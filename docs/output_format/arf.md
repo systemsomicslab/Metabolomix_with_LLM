@@ -7,7 +7,7 @@
 > 対応する Key 番号表: `docs/schema/AlignmentChromPeakFeature.md`（MS-DIAL の `[Key(N)]` から抽出した一次資料）。
 > リーダーのインデックス定数を変更するときは必ずこちらを先に確認する。
 
-## 3. ARF (`arf_reader.py`)
+## 3. ARF (`lipidmix/arf/reader.py`)
 
 ### 3.1 `deserialize()` のスポット出力
 
@@ -66,7 +66,7 @@
 | `sample_names` | 行ラベル。通常は `FileName` |
 | `feature_names` | 列ラベル。`Spot_<MasterAlignmentID>_<property>` 形式。例: `Spot_0_height` |
 
-`property` は `_convert_to_alignment_feature()` の `height`, `area`, `area_above_baseline`, `m_z`, `rt`, `signal_to_noise` などを指定できる。指定値が `None` のセルはまず欠損となり列平均で補完され、全欠損なら 0 となる。分散 0 の列は除外される。`min_detection_rate > 0` の場合は、非ギャップフィルサンプル率が閾値未満の列も除外される。
+`property` は `_convert_to_alignment_feature()` の `height`, `area`, `area_above_baseline`, `m_z`, `rt`, `signal_to_noise` などを指定できる。欠けた値の扱いは 2 通りある。行はあるが指定プロパティの値が `None`（フィールド欠落・読めない値）のセルは **0.0** になる。ある試料の行がそのスポットに無いセルだけが欠損（NaN）になり、列平均で補完され、全試料で欠損の列は 0 となる。gap-fill（`IsGapFilled=true`）のセルは MS-DIAL の補間値をそのまま値として持つ。分散 0 の列は除外される。`min_detection_rate > 0` の場合は、非ギャップフィルサンプル率が閾値未満の列も除外される。
 
 ### 3.4 `run_pca()` と Loading 出力
 
@@ -111,7 +111,7 @@ PCA 前に各列を `StandardScaler` で標準化する。`log_transform=true` �
 
 ### 3.6 MS-DIALタグ
 
-`msdial_tags.py` はARFと同じディレクトリの `*_tags.xml`（互換用に拡張子なしの `*_tags` も可）を読む。サンプル別ファイルは処理時刻の12桁接尾辞を除いた名前でARFの `FileName` と対応させ、XMLの `Peak/@Id` をARF行の `MasterPeakID` と結合する。アラインメント結果用ファイルは `Peak/@Id` を `MasterAlignmentID` と結合する。
+`lipidmix/msdial/tags.py` はARFと同じディレクトリの `*_tags.xml`（互換用に拡張子なしの `*_tags` も可）を読む。サンプル別ファイルは処理時刻の12桁接尾辞を除いた名前でARFの `FileName` と対応させ、XMLの `Peak/@Id` をARF行の `MasterPeakID` と結合する。アラインメント結果用ファイルは `Peak/@Id` を `MasterAlignmentID` と結合する。
 
 タグ条件は `any`、`all`、`none`、`not_all` を使用できる。`sample_peak` スコープでは条件に一致しないサンプル別行をスポット内から除外し、`alignment_spot` スコープではスポット全体を除外する。タグ未付与ピークは `any`/`all` には一致せず、`none`/`not_all` には一致する。
 
@@ -119,7 +119,7 @@ PCA 前に各列を `StandardScaler` で標準化する。`log_transform=true` �
 
 ### 3.7 Class ID
 
-`msdial_classes.py` は `.mddata` の `MsdialDataStorageBase.Key0 AnalysisFiles` を読み、各 `AnalysisFileBean` の `AnalysisFileId`、`AnalysisFileName`、`AnalysisFileClass` を抽出する。`.mddata` は明示パス、`.mdproject` 内の参照、またはARFと同じディレクトリから解決する。
+`lipidmix/msdial/classes.py` は `.mddata` の `MsdialDataStorageBase.Key0 AnalysisFiles` を読み、各 `AnalysisFileBean` の `AnalysisFileId`、`AnalysisFileName`、`AnalysisFileClass` を抽出する。`.mddata` は明示パス、`.mdproject` 内の参照、またはARFと同じディレクトリから解決する。
 
 ARFサンプルとの結合は `FileID` を優先し、欠損時は正規化した `FileName` を使用する。両方が異なるサンプルへ解決された場合はエラーとする。`filter_arf_by_class_ids()` は選択Class ID以外のサンプル行を各スポットから除外し、その結果を `build_pca_matrix()` に渡すことでPCAの行をClass IDで選別できる。
 
@@ -151,7 +151,7 @@ PCAスコアプロット用ブロック（返り値の末尾。**サンプル別
 
 ## 10. 前処理・QC（P2a）
 
-`preprocessing.py`（MCP非依存の純ロジック層）と `tools_arf.py` の `arf_list_sample_roles()` / `arf_preprocess()` / `arf_pca_preprocessed()` が、ARFロード後のサンプル×特徴量行列に対する前処理・QCを担う。既定では**何も適用されない（opt-in）**。生行列を消費する `arf_parser` の既定挙動は変えない。
+`lipidmix/analysis/preprocessing.py`（MCP非依存の純ロジック層）と `lipidmix/arf/tools.py` の `arf_list_sample_roles()` / `arf_preprocess()` / `arf_pca_preprocessed()` が、ARFロード後のサンプル×特徴量行列に対する前処理・QCを担う。既定では**何も適用されない（opt-in）**。生行列を消費する `arf_parser` の既定挙動は変えない。
 
 ### 10.1 役割検出（sample/qc/blank）
 
@@ -163,14 +163,14 @@ PCAスコアプロット用ブロック（返り値の末尾。**サンプル別
 
 1. **ブランク除去**（`blank_min_fold` 指定時）: 生体試料平均 が `blank_min_fold` × ブランク平均 未満の特徴量を背景として除去。ブランク/生体試料のどちらかが無ければ未実施（caveat）。
 2. **正規化**（`normalize="tic"|"median"|"pqn"|"none"`）: 行（サンプル）ごとのスケーリング。`tic`=行総和、`median`=行中央値、`pqn`=Probabilistic Quotient Normalization（参照はQC中央値、QCが無ければ全サンプル中央値）。**正規化係数が0または非有限のサンプル（未検出=0が過半で行中央値=0 になる疎な試料など）は、行全体をNaN化して破棄せず未正規化のまま残置し、`report["unscaled_samples"]` と caveat で明示する**（`median`/`pqn` で起こりやすい。`tic`=行総和は総和>0のため安全）。旧実装は該当行をNaNで全消去し、疎データで多数の試料を無言で失っていた。
-3. **QC-RLSCドリフト補正**（`drift_correct=True` 指定時）: QCを注入順（`analytical_order`、`.mddata` 由来）に並べ移動中央値で平滑化した系統ドリフトで、特徴量ごとに全サンプルを補正する。**注入順が全サンプルで取得できない、またはQCが最小数未満なら未実施**（caveat）。加えて **QC が試料列に挿入されていない設計でも未実施**（`status="skipped"`）: QC-RLSC は QC が試料の前後に散在することを前提とし、QC を全試料の後にまとめて流した設計（実例: 試料 1–48 → Blank 49 → QC 50–56）では `np.interp` が端値で頭打ちになり、補正した外見だけが残る。判定は `report["qc_interspersion"]`（`covered`＝QC注入順区間に入る試料数 / `qc_range` / `sample_range`）。`covered` が試料の半数未満なら適用はするが「外挿補正」caveat を付す。
+3. **QC ドリフト補正**（QC-RLSC 相当の移動中央値版。`drift_correct=True` 指定時）: QCを注入順（`analytical_order`、`.mddata` 由来）に並べ、QC 値の移動中央値（窓 5、QC 4 本以上）で系統ドリフトを推定し、`np.interp` で全注入へ区分線形に補間して `median(QC) / trend` を掛ける。特徴量ごとに全サンプルを 1 系列として補正し、バッチ別には補正しない。LOESS（局所重み付き回帰）は使わない。**注入順が全サンプルで取得できない、またはQCが最小数未満なら未実施**（caveat）。加えて **QC が試料列に挿入されていない設計でも未実施**（`status="skipped"`）: QC-RLSC は QC が試料の前後に散在することを前提とし、QC を全試料の後にまとめて流した設計（実例: 試料 1–48 → Blank 49 → QC 50–56）では `np.interp` が端値で頭打ちになり、補正した外見だけが残る。判定は `report["qc_interspersion"]`（`covered`＝QC注入順区間に入る試料数 / `qc_range` / `sample_range`）。`covered` が試料の半数未満なら適用はするが「外挿補正」caveat を付す。
 4. **QC RSDフィルタ**（`max_qc_rsd` 指定時）: QC群での相対標準偏差（SD/mean）が閾値を超える特徴量を除去。QCが無い/不足なら未実施（caveat）。
 5. **欠損補完**（`impute="half_min"|"knn"|"column_mean"|"none"`、既定 `half_min`）: 行列生成後に残るNaNを補完。`half_min`=特徴量最小値の半分（既定）、`knn`=sklearn `KNNImputer`、`column_mean`=列平均（旧実装互換）、`none`=補完しない。
 6. **ブランク行の除外**: 上記1でブランクを背景除去の**参照**として使い終えたあと、`preprocessing.drop_samples_by_role()` がブランクの**行そのもの**を解析行列から外す。除外内訳は `report["excluded_from_matrix"]`（`{role: [sample_name, ...]}`）と caveat に出る。
 
-> **役割別の行の扱い（重要）**: 前処理後行列 `session.feature_matrix` の行は **生体試料 + QC** であり、**ブランクは含まれない**。ブランクは生体試料と桁違いに総強度が低く、残すと PCA の PC1 を支配して群分離の解釈が壊れるため外す。一方 **QC は残す**——QC クラスタの締まり具合を PCA で見るのは品質確認の定番手段だからである。したがって `arf_pca_preprocessed()` のスコアプロットには QC 点が含まれる（群ラベルは QC の Class ID）。群平均に QC が混ざると困る `arf_differential()` 側は、別途 QC を比較群から外す（§11.1）。
+> **役割別の行の扱い（重要）**: 前処理後行列 `session.arf.feature_matrix` の行は **生体試料 + QC** であり、**ブランクは含まれない**。ブランクは生体試料と桁違いに総強度が低く、残すと PCA の PC1 を支配して群分離の解釈が壊れるため外す。一方 **QC は残す**——QC クラスタの締まり具合を PCA で見るのは品質確認の定番手段だからである。したがって `arf_pca_preprocessed()` のスコアプロットには QC 点が含まれる（群ラベルは QC の Class ID）。群平均に QC が混ざると困る `arf_differential()` 側は、別途 QC を比較群から外す（§11.1）。
 
-処理結果は `session.feature_matrix`（前処理後行列）・`session.pp_sample_names`・`session.pp_feature_names`・`session.sample_meta`・`session.preprocessing_recipe` に保存され、以降の `arf_pca_preprocessed()` や将来の差次的解析（P2b）はこの前処理後行列を消費する。適用したレシピそのものが `session.preprocessing_recipe` に記録され、`arf_pca_preprocessed()` の出力にも「前処理レシピ」として明示される。
+処理結果は `session.arf.feature_matrix`（前処理後行列）・`session.arf.pp_sample_names`・`session.arf.pp_feature_names`・`session.arf.sample_meta`・`session.arf.preprocessing_recipe` に保存され、以降の `arf_pca_preprocessed()` や将来の差次的解析（P2b）はこの前処理後行列を消費する。適用したレシピそのものが `session.arf.preprocessing_recipe` に記録され、`arf_pca_preprocessed()` の出力にも「前処理レシピ」として明示される。
 
 ### 10.3 caveatの扱い
 
@@ -185,11 +185,11 @@ QC/ブランク/注入順のいずれかが欠けているためにスキップ�
 
 ### 10.4 `arf_pca_preprocessed()`
 
-前処理後行列が無い（`session.feature_matrix is None`）場合はエラーメッセージ1件を返す。あれば `arf_reader.run_pca` でPCAを実行し、`arf_parser` と同じ整形ヘルパー（スコアプロット用JSON、Loadings上位）を使って結果を返す。出力テキストの構造・キー意味は8.1節のスコアプロット用JSONと同一（座標点列を同梱し、散布図はそこからチャットで描く。`save_pca_figure` はPNGファイルが明示的に求められたときだけ）。生スポットの選択とは別の計算経路であり、選択を変更した場合は `arf_preprocess()` を再実行する必要がある。
+前処理後行列が無い（`session.arf.feature_matrix is None`）場合はエラーメッセージ1件を返す。あれば `lipidmix/analysis/pca.py` の `run_pca` でPCAを実行し、`arf_parser` と同じ整形ヘルパー（スコアプロット用JSON、Loadings上位）を使って結果を返す。出力テキストの構造・キー意味は8.1節のスコアプロット用JSONと同一（座標点列を同梱し、散布図はそこからチャットで描く。`save_pca_figure` はPNGファイルが明示的に求められたときだけ）。生スポットの選択とは別の計算経路であり、選択を変更した場合は `arf_preprocess()` を再実行する必要がある。
 
 ### 10.5 手動サンプル/ピーク除外（`arf_exclude`）
 
-PCAスコアプロットで明らかに外れた1サンプルや、特定のピーク（スポット）を**名前/IDで手動除外**するためのツール。`exclusions.py`（MCP非依存の純ロジック層、`prune_spots()` / `roster()`）と `tools_arf.py` の `arf_exclude()` が担う。除外は**可逆・非破壊**で、`session.arf.filtered_features` 自体は変更しない。
+PCAスコアプロットで明らかに外れた1サンプルや、特定のピーク（スポット）を**名前/IDで手動除外**するためのツール。`lipidmix/arf/exclusions.py`（MCP非依存の純ロジック層、`prune_spots()` / `roster()`）と `lipidmix/arf/tools.py` の `arf_exclude()` が担う。除外は**可逆・非破壊**で、`session.arf.filtered_features` 自体は変更しない。
 
 `arf_exclude(exclude_samples=None, exclude_spots=None, mode="add")` は JSON を返す。
 
@@ -199,17 +199,17 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 - 現データに存在しない指定は `unmatched_samples` / `unmatched_spots` として警告に載せ、一致分のみ集合へ反映する（タイプミスに寛容）。
 - 応答キー: `status` / `mode` / `excluded_samples` / `excluded_spots` / `samples_before` / `samples_after` / `spots_before` / `spots_after` / `unmatched_samples` / `unmatched_spots` / `caveats`。残サンプルまたは残スポットが0件になる指定には caveat が付く。
 
-除外集合は `session.excluded_samples`（`file_name` 集合）と `session.excluded_spots`（`MasterAlignmentID` 集合）に保持され、新ファイルロード（`load_data` のキャッシュミス経路）でリセットされる。行列を組む直前に `exclusions.prune_spots()` が適用され、**`arf_parser`**・**`arf_preprocess`**（→ `arf_pca_preprocessed` / `arf_differential`）がいずれも自動的に除外を反映する。除外が有効なとき、それぞれの出力に「ユーザ手動除外: サンプル N 件 / スポット M 件」の注記が付く。`arf_list_sample_roles()` は各サンプルに `excluded: true/false` を付して現在の除外状態を示す。
+除外集合は `session.arf.excluded_samples`（`file_name` 集合）と `session.arf.excluded_spots`（`MasterAlignmentID` 集合）に保持され、新ファイルロード（`load_data` のキャッシュミス経路）でリセットされる。行列を組む直前に `exclusions.prune_spots()` が適用され、**`arf_parser`**・**`arf_preprocess`**（→ `arf_pca_preprocessed` / `arf_differential`）がいずれも自動的に除外を反映する。除外が有効なとき、それぞれの出力に「ユーザ手動除外: サンプル N 件 / スポット M 件」の注記が付く。`arf_list_sample_roles()` は各サンプルに `excluded: true/false` を付して現在の除外状態を示す。
 
 運用フロー: `arf_parser`（全体PCAで外れ俯瞰）→ `arf_exclude(exclude_samples=[...])` → `arf_parser` 再呼び出し または `arf_preprocess`＋`arf_pca_preprocessed` で除外後PCAを確認 → `arf_differential`。戻したいときは `mode="remove"` / `mode="clear"`。
 
 ## 11. 差次的解析（P2b）
 
-`differential.py`（MCP非依存の純ロジック層）と、`tools_arf.py` の `arf_differential()` / `tools_reports.py` の `save_volcano_figure()` が、前処理後のサンプル×特徴量行列に対する群間比較を担う。既定挙動・既存ツールは不変で、明示呼び出し時のみ作用する。
+`lipidmix/analysis/differential.py`（MCP非依存の純ロジック層）と、`lipidmix/arf/tools.py` の `arf_differential()` / `lipidmix/tools/reports.py` の `save_volcano_figure()` が、前処理後のサンプル×特徴量行列に対する群間比較を担う。既定挙動・既存ツールは不変で、明示呼び出し時のみ作用する。
 
 ### 11.1 群ラベルの由来
 
-群ラベルは `session.sample_meta[<sample>]["group"]`（ファイル名由来の factor トークン / Class ID 機構、`msdial_classes.assign_sample_groups`）から取得する。バッチは同 `sample_meta` の `batch`（ファイル名中の8桁日付）。`arf_differential()` は `session.feature_matrix`（前処理後行列）を消費し、無ければエラーを返す（先に `arf_preprocess()` が必要）。
+群ラベルは `session.arf.sample_meta[<sample>]["group"]`（ファイル名由来の factor トークン / Class ID 機構、`lipidmix/msdial/classes.py` の `assign_sample_groups`）から取得する。バッチは同 `sample_meta` の `batch`（ファイル名中の8桁日付）。`arf_differential()` は `session.arf.feature_matrix`（前処理後行列）を消費し、無ければエラーを返す（先に `arf_preprocess()` が必要）。
 
 `sample_meta[...]["group"]` は常に**完全な Class ID**（例 `24M_GF_F`）である。一方 `group_a` / `group_b` は**因子トークンによるプール指定**を受け付ける（`sample_factors.expand_sample_specs`。トークンは Class ID とサンプル名の両方から解決される）:
 
@@ -234,10 +234,15 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 
 ### 11.2 統計
 
-- **2群比較**（`group_a` と `group_b` を指定）: 特徴量ごとに Welch t 検定（等分散を仮定しない）と log2 fold change を計算する。`log2fc = log2((mean_b + 擬似カウント) / (mean_a + 擬似カウント))`（**正=群Bで高い（上昇）**。group_a が基準（対照）、group_b が比較対象。擬似カウント既定1.0でゼロ割回避。2026-08-31 に慣習（log2FC=log2(比較対象/基準)）へ合わせて符号を反転した——それ以前の出力とは符号が逆）。小n・分散0・全欠損は `p=NaN`。
+- **2群比較**（`group_a` と `group_b` を指定）: 特徴量ごとに Welch t 検定（等分散を仮定しない）と log2 fold change を計算する。**正=群Bで高い（上昇）**。group_a が基準（対照）、group_b が比較対象。2026-08-31 に慣習（log2FC=log2(比較対象/基準)）へ合わせて符号を反転した——それ以前の出力とは符号が逆。擬似カウントは既定 1.0。定義は `log_transform` で 2 通りある:
+  - `log_transform=true`（**既定**）: 各値を `log2(max(x, 0) + 擬似カウント)` に変換して Welch 検定し、`log2fc = mean(log2 値_B) − mean(log2 値_A)`（＝ x+1 の幾何平均比の log2）。
+  - `log_transform=false`: 生値で Welch 検定し、`log2fc = log2((mean_b + 擬似カウント) / (mean_a + 擬似カウント))`（算術平均比）。
+  - `mean_a` / `mean_b` はどちらの場合も生値の算術平均。
+  - 結果行の `t` は `(平均_B − 平均_A) / SE` で、**log2fc と同じ向き**（正 = 群Bで高い。2026-09-27 に向きを揃えた——それ以前の `t` は符号が逆）。
+  - 小n・分散0・全欠損は `p=NaN`。
 - **多群ANOVAは現状非対応**: MS-DIAL メタに「因子（加齢/菌叢等）→水準」の対応が無く、因子を安全に選べない（誤って全 Class ID を水準にした結果を返さないよう封鎖）。3群以上を比べたいときは `group_a`/`group_b` の因子トークン・プール指定で関心のある2群を切り出す。`differential.one_way_anova()` 自体は関数として残るが、MCP からは露出しない。
-- **多重検定補正**: いずれも Benjamini-Hochberg で `p → q`（FDR）を付与（NaN は補正から除外し位置は保持）。p値は scipy があれば正確（無ければ近似フォールバック）。
-- **volcano**: 2群比較のみ。各点は `feature` / `log2fc` / `neg_log10_p` / `sig`（`up`=q≤閾値かつlog2fc≥+閾値（群Bで高い＝上昇） / `down`=q≤閾値かつlog2fc≤−閾値（群Aで高い＝低下） / `ns`）。全特徴分の点列は `session.last_differential["volcano"]` に保持し、`arf_plot_volcano()`（構造化点列）と `save_volcano_figure()`（PNG）の両方がここから読む。**`arf_differential()` の応答 payload には全量 volcano を同梱せず**、`summary`（`n_tested`/`n_significant`/`n_up`/`n_down`＋有意上位 `top`）中心の要約と `volcano_note` のみを返す（先頭の結論が巨大配列＋文脈切り詰めで埋没し「全て ns」と誤読される退行を避けるため）。
+- **多重検定補正**: いずれも Benjamini-Hochberg で `p → q`（FDR）を付与（NaN は補正から除外し位置は保持）。p値は scipy があればそれで、無ければ自前の t 分布裾確率（正則化不完全ベータ関数）で計算し、どちらも正確（近似ではない）。
+- **volcano**: 2群比較のみ。各点は `feature` / `log2fc` / `neg_log10_p` / `sig`（`up`=q≤閾値かつlog2fc≥+閾値（群Bで高い＝上昇） / `down`=q≤閾値かつlog2fc≤−閾値（群Aで高い＝低下） / `ns`）。全特徴分の点列は `session.arf.last_differential["volcano"]` に保持し、`arf_plot_volcano()`（構造化点列）と `save_volcano_figure()`（PNG）の両方がここから読む。**`arf_differential()` の応答 payload には全量 volcano を同梱せず**、`summary`（`n_tested`/`n_significant`/`n_up`/`n_down`＋有意上位 `top`）中心の要約と `volcano_note` のみを返す（先頭の結論が巨大配列＋文脈切り詰めで埋没し「全て ns」と誤読される退行を避けるため）。
 
 ### 11.2.1 `arf_plot_volcano` の返り値（`lipidmix.volcano.v1`）
 
@@ -275,7 +280,7 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 `arf_differential()` の応答 `caveats` には、該当時に以下を前景化する（無言で握りつぶさない）:
 
 1. **交絡（群⟂バッチ）**: 各群が単一バッチに偏る場合、「処理効果と測定バッチを分離できない」旨を警告（`check_confounding`）。例: `2_lipidome_lcms/NEG` は control/LPS=20220901・ILG/G_uralensis=20220902 で交絡。**判定は必ずプール解決後の（＝実際に比較した）2群に対して行う**。プール前の Class ID 単位で見ると細粒度ラベルほど各群が単一バッチになりやすく、プールすれば両群ともバッチ混在という健全な設計を交絡と誤報するため。判定に使うのは群ラベルが `None` でない試料のみ（QC/ブランク除外後）。
-2. **正規化状態**: `session.preprocessing_recipe` に正規化が含まれなければ「未正規化データの log2FC は測定量差を含み得る」と警告。
+2. **正規化状態**: `session.arf.preprocessing_recipe` に正規化が含まれなければ「未正規化データの log2FC は測定量差を含み得る」と警告。
 3. **群サイズ不足**: いずれかの群が n<2 なら「各群 n>=2 が必要（群名の誤り／前処理での試料脱落の可能性）」と警告。n>=2 かつ n<4 なら小n（検出力の限界）を注記。
 4. **退化（検定不能）**: 検定できた特徴が0件なら「全特徴で p=NaN。群が空・分散0・正規化での試料NaN化の可能性。『有意0件』を『群間差なし』と解釈しない」と警告。0件でなくても特徴数の20%未満しか検定できなければ注記する。これにより「本当に有意差が無い（n_tested 健全）」と「そもそも検定できていない（n_tested≈0）」を区別できる。
 

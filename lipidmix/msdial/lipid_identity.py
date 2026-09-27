@@ -92,9 +92,18 @@ def _read_tsv(path: Path) -> list[dict]:
     return rows
 
 
-def load_reference_tables(reference_dir="reference") -> dict:
-    """同梱の RefMet / LIPID MAPS クラス対応表を読み込む（オフライン）。"""
-    base = Path(reference_dir)
+#: 同梱表の置き場所（リポジトリルート直下の reference/）。起動元の作業
+#: ディレクトリに依存させない——相対パスで探すと表が見つからず `_read_tsv` が
+#: 空を返し、全クラスが「同梱表に無い」扱いになって ID 付与が黙って全滅する。
+REFERENCE_DIR = Path(__file__).resolve().parents[2] / "reference"
+
+
+def load_reference_tables(reference_dir=None) -> dict:
+    """同梱の RefMet / LIPID MAPS クラス対応表を読み込む（オフライン）。
+
+    `reference_dir` 省略時は `REFERENCE_DIR`（作業ディレクトリに依存しない）。
+    """
+    base = Path(reference_dir) if reference_dir is not None else REFERENCE_DIR
     lm = {r["class_token"]: r for r in _read_tsv(base / "lipidmaps_classes.tsv")}
     rm = {r["class_token"]: r for r in _read_tsv(base / "refmet_map.tsv")}
     return {"lipidmaps": lm, "refmet": rm}

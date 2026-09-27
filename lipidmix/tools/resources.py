@@ -1,5 +1,5 @@
-"""MCP リソース（@mcp.resource ×6）: output-format 参照、knowledge/playbook の
-index・expand、knowledge inbox。
+"""MCP リソース（@mcp.resource ×7。静的 4・テンプレート 3）: output-format 参照
+（共通核とトピック別）、knowledge/playbook の index・expand、knowledge inbox。
 
 このモジュールを import すると副作用でリソースが mcp に登録される。server は
 `from lipidmix.tools import resources as tools_resources` するだけでよい。tools_* / server は import しない。
@@ -15,8 +15,10 @@ from lipidmix.core.mcp_core import mcp, OUTPUT_FORMAT_DOC, PLAYBOOK_DIR
     name="output_format",
     title="MS-DIAL parser output format and ontology",
     description=(
-        "Authoritative field-by-field reference for ARF, ARF2, PAI2, DCL, "
-        "and EIC/AEF parser outputs. Read before interpreting parser results."
+        "Shared core of the output-format reference (row granularity, lipid-name "
+        "grammar, mandatory caveats) plus the index of per-topic sections: arf, "
+        "arf2, pai2, dcl, eic, identity, mztab, library. Read before interpreting "
+        "parser or dataset results."
     ),
     mime_type="text/markdown",
 )
@@ -41,7 +43,8 @@ def output_format_reference() -> str:
     title="Per-parser output format section",
     description=(
         "Field-by-field reference for one parser/tool family: arf, arf2, pai2, dcl, "
-        "eic, identity (or core for the shared ontology). Fetch the topic matching "
+        "eic, identity, mztab (dataset_* / mzTab-M path), library (reference-library "
+        "MS/MS matching), or core for the shared ontology. Fetch the topic matching "
         "the output you are about to interpret instead of the whole document."
     ),
     mime_type="text/markdown",

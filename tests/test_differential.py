@@ -63,6 +63,18 @@ class TestTwoGroup(unittest.TestCase):
         self.assertLess(res[0]["log2fc"], 1.95)
 
 
+    def test_t_has_the_same_sign_as_log2fc(self):
+        # t は「group_b − group_a」。arf_differential の summary.top に log2fc と
+        # 並んで出るので、向きが逆だと同じ行で符号が食い違う。両分岐を固定する。
+        matrix = np.array([[10.0], [11.0], [9.0], [40.0], [42.0], [38.0]])
+        labels = ["A", "A", "A", "B", "B", "B"]
+        for log_transform in (False, True):
+            res = diff.two_group_test(matrix, ["f0"], labels, "A", "B",
+                                      log_transform=log_transform)
+            self.assertGreater(res[0]["log2fc"], 0)
+            self.assertGreater(res[0]["t"], 0, f"log_transform={log_transform}")
+
+
 class TestAnova(unittest.TestCase):
     def test_three_group_difference(self):
         matrix = np.array([

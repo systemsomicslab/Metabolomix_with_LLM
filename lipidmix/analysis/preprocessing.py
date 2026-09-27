@@ -172,7 +172,11 @@ def normalize(
 
 
 def _moving_median(values, window=5):
-    """奇数窓の移動中央値（端は縮小窓）。numpy のみで LOESS 相当の平滑化。"""
+    """奇数窓の移動中央値（端は縮小窓）。numpy のみで外れ値に頑健な平滑化。
+
+    LOESS（局所重み付き回帰）ではない。QC-RLSC の「QC で系統ドリフトを推定して
+    補正する」枠組みを、平滑化器を移動中央値に置き換えて実装している。
+    """
     n = len(values)
     half = window // 2
     smoothed = np.empty(n)
@@ -223,8 +227,11 @@ def run_order_correlation(components, sample_names, run_order):
 def qc_drift_correct(matrix, roles, sample_names, run_order, min_qc=4, window=5):
     """QC を注入順に平滑化した系統ドリフトで、特徴量ごとに全サンプルを補正する。
 
+    平滑化は QC 値の移動中央値（`_moving_median`）で、それを `np.interp` で全注入へ
+    区分線形に補間し、`median(QC) / trend` を掛ける。全ランを 1 系列として扱い、
+    バッチ別には補正しない。
     注入順が取れない、または QC が min_qc 未満なら未実施（skipped）。
-    プールQC が層別と疑われる場合の警告は呼び出し側（server）で付す。
+    プールQC が層別と疑われる場合の警告は呼び出し側（各ツール）で付す。
     """
     matrix = np.asarray(matrix, dtype=float)
     orders = np.array([run_order.get(n) for n in sample_names], dtype=object)

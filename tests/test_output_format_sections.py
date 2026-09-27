@@ -65,6 +65,31 @@ class SectionFileTests(unittest.TestCase):
                 self.assertIn(topic, core)
 
 
+class TopicListsInLlmFacingTextTests(unittest.TestCase):
+    """LLM に見せる案内文が、宣言済みトピックを 1 つも取りこぼさないこと。
+
+    正準は `OUTPUT_FORMAT_SECTIONS`。サーバ共通指示やリソース説明の一覧が
+    それより短いと、案内に載らないトピック（過去には library・mztab）は
+    LLM から存在しないのと同じになる。
+    """
+
+    def _non_core_topics(self):
+        return [t for t in mcp_core.OUTPUT_FORMAT_SECTIONS if t != "core"]
+
+    def test_server_instructions_list_every_topic(self):
+        for topic in self._non_core_topics():
+            with self.subTest(topic=topic):
+                self.assertIn(f"`{topic}`", mcp_core.MCP_INSTRUCTIONS)
+
+    def test_section_template_description_lists_every_topic(self):
+        templates = asyncio.run(mcp_core.mcp.list_resource_templates())
+        by_uri = {str(t.uriTemplate): t for t in templates}
+        description = by_uri["lipidmix://docs/output-format/{topic}"].description
+        for topic in self._non_core_topics():
+            with self.subTest(topic=topic):
+                self.assertIn(topic, description)
+
+
 class SectionResourceTests(unittest.TestCase):
     def setUp(self):
         session_state.session = session_state.AnalysisSession()

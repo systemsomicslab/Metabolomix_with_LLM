@@ -148,6 +148,18 @@ def test_welch_reports_p_q_and_effect_size():
     assert by_id["1"]["log2fc"] == pytest.approx(math.log2(40 / 10), abs=1e-6)
 
 
+def test_welch_t_statistic_has_the_same_sign_as_log2fc():
+    # t は「test − reference」。log2FC（test / reference）や Tukey の
+    # mean_difference（test − reference）と同じ向きでないと、同じ TSV の同じ行で
+    # 逆符号の 2 列が並ぶ（spec A14「群方向が一致する」）。
+    matrix, metadata = _two_group_matrix()
+    out = run_statistic(matrix, _welch_spec(), metadata)
+
+    feature = {f["feature_id"]: f for f in out["features"]}["1"]
+    assert feature["log2fc"] > 0
+    assert feature["t_statistic"] > 0
+
+
 def test_effect_size_uses_untransformed_values_even_with_log2():
     matrix, metadata = _two_group_matrix()
     plain = run_statistic(matrix, _welch_spec(), metadata)

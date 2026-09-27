@@ -23,6 +23,11 @@ v1（`dataset_differential` ほか、[dataset_analysis.md](dataset_analysis.md)�
 平均差、v2 は統計変換前の算術平均比の log2（`effect_size_definition =
 log2_arithmetic_mean_ratio`）。v1 の既定値・契約は一切変更していない。
 
+向きは v1・v2 とも揃えてある: `log2fc`、Welch の `t_statistic`（v1 は結果行の `t`）、
+Tukey の `mean_difference` は、いずれも**正なら test（v1 は group_b）が高い**。
+t は `(平均_test − 平均_reference) / SE`（2026-09-27 に向きを揃えた——それ以前の
+t は符号が逆）。
+
 ## プロジェクト保存（`save_project`）と Application Control
 
 要求の `save_project` は**既定 true**（v1/v2 とも）。MS-DIAL はこのとき `-p` を
