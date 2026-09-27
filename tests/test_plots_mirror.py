@@ -273,6 +273,19 @@ def test_the_schema_version_announces_the_added_layer():
     assert _unscored_payload()["plot_schema"] == "lipidmix.mirror.v2"
 
 
+def test_the_tool_description_names_the_current_schema():
+    """ツール説明は LLM が payload の読み方を決める根拠。古い版名を載せない。"""
+    import asyncio
+
+    from lipidmix.core.mcp_core import mcp
+    import lipidmix.library.tools  # noqa: F401  (登録の副作用)
+
+    tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
+    description = tools["library_plot_mirror"].description
+    assert mirror.MIRROR_PLOT_SCHEMA in description
+    assert "lipidmix.mirror.v1" not in description
+
+
 def test_a_payload_without_dropped_peaks_reports_an_empty_layer():
     payload = _payload()
 

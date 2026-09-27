@@ -632,7 +632,8 @@ def build_pca_matrix(deserialized_list: list[dict], use_properties: list[str] = 
             for prop in use_properties:
                 val = peak_field(sample, prop)
                 col_name = f"Spot_{master_id}_{prop}"
-                # Noneの場合は0.0で埋める（欠損値処理）
+                # 値が None（フィールド欠落・読めない値）のセルは 0.0 にする。
+                # gap-fill のセルは通常 MS-DIAL の補間値を持つので、値として残る。
                 sample_data_dict[sample_key][col_name] = float(val) if val is not None else 0.0
                 if is_detected:
                     detection_count[col_name] = detection_count.get(col_name, 0) + 1
@@ -643,9 +644,10 @@ def build_pca_matrix(deserialized_list: list[dict], use_properties: list[str] = 
     # 行がサンプル、列が「スポット×プロパティ」のデータフレームを作成
     df = pd.DataFrame.from_dict(sample_data_dict, orient='index')
 
-    # 改善点2: 欠損値を 0 ではなく「その列(特徴量)の平均値」で埋める (Mean Imputation)
+    # ある試料の行がそのスポットに無かったセル（上の None→0.0 とは別）は NaN になる。
+    # それだけを「その列（特徴量）の平均値」で埋める（Mean Imputation）。
     df = df.fillna(df.mean())
-    # ※もし全サンプルで欠損だった列があれば NaN のまま残るので、その場合のみ 0.0 で埋める
+    # ※全サンプルで欠損だった列は NaN のまま残るので、その場合のみ 0.0 で埋める
     df = df.fillna(0.0)
 
     # 任意: 検出率(非ギャップフィル)による特徴量の足切り（既定0.0=無効）

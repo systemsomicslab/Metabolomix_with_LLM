@@ -133,10 +133,13 @@ The per-parser field definitions are split into topic resources — read the one
 matching the output you are about to interpret, not the whole document:
 `lipidmix://docs/output-format/{topic}` where topic is one of `arf` (.arf,
 arf_parser, preprocessing/QC, differential), `arf2`, `pai2`, `dcl`, `eic`,
-`identity` (annotation confidence), or `mztab` (everything downstream of
+`identity` (annotation confidence), `mztab` (everything downstream of
 `dataset_load`: SME vs SML identification, the feature table, the differential
-export's identity columns). Parser tool output carries a one-line pointer
-to its topic until you have fetched it.
+export's identity columns), or `library` (reference-library MS/MS matching:
+what each score means, `-1` vs `0`, the deliberately ported upstream quirks).
+The ARF / ARF2 / PAI2 / DCL / EIC parser outputs carry a one-line pointer to
+their topic until you have fetched it; for `mztab` and `library` there is no
+pointer, so fetch those before interpreting `dataset_*` or `library_*` output.
 
 MS/MS EVIDENCE — the real spectra live in `.dcl`, not `.pai2`; PAI2's `has_msms`
 only records that an acquisition reference exists. `pai2_parser` attaches the

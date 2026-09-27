@@ -100,6 +100,29 @@ class TestMsiLevel(unittest.TestCase):
         self.assertNotEqual(out["level"], 1)
 
 
+class TestReferenceTablesAreFoundFromAnyWorkingDirectory(unittest.TestCase):
+    """同梱表はリポジトリ内の固定位置にある。起動元の作業ディレクトリに依存させない。
+
+    Claude Desktop はサーバを任意の作業ディレクトリから起動しうる。相対パスで
+    探すと表が見つからず、`_read_tsv` が空リストを返すため、全クラスが
+    「同梱マッピング表に無い」ことになって ID 付与が黙って全滅する。
+    """
+
+    def test_default_tables_load_outside_the_repository(self):
+        import os
+        import tempfile
+        cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as elsewhere:
+            os.chdir(elsewhere)
+            try:
+                tables = li.load_reference_tables()
+            finally:
+                os.chdir(cwd)
+        self.assertTrue(tables["lipidmaps"], "LIPID MAPS 表が 0 件")
+        self.assertTrue(tables["refmet"], "RefMet 表が 0 件")
+        self.assertTrue(li.map_to_reference("pc", tables)["matched"])
+
+
 class TestIdentityBlock(unittest.TestCase):
     def test_block_has_all_sections(self):
         tables = li.load_reference_tables("reference")

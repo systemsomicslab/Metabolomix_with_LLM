@@ -428,7 +428,8 @@ def library_plot_mirror(rank: int = 1, output: str | None = None,
 
     上段が測定、下段が参照（`rank` 位の候補）。`output="image"`（既定）は
     サーバ側で描画した PNG を返し、`output="payload"` は座標を丸めた
-    `lipidmix.mirror.v1` JSON を返す（Use-LLLM 等、自前で描くクライアント向け）。
+    `lipidmix.mirror.v2` JSON を返す（Use-LLLM 等、自前で描くクライアント向け。
+    v2 で採点外ピーク `unscored_mz` の層を追加）。
 
     測定側の一致色分けには許容幅（`ms2_tol`）が要る——`library_match_feature`
     が使った値（store の `search_params` か既定値）を自動で引き継ぐ。

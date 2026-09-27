@@ -110,7 +110,8 @@ def bh_fdr(pvalues):
 
 
 def welch_t(a, b):
-    """Welch t 統計量と両側 p 値（純粋な数値部品）。
+    """Welch t 統計量と両側 p 値（純粋な数値部品）。`a` が基準、`b` が比較で、
+    t は `b − a` の向き（`_welch_t` 参照）。
 
     v1 の `two_group_test` と v2 の `statistics_v2` が**同じ実装**を使うための
     公開名。v1 側の変換・効果量の定義（pseudo_count と log 空間の平均差）は
@@ -121,7 +122,12 @@ def welch_t(a, b):
 
 
 def _welch_t(a, b):
-    """Welch t 統計量と両側 p 値。scipy があれば使い、無ければ正規近似。"""
+    """Welch t 統計量と両側 p 値。
+
+    `a` が基準（対照）、`b` が比較対象。**t = (mean(b) − mean(a)) / SE** で、
+    log2FC（正 = b が高い）・Tukey の mean_difference（test − reference）と同じ向き。
+    p 値は scipy があれば使い、無ければ自前の t 分布裾確率（こちらも正確）。
+    """
     a = a[np.isfinite(a)]
     b = b[np.isfinite(b)]
     if a.size < 2 or b.size < 2:
@@ -131,7 +137,7 @@ def _welch_t(a, b):
     denom = va / na + vb / nb
     if denom <= 0:
         return math.nan, math.nan
-    t = (a.mean() - b.mean()) / math.sqrt(denom)
+    t = (b.mean() - a.mean()) / math.sqrt(denom)
     df = denom ** 2 / ((va / na) ** 2 / (na - 1) + (vb / nb) ** 2 / (nb - 1))
     try:
         from scipy import stats

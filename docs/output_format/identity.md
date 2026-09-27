@@ -6,7 +6,7 @@
 
 ## 12. 同定信頼度・標準化（P2c）
 
-`lipid_identity.py`（MCP非依存の純ロジック層、**完全オフライン**）と `peak_verification.py` の拡張が、脂質同定名の標準化と信頼度レベルの推定を担う。外部識別子の取得はネットワークを一切使わず、`pygoslin`（同梱・純Python）と同梱 TSV 表のみで行う。既存ツール・既定挙動・`verify_peak_annotation` の既存キーは不変で、新データは新ブロックに追加する。
+`lipidmix/msdial/lipid_identity.py`（MCP非依存の純ロジック層、**完全オフライン**）と `lipidmix/msdial/peak_verification.py` の拡張が、脂質同定名の標準化と信頼度レベルの推定を担う。外部識別子の取得はネットワークを一切使わず、`pygoslin`（同梱・純Python）と同梱 TSV 表のみで行う。既存ツール・既定挙動・`verify_peak_annotation` の既存キーは不変で、新データは新ブロックに追加する。
 
 ### 12.1 GOSLIN 名正規化（`normalize_lipid_name`）
 
@@ -18,7 +18,7 @@
 
 ### 12.2 同梱マッピング表（`load_reference_tables` / `map_to_reference`）
 
-`reference/lipidmaps_classes.tsv`（クラス→LIPID MAPS カテゴリ/メインクラス）と `reference/refmet_map.tsv`（クラス→RefMet 名）は**キュレート済みの部分集合**（一般的な脂質クラスを網羅）。クラストークンで写像し、`matched`（bool）/ `lipid_maps_category` / `lipid_maps_main_class` / `refmet_name` / `caveat` を返す。表に無いクラスは `matched=False`＋caveat「同梱マッピング表に無いため ID 未付与」を返し、**推測はしない**。
+`reference/lipidmaps_classes.tsv`（クラス→LIPID MAPS カテゴリ/メインクラス）と `reference/refmet_map.tsv`（クラス→RefMet 名）は**キュレート済みの部分集合**（一般的な脂質クラスを網羅）。置き場所はリポジトリルート直下の `reference/` 固定（`lipid_identity.REFERENCE_DIR`）で、サーバの起動ディレクトリに依存しない。クラストークンで写像し、`matched`（bool）/ `lipid_maps_category` / `lipid_maps_main_class` / `refmet_name` / `caveat` を返す。表に無いクラスは `matched=False`＋caveat「同梱マッピング表に無いため ID 未付与」を返し、**推測はしない**。
 
 ### 12.3 MSI レベル推定（`msi_level`、ヒューリスティック）
 
@@ -45,7 +45,7 @@
   `band == "PASS"` かつ参照ライブラリが読み込み済み（`library_load` 実行済み）のときは、この内側に `spectral_match` ブロックが追加で載る（参照ライブラリとの照合スコア）。3状態契約自体は変えない追加情報であり、`status` 語彙は暫定。定義は `lipidmix://docs/output-format/library` §14.8 を見ること。
 - `arf2_annotate_identities(file_path=None, max_rows=50)`: ARF2 スポットカタログの注釈を一括で正規化・ID/レベル付与し、上位 `max_rows` 件を返す。**ARF2 には MS/MS 取得フラグ・精密質量誤差が無いため MSI は保守的にクラス上限で評価**（`has_msms=False`、バンド UNKNOWN）。より確度の高い MSI 評価は個別ピークの `verify_peak_annotation` を用いること。
 
-### 12.5 アダクト/元素表の拡張（`peak_verification.py`）
+### 12.5 アダクト/元素表の拡張（`lipidmix/msdial/peak_verification.py`）
 
 `ADDUCT_SHIFTS` を `(sign, shift, charge, n_mol)` の4タプル化し、多量体 `[2M-H]-`・多価 `[M-2H]2-`・`[M+FA-H]-`（`[M+HCOO]-` の別名）を追加。`adduct_mz` は `m/z = (n_mol×neutral + shift) / charge` で多量体・多価に対応する（既存1価アダクトの数値挙動は不変）。元素表に D(²H)/F/Br/¹³C を追加（標識・ハロゲン対応）。CCS/RT 参照照合・同位体パターン照合は参照表未同梱のため v1 対象外。
 

@@ -1099,7 +1099,7 @@ def arf_differential(
                    "resolved_samples": resolved_samples,
                    "n_a": n_a, "n_b": n_b,
                    "summary": summary, "caveats": caveats,
-                   "differential_contract_version": 1,
+                   "differential_contract_version": export_contract.CONTRACT_VERSION,
                    "log2fc_sign": ("log2fc は正なら group_b が高い（上昇）。"
                                    "2026-08-31 以前の出力とは符号が逆である。"),
                    "volcano_note": "全特徴の volcano 点列は本要約に非同梱。"
