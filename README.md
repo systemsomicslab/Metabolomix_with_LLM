@@ -95,6 +95,7 @@ implementation lives under `lipidmix/`.
 
 | To find out | Read |
 |---|---|
+| The whole system at a glance — every tool's inputs and outputs, the analysis routes, the statistics, and export formats, with diagrams (Japanese) | [ms-data-parser specification](https://yuukamegai.github.io/ms-data-parser-spec/) |
 | What each MCP tool takes and does | [USAGE.md](USAGE.md) |
 | What an output field *means* — row granularity, lipid-name grammar, caveats | [docs/output_format/](docs/output_format/core.md), also served as the MCP resource `lipidmix://docs/output-format` |
 | Which functions a tool calls, in what order | [docs/workflow/](docs/workflow/index.md) |
