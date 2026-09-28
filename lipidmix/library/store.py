@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -68,6 +69,31 @@ _INDEX = "CREATE INDEX record_mz ON record(precursor_mz);"
 DIGEST_INDEX_NAME = ".library-digests.json"
 
 _HASH_CHUNK_SIZE = 1 << 20  # 1 MiB
+
+_RECORD_COLUMNS = (
+    "name, precursor_mz, ion_mode, adduct, rt, formula, inchikey, "
+    "smiles, compound_class, ontology, spectrum, library_id, record_index"
+)
+_ANNOTATOR_COUNTER = re.compile(r"_\d+$")
+
+
+def library_id_from_annotator(annotator_id: str | None) -> str | None:
+    """MsScanMatchResult の AnnotatorID（`<.dbs のエントリ名>_<n>`）を store の library_id にする。"""
+    if annotator_id is None:
+        return None
+    return _ANNOTATOR_COUNTER.sub("", str(annotator_id))
+
+
+def _row_to_record(row) -> dict:
+    (name, row_mz, row_ion_mode, adduct, row_rt, formula, inchikey,
+     smiles, compound_class, ontology, spectrum_blob, library_id, record_index) = row
+    return {
+        "name": name, "precursor_mz": row_mz, "ion_mode": row_ion_mode,
+        "adduct": adduct, "rt": row_rt, "formula": formula, "inchikey": inchikey,
+        "smiles": smiles, "compound_class": compound_class, "ontology": ontology,
+        "spectrum": msgpack.unpackb(spectrum_blob, use_list=True),
+        "library_id": library_id, "record_index": record_index,
+    }
 
 
 def cache_dir() -> Path:
@@ -267,11 +293,7 @@ class LibraryStore:
         rt: float | None = None,
         rt_tol: float | None = None,
     ) -> list[dict]:
-        query = (
-            "SELECT name, precursor_mz, ion_mode, adduct, rt, formula, inchikey, "
-            "smiles, compound_class, ontology, spectrum, library_id, record_index "
-            "FROM record WHERE precursor_mz BETWEEN ? AND ?"
-        )
+        query = f"SELECT {_RECORD_COLUMNS} FROM record WHERE precursor_mz BETWEEN ? AND ?"
         params: list = [precursor_mz - mz_tol, precursor_mz + mz_tol]
         if ion_mode is not None:
             # COLLATE NOCASE: 呼び出し元の大小表記は揃っていない
@@ -300,27 +322,24 @@ class LibraryStore:
             params.extend([rt, rt_tol])
 
         rows = self._conn.execute(query, params).fetchall()
-        results = []
-        for row in rows:
-            (name, row_mz, row_ion_mode, adduct, row_rt, formula, inchikey,
-             smiles, compound_class, ontology, spectrum_blob,
-             library_id, record_index) = row
-            results.append({
-                "name": name,
-                "precursor_mz": row_mz,
-                "ion_mode": row_ion_mode,
-                "adduct": adduct,
-                "rt": row_rt,
-                "formula": formula,
-                "inchikey": inchikey,
-                "smiles": smiles,
-                "compound_class": compound_class,
-                "ontology": ontology,
-                "spectrum": msgpack.unpackb(spectrum_blob, use_list=True),
-                "library_id": library_id,
-                "record_index": record_index,
-            })
-        return results
+        return [_row_to_record(row) for row in rows]
+
+    def record_by_scan_id(self, scan_id: int, *, library_id: str | None,
+                          precursor_mz: float, mz_tol: float) -> dict | None:
+        """MsScanMatchResult.LibraryID（上流 ScanID = record_index）で参照を 1 件引く。
+
+        `record_index` には索引が無いので、索引のある precursor_mz の窓で先に絞る
+        （参照の precursor はスポットの m/z から高々 0.03 Da 程度しか離れない）。
+        `library_id` は `.dbs` の複数エントリを区別する。NULL（`.msp` 由来）の行は残す。
+        """
+        query = (f"SELECT {_RECORD_COLUMNS} FROM record "
+                 "WHERE precursor_mz BETWEEN ? AND ? AND record_index = ?")
+        params: list = [precursor_mz - mz_tol, precursor_mz + mz_tol, int(scan_id)]
+        if library_id is not None:
+            query += " AND (library_id = ? OR library_id IS NULL)"
+            params.append(library_id)
+        row = self._conn.execute(query + " LIMIT 1", params).fetchone()
+        return _row_to_record(row) if row else None
 
     def close(self) -> None:
         self._conn.close()

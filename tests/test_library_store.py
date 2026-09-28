@@ -417,3 +417,30 @@ def test_the_cli_reports_resolution_errors_without_a_traceback(tmp_path, monkeyp
     monkeypatch.setenv("MSDIAL_MSP_NEG", str(tmp_path / "gone.msp"))
     assert store.main(["--ion-mode", "negative"]) == 2
     assert "MSP_ENV_NOT_FOUND" in capsys.readouterr().err
+
+
+def test_record_by_scan_id_uses_the_mz_index_and_the_scan_id(library):
+    s = store.open_store(library)
+    try:
+        hit = s.record_by_scan_id(1, library_id=None, precursor_mz=100.004, mz_tol=0.05)
+        assert hit["name"] == "B"
+        assert hit["record_index"] == 1
+        assert s.record_by_scan_id(3, library_id=None, precursor_mz=100.0, mz_tol=0.05) is None
+    finally:
+        s.close()
+
+
+def test_record_by_scan_id_filters_by_library_id_when_the_store_has_one(library):
+    s = store.open_store(library)
+    try:
+        # .msp 由来は library_id が NULL。NULL は「区別不要」として残す。
+        assert s.record_by_scan_id(0, library_id="Msp1_lib", precursor_mz=100.0,
+                                   mz_tol=0.05)["name"] == "A"
+    finally:
+        s.close()
+
+
+def test_library_id_from_annotator_strips_the_trailing_counter():
+    assert store.library_id_from_annotator("Msp20260116160945_NCDK_dev_1") == "Msp20260116160945_NCDK_dev"
+    assert store.library_id_from_annotator("plain") == "plain"
+    assert store.library_id_from_annotator(None) is None
