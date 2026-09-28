@@ -70,6 +70,16 @@ def test_submit_rejects_a_submission_naming_the_same_spot_twice(ready):
     assert json.loads(curation_tools.curation_flags())["n_flags"] == 0
 
 
+def test_submit_rejects_when_the_alignment_changed_since_the_review(ready):
+    review_id = json.loads(curation_tools.curation_review())["review_id"]
+    with open(ready["arf2"], "ab") as handle:
+        handle.write(b"\x00")          # .arf2 の sha256 をレビュー時から変える
+    body = json.loads(curation_tools.curation_submit(
+        review_id=review_id, flags=[{"spot_id": 0, "flag": "wrong"}]))
+    assert body["status"] == "error"
+    assert json.loads(curation_tools.curation_flags())["n_flags"] == 0
+
+
 def test_view_data_pages_the_saved_review(ready):
     review_id = json.loads(curation_tools.curation_review())["review_id"]
     body = json.loads(curation_tools.curation_view_data(review_id, 0))

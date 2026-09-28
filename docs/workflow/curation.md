@@ -5,7 +5,8 @@
 
 ```mermaid
 flowchart TD
-    CR[curation_review] --> SEL[curation.evidence.select_spots]
+    CR[curation_review] --> LOAD[arf2.reader.load_catalog]
+    LOAD --> SEL[curation.evidence.select_spots]
     CR --> RUN[curation.review.run_review]
     RUN --> COL[curation.evidence.collect]
     COL --> ANN[arf2.match_results.load_spot_annotations]
@@ -32,25 +33,27 @@ flowchart TD
 
 1. lipidmix/core/path_resolvers.py  resolve_arf2_file_path()
 2. lipidmix/curation/judge.py  resolve_thresholds()
-3. lipidmix/curation/evidence.py  select_spots()
-4. └─ lipidmix/arf2/reader.py  load_catalog()
+3. lipidmix/arf2/reader.py  load_catalog()
+4. lipidmix/curation/evidence.py  select_spots()（load_catalog() が返したカタログを渡す）
 5. lipidmix/curation/review.py  run_review()
 6. │  └─ lipidmix/curation/evidence.py  collect()
 7. │     ├─ lipidmix/arf2/match_results.py  load_spot_annotations()
 8. │     ├─ lipidmix/dcl/reader.py  deserialize_dcl()
-9. │     ├─ lipidmix/arf/reader.py  deserialize()
-10. │     ├─ lipidmix/library/store.py  LibraryStore.record_by_scan_id()
-11. │     ├─ lipidmix/analysis/spectral_match.py  match_spectrum()
-12. │     ├─ lipidmix/plots/mirror.py  build_mirror_payload()
-13. │     ├─ lipidmix/eic/reader.py  read_eic_spot_css1()
-14. │     └─ lipidmix/curation/eic_shape.py  spot_shape()
-15. │  └─ lipidmix/curation/trend.py  composition()
-16. │  └─ lipidmix/curation/trend.py  fit_trends()
-17. │  └─ lipidmix/curation/flags.py  FlagStore.effective()
-18. │  └─ lipidmix/curation/judge.py  judge_spot()
-19. lipidmix/curation/review.py  save_review()
-20. └─ lipidmix/curation/viewer.py  render_html()
-21. lipidmix/curation/review.py  summary_tsv()
+9. │     ├─ lipidmix/curation/evidence.py  _arf_rows()
+10. │     │  └─ lipidmix/arf/reader.py  deserialize()
+11. │     ├─ lipidmix/curation/evidence.py  _reference()
+12. │     │  └─ lipidmix/library/store.py  LibraryStore.record_by_scan_id()
+13. │     ├─ lipidmix/analysis/spectral_match.py  match_spectrum()
+14. │     ├─ lipidmix/plots/mirror.py  build_mirror_payload()
+15. │     ├─ lipidmix/eic/reader.py  read_eic_spot_css1()
+16. │     └─ lipidmix/curation/eic_shape.py  spot_shape()
+17. │  └─ lipidmix/curation/trend.py  composition()
+18. │  └─ lipidmix/curation/trend.py  fit_trends()
+19. │  └─ lipidmix/curation/flags.py  FlagStore.effective()
+20. │  └─ lipidmix/curation/judge.py  judge_spot()
+21. lipidmix/curation/review.py  save_review()
+22. └─ lipidmix/curation/viewer.py  render_html()
+23. lipidmix/curation/review.py  summary_tsv()
 
 ## curation_submit
 

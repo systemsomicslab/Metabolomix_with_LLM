@@ -26,7 +26,6 @@ __all__ = ["curation_review", "curation_submit", "curation_flags", "curation_vie
 VIEWER_URI = "ui://ms-data-parser/curation-viewer"
 _UI_META = {"ui": {"resourceUri": VIEWER_URI}, "ui/resourceUri": VIEWER_URI}
 _APP_ONLY_META = {"ui": {"resourceUri": VIEWER_URI, "visibility": ["app"]}}
-_LOCAL_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True)
 _LOCAL_WRITE_APPEND = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False)
 
 
@@ -48,7 +47,7 @@ def curation_viewer_resource() -> str:
     return viewer.render_html(None)
 
 
-@mcp.tool(annotations=_LOCAL_WRITE, structured_output=False, meta=_UI_META)
+@mcp.tool(annotations=_LOCAL_WRITE_APPEND, structured_output=False, meta=_UI_META)
 def curation_review(ontology: list[str] | None = None, name_contains: str | None = None,
                     file_ids: list[int] | None = None, max_traces: int = 12,
                     thresholds: dict | None = None, file_path: str | None = None) -> str:
