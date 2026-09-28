@@ -1,4 +1,4 @@
-# USAGE — ms-data-parser MCP ツール一覧(全67ツール)
+# USAGE — ms-data-parser MCP ツール一覧(全71ツール)
 
 MS-DIAL 出力(`.arf` / `.arf2` / `.pai2` / `.dcl` / `.EIC.aef`)と mzTab-M を解析し、PCA・差次的解析・
 アノテーション検証・文献探索・レポート記録までを行う MCP サーバーのツール群です。
@@ -210,7 +210,27 @@ QC/blank の扱いはツールごとに異なる。`arf_parser` の `class_ids` 
 | `library_match_feature` | 測定 MS/MS(`.dcl`、間引かずに全ピーク使用)を候補と照合し、上位をスコア付きの TSV で返す。**並び順は `total_score`**(MS-DIAL の `GetTotalScore` の移植。RT・precursor m/z の一致度を足した**正規化しない和**で 1 を超える)。RT 項を足したかは `scoring.use_rt` に出る(`.dbs` の `IsUseTimeForAnnotationScoring` 次第。`.msp` では常に false)。上流の順位付けタプル全体は再現していないので**上位に化学的にありえない候補が残ることがある** — 1 位の妥当性は対向プロットで確かめること。`.dcl` に MS/MS が無いときは `not_found`(「未取得」であって「合わなかった」ではない)。スペクトル座標は戻り値に含めず `session.library.last_match` へ持つ。 |
 | `library_plot_mirror` | 直近の照合結果から対向プロット(上段=測定・下段=参照)を描く。既定は PNG 画像、`output="payload"` で座標 JSON。`scale` で縦軸の写し方を選ぶ(`"relative"` 既定 / `"sqrt"` / `"log10"`)——**precursor がベースピークのスペクトルは `relative` だと診断イオンが潰れて読めない**ので `"sqrt"` を使う。`label_policy` で m/z ラベルの衝突回避を選ぶ(`"auto"` 既定 = 水平・垂直の 2 次元判定 / `"msdial"` = 上流に忠実な水平のみの判定。忠実版のほうがラベルは少ない)。`.dbs` の強度足切りで**採点に入らなかった測定ピーク**は灰色で薄く描き分け、凡例と caption に件数が出る(足切りが 0 の run では現れない)。 |
 
-## 15. サーバ自身の更新
+## 15. アラインメントのキュレーション(注釈の一覧確認と機械判別)
+
+注釈付きスポットを、EIC・対向プロット・Δppm・ΔRT・脂質クラス×不飽和度の RT–m/z 傾向と
+機械判別つきで**一覧**確認し、ユーザーが付けたフラグ(「間違い」「疑わしい」)を記録する経路。
+`library_load`(アラインメントと同じフォルダの `*_Loaded.msp2.dbs` を推奨) → `curation_review` →
+ユーザーがビューアでフラグを付けて「送信用テキストをコピー」→ チャットに貼る → `curation_submit`。
+フラグの無いスポットは「間違っていない」の意で、何も記録しない。
+
+| ツール | 機能 |
+|--------|------|
+| `curation_review` | 対象(既定は注釈付き全部。`ontology` でクラス、`name_contains` で名前の部分一致)を選び、証拠収集・機械判別・HTML ビューア生成を 1 回で行う。戻り値は suspect 以上とフラグ済みのスポットだけの TSV・判定の件数・クラス別の傾向要約・`html_path`。EIC 系列とスペクトルは返さない。判定は `likely_wrong`(ppm_out / polarity_mismatch / precursor_unmatched)/ `suspect`(low_score / drt_out / eic_poor、または弱い兆候の重なり)/ `ok`。RT–m/z 傾向は補強にしか使わない。`thresholds` で既定値を上書きできる。1 回の上限は 3000 スポット。 |
+| `curation_submit` | フラグを追記する。ビューアの送信用テキストを `submission_text` にそのまま渡すか、`review_id` + `flags=[{spot_id, flag: wrong\|suspect\|clear, note}]`。不正な要素が 1 つでもあれば何も書かない。`source` は `user`(ユーザー自身の判断)/ `llm`(LLM の提案にユーザーが同意したもの)。 |
+| `curation_flags` | 現在のアラインメントで有効なフラグを TSV で返す。 |
+| `curation_view_data` | ビューア(MCP Apps)専用。LLM は呼ばない。 |
+
+フラグは `<アラインメントのフォルダ>\curation\flags.jsonl` に、`.arf2` の sha256 と
+MasterAlignmentID の組で記録する(MS-DIAL を再実行すると古いフラグは当たらない)。
+MCP Apps で会話内にビューアを出す経路は、Claude Desktop のローカル
+stdio サーバでは 2026-09 時点で未検証(ブラウザで `html_path` を開く経路が主)。
+
+## 16. サーバ自身の更新
 
 配布先のクローンを `origin/main` へ追従させるための保守ツール。解析の流れには現れない。
 遅れているときは更新通知が出る(`load_dataset` の冒頭行、`dataset_status` /

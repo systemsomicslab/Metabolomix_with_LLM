@@ -127,6 +127,12 @@ EXPECTED_ANNOTATIONS = {
     "log_search": LOCAL_WRITE_APPEND,
     # --- サーバ自身の更新（origin へ出て、作業ツリーを早送りする） ---
     "server_update": REMOTE_WRITE,
+    # --- キュレーション。review は <arf2>/curation/ に review-<id>.json/.html を書く（新しい
+    # review_id で別ファイルになるが既存は壊さない）。submit は flags.jsonl に追記する。 ---
+    "curation_review": LOCAL_WRITE,
+    "curation_submit": LOCAL_WRITE_APPEND,
+    "curation_flags": READ_ONLY,
+    "curation_view_data": READ_ONLY,
 }
 
 

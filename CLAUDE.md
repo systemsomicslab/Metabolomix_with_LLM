@@ -5,7 +5,7 @@
 ## このリポジトリは何か
 
 MS-DIAL（LC-MS リピドミクス／メタボロミクス解析ソフト）の出力を読み、LLM から使える形で
-公開する **MCP サーバ `ms-data-parser`**。ツール 67・リソース 4・リソーステンプレート 3。
+公開する **MCP サーバ `ms-data-parser`**。ツール 71・リソース 5・リソーステンプレート 3。
 GUI の外では読めない圧縮 MessagePack と独自バイナリを解し、解析そのものをサーバ側で回して
 要約だけを返す（生の行列を LLM の文脈に載せない）。
 
@@ -80,6 +80,7 @@ lipidmix/console/   MS-DIAL Console 実行層（job_manager / runner / output_co
 lipidmix/pipeline/  生データフォルダ起点の統括（受付 request/inputs/store・独立 worker が回す engine・
                     工程 handler の service・再開/取消の recovery・必須出力判定と品質レポートの report）
 lipidmix/handoff/   Console 成果物の受け渡しスキーマ（analysis-job.json）
+lipidmix/curation/  アラインメントのキュレーション（証拠収集・機械判別・フラグ記録・ビューア HTML）
 lipidmix/corpus/    蓄積ノートの純ロジック（knowledge_store / paper_ingest）
 lipidmix/tools/     形式に紐づかない MCP 公開層（入口・サンプル検索・目的・レポート・リソース）
 ```

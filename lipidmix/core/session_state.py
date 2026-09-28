@@ -303,6 +303,15 @@ class LibraryState:
         self.last_match: dict | None = None
 
 
+class CurationState:
+    """キュレーションのスロット。レビューの正準はディスク上の review-<id>.json で、
+    ここは review_id からそのフォルダを引くためのポインタだけを持つ。"""
+
+    def __init__(self):
+        self.last_review_id: str | None = None
+        self.review_dirs: dict[str, str] = {}
+
+
 class AnalysisSession:
     """パーサ別スロットと、パーサ横断の意味論ガードを束ねる。
 
@@ -341,6 +350,9 @@ class AnalysisSession:
 
         # --- 参照ライブラリスロット（MS/MS スペクトル照合。他スロットとは独立） ---
         self.library = LibraryState()
+
+        # --- キュレーションスロット（アラインメント注釈の一覧確認・機械判別・フラグ） ---
+        self.curation = CurationState()
 
         # --- Console ジョブスロット ---
         # ジョブ状態の正準はディスク上の analysis-job.json。ここはそのパスへのポインタ。

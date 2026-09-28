@@ -20,10 +20,15 @@ import server
 # 対話経路S1: pipeline を経ずに解析行列を作る dataset_build_matrix を追加(62→63)。
 # Task10: 参照ライブラリの MS/MS 照合 3 本を追加(63→66)。
 # 配布更新: 通知だけでなく適用まで行う server_update を追加(66→67)。
+# アラインメントのキュレーション: curation_review/submit/flags/view_data を追加(67→71)。
 EXPECTED_TOOLS = sorted([
     "library_load",
     "library_match_feature",
     "library_plot_mirror",
+    "curation_review",
+    "curation_submit",
+    "curation_flags",
+    "curation_view_data",
     "arf2_annotate_identities",
     "arf2_parser",
     "arf_differential",
@@ -95,6 +100,7 @@ EXPECTED_RESOURCES = sorted([
     "lipidmix://knowledge/index",
     "lipidmix://playbook/index",
     "lipidmix://knowledge/inbox",
+    "ui://ms-data-parser/curation-viewer",
 ])
 
 EXPECTED_TEMPLATES = sorted([
