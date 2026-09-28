@@ -96,3 +96,13 @@ def test_page_splits_spots(built):
 def test_app_template_has_no_embedded_data():
     html = viewer.render_html(None)
     assert "const EMBEDDED = null" in html
+
+
+def test_template_avoids_horizontal_overflow_at_phone_width():
+    # 実ファイル名にはスペースがなく、header h1 が縮められないと sticky header ごと
+    # 横スクロールが出る（binding requirement: no horizontal page scroll at phone
+    # width）。#trends / #grid の minmax も 320px 幅の携帯（16px ガター）では
+    # 300/320px 未満に縮まないと同様に溢れる。
+    html = viewer.render_html(None)
+    assert "overflow-wrap:anywhere" in html
+    assert "min(300px, 100%)" in html

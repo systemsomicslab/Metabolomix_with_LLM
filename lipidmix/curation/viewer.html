@@ -15,15 +15,15 @@
 body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
 header { position:sticky; top:0; z-index:2; background:var(--bg); border-bottom:1px solid var(--line);
          padding:10px 16px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
-header h1 { font-size:15px; margin:0 12px 0 0; }
+header h1 { font-size:15px; margin:0 12px 0 0; min-width:0; overflow-wrap:anywhere; }
 select, button, input[type=text] { font:inherit; color:inherit; background:var(--card);
          border:1px solid var(--line); border-radius:6px; padding:4px 8px; }
 button.primary { background:var(--meas); color:#fff; border-color:var(--meas); }
 #status { color:var(--muted); }
 main { padding:12px 16px 40px; }
 .warn { border-left:3px solid var(--suspect); padding:6px 10px; margin:6px 0; background:var(--card); }
-#trends { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:12px; margin-bottom:16px; }
-#grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:12px; }
+#trends { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(320px, 100%), 1fr)); gap:12px; margin-bottom:16px; }
+#grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap:12px; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px; }
 .card.flag-wrong { outline:2px solid var(--wrong); }
 .card.flag-suspect { outline:2px solid var(--suspect); }
