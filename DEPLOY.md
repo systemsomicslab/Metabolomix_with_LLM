@@ -1,37 +1,23 @@
-# Local MCP + NAS Knowledge Deployment
+# Local MCP Deployment
 
-The recommended team setup is:
+Each member runs the MCP server on their own machine:
 
 - Source code: each member keeps a local clone.
 - MCP server: each member runs the local `server.py` through stdio.
-- Literature search: unchanged; each local MCP server can call Europe PMC.
-- Knowledge: shared on the NAS through `LIPIDMIX_KNOWLEDGE_DIR`.
-- Analyses/objectives: local by default, unless a specific project needs shared
-  objective records.
+- Literature search: each local MCP server calls Europe PMC directly.
+- Knowledge, analyses/objectives, and reports: kept locally, under the clone by
+  default (`knowledge/`, `analyses/`, `reports/`). The `LIPIDMIX_*_DIR`
+  environment variables only override these locations; they do not imply any
+  shared storage.
 
 ```text
 [member PC] local python server.py --stdio
       |
-      | reads/writes shared notes
+      | reads/writes local notes
       v
-[NAS] \\NAS\lipidmix\knowledge
+<clone>\knowledge
       ├─ *.md
       └─ _inbox\*.md
-```
-
-## NAS Preparation
-
-Create one shared folder for knowledge:
-
-```powershell
-mkdir \\NAS\lipidmix\knowledge
-mkdir \\NAS\lipidmix\knowledge\_inbox
-```
-
-Seed it once from an existing checkout if needed:
-
-```powershell
-Copy-Item .\knowledge\* \\NAS\lipidmix\knowledge -Recurse -Force
 ```
 
 ## Member Setup
@@ -43,11 +29,13 @@ python -m pip install -r requirements.txt
 ```
 
 Set environment variables in the MCP client configuration, or in a shell when
-testing manually:
+testing manually. Only `LIPIDMIX_DATA_DIR` is usually needed; the others are
+optional overrides:
 
 ```powershell
-$env:LIPIDMIX_KNOWLEDGE_DIR="\\NAS\lipidmix\knowledge"
 $env:LIPIDMIX_DATA_DIR="C:\path\to\msdial\output"
+# Optional: keep accumulated notes outside the clone.
+# $env:LIPIDMIX_KNOWLEDGE_DIR="C:\path\to\lipidmix\knowledge"
 python server.py
 ```
 
@@ -63,7 +51,6 @@ transport is `stdio`.
       "command": "python",
       "args": ["C:\\Users\\<name>\\Lipidmix_with_LLM\\server.py"],
       "env": {
-        "LIPIDMIX_KNOWLEDGE_DIR": "\\\\NAS\\lipidmix\\knowledge",
         "LIPIDMIX_DATA_DIR": "C:\\path\\to\\msdial\\output"
       }
     }
@@ -127,12 +114,14 @@ not "up to date".
 
 ## Operational Notes
 
-- `knowledge/` is the only shared mutable state in the standard setup.
-- `analyses/` remains local, so each member's objective/search log does not
-  collide with others.
-- `knowledge/_inbox` is shared. Review ownership should be clear when multiple
-  people are promoting or rejecting notes.
-- Note writes, promote, and reject operations use simple lock files
-  (`.lipidmix.lock`) to reduce concurrent write corruption on the NAS.
+- `knowledge/`, `analyses/`, and `reports/` are each member's own local state.
+  Nothing is shared between members by the server.
+- Review `knowledge/_inbox` through `lipidmix://knowledge/inbox`, then promote
+  or reject notes with `ingest_promote` / `ingest_reject`.
+- Note writes, promote, and reject operations serialize through a per-directory
+  lock file (`.lipidmix.lock`), so concurrent tool calls (for example, two MCP
+  client sessions on the same machine) do not interleave writes to the same
+  directory. If a crashed process leaves a stale `.lipidmix.lock` behind, note
+  writes time out; delete the file once no server is running.
 - `pai2_parser` returns the PCA plot through MCP only. It no longer writes
   `pca_plot_latest.png` into the data directory.

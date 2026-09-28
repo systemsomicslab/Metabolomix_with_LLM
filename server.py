@@ -95,6 +95,6 @@ if __name__ == "__main__":
     start_update_check()
 
     # 既定は stdio（ローカル開発: Claude がサブプロセスとして起動）。
-    # NAS常駐では LIPIDMIX_TRANSPORT=streamable-http を設定し HTTP で待受ける。
+    # 常駐させて HTTP で待受けるときは LIPIDMIX_TRANSPORT=streamable-http を設定する。
     transport = os.environ.get("LIPIDMIX_TRANSPORT", "stdio")
     mcp.run(transport=transport)

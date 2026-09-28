@@ -50,8 +50,8 @@ Claude Code 用の `.mcp.json` はこれを絶対パスで指すが、`.git/info
 `.venv-1/` は 2026-07 のローカル LLM 検証用に残っている別環境で、通常の開発・テストでは使わない。
 
 環境変数（すべて任意・上書き用）: `LIPIDMIX_DATA_DIR`（データ探索先。既定 `<project>/data`）/
-`LIPIDMIX_KNOWLEDGE_DIR` `LIPIDMIX_PLAYBOOK_DIR` `LIPIDMIX_ANALYSES_DIR` `LIPIDMIX_REPORTS_DIR`（蓄積先。
-NAS 共有運用向け）/ `LIPIDMIX_TRANSPORT` `LIPIDMIX_HOST` `LIPIDMIX_PORT`（HTTP 待受）/ `LIPIDMIX_CAVEAT_MODE` /
+`LIPIDMIX_KNOWLEDGE_DIR` `LIPIDMIX_PLAYBOOK_DIR` `LIPIDMIX_ANALYSES_DIR` `LIPIDMIX_REPORTS_DIR`（蓄積先の上書き用）/
+`LIPIDMIX_TRANSPORT` `LIPIDMIX_HOST` `LIPIDMIX_PORT`（HTTP 待受）/ `LIPIDMIX_CAVEAT_MODE` /
 `LIPIDMIX_PLOT_OUTPUT`（描画系ツールの戻り値。既定 `image`。Plotly で自分で描く
 クライアント＝Use-LLLM は `payload` を置く）/ `MSDIAL_MSP_POS` `MSDIAL_MSP_NEG`
 （研究室の参照ライブラリ `.msp` の置き場所。`library_load(ion_mode=...)` が読む）/

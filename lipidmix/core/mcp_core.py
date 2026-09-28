@@ -60,8 +60,8 @@ def _state_dir(env_var: str, default_name: str) -> Path:
     """蓄積される状態ディレクトリを解決する。
 
     環境変数があればそのパスを、無ければ <project>/<default_name> を使う
-    （data_config.get_data_dir と同じ流儀）。NAS常駐運用では共有ボリューム上の
-    パスを指すことで、ローカル開発のコードと蓄積された知識を分離できる。
+    （data_config.get_data_dir と同じ流儀）。環境変数でクローン外のパスを
+    指せば、コードと蓄積された知識の置き場を分離できる。
 
     **ここで mkdir はしない**。この関数は import 時に評価されるので、作ってしまうと
     ユーザが消した `analyses/` が pytest やサーバ起動のたびに空で復活する。
@@ -111,7 +111,7 @@ def _build_report_meta(
 
 
 # 蓄積ノートの置き場（再利用コーパス）。analyses/ はセッション固有なので分離。
-# NAS常駐では LIPIDMIX_KNOWLEDGE_DIR / LIPIDMIX_ANALYSES_DIR を共有ボリュームへ向ける。
+# 置き場を変えたいときは LIPIDMIX_KNOWLEDGE_DIR / LIPIDMIX_ANALYSES_DIR で上書きする。
 # playbook/ は版管理された手順なのでコード側（イメージ内）に置いたまま。
 KNOWLEDGE_DIR = _state_dir("LIPIDMIX_KNOWLEDGE_DIR", "knowledge")
 PLAYBOOK_DIR = _state_dir("LIPIDMIX_PLAYBOOK_DIR", "playbook")
