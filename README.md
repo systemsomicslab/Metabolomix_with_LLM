@@ -101,7 +101,7 @@ implementation lives under `lipidmix/`.
 | Which functions a tool calls, in what order | [docs/workflow/](docs/workflow/index.md) |
 | MessagePack key indices, transcribed from MS-DIAL's `[Key(N)]` attributes | [docs/schema/](docs/schema/AlignmentSpotProperty.md) |
 | Running the parsers from the command line | [docs/cli.md](docs/cli.md) |
-| Deploying for a team, with knowledge on a shared NAS | [DEPLOY.md](DEPLOY.md), [docs/local_shared_knowledge_setup.md](docs/local_shared_knowledge_setup.md) |
+| Setting up the local MCP server on a member's machine | [DEPLOY.md](DEPLOY.md) |
 | Working on this repository | [CLAUDE.md](CLAUDE.md) |
 
 Tests run from the repository root:
