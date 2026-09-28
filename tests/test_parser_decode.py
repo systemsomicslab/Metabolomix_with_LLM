@@ -768,6 +768,25 @@ class TestNeverExecutedToolsSmoke(unittest.TestCase):
         self.assertIn("curation_flag", header)
         self.assertIn("wrong", body[0])
 
+    def test_arf2_annotate_identities_survives_a_malformed_flags_file(self):
+        """I6: 壊れた flags.jsonl でも一覧は返し、curation_flag を空にして 1 行で知らせる。"""
+        from lipidmix.arf2.tools import arf2_annotate_identities
+        from lipidmix.curation import flags as curation_flags
+
+        path = Path(self.write(
+            "synthetic.arf2", lz4_container(msgpack_stream([arf2_spot()]))))
+        flags_path = curation_flags.FlagStore(curation_flags.curation_dir(path)).path
+        flags_path.parent.mkdir(parents=True, exist_ok=True)
+        flags_path.write_text('{"spot_id": 7, "fl\n', encoding="utf-8")
+
+        result = arf2_annotate_identities(file_path=str(path), max_rows=10)
+
+        self.assertIn("PC 34:1", result)
+        notes = [l for l in result.splitlines() if l.startswith("#") and "flags.jsonl" in l]
+        self.assertEqual(len(notes), 1)
+        header, *body = result.splitlines()[-2:]
+        self.assertEqual(body[0].split("\t")[header.split("\t").index("curation_flag")], "")
+
     def test_dcl_find_msms_returns_the_matching_spectrum(self):
         from lipidmix.dcl.tools import dcl_find_msms
 

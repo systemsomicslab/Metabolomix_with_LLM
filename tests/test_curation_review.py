@@ -146,3 +146,106 @@ def test_extracted_script_is_valid_javascript(tmp_path):
     result = subprocess.run([node, "--check", str(script_path)],
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+# ---------- I2: TSV の行数上限 ----------
+
+def test_summary_tsv_keeps_the_first_max_rows_by_severity(built):
+    _, result = built
+    result["spots"][0]["flag"] = "suspect"      # ok だがフラグ済み → 表に載る(2 行になる)
+    assert review.n_summary_rows(result) == 2
+    lines = review.summary_tsv(result, max_rows=1).splitlines()
+    assert len(lines) == 2                      # 見出し + 1 行
+    assert lines[1].split("\t")[0] == "1"       # suspect が先(重い順)
+
+
+# ---------- M1: review_id の形式 ----------
+
+@pytest.mark.parametrize("bad", ["../x", "cr-1", "cr-20260101-000000-zzzz", "cr-20260101-000000-abcd/..", ""])
+def test_load_review_rejects_malformed_review_ids(built, bad):
+    paths, _ = built
+    with pytest.raises(ValueError):
+        review.load_review(paths["arf2"], bad)
+
+
+def test_generated_review_ids_are_valid(built):
+    _, result = built
+    assert review.is_valid_review_id(result["review_id"])
+
+
+# ---------- M5: 置換の順序と `<` のエスケープ ----------
+
+def test_spot_names_containing_the_prefix_placeholder_survive(built):
+    _, result = built
+    result["spots"][0]["name"] = "__SUBMISSION_PREFIX__ <!-- x"
+    html = viewer.render_html(result)
+    start = html.index("const EMBEDDED = ") + len("const EMBEDDED = ")
+    end = html.index(";\nconst PREFIX")
+    embedded = html[start:end]
+    assert "<" not in embedded
+    assert json.loads(embedded)["spots"][0]["name"] == "__SUBMISSION_PREFIX__ <!-- x"
+
+
+# ---------- M7: クラス別傾向の要約 ----------
+
+def test_trend_summary_includes_outlier_counts():
+    fake = {"trend": {"classes": {"PC": {"n": 9, "r2": 0.95, "n_outliers": 1, "coef": [1, 2]}}}}
+    assert review.trend_summary(fake) == {"PC": {"n": 9, "r2": 0.95, "n_outliers": 1}}
+
+
+# ---------- I4 / I5 / M4: ビューアのテンプレート ----------
+
+def _script():
+    html = viewer.render_html(None)
+    return html[html.index("<script>"):html.index("</script>")]
+
+
+def test_submission_includes_the_arf2_path():
+    script = _script()
+    body = script[script.index("function submission"):]
+    body = body[:body.index("\n}")]
+    assert "REVIEW.arf2_path" in body
+
+
+def test_trend_canvas_click_jumps_to_the_spot_card():
+    script = _script()
+    assert "jumpToSpot" in script
+    trends = script[script.index("function renderTrends"):]
+    trends = trends[:trends.index("\n}")]
+    assert 'addEventListener("click"' in trends
+    assert "HIT_RADIUS" in script
+    jump = script[script.index("function jumpToSpot"):]
+    jump = jump[:jump.index("\n}")]
+    assert "scrollIntoView" in jump and "highlight" in jump
+    assert "resetFilters" in jump
+
+
+def test_card_canvases_open_an_enlarged_dialog():
+    html = viewer.render_html(None)
+    assert '<dialog id="zoom"' in html
+    script = _script()
+    card = script[script.index("function spotCard"):]
+    card = card[:card.index("\n}")]
+    assert "openZoom" in card
+    zoom = script[script.index("function openZoom"):]
+    zoom = zoom[:zoom.index("\n}")]
+    assert "drawEic" in zoom and "drawMirror" in zoom
+    assert "Escape" in script
+    assert 'id="zoom-close"' in html
+
+
+def test_note_input_reflects_unsent_edits():
+    script = _script()
+    card = script[script.index("function spotCard"):]
+    card = card[:card.index("\n}")]
+    assert "edits.get(spot.spot_id).note" in card
+    assert "spot.mz?.toFixed" not in card
+
+
+def test_app_loader_shows_error_payloads_and_send_updates_spots():
+    script = _script()
+    assert "showError" in script
+    send = script[script.index('getElementById("send").addEventListener'):]
+    send = send[:send.index("\n});")]
+    assert "spot.flag = " in send and "spot.flag_note = " in send
+    assert send.index("spot.flag = ") < send.index("edits.clear()")

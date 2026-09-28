@@ -1,6 +1,10 @@
 """ビューア HTML の組み立て。テンプレートは同じフォルダの viewer.html。
 
-データを埋め込むときは `</` を `<\\/` にして script 要素から抜け出せないようにする。
+置換の順序: 先に `__SUBMISSION_PREFIX__` をテンプレートへ入れ、その**後で**データを埋め込む
+（逆にすると、スポット名などに同じ文字列があったとき埋め込んだデータまで書き換わる）。
+埋め込む JSON の `<` はすべて `\\u003c` にする——`</script>` だけでなく `<!--` などでも
+script 要素の解析状態が変わりうるため。`<` は JSON では文字列の中にしか現れないので、
+`\\u003c` は同じ文字として読み戻される。
 None を渡すと MCP Apps 用の空テンプレート（データは curation_view_data で取る）。
 """
 from __future__ import annotations
@@ -16,10 +20,10 @@ _PLACEHOLDER = "/*__CURATION_DATA__*/null"
 
 def render_html(review: dict | None) -> str:
     template = _TEMPLATE.read_text(encoding="utf-8")
+    template = template.replace("__SUBMISSION_PREFIX__", SUBMISSION_PREFIX.strip())
     if review is None:
         data = "null"
     else:
         data = json.dumps(review, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
-                          default=str).replace("</", "<\\/")
-    html = template.replace(_PLACEHOLDER, data, 1)
-    return html.replace("__SUBMISSION_PREFIX__", SUBMISSION_PREFIX.strip())
+                          default=str).replace("<", "\\u003c")
+    return template.replace(_PLACEHOLDER, data, 1)

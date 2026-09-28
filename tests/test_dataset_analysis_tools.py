@@ -221,13 +221,42 @@ def test_dataset_export_applies_curation_flags_via_sibling_arf2(tmp_path):
     out = tmp_path / "diff.tsv"
     parsed = json.loads(dataset_export_differential(str(out)))
     assert parsed["status"] == "success"
-    assert parsed["curation"] == "applied"
+    assert parsed["curation"] == {"state": "applied", "wrong_excluded": 1,
+                                  "suspect": 0, "orphaned": 0}
     lines = out.read_text(encoding="utf-8").splitlines()
     body = [l for l in lines if l and not l.startswith("#")][1:]
     assert not any(l.split("\t")[0] == "0" for l in body)
     meta = [l for l in lines if l.startswith("# curation")]
     assert len(meta) == 1
     assert meta[0].startswith("# curation = applied\t")
+
+
+def test_dataset_export_reports_a_malformed_flags_file(tmp_path):
+    """I6: 壊れた flags.jsonl は wrong を黙って落とさず、ファイルと行を名指しで止める。"""
+    from lipidmix.curation import flags as curation_flags
+    from lipidmix.tools.dataset_analysis_tools import (
+        dataset_differential, dataset_export_differential, dataset_preprocess,
+    )
+
+    ds = _load_ds()
+    mztab = tmp_path / "Height_AlignmentResult_2026_01_01_2026_01_01_09.mzTab"
+    mztab.write_text("", encoding="utf-8")
+    ds.source_files = {str(mztab): "sha"}
+    arf2 = tmp_path / "AlignmentResult_2026_01_01.arf2"
+    arf2.write_bytes(b"x")
+    store = curation_flags.FlagStore(curation_flags.curation_dir(arf2))
+    store.path.parent.mkdir(parents=True)
+    store.path.write_text('{"spot_id": 0, "flag": "wr\n', encoding="utf-8")
+
+    dataset_preprocess()
+    a, b = _groups(session_state.session.dataset)
+    dataset_differential(group_a=a, group_b=b)
+
+    out = tmp_path / "diff.tsv"
+    parsed = json.loads(dataset_export_differential(str(out)))
+    assert parsed["error"]["code"] == "CURATION_FLAGS_INVALID"
+    assert parsed["error"]["details"] == {"flags_file": str(store.path), "line": 1}
+    assert not out.exists()
 
 
 def test_dataset_export_refuses_without_inchikey(tmp_path):

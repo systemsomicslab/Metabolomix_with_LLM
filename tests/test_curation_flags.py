@@ -71,3 +71,47 @@ def test_alignment_key_hashes_the_file(tmp_path):
     assert key["alignment_file"] == "AlignmentResult_x.arf2"
     assert len(key["alignment_sha256"]) == 64
     assert flags.curation_dir(path) == tmp_path / "curation"
+
+
+# ---------- I4: 送信用テキストは .arf2 の絶対パスを運ぶ ----------
+
+def test_submission_text_carries_the_arf2_path(tmp_path):
+    arf2 = str((tmp_path / "AlignmentResult_x.arf2").resolve())
+    text = flags.build_submission_text("cr-1", [{"spot_id": 3, "flag": "wrong"}], arf2)
+    assert json.loads(text[len(flags.SUBMISSION_PREFIX):])["arf2_path"] == arf2
+    assert flags.parse_submission_text(text)["arf2_path"] == arf2
+
+
+def test_submission_text_without_arf2_path_still_parses():
+    text = flags.SUBMISSION_PREFIX + json.dumps({"review_id": "cr-1", "flags": []})
+    assert flags.parse_submission_text(text)["arf2_path"] is None
+
+
+# ---------- I6: 壊れた行は名前付きの例外 ----------
+
+def test_a_truncated_line_raises_flag_file_error_naming_the_line(tmp_path):
+    store = flags.FlagStore(tmp_path)
+    store.append([{"spot_id": 1, "flag": "wrong"}], alignment=ALIGN, review_id="r", source="user")
+    with open(store.path, "a", encoding="utf-8") as handle:
+        handle.write('{"spot_id": 2, "flag": "wro\n')
+    with pytest.raises(flags.FlagFileError) as info:
+        store.effective(ALIGN["alignment_sha256"])
+    assert info.value.path == store.path
+    assert info.value.line_no == 2
+    assert "flags.jsonl" in str(info.value) and "2" in str(info.value)
+
+
+def test_a_line_without_an_integer_spot_id_is_a_flag_file_error(tmp_path):
+    store = flags.FlagStore(tmp_path)
+    store.path.write_text('{"flag": "wrong", "alignment_sha256": "x"}\n', encoding="utf-8")
+    with pytest.raises(flags.FlagFileError) as info:
+        store.effective("x")
+    assert info.value.line_no == 1
+
+
+# ---------- M2: メモの改行・タブは空白へ ----------
+
+def test_notes_have_control_whitespace_normalised():
+    cleaned = flags.validate_entries([{"spot_id": 1, "flag": "wrong", "note": "a\r\nb\tc"}],
+                                     allowed_spot_ids=None)
+    assert cleaned[0]["note"] == "a  b c"

@@ -76,9 +76,16 @@ def arf2_annotate_identities(file_path: str | None = None, max_rows: int = 50) -
         return json_payload({"status": "error", "message": ".arf2 が見つかりません。"})
     from lipidmix.arf2.reader import format_spots_as_table, load_catalog
     from lipidmix.curation import apply as curation_apply
+    from lipidmix.curation.flags import FlagFileError
     spots = load_catalog(path)
     tables = _identity_tables()
-    flag_set = curation_apply.flags_for_arf2(path)
+    flag_note = None
+    try:
+        flag_set = curation_apply.flags_for_arf2(path)
+    except FlagFileError as exc:
+        # 一覧そのものは返す。curation_flag は空にし、壊れた記録を 1 行で名指しする。
+        flag_set = {"wrong": set(), "suspect": set()}
+        flag_note = f"# curation_flag は空欄: {exc}"
     rows = []
     for spot in spots[:max_rows]:
         raw_name = spot.get("Name") or ""
@@ -110,6 +117,7 @@ def arf2_annotate_identities(file_path: str | None = None, max_rows: int = 50) -
         f"# 総スポット {len(spots)} 件のうち先頭 {len(rows)} 件（ファイル順・"
         f"強度順ではない）。残り {max(0, len(spots) - len(rows))} 件は未表示。\n"
         f"# MSI はクラス上限の保守的推定（ARF2 に MS/MS 取得フラグと質量誤差が無いため）。"
+        + (f"\n{flag_note}" if flag_note else "")
     )
     columns = ["MasterAlignmentID", "name", "normalized", "refmet",
               "lipid_maps_category", "msi_level", "curation_flag"]

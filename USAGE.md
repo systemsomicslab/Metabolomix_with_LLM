@@ -36,7 +36,7 @@ pipeline_run → pipeline_status(確認) → pipeline_resume(訂正・再開が�
 | ツール | 機能 |
 |--------|------|
 | `arf2_parser` | `.arf2`(全体カタログ)を解析しメタデータ概観を要約。サンプル別強度は含まないため多変量解析は不可。 |
-| `arf2_annotate_identities` | ARF2 スポット注釈を GOSLIN 正規化・RefMet/LIPID MAPS ID・MSI レベルで一括標準化し TSV 表で返す(オフライン)。**ファイル先頭から `max_rows` 件**で強度順ではない(総数と未表示件数はヘッダ行に出る)。MSI はクラス上限の保守評価。 |
+| `arf2_annotate_identities` | ARF2 スポット注釈を GOSLIN 正規化・RefMet/LIPID MAPS ID・MSI レベルで一括標準化し TSV 表で返す(オフライン)。**ファイル先頭から `max_rows` 件**で強度順ではない(総数と未表示件数はヘッダ行に出る)。MSI はクラス上限の保守評価。`curation_flag` 列にキュレーションの有効フラグ(`wrong` / `suspect`、未フラグは空)が出る。 |
 
 ## 3. ARF 解析(サンプル別強度・PCA・差次的解析)
 
@@ -220,14 +220,14 @@ QC/blank の扱いはツールごとに異なる。`arf_parser` の `class_ids` 
 
 | ツール | 機能 |
 |--------|------|
-| `curation_review` | 対象(既定は注釈付き全部。`ontology` でクラス、`name_contains` で名前の部分一致)を選び、証拠収集・機械判別・HTML ビューア生成を 1 回で行う。戻り値は suspect 以上とフラグ済みのスポットだけの TSV・判定の件数・クラス別の傾向要約・`html_path`。EIC 系列とスペクトルは返さない。判定は `likely_wrong`(polarity_mismatch / precursor_unmatched)/ `suspect`(ppm_out / low_score / drt_out / eic_poor、または弱い兆候の重なり)/ `ok`。RT–m/z 傾向は補強にしか使わない。`thresholds` で既定値を上書きできる。1 回の上限は 3000 スポット。 |
-| `curation_submit` | フラグを追記する。ビューアの送信用テキストを `submission_text` にそのまま渡すか、`review_id` + `flags=[{spot_id, flag: wrong\|suspect\|clear, note}]`。不正な要素が 1 つでもあれば何も書かない。`source` は `user`(ユーザー自身の判断)/ `llm`(LLM の提案にユーザーが同意したもの)。 |
+| `curation_review` | 対象(既定は注釈付き全部。`ontology` でクラス、`name_contains` で名前の部分一致)を選び、証拠収集・機械判別・HTML ビューア生成を 1 回で行う。戻り値は suspect 以上とフラグ済みのスポットだけの TSV(判定の重い順の先頭 `max_rows` 行、既定 100。総数 `n_table_rows_total`・表示数 `n_table_rows_shown`。全件は HTML ビューア)・判定の件数・クラス別の傾向要約(点数・R²・外れ数)・`html_path`。EIC 系列とスペクトルは返さない。`file_ids` に `.arf` の行に無い試料 ID があればエラー。判定は `likely_wrong`(polarity_mismatch / precursor_unmatched)/ `suspect`(ppm_out / low_score / drt_out / eic_poor、または弱い兆候の重なり)/ `ok`。RT–m/z 傾向は補強にしか使わない。`thresholds` で既定値を上書きできる。1 回の上限は 3000 スポット。 |
+| `curation_submit` | フラグを追記する。ビューアの送信用テキストを `submission_text` にそのまま渡すか、`review_id` + `flags=[{spot_id, flag: wrong\|suspect\|clear, note}]`。不正な要素が 1 つでもあれば何も書かない。`source` は `user`(ユーザー自身の判断)/ `llm`(LLM の提案にユーザーが同意したもの)。送信用テキストは `.arf2` の絶対パスを運ぶので、サーバ再起動やデータフォルダの切り替えの後でもそのまま貼れば送れる。直接渡すときは `file_path`(レビューを作った `.arf2`)でも探し先を指定できる。 |
 | `curation_flags` | 現在のアラインメントで有効なフラグを TSV で返す。 |
 | `curation_view_data` | ビューア(MCP Apps)専用。LLM は呼ばない。 |
 
 フラグは `<アラインメントのフォルダ>\curation\flags.jsonl` に、`.arf2` の sha256 と
 MasterAlignmentID の組で記録する(MS-DIAL を再実行すると古いフラグは当たらない)。
-`arf_export_differential` / `dataset_export_differential` は既定(`apply_curation=True`)で `wrong` のスポットを同定なしとして出力から外し、メタ行 `# curation = ...` で宣言する(15 列の契約は不変)。
+`arf_export_differential` / `dataset_export_differential` は既定(`apply_curation=True`)で `wrong` のスポットを同定なしとして出力から外し、メタ行 `# curation = ...` で宣言する(15 列の契約は不変)。戻り値の `curation` に適用状況と件数が出る。以前の版の `.arf2`(同じファイル名で sha256 が違う)に付いたフラグは当てず、件数を `warnings` で知らせる。`flags.jsonl` に読めない行があれば、どのツールも黙って読み飛ばさずにファイル名と行番号を返して止まる(`arf2_annotate_identities` だけは一覧を返し、`curation_flag` を空にして注記する)。`pipeline_run` が書くエクスポートにはフラグを当てない。
 MCP Apps で会話内にビューアを出す経路は、Claude Desktop のローカル
 stdio サーバでは 2026-09 時点で未検証(ブラウザで `html_path` を開く経路が主)。
 

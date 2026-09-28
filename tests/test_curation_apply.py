@@ -107,3 +107,45 @@ def test_export_dataset_result_unmapped_curation_keeps_all_rows(tmp_path):
     assert len(meta) == 1
     assert meta[0].startswith("# curation = unmapped\t")
     assert info["curation"] == "unmapped"
+
+
+# ---------- I7: 以前の版のアラインメントに付いたフラグ(orphaned) ----------
+
+def test_flags_recorded_against_an_earlier_version_are_counted_as_orphaned(tmp_path):
+    arf2 = tmp_path / "AlignmentResult_2026_01_01.arf2"
+    arf2.write_bytes(b"new")
+    store = flags.FlagStore(flags.curation_dir(arf2))
+    old = {"alignment_file": arf2.name, "alignment_sha256": "0" * 64}
+    store.append([{"spot_id": 1, "flag": "wrong"}, {"spot_id": 2, "flag": "suspect"},
+                  {"spot_id": 3, "flag": "wrong"}], alignment=old, review_id="r", source="user")
+    store.append([{"spot_id": 3, "flag": "clear"}], alignment=old, review_id="r", source="user")
+    other_file = {"alignment_file": "AlignmentResult_other.arf2", "alignment_sha256": "1" * 64}
+    store.append([{"spot_id": 9, "flag": "wrong"}], alignment=other_file, review_id="r", source="user")
+    state = apply.flags_for_arf2(arf2)
+    assert state["n"] == 0 and state["wrong"] == set()
+    assert state["orphaned"] == 2
+
+
+def test_no_flags_file_skips_hashing_the_alignment(tmp_path, monkeypatch):
+    arf2 = tmp_path / "AlignmentResult_2026_01_01.arf2"
+    arf2.write_bytes(b"x")
+
+    def boom(_):
+        raise AssertionError("フラグが無いのに .arf2 を hash した")
+
+    monkeypatch.setattr(apply, "alignment_key", boom)
+    state = apply.flags_for_arf2(arf2)
+    assert state["n"] == 0 and state["orphaned"] == 0
+
+
+# ---------- M6: バッチ語幹の後ろに数字が続く別バッチを拾わない ----------
+
+def test_arf2_for_mztab_does_not_match_a_stem_that_is_a_prefix_of_another(tmp_path):
+    (tmp_path / "AlignmentResult_2026_01_01_2_3.arf2").write_bytes(b"x")
+    (tmp_path / "AlignmentResult_2026_01_01_2_30.arf2").write_bytes(b"x")
+    mztab = tmp_path / "Height_AlignmentResult_2026_01_01_2_30_09.mzTab"
+    mztab.write_text("", encoding="utf-8")
+    assert apply.arf2_for_mztab(mztab).name == "AlignmentResult_2026_01_01_2_30.arf2"
+    short = tmp_path / "Height_AlignmentResult_2026_01_01_2_3_09.mzTab"
+    short.write_text("", encoding="utf-8")
+    assert apply.arf2_for_mztab(short).name == "AlignmentResult_2026_01_01_2_3.arf2"

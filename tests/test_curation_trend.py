@@ -51,3 +51,40 @@ def test_linear_inliers_without_outlier_flag_nothing():
         [(32, 0), (34, 0), (36, 0), (34, 1), (36, 1), (38, 1), (36, 2), (38, 4)])]
     result = trend.fit_trends(points, TH)
     assert all(not v["outlier"] for v in result["spots"].values())
+
+
+# ---------- I3: パーサはモジュールで 1 回だけ作る ----------
+
+def test_composition_constructs_the_lipid_parser_only_once(monkeypatch):
+    import pygoslin.parser.Parser as goslin
+    from types import SimpleNamespace
+
+    built = []
+
+    class CountingParser:
+        def __init__(self):
+            built.append(self)
+
+        def parse(self, name):
+            info = SimpleNamespace(num_carbon=34, double_bonds=1)
+            return SimpleNamespace(lipid=SimpleNamespace(info=info))
+
+    monkeypatch.setattr(goslin, "LipidParser", CountingParser)
+    monkeypatch.setattr(trend, "_PARSER", None)
+    assert trend.composition("PC 34:1") == (34, 1)
+    assert trend.composition("PC 16:0_18:1") == (34, 1)
+    assert len(built) == 1
+
+
+def test_shared_parser_still_returns_none_after_an_unparseable_name():
+    assert trend.composition("RIKEN N-VS1 ID-45 from Mouse") is None
+    assert trend.composition("PE O-38:5") == (38, 5)
+
+
+# ---------- M7: クラスごとの外れ数 ----------
+
+def test_class_summary_counts_outliers():
+    points = [_pc(i, c, d) for i, (c, d) in enumerate(
+        [(32, 0), (34, 0), (36, 0), (34, 1), (36, 1), (38, 1), (36, 2), (38, 4)])]
+    points.append(_pc(99, 34, 2, rt=30.0))
+    assert trend.fit_trends(points, TH)["classes"]["PC"]["n_outliers"] == 1

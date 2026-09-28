@@ -224,7 +224,9 @@ def dataset_export_differential(output_path: str,
 
     apply_curation（既定 true）: curation_submit で wrong を付けたスポットを
     同定なしとして扱い、出力から外す。フラグがあればメタ行 # curation = ... で
-    適用状況を宣言する。フラグが無ければ出力は変わらない。
+    適用状況を宣言する。フラグが無ければ出力は変わらない。成功 payload の
+    `curation` は `{state, wrong_excluded, suspect, orphaned}`（arf_export_differential と
+    同じ形）。フラグ記録に読めない行があれば書き出さずに `CURATION_FLAGS_INVALID`。
 
     result_id: 書き出す結果を名指しする（省略時は直近の差次的結果）。
         **前処理をやり直した後の古い結果は書き出しません**（`STALE_ANALYSIS_RESULT`）。
@@ -255,11 +257,16 @@ def dataset_export_differential(output_path: str,
     from lipidmix.analysis.dataset_export import export_dataset_result
     from lipidmix.core.atomic_io import DomainError
     from lipidmix.curation import apply as curation_apply
+    from lipidmix.curation.flags import FlagFileError, orphaned_warning
 
     curation = None
+    flag_set = None
     arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p) for p in ds.source_files)), None)
     if arf2 is not None:
-        flag_set = curation_apply.flags_for_arf2(arf2)
+        try:
+            flag_set = curation_apply.flags_for_arf2(arf2)
+        except FlagFileError as exc:
+            return mztab_error("CURATION_FLAGS_INVALID", str(exc), exc.details())
         if flag_set["n"]:
             # SMF_ID と MasterAlignmentID が同じ空間だと言えるのは、隣接 .arf との
             # 対応が検証済み（feature_axis = "arf_spot_index == mztab_smf_id"）のときだけ。
@@ -276,9 +283,13 @@ def dataset_export_differential(output_path: str,
             return _missing("dataset_differential_result", exc.message)
         return mztab_error(exc.code, exc.message, exc.details or None)
 
+    curation_stats = info.pop("curation_stats", None)
+    info["curation"] = curation_apply.payload_summary(info["curation"], flag_set, curation_stats)
+    orphaned = (flag_set or {}).get("orphaned", 0)
     return json_payload({
         "status": "success",
         **info,
+        **({"warnings": [orphaned_warning(orphaned)]} if orphaned else {}),
         "log2fc_sign": "log2fc は正なら group_b が高い（上昇）。",
         "note": ("n_unannotated は InChIKey が付かず書き出さなかった行数です。"
                  "「変化が無かった」ではなく「調べていない」行です。"),

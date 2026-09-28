@@ -62,6 +62,9 @@
 | 37 | `float` | `EnhancedDotProduct` |
 | 38 | `float` | `SpectralEntropy` |
 
+このリポジトリの `has_msms`（`lipidmix/arf2/match_results.py`）は `SquaredWeightedDotProduct >= 0`
+（Key 3 が番兵 -1 でない）で判定しており、上流の `IsSpectrumComparisonPerformed` を簡略化したもの。
+
 ## 注釈名の接頭辞（スポット Key 12）
 
 上流 `StandardAnnotationProcess.SetRepresentativeProperty` / `DataAccess.SetMoleculeMsPropertyAsSuggested`:

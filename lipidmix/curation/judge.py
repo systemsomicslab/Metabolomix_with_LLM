@@ -78,7 +78,7 @@ def _mz(ev: dict, th: dict) -> dict:
             reasons.append("ppm_out")
         elif abs(ppm) > th["ppm_pass"]:
             reasons.append("ppm_borderline")
-    if any(r in STRONG_REASONS or r in WEAK_REASONS for r in reasons):
+    if any(r in STRONG_REASONS for r in reasons) or "ppm_out" in reasons:
         return _check("FAIL", reasons)     # ppm_out は弱いが、mz 系統自体は FAIL にする
     if reasons:
         return _check("BORDERLINE", reasons)

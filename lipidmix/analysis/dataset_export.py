@@ -106,10 +106,10 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
         })
 
     curation_line = None
+    stats = None
     if curation is not None:
         from lipidmix.curation.apply import meta_line
         flag_set = curation["flag_set"]
-        stats = None
         if curation["state"] == "applied":
             wrong = {str(s) for s in flag_set["wrong"]}
             suspect = {str(s) for s in flag_set["suspect"]}
@@ -145,6 +145,7 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
         "n_with_inchikey": len(rows),
         "n_unannotated": n_unannotated,
         "curation": curation["state"] if curation else None,
+        "curation_stats": stats if curation else None,
     }
 
 

@@ -12,7 +12,7 @@ plots.mirror、msdial.peak_verification、curation.eic_shape。tools_* は impor
 (kidney pos, 2196 spots)で JSON が 41.7 MB になり、内訳は EIC 31.0 MB(12 トレース
 × 中央値 70 点)・mirror 5.5 MB(測定ピーク中央値 45、最大 3835)だった。
 `EIC_MAX_POINTS`(既定 40)は `_downsample_points()` が `spot_shape()` 計算の**後**に
-1 サンプルずつ間引く(先頭・末尾・頂点・left/right 最近傍を必ず残し、残りは等間隔)。
+1 サンプルずつ間引く(先頭・末尾・頂点・left/right 最近傍を必ず残し、残りはトレース全体に等間隔に散らす)。
 `MIRROR_MAX_PEAKS`(既定 150)は `_cut_mirror_for_payload()` が `build_mirror_payload()`
 で満スペクトルから `matched_mz`/`matched_measured_mz`/`labels` を確定させた**後**に
 measured/reference それぞれを間引く(一致ピークは必ず残し、残りは強度降順)。
@@ -48,15 +48,24 @@ EIC_MAX_POINTS = 40
 MIRROR_MAX_PEAKS = 150
 
 
+def _spaced_indices(n: int, k: int) -> set[int]:
+    """0..n-1 に等間隔な k 点（両端を含む）。`numpy.linspace(0, n-1, k)` の四捨五入の整数版。"""
+    if k <= 1:
+        return {0}
+    return {(i * (n - 1) + (k - 1) // 2) // (k - 1) for i in range(k)}
+
+
 def _downsample_points(points: list, left: float, right: float,
                        max_points: int = EIC_MAX_POINTS) -> list:
     """EIC の 1 サンプル分の点列を payload 用に間引く(`spot_shape` を計算した**後**に
     呼ぶこと——形状指標は間引き前の全点で確定済みでなければならない)。
 
     先頭・末尾・頂点(最大強度)・`left`/`right` に最も近い点は必ず残し、残りは
-    等間隔(uniform stride)で埋める。強度は整数に丸める(x は `_trim()` で
-    既に小数 3 桁に丸め済みなのでそのまま)。点数が上限以下ならそのまま
-    (強度の丸めだけ行う)。
+    トレース全体に等間隔に散らした位置で埋める(先頭から詰めると、点数が上限の
+    2 倍未満のトレースでピークの右半分が丸ごと落ちる)。等間隔の点数 k は、
+    アンカーとの和集合が `max_points` 以下になるまで減らす。強度は整数に丸める
+    (x は `_trim()` で既に小数 3 桁に丸め済みなのでそのまま)。点数が上限以下なら
+    そのまま(強度の丸めだけ行う)。
     """
     n = len(points)
     if n <= max_points:
@@ -64,14 +73,13 @@ def _downsample_points(points: list, left: float, right: float,
     apex = max(range(n), key=lambda i: points[i][1])
     nearest_left = min(range(n), key=lambda i: abs(points[i][0] - left))
     nearest_right = min(range(n), key=lambda i: abs(points[i][0] - right))
-    keep = {0, n - 1, apex, nearest_left, nearest_right}
-    stride = max(1, n // max_points)
-    i = 0
-    while i < n and len(keep) < max_points:
-        keep.add(i)
-        i += stride
-    chosen = sorted(keep)[:max_points]
-    return [[points[i][0], round(points[i][1])] for i in chosen]
+    anchors = {0, n - 1, apex, nearest_left, nearest_right}
+    k = max_points
+    keep = anchors | _spaced_indices(n, k)
+    while len(keep) > max_points and k > 1:
+        k -= 1
+        keep = anchors | _spaced_indices(n, k)
+    return [[points[i][0], round(points[i][1])] for i in sorted(keep)]
 
 
 def _keep_most_intense_peaks(points: list, is_matched, max_points: int) -> list:
@@ -156,9 +164,27 @@ def _trim(points, left, right):
             if left - margin <= x <= right + margin]
 
 
+class UnknownFileIdsError(ValueError):
+    """`file_ids` に `.arf` の行に無い試料 ID が含まれる。`missing` はその昇順リスト。"""
+
+    def __init__(self, missing: list[int]):
+        self.missing = missing
+        super().__init__(f"file_ids のうち {missing} はこのアラインメントの .arf の行にありません。")
+
+
+def _check_file_ids(rows_by_spot: dict, file_ids) -> None:
+    if file_ids is None or not rows_by_spot:
+        return
+    known = {r.get("file_id") for rows in rows_by_spot.values() for r in rows}
+    missing = sorted(set(file_ids) - known)
+    if missing:
+        raise UnknownFileIdsError(missing)
+
+
 def _choose_file_ids(rows, representative_file_id, file_ids, max_traces):
     if file_ids is not None:
         return list(file_ids)[:max_traces]
+    rows = [r for r in rows if r.get("file_id") is not None]   # 壊れた(空の)行は数えない
     detected = sorted((r for r in rows if not r.get("is_gap_filled")),
                       key=lambda r: -(r.get("height") or 0.0))
     chosen = [representative_file_id] if representative_file_id is not None else []
@@ -190,11 +216,14 @@ def _reference(store, match, rep_mz):
 
 
 def collect(arf2_path, spots, *, store, ms2_tol, th, file_ids=None, max_traces=12):
+    """スポットごとの証拠を集める。`file_ids` に `.arf` の行に無い ID があれば、重い読み込み
+    (`.dcl`・EIC)の前に `UnknownFileIdsError` を投げる。"""
     files = sibling_files(arf2_path)
+    rows_by_spot = _arf_rows(files["arf"])
+    _check_file_ids(rows_by_spot, file_ids)
     annotations = load_spot_annotations(arf2_path)
     dcl = (deserialize_dcl(str(files["dcl"]), include_spectrum=True, top_n_peaks=None)
            if files["dcl"] else [])
-    rows_by_spot = _arf_rows(files["arf"])
     stats = {"n_reference_resolved": 0, "n_with_match": 0,
              "missing_files": sorted(k for k, v in files.items() if v is None)}
 
@@ -245,7 +274,8 @@ def collect(arf2_path, spots, *, store, ms2_tol, th, file_ids=None, max_traces=1
         samples = []
         if files["eic"] is not None and rows:
             chosen = _choose_file_ids(rows, rep_file, file_ids, max_traces)
-            detected = {r["file_id"]: not r.get("is_gap_filled") for r in rows}
+            detected = {r["file_id"]: not r.get("is_gap_filled") for r in rows
+                        if r.get("file_id") is not None}
             eic = read_eic_spot_css1(str(files["eic"]), spot_id, chosen,
                                      max_traces=max_traces, max_total_points=max_traces * 5000)
             for sample in eic["samples"]:

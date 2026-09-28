@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 
 from lipidmix.msdial.lipid_identity import _clean_msdial_name
@@ -17,6 +19,25 @@ from lipidmix.msdial.lipid_identity import _clean_msdial_name
 # 「事実上完全に線形」なクラスでも 1 点だけの外れを検出できるようにする（Ruling 2）。
 MIN_SCALE = 0.02
 
+# LipidParser の構築は 1 回約 75 ms（文法の読み込み）で、スポットごとに作ると実データの
+# レビュー 1 回で 110〜165 秒を占めた。最初の呼び出しで 1 つだけ作って使い回す。
+# pygoslin が無い・構築に失敗した場合は _PARSER_UNAVAILABLE を立て、以後は常に None を返す。
+# LipidParser は parse のたびに自身の event handler を書き換えるので、共有するなら排他する。
+_PARSER = None
+_PARSER_UNAVAILABLE = False
+_PARSER_LOCK = threading.Lock()
+
+
+def _lipid_parser():
+    global _PARSER, _PARSER_UNAVAILABLE
+    if _PARSER is None and not _PARSER_UNAVAILABLE:
+        try:
+            from pygoslin.parser.Parser import LipidParser
+            _PARSER = LipidParser()
+        except Exception:  # noqa: BLE001 - pygoslin 不在なら傾向の対象外にするだけ
+            _PARSER_UNAVAILABLE = True
+    return _PARSER
+
 
 def composition(name) -> tuple[int, int] | None:
     if not name or not str(name).strip():
@@ -24,9 +45,12 @@ def composition(name) -> tuple[int, int] | None:
     clean, _ = _clean_msdial_name(name)
     if not clean:
         return None
+    parser = _lipid_parser()
+    if parser is None:
+        return None
     try:
-        from pygoslin.parser.Parser import LipidParser
-        lipid = LipidParser().parse(clean)
+        with _PARSER_LOCK:
+            lipid = parser.parse(clean)
         info = lipid.lipid.info
         return int(info.num_carbon), int(info.double_bonds)
     except Exception:  # noqa: BLE001 - 脂質名として読めない注釈は傾向の対象外
@@ -81,7 +105,8 @@ def fit_trends(points: list[dict], th: dict) -> dict:
         reliable = r2 is not None and r2 >= th["trend_min_r2"]
         classes[ontology] = {"n": len(members), "r2": r2,
                              "coef": [round(float(b), 5) for b in beta],
-                             "scale": round(float(effective_scale), 5)}
+                             "scale": round(float(effective_scale), 5),
+                             "n_outliers": int(outlier_all.sum())}
         for p, r, z, outlier in zip(members, residual, z_all, outlier_all):
             spots[p["spot_id"]] = {"residual": round(float(r), 4), "z": round(float(z), 3),
                                    "outlier": bool(outlier),

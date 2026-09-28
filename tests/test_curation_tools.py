@@ -110,3 +110,142 @@ def test_review_tool_advertises_the_viewer_resource():
 def test_viewer_resource_is_html_for_mcp_apps():
     resources = {str(r.uri): r for r in asyncio.run(server.mcp.list_resources())}
     assert resources[curation_tools.VIEWER_URI].mimeType == "text/html;profile=mcp-app"
+
+
+# ---------- I2: TSV の行数上限と総数 ----------
+
+def test_review_table_is_capped_and_reports_the_total(ready):
+    body = json.loads(curation_tools.curation_review(max_rows=0))
+    assert body["n_table_rows_total"] == 1
+    assert body["n_table_rows_shown"] == 0
+    assert len(body["table"].splitlines()) == 1          # 見出しだけ
+    assert "html_path" in body["table_note"]
+
+
+def test_review_table_with_max_rows_one_returns_one_row(ready):
+    flag_dir = flags.curation_dir(ready["arf2"])
+    flags.FlagStore(flag_dir).append([{"spot_id": 0, "flag": "suspect"}],
+                                     alignment=flags.alignment_key(ready["arf2"]),
+                                     review_id="r", source="user")
+    body = json.loads(curation_tools.curation_review(max_rows=1))
+    assert body["n_table_rows_total"] == 2
+    assert body["n_table_rows_shown"] == 1
+    assert len(body["table"].splitlines()) == 2
+
+
+# ---------- I4: 再起動・データフォルダ変更の後でも貼った文で送れる ----------
+
+def test_submit_after_a_restart_uses_the_arf2_path_in_the_text(ready, tmp_path, monkeypatch):
+    first = json.loads(curation_tools.curation_review())
+    saved = json.loads((flags.curation_dir(ready["arf2"])
+                        / f"review-{first['review_id']}.json").read_text(encoding="utf-8"))
+    text = flags.build_submission_text(first["review_id"],
+                                       [{"spot_id": 1, "flag": "wrong", "note": ""}],
+                                       saved["arf2_path"])
+    library = session_state.session.library.store
+    session_state.session.__init__()                       # サーバ再起動を模す
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.setattr(mcp_core, "DATA_DIR", elsewhere)
+    try:
+        body = json.loads(curation_tools.curation_submit(submission_text=text))
+    finally:
+        session_state.session.library.store = library
+    assert body["status"] == "ok", body
+    assert body["recorded"] == 1
+
+
+def test_submit_after_a_restart_accepts_file_path(ready, tmp_path, monkeypatch):
+    review_id = json.loads(curation_tools.curation_review())["review_id"]
+    library = session_state.session.library.store
+    session_state.session.__init__()
+    monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path / "nowhere")
+    try:
+        missing = json.loads(curation_tools.curation_submit(
+            review_id=review_id, flags=[{"spot_id": 1, "flag": "wrong"}]))
+        body = json.loads(curation_tools.curation_submit(
+            review_id=review_id, flags=[{"spot_id": 1, "flag": "wrong"}],
+            file_path=str(ready["arf2"])))
+    finally:
+        session_state.session.library.store = library
+    assert missing["status"] == "error"
+    assert "file_path" in missing["message"]
+    assert "curation_review をやり直" not in missing["message"]
+    assert body["status"] == "ok", body
+
+
+# ---------- M1: review_id の形式を path に使う前に検める ----------
+
+def test_submit_and_view_data_reject_a_malformed_review_id(ready):
+    for body in (json.loads(curation_tools.curation_submit(
+                     review_id="../../x", flags=[{"spot_id": 0, "flag": "wrong"}])),
+                 json.loads(curation_tools.curation_view_data("../../x"))):
+        assert body["status"] == "error"
+        assert "review_id" in body["message"]
+
+
+# ---------- M3: 知らない file_ids は先に弾く ----------
+
+def test_review_rejects_unknown_file_ids(ready):
+    body = json.loads(curation_tools.curation_review(file_ids=[0, 77]))
+    assert body["status"] == "error"
+    assert body["missing_file_ids"] == [77]
+
+
+# ---------- I6: 壊れた flags.jsonl ----------
+
+def _break_flags_file(arf2):
+    store = flags.FlagStore(flags.curation_dir(arf2))
+    store.append([{"spot_id": 1, "flag": "wrong"}], alignment=flags.alignment_key(arf2),
+                 review_id="r", source="user")
+    with open(store.path, "a", encoding="utf-8") as handle:
+        handle.write('{"spot_id": 1, "fl')
+    return store.path
+
+
+def test_malformed_flags_file_is_reported_by_every_curation_tool(ready):
+    review_id = json.loads(curation_tools.curation_review())["review_id"]
+    path = _break_flags_file(ready["arf2"])
+    before = path.read_text(encoding="utf-8")
+    for body in (json.loads(curation_tools.curation_flags()),
+                 json.loads(curation_tools.curation_review()),
+                 json.loads(curation_tools.curation_submit(
+                     review_id=review_id, flags=[{"spot_id": 0, "flag": "wrong"}]))):
+        assert body["status"] == "error", body
+        assert body["flags_file"] == str(path)
+        assert body["line"] == 2
+    assert path.read_text(encoding="utf-8") == before       # 壊れたまま追記しない
+
+
+# ---------- I7 / M10: warnings ----------
+
+def test_review_warns_about_orphaned_flags(ready):
+    flags.FlagStore(flags.curation_dir(ready["arf2"])).append(
+        [{"spot_id": 1, "flag": "wrong"}],
+        alignment={"alignment_file": ready["arf2"].name, "alignment_sha256": "0" * 64},
+        review_id="r", source="user")
+    body = json.loads(curation_tools.curation_review())
+    assert any("1 件" in w and "以前の版" in w for w in body["warnings"]), body["warnings"]
+
+
+def test_review_warns_about_missing_siblings(ready):
+    folder = ready["arf2"].parent
+    (folder / "AlignmentResult_x.EIC.aef").unlink()
+    (folder / "AlignmentResult_x.dcl").unlink()
+    body = json.loads(curation_tools.curation_review())
+    assert any("dcl" in w and "eic" in w for w in body["warnings"]), body["warnings"]
+
+
+# ---------- M7 ----------
+
+def test_review_trend_summary_has_outlier_counts(ready, monkeypatch):
+    real = curation_tools.review.trend.fit_trends
+
+    def fake(points, th):
+        result = real(points, th)
+        result["classes"]["PC"] = {"n": 5, "r2": 0.9, "coef": [0.0], "scale": 0.02, "n_outliers": 2}
+        return result
+
+    monkeypatch.setattr(curation_tools.review.trend, "fit_trends", fake)
+    body = json.loads(curation_tools.curation_review())
+    assert body["trend"]["PC"] == {"n": 5, "r2": 0.9, "n_outliers": 2}

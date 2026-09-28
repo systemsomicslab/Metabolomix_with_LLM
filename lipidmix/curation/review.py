@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,12 +22,27 @@ TSV_COLUMNS = ["spot_id", "name", "ontology", "adduct", "verdict", "reasons",
                "ppm", "drt", "wdot", "mpp", "eic_good", "trend_z", "flag"]
 
 
+#: `new_review_id()` の形。review_id はファイル名（`review-<id>.json`）に使うので、
+#: 外から来た値はパスに使う前に必ずこの形かを検める（`../` などを通さない）。
+REVIEW_ID_RE = re.compile(r"^cr-\d{8}-\d{6}-[0-9a-f]{4}$")
+
+
 def new_review_id() -> str:
     return f"cr-{datetime.now():%Y%m%d-%H%M%S}-{secrets.token_hex(2)}"
 
 
+def is_valid_review_id(review_id) -> bool:
+    return isinstance(review_id, str) and REVIEW_ID_RE.fullmatch(review_id) is not None
+
+
 def run_review(arf2_path, spots, *, store, ms2_tol, th, file_ids, max_traces, selection) -> dict:
-    arf2_path = Path(arf2_path)
+    """1 回のレビューを組み立てる。既存フラグは重い証拠収集の**前**に読む——`flags.jsonl`
+    が壊れていれば（`flags.FlagFileError`）数分の計算を捨てずに先に止めるため。"""
+    arf2_path = Path(arf2_path).resolve()
+    alignment = flags.alignment_key(arf2_path)
+    flag_rows = flags.FlagStore(flags.curation_dir(arf2_path)).rows()
+    existing = flags.effective_flags(flag_rows, alignment["alignment_sha256"])
+    orphaned = flags.orphaned_count(flag_rows, alignment)
     evs, stats = evidence.collect(arf2_path, spots, store=store, ms2_tol=ms2_tol, th=th,
                                   file_ids=file_ids, max_traces=max_traces)
     points = []
@@ -38,8 +54,6 @@ def run_review(arf2_path, spots, *, store, ms2_tol, th, file_ids, max_traces, se
         ev["composition"] = list(comp) if comp else None
     trends = trend.fit_trends(points, th)
 
-    alignment = flags.alignment_key(arf2_path)
-    existing = flags.FlagStore(flags.curation_dir(arf2_path)).effective(alignment["alignment_sha256"])
     counts = {"ok": 0, "suspect": 0, "likely_wrong": 0}
     for ev in evs:
         ev.update(judge_spot(ev, trends["spots"].get(ev["spot_id"]), th))
@@ -57,6 +71,8 @@ def run_review(arf2_path, spots, *, store, ms2_tol, th, file_ids, max_traces, se
     if stats["missing_files"]:
         warnings.append(f"兄弟ファイルがありません: {', '.join(stats['missing_files'])}"
                         "（その系統の判別は UNKNOWN になります）。")
+    if orphaned:
+        warnings.append(flags.orphaned_warning(orphaned))
 
     return {
         "review_id": new_review_id(),
@@ -81,6 +97,9 @@ def save_review(review: dict) -> dict:
 
 
 def load_review(arf2_path_or_dir, review_id: str) -> dict:
+    """保存済みレビュー。review_id が `REVIEW_ID_RE` の形でなければ ValueError（パスに使わない）。"""
+    if not is_valid_review_id(review_id):
+        raise ValueError(f"review_id={review_id!r} の形が不正です（cr-YYYYMMDD-HHMMSS-xxxx）。")
     base = Path(arf2_path_or_dir)
     directory = base if base.is_dir() else flags.curation_dir(base)
     path = directory / f"review-{review_id}.json"
@@ -97,12 +116,26 @@ def _cell(value) -> str:
     return str(value).replace("\t", " ").replace("\n", " ")
 
 
-def summary_tsv(review: dict, *, min_verdict: str = "suspect") -> str:
+def _summary_spots(review: dict, min_verdict: str) -> list[dict]:
+    """表に載せるスポット（`min_verdict` 以上とフラグ済み）を判定の重い順に。"""
     floor = VERDICT_RANK[min_verdict]
+    return [s for s in sorted(review["spots"],
+                              key=lambda s: (-VERDICT_RANK[s["verdict"]], s["spot_id"]))
+            if VERDICT_RANK[s["verdict"]] >= floor or s.get("flag")]
+
+
+def n_summary_rows(review: dict, *, min_verdict: str = "suspect") -> int:
+    return len(_summary_spots(review, min_verdict))
+
+
+def summary_tsv(review: dict, *, min_verdict: str = "suspect", max_rows: int | None = None) -> str:
+    """`min_verdict` 以上とフラグ済みのスポットの TSV。`max_rows` があれば重い順の先頭だけ
+    （実データでは約 1000 行になり LLM の文脈を占めるため。全件は HTML ビューアにある）。"""
     lines = ["\t".join(TSV_COLUMNS)]
-    for s in sorted(review["spots"], key=lambda s: (-VERDICT_RANK[s["verdict"]], s["spot_id"])):
-        if VERDICT_RANK[s["verdict"]] < floor and not s.get("flag"):
-            continue
+    spots = _summary_spots(review, min_verdict)
+    if max_rows is not None:
+        spots = spots[:max(0, max_rows)]
+    for s in spots:
         match = s.get("match") or {}
         weighted = match.get("squared_weighted_dot_product")
         lines.append("\t".join(_cell(v) for v in [
@@ -113,6 +146,12 @@ def summary_tsv(review: dict, *, min_verdict: str = "suspect") -> str:
             (s.get("eic_shape") or {}).get("good_fraction"),
             (s.get("trend") or {}).get("z"), s.get("flag")]))
     return "\n".join(lines)
+
+
+def trend_summary(review: dict) -> dict:
+    """クラス別傾向の要約（点数・外れ値を除いた R²・外れ数。spec §5.1）。"""
+    return {name: {"n": c["n"], "r2": c["r2"], "n_outliers": c.get("n_outliers", 0)}
+            for name, c in review["trend"]["classes"].items()}
 
 
 def page(review: dict, page_index: int, page_size: int = 50) -> dict:

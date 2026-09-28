@@ -147,3 +147,61 @@ def test_missing_reference_is_reported_not_raised(dataset, tmp_path):
         assert stats["n_reference_resolved"] == 0
     finally:
         s.close()
+
+
+# ---------- C1: 間引きは全区間に等間隔で散らす ----------
+
+@pytest.mark.parametrize("n", [41, 60, 79, 80, 300, 529])
+def test_downsample_spreads_points_across_the_whole_trace(n):
+    import math
+    points = [[round(0.01 * i, 3), 10.0 + (i % 5)] for i in range(n)]
+    apex = (3 * n) // 4                        # 頂点を右半分に置く(旧実装は右半分を落とした)
+    points[apex] = [points[apex][0], 1e6]
+    left_i, right_i = n // 3, (2 * n) // 3 + 1
+    left, right = points[left_i][0] + 0.001, points[right_i][0] - 0.001
+    out = evidence._downsample_points(points, left, right)
+    assert len(out) <= evidence.EIC_MAX_POINTS
+    index_of = {p[0]: i for i, p in enumerate(points)}
+    kept = [index_of[p[0]] for p in out]
+    assert kept == sorted(kept)
+    for anchor in (0, n - 1, apex, left_i, right_i):
+        assert anchor in kept, (n, anchor)
+    bound = math.ceil(2 * n / evidence.EIC_MAX_POINTS)
+    gaps = [b - a for a, b in zip(kept, kept[1:])]
+    assert max(gaps) <= bound, (n, max(gaps), bound)
+
+
+def test_downsample_leaves_traces_at_or_below_the_cap_unchanged_apart_from_rounding():
+    points = [[round(0.01 * i, 3), i + 0.4] for i in range(evidence.EIC_MAX_POINTS)]
+    out = evidence._downsample_points(points, 0.1, 0.2)
+    assert out == [[p[0], round(p[1])] for p in points]
+
+
+# ---------- M3: file_id の無い行を飛ばす / 未知の file_ids を先に弾く ----------
+
+def test_choose_file_ids_skips_rows_without_a_file_id():
+    rows = [{}, {"file_id": 1, "height": 5.0, "is_gap_filled": False}, {"height": 9.0}]
+    assert evidence._choose_file_ids(rows, None, None, 12) == [1]
+
+
+def test_collect_rejects_file_ids_absent_from_the_alignment(dataset):
+    paths, s = dataset
+    spots = evidence.select_spots(load_catalog(paths["arf2"]), ontology=None, name_contains=None)
+    with pytest.raises(evidence.UnknownFileIdsError) as info:
+        evidence.collect(paths["arf2"], spots, store=s, ms2_tol=0.025,
+                         th=judge.resolve_thresholds(None), file_ids=[0, 98, 99])
+    assert info.value.missing == [98, 99]
+
+
+# ---------- M10: 兄弟ファイルが欠けたら missing_files に出る ----------
+
+def test_collect_reports_missing_eic_and_dcl_siblings(dataset):
+    paths, s = dataset
+    folder = paths["arf2"].parent
+    (folder / "AlignmentResult_x.EIC.aef").unlink()
+    (folder / "AlignmentResult_x.dcl").unlink()
+    spots = evidence.select_spots(load_catalog(paths["arf2"]), ontology=None, name_contains=None)
+    evs, stats = evidence.collect(paths["arf2"], spots, store=s, ms2_tol=0.025,
+                                  th=judge.resolve_thresholds(None))
+    assert stats["missing_files"] == ["dcl", "eic"]
+    assert all(e["eic"]["samples"] == [] and e["mirror"] is None for e in evs)

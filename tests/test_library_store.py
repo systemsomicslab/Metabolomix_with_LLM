@@ -440,6 +440,18 @@ def test_record_by_scan_id_filters_by_library_id_when_the_store_has_one(library)
         s.close()
 
 
+def test_record_by_scan_id_rejects_a_row_whose_library_id_differs(library):
+    s = store.open_store(library)
+    try:
+        # .dbs 由来の store を模して、行に非 NULL の library_id を入れる。
+        s._conn.execute("UPDATE record SET library_id = 'LibA' WHERE record_index = 0")
+        assert s.record_by_scan_id(0, library_id="LibB", precursor_mz=100.0, mz_tol=0.05) is None
+        assert s.record_by_scan_id(0, library_id="LibA", precursor_mz=100.0,
+                                   mz_tol=0.05)["name"] == "A"
+    finally:
+        s.close()
+
+
 def test_library_id_from_annotator_strips_the_trailing_counter():
     assert store.library_id_from_annotator("Msp20260116160945_NCDK_dev_1") == "Msp20260116160945_NCDK_dev"
     assert store.library_id_from_annotator("plain") == "plain"

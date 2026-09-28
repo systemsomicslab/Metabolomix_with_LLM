@@ -36,34 +36,46 @@ flowchart TD
 3. lipidmix/arf2/reader.py  load_catalog()
 4. lipidmix/curation/evidence.py  select_spots()（load_catalog() が返したカタログを渡す）
 5. lipidmix/curation/review.py  run_review()
-6. │  └─ lipidmix/curation/evidence.py  collect()
-7. │     ├─ lipidmix/arf2/match_results.py  load_spot_annotations()
-8. │     ├─ lipidmix/dcl/reader.py  deserialize_dcl()
-9. │     ├─ lipidmix/curation/evidence.py  _arf_rows()
-10. │     │  └─ lipidmix/arf/reader.py  deserialize()
-11. │     ├─ lipidmix/curation/evidence.py  _reference()
-12. │     │  └─ lipidmix/library/store.py  LibraryStore.record_by_scan_id()
-13. │     ├─ lipidmix/analysis/spectral_match.py  match_spectrum()
-14. │     ├─ lipidmix/plots/mirror.py  build_mirror_payload()
-15. │     ├─ lipidmix/eic/reader.py  read_eic_spot_css1()
-16. │     └─ lipidmix/curation/eic_shape.py  spot_shape()
-17. │  └─ lipidmix/curation/trend.py  composition()
-18. │  └─ lipidmix/curation/trend.py  fit_trends()
-19. │  └─ lipidmix/curation/flags.py  FlagStore.effective()
-20. │  └─ lipidmix/curation/judge.py  judge_spot()
-21. lipidmix/curation/review.py  save_review()
-22. └─ lipidmix/curation/viewer.py  render_html()
-23. lipidmix/curation/review.py  summary_tsv()
+6. │  └─ lipidmix/curation/flags.py  alignment_key()
+7. │  └─ lipidmix/curation/flags.py  FlagStore.rows()（重い収集の**前**に読む。読めない行は `FlagFileError` → エラー payload）
+8. │  └─ lipidmix/curation/flags.py  effective_flags()
+9. │  └─ lipidmix/curation/flags.py  orphaned_count()（以前の版の `.arf2` に付いたフラグ → `warnings`）
+10. │  └─ lipidmix/curation/evidence.py  collect()
+11. │     ├─ lipidmix/curation/evidence.py  _arf_rows()
+12. │     │  └─ lipidmix/arf/reader.py  deserialize()
+13. │     ├─ lipidmix/curation/evidence.py  _check_file_ids()（`.arf` に無い `file_ids` は `UnknownFileIdsError` → エラー payload）
+14. │     ├─ lipidmix/arf2/match_results.py  load_spot_annotations()
+15. │     ├─ lipidmix/dcl/reader.py  deserialize_dcl()
+16. │     ├─ lipidmix/curation/evidence.py  _reference()
+17. │     │  └─ lipidmix/library/store.py  LibraryStore.record_by_scan_id()
+18. │     ├─ lipidmix/analysis/spectral_match.py  match_spectrum()
+19. │     ├─ lipidmix/plots/mirror.py  build_mirror_payload()
+20. │     ├─ lipidmix/eic/reader.py  read_eic_spot_css1()
+21. │     ├─ lipidmix/curation/eic_shape.py  spot_shape()
+22. │     └─ lipidmix/curation/evidence.py  _downsample_points()（形状計算の後に payload だけ間引く）
+23. │  └─ lipidmix/curation/trend.py  composition()（`LipidParser` はモジュールで 1 つだけ作る）
+24. │  └─ lipidmix/curation/trend.py  fit_trends()
+25. │  └─ lipidmix/curation/judge.py  judge_spot()
+26. lipidmix/curation/review.py  save_review()
+27. └─ lipidmix/curation/viewer.py  render_html()
+28. lipidmix/curation/review.py  n_summary_rows()
+29. lipidmix/curation/review.py  summary_tsv()（`max_rows` で先頭だけ）
+30. lipidmix/curation/review.py  trend_summary()
 
 ## curation_submit
 
 前提: `review_id` のレビューがディスクにあること。状態変更: `flags.jsonl` へ追記。
+レビューの探し先は、セッションの `review_dirs` → 送信用テキストの `arf2_path` →
+引数 `file_path` → 既定の `.arf2` の順（サーバ再起動の後でも貼った文で送れる）。
 
 1. lipidmix/curation/flags.py  parse_submission_text()（`submission_text` のとき）
-2. lipidmix/curation/review.py  load_review()
-3. lipidmix/curation/flags.py  validate_entries()
-4. lipidmix/curation/flags.py  alignment_key()（レビュー時の sha256 と一致しなければ拒否）
-5. lipidmix/curation/flags.py  FlagStore.append()
+2. lipidmix/curation/review.py  is_valid_review_id()（形が違えばパスに使う前にエラー）
+3. lipidmix/tools/curation_tools.py  _find_review()
+4. └─ lipidmix/curation/review.py  load_review()（候補フォルダを順に）
+5. lipidmix/curation/flags.py  validate_entries()
+6. lipidmix/curation/flags.py  alignment_key()（レビュー時の sha256 と一致しなければ拒否）
+7. lipidmix/curation/flags.py  FlagStore.rows()（読めない行があれば追記せずにエラー）
+8. lipidmix/curation/flags.py  FlagStore.append()
 
 ## curation_flags
 
@@ -72,5 +84,7 @@ flowchart TD
 
 ## curation_view_data
 
-1. lipidmix/curation/review.py  load_review()
-2. lipidmix/curation/review.py  page()
+1. lipidmix/curation/review.py  is_valid_review_id()
+2. lipidmix/tools/curation_tools.py  _find_review()
+3. └─ lipidmix/curation/review.py  load_review()
+4. lipidmix/curation/review.py  page()
