@@ -75,8 +75,10 @@ def arf2_annotate_identities(file_path: str | None = None, max_rows: int = 50) -
     if not path:
         return json_payload({"status": "error", "message": ".arf2 が見つかりません。"})
     from lipidmix.arf2.reader import format_spots_as_table, load_catalog
+    from lipidmix.curation import apply as curation_apply
     spots = load_catalog(path)
     tables = _identity_tables()
+    flag_set = curation_apply.flags_for_arf2(path)
     rows = []
     for spot in spots[:max_rows]:
         raw_name = spot.get("Name") or ""
@@ -86,11 +88,19 @@ def arf2_annotate_identities(file_path: str | None = None, max_rows: int = 50) -
         # ARF2 に MS/MS 取得フラグは無いため has_msms=False（MSI は保守的にクラス上限）
         block = lipid_identity.build_identity_block(
             feat, tables, mass_error_band="UNKNOWN", adduct_band="UNKNOWN")
-        rows.append({"MasterAlignmentID": spot.get("MasterAlignmentID"),
+        spot_id = spot.get("MasterAlignmentID")
+        if spot_id in flag_set["wrong"]:
+            curation_flag = "wrong"
+        elif spot_id in flag_set["suspect"]:
+            curation_flag = "suspect"
+        else:
+            curation_flag = ""
+        rows.append({"MasterAlignmentID": spot_id,
                      "name": feat["name"], "normalized": block["goslin"]["normalized"],
                      "refmet": block["reference"]["refmet_name"],
                      "lipid_maps_category": block["reference"]["lipid_maps_category"],
-                     "msi_level": block["msi"]["level"]})
+                     "msi_level": block["msi"]["level"],
+                     "curation_flag": curation_flag})
     if not rows:
         return "ARF2 にスポットがありません。"
     # 列名を1回だけ出す TSV。同じ6キーを行数ぶん繰り返す JSON に対し、実データ
@@ -101,4 +111,6 @@ def arf2_annotate_identities(file_path: str | None = None, max_rows: int = 50) -
         f"強度順ではない）。残り {max(0, len(spots) - len(rows))} 件は未表示。\n"
         f"# MSI はクラス上限の保守的推定（ARF2 に MS/MS 取得フラグと質量誤差が無いため）。"
     )
-    return f"{header}\n{format_spots_as_table(rows)}"
+    columns = ["MasterAlignmentID", "name", "normalized", "refmet",
+              "lipid_maps_category", "msi_level", "curation_flag"]
+    return f"{header}\n{format_spots_as_table(rows, columns=columns)}"

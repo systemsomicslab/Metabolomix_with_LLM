@@ -750,6 +750,24 @@ class TestNeverExecutedToolsSmoke(unittest.TestCase):
         result = arf2_annotate_identities(file_path=path, max_rows=10)
         self.assertIn("PC 34:1", result)
 
+    def test_arf2_annotate_identities_shows_the_curation_flag(self):
+        """Task 9: wrong フラグが付いたスポットは curation_flag 列に出る。"""
+        from lipidmix.arf2.tools import arf2_annotate_identities
+        from lipidmix.curation import flags as curation_flags
+
+        path = Path(self.write(
+            "synthetic.arf2", lz4_container(msgpack_stream([arf2_spot()]))))
+        curation_flags.FlagStore(curation_flags.curation_dir(path)).append(
+            [{"spot_id": 7, "flag": "wrong"}],
+            alignment=curation_flags.alignment_key(path),
+            review_id="r", source="user")
+
+        result = arf2_annotate_identities(file_path=str(path), max_rows=10)
+
+        header, *body = result.splitlines()[-2:]
+        self.assertIn("curation_flag", header)
+        self.assertIn("wrong", body[0])
+
     def test_dcl_find_msms_returns_the_matching_spectrum(self):
         from lipidmix.dcl.tools import dcl_find_msms
 

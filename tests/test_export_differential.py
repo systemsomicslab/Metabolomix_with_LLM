@@ -197,6 +197,47 @@ class TestExportDifferential(unittest.TestCase):
             meta_lines,
         )
 
+    def test_no_curation_flags_means_no_curation_meta_line(self):
+        """フラグ 0 件のときの出力は現行と完全に同じ(curation メタ行が無い)。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "differential.tsv"
+            arf2 = Path(tmp) / "AlignmentResult_2026_01_01_00_00_00.arf2"
+            arf2.write_bytes(b"")
+            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2), \
+                 patch("lipidmix.arf2.reader.load_catalog", return_value=self.catalog):
+                server.arf_export_differential(str(out))
+            text = out.read_text(encoding="utf-8")
+        self.assertFalse(any(l.startswith("# curation") for l in text.splitlines()))
+
+    def test_wrong_flag_drops_the_row_and_declares_curation_applied(self):
+        from lipidmix.curation import flags as curation_flags
+
+        # spot_id=1 と 2 の両方に InChIKey を付け、1 だけを wrong にする
+        # (2 だけになれば「消えた」ことを行の残り方で確認できる)。setUp の
+        # results には Spot_1_height / Spot_2_height が既にある。
+        self.catalog[1]["InChIKey"] = "DDDDDDDDDDDDDD-EEEEEEEEEE-F"
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "differential.tsv"
+            arf2 = Path(tmp) / "AlignmentResult_2026_01_01_00_00_00.arf2"
+            arf2.write_bytes(b"")
+            curation_flags.FlagStore(curation_flags.curation_dir(arf2)).append(
+                [{"spot_id": 1, "flag": "wrong"}],
+                alignment=curation_flags.alignment_key(arf2),
+                review_id="r", source="user")
+            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2), \
+                 patch("lipidmix.arf2.reader.load_catalog", return_value=self.catalog):
+                payload = json.loads(server.arf_export_differential(str(out)))
+            text = out.read_text(encoding="utf-8")
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["n_with_inchikey"], 1)
+        body = [l for l in text.splitlines() if not l.startswith("#")][1:]
+        self.assertEqual(len(body), 1)
+        self.assertIn("DDDDDDDDDDDDDD-EEEEEEEEEE-F", body[0])
+        meta_lines = [l for l in text.splitlines() if l.startswith("# curation")]
+        self.assertEqual(len(meta_lines), 1)
+        self.assertTrue(meta_lines[0].startswith("# curation = applied\t"))
+        self.assertIn("curation_wrong_excluded = 1", meta_lines[0])
+
 
 if __name__ == "__main__":
     unittest.main()

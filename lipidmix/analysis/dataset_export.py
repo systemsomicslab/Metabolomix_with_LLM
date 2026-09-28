@@ -28,7 +28,7 @@ from lipidmix.core.atomic_io import DomainError
 __all__ = ["export_dataset_result"]
 
 
-def export_dataset_result(ds, result: dict, path: Path) -> dict:
+def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = None) -> dict:
     """差次的結果を InChIKey 付きの契約 TSV として書き出す。
 
     Returns
@@ -105,6 +105,21 @@ def export_dataset_result(ds, result: dict, path: Path) -> dict:
                 q_threshold=q_threshold, log2fc_threshold=log2fc_threshold),
         })
 
+    curation_line = None
+    if curation is not None:
+        from lipidmix.curation.apply import meta_line
+        flag_set = curation["flag_set"]
+        stats = None
+        if curation["state"] == "applied":
+            wrong = {str(s) for s in flag_set["wrong"]}
+            suspect = {str(s) for s in flag_set["suspect"]}
+            before = len(rows)
+            rows = [r for r in rows if str(r["spot_id"]) not in wrong]
+            n_unannotated += before - len(rows)
+            stats = {"wrong_excluded": before - len(rows),
+                     "suspect": sum(1 for r in rows if str(r["spot_id"]) in suspect)}
+        curation_line = meta_line(curation["state"], flag_set, stats)
+
     n_total = len(result["results"])
     if not rows:
         raise DomainError(
@@ -114,7 +129,8 @@ def export_dataset_result(ds, result: dict, path: Path) -> dict:
             {"n_features_total": n_total, "n_with_inchikey": 0,
              "n_unannotated": n_unannotated})
 
-    lines = [*_meta_lines(ds, result, rows, n_total, n_unannotated),
+    lines = [*_meta_lines(ds, result, rows, n_total, n_unannotated,
+                          curation_line=curation_line),
              "\t".join(export_contract.EXPORT_COLUMNS)]
     lines += [export_contract.format_row(r) for r in rows]
     out = _atomic_write_text(Path(path), "\n".join(lines) + "\n")
@@ -128,6 +144,7 @@ def export_dataset_result(ds, result: dict, path: Path) -> dict:
         "n_features_total": n_total,
         "n_with_inchikey": len(rows),
         "n_unannotated": n_unannotated,
+        "curation": curation["state"] if curation else None,
     }
 
 
@@ -172,7 +189,8 @@ def _effect_size_lines(result: dict) -> list[str]:
     return [] if not definition else [f"# effect_size_definition = {definition}"]
 
 
-def _meta_lines(ds, result, rows, n_total, n_unannotated) -> list[str]:
+def _meta_lines(ds, result, rows, n_total, n_unannotated,
+                *, curation_line=None) -> list[str]:
     prov = result["provenance"]
     return export_contract.build_meta(
         group_a=result["a"], n_a=result["n_a"],
@@ -194,6 +212,7 @@ def _meta_lines(ds, result, rows, n_total, n_unannotated) -> list[str]:
             f"# source_verification = {getattr(ds, 'source_verification', '')}",
             *_unadjusted_confounded_lines(prov),
             *_effect_size_lines(result),
+            *([curation_line] if curation_line else []),
         ],
         preprocess_line=f"# preprocess = {_preprocess_parameters(ds, result)}",
     )

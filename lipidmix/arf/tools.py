@@ -1127,12 +1127,16 @@ _format_export_number = export_contract.format_number
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=True),
     structured_output=False)
-def arf_export_differential(output_path: str) -> str:
+def arf_export_differential(output_path: str, apply_curation: bool = True) -> str:
     """差次的結果を InChIKey 付きの 1 ファイルへ書き出す（spec §6.1）。
 
     先に arf_preprocess → arf_differential を実行しておくこと。同一
     アラインメントの兄弟 .arf2 から同定情報を MasterAlignmentID で結合する。
     濃縮解析の背景を保つため、有意な行だけでなく InChIKey が付いた全行を出す。
+
+    apply_curation（既定 true）: curation_submit で wrong を付けたスポットを
+    同定なしとして扱い、出力から外す。フラグがあればメタ行 # curation = ... で
+    適用状況を宣言する。フラグが無ければ出力は変わらない。
     """
     last = getattr(session_state.session.arf, "last_differential", None)
     if not last or last.get("kind") != "two_group":
@@ -1157,6 +1161,17 @@ def arf_export_differential(output_path: str) -> str:
     catalog = {spot.get("MasterAlignmentID"): spot
                for spot in load_catalog(arf2_path)}
     rows, report = identity_join.join_identity(last.get("results") or [], catalog)
+
+    from lipidmix.curation import apply as curation_apply
+    flag_set = curation_apply.flags_for_arf2(arf2_path)
+    curation_stats = None
+    if apply_curation and flag_set["n"]:
+        rows, curation_stats = curation_apply.filter_rows(rows, flag_set, key=lambda r: r["spot_id"])
+        report = {**report, "n_with_inchikey": len(rows),
+                  "n_unannotated": report["n_unannotated"] + curation_stats["wrong_excluded"]}
+    curation_line = curation_apply.meta_line(
+        "applied" if apply_curation else "not_applied", flag_set, curation_stats)
+
     if not rows:
         return json_payload({
             "status": "error",
@@ -1182,6 +1197,7 @@ def arf_export_differential(output_path: str) -> str:
         source_lines=[
             f"# source_arf = {getattr(session_state.session.arf, 'current_file_path', '')}",
             f"# source_arf2 = {arf2_path}",
+            *([curation_line] if curation_line else []),
         ],
         preprocess_line=f"# preprocess = {getattr(session_state.session.arf, 'preprocessing_recipe', None)}",
     )

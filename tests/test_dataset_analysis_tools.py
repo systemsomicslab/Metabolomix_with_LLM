@@ -179,6 +179,57 @@ def test_dataset_export_writes_contract_format(tmp_path):
     assert cols[EXPORT_COLUMNS.index("inchikey")] != ""
 
 
+def test_dataset_export_applies_curation_flags_via_sibling_arf2(tmp_path):
+    """Task 9: `dataset_export_differential` がツール層で兄弟 `.arf2` のフラグを
+    見つけ出し、`export_dataset_result` へ渡すところまで(結合含む)を確認する。
+
+    feature_qc["source"] == "arf" (evidence.py が SMF_ID == MasterAlignmentID の
+    対応を数値で検証できたときだけ立つ) が無いと mztab_smf_id と MasterAlignmentID
+    を同じ空間として扱ってよいと言えないため、ここで明示的に立てる。
+    """
+    from lipidmix.curation import flags as curation_flags
+    from lipidmix.tools.dataset_analysis_tools import (
+        dataset_differential, dataset_export_differential, dataset_preprocess,
+    )
+
+    # feature_ids は mzTab の SMF_ID そのもの(数字の連番文字列)を模す。
+    # curation フラグの spot_id は int の MasterAlignmentID なので、両者の
+    # 空間が一致するのは `str(int) == SMF_ID 文字列` のときだけ。
+    ds = _load_ds()
+    ds.feature_ids = [str(i) for i in range(20)]
+    ds.feature_metadata = {
+        str(i): {"name": f"Compound {i}", "mz": 100.0 + i, "rt": 1.0 + i * 0.1,
+                 "inchikey": f"AAAAAAAAAAAAAA-BBBBBBBBFB-{i % 10}",
+                 "inchikey_source": "database_identifier"}
+        for i in range(20)
+    }
+    mztab = tmp_path / "Height_AlignmentResult_2026_01_01_2026_01_01_09.mzTab"
+    mztab.write_text("", encoding="utf-8")
+    ds.source_files = {str(mztab): "sha"}
+    ds.feature_qc = {"source": "arf"}
+
+    arf2 = tmp_path / "AlignmentResult_2026_01_01.arf2"
+    arf2.write_bytes(b"x")
+    curation_flags.FlagStore(curation_flags.curation_dir(arf2)).append(
+        [{"spot_id": 0, "flag": "wrong"}],
+        alignment=curation_flags.alignment_key(arf2), review_id="r", source="user")
+
+    dataset_preprocess()
+    a, b = _groups(session_state.session.dataset)
+    dataset_differential(group_a=a, group_b=b)
+
+    out = tmp_path / "diff.tsv"
+    parsed = json.loads(dataset_export_differential(str(out)))
+    assert parsed["status"] == "success"
+    assert parsed["curation"] == "applied"
+    lines = out.read_text(encoding="utf-8").splitlines()
+    body = [l for l in lines if l and not l.startswith("#")][1:]
+    assert not any(l.split("\t")[0] == "0" for l in body)
+    meta = [l for l in lines if l.startswith("# curation")]
+    assert len(meta) == 1
+    assert meta[0].startswith("# curation = applied\t")
+
+
 def test_dataset_export_refuses_without_inchikey(tmp_path):
     """InChIKey が 0 件なら書かずに拒否する（arf_export_differential と同じ理由）。"""
     ds = _load_ds()
