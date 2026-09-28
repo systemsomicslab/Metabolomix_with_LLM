@@ -67,6 +67,71 @@ def test_eic_points_are_trimmed_around_the_peak(dataset):
     assert max(xs) <= sample["right"] + 1.5 * width + 1e-6
 
 
+def test_short_eic_trace_is_unchanged_apart_from_rounding_intensity():
+    points = [[0.0, 1.4], [0.01, 2.6], [0.02, 3.0]]
+    out = evidence._downsample_points(points, 0.0, 0.02)
+    assert out == [[0.0, 1], [0.01, 3], [0.02, 3]]
+
+
+def test_long_eic_trace_is_cut_to_the_cap_and_keeps_the_apex():
+    points = [[round(0.01 * i, 3), float(i)] for i in range(200)]
+    points[150] = [points[150][0], 9000.0]     # 頂点を端から離れた位置に置く
+    out = evidence._downsample_points(points, points[0][0], points[-1][0])
+    assert len(out) <= evidence.EIC_MAX_POINTS
+    xs = [p[0] for p in out]
+    assert points[0][0] in xs and points[-1][0] in xs
+    assert points[150][0] in xs
+    assert all(isinstance(p[1], int) for p in out)
+
+
+def test_collect_computes_eic_shape_on_the_full_series_but_downsamples_the_payload(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    paths = write_alignment_set(tmp_path / "neg", eic_points=61)
+    s = library_store.open_store(paths["msp"])
+    captured = {}
+    original_spot_shape = evidence.spot_shape
+
+    def spy(samples, th):
+        captured.setdefault("lengths", []).extend(
+            len(sample["chromatogram"]) for sample in samples)
+        return original_spot_shape(samples, th)
+
+    monkeypatch.setattr(evidence, "spot_shape", spy)
+    try:
+        catalog = load_catalog(paths["arf2"])
+        spots = evidence.select_spots(catalog, ontology=None, name_contains=None)
+        evs, _ = evidence.collect(paths["arf2"], spots, store=s, ms2_tol=0.025,
+                                  th=judge.resolve_thresholds(None))
+    finally:
+        s.close()
+    assert max(captured["lengths"]) > evidence.EIC_MAX_POINTS   # 形状は間引き前の全点で計算
+    first = evs[0]
+    assert first["eic_shape"]["band"] == "PASS"
+    for sample in first["eic"]["samples"]:
+        assert len(sample["points"]) <= evidence.EIC_MAX_POINTS   # payload は間引き後
+
+
+def test_mirror_payload_is_cut_to_the_cap_keeping_all_matched_peaks():
+    measured = [[100.0 + i * 0.01, 1.0 + (i % 7)] for i in range(400)]
+    matched_measured_mz = [measured[10][0], measured[250][0], measured[390][0]]
+    mirror = {
+        "measured": measured,
+        "reference": [[100.1, 500.0], [101.0, 10.0]],
+        "matched_mz": [100.1],
+        "matched_measured_mz": matched_measured_mz,
+        "unscored_mz": [], "scored_peak_count": len(measured), "unscored_peak_count": 0,
+        "labels": [],
+    }
+    cut = evidence._cut_mirror_for_payload(mirror)
+    assert len(cut["measured"]) <= evidence.MIRROR_MAX_PEAKS
+    kept_mz = {p[0] for p in cut["measured"]}
+    assert set(matched_measured_mz) <= kept_mz
+    # 判定に使うフィールドは間引きの影響を受けない(満スペクトルの値のまま)
+    assert cut["scored_peak_count"] == len(measured)
+    assert cut["matched_mz"] == [100.1]
+
+
 def test_missing_reference_is_reported_not_raised(dataset, tmp_path):
     paths, _ = dataset
     other = tmp_path / "other.msp"

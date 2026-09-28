@@ -1,4 +1,6 @@
 import json
+import shutil
+import subprocess
 
 import pytest
 
@@ -106,3 +108,41 @@ def test_template_avoids_horizontal_overflow_at_phone_width():
     html = viewer.render_html(None)
     assert "overflow-wrap:anywhere" in html
     assert "min(300px, 100%)" in html
+
+
+def test_render_builds_cards_in_chunks_with_a_cancellable_generation_counter():
+    # 1468 件のような大きなレビューで render() が 1 回の同期ループで全カードを
+    # 組み立てると、ページが 10-15 秒応答しなくなる（実データ check）。チャンク分割し、
+    # フィルタ変更などで新しい render() が割り込んだら古い方を打ち切る世代カウンタが要る。
+    html = viewer.render_html(None)
+    assert "renderGeneration" in html
+    assert "generation !== renderGeneration" in html
+    assert "requestAnimationFrame" in html
+    assert "setTimeout" in html
+    assert "DocumentFragment" in html
+
+
+def test_draw_trend_clips_the_regression_line_to_the_plot_rectangle():
+    # slope*x+intercept は RT レンジの外まで伸びうり、パネルからはみ出して見える
+    # （実データ check）。プロット矩形で ctx.clip() する。
+    html = viewer.render_html(None)
+    start = html.index("function drawTrend")
+    end = html.index("function spotCard")
+    trend_source = html[start:end]
+    assert "ctx.save()" in trend_source
+    assert "ctx.clip()" in trend_source
+    assert "ctx.restore()" in trend_source
+
+
+def test_extracted_script_is_valid_javascript(tmp_path):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node が見つからないので構文チェックを省略")
+    html = viewer.render_html(None)
+    start = html.index("<script>") + len("<script>")
+    end = html.index("</script>")
+    script_path = tmp_path / "viewer.js"
+    script_path.write_text(html[start:end], encoding="utf-8")
+    result = subprocess.run([node, "--check", str(script_path)],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

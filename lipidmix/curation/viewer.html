@@ -116,11 +116,19 @@ function drawTrend(prepare, ontology, spots) {
   const px = x => 24 + (x - x0) / ((x1 - x0) || 1) * (w - 32), py = y => h - 14 - (y - y0) / ((y1 - y0) || 1) * (h - 24);
   const palette = ["#2471a3", "#c0392b", "#27ae60", "#8e44ad", "#d35400", "#16a085", "#7f8c8d"];
   const groups = ((REVIEW.trend.groups || {})[ontology]) || {};
+  // slope*x+intercept は RT レンジの外まで伸びうるので、プロット矩形（px/py が写す領域）で
+  // クリップする。散布点・軸ラベルはこの矩形の内側にしか描かないのでクリップの外(save/restore
+  // の外)でよい。
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(24, 10, w - 32, h - 24);
+  ctx.clip();
   for (const [db, g] of Object.entries(groups)) {
     if (g.slope === null) continue; const color = palette[Number(db) % palette.length];
     ctx.strokeStyle = color; ctx.globalAlpha = g.r2 !== null && g.r2 < 0.7 ? 0.35 : 0.9;
     ctx.beginPath(); ctx.moveTo(px(x0), py(g.slope * x0 + g.intercept)); ctx.lineTo(px(x1), py(g.slope * x1 + g.intercept)); ctx.stroke();
   }
+  ctx.restore();
   ctx.globalAlpha = 1;
   for (const s of pts) { const db = s.composition[1]; ctx.fillStyle = palette[db % palette.length];
     ctx.beginPath(); ctx.arc(px(s.mz), py(s.rt), s.trend && s.trend.outlier ? 5 : 3, 0, 7); ctx.fill();
@@ -174,16 +182,50 @@ function submission() {
 const observer = new IntersectionObserver(entries => { for (const e of entries)
   if (e.isIntersecting && e.target._draw) { e.target._draw(); observer.unobserve(e.target); } }, {rootMargin: "200px"});
 
+function countsText() {
+  return `ok ${REVIEW.counts.ok} / suspect ${REVIEW.counts.suspect} / likely_wrong ${REVIEW.counts.likely_wrong}`;
+}
+
+// requestAnimationFrame が無い環境(古い WebView 等)向けのフォールバック。
+const scheduleChunk = typeof requestAnimationFrame === "function"
+  ? cb => requestAnimationFrame(cb)
+  : cb => setTimeout(cb, 0);
+
+const RENDER_CHUNK_SIZE = 100;
+let renderGeneration = 0;   // フィルタ変更などで新しい render() が割り込んだら古い方を打ち切る
+
 function render() {
+  const generation = ++renderGeneration;
   const grid = document.getElementById("grid"); grid.textContent = "";
   const cls = document.getElementById("f-class").value, ver = document.getElementById("f-verdict").value,
         flg = document.getElementById("f-flag").value;
-  for (const spot of REVIEW.spots) {
-    if (cls && spot.ontology !== cls) continue;
-    if (ver === "flagged" && spot.verdict === "ok") continue;
-    if (flg === "set" && !currentFlag(spot)) continue;
-    const card = spotCard(spot); grid.appendChild(card); observer.observe(card);
+  const matched = REVIEW.spots.filter(spot => {
+    if (cls && spot.ontology !== cls) return false;
+    if (ver === "flagged" && spot.verdict === "ok") return false;
+    if (flg === "set" && !currentFlag(spot)) return false;
+    return true;
+  });
+  const status = document.getElementById("status");
+  let i = 0;
+
+  function buildChunk() {
+    if (generation !== renderGeneration) return;   // 新しい render() 呼び出しに割り込まれた
+    const frag = document.createDocumentFragment();
+    const end = Math.min(i + RENDER_CHUNK_SIZE, matched.length);
+    for (; i < end; i++) {
+      const card = spotCard(matched[i]);
+      frag.appendChild(card);
+      observer.observe(card);
+    }
+    grid.appendChild(frag);
+    if (i < matched.length) {
+      status.textContent = `構築中… ${i}/${matched.length}`;
+      scheduleChunk(buildChunk);
+    } else {
+      status.textContent = countsText();
+    }
   }
+  buildChunk();
 }
 
 function renderTrends() {
@@ -204,8 +246,7 @@ function start() {
   for (const id of ["f-class", "f-verdict", "f-flag"]) document.getElementById(id).addEventListener("change", render);
   const warnings = document.getElementById("warnings");
   for (const w of REVIEW.warnings || []) warnings.appendChild(el("div", {class: "warn"}, w));
-  document.getElementById("status").textContent =
-    `ok ${REVIEW.counts.ok} / suspect ${REVIEW.counts.suspect} / likely_wrong ${REVIEW.counts.likely_wrong}`;
+  document.getElementById("status").textContent = countsText();
   renderTrends(); render();
 }
 

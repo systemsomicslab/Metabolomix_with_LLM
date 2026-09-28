@@ -43,10 +43,20 @@ def test_low_score_is_suspect():
     assert "low_score" in result["reasons"]
 
 
-def test_large_ppm_is_likely_wrong():
+def test_large_ppm_alone_is_suspect_not_likely_wrong():
+    # ppm > 10 は adduct 非依存(median 約 -0.8 ppm、全 adduct 共通)で、実データで
+    # likely_wrong が ppm_out 単独からしか出ていなかった。弱い理由に格下げ(2026-09-29 ユーザー決定)。
     result = judge.judge_spot(ev(ppm=25.0), None, TH)
-    assert result["verdict"] == "likely_wrong"
+    assert result["verdict"] == "suspect"
     assert result["reasons"][0] == "ppm_out"
+    assert result["checks"]["mz"]["band"] == "FAIL"
+
+
+def test_large_ppm_with_precursor_unmatched_is_likely_wrong():
+    result = judge.judge_spot(ev(ppm=25.0, match=match(is_precursor_mz_match=False)), None, TH)
+    assert result["verdict"] == "likely_wrong"
+    assert "precursor_unmatched" in result["reasons"]
+    assert "ppm_out" in result["reasons"]
 
 
 def test_polarity_mismatch_is_likely_wrong():

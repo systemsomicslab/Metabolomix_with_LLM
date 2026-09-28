@@ -19,10 +19,14 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "rescore_tolerance": 0.1,
 }
 
-STRONG_REASONS = frozenset({"ppm_out", "polarity_mismatch", "precursor_unmatched"})
-WEAK_REASONS = frozenset({"low_score", "drt_out", "eic_poor"})
-_ORDER = ["ppm_out", "polarity_mismatch", "precursor_unmatched",
-          "low_score", "drt_out", "eic_poor",
+# ppm_out は adduct 非依存(実測: 全 adduct で中央値 約 -0.8 ppm)で、precursor_unmatched=0
+# の実データでも likely_wrong が ppm_out 単独からしか出ていなかった。MS-DIAL 自身が
+# その解析の許容幅で判定した precursor_unmatched / polarity_mismatch とは信頼度が違うため、
+# 弱い理由へ格下げする(ユーザー決定 2026-09-29)。
+STRONG_REASONS = frozenset({"polarity_mismatch", "precursor_unmatched"})
+WEAK_REASONS = frozenset({"ppm_out", "low_score", "drt_out", "eic_poor"})
+_ORDER = ["polarity_mismatch", "precursor_unmatched",
+          "ppm_out", "low_score", "drt_out", "eic_poor",
           "ppm_borderline", "drt_borderline", "eic_borderline", "rt_scatter", "trend_outlier"]
 
 
@@ -74,8 +78,8 @@ def _mz(ev: dict, th: dict) -> dict:
             reasons.append("ppm_out")
         elif abs(ppm) > th["ppm_pass"]:
             reasons.append("ppm_borderline")
-    if any(r in STRONG_REASONS for r in reasons):
-        return _check("FAIL", reasons)
+    if any(r in STRONG_REASONS or r in WEAK_REASONS for r in reasons):
+        return _check("FAIL", reasons)     # ppm_out は弱いが、mz 系統自体は FAIL にする
     if reasons:
         return _check("BORDERLINE", reasons)
     return _check("UNKNOWN" if ppm is None else "PASS")

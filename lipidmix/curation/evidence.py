@@ -7,6 +7,16 @@
 - Δ は代表試料の行(FileID == RepresentativeFileID)の Mass / RT と参照の差。
 deps: arf / arf2 / dcl / eic reader、library.store、analysis.spectral_match、
 plots.mirror、msdial.peak_verification、curation.eic_shape。tools_* は import しない。
+
+**EIC と mirror の座標列は payload だけ間引く(判定は変えない)**。実データ check
+(kidney pos, 2196 spots)で JSON が 41.7 MB になり、内訳は EIC 31.0 MB(12 トレース
+× 中央値 70 点)・mirror 5.5 MB(測定ピーク中央値 45、最大 3835)だった。
+`EIC_MAX_POINTS`(既定 40)は `_downsample_points()` が `spot_shape()` 計算の**後**に
+1 サンプルずつ間引く(先頭・末尾・頂点・left/right 最近傍を必ず残し、残りは等間隔)。
+`MIRROR_MAX_PEAKS`(既定 150)は `_cut_mirror_for_payload()` が `build_mirror_payload()`
+で満スペクトルから `matched_mz`/`matched_measured_mz`/`labels` を確定させた**後**に
+measured/reference それぞれを間引く(一致ピークは必ず残し、残りは強度降順)。
+`rescore` はどちらも満スペクトルから計算済みの値をそのまま使う。
 """
 from __future__ import annotations
 
@@ -26,6 +36,79 @@ MAX_SPOTS = 3000
 REFERENCE_MZ_WINDOW = 0.05     # 参照 precursor の検索窓(実測の最大差 0.023 Da の倍以上)
 EIC_WINDOW_FACTOR = 1.5        # 積分範囲の外側に残す幅(範囲の幅に対する倍率)
 _UNANNOTATED = {"", "unknown"}
+
+# --- payload だけを間引く定数(実データ check: pos の JSON が 41.7 MB、内訳は EIC 31.0 MB /
+# mirror 5.5 MB。判定(spot_shape・rescore・matched_mz など)は必ず全点/全スペクトルで計算した
+# 後に、返す座標列だけを削る。判定を変えたら別のバグになる。---
+
+#: EIC 1 サンプルあたりの payload 点数の上限。spot_shape は間引き前の全点で計算する。
+EIC_MAX_POINTS = 40
+#: mirror の measured/reference それぞれの payload 点数の上限。matched_mz / matched_measured_mz /
+#: labels / rescore は間引き前の全スペクトルで計算する。
+MIRROR_MAX_PEAKS = 150
+
+
+def _downsample_points(points: list, left: float, right: float,
+                       max_points: int = EIC_MAX_POINTS) -> list:
+    """EIC の 1 サンプル分の点列を payload 用に間引く(`spot_shape` を計算した**後**に
+    呼ぶこと——形状指標は間引き前の全点で確定済みでなければならない)。
+
+    先頭・末尾・頂点(最大強度)・`left`/`right` に最も近い点は必ず残し、残りは
+    等間隔(uniform stride)で埋める。強度は整数に丸める(x は `_trim()` で
+    既に小数 3 桁に丸め済みなのでそのまま)。点数が上限以下ならそのまま
+    (強度の丸めだけ行う)。
+    """
+    n = len(points)
+    if n <= max_points:
+        return [[x, round(y)] for x, y in points]
+    apex = max(range(n), key=lambda i: points[i][1])
+    nearest_left = min(range(n), key=lambda i: abs(points[i][0] - left))
+    nearest_right = min(range(n), key=lambda i: abs(points[i][0] - right))
+    keep = {0, n - 1, apex, nearest_left, nearest_right}
+    stride = max(1, n // max_points)
+    i = 0
+    while i < n and len(keep) < max_points:
+        keep.add(i)
+        i += stride
+    chosen = sorted(keep)[:max_points]
+    return [[points[i][0], round(points[i][1])] for i in chosen]
+
+
+def _keep_most_intense_peaks(points: list, is_matched, max_points: int) -> list:
+    """一致した点は必ず残し、残りは強度降順で `max_points` まで埋める(m/z 昇順に戻して返す)。
+    一致した点だけで `max_points` を超える場合はそれでも全部残す(「一致ピークは必ず残す」を優先)。
+    """
+    if len(points) <= max_points:
+        return points
+    matched = [p for p in points if is_matched(p)]
+    rest = sorted((p for p in points if not is_matched(p)), key=lambda p: -p[1])
+    budget = max(0, max_points - len(matched))
+    kept = matched + rest[:budget]
+    kept.sort(key=lambda p: p[0])
+    return kept
+
+
+def _cut_mirror_for_payload(mirror: dict | None) -> dict | None:
+    """mirror payload の `measured`/`reference` を payload 用に間引く。
+
+    呼ぶ前提: `mirror` は満スペクトルから `build_mirror_payload` で組み立て済みで、
+    `matched_mz` / `matched_measured_mz` / `labels` は既に確定している(このまま変えない)。
+    一致した測定ピークの判定は `build_mirror_payload` が `ms2_tol` で計算済みの
+    `matched_measured_mz` をそのまま使う(ここで許容幅を取り直さない)。
+    `scored_peak_count` / `unscored_peak_count` も**間引き前の満スペクトルの値のまま**
+    返す——「採点対象外だった点数」という満スペクトル上の意味を保つため、間引き後の
+    表示点数には合わせない(payload only の決めごと)。
+    """
+    if mirror is None:
+        return None
+    matched_measured = set(mirror.get("matched_measured_mz") or ())
+    matched_reference = set(mirror.get("matched_mz") or ())
+    mirror = dict(mirror)
+    mirror["measured"] = _keep_most_intense_peaks(
+        mirror["measured"], lambda p: p[0] in matched_measured, MIRROR_MAX_PEAKS)
+    mirror["reference"] = _keep_most_intense_peaks(
+        mirror["reference"], lambda p: p[0] in matched_reference, MIRROR_MAX_PEAKS)
+    return mirror
 
 
 def sibling_files(arf2_path) -> dict:
@@ -157,6 +240,7 @@ def collect(arf2_path, spots, *, store, ms2_tol, th, file_ids=None, max_traces=1
                 "matched_peaks_percentage")}
             mirror = build_mirror_payload(measured, reference["spectrum"], scores["alignment"],
                                           title=spot.get("Name") or "", ms2_tol=ms2_tol)
+            mirror = _cut_mirror_for_payload(mirror)
 
         samples = []
         if files["eic"] is not None and rows:
@@ -175,6 +259,8 @@ def collect(arf2_path, spots, *, store, ms2_tol, th, file_ids=None, max_traces=1
                 })
         shape = spot_shape([{**s, "chromatogram": s["points"]} for s in samples], th)
         shape.pop("per_sample", None)
+        for s in samples:                  # payload only: 形状計算の後に間引く(判定は変えない)
+            s["points"] = _downsample_points(s["points"], s["left"], s["right"])
 
         results.append({
             "spot_id": spot_id, "name": spot.get("Name"), "ontology": spot.get("Ontology"),

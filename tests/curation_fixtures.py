@@ -162,7 +162,7 @@ LIBRARY_MSP = textwrap.dedent("""\
 """)
 
 
-def write_alignment_set(folder: Path, *, n_files: int = 3) -> dict:
+def write_alignment_set(folder: Path, *, n_files: int = 3, eic_points: int = 31) -> dict:
     """スポット 3 件の一式を `AlignmentResult_x.*` として書く。
 
     spot 0: PC 34:1、参照一致・きれいなピーク（ok になるべき）
@@ -175,6 +175,11 @@ def write_alignment_set(folder: Path, *, n_files: int = 3) -> dict:
     （別ライブラリのレコードを ScanID が指してしまった場合の安全弁）に spot 1 自身が
     引っかかり、参照が解決できなくなる（実装時に判明。ここは fixture 側の記述漏れの
     修正であり、ガードのロジックは変えていない）。
+
+    `eic_points`（既定 31）は各サンプルの EIC 点数。既定の `step=0.01` のまま増やすと、
+    `evidence._trim` の窓（`(right-left) * EIC_WINDOW_FACTOR`、既定で ±0.3 分）を
+    超えた点が捨てられるだけなので、payload の間引き（`EIC_MAX_POINTS`）を試すテストは
+    61（オフセットがちょうど窓幅 0.3 分に収まる点数）のように窓に収まる値を渡すこと。
     """
     folder.mkdir(parents=True, exist_ok=True)
     specs = [
@@ -197,7 +202,7 @@ def write_alignment_set(folder: Path, *, n_files: int = 3) -> dict:
     for s in specs:
         samples, rows = [], []
         for file_id in range(n_files):
-            points = gaussian_points(s["rt"])
+            points = gaussian_points(s["rt"], n=eic_points)
             if s["spot_id"] == 1:
                 for i in range(1, len(points) - 1, 2):
                     points[i][1] *= 0.3

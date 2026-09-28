@@ -29,6 +29,26 @@
 （アラインメントと別のライブラリを読んでいる可能性）、(2) `.dcl`/`.EIC.aef`/`.arf` の
 兄弟ファイルが見つからない（その系統の判定は `UNKNOWN` になる）。
 
+### ビューアの証拠 payload（`curation_view_data` / HTML ビューア専用）
+
+`curation_review` 自体の戻り値には出ない（座標を LLM に返さない規約。上記 `table` と
+`html_path` のみ）が、`html_path` のビューアと `curation_view_data`（MCP Apps 専用、
+LLM は呼ばない）はスポットごとに EIC 系列（`eic.samples[].points`）と対向スペクトル
+（`mirror.measured` / `mirror.reference`）を持つ。判定（`eic_shape` / `rescore` /
+`matched_mz` 等）は必ず全点・全スペクトルで計算した**後**に、返す座標列だけを
+間引く（payload only。判定は変えない。定数・実装は `lipidmix/curation/evidence.py`）:
+
+- `eic.samples[].points`: 1 サンプルあたり最大 `EIC_MAX_POINTS`（既定 40）点。先頭・
+  末尾・頂点（最大強度）・積分範囲（`left`/`right`）に最も近い点は必ず残し、残りは
+  等間隔（uniform stride）で埋める。強度は整数に丸める。
+- `mirror.measured` / `mirror.reference`: それぞれ最大 `MIRROR_MAX_PEAKS`（既定 150）点。
+  一致した点（測定側は `matched_measured_mz`、参照側は `matched_mz`）は必ず残し、
+  残りは強度降順で埋める。`scored_peak_count` / `unscored_peak_count` は**間引き前の
+  満スペクトルの値のまま**返す（間引き後の表示点数には合わせない）。
+
+実データ check（kidney pos, 2196 spots）で JSON が 41.7 MB（内訳 EIC 31.0 MB・
+mirror 5.5 MB）になったため導入した上限。
+
 ### `table`（TSV）の列
 
 | 列 | 意味 |
@@ -65,9 +85,9 @@
 
 | 区分 | コード | 意味 |
 |---|---|---|
-| 強い | `ppm_out` | Δppm が `ppm_borderline` しきい値（既定 10）を超えた |
 | 強い | `polarity_mismatch` | アダクトの電荷符号と実測イオン化極性（`IonMode`）が不一致（`adduct_consistency` の `band` が `FAIL`）。脂質クラスとの典型性（`class_typical`）は advisory のみで `band` には効かない——非典型アダクトだけでは立たない |
 | 強い | `precursor_unmatched` | MS-DIAL 自身の `is_precursor_mz_match` が `False` |
+| 弱い | `ppm_out` | Δppm が `ppm_borderline` しきい値（既定 10）を超えた。**adduct 非依存**（実測: kidney neg/pos で全 adduct の中央値が約 −0.8 ppm）で、単独では強い理由に数えない（ユーザー決定 2026-09-29）——mz 系統自体は `FAIL` になるが、単独では `suspect` 止まり。`polarity_mismatch`/`precursor_unmatched` が別途立てば、そちらの強さで `likely_wrong` になる |
 | 弱い | `low_score` | MS/MS はあるが MS-DIAL 自身の `is_reference_matched` が `False` |
 | 弱い | `drt_out` | ΔRT が `drt_borderline` しきい値（既定 1.0 分）を超えた |
 | 弱い | `eic_poor` | EIC 形状帯が `FAIL`（検出サンプルが 1 件以上あり、かつ `good_fraction` が `eic_borderline_frac` 未満）。**検出サンプルが 0 件のときは `good_fraction` が計算できず帯は `UNKNOWN` になり、このコードは立たない**（`spot_shape` は `n_detected==0` なら `fraction=None`→`band="UNKNOWN"`） |
