@@ -66,18 +66,18 @@
 | 区分 | コード | 意味 |
 |---|---|---|
 | 強い | `ppm_out` | Δppm が `ppm_borderline` しきい値（既定 10）を超えた |
-| 強い | `polarity_mismatch` | アダクトとイオン化極性・脂質クラスの整合性チェック（`adduct_consistency`）が `FAIL` |
+| 強い | `polarity_mismatch` | アダクトの電荷符号と実測イオン化極性（`IonMode`）が不一致（`adduct_consistency` の `band` が `FAIL`）。脂質クラスとの典型性（`class_typical`）は advisory のみで `band` には効かない——非典型アダクトだけでは立たない |
 | 強い | `precursor_unmatched` | MS-DIAL 自身の `is_precursor_mz_match` が `False` |
 | 弱い | `low_score` | MS/MS はあるが MS-DIAL 自身の `is_reference_matched` が `False` |
 | 弱い | `drt_out` | ΔRT が `drt_borderline` しきい値（既定 1.0 分）を超えた |
-| 弱い | `eic_poor` | EIC 形状帯が `FAIL`（`good_fraction` が `eic_borderline_frac` 未満、または検出 0 件） |
+| 弱い | `eic_poor` | EIC 形状帯が `FAIL`（検出サンプルが 1 件以上あり、かつ `good_fraction` が `eic_borderline_frac` 未満）。**検出サンプルが 0 件のときは `good_fraction` が計算できず帯は `UNKNOWN` になり、このコードは立たない**（`spot_shape` は `n_detected==0` なら `fraction=None`→`band="UNKNOWN"`） |
 | 帯のみ | `ppm_borderline` | Δppm が `ppm_pass`〜`ppm_borderline`（既定 5〜10）の帯 |
 | 帯のみ | `drt_borderline` | ΔRT が `drt_pass`〜`drt_borderline`（既定 0.5〜1.0 分）の帯 |
-| 帯のみ | `eic_borderline` | EIC 形状帯が `BORDERLINE`（`good_fraction` が `eic_borderline_frac`〜`eic_pass_frac` の帯） |
+| 帯のみ | `eic_borderline` | EIC 形状帯が `BORDERLINE`（検出サンプルが 1 件以上あり、かつ `good_fraction` が `eic_borderline_frac`〜`eic_pass_frac` の帯）。これも検出 0 件では立たず `UNKNOWN` になる |
 | 帯のみ | `rt_scatter` | 検出サンプル間で EIC 頂点 RT のばらつき（標本標準偏差）が `eic_rt_scatter_sd`（既定 0.1 分）を超えた。EIC 帯が `PASS` ならこの 1 件だけで `BORDERLINE` に格下げする |
 | 帯のみ | `trend_outlier` | 所属クラスの RT–m/z 傾向で頑健 z が `trend_outlier_z`（既定 3.0）を超え、かつそのクラスの傾向フィット自体が信頼できる（`r2 >= trend_min_r2`、既定 0.7） |
 | 情報 | `msms_absent` | MS/MS 未取得、または名前接頭辞が `no MS2`/`w/o MS2`（`msms` 系統は `UNKNOWN`） |
-| 情報 | `reference_not_found` | ライブラリから参照レコードを引けなかった（`rt`/`mz` 系統は `UNKNOWN`） |
+| 情報 | `reference_not_found` | ライブラリから参照レコードを引けなかった。**`rt` 系統だけが `UNKNOWN`** になる。`mz` 系統は Formula/AdductType からの理論値（`mass_error_ppm`、`ppm_basis="formula"`）にフォールバックして計算を続け、それも失敗したときだけ `UNKNOWN` になる（`rt` と違って自動的に `UNKNOWN` にはならない） |
 | 情報 | `reference_rt_absent` | 参照は引けたが RT を持たない（`rt` 系統は `UNKNOWN`） |
 | 情報 | `no_match_result` | ARF2 に MS-DIAL の照合結果（`representative`）自体が無い（`msms` 系統は `UNKNOWN`） |
 | 情報 | `rescore_discrepancy` | `curation_review` が対向照合で出した `weighted_dot_product` が MS-DIAL 自身の値（平方根換算）と `rescore_tolerance`（既定 0.1）を超えてずれた |
@@ -86,6 +86,44 @@
 | 情報 | `manually_unsettled` | 名前接頭辞が `unsettled`（MS-DIAL Alignment Viewer で未確定のまま） |
 | 情報 | `trend_outlier_unreliable` | 頑健 z はしきい値を超えたが、そのクラスの傾向フィット自体が信頼できない（`trend_outlier` には数えない） |
 | 情報 | `dcl_precursor_mismatch` | `.dcl` の該当インデックスの precursor m/z が代表試料の m/z と 0.01 以上ずれる（順序対応の前提が崩れている可能性。その場合 MS/MS 系統の実測スペクトルは使わない） |
+
+### エクスポートのメタ行（`# curation = ...`）
+
+`arf_export_differential` / `dataset_export_differential` は既定（`apply_curation=True`）で
+有効フラグ（`curation_flags` と同じ、スポットごとの最新 1 行・`clear` 済みは除く）を読み、
+差次的エクスポートの契約 15 列（`export_contract.EXPORT_COLUMNS`）自体は変えずに、
+メタ行ブロックの `source_lines` スロットの**末尾**（`# source_arf`/`# source_mztab` 等、
+経路固有のメタ行のすぐ後ろ。`export_contract.build_meta` の順序契約でスロット 3）に
+1 行だけ足す（`lipidmix/curation/apply.py` の `meta_line()`）。**有効フラグが 0 件**なら
+`meta_line()` は `None` を返し、この行自体を出さない——出力は現行と完全に同じになる。
+
+タブ区切りの 1 行で、形は次のとおり（角括弧内は `state` が `applied` のときだけ出る）:
+
+```
+# curation = <state>\tcuration_flags = N[\tcuration_wrong_excluded = N\tcuration_suspect = N]\tcuration_flags_sha256 = <hex>
+```
+
+| フィールド | 意味 |
+|---|---|
+| `<state>` | 下表 |
+| `curation_flags = N` | 有効フラグの総数（`wrong` + `suspect`。`flags_for_arf2()["n"]`） |
+| `curation_wrong_excluded = N` | **`state == "applied"` のときだけ**出る。実際に出力の行から除外したスポット数 |
+| `curation_suspect = N` | 同上。除外せず残した行のうち `suspect` フラグが付いているものの数（値そのものは変えていない） |
+| `curation_flags_sha256 = <hex>` | フラグ集合のダイジェスト（`flags_for_arf2()["digest"]`）。再エクスポートを跨いでフラグ内容が変わっていないかを機械的に照合できる |
+
+`state` は経路とその引数で決まる:
+
+| `state` | 経路 | 条件 |
+|---|---|---|
+| `applied` | ARF 経路（`arf_export_differential`）は `apply_curation=True`（既定）なら常にこれ。mzTab 経路（`dataset_export_differential`）は `apply_curation=True` かつ、隣接する `.arf` との対応が検証済み（`DatasetState.feature_qc["source"] == "arf"`、SMF_ID が `MasterAlignmentID` と同じ空間だと確認できている） | `wrong` のスポットを実際に出力から除外し、`curation_wrong_excluded`/`curation_suspect` を出す |
+| `not_applied` | 両経路 | `apply_curation=False` を明示した。フラグはあっても意図的に無視——行は 1 つも落とさない |
+| `unmapped` | mzTab 経路のみ | `apply_curation=True` だが SMF_ID と `MasterAlignmentID` の対応が未検証（`feature_qc["source"] != "arf"`）。**フラグが 1 件でもあっても行は 1 つも落とさない**——対応が確認できないまま除外すると、mzTab の別 feature を `.arf2` のスポット番号と取り違えて黙って消しかねないため |
+
+ARF 経路は `.arf2` の `MasterAlignmentID` をそのままキーに使うので対応の検証が要らず、
+`unmapped` にはならない（`applied` か `not_applied` の 2 通りのみ）。`not_applied` と
+`unmapped` はどちらも行を落とさないため、件数フィールド（`curation_wrong_excluded`/
+`curation_suspect`）自体を省く——「0 件除外した」と「検証できないので除外していない」を
+数字の 0 で混同させないため。
 
 ## 必須注意事項
 
