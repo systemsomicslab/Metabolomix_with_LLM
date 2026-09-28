@@ -17,8 +17,9 @@
 | `identity` | `lipidmix://docs/output-format/identity` | §12 | 同定信頼度・名前正規化・MSI レベル |
 | `mztab` | `lipidmix://docs/output-format/mztab` | §13 | mzTab-M 経路（`dataset_load` 以降）。SME/SML の同定、特徴表、差次的エクスポートの同定列 |
 | `library` | `lipidmix://docs/output-format/library` | §14 | 参照ライブラリ（`.dbs`/`.msp`）照合。スコアの意味、`-1`/`0` の区別、意図的に写した瑕疵 |
+| `curation` | `lipidmix://docs/output-format/curation` | — | アラインメントのキュレーション（`curation_review` 等）。判定・理由コードの意味 |
 
-節番号は分割前の通し番号をそのまま保持している。本文中の `§11.1.1` のような相互参照は、この表からトピックを引いて辿ること。
+節番号は分割前の通し番号をそのまま保持している（`curation` は分割後に追加したトピックなので節番号を持たない）。本文中の `§11.1.1` のような相互参照は、この表からトピックを引いて辿ること。
 
 MCPツール層（形式ごとの `lipidmix/<形式>/tools.py` と `lipidmix/tools/`。`server.py` はそれらを登録・再エクスポートする薄いファサード）が、パーサーの構造化結果を主に Markdown/JSON 文字列へ整形する。LLM は表示文ではなく、各トピックが定義する意味を基準に解釈する。
 

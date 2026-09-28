@@ -157,7 +157,7 @@ lipidmix/tools/     形式に紐づかない MCP 公開層（入口・サンプ�
 | 知りたいこと | 見る場所 |
 |---|---|
 | ツールの引数・用途（`tests/test_readme_links.py` が一覧と件数を実登録と突き合わせている） | `USAGE.md` |
-| 出力フィールドの**意味**（行の粒度・脂質名文法・必須注意） | `docs/output_format/core.md` ＋ トピック別（`arf` `arf2` `pai2` `dcl` `eic` `identity` `mztab`）。MCP リソース `lipidmix://docs/output-format[/{topic}]` としても配信 |
+| 出力フィールドの**意味**（行の粒度・脂質名文法・必須注意） | `docs/output_format/core.md` ＋ トピック別（`arf` `arf2` `pai2` `dcl` `eic` `identity` `mztab` `curation`）。MCP リソース `lipidmix://docs/output-format[/{topic}]` としても配信 |
 | ツールが**どのファイルのどの関数をどの順に呼ぶか** | `docs/workflow/`（対象範囲の線引きと内訳は `index.md` が正準。`tests/test_workflow_docs.py` が実登録と突き合わせている）。行番号は書かない規約 |
 | **生データ → Console → mzTab-M → 差次的解析 → パスウェイ**の一気通貫の順序と、内部関数の引数・戻り値 | [docs/superpowers/specs/2026-09-03-end-to-end-pipeline-design.md](docs/superpowers/specs/2026-09-03-end-to-end-pipeline-design.md)（**目標状態**の記述。実装状況は同文書 §9。完成後 `docs/workflow/Lipidmix/` へ昇格） |
 | MessagePack の Key 番号 | `docs/schema/*.md` |
