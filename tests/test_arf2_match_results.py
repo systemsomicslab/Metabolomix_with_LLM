@@ -62,6 +62,13 @@ def test_name_prefix_reads_msdial_qualifiers():
     assert mr.name_prefix(None) is None
 
 
+def test_name_prefix_handles_extra_whitespace():
+    # Test with extra whitespace between qualifier tokens
+    assert mr.name_prefix("no  MS2: PC 34:1") == "no MS2"
+    assert mr.name_prefix("low   score: PC 34:1") == "low score"
+    assert mr.name_prefix("w/o  MS2: PC 34:1") == "w/o MS2"
+
+
 def test_load_spot_annotations_keys_by_master_alignment_id(tmp_path):
     path = write_arf2(tmp_path / "AlignmentResult_x.arf2", [
         arf2_spot_raw(spot_id=0, matches=[match_result()], representative_file_id=2),

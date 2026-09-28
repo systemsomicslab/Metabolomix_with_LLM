@@ -23,13 +23,13 @@ def chromxs(rt: float, mz: float) -> list:
     return [[1, [rt]], [3, [mz]]]
 
 
-def match_result(overrides=None, **kwargs) -> list:
+def match_result(overrides: dict | None = None) -> list:
     """MsScanMatchResult の生配列（39 要素）。既定は「参照一致した MS/MS あり」。
 
-    overrides: dict with numeric keys, or use **kwargs for compatibility.
+    overrides: dict with numeric keys for Value at that Key position.
     """
     if overrides is None:
-        overrides = kwargs
+        overrides = {}
     values = {
         0: "PC 34:1", 1: "KEY-PC341", 2: 3.2,
         3: 0.81, 4: 0.64, 5: 0.9, 6: 12.0, 7: 0.7, 8: 0.0,

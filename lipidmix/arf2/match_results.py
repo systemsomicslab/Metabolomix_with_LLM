@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 
 from lipidmix.arf2.reader import load_raw_spots
+from lipidmix.msdial.lipid_identity import _MSDIAL_QUALIFIER_RE
 
 MATCH_KEYS = {
     0: "name", 1: "inchikey", 2: "total_score",
@@ -31,13 +32,14 @@ MATCH_KEYS = {
 SOURCE_UNKNOWN = 1
 SOURCE_MANUAL = 64
 
-# spot Key 12 の接頭辞。上流の綴り（"Unsettled: " は大文字始まり）を大小無視で読む。
-_PREFIXES = (
-    ("no ms2:", "no MS2"),
-    ("low score:", "low score"),
-    ("unsettled:", "unsettled"),
-    ("w/o ms2:", "w/o MS2"),
-)
+# Mapping from normalized qualifier text to label.
+_QUALIFIER_LABELS = {
+    "noms2": "no MS2",
+    "lowscore": "low score",
+    "unsettled": "unsettled",
+    "woms2": "w/o MS2",
+    "woms1": "w/o MS2",  # Map w/o MS1 to w/o MS2 (same family)
+}
 
 
 def _clean(value):
@@ -93,13 +95,23 @@ def representative(container) -> dict | None:
 
 
 def name_prefix(name) -> str | None:
+    """Extract and normalize MS-DIAL qualifier prefix from name.
+
+    Uses the canonical regex from lipid_identity._MSDIAL_QUALIFIER_RE to detect
+    qualifiers like "no MS2:", "low score:", etc. Returns normalized label or None.
+    """
     if not name:
         return None
-    lowered = str(name).strip().lower()
-    for token, label in _PREFIXES:
-        if lowered.startswith(token):
-            return label
-    return None
+    s = str(name).strip()
+    m = _MSDIAL_QUALIFIER_RE.match(s)
+    if not m:
+        return None
+    # Extract the matched text (including colon) and normalize it
+    matched = m.group(0)
+    # Remove leading/trailing whitespace and colon, then normalize by removing spaces and slashes
+    normalized = matched.strip().rstrip(":").replace(" ", "").replace("/", "").lower()
+    # Map to canonical label
+    return _QUALIFIER_LABELS.get(normalized)
 
 
 def spot_annotation(raw_spot: list) -> dict:
