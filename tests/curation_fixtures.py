@@ -71,3 +71,143 @@ def write_arf2(path: Path, spots: list[list]) -> Path:
     path = Path(path)
     path.write_bytes(msgpack.packb(["hdr", payload], use_bin_type=True))
     return path
+
+
+import struct
+import textwrap
+
+from tests.dcl_fixture import build_dcl_bytes
+
+
+def css1_bytes(spots: list[dict]) -> bytes:
+    """`.EIC.aef`（CSS1）。spots[i] = {"rt","mz","samples":[{"file_id","top","left","right","points"}]}"""
+    chunks = []
+    for spot in spots:
+        chunk = bytearray(struct.pack("<ffffbi", spot["rt"], 0.0, spot["mz"], 0.0, 0,
+                                      len(spot["samples"])))
+        for sample in spot["samples"]:
+            chunk.extend(struct.pack("<iifff", sample["file_id"], len(sample["points"]),
+                                     sample["top"], sample["left"], sample["right"]))
+            for x, y in sample["points"]:
+                chunk.extend(struct.pack("<ff", x, y))
+        chunks.append(bytes(chunk))
+    header = 14 + 8 * len(chunks)
+    offsets, cursor = [], header
+    for chunk in chunks:
+        offsets.append(cursor)
+        cursor += len(chunk)
+    body = bytearray(b"CSS1" + b"\x00" * 6 + struct.pack("<i", len(chunks)))
+    for offset in offsets:
+        body.extend(struct.pack("<q", offset))
+    for chunk in chunks:
+        body.extend(chunk)
+    return bytes(body)
+
+
+def arf_row(*, file_id: int, mz: float, rt: float, height: float, gap_filled: bool) -> list:
+    """AlignmentChromPeakFeature の行（docs/schema/AlignmentChromPeakFeature.md）。"""
+    row = [None] * 50
+    row[0] = file_id
+    row[1] = f"sample_{file_id}"
+    row[2] = -2 if gap_filled else file_id + 100
+    row[3] = file_id + 1000
+    row[10] = {}
+    row[15] = chromxs(rt, mz)
+    row[18] = height
+    row[20] = height * 2
+    row[21] = height * 1.5
+    row[22] = mz
+    row[23] = 0
+    row[24] = ""
+    row[37] = [1.0, 20.0]
+    return row
+
+
+def write_arf(path: Path, groups: list[list[list]]) -> Path:
+    inner = b"".join(msgpack.packb(item, use_bin_type=True) for item in [[0, 0, *groups]])
+    payload = msgpack.packb(len(inner), use_bin_type=True) + lz4.block.compress(
+        inner, store_size=False)
+    path = Path(path)
+    path.write_bytes(msgpack.packb(msgpack.ExtType(99, payload), use_bin_type=True))
+    return path
+
+
+def gaussian_points(center: float, *, height: float = 1000.0, sigma: float = 0.03,
+                    n: int = 31, step: float = 0.01) -> list[list[float]]:
+    import math
+    start = center - (n // 2) * step
+    return [[start + i * step, height * math.exp(-((start + i * step - center) ** 2) / (2 * sigma ** 2))]
+            for i in range(n)]
+
+
+LIBRARY_MSP = textwrap.dedent("""\
+    NAME: PC 34:1
+    PRECURSORMZ: 760.5851
+    PRECURSORTYPE: [M+H]+
+    IONMODE: Positive
+    RETENTIONTIME: 12.1
+    INCHIKEY: KEY-PC341
+    Num Peaks: 2
+    184.07 999
+    760.58 200
+
+    NAME: PC 36:2
+    PRECURSORMZ: 786.6007
+    PRECURSORTYPE: [M+H]+
+    IONMODE: Positive
+    RETENTIONTIME: 12.4
+    INCHIKEY: KEY-PC362
+    Num Peaks: 1
+    184.07 999
+""")
+
+
+def write_alignment_set(folder: Path, *, n_files: int = 3) -> dict:
+    """スポット 3 件の一式を `AlignmentResult_x.*` として書く。
+
+    spot 0: PC 34:1、参照一致・きれいなピーク（ok になるべき）
+    spot 1: low score: PC 36:2、参照 RT から 1.5 分ずれ・ピークがギザギザ
+    spot 2: Unknown（選択されない）
+
+    spot 1 の match_result は Key1（InChIKey）を参照レコード（PC 36:2 = KEY-PC362）に
+    合わせて上書きする。`match_result()` の既定値はどの候補も "KEY-PC341"（PC 34:1 の
+    InChIKey）なので、上書きしないと `evidence._reference` の InChIKey 不一致ガード
+    （別ライブラリのレコードを ScanID が指してしまった場合の安全弁）に spot 1 自身が
+    引っかかり、参照が解決できなくなる（実装時に判明。ここは fixture 側の記述漏れの
+    修正であり、ガードのロジックは変えていない）。
+    """
+    folder.mkdir(parents=True, exist_ok=True)
+    specs = [
+        {"spot_id": 0, "name": "PC 34:1", "mz": 760.5851, "rt": 12.1, "scan": 0,
+         "matches": [match_result({0: "PC 34:1", 14: 0, 27: "lib_1"})]},
+        {"spot_id": 1, "name": "low score: PC 36:2", "mz": 786.6007, "rt": 13.9, "scan": 1,
+         "matches": [match_result({0: "PC 36:2", 1: "KEY-PC362", 14: 1, 27: "lib_1",
+                                    33: False, 34: True})]},
+        {"spot_id": 2, "name": "Unknown", "mz": 500.0, "rt": 5.0, "scan": None, "matches": []},
+    ]
+    write_arf2(folder / "AlignmentResult_x.arf2", [
+        arf2_spot_raw(spot_id=s["spot_id"], name=s["name"], mz=s["mz"], rt=s["rt"],
+                      matches=s["matches"], representative_file_id=0)
+        for s in specs])
+    (folder / "AlignmentResult_x.dcl").write_bytes(build_dcl_bytes([
+        {"precursor_mz": s["mz"], "rt": s["rt"],
+         "spectrum": [(184.07, 1000.0), (s["mz"], 150.0)] if s["scan"] is not None else []}
+        for s in specs]))
+    eic_spots, groups = [], []
+    for s in specs:
+        samples, rows = [], []
+        for file_id in range(n_files):
+            points = gaussian_points(s["rt"])
+            if s["spot_id"] == 1:
+                for i in range(1, len(points) - 1, 2):
+                    points[i][1] *= 0.3
+            samples.append({"file_id": file_id, "top": s["rt"], "left": s["rt"] - 0.1,
+                            "right": s["rt"] + 0.1, "points": points})
+            rows.append(arf_row(file_id=file_id, mz=s["mz"], rt=s["rt"],
+                                height=1000.0 * (file_id + 1), gap_filled=(file_id == n_files - 1)))
+        eic_spots.append({"rt": s["rt"], "mz": s["mz"], "samples": samples})
+        groups.append(rows)
+    (folder / "AlignmentResult_x.EIC.aef").write_bytes(css1_bytes(eic_spots))
+    write_arf(folder / "AlignmentResult_x_PeakProperties.arf", groups)
+    (folder / "lib.msp").write_text(LIBRARY_MSP, encoding="utf-8")
+    return {"arf2": folder / "AlignmentResult_x.arf2", "msp": folder / "lib.msp"}
