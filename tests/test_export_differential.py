@@ -197,6 +197,112 @@ class TestExportDifferential(unittest.TestCase):
             meta_lines,
         )
 
+    def test_no_curation_flags_means_no_curation_meta_line(self):
+        """フラグ 0 件のときの出力は現行と完全に同じ(curation メタ行が無い)。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "differential.tsv"
+            arf2 = Path(tmp) / "AlignmentResult_2026_01_01_00_00_00.arf2"
+            arf2.write_bytes(b"")
+            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2), \
+                 patch("lipidmix.arf2.reader.load_catalog", return_value=self.catalog):
+                server.arf_export_differential(str(out))
+            text = out.read_text(encoding="utf-8")
+        self.assertFalse(any(l.startswith("# curation") for l in text.splitlines()))
+
+    def test_wrong_flag_drops_the_row_and_declares_curation_applied(self):
+        from lipidmix.curation import flags as curation_flags
+
+        # spot_id=1 と 2 の両方に InChIKey を付け、1 だけを wrong にする
+        # (2 だけになれば「消えた」ことを行の残り方で確認できる)。setUp の
+        # results には Spot_1_height / Spot_2_height が既にある。
+        self.catalog[1]["InChIKey"] = "DDDDDDDDDDDDDD-EEEEEEEEEE-F"
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "differential.tsv"
+            arf2 = Path(tmp) / "AlignmentResult_2026_01_01_00_00_00.arf2"
+            arf2.write_bytes(b"")
+            curation_flags.FlagStore(curation_flags.curation_dir(arf2)).append(
+                [{"spot_id": 1, "flag": "wrong"}],
+                alignment=curation_flags.alignment_key(arf2),
+                review_id="r", source="user")
+            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2), \
+                 patch("lipidmix.arf2.reader.load_catalog", return_value=self.catalog):
+                payload = json.loads(server.arf_export_differential(str(out)))
+            text = out.read_text(encoding="utf-8")
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["n_with_inchikey"], 1)
+        body = [l for l in text.splitlines() if not l.startswith("#")][1:]
+        self.assertEqual(len(body), 1)
+        self.assertIn("DDDDDDDDDDDDDD-EEEEEEEEEE-F", body[0])
+        meta_lines = [l for l in text.splitlines() if l.startswith("# curation")]
+        self.assertEqual(len(meta_lines), 1)
+        self.assertTrue(meta_lines[0].startswith("# curation = applied\t"))
+        self.assertIn("curation_wrong_excluded = 1", meta_lines[0])
+
+
+    def _export_with_flags(self, flag_rows, *, alignment=None, apply_curation=True,
+                           raw_tail=None):
+        """spot 1 と 2 の両方に InChIKey を付け、flag_rows を記録して書き出す。"""
+        from lipidmix.curation import flags as curation_flags
+
+        self.catalog[1]["InChIKey"] = "DDDDDDDDDDDDDD-EEEEEEEEEE-F"
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "differential.tsv"
+            arf2 = Path(tmp) / "AlignmentResult_2026_01_01_00_00_00.arf2"
+            arf2.write_bytes(b"")
+            store = curation_flags.FlagStore(curation_flags.curation_dir(arf2))
+            store.append(flag_rows, alignment=alignment or curation_flags.alignment_key(arf2),
+                         review_id="r", source="user")
+            if raw_tail is not None:
+                with open(store.path, "a", encoding="utf-8") as handle:
+                    handle.write(raw_tail)
+            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2), \
+                 patch("lipidmix.arf2.reader.load_catalog", return_value=self.catalog):
+                payload = json.loads(server.arf_export_differential(
+                    str(out), apply_curation=apply_curation))
+            text = out.read_text(encoding="utf-8") if out.exists() else None
+            flags_path = str(store.path)
+        return payload, text, flags_path
+
+    def test_orphaned_flags_are_reported_and_their_rows_are_kept(self):
+        """別の sha256（以前の版の .arf2）に付いたフラグは当てず、payload で知らせる。"""
+        payload, text, _ = self._export_with_flags(
+            [{"spot_id": 1, "flag": "wrong"}],
+            alignment={"alignment_file": "AlignmentResult_2026_01_01_00_00_00.arf2",
+                       "alignment_sha256": "0" * 64})
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["curation"], {"state": None, "wrong_excluded": None,
+                                               "suspect": None, "orphaned": 1})
+        self.assertTrue(any("以前の版" in w for w in payload["warnings"]))
+        body = [l for l in text.splitlines() if not l.startswith("#")][1:]
+        self.assertEqual(len(body), 2)                          # spot 1 は落とさない
+        self.assertFalse(any(l.startswith("# curation") for l in text.splitlines()))
+
+    def test_apply_curation_false_declares_not_applied_and_keeps_the_rows(self):
+        payload, text, _ = self._export_with_flags(
+            [{"spot_id": 1, "flag": "wrong"}], apply_curation=False)
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["curation"], {"state": "not_applied", "wrong_excluded": None,
+                                               "suspect": None, "orphaned": 0})
+        body = [l for l in text.splitlines() if not l.startswith("#")][1:]
+        self.assertEqual(len(body), 2)
+        meta = [l for l in text.splitlines() if l.startswith("# curation")]
+        self.assertEqual(len(meta), 1)
+        self.assertTrue(meta[0].startswith("# curation = not_applied\t"))
+
+    def test_applied_curation_is_summarised_in_the_payload(self):
+        payload, _, _ = self._export_with_flags(
+            [{"spot_id": 1, "flag": "wrong"}, {"spot_id": 2, "flag": "suspect"}])
+        self.assertEqual(payload["curation"], {"state": "applied", "wrong_excluded": 1,
+                                               "suspect": 1, "orphaned": 0})
+
+    def test_malformed_flags_file_is_an_error_not_a_silent_drop(self):
+        payload, text, flags_path = self._export_with_flags(
+            [{"spot_id": 1, "flag": "wrong"}], raw_tail='{"spot_id": 2, "fla')
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["flags_file"], flags_path)
+        self.assertEqual(payload["line"], 2)
+        self.assertIsNone(text)                                 # 書き出さない
+
 
 if __name__ == "__main__":
     unittest.main()

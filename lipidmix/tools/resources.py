@@ -17,8 +17,8 @@ from lipidmix.core.mcp_core import mcp, OUTPUT_FORMAT_DOC, PLAYBOOK_DIR
     description=(
         "Shared core of the output-format reference (row granularity, lipid-name "
         "grammar, mandatory caveats) plus the index of per-topic sections: arf, "
-        "arf2, pai2, dcl, eic, identity, mztab, library. Read before interpreting "
-        "parser or dataset results."
+        "arf2, pai2, dcl, eic, identity, mztab, library, curation. Read before "
+        "interpreting parser or dataset results."
     ),
     mime_type="text/markdown",
 )
@@ -44,7 +44,8 @@ def output_format_reference() -> str:
     description=(
         "Field-by-field reference for one parser/tool family: arf, arf2, pai2, dcl, "
         "eic, identity, mztab (dataset_* / mzTab-M path), library (reference-library "
-        "MS/MS matching), or core for the shared ontology. Fetch the topic matching "
+        "MS/MS matching), curation (alignment curation: curation_review's verdicts "
+        "and reason codes), or core for the shared ontology. Fetch the topic matching "
         "the output you are about to interpret instead of the whole document."
     ),
     mime_type="text/markdown",

@@ -123,25 +123,40 @@ def extract_arf2_data(data: list) -> Optional[dict]:
         "MonoIsotopicPercentage": _to_float(get(51)),
     }
 
-def deserialize(file_like_object) -> List[dict]:
-    """バイナリストリームから .arf2 データをパースして辞書のリストを返す"""
-    datas = deserialize_lz4_packed_msgpack(file_like_object.read())
-    results = []
-    
+def iter_raw_spots(datas: list):
+    """`deserialize_lz4_packed_msgpack` の戻りから AlignmentSpotProperty の生配列を順に返す。
+
+    `.arf2` は「スポットを直接並べる」形と「リストの入れ子に包む」形の両方がある
+    （`deserialize` と同じ規則）。Key 番号を読む層（`match_results` など）は
+    ここから生配列を受け取り、展開規則を重複して持たない。
+    """
     for d in datas:
         if isinstance(d, list) and len(d) < 14:
             for item in d:
                 if isinstance(item, list) and len(item) > 0:
                     for spot_raw in item:
-                        formatted = extract_arf2_data(spot_raw)
-                        if formatted:
-                            results.append(formatted)
+                        if isinstance(spot_raw, list) and len(spot_raw) >= 10:
+                            yield spot_raw
             continue
-            
-        formatted = extract_arf2_data(d)
+        if isinstance(d, list) and len(d) >= 10:
+            yield d
+
+
+def load_raw_spots(file_path) -> list:
+    """`.arf2` を読み、AlignmentSpotProperty の生配列の一覧を返す。"""
+    with open(os.fspath(file_path), "rb") as handle:
+        datas = deserialize_lz4_packed_msgpack(handle.read())
+    return list(iter_raw_spots(datas))
+
+
+def deserialize(file_like_object) -> List[dict]:
+    """バイナリストリームから .arf2 データをパースして辞書のリストを返す"""
+    datas = deserialize_lz4_packed_msgpack(file_like_object.read())
+    results = []
+    for spot_raw in iter_raw_spots(datas):
+        formatted = extract_arf2_data(spot_raw)
         if formatted:
             results.append(formatted)
-            
     return results
 
 def summarize_arf2_data(deserialized_list: List[dict]) -> dict:

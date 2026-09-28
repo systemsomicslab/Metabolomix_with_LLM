@@ -1,4 +1,4 @@
-# USAGE — ms-data-parser MCP ツール一覧(全67ツール)
+# USAGE — ms-data-parser MCP ツール一覧(全71ツール)
 
 MS-DIAL 出力(`.arf` / `.arf2` / `.pai2` / `.dcl` / `.EIC.aef`)と mzTab-M を解析し、PCA・差次的解析・
 アノテーション検証・文献探索・レポート記録までを行う MCP サーバーのツール群です。
@@ -36,7 +36,7 @@ pipeline_run → pipeline_status(確認) → pipeline_resume(訂正・再開が�
 | ツール | 機能 |
 |--------|------|
 | `arf2_parser` | `.arf2`(全体カタログ)を解析しメタデータ概観を要約。サンプル別強度は含まないため多変量解析は不可。 |
-| `arf2_annotate_identities` | ARF2 スポット注釈を GOSLIN 正規化・RefMet/LIPID MAPS ID・MSI レベルで一括標準化し TSV 表で返す(オフライン)。**ファイル先頭から `max_rows` 件**で強度順ではない(総数と未表示件数はヘッダ行に出る)。MSI はクラス上限の保守評価。 |
+| `arf2_annotate_identities` | ARF2 スポット注釈を GOSLIN 正規化・RefMet/LIPID MAPS ID・MSI レベルで一括標準化し TSV 表で返す(オフライン)。**ファイル先頭から `max_rows` 件**で強度順ではない(総数と未表示件数はヘッダ行に出る)。MSI はクラス上限の保守評価。`curation_flag` 列にキュレーションの有効フラグ(`wrong` / `suspect`、未フラグは空)が出る。 |
 
 ## 3. ARF 解析(サンプル別強度・PCA・差次的解析)
 
@@ -50,7 +50,7 @@ pipeline_run → pipeline_status(確認) → pipeline_resume(訂正・再開が�
 | `arf_preprocess` | ロード済み ARF 行列に前処理レシピ(正規化・補完・ブランク/QC RSD 足切り・ドリフト補正)を適用し session を更新。 |
 | `arf_pca_preprocessed` | `arf_preprocess` 後の前処理済み行列で PCA を実行(生行列経路とは独立)。 |
 | `arf_differential` | 前処理後行列で差次的解析(2群 Welch t 検定＋log2FC、BH 補正)。因子トークンによるプール群指定に対応。多群 ANOVA は MCP から非公開(関心の2群を因子指定で切り出す)。 |
-| `arf_export_differential` | 直近の差次的結果を InChIKey 付きの 1 ファイルへ書き出す(`output_path`)。同一アラインメントの兄弟 `.arf2` から同定情報を `MasterAlignmentID` で結合する。濃縮解析の背景を保つため、有意行だけでなく **InChIKey が付いた全行**を出す。列定義は `lipidmix/analysis/export_contract.py` が正準(下流リポジトリとの契約)。 |
+| `arf_export_differential` | 直近の差次的結果を InChIKey 付きの 1 ファイルへ書き出す(`output_path`)。同一アラインメントの兄弟 `.arf2` から同定情報を `MasterAlignmentID` で結合する。濃縮解析の背景を保つため、有意行だけでなく **InChIKey が付いた全行**を出す。列定義は `lipidmix/analysis/export_contract.py` が正準(下流リポジトリとの契約)。`apply_curation`(既定 true)でユーザーのキュレーション判断を反映する。 |
 
 ## 4. EIC 解析(`.EIC.aef`)
 
@@ -152,7 +152,7 @@ ARF 経路の状態を壊さない。
 | `dataset_preprocess` | 定量行列に前処理レシピを適用(引数は `arf_preprocess` と同一: `normalize` / `blank_min_fold` / `drift_correct` / `max_qc_rsd` / `impute` / `min_detection_rate`)。`min_detection_rate` は gap-fill を除いた実検出率での足切りで、`dataset_load` が検出状態を取り込めた場合にだけ使える(無い状態で 0 より大きい値を渡すと引数エラー。黙って未検出 0 件として通さない)。フィルタは正規化・補完より**前**に掛ける。注入順とバッチは mzTab-M の `MTD assay[N]-custom[...]`(`MS:4000089` injection sequence label / `MS:4000088` batch label)から読むので **`drift_correct` は実際に適用される**。注入順が無いファイルでは従来どおり未実施の caveat が出る。バッチラベルは 2 値以上あるときだけ採用し(MS-DIAL の既定は全件 `1` で情報を持たないため)、無ければファイル名の日付推定に戻す。採用元は `sample_meta` の `batch_source` / `run_order_source` に入る。 |
 | `dataset_pca` | 前処理済み `DatasetState` で PCA(`n_components` 既定 5、`log_transform` 既定 False)。ローディング全量は戻り値に載せず `session.dataset.last_pca` に保持する。 |
 | `dataset_differential` | 前処理済み行列で 2 群比較(Welch t 検定＋BH-FDR)。`group_a`/`group_b` は**サンプル名のリスト**(`dataset_status` の `samples` で確認)。**log2FC は正なら `group_b` が高い**(`group_a` が基準)。全特徴量の結果と volcano 点列は `session.dataset.last_differential` に保持する。 |
-| `dataset_export_differential` | 指定した差次的結果(`result_id` 省略時は直近)を InChIKey 付きの 1 ファイルへ書き出す。**前処理をやり直した後の古い結果は書き出さない**(古い数字に現在の前処理条件のラベルが付いた TSV は、どちらも正しく見えてずれが分からない)。メタ行に `result_id` / `preprocess_id` / `source_verification` が入り、前処理条件は結果自身の来歴から書く。出力は一時ファイルから置換して確定する。**`arf_export_differential` と同一の契約**(15 列 + `contract_version` メタ行)なので下流のパスウェイ解析にそのまま渡せる。InChIKey は mzTab-M 由来(`.arf2` との結合は不要)。`ontology` と `msi_level` は mzTab-M に対応物が無く空欄で、その旨をメタ行に書く。 |
+| `dataset_export_differential` | 指定した差次的結果(`result_id` 省略時は直近)を InChIKey 付きの 1 ファイルへ書き出す。**前処理をやり直した後の古い結果は書き出さない**(古い数字に現在の前処理条件のラベルが付いた TSV は、どちらも正しく見えてずれが分からない)。メタ行に `result_id` / `preprocess_id` / `source_verification` が入り、前処理条件は結果自身の来歴から書く。出力は一時ファイルから置換して確定する。**`arf_export_differential` と同一の契約**(15 列 + `contract_version` メタ行)なので下流のパスウェイ解析にそのまま渡せる。InChIKey は mzTab-M 由来(`.arf2` との結合は不要)。`ontology` と `msi_level` は mzTab-M に対応物が無く空欄で、その旨をメタ行に書く。`apply_curation`(既定 true)でユーザーのキュレーション判断を反映する。 |
 | `dataset_build_matrix` | v2 の解析行列(`analysis-matrix.v1`)を、いま session にある DatasetState から1本作る。`recipe` は profile の `matrix_recipes` 1要素と同じ5キー(`base`/`normalize`/`drift_correct`/`filter`/`impute`)で、検証規則は profile と共有する。`matrix_id` は recipe と dataset・metadata から決まるので、同じ入力なら同じ ID になる。揃っていない前提は埋めない — `base="internal_standard_ratio"` は対応付けが要るため `missing_state` で止まり、検出状態が不明なら `filter.min_detection_rate` は `not_evaluable` として feature を落とさない。値は戻り値に載せず session に保持し、`dataset_statistic` へは `matrix_id` を渡す。 |
 | `dataset_statistic` | v2(LC–MSメタボロミクス)の統計を、**名指しした解析行列**(`matrix_result_id`、`analysis-matrix.v1`)に対して1件実行する。`specification` は profile の `analysis_recipe.statistics` 1要素と同じ形(`kind` は `welch`/`anova_tukey`/`pca`)。直近の前処理を暗黙に使わない — recipe 違いの行列が2本ある前提の設計で、どの行列の数字かを結果に残す。`dataset_differential`(v1)とは効果量の定義が違う: v2 は**統計変換前の算術平均比の log2**(`effect_size_definition=log2_arithmetic_mean_ratio`)で、log2 変換に pseudocount を足さず、BH の母集団は検定できた feature だけ。行列は pipeline の preprocess/qc_processed か `dataset_build_matrix` が作る。 |
 | `dataset_set_sample_metadata` | 実験情報シート(`sample-manifest.v1`、TSV)を読み込み、全件検証してから `session.dataset` へ一括反映する。上流の Console 実行をやり直さずに群・バッチ・注入順・qc_pool 等の誤記入を訂正できる。**一部だけ適用される状態は作らない**(シートに不備があれば `session.dataset` を一切変更せずエラーを返すので、そのまま再送してよい)。前処理入力(role/batch/injection_order/qc_pool/include/sample_id/source_file)が変われば前処理済み行列・PCA・差次的解析まで無効化するが、**`group` だけの変更なら差次的解析だけを無効化し PCA は生かす**(`changed_fields` で確認できる)。**`dataset_differential` を直接呼ぶ経路との違い**: `dataset_differential` は呼び出し側が `group_a`/`group_b` にサンプル名のリストを都度自分で組み立てる汎用ツールで、群名から対照/処置の向きを決めたり QC/blank/unknown・除外行を弾いたりはしない。pipeline 側が使う明示比較(`comparison_id`/`reference_group`/`test_group`)は、群名だけでは向きを推測しない・QC/blank/unknown・`include=false` を混ぜない・完全交絡(群⟂バッチが分離不能)を `allow_confounded=true` の明示なしには実行しない、という前提検証を経てから同じ計算を呼ぶ(内部関数 `resolve_comparison`/`run_comparison`。バッチ情報が無い場合は「評価不可」であって「交絡あり」ではない)。 |
@@ -210,7 +210,28 @@ QC/blank の扱いはツールごとに異なる。`arf_parser` の `class_ids` 
 | `library_match_feature` | 測定 MS/MS(`.dcl`、間引かずに全ピーク使用)を候補と照合し、上位をスコア付きの TSV で返す。**並び順は `total_score`**(MS-DIAL の `GetTotalScore` の移植。RT・precursor m/z の一致度を足した**正規化しない和**で 1 を超える)。RT 項を足したかは `scoring.use_rt` に出る(`.dbs` の `IsUseTimeForAnnotationScoring` 次第。`.msp` では常に false)。上流の順位付けタプル全体は再現していないので**上位に化学的にありえない候補が残ることがある** — 1 位の妥当性は対向プロットで確かめること。`.dcl` に MS/MS が無いときは `not_found`(「未取得」であって「合わなかった」ではない)。スペクトル座標は戻り値に含めず `session.library.last_match` へ持つ。 |
 | `library_plot_mirror` | 直近の照合結果から対向プロット(上段=測定・下段=参照)を描く。既定は PNG 画像、`output="payload"` で座標 JSON。`scale` で縦軸の写し方を選ぶ(`"relative"` 既定 / `"sqrt"` / `"log10"`)——**precursor がベースピークのスペクトルは `relative` だと診断イオンが潰れて読めない**ので `"sqrt"` を使う。`label_policy` で m/z ラベルの衝突回避を選ぶ(`"auto"` 既定 = 水平・垂直の 2 次元判定 / `"msdial"` = 上流に忠実な水平のみの判定。忠実版のほうがラベルは少ない)。`.dbs` の強度足切りで**採点に入らなかった測定ピーク**は灰色で薄く描き分け、凡例と caption に件数が出る(足切りが 0 の run では現れない)。 |
 
-## 15. サーバ自身の更新
+## 15. アラインメントのキュレーション(注釈の一覧確認と機械判別)
+
+注釈付きスポットを、EIC・対向プロット・Δppm・ΔRT・脂質クラス×不飽和度の RT–m/z 傾向と
+機械判別つきで**一覧**確認し、ユーザーが付けたフラグ(「間違い」「疑わしい」)を記録する経路。
+`library_load`(アラインメントと同じフォルダの `*_Loaded.msp2.dbs` を推奨) → `curation_review` →
+ユーザーがビューアでフラグを付けて「送信用テキストをコピー」→ チャットに貼る → `curation_submit`。
+フラグの無いスポットは「間違っていない」の意で、何も記録しない。
+
+| ツール | 機能 |
+|--------|------|
+| `curation_review` | 対象(既定は注釈付き全部。`ontology` でクラス、`name_contains` で名前の部分一致)を選び、証拠収集・機械判別・HTML ビューア生成を 1 回で行う。戻り値は suspect 以上とフラグ済みのスポットだけの TSV(判定の重い順の先頭 `max_rows` 行、既定 100。総数 `n_table_rows_total`・表示数 `n_table_rows_shown`。全件は HTML ビューア)・判定の件数・クラス別の傾向要約(点数・R²・外れ数)・`html_path`。EIC 系列とスペクトルは返さない。`file_ids` に `.arf` の行に無い試料 ID があればエラー。判定は `likely_wrong`(polarity_mismatch / precursor_unmatched)/ `suspect`(ppm_out / low_score / drt_out / eic_poor、または弱い兆候の重なり)/ `ok`。RT–m/z 傾向は補強にしか使わない。`thresholds` で既定値を上書きできる。1 回の上限は 3000 スポット。 |
+| `curation_submit` | フラグを追記する。ビューアの送信用テキストを `submission_text` にそのまま渡すか、`review_id` + `flags=[{spot_id, flag: wrong\|suspect\|clear, note}]`。不正な要素が 1 つでもあれば何も書かない。`source` は `user`(ユーザー自身の判断)/ `llm`(LLM の提案にユーザーが同意したもの)。送信用テキストは `.arf2` の絶対パスを運ぶので、サーバ再起動やデータフォルダの切り替えの後でもそのまま貼れば送れる。直接渡すときは `file_path`(レビューを作った `.arf2`)でも探し先を指定できる。 |
+| `curation_flags` | 現在のアラインメントで有効なフラグを TSV で返す。 |
+| `curation_view_data` | ビューア(MCP Apps)専用。LLM は呼ばない。 |
+
+フラグは `<アラインメントのフォルダ>\curation\flags.jsonl` に、`.arf2` の sha256 と
+MasterAlignmentID の組で記録する(MS-DIAL を再実行すると古いフラグは当たらない)。
+`arf_export_differential` / `dataset_export_differential` は既定(`apply_curation=True`)で `wrong` のスポットを同定なしとして出力から外し、メタ行 `# curation = ...` で宣言する(15 列の契約は不変)。戻り値の `curation` に適用状況と件数が出る。以前の版の `.arf2`(同じファイル名で sha256 が違う)に付いたフラグは当てず、件数を `warnings` で知らせる。`flags.jsonl` に読めない行があれば、どのツールも黙って読み飛ばさずにファイル名と行番号を返して止まる(`arf2_annotate_identities` だけは一覧を返し、`curation_flag` を空にして注記する)。`pipeline_run` が書くエクスポートにはフラグを当てない。
+MCP Apps で会話内にビューアを出す経路は、Claude Desktop のローカル
+stdio サーバでは 2026-09 時点で未検証(ブラウザで `html_path` を開く経路が主)。
+
+## 16. サーバ自身の更新
 
 配布先のクローンを `origin/main` へ追従させるための保守ツール。解析の流れには現れない。
 遅れているときは更新通知が出る(`load_dataset` の冒頭行、`dataset_status` /

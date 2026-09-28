@@ -116,6 +116,9 @@ MZTAB_ERROR_CODES = frozenset({
     # v2 の matrix recipe が schema に合わない。DATASET_BAD_REQUEST と分けるのは、
     # 直す場所が recipe の中だと一目で分かるようにするため。
     "MATRIX_RECIPE_INVALID",
+    # キュレーションのフラグ記録（curation/flags.jsonl）に読めない行がある。
+    # wrong を黙って落とさないよう、差次的エクスポートを書き出さずに止める。
+    "CURATION_FLAGS_INVALID",
 })
 
 

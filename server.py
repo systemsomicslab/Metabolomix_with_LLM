@@ -85,6 +85,7 @@ from lipidmix.tools.console_tools import *  # console_plan, console_run, console
 from lipidmix.tools.dataset_analysis_tools import *  # dataset_preprocess, dataset_pca, dataset_differential, dataset_export_differential, dataset_set_sample_metadata
 from lipidmix.tools.pipeline_tools import *  # pipeline_plan, pipeline_run, pipeline_status, pipeline_resume, pipeline_cancel
 from lipidmix.tools.maintenance import *  # server_update
+from lipidmix.tools.curation_tools import *  # curation_review, curation_submit, curation_flags, curation_view_data
 
 
 if __name__ == "__main__":

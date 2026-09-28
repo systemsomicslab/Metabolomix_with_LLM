@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alignment curation</title>
+<style>
+:root { --bg:#fbfbfa; --fg:#1f2328; --muted:#6a737d; --card:#ffffff; --line:#d8dde3;
+        --ok:#2e7d32; --suspect:#b26a00; --wrong:#c62828; --meas:#2471a3; --ref:#c0392b; --match:#27ae60; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#16181b; --fg:#e6e6e6; --muted:#9aa0a6; --card:#1f2226; --line:#33383e;
+          --ok:#66bb6a; --suspect:#ffb74d; --wrong:#ef5350; --meas:#5dade2; --ref:#ec7063; --match:#58d68d; }
+}
+* { box-sizing: border-box; }
+body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+header { position:sticky; top:0; z-index:2; background:var(--bg); border-bottom:1px solid var(--line);
+         padding:10px 16px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+header h1 { font-size:15px; margin:0 12px 0 0; min-width:0; overflow-wrap:anywhere; }
+select, button, input[type=text] { font:inherit; color:inherit; background:var(--card);
+         border:1px solid var(--line); border-radius:6px; padding:4px 8px; }
+button.primary { background:var(--meas); color:#fff; border-color:var(--meas); }
+#status { color:var(--muted); }
+main { padding:12px 16px 40px; }
+.warn { border-left:3px solid var(--suspect); padding:6px 10px; margin:6px 0; background:var(--card); }
+#trends { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(320px, 100%), 1fr)); gap:12px; margin-bottom:16px; }
+#grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap:12px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px; }
+.card.flag-wrong { outline:2px solid var(--wrong); }
+.card.flag-suspect { outline:2px solid var(--suspect); }
+.card h2 { font-size:14px; margin:0 0 4px; word-break:break-word; }
+.meta { color:var(--muted); font-size:12px; }
+.badge { display:inline-block; border-radius:4px; padding:0 6px; font-size:12px; color:#fff; }
+.badge.ok { background:var(--ok); } .badge.suspect { background:var(--suspect); } .badge.likely_wrong { background:var(--wrong); }
+canvas { width:100%; height:110px; display:block; margin-top:6px; }
+.flags { display:flex; gap:10px; margin-top:6px; flex-wrap:wrap; }
+.flags input[type=text] { flex:1 1 120px; min-width:0; }
+textarea { width:100%; height:80px; font:12px monospace; }
+.card canvas, #trends canvas { cursor:pointer; }
+.card.highlight { box-shadow:0 0 0 3px var(--meas); transition:box-shadow .2s; }
+#zoom { width:min(960px, calc(100vw - 32px)); max-width:100%; max-height:calc(100vh - 32px);
+        padding:12px; border:1px solid var(--line); border-radius:8px;
+        background:var(--card); color:var(--fg); }
+#zoom::backdrop { background:rgba(0,0,0,.5); }
+#zoom .zoom-head { display:flex; gap:8px; align-items:flex-start; justify-content:space-between; }
+#zoom h2 { font-size:15px; margin:0; min-width:0; overflow-wrap:anywhere; }
+#zoom canvas { height:min(280px, 35vh); cursor:default; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Alignment curation</h1>
+  <label>クラス <select id="f-class"><option value="">すべて</option></select></label>
+  <label>判定 <select id="f-verdict"><option value="">すべて</option><option value="flagged">suspect 以上</option></select></label>
+  <label>フラグ <select id="f-flag"><option value="">すべて</option><option value="set">付けたもの</option></select></label>
+  <button id="send" class="primary" hidden>送信</button>
+  <button id="copy">送信用テキストをコピー</button>
+  <span id="status"></span>
+</header>
+<main>
+  <div id="warnings"></div>
+  <section id="trends"></section>
+  <section id="grid"></section>
+  <textarea id="fallback" hidden readonly></textarea>
+</main>
+<dialog id="zoom" aria-labelledby="zoom-title">
+  <div class="zoom-head"><h2 id="zoom-title"></h2><button id="zoom-close" type="button">閉じる（Esc）</button></div>
+  <div class="meta" id="zoom-meta"></div>
+  <canvas id="zoom-eic"></canvas>
+  <canvas id="zoom-mirror"></canvas>
+</dialog>
+<script>
+const EMBEDDED = /*__CURATION_DATA__*/null;
+const PREFIX = "__SUBMISSION_PREFIX__";
+let REVIEW = EMBEDDED;
+const edits = new Map();   // spot_id -> {flag, note}
+
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const el = (tag, attrs = {}, text) => { const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text; return e; };
+
+function currentFlag(spot) { return edits.has(spot.spot_id) ? edits.get(spot.spot_id).flag : (spot.flag || ""); }
+
+function preparerFor(c) {
+  const ratio = window.devicePixelRatio || 1;
+  const prepare = () => { const w = c.clientWidth, h = c.clientHeight; c.width = w * ratio; c.height = h * ratio;
+    const ctx = c.getContext("2d"); ctx.scale(ratio, ratio); return {ctx, w, h}; };
+  prepare.canvas = c;
+  return prepare;
+}
+
+function canvasFor(card) {
+  const c = el("canvas"); card.appendChild(c);
+  return preparerFor(c);
+}
+
+const fixed = (v, digits) => typeof v === "number" && isFinite(v) ? v.toFixed(digits) : "–";
+
+function drawEic(prepare, spot) {
+  const {ctx, w, h} = prepare(); const samples = spot.eic.samples; if (!samples.length) return;
+  const xs = samples.flatMap(s => s.points.map(p => p[0])); const ys = samples.flatMap(s => s.points.map(p => p[1]));
+  if (!xs.length) return;
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y1 = Math.max(...ys) || 1;
+  const px = x => 4 + (x - x0) / ((x1 - x0) || 1) * (w - 8), py = y => h - 12 - y / y1 * (h - 18);
+  const rep = samples.find(s => s.representative) || samples[0];
+  ctx.fillStyle = css("--line"); ctx.globalAlpha = 0.5;
+  ctx.fillRect(px(rep.left), 4, px(rep.right) - px(rep.left), h - 16); ctx.globalAlpha = 1;
+  for (const s of samples) {
+    ctx.beginPath(); ctx.strokeStyle = s.representative ? css("--meas") : css("--muted");
+    ctx.lineWidth = s.representative ? 2 : 1; ctx.setLineDash(s.detected ? [] : [4, 3]);
+    s.points.forEach((p, i) => i ? ctx.lineTo(px(p[0]), py(p[1])) : ctx.moveTo(px(p[0]), py(p[1])));
+    ctx.stroke();
+  }
+  ctx.setLineDash([]); ctx.fillStyle = css("--muted"); ctx.font = "10px system-ui";
+  ctx.fillText(x0.toFixed(2) + "–" + x1.toFixed(2) + " min", 4, h - 2);
+}
+
+function drawMirror(prepare, spot) {
+  const {ctx, w, h} = prepare(); const m = spot.mirror;
+  if (!m) { ctx.fillStyle = css("--muted"); ctx.font = "12px system-ui";
+    ctx.fillText(spot.match && !spot.match.has_msms ? "MS/MS なし" : "参照スペクトルなし", 8, h / 2); return; }
+  const all = m.measured.concat(m.reference).map(p => p[0]);
+  const x0 = Math.min(...all) - 5, x1 = Math.max(...all) + 5, mid = h / 2;
+  const px = x => 4 + (x - x0) / ((x1 - x0) || 1) * (w - 8);
+  const norm = pts => { const top = Math.max(...pts.map(p => p[1])) || 1; return pts.map(p => [p[0], p[1] / top]); };
+  const matched = new Set(m.matched_mz.map(v => v.toFixed(2)));
+  for (const [x, y] of norm(m.measured)) { ctx.strokeStyle = css("--meas"); ctx.beginPath();
+    ctx.moveTo(px(x), mid); ctx.lineTo(px(x), mid - y * (mid - 4)); ctx.stroke(); }
+  for (const [x, y] of norm(m.reference)) { ctx.strokeStyle = matched.has(x.toFixed(2)) ? css("--match") : css("--ref");
+    ctx.beginPath(); ctx.moveTo(px(x), mid); ctx.lineTo(px(x), mid + y * (mid - 4)); ctx.stroke(); }
+  ctx.strokeStyle = css("--line"); ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(w, mid); ctx.stroke();
+}
+
+function drawTrend(prepare, ontology, spots) {
+  const {ctx, w, h} = prepare(); const pts = spots.filter(s => s.ontology === ontology && s.composition);
+  if (!pts.length) return;
+  const x0 = Math.min(...pts.map(s => s.mz)), x1 = Math.max(...pts.map(s => s.mz));
+  const y0 = Math.min(...pts.map(s => s.rt)), y1 = Math.max(...pts.map(s => s.rt));
+  const px = x => 24 + (x - x0) / ((x1 - x0) || 1) * (w - 32), py = y => h - 14 - (y - y0) / ((y1 - y0) || 1) * (h - 24);
+  const palette = ["#2471a3", "#c0392b", "#27ae60", "#8e44ad", "#d35400", "#16a085", "#7f8c8d"];
+  const groups = ((REVIEW.trend.groups || {})[ontology]) || {};
+  // slope*x+intercept は RT レンジの外まで伸びうるので、プロット矩形（px/py が写す領域）で
+  // クリップする。散布点・軸ラベルはこの矩形の内側にしか描かないのでクリップの外(save/restore
+  // の外)でよい。
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(24, 10, w - 32, h - 24);
+  ctx.clip();
+  for (const [db, g] of Object.entries(groups)) {
+    if (g.slope === null) continue; const color = palette[Number(db) % palette.length];
+    ctx.strokeStyle = color; ctx.globalAlpha = g.r2 !== null && g.r2 < 0.7 ? 0.35 : 0.9;
+    ctx.beginPath(); ctx.moveTo(px(x0), py(g.slope * x0 + g.intercept)); ctx.lineTo(px(x1), py(g.slope * x1 + g.intercept)); ctx.stroke();
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+  prepare.canvas._points = pts.map(s => ({x: px(s.mz), y: py(s.rt), spot_id: s.spot_id}));
+  for (const s of pts) { const db = s.composition[1]; ctx.fillStyle = palette[db % palette.length];
+    ctx.beginPath(); ctx.arc(px(s.mz), py(s.rt), s.trend && s.trend.outlier ? 5 : 3, 0, 7); ctx.fill();
+    if (s.trend && s.trend.outlier) { ctx.strokeStyle = css("--wrong"); ctx.stroke(); } }
+  ctx.fillStyle = css("--muted"); ctx.font = "10px system-ui";
+  ctx.fillText("m/z →", w - 40, h - 2); ctx.fillText("RT", 2, 10);
+}
+
+function spotCard(spot) {
+  const card = el("article", {class: "card", id: "spot-" + spot.spot_id});
+  card.appendChild(el("h2", {}, spot.name));
+  const badge = el("span", {class: "badge " + spot.verdict}, spot.verdict);
+  const meta = el("div", {class: "meta"});
+  meta.append(badge, " ", `#${spot.spot_id} ${spot.adduct || ""} m/z ${fixed(spot.mz, 4)} RT ${fixed(spot.rt, 2)}`);
+  card.appendChild(meta);
+  const w = spot.match && spot.match.squared_weighted_dot_product >= 0 ? Math.sqrt(spot.match.squared_weighted_dot_product).toFixed(2) : "–";
+  card.appendChild(el("div", {class: "meta"},
+    `Δppm ${spot.ppm ?? "–"} / ΔRT ${spot.drt ?? "–"} / wdot ${w} / EIC ${spot.eic_shape.good_fraction ?? "–"}`));
+  if (spot.reasons.length || spot.info.length)
+    card.appendChild(el("div", {class: "meta"}, [...spot.reasons, ...spot.info.map(r => "(" + r + ")")].join(", ")));
+  const eic = canvasFor(card), mirror = canvasFor(card);
+  for (const prepare of [eic, mirror]) prepare.canvas.addEventListener("click", () => openZoom(spot));
+  const flagsRow = el("div", {class: "flags"});
+  for (const [value, label] of [["", "なし"], ["suspect", "疑わしい"], ["wrong", "間違い"]]) {
+    const id = `f-${spot.spot_id}-${value || "none"}`;
+    const radio = el("input", {type: "radio", name: "flag-" + spot.spot_id, id, value});
+    radio.checked = currentFlag(spot) === value;
+    radio.addEventListener("change", () => setFlag(spot, value, note.value, card));
+    const lab = el("label", {for: id}); lab.append(radio, " " + label); flagsRow.appendChild(lab);
+  }
+  const note = el("input", {type: "text", placeholder: "メモ"});
+  note.value = edits.has(spot.spot_id) ? (edits.get(spot.spot_id).note || "") : (spot.flag_note || "");
+  note.addEventListener("change", () => setFlag(spot, currentFlag(spot), note.value, card));
+  flagsRow.appendChild(note); card.appendChild(flagsRow);
+  card.classList.toggle("flag-" + currentFlag(spot), !!currentFlag(spot));
+  card._draw = () => { drawEic(eic, spot); drawMirror(mirror, spot); };
+  return card;
+}
+
+function setFlag(spot, flag, note, card) {
+  const original = spot.flag || "";
+  if (flag === original && (note || "") === (spot.flag_note || "")) edits.delete(spot.spot_id);
+  else edits.set(spot.spot_id, {flag, note});
+  card.classList.remove("flag-wrong", "flag-suspect"); if (flag) card.classList.add("flag-" + flag);
+  document.getElementById("status").textContent = `未送信の変更 ${edits.size} 件`;
+}
+
+function submission() {
+  const flags = [...edits.entries()].map(([spot_id, e]) => ({spot_id, flag: e.flag || "clear", note: e.note || ""}));
+  return {review_id: REVIEW.review_id, arf2_path: REVIEW.arf2_path, flags};
+}
+
+const observer = new IntersectionObserver(entries => { for (const e of entries)
+  if (e.isIntersecting && e.target._draw) { e.target._draw(); observer.unobserve(e.target); } }, {rootMargin: "200px"});
+
+function countsText() {
+  return `ok ${REVIEW.counts.ok} / suspect ${REVIEW.counts.suspect} / likely_wrong ${REVIEW.counts.likely_wrong}`;
+}
+
+// requestAnimationFrame が無い環境(古い WebView 等)向けのフォールバック。
+const scheduleChunk = typeof requestAnimationFrame === "function"
+  ? cb => requestAnimationFrame(cb)
+  : cb => setTimeout(cb, 0);
+
+const RENDER_CHUNK_SIZE = 100;
+let renderGeneration = 0;   // フィルタ変更などで新しい render() が割り込んだら古い方を打ち切る
+
+function passesFilters(spot) {
+  const cls = document.getElementById("f-class").value, ver = document.getElementById("f-verdict").value,
+        flg = document.getElementById("f-flag").value;
+  if (cls && spot.ontology !== cls) return false;
+  if (ver === "flagged" && spot.verdict === "ok") return false;
+  if (flg === "set" && !currentFlag(spot)) return false;
+  return true;
+}
+
+function resetFilters() {
+  for (const id of ["f-class", "f-verdict", "f-flag"]) document.getElementById(id).value = "";
+}
+
+function render() {
+  const generation = ++renderGeneration;
+  const grid = document.getElementById("grid"); grid.textContent = "";
+  const matched = REVIEW.spots.filter(passesFilters);
+  const status = document.getElementById("status");
+  let i = 0;
+
+  function buildChunk() {
+    if (generation !== renderGeneration) return;   // 新しい render() 呼び出しに割り込まれた
+    const frag = document.createDocumentFragment();
+    const end = Math.min(i + RENDER_CHUNK_SIZE, matched.length);
+    for (; i < end; i++) {
+      const card = spotCard(matched[i]);
+      frag.appendChild(card);
+      observer.observe(card);
+    }
+    grid.appendChild(frag);
+    if (i < matched.length) {
+      status.textContent = `構築中… ${i}/${matched.length}`;
+      scheduleChunk(buildChunk);
+    } else {
+      status.textContent = countsText();
+    }
+  }
+  buildChunk();
+}
+
+const HIT_RADIUS = 6;   // 傾向パネルの点をクリックとみなす半径 [CSS px]
+
+function nearestPoint(canvas, event) {
+  const rect = canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
+  let best = null, bestD = HIT_RADIUS * HIT_RADIUS;
+  for (const p of canvas._points || []) {
+    const d = (p.x - x) ** 2 + (p.y - y) ** 2;
+    if (d <= bestD) { best = p; bestD = d; }
+  }
+  return best;
+}
+
+function jumpToSpot(spotId) {
+  const spot = REVIEW.spots.find(s => s.spot_id === spotId); if (!spot) return;
+  if (!passesFilters(spot)) { resetFilters(); render(); }
+  // render() はチャンクで組み立てるので、カードができるまで次のフレームで探し直す。
+  const generation = renderGeneration;
+  const attempt = tries => {
+    const card = document.getElementById("spot-" + spotId);
+    if (card) {
+      card.scrollIntoView({behavior: "smooth", block: "center"});
+      card.classList.add("highlight"); setTimeout(() => card.classList.remove("highlight"), 1600);
+    } else if (tries < 1000 && generation === renderGeneration) scheduleChunk(() => attempt(tries + 1));
+  };
+  attempt(0);
+}
+
+function renderTrends() {
+  const box = document.getElementById("trends"); box.textContent = "";
+  for (const [ontology, info] of Object.entries(REVIEW.trend.classes || {})) {
+    const card = el("article", {class: "card"});
+    card.appendChild(el("h2", {}, `${ontology}（n=${info.n}, R²=${info.r2 ?? "–"}）`));
+    const prepare = canvasFor(card); box.appendChild(card);
+    prepare.canvas.addEventListener("click", event => {
+      const hit = nearestPoint(prepare.canvas, event); if (hit) jumpToSpot(hit.spot_id);
+    });
+    card._draw = () => drawTrend(prepare, ontology, REVIEW.spots); observer.observe(card);
+  }
+}
+
+const zoomEic = preparerFor(document.getElementById("zoom-eic"));
+const zoomMirror = preparerFor(document.getElementById("zoom-mirror"));
+
+function closeZoom() {
+  const dialog = document.getElementById("zoom");
+  if (typeof dialog.close === "function") dialog.close(); else dialog.removeAttribute("open");
+}
+
+function openZoom(spot) {
+  const dialog = document.getElementById("zoom");
+  document.getElementById("zoom-title").textContent = spot.name || "";
+  document.getElementById("zoom-meta").textContent =
+    `#${spot.spot_id} ${spot.adduct || ""} m/z ${fixed(spot.mz, 4)} RT ${fixed(spot.rt, 2)} / ${spot.verdict}`;
+  // 大きさは表示してからでないと決まらない（clientWidth が 0）ので、開いてから描く。
+  if (typeof dialog.showModal === "function") { if (!dialog.open) dialog.showModal(); }
+  else dialog.setAttribute("open", "");
+  drawEic(zoomEic, spot); drawMirror(zoomMirror, spot);
+}
+
+document.getElementById("zoom-close").addEventListener("click", closeZoom);
+document.addEventListener("keydown", event => { if (event.key === "Escape") closeZoom(); });
+
+function start() {
+  document.getElementById("title").textContent = `Alignment curation — ${REVIEW.alignment.alignment_file}`;
+  const classes = [...new Set(REVIEW.spots.map(s => s.ontology).filter(Boolean))].sort();
+  const select = document.getElementById("f-class");
+  for (const c of classes) select.appendChild(el("option", {value: c}, c));
+  for (const id of ["f-class", "f-verdict", "f-flag"]) document.getElementById(id).addEventListener("change", render);
+  const warnings = document.getElementById("warnings");
+  for (const w of REVIEW.warnings || []) warnings.appendChild(el("div", {class: "warn"}, w));
+  document.getElementById("status").textContent = countsText();
+  renderTrends(); render();
+}
+
+document.getElementById("copy").addEventListener("click", async () => {
+  const text = PREFIX + " " + JSON.stringify(submission());
+  const area = document.getElementById("fallback");
+  try { await navigator.clipboard.writeText(text); document.getElementById("status").textContent = "コピーしました。チャットに貼って送ってください。"; }
+  catch { area.hidden = false; area.value = text; area.select(); document.getElementById("status").textContent = "下の欄を選択してコピーしてください。"; }
+});
+
+// ---- MCP Apps（ui:// で表示されたとき）。2026-09 時点で Claude Desktop のローカル stdio では未検証。 ----
+let rpcId = 0; const pending = new Map();
+function rpc(method, params) { const id = ++rpcId;
+  window.parent.postMessage({jsonrpc: "2.0", id, method, params}, "*");
+  return new Promise((resolve, reject) => pending.set(id, {resolve, reject})); }
+function notify(method, params) { window.parent.postMessage({jsonrpc: "2.0", method, params}, "*"); }
+function toolText(result) { return ((result && result.content) || []).filter(c => c.type === "text").map(c => c.text).join(""); }
+
+function showError(message) { document.getElementById("status").textContent = "エラー: " + String(message).slice(0, 300); }
+function errorMessage(body) {
+  if (!body || typeof body !== "object") return "応答を読めませんでした";
+  if (body.status === "error") return body.message || "エラー";
+  if (body.error) return body.error.message || body.error.code || "エラー";
+  return null;
+}
+function parseBody(text) { try { return JSON.parse(text); } catch { return null; } }
+
+window.addEventListener("message", async event => {
+  const m = event.data; if (!m || m.jsonrpc !== "2.0") return;
+  if (m.id !== undefined && pending.has(m.id)) { const p = pending.get(m.id); pending.delete(m.id);
+    m.error ? p.reject(m.error) : p.resolve(m.result); return; }
+  if (m.method === "ui/notifications/tool-result" && !REVIEW) {
+    const match = /"review_id":"([^"]+)"/.exec(toolText(m.params)); if (!match) return;
+    try {
+      const spots = []; let meta = null;
+      for (let page = 0; ; page++) {
+        const text = toolText(await rpc("tools/call", {name: "curation_view_data",
+          arguments: {review_id: match[1], page}}));
+        const body = parseBody(text), problem = errorMessage(body);
+        if (problem) { showError(problem || text); return; }
+        meta = meta || body.review; spots.push(...body.spots); if (page + 1 >= body.n_pages) break;
+      }
+      REVIEW = {...meta, spots}; document.getElementById("send").hidden = false; start();
+    } catch (err) { showError(err && err.message ? err.message : JSON.stringify(err)); }
+  }
+});
+
+document.getElementById("send").addEventListener("click", async () => {
+  if (!edits.size) { document.getElementById("status").textContent = "未送信の変更はありません。"; return; }
+  let text;
+  try {
+    text = toolText(await rpc("tools/call", {name: "curation_submit", arguments: {submission_text: PREFIX + " " + JSON.stringify(submission())}}));
+  } catch (err) { showError(err && err.message ? err.message : JSON.stringify(err)); return; }
+  const body = parseBody(text), problem = errorMessage(body);
+  if (problem) { showError(problem); return; }        // 失敗したら未送信の変更は残す
+  for (const [spotId, e] of edits) {
+    const spot = REVIEW.spots.find(s => s.spot_id === spotId); if (!spot) continue;
+    spot.flag = e.flag || null; spot.flag_note = e.flag ? (e.note || "") : null;
+  }
+  edits.clear();
+  document.getElementById("status").textContent = text.slice(0, 200);
+});
+
+if (REVIEW) start();
+else if (window.parent !== window) {
+  rpc("ui/initialize", {protocolVersion: "2025-06-18", appCapabilities: {},
+                        clientInfo: {name: "ms-data-parser-curation", version: "1"}})
+    .then(() => notify("ui/notifications/initialized", {}));
+}
+</script>
+</body>
+</html>

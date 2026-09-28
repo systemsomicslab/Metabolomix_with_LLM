@@ -1127,12 +1127,20 @@ _format_export_number = export_contract.format_number
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=True),
     structured_output=False)
-def arf_export_differential(output_path: str) -> str:
+def arf_export_differential(output_path: str, apply_curation: bool = True) -> str:
     """差次的結果を InChIKey 付きの 1 ファイルへ書き出す（spec §6.1）。
 
     先に arf_preprocess → arf_differential を実行しておくこと。同一
     アラインメントの兄弟 .arf2 から同定情報を MasterAlignmentID で結合する。
     濃縮解析の背景を保つため、有意な行だけでなく InChIKey が付いた全行を出す。
+
+    apply_curation（既定 true）: curation_submit で wrong を付けたスポットを
+    同定なしとして扱い、出力から外す。フラグがあればメタ行 # curation = ... で
+    適用状況を宣言する。フラグが無ければ出力は変わらない。成功 payload の
+    `curation` は `{state, wrong_excluded, suspect, orphaned}`（orphaned は以前の版の
+    .arf2 に付いたまま当たらないフラグの件数。1 件以上なら `warnings` にも出る）。
+    フラグ記録（curation/flags.jsonl）に読めない行があれば書き出さずにエラーを返す
+    （wrong を黙って落とさないため）。
     """
     last = getattr(session_state.session.arf, "last_differential", None)
     if not last or last.get("kind") != "two_group":
@@ -1157,6 +1165,23 @@ def arf_export_differential(output_path: str) -> str:
     catalog = {spot.get("MasterAlignmentID"): spot
                for spot in load_catalog(arf2_path)}
     rows, report = identity_join.join_identity(last.get("results") or [], catalog)
+
+    from lipidmix.curation import apply as curation_apply
+    from lipidmix.curation.flags import FlagFileError, orphaned_warning
+    try:
+        flag_set = curation_apply.flags_for_arf2(arf2_path)
+    except FlagFileError as exc:
+        return json_payload({"status": "error", "message": str(exc), **exc.details()})
+    curation_stats = None
+    if apply_curation and flag_set["n"]:
+        rows, curation_stats = curation_apply.filter_rows(rows, flag_set, key=lambda r: r["spot_id"])
+        report = {**report, "n_with_inchikey": len(rows),
+                  "n_unannotated": report["n_unannotated"] + curation_stats["wrong_excluded"]}
+    curation_state = ("applied" if apply_curation else "not_applied") if flag_set["n"] else None
+    curation_line = curation_apply.meta_line(curation_state, flag_set, curation_stats)
+    curation_warnings = ([orphaned_warning(flag_set["orphaned"])]
+                         if flag_set["orphaned"] else [])
+
     if not rows:
         return json_payload({
             "status": "error",
@@ -1182,6 +1207,7 @@ def arf_export_differential(output_path: str) -> str:
         source_lines=[
             f"# source_arf = {getattr(session_state.session.arf, 'current_file_path', '')}",
             f"# source_arf2 = {arf2_path}",
+            *([curation_line] if curation_line else []),
         ],
         preprocess_line=f"# preprocess = {getattr(session_state.session.arf, 'preprocessing_recipe', None)}",
     )
@@ -1228,6 +1254,8 @@ def arf_export_differential(output_path: str) -> str:
         "n_features_total": report["n_features_total"],
         "n_with_inchikey": report["n_with_inchikey"],
         "n_unannotated": report["n_unannotated"],
+        "curation": curation_apply.payload_summary(curation_state, flag_set, curation_stats),
+        **({"warnings": curation_warnings} if curation_warnings else {}),
         "log2fc_sign": "log2fc は正なら group_b が高い（上昇）。",
         "note": ("n_unannotated は注釈が付かず書き出さなかった行数です。"
                  "「変化が無かった」ではなく「調べていない」行です。"),

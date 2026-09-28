@@ -44,6 +44,7 @@
 
   `band == "PASS"` かつ参照ライブラリが読み込み済み（`library_load` 実行済み）のときは、この内側に `spectral_match` ブロックが追加で載る（参照ライブラリとの照合スコア）。3状態契約自体は変えない追加情報であり、`status` 語彙は暫定。定義は `lipidmix://docs/output-format/library` §14.8 を見ること。
 - `arf2_annotate_identities(file_path=None, max_rows=50)`: ARF2 スポットカタログの注釈を一括で正規化・ID/レベル付与し、上位 `max_rows` 件を返す。**ARF2 には MS/MS 取得フラグ・精密質量誤差が無いため MSI は保守的にクラス上限で評価**（`has_msms=False`、バンド UNKNOWN）。より確度の高い MSI 評価は個別ピークの `verify_peak_annotation` を用いること。
+  列は `MasterAlignmentID` `name` `normalized` `refmet` `lipid_maps_category` `msi_level` `curation_flag`。`curation_flag` はそのスポットに有効なキュレーションフラグ（`curation_submit` で付けた `wrong` / `suspect`。スポットごとの最新 1 行、`clear` 済みと未フラグは空）。`.arf2` の sha256 が記録時と違う（MS-DIAL を再実行した）フラグは当てない。フラグ記録（`curation/flags.jsonl`）に読めない行があるときは列を空にし、ヘッダにその旨を 1 行出す（`curation` トピック「フラグ記録が壊れているとき」）。
 
 ### 12.5 アダクト/元素表の拡張（`lipidmix/msdial/peak_verification.py`）
 
