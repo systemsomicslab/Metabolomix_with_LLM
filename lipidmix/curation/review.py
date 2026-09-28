@@ -1,0 +1,122 @@
+"""レビューの生成・保存・要約。spec §3・§5。
+
+1 回のレビュー = 対象スポットの証拠＋判別＋傾向＋既存フラグ。`<arf2 のフォルダ>/curation/`
+に `review-<id>.json`（正準）と `review-<id>.html`（ビューア）を書く。LLM へ返すのは
+`summary_tsv` の要約だけで、EIC 系列やスペクトル座標は返さない。
+"""
+from __future__ import annotations
+
+import json
+import secrets
+from datetime import datetime, timezone
+from pathlib import Path
+
+from lipidmix.core.atomic_io import atomic_write_json
+from lipidmix.curation import evidence, flags, trend, viewer
+from lipidmix.curation.judge import judge_spot
+
+VERDICT_RANK = {"ok": 0, "suspect": 1, "likely_wrong": 2}
+REFERENCE_WARN_FRACTION = 0.5
+TSV_COLUMNS = ["spot_id", "name", "ontology", "adduct", "verdict", "reasons",
+               "ppm", "drt", "wdot", "mpp", "eic_good", "trend_z", "flag"]
+
+
+def new_review_id() -> str:
+    return f"cr-{datetime.now():%Y%m%d-%H%M%S}-{secrets.token_hex(2)}"
+
+
+def run_review(arf2_path, spots, *, store, ms2_tol, th, file_ids, max_traces, selection) -> dict:
+    arf2_path = Path(arf2_path)
+    evs, stats = evidence.collect(arf2_path, spots, store=store, ms2_tol=ms2_tol, th=th,
+                                  file_ids=file_ids, max_traces=max_traces)
+    points = []
+    for ev in evs:
+        comp = trend.composition(ev["name"])
+        if comp is not None and ev["rt"] is not None and ev["mz"] is not None:
+            points.append({"spot_id": ev["spot_id"], "ontology": ev["ontology"] or "",
+                           "rt": ev["rt"], "mz": ev["mz"], "carbon": comp[0], "db": comp[1]})
+        ev["composition"] = list(comp) if comp else None
+    trends = trend.fit_trends(points, th)
+
+    alignment = flags.alignment_key(arf2_path)
+    existing = flags.FlagStore(flags.curation_dir(arf2_path)).effective(alignment["alignment_sha256"])
+    counts = {"ok": 0, "suspect": 0, "likely_wrong": 0}
+    for ev in evs:
+        ev.update(judge_spot(ev, trends["spots"].get(ev["spot_id"]), th))
+        ev["trend"] = trends["spots"].get(ev["spot_id"])
+        ev["flag"] = (existing.get(ev["spot_id"]) or {}).get("flag")
+        ev["flag_note"] = (existing.get(ev["spot_id"]) or {}).get("note")
+        counts[ev["verdict"]] += 1
+
+    warnings = []
+    if stats["n_with_match"] and stats["n_reference_resolved"] / stats["n_with_match"] < REFERENCE_WARN_FRACTION:
+        warnings.append(
+            f"照合結果を持つ {stats['n_with_match']} 件のうち参照を引けたのは "
+            f"{stats['n_reference_resolved']} 件です。アラインメントに使われたものと別のライブラリを"
+            "読んでいる可能性があります（同じフォルダの *_Loaded.msp2.dbs を library_load してください）。")
+    if stats["missing_files"]:
+        warnings.append(f"兄弟ファイルがありません: {', '.join(stats['missing_files'])}"
+                        "（その系統の判別は UNKNOWN になります）。")
+
+    return {
+        "review_id": new_review_id(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "arf2_path": str(arf2_path), "alignment": alignment, "selection": selection,
+        "thresholds": th, "ms2_tol": ms2_tol, "counts": counts, "stats": stats,
+        "warnings": warnings, "trend": {"classes": trends["classes"],
+                                        "groups": {k: {str(db): g for db, g in v.items()}
+                                                   for k, v in trends["groups"].items()}},
+        "spots": evs,
+    }
+
+
+def save_review(review: dict) -> dict:
+    directory = flags.curation_dir(review["arf2_path"])
+    directory.mkdir(parents=True, exist_ok=True)
+    json_path = directory / f"review-{review['review_id']}.json"
+    html_path = directory / f"review-{review['review_id']}.html"
+    atomic_write_json(json_path, review)
+    html_path.write_text(viewer.render_html(review), encoding="utf-8")
+    return {"json": json_path, "html": html_path}
+
+
+def load_review(arf2_path_or_dir, review_id: str) -> dict:
+    base = Path(arf2_path_or_dir)
+    directory = base if base.is_dir() else flags.curation_dir(base)
+    path = directory / f"review-{review_id}.json"
+    if not path.is_file():
+        raise FileNotFoundError(f"review_id={review_id} のレビューがありません: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _cell(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return f"{value:.3f}".rstrip("0").rstrip(".")
+    return str(value).replace("\t", " ").replace("\n", " ")
+
+
+def summary_tsv(review: dict, *, min_verdict: str = "suspect") -> str:
+    floor = VERDICT_RANK[min_verdict]
+    lines = ["\t".join(TSV_COLUMNS)]
+    for s in sorted(review["spots"], key=lambda s: (-VERDICT_RANK[s["verdict"]], s["spot_id"])):
+        if VERDICT_RANK[s["verdict"]] < floor and not s.get("flag"):
+            continue
+        match = s.get("match") or {}
+        weighted = match.get("squared_weighted_dot_product")
+        lines.append("\t".join(_cell(v) for v in [
+            s["spot_id"], s["name"], s["ontology"], s["adduct"], s["verdict"],
+            ",".join(s["reasons"]), s["ppm"], s["drt"],
+            round(weighted ** 0.5, 3) if weighted is not None and weighted >= 0 else None,
+            match.get("matched_peaks_percentage"),
+            (s.get("eic_shape") or {}).get("good_fraction"),
+            (s.get("trend") or {}).get("z"), s.get("flag")]))
+    return "\n".join(lines)
+
+
+def page(review: dict, page_index: int, page_size: int = 50) -> dict:
+    spots = review["spots"]
+    n_pages = max(1, -(-len(spots) // page_size))
+    start = page_index * page_size
+    return {"spots": spots[start:start + page_size], "page": page_index, "n_pages": n_pages}
