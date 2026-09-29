@@ -230,6 +230,46 @@ def test_dataset_export_applies_curation_flags_via_sibling_arf2(tmp_path):
     assert len(meta) == 1
     assert meta[0].startswith("# curation = applied\t")
 
+def test_dataset_export_applies_assign_and_redundant(tmp_path):
+    from lipidmix.curation import flags as curation_flags
+    from lipidmix.tools.dataset_analysis_tools import (
+        dataset_differential, dataset_export_differential, dataset_preprocess,
+    )
+
+    ds = _load_ds()
+    ds.feature_ids = [str(i) for i in range(20)]
+    ds.feature_metadata = {
+        str(i): {"name": f"Compound {i}", "mz": 100.0 + i, "rt": 1.0 + i * 0.1,
+                 "inchikey": f"AAAAAAAAAAAAAA-BBBBBBBBFB-{i % 10}",
+                 "inchikey_source": "database_identifier"}
+        for i in range(20)
+    }
+    mztab = tmp_path / "Height_AlignmentResult_2026_01_01_2026_01_01_09.mzTab"
+    mztab.write_text("", encoding="utf-8")
+    ds.source_files = {str(mztab): "sha"}
+    ds.feature_qc = {"source": "arf"}
+    arf2 = tmp_path / "AlignmentResult_2026_01_01.arf2"
+    arf2.write_bytes(b"x")
+    curation_flags.FlagStore(curation_flags.curation_dir(arf2)).append(
+        [{"spot_id": 3, "flag": "assign", "name": "PE 36:2", "level": "sum", "ontology": "PE",
+          "inchikey": "PEPEPEPEPEPEPE-XXXXXXXXXX-N"},
+         {"spot_id": 4, "flag": "redundant", "of": 3, "relation": "isotope_M+1"}],
+        alignment=curation_flags.alignment_key(arf2), review_id="cs-x", source="user")
+
+    dataset_preprocess()
+    a, b = _groups(session_state.session.dataset)
+    dataset_differential(group_a=a, group_b=b)
+    out = tmp_path / "diff.tsv"
+    parsed = json.loads(dataset_export_differential(str(out)))
+    assert parsed["status"] == "success"
+    assert parsed["curation"]["assigned"] == 1 and parsed["curation"]["redundant_excluded"] == 1
+    lines = out.read_text(encoding="utf-8").splitlines()
+    body = [l.split("\t") for l in lines if l and not l.startswith("#")]
+    header, rows = body[0], [dict(zip(body[0], r)) for r in body[1:]]
+    by_id = {r["spot_id"]: r for r in rows}
+    assert "4" not in by_id
+    assert (by_id["3"]["name"], by_id["3"]["name_source"], by_id["3"]["inchikey"]) ==         ("PE 36:2", "curation", "PEPEPEPEPEPEPE-XXXXXXXXXX-N")
+
 
 def test_dataset_export_reports_a_malformed_flags_file(tmp_path):
     """I6: 壊れた flags.jsonl は wrong を黙って落とさず、ファイルと行を名指しで止める。"""

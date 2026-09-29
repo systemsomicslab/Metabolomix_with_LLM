@@ -84,7 +84,7 @@ def arf2_annotate_identities(file_path: str | None = None, max_rows: int = 50) -
         flag_set = curation_apply.flags_for_arf2(path)
     except FlagFileError as exc:
         # 一覧そのものは返す。curation_flag は空にし、壊れた記録を 1 行で名指しする。
-        flag_set = {"wrong": set(), "suspect": set()}
+        flag_set = {"wrong": set(), "suspect": set(), "assign": {}, "redundant": set()}
         flag_note = f"# curation_flag は空欄: {exc}"
     rows = []
     for spot in spots[:max_rows]:
@@ -100,6 +100,10 @@ def arf2_annotate_identities(file_path: str | None = None, max_rows: int = 50) -
             curation_flag = "wrong"
         elif spot_id in flag_set["suspect"]:
             curation_flag = "suspect"
+        elif spot_id in flag_set.get("assign", {}):
+            curation_flag = f"assign:{flag_set['assign'][spot_id].get('name') or ''}"
+        elif spot_id in flag_set.get("redundant", ()):
+            curation_flag = "redundant"
         else:
             curation_flag = ""
         rows.append({"MasterAlignmentID": spot_id,

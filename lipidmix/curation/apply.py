@@ -1,7 +1,9 @@
 """差次的エクスポートへのフラグ反映。spec §6。
 
 契約 15 列は変えない。wrong のスポットは同定なしとして扱う＝InChIKey 付きの行だけを出す
-エクスポートからは落ちる。suspect は行も値も変えない。適用状況はメタ行 1 本で宣言する
+エクスポートからは落ちる。suspect は行も値も変えない。redundant は除外、assign は同定を
+置き換える（未注釈だったスポットは InChIKey を得てエクスポートに現れる）。
+適用状況はメタ行 1 本で宣言する
 （massbank-context の `_parse_meta_line` は未知のキーを保持するだけで落ちない）。
 フラグ 0 件なら何も足さず、出力は現行と完全に同じ。
 """
@@ -12,6 +14,7 @@ from pathlib import Path
 
 from lipidmix.curation.flags import (
     FlagStore, alignment_key, curation_dir, effective_flags, flags_digest, orphaned_count,
+    split_decisions,
 )
 
 
@@ -21,18 +24,41 @@ def flags_for_arf2(arf2_path) -> dict:
 
     `flags.jsonl` が無ければ `.arf2` を hash しない（数百 MB の全読みを省く）。
     読めない行があれば `flags.FlagFileError` をそのまま投げる（呼び出し側がエラーにする）。
+    `assign` は `{spot: 判断の行}`（同定の置き換え）、`redundant` は除外するスポットの集合。
     """
     store = FlagStore(curation_dir(arf2_path))
     if not store.exists():
-        return {"wrong": set(), "suspect": set(), "digest": flags_digest({}), "n": 0,
-                "orphaned": 0}
+        return {"wrong": set(), "suspect": set(), "assign": {}, "redundant": set(),
+                "digest": flags_digest({}), "n": 0, "orphaned": 0}
     rows = store.rows()
     key = alignment_key(arf2_path)
     effective = effective_flags(rows, key["alignment_sha256"])
-    return {"wrong": {s for s, r in effective.items() if r["flag"] == "wrong"},
-            "suspect": {s for s, r in effective.items() if r["flag"] == "suspect"},
+    decisions = split_decisions(effective)
+    return {"wrong": decisions["wrong"], "suspect": decisions["suspect"],
+            "assign": decisions["assign"], "redundant": set(decisions["redundant"]),
             "digest": flags_digest(effective), "n": len(effective),
             "orphaned": orphaned_count(rows, key)}
+
+
+def identity_for(spot_id, flag_set) -> dict | None:
+    """assign の判断が置き換える同定（`name` / `ontology` / `inchikey`）。無ければ None。"""
+    row = (flag_set or {}).get("assign", {}).get(spot_id)
+    if row is None:
+        return None
+    return {"name": row.get("name") or "", "ontology": row.get("ontology") or "",
+            "inchikey": row.get("inchikey") or ""}
+
+
+def override_identity(catalog: dict, flag_set) -> dict:
+    """assign のスポットの `Name` / `Ontology` / `InChIKey` を置き換えた新しい catalog。
+    置き換えた行には `_curation = "assign"` を付ける。元の dict は変えない。"""
+    out = dict(catalog)
+    for spot_id in (flag_set or {}).get("assign", {}):
+        identity = identity_for(spot_id, flag_set)
+        if spot_id in out and identity is not None:
+            out[spot_id] = {**out[spot_id], "Name": identity["name"], "Ontology": identity["ontology"],
+                            "InChIKey": identity["inchikey"], "_curation": "assign"}
+    return out
 
 
 def arf2_for_mztab(mztab_path) -> Path | None:
@@ -46,24 +72,35 @@ def arf2_for_mztab(mztab_path) -> Path | None:
 
 def payload_summary(state: str | None, flag_set: dict | None, stats: dict | None) -> dict:
     """エクスポートの成功 payload に載せる `curation` の要約（両経路で同じ形）。
-    件数は実際に除外を行った `applied` のときだけ数字で、それ以外は None。"""
-    return {"state": state,
-            "wrong_excluded": stats["wrong_excluded"] if stats else None,
-            "suspect": stats["suspect"] if stats else None,
-            "orphaned": (flag_set or {}).get("orphaned", 0)}
+    件数は実際に除外を行った `applied` のときだけ数字で、それ以外は None。
+    assign / redundant が無ければ wrong / suspect だけの現行と同じ 4 キー。"""
+    summary = {"state": state,
+               "wrong_excluded": stats["wrong_excluded"] if stats else None,
+               "suspect": stats["suspect"] if stats else None,
+               "orphaned": (flag_set or {}).get("orphaned", 0)}
+    if (flag_set or {}).get("assign") or (flag_set or {}).get("redundant"):
+        summary["assigned"] = stats.get("assigned") if stats else None
+        summary["redundant_excluded"] = stats.get("redundant_excluded") if stats else None
+    return summary
 
 
 def filter_rows(rows, flag_set: dict, *, key):
-    kept, excluded, suspect = [], 0, 0
+    """wrong と redundant の行を落とす。stats は内部の値（メタ行と payload の材料）。"""
+    kept, stats = [], {"wrong_excluded": 0, "redundant_excluded": 0, "suspect": 0, "assigned": 0}
     for row in rows:
         spot = key(row)
         if spot in flag_set["wrong"]:
-            excluded += 1
+            stats["wrong_excluded"] += 1
+            continue
+        if spot in flag_set.get("redundant", ()):
+            stats["redundant_excluded"] += 1
             continue
         if spot in flag_set["suspect"]:
-            suspect += 1
+            stats["suspect"] += 1
+        if spot in flag_set.get("assign", {}):
+            stats["assigned"] += 1
         kept.append(row)
-    return kept, {"wrong_excluded": excluded, "suspect": suspect}
+    return kept, stats
 
 
 def meta_line(state: str, flag_set: dict | None, stats: dict | None) -> str | None:
@@ -73,5 +110,8 @@ def meta_line(state: str, flag_set: dict | None, stats: dict | None) -> str | No
     if stats is not None:
         parts += [f"curation_wrong_excluded = {stats['wrong_excluded']}",
                   f"curation_suspect = {stats['suspect']}"]
+        if flag_set.get("assign") or flag_set.get("redundant"):
+            parts += [f"curation_assigned = {stats.get('assigned', 0)}",
+                      f"curation_redundant_excluded = {stats.get('redundant_excluded', 0)}"]
     parts.append(f"curation_flags_sha256 = {flag_set['digest']}")
     return "\t".join(parts)

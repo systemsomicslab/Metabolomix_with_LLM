@@ -1139,6 +1139,9 @@ def arf_export_differential(output_path: str, apply_curation: bool = True) -> st
     適用状況を宣言する。フラグが無ければ出力は変わらない。成功 payload の
     `curation` は `{state, wrong_excluded, suspect, orphaned}`（orphaned は以前の版の
     .arf2 に付いたまま当たらないフラグの件数。1 件以上なら `warnings` にも出る）。
+    assign（curation_submit の候補付け）は同定を置き換え（name_source / inchikey_source =
+    curation）、redundant は除外する。どちらかがあれば `curation` に
+    `assigned` と `redundant_excluded` が足される。
     フラグ記録（curation/flags.jsonl）に読めない行があれば書き出さずにエラーを返す
     （wrong を黙って落とさないため）。
     """
@@ -1164,19 +1167,21 @@ def arf_export_differential(output_path: str, apply_curation: bool = True) -> st
     from lipidmix.arf2.reader import load_catalog
     catalog = {spot.get("MasterAlignmentID"): spot
                for spot in load_catalog(arf2_path)}
-    rows, report = identity_join.join_identity(last.get("results") or [], catalog)
-
     from lipidmix.curation import apply as curation_apply
     from lipidmix.curation.flags import FlagFileError, orphaned_warning
     try:
         flag_set = curation_apply.flags_for_arf2(arf2_path)
     except FlagFileError as exc:
         return json_payload({"status": "error", "message": str(exc), **exc.details()})
+    if apply_curation and flag_set["n"]:
+        catalog = curation_apply.override_identity(catalog, flag_set)
+    rows, report = identity_join.join_identity(last.get("results") or [], catalog)
     curation_stats = None
     if apply_curation and flag_set["n"]:
         rows, curation_stats = curation_apply.filter_rows(rows, flag_set, key=lambda r: r["spot_id"])
         report = {**report, "n_with_inchikey": len(rows),
-                  "n_unannotated": report["n_unannotated"] + curation_stats["wrong_excluded"]}
+                  "n_unannotated": report["n_unannotated"] + curation_stats["wrong_excluded"]
+                  + curation_stats["redundant_excluded"]}
     curation_state = ("applied" if apply_curation else "not_applied") if flag_set["n"] else None
     curation_line = curation_apply.meta_line(curation_state, flag_set, curation_stats)
     curation_warnings = ([orphaned_warning(flag_set["orphaned"])]
@@ -1215,6 +1220,7 @@ def arf_export_differential(output_path: str, apply_curation: bool = True) -> st
     lines = [*meta, "\t".join(export_contract.EXPORT_COLUMNS)]
     identity_tables = tool_helpers._identity_tables()
     for row in rows:
+        by_curation = bool(apply_curation and row["spot_id"] in flag_set["assign"])
         identity_name = row["name"]
         if identity_name.strip().lower() == "unknown":
             identity_name = ""
@@ -1227,10 +1233,10 @@ def arf_export_differential(output_path: str, apply_curation: bool = True) -> st
         lines.append(export_contract.format_row({
             "spot_id": row["spot_id"],
             "name": row["name"],
-            "name_source": "arf2",
+            "name_source": "curation" if by_curation else "arf2",
             "ontology": row["ontology"],
             "inchikey": row["inchikey"],
-            "inchikey_source": "arf2",
+            "inchikey_source": "curation" if by_curation else "arf2",
             "msi_level": identity["msi"]["level"],
             "mz": row["mz"], "rt": row["rt"],
             "log2fc": row["log2fc"],
