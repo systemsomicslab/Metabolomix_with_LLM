@@ -205,3 +205,29 @@ def test_collect_reports_missing_eic_and_dcl_siblings(dataset):
                                   th=judge.resolve_thresholds(None))
     assert stats["missing_files"] == ["dcl", "eic"]
     assert all(e["eic"]["samples"] == [] and e["mirror"] is None for e in evs)
+
+
+def test_collect_reports_the_mz_difference_in_mda(dataset):
+    paths, s = dataset
+    spots = evidence.select_spots(load_catalog(paths["arf2"]), ontology=None, name_contains=None)
+    evs, _ = evidence.collect(paths["arf2"], spots, store=s, ms2_tol=0.025,
+                              th=judge.resolve_thresholds(None))
+    first = {e["spot_id"]: e for e in evs}[0]
+    expected = (first["rep_mz"] - first["reference"]["precursor_mz"]) * 1000
+    assert first["dmz_mda"] == pytest.approx(expected, abs=0.01)
+
+
+def test_mz_difference_falls_back_to_the_formula(dataset, tmp_path):
+    paths, _ = dataset
+    other = tmp_path / "other.msp"
+    other.write_text("NAME: X\nPRECURSORMZ: 100.0\nIONMODE: Positive\nNum Peaks: 0\n", encoding="utf-8")
+    s = library_store.open_store(other)
+    try:
+        spots = evidence.select_spots(load_catalog(paths["arf2"]), ontology=None, name_contains=None)
+        evs, _ = evidence.collect(paths["arf2"], spots, store=s, ms2_tol=0.025,
+                                  th=judge.resolve_thresholds(None))
+    finally:
+        s.close()
+    assert evs[0]["ppm_basis"] == "formula"
+    assert evs[0]["dmz_mda"] is not None
+    assert evs[0]["dmz_mda"] == pytest.approx(evs[0]["ppm"] * evs[0]["rep_mz"] / 1000, abs=0.05)

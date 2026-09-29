@@ -7,6 +7,9 @@ from functools import lru_cache
 from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
+from xml.sax.saxutils import escape, quoteattr
+
+from lipidmix.core.atomic_io import atomic_write_bytes
 
 
 TAG_MODES = {"any", "all", "none", "not_all"}
@@ -141,6 +144,72 @@ def parse_tag_file(path: str | Path) -> dict:
         "definitions": definitions,
         "peaks": peaks,
     }
+
+
+#: MS-DIAL 5 の `PeakSpotTag.AllTypes()`（上流 `MsdialCore/DataObj/PeakSpotTag.cs`）。
+#: `_tags.xml` が無いとき、MS-DIAL と同じ定義でファイルを作る。
+MSDIAL_TAG_DEFINITIONS = ((1, "Confirmed"), (2, "Low quality spectrum"), (3, "Misannotation"),
+                          (4, "Coelution (mixed spectra)"), (5, "Overannotation"))
+MISANNOTATION_TAG_ID = 3
+
+
+def alignment_tag_path(arf2_path: str | Path) -> Path:
+    """アラインメントのタグファイル。上流 `AlignmentResultContainer.Save` と同じく
+    アラインメントファイルと同じフォルダの `<stem>_tags.xml`。"""
+    path = Path(arf2_path)
+    return path.parent / f"{path.stem}{TAG_XML_SUFFIX}"
+
+
+def _serialize_tag_file(definitions: dict[int, str], peaks: dict[int, frozenset[int]]) -> bytes:
+    """上流 `XElement.Save` と同じ見た目（UTF-8 BOM・2 空白字下げ・CRLF・末尾改行なし）。
+    MS-DIAL の読み取り（`AlignmentResultContainer.Load`）は `Peak` の `Id` 属性と子 `Tag`
+    の整数しか見ないが、GUI が書くものと差分が出ないようにそろえる。"""
+    lines = ['<?xml version="1.0" encoding="utf-8"?>', "<PeakSpotTags>", "  <Definitions>"]
+    for tag_id, label in sorted(definitions.items()):
+        lines += ["    <Tag>", f"      <Id>{tag_id}</Id>", f"      <Label>{escape(label)}</Label>", "    </Tag>"]
+    lines.append("  </Definitions>")
+    kept = {peak_id: ids for peak_id, ids in peaks.items() if ids}
+    if not kept:
+        lines.append("  <Peaks />")
+    else:
+        lines.append("  <Peaks>")
+        for peak_id in sorted(kept):
+            lines.append(f"    <Peak Id={quoteattr(str(peak_id))}>")
+            lines += [f"      <Tag>{tag_id}</Tag>" for tag_id in sorted(kept[peak_id])]
+            lines.append("    </Peak>")
+        lines.append("  </Peaks>")
+    lines.append("</PeakSpotTags>")
+    return "\ufeff".encode("utf-8") + "\r\n".join(lines).encode("utf-8")
+
+
+def update_alignment_tag(path: str | Path, *, tag_id: int, add, remove) -> dict:
+    """アラインメントの `_tags.xml` で、`add` のスポットに `tag_id` を付け `remove` から外す。
+
+    他のタグ・定義はそのまま残し、タグが 1 つも残らない `Peak` は書かない（上流と同じ）。
+    ファイルが無ければ MS-DIAL と同じ定義で作る。書き込みは原子的。戻り値の
+    `added` / `removed` は実際に変わったスポットだけ（昇順）。
+    """
+    tag_path = Path(path)
+    created = not tag_path.exists()
+    if created:
+        definitions, peaks = dict(MSDIAL_TAG_DEFINITIONS), {}
+    else:
+        parsed = parse_tag_file(tag_path)
+        definitions, peaks = dict(parsed["definitions"]), dict(parsed["peaks"])
+    if tag_id not in definitions:
+        definitions[tag_id] = dict(MSDIAL_TAG_DEFINITIONS).get(tag_id, str(tag_id))
+    added, removed = [], []
+    for spot in sorted({int(s) for s in add}):
+        if tag_id not in peaks.get(spot, frozenset()):
+            peaks[spot] = peaks.get(spot, frozenset()) | {tag_id}
+            added.append(spot)
+    for spot in sorted({int(s) for s in remove}):
+        if tag_id in peaks.get(spot, frozenset()):
+            peaks[spot] = peaks[spot] - {tag_id}
+            removed.append(spot)
+    if created or added or removed:
+        atomic_write_bytes(tag_path, _serialize_tag_file(definitions, peaks))
+    return {"path": str(tag_path), "added": added, "removed": removed, "created": created}
 
 
 def resolve_alignment_tag_file(

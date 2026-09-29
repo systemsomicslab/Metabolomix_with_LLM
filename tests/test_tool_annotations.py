@@ -27,6 +27,9 @@ REMOTE_WRITE = {"readOnlyHint": False, "destructiveHint": False,
 DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True}
 # ファイルを消すが、二度目は何も残っていないので同じ状態に落ち着く → 冪等。
 LOCAL_DELETE = {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True}
+# 追記に加えて外部アプリのファイルを書き換える（curation_submit は flags.jsonl に追記し、
+# MS-DIAL の _tags.xml の Misannotation を付け外しする。clear で外しうる）→ destructive・非冪等。
+APPEND_AND_REWRITE = {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False}
 
 EXPECTED_ANNOTATIONS = {
     # --- ARF（多サンプル解析）。セッション状態は更新するが外部副作用は無い ---
@@ -131,7 +134,7 @@ EXPECTED_ANNOTATIONS = {
     # console_run と同じ「毎回新しい成果物を生む」性質なので idempotent ではない）。
     # submit は flags.jsonl に追記する。 ---
     "curation_review": LOCAL_WRITE_APPEND,
-    "curation_submit": LOCAL_WRITE_APPEND,
+    "curation_submit": APPEND_AND_REWRITE,
     "curation_flags": READ_ONLY,
     "curation_view_data": READ_ONLY,
 }

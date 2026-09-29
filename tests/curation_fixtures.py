@@ -162,7 +162,13 @@ LIBRARY_MSP = textwrap.dedent("""\
 """)
 
 
-def write_alignment_set(folder: Path, *, n_files: int = 3, eic_points: int = 31) -> dict:
+#: `write_alignment_set` の各スポットの match_result 上書き（`match_overrides` で足すときの土台）。
+_KEYS_BY_SPOT = {0: {0: "PC 34:1", 14: 0, 27: "lib_1"},
+                 1: {0: "PC 36:2", 1: "KEY-PC362", 14: 1, 27: "lib_1", 33: False, 34: True}}
+
+
+def write_alignment_set(folder: Path, *, n_files: int = 3, eic_points: int = 31,
+                        match_overrides: dict[int, dict] | None = None) -> dict:
     """スポット 3 件の一式を `AlignmentResult_x.*` として書く。
 
     spot 0: PC 34:1、参照一致・きれいなピーク（ok になるべき）
@@ -175,6 +181,9 @@ def write_alignment_set(folder: Path, *, n_files: int = 3, eic_points: int = 31)
     （別ライブラリのレコードを ScanID が指してしまった場合の安全弁）に spot 1 自身が
     引っかかり、参照が解決できなくなる（実装時に判明。ここは fixture 側の記述漏れの
     修正であり、ガードのロジックは変えていない）。
+
+    `match_overrides` は {spot_id: {Key: 値}}。spot 0/1 の照合結果の Key を追加で上書きする
+    （脂質規則フラグ Key 19/20/22 を試すため）。
 
     `eic_points`（既定 31）は各サンプルの EIC 点数。既定の `step=0.01` のまま増やすと、
     `evidence._trim` の窓（`(right-left) * EIC_WINDOW_FACTOR`、既定で ±0.3 分）を
@@ -190,6 +199,8 @@ def write_alignment_set(folder: Path, *, n_files: int = 3, eic_points: int = 31)
                                     33: False, 34: True})]},
         {"spot_id": 2, "name": "Unknown", "mz": 500.0, "rt": 5.0, "scan": None, "matches": []},
     ]
+    for spot_id, keys in (match_overrides or {}).items():
+        specs[spot_id]["matches"][0][:] = match_result({**_KEYS_BY_SPOT[spot_id], **keys})
     write_arf2(folder / "AlignmentResult_x.arf2", [
         arf2_spot_raw(spot_id=s["spot_id"], name=s["name"], mz=s["mz"], rt=s["rt"],
                       matches=s["matches"], representative_file_id=0)

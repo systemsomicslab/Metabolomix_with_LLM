@@ -245,12 +245,15 @@ def collect(arf2_path, spots, *, store, ms2_tol, th, file_ids=None, max_traces=1
         if reference is not None:
             stats["n_reference_resolved"] += 1
             ppm = (float(rep_mz) - reference["precursor_mz"]) / reference["precursor_mz"] * 1e6
+            dmz = float(rep_mz) - reference["precursor_mz"]
             ppm_basis = "reference"
             ref_rt = reference.get("rt")
             drt = float(rep_rt) - float(ref_rt) if ref_rt and ref_rt > 0 else None
         else:
             computed = mass_error_ppm(rep_mz, spot.get("Formula"), spot.get("AdductType"))
             ppm = computed["ppm"]
+            theoretical = computed.get("theoretical_mz")
+            dmz = float(rep_mz) - theoretical if ppm is not None and theoretical else None
             ppm_basis = "formula" if ppm is not None else None
             drt = None
 
@@ -304,6 +307,7 @@ def collect(arf2_path, spots, *, store, ms2_tol, th, file_ids=None, max_traces=1
                                               "inchikey", "record_index", "library_id")},
             "reference_adduct": None if reference is None else reference.get("adduct"),
             "ppm": None if ppm is None else round(ppm, 2), "ppm_basis": ppm_basis,
+            "dmz_mda": None if dmz is None else round(dmz * 1000, 2),
             "adduct_band": adduct_consistency(spot.get("AdductType"), spot.get("IonMode"),
                                               spot.get("Ontology"))["band"],
             "drt": None if drt is None else round(drt, 4),

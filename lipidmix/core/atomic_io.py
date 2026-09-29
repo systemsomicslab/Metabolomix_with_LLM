@@ -97,6 +97,27 @@ def read_text_stable(path: Path, *, encoding: str = "utf-8") -> str:
     return _retry_on_sharing_violation(lambda: path.read_text(encoding=encoding))
 
 
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """バイト列を原子的に保存する（手順と失敗時の扱いは `atomic_write_json` と同じ）。"""
+    path = Path(path)
+    parent = path.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=parent, prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+            tmp_file.write(data)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        _retry_on_sharing_violation(lambda: os.replace(tmp_path, path))
+    except Exception:
+        if tmp_path is not None and tmp_path.exists():
+            os.unlink(tmp_path)
+        raise
+
+
 def atomic_write_json(path: Path, data: dict) -> None:
     """JSONを原子的に保存する。
 

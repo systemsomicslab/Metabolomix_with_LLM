@@ -115,3 +115,14 @@ def test_notes_have_control_whitespace_normalised():
     cleaned = flags.validate_entries([{"spot_id": 1, "flag": "wrong", "note": "a\r\nb\tc"}],
                                      allowed_spot_ids=None)
     assert cleaned[0]["note"] == "a  b c"
+
+
+def test_cleared_spots_are_those_whose_latest_row_is_clear(tmp_path):
+    # likely_wrong の「間違い」プリセットを、人が明示的に取り消したスポットへは掛け直さないため。
+    store = flags.FlagStore(tmp_path)
+    store.append([{"spot_id": 1, "flag": "wrong"}, {"spot_id": 2, "flag": "wrong"}],
+                 alignment=ALIGN, review_id="cr-1", source="user")
+    store.append([{"spot_id": 1, "flag": "clear"}], alignment=ALIGN, review_id="cr-2", source="user")
+    other = {"alignment_file": "AlignmentResult_x.arf2", "alignment_sha256": "bb" * 32}
+    store.append([{"spot_id": 3, "flag": "clear"}], alignment=other, review_id="cr-3", source="user")
+    assert flags.cleared_spots(store.rows(), ALIGN["alignment_sha256"]) == {1}

@@ -17,7 +17,7 @@ from lipidmix.core.path_resolvers import resolve_arf2_file_path
 from lipidmix.core.serialization import json_payload, round_floats
 # モジュール名を flag_log にするのは、curation_submit の引数 `flags`（公開 API の名前）が
 # モジュールを隠すため。
-from lipidmix.curation import evidence, judge, review, viewer
+from lipidmix.curation import evidence, judge, msdial_writeback, review, viewer
 from lipidmix.curation import flags as flag_log
 from lipidmix.library.defaults import DEFAULT_MS2_TOL, pick_tol
 
@@ -27,6 +27,8 @@ VIEWER_URI = "ui://ms-data-parser/curation-viewer"
 _UI_META = {"ui": {"resourceUri": VIEWER_URI}, "ui/resourceUri": VIEWER_URI}
 _APP_ONLY_META = {"ui": {"resourceUri": VIEWER_URI, "visibility": ["app"]}}
 _LOCAL_WRITE_APPEND = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False)
+# curation_submit は MS-DIAL の _tags.xml を書き換える（clear で Misannotation を外す）ので destructive。
+_SUBMIT_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False)
 
 
 def _error(message: str, **details) -> str:
@@ -107,7 +109,8 @@ def curation_review(ontology: list[str] | None = None, name_contains: str | None
     `html_path` をブラウザで開いてもらい、ビューアで付けたフラグを「送信用テキストを
     コピー」→ チャットに貼ってもらう。貼られたら curation_submit(submission_text=...) に渡す。
 
-    判定: likely_wrong（強い不一致: polarity_mismatch / precursor_unmatched）、
+    判定: likely_wrong（強い不一致: polarity_mismatch / precursor_unmatched / class_rule_rejected。
+    最後は MS-DIAL の脂質クラス規則による棄却で、脂質規則が走ったデータに限る）、
     suspect（ppm_out / low_score / drt_out / eic_poor、または弱い兆候の重なり）、ok。
     RT–m/z 傾向（trend_outlier）は補強にしか使わない。UNKNOWN は不一致に数えない。
     `thresholds` で既定のしきい値（ppm_pass=5, ppm_borderline=10, drt_pass=0.5 分 など）を上書きできる。
@@ -170,7 +173,7 @@ def curation_review(ontology: list[str] | None = None, name_contains: str | None
     }, 4))
 
 
-@mcp.tool(annotations=_LOCAL_WRITE_APPEND, structured_output=False)
+@mcp.tool(annotations=_SUBMIT_WRITE, structured_output=False)
 def curation_submit(submission_text: str | None = None, review_id: str | None = None,
                     flags: list[dict] | None = None, source: str = "user",
                     file_path: str | None = None) -> str:
@@ -185,6 +188,10 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
     2 回以上名指しした場合も含む——どちらを採るか決められないため）。
     レビューはセッションの記録 → 送信用テキストの `arf2_path` → `file_path`（レビューを
     作った `.arf2`）→ 既定の `.arf2` の順に探すので、サーバ再起動の後でも貼った文で送れる。
+    記録の後、アラインメントの `_tags.xml` の Misannotation に反映する（wrong → 付ける、
+    clear → 外す、suspect → 触らない。控えは `curation/tags-backup/`）。結果は `tags_xml`。
+    反映に失敗しても記録は残る。MS-DIAL でプロジェクトを開いたままだと GUI の保存で
+    上書きされるので、`tags_xml.note` をユーザーに伝える。
     """
     if source not in ("user", "llm"):
         return _error("source は 'user' か 'llm' にしてください。")
@@ -225,9 +232,11 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
         return _flag_file_error(exc)
     n = store.append(cleaned, alignment=current, review_id=review_id, source=source)
     effective = store.effective(current["alignment_sha256"])
+    tags_xml = msdial_writeback.sync_misannotation(saved["arf2_path"], cleaned)
     return json_payload({"status": "ok", "recorded": n, "review_id": review_id,
                          "n_wrong": sum(1 for r in effective.values() if r["flag"] == "wrong"),
-                         "n_suspect": sum(1 for r in effective.values() if r["flag"] == "suspect")})
+                         "n_suspect": sum(1 for r in effective.values() if r["flag"] == "suspect"),
+                         "tags_xml": tags_xml})
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
