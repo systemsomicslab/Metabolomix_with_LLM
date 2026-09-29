@@ -77,4 +77,10 @@ def test_eic_draws_the_partner_in_its_own_style():
 
 def test_embedded_data_is_escaped():
     html = viewer.render_suggest_html({"suggestion_id": "cs-1", "spots": [{"name": "</script>"}]})
-    assert "</script>\"" not in html and "\u003c/script>" in html
+    assert "\\u003c/script>" in html
+    assert html.count("</script>") == 1          # ページ自身の閉じタグだけ。データ側の </script> は残らない
+
+
+def test_not_compared_sentinel_is_shown_as_a_dash(tmp_path):
+    out = _run(tmp_path, "[scoreText(-1), scoreText(0.8567), scoreText(0), scoreText(null), scoreText(undefined), scoreText(NaN), countText(-1), countText(3), countText(0)]")
+    assert out == ["–", "0.86", "0.00", "–", "–", "–", "–", "3", "0"]

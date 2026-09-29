@@ -120,7 +120,16 @@ function mirrorFor(spot, candidate) {
   if (!candidate || !candidate.mirror) return {mirror: null, mirror_empty_text: spot.measured && spot.measured.length ? "参照スペクトルなし" : "MS/MS なし"};
   return {mirror: {measured: spot.measured, reference: candidate.mirror.reference, matched_mz: candidate.mirror.matched_mz}};
 }
+// 照合していない候補のスコアは -1 で保存されている（比較していない、の印）。数値として見せない。
+function scoreText(v) { return typeof v === "number" && isFinite(v) && v >= 0 ? v.toFixed(2) : "–"; }
+function countText(v) { return typeof v === "number" && isFinite(v) && v >= 0 ? String(v) : "–"; }
 // --- end suggest ---
+
+// 選択中の ④（相手 Y との関係）。無ければ null。
+function chosenRelation(spot) {
+  const id = (choices.get(spot.spot_id) || {}).candidate;
+  return spot.relations.find(r => r.candidate_id === id) || null;
+}
 
 function candidateLabel(c) {
   return `${c.sum_name || c.name} ${c.adduct || ""}`;
@@ -134,17 +143,22 @@ function spotCard(spot) {
     `#${spot.spot_id} ${spot.adduct || ""} m/z ${fixed(spot.mz, 4)} RT ${fixed(spot.rt, 2)} / ${kind}` +
     (spot.target_reasons.length ? ` / ${spot.target_reasons.join(", ")}` : "")));
   const eic = canvasFor(card), mirror = canvasFor(card);
-  let focused = spot.candidates[0] || null;
+  // ミラーに出す候補: 選択中の候補、無ければ先頭。マウスを外したらここへ戻す。
+  const pinned = () => spot.candidates.find(c => c.candidate_id === (choices.get(spot.spot_id) || {}).candidate)
+    || spot.candidates[0] || null;
+  let focused = pinned();
   const draw = () => {
-    const chosen = spot.relations.find(r => r.candidate_id === (choices.get(spot.spot_id) || {}).candidate);
-    drawEic(eic, chosen ? {...spot, ...overlayFor(spot, chosen)} : spot);   // 初期選択の ④ は重ねて描く
+    const chosen = chosenRelation(spot);
+    drawEic(eic, chosen ? {...spot, ...overlayFor(spot, chosen)} : spot);   // 選択中の ④ は重ねて描く
     drawMirror(mirror, {...spot, ...mirrorFor(spot, focused)});
   };
+  const restore = () => { focused = pinned(); draw(); };
   for (const prepare of [eic, mirror]) prepare.canvas.addEventListener("click", () => openZoom(spot, focused));
   const list = el("div");
   const radioName = "c-" + spot.spot_id;
   const current = () => choices.get(spot.spot_id) || null;
   const note = el("input", {type: "text", placeholder: "メモ"});
+  note.value = (current() || {}).note || "";   // フィルタで作り直しても選択のメモと粒度を保つ
   const setChoice = choice => {
     if (choice) choices.set(spot.spot_id, {...choice, note: note.value}); else choices.delete(spot.spot_id);
     card.classList.toggle("chosen", !!choice);
@@ -167,29 +181,30 @@ function spotCard(spot) {
       (r.soft.length ? ` / ${r.soft.join(",")}` : "") + (r.strong ? " / 強い説明" : "");
     const label = `#${r.of}（${r.of_name || "?"}）の別イオン: ${r.relation}` + (r.informational ? "（情報のみ）" : "");
     const row = addRow(r.candidate_id, label, detail, () => {
-      drawEic(eic, {...spot, ...overlayFor(spot, r)});
-      setChoice({candidate: r.candidate_id, flag: "redundant"});
+      setChoice({candidate: r.candidate_id, flag: "redundant"}); restore();
     }, r.informational ? "info" : "");
     row.addEventListener("mouseenter", () => drawEic(eic, {...spot, ...overlayFor(spot, r)}));
+    row.addEventListener("mouseleave", restore);
     if (r.informational) row.querySelector("input").disabled = true;
   }
   for (const c of spot.candidates) {
     const src = el("span", {class: "src"}, c.source);
-    const detail = `score ${fixed(c.scores.total_score, 2)} / wdot ${fixed(c.scores.weighted_dot_product, 2)} / ` +
-      `一致 ${c.scores.matched_peaks_count} / Δm/z ${c.dmz_mda ?? "–"} mDa` +
+    const detail = `score ${scoreText(c.scores.total_score)} / wdot ${scoreText(c.scores.weighted_dot_product)} / ` +
+      `一致 ${countText(c.scores.matched_peaks_count)} / Δm/z ${c.dmz_mda ?? "–"} mDa` +
       (c.trend ? ` / 傾向 z ${c.trend.z}` : "") + ([...c.soft, ...c.info].length ? ` / ${[...c.soft, ...c.info].join(",")}` : "");
     const row = addRow(c.candidate_id, candidateLabel(c), detail, () => {
-      focused = c; drawMirror(mirror, {...spot, ...mirrorFor(spot, c)});
-      setChoice({candidate: c.candidate_id, flag: "assign", level: species.checked ? "species" : "sum"});
+      setChoice({candidate: c.candidate_id, flag: "assign", level: species.checked ? "species" : "sum"}); restore();
     });
     row.firstChild.nextSibling.firstChild.prepend(src, " ");
     row.addEventListener("mouseenter", () => { focused = c; drawMirror(mirror, {...spot, ...mirrorFor(spot, c)}); });
+    row.addEventListener("mouseleave", restore);
   }
   if (spot.target_kind === "flagged")
-    addRow("clear", "元の注釈に戻す（wrong を取り消す）", null, () => setChoice({flag: "clear"}));
-  addRow("none", "選ばない", null, () => setChoice(null));
+    addRow("clear", "元の注釈に戻す（wrong を取り消す）", null, () => { setChoice({flag: "clear"}); restore(); });
+  addRow("none", "選ばない", null, () => { setChoice(null); restore(); });
   card.appendChild(list);
   const species = el("input", {type: "checkbox"});
+  species.checked = (current() || {}).level === "species";
   const speciesLabel = el("label", {class: "meta"}); speciesLabel.append(species, " 分子種で記録（既定は和組成）");
   species.addEventListener("change", () => { const c = current();
     if (c && c.flag === "assign") setChoice({...c, level: species.checked ? "species" : "sum"}); });
@@ -234,7 +249,8 @@ function openZoom(spot, candidate) {
   const d = document.getElementById("zoom");
   document.getElementById("zoom-title").textContent = `#${spot.spot_id} ${candidate ? candidateLabel(candidate) : ""}`;
   if (typeof d.showModal === "function") { if (!d.open) d.showModal(); } else d.setAttribute("open", "");
-  drawEic(zoomEic, spot); drawMirror(zoomMirror, {...spot, ...mirrorFor(spot, candidate)});
+  const chosen = chosenRelation(spot);
+  drawEic(zoomEic, chosen ? {...spot, ...overlayFor(spot, chosen)} : spot); drawMirror(zoomMirror, {...spot, ...mirrorFor(spot, candidate)});
 }
 document.getElementById("zoom-close").addEventListener("click", closeZoom);
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeZoom(); });
