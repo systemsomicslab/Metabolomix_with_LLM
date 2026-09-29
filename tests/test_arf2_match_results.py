@@ -93,3 +93,9 @@ def test_nan_scores_are_passed_through_as_none():
     decoded = mr.decode_match_result(match_result({37: float("nan")}))
     assert decoded["enhanced_dot_product"] is None
     assert not any(isinstance(v, float) and math.isnan(v) for v in decoded.values())
+
+
+def test_usable_candidates_drop_decoys_and_unknown_source():
+    container = [[match_result({0: "A", 31: 2}), match_result({0: "B", 30: True}),
+                  match_result({0: "C", 26: 1})], {}, []]
+    assert [c["name"] for c in mr.usable_candidates(container)] == ["A"]

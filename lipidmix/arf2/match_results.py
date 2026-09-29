@@ -85,10 +85,15 @@ def _candidates(container) -> list[dict]:
     return [d for d in decoded if d is not None]
 
 
+def usable_candidates(container) -> list[dict]:
+    """非 decoy・Source != Unknown の候補（GUI の代表を選ぶ母集団）。並びはファイル順。"""
+    return [c for c in _candidates(container)
+            if not c.get("is_decoy") and (c.get("source") or 0) != SOURCE_UNKNOWN]
+
+
 def representative(container) -> dict | None:
     """GUI が表示する代表（非 decoy・Source != Unknown の ResultOrder 最大）。無ければ None。"""
-    usable = [c for c in _candidates(container)
-              if not c.get("is_decoy") and (c.get("source") or 0) != SOURCE_UNKNOWN]
+    usable = usable_candidates(container)
     if not usable:
         return None
     return max(usable, key=_order_key)
@@ -128,3 +133,9 @@ def load_spot_annotations(file_path) -> dict[int, dict]:
     """`.arf2` の全スポットについて代表の照合結果を MasterAlignmentID で引ける形にする。"""
     return {entry["spot_id"]: entry
             for entry in (spot_annotation(raw) for raw in load_raw_spots(file_path))}
+
+
+def load_spot_candidates(file_path) -> dict[int, list[dict]]:
+    """MasterAlignmentID → 使える候補の一覧（代表を含む）。"""
+    return {int(raw[0]): usable_candidates(raw[56] if len(raw) > 56 else None)
+            for raw in load_raw_spots(file_path)}

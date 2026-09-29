@@ -125,3 +125,31 @@ def fit_trends(points: list[dict], th: dict) -> dict:
             per_db[db] = entry
         groups[ontology] = per_db
     return {"classes": classes, "groups": groups, "spots": spots}
+
+
+def sum_composition(name) -> str | None:
+    """和組成の名前（pygoslin の SPECIES レベル。`PC 16:0_18:1` → `PC 34:1`）。読めなければ None。"""
+    if not name or not str(name).strip():
+        return None
+    clean, _ = _clean_msdial_name(name)
+    parser = _lipid_parser()
+    if not clean or parser is None:
+        return None
+    try:
+        from pygoslin.domain.LipidLevel import LipidLevel
+        with _PARSER_LOCK:
+            lipid = parser.parse(clean)
+        return lipid.get_lipid_string(LipidLevel.SPECIES)
+    except Exception:  # noqa: BLE001 - 脂質名として読めない名前は和組成を持たない
+        return None
+
+
+def predict_rt(classes: dict, ontology: str, carbon: int, db: int) -> dict | None:
+    """`fit_trends` の `classes` からクラスの加法モデルで RT を予測する。当てはめの無いクラスは None。
+    DB が 1 種類しかなかったクラスは係数が 2 つ（DB の項なし）。"""
+    entry = classes.get(ontology or "")
+    if not entry:
+        return None
+    coef = entry["coef"]
+    predicted = coef[0] + coef[1] * carbon + (coef[2] * db if len(coef) > 2 else 0.0)
+    return {"predicted_rt": predicted, "scale": entry["scale"]}

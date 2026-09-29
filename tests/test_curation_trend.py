@@ -1,3 +1,5 @@
+import pytest
+
 from lipidmix.curation import trend
 
 TH = {"trend_min_points": 5, "trend_outlier_z": 3.0, "trend_min_r2": 0.7}
@@ -88,3 +90,23 @@ def test_class_summary_counts_outliers():
         [(32, 0), (34, 0), (36, 0), (34, 1), (36, 1), (38, 1), (36, 2), (38, 4)])]
     points.append(_pc(99, 34, 2, rt=30.0))
     assert trend.fit_trends(points, TH)["classes"]["PC"]["n_outliers"] == 1
+
+
+from lipidmix.curation.trend import predict_rt, sum_composition  # noqa: E402
+
+
+def test_sum_composition_of_species_and_msdial_names():
+    assert sum_composition("PC 16:0_18:1") == "PC 34:1"
+    assert sum_composition("PC 34:1|PC 16:0_18:1") == "PC 34:1"
+    assert sum_composition("Cer 18:1;O2/24:0") == "Cer 42:1;O2"
+    assert sum_composition("RIKEN N-VS1 ID-45 from x") is None
+
+
+def test_predict_rt_uses_the_additive_model():
+    classes = {"PC": {"coef": [1.0, 0.5, -0.3], "scale": 0.05},
+               "PE": {"coef": [2.0, 0.4], "scale": 0.1}}          # DB が 1 種類しかなかったクラス
+    pc = predict_rt(classes, "PC", 34, 1)
+    assert pc["predicted_rt"] == pytest.approx(1.0 + 17.0 - 0.3) and pc["scale"] == 0.05
+    pe = predict_rt(classes, "PE", 36, 2)
+    assert pe["predicted_rt"] == pytest.approx(2.0 + 14.4) and pe["scale"] == 0.1
+    assert predict_rt(classes, "TG", 50, 1) is None
