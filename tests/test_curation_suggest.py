@@ -180,3 +180,38 @@ def test_decided_spots_are_skipped_by_default(tmp_path, monkeypatch):
         paths["arf2"], base_review=base, store=s, th=TH, options={**OPTIONS, "include_decided": True})["spots"]]
     assert 2 in ids
     s.close()
+
+
+def test_include_decided_returns_a_decided_annotated_spot_as_flagged(tmp_path, monkeypatch):
+    paths, s, base = _setup(tmp_path, monkeypatch)
+    flags.FlagStore(flags.curation_dir(paths["arf2"])).append(
+        [{"spot_id": 1, "flag": "redundant", "of": 0, "relation": "isotope_M+2", "note": ""}],
+        alignment=base["alignment"], review_id="cs-x", source="user")
+    default = suggest.run_suggestion(paths["arf2"], base_review=base, store=s, th=TH, options=OPTIONS)
+    assert 1 not in [sp["spot_id"] for sp in default["spots"]]
+    included = suggest.run_suggestion(paths["arf2"], base_review=base, store=s, th=TH,
+                                      options={**OPTIONS, "include_decided": True})
+    kinds = {sp["spot_id"]: sp["target_kind"] for sp in included["spots"]}
+    assert kinds[1] == "flagged"
+    s.close()
+
+
+def test_an_assigned_partner_is_used_with_its_adopted_name_and_formula(tmp_path, monkeypatch):
+    paths, s, base = _setup(tmp_path, monkeypatch)
+    flags.FlagStore(flags.curation_dir(paths["arf2"])).append(
+        [{"spot_id": 0, "flag": "assign", "name": "PC 36:9", "level": "sum", "formula": "C44H78NO8P",
+          "note": ""}],
+        alignment=base["alignment"], review_id="cs-x", source="user")
+    result = suggest.run_suggestion(paths["arf2"], base_review=base, store=s, th=TH, options=OPTIONS)
+    spot3 = next(sp for sp in result["spots"] if sp["spot_id"] == 3)
+    assert spot3["relations"][0]["of"] == 0 and spot3["relations"][0]["of_name"] == "PC 36:9"
+    s.close()
+
+
+def test_expand_entries_rejects_an_informational_relation_for_redundant(built):
+    _, _, _, result = built
+    spot1 = next(sp for sp in result["spots"] if sp["spot_id"] == 1)
+    spot1["relations"][0]["informational"] = True
+    with pytest.raises(ValueError, match="candidate"):
+        suggest.expand_entries([{"spot_id": 1, "flag": "redundant",
+                                 "candidate": spot1["relations"][0]["candidate_id"]}], result)

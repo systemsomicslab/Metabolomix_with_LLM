@@ -70,7 +70,8 @@ def select_targets(catalog, annotations, base_review, effective, *, wrong, unann
             continue
         annotated = (annotations.get(spot_id) or {}).get("representative") is not None
         judged = verdicts.get(spot_id)
-        if annotated and spot_id in decisions["wrong"]:
+        if annotated and (spot_id in decisions["wrong"] or spot_id in decided):
+            # include_decided=True のとき、判断済み（assign / redundant）の注釈付きスポットも "flagged" で戻す
             targets.append({"spot": spot, "target_kind": "flagged",
                             "target_reasons": list((judged or {}).get("reasons") or [])})
         elif annotated and wrong == "flagged_or_likely" and judged and judged["verdict"] == "likely_wrong":
@@ -85,11 +86,16 @@ def _heights(rows: list[dict]) -> list:
     return [row.get("height") for row in sorted(rows, key=lambda r: r.get("file_id") or 0)]
 
 
-def _partner(spot: dict, annotation: dict, rows) -> dict:
+def _partner(spot: dict, annotation: dict, rows, assigned: dict | None = None) -> dict:
+    """`assigned` は有効な assign 行。あればその name / formula / adduct（空なら catalog の値）を使う
+    （置き換えられた MS-DIAL の名前や組成式で同位体の期待比などを計算しない）。"""
     rep = annotation.get("representative") or {}
-    return {"spot_id": spot["MasterAlignmentID"], "name": spot.get("Name") or rep.get("name"),
-            "mz": spot.get("MassCenter"), "rt": spot.get("RT"), "adduct": spot.get("AdductType"),
-            "formula": spot.get("Formula"), "heights": _heights(rows)}
+    row = assigned or {}
+    return {"spot_id": spot["MasterAlignmentID"],
+            "name": row.get("name") or spot.get("Name") or rep.get("name"),
+            "mz": spot.get("MassCenter"), "rt": spot.get("RT"),
+            "adduct": row.get("adduct") or spot.get("AdductType"),
+            "formula": row.get("formula") or spot.get("Formula"), "heights": _heights(rows)}
 
 
 def _partner_trace(eic_path, spot_id: int, annotations: dict) -> dict | None:
@@ -163,8 +169,9 @@ def run_suggestion(arf2_path, *, base_review, store, th, options) -> dict:
         annotation = annotations.get(spot_id) or {}
         if annotation.get("representative") is None or spot_id in excluded_partners:
             continue
-        partners.append(_partner(spot, annotation, rows_by_spot.get(spot_id, [])))
-        comp = trend.composition(spot.get("Name"))
+        partner = _partner(spot, annotation, rows_by_spot.get(spot_id, []), decisions["assign"].get(spot_id))
+        partners.append(partner)
+        comp = trend.composition(partner["name"])
         if comp is not None and spot.get("RT") is not None:
             points.append({"spot_id": spot_id, "ontology": spot.get("Ontology") or "", "rt": spot["RT"],
                            "mz": spot.get("MassCenter"), "carbon": comp[0], "db": comp[1]})
