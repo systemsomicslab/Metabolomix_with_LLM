@@ -1395,7 +1395,7 @@ git commit -m "feat(curation): 別スポットの同位体・アダクト・イ�
   - `suggest.save_suggestion(s) -> {"json": Path, "html": Path}`、`load_suggestion(dir_or_arf2, suggestion_id) -> dict`
   - `suggest.summary_tsv(s, max_rows) -> str`、`suggest.TSV_COLUMNS`
   - `suggest.expand_entries(entries, suggestion) -> list[dict]`（`flags.jsonl` に書く行の本体。不正なら `ValueError`）
-  - 保存形: `{"suggestion_id", "created_at", "arf2_path", "alignment", "base_review_id", "library": {"sha256", "path"}, "thresholds", "options", "analysis_params", "counts", "warnings", "spots": [...]}`。各スポット: `spot_id, name, ontology, adduct, ion_mode, mz, rt, rep_mz, rep_rt, target_kind, target_reasons, current (代表の {name, inchikey} か None), eic, measured, candidates (library), relations (ion), strong, preset (candidate_id か None)`
+  - 保存形: `{"suggestion_id", "created_at", "arf2_path", "alignment", "base_review_id", "library": {"sha256", "path"}, "thresholds", "options", "analysis_params", "counts", "warnings", "spots": [...]}`。各スポット: `spot_id, name, ontology, adduct, ion_mode, mz, rt, rep_mz, rep_rt, target_kind, target_reasons, current (代表の {name, inchikey} か None), eic, measured, candidates (library), relations (ion。上位 `PARTNER_EIC_RELATIONS`=3 件は `partner_eic` = Y の代表試料のトレース `{file_id, left, top, right, points}` か None を持つ), strong, preset (candidate_id か None)`
 
 - [ ] **Step 1: fixture を書く**
 
@@ -1563,6 +1563,14 @@ def test_isotope_explanation_is_preset_for_the_wrong_spot(built):
     assert "PC 16:0_18:1" not in names and "PG 34:1" in names
 
 
+def test_relation_carries_the_partner_eic(built):
+    _, _, _, result = built
+    spot1 = next(sp for sp in result["spots"] if sp["spot_id"] == 1)
+    trace = spot1["relations"][0]["partner_eic"]
+    assert trace["file_id"] == 0 and trace["left"] < trace["top"] < trace["right"]
+    assert 0 < len(trace["points"]) <= evidence.EIC_MAX_POINTS
+
+
 def test_research_candidate_for_an_unannotated_spot(built):
     _, _, _, result = built
     spot2 = next(sp for sp in result["spots"] if sp["spot_id"] == 2)
@@ -1723,10 +1731,13 @@ from lipidmix.arf2.match_results import load_spot_annotations, load_spot_candida
 from lipidmix.arf2.reader import load_catalog
 from lipidmix.core.atomic_io import atomic_write_json
 from lipidmix.curation import candidates, evidence, flags, relations, review, trend, viewer
+from lipidmix.eic.reader import read_eic_spot_css1
 from lipidmix.library.defaults import pick_tol
 from lipidmix.msdial.analysis_params import resolve_analysis_params
 
 SUGGESTION_ID_RE = re.compile(r"^cs-\d{8}-\d{6}-[0-9a-f]{4}$")
+#: 相手 Y の EIC を持たせる関係の数（スポットごと、並び順の上から）。JSON を膨らませないため。
+PARTNER_EIC_RELATIONS = 3
 WRONG_MODES = ("flagged_or_likely", "flagged")
 LEVELS = ("sum", "species")
 DEFAULTS = {"wrong": "flagged_or_likely", "unannotated": True, "include_decided": False, "top_n": 5,
@@ -1791,6 +1802,24 @@ def _partner(spot: dict, annotation: dict, rows) -> dict:
     return {"spot_id": spot["MasterAlignmentID"], "name": spot.get("Name") or rep.get("name"),
             "mz": spot.get("MassCenter"), "rt": spot.get("RT"), "adduct": spot.get("AdductType"),
             "formula": spot.get("Formula"), "heights": _heights(rows)}
+
+
+def _partner_trace(eic_path, spot_id: int, annotations: dict) -> dict | None:
+    """相手 Y の代表試料の EIC 1 本（ビューアの重ね描き用。spec §7.2）。読めなければ None。"""
+    rep_file = (annotations.get(spot_id) or {}).get("representative_file_id")
+    if eic_path is None or rep_file is None:
+        return None
+    try:
+        eic = read_eic_spot_css1(str(eic_path), spot_id, [rep_file], max_traces=1, max_total_points=5000)
+    except (ValueError, OSError):
+        return None
+    if not eic["samples"]:
+        return None
+    sample = eic["samples"][0]
+    left, right = sample["peak_left"], sample["peak_right"]
+    points = evidence._trim(sample["chromatogram"], left, right)
+    return {"file_id": sample["file_id"], "left": round(left, 4), "top": round(sample["peak_top"], 4),
+            "right": round(right, 4), "points": evidence._downsample_points(points, left, right)}
 
 
 def _scoring(store, rt_tol_default=None) -> dict:
@@ -1871,6 +1900,8 @@ def run_suggestion(arf2_path, *, base_review, store, th, options) -> dict:
         ion = relations.find_relations(me, partners, adducts=params["searched_adducts"], rt_window=rt_window,
                                        mz_tol=opts["relation_mz_tol"], min_r=opts["relation_min_r"],
                                        links=links)
+        for relation in ion[:PARTNER_EIC_RELATIONS]:
+            relation["partner_eic"] = _partner_trace(files["eic"], relation["of"], annotations)
         strong = next((r for r in ion if r["strong"]), None)
         ev.pop("_measured", None)
         spots_out.append({
@@ -2021,7 +2052,7 @@ git commit -m "feat(curation): 候補付けレビューを組み立てて保存�
 
 **Interfaces:**
 - Consumes: Task 6 の保存形（`spots[].candidates` / `relations` / `measured` / `eic` / `preset`）。
-- Produces: `viewer.render_html(review)`（挙動は現行と同じ）、`viewer.render_suggest_html(suggestion | None) -> str`。JS の純関数ブロック（`// --- suggest (pure) ---` 〜 `// --- end suggest ---`）: `initialChoice(spot)`、`choiceEntry(spot, choice)`、`suggestSubmission(suggestion, choices)`、`mirrorFor(spot, candidate)`。
+- Produces: `viewer.render_html(review)`（挙動は現行と同じ）、`viewer.render_suggest_html(suggestion | None) -> str`。JS の純関数ブロック（`// --- suggest (pure) ---` 〜 `// --- end suggest ---`）: `initialChoice(spot)`、`choiceEntry(spot, choice)`、`suggestSubmission(suggestion, choices)`、`overlayFor(spot, relation)`（X のトレース＋Y の `partner_eic` を X の代表の最大値に合わせて縮めたもの）、`mirrorFor(spot, candidate)`。共通の `drawEic` は `partner: true` のトレースを参照色の点線で描く。
 
 - [ ] **Step 1: 共通 JS を切り出す**
 
@@ -2030,6 +2061,19 @@ git commit -m "feat(curation): 候補付けレビューを組み立てて保存�
 ```javascript
   if (!m) { ctx.fillStyle = css("--muted"); ctx.font = "12px system-ui";
     ctx.fillText(spot.mirror_empty_text || (spot.match && !spot.match.has_msms ? "MS/MS なし" : "参照スペクトルなし"), 8, h / 2); return; }
+```
+
+同じく共通側の `drawEic` のトレースを描くループで、相手 Y のトレース（`s.partner`、Step 4 の `overlayFor` が作る）を描き分ける。既存レビューのデータには `partner` が無いので、既存ビューアの見た目は変わらない:
+
+```javascript
+  for (const s of samples) {
+    ctx.beginPath();
+    ctx.strokeStyle = s.partner ? css("--ref") : s.representative ? css("--meas") : css("--muted");
+    ctx.lineWidth = s.representative || s.partner ? 2 : 1;
+    ctx.setLineDash(s.partner ? [2, 2] : s.detected ? [] : [4, 3]);
+    s.points.forEach((p, i) => i ? ctx.lineTo(px(p[0]), py(p[1])) : ctx.moveTo(px(p[0]), py(p[1])));
+    ctx.stroke();
+  }
 ```
 
 `viewer.py`:
@@ -2131,6 +2175,25 @@ def test_mirror_for_combines_spot_measured_with_candidate_reference(tmp_path):
                               "matched_mz": [255.23]}}
 
 
+def test_overlay_adds_the_partner_trace_scaled_to_the_representative(tmp_path):
+    spot = json.dumps({"eic": {"samples": [
+        {"file_id": 0, "representative": True, "detected": True, "points": [[10.0, 0.0], [10.1, 100.0]]},
+        {"file_id": 1, "representative": False, "detected": True, "points": [[10.0, 0.0], [10.1, 50.0]]}]}})
+    relation = json.dumps({"partner_eic": {"file_id": 0, "left": 9.9, "top": 10.1, "right": 10.3,
+                                           "points": [[10.0, 0.0], [10.1, 1000.0]]}})
+    out = _run(tmp_path, f"overlayFor({spot}, {relation}).eic.samples")
+    assert len(out) == 3
+    assert out[2]["partner"] is True and out[2]["representative"] is False
+    assert out[2]["points"][1] == [10.1, 100.0]                     # Y の最大 1000 → X の代表の最大 100
+    assert _run(tmp_path, f"overlayFor({spot}, {{partner_eic: null}}).eic.samples.length") == 2
+
+
+def test_eic_draws_the_partner_in_its_own_style():
+    html = viewer.render_suggest_html(None)
+    source = html[html.index("function drawEic"):html.index("// --- mirror labels (pure) ---")]
+    assert "s.partner" in source
+
+
 def test_embedded_data_is_escaped():
     html = viewer.render_suggest_html({"suggestion_id": "cs-1", "spots": [{"name": "</script>"}]})
     assert "</script>\"" not in html and "\\u003c/script>" in html
@@ -2204,6 +2267,20 @@ function suggestSubmission(suggestion, choiceMap) {
   const flags = [...choiceMap.entries()].map(([id, c]) => choiceEntry(byId.get(id) || {spot_id: id}, c));
   return {review_id: suggestion.suggestion_id, arf2_path: suggestion.arf2_path, flags};
 }
+// ④ の行: X のトレースに相手 Y の代表試料のトレースを足す。Y は X の代表試料の最大値に合わせて
+// 縮める（M+2 は Y の 1 割ほどしかなく、そのままでは X が潰れて形を比べられないため）。
+function overlayFor(spot, relation) {
+  const samples = (spot.eic && spot.eic.samples) || [];
+  const trace = relation && relation.partner_eic;
+  if (!trace || !trace.points.length) return {eic: {samples}};
+  const rep = samples.find(s => s.representative) || samples[0];
+  const xMax = rep ? Math.max(...rep.points.map(p => p[1])) : 0;
+  const yMax = Math.max(...trace.points.map(p => p[1])) || 1;
+  const k = xMax > 0 ? xMax / yMax : 1;
+  const partner = {...trace, detected: true, representative: false, partner: true,
+                   points: trace.points.map(p => [p[0], p[1] * k])};
+  return {eic: {samples: [...samples, partner]}};
+}
 function mirrorFor(spot, candidate) {
   if (!candidate || !candidate.mirror) return {mirror: null, mirror_empty_text: spot.measured && spot.measured.length ? "参照スペクトルなし" : "MS/MS なし"};
   return {mirror: {measured: spot.measured, reference: candidate.mirror.reference, matched_mz: candidate.mirror.matched_mz}};
@@ -2223,7 +2300,11 @@ function spotCard(spot) {
     (spot.target_reasons.length ? ` / ${spot.target_reasons.join(", ")}` : "")));
   const eic = canvasFor(card), mirror = canvasFor(card);
   let focused = spot.candidates[0] || null;
-  const draw = () => { drawEic(eic, spot); drawMirror(mirror, {...spot, ...mirrorFor(spot, focused)}); };
+  const draw = () => {
+    const chosen = spot.relations.find(r => r.candidate_id === (choices.get(spot.spot_id) || {}).candidate);
+    drawEic(eic, chosen ? {...spot, ...overlayFor(spot, chosen)} : spot);   // 初期選択の ④ は重ねて描く
+    drawMirror(mirror, {...spot, ...mirrorFor(spot, focused)});
+  };
   for (const prepare of [eic, mirror]) prepare.canvas.addEventListener("click", () => openZoom(spot, focused));
   const list = el("div");
   const radioName = "c-" + spot.spot_id;
@@ -2250,8 +2331,11 @@ function spotCard(spot) {
       (r.isotope_ratio != null ? ` / 強度比 ${r.isotope_ratio}（期待 ${r.expected_ratio}）` : "") +
       (r.soft.length ? ` / ${r.soft.join(",")}` : "") + (r.strong ? " / 強い説明" : "");
     const label = `#${r.of}（${r.of_name || "?"}）の別イオン: ${r.relation}` + (r.informational ? "（情報のみ）" : "");
-    const row = addRow(r.candidate_id, label, detail, () => setChoice({candidate: r.candidate_id, flag: "redundant"}),
-                       r.informational ? "info" : "");
+    const row = addRow(r.candidate_id, label, detail, () => {
+      drawEic(eic, {...spot, ...overlayFor(spot, r)});
+      setChoice({candidate: r.candidate_id, flag: "redundant"});
+    }, r.informational ? "info" : "");
+    row.addEventListener("mouseenter", () => drawEic(eic, {...spot, ...overlayFor(spot, r)}));
     if (r.informational) row.querySelector("input").disabled = true;
   }
   for (const c of spot.candidates) {
@@ -2342,7 +2426,7 @@ if (DATA) start(); else document.getElementById("status").textContent = "デー�
 </html>
 ```
 
-先頭は `viewer.html` と同じ `<!doctype html>` 〜 `<title>Annotation suggestions</title>` と `<style>`。spec §7.2 の「④ の行を選ぶと X と Y の EIC を重ねる」は、保存形に Y の EIC を持たないため、この版では X の EIC と Y の番号・関係の表示にとどめる。これは spec からの縮小なので、Task 11 の報告と `docs/output_format/curation.md` に明記する（Y の EIC を足すなら `run_suggestion` が関係の相手の EIC を `read_eic_spot_css1` で読み `relations[].partner_eic` に入れる別タスクになる）。
+先頭は `viewer.html` と同じ `<!doctype html>` 〜 `<title>Annotation suggestions</title>` と `<style>`。spec §7.2 の「④ の行を選ぶと X と Y の EIC を重ねる」は、Task 6 が `relations[].partner_eic` に入れた Y の代表試料のトレースを `overlayFor` で X のトレースに足して描く（Step 4）。
 
 - [ ] **Step 5: 通ることを確かめる**
 
@@ -2351,7 +2435,7 @@ Expected: PASS
 
 - [ ] **Step 6: 内蔵ブラウザで目視する**
 
-`check.py` で `write_suggest_set` を tmp に書き、`run_suggestion` → `save_suggestion` した HTML のパスを出力し、Browser pane（`mcp__Claude_Browser__navigate` に `file:///` のパス）で開く。確かめること: spot 1 のカードが緑枠で「#0 の別イオン: isotope_M+2」が初期選択、候補の行にマウスを載せるとミラーが替わる、「送信用テキストをコピー」の文に `review_id":"cs-` と `candidate` だけが入り名前が入っていない、携帯幅（`resize_window` の mobile）で横スクロールが出ない。終わったら `check.py` を空にする。
+`check.py` で `write_suggest_set` を tmp に書き、`run_suggestion` → `save_suggestion` した HTML のパスを出力し、Browser pane（`mcp__Claude_Browser__navigate` に `file:///` のパス）で開く。確かめること: spot 1 のカードが緑枠で「#0 の別イオン: isotope_M+2」が初期選択、その EIC に spot 0 のトレースが参照色の点線で重なっている、候補の行にマウスを載せるとミラーが替わる、「送信用テキストをコピー」の文に `review_id":"cs-` と `candidate` だけが入り名前が入っていない、携帯幅（`resize_window` の mobile）で横スクロールが出ない。終わったら `check.py` を空にする。
 
 - [ ] **Step 7: コミット**
 
@@ -3035,7 +3119,7 @@ git commit -m "feat(curation): assign を同定の置き換え、redundant を�
 
 - `USAGE.md`: 差次的エクスポート 2 行（`arf_export_differential` / `dataset_export_differential`）の `apply_curation` の説明に「assign は同定を置き換え（`name_source` / `inchikey_source` = `curation`）、redundant は除外する」を足す。`arf2_annotate_identities` の行の `curation_flag` の説明を「有効な判断（`wrong` / `suspect` / `assign:<記録名>` / `redundant`、無ければ空）」にする。
 - `docs/output_format/curation.md`: 「### `curation_suggest` の戻り値」「### 候補付けの payload（HTML ビューア専用）」「### 候補の理由コード」（`polarity_mismatch` `dmz_out` がハード、`adduct_atypical` `trend_outlier` `no_matched_peaks` `msms_absent` `no_support` がソフト、`trend_unknown` `reference_unresolved` が情報）、「### イオン関係（`relation`）」（関係コードの一覧と、強い説明の定義、同位体の強度比の規則）、「### 判断の記録（assign / redundant）」の節を足し、メタ行の書式行を
-  `# curation = <state>\tcuration_flags = N[\tcuration_wrong_excluded = N\tcuration_suspect = N[\tcuration_assigned = N\tcuration_redundant_excluded = N]]\tcuration_flags_sha256 = <hex>` に直す。必須注意事項に「候補の並び順はスペクトル類似度と制約だけで決まり、MS-DIAL の脂質規則（診断イオン・鎖決定）は評価していない」「④ の行を選んでもビューアは相手 Y の EIC を重ねない（この版の縮小。Task 7 Step 4）」を足す。
+  `# curation = <state>\tcuration_flags = N[\tcuration_wrong_excluded = N\tcuration_suspect = N[\tcuration_assigned = N\tcuration_redundant_excluded = N]]\tcuration_flags_sha256 = <hex>` に直す。必須注意事項に「候補の並び順はスペクトル類似度と制約だけで決まり、MS-DIAL の脂質規則（診断イオン・鎖決定）は評価していない」「④ の行の EIC の重ね描きで、相手 Y の代表試料のトレースは X の代表試料の最大値に合わせて縮めて描く（形の比較用。強度の比は `isotope_ratio` を見る）」を足す。
 
 - [ ] **Step 2: 通ることを確かめる**
 
@@ -3173,7 +3257,7 @@ worktree の `.mcp.json` のサーバで（または `check.py` から同じ関�
 
 - [ ] **Step 4: 報告と記録**
 
-`docs/task.md` に DONE / TODO を追記する。ユーザーへの報告には次を含める: ② の top1 / top3（分子種・和組成）、④ の再現率、kidney neg / pos の対象数と強い説明の件数、JSON の大きさ、spec からの縮小（④ で Y の EIC を重ねない）、未検証のもの（MCP Apps 表示、実際の採用率はユーザーの判断待ち）。
+`docs/task.md` に DONE / TODO を追記する。ユーザーへの報告には次を含める: ② の top1 / top3（分子種・和組成）、④ の再現率、kidney neg / pos の対象数と強い説明の件数、JSON の大きさ、未検証のもの（MCP Apps 表示、実際の採用率はユーザーの判断待ち）。
 スクリプトのコミット:
 
 ```bash
@@ -3187,5 +3271,5 @@ git commit -m "chore(curation): 候補付けの質を実データで測る検証
 
 - spec §4 対象: Task 6 `select_targets`（flagged / likely_wrong / unannotated、include_decided）。§5 ①②と制約: Task 4。§5.4 和組成: Task 4 `sum_composition`、Task 6 `expand_entries`。§6 ④: Task 5（関係表・同位体比・相関・リンク）、Task 1（リンクの復号）、Task 2（アダクト・param）。§7 ツールとビューア: Task 7・8。§8 記録と下流: Task 3・9。§8.3 `_tags.xml` 不変: Task 8（`sync_misannotation` は wrong / clear だけを見る現行のまま。`test_suggest_then_submit_assign_and_redundant` が `tags_xml.added == []` と `removed == []` を確かめる）。§10 事実: Task 1 Step 1〜3。§11: Task 10・11。
 - 腐敗防止テスト（ツール数・USAGE・workflow）が縛る文書は、ツールを足す Task 8 の中で直す（pre-commit の全テストを `--no-verify` なしで通すため）。値の意味の文書（output_format）と vault は Task 10。
-- spec からの縮小は 1 点（④ で Y の EIC を重ねない）。Task 7 Step 4 と Task 10 の文書、Task 11 の報告に明記する。
+- spec §7.2 の Y の EIC 重ね描き: Task 6（`relations[].partner_eic`、関係の上位 3 件だけ）と Task 7（`overlayFor`、`drawEic` の partner 描き分け）。ユーザー決定 2026-09-29 で縮小せず実装する。
 - 型の一貫性: 候補 ID は library が `L<n>`、ion が `R<n>`。`preset` は ion の ID。`expand_entries` は assign に library の ID、redundant に ion の ID だけを受ける。`flags_for_arf2` の `redundant` は set、`assign` は dict。
