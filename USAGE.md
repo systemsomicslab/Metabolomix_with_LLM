@@ -1,4 +1,4 @@
-# USAGE — ms-data-parser MCP ツール一覧(全71ツール)
+# USAGE — ms-data-parser MCP ツール一覧(全72ツール)
 
 MS-DIAL 出力(`.arf` / `.arf2` / `.pai2` / `.dcl` / `.EIC.aef`)と mzTab-M を解析し、PCA・差次的解析・
 アノテーション検証・文献探索・レポート記録までを行う MCP サーバーのツール群です。
@@ -222,8 +222,9 @@ QC/blank の扱いはツールごとに異なる。`arf_parser` の `class_ids` 
 | ツール | 機能 |
 |--------|------|
 | `curation_review` | 対象(既定は注釈付き全部。`ontology` でクラス、`name_contains` で名前の部分一致)を選び、証拠収集・機械判別・HTML ビューア生成を 1 回で行う。戻り値は suspect 以上とフラグ済みのスポットだけの TSV(判定の重い順の先頭 `max_rows` 行、既定 100。総数 `n_table_rows_total`・表示数 `n_table_rows_shown`。全件は HTML ビューア)・判定の件数・クラス別の傾向要約(点数・R²・外れ数)・`html_path`。EIC 系列とスペクトルは返さない。`file_ids` に `.arf` の行に無い試料 ID があればエラー。判定は `likely_wrong`(polarity_mismatch / precursor_unmatched / dmz_out ＝\|Δm/z\| ≥ 10 mDa / class_rule_rejected ＝MS-DIAL の脂質クラス規則による棄却。脂質規則が走ったデータに限る)/ `suspect`(ppm_out / low_score / drt_out / eic_poor、または弱い兆候の重なり)/ `ok`。RT–m/z 傾向は補強にしか使わない。`thresholds` で既定値を上書きできる。1 回の上限は 3000 スポット。 |
-| `curation_submit` | フラグを追記する。ビューアの送信用テキストを `submission_text` にそのまま渡すか、`review_id` + `flags=[{spot_id, flag: wrong\|suspect\|clear, note}]`。不正な要素が 1 つでもあれば何も書かない。`source` は `user`(ユーザー自身の判断)/ `llm`(LLM の提案にユーザーが同意したもの)。送信用テキストは `.arf2` の絶対パスを運ぶので、サーバ再起動やデータフォルダの切り替えの後でもそのまま貼れば送れる。記録の後、アラインメントの `_tags.xml` の Misannotation に反映する(wrong → 付ける、clear → 外す、suspect → 触らない。控えは `curation/tags-backup/`。結果は `tags_xml`。MS-DIAL でプロジェクトを開いたままだと GUI の保存で上書きされる)。直接渡すときは `file_path`(レビューを作った `.arf2`)でも探し先を指定できる。 |
-| `curation_flags` | 現在のアラインメントで有効なフラグを TSV で返す。 |
+| `curation_suggest` | キュレーションで間違いになったスポット(既定は wrong フラグ＋元レビューの likely_wrong、`wrong="flagged"` でフラグだけ)と未注釈スポット(`unannotated`)に注釈の候補を並べる。**先に `library_load` と `curation_review`**(元レビューは `review_id`、省略時は最新)。候補は MS-DIAL の下位候補・閾値を緩めた再検索・別スポットの同位体／アダクト／インソース断片としての説明。スペクトル類似度で並べ、極性矛盾と \|Δm/z\| ≥ 10 mDa は削る。脂質規則は評価しないので既定は和組成で記録。戻り値は 1 スポット 1 行の TSV・件数・`html_path`。ビューアで選んで送信用テキストを貼る → `curation_submit`。 |
+| `curation_submit` | フラグを追記する。ビューアの送信用テキストを `submission_text` にそのまま渡すか、`review_id` + `flags=[{spot_id, flag: wrong\|suspect\|clear, note}]`。不正な要素が 1 つでもあれば何も書かない。`source` は `user`(ユーザー自身の判断)/ `llm`(LLM の提案にユーザーが同意したもの)。送信用テキストは `.arf2` の絶対パスを運ぶので、サーバ再起動やデータフォルダの切り替えの後でもそのまま貼れば送れる。記録の後、アラインメントの `_tags.xml` の Misannotation に反映する(wrong → 付ける、clear → 外す、suspect → 触らない。控えは `curation/tags-backup/`。結果は `tags_xml`。MS-DIAL でプロジェクトを開いたままだと GUI の保存で上書きされる)。直接渡すときは `file_path`(レビューを作った `.arf2`)でも探し先を指定できる。候補付け(`cs-…`)の送信は `flags=[{spot_id, flag: assign\|redundant\|clear, candidate, level, note}]`。中身は保存済みの候補から展開する。assign / redundant は `_tags.xml` を変えない。 |
+| `curation_flags` | 現在のアラインメントで有効な判断を TSV で返す(列は spot_id・flag・name(assign の記録名)・of(redundant の相手)・note・source・ts)。 |
 | `curation_view_data` | ビューア(MCP Apps)専用。LLM は呼ばない。 |
 
 フラグは `<アラインメントのフォルダ>\curation\flags.jsonl` に、`.arf2` の sha256 と

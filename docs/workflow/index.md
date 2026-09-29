@@ -47,9 +47,9 @@
 | [pipeline.md](pipeline.md) | 生データフォルダ起点の統括(pipeline) — 上流検証・前処理・PCA・比較・レポートまでの自動進行 | 5 |
 | [metabolomics.md](metabolomics.md) | LC–MS メタボロミクス v2 — 名指しした解析行列への統計 | 2 |
 | [library.md](library.md) | 参照ライブラリ（`.dbs`/`.msp`）— MS/MS スペクトル照合と対向プロット | 3 |
-| [curation.md](curation.md) | アラインメントのキュレーション — 注釈の一覧確認・機械判別・フラグ記録 | 4 |
+| [curation.md](curation.md) | アラインメントのキュレーション — 注釈の一覧確認・機械判別・フラグ記録・候補付け | 5 |
 
-合計 50 ツール。対象外は 21 ツール——文献探索・レポート記録系 12
+合計 51 ツール。対象外は 21 ツール——文献探索・レポート記録系 12
 （`record_objective` `knowledge_coverage` `paper_search` `ingest_*` `write_report` など）＋
 Console 実行層 8（`console_plan` `console_prepare_input` `console_method_template`
 `console_method_candidates` `console_run` `console_status` `console_cleanup` `job_list`）＋
