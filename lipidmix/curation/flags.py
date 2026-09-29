@@ -1,6 +1,6 @@
 """キュレーションのフラグ記録（追記専用 JSON Lines）と送信用テキスト。spec §6。
 
-記録するのはユーザーが付けたフラグだけ（wrong / suspect、取り消しは clear）。
+記録するのはユーザーの判断: レビューの wrong / suspect、候補付けの assign / redundant、取り消しの clear。
 無印のスポットは「間違っていない」で何も書かない。キーはアラインメントファイルの
 sha256 と MasterAlignmentID の組で、MS-DIAL を再実行して `.arf2` が作り直されたら
 古いフラグは当たらない（新しい ID に黙って当てない）。
@@ -13,7 +13,9 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-FLAG_VALUES = ("wrong", "suspect", "clear")
+FLAG_VALUES = ("wrong", "suspect", "clear", "assign", "redundant")
+REVIEW_FLAG_VALUES = ("wrong", "suspect", "clear")
+SUGGEST_FLAG_VALUES = ("assign", "redundant", "clear")
 SUBMISSION_PREFIX = "CURATION_SUBMIT "
 FLAGS_FILENAME = "flags.jsonl"
 
@@ -43,8 +45,8 @@ def validate_entries(entries, *, allowed_spot_ids: set[int] | None) -> list[dict
         if allowed_spot_ids is not None and spot_id not in allowed_spot_ids:
             raise ValueError(f"flags[{index}].spot_id={spot_id} はこのレビューの対象外です。")
         flag = entry.get("flag")
-        if flag not in FLAG_VALUES:
-            raise ValueError(f"flags[{index}].flag={flag!r} は {FLAG_VALUES} のいずれかにしてください。")
+        if flag not in REVIEW_FLAG_VALUES:
+            raise ValueError(f"flags[{index}].flag={flag!r} は {REVIEW_FLAG_VALUES} のいずれかにしてください。")
         note = str(entry.get("note") or "")
         for control in ("\r", "\n", "\t"):     # TSV の 1 セル・JSONL の 1 行に収める
             note = note.replace(control, " ")
@@ -134,9 +136,27 @@ def cleared_spots(rows: list[dict], alignment_sha256: str) -> set[int]:
     return {spot for spot, flag in latest.items() if flag == "clear"}
 
 
+def _digest_item(spot: int, row: dict) -> list:
+    flag = row["flag"]
+    if flag == "assign":
+        return [spot, flag, row.get("name"), row.get("level")]
+    if flag == "redundant":
+        return [spot, flag, row.get("of"), row.get("relation")]
+    return [spot, flag]
+
+
 def flags_digest(effective: dict[int, dict]) -> str:
-    canonical = json.dumps(sorted((spot, row["flag"]) for spot, row in effective.items()))
+    # wrong / suspect は以前と同じ [spot, flag]（既存の curation_flags_sha256 を変えない）
+    canonical = json.dumps(sorted((_digest_item(spot, row) for spot, row in effective.items()),
+                                  key=lambda item: item[0]))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def split_decisions(effective: dict[int, dict]) -> dict:
+    return {"wrong": {s for s, r in effective.items() if r["flag"] == "wrong"},
+            "suspect": {s for s, r in effective.items() if r["flag"] == "suspect"},
+            "assign": {s: r for s, r in effective.items() if r["flag"] == "assign"},
+            "redundant": {s: r for s, r in effective.items() if r["flag"] == "redundant"}}
 
 
 def orphaned_count(rows: list[dict], alignment: dict) -> int:

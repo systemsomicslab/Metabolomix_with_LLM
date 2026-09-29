@@ -126,3 +126,48 @@ def test_cleared_spots_are_those_whose_latest_row_is_clear(tmp_path):
     other = {"alignment_file": "AlignmentResult_x.arf2", "alignment_sha256": "bb" * 32}
     store.append([{"spot_id": 3, "flag": "clear"}], alignment=other, review_id="cr-3", source="user")
     assert flags.cleared_spots(store.rows(), ALIGN["alignment_sha256"]) == {1}
+
+
+from lipidmix.curation.flags import (
+    FlagStore, effective_flags, flags_digest, split_decisions, validate_entries)
+
+_ALIGN = {"alignment_file": "a.arf2", "alignment_sha256": "s1"}
+
+
+def test_assign_after_wrong_wins_and_clear_removes_it(tmp_path):
+    store = FlagStore(tmp_path)
+    store.append([{"spot_id": 4, "flag": "wrong", "note": ""}], alignment=_ALIGN, review_id="cr-1", source="user")
+    store.append([{"spot_id": 4, "flag": "assign", "name": "PC 34:1", "level": "sum", "note": ""}],
+                 alignment=_ALIGN, review_id="cs-1", source="user")
+    effective = store.effective("s1")
+    assert effective[4]["flag"] == "assign"
+    assert split_decisions(effective)["assign"][4]["name"] == "PC 34:1"
+    assert split_decisions(effective)["wrong"] == set()
+    store.append([{"spot_id": 4, "flag": "clear", "note": ""}], alignment=_ALIGN, review_id="cs-1", source="user")
+    assert store.effective("s1") == {}
+
+
+def test_rows_accept_the_new_flag_values(tmp_path):
+    store = FlagStore(tmp_path)
+    store.append([{"spot_id": 1, "flag": "redundant", "of": 0, "relation": "isotope_M+2", "note": ""}],
+                 alignment=_ALIGN, review_id="cs-1", source="user")
+    assert store.rows()[0]["flag"] == "redundant"
+
+
+def test_digest_for_wrong_and_suspect_is_unchanged():
+    # 既存ユーザーの curation_flags_sha256 を変えない（メタ行が現行と同じであること）
+    import hashlib, json
+    effective = {1: {"flag": "wrong"}, 2: {"flag": "suspect"}}
+    legacy = hashlib.sha256(json.dumps(sorted([(1, "wrong"), (2, "suspect")])).encode()).hexdigest()
+    assert flags_digest(effective) == legacy
+
+
+def test_digest_changes_when_the_assigned_name_changes():
+    a = {1: {"flag": "assign", "name": "PC 34:1", "level": "sum"}}
+    b = {1: {"flag": "assign", "name": "PC 34:2", "level": "sum"}}
+    assert flags_digest(a) != flags_digest(b)
+
+
+def test_review_submissions_still_reject_assign():
+    with pytest.raises(ValueError, match="flag"):
+        validate_entries([{"spot_id": 1, "flag": "assign"}], allowed_spot_ids={1})

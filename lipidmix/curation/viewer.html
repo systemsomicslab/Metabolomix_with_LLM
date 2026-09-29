@@ -224,6 +224,8 @@ function spotCard(spot) {
     `Δppm ${spot.ppm ?? "–"} / ΔRT ${spot.drt ?? "–"} / wdot ${w} / EIC ${spot.eic_shape.good_fraction ?? "–"}`));
   if (spot.reasons.length || spot.info.length)
     card.appendChild(el("div", {class: "meta"}, [...spot.reasons, ...spot.info.map(r => "(" + r + ")")].join(", ")));
+  if (spot.decision) card.appendChild(el("div", {class: "meta"}, spot.decision.flag === "assign"
+    ? `記録済み: 候補を採用（${spot.decision.name}）` : `記録済み: #${spot.decision.of} の別イオン`));
   const eic = canvasFor(card), mirror = canvasFor(card);
   for (const prepare of [eic, mirror]) prepare.canvas.addEventListener("click", () => openZoom(spot));
   const flagsRow = el("div", {class: "flags"});

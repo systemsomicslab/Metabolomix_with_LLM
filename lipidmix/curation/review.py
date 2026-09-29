@@ -60,8 +60,13 @@ def run_review(arf2_path, spots, *, store, ms2_tol, th, file_ids, max_traces, se
     for ev in evs:
         ev.update(judge_spot(ev, trends["spots"].get(ev["spot_id"]), th, lipid_rules=lipid_rules))
         ev["trend"] = trends["spots"].get(ev["spot_id"])
-        ev["flag"] = (existing.get(ev["spot_id"]) or {}).get("flag")
-        ev["flag_note"] = (existing.get(ev["spot_id"]) or {}).get("note")
+        row = existing.get(ev["spot_id"]) or {}
+        is_flag = row.get("flag") in ("wrong", "suspect")
+        ev["flag"] = row.get("flag") if is_flag else None
+        ev["flag_note"] = row.get("note") if is_flag else None
+        ev["decision"] = ({"flag": "assign", "name": row.get("name")} if row.get("flag") == "assign"
+                          else {"flag": "redundant", "of": row.get("of")} if row.get("flag") == "redundant"
+                          else None)
         ev["flag_cleared"] = ev["spot_id"] in cleared
         ev["auto_note"] = auto_note(ev, th)
         counts[ev["verdict"]] += 1
