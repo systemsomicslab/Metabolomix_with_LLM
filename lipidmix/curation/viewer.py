@@ -15,19 +15,29 @@ from pathlib import Path
 from lipidmix.curation.flags import SUBMISSION_PREFIX
 
 _TEMPLATE = Path(__file__).with_name("viewer.html")
+_SUGGEST_TEMPLATE = Path(__file__).with_name("suggest_viewer.html")
+_COMMON_JS = Path(__file__).with_name("viewer_common.js")
 _PLACEHOLDER = "/*__CURATION_DATA__*/null"
+_COMMON_PLACEHOLDER = "/*__VIEWER_COMMON__*/"
+
+
+def _embed(data) -> str:
+    if data is None:
+        return "null"
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+                      default=str).replace("<", "\\u003c")
+
+
+def _render(template_path: Path, data) -> str:
+    template = template_path.read_text(encoding="utf-8")
+    template = template.replace(_COMMON_PLACEHOLDER, _COMMON_JS.read_text(encoding="utf-8"), 1)
+    template = template.replace("__SUBMISSION_PREFIX__", SUBMISSION_PREFIX.strip())
+    return template.replace(_PLACEHOLDER, _embed(data), 1)
 
 
 def render_html(review: dict | None) -> str:
-    template = _TEMPLATE.read_text(encoding="utf-8")
-    template = template.replace("__SUBMISSION_PREFIX__", SUBMISSION_PREFIX.strip())
-    if review is None:
-        data = "null"
-    else:
-        data = json.dumps(review, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
-                          default=str).replace("<", "\\u003c")
-    return template.replace(_PLACEHOLDER, data, 1)
+    return _render(_TEMPLATE, review)
 
 
 def render_suggest_html(suggestion: dict | None) -> str:
-    return "<!doctype html><title>suggest</title>"   # Task 7 で本実装に置き換える
+    return _render(_SUGGEST_TEMPLATE, suggestion)
