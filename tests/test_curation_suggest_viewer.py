@@ -84,3 +84,22 @@ def test_embedded_data_is_escaped():
 def test_not_compared_sentinel_is_shown_as_a_dash(tmp_path):
     out = _run(tmp_path, "[scoreText(-1), scoreText(0.8567), scoreText(0), scoreText(null), scoreText(undefined), scoreText(NaN), countText(-1), countText(3), countText(0)]")
     assert out == ["–", "0.86", "0.00", "–", "–", "–", "–", "3", "0"]
+
+
+def test_candidate_label_tells_records_with_the_same_sum_name_apart(tmp_path):
+    same = json.dumps({"name": "PC 34:1", "sum_name": "PC 34:1", "adduct": "[M-H]-"})
+    assert _run(tmp_path, f"candidateLabel({same})") == "PC 34:1 [M-H]-"
+    species = json.dumps({"name": "PC 16:0_18:1", "sum_name": "PC 34:1", "adduct": "[M-H]-"})
+    assert _run(tmp_path, f"candidateLabel({species})") == "PC 34:1（PC 16:0_18:1） [M-H]-"
+    bare = json.dumps({"name": "X", "sum_name": None, "adduct": None})
+    assert _run(tmp_path, f"candidateLabel({bare})") == "X"
+
+
+def test_candidate_detail_shows_a_short_inchikey(tmp_path):
+    base = {"scores": {"total_score": 0.9, "weighted_dot_product": 0.8, "matched_peaks_count": 3},
+            "dmz_mda": 1.5, "soft": ["trend_outlier"], "info": []}
+    with_key = json.dumps({**base, "inchikey": "ABCDEFGHIJKLMN-OPQRSTUVWX-N"})
+    detail = _run(tmp_path, f"candidateDetail({with_key})")
+    assert "ABCDEFGHIJKLMN" in detail and "OPQRST" not in detail and detail.endswith("trend_outlier")
+    empty = json.dumps({**base, "inchikey": ""})
+    assert "mDa / – / trend_outlier" in _run(tmp_path, f"candidateDetail({empty})")

@@ -43,7 +43,8 @@ def constraint_reasons(identity: dict, *, rep_mz, ion_mode, measured, scores, tr
         soft.append("adduct_atypical")
     if not measured:
         soft.append("msms_absent")
-    elif (scores or {}).get("matched_peaks_count", 0) <= 0:
+    elif (scores or {}).get("weighted_dot_product", 0.0) >= 0 and (scores or {}).get("matched_peaks_count", 0) <= 0:
+        # 参照スペクトルが無く比較していない候補（スコアが -1 の印）には付けない（reference_unresolved の領分）
         soft.append("no_matched_peaks")
     if trend_entry is None:
         info.append("trend_unknown")

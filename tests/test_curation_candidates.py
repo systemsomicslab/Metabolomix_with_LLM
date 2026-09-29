@@ -100,6 +100,17 @@ def test_unresolved_msdial_candidate_is_kept_with_its_own_identity(store):
     assert "msms_absent" in pg["soft"] and pg["inchikey"] == "KEY-PG"
 
 
+def test_unresolved_candidate_on_a_spot_with_msms_was_never_compared(store):
+    match = {"name": "PG 34:1", "inchikey": "KEY-PG", "library_id": 999, "annotator_id": "lib_1",
+             "total_score": 2.0, "has_msms": True}
+    out = candidates.build_library_candidates(
+        _ev([[255.23, 999.0], [281.25, 800.0]]), msdial_matches=[match], representative=None, store=store,
+        scoring=SCORING, trends={"classes": {}}, th=TH, exclude_current=False, top_n=5)
+    pg = next(c for c in out["candidates"] if c["name"] == "PG 34:1")
+    assert "reference_unresolved" in pg["info"] and pg["scores"]["weighted_dot_product"] < 0
+    assert "no_matched_peaks" not in pg["soft"] and "msms_absent" not in pg["soft"]
+
+
 def test_no_research_without_msms(store):
     out = candidates.build_library_candidates(
         _ev([]), msdial_matches=[], representative=None, store=store,

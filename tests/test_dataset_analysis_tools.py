@@ -271,6 +271,44 @@ def test_dataset_export_applies_assign_and_redundant(tmp_path):
     assert (by_id["3"]["name"], by_id["3"]["name_source"], by_id["3"]["inchikey"]) ==         ("PE 36:2", "curation", "PEPEPEPEPEPEPE-XXXXXXXXXX-N")
 
 
+def test_dataset_export_drops_an_assign_without_inchikey(tmp_path):
+    """R10: 記録した InChIKey が空の assign は、同定なしの行として落ちる（ARF 経路と同じ）。"""
+    from lipidmix.curation import flags as curation_flags
+    from lipidmix.tools.dataset_analysis_tools import (
+        dataset_differential, dataset_export_differential, dataset_preprocess,
+    )
+
+    ds = _load_ds()
+    ds.feature_ids = [str(i) for i in range(20)]
+    ds.feature_metadata = {
+        str(i): {"name": f"Compound {i}", "mz": 100.0 + i, "rt": 1.0 + i * 0.1,
+                 "inchikey": f"AAAAAAAAAAAAAA-BBBBBBBBFB-{i % 10}",
+                 "inchikey_source": "database_identifier"}
+        for i in range(20)
+    }
+    mztab = tmp_path / "Height_AlignmentResult_2026_01_01_2026_01_01_09.mzTab"
+    mztab.write_text("", encoding="utf-8")
+    ds.source_files = {str(mztab): "sha"}
+    ds.feature_qc = {"source": "arf"}
+    arf2 = tmp_path / "AlignmentResult_2026_01_01.arf2"
+    arf2.write_bytes(b"x")
+    curation_flags.FlagStore(curation_flags.curation_dir(arf2)).append(
+        [{"spot_id": 3, "flag": "assign", "name": "PE 36:2", "level": "sum", "ontology": "PE",
+          "inchikey": ""}],
+        alignment=curation_flags.alignment_key(arf2), review_id="cs-x", source="user")
+
+    dataset_preprocess()
+    a, b = _groups(session_state.session.dataset)
+    dataset_differential(group_a=a, group_b=b)
+    out = tmp_path / "diff.tsv"
+    parsed = json.loads(dataset_export_differential(str(out)))
+    assert parsed["status"] == "success"
+    lines = out.read_text(encoding="utf-8").splitlines()
+    body = [l.split("	") for l in lines if l and not l.startswith("#")]
+    by_id = {r["spot_id"]: r for r in (dict(zip(body[0], r)) for r in body[1:])}
+    assert "3" not in by_id and "4" in by_id                 # 3 は落ち、他のスポットは影響を受けない
+
+
 def test_dataset_export_reports_a_malformed_flags_file(tmp_path):
     """I6: 壊れた flags.jsonl は wrong を黙って落とさず、ファイルと行を名指しで止める。"""
     from lipidmix.curation import flags as curation_flags

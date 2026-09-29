@@ -139,7 +139,8 @@ def cleared_spots(rows: list[dict], alignment_sha256: str) -> set[int]:
 def _digest_item(spot: int, row: dict) -> list:
     flag = row["flag"]
     if flag == "assign":
-        return [spot, flag, row.get("name"), row.get("level")]
+        # inchikey も含める: 同じ和組成・同じ粒度でも別レコードへ付け替えるとエクスポートの InChIKey が変わる
+        return [spot, flag, row.get("name"), row.get("level"), row.get("inchikey")]
     if flag == "redundant":
         return [spot, flag, row.get("of"), row.get("relation")]
     return [spot, flag]

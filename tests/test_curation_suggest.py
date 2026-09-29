@@ -215,3 +215,39 @@ def test_expand_entries_rejects_an_informational_relation_for_redundant(built):
     with pytest.raises(ValueError, match="candidate"):
         suggest.expand_entries([{"spot_id": 1, "flag": "redundant",
                                  "candidate": spot1["relations"][0]["candidate_id"]}], result)
+
+
+def test_saved_order_is_strong_first_then_kind_then_spot_id(built):
+    _, _, _, result = built
+    # spot 1（wrong・強い説明）と spot 3（未注釈・強い説明）が先、残りは spot_id 順（カタログ順ではなく summary_tsv と同じ）
+    assert [sp["spot_id"] for sp in result["spots"]] == [1, 3, 2, 4]
+    table = suggest.summary_tsv(result).splitlines()[1:]
+    assert [int(line.split("\t")[0]) for line in table] == [sp["spot_id"] for sp in result["spots"]]
+
+
+def test_trend_training_uses_the_assigned_name_and_ontology(tmp_path, monkeypatch):
+    paths, s, base = _setup(tmp_path, monkeypatch)
+    flags.FlagStore(flags.curation_dir(paths["arf2"])).append(
+        [{"spot_id": 0, "flag": "assign", "name": "PE 36:2", "level": "sum", "ontology": "PE",
+          "inchikey": "KEY-PE362"}],
+        alignment=base["alignment"], review_id="cs-x", source="user")
+    seen = {}
+    real = suggest.trend.fit_trends
+
+    def spy(points, th):
+        seen["points"] = points
+        return real(points, th)
+
+    monkeypatch.setattr(suggest.trend, "fit_trends", spy)
+    suggest.run_suggestion(paths["arf2"], base_review=base, store=s, th=TH, options=OPTIONS)
+    point = next(p for p in seen["points"] if p["spot_id"] == 0)
+    assert (point["ontology"], point["carbon"], point["db"]) == ("PE", 36, 2)     # カタログの PC 34:2 ではない
+    s.close()
+
+
+def test_latest_review_skips_an_unreadable_review_file(built):
+    paths, _, base, _ = built
+    directory = flags.curation_dir(paths["arf2"])
+    (directory / "review-cr-99999999-999999-ffff.json").write_text("{not json", encoding="utf-8")   # 最も新しい ID
+    found = suggest.latest_review(paths["arf2"], base["alignment"]["alignment_sha256"])
+    assert found["review_id"] == base["review_id"]

@@ -377,3 +377,12 @@ def test_submit_rejects_a_forged_candidate(suggest_env):
     assert out["status"] == "error"
     flags_path = suggest_env["arf2"].parent / "curation" / "flags.jsonl"
     assert not flags_path.exists() or '"assign"' not in flags_path.read_text(encoding="utf-8")
+
+
+def test_suggest_survives_a_corrupt_review_file(suggest_env):
+    arf2 = str(suggest_env["arf2"])
+    json.loads(curation_tools.curation_review(file_path=arf2))
+    (flags.curation_dir(suggest_env["arf2"]) / "review-cr-99999999-999999-ffff.json").write_text(
+        "{not json", encoding="utf-8")
+    out = json.loads(curation_tools.curation_suggest(file_path=arf2))
+    assert "suggestion_id" in out and "error" not in out

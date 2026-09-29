@@ -227,13 +227,14 @@ precursor の許容幅をすでに課している——許容幅の外の候補�
 | ハード | `dmz_out` | \|Δm/z\|（代表試料の m/z と参照 precursor m/z の差）が `dmz_fail_mda`（既定 10 mDa）**以上** |
 | ソフト | `adduct_atypical` | そのクラスに典型的でないアダクト |
 | ソフト | `trend_outlier` | 候補のクラス×和組成から予測した RT との残差の \|z\| が `trend_outlier_z`（既定 3.0）を超えた |
-| ソフト | `no_matched_peaks` | MS/MS はあるが一致ピークが 0（参照が引けず比べていない候補にも付く） |
+| ソフト | `no_matched_peaks` | MS/MS はあるが、比べた結果の一致ピークが 0（参照が引けず比べていない候補には付けない。それは `reference_unresolved`） |
 | ソフト | `msms_absent` | スポットに MS/MS が無い（①の候補にだけ付く。②は MS/MS が無いと働かない） |
 | ソフト | `no_support`（イオン関係） | ④の関係に裏付けが無い（次節） |
 | 情報 | `trend_unknown` | 候補のクラスの傾向が点数不足などで当てはまらない。**順位は下げない**（「傾向から外れた」ではなく「傾向を持たない」） |
 | 情報 | `reference_unresolved` | ①の候補の参照レコードがライブラリに無い（スペクトルの再採点ができず、`scores` は `-1`） |
 
-傾向モデルは、そのアラインメントの注釈付きスポットのうち、対象でも `wrong` フラグ付きでもないものから、クラスごとに
+傾向モデルは、そのアラインメントの注釈付きスポットのうち、対象・`wrong` フラグ付き・判断済みの `redundant` のスポットを除いたものから、
+（`assign` を決めたスポットは記録した名前・クラスで）クラスごとに
 `RT = a + b·炭素数 + c·二重結合数`（Huber）で当てはめる。元レビューの範囲には縛られない。
 
 ### イオン関係（`relation`）
@@ -351,7 +352,7 @@ MS-DIAL はアラインメントを保存するたびにメモリ上のタグで
 | `curation_suspect = N` | 同上。除外せず残した行のうち `suspect` フラグが付いているものの数（値そのものは変えていない） |
 | `curation_assigned = N` | **`applied` かつ有効な `assign` / `redundant` があるときだけ**出る。`assign` で同定を置き換えて**出力に残った**行数 |
 | `curation_redundant_excluded = N` | 同上。`redundant` で実際に出力の行から除外したスポット数 |
-| `curation_flags_sha256 = <hex>` | 判断集合のダイジェスト（`flags_for_arf2()["digest"]`）。再エクスポートを跨いで判断の内容が変わっていないかを機械的に照合できる。`assign` は記録名と `level`、`redundant` は相手と関係コードまで含む（`wrong` / `suspect` だけの集合のダイジェストは従来と同じ） |
+| `curation_flags_sha256 = <hex>` | 判断集合のダイジェスト（`flags_for_arf2()["digest"]`）。再エクスポートを跨いで判断の内容が変わっていないかを機械的に照合できる。`assign` は記録名・`level`・`inchikey`（同じ和組成でも別レコードへの付け替えを検出する）、`redundant` は相手と関係コードまで含む（`wrong` / `suspect` だけの集合のダイジェストは従来と同じ） |
 
 `state` は経路とその引数で決まる:
 

@@ -168,6 +168,12 @@ def test_digest_changes_when_the_assigned_name_changes():
     assert flags_digest(a) != flags_digest(b)
 
 
+def test_digest_changes_when_only_the_assigned_record_changes():
+    a = {1: {"flag": "assign", "name": "PC 34:1", "level": "sum", "inchikey": "KEY-A"}}
+    b = {1: {"flag": "assign", "name": "PC 34:1", "level": "sum", "inchikey": "KEY-B"}}
+    assert flags_digest(a) != flags_digest(b)
+
+
 def test_review_submissions_still_reject_assign():
     with pytest.raises(ValueError, match="flag"):
         validate_entries([{"spot_id": 1, "flag": "assign"}], allowed_spot_ids={1})

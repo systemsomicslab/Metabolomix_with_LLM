@@ -123,16 +123,25 @@ function mirrorFor(spot, candidate) {
 // 照合していない候補のスコアは -1 で保存されている（比較していない、の印）。数値として見せない。
 function scoreText(v) { return typeof v === "number" && isFinite(v) && v >= 0 ? v.toFixed(2) : "–"; }
 function countText(v) { return typeof v === "number" && isFinite(v) && v >= 0 ? String(v) : "–"; }
+// 同じ和組成でもライブラリの別レコードは別の候補なので、分子種名が和組成と違うときは併記する。
+function candidateLabel(c) {
+  const base = c.sum_name || c.name || "";
+  const species = c.name && c.sum_name && c.name !== c.sum_name ? `（${c.name}）` : "";
+  return `${base}${species} ${c.adduct || ""}`.trim();
+}
+// 詳細行。InChIKey の先頭 14 文字（骨格部分）でレコードを見分ける。
+function candidateDetail(c) {
+  const extra = [...(c.soft || []), ...(c.info || [])];
+  return `score ${scoreText(c.scores.total_score)} / wdot ${scoreText(c.scores.weighted_dot_product)} / ` +
+    `一致 ${countText(c.scores.matched_peaks_count)} / Δm/z ${c.dmz_mda ?? "–"} mDa / ${(c.inchikey || "").slice(0, 14) || "–"}` +
+    (c.trend ? ` / 傾向 z ${c.trend.z}` : "") + (extra.length ? ` / ${extra.join(",")}` : "");
+}
 // --- end suggest ---
 
 // 選択中の ④（相手 Y との関係）。無ければ null。
 function chosenRelation(spot) {
   const id = (choices.get(spot.spot_id) || {}).candidate;
   return spot.relations.find(r => r.candidate_id === id) || null;
-}
-
-function candidateLabel(c) {
-  return `${c.sum_name || c.name} ${c.adduct || ""}`;
 }
 
 function spotCard(spot) {
@@ -189,9 +198,7 @@ function spotCard(spot) {
   }
   for (const c of spot.candidates) {
     const src = el("span", {class: "src"}, c.source);
-    const detail = `score ${scoreText(c.scores.total_score)} / wdot ${scoreText(c.scores.weighted_dot_product)} / ` +
-      `一致 ${countText(c.scores.matched_peaks_count)} / Δm/z ${c.dmz_mda ?? "–"} mDa` +
-      (c.trend ? ` / 傾向 z ${c.trend.z}` : "") + ([...c.soft, ...c.info].length ? ` / ${[...c.soft, ...c.info].join(",")}` : "");
+    const detail = candidateDetail(c);
     const row = addRow(c.candidate_id, candidateLabel(c), detail, () => {
       setChoice({candidate: c.candidate_id, flag: "assign", level: species.checked ? "species" : "sum"}); restore();
     });

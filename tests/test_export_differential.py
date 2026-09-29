@@ -331,6 +331,30 @@ class TestExportDifferential(unittest.TestCase):
         self.assertEqual(payload["curation"]["assigned"], 1)
         self.assertEqual(payload["curation"]["redundant_excluded"], 1)
 
+    def test_assign_without_inchikey_drops_the_row(self):
+        """R10: 記録した InChIKey が空の assign は、同定なしの行としてエクスポートから落ちる。"""
+        payload, text, _ = self._export_with_flags(
+            [{"spot_id": 1, "flag": "assign", "name": "PE 36:2", "level": "sum", "ontology": "PE",
+              "inchikey": ""}])
+        self.assertEqual(payload["status"], "success")
+        body = [l for l in text.splitlines() if not l.startswith("#")]
+        header = body[0].split("	")
+        rows = [dict(zip(header, l.split("	"))) for l in body[1:]]
+        self.assertEqual([r["spot_id"] for r in rows], ["2"])            # spot 2 は影響を受けない
+        self.assertEqual(rows[0]["inchikey"], "DDDDDDDDDDDDDD-EEEEEEEEEE-F")
+
+    def test_apply_curation_false_keeps_the_original_identity_of_an_assign(self):
+        payload, text, _ = self._export_with_flags(
+            [{"spot_id": 1, "flag": "assign", "name": "PE 36:2", "level": "sum", "ontology": "PE",
+              "inchikey": "PEPEPEPEPEPEPE-XXXXXXXXXX-N"}], apply_curation=False)
+        self.assertEqual(payload["curation"]["state"], "not_applied")
+        body = [l for l in text.splitlines() if not l.startswith("#")]
+        header = body[0].split("	")
+        rows = {r["spot_id"]: r for r in (dict(zip(header, l.split("	"))) for l in body[1:])}
+        self.assertEqual((rows["1"]["name"], rows["1"]["name_source"], rows["1"]["inchikey"]),
+                         ("PC 34:1", "arf2", "AAAAAAAAAAAAAA-BBBBBBBBBB-C"))
+        self.assertEqual(len(rows), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

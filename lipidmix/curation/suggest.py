@@ -49,14 +49,13 @@ def latest_review(arf2_path, alignment_sha256: str) -> dict | None:
         review_id = path.stem[len("review-"):]
         if not review.is_valid_review_id(review_id):
             continue
-        saved = json.loads(path.read_text(encoding="utf-8"))
-        if saved.get("alignment", {}).get("alignment_sha256") == alignment_sha256:
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue    # 壊れた・読めないレビュー 1 件で候補付け全体を止めない
+        if isinstance(saved, dict) and (saved.get("alignment") or {}).get("alignment_sha256") == alignment_sha256:
             return saved
     return None
-
-
-def _is_unknown_name(name) -> bool:
-    return (name or "").strip().lower() in ("", "unknown")
 
 
 def select_targets(catalog, annotations, base_review, effective, *, wrong, unannotated, include_decided):
@@ -87,12 +86,13 @@ def _heights(rows: list[dict]) -> list:
 
 
 def _partner(spot: dict, annotation: dict, rows, assigned: dict | None = None) -> dict:
-    """`assigned` は有効な assign 行。あればその name / formula / adduct（空なら catalog の値）を使う
+    """`assigned` は有効な assign 行。あればその name / ontology / formula / adduct（空なら catalog の値）を使う
     （置き換えられた MS-DIAL の名前や組成式で同位体の期待比などを計算しない）。"""
     rep = annotation.get("representative") or {}
     row = assigned or {}
     return {"spot_id": spot["MasterAlignmentID"],
             "name": row.get("name") or spot.get("Name") or rep.get("name"),
+            "ontology": row.get("ontology") or spot.get("Ontology") or "",
             "mz": spot.get("MassCenter"), "rt": spot.get("RT"),
             "adduct": row.get("adduct") or spot.get("AdductType"),
             "formula": row.get("formula") or spot.get("Formula"), "heights": _heights(rows)}
@@ -116,7 +116,7 @@ def _partner_trace(eic_path, spot_id: int, annotations: dict) -> dict | None:
             "right": round(right, 4), "points": evidence._downsample_points(points, left, right)}
 
 
-def _scoring(store, rt_tol_default=None) -> dict:
+def _scoring(store) -> dict:
     sp = store.summary().get("search_params") or {}
     return {"mz_tol": pick_tol(None, sp, "ms1_tolerance", 0.01),
             "ms2_tol": pick_tol(None, sp, "ms2_tolerance", 0.025),
@@ -173,7 +173,7 @@ def run_suggestion(arf2_path, *, base_review, store, th, options) -> dict:
         partners.append(partner)
         comp = trend.composition(partner["name"])
         if comp is not None and spot.get("RT") is not None:
-            points.append({"spot_id": spot_id, "ontology": spot.get("Ontology") or "", "rt": spot["RT"],
+            points.append({"spot_id": spot_id, "ontology": partner["ontology"], "rt": spot["RT"],
                            "mz": spot.get("MassCenter"), "carbon": comp[0], "db": comp[1]})
     trends = trend.fit_trends(points, th)
 
@@ -209,6 +209,7 @@ def run_suggestion(arf2_path, *, base_review, store, th, options) -> dict:
             "relations": ion, "strong": strong is not None,
             "preset": strong["candidate_id"] if strong else None})
 
+    spots_out.sort(key=_spot_order)      # ビューアのカードも summary_tsv と同じ並びにする
     counts = {"targets": {k: sum(1 for s in spots_out if s["target_kind"] == k)
                           for k in ("flagged", "likely_wrong", "unannotated")},
               "with_candidates": sum(1 for s in spots_out if s["candidates"] or
@@ -246,9 +247,16 @@ def load_suggestion(arf2_path_or_dir, suggestion_id: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+_KIND_ORDER = {"flagged": 0, "likely_wrong": 1, "unannotated": 2}
+
+
+def _spot_order(sp: dict) -> tuple:
+    """強い説明が先、次に wrong フラグ → likely_wrong → 未注釈、最後に spot_id。"""
+    return (not sp["strong"], _KIND_ORDER[sp["target_kind"]], sp["spot_id"])
+
+
 def summary_tsv(s: dict, max_rows: int | None = None) -> str:
-    order = {"flagged": 0, "likely_wrong": 1, "unannotated": 2}
-    spots = sorted(s["spots"], key=lambda sp: (not sp["strong"], order[sp["target_kind"]], sp["spot_id"]))
+    spots = sorted(s["spots"], key=_spot_order)
     if max_rows is not None:
         spots = spots[:max(0, max_rows)]
     lines = ["\t".join(TSV_COLUMNS)]
