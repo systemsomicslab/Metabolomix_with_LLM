@@ -351,7 +351,7 @@ def test_suggest_then_submit_assign_and_redundant(suggest_env):
     out = json.loads(curation_tools.curation_suggest(file_path=arf2))
     sid = out["suggestion_id"]
     assert out["counts"]["targets"]["unannotated"] == 3
-    assert out["table"].splitlines()[0].split("	") == suggest.TSV_COLUMNS
+    assert out["table"].splitlines()[0].split("\t") == suggest.TSV_COLUMNS
     assert out["html_path"].endswith(f"suggest-{sid}.html")
     assert "spots" not in out                                     # 座標・EIC は戻り値に入れない
     assert "path" in out["library"]                               # ライブラリの出所（sha256 だけでは分からない）
@@ -363,9 +363,9 @@ def test_suggest_then_submit_assign_and_redundant(suggest_env):
     assert submitted["n_assign"] == 1 and submitted["n_redundant"] == 1
     assert submitted["tags_xml"]["added"] == [] and submitted["tags_xml"]["removed"] == []   # _tags.xml は不変
     table = json.loads(curation_tools.curation_flags(file_path=arf2))["table"].splitlines()
-    assert table[0] == "spot_id	flag	name	of	note	source	ts"
-    assert table[1].split("	")[:4] == ["2", "assign", "PE 36:2", ""]
-    assert table[2].split("	")[:4] == ["3", "redundant", "", "0"]
+    assert table[0] == "spot_id\tflag\tname\tof\tnote\tsource\tts"
+    assert table[1].split("\t")[:4] == ["2", "assign", "PE 36:2", ""]
+    assert table[2].split("\t")[:4] == ["3", "redundant", "", "0"]
 
 
 def test_submit_rejects_a_forged_candidate(suggest_env):

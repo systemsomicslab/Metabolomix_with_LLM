@@ -54,7 +54,7 @@
 Console 実行層 8（`console_plan` `console_prepare_input` `console_method_template`
 `console_method_candidates` `console_run` `console_status` `console_cleanup` `job_list`）＋
 サーバ自身の保守 1（`server_update`。解析の流れに現れず、配布先クローンの更新だけを行う）。
-登録ツール総数は 71（50 + 21）。
+登録ツール総数は 72（51 + 21）。
 
 ## 一気通貫の順序
 

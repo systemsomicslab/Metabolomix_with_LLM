@@ -1,5 +1,5 @@
-"""アラインメントのキュレーション: curation_review / curation_submit / curation_flags /
-curation_view_data と、MCP Apps 用の ui:// ビューア。spec 2026-09-28。
+"""アラインメントのキュレーション: curation_review / curation_suggest / curation_submit /
+curation_flags / curation_view_data と、MCP Apps 用の ui:// ビューア。spec 2026-09-28。
 
 deps: mcp_core / session_state / mcp_errors / serialization / path_resolvers / curation.*。
 lipidmix.tools.* の他モジュールと server は import しない。

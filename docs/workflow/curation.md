@@ -34,6 +34,7 @@ flowchart TD
     RS --> FR[curation.relations.find_relations]
     CG --> SS[curation.suggest.save_suggestion]
     SS --> SH[curation.viewer.render_suggest_html]
+    CS --> LS[curation.suggest.load_suggestion]
     CS --> EX[curation.suggest.expand_entries]
 ```
 
@@ -113,16 +114,19 @@ flowchart TD
 引数 `file_path` → 既定の `.arf2` の順（サーバ再起動の後でも貼った文で送れる）。
 
 1. lipidmix/curation/flags.py  parse_submission_text()（`submission_text` のとき）
-2. lipidmix/curation/review.py  is_valid_review_id()（形が違えばパスに使う前にエラー）
+2. lipidmix/curation/review.py  is_valid_review_id()（形が違えばパスに使う前にエラー。`cs-…` は lipidmix/curation/suggest.py  is_valid_suggestion_id() も許す）
 3. lipidmix/tools/curation_tools.py  _find_review()
-4. └─ lipidmix/curation/review.py  load_review()（候補フォルダを順に）
-5. lipidmix/curation/flags.py  validate_entries()（`cs-…` のときは lipidmix/curation/suggest.py  expand_entries()）
-6. lipidmix/curation/flags.py  alignment_key()（レビュー時の sha256 と一致しなければ拒否）
-7. lipidmix/curation/flags.py  FlagStore.rows()（読めない行があれば追記せずにエラー）
-8. lipidmix/curation/flags.py  FlagStore.append()
-9. lipidmix/curation/msdial_writeback.py  sync_misannotation()（失敗しても記録は残し `tags_xml.error`）
-10. └─ lipidmix/msdial/tags.py  update_alignment_tag()
-11.    └─ lipidmix/core/atomic_io.py  atomic_write_bytes()
+4. └─ lipidmix/tools/curation_tools.py  _load_any()（ID の接頭辞で読み分ける）
+5.    ├─ [cr-…] lipidmix/curation/review.py  load_review()（候補フォルダを順に）
+6.    └─ [cs-…] lipidmix/curation/suggest.py  load_suggestion()（候補フォルダを順に）
+7. ├─ [cr-…] lipidmix/curation/flags.py  validate_entries()
+8. └─ [cs-…] lipidmix/curation/suggest.py  expand_entries()（候補 ID を記録行へ展開。偽の候補 ID は書く前に拒否）
+9. lipidmix/curation/flags.py  alignment_key()（レビュー時の sha256 と一致しなければ拒否）
+10. lipidmix/curation/flags.py  FlagStore.rows()（読めない行があれば追記せずにエラー）
+11. lipidmix/curation/flags.py  FlagStore.append()
+12. lipidmix/curation/msdial_writeback.py  sync_misannotation()（失敗しても記録は残し `tags_xml.error`。assign / redundant は触らない）
+13. └─ lipidmix/msdial/tags.py  update_alignment_tag()
+14.    └─ lipidmix/core/atomic_io.py  atomic_write_bytes()
 
 ## curation_flags
 
