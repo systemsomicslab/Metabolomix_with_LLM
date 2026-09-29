@@ -283,3 +283,65 @@ def test_rule_flags_are_ignored_when_no_spot_shows_lipid_rules(tmp_path, monkeyp
     assert by_id[1]["verdict"] == "suspect"
     assert "class_rule_rejected" not in by_id[1]["reasons"]
     assert any("脂質規則" in w for w in result["warnings"])
+
+
+# --- ビューア: 自動判別 likely_wrong の赤破線枠と、クラス選択肢の下位項目（2026-09-29 ユーザー決定）---
+
+_CLASS_FILTER_BEGIN = "// --- class filter (pure) ---"
+_CLASS_FILTER_END = "// --- end class filter ---"
+
+
+def _run_class_filter(tmp_path, expression: str):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node が見つからないのでビューアの純関数を実行できない")
+    html = viewer.render_html(None)
+    source = html[html.index(_CLASS_FILTER_BEGIN):html.index(_CLASS_FILTER_END)]
+    spots = [{"spot_id": 0, "ontology": "PC", "verdict": "likely_wrong"},
+             {"spot_id": 1, "ontology": "PC", "verdict": "ok"},
+             {"spot_id": 2, "ontology": "PG", "verdict": "suspect"},
+             {"spot_id": 3, "ontology": "Cer_NS", "verdict": "likely_wrong"},
+             {"spot_id": 4, "ontology": "PC", "verdict": "likely_wrong"},
+             {"spot_id": 5, "ontology": "", "verdict": "likely_wrong"}]
+    script = tmp_path / "class_filter.js"
+    script.write_text(source + f"\nconst SPOTS = {json.dumps(spots)};\n"
+                      f"console.log(JSON.stringify({expression}));\n", encoding="utf-8")
+    result = subprocess.run([node, str(script)], capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_class_options_put_likely_wrong_subitems_under_each_class(tmp_path):
+    options = _run_class_filter(tmp_path, "classFilterOptions(SPOTS)")
+    labels = [o["label"] for o in options]
+    assert labels == ["すべて",
+                      "⚠ 自動判別: 間違い（全クラス 4）",
+                      "Cer_NS (1)", "└ Cer_NS › 自動判別: 間違い (1)",
+                      "PC (3)", "└ PC › 自動判別: 間違い (2)",
+                      "PG (1)"]
+    assert len({o["value"] for o in options}) == len(options)
+
+
+def test_class_options_omit_the_overall_item_when_nothing_is_likely_wrong(tmp_path):
+    options = _run_class_filter(
+        tmp_path, "classFilterOptions(SPOTS.map(s => ({...s, verdict: 'ok'})))")
+    assert [o["label"] for o in options] == ["すべて", "Cer_NS (1)", "PC (3)", "PG (1)"]
+
+
+def test_class_filter_values_select_the_right_spots(tmp_path):
+    picked = _run_class_filter(tmp_path, """Object.fromEntries(classFilterOptions(SPOTS).map(o =>
+        [o.label, SPOTS.filter(s => matchesClassFilter(s, o.value)).map(s => s.spot_id)]))""")
+    assert picked["すべて"] == [0, 1, 2, 3, 4, 5]
+    assert picked["⚠ 自動判別: 間違い（全クラス 4）"] == [0, 3, 4, 5]
+    assert picked["PC (3)"] == [0, 1, 4]
+    assert picked["└ PC › 自動判別: 間違い (2)"] == [0, 4]
+    assert picked["PG (1)"] == [2]
+
+
+def test_likely_wrong_cards_get_a_dashed_red_border_that_turns_solid_when_flagged_wrong():
+    html = viewer.render_html(None)
+    assert ".card.verdict-likely_wrong { border:2px dashed var(--wrong); }" in html
+    assert ".card.verdict-likely_wrong.flag-wrong { border-style:solid; }" in html
+    start = html.index("function spotCard")
+    card_source = html[start:html.index("function setFlag")]
+    assert '"verdict-" + spot.verdict' in card_source

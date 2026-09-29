@@ -27,6 +27,9 @@ main { padding:12px 16px 40px; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px; }
 .card.flag-wrong { outline:2px solid var(--wrong); }
 .card.flag-suspect { outline:2px solid var(--suspect); }
+/* 自動判別 likely_wrong は赤の破線（未確認）。人が「間違い」を付けると実線になる。 */
+.card.verdict-likely_wrong { border:2px dashed var(--wrong); }
+.card.verdict-likely_wrong.flag-wrong { border-style:solid; }
 .card h2 { font-size:14px; margin:0 0 4px; word-break:break-word; }
 .meta { color:var(--muted); font-size:12px; }
 .badge { display:inline-block; border-radius:4px; padding:0 6px; font-size:12px; color:#fff; }
@@ -162,7 +165,7 @@ function drawTrend(prepare, ontology, spots) {
 }
 
 function spotCard(spot) {
-  const card = el("article", {class: "card", id: "spot-" + spot.spot_id});
+  const card = el("article", {class: "card " + "verdict-" + spot.verdict, id: "spot-" + spot.spot_id});
   card.appendChild(el("h2", {}, spot.name));
   const badge = el("span", {class: "badge " + spot.verdict}, spot.verdict);
   const meta = el("div", {class: "meta"});
@@ -220,10 +223,44 @@ const scheduleChunk = typeof requestAnimationFrame === "function"
 const RENDER_CHUNK_SIZE = 100;
 let renderGeneration = 0;   // フィルタ変更などで新しい render() が割り込んだら古い方を打ち切る
 
+// --- class filter (pure) ---
+// クラスの選択肢。各クラスの下に「自動判別: 間違い」の下位項目（そのクラスに likely_wrong が
+// あるときだけ）、先頭に全クラス横断の項目（1 件以上あるときだけ）を置く。値は
+// "<クラス>" / "<クラス>	likely_wrong" / "	likely_wrong"（タブはクラス名に現れない）。
+const LIKELY_WRONG_SUFFIX = "	likely_wrong";
+
+function classFilterOptions(spots) {
+  const total = new Map(), wrong = new Map();
+  let wrongAll = 0;
+  for (const s of spots) {
+    const isWrong = s.verdict === "likely_wrong";
+    if (isWrong) wrongAll++;
+    if (!s.ontology) continue;
+    total.set(s.ontology, (total.get(s.ontology) || 0) + 1);
+    if (isWrong) wrong.set(s.ontology, (wrong.get(s.ontology) || 0) + 1);
+  }
+  const options = [{value: "", label: "すべて"}];
+  if (wrongAll) options.push({value: LIKELY_WRONG_SUFFIX, label: `⚠ 自動判別: 間違い（全クラス ${wrongAll}）`});
+  for (const c of [...total.keys()].sort()) {
+    options.push({value: c, label: `${c} (${total.get(c)})`});
+    if (wrong.get(c)) options.push({value: c + LIKELY_WRONG_SUFFIX, label: `└ ${c} › 自動判別: 間違い (${wrong.get(c)})`});
+  }
+  return options;
+}
+
+function matchesClassFilter(spot, value) {
+  if (!value) return true;
+  const wrongOnly = value.endsWith(LIKELY_WRONG_SUFFIX);
+  const cls = wrongOnly ? value.slice(0, -LIKELY_WRONG_SUFFIX.length) : value;
+  if (wrongOnly && spot.verdict !== "likely_wrong") return false;
+  return !cls || spot.ontology === cls;
+}
+// --- end class filter ---
+
 function passesFilters(spot) {
   const cls = document.getElementById("f-class").value, ver = document.getElementById("f-verdict").value,
         flg = document.getElementById("f-flag").value;
-  if (cls && spot.ontology !== cls) return false;
+  if (!matchesClassFilter(spot, cls)) return false;
   if (ver === "flagged" && spot.verdict === "ok") return false;
   if (flg === "set" && !currentFlag(spot)) return false;
   return true;
@@ -324,9 +361,8 @@ document.addEventListener("keydown", event => { if (event.key === "Escape") clos
 
 function start() {
   document.getElementById("title").textContent = `Alignment curation — ${REVIEW.alignment.alignment_file}`;
-  const classes = [...new Set(REVIEW.spots.map(s => s.ontology).filter(Boolean))].sort();
-  const select = document.getElementById("f-class");
-  for (const c of classes) select.appendChild(el("option", {value: c}, c));
+  const select = document.getElementById("f-class"); select.textContent = "";
+  for (const o of classFilterOptions(REVIEW.spots)) select.appendChild(el("option", {value: o.value}, o.label));
   for (const id of ["f-class", "f-verdict", "f-flag"]) document.getElementById(id).addEventListener("change", render);
   const warnings = document.getElementById("warnings");
   for (const w of REVIEW.warnings || []) warnings.appendChild(el("div", {class: "warn"}, w));
