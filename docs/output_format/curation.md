@@ -69,6 +69,21 @@ LLM は呼ばない）はスポットごとに EIC 系列（`eic.samples[].point
 実データ check（kidney pos, 2196 spots）で JSON が 41.7 MB（内訳 EIC 31.0 MB・
 mirror 5.5 MB）になったため導入した上限。
 
+ビューア用にスポットごとに次も持つ:
+
+- `auto_note`: 判定根拠の文（`likely_wrong` / `suspect` のとき。`ok` は `null`）。
+  `自動: ` に続けて理由コードごとの根拠を ` / ` でつなぐ（例
+  `自動: 精密質量 — Δm/z 12.4 mDa（≥10 mDa） / MS2 — 参照と一致せず（low score）`。
+  文面は `judge.REASON_TEXT`）。ビューアのメモ欄の既定値（記録済みのメモがあればそちら）。
+- `flag_cleared`: このアラインメントで最新のフラグ行が `clear`（人が明示的に取り消した）。
+
+ビューアは `likely_wrong` のうち記録済みのフラグが無く `flag_cleared` でもないものを、
+開いた時点で「間違い」（メモ = `auto_note`）の未送信の変更にする。そのまま送信すれば記録
+され、「なし」に戻して送信すれば `clear` が記録される（次のレビューで掛け直さない）。
+ミラープロットは縦軸に相対強度（上下とも各側の最大値を 100）の目盛り 0/50/100 を付け、
+ピークに m/z（小数 4 桁）のラベルを `library_plot_mirror` と同じ規則（強度降順の貪欲法・
+縦横とも重なるものを飛ばす・片側 25 本まで・側ごとに独立）で付ける。
+
 ### `table`（TSV）の列
 
 | 列 | 意味 |
@@ -80,6 +95,7 @@ mirror 5.5 MB）になったため導入した上限。
 | `verdict` | `likely_wrong` / `suspect` / `ok`（次節） |
 | `reasons` | 立った理由コードをカンマ区切りで、強い→弱い→帯のみの順に並べたもの（次節の表と同じ順） |
 | `ppm` | 代表試料の m/z と参照 precursor m/z（引けなければ Formula からの理論値）の相対誤差 [ppm] |
+| `dmz_mda` | 代表試料の m/z と参照 precursor m/z（引けなければ Formula からの理論値）の差 [mDa]。`ppm` と同じ基準 |
 | `drt` | 代表試料の RT と参照 RT の差 [分]。参照が引けない、または参照に RT が無ければ空 |
 | `wdot` | **MS-DIAL 自身が出した** `squared_weighted_dot_product` の平方根（`library` トピック §14.1 と同じ規約: 平方根側の値）。この照合結果は同定時点でアラインメントに保存済みのもので、`curation_review` がここで再照合した値ではない（後述の必須注意）。値が無い、または MS-DIAL 側が `-1`（比較不能）なら空 |
 | `mpp` | **MS-DIAL 自身が出した** `matched_peaks_percentage`。`wdot` と同じく再照合値ではない |
@@ -107,6 +123,7 @@ mirror 5.5 MB）になったため導入した上限。
 |---|---|---|
 | 強い | `polarity_mismatch` | アダクトの電荷符号と実測イオン化極性（`IonMode`）が不一致（`adduct_consistency` の `band` が `FAIL`）。脂質クラスとの典型性（`class_typical`）は advisory のみで `band` には効かない——非典型アダクトだけでは立たない |
 | 強い | `precursor_unmatched` | MS-DIAL 自身の `is_precursor_mz_match` が `False` |
+| 強い | `dmz_out` | \|Δm/z\|（`dmz_mda`）が `dmz_fail_mda`（既定 10 mDa）**以上**。ppm は m/z に比例して緩むので絶対差で見る（ユーザー決定 2026-09-29）。Δppm の `ppm_out` は弱いまま |
 | 強い | `class_rule_rejected` | MS/MS ありで、MS-DIAL の脂質クラス規則（診断イオン）を評価して棄却した（`is_lipid_class_match=False` かつ `is_other_lipid_match=False`）。実測では全件 `low score:` なので `low_score` も同時に立つ。**脂質規則が走ったデータに限る**（下記） |
 | 弱い | `ppm_out` | Δppm が `ppm_borderline` しきい値（既定 10）を超えた。**adduct 非依存**（実測: kidney neg/pos で全 adduct の中央値が約 −0.8 ppm）で、単独では強い理由に数えない（ユーザー決定 2026-09-29）——mz 系統自体は `FAIL` になるが、単独では `suspect` 止まり。`polarity_mismatch`/`precursor_unmatched` が別途立てば、そちらの強さで `likely_wrong` になる |
 | 弱い | `low_score` | MS/MS はあるが MS-DIAL 自身の `is_reference_matched` が `False` |
@@ -143,6 +160,26 @@ precursor の許容幅をすでに課している——許容幅の外の候補�
 1 件でも `True` のものがあるときだけ、上の 3 コードを使う（`judge.lipid_rules_active`）。
 1 件も無ければ `warnings` にその旨を出す。フラグの意味は上流 MsdialWorkbench `afd5f9522` の
 `MsReferenceScorer` / `LipidMsmsCharacterization` と kidney の実測で確かめた。
+
+### `curation_submit` の戻り値の `tags_xml`（MS-DIAL への反映）
+
+記録（`flags.jsonl`、正本）の後、アラインメントの `<.arf2 の stem>_tags.xml` の
+**Misannotation**（タグ Id 3）に反映する。`wrong` → 付ける、`clear` → 外す、`suspect` → 触らない。
+他のタグと定義は残し、ファイルが無ければ MS-DIAL と同じ 5 定義で作る。形式は上流
+`AlignmentResultContainer.Save` と同じ（`<Peak Id="<MasterAlignmentID>"><Tag>3</Tag></Peak>`、
+UTF-8 BOM・CRLF）。
+
+| フィールド | 意味 |
+|---|---|
+| `path` | 書いた（書こうとした）`_tags.xml` |
+| `added` / `removed` | 実際に Misannotation が付いた／外れた `spot_id`（元から同じ状態のものは含まない） |
+| `created` | ファイルを新しく作ったか |
+| `backup` | 書く前の控え（`curation/tags-backup/<名前>.<UTC 時刻>`）。元のファイルが無ければ `null` |
+| `note` | **MS-DIAL でプロジェクトを開いたままだと GUI の保存で上書きされる**旨。ユーザーに伝える |
+| `error` / `message` | 反映に失敗したとき（壊れた XML・書けない等）。**フラグは記録済み**で、`_tags.xml` は触っていない |
+
+MS-DIAL はアラインメントを保存するたびにメモリ上のタグで `_tags.xml` を丸ごと書き直し、
+読むのはプロジェクトを開くときだけ。反映を見るにはプロジェクトを閉じてから開き直す。
 
 ### エクスポートのメタ行（`# curation = ...`）
 

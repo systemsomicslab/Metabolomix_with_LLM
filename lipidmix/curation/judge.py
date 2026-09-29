@@ -15,7 +15,7 @@ import math
 import re
 
 DEFAULT_THRESHOLDS: dict[str, float] = {
-    "ppm_pass": 5.0, "ppm_borderline": 10.0,
+    "ppm_pass": 5.0, "ppm_borderline": 10.0, "dmz_fail_mda": 10.0,
     "drt_pass": 0.5, "drt_borderline": 1.0,
     "eic_min_points": 5, "eic_min_r2": 0.8, "eic_max_maxima": 2,
     "eic_pass_frac": 0.5, "eic_borderline_frac": 0.2, "eic_rt_scatter_sd": 0.1,
@@ -29,9 +29,12 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
 # 弱い理由へ格下げする(ユーザー決定 2026-09-29)。
 # class_rule_rejected: MS/MS ありで脂質クラス規則を評価して棄却(class=F ∧ other=F)。
 # 診断イオン規則が注釈のクラスを否定したので強い理由にする(ユーザー承認 2026-09-29)。
-STRONG_REASONS = frozenset({"polarity_mismatch", "precursor_unmatched", "class_rule_rejected"})
+# dmz_out: |Δm/z| が dmz_fail_mda（既定 10 mDa）以上。ppm は m/z に比例して緩むので、絶対差で
+# 強い理由にする（ユーザー決定 2026-09-29）。Δppm>10 の ppm_out は弱いまま。
+STRONG_REASONS = frozenset({"polarity_mismatch", "precursor_unmatched", "class_rule_rejected",
+                            "dmz_out"})
 WEAK_REASONS = frozenset({"ppm_out", "low_score", "drt_out", "eic_poor"})
-_ORDER = ["polarity_mismatch", "precursor_unmatched", "class_rule_rejected",
+_ORDER = ["polarity_mismatch", "precursor_unmatched", "dmz_out", "class_rule_rejected",
           "ppm_out", "low_score", "drt_out", "eic_poor",
           "ppm_borderline", "drt_borderline", "eic_borderline", "rt_scatter", "trend_outlier"]
 
@@ -103,6 +106,9 @@ def _mz(ev: dict, th: dict) -> dict:
     m = ev.get("match")
     if m is not None and m.get("is_precursor_mz_match") is False:
         reasons.append("precursor_unmatched")
+    dmz = ev.get("dmz_mda")
+    if dmz is not None and abs(dmz) >= th["dmz_fail_mda"]:
+        reasons.append("dmz_out")
     ppm = ev.get("ppm")
     if ppm is not None:
         if abs(ppm) > th["ppm_borderline"]:
@@ -151,6 +157,40 @@ def _trend(entry: dict | None, info: list[str]) -> dict:
     if entry.get("outlier"):
         info.append("trend_outlier_unreliable")
     return _check("PASS")
+
+
+#: 理由コード → 判定根拠の文（ビューアのメモ欄の既定値）。値は ev と th から差し込む。
+REASON_TEXT = {
+    "polarity_mismatch": lambda ev, th: "アダクト — 電荷の符号が測定極性と矛盾",
+    "precursor_unmatched": lambda ev, th: "精密質量 — MS-DIAL の precursor 判定が不一致",
+    "dmz_out": lambda ev, th: f"精密質量 — Δm/z {_num(ev.get('dmz_mda'))} mDa（≥{_num(th['dmz_fail_mda'])} mDa）",
+    "class_rule_rejected": lambda ev, th: "MS2 — 脂質クラス規則（診断イオン）で棄却",
+    "ppm_out": lambda ev, th: f"精密質量 — Δppm {_num(ev.get('ppm'))}（>{_num(th['ppm_borderline'])}）",
+    "low_score": lambda ev, th: "MS2 — 参照と一致せず（low score）",
+    "drt_out": lambda ev, th: f"RT — ΔRT {_num(ev.get('drt'), 2)} 分（>{_num(th['drt_borderline'])} 分）",
+    "eic_poor": lambda ev, th: "EIC — ピーク形状が不良",
+    "ppm_borderline": lambda ev, th: f"精密質量 — Δppm {_num(ev.get('ppm'))}（境界）",
+    "drt_borderline": lambda ev, th: f"RT — ΔRT {_num(ev.get('drt'), 2)} 分（境界）",
+    "eic_borderline": lambda ev, th: "EIC — ピーク形状が境界",
+    "rt_scatter": lambda ev, th: "EIC — 試料間で頂点 RT がばらつく",
+    "trend_outlier": lambda ev, th: "RT–m/z 傾向 — クラスの傾向から外れる",
+}
+
+
+def _num(value, digits: int | None = None) -> str:
+    if value is None:
+        return "–"
+    if digits is not None and isinstance(value, (int, float)):
+        value = round(float(value), digits)
+    return f"{value:g}" if isinstance(value, float) else str(value)
+
+
+def auto_note(spot: dict, th: dict) -> str | None:
+    """判定済みスポット（`judge_spot` の結果を持つ）の判定根拠。`ok` なら None。"""
+    if spot.get("verdict") in (None, "ok") or not spot.get("reasons"):
+        return None
+    parts = [REASON_TEXT[r](spot, th) if r in REASON_TEXT else r for r in spot["reasons"]]
+    return "自動: " + " / ".join(parts)
 
 
 def judge_spot(ev: dict, trend_entry: dict | None, th: dict, *, lipid_rules: bool = False) -> dict:

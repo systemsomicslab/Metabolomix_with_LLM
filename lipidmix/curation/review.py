@@ -14,12 +14,12 @@ from pathlib import Path
 
 from lipidmix.core.atomic_io import atomic_write_json
 from lipidmix.curation import evidence, flags, trend, viewer
-from lipidmix.curation.judge import judge_spot, lipid_rules_active
+from lipidmix.curation.judge import auto_note, judge_spot, lipid_rules_active
 
 VERDICT_RANK = {"ok": 0, "suspect": 1, "likely_wrong": 2}
 REFERENCE_WARN_FRACTION = 0.5
 TSV_COLUMNS = ["spot_id", "name", "ontology", "adduct", "verdict", "reasons",
-               "ppm", "drt", "wdot", "mpp", "eic_good", "trend_z", "flag"]
+               "ppm", "dmz_mda", "drt", "wdot", "mpp", "eic_good", "trend_z", "flag"]
 
 
 #: `new_review_id()` の形。review_id はファイル名（`review-<id>.json`）に使うので、
@@ -43,6 +43,7 @@ def run_review(arf2_path, spots, *, store, ms2_tol, th, file_ids, max_traces, se
     flag_rows = flags.FlagStore(flags.curation_dir(arf2_path)).rows()
     existing = flags.effective_flags(flag_rows, alignment["alignment_sha256"])
     orphaned = flags.orphaned_count(flag_rows, alignment)
+    cleared = flags.cleared_spots(flag_rows, alignment["alignment_sha256"])
     evs, stats = evidence.collect(arf2_path, spots, store=store, ms2_tol=ms2_tol, th=th,
                                   file_ids=file_ids, max_traces=max_traces)
     points = []
@@ -61,6 +62,8 @@ def run_review(arf2_path, spots, *, store, ms2_tol, th, file_ids, max_traces, se
         ev["trend"] = trends["spots"].get(ev["spot_id"])
         ev["flag"] = (existing.get(ev["spot_id"]) or {}).get("flag")
         ev["flag_note"] = (existing.get(ev["spot_id"]) or {}).get("note")
+        ev["flag_cleared"] = ev["spot_id"] in cleared
+        ev["auto_note"] = auto_note(ev, th)
         counts[ev["verdict"]] += 1
 
     warnings = []
@@ -146,7 +149,7 @@ def summary_tsv(review: dict, *, min_verdict: str = "suspect", max_rows: int | N
         weighted = match.get("squared_weighted_dot_product")
         lines.append("\t".join(_cell(v) for v in [
             s["spot_id"], s["name"], s["ontology"], s["adduct"], s["verdict"],
-            ",".join(s["reasons"]), s["ppm"], s["drt"],
+            ",".join(s["reasons"]), s["ppm"], s.get("dmz_mda"), s["drt"],
             round(weighted ** 0.5, 3) if weighted is not None and weighted >= 0 else None,
             match.get("matched_peaks_percentage"),
             (s.get("eic_shape") or {}).get("good_fraction"),

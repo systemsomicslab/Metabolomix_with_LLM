@@ -125,6 +125,15 @@ def effective_flags(rows: list[dict], alignment_sha256: str) -> dict[int, dict]:
     return {spot: row for spot, row in latest.items() if row.get("flag") != "clear"}
 
 
+def cleared_spots(rows: list[dict], alignment_sha256: str) -> set[int]:
+    """その sha256 で最新の行が clear のスポット（＝人が明示的に取り消した）。"""
+    latest: dict[int, str] = {}
+    for row in rows:
+        if row.get("alignment_sha256") == alignment_sha256:
+            latest[int(row["spot_id"])] = row.get("flag")
+    return {spot for spot, flag in latest.items() if flag == "clear"}
+
+
 def flags_digest(effective: dict[int, dict]) -> str:
     canonical = json.dumps(sorted((spot, row["flag"]) for spot, row in effective.items()))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

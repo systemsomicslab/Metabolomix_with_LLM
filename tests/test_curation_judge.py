@@ -190,3 +190,55 @@ def test_lipid_rules_active_detects_any_rule_flag():
     assert judge.lipid_rules_active([{"match": match(is_other_lipid_match=True)}])
     assert not judge.lipid_rules_active([{"match": rejected()}, {"match": None}])
     assert not judge.lipid_rules_active([])
+
+
+# --- |Δm/z| ≥ 10 mDa は強い理由（ユーザー決定 2026-09-29）。Δppm>10 の ppm_out は弱いまま。---
+
+def test_mz_difference_of_10_mda_or_more_is_likely_wrong():
+    result = judge.judge_spot(ev(dmz_mda=-10.0), None, TH)
+    assert result["verdict"] == "likely_wrong"
+    assert result["reasons"][0] == "dmz_out"
+    assert result["checks"]["mz"]["band"] == "FAIL"
+
+
+def test_mz_difference_below_10_mda_is_not_dmz_out():
+    result = judge.judge_spot(ev(dmz_mda=9.99), None, TH)
+    assert "dmz_out" not in result["reasons"]
+    assert result["verdict"] == "ok"
+
+
+def test_dmz_threshold_can_be_overridden():
+    th = judge.resolve_thresholds({"dmz_fail_mda": 5.0})
+    assert judge.judge_spot(ev(dmz_mda=6.0), None, th)["verdict"] == "likely_wrong"
+
+
+# --- 判定根拠のメモ（likely_wrong / suspect のメモ欄の既定値）---
+
+def test_auto_note_lists_every_reason_with_its_value():
+    spot = ev(dmz_mda=12.4, name_prefix="low score", match=rejected())
+    spot.update(judge.judge_spot(spot, None, TH, lipid_rules=True))
+    note = judge.auto_note(spot, TH)
+    assert note.startswith("自動: ")
+    parts = note[len("自動: "):].split(" / ")
+    assert parts[0] == "精密質量 — Δm/z 12.4 mDa（≥10 mDa）"
+    assert "MS2 — 脂質クラス規則（診断イオン）で棄却" in parts
+    assert "MS2 — 参照と一致せず（low score）" in parts
+
+
+def test_auto_note_is_none_for_ok_spots():
+    spot = ev()
+    spot.update(judge.judge_spot(spot, None, TH))
+    assert judge.auto_note(spot, TH) is None
+
+
+def test_every_reason_code_has_a_note_text():
+    assert set(judge.STRONG_REASONS) | set(judge.WEAK_REASONS) | set(judge._ORDER) <= set(judge.REASON_TEXT)
+
+
+def test_auto_note_rounds_the_rt_difference_to_two_decimals():
+    spot = ev(drt=-1.9958)
+    spot.update(judge.judge_spot(spot, None, TH))
+    assert "RT — ΔRT -2 分（>1 分）" in judge.auto_note(spot, TH)
+    spot = ev(drt=1.2345)
+    spot.update(judge.judge_spot(spot, None, TH))
+    assert "RT — ΔRT 1.23 分（>1 分）" in judge.auto_note(spot, TH)

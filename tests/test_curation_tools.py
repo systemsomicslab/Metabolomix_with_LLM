@@ -249,3 +249,73 @@ def test_review_trend_summary_has_outlier_counts(ready, monkeypatch):
     monkeypatch.setattr(curation_tools.review.trend, "fit_trends", fake)
     body = json.loads(curation_tools.curation_review())
     assert body["trend"]["PC"] == {"n": 5, "r2": 0.9, "n_outliers": 2}
+
+
+# --- 送信で `_tags.xml` の Misannotation を反映（ユーザー決定 2026-09-29）:
+# 「間違い」→ 付ける、取消（clear）→ 外す、「疑わしい」→ 触らない。flags.jsonl が正本。---
+
+from lipidmix.msdial import tags as msdial_tags
+
+
+def _submit(review_id, entries):
+    text = flags.build_submission_text(review_id, entries)
+    return json.loads(curation_tools.curation_submit(submission_text=text))
+
+
+def test_submitting_wrong_sets_misannotation_in_the_alignment_tags(ready):
+    review_id = json.loads(curation_tools.curation_review())["review_id"]
+    body = _submit(review_id, [{"spot_id": 1, "flag": "wrong", "note": "自動: X"},
+                               {"spot_id": 0, "flag": "suspect", "note": ""}])
+    tag_path = msdial_tags.alignment_tag_path(ready["arf2"])
+    assert msdial_tags.parse_tag_file(tag_path)["peaks"] == {1: frozenset({3})}
+    assert body["tags_xml"]["added"] == [1] and body["tags_xml"]["removed"] == []
+    assert body["tags_xml"]["path"] == str(tag_path)
+    assert "MS-DIAL" in body["tags_xml"]["note"]
+
+
+def test_clearing_removes_misannotation(ready):
+    review_id = json.loads(curation_tools.curation_review())["review_id"]
+    _submit(review_id, [{"spot_id": 1, "flag": "wrong", "note": ""}])
+    body = _submit(review_id, [{"spot_id": 1, "flag": "clear", "note": ""}])
+    assert msdial_tags.parse_tag_file(msdial_tags.alignment_tag_path(ready["arf2"]))["peaks"] == {}
+    assert body["tags_xml"]["removed"] == [1]
+
+
+def test_existing_tags_file_is_backed_up_before_writing(ready):
+    tag_path = msdial_tags.alignment_tag_path(ready["arf2"])
+    msdial_tags.update_alignment_tag(tag_path, tag_id=1, add=[0], remove=[])     # Confirmed を人が付けていた
+    before = tag_path.read_bytes()
+    review_id = json.loads(curation_tools.curation_review())["review_id"]
+    body = _submit(review_id, [{"spot_id": 1, "flag": "wrong", "note": ""}])
+    backup = body["tags_xml"]["backup"]
+    assert backup and open(backup, "rb").read() == before
+    assert flags.curation_dir(ready["arf2"]) / "tags-backup" in [p for p in __import__("pathlib").Path(backup).parents]
+    assert msdial_tags.parse_tag_file(tag_path)["peaks"] == {0: frozenset({1}), 1: frozenset({3})}
+
+
+def test_a_failed_tags_write_keeps_the_recorded_flags(ready):
+    msdial_tags.alignment_tag_path(ready["arf2"]).mkdir()     # ファイルの位置にフォルダ＝書けない
+    review_id = json.loads(curation_tools.curation_review())["review_id"]
+    body = _submit(review_id, [{"spot_id": 1, "flag": "wrong", "note": ""}])
+    assert body["status"] == "ok" and body["recorded"] == 1
+    assert "error" in body["tags_xml"]
+    listing = json.loads(curation_tools.curation_flags())
+    assert listing["table"].splitlines()[1].split("\t")[:2] == ["1", "wrong"]
+
+
+def test_a_corrupt_tags_file_is_reported_and_left_untouched(ready):
+    tag_path = msdial_tags.alignment_tag_path(ready["arf2"])
+    tag_path.write_text("<PeakSpotTags><Peaks>", encoding="utf-8")      # 途中で切れた XML
+    review_id = json.loads(curation_tools.curation_review())["review_id"]
+    body = _submit(review_id, [{"spot_id": 1, "flag": "wrong", "note": ""}])
+    assert body["recorded"] == 1 and "error" in body["tags_xml"]
+    assert tag_path.read_text(encoding="utf-8") == "<PeakSpotTags><Peaks>"
+
+
+def test_submit_is_annotated_as_destructive_because_it_rewrites_the_tags_file():
+    import asyncio
+    import server
+    tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+    annotations = tools["curation_submit"].annotations
+    assert annotations.destructiveHint is True and annotations.readOnlyHint is False
+    assert tools["curation_review"].annotations.destructiveHint is False

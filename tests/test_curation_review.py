@@ -345,3 +345,125 @@ def test_likely_wrong_cards_get_a_dashed_red_border_that_turns_solid_when_flagge
     start = html.index("function spotCard")
     card_source = html[start:html.index("function setFlag")]
     assert '"verdict-" + spot.verdict' in card_source
+
+
+def test_summary_tsv_has_the_mz_difference_column(built):
+    _, result = built
+    header = review.summary_tsv(result).splitlines()[0].split("\t")
+    assert header[header.index("ppm") + 1] == "dmz_mda"
+
+
+def test_review_attaches_auto_notes_and_cleared_state(built):
+    paths, result = built
+    by_id = {s["spot_id"]: s for s in result["spots"]}
+    assert by_id[0]["auto_note"] is None
+    assert by_id[1]["auto_note"].startswith("自動: ")
+    assert by_id[1]["flag_cleared"] is False
+    store = flags.FlagStore(flags.curation_dir(paths["arf2"]))
+    store.append([{"spot_id": 1, "flag": "wrong"}], alignment=result["alignment"],
+                 review_id="old", source="user")
+    store.append([{"spot_id": 1, "flag": "clear"}], alignment=result["alignment"],
+                 review_id="old2", source="user")
+    again = _review(paths)
+    assert {s["spot_id"]: s["flag_cleared"] for s in again["spots"]} == {0: False, 1: True}
+
+
+# --- ビューア: likely_wrong の「間違い」プリセット・根拠メモ・ミラーの m/z ラベルと縦軸目盛り
+# （ユーザー決定 2026-09-29。ラベルは library_plot_mirror の _draw_labels（auto 方式）と同じ）---
+
+def _run_block(tmp_path, block: str, prelude: str, expression: str):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node が見つからないのでビューアの純関数を実行できない")
+    html = viewer.render_html(None)
+    begin, end = f"// --- {block} (pure) ---", f"// --- end {block} ---"
+    source = html[html.index(begin):html.index(end)]
+    script = tmp_path / f"{block.replace(' ', '_')}.js"
+    script.write_text(source + "\n" + prelude + f"\nconsole.log(JSON.stringify({expression}));\n",
+                      encoding="utf-8")
+    result = subprocess.run([node, str(script)], capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+_PRESET_SPOTS = json.dumps([
+    {"spot_id": 0, "verdict": "likely_wrong", "flag": None, "flag_cleared": False, "auto_note": "自動: A"},
+    {"spot_id": 1, "verdict": "likely_wrong", "flag": "suspect", "flag_cleared": False, "auto_note": "自動: B"},
+    {"spot_id": 2, "verdict": "likely_wrong", "flag": None, "flag_cleared": True, "auto_note": "自動: C"},
+    {"spot_id": 3, "verdict": "suspect", "flag": None, "flag_cleared": False, "auto_note": "自動: D"},
+    {"spot_id": 4, "verdict": "ok", "flag": None, "flag_cleared": False, "auto_note": None},
+    {"spot_id": 5, "verdict": "suspect", "flag": "wrong", "flag_note": "人のメモ", "flag_cleared": False,
+     "auto_note": "自動: E"}])
+
+
+def test_likely_wrong_is_preset_to_wrong_unless_already_recorded_or_cleared(tmp_path):
+    presets = _run_block(tmp_path, "presets", f"const SPOTS = {_PRESET_SPOTS};",
+                         "SPOTS.filter(isPresetTarget).map(s => [s.spot_id, presetEdit(s)])")
+    assert presets == [[0, {"flag": "wrong", "note": "自動: A", "preset": True}]]
+
+
+def test_note_defaults_to_the_recorded_note_then_the_auto_note(tmp_path):
+    notes = _run_block(tmp_path, "presets", f"const SPOTS = {_PRESET_SPOTS};",
+                       "SPOTS.map(defaultNote)")
+    assert notes == ["自動: A", "自動: B", "自動: C", "自動: D", "", "人のメモ"]
+
+
+_LABEL_PRELUDE = """
+const measure = text => ({w: 40, h: 8});           // 代表箱: 幅 40px・高さ 8px
+const toPixel = (mz, y) => ({x: mz, y: 100 - y * 100});   // m/z をそのまま px に
+"""
+
+
+def test_mirror_labels_are_picked_by_height_and_skip_2d_overlaps(tmp_path):
+    labels = _run_block(tmp_path, "mirror labels", _LABEL_PRELUDE,
+                        "pickMirrorLabels([[100, 0.5], [110, 1.0], [300, 0.2], [120, 0.1]], toPixel, measure)"
+                        ".map(l => l.text)")
+    # 110 (最大) → 100 は横も縦も近い（Δx 10 < 40、Δy 50 > 8 なので縦は離れている）ので残る。
+    # 120 は 110 と Δx 10・Δy 90 で縦に離れて残る。auto は横と縦の両方が近いときだけ飛ばす。
+    assert labels == ["110.0000", "100.0000", "300.0000", "120.0000"]
+
+
+def test_mirror_labels_skip_a_peak_that_overlaps_both_ways(tmp_path):
+    labels = _run_block(tmp_path, "mirror labels", _LABEL_PRELUDE,
+                        "pickMirrorLabels([[100, 1.0], [105, 0.97], [200, 0.5]], toPixel, measure)"
+                        ".map(l => l.text)")
+    assert labels == ["100.0000", "200.0000"]
+
+
+def test_mirror_labels_stop_at_25_per_side(tmp_path):
+    labels = _run_block(tmp_path, "mirror labels", _LABEL_PRELUDE,
+                        "pickMirrorLabels(Array.from({length: 40}, (_, i) => [i * 100, 1 - i / 100]),"
+                        " toPixel, measure).length")
+    assert labels == 25
+
+
+def test_mirror_draws_labels_per_side_and_relative_intensity_ticks():
+    html = viewer.render_html(None)
+    source = html[html.index("function drawMirror"):html.index("function drawTrend")]
+    # 実測・参照で別々に選ぶ（側をまたいで干渉しない）
+    assert "for (const [pts, sign] of [[measured, 1], [reference, -1]])" in source
+    assert "pickMirrorLabels(pts," in source
+    assert "[0, 50, 100]" in source                        # 縦軸の目盛り（相対強度 %、上下とも）
+
+
+def test_preset_cards_keep_the_dashed_border_until_the_flag_is_recorded():
+    html = viewer.render_html(None)
+    assert '"flag-preset"' in html
+    assert ".card.verdict-likely_wrong.flag-wrong { border-style:solid; }" in html
+    assert ".card.flag-preset" not in html or "outline" not in html.split(".card.flag-preset")[1].split("}")[0]
+
+
+def test_status_keeps_showing_pending_changes_after_render():
+    # render() の完了時に countsText() で上書きするので、未送信の変更（プリセット含む）を
+    # そこに含めないと「likely_wrong N 件を初期選択」が絞り込みのたびに消える（実データ check）。
+    html = viewer.render_html(None)
+    source = html[html.index("function countsText"):html.index("function countsText") + 400]
+    assert "edits.size" in source and "presetCount" in source
+
+
+def test_mirror_labels_are_kept_inside_the_plot_area(tmp_path):
+    # 端のピークのラベルが縦軸の目盛りに重なった（実データ check）。中心を [xmin+w/2, xmax-w/2] に寄せる。
+    labels = _run_block(tmp_path, "mirror labels", _LABEL_PRELUDE,
+                        "pickMirrorLabels([[5, 1.0], [298, 0.5]], toPixel, measure, {xmin: 0, xmax: 300})"
+                        ".map(l => l.x)")
+    assert labels == [20, 280]
