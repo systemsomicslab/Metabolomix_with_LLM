@@ -467,3 +467,16 @@ def test_mirror_labels_are_kept_inside_the_plot_area(tmp_path):
                         "pickMirrorLabels([[5, 1.0], [298, 0.5]], toPixel, measure, {xmin: 0, xmax: 300})"
                         ".map(l => l.x)")
     assert labels == [20, 280]
+
+
+def test_assign_and_redundant_are_decisions_not_flags(tmp_path, monkeypatch):
+    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    paths = write_alignment_set(tmp_path / "neg")
+    first = _review(paths)
+    store = flags.FlagStore(flags.curation_dir(paths["arf2"]))
+    store.append([{"spot_id": 0, "flag": "assign", "name": "PC 34:1", "level": "sum", "note": ""},
+                  {"spot_id": 1, "flag": "redundant", "of": 0, "relation": "isotope_M+1", "note": ""}],
+                 alignment=first["alignment"], review_id="cs-x", source="user")
+    again = {s["spot_id"]: s for s in _review(paths)["spots"]}
+    assert again[0]["flag"] is None and again[0]["decision"] == {"flag": "assign", "name": "PC 34:1"}
+    assert again[1]["flag"] is None and again[1]["decision"] == {"flag": "redundant", "of": 0}

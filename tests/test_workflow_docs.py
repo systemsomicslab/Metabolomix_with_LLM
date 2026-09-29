@@ -48,7 +48,10 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
     ),
     "metabolomics.md": ("dataset_statistic", "dataset_build_matrix"),
     "library.md": ("library_load", "library_match_feature", "library_plot_mirror"),
-    "curation.md": ("curation_review", "curation_submit", "curation_flags", "curation_view_data"),
+    "curation.md": (
+        "curation_review", "curation_suggest", "curation_submit", "curation_flags",
+        "curation_view_data",
+    ),
 }
 
 # 今回の範囲外。文書に混入したら落とす（線引きを固定するため）。
@@ -181,4 +184,4 @@ class TestScopeBoundary(unittest.TestCase):
             registered,
             "対象範囲の分類と登録済みツールが一致しない",
         )
-        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 50)
+        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 51)

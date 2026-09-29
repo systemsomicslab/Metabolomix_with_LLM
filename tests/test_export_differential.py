@@ -304,5 +304,57 @@ class TestExportDifferential(unittest.TestCase):
         self.assertIsNone(text)                                 # 書き出さない
 
 
+    def test_assign_adds_an_unannotated_spot_and_redundant_drops_one(self):
+        from lipidmix.curation import flags as curation_flags
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "differential.tsv"
+            arf2 = Path(tmp) / "AlignmentResult_2026_01_01_00_00_00.arf2"
+            arf2.write_bytes(b"")
+            curation_flags.FlagStore(curation_flags.curation_dir(arf2)).append(
+                [{"spot_id": 2, "flag": "assign", "name": "PE 36:2", "level": "sum", "ontology": "PE",
+                  "inchikey": "PEPEPEPEPEPEPE-XXXXXXXXXX-N"},
+                 {"spot_id": 1, "flag": "redundant", "of": 9, "relation": "isotope_M+1"}],
+                alignment=curation_flags.alignment_key(arf2), review_id="cs-x", source="user")
+            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2),                  patch("lipidmix.arf2.reader.load_catalog", return_value=self.catalog):
+                payload = json.loads(server.arf_export_differential(str(out)))
+            text = out.read_text(encoding="utf-8")
+        self.assertEqual(payload["status"], "success")
+        body = [l for l in text.splitlines() if not l.startswith("#")]
+        header = body[0].split("\t")
+        rows = [dict(zip(header, l.split("\t"))) for l in body[1:]]
+        self.assertEqual([r["name"] for r in rows], ["PE 36:2"])
+        self.assertEqual((rows[0]["name_source"], rows[0]["inchikey_source"], rows[0]["inchikey"]),
+                         ("curation", "curation", "PEPEPEPEPEPEPE-XXXXXXXXXX-N"))
+        meta = next(l for l in text.splitlines() if l.startswith("# curation"))
+        self.assertIn("curation_assigned = 1\tcuration_redundant_excluded = 1", meta)
+        self.assertEqual(payload["curation"]["assigned"], 1)
+        self.assertEqual(payload["curation"]["redundant_excluded"], 1)
+
+    def test_assign_without_inchikey_drops_the_row(self):
+        """R10: 記録した InChIKey が空の assign は、同定なしの行としてエクスポートから落ちる。"""
+        payload, text, _ = self._export_with_flags(
+            [{"spot_id": 1, "flag": "assign", "name": "PE 36:2", "level": "sum", "ontology": "PE",
+              "inchikey": ""}])
+        self.assertEqual(payload["status"], "success")
+        body = [l for l in text.splitlines() if not l.startswith("#")]
+        header = body[0].split("	")
+        rows = [dict(zip(header, l.split("	"))) for l in body[1:]]
+        self.assertEqual([r["spot_id"] for r in rows], ["2"])            # spot 2 は影響を受けない
+        self.assertEqual(rows[0]["inchikey"], "DDDDDDDDDDDDDD-EEEEEEEEEE-F")
+
+    def test_apply_curation_false_keeps_the_original_identity_of_an_assign(self):
+        payload, text, _ = self._export_with_flags(
+            [{"spot_id": 1, "flag": "assign", "name": "PE 36:2", "level": "sum", "ontology": "PE",
+              "inchikey": "PEPEPEPEPEPEPE-XXXXXXXXXX-N"}], apply_curation=False)
+        self.assertEqual(payload["curation"]["state"], "not_applied")
+        body = [l for l in text.splitlines() if not l.startswith("#")]
+        header = body[0].split("	")
+        rows = {r["spot_id"]: r for r in (dict(zip(header, l.split("	"))) for l in body[1:])}
+        self.assertEqual((rows["1"]["name"], rows["1"]["name_source"], rows["1"]["inchikey"]),
+                         ("PC 34:1", "arf2", "AAAAAAAAAAAAAA-BBBBBBBBBB-C"))
+        self.assertEqual(len(rows), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

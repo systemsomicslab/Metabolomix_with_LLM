@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Annotation suggestions</title>
+<style>
+:root { --bg:#fbfbfa; --fg:#1f2328; --muted:#6a737d; --card:#ffffff; --line:#d8dde3;
+        --ok:#2e7d32; --suspect:#b26a00; --wrong:#c62828; --meas:#2471a3; --ref:#c0392b; --match:#27ae60; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#16181b; --fg:#e6e6e6; --muted:#9aa0a6; --card:#1f2226; --line:#33383e;
+          --ok:#66bb6a; --suspect:#ffb74d; --wrong:#ef5350; --meas:#5dade2; --ref:#ec7063; --match:#58d68d; }
+}
+* { box-sizing: border-box; }
+body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+header { position:sticky; top:0; z-index:2; background:var(--bg); border-bottom:1px solid var(--line);
+         padding:10px 16px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+header h1 { font-size:15px; margin:0 12px 0 0; min-width:0; overflow-wrap:anywhere; }
+select, button, input[type=text] { font:inherit; color:inherit; background:var(--card);
+         border:1px solid var(--line); border-radius:6px; padding:4px 8px; }
+button.primary { background:var(--meas); color:#fff; border-color:var(--meas); }
+#status { color:var(--muted); }
+main { padding:12px 16px 40px; }
+.warn { border-left:3px solid var(--suspect); padding:6px 10px; margin:6px 0; background:var(--card); }
+#trends { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(320px, 100%), 1fr)); gap:12px; margin-bottom:16px; }
+#grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap:12px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px; }
+.card.flag-wrong { outline:2px solid var(--wrong); }
+.card.flag-suspect { outline:2px solid var(--suspect); }
+/* 自動判別 likely_wrong は赤の破線（未確認）。人が「間違い」を付けると実線になる。 */
+.card.verdict-likely_wrong { border:2px dashed var(--wrong); }
+.card.verdict-likely_wrong.flag-wrong { border-style:solid; }
+.card h2 { font-size:14px; margin:0 0 4px; word-break:break-word; }
+.meta { color:var(--muted); font-size:12px; }
+.badge { display:inline-block; border-radius:4px; padding:0 6px; font-size:12px; color:#fff; }
+.badge.ok { background:var(--ok); } .badge.suspect { background:var(--suspect); } .badge.likely_wrong { background:var(--wrong); }
+canvas { width:100%; height:110px; display:block; margin-top:6px; }
+.flags { display:flex; gap:10px; margin-top:6px; flex-wrap:wrap; }
+.flags input[type=text] { flex:1 1 120px; min-width:0; }
+textarea { width:100%; height:80px; font:12px monospace; }
+.card canvas, #trends canvas { cursor:pointer; }
+.card.highlight { box-shadow:0 0 0 3px var(--meas); transition:box-shadow .2s; }
+#zoom { width:min(960px, calc(100vw - 32px)); max-width:100%; max-height:calc(100vh - 32px);
+        padding:12px; border:1px solid var(--line); border-radius:8px;
+        background:var(--card); color:var(--fg); }
+#zoom::backdrop { background:rgba(0,0,0,.5); }
+#zoom .zoom-head { display:flex; gap:8px; align-items:flex-start; justify-content:space-between; }
+#zoom h2 { font-size:15px; margin:0; min-width:0; overflow-wrap:anywhere; }
+#zoom canvas { height:min(280px, 35vh); cursor:default; }
+.cand { display:grid; grid-template-columns:auto 1fr; gap:2px 8px; align-items:start; padding:4px 0;
+        border-top:1px solid var(--line); font-size:12px; }
+.cand .src { display:inline-block; border-radius:4px; padding:0 5px; background:var(--line); }
+.cand.info { opacity:.6; }
+.card.strong { border:2px solid var(--match); }
+.card.chosen { outline:2px solid var(--meas); }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Annotation suggestions</h1>
+  <label>対象 <select id="f-target"><option value="">すべて</option><option value="flagged">wrong フラグ</option>
+    <option value="likely_wrong">likely_wrong</option><option value="unannotated">未注釈</option></select></label>
+  <label>説明 <select id="f-strong"><option value="">すべて</option><option value="strong">強い説明あり</option></select></label>
+  <label>出所 <select id="f-source"><option value="">すべて</option><option value="msdial">msdial を含む</option>
+    <option value="research">research を含む</option><option value="ion">イオン関係あり</option></select></label>
+  <label>選択 <select id="f-chosen"><option value="">すべて</option><option value="chosen">選んだもの</option>
+    <option value="open">未選択</option></select></label>
+  <button id="copy" class="primary">送信用テキストをコピー</button>
+  <span id="status"></span>
+</header>
+<main>
+  <div id="warnings"></div>
+  <section id="grid"></section>
+  <textarea id="fallback" hidden readonly></textarea>
+</main>
+<dialog id="zoom" aria-labelledby="zoom-title">
+  <div class="zoom-head"><h2 id="zoom-title"></h2><button id="zoom-close" type="button">閉じる（Esc）</button></div>
+  <canvas id="zoom-eic"></canvas>
+  <canvas id="zoom-mirror"></canvas>
+</dialog>
+<script>
+const EMBEDDED = /*__CURATION_DATA__*/null;
+const PREFIX = "__SUBMISSION_PREFIX__";
+let DATA = EMBEDDED;
+const choices = new Map();   // spot_id -> {candidate?, flag, level?, note}
+
+/*__VIEWER_COMMON__*/
+
+// --- suggest (pure) ---
+// 初期選択は強い説明のある ④ の行だけ（spec §6.2）。それ以外は「選ばない」。
+function initialChoice(spot) { return spot.preset ? {candidate: spot.preset, flag: "redundant", level: "sum"} : null; }
+// 送信用テキストには候補 ID だけを入れる（中身は curation_submit が保存済みの候補から展開する）。
+function choiceEntry(spot, choice) {
+  const entry = {spot_id: spot.spot_id, flag: choice.flag};
+  if (choice.flag === "assign") { entry.candidate = choice.candidate; entry.level = choice.level || "sum"; }
+  if (choice.flag === "redundant") entry.candidate = choice.candidate;
+  entry.note = choice.note || "";
+  return entry;
+}
+function suggestSubmission(suggestion, choiceMap) {
+  const byId = new Map((suggestion.spots || []).map(s => [s.spot_id, s]));
+  const flags = [...choiceMap.entries()].map(([id, c]) => choiceEntry(byId.get(id) || {spot_id: id}, c));
+  return {review_id: suggestion.suggestion_id, arf2_path: suggestion.arf2_path, flags};
+}
+// ④ の行: X のトレースに相手 Y の代表試料のトレースを足す。Y は X の代表試料の最大値に合わせて
+// 縮める（M+2 は Y の 1 割ほどしかなく、そのままでは X が潰れて形を比べられないため）。
+function overlayFor(spot, relation) {
+  const samples = (spot.eic && spot.eic.samples) || [];
+  const trace = relation && relation.partner_eic;
+  if (!trace || !trace.points.length) return {eic: {samples}};
+  const rep = samples.find(s => s.representative) || samples[0];
+  const xMax = rep ? Math.max(...rep.points.map(p => p[1])) : 0;
+  const yMax = Math.max(...trace.points.map(p => p[1])) || 1;
+  const k = xMax > 0 ? xMax / yMax : 1;
+  const partner = {...trace, detected: true, representative: false, partner: true,
+                   points: trace.points.map(p => [p[0], p[1] * k])};
+  return {eic: {samples: [...samples, partner]}};
+}
+function mirrorFor(spot, candidate) {
+  if (!candidate || !candidate.mirror) return {mirror: null, mirror_empty_text: spot.measured && spot.measured.length ? "参照スペクトルなし" : "MS/MS なし"};
+  return {mirror: {measured: spot.measured, reference: candidate.mirror.reference, matched_mz: candidate.mirror.matched_mz}};
+}
+// 照合していない候補のスコアは -1 で保存されている（比較していない、の印）。数値として見せない。
+function scoreText(v) { return typeof v === "number" && isFinite(v) && v >= 0 ? v.toFixed(2) : "–"; }
+function countText(v) { return typeof v === "number" && isFinite(v) && v >= 0 ? String(v) : "–"; }
+// 同じ和組成でもライブラリの別レコードは別の候補なので、分子種名が和組成と違うときは併記する。
+function candidateLabel(c) {
+  const base = c.sum_name || c.name || "";
+  const species = c.name && c.sum_name && c.name !== c.sum_name ? `（${c.name}）` : "";
+  return `${base}${species} ${c.adduct || ""}`.trim();
+}
+// 詳細行。InChIKey の先頭 14 文字（骨格部分）でレコードを見分ける。
+function candidateDetail(c) {
+  const extra = [...(c.soft || []), ...(c.info || [])];
+  return `score ${scoreText(c.scores.total_score)} / wdot ${scoreText(c.scores.weighted_dot_product)} / ` +
+    `一致 ${countText(c.scores.matched_peaks_count)} / Δm/z ${c.dmz_mda ?? "–"} mDa / ${(c.inchikey || "").slice(0, 14) || "–"}` +
+    (c.trend ? ` / 傾向 z ${c.trend.z}` : "") + (extra.length ? ` / ${extra.join(",")}` : "");
+}
+// --- end suggest ---
+
+// 選択中の ④（相手 Y との関係）。無ければ null。
+function chosenRelation(spot) {
+  const id = (choices.get(spot.spot_id) || {}).candidate;
+  return spot.relations.find(r => r.candidate_id === id) || null;
+}
+
+function spotCard(spot) {
+  const card = el("article", {class: "card" + (spot.strong ? " strong" : ""), id: "spot-" + spot.spot_id});
+  card.appendChild(el("h2", {}, spot.name && spot.target_kind !== "unannotated" ? spot.name : `#${spot.spot_id}（未注釈）`));
+  const kind = {flagged: "wrong フラグ", likely_wrong: "likely_wrong", unannotated: "未注釈"}[spot.target_kind];
+  card.appendChild(el("div", {class: "meta"},
+    `#${spot.spot_id} ${spot.adduct || ""} m/z ${fixed(spot.mz, 4)} RT ${fixed(spot.rt, 2)} / ${kind}` +
+    (spot.target_reasons.length ? ` / ${spot.target_reasons.join(", ")}` : "")));
+  const eic = canvasFor(card), mirror = canvasFor(card);
+  // ミラーに出す候補: 選択中の候補、無ければ先頭。マウスを外したらここへ戻す。
+  const pinned = () => spot.candidates.find(c => c.candidate_id === (choices.get(spot.spot_id) || {}).candidate)
+    || spot.candidates[0] || null;
+  let focused = pinned();
+  const draw = () => {
+    const chosen = chosenRelation(spot);
+    drawEic(eic, chosen ? {...spot, ...overlayFor(spot, chosen)} : spot);   // 選択中の ④ は重ねて描く
+    drawMirror(mirror, {...spot, ...mirrorFor(spot, focused)});
+  };
+  const restore = () => { focused = pinned(); draw(); };
+  for (const prepare of [eic, mirror]) prepare.canvas.addEventListener("click", () => openZoom(spot, focused));
+  const list = el("div");
+  const radioName = "c-" + spot.spot_id;
+  const current = () => choices.get(spot.spot_id) || null;
+  const note = el("input", {type: "text", placeholder: "メモ"});
+  note.value = (current() || {}).note || "";   // フィルタで作り直しても選択のメモと粒度を保つ
+  const setChoice = choice => {
+    if (choice) choices.set(spot.spot_id, {...choice, note: note.value}); else choices.delete(spot.spot_id);
+    card.classList.toggle("chosen", !!choice);
+    document.getElementById("status").textContent = statusText();
+  };
+  const addRow = (value, labelText, detail, onPick, extraClass) => {
+    const row = el("label", {class: "cand" + (extraClass ? " " + extraClass : "")});
+    const radio = el("input", {type: "radio", name: radioName, value});
+    const c = current();
+    radio.checked = c ? (c.candidate ? c.candidate === value : c.flag === value) : value === "none";
+    radio.addEventListener("change", onPick);
+    const text = el("div"); text.append(el("div", {}, labelText));
+    if (detail) text.append(el("div", {class: "meta"}, detail));
+    row.append(radio, text); list.appendChild(row); return row;
+  };
+  for (const r of spot.relations) {
+    const detail = `Δm/z ${r.dmz_mda ?? "–"} mDa / ΔRT ${r.drt} / r ${r.r ?? "–"}` +
+      (r.msdial_links.length ? ` / MS-DIAL: ${r.msdial_links.join(",")}` : "") +
+      (r.isotope_ratio != null ? ` / 強度比 ${r.isotope_ratio}（期待 ${r.expected_ratio}）` : "") +
+      (r.soft.length ? ` / ${r.soft.join(",")}` : "") + (r.strong ? " / 強い説明" : "");
+    const label = `#${r.of}（${r.of_name || "?"}）の別イオン: ${r.relation}` + (r.informational ? "（情報のみ）" : "");
+    const row = addRow(r.candidate_id, label, detail, () => {
+      setChoice({candidate: r.candidate_id, flag: "redundant"}); restore();
+    }, r.informational ? "info" : "");
+    row.addEventListener("mouseenter", () => drawEic(eic, {...spot, ...overlayFor(spot, r)}));
+    row.addEventListener("mouseleave", restore);
+    if (r.informational) row.querySelector("input").disabled = true;
+  }
+  for (const c of spot.candidates) {
+    const src = el("span", {class: "src"}, c.source);
+    const detail = candidateDetail(c);
+    const row = addRow(c.candidate_id, candidateLabel(c), detail, () => {
+      setChoice({candidate: c.candidate_id, flag: "assign", level: species.checked ? "species" : "sum"}); restore();
+    });
+    row.firstChild.nextSibling.firstChild.prepend(src, " ");
+    row.addEventListener("mouseenter", () => { focused = c; drawMirror(mirror, {...spot, ...mirrorFor(spot, c)}); });
+    row.addEventListener("mouseleave", restore);
+  }
+  if (spot.target_kind === "flagged")
+    addRow("clear", "元の注釈に戻す（wrong を取り消す）", null, () => { setChoice({flag: "clear"}); restore(); });
+  addRow("none", "選ばない", null, () => { setChoice(null); restore(); });
+  card.appendChild(list);
+  const species = el("input", {type: "checkbox"});
+  species.checked = (current() || {}).level === "species";
+  const speciesLabel = el("label", {class: "meta"}); speciesLabel.append(species, " 分子種で記録（既定は和組成）");
+  species.addEventListener("change", () => { const c = current();
+    if (c && c.flag === "assign") setChoice({...c, level: species.checked ? "species" : "sum"}); });
+  note.addEventListener("change", () => { const c = current(); if (c) setChoice(c); });
+  const foot = el("div", {class: "flags"}); foot.append(speciesLabel, note); card.appendChild(foot);
+  if (current()) card.classList.add("chosen");
+  card._draw = draw;
+  return card;
+}
+
+function statusText() {
+  const c = DATA.counts;
+  return `対象 ${DATA.spots.length}（wrong ${c.targets.flagged} / likely_wrong ${c.targets.likely_wrong} / 未注釈 ${c.targets.unannotated}）` +
+    ` / 強い説明 ${c.with_strong_relation} / 未送信の選択 ${choices.size}`;
+}
+
+function passes(spot) {
+  const t = document.getElementById("f-target").value, s = document.getElementById("f-strong").value;
+  const src = document.getElementById("f-source").value, ch = document.getElementById("f-chosen").value;
+  if (t && spot.target_kind !== t) return false;
+  if (s && !spot.strong) return false;
+  if (src === "ion" && !spot.relations.length) return false;
+  if ((src === "msdial" || src === "research") && !spot.candidates.some(c => c.source.includes(src))) return false;
+  if (ch === "chosen" && !choices.has(spot.spot_id)) return false;
+  if (ch === "open" && choices.has(spot.spot_id)) return false;
+  return true;
+}
+
+const observer = new IntersectionObserver(entries => { for (const e of entries)
+  if (e.isIntersecting && e.target._draw) { e.target._draw(); observer.unobserve(e.target); } }, {rootMargin: "200px"});
+
+function render() {
+  const grid = document.getElementById("grid"); grid.textContent = "";
+  for (const spot of DATA.spots.filter(passes)) { const card = spotCard(spot); grid.appendChild(card); observer.observe(card); }
+  document.getElementById("status").textContent = statusText();
+}
+
+const zoomEic = preparerFor(document.getElementById("zoom-eic"));
+const zoomMirror = preparerFor(document.getElementById("zoom-mirror"));
+function closeZoom() { const d = document.getElementById("zoom"); if (typeof d.close === "function") d.close(); else d.removeAttribute("open"); }
+function openZoom(spot, candidate) {
+  const d = document.getElementById("zoom");
+  document.getElementById("zoom-title").textContent = `#${spot.spot_id} ${candidate ? candidateLabel(candidate) : ""}`;
+  if (typeof d.showModal === "function") { if (!d.open) d.showModal(); } else d.setAttribute("open", "");
+  const chosen = chosenRelation(spot);
+  drawEic(zoomEic, chosen ? {...spot, ...overlayFor(spot, chosen)} : spot); drawMirror(zoomMirror, {...spot, ...mirrorFor(spot, candidate)});
+}
+document.getElementById("zoom-close").addEventListener("click", closeZoom);
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeZoom(); });
+
+function start() {
+  document.getElementById("title").textContent = `Annotation suggestions — ${DATA.alignment.alignment_file}`;
+  const warnings = document.getElementById("warnings");
+  for (const w of DATA.warnings || []) warnings.appendChild(el("div", {class: "warn"}, w));
+  for (const s of DATA.spots) { const c = initialChoice(s); if (c && !choices.has(s.spot_id)) choices.set(s.spot_id, {...c, note: ""}); }
+  for (const id of ["f-target", "f-strong", "f-source", "f-chosen"]) document.getElementById(id).addEventListener("change", render);
+  render();
+}
+
+document.getElementById("copy").addEventListener("click", async () => {
+  const text = PREFIX + " " + JSON.stringify(suggestSubmission(DATA, choices));
+  const area = document.getElementById("fallback");
+  try { await navigator.clipboard.writeText(text); document.getElementById("status").textContent = "コピーしました。チャットに貼って送ってください。"; }
+  catch { area.hidden = false; area.value = text; area.select(); document.getElementById("status").textContent = "下の欄を選択してコピーしてください。"; }
+});
+
+if (DATA) start(); else document.getElementById("status").textContent = "データがありません。";
+</script>
+</body>
+</html>

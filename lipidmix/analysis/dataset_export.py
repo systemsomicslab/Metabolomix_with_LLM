@@ -70,10 +70,19 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
         meta = ds.feature_metadata.get(fid, {})
         # 行単位で出所を1つに決める。決め手は InChIKey を供給した側——列ごとに
         # 選ぶと、name が SML 由来で inchikey が SME 由来、という食い違った行ができる。
+        override = None
+        if curation is not None and curation["state"] == "applied":
+            from lipidmix.curation.apply import identity_for
+            override = identity_for(_as_spot_id(fid), curation["flag_set"])
         inchikey = str(meta.get("inchikey") or "").strip()
         source = meta
         name_source = "mztab_sme"               # 名前の実体は SME 行（旧 "mztab_smf" は誤り）
-        if not inchikey:
+        if override is not None:
+            # curation の assign が同定を置き換える。SME / SML の分岐は通らない。
+            inchikey = override["inchikey"].strip()
+            source = {"name": override["name"], "inchikey_source": "curation"}
+            name_source = "curation"
+        elif not inchikey:
             annotation = annotations.get(fid) or {}
             if annotation.get("ambiguous"):
                 annotation = {}
@@ -89,7 +98,7 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
             "spot_id": fid,                     # mzTab-M の SMF_ID（メタ行で id_space を宣言）
             "name": (source.get("name") or "").strip(),
             "name_source": name_source,
-            "ontology": "",                     # mzTab-M に対応物なし
+            "ontology": override["ontology"] if override is not None else "",  # mzTab-M に対応物なし
             "inchikey": inchikey,
             "inchikey_source": source.get("inchikey_source") or "",
             "msi_level": None,                  # 同上（.arf2 由来の注釈確度が無い）
@@ -112,12 +121,17 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
         flag_set = curation["flag_set"]
         if curation["state"] == "applied":
             wrong = {str(s) for s in flag_set["wrong"]}
+            redundant = {str(s) for s in flag_set.get("redundant", ())}
             suspect = {str(s) for s in flag_set["suspect"]}
             before = len(rows)
-            rows = [r for r in rows if str(r["spot_id"]) not in wrong]
-            n_unannotated += before - len(rows)
-            stats = {"wrong_excluded": before - len(rows),
-                     "suspect": sum(1 for r in rows if str(r["spot_id"]) in suspect)}
+            rows_kept = [r for r in rows if str(r["spot_id"]) not in wrong]
+            n_wrong = before - len(rows_kept)
+            rows = [r for r in rows_kept if str(r["spot_id"]) not in redundant]
+            n_redundant = len(rows_kept) - len(rows)
+            n_unannotated += n_wrong + n_redundant
+            stats = {"wrong_excluded": n_wrong, "redundant_excluded": n_redundant,
+                     "suspect": sum(1 for r in rows if str(r["spot_id"]) in suspect),
+                     "assigned": sum(1 for r in rows if r.get("name_source") == "curation")}
         curation_line = meta_line(curation["state"], flag_set, stats)
 
     n_total = len(result["results"])
@@ -150,6 +164,15 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
 
 
 # ---------- 内部 ----------
+
+def _as_spot_id(fid):
+    """mzTab-M の SMF_ID（文字列）を、curation フラグの spot_id（int の MasterAlignmentID）と
+    突き合わせられる形にする。数字でなければそのまま返す。"""
+    try:
+        return int(fid)
+    except (TypeError, ValueError):
+        return fid
+
 
 def _preprocess_parameters(ds, result: dict) -> dict:
     """その結果が実際に使った前処理条件を返す（今の状態ではなく来歴から）。"""

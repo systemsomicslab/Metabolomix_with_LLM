@@ -3,10 +3,10 @@ import json
 import pytest
 
 from lipidmix.core import mcp_core, session_state
-from lipidmix.curation import flags
+from lipidmix.curation import flags, suggest
 from lipidmix.library import store as library_store
 from lipidmix.tools import curation_tools
-from tests.curation_fixtures import write_alignment_set
+from tests.curation_fixtures import write_alignment_set, write_suggest_set
 
 
 @pytest.fixture()
@@ -319,3 +319,70 @@ def test_submit_is_annotated_as_destructive_because_it_rewrites_the_tags_file():
     annotations = tools["curation_submit"].annotations
     assert annotations.destructiveHint is True and annotations.readOnlyHint is False
     assert tools["curation_review"].annotations.destructiveHint is False
+
+
+@pytest.fixture()
+def suggest_env(tmp_path, monkeypatch):
+    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    paths = write_suggest_set(tmp_path / "neg")
+    monkeypatch.setattr(mcp_core, "DATA_DIR", paths["arf2"].parent)
+    session_state.session.__init__()
+    s = library_store.open_store(paths["msp"])
+    session_state.session.library.store = s
+    yield paths
+    s.close()
+    session_state.session.__init__()
+
+
+def test_suggest_requires_a_review(suggest_env):
+    out = json.loads(curation_tools.curation_suggest(file_path=str(suggest_env["arf2"])))
+    assert out["error"]["code"] == "missing_state" and out["error"]["required_tools"] == ["curation_review"]
+
+
+def test_suggest_requires_the_library(suggest_env):
+    session_state.session.library.store = None
+    out = json.loads(curation_tools.curation_suggest(file_path=str(suggest_env["arf2"])))
+    assert out["error"]["required_tools"] == ["library_load"]
+
+
+def test_suggest_then_submit_assign_and_redundant(suggest_env):
+    arf2 = str(suggest_env["arf2"])
+    json.loads(curation_tools.curation_review(file_path=arf2))
+    out = json.loads(curation_tools.curation_suggest(file_path=arf2))
+    sid = out["suggestion_id"]
+    assert out["counts"]["targets"]["unannotated"] == 3
+    assert out["table"].splitlines()[0].split("\t") == suggest.TSV_COLUMNS
+    assert out["html_path"].endswith(f"suggest-{sid}.html")
+    assert "spots" not in out                                     # 座標・EIC は戻り値に入れない
+    assert "path" in out["library"]                               # ライブラリの出所（sha256 だけでは分からない）
+    text = 'CURATION_SUBMIT ' + json.dumps({"review_id": sid, "arf2_path": arf2, "flags": [
+        {"spot_id": 2, "flag": "assign", "candidate": "L1", "level": "sum", "note": ""},
+        {"spot_id": 3, "flag": "redundant", "candidate": "R1", "note": ""}]})
+    submitted = json.loads(curation_tools.curation_submit(submission_text=text))
+    assert submitted["status"] == "ok" and submitted["recorded"] == 2
+    assert submitted["n_assign"] == 1 and submitted["n_redundant"] == 1
+    assert submitted["tags_xml"]["added"] == [] and submitted["tags_xml"]["removed"] == []   # _tags.xml は不変
+    table = json.loads(curation_tools.curation_flags(file_path=arf2))["table"].splitlines()
+    assert table[0] == "spot_id\tflag\tname\tof\tnote\tsource\tts"
+    assert table[1].split("\t")[:4] == ["2", "assign", "PE 36:2", ""]
+    assert table[2].split("\t")[:4] == ["3", "redundant", "", "0"]
+
+
+def test_submit_rejects_a_forged_candidate(suggest_env):
+    arf2 = str(suggest_env["arf2"])
+    json.loads(curation_tools.curation_review(file_path=arf2))
+    sid = json.loads(curation_tools.curation_suggest(file_path=arf2))["suggestion_id"]
+    out = json.loads(curation_tools.curation_submit(review_id=sid, file_path=arf2, flags=[
+        {"spot_id": 2, "flag": "assign", "candidate": "L7", "level": "sum"}]))
+    assert out["status"] == "error"
+    flags_path = suggest_env["arf2"].parent / "curation" / "flags.jsonl"
+    assert not flags_path.exists() or '"assign"' not in flags_path.read_text(encoding="utf-8")
+
+
+def test_suggest_survives_a_corrupt_review_file(suggest_env):
+    arf2 = str(suggest_env["arf2"])
+    json.loads(curation_tools.curation_review(file_path=arf2))
+    (flags.curation_dir(suggest_env["arf2"]) / "review-cr-99999999-999999-ffff.json").write_text(
+        "{not json", encoding="utf-8")
+    out = json.loads(curation_tools.curation_suggest(file_path=arf2))
+    assert "suggestion_id" in out and "error" not in out

@@ -21,6 +21,7 @@ import server
 # Task10: 参照ライブラリの MS/MS 照合 3 本を追加(63→66)。
 # 配布更新: 通知だけでなく適用まで行う server_update を追加(66→67)。
 # アラインメントのキュレーション: curation_review/submit/flags/view_data を追加(67→71)。
+# キュレーションの候補付け: curation_suggest を追加(71→72)。
 EXPECTED_TOOLS = sorted([
     "library_load",
     "library_match_feature",
@@ -29,6 +30,7 @@ EXPECTED_TOOLS = sorted([
     "curation_submit",
     "curation_flags",
     "curation_view_data",
+    "curation_suggest",
     "arf2_annotate_identities",
     "arf2_parser",
     "arf_differential",

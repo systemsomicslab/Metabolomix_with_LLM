@@ -768,6 +768,22 @@ class TestNeverExecutedToolsSmoke(unittest.TestCase):
         self.assertIn("curation_flag", header)
         self.assertIn("wrong", body[0])
 
+    def test_arf2_annotate_identities_shows_assign(self):
+        from lipidmix.arf2.tools import arf2_annotate_identities
+        from lipidmix.curation import flags as curation_flags
+
+        path = Path(self.write(
+            "synthetic.arf2", lz4_container(msgpack_stream([arf2_spot()]))))
+        curation_flags.FlagStore(curation_flags.curation_dir(path)).append(
+            [{"spot_id": 7, "flag": "assign", "name": "PC 34:2", "level": "sum"}],
+            alignment=curation_flags.alignment_key(path), review_id="cs-x", source="user")
+
+        result = arf2_annotate_identities(file_path=str(path), max_rows=10)
+
+        header, *body = result.splitlines()[-2:]
+        column = header.split("\t").index("curation_flag")
+        self.assertEqual(body[0].split("\t")[column], "assign:PC 34:2")
+
     def test_arf2_annotate_identities_survives_a_malformed_flags_file(self):
         """I6: 壊れた flags.jsonl でも一覧は返し、curation_flag を空にして 1 行で知らせる。"""
         from lipidmix.arf2.tools import arf2_annotate_identities

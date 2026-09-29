@@ -148,7 +148,7 @@ def select_spots(catalog, *, ontology, name_contains) -> list[dict]:
     return selected
 
 
-def _arf_rows(arf_path) -> dict[int, list[dict]]:
+def arf_rows_by_spot(arf_path) -> dict[int, list[dict]]:
     if arf_path is None:
         return {}
     with open(arf_path, "rb") as handle:
@@ -156,6 +156,9 @@ def _arf_rows(arf_path) -> dict[int, list[dict]]:
     return {spot["MasterAlignmentID"]: [arf_reader.alignment_feature_row(row)
                                         for row in spot["AlignedPeakProperties"]]
             for spot in spots}
+
+
+_arf_rows = arf_rows_by_spot
 
 
 def _trim(points, left, right):
@@ -215,7 +218,8 @@ def _reference(store, match, rep_mz):
     return record
 
 
-def collect(arf2_path, spots, *, store, ms2_tol, th, file_ids=None, max_traces=12):
+def collect(arf2_path, spots, *, store, ms2_tol, th, file_ids=None, max_traces=12,
+            keep_measured: bool = False):
     """スポットごとの証拠を集める。`file_ids` に `.arf` の行に無い ID があれば、重い読み込み
     (`.dcl`・EIC)の前に `UnknownFileIdsError` を投げる。"""
     files = sibling_files(arf2_path)
@@ -313,5 +317,6 @@ def collect(arf2_path, spots, *, store, ms2_tol, th, file_ids=None, max_traces=1
             "drt": None if drt is None else round(drt, 4),
             "rescore": rescore, "mirror": mirror,
             "eic": {"samples": samples}, "eic_shape": shape, "notes": notes,
+            **({"_measured": measured} if keep_measured else {}),
         })
     return results, stats

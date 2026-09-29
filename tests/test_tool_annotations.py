@@ -137,6 +137,7 @@ EXPECTED_ANNOTATIONS = {
     "curation_submit": APPEND_AND_REWRITE,
     "curation_flags": READ_ONLY,
     "curation_view_data": READ_ONLY,
+    "curation_suggest": LOCAL_WRITE_APPEND,
 }
 
 

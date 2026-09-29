@@ -26,7 +26,7 @@ def test_wrong_rows_are_dropped_and_suspect_kept(tmp_path):
     rows = [{"spot_id": 1}, {"spot_id": 2}, {"spot_id": 3}]
     kept, stats = apply.filter_rows(rows, state, key=lambda r: r["spot_id"])
     assert [r["spot_id"] for r in kept] == [2, 3]
-    assert stats == {"wrong_excluded": 1, "suspect": 1}
+    assert stats == {"wrong_excluded": 1, "redundant_excluded": 0, "suspect": 1, "assigned": 0}
     line = apply.meta_line("applied", state, stats)
     assert line.startswith("# curation = applied\t")
     assert "curation_wrong_excluded = 1" in line
@@ -149,3 +149,47 @@ def test_arf2_for_mztab_does_not_match_a_stem_that_is_a_prefix_of_another(tmp_pa
     short = tmp_path / "Height_AlignmentResult_2026_01_01_2_3_09.mzTab"
     short.write_text("", encoding="utf-8")
     assert apply.arf2_for_mztab(short).name == "AlignmentResult_2026_01_01_2_3.arf2"
+
+
+# ---------- assign / redundant（候補付けの判断の反映） ----------
+
+from lipidmix.curation import apply as curation_apply  # noqa: E402
+
+
+def _flag_set(**kw):
+    base = {"wrong": set(), "suspect": set(), "assign": {}, "redundant": set(), "digest": "d", "n": 0,
+            "orphaned": 0}
+    base.update(kw)
+    base["n"] = len(base["wrong"]) + len(base["suspect"]) + len(base["assign"]) + len(base["redundant"])
+    return base
+
+
+def test_meta_line_unchanged_without_decisions():
+    fs = _flag_set(wrong={1}, suspect={2})
+    line = curation_apply.meta_line("applied", fs, {"wrong_excluded": 1, "suspect": 1,
+                                                    "redundant_excluded": 0, "assigned": 0})
+    assert line == ("# curation = applied\tcuration_flags = 2\tcuration_wrong_excluded = 1\t"
+                    "curation_suspect = 1\tcuration_flags_sha256 = d")
+
+
+def test_meta_line_with_decisions():
+    fs = _flag_set(assign={3: {"name": "PC 34:1", "ontology": "PC", "inchikey": "K"}}, redundant={4})
+    line = curation_apply.meta_line("applied", fs, {"wrong_excluded": 0, "suspect": 0,
+                                                    "redundant_excluded": 1, "assigned": 1})
+    assert "curation_assigned = 1\tcuration_redundant_excluded = 1\tcuration_flags_sha256 = d" in line
+
+
+def test_override_identity_makes_an_unannotated_spot_exportable():
+    catalog = {3: {"MasterAlignmentID": 3, "Name": "Unknown", "Ontology": "", "InChIKey": ""}}
+    fs = _flag_set(assign={3: {"name": "PE 36:2", "ontology": "PE", "inchikey": "KEY-PE362"}})
+    out = curation_apply.override_identity(catalog, fs)
+    assert out[3]["Name"] == "PE 36:2" and out[3]["InChIKey"] == "KEY-PE362" and out[3]["_curation"] == "assign"
+    assert catalog[3]["Name"] == "Unknown"                       # 元の dict は変えない
+
+
+def test_filter_rows_excludes_wrong_and_redundant_and_counts_assigned():
+    rows = [{"spot_id": i} for i in range(5)]
+    fs = _flag_set(wrong={0}, redundant={1}, suspect={2}, assign={3: {"name": "x", "ontology": "", "inchikey": "k"}})
+    kept, stats = curation_apply.filter_rows(rows, fs, key=lambda r: r["spot_id"])
+    assert [r["spot_id"] for r in kept] == [2, 3, 4]
+    assert stats == {"wrong_excluded": 1, "redundant_excluded": 1, "suspect": 1, "assigned": 1}
