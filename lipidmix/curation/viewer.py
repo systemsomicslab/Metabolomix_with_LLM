@@ -27,3 +27,7 @@ def render_html(review: dict | None) -> str:
         data = json.dumps(review, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
                           default=str).replace("<", "\\u003c")
     return template.replace(_PLACEHOLDER, data, 1)
+
+
+def render_suggest_html(suggestion: dict | None) -> str:
+    return "<!doctype html><title>suggest</title>"   # Task 7 で本実装に置き換える

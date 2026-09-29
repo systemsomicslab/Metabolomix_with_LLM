@@ -10,6 +10,9 @@ from pathlib import Path
 import lz4.block
 import msgpack
 
+from lipidmix.msdial.adducts import mz_from_neutral, parse_adduct
+from lipidmix.msdial.peak_verification import monoisotopic_mass, parse_formula
+
 
 def at_keys(size: int, values: dict) -> list:
     row = [None] * size
@@ -232,4 +235,102 @@ def write_alignment_set(folder: Path, *, n_files: int = 3, eic_points: int = 31,
     (folder / "AlignmentResult_x.EIC.aef").write_bytes(css1_bytes(eic_spots))
     write_arf(folder / "AlignmentResult_x_PeakProperties.arf", groups)
     (folder / "lib.msp").write_text(LIBRARY_MSP, encoding="utf-8")
+    return {"arf2": folder / "AlignmentResult_x.arf2", "msp": folder / "lib.msp"}
+
+
+SUGGEST_MSP = textwrap.dedent("""\
+    NAME: PC 16:0_18:2
+    PRECURSORMZ: {pc342:.4f}
+    PRECURSORTYPE: [M+HCOO]-
+    IONMODE: Negative
+    INCHIKEY: KEY-PC342
+    FORMULA: C42H80NO8P
+    Num Peaks: 2
+    255.23 999
+    279.23 800
+
+    NAME: PC 16:0_18:1
+    PRECURSORMZ: {pc341:.4f}
+    PRECURSORTYPE: [M+HCOO]-
+    IONMODE: Negative
+    INCHIKEY: KEY-PC341
+    FORMULA: C42H82NO8P
+    Num Peaks: 2
+    255.23 999
+    281.25 800
+
+    NAME: PE 18:0_18:2
+    PRECURSORMZ: {pe362:.4f}
+    PRECURSORTYPE: [M-H]-
+    IONMODE: Negative
+    INCHIKEY: KEY-PE362
+    FORMULA: C41H78NO8P
+    Num Peaks: 2
+    283.26 999
+    279.23 700
+""")
+
+
+def _mz(formula: str, adduct: str) -> float:
+    return mz_from_neutral(monoisotopic_mass(parse_formula(formula)), parse_adduct(adduct))
+
+
+def write_suggest_set(folder: Path, *, with_param: bool = True, with_arf: bool = True) -> dict:
+    """候補付け用の一式（負イオン、6 試料）。
+
+    spot 0: PC 34:2 [M+HCOO]-、注釈付き（相手 Y）
+    spot 1: PC 34:1 と注釈されているが、実は spot 0 の M+2（強度 0.1 倍・同時溶出）。wrong フラグの対象。
+            MatchResults は代表（PC 16:0_18:1、ライブラリ 1 番）と、store に無い 2 位（PG 34:1、LibraryID 99）
+    spot 2: 未注釈、MS/MS が PE 18:0_18:2 [M-H]- と合う（② で候補が出る）
+    spot 3: 未注釈、spot 0 の [M+HCOO]- → [M-CH3]-（-60.0211）、spot 0 への FoundInUpperMsMs リンク
+    spot 4: 未注釈、MS/MS なし、関係なし（候補は出ない）
+    """
+    folder.mkdir(parents=True, exist_ok=True)
+    pc342 = _mz("C42H80NO8P", "[M+HCOO]-")
+    pc341 = _mz("C42H82NO8P", "[M+HCOO]-")
+    pe362 = _mz("C41H78NO8P", "[M-H]-")
+    unknown = match_result({0: None, 1: "", 2: 0.0, 3: 0.0, 14: -1, 26: 1, 33: False})
+    specs = [
+        {"spot_id": 0, "name": "PC 34:2", "mz": pc342, "rt": 10.00, "adduct": "[M+HCOO]-",
+         "formula": "C42H80NO8P", "ontology": "PC", "scale": 1.0, "spectrum": [(255.23, 999.0), (279.23, 800.0)],
+         "matches": [match_result({0: "PC 16:0_18:2", 1: "KEY-PC342", 14: 0, 27: "lib_1"})], "links": []},
+        {"spot_id": 1, "name": "PC 34:1", "mz": pc342 + 2.006710, "rt": 10.01, "adduct": "[M+HCOO]-",
+         "formula": "C42H82NO8P", "ontology": "PC", "scale": 0.1, "spectrum": [(255.23, 999.0), (279.23, 700.0)],
+         "matches": [match_result({0: "PC 16:0_18:1", 1: "KEY-PC341", 14: 1, 27: "lib_1", 31: 2}),
+                     match_result({0: "PG 34:1", 1: "KEY-PG341", 14: 99, 27: "lib_1", 31: 1, 2: 2.0})],
+         "links": [(0, 5)]},
+        {"spot_id": 2, "name": "Unknown", "mz": pe362, "rt": 11.50, "adduct": "[M-H]-", "formula": "",
+         "ontology": "", "scale": 0.5, "spectrum": [(283.26, 999.0), (279.23, 650.0)], "matches": [unknown],
+         "links": []},
+        {"spot_id": 3, "name": "Unknown", "mz": pc342 - 60.021129, "rt": 10.00, "adduct": "[M-H]-",
+         "formula": "", "ontology": "", "scale": 0.3, "spectrum": [(255.23, 999.0)], "matches": [unknown],
+         "links": [(0, 4)]},
+        {"spot_id": 4, "name": "Unknown", "mz": 432.1234, "rt": 3.00, "adduct": "[M-H]-", "formula": "",
+         "ontology": "", "scale": 0.7, "spectrum": [], "matches": [unknown], "links": []},
+    ]
+    write_arf2(folder / "AlignmentResult_x.arf2", [
+        arf2_spot_raw(spot_id=s["spot_id"], name=s["name"], mz=s["mz"], rt=s["rt"], ontology=s["ontology"],
+                      adduct=s["adduct"], formula=s["formula"], ion_mode=1, representative_file_id=0,
+                      matches=s["matches"], peak_links=s["links"])
+        for s in specs])
+    (folder / "AlignmentResult_x.dcl").write_bytes(build_dcl_bytes([
+        {"precursor_mz": s["mz"], "rt": s["rt"], "spectrum": s["spectrum"]} for s in specs]))
+    eic_spots, groups = [], []
+    for s in specs:
+        samples, rows = [], []
+        for file_id in range(6):
+            height = 1000.0 * (file_id + 1) * s["scale"]
+            samples.append({"file_id": file_id, "top": s["rt"], "left": s["rt"] - 0.1, "right": s["rt"] + 0.1,
+                            "points": gaussian_points(s["rt"], height=height)})
+            rows.append(arf_row(file_id=file_id, mz=s["mz"], rt=s["rt"], height=height, gap_filled=False))
+        eic_spots.append({"rt": s["rt"], "mz": s["mz"], "samples": samples})
+        groups.append(rows)
+    (folder / "AlignmentResult_x.EIC.aef").write_bytes(css1_bytes(eic_spots))
+    if with_arf:
+        write_arf(folder / "AlignmentResult_x_PeakProperties.arf", groups)
+    if with_param:
+        (folder / "Dataset_x_param_1.txt").write_text(
+            "Ion mode: Negative\nSearched adduct ions: [M-H]-,[M+HCOO]-,[M+CH3COO]-\n"
+            "MS1 tolerance for centroid: 0.01\nRetention time tolerance for alignment: 0.1\n", encoding="utf-8")
+    (folder / "lib.msp").write_text(SUGGEST_MSP.format(pc342=pc342, pc341=pc341, pe362=pe362), encoding="utf-8")
     return {"arf2": folder / "AlignmentResult_x.arf2", "msp": folder / "lib.msp"}
