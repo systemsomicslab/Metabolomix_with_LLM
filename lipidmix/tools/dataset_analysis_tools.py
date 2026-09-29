@@ -226,7 +226,10 @@ def dataset_export_differential(output_path: str,
     同定なしとして扱い、出力から外す。フラグがあればメタ行 # curation = ... で
     適用状況を宣言する。フラグが無ければ出力は変わらない。成功 payload の
     `curation` は `{state, wrong_excluded, suspect, orphaned}`（arf_export_differential と
-    同じ形）。フラグ記録に読めない行があれば書き出さずに `CURATION_FLAGS_INVALID`。
+    同じ形）。assign（curation_submit の候補付け）は同定を置き換え（name_source /
+    inchikey_source = curation）、redundant は除外する。どちらかがあれば `curation` に
+    `assigned` と `redundant_excluded` が足される。
+    フラグ記録に読めない行があれば書き出さずに `CURATION_FLAGS_INVALID`。
 
     result_id: 書き出す結果を名指しする（省略時は直近の差次的結果）。
         **前処理をやり直した後の古い結果は書き出しません**（`STALE_ANALYSIS_RESULT`）。

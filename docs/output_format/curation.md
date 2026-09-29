@@ -1,13 +1,14 @@
 # アラインメントのキュレーション（`curation_review` 等）の出力フィールド
 
-`curation_review` / `curation_submit` / `curation_flags` が返す値の意味。
+`curation_review` / `curation_suggest` / `curation_submit` / `curation_flags` が返す値の意味。
 
 > 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項はそちらで定義され、ここでは繰り返さない。参照ライブラリ照合のスコアの意味（`-1`/`0` の区別など）は `library` トピックが定義し、ここでは繰り返さない。
 
 ツールが**どのファイルのどの関数をどの順に呼ぶか**は `docs/workflow/curation.md`。
 ここは**値の意味**だけを定義する。実装は `lipidmix/curation/`
 （`judge.py` 機械判別・`evidence.py` 証拠収集・`eic_shape.py` EIC 形状・`trend.py` RT–m/z 傾向・
-`review.py` レビュー生成/要約・`flags.py` フラグ永続化・`apply.py` エクスポート反映）。
+`review.py` レビュー生成/要約・`flags.py` 判断の記録の永続化・`apply.py` エクスポート反映・
+`suggest.py` 候補付けの組み立て/保存/送信内容の展開・`candidates.py` 注釈候補 ①②・`relations.py` イオン関係 ④）。
 
 ## アラインメントのキュレーション
 
@@ -161,10 +162,154 @@ precursor の許容幅をすでに課している——許容幅の外の候補�
 1 件も無ければ `warnings` にその旨を出す。フラグの意味は上流 MsdialWorkbench `afd5f9522` の
 `MsReferenceScorer` / `LipidMsmsCharacterization` と kidney の実測で確かめた。
 
+### `curation_suggest` の戻り値
+
+間違いになったスポットと未注釈スポットに、注釈の候補（①②）と別スポットのイオンとしての説明（④）を並べる。
+**先に `library_load` と `curation_review`**（どちらも無ければ `missing_state`）。
+
+| キー | 意味 |
+|---|---|
+| `suggestion_id` | この候補付けの識別子（`cs-YYYYMMDD-HHMMSS-xxxx`）。`curation_submit` の送信用テキストが運ぶ |
+| `base_review_id` | `likely_wrong` の判定を読んだ元のレビュー。`review_id` を省くと、このアラインメント（sha256 一致）の最新のレビュー |
+| `n_spots` | 対象になったスポット数 |
+| `counts` | `targets`（対象の種類別 `{flagged, likely_wrong, unannotated}`）・`with_candidates`（候補または情報でないイオン関係があるスポット数）・`with_strong_relation`（強い説明（後述）のあるスポット数）・`hard_removed`（ハード制約で削った候補の延べ数） |
+| `warnings` | param ファイルが無く既定の検索アダクトと RT 窓を使った、`PeakProperties.arf` が無く相関を計算できない、兄弟ファイルが無い、など。**`likely_wrong` は元レビューの対象範囲についてしか分からない**旨は常に出る |
+| `table` | 1 スポット 1 行の TSV（列は下表）。強い説明のあるスポットが先、次に対象の種類（`flagged` → `likely_wrong` → `unannotated`）、同順位は `spot_id` 昇順の**先頭 `max_rows` 行だけ**（引数、既定 100）。載せた行数は `n_table_rows_shown`。全件は `html_path` |
+| `html_path` | 候補付けビューア HTML のパス。ユーザーがブラウザで開いて選び、「送信用テキストをコピー」でチャットへ貼る |
+| `library` | 使った参照ライブラリの `path` と `sha256` |
+| `analysis_params` | 検索アダクトと RT 窓の出所。`source`（param ファイルか既定か）・`path`・`rt_window`（分） |
+| `options` / `thresholds` | 実際に使った引数（`rt_window` は解決後の値）としきい値 |
+
+`table`（TSV）の列:
+
+| 列 | 意味 |
+|---|---|
+| `spot_id` | `MasterAlignmentID` |
+| `name` | 今の名前（未注釈は `Unknown` 系） |
+| `target` | 対象の種類。`flagged`＝有効な `wrong` フラグのあるスポット、`likely_wrong`＝元レビューの判定が `likely_wrong`（フラグ無し）、`unannotated`＝`.arf2` に代表が無いスポット。`include_decided=True` のときは、判断済み（assign / redundant）の注釈付きスポットも `flagged` で戻る |
+| `top_candidate` | 候補（①②）の先頭の名前（和組成があれば和組成）。候補が無ければ空 |
+| `source` | 先頭の候補の出所。`msdial`（MS-DIAL 自身の下位候補）・`research`（閾値を緩めた再検索だけで出たもの）・`msdial+research`（両方） |
+| `total_score` | 先頭の候補の総合スコア（`library` トピックの `total_score` と同じ物差し。RT・precursor の一致度を足した**非正規化の和**で 1 を超える）。比較できなければ `-1` |
+| `reasons` | 先頭の候補のソフト理由・情報の理由コードをカンマ区切り |
+| `relation` | 先頭のイオン関係（④）を `<関係コード>(#<相手スポット>)` で。無ければ空 |
+| `strong` | 強い説明があるか（`True`/`False`） |
+
+### 候補付けの payload（HTML ビューア専用）
+
+`curation_suggest` の戻り値には出ない（座標を LLM に返さない規約）。`suggest-<id>.json`（正準）と
+`suggest-<id>.html` のビューアだけが持つ。スポットごとに `eic`（対象の EIC）・`measured`（測定 MS/MS）・
+`candidates`（①② の候補）・`relations`（④ の関係）・`strong`・`preset`（強い説明があるときの初期選択の `R<n>`）を持つ。
+`curation_submit` はここから候補の詳細を引いて記録行に展開する。
+
+**候補（`candidates[]`、①②）**: `candidate_id`（`L1`…、並び順）・`source`・`name`（分子種）・`sum_name`
+（和組成。解析できなければ `null`）・`ontology`・`adduct`・`formula`・`inchikey`・`library_id`/`record_index`
+（参照レコード）・`dmz_mda`/`ppm`（代表試料の m/z と参照 precursor m/z の差）・`scores`
+（`total_score` `weighted_dot_product` `simple_dot_product` `reverse_dot_product`
+`matched_peaks_percentage` `matched_peaks_count`）・`trend`（RT–m/z 傾向の予測 RT・残差・z。当てはまらなければ `null`）・
+理由コード（`soft` / `info`。ハードは削られるので残らない）・`mirror`（対向プロットの参照側）。
+`total_score` 等の `-1` は**比較していない**（スポットに MS/MS が無い、または参照が引けずスペクトルが無い。`matched_peaks_count` は 0 のまま）で、
+ビューアは `–` と表示する（「一致度ゼロ」ではない。`library` トピックの `-1`/`0` の区別と同じ）。
+
+**イオン関係（`relations[]`、④）**: 次々節。
+
+ビューアは、イオン関係の行を選ぶ（または指す）と、相手 Y の代表試料の EIC（`partner_eic`）を X の代表試料の EIC に
+重ねて描く。Y のトレースは X の代表試料の最大値に合わせて縮め、点線で描く（形の比較用。強度の比は `isotope_ratio` を見る）。
+
+### 候補の理由コード
+
+候補（①②）ごとに、次の制約を当てる。**ハード**は候補から削る（戻り値の `hard_removed` に数だけ残る）、
+**ソフト**は順位を下げる、**情報**は何もしない。並び順は（ソフト理由の数 昇順、`total_score` 降順）で、
+スポットごとに上位 `top_n`（既定 5）件を出す。
+
+| 区分 | コード | 意味 |
+|---|---|---|
+| ハード | `polarity_mismatch` | 候補のアダクトの電荷符号とスポットのイオン化極性が矛盾 |
+| ハード | `dmz_out` | \|Δm/z\|（代表試料の m/z と参照 precursor m/z の差）が `dmz_fail_mda`（既定 10 mDa）**以上** |
+| ソフト | `adduct_atypical` | そのクラスに典型的でないアダクト |
+| ソフト | `trend_outlier` | 候補のクラス×和組成から予測した RT との残差の \|z\| が `trend_outlier_z`（既定 3.0）を超えた |
+| ソフト | `no_matched_peaks` | MS/MS はあるが一致ピークが 0（参照が引けず比べていない候補にも付く） |
+| ソフト | `msms_absent` | スポットに MS/MS が無い（①の候補にだけ付く。②は MS/MS が無いと働かない） |
+| ソフト | `no_support`（イオン関係） | ④の関係に裏付けが無い（次節） |
+| 情報 | `trend_unknown` | 候補のクラスの傾向が点数不足などで当てはまらない。**順位は下げない**（「傾向から外れた」ではなく「傾向を持たない」） |
+| 情報 | `reference_unresolved` | ①の候補の参照レコードがライブラリに無い（スペクトルの再採点ができず、`scores` は `-1`） |
+
+傾向モデルは、そのアラインメントの注釈付きスポットのうち、対象でも `wrong` フラグ付きでもないものから、クラスごとに
+`RT = a + b·炭素数 + c·二重結合数`（Huber）で当てはめる。元レビューの範囲には縛られない。
+
+### イオン関係（`relation`）
+
+対象スポット X を、注釈付きの別スポット Y のイオンとして説明できるとき、`relations[]` の行（`candidate_id` は
+`R1`…）になる。①② とは物差しが違うので、候補と 1 本の順位には混ぜない。
+
+**相手 Y の条件**: 注釈付きで、有効な `wrong` フラグが無く、今回の対象でも `redundant` 判断済みでもないスポット。
+誤った注釈や消した行を起点にした説明の連鎖を防ぐ。**Y が `assign` 済みなら、記録した名前・組成式・アダクトで扱う**
+（置き換えた MS-DIAL の名前や組成式で同位体の期待比を計算しない）。
+
+**関係になる条件**（すべて）: (1) \|ΔRT\| ≤ `rt_window`（既定は param ファイルの
+`Retention time tolerance for alignment`、無ければ 0.1 分）、(2) Δm/z が下の関係のどれかで `relation_mz_tol`
+（既定 10 mDa）以内、または MS-DIAL の `found_in_upper_msms` リンクがある。
+
+| 関係コード | 意味 |
+|---|---|
+| `adduct:<X のアダクト>/<Y のアダクト>` | 同じ中性分子の別アダクト。Y の中性質量に、解析で検索したアダクト（param ファイルの `Searched adduct ions`。二量体・多価を含む。無ければ極性ごとの既定）を付けた m/z が X に一致 |
+| `isotope_M+1` / `isotope_M+2` | Y の 13C 同位体（+1.003355 / +2.006710 を電荷で割る） |
+| `insource:-H2O` `-2H2O` `-NH3` `-HCOOCH3` `-CH3COOCH3` `-C3H5NO2` `-C2H8NO4P` `-C3H8NO6P` `-C6H10O5` | Y からの中性損失によるインソース断片（`lipidmix/curation/relations.py` の表。質量はそれぞれの組成式から計算） |
+| `found_in_upper_msms` | 質量差が上のどれでも説明できないが、MS-DIAL が「Y の MS/MS に X が見える」とリンクしている |
+
+**MS-DIAL の `found_in_upper_msms` リンクは向きの無い対で保存される**（実データで相互に 100%、相手が高 m/z 側になるのは半々）。
+そこで前駆体（upper）側は m/z の大小で決める: **リンクだけで関係にするのも、リンクで強い説明にするのも、X の m/z が Y の m/z
+より小さい（X が断片＝軽い側）ときに限る**。リンクは裏付け（下）には向きによらず数える。
+
+**裏付け**: MS-DIAL のリンク（`correl_similar` / `chrom_similar` / `found_in_upper_msms`）があるか、`.arf` の試料別の高さの
+log1p で求めた Pearson の `r` ≥ `relation_min_r`（既定 0.8。両方の高さが正の試料が 5 以上のときだけ計算、足りなければ `r` は空）。
+どちらも無い関係は載せるが `no_support`（ソフト）を付けて順位を下げる。`msdial_links` は X–Y 間の MS-DIAL のリンク種別。
+
+**強い説明**（`strong = true`）: 裏付けがあり、情報でなく、かつ (a) `found_in_upper_msms` の関係、(b) Y が前駆体側（上の m/z の規則）の
+`found_in_upper_msms` リンクを持つ関係、または (c) 同位体で `isotope_consistent` のもの。強い説明のあるスポットでは、それがカードの先頭で
+初期選択（`preset`）になる。**アダクトの組・インソース断片は、Y が前駆体側のリンクを伴わない限り強い説明にならない**（Δm/z が合うだけでは
+断定しない）。
+
+**同位体の強度比の規則**: `isotope_ratio` は試料ごとの X の高さ / Y の高さの中央値（両方が正の試料だけ）。`expected_ratio` は Y の組成式の
+炭素数 n から二項分布で求めた期待比 `C(n,k)·q^k`（k = 1 または 2、q = 0.0107 / (1 − 0.0107)）。`isotope_ratio` が `expected_ratio` の
+**1.5 倍以下**なら `isotope_consistent = true`（Y の同位体として矛盾しない）。**1.5 倍を超えれば X は実在の別物質**（同位体の重なり）と
+みなし、`informational = true`（情報として添えるだけで、`redundant` には選べない）。比が求められない（炭素数不明・共通試料なし）ときは
+`isotope_consistent` は `null` で、強い説明にはならない。
+
+関係の並び順は（強い説明 → 情報でないもの → 裏付けありのもの、`|Δm/z|` 昇順）。ビューアのために、上位 3 件の関係は相手 Y の代表試料の
+EIC（`partner_eic`）を持つ。
+
+### 判断の記録（assign / redundant）
+
+`flags.jsonl`（追記専用。ファイル名は変わらず、「フラグ」は「判断の記録」の意味に広がった）の `flag` は
+`wrong` / `suspect` / `clear` / `assign` / `redundant`。キー（アラインメントの sha256 と `MasterAlignmentID`）、
+**スポットごとに最新の 1 行が勝つ**、`clear` は取り消し、は既存どおり。`wrong` の後の `assign` は `assign` が勝つ。
+
+| flag | 主な項目 |
+|---|---|
+| `assign` | `name`（記録名）・`level`（`sum` / `species`）・`species_name`（レコード本来の分子種名）・`ontology`・`adduct`・`formula`・`inchikey`・`candidate_source`・`library`（`sha256` `library_id` `record_index`）・`scores`（採点のスナップショット）・`suggestion_id` |
+| `redundant` | `of`（Y の `spot_id`）・`relation`（関係コード）・`evidence`（`dmz_mda` `drt` `r` `msdial_links`）・`suggestion_id` |
+
+- 候補付け（`cs-…`）の送信は `flags=[{spot_id, flag: assign|redundant|clear, candidate, level, note}]`。`candidate` は `assign` なら
+  `L<n>`、`redundant` なら `R<n>`（**情報のイオン関係は `redundant` に選べない**）。名前・InChIKey は送信側で書かず、
+  保存済みの `suggest-<id>.json` から展開する。`level` の既定は `sum`（和組成。`name` = `sum_name`、解析できなければ分子種名）で、
+  `species` なら `name` はレコードの分子種名。**和組成で記録しても、選んだレコードの InChIKey を持たせる**（MS-DIAL が和組成の名前にも
+  ライブラリの構造の InChIKey を付けるのと同じ）。この InChIKey は MS/MS で鎖組成まで確かめたことを意味しない。
+- `curation_submit` の戻り値に `n_assign` / `n_redundant`（有効な判断の件数）が加わる。**`assign` / `redundant` は `_tags.xml` の
+  Misannotation を変えない**（MS-DIAL の中の名前はまだ誤ったままのため）。
+- 候補付けビューアの「元の注釈に戻す」は `clear` を送る。`clear` はそのスポットの**有効な判断を丸ごと**（`wrong` でも `assign` でも）消し、
+  `_tags.xml` の Misannotation も外す。
+- `curation_flags` の TSV は 7 列: `spot_id`・`flag`・`name`（`assign` の記録名）・`of`（`redundant` の相手）・`note`・`source`・`ts`。
+- `arf2_annotate_identities` の `curation_flag` 列は有効な判断: `wrong` / `suspect` / `assign:<記録名>` / `redundant`（無ければ空）。
+- `curation_review` のスポットの `flag` / `flag_note` は `wrong` / `suspect` だけ。`assign` / `redundant` は別項目 `decision`
+  （`{flag, name}` または `{flag, of}`）に出る。
+- エクスポートでの扱い（下の「エクスポートのメタ行」以降）: `assign` は同定を置き換え、`redundant` は除外する。
+
 ### `curation_submit` の戻り値の `tags_xml`（MS-DIAL への反映）
 
 記録（`flags.jsonl`、正本）の後、アラインメントの `<.arf2 の stem>_tags.xml` の
 **Misannotation**（タグ Id 3）に反映する。`wrong` → 付ける、`clear` → 外す、`suspect` → 触らない。
+**`assign` / `redundant` も触らない**（MS-DIAL の中の名前はまだ誤ったままで、Misannotation を外す条件は満たさない）。
+候補付けビューアの「元の注釈に戻す」（`clear`）は、そのスポットの有効な判断が `wrong` でも `assign` でも `redundant` でも Misannotation を外す。
 他のタグと定義は残し、ファイルが無ければ MS-DIAL と同じ 5 定義で作る。形式は上流
 `AlignmentResultContainer.Save` と同じ（`<Peak Id="<MasterAlignmentID>"><Tag>3</Tag></Peak>`、
 UTF-8 BOM・CRLF）。
@@ -184,44 +329,61 @@ MS-DIAL はアラインメントを保存するたびにメモリ上のタグで
 ### エクスポートのメタ行（`# curation = ...`）
 
 `arf_export_differential` / `dataset_export_differential` は既定（`apply_curation=True`）で
-有効フラグ（`curation_flags` と同じ、スポットごとの最新 1 行・`clear` 済みは除く）を読み、
-差次的エクスポートの契約 15 列（`export_contract.EXPORT_COLUMNS`）自体は変えずに、
+有効な判断（`curation_flags` と同じ、スポットごとの最新 1 行・`clear` 済みは除く。`wrong` / `suspect` /
+`assign` / `redundant`）を読み、差次的エクスポートの契約 15 列（`export_contract.EXPORT_COLUMNS`）自体は変えずに、
 メタ行ブロックの `source_lines` スロットの**末尾**（`# source_arf`/`# source_mztab` 等、
 経路固有のメタ行のすぐ後ろ。`export_contract.build_meta` の順序契約でスロット 3）に
-1 行だけ足す（`lipidmix/curation/apply.py` の `meta_line()`）。**有効フラグが 0 件**なら
+1 行だけ足す（`lipidmix/curation/apply.py` の `meta_line()`）。**有効な判断が 0 件**なら
 `meta_line()` は `None` を返し、この行自体を出さない——出力は現行と完全に同じになる。
 
-タブ区切りの 1 行で、形は次のとおり（角括弧内は `state` が `applied` のときだけ出る）:
+タブ区切りの 1 行で、形は次のとおり（外側の角括弧内は `state` が `applied` のときだけ、内側の角括弧内はさらに
+有効な `assign` / `redundant` が 1 件以上あるときだけ出る）:
 
 ```
-# curation = <state>\tcuration_flags = N[\tcuration_wrong_excluded = N\tcuration_suspect = N]\tcuration_flags_sha256 = <hex>
+# curation = <state>\tcuration_flags = N[\tcuration_wrong_excluded = N\tcuration_suspect = N[\tcuration_assigned = N\tcuration_redundant_excluded = N]]\tcuration_flags_sha256 = <hex>
 ```
 
 | フィールド | 意味 |
 |---|---|
 | `<state>` | 下表 |
-| `curation_flags = N` | 有効フラグの総数（`wrong` + `suspect`。`flags_for_arf2()["n"]`） |
+| `curation_flags = N` | 有効な判断の総数（`wrong` + `suspect` + `assign` + `redundant`。`flags_for_arf2()["n"]`） |
 | `curation_wrong_excluded = N` | **`state == "applied"` のときだけ**出る。実際に出力の行から除外したスポット数 |
 | `curation_suspect = N` | 同上。除外せず残した行のうち `suspect` フラグが付いているものの数（値そのものは変えていない） |
-| `curation_flags_sha256 = <hex>` | フラグ集合のダイジェスト（`flags_for_arf2()["digest"]`）。再エクスポートを跨いでフラグ内容が変わっていないかを機械的に照合できる |
+| `curation_assigned = N` | **`applied` かつ有効な `assign` / `redundant` があるときだけ**出る。`assign` で同定を置き換えて**出力に残った**行数 |
+| `curation_redundant_excluded = N` | 同上。`redundant` で実際に出力の行から除外したスポット数 |
+| `curation_flags_sha256 = <hex>` | 判断集合のダイジェスト（`flags_for_arf2()["digest"]`）。再エクスポートを跨いで判断の内容が変わっていないかを機械的に照合できる。`assign` は記録名と `level`、`redundant` は相手と関係コードまで含む（`wrong` / `suspect` だけの集合のダイジェストは従来と同じ） |
 
 `state` は経路とその引数で決まる:
 
 | `state` | 経路 | 条件 |
 |---|---|---|
-| `applied` | ARF 経路（`arf_export_differential`）は `apply_curation=True`（既定）なら常にこれ。mzTab 経路（`dataset_export_differential`）は `apply_curation=True` かつ、隣接する `.arf` との対応が検証済み（`DatasetState.feature_qc["source"] == "arf"`、SMF_ID が `MasterAlignmentID` と同じ空間だと確認できている） | `wrong` のスポットを実際に出力から除外し、`curation_wrong_excluded`/`curation_suspect` を出す |
-| `not_applied` | 両経路 | `apply_curation=False` を明示した。フラグはあっても意図的に無視——行は 1 つも落とさない |
-| `unmapped` | mzTab 経路のみ | `apply_curation=True` だが SMF_ID と `MasterAlignmentID` の対応が未検証（`feature_qc["source"] != "arf"`）。**フラグが 1 件でもあっても行は 1 つも落とさない**——対応が確認できないまま除外すると、mzTab の別 feature を `.arf2` のスポット番号と取り違えて黙って消しかねないため |
+| `applied` | ARF 経路（`arf_export_differential`）は `apply_curation=True`（既定）なら常にこれ。mzTab 経路（`dataset_export_differential`）は `apply_curation=True` かつ、隣接する `.arf` との対応が検証済み（`DatasetState.feature_qc["source"] == "arf"`、SMF_ID が `MasterAlignmentID` と同じ空間だと確認できている） | `wrong` と `redundant` のスポットを実際に出力から除外し、`assign` のスポットの同定を置き換え、`curation_wrong_excluded`/`curation_suspect`（と `assign` / `redundant` があれば `curation_assigned`/`curation_redundant_excluded`）を出す |
+| `not_applied` | 両経路 | `apply_curation=False` を明示した。判断はあっても意図的に無視——行は 1 つも落とさず、同定も置き換えない |
+| `unmapped` | mzTab 経路のみ | `apply_curation=True` だが SMF_ID と `MasterAlignmentID` の対応が未検証（`feature_qc["source"] != "arf"`）。**判断が 1 件でもあっても行は 1 つも落とさず、`assign` も当てない**——対応が確認できないまま除外・置き換えすると、mzTab の別 feature を `.arf2` のスポット番号と取り違えて黙って消す（または別の同定を付ける）しかねないため |
+
+### エクスポートでの `assign` / `redundant` の扱い
+
+両経路（`curation/apply.py` の 1 か所を共有）で、`state == "applied"` のとき:
+
+- `wrong`: 除外（従来どおり）。`redundant`: 除外（`n_unannotated` に数える。「調べていない」行）。
+- `assign`: 行の `name`・`ontology`・`inchikey` を記録した値で置き換え、`name_source` と `inchikey_source` を `curation` にする。
+  ARF 経路の `msi_level` は記録名から求め直す（mzTab 経路は従来どおり空欄）。**未注釈だったスポットも InChIKey を得てエクスポートに新しく現れる**。
+- **記録した InChIKey が空の `assign` は、その行を出力から落とす**（置き換えた MS-DIAL の InChIKey は残さない。InChIKey の無い行は
+  そもそも書き出さないので、`n_unannotated` に数えられる）。ライブラリの参照レコードに InChIKey が無かった候補（`RIKEN … from …` 名の
+  未知スペクトルなど）で起こる。
+- 15 列と `CONTRACT_VERSION` は変わらない。判断が 0 件なら出力は従来と完全に同じ。
 
 ### エクスポートの戻り値の `curation`
 
 両経路の成功 payload は同じ形の `curation` を持つ:
-`{"state": ..., "wrong_excluded": N, "suspect": N, "orphaned": N}`。
+`{"state": ..., "wrong_excluded": N, "suspect": N, "orphaned": N}`。有効な `assign` / `redundant` があるときは
+`assigned` と `redundant_excluded` が足される。
 
 | キー | 意味 |
 |---|---|
-| `state` | 上表の `applied` / `not_applied` / `unmapped`。有効フラグが 0 件（メタ行を出さない）なら `null` |
+| `state` | 上表の `applied` / `not_applied` / `unmapped`。有効な判断が 0 件（メタ行を出さない）なら `null` |
 | `wrong_excluded` / `suspect` | `state == "applied"` のときだけ数字（メタ行の同名フィールドと同じ値）。それ以外は `null`——メタ行と同じく「0 件除外した」と「除外していない」を混同させない |
+| `assigned` / `redundant_excluded` | 有効な `assign` / `redundant` があるときだけ出るキー。`state == "applied"` のときだけ数字（メタ行の `curation_assigned` / `curation_redundant_excluded` と同じ値）、それ以外は `null` |
 | `orphaned` | 同じファイル名で sha256 が違う（以前の版の）`.arf2` に付いた有効フラグの件数。当てないので行は落とさない。1 件以上なら payload の `warnings` にも同じ内容が出る。**メタ行には出さない** |
 
 **パイプライン（`pipeline_run`）が書く差次的エクスポートはフラグを当てない。** キュレーションは
@@ -231,7 +393,7 @@ pipeline に入れていない（worker は session もフラグ記録も読ま�
 ### フラグ記録が壊れているとき
 
 `flags.jsonl` に読めない行（途中で切れた JSON、`spot_id` が整数でない、`flag` が
-`wrong`/`suspect`/`clear` のどれでもない）があると、黙って読み飛ばさずに止める——
+`wrong`/`suspect`/`clear`/`assign`/`redundant` のどれでもない）があると、黙って読み飛ばさずに止める——
 読み飛ばすとその行の `wrong` がエクスポートから外れないまま、誰も気づかないため。
 
 | ツール | 振る舞い |
@@ -267,3 +429,15 @@ ARF 経路は `.arf2` の `MasterAlignmentID` をそのままキーに使うの�
    `curation_review` ではなく `library_match_feature` を直接使う。また `wdot`/`mpp` は
    `curation_review` が対向照合し直した値ではない——再照合の結果は理由コード
    `rescore_discrepancy`（両者が乖離したときだけ）にしか現れない。
+5. **候補の並び順はスペクトル類似度と制約だけで決まり、MS-DIAL の脂質規則（診断イオン・鎖決定）は評価していない。**
+   候補の上位は化学的にありえない鎖組成でもありうる。そのため既定の記録は和組成（`level = sum`）で、`assign` は
+   「鎖組成まで確かめた」という意味を持たない。`likely_wrong` の判定に使う脂質規則フラグは MS-DIAL の照合結果を読んだものであって、
+   こちらの再検索で出た新しい候補にはその裏付けが無い。
+6. **④ の行の EIC の重ね描きで、相手 Y の代表試料のトレースは X の代表試料の最大値に合わせて縮めて描く**（形の比較用）。
+   重なって見えても強度が同程度という意味ではない。強度の比は `isotope_ratio`（と `expected_ratio`）を見る。
+7. **`redundant` は「X は Y のイオンだ」という判断であって、X が実在しないという判断ではない。** 同位体で強度比が期待の 1.5 倍を超えたもの
+   （`informational`）は実在の別物質の可能性があるので、`redundant` には選べない。`found_in_upper_msms` リンクは向きの無い対なので、
+   前駆体側は m/z の大小で決めている（軽い側が断片）。
+8. **`total_score` の `-1` は「比較していない」であって「一致度ゼロ」ではない。** ビューアは `–` と表示する。
+9. **`curation_suggest` の `likely_wrong` は元レビューの対象範囲についてしか分からない。** 元レビューを `ontology` などで絞っていた場合、
+   範囲外の `likely_wrong` は拾えない（範囲外でも `wrong` フラグと未注釈は対象になる）。
