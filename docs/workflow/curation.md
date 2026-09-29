@@ -55,12 +55,13 @@ flowchart TD
 22. │     └─ lipidmix/curation/evidence.py  _downsample_points()（形状計算の後に payload だけ間引く）
 23. │  └─ lipidmix/curation/trend.py  composition()（`LipidParser` はモジュールで 1 つだけ作る）
 24. │  └─ lipidmix/curation/trend.py  fit_trends()
-25. │  └─ lipidmix/curation/judge.py  judge_spot()
-26. lipidmix/curation/review.py  save_review()
-27. └─ lipidmix/curation/viewer.py  render_html()
-28. lipidmix/curation/review.py  n_summary_rows()
-29. lipidmix/curation/review.py  summary_tsv()（`max_rows` で先頭だけ）
-30. lipidmix/curation/review.py  trend_summary()
+25. │  └─ lipidmix/curation/judge.py  lipid_rules_active()（脂質規則フラグが 1 件でも True か）
+26. │  └─ lipidmix/curation/judge.py  judge_spot()
+27. lipidmix/curation/review.py  save_review()
+28. └─ lipidmix/curation/viewer.py  render_html()
+29. lipidmix/curation/review.py  n_summary_rows()
+30. lipidmix/curation/review.py  summary_tsv()（`max_rows` で先頭だけ）
+31. lipidmix/curation/review.py  trend_summary()
 
 ## curation_submit
 

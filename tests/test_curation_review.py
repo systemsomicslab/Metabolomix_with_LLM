@@ -249,3 +249,37 @@ def test_app_loader_shows_error_payloads_and_send_updates_spots():
     send = send[:send.index("\n});")]
     assert "spot.flag = " in send and "spot.flag_note = " in send
     assert send.index("spot.flag = ") < send.index("edits.clear()")
+
+
+def _review(paths):
+    s = library_store.open_store(paths["msp"])
+    try:
+        spots = evidence.select_spots(load_catalog(paths["arf2"]), ontology=None, name_contains=None)
+        return review.run_review(paths["arf2"], spots, store=s, ms2_tol=0.025,
+                                 th=judge.resolve_thresholds(None), file_ids=None,
+                                 max_traces=12, selection={"kind": "annotated"})
+    finally:
+        s.close()
+
+
+def test_class_rule_rejection_is_likely_wrong_when_lipid_rules_ran(tmp_path, monkeypatch):
+    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    # spot 0 は既定のまま（class=True）＝このデータは脂質規則で採点されている。
+    paths = write_alignment_set(tmp_path / "neg", match_overrides={1: {19: False, 20: False, 22: False}})
+    result = _review(paths)
+    by_id = {s["spot_id"]: s for s in result["spots"]}
+    assert by_id[1]["verdict"] == "likely_wrong"
+    assert by_id[1]["reasons"][0] == "class_rule_rejected"
+    assert not any("脂質規則" in w for w in result["warnings"])
+
+
+def test_rule_flags_are_ignored_when_no_spot_shows_lipid_rules(tmp_path, monkeypatch):
+    # メタボロミクス採点器の出力を模す: どのスポットも規則フラグが全部 False。
+    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    off = {19: False, 20: False, 22: False}
+    paths = write_alignment_set(tmp_path / "neg", match_overrides={0: off, 1: off})
+    result = _review(paths)
+    by_id = {s["spot_id"]: s for s in result["spots"]}
+    assert by_id[1]["verdict"] == "suspect"
+    assert "class_rule_rejected" not in by_id[1]["reasons"]
+    assert any("脂質規則" in w for w in result["warnings"])

@@ -28,11 +28,15 @@
 | `thresholds` | 実際に使ったしきい値（既定 `DEFAULT_THRESHOLDS` に `thresholds` 引数を上書きしたもの） |
 | `ms2_tol` | 対向照合に使った MS2 許容幅（`.dbs` の `search_params` があればそこから、無ければ既定値） |
 
-`warnings` に出る 3 通り: (1) 照合結果を持つスポットのうち参照を引けた割合が半分未満
+`warnings` に出る 4 通り: (1) 照合結果を持つスポットのうち参照を引けた割合が半分未満
 （アラインメントと別のライブラリを読んでいる可能性）、(2) `.dcl`/`.EIC.aef`/`.arf` の
 兄弟ファイルが見つからない（その系統の判定は `UNKNOWN` になる）、(3) **orphaned**——
 `flags.jsonl` に、同じファイル名で sha256 が違う（＝以前の版の）`.arf2` に対して記録された
-有効フラグがある（件数を出す。スポット番号が今の版と対応する保証が無いので当てない）。
+有効フラグがある（件数を出す。スポット番号が今の版と対応する保証が無いので当てない）、
+(4) 照合結果はあるのに MS-DIAL の脂質規則フラグ（`is_lipid_class_match` /
+`is_lipid_chains_match` / `is_other_lipid_match`）がどのスポットにも立っていない——脂質以外の
+採点器の出力とみなし、規則に基づく 3 コード（`class_rule_rejected` / `class_rules_not_run` /
+`chains_unsupported`）を使わない（次節）。
 
 エラーで止まる場合（`{"status": "error", "message": ...}`）:
 `file_ids` に `.arf` の行に無い試料 ID がある（`missing_file_ids` にその ID を出す。重い
@@ -103,6 +107,7 @@ mirror 5.5 MB）になったため導入した上限。
 |---|---|---|
 | 強い | `polarity_mismatch` | アダクトの電荷符号と実測イオン化極性（`IonMode`）が不一致（`adduct_consistency` の `band` が `FAIL`）。脂質クラスとの典型性（`class_typical`）は advisory のみで `band` には効かない——非典型アダクトだけでは立たない |
 | 強い | `precursor_unmatched` | MS-DIAL 自身の `is_precursor_mz_match` が `False` |
+| 強い | `class_rule_rejected` | MS/MS ありで、MS-DIAL の脂質クラス規則（診断イオン）を評価して棄却した（`is_lipid_class_match=False` かつ `is_other_lipid_match=False`）。実測では全件 `low score:` なので `low_score` も同時に立つ。**脂質規則が走ったデータに限る**（下記） |
 | 弱い | `ppm_out` | Δppm が `ppm_borderline` しきい値（既定 10）を超えた。**adduct 非依存**（実測: kidney neg/pos で全 adduct の中央値が約 −0.8 ppm）で、単独では強い理由に数えない（ユーザー決定 2026-09-29）——mz 系統自体は `FAIL` になるが、単独では `suspect` 止まり。`polarity_mismatch`/`precursor_unmatched` が別途立てば、そちらの強さで `likely_wrong` になる |
 | 弱い | `low_score` | MS/MS はあるが MS-DIAL 自身の `is_reference_matched` が `False` |
 | 弱い | `drt_out` | ΔRT が `drt_borderline` しきい値（既定 1.0 分）を超えた |
@@ -116,6 +121,8 @@ mirror 5.5 MB）になったため導入した上限。
 | 情報 | `reference_not_found` | ライブラリから参照レコードを引けなかった。**`rt` 系統だけが `UNKNOWN`** になる。`mz` 系統は Formula/AdductType からの理論値（`mass_error_ppm`、`ppm_basis="formula"`）にフォールバックして計算を続け、それも失敗したときだけ `UNKNOWN` になる（`rt` と違って自動的に `UNKNOWN` にはならない） |
 | 情報 | `reference_rt_absent` | 参照は引けたが RT を持たない（`rt` 系統は `UNKNOWN`） |
 | 情報 | `no_match_result` | ARF2 に MS-DIAL の照合結果（`representative`）自体が無い（`msms` 系統は `UNKNOWN`） |
+| 情報 | `class_rules_not_run` | 脂質クラス規則が評価されていない（`is_lipid_class_match=False` かつ `is_other_lipid_match=True`。CompoundClass が Unknown/Others・SPLASH・名前解析失敗など）。参照一致でも規則の裏付けは無い＝**誤りの意味ではない**（未検証）。脂質規則が走ったデータに限る |
+| 情報 | `chains_unsupported` | 名前が鎖レベル（`16:0_18:1` や `18:1;O2/16:0` のように鎖を `_`/`/` で区切る。`PC 34:1\|PC 16:0_18:1` の `\|` 以降も含む。単鎖は数えない）なのに `is_lipid_chains_match=False`。MS-DIAL は照合に失敗しても参照名から `\|` 付きの名前を作るので、鎖組成の裏付けは `is_lipid_chains_match=True` だけ。MS/MS ありのときだけ。脂質規則が走ったデータに限る |
 | 情報 | `rescore_discrepancy` | `curation_review` が対向照合で出した `weighted_dot_product` が MS-DIAL 自身の値（平方根換算）と `rescore_tolerance`（既定 0.1）を超えてずれた |
 | 情報 | `adduct_differs_from_reference` | 参照レコードのアダクトと注釈のアダクトが食い違う |
 | 情報 | `manually_modified` | MS-DIAL 側で `is_manually_modified` が立っている（GUI で人手修正済み） |
@@ -127,8 +134,15 @@ mirror 5.5 MB）になったため導入した上限。
 `precursor_unmatched` は MS-DIAL 自身の `IsPrecursorMzMatch` で、MS-DIAL は同定時に
 precursor の許容幅をすでに課している——許容幅の外の候補はそもそも代表に残りにくい。
 `likely_wrong` が 0 件でも「全部正しい」ではなく、`suspect` の中身（理由コード）を読むこと。
-また `.arf2` の照合結果にある `IsLipidClassMatch`（`is_lipid_class_match`）は読み出して
-いるが、判定には使っていない。
+`class_rule_rejected`（MS-DIAL の脂質クラス規則による棄却）は、そうした絞り込みの後でも
+残る強い理由で、kidney neg/pos の実測では 370 / 404 件あった。
+
+**脂質規則フラグは脂質規則が走ったデータに限って読む。** 規則フラグは MS-DIAL の Lipidomics
+採点器でしか立たず、それ以外の採点器では全部 `False` になる（`class_rule_rejected` の条件と
+区別できない）。そこで 1 回のレビューの対象スポットに規則フラグ（class / chains / other）が
+1 件でも `True` のものがあるときだけ、上の 3 コードを使う（`judge.lipid_rules_active`）。
+1 件も無ければ `warnings` にその旨を出す。フラグの意味は上流 MsdialWorkbench `afd5f9522` の
+`MsReferenceScorer` / `LipidMsmsCharacterization` と kidney の実測で確かめた。
 
 ### エクスポートのメタ行（`# curation = ...`）
 

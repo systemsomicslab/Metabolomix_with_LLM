@@ -14,7 +14,7 @@ from pathlib import Path
 
 from lipidmix.core.atomic_io import atomic_write_json
 from lipidmix.curation import evidence, flags, trend, viewer
-from lipidmix.curation.judge import judge_spot
+from lipidmix.curation.judge import judge_spot, lipid_rules_active
 
 VERDICT_RANK = {"ok": 0, "suspect": 1, "likely_wrong": 2}
 REFERENCE_WARN_FRACTION = 0.5
@@ -55,8 +55,9 @@ def run_review(arf2_path, spots, *, store, ms2_tol, th, file_ids, max_traces, se
     trends = trend.fit_trends(points, th)
 
     counts = {"ok": 0, "suspect": 0, "likely_wrong": 0}
+    lipid_rules = lipid_rules_active(evs)
     for ev in evs:
-        ev.update(judge_spot(ev, trends["spots"].get(ev["spot_id"]), th))
+        ev.update(judge_spot(ev, trends["spots"].get(ev["spot_id"]), th, lipid_rules=lipid_rules))
         ev["trend"] = trends["spots"].get(ev["spot_id"])
         ev["flag"] = (existing.get(ev["spot_id"]) or {}).get("flag")
         ev["flag_note"] = (existing.get(ev["spot_id"]) or {}).get("note")
@@ -73,6 +74,11 @@ def run_review(arf2_path, spots, *, store, ms2_tol, th, file_ids, max_traces, se
                         "（その系統の判別は UNKNOWN になります）。")
     if orphaned:
         warnings.append(flags.orphaned_warning(orphaned))
+    if stats["n_with_match"] and not lipid_rules:
+        warnings.append(
+            "MS-DIAL の脂質規則フラグ（IsLipidClassMatch / IsLipidChainsMatch / IsOtherLipidMatch）が"
+            "どのスポットにも立っていません（脂質以外の採点器の出力とみなしました）。"
+            "規則による判定（class_rule_rejected・class_rules_not_run・chains_unsupported）は使っていません。")
 
     return {
         "review_id": new_review_id(),

@@ -5,10 +5,14 @@
 - MS-DIAL 自身がその解析の許容幅で出した判定（IsPrecursorMzMatch / IsReferenceMatched）を
   そのまま使う。ppm と ΔRT の帯はこちらの固定既定値で、引数で上書きできる。
 - ⑤傾向は単独で総合判定を上げない。①〜④の BORDERLINE と重なったときだけ補強する。
+- MS-DIAL の脂質規則フラグ（IsLipidClassMatch / IsLipidChainsMatch / IsOtherLipidMatch）は
+  Lipidomics 採点器でしか立たない。メタボロミクス採点器では全部 False なので、そのレビューで
+  規則が走った証拠（`lipid_rules_active`）があるときだけ読む（`lipid_rules=True`）。
 """
 from __future__ import annotations
 
 import math
+import re
 
 DEFAULT_THRESHOLDS: dict[str, float] = {
     "ppm_pass": 5.0, "ppm_borderline": 10.0,
@@ -23,11 +27,28 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
 # の実データでも likely_wrong が ppm_out 単独からしか出ていなかった。MS-DIAL 自身が
 # その解析の許容幅で判定した precursor_unmatched / polarity_mismatch とは信頼度が違うため、
 # 弱い理由へ格下げする(ユーザー決定 2026-09-29)。
-STRONG_REASONS = frozenset({"polarity_mismatch", "precursor_unmatched"})
+# class_rule_rejected: MS/MS ありで脂質クラス規則を評価して棄却(class=F ∧ other=F)。
+# 診断イオン規則が注釈のクラスを否定したので強い理由にする(ユーザー承認 2026-09-29)。
+STRONG_REASONS = frozenset({"polarity_mismatch", "precursor_unmatched", "class_rule_rejected"})
 WEAK_REASONS = frozenset({"ppm_out", "low_score", "drt_out", "eic_poor"})
-_ORDER = ["polarity_mismatch", "precursor_unmatched",
+_ORDER = ["polarity_mismatch", "precursor_unmatched", "class_rule_rejected",
           "ppm_out", "low_score", "drt_out", "eic_poor",
           "ppm_borderline", "drt_borderline", "eic_borderline", "rt_scatter", "trend_outlier"]
+
+
+_RULE_FLAGS = ("is_lipid_class_match", "is_lipid_chains_match", "is_other_lipid_match")
+#: 鎖を区切る `_` / `/` が鎖表記（`16:0` など）の直後に来る名前。`PC 34:1|PC 16:0_18:1` の
+#: `|` 以降も拾う。単鎖（`LPC 16:0`）は種名と同じなので鎖レベルに数えない。
+_CHAIN_LEVEL_RE = re.compile(r"\d+:\d+[^\s_/|]*[_/]")
+
+
+def lipid_rules_active(evs) -> bool:
+    """規則フラグが 1 件でも True なら、このデータは脂質規則で採点されている。"""
+    return any(any((ev.get("match") or {}).get(k) for k in _RULE_FLAGS) for ev in evs)
+
+
+def is_chain_level_name(name) -> bool:
+    return bool(name) and _CHAIN_LEVEL_RE.search(str(name)) is not None
 
 
 def resolve_thresholds(overrides: dict | None) -> dict:
@@ -41,7 +62,7 @@ def _check(band: str, reasons: list[str] | None = None) -> dict:
     return {"band": band, "reasons": list(reasons or [])}
 
 
-def _msms(ev: dict, info: list[str], th: dict) -> dict:
+def _msms(ev: dict, info: list[str], th: dict, lipid_rules: bool) -> dict:
     m = ev.get("match")
     prefix = ev.get("name_prefix")
     if prefix == "unsettled":
@@ -60,9 +81,19 @@ def _msms(ev: dict, info: list[str], th: dict) -> dict:
     if not m.get("has_msms") or prefix in ("no MS2", "w/o MS2"):
         info.append("msms_absent")
         return _check("UNKNOWN")
+    class_rejected = False
+    if lipid_rules:
+        other = m.get("is_other_lipid_match")
+        if m.get("is_lipid_class_match") is False:
+            if other is True:
+                info.append("class_rules_not_run")
+            elif other is False:
+                class_rejected = True
+        if m.get("is_lipid_chains_match") is False and is_chain_level_name(ev.get("name")):
+            info.append("chains_unsupported")
     if m.get("is_reference_matched"):
         return _check("PASS")
-    return _check("FAIL", ["low_score"])
+    return _check("FAIL", (["class_rule_rejected"] if class_rejected else []) + ["low_score"])
 
 
 def _mz(ev: dict, th: dict) -> dict:
@@ -122,12 +153,12 @@ def _trend(entry: dict | None, info: list[str]) -> dict:
     return _check("PASS")
 
 
-def judge_spot(ev: dict, trend_entry: dict | None, th: dict) -> dict:
+def judge_spot(ev: dict, trend_entry: dict | None, th: dict, *, lipid_rules: bool = False) -> dict:
     info: list[str] = list(ev.get("notes") or [])
     ref_adduct = ev.get("reference_adduct")
     if ref_adduct and ev.get("adduct") and ref_adduct != ev.get("adduct"):
         info.append("adduct_differs_from_reference")
-    checks = {"msms": _msms(ev, info, th), "mz": _mz(ev, th), "rt": _rt(ev, info, th),
+    checks = {"msms": _msms(ev, info, th, lipid_rules), "mz": _mz(ev, th), "rt": _rt(ev, info, th),
               "eic": _eic(ev, th), "trend": _trend(trend_entry, info)}
     core = [checks[k] for k in ("msms", "mz", "rt", "eic")]
     reasons = [r for c in checks.values() for r in c["reasons"]]
