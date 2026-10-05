@@ -30,6 +30,7 @@ def console_plan(
     save_project: bool = True,
     timeout_s: int = 21600,
     lbm_file: str | None = None,
+    keep_extension: str | None = None,
 ) -> str:
     """MS-DIAL Console の実行計画を作成し、analysis-job.json を生成します。
 
@@ -70,6 +71,14 @@ def console_plan(
     timeout_s:
         MS-DIAL Console のタイムアウト秒数（既定 21600 ＝ 6 時間）。
         実測では 4 サンプルで約 3 分。60 サンプル規模では 1 時間を超え得ます。
+    keep_extension:
+        アライメントする計測形式（例 "wiff" / "wiff2"）。dataset_root に形式が
+        混在しているとき（SCIEX は 1 測定につき .wiff と .wiff2 ができる）に
+        使います。省略して混在していれば、選べる形式を `choices` に入れた
+        MIXED_RAW_FORMATS を返すので、そこから選んで呼び直してください。
+        指定すると、その形式の計測ファイルと随伴ファイルだけを集めたフォルダを
+        `<元フォルダ>_<拡張子>` にハードリンクで作り（既にあれば欠けている分だけ
+        補う）、そちらで計画します。元フォルダは変更しません。
 
     成功すると session.current_job_path にジョブパスが設定され、
     console_run でそのまま実行できます。
@@ -183,20 +192,47 @@ def console_plan(
             "（.d と .raw はフォルダ 1 つが 1 検体。それ以外はファイルであることが要ります）",
             {"formats": formats},
         )
+
+    # 混在フォルダでは、選ばれた形式だけのフォルダを兄弟に作ってそちらで計画する。
+    # method_file の自動探索は上で元フォルダに対して済ませてある（GUI の
+    # パラメータは元フォルダ側に保存されるため）。
+    prepared = None
+    source_root = root
+    if keep_extension:
+        ext = keep_extension.lower().lstrip(".")
+        if ext not in formats:
+            return console_error(
+                "MIXED_RAW_FORMATS",
+                f"指定された形式 '{ext}' の計測ファイルがデータフォルダにありません: {root}  "
+                "実在する形式: " + ", ".join(f"{e}×{n}" for e, n in sorted(formats.items())),
+                {"formats": formats, "requested": ext},
+            )
+        if len(formats) > 1:
+            from lipidmix.console.input_prep import prepare_single_format_input
+            try:
+                prepared = prepare_single_format_input(root, ext, _prepared_input_dir(root, ext))
+            except (ValueError, OSError) as exc:
+                return console_error("INPUT_PREP_FAILED", str(exc),
+                                     {"dataset_root": str(root), "keep_extension": ext})
+            root = Path(prepared.out_dir)
+            formats = raw_input_summary(root)
     if len(formats) > 1:
         return console_error(
             "MIXED_RAW_FORMATS",
             "データフォルダに MS-DIAL が対象とする拡張子が 2 種類以上あります: "
             + ", ".join(f"{ext}×{n}" for ext, n in sorted(formats.items()))
-            + "。MS-DIAL Console はこの状態で対話プロンプトを出すため、"
-            "stdin を塞いだ実行では異常終了します。続行できたとしても、"
-            "同じ測定が複数の解析ファイルとして扱われます。"
-            "SCIEX の出力は 1 測定につき .wiff と .wiff2 が両方できるのが普通なので、"
-            "解析に使うほうだけを残したフォルダを作って指定してください。"
-            "console_prepare_input(dataset_root, keep_extension) がハードリンクで"
-            "そのフォルダを作ります（実体コピーなし・元フォルダは無変更）。",
-            {"formats": formats},
-            required_tools=["console_prepare_input"],
+            + "。どちらをアライメントするかを選び、console_plan を "
+            "keep_extension=<choices の値> 付きで呼び直してください。"
+            "選んだ形式の計測ファイルと随伴ファイルだけを集めたフォルダを"
+            "`<元フォルダ>_<拡張子>` にハードリンクで作り、そこで計画します"
+            "（実体コピーなし・元フォルダは無変更）。"
+            "SCIEX の出力は 1 測定につき .wiff と .wiff2 が両方できるのが普通です。"
+            "混在のまま MS-DIAL Console に渡すと対話プロンプトで異常終了し、"
+            "続行できても同じ測定が複数の解析ファイルとして扱われます。",
+            {"formats": formats,
+             "choices": [{"keep_extension": ext, "count": n}
+                         for ext, n in sorted(formats.items())]},
+            required_tools=["console_plan"],
         )
     input_count = sum(formats.values())
 
@@ -259,6 +295,10 @@ def console_plan(
             "effective": job.method_file,
         },
         "lbm": {"path": lbm.path, "source": lbm.source},
+        "keep_extension": next(iter(formats)),
+        **({"prepared_input": {"source": str(source_root), "out_dir": prepared.out_dir,
+                               "linked": prepared.linked, "copied": prepared.copied}}
+           if prepared is not None else {}),
         "warnings": warnings,
         "next": "console_run を呼び出して実行を開始してください",
     })
@@ -459,6 +499,11 @@ def console_run(job_path: str | None = None, detach: bool = False) -> str:
     return _console_run_result(resolved, receipt)
 
 
+def _prepared_input_dir(src: Path, keep_extension: str) -> Path:
+    """単一形式フォルダの既定の置き場所: `<元フォルダ>_<拡張子>` の兄弟。"""
+    return src.parent / f"{src.name}_{keep_extension.lower().lstrip('.')}"
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
           structured_output=False)
 def console_prepare_input(
@@ -488,7 +533,7 @@ def console_prepare_input(
     out_dir: 出力先。省略時は `<元フォルダ>_<拡張子>` を兄弟として作ります。
     """
     src = Path(dataset_root).expanduser()
-    dest = Path(out_dir).expanduser() if out_dir else src.parent / f"{src.name}_{keep_extension.lower().lstrip('.')}"
+    dest = Path(out_dir).expanduser() if out_dir else _prepared_input_dir(src, keep_extension)
 
     from lipidmix.console.input_prep import prepare_single_format_input
     try:
