@@ -480,22 +480,19 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path) -> dict:
     if polarity["source"] == "method_declaration":
         unverified.append("polarity_from_method_declaration_not_verified_from_raw")
 
-    overrides: dict[str, str] = {}
-    if lbm_info["path"] and lbm_info["source"] != "not_required":
-        if lbm_info["source"] == "method_file":
-            # 原本メソッドが `Lbm file path` を宣言していた場合。宣言値が相対
-            # 参照だと、実効コピー（別ディレクトリ）へ verbatim コピーした
-            # 瞬間に意味が変わる（コピー先基準で解決されてしまう）。
-            # spec §4.3「コピー後に相対参照の意味を変えない」を守るため、
-            # 宣言が相対のときだけ、原本基準で解決済みの絶対パスへ書き換える
-            # （絶対解決は既存どおりresolve_lbmが原本ディレクトリ基準で行う）。
-            declared_lbm = (method_keys.get(method_file_mod.LBM_KEY.lower()) or "").strip()
-            if declared_lbm and not Path(declared_lbm).is_absolute():
-                overrides[method_file_mod.LBM_KEY] = lbm_info["path"]
-        else:
-            # 原本に宣言が無く、build_tree/env/exe_dirへフォールバックした場合は
-            # 元々そのキーの行自体が無いので、そのまま新規追加する。
-            overrides[method_file_mod.LBM_KEY] = lbm_info["path"]
+    # 相対で宣言されたパスキー（LBM・MSP・Text DB 等）は原本基準の絶対パスへ
+    # 書き換える。LC-MS の Console は宣言パスを解決せず、相対値を自分の cwd
+    # 基準で読む（メソッド基準で解くのは GC-MS 経路だけ）ので、実効コピーへ
+    # verbatim に写すと見つからずに黙って飛ばされる（spec §4.3「コピー後に
+    # 相対参照の意味を変えない」）。実在は問わない——LBM 以外の古い宣言で
+    # 既存 lipidomics 実行を止めない（REFERENCE_KEYS を広げない方針と同じ）。
+    overrides = method_file_mod.relative_path_overrides(method_keys, method_path)
+    if lbm_info["path"] and (lbm_info["source"] != "method_file"
+                             or method_file_mod.LBM_KEY in overrides):
+        # 相対宣言なら resolve_lbm の解決結果で置き換え、build_tree/env/exe_dir
+        # へフォールバックした場合は（原本に行が無いので）新規追加する。
+        # 絶対宣言はそのまま（Console がそのまま読める）。
+        overrides[method_file_mod.LBM_KEY] = lbm_info["path"]
 
     # Console を起動する前に判定する（起動後だと全検体の解析を終えてから落ちる）。
     _assert_project_save_possible(request, exe_info["path"])
@@ -560,9 +557,10 @@ def plan_from_profile(source_root: Path, request: dict, profile: dict) -> dict:
             f"profileが宣言した実行体がMS-DIAL Consoleではありません: {exe_path}",
             {"exe_path": str(exe_path)})
 
-    # v1がLBM1件に使っていた任意キーdictを、全依存へそのまま一般化する。
-    overrides = {dep["method_key"]: dep["source_path"]
-                 for dep in resolved["dependencies"] if dep.get("present")}
+    # v1がLBM1件に使っていた任意キーdictを、全依存へそのまま一般化し、
+    # profile外で原本が相対宣言したパスキーも絶対化する（記録用の
+    # `snapshot_profile`と同じ関数を通し、実行と記録をずらさない）。
+    overrides = profiles_mod.effective_method_overrides(resolved)
     lbm = next((dep for dep in resolved["dependencies"]
                 if dep["method_key"] == method_file_mod.LBM_KEY), None)
 

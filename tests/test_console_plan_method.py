@@ -257,3 +257,125 @@ def test_console_plan_not_given_reports_where_it_looked(tmp_path, monkeypatch):
     parsed = _json.loads(console_plan(dataset_root=str(root), polarity="positive"))
     assert parsed["error"]["code"] == "METHOD_FILE_NOT_GIVEN"
     assert str(root) in parsed["error"]["details"]["searched"]
+
+
+# ---------- 相対パス宣言は実効メソッドへ絶対パスで書く ----------
+#
+# LC-MS の Console（`ConfigParser.ReadForLcmsParameter`）は宣言パスを解決せず、
+# 相対値は Console プロセスの cwd（＝run_dir）基準になる。見つからなければ
+# ライブラリを黙って飛ばし、同定 0 件で完走する。
+
+
+def test_console_plan_writes_a_relative_lbm_declaration_as_an_absolute_path(tmp_path, monkeypatch):
+    from lipidmix.console import method_file as method_file_mod
+    from lipidmix.console.job_manager import load_job
+    exe = _fake_exe_with_lbm(tmp_path)
+    _plan_ready(tmp_path, monkeypatch, exe)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    lib = proj / "lab.lbm2"
+    lib.touch()
+    method = proj / "params.txt"
+    method.write_text("Ion mode: Negative\nLbm file path: lab.lbm2\n", encoding="ascii")
+    from lipidmix.tools.console_tools import console_plan
+    parsed = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
+                                      polarity="negative", measure="peak_height"))
+    assert parsed["lbm"]["source"] == "method_file"
+    job = load_job(Path(parsed["job_path"]))
+    effective = Path(job.method_file)
+    assert effective != method
+    declared = method_file_mod.read_method_keys(effective)["lbm file path"]
+    assert Path(declared).is_absolute()
+    assert Path(declared) == lib.resolve()
+
+
+def test_console_plan_writes_relative_msp_and_text_db_as_absolute_paths(tmp_path, monkeypatch):
+    from lipidmix.console import method_file as method_file_mod
+    from lipidmix.console.job_manager import load_job
+    exe = _fake_exe_with_lbm(tmp_path)
+    _plan_ready(tmp_path, monkeypatch, exe)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "lib.msp").touch()
+    (proj / "db.txt").touch()
+    method = proj / "params.txt"
+    method.write_text("Ion mode: Negative\nMsp file path: lib.msp\nText DB file path: db.txt\n",
+                      encoding="ascii")
+    from lipidmix.tools.console_tools import console_plan
+    parsed = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
+                                      polarity="negative", measure="peak_height",
+                                      omics="metabolomics"))
+    assert parsed["status"] == "planned"
+    keys = method_file_mod.read_method_keys(Path(load_job(Path(parsed["job_path"])).method_file))
+    assert Path(keys["msp file path"]) == (proj / "lib.msp").resolve()
+    assert Path(keys["text db file path"]) == (proj / "db.txt").resolve()
+
+
+def test_console_plan_metabolomics_writes_a_declared_lbm_as_an_absolute_path(tmp_path, monkeypatch):
+    """Console は Target omics に関わらず LBM を読んで脂質を同定する。"""
+    from lipidmix.console import method_file as method_file_mod
+    from lipidmix.console.job_manager import load_job
+    exe = _fake_exe_with_lbm(tmp_path)
+    _plan_ready(tmp_path, monkeypatch, exe)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "lab.lbm2").touch()
+    method = proj / "params.txt"
+    method.write_text("Ion mode: Negative\nLbm file path: lab.lbm2\n", encoding="ascii")
+    from lipidmix.tools.console_tools import console_plan
+    parsed = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
+                                      polarity="negative", measure="peak_height",
+                                      omics="metabolomics"))
+    assert parsed["lbm"]["source"] == "method_file"
+    keys = method_file_mod.read_method_keys(Path(load_job(Path(parsed["job_path"])).method_file))
+    assert Path(keys["lbm file path"]) == (proj / "lab.lbm2").resolve()
+
+
+def test_console_method_template_writes_relative_paths_as_absolute(tmp_path, monkeypatch):
+    """別フォルダへ書き出すので、相対宣言は原本基準の絶対パスに固定する。"""
+    from lipidmix.console import method_file as method_file_mod
+    monkeypatch.delenv("MSDIAL_EXE", raising=False)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "lab.lbm2").touch()
+    src = proj / "params.txt"
+    src.write_text("Ion mode: Negative\nLbm file path: lab.lbm2\nMsp file path: lib.msp\n",
+                   encoding="ascii")
+    out = tmp_path / "elsewhere" / "pos.txt"
+    from lipidmix.tools.console_tools import console_method_template
+    parsed = _json.loads(console_method_template(out_path=str(out), polarity="positive",
+                                                 based_on=str(src)))
+    assert parsed["status"] == "written"
+    keys = method_file_mod.read_method_keys(out)
+    assert Path(keys["lbm file path"]) == (proj / "lab.lbm2").resolve()
+    assert Path(keys["msp file path"]) == (proj / "lib.msp").resolve()
+
+
+def test_console_plan_rejects_a_non_ascii_absolute_path_before_creating_the_job(tmp_path, monkeypatch):
+    """Console はメソッドを `Encoding.ASCII` で読む。`?` に化けた絶対パスでは
+    ライブラリが見つからず、黙って同定 0 件になる。"""
+    exe = _fake_exe_with_lbm(tmp_path)
+    _plan_ready(tmp_path, monkeypatch, exe)
+    proj = tmp_path / "解析"
+    proj.mkdir()
+    (proj / "lab.lbm2").touch()
+    method = proj / "params.txt"
+    method.write_text("Ion mode: Negative\nLbm file path: lab.lbm2\n", encoding="ascii")
+    from lipidmix.tools.console_tools import console_plan
+    parsed = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
+                                      polarity="negative", measure="peak_height"))
+    assert parsed["error"]["code"] == "METHOD_ENCODING_UNSUPPORTED"
+    assert not (tmp_path / "runs").exists()
+
+
+def test_console_method_template_rejects_a_non_ascii_absolute_path(tmp_path, monkeypatch):
+    monkeypatch.delenv("MSDIAL_EXE", raising=False)
+    proj = tmp_path / "解析"
+    proj.mkdir()
+    (proj / "lab.lbm2").touch()
+    src = proj / "params.txt"
+    src.write_text("Ion mode: Negative\nLbm file path: lab.lbm2\n", encoding="ascii")
+    from lipidmix.tools.console_tools import console_method_template
+    parsed = _json.loads(console_method_template(out_path=str(tmp_path / "pos.txt"),
+                                                 polarity="positive", based_on=str(src)))
+    assert parsed["error"]["code"] == "METHOD_ENCODING_UNSUPPORTED"

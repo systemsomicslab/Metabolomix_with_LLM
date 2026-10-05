@@ -185,3 +185,42 @@ def test_upstream_reads_the_snapshot_from_persisted_results_not_from_runtime(
     outcome = service._handle_upstream(context)
     assert outcome["status"] == "needs_input"
     assert outcome["error"]["code"] == "PROFILE_SNAPSHOT_MISSING"
+
+
+# ---------- profile 外の相対宣言も絶対パスで渡す ----------
+
+def _declare_extra_relative_text_db(source_root: Path, profile: dict) -> Path:
+    """method 原本に profile が依存として宣言していない相対キーを足す。
+
+    LC-MS の Console は宣言パスを解決せず cwd 基準で読むので、profile の依存
+    だけを上書きすると、この行は相対のまま Console へ届いて黙って無視される。
+    """
+    import hashlib
+    method = source_root / profile["processing"]["method_path"]
+    (source_root / "lib" / "t.txt").write_text("synthetic\n", encoding="utf-8")
+    method.write_text(method.read_text(encoding="utf-8")
+                      + "Text DB file path: ../lib/t.txt\n",
+                      encoding="utf-8", newline="\n")
+    profile["processing"]["method_sha256"] = hashlib.sha256(method.read_bytes()).hexdigest()
+    return (source_root / "lib" / "t.txt").resolve()
+
+
+def test_a_relative_method_declaration_outside_the_profile_becomes_absolute(tmp_path, monkeypatch):
+    source_root, request, profile = _setup(tmp_path, monkeypatch)
+    expected = _declare_extra_relative_text_db(source_root, profile)
+    plan = inputs_mod.plan_from_profile(source_root, request, profile)
+    assert Path(plan["method"]["overrides"]["Text DB file path"]) == expected
+
+
+def test_the_profile_snapshot_writes_the_same_absolute_declaration(tmp_path, monkeypatch):
+    from lipidmix.console import method_file as method_file_mod
+    from lipidmix.console import profiles as profiles_mod
+    source_root, _request, profile = _setup(tmp_path, monkeypatch)
+    expected = _declare_extra_relative_text_db(source_root, profile)
+    plan = profiles_mod.resolve_profile_inputs(profile, source_root, raw_root=source_root)
+    snapshot = profiles_mod.snapshot_profile(plan, tmp_path / "run")
+    effective = tmp_path / "run" / snapshot["effective_method_relative_path"]
+    keys = method_file_mod.read_method_keys(effective)
+    assert Path(keys["text db file path"]) == expected
+    assert {"method_key": "Text DB file path", "original_value": "../lib/t.txt",
+            "new_value": str(expected)} in snapshot["method_overrides"]

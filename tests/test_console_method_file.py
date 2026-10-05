@@ -27,6 +27,7 @@ from lipidmix.console.method_file import (
     method_search_dirs,
     past_run_method_files,
     read_method_keys,
+    relative_path_overrides,
     resolve_lbm,
     scan_dir_for_method_files,
     write_effective_method_file,
@@ -117,7 +118,13 @@ def test_resolve_lbm_prefers_explicit_method_file_value(tmp_path):
 
 
 def test_resolve_lbm_resolves_relative_value_against_method_file(tmp_path):
-    """MS-DIAL の ResolvePathFromMethodFile と同じ基準。"""
+    """相対宣言はメソッドファイルの親基準で解く。
+
+    LC-MS の Console（`ConfigParser.ReadForLcmsParameter`）はパスを解決せず、
+    相対値はプロセスの cwd 基準になる。メソッド基準で解くのは GC-MS 経路の
+    `ResolvePathFromMethodFile` だけ。ここでメソッド基準に解いた結果は、
+    呼び出し側が実効メソッドへ**絶対パスで**書き戻して初めて Console に届く。
+    """
     lib = tmp_path / "lib.lbm2"
     lib.touch()
     exe = _exe_dir_with(tmp_path, "other.lbm2")
@@ -179,9 +186,10 @@ def test_resolve_lbm_errors_when_exe_directory_is_ambiguous(tmp_path):
 
 
 def test_resolve_lbm_not_required_for_metabolomics(tmp_path):
-    exe = _exe_dir_with(tmp_path)
+    """宣言が無ければ、metabolomics では GUI 流の自動補完（exe フォルダ等）をしない。"""
+    exe = _exe_dir_with(tmp_path, "only.lbm2")
     res = resolve_lbm({}, tmp_path / "param.txt", omics="metabolomics",
-                      exe_path=str(exe), env={})
+                      exe_path=str(exe), env={"MSDIAL_LBM": str(tmp_path / "x.lbm2")})
     assert res.error_code is None
     assert res.source == "not_required"
     assert res.path is None
@@ -617,3 +625,108 @@ def test_discover_reports_where_it_looked(tmp_path):
     _found, searched = discover_method_candidates(root, polarity="positive")
     assert str(root) in searched
     assert str(tmp_path / "NEG") in searched
+
+
+# ---------- 相対パス宣言（LC-MS Console は cwd 基準で読む） ----------
+#
+# MS-DIAL Console の LC-MS 経路（`ConfigParser.ReadForLcmsParameter`）は
+# `Lbm file path` / `Msp file path` / `Text DB file path` 等を**解決しない**。
+# 相対値はプロセスの cwd 基準になり、見つからなければ `CommonProcess.ParseLibraries`
+# がそのライブラリを黙って飛ばす（同定 0 件で完走）。メソッド基準で解くのは
+# GC-MS 経路の `ResolvePathFromMethodFile` だけ（MsdialWorkbench afd5f95）。
+
+
+def test_resolve_lbm_returns_an_absolute_path_for_a_relative_declaration(tmp_path, monkeypatch):
+    """メソッドファイル自体が相対で渡されても、Console へ渡す値は絶対パスにする。"""
+    (tmp_path / "proj").mkdir()
+    lib = tmp_path / "proj" / "lib.lbm2"
+    lib.touch()
+    monkeypatch.chdir(tmp_path)
+    res = resolve_lbm({"lbm file path": "lib.lbm2"}, Path("proj") / "param.txt",
+                      omics="lipidomics", exe_path=None, env={})
+    assert res.error_code is None
+    assert Path(res.path).is_absolute()
+    assert Path(res.path) == lib
+
+
+def test_resolve_lbm_honours_a_declared_lbm_for_metabolomics(tmp_path):
+    """Console は Target omics に関わらず `Lbm file path` を読み、脂質同定に使う
+    （`LcmsProcess` が LBM annotator を `TargetOmics.Lipidomics` 固定で組む）。"""
+    lib = tmp_path / "lib.lbm2"
+    lib.touch()
+    res = resolve_lbm({"lbm file path": "lib.lbm2"}, tmp_path / "param.txt",
+                      omics="metabolomics", exe_path=None, env={})
+    assert res.error_code is None
+    assert res.source == "method_file"
+    assert Path(res.path) == lib
+
+
+def test_resolve_lbm_rejects_a_missing_declared_lbm_for_metabolomics(tmp_path):
+    res = resolve_lbm({"lbm file path": "gone.lbm2"}, tmp_path / "param.txt",
+                      omics="metabolomics", exe_path=None, env={})
+    assert res.error_code == "LBM_NOT_FOUND"
+
+
+def test_resolve_lbm_honours_the_argument_for_metabolomics(tmp_path):
+    lib = tmp_path / "chosen.lbm2"
+    lib.touch()
+    res = resolve_lbm({}, tmp_path / "param.txt", omics="metabolomics",
+                      exe_path=None, env={}, override=str(lib))
+    assert res.source == "argument"
+    assert Path(res.path) == lib
+
+
+def test_relative_path_overrides_absolutizes_library_paths_against_the_method(tmp_path):
+    method = tmp_path / "proj" / "param.txt"
+    keys = {
+        "lbm file path": "lib.lbm2",
+        "msp file path": r"..\libs\a.msp",
+        "text db file path": "t.txt",
+        "isotope text db file path": "iso.txt",
+        "compounds library file path for target detection": "target.txt",
+        "compounds library file path for rt correction": "rt.txt",
+        "rt correction peak selection file path": "sel.tsv",
+    }
+    out = relative_path_overrides(keys, method)
+    base = method.parent
+    assert {k.lower(): v for k, v in out.items()} == {
+        "lbm file path": str((base / "lib.lbm2").resolve()),
+        "msp file path": str((tmp_path / "libs" / "a.msp").resolve()),
+        "text db file path": str((base / "t.txt").resolve()),
+        "isotope text db file path": str((base / "iso.txt").resolve()),
+        "compounds library file path for target detection": str((base / "target.txt").resolve()),
+        "compounds library file path for rt correction": str((base / "rt.txt").resolve()),
+        "rt correction peak selection file path": str((base / "sel.tsv").resolve()),
+    }
+
+
+def test_relative_path_overrides_absolutizes_annotator_settings_paths(tmp_path):
+    """設定表のパスは Console 自身がメソッドファイル基準で解く。実効コピーを別フォルダに
+    書くとその基準がずれるので、原本基準の絶対パスへ固定する。"""
+    method = tmp_path / "param.txt"
+    keys = {"msp annotator settings file path": "msp.tsv",
+            "text db annotator settings file path": "text.tsv"}
+    out = {k.lower(): v for k, v in relative_path_overrides(keys, method).items()}
+    assert out == {"msp annotator settings file path": str((tmp_path / "msp.tsv").resolve()),
+                   "text db annotator settings file path": str((tmp_path / "text.tsv").resolve())}
+
+
+def test_relative_path_overrides_leaves_absolute_empty_and_unknown_keys_alone(tmp_path):
+    keys = {"msp file path": str(tmp_path / "abs.msp"),
+            "lbm file path": "",
+            "ion mode": "Positive",
+            "some other file": "x.txt"}
+    assert relative_path_overrides(keys, tmp_path / "param.txt") == {}
+
+
+def test_write_effective_method_file_replaces_every_duplicate_line(tmp_path):
+    """ConfigParser は全行を順に読み、後の行が勝つ。最初の 1 行だけ差し替えると
+    後ろの重複行が上書きを打ち消す。"""
+    src = tmp_path / "src.txt"
+    src.write_text("Msp file path: a.msp\nIon mode: Positive\nmsp file path: b.msp\n",
+                   encoding="ascii")
+    dest = tmp_path / "effective.txt"
+    write_effective_method_file(src, dest, {"Msp file path": "C:\\lib\\x.msp"})
+    lines = dest.read_text(encoding="ascii").splitlines()
+    assert lines == ["Msp file path: C:\\lib\\x.msp", "Ion mode: Positive",
+                     "Msp file path: C:\\lib\\x.msp"]

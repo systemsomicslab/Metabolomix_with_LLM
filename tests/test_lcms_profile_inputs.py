@@ -714,9 +714,13 @@ def test_inspect_inputs_ignores_unresolvable_msp_file_path_like_before(tmp_path,
     """v1 lipidomics経路の既存挙動を固定するテスト（A01「既存lipidomics実行が
     変わらない」）。`method_file.REFERENCE_KEYS`は`Lbm file path`だけの既定値の
     ままなので、lipidomicsのメソッドファイルが（本タスクと無関係な理由で）
-    解決不能な`Msp file path`を宣言していても、`inspect_inputs`はこれを無視して
-    今までどおり成功する——`METHOD_REFERENCE_UNRESOLVED`にはならないし、
-    `overrides`にMSP_KEYは現れない。
+    解決不能な`Msp file path`を宣言していても、`inspect_inputs`は今までどおり
+    成功する——`METHOD_REFERENCE_UNRESOLVED`にはならない。
+
+    2026-10-05 から、相対宣言は実在を問わず原本基準の絶対パスとして`overrides`
+    に載る（LC-MS の Console は相対値を自分の cwd＝run_dir 基準で読むので、
+    相対のまま写すと原本の隣にあっても届かない）。実在しない宣言では Console
+    はどちらにしても黙って飛ばすので、実行結果は変わらない。
     """
     from lipidmix.core import session_state
     session_state.session = session_state.AnalysisSession()
@@ -752,10 +756,11 @@ def test_inspect_inputs_ignores_unresolvable_msp_file_path_like_before(tmp_path,
     request = {"method_file": str(method), "polarity": "negative"}
     plan = inspect_inputs(dataset_root, request, exe_path=exe)
 
-    # 例外を投げず、MSP_KEYがoverridesへ現れないことが「無視された」ことの
-    # 直接の証拠（inspect_inputsの戻り値に"status"キーは無い——それはMCPツール層
+    # 例外を投げずに計画が返ること自体が「止めない」ことの証拠
+    # （inspect_inputsの戻り値に"status"キーは無い——それはMCPツール層
     # (`console_plan`)が付けるもので、ここでは戻り値自体で確認する）。
-    assert method_file_mod.MSP_KEY not in plan["method"]["overrides"]
+    assert Path(plan["method"]["overrides"][method_file_mod.MSP_KEY]) == \
+        (dataset_root / "lib1.msp").resolve()
 
 
 def test_resolve_profile_inputs_rejects_unresolvable_declared_reference_in_method_file(tmp_path):
