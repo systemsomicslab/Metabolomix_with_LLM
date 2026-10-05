@@ -456,3 +456,90 @@ def test_library_id_from_annotator_strips_the_trailing_counter():
     assert store.library_id_from_annotator("Msp20260116160945_NCDK_dev_1") == "Msp20260116160945_NCDK_dev"
     assert store.library_id_from_annotator("plain") == "plain"
     assert store.library_id_from_annotator(None) is None
+
+
+def _console_dbs(tmp_path):
+    """MS-DIAL Console が作る `.dbs` の形: ライブラリ名は `LbmDB` だが、照合結果の
+    AnnotatorID（`Storage` の Key）は LBM ファイルのパス。"""
+    from tests.dbs_fixture import record, write_dbs
+    return write_dbs(tmp_path / "Project_Loaded.msp2.dbs", [
+        ("LbmDB", [record(name="PC 34:1", mz=760.585), record(name="PE 36:2", mz=744.554)],
+         ["C:/lib/NCDK_conventional.lbm2"]),
+        ("MspDB", [record(name="Lab GABA", mz=104.0706)], ["C:/lib/lab_pos.msp"]),
+    ])
+
+
+def test_library_id_for_follows_the_annotator_keys_saved_in_the_dbs(tmp_path, monkeypatch):
+    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    s = store.open_store(_console_dbs(tmp_path))
+    try:
+        assert s.library_id_for("C:/lib/NCDK_conventional.lbm2") == "LbmDB"
+        assert s.library_id_for("C:/lib/lab_pos.msp") == "MspDB"
+        hit = s.record_by_scan_id(1, library_id=s.library_id_for("C:/lib/NCDK_conventional.lbm2"),
+                                  precursor_mz=744.554, mz_tol=0.05)
+        assert hit["name"] == "PE 36:2"
+        # MSP 側のキーで LBM のレコードを引かない（ScanID はライブラリごとに 0 から）。
+        assert s.record_by_scan_id(1, library_id=s.library_id_for("C:/lib/lab_pos.msp"),
+                                   precursor_mz=744.554, mz_tol=0.05) is None
+    finally:
+        s.close()
+
+
+def test_library_id_for_falls_back_to_the_gui_counter_rule(tmp_path, monkeypatch):
+    """対応表に無い ID（`.msp`/`.lbm2` を直接読んだ store 等）は従来の規則に戻す。"""
+    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    s = store.open_store(_console_dbs(tmp_path))
+    try:
+        assert s.library_id_for("Msp20260116160945_NCDK_dev_1") == "Msp20260116160945_NCDK_dev"
+        assert s.library_id_for(None) is None
+    finally:
+        s.close()
+
+
+def test_a_cache_built_before_the_annotator_map_reads_it_from_the_source(tmp_path, monkeypatch):
+    """対応表を持たない古いキャッシュでも、元の `.dbs` が残っていれば作り直さずに引ける
+    （研究室の `.dbs` は数百 MB あり、構築し直しは重い）。"""
+    import sqlite3
+    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    path = _console_dbs(tmp_path)
+    store.open_store(path).close()
+    db_path = next((tmp_path / "cache").glob("*.sqlite"))
+    con = sqlite3.connect(db_path)
+    with con:
+        con.execute("DELETE FROM meta WHERE key = 'annotator_libraries'")
+    con.close()
+
+    s = store.open_store(path)
+    try:
+        assert s.library_id_for("C:/lib/NCDK_conventional.lbm2") == "LbmDB"
+    finally:
+        s.close()
+
+
+def test_rt_used_for_reads_the_annotator_switches(tmp_path, monkeypatch):
+    from tests.dbs_fixture import PARAMETER, record, write_dbs
+    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    off = list(PARAMETER)
+    off[15] = off[16] = False
+    s = store.open_store(write_dbs(tmp_path / "off.msp2.dbs",
+                                   [("LbmDB", [record()], ["C:/lib/a.lbm2"])], parameter=off))
+    try:
+        assert s.rt_used_for("C:/lib/a.lbm2") is False
+        assert s.rt_used_for("someone_else_1") is None     # 対応に無い＝分からない
+        assert s.rt_used_for(None) is None
+    finally:
+        s.close()
+    on = store.open_store(write_dbs(tmp_path / "on.msp2.dbs",
+                                    [("LbmDB", [record()], ["C:/lib/a.lbm2"])]))
+    try:
+        assert on.rt_used_for("C:/lib/a.lbm2") is True
+    finally:
+        on.close()
+
+
+def test_rt_used_for_is_unknown_for_a_plain_msp(library):
+    s = store.open_store(library)
+    try:
+        assert s.rt_used_for("Msp1_lib_1") is None
+    finally:
+        s.close()

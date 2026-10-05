@@ -242,3 +242,20 @@ def test_auto_note_rounds_the_rt_difference_to_two_decimals():
     spot = ev(drt=1.2345)
     spot.update(judge.judge_spot(spot, None, TH))
     assert "RT — ΔRT 1.23 分（>1 分）" in judge.auto_note(spot, TH)
+
+
+def test_rt_is_not_judged_when_the_annotator_did_not_use_rt():
+    """MS-DIAL が RT を絞り込みにも採点にも使っていない照合では、参照 RT は別の
+    クロマトグラフィーの予測値でありうる（LBM は約 18 分系の予測 RT を持つ）。
+    そのずれで drt_out を付けない。ΔRT の値そのものは残す（表示用）。"""
+    result = judge.judge_spot(ev(drt=-5.9, rt_used_by_annotation=False), None, TH)
+    assert result["checks"]["rt"]["band"] == "UNKNOWN"
+    assert "rt_not_used_by_annotation" in result["info"]
+    assert "drt_out" not in result["reasons"]
+    assert result["verdict"] == "ok"
+
+
+def test_rt_is_judged_when_the_annotator_used_rt_or_it_is_unknown():
+    for used in (True, None):
+        result = judge.judge_spot(ev(drt=-5.9, rt_used_by_annotation=used), None, TH)
+        assert "drt_out" in result["reasons"]

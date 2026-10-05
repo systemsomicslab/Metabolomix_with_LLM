@@ -252,7 +252,7 @@ def _search_params_from_parameter(parameter: list) -> dict:
 
 
 def read_storage_meta(path: str | Path) -> dict | None:
-    """`.dbs` の `Storage` エントリ（使用ライブラリ・元パス・注釈器パラメータ）を読む。
+    """`.dbs` の `Storage` エントリ（使用ライブラリ・元パス・注釈器パラメータ・注釈器の Key とライブラリの対応）を読む。
 
     `.lbm2`（ZIP でない、または `Storage` を持たない）には無いので `None` を返す。
     ZIP かどうかは先頭 4 バイトだけで判定する——ZIP でなければそこで打ち切り、
@@ -291,8 +291,41 @@ def read_storage_meta(path: str | Path) -> dict | None:
             parameter = annotator_key[1].get("Parameter") or []
             search_params = _search_params_from_parameter(parameter)
 
+    annotator_libraries, annotator_search_params = _annotators(databases)
     return {
         "library_name": library_name,
         "source_path": source_path,
         "search_params": search_params,
+        "annotator_libraries": annotator_libraries,
+        "annotator_search_params": annotator_search_params,
     }
+
+
+def _annotators(databases: list) -> tuple[dict[str, str], dict[str, dict]]:
+    """注釈器の Key（照合結果の AnnotatorID）→ ライブラリ名（`MetabolomicsDB/<名前>/`）。
+
+    AnnotatorID はライブラリ名と同じとは限らない。GUI は `<名前>_<n>`、MS-DIAL
+    Console は LBM ならファイルのパス（後の版は `LbmDB: <stem>`）、MSP なら `.msp` の
+    パスや設定ファイルで付けた任意の名前を使う。どの規則でも、MS-DIAL 自身が
+    保存したこの対応だけは食い違わない。
+
+    2 つ目は Key → その注釈器の検索パラメータ。RT を使ったか等は注釈器ごとに
+    違いうるので、先頭の注釈器（`search_params`）だけで代表させない。
+    """
+    mapping: dict[str, str] = {}
+    params: dict[str, dict] = {}
+    for database_entry in databases:
+        database = database_entry.get("DataBase") or []
+        name = database[0] if database else None
+        if not isinstance(name, str):
+            continue
+        for pair in database_entry.get("Pairs") or []:
+            body = pair[1] if isinstance(pair, (list, tuple)) and len(pair) > 1 else {}
+            annotator = body.get("SerializableAnnotatorKey") if isinstance(body, dict) else None
+            if not isinstance(annotator, (list, tuple)) or len(annotator) < 2:
+                continue
+            key = annotator[1].get("Key") if isinstance(annotator[1], dict) else None
+            if isinstance(key, str) and key:
+                mapping[key] = name
+                params[key] = _search_params_from_parameter(annotator[1].get("Parameter") or [])
+    return mapping, params

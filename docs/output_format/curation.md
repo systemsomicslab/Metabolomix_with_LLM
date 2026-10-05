@@ -97,7 +97,7 @@ mirror 5.5 MB）になったため導入した上限。
 | `reasons` | 立った理由コードをカンマ区切りで、強い→弱い→帯のみの順に並べたもの（次節の表と同じ順） |
 | `ppm` | 代表試料の m/z と参照 precursor m/z（引けなければ Formula からの理論値）の相対誤差 [ppm] |
 | `dmz_mda` | 代表試料の m/z と参照 precursor m/z（引けなければ Formula からの理論値）の差 [mDa]。`ppm` と同じ基準 |
-| `drt` | 代表試料の RT と参照 RT の差 [分]。参照が引けない、または参照に RT が無ければ空 |
+| `drt` | 代表試料の RT と参照 RT の差 [分]。参照が引けない、または参照に RT が無ければ空。MS-DIAL が RT を使っていない照合（情報 `rt_not_used_by_annotation`）でも値は出るが、判定には使わない |
 | `wdot` | **MS-DIAL 自身が出した** `squared_weighted_dot_product` の平方根（`library` トピック §14.1 と同じ規約: 平方根側の値）。この照合結果は同定時点でアラインメントに保存済みのもので、`curation_review` がここで再照合した値ではない（後述の必須注意）。値が無い、または MS-DIAL 側が `-1`（比較不能）なら空 |
 | `mpp` | **MS-DIAL 自身が出した** `matched_peaks_percentage`。`wdot` と同じく再照合値ではない |
 | `eic_good` | 検出（非 gap-fill）サンプルのうち EIC 形状が「良い」と判定された割合（`eic_shape.spot_shape` の `good_fraction`）。良否は頂点がウィンドウ内・点数十分・理想ガウスとの R² 十分・極大数が上限以下で決まる。検出サンプルが無ければ空 |
@@ -138,6 +138,7 @@ mirror 5.5 MB）になったため導入した上限。
 | 情報 | `msms_absent` | MS/MS 未取得、または名前接頭辞が `no MS2`/`w/o MS2`（`msms` 系統は `UNKNOWN`） |
 | 情報 | `reference_not_found` | ライブラリから参照レコードを引けなかった。**`rt` 系統だけが `UNKNOWN`** になる。`mz` 系統は Formula/AdductType からの理論値（`mass_error_ppm`、`ppm_basis="formula"`）にフォールバックして計算を続け、それも失敗したときだけ `UNKNOWN` になる（`rt` と違って自動的に `UNKNOWN` にはならない） |
 | 情報 | `reference_rt_absent` | 参照は引けたが RT を持たない（`rt` 系統は `UNKNOWN`） |
+| 情報 | `rt_not_used_by_annotation` | MS-DIAL がこの照合で RT を絞り込みにも採点にも使っていない（`.dbs` に保存された注釈器の `use_time_for_annotation_filtering` / `use_time_for_annotation_scoring` がどちらも False）。参照 RT は別のクロマトグラフィーを前提にした予測値でありうる（例: LBM は約 18 分系の予測 RT を持つ）ので、`rt` 系統は `UNKNOWN` にして `drt_out` / `drt_borderline` を立てない。`drt` の値は表示用に残る。`.msp`/`.lbm2` を直接読んだ store のようにスイッチが分からないときは、従来どおり RT で判定する |
 | 情報 | `no_match_result` | ARF2 に MS-DIAL の照合結果（`representative`）自体が無い（`msms` 系統は `UNKNOWN`） |
 | 情報 | `class_rules_not_run` | 脂質クラス規則が評価されていない（`is_lipid_class_match=False` かつ `is_other_lipid_match=True`。CompoundClass が Unknown/Others・SPLASH・名前解析失敗など）。参照一致でも規則の裏付けは無い＝**誤りの意味ではない**（未検証）。脂質規則が走ったデータに限る |
 | 情報 | `chains_unsupported` | 名前が鎖レベル（`16:0_18:1` や `18:1;O2/16:0` のように鎖を `_`/`/` で区切る。`PC 34:1\|PC 16:0_18:1` の `\|` 以降も含む。単鎖は数えない）なのに `is_lipid_chains_match=False`。MS-DIAL は照合に失敗しても参照名から `\|` 付きの名前を作るので、鎖組成の裏付けは `is_lipid_chains_match=True` だけ。MS/MS ありのときだけ。脂質規則が走ったデータに限る |

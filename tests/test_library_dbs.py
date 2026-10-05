@@ -7,43 +7,9 @@ import msgpack
 import pytest
 
 from lipidmix.library import dbs
-
-
-def _pack_chunk(records: list[list]) -> bytes:
-    """LargeListMessagePack のチャンク 1 個を組む。
-
-    要素数に応じて array ヘッダが短形式になる点を再現する（本番の罠）。
-    要素は常にオフセット 5 から始まる。
-    """
-    body = b"".join(msgpack.packb(r, use_bin_type=True) for r in records)
-    n = len(records)
-    if n < 16:
-        header = bytes([0x90 | n])
-    elif n < 65536:
-        header = b"\xdc" + struct.pack(">H", n)
-    else:
-        header = b"\xdd" + struct.pack(">I", n)
-    raw = header + b"\x00" * (5 - len(header)) + body
-    comp = lz4.block.compress(raw, store_size=False)
-    return (b"\xc9" + struct.pack(">I", len(comp) + 5) + b"\x63"
-            + b"\xd2" + struct.pack(">i", len(raw)) + comp)
-
-
-def _record(name="GABA", mz=104.0706, ion_mode=1, peaks=((87.04, 999.0), (69.03, 500.0))):
-    r = [None] * 29
-    r[0] = 0
-    r[1] = mz
-    r[2] = [[1, [1.23, 0, 0]]]
-    r[3] = ion_mode
-    r[4] = [[m, i] + [None] * 4 + [0, 0] + [None] * 3 + [0, False] for m, i in peaks]
-    r[5] = name
-    r[6] = None
-    r[7] = ""
-    r[8] = "NCCCC(=O)O"
-    r[9] = "BTCSSZJGUNDROE-UHFFFAOYSA-N"
-    r[10] = [1.00782503207, 1, "[M+H]+", 1, 1, True, 0.0, 0.0, False, False]
-    r[14] = "AminoAcid"
-    return r
+from tests.dbs_fixture import pack_chunk as _pack_chunk
+from tests.dbs_fixture import record as _record
+from tests.dbs_fixture import write_dbs
 
 
 def test_a_short_array_header_is_read_correctly(tmp_path):
@@ -183,3 +149,37 @@ def test_the_scoring_flags_are_read_and_not_hardcoded(tmp_path):
 
     assert meta["search_params"]["use_time_for_annotation_scoring"] is False
     assert meta["search_params"]["use_ccs_for_annotation_scoring"] is True
+
+
+def test_the_storage_maps_every_annotator_key_to_its_library(tmp_path):
+    """照合結果の AnnotatorID はライブラリ名と同じとは限らない。MS-DIAL Console は
+    LBM ならファイルのパス（後の版は `LbmDB: <stem>`）、MSP なら `.msp` のパスや
+    設定ファイルで付けた任意の名前を使う。`Storage` が保存している Key → ライブラリ名の
+    対応を、全ライブラリ・全注釈器について読む。"""
+    path = write_dbs(tmp_path / "P_Loaded.msp2.dbs", [
+        ("LbmDB", [_record(name="L")], ["C:/lib/NCDK_conventional.lbm2"]),
+        ("MspDB_lab_1", [_record(name="M")], ["lab-strict", "lab-loose"]),
+        ("TextDB", [_record(name="T")], ["C:/lib/targets.txt"]),
+    ])
+
+    meta = dbs.read_storage_meta(path)
+
+    assert meta["annotator_libraries"] == {
+        "C:/lib/NCDK_conventional.lbm2": "LbmDB",
+        "lab-strict": "MspDB_lab_1", "lab-loose": "MspDB_lab_1",
+        "C:/lib/targets.txt": "TextDB",
+    }
+    assert meta["library_name"] == "LbmDB"   # 先頭ライブラリの扱いは変えない
+
+
+def test_the_storage_keeps_search_params_per_annotator(tmp_path):
+    """RT を使うかは注釈器ごとに違いうる（先頭の注釈器だけで代表させない）。"""
+    off = list(_PARAMETER)
+    off[15] = off[16] = False
+    path = tmp_path / "P_Loaded.msp2.dbs"
+    write_dbs(path, [("LbmDB", [_record(name="L")], ["C:/lib/a.lbm2"])], parameter=off)
+    meta = dbs.read_storage_meta(path)
+    params = meta["annotator_search_params"]["C:/lib/a.lbm2"]
+    assert params["use_time_for_annotation_filtering"] is False
+    assert params["use_time_for_annotation_scoring"] is False
+    assert params["rt_tolerance"] == pytest.approx(2.0)

@@ -30,6 +30,7 @@ import os
 import re
 import sqlite3
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Iterable
 
@@ -82,6 +83,22 @@ def library_id_from_annotator(annotator_id: str | None) -> str | None:
     if annotator_id is None:
         return None
     return _ANNOTATOR_COUNTER.sub("", str(annotator_id))
+
+
+def _annotators_from_source(source_path_json: str | None) -> tuple[dict[str, str], dict[str, dict]]:
+    """対応表を持たない古いキャッシュ用。元の `.dbs` の `Storage` だけを読み直す。
+
+    レコード本体は読まないので、数百 MB の `.dbs` でも作り直すより軽い。元が
+    無い・`.dbs` でない（`.msp`/`.lbm2`）ときは空（＝従来の規則だけで引く）。
+    """
+    try:
+        source_path = json.loads(source_path_json) if source_path_json else None
+        if not source_path or not Path(source_path).is_file():
+            return {}, {}
+        meta = dbs_reader.read_storage_meta(source_path) or {}
+    except (OSError, ValueError, zipfile.BadZipFile, StopIteration):
+        return {}, {}   # 近道を使えないだけ。従来の規則で引く。
+    return meta.get("annotator_libraries") or {}, meta.get("annotator_search_params") or {}
 
 
 def _row_to_record(row) -> dict:
@@ -204,9 +221,13 @@ def _build(source_path: Path, dest_path: Path, digest: str) -> None:
                 conn.execute(_INDEX)
 
                 search_params = None
+                annotator_libraries: dict = {}
+                annotator_search_params: dict = {}
                 storage_meta = dbs_reader.read_storage_meta(source_path)
                 if storage_meta is not None:
                     search_params = storage_meta.get("search_params") or {}
+                    annotator_libraries = storage_meta.get("annotator_libraries") or {}
+                    annotator_search_params = storage_meta.get("annotator_search_params") or {}
 
                 meta_rows = [
                     ("record_count", json.dumps(record_count)),
@@ -216,6 +237,8 @@ def _build(source_path: Path, dest_path: Path, digest: str) -> None:
                     ("search_params", json.dumps(search_params)),
                     ("skipped_no_precursor_mz", json.dumps(skipped_no_precursor_mz)),
                     ("non_utf8_lines", json.dumps(reader_stats.get("non_utf8_lines", 0))),
+                    ("annotator_libraries", json.dumps(annotator_libraries)),
+                    ("annotator_search_params", json.dumps(annotator_search_params)),
                 ]
                 conn.executemany("INSERT INTO meta(key, value) VALUES (?, ?)", meta_rows)
         finally:
@@ -238,9 +261,38 @@ class LibraryStore:
         self._search_params = meta["search_params"]
         self._skipped_no_precursor_mz: int = meta["skipped_no_precursor_mz"]
         self._non_utf8_lines: int = meta["non_utf8_lines"]
+        self._annotator_libraries: dict[str, str] = meta["annotator_libraries"]
+        self._annotator_search_params: dict[str, dict] = meta["annotator_search_params"]
+
+    def rt_used_for(self, annotator_id: str | None) -> bool | None:
+        """その注釈器が RT を絞り込みか採点に使ったか。`.dbs` に記録が無ければ None（不明）。"""
+        params = self._annotator_search_params.get(str(annotator_id)) if annotator_id else None
+        if not params:
+            return None
+        return bool(params.get("use_time_for_annotation_filtering")
+                    or params.get("use_time_for_annotation_scoring"))
+
+    def library_id_for(self, annotator_id: str | None) -> str | None:
+        """照合結果の AnnotatorID を、この store の `library_id`（ライブラリ名）にする。
+
+        `.dbs` が保存した注釈器の Key → ライブラリ名の対応を先に引く（Console の
+        LBM はパス、MSP は任意名など、AnnotatorID の形は作り手しだいなので推測しない）。
+        対応に無い ID だけ、GUI の `<名前>_<n>` 規則（`library_id_from_annotator`）に戻す。
+        """
+        if annotator_id is None:
+            return None
+        mapped = self._annotator_libraries.get(str(annotator_id))
+        return mapped if mapped is not None else library_id_from_annotator(annotator_id)
 
     def _load_meta(self) -> dict:
         rows = dict(self._conn.execute("SELECT key, value FROM meta").fetchall())
+        if "annotator_libraries" in rows and "annotator_search_params" in rows:
+            annotator_libraries = json.loads(rows["annotator_libraries"])
+            annotator_search_params = json.loads(rows["annotator_search_params"])
+        else:
+            # この対応表より前に構築されたキャッシュ。元の `.dbs` から読み直す。
+            annotator_libraries, annotator_search_params = _annotators_from_source(
+                rows.get("source_path"))
         return {
             "record_count": json.loads(rows["record_count"]),
             "ion_modes": json.loads(rows["ion_modes"]),
@@ -252,6 +304,8 @@ class LibraryStore:
             "skipped_no_precursor_mz": json.loads(rows.get("skipped_no_precursor_mz", "0")),
             # 同上。以前のリーダは厳密な UTF-8 で読んでいたので、読めた古いキャッシュは 0 で正しい。
             "non_utf8_lines": json.loads(rows.get("non_utf8_lines", "0")),
+            "annotator_libraries": annotator_libraries,
+            "annotator_search_params": annotator_search_params,
         }
 
     def summary(self) -> dict:
