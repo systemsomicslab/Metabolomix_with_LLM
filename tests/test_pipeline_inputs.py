@@ -116,9 +116,13 @@ def test_effective_method_lbm_reference_resolves_from_its_own_directory(tmp_path
     `overrides` dict のアサートだけでは不十分——TDDでこのバグを見逃した原因が
     まさにそれ（overrideの有無しか見ておらず、実効ファイルの中身を読み戻して
     いなかった）。ここでは実際に書き出された `effective-method.txt` を読み戻し、
-    MS-DIAL Console と同じ規則（method_file.py:284 のコメント: 参照はメソッド
-    ファイル**自身**の位置基準で解決する）で `Lbm file path` を解決できることを
-    検証する。
+    `Lbm file path` が**絶対パス**で、実在するファイルを指すことを検証する。
+
+    LC-MS の Console（`ConfigParser.ReadForLcmsParameter`）は宣言パスを解決
+    しないので、相対値はメソッドファイル基準ではなく Console プロセスの cwd
+    基準になる（メソッド基準で解くのは GC-MS 経路の `ResolvePathFromMethodFile`
+    だけ。MsdialWorkbench afd5f95）。相対のまま残すと、どの基準で読んでも
+    原本の意図とずれる。
     """
     _allow_fake_exe(monkeypatch)
     src = make_source(tmp_path / "raw")
@@ -134,12 +138,32 @@ def test_effective_method_lbm_reference_resolves_from_its_own_directory(tmp_path
     assert declared, "実効メソッドに Lbm file path が書かれていない"
 
     candidate = Path(declared)
-    if not candidate.is_absolute():
-        # Console は実効メソッド自身のディレクトリ基準で解決する。
-        candidate = effective.parent / candidate
+    assert candidate.is_absolute(), f"実効コピーの Lbm file path が相対のまま: {declared!r}"
     assert candidate.is_file(), (
-        f"実効コピーの Lbm file path が解決できません: 宣言値={declared!r} "
-        f"実効コピーのディレクトリ={effective.parent} 解決先={candidate}")
+        f"実効コピーの Lbm file path が解決できません: 宣言値={declared!r}")
+
+
+def test_effective_method_writes_relative_msp_and_text_db_as_absolute_paths(tmp_path, monkeypatch):
+    """LBM 以外のライブラリ宣言も、相対のままでは Console の cwd 基準で読まれる。
+
+    既存 lipidomics 経路の厳格な参照検査（`REFERENCE_KEYS`＝LBM のみ）は広げない
+    ——実在しない古い宣言でも止めず、原本基準の絶対パスに固定するだけ。
+    """
+    _allow_fake_exe(monkeypatch)
+    src = make_source(tmp_path / "raw")
+    (src["root"] / "lib.msp").write_text("NAME: x\n", encoding="ascii")
+    method = src["method"]
+    method.write_text(method.read_text(encoding="ascii")
+                      + "Msp file path: lib.msp\nText DB file path: gone.txt\n",
+                      encoding="ascii", newline="\n")
+    request = resolve_request(src["root"])
+    plan = inspect_inputs(src["root"], request, exe_path=src["exe"])
+
+    pipeline_root = tmp_path / "pipeline_run"
+    stage_inputs(plan, pipeline_root)
+    keys = method_file_mod.read_method_keys(pipeline_root / "inputs" / "effective-method.txt")
+    assert Path(keys["msp file path"]) == (src["root"] / "lib.msp").resolve()
+    assert Path(keys["text db file path"]) == (src["root"] / "gone.txt").resolve()
 
 
 def test_source_is_byte_and_stat_identical_after_staging(tmp_path, monkeypatch):

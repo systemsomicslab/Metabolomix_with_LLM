@@ -57,6 +57,12 @@ def console_plan(
         環境変数 MSDIAL_LBM → MSDIAL_EXE と同じフォルダ」の順に、MS-DIAL GUI と
         同じ規則で自動解決します。GUI 由来のパラメータは `Lbm file path:` が
         必ず空なので、この自動解決が無いと**警告なしで同定 0 件**になります。
+        自動補完（宣言より後ろの 3 つ）は lipidomics だけです。引数と宣言は
+        metabolomics でも使います（Console は omics を問わず LBM で脂質を同定する）。
+        解決した LBM と、相対で宣言されたライブラリ類のパス（`Msp file path`
+        `Text DB file path` 等）は、メソッドファイル基準の絶対パスにして
+        `run_dir/effective-method.txt` へ書きます（Console は相対パスを
+        自分の作業フォルダ基準で読み、見つからなければ黙って飛ばすため）。
     polarity:
         "positive" または "negative"。
     measure:
@@ -242,6 +248,17 @@ def console_plan(
         return console_error(lbm.error_code, lbm.message or "",
                              {"candidates": list(lbm.candidates)} if lbm.candidates else None)
 
+    # 解決した LBM と、相対で宣言されたライブラリ等のパスは絶対パスにして
+    # run_dir の実効メソッドファイルに書く。LC-MS の Console は宣言パスを
+    # 解決せず cwd（run_dir）基準で読むので、相対のまま渡すと見つからずに
+    # 黙って飛ばされる（同定 0 件で完走）。ジョブを作る前に組んで ASCII 検査する。
+    overrides = method_file_mod.relative_path_overrides(method_keys, mf)
+    if lbm.path:
+        overrides[method_file_mod.LBM_KEY] = lbm.path
+    encoding_error = _non_ascii_override_error(overrides)
+    if encoding_error:
+        return encoding_error
+
     try:
         job, job_path = create_job(
             dataset_root=root,
@@ -258,12 +275,11 @@ def console_plan(
     job.save_project = save_project
     job.timeout_s = timeout_s
 
-    # 解決した LBM は run_dir の実効メソッドファイルに書き、ジョブをそちらへ向ける。
-    # ユーザーのパラメータファイルは触らない（GUI が次に開いたときの整合が崩れる）。
-    if lbm.path and lbm.source != "method_file":
+    # 実効メソッドを書いてジョブをそちらへ向ける。ユーザーのパラメータファイルは
+    # 触らない（GUI が次に開いたときの整合が崩れる）。
+    if overrides:
         effective = method_file_mod.write_effective_method_file(
-            mf, Path(job.run_dir) / "effective-method.txt",
-            {method_file_mod.LBM_KEY: lbm.path})
+            mf, Path(job.run_dir) / "effective-method.txt", overrides)
         job.method_file = str(effective)
     save_job(job, job_path)
     session_state.session.current_job_path = str(job_path)
@@ -302,6 +318,25 @@ def console_plan(
         "warnings": warnings,
         "next": "console_run を呼び出して実行を開始してください",
     })
+
+
+def _non_ascii_override_error(overrides: dict[str, str]) -> str | None:
+    """実効メソッドへ書く値に ASCII で表せない文字があれば封筒を返す。
+
+    Console はメソッドを `Encoding.ASCII` で読む（`ConfigParser`）。非 ASCII の
+    フォルダ名は `?` に化けてライブラリが見つからず、黙って同定 0 件になる。
+    pipeline の `METHOD_ENCODING_UNSUPPORTED` と同じコードで止める。
+    """
+    bad = {key: value for key, value in overrides.items() if not value.isascii()}
+    if not bad:
+        return None
+    return console_error(
+        "METHOD_ENCODING_UNSUPPORTED",
+        "実効メソッドへ書くパスに ASCII 以外の文字があります。MS-DIAL Console は"
+        "メソッドファイルを ASCII で読むため、このパスのライブラリは見つからず"
+        "黙って同定 0 件になります。ASCII だけのフォルダへ置き直してください: "
+        + ", ".join(f"{key}={value}" for key, value in sorted(bad.items())),
+        {"keys": sorted(bad)})
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
@@ -695,20 +730,25 @@ def console_method_template(
             "（中身は .mddata へのポインタだけです）。",
             {"based_on": str(src)})
 
+    src_keys = method_file_mod.read_method_keys(src)
+    # 別フォルダへ書き出すので、相対宣言は原本基準の絶対パスに固定する。
     overrides = {
+        **method_file_mod.relative_path_overrides(src_keys, src),
         method_file_mod.ION_MODE_KEY: polarity.capitalize(),
         method_file_mod.ADDUCT_KEY: method_file_mod.STANDARD_ADDUCTS[polarity],
     }
 
     exe = os.environ.get("MSDIAL_EXE") or None
     lbm = method_file_mod.resolve_lbm(
-        method_file_mod.read_method_keys(src), src,
-        omics=omics, exe_path=exe, env=os.environ)
+        src_keys, src, omics=omics, exe_path=exe, env=os.environ)
     if lbm.error_code:
         return console_error(lbm.error_code, lbm.message or "",
                              {"candidates": list(lbm.candidates)} if lbm.candidates else None)
     if lbm.path:
         overrides[method_file_mod.LBM_KEY] = lbm.path
+    encoding_error = _non_ascii_override_error(overrides)
+    if encoding_error:
+        return encoding_error
 
     dest = Path(out_path).expanduser()
     try:

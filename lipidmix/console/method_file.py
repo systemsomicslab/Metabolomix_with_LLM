@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -74,6 +75,58 @@ MSP_KEY = "Msp file path"
 #: `.lower()`後の比較なので大文字小文字は実害がないが、証拠に合わせておく。
 TEXT_DB_KEY = "Text DB file path"
 RT_REFERENCE_KEY = "Compounds library file path for RT correction"
+
+#: LC-MS の Console が**ファイルパスとして**読むキー（`ConfigParser.ReadCommonParameter`
+#: の `//File paths` 節）。`ReadForLcmsParameter` はこれらを解決しないので、相対値は
+#: Console プロセスの cwd 基準になる——メソッド基準で解くのは GC-MS 経路の
+#: `ResolveGcmsFilePaths` → `ResolvePathFromMethodFile` だけ（MsdialWorkbench
+#: afd5f95）。見つからなければ `CommonProcess.ParseLibraries` が黙って飛ばす
+#: （`IsFileExist` 判定。警告もエラーも出ない）。
+CONSOLE_PATH_KEYS: tuple[str, ...] = (
+    LBM_KEY, MSP_KEY, TEXT_DB_KEY,
+    "Isotope text DB file path",
+    "Compounds library file path for target detection",
+    RT_REFERENCE_KEY,
+    "RT correction peak selection file path",
+)
+
+#: annotator 設定表（TSV）を指すキー。こちらは Console 自身が**渡されたメソッド
+#: ファイルの親**基準で解く（`ConfigParser.ReadMspAnnotatorSettings` /
+#: `ReadTextAnnotatorSettings`）。実効コピーを別フォルダに書くと基準がずれるので、
+#: 原本基準の絶対パスに固定する。綴りの別名は Console の `case` 列挙どおり。
+SETTINGS_PATH_KEYS: tuple[str, ...] = (
+    "MSP annotator settings file path",
+    "MSP annotation settings file path",
+    "MSP search settings file path",
+    "Text annotator settings file path",
+    "Text library annotator settings file path",
+    "Text DB annotator settings file path",
+    "Text annotation settings file path",
+)
+
+
+def _absolute(path: Path) -> str:
+    """絶対パス文字列にする。シンボリックリンクやドライブ割当ては解かない。"""
+    return os.path.abspath(path)
+
+
+def relative_path_overrides(method_keys: dict[str, str], method_file: Path) -> dict[str, str]:
+    """相対で宣言されたパスキーを、原本メソッドの親基準の絶対パスへ書き換える上書きを返す。
+
+    実効メソッドは原本と別フォルダに書かれ、Console はそれを run_dir を cwd に
+    して読む。相対値のままだと、`CONSOLE_PATH_KEYS` は cwd 基準、
+    `SETTINGS_PATH_KEYS` は実効コピー基準で読まれ、どちらも原本の意図とずれる。
+
+    参照先の実在は問わない（止めるかどうかは呼び出し側の方針。既存 lipidomics
+    経路は LBM 以外の古い宣言で止めない）。絶対・空のキーと未知のキーは触らない。
+    """
+    out: dict[str, str] = {}
+    for key in (*CONSOLE_PATH_KEYS, *SETTINGS_PATH_KEYS):
+        declared = (method_keys.get(key.lower()) or "").strip()
+        if not declared or Path(declared).is_absolute():
+            continue
+        out[key] = _absolute(method_file.parent / declared)
+    return out
 
 ION_MODE_KEY = "Ion mode"
 ADDUCT_KEY = "Searched adduct ions"
@@ -300,31 +353,43 @@ def resolve_lbm(
     MSDIAL_EXE と同じフォルダ。ビルド生成物を `MSDIAL_LBM` より上に置くのは、
     この環境の Console がソースからのビルドで、ライブラリもそのツリー内の
     新しいものを使うため（インストール版より優先する）。
-    lipidomics 以外では LBM を要求しない（Console も読まないため）。
-    """
-    if omics != "lipidomics":
-        return LbmResolution(path=None, source="not_required")
+    返すパスは常に絶対パス。呼び出し側はそれを実効メソッドへ書き戻す
+    （宣言が相対でも原本のままにしない。`relative_path_overrides` 参照）。
 
+    明示引数とメソッドの宣言は omics を問わず採る——Console は `Target omics`
+    に関わらず `Lbm file path` を読み（`CommonProcess.ParseLibraries`）、LBM
+    annotator を `TargetOmics.Lipidomics` 固定で組んで脂質を同定する
+    （`LcmsProcess`）。宣言されたのに見つからなければ止める（Console は黙って
+    飛ばすので）。GUI 流の自動補完（ビルド生成物 → `MSDIAL_LBM` → exe フォルダ）
+    だけを lipidomics に限る。metabolomics で宣言も引数も無ければ
+    `not_required`（LBM を足さない）。
+    """
     if override:
         candidate = Path(override).expanduser()
         if candidate.is_file():
-            return LbmResolution(path=str(candidate), source="argument")
+            return LbmResolution(path=_absolute(candidate), source="argument")
         return LbmResolution(
             path=None, source="argument", error_code="LBM_NOT_FOUND",
             message=f"lbm_file が指すファイルがありません: {override}")
 
     declared = (method_keys.get(LBM_KEY.lower()) or "").strip()
     if declared:
-        # MS-DIAL の ResolvePathFromMethodFile と同じくメソッドファイル基準で解決する。
+        # LC-MS の Console（`ConfigParser.ReadForLcmsParameter`）は宣言を解決せず、
+        # 相対値は Console プロセスの cwd 基準で読む。メソッド基準で解くのは
+        # GC-MS 経路の `ResolvePathFromMethodFile` だけ（MsdialWorkbench afd5f95）。
+        # ここではメソッド基準で解き、呼び出し側が絶対パスを実効メソッドへ書く。
         candidate = Path(declared)
         if not candidate.is_absolute():
             candidate = method_file.parent / candidate
         if candidate.is_file():
-            return LbmResolution(path=str(candidate), source="method_file")
+            return LbmResolution(path=_absolute(candidate), source="method_file")
         return LbmResolution(
             path=None, source="method_file", error_code="LBM_NOT_FOUND",
             message=(f"メソッドファイルが指す脂質ライブラリが見つかりません: {declared}  "
                      f"（{method_file} 基準で解決: {candidate}）"))
+
+    if omics != "lipidomics":
+        return LbmResolution(path=None, source="not_required")
 
     from_build, build_ambiguous = find_build_tree_lbm(exe_path)
     if build_ambiguous:
@@ -338,13 +403,13 @@ def resolve_lbm(
                 "止めます。1 件だけ残すか、lbm_file 引数で明示してください。"),
             candidates=tuple(str(p) for p in build_ambiguous))
     if from_build is not None:
-        return LbmResolution(path=str(from_build), source="build_tree")
+        return LbmResolution(path=_absolute(from_build), source="build_tree")
 
     from_env = (env.get("MSDIAL_LBM") or "").strip()
     if from_env:
         candidate = Path(from_env)
         if candidate.is_file():
-            return LbmResolution(path=str(candidate), source="env")
+            return LbmResolution(path=_absolute(candidate), source="env")
         return LbmResolution(
             path=None, source="env", error_code="LBM_NOT_FOUND",
             message=f"環境変数 MSDIAL_LBM が指すファイルがありません: {from_env}")
@@ -357,7 +422,7 @@ def resolve_lbm(
     exe_dir = Path(exe_path).expanduser().parent
     found = find_lbm_files(exe_dir)
     if len(found) == 1:
-        return LbmResolution(path=str(found[0]), source="exe_dir")
+        return LbmResolution(path=_absolute(found[0]), source="exe_dir")
     if not found:
         return LbmResolution(
             path=None, source="exe_dir", error_code="LBM_NOT_FOUND",
@@ -435,8 +500,8 @@ def past_run_method_files(dataset_root: Path) -> list[Path]:
     """過去 run が実際に使ったメソッドファイルを返す。
 
     `analysis-job.json` の `software.method_file` から引く。**ファイル名で拾わない** —
-    `run_dir/effective-method.txt` は「LBM の解決元がメソッドファイル以外だったとき」
-    だけ書かれるので、グロブでは取りこぼす。
+    `run_dir/effective-method.txt` は「原本からの書き換え（LBM の補完・相対パスの
+    絶対化）が要るとき」だけ書かれるので、グロブでは取りこぼす。
     """
     runs = Path(dataset_root).expanduser() / RUNS_SUBDIR_NAME
     out: list[Path] = []
@@ -475,26 +540,29 @@ def write_effective_method_file(src: Path, dest: Path, overrides: dict[str, str]
     **元ファイルは触らない**。ユーザーのデータフォルダにある GUI 由来の
     パラメータを書き換えると、次に GUI で開いたときの整合が取れなくなる。
     出力は ASCII / LF（`ConfigParser` は `StreamReader(path, Encoding.ASCII)`）。
+
+    同じキーの行が複数あれば**全部**差し替える。`ConfigParser` は全行を順に
+    読んで後の行が勝つので、最初の 1 行だけでは後ろの重複行が上書きを打ち消す。
     """
-    remaining = dict(overrides)
+    by_lower = {key.lower(): key for key in overrides}
+    applied: set[str] = set()
     lines: list[str] = []
     for line in src.read_text(encoding="ascii", errors="replace").splitlines():
         stripped = line.strip()
-        replaced = False
+        override_key = None
         if stripped and not stripped.startswith("#"):
             positions = [i for i in (stripped.find(":"), stripped.find("=")) if i > 0]
             if positions:
-                key = stripped[:min(positions)].strip().lower()
-                for override_key in list(remaining):
-                    if override_key.lower() == key:
-                        lines.append(f"{override_key}: {remaining.pop(override_key)}")
-                        replaced = True
-                        break
-        if not replaced:
+                override_key = by_lower.get(stripped[:min(positions)].strip().lower())
+        if override_key is None:
             lines.append(line)
+        else:
+            lines.append(f"{override_key}: {overrides[override_key]}")
+            applied.add(override_key)
 
-    for key, value in remaining.items():
-        lines.append(f"{key}: {value}")
+    for key, value in overrides.items():
+        if key not in applied:
+            lines.append(f"{key}: {value}")
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text("\n".join(lines) + "\n", encoding="ascii", newline="\n")

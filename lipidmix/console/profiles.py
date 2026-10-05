@@ -23,7 +23,8 @@
   宣言（polarity / omics / acquisition_type）が食い違えば`PROFILE_METHOD_CONFLICT`。
 - `snapshot_profile(plan, run_dir)`: `resolve_profile_inputs`が返した計画を
   `run_dir`へ実体化する。method原本は書き換えず、実効コピー
-  （`method_file.write_effective_method_file`が生成、依存の絶対pathで上書き）
+  （`method_file.write_effective_method_file`が生成、依存の絶対pathと、原本が
+  相対で宣言したパスキーの絶対化で上書き——`effective_method_overrides`）
   だけを`run_dir`配下に書く。**計画の同一性ハッシュ（`plan_identity_hash`）は
   `plan`自体のcanonical hashで、`run_dir`（＝出力先）に一切依存しない**——
   実行コピーの絶対pathを含む実行証跡ハッシュ（`effective_method_sha256`）は
@@ -50,8 +51,8 @@ from lipidmix.console.profile_schema import profile_content_hash, validate_profi
 from lipidmix.core.atomic_io import DomainError, canonical_hash
 from lipidmix.pipeline import inputs as pipeline_inputs_mod
 
-__all__ = ["certificate_routine_overrides", "hash_files", "load_profile",
-           "resolve_profile_inputs", "snapshot_profile"]
+__all__ = ["certificate_routine_overrides", "effective_method_overrides", "hash_files",
+           "load_profile", "resolve_profile_inputs", "snapshot_profile"]
 
 #: 実行環境manifestが実行体と一緒に列挙する同梱ファイルの拡張子（spec §5.1
 #: 「実行環境manifestはexeのほか同梱DLL/設定...を列挙する」）。.NETアプリの
@@ -419,6 +420,32 @@ def resolve_profile_inputs(profile: dict, source_root: Path, *, raw_root: Path |
     }
 
 
+def effective_method_overrides(plan: dict) -> dict[str, str]:
+    """実効メソッドへ書く上書き（`method_key` → 値）を`plan`から作る。
+
+    profile が宣言した依存（存在するもの）の絶対パスに加え、method 原本が
+    **相対で**宣言していて profile が依存として持たないパスキーを、原本の親
+    基準の絶対パスへ書き換える。LC-MS の Console は宣言パスを解決せず cwd
+    基準で読むので、相対のまま写すと見つからずに黙って飛ばされる——一方
+    `resolve_profile_inputs` はそれらを原本基準で実在確認しており、実行時の
+    読み方と食い違う。
+
+    実行用の配置（`pipeline.inputs.plan_from_profile`）と記録用の
+    スナップショット（`snapshot_profile`）は両方ここを通す（片方だけ直すと、
+    記録された実効メソッドと Console が実際に読むものがずれる）。
+    """
+    method_path = Path(plan["method"]["source_path"])
+    declared = {dep["method_key"]: dep["source_path"]
+                for dep in plan["dependencies"] if dep["present"]}
+    covered = {key.lower() for key in declared}
+    relative = method_file_mod.relative_path_overrides(
+        method_file_mod.read_method_keys(method_path), method_path)
+    overrides = {key: value for key, value in relative.items()
+                 if key.lower() not in covered}
+    overrides.update(declared)
+    return overrides
+
+
 def snapshot_profile(plan: dict, run_dir: Path) -> dict:
     """`plan`を`run_dir`へ実体化し、実行スナップショットを返す。
 
@@ -439,10 +466,7 @@ def snapshot_profile(plan: dict, run_dir: Path) -> dict:
     snapshot_dir = run_dir / _SNAPSHOT_SUBDIR
     effective_path = snapshot_dir / _EFFECTIVE_METHOD_NAME
 
-    overrides = {
-        dep["method_key"]: dep["source_path"]
-        for dep in plan["dependencies"] if dep["present"]
-    }
+    overrides = effective_method_overrides(plan)
     original_method_keys = method_file_mod.read_method_keys(Path(plan["method"]["source_path"]))
     method_overrides = [
         {
