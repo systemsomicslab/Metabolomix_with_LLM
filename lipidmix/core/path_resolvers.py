@@ -185,11 +185,20 @@ def _resolve_data_file(
     明示パスがあればそれを優先し、無ければ (1) 複数バッチ混在なら最新バッチへ絞り、
     (2) `prefer_suffix` に一致するものがあればそちらを優先し、(3) 重複時は最新版を
     採る。この 3 段は形式によらず同じなので、拡張子と優先条件だけを変えて共有する。
+
+    `file_path` がフォルダなら、既定のデータディレクトリの代わりにその中を探す。
+    LLM は `load_dataset` に渡したフォルダをそのまま `file_path` に渡しがちで、
+    フォルダを返すと読み手が open して Windows では EACCES になる。フォルダの中に
+    無いときは None を返し、既定ディレクトリの別データセットへは落ちない。
     """
-    if file_path and os.path.exists(file_path):
+    search_dir = None
+    if file_path and os.path.isdir(file_path):
+        search_dir = file_path
+    elif file_path and os.path.exists(file_path):
         return file_path
 
-    real_paths = [p for p in list_data_files(extension=extension) if os.path.isfile(p)]
+    real_paths = [p for p in list_data_files(extension=extension, directory=search_dir)
+                  if os.path.isfile(p)]
     if not real_paths:
         return None
     real_paths = _select_latest_batch(real_paths)  # 複数バッチ混在時は最新バッチへ
