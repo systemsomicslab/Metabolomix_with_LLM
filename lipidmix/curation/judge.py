@@ -126,6 +126,11 @@ def _rt(ev: dict, info: list[str], th: dict) -> dict:
     if ev.get("reference") is None:
         info.append("reference_not_found")
         return _check("UNKNOWN")
+    if ev.get("rt_used_by_annotation") is False:
+        # 参照 RT は別のクロマトグラフィーの予測値でありうる（LBM 等）。MS-DIAL が
+        # 使っていない RT のずれで誤りとは言えない。
+        info.append("rt_not_used_by_annotation")
+        return _check("UNKNOWN")
     drt = ev.get("drt")
     if drt is None:
         info.append("reference_rt_absent")

@@ -28,7 +28,6 @@ from lipidmix.arf2.match_results import load_spot_annotations, name_prefix
 from lipidmix.curation.eic_shape import spot_shape
 from lipidmix.dcl.reader import deserialize_dcl
 from lipidmix.eic.reader import read_eic_spot_css1
-from lipidmix.library.store import library_id_from_annotator
 from lipidmix.msdial.peak_verification import adduct_consistency, mass_error_ppm
 from lipidmix.plots.mirror import build_mirror_payload
 
@@ -209,7 +208,7 @@ def _reference(store, match, rep_mz):
         return None
     record = store.record_by_scan_id(
         int(match["library_id"]),
-        library_id=library_id_from_annotator(match.get("annotator_id")),
+        library_id=store.library_id_for(match.get("annotator_id")),
         precursor_mz=float(rep_mz), mz_tol=REFERENCE_MZ_WINDOW)
     if record is None:
         return None
@@ -315,6 +314,9 @@ def collect(arf2_path, spots, *, store, ms2_tol, th, file_ids=None, max_traces=1
             "adduct_band": adduct_consistency(spot.get("AdductType"), spot.get("IonMode"),
                                               spot.get("Ontology"))["band"],
             "drt": None if drt is None else round(drt, 4),
+            # MS-DIAL がこの照合で RT を使ったか（False なら RT 判定をしない。None は不明）。
+            "rt_used_by_annotation": (store.rt_used_for(match.get("annotator_id"))
+                                      if store is not None and match is not None else None),
             "rescore": rescore, "mirror": mirror,
             "eic": {"samples": samples}, "eic_shape": shape, "notes": notes,
             **({"_measured": measured} if keep_measured else {}),

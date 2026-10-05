@@ -62,22 +62,24 @@ flowchart TD
 15. │     ├─ lipidmix/arf2/match_results.py  load_spot_annotations()
 16. │     ├─ lipidmix/dcl/reader.py  deserialize_dcl()
 17. │     ├─ lipidmix/curation/evidence.py  _reference()
-18. │     │  └─ lipidmix/library/store.py  LibraryStore.record_by_scan_id()
-19. │     ├─ lipidmix/analysis/spectral_match.py  match_spectrum()
-20. │     ├─ lipidmix/plots/mirror.py  build_mirror_payload()
-21. │     ├─ lipidmix/eic/reader.py  read_eic_spot_css1()
-22. │     ├─ lipidmix/curation/eic_shape.py  spot_shape()
-23. │     └─ lipidmix/curation/evidence.py  _downsample_points()（形状計算の後に payload だけ間引く）
-24. │  └─ lipidmix/curation/trend.py  composition()（`LipidParser` はモジュールで 1 つだけ作る）
-25. │  └─ lipidmix/curation/trend.py  fit_trends()
-26. │  └─ lipidmix/curation/judge.py  lipid_rules_active()（脂質規則フラグが 1 件でも True か）
-27. │  └─ lipidmix/curation/judge.py  judge_spot()
-28. │  └─ lipidmix/curation/judge.py  auto_note()（判定根拠の文 → `auto_note`）
-29. lipidmix/curation/review.py  save_review()
-30. └─ lipidmix/curation/viewer.py  render_html()
-31. lipidmix/curation/review.py  n_summary_rows()
-32. lipidmix/curation/review.py  summary_tsv()（`max_rows` で先頭だけ）
-33. lipidmix/curation/review.py  trend_summary()
+18. │     │  ├─ lipidmix/library/store.py  LibraryStore.library_id_for()（`.dbs` の注釈器 Key → ライブラリ名。無ければ GUI の `<名前>_<n>` 規則）
+19. │     │  └─ lipidmix/library/store.py  LibraryStore.record_by_scan_id()
+20. │     ├─ lipidmix/library/store.py  LibraryStore.rt_used_for()（MS-DIAL がその照合で RT を使ったか → `rt_used_by_annotation`）
+21. │     ├─ lipidmix/analysis/spectral_match.py  match_spectrum()
+22. │     ├─ lipidmix/plots/mirror.py  build_mirror_payload()
+23. │     ├─ lipidmix/eic/reader.py  read_eic_spot_css1()
+24. │     ├─ lipidmix/curation/eic_shape.py  spot_shape()
+25. │     └─ lipidmix/curation/evidence.py  _downsample_points()（形状計算の後に payload だけ間引く）
+26. │  └─ lipidmix/curation/trend.py  composition()（`LipidParser` はモジュールで 1 つだけ作る）
+27. │  └─ lipidmix/curation/trend.py  fit_trends()
+28. │  └─ lipidmix/curation/judge.py  lipid_rules_active()（脂質規則フラグが 1 件でも True か）
+29. │  └─ lipidmix/curation/judge.py  judge_spot()
+30. │  └─ lipidmix/curation/judge.py  auto_note()（判定根拠の文 → `auto_note`）
+31. lipidmix/curation/review.py  save_review()
+32. └─ lipidmix/curation/viewer.py  render_html()
+33. lipidmix/curation/review.py  n_summary_rows()
+34. lipidmix/curation/review.py  summary_tsv()（`max_rows` で先頭だけ）
+35. lipidmix/curation/review.py  trend_summary()
 
 ## curation_suggest
 

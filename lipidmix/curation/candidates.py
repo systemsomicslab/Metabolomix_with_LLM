@@ -12,7 +12,6 @@ from __future__ import annotations
 from lipidmix.analysis.spectral_match import match_spectrum, total_score
 from lipidmix.curation import trend
 from lipidmix.curation.evidence import MIRROR_MAX_PEAKS, REFERENCE_MZ_WINDOW, _keep_most_intense_peaks
-from lipidmix.library.store import library_id_from_annotator
 from lipidmix.msdial.adducts import parse_adduct
 from lipidmix.msdial.peak_verification import adduct_consistency
 from lipidmix.plots.mirror import build_mirror_payload
@@ -90,10 +89,10 @@ def _from_record(record: dict, source: str) -> dict:
             "_spectrum": record.get("spectrum") or [], "msdial_total_score": None}
 
 
-def _from_match(match: dict) -> dict:
+def _from_match(match: dict, store) -> dict:
     return {"source": "msdial", "name": match.get("name"), "ontology": None, "adduct": None,
             "formula": None, "inchikey": match.get("inchikey"), "precursor_mz": None, "ref_rt": None,
-            "library_id": library_id_from_annotator(match.get("annotator_id")),
+            "library_id": store.library_id_for(match.get("annotator_id")),
             "record_index": match.get("library_id"), "_spectrum": [],
             "msdial_total_score": match.get("total_score"), "_unresolved": True}
 
@@ -102,7 +101,7 @@ def _resolve_match(store, match: dict, rep_mz) -> dict | None:
     if match.get("library_id") is None or rep_mz is None:
         return None
     record = store.record_by_scan_id(int(match["library_id"]),
-                                     library_id=library_id_from_annotator(match.get("annotator_id")),
+                                     library_id=store.library_id_for(match.get("annotator_id")),
                                      precursor_mz=float(rep_mz), mz_tol=REFERENCE_MZ_WINDOW)
     if record is None:
         return None
@@ -123,7 +122,7 @@ def build_library_candidates(ev: dict, *, msdial_matches, representative, store,
     for match in msdial_matches:
         record = _resolve_match(store, match, rep_mz)
         if record is None:
-            unresolved.append(_from_match(match))
+            unresolved.append(_from_match(match, store))
             continue
         item = pool.setdefault(record_key(record), _from_record(record, "msdial"))
         item["msdial_total_score"] = match.get("total_score")
