@@ -1,4 +1,4 @@
-"""状態不足13箇所が missing_state エンベロープを返すことの契約テスト。
+"""状態不足15箇所が missing_state エンベロープを返すことの契約テスト。
 
 message は既存の日本語文面を保持する（エンベロープを解釈しないクライアントでも
 LLM が読む内容が変わらないこと）。
@@ -125,6 +125,23 @@ class MissingStateContractTests(unittest.TestCase):
             # arf_plot_volcano は ARF 専用なので候補は増やさない。
             ["arf_differential", "dataset_differential"],
             "arf_differential",
+        )
+
+    def test_arf_plot_group_intensity(self):
+        """ARF 未読み込みの空セッションでは、素の戻り値としてエンベロープを返す。"""
+        self.assert_missing(
+            server.arf_plot_group_intensity(items=["PG"], groups=["x"], output="payload"),
+            "arf_dataset",
+            ["arf_parser", "load_dataset"],
+            "load_dataset",
+        )
+
+    def test_save_group_intensity_figure(self):
+        self.assert_missing(
+            server.save_group_intensity_figure(analysis_id="x"),
+            "group_intensity_plot",
+            ["arf_plot_group_intensity"],
+            "arf_plot_group_intensity",
         )
 
     def test_save_eic_figure_offers_both_producers(self):
