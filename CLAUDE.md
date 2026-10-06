@@ -34,6 +34,7 @@ fake Console までしか検証されていない**——`docs/workflow/metabolo
 ## コマンド
 
 ```bash
+C:/Python314/python.exe -m pip install -r requirements-dev.txt   # 初回のみ。pytest はここにだけ入る
 C:/Python314/python.exe -m pytest tests -q
 ```
 

@@ -104,9 +104,11 @@ implementation lives under `lipidmix/`.
 | Setting up the local MCP server on a member's machine | [DEPLOY.md](DEPLOY.md) |
 | Working on this repository | [CLAUDE.md](CLAUDE.md) |
 
-Tests run from the repository root:
+Tests run from the repository root. They need `pytest`, which is not part of the
+runtime dependencies; install it through the development requirements first:
 
 ```bash
+python -m pip install -r requirements-dev.txt
 python -m pytest tests -q
 ```
 

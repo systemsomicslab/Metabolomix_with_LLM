@@ -22,7 +22,8 @@ Each member runs the MCP server on their own machine:
 
 ## Member Setup
 
-Install dependencies locally:
+Install dependencies locally (running the server needs only `requirements.txt`;
+`requirements-dev.txt` adds `pytest` for running the tests):
 
 ```powershell
 python -m pip install -r requirements.txt
