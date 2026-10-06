@@ -232,3 +232,10 @@ InChIKey・Ontology・m/z・RT と結合する。InChIKey が無い特徴は本�
 5. └─ [output=image] metabolomix/arf/tools.py  _volcano_counts()
 6.    └─ metabolomix/plots/volcano.py  render_volcano_plot()
 7.    └─ metabolomix/plots/render.py  figure_to_png()
+
+## arf_plot_group_intensity
+
+前提: ARF を読み込み済みで、同じアラインメントの `.arf2` が隣にある（無ければ `MissingState`）
+状態変更: `session.arf.last_group_intensity` を更新。ファイルは書かない。
+
+1. metabolomix/arf/tools.py  arf_plot_group_intensity()

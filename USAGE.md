@@ -1,4 +1,4 @@
-# USAGE — ms-data-parser MCP ツール一覧(全72ツール)
+# USAGE — ms-data-parser MCP ツール一覧(全73ツール)
 
 MS-DIAL 出力(`.arf` / `.arf2` / `.pai2` / `.dcl` / `.EIC.aef`)と mzTab-M を解析し、PCA・差次的解析・
 アノテーション検証・文献探索・レポート記録までを行う MCP サーバーのツール群です。
@@ -115,6 +115,7 @@ pipeline_run → pipeline_status(確認) → pipeline_resume(訂正・再開が�
 | ツール | 機能 |
 |--------|------|
 | `arf_plot_volcano` | 直近の2群差次的解析を volcano 図として返す。**既定はPNG画像＋件数入りキャプション**(`output="image"`、全特徴を描画)。点列(`lipidmix.volcano.v1`)が要るクライアントは `output="payload"` または env `LIPIDMIX_PLOT_OUTPUT=payload` —— その場合 `up`/`down` は全件、`ns` は `max_points`(既定800)まで等間隔で間引き、件数は `selection` に出る。ファイル保存はしない。 |
+| `arf_plot_group_intensity` | 選んだクラス・分子種ごとに、試料群の試料別強度を 1 項目 1 パネルで並べる(既定はPNG画像、`output="payload"` で `lipidmix.group_intensity.v1`)。 |
 | `save_pca_figure` | ユーザーがPNGを明示的に希望した場合だけ、指定した PCA 結果を `reports/figures/` に保存。通常の描画はクライアントUIに任せる。入力元は ARF 経路と mzTab-M 経路の 2 つあり、**どちらも優先しない** — 有効な結果が 2 つ以上あると `AMBIGUOUS_RESULT_SOURCE` で止まるので `source`(`arf`/`mztab`)か `result_id` を指定する(どちらを描くかは図の数字そのものを変えるため)。前処理をやり直して古くなった結果は選べない。探索専用データセットから描いた図には、図の中に但し書きが入る。 |
 | `save_volcano_figure` | ユーザーが**ファイルとしての**PNGを希望した場合だけ、指定した差次的解析(2群)を volcano PNG として保存(レポート埋め込み用)。画面で見るだけなら `arf_plot_volcano` が画像を直接返す。描画関数は共通なので同じ図。入力元の決め方(`source`/`result_id`、曖昧なら停止)は `save_pca_figure` と同じ。 |
 | `save_eic_figure` | ユーザーが明示的に保存を希望した場合だけ、直近のEICプロット情報を PNG 化し `reports/figures/<analysis_id>_eic.png` に保存。Use-LLLMではローカル書き込みとして承認が必要。 |

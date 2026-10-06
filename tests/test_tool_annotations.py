@@ -42,6 +42,7 @@ EXPECTED_ANNOTATIONS = {
     "arf_parser": READ_ONLY,
     "arf_differential": READ_ONLY,
     "arf_plot_volcano": READ_ONLY,
+    "arf_plot_group_intensity": READ_ONLY,
     "arf2_parser": READ_ONLY,
     "arf2_annotate_identities": READ_ONLY,
     # --- データセット入口 ---

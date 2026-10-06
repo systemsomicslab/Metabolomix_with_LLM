@@ -59,6 +59,7 @@ __all__ = [
     "arf_parser",
     "arf_differential",
     "arf_plot_volcano",
+    "arf_plot_group_intensity",
     "arf_export_differential",
 ]
 
@@ -1335,3 +1336,139 @@ def _volcano_counts(last: dict) -> dict:
         "ns": sum(1 for p in drawable if p.get("sig") not in ("up", "down")),
         "nonfinite": len(points) - len(drawable),
     }
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+def arf_plot_group_intensity(
+    items: list[str],
+    groups: list[str],
+    low_reliability_samples: list[str] | None = None,
+    apply_curation: bool = True,
+    exclude_auto_likely_wrong: bool = False,
+    standard_samples: list[str] | None = None,
+    detection_limit: float | None = None,
+    title: str | None = None,
+    ncols: int | None = None,
+    output: str | None = None,
+) -> list | str:
+    """選んだクラス・分子種ごとに、試料群の試料別強度を並べる（1 項目 1 パネル。既定は PNG 画像）。
+
+    - items: 1 項目 1 パネル（1〜30 件）。`.arf2` の Ontology に完全一致すればクラス（全分子種の合計）、
+      しなければ分子種名（`|` で分けた候補名に完全一致。`low score:` 等の接頭辞は無視）。
+      `"PE+EtherPE"` のように `+` で合算。当たらない項目は N.D. のパネルになる。
+    - groups: 1 群以上。`arf_differential` と同じトークン規則（`"KO_9w"` は両方を含む試料）。
+      QC・ブランクは群の指定に `qc` / `blank` を書いたときだけ入る。
+    - 1 点 = 1 試料の PeakHeight 合計（gap-fill 含む）。縦軸は log10 で全パネル共通、群は log10 の平均 ± SD。
+      検定はしない（`arf_differential` を使う）。
+    - クラスの合計からは標識内部標準（`(d7)` 等）と、standard_samples の試料にだけある分子種を除く。
+      apply_curation（既定 True）で人の判断（wrong / redundant 除外、assign 付け替え）、
+      exclude_auto_likely_wrong で最新レビューの likely_wrong も除く。除いたものは payload の excluded。
+    - low_reliability_samples: 白抜きで描き、平均 ± SD から外す。
+    - detection_limit: 検出下限の破線。省略時は param ファイルの Minimum peak height。
+    - output: "image"（既定）/ "payload"（`lipidmix.group_intensity.v1`）。PNG ファイルが要るときは
+      save_group_intensity_figure。
+    """
+    from metabolomix.arf import reader as arf_reader
+    from metabolomix.arf2 import reader as arf2_reader
+    from metabolomix.arf2.match_results import load_spot_annotations, name_prefix
+    from metabolomix.curation import apply as curation_apply
+    from metabolomix.curation import flags as curation_flags
+    from metabolomix.curation import suggest as curation_suggest
+    from metabolomix.msdial import analysis_params
+    from metabolomix.plots import group_intensity as gi
+
+    mode = plot_render.resolve_plot_output(output)
+    arf_state = session_state.session.arf
+    if arf_state.features is None or not str(arf_state.current_file_path or "").lower().endswith(".arf"):
+        return mcp_errors.missing_state(
+            "arf_dataset", ["arf_parser", "load_dataset"], "先に load_dataset で ARF データを読み込んでください。")
+    arf2_path = _sibling_arf2_path()
+    if arf2_path is None:
+        return mcp_errors.missing_state(
+            "sibling_arf2", ["arf_parser", "load_dataset"],
+            "同じアラインメントの .arf2 が見つかりません（名前とクラスの解決に要ります）。")
+
+    excluded_samples = set(arf_state.excluded_samples or ())
+    rows_by_spot = {}
+    for feature in arf_state.features:
+        rows = [arf_reader.alignment_feature_row(raw) for raw in feature["AlignedPeakProperties"]]
+        rows_by_spot[feature["MasterAlignmentID"]] = [
+            r for r in rows if r and r.get("file_name") not in excluded_samples]
+    names = [n for n in sample_factors.arf_sample_names(arf_state.features) if n not in excluded_samples]
+    facets = sample_factors.build_sample_facets(names, arf_state.class_index)
+    resolved_groups, caveats = gi.resolve_groups(groups, facets)
+    plotted = {n for g in resolved_groups for n in g["samples"]}
+    low = gi.resolve_sample_specs(low_reliability_samples or [], facets)
+
+    catalog = arf2_reader.load_catalog(str(arf2_path))
+    curation = {}
+    if apply_curation:
+        try:
+            flag_set = curation_apply.flags_for_arf2(arf2_path)
+        except curation_flags.FlagFileError as exc:
+            return json_payload({"status": "error", **exc.details()})
+        curation = {
+            "wrong": {int(s) for s in flag_set["wrong"]},
+            "redundant": {int(s) for s in flag_set["redundant"]},
+            "assign": {int(s): {"name": row.get("name") or "", "ontology": row.get("ontology") or ""}
+                       for s, row in flag_set["assign"].items()},
+        }
+        if flag_set["orphaned"]:
+            caveats.append(curation_flags.orphaned_warning(flag_set["orphaned"]))
+    if exclude_auto_likely_wrong:
+        review = curation_suggest.latest_review(
+            arf2_path, curation_flags.alignment_key(arf2_path)["alignment_sha256"])
+        if review is None:
+            caveats.append("このアラインメントの curation_review のレビューが無いため、自動判定 likely_wrong は除いていません。")
+        else:
+            curation["auto_likely_wrong"] = {
+                int(s["spot_id"]) for s in review["spots"] if s.get("verdict") == "likely_wrong"}
+
+    standard = set()
+    if standard_samples:
+        standard = gi.resolve_sample_specs(standard_samples, sample_factors.build_sample_facets(
+            sample_factors.arf_sample_names(arf_state.features), arf_state.class_index))
+    standard_only = gi.standard_only_spots(rows_by_spot, standard, plotted) if standard else frozenset()
+    resolved_items, excluded = gi.resolve_items(items, catalog, curation=curation, standard_only=standard_only)
+
+    # MS/MS の裏付け: 照合結果に MS/MS があり、かつ .arf2 の Name が `no MS2:` / `w/o MS2:` でない
+    # （接頭辞は照合結果ではなく .arf2 の Name に付く）。assign 済みでも元のスペクトルの有無で判断する。
+    annotations = load_spot_annotations(str(arf2_path))
+    name_by_id = {int(r["MasterAlignmentID"]): r.get("Name") or "" for r in catalog}
+    msms = {}
+    for sid, ann in annotations.items():
+        rep = ann.get("representative") or {}
+        msms[sid] = (bool(rep.get("has_msms"))
+                     and name_prefix(name_by_id.get(sid, "")) not in ("no MS2", "w/o MS2"))
+
+    source = None
+    if detection_limit is not None:
+        detection_limit, source = float(detection_limit), "argument"
+    else:
+        param = analysis_params.find_param_file(arf2_path)
+        value = analysis_params.read_analysis_params(param)["min_peak_height"] if param else None
+        if value:
+            detection_limit, source = value, "param_file"
+
+    payload = gi.build_group_intensity_payload(
+        resolved_items, resolved_groups, rows_by_spot, msms=msms, low_reliability=frozenset(low),
+        excluded=excluded, detection_limit=detection_limit, detection_limit_source=source, caveats=caveats)
+    arf_state.last_group_intensity = {"payload": payload, "title": title, "ncols": ncols}
+    if mode == plot_render.PAYLOAD:
+        return json_payload(payload)
+    png = plot_render.figure_to_png(gi.render_group_intensity_plot(payload, title=title, ncols=ncols))
+    return [_group_intensity_caption(payload), Image(data=png, format="png")]
+
+
+def _group_intensity_caption(payload: dict) -> str:
+    """画像に添える 1 行。図から読めない内訳（試料数・除外数・N.D.）を言葉で残す。"""
+    groups = "、".join(f"{g['label']} n={len(g['samples'])}" for g in payload["groups"])
+    nd = [it["item"] for it in payload["items"] if not it["detected"]]
+    ex = payload["excluded"]
+    caption = (f"群別強度: {len(payload['items'])} 項目（{groups}）。除外 — 内部標準 {len(ex['internal_standard'])}・"
+               f"判断 {len(ex['curation'])}・自動判定 {len(ex['auto_likely_wrong'])}・標準液 {len(ex['standard_only'])}。")
+    if nd:
+        caption += f" N.D.: {'、'.join(nd)}。"
+    if payload["caveats"]:
+        caption += " 注意: " + " / ".join(payload["caveats"])
+    return caption
