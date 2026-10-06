@@ -135,3 +135,53 @@ def resolve_sample_specs(specs, facets):
         matches, _ = sample_factors.expand_sample_specs([spec], facets, include_roles=None)
         found.update(matches.get(spec, []))
     return found
+
+
+def build_group_intensity_payload(resolved_items, groups, rows_by_spot, *, msms=None,
+                                  low_reliability=frozenset(), excluded=None,
+                                  detection_limit=None, detection_limit_source=None, caveats=None):
+    """項目 × 群 × 試料のクラス合計強度を組み立てる（描画しない）。spec §4 / §7。"""
+    index = {sid: {r.get("file_name"): r for r in rows} for sid, rows in rows_by_spot.items()}
+    out_items = []
+    for item in resolved_items:
+        sids = [s["spot_id"] for s in item["spots"]]
+        out_groups = []
+        for group in groups:
+            samples = []
+            for name in group["samples"]:
+                total = gap = 0.0
+                for sid in sids:
+                    row = index.get(sid, {}).get(name)
+                    if row is None:
+                        continue
+                    h = float(row.get("height") or 0.0)
+                    total += h
+                    if row.get("is_gap_filled"):
+                        gap += h
+                samples.append({"sample": name, "value": round(total, 1),
+                                "gap_filled_fraction": round(gap / total, 3) if total > 0 else None,
+                                "low_reliability": name in low_reliability})
+            logs = [math.log10(s["value"]) for s in samples if s["value"] > 0 and not s["low_reliability"]]
+            out_groups.append({
+                "label": group["label"], "samples": samples,
+                "log10_mean": round(statistics.mean(logs), 4) if logs else None,
+                "log10_sd": round(statistics.stdev(logs), 4) if len(logs) > 1 else None,
+                "n_in_stats": len(logs),
+            })
+        out_items.append({
+            "item": item["item"], "parts": item["parts"], "spots": item["spots"],
+            "n_spots": len(sids),
+            "n_spots_msms": sum(1 for sid in sids if (msms or {}).get(sid)) if msms is not None else None,
+            "detected": any(s["value"] > 0 for g in out_groups for s in g["samples"]),
+            "groups": out_groups,
+        })
+    return {
+        "plot_schema": GROUP_INTENSITY_SCHEMA,
+        "value": "sum of PeakHeight (log10 on the plot)",
+        "detection_limit": detection_limit, "detection_limit_source": detection_limit_source,
+        "groups": [{"label": g["label"], "samples": list(g["samples"])} for g in groups],
+        "low_reliability_samples": sorted(low_reliability),
+        "items": out_items,
+        "excluded": {key: list((excluded or {}).get(key, [])) for key in _EXCLUDED_KEYS},
+        "caveats": list(caveats or []),
+    }

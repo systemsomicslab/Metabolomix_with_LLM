@@ -134,3 +134,60 @@ def test_low_reliability_specs_accept_names_and_tokens():
     facets = _facets(["x_ctrl_1", "x_ko_1", "x_ko_2"])
     assert gi.resolve_sample_specs(["x_ko_1"], facets) == {"x_ko_1"}
     assert gi.resolve_sample_specs(["ko"], facets) == {"x_ko_1", "x_ko_2"}
+
+
+def _rows():
+    return {
+        0: [{"file_name": "c1", "height": 100.0, "is_gap_filled": False},
+            {"file_name": "c2", "height": 1000.0, "is_gap_filled": False},
+            {"file_name": "k1", "height": 10.0, "is_gap_filled": True}],
+        1: [{"file_name": "c1", "height": 900.0, "is_gap_filled": True},
+            {"file_name": "c2", "height": 0.0, "is_gap_filled": True},
+            {"file_name": "k1", "height": 0.0, "is_gap_filled": True}],
+    }
+
+
+def _payload(**kw):
+    items = [{"item": "PG", "parts": [{"part": "PG", "kind": "class", "n_spots": 2}],
+              "spots": [{"spot_id": 0, "name": "PG 34:1", "ontology": "PG"},
+                        {"spot_id": 1, "name": "no MS2: PG 35:1", "ontology": "PG"}]},
+             {"item": "PE", "parts": [{"part": "PE", "kind": "none", "n_spots": 0}], "spots": []}]
+    groups = [{"label": "ctrl", "samples": ["c1", "c2"]}, {"label": "ko", "samples": ["k1"]}]
+    return gi.build_group_intensity_payload(items, groups, _rows(), msms={0: True, 1: False}, **kw)
+
+
+def test_values_are_sums_with_gap_fill_fraction():
+    p = _payload()
+    ctrl = p["items"][0]["groups"][0]["samples"]
+    assert ctrl[0] == {"sample": "c1", "value": 1000.0, "gap_filled_fraction": 0.9, "low_reliability": False}
+    assert ctrl[1]["value"] == 1000.0 and ctrl[1]["gap_filled_fraction"] == 0.0
+    assert p["plot_schema"] == "lipidmix.group_intensity.v1"
+
+
+def test_log10_mean_sd_and_low_reliability_exclusion():
+    p = _payload()
+    g = p["items"][0]["groups"][0]
+    assert g["log10_mean"] == 3.0 and g["log10_sd"] == 0.0 and g["n_in_stats"] == 2
+    p = _payload(low_reliability=frozenset({"c2"}))
+    g = p["items"][0]["groups"][0]
+    assert g["n_in_stats"] == 1 and g["log10_sd"] is None
+    assert g["samples"][1]["low_reliability"] is True
+
+
+def test_zero_values_are_kept_and_not_in_stats():
+    p = _payload()
+    k = p["items"][0]["groups"][1]
+    assert k["samples"][0]["value"] == 10.0
+    assert k["n_in_stats"] == 1
+    pe = p["items"][1]
+    assert pe["detected"] is False and pe["n_spots"] == 0
+    assert pe["groups"][0]["samples"][0]["value"] == 0.0 and pe["groups"][0]["log10_mean"] is None
+
+
+def test_msms_count_and_metadata_are_carried():
+    p = _payload(detection_limit=1000.0, detection_limit_source="argument",
+                 excluded={"internal_standard": ["#2 x"]}, caveats=["c"])
+    assert p["items"][0]["n_spots_msms"] == 1
+    assert p["detection_limit"] == 1000.0 and p["detection_limit_source"] == "argument"
+    assert p["excluded"]["internal_standard"] == ["#2 x"] and p["caveats"] == ["c"]
+    assert p["groups"] == [{"label": "ctrl", "samples": ["c1", "c2"]}, {"label": "ko", "samples": ["k1"]}]
