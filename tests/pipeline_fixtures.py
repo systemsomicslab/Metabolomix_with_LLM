@@ -25,6 +25,8 @@ import sys
 import time
 from pathlib import Path
 
+from lipidmix.core.process_control import resolve_python_launch
+
 #: このcheckoutのルート（`tests/` の1階層上）。子プロセスのcwdをここへ固定する。
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -498,8 +500,12 @@ class PipelineHarness:
         command = self._worker_command(pipeline_root, options)
         log_path = self.logs_dir / f"{pipeline_root.name}-{len(self._workers)}.log"
         log = open(log_path, "ab")
+        # venvのリダイレクタを挟まない。挟むと`proc`はリダイレクタになり、
+        # `proc.wait()`が返った時点で本物のworker（engineがidentityを刻んだ
+        # プロセス）はまだ終了処理中でありうる（GitHub #3）。
+        command, env = resolve_python_launch(command)
         proc = subprocess.Popen(
-            command, cwd=str(_REPO_ROOT), stdin=subprocess.DEVNULL,
+            command, env=env, cwd=str(_REPO_ROOT), stdin=subprocess.DEVNULL,
             stdout=log, stderr=subprocess.STDOUT)
         self._workers.append((pipeline_root.name, proc, log))
         return {"launched": True, "pid": proc.pid, "log_path": str(log_path)}

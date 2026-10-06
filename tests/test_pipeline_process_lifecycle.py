@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.core.process_control import process_identity, same_process
+from lipidmix.core.process_control import process_identity, resolve_python_launch, same_process
 from lipidmix.pipeline import engine, recovery
 from tests.pipeline_fixtures import DEFAULT_COMPARISON, PipelineHarness, read_contract_tsv
 
@@ -52,9 +52,11 @@ class Bystander:
     """
 
     def __init__(self):
+        # venvのリダイレクタを挟まない（挟むとidentityがリダイレクタのものになる）。
+        command, env = resolve_python_launch(
+            [sys.executable, "-c", f"import time; time.sleep({_BYSTANDER_LIFETIME})"])
         self.proc = subprocess.Popen(
-            [sys.executable, "-c", f"import time; time.sleep({_BYSTANDER_LIFETIME})"],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.identity = process_identity(self.proc.pid)
         assert self.identity is not None, "巻き添え検査用プロセスを起こせませんでした"
 
