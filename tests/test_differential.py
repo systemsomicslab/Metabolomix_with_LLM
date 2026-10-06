@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from lipidmix.analysis import differential as diff
+from metabolomix.analysis import differential as diff
 
 
 class TestBhFdr(unittest.TestCase):

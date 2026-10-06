@@ -23,15 +23,15 @@ import json
 import numpy as np
 import pytest
 
-from lipidmix.analysis.matrix_state import (
+from metabolomix.analysis.matrix_state import (
     MATRIX_SCHEMA,
     finalize_matrix,
     load_matrix,
     make_matrix,
     save_matrix,
 )
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.mztab.dataset_state import DatasetState
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.mztab.dataset_state import DatasetState
 
 
 def _recipe(**overrides) -> dict:
@@ -317,7 +317,7 @@ def test_saved_arrays_do_not_allow_pickle(tmp_path):
 
 def test_rebinding_invalidates_the_preprocessed_matrix():
     """どのfeatureが内部標準かが変われば、比の行列は作り直しになる。"""
-    from lipidmix.analysis.result_state import invalidate_results
+    from metabolomix.analysis.result_state import invalidate_results
 
     ds = _dataset()
     ds.pp_matrix = object()
@@ -328,7 +328,7 @@ def test_rebinding_invalidates_the_preprocessed_matrix():
 
 
 def test_matrix_recipe_change_invalidates_the_preprocessed_matrix():
-    from lipidmix.analysis.result_state import invalidate_results
+    from metabolomix.analysis.result_state import invalidate_results
 
     ds = _dataset()
     ds.pp_matrix = object()

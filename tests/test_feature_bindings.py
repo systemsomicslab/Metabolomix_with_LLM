@@ -22,13 +22,13 @@ import copy
 
 import pytest
 
-from lipidmix.analysis.feature_bindings import (
+from metabolomix.analysis.feature_bindings import (
     BINDINGS_SCHEMA,
     bind_features,
     resolve_candidates,
 )
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.mztab.dataset_state import DatasetState
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.mztab.dataset_state import DatasetState
 
 
 def _target(**overrides) -> dict:

@@ -1,6 +1,6 @@
 import pytest
 
-from lipidmix.curation import trend
+from metabolomix.curation import trend
 
 TH = {"trend_min_points": 5, "trend_outlier_z": 3.0, "trend_min_r2": 0.7}
 
@@ -92,7 +92,7 @@ def test_class_summary_counts_outliers():
     assert trend.fit_trends(points, TH)["classes"]["PC"]["n_outliers"] == 1
 
 
-from lipidmix.curation.trend import predict_rt, sum_composition  # noqa: E402
+from metabolomix.curation.trend import predict_rt, sum_composition  # noqa: E402
 
 
 def test_sum_composition_of_species_and_msdial_names():

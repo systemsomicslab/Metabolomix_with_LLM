@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.console.job_manager import create_job, load_job
+from metabolomix.console.job_manager import create_job, load_job
 
 
 def _job_with_outputs(tmp_path, *, record=True):
@@ -34,7 +34,7 @@ def _job_with_outputs(tmp_path, *, record=True):
     (tmp_path / "keep_me.wiff").write_text("raw", encoding="utf-8")
 
     if record:
-        from lipidmix.handoff.schema import Artifact, MztabEntry
+        from metabolomix.handoff.schema import Artifact, MztabEntry
         job.primary_mztab_files = [MztabEntry(
             path="msdial/AlignResult-1.mzTab", polarity="negative",
             measure="peak_height", sha256="x", root="run_dir")]
@@ -45,13 +45,13 @@ def _job_with_outputs(tmp_path, *, record=True):
                      format="pai2", sha256="z", root="dataset_root"),
         ]
         job.status = "completed"
-        from lipidmix.console.job_manager import save_job
+        from metabolomix.console.job_manager import save_job
         save_job(job, job_path)
     return job_path
 
 
 def test_dry_run_lists_without_deleting(tmp_path):
-    from lipidmix.tools.console_tools import console_cleanup
+    from metabolomix.tools.console_tools import console_cleanup
     job_path = _job_with_outputs(tmp_path)
     parsed = _json.loads(console_cleanup(str(job_path)))
     assert parsed["dry_run"] is True
@@ -61,21 +61,21 @@ def test_dry_run_lists_without_deleting(tmp_path):
 
 def test_dry_run_is_the_default(tmp_path):
     """消す側を既定にしてはいけない。"""
-    from lipidmix.tools.console_tools import console_cleanup
+    from metabolomix.tools.console_tools import console_cleanup
     job_path = _job_with_outputs(tmp_path)
     console_cleanup(str(job_path))
     assert (tmp_path / "AlignResult-1_PeakProperties.arf").exists()
 
 
 def test_never_lists_raw_measurement_files(tmp_path):
-    from lipidmix.tools.console_tools import console_cleanup
+    from metabolomix.tools.console_tools import console_cleanup
     job_path = _job_with_outputs(tmp_path)
     parsed = _json.loads(console_cleanup(str(job_path)))
     assert not any(p.endswith(".wiff") for p in parsed["files"])
 
 
 def test_delete_removes_only_recorded_outputs(tmp_path):
-    from lipidmix.tools.console_tools import console_cleanup
+    from metabolomix.tools.console_tools import console_cleanup
     job_path = _job_with_outputs(tmp_path)
     parsed = _json.loads(console_cleanup(str(job_path), dry_run=False))
     assert parsed["deleted"] == 3
@@ -86,7 +86,7 @@ def test_delete_removes_only_recorded_outputs(tmp_path):
 
 def test_delete_marks_the_job_as_cleaned(tmp_path):
     """掃除後のジョブを dataset_load が完了品として読むと、存在しない生成物を指す。"""
-    from lipidmix.tools.console_tools import console_cleanup
+    from metabolomix.tools.console_tools import console_cleanup
     job_path = _job_with_outputs(tmp_path)
     console_cleanup(str(job_path), dry_run=False)
     job = load_job(job_path)
@@ -95,7 +95,7 @@ def test_delete_marks_the_job_as_cleaned(tmp_path):
 
 def test_refuses_when_the_job_recorded_nothing(tmp_path):
     """記録が無いジョブでタイムスタンプ推測に走ると、別バッチを巻き込む。"""
-    from lipidmix.tools.console_tools import console_cleanup
+    from metabolomix.tools.console_tools import console_cleanup
     job_path = _job_with_outputs(tmp_path, record=False)
     parsed = _json.loads(console_cleanup(str(job_path), dry_run=False))
     assert parsed["error"]["code"] == "NO_JOB_OUTPUT"
@@ -103,7 +103,7 @@ def test_refuses_when_the_job_recorded_nothing(tmp_path):
 
 
 def test_reports_already_absent_files_without_failing(tmp_path):
-    from lipidmix.tools.console_tools import console_cleanup
+    from metabolomix.tools.console_tools import console_cleanup
     job_path = _job_with_outputs(tmp_path)
     (tmp_path / "s1_1.pai2").unlink()
     parsed = _json.loads(console_cleanup(str(job_path), dry_run=False))
@@ -122,8 +122,8 @@ _WINDOWS_ONLY = pytest.mark.skipif(
 
 def _own_job(job_path, *, alive: bool) -> None:
     """このジョブを「実行中のワーカーが所有している」状態にする。"""
-    from lipidmix.console.worker import write_owner
-    from lipidmix.core.process_control import process_identity
+    from metabolomix.console.worker import write_owner
+    from metabolomix.core.process_control import process_identity
     run_dir = Path(load_job(job_path).run_dir)
     identity = (process_identity(os.getpid()) if alive
                 else {"pid": 999_999_999, "creation_time": 1})
@@ -133,7 +133,7 @@ def _own_job(job_path, *, alive: bool) -> None:
 
 @_WINDOWS_ONLY
 def test_refuses_to_delete_while_a_worker_owns_the_job(tmp_path):
-    from lipidmix.tools.console_tools import console_cleanup
+    from metabolomix.tools.console_tools import console_cleanup
     job_path = _job_with_outputs(tmp_path)
     _own_job(job_path, alive=True)
 
@@ -147,7 +147,7 @@ def test_refuses_to_delete_while_a_worker_owns_the_job(tmp_path):
 @_WINDOWS_ONLY
 def test_dry_run_lists_but_warns_while_a_worker_owns_the_job(tmp_path):
     """一覧は読み取りだけなので許す。ただし黙って渡さない。"""
-    from lipidmix.tools.console_tools import console_cleanup
+    from metabolomix.tools.console_tools import console_cleanup
     job_path = _job_with_outputs(tmp_path)
     _own_job(job_path, alive=True)
 
@@ -160,7 +160,7 @@ def test_dry_run_lists_but_warns_while_a_worker_owns_the_job(tmp_path):
 @_WINDOWS_ONLY
 def test_deletes_when_the_recorded_owner_is_no_longer_running(tmp_path):
     """終了したワーカーの記録が残っているだけなら、片付けを止めない。"""
-    from lipidmix.tools.console_tools import console_cleanup
+    from metabolomix.tools.console_tools import console_cleanup
     job_path = _job_with_outputs(tmp_path)
     _own_job(job_path, alive=False)
 
@@ -173,7 +173,7 @@ def test_deletes_when_the_recorded_owner_is_no_longer_running(tmp_path):
 @_WINDOWS_ONLY
 def test_refusal_names_the_owner_so_the_caller_can_act(tmp_path):
     """「使用中」だけでは、待てばよいのか手で直すのか判断できない。"""
-    from lipidmix.tools.console_tools import console_cleanup
+    from metabolomix.tools.console_tools import console_cleanup
     job_path = _job_with_outputs(tmp_path)
     _own_job(job_path, alive=True)
 
@@ -185,14 +185,14 @@ def test_refusal_names_the_owner_so_the_caller_can_act(tmp_path):
 
 
 # ---------- pipelineが所有するjobは単体console_run/console_cleanupから守る ----------
-# Task 14 (lipidmix.pipeline.store)。register_job_ownerでrun_dirへ所有記録を
+# Task 14 (metabolomix.pipeline.store)。register_job_ownerでrun_dirへ所有記録を
 # 作った後、その所有pipelineが活動中／判定不能なら、単体console_run・
 # console_cleanupのどちらも拒否する。terminal状態に達したら拒否しない。
 
 def _make_pipeline_root(tmp_path, *, status: str):
     """所有権判定だけに要る最小のpipeline-run.jsonを作る。"""
-    from lipidmix.pipeline.request import resolve_request
-    from lipidmix.pipeline.store import create_run, load_run, save_run
+    from metabolomix.pipeline.request import resolve_request
+    from metabolomix.pipeline.store import create_run, load_run, save_run
 
     source = tmp_path / f"pipeline_source_{status}"
     source.mkdir()
@@ -206,9 +206,9 @@ def _make_pipeline_root(tmp_path, *, status: str):
 
 
 def test_standalone_console_run_refuses_when_owned_by_an_active_pipeline(tmp_path):
-    from lipidmix.console.job_manager import load_job
-    from lipidmix.pipeline.store import register_job_owner
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import load_job
+    from metabolomix.pipeline.store import register_job_owner
+    from metabolomix.tools.console_tools import console_run
 
     job_path = _job_with_outputs(tmp_path, record=False)
     # console_runが実行に進むには status=planned が要る。_job_with_outputsは
@@ -225,8 +225,8 @@ def test_standalone_console_run_refuses_when_owned_by_an_active_pipeline(tmp_pat
 
 def test_standalone_console_run_proceeds_when_owning_pipeline_is_terminal(tmp_path, monkeypatch):
     """所有pipelineが終端状態なら、単体console_runの以降のガード（MSDIAL_EXE等）まで進む。"""
-    from lipidmix.pipeline.store import register_job_owner
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.pipeline.store import register_job_owner
+    from metabolomix.tools.console_tools import console_run
 
     job_path = _job_with_outputs(tmp_path, record=False)
     pipeline_root = _make_pipeline_root(tmp_path, status="cancelled")
@@ -240,8 +240,8 @@ def test_standalone_console_run_proceeds_when_owning_pipeline_is_terminal(tmp_pa
 
 
 def test_dry_run_cleanup_warns_but_lists_when_owned_by_pipeline(tmp_path):
-    from lipidmix.pipeline.store import register_job_owner
-    from lipidmix.tools.console_tools import console_cleanup
+    from metabolomix.pipeline.store import register_job_owner
+    from metabolomix.tools.console_tools import console_cleanup
 
     job_path = _job_with_outputs(tmp_path)
     pipeline_root = _make_pipeline_root(tmp_path, status="needs_input")
@@ -255,8 +255,8 @@ def test_dry_run_cleanup_warns_but_lists_when_owned_by_pipeline(tmp_path):
 
 
 def test_cleanup_refuses_to_delete_while_owned_by_an_active_pipeline(tmp_path):
-    from lipidmix.pipeline.store import register_job_owner
-    from lipidmix.tools.console_tools import console_cleanup
+    from metabolomix.pipeline.store import register_job_owner
+    from metabolomix.tools.console_tools import console_cleanup
 
     job_path = _job_with_outputs(tmp_path)
     pipeline_root = _make_pipeline_root(tmp_path, status="planned")
@@ -270,8 +270,8 @@ def test_cleanup_refuses_to_delete_while_owned_by_an_active_pipeline(tmp_path):
 
 
 def test_cleanup_proceeds_when_owning_pipeline_is_terminal(tmp_path):
-    from lipidmix.pipeline.store import register_job_owner
-    from lipidmix.tools.console_tools import console_cleanup
+    from metabolomix.pipeline.store import register_job_owner
+    from metabolomix.tools.console_tools import console_cleanup
 
     job_path = _job_with_outputs(tmp_path)
     pipeline_root = _make_pipeline_root(tmp_path, status="failed")
@@ -285,8 +285,8 @@ def test_cleanup_proceeds_when_owning_pipeline_is_terminal(tmp_path):
 
 def test_cleanup_refuses_when_owner_pipeline_is_undeterminable(tmp_path):
     """所有記録はあるが、そのpipeline-run.jsonが読めない（判定不能）場合も拒否する。"""
-    from lipidmix.pipeline.store import register_job_owner
-    from lipidmix.tools.console_tools import console_cleanup
+    from metabolomix.pipeline.store import register_job_owner
+    from metabolomix.tools.console_tools import console_cleanup
 
     job_path = _job_with_outputs(tmp_path)
     vanished_pipeline_root = tmp_path / "vanished_pipeline_root"

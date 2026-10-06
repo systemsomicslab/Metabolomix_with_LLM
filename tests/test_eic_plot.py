@@ -12,10 +12,10 @@ import matplotlib
 
 matplotlib.use("Agg")
 
-from lipidmix.core import mcp_core
+from metabolomix.core import mcp_core
 import server
-from lipidmix.core import session_state
-from lipidmix.eic.reader import read_eic_spot_css1, read_eic_spots_css1
+from metabolomix.core import session_state
+from metabolomix.eic.reader import read_eic_spot_css1, read_eic_spots_css1
 
 
 def _write_css1(path: Path, spots: list[dict]) -> None:

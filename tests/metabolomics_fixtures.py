@@ -2,7 +2,7 @@
 
 **合成だが、モックの成功JSONは返さない。** mzTab-M と `.arf` を実ファイルとして
 書き、実物の `parse_mztab` / `build_dataset_state` / `arf_reader.deserialize` に
-通す。工程は `lipidmix.pipeline.engine.run_engine` を本物の v2 handler で回し、
+通す。工程は `metabolomix.pipeline.engine.run_engine` を本物の v2 handler で回し、
 `pipeline-run.json` へ保存された成果物を読み戻して検証する。
 
 **どこを差し替えるか。** 上流4工程（`prepare_inputs` / `execute_console` /
@@ -25,12 +25,12 @@ import lz4.block
 import msgpack
 import numpy as np
 
-from lipidmix.analysis.sample_manifest import FIELDS_V2
-from lipidmix.console.profile_schema import validate_profile
-from lipidmix.mztab.dataset_state import build_dataset_state
-from lipidmix.mztab.reader import parse_mztab
-from lipidmix.pipeline import engine, recovery, request as request_mod, store
-from lipidmix.pipeline.service import build_handlers
+from metabolomix.analysis.sample_manifest import FIELDS_V2
+from metabolomix.console.profile_schema import validate_profile
+from metabolomix.mztab.dataset_state import build_dataset_state
+from metabolomix.mztab.reader import parse_mztab
+from metabolomix.pipeline import engine, recovery, request as request_mod, store
+from metabolomix.pipeline.service import build_handlers
 
 __all__ = ["MetabolomicsHarness"]
 

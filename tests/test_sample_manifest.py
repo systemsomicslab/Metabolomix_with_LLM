@@ -18,17 +18,17 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.analysis.dataset_analysis import build_dataset_pp_inputs
-from lipidmix.analysis.sample_manifest import (
+from metabolomix.analysis.dataset_analysis import build_dataset_pp_inputs
+from metabolomix.analysis.sample_manifest import (
     apply_metadata,
     parse_injection_order,
     parse_manifest,
     resolve_metadata,
 )
-from lipidmix.console.validation import map_assays
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.mztab.dataset_state import build_dataset_state
-from lipidmix.mztab.reader import parse_mztab
+from metabolomix.console.validation import map_assays
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.mztab.dataset_state import build_dataset_state
+from metabolomix.mztab.reader import parse_mztab
 from tests.pipeline_fixtures import make_dataset, metadata_rows, write_mztab
 
 _HEADER = ("sample_id\tsource_file\trole\tgroup\tbatch\tinjection_order\t"
@@ -489,7 +489,7 @@ def test_apply_metadata_rejects_bad_role_value_and_leaves_dataset_untouched():
 
 def test_apply_metadata_group_only_change_invalidates_only_the_comparison():
     """B04: groupだけの訂正はPCAを残し、差次的解析だけを無効化する。"""
-    from lipidmix.analysis.dataset_service import compare_dataset, pca_dataset, preprocess_dataset
+    from metabolomix.analysis.dataset_service import compare_dataset, pca_dataset, preprocess_dataset
 
     ds = make_dataset()
     apply_metadata(ds, metadata_rows(ds, n_qc=0))
@@ -512,7 +512,7 @@ def test_apply_metadata_group_only_change_invalidates_only_the_comparison():
 
 def test_apply_metadata_batch_change_invalidates_preprocessing():
     """B02系: 前処理に効く列が変わればpp_matrix以下を丸ごと無効化する。"""
-    from lipidmix.analysis.dataset_service import pca_dataset, preprocess_dataset
+    from metabolomix.analysis.dataset_service import pca_dataset, preprocess_dataset
 
     ds = make_dataset()
     apply_metadata(ds, metadata_rows(ds))
@@ -625,7 +625,7 @@ def test_run_dataset_preprocess_ignores_excluded_qc_when_deciding_no_qc_blank_ca
     ブランクも含まれていない」という安全側の注意書きが出なくなる
     （controller裁定 round2 で指摘されたregression）。
     """
-    from lipidmix.analysis.dataset_analysis import run_dataset_preprocess
+    from metabolomix.analysis.dataset_analysis import run_dataset_preprocess
 
     ds = make_dataset()
     rows = metadata_rows(ds, n_qc=1)
@@ -659,7 +659,7 @@ def test_detection_rate_ignores_samples_excluded_by_include_false():
     """
     import numpy as np
 
-    from lipidmix.analysis.dataset_analysis import run_dataset_preprocess
+    from metabolomix.analysis.dataset_analysis import run_dataset_preprocess
 
     ds = make_dataset()
     rows = metadata_rows(ds, n_qc=0)

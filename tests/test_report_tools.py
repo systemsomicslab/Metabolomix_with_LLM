@@ -7,9 +7,9 @@ import matplotlib
 matplotlib.use("Agg")  # import server が pyplot を読む前にヘッドレス指定
 
 import server
-from lipidmix.core import session_state
-from lipidmix.core import mcp_core
-from lipidmix.corpus import knowledge_store
+from metabolomix.core import session_state
+from metabolomix.core import mcp_core
+from metabolomix.corpus import knowledge_store
 
 
 class WriteLocationHelpers(unittest.TestCase):
@@ -153,7 +153,7 @@ class PcaPlotHelperTests(unittest.TestCase):
 
     def test_format_pca_plot_block_includes_points_and_summary(self):
         import json as _json
-        from lipidmix.core import tool_helpers
+        from metabolomix.core import tool_helpers
         block = tool_helpers._format_pca_plot_block(
             {"components": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]],
              "explained_variance_ratio": [0.24, 0.15]},
@@ -181,7 +181,7 @@ class PcaPlotHelperTests(unittest.TestCase):
         self.assertEqual(payload["points"][0]["pc2"], 2.0)
 
     def test_format_pca_plot_block_no_groups_includes_points_without_group(self):
-        from lipidmix.core import tool_helpers
+        from metabolomix.core import tool_helpers
         block = tool_helpers._format_pca_plot_block(
             {"components": [[1.0, 2.0], [3.0, 4.0]],
              "explained_variance_ratio": [0.5, 0.3]},
@@ -322,7 +322,7 @@ class DatasetFigureFallbackTests(unittest.TestCase):
 
     def setUp(self):
         import tempfile
-        from lipidmix.mztab.dataset_state import DatasetState
+        from metabolomix.mztab.dataset_state import DatasetState
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
         self._saved_data_dir = mcp_core.DATA_DIR

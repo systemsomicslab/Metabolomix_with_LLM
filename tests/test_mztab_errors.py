@@ -1,5 +1,5 @@
 import json
-from lipidmix.core.mcp_errors import mztab_error, missing_state, MISSING_STATE
+from metabolomix.core.mcp_errors import mztab_error, missing_state, MISSING_STATE
 
 
 def test_mztab_error_returns_json_string():

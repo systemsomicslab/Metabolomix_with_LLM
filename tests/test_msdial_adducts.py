@@ -1,7 +1,7 @@
 import pytest
 
-from lipidmix.msdial.adducts import mz_from_neutral, neutral_from_mz, parse_adduct
-from lipidmix.msdial.peak_verification import ADDUCT_SHIFTS
+from metabolomix.msdial.adducts import mz_from_neutral, neutral_from_mz, parse_adduct
+from metabolomix.msdial.peak_verification import ADDUCT_SHIFTS
 
 
 @pytest.mark.parametrize("name", sorted(ADDUCT_SHIFTS))

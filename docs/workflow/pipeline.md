@@ -1,29 +1,29 @@
 # 生データフォルダpipeline呼び出し連鎖
 
-MCP層は薄い(`lipidmix/tools/pipeline_tools.py`)。実体は `lipidmix/pipeline/service.py`
-（受付・工程handler一式）と `lipidmix/pipeline/recovery.py`（読取専用status・取消・
-再開判定）にある。工程本体は独立したworkerプロセス（`lipidmix/pipeline/worker.py`）が
-`lipidmix/pipeline/engine.py::run_engine()` を通じて進めるため、MCP呼び出し自身の
+MCP層は薄い(`metabolomix/tools/pipeline_tools.py`)。実体は `metabolomix/pipeline/service.py`
+（受付・工程handler一式）と `metabolomix/pipeline/recovery.py`（読取専用status・取消・
+再開判定）にある。工程本体は独立したworkerプロセス（`metabolomix/pipeline/worker.py`）が
+`metabolomix/pipeline/engine.py::run_engine()` を通じて進めるため、MCP呼び出し自身の
 連鎖と、workerが後で進める連鎖は別物として分けて書く。
 
 ## pipeline_run
 
-1. lipidmix/tools/pipeline_tools.py  pipeline_run()
-2. └─ lipidmix/pipeline/service.py  start_pipeline()
-3.    ├─ lipidmix/pipeline/service.py  _prepare_run()
-4.    │  ├─ lipidmix/pipeline/request.py  resolve_request()
-5.    │  ├─ lipidmix/pipeline/inputs.py  inspect_inputs()
-6.    │  ├─ lipidmix/pipeline/service.py  _precheck_manifest()
-7.    │  │  └─ lipidmix/analysis/sample_manifest.py  parse_manifest()
-8.    │  ├─ lipidmix/pipeline/store.py  find_or_create_run()
-9.    │  └─ [manifest不正を検出した場合] lipidmix/pipeline/service.py  _mark_needs_input_without_launch()
-10.   ├─ [manifest不正が無かった場合のみ] lipidmix/pipeline/store.py  load_run()
-11.   ├─ [manifest不正あり、または既存run(活動中/completed/失敗/取消/部分完了)を再利用した場合] lipidmix/pipeline/service.py  _dispatch_receipt()
-12.   ├─ [新規作成直後の`planned` runのときだけ] lipidmix/pipeline/service.py  _launch_and_await()
-13.   │  ├─ lipidmix/pipeline/service.py  launch_pipeline_worker()
-14.   │  │  └─ lipidmix/core/process_control.py  launch_detached()
-15.   │  └─ lipidmix/pipeline/service.py  _await_launch_handshake()
-16.   └─ lipidmix/pipeline/service.py  _dispatch_receipt()
+1. metabolomix/tools/pipeline_tools.py  pipeline_run()
+2. └─ metabolomix/pipeline/service.py  start_pipeline()
+3.    ├─ metabolomix/pipeline/service.py  _prepare_run()
+4.    │  ├─ metabolomix/pipeline/request.py  resolve_request()
+5.    │  ├─ metabolomix/pipeline/inputs.py  inspect_inputs()
+6.    │  ├─ metabolomix/pipeline/service.py  _precheck_manifest()
+7.    │  │  └─ metabolomix/analysis/sample_manifest.py  parse_manifest()
+8.    │  ├─ metabolomix/pipeline/store.py  find_or_create_run()
+9.    │  └─ [manifest不正を検出した場合] metabolomix/pipeline/service.py  _mark_needs_input_without_launch()
+10.   ├─ [manifest不正が無かった場合のみ] metabolomix/pipeline/store.py  load_run()
+11.   ├─ [manifest不正あり、または既存run(活動中/completed/失敗/取消/部分完了)を再利用した場合] metabolomix/pipeline/service.py  _dispatch_receipt()
+12.   ├─ [新規作成直後の`planned` runのときだけ] metabolomix/pipeline/service.py  _launch_and_await()
+13.   │  ├─ metabolomix/pipeline/service.py  launch_pipeline_worker()
+14.   │  │  └─ metabolomix/core/process_control.py  launch_detached()
+15.   │  └─ metabolomix/pipeline/service.py  _await_launch_handshake()
+16.   └─ metabolomix/pipeline/service.py  _dispatch_receipt()
 
 事前検査(手順6-7)で壊れた実験情報シート等の既知の不正入力を検出した場合、
 `find_or_create_run` でrunは作るがworkerは起動しない(手順9で`needs_input`のまま
@@ -45,7 +45,7 @@ MCP層は薄い(`lipidmix/tools/pipeline_tools.py`)。実体は `lipidmix/pipeli
 既に記録されているケースでも、両呼び出しが同じ基準時点の記録を共有できるように
 するため(`pipeline_resume`と共有する実装)。
 
-`launch_pipeline_worker` は `sys.executable` で `python -m lipidmix.pipeline.worker`
+`launch_pipeline_worker` は `sys.executable` で `python -m metabolomix.pipeline.worker`
 を起動し、cwdは呼び出し元のcwdや別checkoutではなくこのcheckout自身(`_REPO_ROOT`)へ
 固定する。起動プロセスのstdout/stderrは `launch_detached` がログファイルへ結ぶため、
 起動元プロセスがworkerのstdoutパイプを継承して待ち続ける経路(`bInheritHandles=TRUE`
@@ -55,11 +55,11 @@ MCP層は薄い(`lipidmix/tools/pipeline_tools.py`)。実体は `lipidmix/pipeli
 
 ## pipeline_plan
 
-1. lipidmix/tools/pipeline_tools.py  pipeline_plan()
-2. └─ lipidmix/pipeline/service.py  plan_pipeline()
-3.    ├─ lipidmix/pipeline/service.py  _prepare_run()
-4.    └─ lipidmix/pipeline/service.py  _dispatch_receipt()
-5.       └─ lipidmix/pipeline/service.py  _resolved_settings()
+1. metabolomix/tools/pipeline_tools.py  pipeline_plan()
+2. └─ metabolomix/pipeline/service.py  plan_pipeline()
+3.    ├─ metabolomix/pipeline/service.py  _prepare_run()
+4.    └─ metabolomix/pipeline/service.py  _dispatch_receipt()
+5.       └─ metabolomix/pipeline/service.py  _resolved_settings()
 
 `pipeline_run` と事前検査までは完全に同じ経路(`_prepare_run`)を共有するが、
 `launch_pipeline_worker` を一切呼ばない——検査・計画・不足情報の保存だけで終える。
@@ -68,7 +68,7 @@ MCP層は薄い(`lipidmix/tools/pipeline_tools.py`)。実体は `lipidmix/pipeli
 (`_dispatch_receipt(include_resolved=True)`)。載せるのは解決済みの
 method(`source_path`/`sha256`)・LBM・polarity(`value`/`source`)の3項目だけで、
 `raw_stat`・`entries`・`overrides` のような大きな中間データは `record["inputs"]`
-に残したまま出さない。サーバー共通指示(`lipidmix/core/mcp_core.py` の ENTRY POINT)が
+に残したまま出さない。サーバー共通指示(`metabolomix/core/mcp_core.py` の ENTRY POINT)が
 このツールを「起動前に解決結果を確認する入口」として案内しているため、receiptが
 それを持たないと `pipeline_status(include_details=true)` でrecord全体を引くしかなく、
 「receiptはコンパクトに」という拘束と衝突する。起動する側(`pipeline_run`)の
@@ -76,10 +76,10 @@ receiptは従来どおり最小のまま。
 
 ## pipeline_status
 
-1. lipidmix/tools/pipeline_tools.py  pipeline_status()
-2. └─ lipidmix/pipeline/recovery.py  read_status()
-3.    └─ lipidmix/pipeline/store.py  load_run()
-4.    └─ lipidmix/core/process_control.py  same_process()
+1. metabolomix/tools/pipeline_tools.py  pipeline_status()
+2. └─ metabolomix/pipeline/recovery.py  read_status()
+3.    └─ metabolomix/pipeline/store.py  load_run()
+4.    └─ metabolomix/core/process_control.py  same_process()
 
 `load_run` は読取専用で、このツール自身は `pipeline-run.json` を一切書き換えない。
 `status="running"`のときだけ`same_process`でworker identityの生存を確認するが、
@@ -87,15 +87,15 @@ receiptは従来どおり最小のまま。
 
 ## pipeline_resume
 
-1. lipidmix/tools/pipeline_tools.py  pipeline_resume()
-2. └─ lipidmix/pipeline/service.py  resume_pipeline()
-3.    ├─ lipidmix/pipeline/recovery.py  prepare_resume()
-4.    │  └─ lipidmix/pipeline/request.py  merge_updates()
-5.    ├─ [status=="planned"のときだけ] lipidmix/pipeline/store.py  load_run()
-6.    └─ [status=="planned"のときだけ] lipidmix/pipeline/service.py  _launch_and_await()
-7.       ├─ lipidmix/pipeline/service.py  launch_pipeline_worker()
-8.       │  └─ lipidmix/core/process_control.py  launch_detached()
-9.       └─ lipidmix/pipeline/service.py  _await_launch_handshake()
+1. metabolomix/tools/pipeline_tools.py  pipeline_resume()
+2. └─ metabolomix/pipeline/service.py  resume_pipeline()
+3.    ├─ metabolomix/pipeline/recovery.py  prepare_resume()
+4.    │  └─ metabolomix/pipeline/request.py  merge_updates()
+5.    ├─ [status=="planned"のときだけ] metabolomix/pipeline/store.py  load_run()
+6.    └─ [status=="planned"のときだけ] metabolomix/pipeline/service.py  _launch_and_await()
+7.       ├─ metabolomix/pipeline/service.py  launch_pipeline_worker()
+8.       │  └─ metabolomix/core/process_control.py  launch_detached()
+9.       └─ metabolomix/pipeline/service.py  _await_launch_handshake()
 
 `prepare_resume`は新しいattempt/revisionを用意し、どのstageを`pending`へ戻すかを
 決めて保存するだけで、それ自体はworkerを起動しない(no-op resumeで無駄な起動を
@@ -108,10 +108,10 @@ receiptは従来どおり最小のまま。
 
 ## pipeline_cancel
 
-1. lipidmix/tools/pipeline_tools.py  pipeline_cancel()
-2. └─ lipidmix/pipeline/recovery.py  request_cancel()
-3.    └─ lipidmix/pipeline/store.py  load_run()
-4.    └─ lipidmix/pipeline/engine.py  cancel_request_path()
+1. metabolomix/tools/pipeline_tools.py  pipeline_cancel()
+2. └─ metabolomix/pipeline/recovery.py  request_cancel()
+3.    └─ metabolomix/pipeline/store.py  load_run()
+4.    └─ metabolomix/pipeline/engine.py  cancel_request_path()
 
 保存するのは協調的な取消フラグ(小さなJSON)だけで、ここでは一切のプロセスを
 直接終了させない。**rawデータは削除しない。** 上流Consoleの停止は既存の
@@ -122,34 +122,34 @@ receiptは従来どおり最小のまま。
 ## workerが1回分を進める経路(別プロセス。上記5ツールとは別に進行する)
 
 `pipeline_run`/`pipeline_resume`が起動したworkerプロセス自身の経路。MCP接続や
-グローバルsessionには一切触れない(`lipidmix.core.session_state` /
-`lipidmix.core.mcp_core` / `lipidmix.tools.*` を意図的にimportしない設計——
+グローバルsessionには一切触れない(`metabolomix.core.session_state` /
+`metabolomix.core.mcp_core` / `metabolomix.tools.*` を意図的にimportしない設計——
 `tests/test_pipeline_engine.py`のASTテストがこれを固定する)。
 
-1. lipidmix/pipeline/worker.py  run_worker()
-2. └─ lipidmix/pipeline/engine.py  run_engine()
-3.    └─ lipidmix/pipeline/service.py  build_handlers()
-4.    └─ lipidmix/pipeline/engine.py  _run_stage_loop()
-5.       ├─ lipidmix/pipeline/service.py  _handle_prepare_input()
-6.       ├─ lipidmix/pipeline/service.py  _handle_upstream()
-7.       │  └─ lipidmix/console/execution.py  supervise()
-8.       ├─ lipidmix/pipeline/service.py  _handle_validate_outputs()
-9.       ├─ lipidmix/pipeline/service.py  _handle_load_dataset()
-10.      │  └─ lipidmix/mztab/loading.py  load_dataset_state()
-11.      ├─ lipidmix/pipeline/service.py  _handle_resolve_metadata()
-12.      ├─ lipidmix/pipeline/service.py  _handle_preprocess()
-13.      │  └─ lipidmix/analysis/dataset_service.py  preprocess_auto()
-14.      ├─ lipidmix/pipeline/service.py  _handle_pca()
-15.      │  └─ lipidmix/analysis/dataset_service.py  pca_dataset()
-16.      ├─ lipidmix/pipeline/service.py  _handle_resolve_comparisons()
-17.      ├─ [comparisonごと] lipidmix/pipeline/service.py  _handle_differential()
-18.      │  └─ lipidmix/analysis/dataset_service.py  run_comparison()
-19.      ├─ [comparisonごと] lipidmix/pipeline/service.py  _handle_export()
-20.      │  └─ lipidmix/analysis/dataset_export.py  export_dataset_result()
-21.      └─ lipidmix/pipeline/service.py  _handle_report()
-22.         └─ lipidmix/pipeline/report.py  write_pipeline_report()
-23.    └─ lipidmix/pipeline/engine.py  finish_success()
-24.       └─ lipidmix/pipeline/report.py  evaluate_target()
+1. metabolomix/pipeline/worker.py  run_worker()
+2. └─ metabolomix/pipeline/engine.py  run_engine()
+3.    └─ metabolomix/pipeline/service.py  build_handlers()
+4.    └─ metabolomix/pipeline/engine.py  _run_stage_loop()
+5.       ├─ metabolomix/pipeline/service.py  _handle_prepare_input()
+6.       ├─ metabolomix/pipeline/service.py  _handle_upstream()
+7.       │  └─ metabolomix/console/execution.py  supervise()
+8.       ├─ metabolomix/pipeline/service.py  _handle_validate_outputs()
+9.       ├─ metabolomix/pipeline/service.py  _handle_load_dataset()
+10.      │  └─ metabolomix/mztab/loading.py  load_dataset_state()
+11.      ├─ metabolomix/pipeline/service.py  _handle_resolve_metadata()
+12.      ├─ metabolomix/pipeline/service.py  _handle_preprocess()
+13.      │  └─ metabolomix/analysis/dataset_service.py  preprocess_auto()
+14.      ├─ metabolomix/pipeline/service.py  _handle_pca()
+15.      │  └─ metabolomix/analysis/dataset_service.py  pca_dataset()
+16.      ├─ metabolomix/pipeline/service.py  _handle_resolve_comparisons()
+17.      ├─ [comparisonごと] metabolomix/pipeline/service.py  _handle_differential()
+18.      │  └─ metabolomix/analysis/dataset_service.py  run_comparison()
+19.      ├─ [comparisonごと] metabolomix/pipeline/service.py  _handle_export()
+20.      │  └─ metabolomix/analysis/dataset_export.py  export_dataset_result()
+21.      └─ metabolomix/pipeline/service.py  _handle_report()
+22.         └─ metabolomix/pipeline/report.py  write_pipeline_report()
+23.    └─ metabolomix/pipeline/engine.py  finish_success()
+24.       └─ metabolomix/pipeline/report.py  evaluate_target()
 
 手順4の `_run_stage_loop` は **`build_stages` の計画順**で回す
 (`_stage_order`)。`record["stages"]` の挿入順ではない——`prepare_resume` は
@@ -169,7 +169,7 @@ resume時に「recordに無いstage_id」を末尾へ追記するので、比較
 completedになる。組み直しは有限回(`_REQUEST_RELOAD_MAX_PASSES`)までで、
 超えたら`REQUEST_REVISION_CHURN`で止める。
 
-`_handle_upstream`は`lipidmix.console.worker`（単体Console用の監視ワーカー）を
+`_handle_upstream`は`metabolomix.console.worker`（単体Console用の監視ワーカー）を
 一切呼ばない——`execution.supervise`を直接呼ぶことで、pipeline用worker自身が
 「起動して見張る」役を兼ねる(Console用workerの二重起動を避ける)。
 `console_job_path`は`analysis-job.json`そのものへのパス(`run_dir = Path(job_path)
@@ -196,7 +196,7 @@ deepcopyしてそのまま書くだけなので、ここで書く`source_file`�
 絶対パスのまま残る(既知の制限。
 `docs/superpowers/notes/2026-09-05-raw-folder-pipeline-validation.md`参照)。
 
-`_handle_pca`はPCA不成立を検出した`PreconditionError`（`lipidmix.analysis.
+`_handle_pca`はPCA不成立を検出した`PreconditionError`（`metabolomix.analysis.
 dataset_analysis.run_dataset_pca`が送出。`DomainError`の派生ではないため
 `engine._invoke_handler`の`_NEEDS_INPUT_CODES`whitelistでは検出できない）を
 handler自身が捕らえ、`needs_input`のStageResultへ直接変換する。これにより

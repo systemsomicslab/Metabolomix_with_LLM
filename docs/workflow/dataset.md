@@ -37,8 +37,8 @@ flowchart TD
 純関数側は見つからなければ**空リスト**を返す。文面（「存在しません」等）を持つのは
 ツール層だけで、以前のようにエラー文字列がパスの位置に紛れ込むことはない。
 
-1. lipidmix/tools/dataset.py  list_data_files()
-2. └─ lipidmix/core/path_resolvers.py  list_data_files()
+1. metabolomix/tools/dataset.py  list_data_files()
+2. └─ metabolomix/core/path_resolvers.py  list_data_files()
 
 ## load_dataset
 
@@ -49,22 +49,22 @@ flowchart TD
 意味論ダイジェストは入口の先頭で 1 回だけ前置する。ここで発火させると、後段の
 `arf2_parser` / `arf_parser` 内の同じガードは `caveat_emitted` により no-op になる。
 
-1. lipidmix/tools/dataset.py  load_dataset()
-2. └─ lipidmix/core/path_resolvers.py  resolve_arf2_file_path()
-3. └─ lipidmix/core/path_resolvers.py  resolve_arf_file_path()
-4. └─ lipidmix/core/session_state.py  AnalysisSession.maybe_prepend_caveat()
-5. └─ lipidmix/core/path_resolvers.py  _describe_batch_selection()
-6. └─ lipidmix/arf2/tools.py  arf2_parser()
-7. └─ lipidmix/arf/tools.py  arf_parser()
+1. metabolomix/tools/dataset.py  load_dataset()
+2. └─ metabolomix/core/path_resolvers.py  resolve_arf2_file_path()
+3. └─ metabolomix/core/path_resolvers.py  resolve_arf_file_path()
+4. └─ metabolomix/core/session_state.py  AnalysisSession.maybe_prepend_caveat()
+5. └─ metabolomix/core/path_resolvers.py  _describe_batch_selection()
+6. └─ metabolomix/arf2/tools.py  arf2_parser()
+7. └─ metabolomix/arf/tools.py  arf_parser()
 
 ## sample_search
 
 前提: なし（ARF ロード前でも動く）
 状態変更: なし
 
-1. lipidmix/tools/samples.py  sample_search()
-2. └─ lipidmix/msdial/sample_factors.py  token_vocabulary()
-3. └─ lipidmix/msdial/sample_factors.py  expand_sample_specs()
-4. └─ lipidmix/tools/samples.py  _collect_facets()
-5. └─ lipidmix/tools/samples.py  _apply_role_filter()
-6. └─ lipidmix/tools/samples.py  _describe()
+1. metabolomix/tools/samples.py  sample_search()
+2. └─ metabolomix/msdial/sample_factors.py  token_vocabulary()
+3. └─ metabolomix/msdial/sample_factors.py  expand_sample_specs()
+4. └─ metabolomix/tools/samples.py  _collect_facets()
+5. └─ metabolomix/tools/samples.py  _apply_role_filter()
+6. └─ metabolomix/tools/samples.py  _describe()

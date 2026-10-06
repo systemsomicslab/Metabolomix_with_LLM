@@ -1,8 +1,8 @@
 import pytest
 
-from lipidmix.curation import relations
-from lipidmix.msdial.adducts import mz_from_neutral, parse_adduct
-from lipidmix.msdial.peak_verification import monoisotopic_mass, parse_formula
+from metabolomix.curation import relations
+from metabolomix.msdial.adducts import mz_from_neutral, parse_adduct
+from metabolomix.msdial.peak_verification import monoisotopic_mass, parse_formula
 
 PC342 = monoisotopic_mass(parse_formula("C42H80NO8P"))
 Y_MZ = mz_from_neutral(PC342, parse_adduct("[M+HCOO]-"))

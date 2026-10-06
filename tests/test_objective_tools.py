@@ -5,10 +5,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from lipidmix.corpus import knowledge_store as ks
+from metabolomix.corpus import knowledge_store as ks
 import server
-from lipidmix.core import mcp_core
-from lipidmix.corpus import paper_ingest
+from metabolomix.core import mcp_core
+from metabolomix.corpus import paper_ingest
 
 
 class ObjectiveStoreTests(unittest.TestCase):
@@ -110,7 +110,7 @@ class ObjectiveServerToolTests(unittest.TestCase):
 
 
     def test_record_objective_persists_and_applies_assay_kind(self):
-        from lipidmix.core import session_state
+        from metabolomix.core import session_state
         session_state.session = session_state.AnalysisSession()
         server.record_objective(
             "exp-4", "HILIC / POS", "POS", ["control", "treatment"], "群間差",
@@ -122,7 +122,7 @@ class ObjectiveServerToolTests(unittest.TestCase):
         self.assertEqual(meta["assay_kind"], "metabolite")
 
     def test_record_objective_defaults_to_unknown_kind(self):
-        from lipidmix.core import session_state
+        from metabolomix.core import session_state
         session_state.session = session_state.AnalysisSession()
         server.record_objective("exp-5", "NEG", "NEG", ["a", "b"], "c", ["問い"])
         self.assertEqual(session_state.session.assay_kind, "unknown")
@@ -136,7 +136,7 @@ class ObjectiveServerToolTests(unittest.TestCase):
         self.assertFalse((mcp_core.ANALYSES_DIR / "exp-6.md").exists())
 
     def test_update_objective_switches_assay_kind(self):
-        from lipidmix.core import session_state
+        from metabolomix.core import session_state
         session_state.session = session_state.AnalysisSession()
         server.record_objective("exp-7", "NEG", "NEG", ["a", "b"], "c", ["問い"])
         server.update_objective("exp-7", assay_kind="lipid")

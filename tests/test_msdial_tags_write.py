@@ -1,6 +1,6 @@
 """アラインメントの `_tags.xml` への書き戻し（MS-DIAL 5 の AlignmentResultContainer.Save / Load と
 同じ形: `<Peaks><Peak Id="<MasterAlignmentID>"><Tag>3</Tag></Peak></Peaks>`）。"""
-from lipidmix.msdial import tags
+from metabolomix.msdial import tags
 
 EXISTING = """\ufeff<?xml version="1.0" encoding="utf-8"?>
 <PeakSpotTags>

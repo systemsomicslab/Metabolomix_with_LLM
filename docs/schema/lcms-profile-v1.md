@@ -4,7 +4,7 @@
 [2026-09-15-validated-lcms-metabolomics-design.md](../superpowers/specs/2026-09-15-validated-lcms-metabolomics-design.md)
 §5, §5.1）が使う測定法・処理・統計・QCの固定プロファイルと、その検証証明書
 `lcms-profile-validation.v1` の契約。実装は
-[`lipidmix/console/profile_schema.py`](../../lipidmix/console/profile_schema.py)。
+[`metabolomix/console/profile_schema.py`](../../metabolomix/console/profile_schema.py)。
 
 > このモジュールはファイルを読まない。profileファイル・証明書ファイルの読込、
 > 依存ファイル・method・証明書出力の実体hash計算は呼び出し側（後続タスク）の
@@ -17,7 +17,7 @@
   target_id/recipe_id参照、内部標準対応の重複・循環、既定matrix recipeの欠落等）
   はすべて `DomainError("PROFILE_INVALID", ...)`。
 - `profile_content_hash(data: dict) -> str`: `validation` キーを除いたprofile本体の
-  canonical hash（`lipidmix.core.atomic_io.canonical_hash`）。証明書の付与や
+  canonical hash（`metabolomix.core.atomic_io.canonical_hash`）。証明書の付与や
   `status` の変更（draft→validated）はprofile本体の内容identityを変えない。
 - `validate_certificate(profile: dict, certificate: dict, observed_hashes: dict) -> None`:
   証明書が「このprofileを正当にvalidatedと名乗らせる」ものかを検証する。不一致・
@@ -441,6 +441,6 @@ field path（ドット区切りの識別子列、例 `"acquisition.lc.column"`�
 （上記「証明書 `lcms-profile-validation.v1`」節の`routine_overrides`）の外に
 出る変更は`PROFILE_SCOPE_MISMATCH`で拒否される（spec §6「routineで許される
 比較群の変更等は証明書の適用範囲内に限定する」）。この判定は
-`lipidmix.pipeline.request_v2`（`docs/schema/pipeline-request-v2.md`）が
+`metabolomix.pipeline.request_v2`（`docs/schema/pipeline-request-v2.md`）が
 `validate_certificate`の戻り値の`routine_overrides`を消費して行う——
 このモジュール自体はMCP requestを扱わない。

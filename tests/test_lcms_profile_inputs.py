@@ -1,6 +1,6 @@
-"""`lipidmix.console.profiles` / `profile_adapter` の統合テスト（spec §5, §5.1, §6.1）。
+"""`metabolomix.console.profiles` / `profile_adapter` の統合テスト（spec §5, §5.1, §6.1）。
 
-`lipidmix.console.profile_schema` の構造検証は `tests/test_lcms_profile_schema.py`。
+`metabolomix.console.profile_schema` の構造検証は `tests/test_lcms_profile_schema.py`。
 ここは実ファイル（method・依存・実行体・raw）を使う統合層: `load_profile` →
 `resolve_profile_inputs` → `snapshot_profile` の一気通貫、raw構成ファイルの
 hash（§6.1）、method_key単位の原本→実効値の差分記録（§5.1）を検証する。
@@ -20,10 +20,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from lipidmix.console import method_file as method_file_mod
-from lipidmix.console import profile_adapter
-from lipidmix.console import profiles
-from lipidmix.core.atomic_io import DomainError
+from metabolomix.console import method_file as method_file_mod
+from metabolomix.console import profile_adapter
+from metabolomix.console import profiles
+from metabolomix.core.atomic_io import DomainError
 
 
 # ---------- fixtureヘルパ ----------
@@ -438,7 +438,7 @@ def test_resolve_profile_inputs_rejects_two_dependencies_same_method_key(tmp_pat
     捨てるのではなく、一意に決まらないこと自体をエラーにする。
 
     schema側（`validate_profile`）は`dependency_id`の重複だけを拒否し、`kind`や
-    `method_key`の重複は禁止していない（`lipidmix/console/profile_schema.py`の
+    `method_key`の重複は禁止していない（`metabolomix/console/profile_schema.py`の
     `_validate_dependency`参照）——ここでの衝突検出はTask 2（`resolve_profile_inputs`）
     が新たに持つべき責務であり、Task 1のスキーマ検証を重複させるものではない。
     """
@@ -722,9 +722,9 @@ def test_inspect_inputs_ignores_unresolvable_msp_file_path_like_before(tmp_path,
     相対のまま写すと原本の隣にあっても届かない）。実在しない宣言では Console
     はどちらにしても黙って飛ばすので、実行結果は変わらない。
     """
-    from lipidmix.core import session_state
+    from metabolomix.core import session_state
     session_state.session = session_state.AnalysisSession()
-    from lipidmix.pipeline.inputs import inspect_inputs
+    from metabolomix.pipeline.inputs import inspect_inputs
 
     # このテストが見たいのは「exe と同じフォルダの .lbm2 が使われる」経路。
     # `resolve_lbm` の優先順位は 明示引数 → メソッド宣言 → ビルド生成物 →
@@ -744,7 +744,7 @@ def test_inspect_inputs_ignores_unresolvable_msp_file_path_like_before(tmp_path,
     exe.touch()
     lbm = exe_dir / "lib.lbm2"
     lbm.touch()
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
 
     # `lib1.msp`は実在しない（解決不能な宣言）。REFERENCE_KEYS拡張前と同じく
     # 無視されるはず。

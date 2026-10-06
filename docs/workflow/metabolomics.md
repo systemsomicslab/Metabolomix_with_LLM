@@ -40,7 +40,7 @@ t は符号が逆）。
 
 **計画時に止めるようにしてある。** `inputs._assert_project_save_possible` が
 「ポリシーが Enforce」かつ「当該アセンブリが未署名」の両方を確認したときだけ
-`PROJECT_SAVE_BLOCKED` で停止する（`lipidmix/core/app_control.py`）。ポリシー単独では
+`PROJECT_SAVE_BLOCKED` で停止する（`metabolomix/core/app_control.py`）。ポリシー単独では
 止めない——署名済みの公式配布版を使う正当な構成まで塞いでしまうため。
 
 **対処は要求に `"save_project": false` を書く。** `.mdproject` は GUI で開くための
@@ -73,14 +73,14 @@ t は符号が逆）。
 - **呼び出し連鎖**
 
 ```
-1. lipidmix/tools/dataset_analysis_tools.py  dataset_build_matrix()
-2. ├─ lipidmix/console/profile_schema.py  validate_matrix_recipe()
-3. └─ lipidmix/analysis/dataset_service.py  build_analysis_matrix()
-4.    └─ lipidmix/analysis/matrix_state.py  make_matrix()
-5.       └─ lipidmix/analysis/matrix_state.py  _detected_mask()
-6.       └─ lipidmix/analysis/matrix_state.py  _apply_recipe()
-7.       └─ lipidmix/analysis/matrix_state.py  _detection_eligibility()
-8.       └─ lipidmix/analysis/internal_standards.py  apply_internal_standards()
+1. metabolomix/tools/dataset_analysis_tools.py  dataset_build_matrix()
+2. ├─ metabolomix/console/profile_schema.py  validate_matrix_recipe()
+3. └─ metabolomix/analysis/dataset_service.py  build_analysis_matrix()
+4.    └─ metabolomix/analysis/matrix_state.py  make_matrix()
+5.       └─ metabolomix/analysis/matrix_state.py  _detected_mask()
+6.       └─ metabolomix/analysis/matrix_state.py  _apply_recipe()
+7.       └─ metabolomix/analysis/matrix_state.py  _detection_eligibility()
+8.       └─ metabolomix/analysis/internal_standards.py  apply_internal_standards()
 ```
 
 `matrix_id` は値ではなく**入力の identity**（dataset fingerprint・recipe・binding・
@@ -100,17 +100,17 @@ t は符号が逆）。
 - **呼び出し連鎖**
 
 ```
-1. lipidmix/tools/dataset_analysis_tools.py  dataset_statistic()
-2. └─ lipidmix/analysis/dataset_service.py  statistic_dataset()
-3.    └─ lipidmix/analysis/statistics_v2.py  run_statistic()
-4.       └─ lipidmix/analysis/statistics_v2.py  transform_values()
-5.       └─ lipidmix/analysis/sample_manifest.py  select_statistical_samples()
-6.       └─ lipidmix/analysis/sample_manifest.py  validate_independent_samples()
-7.       └─ lipidmix/analysis/differential.py  welch_t()
-8.       └─ lipidmix/analysis/differential.py  bh_fdr()
-9.       └─ lipidmix/analysis/multigroup.py  test_feature()
-10.      └─ lipidmix/analysis/statistics_v2.py  arithmetic_log2fc()
-11.      └─ lipidmix/analysis/pca.py  run_pca()
+1. metabolomix/tools/dataset_analysis_tools.py  dataset_statistic()
+2. └─ metabolomix/analysis/dataset_service.py  statistic_dataset()
+3.    └─ metabolomix/analysis/statistics_v2.py  run_statistic()
+4.       └─ metabolomix/analysis/statistics_v2.py  transform_values()
+5.       └─ metabolomix/analysis/sample_manifest.py  select_statistical_samples()
+6.       └─ metabolomix/analysis/sample_manifest.py  validate_independent_samples()
+7.       └─ metabolomix/analysis/differential.py  welch_t()
+8.       └─ metabolomix/analysis/differential.py  bh_fdr()
+9.       └─ metabolomix/analysis/multigroup.py  test_feature()
+10.      └─ metabolomix/analysis/statistics_v2.py  arithmetic_log2fc()
+11.      └─ metabolomix/analysis/pca.py  run_pca()
 ```
 
 `matrix_result_id` が `ds.analysis_matrices` に無ければ `ANALYSIS_RESULT_NOT_FOUND` で
@@ -120,7 +120,7 @@ t は符号が逆）。
 ## pipeline の v2 工程（参考）
 
 公開受付接続後にv2 workerが回す予定の順序（handler の実体は
-`lipidmix/pipeline/metabolomics_handlers.py`）:
+`metabolomix/pipeline/metabolomics_handlers.py`）:
 
 ```
 prepare_inputs → execute_console → validate_outputs → load_dataset
@@ -129,18 +129,18 @@ prepare_inputs → execute_console → validate_outputs → load_dataset
 ```
 
 - `load_assay_evidence` — `.arf` の `AlignedPeakProperties` から注入ごとの RT/m/z を
-  読む（`lipidmix/analysis/assay_evidence.py` `build_assay_evidence()`）。取得できない
+  読む（`metabolomix/analysis/assay_evidence.py` `build_assay_evidence()`）。取得できない
   場合も理由 JSON を残して先へ進む。
 - `resolve_feature_bindings` — profile の `feature_targets` をこのバッチの feature へ
-  対応付ける（`lipidmix/analysis/feature_bindings.py` `bind_features()`）。0件・複数件は
+  対応付ける（`metabolomix/analysis/feature_bindings.py` `bind_features()`）。0件・複数件は
   `FEATURE_BINDING_UNRESOLVED` で停止し、自動では選ばない。
-- `qc_raw` — filter 前に QC 評価集合を固定する（`lipidmix/analysis/assay_qc.py`
+- `qc_raw` — filter 前に QC 評価集合を固定する（`metabolomix/analysis/assay_qc.py`
   `evaluate_qc()`）。
-- `preprocess` — recipe ごとに行列を作る（`lipidmix/analysis/matrix_state.py`
+- `preprocess` — recipe ごとに行列を作る（`metabolomix/analysis/matrix_state.py`
   `make_matrix()`）。補完はしない。
 - `qc_processed` — 処理後 QC を評価してから補完する（`finalize_matrix()`）。QC で落ちた
   feature は eligibility にだけ反映し、QC は再集計しない。
-- `report` — 実行・QC・解析の3軸を分けて書く（`lipidmix/pipeline/report.py`
+- `report` — 実行・QC・解析の3軸を分けて書く（`metabolomix/pipeline/report.py`
   `analysis_status()`）。
 
 工程ごとの停止理由・再開の規則は

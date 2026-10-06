@@ -55,7 +55,7 @@ def _two_by_two():
 
 
 def test_normalize_arf_spots_reads_gap_fill_per_cell():
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     norm = evidence.normalize_arf_spots(_two_by_two())
     assert [s["mz"] for s in norm] == [700.5, 800.25]
     assert [c["name"] for c in norm[0]["samples"]] == ["s1", "s2"]
@@ -64,7 +64,7 @@ def test_normalize_arf_spots_reads_gap_fill_per_cell():
 
 
 def test_build_evidence_joins_by_position_and_name():
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     result = evidence.build_evidence(
         evidence.normalize_arf_spots(_two_by_two()),
         feature_mz=[700.5, 800.25],
@@ -82,7 +82,7 @@ def test_build_evidence_joins_by_position_and_name():
 
 def test_build_evidence_reorders_columns_to_match_sample_names():
     """列順は mzTab の assay 順に合わせる（.arf の FileID 順とは限らない）。"""
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     result = evidence.build_evidence(
         evidence.normalize_arf_spots(_two_by_two()),
         feature_mz=[700.5, 800.25],
@@ -93,7 +93,7 @@ def test_build_evidence_reorders_columns_to_match_sample_names():
 
 
 def test_build_evidence_rejects_feature_count_mismatch():
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     result = evidence.build_evidence(
         evidence.normalize_arf_spots(_two_by_two()),
         feature_mz=[700.5],
@@ -105,7 +105,7 @@ def test_build_evidence_rejects_feature_count_mismatch():
 
 def test_build_evidence_rejects_mz_mismatch():
     """位置一致が成り立たないなら取り込まない（誤接合は静かに嘘をつく）。"""
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     result = evidence.build_evidence(
         evidence.normalize_arf_spots(_two_by_two()),
         feature_mz=[800.25, 700.5],          # 順序が入れ替わっている
@@ -118,7 +118,7 @@ def test_build_evidence_rejects_mz_mismatch():
 
 def test_build_evidence_accepts_small_mz_deviation():
     """スポット代表値と平均値の差（実データで最大 6.7 mDa）は許容する。"""
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     result = evidence.build_evidence(
         evidence.normalize_arf_spots(_two_by_two()),
         feature_mz=[700.5067, 800.2433],
@@ -129,7 +129,7 @@ def test_build_evidence_accepts_small_mz_deviation():
 
 
 def test_build_evidence_rejects_sample_axis_mismatch():
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     result = evidence.build_evidence(
         evidence.normalize_arf_spots(_two_by_two()),
         feature_mz=[700.5, 800.25],
@@ -142,7 +142,7 @@ def test_build_evidence_rejects_sample_axis_mismatch():
 
 def test_detection_rates_are_per_feature():
     """率の定義は形式非依存なので analysis 側が正準（evidence から再輸出しない）。"""
-    from lipidmix.analysis.preprocessing import detection_rates
+    from metabolomix.analysis.preprocessing import detection_rates
     mask = np.array([[True, True], [True, False]])
     assert detection_rates(mask).tolist() == [1.0, 0.5]
 
@@ -150,7 +150,7 @@ def test_detection_rates_are_per_feature():
 # --- DatasetState への適用 ---
 
 def _ds_with_features(n_features=2, sample_names=("s1", "s2")):
-    from lipidmix.mztab.dataset_state import DatasetState
+    from metabolomix.mztab.dataset_state import DatasetState
     ds = DatasetState()
     ds.feature_ids = [str(i) for i in range(n_features)]
     ds.sample_names = list(sample_names)
@@ -159,7 +159,7 @@ def _ds_with_features(n_features=2, sample_names=("s1", "s2")):
 
 
 def test_apply_evidence_sets_mask_and_summary():
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     ds = _ds_with_features()
     result = evidence.build_evidence(
         evidence.normalize_arf_spots(_two_by_two()),
@@ -175,7 +175,7 @@ def test_apply_evidence_sets_mask_and_summary():
 
 def test_apply_evidence_rejected_leaves_no_mask_and_warns():
     """取り込めなかったことを明示する。黙って検出 0 扱いにしない。"""
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     ds = _ds_with_features()
     evidence.apply_evidence(ds, {
         "status": "rejected", "reason": "mz_mismatch",
@@ -190,7 +190,7 @@ def test_apply_evidence_rejected_leaves_no_mask_and_warns():
 
 def test_apply_evidence_none_records_absence():
     """候補 .arf が 1 つも無い場合も、状態が無いことを記録する。"""
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     ds = _ds_with_features()
     evidence.apply_evidence(ds, None)
     assert ds.detected_mask is None
@@ -199,7 +199,7 @@ def test_apply_evidence_none_records_absence():
 
 
 def test_arf_candidates_prefers_peak_properties_and_skips_drift(tmp_path):
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     (tmp_path / "A_PeakProperties.arf").write_bytes(b"x")
     (tmp_path / "A_DriftSopts.arf").write_bytes(b"x")     # MS-DIAL の綴りゆれ
     (tmp_path / "A_DriftSpots.arf").write_bytes(b"x")
@@ -214,7 +214,7 @@ def test_arf_candidates_prefers_peak_properties_and_skips_drift(tmp_path):
 
 
 def test_arf_candidates_puts_handoff_artifact_first(tmp_path):
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     (tmp_path / "A_PeakProperties.arf").write_bytes(b"x")
     recorded = tmp_path / "recorded_PeakProperties.arf"
     recorded.write_bytes(b"x")
@@ -248,7 +248,7 @@ def test_build_evidence_tolerates_a_single_outlier_among_many():
     実データ: スポット数 3944 == 特徴数 3944、先頭から小数 4 桁まで一致、
     許容超えは 1 件だけ（14.8 mDa）。接合は明らかに正しい。
     """
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     spots, feature_mz = _many_spots(500, {123: 0.0148})
     result = evidence.build_evidence(
         evidence.normalize_arf_spots(spots), feature_mz=feature_mz,
@@ -259,7 +259,7 @@ def test_build_evidence_tolerates_a_single_outlier_among_many():
 
 def test_build_evidence_rejects_when_many_features_exceed_tolerance():
     """外れが少数でなくなったら、それは接合が違うということ。"""
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     spots, feature_mz = _many_spots(100, {i: 0.05 for i in range(20)})
     result = evidence.build_evidence(
         evidence.normalize_arf_spots(spots), feature_mz=feature_mz,
@@ -271,7 +271,7 @@ def test_build_evidence_rejects_when_many_features_exceed_tolerance():
 
 def test_build_evidence_rejects_any_feature_beyond_the_hard_limit():
     """1 つずらした誤接合は Da オーダーに爆発する。少数でも見逃してはいけない。"""
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     spots, feature_mz = _many_spots(500, {7: 87.0})
     result = evidence.build_evidence(
         evidence.normalize_arf_spots(spots), feature_mz=feature_mz,
@@ -282,7 +282,7 @@ def test_build_evidence_rejects_any_feature_beyond_the_hard_limit():
 
 def test_build_evidence_still_rejects_two_feature_swap():
     """小さな表でも順序入れ替えは棄却され続けること（既存の保護を壊さない）。"""
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     result = evidence.build_evidence(
         evidence.normalize_arf_spots(_two_by_two()),
         feature_mz=[800.25, 700.5], sample_names=["s1", "s2"])
@@ -291,7 +291,7 @@ def test_build_evidence_still_rejects_two_feature_swap():
 
 def test_build_evidence_reports_outlier_counts_when_accepted():
     """受け入れたときも、何件が許容を超えていたかは残す。"""
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     spots, feature_mz = _many_spots(500)
     result = evidence.build_evidence(
         evidence.normalize_arf_spots(spots), feature_mz=feature_mz,
@@ -302,7 +302,7 @@ def test_build_evidence_reports_outlier_counts_when_accepted():
 
 def test_attach_to_dataset_records_which_arf_files_were_tried(tmp_path):
     """どの .arf と照合して落ちたのかが出ないと、原因を追えない。"""
-    from lipidmix.mztab import evidence
+    from metabolomix.mztab import evidence
     ds = _ds_with_features(n_features=2, sample_names=("s1", "s2"))
     ds.artifact_paths = {}
     (tmp_path / "a.mzTab").write_text("x", encoding="utf-8")

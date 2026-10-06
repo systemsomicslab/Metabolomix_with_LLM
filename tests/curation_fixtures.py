@@ -10,8 +10,8 @@ from pathlib import Path
 import lz4.block
 import msgpack
 
-from lipidmix.msdial.adducts import mz_from_neutral, parse_adduct
-from lipidmix.msdial.peak_verification import monoisotopic_mass, parse_formula
+from metabolomix.msdial.adducts import mz_from_neutral, parse_adduct
+from metabolomix.msdial.peak_verification import monoisotopic_mass, parse_formula
 
 
 def at_keys(size: int, values: dict) -> list:

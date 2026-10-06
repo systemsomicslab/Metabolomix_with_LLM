@@ -1,7 +1,7 @@
 # tests/test_handoff_schema.py
 import json
 import pytest
-from lipidmix.handoff.schema import (
+from metabolomix.handoff.schema import (
     SCHEMA_VERSION,
     AnalysisJob,
     Artifact,

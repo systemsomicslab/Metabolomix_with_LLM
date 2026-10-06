@@ -2,8 +2,8 @@
 import io
 import math
 
-from lipidmix.arf2 import match_results as mr
-from lipidmix.arf2 import reader as arf2_reader
+from metabolomix.arf2 import match_results as mr
+from metabolomix.arf2 import reader as arf2_reader
 from tests.curation_fixtures import arf2_spot_raw, match_result, write_arf2
 
 

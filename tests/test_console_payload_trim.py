@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import json as _json
 
-from lipidmix.console.job_manager import create_job, load_job, save_job
-from lipidmix.core.tool_helpers import _format_arf_class_summary
-from lipidmix.handoff.schema import Artifact
-from lipidmix.tools.console_tools import console_status
+from metabolomix.console.job_manager import create_job, load_job, save_job
+from metabolomix.core.tool_helpers import _format_arf_class_summary
+from metabolomix.handoff.schema import Artifact
+from metabolomix.tools.console_tools import console_status
 
 
 def _job_with_artifacts(tmp_path, n_samples=60):

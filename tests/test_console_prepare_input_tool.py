@@ -17,7 +17,7 @@ def _sciex(root: Path, stem: str):
 
 
 def test_prepare_input_creates_single_format_folder(tmp_path):
-    from lipidmix.tools.console_tools import console_prepare_input
+    from metabolomix.tools.console_tools import console_prepare_input
     src = tmp_path / "raw"
     src.mkdir()
     _sciex(src, "a")
@@ -32,7 +32,7 @@ def test_prepare_input_creates_single_format_folder(tmp_path):
 
 def test_prepare_input_defaults_out_dir_beside_source(tmp_path):
     """置き場所を毎回考えさせない。既定は <元フォルダ名>_<拡張子> の兄弟。"""
-    from lipidmix.tools.console_tools import console_prepare_input
+    from metabolomix.tools.console_tools import console_prepare_input
     src = tmp_path / "POS"
     src.mkdir()
     _sciex(src, "a")
@@ -43,7 +43,7 @@ def test_prepare_input_defaults_out_dir_beside_source(tmp_path):
 
 
 def test_prepare_input_returns_error_envelope_not_exception(tmp_path):
-    from lipidmix.tools.console_tools import console_prepare_input
+    from metabolomix.tools.console_tools import console_prepare_input
     src = tmp_path / "raw"
     src.mkdir()
     _sciex(src, "a")
@@ -54,14 +54,14 @@ def test_prepare_input_returns_error_envelope_not_exception(tmp_path):
 
 def _console_env(tmp_path: Path, monkeypatch) -> Path:
     """Console 実行体と LBM を偽装し、Negative のメソッドファイルを返す。"""
-    from lipidmix.core import session_state
+    from metabolomix.core import session_state
     session_state.session = session_state.AnalysisSession()
     app = tmp_path / "app"
     app.mkdir()
     (app / "x.lbm2").touch()
     monkeypatch.setenv("MSDIAL_EXE", str(app / "MSDIALCUI.exe"))
     monkeypatch.delenv("MSDIAL_LBM", raising=False)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     return method
@@ -74,7 +74,7 @@ def test_mixed_raw_formats_offers_choices_and_retries_plan(tmp_path, monkeypatch
     src.mkdir()
     _sciex(src, "a")
     _sciex(src, "b")
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     parsed = _json.loads(console_plan(dataset_root=str(src), method_file=str(method),
                                       polarity="negative", measure="peak_height"))
     assert parsed["error"]["code"] == "MIXED_RAW_FORMATS"
@@ -93,7 +93,7 @@ def test_keep_extension_on_mixed_folder_plans_on_prepared_sibling(tmp_path, monk
     _sciex(src, "a")
     _sciex(src, "b")
     before = sorted(p.name for p in src.iterdir())
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     parsed = _json.loads(console_plan(dataset_root=str(src), method_file=str(method),
                                       polarity="negative", measure="peak_height",
                                       keep_extension="wiff2"))
@@ -114,7 +114,7 @@ def test_keep_extension_absent_from_folder_is_rejected(tmp_path, monkeypatch):
     src = tmp_path / "raw"
     src.mkdir()
     _sciex(src, "a")
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     parsed = _json.loads(console_plan(dataset_root=str(src), method_file=str(method),
                                       polarity="negative", measure="peak_height",
                                       keep_extension="mzml"))
@@ -128,7 +128,7 @@ def test_keep_extension_on_single_format_folder_plans_in_place(tmp_path, monkeyp
     src = tmp_path / "raw"
     src.mkdir()
     (src / "a.mzML").write_text("m", encoding="ascii")
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     parsed = _json.loads(console_plan(dataset_root=str(src), method_file=str(method),
                                       polarity="negative", measure="peak_height",
                                       keep_extension=".mzML"))
@@ -146,7 +146,7 @@ def test_prepared_folder_then_plans_cleanly(tmp_path, monkeypatch):
     src.mkdir()
     _sciex(src, "a")
 
-    from lipidmix.tools.console_tools import console_plan, console_prepare_input
+    from metabolomix.tools.console_tools import console_plan, console_prepare_input
     prepared = _json.loads(console_prepare_input(dataset_root=str(src),
                                                  keep_extension="wiff"))
     parsed = _json.loads(console_plan(dataset_root=prepared["out_dir"],

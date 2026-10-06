@@ -5,8 +5,8 @@ import textwrap
 
 import pytest
 
-from lipidmix.core import mcp_core, session_state
-from lipidmix.library import tools
+from metabolomix.core import mcp_core, session_state
+from metabolomix.library import tools
 
 _MSP = textwrap.dedent("""\
     NAME: GABA
@@ -83,7 +83,7 @@ def test_mirror_plot_passes_ms2_tol_so_measured_side_gets_colored(fresh_session,
     tools.library_match_feature(104.0706, ion_mode="positive")
 
     captured = {}
-    from lipidmix.plots import mirror as mirror_plot
+    from metabolomix.plots import mirror as mirror_plot
     real_build = mirror_plot.build_mirror_payload
 
     def spy(*args, **kwargs):
@@ -110,8 +110,8 @@ def test_second_load_does_not_rescan_the_source_file(fresh_session, monkeypatch)
     ライブラリファイルを再走査してはいけない（cache hit のはず）。"""
     tools.library_load()  # 1 回目でキャッシュを構築する
 
-    from lipidmix.library import dbs as dbs_reader
-    from lipidmix.library import msp as msp_reader
+    from metabolomix.library import dbs as dbs_reader
+    from metabolomix.library import msp as msp_reader
 
     def _boom(*_args, **_kwargs):
         raise AssertionError("iter_records が呼ばれた（2 回目は cache hit のはず）")
@@ -130,7 +130,7 @@ def test_second_load_does_not_rescan_the_source_file(fresh_session, monkeypatch)
 # `.dcl` 解決 → `get_msms_by_precursor` → hits の選択が一度も検証されて
 # いなかった（この穴が Important 7 を通した）。ここでは実際の `.dcl` バイナリを
 # 組み立てて、その経路を通しで確認する。レイアウトは
-# `lipidmix/dcl/reader.py` 冒頭のドキュメントに準拠（`tests/test_parser_decode.py`
+# `metabolomix/dcl/reader.py` 冒頭のドキュメントに準拠（`tests/test_parser_decode.py`
 # の `dcl_bytes`/`dcl_result` と同じ組み立て方だが、fixture はテスト自身が
 # 作る規約に沿ってここに複製する）。
 # --------------------------------------------------------------------------
@@ -410,7 +410,7 @@ def test_mirror_plot_passes_the_unscored_peaks_so_the_layer_reaches_the_figure(
     tools.library_match_feature(104.0706, ion_mode="positive")
 
     captured = {}
-    from lipidmix.plots import mirror as mirror_plot
+    from metabolomix.plots import mirror as mirror_plot
     real_build = mirror_plot.build_mirror_payload
 
     def spy(*args, **kwargs):

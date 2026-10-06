@@ -3,9 +3,9 @@
 検証済みLC–MSメタボロミクス実行経路（spec
 [2026-09-15-validated-lcms-metabolomics-design.md](../superpowers/specs/2026-09-15-validated-lcms-metabolomics-design.md)
 §6, §6.2）が使うMCP request契約。実装は
-[`lipidmix/pipeline/request_v2.py`](../../lipidmix/pipeline/request_v2.py)。既存の
-`pipeline-request.v1`（[`lipidmix/pipeline/request.py`](../../lipidmix/pipeline/request.py)、
-[`docs/schema/`にはv1専用の文書は無く、実装のdocstringが正準](../../lipidmix/pipeline/request.py)）
+[`metabolomix/pipeline/request_v2.py`](../../metabolomix/pipeline/request_v2.py)。既存の
+`pipeline-request.v1`（[`metabolomix/pipeline/request.py`](../../metabolomix/pipeline/request.py)、
+[`docs/schema/`にはv1専用の文書は無く、実装のdocstringが正準](../../metabolomix/pipeline/request.py)）
 とは別契約であり、上流条件の出所が根本的に異なる: v1は`method_file`/`lbm_file`を
 requestへ直接指定するが、v2は検証済み
 [`lcms-profile.v1`](lcms-profile-v1.md)（`profile_file`）から上流条件を解決し、
@@ -21,11 +21,11 @@ requestへ直接指定するが、v2は検証済み
 
 ## schema dispatch（v1との共存）
 
-`lipidmix.pipeline.request.resolve_request(source_root, explicit, *, profile=None)`が
+`metabolomix.pipeline.request.resolve_request(source_root, explicit, *, profile=None)`が
 実効schema（下記）を判定し、`"pipeline-request.v2"`なら
 `request_v2.read_request_file(source_root)`で`analysis-request.json`を読んだ上で
 `request_v2.resolve(explicit, profile, from_file=...)`へ委譲する。同様に
-`lipidmix.pipeline.request.merge_updates(request, updates, *, profile=None)`は
+`metabolomix.pipeline.request.merge_updates(request, updates, *, profile=None)`は
 `request["schema"] == "pipeline-request.v2"`で`request_v2.merge_updates`へ委譲する
 （resumeは`analysis-request.json`を読み直さない——§6.1が定める更新経路は
 明示`updates`だけ）。

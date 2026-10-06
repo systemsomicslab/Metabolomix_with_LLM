@@ -7,7 +7,7 @@ import zipfile
 import lz4.block
 import msgpack
 
-from lipidmix.msdial.classes import (
+from metabolomix.msdial.classes import (
     assign_sample_groups,
     attach_class_ids_to_spots,
     decode_msdial_messagepack,
@@ -18,7 +18,7 @@ from lipidmix.msdial.classes import (
     parse_analysis_file_classes,
     resolve_mddata_path,
 )
-from lipidmix.msdial.tags import normalize_sample_name
+from metabolomix.msdial.tags import normalize_sample_name
 
 
 def pack_msdial(value) -> bytes:

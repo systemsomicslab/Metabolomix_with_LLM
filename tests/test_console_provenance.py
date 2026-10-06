@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json as _json
 
-from lipidmix.console.output_collector import (
+from metabolomix.console.output_collector import (
     read_adduct_polarity,
     read_software_version,
 )
@@ -80,12 +80,12 @@ def test_adduct_majority_handles_missing_column(tmp_path):
 def test_console_run_records_software_version_from_mztab(tmp_path, monkeypatch):
     """Console 実行からは分からない版数を、成果物の mzTab から採る。"""
     from pathlib import Path
-    from lipidmix.console.job_manager import create_job, load_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import create_job, load_job
+    from metabolomix.tools.console_tools import console_run
     from tests.pipeline_fixtures import fake_console_command, use_fake_console
 
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     _, job_path = create_job(dataset_root=tmp_path, method_file=method,
@@ -107,12 +107,12 @@ def test_console_run_crosschecks_polarity_without_overwriting_the_source(tmp_pat
     「何も分からない」は別のことなので、原因を読める形にしてから止める。
     """
     from pathlib import Path
-    from lipidmix.console.job_manager import create_job, load_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import create_job, load_job
+    from metabolomix.tools.console_tools import console_run
     from tests.pipeline_fixtures import fake_console_command, use_fake_console
 
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     _, job_path = create_job(dataset_root=tmp_path, method_file=method,
@@ -137,8 +137,8 @@ def test_console_run_crosschecks_polarity_without_overwriting_the_source(tmp_pat
 
 def test_console_status_reports_server_version(tmp_path, monkeypatch):
     from pathlib import Path
-    from lipidmix.console.job_manager import create_job
-    from lipidmix.tools.console_tools import console_status
+    from metabolomix.console.job_manager import create_job
+    from metabolomix.tools.console_tools import console_status
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     _, job_path = create_job(dataset_root=tmp_path, method_file=method,
@@ -150,9 +150,9 @@ def test_console_status_reports_server_version(tmp_path, monkeypatch):
 def test_dataset_status_reports_server_version(monkeypatch):
     """更新後に再起動を忘れると、古いプロセスが黙って動き続ける。"""
     import numpy as np
-    from lipidmix.core import session_state
-    from lipidmix.mztab.dataset_state import DatasetState
-    from lipidmix.tools.mztab_tools import dataset_status
+    from metabolomix.core import session_state
+    from metabolomix.mztab.dataset_state import DatasetState
+    from metabolomix.tools.mztab_tools import dataset_status
     ds = DatasetState()
     ds.feature_matrix = np.ones((2, 2))
     ds.sample_names = ["s1", "s2"]

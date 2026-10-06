@@ -1,6 +1,6 @@
 import unittest
 
-from lipidmix.msdial import lipid_identity as li
+from metabolomix.msdial import lipid_identity as li
 
 
 class TestNormalizeLipidName(unittest.TestCase):

@@ -21,9 +21,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from lipidmix.arf import exclusions
-from lipidmix.arf import reader as arf_reader
-from lipidmix.msdial import tags as msdial_tags
+from metabolomix.arf import exclusions
+from metabolomix.arf import reader as arf_reader
+from metabolomix.msdial import tags as msdial_tags
 
 
 def _row(file_id, name, height):
@@ -272,7 +272,7 @@ class ArfParserAvoidsThrowawayDataFrameTests(unittest.TestCase):
 
     def _run(self):
         import server  # ツール登録の副作用を踏む（他テストと同じ入口）
-        from lipidmix.core import session_state as state_mod
+        from metabolomix.core import session_state as state_mod
         original = state_mod.session
         state_mod.session = _FakeSession(_pca_fixture())
         try:

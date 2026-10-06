@@ -1,4 +1,4 @@
-"""工程エンジン（`lipidmix.pipeline.engine`）とsessionを持たないworkerのテスト（Task15）。
+"""工程エンジン（`metabolomix.pipeline.engine`）とsessionを持たないworkerのテスト（Task15）。
 
 engineは注入handlerだけで検証する（本番handler一式`build_handlers`はTask18）。
 fixtureは合成dictビルダーとして本ファイル内に閉じる（Controller裁定: 共有
@@ -14,11 +14,11 @@ from pathlib import Path
 
 import pytest
 
-import lipidmix.pipeline.store as store_module
-from lipidmix.core.atomic_io import DomainError, atomic_write_json
-from lipidmix.pipeline.engine import cancel_request_path, run_engine
-from lipidmix.pipeline.request import resolve_request
-from lipidmix.pipeline.store import create_run, load_run
+import metabolomix.pipeline.store as store_module
+from metabolomix.core.atomic_io import DomainError, atomic_write_json
+from metabolomix.pipeline.engine import cancel_request_path, run_engine
+from metabolomix.pipeline.request import resolve_request
+from metabolomix.pipeline.store import create_run, load_run
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,13 +30,13 @@ def _minimal_inputs(root: Path) -> dict:
 
 
 def _persist(pipeline_root, name: str):
-    """`lipidmix.pipeline.report.persist_result`を使い、`output_name=name`の
+    """`metabolomix.pipeline.report.persist_result`を使い、`output_name=name`の
     実ファイル付きrefを作る（Task18: `evaluate_target`はhash照合まで行うため、
     文字列のダミーrefでは`achieved_outputs`に数えられない）。データ内容は
     固定なので、`_ALWAYS_RECONSTRUCT_STAGE_IDS`（preprocess/pca）が再実行時にも
     同じhashのrefを返し、`commit_stage_outcome`の重複追記防止が効く。
     """
-    from lipidmix.pipeline import report as report_mod
+    from metabolomix.pipeline import report as report_mod
     return report_mod.persist_result(pipeline_root, {
         "output_name": name, "kind": "synthetic",
         "result_id": f"{name.replace(':', '_')}-result",
@@ -364,9 +364,9 @@ def test_second_engine_start_is_refused(tmp_path):
 # ---------- AST: 禁止import ----------
 
 _FORBIDDEN_IMPORT_PREFIXES = (
-    "lipidmix.core.session_state",
-    "lipidmix.core.mcp_core",
-    "lipidmix.tools",
+    "metabolomix.core.session_state",
+    "metabolomix.core.mcp_core",
+    "metabolomix.tools",
 )
 
 
@@ -383,7 +383,7 @@ def _imported_module_names(source: str) -> set[str]:
 
 
 def test_engine_and_worker_do_not_import_global_session():
-    for relative in ("lipidmix/pipeline/engine.py", "lipidmix/pipeline/worker.py"):
+    for relative in ("metabolomix/pipeline/engine.py", "metabolomix/pipeline/worker.py"):
         source = (REPO_ROOT / relative).read_text(encoding="utf-8")
         for name in _imported_module_names(source):
             forbidden = any(name == prefix or name.startswith(prefix + ".")
@@ -394,7 +394,7 @@ def test_engine_and_worker_do_not_import_global_session():
 # ---------- worker.py のCLI配線 ----------
 
 def test_worker_main_invokes_run_worker_with_parsed_path(monkeypatch, tmp_path, capsys):
-    from lipidmix.pipeline import worker
+    from metabolomix.pipeline import worker
 
     seen = {}
 
@@ -424,7 +424,7 @@ def test_comparisons_added_by_resume_run_before_report(tmp_path):
     永続順が実際に崩れていること自体を先に確かめてから呼出し順を見る
     ——「たまたま順序が合っていたから通った」テストにしないため。
     """
-    from lipidmix.pipeline.recovery import prepare_resume
+    from metabolomix.pipeline.recovery import prepare_resume
 
     comparison = {"comparison_id": "cmp1", "reference_group": "control",
                   "test_group": "treated"}
@@ -502,7 +502,7 @@ def test_a_resume_during_the_run_is_picked_up_by_the_running_worker(tmp_path):
     走っているこのworkerだけ。stage計画を1回しか組まないと、旧revisionの条件で
     計算した結果が新revisionの結果としてcompletedになる。
     """
-    from lipidmix.pipeline.recovery import prepare_resume
+    from metabolomix.pipeline.recovery import prepare_resume
 
     path, handlers, calls = _build_pipeline(tmp_path, target="exploratory")
     real_pca = handlers["pca"]
@@ -543,7 +543,7 @@ def test_a_stage_reset_during_the_run_is_re_executed_before_finishing(tmp_path):
     `pending`へ戻す。要求版の変化だけを見ていると、既に通過したstageの
     差し戻しに気付かないままcompletedを書いてしまう。
     """
-    from lipidmix.pipeline.recovery import prepare_resume
+    from metabolomix.pipeline.recovery import prepare_resume
 
     path, handlers, calls = _build_pipeline(tmp_path, target="exploratory")
     real_report = handlers["report"]
@@ -567,8 +567,8 @@ def test_a_stage_reset_during_the_run_is_re_executed_before_finishing(tmp_path):
 
 def test_endless_request_updates_stop_the_worker_instead_of_spinning(tmp_path):
     """要求の更新が途切れず届き続ける場合は、有限回で止めて知らせる。"""
-    from lipidmix.pipeline.engine import _REQUEST_RELOAD_MAX_PASSES
-    from lipidmix.pipeline.recovery import prepare_resume
+    from metabolomix.pipeline.engine import _REQUEST_RELOAD_MAX_PASSES
+    from metabolomix.pipeline.recovery import prepare_resume
 
     path, handlers, _calls = _build_pipeline(tmp_path, target="exploratory")
     real_pca = handlers["pca"]

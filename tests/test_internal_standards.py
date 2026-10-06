@@ -15,12 +15,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from lipidmix.analysis.internal_standards import (
+from metabolomix.analysis.internal_standards import (
     apply_internal_standards,
     ratio,
     validate_pairs,
 )
-from lipidmix.core.atomic_io import DomainError
+from metabolomix.core.atomic_io import DomainError
 
 
 # ---------- brief記載のRED ----------

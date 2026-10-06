@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from lipidmix.curation import flags
+from metabolomix.curation import flags
 
 ALIGN = {"alignment_file": "AlignmentResult_x.arf2", "alignment_sha256": "aa" * 32}
 
@@ -128,7 +128,7 @@ def test_cleared_spots_are_those_whose_latest_row_is_clear(tmp_path):
     assert flags.cleared_spots(store.rows(), ALIGN["alignment_sha256"]) == {1}
 
 
-from lipidmix.curation.flags import (
+from metabolomix.curation.flags import (
     FlagStore, effective_flags, flags_digest, split_decisions, validate_entries)
 
 _ALIGN = {"alignment_file": "a.arf2", "alignment_sha256": "s1"}

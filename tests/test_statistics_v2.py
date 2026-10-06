@@ -20,12 +20,12 @@ import math
 import numpy as np
 import pytest
 
-from lipidmix.analysis.statistics_v2 import (
+from metabolomix.analysis.statistics_v2 import (
     arithmetic_log2fc,
     run_statistic,
     transform_values,
 )
-from lipidmix.core.atomic_io import DomainError
+from metabolomix.core.atomic_io import DomainError
 
 
 # ---------- brief記載のRED ----------

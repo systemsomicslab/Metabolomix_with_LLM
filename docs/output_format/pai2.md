@@ -7,7 +7,7 @@
 > 対応する Key 番号表: `docs/schema/ChromatogramPeakFeature.md`（MS-DIAL の `[Key(N)]` から抽出した一次資料）。
 > リーダーのインデックス定数を変更するときは必ずこちらを先に確認する。
 
-## 5. PAI2 (`lipidmix/pai2/reader.py`)
+## 5. PAI2 (`metabolomix/pai2/reader.py`)
 
 ### 5.1 `deserialize()` のピーク出力
 

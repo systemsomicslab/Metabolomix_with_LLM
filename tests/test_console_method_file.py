@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.console.method_file import (
+from metabolomix.console.method_file import (
     KEY_PARAMS_MAX_CANDIDATES,
     LbmResolution,
     MethodCandidate,
@@ -32,7 +32,7 @@ from lipidmix.console.method_file import (
     scan_dir_for_method_files,
     write_effective_method_file,
 )
-from lipidmix.core.user_config import Setting
+from metabolomix.core.user_config import Setting
 
 
 def _env_lbm(value) -> Setting:

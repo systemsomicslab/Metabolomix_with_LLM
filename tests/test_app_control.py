@@ -11,7 +11,7 @@ import struct
 
 import pytest
 
-from lipidmix.core import app_control
+from metabolomix.core import app_control
 
 
 def _pe(*, signed: bool, pe32_plus: bool = True) -> bytes:

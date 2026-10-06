@@ -1,7 +1,7 @@
 """spot id と .arf2 同定情報の結合(純関数)。"""
 import unittest
 
-from lipidmix.arf import identity_join
+from metabolomix.arf import identity_join
 
 
 def _catalog():

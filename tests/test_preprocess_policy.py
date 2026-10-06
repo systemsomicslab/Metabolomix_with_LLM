@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import pytest
 
-from lipidmix.analysis.dataset_service import preprocess_auto
-from lipidmix.analysis.preprocess_policy import (
+from metabolomix.analysis.dataset_service import preprocess_auto
+from metabolomix.analysis.preprocess_policy import (
     POLICY_VERSION,
     check_applied_policy,
     resolve_policy,
 )
-from lipidmix.core.atomic_io import DomainError
+from metabolomix.core.atomic_io import DomainError
 from tests.pipeline_fixtures import make_dataset, metadata_rows
 
 
@@ -404,8 +404,8 @@ def test_preprocess_auto_computes_the_matrix_only_once(monkeypatch):
     2度目は結果まで同じ——検体数×特徴量数の全量に対する重複計算で、
     得られるものが無い。
     """
-    from lipidmix.analysis import dataset_service
-    from lipidmix.analysis.dataset_analysis import run_dataset_preprocess
+    from metabolomix.analysis import dataset_service
+    from metabolomix.analysis.dataset_analysis import run_dataset_preprocess
 
     calls = {"count": 0}
 
@@ -427,8 +427,8 @@ def test_preprocess_auto_computes_the_matrix_only_once(monkeypatch):
 
 def test_preprocess_auto_reuses_an_identical_preprocessing_without_recomputing(monkeypatch):
     """同じ入力・同じレシピの再実行では、計算そのものを1回も行わない。"""
-    from lipidmix.analysis import dataset_service
-    from lipidmix.analysis.dataset_analysis import run_dataset_preprocess
+    from metabolomix.analysis import dataset_service
+    from metabolomix.analysis.dataset_analysis import run_dataset_preprocess
 
     ds = make_dataset()
     rows = metadata_rows(ds)
@@ -452,7 +452,7 @@ def test_dataset_preprocess_default_arguments_are_unchanged():
     """通常のdataset_preprocess(単体ツール経路)の既定引数はpipeline由来のautoで変えない。"""
     import inspect
 
-    from lipidmix.analysis.dataset_service import preprocess_dataset
+    from metabolomix.analysis.dataset_service import preprocess_dataset
 
     sig = inspect.signature(preprocess_dataset)
     assert list(sig.parameters) == ["ds", "recipe", "request_revision"]

@@ -1,4 +1,4 @@
-"""lipidmix.pipeline.service の単体テスト。
+"""metabolomix.pipeline.service の単体テスト。
 
 `tests/test_pipeline_engine.py` / `test_pipeline_recovery.py` は合成handlerで
 engine自体（stage順序・owner lock・冪等性）を検証しており、`build_handlers()`が
@@ -20,10 +20,10 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.analysis.dataset_analysis import PreconditionError
-from lipidmix.pipeline import engine, service
-from lipidmix.pipeline.request import resolve_request
-from lipidmix.pipeline.store import create_run, load_run, save_run
+from metabolomix.analysis.dataset_analysis import PreconditionError
+from metabolomix.pipeline import engine, service
+from metabolomix.pipeline.request import resolve_request
+from metabolomix.pipeline.store import create_run, load_run, save_run
 
 
 def _pca_context(pipeline_root: Path) -> dict:
@@ -71,11 +71,11 @@ def test_pca_success_persists_data_and_figure_refs(tmp_path, monkeypatch):
 
 
 def test_upstream_handler_never_calls_console_worker_module(tmp_path, monkeypatch):
-    """Console用workerを二重起動しない: `lipidmix.console.worker`を一切呼ばない。"""
-    import lipidmix.console.worker as console_worker_mod
+    """Console用workerを二重起動しない: `metabolomix.console.worker`を一切呼ばない。"""
+    import metabolomix.console.worker as console_worker_mod
 
     def _forbidden(*a, **kw):
-        raise AssertionError("upstream handlerがlipidmix.console.workerを呼び出した"
+        raise AssertionError("upstream handlerがmetabolomix.console.workerを呼び出した"
                             "（Console用workerの二重起動）")
 
     for name in ("run_job", "launch_console_worker"):
@@ -136,7 +136,7 @@ def test_launch_pipeline_worker_uses_sys_executable_and_repo_root_cwd(tmp_path, 
 
     assert result == {"launched": True, "pid": 4321}
     assert captured["command"][0] == sys.executable
-    assert captured["command"][1:4] == ["-m", "lipidmix.pipeline.worker", "--pipeline"]
+    assert captured["command"][1:4] == ["-m", "metabolomix.pipeline.worker", "--pipeline"]
     assert captured["command"][4] == str(pipeline_path)
     assert captured["cwd"] == service._REPO_ROOT
 
@@ -173,7 +173,7 @@ def test_confounded_comparison_becomes_needs_input_not_failed(monkeypatch):
 def test_resolve_metadata_records_the_resolved_manifest_into_inputs():
     """spec §7.3/§11: 解決したrole/group/batch/orderの出所をrecordへ残す。
 
-    `record["inputs"]["manifest"]`は`lipidmix.pipeline.report._section_sample_
+    `record["inputs"]["manifest"]`は`metabolomix.pipeline.report._section_sample_
     provenance`が読み、`store`が相対化し、`recovery`が絶対化する——**読む側は
     3つあるのに書く側が居なかった**。`_handle_resolve_metadata`が
     `record_updates`を返さない限り、解決結果は`context["runtime"]`にしか
@@ -287,7 +287,7 @@ def test_resume_pipeline_normalizes_the_run_json_path_before_launching(tmp_path,
     `_await_launch_handshake`の`store.load_run`が`PIPELINE_RUN_NOT_FOUND`で
     落ちる（レビュー指摘3）。
     """
-    from lipidmix.pipeline import store as store_mod
+    from metabolomix.pipeline import store as store_mod
 
     source_root = tmp_path / "source"
     source_root.mkdir()
@@ -333,7 +333,7 @@ def _prepare_source(tmp_path, monkeypatch):
     from tests.pipeline_fixtures import make_source
     source = make_source(tmp_path / "source")
     monkeypatch.setenv("MSDIAL_EXE", str(source["exe"]))
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     monkeypatch.setenv("LIPIDMIX_PIPELINE_INDEX_DIR", str(tmp_path / "_pipeline_index_base"))
     return source
 
@@ -575,7 +575,7 @@ def test_worker_run_worker_completes_a_real_exploratory_pipeline(tmp_path, monke
     自動推定、実`preprocess_auto`、実`pca_dataset`、`report`の
     `evaluate_target`——はすべて本物を通す。
     """
-    from lipidmix.pipeline import worker
+    from metabolomix.pipeline import worker
     from tests.pipeline_fixtures import fake_console_command, make_source, mztab_text, use_fake_console
 
     source = _prepare_source(tmp_path, monkeypatch)
@@ -586,7 +586,7 @@ def test_worker_run_worker_completes_a_real_exploratory_pipeline(tmp_path, monke
     pipeline_path = Path(plan_receipt["pipeline_path"])
 
     # stage_inputsが配置する先(pipeline_root/input)のファイル名は元名を保つ
-    # (lipidmix.pipeline.inputs.stage_inputs)。まだ配置されていない時点でも、
+    # (metabolomix.pipeline.inputs.stage_inputs)。まだ配置されていない時点でも、
     # この規約からpost-stage時点の絶対パスを先に計算できる。
     staged_sources = [pipeline_path / "input" / f"S{i}.wiff" for i in range(8)]
     mztab_content = mztab_text(tmp_path, staged_sources)
@@ -622,8 +622,8 @@ def test_a_precondition_error_from_any_handler_becomes_needs_input(monkeypatch):
     engineの汎用例外分岐に落ち、`error.code`がPythonのクラス名のまま`failed`に
     なる——入力を直せば再開できる停止なのに「回復不能な失敗」に見える。
     """
-    from lipidmix.analysis.dataset_analysis import PreconditionError
-    from lipidmix.pipeline import service as service_mod
+    from metabolomix.analysis.dataset_analysis import PreconditionError
+    from metabolomix.pipeline import service as service_mod
 
     def _boom(context):
         raise PreconditionError(
@@ -640,8 +640,8 @@ def test_a_precondition_error_from_any_handler_becomes_needs_input(monkeypatch):
 
 
 def test_a_missing_state_precondition_carries_the_missing_state_name(monkeypatch):
-    from lipidmix.analysis.dataset_analysis import PreconditionError
-    from lipidmix.pipeline import service as service_mod
+    from metabolomix.analysis.dataset_analysis import PreconditionError
+    from metabolomix.pipeline import service as service_mod
 
     def _boom(context):
         raise PreconditionError("missing_state", "前処理済み行列がありません。",
@@ -657,9 +657,9 @@ def test_a_missing_state_precondition_carries_the_missing_state_name(monkeypatch
 
 def test_a_precondition_error_stops_the_engine_as_needs_input_not_failed(tmp_path, monkeypatch):
     """engine経由でも`failed`にならないこと（`_invoke_handler`の汎用分岐を通さない）。"""
-    from lipidmix.analysis.dataset_analysis import PreconditionError
-    from lipidmix.pipeline import service as service_mod
-    from lipidmix.pipeline.engine import _invoke_handler
+    from metabolomix.analysis.dataset_analysis import PreconditionError
+    from metabolomix.pipeline import service as service_mod
+    from metabolomix.pipeline.engine import _invoke_handler
 
     def _boom(context):
         raise PreconditionError("bad_request", "レシピが不正です。", {"recipe": {}})

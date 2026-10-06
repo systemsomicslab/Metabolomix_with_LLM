@@ -16,9 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.pipeline.request import resolve_request
-from lipidmix.pipeline.store import find_or_create_run
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.pipeline.request import resolve_request
+from metabolomix.pipeline.store import find_or_create_run
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -52,14 +52,14 @@ def test_same_request_id_is_content_addressed(tmp_path):
 # ---------- create_run / load_run / save_run の基本契約 ----------
 
 def test_create_run_writes_expected_shape(tmp_path):
-    from lipidmix.pipeline.store import RUN_FILENAME, SCHEMA, load_run
+    from metabolomix.pipeline.store import RUN_FILENAME, SCHEMA, load_run
 
     root = tmp_path / "source"
     root.mkdir()
     req = resolve_request(root)
     inputs = _minimal_inputs(root)
 
-    from lipidmix.pipeline.store import create_run
+    from metabolomix.pipeline.store import create_run
     pipeline_root = create_run(root, req, inputs)
 
     assert (pipeline_root / RUN_FILENAME).is_file()
@@ -86,7 +86,7 @@ def test_create_run_writes_expected_shape(tmp_path):
 
 
 def test_create_run_stage_ids_include_comparisons(tmp_path):
-    from lipidmix.pipeline.store import create_run, load_run
+    from metabolomix.pipeline.store import create_run, load_run
 
     root = tmp_path / "source"
     root.mkdir()
@@ -101,7 +101,7 @@ def test_create_run_stage_ids_include_comparisons(tmp_path):
 
 
 def test_create_run_uses_output_root_when_given(tmp_path):
-    from lipidmix.pipeline.store import create_run
+    from metabolomix.pipeline.store import create_run
 
     root = tmp_path / "source"
     root.mkdir()
@@ -113,7 +113,7 @@ def test_create_run_uses_output_root_when_given(tmp_path):
 
 
 def test_create_run_rejects_missing_source_root(tmp_path):
-    from lipidmix.pipeline.store import create_run
+    from metabolomix.pipeline.store import create_run
 
     missing = tmp_path / "not_there"
     req = resolve_request(missing)
@@ -122,7 +122,7 @@ def test_create_run_rejects_missing_source_root(tmp_path):
 
 
 def test_create_run_rejects_inputs_without_fingerprint(tmp_path):
-    from lipidmix.pipeline.store import create_run
+    from metabolomix.pipeline.store import create_run
 
     root = tmp_path / "source"
     root.mkdir()
@@ -132,7 +132,7 @@ def test_create_run_rejects_inputs_without_fingerprint(tmp_path):
 
 
 def test_load_run_missing_pipeline_run_json(tmp_path):
-    from lipidmix.pipeline.store import load_run
+    from metabolomix.pipeline.store import load_run
 
     empty = tmp_path / "empty_pipeline_root"
     empty.mkdir()
@@ -141,7 +141,7 @@ def test_load_run_missing_pipeline_run_json(tmp_path):
 
 
 def test_save_run_round_trips_and_bumps_revision(tmp_path):
-    from lipidmix.pipeline.store import create_run, load_run, save_run
+    from metabolomix.pipeline.store import create_run, load_run, save_run
 
     root = tmp_path / "source"
     root.mkdir()
@@ -157,7 +157,7 @@ def test_save_run_round_trips_and_bumps_revision(tmp_path):
 
 
 def test_save_run_rejects_stale_expected_revision(tmp_path):
-    from lipidmix.pipeline.store import create_run, load_run, save_run
+    from metabolomix.pipeline.store import create_run, load_run, save_run
 
     root = tmp_path / "source"
     root.mkdir()
@@ -173,7 +173,7 @@ def test_save_run_rejects_stale_expected_revision(tmp_path):
 
 
 def test_save_run_rejects_rewriting_results_history(tmp_path):
-    from lipidmix.pipeline.store import create_run, load_run, save_run
+    from metabolomix.pipeline.store import create_run, load_run, save_run
 
     root = tmp_path / "source"
     root.mkdir()
@@ -196,7 +196,7 @@ def test_save_run_rejects_rewriting_results_history(tmp_path):
 
 
 def test_save_run_appending_new_results_is_allowed(tmp_path):
-    from lipidmix.pipeline.store import create_run, load_run, save_run
+    from metabolomix.pipeline.store import create_run, load_run, save_run
 
     root = tmp_path / "source"
     root.mkdir()
@@ -217,8 +217,8 @@ def test_save_run_appending_new_results_is_allowed(tmp_path):
 
 
 def test_save_run_failure_leaves_record_unchanged_and_releases_lock(tmp_path, monkeypatch):
-    from lipidmix.pipeline import store as store_mod
-    from lipidmix.pipeline.store import create_run, load_run, save_run
+    from metabolomix.pipeline import store as store_mod
+    from metabolomix.pipeline.store import create_run, load_run, save_run
 
     root = tmp_path / "source"
     root.mkdir()
@@ -260,7 +260,7 @@ def test_a_concurrent_reader_cannot_break_the_writer(tmp_path):
     """
     import threading
 
-    from lipidmix.pipeline.store import create_run, load_run, save_run
+    from metabolomix.pipeline.store import create_run, load_run, save_run
 
     root = tmp_path / "source"
     root.mkdir()
@@ -304,7 +304,7 @@ def test_a_concurrent_reader_cannot_break_the_writer(tmp_path):
 
 def test_create_run_relativizes_paths_actually_under_pipeline_root(tmp_path):
     """method.source_path等はpipeline_root外なら絶対のまま、配下なら相対化する。"""
-    from lipidmix.pipeline.store import create_run, load_run
+    from metabolomix.pipeline.store import create_run, load_run
 
     root = tmp_path / "source"
     root.mkdir()
@@ -336,7 +336,7 @@ def test_create_run_relativizes_paths_actually_under_pipeline_root(tmp_path):
     inputs2["method"] = {"source_path": str(staged)}
     inputs2["manifest"] = [{"sample_id": "S1", "source_file": str(staged)}]
 
-    from lipidmix.pipeline.store import _relativize_inputs_paths
+    from metabolomix.pipeline.store import _relativize_inputs_paths
     relativized = _relativize_inputs_paths(inputs2, pipeline_root)
     assert relativized["method"]["source_path"] == "input/effective-method.txt"
     assert relativized["manifest"][0]["source_file"] == "input/effective-method.txt"
@@ -364,7 +364,7 @@ def test_different_input_fingerprint_creates_a_new_run(tmp_path):
 
 
 def _mark_completed_with_result(pipeline_root, *, sha_ok: bool):
-    from lipidmix.pipeline.store import load_run, save_run
+    from metabolomix.pipeline.store import load_run, save_run
 
     record = load_run(pipeline_root)
     result_path = pipeline_root / "results" / "r1.json"
@@ -411,7 +411,7 @@ def test_completed_run_with_broken_artifact_and_no_request_id_creates_new_run(tm
     店の解釈をreportに記載）。ただし黙って上書きはせず、破損の事実（旧runの
     パスとどの成果物が壊れていたか）を新runのwarningsへ記録する
     （レビュー finding 2 / controller ruling R17）。"""
-    from lipidmix.pipeline.store import load_run
+    from metabolomix.pipeline.store import load_run
 
     root = tmp_path / "source"
     root.mkdir()
@@ -461,7 +461,7 @@ def test_index_entry_with_vanished_run_and_no_request_id_self_heals(tmp_path):
 
 
 def test_uuid_collision_is_retried(tmp_path, monkeypatch):
-    from lipidmix.pipeline import store as store_mod
+    from metabolomix.pipeline import store as store_mod
 
     root = tmp_path / "source"
     root.mkdir()
@@ -504,8 +504,8 @@ def test_find_or_create_run_request_id_patch_survives_concurrent_state_bump(tmp_
     割り込ませることで、この隙間を確定的に突く（スレッドやプロセスに頼らず、
     フックで狙った位置に割り込みを固定する）。
     """
-    from lipidmix.pipeline import store as store_mod
-    from lipidmix.pipeline.store import load_run
+    from metabolomix.pipeline import store as store_mod
+    from metabolomix.pipeline.store import load_run
 
     root = tmp_path / "source"
     root.mkdir()
@@ -549,7 +549,7 @@ def test_find_or_create_run_request_id_patch_survives_concurrent_state_bump(tmp_
 # ---------- 読取専用importが索引dirを作らない ----------
 
 def test_load_run_does_not_create_index_dir(tmp_path, _index_base):
-    from lipidmix.pipeline.store import create_run, load_run
+    from metabolomix.pipeline.store import create_run, load_run
 
     root = tmp_path / "source"
     root.mkdir()
@@ -564,7 +564,7 @@ def test_load_run_does_not_create_index_dir(tmp_path, _index_base):
 # ---------- register_job_owner / pipeline_owner_block_reason ----------
 
 def test_pipeline_owner_block_reason_none_when_unowned(tmp_path):
-    from lipidmix.pipeline.store import pipeline_owner_block_reason
+    from metabolomix.pipeline.store import pipeline_owner_block_reason
 
     run_dir = tmp_path / "run_dir"
     run_dir.mkdir()
@@ -572,7 +572,7 @@ def test_pipeline_owner_block_reason_none_when_unowned(tmp_path):
 
 
 def test_pipeline_owner_block_reason_blocks_when_pipeline_active(tmp_path):
-    from lipidmix.pipeline.store import create_run, register_job_owner, pipeline_owner_block_reason
+    from metabolomix.pipeline.store import create_run, register_job_owner, pipeline_owner_block_reason
 
     root = tmp_path / "source"
     root.mkdir()
@@ -592,7 +592,7 @@ def test_pipeline_owner_block_reason_blocks_when_pipeline_active(tmp_path):
 
 
 def test_pipeline_owner_block_reason_allows_when_pipeline_terminal(tmp_path):
-    from lipidmix.pipeline.store import (
+    from metabolomix.pipeline.store import (
         create_run, load_run, save_run, register_job_owner, pipeline_owner_block_reason,
     )
 
@@ -614,7 +614,7 @@ def test_pipeline_owner_block_reason_allows_when_pipeline_terminal(tmp_path):
 
 
 def test_pipeline_owner_block_reason_undeterminable_when_pipeline_unreadable(tmp_path):
-    from lipidmix.pipeline.store import register_job_owner, pipeline_owner_block_reason
+    from metabolomix.pipeline.store import register_job_owner, pipeline_owner_block_reason
 
     run_dir = tmp_path / "console_run_dir"
     run_dir.mkdir()
@@ -629,8 +629,8 @@ def test_pipeline_owner_block_reason_undeterminable_when_pipeline_unreadable(tmp
 
 
 def test_pipeline_owner_block_reason_undeterminable_when_sidecar_corrupt(tmp_path):
-    from lipidmix.pipeline.store import pipeline_owner_block_reason
-    from lipidmix.console.job_manager import pipeline_owner_path
+    from metabolomix.pipeline.store import pipeline_owner_block_reason
+    from metabolomix.console.job_manager import pipeline_owner_path
 
     run_dir = tmp_path / "console_run_dir"
     run_dir.mkdir()
@@ -667,8 +667,8 @@ while not go_path.exists():
         raise SystemExit(0)
     time.sleep(0.001)
 
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.pipeline.store import find_or_create_run
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.pipeline.store import find_or_create_run
 
 try:
     result = find_or_create_run(
@@ -775,7 +775,7 @@ def test_two_processes_different_output_root_still_serialize_index_writes(tmp_pa
     paths = {r[len("OK:"):] for r in results}
     assert len(paths) == 2  # output_rootが違うので別々のrunになる
 
-    from lipidmix.pipeline.store import _index_dir_for_source
+    from metabolomix.pipeline.store import _index_dir_for_source
     index_dir = _index_dir_for_source(root)
     index_data = json.loads((index_dir / "index.json").read_text(encoding="utf-8"))
     # 索引の書込み自体は同じロックの下で直列化され、片方が消えていない
@@ -794,7 +794,7 @@ def _append_recomputed_result(pipeline_root, *, output_name: str, content: str):
     """
     import hashlib
 
-    from lipidmix.pipeline.store import load_run, save_run
+    from metabolomix.pipeline.store import load_run, save_run
 
     record = load_run(pipeline_root)
     result_path = pipeline_root / "results" / "r1.json"

@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from lipidmix.analysis import preprocessing as pp
+from metabolomix.analysis import preprocessing as pp
 
 
 class TestDetectQcStrata(unittest.TestCase):

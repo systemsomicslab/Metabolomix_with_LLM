@@ -3,7 +3,7 @@ import json
 import unittest
 import numpy as np
 import server
-from lipidmix.core import session_state
+from metabolomix.core import session_state
 
 
 class TestPreprocessTools(unittest.TestCase):
@@ -23,7 +23,7 @@ class TestPreprocessTools(unittest.TestCase):
             m = np.array([[10.0, 1.0], [20.0, 2.0], [15.0, 1.5]])
             return m, ["s1", "s2", "q1"], ["Spot_0_height", "Spot_1_height"]
 
-        from lipidmix.core import tool_helpers
+        from metabolomix.core import tool_helpers
         # _pp_build_matrix の正準定義元は tool_helpers。arf_preprocess はそこを module 修飾で
         # 参照するため、差し替え・復元も tool_helpers 側で行う（他テストへの漏れを防ぐ）。
         _orig_build = tool_helpers._pp_build_matrix
@@ -81,7 +81,7 @@ class TestBlankExclusionFromAnalysisMatrix(unittest.TestCase):
             ])
             return m, ["s1", "s2", "QC_1", "blank_1"], ["Spot_0_height", "Spot_1_height"]
 
-        from lipidmix.core import tool_helpers
+        from metabolomix.core import tool_helpers
         _orig = tool_helpers._pp_build_matrix
         tool_helpers._pp_build_matrix = fake_matrix
         self.addCleanup(setattr, tool_helpers, "_pp_build_matrix", _orig)

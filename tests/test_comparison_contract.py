@@ -12,13 +12,13 @@ import pytest
 
 from tests.pipeline_fixtures import make_dataset, metadata_rows
 
-from lipidmix.core.atomic_io import DomainError
+from metabolomix.core.atomic_io import DomainError
 
 
 def test_group_names_do_not_determine_reference_implicitly():
     """comparisonにreference_group/test_groupが無ければ、群名がどれだけそれらしくても
     比較は実行しない（spec §7.4「群が2種類あるだけでは対照と処置の向きを決めない」）。"""
-    from lipidmix.analysis.dataset_service import resolve_comparison
+    from metabolomix.analysis.dataset_service import resolve_comparison
 
     ds = make_dataset()
     rows = metadata_rows(ds, n_qc=0)
@@ -46,7 +46,7 @@ def _confirm(row: dict, field: str, value) -> None:
 def test_resolve_comparison_excludes_qc_blank_unknown_and_include_false():
     """QC/blank/role=unknown/include=falseは、比較対象の群ラベルに合致していても
     比較には混ざらない（brief step3・spec §7.4）。"""
-    from lipidmix.analysis.dataset_service import resolve_comparison
+    from metabolomix.analysis.dataset_service import resolve_comparison
 
     ds = make_dataset()
     rows = _labelled_rows(ds)
@@ -63,7 +63,7 @@ def test_resolve_comparison_excludes_qc_blank_unknown_and_include_false():
 
 
 def test_resolve_comparison_rejects_duplicate_sample_id():
-    from lipidmix.analysis.dataset_service import resolve_comparison
+    from metabolomix.analysis.dataset_service import resolve_comparison
 
     ds = make_dataset()
     rows = _labelled_rows(ds)
@@ -75,7 +75,7 @@ def test_resolve_comparison_rejects_duplicate_sample_id():
 
 
 def test_resolve_comparison_rejects_group_with_fewer_than_two_samples():
-    from lipidmix.analysis.dataset_service import resolve_comparison
+    from metabolomix.analysis.dataset_service import resolve_comparison
 
     ds = make_dataset()
     rows = _labelled_rows(ds)
@@ -90,7 +90,7 @@ def test_resolve_comparison_rejects_group_with_fewer_than_two_samples():
 
 def test_run_comparison_direction_positive_log2fc_means_test_group_higher():
     """reference_group→group_a、test_group→group_bへ渡す（正のlog2FCはtest_groupが高い）。"""
-    from lipidmix.analysis.dataset_service import preprocess_dataset, run_comparison
+    from metabolomix.analysis.dataset_service import preprocess_dataset, run_comparison
 
     ds = make_dataset()
     rows = _labelled_rows(ds)
@@ -108,7 +108,7 @@ def test_run_comparison_direction_positive_log2fc_means_test_group_higher():
 
 def test_run_comparison_stops_on_complete_confounding_without_override():
     """各群が単一バッチに完全に一致する（群⟂バッチが分離不能）場合は既定で止める。"""
-    from lipidmix.analysis.dataset_service import preprocess_dataset, run_comparison
+    from metabolomix.analysis.dataset_service import preprocess_dataset, run_comparison
 
     ds = make_dataset()
     rows = _labelled_rows(ds)
@@ -134,7 +134,7 @@ def test_run_comparison_continues_with_explicit_allow_confounded():
     provenance.warningsを作るため、run_comparisonがそのあとに追記したこの注記が
     provenance側に反映されるかは別に確認する必要がある（レビュー Finding 2）。
     """
-    from lipidmix.analysis.dataset_service import preprocess_dataset, run_comparison
+    from metabolomix.analysis.dataset_service import preprocess_dataset, run_comparison
 
     ds = make_dataset()
     rows = _labelled_rows(ds)
@@ -161,7 +161,7 @@ def test_run_comparison_continues_with_explicit_allow_confounded():
 def test_run_comparison_insufficient_batch_info_is_not_confounded():
     """batch情報が無い（欠落）場合は「評価不可」であって「交絡あり」ではない
     ——完全交絡と決め付けて止めない（spec §7.4・common-context 参照）。"""
-    from lipidmix.analysis.dataset_service import preprocess_dataset, run_comparison
+    from metabolomix.analysis.dataset_service import preprocess_dataset, run_comparison
 
     ds = make_dataset()
     rows = _labelled_rows(ds)
@@ -210,7 +210,7 @@ def test_dataset_set_sample_metadata_reuses_pca_and_invalidates_differential(tmp
     無効化しない」規則、common-context 参照）。1回目の適用は全列確定として扱われる
     （Task 9 apply_metadataの契約）ので、その後にPCA・差次的解析を作ってから2回目を送る。
     """
-    from lipidmix.analysis.dataset_service import (
+    from metabolomix.analysis.dataset_service import (
         apply_sample_manifest, compare_dataset, pca_dataset, preprocess_dataset,
     )
 
@@ -241,7 +241,7 @@ def test_dataset_set_sample_metadata_reuses_pca_and_invalidates_differential(tmp
 
 def test_dataset_set_sample_metadata_does_not_mutate_session_on_failure(tmp_path):
     """シートが不正なら、apply_metadataの契約どおりdsを一切変更しない。"""
-    from lipidmix.analysis.dataset_service import apply_sample_manifest, preprocess_dataset
+    from metabolomix.analysis.dataset_service import apply_sample_manifest, preprocess_dataset
 
     ds = _job_dataset_with_raws(tmp_path)
     preprocess_dataset(ds, {"normalize": "none", "impute": "half_min"})

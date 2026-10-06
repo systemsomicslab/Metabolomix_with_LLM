@@ -15,8 +15,8 @@ import math
 import numpy as np
 import pytest
 
-from lipidmix.analysis.multigroup import test_feature as run_feature_test
-from lipidmix.core.atomic_io import DomainError
+from metabolomix.analysis.multigroup import test_feature as run_feature_test
+from metabolomix.core.atomic_io import DomainError
 
 #: 固定小例 [1,2,3] / [2,3,4] / [4,5,6] の独立な期待値。
 #:

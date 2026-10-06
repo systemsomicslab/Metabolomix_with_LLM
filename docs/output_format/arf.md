@@ -7,7 +7,7 @@
 > 対応する Key 番号表: `docs/schema/AlignmentChromPeakFeature.md`（MS-DIAL の `[Key(N)]` から抽出した一次資料）。
 > リーダーのインデックス定数を変更するときは必ずこちらを先に確認する。
 
-## 3. ARF (`lipidmix/arf/reader.py`)
+## 3. ARF (`metabolomix/arf/reader.py`)
 
 ### 3.1 `deserialize()` のスポット出力
 
@@ -111,7 +111,7 @@ PCA 前に各列を `StandardScaler` で標準化する。`log_transform=true` �
 
 ### 3.6 MS-DIALタグ
 
-`lipidmix/msdial/tags.py` はARFと同じディレクトリの `*_tags.xml`（互換用に拡張子なしの `*_tags` も可）を読む。サンプル別ファイルは処理時刻の12桁接尾辞を除いた名前でARFの `FileName` と対応させ、XMLの `Peak/@Id` をARF行の `MasterPeakID` と結合する。アラインメント結果用ファイルは `Peak/@Id` を `MasterAlignmentID` と結合する。
+`metabolomix/msdial/tags.py` はARFと同じディレクトリの `*_tags.xml`（互換用に拡張子なしの `*_tags` も可）を読む。サンプル別ファイルは処理時刻の12桁接尾辞を除いた名前でARFの `FileName` と対応させ、XMLの `Peak/@Id` をARF行の `MasterPeakID` と結合する。アラインメント結果用ファイルは `Peak/@Id` を `MasterAlignmentID` と結合する。
 
 タグ条件は `any`、`all`、`none`、`not_all` を使用できる。`sample_peak` スコープでは条件に一致しないサンプル別行をスポット内から除外し、`alignment_spot` スコープではスポット全体を除外する。タグ未付与ピークは `any`/`all` には一致せず、`none`/`not_all` には一致する。
 
@@ -119,7 +119,7 @@ PCA 前に各列を `StandardScaler` で標準化する。`log_transform=true` �
 
 ### 3.7 Class ID
 
-`lipidmix/msdial/classes.py` は `.mddata` の `MsdialDataStorageBase.Key0 AnalysisFiles` を読み、各 `AnalysisFileBean` の `AnalysisFileId`、`AnalysisFileName`、`AnalysisFileClass` を抽出する。`.mddata` は明示パス、`.mdproject` 内の参照、またはARFと同じディレクトリから解決する。
+`metabolomix/msdial/classes.py` は `.mddata` の `MsdialDataStorageBase.Key0 AnalysisFiles` を読み、各 `AnalysisFileBean` の `AnalysisFileId`、`AnalysisFileName`、`AnalysisFileClass` を抽出する。`.mddata` は明示パス、`.mdproject` 内の参照、またはARFと同じディレクトリから解決する。
 
 ARFサンプルとの結合は `FileID` を優先し、欠損時は正規化した `FileName` を使用する。両方が異なるサンプルへ解決された場合はエラーとする。`filter_arf_by_class_ids()` は選択Class ID以外のサンプル行を各スポットから除外し、その結果を `build_pca_matrix()` に渡すことでPCAの行をClass IDで選別できる。
 
@@ -151,7 +151,7 @@ PCAスコアプロット用ブロック（返り値の末尾。**サンプル別
 
 ## 10. 前処理・QC（P2a）
 
-`lipidmix/analysis/preprocessing.py`（MCP非依存の純ロジック層）と `lipidmix/arf/tools.py` の `arf_list_sample_roles()` / `arf_preprocess()` / `arf_pca_preprocessed()` が、ARFロード後のサンプル×特徴量行列に対する前処理・QCを担う。既定では**何も適用されない（opt-in）**。生行列を消費する `arf_parser` の既定挙動は変えない。
+`metabolomix/analysis/preprocessing.py`（MCP非依存の純ロジック層）と `metabolomix/arf/tools.py` の `arf_list_sample_roles()` / `arf_preprocess()` / `arf_pca_preprocessed()` が、ARFロード後のサンプル×特徴量行列に対する前処理・QCを担う。既定では**何も適用されない（opt-in）**。生行列を消費する `arf_parser` の既定挙動は変えない。
 
 ### 10.1 役割検出（sample/qc/blank）
 
@@ -185,11 +185,11 @@ QC/ブランク/注入順のいずれかが欠けているためにスキップ�
 
 ### 10.4 `arf_pca_preprocessed()`
 
-前処理後行列が無い（`session.arf.feature_matrix is None`）場合はエラーメッセージ1件を返す。あれば `lipidmix/analysis/pca.py` の `run_pca` でPCAを実行し、`arf_parser` と同じ整形ヘルパー（スコアプロット用JSON、Loadings上位）を使って結果を返す。出力テキストの構造・キー意味は8.1節のスコアプロット用JSONと同一（座標点列を同梱し、散布図はそこからチャットで描く。`save_pca_figure` はPNGファイルが明示的に求められたときだけ）。生スポットの選択とは別の計算経路であり、選択を変更した場合は `arf_preprocess()` を再実行する必要がある。
+前処理後行列が無い（`session.arf.feature_matrix is None`）場合はエラーメッセージ1件を返す。あれば `metabolomix/analysis/pca.py` の `run_pca` でPCAを実行し、`arf_parser` と同じ整形ヘルパー（スコアプロット用JSON、Loadings上位）を使って結果を返す。出力テキストの構造・キー意味は8.1節のスコアプロット用JSONと同一（座標点列を同梱し、散布図はそこからチャットで描く。`save_pca_figure` はPNGファイルが明示的に求められたときだけ）。生スポットの選択とは別の計算経路であり、選択を変更した場合は `arf_preprocess()` を再実行する必要がある。
 
 ### 10.5 手動サンプル/ピーク除外（`arf_exclude`）
 
-PCAスコアプロットで明らかに外れた1サンプルや、特定のピーク（スポット）を**名前/IDで手動除外**するためのツール。`lipidmix/arf/exclusions.py`（MCP非依存の純ロジック層、`prune_spots()` / `roster()`）と `lipidmix/arf/tools.py` の `arf_exclude()` が担う。除外は**可逆・非破壊**で、`session.arf.filtered_features` 自体は変更しない。
+PCAスコアプロットで明らかに外れた1サンプルや、特定のピーク（スポット）を**名前/IDで手動除外**するためのツール。`metabolomix/arf/exclusions.py`（MCP非依存の純ロジック層、`prune_spots()` / `roster()`）と `metabolomix/arf/tools.py` の `arf_exclude()` が担う。除外は**可逆・非破壊**で、`session.arf.filtered_features` 自体は変更しない。
 
 `arf_exclude(exclude_samples=None, exclude_spots=None, mode="add")` は JSON を返す。
 
@@ -205,11 +205,11 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 
 ## 11. 差次的解析（P2b）
 
-`lipidmix/analysis/differential.py`（MCP非依存の純ロジック層）と、`lipidmix/arf/tools.py` の `arf_differential()` / `lipidmix/tools/reports.py` の `save_volcano_figure()` が、前処理後のサンプル×特徴量行列に対する群間比較を担う。既定挙動・既存ツールは不変で、明示呼び出し時のみ作用する。
+`metabolomix/analysis/differential.py`（MCP非依存の純ロジック層）と、`metabolomix/arf/tools.py` の `arf_differential()` / `metabolomix/tools/reports.py` の `save_volcano_figure()` が、前処理後のサンプル×特徴量行列に対する群間比較を担う。既定挙動・既存ツールは不変で、明示呼び出し時のみ作用する。
 
 ### 11.1 群ラベルの由来
 
-群ラベルは `session.arf.sample_meta[<sample>]["group"]`（ファイル名由来の factor トークン / Class ID 機構、`lipidmix/msdial/classes.py` の `assign_sample_groups`）から取得する。バッチは同 `sample_meta` の `batch`（ファイル名中の8桁日付）。`arf_differential()` は `session.arf.feature_matrix`（前処理後行列）を消費し、無ければエラーを返す（先に `arf_preprocess()` が必要）。
+群ラベルは `session.arf.sample_meta[<sample>]["group"]`（ファイル名由来の factor トークン / Class ID 機構、`metabolomix/msdial/classes.py` の `assign_sample_groups`）から取得する。バッチは同 `sample_meta` の `batch`（ファイル名中の8桁日付）。`arf_differential()` は `session.arf.feature_matrix`（前処理後行列）を消費し、無ければエラーを返す（先に `arf_preprocess()` が必要）。
 
 `sample_meta[...]["group"]` は常に**完全な Class ID**（例 `24M_GF_F`）である。一方 `group_a` / `group_b` は**因子トークンによるプール指定**を受け付ける（`sample_factors.expand_sample_specs`。トークンは Class ID とサンプル名の両方から解決される）:
 

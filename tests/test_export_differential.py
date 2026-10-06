@@ -6,10 +6,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import server
-from lipidmix.core import session_state
+from metabolomix.core import session_state
 
 # ブリーフは `server.session_state...` と書くが、server は wildcard import
-# （from lipidmix.arf.tools import *）経由で __all__ に無い session_state を
+# （from metabolomix.arf.tools import *）経由で __all__ に無い session_state を
 # 再エクスポートしていないため AttributeError になる（test_differential_tools.py の
 # 既存テストと同じ既知の落とし穴）。直接 import した session_state を参照する。
 
@@ -56,7 +56,7 @@ class TestExportDifferential(unittest.TestCase):
         self.assertIn("arf_differential", payload["error"]["required_tools"])
 
     def test_fails_when_sibling_arf2_missing(self):
-        with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=None):
+        with patch("metabolomix.arf.tools._sibling_arf2_path", return_value=None):
             payload = json.loads(server.arf_export_differential("out.tsv"))
         self.assertEqual(payload["error"]["code"], "missing_state")
         self.assertEqual(payload["error"]["state"], "sibling_arf2")
@@ -69,7 +69,7 @@ class TestExportDifferential(unittest.TestCase):
             out = Path(tmp) / "differential.tsv"
             arf2 = Path(tmp) / "AlignmentResult_2026_01_01_00_00_00.arf2"
             arf2.write_bytes(b"")
-            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2):
+            with patch("metabolomix.arf.tools._sibling_arf2_path", return_value=arf2):
                 payload = json.loads(server.arf_export_differential(str(out)))
             self.assertFalse(out.exists())
         self.assertEqual(payload["error"]["code"], "missing_state")
@@ -82,8 +82,8 @@ class TestExportDifferential(unittest.TestCase):
             out = Path(tmp) / "differential.tsv"
             arf2 = Path(tmp) / "AlignmentResult_2026_01_01_00_00_00.arf2"
             arf2.write_bytes(b"")
-            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2), \
-                 patch("lipidmix.arf2.reader.load_catalog", return_value=self.catalog):
+            with patch("metabolomix.arf.tools._sibling_arf2_path", return_value=arf2), \
+                 patch("metabolomix.arf2.reader.load_catalog", return_value=self.catalog):
                 payload = json.loads(server.arf_export_differential(str(out)))
             self.assertFalse(out.exists())
         self.assertEqual(payload["status"], "error")
@@ -95,8 +95,8 @@ class TestExportDifferential(unittest.TestCase):
             out = Path(tmp) / "differential.tsv"
             arf2 = Path(tmp) / "AlignmentResult_2026_01_01_00_00_00.arf2"
             arf2.write_bytes(b"")
-            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2), \
-                 patch("lipidmix.arf2.reader.load_catalog", return_value=self.catalog):
+            with patch("metabolomix.arf.tools._sibling_arf2_path", return_value=arf2), \
+                 patch("metabolomix.arf2.reader.load_catalog", return_value=self.catalog):
                 payload = json.loads(server.arf_export_differential(str(out)))
             text = out.read_text(encoding="utf-8")
 
@@ -125,8 +125,8 @@ class TestExportDifferential(unittest.TestCase):
             out = Path(tmp) / "differential.tsv"
             arf2 = Path(tmp) / "AlignmentResult_2026_01_01_00_00_00.arf2"
             arf2.write_bytes(b"")
-            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2), \
-                 patch("lipidmix.arf2.reader.load_catalog", return_value=self.catalog):
+            with patch("metabolomix.arf.tools._sibling_arf2_path", return_value=arf2), \
+                 patch("metabolomix.arf2.reader.load_catalog", return_value=self.catalog):
                 server.arf_export_differential(str(out))
             row = [l for l in out.read_text(encoding="utf-8").splitlines()
                    if not l.startswith("#")][1]
@@ -147,8 +147,8 @@ class TestExportDifferential(unittest.TestCase):
             out = Path(tmp) / "differential.tsv"
             arf2 = Path(tmp) / "AlignmentResult_2026_01_01_00_00_00.arf2"
             arf2.write_bytes(b"")
-            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2), \
-                 patch("lipidmix.arf2.reader.load_catalog", return_value=self.catalog):
+            with patch("metabolomix.arf.tools._sibling_arf2_path", return_value=arf2), \
+                 patch("metabolomix.arf2.reader.load_catalog", return_value=self.catalog):
                 server.arf_export_differential(str(out))
             text = out.read_text(encoding="utf-8")
 
@@ -173,8 +173,8 @@ class TestExportDifferential(unittest.TestCase):
             out = Path(tmp) / "differential.tsv"
             arf2 = Path(tmp) / "AlignmentResult_2026_01_01_00_00_00.arf2"
             arf2.write_bytes(b"")
-            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2), \
-                 patch("lipidmix.arf2.reader.load_catalog", return_value=self.catalog):
+            with patch("metabolomix.arf.tools._sibling_arf2_path", return_value=arf2), \
+                 patch("metabolomix.arf2.reader.load_catalog", return_value=self.catalog):
                 server.arf_export_differential(str(out))
             text = out.read_text(encoding="utf-8")
         meta = [l for l in text.splitlines() if l.startswith("#")]
@@ -187,8 +187,8 @@ class TestExportDifferential(unittest.TestCase):
             out = Path(tmp) / "differential.tsv"
             arf2 = Path(tmp) / "AlignmentResult_2026_01_01_00_00_00.arf2"
             arf2.write_bytes(b"")
-            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2), \
-                 patch("lipidmix.arf2.reader.load_catalog", return_value=self.catalog):
+            with patch("metabolomix.arf.tools._sibling_arf2_path", return_value=arf2), \
+                 patch("metabolomix.arf2.reader.load_catalog", return_value=self.catalog):
                 server.arf_export_differential(str(out))
             text = out.read_text(encoding="utf-8")
         meta_lines = [l for l in text.splitlines() if l.startswith("#")]
@@ -203,14 +203,14 @@ class TestExportDifferential(unittest.TestCase):
             out = Path(tmp) / "differential.tsv"
             arf2 = Path(tmp) / "AlignmentResult_2026_01_01_00_00_00.arf2"
             arf2.write_bytes(b"")
-            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2), \
-                 patch("lipidmix.arf2.reader.load_catalog", return_value=self.catalog):
+            with patch("metabolomix.arf.tools._sibling_arf2_path", return_value=arf2), \
+                 patch("metabolomix.arf2.reader.load_catalog", return_value=self.catalog):
                 server.arf_export_differential(str(out))
             text = out.read_text(encoding="utf-8")
         self.assertFalse(any(l.startswith("# curation") for l in text.splitlines()))
 
     def test_wrong_flag_drops_the_row_and_declares_curation_applied(self):
-        from lipidmix.curation import flags as curation_flags
+        from metabolomix.curation import flags as curation_flags
 
         # spot_id=1 と 2 の両方に InChIKey を付け、1 だけを wrong にする
         # (2 だけになれば「消えた」ことを行の残り方で確認できる)。setUp の
@@ -224,8 +224,8 @@ class TestExportDifferential(unittest.TestCase):
                 [{"spot_id": 1, "flag": "wrong"}],
                 alignment=curation_flags.alignment_key(arf2),
                 review_id="r", source="user")
-            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2), \
-                 patch("lipidmix.arf2.reader.load_catalog", return_value=self.catalog):
+            with patch("metabolomix.arf.tools._sibling_arf2_path", return_value=arf2), \
+                 patch("metabolomix.arf2.reader.load_catalog", return_value=self.catalog):
                 payload = json.loads(server.arf_export_differential(str(out)))
             text = out.read_text(encoding="utf-8")
         self.assertEqual(payload["status"], "success")
@@ -242,7 +242,7 @@ class TestExportDifferential(unittest.TestCase):
     def _export_with_flags(self, flag_rows, *, alignment=None, apply_curation=True,
                            raw_tail=None):
         """spot 1 と 2 の両方に InChIKey を付け、flag_rows を記録して書き出す。"""
-        from lipidmix.curation import flags as curation_flags
+        from metabolomix.curation import flags as curation_flags
 
         self.catalog[1]["InChIKey"] = "DDDDDDDDDDDDDD-EEEEEEEEEE-F"
         with tempfile.TemporaryDirectory() as tmp:
@@ -255,8 +255,8 @@ class TestExportDifferential(unittest.TestCase):
             if raw_tail is not None:
                 with open(store.path, "a", encoding="utf-8") as handle:
                     handle.write(raw_tail)
-            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2), \
-                 patch("lipidmix.arf2.reader.load_catalog", return_value=self.catalog):
+            with patch("metabolomix.arf.tools._sibling_arf2_path", return_value=arf2), \
+                 patch("metabolomix.arf2.reader.load_catalog", return_value=self.catalog):
                 payload = json.loads(server.arf_export_differential(
                     str(out), apply_curation=apply_curation))
             text = out.read_text(encoding="utf-8") if out.exists() else None
@@ -305,7 +305,7 @@ class TestExportDifferential(unittest.TestCase):
 
 
     def test_assign_adds_an_unannotated_spot_and_redundant_drops_one(self):
-        from lipidmix.curation import flags as curation_flags
+        from metabolomix.curation import flags as curation_flags
 
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "differential.tsv"
@@ -316,7 +316,7 @@ class TestExportDifferential(unittest.TestCase):
                   "inchikey": "PEPEPEPEPEPEPE-XXXXXXXXXX-N"},
                  {"spot_id": 1, "flag": "redundant", "of": 9, "relation": "isotope_M+1"}],
                 alignment=curation_flags.alignment_key(arf2), review_id="cs-x", source="user")
-            with patch("lipidmix.arf.tools._sibling_arf2_path", return_value=arf2),                  patch("lipidmix.arf2.reader.load_catalog", return_value=self.catalog):
+            with patch("metabolomix.arf.tools._sibling_arf2_path", return_value=arf2),                  patch("metabolomix.arf2.reader.load_catalog", return_value=self.catalog):
                 payload = json.loads(server.arf_export_differential(str(out)))
             text = out.read_text(encoding="utf-8")
         self.assertEqual(payload["status"], "success")

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json as _json
 
-from lipidmix.console.runner import msdial_exe_candidates
+from metabolomix.console.runner import msdial_exe_candidates
 
 
 def test_finds_console_executables_under_search_roots(tmp_path):
@@ -36,7 +36,7 @@ def test_console_plan_envelope_says_a_human_must_act(tmp_path, monkeypatch):
     monkeypatch.delenv("MSDIAL_EXE", raising=False)
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     parsed = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
                                       polarity="negative", measure="peak_height"))
     err = parsed["error"]
@@ -50,7 +50,7 @@ def test_console_plan_envelope_offers_a_copyable_command(tmp_path, monkeypatch):
     monkeypatch.delenv("MSDIAL_EXE", raising=False)
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     parsed = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
                                       polarity="negative", measure="peak_height"))
     assert parsed["error"]["details"]["how_to_set"]

@@ -8,7 +8,7 @@ from unittest.mock import patch
 import numpy as np
 
 import server
-from lipidmix.core import session_state
+from metabolomix.core import session_state
 from tests.test_server_class_filter import (
     fake_build_pca_matrix,
     fake_extract_peak_properties,

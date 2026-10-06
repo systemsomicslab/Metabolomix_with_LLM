@@ -6,7 +6,7 @@
 
 > **MS/MS の所在（重要）**: 実スペクトルを持つのは `.dcl` であって `.pai2` ではない。PAI2 の `has_msms` は**取得参照の有無**を示すだけで、`msms_spectrum` が非空である保証はない（共通核 §9-8）。同定確度（MSI Level 2）は MS/MS を根拠にするため、フラグだけで確度を主張してはならない。`pai2_parser` は同名 `.dcl` を自動で読み、索引対応で PAI2 ピークへ MS/MS を付与する。
 
-## 6. DCL (`lipidmix/dcl/reader.py`)
+## 6. DCL (`metabolomix/dcl/reader.py`)
 
 ### 6.1 `deserialize_dcl()`
 
@@ -71,7 +71,7 @@ precursor m/z（任意で RT）に一致する MS/MS を引く。アノテーシ
 
 ### 6.5 PAI2 ピークへの MS/MS 付与
 
-`pai2_parser` は解析時に `lipidmix/pai2/tools.py` の `_attach_sibling_msms()` を通じて同名 `.dcl` を読み、`lipidmix/dcl/reader.py` の `attach_msms_to_features()` で索引対応（`dcl_index` ↔ PAI2 のピーク順）により `msms_spectrum` / `n_msms_peaks` を書き込む。安全弁として **precursor m/z が feature の `m/z` と 0.01 を超えて食い違う場合は付与しない**（索引対応が崩れている疑いがあるため、誤った MS/MS を貼るより欠測にする）。
+`pai2_parser` は解析時に `metabolomix/pai2/tools.py` の `_attach_sibling_msms()` を通じて同名 `.dcl` を読み、`metabolomix/dcl/reader.py` の `attach_msms_to_features()` で索引対応（`dcl_index` ↔ PAI2 のピーク順）により `msms_spectrum` / `n_msms_peaks` を書き込む。安全弁として **precursor m/z が feature の `m/z` と 0.01 を超えて食い違う場合は付与しない**（索引対応が崩れている疑いがあるため、誤った MS/MS を貼るより欠測にする）。
 
 結果は `pai2_parser` の応答 `summary.msms_attachment` に出る。
 

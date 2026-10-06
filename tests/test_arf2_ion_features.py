@@ -1,4 +1,4 @@
-from lipidmix.arf2.ion_features import LINK_KINDS, decode_ion_features, load_ion_features
+from metabolomix.arf2.ion_features import LINK_KINDS, decode_ion_features, load_ion_features
 from tests.curation_fixtures import arf2_spot_raw, write_arf2
 
 

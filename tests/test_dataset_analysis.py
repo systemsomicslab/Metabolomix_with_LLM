@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from lipidmix.mztab.dataset_state import DatasetState
+from metabolomix.mztab.dataset_state import DatasetState
 
 
 def _make_ds(n_features=20, n_samples=8, with_blank=False):
@@ -30,7 +30,7 @@ def _ds_with_assay_meta(names, assay_meta):
 
 
 def _preprocessed(ds, recipe=None):
-    from lipidmix.analysis.dataset_analysis import run_dataset_preprocess
+    from metabolomix.analysis.dataset_analysis import run_dataset_preprocess
     (ds.pp_matrix, ds.pp_sample_names, ds.pp_feature_names,
      ds.roles, ds.sample_meta, report) = run_dataset_preprocess(ds, recipe or {})
     return report
@@ -39,7 +39,7 @@ def _preprocessed(ds, recipe=None):
 # ---------- build_dataset_pp_inputs ----------
 
 def test_build_dataset_pp_inputs_transposes():
-    from lipidmix.analysis.dataset_analysis import build_dataset_pp_inputs
+    from metabolomix.analysis.dataset_analysis import build_dataset_pp_inputs
     ds = _make_ds(n_features=20, n_samples=8)
     matrix, sample_names, feature_names, roles, sample_meta = build_dataset_pp_inputs(ds)
     assert matrix.shape == (8, 20)          # (n_samples, n_features)
@@ -50,7 +50,7 @@ def test_build_dataset_pp_inputs_transposes():
 
 
 def test_build_dataset_pp_inputs_detects_blank_role():
-    from lipidmix.analysis.dataset_analysis import build_dataset_pp_inputs
+    from metabolomix.analysis.dataset_analysis import build_dataset_pp_inputs
     ds = _make_ds(with_blank=True)
     _, _, _, roles, _ = build_dataset_pp_inputs(ds)
     assert roles["blank_1"] == "blank"
@@ -58,7 +58,7 @@ def test_build_dataset_pp_inputs_detects_blank_role():
 
 def test_build_dataset_pp_inputs_uses_mztab_injection_order():
     """assay 順序を全件 None にすると QC ドリフト補正が常に skipped になる。"""
-    from lipidmix.analysis.dataset_analysis import build_dataset_pp_inputs
+    from metabolomix.analysis.dataset_analysis import build_dataset_pp_inputs
     ds = _ds_with_assay_meta(["s1", "s2"], {
         "assay[1]": {"run_order": 7, "batch": "1"},
         "assay[2]": {"run_order": 3, "batch": "1"},
@@ -71,7 +71,7 @@ def test_build_dataset_pp_inputs_uses_mztab_injection_order():
 
 def test_build_dataset_pp_inputs_prefers_filename_date_when_batch_is_constant():
     """既定の定数バッチを採ると日付由来の交絡を見落とす。"""
-    from lipidmix.analysis.dataset_analysis import build_dataset_pp_inputs
+    from metabolomix.analysis.dataset_analysis import build_dataset_pp_inputs
     ds = _ds_with_assay_meta(["20220901_a", "20220902_b"], {
         "assay[1]": {"run_order": 1, "batch": "1"},
         "assay[2]": {"run_order": 2, "batch": "1"},
@@ -83,7 +83,7 @@ def test_build_dataset_pp_inputs_prefers_filename_date_when_batch_is_constant():
 
 def test_build_dataset_pp_inputs_uses_mztab_batch_when_it_varies():
     """変化する assay バッチを捨てると真の実験バッチを使えない。"""
-    from lipidmix.analysis.dataset_analysis import build_dataset_pp_inputs
+    from metabolomix.analysis.dataset_analysis import build_dataset_pp_inputs
     ds = _ds_with_assay_meta(["20220901_a", "20220901_b"], {
         "assay[1]": {"run_order": 1, "batch": "B1"},
         "assay[2]": {"run_order": 2, "batch": "B2"},
@@ -95,7 +95,7 @@ def test_build_dataset_pp_inputs_uses_mztab_batch_when_it_varies():
 
 
 def test_build_dataset_pp_inputs_rejects_empty_matrix():
-    from lipidmix.analysis.dataset_analysis import (
+    from metabolomix.analysis.dataset_analysis import (
         PreconditionError, build_dataset_pp_inputs,
     )
     ds = DatasetState()
@@ -173,7 +173,7 @@ def test_run_dataset_preprocess_applies_mztab_qc_drift_correction():
 
 def _run_dataset_preprocess_for_test(ds):
     """テスト中に DatasetState へ副作用を書かず、純アダプタの戻り値を得る。"""
-    from lipidmix.analysis.dataset_analysis import run_dataset_preprocess
+    from metabolomix.analysis.dataset_analysis import run_dataset_preprocess
     return run_dataset_preprocess(ds, {
         "normalize": "none", "drift_correct": True, "impute": "half_min",
     })
@@ -183,9 +183,9 @@ def test_run_dataset_preprocess_matches_arf_preprocess_for_qc_drift(monkeypatch)
     """DatasetState 側だけで補正式を複製すると、ARF 経路との数値乖離を見逃す。"""
     import json
 
-    from lipidmix.arf.tools import arf_preprocess
-    from lipidmix.core import session_state
-    from lipidmix.core.session_state import AnalysisSession
+    from metabolomix.arf.tools import arf_preprocess
+    from metabolomix.core import session_state
+    from metabolomix.core.session_state import AnalysisSession
 
     ds, names, values, orders = _drift_fixture_dataset()
     dataset_matrix, dataset_names, _, _, _, dataset_report = _run_dataset_preprocess_for_test(ds)
@@ -227,7 +227,7 @@ def test_run_dataset_preprocess_matches_arf_preprocess_for_qc_drift(monkeypatch)
 
 
 def test_run_dataset_preprocess_rejects_unknown_normalize():
-    from lipidmix.analysis.dataset_analysis import PreconditionError
+    from metabolomix.analysis.dataset_analysis import PreconditionError
     ds = _make_ds()
     with pytest.raises(PreconditionError):
         _preprocessed(ds, {"normalize": "not_a_method"})
@@ -256,14 +256,14 @@ def test_run_dataset_preprocess_no_multi_batch_caveat_without_dates():
 # ---------- run_dataset_pca ----------
 
 def test_run_dataset_pca_requires_preprocess():
-    from lipidmix.analysis.dataset_analysis import PreconditionError, run_dataset_pca
+    from metabolomix.analysis.dataset_analysis import PreconditionError, run_dataset_pca
     ds = _make_ds()
     with pytest.raises(PreconditionError):
         run_dataset_pca(ds, n_components=2)
 
 
 def test_run_dataset_pca_returns_scores_per_sample():
-    from lipidmix.analysis.dataset_analysis import run_dataset_pca
+    from metabolomix.analysis.dataset_analysis import run_dataset_pca
     ds = _make_ds(n_features=20, n_samples=8)
     _preprocessed(ds)
     result = run_dataset_pca(ds, n_components=2)
@@ -274,7 +274,7 @@ def test_run_dataset_pca_returns_scores_per_sample():
 
 def test_run_dataset_pca_reports_run_order_correlation(monkeypatch):
     """QC が無くても、注入順があればドリフトの有無は言える。"""
-    from lipidmix.analysis.dataset_analysis import run_dataset_pca
+    from metabolomix.analysis.dataset_analysis import run_dataset_pca
     names = [f"s{i}" for i in range(8)]
     ds = _ds_with_assay_meta(names, {
         f"assay[{i + 1}]": {"run_order": i + 1, "batch": None} for i in range(8)})
@@ -286,7 +286,7 @@ def test_run_dataset_pca_reports_run_order_correlation(monkeypatch):
 
 def test_run_dataset_pca_run_order_correlation_is_null_without_injection_order():
     """注入順が無いのに相関を数字で返してはいけない。"""
-    from lipidmix.analysis.dataset_analysis import run_dataset_pca
+    from metabolomix.analysis.dataset_analysis import run_dataset_pca
     ds = _make_ds(n_features=20, n_samples=8)
     _preprocessed(ds)
     result = run_dataset_pca(ds, n_components=2)
@@ -296,7 +296,7 @@ def test_run_dataset_pca_run_order_correlation_is_null_without_injection_order()
 def test_run_dataset_pca_caveats_strong_drift_component():
     """主成分が注入順と強く相関したら、生物学と読む前に警告する。"""
     import numpy as np
-    from lipidmix.analysis.dataset_analysis import run_dataset_pca
+    from metabolomix.analysis.dataset_analysis import run_dataset_pca
     names = [f"s{i}" for i in range(8)]
     ds = _ds_with_assay_meta(names, {
         f"assay[{i + 1}]": {"run_order": i + 1, "batch": None} for i in range(8)})
@@ -311,7 +311,7 @@ def test_run_dataset_pca_caveats_strong_drift_component():
 # ---------- run_dataset_differential ----------
 
 def test_run_dataset_differential_summarizes():
-    from lipidmix.analysis.dataset_analysis import run_dataset_differential
+    from metabolomix.analysis.dataset_analysis import run_dataset_differential
     ds = _make_ds(n_features=20, n_samples=8)
     _preprocessed(ds)
     result = run_dataset_differential(
@@ -328,7 +328,7 @@ def test_run_dataset_differential_summarizes():
 
 def test_run_dataset_differential_reports_unknown_samples():
     """存在しないサンプル名を黙って捨てず、caveat で名指しする。"""
-    from lipidmix.analysis.dataset_analysis import run_dataset_differential
+    from metabolomix.analysis.dataset_analysis import run_dataset_differential
     ds = _make_ds(n_features=20, n_samples=8)
     _preprocessed(ds)
     result = run_dataset_differential(
@@ -341,7 +341,7 @@ def test_run_dataset_differential_reports_unknown_samples():
 
 
 def test_run_dataset_differential_rejects_small_groups():
-    from lipidmix.analysis.dataset_analysis import (
+    from metabolomix.analysis.dataset_analysis import (
         PreconditionError, run_dataset_differential,
     )
     ds = _make_ds(n_features=20, n_samples=8)
@@ -355,7 +355,7 @@ def test_run_dataset_differential_deduplicates_requested_samples():
     """group_a=["S1","S1"] は同じ行を2回数えるだけで、分散0の縮退比較を
     len(idx_a)<2 の拒否をすり抜けて通してしまう。重複は1回に丸め、
     その旨を caveat で名指しする。"""
-    from lipidmix.analysis.dataset_analysis import run_dataset_differential
+    from metabolomix.analysis.dataset_analysis import run_dataset_differential
     ds = _make_ds(n_features=20, n_samples=8)
     _preprocessed(ds)
     result = run_dataset_differential(
@@ -371,7 +371,7 @@ def test_run_dataset_differential_deduplicates_requested_samples():
 def test_run_dataset_differential_rejects_group_that_is_all_duplicates():
     """重複除去後に n<2 まで縮む場合、水増しされた見かけの n ではなく
     実際のサイズ不足として拒否されなければならない。"""
-    from lipidmix.analysis.dataset_analysis import (
+    from metabolomix.analysis.dataset_analysis import (
         PreconditionError, run_dataset_differential,
     )
     ds = _make_ds(n_features=20, n_samples=8)
@@ -398,7 +398,7 @@ def _make_batch_ds(names, n_features=20):
 
 def test_run_dataset_differential_warns_when_not_normalized():
     """arf_differential:846-848 と同じ「正規化未適用」警告。既定 recipe は normalize=none。"""
-    from lipidmix.analysis.dataset_analysis import run_dataset_differential
+    from metabolomix.analysis.dataset_analysis import run_dataset_differential
     ds = _make_ds(n_features=20, n_samples=8)
     _preprocessed(ds)  # ds.preprocessing_recipe は既定の {} のまま
     result = run_dataset_differential(
@@ -411,7 +411,7 @@ def test_run_dataset_differential_warns_when_not_normalized():
 
 def test_run_dataset_differential_no_normalize_caveat_when_normalized():
     """normalize が none 以外なら「正規化未適用」警告は出ない。"""
-    from lipidmix.analysis.dataset_analysis import run_dataset_differential
+    from metabolomix.analysis.dataset_analysis import run_dataset_differential
     ds = _make_ds(n_features=20, n_samples=8)
     _preprocessed(ds)
     ds.preprocessing_recipe = {"normalize": "median"}
@@ -426,10 +426,10 @@ def test_run_dataset_differential_no_normalize_caveat_when_normalized():
 def test_run_dataset_differential_unassessable_confounding_without_dates():
     """既定フィクスチャ（サンプル名に日付なし）は全 batch=None → 交絡評価不可。
 
-    check_confounding のドキュメント（lipidmix/analysis/differential.py:256）どおり、
+    check_confounding のドキュメント（metabolomix/analysis/differential.py:256）どおり、
     「バッチが1つ（この場合は判明ゼロ）＝交絡なし」と誤読させないための assessable=False 経路。
     """
-    from lipidmix.analysis.dataset_analysis import run_dataset_differential
+    from metabolomix.analysis.dataset_analysis import run_dataset_differential
     ds = _make_ds(n_features=20, n_samples=8)
     _preprocessed(ds)
     result = run_dataset_differential(
@@ -444,7 +444,7 @@ def test_run_dataset_differential_unassessable_confounding_without_dates():
 
 def test_run_dataset_differential_confounded_caveat_when_groups_are_single_batch():
     """group_a が丸ごとバッチA、group_b が丸ごとバッチBなら交絡と判定する。"""
-    from lipidmix.analysis.dataset_analysis import run_dataset_differential
+    from metabolomix.analysis.dataset_analysis import run_dataset_differential
     names = ([f"20260901_ctrl_{i}" for i in range(3)]
              + [f"20260902_treat_{i}" for i in range(3)])
     ds = _make_batch_ds(names)
@@ -460,7 +460,7 @@ def test_run_dataset_differential_confounded_caveat_when_groups_are_single_batch
 
 def test_run_dataset_differential_no_confounding_caveat_when_batches_mixed():
     """両群にバッチA・バッチBが混在していれば、交絡系の caveat はどちらも出ない。"""
-    from lipidmix.analysis.dataset_analysis import run_dataset_differential
+    from metabolomix.analysis.dataset_analysis import run_dataset_differential
     names = ["20260901_ctrl_0", "20260902_ctrl_1", "20260901_ctrl_2",
              "20260901_treat_0", "20260902_treat_1", "20260902_treat_2"]
     ds = _make_batch_ds(names)
@@ -477,7 +477,7 @@ def test_run_dataset_differential_no_confounding_caveat_when_batches_mixed():
 
 def test_min_detection_rate_drops_features_below_threshold():
     """gap-fill を除いた実検出率で足切りする（ARF 経路の同名引数と同義）。"""
-    from lipidmix.analysis.dataset_analysis import run_dataset_preprocess
+    from metabolomix.analysis.dataset_analysis import run_dataset_preprocess
     ds = _make_ds(n_features=4, n_samples=4)
     # 特徴 0: 4/4 検出、特徴 1: 2/4、特徴 2: 1/4、特徴 3: 0/4
     ds.detected_mask = np.array([
@@ -497,7 +497,7 @@ def test_min_detection_rate_drops_features_below_threshold():
 
 
 def test_min_detection_rate_zero_keeps_everything():
-    from lipidmix.analysis.dataset_analysis import run_dataset_preprocess
+    from metabolomix.analysis.dataset_analysis import run_dataset_preprocess
     ds = _make_ds(n_features=3, n_samples=4)
     ds.detected_mask = np.zeros((3, 4), dtype=bool)
     ds.feature_qc = {"source": "arf"}
@@ -509,7 +509,7 @@ def test_min_detection_rate_zero_keeps_everything():
 
 def test_min_detection_rate_without_detection_state_is_a_bad_request():
     """検出状態が無いのに足切りを求められたら、黙って 0 扱いにせず拒否する。"""
-    from lipidmix.analysis.dataset_analysis import (
+    from metabolomix.analysis.dataset_analysis import (
         PreconditionError, run_dataset_preprocess)
     ds = _make_ds(n_features=3, n_samples=4)
     assert ds.detected_mask is None
@@ -521,7 +521,7 @@ def test_min_detection_rate_without_detection_state_is_a_bad_request():
 
 def test_detection_rate_is_reported_even_without_filtering():
     """フィルタを掛けなくても、検出状態があれば実検出率を報告する。"""
-    from lipidmix.analysis.dataset_analysis import run_dataset_preprocess
+    from metabolomix.analysis.dataset_analysis import run_dataset_preprocess
     ds = _make_ds(n_features=2, n_samples=4)
     ds.detected_mask = np.array([[True, True, True, True],
                                  [True, False, False, False]])

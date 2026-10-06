@@ -34,7 +34,7 @@ MS-DIAL（MsdialWorkbench）の C# クラス `CompMs.Common.Components.MoleculeM
 - 照合したコミット: `afd5f9522`（2026-09-20、`master` ブランチの HEAD）
 - **この表は Key 番号とメンバ名・型の対応だけを写したもので、上流のソースコードは含まない。**
 - MS-DIAL 側でクラスが変わったら、上流の同ファイルを開いて `[Key(N)]` を読み直し、
-  この表を更新する。実装（Task 3 で書く `lipidmix/library/*`）から逆算して直しては
+  この表を更新する。実装（Task 3 で書く `metabolomix/library/*`）から逆算して直しては
   いけない。
 
 表は **Key 番号の昇順**で並べている（上流のソース上の宣言順とは一致しない）。
@@ -273,7 +273,7 @@ Storage
 **既定は false だが実 run では true のことがある**（実測: aging mice kidney neg の
 `Dataset_2026_09_09_17_28_59_Loaded.msp2.dbs` は Key 15/16 が両方 true、
 `RtTolerance=2.0`）。既定値を仮定せず必ず `Storage` から読むこと——
-`lipidmix/library/dbs.py` の `_SEARCH_PARAM_KEYS` が 15〜18 を
+`metabolomix/library/dbs.py` の `_SEARCH_PARAM_KEYS` が 15〜18 を
 `use_time_for_annotation_*` / `use_ccs_for_annotation_*` として拾い、
 `library_match_feature` の `scoring.use_rt` に反映される。
 

@@ -4,7 +4,7 @@
 ``persist_result`` の4関数を、ケースごとに小さくTDDする。fixtureは
 ``tests.pipeline_fixtures`` の合成dictビルダーを再利用し、実rawや既存成果物は
 使わない（CLAUDE.md方針）。``evaluate_target`` の部分完了ケースだけは
-``lipidmix.pipeline.store.create_run`` と本モジュールの ``persist_result`` で
+``metabolomix.pipeline.store.create_run`` と本モジュールの ``persist_result`` で
 実ファイル・実hash・実IDを ``tmp_path`` へ作る——path/hashを持たないダミーの
 result_refで有効成果物を代用しない。
 """
@@ -16,15 +16,15 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.pipeline.report import (
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.pipeline.report import (
     evaluate_target,
     persist_result,
     required_outputs,
     write_pipeline_report,
 )
-from lipidmix.pipeline.request import resolve_request
-from lipidmix.pipeline.store import create_run, load_run
+from metabolomix.pipeline.request import resolve_request
+from metabolomix.pipeline.store import create_run, load_run
 
 
 def _minimal_inputs(root: Path) -> dict:
@@ -216,8 +216,8 @@ def _differential_pipeline(tmp_path):
     正常ケース・EXPORT_BACKGROUND_EMPTYによる部分完了ケース・保存後に改変した
     hash不一致ケースを、すべてここから枝分かれさせる。
     """
-    from lipidmix.analysis.dataset_export import export_dataset_result
-    from lipidmix.analysis.dataset_service import compare_dataset, pca_dataset, preprocess_dataset
+    from metabolomix.analysis.dataset_export import export_dataset_result
+    from metabolomix.analysis.dataset_service import compare_dataset, pca_dataset, preprocess_dataset
     from tests.pipeline_fixtures import make_dataset
 
     comparisons = [{"comparison_id": "t_vs_c", "reference_group": "control", "test_group": "treated"}]

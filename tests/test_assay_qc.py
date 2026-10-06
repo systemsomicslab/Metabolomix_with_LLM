@@ -17,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from lipidmix.analysis.assay_qc import aggregate_counts, evaluate_qc
+from metabolomix.analysis.assay_qc import aggregate_counts, evaluate_qc
 
 
 # ---------- brief記載のRED ----------
@@ -420,7 +420,7 @@ def test_batch_passes_only_when_every_required_metric_passes():
 
 def test_unknown_metric_is_rejected():
     matrix, metadata = _qc_matrix([100., 101., 99.])
-    from lipidmix.core.atomic_io import DomainError
+    from metabolomix.core.atomic_io import DomainError
     with pytest.raises(DomainError) as caught:
         evaluate_qc(matrix, _evidence(), metadata, [_policy("made_up_metric")], None)
     assert caught.value.code == "QC_POLICY_INVALID"
@@ -428,7 +428,7 @@ def test_unknown_metric_is_rejected():
 
 def test_metadata_must_line_up_with_the_matrix_assays():
     matrix, metadata = _qc_matrix([100., 101., 99.])
-    from lipidmix.core.atomic_io import DomainError
+    from metabolomix.core.atomic_io import DomainError
     with pytest.raises(DomainError) as caught:
         evaluate_qc(matrix, _evidence(), metadata[:-1], [_policy("pooled_qc_rsd")],
                     None)
@@ -443,7 +443,7 @@ def test_explicit_policy_adds_no_automatic_decisions():
     落とす判断（前提不足）は `matrix_state` が QC_PREREQUISITE_MISSING で
     **止める**役目で、conservative-v1 のように skip して続行しない。
     """
-    from lipidmix.analysis.preprocess_policy import (
+    from metabolomix.analysis.preprocess_policy import (
         EXPLICIT_POLICY_VERSION,
         explicit_policy,
     )

@@ -19,8 +19,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lipidmix.core import session_state
-from lipidmix.pipeline import store
+from metabolomix.core import session_state
+from metabolomix.pipeline import store
 from tests.metabolomics_fixtures import MetabolomicsHarness
 from tests.test_mztab_tools import _make_job_json
 
@@ -73,7 +73,7 @@ def test_matrices_are_saved_with_their_values_not_only_a_summary(tmp_path):
 
 
 def test_saved_matrices_can_be_read_back_with_the_recorded_reference(tmp_path):
-    from lipidmix.analysis.matrix_state import load_matrix
+    from metabolomix.analysis.matrix_state import load_matrix
 
     harness = MetabolomicsHarness(tmp_path)
     harness.run()
@@ -90,7 +90,7 @@ def test_saved_matrices_can_be_read_back_with_the_recorded_reference(tmp_path):
 # ---------- 読み側 ----------
 
 def test_loading_a_run_brings_the_dataset_and_its_matrices_together(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
 
     harness, _ = _completed_run(tmp_path)
     session_state.session.dataset = None
@@ -107,7 +107,7 @@ def test_loading_a_run_brings_the_dataset_and_its_matrices_together(tmp_path):
 
 
 def test_loading_a_run_restores_the_resolved_sample_metadata(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
 
     harness, _ = _completed_run(tmp_path)
     session_state.session.dataset = None
@@ -121,7 +121,7 @@ def test_loading_a_run_restores_the_resolved_sample_metadata(tmp_path):
 
 
 def test_loading_a_run_restores_the_resolved_binding_targets(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
 
     harness, _ = _completed_run(tmp_path)
     session_state.session.dataset = None
@@ -135,8 +135,8 @@ def test_loading_a_run_restores_the_resolved_binding_targets(tmp_path):
 
 
 def test_a_restored_matrix_can_be_used_by_dataset_statistic(tmp_path):
-    from lipidmix.tools.dataset_analysis_tools import dataset_statistic
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.dataset_analysis_tools import dataset_statistic
+    from metabolomix.tools.mztab_tools import dataset_load
 
     harness, _ = _completed_run(tmp_path)
     session_state.session.dataset = None
@@ -152,7 +152,7 @@ def test_a_restored_matrix_can_be_used_by_dataset_statistic(tmp_path):
 
 
 def test_pipeline_path_cannot_be_combined_with_the_other_entry_points(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
 
     harness, _ = _completed_run(tmp_path)
     payload = _payload(dataset_load(mztab_path=str(harness.mztab_path),
@@ -161,7 +161,7 @@ def test_pipeline_path_cannot_be_combined_with_the_other_entry_points(tmp_path):
 
 
 def test_a_tampered_matrix_file_is_refused_and_leaves_the_session_alone(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
 
     harness, _ = _completed_run(tmp_path)
     record = harness.record()

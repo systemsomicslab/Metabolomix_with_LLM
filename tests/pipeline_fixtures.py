@@ -25,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 
-from lipidmix.core.process_control import resolve_python_launch
+from metabolomix.core.process_control import resolve_python_launch
 
 #: このcheckoutのルート（`tests/` の1階層上）。子プロセスのcwdをここへ固定する。
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -37,7 +37,7 @@ def make_source(root: Path, *, extension: str = ".wiff", kind: str = "file") -> 
     root直下にS0..S7.wiff・GUI自動保存形式のlab_param_202609050001.txt
     （Ion mode/Target omics/Lbm file path）・fake.lbm2・fake.exeを作り、
     それぞれのPathを返す。fake.exeは実行しない（中身は placeholder テキスト）
-    ——単体テストではlipidmix.console.runner.is_console_exeを差し替えて使う。
+    ——単体テストではmetabolomix.console.runner.is_console_exeを差し替えて使う。
 
     Parameters
     ----------
@@ -115,7 +115,7 @@ def write_mztab(path: Path, sources: list[Path], *, with_inchikey: bool = True) 
 
     同定（InChIKey・化合物名）は **SME セクション**に書き、SMF からは
     `SME_ID_REFS` で参照する。mzTab-M 2.0.0-M では構造・名称が SME にしか無く、
-    `lipidmix.mztab.dataset_state` も SME 側だけを読むため——SMF 列に書いても
+    `metabolomix.mztab.dataset_state` も SME 側だけを読むため——SMF 列に書いても
     `feature_metadata["inchikey"]` は全件 None になる。
 
     Parameters
@@ -145,7 +145,7 @@ def write_mztab(path: Path, sources: list[Path], *, with_inchikey: bool = True) 
 
     abundance_cols = "\t".join(f"abundance_assay[{i}]" for i in range(1, n + 1))
     # SMFは`SME_ID_REFS`で同定証拠（SME）を指す。**構造・名称はSMEにしか無い**のが
-    # mzTab-M 2.0.0-Mの実際で、`lipidmix.mztab.dataset_state`もSME側だけを読む
+    # mzTab-M 2.0.0-Mの実際で、`metabolomix.mztab.dataset_state`もSME側だけを読む
     # （SMFのdatabase_identifier/chemical_nameは読まない）。ここでSMEへ書かないと
     # `with_inchikey=True`でもfeature_metadataのinchikeyが全件Noneになり、
     # 契約TSVのエクスポートがNO_ANNOTATED_FEATURESで落ちる。
@@ -224,7 +224,7 @@ def use_fake_console(monkeypatch, command: list[str]) -> None:
     実行口になる）ので、テストからは唯一の組み立て場所である build_msdial_cmd を
     差し替える。
     """
-    monkeypatch.setattr("lipidmix.console.runner.build_msdial_cmd",
+    monkeypatch.setattr("metabolomix.console.runner.build_msdial_cmd",
                         lambda *args, **kwargs: command)
 
 
@@ -251,7 +251,7 @@ def make_dataset():
     """
     import numpy as np
 
-    from lipidmix.mztab.dataset_state import DatasetState
+    from metabolomix.mztab.dataset_state import DatasetState
     ds = DatasetState()
     ds.feature_matrix = np.random.default_rng(7).uniform(100, 200, (6, 8))
     ds.sample_names = [f"S{i}" for i in range(8)]
@@ -309,7 +309,7 @@ def metadata_rows(ds, *, n_qc=4, confirmed=True):
 #    自身の受付・再利用判定・handshakeは本物のまま通る（本番workerは試験用の
 #    環境変数・任意import名を一切受け付けないため、差し替えるならここしかない）。
 #    起こしたPopenは全部harnessが持ち、`close()`で確実に始末する。
-# 2. harness worker内での `lipidmix.console.runner.build_msdial_cmd` —
+# 2. harness worker内での `metabolomix.console.runner.build_msdial_cmd` —
 #    偽Consoleスクリプト（`tests/fixtures/fake_console.py`）を起こすコマンドへ替える。
 #    起動・監視・停止・収集・完了判定はすべて本物の`supervise`を通る。
 
@@ -319,7 +319,7 @@ _HARNESS_WORKER = Path(__file__).resolve().parent / "pipeline_worker_harness.py"
 WAIT_TIMEOUT_S = 20.0
 _WAIT_POLL_S = 0.05
 
-#: sample-manifest.v1 の8列（`lipidmix.analysis.sample_manifest.FIELDS`と同じ順）。
+#: sample-manifest.v1 の8列（`metabolomix.analysis.sample_manifest.FIELDS`と同じ順）。
 _MANIFEST_FIELDS = ("sample_id", "source_file", "role", "group", "batch",
                     "injection_order", "qc_pool", "include")
 
@@ -423,12 +423,12 @@ class PipelineHarness:
         """受付層が要る環境（MSDIAL_EXE・console判定・受付索引）を一度だけ整える。"""
         if self._configured:
             return
-        from lipidmix.pipeline import service
+        from metabolomix.pipeline import service
 
         exe = self.tmp_path / "fake-msdialcui.exe"
         exe.write_text("fake console executable placeholder", encoding="ascii")
         self.monkeypatch.setenv("MSDIAL_EXE", str(exe))
-        self.monkeypatch.setattr("lipidmix.console.runner.is_console_exe",
+        self.monkeypatch.setattr("metabolomix.console.runner.is_console_exe",
                                  lambda *a, **k: True)
         # 受付索引はユーザーのLOCALAPPDATAではなくtmpへ。テスト間で共有させない。
         self.monkeypatch.setenv("LIPIDMIX_PIPELINE_INDEX_DIR",
@@ -529,7 +529,7 @@ class PipelineHarness:
         timeout検証で短くする。
         """
         self._configure()
-        from lipidmix.pipeline import service
+        from metabolomix.pipeline import service
 
         source = self.source(source_name)
         request = {"target": target, "save_project": save_project,
@@ -580,7 +580,7 @@ class PipelineHarness:
         状態ファイルには一切触れない——待つ相手は自分の子プロセス（`Popen.wait`）と、
         切り離したworkerのprocess identity（`same_process`＝`OpenProcess`）だけ。
         """
-        from lipidmix.core.process_control import same_process
+        from metabolomix.core.process_control import same_process
 
         deadline = time.monotonic() + timeout
         name = self.pipeline_root(run).name
@@ -690,7 +690,7 @@ class PipelineHarness:
 
     def console_job(self, run):
         """ディスク上のanalysis-job（収集された成果物一覧を読むため）。"""
-        from lipidmix.console.job_manager import JOB_FILENAME, load_job
+        from metabolomix.console.job_manager import JOB_FILENAME, load_job
         return load_job(self.console_run_dir(run) / JOB_FILENAME)
 
     def output_ref(self, record: dict, kind: str) -> dict:
@@ -730,7 +730,7 @@ class PipelineHarness:
 
         `service.resume_pipeline`を本物どおり呼ぶ（起動されるworkerだけharness版）。
         """
-        from lipidmix.pipeline import service
+        from metabolomix.pipeline import service
 
         pipeline_root = self.pipeline_root(run)
         manifest = self.write_manifest(source_name=source_name, groups=groups)
@@ -764,7 +764,7 @@ class PipelineHarness:
         **自分が起こしたものが全部消えたか**で判定するための材料
         （偽Console本体と、その孫プロセスまで数える）。
         """
-        from lipidmix.core.process_control import process_identity, same_process
+        from metabolomix.core.process_control import process_identity, same_process
 
         alive = []
         for _key, proc, _log in self._workers:
@@ -788,7 +788,7 @@ class PipelineHarness:
         self._kill_detached()
 
     def _kill_detached(self) -> None:
-        from lipidmix.core.process_control import same_process
+        from metabolomix.core.process_control import same_process
 
         for _key, info in self._detached:
             identity = info.get("identity") or {}

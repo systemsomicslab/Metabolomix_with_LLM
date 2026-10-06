@@ -21,8 +21,8 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.core.process_control import process_identity, resolve_python_launch, same_process
-from lipidmix.pipeline import engine, recovery
+from metabolomix.core.process_control import process_identity, resolve_python_launch, same_process
+from metabolomix.pipeline import engine, recovery
 from tests.pipeline_fixtures import DEFAULT_COMPARISON, PipelineHarness, read_contract_tsv
 
 pytestmark = pytest.mark.skipif(
@@ -238,7 +238,7 @@ def test_cancel_with_unknown_owner_never_touches_another_process(
     どちらでも、取消の受理・状態読取・再開準備を通した後で、その無関係な
     プロセスが生きていることを確かめる。
     """
-    from lipidmix.pipeline import store
+    from metabolomix.pipeline import store
 
     run = pipeline_harness.start(target="exploratory", launch=False)
     pipeline_root = pipeline_harness.pipeline_root(run)
@@ -299,7 +299,7 @@ def test_lost_worker_is_reported_and_never_fabricated(pipeline_harness):
 
 def test_lost_run_can_be_resumed_as_read_status_advertises(pipeline_harness):
     """spec A06: 中断したrunは、案内どおりのresumeで最後まで進められること。"""
-    from lipidmix.pipeline import service
+    from metabolomix.pipeline import service
 
     pipeline_root, run = _lose_the_worker(pipeline_harness)
     assert recovery.read_status(pipeline_root)["recovery_hint"]["code"] == "PIPELINE_INTERRUPTED"
@@ -322,7 +322,7 @@ def test_resumed_export_alone_still_names_a_recorded_differential_result(pipelin
     `# result_id`とvolcanoの`parent_ids`が`record["results"]`に存在しない
     結果を指す（Task19が見つけた欠陥の、再開経路側の顔）。
     """
-    from lipidmix.pipeline import service
+    from metabolomix.pipeline import service
 
     cid = DEFAULT_COMPARISON["comparison_id"]
     pipeline_harness.write_manifest()

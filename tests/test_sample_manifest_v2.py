@@ -20,8 +20,8 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.analysis.result_state import invalidate_results
-from lipidmix.analysis.sample_manifest import (
+from metabolomix.analysis.result_state import invalidate_results
+from metabolomix.analysis.sample_manifest import (
     FIELDS,
     FIELDS_V2,
     apply_metadata,
@@ -30,7 +30,7 @@ from lipidmix.analysis.sample_manifest import (
     validate_independent_samples,
     validate_standard_assays,
 )
-from lipidmix.core.atomic_io import DomainError
+from metabolomix.core.atomic_io import DomainError
 from tests.pipeline_fixtures import make_dataset, metadata_rows
 
 _HEADER_V1 = "\t".join(FIELDS)

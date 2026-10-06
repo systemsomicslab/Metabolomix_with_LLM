@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from lipidmix.msdial.tags import (
+from metabolomix.msdial.tags import (
     attach_tags_to_spots,
     discover_arf_tag_index,
     filter_arf_by_tags,

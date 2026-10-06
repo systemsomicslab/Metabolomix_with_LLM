@@ -1,7 +1,7 @@
 """対向プロット。座標は payload に持ち、描画は PNG で返す。"""
 import pytest
 
-from lipidmix.plots import mirror
+from metabolomix.plots import mirror
 
 
 def test_the_payload_keeps_both_spectra_and_the_matches():
@@ -118,7 +118,7 @@ def test_peaks_are_bare_stems_without_tip_markers(monkeypatch):
     近接ピークを潰すだけで情報を足さない。"""
     captured = {}
 
-    from lipidmix.plots import render as plot_render
+    from metabolomix.plots import render as plot_render
     real = plot_render.figure_to_png
 
     def spy(fig):
@@ -141,7 +141,7 @@ def test_peaks_are_bare_stems_without_tip_markers(monkeypatch):
 def _labelled(payload, **kwargs):
     """描画した図から、実際に置かれたラベルの文字列を拾う。"""
     captured = {}
-    from lipidmix.plots import render as plot_render
+    from metabolomix.plots import render as plot_render
     real = plot_render.figure_to_png
 
     def spy(fig):
@@ -238,7 +238,7 @@ def test_the_payload_label_cap_is_per_side():
 def _figure(payload, **kwargs):
     """描画した図の Axes を返す（`figure_to_png` を spy して横取りする）。"""
     captured = {}
-    from lipidmix.plots import render as plot_render
+    from metabolomix.plots import render as plot_render
     real = plot_render.figure_to_png
 
     def spy(fig):
@@ -290,8 +290,8 @@ def test_the_tool_description_names_the_current_schema():
     """ツール説明は LLM が payload の読み方を決める根拠。古い版名を載せない。"""
     import asyncio
 
-    from lipidmix.core.mcp_core import mcp
-    import lipidmix.library.tools  # noqa: F401  (登録の副作用)
+    from metabolomix.core.mcp_core import mcp
+    import metabolomix.library.tools  # noqa: F401  (登録の副作用)
 
     tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
     description = tools["library_plot_mirror"].description

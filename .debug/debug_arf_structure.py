@@ -2,7 +2,7 @@ import os
 import io
 import msgpack
 import lz4.block
-from lipidmix.arf.reader import deserialize_lz4_packed_msgpack
+from metabolomix.arf.reader import deserialize_lz4_packed_msgpack
 
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 path = 'data/AlignmentResult_2026_04_07_14_07_25.arf2'

@@ -10,7 +10,7 @@
 [docs/superpowers/specs/2026-09-19-msms-spectral-matching-design.md](../superpowers/specs/2026-09-19-msms-spectral-matching-design.md)
 にある。
 
-## 14. 参照ライブラリ照合（`lipidmix/library/`, `lipidmix/analysis/spectral_match.py`）
+## 14. 参照ライブラリ照合（`metabolomix/library/`, `metabolomix/analysis/spectral_match.py`）
 
 `.dcl` の測定 MS/MS を参照ライブラリ（`*_Loaded.msp2.dbs` 優先、無ければ `*.msp`）と
 突き合わせ、MS-DIAL の個別スコア定義をそのまま移植して数値を出す。目的は「付いている
@@ -67,7 +67,7 @@
 - `id_confidence_measure[7..8]`（matched peaks count / percentage）は素のフィールドで、
   クランプを経ないため `-1` のまま出る。こちらは `-1` 同士で素直に比較できる。
 
-### 14.3 意図的に写した瑕疵（`lipidmix/analysis/spectral_match.py`）
+### 14.3 意図的に写した瑕疵（`metabolomix/analysis/spectral_match.py`）
 
 移植の目的は MS-DIAL との**数値の一致**であって、実装の改善ではない。次の 5 点は
 上流の「明らかに変な点」を**意図的にそのまま残している**。素直な実装に書き直すと
@@ -95,13 +95,13 @@
 
 **`.msp` にはこの情報が無い。** `.msp` 由来の store は `search_params=None` を持ち、
 `library_load` の戻り値に既定値を使う旨の `note` が付く。既定値は
-`lipidmix/library/defaults.py` の `DEFAULT_MZ_TOL` (0.01) / `DEFAULT_MS2_TOL` (0.025) /
+`metabolomix/library/defaults.py` の `DEFAULT_MZ_TOL` (0.01) / `DEFAULT_MS2_TOL` (0.025) /
 `DEFAULT_RT_TOL` (0.2)。
 
 **`DEFAULT_RT_TOL` の出所訂正（最終レビュー Important 6）**: これは
 `MsRefSearchParameterBase` の `RtTolerance` の既定値ではない
 （`docs/schema/molecule_ms_reference.md` によれば上流既定は **100.0**）。
-`DEFAULT_RT_TOL` (0.2) は `lipidmix/dcl/reader.py` / `dcl/tools.py` の `.dcl` 検索
+`DEFAULT_RT_TOL` (0.2) は `metabolomix/dcl/reader.py` / `dcl/tools.py` の `.dcl` 検索
 （precursor m/z から測定 MS/MS を引くときの RT 窓）の既定値であって、ライブラリ
 候補検索用の値ではない。値そのもの（0.2 分）は `.dcl` の窓として妥当。
 
@@ -188,7 +188,7 @@ BINARY 照合のままで、`verify_peak_annotation` の統合経路（§14.8）
 
 ### 14.7 `library_plot_mirror`
 
-`build_mirror_payload` / `render_mirror`（`lipidmix/plots/mirror.py`）の座標契約は
+`build_mirror_payload` / `render_mirror`（`metabolomix/plots/mirror.py`）の座標契約は
 `lipidmix.mirror.v2`。上段が測定（上向き）、下段が参照（下向き）、横軸 m/z 共通。
 `matched_mz` は**常に参照側の m/z**（参照グリッドの窓中心）で、測定側の一致 m/z は
 別フィールド `matched_measured_mz`（`ms2_tol` を渡したときだけ計算、渡さなければ空）。
@@ -264,7 +264,7 @@ Log10 / Sqrt を**上下独立**に選ばせる）。**`Absolute` は用意し�
 追加で載る。ライブラリ未読み込みなら `spectral_match` キー自体を持たない。
 
 **`status` の語彙は暫定である。** `library_match_feature` とは独立に実装されており
-（`_spectral_match_for_feature`、`lipidmix/msdial/peak_verification.py`）、
+（`_spectral_match_for_feature`、`metabolomix/msdial/peak_verification.py`）、
 実際の `verify_peak_annotation` の使われ方を見る前に固まらないよう、
 現時点では次の 4 値を使う（将来 `library_match_feature` 側の語彙
 `not_found`/`no_candidates`/`success` と統一する可能性がある）:

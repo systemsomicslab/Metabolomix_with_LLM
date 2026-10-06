@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.plots.result_output import save_result_figure, select_result
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.plots.result_output import save_result_figure, select_result
 
 
 def _candidate(source, result_id, dataset_id="d1", valid=True, result=None):
@@ -151,8 +151,8 @@ def test_exploratory_datasets_are_marked_on_the_figure(tmp_path):
     レポートに貼られた PNG は、貼った後は単体で読まれる。「この図は探索専用の
     データから描いた」という但し書きは、戻り値ではなく図の中に要る。
     """
-    from lipidmix.mztab.dataset_state import DatasetState
-    from lipidmix.plots.result_output import figure_annotations
+    from metabolomix.mztab.dataset_state import DatasetState
+    from metabolomix.plots.result_output import figure_annotations
     ds = DatasetState()
     ds.exploratory_only = True
     ds.source_verification = "legacy_unverified"
@@ -168,8 +168,8 @@ def test_exploratory_datasets_are_marked_on_the_figure(tmp_path):
 
 def test_a_verified_dataset_gets_no_disclaimer():
     """常に但し書きを付けると、本当に注意が要る図が埋もれる。"""
-    from lipidmix.mztab.dataset_state import DatasetState
-    from lipidmix.plots.result_output import figure_annotations
+    from metabolomix.mztab.dataset_state import DatasetState
+    from metabolomix.plots.result_output import figure_annotations
     ds = DatasetState()
     ds.source_verification = "verified"
     assert figure_annotations(ds) == []
@@ -179,7 +179,7 @@ def test_unadjusted_confounded_comparisons_get_an_ascii_disclaimer_on_the_figure
     """spec §7.4(R16): allow_confounded=trueで継続した比較は、図の中にもその旨が
     要る。matplotlibの既定フォントは日本語字形を持たないため、他の但し書きと
     同じくASCIIで書く。"""
-    from lipidmix.plots.result_output import figure_annotations
+    from metabolomix.plots.result_output import figure_annotations
     result = dict(_VOLCANO)
     result["provenance"] = {"comparison": {"unadjusted_confounded": True}}
 
@@ -192,7 +192,7 @@ def test_unadjusted_confounded_comparisons_get_an_ascii_disclaimer_on_the_figure
 
 
 def test_adjusted_comparisons_get_no_confounding_disclaimer():
-    from lipidmix.plots.result_output import figure_annotations
+    from metabolomix.plots.result_output import figure_annotations
     result = dict(_VOLCANO)
     result["provenance"] = {"comparison": {"unadjusted_confounded": False}}
     assert figure_annotations(None, result) == []
@@ -201,7 +201,7 @@ def test_adjusted_comparisons_get_no_confounding_disclaimer():
 # ---------- TSV ----------
 
 def _prepared_dataset():
-    from lipidmix.analysis.dataset_service import compare_dataset, preprocess_dataset
+    from metabolomix.analysis.dataset_service import compare_dataset, preprocess_dataset
     from tests.pipeline_fixtures import make_dataset
     ds = make_dataset()
     preprocess_dataset(ds, {"normalize": "none", "impute": "half_min"})
@@ -210,8 +210,8 @@ def _prepared_dataset():
 
 
 def test_export_writes_the_contract_columns(tmp_path):
-    from lipidmix.analysis import export_contract
-    from lipidmix.analysis.dataset_export import export_dataset_result
+    from metabolomix.analysis import export_contract
+    from metabolomix.analysis.dataset_export import export_dataset_result
     ds, result = _prepared_dataset()
 
     info = export_dataset_result(ds, result, tmp_path / "out.tsv")
@@ -225,7 +225,7 @@ def test_export_writes_the_contract_columns(tmp_path):
 
 def test_export_records_the_preprocessing_that_the_result_actually_used(tmp_path):
     """メタ行の前処理は「今のレシピ」ではなく「その結果が使ったレシピ」。"""
-    from lipidmix.analysis.dataset_export import export_dataset_result
+    from metabolomix.analysis.dataset_export import export_dataset_result
     ds, result = _prepared_dataset()
 
     meta = [l for l in
@@ -240,7 +240,7 @@ def test_export_records_unadjusted_confounded_status_in_the_meta(tmp_path):
     """spec §7.4(R16): allow_confounded=trueで継続した比較は、TSV付随メタにもその旨が
     要る。`_meta_lines`は既にprovenanceを読んでいるので確認する（見た目は近いが、
     未調整フラグまで読んでいるかは別に確認しないと分からない）。"""
-    from lipidmix.analysis.dataset_export import export_dataset_result
+    from metabolomix.analysis.dataset_export import export_dataset_result
     ds, result = _prepared_dataset()
     result["provenance"]["comparison"] = {"unadjusted_confounded": True}
     result["provenance"]["warnings"] = [
@@ -256,7 +256,7 @@ def test_export_records_unadjusted_confounded_status_in_the_meta(tmp_path):
 
 
 def test_export_omits_the_unadjusted_confounded_line_when_not_confounded(tmp_path):
-    from lipidmix.analysis.dataset_export import export_dataset_result
+    from metabolomix.analysis.dataset_export import export_dataset_result
     ds, result = _prepared_dataset()
 
     meta = [l for l in
@@ -267,8 +267,8 @@ def test_export_omits_the_unadjusted_confounded_line_when_not_confounded(tmp_pat
 
 
 def test_export_refuses_a_result_from_a_superseded_preprocessing(tmp_path):
-    from lipidmix.analysis.dataset_export import export_dataset_result
-    from lipidmix.analysis.dataset_service import preprocess_dataset
+    from metabolomix.analysis.dataset_export import export_dataset_result
+    from metabolomix.analysis.dataset_service import preprocess_dataset
     ds, result = _prepared_dataset()
     preprocess_dataset(ds, {"normalize": "tic", "impute": "half_min"})
 
@@ -280,7 +280,7 @@ def test_export_refuses_a_result_from_a_superseded_preprocessing(tmp_path):
 
 
 def test_export_refuses_an_exploratory_dataset(tmp_path):
-    from lipidmix.analysis.dataset_export import export_dataset_result
+    from metabolomix.analysis.dataset_export import export_dataset_result
     ds, result = _prepared_dataset()
     ds.exploratory_only = True
 
@@ -293,7 +293,7 @@ def test_export_refuses_an_exploratory_dataset(tmp_path):
 
 def test_export_refuses_when_no_feature_has_an_inchikey(tmp_path):
     """背景集合が空の TSV は、下流のパスウェイ解析にとって無意味。"""
-    from lipidmix.analysis.dataset_export import export_dataset_result
+    from metabolomix.analysis.dataset_export import export_dataset_result
     ds, result = _prepared_dataset()
     for meta in ds.feature_metadata.values():
         meta["inchikey"] = ""
@@ -306,7 +306,7 @@ def test_export_refuses_when_no_feature_has_an_inchikey(tmp_path):
 
 
 def test_a_failed_export_does_not_replace_the_previous_file(tmp_path):
-    from lipidmix.analysis.dataset_export import export_dataset_result
+    from metabolomix.analysis.dataset_export import export_dataset_result
     ds, result = _prepared_dataset()
     out = tmp_path / "prev.tsv"
     export_dataset_result(ds, result, out)
@@ -328,7 +328,7 @@ def _exported_lines(func, ds, result, path: Path) -> list[str]:
 
 def _export_rows(tmp_path, ds, result, name="sml.tsv") -> list[dict]:
     """エクスポート TSV の本体を dict の一覧で返す（`#` メタ行は落とす）。"""
-    from lipidmix.analysis.dataset_export import export_dataset_result
+    from metabolomix.analysis.dataset_export import export_dataset_result
     path = tmp_path / name
     export_dataset_result(ds, result, path)
     body = [l for l in path.read_text(encoding="utf-8").splitlines()
@@ -383,7 +383,7 @@ def test_a_row_sourced_from_an_sml_annotation_says_so(tmp_path):
 
 def test_a_name_without_an_inchikey_is_still_dropped(tmp_path):
     """InChIKey ゲートは変えない。下流が InChIKey で結合するため。"""
-    from lipidmix.analysis.dataset_export import export_dataset_result
+    from metabolomix.analysis.dataset_export import export_dataset_result
     ds, result = _prepared_dataset()
     for fid in ds.feature_ids:
         ds.feature_metadata.setdefault(fid, {})["inchikey"] = None

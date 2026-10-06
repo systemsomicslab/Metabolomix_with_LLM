@@ -12,8 +12,8 @@ from unittest.mock import patch
 import pytest
 
 import server
-from lipidmix.arf import reader as arf_reader
-from lipidmix.core import session_state
+from metabolomix.arf import reader as arf_reader
+from metabolomix.core import session_state
 
 
 def _group(rows: int = 3) -> list:

@@ -7,8 +7,8 @@ import os
 import unittest
 from unittest import mock
 
-from lipidmix.arf import reader as arf_reader
-from lipidmix.core import session_state
+from metabolomix.arf import reader as arf_reader
+from metabolomix.core import session_state
 
 
 class TestSemanticsCaveatGuard(unittest.TestCase):
@@ -81,7 +81,7 @@ class TestResourceReadClearsGuard(unittest.TestCase):
         session_state.session = session_state.AnalysisSession()
 
     def test_reading_resource_sets_seen(self):
-        from lipidmix.tools import resources as tools_resources
+        from metabolomix.tools import resources as tools_resources
         self.assertFalse(session_state.session.output_format_seen)
         text = tools_resources.output_format_reference()
         self.assertIn("オントロジー", text)

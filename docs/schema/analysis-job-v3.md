@@ -1,7 +1,7 @@
 # analysis-job.v3 — 検証済みプロファイル実行のジョブ記録
 
 MS-DIAL Console実行の永続スナップショット`analysis-job.json`の第3版。実装は
-[`lipidmix/handoff/schema.py`](../../lipidmix/handoff/schema.py)。検証済みLC–MS
+[`metabolomix/handoff/schema.py`](../../metabolomix/handoff/schema.py)。検証済みLC–MS
 メタボロミクス経路（spec
 [2026-09-15-validated-lcms-metabolomics-design.md](../superpowers/specs/2026-09-15-validated-lcms-metabolomics-design.md)
 §6, §6.1）が書く版で、v2の全フィールドをそのまま引き継ぎ、**profile snapshot**を1つ足す。
@@ -10,7 +10,7 @@ MS-DIAL Console実行の永続スナップショット`analysis-job.json`の第3
 
 | 場面 | 規則 |
 |---|---|
-| 読込 | `AnalysisJob.load`は`SUPPORTED_SCHEMA_VERSIONS`（`analysis-job.v1` / `analysis-job.v2` / `analysis-job.v3`）を受ける。未知のschemaは`ValueError`（`lipidmix.mztab.loading`はこれを`MZTAB_NOT_FOUND`の`DomainError`へ畳む） |
+| 読込 | `AnalysisJob.load`は`SUPPORTED_SCHEMA_VERSIONS`（`analysis-job.v1` / `analysis-job.v2` / `analysis-job.v3`）を受ける。未知のschemaは`ValueError`（`metabolomix.mztab.loading`はこれを`MZTAB_NOT_FOUND`の`DomainError`へ畳む） |
 | 書出 | `AnalysisJob.save`は**ジョブの内容**で版を決める（`_schema_version_for`）。profile snapshotを持つジョブだけが`analysis-job.v3`、持たないジョブは従来どおり`analysis-job.v2` |
 
 内容で決めるので、リピドミクスv1経路が書くジョブのバイト列は一切変わらない
@@ -21,7 +21,7 @@ MS-DIAL Console実行の永続スナップショット`analysis-job.json`の第3
 
 | フィールド | 型 | 内容 |
 |---|---|---|
-| `profile` | object | `lipidmix.console.profiles.snapshot_profile()`の戻り値そのまま。dataclass側の属性名は`profile_snapshot` |
+| `profile` | object | `metabolomix.console.profiles.snapshot_profile()`の戻り値そのまま。dataclass側の属性名は`profile_snapshot` |
 | `dependencies` | list | 依存ファイルmanifest。**`profile.dependencies`の読取専用view**（`AnalysisJob.dependencies`プロパティ） |
 | `environment` | object | 実行環境manifest。**`profile.execution_environment`の読取専用view**（`AnalysisJob.environment`プロパティ） |
 
@@ -32,7 +32,7 @@ MS-DIAL Console実行の永続スナップショット`analysis-job.json`の第3
 
 ## profile（snapshot）の主なキー
 
-`lipidmix/console/profiles.py`の`resolve_profile_inputs` → `snapshot_profile`が組み立てる。
+`metabolomix/console/profiles.py`の`resolve_profile_inputs` → `snapshot_profile`が組み立てる。
 
 | キー | 内容 |
 |---|---|
@@ -49,7 +49,7 @@ MS-DIAL Console実行の永続スナップショット`analysis-job.json`の第3
 
 ## 完了検証での使われ方
 
-`lipidmix.mztab.loading._verify_source`は、既存の検証（終了証跡の存在・`job_id`一致・
+`metabolomix.mztab.loading._verify_source`は、既存の検証（終了証跡の存在・`job_id`一致・
 `termination=exited` かつ `exit_code=0`・mzTabのhash一致）を通ったあとに、v3のジョブだけ
 **実効メソッドの再照合**を行う（`_verify_effective_method`）。`run_dir`配下の
 `effective_method_relative_path`が消えている、または`effective_method_sha256`と

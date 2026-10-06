@@ -23,13 +23,13 @@
 
 ## 層の構成
 
-- `lipidmix/core/` — FastMCP インスタンス、セッション状態、パス解決、共通ヘルパ
-- `lipidmix/msdial/` — MS-DIAL 固有のサイドカー（`*_tags.xml` / `.mddata`）と同定・検証
-- `lipidmix/arf/` `arf2/` `pai2/` `dcl/` `eic/` — 形式ごとのパーサと MCP ツール
-- `lipidmix/analysis/` — 入力形式に依存しない数値処理
-- `lipidmix/plots/` — レンダラ中立の payload 組み立て
-- `lipidmix/corpus/` — 蓄積ノートの純ロジック
-- `lipidmix/tools/` — 形式に紐づかない MCP 公開層
+- `metabolomix/core/` — FastMCP インスタンス、セッション状態、パス解決、共通ヘルパ
+- `metabolomix/msdial/` — MS-DIAL 固有のサイドカー（`*_tags.xml` / `.mddata`）と同定・検証
+- `metabolomix/arf/` `arf2/` `pai2/` `dcl/` `eic/` — 形式ごとのパーサと MCP ツール
+- `metabolomix/analysis/` — 入力形式に依存しない数値処理
+- `metabolomix/plots/` — レンダラ中立の payload 組み立て
+- `metabolomix/corpus/` — 蓄積ノートの純ロジック
+- `metabolomix/tools/` — 形式に紐づかない MCP 公開層
 
 ## 目次
 

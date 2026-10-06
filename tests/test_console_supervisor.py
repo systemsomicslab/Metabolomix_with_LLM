@@ -1,4 +1,4 @@
-"""Console 監視（lipidmix.console.execution.supervise）の全終了経路の検証。
+"""Console 監視（metabolomix.console.execution.supervise）の全終了経路の検証。
 
 旧実装は非ゼロ終了で即 return し、生成物の収集を丸ごと飛ばしていた。**失敗した実行が
 何の証拠も残さない**のがこのテストが防ぐ欠陥なので、成功・非ゼロ・timeout・取消・
@@ -21,10 +21,10 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.console.execution import supervise, write_supervision_inputs
-from lipidmix.console.job_manager import create_job, load_job
-from lipidmix.core.process_control import process_identity, same_process
-from lipidmix.handoff.schema import sha256_file
+from metabolomix.console.execution import supervise, write_supervision_inputs
+from metabolomix.console.job_manager import create_job, load_job
+from metabolomix.core.process_control import process_identity, same_process
+from metabolomix.handoff.schema import sha256_file
 
 pytestmark = pytest.mark.skipif(
     os.name != "nt", reason="Job Object による実プロセス監視は Windows 専用")
@@ -327,7 +327,7 @@ def test_collection_failure_keeps_before_snapshot(planned_fake_job, monkeypatch)
     def _boom(*args, **kwargs):
         raise OSError("収集中のディスクエラー")
 
-    monkeypatch.setattr("lipidmix.console.execution.collect_artifacts", _boom)
+    monkeypatch.setattr("metabolomix.console.execution.collect_artifacts", _boom)
 
     receipt = supervise(job_path, command=_fake_command(job_path, counter, "success"))
 
@@ -346,7 +346,7 @@ def test_job_save_failure_returns_recovery_information(planned_fake_job, monkeyp
     def _boom(self, path):
         raise OSError("analysis-job.json を書けない")
 
-    monkeypatch.setattr("lipidmix.handoff.schema.AnalysisJob.save", _boom)
+    monkeypatch.setattr("metabolomix.handoff.schema.AnalysisJob.save", _boom)
 
     receipt = supervise(job_path, command=_fake_command(job_path, counter, "success"))
 
@@ -367,7 +367,7 @@ def test_receipt_is_persisted_before_stage_results(planned_fake_job, monkeypatch
         seen["receipt"] = _receipt_on_disk(job_path)
         raise OSError("収集中のディスクエラー")
 
-    monkeypatch.setattr("lipidmix.console.execution.collect_artifacts", _capture)
+    monkeypatch.setattr("metabolomix.console.execution.collect_artifacts", _capture)
 
     supervise(job_path, command=_fake_command(job_path, counter, "success"))
 
@@ -377,7 +377,7 @@ def test_receipt_is_persisted_before_stage_results(planned_fake_job, monkeypatch
 
 
 def test_receipt_passes_execution_record_validation(planned_fake_job):
-    from lipidmix.console.execution import validate_execution_record
+    from metabolomix.console.execution import validate_execution_record
     job_path, counter = planned_fake_job
 
     receipt = supervise(job_path, command=_fake_command(job_path, counter, "success"))

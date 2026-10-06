@@ -16,7 +16,7 @@ import json as _json
 
 import pytest
 
-from lipidmix.core import version
+from metabolomix.core import version
 
 
 @pytest.fixture(autouse=True)
@@ -58,7 +58,7 @@ CLEAN_BEHIND_ONE = {
     ("status", "--porcelain"): "",
     ("fetch",): "",
     ("rev-list", "--count"): "1",
-    ("diff", "--name-only"): "lipidmix/arf/reader.py\nUSAGE.md",
+    ("diff", "--name-only"): "metabolomix/arf/reader.py\nUSAGE.md",
     ("merge", "--ff-only"): "Updating 4253408..abc1234",
     ("rev-parse", "--short", "HEAD"): "abc1234",
 }
@@ -85,7 +85,7 @@ def no_pip(monkeypatch):
 
 def test_refuses_when_worktree_is_dirty(monkeypatch, no_pip):
     """未コミット変更があるときは pull しない。消えたら復元できないため。"""
-    git = FakeGit(_with(**{"status__--porcelain": " M lipidmix/arf/reader.py"}))
+    git = FakeGit(_with(**{"status__--porcelain": " M metabolomix/arf/reader.py"}))
     monkeypatch.setattr(version, "_git", git)
 
     result = version.apply_update()
@@ -232,7 +232,7 @@ def test_notice_names_the_tool(monkeypatch):
 # ---------- MCP 公開面 ----------
 
 def test_tool_returns_compact_json(monkeypatch):
-    from lipidmix.tools import maintenance
+    from metabolomix.tools import maintenance
 
     monkeypatch.setattr(version, "apply_update",
                         lambda: {"status": "up_to_date", "head": "abc1234"})
@@ -245,7 +245,7 @@ def test_tool_returns_compact_json(monkeypatch):
 
 def test_tool_reports_running_version(monkeypatch, no_pip):
     """どの版が動いていたかが分からないと、更新前後の比較ができない。"""
-    from lipidmix.tools import maintenance
+    from metabolomix.tools import maintenance
 
     monkeypatch.setattr(version, "_git", FakeGit(CLEAN_BEHIND_ONE))
 

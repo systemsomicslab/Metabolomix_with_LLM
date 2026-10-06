@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.console.input_prep import prepare_single_format_input
+from metabolomix.console.input_prep import prepare_single_format_input
 
 
 def _sciex_pair(root: Path, stem: str):
@@ -79,7 +79,7 @@ def test_leaves_the_source_folder_untouched(tmp_path):
 
 def test_output_folder_has_exactly_one_raw_format(tmp_path):
     """作った先が console_plan の raw_input_summary を 1 種類で通ること。"""
-    from lipidmix.console.job_manager import raw_input_summary
+    from metabolomix.console.job_manager import raw_input_summary
     src = tmp_path / "raw"
     src.mkdir()
     _sciex_pair(src, "a")
@@ -130,7 +130,7 @@ def test_same_stem_analysis_artifacts_are_not_pulled_in_as_companions(tmp_path):
 
     旧実装は「primaryの先頭トークンで始まり、計測拡張子でないもの」を随伴と
     見なしていたため、同じstemのPAI2やタグXMLまで拾ってしまっていた
-    （lipidmix/console/input_prep.py の COMPANION_RULES 導入前の欠陥）。
+    （metabolomix/console/input_prep.py の COMPANION_RULES 導入前の欠陥）。
     """
     src = tmp_path / "raw"
     src.mkdir()

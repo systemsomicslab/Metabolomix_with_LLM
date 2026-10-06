@@ -30,27 +30,27 @@ MS/MS の充填（手順 5）はセッション格納（手順 4）の**後**に
 `session.pai2.features` を直接書き換える形で走る。`.dcl` が見つからなくても
 `caveat` を添えて解析は続行する。
 
-1. lipidmix/pai2/tools.py  pai2_parser()
-2. └─ lipidmix/core/path_resolvers.py  resolve_pai2_file_path()
-3. └─ lipidmix/pai2/reader.py  deserialize()
-4. └─ lipidmix/core/session_state.py  Pai2State.load()
-5. │  └─ lipidmix/core/session_state.py  Pai2State.apply_filter()
-6. │     └─ lipidmix/pai2/reader.py  filter_features_by_params()
-7. └─ lipidmix/pai2/tools.py  _attach_sibling_msms()
-8. │  └─ lipidmix/dcl/reader.py  find_dcl_for_pai2()
-9. │  └─ lipidmix/dcl/reader.py  deserialize_dcl()
-10. │  └─ lipidmix/dcl/reader.py  attach_msms_to_features()
-11. └─ lipidmix/pai2/reader.py  summarize_pai2_inventory()
-12. └─ lipidmix/core/session_state.py  AnalysisSession.maybe_prepend_caveat()
+1. metabolomix/pai2/tools.py  pai2_parser()
+2. └─ metabolomix/core/path_resolvers.py  resolve_pai2_file_path()
+3. └─ metabolomix/pai2/reader.py  deserialize()
+4. └─ metabolomix/core/session_state.py  Pai2State.load()
+5. │  └─ metabolomix/core/session_state.py  Pai2State.apply_filter()
+6. │     └─ metabolomix/pai2/reader.py  filter_features_by_params()
+7. └─ metabolomix/pai2/tools.py  _attach_sibling_msms()
+8. │  └─ metabolomix/dcl/reader.py  find_dcl_for_pai2()
+9. │  └─ metabolomix/dcl/reader.py  deserialize_dcl()
+10. │  └─ metabolomix/dcl/reader.py  attach_msms_to_features()
+11. └─ metabolomix/pai2/reader.py  summarize_pai2_inventory()
+12. └─ metabolomix/core/session_state.py  AnalysisSession.maybe_prepend_caveat()
 
 ## pai2_inspect_peak
 
 前提: `pai2_parser` 実行済み（未実行なら手順 2 で `MissingState`）
 状態変更: なし
 
-1. lipidmix/pai2/tools.py  pai2_inspect_peak()
-2. └─ lipidmix/core/mcp_errors.py  missing_state()
-3. └─ lipidmix/pai2/reader.py  inspect_peak_details()
+1. metabolomix/pai2/tools.py  pai2_inspect_peak()
+2. └─ metabolomix/core/mcp_errors.py  missing_state()
+3. └─ metabolomix/pai2/reader.py  inspect_peak_details()
 
 ## verify_peak_annotation
 
@@ -65,8 +65,8 @@ MSI Level 2 を主張する前に、返り値の `analytical_checks.msms.band` �
 蓄積ノートの語彙（手順 3）は生物学的妥当性の材料としてドシエに載る。ヒットが複数ある
 場合は手順 4 が件数分繰り返される。
 
-1. lipidmix/pai2/tools.py  verify_peak_annotation()
-2. └─ lipidmix/core/mcp_errors.py  missing_state()
-3. └─ lipidmix/corpus/knowledge_store.py  load_vocab()
-4. └─ lipidmix/core/tool_helpers.py  _build_verification_dossier()
-5. │  └─ lipidmix/pai2/reader.py  get_signal_to_noise()
+1. metabolomix/pai2/tools.py  verify_peak_annotation()
+2. └─ metabolomix/core/mcp_errors.py  missing_state()
+3. └─ metabolomix/corpus/knowledge_store.py  load_vocab()
+4. └─ metabolomix/core/tool_helpers.py  _build_verification_dossier()
+5. │  └─ metabolomix/pai2/reader.py  get_signal_to_noise()

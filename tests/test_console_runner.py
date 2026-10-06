@@ -1,7 +1,7 @@
 # tests/test_console_runner.py
 #
-# Console の実行は `lipidmix.console.execution.supervise` が唯一の経路で、
-# `console_run` は監視ワーカー（lipidmix.console.worker）を通してそこへ入る。
+# Console の実行は `metabolomix.console.execution.supervise` が唯一の経路で、
+# `console_run` は監視ワーカー（metabolomix.console.worker）を通してそこへ入る。
 # ここでの実行系テストは **subprocess をモックしない** —— 監視・停止・収集の
 # どれが壊れても緑のままになるため、実際に子プロセスを起こし、その終了コードと
 # 生成物で判定する（`_fake_console`）。
@@ -14,18 +14,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lipidmix.console.runner import (
+from metabolomix.console.runner import (
     MsdialExeNotFoundError,
     build_msdial_cmd,
     get_exe_path,
 )
-from lipidmix.console.output_collector import (
+from metabolomix.console.output_collector import (
     collect_artifacts,
     snapshot,
     _assign_role,
     _infer_mztab_meta,
 )
-from lipidmix.console.job_manager import (
+from metabolomix.console.job_manager import (
     create_job,
     count_raw_inputs,
     list_jobs,
@@ -48,7 +48,7 @@ def test_get_exe_path_set(monkeypatch):
 
 
 def test_is_console_exe_accepts_output_with_lcms():
-    from lipidmix.console.runner import is_console_exe
+    from metabolomix.console.runner import is_console_exe
     completed = MagicMock()
     completed.stdout = "MSDIAL Console Application 5.5\n  lcms   Run LC-MS data processing\n"
     with patch("subprocess.run", return_value=completed):
@@ -57,13 +57,13 @@ def test_is_console_exe_accepts_output_with_lcms():
 
 def test_is_console_exe_rejects_gui():
     """GUI はコンソール出力を持たず、--help でウィンドウを開いて返らない。"""
-    from lipidmix.console.runner import is_console_exe
+    from metabolomix.console.runner import is_console_exe
     with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("x", 15)):
         assert is_console_exe("gui.exe") is False
 
 
 def test_is_console_exe_rejects_missing_file():
-    from lipidmix.console.runner import is_console_exe
+    from metabolomix.console.runner import is_console_exe
     with patch("subprocess.run", side_effect=OSError("not found")):
         assert is_console_exe("nope.exe") is False
 
@@ -291,7 +291,7 @@ def test_list_jobs_finds_jobs(tmp_path):
 
 
 def test_raw_input_summary_counts_by_extension(tmp_path):
-    from lipidmix.console.job_manager import raw_input_summary
+    from metabolomix.console.job_manager import raw_input_summary
     (tmp_path / "a.wiff").touch()
     (tmp_path / "b.wiff").touch()
     (tmp_path / "a.wiff2").touch()
@@ -313,7 +313,7 @@ def test_vendor_directories_count_as_measurements(tmp_path):
     （`Directory.Exists(path) && (extension == ".raw" || extension == ".d")`）。
     Agilent/Bruker の `.d` と Waters の `.raw` がこれに当たる。
     """
-    from lipidmix.console.job_manager import list_raw_inputs, raw_input_summary
+    from metabolomix.console.job_manager import list_raw_inputs, raw_input_summary
     (tmp_path / "a.d").mkdir()
     (tmp_path / "b.d").mkdir()
     (tmp_path / "waters.raw").mkdir()
@@ -329,7 +329,7 @@ def test_non_vendor_directories_are_not_measurements(tmp_path):
     実在しないサンプルが入り、`ms_run[N]-location` との 1 対 1 照合が
     実行の最後になって落ちる。
     """
-    from lipidmix.console.job_manager import raw_input_summary
+    from metabolomix.console.job_manager import raw_input_summary
     (tmp_path / "backup.mzml").mkdir()
     (tmp_path / "old.wiff").mkdir()
     (tmp_path / "real.mzml").touch()
@@ -342,7 +342,7 @@ def test_all_msdial_raw_extensions_are_recognised(tmp_path):
     出典: `src/MSDIAL5/MsdialCore/Enum/SupportFormat.cs`
     `enum SupportMsRawDataExtension { abf, ibf, cdf, mzml, wiff, raw, d, wiff2, qgd, lcd, lrp, imzml }`
     """
-    from lipidmix.console.job_manager import raw_input_summary
+    from metabolomix.console.job_manager import raw_input_summary
     extensions = ["abf", "ibf", "cdf", "mzml", "wiff", "raw",
                   "d", "wiff2", "qgd", "lcd", "lrp", "imzml"]
     for ext in extensions:
@@ -376,7 +376,7 @@ from tests.pipeline_fixtures import (  # noqa: E402
 
 def test_console_plan_unsupported_area(tmp_path):
     import json as _json
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     result = console_plan(
         dataset_root=str(tmp_path),
         method_file=str(tmp_path / "m.msdial"),
@@ -392,7 +392,7 @@ def test_console_plan_missing_exe(tmp_path, monkeypatch):
     monkeypatch.delenv("MSDIAL_EXE", raising=False)
     method = tmp_path / "params.msdial"
     method.write_text("Ion mode: Positive\n", encoding="ascii")
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     result = console_plan(
         dataset_root=str(tmp_path),
         method_file=str(method),
@@ -407,7 +407,7 @@ def test_console_plan_missing_method_file(tmp_path, monkeypatch):
     import json as _json
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     result = console_plan(
         dataset_root=str(tmp_path),
         method_file=str(tmp_path / "nonexistent.msdial"),
@@ -425,8 +425,8 @@ def test_console_plan_rejects_non_console_exe(tmp_path, monkeypatch):
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     (tmp_path / "a.wiff").touch()
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: False)
-    from lipidmix.tools.console_tools import console_plan
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: False)
+    from metabolomix.tools.console_tools import console_plan
     result = console_plan(dataset_root=str(tmp_path), method_file=str(method),
                           polarity="negative", measure="peak_height")
     assert _json.loads(result)["error"]["code"] == "MSDIAL_EXE_NOT_CONSOLE"
@@ -434,15 +434,15 @@ def test_console_plan_rejects_non_console_exe(tmp_path, monkeypatch):
 
 def test_console_plan_success(tmp_path, monkeypatch):
     import json as _json
-    from lipidmix.core import session_state
+    from metabolomix.core import session_state
     session_state.session = session_state.AnalysisSession()
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     method = tmp_path / "params.msdial"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     (tmp_path / "a.wiff").touch()
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     result = console_plan(
         dataset_root=str(tmp_path),
         method_file=str(method),
@@ -460,12 +460,12 @@ def test_console_plan_rejects_mixed_raw_formats(tmp_path, monkeypatch):
     import json as _json
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     (tmp_path / "a.wiff").touch()
     (tmp_path / "a.wiff2").touch()
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     parsed = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
                                       polarity="negative", measure="peak_height"))
     assert parsed["error"]["code"] == "MIXED_RAW_FORMATS"
@@ -476,10 +476,10 @@ def test_console_plan_rejects_empty_dataset_root(tmp_path, monkeypatch):
     import json as _json
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     parsed = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
                                       polarity="negative", measure="peak_height"))
     assert parsed["error"]["code"] == "MIXED_RAW_FORMATS"
@@ -488,16 +488,16 @@ def test_console_plan_rejects_empty_dataset_root(tmp_path, monkeypatch):
 def test_console_plan_warns_existing_alignment_results(tmp_path, monkeypatch):
     """実行のたびに dataset_root へ別タイムスタンプのアライメント一式が積まれる。"""
     import json as _json
-    from lipidmix.core import session_state
+    from metabolomix.core import session_state
     session_state.session = session_state.AnalysisSession()
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     (tmp_path / "a.wiff").touch()
     (tmp_path / "AlignResult-2026931617_PeakProperties.arf").touch()
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     parsed = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
                                       polarity="negative", measure="peak_height"))
     assert parsed["status"] == "planned"
@@ -509,11 +509,11 @@ def test_console_plan_rejects_binary_method_file(tmp_path, monkeypatch):
     import json as _json
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     (tmp_path / "a.wiff").touch()
     method = tmp_path / "project.mdproject"
     method.write_bytes(b"PK\x03\x04\x00\x00binary")
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     parsed = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
                                       polarity="negative", measure="peak_height"))
     assert parsed["error"]["code"] == "METHOD_FILE_NOT_TEXT"
@@ -523,11 +523,11 @@ def test_console_plan_rejects_text_without_key_value(tmp_path, monkeypatch):
     import json as _json
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     (tmp_path / "a.wiff").touch()
     method = tmp_path / "empty.txt"
     method.write_text("# comment only\n\n", encoding="ascii")
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     parsed = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
                                       polarity="negative", measure="peak_height"))
     assert parsed["error"]["code"] == "METHOD_FILE_NOT_TEXT"
@@ -535,15 +535,15 @@ def test_console_plan_rejects_text_without_key_value(tmp_path, monkeypatch):
 
 def test_console_plan_accepts_key_value_method_file(tmp_path, monkeypatch):
     import json as _json
-    from lipidmix.core import session_state
+    from metabolomix.core import session_state
     session_state.session = session_state.AnalysisSession()
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     (tmp_path / "a.wiff").touch()
     method = tmp_path / "params.txt"
     method.write_text("# MS-DIAL param\nIon mode: Negative\n", encoding="ascii")
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     parsed = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
                                       polarity="negative", measure="peak_height"))
     assert parsed["status"] == "planned"
@@ -551,9 +551,9 @@ def test_console_plan_accepts_key_value_method_file(tmp_path, monkeypatch):
 
 def test_console_status_no_job():
     import json as _json
-    from lipidmix.core import session_state
+    from metabolomix.core import session_state
     session_state.session = session_state.AnalysisSession()
-    from lipidmix.tools.console_tools import console_status
+    from metabolomix.tools.console_tools import console_status
     result = console_status()
     parsed = _json.loads(result)
     assert parsed["error"]["code"] == "JOB_NOT_FOUND"
@@ -570,7 +570,7 @@ def test_console_run_nonplanned_job(tmp_path, monkeypatch):
         polarity="positive", measure="peak_height",
     )
     update_status(job_path, "completed")
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.tools.console_tools import console_run
     result = console_run(str(job_path))
     parsed = _json.loads(result)
     assert parsed["error"]["code"] == "JOB_NOT_PLANNED"
@@ -579,9 +579,9 @@ def test_console_run_nonplanned_job(tmp_path, monkeypatch):
 def test_console_run_rejects_changed_non_console_exe_before_launch(tmp_path, monkeypatch):
     """計画後に MSDIAL_EXE が GUI へ変わっても、ジョブを planned のまま止める。"""
     import json as _json
-    from lipidmix.core import session_state
-    from lipidmix.console import runner
-    from lipidmix.tools.console_tools import console_plan, console_run
+    from metabolomix.core import session_state
+    from metabolomix.console import runner
+    from metabolomix.tools.console_tools import console_plan, console_run
 
     session_state.session = session_state.AnalysisSession()
     monkeypatch.setenv("MSDIAL_EXE", "console.exe")
@@ -620,8 +620,8 @@ def test_console_run_rejects_changed_non_console_exe_before_launch(tmp_path, mon
 def test_console_run_marks_missing_changed_exe_failed(tmp_path, monkeypatch):
     """計画後に MSDIAL_EXE が消えた場合は従来どおり NOT_FOUND/failed にする。"""
     import json as _json
-    from lipidmix.console.job_manager import create_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import create_job
+    from metabolomix.tools.console_tools import console_run
 
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
@@ -644,8 +644,8 @@ def test_console_run_marks_missing_changed_exe_failed(tmp_path, monkeypatch):
 
 def test_create_job_allows_default_data_dir(tmp_path, monkeypatch):
     """既定データディレクトリ（<repo>/data 配下）を dataset_root にできる。"""
-    from lipidmix.core import mcp_core
-    from lipidmix.console.job_manager import create_job
+    from metabolomix.core import mcp_core
+    from metabolomix.console.job_manager import create_job
     # リポジトリ直下の data/ を模す: BASE_DIR 配下だが DATA_DIR 配下でもある
     fake_repo = tmp_path / "repo"
     data_root = fake_repo / "data" / "study-001"
@@ -662,10 +662,10 @@ def test_create_job_allows_default_data_dir(tmp_path, monkeypatch):
 
 def test_create_job_still_rejects_source_tree(tmp_path, monkeypatch):
     """データディレクトリ外のリポジトリ内パスは従来どおり拒否する。"""
-    from lipidmix.core import mcp_core
-    from lipidmix.console.job_manager import create_job
+    from metabolomix.core import mcp_core
+    from metabolomix.console.job_manager import create_job
     fake_repo = tmp_path / "repo"
-    (fake_repo / "lipidmix").mkdir(parents=True)
+    (fake_repo / "metabolomix").mkdir(parents=True)
     (fake_repo / "data").mkdir(parents=True)
     method = tmp_path / "params.msdial"
     method.touch()
@@ -673,13 +673,13 @@ def test_create_job_still_rejects_source_tree(tmp_path, monkeypatch):
     monkeypatch.setenv("LIPIDMIX_DATA_DIR", str(fake_repo / "data"))
 
     with pytest.raises(ValueError):
-        create_job(dataset_root=fake_repo / "lipidmix", method_file=method,
+        create_job(dataset_root=fake_repo / "metabolomix", method_file=method,
                    polarity="positive", measure="peak_height")
 
 
 def test_collect_artifacts_excludes_operational_files(tmp_path):
     """msdial.log / analysis-job.json は生成物として数えない。"""
-    from lipidmix.console.output_collector import collect_artifacts, snapshot
+    from metabolomix.console.output_collector import collect_artifacts, snapshot
     before = snapshot(tmp_path)
     (tmp_path / "msdial.log").write_text("CMD: fake\n")
     (tmp_path / "analysis-job.json").write_text("{}")
@@ -691,11 +691,11 @@ def test_collect_artifacts_excludes_operational_files(tmp_path):
 def test_console_run_reports_no_output(tmp_path, monkeypatch):
     """終了コード 0 でも生成物が 1 件も無ければ NO_JOB_OUTPUT になる。"""
     import json as _json
-    from lipidmix.console.job_manager import create_job, load_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import create_job, load_job
+    from metabolomix.tools.console_tools import console_run
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     method = tmp_path / "params.msdial"
     method.touch()
     _, job_path = create_job(dataset_root=tmp_path, method_file=method,
@@ -715,11 +715,11 @@ def test_console_run_marks_failed_when_the_executable_cannot_be_started(tmp_path
     最後の砦。起動できなかった事実は終了証跡に termination=launch_failed として残る。
     """
     import json as _json
-    from lipidmix.console.job_manager import create_job, load_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import create_job, load_job
+    from metabolomix.tools.console_tools import console_run
     monkeypatch.setenv("MSDIAL_EXE", str(tmp_path / "definitely_not_here.exe"))
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     method = tmp_path / "params.msdial"
     method.touch()
     _, job_path = create_job(dataset_root=tmp_path, method_file=method,
@@ -743,11 +743,11 @@ def test_console_run_post_run_failure_marks_job_failed_not_running(tmp_path, mon
     JOB_NOT_PLANNED で拒否されて誰も直せなくなる。
     """
     import json as _json
-    from lipidmix.console.job_manager import create_job, load_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import create_job, load_job
+    from metabolomix.tools.console_tools import console_run
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     method = tmp_path / "params.msdial"
     method.touch()
     job, job_path = create_job(dataset_root=tmp_path, method_file=method,
@@ -755,7 +755,7 @@ def test_console_run_post_run_failure_marks_job_failed_not_running(tmp_path, mon
     out = Path(job.run_dir) / "msdial"
     _use_console(monkeypatch, _fake_console(
         {out / "Height_AlignmentResult_ctrl_1.mzTab": "MTD\t"}))
-    monkeypatch.setattr("lipidmix.console.output_collector.sha256_file",
+    monkeypatch.setattr("metabolomix.console.output_collector.sha256_file",
                         lambda *a, **k: (_ for _ in ()).throw(
                             PermissionError("locked by AV scanner")))
 
@@ -822,11 +822,11 @@ def test_collect_artifacts_excludes_normalized_mztab_from_primary_candidates(tmp
 
 def test_console_run_records_declared_polarity_on_mztab_entries(tmp_path, monkeypatch):
     """極性トークンを持たない出力名でも、宣言した negative が記録される。"""
-    from lipidmix.console.job_manager import create_job, load_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import create_job, load_job
+    from metabolomix.tools.console_tools import console_run
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     (tmp_path / "S1.abf").write_bytes(b"raw")
     method = tmp_path / "params.msdial"
     method.touch()
@@ -846,11 +846,11 @@ def test_console_run_records_declared_polarity_on_mztab_entries(tmp_path, monkey
 
 def test_console_run_warns_when_filename_contradicts_declared_polarity(tmp_path, monkeypatch):
     """ファイル名の極性が宣言と食い違うなら、黙らずに warning へ残す。"""
-    from lipidmix.console.job_manager import create_job, load_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import create_job, load_job
+    from metabolomix.tools.console_tools import console_run
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     (tmp_path / "S1.abf").write_bytes(b"raw")
     method = tmp_path / "params.msdial"
     method.touch()
@@ -877,11 +877,11 @@ def test_console_run_warns_when_filename_contradicts_declared_polarity(tmp_path,
 # 増えない（その穴は最初から埋まっていない）。
 
 def test_console_run_writes_no_sidecar_files(tmp_path, monkeypatch):
-    from lipidmix.console.job_manager import create_job, load_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import create_job, load_job
+    from metabolomix.tools.console_tools import console_run
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     (tmp_path / "S1.abf").write_bytes(b"raw")
     method = tmp_path / "params.msdial"
     method.touch()
@@ -906,11 +906,11 @@ def test_console_run_warns_when_no_per_sample_pai2(tmp_path, monkeypatch):
     「サンプル別ファイルが無い＝pai2_parser / dcl_find_msms が読むものが無い」
     という事実の側にある。廃止後も独立した検査として残す。
     """
-    from lipidmix.console.job_manager import create_job, load_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import create_job, load_job
+    from metabolomix.tools.console_tools import console_run
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     (tmp_path / "S1.abf").write_bytes(b"raw")
     method = tmp_path / "params.msdial"
     method.touch()
@@ -929,11 +929,11 @@ def test_console_run_warns_when_no_per_sample_pai2(tmp_path, monkeypatch):
 
 def test_console_run_no_pai2_warning_when_pai2_present(tmp_path, monkeypatch):
     """.pai2 が出ているときに上の警告を出してはいけない（過剰警告の防止）。"""
-    from lipidmix.console.job_manager import create_job, load_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import create_job, load_job
+    from metabolomix.tools.console_tools import console_run
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     (tmp_path / "S1.abf").write_bytes(b"raw")
     method = tmp_path / "params.msdial"
     method.touch()
@@ -954,13 +954,13 @@ def test_console_run_no_pai2_warning_when_pai2_present(tmp_path, monkeypatch):
 def _planned_task8_job(tmp_path, monkeypatch, **kwargs):
     """console_plan を通して Task 8 のジョブを 1 件作り、パスを返す。"""
     import json as _json
-    from lipidmix.core import session_state
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.core import session_state
+    from metabolomix.tools.console_tools import console_plan
 
     session_state.session = session_state.AnalysisSession()
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     (tmp_path / "S1.wiff").touch()
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
@@ -974,8 +974,8 @@ def _planned_task8_job(tmp_path, monkeypatch, **kwargs):
 def test_console_run_collects_dataset_root_outputs(tmp_path, monkeypatch):
     """生データフォルダの .pai2/.dcl も収集し、誤った不在警告を出さない。"""
     import json as _json
-    from lipidmix.console.job_manager import load_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import load_job
+    from metabolomix.tools.console_tools import console_run
 
     job_path = _planned_task8_job(tmp_path, monkeypatch)
     out = Path(load_job(job_path).run_dir) / "msdial"
@@ -1000,8 +1000,8 @@ def test_console_run_collects_dataset_root_outputs(tmp_path, monkeypatch):
 def test_console_run_warns_when_no_dataset_root_sample_files(tmp_path, monkeypatch):
     """両ルートに .pai2 がなければ初めて MS/MS 根拠不足を警告する。"""
     import json as _json
-    from lipidmix.console.job_manager import load_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import load_job
+    from metabolomix.tools.console_tools import console_run
 
     job_path = _planned_task8_job(tmp_path, monkeypatch)
     out = Path(load_job(job_path).run_dir) / "msdial"
@@ -1019,8 +1019,8 @@ def test_console_plan_persists_and_console_run_passes_execution_options(tmp_path
     終了証跡の `timeout_s` で確かめる（証跡は監視が実際に使った値を書く）。
     """
     import json as _json
-    from lipidmix.console.job_manager import load_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import load_job
+    from metabolomix.tools.console_tools import console_run
 
     job_path = _planned_task8_job(tmp_path, monkeypatch, save_project=True, timeout_s=1234)
     out = Path(load_job(job_path).run_dir) / "msdial"
@@ -1033,7 +1033,7 @@ def test_console_plan_persists_and_console_run_passes_execution_options(tmp_path
                     dataset_root=str(dataset_root), out=str(msdial_out_dir))
         return command
 
-    monkeypatch.setattr("lipidmix.console.runner.build_msdial_cmd", _capture)
+    monkeypatch.setattr("metabolomix.console.runner.build_msdial_cmd", _capture)
     console_run(str(job_path))
 
     saved = load_job(job_path)
@@ -1053,8 +1053,8 @@ def test_console_plan_rejects_invalid_execution_options_before_job_side_effects(
         tmp_path, monkeypatch, save_project, timeout_s):
     """不正な実行オプションは runs 作成も current_job_path 更新も起こさせない。"""
     import json as _json
-    from lipidmix.core import session_state
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.core import session_state
+    from metabolomix.tools.console_tools import console_plan
 
     session_state.session = session_state.AnalysisSession()
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
@@ -1075,15 +1075,15 @@ def test_console_plan_rejects_invalid_execution_options_before_job_side_effects(
 def test_console_run_rejects_invalid_loaded_execution_options_before_running(tmp_path, monkeypatch):
     """手編集された不正ジョブは Console を起動せず planned のまま拒否する。"""
     import json as _json
-    from lipidmix.console.job_manager import load_job, save_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import load_job, save_job
+    from metabolomix.tools.console_tools import console_run
 
     job_path = _planned_task8_job(tmp_path, monkeypatch)
     job = load_job(job_path)
     job.timeout_s = 0
     save_job(job, job_path)
     monkeypatch.setattr(
-        "lipidmix.console.execution.start_owned_process",
+        "metabolomix.console.execution.start_owned_process",
         lambda *args, **kwargs: pytest.fail("不正な実行オプションで Console を起動した"),
     )
 
@@ -1095,8 +1095,8 @@ def test_console_run_rejects_invalid_loaded_execution_options_before_running(tmp
 def test_console_run_timeout_persists_partial_outputs_from_both_roots(tmp_path, monkeypatch):
     """タイムアウト後も既出力は partial ジョブに保存し、根を失わない。"""
     import json as _json
-    from lipidmix.console.job_manager import load_job, save_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import load_job, save_job
+    from metabolomix.tools.console_tools import console_run
 
     job_path = _planned_task8_job(tmp_path, monkeypatch)
     job = load_job(job_path)
@@ -1122,8 +1122,8 @@ def test_console_run_timeout_persists_partial_outputs_from_both_roots(tmp_path, 
 def test_console_run_timeout_without_outputs_fails(tmp_path, monkeypatch):
     """タイムアウト時に出力ゼロなら partial と偽らず failed にする。"""
     import json as _json
-    from lipidmix.console.job_manager import load_job, save_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import load_job, save_job
+    from metabolomix.tools.console_tools import console_run
 
     job_path = _planned_task8_job(tmp_path, monkeypatch)
     job = load_job(job_path)
@@ -1145,8 +1145,8 @@ def test_console_run_timeout_collection_failure_marks_failed_with_timeout_contex
     もう一方を消さない**。
     """
     import json as _json
-    from lipidmix.console.job_manager import load_job, save_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import load_job, save_job
+    from metabolomix.tools.console_tools import console_run
 
     job_path = _planned_task8_job(tmp_path, monkeypatch)
     job = load_job(job_path)
@@ -1154,7 +1154,7 @@ def test_console_run_timeout_collection_failure_marks_failed_with_timeout_contex
     save_job(job, job_path)
     _use_console(monkeypatch, _fake_console(sleep_s=30))
     monkeypatch.setattr(
-        "lipidmix.console.execution.collect_artifacts",
+        "metabolomix.console.execution.collect_artifacts",
         lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("locked")),
     )
 
@@ -1174,15 +1174,15 @@ def test_console_run_timeout_collection_failure_marks_failed_with_timeout_contex
 def test_console_run_persistence_failure_marks_successful_run_failed(tmp_path, monkeypatch):
     """収集済み成果物の保存に失敗しても running を残さず封筒を返す。"""
     import json as _json
-    from lipidmix.console.job_manager import load_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import load_job
+    from metabolomix.tools.console_tools import console_run
 
     job_path = _planned_task8_job(tmp_path, monkeypatch)
     out = Path(load_job(job_path).run_dir) / "msdial"
     _use_console(monkeypatch, _fake_console({
         out / "Height_AlignResult-1.mzTab": _mztab_text(tmp_path, [tmp_path / "S1.wiff"])}))
     monkeypatch.setattr(
-        "lipidmix.console.execution.save_job",
+        "metabolomix.console.execution.save_job",
         lambda *args, **kwargs: (_ for _ in ()).throw(OSError("save locked")),
     )
 
@@ -1198,8 +1198,8 @@ def test_console_run_persistence_failure_marks_successful_run_failed(tmp_path, m
 def test_console_run_timeout_persistence_failure_preserves_timeout_context(tmp_path, monkeypatch):
     """timeout 後の保存失敗も timeout 封筒と failed 状態に収束させる。"""
     import json as _json
-    from lipidmix.console.job_manager import load_job, save_job
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import load_job, save_job
+    from metabolomix.tools.console_tools import console_run
 
     job_path = _planned_task8_job(tmp_path, monkeypatch)
     job = load_job(job_path)
@@ -1210,7 +1210,7 @@ def test_console_run_timeout_persistence_failure_preserves_timeout_context(tmp_p
         {out / "Height_AlignResult-1.mzTab": _mztab_text(tmp_path, [tmp_path / "S1.wiff"])},
         sleep_s=30))
     monkeypatch.setattr(
-        "lipidmix.console.execution.save_job",
+        "metabolomix.console.execution.save_job",
         lambda *args, **kwargs: (_ for _ in ()).throw(OSError("save locked")),
     )
 
@@ -1225,8 +1225,8 @@ def test_console_run_timeout_persistence_failure_preserves_timeout_context(tmp_p
 def test_console_status_exposes_roots_artifacts_and_execution_options(tmp_path, monkeypatch):
     """状態照会だけで生成物の由来と実行設定を追跡できる。"""
     import json as _json
-    from lipidmix.console.job_manager import load_job
-    from lipidmix.tools.console_tools import console_run, console_status
+    from metabolomix.console.job_manager import load_job
+    from metabolomix.tools.console_tools import console_run, console_status
 
     job_path = _planned_task8_job(tmp_path, monkeypatch, save_project=True, timeout_s=456)
     out = Path(load_job(job_path).run_dir) / "msdial"
@@ -1251,7 +1251,7 @@ def test_console_status_exposes_roots_artifacts_and_execution_options(tmp_path, 
 
 def test_method_text_check_reads_only_the_head(tmp_path, monkeypatch):
     """判定は先頭だけを読む。弾く対象の .mddata は GB 級になり得る。"""
-    from lipidmix.tools import console_tools
+    from metabolomix.tools import console_tools
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n" + "x" * 50000, encoding="ascii")
 
@@ -1265,8 +1265,8 @@ def test_method_text_check_reads_only_the_head(tmp_path, monkeypatch):
 def test_console_status_returns_artifacts_as_tsv(tmp_path, monkeypatch):
     """生成物の全文は行が並ぶ一覧なので TSV（列名 1 回）で返す（include_artifacts=True 時）。"""
     import json as _json
-    from lipidmix.console.job_manager import load_job
-    from lipidmix.tools.console_tools import console_run, console_status
+    from metabolomix.console.job_manager import load_job
+    from metabolomix.tools.console_tools import console_run, console_status
 
     job_path = _planned_task8_job(tmp_path, monkeypatch)
     out = Path(load_job(job_path).run_dir) / "msdial"
@@ -1291,7 +1291,7 @@ def test_console_status_returns_artifacts_as_tsv(tmp_path, monkeypatch):
 def test_console_status_artifacts_tsv_is_empty_string_when_none(tmp_path, monkeypatch):
     """生成物ゼロなら空文字。列名だけの行を返して件数を誤読させない。"""
     import json as _json
-    from lipidmix.tools.console_tools import console_status
+    from metabolomix.tools.console_tools import console_status
 
     job_path = _planned_task8_job(tmp_path, monkeypatch)
     parsed = _json.loads(console_status(str(job_path), include_artifacts=True))

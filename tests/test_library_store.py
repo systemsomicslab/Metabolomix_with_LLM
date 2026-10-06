@@ -3,7 +3,7 @@ import textwrap
 
 import pytest
 
-from lipidmix.library import store
+from metabolomix.library import store
 
 _MSP = textwrap.dedent("""\
     NAME: A

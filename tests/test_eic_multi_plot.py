@@ -7,7 +7,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 
-from lipidmix.plots.eic import build_multi_compound_plot_payload, render_eic_plot
+from metabolomix.plots.eic import build_multi_compound_plot_payload, render_eic_plot
 
 
 def _candidate(spot_id, name, ontology, rt, mz):
@@ -279,8 +279,8 @@ class EicPlotCompoundsToolTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from lipidmix.core import mcp_core
-        from lipidmix.core import session_state
+        from metabolomix.core import mcp_core
+        from metabolomix.core import session_state
 
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
@@ -319,7 +319,7 @@ class EicPlotCompoundsToolTests(unittest.TestCase):
         os.environ["LIPIDMIX_REPORTS_DIR"] = str(self.tmp / "fallback")
         session_state.session.eic.last_plot = None
 
-        from lipidmix.eic import tools as tools_eic
+        from metabolomix.eic import tools as tools_eic
 
         self._saved_loader = tools_eic.load_arf2_records
         tools_eic.load_arf2_records = lambda _path: self.records
@@ -327,9 +327,9 @@ class EicPlotCompoundsToolTests(unittest.TestCase):
     def tearDown(self):
         import os
 
-        from lipidmix.core import mcp_core
-        from lipidmix.core import session_state
-        from lipidmix.eic import tools as tools_eic
+        from metabolomix.core import mcp_core
+        from metabolomix.core import session_state
+        from metabolomix.eic import tools as tools_eic
 
         tools_eic.load_arf2_records = self._saved_loader
         mcp_core.DATA_DIR = self._saved_data_dir
@@ -342,7 +342,7 @@ class EicPlotCompoundsToolTests(unittest.TestCase):
 
     def test_returns_multi_payload_and_writes_no_png(self):
         import server
-        from lipidmix.core import session_state
+        from metabolomix.core import session_state
 
         payload = json.loads(server.eic_plot_compounds(
             7, names=["ceramide"], ontologies=["PC"],
@@ -395,7 +395,7 @@ class EicPlotCompoundsToolTests(unittest.TestCase):
 
     def test_default_top_n_is_small_enough_to_read(self):
         """既定 24 本は payload を実測 119,768 字まで膨らませ図も判読不能だった。"""
-        from lipidmix.eic.tools import DEFAULT_COMPOUND_TOP_N
+        from metabolomix.eic.tools import DEFAULT_COMPOUND_TOP_N
 
         self.assertLessEqual(DEFAULT_COMPOUND_TOP_N, 8)
 
@@ -457,13 +457,13 @@ class PlotSourceShapeRegressionTests(unittest.TestCase):
     """
 
     def test_single_spot_source_shape_is_unchanged(self):
-        from lipidmix.plots.eic import PlotSource
+        from metabolomix.plots.eic import PlotSource
 
         self.assertEqual(set(PlotSource.__annotations__), {"file", "file_name"})
         self.assertEqual(set(PlotSource.__required_keys__), {"file", "file_name"})
 
     def test_multi_compound_source_shape_has_all_three_fields(self):
-        from lipidmix.plots.eic import MultiPlotSource
+        from metabolomix.plots.eic import MultiPlotSource
 
         self.assertEqual(
             set(MultiPlotSource.__annotations__), {"file", "file_name", "arf2_file"},

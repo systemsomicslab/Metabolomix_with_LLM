@@ -3,7 +3,7 @@ import textwrap
 
 import pytest
 
-from lipidmix.library import msp
+from metabolomix.library import msp
 
 _MSP = textwrap.dedent("""\
     NAME: GABA

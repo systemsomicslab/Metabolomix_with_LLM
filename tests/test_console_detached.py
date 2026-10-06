@@ -10,7 +10,7 @@
 化けた。
 
 いまは `console_run(detach=True)` が切り離しワーカー
-（`python -m lipidmix.console.worker --job <path>`）を起こし、そのワーカーが
+（`python -m metabolomix.console.worker --job <path>`）を起こし、そのワーカーが
 job 単位の OS ロックを持ったまま `supervise` を最後まで回す。`console_status` は
 保存済みの状態を読むだけになり、完了処理を担わない。
 """
@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.console.job_manager import create_job, load_job
+from metabolomix.console.job_manager import create_job, load_job
 
 _WINDOWS_ONLY = pytest.mark.skipif(
     os.name != "nt", reason="切り離しワーカーの実プロセス起動は Windows 専用")
@@ -42,7 +42,7 @@ def _planned(tmp_path, monkeypatch, *, raw_count: int = 2):
     """planned 状態のジョブを 1 件作る（合成 raw と method ファイル付き）。"""
     monkeypatch.setenv("MSDIAL_EXE", str(tmp_path / "fake-msdialcui.exe"))
     (tmp_path / "fake-msdialcui.exe").write_bytes(b"fake console executable")
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     source = tmp_path / "source"
     source.mkdir(exist_ok=True)
     for i in range(1, raw_count + 1):
@@ -81,8 +81,8 @@ def _prime_supervision(job_path: Path) -> None:
     起動するテストでは、同じ前提をここで作る（入力目録が無いと
     `INPUT_INVENTORY_MISSING` で completed へ進めない）。
     """
-    from lipidmix.console.execution import write_supervision_inputs
-    from lipidmix.handoff.schema import sha256_file
+    from metabolomix.console.execution import write_supervision_inputs
+    from metabolomix.handoff.schema import sha256_file
     job = load_job(job_path)
     source = Path(job.dataset_root)
     raws = sorted(p.resolve() for p in source.iterdir() if p.suffix == ".abf")
@@ -104,7 +104,7 @@ def test_legacy_detached_state_is_not_promoted_by_files(tmp_path, monkeypatch):
     無い。この状態のジョブは「どう終わったか分からない」のであって、
     「成功した」ではない。
     """
-    from lipidmix.tools.console_tools import console_status
+    from metabolomix.tools.console_tools import console_status
     root = tmp_path / "source"
     root.mkdir()
     method = root / "method.txt"
@@ -113,18 +113,18 @@ def test_legacy_detached_state_is_not_promoted_by_files(tmp_path, monkeypatch):
     out = Path(job.run_dir)
     (out / ".detached-state.json").write_text('{"pid":123,"befores":{}}')
     (out / "intermediate.pai2").write_bytes(b"intermediate")
-    monkeypatch.setattr("lipidmix.console.runner.is_process_running", lambda pid: False)
+    monkeypatch.setattr("metabolomix.console.runner.is_process_running", lambda pid: False)
     console_status(str(path))
     assert load_job(path).status != "completed"
 
 
 def test_legacy_detached_state_reports_execution_unresolved(tmp_path, monkeypatch):
     """終了コード不明は成功でも失敗でもない。機械可読に「未解決」と言う。"""
-    from lipidmix.tools.console_tools import console_status
+    from metabolomix.tools.console_tools import console_status
     job_path = _planned(tmp_path, monkeypatch)
-    from lipidmix.console.detached import write_detached_state
+    from metabolomix.console.detached import write_detached_state
     write_detached_state(_run_dir(job_path), 123, {})
-    monkeypatch.setattr("lipidmix.console.runner.is_process_running", lambda pid: False)
+    monkeypatch.setattr("metabolomix.console.runner.is_process_running", lambda pid: False)
 
     parsed = _json.loads(console_status(str(job_path)))
     assert parsed["error"]["code"] == "EXECUTION_UNRESOLVED"
@@ -133,11 +133,11 @@ def test_legacy_detached_state_reports_execution_unresolved(tmp_path, monkeypatc
 
 def test_legacy_detached_state_still_alive_is_reported_as_running(tmp_path, monkeypatch):
     """まだ生きている旧実行は、未解決ではなく実行中として読める。"""
-    from lipidmix.tools.console_tools import console_status
+    from metabolomix.tools.console_tools import console_status
     job_path = _planned(tmp_path, monkeypatch)
-    from lipidmix.console.detached import write_detached_state
+    from metabolomix.console.detached import write_detached_state
     write_detached_state(_run_dir(job_path), 123, {})
-    monkeypatch.setattr("lipidmix.console.runner.is_process_running", lambda pid: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_process_running", lambda pid: True)
 
     parsed = _json.loads(console_status(str(job_path)))
     assert parsed["detached"] == {"pid": 123, "alive": True, "legacy": True}
@@ -145,12 +145,12 @@ def test_legacy_detached_state_still_alive_is_reported_as_running(tmp_path, monk
 
 def test_is_process_running_true_for_self():
     """旧 state の安全な検出のため互換 wrapper は残す。"""
-    from lipidmix.console.runner import is_process_running
+    from metabolomix.console.runner import is_process_running
     assert is_process_running(os.getpid()) is True
 
 
 def test_is_process_running_false_for_absent_pid():
-    from lipidmix.console.runner import is_process_running
+    from metabolomix.console.runner import is_process_running
     # 実在しない可能性が極めて高い pid。誤検出しても False を返すのが安全側。
     assert is_process_running(999_999_999) is False
 
@@ -158,8 +158,8 @@ def test_is_process_running_false_for_absent_pid():
 # ---------- ワーカーの起動 ----------
 
 def test_worker_command_runs_the_module_from_the_repo_root(tmp_path, monkeypatch):
-    """`-m lipidmix.console.worker` は cwd がリポジトリルートでなければ解決しない。"""
-    from lipidmix.console import worker
+    """`-m metabolomix.console.worker` は cwd がリポジトリルートでなければ解決しない。"""
+    from metabolomix.console import worker
     seen: dict = {}
 
     def _fake_launch(command, *, cwd, log_path):
@@ -167,23 +167,23 @@ def test_worker_command_runs_the_module_from_the_repo_root(tmp_path, monkeypatch
         return {"pid": 4242, "identity": {"pid": 4242, "creation_time": 7},
                 "breakaway": "not_in_job", "log_path": str(log_path)}
 
-    monkeypatch.setattr("lipidmix.console.worker.launch_detached", _fake_launch)
+    monkeypatch.setattr("metabolomix.console.worker.launch_detached", _fake_launch)
     job_path = _planned(tmp_path, monkeypatch)
 
     info = worker.launch_console_worker(job_path)
 
     assert info["pid"] == 4242
-    assert seen["command"] == [sys.executable, "-m", "lipidmix.console.worker",
+    assert seen["command"] == [sys.executable, "-m", "metabolomix.console.worker",
                                "--job", str(job_path)]
-    assert (seen["cwd"] / "lipidmix" / "console" / "worker.py").is_file()
+    assert (seen["cwd"] / "metabolomix" / "console" / "worker.py").is_file()
     assert Path(seen["log_path"]).name == "worker.log"
 
 
 def test_console_run_detach_returns_the_worker_pid(tmp_path, monkeypatch):
     """受理応答の pid はワーカー。Console の pid は起動後の証跡に載る。"""
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.tools.console_tools import console_run
     monkeypatch.setattr(
-        "lipidmix.console.worker.launch_detached",
+        "metabolomix.console.worker.launch_detached",
         lambda command, *, cwd, log_path: {
             "pid": 31337, "identity": {"pid": 31337, "creation_time": 11},
             "breakaway": "not_in_job", "log_path": str(log_path)})
@@ -199,8 +199,8 @@ def test_console_run_detach_returns_the_worker_pid(tmp_path, monkeypatch):
 
 def test_console_run_detach_fixes_the_inputs_before_launching(tmp_path, monkeypatch):
     """何を入力として実行するかは、起動より前に固定しなければ検証できない。"""
-    from lipidmix.console.execution import read_supervision_state
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.execution import read_supervision_state
+    from metabolomix.tools.console_tools import console_run
     seen: dict = {}
 
     def _fake_launch(command, *, cwd, log_path):
@@ -208,7 +208,7 @@ def test_console_run_detach_fixes_the_inputs_before_launching(tmp_path, monkeypa
         return {"pid": 4242, "identity": {"pid": 4242, "creation_time": 7},
                 "breakaway": "not_in_job", "log_path": str(log_path)}
 
-    monkeypatch.setattr("lipidmix.console.worker.launch_detached", _fake_launch)
+    monkeypatch.setattr("metabolomix.console.worker.launch_detached", _fake_launch)
     job_path = _planned(tmp_path, monkeypatch, raw_count=3)
 
     console_run(str(job_path), detach=True)
@@ -222,10 +222,10 @@ def test_console_run_detach_fixes_the_inputs_before_launching(tmp_path, monkeypa
 
 def test_console_run_detach_writes_no_legacy_state(tmp_path, monkeypatch):
     """旧サイドカーを新規に書かない（読み手が 2 つの真実を持たされる）。"""
-    from lipidmix.console.detached import read_detached_state
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.detached import read_detached_state
+    from metabolomix.tools.console_tools import console_run
     monkeypatch.setattr(
-        "lipidmix.console.worker.launch_detached",
+        "metabolomix.console.worker.launch_detached",
         lambda command, *, cwd, log_path: {
             "pid": 31337, "identity": {"pid": 31337, "creation_time": 11},
             "breakaway": "not_in_job", "log_path": str(log_path)})
@@ -239,9 +239,9 @@ def test_console_run_detach_writes_no_legacy_state(tmp_path, monkeypatch):
 def test_console_run_detach_reports_the_worker_even_if_the_owner_write_fails(
         tmp_path, monkeypatch):
     """起動後に所有記録を書けなくても、走り出したワーカーを黙って捨てない。"""
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.tools.console_tools import console_run
     monkeypatch.setattr(
-        "lipidmix.console.worker.launch_detached",
+        "metabolomix.console.worker.launch_detached",
         lambda command, *, cwd, log_path: {
             "pid": 31337, "identity": {"pid": 31337, "creation_time": 11},
             "breakaway": "not_in_job", "log_path": str(log_path)})
@@ -249,7 +249,7 @@ def test_console_run_detach_reports_the_worker_even_if_the_owner_write_fails(
     def _boom(run_dir, owner):
         raise OSError("worker.json を書けない")
 
-    monkeypatch.setattr("lipidmix.console.worker.write_owner", _boom)
+    monkeypatch.setattr("metabolomix.console.worker.write_owner", _boom)
     job_path = _planned(tmp_path, monkeypatch)
 
     parsed = _json.loads(console_run(str(job_path), detach=True))
@@ -261,13 +261,13 @@ def test_console_run_detach_reports_the_worker_even_if_the_owner_write_fails(
 
 def test_console_run_detach_marks_failed_when_the_worker_cannot_start(tmp_path, monkeypatch):
     """起動できなかったなら running のまま放置しない。"""
-    from lipidmix.core.atomic_io import DomainError
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.core.atomic_io import DomainError
+    from metabolomix.tools.console_tools import console_run
 
     def _boom(command, *, cwd, log_path):
         raise DomainError("DETACH_UNSUPPORTED", "親 Job から抜けられない")
 
-    monkeypatch.setattr("lipidmix.console.worker.launch_detached", _boom)
+    monkeypatch.setattr("metabolomix.console.worker.launch_detached", _boom)
     job_path = _planned(tmp_path, monkeypatch)
 
     parsed = _json.loads(console_run(str(job_path), detach=True))
@@ -298,7 +298,7 @@ def test_job_ids_are_unique_within_the_same_second(tmp_path):
 @_WINDOWS_ONLY
 def test_worker_finalizes_the_job_without_any_console_status_call(tmp_path, monkeypatch):
     """console_status を一度も呼ばなくても、ワーカーがジョブを確定させる。"""
-    from lipidmix.console import worker
+    from metabolomix.console import worker
     job_path = _planned(tmp_path, monkeypatch, raw_count=2)
     _prime_supervision(job_path)
     counter = tmp_path / "launches.tsv"
@@ -318,7 +318,7 @@ def test_worker_finalizes_the_job_without_any_console_status_call(tmp_path, monk
 @_WINDOWS_ONLY
 def test_worker_records_a_nonzero_exit_instead_of_completing(tmp_path, monkeypatch):
     """非ゼロ終了は成果物が残っていても completed にしない。"""
-    from lipidmix.console import worker
+    from metabolomix.console import worker
     job_path = _planned(tmp_path, monkeypatch, raw_count=2)
     _prime_supervision(job_path)
     counter = tmp_path / "launches.tsv"
@@ -336,11 +336,11 @@ def test_worker_records_a_nonzero_exit_instead_of_completing(tmp_path, monkeypat
 @_WINDOWS_ONLY
 def test_a_second_execution_is_refused_while_the_job_is_locked(tmp_path, monkeypatch):
     """同じジョブを 2 つのプロセスが同時に走らせない（OS ロックで排他する）。"""
-    from lipidmix.console.worker import lock_path
-    from lipidmix.core.process_control import file_lock
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.worker import lock_path
+    from metabolomix.core.process_control import file_lock
+    from metabolomix.tools.console_tools import console_run
     job_path = _planned(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.worker.LOCK_TIMEOUT_S", 0.2)
+    monkeypatch.setattr("metabolomix.console.worker.LOCK_TIMEOUT_S", 0.2)
 
     with file_lock(lock_path(_run_dir(job_path))):
         parsed = _json.loads(console_run(str(job_path)))
@@ -356,7 +356,7 @@ def test_console_status_reads_a_legacy_v1_job_without_rewriting_it(tmp_path):
     v1 には run_dir 側の証跡も detach 状態も無い。「終わったことになっている」
     古い記録をそのまま表示し、勝手に再解釈しない。
     """
-    from lipidmix.tools.console_tools import console_status
+    from metabolomix.tools.console_tools import console_status
     run_dir = tmp_path / "runs" / "old"
     run_dir.mkdir(parents=True)
     job_path = run_dir / "analysis-job.json"
@@ -395,8 +395,8 @@ def test_console_run_detach_does_not_overwrite_a_worker_that_already_finished(
     `console_status` は読取専用なので、ここで潰された状態は誰も直せない
     ——終わっている実行が永久に running のまま残る。
     """
-    from lipidmix.console.job_manager import update_status
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import update_status
+    from metabolomix.tools.console_tools import console_run
 
     job_path = _planned(tmp_path, monkeypatch)
 
@@ -407,7 +407,7 @@ def test_console_run_detach_does_not_overwrite_a_worker_that_already_finished(
         return {"pid": 31337, "identity": {"pid": 31337, "creation_time": 11},
                 "breakaway": "not_in_job", "log_path": str(log_path)}
 
-    monkeypatch.setattr("lipidmix.console.worker.launch_detached", _fast_worker)
+    monkeypatch.setattr("metabolomix.console.worker.launch_detached", _fast_worker)
 
     parsed = _json.loads(console_run(str(job_path), detach=True))
 
@@ -419,8 +419,8 @@ def test_console_run_detach_does_not_overwrite_a_worker_that_already_finished(
 def test_console_run_detach_does_not_overwrite_the_owner_written_by_the_worker(
         tmp_path, monkeypatch):
     """ワーカーが自分の identity を書いていたら、親の pid 記録で上書きしない。"""
-    from lipidmix.console import worker as console_worker
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console import worker as console_worker
+    from metabolomix.tools.console_tools import console_run
 
     job_path = _planned(tmp_path, monkeypatch)
     run_dir = _run_dir(job_path)
@@ -433,7 +433,7 @@ def test_console_run_detach_does_not_overwrite_the_owner_written_by_the_worker(
         return {"pid": 31337, "identity": {"pid": 31337, "creation_time": 11},
                 "breakaway": "not_in_job", "log_path": str(log_path)}
 
-    monkeypatch.setattr("lipidmix.console.worker.launch_detached",
+    monkeypatch.setattr("metabolomix.console.worker.launch_detached",
                         _worker_that_claims_ownership)
 
     console_run(str(job_path), detach=True)
@@ -445,9 +445,9 @@ def test_console_run_detach_does_not_overwrite_the_owner_written_by_the_worker(
 
 def test_run_job_refuses_a_job_that_another_process_already_finished(tmp_path, monkeypatch):
     """ロック待ちの間に先行プロセスが走り切っていたら、MS-DIAL を二度起動しない。"""
-    from lipidmix.console import worker as console_worker
-    from lipidmix.console.job_manager import update_status
-    from lipidmix.core.atomic_io import DomainError
+    from metabolomix.console import worker as console_worker
+    from metabolomix.console.job_manager import update_status
+    from metabolomix.core.atomic_io import DomainError
 
     job_path = _planned(tmp_path, monkeypatch)
     _prime_supervision(job_path)
@@ -456,7 +456,7 @@ def test_run_job_refuses_a_job_that_another_process_already_finished(tmp_path, m
     def _never(*args, **kwargs):
         raise AssertionError("完了済みジョブで Console を起動してはいけない")
 
-    monkeypatch.setattr("lipidmix.console.worker.supervise", _never)
+    monkeypatch.setattr("metabolomix.console.worker.supervise", _never)
 
     with pytest.raises(DomainError) as excinfo:
         console_worker.run_job(job_path)
@@ -467,20 +467,20 @@ def test_run_job_refuses_a_job_that_another_process_already_finished(tmp_path, m
 def test_console_run_reports_an_already_finished_job_without_touching_its_state(
         tmp_path, monkeypatch):
     """同時に届いた2本目の console_run は、勝者の終端状態を failed で塗り替えない。"""
-    from lipidmix.console.job_manager import update_status
-    from lipidmix.tools.console_tools import console_run
+    from metabolomix.console.job_manager import update_status
+    from metabolomix.tools.console_tools import console_run
 
     job_path = _planned(tmp_path, monkeypatch)
     _prime_supervision(job_path)
 
     def _finish_first(job_path_arg, *, command=None):
         # ロックを取るまでの間に先行プロセスが走り切っていた、という筋書き。
-        from lipidmix.core.atomic_io import DomainError
+        from metabolomix.core.atomic_io import DomainError
         update_status(job_path, "completed")
         raise DomainError("JOB_ALREADY_FINISHED", "既に実行を終えています",
                           {"status": "completed"})
 
-    monkeypatch.setattr("lipidmix.console.worker.run_job", _finish_first)
+    monkeypatch.setattr("metabolomix.console.worker.run_job", _finish_first)
 
     parsed = _json.loads(console_run(str(job_path)))
 
@@ -494,8 +494,8 @@ def test_owner_is_released_when_the_run_finishes_in_this_process(tmp_path, monke
     """
     import os
 
-    from lipidmix.console import worker as console_worker
-    from lipidmix.core.process_control import process_identity
+    from metabolomix.console import worker as console_worker
+    from metabolomix.core.process_control import process_identity
 
     job_path = _planned(tmp_path, monkeypatch)
     run_dir = _run_dir(job_path)

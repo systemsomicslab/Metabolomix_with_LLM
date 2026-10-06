@@ -5,7 +5,7 @@ spec: docs/superpowers/sdd/2026-09-19-msms-spectral-matching タスク 7。
 
 やること（brief 準拠）:
   1. `.dbs` から store を作る（`search_params` の `ms2_tolerance` を bin_width に使う）。
-  2. mzTab の SME 行を読む（`lipidmix.mztab.reader.parse_mztab`）。
+  2. mzTab の SME 行を読む（`metabolomix.mztab.reader.parse_mztab`）。
   3. 各 SME 行の `spectra_ref`（`ms_run[N]:ms1scanID=X ms2scanID=Y` の `| ` 区切りリスト）
      が指す測定を `.dcl` から引く。**`ms2scanID` は上流 `MSDecResult.RawSpectrumID`
      と同一**（`AddSpectraRef` が `properties[i].MS2RawSpectrumID` を書き、
@@ -47,11 +47,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lipidmix.analysis import spectral_match
-from lipidmix.dcl import reader as dcl_reader
-from lipidmix.library import dbs as dbs_reader
-from lipidmix.library import store as library_store
-from lipidmix.mztab import reader as mztab_reader
+from metabolomix.analysis import spectral_match
+from metabolomix.dcl import reader as dcl_reader
+from metabolomix.library import dbs as dbs_reader
+from metabolomix.library import store as library_store
+from metabolomix.mztab import reader as mztab_reader
 
 _MS_RUN_LOCATION_RE = re.compile(r"^ms_run\[(\d+)\]-location$")
 _SPECTRA_REF_ENTRY_RE = re.compile(

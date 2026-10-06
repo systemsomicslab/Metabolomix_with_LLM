@@ -31,22 +31,22 @@ last_pca を格納。以降の ARF 系ツールの土台。
 セッションにキャッシュされるので再パースは走らない。手動除外（`arf_exclude`）は
 PCA 直前に非破壊で適用される（手順 7）。
 
-1. lipidmix/arf/tools.py  arf_parser()
-2. └─ lipidmix/core/path_resolvers.py  resolve_arf_file_path()
-3. └─ lipidmix/core/session_state.py  ArfState.load_data()
-4. └─ lipidmix/msdial/tags.py  filter_arf_by_tags()
-5. └─ lipidmix/msdial/classes.py  filter_arf_by_class_ids()
-6. └─ lipidmix/core/path_resolvers.py  _filter_arf_spots()
-7. └─ lipidmix/arf/exclusions.py  prune_spots()
-8. └─ lipidmix/arf/reader.py  count_peak_property_rows()
-9. └─ lipidmix/arf/reader.py  build_pca_matrix()
-10. └─ lipidmix/analysis/pca.py  run_pca()
-11. └─ lipidmix/msdial/classes.py  assign_sample_groups()
-12. └─ lipidmix/core/tool_helpers.py  _format_pca_plot_block()
-13. └─ lipidmix/core/tool_helpers.py  _remember_arf_pca_plot()
-14. └─ lipidmix/arf/reader.py  get_pca_loading_features()
-15. └─ lipidmix/core/tool_helpers.py  _format_pca_loadings_md()
-16. └─ lipidmix/core/session_state.py  AnalysisSession.maybe_prepend_caveat()
+1. metabolomix/arf/tools.py  arf_parser()
+2. └─ metabolomix/core/path_resolvers.py  resolve_arf_file_path()
+3. └─ metabolomix/core/session_state.py  ArfState.load_data()
+4. └─ metabolomix/msdial/tags.py  filter_arf_by_tags()
+5. └─ metabolomix/msdial/classes.py  filter_arf_by_class_ids()
+6. └─ metabolomix/core/path_resolvers.py  _filter_arf_spots()
+7. └─ metabolomix/arf/exclusions.py  prune_spots()
+8. └─ metabolomix/arf/reader.py  count_peak_property_rows()
+9. └─ metabolomix/arf/reader.py  build_pca_matrix()
+10. └─ metabolomix/analysis/pca.py  run_pca()
+11. └─ metabolomix/msdial/classes.py  assign_sample_groups()
+12. └─ metabolomix/core/tool_helpers.py  _format_pca_plot_block()
+13. └─ metabolomix/core/tool_helpers.py  _remember_arf_pca_plot()
+14. └─ metabolomix/arf/reader.py  get_pca_loading_features()
+15. └─ metabolomix/core/tool_helpers.py  _format_pca_loadings_md()
+16. └─ metabolomix/core/session_state.py  AnalysisSession.maybe_prepend_caveat()
 
 ## arf_list_classes
 
@@ -57,12 +57,12 @@ PCA 直前に非破壊で適用される（手順 7）。
 `arf_parser(class_ids=...)` の絞り込みを引き継ぐと、「何で絞れるか」を尋ねる本ツールが
 黙って痩せた語彙を返してしまうため。
 
-1. lipidmix/arf/tools.py  arf_list_classes()
-2. └─ lipidmix/core/mcp_errors.py  missing_state()
-3. └─ lipidmix/msdial/sample_factors.py  arf_sample_names()
-4. └─ lipidmix/msdial/sample_factors.py  build_sample_facets()
-5. └─ lipidmix/core/tool_helpers.py  _class_factors_by_position()
-6. └─ lipidmix/msdial/sample_factors.py  token_vocabulary()
+1. metabolomix/arf/tools.py  arf_list_classes()
+2. └─ metabolomix/core/mcp_errors.py  missing_state()
+3. └─ metabolomix/msdial/sample_factors.py  arf_sample_names()
+4. └─ metabolomix/msdial/sample_factors.py  build_sample_facets()
+5. └─ metabolomix/core/tool_helpers.py  _class_factors_by_position()
+6. └─ metabolomix/msdial/sample_factors.py  token_vocabulary()
 
 ## arf_list_tags
 
@@ -71,8 +71,8 @@ PCA 直前に非破壊で適用される（手順 7）。
 
 `session.arf.tag_index` の `summary` をそのまま返すだけで、ヘルパは介さない。
 
-1. lipidmix/arf/tools.py  arf_list_tags()
-2. └─ lipidmix/core/mcp_errors.py  missing_state()
+1. metabolomix/arf/tools.py  arf_list_tags()
+2. └─ metabolomix/core/mcp_errors.py  missing_state()
 
 ## arf_list_sample_roles
 
@@ -82,11 +82,11 @@ PCA 直前に非破壊で適用される（手順 7）。
 返り値は列名を 1 回だけ出す TSV 表（sample / role / group / batch / run_order /
 excluded）。全行で同じ値になる `batch_source` はヘッダ行にまとめる。
 
-1. lipidmix/arf/tools.py  arf_list_sample_roles()
-2. └─ lipidmix/core/mcp_errors.py  missing_state()
-3. └─ lipidmix/core/tool_helpers.py  _pp_build_matrix()
-4. └─ lipidmix/core/session_state.py  _build_sample_meta()
-5. └─ lipidmix/arf2/reader.py  format_spots_as_table()
+1. metabolomix/arf/tools.py  arf_list_sample_roles()
+2. └─ metabolomix/core/mcp_errors.py  missing_state()
+3. └─ metabolomix/core/tool_helpers.py  _pp_build_matrix()
+4. └─ metabolomix/core/session_state.py  _build_sample_meta()
+5. └─ metabolomix/arf2/reader.py  format_spots_as_table()
 
 ## arf_exclude
 
@@ -98,14 +98,14 @@ excluded）。全行で同じ値になる `batch_source` はヘッダ行にま�
 `mode="list"` は何もせず現状を報告する。どの経路でも手順 5〜6 の再集計は必ず通り、
 除外後の残サンプル数・残スポット数が返る。
 
-1. lipidmix/arf/tools.py  arf_exclude()
-2. └─ lipidmix/core/mcp_errors.py  missing_state()
-3. └─ lipidmix/arf/exclusions.py  roster()
-4. ├─ [mode=add/remove のみ] lipidmix/arf/tools.py  _resolve_exclude_specs()
-5. │  └─ lipidmix/msdial/sample_factors.py  build_sample_facets()
-6. │  └─ lipidmix/msdial/sample_factors.py  expand_sample_specs()
-7. └─ lipidmix/arf/exclusions.py  prune_spots()
-8. └─ lipidmix/arf/exclusions.py  roster()
+1. metabolomix/arf/tools.py  arf_exclude()
+2. └─ metabolomix/core/mcp_errors.py  missing_state()
+3. └─ metabolomix/arf/exclusions.py  roster()
+4. ├─ [mode=add/remove のみ] metabolomix/arf/tools.py  _resolve_exclude_specs()
+5. │  └─ metabolomix/msdial/sample_factors.py  build_sample_facets()
+6. │  └─ metabolomix/msdial/sample_factors.py  expand_sample_specs()
+7. └─ metabolomix/arf/exclusions.py  prune_spots()
+8. └─ metabolomix/arf/exclusions.py  roster()
 
 ## arf_preprocess
 
@@ -118,15 +118,15 @@ excluded）。全行で同じ値になる `batch_source` はヘッダ行にま�
 低い総強度が PC1 を支配する）。QC は残す —— QC クラスタの締まり具合を PCA で見るため。
 手動除外の状態は 0 件でも手順 8 で必ず開示する。
 
-1. lipidmix/arf/tools.py  arf_preprocess()
-2. └─ lipidmix/core/mcp_errors.py  missing_state()
-3. └─ lipidmix/arf/exclusions.py  prune_spots()
-4. └─ lipidmix/core/tool_helpers.py  _pp_build_matrix()
-5. └─ lipidmix/core/session_state.py  _build_sample_meta()
-6. └─ lipidmix/analysis/preprocessing.py  detect_qc_strata()
-7. └─ lipidmix/analysis/preprocessing.py  preprocess()
-8. └─ lipidmix/analysis/preprocessing.py  drop_samples_by_role()
-9. └─ lipidmix/arf/tools.py  _manual_exclusion_caveat()
+1. metabolomix/arf/tools.py  arf_preprocess()
+2. └─ metabolomix/core/mcp_errors.py  missing_state()
+3. └─ metabolomix/arf/exclusions.py  prune_spots()
+4. └─ metabolomix/core/tool_helpers.py  _pp_build_matrix()
+5. └─ metabolomix/core/session_state.py  _build_sample_meta()
+6. └─ metabolomix/analysis/preprocessing.py  detect_qc_strata()
+7. └─ metabolomix/analysis/preprocessing.py  preprocess()
+8. └─ metabolomix/analysis/preprocessing.py  drop_samples_by_role()
+9. └─ metabolomix/arf/tools.py  _manual_exclusion_caveat()
 
 ## arf_pca_preprocessed
 
@@ -137,15 +137,15 @@ excluded）。全行で同じ値になる `batch_source` はヘッダ行にま�
 色分け（`group_levels` / `group_factors`）や log 変換だけを変えて再実行しても、
 前処理はやり直さない。
 
-1. lipidmix/arf/tools.py  arf_pca_preprocessed()
-2. └─ lipidmix/core/tool_helpers.py  _pp_has_preprocessed()
-3. └─ lipidmix/core/mcp_errors.py  missing_state()
-4. └─ lipidmix/analysis/pca.py  run_pca()
-5. └─ lipidmix/msdial/classes.py  assign_sample_groups()
-6. └─ lipidmix/core/tool_helpers.py  _format_pca_plot_block()
-7. └─ lipidmix/core/tool_helpers.py  _remember_arf_pca_plot()
-8. └─ lipidmix/arf/reader.py  get_pca_loading_features()
-9. └─ lipidmix/core/tool_helpers.py  _format_pca_loadings_md()
+1. metabolomix/arf/tools.py  arf_pca_preprocessed()
+2. └─ metabolomix/core/tool_helpers.py  _pp_has_preprocessed()
+3. └─ metabolomix/core/mcp_errors.py  missing_state()
+4. └─ metabolomix/analysis/pca.py  run_pca()
+5. └─ metabolomix/msdial/classes.py  assign_sample_groups()
+6. └─ metabolomix/core/tool_helpers.py  _format_pca_plot_block()
+7. └─ metabolomix/core/tool_helpers.py  _remember_arf_pca_plot()
+8. └─ metabolomix/arf/reader.py  get_pca_loading_features()
+9. └─ metabolomix/core/tool_helpers.py  _format_pca_loadings_md()
 
 ## arf_differential
 
@@ -162,19 +162,19 @@ QC / blank は群ラベルを `None` にして両群のどちらにも寄らせ�
 手順 10〜12 は `_annotate_with_names()` の内側。ARF 側の代表 Name が Unknown の
 スポットが残るときだけ、同一アラインメントの兄弟 `.arf2` を読んで橋渡しする。
 
-1. lipidmix/arf/tools.py  arf_differential()
-2. └─ lipidmix/core/mcp_errors.py  missing_state()
-3. └─ lipidmix/arf/tools.py  _manual_exclusion_caveat()
-4. └─ lipidmix/arf/tools.py  _pool_group_labels()
-5. └─ lipidmix/analysis/differential.py  check_confounding()
-6. └─ lipidmix/analysis/differential.py  two_group_test()
-7. └─ lipidmix/analysis/differential.py  add_fdr()
-8. └─ lipidmix/analysis/differential.py  summarize_two_group()
-9. └─ lipidmix/arf/tools.py  _annotate_with_names()
-10. │  └─ lipidmix/arf/tools.py  _spot_id_of()
-11. │  └─ lipidmix/arf/tools.py  _sibling_arf2_path()
-12. │  └─ lipidmix/arf2/reader.py  load_catalog()
-13. └─ lipidmix/analysis/differential.py  volcano_data()
+1. metabolomix/arf/tools.py  arf_differential()
+2. └─ metabolomix/core/mcp_errors.py  missing_state()
+3. └─ metabolomix/arf/tools.py  _manual_exclusion_caveat()
+4. └─ metabolomix/arf/tools.py  _pool_group_labels()
+5. └─ metabolomix/analysis/differential.py  check_confounding()
+6. └─ metabolomix/analysis/differential.py  two_group_test()
+7. └─ metabolomix/analysis/differential.py  add_fdr()
+8. └─ metabolomix/analysis/differential.py  summarize_two_group()
+9. └─ metabolomix/arf/tools.py  _annotate_with_names()
+10. │  └─ metabolomix/arf/tools.py  _spot_id_of()
+11. │  └─ metabolomix/arf/tools.py  _sibling_arf2_path()
+12. │  └─ metabolomix/arf2/reader.py  load_catalog()
+13. └─ metabolomix/analysis/differential.py  volcano_data()
 
 ## arf_export_differential
 
@@ -191,23 +191,23 @@ InChIKey・Ontology・m/z・RT と結合する。InChIKey が無い特徴は本�
 残さずエラーにする。`msi_level` は `arf2_annotate_identities` と同じ保守的な
 クラス上限であり、MS/MS 取得有無を表さない。
 
-列の組み立ては `lipidmix/analysis/export_contract.py` に閉じている（mzTab-M 経路の
+列の組み立ては `metabolomix/analysis/export_contract.py` に閉じている（mzTab-M 経路の
 `dataset_export_differential` と同一の関数。[dataset_analysis.md](dataset_analysis.md) 参照）。
 15 列目 `significant` の判定も `is_significant()` に一本化してあり、ここには無い
 ——ARF 側は `q_value`、DatasetState 側は `q` というキーで同じ量を持つため、
 判定を各経路に置くと 2 実装に分裂する（実際に分裂していた）。
 
-1. lipidmix/arf/tools.py  arf_export_differential()
-2. ├─ lipidmix/core/mcp_errors.py  missing_state()
-3. ├─ lipidmix/arf/tools.py  _sibling_arf2_path()
-4. ├─ lipidmix/arf2/reader.py  load_catalog()
-5. ├─ lipidmix/arf/identity_join.py  join_identity()
-6. ├─ lipidmix/analysis/export_contract.py  build_meta()
-7. ├─ lipidmix/analysis/export_contract.py  is_significant()
-8. └─ lipidmix/analysis/export_contract.py  format_row()
-9.    └─ lipidmix/analysis/export_contract.py  format_number()
+1. metabolomix/arf/tools.py  arf_export_differential()
+2. ├─ metabolomix/core/mcp_errors.py  missing_state()
+3. ├─ metabolomix/arf/tools.py  _sibling_arf2_path()
+4. ├─ metabolomix/arf2/reader.py  load_catalog()
+5. ├─ metabolomix/arf/identity_join.py  join_identity()
+6. ├─ metabolomix/analysis/export_contract.py  build_meta()
+7. ├─ metabolomix/analysis/export_contract.py  is_significant()
+8. └─ metabolomix/analysis/export_contract.py  format_row()
+9.    └─ metabolomix/analysis/export_contract.py  format_number()
 
-`lipidmix/arf/tools.py` の `_format_export_number` は `export_contract.format_number`
+`metabolomix/arf/tools.py` の `_format_export_number` は `export_contract.format_number`
 への別名で、**どこからも呼ばれていない**（後方互換のため意図的に残置）。連鎖に
 現れないのが正しい。
 
@@ -225,10 +225,10 @@ InChIKey・Ontology・m/z・RT と結合する。InChIKey が無い特徴は本�
 キャプションに up / down / ns / 検定不能の件数を書くのは、件数を図から読み取らせない
 ため。PNG をファイルに保存したいときは `save_volcano_figure`（[plots.md](plots.md)）。
 
-1. lipidmix/arf/tools.py  arf_plot_volcano()
-2. └─ lipidmix/core/mcp_errors.py  missing_state()
-3. └─ lipidmix/plots/render.py  resolve_plot_output()
-4. ├─ [output=payload] lipidmix/plots/volcano.py  build_volcano_plot_payload()
-5. └─ [output=image] lipidmix/arf/tools.py  _volcano_counts()
-6.    └─ lipidmix/plots/volcano.py  render_volcano_plot()
-7.    └─ lipidmix/plots/render.py  figure_to_png()
+1. metabolomix/arf/tools.py  arf_plot_volcano()
+2. └─ metabolomix/core/mcp_errors.py  missing_state()
+3. └─ metabolomix/plots/render.py  resolve_plot_output()
+4. ├─ [output=payload] metabolomix/plots/volcano.py  build_volcano_plot_payload()
+5. └─ [output=image] metabolomix/arf/tools.py  _volcano_counts()
+6.    └─ metabolomix/plots/volcano.py  render_volcano_plot()
+7.    └─ metabolomix/plots/render.py  figure_to_png()

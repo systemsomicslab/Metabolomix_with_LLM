@@ -1,6 +1,6 @@
 """試験用の偽 MS-DIAL Console（実プロセスとして起動されるスクリプト）。
 
-`lipidmix.console.execution.supervise` は「本当に起動したプロセスが本当に
+`metabolomix.console.execution.supervise` は「本当に起動したプロセスが本当に
 どう終わったか」を証跡にする。そこをモックで置き換えると、監視・停止・収集の
 どれが壊れても緑のままになるため、このファイルは **import せずスクリプトパス
 として子プロセスへ渡す**（テストからの `import` は禁止。`tests.pipeline_fixtures`
@@ -46,8 +46,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from lipidmix.console.job_manager import list_raw_inputs  # noqa: E402
-from lipidmix.core.process_control import resolve_python_launch  # noqa: E402
+from metabolomix.console.job_manager import list_raw_inputs  # noqa: E402
+from metabolomix.core.process_control import resolve_python_launch  # noqa: E402
 from tests.pipeline_fixtures import write_mztab  # noqa: E402
 
 #: `success` が書く主 mzTab のファイル名。MS-DIAL GUI の `Height_` prefix を

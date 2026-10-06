@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from lipidmix.pipeline import service, store, worker
+from metabolomix.pipeline import service, store, worker
 from tests.metabolomics_fixtures import (
     DEFAULT_STATISTICS, INJECTIONS, write_arf, write_manifest_v2, write_mztab_v2,
     write_profile,
@@ -24,7 +24,7 @@ from tests.pipeline_fixtures import fake_console_command, use_fake_console
 
 
 def _source(tmp_path, monkeypatch) -> tuple[Path, dict, list[Path]]:
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     source_root = tmp_path / "source"
     source_root.mkdir()
     sources = []
@@ -145,9 +145,9 @@ def test_a_completed_run_can_be_opened_for_interactive_work(tmp_path, monkeypatc
     S1（dataset_build_matrix）・S2（dataset_load の pipeline_path モード）・
     S3（この公開入口）が1本に繋がっていることを、この試験だけが示す。
     """
-    from lipidmix.core import session_state
-    from lipidmix.tools.dataset_analysis_tools import dataset_statistic
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.core import session_state
+    from metabolomix.tools.dataset_analysis_tools import dataset_statistic
+    from metabolomix.tools.mztab_tools import dataset_load
 
     source_root, request, _sources = _source(tmp_path, monkeypatch)
     receipt = service.plan_pipeline(source_root, request)

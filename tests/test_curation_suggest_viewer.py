@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from lipidmix.curation import viewer
+from metabolomix.curation import viewer
 
 SPOT = {"spot_id": 1, "target_kind": "flagged", "preset": "R1", "measured": [[255.23, 999.0]],
         "candidates": [{"candidate_id": "L1", "name": "PG 16:0_18:1", "sum_name": "PG 34:1",

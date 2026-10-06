@@ -235,7 +235,7 @@ def test_adding_a_statistic_does_not_redo_the_matrices(tmp_path):
 # ---------- 記録の健全性 ----------
 
 def test_results_are_append_only_and_verifiable(tmp_path):
-    from lipidmix.pipeline import store
+    from metabolomix.pipeline import store
 
     h = MetabolomicsHarness(tmp_path)
     h.run()
@@ -247,7 +247,7 @@ def test_results_are_append_only_and_verifiable(tmp_path):
 def test_a_tampered_artifact_is_detected(tmp_path):
     from pathlib import Path
 
-    from lipidmix.pipeline import store
+    from metabolomix.pipeline import store
 
     h = MetabolomicsHarness(tmp_path)
     h.run()

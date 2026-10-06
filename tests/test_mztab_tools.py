@@ -2,8 +2,8 @@
 import json
 import textwrap
 import pytest
-from lipidmix.core import session_state
-from lipidmix.core.mcp_errors import MISSING_STATE
+from metabolomix.core import session_state
+from metabolomix.core.mcp_errors import MISSING_STATE
 
 _CONTENT = textwrap.dedent("""\
     MTD\tmzTab-version\t2.0.0-M
@@ -39,27 +39,27 @@ def mztab_file(tmp_path):
 
 
 def test_dataset_load_success(mztab_file):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     result = dataset_load(str(mztab_file))
     assert "dataset_load" in result or "mzTab" in result
     assert session_state.session.dataset is not None
 
 
 def test_dataset_load_sets_source_format(mztab_file):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     dataset_load(str(mztab_file))
     assert session_state.session.dataset.source_format == "mztab"
 
 
 def test_dataset_load_missing_file():
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     result = dataset_load("/nonexistent/path.mzTab")
     parsed = json.loads(result)
     assert parsed["error"]["code"] == "MZTAB_NOT_FOUND"
 
 
 def test_dataset_load_invalid_structure(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     bad = tmp_path / "bad.mzTab"
     bad.write_text("MTD\tmzTab-version\t3.0.0-M\n", encoding="utf-8")
     result = dataset_load(str(bad))
@@ -75,7 +75,7 @@ def test_dataset_load_no_args_returns_bad_request():
     復旧策になってしまう）。DATASET_BAD_REQUEST は「引数を直して呼び直す」
     種類のエラーであることを明示し、required_tools を持たない。
     """
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     result = dataset_load()
     parsed = json.loads(result)
     assert parsed["error"]["code"] == "DATASET_BAD_REQUEST"
@@ -88,7 +88,7 @@ def test_dataset_load_both_args_returns_bad_request(mztab_file):
     MZTAB_NOT_FOUND のままだと、そのコードを見て別パスで再試行するクライアントを
     誤誘導する（ファイルはちゃんと存在する）。
     """
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     result = dataset_load(str(mztab_file), job_path="/fake/job.json")
     parsed = json.loads(result)
     assert parsed["error"]["code"] == "DATASET_BAD_REQUEST"
@@ -98,7 +98,7 @@ def test_dataset_load_both_args_returns_bad_request(mztab_file):
 # ---------- dataset_status ----------
 
 def test_dataset_status_no_state():
-    from lipidmix.tools.mztab_tools import dataset_status
+    from metabolomix.tools.mztab_tools import dataset_status
     result = dataset_status()
     parsed = json.loads(result)
     # Phase 3 で missing_state 契約に修正
@@ -108,14 +108,14 @@ def test_dataset_status_no_state():
 
 
 def test_dataset_status_after_load(mztab_file):
-    from lipidmix.tools.mztab_tools import dataset_load, dataset_status
+    from metabolomix.tools.mztab_tools import dataset_load, dataset_status
     dataset_load(str(mztab_file))
     result = dataset_status()
     assert "mztab" in result.lower() or "source_format" in result
 
 
 def test_dataset_load_does_not_touch_arf_slot(mztab_file):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     dataset_load(str(mztab_file))
     assert session_state.session.arf.features is None
 
@@ -131,7 +131,7 @@ def _make_job_json(tmp_path, mztab_rel_path: str, extra_artifacts=None,
     status で終端状態を差し替える（partial = タイムアウト後の部分回収）。
     """
     import json as _json
-    from lipidmix.handoff.schema import SCHEMA_VERSION
+    from metabolomix.handoff.schema import SCHEMA_VERSION
     run_dir = tmp_path / "runs" / "job_test"
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -160,7 +160,7 @@ def _make_job_json(tmp_path, mztab_rel_path: str, extra_artifacts=None,
 
 
 def test_dataset_load_via_job_path_success(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     mztab_dir = tmp_path / "runs" / "job_test" / "mztab"
     mztab_dir.mkdir(parents=True)
     mztab_file = mztab_dir / "neg-height.mzTab"
@@ -175,7 +175,7 @@ def test_dataset_load_via_job_path_success(tmp_path):
 
 
 def test_dataset_load_via_job_path_sets_source_format(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     mztab_dir = tmp_path / "runs" / "job_test" / "mztab"
     mztab_dir.mkdir(parents=True)
     (mztab_dir / "neg-height.mzTab").write_text(_CONTENT, encoding="utf-8")
@@ -186,7 +186,7 @@ def test_dataset_load_via_job_path_sets_source_format(tmp_path):
 
 
 def test_dataset_load_via_job_path_stores_artifacts(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     mztab_dir = tmp_path / "runs" / "job_test" / "mztab"
     mztab_dir.mkdir(parents=True)
     (mztab_dir / "neg-height.mzTab").write_text(_CONTENT, encoding="utf-8")
@@ -203,8 +203,8 @@ def test_dataset_load_via_job_path_stores_artifacts(tmp_path):
 @pytest.mark.parametrize("primary_root", ["run_dir", "dataset_root"])
 def test_dataset_load_resolves_recorded_artifact_roots(tmp_path, primary_root):
     """dataset_root 側の一次 mzTab と sidecar を記録された root から解決する。"""
-    from lipidmix.handoff.schema import SCHEMA_VERSION
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.handoff.schema import SCHEMA_VERSION
+    from metabolomix.tools.mztab_tools import dataset_load
 
     run_dir = tmp_path / "runs" / "job1"
     (run_dir / "msdial").mkdir(parents=True)
@@ -245,9 +245,9 @@ def test_dataset_load_resolves_recorded_artifact_roots(tmp_path, primary_root):
 
 
 def test_dataset_load_via_job_path_no_mztab_files(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     import json as _json
-    from lipidmix.handoff.schema import SCHEMA_VERSION
+    from metabolomix.handoff.schema import SCHEMA_VERSION
     run_dir = tmp_path / "runs" / "job_test"
     run_dir.mkdir(parents=True, exist_ok=True)
     job_data = {
@@ -272,7 +272,7 @@ def test_dataset_load_via_job_path_no_mztab_files(tmp_path):
 
 
 def test_dataset_load_via_job_path_missing_mztab_file(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     # job は valid だが mzTab ファイルが存在しない
     job_path, _ = _make_job_json(tmp_path, "mztab/nonexistent.mzTab")
     result = dataset_load(job_path=str(job_path))
@@ -281,14 +281,14 @@ def test_dataset_load_via_job_path_missing_mztab_file(tmp_path):
 
 
 def test_dataset_load_via_job_path_missing_job_file(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     result = dataset_load(job_path=str(tmp_path / "nonexistent" / "analysis-job.json"))
     parsed = json.loads(result)
     assert parsed["error"]["code"] == "MZTAB_NOT_FOUND"
 
 
 def test_dataset_status_shows_job_path(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load, dataset_status
+    from metabolomix.tools.mztab_tools import dataset_load, dataset_status
     mztab_dir = tmp_path / "runs" / "job_test" / "mztab"
     mztab_dir.mkdir(parents=True)
     (mztab_dir / "neg-height.mzTab").write_text(_CONTENT, encoding="utf-8")
@@ -312,7 +312,7 @@ def _entry(path, polarity="negative", measure="peak_height"):
 
 
 def test_dataset_load_via_job_path_selects_entry_matching_declared_measure(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     mztab_dir = tmp_path / "runs" / "job_test" / "mztab"
     mztab_dir.mkdir(parents=True)
     (mztab_dir / "Area_Alignment.mzTab").write_text(_CONTENT, encoding="utf-8")
@@ -329,7 +329,7 @@ def test_dataset_load_via_job_path_selects_entry_matching_declared_measure(tmp_p
 
 
 def test_dataset_load_via_job_path_ambiguous_candidates_stop(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     mztab_dir = tmp_path / "runs" / "job_test" / "mztab"
     mztab_dir.mkdir(parents=True)
     (mztab_dir / "Height_a.mzTab").write_text(_CONTENT, encoding="utf-8")
@@ -345,7 +345,7 @@ def test_dataset_load_via_job_path_ambiguous_candidates_stop(tmp_path):
 
 
 def test_dataset_load_via_job_path_no_entry_with_declared_measure(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     mztab_dir = tmp_path / "runs" / "job_test" / "mztab"
     mztab_dir.mkdir(parents=True)
     (mztab_dir / "Area_Alignment.mzTab").write_text(_CONTENT, encoding="utf-8")
@@ -358,7 +358,7 @@ def test_dataset_load_via_job_path_no_entry_with_declared_measure(tmp_path):
 
 
 def test_dataset_load_via_job_path_no_entry_with_declared_polarity(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     mztab_dir = tmp_path / "runs" / "job_test" / "mztab"
     mztab_dir.mkdir(parents=True)
     (mztab_dir / "Height_Pos.mzTab").write_text(_CONTENT, encoding="utf-8")
@@ -377,7 +377,7 @@ def test_dataset_status_lists_sample_names_with_roles(mztab_file):
     dataset_status は n_samples（件数）しか返しておらず、名前を知る手段が
     「わざと群サイズ不足のエラーを起こして details を読む」しか無かった。
     """
-    from lipidmix.tools.mztab_tools import dataset_load, dataset_status
+    from metabolomix.tools.mztab_tools import dataset_load, dataset_status
     dataset_load(str(mztab_file))
     status = json.loads(dataset_status())
     lines = status["samples"].splitlines()
@@ -387,7 +387,7 @@ def test_dataset_status_lists_sample_names_with_roles(mztab_file):
 
 def test_dataset_status_sample_roles_reflect_qc_detection(tmp_path):
     """QC/ブランクは role 列で見分けられる（群に混ぜてはいけない試料）。"""
-    from lipidmix.tools.mztab_tools import dataset_load, dataset_status
+    from metabolomix.tools.mztab_tools import dataset_load, dataset_status
     content = _CONTENT.replace(
         "MTD\tassay[1]-ms_run_ref\tms_run[1]",
         "MTD\tassay[1]-ms_run_ref\tms_run[1]\nMTD\tassay[1]\t20260901_QC_1",
@@ -415,7 +415,7 @@ def test_dataset_load_refuses_an_incomplete_job_by_default(tmp_path):
     中断時点の生成物を完了品として下流へ流すと、欠けた検体が「その群には無い」
     ように見え、2 群比較がその欠落ごと結論にしてしまう。
     """
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     job_path = _job_with_mztab(tmp_path, "partial")
 
     parsed = json.loads(dataset_load(job_path=str(job_path)))
@@ -427,7 +427,7 @@ def test_dataset_load_refuses_an_incomplete_job_by_default(tmp_path):
 
 def test_dataset_load_reads_an_incomplete_job_only_when_asked(tmp_path):
     """明示すれば探索目的で読める。ただし探索専用であることを状態に残す。"""
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     job_path = _job_with_mztab(tmp_path, "partial")
 
     result = dataset_load(job_path=str(job_path), allow_incomplete=True)
@@ -440,7 +440,7 @@ def test_dataset_load_reads_an_incomplete_job_only_when_asked(tmp_path):
 
 def test_allow_incomplete_rejects_non_boolean(tmp_path):
     """"false" という文字列が True になる事故を防ぐ。"""
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     job_path = _job_with_mztab(tmp_path, "partial")
 
     parsed = json.loads(dataset_load(job_path=str(job_path), allow_incomplete="false"))
@@ -449,7 +449,7 @@ def test_allow_incomplete_rejects_non_boolean(tmp_path):
 
 
 def test_dataset_load_does_not_warn_for_completed_job(tmp_path):
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     job_path = _job_with_mztab(tmp_path, "completed")
 
     dataset_load(job_path=str(job_path))
@@ -462,7 +462,7 @@ def test_dataset_load_does_not_warn_for_completed_job(tmp_path):
 
 def test_dataset_load_records_absence_of_detection_state(mztab_file):
     """隣に .arf が無いなら「検出状態が無い」と記録する（0 件と混同させない）。"""
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     dataset_load(str(mztab_file))
     ds = session_state.session.dataset
     assert ds.detected_mask is None
@@ -471,7 +471,7 @@ def test_dataset_load_records_absence_of_detection_state(mztab_file):
 
 
 def test_dataset_status_says_detection_state_is_unavailable(mztab_file):
-    from lipidmix.tools.mztab_tools import dataset_load, dataset_status
+    from metabolomix.tools.mztab_tools import dataset_load, dataset_status
     dataset_load(str(mztab_file))
     payload = json.loads(dataset_status())
     assert payload["detection"]["available"] is False
@@ -480,7 +480,7 @@ def test_dataset_status_says_detection_state_is_unavailable(mztab_file):
 
 def test_dataset_status_reports_detection_rate_when_available(mztab_file):
     import numpy as np
-    from lipidmix.tools.mztab_tools import dataset_load, dataset_status
+    from metabolomix.tools.mztab_tools import dataset_load, dataset_status
     dataset_load(str(mztab_file))
     ds = session_state.session.dataset
     ds.detected_mask = np.array([[True, False]])
@@ -494,7 +494,7 @@ def test_dataset_status_reports_detection_rate_when_available(mztab_file):
 
 def test_dataset_load_summary_mentions_detection_when_absent(mztab_file):
     """入口の要約で「検出率を語れない」ことを伝える（70% が gap-fill の実データがある）。"""
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     out = dataset_load(str(mztab_file))
     assert "検出状態" in out
 
@@ -518,7 +518,7 @@ _SML_ONLY_MZTAB = textwrap.dedent("""\
 
 def test_the_load_summary_separates_evidence_from_ms1_annotation(tmp_path):
     """LLM が MS1 注釈を MS/MS 裏付けと取り違えないよう、入口で分けて言う。"""
-    from lipidmix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.mztab_tools import dataset_load
     p = tmp_path / "Height_sml.mzTab"
     p.write_text(_SML_ONLY_MZTAB, encoding="utf-8")
 

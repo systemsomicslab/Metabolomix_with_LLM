@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from lipidmix.analysis import spectral_match as sm
+from metabolomix.analysis import spectral_match as sm
 
 # 参照窓のうち「正規化強度 > 0.1」が 5 個以上になるようにしてある。4 個以下だと
 # weighted / reverse に peakCountPenalty が掛かり、同一スペクトルでも 1.0 にならない。

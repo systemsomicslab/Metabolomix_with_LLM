@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.core.process_control import (
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.core.process_control import (
     detach_breakaway_mode,
     file_lock,
     launch_detached,
@@ -27,7 +27,7 @@ from lipidmix.core.process_control import (
     same_process,
     start_owned_process,
 )
-import lipidmix.core.process_control as pc
+import metabolomix.core.process_control as pc
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[1])
 
@@ -391,8 +391,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, sys.argv[1])
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.core.process_control import file_lock
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.core.process_control import file_lock
 
 lock_path = Path(sys.argv[2])
 result_path = Path(sys.argv[3])
@@ -613,8 +613,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, sys.argv[1])
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.core.process_control import launch_detached
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.core.process_control import launch_detached
 
 out_path = Path(sys.argv[2])
 cwd = Path(sys.argv[3])
@@ -847,7 +847,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, sys.argv[1])
-from lipidmix.core.process_control import launch_detached, start_owned_process
+from metabolomix.core.process_control import launch_detached, start_owned_process
 
 work = Path(sys.argv[2])
 child = work / "child.py"

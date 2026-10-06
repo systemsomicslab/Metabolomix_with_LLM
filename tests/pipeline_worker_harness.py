@@ -1,10 +1,10 @@
-"""lipidmix.pipeline を実プロセスとして検証するための試験専用workerエントリ。
+"""metabolomix.pipeline を実プロセスとして検証するための試験専用workerエントリ。
 
-production worker（`lipidmix/pipeline/worker.py`）は`--pipeline`しか受け付けない
+production worker（`metabolomix/pipeline/worker.py`）は`--pipeline`しか受け付けない
 ——試験用の環境変数も任意import名も持たせない（それ自体がコード実行の入口に
 なる）。したがって「実プロセスとして起動されて初めて確認できる」振る舞いを
 確かめるには、本番からは決して呼ばれない別のエントリが要る。それがこのファイル
-（`lipidmix.console.worker` の `--console-arg` と同じ位置付け）。
+（`metabolomix.console.worker` の `--console-arg` と同じ位置付け）。
 **importせずスクリプトパスとして`python tests/pipeline_worker_harness.py`で起動する**
 （`tests/fixtures/fake_console.py` と同じ流儀）。
 
@@ -15,8 +15,8 @@ production worker（`lipidmix/pipeline/worker.py`）は`--pipeline`しか受け�
     engine自体（stage順序・owner lock・冪等性）だけを見るためのモード。
 
 ``--scenario <name>``（Task 19）
-    **本番の`lipidmix.pipeline.service.build_handlers()`をそのまま使う。**
-    差し替えるのは`lipidmix.console.runner.build_msdial_cmd`だけ——起動する
+    **本番の`metabolomix.pipeline.service.build_handlers()`をそのまま使う。**
+    差し替えるのは`metabolomix.console.runner.build_msdial_cmd`だけ——起動する
     Consoleのコマンドラインを`tests/fixtures/fake_console.py`へ向ける。
     loading・metadata・preprocessing・PCA・differential・export・renderは
     すべて本物が走る。`supervise`（起動・監視・停止・収集・完了判定）も本物。
@@ -52,8 +52,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from lipidmix.core.atomic_io import DomainError  # noqa: E402
-from lipidmix.pipeline.engine import run_engine  # noqa: E402
+from metabolomix.core.atomic_io import DomainError  # noqa: E402
+from metabolomix.pipeline.engine import run_engine  # noqa: E402
 
 #: 偽Consoleスクリプト（importせずスクリプトパスとして渡す）。
 _FAKE_CONSOLE = Path(__file__).resolve().parent / "fixtures" / "fake_console.py"
@@ -65,7 +65,7 @@ _HANDLER_KEYS = (
     "differential", "export", "report",
 )
 
-#: handlerキー → 登録するoutput_name一覧（Task18: `lipidmix.pipeline.report.
+#: handlerキー → 登録するoutput_name一覧（Task18: `metabolomix.pipeline.report.
 #: evaluate_target`がhash照合込みで`output_name`付きrefだけを「達成」と数える
 #: ため、文字列ダミーのrefでは`finish_success`が常にfailed/partialへ落ちる。
 #: 本harnessが検証する対象はengine自体（stage順序・owner lock）で、Task18の
@@ -78,7 +78,7 @@ _OUTPUT_NAMES = {
 
 
 def _persist(pipeline_root, name: str) -> dict:
-    from lipidmix.pipeline.report import persist_result
+    from metabolomix.pipeline.report import persist_result
     return persist_result(pipeline_root, {
         "output_name": name, "kind": "synthetic",
         "result_id": f"{name.replace(':', '_')}-result",
@@ -119,13 +119,13 @@ def _install_fake_console(scenario: str, counter: str | None, no_inchikey: bool)
     """Consoleの**コマンドライン組み立てだけ**を偽Consoleへ向ける。
 
     差し替えるのは「何を起動するか」だけで、起動・監視・停止・収集・完了判定は
-    本物の`lipidmix.console.execution.supervise`を通る。`supervise`の`command`
+    本物の`metabolomix.console.execution.supervise`を通る。`supervise`の`command`
     引数はMCPの公開引数にできない（任意コマンドの実行口になる）ため、唯一の
     組み立て場所である`build_msdial_cmd`をこのworkerプロセス内で差し替える
     ——`tests/pipeline_fixtures.py::use_fake_console`と同じ理由・同じ場所で、
     `-i`/`-o`/`-m`/`-p`は実Consoleと同じ意味のまま渡す。
     """
-    from lipidmix.console import runner as console_runner
+    from metabolomix.console import runner as console_runner
 
     def build_msdial_cmd(exe, dataset_root, msdial_out_dir, method_file,
                          save_project=False):
@@ -178,7 +178,7 @@ def _with_sleep(handlers: dict, sleep_stage: str | None, sleep_seconds: float) -
 
 
 def _real_handlers(args) -> dict:
-    from lipidmix.pipeline.service import build_handlers
+    from metabolomix.pipeline.service import build_handlers
 
     _install_fake_console(args.scenario, args.counter, args.no_inchikey)
     return _with_sleep(build_handlers(), args.sleep_stage, args.sleep_seconds)
@@ -193,7 +193,7 @@ def _relaunch_detached(args, argv: list) -> int:
     ——このプロセスが消えたあともworkerが進み続けることを、呼び出し側が
     「起動役の終了」を待ってから観測できるようにするため。
     """
-    from lipidmix.core.process_control import launch_detached
+    from metabolomix.core.process_control import launch_detached
 
     skip_next = False
     forwarded: list = []
