@@ -19,10 +19,12 @@ drive a full analysis without ever seeing the raw matrices.
 - **Keeps results out of the context window** — plots are rendered to PNG on the server
   rather than shipped as coordinate lists, and full result tables stay in session state
   until exported.
-- **Drives MS-DIAL itself** — an optional path plans and runs MS-DIAL Console over raw
-  acquisition files, then loads the resulting mzTab-M as a canonical dataset.
 - **Accumulates knowledge** — literature notes and reusable analysis playbooks are served
   back to the LLM as MCP resources, so findings compound across sessions.
+- **Can drive MS-DIAL itself (auxiliary)** — the main workflow reads output you have already
+  processed in the MS-DIAL GUI. As a secondary path, the server can plan and run MS-DIAL
+  Console over raw acquisition files and load the resulting mzTab-M. It only does this when
+  you choose to; given raw data alone, it first suggests processing it in the GUI.
 
 ## Supported inputs
 
