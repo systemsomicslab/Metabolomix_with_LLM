@@ -101,3 +101,21 @@ def test_library_load_normalises_ion_mode_in_the_not_found_hint(cfg):
     assert payload["details"]["setting"] == "library.msp_negative"
     assert "[library] msp_negative" in payload["message"]
     assert "MSDIAL_MSP_NEG" in payload["message"]
+
+
+def test_library_load_open_failure_does_not_leak_a_forward_slash_directory(cfg, tmp_path, monkeypatch):
+    """環境変数に `/` 区切りで書かれた置き場所は、OSError の文言にも `/` のまま出る。伏せ漏れしない。"""
+    from lipidmix.library import tools as library_tools
+    lab = tmp_path / "secret-lab-share"
+    pos = _msp(lab / "pos.msp")
+    monkeypatch.setenv("MSDIAL_MSP_POS", lab.as_posix() + "/pos.msp")
+
+    def boom(path, **_kwargs):
+        raise OSError(f"cannot open {lab.as_posix()}/pos.msp.sqlite")
+
+    monkeypatch.setattr(library_tools, "open_store", boom)
+    raw = library_tools.library_load(ion_mode="positive")
+    assert json.loads(raw)["status"] == "error"
+    assert pos.exists()
+    assert lab.as_posix() not in raw
+    assert "secret-lab-share" not in raw

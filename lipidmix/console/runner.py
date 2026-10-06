@@ -56,6 +56,12 @@ def get_exe_path() -> str:
             "MS-DIAL Console の実行体が設定されていません。"
             + user_config.missing_hint("msdial.exe", _EXE_WHAT),
             details=user_config.describe_missing("msdial.exe"))
+    if setting.source == "config_file" and not Path(setting.value).is_file():
+        # 設定ファイルの値は利用者が書き写したパスなので、typo はここで出どころ付きで返す。
+        # 環境変数の値は PATH 解決される素の名前でありうるので存在確認しない。
+        raise MsdialExeNotFoundError(
+            f"{user_config.setting_label(setting)} が指すファイルがありません: {setting.value}",
+            details=user_config.describe_missing("msdial.exe", setting))
     return setting.value
 
 

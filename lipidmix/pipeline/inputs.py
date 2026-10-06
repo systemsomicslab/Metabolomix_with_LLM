@@ -447,7 +447,7 @@ def _resolve_exe(exe_path: Path) -> dict:
     if not console_runner.is_console_exe(str(exe_path)):
         raise DomainError(
             "MSDIAL_EXE_NOT_CONSOLE",
-            f"MSDIAL_EXE が MS-DIAL Console ではありません: {exe_path}",
+            f"Console の実行体（[msdial] exe / MSDIAL_EXE）が MS-DIAL Console ではありません: {exe_path}",
             {"exe_path": str(exe_path)})
     return {"path": str(exe_path.resolve()), "sha256": _sha256_file(exe_path), "version": None}
 

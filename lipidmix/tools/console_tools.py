@@ -179,7 +179,7 @@ def console_plan(
     if not console_runner.is_console_exe(exe):
         return console_error(
             "MSDIAL_EXE_NOT_CONSOLE",
-            f"MSDIAL_EXE が MS-DIAL Console ではありません: {exe}  "
+            f"Console の実行体（[msdial] exe / MSDIAL_EXE）が MS-DIAL Console ではありません: {exe}  "
             "--help にサブコマンド `lcms` が現れませんでした。GUI の MSDIAL.exe を"
             "指している可能性があります（GUI はコマンドラインを解釈せずウィンドウを"
             "開いたままになります）。MsdialWorkbench の Console 実行体"
@@ -413,7 +413,7 @@ def console_run(job_path: str | None = None, detach: bool = False) -> str:
     if not is_console:
         return console_error(
             "MSDIAL_EXE_NOT_CONSOLE",
-            f"MSDIAL_EXE が MS-DIAL Console ではありません: {exe}  "
+            f"Console の実行体（[msdial] exe / MSDIAL_EXE）が MS-DIAL Console ではありません: {exe}  "
             "--help にサブコマンド `lcms` が現れませんでした。GUI の MSDIAL.exe を"
             "指している可能性があります（GUI はコマンドラインを解釈せずウィンドウを"
             "開いたままになります）。MsdialWorkbench の Console 実行体"

@@ -35,8 +35,27 @@ def _plan(tmp_path: Path) -> dict:
 
 def test_get_exe_path_reads_the_config_file(cfg, tmp_path):
     exe = tmp_path / "MSDIALCUI.exe"
+    exe.touch()
     cfg.write_text(f"[msdial]\nexe = '{exe}'\n", encoding="utf-8")
     assert get_exe_path() == str(exe)
+
+
+def test_config_exe_pointing_at_a_missing_file_names_the_config_file(cfg, tmp_path):
+    """設定ファイルの typo は NOT_FOUND で、出どころ（設定ファイルの [msdial] exe）を名指しする。"""
+    exe = tmp_path / "no_such" / "MSDIALCUI.exe"
+    cfg.write_text(f"[msdial]\nexe = '{exe}'\n", encoding="utf-8")
+    with pytest.raises(MsdialExeNotFoundError) as exc:
+        get_exe_path()
+    assert exc.value.code == "MSDIAL_EXE_NOT_FOUND"
+    assert "lipidmix.local.toml の [msdial] exe が指すファイルがありません" in str(exc.value)
+    assert exc.value.details["source"] == "config_file"
+    assert exc.value.details["setting"] == "msdial.exe"
+
+
+def test_env_exe_is_not_checked_for_existence(cfg, monkeypatch):
+    """環境変数の値は PATH 解決される素の名前でありうるので、存在確認しない。"""
+    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    assert get_exe_path() == "fake.exe"
 
 
 def test_unset_exe_names_the_config_file_and_the_key(cfg):
@@ -68,6 +87,16 @@ def test_console_plan_envelope_carries_the_config_details(tmp_path, cfg):
     assert any("[msdial] exe" in step for step in err["details"]["how_to_set"])
 
 
+def test_console_plan_with_a_missing_config_exe_is_not_found_not_not_console(tmp_path, cfg):
+    exe = tmp_path / "no_such" / "MSDIALCUI.exe"
+    cfg.write_text(f"[msdial]\nexe = '{exe}'\n", encoding="utf-8")
+    err = _plan(tmp_path)["error"]
+    assert err["code"] == "MSDIAL_EXE_NOT_FOUND"
+    assert "lipidmix.local.toml の [msdial] exe" in err["message"]
+    assert err["details"]["setting"] == "msdial.exe"
+    assert err["details"]["human_action_required"] is True
+
+
 def test_console_plan_reports_config_invalid_with_the_quote_hint(tmp_path, cfg):
     cfg.write_text('[msdial]\nexe = "C:' + BS + 'MS-DIAL' + BS + 'x.exe"\n', encoding="utf-8")
     err = _plan(tmp_path)["error"]
@@ -90,6 +119,7 @@ def test_template_uses_the_exe_from_the_config_file_to_find_the_lbm(tmp_path, cf
     app = tmp_path / "app"
     app.mkdir()
     (app / "lib.lbm2").touch()
+    (app / "MSDIALCUI.exe").touch()
     cfg.write_text(f"[msdial]\nexe = '{app / 'MSDIALCUI.exe'}'\n", encoding="utf-8")
     parsed = json.loads(console_method_template(
         out_path=str(tmp_path / "param_POS.txt"), polarity="positive",
@@ -112,6 +142,7 @@ def test_template_reports_config_invalid(tmp_path, cfg):
 def test_pipeline_intake_resolves_the_exe_from_the_config_file(cfg, tmp_path):
     from lipidmix.pipeline import service
     exe = tmp_path / "MSDIALCUI.exe"
+    exe.touch()
     cfg.write_text(f"[msdial]\nexe = '{exe}'\n", encoding="utf-8")
     assert service._resolve_exe_path() == exe
 

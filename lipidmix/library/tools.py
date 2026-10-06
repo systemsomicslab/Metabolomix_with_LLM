@@ -114,7 +114,12 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     except Exception as exc:  # noqa: BLE001 - 壊れたライブラリは文言で返す（MCP が扱いやすい）
         # OSError の文言は置き場所（フルパス）を含む。研究室ライブラリの置き場所は
         # 戻り値（LLM の文脈）に出さないので、ディレクトリ部分を伏せる。
-        detail = f"{type(exc).__name__}: {exc}".replace(str(Path(resolved).parent), "…")
+        # OS が返す文言は `\` 区切り・`/` 区切りのどちらでも出うる（環境変数に `/` で
+        # 書かれた値はそのまま `/` で残る）ので、両方の表記を伏せる。
+        parent = Path(resolved).parent
+        detail = f"{type(exc).__name__}: {exc}"
+        for shown in (str(parent), parent.as_posix()):
+            detail = detail.replace(shown, "…")
         return json_payload({"status": "error", "message": f"参照ライブラリの読み込みに失敗しました: {detail}"})
 
     # 古い store の sqlite3 接続を閉じてから差し替える（Minor 8: 閉じずに上書きすると

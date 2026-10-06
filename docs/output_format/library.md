@@ -140,7 +140,7 @@
 `INVALID_ION_MODE` / `CONFIG_INVALID`（設定ファイルが読めない。`details` に `config_file`
 `line` `column`）。`details` は `MSP_ENV_NOT_FOUND` と、何も見つからなかったときに付き、
 `setting`（設定キー）`env_var` `source`（`env` / `config_file` / null）`config_file`
-`config_file_exists` `example`、あれば `unknown_keys`（打ち間違いの疑い）を持つ。
+`config_file_exists` `example`、あれば `unknown_keys`（打ち間違いの疑い）と `config_invalid`（設定ファイルが読めないときの理由）を持つ。
 `message` と `details` にはファイル名・設定キー・環境変数名・設定ファイルのパスだけが入り、
 ライブラリの置き場所は入らない。
 
