@@ -44,6 +44,7 @@ from lipidmix.console import runner as console_runner
 from lipidmix.console.input_prep import _companions_of
 from lipidmix.console.output_collector import is_upstream_artifact
 from lipidmix.core import app_control
+from lipidmix.core import user_config
 from lipidmix.core.atomic_io import DomainError, canonical_hash
 
 __all__ = ["DEFAULT_MANIFEST_NAME", "inspect_inputs", "manifest_source_record",
@@ -422,9 +423,13 @@ def _resolve_lbm_pinned(method_keys: dict, method_path: Path, exe_path: str,
     override = request.get("lbm_file")
     if override and not Path(override).is_absolute():
         override = str(source_root / override)
+    try:
+        lbm_setting = user_config.get_setting("msdial.lbm")
+    except user_config.ConfigInvalidError as exc:
+        raise DomainError(exc.code, exc.message, exc.details()) from exc
     lbm = method_file_mod.resolve_lbm(
         method_keys, method_path, omics=_OMICS, exe_path=exe_path,
-        env=dict(os.environ), override=override)
+        lbm_setting=lbm_setting, override=override)
     if lbm.error_code:
         raise DomainError(lbm.error_code, lbm.message or "",
                           {"candidates": list(lbm.candidates)} if lbm.candidates else {})

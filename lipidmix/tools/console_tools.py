@@ -4,7 +4,6 @@ spec §8 参照。
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from mcp.types import ToolAnnotations
@@ -241,8 +240,11 @@ def console_plan(
         )
     input_count = sum(formats.values())
 
+    lbm_setting = _lbm_setting()
+    if isinstance(lbm_setting, str):
+        return lbm_setting
     lbm = method_file_mod.resolve_lbm(
-        method_keys, mf, omics=omics, exe_path=exe, env=os.environ, override=lbm_file)
+        method_keys, mf, omics=omics, exe_path=exe, lbm_setting=lbm_setting, override=lbm_file)
     if lbm.error_code:
         return console_error(lbm.error_code, lbm.message or "",
                              {"candidates": list(lbm.candidates)} if lbm.candidates else None)
@@ -746,8 +748,11 @@ def console_method_template(
         if getattr(exc, "code", "") == "CONFIG_INVALID":
             return _exe_error(exc)
         exe = None
+    lbm_setting = _lbm_setting()
+    if isinstance(lbm_setting, str):
+        return lbm_setting
     lbm = method_file_mod.resolve_lbm(
-        src_keys, src, omics=omics, exe_path=exe, env=os.environ)
+        src_keys, src, omics=omics, exe_path=exe, lbm_setting=lbm_setting)
     if lbm.error_code:
         return console_error(lbm.error_code, lbm.message or "",
                              {"candidates": list(lbm.candidates)} if lbm.candidates else None)
@@ -1281,6 +1286,15 @@ def _exe_error(exc: EnvironmentError) -> str:
     if code == "MSDIAL_EXE_NOT_FOUND":
         details = {**_msdial_exe_setup_help(), **details}
     return console_error(code, str(exc), details or None)
+
+
+def _lbm_setting():
+    """`[msdial] lbm` / MSDIAL_LBM の設定。設定ファイルが読めなければ封筒（str）を返す。"""
+    from lipidmix.core import user_config
+    try:
+        return user_config.get_setting("msdial.lbm")
+    except user_config.ConfigInvalidError as exc:
+        return console_error(exc.code, exc.message, exc.details())
 
 
 def _configured_exe() -> str:

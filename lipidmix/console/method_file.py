@@ -32,6 +32,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from lipidmix.core.atomic_io import DomainError
+from lipidmix.core.user_config import Setting, setting_label
 
 # GUI の DataBaseSettingViewModel が使う判定と同じ（`@"\.lbm\d*"`）。
 # .NET の `GetFiles(dir, "*.lbm?")` が拾う .lbm / .lbm2 に一致し、.lbmx は拾わない。
@@ -160,7 +161,7 @@ class LbmResolution:
     """LBM の解決結果。`error_code` が非 None なら呼び出し側は停止する。"""
 
     path: str | None
-    source: str  # argument | method_file | build_tree | env | exe_dir | not_required
+    source: str  # argument | method_file | build_tree | env | config_file | exe_dir | not_required
     error_code: str | None = None
     message: str | None = None
     candidates: tuple[str, ...] = ()
@@ -344,13 +345,15 @@ def resolve_lbm(
     method_file: Path,
     omics: str,
     exe_path: str | None,
-    env: dict[str, str],
+    lbm_setting: Setting | None = None,
     override: str | None = None,
 ) -> LbmResolution:
     """脂質ライブラリのパスを GUI と同じ規則で解決する。
 
-    順に: 明示引数 → メソッドファイルの宣言 → **ビルド生成物** → `MSDIAL_LBM` →
-    MSDIAL_EXE と同じフォルダ。ビルド生成物を `MSDIAL_LBM` より上に置くのは、
+    順に: 明示引数 → メソッドファイルの宣言 → **ビルド生成物** → `lbm_setting`
+    （環境変数 MSDIAL_LBM → 設定ファイルの `[msdial] lbm`。呼び出し側が
+    `user_config.get_setting("msdial.lbm")` で引いて渡す）→ Console の実行体と同じ
+    フォルダ。ビルド生成物を `lbm_setting` より上に置くのは、
     この環境の Console がソースからのビルドで、ライブラリもそのツリー内の
     新しいものを使うため（インストール版より優先する）。
     返すパスは常に絶対パス。呼び出し側はそれを実効メソッドへ書き戻す
@@ -405,19 +408,18 @@ def resolve_lbm(
     if from_build is not None:
         return LbmResolution(path=_absolute(from_build), source="build_tree")
 
-    from_env = (env.get("MSDIAL_LBM") or "").strip()
-    if from_env:
-        candidate = Path(from_env)
+    if lbm_setting is not None:
+        candidate = Path(lbm_setting.value)
         if candidate.is_file():
-            return LbmResolution(path=_absolute(candidate), source="env")
+            return LbmResolution(path=_absolute(candidate), source=lbm_setting.source)
         return LbmResolution(
-            path=None, source="env", error_code="LBM_NOT_FOUND",
-            message=f"環境変数 MSDIAL_LBM が指すファイルがありません: {from_env}")
+            path=None, source=lbm_setting.source, error_code="LBM_NOT_FOUND",
+            message=f"{setting_label(lbm_setting)} が指すファイルがありません: {lbm_setting.value}")
 
     if not exe_path:
         return LbmResolution(
             path=None, source="exe_dir", error_code="LBM_NOT_FOUND",
-            message="脂質ライブラリ（.lbm2）を解決できません。MSDIAL_EXE が未設定です。")
+            message="脂質ライブラリ（.lbm2）を解決できません。Console の実行体（[msdial] exe / MSDIAL_EXE）が未設定です。")
 
     exe_dir = Path(exe_path).expanduser().parent
     found = find_lbm_files(exe_dir)
@@ -433,8 +435,9 @@ def resolve_lbm(
                 "パラメータはこの行が必ず空です。空のまま実行すると"
                 "**警告なしで同定 0 件**になります。"
                 f"探した場所: {exe_dir}  "
-                "MS-DIAL のインストールフォルダにある .lbm2 のパスを環境変数"
-                "MSDIAL_LBM に設定するか、lbm_file 引数で渡してください。"))
+                "MS-DIAL のインストールフォルダにある .lbm2 のパスを設定ファイル"
+                "（lipidmix.local.toml）の [msdial] lbm か環境変数 MSDIAL_LBM に"
+                "設定するか、lbm_file 引数で渡してください。"))
     return LbmResolution(
         path=None, source="exe_dir", error_code="LBM_AMBIGUOUS",
         message=(

@@ -32,6 +32,13 @@ from lipidmix.console.method_file import (
     scan_dir_for_method_files,
     write_effective_method_file,
 )
+from lipidmix.core.user_config import Setting
+
+
+def _env_lbm(value) -> Setting:
+    """環境変数 MSDIAL_LBM から来た値（resolve_lbm は出どころごと受け取る）。"""
+    return Setting(key="msdial.lbm", value=str(value), source="env",
+                   env_var="MSDIAL_LBM", config_file=None)
 
 
 # ---------- read_method_keys ----------
@@ -111,7 +118,7 @@ def test_resolve_lbm_prefers_explicit_method_file_value(tmp_path):
     lib.touch()
     exe = _exe_dir_with(tmp_path, "other.lbm2")
     res = resolve_lbm({"lbm file path": str(lib)}, tmp_path / "param.txt",
-                      omics="lipidomics", exe_path=str(exe), env={})
+                      omics="lipidomics", exe_path=str(exe))
     assert res.source == "method_file"
     assert Path(res.path) == lib
     assert res.error_code is None
@@ -129,7 +136,7 @@ def test_resolve_lbm_resolves_relative_value_against_method_file(tmp_path):
     lib.touch()
     exe = _exe_dir_with(tmp_path, "other.lbm2")
     res = resolve_lbm({"lbm file path": "lib.lbm2"}, tmp_path / "param.txt",
-                      omics="lipidomics", exe_path=str(exe), env={})
+                      omics="lipidomics", exe_path=str(exe))
     assert Path(res.path) == lib
     assert res.source == "method_file"
 
@@ -137,7 +144,7 @@ def test_resolve_lbm_resolves_relative_value_against_method_file(tmp_path):
 def test_resolve_lbm_errors_when_declared_path_is_missing(tmp_path):
     exe = _exe_dir_with(tmp_path, "other.lbm2")
     res = resolve_lbm({"lbm file path": str(tmp_path / "gone.lbm2")}, tmp_path / "param.txt",
-                      omics="lipidomics", exe_path=str(exe), env={})
+                      omics="lipidomics", exe_path=str(exe))
     assert res.error_code == "LBM_NOT_FOUND"
     assert res.path is None
 
@@ -148,7 +155,7 @@ def test_resolve_lbm_falls_back_to_env(tmp_path):
     exe = _exe_dir_with(tmp_path)
     res = resolve_lbm({"lbm file path": ""}, tmp_path / "param.txt",
                       omics="lipidomics", exe_path=str(exe),
-                      env={"MSDIAL_LBM": str(lib)})
+                      lbm_setting=_env_lbm(str(lib)))
     assert res.source == "env"
     assert Path(res.path) == lib
 
@@ -156,15 +163,44 @@ def test_resolve_lbm_falls_back_to_env(tmp_path):
 def test_resolve_lbm_errors_when_env_path_is_missing(tmp_path):
     exe = _exe_dir_with(tmp_path, "one.lbm2")
     res = resolve_lbm({}, tmp_path / "param.txt", omics="lipidomics",
-                      exe_path=str(exe), env={"MSDIAL_LBM": str(tmp_path / "gone.lbm2")})
+                      exe_path=str(exe), lbm_setting=_env_lbm(str(tmp_path / "gone.lbm2")))
     assert res.error_code == "LBM_NOT_FOUND"
+
+
+def test_resolve_lbm_takes_the_value_from_the_config_file(tmp_path):
+    lib = tmp_path / "conf.lbm2"
+    lib.touch()
+    exe = _exe_dir_with(tmp_path)
+    setting = Setting(key="msdial.lbm", value=str(lib), source="config_file",
+                      env_var="MSDIAL_LBM", config_file=str(tmp_path / "lipidmix.local.toml"))
+    res = resolve_lbm({"lbm file path": ""}, tmp_path / "param.txt",
+                      omics="lipidomics", exe_path=str(exe), lbm_setting=setting)
+    assert res.source == "config_file"
+    assert Path(res.path) == lib
+
+
+def test_resolve_lbm_names_the_config_key_when_its_file_is_missing(tmp_path):
+    exe = _exe_dir_with(tmp_path, "one.lbm2")
+    setting = Setting(key="msdial.lbm", value=str(tmp_path / "gone.lbm2"), source="config_file",
+                      env_var="MSDIAL_LBM", config_file=str(tmp_path / "lipidmix.local.toml"))
+    res = resolve_lbm({}, tmp_path / "param.txt", omics="lipidomics",
+                      exe_path=str(exe), lbm_setting=setting)
+    assert res.error_code == "LBM_NOT_FOUND"
+    assert "lipidmix.local.toml の [msdial] lbm" in res.message
+
+
+def test_resolve_lbm_names_the_env_var_when_its_file_is_missing(tmp_path):
+    exe = _exe_dir_with(tmp_path, "one.lbm2")
+    res = resolve_lbm({}, tmp_path / "param.txt", omics="lipidomics",
+                      exe_path=str(exe), lbm_setting=_env_lbm(tmp_path / "gone.lbm2"))
+    assert "環境変数 MSDIAL_LBM" in res.message
 
 
 def test_resolve_lbm_uses_exe_directory_when_exactly_one(tmp_path):
     """GUI が `Assembly.GetExecutingAssembly().Location` の隣を見るのと同じ。"""
     exe = _exe_dir_with(tmp_path, "only.lbm2")
     res = resolve_lbm({"lbm file path": ""}, tmp_path / "param.txt",
-                      omics="lipidomics", exe_path=str(exe), env={})
+                      omics="lipidomics", exe_path=str(exe))
     assert res.source == "exe_dir"
     assert Path(res.path).name == "only.lbm2"
 
@@ -172,7 +208,7 @@ def test_resolve_lbm_uses_exe_directory_when_exactly_one(tmp_path):
 def test_resolve_lbm_errors_when_exe_directory_has_none(tmp_path):
     exe = _exe_dir_with(tmp_path)
     res = resolve_lbm({"lbm file path": ""}, tmp_path / "param.txt",
-                      omics="lipidomics", exe_path=str(exe), env={})
+                      omics="lipidomics", exe_path=str(exe))
     assert res.error_code == "LBM_NOT_FOUND"
 
 
@@ -180,7 +216,7 @@ def test_resolve_lbm_errors_when_exe_directory_is_ambiguous(tmp_path):
     """GUI も 1 件でなければ MessageBox で止める（DatasetParameterSettingModel）。"""
     exe = _exe_dir_with(tmp_path, "a.lbm2", "b.lbm2")
     res = resolve_lbm({"lbm file path": ""}, tmp_path / "param.txt",
-                      omics="lipidomics", exe_path=str(exe), env={})
+                      omics="lipidomics", exe_path=str(exe))
     assert res.error_code == "LBM_AMBIGUOUS"
     assert len(res.candidates) == 2
 
@@ -189,7 +225,7 @@ def test_resolve_lbm_not_required_for_metabolomics(tmp_path):
     """宣言が無ければ、metabolomics では GUI 流の自動補完（exe フォルダ等）をしない。"""
     exe = _exe_dir_with(tmp_path, "only.lbm2")
     res = resolve_lbm({}, tmp_path / "param.txt", omics="metabolomics",
-                      exe_path=str(exe), env={"MSDIAL_LBM": str(tmp_path / "x.lbm2")})
+                      exe_path=str(exe), lbm_setting=_env_lbm(str(tmp_path / "x.lbm2")))
     assert res.error_code is None
     assert res.source == "not_required"
     assert res.path is None
@@ -334,7 +370,7 @@ def test_resolve_lbm_prefers_the_build_tree_over_the_installed_env_path(tmp_path
     installed.touch()
     res = resolve_lbm({"lbm file path": ""}, tmp_path / "param.txt",
                       omics="lipidomics", exe_path=str(exe),
-                      env={"MSDIAL_LBM": str(installed)})
+                      lbm_setting=_env_lbm(str(installed)))
     assert res.source == "build_tree"
     assert res.error_code is None
     assert Path(res.path).parent == repo / "src/MSDIAL5/MsdialGuiApp/bin/Debug/net48"
@@ -345,7 +381,7 @@ def test_resolve_lbm_build_tree_picks_the_tfm_matching_the_console_exe(tmp_path)
     repo, exe = _build_tree(tmp_path, msdial5_tfms=("", "net472", "net48", "net481"),
                             exe_tfm="net481")
     res = resolve_lbm({"lbm file path": ""}, tmp_path / "param.txt",
-                      omics="lipidomics", exe_path=str(exe), env={})
+                      omics="lipidomics", exe_path=str(exe))
     assert Path(res.path).parent == repo / "src/MSDIAL5/MsdialGuiApp/bin/Debug/net481"
 
 
@@ -353,7 +389,7 @@ def test_resolve_lbm_build_tree_falls_back_to_the_plain_debug_copy(tmp_path):
     """exe の TFM に対応するコピーが無ければ素の Debug/ を使う。"""
     repo, exe = _build_tree(tmp_path, msdial5_tfms=("", "net472"), exe_tfm="net48")
     res = resolve_lbm({"lbm file path": ""}, tmp_path / "param.txt",
-                      omics="lipidomics", exe_path=str(exe), env={})
+                      omics="lipidomics", exe_path=str(exe))
     assert Path(res.path).parent == repo / "src/MSDIAL5/MsdialGuiApp/bin/Debug"
 
 
@@ -361,7 +397,7 @@ def test_resolve_lbm_build_tree_is_not_ambiguous_for_tfm_copies(tmp_path):
     """同名の TFM 別コピーは『候補 4 件』ではない。LBM_AMBIGUOUS にしない。"""
     _repo, exe = _build_tree(tmp_path, msdial5_tfms=("", "net472", "net48", "net481"))
     res = resolve_lbm({"lbm file path": ""}, tmp_path / "param.txt",
-                      omics="lipidomics", exe_path=str(exe), env={})
+                      omics="lipidomics", exe_path=str(exe))
     assert res.error_code is None
     assert res.candidates == ()
 
@@ -373,7 +409,7 @@ def test_resolve_lbm_build_tree_excludes_msdial4(tmp_path):
     installed.touch()
     res = resolve_lbm({"lbm file path": ""}, tmp_path / "param.txt",
                       omics="lipidomics", exe_path=str(exe),
-                      env={"MSDIAL_LBM": str(installed)})
+                      lbm_setting=_env_lbm(str(installed)))
     assert res.source == "env"
     assert Path(res.path) == installed
 
@@ -391,7 +427,7 @@ def test_resolve_lbm_build_tree_is_ambiguous_for_distinct_libraries(tmp_path):
     exe = exe_dir / "MSDIALCUI.exe"
     exe.touch()
     res = resolve_lbm({"lbm file path": ""}, tmp_path / "param.txt",
-                      omics="lipidomics", exe_path=str(exe), env={})
+                      omics="lipidomics", exe_path=str(exe))
     assert res.error_code == "LBM_AMBIGUOUS"
     assert res.path is None
     assert len(res.candidates) == 2
@@ -403,7 +439,7 @@ def test_resolve_lbm_method_file_declaration_still_beats_the_build_tree(tmp_path
     declared = tmp_path / "declared.lbm2"
     declared.touch()
     res = resolve_lbm({"lbm file path": str(declared)}, tmp_path / "param.txt",
-                      omics="lipidomics", exe_path=str(exe), env={})
+                      omics="lipidomics", exe_path=str(exe))
     assert res.source == "method_file"
     assert Path(res.path) == declared
 
@@ -643,7 +679,7 @@ def test_resolve_lbm_returns_an_absolute_path_for_a_relative_declaration(tmp_pat
     lib.touch()
     monkeypatch.chdir(tmp_path)
     res = resolve_lbm({"lbm file path": "lib.lbm2"}, Path("proj") / "param.txt",
-                      omics="lipidomics", exe_path=None, env={})
+                      omics="lipidomics", exe_path=None)
     assert res.error_code is None
     assert Path(res.path).is_absolute()
     assert Path(res.path) == lib
@@ -655,7 +691,7 @@ def test_resolve_lbm_honours_a_declared_lbm_for_metabolomics(tmp_path):
     lib = tmp_path / "lib.lbm2"
     lib.touch()
     res = resolve_lbm({"lbm file path": "lib.lbm2"}, tmp_path / "param.txt",
-                      omics="metabolomics", exe_path=None, env={})
+                      omics="metabolomics", exe_path=None)
     assert res.error_code is None
     assert res.source == "method_file"
     assert Path(res.path) == lib
@@ -663,7 +699,7 @@ def test_resolve_lbm_honours_a_declared_lbm_for_metabolomics(tmp_path):
 
 def test_resolve_lbm_rejects_a_missing_declared_lbm_for_metabolomics(tmp_path):
     res = resolve_lbm({"lbm file path": "gone.lbm2"}, tmp_path / "param.txt",
-                      omics="metabolomics", exe_path=None, env={})
+                      omics="metabolomics", exe_path=None)
     assert res.error_code == "LBM_NOT_FOUND"
 
 
@@ -671,7 +707,7 @@ def test_resolve_lbm_honours_the_argument_for_metabolomics(tmp_path):
     lib = tmp_path / "chosen.lbm2"
     lib.touch()
     res = resolve_lbm({}, tmp_path / "param.txt", omics="metabolomics",
-                      exe_path=None, env={}, override=str(lib))
+                      exe_path=None, override=str(lib))
     assert res.source == "argument"
     assert Path(res.path) == lib
 

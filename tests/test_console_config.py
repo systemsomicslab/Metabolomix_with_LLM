@@ -132,3 +132,58 @@ def test_pipeline_intake_keeps_the_not_found_code_with_details(cfg):
         service._resolve_exe_path()
     assert exc.value.code == "MSDIAL_EXE_NOT_FOUND"
     assert exc.value.details["setting"] == "msdial.exe"
+
+
+# ---------- LBM（[msdial] lbm） ----------
+
+def test_template_uses_lbm_from_the_config_file_while_exe_comes_from_env(tmp_path, cfg, monkeypatch):
+    """出どころが混ざる構成: exe は環境変数、LBM は設定ファイル。"""
+    from lipidmix.tools.console_tools import console_method_template
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "bundled.lbm2").touch()  # exe フォルダの LBM より設定ファイルの LBM が先
+    lib = tmp_path / "libs" / "chosen.lbm2"
+    lib.parent.mkdir()
+    lib.touch()
+    monkeypatch.setenv("MSDIAL_EXE", str(app / "MSDIALCUI.exe"))
+    cfg.write_text(f"[msdial]\nlbm = '{lib}'\n", encoding="utf-8")
+    out = tmp_path / "param_POS.txt"
+    parsed = json.loads(console_method_template(
+        out_path=str(out), polarity="positive",
+        based_on=str(_neg_param(tmp_path / "neg_param_1.txt"))))
+    assert parsed["lbm"]["source"] == "config_file"
+    assert "chosen.lbm2" in out.read_text(encoding="ascii")
+
+
+def test_template_reports_config_invalid_from_the_lbm_lookup(tmp_path, cfg, monkeypatch):
+    """exe を環境変数で渡していても、LBM を引くときに壊れた設定ファイルに当たれば止める。"""
+    from lipidmix.tools.console_tools import console_method_template
+    app = tmp_path / "app"
+    app.mkdir()
+    monkeypatch.setenv("MSDIAL_EXE", str(app / "MSDIALCUI.exe"))
+    cfg.write_text("[msdial\n", encoding="utf-8")
+    parsed = json.loads(console_method_template(
+        out_path=str(tmp_path / "param_POS.txt"), polarity="positive",
+        based_on=str(_neg_param(tmp_path / "neg_param_1.txt"))))
+    assert parsed["error"]["code"] == "CONFIG_INVALID"
+
+
+def test_pipeline_pins_the_lbm_from_the_config_file(tmp_path, cfg):
+    from lipidmix.pipeline import inputs
+    lib = tmp_path / "chosen.lbm2"
+    lib.write_bytes(b"lbm")
+    cfg.write_text(f"[msdial]\nlbm = '{lib}'\n", encoding="utf-8")
+    pinned = inputs._resolve_lbm_pinned({}, tmp_path / "param.txt",
+                                        str(tmp_path / "app" / "MSDIALCUI.exe"), {}, tmp_path)
+    assert pinned["source"] == "config_file"
+    assert Path(pinned["path"]) == lib.resolve()
+
+
+def test_pipeline_lbm_lookup_wraps_config_invalid(tmp_path, cfg):
+    from lipidmix.core.atomic_io import DomainError
+    from lipidmix.pipeline import inputs
+    cfg.write_text("[msdial\n", encoding="utf-8")
+    with pytest.raises(DomainError) as exc:
+        inputs._resolve_lbm_pinned({}, tmp_path / "param.txt",
+                                   str(tmp_path / "app" / "MSDIALCUI.exe"), {}, tmp_path)
+    assert exc.value.code == "CONFIG_INVALID"
