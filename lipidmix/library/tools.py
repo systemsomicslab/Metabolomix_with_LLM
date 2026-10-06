@@ -18,9 +18,14 @@ from mcp.types import ToolAnnotations
 
 from lipidmix.analysis.spectral_match import cutoff_mask, match_spectrum, total_score
 from lipidmix.arf2.reader import format_spots_as_table
-from lipidmix.core import mcp_errors, session_state
+from lipidmix.core import mcp_errors, session_state, user_config
 from lipidmix.core.mcp_core import mcp
-from lipidmix.core.path_resolvers import LibraryPathError, resolve_dcl_file_path, resolve_library_path
+from lipidmix.core.path_resolvers import (
+    LIBRARY_SETTING_KEYS,
+    LibraryPathError,
+    resolve_dcl_file_path,
+    resolve_library_path,
+)
 from lipidmix.core.serialization import json_payload, round_floats
 from lipidmix.dcl.reader import deserialize_dcl, get_msms_by_precursor
 from lipidmix.library.defaults import DEFAULT_MS2_TOL as _DEFAULT_MS2_TOL
@@ -64,8 +69,9 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     再利用）する。
 
     解決順: `file_path` の明示 → `ion_mode`（`"positive"` / `"negative"`）に対応する
-    環境変数 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG` → データディレクトリの
-    `*_Loaded.msp2.dbs` → 設定済みの環境変数（両方あれば `ion_mode` を求める）→
+    設定（環境変数 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG` → `lipidmix.local.toml` の
+    `[library] msp_positive` / `msp_negative`）→ データディレクトリの
+    `*_Loaded.msp2.dbs` → 設定済みの極性（両方あれば `ion_mode` を求める）→
     データディレクトリの `*.msp`。候補が 1 つに決まらなければ `code` 付きの
     エラー（`MSP_AMBIGUOUS` など）を返し、黙って選ばない。一度に保持する
     ライブラリは 1 つだけ——測定の極性に合わせて `ion_mode` を指定する。
@@ -85,11 +91,20 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     try:
         resolved = resolve_library_path(file_path, ion_mode=ion_mode)
     except LibraryPathError as exc:
-        return json_payload({"status": "error", "code": exc.code, "message": exc.message})
+        payload = {"status": "error", "code": exc.code, "message": exc.message}
+        if exc.details:
+            payload["details"] = exc.details
+        return json_payload(payload)
     if not resolved:
+        key = LIBRARY_SETTING_KEYS.get(ion_mode or "positive", "library.msp_positive")
+        hint = user_config.missing_hint(key, "研究室の参照ライブラリ（.msp）")
+        if ion_mode is None:
+            hint += " 負イオンは [library] msp_negative です。"
         return json_payload({
             "status": "error",
-            "message": "データディレクトリに参照ライブラリ（*_Loaded.msp2.dbs または *.msp）が見つかりませんでした。",
+            "message": "参照ライブラリが見つかりませんでした（データディレクトリにも "
+                       "*_Loaded.msp2.dbs / *.msp がありません）。file_path で指定するか、" + hint,
+            "details": user_config.describe_missing(key),
         })
 
     try:
