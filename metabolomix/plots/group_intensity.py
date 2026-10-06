@@ -200,6 +200,8 @@ def render_group_intensity_plot(payload, *, title=None, ncols=None):
     from matplotlib.lines import Line2D
 
     items = payload["items"]
+    if not items:
+        raise ValueError("描く項目がありません。")
     labels = [g["label"] for g in payload["groups"]]
     ncols = ncols or min(5, len(items))
     nrows = math.ceil(len(items) / ncols)

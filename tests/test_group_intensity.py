@@ -237,3 +237,128 @@ def test_render_marks_ms1_only_panels():
         assert any("MS1-only" in t for t in _texts(fig.axes[0]))
     finally:
         plt.close(fig)
+
+
+def test_render_empty_items_raises():
+    p = {"items": [], "groups": [], "plot_schema": "lipidmix.group_intensity.v1",
+         "value": "test", "detection_limit": None, "detection_limit_source": None,
+         "groups": [], "low_reliability_samples": [], "excluded": {}, "caveats": []}
+    with pytest.raises(ValueError, match="描く項目がありません"):
+        gi.render_group_intensity_plot(p)
+
+
+def test_render_diamond_vs_circle_markers():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    rows = {
+        0: [{"file_name": "c1", "height": 100.0, "is_gap_filled": False},  # c1: gap_fraction = 0 <= 0.5 → circle
+            {"file_name": "c2", "height": 100.0, "is_gap_filled": True}],    # c2: gap_fraction = 1.0 > 0.5 → diamond
+        1: [{"file_name": "c1", "height": 50.0, "is_gap_filled": False},
+            {"file_name": "c2", "height": 50.0, "is_gap_filled": False}],
+    }
+    items = [{"item": "item", "parts": [{"part": "item", "kind": "class", "n_spots": 2}],
+              "spots": [{"spot_id": 0, "name": "s0", "ontology": "x"},
+                        {"spot_id": 1, "name": "s1", "ontology": "x"}]}]
+    p = gi.build_group_intensity_payload(items, [{"label": "g", "samples": ["c1", "c2"]}], rows,
+                                         msms={0: True, 1: True})
+    fig = gi.render_group_intensity_plot(p)
+    try:
+        ax = fig.axes[0]
+        collections = ax.collections
+        assert len(collections) > 0, "No scatter plots drawn"
+        # Find circle (26 vertices) and diamond (5 vertices) by path vertex count
+        has_circle = any(len(coll.get_paths()) > 0 and
+                        any(len(p.vertices) == 26 for p in coll.get_paths())
+                        for coll in collections)
+        has_diamond = any(len(coll.get_paths()) > 0 and
+                         any(len(p.vertices) == 5 for p in coll.get_paths())
+                         for coll in collections)
+        assert has_circle and has_diamond, "Both circle and diamond markers should be present"
+    finally:
+        plt.close(fig)
+
+
+def test_render_low_reliability_sample_white_fill():
+    import matplotlib.pyplot as plt
+    import numpy as np
+    rows = {0: [{"file_name": "c1", "height": 100.0, "is_gap_filled": False}]}
+    items = [{"item": "item", "parts": [{"part": "item", "kind": "class", "n_spots": 1}],
+              "spots": [{"spot_id": 0, "name": "s0", "ontology": "x"}]}]
+    p = gi.build_group_intensity_payload(items, [{"label": "g", "samples": ["c1"]}], rows,
+                                         msms={0: True}, low_reliability=frozenset({"c1"}))
+    fig = gi.render_group_intensity_plot(p)
+    try:
+        ax = fig.axes[0]
+        collections = ax.collections
+        for coll in collections:
+            facecolors = coll.get_facecolors()
+            if len(facecolors) > 0:
+                # Check if any color is white (or close to white: [1, 1, 1, 1])
+                for fc in facecolors:
+                    if np.allclose(fc[:3], [1, 1, 1], atol=0.01):
+                        return  # Found white fill
+        assert False, "No white facecolor found for low-reliability sample"
+    finally:
+        plt.close(fig)
+
+
+def test_render_no_dashed_line_without_detection_limit():
+    import matplotlib.pyplot as plt
+    rows = {0: [{"file_name": "c1", "height": 1000.0, "is_gap_filled": False}]}
+    items = [{"item": "item", "parts": [{"part": "item", "kind": "class", "n_spots": 1}],
+              "spots": [{"spot_id": 0, "name": "s0", "ontology": "x"}]}]
+    p = gi.build_group_intensity_payload(items, [{"label": "g", "samples": ["c1"]}], rows, msms={0: True})
+    assert p["detection_limit"] is None
+    fig = gi.render_group_intensity_plot(p)
+    try:
+        ax = fig.axes[0]
+        for line in ax.get_lines():
+            assert line.get_linestyle() != "--", "Dashed line should not be present when detection_limit is None"
+    finally:
+        plt.close(fig)
+
+
+def test_render_group_mean_line_drawn():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    rows = {0: [{"file_name": "c1", "height": 1000.0, "is_gap_filled": False}]}
+    items = [{"item": "item", "parts": [{"part": "item", "kind": "class", "n_spots": 1}],
+              "spots": [{"spot_id": 0, "name": "s0", "ontology": "x"}]}]
+    p = gi.build_group_intensity_payload(items, [{"label": "g", "samples": ["c1"]}], rows, msms={0: True})
+    fig = gi.render_group_intensity_plot(p)
+    try:
+        ax = fig.axes[0]
+        # Check for LineCollection from hlines
+        has_line_collection = any(hasattr(c, 'get_segments') for c in ax.collections)
+        # Also check for lines from errorbar/hlines
+        has_lines = len(ax.get_lines()) > 0
+        assert has_line_collection or has_lines, "Group mean line (hlines) should be drawn when log10_mean is not None"
+    finally:
+        plt.close(fig)
+
+
+def test_render_shared_yaxis_with_different_magnitudes():
+    import matplotlib.pyplot as plt
+    rows = {
+        0: [{"file_name": "c1", "height": 10.0, "is_gap_filled": False}],         # small: log10(10) = 1
+        1: [{"file_name": "c1", "height": 100000.0, "is_gap_filled": False}],     # large: log10(100000) = 5
+    }
+    items = [{"item": "small", "parts": [{"part": "small", "kind": "class", "n_spots": 1}],
+              "spots": [{"spot_id": 0, "name": "s0", "ontology": "x"}]},
+             {"item": "large", "parts": [{"part": "large", "kind": "class", "n_spots": 1}],
+              "spots": [{"spot_id": 1, "name": "s1", "ontology": "x"}]}]
+    p = gi.build_group_intensity_payload(items, [{"label": "g", "samples": ["c1"]}], rows, msms={0: True, 1: True})
+    fig = gi.render_group_intensity_plot(p)
+    try:
+        axes = [ax for ax in fig.axes if ax.get_visible() and ax.axison]
+        assert len(axes) == 2
+        ylim0 = axes[0].get_ylim()
+        ylim1 = axes[1].get_ylim()
+        # Both should have the same limits (shared y-axis)
+        assert ylim0 == ylim1, f"Y-axes should be shared but got {ylim0} vs {ylim1}"
+        # Upper limit should be >= log10(100000) = 5
+        assert ylim0[1] >= 5.0, f"Upper y-limit {ylim0[1]} should be >= 5.0 to accommodate both items"
+    finally:
+        plt.close(fig)
