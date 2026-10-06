@@ -33,6 +33,8 @@ knowledge/
 # 追跡済みの requirements.txt 等は影響を受けないが、新規の .txt は
 # 明示的に git add -f しない限り無視される点に注意。
 *.txt
+# 依存宣言は追跡する（requirements.txt は追跡済み、dev 側も同様に除外しない）。
+!requirements*.txt
 *.csproj
 *.sln
 interp_eval_out/
