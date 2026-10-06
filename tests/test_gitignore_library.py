@@ -25,6 +25,8 @@ _MUST_BE_IGNORED = [
     "cache/lab_pos-0123456789abcdef.sqlite",
     "anywhere/.library-cache/lab_pos-0123456789abcdef.sqlite",
     f"cache/{store.DIGEST_INDEX_NAME}",
+    # 設定ファイルには研究室ライブラリのパスが入る（spec 2026-10-06）
+    "lipidmix.local.toml",
 ]
 
 

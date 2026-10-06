@@ -1,6 +1,8 @@
 .venv/
 .venv-1/
 .env
+# 外部資産の場所の設定（研究室の参照ライブラリのパスが入る）。雛形は lipidmix.example.toml
+lipidmix.local.toml
 data/
 .vs/
 .vscode/
