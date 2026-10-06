@@ -185,3 +185,83 @@ def build_group_intensity_payload(resolved_items, groups, rows_by_spot, *, msms=
         "excluded": {key: list((excluded or {}).get(key, [])) for key in _EXCLUDED_KEYS},
         "caveats": list(caveats or []),
     }
+
+
+GROUP_COLORS = ["#bdbdbd", "#9ecae1", "#3182bd", "#de2d26", "#fd8d3c", "#31a354", "#756bb1", "#8c564b"]
+
+
+def render_group_intensity_plot(payload, *, title=None, ncols=None):
+    """payload を 1 項目 1 パネルの点 + 平均 ± SD 図にする。spec §4。
+
+    縦軸は全パネル共通（log10）。パネルごとに拡大すると強度 10 前後のノイズが信号に見え、
+    「見つかるか」の判断を誤らせるため。0 の試料は軸の底に ▽。
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    items = payload["items"]
+    labels = [g["label"] for g in payload["groups"]]
+    ncols = ncols or min(5, len(items))
+    nrows = math.ceil(len(items) / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(2.6 * ncols, 2.7 * nrows), squeeze=False)
+    positive = [s["value"] for it in items for g in it["groups"] for s in g["samples"] if s["value"] > 0]
+    floor = 0.0
+    top = math.ceil(math.log10(max(positive)) + 0.2) if positive else 1.0
+    limit = payload.get("detection_limit")
+    for ax, item in zip(axes.flat, items):
+        ms1_only = item["n_spots"] > 0 and item.get("n_spots_msms") == 0
+        msms_note = "" if item.get("n_spots_msms") is None else f", MS/MS {item['n_spots_msms']}"
+        ax.set_title(f"{item['item']}  (spots {item['n_spots']}{msms_note})", fontsize=9,
+                     color="#777777" if ms1_only else "black", style="italic" if ms1_only else "normal")
+        ax.set_xticks(range(len(labels)))
+        ax.set_xticklabels(labels, rotation=35, ha="right", fontsize=7)
+        ax.set_xlim(-0.6, len(labels) - 0.4)
+        ax.set_ylim(floor - 0.3, top)
+        ax.tick_params(axis="y", labelsize=7)
+        ax.set_ylabel("log10(Intensity)", fontsize=7)
+        if limit:
+            ax.axhline(math.log10(limit), color="#888888", linestyle="--", linewidth=0.8, zorder=1)
+        if ms1_only:
+            ax.set_facecolor("#f4f4f4")
+            ax.text(0.03, 0.95, "MS1-only (unconfirmed)", transform=ax.transAxes, ha="left", va="top",
+                    fontsize=7, color="#777777", style="italic")
+        if not item["detected"]:
+            reason = "no annotated species" if item["n_spots"] == 0 else "intensity 0 in all samples"
+            ax.text(0.5, 0.5, f"N.D.\n({reason})", transform=ax.transAxes, ha="center", va="center",
+                    fontsize=9, color="#555555",
+                    bbox={"facecolor": "white", "edgecolor": "none", "pad": 2}, zorder=5)
+            continue
+        for i, group in enumerate(item["groups"]):
+            color = GROUP_COLORS[i % len(GROUP_COLORS)]
+            n = len(group["samples"])
+            for j, s in enumerate(group["samples"]):
+                x = i + (j - (n - 1) / 2) * 0.12
+                if s["value"] <= 0:
+                    ax.scatter(x, floor, marker="v", s=22, facecolor="white", edgecolor="#555555", zorder=3)
+                    continue
+                gapfilled = (s["gap_filled_fraction"] or 0) > GAPFILL_MAJORITY
+                ax.scatter(x, math.log10(s["value"]), s=30, marker="D" if gapfilled else "o",
+                           facecolor="white" if s["low_reliability"] else color,
+                           edgecolor="black", linewidth=0.6, zorder=3)
+            if group["log10_mean"] is not None:
+                m, sd = group["log10_mean"], group["log10_sd"]
+                ax.hlines(m, i - 0.28, i + 0.28, color="black", linewidth=1.6, zorder=4)
+                if sd is not None:
+                    ax.errorbar(i, m, yerr=sd, color="black", capsize=4, linewidth=1.0, zorder=4)
+        ax.axhline(floor, color="#dddddd", linewidth=0.6, zorder=1)
+    for ax in list(axes.flat)[len(items):]:
+        ax.axis("off")
+    legend = [
+        Line2D([], [], marker="o", ls="", mfc="#888888", mec="black", label="sample (mostly detected peaks)"),
+        Line2D([], [], marker="D", ls="", mfc="#888888", mec="black", label="sample (mostly gap-filled values)"),
+        Line2D([], [], marker="o", ls="", mfc="white", mec="black", label="low-reliability sample (not in mean/SD)"),
+        Line2D([], [], marker="v", ls="", mfc="white", mec="#555555", label="zero (at the axis floor)"),
+        Line2D([], [], color="black", lw=1.6, label="mean ± SD of log10"),
+    ]
+    if limit:
+        legend.append(Line2D([], [], color="#888888", ls="--", lw=0.8,
+                             label=f"detection limit ({limit:,.0f})"))
+    fig.legend(handles=legend, loc="lower center", ncol=3, fontsize=7, frameon=False)
+    fig.suptitle(title or "Intensity by sample group", fontsize=11)
+    fig.tight_layout(rect=(0, 0.08, 1, 0.96))
+    return fig

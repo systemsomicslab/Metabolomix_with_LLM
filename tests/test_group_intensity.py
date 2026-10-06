@@ -191,3 +191,49 @@ def test_msms_count_and_metadata_are_carried():
     assert p["detection_limit"] == 1000.0 and p["detection_limit_source"] == "argument"
     assert p["excluded"]["internal_standard"] == ["#2 x"] and p["caveats"] == ["c"]
     assert p["groups"] == [{"label": "ctrl", "samples": ["c1", "c2"]}, {"label": "ko", "samples": ["k1"]}]
+
+
+def _texts(ax):
+    return [t.get_text() for t in ax.texts]
+
+
+def test_render_shares_the_y_axis_and_marks_nd_and_ms1_only():
+    import matplotlib.pyplot as plt
+    p = _payload(detection_limit=1000.0)
+    fig = gi.render_group_intensity_plot(p)
+    try:
+        axes = [ax for ax in fig.axes if ax.get_visible() and ax.axison]
+        assert len(axes) == 2
+        assert axes[0].get_ylim() == axes[1].get_ylim()
+        assert any("no annotated species" in t for t in _texts(axes[1]))
+        assert any(l.get_linestyle() == "--" for l in axes[0].get_lines())   # 検出下限の破線
+    finally:
+        plt.close(fig)
+
+
+def test_render_distinguishes_all_zero_from_no_species():
+    import matplotlib.pyplot as plt
+    rows = {9: [{"file_name": "c1", "height": 0.0, "is_gap_filled": True}]}
+    items = [{"item": "PS", "parts": [{"part": "PS", "kind": "class", "n_spots": 1}],
+              "spots": [{"spot_id": 9, "name": "PS 34:1", "ontology": "PS"}]}]
+    p = gi.build_group_intensity_payload(items, [{"label": "ctrl", "samples": ["c1"]}], rows,
+                                         msms={9: False})
+    fig = gi.render_group_intensity_plot(p)
+    try:
+        assert any("intensity 0 in all samples" in t for t in _texts(fig.axes[0]))
+    finally:
+        plt.close(fig)
+
+
+def test_render_marks_ms1_only_panels():
+    import matplotlib.pyplot as plt
+    rows = {1: [{"file_name": "c1", "height": 500.0, "is_gap_filled": False}]}
+    items = [{"item": "PG 35:1", "parts": [{"part": "PG 35:1", "kind": "name", "n_spots": 1}],
+              "spots": [{"spot_id": 1, "name": "no MS2: PG 35:1", "ontology": "PG"}]}]
+    p = gi.build_group_intensity_payload(items, [{"label": "ctrl", "samples": ["c1"]}], rows,
+                                         msms={1: False})
+    fig = gi.render_group_intensity_plot(p)
+    try:
+        assert any("MS1-only" in t for t in _texts(fig.axes[0]))
+    finally:
+        plt.close(fig)
