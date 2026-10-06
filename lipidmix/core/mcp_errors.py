@@ -51,6 +51,8 @@ def missing_state(state: str, required_tools: list[str], message: str) -> str:
 
 CONSOLE_ERROR_CODES = frozenset({
     "MSDIAL_EXE_NOT_FOUND",
+    # 設定ファイル（lipidmix.local.toml）が読めない。
+    "CONFIG_INVALID",
     "MSDIAL_TIMEOUT",
     "MSDIAL_NONZERO_EXIT",
     "NO_JOB_OUTPUT",

@@ -1,0 +1,23 @@
+# ms-data-parser の外部資産の場所。
+#
+# このファイルを lipidmix.local.toml という名前でリポジトリ直下（server.py の隣）に
+# 複製して編集する。lipidmix.local.toml は git に追跡されない。
+#
+# - Windows のパスは単一引用符で囲む（二重引用符だと \ がエスケープとして読まれる）。
+# - 相対パスは、このファイルのあるフォルダ基準で解く。
+# - 環境変数（MSDIAL_EXE / MSDIAL_LBM / MSDIAL_MSP_POS / MSDIAL_MSP_NEG）が
+#   設定されていれば、そちらが優先される。
+# - 書き換えは次のツール呼び出しから効く（MCP サーバの再起動は不要）。
+
+[msdial]
+# MS-DIAL Console の実行体。console_* / pipeline_* ツールを使うときだけ必要。
+exe = 'C:\MS-DIAL\MSDIALCUI.exe'
+
+# 脂質ライブラリ（.lbm2）。任意。書かなければメソッドファイルの宣言や、
+# Console の実行体と同じフォルダの .lbm2 から推定する。
+# lbm = 'C:\MS-DIAL\Lipids.lbm2'
+
+[library]
+# library_load(ion_mode=...) が読む参照ライブラリ（.msp）。極性ごとに 1 つ。
+# msp_positive = 'D:\library\pos.msp'
+# msp_negative = 'D:\library\neg.msp'

@@ -4,7 +4,6 @@ spec §8 参照。
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from mcp.types import ToolAnnotations
@@ -54,7 +53,8 @@ def console_plan(
     lbm_file:
         脂質ライブラリ（`.lbm2`）のパス。省略時は「メソッドファイルの宣言 →
         ビルド生成物（MsdialWorkbench をソースからビルドしている場合） →
-        環境変数 MSDIAL_LBM → MSDIAL_EXE と同じフォルダ」の順に、MS-DIAL GUI と
+        `[msdial] lbm`（lipidmix.local.toml）か環境変数 MSDIAL_LBM →
+        Console の実行体（[msdial] exe / MSDIAL_EXE）と同じフォルダ」の順に、MS-DIAL GUI と
         同じ規則で自動解決します。GUI 由来のパラメータは `Lbm file path:` が
         必ず空なので、この自動解決が無いと**警告なしで同定 0 件**になります。
         自動補完（宣言より後ろの 3 つ）は lipidomics だけです。引数と宣言は
@@ -175,12 +175,11 @@ def console_plan(
         from lipidmix.console import runner as console_runner
         exe = console_runner.get_exe_path()
     except EnvironmentError as exc:
-        return console_error("MSDIAL_EXE_NOT_FOUND", str(exc),
-                             _msdial_exe_setup_help())
+        return _exe_error(exc)
     if not console_runner.is_console_exe(exe):
         return console_error(
             "MSDIAL_EXE_NOT_CONSOLE",
-            f"MSDIAL_EXE が MS-DIAL Console ではありません: {exe}  "
+            f"Console の実行体（[msdial] exe / MSDIAL_EXE）が MS-DIAL Console ではありません: {exe}  "
             "--help にサブコマンド `lcms` が現れませんでした。GUI の MSDIAL.exe を"
             "指している可能性があります（GUI はコマンドラインを解釈せずウィンドウを"
             "開いたままになります）。MsdialWorkbench の Console 実行体"
@@ -242,8 +241,11 @@ def console_plan(
         )
     input_count = sum(formats.values())
 
+    lbm_setting = _lbm_setting()
+    if isinstance(lbm_setting, str):
+        return lbm_setting
     lbm = method_file_mod.resolve_lbm(
-        method_keys, mf, omics=omics, exe_path=exe, env=os.environ, override=lbm_file)
+        method_keys, mf, omics=omics, exe_path=exe, lbm_setting=lbm_setting, override=lbm_file)
     if lbm.error_code:
         return console_error(lbm.error_code, lbm.message or "",
                              {"candidates": list(lbm.candidates)} if lbm.candidates else None)
@@ -402,7 +404,7 @@ def console_run(job_path: str | None = None, detach: bool = False) -> str:
         exe = console_runner.get_exe_path()
     except EnvironmentError as exc:
         update_status(resolved, "failed", error=str(exc))
-        return console_error("MSDIAL_EXE_NOT_FOUND", str(exc))
+        return _exe_error(exc)
     try:
         is_console = console_runner.is_console_exe(exe, raise_on_os_error=True)
     except OSError as exc:
@@ -411,7 +413,7 @@ def console_run(job_path: str | None = None, detach: bool = False) -> str:
     if not is_console:
         return console_error(
             "MSDIAL_EXE_NOT_CONSOLE",
-            f"MSDIAL_EXE が MS-DIAL Console ではありません: {exe}  "
+            f"Console の実行体（[msdial] exe / MSDIAL_EXE）が MS-DIAL Console ではありません: {exe}  "
             "--help にサブコマンド `lcms` が現れませんでした。GUI の MSDIAL.exe を"
             "指している可能性があります（GUI はコマンドラインを解釈せずウィンドウを"
             "開いたままになります）。MsdialWorkbench の Console 実行体"
@@ -738,9 +740,20 @@ def console_method_template(
         method_file_mod.ADDUCT_KEY: method_file_mod.STANDARD_ADDUCTS[polarity],
     }
 
-    exe = os.environ.get("MSDIAL_EXE") or None
+    from lipidmix.console import runner as console_runner
+    try:
+        exe = console_runner.get_exe_path()
+    except EnvironmentError as exc:
+        # exe はビルド生成物・exe フォルダからの LBM 推定にだけ使う。未設定でも
+        # メソッドの宣言や [msdial] lbm で解決できれば足りるので、ここでは止めない。
+        if getattr(exc, "code", "") == "CONFIG_INVALID":
+            return _exe_error(exc)
+        exe = None
+    lbm_setting = _lbm_setting()
+    if isinstance(lbm_setting, str):
+        return lbm_setting
     lbm = method_file_mod.resolve_lbm(
-        src_keys, src, omics=omics, exe_path=exe, env=os.environ)
+        src_keys, src, omics=omics, exe_path=exe, lbm_setting=lbm_setting)
     if lbm.error_code:
         return console_error(lbm.error_code, lbm.message or "",
                              {"candidates": list(lbm.candidates)} if lbm.candidates else None)
@@ -1044,7 +1057,7 @@ def _console_run_result(job_path: Path, receipt: dict) -> str:
         return console_error(
             "MSDIAL_EXE_NOT_FOUND",
             f"MS-DIAL Console を起動できませんでした: {receipt.get('error', '')}",
-            {**details, "exe": os.environ.get("MSDIAL_EXE", "")})
+            {**details, "exe": _configured_exe()})
     if receipt["termination"] == "timeout":
         return console_error(
             "MSDIAL_TIMEOUT",
@@ -1263,32 +1276,73 @@ def _capped_candidates(candidates) -> dict:
     return section
 
 
-def _msdial_exe_setup_help() -> dict:
-    """MSDIAL_EXE 未設定の封筒に、誰が何をすべきかを機械可読で載せる。
+def _exe_error(exc: EnvironmentError) -> str:
+    """`get_exe_path` の失敗を封筒にする。
 
-    環境変数は MCP クライアントからは設定できず、設定しても**起動中のサーバには
-    反映されない**（サーバはクライアントが起動したまま生き続ける）。
-    LLM に「設定してください」とだけ返すと、設定を試みて失敗するか黙って諦める。
-    人間の作業であることを型で示し、コピペできる手順を渡す。
+    未設定（`MSDIAL_EXE_NOT_FOUND`）には人間がすべき手順を、設定ファイルが読めない
+    （`CONFIG_INVALID`）ときはその行・列を載せる。
+    """
+    code = getattr(exc, "code", "MSDIAL_EXE_NOT_FOUND")
+    details = dict(getattr(exc, "details", {}) or {})
+    if code == "MSDIAL_EXE_NOT_FOUND":
+        details = {**_msdial_exe_setup_help(), **details}
+    return console_error(code, str(exc), details or None)
+
+
+def _lbm_setting():
+    """`[msdial] lbm` / MSDIAL_LBM の設定。設定ファイルが読めなければ封筒（str）を返す。"""
+    from lipidmix.core import user_config
+    try:
+        return user_config.get_setting("msdial.lbm")
+    except user_config.ConfigInvalidError as exc:
+        return console_error(exc.code, exc.message, exc.details())
+
+
+def _configured_exe() -> str:
+    """封筒に載せるための設定済み実行体（決められなければ空文字）。"""
+    from lipidmix.console import runner as console_runner
+    try:
+        return console_runner.get_exe_path()
+    except EnvironmentError:
+        return ""
+
+
+def _msdial_exe_setup_help() -> dict:
+    """Console の実行体が未設定の封筒に、誰が何をすべきかを機械可読で載せる。
+
+    設定ファイル（`lipidmix.local.toml`）の編集も環境変数の設定も MCP クライアント
+    からはできない。LLM に「設定してください」とだけ返すと、設定を試みて失敗するか
+    黙って諦める。人間の作業であることを型で示し、コピペできる手順を渡す。
+    設定ファイルは呼ばれるたびに読まれるので再起動は要らないが、環境変数は
+    起動中のサーバに反映されない。
     """
     from lipidmix.console.runner import msdial_exe_candidates
+    from lipidmix.core import user_config
 
     try:
         candidates = msdial_exe_candidates()
     except OSError:
         candidates = []
+    config = user_config.config_file_path()
+    if config.is_file():
+        config_step = (f"{config} の [msdial] に exe = '<MSDIALCUI.exe のパス>' と書く"
+                       "（単一引用符で囲む。サーバの再起動は不要）")
+    else:
+        config_step = (f"{user_config.EXAMPLE_FILENAME} を {config} として複製し、"
+                       "[msdial] exe = '<MSDIALCUI.exe のパス>' と書く"
+                       "（単一引用符で囲む。サーバの再起動は不要）")
     return {
         "human_action_required": True,
-        "why": "環境変数の設定は MCP クライアントからはできません。",
+        "why": "設定ファイルの編集も環境変数の設定も MCP クライアントからはできません。",
         "candidates": candidates[:10],
         "how_to_set": [
-            'PowerShell（恒久設定）: [Environment]::SetEnvironmentVariable('
-            "'MSDIAL_EXE','<MSDIALCUI.exe のパス>','User')",
-            '.mcp.json の該当サーバに "env": {"MSDIAL_EXE": "<パス>"} を書く',
+            config_step,
+            "PowerShell（恒久設定）: [Environment]::SetEnvironmentVariable("
+            "'MSDIAL_EXE','<MSDIALCUI.exe のパス>','User')（設定後に MCP サーバの再起動が必要）",
         ],
-        "restart_required": True,
-        "restart_note": "設定後は MCP サーバを再起動してください。"
-                        "起動中のプロセスは環境変数の変更を読み直しません。",
+        "restart_required": False,
+        "restart_note": "設定ファイルなら次の呼び出しから効きます。環境変数で設定した場合だけ、"
+                        "起動中のプロセスが変更を読み直さないので MCP サーバの再起動が必要です。",
     }
 
 

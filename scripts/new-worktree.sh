@@ -38,6 +38,12 @@ fi
 
 main_w=$(win "$main")
 wt_w=$(win "$path")
+# 外部資産の場所の設定（lipidmix.local.toml、追跡外）は worktree に来ない。
+# main ツリーにあれば LIPIDMIX_CONFIG でそれを指す（設定を分裂させない）。
+config_env=""
+if [ -f "$main/lipidmix.local.toml" ]; then
+    config_env="\"LIPIDMIX_CONFIG\": \"$main_w/lipidmix.local.toml\","
+fi
 
 # server.py はこの worktree のものを指す。main を指すと、worktree のコードを
 # 編集しながら main の実装を試すことになり、最も気づきにくい形で嘘をつく。
@@ -52,6 +58,7 @@ cat > "$path/.mcp.json" <<JSON
         "$wt_w/server.py"
       ],
       "env": {
+        $config_env
         "LIPIDMIX_DATA_DIR": "$main_w/data",
         "LIPIDMIX_ANALYSES_DIR": "$main_w/analyses",
         "LIPIDMIX_KNOWLEDGE_DIR": "$main_w/knowledge",
