@@ -810,6 +810,20 @@ def test_resolve_python_launch_bypasses_the_venv_redirector(monkeypatch, tmp_pat
 
 
 @windows_only
+def test_environment_block_encodes_characters_outside_the_bmp():
+    """BMP外の文字（絵文字など）を含む環境変数があっても環境ブロックを作れる。
+
+    venv経路は親の環境全体をブロックにするので、どれか1つの変数にBMP外の
+    文字があるだけで、venvからの起動がすべて失敗してはいけない。wchar_tは
+    UTF-16なので、BMP外の1文字はサロゲートペアの2要素になる。
+    """
+    block = pc._environment_block({"B": "y", "A": "x\U0001F600"})
+
+    decoded = bytes(block).decode("utf-16-le")
+    assert decoded.startswith("A=x\U0001F600\0B=y\0\0")
+
+
+@windows_only
 def test_resolve_python_launch_leaves_other_programs_alone(monkeypatch, tmp_path):
     redirector = tmp_path / "venv" / "Scripts" / "python.exe"
     base = tmp_path / "base" / "python.exe"
@@ -853,7 +867,10 @@ def reported(path):
         except OSError:
             text = ""
         if text.strip():
-            return json.loads(text)
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                pass  # 書きかけを読んだ。書き終わるまで待つ。
         time.sleep(0.02)
     raise SystemExit(f"child did not write {path}")
 

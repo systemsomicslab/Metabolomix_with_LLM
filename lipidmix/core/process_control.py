@@ -424,9 +424,11 @@ def _environment_block(env: dict):
                               {"name": name})
         entries.append(f"{name}={value}\0")
     block = "".join(entries) + "\0"
-    buffer = (ctypes.c_wchar * len(block))()
-    buffer[:] = block
-    return buffer
+    # `create_unicode_buffer`はUTF-16へ符号化して確保する（BMP外の1文字は
+    # サロゲートペアの2要素）。`(c_wchar * len(block))`に1文字ずつ詰めると、
+    # 絵文字などを含む変数が1つあるだけでTypeErrorになり起動できない。
+    # 埋め込みのNULはそのまま保たれる。
+    return ctypes.create_unicode_buffer(block)
 
 
 def _create_process(command: list[str], cwd: Path, log_path: Path,
