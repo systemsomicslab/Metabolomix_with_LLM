@@ -58,8 +58,10 @@ Console 実行層 8（`console_plan` `console_prepare_input` `console_method_tem
 
 ## 一気通貫の順序
 
+主経路は MS-DIAL GUI で解析済みの出力を `load_dataset` で読むこと（[dataset.md](dataset.md)）。
 生データフォルダから Console・mzTab-M・前処理・PCA・比較・レポートまでを自動で
-進める**現行の一気通貫入口**は `pipeline_run`（[pipeline.md](pipeline.md)）。
+進める**補助経路の一気通貫入口**は `pipeline_run`（[pipeline.md](pipeline.md)）で、
+ユーザーが Console での自動解析を選んだときにだけ使う。
 workerが1回分を進める経路（`prepare_input → upstream → validate_outputs →
 load_dataset → resolve_metadata → preprocess → pca → resolve_comparisons →
 differential → export → report`）が、まさにその「どの順に何を行うか」を記録する。

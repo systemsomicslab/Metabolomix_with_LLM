@@ -84,10 +84,12 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
 @mcp.tool(annotations=_LOCAL_WRITE, structured_output=False)
 def pipeline_run(dataset_root: str, request: dict | None = None,
                  request_id: str | None = None) -> str:
-    """計画と起動を一括実行する。フォルダだけの通常入口。
+    """計画と起動を一括実行する。生データから MS-DIAL Console を回す補助経路の入口。
 
-    「生データを解析して」という依頼はこのツールの起動依頼そのもの（spec
-    §10.2）。通常は `pipeline_plan` による確認を挟まなくてよい。引数は
+    主経路は MS-DIAL GUI で解析済みの出力を `load_dataset` で読むこと。生データ
+    だけのフォルダでは、まず GUI での解析を勧め、Console での自動解析は選択肢
+    として示す。このツールはユーザーがそれを選んだときにだけ呼ぶ。起動前に解決
+    結果（method file・LBM・極性）を見たいときは `pipeline_plan`。引数は
     `pipeline_plan` と同じ。
 
     短時間で `pipeline_path` を返す——起動受理は、workerのidentity保存と
