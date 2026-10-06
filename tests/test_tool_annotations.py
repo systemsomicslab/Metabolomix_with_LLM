@@ -42,6 +42,7 @@ EXPECTED_ANNOTATIONS = {
     "arf_parser": READ_ONLY,
     "arf_differential": READ_ONLY,
     "arf_plot_volcano": READ_ONLY,
+    "arf_plot_group_intensity": READ_ONLY,
     "arf2_parser": READ_ONLY,
     "arf2_annotate_identities": READ_ONLY,
     # --- データセット入口 ---
@@ -117,6 +118,7 @@ EXPECTED_ANNOTATIONS = {
     "save_pca_figure": LOCAL_WRITE,
     "save_volcano_figure": LOCAL_WRITE,
     "save_eic_figure": LOCAL_WRITE,
+    "save_group_intensity_figure": LOCAL_WRITE,
     "arf_export_differential": LOCAL_WRITE,
     # --- knowledge の変更 ---
     "ingest_stage": LOCAL_WRITE_APPEND,

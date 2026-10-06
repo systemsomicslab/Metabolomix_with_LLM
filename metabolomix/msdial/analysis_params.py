@@ -1,7 +1,7 @@
 """MS-DIAL の解析 param ファイル（`<Dataset>_param_<ts>.txt`）から、候補付けに要る値だけを読む。
 
 読む行: `Ion mode:`、`Searched adduct ions:`（その解析の極性の一覧）、`MS1 tolerance for centroid:`、
-`Retention time tolerance for alignment:`。ファイルが無ければ極性ごとの既定値に落とし、どちらを
+`Retention time tolerance for alignment:`、`Minimum peak height:`。ファイルが無ければ極性ごとの既定値に落とし、どちらを
 使ったかを `source` で返す。deps: stdlib だけ。
 """
 from __future__ import annotations
@@ -15,7 +15,8 @@ DEFAULT_ADDUCTS = {
 DEFAULT_RT_WINDOW = 0.1
 _KEYS = {"Ion mode": "ion_mode", "Searched adduct ions": "searched_adducts",
          "MS1 tolerance for centroid": "ms1_tolerance",
-         "Retention time tolerance for alignment": "rt_tolerance_alignment"}
+         "Retention time tolerance for alignment": "rt_tolerance_alignment",
+         "Minimum peak height": "min_peak_height"}
 
 
 def find_param_file(arf2_path) -> Path | None:
@@ -37,10 +38,10 @@ def read_analysis_params(path) -> dict:
     """param ファイルを読み、必要な値を抽出する。
 
     Returns:
-        dict with keys: ion_mode, searched_adducts, rt_tolerance_alignment, ms1_tolerance
+        dict with keys: ion_mode, searched_adducts, rt_tolerance_alignment, ms1_tolerance, min_peak_height
     """
     found = {"ion_mode": None, "searched_adducts": [], "rt_tolerance_alignment": None,
-             "ms1_tolerance": None}
+             "ms1_tolerance": None, "min_peak_height": None}
     for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
         key, sep, value = line.partition(":")
         name = _KEYS.get(key.strip())

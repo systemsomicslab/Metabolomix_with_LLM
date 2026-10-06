@@ -14,7 +14,7 @@ def test_read_params(tmp_path):
     path.write_text(PARAM, encoding="utf-8")
     assert read_analysis_params(path) == {
         "ion_mode": "Negative", "searched_adducts": ["[M-H]-", "[M+HCOO]-", "[M+CH3COO]-", "[2M-H]-"],
-        "rt_tolerance_alignment": 0.1, "ms1_tolerance": 0.01}
+        "rt_tolerance_alignment": 0.1, "ms1_tolerance": 0.01, "min_peak_height": None}
 
 
 def test_find_param_file_picks_the_newest_name(tmp_path):

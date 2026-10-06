@@ -1,7 +1,7 @@
 # ワークフロー: 図の保存と payload 契約
 
 通常の対話では PNG を作らない。ユーザーが明示的に保存を求めたときだけ `save_*_figure`
-を呼ぶ。3 ツールは同じ骨格を持つ ——「`session` に記録済みの payload を取り出し、
+を呼ぶ。4 ツールは同じ骨格を持つ ——「`session` に記録済みの payload を取り出し、
 ファイル名の slug を作り、レポート先ディレクトリを解決し、matplotlib で描いて保存する」。
 
 ## payload 契約の比較
@@ -10,6 +10,7 @@
 |---|---|---|---|
 | PCA スコア（`session.arf.last_pca_plot` / `session.dataset.last_pca`） | `arf_parser` / `arf_pca_preprocessed` / `dataset_pca` | `save_pca_figure` | 散布図。`_pca_scatter_arrays` で座標配列に展開 |
 | `lipidmix.volcano.v1` | `arf_plot_volcano(output="payload")` | `save_volcano_figure` | `up`/`down` は全点保持、`ns` のみ間引く |
+| `lipidmix.group_intensity.v1` | `arf_plot_group_intensity(output="payload")` | `save_group_intensity_figure` | 項目 × 群 × 試料の PeakHeight 合計。点も平均 ± SD も全量保持（間引かない）。PNG に加えて SVG も書く。描画は `plots/group_intensity.py` に委譲 |
 | `lipidmix.eic.v1` / `.multi.v1` | `eic_plot_chromatograms` / `eic_plot_compounds(output="payload")` | `save_eic_figure` | 線グラフ。描画は `plots/eic.py` に委譲 |
 
 `arf_plot_volcano` と `eic_plot_compounds` の**既定は payload ではなく画像**
@@ -102,3 +103,18 @@
 7. └─ metabolomix/plots/eic.py  render_eic_plot()
 8.    ├─ [lipidmix.eic.v1] metabolomix/plots/eic.py  _render_single_spot()
 9.    └─ [lipidmix.eic.multi.v1] metabolomix/plots/eic.py  _render_multi_compound()
+
+## save_group_intensity_figure
+
+前提: `arf_plot_group_intensity` 実行済み（未実行なら `MissingState`。`required_tools` は
+`arf_plot_group_intensity`）
+状態変更: `reports/figures/` に PNG（dpi 300）と同名の SVG を書く。
+
+`session.arf.last_group_intensity` の payload・title・ncols から描き直す。`title` を省くと
+`arf_plot_group_intensity` に渡したものを使う。
+
+1. metabolomix/tools/reports.py  save_group_intensity_figure()
+2. └─ metabolomix/core/mcp_errors.py  missing_state()
+3. └─ metabolomix/corpus/knowledge_store.py  make_slug()
+4. └─ metabolomix/core/mcp_core.py  _resolve_report_dir()
+5. └─ metabolomix/plots/group_intensity.py  render_group_intensity_plot()

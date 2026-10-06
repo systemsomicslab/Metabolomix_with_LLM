@@ -22,6 +22,8 @@ import server
 # 配布更新: 通知だけでなく適用まで行う server_update を追加(66→67)。
 # アラインメントのキュレーション: curation_review/submit/flags/view_data を追加(67→71)。
 # キュレーションの候補付け: curation_suggest を追加(71→72)。
+# 群別強度プロット: arf_plot_group_intensity を追加(72→73)。
+# 群別強度プロットの保存: save_group_intensity_figure を追加(73→74)。
 EXPECTED_TOOLS = sorted([
     "library_load",
     "library_match_feature",
@@ -42,6 +44,7 @@ EXPECTED_TOOLS = sorted([
     "arf_parser",
     "arf_pca_preprocessed",
     "arf_plot_volcano",
+    "arf_plot_group_intensity",
     "arf_preprocess",
     "eic_parser",
     "eic_plot_chromatograms",
@@ -90,6 +93,7 @@ EXPECTED_TOOLS = sorted([
     "sample_search",
     "server_update",
     "save_eic_figure",
+    "save_group_intensity_figure",
     "save_pca_figure",
     "save_volcano_figure",
     "update_objective",
