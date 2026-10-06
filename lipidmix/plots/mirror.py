@@ -242,8 +242,23 @@ _MSDIAL_REPRESENTATIVE_LABEL = "1000.00000"
 _MAX_LABELS_PER_SIDE = 25
 
 
+# ラベル箱の高さは文字サイズ × この倍率（行送り。matplotlib の `text.linespacing`
+# 既定と同じ 1.2）で決める。`get_window_extent` の高さは matplotlib の版・
+# ヒンティング既定で変わる（3.10.9: 9.0px / 3.11.2: 8.33px、いずれも 6pt・dpi100）
+# ので、縦方向の重なり判定に実測を使うと、密集ピークの縦間隔がその差に挟まったとき
+# 版によって間引きが効かなくなる（GitHub #3）。幅だけは字形に依存するので実測する。
+_LABEL_LINE_HEIGHT = 1.2
+
+
+def _label_box_height_px(fig) -> float:
+    """ラベル箱の高さ（ピクセル）。文字サイズと dpi だけで決まる決定的な値。"""
+    return _LABEL_FONTSIZE * fig.dpi / 72.0 * _LABEL_LINE_HEIGHT
+
+
 def _text_extent(ax, renderer, text: str) -> tuple[float, float]:
-    """文字列の描画サイズ（ピクセル）。使い捨ての Text を置いて測って消す。"""
+    """文字列の描画サイズ（ピクセル）。使い捨ての Text を置いて測って消す。
+
+    呼び出し側は**幅だけ**を使う（高さは `_label_box_height_px`）。"""
     artist = ax.text(0, 0, text, fontsize=_LABEL_FONTSIZE)
     box = artist.get_window_extent(renderer=renderer)
     artist.remove()
@@ -284,7 +299,8 @@ def _draw_labels(ax, fig, points_by_side: dict, policy: str) -> None:
 
     fig.canvas.draw()          # transData を確定させてからピクセルへ写す
     renderer = fig.canvas.get_renderer()
-    representative = _text_extent(ax, renderer, _MSDIAL_REPRESENTATIVE_LABEL)
+    box_height = _label_box_height_px(fig)
+    representative = (_text_extent(ax, renderer, _MSDIAL_REPRESENTATIVE_LABEL)[0], box_height)
 
     # 上流は上下で別々の Annotator を使う＝側をまたぐ衝突は起きない。
     for side, points in points_by_side.items():
@@ -294,7 +310,8 @@ def _draw_labels(ax, fig, points_by_side: dict, policy: str) -> None:
             if len(placed) >= _MAX_LABELS_PER_SIDE:
                 break
             text = f"{mz:.4f}"
-            box = representative if policy == MSDIAL else _text_extent(ax, renderer, text)
+            box = representative if policy == MSDIAL else (
+                _text_extent(ax, renderer, text)[0], box_height)
             point = ax.transData.transform((mz, sign * height))
             if any(_is_overlap(policy, box, point, other_box, other_point)
                    for other_box, other_point in placed):

@@ -177,6 +177,19 @@ def test_labels_no_longer_overlap_by_default():
     assert 0 < len(texts) < 2 * 14
 
 
+def test_label_box_height_does_not_depend_on_the_measured_text_height(monkeypatch):
+    """箱の高さを描画器の実測に頼らない（GitHub #3）。
+
+    `get_window_extent` の高さはフォント・ヒンティングの既定が違う matplotlib の版で
+    変わる（3.10.9 は 9.0px、3.11.2 は 8.33px）。密集ピークの縦間隔（8.37px）が
+    その間に挟まると、ある版では重なり判定が成り立たず全ラベルが残る。高さは
+    文字サイズから決める決定的な値にし、実測が小さく返ってもラベルは間引かれる。
+    """
+    monkeypatch.setattr(mirror, "_text_extent", lambda ax, renderer, text: (38.0, 8.0))
+    texts = _labelled(_crowded_payload())
+    assert 0 < len(texts) < 2 * 14
+
+
 def test_the_msdial_policy_ignores_vertical_separation():
     """忠実版は水平距離だけを見る（`Overlap="Horizontal, Direct"` は全ラベルが
     同じ代表箱なので Direct ⊆ Horizontal に縮退する）。高さが違っても
