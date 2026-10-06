@@ -104,7 +104,10 @@ def _resolve_exe_path() -> Path:
     try:
         exe = console_runner.get_exe_path()
     except EnvironmentError as exc:
-        raise DomainError("MSDIAL_EXE_NOT_FOUND", str(exc), {}) from exc
+        # 未設定は MSDIAL_EXE_NOT_FOUND、設定ファイルが読めなければ CONFIG_INVALID。
+        # どちらも利用者が直す手掛かり（設定ファイルの場所・キー・行）を details に持つ。
+        raise DomainError(getattr(exc, "code", "MSDIAL_EXE_NOT_FOUND"), str(exc),
+                          dict(getattr(exc, "details", {}) or {})) from exc
     return Path(exe)
 
 

@@ -1,7 +1,9 @@
 """MS-DIAL Console の実行体解決とコマンド組み立て。
 
 exe_path は引数で注入できる（テスト用 fake の差し込みに使う）。
-既定は環境変数 MSDIAL_EXE から取得し、未設定なら EnvironmentError を上げる。
+既定は `lipidmix.core.user_config` の `msdial.exe`（環境変数 MSDIAL_EXE →
+`lipidmix.local.toml` の `[msdial] exe`）から取得し、決められなければ
+`MsdialExeNotFoundError`（EnvironmentError）を上げる。
 
 **Console を実際に起動して見張るのは `lipidmix.console.execution.supervise`**。
 同期呼出しも切り離しワーカー（`lipidmix.console.worker`）も pipeline の上流工程も
@@ -23,20 +25,38 @@ import os
 import subprocess
 from pathlib import Path
 
+from lipidmix.core import user_config
+
+_EXE_WHAT = "MS-DIAL Console の実行体（MSDIALCUI.exe / MsdialConsoleApp.exe）"
+
 
 class MsdialExeNotFoundError(EnvironmentError):
-    pass
+    """Console の実行体を決められない。
+
+    `code` は封筒にそのまま載せる。未設定は `MSDIAL_EXE_NOT_FOUND`、設定ファイルが
+    読めなければ `CONFIG_INVALID`。後者も同じ型で送るのは、呼び出し側の既存の
+    `except EnvironmentError` をすべてそのまま生かすため。
+    """
+
+    def __init__(self, message: str, *, code: str = "MSDIAL_EXE_NOT_FOUND",
+                 details: dict | None = None):
+        super().__init__(message)
+        self.code = code
+        self.details = details if details is not None else {}
 
 
 def get_exe_path() -> str:
-    """環境変数 MSDIAL_EXE から実行ファイルパスを取得する。"""
-    exe = os.environ.get("MSDIAL_EXE", "").strip()
-    if not exe:
+    """Console の実行体のパス（環境変数 MSDIAL_EXE → 設定ファイルの `[msdial] exe`）。"""
+    try:
+        setting = user_config.get_setting("msdial.exe")
+    except user_config.ConfigInvalidError as exc:
+        raise MsdialExeNotFoundError(exc.message, code=exc.code, details=exc.details()) from exc
+    if setting is None:
         raise MsdialExeNotFoundError(
-            "環境変数 MSDIAL_EXE が設定されていません。"
-            "MS-DIAL Console の実行ファイルパスを MSDIAL_EXE に設定してください。"
-        )
-    return exe
+            "MS-DIAL Console の実行体が設定されていません。"
+            + user_config.missing_hint("msdial.exe", _EXE_WHAT),
+            details=user_config.describe_missing("msdial.exe"))
+    return setting.value
 
 
 def is_console_exe(
