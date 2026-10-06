@@ -47,6 +47,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from lipidmix.console.job_manager import list_raw_inputs  # noqa: E402
+from lipidmix.core.process_control import resolve_python_launch  # noqa: E402
 from tests.pipeline_fixtures import write_mztab  # noqa: E402
 
 #: `success` が書く主 mzTab のファイル名。MS-DIAL GUI の `Height_` prefix を
@@ -132,10 +133,14 @@ def _spawn_grandchild() -> int:
     監視側が開いたログファイルのハンドルであり、パイプを介在させると待ち合わせが
     絡む。孫は「Job Object が一族を停止できるか」を確かめるためだけの存在なので、
     出力経路を一切持たせない。
+
+    venvのリダイレクタは挟まない。挟むと記録するpidがリダイレクタになり、
+    「孫が消えたか」の検査が孫本体を見なくなる（GitHub #3）。
     """
+    command, env = resolve_python_launch(
+        [sys.executable, "-c", f"import time; time.sleep({GRANDCHILD_LIFETIME})"])
     grandchild = subprocess.Popen(
-        [sys.executable, "-c", f"import time; time.sleep({GRANDCHILD_LIFETIME})"],
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     return int(grandchild.pid)
 

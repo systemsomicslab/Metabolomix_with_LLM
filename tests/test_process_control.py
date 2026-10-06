@@ -667,10 +667,14 @@ def test_detached_worker_survives_the_job_that_launched_it(tmp_path):
     try:
         with _test_job(_TEST_JOB_LIMIT_BREAKAWAY_OK
                        | _TEST_JOB_LIMIT_KILL_ON_JOB_CLOSE) as (k, job, close_job):
-            launcher = subprocess.Popen(
+            # venvのリダイレクタを挟むと、Jobへ入るのはリダイレクタで、detacher
+            # 本体はその内側のJob（0x3000）から切り離し判定をしてしまう（GitHub #3）。
+            command, env = pc.resolve_python_launch(
                 [sys.executable, str(detacher), _REPO_ROOT, str(out_path),
                  str(tmp_path), str(tmp_path / "worker.log"),
-                 str(worker_script), str(gate)],
+                 str(worker_script), str(gate)])
+            launcher = subprocess.Popen(
+                command, env=env,
                 cwd=str(tmp_path), stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
@@ -754,3 +758,170 @@ def test_launch_detached_validates_arguments(tmp_path):
     with pytest.raises(DomainError) as excinfo:
         launch_detached([], cwd=tmp_path, log_path=tmp_path / "c.log")
     assert excinfo.value.code == "COMMAND_EMPTY"
+
+
+# ---------- venvのリダイレクタを挟まずに本物の解釈系を起動する（GitHub #3） ----------
+#
+# Windowsのvenvの`Scripts\python.exe`は解釈系そのものではなく、自前のJob Object
+# （SILENT_BREAKAWAY_OK | KILL_ON_JOB_CLOSE）を作って本物の`python.exe`を子として
+# 起動するリダイレクタである。`[sys.executable, ...]`をそのまま起動すると、
+# 返るpid・identity・Job割当・待ち合わせの対象はリダイレクタになり、コードを
+# 実行している本物のプロセスではなくなる。
+
+
+def test_resolve_python_launch_is_unchanged_outside_a_venv(monkeypatch, tmp_path):
+    exe = tmp_path / "python.exe"
+    exe.write_bytes(b"")
+    monkeypatch.setattr(sys, "executable", str(exe))
+    monkeypatch.setattr(sys, "_base_executable", str(exe), raising=False)
+
+    command, env = pc.resolve_python_launch([str(exe), "-m", "pkg.worker"])
+
+    assert command == [str(exe), "-m", "pkg.worker"]
+    assert env is None
+
+
+@windows_only
+def test_resolve_python_launch_bypasses_the_venv_redirector(monkeypatch, tmp_path):
+    """venvのリダイレクタを、venvの見え方を保ったまま本物の解釈系へ置き換える。
+
+    `__PYVENV_LAUNCHER__`はリダイレクタ自身が本物の解釈系へ渡す環境変数で、
+    これがあると解釈系は`pyvenv.cfg`を読み、venvの`sys.prefix`・site-packages・
+    `sys.executable`をそのまま再現する（CPythonの`multiprocessing`と同じ手順）。
+    """
+    redirector = tmp_path / "venv" / "Scripts" / "python.exe"
+    base = tmp_path / "base" / "python.exe"
+    for path in (redirector, base):
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"")
+    monkeypatch.setattr(sys, "executable", str(redirector))
+    monkeypatch.setattr(sys, "_base_executable", str(base), raising=False)
+    monkeypatch.setenv("LIPIDMIX_PROBE_INHERITED", "kept")
+    before = dict(os.environ)
+
+    # パスの大小文字違いは同じファイルとして扱う（Windowsのパスは大小を区別しない）。
+    command, env = pc.resolve_python_launch(
+        [str(redirector).upper(), "-m", "pkg.worker", "--flag"])
+
+    assert command == [str(base), "-m", "pkg.worker", "--flag"]
+    assert env["__PYVENV_LAUNCHER__"] == str(redirector)
+    assert env["LIPIDMIX_PROBE_INHERITED"] == "kept"
+    assert dict(os.environ) == before, "呼び出し元の環境を書き換えてはいけない"
+
+
+@windows_only
+def test_environment_block_encodes_characters_outside_the_bmp():
+    """BMP外の文字（絵文字など）を含む環境変数があっても環境ブロックを作れる。
+
+    venv経路は親の環境全体をブロックにするので、どれか1つの変数にBMP外の
+    文字があるだけで、venvからの起動がすべて失敗してはいけない。wchar_tは
+    UTF-16なので、BMP外の1文字はサロゲートペアの2要素になる。
+    """
+    block = pc._environment_block({"B": "y", "A": "x\U0001F600"})
+
+    decoded = bytes(block).decode("utf-16-le")
+    assert decoded.startswith("A=x\U0001F600\0B=y\0\0")
+
+
+@windows_only
+def test_resolve_python_launch_leaves_other_programs_alone(monkeypatch, tmp_path):
+    redirector = tmp_path / "venv" / "Scripts" / "python.exe"
+    base = tmp_path / "base" / "python.exe"
+    for path in (redirector, base):
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"")
+    monkeypatch.setattr(sys, "executable", str(redirector))
+    monkeypatch.setattr(sys, "_base_executable", str(base), raising=False)
+    console = str(tmp_path / "MsdialConsoleApp.exe")
+
+    command, env = pc.resolve_python_launch([console, "lcmsdda", "-i", "x"])
+
+    assert command == [console, "lcmsdda", "-i", "x"]
+    assert env is None
+
+
+_VENV_PROBE_SRC = """\
+import json
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from lipidmix.core.process_control import launch_detached, start_owned_process
+
+work = Path(sys.argv[2])
+child = work / "child.py"
+child.write_text(
+    "import json, os, sys\\n"
+    "from pathlib import Path\\n"
+    "Path(sys.argv[1]).write_text(json.dumps("
+    "{'pid': os.getpid(), 'prefix': sys.prefix}), encoding='utf-8')\\n",
+    encoding="utf-8")
+
+
+def reported(path):
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        if text.strip():
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                pass  # 書きかけを読んだ。書き終わるまで待つ。
+        time.sleep(0.02)
+    raise SystemExit(f"child did not write {path}")
+
+
+result = {"executable": sys.executable,
+          "base_executable": getattr(sys, "_base_executable", sys.executable),
+          "prefix": sys.prefix}
+owned = start_owned_process([sys.executable, str(child), str(work / "owned.json")],
+                            cwd=work, log_path=work / "owned.log")
+try:
+    assert owned.wait(timeout=60) == 0
+    result["owned"] = {"pid": owned.pid, "child": reported(work / "owned.json")}
+finally:
+    owned.close()
+info = launch_detached([sys.executable, str(child), str(work / "detached.json")],
+                       cwd=work, log_path=work / "detached.log")
+result["detached"] = {"pid": info["pid"], "child": reported(work / "detached.json")}
+(work / "result.json").write_text(json.dumps(result), encoding="utf-8")
+"""
+
+
+@windows_only
+def test_launched_pid_is_the_interpreter_that_runs_the_code_even_from_a_venv(tmp_path):
+    """venvから起動しても、返るpidはコードを実行している本物の解釈系のもの。
+
+    テスト自身がvenvを作り、その`Scripts\\python.exe`（リダイレクタ）から
+    `start_owned_process`/`launch_detached`を呼ばせる。システムの解釈系で
+    テストを回していてもvenv経路を必ず通るので、リダイレクタのpidを返す
+    退行はここで赤くなる。子の`sys.prefix`がvenvのままであることも見る
+    ——リダイレクタを外した代わりにvenvのsite-packagesを失っては意味が無い。
+    """
+    import venv
+
+    env_dir = tmp_path / "venv"
+    venv.create(env_dir, with_pip=False)
+    venv_python = env_dir / "Scripts" / "python.exe"
+    work = tmp_path / "work"
+    work.mkdir()
+    probe = _write_script(tmp_path, "venv_probe.py", _VENV_PROBE_SRC)
+
+    completed = subprocess.run([str(venv_python), str(probe), _REPO_ROOT, str(work)],
+                               cwd=str(tmp_path), stdin=subprocess.DEVNULL,
+                               capture_output=True, text=True, timeout=120)
+    assert completed.returncode == 0, completed.stderr
+
+    result = json.loads((work / "result.json").read_text(encoding="utf-8"))
+    # 前提: venvのpython.exeはリダイレクタである（でなければ検証にならない）。
+    assert os.path.normcase(result["executable"]) != \
+        os.path.normcase(result["base_executable"])
+    for key in ("owned", "detached"):
+        assert result[key]["pid"] == result[key]["child"]["pid"], \
+            f"{key}: 返したpidがコードを実行しているプロセスではない（リダイレクタ）"
+        assert os.path.normcase(result[key]["child"]["prefix"]) == \
+            os.path.normcase(result["prefix"]), f"{key}: 子がvenvを失っている"

@@ -16,6 +16,11 @@
    OSのbyte-range lockを使う。「owner記録ファイルを消す＝解除」ではない
    （記録が消えてもロックは残るし、記録が残っていてもロックは解けている）。
 
+起動する子が`sys.executable`のときは`resolve_python_launch`を通す。venvの
+`Scripts\\python.exe`は解釈系ではなくリダイレクタで、本物の解釈系を自前のJobの
+中で子として走らせる。そのまま起動すると、所有・identity・切り離しの対象が
+コードを実行していないリダイレクタになる（GitHub #3）。
+
 `same_process`が「生きている」と答えるための判定に`OpenProcess`の成否だけを
 使ってはいけない。実測（Windows 11 / Python 3.14）では、終了済みプロセスでも
 そのプロセスハンドルがどこかで開かれている限り`OpenProcess`は成功する。
@@ -38,6 +43,7 @@ __all__ = [
     "file_lock",
     "launch_detached",
     "process_identity",
+    "resolve_python_launch",
     "same_process",
     "start_owned_process",
 ]
@@ -51,6 +57,12 @@ JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800
 JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK = 0x00001000
 DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_UNICODE_ENVIRONMENT = 0x00000400
+
+#: venvのリダイレクタが本物の解釈系へ渡す環境変数。解釈系はこれを見て
+#: `pyvenv.cfg`を読み、venvの`sys.prefix`・site-packages・`sys.executable`を
+#: 再現する（起動直後に自分で消すので、さらに下の子へは漏れない）。
+_PYVENV_LAUNCHER_ENV = "__PYVENV_LAUNCHER__"
 
 #: Job Objectの終了コード。TerminateJobObjectへ渡し、所有プロセスの
 #: exit_codeとして観測される（0以外であることに意味がある）。
@@ -65,6 +77,55 @@ def _unsupported_platform(operation: str) -> DomainError:
         f"{operation} はWindowsでのみ利用できます（現在: {sys.platform}）",
         {"operation": operation, "platform": sys.platform},
     )
+
+
+def _same_path(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
+def resolve_python_launch(command: list[str]) -> tuple[list[str], dict | None]:
+    """`[sys.executable, ...]`を、venvのリダイレクタを挟まない起動に直す。
+
+    返り値は`(command, env)`。`env`がNoneなら環境は親のまま継承してよく、
+    dictならその環境全体で起動する（`subprocess.Popen(command, env=env)`に
+    そのまま渡せる形）。
+
+    なぜ要るか: Windowsのvenvの`Scripts\\python.exe`は解釈系そのものではない。
+    自前のJob Object（SILENT_BREAKAWAY_OK | KILL_ON_JOB_CLOSE）を作り、本物の
+    `python.exe`を子として起動して終了を待つだけのリダイレクタである。これを
+    そのまま起動すると、手に入るpid・プロセスハンドルはリダイレクタのものになり、
+
+    - identityの記録・`same_process`の生死判定・待ち合わせが、コードを実行して
+      いないプロセスを見る（リダイレクタが signaled になった時点で、本物の
+      workerはまだ終了処理中でありうる）。
+    - 自前Jobへの割当・切り離し判定が、リダイレクタの内側のJobに入った本物の
+      解釈系に届かない（解釈系からは常にリダイレクタのJob＝0x3000が見える）。
+
+    （GitHub #3。システムの解釈系を直接使う環境では起きない。）
+
+    直し方はCPythonの`multiprocessing`（`popen_spawn_win32`）と同じで、
+    `sys._base_executable`（本物の解釈系）を起動し、`__PYVENV_LAUNCHER__`に
+    venvの`python.exe`を入れて渡す。これはリダイレクタ自身が本物の解釈系へ
+    渡す値そのものなので、子から見たvenv（`sys.prefix`・site-packages・
+    `sys.executable`）はリダイレクタ経由と変わらない。PYTHONPATHで
+    site-packagesを足す方式は`.pth`の処理や`sys.prefix`が再現されないので採らない。
+
+    書き換えるのは`command[0]`が`sys.executable`そのもので、かつ
+    `sys._base_executable`がそれと異なり実在するときだけ。Console本体など
+    他のプログラム、明示された別の解釈系、venvでない環境では何もしない。
+    """
+    command = [str(part) for part in command]
+    if not _IS_WINDOWS or not command:
+        return command, None
+    executable = sys.executable
+    base = getattr(sys, "_base_executable", None)
+    if (not executable or not base or _same_path(base, executable)
+            or not _same_path(command[0], executable)
+            or not os.path.isfile(base)):
+        return command, None
+    env = dict(os.environ)
+    env[_PYVENV_LAUNCHER_ENV] = executable
+    return [base, *command[1:]], env
 
 
 if _IS_WINDOWS:  # pragma: no branch - Windows専用の宣言ブロック
@@ -348,21 +409,51 @@ def _validate_launch_args(command, cwd: Path) -> tuple[list[str], Path]:
     return command, cwd
 
 
+def _environment_block(env: dict):
+    """CreateProcessW用のUnicode環境ブロック（`名前=値\\0`の列＋終端`\\0`）を作る。
+
+    名前は大文字小文字を無視した順に並べる（Win32の要求）。NULを含む名前・値と、
+    `=`を含む名前はブロックを壊すので拒否する。
+    """
+    entries = []
+    for name, value in sorted(env.items(), key=lambda kv: str(kv[0]).upper()):
+        name, value = str(name), str(value)
+        if not name or "=" in name or "\0" in name or "\0" in value:
+            raise DomainError("ENVIRONMENT_INVALID",
+                              f"子へ渡せない環境変数がある: {name!r}",
+                              {"name": name})
+        entries.append(f"{name}={value}\0")
+    block = "".join(entries) + "\0"
+    # `create_unicode_buffer`はUTF-16へ符号化して確保する（BMP外の1文字は
+    # サロゲートペアの2要素）。`(c_wchar * len(block))`に1文字ずつ詰めると、
+    # 絵文字などを含む変数が1つあるだけでTypeErrorになり起動できない。
+    # 埋め込みのNULはそのまま保たれる。
+    return ctypes.create_unicode_buffer(block)
+
+
 def _create_process(command: list[str], cwd: Path, log_path: Path,
-                    creation_flags: int) -> "_PROCESS_INFORMATION":
+                    creation_flags: int,
+                    env: dict | None = None) -> "_PROCESS_INFORMATION":
     """CreateProcessWを呼び、PROCESS_INFORMATIONを返す。
 
     stdio用に開いたハンドルは成功・失敗いずれの経路でも必ず閉じる。子は
     CreateProcessWの時点で自分用の複製を受け取っているので、親側の複製を
     残しておく理由がない（残すとログファイルが解放されない）。
+
+    `env`がNoneなら親の環境を継承する。dictならその環境全体で起動する
+    （`resolve_python_launch`がvenvを再現するために使う）。
     """
+    environment = None
+    if env is not None:
+        environment = _environment_block(env)
+        creation_flags |= CREATE_UNICODE_ENVIRONMENT
     log_handle, null_handle = _open_child_stdio(log_path)
     try:
         si = _startup_info(log_handle, null_handle)
         pi = _PROCESS_INFORMATION()
         cmdline = ctypes.create_unicode_buffer(subprocess.list2cmdline(command))
         created = _CreateProcessW(None, cmdline, None, None, True,
-                                  creation_flags, None, str(cwd),
+                                  creation_flags, environment, str(cwd),
                                   ctypes.byref(si), ctypes.byref(pi))
         if not created:
             raise _win_error("PROCESS_LAUNCH_FAILED",
@@ -548,6 +639,7 @@ def start_owned_process(command: list[str], *, cwd: Path,
     if not _IS_WINDOWS:
         raise _unsupported_platform("start_owned_process")
     command, cwd = _validate_launch_args(command, cwd)
+    command, env = resolve_python_launch(command)
 
     job = _CreateJobObjectW(None, None)
     if not job:
@@ -562,7 +654,7 @@ def start_owned_process(command: list[str], *, cwd: Path,
                              "SetInformationJobObjectに失敗した")
 
         pi = _create_process(command, cwd, log_path,
-                             CREATE_SUSPENDED | CREATE_NO_WINDOW)
+                             CREATE_SUSPENDED | CREATE_NO_WINDOW, env)
         try:
             if not _AssignProcessToJobObject(job, pi.hProcess):
                 error = _win_error("PROCESS_ASSIGN_FAILED",
@@ -649,6 +741,7 @@ def launch_detached(command: list[str], *, cwd: Path, log_path: Path) -> dict:
     if not _IS_WINDOWS:
         raise _unsupported_platform("launch_detached")
     command, cwd = _validate_launch_args(command, cwd)
+    command, env = resolve_python_launch(command)
 
     mode = detach_breakaway_mode()
     if mode == "unsupported":
@@ -662,7 +755,7 @@ def launch_detached(command: list[str], *, cwd: Path, log_path: Path) -> dict:
     if mode == "breakaway_ok":
         flags |= CREATE_BREAKAWAY_FROM_JOB
 
-    pi = _create_process(command, cwd, log_path, flags)
+    pi = _create_process(command, cwd, log_path, flags, env)
     try:
         identity = {"pid": int(pi.dwProcessId),
                     "creation_time": _creation_time(pi.hProcess)}

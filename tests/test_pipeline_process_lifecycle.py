@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.core.process_control import process_identity, same_process
+from lipidmix.core.process_control import process_identity, resolve_python_launch, same_process
 from lipidmix.pipeline import engine, recovery
 from tests.pipeline_fixtures import DEFAULT_COMPARISON, PipelineHarness, read_contract_tsv
 
@@ -52,9 +52,11 @@ class Bystander:
     """
 
     def __init__(self):
+        # venvのリダイレクタを挟まない（挟むとidentityがリダイレクタのものになる）。
+        command, env = resolve_python_launch(
+            [sys.executable, "-c", f"import time; time.sleep({_BYSTANDER_LIFETIME})"])
         self.proc = subprocess.Popen(
-            [sys.executable, "-c", f"import time; time.sleep({_BYSTANDER_LIFETIME})"],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.identity = process_identity(self.proc.pid)
         assert self.identity is not None, "巻き添え検査用プロセスを起こせませんでした"
 
@@ -164,9 +166,13 @@ def test_cancel_during_upstream_stops_only_the_owned_console_tree(
     # 待つクライアントが永久に確認できなかった。
     record = pipeline_harness.wait(run, expected="cancelled")
 
-    # 所有する一族は止まった。
-    assert process_identity(console_pid) is None
-    assert process_identity(grandchild_pid) is None
+    # 所有する一族は止まった。一度きりの判定にしない——`terminate_tree`は
+    # Consoleのハンドルと Job の ActiveProcesses==0 を待つが、Jobの計数が0に
+    # なった瞬間に孫のプロセスオブジェクトがまだ signaled でないことがある。
+    pipeline_harness.wait_for(
+        lambda: process_identity(console_pid) is None
+        and process_identity(grandchild_pid) is None,
+        timeout=30, what="偽Consoleと孫プロセスの終了")
     assert pipeline_harness.console_receipt(run)["termination"] == "cancelled"
     assert record["stages"]["upstream"]["error"]["code"] == "MSDIAL_EXECUTION_FAILED"
     # 無関係なプロセスには触れていない。
