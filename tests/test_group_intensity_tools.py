@@ -139,10 +139,67 @@ def test_excluded_samples_and_low_reliability(loaded):
     assert ctrl["n_in_stats"] == 1 and ctrl["samples"][1]["low_reliability"] is True
 
 
-def test_group_fully_excluded_raises(loaded):
+def test_group_fully_excluded_returns_error_json(loaded):
     session_state.session.arf.excluded_samples = {"20261006_ko_1", "20261006_ko_2"}
-    with pytest.raises(ValueError):
-        _payload(items=["PG"], groups=["ctrl", "ko"])
+    out = _payload(items=["PG"], groups=["ctrl", "ko"])
+    assert out["status"] == "error" and "No sample matched spec 'ko'" in out["message"]
+
+
+def test_excluded_spots_are_not_drawn_in_class_or_name_parts(loaded):
+    session_state.session.arf.excluded_spots = {1}
+    p = _payload(items=["PG", "PG 35:1"], groups=["ctrl"])
+    by = {it["item"]: it for it in p["items"]}
+    assert 1 not in [s["spot_id"] for s in by["PG"]["spots"]]
+    assert by["PG 35:1"]["spots"] == [] and by["PG 35:1"]["detected"] is False
+    assert p["excluded"]["manual"] == ["#1 PG 35:1|PG 16:0_19:1"]
+
+
+def test_caption_reports_manual_exclusions(loaded):
+    from metabolomix.arf.tools import arf_plot_group_intensity
+    session_state.session.arf.excluded_spots = {1}
+    out = arf_plot_group_intensity(items=["PG"], groups=["ctrl"])
+    assert "手動除外 1" in out[0]
+
+
+def test_failed_call_discards_the_previous_figure(loaded):
+    from metabolomix.arf.tools import arf_plot_group_intensity
+    from metabolomix.tools.reports import save_group_intensity_figure
+    arf_plot_group_intensity(items=["PG"], groups=["ctrl"], output="payload")
+    assert session_state.session.arf.last_group_intensity is not None
+    bad = _payload(items=["PG"], groups=["nonexistent"])
+    assert bad["status"] == "error"
+    assert session_state.session.arf.last_group_intensity is None
+    out = json.loads(save_group_intensity_figure("x"))
+    assert out["error"]["code"] == "missing_state"
+
+
+@pytest.mark.parametrize("kw", [{"detection_limit": -5}, {"detection_limit": 0},
+                                {"detection_limit": float("nan")}, {"detection_limit": float("inf")},
+                                {"ncols": 0}, {"ncols": 1.5}])
+def test_invalid_detection_limit_or_ncols_returns_error_and_clears_slot(loaded, kw):
+    from metabolomix.arf.tools import arf_plot_group_intensity
+    arf_plot_group_intensity(items=["PG"], groups=["ctrl"], output="payload")
+    out = _payload(items=["PG"], groups=["ctrl"], **kw)
+    assert out["status"] == "error" and out["message"]
+    assert session_state.session.arf.last_group_intensity is None
+
+
+def test_image_mode_does_not_store_the_figure_when_render_fails(loaded, monkeypatch):
+    from metabolomix.arf.tools import arf_plot_group_intensity
+    from metabolomix.plots import group_intensity as gi
+
+    def boom(*a, **k):
+        raise RuntimeError("render failed")
+    monkeypatch.setattr(gi, "render_group_intensity_plot", boom)
+    with pytest.raises(RuntimeError):
+        arf_plot_group_intensity(items=["PG"], groups=["ctrl"])
+    assert session_state.session.arf.last_group_intensity is None
+
+
+def test_invalid_output_returns_error_json(loaded):
+    from metabolomix.arf.tools import arf_plot_group_intensity
+    out = json.loads(arf_plot_group_intensity(items=["PG"], groups=["ctrl"], output="svg"))
+    assert out["status"] == "error" and "output" in out["message"]
 
 
 def test_detection_limit_from_param_file_and_argument(loaded, tmp_path):

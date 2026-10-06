@@ -70,6 +70,24 @@ def test_curation_wrong_redundant_and_auto_likely_wrong_are_excluded():
     assert excluded["auto_likely_wrong"] == ["#1 low score: PG 35:1|PG 16:0_19:1"]
 
 
+def test_manual_exclusion_applies_to_class_and_name_parts():
+    items, excluded = gi.resolve_items(["PG", "PG 34:1"], CATALOG, manual={0})
+    assert 0 not in _ids(items[0]) and 0 not in _ids(items[1])
+    assert _ids(items[1]) == [5]
+    assert excluded["manual"] == ["#0 PG 34:1|PG 16:0_18:1"]
+
+
+def test_render_extends_axis_to_show_a_detection_limit_above_all_values():
+    import math
+    import matplotlib.pyplot as plt
+    fig = gi.render_group_intensity_plot(_payload(detection_limit=1e9))
+    try:
+        axes = [ax for ax in fig.axes if ax.get_visible() and ax.axison]
+        assert all(ax.get_ylim()[1] >= math.log10(1e9) for ax in axes)
+    finally:
+        plt.close(fig)
+
+
 def test_assign_moves_spot_to_the_recorded_class():
     curation = {"assign": {3: {"name": "PE 34:1", "ontology": "PE"}}}
     items, _ = gi.resolve_items(["PE", "PC"], CATALOG, curation=curation)
@@ -117,17 +135,32 @@ def test_overlapping_groups_are_drawn_in_both_with_a_caveat():
     facets = _facets(["x_ko_9w_1", "x_ko_24m_1", "x_ctrl_9w_1"])
     groups, caveats = gi.resolve_groups(["ko", "ko_9w"], facets)
     assert groups[1]["samples"] == ["x_ko_9w_1"]
-    assert any("x_ko_9w_1" in c for c in caveats)
+    assert len(caveats) == 1
+    assert "ko と ko_9w" in caveats[0] and "1 試料" in caveats[0] and "x_ko_9w_1" in caveats[0]
 
 
-def test_unmatched_or_empty_group_raises():
-    facets = _facets(["x_ctrl_1"])
-    with pytest.raises(ValueError):
-        gi.resolve_groups(["ko"], facets)
-    with pytest.raises(ValueError):
-        gi.resolve_groups([], facets)
-    with pytest.raises(ValueError):
-        gi.resolve_groups(["_"], facets)
+def test_overlap_caveat_is_one_per_group_pair_with_at_most_three_names():
+    names = [f"x_ko_9w_{i}" for i in range(1, 6)] + ["x_ctrl_1"]
+    groups, caveats = gi.resolve_groups(["ko", "ko_9w"], _facets(names))
+    assert len(caveats) == 1
+    assert "5 試料" in caveats[0] and "ほか" in caveats[0]
+    assert caveats[0].count("x_ko_9w_") == 3
+
+
+def test_duplicate_group_specs_get_a_caveat():
+    groups, caveats = gi.resolve_groups(["ko", "ko"], _facets(["x_ko_1", "x_ctrl_1"]))
+    assert len(groups) == 2 and len(caveats) == 1 and "重複" in caveats[0]
+
+
+def test_role_filtered_group_error_hints_how_to_include_blank():
+    facets = _facets(["x_blank_1", "x_blank_2", "x_ctrl_1"])
+    with pytest.raises(ValueError) as hinted:
+        gi.resolve_groups(["2"], facets)       # 当たるのはブランクだけ（役割で落ちる）
+    message = str(hinted.value)
+    assert "after role filtering" in message and "blank / qc を書くと" in message
+    with pytest.raises(ValueError) as plain:
+        gi.resolve_groups(["nonexistent"], facets)
+    assert "blank / qc" not in str(plain.value)
 
 
 def test_low_reliability_specs_accept_names_and_tokens():

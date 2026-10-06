@@ -21,15 +21,18 @@ STANDARD_ONLY_FOLD = 10.0
 #: 合計のうち gap-fill の値がこの割合を超える点は形を変える。
 GAPFILL_MAJORITY = 0.5
 _PREFIX = re.compile(r"^\s*(?:low score|no MS2|w/o MS2|unsettled)\s*:\s*", re.IGNORECASE)
-_EXCLUDED_KEYS = ("internal_standard", "curation", "auto_likely_wrong", "standard_only")
+_EXCLUDED_KEYS = ("internal_standard", "manual", "curation", "auto_likely_wrong", "standard_only")
 
 
 def _candidate_names(name: str) -> set[str]:
     return {_PREFIX.sub("", part).strip().casefold() for part in (name or "").split("|") if part.strip()}
 
 
-def resolve_items(items, catalog, *, curation=None, standard_only=frozenset()):
-    """項目（クラス・名前、`+` で合算）をスポット集合に解決する。spec §3.1 / §5。"""
+def resolve_items(items, catalog, *, curation=None, standard_only=frozenset(), manual=frozenset()):
+    """項目（クラス・名前、`+` で合算）をスポット集合に解決する。spec §3.1 / §5。
+
+    manual: `arf_exclude` で手動除外したスポット ID。クラスにも名前指定にも効く。
+    """
     items = [str(item) for item in (items or [])]
     if not 1 <= len(items) <= MAX_ITEMS:
         raise ValueError(f"items は 1〜{MAX_ITEMS} 件で指定してください（受け取った数: {len(items)}）。")
@@ -37,6 +40,7 @@ def resolve_items(items, catalog, *, curation=None, standard_only=frozenset()):
     wrong = set(curation.get("wrong") or ()) | set(curation.get("redundant") or ())
     auto = set(curation.get("auto_likely_wrong") or ())
     assign = curation.get("assign") or {}
+    manual = {int(s) for s in (manual or ())}
 
     spots = []
     for row in catalog:
@@ -52,6 +56,9 @@ def resolve_items(items, catalog, *, curation=None, standard_only=frozenset()):
 
     def keep(spot, *, as_class):
         label = f"#{spot['spot_id']} {spot['name']}"
+        if spot["spot_id"] in manual:
+            excluded["manual"].add(label)
+            return False
         if spot["spot_id"] in wrong:
             excluded["curation"].add(label)
             return False
@@ -113,15 +120,25 @@ def resolve_groups(group_specs, facets):
         if not tokens:
             raise ValueError(f"空の群指定は使えません: {spec!r}")
         roles = ["sample"] + [role for role in ("blank", "qc") if role in tokens]
-        matches, _ = sample_factors.expand_sample_specs([spec], facets, include_roles=tuple(roles))
+        try:
+            matches, _ = sample_factors.expand_sample_specs([spec], facets, include_roles=tuple(roles))
+        except ValueError as exc:
+            if "role filtering" in str(exc):
+                raise ValueError(f"{exc} 群の指定に blank / qc を書くとその役割が入ります。") from exc
+            raise
         groups.append({"label": spec, "samples": list(matches[spec])})
     caveats = []
-    seen: dict[str, str] = {}
-    for group in groups:
-        for name in group["samples"]:
-            if name in seen and seen[name] != group["label"]:
-                caveats.append(f"試料 {name} は群 {seen[name]} と {group['label']} の両方に当たり、両方に描きました。")
-            seen.setdefault(name, group["label"])
+    for i, first in enumerate(groups):
+        for second in groups[i + 1:]:
+            shared = [n for n in first["samples"] if n in set(second["samples"])]
+            if not shared:
+                continue
+            names = "、".join(shared[:3]) + (" ほか" if len(shared) > 3 else "")
+            if first["label"] == second["label"]:
+                caveats.append(f"群 {first['label']} が重複して指定され、{len(shared)} 試料を重ねて描きました（{names}）。")
+            else:
+                caveats.append(f"群 {first['label']} と {second['label']} に {len(shared)} 試料が重なり、"
+                               f"両方に描きました（{names}）。")
     return groups, caveats
 
 
@@ -210,6 +227,8 @@ def render_group_intensity_plot(payload, *, title=None, ncols=None):
     floor = 0.0
     top = math.ceil(math.log10(max(positive)) + 0.2) if positive else 1.0
     limit = payload.get("detection_limit")
+    if limit and limit > 0:
+        top = max(top, math.ceil(math.log10(limit) + 0.2))    # 破線が軸の外に出ないように
     for ax, item in zip(axes.flat, items):
         ms1_only = item["n_spots"] > 0 and item.get("n_spots_msms") == 0
         msms_note = "" if item.get("n_spots_msms") is None else f", MS/MS {item['n_spots_msms']}"
@@ -221,7 +240,7 @@ def render_group_intensity_plot(payload, *, title=None, ncols=None):
         ax.set_ylim(floor - 0.3, top)
         ax.tick_params(axis="y", labelsize=7)
         ax.set_ylabel("log10(Intensity)", fontsize=7)
-        if limit:
+        if limit and limit > 0:
             ax.axhline(math.log10(limit), color="#888888", linestyle="--", linewidth=0.8, zorder=1)
         if ms1_only:
             ax.set_facecolor("#f4f4f4")
@@ -260,7 +279,7 @@ def render_group_intensity_plot(payload, *, title=None, ncols=None):
         Line2D([], [], marker="v", ls="", mfc="white", mec="#555555", label="zero (at the axis floor)"),
         Line2D([], [], color="black", lw=1.6, label="mean ± SD of log10"),
     ]
-    if limit:
+    if limit and limit > 0:
         legend.append(Line2D([], [], color="#888888", ls="--", lw=0.8,
                              label=f"detection limit ({limit:,.0f})"))
     fig.legend(handles=legend, loc="lower center", ncol=3, fontsize=7, frameon=False)

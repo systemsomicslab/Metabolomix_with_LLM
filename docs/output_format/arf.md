@@ -314,11 +314,13 @@ mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`。
 選んだクラス・分子種が、指定した試料群のそれぞれで**見つかるか・どれくらいあるか**を示す
 read-only ツール。ARF 経路のみ（読み込み済み `.arf` と、同じアラインメントの兄弟 `.arf2` が要る）。
 **既定（`output="image"`）はサーバ側で描いた PNG と 1 行のキャプション**。キャプションには
-項目ごとのスポット数（MS/MS の裏付けがあれば括弧内にその数）、群ごとの試料数、除外の 4 種類の
-件数、N.D. の項目名、`caveats` が入る。以下の表は `output="payload"`（または env
+項目ごとのスポット数（MS/MS の件数が分かるときは括弧内にその数。0 も出す）、群ごとの試料数、除外の 5 種類の
+件数（手動除外・内部標準・判断・自動判定・標準液）、N.D. の項目名、`caveats` が入る。以下の表は `output="payload"`（または env
 `LIPIDMIX_PLOT_OUTPUT=payload`）の契約。ファイルとして PNG が要るときは
 `save_group_intensity_figure`（`reports/figures/<analysis_id>_group_intensity.png` を dpi 300 で、
 同名の `.svg` と一緒に書く。直前の `arf_plot_group_intensity` が無ければ `missing_state`）。
+
+**エラーと状態**: 入力の誤り（群が 1 試料にも当たらない・`output` の値が不正・`detection_limit` が 0 以下や非有限・`ncols` が 1 未満など）は例外ではなく `{"status": "error", "message": ...}` で返す。呼び出しが（missing_state を含め）失敗したときは、前回の図を `save_group_intensity_figure` が保存しないようセッションの図を破棄する。画像モードでは描画に成功してから図を保持する。群の指定が `blank` / `qc` の役割で全滅したときは、`blank` / `qc` を書くよう案内を添える。
 
 **検定はしない**。1 パネル = 1 項目、1 点 = 1 試料、群ごとに log10 空間の平均 ± SD を添えるだけで、
 群間の有意差は述べない（検定は `arf_differential`。小 n の p 値が図に独り歩きするのを避ける）。
@@ -332,15 +334,15 @@ read-only ツール。ARF 経路のみ（読み込み済み `.arf` と、同じ�
 | `groups[]` | `label`（指定した群の文字列）と `samples`（解決した試料名）。指定順。`arf_exclude` した試料は含まない |
 | `low_reliability_samples` | 白抜きで描き、平均 ± SD から外した試料（抽出量が少なかった等）。解決後の試料名 |
 | `items[].item` | 指定した項目の文字列（指定順。1〜30 件） |
-| `items[].parts[]` | `+` で分けた各部分。`part`・`kind`（`class` = `.arf2` の Ontology に完全一致、`name` = 分子種名に完全一致、`none` = 当たらず）・`n_spots` |
+| `items[].parts[]` | `+` で分けた各部分。`part`・`kind`（`class` = `.arf2` の Ontology に完全一致、`name` = 分子種名に完全一致、`none` = 当たらず。名前が当たっても全スポットが除外で消えたときも `none`。そのスポットは `excluded` に載る）・`n_spots` |
 | `items[].spots[]` | 当たったスポット `spot_id` / `name` / `ontology`（キュレーションの `assign` は付け替え後の値） |
 | `items[].n_spots` | 当たったスポット数（アダクト違い・重複スポットは合計に入る） |
-| `items[].n_spots_msms` | 当たったスポットのうち MS/MS の裏付けがある数。**0 のパネルは図で灰色になり「MS1-only (unconfirmed)」と書かれる**（MS1 の一致だけで、MS/MS では確かめていない同定） |
+| `items[].n_spots_msms` | 当たったスポットのうち MS/MS の裏付けがある数。**スポットが 1 つ以上あって 0 のパネルだけ図で灰色になり「MS1-only (unconfirmed)」と書かれる**（MS1 の一致だけで、MS/MS では確かめていない同定。スポットが 0 の N.D. パネルは灰色にしない） |
 | `items[].detected` | どこかの試料で値が 0 より大きいか |
 | `items[].groups[].samples[]` | `sample` / `value`（PeakHeight 合計） / `gap_filled_fraction`（合計のうち gap-fill の値の割合。値 0 なら null） / `low_reliability` |
 | `items[].groups[].log10_mean` / `log10_sd` / `n_in_stats` | log10 空間の平均・SD と、その計算に使った試料数（値 > 0 かつ低信頼でない試料）。n = 1 なら SD は null、0 なら平均も null |
-| `excluded` | 自動で除いたスポットの `#<spot_id> <name>`。理由ごとに 4 種類（下記） |
-| `caveats` | 試料が複数の群に当たった、孤立した判断記録がある、レビューが無く自動判定を除けなかった、等 |
+| `excluded` | 除いたスポットの `#<spot_id> <name>`。理由ごとに 5 種類（`manual` / `internal_standard` / `curation` / `auto_likely_wrong` / `standard_only`。下記） |
+| `caveats` | 試料が複数の群に当たった（群の組ごとに 1 件。重なった試料数と最大 3 試料名）、同じ群を重複指定した、孤立した判断記録がある、レビューが無く自動判定を除けなかった、等 |
 
 **N.D. には 2 種類ある**。(a) 項目に当たるスポットが無い（`items[].n_spots` = 0。名前が当たらなければ `parts[].kind` は `none`。
 クラスに当たっても除外で全スポットが消えた場合は `class` のまま 0 になる）。(b) スポットは当たったが、描いた試料のどれでも値が 0（`n_spots` > 0 で
@@ -352,13 +354,14 @@ read-only ツール。ARF 経路のみ（読み込み済み `.arf` と、同じ�
 `gap_filled_fraction` が **0.5 を超える点は ◆**（合計の過半が gap-fill、つまり検出ピークではなく
 後から埋めた値）。◆ は検出の証拠として弱いので、群の「見つかった」を読むときに割り引く。
 
-**`excluded` の 4 種類**（キーと条件）:
+**`excluded` の 5 種類**（キーと条件）:
 
 | キー | 除くもの |
 |------|----------|
+| `manual` | `arf_exclude` でスポットとして除いたもの（セッションの `excluded_spots`）。クラスにも名前指定の部分にも効く |
 | `internal_standard` | 名前に `(d<数字>)`（`PC 33:1(d7)` 等）を持つ標識内部標準。**クラスとして当たった分だけ**除く。名前で直接指定した部分は描く |
 | `curation` | `apply_curation=True`（既定）のとき、人の判断が `wrong` / `redundant` のスポット（`clear` 済みは無効）。`assign` は記録した名前・クラスで扱う。`suspect` は描く。名前指定の部分にも効く |
-| `auto_likely_wrong` | `exclude_auto_likely_wrong=True` のとき、このアラインメント（`.arf2` の sha256 一致）の最新 `curation_review` で `likely_wrong` のスポット。レビューが無ければ除かず `caveats` に出す |
+| `auto_likely_wrong` | `exclude_auto_likely_wrong=True` のとき、このアラインメント（`.arf2` の sha256 一致）の最新 `curation_review` で `likely_wrong` のスポット。名前指定の部分にも効く。レビューが無ければ除かず `caveats` に出す |
 | `standard_only` | `standard_samples` を指定したとき、その試料での最大高さが、描く群の試料での最大高さの 10 倍以上のスポット（クラスとして当たった分だけ）。システムチェック標準液の奇数鎖標準物質が試料のクラス合計に混ざるのを防ぐ。判定には `arf_exclude` 済みの試料の行も使う |
 
 除外は**解析の前提を変える**ので、図を報告に載せるときは `excluded` の件数と理由を併記すること。

@@ -250,8 +250,11 @@ InChIKey・Ontology・m/z・RT と結合する。InChIKey が無い特徴は本�
 手順 4 が兄弟 `.arf2` を見つけられなかったとき。どちらも返して終わる。
 `arf_exclude` した試料は群の解決と描画から外すが、`standard_samples` の判定（手順 15）には
 除外前の全試料の行を使う（標準液を `arf_exclude` していても「標準液にだけある分子種」を判定できる）。
-手順 12 で判断の記録ファイルが読めなければ `FlagFileError` を捕まえ、`{"status":"error","message":...}`
-を返して終わる。手順 13〜14 は、レビューが無ければ除かずに caveat に出す。
+手順 2・8・10・16 などが投げる `ValueError`（出力形式・群が当たらない・`detection_limit` / `ncols` の不正・
+項目数）は捕まえ、`{"status":"error","message":...}` を返して終わる。手順 3 の後で前回の図
+（`last_group_intensity`）を破棄し、画像モードでは描画に成功してから図を保持する。
+手順 12 で判断の記録ファイルが読めなければ `FlagFileError` を捕まえ、同じ形のエラーを返して終わる。
+手順 16 は `arf_exclude` で除いたスポット（`excluded_spots`）も除外する。手順 13〜14 は、レビューが無ければ除かずに caveat に出す。
 手順 17〜18 は MS/MS の裏付け（照合結果の `has_msms` かつ `.arf2` の Name が `no MS2:` /
 `w/o MS2:` でない）を作る。手順 19〜20 は検出下限（引数が優先、無ければ param ファイルの
 `Minimum peak height`）。
