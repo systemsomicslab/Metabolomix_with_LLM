@@ -17,19 +17,19 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from lipidmix.analysis.dataset_service import (
+from metabolomix.analysis.dataset_service import (
     compare_dataset,
     pca_dataset,
     preprocess_dataset,
 )
-from lipidmix.analysis.result_state import (
+from metabolomix.analysis.result_state import (
     array_fingerprint,
     assert_current,
     dataset_fingerprint,
     invalidate_results,
     metadata_fingerprints,
 )
-from lipidmix.core.atomic_io import DomainError
+from metabolomix.core.atomic_io import DomainError
 from tests.pipeline_fixtures import make_dataset
 
 _BASE_RECIPE = {"normalize": "none", "impute": "half_min"}
@@ -314,7 +314,7 @@ def test_compare_dataset_updates_the_state_only_on_success():
 
 def test_a_result_without_provenance_is_not_called_stale():
     """来歴が無いのは「古い」の証拠ではない。旧経路の結果を一律に殺さない。"""
-    from lipidmix.analysis.result_state import is_current
+    from metabolomix.analysis.result_state import is_current
     ds = make_dataset()
     assert is_current(ds, {"scores": []}) is True
     assert_current(ds, {"scores": []})
@@ -324,7 +324,7 @@ def test_a_result_without_provenance_is_not_called_stale():
 
 def _dataset_with_groups(first_half: str, second_half: str):
     """8 検体すべて role=sample・include=true で、前半後半を別群に割った ds。"""
-    from lipidmix.analysis.sample_manifest import apply_metadata
+    from metabolomix.analysis.sample_manifest import apply_metadata
     from tests.pipeline_fixtures import metadata_rows
 
     ds = make_dataset()
@@ -336,7 +336,7 @@ def _dataset_with_groups(first_half: str, second_half: str):
 
 
 def _regroup(ds, rows, groups: list[str]):
-    from lipidmix.analysis.sample_manifest import apply_metadata
+    from metabolomix.analysis.sample_manifest import apply_metadata
 
     updated = [dict(row) for row in rows]
     for row, group in zip(updated, groups):
@@ -351,7 +351,7 @@ def test_a_differential_result_goes_stale_when_the_groups_are_corrected():
     前処理・データセットの一致しか見ないと、群の訂正後も旧結果の
     parent_ids/dataset_id は一致したままで「現在の結果」として通ってしまう。
     """
-    from lipidmix.analysis.result_state import is_current
+    from metabolomix.analysis.result_state import is_current
 
     ds, rows = _dataset_with_groups("control", "treated")
     preprocess_dataset(ds, _BASE_RECIPE)
@@ -371,7 +371,7 @@ def test_a_differential_result_goes_stale_when_the_groups_are_corrected():
 
 def test_exporting_a_result_from_the_old_groups_is_refused(tmp_path):
     """`dataset_export_differential`が約束している拒否を、実際の書き出しで確かめる。"""
-    from lipidmix.analysis.dataset_export import export_dataset_result
+    from metabolomix.analysis.dataset_export import export_dataset_result
 
     ds, rows = _dataset_with_groups("control", "treated")
     preprocess_dataset(ds, _BASE_RECIPE)
@@ -388,7 +388,7 @@ def test_exporting_a_result_from_the_old_groups_is_refused(tmp_path):
 
 def test_a_freshly_recomputed_comparison_is_current_again():
     """訂正後に計算し直した結果は当然通る（拒否が広すぎないことの確認）。"""
-    from lipidmix.analysis.result_state import is_current
+    from metabolomix.analysis.result_state import is_current
 
     ds, rows = _dataset_with_groups("control", "treated")
     preprocess_dataset(ds, _BASE_RECIPE)
@@ -403,7 +403,7 @@ def test_a_freshly_recomputed_comparison_is_current_again():
 
 def test_a_differential_result_without_group_fingerprint_is_not_called_stale():
     """群の指紋を持たない結果（この検査より前の結果）は材料不足として通す。"""
-    from lipidmix.analysis.result_state import is_current
+    from metabolomix.analysis.result_state import is_current
 
     ds, rows = _dataset_with_groups("control", "treated")
     preprocess_dataset(ds, _BASE_RECIPE)

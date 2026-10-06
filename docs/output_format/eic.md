@@ -4,7 +4,7 @@
 
 > 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項はそちらで定義され、ここでは繰り返さない。節番号は分割前の通し番号。
 
-## 7. EIC/AEF (`lipidmix/eic/reader.py`)
+## 7. EIC/AEF (`metabolomix/eic/reader.py`)
 
 ### 7.1 `parse_eic_aef_css1()` のスポット出力
 

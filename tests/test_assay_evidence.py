@@ -19,14 +19,14 @@ import lz4.block
 import msgpack
 import pytest
 
-from lipidmix.analysis.assay_evidence import (
+from metabolomix.analysis.assay_evidence import (
     EVIDENCE_SCHEMA,
     build_assay_evidence,
     normalize_cell,
 )
-from lipidmix.console.profile_adapter import adapter_capabilities
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.mztab.dataset_state import DatasetState
+from metabolomix.console.profile_adapter import adapter_capabilities
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.mztab.dataset_state import DatasetState
 
 
 # ---------- 合成 `.arf`（tests/test_arf_multiblock.py と同じ組み立て） ----------
@@ -313,7 +313,7 @@ def test_unsupported_evidence_reader_is_a_domain_error(tmp_path):
 
 def test_all_sme_candidates_are_kept_with_library_identity_and_score():
     """rank最上位だけを残すと、bindingがadduct/charge/scoreで選び直せない。"""
-    from lipidmix.mztab.dataset_state import build_dataset_state
+    from metabolomix.mztab.dataset_state import build_dataset_state
 
     parse_result = {
         "metadata": {"assay[1]": "S1"},
@@ -350,7 +350,7 @@ def test_all_sme_candidates_are_kept_with_library_identity_and_score():
 
 
 def test_features_without_identification_keep_an_empty_candidate_list():
-    from lipidmix.mztab.dataset_state import build_dataset_state
+    from metabolomix.mztab.dataset_state import build_dataset_state
 
     parse_result = {
         "metadata": {"assay[1]": "S1"},

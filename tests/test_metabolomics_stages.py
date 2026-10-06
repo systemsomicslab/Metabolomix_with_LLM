@@ -2,7 +2,7 @@
 
 ここで縛るのは4つ。
 
-1. **v2 stage列は`lipidmix.pipeline.stage_plan`が唯一の正準**。store（`record["stages"]`
+1. **v2 stage列は`metabolomix.pipeline.stage_plan`が唯一の正準**。store（`record["stages"]`
    を作る側）とengine（実行順を決める側）が別々に同じ順序を持つと、片方だけ直したときに
    「recordに無いstageを計画する」または「計画に無いstageを実行しない」で静かにずれる。
    両者が同じbuilderを呼ぶことをテストで固定する。
@@ -24,12 +24,12 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.pipeline import engine as engine_mod
-from lipidmix.pipeline import recovery as recovery_mod
-from lipidmix.pipeline import request_v2
-from lipidmix.pipeline import store as store_mod
-from lipidmix.pipeline.stage_plan import build_v2, invalidated_v2
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.pipeline import engine as engine_mod
+from metabolomix.pipeline import recovery as recovery_mod
+from metabolomix.pipeline import request_v2
+from metabolomix.pipeline import store as store_mod
+from metabolomix.pipeline.stage_plan import build_v2, invalidated_v2
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -277,7 +277,7 @@ def test_v2_request_creates_a_pipeline_run_v2_with_v2_stages(tmp_path):
 
 
 def test_v1_request_still_creates_a_pipeline_run_v1(tmp_path):
-    from lipidmix.pipeline.request import resolve_request
+    from metabolomix.pipeline.request import resolve_request
 
     root = _source(tmp_path)
     request = resolve_request(root)
@@ -292,7 +292,7 @@ def test_v1_request_still_creates_a_pipeline_run_v1(tmp_path):
 
 def test_load_run_still_reads_an_existing_v1_record(tmp_path):
     """v1 recordはv1のまま読める（v2へ自動昇格しない）。"""
-    from lipidmix.pipeline.request import resolve_request
+    from metabolomix.pipeline.request import resolve_request
 
     root = _source(tmp_path)
     pipeline_root = store_mod.create_run(root, resolve_request(root), _inputs(root))
@@ -302,7 +302,7 @@ def test_load_run_still_reads_an_existing_v1_record(tmp_path):
 
 
 def test_load_run_rejects_an_unknown_schema(tmp_path):
-    from lipidmix.pipeline.request import resolve_request
+    from metabolomix.pipeline.request import resolve_request
 
     root = _source(tmp_path)
     pipeline_root = store_mod.create_run(root, resolve_request(root), _inputs(root))
@@ -326,7 +326,7 @@ def test_create_run_rejects_an_unknown_request_schema(tmp_path):
 
 def test_save_run_refuses_to_rewrite_a_v1_record_as_v2(tmp_path):
     """過去の記録をインプレース変換しない（spec §6, CONSTRAINTS）。"""
-    from lipidmix.pipeline.request import resolve_request
+    from metabolomix.pipeline.request import resolve_request
 
     root = _source(tmp_path)
     pipeline_root = store_mod.create_run(root, resolve_request(root), _inputs(root))
@@ -424,7 +424,7 @@ def test_recovery_reset_for_v2_treats_a_rewritten_sheet_as_metadata_change():
 
 def test_recovery_reset_for_v1_is_unchanged(tmp_path):
     """v1の依存区分はそのまま（golden）。"""
-    from lipidmix.pipeline.request import resolve_request
+    from metabolomix.pipeline.request import resolve_request
 
     root = _source(tmp_path)
     comparisons = [{"comparison_id": "c1", "reference_group": "a", "test_group": "b"}]
@@ -480,7 +480,7 @@ def _profile_snapshot(run_dir: Path) -> dict:
 
 
 def test_a_job_without_a_profile_snapshot_is_still_written_as_v2(tmp_path):
-    from lipidmix.handoff.schema import SCHEMA_VERSION, AnalysisJob
+    from metabolomix.handoff.schema import SCHEMA_VERSION, AnalysisJob
 
     job = AnalysisJob(
         schema=SCHEMA_VERSION, job_id="j", status="planned", created_at="t",
@@ -497,7 +497,7 @@ def test_a_job_without_a_profile_snapshot_is_still_written_as_v2(tmp_path):
 
 
 def test_a_job_with_a_profile_snapshot_is_written_as_v3_and_round_trips(tmp_path):
-    from lipidmix.handoff.schema import SCHEMA_VERSION_V3, AnalysisJob
+    from metabolomix.handoff.schema import SCHEMA_VERSION_V3, AnalysisJob
 
     snapshot = _profile_snapshot(tmp_path)
     job = AnalysisJob(
@@ -522,7 +522,7 @@ def test_a_job_with_a_profile_snapshot_is_written_as_v3_and_round_trips(tmp_path
 
 def test_job_dependency_and_environment_manifests_come_from_the_snapshot(tmp_path):
     """写しを2つ持たない——manifestはsnapshotの中の1箇所だけが正準。"""
-    from lipidmix.handoff.schema import AnalysisJob
+    from metabolomix.handoff.schema import AnalysisJob
 
     job = AnalysisJob(
         schema="analysis-job.v2", job_id="j", status="planned", created_at="t",
@@ -535,7 +535,7 @@ def test_job_dependency_and_environment_manifests_come_from_the_snapshot(tmp_pat
 
 
 def test_job_load_rejects_an_unknown_schema(tmp_path):
-    from lipidmix.handoff.schema import AnalysisJob
+    from metabolomix.handoff.schema import AnalysisJob
 
     path = tmp_path / "analysis-job.json"
     path.write_text(json.dumps({"schema": "analysis-job.v9", "job_id": "j",
@@ -549,9 +549,9 @@ def test_job_load_rejects_an_unknown_schema(tmp_path):
 
 def _v3_job_with_outputs(tmp_path, *, effective_method_text="Ion mode: Positive\n"):
     """v3ジョブ（profile snapshot付き）と、その実効メソッド写しを作る。"""
-    from lipidmix.console.execution import receipt_path, write_supervision_inputs
-    from lipidmix.console.job_manager import create_job, save_job
-    from lipidmix.handoff.schema import Artifact, MztabEntry, sha256_file
+    from metabolomix.console.execution import receipt_path, write_supervision_inputs
+    from metabolomix.console.job_manager import create_job, save_job
+    from metabolomix.handoff.schema import Artifact, MztabEntry, sha256_file
     from tests.pipeline_fixtures import execution_record, write_mztab
 
     source = _source(tmp_path)
@@ -591,7 +591,7 @@ def _v3_job_with_outputs(tmp_path, *, effective_method_text="Ion mode: Positive\
 
 
 def test_a_v3_job_with_an_intact_effective_method_is_verified(tmp_path):
-    from lipidmix.mztab.loading import load_dataset_state
+    from metabolomix.mztab.loading import load_dataset_state
 
     job_path, _effective = _v3_job_with_outputs(tmp_path)
     ds = load_dataset_state(job_path=job_path)
@@ -600,7 +600,7 @@ def test_a_v3_job_with_an_intact_effective_method_is_verified(tmp_path):
 
 def test_a_v3_job_whose_effective_method_was_altered_is_not_verified(tmp_path):
     """実際に走ったメソッドを裏取りできない出力をverifiedと名乗らせない（spec §6.1）。"""
-    from lipidmix.mztab.loading import load_dataset_state
+    from metabolomix.mztab.loading import load_dataset_state
 
     job_path, effective = _v3_job_with_outputs(tmp_path)
     effective.write_text("Ion mode: Negative\n", encoding="ascii")
@@ -611,7 +611,7 @@ def test_a_v3_job_whose_effective_method_was_altered_is_not_verified(tmp_path):
 
 
 def test_a_v3_job_whose_effective_method_is_missing_is_not_verified(tmp_path):
-    from lipidmix.mztab.loading import load_dataset_state
+    from metabolomix.mztab.loading import load_dataset_state
 
     job_path, effective = _v3_job_with_outputs(tmp_path)
     effective.unlink()
@@ -623,15 +623,15 @@ def test_a_v3_job_whose_effective_method_is_missing_is_not_verified(tmp_path):
 # ---------- AST: stage_planも禁止importを持たない ----------
 
 _FORBIDDEN_IMPORT_PREFIXES = (
-    "lipidmix.core.session_state",
-    "lipidmix.core.mcp_core",
-    "lipidmix.tools",
+    "metabolomix.core.session_state",
+    "metabolomix.core.mcp_core",
+    "metabolomix.tools",
 )
 
 
 def test_stage_plan_does_not_import_the_global_session():
     """store/engine/recoveryがimportする以上、同じ規則の下に置く。"""
-    source = (REPO_ROOT / "lipidmix/pipeline/stage_plan.py").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "metabolomix/pipeline/stage_plan.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     names: set[str] = set()
     for node in ast.walk(tree):
@@ -658,7 +658,7 @@ _V1_DIFFERENTIAL_FINGERPRINT = (
 
 def test_v1_request_fingerprint_is_unchanged(tmp_path):
     """v1 goldenの同一性: 既知のv1要求のcontent_hashは1バイトも変わらない。"""
-    from lipidmix.pipeline.request import request_fingerprint, resolve_request
+    from metabolomix.pipeline.request import request_fingerprint, resolve_request
 
     root = _source(tmp_path)
     assert request_fingerprint(resolve_request(root)) == _V1_DEFAULT_FINGERPRINT
@@ -676,7 +676,7 @@ def test_v2_fingerprint_separates_requests_that_differ_only_in_statistics():
     `find_or_create_run`が別の解析を1本のrunへ畳み、`prepare_resume`は
     統計の訂正を「何も変わっていない」と読む。
     """
-    from lipidmix.pipeline.request import request_fingerprint
+    from metabolomix.pipeline.request import request_fingerprint
 
     two_components = _resolved_v2([_pca("p", n_components=2)])
     three_components = _resolved_v2([_pca("p", n_components=3)])
@@ -686,7 +686,7 @@ def test_v2_fingerprint_separates_requests_that_differ_only_in_statistics():
 
 
 def test_v2_fingerprint_separates_an_added_statistic_with_the_same_target():
-    from lipidmix.pipeline.request import request_fingerprint
+    from metabolomix.pipeline.request import request_fingerprint
 
     one = _resolved_v2([_welch("w")], target="differential")
     two = _resolved_v2([_welch("w"), _anova("a")], target="differential")
@@ -695,7 +695,7 @@ def test_v2_fingerprint_separates_an_added_statistic_with_the_same_target():
 
 def test_v2_fingerprint_separates_every_resumable_v2_field():
     """v2固有フィールドはどれ一つとしてhashから落ちていない。"""
-    from lipidmix.pipeline.request import request_fingerprint
+    from metabolomix.pipeline.request import request_fingerprint
 
     base = _resolved_v2_with_target([_pca("p")])
     base_hash = request_fingerprint(base)
@@ -723,7 +723,7 @@ def test_v2_fingerprint_separates_every_resumable_v2_field():
 
 def test_v2_fingerprint_ignores_provenance_only_differences():
     """value_sources/effective_targetは由来情報。同じ実効値なら同一内容。"""
-    from lipidmix.pipeline.request import request_fingerprint
+    from metabolomix.pipeline.request import request_fingerprint
 
     request = _resolved_v2([_pca("p")])
     restated = dict(request)
@@ -732,7 +732,7 @@ def test_v2_fingerprint_ignores_provenance_only_differences():
 
 
 def test_v2_fingerprint_is_stable_for_the_same_content():
-    from lipidmix.pipeline.request import request_fingerprint
+    from metabolomix.pipeline.request import request_fingerprint
 
     assert (request_fingerprint(_resolved_v2([_pca("p"), _welch("w")], target="differential"))
             == request_fingerprint(_resolved_v2([_pca("p"), _welch("w")],
@@ -748,7 +748,7 @@ def test_a_v2_statistics_change_bumps_the_request_revision(tmp_path):
     pipeline_root = store_mod.create_run(root, one, _inputs(root))
     recorded = store_mod.load_run(pipeline_root)["request"]["content_hash"]
 
-    from lipidmix.pipeline.request import request_fingerprint
+    from metabolomix.pipeline.request import request_fingerprint
     assert recorded != request_fingerprint(two)
 
 
@@ -768,7 +768,7 @@ def _first_table_column(text: str, heading: str) -> list[str]:
 
 def test_pipeline_run_v2_doc_lists_the_canonical_stage_order():
     """stage列の写しが腐ったら落ちる（docs/workflowの腐敗防止と同じ流儀）。"""
-    from lipidmix.pipeline import stage_plan
+    from metabolomix.pipeline import stage_plan
 
     doc = (_SCHEMA_DOCS / "pipeline-run-v2.md").read_text(encoding="utf-8")
     expected = (list(stage_plan.BASE_V2_STAGE_IDS)
@@ -779,7 +779,7 @@ def test_pipeline_run_v2_doc_lists_the_canonical_stage_order():
 
 
 def test_pipeline_run_v2_doc_lists_every_invalidation_token():
-    from lipidmix.pipeline import stage_plan
+    from metabolomix.pipeline import stage_plan
 
     doc = (_SCHEMA_DOCS / "pipeline-run-v2.md").read_text(encoding="utf-8")
     documented = set(_first_table_column(doc, "## 依存無効化"))
@@ -794,7 +794,7 @@ def test_pipeline_run_v2_doc_names_both_schema_constants():
 
 
 def test_analysis_job_v3_doc_documents_the_v3_only_fields():
-    from lipidmix.handoff.schema import SCHEMA_VERSION, SCHEMA_VERSION_V3
+    from metabolomix.handoff.schema import SCHEMA_VERSION, SCHEMA_VERSION_V3
 
     doc = (_SCHEMA_DOCS / "analysis-job-v3.md").read_text(encoding="utf-8")
     assert SCHEMA_VERSION_V3 in doc

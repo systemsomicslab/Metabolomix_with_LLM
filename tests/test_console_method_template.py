@@ -36,7 +36,7 @@ def _ready(tmp_path, monkeypatch):
 
 
 def test_template_switches_polarity_and_adducts(tmp_path, monkeypatch):
-    from lipidmix.tools.console_tools import console_method_template
+    from metabolomix.tools.console_tools import console_method_template
     _ready(tmp_path, monkeypatch)
     src = _neg_param(tmp_path / "neg_param_1.txt")
     out = tmp_path / "param_POS.txt"
@@ -51,7 +51,7 @@ def test_template_switches_polarity_and_adducts(tmp_path, monkeypatch):
 
 def test_template_keeps_the_labs_detection_settings(tmp_path, monkeypatch):
     """極性とアダクト以外は触らない。検出条件を勝手に変えたら別の解析になる。"""
-    from lipidmix.tools.console_tools import console_method_template
+    from metabolomix.tools.console_tools import console_method_template
     _ready(tmp_path, monkeypatch)
     src = _neg_param(tmp_path / "neg_param_1.txt")
     out = tmp_path / "param_POS.txt"
@@ -63,7 +63,7 @@ def test_template_keeps_the_labs_detection_settings(tmp_path, monkeypatch):
 
 def test_template_fills_the_resolved_lbm_path(tmp_path, monkeypatch):
     """GUI 由来のパラメータは Lbm file path が必ず空。テンプレートで埋めておく。"""
-    from lipidmix.tools.console_tools import console_method_template
+    from metabolomix.tools.console_tools import console_method_template
     _ready(tmp_path, monkeypatch)
     src = _neg_param(tmp_path / "neg_param_1.txt")
     out = tmp_path / "param_POS.txt"
@@ -75,7 +75,7 @@ def test_template_fills_the_resolved_lbm_path(tmp_path, monkeypatch):
 
 def test_template_discovers_a_source_of_the_other_polarity(tmp_path, monkeypatch):
     """POS が無いから作る、という状況なので、探す相手は別極性でよい。"""
-    from lipidmix.tools.console_tools import console_method_template
+    from metabolomix.tools.console_tools import console_method_template
     _ready(tmp_path, monkeypatch)
     data = tmp_path / "data"
     data.mkdir()
@@ -88,7 +88,7 @@ def test_template_discovers_a_source_of_the_other_polarity(tmp_path, monkeypatch
 
 
 def test_template_errors_without_any_source(tmp_path, monkeypatch):
-    from lipidmix.tools.console_tools import console_method_template
+    from metabolomix.tools.console_tools import console_method_template
     _ready(tmp_path, monkeypatch)
     data = tmp_path / "data"
     data.mkdir()
@@ -99,7 +99,7 @@ def test_template_errors_without_any_source(tmp_path, monkeypatch):
 
 def test_template_rejects_binary_source(tmp_path, monkeypatch):
     """.mdproject は ZIP。渡すと全パラメータ既定値で走る種を作ってしまう。"""
-    from lipidmix.tools.console_tools import console_method_template
+    from metabolomix.tools.console_tools import console_method_template
     _ready(tmp_path, monkeypatch)
     src = tmp_path / "project.mdproject"
     src.write_bytes(b"PK\x03\x04\x00\x00binary")
@@ -110,11 +110,11 @@ def test_template_rejects_binary_source(tmp_path, monkeypatch):
 
 def test_template_output_then_plans_cleanly(tmp_path, monkeypatch):
     """作ったテンプレートが console_plan をそのまま通ること。"""
-    from lipidmix.core import session_state
+    from metabolomix.core import session_state
     session_state.session = session_state.AnalysisSession()
-    from lipidmix.tools.console_tools import console_method_template, console_plan
+    from metabolomix.tools.console_tools import console_method_template, console_plan
     _ready(tmp_path, monkeypatch)
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     src = _neg_param(tmp_path / "neg_param_1.txt")
     data = tmp_path / "data"
     data.mkdir()
@@ -128,7 +128,7 @@ def test_template_output_then_plans_cleanly(tmp_path, monkeypatch):
 
 def test_template_finds_a_sibling_folder_when_based_on_is_omitted(tmp_path, monkeypatch):
     """実データの形。POS のフォルダには何も無く、隣の NEG に GUI 由来のものがある。"""
-    from lipidmix.tools.console_tools import console_method_template
+    from metabolomix.tools.console_tools import console_method_template
     _ready(tmp_path, monkeypatch)
     data = tmp_path / "data"
     data.mkdir()
@@ -145,7 +145,7 @@ def test_template_finds_a_sibling_folder_when_based_on_is_omitted(tmp_path, monk
 
 def test_template_asks_which_base_when_several_exist(tmp_path, monkeypatch):
     """土台の選択は解析条件そのもの。mtime 順の最新を黙って採らない。"""
-    from lipidmix.tools.console_tools import console_method_template
+    from metabolomix.tools.console_tools import console_method_template
     _ready(tmp_path, monkeypatch)
     data = tmp_path / "data"
     data.mkdir()
@@ -163,8 +163,8 @@ def test_template_asks_which_base_when_several_exist(tmp_path, monkeypatch):
 
 def test_template_choice_required_truncates_many_candidates(tmp_path, monkeypatch):
     """based_on 省略時の探索も、候補が多いと戻り値を無制限に太らせない。"""
-    from lipidmix.console.method_file import MAX_REPORTED_CANDIDATES
-    from lipidmix.tools.console_tools import console_method_template
+    from metabolomix.console.method_file import MAX_REPORTED_CANDIDATES
+    from metabolomix.tools.console_tools import console_method_template
     _ready(tmp_path, monkeypatch)
     data = tmp_path / "data"
     data.mkdir()

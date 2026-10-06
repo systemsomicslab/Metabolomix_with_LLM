@@ -7,7 +7,7 @@
 > 対応する Key 番号表: `docs/schema/AlignmentSpotProperty.md`（MS-DIAL の `[Key(N)]` から抽出した一次資料）。
 > リーダーのインデックス定数を変更するときは必ずこちらを先に確認する。
 
-## 4. ARF2 (`lipidmix/arf2/reader.py`)
+## 4. ARF2 (`metabolomix/arf2/reader.py`)
 
 ### 4.1 `deserialize()` / `extract_arf2_data()`
 

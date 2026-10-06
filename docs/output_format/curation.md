@@ -5,7 +5,7 @@
 > 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項はそちらで定義され、ここでは繰り返さない。参照ライブラリ照合のスコアの意味（`-1`/`0` の区別など）は `library` トピックが定義し、ここでは繰り返さない。
 
 ツールが**どのファイルのどの関数をどの順に呼ぶか**は `docs/workflow/curation.md`。
-ここは**値の意味**だけを定義する。実装は `lipidmix/curation/`
+ここは**値の意味**だけを定義する。実装は `metabolomix/curation/`
 （`judge.py` 機械判別・`evidence.py` 証拠収集・`eic_shape.py` EIC 形状・`trend.py` RT–m/z 傾向・
 `review.py` レビュー生成/要約・`flags.py` 判断の記録の永続化・`apply.py` エクスポート反映・
 `suggest.py` 候補付けの組み立て/保存/送信内容の展開・`candidates.py` 注釈候補 ①②・`relations.py` イオン関係 ④）。
@@ -55,7 +55,7 @@
 LLM は呼ばない）はスポットごとに EIC 系列（`eic.samples[].points`）と対向スペクトル
 （`mirror.measured` / `mirror.reference`）を持つ。判定（`eic_shape` / `rescore` /
 `matched_mz` 等）は必ず全点・全スペクトルで計算した**後**に、返す座標列だけを
-間引く（payload only。判定は変えない。定数・実装は `lipidmix/curation/evidence.py`）:
+間引く（payload only。判定は変えない。定数・実装は `metabolomix/curation/evidence.py`）:
 
 - `eic.samples[].points`: 1 サンプルあたり最大 `EIC_MAX_POINTS`（既定 40）点。先頭・
   末尾・頂点（最大強度）・積分範囲（`left`/`right`）に最も近い点は必ず残し、残りは
@@ -255,7 +255,7 @@ precursor の許容幅をすでに課している——許容幅の外の候補�
 |---|---|
 | `adduct:<X のアダクト>/<Y のアダクト>` | 同じ中性分子の別アダクト。Y の中性質量に、解析で検索したアダクト（param ファイルの `Searched adduct ions`。二量体・多価を含む。無ければ極性ごとの既定）を付けた m/z が X に一致 |
 | `isotope_M+1` / `isotope_M+2` | Y の 13C 同位体（+1.003355 / +2.006710 を電荷で割る） |
-| `insource:-H2O` `-2H2O` `-NH3` `-HCOOCH3` `-CH3COOCH3` `-C3H5NO2` `-C2H8NO4P` `-C3H8NO6P` `-C6H10O5` | Y からの中性損失によるインソース断片（`lipidmix/curation/relations.py` の表。質量はそれぞれの組成式から計算） |
+| `insource:-H2O` `-2H2O` `-NH3` `-HCOOCH3` `-CH3COOCH3` `-C3H5NO2` `-C2H8NO4P` `-C3H8NO6P` `-C6H10O5` | Y からの中性損失によるインソース断片（`metabolomix/curation/relations.py` の表。質量はそれぞれの組成式から計算） |
 | `found_in_upper_msms` | 質量差が上のどれでも説明できないが、MS-DIAL が「Y の MS/MS に X が見える」とリンクしている |
 
 **MS-DIAL の `found_in_upper_msms` リンクは向きの無い対で保存される**（実データで相互に 100%、相手が高 m/z 側になるのは半々）。
@@ -335,7 +335,7 @@ MS-DIAL はアラインメントを保存するたびにメモリ上のタグで
 `assign` / `redundant`）を読み、差次的エクスポートの契約 15 列（`export_contract.EXPORT_COLUMNS`）自体は変えずに、
 メタ行ブロックの `source_lines` スロットの**末尾**（`# source_arf`/`# source_mztab` 等、
 経路固有のメタ行のすぐ後ろ。`export_contract.build_meta` の順序契約でスロット 3）に
-1 行だけ足す（`lipidmix/curation/apply.py` の `meta_line()`）。**有効な判断が 0 件**なら
+1 行だけ足す（`metabolomix/curation/apply.py` の `meta_line()`）。**有効な判断が 0 件**なら
 `meta_line()` は `None` を返し、この行自体を出さない——出力は現行と完全に同じになる。
 
 タブ区切りの 1 行で、形は次のとおり（外側の角括弧内は `state` が `applied` のときだけ、内側の角括弧内はさらに

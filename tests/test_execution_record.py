@@ -4,8 +4,8 @@ import json
 import pytest
 
 from tests.pipeline_fixtures import execution_record
-from lipidmix.core.atomic_io import DomainError, atomic_write_json, canonical_hash
-from lipidmix.console.execution import validate_execution_record
+from metabolomix.core.atomic_io import DomainError, atomic_write_json, canonical_hash
+from metabolomix.console.execution import validate_execution_record
 
 
 # ---------- validate_execution_record: 正常系 ----------
@@ -145,7 +145,7 @@ def test_failed_replace_keeps_old_json(tmp_path, monkeypatch):
     def fail_replace(*args):
         raise OSError("locked")
 
-    monkeypatch.setattr("lipidmix.core.atomic_io.os.replace", fail_replace)
+    monkeypatch.setattr("metabolomix.core.atomic_io.os.replace", fail_replace)
     with pytest.raises(OSError):
         atomic_write_json(path, {"status": "completed"})
     assert json.loads(path.read_text(encoding="utf-8"))["status"] == "running"
@@ -158,7 +158,7 @@ def test_failed_replace_leaves_no_stray_temp_file(tmp_path, monkeypatch):
     def fail_replace(*args):
         raise OSError("locked")
 
-    monkeypatch.setattr("lipidmix.core.atomic_io.os.replace", fail_replace)
+    monkeypatch.setattr("metabolomix.core.atomic_io.os.replace", fail_replace)
     with pytest.raises(OSError):
         atomic_write_json(path, {"status": "completed"})
     leftovers = [p for p in tmp_path.iterdir() if p.name != "state.json"]

@@ -18,8 +18,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lipidmix.pipeline import metabolomics_handlers, stage_plan
-from lipidmix.pipeline.service import build_handlers
+from metabolomix.pipeline import metabolomics_handlers, stage_plan
+from metabolomix.pipeline.service import build_handlers
 
 
 # ---------- brief記載のRED ----------
@@ -109,7 +109,7 @@ def test_shared_stage_names_dispatch_on_the_request_schema():
 
 def _profile(tmp_path: Path) -> Path:
     """draft の最小 profile（`execution_purpose="validation"` で読める）。"""
-    from lipidmix.console.profile_schema import validate_profile
+    from metabolomix.console.profile_schema import validate_profile
 
     profile = {
         "schema": "lcms-profile.v1", "profile_id": "p1", "revision": 1,
@@ -177,7 +177,7 @@ def _profile(tmp_path: Path) -> Path:
 
 
 def _dataset():
-    from lipidmix.mztab.dataset_state import DatasetState
+    from metabolomix.mztab.dataset_state import DatasetState
 
     ds = DatasetState()
     ds.feature_matrix = np.array([[10., 12., 40., 44.],
@@ -371,7 +371,7 @@ def test_a_statistic_that_cannot_run_is_recorded_not_skipped(tmp_path):
 # ---------- restore_results ----------
 
 def test_restore_results_verifies_hashes(tmp_path):
-    from lipidmix.pipeline import report as report_mod
+    from metabolomix.pipeline import report as report_mod
 
     ref = report_mod.persist_result(tmp_path, {
         "output_name": "feature_bindings", "kind": "feature_bindings",
@@ -384,8 +384,8 @@ def test_restore_results_verifies_hashes(tmp_path):
 
 
 def test_restore_results_refuses_a_tampered_result(tmp_path):
-    from lipidmix.core.atomic_io import DomainError
-    from lipidmix.pipeline import report as report_mod
+    from metabolomix.core.atomic_io import DomainError
+    from metabolomix.pipeline import report as report_mod
 
     ref = report_mod.persist_result(tmp_path, {
         "output_name": "feature_bindings", "kind": "feature_bindings",

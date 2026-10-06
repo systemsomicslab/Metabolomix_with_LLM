@@ -6,7 +6,7 @@
 
 ## 12. 同定信頼度・標準化（P2c）
 
-`lipidmix/msdial/lipid_identity.py`（MCP非依存の純ロジック層、**完全オフライン**）と `lipidmix/msdial/peak_verification.py` の拡張が、脂質同定名の標準化と信頼度レベルの推定を担う。外部識別子の取得はネットワークを一切使わず、`pygoslin`（同梱・純Python）と同梱 TSV 表のみで行う。既存ツール・既定挙動・`verify_peak_annotation` の既存キーは不変で、新データは新ブロックに追加する。
+`metabolomix/msdial/lipid_identity.py`（MCP非依存の純ロジック層、**完全オフライン**）と `metabolomix/msdial/peak_verification.py` の拡張が、脂質同定名の標準化と信頼度レベルの推定を担う。外部識別子の取得はネットワークを一切使わず、`pygoslin`（同梱・純Python）と同梱 TSV 表のみで行う。既存ツール・既定挙動・`verify_peak_annotation` の既存キーは不変で、新データは新ブロックに追加する。
 
 ### 12.1 GOSLIN 名正規化（`normalize_lipid_name`）
 
@@ -46,7 +46,7 @@
 - `arf2_annotate_identities(file_path=None, max_rows=50)`: ARF2 スポットカタログの注釈を一括で正規化・ID/レベル付与し、上位 `max_rows` 件を返す。**ARF2 には MS/MS 取得フラグ・精密質量誤差が無いため MSI は保守的にクラス上限で評価**（`has_msms=False`、バンド UNKNOWN）。より確度の高い MSI 評価は個別ピークの `verify_peak_annotation` を用いること。
   列は `MasterAlignmentID` `name` `normalized` `refmet` `lipid_maps_category` `msi_level` `curation_flag`。`curation_flag` はそのスポットに有効なキュレーションフラグ（`curation_submit` で付けた `wrong` / `suspect`。スポットごとの最新 1 行、`clear` 済みと未フラグは空）。`.arf2` の sha256 が記録時と違う（MS-DIAL を再実行した）フラグは当てない。フラグ記録（`curation/flags.jsonl`）に読めない行があるときは列を空にし、ヘッダにその旨を 1 行出す（`curation` トピック「フラグ記録が壊れているとき」）。
 
-### 12.5 アダクト/元素表の拡張（`lipidmix/msdial/peak_verification.py`）
+### 12.5 アダクト/元素表の拡張（`metabolomix/msdial/peak_verification.py`）
 
 `ADDUCT_SHIFTS` を `(sign, shift, charge, n_mol)` の4タプル化し、多量体 `[2M-H]-`・多価 `[M-2H]2-`・`[M+FA-H]-`（`[M+HCOO]-` の別名）を追加。`adduct_mz` は `m/z = (n_mol×neutral + shift) / charge` で多量体・多価に対応する（既存1価アダクトの数値挙動は不変）。元素表に D(²H)/F/Br/¹³C を追加（標識・ハロゲン対応）。CCS/RT 参照照合・同位体パターン照合は参照表未同梱のため v1 対象外。
 

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.core.user_config import CONFIG_ENV, SETTINGS
+from metabolomix.core.user_config import CONFIG_ENV, SETTINGS
 
 #: 作られることの無いパス。autouse で tmp_path を要求すると全テストに tmp ディレクトリが
 #: できるので、存在しない固定パスで済ませる。

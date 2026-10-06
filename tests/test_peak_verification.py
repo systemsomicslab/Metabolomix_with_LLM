@@ -3,7 +3,7 @@
 import textwrap
 import unittest
 
-from lipidmix.msdial import peak_verification as pv
+from metabolomix.msdial import peak_verification as pv
 
 
 class FormulaMassTests(unittest.TestCase):
@@ -162,9 +162,9 @@ import tempfile
 from pathlib import Path
 
 import server
-from lipidmix.core import mcp_core
-from lipidmix.core import session_state
-from lipidmix.pai2.reader import IonMode
+from metabolomix.core import mcp_core
+from metabolomix.core import session_state
+from metabolomix.pai2.reader import IonMode
 
 
 def _feat(**over):
@@ -305,14 +305,14 @@ class MsmsEvidenceTests(unittest.TestCase):
 
 def test_the_msms_band_still_has_only_three_states():
     """PASS / FLAG_ONLY / ABSENT の 3 状態は契約。照合はその内側に足す。"""
-    from lipidmix.msdial.peak_verification import msms_evidence
+    from metabolomix.msdial.peak_verification import msms_evidence
     assert msms_evidence({"msms_spectrum": [[100.0, 999.0]]})["band"] == "PASS"
     assert msms_evidence({"has_msms": True})["band"] == "FLAG_ONLY"
     assert msms_evidence({})["band"] == "ABSENT"
 
 
 def test_spectral_match_is_absent_without_a_loaded_library():
-    from lipidmix.msdial.peak_verification import msms_evidence
+    from metabolomix.msdial.peak_verification import msms_evidence
     assert msms_evidence({"msms_spectrum": [[100.0, 999.0]]}).get("spectral_match") is None
 
 
@@ -332,7 +332,7 @@ class _FakeIonModePositive:
 
 
 def _open_gaba_store(tmp_path, monkeypatch):
-    from lipidmix.library import store as library_store
+    from metabolomix.library import store as library_store
     monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
     msp_path = tmp_path / "lib.msp"
     msp_path.write_text(_MSP_GABA, encoding="utf-8")
@@ -366,7 +366,7 @@ def test_spectral_match_finds_candidates_despite_ion_mode_case_mismatch(tmp_path
 def test_spectral_match_via_msms_evidence_end_to_end(tmp_path, monkeypatch):
     """`msms_evidence` から `_spectral_match_for_feature` までを通しで確認する
     （`session.library.store` が実際に読み込まれた状態で）。"""
-    from lipidmix.core import session_state
+    from metabolomix.core import session_state
 
     lib_store = _open_gaba_store(tmp_path, monkeypatch)
     try:
@@ -404,7 +404,7 @@ def test_scoring_forwards_search_params_amplitude_cutoffs_to_match_spectrum(monk
             "matched_peaks_count": 1, "entropy_similarity": 1.0, "alignment": [],
         }
 
-    import lipidmix.analysis.spectral_match as spectral_match_module
+    import metabolomix.analysis.spectral_match as spectral_match_module
     monkeypatch.setattr(spectral_match_module, "match_spectrum", fake_match_spectrum)
 
     class _FakeStore:
@@ -430,7 +430,7 @@ def test_scoring_forwards_search_params_amplitude_cutoffs_to_match_spectrum(monk
 def test_tolerance_lookup_keeps_an_explicit_zero_from_search_params(monkeypatch):
     """Important 5 の再発防止: `search_params.get(key)` が `0.0`（正当な値。
     例えば足切りなし）でも、`or` 判定（偽値扱い）で既定値へ差し替えてはいけない。
-    以前この関数だけが `or` を使っており、`lipidmix.library.tools._pick_tol`
+    以前この関数だけが `or` を使っており、`metabolomix.library.tools._pick_tol`
     （`is None` 判定）とロジックがずれていた。"""
     captured = {}
 
@@ -442,7 +442,7 @@ def test_tolerance_lookup_keeps_an_explicit_zero_from_search_params(monkeypatch)
             "matched_peaks_count": 1, "entropy_similarity": 1.0, "alignment": [],
         }
 
-    import lipidmix.analysis.spectral_match as spectral_match_module
+    import metabolomix.analysis.spectral_match as spectral_match_module
     monkeypatch.setattr(spectral_match_module, "match_spectrum", fake_match_spectrum)
 
     class _FakeStore:
@@ -476,7 +476,7 @@ def test_the_best_match_is_chosen_by_the_same_rule_as_library_match_feature(monk
         name = "NOISY" if reference == [[100.0, 10.0]] else "CLEAN"
         return {**scores[name], "entropy_similarity": 0.0, "alignment": []}
 
-    import lipidmix.analysis.spectral_match as spectral_match_module
+    import metabolomix.analysis.spectral_match as spectral_match_module
     monkeypatch.setattr(spectral_match_module, "match_spectrum", fake_match_spectrum)
 
     class _FakeStore:
@@ -507,7 +507,7 @@ def test_the_best_match_survives_a_candidate_without_precursor_mz_or_rt(monkeypa
                 "reverse_dot_product": 1.0, "matched_peaks_percentage": 1.0,
                 "matched_peaks_count": 1, "entropy_similarity": 1.0, "alignment": []}
 
-    import lipidmix.analysis.spectral_match as spectral_match_module
+    import metabolomix.analysis.spectral_match as spectral_match_module
     monkeypatch.setattr(spectral_match_module, "match_spectrum", fake_match_spectrum)
 
     class _FakeStore:

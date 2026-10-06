@@ -17,10 +17,10 @@ import json
 
 import numpy as np
 
-from lipidmix.core import session_state
-from lipidmix.mztab.dataset_state import DatasetState
-from lipidmix.pipeline.metabolomics_handlers import build_handlers
-from lipidmix.tools.dataset_analysis_tools import dataset_statistic
+from metabolomix.core import session_state
+from metabolomix.mztab.dataset_state import DatasetState
+from metabolomix.pipeline.metabolomics_handlers import build_handlers
+from metabolomix.tools.dataset_analysis_tools import dataset_statistic
 
 
 # ---------- brief記載のRED ----------
@@ -162,7 +162,7 @@ def test_an_unknown_kind_is_refused_with_the_supported_list():
 def test_v1_dataset_differential_defaults_are_unchanged():
     import inspect
 
-    from lipidmix.tools.dataset_analysis_tools import dataset_differential
+    from metabolomix.tools.dataset_analysis_tools import dataset_differential
 
     signature = inspect.signature(dataset_differential)
     assert signature.parameters["q_threshold"].default == 0.05
@@ -207,7 +207,7 @@ def test_build_matrix_is_registered_like_its_siblings():
 
 
 def test_building_without_a_dataset_says_to_load_one():
-    from lipidmix.tools.dataset_analysis_tools import dataset_build_matrix
+    from metabolomix.tools.dataset_analysis_tools import dataset_build_matrix
 
     session_state.session.dataset = None
     payload = _payload(dataset_build_matrix(_recipe()))
@@ -217,7 +217,7 @@ def test_building_without_a_dataset_says_to_load_one():
 
 
 def test_an_invalid_recipe_is_rejected_not_reported_as_missing_state():
-    from lipidmix.tools.dataset_analysis_tools import dataset_build_matrix
+    from metabolomix.tools.dataset_analysis_tools import dataset_build_matrix
 
     _dataset_for_matrix()
     payload = _payload(dataset_build_matrix(_recipe(normalize="quantile")))
@@ -226,7 +226,7 @@ def test_an_invalid_recipe_is_rejected_not_reported_as_missing_state():
 
 
 def test_a_built_matrix_can_be_used_by_dataset_statistic():
-    from lipidmix.tools.dataset_analysis_tools import dataset_build_matrix
+    from metabolomix.tools.dataset_analysis_tools import dataset_build_matrix
 
     _dataset_for_matrix()
     built = _payload(dataset_build_matrix(_recipe()))
@@ -240,7 +240,7 @@ def test_a_built_matrix_can_be_used_by_dataset_statistic():
 
 
 def test_the_same_recipe_and_dataset_give_the_same_matrix_id():
-    from lipidmix.tools.dataset_analysis_tools import dataset_build_matrix
+    from metabolomix.tools.dataset_analysis_tools import dataset_build_matrix
 
     _dataset_for_matrix()
     first = _payload(dataset_build_matrix(_recipe()))
@@ -249,7 +249,7 @@ def test_the_same_recipe_and_dataset_give_the_same_matrix_id():
 
 
 def test_detection_filter_is_not_evaluable_when_detection_is_unknown():
-    from lipidmix.tools.dataset_analysis_tools import dataset_build_matrix
+    from metabolomix.tools.dataset_analysis_tools import dataset_build_matrix
 
     _dataset_for_matrix()
     payload = _payload(dataset_build_matrix(
@@ -262,7 +262,7 @@ def test_detection_filter_is_not_evaluable_when_detection_is_unknown():
 
 
 def test_internal_standard_ratio_needs_bindings_and_is_not_faked():
-    from lipidmix.tools.dataset_analysis_tools import dataset_build_matrix
+    from metabolomix.tools.dataset_analysis_tools import dataset_build_matrix
 
     _dataset_for_matrix()
     payload = _payload(dataset_build_matrix(_recipe(base="internal_standard_ratio")))

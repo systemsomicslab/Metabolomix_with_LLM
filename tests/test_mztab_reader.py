@@ -3,7 +3,7 @@ import math
 import textwrap
 from pathlib import Path
 import pytest
-from lipidmix.mztab.reader import parse_mztab, extract_abundance_matrix, get_assay_count
+from metabolomix.mztab.reader import parse_mztab, extract_abundance_matrix, get_assay_count
 
 # 最小 mzTab-M 2.0 fixture（2 assay × 3 feature）
 _MINIMAL_MZTAB = textwrap.dedent("""\

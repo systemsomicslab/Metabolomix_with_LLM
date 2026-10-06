@@ -20,12 +20,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lipidmix.arf2.ion_features import load_ion_features            # noqa: E402
-from lipidmix.arf2.match_results import load_spot_annotations       # noqa: E402
-from lipidmix.arf2.reader import load_catalog                       # noqa: E402
-from lipidmix.curation import candidates, evidence, judge, relations, review, suggest, trend  # noqa: E402
-from lipidmix.library.store import open_store                       # noqa: E402
-from lipidmix.msdial.analysis_params import resolve_analysis_params # noqa: E402
+from metabolomix.arf2.ion_features import load_ion_features            # noqa: E402
+from metabolomix.arf2.match_results import load_spot_annotations       # noqa: E402
+from metabolomix.arf2.reader import load_catalog                       # noqa: E402
+from metabolomix.curation import candidates, evidence, judge, relations, review, suggest, trend  # noqa: E402
+from metabolomix.library.store import open_store                       # noqa: E402
+from metabolomix.msdial.analysis_params import resolve_analysis_params # noqa: E402
 
 
 def main(argv=None) -> int:

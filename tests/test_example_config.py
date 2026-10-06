@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import shutil
 
-from lipidmix.core import user_config
+from metabolomix.core import user_config
 
 
 def test_example_is_a_valid_config_with_only_known_keys(tmp_path, monkeypatch):

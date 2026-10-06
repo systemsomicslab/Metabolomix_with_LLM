@@ -1,4 +1,4 @@
-"""外部資産の場所の設定（`lipidmix.core.user_config`）。spec 2026-10-06。
+"""外部資産の場所の設定（`metabolomix.core.user_config`）。spec 2026-10-06。
 
 環境変数 → 設定ファイル（`LIPIDMIX_CONFIG` → `<repo>/lipidmix.local.toml`）の順に引く。
 conftest が環境変数を消し `LIPIDMIX_CONFIG` を存在しないパスに向けているので、
@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.core import user_config
-from lipidmix.core.user_config import ConfigInvalidError
+from metabolomix.core import user_config
+from metabolomix.core.user_config import ConfigInvalidError
 
 BS = "\\"
 
@@ -41,7 +41,7 @@ def test_config_file_path_follows_lipidmix_config(cfg):
 
 
 def test_config_file_path_defaults_to_the_repository_root(monkeypatch):
-    from lipidmix.core import mcp_core
+    from metabolomix.core import mcp_core
     monkeypatch.delenv("LIPIDMIX_CONFIG", raising=False)
     assert user_config.REPO_ROOT == mcp_core.BASE_DIR
     assert user_config.config_file_path() == mcp_core.BASE_DIR / "lipidmix.local.toml"

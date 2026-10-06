@@ -17,7 +17,7 @@ MS-DIAL（MsdialWorkbench）の C# クラス `CompMs.MsdialCore.DataObj.Alignmen
 - 照合したコミット: `45a531c`（2026-09-02）
 - **この表は Key 番号とメンバ名・型の対応だけを写したもので、上流のソースコードは含まない。**
 - MS-DIAL 側でクラスが変わったら、上流の同ファイルを開いて `[Key(N)]` を読み直し、
-  この表を更新する。実装（`lipidmix/*/reader.py`）から逆算して直してはいけない。
+  この表を更新する。実装（`metabolomix/*/reader.py`）から逆算して直してはいけない。
 
 表は **Key 番号の昇順**で並べている（上流のソース上の宣言順とは一致しない）。
 
@@ -121,9 +121,9 @@ MessagePack 上では、下の型は配列として入れ子で載る。**この
 
 ## 本リポジトリのリーダが読む Key
 
-`lipidmix/arf2/reader.py` の `extract_arf2_data()`:
+`metabolomix/arf2/reader.py` の `extract_arf2_data()`:
 Key 0, 1, 4（RT）, 5, 11, 12, 13（index0）, 14, 15, 16, 31, 32, 33, 34, 35, 36, 37, 43, 44, 49, 51,
 54（index2）。
 
-`lipidmix/arf/reader.py` はスポット層から Key8 `AlignedPeakProperties` を取り出し、
+`metabolomix/arf/reader.py` はスポット層から Key8 `AlignedPeakProperties` を取り出し、
 その各要素を `AlignmentChromPeakFeature` として読む。

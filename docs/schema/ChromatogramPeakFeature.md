@@ -23,7 +23,7 @@ MS-DIAL（MsdialWorkbench）の C# クラス `CompMs.MsdialCore.DataObj.Chromato
 - 照合したコミット: `45a531c`（2026-09-02）
 - **この表は Key 番号とメンバ名・型の対応だけを写したもので、上流のソースコードは含まない。**
 - MS-DIAL 側でクラスが変わったら、上流の同ファイルを開いて `[Key(N)]` を読み直し、
-  この表を更新する。実装（`lipidmix/*/reader.py`）から逆算して直してはいけない。
+  この表を更新する。実装（`metabolomix/*/reader.py`）から逆算して直してはいけない。
 
 表は **Key 番号の昇順**で並べている（上流のソース上の宣言順とは一致しない）。
 
@@ -116,7 +116,7 @@ MessagePack 上では、下の型は配列として入れ子で載る。**この
 
 ## 本リポジトリのリーダが読む Key
 
-`lipidmix/pai2/reader.py` の `_convert_to_peakfeature()`:
+`metabolomix/pai2/reader.py` の `_convert_to_peakfeature()`:
 Key 3, 4, 5（ChromXs 左/トップ/右）, 6, 7, 8（高さ）, 9, 10（面積）, 11（id）, 18, 19, 22, 24,
 25, 26（index0）, 27, 28, 29, 30（index2）, 31, 38, 40（index1=S/N）, 43（m/z）。
 

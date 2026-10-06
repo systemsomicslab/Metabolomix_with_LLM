@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 
 import server
-from lipidmix.core import session_state
-from lipidmix.core import path_resolvers
+from metabolomix.core import session_state
+from metabolomix.core import path_resolvers
 
 REAL_BUILD_PCA_MATRIX = server.arf_reader.build_pca_matrix
 
@@ -135,7 +135,7 @@ class ServerClassFilterTests(unittest.TestCase):
             path = Path(tmp) / 'AlignResult-2026981258_PeakProperties.arf'
             path.touch()
             path.with_name('AlignResult-2026981258.arf2').touch()
-            with patch('lipidmix.arf2.reader.load_catalog', return_value=[
+            with patch('metabolomix.arf2.reader.load_catalog', return_value=[
                     {'MasterAlignmentID':10,'Name':'SL 33:0;O','Ontology':'SL'}]):
                 result = server.arf_parser(str(path), annotation_keyword='SL', spot_ids=[10], ontologies=['SL'])
         self.assertNotIn('[ERROR]', result)
@@ -146,7 +146,7 @@ class ServerClassFilterTests(unittest.TestCase):
         self.assertIn('ARF2', result)
 
     def test_single_spot_selection_succeeds_without_fake_two_feature_pca(self):
-        from lipidmix.analysis.pca import run_pca
+        from metabolomix.analysis.pca import run_pca
         self.session.arf.filtered_features = self.session.arf.features
         self.session.arf.last_pca_plot = {'old': True}
         self.session.arf.last_differential = {'old': True}
@@ -181,7 +181,7 @@ class ServerClassFilterTests(unittest.TestCase):
         self.assertIsNone(self.session.arf.last_differential)
 
     def test_constant_spot_selection_survives_pca_variance_filter(self):
-        from lipidmix.arf.reader import _convert_to_alignment_feature
+        from metabolomix.arf.reader import _convert_to_alignment_feature
         # setUp のパッチ前の実関数は別名で保持して使用する。
         for row in self.session.arf.features[0]['AlignedPeakProperties']:
             row.extend([0] * (26 - len(row)))

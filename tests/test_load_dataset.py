@@ -13,7 +13,7 @@ from pathlib import Path
 import tempfile
 
 import server
-from lipidmix.core import mcp_core
+from metabolomix.core import mcp_core
 
 
 class ResolveArfPreferenceTests(unittest.TestCase):
@@ -349,7 +349,7 @@ class ListDataFilesTests(unittest.TestCase):
         以前は純関数がエラー文面を1要素のリストで返しており、リゾルバ5箇所が
         「メッセージをパスとして掴まない」よう防御していた。
         """
-        from lipidmix.core import path_resolvers
+        from metabolomix.core import path_resolvers
 
         missing = str(self.directory / "no-such-dir")
         self.assertEqual(path_resolvers.list_data_files(directory=missing), [])

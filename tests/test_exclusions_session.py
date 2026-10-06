@@ -1,8 +1,8 @@
 import io
 import unittest
 
-from lipidmix.arf import reader as arf_reader
-from lipidmix.core import session_state
+from metabolomix.arf import reader as arf_reader
+from metabolomix.core import session_state
 
 
 class TestExclusionSessionState(unittest.TestCase):

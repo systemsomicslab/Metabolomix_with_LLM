@@ -23,11 +23,11 @@ from pathlib import Path
 import lz4.block
 import msgpack
 
-from lipidmix.arf import reader as arf_reader
-from lipidmix.arf2 import reader as arf2_reader
-from lipidmix.dcl import reader as dcl_reader
-from lipidmix.eic import reader as eic_reader
-from lipidmix.pai2 import reader as pai2_reader
+from metabolomix.arf import reader as arf_reader
+from metabolomix.arf2 import reader as arf2_reader
+from metabolomix.dcl import reader as dcl_reader
+from metabolomix.eic import reader as eic_reader
+from metabolomix.pai2 import reader as pai2_reader
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_DIR = REPO_ROOT / "docs" / "schema"
@@ -583,7 +583,7 @@ class TestEicCss1Decode(unittest.TestCase):
 # .dcl = MSDecResult（msgpack ではなく BinaryWriter 由来の独自バイナリ）
 # --------------------------------------------------------------------------
 def dcl_bytes(results: list) -> bytes:
-    """`.dcl` を組み立てる。レイアウトは lipidmix/dcl/reader.py の冒頭に準拠。"""
+    """`.dcl` を組み立てる。レイアウトは metabolomix/dcl/reader.py の冒頭に準拠。"""
     header = b"DC" + struct.pack("<i", 1) + b"\x00" + struct.pack("<i", len(results))
     table_size = 8 * len(results)
     body = b""
@@ -690,7 +690,7 @@ class TestNeverExecutedToolsSmoke(unittest.TestCase):
 
     def setUp(self):
         import tempfile
-        from lipidmix.core import session_state as state
+        from metabolomix.core import session_state as state
 
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -716,14 +716,14 @@ class TestNeverExecutedToolsSmoke(unittest.TestCase):
         return self.write("synthetic.EIC.aef", css1_bytes(spots))
 
     def test_eic_parser_reports_the_summary(self):
-        from lipidmix.eic.tools import eic_parser
+        from metabolomix.eic.tools import eic_parser
 
         result = eic_parser(file_path=self.eic_file())
         self.assertIn("EIC解析完了", result)
         self.assertIn("total_spots", result)
 
     def test_eic_rank_by_max_intensity_puts_the_strong_spot_first(self):
-        from lipidmix.eic.tools import eic_rank_by_max_intensity
+        from metabolomix.eic.tools import eic_rank_by_max_intensity
 
         result = eic_rank_by_max_intensity(file_path=self.eic_file(), top_n=2)
         self.assertIn("EIC強度上位スポット", result)
@@ -732,19 +732,19 @@ class TestNeverExecutedToolsSmoke(unittest.TestCase):
         self.assertIn("760", lines[0])
 
     def test_eic_search_by_mz_range_filters(self):
-        from lipidmix.eic.tools import eic_search_by_mz_range
+        from metabolomix.eic.tools import eic_search_by_mz_range
 
         result = eic_search_by_mz_range(file_path=self.eic_file(), min_mz=700.0, max_mz=800.0)
         self.assertIn("一致件数: 1", result)
 
     def test_eic_search_by_rt_range_filters(self):
-        from lipidmix.eic.tools import eic_search_by_rt_range
+        from metabolomix.eic.tools import eic_search_by_rt_range
 
         result = eic_search_by_rt_range(file_path=self.eic_file(), min_rt=0.0, max_rt=5.0)
         self.assertIn("一致件数: 1", result)
 
     def test_arf2_annotate_identities_returns_a_table(self):
-        from lipidmix.arf2.tools import arf2_annotate_identities
+        from metabolomix.arf2.tools import arf2_annotate_identities
 
         path = self.write("synthetic.arf2", lz4_container(msgpack_stream([arf2_spot()])))
         result = arf2_annotate_identities(file_path=path, max_rows=10)
@@ -752,8 +752,8 @@ class TestNeverExecutedToolsSmoke(unittest.TestCase):
 
     def test_arf2_annotate_identities_shows_the_curation_flag(self):
         """Task 9: wrong フラグが付いたスポットは curation_flag 列に出る。"""
-        from lipidmix.arf2.tools import arf2_annotate_identities
-        from lipidmix.curation import flags as curation_flags
+        from metabolomix.arf2.tools import arf2_annotate_identities
+        from metabolomix.curation import flags as curation_flags
 
         path = Path(self.write(
             "synthetic.arf2", lz4_container(msgpack_stream([arf2_spot()]))))
@@ -769,8 +769,8 @@ class TestNeverExecutedToolsSmoke(unittest.TestCase):
         self.assertIn("wrong", body[0])
 
     def test_arf2_annotate_identities_shows_assign(self):
-        from lipidmix.arf2.tools import arf2_annotate_identities
-        from lipidmix.curation import flags as curation_flags
+        from metabolomix.arf2.tools import arf2_annotate_identities
+        from metabolomix.curation import flags as curation_flags
 
         path = Path(self.write(
             "synthetic.arf2", lz4_container(msgpack_stream([arf2_spot()]))))
@@ -786,8 +786,8 @@ class TestNeverExecutedToolsSmoke(unittest.TestCase):
 
     def test_arf2_annotate_identities_survives_a_malformed_flags_file(self):
         """I6: 壊れた flags.jsonl でも一覧は返し、curation_flag を空にして 1 行で知らせる。"""
-        from lipidmix.arf2.tools import arf2_annotate_identities
-        from lipidmix.curation import flags as curation_flags
+        from metabolomix.arf2.tools import arf2_annotate_identities
+        from metabolomix.curation import flags as curation_flags
 
         path = Path(self.write(
             "synthetic.arf2", lz4_container(msgpack_stream([arf2_spot()]))))
@@ -804,7 +804,7 @@ class TestNeverExecutedToolsSmoke(unittest.TestCase):
         self.assertEqual(body[0].split("\t")[header.split("\t").index("curation_flag")], "")
 
     def test_dcl_find_msms_returns_the_matching_spectrum(self):
-        from lipidmix.dcl.tools import dcl_find_msms
+        from metabolomix.dcl.tools import dcl_find_msms
 
         path = self.write("synthetic.dcl", dcl_bytes([dcl_result(precursor_mz=760.5851)]))
         result = dcl_find_msms(precursor_mz=760.5851, file_path=path)
@@ -813,7 +813,7 @@ class TestNeverExecutedToolsSmoke(unittest.TestCase):
     def test_dcl_find_msms_reports_not_found_rather_than_an_empty_hit(self):
         # not_found は「MS/MS が取得されていない」であって「期待フラグメントが無い」
         # ではない。この区別が MSI レベルの主張を左右する。
-        from lipidmix.dcl.tools import dcl_find_msms
+        from metabolomix.dcl.tools import dcl_find_msms
 
         path = self.write("synthetic.dcl", dcl_bytes([dcl_result(precursor_mz=760.5851)]))
         result = dcl_find_msms(precursor_mz=200.0, file_path=path)

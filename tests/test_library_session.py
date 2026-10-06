@@ -1,5 +1,5 @@
 """ライブラリのセッションスロットとパス解決。"""
-from lipidmix.core import mcp_core, path_resolvers, session_state
+from metabolomix.core import mcp_core, path_resolvers, session_state
 
 
 def test_the_new_slot_does_not_disturb_the_others():
@@ -57,7 +57,7 @@ def test_bare_msp2_and_lbm2_are_never_candidates(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 import pytest  # noqa: E402
 
-from lipidmix.core.path_resolvers import LibraryPathError  # noqa: E402
+from metabolomix.core.path_resolvers import LibraryPathError  # noqa: E402
 
 
 def _libs(tmp_path):

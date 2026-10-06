@@ -1,7 +1,7 @@
 import pytest
 
-from lipidmix.curation import candidates, judge
-from lipidmix.library import store as library_store
+from metabolomix.curation import candidates, judge
+from metabolomix.library import store as library_store
 
 TH = judge.resolve_thresholds(None)
 SCORING = {"mz_tol": 0.01, "ms2_tol": 0.025, "mass_begin": 0.0, "mass_end": 2000.0,

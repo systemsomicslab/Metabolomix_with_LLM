@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.console.runner import MsdialExeNotFoundError, get_exe_path
+from metabolomix.console.runner import MsdialExeNotFoundError, get_exe_path
 
 BS = "\\"
 
@@ -26,7 +26,7 @@ def _method(tmp_path: Path) -> Path:
 
 
 def _plan(tmp_path: Path) -> dict:
-    from lipidmix.tools.console_tools import console_plan
+    from metabolomix.tools.console_tools import console_plan
     return json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(_method(tmp_path)),
                                    polarity="negative", measure="peak_height"))
 
@@ -115,7 +115,7 @@ def _neg_param(path: Path) -> Path:
 
 def test_template_uses_the_exe_from_the_config_file_to_find_the_lbm(tmp_path, cfg):
     """exe フォルダの *.lbm2 を 1 件だけ自動採用する GUI 流の推定が、設定ファイルの exe でも効く。"""
-    from lipidmix.tools.console_tools import console_method_template
+    from metabolomix.tools.console_tools import console_method_template
     app = tmp_path / "app"
     app.mkdir()
     (app / "lib.lbm2").touch()
@@ -129,7 +129,7 @@ def test_template_uses_the_exe_from_the_config_file_to_find_the_lbm(tmp_path, cf
 
 
 def test_template_reports_config_invalid(tmp_path, cfg):
-    from lipidmix.tools.console_tools import console_method_template
+    from metabolomix.tools.console_tools import console_method_template
     cfg.write_text("[msdial\n", encoding="utf-8")
     parsed = json.loads(console_method_template(
         out_path=str(tmp_path / "param_POS.txt"), polarity="positive",
@@ -140,7 +140,7 @@ def test_template_reports_config_invalid(tmp_path, cfg):
 # ---------- pipeline の受付 ----------
 
 def test_pipeline_intake_resolves_the_exe_from_the_config_file(cfg, tmp_path):
-    from lipidmix.pipeline import service
+    from metabolomix.pipeline import service
     exe = tmp_path / "MSDIALCUI.exe"
     exe.touch()
     cfg.write_text(f"[msdial]\nexe = '{exe}'\n", encoding="utf-8")
@@ -148,8 +148,8 @@ def test_pipeline_intake_resolves_the_exe_from_the_config_file(cfg, tmp_path):
 
 
 def test_pipeline_intake_wraps_config_invalid(cfg):
-    from lipidmix.core.atomic_io import DomainError
-    from lipidmix.pipeline import service
+    from metabolomix.core.atomic_io import DomainError
+    from metabolomix.pipeline import service
     cfg.write_text("[msdial\n", encoding="utf-8")
     with pytest.raises(DomainError) as exc:
         service._resolve_exe_path()
@@ -157,8 +157,8 @@ def test_pipeline_intake_wraps_config_invalid(cfg):
 
 
 def test_pipeline_intake_keeps_the_not_found_code_with_details(cfg):
-    from lipidmix.core.atomic_io import DomainError
-    from lipidmix.pipeline import service
+    from metabolomix.core.atomic_io import DomainError
+    from metabolomix.pipeline import service
     with pytest.raises(DomainError) as exc:
         service._resolve_exe_path()
     assert exc.value.code == "MSDIAL_EXE_NOT_FOUND"
@@ -169,7 +169,7 @@ def test_pipeline_intake_keeps_the_not_found_code_with_details(cfg):
 
 def test_template_uses_lbm_from_the_config_file_while_exe_comes_from_env(tmp_path, cfg, monkeypatch):
     """出どころが混ざる構成: exe は環境変数、LBM は設定ファイル。"""
-    from lipidmix.tools.console_tools import console_method_template
+    from metabolomix.tools.console_tools import console_method_template
     app = tmp_path / "app"
     app.mkdir()
     (app / "bundled.lbm2").touch()  # exe フォルダの LBM より設定ファイルの LBM が先
@@ -188,7 +188,7 @@ def test_template_uses_lbm_from_the_config_file_while_exe_comes_from_env(tmp_pat
 
 def test_template_reports_config_invalid_from_the_lbm_lookup(tmp_path, cfg, monkeypatch):
     """exe を環境変数で渡していても、LBM を引くときに壊れた設定ファイルに当たれば止める。"""
-    from lipidmix.tools.console_tools import console_method_template
+    from metabolomix.tools.console_tools import console_method_template
     app = tmp_path / "app"
     app.mkdir()
     monkeypatch.setenv("MSDIAL_EXE", str(app / "MSDIALCUI.exe"))
@@ -200,7 +200,7 @@ def test_template_reports_config_invalid_from_the_lbm_lookup(tmp_path, cfg, monk
 
 
 def test_pipeline_pins_the_lbm_from_the_config_file(tmp_path, cfg):
-    from lipidmix.pipeline import inputs
+    from metabolomix.pipeline import inputs
     lib = tmp_path / "chosen.lbm2"
     lib.write_bytes(b"lbm")
     cfg.write_text(f"[msdial]\nlbm = '{lib}'\n", encoding="utf-8")
@@ -211,8 +211,8 @@ def test_pipeline_pins_the_lbm_from_the_config_file(tmp_path, cfg):
 
 
 def test_pipeline_lbm_lookup_wraps_config_invalid(tmp_path, cfg):
-    from lipidmix.core.atomic_io import DomainError
-    from lipidmix.pipeline import inputs
+    from metabolomix.core.atomic_io import DomainError
+    from metabolomix.pipeline import inputs
     cfg.write_text("[msdial\n", encoding="utf-8")
     with pytest.raises(DomainError) as exc:
         inputs._resolve_lbm_pinned({}, tmp_path / "param.txt",

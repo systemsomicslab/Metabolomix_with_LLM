@@ -26,31 +26,31 @@ flowchart TD
 前提: なし
 状態変更: `session.eic` に EIC スポットを格納。
 
-1. lipidmix/eic/tools.py  eic_parser()
-2. └─ lipidmix/core/path_resolvers.py  resolve_eicaef_file_path()
-3. └─ lipidmix/core/session_state.py  EicState.load_data()
-4. └─ lipidmix/eic/reader.py  summarize_eic_data()
-5. └─ lipidmix/core/session_state.py  AnalysisSession.maybe_prepend_caveat()
+1. metabolomix/eic/tools.py  eic_parser()
+2. └─ metabolomix/core/path_resolvers.py  resolve_eicaef_file_path()
+3. └─ metabolomix/core/session_state.py  EicState.load_data()
+4. └─ metabolomix/eic/reader.py  summarize_eic_data()
+5. └─ metabolomix/core/session_state.py  AnalysisSession.maybe_prepend_caveat()
 
 ## eic_search_by_mz_range
 
 前提: なし
 状態変更: `session.eic` に EIC スポットを格納（未ロードなら読み込む）。
 
-1. lipidmix/eic/tools.py  eic_search_by_mz_range()
-2. └─ lipidmix/core/path_resolvers.py  resolve_eicaef_file_path()
-3. └─ lipidmix/core/session_state.py  EicState.load_data()
-4. └─ lipidmix/eic/reader.py  search_eic_by_mz_range()
+1. metabolomix/eic/tools.py  eic_search_by_mz_range()
+2. └─ metabolomix/core/path_resolvers.py  resolve_eicaef_file_path()
+3. └─ metabolomix/core/session_state.py  EicState.load_data()
+4. └─ metabolomix/eic/reader.py  search_eic_by_mz_range()
 
 ## eic_search_by_rt_range
 
 前提: なし
 状態変更: `session.eic` に EIC スポットを格納（未ロードなら読み込む）。
 
-1. lipidmix/eic/tools.py  eic_search_by_rt_range()
-2. └─ lipidmix/core/path_resolvers.py  resolve_eicaef_file_path()
-3. └─ lipidmix/core/session_state.py  EicState.load_data()
-4. └─ lipidmix/eic/reader.py  search_eic_by_rt_range()
+1. metabolomix/eic/tools.py  eic_search_by_rt_range()
+2. └─ metabolomix/core/path_resolvers.py  resolve_eicaef_file_path()
+3. └─ metabolomix/core/session_state.py  EicState.load_data()
+4. └─ metabolomix/eic/reader.py  search_eic_by_rt_range()
 
 ## eic_rank_by_max_intensity
 
@@ -59,10 +59,10 @@ flowchart TD
 
 各試料のクロマトグラム最大強度の、そのまた最大値で降順に並べる。RT 座標順ではない。
 
-1. lipidmix/eic/tools.py  eic_rank_by_max_intensity()
-2. └─ lipidmix/core/path_resolvers.py  resolve_eicaef_file_path()
-3. └─ lipidmix/core/session_state.py  EicState.load_data()
-4. └─ lipidmix/eic/reader.py  top_eic_spots_by_max_intensity()
+1. metabolomix/eic/tools.py  eic_rank_by_max_intensity()
+2. └─ metabolomix/core/path_resolvers.py  resolve_eicaef_file_path()
+3. └─ metabolomix/core/session_state.py  EicState.load_data()
+4. └─ metabolomix/eic/reader.py  top_eic_spots_by_max_intensity()
 
 ## eic_plot_chromatograms
 
@@ -73,10 +73,10 @@ flowchart TD
 `session.eic` の全件ロードは経由しない。座標は 4 桁に丸めて返す（RT 0.0001 分・
 m/z 4 桁で図にも解釈にも足り、float の既定 repr の 17 桁は空白同然のため）。
 
-1. lipidmix/eic/tools.py  eic_plot_chromatograms()
-2. └─ lipidmix/core/path_resolvers.py  resolve_eicaef_file_path()
-3. └─ lipidmix/eic/reader.py  read_eic_spot_css1()
-4. └─ lipidmix/plots/eic.py  build_eic_plot_payload()
+1. metabolomix/eic/tools.py  eic_plot_chromatograms()
+2. └─ metabolomix/core/path_resolvers.py  resolve_eicaef_file_path()
+3. └─ metabolomix/eic/reader.py  read_eic_spot_css1()
+4. └─ metabolomix/plots/eic.py  build_eic_plot_payload()
 
 ## eic_plot_compounds
 
@@ -92,13 +92,13 @@ ARF2 の同定候補を rt/mz で照合し、外れた物質は `selection.dropp
 照合（手順 10）は候補選抜の中ではなく payload 組み立ての中で走る —— 実際に読み出した
 EIC スポットと突き合わせないと検証にならないため。
 
-1. lipidmix/eic/tools.py  eic_plot_compounds()
-2. └─ lipidmix/plots/render.py  resolve_plot_output()
-3. └─ lipidmix/core/path_resolvers.py  resolve_eicaef_file_path()
-4. └─ lipidmix/core/path_resolvers.py  resolve_arf2_file_path()
-5. └─ lipidmix/eic/identity_map.py  load_arf2_records()
-6. │  └─ lipidmix/arf2/reader.py  load_catalog()
-7. └─ lipidmix/eic/identity_map.py  select_identity_candidates()
-8. └─ lipidmix/eic/reader.py  read_eic_spots_css1()
-9. └─ lipidmix/plots/eic.py  build_multi_compound_plot_payload()
-10. │  └─ lipidmix/eic/identity_map.py  verify_spot_match()
+1. metabolomix/eic/tools.py  eic_plot_compounds()
+2. └─ metabolomix/plots/render.py  resolve_plot_output()
+3. └─ metabolomix/core/path_resolvers.py  resolve_eicaef_file_path()
+4. └─ metabolomix/core/path_resolvers.py  resolve_arf2_file_path()
+5. └─ metabolomix/eic/identity_map.py  load_arf2_records()
+6. │  └─ metabolomix/arf2/reader.py  load_catalog()
+7. └─ metabolomix/eic/identity_map.py  select_identity_candidates()
+8. └─ metabolomix/eic/reader.py  read_eic_spots_css1()
+9. └─ metabolomix/plots/eic.py  build_multi_compound_plot_payload()
+10. │  └─ metabolomix/eic/identity_map.py  verify_spot_match()

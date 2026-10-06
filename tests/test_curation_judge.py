@@ -1,6 +1,6 @@
 import pytest
 
-from lipidmix.curation import judge
+from metabolomix.curation import judge
 
 TH = judge.resolve_thresholds(None)
 

@@ -19,11 +19,11 @@ MS/MS スペクトルの実体。msgpack/lz4 ではない独自バイナリ（MS
 前提: なし（`file_path` 省略時は最新バッチを自動選択）
 状態変更: なし。`session` には何も載せない。
 
-1. lipidmix/dcl/tools.py  dcl_parser()
-2. └─ lipidmix/core/path_resolvers.py  resolve_dcl_file_path()
-3. └─ lipidmix/dcl/reader.py  deserialize_dcl()
-4. └─ lipidmix/dcl/reader.py  summarize_dcl()
-5. └─ lipidmix/core/session_state.py  AnalysisSession.maybe_prepend_caveat()
+1. metabolomix/dcl/tools.py  dcl_parser()
+2. └─ metabolomix/core/path_resolvers.py  resolve_dcl_file_path()
+3. └─ metabolomix/dcl/reader.py  deserialize_dcl()
+4. └─ metabolomix/dcl/reader.py  summarize_dcl()
+5. └─ metabolomix/core/session_state.py  AnalysisSession.maybe_prepend_caveat()
 
 ## dcl_find_msms
 
@@ -32,7 +32,7 @@ MS/MS スペクトルの実体。msgpack/lz4 ではない独自バイナリ（MS
 
 RT を渡すと、同一 m/z の別溶出ピークを分離できる。
 
-1. lipidmix/dcl/tools.py  dcl_find_msms()
-2. └─ lipidmix/core/path_resolvers.py  resolve_dcl_file_path()
-3. └─ lipidmix/dcl/reader.py  deserialize_dcl()
-4. └─ lipidmix/dcl/reader.py  get_msms_by_precursor()
+1. metabolomix/dcl/tools.py  dcl_find_msms()
+2. └─ metabolomix/core/path_resolvers.py  resolve_dcl_file_path()
+3. └─ metabolomix/dcl/reader.py  deserialize_dcl()
+4. └─ metabolomix/dcl/reader.py  get_msms_by_precursor()

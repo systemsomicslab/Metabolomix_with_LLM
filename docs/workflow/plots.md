@@ -42,21 +42,21 @@
 生行列 PCA と前処理後 PCA は ARF 側の同じスロットを使うので、ARF 経路で保存されるのは
 **直近に実行したほう**の図になる。
 
-1. lipidmix/tools/reports.py  save_pca_figure()
-2. └─ lipidmix/tools/reports.py  _pca_candidates()
-3. │  └─ lipidmix/core/tool_helpers.py  dataset_pca_plot()
-4. │  └─ lipidmix/analysis/result_state.py  is_current()
-5. └─ lipidmix/tools/reports.py  _choose_figure_result()
-6. │  └─ lipidmix/plots/result_output.py  select_result()
-7. └─ lipidmix/core/mcp_errors.py  missing_state()
-8. └─ lipidmix/tools/reports.py  _save_figure()
-9. │  └─ lipidmix/corpus/knowledge_store.py  make_slug()
-10.│  └─ lipidmix/core/mcp_core.py  _resolve_report_dir()
-11.│  │  └─ lipidmix/core/mcp_core.py  _report_dir_candidates()
-12.│  │  └─ lipidmix/core/mcp_core.py  _first_writable_dir()
-13.│  └─ lipidmix/plots/result_output.py  save_result_figure()
-14.│     └─ lipidmix/plots/result_output.py  figure_annotations()
-15.│     └─ lipidmix/core/tool_helpers.py  _pca_scatter_arrays()
+1. metabolomix/tools/reports.py  save_pca_figure()
+2. └─ metabolomix/tools/reports.py  _pca_candidates()
+3. │  └─ metabolomix/core/tool_helpers.py  dataset_pca_plot()
+4. │  └─ metabolomix/analysis/result_state.py  is_current()
+5. └─ metabolomix/tools/reports.py  _choose_figure_result()
+6. │  └─ metabolomix/plots/result_output.py  select_result()
+7. └─ metabolomix/core/mcp_errors.py  missing_state()
+8. └─ metabolomix/tools/reports.py  _save_figure()
+9. │  └─ metabolomix/corpus/knowledge_store.py  make_slug()
+10.│  └─ metabolomix/core/mcp_core.py  _resolve_report_dir()
+11.│  │  └─ metabolomix/core/mcp_core.py  _report_dir_candidates()
+12.│  │  └─ metabolomix/core/mcp_core.py  _first_writable_dir()
+13.│  └─ metabolomix/plots/result_output.py  save_result_figure()
+14.│     └─ metabolomix/plots/result_output.py  figure_annotations()
+15.│     └─ metabolomix/core/tool_helpers.py  _pca_scatter_arrays()
 
 ## save_volcano_figure
 
@@ -71,19 +71,19 @@
 入力元の決め方は save_pca_figure と同じ（優先せず、曖昧なら止める）。戻り値には
 選ばれた `source=` と `result_id=` を書く。
 
-1. lipidmix/tools/reports.py  save_volcano_figure()
-2. └─ lipidmix/tools/reports.py  _differential_candidates()
-3. │  └─ lipidmix/analysis/result_state.py  is_current()
-4. └─ lipidmix/tools/reports.py  _choose_figure_result()
-5. │  └─ lipidmix/plots/result_output.py  select_result()
-6. └─ lipidmix/core/mcp_errors.py  missing_state()
-7. └─ lipidmix/tools/reports.py  _save_figure()
-8. │  └─ lipidmix/corpus/knowledge_store.py  make_slug()
-9. │  └─ lipidmix/core/mcp_core.py  _resolve_report_dir()
-10.│  │  └─ lipidmix/core/mcp_core.py  _report_dir_candidates()
-11.│  │  └─ lipidmix/core/mcp_core.py  _first_writable_dir()
-12.│  └─ lipidmix/plots/result_output.py  save_result_figure()
-13.│     └─ lipidmix/plots/volcano.py  render_volcano_plot()
+1. metabolomix/tools/reports.py  save_volcano_figure()
+2. └─ metabolomix/tools/reports.py  _differential_candidates()
+3. │  └─ metabolomix/analysis/result_state.py  is_current()
+4. └─ metabolomix/tools/reports.py  _choose_figure_result()
+5. │  └─ metabolomix/plots/result_output.py  select_result()
+6. └─ metabolomix/core/mcp_errors.py  missing_state()
+7. └─ metabolomix/tools/reports.py  _save_figure()
+8. │  └─ metabolomix/corpus/knowledge_store.py  make_slug()
+9. │  └─ metabolomix/core/mcp_core.py  _resolve_report_dir()
+10.│  │  └─ metabolomix/core/mcp_core.py  _report_dir_candidates()
+11.│  │  └─ metabolomix/core/mcp_core.py  _first_writable_dir()
+12.│  └─ metabolomix/plots/result_output.py  save_result_figure()
+13.│     └─ metabolomix/plots/volcano.py  render_volcano_plot()
 
 ## save_eic_figure
 
@@ -93,12 +93,12 @@
 
 手順 7 は payload の `plot_schema` で描画関数を選ぶ。未知のスキーマは `ValueError`。
 
-1. lipidmix/tools/reports.py  save_eic_figure()
-2. └─ lipidmix/core/mcp_errors.py  missing_state()
-3. └─ lipidmix/corpus/knowledge_store.py  make_slug()
-4. └─ lipidmix/core/mcp_core.py  _resolve_report_dir()
-5. │  └─ lipidmix/core/mcp_core.py  _report_dir_candidates()
-6. │  └─ lipidmix/core/mcp_core.py  _first_writable_dir()
-7. └─ lipidmix/plots/eic.py  render_eic_plot()
-8.    ├─ [lipidmix.eic.v1] lipidmix/plots/eic.py  _render_single_spot()
-9.    └─ [lipidmix.eic.multi.v1] lipidmix/plots/eic.py  _render_multi_compound()
+1. metabolomix/tools/reports.py  save_eic_figure()
+2. └─ metabolomix/core/mcp_errors.py  missing_state()
+3. └─ metabolomix/corpus/knowledge_store.py  make_slug()
+4. └─ metabolomix/core/mcp_core.py  _resolve_report_dir()
+5. │  └─ metabolomix/core/mcp_core.py  _report_dir_candidates()
+6. │  └─ metabolomix/core/mcp_core.py  _first_writable_dir()
+7. └─ metabolomix/plots/eic.py  render_eic_plot()
+8.    ├─ [lipidmix.eic.v1] metabolomix/plots/eic.py  _render_single_spot()
+9.    └─ [lipidmix.eic.multi.v1] metabolomix/plots/eic.py  _render_multi_compound()

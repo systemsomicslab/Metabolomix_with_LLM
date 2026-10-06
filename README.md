@@ -87,19 +87,19 @@ To run the parsers without an MCP client, see [docs/cli.md](docs/cli.md).
 
 `server.py` is a thin facade that registers tools by import side effect; it must stay at
 the repository root because MCP client configs reference it by absolute path. The
-implementation lives under `lipidmix/`.
+implementation lives under `metabolomix/`.
 
 | Package | Responsibility |
 |---|---|
-| `lipidmix/core/` | FastMCP instance, configuration, session state, path resolution. Depends on nothing else in the tree. |
-| `lipidmix/{arf,arf2,pai2,dcl,eic}/` | One `reader.py` (parser) and `tools.py` (MCP surface) per input format. |
-| `lipidmix/mztab/` | mzTab-M reader and canonical `DatasetState`. |
-| `lipidmix/console/` | MS-DIAL Console execution: job planning, running, output collection. |
-| `lipidmix/analysis/` | Format-independent numerics: preprocessing/QC, PCA, differential analysis, the export contract. |
-| `lipidmix/plots/` | Renderer-neutral plot payloads and matplotlib rendering. |
-| `lipidmix/msdial/` | MS-DIAL-specific sidecars, identification, peak verification. |
-| `lipidmix/corpus/` | Pure logic for the knowledge and playbook notes. |
-| `lipidmix/tools/` | MCP tools not tied to a single input format. |
+| `metabolomix/core/` | FastMCP instance, configuration, session state, path resolution. Depends on nothing else in the tree. |
+| `metabolomix/{arf,arf2,pai2,dcl,eic}/` | One `reader.py` (parser) and `tools.py` (MCP surface) per input format. |
+| `metabolomix/mztab/` | mzTab-M reader and canonical `DatasetState`. |
+| `metabolomix/console/` | MS-DIAL Console execution: job planning, running, output collection. |
+| `metabolomix/analysis/` | Format-independent numerics: preprocessing/QC, PCA, differential analysis, the export contract. |
+| `metabolomix/plots/` | Renderer-neutral plot payloads and matplotlib rendering. |
+| `metabolomix/msdial/` | MS-DIAL-specific sidecars, identification, peak verification. |
+| `metabolomix/corpus/` | Pure logic for the knowledge and playbook notes. |
+| `metabolomix/tools/` | MCP tools not tied to a single input format. |
 
 ## Documentation
 

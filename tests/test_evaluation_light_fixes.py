@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.arf import tools as arf_tools
-from lipidmix.console.validation import map_assays
-from lipidmix.core import mcp_core, session_state
-from lipidmix.tools.reports import write_report, read_report
+from metabolomix.arf import tools as arf_tools
+from metabolomix.console.validation import map_assays
+from metabolomix.core import mcp_core, session_state
+from metabolomix.tools.reports import write_report, read_report
 
 
 @pytest.mark.parametrize('uri,source', [

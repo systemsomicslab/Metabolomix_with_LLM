@@ -1,6 +1,6 @@
 import unittest
 
-from lipidmix.eic.identity_map import (
+from metabolomix.eic.identity_map import (
     MAX_CANDIDATES,
     select_identity_candidates,
     verify_spot_match,

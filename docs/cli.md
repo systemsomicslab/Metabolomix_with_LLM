@@ -6,12 +6,12 @@ MCP サーバを起動せずに、各 reader を直接叩いて `.arf` / `.arf2`
 ## 前提
 
 - Python は `C:/Python314/python.exe`（`.mcp.json` / `.vscode/mcp.json` が指しているのと同じ環境）。
-- 探索先はすべて `lipidmix.core.data_config.get_data_dir()` 経由。環境変数
+- 探索先はすべて `metabolomix.core.data_config.get_data_dir()` 経由。環境変数
   `LIPIDMIX_DATA_DIR` を設定するとその MS-DIAL 出力フォルダが対象になる（未設定時は `<project>/data`）。
 - 出力（CSV / JSON / PNG）は、パスを渡さない限りカレントディレクトリに書かれる。
   生成物はリポジトリに追跡させない。
 
-## `lipidmix.arf.reader` — `.arf`
+## `metabolomix.arf.reader` — `.arf`
 
 唯一、引数を取る本格的な CLI。`--file` を省略するとデータディレクトリから自動選択する
 （`--index` で候補の何番目かを指定）。
@@ -39,31 +39,31 @@ MCP サーバを起動せずに、各 reader を直接叩いて `.arf` / `.arf2`
 ピークプロパティを CSV に書き出す:
 
 ```bash
-C:/Python314/python.exe -m lipidmix.arf.reader --file "data/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf" --export output_peaks.csv
+C:/Python314/python.exe -m metabolomix.arf.reader --file "data/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf" --export output_peaks.csv
 ```
 
 PCA を実行して結果と図を保存する:
 
 ```bash
-C:/Python314/python.exe -m lipidmix.arf.reader --file "data/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf" --pca --output-pca pca_result.json --output-plot pca_plot.png --output-sample-scores sample_scores.png
+C:/Python314/python.exe -m metabolomix.arf.reader --file "data/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf" --pca --output-pca pca_result.json --output-plot pca_plot.png --output-sample-scores sample_scores.png
 ```
 
 PCA Loading の上位特徴量を見る:
 
 ```bash
-C:/Python314/python.exe -m lipidmix.arf.reader --file "data/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf" --pca --top-features 10 --props height
+C:/Python314/python.exe -m metabolomix.arf.reader --file "data/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf" --pca --top-features 10 --props height
 ```
 
-## `lipidmix.arf2.reader` / `lipidmix.dcl.reader` / `lipidmix.eic.reader`
+## `metabolomix.arf2.reader` / `metabolomix.dcl.reader` / `metabolomix.eic.reader`
 
 いずれも引数を取らず、データディレクトリから対象ファイルを自動選択して要約を標準出力に出す
 簡易確認用。対象を切り替えるときは `LIPIDMIX_DATA_DIR` を変える。
 
 ```bash
-C:/Python314/python.exe -m lipidmix.arf2.reader
+C:/Python314/python.exe -m metabolomix.arf2.reader
 ```
 
-## `lipidmix.library.store` — 参照ライブラリの store 事前構築
+## `metabolomix.library.store` — 参照ライブラリの store 事前構築
 
 `library_load` と同じ解決規則でライブラリを選び、照合用の SQLite store を構築する
 （既にあれば開くだけ）。大きな `.msp` の初回構築は MCP クライアントのタイムアウトに
@@ -79,7 +79,7 @@ C:/Python314/python.exe -m lipidmix.arf2.reader
 解決できないときは `MSP_AMBIGUOUS` などのコードを標準エラーに出して終了コード 2。
 
 ```bash
-C:/Python314/python.exe -m lipidmix.library.store --ion-mode negative
+C:/Python314/python.exe -m metabolomix.library.store --ion-mode negative
 ```
 
 ## テスト

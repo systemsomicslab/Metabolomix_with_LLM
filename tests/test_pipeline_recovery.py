@@ -15,14 +15,14 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.core.atomic_io import DomainError, atomic_write_json
-from lipidmix.core.process_control import process_identity
-from lipidmix.pipeline.engine import cancel_request_path, run_engine
-from lipidmix.pipeline.recovery import prepare_resume, read_status, request_cancel
-from lipidmix.pipeline.request import resolve_request
-from lipidmix.pipeline.store import create_run, load_run, save_run
-import lipidmix.pipeline.recovery as recovery_module
-import lipidmix.pipeline.store as store_module
+from metabolomix.core.atomic_io import DomainError, atomic_write_json
+from metabolomix.core.process_control import process_identity
+from metabolomix.pipeline.engine import cancel_request_path, run_engine
+from metabolomix.pipeline.recovery import prepare_resume, read_status, request_cancel
+from metabolomix.pipeline.request import resolve_request
+from metabolomix.pipeline.store import create_run, load_run, save_run
+import metabolomix.pipeline.recovery as recovery_module
+import metabolomix.pipeline.store as store_module
 
 from tests.pipeline_fixtures import make_source
 
@@ -39,7 +39,7 @@ def _persist(pipeline_root, name: str):
     """`output_name=name`の実ファイル付きref（Task18: `evaluate_target`は
     hash照合込みで`output_name`付きrefだけを「達成」と数えるため、文字列の
     ダミーrefでは`finish_success`が常にfailed/partialへ落ちる）。"""
-    from lipidmix.pipeline import report as report_mod
+    from metabolomix.pipeline import report as report_mod
     return report_mod.persist_result(pipeline_root, {
         "output_name": name, "kind": "synthetic",
         "result_id": f"{name.replace(':', '_')}-result",
@@ -138,7 +138,7 @@ def process_identity_of_self():
 def test_status_does_not_finalize_or_rewrite(run_with_lost_worker, monkeypatch):
     path = run_with_lost_worker
     before = path.read_bytes()
-    monkeypatch.setattr("lipidmix.pipeline.recovery.same_process", lambda identity: False)
+    monkeypatch.setattr("metabolomix.pipeline.recovery.same_process", lambda identity: False)
     status = read_status(path)
     assert status["observed_health"] == "worker_missing"
     assert path.read_bytes() == before
@@ -576,9 +576,9 @@ def _build_pipeline_with_real_inputs(tmp_path, monkeypatch, *, target="explorato
     既に検証済み」という前提のもとでの再検証なので、ここでは
     UPSTREAM_RERUN_REQUIREDゲートを通過させるためだけに必要。
     """
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
-    from lipidmix.pipeline.inputs import inspect_inputs, stage_inputs
-    from lipidmix.core.atomic_io import canonical_hash
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    from metabolomix.pipeline.inputs import inspect_inputs, stage_inputs
+    from metabolomix.core.atomic_io import canonical_hash
 
     source = make_source(tmp_path / "source")
     request = resolve_request(source["root"], {"target": target})
@@ -682,7 +682,7 @@ def _completed_run_with_manifest(tmp_path):
     `record["inputs"]["manifest_source"]`を書く。ここではその形だけを合成する
     （このファイルの流儀どおり、handlerは注入fixtureのまま）。
     """
-    from lipidmix.pipeline import inputs as inputs_mod
+    from metabolomix.pipeline import inputs as inputs_mod
 
     comparisons = [{"comparison_id": "cmp1", "reference_group": "control",
                     "test_group": "treated"}]
@@ -769,7 +769,7 @@ def test_v2_upstream_verified_state_uses_the_v2_stage_id(tmp_path):
     `prepare_resume`は既に`_upstream_stage_id`を使っており、ここだけが
     取り残されていた。
     """
-    from lipidmix.pipeline import recovery
+    from metabolomix.pipeline import recovery
 
     job_path = tmp_path / "console" / "attempt-0001" / "analysis-job.json"
     job_path.parent.mkdir(parents=True)
@@ -787,7 +787,7 @@ def test_v2_upstream_verified_state_uses_the_v2_stage_id(tmp_path):
 
 
 def test_v1_upstream_verified_state_is_unchanged(tmp_path):
-    from lipidmix.pipeline import recovery
+    from metabolomix.pipeline import recovery
 
     job_path = tmp_path / "console" / "attempt-0001" / "analysis-job.json"
     job_path.parent.mkdir(parents=True)

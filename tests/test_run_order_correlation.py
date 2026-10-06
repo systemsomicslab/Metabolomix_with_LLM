@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from lipidmix.analysis.preprocessing import run_order_correlation
+from metabolomix.analysis.preprocessing import run_order_correlation
 
 
 def _names(n):

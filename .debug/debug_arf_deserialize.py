@@ -1,6 +1,6 @@
 import os
 import io
-from lipidmix.arf import reader as arf_reader
+from metabolomix.arf import reader as arf_reader
 
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 path = r'data\AlignmentResult_2026_04_07_14_07_25_PeakProperties.arf'

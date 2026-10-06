@@ -4,9 +4,9 @@ import subprocess
 
 import pytest
 
-from lipidmix.arf2.reader import load_catalog
-from lipidmix.curation import evidence, flags, judge, review, viewer
-from lipidmix.library import store as library_store
+from metabolomix.arf2.reader import load_catalog
+from metabolomix.curation import evidence, flags, judge, review, viewer
+from metabolomix.library import store as library_store
 from tests.curation_fixtures import write_alignment_set
 
 

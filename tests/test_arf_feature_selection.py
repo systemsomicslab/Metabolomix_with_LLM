@@ -3,7 +3,7 @@ import copy
 
 import pytest
 
-from lipidmix.core import path_resolvers
+from metabolomix.core import path_resolvers
 
 
 def test_catalog_annotation_selects_unknown_arf_without_mutating_input():

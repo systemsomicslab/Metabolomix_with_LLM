@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.core import mcp_core
-from lipidmix.core.path_resolvers import resolve_arf2_file_path, resolve_arf_file_path
+from metabolomix.core import mcp_core
+from metabolomix.core.path_resolvers import resolve_arf2_file_path, resolve_arf_file_path
 
 
 @pytest.fixture

@@ -20,10 +20,10 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.console.job_manager import create_job, save_job
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.handoff.schema import Artifact, MztabEntry, sha256_file
-from lipidmix.mztab.loading import load_dataset_state
+from metabolomix.console.job_manager import create_job, save_job
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.handoff.schema import Artifact, MztabEntry, sha256_file
+from metabolomix.mztab.loading import load_dataset_state
 from tests.pipeline_fixtures import execution_record, write_mztab
 
 
@@ -61,7 +61,7 @@ def _job_with_outputs(tmp_path, *, status="completed", raw_count=2,
     job.status = status
     save_job(job, job_path)
 
-    from lipidmix.console.execution import (
+    from metabolomix.console.execution import (
         receipt_path, supervision_state_path, write_supervision_inputs)
     write_supervision_inputs(run_dir, {
         "raw_inventory": [str(p.resolve()) for p in raws]})
@@ -175,8 +175,8 @@ def test_a_nonzero_exit_receipt_is_not_verified(tmp_path):
 
 def test_a_receipt_from_another_job_is_not_verified(tmp_path):
     job_path, _ = _job_with_outputs(tmp_path)
-    from lipidmix.console.execution import receipt_path
-    from lipidmix.console.job_manager import load_job
+    from metabolomix.console.execution import receipt_path
+    from metabolomix.console.job_manager import load_job
     run_dir = Path(load_job(job_path).run_dir)
     record = json.loads(receipt_path(run_dir).read_text(encoding="utf-8"))
     record["job_id"] = "someone_elses_job"
@@ -197,7 +197,7 @@ def test_a_mztab_that_no_longer_matches_its_recorded_hash_is_not_verified(tmp_pa
 
 def test_job_without_primary_mztab_files(tmp_path):
     job_path, _ = _job_with_outputs(tmp_path)
-    from lipidmix.console.job_manager import load_job, save_job as _save
+    from metabolomix.console.job_manager import load_job, save_job as _save
     job = load_job(job_path)
     job.primary_mztab_files = []
     _save(job, job_path)
@@ -226,7 +226,7 @@ def test_legacy_v1_job_is_loadable(tmp_path):
 
 def test_loading_does_not_import_session_or_mcp_core():
     """ワーカーから呼べる読み込みであること。グローバル状態を触らせない。"""
-    import lipidmix.mztab.loading as loading
+    import metabolomix.mztab.loading as loading
     tree = ast.parse(Path(loading.__file__).read_text(encoding="utf-8"))
     imported = set()
     for node in ast.walk(tree):
@@ -234,6 +234,6 @@ def test_loading_does_not_import_session_or_mcp_core():
             imported.update(a.name for a in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module)
-    assert not any(m.startswith("lipidmix.core.session_state")
-                   or m.startswith("lipidmix.core.mcp_core")
-                   or m.startswith("lipidmix.tools") for m in imported), imported
+    assert not any(m.startswith("metabolomix.core.session_state")
+                   or m.startswith("metabolomix.core.mcp_core")
+                   or m.startswith("metabolomix.tools") for m in imported), imported

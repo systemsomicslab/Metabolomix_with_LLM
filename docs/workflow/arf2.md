@@ -14,12 +14,12 @@ ARF 解析（前処理行列・差次的結果・手動除外）は壊れない�
 要約テキストの生成（手順 4）はセッションへの格納（手順 5）より先に走る。格納は
 「将来の検索用に保持する」だけで、返り値の組み立てには使われないため。
 
-1. lipidmix/arf2/tools.py  arf2_parser()
-2. └─ lipidmix/core/path_resolvers.py  resolve_arf2_file_path()
-3. └─ lipidmix/arf2/reader.py  deserialize()
-4. └─ lipidmix/arf2/reader.py  generate_text_summary()
-5. └─ lipidmix/core/session_state.py  Arf2State.load()
-6. └─ lipidmix/core/session_state.py  AnalysisSession.maybe_prepend_caveat()
+1. metabolomix/arf2/tools.py  arf2_parser()
+2. └─ metabolomix/core/path_resolvers.py  resolve_arf2_file_path()
+3. └─ metabolomix/arf2/reader.py  deserialize()
+4. └─ metabolomix/arf2/reader.py  generate_text_summary()
+5. └─ metabolomix/core/session_state.py  Arf2State.load()
+6. └─ metabolomix/core/session_state.py  AnalysisSession.maybe_prepend_caveat()
 
 ## arf2_annotate_identities
 
@@ -38,9 +38,9 @@ ARF2 には MS/MS 取得フラグも精密質量誤差も無いので、`has_msm
 返り値は列名を 1 回だけ出す TSV 表で、ヘッダ行に**総スポット数と未表示件数**を明記する
 （返すのはファイル先頭から `max_rows` 件で、強度順でも MSI 順でもない）。
 
-1. lipidmix/arf2/tools.py  arf2_annotate_identities()
-2. └─ lipidmix/core/path_resolvers.py  resolve_arf2_file_path()
-3. └─ lipidmix/arf2/reader.py  load_catalog()
-4. └─ lipidmix/core/tool_helpers.py  _identity_tables()
-5. │  └─ lipidmix/msdial/lipid_identity.py  load_reference_tables()
-6. └─ lipidmix/msdial/lipid_identity.py  build_identity_block()
+1. metabolomix/arf2/tools.py  arf2_annotate_identities()
+2. └─ metabolomix/core/path_resolvers.py  resolve_arf2_file_path()
+3. └─ metabolomix/arf2/reader.py  load_catalog()
+4. └─ metabolomix/core/tool_helpers.py  _identity_tables()
+5. │  └─ metabolomix/msdial/lipid_identity.py  load_reference_tables()
+6. └─ metabolomix/msdial/lipid_identity.py  build_identity_block()

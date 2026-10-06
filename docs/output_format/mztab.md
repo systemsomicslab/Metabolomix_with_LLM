@@ -79,14 +79,14 @@ SMF からこれらを読もうとすると常に `None` になり、「この�
 無い）ときは、対応する SME の個別スコア（`id_confidence_measure[2..8]` の合成
 total score）を代わりに入れる。SML 側の値がある場合はそちらを優先し上書きしない。
 このフォールバックが入ったことで、`dataset_export_differential` /
-`arf_export_differential`（`lipidmix/analysis/feature_export.py`）の同じ列が、
+`arf_export_differential`（`metabolomix/analysis/feature_export.py`）の同じ列が、
 以前は `null` だった行に SME 由来の値を出すようになった（列定義
 `export_contract.py` 自体は無変更）。
 
 **`confidence_measures` はどこからも読まれていない（Minor 9）**: `feature_annotations[fid]`
 に SME の個別スコア（`id_confidence_measure[2..8]`、`_extract_confidence_measures`）が
 入るが、`dataset_export_differential` / `arf_export_differential`
-（`lipidmix/analysis/{dataset_export,feature_export}.py`）は列定義で明示された
+（`metabolomix/analysis/{dataset_export,feature_export}.py`）は列定義で明示された
 キーだけを拾うため、この辞書は現状どのツール戻り値にも出ない。参照するには
 `DatasetState.feature_annotations[fid]["confidence_measures"]` を直接読むこと。
 

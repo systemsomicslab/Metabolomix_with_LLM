@@ -1,6 +1,6 @@
 import math
 
-from lipidmix.curation import eic_shape
+from metabolomix.curation import eic_shape
 
 TH = {"eic_min_points": 5, "eic_min_r2": 0.8, "eic_max_maxima": 2,
       "eic_pass_frac": 0.5, "eic_borderline_frac": 0.2, "eic_rt_scatter_sd": 0.1}

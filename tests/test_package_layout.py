@@ -8,9 +8,9 @@ import os
 import unittest
 from pathlib import Path
 
-from lipidmix.core import data_config
-from lipidmix.core import mcp_core
-from lipidmix.core import tool_helpers
+from metabolomix.core import data_config
+from metabolomix.core import mcp_core
+from metabolomix.core import tool_helpers
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,7 +20,7 @@ class TestBaseDirResolution(unittest.TestCase):
         self.assertEqual(mcp_core.BASE_DIR.resolve(), REPO_ROOT)
 
     def test_base_dir_has_repo_markers(self):
-        # lipidmix/core/ を指してしまった場合をここで落とす
+        # metabolomix/core/ を指してしまった場合をここで落とす
         for marker in ("docs", "playbook", "reference"):
             with self.subTest(marker=marker):
                 self.assertTrue(
@@ -52,13 +52,13 @@ class TestRootLayout(unittest.TestCase):
         found = {p.name for p in REPO_ROOT.glob("*.py")}
         self.assertEqual(
             found, {"server.py", "check.py"},
-            "ルート直下の .py が増減している。実装は lipidmix/ に置く",
+            "ルート直下の .py が増減している。実装は metabolomix/ に置く",
         )
 
 
 class TestStateDirsOutsidePackage(unittest.TestCase):
     def test_state_dirs_are_not_inside_lipidmix(self):
-        package_dir = (REPO_ROOT / "lipidmix").resolve()
+        package_dir = (REPO_ROOT / "metabolomix").resolve()
         for name in ("KNOWLEDGE_DIR", "PLAYBOOK_DIR", "ANALYSES_DIR"):
             with self.subTest(name=name):
                 resolved = getattr(mcp_core, name).resolve()
@@ -83,7 +83,7 @@ class TestReferenceTables(unittest.TestCase):
 
 
 class TestStateDirsAreNotCreatedOnImport(unittest.TestCase):
-    """`lipidmix.core.mcp_core` の import が置き場ディレクトリを作らないことを縛る。
+    """`metabolomix.core.mcp_core` の import が置き場ディレクトリを作らないことを縛る。
 
     KNOWLEDGE_DIR / PLAYBOOK_DIR / ANALYSES_DIR はパス解決の時点で mkdir していた
     ため、`analyses/` を消しても import のたび（＝pytest を回すたび、MCP サーバを
@@ -103,7 +103,7 @@ class TestStateDirsAreNotCreatedOnImport(unittest.TestCase):
             env["LIPIDMIX_PLAYBOOK_DIR"] = str(base / "playbook")
             env["LIPIDMIX_ANALYSES_DIR"] = str(base / "analyses")
             proc = subprocess.run(
-                [sys.executable, "-c", "import lipidmix.core.mcp_core"],
+                [sys.executable, "-c", "import metabolomix.core.mcp_core"],
                 cwd=str(REPO_ROOT), env=env,
                 capture_output=True, text=True,
             )

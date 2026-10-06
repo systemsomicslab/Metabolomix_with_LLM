@@ -2,9 +2,9 @@
 import math
 import textwrap
 import pytest
-from lipidmix.mztab.reader import parse_mztab
-from lipidmix.mztab.dataset_state import DatasetState, build_dataset_state
-from lipidmix.core import session_state
+from metabolomix.mztab.reader import parse_mztab
+from metabolomix.mztab.dataset_state import DatasetState, build_dataset_state
+from metabolomix.core import session_state
 
 # SMF は同定を持たず SME_ID_REFS で SME を指す（mzTab-M 2.0.0-M の実形状）。
 # 構造・名称を SMF 行へ直接書いたフィクスチャは形式として存在せず、
@@ -102,7 +102,7 @@ def test_session_dataset_does_not_affect_arf_slot():
 
 
 def test_dataset_state_has_analysis_fields():
-    from lipidmix.mztab.dataset_state import DatasetState
+    from metabolomix.mztab.dataset_state import DatasetState
     ds = DatasetState()
     assert ds.pp_matrix is None
     assert ds.pp_sample_names == []
@@ -252,7 +252,7 @@ def test_dataset_preprocess_detects_qc_role_via_resolved_display_name(mztab_qc_n
     直る前は sample_names が abundance_assay[3] のままで、detect_sample_roles が
     "qc" トークンを見つけられず全サンプルが "sample" のままだった。
     """
-    from lipidmix.analysis.dataset_analysis import run_dataset_preprocess
+    from metabolomix.analysis.dataset_analysis import run_dataset_preprocess
 
     pr = parse_mztab(mztab_qc_named_file)
     ds = build_dataset_state(pr, mztab_qc_named_file.name, str(mztab_qc_named_file))
@@ -401,12 +401,12 @@ def mztab_with_custom(tmp_path):
 
 
 def test_parse_cv_term_extracts_accession_and_value():
-    from lipidmix.mztab.dataset_state import _parse_cv_term
+    from metabolomix.mztab.dataset_state import _parse_cv_term
     assert _parse_cv_term("[MS,MS:4000089,injection sequence label,7]") == ("MS:4000089", "7")
 
 
 def test_parse_cv_term_returns_none_for_garbage():
-    from lipidmix.mztab.dataset_state import _parse_cv_term
+    from metabolomix.mztab.dataset_state import _parse_cv_term
     assert _parse_cv_term("not a cv term") == (None, None)
     assert _parse_cv_term("[MS,MS:4000089]") == (None, None)
     assert _parse_cv_term(None) == (None, None)
@@ -437,7 +437,7 @@ def test_build_dataset_state_without_custom_terms_has_none(mztab_file):
 
 
 def test_rdkit_available_reports_bool():
-    from lipidmix.mztab.identity import rdkit_available
+    from metabolomix.mztab.identity import rdkit_available
     assert isinstance(rdkit_available(), bool)
 
 
@@ -450,15 +450,15 @@ def test_inchikey_coverage_reports_rdkit_availability(mztab_file):
 # rdkit_available だけを False にしても実 RDKit が導出してしまうため、
 # 導出側も同時に落として実環境を再現する。
 def _no_rdkit_derive(database_identifier, inchi, smiles):
-    from lipidmix.mztab.identity import _INCHIKEY_RE
+    from metabolomix.mztab.identity import _INCHIKEY_RE
     if database_identifier and _INCHIKEY_RE.match(database_identifier.strip()):
         return database_identifier.strip(), "database_identifier"
     return None, "none"
 
 
 def _without_rdkit(monkeypatch):
-    monkeypatch.setattr("lipidmix.mztab.identity.rdkit_available", lambda: False)
-    monkeypatch.setattr("lipidmix.mztab.dataset_state.derive_inchikey", _no_rdkit_derive)
+    monkeypatch.setattr("metabolomix.mztab.identity.rdkit_available", lambda: False)
+    monkeypatch.setattr("metabolomix.mztab.dataset_state.derive_inchikey", _no_rdkit_derive)
 
 
 def test_dataset_state_warns_when_rdkit_missing(mztab_smiles_file, monkeypatch):
@@ -635,7 +635,7 @@ def test_an_inchikey_is_derived_from_the_sml_smiles(tmp_path):
     # なので import は通り、native な `rdchem` を引く `rdkit.Chem` だけが落ちる環境が
     # ある（Windows の Application Control は**ファイル単位**で効く）。必要なのは
     # 「パッケージが在るか」ではなく「InChI を導出できるか」なので、本番と同じ判定を使う。
-    from lipidmix.mztab.identity import rdkit_available
+    from metabolomix.mztab.identity import rdkit_available
     if not rdkit_available():
         pytest.skip("RDKit の native DLL を読めない環境では smiles 経路を検証できない")
     ds = _build_text(tmp_path, _SMILES_MZTAB, "Height_smiles.mzTab")

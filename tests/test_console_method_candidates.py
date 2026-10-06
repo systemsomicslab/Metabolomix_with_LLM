@@ -8,7 +8,7 @@ from __future__ import annotations
 import json as _json
 from pathlib import Path
 
-from lipidmix.tools.console_tools import console_method_candidates
+from metabolomix.tools.console_tools import console_method_candidates
 
 
 def _write_param(directory: Path, name: str, ion: str = "Positive") -> Path:
@@ -55,7 +55,7 @@ def test_truncates_the_candidate_list_beyond_the_cap(tmp_path):
     n_candidates は総数のまま、candidates は上限までに切り、切ったときだけ
     truncated が立つ（切っていないときは truncated キー自体が無い）。
     """
-    from lipidmix.console.method_file import MAX_REPORTED_CANDIDATES
+    from metabolomix.console.method_file import MAX_REPORTED_CANDIDATES
     root = tmp_path / "POS"
     root.mkdir()
     n_siblings = MAX_REPORTED_CANDIDATES + 2

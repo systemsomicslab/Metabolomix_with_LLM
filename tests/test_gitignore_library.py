@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.library import store
+from metabolomix.library import store
 
 ROOT = Path(__file__).resolve().parents[1]
 

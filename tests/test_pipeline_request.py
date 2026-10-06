@@ -1,7 +1,7 @@
 """pipeline-request.v1 の厳密な解決・更新契約（spec §10.1）を検証する。
 
 resolve_request/merge_updates/validate_request/request_fingerprint はすべて
-lipidmix.pipeline.request にある。実rawや既存成果物は使わない
+metabolomix.pipeline.request にある。実rawや既存成果物は使わない
 （tmp_path上に空のsource_rootを作るだけ）。
 """
 import copy
@@ -9,8 +9,8 @@ import math
 
 import pytest
 
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.pipeline.request import (
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.pipeline.request import (
     UPDATABLE,
     merge_updates,
     request_fingerprint,
@@ -568,7 +568,7 @@ def _source_with_request_file(tmp_path, payload) -> "Path":
     import json
     from pathlib import Path
 
-    from lipidmix.pipeline.request import REQUEST_FILE_NAME
+    from metabolomix.pipeline.request import REQUEST_FILE_NAME
 
     root = tmp_path / "source"
     root.mkdir(exist_ok=True)

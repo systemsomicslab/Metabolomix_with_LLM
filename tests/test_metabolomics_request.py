@@ -1,7 +1,7 @@
 """pipeline-request.v2 の解決・更新契約（spec §6, §6.2）を検証する。
 
 request_v2.resolve/validate_statistics/merge_updates はすべて
-lipidmix.pipeline.request_v2 にある。既存v1 (lipidmix.pipeline.request) は
+metabolomix.pipeline.request_v2 にある。既存v1 (metabolomix.pipeline.request) は
 schemaディスパッチだけを追加で持ち、v1自身の挙動（既定値・null・更新）は
 一切変えない——tests/test_pipeline_request.py の既存assertは変更しない。
 
@@ -16,10 +16,10 @@ import json
 
 import pytest
 
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.pipeline import request as request_v1
-from lipidmix.pipeline import request_v2
-from lipidmix.pipeline.request_v2 import merge_updates, resolve, validate_statistics
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.pipeline import request as request_v1
+from metabolomix.pipeline import request_v2
+from metabolomix.pipeline.request_v2 import merge_updates, resolve, validate_statistics
 
 
 def _profile(matrix_recipes=None, feature_targets=None, statistics=None):
@@ -525,7 +525,7 @@ def test_resolve_does_not_mutate_input_profile_or_data():
 
 # ---------- Concern 1: analysis-request.json の4段優先順位 ----------
 # spec §6「値の優先順位はMCP明示値 > analysis-request.json > profile既定値 >
-# v2既定値」。lipidmix.pipeline.request.resolve_request が v1 と同じ場所
+# v2既定値」。metabolomix.pipeline.request.resolve_request が v1 と同じ場所
 # （request層自身）でファイルを読むので、v2でもここで読む。
 
 def _write_request_file(root, payload):

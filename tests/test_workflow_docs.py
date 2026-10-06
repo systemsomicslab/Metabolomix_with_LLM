@@ -11,9 +11,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = REPO_ROOT / "docs" / "workflow"
 
-# 呼び出し連鎖行の書式:  `1. └─ lipidmix/arf/reader.py  run_pca()`
+# 呼び出し連鎖行の書式:  `1. └─ metabolomix/arf/reader.py  run_pca()`
 # 分岐（排他的な if/else 経路）は `├─` / `│  └─` で表し、経路の説明を角括弧で
-# 添えてよい: `4. ├─ [specs 省略時] lipidmix/tools/samples.py  _apply_role_filter()`
+# 添えてよい: `4. ├─ [specs 省略時] metabolomix/tools/samples.py  _apply_role_filter()`
 CHAIN_RE = re.compile(
     r"^\s*\d+\.\s*(?:[└├│─]\s*)*(?:\[[^\]]*\]\s*)?"
     r"(?P<path>[\w/]+\.py)\s+(?P<func>[\w.]+)\(\)"

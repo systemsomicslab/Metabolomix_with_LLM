@@ -5,9 +5,9 @@ from unittest import mock
 import numpy as np
 
 import server
-from lipidmix.analysis import export_contract
-from lipidmix.core import session_state
-from lipidmix.arf import tools as tools_arf
+from metabolomix.analysis import export_contract
+from metabolomix.core import session_state
+from metabolomix.arf import tools as tools_arf
 
 
 def _run_preprocess_and_differential():
@@ -292,7 +292,7 @@ class TestTopHitAnnotation(unittest.TestCase):
             sibling = Path(tmp) / "AlignmentResult_2026_01_01_00_00_00.arf2"
             sibling.write_bytes(b"")
             with mock.patch.object(tools_arf, "_sibling_arf2_path", return_value=sibling), \
-                 mock.patch("lipidmix.arf2.reader.deserialize", return_value=arf2_spots):
+                 mock.patch("metabolomix.arf2.reader.deserialize", return_value=arf2_spots):
                 out = json.loads(server.arf_differential(group_a="A", group_b="B"))
         top = out["summary"]["top"][0]
         self.assertEqual(top["name"], "SL 33:0;O|SL 17:0;O/16:0")
@@ -443,7 +443,7 @@ class TestDifferentialSignDisclosure(unittest.TestCase):
         self.assertEqual(payload["differential_contract_version"], 1)
         self.assertIn("group_b", payload["log2fc_sign"])
         # ブリーフは `server.session_state...` と書くが、server は wildcard import
-        # （from lipidmix.arf.tools import *）経由で __all__ に無い session_state を
+        # （from metabolomix.arf.tools import *）経由で __all__ に無い session_state を
         # 再エクスポートしていないため AttributeError になる。本ファイルの既存テスト
         # （例: line 122 の last = session_state.session.arf.last_differential）に
         # 倣い、直接 import した session_state を参照する。

@@ -25,9 +25,9 @@ import math
 import numpy as np
 import pytest
 
-from lipidmix.analysis.feature_export import export_features, export_statistic
-from lipidmix.mztab.dataset_state import DatasetState
-from lipidmix.pipeline.report import analysis_status, required_outputs_v2
+from metabolomix.analysis.feature_export import export_features, export_statistic
+from metabolomix.mztab.dataset_state import DatasetState
+from metabolomix.pipeline.report import analysis_status, required_outputs_v2
 
 
 # ---------- brief記載のRED ----------
@@ -371,7 +371,7 @@ def test_pathway_tsv_is_not_a_required_v2_output():
 
 
 def test_v1_required_outputs_are_unchanged():
-    from lipidmix.pipeline.report import required_outputs
+    from metabolomix.pipeline.report import required_outputs
 
     v1 = required_outputs({"save_project": False, "effective_target": "exploratory",
                            "comparisons": []})
@@ -382,13 +382,13 @@ def test_v1_required_outputs_are_unchanged():
 
 def test_v1_export_meta_is_unchanged_without_an_effect_size_definition():
     """v1の結果にはこの欄が無い。無い結果へ行を足さない。"""
-    from lipidmix.analysis.dataset_export import _effect_size_lines
+    from metabolomix.analysis.dataset_export import _effect_size_lines
 
     assert _effect_size_lines({"provenance": {}}) == []
 
 
 def test_v2_effect_size_definition_is_inherited_into_the_meta():
-    from lipidmix.analysis.dataset_export import _effect_size_lines
+    from metabolomix.analysis.dataset_export import _effect_size_lines
 
     lines = _effect_size_lines(
         {"effect_size_definition": "log2_arithmetic_mean_ratio"})

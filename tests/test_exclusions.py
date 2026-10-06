@@ -1,5 +1,5 @@
 import unittest
-from lipidmix.arf import exclusions
+from metabolomix.arf import exclusions
 
 
 def _row(file_id, name, height):

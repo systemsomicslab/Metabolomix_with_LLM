@@ -2,10 +2,10 @@ import json
 
 import pytest
 
-from lipidmix.core import mcp_core, session_state
-from lipidmix.curation import flags, suggest
-from lipidmix.library import store as library_store
-from lipidmix.tools import curation_tools
+from metabolomix.core import mcp_core, session_state
+from metabolomix.curation import flags, suggest
+from metabolomix.library import store as library_store
+from metabolomix.tools import curation_tools
 from tests.curation_fixtures import write_alignment_set, write_suggest_set
 
 
@@ -254,7 +254,7 @@ def test_review_trend_summary_has_outlier_counts(ready, monkeypatch):
 # --- 送信で `_tags.xml` の Misannotation を反映（ユーザー決定 2026-09-29）:
 # 「間違い」→ 付ける、取消（clear）→ 外す、「疑わしい」→ 触らない。flags.jsonl が正本。---
 
-from lipidmix.msdial import tags as msdial_tags
+from metabolomix.msdial import tags as msdial_tags
 
 
 def _submit(review_id, entries):

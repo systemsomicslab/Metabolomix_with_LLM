@@ -1,5 +1,5 @@
 # tests/test_console_completion.py
-"""Console完了ゲート（lipidmix.console.validation）の検証。
+"""Console完了ゲート（metabolomix.console.validation）の検証。
 
 exit_code=0・termination=exited だけでは「完了」ではない。主mzTab-Mが構造的に
 妥当で、定量行列に有限値があり、予定した準備済みraw全件がassayへ1対1で
@@ -18,25 +18,25 @@ from tests.pipeline_fixtures import execution_record, write_mztab
 # ---------- completion_status ----------
 
 def test_intermediate_output_is_not_completed():
-    from lipidmix.console.validation import completion_status
+    from metabolomix.console.validation import completion_status
     receipt = execution_record(exit_code=1)
     validation = {"ok": False, "errors": ["PRIMARY_MZTAB_MISSING"]}
     assert completion_status(receipt, validation, has_artifacts=True) == "partial"
 
 
 def test_zero_exit_with_invalid_mztab_is_not_completed():
-    from lipidmix.console.validation import completion_status
+    from metabolomix.console.validation import completion_status
     assert completion_status(execution_record(), {"ok": False}, True) != "completed"
 
 
 def test_zero_exit_with_valid_mztab_is_completed():
-    from lipidmix.console.validation import completion_status
+    from metabolomix.console.validation import completion_status
     validation = {"ok": True, "errors": [], "warnings": []}
     assert completion_status(execution_record(), validation, True) == "completed"
 
 
 def test_failed_execution_without_artifacts_is_failed():
-    from lipidmix.console.validation import completion_status
+    from metabolomix.console.validation import completion_status
     receipt = execution_record(exit_code=1)
     validation = {"ok": False, "errors": ["PRIMARY_MZTAB_MISSING"]}
     assert completion_status(receipt, validation, has_artifacts=False) == "failed"
@@ -44,7 +44,7 @@ def test_failed_execution_without_artifacts_is_failed():
 
 def test_non_exited_termination_with_valid_validation_is_not_completed():
     """terminationがexitedでなければ、validationがokでもcompletedにしない。"""
-    from lipidmix.console.validation import completion_status
+    from metabolomix.console.validation import completion_status
     receipt = execution_record(exit_code=None, termination="timeout")
     validation = {"ok": True, "errors": [], "warnings": []}
     assert completion_status(receipt, validation, has_artifacts=True) == "partial"
@@ -52,7 +52,7 @@ def test_non_exited_termination_with_valid_validation_is_not_completed():
 
 def test_bool_exit_code_is_not_treated_as_int():
     """execution.validate_execution_recordと同じ厳密さ: type(rc) is int のみ許容する。"""
-    from lipidmix.console.validation import completion_status
+    from metabolomix.console.validation import completion_status
     receipt = execution_record(exit_code=True)  # bool は int のサブクラスだが弾く
     validation = {"ok": True, "errors": [], "warnings": []}
     assert completion_status(receipt, validation, has_artifacts=True) == "partial"
@@ -61,8 +61,8 @@ def test_bool_exit_code_is_not_treated_as_int():
 # ---------- write_mztab fixtureが実物のreader/validatorに通ることの検証 ----------
 
 def test_write_mztab_passes_real_parser_and_validator(tmp_path):
-    from lipidmix.mztab.reader import parse_mztab, extract_abundance_matrix
-    from lipidmix.mztab.validator import validate_mztab
+    from metabolomix.mztab.reader import parse_mztab, extract_abundance_matrix
+    from metabolomix.mztab.validator import validate_mztab
 
     raws = [tmp_path / "raw" / "S1.raw", tmp_path / "raw" / "S2.raw"]
     for r in raws:
@@ -85,7 +85,7 @@ def test_write_mztab_passes_real_parser_and_validator(tmp_path):
 
 
 def test_write_mztab_without_inchikey_writes_null_identifier(tmp_path):
-    from lipidmix.mztab.reader import parse_mztab
+    from metabolomix.mztab.reader import parse_mztab
     raws = [tmp_path / "S1.raw"]
     raws[0].write_bytes(b"\x00")
     mztab_path = write_mztab(tmp_path / "a.mzTab", raws, with_inchikey=False)
@@ -97,7 +97,7 @@ def test_write_mztab_without_inchikey_writes_null_identifier(tmp_path):
 # ---------- map_assays ----------
 
 def _job(tmp_path, *, polarity="negative", measure="peak_height", mztab_rel="AlignResult-1.mzTab"):
-    from lipidmix.handoff.schema import AnalysisJob, MztabEntry, SCHEMA_VERSION
+    from metabolomix.handoff.schema import AnalysisJob, MztabEntry, SCHEMA_VERSION
     run_dir = tmp_path / "runs" / "job_test"
     run_dir.mkdir(parents=True, exist_ok=True)
     return AnalysisJob(
@@ -114,8 +114,8 @@ def _job(tmp_path, *, polarity="negative", measure="peak_height", mztab_rel="Ali
 
 def test_map_assays_matches_via_decoded_uri_not_display_name(tmp_path):
     """assay[N]の表示名（S1等）が何であってもURIの実パスだけで結合する。"""
-    from lipidmix.mztab.reader import parse_mztab
-    from lipidmix.console.validation import map_assays
+    from metabolomix.mztab.reader import parse_mztab
+    from metabolomix.console.validation import map_assays
 
     raws = [tmp_path / "raw" / "Sample A.raw", tmp_path / "raw" / "Sample B.raw"]
     for r in raws:
@@ -134,8 +134,8 @@ def test_map_assays_matches_via_decoded_uri_not_display_name(tmp_path):
 
 def test_map_assays_decodes_url_characters_and_unicode_whitespace(tmp_path):
     """空白・日本語を含むファイル名でも file URI のURLエンコードを正しくdecodeする。"""
-    from lipidmix.mztab.reader import parse_mztab
-    from lipidmix.console.validation import map_assays
+    from metabolomix.mztab.reader import parse_mztab
+    from metabolomix.console.validation import map_assays
 
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
@@ -151,8 +151,8 @@ def test_map_assays_decodes_url_characters_and_unicode_whitespace(tmp_path):
 
 def test_map_assays_normalizes_windows_case_for_matching(tmp_path):
     """Windowsのパス照合は大文字小文字を正規化する。"""
-    from lipidmix.mztab.reader import parse_mztab
-    from lipidmix.console.validation import map_assays
+    from metabolomix.mztab.reader import parse_mztab
+    from metabolomix.console.validation import map_assays
 
     raw = tmp_path / "raw" / "S1.raw"
     raw.parent.mkdir(parents=True, exist_ok=True)
@@ -167,8 +167,8 @@ def test_map_assays_normalizes_windows_case_for_matching(tmp_path):
 
 def test_map_assays_leaves_unmatched_location_as_is_when_not_staged(tmp_path):
     """staged_sourcesに無いassayは、decode済みの実パスのまま残す（黙って捨てない）。"""
-    from lipidmix.mztab.reader import parse_mztab
-    from lipidmix.console.validation import map_assays
+    from metabolomix.mztab.reader import parse_mztab
+    from metabolomix.console.validation import map_assays
 
     raw = tmp_path / "raw" / "S1.raw"
     raw.parent.mkdir(parents=True, exist_ok=True)
@@ -183,7 +183,7 @@ def test_map_assays_leaves_unmatched_location_as_is_when_not_staged(tmp_path):
 # ---------- validate_outputs ----------
 
 def test_validate_outputs_ok_when_everything_matches(tmp_path):
-    from lipidmix.console.validation import validate_outputs
+    from metabolomix.console.validation import validate_outputs
 
     raws = [tmp_path / "raw" / "S1.raw", tmp_path / "raw" / "S2.raw"]
     for r in raws:
@@ -206,7 +206,7 @@ def test_validate_outputs_ok_when_everything_matches(tmp_path):
 
 def test_validate_outputs_fails_on_missing_prepared_raw(tmp_path):
     """準備済みrawの一部がassayから欠落しているとok=false。"""
-    from lipidmix.console.validation import validate_outputs
+    from metabolomix.console.validation import validate_outputs
 
     raws = [tmp_path / "raw" / "S1.raw"]
     raws[0].parent.mkdir(parents=True, exist_ok=True)
@@ -223,7 +223,7 @@ def test_validate_outputs_fails_on_missing_prepared_raw(tmp_path):
 
 def test_validate_outputs_fails_on_unexpected_extra_sample(tmp_path):
     """mzTabのassayがstaged_sourcesに無いrawを指しているとok=false。"""
-    from lipidmix.console.validation import validate_outputs
+    from metabolomix.console.validation import validate_outputs
 
     raws = [tmp_path / "raw" / "S1.raw", tmp_path / "raw" / "Extra.raw"]
     for r in raws:
@@ -241,7 +241,7 @@ def test_validate_outputs_fails_on_unexpected_extra_sample(tmp_path):
 
 def test_validate_outputs_fails_when_one_raw_has_multiple_assays(tmp_path):
     """1rawから複数assayが出るのは初期版の契約外として停止する。"""
-    from lipidmix.console.validation import validate_outputs
+    from metabolomix.console.validation import validate_outputs
 
     raw = tmp_path / "raw" / "S1.raw"
     raw.parent.mkdir(parents=True, exist_ok=True)
@@ -274,8 +274,8 @@ def test_validate_outputs_fails_when_one_raw_has_multiple_assays(tmp_path):
 
 def test_validate_outputs_fails_on_ambiguous_primary_candidates(tmp_path):
     """候補が複数あればok=false（正準選択の一意性）。"""
-    from lipidmix.handoff.schema import MztabEntry
-    from lipidmix.console.validation import validate_outputs
+    from metabolomix.handoff.schema import MztabEntry
+    from metabolomix.console.validation import validate_outputs
 
     raw = tmp_path / "raw" / "S1.raw"
     raw.parent.mkdir(parents=True, exist_ok=True)
@@ -295,7 +295,7 @@ def test_validate_outputs_fails_on_ambiguous_primary_candidates(tmp_path):
 
 def test_validate_outputs_fails_on_empty_numeric_matrix(tmp_path):
     """特徴量0件（数値行列が空）はok=false。"""
-    from lipidmix.console.validation import validate_outputs
+    from metabolomix.console.validation import validate_outputs
 
     raw = tmp_path / "raw" / "S1.raw"
     raw.parent.mkdir(parents=True, exist_ok=True)
@@ -325,7 +325,7 @@ def test_validate_outputs_structure_errors_are_stable_codes_not_raw_prose(tmp_pa
     捨てずに`structure_errors`で読める。
     """
     import re
-    from lipidmix.console.validation import validate_outputs
+    from metabolomix.console.validation import validate_outputs
 
     raw = tmp_path / "raw" / "S1.raw"
     raw.parent.mkdir(parents=True, exist_ok=True)
@@ -354,7 +354,7 @@ def test_validate_outputs_structure_errors_are_stable_codes_not_raw_prose(tmp_pa
 
 def test_validate_outputs_fails_on_all_nan_matrix(tmp_path):
     """特徴量はあるが全欠損（有限値なし）はok=false。"""
-    from lipidmix.console.validation import validate_outputs
+    from metabolomix.console.validation import validate_outputs
 
     raw = tmp_path / "raw" / "S1.raw"
     raw.parent.mkdir(parents=True, exist_ok=True)
@@ -380,7 +380,7 @@ def test_validate_outputs_fails_on_all_nan_matrix(tmp_path):
 
 def test_validate_outputs_fails_on_measure_mismatch(tmp_path):
     """ファイル名がAreaなのにjobがpeak_heightを宣言しているのは致命的不一致。"""
-    from lipidmix.console.validation import validate_outputs
+    from metabolomix.console.validation import validate_outputs
 
     raws = [tmp_path / "raw" / "S1.raw"]
     raws[0].parent.mkdir(parents=True, exist_ok=True)
@@ -395,7 +395,7 @@ def test_validate_outputs_fails_on_measure_mismatch(tmp_path):
 
 def test_validate_outputs_fails_on_polarity_majority_mismatch(tmp_path):
     """宣言はnegativeだがアダクト多数決はpositive、は致命的不一致。"""
-    from lipidmix.console.validation import validate_outputs
+    from metabolomix.console.validation import validate_outputs
 
     raw = tmp_path / "raw" / "S1.raw"
     raw.parent.mkdir(parents=True, exist_ok=True)
@@ -424,7 +424,7 @@ def test_validate_outputs_fails_on_polarity_majority_mismatch(tmp_path):
 
 
 def test_validate_outputs_fails_when_primary_missing(tmp_path):
-    from lipidmix.console.validation import validate_outputs
+    from metabolomix.console.validation import validate_outputs
     job = _job(tmp_path)
     job.primary_mztab_files = []
     result = validate_outputs(job, execution_record(), [])
@@ -436,7 +436,7 @@ def test_validate_outputs_fails_when_primary_missing(tmp_path):
 # ---------- 制御ファイルの除外（回帰） ----------
 
 def test_control_files_are_not_counted_as_artifacts(tmp_path):
-    from lipidmix.console.output_collector import collect_artifacts, snapshot
+    from metabolomix.console.output_collector import collect_artifacts, snapshot
 
     run_dir = tmp_path / "runs" / "job_test"
     run_dir.mkdir(parents=True)
@@ -460,11 +460,11 @@ def test_reserved_names_are_limited_to_files_something_actually_writes(tmp_path)
 
     `control.json` はどのコードも書かない予約名だった——将来 MS-DIAL が
     その名前で出力を書けば、収集が黙って捨てて「生成物ゼロ」に化ける。
-    実在する運用ファイル名（`lipidmix.console.execution` の定数）だけを
+    実在する運用ファイル名（`metabolomix.console.execution` の定数）だけを
     除外集合に置く。
     """
-    from lipidmix.console import execution
-    from lipidmix.console.output_collector import _OPERATIONAL_FILES, collect_artifacts, snapshot
+    from metabolomix.console import execution
+    from metabolomix.console.output_collector import _OPERATIONAL_FILES, collect_artifacts, snapshot
 
     assert "control.json" not in _OPERATIONAL_FILES
     assert execution.RECEIPT_FILENAME in _OPERATIONAL_FILES
@@ -490,7 +490,7 @@ def test_validate_outputs_fails_when_a_declared_assay_has_no_abundance_column(tm
     その検体の定量値はどこにも無いのに、残りの列だけで行列は非空・有限になる
     ——MTDだけで対応表を作ると、定量列が欠けたmzTabがcompletedとして通る。
     """
-    from lipidmix.console.validation import validate_outputs
+    from metabolomix.console.validation import validate_outputs
 
     raws = [tmp_path / "raw" / "S1.raw", tmp_path / "raw" / "S2.raw"]
     for r in raws:
@@ -522,7 +522,7 @@ def test_validate_outputs_fails_when_a_declared_assay_has_no_abundance_column(tm
 
 def test_validate_outputs_fails_on_an_abundance_column_without_an_assay(tmp_path):
     """どのassay対応にもぶら下がらない定量列は、どのrawの値か言えない。"""
-    from lipidmix.console.validation import validate_outputs
+    from metabolomix.console.validation import validate_outputs
 
     raw = tmp_path / "raw" / "S1.raw"
     raw.parent.mkdir(parents=True, exist_ok=True)
@@ -551,7 +551,7 @@ def test_validate_outputs_fails_on_an_abundance_column_without_an_assay(tmp_path
 
 def test_validate_outputs_accepts_a_one_to_one_assay_and_column_mapping(tmp_path):
     """正常な出力（assayと定量列が1対1）はそのまま通る。"""
-    from lipidmix.console.validation import validate_outputs
+    from metabolomix.console.validation import validate_outputs
 
     raws = [tmp_path / "raw" / "S1.raw", tmp_path / "raw" / "S2.raw"]
     for r in raws:
@@ -573,7 +573,7 @@ def test_validate_outputs_fails_when_the_entry_measure_differs_from_the_job(tmp_
     下流の`select_primary_entry`は**jobの宣言**で候補を選ぶので、この食い違いを
     通すと「completedなのに読めない」出力ができる。
     """
-    from lipidmix.console.validation import validate_outputs
+    from metabolomix.console.validation import validate_outputs
 
     raw = tmp_path / "raw" / "S1.raw"
     raw.parent.mkdir(parents=True, exist_ok=True)
@@ -593,7 +593,7 @@ def test_validate_outputs_fails_when_the_entry_measure_differs_from_the_job(tmp_
 
 
 def test_validate_outputs_fails_when_the_entry_polarity_differs_from_the_job(tmp_path):
-    from lipidmix.console.validation import validate_outputs
+    from metabolomix.console.validation import validate_outputs
 
     raw = tmp_path / "raw" / "S1.raw"
     raw.parent.mkdir(parents=True, exist_ok=True)

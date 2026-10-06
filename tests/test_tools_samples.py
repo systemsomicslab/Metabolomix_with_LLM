@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from lipidmix.core import mcp_core
+from metabolomix.core import mcp_core
 import server
-from lipidmix.core import session_state
+from metabolomix.core import session_state
 
 
 SAMPLES = [

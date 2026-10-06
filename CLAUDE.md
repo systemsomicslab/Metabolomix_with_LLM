@@ -43,7 +43,7 @@ C:/Python314/python.exe -m pytest tests -q
   pytest 関数形式で書かれたファイルは `unittest.TestCase` を継承しないため拾えない）。
   **テストの数はここに書かない**。pytest の出力が正準（写しだけが腐るため）。
 - MCP サーバ起動: `C:/Python314/python.exe server.py`（既定 stdio）。
-- パーサ単体の CLI: `python -m lipidmix.arf.reader --file <path> --pca` など（README「Command-line examples」）。
+- パーサ単体の CLI: `python -m metabolomix.arf.reader --file <path> --pca` など（README「Command-line examples」）。
 
 **Python は `C:/Python314/python.exe` を使う**（PATH 上の `python` も同じ実体で、依存はここに入っている）。
 Claude Code 用の `.mcp.json` はこれを絶対パスで指すが、`.git/info/exclude` でローカル除外されており
@@ -61,7 +61,7 @@ Claude Code 用の `.mcp.json` はこれを絶対パスで指すが、`.git/info
 **外部資産の場所は設定ファイルか環境変数で指す**（spec 2026-10-06）。リポジトリ直下の
 `lipidmix.local.toml`（追跡外。雛形 `lipidmix.example.toml`）の `[msdial] exe` `lbm` と
 `[library] msp_positive` `msp_negative`、または環境変数 `MSDIAL_EXE` `MSDIAL_LBM`
-`MSDIAL_MSP_POS` `MSDIAL_MSP_NEG`（環境変数が優先）。読むのは `lipidmix/core/user_config.py`
+`MSDIAL_MSP_POS` `MSDIAL_MSP_NEG`（環境変数が優先）。読むのは `metabolomix/core/user_config.py`
 の `get_setting` だけで、各リゾルバは `os.environ` を直に読まない。設定ファイルは呼ばれる
 たびに読むので再起動は要らない。テストは conftest がこれらの環境変数を消し
 `LIPIDMIX_CONFIG` を存在しないパスへ向けている（手元の設定ファイルを掴ませない）。
@@ -73,36 +73,42 @@ Claude Code 用の `.mcp.json` はこれを絶対パスで指すが、`.git/info
 
 ## 構成と、触るときの鉄則
 
-ルート直下の `.py` は `server.py` と `check.py` の 2 つだけ。実装は `lipidmix/` にある。
+ルート直下の `.py` は `server.py` と `check.py` の 2 つだけ。実装は `metabolomix/` にある。
+
+**パッケージ名は `metabolomix`（2026-10-06 に `lipidmix` から改名）だが、外部契約は旧名のまま**:
+環境変数 `LIPIDMIX_*`、MCP リソース URI `lipidmix://`、描画データの形式名
+`lipidmix.<名前>.vN`（Use-LLLM が読む）、設定ファイル `lipidmix.local.toml`。
+これらを `metabolomix` に揃えるのは将来の検討事項で、変えるなら移行期間と下流の同時更新が要る。
+新しく足すものもこの規則に合わせる（新しい環境変数も `LIPIDMIX_` で始める）。
 
 ```
-lipidmix/core/      FastMCP インスタンス・設定・セッション状態・パス解決・共通ヘルパ（依存グラフの leaf）
-lipidmix/msdial/    MS-DIAL 固有サイドカー（*_tags.xml / .mddata）・同定・ピーク検証・サンプル因子
-lipidmix/analysis/  入力形式に依存しない数値処理（前処理/QC・PCA・差次的解析・エクスポート契約）
-lipidmix/plots/     描画 payload の組み立てと matplotlib 描画（volcano / eic / render）
-lipidmix/{arf,arf2,pai2,dcl,eic}/   形式ごとの reader.py（パーサ）と tools.py（MCP ツール）
-lipidmix/mztab/     mzTab-M リーダ・DatasetState 構築
-lipidmix/library/   参照ライブラリ（.dbs / .msp）の読み取りと永続 store。
+metabolomix/core/      FastMCP インスタンス・設定・セッション状態・パス解決・共通ヘルパ（依存グラフの leaf）
+metabolomix/msdial/    MS-DIAL 固有サイドカー（*_tags.xml / .mddata）・同定・ピーク検証・サンプル因子
+metabolomix/analysis/  入力形式に依存しない数値処理（前処理/QC・PCA・差次的解析・エクスポート契約）
+metabolomix/plots/     描画 payload の組み立てと matplotlib 描画（volcano / eic / render）
+metabolomix/{arf,arf2,pai2,dcl,eic}/   形式ごとの reader.py（パーサ）と tools.py（MCP ツール）
+metabolomix/mztab/     mzTab-M リーダ・DatasetState 構築
+metabolomix/library/   参照ライブラリ（.dbs / .msp）の読み取りと永続 store。
                     形式ごとに分けないのは、2 つが同じレコード形と同じ store を
                     共有する 2 つの入口にすぎないため（spec 2026-09-19）
-lipidmix/console/   MS-DIAL Console 実行層（job_manager / runner / output_collector）
-lipidmix/pipeline/  生データフォルダ起点の統括（受付 request/inputs/store・独立 worker が回す engine・
+metabolomix/console/   MS-DIAL Console 実行層（job_manager / runner / output_collector）
+metabolomix/pipeline/  生データフォルダ起点の統括（受付 request/inputs/store・独立 worker が回す engine・
                     工程 handler の service・再開/取消の recovery・必須出力判定と品質レポートの report）
-lipidmix/handoff/   Console 成果物の受け渡しスキーマ（analysis-job.json）
-lipidmix/curation/  アラインメントのキュレーション（証拠収集・機械判別・フラグ記録・ビューア HTML）
-lipidmix/corpus/    蓄積ノートの純ロジック（knowledge_store / paper_ingest）
-lipidmix/tools/     形式に紐づかない MCP 公開層（入口・サンプル検索・目的・レポート・リソース）
+metabolomix/handoff/   Console 成果物の受け渡しスキーマ（analysis-job.json）
+metabolomix/curation/  アラインメントのキュレーション（証拠収集・機械判別・フラグ記録・ビューア HTML）
+metabolomix/corpus/    蓄積ノートの純ロジック（knowledge_store / paper_ingest）
+metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サンプル検索・目的・レポート・リソース）
 ```
 
 - **`server.py` は薄いファサード**。import 副作用で `@mcp.tool` を登録し、`from ... import *`
   （各モジュールの `__all__` ＝そのモジュールのツール名）で公開面を再エクスポートするだけ。
   新しいツールを足すときは、実体を該当モジュールに書き `__all__` に載せる。
 - **`server.py` をルートから動かさない**。`.mcp.json` / `.vscode/mcp.json` が絶対パスで指している。
-- **可変状態の正準は `lipidmix.core.mcp_core`（`DATA_DIR` `KNOWLEDGE_DIR` `ANALYSES_DIR`）と
-  `lipidmix.core.session_state`（`session`）**。`server.<name>` はスナップショット束縛にすぎないので、
+- **可変状態の正準は `metabolomix.core.mcp_core`（`DATA_DIR` `KNOWLEDGE_DIR` `ANALYSES_DIR`）と
+  `metabolomix.core.session_state`（`session`）**。`server.<name>` はスナップショット束縛にすぎないので、
   差し替え・モンキーパッチは必ず正準モジュール側に当てる。参照も `mcp_core.DATA_DIR` の
   module 修飾で行い、`from ... import DATA_DIR` を書かない。
-- **`lipidmix.core.mcp_core` は leaf**。ここから `lipidmix.<形式>.tools` や `lipidmix.tools.*` を
+- **`metabolomix.core.mcp_core` は leaf**。ここから `metabolomix.<形式>.tools` や `metabolomix.tools.*` を
   import してはならない（循環）。
 - **セッション状態はパーサ別に分離済み**: `session.arf` / `.arf2` / `.pai2` / `.eic`。あるパーサが
   別スロットを触ってはいけない（`pai2_parser` が ARF の前処理行列を無言破棄した過去のバグの再発防止）。
@@ -113,21 +119,21 @@ lipidmix/tools/     形式に紐づかない MCP 公開層（入口・サンプ�
   1 回出る。`caveat_emitted_kind` があるから、種別が確定したときにもう 1 回だけ届く。
 - **前提状態が無いときは例外でなく機械可読な封筒を返す**:
   `{"error": {"code": "missing_state", "state": ..., "required_tools": [...], "message": ...}}`
-  （`lipidmix/core/mcp_errors.py` の `missing_state`）。クライアントはこれを読んでリプレイする契約。
+  （`metabolomix/core/mcp_errors.py` の `missing_state`）。クライアントはこれを読んでリプレイする契約。
 - **reader の MessagePack Key インデックスの正解表は `docs/schema/*.md`**（MS-DIAL の C# クラス
   `[Key(N)]` から抽出した Key 番号表。上流のコミットと欠番も記載してある）。
   インデックス定数を変える前に必ず参照する。推測で直さない。
-- **`run_pca` の正準は `lipidmix/analysis/pca.py`**。`lipidmix/arf/reader.py` の同名は後方互換の
+- **`run_pca` の正準は `metabolomix/analysis/pca.py`**。`metabolomix/arf/reader.py` の同名は後方互換の
   再エクスポートで、ARF テストが `patch.object(server.arf_reader, "run_pca", ...)` で module 属性
   としてこの束縛を差し替えてモックしている。**消すとモックが効かなくなり、テストは緑のまま
   実物の scikit-learn PCA が走り出す。**
-- **差次的エクスポートの列定義は `lipidmix/analysis/export_contract.py` が唯一の正準**。
+- **差次的エクスポートの列定義は `metabolomix/analysis/export_contract.py` が唯一の正準**。
   ARF（`arf_export_differential`）と mzTab-M（`dataset_export_differential`）の両経路がここを
   共有しており、**別リポジトリ（massbank-context）との契約**でもある。列の追加・改名・並べ替えは
   `CONTRACT_VERSION` の引き上げと下流の同時更新なしにやってはいけない。
 - **ツールの戻り値を肥大させない**。戻り値はそのまま LLM の文脈を占め、結論が埋没する。
   守るべき決まりごと:
-  - JSON は `lipidmix.core.serialization.json_payload()` で返す（`json.dumps(..., indent=2)`
+  - JSON は `metabolomix.core.serialization.json_payload()` で返す（`json.dumps(..., indent=2)`
     を書かない。実測で戻り値の 15〜57% が空白だった）。
   - 行が並ぶ一覧は `arf2/reader.py format_spots_as_table()` の TSV（列名 1 回）。
   - float は丸めてから返す（既定 repr は 17 桁出る）。座標点列は `round_floats()`。
@@ -138,9 +144,9 @@ lipidmix/tools/     形式に紐づかない MCP 公開層（入口・サンプ�
   - 図は座標を LLM に渡すより**サーバで描いて画像で返す**ほうが 2 桁安い
     （volcano 実測: 点列 183,578 字 ≒数万トークン → PNG 327 画像トークン）。
     画像トークンは `幅×高さ/750` なので dpi は上げない（`plots/render.py`）。
-- **`lipidmix/pipeline/` は独立 worker プロセスが回す層**。守るべき決まりごと:
+- **`metabolomix/pipeline/` は独立 worker プロセスが回す層**。守るべき決まりごと:
   - **`pipeline/{engine,worker,service,recovery,store}.py` はグローバル session を import しない**
-    （`lipidmix.core.session_state` / `lipidmix.core.mcp_core` / `lipidmix.tools.*`。
+    （`metabolomix.core.session_state` / `metabolomix.core.mcp_core` / `metabolomix.tools.*`。
     `tests/test_pipeline_engine.py` の AST テストが固定している）。進行状況は
     `pipeline-run.json` と、そのプロセスだけが持つ `runtime` dict に住む。
   - **`core/atomic_io.py` と `core/process_control.py` と `core/user_config.py` は stdlib だけの leaf**。
@@ -203,7 +209,7 @@ lipidmix/tools/     形式に紐づかない MCP 公開層（入口・サンプ�
 - **フローが変わったら vault 側の流れ図も同じ作業の中で直す**。反映先は
   `C:\Users\yuu18\Documents\KnowledgeVault\30_Projects\ms-data-parser\ms-data-parser-flow.md`。
   対象は「利用者から見て何がどの順に起きるか」が変わる改修——入口の判定規則
-  （`lipidmix/core/mcp_core.py` の `MCP_INSTRUCTIONS` の ENTRY POINT / GATEWAY）、
+  （`metabolomix/core/mcp_core.py` の `MCP_INSTRUCTIONS` の ENTRY POINT / GATEWAY）、
   pipeline の stage 列（`pipeline/engine.py` `build_stages` /
   `pipeline/stage_plan.py` `BASE_V2_STAGE_IDS`）、前提状態の連鎖（どのツールが
   どのツールを `missing_state` で要求するか）、経路の増減（新しい入口・新しい解析枝）、

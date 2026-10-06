@@ -36,7 +36,7 @@ optional overrides:
 ```powershell
 $env:LIPIDMIX_DATA_DIR="C:\path\to\msdial\output"
 # Optional: keep accumulated notes outside the clone.
-# $env:LIPIDMIX_KNOWLEDGE_DIR="C:\path\to\lipidmix\knowledge"
+# $env:LIPIDMIX_KNOWLEDGE_DIR="C:\path\to\metabolomix\knowledge"
 python server.py
 ```
 
@@ -120,9 +120,9 @@ not "up to date".
 - Review `knowledge/_inbox` through `lipidmix://knowledge/inbox`, then promote
   or reject notes with `ingest_promote` / `ingest_reject`.
 - Note writes, promote, and reject operations serialize through a per-directory
-  lock file (`.lipidmix.lock`), so concurrent tool calls (for example, two MCP
+  lock file (`.metabolomix.lock`), so concurrent tool calls (for example, two MCP
   client sessions on the same machine) do not interleave writes to the same
-  directory. If a crashed process leaves a stale `.lipidmix.lock` behind, note
+  directory. If a crashed process leaves a stale `.metabolomix.lock` behind, note
   writes time out; delete the file once no server is running.
 - `pai2_parser` returns the PCA plot through MCP only. It no longer writes
   `pca_plot_latest.png` into the data directory.

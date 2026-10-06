@@ -3,9 +3,9 @@ import json
 import numpy as np
 import pytest
 
-from lipidmix.core import session_state
-from lipidmix.core.mcp_errors import MISSING_STATE
-from lipidmix.mztab.dataset_state import DatasetState
+from metabolomix.core import session_state
+from metabolomix.core.mcp_errors import MISSING_STATE
+from metabolomix.mztab.dataset_state import DatasetState
 
 
 @pytest.fixture(autouse=True)
@@ -41,7 +41,7 @@ def _groups(ds):
 # ---------- dataset_preprocess ----------
 
 def test_dataset_preprocess_without_dataset_returns_missing_state():
-    from lipidmix.tools.dataset_analysis_tools import dataset_preprocess
+    from metabolomix.tools.dataset_analysis_tools import dataset_preprocess
     parsed = json.loads(dataset_preprocess())
     assert parsed["error"]["code"] == MISSING_STATE
     assert parsed["error"]["required_tools"] == ["dataset_load"]
@@ -49,7 +49,7 @@ def test_dataset_preprocess_without_dataset_returns_missing_state():
 
 def test_dataset_preprocess_success_sets_pp_matrix():
     _load_ds()
-    from lipidmix.tools.dataset_analysis_tools import dataset_preprocess
+    from metabolomix.tools.dataset_analysis_tools import dataset_preprocess
     parsed = json.loads(dataset_preprocess())
     assert parsed["status"] == "success"
     assert parsed["n_samples"] == 8
@@ -62,7 +62,7 @@ def test_dataset_preprocess_success_sets_pp_matrix():
 def test_dataset_preprocess_bad_recipe_is_not_missing_state():
     """引数エラーは missing_state ではない（リプレイしても直らない）。"""
     _load_ds()
-    from lipidmix.tools.dataset_analysis_tools import dataset_preprocess
+    from metabolomix.tools.dataset_analysis_tools import dataset_preprocess
     parsed = json.loads(dataset_preprocess(normalize="not_a_method"))
     assert parsed["error"]["code"] != MISSING_STATE
     assert "not_a_method" in json.dumps(parsed, ensure_ascii=False)
@@ -72,7 +72,7 @@ def test_dataset_preprocess_bad_recipe_is_not_missing_state():
 
 def test_dataset_pca_requires_preprocess():
     _load_ds()
-    from lipidmix.tools.dataset_analysis_tools import dataset_pca
+    from metabolomix.tools.dataset_analysis_tools import dataset_pca
     parsed = json.loads(dataset_pca())
     assert parsed["error"]["code"] == MISSING_STATE
     assert parsed["error"]["required_tools"] == ["dataset_preprocess"]
@@ -80,7 +80,7 @@ def test_dataset_pca_requires_preprocess():
 
 def test_dataset_pca_success_omits_loadings_from_payload():
     _load_ds()
-    from lipidmix.tools.dataset_analysis_tools import dataset_pca, dataset_preprocess
+    from metabolomix.tools.dataset_analysis_tools import dataset_pca, dataset_preprocess
     dataset_preprocess()
     parsed = json.loads(dataset_pca(n_components=2))
     assert len(parsed["explained_variance_ratio"]) == 2
@@ -93,7 +93,7 @@ def test_dataset_pca_success_omits_loadings_from_payload():
 
 def test_dataset_differential_requires_preprocess():
     _load_ds()
-    from lipidmix.tools.dataset_analysis_tools import dataset_differential
+    from metabolomix.tools.dataset_analysis_tools import dataset_differential
     parsed = json.loads(dataset_differential(group_a=["ctrl_0"], group_b=["treat_0"]))
     assert parsed["error"]["code"] == MISSING_STATE
     assert parsed["error"]["required_tools"] == ["dataset_preprocess"]
@@ -101,7 +101,7 @@ def test_dataset_differential_requires_preprocess():
 
 def test_dataset_differential_success_returns_summary_only():
     ds = _load_ds()
-    from lipidmix.tools.dataset_analysis_tools import (
+    from metabolomix.tools.dataset_analysis_tools import (
         dataset_differential, dataset_preprocess,
     )
     dataset_preprocess()
@@ -118,7 +118,7 @@ def test_dataset_differential_success_returns_summary_only():
 
 def test_dataset_differential_small_group_is_bad_request():
     _load_ds()
-    from lipidmix.tools.dataset_analysis_tools import (
+    from metabolomix.tools.dataset_analysis_tools import (
         dataset_differential, dataset_preprocess,
     )
     dataset_preprocess()
@@ -129,7 +129,7 @@ def test_dataset_differential_small_group_is_bad_request():
 
 def test_dataset_differential_does_not_touch_arf_slot():
     _load_ds()
-    from lipidmix.tools.dataset_analysis_tools import (
+    from metabolomix.tools.dataset_analysis_tools import (
         dataset_differential, dataset_preprocess,
     )
     dataset_preprocess()
@@ -143,16 +143,16 @@ def test_dataset_differential_does_not_touch_arf_slot():
 
 def test_dataset_export_requires_differential(tmp_path):
     _load_ds()
-    from lipidmix.tools.dataset_analysis_tools import dataset_export_differential
+    from metabolomix.tools.dataset_analysis_tools import dataset_export_differential
     parsed = json.loads(dataset_export_differential(str(tmp_path / "out.tsv")))
     assert parsed["error"]["code"] == MISSING_STATE
     assert parsed["error"]["required_tools"] == ["dataset_differential"]
 
 
 def test_dataset_export_writes_contract_format(tmp_path):
-    from lipidmix.analysis.export_contract import CONTRACT_VERSION, EXPORT_COLUMNS
+    from metabolomix.analysis.export_contract import CONTRACT_VERSION, EXPORT_COLUMNS
     _load_ds()
-    from lipidmix.tools.dataset_analysis_tools import (
+    from metabolomix.tools.dataset_analysis_tools import (
         dataset_differential, dataset_export_differential, dataset_preprocess,
     )
     dataset_preprocess()
@@ -187,8 +187,8 @@ def test_dataset_export_applies_curation_flags_via_sibling_arf2(tmp_path):
     対応を数値で検証できたときだけ立つ) が無いと mztab_smf_id と MasterAlignmentID
     を同じ空間として扱ってよいと言えないため、ここで明示的に立てる。
     """
-    from lipidmix.curation import flags as curation_flags
-    from lipidmix.tools.dataset_analysis_tools import (
+    from metabolomix.curation import flags as curation_flags
+    from metabolomix.tools.dataset_analysis_tools import (
         dataset_differential, dataset_export_differential, dataset_preprocess,
     )
 
@@ -231,8 +231,8 @@ def test_dataset_export_applies_curation_flags_via_sibling_arf2(tmp_path):
     assert meta[0].startswith("# curation = applied\t")
 
 def test_dataset_export_applies_assign_and_redundant(tmp_path):
-    from lipidmix.curation import flags as curation_flags
-    from lipidmix.tools.dataset_analysis_tools import (
+    from metabolomix.curation import flags as curation_flags
+    from metabolomix.tools.dataset_analysis_tools import (
         dataset_differential, dataset_export_differential, dataset_preprocess,
     )
 
@@ -273,8 +273,8 @@ def test_dataset_export_applies_assign_and_redundant(tmp_path):
 
 def test_dataset_export_drops_an_assign_without_inchikey(tmp_path):
     """R10: 記録した InChIKey が空の assign は、同定なしの行として落ちる（ARF 経路と同じ）。"""
-    from lipidmix.curation import flags as curation_flags
-    from lipidmix.tools.dataset_analysis_tools import (
+    from metabolomix.curation import flags as curation_flags
+    from metabolomix.tools.dataset_analysis_tools import (
         dataset_differential, dataset_export_differential, dataset_preprocess,
     )
 
@@ -311,8 +311,8 @@ def test_dataset_export_drops_an_assign_without_inchikey(tmp_path):
 
 def test_dataset_export_reports_a_malformed_flags_file(tmp_path):
     """I6: 壊れた flags.jsonl は wrong を黙って落とさず、ファイルと行を名指しで止める。"""
-    from lipidmix.curation import flags as curation_flags
-    from lipidmix.tools.dataset_analysis_tools import (
+    from metabolomix.curation import flags as curation_flags
+    from metabolomix.tools.dataset_analysis_tools import (
         dataset_differential, dataset_export_differential, dataset_preprocess,
     )
 
@@ -343,7 +343,7 @@ def test_dataset_export_refuses_without_inchikey(tmp_path):
     ds.feature_metadata = {fid: {"name": None, "mz": None, "rt": None,
                                  "inchikey": None, "inchikey_source": "none"}
                            for fid in ds.feature_ids}
-    from lipidmix.tools.dataset_analysis_tools import (
+    from metabolomix.tools.dataset_analysis_tools import (
         dataset_differential, dataset_export_differential, dataset_preprocess,
     )
     dataset_preprocess()
@@ -360,7 +360,7 @@ def test_dataset_export_refuses_without_inchikey(tmp_path):
 # --- min_detection_rate（evidence sidecar 由来）---
 
 def test_dataset_preprocess_accepts_min_detection_rate():
-    from lipidmix.tools.dataset_analysis_tools import dataset_preprocess
+    from metabolomix.tools.dataset_analysis_tools import dataset_preprocess
     ds = _load_ds(n_features=4, n_samples=4)
     ds.detected_mask = np.array([
         [True, True, True, True],
@@ -378,7 +378,7 @@ def test_dataset_preprocess_accepts_min_detection_rate():
 
 
 def test_dataset_preprocess_min_detection_rate_without_state_is_bad_request():
-    from lipidmix.tools.dataset_analysis_tools import dataset_preprocess
+    from metabolomix.tools.dataset_analysis_tools import dataset_preprocess
     _load_ds(n_features=4, n_samples=4)
     payload = json.loads(dataset_preprocess(min_detection_rate=0.5))
     # missing_state ではない——別ツールを呼んでも直らない引数由来のエラー
@@ -387,7 +387,7 @@ def test_dataset_preprocess_min_detection_rate_without_state_is_bad_request():
 
 
 def test_dataset_preprocess_reports_detection_when_available():
-    from lipidmix.tools.dataset_analysis_tools import dataset_preprocess
+    from metabolomix.tools.dataset_analysis_tools import dataset_preprocess
     ds = _load_ds(n_features=2, n_samples=4)
     ds.detected_mask = np.array([[True, True, True, True],
                                  [True, False, False, False]])
@@ -401,7 +401,7 @@ def test_dataset_preprocess_reports_detection_when_available():
 # 出た数字を並べる。ツール層でもその境界が効いていることを確かめる。
 
 def test_tools_report_the_result_id_of_each_computation():
-    from lipidmix.tools.dataset_analysis_tools import (
+    from metabolomix.tools.dataset_analysis_tools import (
         dataset_differential, dataset_pca, dataset_preprocess)
     ds = _load_ds()
     pp = json.loads(dataset_preprocess())
@@ -414,7 +414,7 @@ def test_tools_report_the_result_id_of_each_computation():
 
 def test_repreprocessing_makes_the_previous_comparison_unavailable(tmp_path):
     """古い結果を「直近の結果」として書き出させない。"""
-    from lipidmix.tools.dataset_analysis_tools import (
+    from metabolomix.tools.dataset_analysis_tools import (
         dataset_differential, dataset_export_differential, dataset_preprocess)
     ds = _load_ds()
     dataset_preprocess()
@@ -455,7 +455,7 @@ def _manifest_text(ds, groups):
 
 
 def test_dataset_set_sample_metadata_without_dataset_returns_missing_state():
-    from lipidmix.tools.dataset_analysis_tools import dataset_set_sample_metadata
+    from metabolomix.tools.dataset_analysis_tools import dataset_set_sample_metadata
     parsed = json.loads(dataset_set_sample_metadata("manifest.tsv"))
     assert parsed["error"]["code"] == MISSING_STATE
     assert parsed["error"]["required_tools"] == ["dataset_load"]
@@ -467,7 +467,7 @@ def test_dataset_set_sample_metadata_success_applies_rows(tmp_path):
     groups = ["ctrl"] * 4 + ["treat"] * 4
     manifest.write_text(_manifest_text(ds, groups), encoding="utf-8")
 
-    from lipidmix.tools.dataset_analysis_tools import dataset_set_sample_metadata
+    from metabolomix.tools.dataset_analysis_tools import dataset_set_sample_metadata
     parsed = json.loads(dataset_set_sample_metadata(str(manifest)))
 
     assert parsed["status"] == "success"
@@ -487,7 +487,7 @@ def test_dataset_set_sample_metadata_invalid_sheet_does_not_touch_session(tmp_pa
     )
     before_revision = ds.metadata_revision
 
-    from lipidmix.tools.dataset_analysis_tools import dataset_set_sample_metadata
+    from metabolomix.tools.dataset_analysis_tools import dataset_set_sample_metadata
     parsed = json.loads(dataset_set_sample_metadata(str(manifest)))
 
     assert parsed["error"]["code"] != MISSING_STATE
@@ -496,7 +496,7 @@ def test_dataset_set_sample_metadata_invalid_sheet_does_not_touch_session(tmp_pa
 
 
 def test_export_records_which_result_it_came_from(tmp_path):
-    from lipidmix.tools.dataset_analysis_tools import (
+    from metabolomix.tools.dataset_analysis_tools import (
         dataset_differential, dataset_export_differential, dataset_preprocess)
     ds = _load_ds()
     dataset_preprocess()

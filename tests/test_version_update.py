@@ -10,7 +10,7 @@ import json as _json
 
 import pytest
 
-from lipidmix.core import version
+from metabolomix.core import version
 
 
 @pytest.fixture(autouse=True)
@@ -136,9 +136,9 @@ def test_start_update_check_runs_once(monkeypatch):
 
 def test_dataset_status_carries_notice(monkeypatch):
     import numpy as np
-    from lipidmix.core import session_state
-    from lipidmix.mztab.dataset_state import DatasetState
-    from lipidmix.tools.mztab_tools import dataset_status
+    from metabolomix.core import session_state
+    from metabolomix.mztab.dataset_state import DatasetState
+    from metabolomix.tools.mztab_tools import dataset_status
 
     ds = DatasetState()
     ds.feature_matrix = np.ones((2, 2))
@@ -157,8 +157,8 @@ def test_dataset_status_carries_notice(monkeypatch):
 
 
 def test_console_status_carries_notice(tmp_path, monkeypatch):
-    from lipidmix.console.job_manager import create_job
-    from lipidmix.tools.console_tools import console_status
+    from metabolomix.console.job_manager import create_job
+    from metabolomix.tools.console_tools import console_status
 
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
@@ -176,8 +176,8 @@ def test_console_status_carries_notice(tmp_path, monkeypatch):
 
 def test_load_dataset_shows_notice(tmp_path, monkeypatch):
     """入口ツールは Markdown を返すので、キーではなく 1 行のブロックで出す。"""
-    from lipidmix.core import mcp_core, session_state
-    from lipidmix.tools.dataset import load_dataset
+    from metabolomix.core import mcp_core, session_state
+    from metabolomix.tools.dataset import load_dataset
 
     session_state.session = session_state.AnalysisSession()
     original = mcp_core.DATA_DIR

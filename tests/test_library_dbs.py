@@ -6,7 +6,7 @@ import lz4.block
 import msgpack
 import pytest
 
-from lipidmix.library import dbs
+from metabolomix.library import dbs
 from tests.dbs_fixture import pack_chunk as _pack_chunk
 from tests.dbs_fixture import record as _record
 from tests.dbs_fixture import write_dbs

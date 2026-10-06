@@ -16,7 +16,7 @@ MS-DIAL（MsdialWorkbench）の C# クラス `CompMs.MsdialCore.DataObj.Alignmen
 - 照合したコミット: `45a531c`（2026-09-02）
 - **この表は Key 番号とメンバ名・型の対応だけを写したもので、上流のソースコードは含まない。**
 - MS-DIAL 側でクラスが変わったら、上流の同ファイルを開いて `[Key(N)]` を読み直し、
-  この表を更新する。実装（`lipidmix/*/reader.py`）から逆算して直してはいけない。
+  この表を更新する。実装（`metabolomix/*/reader.py`）から逆算して直してはいけない。
 
 表は **Key 番号の昇順**で並べている（上流のソース上の宣言順とは一致しない）。
 
@@ -98,6 +98,6 @@ MessagePack 上では、下の型は配列として入れ子で載る。**この
 
 ## 本リポジトリのリーダが読む Key
 
-`lipidmix/arf/reader.py` の `_convert_to_alignment_feature()`:
+`metabolomix/arf/reader.py` の `_convert_to_alignment_feature()`:
 Key 0（FileID）, 2（ギャップフィル判定）, 3, 9, 10（MS/MS 取得判定）, 15→16（RT。Key15 が無い場合のみ
 Key16 で代替）, 18, 20, 21, 22, 37（index0=EstimatedNoise / index1=S/N）。

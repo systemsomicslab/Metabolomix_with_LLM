@@ -1,4 +1,4 @@
-from lipidmix.msdial.analysis_params import (
+from metabolomix.msdial.analysis_params import (
     DEFAULT_ADDUCTS, find_param_file, read_analysis_params, resolve_analysis_params)
 
 PARAM = """# Project information

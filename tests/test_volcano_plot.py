@@ -8,7 +8,7 @@ import json
 import math
 import unittest
 
-from lipidmix.plots import volcano as volcano_plot
+from metabolomix.plots import volcano as volcano_plot
 
 
 def _point(feature, log2fc, neg_log10_p, sig):
@@ -147,7 +147,7 @@ class TestArfPlotVolcanoTool(unittest.TestCase):
 
     def setUp(self):
         import server
-        from lipidmix.core import session_state
+        from metabolomix.core import session_state
         self.server = server
         self.session_state = session_state
         self._saved = session_state.session

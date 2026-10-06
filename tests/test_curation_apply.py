@@ -1,4 +1,4 @@
-from lipidmix.curation import apply, flags
+from metabolomix.curation import apply, flags
 
 
 def _flag(tmp_path, spot_id, flag):
@@ -53,7 +53,7 @@ def test_arf2_for_mztab_matches_the_batch_stem(tmp_path):
 # ---------- export_dataset_result への反映（Step 5） ----------
 
 def _prepared_dataset():
-    from lipidmix.analysis.dataset_service import compare_dataset, preprocess_dataset
+    from metabolomix.analysis.dataset_service import compare_dataset, preprocess_dataset
     from tests.pipeline_fixtures import make_dataset
     ds = make_dataset()
     preprocess_dataset(ds, {"normalize": "none", "impute": "half_min"})
@@ -62,7 +62,7 @@ def _prepared_dataset():
 
 
 def test_export_dataset_result_with_no_curation_has_no_meta_line(tmp_path):
-    from lipidmix.analysis.dataset_export import export_dataset_result
+    from metabolomix.analysis.dataset_export import export_dataset_result
     ds, result = _prepared_dataset()
 
     info = export_dataset_result(ds, result, tmp_path / "out.tsv", curation=None)
@@ -73,7 +73,7 @@ def test_export_dataset_result_with_no_curation_has_no_meta_line(tmp_path):
 
 
 def test_export_dataset_result_applied_curation_drops_the_wrong_row(tmp_path):
-    from lipidmix.analysis.dataset_export import export_dataset_result
+    from metabolomix.analysis.dataset_export import export_dataset_result
     ds, result = _prepared_dataset()
     curation = {"state": "applied",
                "flag_set": {"wrong": {"F0"}, "suspect": set(),
@@ -92,7 +92,7 @@ def test_export_dataset_result_applied_curation_drops_the_wrong_row(tmp_path):
 
 
 def test_export_dataset_result_unmapped_curation_keeps_all_rows(tmp_path):
-    from lipidmix.analysis.dataset_export import export_dataset_result
+    from metabolomix.analysis.dataset_export import export_dataset_result
     ds, result = _prepared_dataset()
     curation = {"state": "unmapped",
                "flag_set": {"wrong": {"F0"}, "suspect": set(),
@@ -153,7 +153,7 @@ def test_arf2_for_mztab_does_not_match_a_stem_that_is_a_prefix_of_another(tmp_pa
 
 # ---------- assign / redundant（候補付けの判断の反映） ----------
 
-from lipidmix.curation import apply as curation_apply  # noqa: E402
+from metabolomix.curation import apply as curation_apply  # noqa: E402
 
 
 def _flag_set(**kw):

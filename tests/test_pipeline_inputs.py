@@ -1,6 +1,6 @@
 """入力一覧・メソッド選択・解析専用配置（spec §4）を検証する。
 
-対象は lipidmix.pipeline.inputs の inspect_inputs / select_method /
+対象は metabolomix.pipeline.inputs の inspect_inputs / select_method /
 stage_inputs / verify_inputs。実rawや既存成果物は使わず、
 tests.pipeline_fixtures.make_source が作る合成データだけを使う。
 
@@ -18,17 +18,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from lipidmix.console import method_file as method_file_mod
-from lipidmix.core import app_control
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.pipeline.inputs import inspect_inputs, select_method, stage_inputs, verify_inputs
-from lipidmix.pipeline.request import resolve_request
+from metabolomix.console import method_file as method_file_mod
+from metabolomix.core import app_control
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.pipeline.inputs import inspect_inputs, select_method, stage_inputs, verify_inputs
+from metabolomix.pipeline.request import resolve_request
 from tests.pipeline_fixtures import make_source
 
 
 def _allow_fake_exe(monkeypatch) -> None:
     """fake.exe を実際には実行させず、Console 実行体として通す。"""
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
 
 
 def _method_lbm_exe(root: Path, *, ion_mode: str = "negative") -> dict:

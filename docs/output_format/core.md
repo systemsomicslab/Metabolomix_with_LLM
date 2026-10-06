@@ -21,7 +21,7 @@
 
 節番号は分割前の通し番号をそのまま保持している（`curation` は分割後に追加したトピックなので節番号を持たない）。本文中の `§11.1.1` のような相互参照は、この表からトピックを引いて辿ること。
 
-MCPツール層（形式ごとの `lipidmix/<形式>/tools.py` と `lipidmix/tools/`。`server.py` はそれらを登録・再エクスポートする薄いファサード）が、パーサーの構造化結果を主に Markdown/JSON 文字列へ整形する。LLM は表示文ではなく、各トピックが定義する意味を基準に解釈する。
+MCPツール層（形式ごとの `metabolomix/<形式>/tools.py` と `metabolomix/tools/`。`server.py` はそれらを登録・再エクスポートする薄いファサード）が、パーサーの構造化結果を主に Markdown/JSON 文字列へ整形する。LLM は表示文ではなく、各トピックが定義する意味を基準に解釈する。
 
 ## 1. 目的と対象
 
@@ -29,12 +29,12 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 
 | パーサー | 入力 | 主な実装 | トピック |
 |---|---|---|---|
-| ARF | `*_PeakProperties.arf` | `lipidmix/arf/reader.py` | `arf` |
-| ARF2 | `*.arf2` | `lipidmix/arf2/reader.py` | `arf2` |
-| PAI2 | `*.pai2` | `lipidmix/pai2/reader.py` | `pai2` |
-| DCL | `*.dcl` | `lipidmix/dcl/reader.py` | `dcl` |
-| EIC/AEF | `*.EIC.aef` | `lipidmix/eic/reader.py` | `eic` |
-| mzTab-M | `*.mzTab` | `lipidmix/mztab/reader.py` | `mztab` |
+| ARF | `*_PeakProperties.arf` | `metabolomix/arf/reader.py` | `arf` |
+| ARF2 | `*.arf2` | `metabolomix/arf2/reader.py` | `arf2` |
+| PAI2 | `*.pai2` | `metabolomix/pai2/reader.py` | `pai2` |
+| DCL | `*.dcl` | `metabolomix/dcl/reader.py` | `dcl` |
+| EIC/AEF | `*.EIC.aef` | `metabolomix/eic/reader.py` | `eic` |
+| mzTab-M | `*.mzTab` | `metabolomix/mztab/reader.py` | `mztab` |
 
 記載内容は、実装、`docs/schema/AlignmentSpotProperty.md`、`docs/schema/AlignmentChromPeakFeature.md`、`docs/schema/ChromatogramPeakFeature.md`、および NEG 実測データセット（`LIPIDMIX_DATA_DIR` 配下）の実ファイルに対する出力確認に基づく。
 

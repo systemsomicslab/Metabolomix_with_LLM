@@ -6,7 +6,7 @@ Console の照合結果の AnnotatorID は `.dbs` のライブラリ名と一致
 """
 from __future__ import annotations
 
-from lipidmix.library import store
+from metabolomix.library import store
 
 
 def _console_store(tmp_path, monkeypatch):
@@ -24,7 +24,7 @@ _MATCH = {"library_id": 0, "annotator_id": "C:/lib/NCDK_conventional.lbm2",
 
 
 def test_review_evidence_resolves_a_console_lbm_reference(tmp_path, monkeypatch):
-    from lipidmix.curation import evidence
+    from metabolomix.curation import evidence
     s = _console_store(tmp_path, monkeypatch)
     try:
         reference = evidence._reference(s, _MATCH, 760.586)
@@ -35,7 +35,7 @@ def test_review_evidence_resolves_a_console_lbm_reference(tmp_path, monkeypatch)
 
 
 def test_suggestion_resolves_a_console_lbm_reference(tmp_path, monkeypatch):
-    from lipidmix.curation import candidates
+    from metabolomix.curation import candidates
     s = _console_store(tmp_path, monkeypatch)
     try:
         record = candidates._resolve_match(s, _MATCH, 760.586)

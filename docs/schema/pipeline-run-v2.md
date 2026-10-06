@@ -3,8 +3,8 @@
 検証済みLC–MSメタボロミクス実行経路（spec
 [2026-09-15-validated-lcms-metabolomics-design.md](../superpowers/specs/2026-09-15-validated-lcms-metabolomics-design.md)
 §6, §6.2）が`pipeline_root/pipeline-run.json`へ書く永続記録。実装は
-[`lipidmix/pipeline/store.py`](../../lipidmix/pipeline/store.py)（永続化・schema判定）と
-[`lipidmix/pipeline/stage_plan.py`](../../lipidmix/pipeline/stage_plan.py)（stage列・依存無効化表）。
+[`metabolomix/pipeline/store.py`](../../metabolomix/pipeline/store.py)（永続化・schema判定）と
+[`metabolomix/pipeline/stage_plan.py`](../../metabolomix/pipeline/stage_plan.py)（stage列・依存無効化表）。
 要求契約は[`pipeline-request.v2`](pipeline-request-v2.md)。
 
 既存の`pipeline-run.v1`（リピドミクスv1経路。実装docstringが正準）とは**別の記録**で、
@@ -44,7 +44,7 @@ v1と同じ形。`schema`の値と`stages`のキー集合だけがv2固有にな
 | `warnings` | 受付時から積む警告 |
 | `worker` | owner lockを取ったworkerの`identity`と`started_at` |
 
-`request.content_hash`は`lipidmix.pipeline.request.request_fingerprint`が計算する。
+`request.content_hash`は`metabolomix.pipeline.request.request_fingerprint`が計算する。
 **v2要求はv2のキー集合で畳む**——v1のキー集合で畳むと`statistics`等が落ち、統計定義
 だけが違う2つの解析が同じhashになって1本のrunへ畳まれてしまう（spec §6.1
 「下流結果IDは…変換、群・検定設定に依存する」）。

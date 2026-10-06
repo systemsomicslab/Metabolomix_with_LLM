@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from lipidmix.core.path_resolvers import LibraryPathError, resolve_library_path
+from metabolomix.core.path_resolvers import LibraryPathError, resolve_library_path
 
 
 @pytest.fixture
@@ -17,7 +17,7 @@ def cfg(tmp_path, monkeypatch):
     path.parent.mkdir()
     monkeypatch.setenv("LIPIDMIX_CONFIG", str(path))
     # data ディレクトリの *.msp / *.dbs を拾わせない
-    from lipidmix.core import mcp_core
+    from metabolomix.core import mcp_core
     empty = tmp_path / "data"
     empty.mkdir()
     monkeypatch.setattr(mcp_core, "DATA_DIR", empty)
@@ -75,7 +75,7 @@ def test_broken_config_file_is_config_invalid(cfg):
 
 
 def test_library_load_missing_config_msp_does_not_leak_the_directory(cfg, tmp_path):
-    from lipidmix.library.tools import library_load
+    from metabolomix.library.tools import library_load
     gone = tmp_path / "secret-lab-share" / "pos.msp"
     cfg.write_text(f"[library]\nmsp_positive = '{gone}'\n", encoding="utf-8")
     raw = library_load(ion_mode="positive")
@@ -86,7 +86,7 @@ def test_library_load_missing_config_msp_does_not_leak_the_directory(cfg, tmp_pa
 
 
 def test_library_load_with_nothing_configured_says_where_to_write(cfg):
-    from lipidmix.library.tools import library_load
+    from metabolomix.library.tools import library_load
     payload = json.loads(library_load(ion_mode="negative"))
     assert payload["status"] == "error"
     assert "[library] msp_negative" in payload["message"]
@@ -95,7 +95,7 @@ def test_library_load_with_nothing_configured_says_where_to_write(cfg):
 
 def test_library_load_normalises_ion_mode_in_the_not_found_hint(cfg):
     """大文字・空白の ion_mode でも、案内は同じ極性のキーを指す。"""
-    from lipidmix.library.tools import library_load
+    from metabolomix.library.tools import library_load
     payload = json.loads(library_load(ion_mode=" Negative "))
     assert payload["status"] == "error"
     assert payload["details"]["setting"] == "library.msp_negative"
@@ -105,7 +105,7 @@ def test_library_load_normalises_ion_mode_in_the_not_found_hint(cfg):
 
 def test_library_load_open_failure_does_not_leak_a_forward_slash_directory(cfg, tmp_path, monkeypatch):
     """環境変数に `/` 区切りで書かれた置き場所は、OSError の文言にも `/` のまま出る。伏せ漏れしない。"""
-    from lipidmix.library import tools as library_tools
+    from metabolomix.library import tools as library_tools
     lab = tmp_path / "secret-lab-share"
     pos = _msp(lab / "pos.msp")
     monkeypatch.setenv("MSDIAL_MSP_POS", lab.as_posix() + "/pos.msp")

@@ -1,5 +1,5 @@
 # tests/test_mztab_validator.py
-from lipidmix.mztab.validator import validate_mztab, detect_quantification_measure
+from metabolomix.mztab.validator import validate_mztab, detect_quantification_measure
 
 _BASE = {
     "metadata": {

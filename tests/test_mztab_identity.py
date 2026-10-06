@@ -5,8 +5,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from lipidmix.mztab import identity
-from lipidmix.mztab.identity import derive_inchikey, _INCHIKEY_RE
+from metabolomix.mztab import identity
+from metabolomix.mztab.identity import derive_inchikey, _INCHIKEY_RE
 
 
 @pytest.fixture(autouse=True)

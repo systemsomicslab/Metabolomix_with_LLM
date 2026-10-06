@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.analysis.export_contract import CONTRACT_VERSION, EXPORT_COLUMNS, LOG2FC_SIGN
-from lipidmix.pipeline import recovery, store
+from metabolomix.analysis.export_contract import CONTRACT_VERSION, EXPORT_COLUMNS, LOG2FC_SIGN
+from metabolomix.pipeline import recovery, store
 from tests.pipeline_fixtures import (
     DEFAULT_COMPARISON, PipelineHarness, WAIT_TIMEOUT_S, read_contract_tsv,
 )
@@ -153,7 +153,7 @@ def test_rerun_upstream_creates_a_new_attempt_and_keeps_the_old_evidence(pipelin
     パスだと、これらは上書き・切り詰め・置換され「timeoutした事実」を
     後から証明できなくなる。
     """
-    from lipidmix.pipeline import service
+    from metabolomix.pipeline import service
 
     run = pipeline_harness.start_scenario("hang", timeout_s=3)
     pipeline_harness.wait(run, expected="failed")
@@ -255,8 +255,8 @@ def test_exported_tsv_matches_the_contract_in_both_directions(pipeline_harness):
 
 def test_saved_figures_come_from_the_named_results(pipeline_harness):
     """spec E03: 図が「指定データ・群・出所」と一致し、実PNGとして残ること。"""
-    from lipidmix.plots.result_output import save_result_figure
-    from lipidmix.plots.volcano import render_volcano_plot
+    from metabolomix.plots.result_output import save_result_figure
+    from metabolomix.plots.volcano import render_volcano_plot
 
     pipeline_harness.write_manifest()
     run = pipeline_harness.start(
@@ -345,8 +345,8 @@ def test_saved_pca_figure_plots_the_run_samples(pipeline_harness):
     PNGに**点の画素が実在する**こと、(3) その結果から本番の保存経路で描き直しても
     点が描かれ、警告（豆腐＝`Glyph missing`）が1件も出ないことまで見る。
     """
-    from lipidmix.core.tool_helpers import _pca_scatter_arrays, dataset_pca_plot
-    from lipidmix.plots.result_output import save_result_figure
+    from metabolomix.core.tool_helpers import _pca_scatter_arrays, dataset_pca_plot
+    from metabolomix.plots.result_output import save_result_figure
 
     run = pipeline_harness.start(target="exploratory")
     record = pipeline_harness.wait(run, expected="completed")
@@ -481,7 +481,7 @@ def test_two_concurrent_starts_of_the_same_request_launch_console_once(pipeline_
     実プロセスで検証済み。ここで検証したいのはその**先**——`start_pipeline`が
     「読み出したstatusがplannedだから起動する」と判断する箇所は`file_lock`の
     **外**にあり、2つの呼び出しがどちらも新規作成直後の`planned`を読めば
-    どちらも起動しうる（`lipidmix/pipeline/service.py`の`start_pipeline`docstring
+    どちらも起動しうる（`metabolomix/pipeline/service.py`の`start_pipeline`docstring
     が名指す「レビュー指摘1」の対象コードそのもの）。実際に二重起動を止めて
     いるのはworker側のowner lock（`engine.run_engine`のworker.lock）である
     ことを、その場しのぎでなく実際の競合で確かめる。
@@ -596,7 +596,7 @@ def test_two_concurrent_resumes_of_the_same_run_launch_console_once(pipeline_har
     errors: list = []
 
     def _call():
-        from lipidmix.pipeline import service
+        from metabolomix.pipeline import service
         try:
             results.append(service.resume_pipeline(pipeline_root, updates=updates))
         except Exception as exc:  # pragma: no cover - 失敗時の診断用
@@ -632,8 +632,8 @@ def test_two_concurrent_resumes_of_the_same_run_launch_console_once(pipeline_har
 
 def test_changed_raw_is_detected_on_resume(pipeline_harness):
     """spec D05: 元rawが変わっていたら、無条件に再利用せずINPUT_CHANGEDで止める。"""
-    from lipidmix.core.atomic_io import DomainError
-    from lipidmix.pipeline import service
+    from metabolomix.core.atomic_io import DomainError
+    from metabolomix.pipeline import service
 
     run = pipeline_harness.start(target="exploratory")
     pipeline_harness.wait(run, expected="completed")
@@ -650,8 +650,8 @@ def test_changed_raw_is_detected_on_resume(pipeline_harness):
 
 def test_changed_effective_method_is_detected_on_resume(pipeline_harness):
     """spec D05: Consoleが実際に読む実効メソッドの改変も再開時に検出する。"""
-    from lipidmix.core.atomic_io import DomainError
-    from lipidmix.pipeline import service
+    from metabolomix.core.atomic_io import DomainError
+    from metabolomix.pipeline import service
 
     run = pipeline_harness.start(target="exploratory")
     record = pipeline_harness.wait(run, expected="completed")

@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.pipeline import request as request_mod, service
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.pipeline import request as request_mod, service
 from tests.test_metabolomics_engine import _profile
 
 
@@ -68,7 +68,7 @@ def test_explicit_routine_overrides_file_validation(tmp_path):
 
 
 def test_snapshot_uses_profile_directory_and_persists_raw_hashes(tmp_path):
-    from lipidmix.pipeline import metabolomics_handlers
+    from metabolomix.pipeline import metabolomics_handlers
     from tests.test_lcms_profile_inputs import _build_profile, _write_fake_exe, _write, _msp_dependency
 
     profile_root = tmp_path / "configuration"
@@ -127,7 +127,7 @@ def test_raw_content_change_between_runs_stops_with_input_changed(tmp_path):
     見る v1 の `verify_inputs` は仕様上 raw の内容 hash を検証しない契約なので、
     ここで v2 が自分の持つ hash を使う。
     """
-    from lipidmix.pipeline import metabolomics_handlers
+    from metabolomix.pipeline import metabolomics_handlers
     from tests.test_lcms_profile_inputs import _write
 
     context, raw_root = _profile_context(tmp_path)
@@ -151,7 +151,7 @@ def test_raw_content_change_between_runs_stops_with_input_changed(tmp_path):
 
 def test_an_unchanged_rerun_passes_the_raw_check(tmp_path):
     """内容が同じ再実行は素通りする（照合そのものが誤検出しないこと）。"""
-    from lipidmix.pipeline import metabolomics_handlers
+    from metabolomix.pipeline import metabolomics_handlers
 
     context, _raw_root = _profile_context(tmp_path)
     first = metabolomics_handlers.snapshot_profile_outcome(context, {"status": "succeeded"})

@@ -1,6 +1,6 @@
 """`lcms-profile.v1` と `lcms-profile-validation.v1` の厳密な契約検証（spec §5, §5.1）。
 
-`lipidmix.console.profile_schema` はファイルを読まない純ロジックなので、fixtureは
+`metabolomix.console.profile_schema` はファイルを読まない純ロジックなので、fixtureは
 すべてこのテスト自身が組み立てるPython dict（実データ・実profileに依存しない）。
 """
 import copy
@@ -8,8 +8,8 @@ import math
 
 import pytest
 
-from lipidmix.core.atomic_io import DomainError, canonical_hash
-from lipidmix.console.profile_schema import (
+from metabolomix.core.atomic_io import DomainError, canonical_hash
+from metabolomix.console.profile_schema import (
     CERTIFICATE_SCHEMA,
     SCHEMA,
     profile_content_hash,

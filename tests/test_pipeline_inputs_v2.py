@@ -12,16 +12,16 @@ from pathlib import Path
 
 import pytest
 
-from lipidmix.console.profile_schema import validate_profile
-from lipidmix.core.atomic_io import DomainError
-from lipidmix.pipeline import inputs as inputs_mod
+from metabolomix.console.profile_schema import validate_profile
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.pipeline import inputs as inputs_mod
 from tests.metabolomics_fixtures import write_profile
 
 
 def _setup(tmp_path, monkeypatch) -> tuple[Path, dict, dict]:
     # fixture の実行体は placeholder なので、Console 判定（実際に --help を
     # 起動する）は既存テストと同じ流儀で差し替える。
-    monkeypatch.setattr("lipidmix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
     source_root = tmp_path / "source"
     source_root.mkdir()
     for name in ("A", "B"):
@@ -72,7 +72,7 @@ def test_a_changed_dependency_stops_before_any_plan_is_returned(tmp_path, monkey
 # ---------- 受付が v1 経路へ落ちないこと ----------
 
 def test_v2_request_does_not_go_through_the_v1_inspection(tmp_path, monkeypatch):
-    from lipidmix.pipeline import service
+    from metabolomix.pipeline import service
 
     source_root, request, _profile = _setup(tmp_path, monkeypatch)
 
@@ -85,7 +85,7 @@ def test_v2_request_does_not_go_through_the_v1_inspection(tmp_path, monkeypatch)
 
 
 def test_v2_request_does_not_touch_the_environment_executable(tmp_path, monkeypatch):
-    from lipidmix.pipeline import service
+    from metabolomix.pipeline import service
 
     source_root, request, _profile = _setup(tmp_path, monkeypatch)
 
@@ -97,7 +97,7 @@ def test_v2_request_does_not_touch_the_environment_executable(tmp_path, monkeypa
 
 
 def test_a_v2_request_without_a_profile_stops_instead_of_falling_back(tmp_path, monkeypatch):
-    from lipidmix.pipeline import service
+    from metabolomix.pipeline import service
 
     source_root, request, _profile = _setup(tmp_path, monkeypatch)
     Path(request["profile_file"]).unlink()
@@ -121,9 +121,9 @@ def _upstream_context(tmp_path, monkeypatch):
     だけだから。prepare_inputs が固定した成果物 ref を record へ載せて渡す
     （engine が commit_stage_outcome でやることを、この試験の範囲だけ手で行う）。
     """
-    from lipidmix.pipeline import engine as engine_mod
-    from lipidmix.pipeline import request as request_mod
-    from lipidmix.pipeline import service, store
+    from metabolomix.pipeline import engine as engine_mod
+    from metabolomix.pipeline import request as request_mod
+    from metabolomix.pipeline import service, store
 
     source_root, request, _profile = _setup(tmp_path, monkeypatch)
     receipt = service.plan_pipeline(source_root, request)
@@ -142,8 +142,8 @@ def _upstream_context(tmp_path, monkeypatch):
 
 
 def test_v2_upstream_writes_a_v3_job_with_the_profile_snapshot(tmp_path, monkeypatch):
-    from lipidmix.console import execution as console_execution
-    from lipidmix.pipeline import service
+    from metabolomix.console import execution as console_execution
+    from metabolomix.pipeline import service
 
     context, pipeline_root = _upstream_context(tmp_path, monkeypatch)
     monkeypatch.setattr(console_execution, "supervise",
@@ -171,8 +171,8 @@ def test_upstream_reads_the_snapshot_from_persisted_results_not_from_runtime(
     snapshot を失い、v3 のはずの job が黙って v2 になる。成果物が無いなら
     「無い」と言って止まること（前の工程を先に通す）を縛る。
     """
-    from lipidmix.console import execution as console_execution
-    from lipidmix.pipeline import service
+    from metabolomix.console import execution as console_execution
+    from metabolomix.pipeline import service
 
     context, _pipeline_root = _upstream_context(tmp_path, monkeypatch)
     monkeypatch.setattr(console_execution, "supervise",
@@ -213,8 +213,8 @@ def test_a_relative_method_declaration_outside_the_profile_becomes_absolute(tmp_
 
 
 def test_the_profile_snapshot_writes_the_same_absolute_declaration(tmp_path, monkeypatch):
-    from lipidmix.console import method_file as method_file_mod
-    from lipidmix.console import profiles as profiles_mod
+    from metabolomix.console import method_file as method_file_mod
+    from metabolomix.console import profiles as profiles_mod
     source_root, _request, profile = _setup(tmp_path, monkeypatch)
     expected = _declare_extra_relative_text_db(source_root, profile)
     plan = profiles_mod.resolve_profile_inputs(profile, source_root, raw_root=source_root)
