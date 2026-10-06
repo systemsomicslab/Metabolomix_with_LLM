@@ -102,3 +102,10 @@
 7. └─ metabolomix/plots/eic.py  render_eic_plot()
 8.    ├─ [lipidmix.eic.v1] metabolomix/plots/eic.py  _render_single_spot()
 9.    └─ [lipidmix.eic.multi.v1] metabolomix/plots/eic.py  _render_multi_compound()
+
+## save_group_intensity_figure
+
+前提: `arf_plot_group_intensity` 実行済み（未実行なら `MissingState`）
+状態変更: `reports/figures/` に PNG（dpi 300）と SVG を書く。
+
+1. metabolomix/tools/reports.py  save_group_intensity_figure()

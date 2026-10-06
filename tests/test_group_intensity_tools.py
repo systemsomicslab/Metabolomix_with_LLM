@@ -125,3 +125,22 @@ def test_image_output_and_session_keeps_payload(loaded):
     assert isinstance(out, list) and isinstance(out[1], Image)
     assert "2 項目" in out[0] and "N.D.: PE" in out[0]
     assert session_state.session.arf.last_group_intensity["payload"]["items"][0]["item"] == "PG"
+
+
+def test_save_without_plot_is_missing_state():
+    from metabolomix.tools.reports import save_group_intensity_figure
+    session_state.session = session_state.AnalysisSession()
+    out = json.loads(save_group_intensity_figure("x"))
+    assert out["error"]["required_tools"] == ["arf_plot_group_intensity"]
+
+
+def test_save_writes_png_and_svg(loaded, tmp_path, monkeypatch):
+    from metabolomix.arf.tools import arf_plot_group_intensity
+    from metabolomix.tools.reports import save_group_intensity_figure
+    monkeypatch.setenv("LIPIDMIX_REPORTS_DIR", str(tmp_path / "reports"))
+    arf_plot_group_intensity(items=["PG"], groups=["ctrl", "ko"], output="payload")
+    msg = save_group_intensity_figure("EV membrane")
+    figures = tmp_path / "reports" / "figures"
+    pngs = list(figures.glob("*_group_intensity.png"))
+    assert len(pngs) == 1 and pngs[0].with_suffix(".svg").is_file()
+    assert "group_intensity.png" in msg

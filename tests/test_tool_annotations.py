@@ -118,6 +118,7 @@ EXPECTED_ANNOTATIONS = {
     "save_pca_figure": LOCAL_WRITE,
     "save_volcano_figure": LOCAL_WRITE,
     "save_eic_figure": LOCAL_WRITE,
+    "save_group_intensity_figure": LOCAL_WRITE,
     "arf_export_differential": LOCAL_WRITE,
     # --- knowledge の変更 ---
     "ingest_stage": LOCAL_WRITE_APPEND,

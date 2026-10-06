@@ -1,4 +1,4 @@
-# USAGE — ms-data-parser MCP ツール一覧(全73ツール)
+# USAGE — ms-data-parser MCP ツール一覧(全74ツール)
 
 MS-DIAL 出力(`.arf` / `.arf2` / `.pai2` / `.dcl` / `.EIC.aef`)と mzTab-M を解析し、PCA・差次的解析・
 アノテーション検証・文献探索・レポート記録までを行う MCP サーバーのツール群です。
@@ -119,6 +119,7 @@ pipeline_run → pipeline_status(確認) → pipeline_resume(訂正・再開が�
 | `save_pca_figure` | ユーザーがPNGを明示的に希望した場合だけ、指定した PCA 結果を `reports/figures/` に保存。通常の描画はクライアントUIに任せる。入力元は ARF 経路と mzTab-M 経路の 2 つあり、**どちらも優先しない** — 有効な結果が 2 つ以上あると `AMBIGUOUS_RESULT_SOURCE` で止まるので `source`(`arf`/`mztab`)か `result_id` を指定する(どちらを描くかは図の数字そのものを変えるため)。前処理をやり直して古くなった結果は選べない。探索専用データセットから描いた図には、図の中に但し書きが入る。 |
 | `save_volcano_figure` | ユーザーが**ファイルとしての**PNGを希望した場合だけ、指定した差次的解析(2群)を volcano PNG として保存(レポート埋め込み用)。画面で見るだけなら `arf_plot_volcano` が画像を直接返す。描画関数は共通なので同じ図。入力元の決め方(`source`/`result_id`、曖昧なら停止)は `save_pca_figure` と同じ。 |
 | `save_eic_figure` | ユーザーが明示的に保存を希望した場合だけ、直近のEICプロット情報を PNG 化し `reports/figures/<analysis_id>_eic.png` に保存。Use-LLLMではローカル書き込みとして承認が必要。 |
+| `save_group_intensity_figure` | 直前の `arf_plot_group_intensity` の図を `reports/figures/<analysis_id>_group_intensity.png`(dpi 300)と同名 `.svg` に保存。ユーザーがファイルを希望した場合だけ使う。 |
 | `write_report` | 解析・解釈レポートを `reports/<analysis_id>.md` に上書き保存。 |
 | `read_report` | 過去レポートを読み戻す(最新更新のものを返す。セッション継続用)。 |
 | `list_reports` | 既存レポートの1行索引(analysis_id / date / status)を返す。 |

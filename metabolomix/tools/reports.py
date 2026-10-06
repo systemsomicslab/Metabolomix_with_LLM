@@ -23,6 +23,7 @@ __all__ = [
     "save_pca_figure",
     "save_volcano_figure",
     "save_eic_figure",
+    "save_group_intensity_figure",
 ]
 
 
@@ -286,3 +287,30 @@ def save_eic_figure(analysis_id: str, title: str | None = None) -> str:
 
     rel = f"figures/{out_path.name}"
     return f"EIC図を保存: {out_path}\n本文に ![EIC]({rel}) で埋め込めます。"
+
+
+@mcp.tool(annotations=ToolAnnotations(
+    readOnlyHint=False, destructiveHint=False, idempotentHint=True), structured_output=False)
+def save_group_intensity_figure(analysis_id: str, title: str | None = None) -> str:
+    """直前の arf_plot_group_intensity の図を reports/figures/<analysis_id>_group_intensity.png（dpi 300）と
+    同名 .svg に保存し、相対パスを返す。レポート本文に `![...](figures/<...>.png)` で埋め込める。"""
+    from metabolomix.plots.group_intensity import render_group_intensity_plot
+
+    last = getattr(session_state.session.arf, "last_group_intensity", None)
+    if not last or not last.get("payload"):
+        return mcp_errors.missing_state(
+            "group_intensity_plot", ["arf_plot_group_intensity"],
+            "先に arf_plot_group_intensity を実行してください（群別強度の図がありません）。")
+    slug = knowledge_store.make_slug(analysis_id)
+    figures_dir = _resolve_report_dir() / "figures"
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    out_path = figures_dir / f"{slug}_group_intensity.png"
+    fig = render_group_intensity_plot(last["payload"], title=title or last.get("title"), ncols=last.get("ncols"))
+    try:
+        fig.savefig(out_path, dpi=300, format="png", bbox_inches="tight")
+        fig.savefig(out_path.with_suffix(".svg"), format="svg", bbox_inches="tight")
+    finally:
+        plt.close(fig)
+    rel = f"figures/{out_path.name}"
+    return (f"群別強度の図を保存: {out_path}（同名の .svg も保存）\n"
+            f"本文に ![group intensity]({rel}) で埋め込めます。")
