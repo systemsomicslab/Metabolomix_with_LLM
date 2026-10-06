@@ -106,7 +106,12 @@ exe = 'C:\MS-DIAL\MsdialConsoleApp.exe'
   `details.config_file` にそのパスを載せる（worktree やテストが意図して空を指すため）。
 - **値を引く順**: 環境変数 → 設定ファイル → 各リゾルバの既存の推定。環境変数が空文字や
   空白だけなら未設定とみなす（現行の `.strip()` と同じ）。
-- **相対パス**は設定ファイルのあるフォルダ基準で解き、絶対パスにして返す。`~` は展開する。
+- 設定ファイルの値の**相対パス**は設定ファイルのあるフォルダ基準で解き、絶対パスにして
+  返す。`~` は展開する。環境変数の値は加工しない（§5 `Setting`）。
+- 設定ファイルは UTF-8 で読み、先頭の BOM は許す（メモ帳が付けることがあり、`tomllib` は
+  BOM を構文エラーにする）。
+- **環境変数が設定されているキーについては設定ファイルを読まない**。設定ファイルが壊れて
+  いても、環境変数で渡している値は今まで通り使える。
 - **`<repo>`** は `core/data_config.py` と同じく `Path(__file__).resolve().parents[2]`。
   worktree ではその worktree のルートになる（worktree へ main の設定を届けるのは §8）。
 - `lipidmix.local.toml` は `.gitignore` に入れる（研究室ライブラリのパスが入るため）。
@@ -123,9 +128,15 @@ exe = 'C:\MS-DIAL\MsdialConsoleApp.exe'
     環境変数名の正準はここに置き、`path_resolvers.LIBRARY_ENV_VARS` はここから導く。
   - `config_file_path() -> Path`: §4 の探す順で決めた設定ファイルのパス（存在しなくても返す）。
   - `get_setting(key) -> Setting | None`: §4 の引く順で値を返す。未設定なら `None`。
-  - `Setting`: `value`（絶対パスの `str`）、`source`（`"env"` / `"config_file"`）、
-    `env_var`、`config_file`。
-  - `describe_missing(key) -> dict`: 未設定エラーの `details` に足す内容（§6.1）。
+  - `Setting`: `key`、`value`（`str`。環境変数の値は前後の空白を除いてそのまま——
+    既存の利用者とテストが相対名や `/` 区切りを置いているので形を変えない。設定ファイルの
+    値は §4 の規則で絶対パスにする）、`source`（`"env"` / `"config_file"`）、`env_var`、
+    `config_file`。
+  - `setting_label(setting) -> str`: エラー文で値の出どころを言う句
+    （「環境変数 MSDIAL_EXE」/「lipidmix.local.toml の [msdial] exe」）。
+  - `missing_hint(key, what) -> str`: 未設定のとき利用者に伝える文（§7.1）。
+  - `describe_missing(key, setting=None) -> dict`: 未設定・指す先が無いエラーの
+    `details` に足す内容（§7.1）。値そのものは載せない。
   - `ConfigInvalidError(Exception)`: `code="CONFIG_INVALID"`、`message`、`line` / `column`
     （分かれば）。設定ファイルが読めないとき `get_setting` が送出する。
 - **読むのは呼ばれるたび**。設定ファイルのパスと `st_mtime_ns` をキーに、解析結果を
@@ -183,9 +194,14 @@ reanalysis-study plan Task 9（Console に渡す MSP を、明示 → メソッ�
 ### 7.2 設定ファイルが読めない
 
 TOML の構文エラー、または値の型違い（文字列でない）なら `CONFIG_INVALID`。メッセージに
-設定ファイルのパスと行・列を載せる。二重引用符の文字列の中の `\` が原因と推定できる
-とき（`tomllib` のエラーが無効なエスケープを指すとき）は、「Windows のパスは単一引用符で
-囲んでください」と添える。
+設定ファイルの名前と行・列を載せる（`details.config_file` にパス）。構文エラーで
+ファイルに `\` が含まれるときは、「Windows のパスは単一引用符で囲んでください」と添える
+（`"C:\MS-DIAL"` は `Unescaped '\'`、`"C:\Users"` は `Invalid hex value` になる。
+2026-10-06 に Python 3.14 の `tomllib` で確認）。
+
+構文としては通ってしまう誤りも拾う: `"C:\new\tool.exe"` の `\n` `\t` はエスケープとして
+読まれ、値に制御文字が入る。値に改行・タブ・`\b` `\f` `\r` が含まれていたら
+`CONFIG_INVALID` にして同じ案内を添える。
 
 ### 7.3 打ち間違い
 
