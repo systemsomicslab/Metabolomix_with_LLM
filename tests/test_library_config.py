@@ -10,8 +10,6 @@ import pytest
 
 from lipidmix.core.path_resolvers import LibraryPathError, resolve_library_path
 
-BS = "\\"
-
 
 @pytest.fixture
 def cfg(tmp_path, monkeypatch):
@@ -93,3 +91,13 @@ def test_library_load_with_nothing_configured_says_where_to_write(cfg):
     assert payload["status"] == "error"
     assert "[library] msp_negative" in payload["message"]
     assert payload["details"]["setting"] == "library.msp_negative"
+
+
+def test_library_load_normalises_ion_mode_in_the_not_found_hint(cfg):
+    """大文字・空白の ion_mode でも、案内は同じ極性のキーを指す。"""
+    from lipidmix.library.tools import library_load
+    payload = json.loads(library_load(ion_mode=" Negative "))
+    assert payload["status"] == "error"
+    assert payload["details"]["setting"] == "library.msp_negative"
+    assert "[library] msp_negative" in payload["message"]
+    assert "MSDIAL_MSP_NEG" in payload["message"]

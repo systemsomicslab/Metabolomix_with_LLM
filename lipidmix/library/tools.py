@@ -96,7 +96,9 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
             payload["details"] = exc.details
         return json_payload(payload)
     if not resolved:
-        key = LIBRARY_SETTING_KEYS.get(ion_mode or "positive", "library.msp_positive")
+        # resolve_library_path は大文字・空白を許して正規化するので、ここでも同じに揃える。
+        mode = (ion_mode or "positive").strip().lower()
+        key = LIBRARY_SETTING_KEYS.get(mode, "library.msp_positive")
         hint = user_config.missing_hint(key, "研究室の参照ライブラリ（.msp）")
         if ion_mode is None:
             hint += " 負イオンは [library] msp_negative です。"
