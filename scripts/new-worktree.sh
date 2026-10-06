@@ -73,7 +73,7 @@ echo "worktree : $path"
 echo "branch   : $branch"
 echo ".mcp.json: 生成済み（server.py=この worktree / 蓄積状態=main ツリー）"
 echo
-echo "記録は main ツリー側へ追記する（worktree には存在しない）:"
+echo "記録は main ツリー側へ書く（worktree には存在しない。task.md は並列中なので末尾への追記だけ）:"
 echo "  $main_w/docs/HISTRY.md"
 echo "  $main_w/docs/task.md"
 echo

@@ -79,7 +79,7 @@ def derive_inchikey(
                         return ik, "smiles_derived"
     except Exception:
         # 文書化された silent fallback（spec §23）。診断を潰す点は
-        # docs/task.md 2026-09-19(2) の HOLD として別途判断する。
+        # docs/task.md の HOLD（derive_inchikey の例外の飲み込み）として別途判断する。
         pass
 
     return None, "none"

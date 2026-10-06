@@ -172,8 +172,8 @@ lipidmix/tools/     形式に紐づかない MCP 公開層（入口・サンプ�
 | MessagePack の Key 番号 | `docs/schema/*.md` |
 | パーサ単体の CLI（フラグ一覧と実行例） | `docs/cli.md` |
 | 文献由来の設計候補（採択済み） | [docs/research-backlog.md](docs/research-backlog.md)（正準は vault 側。仕組みは spec 2026-09-14） |
-| 設計判断の経緯・調査で判明した事実 | `docs/HISTRY.md`（綴りはこのまま。**追跡外＝ローカル専用ログ**） |
-| 進行中/完了タスク | `docs/task.md`（**追跡外**。ステータス = TODO/DOING/DONE/HOLD） |
+| 設計判断の経緯・調査で判明した事実・完了した作業の記録 | `docs/HISTRY.md`（綴りはこのまま。**追跡外＝ローカル専用ログ**） |
+| 未完了のタスク | `docs/task.md`（**追跡外**。未完了だけを置く。ステータス = TODO/DOING/HOLD/BLOCKED） |
 | 過去の設計書・計画書 | `docs/superpowers/{specs,plans,notes}/` |
 | **利用者から見た**入口の分岐と、経路ごとの強制順序／オプション分岐の全体像 | `C:\Users\yuu18\Documents\KnowledgeVault\30_Projects\ms-data-parser\ms-data-parser-flow.md`（**リポジトリ外**・Obsidian vault。維持義務は「作業の記録と Git」） |
 
@@ -196,10 +196,15 @@ lipidmix/tools/     形式に紐づかない MCP 公開層（入口・サンプ�
 
 ## 作業の記録と Git
 
-- 調査・実装をしたら `docs/HISTRY.md` に追記し、`docs/task.md` のステータスを更新する。
-- **この 2 つは追記専用**。日付見出しで区切って末尾に足し、既存の節は書き換えない。
-  どちらも追跡外で git が競合を検出しないため、複数のエージェントが同時に走ると
-  書き換えは後勝ちで静かに消える。
+- 調査・実装をしたら `docs/HISTRY.md` に追記し、`docs/task.md` を更新する。
+- **`docs/HISTRY.md` は追記専用**。日付見出しで区切って末尾に足し、既存の節は書き換えない。
+  完了した作業の経緯はここに残す。
+- **`docs/task.md` は未完了のタスクだけを置く**。完了したら HISTRY に記録して task.md からは
+  消す（DONE の行を残さない）。後の作業で閉じた項目・前提が消えた項目も同様に消す。
+  新しい残課題は該当する区分に足す。
+- どちらも追跡外で git が競合を検出しないため、複数のエージェントが同時に走ると
+  書き換えは後勝ちで静かに消える。**task.md の既存項目の書き換え・削除は、並列の
+  エージェントがいないときに行う**。並列中は末尾への追記だけにとどめ、整理は後で行う。
 - **フローが変わったら vault 側の流れ図も同じ作業の中で直す**。反映先は
   `C:\Users\yuu18\Documents\KnowledgeVault\30_Projects\ms-data-parser\ms-data-parser-flow.md`。
   対象は「利用者から見て何がどの順に起きるか」が変わる改修——入口の判定規則
@@ -242,7 +247,7 @@ git worktree remove .worktrees/<slug>  # 片付け
   `LIPIDMIX_ANALYSES_DIR` `LIPIDMIX_KNOWLEDGE_DIR` `LIPIDMIX_REPORTS_DIR`）は
   **main ツリー**を向けて分裂させない。版管理対象の `playbook/` だけは worktree ローカル
   （変更対象そのものなので）。
-- **記録は main ツリー側の `docs/HISTRY.md` / `docs/task.md` へ追記する**。
+- **記録は main ツリー側の `docs/HISTRY.md` / `docs/task.md` へ書く**（task.md は並列中なので末尾への追記だけ）。
   worktree には存在しない。
 - `core.hooksPath` は worktree 間で共有され `.githooks/` は追跡対象なので、
   pre-commit は worktree でもそのまま効く。
