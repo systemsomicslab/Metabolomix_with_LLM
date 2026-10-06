@@ -282,23 +282,32 @@ def test_render_diamond_vs_circle_markers():
 def test_render_low_reliability_sample_white_fill():
     import matplotlib.pyplot as plt
     import numpy as np
-    rows = {0: [{"file_name": "c1", "height": 100.0, "is_gap_filled": False}]}
+    # Two samples: one normal (c1) and one low-reliability (c2)
+    rows = {0: [{"file_name": "c1", "height": 100.0, "is_gap_filled": False},
+                {"file_name": "c2", "height": 100.0, "is_gap_filled": False}]}
     items = [{"item": "item", "parts": [{"part": "item", "kind": "class", "n_spots": 1}],
               "spots": [{"spot_id": 0, "name": "s0", "ontology": "x"}]}]
-    p = gi.build_group_intensity_payload(items, [{"label": "g", "samples": ["c1"]}], rows,
-                                         msms={0: True}, low_reliability=frozenset({"c1"}))
+    p = gi.build_group_intensity_payload(items, [{"label": "g", "samples": ["c1", "c2"]}], rows,
+                                         msms={0: True}, low_reliability=frozenset({"c2"}))
     fig = gi.render_group_intensity_plot(p)
     try:
         ax = fig.axes[0]
         collections = ax.collections
+        found_white = False
+        found_non_white = False
         for coll in collections:
             facecolors = coll.get_facecolors()
             if len(facecolors) > 0:
-                # Check if any color is white (or close to white: [1, 1, 1, 1])
                 for fc in facecolors:
+                    # Check for white fill
                     if np.allclose(fc[:3], [1, 1, 1], atol=0.01):
-                        return  # Found white fill
-        assert False, "No white facecolor found for low-reliability sample"
+                        found_white = True
+                    # Check for non-white fill (should be the group color)
+                    elif not np.allclose(fc[:3], [1, 1, 1], atol=0.01) and not np.allclose(fc[:3], [0, 0, 0], atol=0.01):
+                        # Not white, not black (black is edge color)
+                        found_non_white = True
+        assert found_white, "Low-reliability sample should have white facecolor"
+        assert found_non_white, "Normal sample should have non-white facecolor"
     finally:
         plt.close(fig)
 
@@ -323,18 +332,54 @@ def test_render_group_mean_line_drawn():
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    rows = {0: [{"file_name": "c1", "height": 1000.0, "is_gap_filled": False}]}
+    # Use 2 samples so log10_sd is not None (otherwise errorbar is not drawn)
+    rows = {0: [{"file_name": "c1", "height": 100.0, "is_gap_filled": False},
+                {"file_name": "c2", "height": 1000.0, "is_gap_filled": False}]}
     items = [{"item": "item", "parts": [{"part": "item", "kind": "class", "n_spots": 1}],
               "spots": [{"spot_id": 0, "name": "s0", "ontology": "x"}]}]
-    p = gi.build_group_intensity_payload(items, [{"label": "g", "samples": ["c1"]}], rows, msms={0: True})
+    p = gi.build_group_intensity_payload(items, [{"label": "g", "samples": ["c1", "c2"]}], rows, msms={0: True})
+    # Verify log10_sd is not None (i.e., we have 2+ samples for statistics)
+    assert p["items"][0]["groups"][0]["log10_sd"] is not None, "Test fixture must have 2+ samples for SD calculation"
+    log10_mean = p["items"][0]["groups"][0]["log10_mean"]
+    log10_sd = p["items"][0]["groups"][0]["log10_sd"]
+
     fig = gi.render_group_intensity_plot(p)
     try:
         ax = fig.axes[0]
-        # Check for LineCollection from hlines
-        has_line_collection = any(hasattr(c, 'get_segments') for c in ax.collections)
-        # Also check for lines from errorbar/hlines
-        has_lines = len(ax.get_lines()) > 0
-        assert has_line_collection or has_lines, "Group mean line (hlines) should be drawn when log10_mean is not None"
+        # Look for LineCollection with horizontal segment at y == log10_mean (from hlines)
+        mean_line_found = False
+        for coll in ax.collections:
+            if hasattr(coll, 'get_segments'):
+                for seg in coll.get_segments():
+                    # A horizontal line has same y-coords at both endpoints
+                    if len(seg) == 2 and pytest.approx(seg[0][1], abs=0.01) == pytest.approx(seg[1][1], abs=0.01):
+                        if pytest.approx(seg[0][1], abs=0.01) == pytest.approx(log10_mean, abs=0.01):
+                            mean_line_found = True
+                            break
+        assert mean_line_found, "Mean line (horizontal segment at y=log10_mean) should be drawn"
+
+        # Look for ErrorbarContainer or vertical lines for SD bars
+        sd_bar_found = False
+        # Check containers for ErrorbarContainer
+        if hasattr(ax, 'containers'):
+            for container in ax.containers:
+                if hasattr(container, 'lines') and len(container.lines) > 0:
+                    sd_bar_found = True
+                    break
+        # Also check for vertical segments in LineCollections
+        if not sd_bar_found:
+            for coll in ax.collections:
+                if hasattr(coll, 'get_segments'):
+                    for seg in coll.get_segments():
+                        # A vertical line has same x-coords at both endpoints
+                        if len(seg) == 2 and pytest.approx(seg[0][0], abs=0.01) == pytest.approx(seg[1][0], abs=0.01):
+                            y_min, y_max = min(seg[0][1], seg[1][1]), max(seg[0][1], seg[1][1])
+                            # SD bar should span mean ± SD
+                            if (pytest.approx(y_min, abs=0.01) == pytest.approx(log10_mean - log10_sd, abs=0.01) and
+                                pytest.approx(y_max, abs=0.01) == pytest.approx(log10_mean + log10_sd, abs=0.01)):
+                                sd_bar_found = True
+                                break
+        assert sd_bar_found, "SD bar should be drawn when log10_sd is not None"
     finally:
         plt.close(fig)
 
