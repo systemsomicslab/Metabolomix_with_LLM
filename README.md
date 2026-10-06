@@ -71,6 +71,16 @@ export LIPIDMIX_DATA_DIR=/path/to/your/msdial/output
 That calls `load_dataset`, the entry point: it picks the latest alignment batch, runs the
 standard overview, and primes the session for everything that follows.
 
+### MS-DIAL Console and reference libraries (optional)
+
+Running MS-DIAL Console from raw data (`console_*`, `pipeline_*`) or matching against your own
+`.msp` library (`library_load`) needs to know where those files live. Copy
+`lipidmix.example.toml` to `lipidmix.local.toml` next to `server.py` and fill in the paths
+(Windows paths in single quotes). The file is not tracked by git and is read on every call, so
+edits take effect without restarting the server. The environment variables `MSDIAL_EXE`,
+`MSDIAL_LBM`, `MSDIAL_MSP_POS` and `MSDIAL_MSP_NEG` still work and take precedence over the file.
+If something is missing, the tool's error names the file and the key to fill in.
+
 To run the parsers without an MCP client, see [docs/cli.md](docs/cli.md).
 
 ## Repository map

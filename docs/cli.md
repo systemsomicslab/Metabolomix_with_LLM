@@ -72,7 +72,7 @@ C:/Python314/python.exe -m lipidmix.arf2.reader
 
 | フラグ | 意味 |
 |---|---|
-| `--ion-mode {positive,negative}` | 環境変数 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG` のどちらを使うか |
+| `--ion-mode {positive,negative}` | どちらの極性の設定（環境変数 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG`、無ければ `lipidmix.local.toml` の `[library] msp_positive` / `msp_negative`）を使うか |
 | `--file <path>` | ライブラリのパス（環境変数より優先） |
 | `--rebuild` | キャッシュと記憶した sha256 を無視して作り直す |
 

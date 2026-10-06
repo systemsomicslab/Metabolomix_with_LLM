@@ -132,11 +132,17 @@
 | `records_without_ion_mode` | 極性（`IONMODE`）を持たないレコード件数（`record_count` に含まれる）。`library_match_feature` の `ion_mode` 絞り込みはこれらを**極性不明として候補に残す** |
 | `non_utf8_lines` | UTF-8 で読めず cp932（無理なら latin-1）で読んだ `.msp` の行数。0 より多ければ化合物名が化けている可能性がある |
 
-**エラー戻り値**: ライブラリを 1 つに決められないときは `{"status": "error", "code": ..., "message": ...}`
+**エラー戻り値**: ライブラリを 1 つに決められないときは `{"status": "error", "code": ..., "message": ..., "details": ...}`
 を返し、store は差し替えない。`code` は `MSP_AMBIGUOUS`（候補が複数。`ion_mode` か
-`file_path` を指定する）/ `MSP_ENV_NOT_FOUND`（環境変数 `MSDIAL_MSP_POS` /
-`MSDIAL_MSP_NEG` の指す先が無い）/ `LIBRARY_NOT_FOUND`（明示した `file_path` が無い）/
-`INVALID_ION_MODE`。`message` にはファイル名と環境変数名だけが入り、置き場所は入らない。
+`file_path` を指定する）/ `MSP_ENV_NOT_FOUND`（極性の設定——環境変数 `MSDIAL_MSP_POS` /
+`MSDIAL_MSP_NEG` か `lipidmix.local.toml` の `[library] msp_positive` / `msp_negative`——の
+指す先が無い。設定ファイル由来でも同じコード）/ `LIBRARY_NOT_FOUND`（明示した `file_path` が無い）/
+`INVALID_ION_MODE` / `CONFIG_INVALID`（設定ファイルが読めない。`details` に `config_file`
+`line` `column`）。`details` は `MSP_ENV_NOT_FOUND` と、何も見つからなかったときに付き、
+`setting`（設定キー）`env_var` `source`（`env` / `config_file` / null）`config_file`
+`config_file_exists` `example`、あれば `unknown_keys`（打ち間違いの疑い）を持つ。
+`message` と `details` にはファイル名・設定キー・環境変数名・設定ファイルのパスだけが入り、
+ライブラリの置き場所は入らない。
 
 **`records_without_ion_mode`**: 研究室ライブラリのように極性ごとにファイルが分かれて
 いると、ファイル側に `IONMODE` 欄が無いことがある。NULL を絞り込みで弾くと候補が

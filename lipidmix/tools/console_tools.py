@@ -53,7 +53,8 @@ def console_plan(
     lbm_file:
         脂質ライブラリ（`.lbm2`）のパス。省略時は「メソッドファイルの宣言 →
         ビルド生成物（MsdialWorkbench をソースからビルドしている場合） →
-        環境変数 MSDIAL_LBM → MSDIAL_EXE と同じフォルダ」の順に、MS-DIAL GUI と
+        `[msdial] lbm`（lipidmix.local.toml）か環境変数 MSDIAL_LBM →
+        Console の実行体（[msdial] exe / MSDIAL_EXE）と同じフォルダ」の順に、MS-DIAL GUI と
         同じ規則で自動解決します。GUI 由来のパラメータは `Lbm file path:` が
         必ず空なので、この自動解決が無いと**警告なしで同定 0 件**になります。
         自動補完（宣言より後ろの 3 つ）は lipidomics だけです。引数と宣言は

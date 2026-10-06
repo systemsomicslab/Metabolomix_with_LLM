@@ -31,9 +31,11 @@ flowchart TD
 
 ## library_load
 
-前提: なし。解決順は `file_path` の明示 → `ion_mode` に対応する環境変数
-（`MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG`。研究室の参照ライブラリはリポジトリの外に
-置いてここで指す）→ データディレクトリの `*_Loaded.msp2.dbs` → 設定済みの環境変数
+前提: なし。解決順は `file_path` の明示 → `ion_mode` に対応する極性の設定
+（環境変数 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG` → `lipidmix.local.toml` の
+`[library] msp_positive` / `msp_negative`。`lipidmix/core/user_config.py` の
+`get_setting` が引く。研究室の参照ライブラリはリポジトリの外に置いてここで指す）→
+データディレクトリの `*_Loaded.msp2.dbs` → 設定済みの極性
 （両方あれば `MSP_AMBIGUOUS`）→ データディレクトリの `*.msp`（複数あれば
 `MSP_AMBIGUOUS`）。候補を更新日時で黙って選ばない。解決できなければ
 `LibraryPathError` を `code` 付きのエラー戻り値にする。

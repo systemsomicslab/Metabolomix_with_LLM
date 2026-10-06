@@ -363,7 +363,7 @@ def resolve_lbm(
     に関わらず `Lbm file path` を読み（`CommonProcess.ParseLibraries`）、LBM
     annotator を `TargetOmics.Lipidomics` 固定で組んで脂質を同定する
     （`LcmsProcess`）。宣言されたのに見つからなければ止める（Console は黙って
-    飛ばすので）。GUI 流の自動補完（ビルド生成物 → `MSDIAL_LBM` → exe フォルダ）
+    飛ばすので）。GUI 流の自動補完（ビルド生成物 → `lbm_setting`（`[msdial] lbm` / `MSDIAL_LBM`）→ exe フォルダ）
     だけを lipidomics に限る。metabolomics で宣言も引数も無ければ
     `not_required`（LBM を足さない）。
     """

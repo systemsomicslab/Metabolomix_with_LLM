@@ -53,11 +53,19 @@ Claude Code 用の `.mcp.json` はこれを絶対パスで指すが、`.git/info
 `LIPIDMIX_KNOWLEDGE_DIR` `LIPIDMIX_PLAYBOOK_DIR` `LIPIDMIX_ANALYSES_DIR` `LIPIDMIX_REPORTS_DIR`（蓄積先の上書き用）/
 `LIPIDMIX_TRANSPORT` `LIPIDMIX_HOST` `LIPIDMIX_PORT`（HTTP 待受）/ `LIPIDMIX_CAVEAT_MODE` /
 `LIPIDMIX_PLOT_OUTPUT`（描画系ツールの戻り値。既定 `image`。Plotly で自分で描く
-クライアント＝Use-LLLM は `payload` を置く）/ `MSDIAL_MSP_POS` `MSDIAL_MSP_NEG`
-（研究室の参照ライブラリ `.msp` の置き場所。`library_load(ion_mode=...)` が読む）/
-`LIPIDMIX_LIBRARY_CACHE_DIR`（照合用 SQLite キャッシュの置き場所。既定 `data/.library-cache`）。
+クライアント＝Use-LLLM は `payload` を置く）/
+`LIPIDMIX_LIBRARY_CACHE_DIR`（照合用 SQLite キャッシュの置き場所。既定 `data/.library-cache`）/
+`LIPIDMIX_CONFIG`（下記の設定ファイルの場所の上書き。worktree とテストが使う）。
 
-**研究室の参照ライブラリは外部流出禁止**。本体はリポジトリの外に置いて環境変数で指し、
+**外部資産の場所は設定ファイルか環境変数で指す**（spec 2026-10-06）。リポジトリ直下の
+`lipidmix.local.toml`（追跡外。雛形 `lipidmix.example.toml`）の `[msdial] exe` `lbm` と
+`[library] msp_positive` `msp_negative`、または環境変数 `MSDIAL_EXE` `MSDIAL_LBM`
+`MSDIAL_MSP_POS` `MSDIAL_MSP_NEG`（環境変数が優先）。読むのは `lipidmix/core/user_config.py`
+の `get_setting` だけで、各リゾルバは `os.environ` を直に読まない。設定ファイルは呼ばれる
+たびに読むので再起動は要らない。テストは conftest がこれらの環境変数を消し
+`LIPIDMIX_CONFIG` を存在しないパスへ向けている（手元の設定ファイルを掴ませない）。
+
+**研究室の参照ライブラリは外部流出禁止**。本体はリポジトリの外に置いて設定ファイルか環境変数で指し、
 パスを追跡対象の文書・テストに書かない。本体とキャッシュの拡張子は `.gitignore` が
 置き場所を問わず無視し、`tests/test_gitignore_library.py` がその網を縛っている。
 照合の上位候補（化合物名・スコア）がツール戻り値に出るのは許容されている。
@@ -134,7 +142,7 @@ lipidmix/tools/     形式に紐づかない MCP 公開層（入口・サンプ�
     （`lipidmix.core.session_state` / `lipidmix.core.mcp_core` / `lipidmix.tools.*`。
     `tests/test_pipeline_engine.py` の AST テストが固定している）。進行状況は
     `pipeline-run.json` と、そのプロセスだけが持つ `runtime` dict に住む。
-  - **`core/atomic_io.py` と `core/process_control.py` は stdlib だけの leaf**。
+  - **`core/atomic_io.py` と `core/process_control.py` と `core/user_config.py` は stdlib だけの leaf**。
     別プロセスの worker が最初に import するので、重い依存を持ち込まない。
   - **run record の `results` は追記専用**（`store._assert_results_append_only` が
     既存要素の書換えを拒否する）。永続化する pipeline 内のパスは `pipeline_root` 相対。
