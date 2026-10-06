@@ -1390,10 +1390,12 @@ def arf_plot_group_intensity(
 
     excluded_samples = set(arf_state.excluded_samples or ())
     rows_by_spot = {}
+    all_rows_by_spot = {}    # 標準液の判定用: arf_exclude 済みの試料の行も含める
     for feature in arf_state.features:
-        rows = [arf_reader.alignment_feature_row(raw) for raw in feature["AlignedPeakProperties"]]
+        rows = [r for r in (arf_reader.alignment_feature_row(raw) for raw in feature["AlignedPeakProperties"]) if r]
+        all_rows_by_spot[feature["MasterAlignmentID"]] = rows
         rows_by_spot[feature["MasterAlignmentID"]] = [
-            r for r in rows if r and r.get("file_name") not in excluded_samples]
+            r for r in rows if r.get("file_name") not in excluded_samples]
     names = [n for n in sample_factors.arf_sample_names(arf_state.features) if n not in excluded_samples]
     facets = sample_factors.build_sample_facets(names, arf_state.class_index)
     resolved_groups, caveats = gi.resolve_groups(groups, facets)
@@ -1406,7 +1408,7 @@ def arf_plot_group_intensity(
         try:
             flag_set = curation_apply.flags_for_arf2(arf2_path)
         except curation_flags.FlagFileError as exc:
-            return json_payload({"status": "error", **exc.details()})
+            return json_payload({"status": "error", "message": str(exc), **exc.details()})
         curation = {
             "wrong": {int(s) for s in flag_set["wrong"]},
             "redundant": {int(s) for s in flag_set["redundant"]},
@@ -1428,7 +1430,7 @@ def arf_plot_group_intensity(
     if standard_samples:
         standard = gi.resolve_sample_specs(standard_samples, sample_factors.build_sample_facets(
             sample_factors.arf_sample_names(arf_state.features), arf_state.class_index))
-    standard_only = gi.standard_only_spots(rows_by_spot, standard, plotted) if standard else frozenset()
+    standard_only = gi.standard_only_spots(all_rows_by_spot, standard, plotted) if standard else frozenset()
     resolved_items, excluded = gi.resolve_items(items, catalog, curation=curation, standard_only=standard_only)
 
     # MS/MS の裏付け: 照合結果に MS/MS があり、かつ .arf2 の Name が `no MS2:` / `w/o MS2:` でない
@@ -1464,8 +1466,11 @@ def _group_intensity_caption(payload: dict) -> str:
     """画像に添える 1 行。図から読めない内訳（試料数・除外数・N.D.）を言葉で残す。"""
     groups = "、".join(f"{g['label']} n={len(g['samples'])}" for g in payload["groups"])
     nd = [it["item"] for it in payload["items"] if not it["detected"]]
+    per_item = "、".join(
+        f"{it['item']} {it['n_spots']}" + (f" (MS/MS {it['n_spots_msms']})" if it.get("n_spots_msms") is not None else "")
+        for it in payload["items"])
     ex = payload["excluded"]
-    caption = (f"群別強度: {len(payload['items'])} 項目（{groups}）。除外 — 内部標準 {len(ex['internal_standard'])}・"
+    caption = (f"群別強度: {len(payload['items'])} 項目（{groups}）。スポット数 — {per_item}。除外 — 内部標準 {len(ex['internal_standard'])}・"
                f"判断 {len(ex['curation'])}・自動判定 {len(ex['auto_likely_wrong'])}・標準液 {len(ex['standard_only'])}。")
     if nd:
         caption += f" N.D.: {'、'.join(nd)}。"

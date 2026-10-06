@@ -90,6 +90,42 @@ def test_curation_flags_are_applied_by_default(loaded):
     assert 1 in [s["spot_id"] for s in p["items"][0]["spots"]]
 
 
+def test_standard_filter_still_works_when_standard_sample_is_arf_excluded(loaded):
+    session_state.session.arf.excluded_samples = {"20261006_std_1"}
+    p = _payload(items=["PG"], groups=["ctrl", "ko"], standard_samples=["std"])
+    assert [s["spot_id"] for s in p["items"][0]["spots"]] == [0, 1]
+    assert p["excluded"]["standard_only"] == ["#4 PG 31:1|PG 17:0_14:1"]
+
+
+def _write_review(arf2, review_id, sha, spots):
+    directory = curation_flags.curation_dir(arf2)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"review-{review_id}.json").write_text(
+        json.dumps({"alignment": {"alignment_sha256": sha}, "spots": spots}), encoding="utf-8")
+
+
+def test_auto_likely_wrong_with_review_excludes_spots_and_ignores_other_alignment(loaded):
+    arf2 = loaded["arf2"]
+    sha = curation_flags.alignment_key(arf2)["alignment_sha256"]
+    _write_review(arf2, "cr-20261006-120000-aaaa", sha, [{"spot_id": 1, "verdict": "likely_wrong"}])
+    # 別アラインメント（sha256 違い）のレビューは、より新しくても無視される
+    _write_review(arf2, "cr-20261006-130000-bbbb", "0" * 64, [{"spot_id": 0, "verdict": "likely_wrong"}])
+    p = _payload(items=["PG"], groups=["ctrl"], exclude_auto_likely_wrong=True)
+    assert [s["spot_id"] for s in p["items"][0]["spots"]] == [0, 4]
+    assert [e for e in p["excluded"]["auto_likely_wrong"]][0].startswith("#1 ")
+    assert not any("レビュー" in c for c in p["caveats"])
+    p = _payload(items=["PG"], groups=["ctrl"])
+    assert 1 in [s["spot_id"] for s in p["items"][0]["spots"]]
+
+
+def test_broken_flag_file_returns_error_with_message(loaded):
+    directory = curation_flags.curation_dir(loaded["arf2"])
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / curation_flags.FLAGS_FILENAME).write_text("{not json\n", encoding="utf-8")
+    out = _payload(items=["PG"], groups=["ctrl"])
+    assert out["status"] == "error" and out["message"]
+
+
 def test_auto_likely_wrong_without_review_adds_caveat(loaded):
     p = _payload(items=["PG"], groups=["ctrl"], exclude_auto_likely_wrong=True)
     assert any("レビュー" in c for c in p["caveats"])
@@ -124,6 +160,7 @@ def test_image_output_and_session_keeps_payload(loaded):
     out = arf_plot_group_intensity(items=["PG", "PE"], groups=["ctrl", "ko"])
     assert isinstance(out, list) and isinstance(out[1], Image)
     assert "2 項目" in out[0] and "N.D.: PE" in out[0]
+    assert "PG 3 (MS/MS 0)" in out[0] and "PE 0" in out[0]
     assert session_state.session.arf.last_group_intensity["payload"]["items"][0]["item"] == "PG"
 
 
