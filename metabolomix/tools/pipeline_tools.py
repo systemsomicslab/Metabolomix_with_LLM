@@ -86,10 +86,10 @@ def pipeline_run(dataset_root: str, request: dict | None = None,
                  request_id: str | None = None) -> str:
     """計画と起動を一括実行する。生データから MS-DIAL Console を回す補助経路の入口。
 
-    主経路は MS-DIAL GUI で解析済みの出力を `load_dataset` で読むこと。生データ
-    だけのフォルダでは、まず GUI での解析を勧め、Console での自動解析は選択肢
-    として示す。このツールはユーザーがそれを選んだときにだけ呼ぶ。起動前に解決
-    結果（method file・LBM・極性）を見たいときは `pipeline_plan`。引数は
+    先にフォルダに MS-DIAL を動かした形跡（.arf 等の出力）があるかを確かめ、
+    あれば `load_dataset` で下流へ進む（主経路）。形跡が無いときだけ、ユーザーに
+    Console を回してよいか許可を取り、同意を得てからこのツールを呼ぶ。起動前に
+    解決結果（method file・LBM・極性）を見たいときは `pipeline_plan`。引数は
     `pipeline_plan` と同じ。
 
     短時間で `pipeline_path` を返す——起動受理は、workerのidentity保存と

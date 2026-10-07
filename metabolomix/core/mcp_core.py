@@ -164,41 +164,38 @@ identification rests on the candidate set (adducts, isomers, rank). Record it
 with `record_objective(assay_kind=...)`, which also switches the semantics
 digest this server prepends to parser output.
 
-ENTRY POINT — the main path is MS-DIAL output the user has already processed
-in the MS-DIAL GUI. Running MS-DIAL Console from raw data is an auxiliary path.
-Distinguish which of the following the user's folder actually is before
-picking a tool:
+ENTRY POINT — first check whether MS-DIAL has already been run on the user's
+folder, then go downstream if it has, or ask before running it if it has not.
+Look before picking a tool: `list_data_files(directory=...)` lists MS-DIAL
+output in the folder, and `all_files=True` also shows raw instrument files.
 
-1. EXISTING MS-DIAL OUTPUT (a folder that already contains .arf/.arf2/.pai2/
-   .dcl/.EIC.aef or a completed analysis-job.json). Call
-   `load_dataset(directory)` (or `dataset_load` for an mzTab-M path). It runs
-   the standard initial analysis (arf2 overview -> arf PCA, auto-selecting
-   PeakProperties.arf over DriftSpots.arf) and primes the session. Its output
-   (group structure, compound classes, polarity) is exactly the material for
-   GATEWAY step 1 below.
-2. RAW DATA ONLY (a folder of unprocessed instrument files, with no existing
-   MS-DIAL output). Any format MS-DIAL itself reads qualifies: .abf .ibf .cdf
-   .mzml .wiff .raw .d .wiff2 .qgd .lcd .lrp .imzml. For Agilent/Bruker .d and
-   Waters .raw, one measurement is a FOLDER, not a file — a directory listing
-   showing only sub-folders with those extensions IS raw data, not an empty
-   folder and not branch 3. Do NOT launch anything yet. Tell the user the
-   recommended route is to process the data in the MS-DIAL GUI and then point
-   this server at the output folder (branch 1). Offer, as an alternative,
-   running MS-DIAL Console automatically with `pipeline_run(dataset_root)`,
-   and launch it only after the user chooses that option. If the user wants
-   to see the resolved settings (method file, LBM, polarity) before anything
-   launches, use `pipeline_plan` first. Once launched, `pipeline_run` starts
-   an independent worker that carries the run through upstream execution,
-   metadata resolution, preprocessing, PCA, and (if comparisons are given or
-   confirmed) differential analysis and reporting, returning a compact
-   dispatch receipt (`pipeline_id`/`pipeline_path`) — not the results
-   themselves. Poll with `pipeline_status(pipeline_path)` and, once it reports
-   `needs_input`, resolve ONLY the missing items with `pipeline_resume`
-   (never re-ask about items already confirmed).
-3. MIXED / AMBIGUOUS (raw files and existing MS-DIAL output both present).
-   Default to reading the existing results (branch 1). Do NOT launch a
-   re-analysis from raw data unless the user asks for it; if it is unclear
-   which they want, ask.
+1. MS-DIAL HAS BEEN RUN (the folder contains MS-DIAL output: .arf/.arf2/
+   .pai2/.dcl/.EIC.aef, an mzTab-M file, a completed analysis-job.json, or a
+   completed pipeline run). Go downstream — this is the main path, and it
+   applies even when raw files sit in the same folder. Call
+   `load_dataset(directory)` (or `dataset_load` for an mzTab-M / job /
+   pipeline path). It runs the standard initial analysis (arf2 overview ->
+   arf PCA, auto-selecting PeakProperties.arf over DriftSpots.arf) and primes
+   the session. Its output (group structure, compound classes, polarity) is
+   exactly the material for GATEWAY step 1 below. Re-run MS-DIAL on such a
+   folder only if the user explicitly asks for it.
+2. NO TRACE OF MS-DIAL (only unprocessed instrument files). Any format
+   MS-DIAL itself reads qualifies: .abf .ibf .cdf .mzml .wiff .raw .d .wiff2
+   .qgd .lcd .lrp .imzml. For Agilent/Bruker .d and Waters .raw, one
+   measurement is a FOLDER, not a file — a directory listing showing only
+   sub-folders with those extensions IS raw data, not an empty folder. Running
+   MS-DIAL Console is an auxiliary path that takes tens of minutes and writes
+   outputs next to the raw data, so ASK THE USER FOR PERMISSION before
+   launching it, and launch nothing until they agree. Once they agree, call
+   `pipeline_run(dataset_root)`. If they want to see the resolved settings
+   (method file, LBM, polarity) first, call `pipeline_plan` before asking.
+   `pipeline_run` starts an independent worker that carries the run through
+   upstream execution, metadata resolution, preprocessing, PCA, and (if
+   comparisons are given or confirmed) differential analysis and reporting,
+   returning a compact dispatch receipt (`pipeline_id`/`pipeline_path`) — not
+   the results themselves. Poll with `pipeline_status(pipeline_path)` and,
+   once it reports `needs_input`, resolve ONLY the missing items with
+   `pipeline_resume` (never re-ask about items already confirmed).
 
 MIXED-DATE FOLDERS ARE FINE — a folder may contain files from several MS-DIAL
 processing runs (multiple dates/batches). This is NOT a blocker and must not be

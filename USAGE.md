@@ -9,8 +9,8 @@ list_data_files → load_dataset → arf_list_classes / arf_preprocess
    → arf_pca_preprocessed / arf_differential → save_*_figure
    → record_objective → knowledge_coverage → paper_search → ingest_* → write_report
 
-生データから始める場合(補助経路。MS-DIAL GUI で解析してから load_dataset で読むのが主経路。
-Console で自動解析することをユーザーが選んだときだけ。手動で繋ぐなら):
+生データから始める場合(補助経路。まずフォルダに MS-DIAL を動かした形跡(.arf 等)があるかを確かめ、
+あれば上の主経路へ。形跡が無く、Console を回すことにユーザーが同意したときだけ。手動で繋ぐなら):
 console_plan → console_run → dataset_load → dataset_preprocess
    → dataset_pca / dataset_differential → dataset_export_differential
 
@@ -195,7 +195,7 @@ QC/blank の扱いはツールごとに異なる。`arf_parser` の `class_ids` 
 
 | ツール | 機能 |
 |--------|------|
-| `pipeline_run` | 生データフォルダ(`dataset_root`)を渡すだけの、Console 補助経路の入口。主経路は GUI で解析済みの出力を `load_dataset` で読むことで、生データだけのときは GUI での解析を勧め、ユーザーが Console での自動解析を選んだときだけ呼ぶ。入力検査・計画保存・workerの起動までを一括で行い、短時間で `pipeline_path` を返す(工程自体は非同期に進む)。`request`(省略可)で `target`/`polarity`/`method_file`/`sample_manifest`/`preprocess`/`comparisons` 等を指定できる。省略項目は既定値で埋まる(measure=peak_height、preprocess=conservative-v1、comparisons=空 等)。`dataset_root` 直下の `analysis-request.json` / `sample-manifest.tsv` は既定名として読み、優先順位は「`request` の明示値 > `analysis-request.json` > 既定値」(`preprocess` は子キー単位で重なる)。`request_id` は冪等性キーで、同一内容の再送は同じ結果を返し別内容は `IDEMPOTENCY_CONFLICT`。壊れた実験情報シート等の既知の不正入力は、Console を起動せず `needs_input` を保存する。差次的解析で `comparisons` を指定し忘れた場合だけは、workerを起動したうえで `resolve_comparisons` 工程が `COMPARISON_REQUIRED` の `needs_input` として検出する。 |
+| `pipeline_run` | 生データフォルダ(`dataset_root`)を渡すだけの、Console 補助経路の入口。フォルダに MS-DIAL を動かした形跡(.arf 等)があれば `load_dataset` で下流へ進むのが主経路で、形跡が無いときだけ、ユーザーの許可を取ってから呼ぶ。入力検査・計画保存・workerの起動までを一括で行い、短時間で `pipeline_path` を返す(工程自体は非同期に進む)。`request`(省略可)で `target`/`polarity`/`method_file`/`sample_manifest`/`preprocess`/`comparisons` 等を指定できる。省略項目は既定値で埋まる(measure=peak_height、preprocess=conservative-v1、comparisons=空 等)。`dataset_root` 直下の `analysis-request.json` / `sample-manifest.tsv` は既定名として読み、優先順位は「`request` の明示値 > `analysis-request.json` > 既定値」(`preprocess` は子キー単位で重なる)。`request_id` は冪等性キーで、同一内容の再送は同じ結果を返し別内容は `IDEMPOTENCY_CONFLICT`。壊れた実験情報シート等の既知の不正入力は、Console を起動せず `needs_input` を保存する。差次的解析で `comparisons` を指定し忘れた場合だけは、workerを起動したうえで `resolve_comparisons` 工程が `COMPARISON_REQUIRED` の `needs_input` として検出する。 |
 | `pipeline_plan` | `pipeline_run` と同じ入力検査・計画保存だけを行い、workerは起動しない。実行前に条件(不足情報と、receiptの `resolved` が返す method/lbm/polarity)を確認したいときに使う。 |
 | `pipeline_status` | 実行中の run の状態を読む(`pipeline_path`, `include_details=False`)。**読み取り専用** — 監視や成果物の確定はこの呼び出しに依存しない(呼ばなくても裏の worker が最後まで進める)。`status`/`stage_statuses`/`needs_input`/`warnings` の要約を返し、`include_details=True` で永続レコード全体を追加取得できる。`status="running"` のとき、workerの生存確認 `observed_health`(`ok`/`worker_missing`/`unknown`)を添える。`worker_missing` なら `recovery_hint` で `pipeline_resume` を促す。 |
 | `pipeline_resume` | 入力訂正(`updates`: `target`/`sample_manifest`/`preprocess`/`comparisons` に限定)、下流の再計算、または中断した工程からの再開を行う。`rerun_upstream=True` を明示しない限り Console 実行はやり直さない(自動再試行はしない)。`request_id` を指定した再送は、直前と同じ内容なら新しい revision を作らず直前の結果を返す。 |
