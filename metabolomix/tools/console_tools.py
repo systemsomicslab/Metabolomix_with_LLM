@@ -794,7 +794,10 @@ def console_method_template(
         "changed_keys": sorted(overrides),
         "caveat": "検出・アライメント条件は元ファイルのまま引き継いでいます。"
                   "その極性に妥当かは実行前に確認してください。",
-        "next": f"console_plan(dataset_root=..., method_file={str(dest)!r}, polarity={polarity!r})",
+        # msp_only の雛形は `Lbm file path` が空なので、auto で計画すると LBM が自動補完され
+        # 契約（LBM 不使用）が黙って破れる。次の一手にもモードを引き継ぐ。
+        "next": (f"console_plan(dataset_root=..., method_file={str(dest)!r}, polarity={polarity!r}"
+                 + (", library_mode='msp_only')" if library_mode == "msp_only" else ")")),
     })
 
 

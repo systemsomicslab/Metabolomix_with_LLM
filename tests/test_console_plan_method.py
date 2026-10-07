@@ -535,3 +535,20 @@ def test_console_method_template_msp_only(tmp_path, monkeypatch):
     assert keys["lbm file path"] == [""]
     assert keys["msp file path"] == [os.path.abspath(paths["positive"])]
     assert keys["ion mode"] == ["Positive"]
+
+
+def test_console_method_template_msp_only_next_hint_keeps_the_mode(tmp_path, monkeypatch):
+    """最終レビュー #7: 雛形の次の一手が auto の console_plan を勧めない（LBM が自動補完され契約が破れる）。"""
+    write_lab_msp_config(tmp_path, monkeypatch)
+    exe = _fake_exe_with_lbm(tmp_path, "Msp_lipids.lbm2")
+    _plan_ready(tmp_path, monkeypatch, exe)
+    src = tmp_path / "neg_param.txt"
+    src.write_text("Ion mode: Negative\n", encoding="ascii")
+    from metabolomix.tools.console_tools import console_method_template
+    parsed = _json.loads(console_method_template(
+        out_path=str(tmp_path / "pos_param.txt"), polarity="positive", based_on=str(src),
+        library_mode="msp_only"))
+    assert "library_mode='msp_only'" in parsed["next"]
+    auto = _json.loads(console_method_template(
+        out_path=str(tmp_path / "pos_auto.txt"), polarity="positive", based_on=str(src)))
+    assert "library_mode" not in auto["next"]

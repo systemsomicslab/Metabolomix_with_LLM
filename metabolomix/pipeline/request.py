@@ -344,7 +344,9 @@ def _validate_fields(data: dict) -> None:
     for field in ("method_file", "lbm_file", "msp_file", "output_root", "sample_manifest"):
         _validate_optional_str(data, field)
 
-    library_mode = data.get("library_mode")
+    # 変更前に保存された要求（キー無し）は既定の "auto"。明示の null は
+    # `_reject_disallowed_explicit_null` が先に拒否している。
+    library_mode = data.get("library_mode", "auto")
     if library_mode not in _LIBRARY_MODE_VALUES:
         _fail(f"library_modeが不正です: {library_mode!r}", library_mode=library_mode)
     if library_mode == "msp_only" and data.get("lbm_file"):

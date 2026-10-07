@@ -781,3 +781,56 @@ def test_auto_plan_reports_msp_not_used(tmp_path, monkeypatch):
     assert plan["msp"] == {"path": None, "file": None, "sha256": None, "source": "not_used"}
     assert plan["removed_declarations"] == []
     assert plan["lbm"]["path"] == str(src["lbm"].resolve())
+
+
+def test_verify_inputs_msp_errors_do_not_reveal_the_location(tmp_path, monkeypatch):
+    """最終レビュー #2: resume の再検査が研究室 MSP の置き場所を返さない。"""
+    _allow_fake_exe(monkeypatch)
+    paths = write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share")
+    src = make_source(tmp_path / "raw")
+    request = resolve_request(src["root"], {"library_mode": "msp_only"})
+    plan = inspect_inputs(src["root"], request, exe_path=src["exe"])
+    snapshot = stage_inputs(plan, tmp_path / "pipeline_run")
+
+    paths["negative"].write_text("NAME: changed\n", encoding="ascii")
+    with pytest.raises(DomainError, match="INPUT_CHANGED") as changed:
+        verify_inputs(snapshot)
+    assert changed.value.details == {"which": "msp", "msp_file": "lab_neg.msp"}
+    assert "secret_share" not in str(changed.value)
+
+    paths["negative"].unlink()
+    with pytest.raises(DomainError, match="INPUT_CHANGED") as missing:
+        verify_inputs(snapshot)
+    assert missing.value.details == {"which": "msp", "msp_file": "lab_neg.msp"}
+    assert "secret_share" not in str(missing.value)
+
+
+def test_stage_encoding_error_lists_keys_not_paths(tmp_path, monkeypatch):
+    """最終レビュー #3: 実効メソッドを書けないときの details に上書きの値（MSP の絶対パス）を載せない。"""
+    _allow_fake_exe(monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share")
+    src = make_source(tmp_path / "raw")
+    src["method"].write_bytes(
+        "Ion mode: negative\nTarget omics: Lipidomics\nLbm file path: fake.lbm2\n"
+        "Compounds library file path for RT correction: 補正.txt\n".encode("utf-8"))
+    request = resolve_request(src["root"], {"library_mode": "msp_only"})
+    plan = inspect_inputs(src["root"], request, exe_path=src["exe"])
+    with pytest.raises(DomainError, match="METHOD_ENCODING_UNSUPPORTED") as info:
+        stage_inputs(plan, tmp_path / "pipeline_run")
+    assert info.value.details == {"keys": [method_file_mod.RT_REFERENCE_KEY]}
+    assert "secret_share" not in str(info.value)
+
+
+def test_sha256_is_streamed_not_read_whole(tmp_path, monkeypatch):
+    """最終レビュー #4: 2 GB 級の MSP を丸ごとメモリに読まない。"""
+    import hashlib
+    from metabolomix.pipeline import inputs as inputs_mod
+    big = tmp_path / "big.msp"
+    big.write_bytes(b"x" * (3 << 20))
+    expected = hashlib.sha256(big.read_bytes()).hexdigest()
+
+    def forbidden(self, *args, **kwargs):
+        raise AssertionError("read_bytes で丸ごと読んだ")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    assert inputs_mod._sha256_file(big) == expected

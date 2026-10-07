@@ -705,3 +705,23 @@ def test_plan_fingerprint_is_unchanged_without_an_msp():
     assert service._plan_fingerprint(plan) == legacy
     plan["msp"] = {"path": "x", "file": "x.msp", "sha256": "s" * 64, "source": "config_file"}
     assert service._plan_fingerprint(plan) != legacy
+
+
+def test_status_details_do_not_reveal_the_lab_msp_location(tmp_path, monkeypatch):
+    """最終レビュー #3: pipeline_status(include_details=True) の record から研究室 MSP の置き場所を除く。"""
+    from metabolomix.pipeline import recovery
+    from tests.lab_msp_fixtures import write_lab_msp_config
+    source = _prepare_source(tmp_path, monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share")
+    receipt = service.plan_pipeline(source["root"], {"library_mode": "msp_only"})
+    status = recovery.read_status(Path(receipt["pipeline_path"]), include_details=True)
+    text = json.dumps(status, ensure_ascii=False)
+    assert "secret_share" not in text
+    inputs = status["record"]["inputs"]
+    assert inputs["msp"]["file"] == "lab_neg.msp"
+    assert inputs["method"]["overrides"]["Msp file path"] == "lab_neg.msp"
+    # データ側の記録そのものは絶対パスのまま（resume の再検査に要る）。
+    from metabolomix.pipeline import store
+    saved = store.load_run(recovery.normalize_pipeline_root(Path(receipt["pipeline_path"])))
+    assert saved["inputs"]["msp"]["path"].endswith("lab_neg.msp")
+    assert "secret_share" in saved["inputs"]["msp"]["path"]

@@ -719,3 +719,15 @@ def test_v2_rejects_library_mode_with_a_migration_hint(tmp_path):
     with pytest.raises(DomainError, match="PIPELINE_REQUEST_INVALID") as info:
         request_v2._check_known_keys({"library_mode": "msp_only"})
     assert "library_mode" in str(info.value)
+
+
+def test_resume_of_a_request_saved_before_library_mode_still_validates(tmp_path):
+    """最終レビュー #1: 変更前に保存された要求（library_mode / msp_file キー無し）でも
+    resume の updates が通り、内容 hash も変わらない。"""
+    req = resolve_request(_root(tmp_path))
+    legacy = {k: v for k, v in req.items() if k not in ("library_mode", "msp_file")}
+    legacy["value_sources"] = {k: v for k, v in req["value_sources"].items()
+                               if k not in ("library_mode", "msp_file")}
+    assert request_fingerprint(legacy) == request_fingerprint(req)
+    updated = merge_updates(legacy, {"target": "exploratory"})
+    assert updated["target"] == "exploratory"

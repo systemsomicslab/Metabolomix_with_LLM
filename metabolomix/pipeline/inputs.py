@@ -68,7 +68,9 @@ _EFFECTIVE_METHOD_NAME = "effective-method.txt"
 # ---------- 小さなユーティリティ ----------
 
 def _sha256_file(path: Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    # 研究室 MSP は 2 GB 級になる。丸ごと読まずにストリームでハッシュする。
+    with open(path, "rb") as f:
+        return hashlib.file_digest(f, "sha256").hexdigest()
 
 
 def resolve_manifest_path(source_root: Path, request: dict) -> Path | None:
@@ -775,7 +777,8 @@ def stage_inputs(plan: dict, pipeline_root: Path, *,
         raise DomainError(
             "METHOD_ENCODING_UNSUPPORTED",
             f"実効メソッドをASCIIで書き出せません（非ASCII文字を含みます）: {exc}",
-            {"overrides": overrides}) from exc
+            # 値は載せない（研究室 MSP の絶対パスが LLM の文脈に入るため。spec 2026-10-07 §3.3）。
+            {"keys": sorted(key for key, value in overrides.items() if not value.isascii())}) from exc
 
     snapshot = copy.deepcopy(plan)
     snapshot["pipeline_root"] = str(pipeline_root.resolve())
@@ -844,11 +847,14 @@ def verify_inputs(snapshot: dict) -> None:
         if not info or not info.get(path_key) or not info.get("sha256"):
             continue
         path = Path(info[path_key])
+        # 研究室 MSP は置き場所を返さない（ファイル名だけ。spec 2026-10-07 §3.3）。
+        shown = path.name if label == "msp" else str(path)
+        details = ({"which": label, "msp_file": path.name} if label == "msp"
+                   else {"which": label, "path": str(path)})
         try:
             digest = _sha256_file(path)
         except OSError as exc:
-            raise DomainError("INPUT_CHANGED", f"{label}のファイルが読めません: {path}",
-                              {"which": label, "path": str(path)}) from exc
+            raise DomainError("INPUT_CHANGED", f"{label}のファイルが読めません: {shown}",
+                              details) from exc
         if digest != info["sha256"]:
-            raise DomainError("INPUT_CHANGED", f"{label}の内容が変化しています: {path}",
-                              {"which": label, "path": str(path)})
+            raise DomainError("INPUT_CHANGED", f"{label}の内容が変化しています: {shown}", details)
