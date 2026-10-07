@@ -505,7 +505,9 @@ def test_plan_receipt_shows_the_resolved_settings_the_instructions_promise(tmp_p
     assert resolved["polarity"]["source"]
 
     # コンパクトさ: 大きな中間データを持ち込んでいない。
-    assert set(resolved) == {"method", "lbm", "polarity"}
+    assert set(resolved) == {"method", "lbm", "polarity", "library_mode", "msp"}
+    assert resolved["library_mode"] == "auto"
+    assert resolved["msp"] == {"file": None, "sha256": None, "source": "not_used"}
     assert set(resolved["method"]) == {"source_path", "sha256"}
     text = json.dumps(receipt, ensure_ascii=False)
     assert "raw_stat" not in text and "entries" not in text
@@ -670,3 +672,36 @@ def test_a_precondition_error_stops_the_engine_as_needs_input_not_failed(tmp_pat
 
     assert outcome["status"] == "needs_input"
     assert outcome["error"]["code"] != "PreconditionError"
+
+
+def test_plan_receipt_shows_the_lab_msp_without_its_location(tmp_path, monkeypatch):
+    from tests.lab_msp_fixtures import write_lab_msp_config
+    source = _prepare_source(tmp_path, monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share")
+    receipt = service.plan_pipeline(source["root"], {"library_mode": "msp_only"})
+    resolved = receipt["resolved"]
+    assert resolved["library_mode"] == "msp_only"
+    assert resolved["lbm"] == {"path": None, "sha256": None}
+    assert resolved["msp"]["file"] == "lab_neg.msp"
+    assert len(resolved["msp"]["sha256"]) == 64
+    assert resolved["msp"]["source"] == "config_file"
+    assert "secret_share" not in json.dumps(receipt, ensure_ascii=False)
+
+
+def test_plan_fingerprint_is_unchanged_without_an_msp():
+    from metabolomix.core.atomic_io import canonical_hash
+    plan = {
+        "raw_stat": [{"relative_path": "a.wiff", "size": 1, "mtime_ns": 2}],
+        "selected_format": "wiff",
+        "method": {"sha256": "m" * 64}, "lbm": {"sha256": "l" * 64},
+        "exe": {"sha256": "e" * 64}, "polarity": {"value": "negative"},
+    }
+    legacy = canonical_hash({
+        "raw_stat": plan["raw_stat"], "selected_format": "wiff",
+        "method_sha256": "m" * 64, "lbm_sha256": "l" * 64, "exe_sha256": "e" * 64,
+        "polarity": "negative"})
+    assert service._plan_fingerprint(plan) == legacy
+    plan["msp"] = {"path": None, "file": None, "sha256": None, "source": "not_used"}
+    assert service._plan_fingerprint(plan) == legacy
+    plan["msp"] = {"path": "x", "file": "x.msp", "sha256": "s" * 64, "source": "config_file"}
+    assert service._plan_fingerprint(plan) != legacy

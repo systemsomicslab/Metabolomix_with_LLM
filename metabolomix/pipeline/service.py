@@ -118,14 +118,20 @@ def _plan_fingerprint(plan: dict) -> str:
     ——`overrides`（絶対パスを含みうる）や`unverified`（判断の説明文）は
     「同一入力」の判定に無関係なので混ぜない。
     """
-    return canonical_hash({
+    content = {
         "raw_stat": plan["raw_stat"],
         "selected_format": plan["selected_format"],
         "method_sha256": plan["method"]["sha256"],
         "lbm_sha256": plan["lbm"]["sha256"],
         "exe_sha256": plan["exe"]["sha256"],
         "polarity": plan["polarity"]["value"],
-    })
+    }
+    # 研究室 MSP は msp_only のときだけ入れる。auto の計画の指紋は変えない
+    # （受付冪等性と再開の同一性が既存 run で崩れないように。spec 2026-10-07 §3.3）。
+    msp_sha256 = (plan.get("msp") or {}).get("sha256")
+    if msp_sha256:
+        content["msp_sha256"] = msp_sha256
+    return canonical_hash(content)
 
 
 def _resolve_manifest_path(source_root: Path, request: dict) -> Path | None:
@@ -184,7 +190,8 @@ def _resolved_settings(record: dict) -> dict:
     `pipeline_status(include_details=True)`でrecord全体を引くしかない
     ——コンパクトなreceiptという拘束と正面から衝突する。
 
-    載せるのは3項目だけ。`raw_stat`・`entries`・`companions`・`overrides`の
+    載せるのは method / lbm / polarity / library_mode / msp だけ（msp は置き場所を
+    載せずファイル名・sha256・出どころ。spec 2026-10-07 §3.3）。`raw_stat`・`entries`・`companions`・`overrides`の
     ような大きな中間データは`record["inputs"]`に残したまま、receiptへは
     出さない（CLAUDE.md「戻り値を肥大させない」）。
     """
@@ -192,10 +199,14 @@ def _resolved_settings(record: dict) -> dict:
     method = inputs.get("method") or {}
     lbm = inputs.get("lbm") or {}
     polarity = inputs.get("polarity") or {}
+    msp = inputs.get("msp") or {}
     return {
         "method": {"source_path": method.get("source_path"), "sha256": method.get("sha256")},
         "lbm": {"path": lbm.get("path"), "sha256": lbm.get("sha256")},
         "polarity": {"value": polarity.get("value"), "source": polarity.get("source")},
+        "library_mode": inputs.get("library_mode", "auto"),
+        "msp": {"file": msp.get("file"), "sha256": msp.get("sha256"),
+                "source": msp.get("source", "not_used")},
     }
 
 
@@ -308,7 +319,7 @@ def plan_pipeline(dataset_root: Path, request: dict | None = None,
                   request_id: str | None = None) -> dict:
     """入力検査・不足情報・固定要求の保存のみを行う。Consoleは起動しない。
 
-    receiptには解決済みのmethod/LBM/polarityを`resolved`として載せる
+    receiptには解決済みのmethod/LBM/polarity/library_mode/MSPを`resolved`として載せる
     ——`MCP_INSTRUCTIONS`がこのツールを「起動前に解決結果を確認する」入口
     として案内しているため（`_resolved_settings`）。
     """
