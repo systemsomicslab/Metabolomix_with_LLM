@@ -30,6 +30,8 @@ def console_plan(
     timeout_s: int = 21600,
     lbm_file: str | None = None,
     keep_extension: str | None = None,
+    library_mode: str = "auto",
+    msp_file: str | None = None,
 ) -> str:
     """MS-DIAL Console の実行計画を作成し、analysis-job.json を生成します。
 
@@ -85,6 +87,17 @@ def console_plan(
         指定すると、その形式の計測ファイルと随伴ファイルだけを集めたフォルダを
         `<元フォルダ>_<拡張子>` にハードリンクで作り（既にあれば欠けている分だけ
         補う）、そちらで計画します。元フォルダは変更しません。
+    library_mode:
+        "auto"（既定）か "msp_only"。"msp_only" は LBM を使わず、研究室の参照ライブラリ
+        （.msp）だけで同定する: 実効メソッドの `Lbm file path` を空にし、`Msp file path` に
+        `msp_file` か極性の設定（環境変数 MSDIAL_MSP_POS / MSDIAL_MSP_NEG →
+        lipidmix.local.toml の [library] msp_positive / msp_negative）を書き、メソッドが宣言する
+        Text DB と MSP / Text の注釈器設定表を空にする（消したキーは removed_declarations）。
+        メソッドの `Msp file path` の宣言は使わない。MSP が決まらなければ MSP_NOT_CONFIGURED /
+        MSP_NOT_FOUND で止まり、ジョブを作らない。lbm_file とは同時に指定できない。
+        戻り値の msp はファイル名と出どころだけで、ライブラリの置き場所は返さない。
+    msp_file:
+        library_mode="msp_only" で使う MSP の明示パス（設定より優先）。"auto" では指定できない。
 
     成功すると session.current_job_path にジョブパスが設定され、
     console_run でそのまま実行できます。
@@ -104,6 +117,9 @@ def console_plan(
         return console_error("JOB_NOT_PLANNED", f"polarity は 'positive' または 'negative' です: {polarity!r}")
     if omics not in ("lipidomics", "metabolomics"):
         return console_error("JOB_NOT_PLANNED", f"omics は 'lipidomics' または 'metabolomics' です: {omics!r}")
+    library_error = _library_mode_error(library_mode, lbm_file, msp_file)
+    if library_error:
+        return library_error
 
     root = Path(dataset_root).expanduser()
     if not root.is_dir():
@@ -241,22 +257,16 @@ def console_plan(
         )
     input_count = sum(formats.values())
 
-    lbm_setting = _lbm_setting()
-    if isinstance(lbm_setting, str):
-        return lbm_setting
-    lbm = method_file_mod.resolve_lbm(
-        method_keys, mf, omics=omics, exe_path=exe, lbm_setting=lbm_setting, override=lbm_file)
-    if lbm.error_code:
-        return console_error(lbm.error_code, lbm.message or "",
-                             {"candidates": list(lbm.candidates)} if lbm.candidates else None)
-
-    # 解決した LBM と、相対で宣言されたライブラリ等のパスは絶対パスにして
-    # run_dir の実効メソッドファイルに書く。LC-MS の Console は宣言パスを
-    # 解決せず cwd（run_dir）基準で読むので、相対のまま渡すと見つからずに
+    # 解決した LBM（msp_only なら研究室 MSP）と、相対で宣言されたライブラリ等の
+    # パスは絶対パスにして run_dir の実効メソッドファイルに書く。LC-MS の Console は
+    # 宣言パスを解決せず cwd（run_dir）基準で読むので、相対のまま渡すと見つからずに
     # 黙って飛ばされる（同定 0 件で完走）。ジョブを作る前に組んで ASCII 検査する。
-    overrides = method_file_mod.relative_path_overrides(method_keys, mf)
-    if lbm.path:
-        overrides[method_file_mod.LBM_KEY] = lbm.path
+    resolved_libraries = _resolve_libraries(
+        method_keys, mf, omics=omics, exe=exe, polarity=polarity, library_mode=library_mode,
+        lbm_file=lbm_file, msp_file=msp_file)
+    if isinstance(resolved_libraries, str):
+        return resolved_libraries
+    overrides, library_payload = resolved_libraries
     encoding_error = _non_ascii_override_error(overrides)
     if encoding_error:
         return encoding_error
@@ -312,7 +322,7 @@ def console_plan(
             "discovered_from": discovered_from,
             "effective": job.method_file,
         },
-        "lbm": {"path": lbm.path, "source": lbm.source},
+        **library_payload,
         "keep_extension": next(iter(formats)),
         **({"prepared_input": {"source": str(source_root), "out_dir": prepared.out_dir,
                                "linked": prepared.linked, "copied": prepared.copied}}
@@ -665,6 +675,8 @@ def console_method_template(
     based_on: str | None = None,
     dataset_root: str | None = None,
     omics: str = "lipidomics",
+    library_mode: str = "auto",
+    msp_file: str | None = None,
 ) -> str:
     """既存のパラメータから、別極性用のメソッドファイルを作ります（最後の手段）。
 
@@ -686,10 +698,17 @@ def console_method_template(
         過去 run まで探します。候補が複数あれば based_on で選ぶよう
         METHOD_FILE_CHOICE_REQUIRED で止まります（土台の選択は解析条件そのもの
         なので、最新を黙って採りません）。
+    library_mode: "auto"（既定）か "msp_only"。"msp_only" は console_plan と同じく
+        `Lbm file path` を空にし、`Msp file path` に作りたい極性の研究室 MSP を書き、
+        Text DB と注釈器設定表の宣言を空にする（解決順・止まる条件も console_plan と同じ）。
+    msp_file: library_mode="msp_only" で使う MSP の明示パス。
     """
     if polarity not in ("positive", "negative"):
         return console_error("JOB_NOT_PLANNED",
                              f"polarity は 'positive' または 'negative' です: {polarity!r}")
+    library_error = _library_mode_error(library_mode, None, msp_file)
+    if library_error:
+        return library_error
 
     from metabolomix.console import method_file as method_file_mod
 
@@ -733,12 +752,6 @@ def console_method_template(
             {"based_on": str(src)})
 
     src_keys = method_file_mod.read_method_keys(src)
-    # 別フォルダへ書き出すので、相対宣言は原本基準の絶対パスに固定する。
-    overrides = {
-        **method_file_mod.relative_path_overrides(src_keys, src),
-        method_file_mod.ION_MODE_KEY: polarity.capitalize(),
-        method_file_mod.ADDUCT_KEY: method_file_mod.STANDARD_ADDUCTS[polarity],
-    }
 
     from metabolomix.console import runner as console_runner
     try:
@@ -749,16 +762,19 @@ def console_method_template(
         if getattr(exc, "code", "") == "CONFIG_INVALID":
             return _exe_error(exc)
         exe = None
-    lbm_setting = _lbm_setting()
-    if isinstance(lbm_setting, str):
-        return lbm_setting
-    lbm = method_file_mod.resolve_lbm(
-        src_keys, src, omics=omics, exe_path=exe, lbm_setting=lbm_setting)
-    if lbm.error_code:
-        return console_error(lbm.error_code, lbm.message or "",
-                             {"candidates": list(lbm.candidates)} if lbm.candidates else None)
-    if lbm.path:
-        overrides[method_file_mod.LBM_KEY] = lbm.path
+    # 別フォルダへ書き出すので、相対宣言は原本基準の絶対パスに固定する
+    # （_resolve_libraries が作る上書きに含まれる）。
+    resolved_libraries = _resolve_libraries(
+        src_keys, src, omics=omics, exe=exe, polarity=polarity, library_mode=library_mode,
+        msp_file=msp_file)
+    if isinstance(resolved_libraries, str):
+        return resolved_libraries
+    library_overrides, library_payload = resolved_libraries
+    overrides = {
+        **library_overrides,
+        method_file_mod.ION_MODE_KEY: polarity.capitalize(),
+        method_file_mod.ADDUCT_KEY: method_file_mod.STANDARD_ADDUCTS[polarity],
+    }
     encoding_error = _non_ascii_override_error(overrides)
     if encoding_error:
         return encoding_error
@@ -774,7 +790,7 @@ def console_method_template(
         "out_path": str(dest),
         "based_on": str(src),
         "polarity": polarity,
-        "lbm": {"path": lbm.path, "source": lbm.source},
+        **library_payload,
         "changed_keys": sorted(overrides),
         "caveat": "検出・アライメント条件は元ファイルのまま引き継いでいます。"
                   "その極性に妥当かは実行前に確認してください。",
@@ -1296,6 +1312,94 @@ def _lbm_setting():
         return user_config.get_setting("msdial.lbm")
     except user_config.ConfigInvalidError as exc:
         return console_error(exc.code, exc.message, exc.details())
+
+
+_LIBRARY_MODES = ("auto", "msp_only")
+
+
+def _library_mode_error(library_mode: str, lbm_file: str | None, msp_file: str | None) -> str | None:
+    """library_mode の値と、lbm_file / msp_file との組み合わせを検査する。"""
+    if library_mode not in _LIBRARY_MODES:
+        return console_error("JOB_NOT_PLANNED",
+                             f"library_mode は 'auto' または 'msp_only' です: {library_mode!r}")
+    if library_mode == "msp_only" and lbm_file:
+        return console_error(
+            "LIBRARY_MODE_CONFLICT",
+            "library_mode='msp_only' は LBM を使わないので、lbm_file と同時には指定できません。",
+            {"library_mode": library_mode})
+    if library_mode == "auto" and msp_file:
+        return console_error(
+            "LIBRARY_MODE_CONFLICT",
+            "msp_file は library_mode='msp_only' のときだけ使えます。library_mode='auto' では"
+            "MSP を解決しないので、渡しても使われません。",
+            {"library_mode": library_mode})
+    return None
+
+
+def _msp_setting(polarity: str):
+    """極性の研究室 MSP の設定。設定ファイルが読めなければ封筒（str）を返す。"""
+    from metabolomix.core import user_config
+    try:
+        return user_config.get_setting(user_config.MSP_SETTING_KEYS[polarity])
+    except user_config.ConfigInvalidError as exc:
+        return console_error(exc.code, exc.message, exc.details())
+
+
+def _resolve_libraries(method_keys: dict, method_path: Path, *, omics: str, exe: str | None,
+                       polarity: str, library_mode: str, lbm_file: str | None = None,
+                       msp_file: str | None = None):
+    """実効メソッドの上書き（相対宣言の絶対化＋ライブラリ）と戻り値の断片を返す。
+
+    失敗したら封筒（str）。研究室 MSP の置き場所は戻り値・エラー文に載せない
+    （ファイル名だけ。core/path_resolvers.LibraryPathError と同じ規約）。
+    """
+    from metabolomix.console import method_file as method_file_mod
+    from metabolomix.core import user_config
+
+    overrides = method_file_mod.relative_path_overrides(method_keys, method_path)
+    if library_mode == "msp_only":
+        msp_setting = _msp_setting(polarity)
+        if isinstance(msp_setting, str):
+            return msp_setting
+        msp = method_file_mod.resolve_msp(msp_file, polarity, msp_setting)
+        if msp.error_code:
+            details = ({"msp_file": Path(msp_file).name} if msp.source == "argument"
+                       else user_config.describe_missing(
+                           user_config.MSP_SETTING_KEYS[polarity], msp_setting))
+            return console_error(msp.error_code, msp.message or "", details)
+        if not msp.path.isascii():
+            return console_error(
+                "METHOD_ENCODING_UNSUPPORTED",
+                f"研究室 MSP（{Path(msp.path).name}）のパスに ASCII 以外の文字があります。"
+                "MS-DIAL Console はメソッドファイルを ASCII で読むため、このライブラリは"
+                "見つからず黙って同定 0 件になります。ASCII だけのフォルダへ置き直してください。",
+                {"keys": [method_file_mod.MSP_KEY]})
+        extra, removed = method_file_mod.msp_only_overrides(method_keys, msp.path)
+        overrides.update(extra)
+        return overrides, {
+            "library_mode": "msp_only",
+            "lbm": {"path": None, "source": "disabled"},
+            "msp": {"file": Path(msp.path).name, "source": msp.source},
+            "removed_declarations": removed,
+        }
+
+    lbm_setting = _lbm_setting()
+    if isinstance(lbm_setting, str):
+        return lbm_setting
+    lbm = method_file_mod.resolve_lbm(
+        method_keys, method_path, omics=omics, exe_path=exe, lbm_setting=lbm_setting,
+        override=lbm_file)
+    if lbm.error_code:
+        return console_error(lbm.error_code, lbm.message or "",
+                             {"candidates": list(lbm.candidates)} if lbm.candidates else None)
+    if lbm.path:
+        overrides[method_file_mod.LBM_KEY] = lbm.path
+    return overrides, {
+        "library_mode": "auto",
+        "lbm": {"path": lbm.path, "source": lbm.source},
+        "msp": {"file": None, "source": "not_used"},
+        "removed_declarations": [],
+    }
 
 
 def _configured_exe() -> str:

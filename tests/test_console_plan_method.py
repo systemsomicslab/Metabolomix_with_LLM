@@ -379,3 +379,159 @@ def test_console_method_template_rejects_a_non_ascii_absolute_path(tmp_path, mon
     parsed = _json.loads(console_method_template(out_path=str(tmp_path / "pos.txt"),
                                                  polarity="positive", based_on=str(src)))
     assert parsed["error"]["code"] == "METHOD_ENCODING_UNSUPPORTED"
+
+
+# ---------- library_mode="msp_only"（LBM 不使用・研究室 MSP のみ） ----------
+
+import os
+
+from tests.lab_msp_fixtures import write_lab_msp_config
+
+
+def _effective_keys(path) -> dict[str, list[str]]:
+    keys: dict[str, list[str]] = {}
+    for line in Path(path).read_text(encoding="ascii").splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            keys.setdefault(key.strip().lower(), []).append(value.strip())
+    return keys
+
+
+def _msp_only_plan(tmp_path, monkeypatch, method_text, **kwargs):
+    exe = _fake_exe_with_lbm(tmp_path, "Msp_lipids.lbm2")  # auto なら拾われる LBM
+    _plan_ready(tmp_path, monkeypatch, exe)
+    method = tmp_path / "params.txt"
+    method.write_text(method_text, encoding="ascii")
+    from metabolomix.tools.console_tools import console_plan
+    kwargs.setdefault("polarity", "negative")
+    kwargs.setdefault("library_mode", "msp_only")
+    return _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
+                                    measure="peak_height", **kwargs))
+
+
+def test_console_plan_msp_only_blanks_lbm_and_writes_the_lab_msp(tmp_path, monkeypatch):
+    paths = write_lab_msp_config(tmp_path, monkeypatch)
+    parsed = _msp_only_plan(
+        tmp_path, monkeypatch,
+        "Ion mode: Negative\nLbm file path: \nMsp file path: C:/public/other.msp\n"
+        "Text DB file path: other.txt\n")
+    assert parsed["status"] == "planned"
+    assert parsed["library_mode"] == "msp_only"
+    assert parsed["lbm"] == {"path": None, "source": "disabled"}
+    assert parsed["msp"] == {"file": "lab_neg.msp", "source": "config_file"}
+    assert parsed["removed_declarations"] == ["Text DB file path"]
+    keys = _effective_keys(parsed["method_file"])
+    assert keys["lbm file path"] == [""]
+    assert keys["msp file path"] == [os.path.abspath(paths["negative"])]
+    assert keys["text db file path"] == [""]
+    assert "lab_library" not in _json.dumps(parsed, ensure_ascii=False)  # 置き場所を返さない
+
+
+def test_console_plan_msp_only_picks_the_positive_library_for_positive(tmp_path, monkeypatch):
+    paths = write_lab_msp_config(tmp_path, monkeypatch)
+    parsed = _msp_only_plan(tmp_path, monkeypatch, "Ion mode: Positive\n", polarity="positive")
+    assert parsed["msp"]["file"] == "lab_pos.msp"
+    assert _effective_keys(parsed["method_file"])["msp file path"] == [os.path.abspath(paths["positive"])]
+
+
+def test_console_plan_msp_only_for_metabolomics(tmp_path, monkeypatch):
+    write_lab_msp_config(tmp_path, monkeypatch)
+    parsed = _msp_only_plan(tmp_path, monkeypatch, "Ion mode: Negative\nLbm file path: C:/x/y.lbm2\n",
+                            omics="metabolomics")
+    assert parsed["status"] == "planned"
+    assert parsed["removed_declarations"] == ["Lbm file path"]
+    assert _effective_keys(parsed["method_file"])["lbm file path"] == [""]
+
+
+def test_console_plan_msp_only_env_var_wins_and_is_reported(tmp_path, monkeypatch):
+    write_lab_msp_config(tmp_path, monkeypatch)
+    env_lib = tmp_path / "env_dir" / "env_neg.msp"
+    env_lib.parent.mkdir()
+    env_lib.write_text("NAME: e\n", encoding="ascii")
+    monkeypatch.setenv("MSDIAL_MSP_NEG", str(env_lib))
+    parsed = _msp_only_plan(tmp_path, monkeypatch, "Ion mode: Negative\n")
+    assert parsed["msp"] == {"file": "env_neg.msp", "source": "env"}
+
+
+def test_console_plan_msp_only_argument_wins(tmp_path, monkeypatch):
+    write_lab_msp_config(tmp_path, monkeypatch)
+    given = tmp_path / "given.msp"
+    given.write_text("NAME: g\n", encoding="ascii")
+    parsed = _msp_only_plan(tmp_path, monkeypatch, "Ion mode: Negative\n", msp_file=str(given))
+    assert parsed["msp"] == {"file": "given.msp", "source": "argument"}
+
+
+def test_console_plan_msp_only_stops_when_not_configured(tmp_path, monkeypatch):
+    parsed = _msp_only_plan(tmp_path, monkeypatch, "Ion mode: Negative\n")
+    assert parsed["error"]["code"] == "MSP_NOT_CONFIGURED"
+    assert not (tmp_path / "runs").exists()  # ジョブを作らない
+
+
+def test_console_plan_msp_only_stops_when_the_file_is_missing(tmp_path, monkeypatch):
+    paths = write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share")
+    paths["negative"].unlink()
+    parsed = _msp_only_plan(tmp_path, monkeypatch, "Ion mode: Negative\n")
+    assert parsed["error"]["code"] == "MSP_NOT_FOUND"
+    assert "secret_share" not in _json.dumps(parsed, ensure_ascii=False)
+    assert not (tmp_path / "runs").exists()
+
+
+def test_console_plan_msp_only_rejects_lbm_file(tmp_path, monkeypatch):
+    write_lab_msp_config(tmp_path, monkeypatch)
+    parsed = _msp_only_plan(tmp_path, monkeypatch, "Ion mode: Negative\n", lbm_file="C:/x/y.lbm2")
+    assert parsed["error"]["code"] == "LIBRARY_MODE_CONFLICT"
+
+
+def test_console_plan_auto_rejects_msp_file(tmp_path, monkeypatch):
+    write_lab_msp_config(tmp_path, monkeypatch)
+    parsed = _msp_only_plan(tmp_path, monkeypatch, "Ion mode: Negative\n",
+                            library_mode="auto", msp_file="C:/x/y.msp")
+    assert parsed["error"]["code"] == "LIBRARY_MODE_CONFLICT"
+
+
+def test_console_plan_rejects_an_unknown_library_mode(tmp_path, monkeypatch):
+    parsed = _msp_only_plan(tmp_path, monkeypatch, "Ion mode: Negative\n", library_mode="lbm_only")
+    assert parsed["error"]["code"] == "JOB_NOT_PLANNED"
+
+
+def test_console_plan_msp_only_rejects_a_non_ascii_library_path(tmp_path, monkeypatch):
+    write_lab_msp_config(tmp_path, monkeypatch, directory_name="非公開の置き場")
+    parsed = _msp_only_plan(tmp_path, monkeypatch, "Ion mode: Negative\n")
+    assert parsed["error"]["code"] == "METHOD_ENCODING_UNSUPPORTED"
+    assert "非公開の置き場" not in _json.dumps(parsed, ensure_ascii=False)
+    assert not (tmp_path / "runs").exists()
+
+
+def test_console_plan_auto_reports_msp_not_used(tmp_path, monkeypatch):
+    exe = _fake_exe_with_lbm(tmp_path, "Msp_lipids.lbm2")
+    _plan_ready(tmp_path, monkeypatch, exe)
+    method = tmp_path / "params.txt"
+    method.write_text("Ion mode: Negative\nLbm file path: \n", encoding="ascii")
+    from metabolomix.tools.console_tools import console_plan
+    parsed = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
+                                      polarity="negative", measure="peak_height"))
+    assert parsed["library_mode"] == "auto"
+    assert parsed["lbm"]["source"] == "exe_dir"
+    assert parsed["msp"] == {"file": None, "source": "not_used"}
+    assert parsed["removed_declarations"] == []
+
+
+def test_console_method_template_msp_only(tmp_path, monkeypatch):
+    paths = write_lab_msp_config(tmp_path, monkeypatch)
+    exe = _fake_exe_with_lbm(tmp_path, "Msp_lipids.lbm2")
+    _plan_ready(tmp_path, monkeypatch, exe)
+    src = tmp_path / "neg_param.txt"
+    src.write_text("Ion mode: Negative\nLbm file path: C:/x/y.lbm2\nText DB file path: db.txt\n",
+                   encoding="ascii")
+    out = tmp_path / "pos_param.txt"
+    from metabolomix.tools.console_tools import console_method_template
+    parsed = _json.loads(console_method_template(
+        out_path=str(out), polarity="positive", based_on=str(src), library_mode="msp_only"))
+    assert parsed["status"] == "written"
+    assert parsed["lbm"] == {"path": None, "source": "disabled"}
+    assert parsed["msp"] == {"file": "lab_pos.msp", "source": "config_file"}
+    assert parsed["removed_declarations"] == ["Lbm file path", "Text DB file path"]
+    keys = _effective_keys(out)
+    assert keys["lbm file path"] == [""]
+    assert keys["msp file path"] == [os.path.abspath(paths["positive"])]
+    assert keys["ion mode"] == ["Positive"]
