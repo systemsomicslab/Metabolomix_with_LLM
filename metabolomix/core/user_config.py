@@ -35,6 +35,14 @@ SETTINGS: dict[str, str] = {
     "library.msp_negative": "MSDIAL_MSP_NEG",
 }
 
+#: 極性 → 研究室参照ライブラリ（.msp）の設定キー。正準はここ
+#: （`core/path_resolvers.LIBRARY_SETTING_KEYS` と `console/method_file.resolve_msp` が参照する。
+#: pipeline の worker も使うので、mcp_core を引き込まない leaf のここに置く）。
+MSP_SETTING_KEYS: dict[str, str] = {
+    "positive": "library.msp_positive",
+    "negative": "library.msp_negative",
+}
+
 # 二重引用符の中の `\n` `\t` `\b` `\f` `\r` は TOML の正しいエスケープなので構文エラーに
 # ならない。`"C:\new\tool.exe"` は黙って改行とタブ入りの値になる。値の側で拾う。
 _CONTROL_CHARS = frozenset("\n\t\b\f\r")

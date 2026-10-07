@@ -32,7 +32,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from metabolomix.core.atomic_io import DomainError
-from metabolomix.core.user_config import Setting, setting_label
+from metabolomix.core.user_config import MSP_SETTING_KEYS, Setting, missing_hint, setting_label
 
 # GUI の DataBaseSettingViewModel が使う判定と同じ（`@"\.lbm\d*"`）。
 # .NET の `GetFiles(dir, "*.lbm?")` が拾う .lbm / .lbm2 に一致し、.lbmx は拾わない。
@@ -105,6 +105,11 @@ SETTINGS_PATH_KEYS: tuple[str, ...] = (
     "Text annotation settings file path",
 )
 
+#: library_mode="msp_only" で実効メソッドから消す同定用の宣言。研究室 MSP 以外の
+#: ライブラリ（Text DB、複数 MSP / Text の注釈器設定表）が混ざらないようにする。
+#: 同定に使わないキー（アイソトープ追跡・ターゲット検出・RT 補正）は含めない。
+IDENTIFICATION_CLEAR_KEYS: tuple[str, ...] = (TEXT_DB_KEY, *SETTINGS_PATH_KEYS)
+
 
 def _absolute(path: Path) -> str:
     """絶対パス文字列にする。シンボリックリンクやドライブ割当ては解かない。"""
@@ -165,6 +170,20 @@ class LbmResolution:
     error_code: str | None = None
     message: str | None = None
     candidates: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MspResolution:
+    """library_mode="msp_only" の MSP の解決結果。`error_code` が非 None なら呼び出し側は停止する。
+
+    `message` に研究室ライブラリの置き場所（ディレクトリ）を載せない——戻り値は LLM の
+    文脈に入る（`core/path_resolvers.LibraryPathError` と同じ規約）。ファイル名だけを言う。
+    """
+
+    path: str | None
+    source: str  # argument | env | config_file | not_configured
+    error_code: str | None = None
+    message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -445,6 +464,58 @@ def resolve_lbm(
             "MS-DIAL GUI も 1 件でなければ実行を止めます。1 件だけ残すか、"
             "lbm_file 引数で明示してください。"),
         candidates=tuple(str(p) for p in found))
+
+
+_MSP_WHAT = "研究室の参照ライブラリ（.msp）"
+
+
+def resolve_msp(override: str | None, polarity: str, msp_setting: Setting | None) -> MspResolution:
+    """library_mode="msp_only" の MSP を決める。順に: 明示引数 → 極性の設定。
+
+    極性の設定は呼び出し側が `user_config.get_setting(MSP_SETTING_KEYS[polarity])` で引いて
+    渡す（環境変数 MSDIAL_MSP_POS / MSDIAL_MSP_NEG → lipidmix.local.toml）。メソッドファイルの
+    `Msp file path` の宣言は使わない——研究室 MSP 以外を宣言した GUI パラメータを流用しても
+    契約から外れないようにする（spec 2026-10-07 §3.2）。返すパスは絶対パス。
+    """
+    if override:
+        candidate = Path(override).expanduser()
+        if candidate.is_file():
+            return MspResolution(path=_absolute(candidate), source="argument")
+        return MspResolution(
+            path=None, source="argument", error_code="MSP_NOT_FOUND",
+            message=f"msp_file が指すファイル（{candidate.name}）がありません。")
+    key = MSP_SETTING_KEYS[polarity]
+    if msp_setting is None:
+        return MspResolution(
+            path=None, source="not_configured", error_code="MSP_NOT_CONFIGURED",
+            message=(f"library_mode='msp_only' には {polarity} の{_MSP_WHAT}が要ります。"
+                     + missing_hint(key, _MSP_WHAT)))
+    candidate = Path(msp_setting.value).expanduser()
+    if candidate.is_file():
+        return MspResolution(path=_absolute(candidate), source=msp_setting.source)
+    label = setting_label(msp_setting)
+    return MspResolution(
+        path=None, source=msp_setting.source, error_code="MSP_NOT_FOUND",
+        message=f"{label} が指すファイル（{candidate.name}）がありません。{label} を確認してください。")
+
+
+def msp_only_overrides(method_keys: dict[str, str], msp_path: str) -> tuple[dict[str, str], list[str]]:
+    """library_mode="msp_only" の実効メソッドの上書きと、消した宣言のキーを返す。
+
+    `Lbm file path` は空、`Msp file path` は `msp_path`。原本が空でなく宣言している
+    `IDENTIFICATION_CLEAR_KEYS` は空にする。キーは正準の綴りで返す
+    （`write_effective_method_file` は大文字小文字を問わず全行を差し替える）。
+    `method_keys` は `read_method_keys` の戻り値（キーは小文字）。
+    """
+    overrides: dict[str, str] = {LBM_KEY: "", MSP_KEY: msp_path}
+    removed: list[str] = []
+    if (method_keys.get(LBM_KEY.lower()) or "").strip():
+        removed.append(LBM_KEY)
+    for key in IDENTIFICATION_CLEAR_KEYS:
+        if (method_keys.get(key.lower()) or "").strip():
+            overrides[key] = ""
+            removed.append(key)
+    return overrides, removed
 
 
 def scan_dir_for_method_files(directory: Path, origin: str) -> list[MethodCandidate]:
