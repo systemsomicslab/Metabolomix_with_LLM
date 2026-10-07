@@ -259,3 +259,46 @@ def test_rt_is_judged_when_the_annotator_used_rt_or_it_is_unknown():
     for used in (True, None):
         result = judge.judge_spot(ev(drt=-5.9, rt_used_by_annotation=used), None, TH)
         assert "drt_out" in result["reasons"]
+
+
+# --- 別アダクトの取り違え（adduct_isomer_of / adduct_isomer_minor_of。2026-10-07 ユーザー承認）---
+
+def isomer(severity="strong", of=189, **kw):
+    base = {"of": of, "of_name": "DGDG 35:1|DGDG 16:0_19:1", "of_adduct": "[M+CH3COO]-",
+            "as_adduct": "[M-H]-", "ppm": -1.2, "drt": -0.0069, "severity": severity,
+            "tier": 2, "of_tier": 3, "height_ratio": 10.28}
+    base.update(kw)
+    return base
+
+
+def test_adduct_isomer_of_a_stronger_partner_is_likely_wrong():
+    # 実例 neg #173: 参照一致・7 ppm で、単独では ppm_borderline だけの ok だった。
+    result = judge.judge_spot(ev(ppm=7.1, adduct_isomer=isomer()), None, TH)
+    assert result["verdict"] == "likely_wrong"
+    assert result["checks"]["ion"] == {"band": "FAIL", "reasons": ["adduct_isomer_of:189"]}
+    assert result["reasons"] == ["adduct_isomer_of:189", "ppm_borderline"]
+
+
+def test_adduct_isomer_minor_of_a_same_tier_partner_is_suspect():
+    result = judge.judge_spot(ev(adduct_isomer=isomer("minor", of=42)), None, TH)
+    assert result["verdict"] == "suspect"
+    assert result["reasons"] == ["adduct_isomer_minor_of:42"]
+
+
+def test_no_adduct_isomer_passes_and_unevaluated_is_unknown():
+    assert judge.judge_spot(ev(adduct_isomer=None), None, TH)["checks"]["ion"]["band"] == "PASS"
+    assert judge.judge_spot(ev(), None, TH)["checks"]["ion"]["band"] == "UNKNOWN"
+
+
+def test_adduct_isomer_sorts_after_class_rule_rejection_and_before_weak_reasons():
+    result = judge.judge_spot(ev(ppm=25.0, name_prefix="low score", adduct_isomer=isomer(),
+                                 match=match(is_reference_matched=False, is_lipid_class_match=False,
+                                             is_other_lipid_match=False)), None, TH, lipid_rules=True)
+    assert result["reasons"][:4] == ["class_rule_rejected", "adduct_isomer_of:189", "ppm_out", "low_score"]
+
+
+def test_auto_note_names_the_partner_and_the_adduct():
+    spot = ev(adduct_isomer=isomer())
+    spot.update(judge.judge_spot(spot, None, TH))
+    note = judge.auto_note(spot, TH)
+    assert "#189 DGDG 35:1|DGDG 16:0_19:1" in note and "[M-H]-" in note and "-1.2 ppm" in note

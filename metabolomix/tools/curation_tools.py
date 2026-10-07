@@ -116,9 +116,12 @@ def curation_review(ontology: list[str] | None = None, name_contains: str | None
     `html_path` をブラウザで開いてもらい、ビューアで付けたフラグを「送信用テキストを
     コピー」→ チャットに貼ってもらう。貼られたら curation_submit(submission_text=...) に渡す。
 
-    判定: likely_wrong（強い不一致: polarity_mismatch / precursor_unmatched / class_rule_rejected。
-    最後は MS-DIAL の脂質クラス規則による棄却で、脂質規則が走ったデータに限る）、
-    suspect（ppm_out / low_score / drt_out / eic_poor、または弱い兆候の重なり）、ok。
+    判定: likely_wrong（強い不一致: polarity_mismatch / precursor_unmatched / dmz_out /
+    class_rule_rejected（MS-DIAL の脂質クラス規則による棄却で、脂質規則が走ったデータに限る）/
+    adduct_isomer_of:<spot>（m/z が同時溶出する証拠の強い別物質スポットの別アダクトで説明できる。
+    相手はレビューの対象に絞らずアラインメント全体から探す））、
+    suspect（ppm_out / low_score / drt_out / eic_poor / adduct_isomer_minor_of:<spot>、
+    または弱い兆候の重なり）、ok。
     RT–m/z 傾向（trend_outlier）は補強にしか使わない。UNKNOWN は不一致に数えない。
     `thresholds` で既定のしきい値（ppm_pass=5, ppm_borderline=10, drt_pass=0.5 分 など）を上書きできる。
     """

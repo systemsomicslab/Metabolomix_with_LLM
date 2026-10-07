@@ -480,3 +480,41 @@ def test_assign_and_redundant_are_decisions_not_flags(tmp_path, monkeypatch):
     again = {s["spot_id"]: s for s in _review(paths)["spots"]}
     assert again[0]["flag"] is None and again[0]["decision"] == {"flag": "assign", "name": "PC 34:1"}
     assert again[1]["flag"] is None and again[1]["decision"] == {"flag": "redundant", "of": 0}
+
+
+# --- 別アダクトの取り違え（adduct_isomer_of。2026-10-07 ユーザー承認）---
+
+def _isomer_alignment(folder):
+    """実例 pos #660 / #657 を写した 2 スポット。#660 は MS2 無しの PI、#657 は鎖まで裏付けた DGDG。"""
+    from tests.curation_fixtures import arf2_spot_raw, match_result, write_arf2
+    folder.mkdir(parents=True, exist_ok=True)
+    pi = arf2_spot_raw(spot_id=0, name="no MS2: PI 41:2", mz=955.63183, rt=4.323, ontology="PI",
+                       adduct="[M+Na]+", formula="C50H93O13P")
+    dgdg = arf2_spot_raw(spot_id=1, name="DGDG 35:1|DGDG 16:0_19:1", mz=950.67661, rt=4.345,
+                         ontology="DGDG", adduct="[M+NH4]+", formula="C50H92O15",
+                         matches=[match_result({0: "DGDG 16:0_19:1"})])
+    return write_arf2(folder / "AlignmentResult_x.arf2", [pi, dgdg])
+
+
+def _review_without_library(arf2, ontology):
+    spots = evidence.select_spots(load_catalog(arf2), ontology=ontology, name_contains=None)
+    return review.run_review(arf2, spots, store=None, ms2_tol=0.025, th=judge.resolve_thresholds(None),
+                             file_ids=None, max_traces=12, selection={"ontology": ontology})
+
+
+def test_adduct_isomer_finds_a_partner_outside_the_selected_classes(tmp_path):
+    result = _review_without_library(_isomer_alignment(tmp_path / "pos"), ["PI"])
+    [pi] = result["spots"]
+    assert pi["verdict"] == "likely_wrong"
+    assert pi["reasons"][0] == "adduct_isomer_of:1"
+    assert pi["adduct_isomer"]["as_adduct"] == "[M+Na]+"
+    assert "adduct_isomer_of:1" in review.summary_tsv(result)
+
+
+def test_adduct_isomer_ignores_a_partner_flagged_wrong(tmp_path):
+    arf2 = _isomer_alignment(tmp_path / "pos")
+    flags.FlagStore(flags.curation_dir(arf2)).append(
+        [{"spot_id": 1, "flag": "wrong"}], alignment=flags.alignment_key(arf2), review_id="old", source="user")
+    [pi] = _review_without_library(arf2, ["PI"])["spots"]
+    assert pi["adduct_isomer"] is None
+    assert not any(r.startswith("adduct_isomer") for r in pi["reasons"])

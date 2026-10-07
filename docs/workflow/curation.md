@@ -16,6 +16,7 @@ flowchart TD
     COL --> MS[analysis.spectral_match.match_spectrum]
     COL --> MIR[plots.mirror.build_mirror_payload]
     RUN --> TR[curation.trend.fit_trends]
+    RUN --> AI[curation.adduct_isomer.find_adduct_isomer]
     RUN --> JG[curation.judge.judge_spot]
     CR --> SAV[curation.review.save_review]
     SAV --> HTML[curation.viewer.render_html]
@@ -72,14 +73,19 @@ flowchart TD
 25. │     └─ metabolomix/curation/evidence.py  _downsample_points()（形状計算の後に payload だけ間引く）
 26. │  └─ metabolomix/curation/trend.py  composition()（`LipidParser` はモジュールで 1 つだけ作る）
 27. │  └─ metabolomix/curation/trend.py  fit_trends()
-28. │  └─ metabolomix/curation/judge.py  lipid_rules_active()（脂質規則フラグが 1 件でも True か）
-29. │  └─ metabolomix/curation/judge.py  judge_spot()
-30. │  └─ metabolomix/curation/judge.py  auto_note()（判定根拠の文 → `auto_note`）
-31. metabolomix/curation/review.py  save_review()
-32. └─ metabolomix/curation/viewer.py  render_html()
-33. metabolomix/curation/review.py  n_summary_rows()
-34. metabolomix/curation/review.py  summary_tsv()（`max_rows` で先頭だけ）
-35. metabolomix/curation/review.py  trend_summary()
+28. │  └─ metabolomix/curation/review.py  _adduct_isomer_pool()（対象に絞らずアラインメントの注釈付き全スポット）
+29. │     ├─ metabolomix/arf2/match_results.py  load_spot_annotations()
+30. │     ├─ metabolomix/arf2/reader.py  load_catalog()（同じファイルならキャッシュ済み）
+31. │     └─ metabolomix/curation/adduct_isomer.py  pool_entry()（`evidence_tier()` で証拠の段階を付ける）
+32. │  └─ metabolomix/curation/judge.py  lipid_rules_active()（脂質規則フラグが 1 件でも True か）
+33. │  └─ metabolomix/curation/adduct_isomer.py  find_adduct_isomer()（有効な `wrong` フラグのスポットは相手から外す → `adduct_isomer`）
+34. │  └─ metabolomix/curation/judge.py  judge_spot()
+35. │  └─ metabolomix/curation/judge.py  auto_note()（判定根拠の文 → `auto_note`）
+36. metabolomix/curation/review.py  save_review()
+37. └─ metabolomix/curation/viewer.py  render_html()
+38. metabolomix/curation/review.py  n_summary_rows()
+39. metabolomix/curation/review.py  summary_tsv()（`max_rows` で先頭だけ）
+40. metabolomix/curation/review.py  trend_summary()
 
 ## curation_suggest
 

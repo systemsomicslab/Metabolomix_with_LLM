@@ -7,7 +7,7 @@
 ツールが**どのファイルのどの関数をどの順に呼ぶか**は `docs/workflow/curation.md`。
 ここは**値の意味**だけを定義する。実装は `metabolomix/curation/`
 （`judge.py` 機械判別・`evidence.py` 証拠収集・`eic_shape.py` EIC 形状・`trend.py` RT–m/z 傾向・
-`review.py` レビュー生成/要約・`flags.py` 判断の記録の永続化・`apply.py` エクスポート反映・
+`adduct_isomer.py` 別アダクトの取り違え・`review.py` レビュー生成/要約・`flags.py` 判断の記録の永続化・`apply.py` エクスポート反映・
 `suggest.py` 候補付けの組み立て/保存/送信内容の展開・`candidates.py` 注釈候補 ①②・`relations.py` イオン関係 ④）。
 
 ## アラインメントのキュレーション
@@ -94,7 +94,7 @@ mirror 5.5 MB）になったため導入した上限。
 | `ontology` | ARF2 の `Ontology`（脂質クラス） |
 | `adduct` | ARF2 の `AdductType` |
 | `verdict` | `likely_wrong` / `suspect` / `ok`（次節） |
-| `reasons` | 立った理由コードをカンマ区切りで、強い→弱い→帯のみの順に並べたもの（次節の表と同じ順） |
+| `reasons` | 立った理由コードをカンマ区切りで、強い→弱い→帯のみの順に並べたもの（次節の表と同じ順）。相手のスポットを指すコードは `adduct_isomer_of:189` のように `:<相手の spot_id>` が付く |
 | `ppm` | 代表試料の m/z と参照 precursor m/z（引けなければ Formula からの理論値）の相対誤差 [ppm] |
 | `dmz_mda` | 代表試料の m/z と参照 precursor m/z（引けなければ Formula からの理論値）の差 [mDa]。`ppm` と同じ基準 |
 | `drt` | 代表試料の RT と参照 RT の差 [分]。参照が引けない、または参照に RT が無ければ空。MS-DIAL が RT を使っていない照合（情報 `rt_not_used_by_annotation`）でも値は出るが、判定には使わない |
@@ -106,12 +106,13 @@ mirror 5.5 MB）になったため導入した上限。
 
 ### 判定（`verdict`）と理由コード
 
-`verdict` は 5 系統の帯（`checks.{msms,mz,rt,eic,trend}`。各 `PASS`/`BORDERLINE`/`FAIL`/`UNKNOWN`
-と理由コード）から決める:
+`verdict` は 6 系統の帯（`checks.{msms,mz,rt,eic,ion,trend}`。各 `PASS`/`BORDERLINE`/`FAIL`/`UNKNOWN`
+と理由コード）から決める。`ion` は別アダクトの取り違え（下記）で、`FAIL` か `PASS` のどちらか
+（`adduct_isomer` が無い＝評価していないときだけ `UNKNOWN`）:
 
 - **`likely_wrong`**: 強い理由コードが 1 つでも立った場合。
-- **`suspect`**: 強い理由が無く、かつ (a) msms/mz/rt/eic のいずれかが `FAIL`、または
-  (b) msms/mz/rt/eic のうち `BORDERLINE` が 2 つ以上、または (c) `BORDERLINE` が 1 つ以上
+- **`suspect`**: 強い理由が無く、かつ (a) msms/mz/rt/eic/ion のいずれかが `FAIL`、または
+  (b) msms/mz/rt/eic/ion のうち `BORDERLINE` が 2 つ以上、または (c) `BORDERLINE` が 1 つ以上
   あって RT–m/z 傾向も `BORDERLINE`（`trend_outlier`）の場合。
 - **`ok`**: それ以外。
 
@@ -126,10 +127,12 @@ mirror 5.5 MB）になったため導入した上限。
 | 強い | `precursor_unmatched` | MS-DIAL 自身の `is_precursor_mz_match` が `False` |
 | 強い | `dmz_out` | \|Δm/z\|（`dmz_mda`）が `dmz_fail_mda`（既定 10 mDa）**以上**。ppm は m/z に比例して緩むので絶対差で見る（ユーザー決定 2026-09-29）。Δppm の `ppm_out` は弱いまま |
 | 強い | `class_rule_rejected` | MS/MS ありで、MS-DIAL の脂質クラス規則（診断イオン）を評価して棄却した（`is_lipid_class_match=False` かつ `is_other_lipid_match=False`）。実測では全件 `low score:` なので `low_score` も同時に立つ。**脂質規則が走ったデータに限る**（下記） |
+| 強い | `adduct_isomer_of:<spot>` | m/z が、同時に溶出する別物質のスポット `<spot>` の中性質量の**別のアダクト**で説明でき、かつ `<spot>` の証拠の段階が上（下記「別アダクトの取り違え」）。例: neg #173「PI 41:2」[M-H]- は #189 DGDG 35:1 [M+CH3COO]- の [M-H]-（−1.2 ppm）。単独の証拠では `ok` だったスポットにも立つ |
 | 弱い | `ppm_out` | Δppm が `ppm_borderline` しきい値（既定 10）を超えた。**adduct 非依存**（実測: kidney neg/pos で全 adduct の中央値が約 −0.8 ppm）で、単独では強い理由に数えない（ユーザー決定 2026-09-29）——mz 系統自体は `FAIL` になるが、単独では `suspect` 止まり。`polarity_mismatch`/`precursor_unmatched` が別途立てば、そちらの強さで `likely_wrong` になる |
 | 弱い | `low_score` | MS/MS はあるが MS-DIAL 自身の `is_reference_matched` が `False` |
 | 弱い | `drt_out` | ΔRT が `drt_borderline` しきい値（既定 1.0 分）を超えた |
 | 弱い | `eic_poor` | EIC 形状帯が `FAIL`（検出サンプルが 1 件以上あり、かつ `good_fraction` が `eic_borderline_frac` 未満）。**検出サンプルが 0 件のときは `good_fraction` が計算できず帯は `UNKNOWN` になり、このコードは立たない**（`spot_shape` は `n_detected==0` なら `fraction=None`→`band="UNKNOWN"`） |
+| 弱い | `adduct_isomer_minor_of:<spot>` | `adduct_isomer_of` と同じ条件で説明できるが、`<spot>` の証拠の段階は同じで、強度（`HeightAverage`）が `adduct_isomer_height_ratio`（既定 3）倍以上。例: neg の RIKEN ID 注釈は FA 18:0 の [2M-H]-（強度 41 倍） |
 | 帯のみ | `ppm_borderline` | Δppm が `ppm_pass`〜`ppm_borderline`（既定 5〜10）の帯 |
 | 帯のみ | `drt_borderline` | ΔRT が `drt_pass`〜`drt_borderline`（既定 0.5〜1.0 分）の帯 |
 | 帯のみ | `eic_borderline` | EIC 形状帯が `BORDERLINE`（検出サンプルが 1 件以上あり、かつ `good_fraction` が `eic_borderline_frac`〜`eic_pass_frac` の帯）。これも検出 0 件では立たず `UNKNOWN` になる |
@@ -155,6 +158,33 @@ precursor の許容幅をすでに課している——許容幅の外の候補�
 `likely_wrong` が 0 件でも「全部正しい」ではなく、`suspect` の中身（理由コード）を読むこと。
 `class_rule_rejected`（MS-DIAL の脂質クラス規則による棄却）は、そうした絞り込みの後でも
 残る強い理由で、kidney neg/pos の実測では 370 / 404 件あった。
+
+**別アダクトの取り違え（`adduct_isomer_of` / `adduct_isomer_minor_of`）。** 個々のスポットの
+証拠（Δppm・MS2）だけでは見えない誤り——別の物質の別アダクトを、たまたま近い質量の別物質として
+注釈したもの（PI 41:2 と DGDG 35:1 は [M-H]- で 8 ppm しか違わない）——を、同時に溶出する
+スポット同士で見る（`metabolomix/curation/adduct_isomer.py`）。対象 X と相手 Y について:
+
+- **相手の範囲**: レビューの対象（`ontology` / `name_contains`）に絞らず、アラインメントの
+  注釈付きスポット全部。有効な `wrong` フラグのあるスポットは相手にしない。
+- **条件**: Y が X と同じ極性で |ΔRT| ≤ `adduct_isomer_drt`（既定 0.05 分）。X と Y は別物質
+  （組成式とクラス（`Ontology`）が両方同じなら同じ分子種の別アダクト＝正しい注釈なので対象外）。
+  Y の m/z と注釈アダクトから中性質量を出し、仮定アダクト A（X の極性の既定アダクト一覧
+  `msdial.analysis_params.DEFAULT_ADDUCTS` と X 自身のアダクト。Y 自身のアダクトは除く）での
+  m/z が X の m/z と `adduct_isomer_ppm`（既定 5 ppm）以内。m/z・RT はどちらもスポットの
+  `MassCenter` / `RT`。
+- **証拠の段階**: 3 = MS2 で鎖組成まで裏付け（鎖レベルの名前 ∧ `is_lipid_chains_match`）、
+  2 = MS2 が参照と一致（`is_reference_matched`）、1 = MS2 はある（low score）、0 = MS2 無し
+  （名前接頭辞 `no MS2`/`w/o MS2` を含む）・照合結果無し。Y の段階が上なら `adduct_isomer_of`
+  （強い）、同じ段階で強度比が `adduct_isomer_height_ratio` 以上なら `adduct_isomer_minor_of`
+  （弱い）。Y の段階が下なら立たない（逆向きの組は Y の側に立つ）。
+- 複数の Y が説明するときは、強い → 段階 → 強度の順に 1 件だけ。
+
+レビュー JSON（とビューア）のスポットは `adduct_isomer` に根拠を持つ: `of`・`of_name`・`of_adduct`
+（相手と、その注釈アダクト）・`as_adduct`（X を説明する仮定アダクト A）・`ppm`（X の m/z と A の
+理論 m/z の差）・`drt`（X − Y の RT [分]）・`severity`（`strong` / `minor`）・`tier` / `of_tier`・
+`height_ratio`（Y / X）。説明する相手が無ければ `null`。**同じ組成式・同じクラスの組（例: DG の
+[M+Na]+ と [M+NH4]+ の二重計上）はこの理由の対象外**（重複の整理は別の話）。20260930_EV の実測で
+neg 154 件中 9 件・pos 469 件中 27 件に立った。
 
 **脂質規則フラグは脂質規則が走ったデータに限って読む。** 規則フラグは MS-DIAL の Lipidomics
 採点器でしか立たず、それ以外の採点器では全部 `False` になる（`class_rule_rejected` の条件と

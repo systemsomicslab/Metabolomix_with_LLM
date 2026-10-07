@@ -12,8 +12,10 @@ import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
+from metabolomix.arf2.match_results import load_spot_annotations
+from metabolomix.arf2.reader import load_catalog
 from metabolomix.core.atomic_io import atomic_write_json
-from metabolomix.curation import evidence, flags, trend, viewer
+from metabolomix.curation import adduct_isomer, evidence, flags, trend, viewer
 from metabolomix.curation.judge import auto_note, judge_spot, lipid_rules_active
 
 VERDICT_RANK = {"ok": 0, "suspect": 1, "likely_wrong": 2}
@@ -54,10 +56,16 @@ def run_review(arf2_path, spots, *, store, ms2_tol, th, file_ids, max_traces, se
                            "rt": ev["rt"], "mz": ev["mz"], "carbon": comp[0], "db": comp[1]})
         ev["composition"] = list(comp) if comp else None
     trends = trend.fit_trends(points, th)
+    pool = _adduct_isomer_pool(arf2_path)
+    wrong = flags.split_decisions(existing)["wrong"]
+    partners = [p for spot_id, p in pool.items() if spot_id not in wrong]
 
     counts = {"ok": 0, "suspect": 0, "likely_wrong": 0}
     lipid_rules = lipid_rules_active(evs)
     for ev in evs:
+        target = pool.get(ev["spot_id"])
+        ev["adduct_isomer"] = (adduct_isomer.find_adduct_isomer(target, partners, th)
+                               if target is not None else None)
         ev.update(judge_spot(ev, trends["spots"].get(ev["spot_id"]), th, lipid_rules=lipid_rules))
         ev["trend"] = trends["spots"].get(ev["spot_id"])
         row = existing.get(ev["spot_id"]) or {}
@@ -98,6 +106,19 @@ def run_review(arf2_path, spots, *, store, ms2_tol, th, file_ids, max_traces, se
                                                    for k, v in trends["groups"].items()}},
         "spots": evs,
     }
+
+
+def _adduct_isomer_pool(arf2_path) -> dict[int, dict]:
+    """別アダクトの取り違えを比べる相手の候補。レビューの対象に絞らず、アラインメントの注釈付き
+    スポット全部（`ontology=["PI"]` のレビューでも DGDG の相手を見つけるため）。有効な `wrong`
+    フラグのあるスポットを相手から外すのは呼び出し側（対象自身はここから引く）。"""
+    annotations = load_spot_annotations(arf2_path)
+    pool = {}
+    for spot in load_catalog(arf2_path):
+        entry = adduct_isomer.pool_entry(spot, annotations.get(spot["MasterAlignmentID"]))
+        if entry is not None:
+            pool[entry["spot_id"]] = entry
+    return pool
 
 
 def save_review(review: dict) -> dict:
