@@ -50,6 +50,8 @@ def test_defaults_are_fully_populated(tmp_path):
     assert req["effective_target"] == "exploratory"  # comparisons空 => exploratory
     assert req["method_file"] is None
     assert req["lbm_file"] is None
+    assert req["library_mode"] == "auto"
+    assert req["msp_file"] is None
     assert req["polarity"] is None
     assert req["measure"] == "peak_height"
     assert req["keep_extension"] is None
@@ -663,3 +665,57 @@ def test_no_request_file_keeps_the_previous_defaults(tmp_path):
     request = resolve_request(root)
     assert request["timeout_s"] == 21600
     assert request["value_sources"]["timeout_s"] == "default"
+
+
+# ---------- library_mode / msp_file（spec 2026-10-07） ----------
+
+def _root(tmp_path):
+    root = tmp_path / "source"
+    root.mkdir()
+    return root
+
+
+def test_library_mode_msp_only_is_accepted_with_an_msp_file(tmp_path):
+    req = resolve_request(_root(tmp_path), {"library_mode": "msp_only", "msp_file": "lab.msp"})
+    assert req["library_mode"] == "msp_only"
+    assert req["msp_file"] == "lab.msp"
+    assert req["value_sources"]["library_mode"] == "explicit"
+
+
+@pytest.mark.parametrize("explicit", [
+    {"library_mode": "lbm_only"},
+    {"library_mode": None},
+    {"msp_file": None},
+    {"library_mode": "msp_only", "msp_file": ""},
+    {"library_mode": "msp_only", "lbm_file": "x.lbm2"},
+    {"msp_file": "lab.msp"},  # auto では使われないので黙って受けない
+])
+def test_invalid_library_mode_combinations_are_rejected(tmp_path, explicit):
+    with pytest.raises(DomainError, match="PIPELINE_REQUEST_INVALID"):
+        resolve_request(_root(tmp_path), explicit)
+
+
+def test_library_mode_cannot_be_changed_on_resume(tmp_path):
+    with pytest.raises(DomainError, match="NEW_PIPELINE_REQUIRED"):
+        merge_updates(resolve_request(_root(tmp_path)), {"library_mode": "msp_only"})
+
+
+def test_default_library_mode_does_not_change_the_request_fingerprint(tmp_path):
+    from metabolomix.core.atomic_io import canonical_hash
+    from metabolomix.pipeline import request as request_mod
+    req = resolve_request(_root(tmp_path))
+    legacy_keys = request_mod._TOP_LEVEL_KEYS - {"library_mode", "msp_file"}
+    assert request_fingerprint(req) == canonical_hash({k: req[k] for k in legacy_keys if k in req})
+
+
+def test_msp_only_changes_the_request_fingerprint(tmp_path):
+    root = _root(tmp_path)
+    assert (request_fingerprint(resolve_request(root, {"library_mode": "msp_only"}))
+            != request_fingerprint(resolve_request(root)))
+
+
+def test_v2_rejects_library_mode_with_a_migration_hint(tmp_path):
+    from metabolomix.pipeline import request_v2
+    with pytest.raises(DomainError, match="PIPELINE_REQUEST_INVALID") as info:
+        request_v2._check_known_keys({"library_mode": "msp_only"})
+    assert "library_mode" in str(info.value)
