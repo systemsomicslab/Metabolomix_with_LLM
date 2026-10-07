@@ -68,7 +68,9 @@ _EFFECTIVE_METHOD_NAME = "effective-method.txt"
 # ---------- 小さなユーティリティ ----------
 
 def _sha256_file(path: Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    # 研究室 MSP は 2 GB 級になる。丸ごと読まずにストリームでハッシュする。
+    with open(path, "rb") as f:
+        return hashlib.file_digest(f, "sha256").hexdigest()
 
 
 def resolve_manifest_path(source_root: Path, request: dict) -> Path | None:
@@ -439,6 +441,47 @@ def _resolve_lbm_pinned(method_keys: dict, method_path: Path, exe_path: str,
     return {"path": str(resolved), "sha256": _sha256_file(resolved), "source": lbm.source}
 
 
+_MSP_NOT_USED = {"path": None, "file": None, "sha256": None, "source": "not_used"}
+
+
+def _resolve_msp_pinned(request: dict, polarity: str, source_root: Path) -> dict:
+    """library_mode="msp_only" の研究室 MSP を解決し、sha256 で固定する。
+
+    エラー文と details に置き場所（ディレクトリ）を載せない（ファイル名だけ。
+    core/path_resolvers.LibraryPathError と同じ規約）。絶対パスは入力計画（データ側）にだけ置く。
+    """
+    override = request.get("msp_file")
+    if override and not Path(override).is_absolute():
+        override = str(source_root / override)
+    polarity = polarity.lower()
+    key = user_config.MSP_SETTING_KEYS[polarity]
+    try:
+        msp_setting = user_config.get_setting(key)
+    except user_config.ConfigInvalidError as exc:
+        raise DomainError(exc.code, exc.message, exc.details()) from exc
+    msp = method_file_mod.resolve_msp(override, polarity, msp_setting)
+    if msp.error_code:
+        details = ({"msp_file": Path(override).name} if msp.source == "argument"
+                   else user_config.describe_missing(key, msp_setting))
+        raise DomainError(msp.error_code, msp.message or "", details)
+    resolved = Path(msp.path).resolve()
+    if not str(resolved).isascii():
+        raise DomainError(
+            "METHOD_ENCODING_UNSUPPORTED",
+            f"研究室 MSP（{resolved.name}）のパスに ASCII 以外の文字があります。MS-DIAL Console は"
+            "メソッドファイルを ASCII で読むため、このライブラリは黙って無視されます。",
+            {"keys": [method_file_mod.MSP_KEY]})
+    try:
+        digest = _sha256_file(resolved)
+    except OSError as exc:
+        raise DomainError(
+            "MSP_NOT_FOUND",
+            f"研究室 MSP（{resolved.name}）を読めません（ネットワークの一時的な切断の可能性）: "
+            f"{type(exc).__name__}",
+            {"msp_file": resolved.name}) from exc
+    return {"path": str(resolved), "file": resolved.name, "sha256": digest, "source": msp.source}
+
+
 def _resolve_exe(exe_path: Path) -> dict:
     exe_path = Path(exe_path)
     if not exe_path.is_file():
@@ -474,12 +517,20 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path) -> dict:
     method_path = Path(chosen_method["path"])
     method_keys = method_file_mod.read_method_keys(method_path)
 
+    library_mode = request.get("library_mode", "auto")
     # 最終選択後にだけ厳格な参照解決を行う（select_methodのグルーピングは弱い版）。
-    method_file_mod.resolve_method_references(method_keys, method_path)
+    # msp_only では LBM を使わないので、その宣言の実在で止めない（spec 2026-10-07 §3.2）。
+    if library_mode != "msp_only":
+        method_file_mod.resolve_method_references(method_keys, method_path)
 
     polarity = _resolve_polarity(request, method_path)
     exe_info = _resolve_exe(Path(exe_path))
-    lbm_info = _resolve_lbm_pinned(method_keys, method_path, exe_info["path"], request, source_root)
+    if library_mode == "msp_only":
+        lbm_info = {"path": None, "sha256": None, "source": "disabled"}
+        msp_info = _resolve_msp_pinned(request, polarity["value"], source_root)
+    else:
+        lbm_info = _resolve_lbm_pinned(method_keys, method_path, exe_info["path"], request, source_root)
+        msp_info = dict(_MSP_NOT_USED)
 
     unverified: list[str] = []
     if polarity["source"] == "method_declaration":
@@ -492,8 +543,13 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path) -> dict:
     # 相対参照の意味を変えない」）。実在は問わない——LBM 以外の古い宣言で
     # 既存 lipidomics 実行を止めない（REFERENCE_KEYS を広げない方針と同じ）。
     overrides = method_file_mod.relative_path_overrides(method_keys, method_path)
-    if lbm_info["path"] and (lbm_info["source"] != "method_file"
-                             or method_file_mod.LBM_KEY in overrides):
+    removed_declarations: list[str] = []
+    if library_mode == "msp_only":
+        msp_overrides, removed_declarations = method_file_mod.msp_only_overrides(
+            method_keys, msp_info["path"])
+        overrides.update(msp_overrides)
+    elif lbm_info["path"] and (lbm_info["source"] != "method_file"
+                               or method_file_mod.LBM_KEY in overrides):
         # 相対宣言なら resolve_lbm の解決結果で置き換え、build_tree/env/exe_dir
         # へフォールバックした場合は（原本に行が無いので）新規追加する。
         # 絶対宣言はそのまま（Console がそのまま読める）。
@@ -516,6 +572,9 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path) -> dict:
             "overrides": overrides,
         },
         "lbm": {"path": lbm_info["path"], "sha256": lbm_info["sha256"]},
+        "library_mode": library_mode,
+        "msp": msp_info,
+        "removed_declarations": removed_declarations,
         "exe": exe_info,
         "polarity": polarity,
         "unverified": unverified,
@@ -718,7 +777,8 @@ def stage_inputs(plan: dict, pipeline_root: Path, *,
         raise DomainError(
             "METHOD_ENCODING_UNSUPPORTED",
             f"実効メソッドをASCIIで書き出せません（非ASCII文字を含みます）: {exc}",
-            {"overrides": overrides}) from exc
+            # 値は載せない（研究室 MSP の絶対パスが LLM の文脈に入るため。spec 2026-10-07 §3.3）。
+            {"keys": sorted(key for key, value in overrides.items() if not value.isascii())}) from exc
 
     snapshot = copy.deepcopy(plan)
     snapshot["pipeline_root"] = str(pipeline_root.resolve())
@@ -781,16 +841,20 @@ def verify_inputs(snapshot: dict) -> None:
     for label, info, path_key in (
         ("method", snapshot.get("method"), "source_path"),
         ("lbm", snapshot.get("lbm"), "path"),
+        ("msp", snapshot.get("msp"), "path"),
         ("exe", snapshot.get("exe"), "path"),
     ):
         if not info or not info.get(path_key) or not info.get("sha256"):
             continue
         path = Path(info[path_key])
+        # 研究室 MSP は置き場所を返さない（ファイル名だけ。spec 2026-10-07 §3.3）。
+        shown = path.name if label == "msp" else str(path)
+        details = ({"which": label, "msp_file": path.name} if label == "msp"
+                   else {"which": label, "path": str(path)})
         try:
             digest = _sha256_file(path)
         except OSError as exc:
-            raise DomainError("INPUT_CHANGED", f"{label}のファイルが読めません: {path}",
-                              {"which": label, "path": str(path)}) from exc
+            raise DomainError("INPUT_CHANGED", f"{label}のファイルが読めません: {shown}",
+                              details) from exc
         if digest != info["sha256"]:
-            raise DomainError("INPUT_CHANGED", f"{label}の内容が変化しています: {path}",
-                              {"which": label, "path": str(path)})
+            raise DomainError("INPUT_CHANGED", f"{label}の内容が変化しています: {shown}", details)

@@ -251,7 +251,7 @@ def resolve_dcl_file_path(file_path: str | None = None) -> str | None:
 #: 極性 → 研究室参照ライブラリ（`.msp`）の設定キー。値は環境変数か
 #: `lipidmix.local.toml` の `[library]` で指す（`metabolomix.core.user_config`）。
 #: ライブラリ本体はリポジトリの外（外部流出禁止の資産）に置き、場所だけを教える。
-LIBRARY_SETTING_KEYS = {"positive": "library.msp_positive", "negative": "library.msp_negative"}
+LIBRARY_SETTING_KEYS = user_config.MSP_SETTING_KEYS
 #: 同じ値を指す環境変数（正準は user_config.SETTINGS。既存の参照のため名前を残す）。
 LIBRARY_ENV_VARS = {mode: user_config.SETTINGS[key] for mode, key in LIBRARY_SETTING_KEYS.items()}
 

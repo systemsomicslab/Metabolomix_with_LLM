@@ -53,8 +53,12 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
         Agilent・Bruker の .d と Waters の .raw は**フォルダ**が 1 検体です。
     request:
         `pipeline-request.v1` のトップレベル項目（省略可、spec §10.1）。
-        `target` / `polarity` / `method_file` / `lbm_file` / `sample_manifest` /
-        `preprocess` / `comparisons` 等。相対パスは `dataset_root` 基準。
+        `target` / `polarity` / `method_file` / `lbm_file` / `library_mode` /
+        `msp_file` / `sample_manifest` / `preprocess` / `comparisons` 等。相対パスは
+        `dataset_root` 基準。`library_mode="msp_only"` は LBM を使わず研究室の参照
+        ライブラリ（.msp）だけで同定する（`msp_file` か極性の設定 `[library]
+        msp_positive` / `msp_negative`。メソッドの Text DB・注釈器設定表の宣言は空にする）。
+        `lbm_file` との同時指定、`auto` での `msp_file` は `PIPELINE_REQUEST_INVALID`。
     request_id:
         冪等性キー。同一内容の再送は同じ結果を返し、別内容は `IDEMPOTENCY_CONFLICT`。
 
@@ -67,8 +71,9 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
     `PIPELINE_REQUEST_INVALID` にする。
 
     receiptの `resolved` に、解決済みの実行条件——`method`（`source_path` /
-    `sha256`）・`lbm`・`polarity`（`value` とその `source`）——が入る。何も
-    起動しないうちにこの3項目を確認するのがこのツールの用途。
+    `sha256`）・`lbm`・`polarity`（`value` とその `source`）・`library_mode`・
+    `msp`（ファイル名・sha256・出どころ。置き場所は載せない）——が入る。何も
+    起動しないうちにこれらを確認するのがこのツールの用途。
 
     起動せずに `needs_input` を保存することがある（不正なsample_manifest等、
     spec §9.2「既知の不正入力はConsole起動前に拒否する」）。条件だけ確認したい

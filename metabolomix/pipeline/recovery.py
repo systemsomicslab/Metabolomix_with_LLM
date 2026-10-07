@@ -181,8 +181,29 @@ def read_status(path: Path, *, include_details: bool = False) -> dict:
             "message": "workerの生存を確認できません。prepare_resumeで再開してください。",
         }
     if include_details:
-        result["record"] = record
+        result["record"] = _without_library_location(record)
     return result
+
+
+def _without_library_location(record: dict) -> dict:
+    """戻り値用の record の写しから、研究室 MSP の置き場所を除く（ファイル名だけ残す）。
+
+    戻り値は LLM の文脈に入る（spec 2026-10-07 §3.3）。保存された record は変えない
+    ——resume の再検査（`inputs.verify_inputs`）が絶対パスを要る。
+    """
+    inputs = record.get("inputs")
+    if not isinstance(inputs, dict) or not isinstance(inputs.get("msp"), dict):
+        return record
+    redacted = copy.deepcopy(record)
+    msp = redacted["inputs"]["msp"]
+    if msp.get("path"):
+        msp["path"] = Path(msp["path"]).name
+    overrides = (redacted["inputs"].get("method") or {}).get("overrides")
+    if isinstance(overrides, dict):
+        for key, value in overrides.items():
+            if key.lower() == "msp file path" and value:
+                overrides[key] = Path(value).name
+    return redacted
 
 
 # ---------- request_cancel ----------

@@ -676,3 +676,161 @@ def test_planning_proceeds_when_the_policy_is_not_enforcing(tmp_path, monkeypatc
     request["save_project"] = True
 
     inspect_inputs(src["root"], request, exe_path=src["exe"])   # 例外を投げない
+
+
+# ---------- library_mode="msp_only"（spec 2026-10-07） ----------
+
+from tests.lab_msp_fixtures import write_lab_msp_config
+
+
+def _msp_only_plan(tmp_path, monkeypatch, **explicit):
+    _allow_fake_exe(monkeypatch)
+    paths = write_lab_msp_config(tmp_path, monkeypatch)
+    src = make_source(tmp_path / "raw")
+    request = resolve_request(src["root"], {"library_mode": "msp_only", **explicit})
+    return src, paths, inspect_inputs(src["root"], request, exe_path=src["exe"])
+
+
+def test_msp_only_plan_pins_the_lab_msp_and_blanks_the_lbm(tmp_path, monkeypatch):
+    src, paths, plan = _msp_only_plan(tmp_path, monkeypatch)
+    lib = paths["negative"].resolve()
+    assert plan["library_mode"] == "msp_only"
+    assert plan["lbm"] == {"path": None, "sha256": None}
+    assert plan["msp"]["path"] == str(lib)
+    assert plan["msp"]["file"] == "lab_neg.msp"
+    assert plan["msp"]["source"] == "config_file"
+    assert len(plan["msp"]["sha256"]) == 64
+    assert plan["removed_declarations"] == [method_file_mod.LBM_KEY]
+    assert plan["method"]["overrides"][method_file_mod.LBM_KEY] == ""
+    assert plan["method"]["overrides"][method_file_mod.MSP_KEY] == str(lib)
+
+    snapshot = stage_inputs(plan, tmp_path / "pipeline_run")
+    effective = (tmp_path / "pipeline_run" / "inputs" / "effective-method.txt").read_text(encoding="ascii")
+    assert "Lbm file path: \n" in effective
+    assert f"Msp file path: {lib}\n" in effective
+    verify_inputs(snapshot)
+
+
+def test_msp_only_ignores_an_unresolvable_lbm_declaration(tmp_path, monkeypatch):
+    _allow_fake_exe(monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch)
+    src = make_source(tmp_path / "raw")
+    src["method"].write_text(
+        "Ion mode: negative\nTarget omics: Lipidomics\nLbm file path: missing.lbm2\n",
+        encoding="ascii", newline="\n")
+    request = resolve_request(src["root"], {"library_mode": "msp_only"})
+    plan = inspect_inputs(src["root"], request, exe_path=src["exe"])
+    assert plan["lbm"]["path"] is None
+
+
+def test_verify_inputs_detects_a_changed_msp(tmp_path, monkeypatch):
+    src, paths, plan = _msp_only_plan(tmp_path, monkeypatch)
+    snapshot = stage_inputs(plan, tmp_path / "pipeline_run")
+    paths["negative"].write_text("NAME: changed\n", encoding="ascii")
+    with pytest.raises(DomainError, match="INPUT_CHANGED") as info:
+        verify_inputs(snapshot)
+    assert info.value.details["which"] == "msp"
+
+
+def test_msp_only_without_a_configured_library_stops(tmp_path, monkeypatch):
+    _allow_fake_exe(monkeypatch)
+    src = make_source(tmp_path / "raw")
+    request = resolve_request(src["root"], {"library_mode": "msp_only"})
+    with pytest.raises(DomainError, match="MSP_NOT_CONFIGURED"):
+        inspect_inputs(src["root"], request, exe_path=src["exe"])
+
+
+def test_msp_only_unreadable_library_stops_with_an_envelope(tmp_path, monkeypatch):
+    """Review Focus 1: NAS が一時的に読めないときは封筒で止まる（例外で落ちない）。"""
+    _allow_fake_exe(monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share")
+    src = make_source(tmp_path / "raw")
+    request = resolve_request(src["root"], {"library_mode": "msp_only"})
+    from metabolomix.pipeline import inputs as inputs_mod
+    real = inputs_mod._sha256_file
+
+    def flaky(path):
+        if Path(path).suffix == ".msp":
+            raise OSError("network name is no longer available")
+        return real(path)
+
+    monkeypatch.setattr(inputs_mod, "_sha256_file", flaky)
+    with pytest.raises(DomainError, match="MSP_NOT_FOUND") as info:
+        inspect_inputs(src["root"], request, exe_path=src["exe"])
+    assert "secret_share" not in str(info.value)
+
+
+def test_msp_only_accepts_a_capitalized_polarity(tmp_path, monkeypatch):
+    """Review Focus 3: 極性の値が大文字始まりでも設定キーを引ける。"""
+    _allow_fake_exe(monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch)
+    src = make_source(tmp_path / "raw")
+    src["method"].write_text(
+        "Ion mode: Negative\nTarget omics: Lipidomics\nLbm file path: fake.lbm2\n",
+        encoding="ascii", newline="\n")
+    request = resolve_request(src["root"], {"library_mode": "msp_only"})
+    plan = inspect_inputs(src["root"], request, exe_path=src["exe"])
+    assert plan["msp"]["file"] == "lab_neg.msp"
+
+
+def test_auto_plan_reports_msp_not_used(tmp_path, monkeypatch):
+    _allow_fake_exe(monkeypatch)
+    src = make_source(tmp_path / "raw")
+    plan = inspect_inputs(src["root"], resolve_request(src["root"]), exe_path=src["exe"])
+    assert plan["library_mode"] == "auto"
+    assert plan["msp"] == {"path": None, "file": None, "sha256": None, "source": "not_used"}
+    assert plan["removed_declarations"] == []
+    assert plan["lbm"]["path"] == str(src["lbm"].resolve())
+
+
+def test_verify_inputs_msp_errors_do_not_reveal_the_location(tmp_path, monkeypatch):
+    """最終レビュー #2: resume の再検査が研究室 MSP の置き場所を返さない。"""
+    _allow_fake_exe(monkeypatch)
+    paths = write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share")
+    src = make_source(tmp_path / "raw")
+    request = resolve_request(src["root"], {"library_mode": "msp_only"})
+    plan = inspect_inputs(src["root"], request, exe_path=src["exe"])
+    snapshot = stage_inputs(plan, tmp_path / "pipeline_run")
+
+    paths["negative"].write_text("NAME: changed\n", encoding="ascii")
+    with pytest.raises(DomainError, match="INPUT_CHANGED") as changed:
+        verify_inputs(snapshot)
+    assert changed.value.details == {"which": "msp", "msp_file": "lab_neg.msp"}
+    assert "secret_share" not in str(changed.value)
+
+    paths["negative"].unlink()
+    with pytest.raises(DomainError, match="INPUT_CHANGED") as missing:
+        verify_inputs(snapshot)
+    assert missing.value.details == {"which": "msp", "msp_file": "lab_neg.msp"}
+    assert "secret_share" not in str(missing.value)
+
+
+def test_stage_encoding_error_lists_keys_not_paths(tmp_path, monkeypatch):
+    """最終レビュー #3: 実効メソッドを書けないときの details に上書きの値（MSP の絶対パス）を載せない。"""
+    _allow_fake_exe(monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share")
+    src = make_source(tmp_path / "raw")
+    src["method"].write_bytes(
+        "Ion mode: negative\nTarget omics: Lipidomics\nLbm file path: fake.lbm2\n"
+        "Compounds library file path for RT correction: 補正.txt\n".encode("utf-8"))
+    request = resolve_request(src["root"], {"library_mode": "msp_only"})
+    plan = inspect_inputs(src["root"], request, exe_path=src["exe"])
+    with pytest.raises(DomainError, match="METHOD_ENCODING_UNSUPPORTED") as info:
+        stage_inputs(plan, tmp_path / "pipeline_run")
+    assert info.value.details == {"keys": [method_file_mod.RT_REFERENCE_KEY]}
+    assert "secret_share" not in str(info.value)
+
+
+def test_sha256_is_streamed_not_read_whole(tmp_path, monkeypatch):
+    """最終レビュー #4: 2 GB 級の MSP を丸ごとメモリに読まない。"""
+    import hashlib
+    from metabolomix.pipeline import inputs as inputs_mod
+    big = tmp_path / "big.msp"
+    big.write_bytes(b"x" * (3 << 20))
+    expected = hashlib.sha256(big.read_bytes()).hexdigest()
+
+    def forbidden(self, *args, **kwargs):
+        raise AssertionError("read_bytes で丸ごと読んだ")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    assert inputs_mod._sha256_file(big) == expected

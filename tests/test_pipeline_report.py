@@ -467,3 +467,21 @@ def test_report_links_stay_relative_and_inside_the_pipeline(tmp_path):
     for link in links:
         assert ".." not in link
         assert not Path(link).is_absolute()
+
+
+def test_method_section_shows_the_msp_file_but_not_its_location():
+    from metabolomix.pipeline.report import _section_method
+    record = {"inputs": {
+        "library_mode": "msp_only",
+        "method": {"source_path": "m.txt", "sha256": "a" * 64},
+        "lbm": {"path": None, "sha256": None},
+        "msp": {"path": "//nas/secret_share/lab_neg.msp", "file": "lab_neg.msp",
+                "sha256": "b" * 64, "source": "config_file"},
+        "exe": {"version": None},
+    }}
+    text = _section_method(record)
+    assert "- library_mode: msp_only" in text
+    assert "- msp_file: lab_neg.msp" in text
+    assert f"- msp_sha256: {'b' * 64}" in text
+    assert "- msp_source: config_file" in text
+    assert "secret_share" not in text

@@ -390,12 +390,18 @@ def _section_method(record: dict) -> str:
     method = inputs.get("method") or {}
     lbm = inputs.get("lbm") or {}
     exe = inputs.get("exe") or {}
+    # 研究室 MSP はファイル名だけ（置き場所は載せない。spec 2026-10-07 §3.3）。
+    msp = inputs.get("msp") or {}
     lines = [
         "## Method / LBM / Version", "",
         f"- method_source_path: {method.get('source_path') or '(unknown)'}",
         f"- method_sha256: {method.get('sha256') or '(unknown)'}",
         f"- lbm_path: {lbm.get('path') or '(unknown)'}",
         f"- lbm_sha256: {lbm.get('sha256') or '(unknown)'}",
+        f"- library_mode: {inputs.get('library_mode') or 'auto'}",
+        f"- msp_file: {msp.get('file') or '(not used)'}",
+        f"- msp_sha256: {msp.get('sha256') or '(not used)'}",
+        f"- msp_source: {msp.get('source') or 'not_used'}",
         f"- exe_version: {exe.get('version') or '(unknown)'}",
     ]
     return "\n".join(lines)

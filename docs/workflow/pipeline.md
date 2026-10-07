@@ -66,13 +66,21 @@ MCP層は薄い(`metabolomix/tools/pipeline_tools.py`)。実体は `metabolomix/
 
 手順5の `_resolved_settings` は `plan_pipeline` の発送receiptにだけ足される
 (`_dispatch_receipt(include_resolved=True)`)。載せるのは解決済みの
-method(`source_path`/`sha256`)・LBM・polarity(`value`/`source`)の3項目だけで、
+method(`source_path`/`sha256`)・LBM・polarity(`value`/`source`)・`library_mode`・
+MSP(ファイル名・sha256・出どころ。置き場所は載せない)だけで、
 `raw_stat`・`entries`・`overrides` のような大きな中間データは `record["inputs"]`
 に残したまま出さない。サーバー共通指示(`metabolomix/core/mcp_core.py` の ENTRY POINT)が
 このツールを「起動前に解決結果を確認する入口」として案内しているため、receiptが
 それを持たないと `pipeline_status(include_details=true)` でrecord全体を引くしかなく、
 「receiptはコンパクトに」という拘束と衝突する。起動する側(`pipeline_run`)の
 receiptは従来どおり最小のまま。
+
+`library_mode="msp_only"` の要求では LBM を解決せず(`Lbm file path` は空)、研究室の参照ライブラリ(.msp)を
+`msp_file` か極性の設定(`[library] msp_positive` / `msp_negative`)から決めて実効メソッドの `Msp file path` に書く。
+メソッドが宣言する Text DB と注釈器設定表は空にする。MSP の sha256 は入力計画に固定し、計画の指紋にも入れる
+(MSP が変われば `pipeline_run` は別の run を作る)。上流をやり直さない `pipeline_resume` では
+`metabolomix/pipeline/inputs.py` の `verify_inputs()` が再検査する(変わっていれば `INPUT_CHANGED`、`which: "msp"`)。
+receipt にはファイル名・sha256・出どころだけを載せ、置き場所は載せない。
 
 ## pipeline_status
 

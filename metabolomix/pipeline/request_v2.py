@@ -633,10 +633,10 @@ def _check_known_keys(source: dict) -> None:
     unknown = set(source) - _TOP_LEVEL_KEYS
     if not unknown:
         return
-    if {"method_file", "lbm_file"} & unknown:
+    if {"method_file", "lbm_file", "library_mode", "msp_file"} & unknown:
         _fail(
-            "pipeline-request.v2ではmethod_file/lbm_fileを直接指定できません"
-            "（profile_fileから解決してください）。", unknown_keys=sorted(unknown),
+            "pipeline-request.v2ではmethod_file/lbm_file/library_mode/msp_fileを直接指定"
+            "できません（profile_fileから解決してください）。", unknown_keys=sorted(unknown),
         )
     if "comparisons" in unknown:
         _fail(

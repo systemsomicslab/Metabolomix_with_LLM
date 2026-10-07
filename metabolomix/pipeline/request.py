@@ -79,12 +79,20 @@ _TOP_LEVEL_KEYS = frozenset({
     "schema", "target", "method_file", "lbm_file", "polarity", "measure",
     "keep_extension", "timeout_s", "save_project", "output_root",
     "sample_manifest", "preprocess", "comparisons",
+    # spec 2026-10-07（library_mode="msp_only"）
+    "library_mode", "msp_file",
 })
 
 #: 内部でだけ使う2キー。外部入力（explicit/updates）には現れてはいけない。
 _INTERNAL_KEYS = frozenset({"effective_target", "value_sources"})
 
 _TARGET_VALUES = frozenset({"auto", "exploratory", "differential"})
+_LIBRARY_MODE_VALUES = frozenset({"auto", "msp_only"})
+
+#: 内容 hash から外す既定値（spec 2026-10-07 §3.1）。既定値のキーが増えただけで既存の
+#: 要求の hash が変わると、過去の run への再送が IDEMPOTENCY_CONFLICT になり、
+#: 完了済み run の再利用も外れる（tests/test_metabolomics_stages.py が実測値で縛る）。
+_FINGERPRINT_OMITTED_DEFAULTS = {"library_mode": "auto", "msp_file": None}
 _POLARITY_VALUES = frozenset({"positive", "negative"})
 _MEASURE_VALUES = frozenset({"peak_height"})  # 初期版はpeak_heightのみ(spec §10.1)
 _NORMALIZE_VALUES = frozenset({"auto", "none", "tic", "median", "pqn"})
@@ -136,7 +144,7 @@ _NULL_ALLOWED_TOP_LEVEL_KEYS = frozenset({"sample_manifest"})
 #: ——nullは「無効化」を意味する設定だけの特別な語彙（上のR13）。
 _NULL_REJECTED_TOP_LEVEL_KEYS = frozenset({
     "method_file", "lbm_file", "polarity", "keep_extension", "output_root",
-    "comparisons",
+    "comparisons", "library_mode", "msp_file",
 })
 
 
@@ -333,8 +341,20 @@ def _validate_fields(data: dict) -> None:
     if target not in _TARGET_VALUES:
         _fail(f"targetが不正です: {target!r}", target=target)
 
-    for field in ("method_file", "lbm_file", "output_root", "sample_manifest"):
+    for field in ("method_file", "lbm_file", "msp_file", "output_root", "sample_manifest"):
         _validate_optional_str(data, field)
+
+    # 変更前に保存された要求（キー無し）は既定の "auto"。明示の null は
+    # `_reject_disallowed_explicit_null` が先に拒否している。
+    library_mode = data.get("library_mode", "auto")
+    if library_mode not in _LIBRARY_MODE_VALUES:
+        _fail(f"library_modeが不正です: {library_mode!r}", library_mode=library_mode)
+    if library_mode == "msp_only" and data.get("lbm_file"):
+        _fail("library_mode='msp_only'はLBMを使わないので、lbm_fileと同時には指定できません。",
+              library_mode=library_mode)
+    if library_mode == "auto" and data.get("msp_file"):
+        _fail("msp_fileはlibrary_mode='msp_only'のときだけ使えます（autoではMSPを解決しない）。",
+              library_mode=library_mode)
 
     polarity = data.get("polarity")
     if polarity is not None and polarity not in _POLARITY_VALUES:
@@ -610,6 +630,8 @@ def resolve_request(source_root: Path, explicit: dict | None = None, *,
         "target": _pick("target", "auto"),
         "method_file": _pick("method_file"),
         "lbm_file": _pick("lbm_file"),
+        "library_mode": _pick("library_mode", "auto"),
+        "msp_file": _pick("msp_file"),
         "polarity": _pick("polarity"),
         "measure": _pick("measure", "peak_height"),
         "keep_extension": _pick("keep_extension"),
@@ -697,4 +719,8 @@ def request_fingerprint(request: dict) -> str:
     key_set = (request_v2._TOP_LEVEL_KEYS
                if request.get("schema") == request_v2.SCHEMA else _TOP_LEVEL_KEYS)
     content = {key: request[key] for key in key_set if key in request}
+    if key_set is _TOP_LEVEL_KEYS:
+        for key, default in _FINGERPRINT_OMITTED_DEFAULTS.items():
+            if key in content and content[key] == default:
+                del content[key]
     return canonical_hash(content)

@@ -766,3 +766,106 @@ def test_write_effective_method_file_replaces_every_duplicate_line(tmp_path):
     lines = dest.read_text(encoding="ascii").splitlines()
     assert lines == ["Msp file path: C:\\lib\\x.msp", "Ion mode: Positive",
                      "Msp file path: C:\\lib\\x.msp"]
+
+
+# ---------- library_mode="msp_only": MSP の解決と実効メソッドの上書き ----------
+
+import os
+
+from metabolomix.console import method_file as _mf
+from metabolomix.core import path_resolvers as _path_resolvers
+from metabolomix.core import user_config as _user_config
+
+
+def _msp_setting(path, *, source="config_file", key="library.msp_negative"):
+    return _user_config.Setting(
+        key=key, value=str(path), source=source,
+        env_var=_user_config.SETTINGS[key],
+        config_file=None if source == "env" else "C:/cfg/lipidmix.local.toml")
+
+
+def test_msp_setting_keys_are_the_single_source_for_library_lookup():
+    assert _user_config.MSP_SETTING_KEYS == {
+        "positive": "library.msp_positive", "negative": "library.msp_negative"}
+    assert _path_resolvers.LIBRARY_SETTING_KEYS is _user_config.MSP_SETTING_KEYS
+
+
+def test_resolve_msp_prefers_the_argument(tmp_path):
+    arg = tmp_path / "given.msp"
+    arg.write_text("NAME: a\n", encoding="ascii")
+    other = tmp_path / "configured.msp"
+    other.write_text("NAME: b\n", encoding="ascii")
+    res = _mf.resolve_msp(str(arg), "negative", _msp_setting(other))
+    assert res == _mf.MspResolution(path=os.path.abspath(arg), source="argument")
+
+
+def test_resolve_msp_uses_the_setting_and_reports_where_it_came_from(tmp_path):
+    lib = tmp_path / "lab_neg.msp"
+    lib.write_text("NAME: a\n", encoding="ascii")
+    from_file = _mf.resolve_msp(None, "negative", _msp_setting(lib))
+    assert from_file.path == os.path.abspath(lib) and from_file.source == "config_file"
+    from_env = _mf.resolve_msp(None, "negative", _msp_setting(lib, source="env"))
+    assert from_env.source == "env"
+
+
+def test_resolve_msp_not_configured_names_the_setting_key_and_env_var():
+    res = _mf.resolve_msp(None, "positive", None)
+    assert res.error_code == "MSP_NOT_CONFIGURED"
+    assert res.path is None and res.source == "not_configured"
+    assert "msp_positive" in res.message and "MSDIAL_MSP_POS" in res.message
+
+
+def test_resolve_msp_not_found_shows_only_the_file_name(tmp_path):
+    hidden_dir = tmp_path / "secret_lab_share"
+    missing = hidden_dir / "lab_neg.msp"
+    res = _mf.resolve_msp(None, "negative", _msp_setting(missing))
+    assert res.error_code == "MSP_NOT_FOUND"
+    assert "lab_neg.msp" in res.message
+    assert "secret_lab_share" not in res.message
+    arg = _mf.resolve_msp(str(missing), "negative", None)
+    assert arg.error_code == "MSP_NOT_FOUND" and arg.source == "argument"
+    assert "secret_lab_share" not in arg.message
+
+
+def test_msp_only_overrides_blank_lbm_set_msp_and_clear_other_identification_keys():
+    method_keys = {
+        "ion mode": "Negative",
+        "lbm file path": "C:/libs/lipids.lbm2",
+        "msp file path": "C:/public/other.msp",
+        "text db file path": "db.txt",                    # 小文字の綴りでも拾う
+        "msp annotator settings file path": "msp.tsv",
+        "isotope text db file path": "iso.txt",           # 同定用ではないので残す
+        "compounds library file path for rt correction": "rt.txt",
+    }
+    overrides, removed = _mf.msp_only_overrides(method_keys, "C:/lab/lab_neg.msp")
+    assert overrides[_mf.LBM_KEY] == ""
+    assert overrides[_mf.MSP_KEY] == "C:/lab/lab_neg.msp"
+    assert overrides[_mf.TEXT_DB_KEY] == ""
+    assert overrides["MSP annotator settings file path"] == ""
+    assert "Isotope text DB file path" not in overrides
+    assert _mf.RT_REFERENCE_KEY not in overrides
+    assert removed == [_mf.LBM_KEY, _mf.TEXT_DB_KEY, "MSP annotator settings file path"]
+
+
+def test_msp_only_overrides_does_not_add_keys_the_method_never_declared():
+    overrides, removed = _mf.msp_only_overrides({"ion mode": "Positive", "lbm file path": ""},
+                                                "C:/lab/lab_pos.msp")
+    assert overrides == {_mf.LBM_KEY: "", _mf.MSP_KEY: "C:/lab/lab_pos.msp"}
+    assert removed == []
+
+
+def test_blank_override_replaces_every_duplicate_line(tmp_path):
+    src = tmp_path / "params.txt"
+    src.write_text(
+        "Ion mode: Negative\n"
+        "Lbm file path: C:/libs/a.lbm2\n"
+        "MSP FILE PATH: C:/public/one.msp\n"
+        "Lbm file path: C:/libs/b.lbm2\n"
+        "msp file path: C:/public/two.msp\n",
+        encoding="ascii")
+    overrides, _ = _mf.msp_only_overrides(_mf.read_method_keys(src), "C:/lab/lab_neg.msp")
+    dest = _mf.write_effective_method_file(src, tmp_path / "out" / "effective.txt", overrides)
+    lines = dest.read_text(encoding="ascii").splitlines()
+    assert lines.count("Lbm file path: ") == 2
+    assert lines.count("Msp file path: C:/lab/lab_neg.msp") == 2
+    assert not any("one.msp" in line or "two.msp" in line or ".lbm2" in line for line in lines)
