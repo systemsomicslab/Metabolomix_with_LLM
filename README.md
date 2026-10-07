@@ -21,10 +21,11 @@ drive a full analysis without ever seeing the raw matrices.
   until exported.
 - **Accumulates knowledge** — literature notes and reusable analysis playbooks are served
   back to the LLM as MCP resources, so findings compound across sessions.
-- **Can drive MS-DIAL itself (auxiliary)** — the main workflow reads output you have already
-  processed in the MS-DIAL GUI. As a secondary path, the server can plan and run MS-DIAL
-  Console over raw acquisition files and load the resulting mzTab-M. It only does this when
-  you choose to; given raw data alone, it first suggests processing it in the GUI.
+- **Can drive MS-DIAL itself (auxiliary)** — the main workflow reads output MS-DIAL has
+  already written (for example after processing in the MS-DIAL GUI). Given a folder, the
+  server first checks for such output and goes straight to analysis if it is there. Only
+  when the folder holds raw acquisition files alone does it ask for your permission, then
+  plan and run MS-DIAL Console and load the resulting mzTab-M.
 
 ## Supported inputs
 
