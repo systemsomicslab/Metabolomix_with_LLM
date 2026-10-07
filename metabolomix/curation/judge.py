@@ -21,6 +21,7 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "eic_pass_frac": 0.5, "eic_borderline_frac": 0.2, "eic_rt_scatter_sd": 0.1,
     "trend_min_points": 5, "trend_outlier_z": 3.0, "trend_min_r2": 0.7,
     "rescore_tolerance": 0.1,
+    "adduct_isomer_ppm": 5.0, "adduct_isomer_drt": 0.05, "adduct_isomer_height_ratio": 3.0,
 }
 
 # ppm_out は adduct 非依存(実測: 全 adduct で中央値 約 -0.8 ppm)で、precursor_unmatched=0
@@ -31,11 +32,14 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
 # 診断イオン規則が注釈のクラスを否定したので強い理由にする(ユーザー承認 2026-09-29)。
 # dmz_out: |Δm/z| が dmz_fail_mda（既定 10 mDa）以上。ppm は m/z に比例して緩むので、絶対差で
 # 強い理由にする（ユーザー決定 2026-09-29）。Δppm>10 の ppm_out は弱いまま。
+# adduct_isomer_of / adduct_isomer_minor_of: m/z が同時溶出する別物質のスポットの別アダクトで説明でき、
+# 相手の証拠の段階が上なら強い・同じ段階で強度が 3 倍以上なら弱い（ユーザー承認 2026-10-07。
+# 判定は adduct_isomer.py）。理由には相手のスポット番号を `:<spot>` で付ける。
 STRONG_REASONS = frozenset({"polarity_mismatch", "precursor_unmatched", "class_rule_rejected",
-                            "dmz_out"})
-WEAK_REASONS = frozenset({"ppm_out", "low_score", "drt_out", "eic_poor"})
+                            "dmz_out", "adduct_isomer_of"})
+WEAK_REASONS = frozenset({"ppm_out", "low_score", "drt_out", "eic_poor", "adduct_isomer_minor_of"})
 _ORDER = ["polarity_mismatch", "precursor_unmatched", "dmz_out", "class_rule_rejected",
-          "ppm_out", "low_score", "drt_out", "eic_poor",
+          "adduct_isomer_of", "ppm_out", "low_score", "drt_out", "eic_poor", "adduct_isomer_minor_of",
           "ppm_borderline", "drt_borderline", "eic_borderline", "rt_scatter", "trend_outlier"]
 
 
@@ -59,6 +63,11 @@ def resolve_thresholds(overrides: dict | None) -> dict:
     if unknown:
         raise ValueError(f"未知のしきい値キー: {sorted(unknown)}（有効: {sorted(DEFAULT_THRESHOLDS)}）")
     return {**DEFAULT_THRESHOLDS, **(overrides or {})}
+
+
+def reason_code(reason: str) -> str:
+    """理由から `:<spot>` の添え字を除いたコード（`adduct_isomer_of:189` → `adduct_isomer_of`）。"""
+    return reason.split(":", 1)[0]
 
 
 def _check(band: str, reasons: list[str] | None = None) -> dict:
@@ -154,6 +163,17 @@ def _eic(ev: dict, th: dict) -> dict:
     return _check(band, reasons)
 
 
+def _ion(ev: dict) -> dict:
+    """別アダクトの取り違え。`adduct_isomer` が無ければ未評価（UNKNOWN）、None なら説明する相手が無い。"""
+    if "adduct_isomer" not in ev:
+        return _check("UNKNOWN")
+    hit = ev["adduct_isomer"]
+    if hit is None:
+        return _check("PASS")
+    code = "adduct_isomer_of" if hit["severity"] == "strong" else "adduct_isomer_minor_of"
+    return _check("FAIL", [f"{code}:{hit['of']}"])
+
+
 def _trend(entry: dict | None, info: list[str]) -> dict:
     if entry is None:
         return _check("UNKNOWN")
@@ -179,7 +199,15 @@ REASON_TEXT = {
     "eic_borderline": lambda ev, th: "EIC — ピーク形状が境界",
     "rt_scatter": lambda ev, th: "EIC — 試料間で頂点 RT がばらつく",
     "trend_outlier": lambda ev, th: "RT–m/z 傾向 — クラスの傾向から外れる",
+    "adduct_isomer_of": lambda ev, th: "アダクト — " + _isomer_text(ev, "証拠の強い"),
+    "adduct_isomer_minor_of": lambda ev, th: "アダクト — " + _isomer_text(ev, "同じ段階で強度の高い"),
 }
+
+
+def _isomer_text(ev: dict, kind: str) -> str:
+    hit = ev.get("adduct_isomer") or {}
+    return (f"同時溶出する{kind} #{hit.get('of')} {hit.get('of_name')} の {hit.get('as_adduct')} で説明できる"
+            f"（{_num(hit.get('ppm'))} ppm、ΔRT {_num(hit.get('drt'), 3)} 分）")
 
 
 def _num(value, digits: int | None = None) -> str:
@@ -194,7 +222,8 @@ def auto_note(spot: dict, th: dict) -> str | None:
     """判定済みスポット（`judge_spot` の結果を持つ）の判定根拠。`ok` なら None。"""
     if spot.get("verdict") in (None, "ok") or not spot.get("reasons"):
         return None
-    parts = [REASON_TEXT[r](spot, th) if r in REASON_TEXT else r for r in spot["reasons"]]
+    parts = [REASON_TEXT[reason_code(r)](spot, th) if reason_code(r) in REASON_TEXT else r
+             for r in spot["reasons"]]
     return "自動: " + " / ".join(parts)
 
 
@@ -204,12 +233,12 @@ def judge_spot(ev: dict, trend_entry: dict | None, th: dict, *, lipid_rules: boo
     if ref_adduct and ev.get("adduct") and ref_adduct != ev.get("adduct"):
         info.append("adduct_differs_from_reference")
     checks = {"msms": _msms(ev, info, th, lipid_rules), "mz": _mz(ev, th), "rt": _rt(ev, info, th),
-              "eic": _eic(ev, th), "trend": _trend(trend_entry, info)}
-    core = [checks[k] for k in ("msms", "mz", "rt", "eic")]
+              "eic": _eic(ev, th), "ion": _ion(ev), "trend": _trend(trend_entry, info)}
+    core = [checks[k] for k in ("msms", "mz", "rt", "eic", "ion")]
     reasons = [r for c in checks.values() for r in c["reasons"]]
-    reasons.sort(key=lambda r: _ORDER.index(r) if r in _ORDER else len(_ORDER))
+    reasons.sort(key=lambda r: _ORDER.index(reason_code(r)) if reason_code(r) in _ORDER else len(_ORDER))
 
-    if any(r in STRONG_REASONS for r in reasons):
+    if any(reason_code(r) in STRONG_REASONS for r in reasons):
         verdict = "likely_wrong"
     else:
         weak_fail = any(c["band"] == "FAIL" for c in core)
