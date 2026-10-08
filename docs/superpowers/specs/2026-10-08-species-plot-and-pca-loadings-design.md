@@ -32,7 +32,8 @@
 ## 3. 共通部品: 項目から分子種（スポット）の一覧を作る
 
 `arf_plot_group_intensity` の中にある解決処理を、MCP 非依存の関数に切り出す（新モジュール
-`metabolomix/plots/item_selection.py`）。入力と除外の規則は群別強度と同じ:
+`metabolomix/arf/selection.py`。ARF の行・`.arf2`・キュレーションの記録を読むので `plots/` ではなく `arf/` に置く。
+項目の文字列の解決そのものは既存の `plots/group_intensity.py resolve_items()` をそのまま使う）。入力と除外の規則は群別強度と同じ:
 
 - 項目: `.arf2` の Ontology に完全一致すればクラス、しなければ分子種名（`|` 区切りの候補名、`low score:` 等の接頭辞は無視）。`+` で合算。
 - 除外（payload の `excluded` に理由別で残す）: 標識内部標準（`(d7)` 等）、`standard_samples` の試料にだけある分子種、
@@ -52,6 +53,9 @@
 同じ指定なら図と PCA が同じ分子種の集合を使う。
 
 ## 4. `arf_plot_species`
+
+`arf_plot_species` と `arf_pca_species` は新モジュール `metabolomix/arf/species_tools.py` に置く
+（`arf/tools.py` は既に大きいため）。`plot_pca_loadings` は `metabolomix/tools/pca_loadings_tools.py`。
 
 ### 4.1 引数
 
@@ -108,6 +112,8 @@
 ### 5.3 戻り値と状態
 
 - 既定: `[説明文, Image(png)]`。スコア図（PC1 × PC2、群で色分け、低信頼は白抜き、投影点が枠外なら端に矢印）。
+  描画は新設の `plots/pca_scores.py render_pca_scores()`。`save_figure(kind="pca")` もこれを使う
+  （画面の図と保存した図をそろえる。既存の ARF / mzTab の PCA 図も群の色分けが付くようになる）。
   説明文は寄与率、分子種の数、外したスポット数、PC1 の r の上位・下位 5 件。
 - `payload`: 既存の PCA の点列と同じ形（`x` / `y` / `label` / `group`）に、寄与率とローディングの要約を添える。
 - `session.arf.last_species_pca` にスコア・ローディング全量・特異値・特徴量（スポット）情報・計算に使った試料・
