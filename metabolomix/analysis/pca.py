@@ -79,13 +79,21 @@ def run_pca_fit_subset(matrix, fit_mask, n_components: int | None = None) -> dic
     n_fit = int(fit.sum())
     if n_fit < 3:
         raise ValueError(f"PCA の計算に使う試料は 3 以上必要です（現在: {n_fit}）。")
+    if n_components is not None and (
+            isinstance(n_components, bool)
+            or not isinstance(n_components, (int, np.integer))
+            or n_components < 1):
+        raise ValueError(f"n_components は 1 以上の整数にしてください（現在: {n_components!r}）。")
     fit_rows = matrix[fit]
-    sd = fit_rows.std(axis=0)
-    kept = np.flatnonzero(sd > 0)
+    mean_all = fit_rows.mean(axis=0)
+    sd_all = fit_rows.std(axis=0)
+    # 定数列の母標準偏差は浮動小数点の誤差で 0 にならないことがあるので、相対閾値で外す。
+    kept = np.flatnonzero(sd_all > 1e-12 * np.maximum(1.0, np.abs(mean_all)))
     if kept.size < 2:
         raise ValueError(f"計算に使う試料で値が変わる特徴量が 2 未満のため PCA を計算できません（現在: {kept.size}）。")
-    mean = fit_rows[:, kept].mean(axis=0)
-    scaled = (matrix[:, kept] - mean) / sd[kept]
+    mean = mean_all[kept]
+    sd = sd_all[kept]
+    scaled = (matrix[:, kept] - mean) / sd
     max_components = min(n_fit, kept.size)
     target = max_components if n_components is None else min(n_components, max_components)
     pca = PCA(n_components=target).fit(scaled[fit])

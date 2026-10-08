@@ -71,3 +71,25 @@ def test_run_pca_fit_subset_needs_three_fitted_rows_and_two_varying_columns(fit)
     matrix = np.array([[1.0, 2.0], [2.0, 2.0], [3.0, 2.0], [4.0, 2.0]])   # 列 1 は一定
     with pytest.raises(ValueError):
         run_pca_fit_subset(matrix, np.array(fit))
+
+
+def test_run_pca_fit_subset_drops_float_noise_constant_columns():
+    """定数列の母標準偏差は浮動小数点の誤差で 0 にならないことがある。相対閾値で外す。"""
+    import numpy as np
+    from metabolomix.analysis.pca import run_pca_fit_subset
+
+    rng = np.random.default_rng(2)
+    varying = rng.normal(size=(7, 2))
+    matrix = np.hstack([varying[:, :1], np.full((7, 1), 0.1),
+                        varying[:, 1:], np.full((7, 1), 1234.567)])
+    out = run_pca_fit_subset(matrix, np.ones(7, bool), n_components=2)
+    assert out["kept_features"] == [0, 2]
+
+
+def test_run_pca_fit_subset_rejects_non_positive_n_components():
+    import numpy as np
+    from metabolomix.analysis.pca import run_pca_fit_subset
+
+    matrix = np.random.default_rng(3).normal(size=(6, 4))
+    with pytest.raises(ValueError):
+        run_pca_fit_subset(matrix, np.ones(6, bool), n_components=0)
