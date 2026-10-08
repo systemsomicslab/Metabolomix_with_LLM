@@ -76,6 +76,7 @@ from metabolomix.pai2.tools import *
 from metabolomix.dcl.tools import *
 from metabolomix.library.tools import *  # library_load, library_match_feature, library_plot_mirror
 from metabolomix.arf.tools import *
+from metabolomix.arf.species_tools import *  # arf_plot_species, arf_pca_species
 from metabolomix.tools.samples import *  # sample_search
 from metabolomix.arf2.tools import *
 from metabolomix.eic.tools import *

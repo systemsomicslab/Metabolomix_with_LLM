@@ -365,3 +365,33 @@ read-only ツール。ARF 経路のみ（読み込み済み `.arf` と、同じ�
 | `standard_only` | `standard_samples` を指定したとき、その試料での最大高さが、描く群の試料での最大高さの 10 倍以上のスポット（クラスとして当たった分だけ）。システムチェック標準液の奇数鎖標準物質が試料のクラス合計に混ざるのを防ぐ。判定には `arf_exclude` 済みの試料の行も使う |
 
 除外は**解析の前提を変える**ので、図を報告に載せるときは `excluded` の件数と理由を併記すること。
+
+### 11.6 `arf_plot_species` の返り値（`lipidmix.species_intensity.v1`）
+
+選んだクラスを**分子種（アラインメントスポット）に展開**し、1 分子種 1 パネルで、群ごとの試料別の値
+（割合 % または PeakHeight）を並べる read-only ツール。ARF 経路のみ（読み込み済み `.arf` と兄弟 `.arf2` が要る）。
+`arf_plot_group_intensity`（クラス合計）と違い、**スポットごとに**描く。同じ名前でも付加イオンが違えば別パネル。
+**既定（`output="image"`）はサーバ側で描いた PNG と 1 行のキャプション**（パネル数・群の試料数・除外の 6 種類の件数・
+分母が 0 で描かなかった試料・`caveats`）。以下は `output="payload"`（または env `LIPIDMIX_PLOT_OUTPUT=payload`）の契約。
+ファイルは `save_figure(kind="species")`（`reports/figures/<analysis_id>_species.png` を dpi 300 で、同名の `.svg` と
+一緒に書く）。入力の誤り・パネルが 40 枚を超える・判断の記録ファイルが読めないときは
+`{"status": "error", "message": ...}`。失敗した呼び出しの後は前回の図を破棄する。**検定はしない**。
+
+| フィールド | 意味 |
+|------------|------|
+| `plot_schema` | `lipidmix.species_intensity.v1` |
+| `value` | `share`（試料ごとに 高さ ÷ 分母の合計 × 100）または `height`（PeakHeight） |
+| `stat` | 平均と SD の定義: `mean ± SD of share (%)` / `mean ± SD of log10(peak height)`。`groups[].mean` / `sd` はこれに従う |
+| `share_basis` | `value="share"` のときだけ。`items`（指定した分母の項目。省略時は null で、描く項目が分母）と `spot_ids`（分母にしたスポット）。`height` では null |
+| `groups[]` | `label` と `samples`（解決した試料名。指定順。`arf_exclude` した試料は含まない） |
+| `low_reliability_samples` | 白抜きで描き、平均・SD から外した試料 |
+| `zero_denominator_samples` | 分母（分母スポットの高さの合計）が 0 で割合を計算できなかった試料。その試料の `share` は null で描かない |
+| `spots[]` | パネルごとに `spot_id` / `name` / `label`（表示名）/ `ontology` / `item`（展開元の項目）/ `adduct` / `mz` / `rt` / `msms`（MS/MS の裏付けの有無）と `groups[]` |
+| `spots[].groups[].samples[]` | `sample` / `height`（PeakHeight。行が無ければ 0）/ `share`（分母に対する %。`height` 指定時と分母 0 の試料は null）/ `gap_filled` / `low_reliability` |
+| `spots[].groups[].mean` / `sd` / `n_in_stats` | `stat` の定義での平均・SD と、その計算に使った試料数（低信頼でなく、`share` なら計算できた試料、`height` なら高さ > 0 の試料）。n = 1 なら SD は null、0 なら平均も null |
+| `excluded` | 除いたスポットの `#<spot_id> <name>`。理由ごとに `internal_standard` / `manual` / `curation` / `auto_likely_wrong` / `standard_only`（`arf_plot_group_intensity` と同じ。§11.5）と、`require_msms=True` で MS/MS の裏付けがないために除いた `no_msms` |
+| `caveats` | `arf_plot_group_intensity` と同じ種類に加え、`share_basis` が描く分子種を含まないとき（分母に含まれない分子種があり、割合が 100 % を超えうる） |
+
+**割合の読み方**: `share` は**分母にしたスポットの高さの合計に対する %** で、試料の総量に対する割合ではない。
+分母は `share_basis`（省略時は `items`）を同じ除外規則で解決したスポットで、`require_msms=True` なら分母にも効く。
+分子種の割合は分母の選び方で変わるので、図を報告に載せるときは `share_basis` を併記すること。

@@ -194,8 +194,8 @@ def list_reports() -> str:
     return "\n".join(lines)
 
 
-#: save_figure が受け付ける図の種類。後続の作業で species / pca_loadings を足す。
-FIGURE_KINDS = ("pca", "volcano", "eic", "group_intensity")
+#: save_figure が受け付ける図の種類。後続の作業で pca_loadings を足す。
+FIGURE_KINDS = ("pca", "volcano", "eic", "group_intensity", "species")
 #: ARF と mzTab のどちらの結果を描くかを選ぶ必要がある種類（source / result_id を使う）。
 _SOURCE_KINDS = ("pca", "volcano")
 
@@ -208,7 +208,8 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
 
     kind: "pca"（arf_parser / arf_pca_preprocessed / dataset_pca のスコア）/ "volcano"
       （arf_differential / dataset_differential。間引き前の全点）/ "eic"（eic_plot_chromatograms /
-      eic_plot_compounds）/ "group_intensity"（arf_plot_group_intensity。dpi 300 の PNG と同名 .svg）。
+      eic_plot_compounds）/ "group_intensity"（arf_plot_group_intensity。dpi 300 の PNG と同名 .svg）/
+      "species"（arf_plot_species。dpi 300 の PNG と同名 .svg）。
     source / result_id: kind が pca / volcano のときだけ使う。"auto"（既定）はどちらも優先せず、
       有効な結果が 2 つ以上あると AMBIGUOUS_RESULT_SOURCE で止まる（"arf" / "mztab" で指定する）。
     通常の対話描画では呼ばない（各描画ツールが画像を返す）。返り値の相対パスは write_report の
@@ -233,7 +234,9 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
         return _save_figure(chosen, analysis_id, title, kind="volcano", label="volcano")
     if kind == "eic":
         return _save_eic(analysis_id, title)
-    return _save_group_intensity(analysis_id, title)
+    if kind == "group_intensity":
+        return _save_group_intensity(analysis_id, title)
+    return _save_species(analysis_id, title)
 
 
 def _save_figure(chosen: dict, analysis_id: str, title: str | None, *,
@@ -288,16 +291,40 @@ def _save_group_intensity(analysis_id: str, title: str | None) -> str:
         return mcp_errors.missing_state(
             "group_intensity_plot", ["arf_plot_group_intensity"],
             "先に arf_plot_group_intensity を実行してください（群別強度の図がありません）。")
-    slug = knowledge_store.make_slug(analysis_id)
+    out_path = _figures_dir() / f"{knowledge_store.make_slug(analysis_id)}_group_intensity.png"
+    fig = render_group_intensity_plot(last["payload"], title=title or last.get("title"), ncols=last.get("ncols"))
+    _write_png_and_svg(fig, out_path)
+    rel = f"figures/{out_path.name}"
+    return (f"群別強度の図を保存: {out_path}（同名の .svg も保存）\n"
+            f"本文に ![group intensity]({rel}) で埋め込めます。")
+
+
+def _save_species(analysis_id: str, title: str | None) -> str:
+    """直前の arf_plot_species の図を PNG（dpi 300）と同名 .svg に保存する。"""
+    from metabolomix.plots.species import render_species_plot
+
+    last = getattr(session_state.session.arf, "last_species_plot", None)
+    if not last or not last.get("payload"):
+        return mcp_errors.missing_state(
+            "species_plot", ["arf_plot_species"],
+            "先に arf_plot_species を実行してください（分子種ごとの図がありません）。")
+    out_path = _figures_dir() / f"{knowledge_store.make_slug(analysis_id)}_species.png"
+    fig = render_species_plot(last["payload"], title=title or last.get("title"), ncols=last.get("ncols"))
+    _write_png_and_svg(fig, out_path)
+    return (f"分子種ごとの図を保存: {out_path}（同名の .svg も保存）\n"
+            f"本文に ![species](figures/{out_path.name}) で埋め込めます。")
+
+
+def _figures_dir():
     figures_dir = _resolve_report_dir() / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
-    out_path = figures_dir / f"{slug}_group_intensity.png"
-    fig = render_group_intensity_plot(last["payload"], title=title or last.get("title"), ncols=last.get("ncols"))
+    return figures_dir
+
+
+def _write_png_and_svg(fig, out_path) -> None:
+    """報告書用の図を dpi 300 の PNG と同名 SVG で書く（Figure は閉じる）。"""
     try:
         fig.savefig(out_path, dpi=300, format="png", bbox_inches="tight")
         fig.savefig(out_path.with_suffix(".svg"), format="svg", bbox_inches="tight")
     finally:
         plt.close(fig)
-    rel = f"figures/{out_path.name}"
-    return (f"群別強度の図を保存: {out_path}（同名の .svg も保存）\n"
-            f"本文に ![group intensity]({rel}) で埋め込めます。")

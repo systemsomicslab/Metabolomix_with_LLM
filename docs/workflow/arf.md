@@ -21,6 +21,8 @@ flowchart TD
     VOL --> SVF[save_figure kind=volcano → plots.md]
     P -->|session.arf.features + 兄弟 .arf2| GI[arf_plot_group_intensity]
     GI -->|session.arf.last_group_intensity| SGI[save_figure kind=group_intensity → plots.md]
+    P -->|session.arf.features + 兄弟 .arf2| SP[arf_plot_species]
+    SP -->|session.arf.last_species_plot| SSP[save_figure kind=species → plots.md]
 ```
 
 ## arf_parser
@@ -283,3 +285,28 @@ InChIKey・Ontology・m/z・RT と結合する。InChIKey が無い特徴は本�
 20. └─ [output=image] metabolomix/plots/group_intensity.py  render_group_intensity_plot()
 21.    └─ metabolomix/plots/render.py  figure_to_png()
 22.    └─ metabolomix/arf/tools.py  _group_intensity_caption()
+
+## arf_plot_species
+
+前提: ARF を読み込み済みで、同じアラインメントの `.arf2` が隣にある（無ければ `MissingState`）
+状態変更: `session.arf.last_species_plot`（payload・title・ncols）を更新。ファイルは書かない。
+`save_figure(kind="species")`（[plots.md](plots.md)）がここから読んで保存する。
+
+選んだクラスを分子種（アラインメントスポット）に展開し、1 分子種 1 パネルで群ごとの試料別の値を並べる。
+項目・群・除外の解決は `arf_plot_group_intensity` と同じ `arf/selection.py`。`value="share"` の分母は
+`share_basis`（省略時は `items`）を同じ規則で解決したスポットの合計（手順 6 をもう 1 回呼ぶ）。
+入力の誤り・パネル超過（40 枚）・判断の記録ファイルの破損は `{"status":"error","message":...}` を返して終わる。
+
+1. metabolomix/arf/species_tools.py  arf_plot_species()
+2. └─ metabolomix/arf/species_tools.py  _require_arf_with_arf2()
+3. │  └─ metabolomix/core/mcp_errors.py  missing_state()
+4. │  └─ metabolomix/arf/tools.py  _sibling_arf2_path()
+5. └─ metabolomix/plots/render.py  resolve_plot_output()
+6. └─ metabolomix/arf/selection.py  build_selection()
+7. │  └─ metabolomix/plots/group_intensity.py  resolve_items()
+8. └─ metabolomix/arf/selection.py  expand_spots()
+9. └─ metabolomix/plots/species.py  build_species_payload()
+10.├─ [output=payload] metabolomix/core/serialization.py  json_payload()
+11.└─ [output=image] metabolomix/plots/species.py  render_species_plot()
+12.   └─ metabolomix/plots/render.py  figure_to_png()
+13.   └─ metabolomix/arf/species_tools.py  _species_caption()

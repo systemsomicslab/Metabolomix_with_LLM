@@ -136,6 +136,14 @@ class MissingStateContractTests(unittest.TestCase):
             "load_dataset",
         )
 
+    def test_arf_plot_species(self):
+        self.assert_missing(
+            server.arf_plot_species(items=["PG"], groups=["x"], output="payload"),
+            "arf_dataset",
+            ["arf_parser", "load_dataset"],
+            "load_dataset",
+        )
+
     def test_save_figure_group_intensity(self):
         self.assert_missing(
             server.save_figure("group_intensity", analysis_id="x"),

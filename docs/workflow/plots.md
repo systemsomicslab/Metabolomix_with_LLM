@@ -11,6 +11,7 @@
 | PCA スコア（`session.arf.last_pca_plot` / `session.dataset.last_pca`） | `arf_parser` / `arf_pca_preprocessed` / `dataset_pca` | `save_figure(kind="pca")` | 散布図 |
 | `lipidmix.volcano.v1` | `arf_plot_volcano(output="payload")` | `save_figure(kind="volcano")` | `up`/`down` は全点保持、`ns` のみ間引く。保存は間引き前の全点 |
 | `lipidmix.group_intensity.v1` | `arf_plot_group_intensity(output="payload")` | `save_figure(kind="group_intensity")` | 項目 × 群 × 試料の PeakHeight 合計。PNG（dpi 300）に加えて SVG も書く |
+| `lipidmix.species_intensity.v1` | `arf_plot_species(output="payload")` | `save_figure(kind="species")` | スポット × 群 × 試料の高さと割合。PNG（dpi 300）と SVG |
 | `lipidmix.eic.v1` / `.multi.v1` | `eic_plot_chromatograms` / `eic_plot_compounds(output="payload")` | `save_figure(kind="eic")` | 線グラフ |
 
 描画ツールの**既定は payload ではなく画像**（`output="image"`）。座標点列を LLM の文脈へ流すと
@@ -26,7 +27,7 @@ Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT
 ## save_figure
 
 前提: `kind` に対応する描画・解析を実行済み（無ければ `MissingState`。`required_tools` は kind ごと）
-状態変更: `reports/figures/` に PNG（`group_intensity` は SVG も）を書く。
+状態変更: `reports/figures/` に PNG（`group_intensity` と `species` は SVG も）を書く。
 
 `kind` が `pca` / `volcano` のときだけ入力元を選ぶ（手順 2〜4）。ARF 経路と mzTab-M 経路の結果を
 並べ、**どちらも優先しない**——有効な結果が 2 つ以上あれば `AMBIGUOUS_RESULT_SOURCE` で止まり、
@@ -43,5 +44,7 @@ Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT
 7. │     └─ metabolomix/plots/result_output.py  save_result_figure()
 8. ├─ [kind=eic] metabolomix/tools/reports.py  _save_eic()
 9. │  └─ metabolomix/plots/eic.py  render_eic_plot()
-10.└─ [kind=group_intensity] metabolomix/tools/reports.py  _save_group_intensity()
-11.   └─ metabolomix/plots/group_intensity.py  render_group_intensity_plot()
+10.├─ [kind=group_intensity] metabolomix/tools/reports.py  _save_group_intensity()
+11.│  └─ metabolomix/plots/group_intensity.py  render_group_intensity_plot()
+12.└─ [kind=species] metabolomix/tools/reports.py  _save_species()
+13.   └─ metabolomix/plots/species.py  render_species_plot()
