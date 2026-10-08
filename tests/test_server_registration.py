@@ -26,6 +26,7 @@ import server
 # 群別強度プロットの保存: save_group_intensity_figure を追加(73→74)。
 # 図の保存の一本化: save_figure に統合し旧 4 ツールを撤去(74→71)。
 # 分子種ごとの図: arf_plot_species を追加(71→72)。
+# 分子種 PCA: arf_pca_species を追加(72→73)。
 EXPECTED_TOOLS = sorted([
     "library_load",
     "library_match_feature",
@@ -48,6 +49,7 @@ EXPECTED_TOOLS = sorted([
     "arf_plot_volcano",
     "arf_plot_group_intensity",
     "arf_plot_species",
+    "arf_pca_species",
     "arf_preprocess",
     "eic_parser",
     "eic_plot_chromatograms",

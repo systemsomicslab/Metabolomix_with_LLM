@@ -122,3 +122,58 @@ def test_save_figure_species_writes_png_and_svg(loaded, tmp_path, monkeypatch):
     msg = server.save_figure("species", "EV-PG")
     png = tmp_path / "reports" / "figures" / "ev-pg_species.png"      # make_slug は小文字にする
     assert png.is_file() and png.with_suffix(".svg").is_file() and str(png) in msg
+
+
+def _pca(**kw):
+    from metabolomix.arf.species_tools import arf_pca_species
+    kw.setdefault("groups", ["ctrl", "ko"])
+    return json.loads(arf_pca_species(output="payload", **kw))
+
+
+def test_pca_species_projects_low_reliability_and_orients(loaded):
+    p = _pca(items=["PG", "DGDG", "DG"], low_reliability_samples=["ko_3"], orient_by="ko")
+    pts = {pt["label"]: pt for pt in p["points"]}
+    assert pts["20261006_ko_3"]["fitted"] is False and pts["20261006_ctrl_1"]["fitted"] is True
+    ko_x = [pts[f"20261006_ko_{i}"]["x"] for i in (1, 2)]
+    assert sum(ko_x) / 2 > 0                                    # orient_by の群が正
+    last = session_state.session.arf.last_species_pca
+    assert last["n_fit"] == 5 and last["scaling"] == "autoscale"
+    assert {row["feature_id"] for row in last["loadings_rows"]} == {"0", "1", "2", "3", "4"}
+    assert all(-1.0001 <= v <= 1.0001 for row in last["loadings_rows"] for v in row["r"])
+
+
+def test_pca_species_total_normalization_with_zero_total_names_the_sample(loaded):
+    session_state.session.arf.excluded_spots = set()
+    out = _pca(items=["DG"], groups=["blank", "ctrl"], normalize="total")
+    assert out["status"] == "error" and "blank_1" in out["message"]
+
+
+def test_pca_species_sample_in_two_groups_is_counted_once(loaded):
+    p = _pca(items=["PG", "DGDG", "DG"], groups=["ctrl", "ctrl_1", "ko"])
+    labels = [pt["label"] for pt in p["points"]]
+    assert labels.count("20261006_ctrl_1") == 1
+
+
+@pytest.mark.parametrize("kw", [{"normalize": "median"}, {"orient_by": "nope"}, {"items": ["PG 16:0_18:1"]},
+                                {"groups": ["ctrl"], "low_reliability_samples": ["ctrl_1"]}])
+def test_pca_species_invalid_input_returns_error_and_clears_slot(loaded, kw):
+    _pca(items=["PG", "DGDG", "DG"])
+    assert session_state.session.arf.last_species_pca is not None
+    out = _pca(**{"items": ["PG", "DGDG", "DG"], **kw})
+    assert out["status"] == "error" and out["message"]
+    assert session_state.session.arf.last_species_pca is None
+
+
+def test_pca_species_image_and_save_figure_needs_source_when_ambiguous(loaded, tmp_path, monkeypatch):
+    from mcp.server.fastmcp import Image
+    import server
+    from metabolomix.arf.species_tools import arf_pca_species
+    monkeypatch.setenv("LIPIDMIX_REPORTS_DIR", str(tmp_path / "reports"))
+    out = arf_pca_species(items=["PG", "DGDG", "DG"], groups=["ctrl", "ko"])
+    assert isinstance(out[1], Image) and "PC1" in out[0]
+    session_state.session.arf.last_pca_plot = {"title": "x", "x_label": "PC1", "y_label": "PC2",
+                                               "points": [{"x": 0, "y": 0, "label": "a"}]}
+    ambiguous = json.loads(server.save_figure("pca", "s1"))
+    assert ambiguous["error"]["code"] == "AMBIGUOUS_RESULT_SOURCE"
+    msg = server.save_figure("pca", "s1", source="species")
+    assert (tmp_path / "reports" / "figures" / "s1_pca.png").is_file() and "source=species" in msg

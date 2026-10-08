@@ -313,3 +313,26 @@ ARF が未読み込みのときと、手順 4 が兄弟 `.arf2` を見つけら�
 12.└─ [output=image] metabolomix/plots/species.py  render_species_plot()
 13.   └─ metabolomix/plots/render.py  figure_to_png()
 14.   └─ metabolomix/arf/species_tools.py  _species_caption()
+
+## arf_pca_species
+
+前提: ARF を読み込み済みで、同じアラインメントの `.arf2` が隣にある（無ければ `MissingState`）
+状態変更: `session.arf.last_species_pca`（スコア・ローディング全量・寄与率・provenance）を更新。ファイルは書かない。
+`save_figure(kind="pca", source="species")` と `plot_pca_loadings(source="species")` がここから読む。
+
+分子種の選び方は `arf_plot_species` と同じ（手順 4〜5）。試料 × 分子種の PeakHeight 行列を作り、
+`normalize="total"` なら試料ごとの合計で割り、log10(x + 1)、計算に使う試料（低信頼を除く）で
+autoscale して PCA（手順 6）。低信頼の試料は投影だけする。`orient_by` で符号をそろえ、相関 r を計算する（手順 7）。
+入力の誤り（計算に使う試料が 3 未満・合計 0 の試料・未知の `orient_by` など）は `{"status":"error"}`。
+
+1. metabolomix/arf/species_tools.py  arf_pca_species()
+2. └─ metabolomix/arf/tools.py  _require_arf_with_arf2()
+3. └─ metabolomix/plots/render.py  resolve_plot_output()
+4. └─ metabolomix/arf/selection.py  build_selection()
+5. └─ metabolomix/arf/selection.py  expand_spots()
+6. └─ metabolomix/analysis/pca.py  run_pca_fit_subset()
+7. └─ metabolomix/analysis/pca.py  loading_correlations()
+8. └─ metabolomix/analysis/result_state.py  new_provenance()
+9. ├─ [output=payload] metabolomix/core/serialization.py  json_payload()
+10.└─ [output=image] metabolomix/plots/pca_scores.py  render_pca_scores()
+11.   └─ metabolomix/plots/render.py  figure_to_png()

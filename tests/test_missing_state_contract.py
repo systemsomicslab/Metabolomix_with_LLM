@@ -113,7 +113,7 @@ class MissingStateContractTests(unittest.TestCase):
             server.save_figure("pca", analysis_id="x"),
             "pca_result",
             # mzTab-M 経路（dataset_pca）も PCA の生産者なのでリプレイ候補に入る
-            ["arf_parser", "arf_pca_preprocessed", "load_dataset", "dataset_pca"],
+            ["arf_parser", "arf_pca_preprocessed", "arf_pca_species", "load_dataset", "dataset_pca"],
             "PCA",
         )
 
@@ -139,6 +139,14 @@ class MissingStateContractTests(unittest.TestCase):
     def test_arf_plot_species(self):
         self.assert_missing(
             server.arf_plot_species(items=["PG"], groups=["x"], output="payload"),
+            "arf_dataset",
+            ["arf_parser", "load_dataset"],
+            "load_dataset",
+        )
+
+    def test_arf_pca_species(self):
+        self.assert_missing(
+            server.arf_pca_species(items=["PG"], groups=["x"], output="payload"),
             "arf_dataset",
             ["arf_parser", "load_dataset"],
             "load_dataset",

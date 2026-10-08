@@ -45,6 +45,13 @@ def _pca_candidates() -> list[dict]:
             "source": "arf", "result_id": prov.get("result_id"),
             "dataset_id": prov.get("dataset_id"), "valid": True,
             "result": plot, "ds": None})
+    species = getattr(session_state.session.arf, "last_species_pca", None)
+    if species and species.get("points"):
+        prov = species.get("provenance") or {}
+        candidates.append({
+            "source": "species", "result_id": prov.get("result_id"),
+            "dataset_id": prov.get("dataset_id"), "valid": True,
+            "result": species, "ds": None})
     ds = getattr(session_state.session, "dataset", None)
     ds_pca = getattr(ds, "last_pca", None) if ds is not None else None
     if ds_pca:
@@ -84,8 +91,8 @@ def _figure_missing_state(kind: str) -> str:
     if kind == "pca":
         return mcp_errors.missing_state(
             "pca_result",
-            ["arf_parser", "arf_pca_preprocessed", "load_dataset", "dataset_pca"],
-            "先に arf_parser / arf_pca_preprocessed / load_dataset 等でPCAを実行してください"
+            ["arf_parser", "arf_pca_preprocessed", "arf_pca_species", "load_dataset", "dataset_pca"],
+            "先に arf_parser / arf_pca_preprocessed / arf_pca_species / load_dataset 等でPCAを実行してください"
             "（PCA結果がありません）。")
     return mcp_errors.missing_state(
         "differential_result", ["arf_differential", "dataset_differential"],
@@ -206,7 +213,8 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
                 source: str = "auto", result_id: str | None = None) -> str:
     """明示的なユーザー要求時だけ、直近の図を reports/figures/<analysis_id>_<kind>.png に保存する。
 
-    kind: "pca"（arf_parser / arf_pca_preprocessed / dataset_pca のスコア）/ "volcano"
+    kind: "pca"（arf_parser / arf_pca_preprocessed / arf_pca_species / dataset_pca のスコア。
+      arf_pca_species の結果は source="species"）/ "volcano"
       （arf_differential / dataset_differential。間引き前の全点）/ "eic"（eic_plot_chromatograms /
       eic_plot_compounds）/ "group_intensity"（arf_plot_group_intensity。dpi 300 の PNG と同名 .svg）/
       "species"（arf_plot_species。dpi 300 の PNG と同名 .svg）。

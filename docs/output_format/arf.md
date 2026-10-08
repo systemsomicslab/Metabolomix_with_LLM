@@ -395,3 +395,27 @@ read-only ツール。ARF 経路のみ（読み込み済み `.arf` と、同じ�
 **割合の読み方**: `share` は**分母にしたスポットの高さの合計に対する %** で、試料の総量に対する割合ではない。
 分母は `share_basis`（省略時は `items`）を同じ除外規則で解決したスポットで、`require_msms=True` なら分母にも効く。
 分子種の割合は分母の選び方で変わるので、図を報告に載せるときは `share_basis` を併記すること。
+
+### 11.7 `arf_pca_species` の返り値
+
+選んだ分子種（`arf_plot_species` と同じ項目指定・除外）の PeakHeight 行列（試料 × 分子種）で PCA を回す read-only ツール。
+ARF 経路のみ（読み込み済み `.arf` と兄弟 `.arf2` が要る）。既定（`output="image"`）はサーバ側で描いたスコア図の PNG と
+説明（寄与率・`pc1_r_top` / `pc1_r_bottom`）。以下は `output="payload"` の契約。ファイルは
+`save_figure(kind="pca", source="species")`。ローディング全量（`loadings_rows`）は戻り値に載せずセッションに残す。
+入力の誤り（計算に使う試料が 3 未満・合計 0 の試料・未知の `orient_by` / `normalize` など）は
+`{"status": "error", "message": ...}`。失敗した呼び出しの後は前回の結果を破棄する。
+
+| フィールド | 意味 |
+|------------|------|
+| `points[]` | 試料ごとに `x`（PC1）/ `y`（PC2）/ `label`（試料名）/ `group`（群。2 群に入る試料は最初の群）/ `fitted`。`fitted=false` は低信頼の試料で、**主成分の計算に使わず投影しただけ**（スコアは計算に使った試料が決めた軸への射影） |
+| `explained_variance_ratio` | 主成分ごとの寄与率（計算に使った試料での値。最大 5 成分） |
+| `x_label` / `y_label` | 軸名（寄与率入り） |
+| `n_fit` / `n_species` | 計算に使った試料数 / PCA に使った分子種数 |
+| `dropped_zero_variance` | 計算に使う試料で値が変わらず外した分子種の数 |
+| `excluded` / `caveats` | `arf_plot_species` と同じ（§11.6） |
+| `pc1_r_top` / `pc1_r_bottom` | PC1 との相関 r が大きい・小さい分子種（表示名と r、各 5 件）。r は**計算に使った試料**での分子種と主成分スコアの相関で −1〜1 |
+| `result_id` | この結果の ID（`save_figure` の `result_id` に使える） |
+
+**読み方**: 値は `normalize`（`none` / `total`）→ log10(x + 1)（`log_transform`）→ 計算に使う試料の平均と母標準偏差で
+autoscale の順。主成分の**符号は本来任意**で、`orient_by` を指定したときだけ、その群の平均スコアが正になるようにそろえる。
+`normalize="total"` は試料量の差を除いて組成を比べるときの選択で、合計が 0 の試料があると計算しない。

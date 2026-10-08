@@ -8,7 +8,7 @@
 
 | payload | 生成元 | 保存 | 特徴 |
 |---|---|---|---|
-| PCA スコア（`session.arf.last_pca_plot` / `session.dataset.last_pca`） | `arf_parser` / `arf_pca_preprocessed` / `dataset_pca` | `save_figure(kind="pca")` | 散布図 |
+| PCA スコア（`session.arf.last_pca_plot` / `session.dataset.last_pca`） | `arf_parser` / `arf_pca_preprocessed` / `arf_pca_species`（`session.arf.last_species_pca`）/ `dataset_pca` | `save_figure(kind="pca")` | 散布図 |
 | `lipidmix.volcano.v1` | `arf_plot_volcano(output="payload")` | `save_figure(kind="volcano")` | `up`/`down` は全点保持、`ns` のみ間引く。保存は間引き前の全点 |
 | `lipidmix.group_intensity.v1` | `arf_plot_group_intensity(output="payload")` | `save_figure(kind="group_intensity")` | 項目 × 群 × 試料の PeakHeight 合計。PNG（dpi 300）に加えて SVG も書く |
 | `lipidmix.species_intensity.v1` | `arf_plot_species(output="payload")` | `save_figure(kind="species")` | スポット × 群 × 試料の高さと割合。PNG（dpi 300）と SVG |

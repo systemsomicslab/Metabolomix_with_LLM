@@ -34,7 +34,7 @@ def test_source_is_rejected_for_kinds_without_sources(kind):
 
 
 @pytest.mark.parametrize("kind,state,tools", [
-    ("pca", "pca_result", ["arf_parser", "arf_pca_preprocessed", "load_dataset", "dataset_pca"]),
+    ("pca", "pca_result", ["arf_parser", "arf_pca_preprocessed", "arf_pca_species", "load_dataset", "dataset_pca"]),
     ("volcano", "differential_result", ["arf_differential", "dataset_differential"]),
     ("eic", "eic_plot", ["eic_plot_chromatograms", "eic_plot_compounds"]),
     ("group_intensity", "group_intensity_plot", ["arf_plot_group_intensity"]),
