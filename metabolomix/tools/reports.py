@@ -236,7 +236,9 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
         return _save_eic(analysis_id, title)
     if kind == "group_intensity":
         return _save_group_intensity(analysis_id, title)
-    return _save_species(analysis_id, title)
+    if kind == "species":
+        return _save_species(analysis_id, title)
+    raise AssertionError(f"unhandled figure kind: {kind!r}")  # FIGURE_KINDS に足したら分岐も足す
 
 
 def _save_figure(chosen: dict, analysis_id: str, title: str | None, *,

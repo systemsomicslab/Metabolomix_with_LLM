@@ -860,6 +860,25 @@ def _sibling_arf2_path() -> Path | None:
     return sibling if sibling.is_file() else None
 
 
+def _require_arf_with_arf2():
+    """ARF と兄弟 .arf2 があればその .arf2 のパス、無ければ missing_state の封筒（str）。"""
+    arf_state = session_state.session.arf
+    if arf_state.features is None or not str(arf_state.current_file_path or "").lower().endswith(".arf"):
+        return mcp_errors.missing_state(
+            "arf_dataset", ["arf_parser", "load_dataset"], "先に load_dataset で ARF データを読み込んでください。")
+    arf2_path = _sibling_arf2_path()
+    if arf2_path is None:
+        return mcp_errors.missing_state(
+            "sibling_arf2", ["arf_parser", "load_dataset"],
+            "同じアラインメントの .arf2 が見つかりません（名前とクラスの解決に要ります）。")
+    return arf2_path
+
+
+def _check_ncols(ncols) -> None:
+    if ncols is not None and (isinstance(ncols, bool) or not isinstance(ncols, int) or ncols < 1):
+        raise ValueError(f"ncols は 1 以上の整数で指定してください（受け取った値: {ncols!r}）。")
+
+
 def _annotate_with_names(rows: list[dict]) -> dict:
     """差次的解析の上位ヒットに脂質名/Ontology を付す。ARF が Unknown なら ARF2 を引く。
 
@@ -1376,15 +1395,10 @@ def arf_plot_group_intensity(
     from metabolomix.msdial import analysis_params
     from metabolomix.plots import group_intensity as gi
 
+    arf2_path = _require_arf_with_arf2()
+    if isinstance(arf2_path, str):
+        return arf2_path
     arf_state = session_state.session.arf
-    if arf_state.features is None or not str(arf_state.current_file_path or "").lower().endswith(".arf"):
-        return mcp_errors.missing_state(
-            "arf_dataset", ["arf_parser", "load_dataset"], "先に load_dataset で ARF データを読み込んでください。")
-    arf2_path = _sibling_arf2_path()
-    if arf2_path is None:
-        return mcp_errors.missing_state(
-            "sibling_arf2", ["arf_parser", "load_dataset"],
-            "同じアラインメントの .arf2 が見つかりません（名前とクラスの解決に要ります）。")
     # 失敗した呼び出しの後に、前回の図を save_figure(kind="group_intensity") が保存してしまわないよう先に捨てる。
     arf_state.last_group_intensity = None
 
@@ -1394,8 +1408,7 @@ def arf_plot_group_intensity(
             if (isinstance(detection_limit, bool) or not isinstance(detection_limit, (int, float))
                     or not math.isfinite(detection_limit) or detection_limit <= 0):
                 raise ValueError(f"detection_limit は 0 より大きい有限の数で指定してください（受け取った値: {detection_limit!r}）。")
-        if ncols is not None and (isinstance(ncols, bool) or not isinstance(ncols, int) or ncols < 1):
-            raise ValueError(f"ncols は 1 以上の整数で指定してください（受け取った値: {ncols!r}）。")
+        _check_ncols(ncols)
         selected = arf_selection.build_selection(
             arf_state, arf2_path, items=items, groups=groups,
             low_reliability_samples=low_reliability_samples, apply_curation=apply_curation,

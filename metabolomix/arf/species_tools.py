@@ -9,7 +9,8 @@ from mcp.server.fastmcp import Image
 from mcp.types import ToolAnnotations
 
 from metabolomix.arf import selection as arf_selection
-from metabolomix.core import mcp_errors, session_state
+from metabolomix.arf.tools import _check_ncols, _require_arf_with_arf2
+from metabolomix.core import session_state
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.serialization import json_payload
 from metabolomix.curation import flags as curation_flags
@@ -20,27 +21,6 @@ __all__ = ["arf_plot_species"]
 
 _EXCLUDED_LABELS = (("internal_standard", "内部標準"), ("manual", "手動除外"), ("curation", "判断"),
                     ("auto_likely_wrong", "自動判定"), ("standard_only", "標準液"), ("no_msms", "MS/MS なし"))
-
-
-def _require_arf_with_arf2():
-    """ARF と兄弟 .arf2 があればその .arf2 のパス、無ければ missing_state の封筒（str）。"""
-    from metabolomix.arf.tools import _sibling_arf2_path
-
-    arf_state = session_state.session.arf
-    if arf_state.features is None or not str(arf_state.current_file_path or "").lower().endswith(".arf"):
-        return mcp_errors.missing_state(
-            "arf_dataset", ["arf_parser", "load_dataset"], "先に load_dataset で ARF データを読み込んでください。")
-    arf2_path = _sibling_arf2_path()
-    if arf2_path is None:
-        return mcp_errors.missing_state(
-            "sibling_arf2", ["arf_parser", "load_dataset"],
-            "同じアラインメントの .arf2 が見つかりません（名前とクラスの解決に要ります）。")
-    return arf2_path
-
-
-def _check_ncols(ncols):
-    if ncols is not None and (isinstance(ncols, bool) or not isinstance(ncols, int) or ncols < 1):
-        raise ValueError(f"ncols は 1 以上の整数で指定してください（受け取った値: {ncols!r}）。")
 
 
 def _excluded_summary(excluded: dict) -> str:
