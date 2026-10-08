@@ -33,6 +33,8 @@ Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT
 `kind` が `pca` / `volcano` のときだけ入力元を選ぶ（手順 2〜4）。ARF 経路と mzTab-M 経路の結果を
 並べ、**どちらも優先しない**——有効な結果が 2 つ以上あれば `AMBIGUOUS_RESULT_SOURCE` で止まり、
 `source` か `result_id` の指定を求める。前処理をやり直して古くなった結果は候補にならない。
+`kind="pca_loadings"` は、描いた後に PCA が入れ替わっていたら（`_candidates()` に同じ `source` と
+`result_id` が無い）古い図を保存せず `missing_state` を返す。
 未知の `kind` と、`source` / `result_id` を使わない `kind` への指定は `{"status": "error"}`。
 戻り値には保存した絶対パスを書く（Use-LLLM はこれを拾って画像として表示する）。
 
@@ -51,7 +53,8 @@ Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT
 12.├─ [kind=species] metabolomix/tools/reports.py  _save_species()
 13.│  └─ metabolomix/plots/species.py  render_species_plot()
 14.└─ [kind=pca_loadings] metabolomix/tools/reports.py  _save_pca_loadings()
-15.   └─ metabolomix/plots/pca_loadings.py  render_loadings_plot()
+15.   └─ metabolomix/tools/pca_loadings_tools.py  _candidates()
+16.   └─ metabolomix/plots/pca_loadings.py  render_loadings_plot()
 
 ## plot_pca_loadings
 

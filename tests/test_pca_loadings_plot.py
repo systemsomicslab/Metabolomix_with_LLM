@@ -68,3 +68,9 @@ def test_render_one_panel_per_pc_with_class_legend():
     fig = pl.render_loadings_plot(_payload(top_n=None))
     assert len([ax for ax in fig.axes if ax.get_visible()]) == 2
     plt.close(fig)
+
+
+def test_class_palette_has_20_distinct_colours_and_keeps_the_first_five():
+    from metabolomix.plots import pca_loadings as pl
+    assert len(set(pl._CLASS_PALETTE)) == len(pl._CLASS_PALETTE) == 20
+    assert pl._CLASS_PALETTE[:5] == ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]

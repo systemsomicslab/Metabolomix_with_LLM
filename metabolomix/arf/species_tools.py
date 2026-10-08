@@ -66,7 +66,8 @@ def arf_plot_species(
     - value: "share"（既定。試料ごとに 高さ ÷ 分母の合計 × 100。棒 = 群平均、ひげ = SD）/ "height"
       （PeakHeight を log10 で。横線 = log10 の平均、ひげ = SD、0 は軸の下端）。検定はしない。
     - share_basis: 割合の分母にする項目（省略時は items）。例: PG のページでも分母は
-      ["PG", "DGDG", "MGDG", "CL"]。分母にも同じ除外を適用する。
+      ["PG", "DGDG", "MGDG", "CL"]。分母にも同じ除外を適用する。当たらない部品があると分母が変わるので
+      描かずにエラー。items に当たらない部品は caveats に書く。value="height" では share_basis は無視される。
     - 除外は arf_plot_group_intensity と同じ（内部標準・standard_samples だけにある分子種・
       apply_curation の判断・exclude_auto_likely_wrong・arf_exclude したスポット）。require_msms=True で
       MS/MS の裏付けがない分子種も除く。除いたものは payload の excluded。
@@ -89,15 +90,24 @@ def arf_plot_species(
         _check_ncols(ncols)
         selected = arf_selection.build_selection(arf_state, arf2_path, items=items, groups=groups, **filters)
         spots, no_msms = arf_selection.expand_spots(selected, require_msms=require_msms)
+        caveats = list(selected.caveats)
+        unmatched = arf_selection.unmatched_parts(selected)
+        if unmatched:
+            caveats.append(f"items のうち当たらなかった（またはすべて除外された）ものがあります: {'、'.join(unmatched)}。")
         if not spots:
             raise ValueError("描く分子種がありません（項目が当たらないか、すべて除外されました）。")
         if len(spots) > species_plot.MAX_PANELS:
             raise ValueError(f"パネルが {len(spots)} 枚になります（1 回 {species_plot.MAX_PANELS} 枚まで）。"
                              "items を分けて呼んでください（share_basis を同じにすれば割合はそろいます）。")
         basis_spots = None
-        caveats = list(selected.caveats)
+        if value == "height" and share_basis:
+            caveats.append("value=\"height\" では share_basis は無視されます（割合を描くときだけ使います）。")
         if value == "share" and share_basis:
             basis_sel = arf_selection.build_selection(arf_state, arf2_path, items=share_basis, groups=groups, **filters)
+            basis_unmatched = arf_selection.unmatched_parts(basis_sel)
+            if basis_unmatched:
+                raise ValueError("share_basis のうち当たらなかった（またはすべて除外された）ものがあります: "
+                                 f"{'、'.join(basis_unmatched)}。分母が変わるため描きません。名前を直すか share_basis から外してください。")
             basis_spots, _ = arf_selection.expand_spots(basis_sel, require_msms=require_msms)
             outside = sorted({s["spot_id"] for s in spots} - {s["spot_id"] for s in basis_spots})
             if outside:
@@ -159,7 +169,9 @@ def arf_pca_species(
     arf_state.last_species_pca = None
     settings = {"items": list(items), "groups": list(groups), "normalize": normalize,
                 "log_transform": log_transform, "require_msms": require_msms, "orient_by": orient_by,
-                "low_reliability_samples": list(low_reliability_samples or [])}
+                "low_reliability_samples": list(low_reliability_samples or []),
+                "apply_curation": apply_curation, "exclude_auto_likely_wrong": exclude_auto_likely_wrong,
+                "standard_samples": list(standard_samples or [])}
     try:
         mode = plot_render.resolve_plot_output(output)
         if normalize not in ("none", "total"):
@@ -172,6 +184,10 @@ def arf_pca_species(
         if orient_by is not None and orient_by not in labels:
             raise ValueError(f"orient_by は groups のどれかを指定してください（{labels}）。")
         spots, no_msms = arf_selection.expand_spots(selected, require_msms=require_msms)
+        caveats = list(selected.caveats)
+        unmatched = arf_selection.unmatched_parts(selected)
+        if unmatched:
+            caveats.append(f"items のうち当たらなかった（またはすべて除外された）ものがあります: {'、'.join(unmatched)}。")
         if len(spots) < 2:
             raise ValueError(f"PCA には分子種が 2 つ以上必要です（現在: {len(spots)}）。")
         samples, group_of = [], {}
@@ -193,6 +209,9 @@ def arf_pca_species(
         if log_transform:
             X = np.log10(X + 1.0)
         fit = np.array([n not in selected.low_reliability for n in samples])
+        if orient_by is not None and not any(group_of[n] == orient_by and f for n, f in zip(samples, fit)):
+            raise ValueError("orient_by の群に主成分の計算に使った試料がありません"
+                             f"（{orient_by}。低信頼の試料は計算に使わず投影だけします）。")
         result = run_pca_fit_subset(X, fit, n_components=_PCA_COMPONENTS)
     except curation_flags.FlagFileError as exc:
         return json_payload({"status": "error", "message": str(exc), **exc.details()})
@@ -226,19 +245,21 @@ def arf_pca_species(
         "explained_variance_ratio": [round(float(v), 4) for v in evr],
         "loadings_rows": loadings_rows, "scaling": "autoscale", "n_fit": result["n_fit"],
         "n_species": len(kept), "dropped_zero_variance": len(spots) - len(kept),
-        "excluded": {**selected.excluded, "no_msms": no_msms}, "caveats": list(selected.caveats),
+        "excluded": {**selected.excluded, "no_msms": no_msms}, "caveats": caveats,
         "settings": settings,
         "provenance": new_provenance(arf_state, kind="pca", input_fingerprint=array_fingerprint(X),
                                      effective_parameters=settings),
     }
     ranked = sorted(loadings_rows, key=lambda row: row["r"][0], reverse=True)
-    top = [f"{row['label']} {row['r'][0]:+.2f}" for row in ranked[:5]]
-    bottom = [f"{row['label']} {row['r'][0]:+.2f}" for row in ranked[-5:][::-1]]
+    top = [f"{row['label']} {row['r'][0]:+.2f}" for row in ranked if row["r"][0] > 0][:5]
+    bottom = [f"{row['label']} {row['r'][0]:+.2f}" for row in ranked[::-1] if row["r"][0] < 0][:5]
     caption = (f"分子種 PCA: {len(kept)} 分子種、計算に使った試料 {result['n_fit']}"
                f"（投影 {int((~fit).sum())}）。PC1 {evr[0] * 100:.1f}%"
                + (f"、PC2 {evr[1] * 100:.1f}%" if len(evr) > 1 else "") + "。"
-               f" PC1 の r 上位: {', '.join(top)}。下位: {', '.join(bottom)}。"
+               f" PC1 の r 上位: {', '.join(top) or 'なし'}。下位: {', '.join(bottom) or 'なし'}。"
                + (f" 分散 0 で外した分子種 {plot['dropped_zero_variance']}。" if plot["dropped_zero_variance"] else "")
+               + f" 除外 — {_excluded_summary(plot['excluded'])}。"
+               + (" 注意: " + " / ".join(caveats) if caveats else "")
                + " ローディング図は plot_pca_loadings(source=\"species\")。")
     if mode == plot_render.PAYLOAD:
         arf_state.last_species_pca = plot

@@ -85,6 +85,25 @@ def test_basis_without_the_plotted_species_adds_caveat(loaded):
     assert any("分母に含まれない" in c for c in p["caveats"])
 
 
+def test_unmatched_share_basis_part_is_an_error(loaded):
+    out = _species(items=["PG", "PE"], share_basis=["PG", "DGDGX"])
+    assert out["status"] == "error" and "DGDGX" in out["message"] and "share_basis" in out["message"]
+    assert session_state.session.arf.last_species_plot is None
+
+
+def test_unmatched_item_part_is_a_caveat_in_payload_and_caption(loaded):
+    from metabolomix.arf.species_tools import arf_plot_species
+    p = _species(items=["PG", "NOSUCH"])
+    assert any("NOSUCH" in c for c in p["caveats"])
+    out = arf_plot_species(items=["PG", "NOSUCH"], groups=["ctrl", "ko"])
+    assert "NOSUCH" in out[0]
+
+
+def test_height_with_share_basis_warns_that_basis_is_ignored(loaded):
+    p = _species(items=["PG"], value="height", share_basis=["PG", "DGDG"])
+    assert any("share_basis" in c and "無視" in c for c in p["caveats"])
+
+
 def test_same_name_different_adduct_are_separate_panels(loaded):
     p = _species(items=["DG"], value="height")
     assert [(s["spot_id"], s["adduct"]) for s in p["spots"]] == [(3, "[M+NH4]+"), (4, "[M+Na]+")]
@@ -177,3 +196,40 @@ def test_pca_species_image_and_save_figure_needs_source_when_ambiguous(loaded, t
     assert ambiguous["error"]["code"] == "AMBIGUOUS_RESULT_SOURCE"
     msg = server.save_figure("pca", "s1", source="species")
     assert (tmp_path / "reports" / "figures" / "s1_pca.png").is_file() and "source=species" in msg
+
+
+def test_pca_species_unmatched_item_is_a_caveat_in_payload_and_caption(loaded):
+    from metabolomix.arf.species_tools import arf_pca_species
+    p = _pca(items=["PG", "DGDG", "NOSUCH"])
+    assert any("NOSUCH" in c for c in p["caveats"])
+    out = arf_pca_species(items=["PG", "DGDG", "NOSUCH"], groups=["ctrl", "ko"])
+    assert "NOSUCH" in out[0] and "除外" in out[0]
+
+
+def test_pca_species_caption_carries_review_caveat_and_exclusion_summary(loaded):
+    from metabolomix.arf.species_tools import arf_pca_species
+    out = arf_pca_species(items=["PG", "DGDG", "DG"], groups=["ctrl", "ko"], exclude_auto_likely_wrong=True)
+    assert "curation_review" in out[0] and "除外 — " in out[0] and "注意:" in out[0]
+
+
+def test_pca_species_orient_by_group_without_fitted_samples_is_an_error(loaded):
+    out = _pca(items=["PG", "DGDG", "DG"], orient_by="ko", low_reliability_samples=["ko"])
+    assert out["status"] == "error" and "orient_by" in out["message"]
+    assert session_state.session.arf.last_species_pca is None
+
+
+def test_pca_species_settings_record_filters(loaded):
+    _pca(items=["PG", "DGDG", "DG"], exclude_auto_likely_wrong=True, apply_curation=False,
+         standard_samples=["blank"])
+    last = session_state.session.arf.last_species_pca
+    for settings in (last["settings"], last["provenance"]["effective_parameters"]):
+        assert settings["apply_curation"] is False and settings["exclude_auto_likely_wrong"] is True
+        assert settings["standard_samples"] == ["blank"]
+
+
+def test_pca_species_top_and_bottom_do_not_overlap(loaded):
+    p = _pca(items=["PG", "DGDG", "DG"])
+    top, bottom = p["pc1_r_top"], p["pc1_r_bottom"]
+    assert not set(top) & set(bottom)
+    assert all(" +" in t or "+0" in t for t in top) and all(" -" in b for b in bottom)
+    assert len(top) + len(bottom) <= 5 * 2

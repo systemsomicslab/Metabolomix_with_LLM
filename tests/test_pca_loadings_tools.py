@@ -16,7 +16,8 @@ def _arf_plot(n_feat=4, with_loadings=True):
                        {"x": 0.0, "y": -0.5, "label": "c"}, {"x": 0.3, "y": 0.2, "label": "d"}],
             "provenance": {"result_id": "arf-1", "dataset_id": "d"}}
     if with_loadings:
-        plot.update({"loadings": [[0.5, -0.5, 0.5, -0.5][:n_feat], [0.1, 0.2, -0.3, 0.9][:n_feat]],
+        # 同点なしにして top_n の選び方を決定的にする（PC1: 0 が最大の正・1 が最大の負）
+        plot.update({"loadings": [[0.9, -0.8, 0.5, -0.4][:n_feat], [0.1, 0.2, -0.3, 0.9][:n_feat]],
                      "singular_values": [4.0, 2.0], "explained_variance_ratio": [0.7, 0.2],
                      "feature_names": [f"Spot_{i}_height" for i in range(n_feat)], "n_fit": 4,
                      "scaling": "autoscale"})
@@ -51,7 +52,7 @@ def test_arf_source_uses_reader_selection_and_computes_r():
     p = _call(top_n=1)
     assert p["source"] == "arf" and p["value"] == "r" and p["result_id"] == "arf-1"
     rows = {row["feature_id"]: row for row in p["panels"][0]["rows"]}
-    assert set(rows) == {"0", "1"} or len(rows) == 2
+    assert set(rows) == {"0", "1"}
     some = next(iter(rows.values()))
     assert some["r"] == pytest.approx(some["coefficient"] * 4.0 / math.sqrt(4), abs=1e-3)
     assert some["label"].startswith("PG")
@@ -118,3 +119,31 @@ def test_mztab_source_draws_dataset_pca():
 
 def test_last_loadings_plot_lives_on_the_analysis_session():
     assert server.AnalysisSession().last_loadings_plot is None
+
+
+def test_multi_property_arf_pca_is_an_error():
+    plot = _arf_plot()
+    plot["feature_names"] = ["Spot_0_height", "Spot_0_area", "Spot_1_height", "Spot_1_area"]
+    session_state.session.arf.last_pca_plot = plot
+    out = _call()
+    assert out["status"] == "error" and "props" in out["message"] and "1 つ" in out["message"]
+
+
+def test_save_figure_refuses_a_loadings_figure_from_a_replaced_pca(tmp_path, monkeypatch):
+    monkeypatch.setenv("LIPIDMIX_REPORTS_DIR", str(tmp_path / "reports"))
+    session_state.session.arf.last_pca_plot = _arf_plot()
+    _call()
+    session_state.session.arf.last_pca_plot = {**_arf_plot(), "provenance": {"result_id": "arf-2", "dataset_id": "d"}}
+    err = json.loads(server.save_figure("pca_loadings", "stale"))["error"]
+    assert err["code"] == "missing_state" and err["required_tools"] == ["plot_pca_loadings"]
+    assert not (tmp_path / "reports" / "figures" / "stale_pca_loadings.png").exists()
+    _call()                                   # 描き直せば保存できる
+    assert "ローディング図を保存" in server.save_figure("pca_loadings", "fresh")
+
+
+def test_save_figure_refuses_a_loadings_figure_when_the_pca_is_gone(tmp_path, monkeypatch):
+    monkeypatch.setenv("LIPIDMIX_REPORTS_DIR", str(tmp_path / "reports"))
+    session_state.session.arf.last_pca_plot = _arf_plot()
+    _call()
+    session_state.session.arf.last_pca_plot = None
+    assert json.loads(server.save_figure("pca_loadings", "gone"))["error"]["code"] == "missing_state"

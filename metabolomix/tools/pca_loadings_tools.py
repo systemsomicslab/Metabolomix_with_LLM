@@ -68,7 +68,11 @@ def _arf_features(plot: dict, pcs: list[int], top_n: int | None) -> tuple[list[d
     for j, name in enumerate(names):
         parts = name.split("_")
         if len(parts) >= 3 and parts[1].isdigit():
-            column_of.setdefault(int(parts[1]), j)
+            if int(parts[1]) in column_of:
+                raise ValueError("この PCA はスポットあたり複数の列（複数の props）を使っており、ローディング図は 1 つの props だけの"
+                                 "PCA に対応しています。arf_parser / arf_preprocess を props=[\"height\"] のように 1 つにして"
+                                 "PCA をやり直してください。")
+            column_of[int(parts[1])] = j
     ids = []
     for pc in picked:
         for item in pc["positive"] + pc["negative"]:

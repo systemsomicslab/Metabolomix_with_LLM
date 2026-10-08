@@ -25,9 +25,10 @@ __all__ = [
 ]
 
 
-# --- 図の入力元の選択（ARF 経路 / mzTab-M 経路） ---
+# --- 図の入力元の選択（ARF 経路 / 分子種 PCA 経路 / mzTab-M 経路） ---
 #
-# 図の描画は 2 つのセッションスロットから来る。ARF 経路は session.arf に、
+# 図の描画は 3 つのセッションスロットから来る。ARF 経路は session.arf.last_pca_plot（volcano は
+# last_differential）に、分子種 PCA（arf_pca_species。kind="pca" だけ）は session.arf.last_species_pca に、
 # mzTab-M 経路は session.dataset（DatasetState）に結果を置く。
 #
 # **どちらかを優先しない**。旧実装は両方あるとき黙って ARF を採っていたので、
@@ -220,8 +221,8 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
       "species"（arf_plot_species。dpi 300 の PNG と同名 .svg）/
       "pca_loadings"（plot_pca_loadings。dpi 300 の PNG と同名 .svg）。
     source / result_id: kind が pca / volcano のときだけ使う。"auto"（既定）はどちらも優先せず、
-      有効な結果が 2 つ以上あると AMBIGUOUS_RESULT_SOURCE で止まる（"arf" / "species"（arf_pca_species）/
-      "mztab" で指定する）。
+      有効な結果が 2 つ以上あると AMBIGUOUS_RESULT_SOURCE で止まる（"arf" / "mztab"、kind="pca" のときだけ
+      "species"（arf_pca_species）でも指定できる）。
     通常の対話描画では呼ばない（各描画ツールが画像を返す）。返り値の相対パスは write_report の
     本文に `![...](figures/<analysis_id>_<kind>.png)` として埋め込める。
     """
@@ -262,7 +263,7 @@ def _save_figure(chosen: dict, analysis_id: str, title: str | None, *,
     figures_dir = _resolve_report_dir() / "figures"
     out_path = save_result_figure(
         chosen.get("ds"), chosen["result"],
-        figures_dir / f"{slug}_{kind if kind != 'volcano' else 'volcano'}.png",
+        figures_dir / f"{slug}_{kind}.png",
         kind=kind, title=title)
 
     rel = f"figures/{out_path.name}"
@@ -338,9 +339,18 @@ def _save_pca_loadings(analysis_id: str, title: str | None) -> str:
         return mcp_errors.missing_state(
             "pca_loadings_plot", ["plot_pca_loadings"],
             "先に plot_pca_loadings を実行してください（ローディング図がありません）。")
-    out_path = _figures_dir() / f"{knowledge_store.make_slug(analysis_id)}_pca_loadings.png"
-    _write_png_and_svg(render_loadings_plot(last["payload"], title=title or last.get("title")), out_path)
     payload = last["payload"]
+    # 描いた後に PCA が入れ替わった（データセット切替・再実行・前処理の無効化）図は保存しない。
+    from metabolomix.tools.pca_loadings_tools import _candidates
+    if not any(c["valid"] and c["source"] == payload["source"] and c["result_id"] == payload["result_id"]
+               for c in _candidates()):
+        return mcp_errors.missing_state(
+            "pca_loadings_plot", ["plot_pca_loadings"],
+            "直前のローディング図は、いまの PCA 結果から描いたものではありません"
+            f"（source={payload['source']} result_id={payload['result_id'] or '(なし)'} は現在の結果にありません）。"
+            "plot_pca_loadings をもう一度実行してください。")
+    out_path = _figures_dir() / f"{knowledge_store.make_slug(analysis_id)}_pca_loadings.png"
+    _write_png_and_svg(render_loadings_plot(payload, title=title or last.get("title")), out_path)
     return (f"ローディング図を保存: {out_path}（同名の .svg も保存。source={payload['source']} "
             f"result_id={payload['result_id'] or '(なし)'}）\n"
             f"本文に ![PCA loadings](figures/{out_path.name}) で埋め込めます。")

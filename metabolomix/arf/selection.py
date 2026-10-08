@@ -98,6 +98,11 @@ def build_selection(arf_state, arf2_path, *, items, groups, low_reliability_samp
                      catalog_by_id={int(r["MasterAlignmentID"]): r for r in catalog}, caveats=caveats)
 
 
+def unmatched_parts(selection: Selection) -> list[str]:
+    """どのスポットにも当たらなかった項目の部品（クラスでも分子種名でもない、または除外で空になった名前）。"""
+    return [p["part"] for item in selection.items for p in item["parts"] if p.get("kind") == "none"]
+
+
 def expand_spots(selection: Selection, *, require_msms: bool = False):
     """解決済みの項目をスポット単位に展開する（項目の順 → 表示名の順。同じスポットは 1 回）。"""
     seen = set()

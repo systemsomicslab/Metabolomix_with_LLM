@@ -390,11 +390,13 @@ read-only ツール。ARF 経路のみ（読み込み済み `.arf` と、同じ�
 | `spots[].groups[].samples[]` | `sample` / `height`（PeakHeight。行が無ければ 0）/ `share`（分母に対する %。`height` 指定時と分母 0 の試料は null）/ `gap_filled` / `low_reliability` |
 | `spots[].groups[].mean` / `sd` / `n_in_stats` | `stat` の定義での平均・SD と、その計算に使った試料数（低信頼でなく、`share` なら計算できた試料、`height` なら高さ > 0 の試料）。n = 1 なら SD は null、0 なら平均も null |
 | `excluded` | 除いたスポットの `#<spot_id> <name>`。理由ごとに `internal_standard` / `manual` / `curation` / `auto_likely_wrong` / `standard_only`（`arf_plot_group_intensity` と同じ。§11.5）と、`require_msms=True` で MS/MS の裏付けがないために除いた `no_msms` |
-| `caveats` | `arf_plot_group_intensity` と同じ種類に加え、`share_basis` が描く分子種を含まないとき（分母に含まれない分子種があり、割合が 100 % を超えうる） |
+| `caveats` | `arf_plot_group_intensity` と同じ種類に加え、`share_basis` が描く分子種を含まないとき（分母に含まれない分子種があり、割合が 100 % を超えうる）、`items` に当たらなかった（またはすべて除外された）部品があるとき、`value="height"` なのに `share_basis` を渡したとき（無視される） |
 
 **割合の読み方**: `share` は**分母にしたスポットの高さの合計に対する %** で、試料の総量に対する割合ではない。
 分母は `share_basis`（省略時は `items`）を同じ除外規則で解決したスポットで、`require_msms=True` なら分母にも効く。
 分子種の割合は分母の選び方で変わるので、図を報告に載せるときは `share_basis` を併記すること。
+`share_basis` の部品が 1 つでも当たらない（名前の綴り違いなど）と分母が変わるため、図は描かずに `{"status": "error"}`
+（当たらなかった部品名入り）を返す。`items` の当たらない部品は図を描いたうえで `caveats` と説明文に書く。
 
 ### 11.7 `arf_pca_species` の返り値
 
@@ -412,8 +414,8 @@ ARF 経路のみ（読み込み済み `.arf` と兄弟 `.arf2` が要る）。�
 | `x_label` / `y_label` | 軸名（寄与率入り） |
 | `n_fit` / `n_species` | 計算に使った試料数 / PCA に使った分子種数 |
 | `dropped_zero_variance` | 計算に使う試料で値が変わらず外した分子種の数 |
-| `excluded` / `caveats` | `arf_plot_species` と同じ（§11.6） |
-| `pc1_r_top` / `pc1_r_bottom` | PC1 との相関 r が大きい・小さい分子種（表示名と r、各 5 件）。r は**計算に使った試料**での分子種と主成分スコアの相関で −1〜1 |
+| `excluded` / `caveats` | `arf_plot_species` と同じ（§11.6）。画像の説明文にも除外の件数と caveat を載せる |
+| `pc1_r_top` / `pc1_r_bottom` | PC1 との相関 r が正の上位・負の上位の分子種（表示名と r。各最大 5 件。正が無ければ `top` は空）。r は**計算に使った試料**での分子種と主成分スコアの相関で −1〜1 |
 | `result_id` | この結果の ID（`save_figure` の `result_id` に使える） |
 
 **読み方**: 値は `normalize`（`none` / `total`）→ log10(x + 1)（`log_transform`）→ 計算に使う試料の平均と母標準偏差で
@@ -442,5 +444,8 @@ PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（
 
 **読み方**: `r` は特徴量とその主成分スコアの相関（−1〜1）で、成分 × 特異値 / √n で出す。autoscale した PCA でだけ意味があり、
 そうでない PCA では出せないので `coefficient` で描く。主成分の**符号は本来任意**なので、正負そのものに意味はなく、
-同じ主成分の中での向きの違いだけを読む。ARF のローディングは前処理後の全スポットのうち**上位だけ**を描く（`top_n` で絞る）。
+同じ主成分の中での向きの違いだけを読む。ARF のローディングは、その PCA に使った特徴量行列の全スポット
+（`arf_parser` なら生のスポット行列、`arf_pca_preprocessed` なら前処理後の行列）のうち**上位だけ**を描く（`top_n` で絞る）。
+ARF のローディング図は**単一の props の PCA** だけに対応する（`arf_parser(props=["height","area"])` のようにスポットあたり
+複数の列があると、どの列を描くか決まらないので `{"status": "error"}`。props を 1 つにして PCA をやり直す）。
 棒の色は `.arf2` の Ontology（クラス）。

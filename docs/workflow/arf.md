@@ -297,7 +297,8 @@ ARF が未読み込みのときと、手順 4 が兄弟 `.arf2` を見つけら�
 選んだクラスを分子種（アラインメントスポット）に展開し、1 分子種 1 パネルで群ごとの試料別の値を並べる。
 項目・群・除外の解決は `arf_plot_group_intensity` と同じ `arf/selection.py`。`value="share"` の分母は
 `share_basis`（省略時は `items`）を同じ規則で解決したスポットの合計（手順 7 をもう 1 回呼ぶ）。
-入力の誤り・パネル超過（40 枚）・判断の記録ファイルの破損は `{"status":"error","message":...}` を返して終わる。
+入力の誤り・パネル超過（40 枚）・判断の記録ファイルの破損・`share_basis` に当たらない部品がある
+場合は `{"status":"error","message":...}` を返して終わる。`items` に当たらない部品は caveat にする（手順 10）。
 
 1. metabolomix/arf/species_tools.py  arf_plot_species()
 2. └─ metabolomix/arf/tools.py  _require_arf_with_arf2()
@@ -308,11 +309,12 @@ ARF が未読み込みのときと、手順 4 が兄弟 `.arf2` を見つけら�
 7. └─ metabolomix/arf/selection.py  build_selection()
 8. │  └─ metabolomix/plots/group_intensity.py  resolve_items()
 9. └─ metabolomix/arf/selection.py  expand_spots()
-10.└─ metabolomix/plots/species.py  build_species_payload()
-11.├─ [output=payload] metabolomix/core/serialization.py  json_payload()
-12.└─ [output=image] metabolomix/plots/species.py  render_species_plot()
-13.   └─ metabolomix/plots/render.py  figure_to_png()
-14.   └─ metabolomix/arf/species_tools.py  _species_caption()
+10.└─ metabolomix/arf/selection.py  unmatched_parts()
+11.└─ metabolomix/plots/species.py  build_species_payload()
+12.├─ [output=payload] metabolomix/core/serialization.py  json_payload()
+13.└─ [output=image] metabolomix/plots/species.py  render_species_plot()
+14.   └─ metabolomix/plots/render.py  figure_to_png()
+15.   └─ metabolomix/arf/species_tools.py  _species_caption()
 
 ## arf_pca_species
 
@@ -322,17 +324,19 @@ ARF が未読み込みのときと、手順 4 が兄弟 `.arf2` を見つけら�
 
 分子種の選び方は `arf_plot_species` と同じ（手順 4〜5）。試料 × 分子種の PeakHeight 行列を作り、
 `normalize="total"` なら試料ごとの合計で割り、log10(x + 1)、計算に使う試料（低信頼を除く）で
-autoscale して PCA（手順 6）。低信頼の試料は投影だけする。`orient_by` で符号をそろえ、相関 r を計算する（手順 7）。
-入力の誤り（計算に使う試料が 3 未満・合計 0 の試料・未知の `orient_by` など）は `{"status":"error"}`。
+autoscale して PCA（手順 7）。低信頼の試料は投影だけする。`orient_by` で符号をそろえ、相関 r を計算する（手順 8）。
+`items` に当たらない部品は caveat にする（手順 6）。
+入力の誤り（計算に使う試料が 3 未満・合計 0 の試料・未知の `orient_by`・計算に使った試料のない `orient_by` など）は `{"status":"error"}`。
 
 1. metabolomix/arf/species_tools.py  arf_pca_species()
 2. └─ metabolomix/arf/tools.py  _require_arf_with_arf2()
 3. └─ metabolomix/plots/render.py  resolve_plot_output()
 4. └─ metabolomix/arf/selection.py  build_selection()
 5. └─ metabolomix/arf/selection.py  expand_spots()
-6. └─ metabolomix/analysis/pca.py  run_pca_fit_subset()
-7. └─ metabolomix/analysis/pca.py  loading_correlations()
-8. └─ metabolomix/analysis/result_state.py  new_provenance()
-9. ├─ [output=payload] metabolomix/core/serialization.py  json_payload()
-10.└─ [output=image] metabolomix/plots/pca_scores.py  render_pca_scores()
-11.   └─ metabolomix/plots/render.py  figure_to_png()
+6. └─ metabolomix/arf/selection.py  unmatched_parts()
+7. └─ metabolomix/analysis/pca.py  run_pca_fit_subset()
+8. └─ metabolomix/analysis/pca.py  loading_correlations()
+9. └─ metabolomix/analysis/result_state.py  new_provenance()
+10.├─ [output=payload] metabolomix/core/serialization.py  json_payload()
+11.└─ [output=image] metabolomix/plots/pca_scores.py  render_pca_scores()
+12.   └─ metabolomix/plots/render.py  figure_to_png()

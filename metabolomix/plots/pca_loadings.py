@@ -11,7 +11,8 @@ LOADINGS_SCHEMA = "lipidmix.pca_loadings.v1"
 MAX_ALL_FEATURES = 60
 MAX_PCS = 3
 _CLASS_PALETTE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#7e57c2",
-                  "#00897b", "#8d6e63", "#5c6bc0", "#c0ca33"]
+                  "#00897b", "#8d6e63", "#5c6bc0", "#c0ca33", "#d32f2f", "#0097a7", "#6d4c41", "#8e24aa",
+                  "#43a047", "#fb8c00", "#546e7a", "#f06292", "#3949ab", "#9e9d24"]
 
 
 def _check_pcs(pcs, n_available):
