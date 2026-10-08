@@ -185,6 +185,7 @@ def _remember_arf_pca_plot(
     sample_names: list[str],
     title: str,
     groups: dict[str, str | None] | None = None,
+    feature_names: list[str] | None = None,
 ) -> None:
     """ARF系PCAのサンプル別スコアを session_state.session.arf.last_pca_plot に保存する。"""
     x_label, y_label = _pca_axis_labels(pca_result)
@@ -202,6 +203,14 @@ def _remember_arf_pca_plot(
         "x_label": x_label,
         "y_label": y_label,
         "points": points,
+        # ローディング図（plot_pca_loadings）用。LLM への戻り値には載せない。
+        # r（相関）は scaling が autoscale のときだけ 成分 × 特異値 / √n で出せる（run_pca は既定 autoscale）。
+        "loadings": pca_result.get("loadings"),
+        "singular_values": pca_result.get("singular_values"),
+        "explained_variance_ratio": pca_result.get("explained_variance_ratio"),
+        "feature_names": list(feature_names) if feature_names is not None else None,
+        "n_fit": len(sample_names),
+        "scaling": "autoscale",
         # どのデータのどの計算から出た点列かを、点列自身に持たせる。図の保存が
         # 「今のセッションに載っているから」ではなく「この結果だから」で選べる。
         "provenance": new_provenance(
@@ -222,7 +231,7 @@ def _format_pca_plot_block(
 
     LLM がこの座標から散布図を自描画できるよう per-sample の点列を ```json
     フェンスで同梱する。点列は session_state.session.arf.last_pca_plot にも別途保存
-    され（_remember_arf_pca_plot）、save_pca_figure がユーザー要求時の PNG 化に
+    され（_remember_arf_pca_plot）、save_figure(kind="pca") がユーザー要求時の PNG 化に
     使う。呼び出し側はこのブロックを loadings の後（payload 末尾）に置くこと
     （万一の下流截断で loadings ではなく座標点を失うようにするため）。
     """
@@ -251,7 +260,7 @@ def _format_pca_plot_block(
     plot_data = {"x_label": x_label, "y_label": y_label, "points": points}
     lines.append(
         "- 上記座標から散布図を描画してください（group があれば群ごとに色分け・凡例付き）。"
-        "PNG が必要なときのみ save_pca_figure を実行します。"
+        "PNG が必要なときのみ save_figure(kind=\"pca\") を実行します。"
     )
     lines.append("```json")
     lines.append(json.dumps(plot_data, ensure_ascii=False))

@@ -245,7 +245,7 @@ def render_volcano_plot(last_differential: dict, title: str | None = None):
 
     点列は payload（間引き済み）ではなく `session.arf.last_differential` の**全量**
     から描く。間引きは payload のトークン対策であって、図には不要なため。
-    `save_volcano_figure`（PNG 保存）と `arf_plot_volcano`（画像返し）の共通描画。
+    `save_figure(kind="volcano")`（PNG 保存）と `arf_plot_volcano`（画像返し）の共通描画。
     """
     import matplotlib.pyplot as plt
 

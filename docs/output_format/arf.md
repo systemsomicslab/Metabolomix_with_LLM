@@ -136,17 +136,17 @@ ARFサンプルとの結合は `FileID` を優先し、欠損時は正規化し�
 脂質選択を指定した場合、分散・検出率フィルタ後にPCAの必要次元数が足りなくても、サンプルが存在すれば生スポット選択は保存する。PCAをスキップした理由と行列形状を返し、PCA図・結果は生成しない。1脂質や定数の脂質もこの経路で後続の前処理へ渡せる。
 
 PCAスコアプロット用ブロック（返り値の末尾。**サンプル別の座標点列を同梱する**）。
-散布図は**この点列からクライアント側（チャット）で描く**。`save_pca_figure` は PNG
+散布図は**この点列からクライアント側（チャット）で描く**。`save_figure(kind="pca")` は PNG
 ファイルを reports/figures/ へ書き込む操作であり、ユーザーがファイルとしての図を明示的に
 求めたときだけ使う——対話の中で図を見せる目的では呼ばない。同じ点列は
-`session.arf.last_pca_plot` にも保持され、`save_pca_figure` はそこから描く。
+`session.arf.last_pca_plot` にも保持され、`save_figure(kind="pca")` はそこから描く。
 
 | キー/行 | 意味 |
 |---|---|
 | タイトル行 | 図タイトル |
 | `PC1 (x%) × PC2 (y%)` | PC1/PC2 説明分散率 |
 | 群別サンプル数 | 群ラベルがあれば `群=件数` を列挙、無ければ総サンプル数 |
-| 描画指示 | 上記座標から散布図を描く（group があれば群ごとに色分け・凡例付き）。PNG が必要なときのみ `save_pca_figure` |
+| 描画指示 | 上記座標から散布図を描く（group があれば群ごとに色分け・凡例付き）。PNG が必要なときのみ `save_figure(kind="pca")` |
 | json 点列 | `x_label` / `y_label`（説明分散率つき軸名）と `points`。各点は `pc1` / `pc2` / `sample`、群分け時は `group` |
 
 ## 10. 前処理・QC（P2a）
@@ -185,7 +185,7 @@ QC/ブランク/注入順のいずれかが欠けているためにスキップ�
 
 ### 10.4 `arf_pca_preprocessed()`
 
-前処理後行列が無い（`session.arf.feature_matrix is None`）場合はエラーメッセージ1件を返す。あれば `metabolomix/analysis/pca.py` の `run_pca` でPCAを実行し、`arf_parser` と同じ整形ヘルパー（スコアプロット用JSON、Loadings上位）を使って結果を返す。出力テキストの構造・キー意味は8.1節のスコアプロット用JSONと同一（座標点列を同梱し、散布図はそこからチャットで描く。`save_pca_figure` はPNGファイルが明示的に求められたときだけ）。生スポットの選択とは別の計算経路であり、選択を変更した場合は `arf_preprocess()` を再実行する必要がある。
+前処理後行列が無い（`session.arf.feature_matrix is None`）場合はエラーメッセージ1件を返す。あれば `metabolomix/analysis/pca.py` の `run_pca` でPCAを実行し、`arf_parser` と同じ整形ヘルパー（スコアプロット用JSON、Loadings上位）を使って結果を返す。出力テキストの構造・キー意味は8.1節のスコアプロット用JSONと同一（座標点列を同梱し、散布図はそこからチャットで描く。`save_figure(kind="pca")` はPNGファイルが明示的に求められたときだけ）。生スポットの選択とは別の計算経路であり、選択を変更した場合は `arf_preprocess()` を再実行する必要がある。
 
 ### 10.5 手動サンプル/ピーク除外（`arf_exclude`）
 
@@ -205,7 +205,7 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 
 ## 11. 差次的解析（P2b）
 
-`metabolomix/analysis/differential.py`（MCP非依存の純ロジック層）と、`metabolomix/arf/tools.py` の `arf_differential()` / `metabolomix/tools/reports.py` の `save_volcano_figure()` が、前処理後のサンプル×特徴量行列に対する群間比較を担う。既定挙動・既存ツールは不変で、明示呼び出し時のみ作用する。
+`metabolomix/analysis/differential.py`（MCP非依存の純ロジック層）と、`metabolomix/arf/tools.py` の `arf_differential()` / `metabolomix/tools/reports.py` の `save_figure()`（`kind="volcano"`）が、前処理後のサンプル×特徴量行列に対する群間比較を担う。既定挙動・既存ツールは不変で、明示呼び出し時のみ作用する。
 
 ### 11.1 群ラベルの由来
 
@@ -242,14 +242,14 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
   - 小n・分散0・全欠損は `p=NaN`。
 - **多群ANOVAは現状非対応**: MS-DIAL メタに「因子（加齢/菌叢等）→水準」の対応が無く、因子を安全に選べない（誤って全 Class ID を水準にした結果を返さないよう封鎖）。3群以上を比べたいときは `group_a`/`group_b` の因子トークン・プール指定で関心のある2群を切り出す。`differential.one_way_anova()` 自体は関数として残るが、MCP からは露出しない。
 - **多重検定補正**: いずれも Benjamini-Hochberg で `p → q`（FDR）を付与（NaN は補正から除外し位置は保持）。p値は scipy があればそれで、無ければ自前の t 分布裾確率（正則化不完全ベータ関数）で計算し、どちらも正確（近似ではない）。
-- **volcano**: 2群比較のみ。各点は `feature` / `log2fc` / `neg_log10_p` / `sig`（`up`=q≤閾値かつlog2fc≥+閾値（群Bで高い＝上昇） / `down`=q≤閾値かつlog2fc≤−閾値（群Aで高い＝低下） / `ns`）。全特徴分の点列は `session.arf.last_differential["volcano"]` に保持し、`arf_plot_volcano()`（構造化点列）と `save_volcano_figure()`（PNG）の両方がここから読む。**`arf_differential()` の応答 payload には全量 volcano を同梱せず**、`summary`（`n_tested`/`n_significant`/`n_up`/`n_down`＋有意上位 `top`）中心の要約と `volcano_note` のみを返す（先頭の結論が巨大配列＋文脈切り詰めで埋没し「全て ns」と誤読される退行を避けるため）。
+- **volcano**: 2群比較のみ。各点は `feature` / `log2fc` / `neg_log10_p` / `sig`（`up`=q≤閾値かつlog2fc≥+閾値（群Bで高い＝上昇） / `down`=q≤閾値かつlog2fc≤−閾値（群Aで高い＝低下） / `ns`）。全特徴分の点列は `session.arf.last_differential["volcano"]` に保持し、`arf_plot_volcano()`（構造化点列）と `save_figure(kind="volcano")`（PNG）の両方がここから読む。**`arf_differential()` の応答 payload には全量 volcano を同梱せず**、`summary`（`n_tested`/`n_significant`/`n_up`/`n_down`＋有意上位 `top`）中心の要約と `volcano_note` のみを返す（先頭の結論が巨大配列＋文脈切り詰めで埋没し「全て ns」と誤読される退行を避けるため）。
 
 ### 11.2.1 `arf_plot_volcano` の返り値（`lipidmix.volcano.v1`）
 
 `arf_differential`（2群）の後に呼ぶ read-only ツール。**既定（`output="image"`）では
 サーバ側で描いた PNG と件数入りの1行キャプションを返す**ので、以下の表は
 `output="payload"`（または env `LIPIDMIX_PLOT_OUTPUT=payload`）でクライアントが自分で
-描くときの契約。ファイルとして PNG を残したいときだけ `save_volcano_figure` を呼ぶ。
+描くときの契約。ファイルとして PNG を残したいときだけ `save_figure(kind="volcano")` を呼ぶ。
 
 画像モードでは間引きをせず全特徴を描く。**有意件数はキャプションの
 `up=` / `down=` / `ns=` を読むこと**（図の点を数えない）。
@@ -317,10 +317,10 @@ read-only ツール。ARF 経路のみ（読み込み済み `.arf` と、同じ�
 項目ごとのスポット数（MS/MS の件数が分かるときは括弧内にその数。0 も出す）、群ごとの試料数、除外の 5 種類の
 件数（手動除外・内部標準・判断・自動判定・標準液）、N.D. の項目名、`caveats` が入る。以下の表は `output="payload"`（または env
 `LIPIDMIX_PLOT_OUTPUT=payload`）の契約。ファイルとして PNG が要るときは
-`save_group_intensity_figure`（`reports/figures/<analysis_id>_group_intensity.png` を dpi 300 で、
+`save_figure(kind="group_intensity")`（`reports/figures/<analysis_id>_group_intensity.png` を dpi 300 で、
 同名の `.svg` と一緒に書く。直前の `arf_plot_group_intensity` が無ければ `missing_state`）。
 
-**エラーと状態**: 入力の誤り（群が 1 試料にも当たらない・`output` の値が不正・`detection_limit` が 0 以下や非有限・`ncols` が 1 未満など）は例外ではなく `{"status": "error", "message": ...}` で返す。呼び出しが（missing_state を含め）失敗したときは、前回の図を `save_group_intensity_figure` が保存しないようセッションの図を破棄する。画像モードでは描画に成功してから図を保持する。群の指定が `blank` / `qc` の役割で全滅したときは、`blank` / `qc` を書くよう案内を添える。
+**エラーと状態**: 入力の誤り（群が 1 試料にも当たらない・`output` の値が不正・`detection_limit` が 0 以下や非有限・`ncols` が 1 未満など）は例外ではなく `{"status": "error", "message": ...}` で返す。呼び出しが（missing_state を含め）失敗したときは、前回の図を `save_figure(kind="group_intensity")` が保存しないようセッションの図を破棄する。画像モードでは描画に成功してから図を保持する。群の指定が `blank` / `qc` の役割で全滅したときは、`blank` / `qc` を書くよう案内を添える。
 
 **検定はしない**。1 パネル = 1 項目、1 点 = 1 試料、群ごとに log10 空間の平均 ± SD を添えるだけで、
 群間の有意差は述べない（検定は `arf_differential`。小 n の p 値が図に独り歩きするのを避ける）。
@@ -365,3 +365,87 @@ read-only ツール。ARF 経路のみ（読み込み済み `.arf` と、同じ�
 | `standard_only` | `standard_samples` を指定したとき、その試料での最大高さが、描く群の試料での最大高さの 10 倍以上のスポット（クラスとして当たった分だけ）。システムチェック標準液の奇数鎖標準物質が試料のクラス合計に混ざるのを防ぐ。判定には `arf_exclude` 済みの試料の行も使う |
 
 除外は**解析の前提を変える**ので、図を報告に載せるときは `excluded` の件数と理由を併記すること。
+
+### 11.6 `arf_plot_species` の返り値（`lipidmix.species_intensity.v1`）
+
+選んだクラスを**分子種（アラインメントスポット）に展開**し、1 分子種 1 パネルで、群ごとの試料別の値
+（割合 % または PeakHeight）を並べる read-only ツール。ARF 経路のみ（読み込み済み `.arf` と兄弟 `.arf2` が要る）。
+`arf_plot_group_intensity`（クラス合計）と違い、**スポットごとに**描く。同じ名前でも付加イオンが違えば別パネル。
+**既定（`output="image"`）はサーバ側で描いた PNG と 1 行のキャプション**（パネル数・群の試料数・除外の 6 種類の件数・
+分母が 0 で描かなかった試料・`caveats`）。以下は `output="payload"`（または env `LIPIDMIX_PLOT_OUTPUT=payload`）の契約。
+ファイルは `save_figure(kind="species")`（`reports/figures/<analysis_id>_species.png` を dpi 300 で、同名の `.svg` と
+一緒に書く）。入力の誤り・パネルが 40 枚を超える・判断の記録ファイルが読めないときは
+`{"status": "error", "message": ...}`。失敗した呼び出しの後は前回の図を破棄する。**検定はしない**。
+
+| フィールド | 意味 |
+|------------|------|
+| `plot_schema` | `lipidmix.species_intensity.v1` |
+| `value` | `share`（試料ごとに 高さ ÷ 分母の合計 × 100）または `height`（PeakHeight） |
+| `stat` | 平均と SD の定義: `mean ± SD of share (%)` / `mean ± SD of log10(peak height)`。`groups[].mean` / `sd` はこれに従う |
+| `share_basis` | `value="share"` のときだけ。`items`（指定した分母の項目。省略時は null で、描く項目が分母）と `spot_ids`（分母にしたスポット）。`height` では null |
+| `groups[]` | `label` と `samples`（解決した試料名。指定順。`arf_exclude` した試料は含まない） |
+| `low_reliability_samples` | 白抜きで描き、平均・SD から外した試料 |
+| `zero_denominator_samples` | 分母（分母スポットの高さの合計）が 0 で割合を計算できなかった試料。その試料の `share` は null で描かない |
+| `spots[]` | パネルごとに `spot_id` / `name` / `label`（表示名）/ `ontology` / `item`（展開元の項目）/ `adduct` / `mz` / `rt` / `msms`（MS/MS の裏付けの有無）と `groups[]` |
+| `spots[].groups[].samples[]` | `sample` / `height`（PeakHeight。行が無ければ 0）/ `share`（分母に対する %。`height` 指定時と分母 0 の試料は null）/ `gap_filled` / `low_reliability` |
+| `spots[].groups[].mean` / `sd` / `n_in_stats` | `stat` の定義での平均・SD と、その計算に使った試料数（低信頼でなく、`share` なら計算できた試料、`height` なら高さ > 0 の試料）。n = 1 なら SD は null、0 なら平均も null |
+| `excluded` | 除いたスポットの `#<spot_id> <name>`。理由ごとに `internal_standard` / `manual` / `curation` / `auto_likely_wrong` / `standard_only`（`arf_plot_group_intensity` と同じ。§11.5）と、`require_msms=True` で MS/MS の裏付けがないために除いた `no_msms` |
+| `caveats` | `arf_plot_group_intensity` と同じ種類に加え、`share_basis` が描く分子種を含まないとき（分母に含まれない分子種があり、割合が 100 % を超えうる）、`items` に当たらなかった（またはすべて除外された）部品があるとき、`value="height"` なのに `share_basis` を渡したとき（無視される） |
+
+**割合の読み方**: `share` は**分母にしたスポットの高さの合計に対する %** で、試料の総量に対する割合ではない。
+分母は `share_basis`（省略時は `items`）を同じ除外規則で解決したスポットで、`require_msms=True` なら分母にも効く。
+分子種の割合は分母の選び方で変わるので、図を報告に載せるときは `share_basis` を併記すること。
+`share_basis` の部品が 1 つでも当たらない（名前の綴り違いなど）と分母が変わるため、図は描かずに `{"status": "error"}`
+（当たらなかった部品名入り）を返す。`items` の当たらない部品は図を描いたうえで `caveats` と説明文に書く。
+
+### 11.7 `arf_pca_species` の返り値
+
+選んだ分子種（`arf_plot_species` と同じ項目指定・除外）の PeakHeight 行列（試料 × 分子種）で PCA を回す read-only ツール。
+ARF 経路のみ（読み込み済み `.arf` と兄弟 `.arf2` が要る）。既定（`output="image"`）はサーバ側で描いたスコア図の PNG と
+説明（寄与率・`pc1_r_top` / `pc1_r_bottom`）。以下は `output="payload"` の契約。ファイルは
+`save_figure(kind="pca", source="species")`。ローディング全量（`loadings_rows`）は戻り値に載せずセッションに残す。
+入力の誤り（計算に使う試料が 3 未満・合計 0 の試料・未知の `orient_by` / `normalize` など）は
+`{"status": "error", "message": ...}`。失敗した呼び出しの後は前回の結果を破棄する。
+
+| フィールド | 意味 |
+|------------|------|
+| `points[]` | 試料ごとに `x`（PC1）/ `y`（PC2）/ `label`（試料名）/ `group`（群。2 群に入る試料は最初の群）/ `fitted`。`fitted=false` は低信頼の試料で、**主成分の計算に使わず投影しただけ**（スコアは計算に使った試料が決めた軸への射影） |
+| `explained_variance_ratio` | 主成分ごとの寄与率（計算に使った試料での値。最大 5 成分） |
+| `x_label` / `y_label` | 軸名（寄与率入り） |
+| `n_fit` / `n_species` | 計算に使った試料数 / PCA に使った分子種数 |
+| `dropped_zero_variance` | 計算に使う試料で値が変わらず外した分子種の数 |
+| `excluded` / `caveats` | `arf_plot_species` と同じ（§11.6）。画像の説明文にも除外の件数と caveat を載せる |
+| `pc1_r_top` / `pc1_r_bottom` | PC1 との相関 r が正の上位・負の上位の分子種（表示名と r。各最大 5 件。正が無ければ `top` は空）。r は**計算に使った試料**での分子種と主成分スコアの相関で −1〜1 |
+| `result_id` | この結果の ID（`save_figure` の `result_id` に使える） |
+
+**読み方**: 値は `normalize`（`none` / `total`）→ log10(x + 1)（`log_transform`）→ 計算に使う試料の平均と母標準偏差で
+autoscale の順。主成分の**符号は本来任意**で、`orient_by` を指定したときだけ、その群の平均スコアが正になるようにそろえる。
+`normalize="total"` は試料量の差を除いて組成を比べるときの選択で、合計が 0 の試料があると計算しない。
+
+### 11.8 `plot_pca_loadings` の返り値（`lipidmix.pca_loadings.v1`）
+
+保存済みの PCA（`arf_parser` / `arf_pca_preprocessed` / `arf_pca_species` / `dataset_pca`）のローディングを、主成分ごとの
+横棒で描く read-only ツール。既定（`output="image"`）はサーバ側で描いた PNG と説明、以下は `output="payload"` の契約。
+ファイルは `save_figure(kind="pca_loadings")`（PNG と同名 `.svg`）。入力元は `source`（`arf` / `species` / `mztab`）で、
+`auto` はどれも優先せず、候補が 2 つ以上あると `AMBIGUOUS_RESULT_SOURCE` で止まる。ローディングを持たない古い ARF の
+PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（`pcs` が 1〜3 個でない・その PCA にない主成分・未知の `value`・
+全件表示が 60 特徴量を超える、など）は `{"status": "error", "message": ...}`。失敗した呼び出しの後は前回の図を破棄する。
+
+| フィールド | 意味 |
+|------------|------|
+| `source` / `result_id` | どの PCA 結果から描いたか（`save_figure` の `source` / `result_id` と同じ名指し） |
+| `value` | **実際に描いた値の種類**（`r` / `coefficient`）。`value_requested` と違うときは `caveats` に理由がある |
+| `value_requested` | 呼び出しで求めた値の種類 |
+| `top_n` | 主成分ごとに取った正・負それぞれの上位件数。`null` は全件 |
+| `aligned` | `true` は全件表示で、全パネルの行が最初の主成分の順にそろっている（同じ行が全パネルで同じ位置）。`false` は主成分ごとに上位を独立に選んだ |
+| `panels[]` | 主成分ごとに `pc`（`PC1` …）/ `explained_pct`（寄与率 %）/ `rows[]` |
+| `rows[]` | `feature_id` / `label`（表示名）/ `ontology` / `adduct` / `mz` / `rt` / `coefficient`（固有ベクトルの成分）/ `r` / `value`（描いた値） |
+| `caveats` | 値を `coefficient` に落とした理由など |
+
+**読み方**: `r` は特徴量とその主成分スコアの相関（−1〜1）で、成分 × 特異値 / √n で出す。autoscale した PCA でだけ意味があり、
+そうでない PCA では出せないので `coefficient` で描く。主成分の**符号は本来任意**なので、正負そのものに意味はなく、
+同じ主成分の中での向きの違いだけを読む。ARF のローディングは、その PCA に使った特徴量行列の全スポット
+（`arf_parser` なら生のスポット行列、`arf_pca_preprocessed` なら前処理後の行列）のうち**上位だけ**を描く（`top_n` で絞る）。
+ARF のローディング図は**単一の props の PCA** だけに対応する（`arf_parser(props=["height","area"])` のようにスポットあたり
+複数の列があると、どの列を描くか決まらないので `{"status": "error"}`。props を 1 つにして PCA をやり直す）。
+棒の色は `.arf2` の Ontology（クラス）。

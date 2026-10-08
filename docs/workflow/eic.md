@@ -2,7 +2,7 @@
 
 描画系 2 ツールは**画像を作らない**。レンダラ中立の構造化 payload を返すだけで、
 描画方法はクライアント（Use-LLLM は Plotly、Claude Desktop は各 UI の方式）に委ねる。
-PNG が要るときだけ `save_eic_figure`（[plots.md](plots.md)）を明示的に呼ぶ。
+PNG が要るときだけ `save_figure(kind="eic")`（[plots.md](plots.md)）を明示的に呼ぶ。
 
 `peak_top` は座標であって強度ではない。混同しないこと。
 
@@ -13,7 +13,7 @@ flowchart TD
     RK[eic_rank_by_max_intensity] --> SPOT
     SPOT --> PC[eic_plot_chromatograms<br/>lipidmix.eic.v1]
     SPOT --> PM[eic_plot_compounds<br/>lipidmix.eic.multi.v1]
-    PC --> SAVE[save_eic_figure → plots.md]
+    PC --> SAVE[save_figure kind=eic → plots.md]
     PM --> SAVE
 ```
 

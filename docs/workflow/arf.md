@@ -17,10 +17,12 @@ flowchart TD
     DIFF -->|session.arf.last_differential| VOL[arf_plot_volcano]
     DIFF -->|session.arf.last_differential| EXPORT[arf_export_differential]
     P -->|同一語幹の兄弟 .arf2| EXPORT
-    PCA -->|session.arf.last_pca| SPF[save_pca_figure → plots.md]
-    VOL --> SVF[save_volcano_figure → plots.md]
+    PCA -->|session.arf.last_pca| SPF[save_figure kind=pca → plots.md]
+    VOL --> SVF[save_figure kind=volcano → plots.md]
     P -->|session.arf.features + 兄弟 .arf2| GI[arf_plot_group_intensity]
-    GI -->|session.arf.last_group_intensity| SGI[save_group_intensity_figure → plots.md]
+    GI -->|session.arf.last_group_intensity| SGI[save_figure kind=group_intensity → plots.md]
+    P -->|session.arf.features + 兄弟 .arf2| SP[arf_plot_species]
+    SP -->|session.arf.last_species_plot| SSP[save_figure kind=species → plots.md]
 ```
 
 ## arf_parser
@@ -133,7 +135,7 @@ excluded）。全行で同じ値になる `batch_source` はヘッダ行にま�
 ## arf_pca_preprocessed
 
 前提: `arf_preprocess` 実行済み（未実行なら手順 3 で `MissingState`）
-状態変更: `session.arf.last_pca` を更新。`save_pca_figure` の入力になる。
+状態変更: `session.arf.last_pca` を更新。`save_figure(kind="pca")` の入力になる。
 
 `arf_parser` の生行列 PCA とは**独立した経路**。同じ図に見えても前処理の有無が違う。
 色分け（`group_levels` / `group_factors`）や log 変換だけを変えて再実行しても、
@@ -225,7 +227,7 @@ InChIKey・Ontology・m/z・RT と結合する。InChIKey が無い特徴は本�
 
 画像は間引かず全特徴を描く（間引きは payload のトークン対策であって図には不要）。
 キャプションに up / down / ns / 検定不能の件数を書くのは、件数を図から読み取らせない
-ため。PNG をファイルに保存したいときは `save_volcano_figure`（[plots.md](plots.md)）。
+ため。PNG をファイルに保存したいときは `save_figure(kind="volcano")`（[plots.md](plots.md)）。
 
 1. metabolomix/arf/tools.py  arf_plot_volcano()
 2. └─ metabolomix/core/mcp_errors.py  missing_state()
@@ -239,48 +241,102 @@ InChIKey・Ontology・m/z・RT と結合する。InChIKey が無い特徴は本�
 
 前提: ARF を読み込み済みで、同じアラインメントの `.arf2` が隣にある（無ければ `MissingState`）
 状態変更: `session.arf.last_group_intensity`（payload・title・ncols）を更新。ファイルは書かない。
-`save_group_intensity_figure`（[plots.md](plots.md)）がここから読んで保存する。
+`save_figure(kind="group_intensity")`（[plots.md](plots.md)）がここから読んで保存する。
 
 選んだクラス・分子種ごとに、試料群の試料別 PeakHeight 合計を並べる。項目と群の解決・payload・
 描画は `metabolomix/plots/group_intensity.py` の純関数で、本ツールは ARF・`.arf2`・
 キュレーションの判断と最新レビュー・param ファイルを集めて渡す層。検定はしない
 （群間の検定は `arf_differential`）。
 
-手順 3 の `missing_state()` は 2 か所から呼ばれる: ARF が未読み込み（手順 1 の直後）と、
-手順 4 が兄弟 `.arf2` を見つけられなかったとき。どちらも返して終わる。
+手順 3 の `missing_state()` は手順 2 の `_require_arf_with_arf2()`（`arf_plot_species` も共有）が 2 か所から呼ぶ:
+ARF が未読み込みのときと、手順 4 が兄弟 `.arf2` を見つけられなかったとき。どちらも返して終わる。
+項目・群・除外の解決は手順 7 の `arf/selection.py build_selection()` に切り出してあり
+（分子種ごとの図・分子種 PCA と共有する）、手順 8〜17 はその内側。
 `arf_exclude` した試料は群の解決と描画から外すが、`standard_samples` の判定（手順 15）には
 除外前の全試料の行を使う（標準液を `arf_exclude` していても「標準液にだけある分子種」を判定できる）。
-手順 2・8・10・16 などが投げる `ValueError`（出力形式・群が当たらない・`detection_limit` / `ncols` の不正・
-項目数）は捕まえ、`{"status":"error","message":...}` を返して終わる。手順 3 の後で前回の図
+手順 5・6・7・10・16 などが投げる `ValueError`（出力形式・`ncols` の不正・群が当たらない・項目数など）と
+`detection_limit` の不正は捕まえ、`{"status":"error","message":...}` を返して終わる。手順 2 の後で前回の図
 （`last_group_intensity`）を破棄し、画像モードでは描画に成功してから図を保持する。
-手順 12 で判断の記録ファイルが読めなければ `FlagFileError` を捕まえ、同じ形のエラーを返して終わる。
-手順 16 は `arf_exclude` で除いたスポット（`excluded_spots`）も除外する。手順 13〜14 は、レビューが無ければ除かずに caveat に出す。
-手順 17〜18 は MS/MS の裏付け（照合結果の `has_msms` かつ `.arf2` の Name が `no MS2:` /
-`w/o MS2:` でない）を作る。手順 19〜20 は検出下限（引数が優先、無ければ param ファイルの
+手順 13 で判断の記録ファイルが読めなければ `FlagFileError` を捕まえ、同じ形のエラーを返して終わる。
+手順 16 は `arf_exclude` で除いたスポット（`excluded_spots`）も除外する。手順 14 は、レビューが無ければ除かずに caveat に出す。
+手順 17 は MS/MS の裏付け（照合結果の `has_msms` かつ `.arf2` の Name が `no MS2:` /
+`w/o MS2:` でない）を作る。手順 18〜19 は検出下限（引数が優先、無ければ param ファイルの
 `Minimum peak height`）。
 
 1. metabolomix/arf/tools.py  arf_plot_group_intensity()
-2. └─ metabolomix/plots/render.py  resolve_plot_output()
-3. └─ metabolomix/core/mcp_errors.py  missing_state()
-4. └─ metabolomix/arf/tools.py  _sibling_arf2_path()
-5. └─ metabolomix/arf/reader.py  alignment_feature_row()
-6. └─ metabolomix/msdial/sample_factors.py  arf_sample_names()
-7. └─ metabolomix/msdial/sample_factors.py  build_sample_facets()
-8. └─ metabolomix/plots/group_intensity.py  resolve_groups()
-9. │  └─ metabolomix/msdial/sample_factors.py  expand_sample_specs()
-10. └─ metabolomix/plots/group_intensity.py  resolve_sample_specs()
-11. └─ metabolomix/arf2/reader.py  load_catalog()
-12. └─ [apply_curation] metabolomix/curation/apply.py  flags_for_arf2()
-13. └─ [exclude_auto_likely_wrong] metabolomix/curation/flags.py  alignment_key()
-14. │  └─ metabolomix/curation/suggest.py  latest_review()
-15. └─ [standard_samples] metabolomix/plots/group_intensity.py  standard_only_spots()
-16. └─ metabolomix/plots/group_intensity.py  resolve_items()
-17. └─ metabolomix/arf2/match_results.py  load_spot_annotations()
-18. └─ metabolomix/arf2/match_results.py  name_prefix()
-19. └─ metabolomix/msdial/analysis_params.py  find_param_file()
-20. └─ metabolomix/msdial/analysis_params.py  read_analysis_params()
-21. └─ metabolomix/plots/group_intensity.py  build_group_intensity_payload()
-22. ├─ [output=payload] metabolomix/core/serialization.py  json_payload()
-23. └─ [output=image] metabolomix/plots/group_intensity.py  render_group_intensity_plot()
-24.    └─ metabolomix/plots/render.py  figure_to_png()
-25.    └─ metabolomix/arf/tools.py  _group_intensity_caption()
+2. └─ metabolomix/arf/tools.py  _require_arf_with_arf2()
+3. │  └─ metabolomix/core/mcp_errors.py  missing_state()
+4. │  └─ metabolomix/arf/tools.py  _sibling_arf2_path()
+5. └─ metabolomix/plots/render.py  resolve_plot_output()
+6. └─ metabolomix/arf/tools.py  _check_ncols()
+7. └─ metabolomix/arf/selection.py  build_selection()
+8. │  └─ metabolomix/arf/reader.py  alignment_feature_row()
+9. │  └─ metabolomix/msdial/sample_factors.py  build_sample_facets()
+10. │  └─ metabolomix/plots/group_intensity.py  resolve_groups()
+11. │  └─ metabolomix/plots/group_intensity.py  resolve_sample_specs()
+12. │  └─ metabolomix/arf2/reader.py  load_catalog()
+13. │  └─ [apply_curation] metabolomix/curation/apply.py  flags_for_arf2()
+14. │  └─ [exclude_auto_likely_wrong] metabolomix/curation/suggest.py  latest_review()
+15. │  └─ [standard_samples] metabolomix/plots/group_intensity.py  standard_only_spots()
+16. │  └─ metabolomix/plots/group_intensity.py  resolve_items()
+17. │  └─ metabolomix/arf2/match_results.py  load_spot_annotations()
+18. └─ metabolomix/msdial/analysis_params.py  find_param_file()
+19. └─ metabolomix/msdial/analysis_params.py  read_analysis_params()
+20. └─ metabolomix/plots/group_intensity.py  build_group_intensity_payload()
+21. ├─ [output=payload] metabolomix/core/serialization.py  json_payload()
+22. └─ [output=image] metabolomix/plots/group_intensity.py  render_group_intensity_plot()
+23.    └─ metabolomix/plots/render.py  figure_to_png()
+24.    └─ metabolomix/arf/tools.py  _group_intensity_caption()
+
+## arf_plot_species
+
+前提: ARF を読み込み済みで、同じアラインメントの `.arf2` が隣にある（無ければ `MissingState`）
+状態変更: `session.arf.last_species_plot`（payload・title・ncols）を更新。ファイルは書かない。
+`save_figure(kind="species")`（[plots.md](plots.md)）がここから読んで保存する。
+
+選んだクラスを分子種（アラインメントスポット）に展開し、1 分子種 1 パネルで群ごとの試料別の値を並べる。
+項目・群・除外の解決は `arf_plot_group_intensity` と同じ `arf/selection.py`。`value="share"` の分母は
+`share_basis`（省略時は `items`）を同じ規則で解決したスポットの合計（手順 7 をもう 1 回呼ぶ）。
+入力の誤り・パネル超過（40 枚）・判断の記録ファイルの破損・`share_basis` に当たらない部品がある
+場合は `{"status":"error","message":...}` を返して終わる。`items` に当たらない部品は caveat にする（手順 10）。
+
+1. metabolomix/arf/species_tools.py  arf_plot_species()
+2. └─ metabolomix/arf/tools.py  _require_arf_with_arf2()
+3. │  └─ metabolomix/core/mcp_errors.py  missing_state()
+4. │  └─ metabolomix/arf/tools.py  _sibling_arf2_path()
+5. └─ metabolomix/plots/render.py  resolve_plot_output()
+6. └─ metabolomix/arf/tools.py  _check_ncols()
+7. └─ metabolomix/arf/selection.py  build_selection()
+8. │  └─ metabolomix/plots/group_intensity.py  resolve_items()
+9. └─ metabolomix/arf/selection.py  expand_spots()
+10.└─ metabolomix/arf/selection.py  unmatched_parts()
+11.└─ metabolomix/plots/species.py  build_species_payload()
+12.├─ [output=payload] metabolomix/core/serialization.py  json_payload()
+13.└─ [output=image] metabolomix/plots/species.py  render_species_plot()
+14.   └─ metabolomix/plots/render.py  figure_to_png()
+15.   └─ metabolomix/arf/species_tools.py  _species_caption()
+
+## arf_pca_species
+
+前提: ARF を読み込み済みで、同じアラインメントの `.arf2` が隣にある（無ければ `MissingState`）
+状態変更: `session.arf.last_species_pca`（スコア・ローディング全量・寄与率・provenance）を更新。ファイルは書かない。
+`save_figure(kind="pca", source="species")` と `plot_pca_loadings(source="species")` がここから読む。
+
+分子種の選び方は `arf_plot_species` と同じ（手順 4〜5）。試料 × 分子種の PeakHeight 行列を作り、
+`normalize="total"` なら試料ごとの合計で割り、log10(x + 1)、計算に使う試料（低信頼を除く）で
+autoscale して PCA（手順 7）。低信頼の試料は投影だけする。`orient_by` で符号をそろえ、相関 r を計算する（手順 8）。
+`items` に当たらない部品は caveat にする（手順 6）。
+入力の誤り（計算に使う試料が 3 未満・合計 0 の試料・未知の `orient_by`・計算に使った試料のない `orient_by` など）は `{"status":"error"}`。
+
+1. metabolomix/arf/species_tools.py  arf_pca_species()
+2. └─ metabolomix/arf/tools.py  _require_arf_with_arf2()
+3. └─ metabolomix/plots/render.py  resolve_plot_output()
+4. └─ metabolomix/arf/selection.py  build_selection()
+5. └─ metabolomix/arf/selection.py  expand_spots()
+6. └─ metabolomix/arf/selection.py  unmatched_parts()
+7. └─ metabolomix/analysis/pca.py  run_pca_fit_subset()
+8. └─ metabolomix/analysis/pca.py  loading_correlations()
+9. └─ metabolomix/analysis/result_state.py  new_provenance()
+10.├─ [output=payload] metabolomix/core/serialization.py  json_payload()
+11.└─ [output=image] metabolomix/plots/pca_scores.py  render_pca_scores()
+12.   └─ metabolomix/plots/render.py  figure_to_png()

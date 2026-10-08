@@ -36,12 +36,12 @@
 | 文書 | 対象 | ツール数 |
 |---|---|---|
 | [dataset.md](dataset.md) | データセット投入の入口 | 3 |
-| [arf.md](arf.md) | `.arf` — サンプル別強度・PCA・差次的解析 | 11 |
+| [arf.md](arf.md) | `.arf` — サンプル別強度・PCA・差次的解析 | 13 |
 | [arf2.md](arf2.md) | `.arf2` — スポット代表カタログ | 2 |
 | [pai2.md](pai2.md) | `.pai2` — 単一測定のピークと MS/MS 検証 | 3 |
 | [dcl.md](dcl.md) | `.dcl` — デコンボリューション済み MS/MS | 2 |
 | [eic.md](eic.md) | `.EIC.aef` — クロマトグラムの検索と描画 | 6 |
-| [plots.md](plots.md) | 図の PNG 保存と payload 契約の比較 | 4 |
+| [plots.md](plots.md) | 図の保存（save_figure）・PCA ローディング図と payload 契約の比較 | 2 |
 | [mztab.md](mztab.md) | mzTab-M — DatasetState への読み込み | 2 |
 | [dataset_analysis.md](dataset_analysis.md) | DatasetState — 前処理・PCA・差次的解析・エクスポート・実験情報訂正 | 5 |
 | [pipeline.md](pipeline.md) | 生データフォルダ起点の統括(pipeline) — 上流検証・前処理・PCA・比較・レポートまでの自動進行 | 5 |

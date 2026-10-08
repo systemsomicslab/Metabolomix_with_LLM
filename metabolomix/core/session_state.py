@@ -139,9 +139,11 @@ class ArfState:
         self.preprocessing_recipe = {}   # 直近適用した前処理レシピ（空=未適用）
 
         # --- 直近解析の描画用データ ---
-        self.last_pca_plot = None        # save_pca_figure が参照
-        self.last_differential = None    # arf_plot_volcano / save_volcano_figure が参照
-        self.last_group_intensity = None  # arf_plot_group_intensity / save_group_intensity_figure が参照
+        self.last_pca_plot = None        # save_figure が参照
+        self.last_differential = None    # arf_plot_volcano / save_figure が参照
+        self.last_group_intensity = None  # arf_plot_group_intensity / save_figure が参照
+        self.last_species_plot = None  # arf_plot_species / save_figure(kind="species") が参照
+        self.last_species_pca = None  # arf_pca_species / save_figure(kind="pca", source="species") / plot_pca_loadings が参照
 
         # --- 手動除外集合（PCA 外れサンプル / 特定ピークの可逆・非破壊除外） ---
         self.excluded_samples = set()   # 除外する file_name（サンプル）
@@ -168,6 +170,8 @@ class ArfState:
         self.last_pca_plot = None
         self.last_differential = None
         self.last_group_intensity = None
+        self.last_species_plot = None
+        self.last_species_pca = None
         # 前処理由来の正準行列とサンプルメタ
         self.feature_matrix = None
         self.pp_sample_names = None
@@ -327,6 +331,9 @@ class AnalysisSession:
         self.arf2 = Arf2State()
         self.pai2 = Pai2State()
         self.eic = EicState()
+
+        # --- パーサ横断の図（どの経路の PCA でも 1 か所。ArfState の reset では消さない） ---
+        self.last_loadings_plot = None  # plot_pca_loadings / save_figure(kind="pca_loadings") が参照（どの経路の PCA でも 1 か所）
 
         # --- 意味論 caveat ガード（output-format 未 pull 時に1回だけ前置） ---
         # プロセス内で真に1回だけ発火させる。output-format リソースが読まれたら

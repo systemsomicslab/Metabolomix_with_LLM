@@ -24,6 +24,10 @@ import server
 # キュレーションの候補付け: curation_suggest を追加(71→72)。
 # 群別強度プロット: arf_plot_group_intensity を追加(72→73)。
 # 群別強度プロットの保存: save_group_intensity_figure を追加(73→74)。
+# 図の保存の一本化: save_figure に統合し旧 4 ツールを撤去(74→71)。
+# 分子種ごとの図: arf_plot_species を追加(71→72)。
+# 分子種 PCA: arf_pca_species を追加(72→73)。
+# PCA のローディング図: plot_pca_loadings を追加(73→74)。
 EXPECTED_TOOLS = sorted([
     "library_load",
     "library_match_feature",
@@ -45,6 +49,9 @@ EXPECTED_TOOLS = sorted([
     "arf_pca_preprocessed",
     "arf_plot_volcano",
     "arf_plot_group_intensity",
+    "arf_plot_species",
+    "arf_pca_species",
+    "plot_pca_loadings",
     "arf_preprocess",
     "eic_parser",
     "eic_plot_chromatograms",
@@ -92,10 +99,7 @@ EXPECTED_TOOLS = sorted([
     "record_objective",
     "sample_search",
     "server_update",
-    "save_eic_figure",
-    "save_group_intensity_figure",
-    "save_pca_figure",
-    "save_volcano_figure",
+    "save_figure",
     "update_objective",
     "verify_peak_annotation",
     "write_report",

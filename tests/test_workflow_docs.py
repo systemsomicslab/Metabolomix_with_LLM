@@ -27,7 +27,8 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
     "arf.md": (
         "arf_parser", "arf_list_classes", "arf_list_tags", "arf_list_sample_roles",
         "arf_exclude", "arf_preprocess", "arf_pca_preprocessed", "arf_differential",
-        "arf_export_differential", "arf_plot_volcano", "arf_plot_group_intensity",
+        "arf_export_differential", "arf_plot_volcano", "arf_plot_group_intensity", "arf_plot_species",
+        "arf_pca_species",
     ),
     "arf2.md": ("arf2_parser", "arf2_annotate_identities"),
     "pai2.md": ("pai2_parser", "pai2_inspect_peak", "verify_peak_annotation"),
@@ -36,8 +37,7 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
         "eic_parser", "eic_search_by_mz_range", "eic_search_by_rt_range",
         "eic_rank_by_max_intensity", "eic_plot_chromatograms", "eic_plot_compounds",
     ),
-    "plots.md": ("save_pca_figure", "save_volcano_figure", "save_eic_figure",
-                 "save_group_intensity_figure"),
+    "plots.md": ("save_figure", "plot_pca_loadings"),
     "mztab.md": ("dataset_load", "dataset_status"),
     "dataset_analysis.md": (
         "dataset_preprocess", "dataset_pca", "dataset_differential",

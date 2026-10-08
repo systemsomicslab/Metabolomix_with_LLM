@@ -5,7 +5,7 @@ MCP は画像を content ブロック（`ImageContent`）として返せる。�
 対し PNG は約 470 画像トークンだった。画像トークンはおおよそ `幅×高さ/750` なので、
 **dpi を上げるとトークンが二乗で増える**点に注意（既定 100 を保つこと）。
 
-図の保存（`save_*_figure`）と画像返し（`arf_plot_volcano` 等）の両方がここを通る。
+図の保存（`save_figure`）と画像返し（`arf_plot_volcano` 等）の両方がここを通る。
 """
 from __future__ import annotations
 

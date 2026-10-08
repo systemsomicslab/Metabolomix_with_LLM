@@ -78,7 +78,7 @@ Claude Desktop等は各クライアントのUI方式で描画できる。通常�
 作らない。
 
 PNGが必要だとユーザーが明示した場合に限り、先に得たプロット情報を
-`save_eic_figure(analysis_id, title=None)` で `reports/figures/` へ保存する。
+`save_figure(kind="eic", analysis_id=..., title=None)` で `reports/figures/` へ保存する。
 この保存は対話描画とは別の書き込み操作である。
 
 ### 8.6 `eic_plot_compounds()` の描画契約
@@ -114,5 +114,5 @@ PNGが必要だとユーザーが明示した場合に限り、先に得たプ�
   上位300件に予備選抜され、`candidates > candidates_evaluated` となり `caveats` にも残る。
   `selection.plotted` は実際に描画した数。
 
-PNGが必要だとユーザーが明示した場合に限り `save_eic_figure(analysis_id, title=None)` で
+PNGが必要だとユーザーが明示した場合に限り `save_figure(kind="eic", analysis_id=..., title=None)` で
 保存する。この保存ツールは `lipidmix.eic.v1` と `lipidmix.eic.multi.v1` の両方に対応する。
