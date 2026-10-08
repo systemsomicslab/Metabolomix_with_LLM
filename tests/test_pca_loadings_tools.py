@@ -114,3 +114,7 @@ def test_mztab_source_draws_dataset_pca():
     p = _call(source="mztab", top_n=3)
     assert p["source"] == "mztab" and p["value"] == "r"
     assert p["panels"][0]["rows"][0]["label"].startswith("Compound")
+
+
+def test_last_loadings_plot_lives_on_the_analysis_session():
+    assert server.AnalysisSession().last_loadings_plot is None
