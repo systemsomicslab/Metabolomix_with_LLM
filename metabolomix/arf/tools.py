@@ -430,7 +430,8 @@ def arf_pca_preprocessed(
         groups=sample_groups,
     )
     _remember_arf_pca_plot(pca_result, sample_names,
-                           title="PCA (preprocessed ARF)", groups=sample_groups)
+                           title="PCA (preprocessed ARF)", groups=sample_groups,
+                           feature_names=feature_names)
     loading_features = get_pca_loading_features(
         pca_result, session_state.session.arf.features or [], feature_names, top_n=top_features,
     )
@@ -632,6 +633,7 @@ def arf_parser(
             pca_result, sample_names,
             title=f"PCA Score Plot ({Path(file_path).name})",
             groups=sample_groups,
+            feature_names=feature_names,
         )
 
         # Loadings 寄与上位（arf_reader の構造化関数 + 共通整形ヘルパー）

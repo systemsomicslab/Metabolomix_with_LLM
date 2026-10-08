@@ -378,6 +378,7 @@ def run_dataset_pca(ds, n_components: int = 5, log_transform: bool = False) -> d
         # loadings は特徴量数 × 主成分数で巨大になる。要約には載せず、
         # 呼び出し側がセッションに保持する分にだけ含める。
         "loadings": pca["loadings"],
+        "singular_values": pca["singular_values"],
     }
 
 

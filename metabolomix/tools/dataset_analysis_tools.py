@@ -143,7 +143,7 @@ def dataset_pca(n_components: int = 5, log_transform: bool = False) -> str:
         return _from_precondition(exc)
 
     payload = {k: v for k, v in result.items()
-               if k not in ("loadings", "provenance")}
+               if k not in ("loadings", "singular_values", "provenance")}
     payload["status"] = "success"
     payload["result_id"] = result["provenance"]["result_id"]
     payload["loadings_note"] = (
