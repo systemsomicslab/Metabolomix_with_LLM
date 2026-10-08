@@ -84,6 +84,7 @@ from metabolomix.tools.dataset import *  # list_data_files, load_dataset
 from metabolomix.tools.mztab_tools import *  # dataset_load, dataset_status
 from metabolomix.tools.console_tools import *  # console_plan, console_run, console_status, job_list
 from metabolomix.tools.dataset_analysis_tools import *  # dataset_preprocess, dataset_pca, dataset_differential, dataset_export_differential, dataset_set_sample_metadata
+from metabolomix.tools.pca_loadings_tools import *  # plot_pca_loadings（mzTab の DatasetState を読むので dataset 系の後）
 from metabolomix.tools.pipeline_tools import *  # pipeline_plan, pipeline_run, pipeline_status, pipeline_resume, pipeline_cancel
 from metabolomix.tools.maintenance import *  # server_update
 from metabolomix.tools.curation_tools import *  # curation_review, curation_suggest, curation_submit, curation_flags, curation_view_data

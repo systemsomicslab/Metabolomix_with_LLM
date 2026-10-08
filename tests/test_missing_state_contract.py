@@ -152,6 +152,14 @@ class MissingStateContractTests(unittest.TestCase):
             "load_dataset",
         )
 
+    def test_plot_pca_loadings(self):
+        self.assert_missing(
+            server.plot_pca_loadings(output="payload"),
+            "pca_result",
+            ["arf_parser", "arf_pca_preprocessed", "arf_pca_species", "dataset_pca"],
+            "PCA",
+        )
+
     def test_save_figure_group_intensity(self):
         self.assert_missing(
             server.save_figure("group_intensity", analysis_id="x"),

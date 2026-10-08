@@ -419,3 +419,28 @@ ARF 経路のみ（読み込み済み `.arf` と兄弟 `.arf2` が要る）。�
 **読み方**: 値は `normalize`（`none` / `total`）→ log10(x + 1)（`log_transform`）→ 計算に使う試料の平均と母標準偏差で
 autoscale の順。主成分の**符号は本来任意**で、`orient_by` を指定したときだけ、その群の平均スコアが正になるようにそろえる。
 `normalize="total"` は試料量の差を除いて組成を比べるときの選択で、合計が 0 の試料があると計算しない。
+
+### 11.8 `plot_pca_loadings` の返り値（`lipidmix.pca_loadings.v1`）
+
+保存済みの PCA（`arf_parser` / `arf_pca_preprocessed` / `arf_pca_species` / `dataset_pca`）のローディングを、主成分ごとの
+横棒で描く read-only ツール。既定（`output="image"`）はサーバ側で描いた PNG と説明、以下は `output="payload"` の契約。
+ファイルは `save_figure(kind="pca_loadings")`（PNG と同名 `.svg`）。入力元は `source`（`arf` / `species` / `mztab`）で、
+`auto` はどれも優先せず、候補が 2 つ以上あると `AMBIGUOUS_RESULT_SOURCE` で止まる。ローディングを持たない古い ARF の
+PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（`pcs` が 1〜3 個でない・その PCA にない主成分・未知の `value`・
+全件表示が 60 特徴量を超える、など）は `{"status": "error", "message": ...}`。失敗した呼び出しの後は前回の図を破棄する。
+
+| フィールド | 意味 |
+|------------|------|
+| `source` / `result_id` | どの PCA 結果から描いたか（`save_figure` の `source` / `result_id` と同じ名指し） |
+| `value` | **実際に描いた値の種類**（`r` / `coefficient`）。`value_requested` と違うときは `caveats` に理由がある |
+| `value_requested` | 呼び出しで求めた値の種類 |
+| `top_n` | 主成分ごとに取った正・負それぞれの上位件数。`null` は全件 |
+| `aligned` | `true` は全件表示で、全パネルの行が最初の主成分の順にそろっている（同じ行が全パネルで同じ位置）。`false` は主成分ごとに上位を独立に選んだ |
+| `panels[]` | 主成分ごとに `pc`（`PC1` …）/ `explained_pct`（寄与率 %）/ `rows[]` |
+| `rows[]` | `feature_id` / `label`（表示名）/ `ontology` / `adduct` / `mz` / `rt` / `coefficient`（固有ベクトルの成分）/ `r` / `value`（描いた値） |
+| `caveats` | 値を `coefficient` に落とした理由など |
+
+**読み方**: `r` は特徴量とその主成分スコアの相関（−1〜1）で、成分 × 特異値 / √n で出す。autoscale した PCA でだけ意味があり、
+そうでない PCA では出せないので `coefficient` で描く。主成分の**符号は本来任意**なので、正負そのものに意味はなく、
+同じ主成分の中での向きの違いだけを読む。ARF のローディングは前処理後の全スポットのうち**上位だけ**を描く（`top_n` で絞る）。
+棒の色は `.arf2` の Ontology（クラス）。

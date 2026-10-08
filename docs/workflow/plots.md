@@ -12,6 +12,7 @@
 | `lipidmix.volcano.v1` | `arf_plot_volcano(output="payload")` | `save_figure(kind="volcano")` | `up`/`down` は全点保持、`ns` のみ間引く。保存は間引き前の全点 |
 | `lipidmix.group_intensity.v1` | `arf_plot_group_intensity(output="payload")` | `save_figure(kind="group_intensity")` | 項目 × 群 × 試料の PeakHeight 合計。PNG（dpi 300）に加えて SVG も書く |
 | `lipidmix.species_intensity.v1` | `arf_plot_species(output="payload")` | `save_figure(kind="species")` | スポット × 群 × 試料の高さと割合。PNG（dpi 300）と SVG |
+| `lipidmix.pca_loadings.v1` | `plot_pca_loadings(output="payload")` | `save_figure(kind="pca_loadings")` | 主成分ごとの横棒。値は r か coefficient。PNG（dpi 300）と SVG |
 | `lipidmix.eic.v1` / `.multi.v1` | `eic_plot_chromatograms` / `eic_plot_compounds(output="payload")` | `save_figure(kind="eic")` | 線グラフ |
 
 描画ツールの**既定は payload ではなく画像**（`output="image"`）。座標点列を LLM の文脈へ流すと
@@ -27,7 +28,7 @@ Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT
 ## save_figure
 
 前提: `kind` に対応する描画・解析を実行済み（無ければ `MissingState`。`required_tools` は kind ごと）
-状態変更: `reports/figures/` に PNG（`group_intensity` と `species` は SVG も）を書く。
+状態変更: `reports/figures/` に PNG（`group_intensity` と `species` と `pca_loadings` は SVG も）を書く。
 
 `kind` が `pca` / `volcano` のときだけ入力元を選ぶ（手順 2〜4）。ARF 経路と mzTab-M 経路の結果を
 並べ、**どちらも優先しない**——有効な結果が 2 つ以上あれば `AMBIGUOUS_RESULT_SOURCE` で止まり、
@@ -47,5 +48,30 @@ Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT
 9. │  └─ metabolomix/plots/eic.py  render_eic_plot()
 10.├─ [kind=group_intensity] metabolomix/tools/reports.py  _save_group_intensity()
 11.│  └─ metabolomix/plots/group_intensity.py  render_group_intensity_plot()
-12.└─ [kind=species] metabolomix/tools/reports.py  _save_species()
-13.   └─ metabolomix/plots/species.py  render_species_plot()
+12.├─ [kind=species] metabolomix/tools/reports.py  _save_species()
+13.│  └─ metabolomix/plots/species.py  render_species_plot()
+14.└─ [kind=pca_loadings] metabolomix/tools/reports.py  _save_pca_loadings()
+15.   └─ metabolomix/plots/pca_loadings.py  render_loadings_plot()
+
+## plot_pca_loadings
+
+前提: ローディングを持つ PCA 結果がある（`arf_parser` / `arf_pca_preprocessed` / `arf_pca_species` /
+`dataset_pca`。無ければ `MissingState`）
+状態変更: `session.last_loadings_plot`（payload・title）を更新。ファイルは書かない。
+
+入力元は 3 つ（手順 2）。選び方は `save_figure(kind="pca")` と同じで、どれも優先せず曖昧なら
+`AMBIGUOUS_RESULT_SOURCE` で止まる（手順 3）。ARF は上位 N の選び方とスポット情報に
+`get_pca_loading_features()` を使い（手順 4〜5）、分子種 PCA は保存済みの行を、mzTab は
+`pp_feature_names` と特徴量の注釈を使う（手順 6）。r は autoscale した PCA でだけ
+成分 × 特異値 / √n で出し、出せなければ coefficient で描く（手順 7）。
+
+1. metabolomix/tools/pca_loadings_tools.py  plot_pca_loadings()
+2. └─ metabolomix/tools/pca_loadings_tools.py  _candidates()
+3. └─ metabolomix/plots/result_output.py  select_result()
+4. ├─ [source=arf] metabolomix/tools/pca_loadings_tools.py  _arf_features()
+5. │  └─ metabolomix/arf/reader.py  get_pca_loading_features()
+6. ├─ [source=mztab] metabolomix/tools/pca_loadings_tools.py  _mztab_features()
+7. └─ metabolomix/plots/pca_loadings.py  build_loadings_payload()
+8. ├─ [output=payload] metabolomix/core/serialization.py  json_payload()
+9. └─ [output=image] metabolomix/plots/pca_loadings.py  render_loadings_plot()
+10.   └─ metabolomix/plots/render.py  figure_to_png()

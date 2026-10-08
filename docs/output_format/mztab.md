@@ -184,3 +184,10 @@ mzTab-M の `abundance_assay[N]` は非ゼロでも実測ピークか gap-fill �
 その mzTab-M の非ゼロ値には補間値が混じり得る。この状態では検出率・欠測率を語れず、
 `dataset_preprocess` の `min_detection_rate` も使えない（0 より大きい値を渡すと
 引数エラーになる。黙って未検出 0 件として通さない）。
+
+## `plot_pca_loadings(source="mztab")`
+
+`dataset_pca` の結果は `plot_pca_loadings(source="mztab")` で主成分ごとのローディング図に描ける（`source="auto"` でも、候補がこの 1 つだけなら選ばれる）。
+特徴量は前処理後の `pp_feature_names`、表示名は `feature_annotations`（SML 由来）か `feature_metadata`（SME 由来）の名前で、
+無ければ `feature_id`。mzTab-M にはクラス（Ontology）が無いので棒は 1 色になる。r は `dataset_pca` が autoscale で回したときの
+成分 × 特異値 / √n（`n_samples`）で出す。返り値の意味は `arf` トピックの §11.8 と同じ。

@@ -144,6 +144,7 @@ class ArfState:
         self.last_group_intensity = None  # arf_plot_group_intensity / save_figure が参照
         self.last_species_plot = None  # arf_plot_species / save_figure(kind="species") が参照
         self.last_species_pca = None  # arf_pca_species / save_figure(kind="pca", source="species") / plot_pca_loadings が参照
+        self.last_loadings_plot = None  # plot_pca_loadings / save_figure(kind="pca_loadings") が参照（どの経路の PCA でも 1 か所）
 
         # --- 手動除外集合（PCA 外れサンプル / 特定ピークの可逆・非破壊除外） ---
         self.excluded_samples = set()   # 除外する file_name（サンプル）
@@ -172,6 +173,7 @@ class ArfState:
         self.last_group_intensity = None
         self.last_species_plot = None
         self.last_species_pca = None
+        self.last_loadings_plot = None
         # 前処理由来の正準行列とサンプルメタ
         self.feature_matrix = None
         self.pp_sample_names = None

@@ -25,7 +25,7 @@ def test_unknown_kind_is_an_error():
     assert out["status"] == "error" and "kind" in out["message"]
 
 
-@pytest.mark.parametrize("kind", ["eic", "group_intensity", "species"])
+@pytest.mark.parametrize("kind", ["eic", "group_intensity", "species", "pca_loadings"])
 def test_source_is_rejected_for_kinds_without_sources(kind):
     out = json.loads(server.save_figure(kind, "x", source="arf"))
     assert out["status"] == "error" and "source" in out["message"]
@@ -39,6 +39,7 @@ def test_source_is_rejected_for_kinds_without_sources(kind):
     ("eic", "eic_plot", ["eic_plot_chromatograms", "eic_plot_compounds"]),
     ("group_intensity", "group_intensity_plot", ["arf_plot_group_intensity"]),
     ("species", "species_plot", ["arf_plot_species"]),
+    ("pca_loadings", "pca_loadings_plot", ["plot_pca_loadings"]),
 ])
 def test_missing_state_per_kind(kind, state, tools):
     err = json.loads(server.save_figure(kind, "x"))["error"]
