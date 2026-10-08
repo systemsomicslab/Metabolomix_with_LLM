@@ -58,7 +58,7 @@ class TestArfDifferential(unittest.TestCase):
 
     def test_two_group_payload_omits_full_volcano_but_session_keeps_it(self):
         # 8000字切り詰めで summary が埋没しないよう、payload は全量 volcano を含まず
-        # 要約中心にする。全量は session に残し save_volcano_figure から使える。
+        # 要約中心にする。全量は session に残し save_figure(kind="volcano") から使える。
         session_state.session.arf.feature_matrix = np.array([
             [10.0, 5.0], [11.0, 5.1], [9.5, 4.9],
             [50.0, 5.0], [52.0, 5.2], [48.0, 4.8],
@@ -137,7 +137,7 @@ class TestArfDifferential(unittest.TestCase):
         }
         out = json.loads(server.arf_differential(group_a="A", group_b="B"))
         self.assertIn("arf_plot_volcano", out["volcano_note"])
-        self.assertNotIn("save_volcano_figure で図示", out["volcano_note"])
+        self.assertNotIn('save_figure(kind="volcano") で図示', out["volcano_note"])
         self.assertNotIn("volcano", out)
         last = session_state.session.arf.last_differential
         self.assertEqual(last["q_threshold"], 0.05)
@@ -185,7 +185,7 @@ class TestSaveVolcano(unittest.TestCase):
         session_state.session = server.AnalysisSession()
 
     def test_requires_last_differential(self):
-        out = server.save_volcano_figure("A1")
+        out = server.save_figure("volcano", "A1")
         self.assertIn("error", out.lower())
 
     def test_writes_png(self):
@@ -197,7 +197,7 @@ class TestSaveVolcano(unittest.TestCase):
                 {"feature": "f2", "log2fc": 0.0, "neg_log10_p": 0.1, "sig": "ns"},
             ],
         }
-        rel = server.save_volcano_figure("A1")
+        rel = server.save_figure("volcano", "A1")
         self.assertIn("volcano", rel)
 
 

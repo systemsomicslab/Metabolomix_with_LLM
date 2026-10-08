@@ -222,7 +222,7 @@ def _format_pca_plot_block(
 
     LLM がこの座標から散布図を自描画できるよう per-sample の点列を ```json
     フェンスで同梱する。点列は session_state.session.arf.last_pca_plot にも別途保存
-    され（_remember_arf_pca_plot）、save_pca_figure がユーザー要求時の PNG 化に
+    され（_remember_arf_pca_plot）、save_figure(kind="pca") がユーザー要求時の PNG 化に
     使う。呼び出し側はこのブロックを loadings の後（payload 末尾）に置くこと
     （万一の下流截断で loadings ではなく座標点を失うようにするため）。
     """
@@ -251,7 +251,7 @@ def _format_pca_plot_block(
     plot_data = {"x_label": x_label, "y_label": y_label, "points": points}
     lines.append(
         "- 上記座標から散布図を描画してください（group があれば群ごとに色分け・凡例付き）。"
-        "PNG が必要なときのみ save_pca_figure を実行します。"
+        "PNG が必要なときのみ save_figure(kind=\"pca\") を実行します。"
     )
     lines.append("```json")
     lines.append(json.dumps(plot_data, ensure_ascii=False))

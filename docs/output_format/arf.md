@@ -136,17 +136,17 @@ ARFサンプルとの結合は `FileID` を優先し、欠損時は正規化し�
 脂質選択を指定した場合、分散・検出率フィルタ後にPCAの必要次元数が足りなくても、サンプルが存在すれば生スポット選択は保存する。PCAをスキップした理由と行列形状を返し、PCA図・結果は生成しない。1脂質や定数の脂質もこの経路で後続の前処理へ渡せる。
 
 PCAスコアプロット用ブロック（返り値の末尾。**サンプル別の座標点列を同梱する**）。
-散布図は**この点列からクライアント側（チャット）で描く**。`save_pca_figure` は PNG
+散布図は**この点列からクライアント側（チャット）で描く**。`save_figure(kind="pca")` は PNG
 ファイルを reports/figures/ へ書き込む操作であり、ユーザーがファイルとしての図を明示的に
 求めたときだけ使う——対話の中で図を見せる目的では呼ばない。同じ点列は
-`session.arf.last_pca_plot` にも保持され、`save_pca_figure` はそこから描く。
+`session.arf.last_pca_plot` にも保持され、`save_figure(kind="pca")` はそこから描く。
 
 | キー/行 | 意味 |
 |---|---|
 | タイトル行 | 図タイトル |
 | `PC1 (x%) × PC2 (y%)` | PC1/PC2 説明分散率 |
 | 群別サンプル数 | 群ラベルがあれば `群=件数` を列挙、無ければ総サンプル数 |
-| 描画指示 | 上記座標から散布図を描く（group があれば群ごとに色分け・凡例付き）。PNG が必要なときのみ `save_pca_figure` |
+| 描画指示 | 上記座標から散布図を描く（group があれば群ごとに色分け・凡例付き）。PNG が必要なときのみ `save_figure(kind="pca")` |
 | json 点列 | `x_label` / `y_label`（説明分散率つき軸名）と `points`。各点は `pc1` / `pc2` / `sample`、群分け時は `group` |
 
 ## 10. 前処理・QC（P2a）
@@ -185,7 +185,7 @@ QC/ブランク/注入順のいずれかが欠けているためにスキップ�
 
 ### 10.4 `arf_pca_preprocessed()`
 
-前処理後行列が無い（`session.arf.feature_matrix is None`）場合はエラーメッセージ1件を返す。あれば `metabolomix/analysis/pca.py` の `run_pca` でPCAを実行し、`arf_parser` と同じ整形ヘルパー（スコアプロット用JSON、Loadings上位）を使って結果を返す。出力テキストの構造・キー意味は8.1節のスコアプロット用JSONと同一（座標点列を同梱し、散布図はそこからチャットで描く。`save_pca_figure` はPNGファイルが明示的に求められたときだけ）。生スポットの選択とは別の計算経路であり、選択を変更した場合は `arf_preprocess()` を再実行する必要がある。
+前処理後行列が無い（`session.arf.feature_matrix is None`）場合はエラーメッセージ1件を返す。あれば `metabolomix/analysis/pca.py` の `run_pca` でPCAを実行し、`arf_parser` と同じ整形ヘルパー（スコアプロット用JSON、Loadings上位）を使って結果を返す。出力テキストの構造・キー意味は8.1節のスコアプロット用JSONと同一（座標点列を同梱し、散布図はそこからチャットで描く。`save_figure(kind="pca")` はPNGファイルが明示的に求められたときだけ）。生スポットの選択とは別の計算経路であり、選択を変更した場合は `arf_preprocess()` を再実行する必要がある。
 
 ### 10.5 手動サンプル/ピーク除外（`arf_exclude`）
 
@@ -205,7 +205,7 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 
 ## 11. 差次的解析（P2b）
 
-`metabolomix/analysis/differential.py`（MCP非依存の純ロジック層）と、`metabolomix/arf/tools.py` の `arf_differential()` / `metabolomix/tools/reports.py` の `save_volcano_figure()` が、前処理後のサンプル×特徴量行列に対する群間比較を担う。既定挙動・既存ツールは不変で、明示呼び出し時のみ作用する。
+`metabolomix/analysis/differential.py`（MCP非依存の純ロジック層）と、`metabolomix/arf/tools.py` の `arf_differential()` / `metabolomix/tools/reports.py` の `save_figure()`（`kind="volcano"`）が、前処理後のサンプル×特徴量行列に対する群間比較を担う。既定挙動・既存ツールは不変で、明示呼び出し時のみ作用する。
 
 ### 11.1 群ラベルの由来
 
@@ -242,14 +242,14 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
   - 小n・分散0・全欠損は `p=NaN`。
 - **多群ANOVAは現状非対応**: MS-DIAL メタに「因子（加齢/菌叢等）→水準」の対応が無く、因子を安全に選べない（誤って全 Class ID を水準にした結果を返さないよう封鎖）。3群以上を比べたいときは `group_a`/`group_b` の因子トークン・プール指定で関心のある2群を切り出す。`differential.one_way_anova()` 自体は関数として残るが、MCP からは露出しない。
 - **多重検定補正**: いずれも Benjamini-Hochberg で `p → q`（FDR）を付与（NaN は補正から除外し位置は保持）。p値は scipy があればそれで、無ければ自前の t 分布裾確率（正則化不完全ベータ関数）で計算し、どちらも正確（近似ではない）。
-- **volcano**: 2群比較のみ。各点は `feature` / `log2fc` / `neg_log10_p` / `sig`（`up`=q≤閾値かつlog2fc≥+閾値（群Bで高い＝上昇） / `down`=q≤閾値かつlog2fc≤−閾値（群Aで高い＝低下） / `ns`）。全特徴分の点列は `session.arf.last_differential["volcano"]` に保持し、`arf_plot_volcano()`（構造化点列）と `save_volcano_figure()`（PNG）の両方がここから読む。**`arf_differential()` の応答 payload には全量 volcano を同梱せず**、`summary`（`n_tested`/`n_significant`/`n_up`/`n_down`＋有意上位 `top`）中心の要約と `volcano_note` のみを返す（先頭の結論が巨大配列＋文脈切り詰めで埋没し「全て ns」と誤読される退行を避けるため）。
+- **volcano**: 2群比較のみ。各点は `feature` / `log2fc` / `neg_log10_p` / `sig`（`up`=q≤閾値かつlog2fc≥+閾値（群Bで高い＝上昇） / `down`=q≤閾値かつlog2fc≤−閾値（群Aで高い＝低下） / `ns`）。全特徴分の点列は `session.arf.last_differential["volcano"]` に保持し、`arf_plot_volcano()`（構造化点列）と `save_figure(kind="volcano")`（PNG）の両方がここから読む。**`arf_differential()` の応答 payload には全量 volcano を同梱せず**、`summary`（`n_tested`/`n_significant`/`n_up`/`n_down`＋有意上位 `top`）中心の要約と `volcano_note` のみを返す（先頭の結論が巨大配列＋文脈切り詰めで埋没し「全て ns」と誤読される退行を避けるため）。
 
 ### 11.2.1 `arf_plot_volcano` の返り値（`lipidmix.volcano.v1`）
 
 `arf_differential`（2群）の後に呼ぶ read-only ツール。**既定（`output="image"`）では
 サーバ側で描いた PNG と件数入りの1行キャプションを返す**ので、以下の表は
 `output="payload"`（または env `LIPIDMIX_PLOT_OUTPUT=payload`）でクライアントが自分で
-描くときの契約。ファイルとして PNG を残したいときだけ `save_volcano_figure` を呼ぶ。
+描くときの契約。ファイルとして PNG を残したいときだけ `save_figure(kind="volcano")` を呼ぶ。
 
 画像モードでは間引きをせず全特徴を描く。**有意件数はキャプションの
 `up=` / `down=` / `ns=` を読むこと**（図の点を数えない）。
@@ -317,10 +317,10 @@ read-only ツール。ARF 経路のみ（読み込み済み `.arf` と、同じ�
 項目ごとのスポット数（MS/MS の件数が分かるときは括弧内にその数。0 も出す）、群ごとの試料数、除外の 5 種類の
 件数（手動除外・内部標準・判断・自動判定・標準液）、N.D. の項目名、`caveats` が入る。以下の表は `output="payload"`（または env
 `LIPIDMIX_PLOT_OUTPUT=payload`）の契約。ファイルとして PNG が要るときは
-`save_group_intensity_figure`（`reports/figures/<analysis_id>_group_intensity.png` を dpi 300 で、
+`save_figure(kind="group_intensity")`（`reports/figures/<analysis_id>_group_intensity.png` を dpi 300 で、
 同名の `.svg` と一緒に書く。直前の `arf_plot_group_intensity` が無ければ `missing_state`）。
 
-**エラーと状態**: 入力の誤り（群が 1 試料にも当たらない・`output` の値が不正・`detection_limit` が 0 以下や非有限・`ncols` が 1 未満など）は例外ではなく `{"status": "error", "message": ...}` で返す。呼び出しが（missing_state を含め）失敗したときは、前回の図を `save_group_intensity_figure` が保存しないようセッションの図を破棄する。画像モードでは描画に成功してから図を保持する。群の指定が `blank` / `qc` の役割で全滅したときは、`blank` / `qc` を書くよう案内を添える。
+**エラーと状態**: 入力の誤り（群が 1 試料にも当たらない・`output` の値が不正・`detection_limit` が 0 以下や非有限・`ncols` が 1 未満など）は例外ではなく `{"status": "error", "message": ...}` で返す。呼び出しが（missing_state を含め）失敗したときは、前回の図を `save_figure(kind="group_intensity")` が保存しないようセッションの図を破棄する。画像モードでは描画に成功してから図を保持する。群の指定が `blank` / `qc` の役割で全滅したときは、`blank` / `qc` を書くよう案内を添える。
 
 **検定はしない**。1 パネル = 1 項目、1 点 = 1 試料、群ごとに log10 空間の平均 ± SD を添えるだけで、
 群間の有意差は述べない（検定は `arf_differential`。小 n の p 値が図に独り歩きするのを避ける）。

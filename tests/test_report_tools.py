@@ -173,7 +173,7 @@ class PcaPlotHelperTests(unittest.TestCase):
         self.assertIn("15.00%", block)
         self.assertIn("A=2", block)
         self.assertIn("B=2", block)
-        self.assertIn("save_pca_figure", block)
+        self.assertIn("save_figure", block)
         # JSON は valid で points が 4 件、座標が一致
         payload = _json.loads(block.split("```json")[1].split("```")[0].strip())
         self.assertEqual(len(payload["points"]), 4)
@@ -222,14 +222,14 @@ class SavePcaFigureTests(unittest.TestCase):
                 {"x": -1.0, "y": 0.5, "label": "s2"},
             ],
         }
-        msg = server.save_pca_figure("a-1")
+        msg = server.save_figure("pca", "a-1")
         png = self.tmp / "reports_fallback" / "figures" / "a-1_pca.png"
         self.assertTrue(png.is_file())
         self.assertIn("figures/a-1_pca.png", msg)
 
     def test_save_pca_figure_guidance_when_no_plot(self):
         session_state.session.arf.last_pca_plot = None
-        msg = server.save_pca_figure("a-1")
+        msg = server.save_figure("pca", "a-1")
         self.assertIn("PCA", msg)
         self.assertFalse((self.tmp / "reports_fallback" / "figures").exists())
 
@@ -356,7 +356,7 @@ class DatasetFigureFallbackTests(unittest.TestCase):
             ],
             "n_samples": 2, "n_features": 10, "log_transform": False,
         }
-        msg = server.save_pca_figure("ds-1")
+        msg = server.save_figure("pca", "ds-1")
         png = self.tmp / "reports_fallback" / "figures" / "ds-1_pca.png"
         self.assertTrue(png.is_file())
         self.assertIn("figures/ds-1_pca.png", msg)
@@ -374,7 +374,7 @@ class DatasetFigureFallbackTests(unittest.TestCase):
                 {"feature": "f3", "log2fc": 0.1, "neg_log10_p": 0.2, "sig": "ns"},
             ],
         }
-        msg = server.save_volcano_figure("ds-2")
+        msg = server.save_figure("volcano", "ds-2")
         png = self.tmp / "reports_fallback" / "figures" / "ds-2_volcano.png"
         self.assertTrue(png.is_file())
         self.assertIn("figures/ds-2_volcano.png", msg)
@@ -398,7 +398,7 @@ class DatasetFigureFallbackTests(unittest.TestCase):
         それが暗黙の既定になって「なぜこの図なのか」を誰も説明できなくなる。
         """
         self._both_paths_have_pca()
-        parsed = json.loads(server.save_pca_figure("both-1"))
+        parsed = json.loads(server.save_figure("pca", "both-1"))
         self.assertEqual(parsed["error"]["code"], "AMBIGUOUS_RESULT_SOURCE")
         self.assertEqual(
             sorted(c["source"] for c in parsed["error"]["details"]["candidates"]),
@@ -407,11 +407,11 @@ class DatasetFigureFallbackTests(unittest.TestCase):
 
     def test_an_explicit_source_resolves_the_ambiguity(self):
         self._both_paths_have_pca()
-        msg = server.save_pca_figure("both-2", source="mztab")
+        msg = server.save_figure("pca", "both-2", source="mztab")
         self.assertIn("source=mztab", msg)
         self.assertTrue((self.tmp / "reports_fallback" / "figures" / "both-2_pca.png").is_file())
 
     def test_guidance_mentions_dataset_tools_when_nothing_available(self):
         session_state.session.dataset = None
-        msg = server.save_pca_figure("none-1")
+        msg = server.save_figure("pca", "none-1")
         self.assertIn("dataset_pca", msg)

@@ -108,18 +108,18 @@ class MissingStateContractTests(unittest.TestCase):
             "pai2_parser",
         )
 
-    def test_save_pca_figure(self):
+    def test_save_figure_pca(self):
         self.assert_missing(
-            server.save_pca_figure(analysis_id="x"),
+            server.save_figure("pca", analysis_id="x"),
             "pca_result",
             # mzTab-M 経路（dataset_pca）も PCA の生産者なのでリプレイ候補に入る
             ["arf_parser", "arf_pca_preprocessed", "load_dataset", "dataset_pca"],
             "PCA",
         )
 
-    def test_save_volcano_figure(self):
+    def test_save_figure_volcano(self):
         self.assert_missing(
-            server.save_volcano_figure(analysis_id="x"),
+            server.save_figure("volcano", analysis_id="x"),
             "differential_result",
             # 図の保存は mzTab-M 経路（dataset_differential）からもできる。
             # arf_plot_volcano は ARF 専用なので候補は増やさない。
@@ -136,18 +136,18 @@ class MissingStateContractTests(unittest.TestCase):
             "load_dataset",
         )
 
-    def test_save_group_intensity_figure(self):
+    def test_save_figure_group_intensity(self):
         self.assert_missing(
-            server.save_group_intensity_figure(analysis_id="x"),
+            server.save_figure("group_intensity", analysis_id="x"),
             "group_intensity_plot",
             ["arf_plot_group_intensity"],
             "arf_plot_group_intensity",
         )
 
-    def test_save_eic_figure_offers_both_producers(self):
+    def test_save_figure_eic_offers_both_producers(self):
         """eic_plot は2つのツールのどちらでも作れる（OR の代替候補）。"""
         self.assert_missing(
-            server.save_eic_figure(analysis_id="x"),
+            server.save_figure("eic", analysis_id="x"),
             "eic_plot",
             ["eic_plot_chromatograms", "eic_plot_compounds"],
             "eic_plot_chromatograms",

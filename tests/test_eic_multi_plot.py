@@ -355,7 +355,7 @@ class EicPlotCompoundsToolTests(unittest.TestCase):
             ["PC(12:0/13:0)", "Ceramide (d18:1/25:0)"],
         )
         self.assertEqual(payload["sample"]["file_id"], 7)
-        # 戻り値は最小形の JSON 文字列だが、save_eic_figure が使うセッション側は
+        # 戻り値は最小形の JSON 文字列だが、save_figure(kind="eic") が使うセッション側は
         # dict のまま保持されている。
         self.assertEqual(session_state.session.eic.last_plot, payload)
         self.assertEqual(list(self.tmp.rglob("*.png")), [])
@@ -423,7 +423,7 @@ class EicPlotCompoundsToolTests(unittest.TestCase):
             7, ontologies=["PC", "Cer"],
             file_path=str(self.path), arf2_path=str(self.arf2),
         )
-        message = server.save_eic_figure("overlay-eic")
+        message = server.save_figure("eic", "overlay-eic")
         png = self.tmp / "fallback" / "figures" / "overlay-eic_eic.png"
         self.assertTrue(png.is_file())
         self.assertIn("figures/overlay-eic_eic.png", message)

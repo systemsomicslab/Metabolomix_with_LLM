@@ -1,6 +1,6 @@
 """解析・解釈レポートと図の保存ツール群。
 
-write/read/list_reports, save_pca_figure, save_volcano_figure, save_eic_figure。
+write/read/list_reports, save_figure。
 レポート先の解決は mcp_core（DATA_DIR を動的参照）に委ねる。deps: mcp_core /
 session_state / tool_helpers / knowledge_store / matplotlib。
 tools_* / server は import しない。
@@ -11,6 +11,7 @@ from metabolomix.corpus import knowledge_store
 from metabolomix.core import mcp_errors
 from metabolomix.core import session_state
 from mcp.types import ToolAnnotations
+from metabolomix.core.serialization import json_payload
 from metabolomix.core.mcp_core import mcp, _resolve_report_dir, _report_dir_candidates, _build_report_meta
 from metabolomix.core.tool_helpers import _pca_scatter_arrays, dataset_pca_plot
 from metabolomix.plots.eic import render_eic_plot
@@ -20,10 +21,7 @@ __all__ = [
     "write_report",
     "read_report",
     "list_reports",
-    "save_pca_figure",
-    "save_volcano_figure",
-    "save_eic_figure",
-    "save_group_intensity_figure",
+    "save_figure",
 ]
 
 
@@ -196,47 +194,46 @@ def list_reports() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool(annotations=ToolAnnotations(
-    readOnlyHint=False, destructiveHint=False, idempotentHint=True), structured_output=False)
-def save_pca_figure(analysis_id: str, title: str | None = None,
-                    source: str = "auto", result_id: str | None = None) -> str:
-    """明示的なユーザー要求時だけ、指定したPCA結果をPNGとして保存する。
-
-    先に arf_parser / arf_pca_preprocessed / load_dataset 等でPCAを実行する。通常の
-    対話描画ではこのツールを呼ばず、各MCPクライアントのUIへ描画を任せる（PCA座標は
-    解析ツールの返り値に同梱されている）。返り値の相対パスは write_report の本文に
-    `![PCA](figures/<analysis_id>_pca.png)` として埋め込める。
-
-    source: "auto"（既定）/ "arf" / "mztab"。**auto はどちらかを優先しません**。
-        有効な結果が 2 つ以上あると `AMBIGUOUS_RESULT_SOURCE` で止まるので、
-        どちらを描くか指定してください（どの結果を描くかは図の数字そのものを変えます）。
-    result_id: 特定の結果を名指しする場合に指定する（解析ツールの戻り値に入っています）。
-    """
-    chosen = _choose_figure_result("pca", source, result_id)
-    if isinstance(chosen, str):
-        return chosen  # error envelope
-    return _save_figure(chosen, analysis_id, title, kind="pca", label="PCA")
+#: save_figure が受け付ける図の種類。後続の作業で species / pca_loadings を足す。
+FIGURE_KINDS = ("pca", "volcano", "eic", "group_intensity")
+#: ARF と mzTab のどちらの結果を描くかを選ぶ必要がある種類（source / result_id を使う）。
+_SOURCE_KINDS = ("pca", "volcano")
 
 
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=True), structured_output=False)
-def save_volcano_figure(analysis_id: str, title: str | None = None,
-                        source: str = "auto", result_id: str | None = None) -> str:
-    """明示的なユーザー要求時だけ、指定した差次的解析を volcano プロットのPNGとして
-    reports/figures/<analysis_id>_volcano.png に保存し、相対パスを返す。
+def save_figure(kind: str, analysis_id: str, title: str | None = None,
+                source: str = "auto", result_id: str | None = None) -> str:
+    """明示的なユーザー要求時だけ、直近の図を reports/figures/<analysis_id>_<kind>.png に保存する。
 
-    先に arf_differential / dataset_differential（2群比較）を実行する。通常の対話描画では
-    このツールを呼ばず、arf_plot_volcano で構造化した点列を返して各MCPクライアントのUIへ
-    描画を任せる。なお本PNGは間引き前の全特徴を描く（arf_plot_volcano は ns 点を
-    間引くことがある）。返り値の相対パスは write_report の本文に
-    `![volcano](figures/<analysis_id>_volcano.png)` として埋め込める。
-
-    source / result_id: save_pca_figure と同じ。**auto はどちらかを優先しません**。
+    kind: "pca"（arf_parser / arf_pca_preprocessed / dataset_pca のスコア）/ "volcano"
+      （arf_differential / dataset_differential。間引き前の全点）/ "eic"（eic_plot_chromatograms /
+      eic_plot_compounds）/ "group_intensity"（arf_plot_group_intensity。dpi 300 の PNG と同名 .svg）。
+    source / result_id: kind が pca / volcano のときだけ使う。"auto"（既定）はどちらも優先せず、
+      有効な結果が 2 つ以上あると AMBIGUOUS_RESULT_SOURCE で止まる（"arf" / "mztab" で指定する）。
+    通常の対話描画では呼ばない（各描画ツールが画像を返す）。返り値の相対パスは write_report の
+    本文に `![...](figures/<analysis_id>_<kind>.png)` として埋め込める。
     """
-    chosen = _choose_figure_result("differential", source, result_id)
-    if isinstance(chosen, str):
-        return chosen  # error envelope
-    return _save_figure(chosen, analysis_id, title, kind="volcano", label="volcano")
+    if kind not in FIGURE_KINDS:
+        return json_payload({"status": "error", "message":
+                             f"kind は {', '.join(FIGURE_KINDS)} のどれかを指定してください（受け取った値: {kind!r}）。"})
+    if kind not in _SOURCE_KINDS and (source != "auto" or result_id is not None):
+        return json_payload({"status": "error", "message":
+                             f"source / result_id は kind が {' / '.join(_SOURCE_KINDS)} のときだけ指定できます"
+                             f"（kind={kind!r}）。"})
+    if kind == "pca":
+        chosen = _choose_figure_result("pca", source, result_id)
+        if isinstance(chosen, str):
+            return chosen
+        return _save_figure(chosen, analysis_id, title, kind="pca", label="PCA")
+    if kind == "volcano":
+        chosen = _choose_figure_result("differential", source, result_id)
+        if isinstance(chosen, str):
+            return chosen
+        return _save_figure(chosen, analysis_id, title, kind="volcano", label="volcano")
+    if kind == "eic":
+        return _save_eic(analysis_id, title)
+    return _save_group_intensity(analysis_id, title)
 
 
 def _save_figure(chosen: dict, analysis_id: str, title: str | None, *,
@@ -258,15 +255,8 @@ def _save_figure(chosen: dict, analysis_id: str, title: str | None, *,
             f"本文に ![{label}]({rel}) で埋め込めます。")
 
 
-@mcp.tool(annotations=ToolAnnotations(
-    readOnlyHint=False, destructiveHint=False, idempotentHint=True), structured_output=False)
-def save_eic_figure(analysis_id: str, title: str | None = None) -> str:
-    """明示的なユーザー要求時だけ、直近EICプロット情報をPNGとして保存する。
-
-    先に ``eic_plot_chromatograms``（1物質×複数サンプル）または ``eic_plot_compounds``
-    （複数物質×1サンプル）でクライアント描画用の構造化情報を作る。通常の対話描画では
-    このツールを呼ばず、各MCPクライアントのUIへ描画を任せる。
-    """
+def _save_eic(analysis_id: str, title: str | None) -> str:
+    """直近EICプロット情報（eic_plot_chromatograms / eic_plot_compounds）をPNGとして保存する。"""
     plot = getattr(session_state.session.eic, "last_plot", None)
     if not plot or not plot.get("series"):
         return mcp_errors.missing_state(
@@ -289,11 +279,8 @@ def save_eic_figure(analysis_id: str, title: str | None = None) -> str:
     return f"EIC図を保存: {out_path}\n本文に ![EIC]({rel}) で埋め込めます。"
 
 
-@mcp.tool(annotations=ToolAnnotations(
-    readOnlyHint=False, destructiveHint=False, idempotentHint=True), structured_output=False)
-def save_group_intensity_figure(analysis_id: str, title: str | None = None) -> str:
-    """直前の arf_plot_group_intensity の図を reports/figures/<analysis_id>_group_intensity.png（dpi 300）と
-    同名 .svg に保存し、相対パスを返す。レポート本文に `![...](figures/<...>.png)` で埋め込める。"""
+def _save_group_intensity(analysis_id: str, title: str | None) -> str:
+    """直前の arf_plot_group_intensity の図を PNG（dpi 300）と同名 .svg に保存する。"""
     from metabolomix.plots.group_intensity import render_group_intensity_plot
 
     last = getattr(session_state.session.arf, "last_group_intensity", None)

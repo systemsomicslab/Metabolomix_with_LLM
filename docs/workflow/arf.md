@@ -17,10 +17,10 @@ flowchart TD
     DIFF -->|session.arf.last_differential| VOL[arf_plot_volcano]
     DIFF -->|session.arf.last_differential| EXPORT[arf_export_differential]
     P -->|同一語幹の兄弟 .arf2| EXPORT
-    PCA -->|session.arf.last_pca| SPF[save_pca_figure → plots.md]
-    VOL --> SVF[save_volcano_figure → plots.md]
+    PCA -->|session.arf.last_pca| SPF[save_figure kind=pca → plots.md]
+    VOL --> SVF[save_figure kind=volcano → plots.md]
     P -->|session.arf.features + 兄弟 .arf2| GI[arf_plot_group_intensity]
-    GI -->|session.arf.last_group_intensity| SGI[save_group_intensity_figure → plots.md]
+    GI -->|session.arf.last_group_intensity| SGI[save_figure kind=group_intensity → plots.md]
 ```
 
 ## arf_parser
@@ -133,7 +133,7 @@ excluded）。全行で同じ値になる `batch_source` はヘッダ行にま�
 ## arf_pca_preprocessed
 
 前提: `arf_preprocess` 実行済み（未実行なら手順 3 で `MissingState`）
-状態変更: `session.arf.last_pca` を更新。`save_pca_figure` の入力になる。
+状態変更: `session.arf.last_pca` を更新。`save_figure(kind="pca")` の入力になる。
 
 `arf_parser` の生行列 PCA とは**独立した経路**。同じ図に見えても前処理の有無が違う。
 色分け（`group_levels` / `group_factors`）や log 変換だけを変えて再実行しても、
@@ -225,7 +225,7 @@ InChIKey・Ontology・m/z・RT と結合する。InChIKey が無い特徴は本�
 
 画像は間引かず全特徴を描く（間引きは payload のトークン対策であって図には不要）。
 キャプションに up / down / ns / 検定不能の件数を書くのは、件数を図から読み取らせない
-ため。PNG をファイルに保存したいときは `save_volcano_figure`（[plots.md](plots.md)）。
+ため。PNG をファイルに保存したいときは `save_figure(kind="volcano")`（[plots.md](plots.md)）。
 
 1. metabolomix/arf/tools.py  arf_plot_volcano()
 2. └─ metabolomix/core/mcp_errors.py  missing_state()
@@ -239,7 +239,7 @@ InChIKey・Ontology・m/z・RT と結合する。InChIKey が無い特徴は本�
 
 前提: ARF を読み込み済みで、同じアラインメントの `.arf2` が隣にある（無ければ `MissingState`）
 状態変更: `session.arf.last_group_intensity`（payload・title・ncols）を更新。ファイルは書かない。
-`save_group_intensity_figure`（[plots.md](plots.md)）がここから読んで保存する。
+`save_figure(kind="group_intensity")`（[plots.md](plots.md)）がここから読んで保存する。
 
 選んだクラス・分子種ごとに、試料群の試料別 PeakHeight 合計を並べる。項目と群の解決・payload・
 描画は `metabolomix/plots/group_intensity.py` の純関数で、本ツールは ARF・`.arf2`・

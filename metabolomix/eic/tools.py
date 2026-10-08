@@ -102,7 +102,7 @@ def eic_plot_chromatograms(
     This read-only tool returns structured ``lipidmix.eic.v1`` JSON only. It does
     not render an image and does not write files: Use-LLLM may render the series
     with Plotly, while Claude Desktop or another MCP client may use its own UI.
-    Call ``save_eic_figure`` only after the user explicitly requests PNG output.
+    Call ``save_figure(kind="eic")`` only after the user explicitly requests PNG output.
 
     ``spot_id`` is exact and should normally come from the existing m/z or RT
     search tools. ``file_ids`` selects at most 12 sample traces; when omitted all

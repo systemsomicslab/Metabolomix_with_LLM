@@ -1091,7 +1091,7 @@ def arf_differential(
                                      "log_transform": log_transform,
                                      "results": results, "volcano": volcano}
         # 全量 volcano（~特徴数）は上の last_differential に保持し、arf_plot_volcano
-        # （構造化点列）と save_volcano_figure（PNG）から使う。payload には載せない
+        # （構造化点列）と save_figure(kind="volcano")（PNG）から使う。payload には載せない
         # ——先頭の summary が巨大 volcano 配列＋文脈切り詰めで埋没し、解釈モデルが
         # 有意件数を読めず「全て ns」と誤読する退行を避けるため。
         payload = {"status": "success", "kind": "two_group",
@@ -1107,7 +1107,7 @@ def arf_differential(
                                    "arf_plot_volcano で構造化した点列を取得し、"
                                    "クライアント側で散布図を描画してください。"
                                    "PNG が必要だとユーザーが明示した場合のみ "
-                                   "save_volcano_figure を実行します。"}
+                                   "save_figure(kind=\"volcano\") を実行します。"}
     else:
         return json_payload({"status": "error",
                            "message": "group_a と group_b の両方を指定してください（2群比較）。"
@@ -1293,7 +1293,7 @@ def arf_plot_volcano(
     thinned to fit ``max_points``; every count is reported in ``selection``. The
     image always draws every feature.
 
-    Call ``save_volcano_figure`` only when the user wants the PNG written to disk.
+    Call ``save_figure(kind="volcano")`` only when the user wants the PNG written to disk.
     """
     last = getattr(session_state.session.arf, "last_differential", None)
     if not last or last.get("kind") != "two_group" or not last.get("volcano"):
@@ -1367,7 +1367,7 @@ def arf_plot_group_intensity(
     - detection_limit: 検出下限の破線。省略時は param ファイルの Minimum peak height。
     - arf_exclude で除いた試料は描かず、除いたスポットはクラスにも名前指定にも入れない（excluded の manual）。
     - output: "image"（既定）/ "payload"（`lipidmix.group_intensity.v1`）。PNG ファイルが要るときは
-      save_group_intensity_figure。
+      save_figure(kind="group_intensity")。
     - 入力の誤り（群が当たらない・detection_limit が 0 以下・ncols が 1 未満など）は
       `{"status": "error", "message": ...}` で返す。失敗した呼び出しの後は前回の図を破棄する。
     """
@@ -1385,7 +1385,7 @@ def arf_plot_group_intensity(
         return mcp_errors.missing_state(
             "sibling_arf2", ["arf_parser", "load_dataset"],
             "同じアラインメントの .arf2 が見つかりません（名前とクラスの解決に要ります）。")
-    # 失敗した呼び出しの後に、前回の図を save_group_intensity_figure が保存してしまわないよう先に捨てる。
+    # 失敗した呼び出しの後に、前回の図を save_figure(kind="group_intensity") が保存してしまわないよう先に捨てる。
     arf_state.last_group_intensity = None
 
     try:

@@ -190,7 +190,7 @@ class DatasetState:
         # last_pca / last_differential: 直近結果の全量。戻り値には要約だけを載せ、
         # 全量はここに置く（CLAUDE.md の戻り値肥大禁止）。
         # 現時点で読むのは dataset_export_differential のみ。図の保存ツール
-        # （save_pca_figure / save_volcano_figure）は session.arf 側を見ており、
+        # （save_figure の pca / volcano）は session.arf 側を見ており、
         # DatasetState 経路には未対応（次フェーズ）。
         self.last_pca = None
         self.last_differential = None

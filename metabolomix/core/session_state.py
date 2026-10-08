@@ -139,9 +139,9 @@ class ArfState:
         self.preprocessing_recipe = {}   # 直近適用した前処理レシピ（空=未適用）
 
         # --- 直近解析の描画用データ ---
-        self.last_pca_plot = None        # save_pca_figure が参照
-        self.last_differential = None    # arf_plot_volcano / save_volcano_figure が参照
-        self.last_group_intensity = None  # arf_plot_group_intensity / save_group_intensity_figure が参照
+        self.last_pca_plot = None        # save_figure が参照
+        self.last_differential = None    # arf_plot_volcano / save_figure が参照
+        self.last_group_intensity = None  # arf_plot_group_intensity / save_figure が参照
 
         # --- 手動除外集合（PCA 外れサンプル / 特定ピークの可逆・非破壊除外） ---
         self.excluded_samples = set()   # 除外する file_name（サンプル）
