@@ -1371,12 +1371,8 @@ def arf_plot_group_intensity(
     - 入力の誤り（群が当たらない・detection_limit が 0 以下・ncols が 1 未満など）は
       `{"status": "error", "message": ...}` で返す。失敗した呼び出しの後は前回の図を破棄する。
     """
-    from metabolomix.arf import reader as arf_reader
-    from metabolomix.arf2 import reader as arf2_reader
-    from metabolomix.arf2.match_results import load_spot_annotations, name_prefix
-    from metabolomix.curation import apply as curation_apply
+    from metabolomix.arf import selection as arf_selection
     from metabolomix.curation import flags as curation_flags
-    from metabolomix.curation import suggest as curation_suggest
     from metabolomix.msdial import analysis_params
     from metabolomix.plots import group_intensity as gi
 
@@ -1400,63 +1396,10 @@ def arf_plot_group_intensity(
                 raise ValueError(f"detection_limit は 0 より大きい有限の数で指定してください（受け取った値: {detection_limit!r}）。")
         if ncols is not None and (isinstance(ncols, bool) or not isinstance(ncols, int) or ncols < 1):
             raise ValueError(f"ncols は 1 以上の整数で指定してください（受け取った値: {ncols!r}）。")
-        excluded_samples = set(arf_state.excluded_samples or ())
-        rows_by_spot = {}
-        all_rows_by_spot = {}    # 標準液の判定用: arf_exclude 済みの試料の行も含める
-        for feature in arf_state.features:
-            rows = [r for r in (arf_reader.alignment_feature_row(raw) for raw in feature["AlignedPeakProperties"]) if r]
-            all_rows_by_spot[feature["MasterAlignmentID"]] = rows
-            rows_by_spot[feature["MasterAlignmentID"]] = [
-                r for r in rows if r.get("file_name") not in excluded_samples]
-        names = [n for n in sample_factors.arf_sample_names(arf_state.features) if n not in excluded_samples]
-        facets = sample_factors.build_sample_facets(names, arf_state.class_index)
-        resolved_groups, caveats = gi.resolve_groups(groups, facets)
-        plotted = {n for g in resolved_groups for n in g["samples"]}
-        low = gi.resolve_sample_specs(low_reliability_samples or [], facets)
-
-        catalog = arf2_reader.load_catalog(str(arf2_path))
-        curation = {}
-        if apply_curation:
-            try:
-                flag_set = curation_apply.flags_for_arf2(arf2_path)
-            except curation_flags.FlagFileError as exc:
-                return json_payload({"status": "error", "message": str(exc), **exc.details()})
-            curation = {
-                "wrong": {int(s) for s in flag_set["wrong"]},
-                "redundant": {int(s) for s in flag_set["redundant"]},
-                "assign": {int(s): {"name": row.get("name") or "", "ontology": row.get("ontology") or ""}
-                           for s, row in flag_set["assign"].items()},
-            }
-            if flag_set["orphaned"]:
-                caveats.append(curation_flags.orphaned_warning(flag_set["orphaned"]))
-        if exclude_auto_likely_wrong:
-            review = curation_suggest.latest_review(
-                arf2_path, curation_flags.alignment_key(arf2_path)["alignment_sha256"])
-            if review is None:
-                caveats.append("このアラインメントの curation_review のレビューが無いため、自動判定 likely_wrong は除いていません。")
-            else:
-                curation["auto_likely_wrong"] = {
-                    int(s["spot_id"]) for s in review["spots"] if s.get("verdict") == "likely_wrong"}
-
-        standard = set()
-        if standard_samples:
-            standard = gi.resolve_sample_specs(standard_samples, sample_factors.build_sample_facets(
-                sample_factors.arf_sample_names(arf_state.features), arf_state.class_index))
-        standard_only = gi.standard_only_spots(all_rows_by_spot, standard, plotted) if standard else frozenset()
-        manual = {int(s) for s in (arf_state.excluded_spots or ())}    # arf_exclude で除いたスポット
-        resolved_items, excluded = gi.resolve_items(
-            items, catalog, curation=curation, standard_only=standard_only, manual=manual)
-
-        # MS/MS の裏付け: 照合結果に MS/MS があり、かつ .arf2 の Name が `no MS2:` / `w/o MS2:` でない
-        # （接頭辞は照合結果ではなく .arf2 の Name に付く）。assign 済みでも元のスペクトルの有無で判断する。
-        annotations = load_spot_annotations(str(arf2_path))
-        name_by_id = {int(r["MasterAlignmentID"]): r.get("Name") or "" for r in catalog}
-        msms = {}
-        for sid, ann in annotations.items():
-            rep = ann.get("representative") or {}
-            msms[sid] = (bool(rep.get("has_msms"))
-                         and name_prefix(name_by_id.get(sid, "")) not in ("no MS2", "w/o MS2"))
-
+        selected = arf_selection.build_selection(
+            arf_state, arf2_path, items=items, groups=groups,
+            low_reliability_samples=low_reliability_samples, apply_curation=apply_curation,
+            exclude_auto_likely_wrong=exclude_auto_likely_wrong, standard_samples=standard_samples)
         source = None
         if detection_limit is not None:
             detection_limit, source = float(detection_limit), "argument"
@@ -1465,12 +1408,15 @@ def arf_plot_group_intensity(
             value = analysis_params.read_analysis_params(param)["min_peak_height"] if param else None
             if value:
                 detection_limit, source = value, "param_file"
+    except curation_flags.FlagFileError as exc:
+        return json_payload({"status": "error", "message": str(exc), **exc.details()})
     except ValueError as exc:
         return json_payload({"status": "error", "message": str(exc)})
 
     payload = gi.build_group_intensity_payload(
-        resolved_items, resolved_groups, rows_by_spot, msms=msms, low_reliability=frozenset(low),
-        excluded=excluded, detection_limit=detection_limit, detection_limit_source=source, caveats=caveats)
+        selected.items, selected.groups, selected.rows_by_spot, msms=selected.msms,
+        low_reliability=selected.low_reliability, excluded=selected.excluded,
+        detection_limit=detection_limit, detection_limit_source=source, caveats=selected.caveats)
     if mode == plot_render.PAYLOAD:
         arf_state.last_group_intensity = {"payload": payload, "title": title, "ncols": ncols}
         return json_payload(payload)

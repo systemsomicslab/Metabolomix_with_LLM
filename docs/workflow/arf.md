@@ -248,39 +248,38 @@ InChIKey・Ontology・m/z・RT と結合する。InChIKey が無い特徴は本�
 
 手順 3 の `missing_state()` は 2 か所から呼ばれる: ARF が未読み込み（手順 1 の直後）と、
 手順 4 が兄弟 `.arf2` を見つけられなかったとき。どちらも返して終わる。
-`arf_exclude` した試料は群の解決と描画から外すが、`standard_samples` の判定（手順 15）には
+項目・群・除外の解決は手順 5 の `arf/selection.py build_selection()` に切り出してあり
+（分子種ごとの図・分子種 PCA と共有する）、手順 6〜15 はその内側。
+`arf_exclude` した試料は群の解決と描画から外すが、`standard_samples` の判定（手順 13）には
 除外前の全試料の行を使う（標準液を `arf_exclude` していても「標準液にだけある分子種」を判定できる）。
-手順 2・8・10・16 などが投げる `ValueError`（出力形式・群が当たらない・`detection_limit` / `ncols` の不正・
+手順 2・5・8・14 などが投げる `ValueError`（出力形式・群が当たらない・`detection_limit` / `ncols` の不正・
 項目数）は捕まえ、`{"status":"error","message":...}` を返して終わる。手順 3 の後で前回の図
 （`last_group_intensity`）を破棄し、画像モードでは描画に成功してから図を保持する。
-手順 12 で判断の記録ファイルが読めなければ `FlagFileError` を捕まえ、同じ形のエラーを返して終わる。
-手順 16 は `arf_exclude` で除いたスポット（`excluded_spots`）も除外する。手順 13〜14 は、レビューが無ければ除かずに caveat に出す。
-手順 17〜18 は MS/MS の裏付け（照合結果の `has_msms` かつ `.arf2` の Name が `no MS2:` /
-`w/o MS2:` でない）を作る。手順 19〜20 は検出下限（引数が優先、無ければ param ファイルの
+手順 11 で判断の記録ファイルが読めなければ `FlagFileError` を捕まえ、同じ形のエラーを返して終わる。
+手順 14 は `arf_exclude` で除いたスポット（`excluded_spots`）も除外する。手順 12 は、レビューが無ければ除かずに caveat に出す。
+手順 15 は MS/MS の裏付け（照合結果の `has_msms` かつ `.arf2` の Name が `no MS2:` /
+`w/o MS2:` でない）を作る。手順 16〜17 は検出下限（引数が優先、無ければ param ファイルの
 `Minimum peak height`）。
 
 1. metabolomix/arf/tools.py  arf_plot_group_intensity()
 2. └─ metabolomix/plots/render.py  resolve_plot_output()
 3. └─ metabolomix/core/mcp_errors.py  missing_state()
 4. └─ metabolomix/arf/tools.py  _sibling_arf2_path()
-5. └─ metabolomix/arf/reader.py  alignment_feature_row()
-6. └─ metabolomix/msdial/sample_factors.py  arf_sample_names()
-7. └─ metabolomix/msdial/sample_factors.py  build_sample_facets()
-8. └─ metabolomix/plots/group_intensity.py  resolve_groups()
-9. │  └─ metabolomix/msdial/sample_factors.py  expand_sample_specs()
-10. └─ metabolomix/plots/group_intensity.py  resolve_sample_specs()
-11. └─ metabolomix/arf2/reader.py  load_catalog()
-12. └─ [apply_curation] metabolomix/curation/apply.py  flags_for_arf2()
-13. └─ [exclude_auto_likely_wrong] metabolomix/curation/flags.py  alignment_key()
-14. │  └─ metabolomix/curation/suggest.py  latest_review()
-15. └─ [standard_samples] metabolomix/plots/group_intensity.py  standard_only_spots()
-16. └─ metabolomix/plots/group_intensity.py  resolve_items()
-17. └─ metabolomix/arf2/match_results.py  load_spot_annotations()
-18. └─ metabolomix/arf2/match_results.py  name_prefix()
-19. └─ metabolomix/msdial/analysis_params.py  find_param_file()
-20. └─ metabolomix/msdial/analysis_params.py  read_analysis_params()
-21. └─ metabolomix/plots/group_intensity.py  build_group_intensity_payload()
-22. ├─ [output=payload] metabolomix/core/serialization.py  json_payload()
-23. └─ [output=image] metabolomix/plots/group_intensity.py  render_group_intensity_plot()
-24.    └─ metabolomix/plots/render.py  figure_to_png()
-25.    └─ metabolomix/arf/tools.py  _group_intensity_caption()
+5. └─ metabolomix/arf/selection.py  build_selection()
+6. │  └─ metabolomix/arf/reader.py  alignment_feature_row()
+7. │  └─ metabolomix/msdial/sample_factors.py  build_sample_facets()
+8. │  └─ metabolomix/plots/group_intensity.py  resolve_groups()
+9. │  └─ metabolomix/plots/group_intensity.py  resolve_sample_specs()
+10. │  └─ metabolomix/arf2/reader.py  load_catalog()
+11. │  └─ [apply_curation] metabolomix/curation/apply.py  flags_for_arf2()
+12. │  └─ [exclude_auto_likely_wrong] metabolomix/curation/suggest.py  latest_review()
+13. │  └─ [standard_samples] metabolomix/plots/group_intensity.py  standard_only_spots()
+14. │  └─ metabolomix/plots/group_intensity.py  resolve_items()
+15. │  └─ metabolomix/arf2/match_results.py  load_spot_annotations()
+16. └─ metabolomix/msdial/analysis_params.py  find_param_file()
+17. └─ metabolomix/msdial/analysis_params.py  read_analysis_params()
+18. └─ metabolomix/plots/group_intensity.py  build_group_intensity_payload()
+19. ├─ [output=payload] metabolomix/core/serialization.py  json_payload()
+20. └─ [output=image] metabolomix/plots/group_intensity.py  render_group_intensity_plot()
+21.    └─ metabolomix/plots/render.py  figure_to_png()
+22.    └─ metabolomix/arf/tools.py  _group_intensity_caption()
