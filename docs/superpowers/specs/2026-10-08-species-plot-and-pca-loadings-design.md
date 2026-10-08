@@ -23,7 +23,8 @@
 - ツールの総数は変わらない（4 足して 4 消す）。
 - 分子種ごとの図と分子種 PCA は **ARF 経路のみ**（`load_dataset` / `arf_parser` で読んだ `.arf` と兄弟の `.arf2`）。
 - ローディング図は ARF（`arf_parser` / `arf_pca_preprocessed`）・分子種 PCA・mzTab（`dataset_pca`）の 3 つの PCA を描く。
-- 既存の 4 つの保存ツールは**移行期間を置かずに消す**（ユーザー判断）。下流の Use-LLLM は
+- 既存の 4 つの保存ツールは**移行期間を置かずに消す**（ユーザー判断）。消すのは `save_figure` が 4 種類（`pca` / `volcano` /
+  `eic` / `group_intensity`）すべてを今と同じ出力で保存できると確かめた時点（実装の順序として、統合 → 確認 → 削除）。下流の Use-LLLM は
   本体がツール名を見ず `annotations`（`may_write_files`）で PNG を拾っているので、直すのはテストの
   ツール名一覧と README だけ。同じ作業の中で直す（§9）。
 - 描画 payload の形式名は外部契約の旧名規則に従う: `lipidmix.species_intensity.v1`、`lipidmix.pca_loadings.v1`。
