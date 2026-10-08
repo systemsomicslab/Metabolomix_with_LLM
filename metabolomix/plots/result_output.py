@@ -18,7 +18,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 from metabolomix.core.atomic_io import DomainError
-from metabolomix.core.tool_helpers import _pca_scatter_arrays, dataset_pca_plot
+from metabolomix.core.tool_helpers import dataset_pca_plot
+from metabolomix.plots.pca_scores import render_pca_scores
 from metabolomix.plots.volcano import render_volcano_plot
 
 __all__ = ["figure_annotations", "save_result_figure", "select_result"]
@@ -140,17 +141,8 @@ def _pca_plot_payload(result: dict) -> dict:
 
 def _render(result: dict, *, kind: str, title: str | None):
     if kind == "pca":
-        xs, ys, labels, x_label, y_label, plot_title = _pca_scatter_arrays(
-            _pca_plot_payload(result))
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax.scatter(xs, ys, alpha=0.6)
-        for x, y, label in zip(xs, ys, labels):
-            if label:
-                ax.annotate(str(label), (x, y), fontsize=8)
-        ax.set_xlabel(x_label)
-        ax.set_ylabel(y_label)
-        ax.set_title(title or plot_title)
-        return fig
+        # 描画は arf_pca_species（画像返し）と共有する。群があれば色分けされる。
+        return render_pca_scores(_pca_plot_payload(result), title=title)
     if kind == "volcano":
         # 描画は arf_plot_volcano（画像返し）と共有する。色や軸がツール間でずれると
         # 「画面で見た図」と「レポートに貼った図」が別物になるため。

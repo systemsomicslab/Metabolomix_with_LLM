@@ -42,6 +42,7 @@ Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT
 5. │  └─ metabolomix/plots/result_output.py  select_result()
 6. │  └─ metabolomix/tools/reports.py  _save_figure()
 7. │     └─ metabolomix/plots/result_output.py  save_result_figure()
+   │        └─ [kind=pca] metabolomix/plots/pca_scores.py  render_pca_scores()
 8. ├─ [kind=eic] metabolomix/tools/reports.py  _save_eic()
 9. │  └─ metabolomix/plots/eic.py  render_eic_plot()
 10.├─ [kind=group_intensity] metabolomix/tools/reports.py  _save_group_intensity()
