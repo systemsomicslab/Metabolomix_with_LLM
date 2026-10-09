@@ -705,8 +705,10 @@ document.getElementById("submit").addEventListener("click", async () => {
   const r = await submitClient.submit(payload);
   button.disabled = false;
   if (r.status === 200) { afterRecorded(tagsResultText(r.body, "en"), sent); return; }
-  document.getElementById("result").textContent = "";
-  if (r.status !== 401 && r.status !== 0) showError(errorMessage(r.body) || `HTTP ${r.status}`);   // 未送信の変更は残す
+  if (r.status !== 401 && r.status !== 0) {   // 未送信の変更は残す。401/0 は onState("lost") が理由を #result に書いたので消さない
+    document.getElementById("result").textContent = "";
+    showError(errorMessage(r.body) || `HTTP ${r.status}`);
+  }
 });
 
 document.getElementById("finish").addEventListener("click", async () => {

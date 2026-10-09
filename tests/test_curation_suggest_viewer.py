@@ -154,3 +154,12 @@ def test_suggest_extracted_script_is_valid_javascript(tmp_path):
     path.write_text(_script()[len("<script>"):], encoding="utf-8")
     result = subprocess.run([node, "--check", str(path)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_suggest_submit_keeps_the_lost_reason_in_result():
+    script = _script()
+    handler = script[script.index('getElementById("submit").addEventListener'):]
+    after = handler[handler.index("await submitClient.submit("):handler.index("\n});")]
+    guard = after.index("if (r.status !== 401 && r.status !== 0)")
+    clears = [i for i in range(len(after)) if after.startswith('getElementById("result").textContent = ""', i)]
+    assert clears and all(i > guard for i in clears)   # 401/0 では onState("lost") が書いた理由を消さない

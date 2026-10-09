@@ -885,3 +885,13 @@ def test_submit_snapshots_edits_and_disables_the_button_in_flight():
     assert handler.index("new Map(edits)") < handler.index("submitClient.submit(")
     assert "disabled = true" in handler and "disabled = false" in handler
     assert "clearSent(edits, sent)" in script[script.index("function afterRecorded"):]
+
+
+def test_submit_keeps_the_lost_reason_in_result():
+    script = _script()
+    handler = script[script.index('getElementById("submit").addEventListener'):]
+    after = handler[handler.index("await submitClient.submit("):handler.index("\n});")]
+    guard = after.index("if (r.status !== 401 && r.status !== 0)")
+    assert 'getElementById("result").textContent = ""' in after
+    for m in re.finditer(re.escape('getElementById("result").textContent = ""'), after):
+        assert m.start() > guard   # 401/0 では onState("lost") が書いた理由を消さない

@@ -326,9 +326,10 @@ document.getElementById("submit").addEventListener("click", async () => {
   const r = await submitClient.submit(payload);
   button.disabled = false;
   if (r.status === 200) { afterRecorded(tagsResultText(r.body, "ja"), sent); return; }
-  document.getElementById("result").textContent = "";
-  if (r.status !== 401 && r.status !== 0)          // 未送信の選択は残す
+  if (r.status !== 401 && r.status !== 0) {        // 未送信の選択は残す。401/0 は onState("lost") が理由を #result に書いたので消さない
+    document.getElementById("result").textContent = "";
     document.getElementById("status").textContent = "エラー: " + String((r.body && r.body.message) || `HTTP ${r.status}`).slice(0, 300);
+  }
 });
 
 document.getElementById("finish").addEventListener("click", async () => {
