@@ -766,3 +766,23 @@ def test_spot_cards_have_a_confirmed_checkbox_in_the_top_right():
     card = card[:card.index("\nfunction setFlag")]
     assert 'type: "checkbox"' in card and "Confirmed" in card and "flagControls" in card
     assert '<option value="confirmed">Confirmed</option>' in html
+
+
+# --- ビューア: MS1 同位体の相対強度の横に絶対強度（ユーザー決定 2026-10-09）---
+
+def test_isotope_labels_show_absolute_intensity_beside_the_relative(tmp_path):
+    result = _run_block(tmp_path, "isotope labels", "",
+                        """[formatAbsolute(5340), formatAbsolute(12345), formatAbsolute(63.4),
+                            formatAbsolute(null), formatAbsolute(1.25e6),
+                            isotopeLabel(26.2, 12345, 27.1), isotopeLabel(null, null, 5), isotopeLabel(100, null, 100)]""")
+    assert result == ["5.3e3", "1.2e4", "63", "–", "1.3e6",
+                      {"measured": "26% (1.2e4)", "theory": "27%"},
+                      {"measured": "–", "theory": "5%"},
+                      {"measured": "100%", "theory": "100%"}]
+
+
+def test_isotope_panel_wraps_the_absolute_value_when_it_does_not_fit():
+    script = _script()
+    draw = script[script.index("function drawIsotopes"):]
+    draw = draw[:draw.index("\n}")]
+    assert "isotopeLabel(" in draw and "measureText" in draw

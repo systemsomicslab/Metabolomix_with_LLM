@@ -80,8 +80,9 @@ mirror 5.5 MB）になったため導入した上限。
 - `flag_cleared`: このアラインメントで最新のフラグ行が `clear`（人が明示的に取り消した）。
 
 - `isotopes`: MS1 の同位体パターン（ビューアの MS1 パネル用。判定には使わない）。
-  `measured` は `.arf2` Key 53 `IsotopicPeaks`（代表試料の M, M+1, M+2）の `[m/z, 相対強度 %]`
-  （M = 100）。MS-DIAL が書く m/z は単同位体 + 1.00467·k の計算値で、実測の質量ではない。
+  `measured` は `.arf2` Key 53 `IsotopicPeaks`（代表試料の M, M+1, M+2）の `[m/z, 相対強度 %, 絶対強度]`
+  （M = 100。絶対強度は要素の Key 4 `AbsoluteAbundance` を整数に丸めたもの、無ければ `null`）。
+  ビューアは棒の上に「実測 % (絶対強度) / 理論 %」を出す（絶対強度は 1000 以上で有効 2 桁の指数表記）。MS-DIAL が書く m/z は単同位体 + 1.00467·k の計算値で、実測の質量ではない。
   `theoretical` は `{"relative": [M, M+1, M+2 の %], "basis": ...}` で、組成式（`Formula`）に
   アダクトの原子を足して整数質量の分解能で畳み込んだもの（`curation/isotope.py`）。
   `basis` は `formula+adduct`、アダクトが読めなければ中性の組成式だけの `formula`。

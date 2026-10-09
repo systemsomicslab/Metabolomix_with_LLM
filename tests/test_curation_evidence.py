@@ -61,6 +61,7 @@ def test_collect_attaches_the_measured_and_theoretical_ms1_isotopes(dataset):
                               th=judge.resolve_thresholds(None))
     iso = {e["spot_id"]: e for e in evs}[0]["isotopes"]
     assert [p[1] for p in iso["measured"]] == [100.0, 46.0, 12.0]
+    assert [p[2] for p in iso["measured"]] == [10000, 4600, 1200]
     assert iso["measured"][0][0] == pytest.approx(760.5851, abs=1e-4)
     assert iso["theoretical"]["basis"] == "formula+adduct"
     assert iso["theoretical"]["relative"][1] == pytest.approx(47.1, abs=0.5)
