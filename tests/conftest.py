@@ -8,6 +8,7 @@
 存在しないパスへ向ける。使うテストは monkeypatch.setenv で明示的に置く
 （設定ファイルは tmp に書いて `LIPIDMIX_CONFIG` で指す）。
 """
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,3 +25,13 @@ def _isolate_external_asset_settings(monkeypatch):
     for name in SETTINGS.values():
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv(CONFIG_ENV, str(_NO_CONFIG))
+
+
+@pytest.fixture(autouse=True)
+def _stop_curation_submit_server():
+    """curation_review / curation_suggest はビューアの受け口（daemon スレッドの HTTP サーバ）を
+    立てる。テストをまたいで登録と待受けを残さない。未 import なら何もしない（重い import を避ける）。"""
+    yield
+    module = sys.modules.get("metabolomix.curation.submit_server")
+    if module is not None:
+        module.reset()
