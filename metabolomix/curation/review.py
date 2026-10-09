@@ -125,13 +125,13 @@ def _adduct_isomer_pool(arf2_path) -> dict[int, dict]:
     return pool
 
 
-def save_review(review: dict) -> dict:
+def save_review(review: dict, submit_endpoint: dict | None = None) -> dict:
     directory = flags.curation_dir(review["arf2_path"])
     directory.mkdir(parents=True, exist_ok=True)
     json_path = directory / f"review-{review['review_id']}.json"
     html_path = directory / f"review-{review['review_id']}.html"
     atomic_write_json(json_path, review)
-    html_path.write_text(viewer.render_html(review), encoding="utf-8")
+    html_path.write_text(viewer.render_html(review, submit_endpoint), encoding="utf-8")
     return {"json": json_path, "html": html_path}
 
 

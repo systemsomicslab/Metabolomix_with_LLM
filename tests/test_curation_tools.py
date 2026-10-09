@@ -435,3 +435,45 @@ def test_review_marks_spots_confirmed_from_the_tags_file_and_the_records(ready):
     from metabolomix.curation import review as review_mod
     spots = {s["spot_id"]: s for s in review_mod.load_review(ready["arf2"], again)["spots"]}
     assert spots[0]["confirmed"] is True and spots[1]["confirmed"] is False
+
+
+import re
+from pathlib import Path
+
+from metabolomix.curation import submit_server
+
+
+def _embedded_endpoint(html_path):
+    html = Path(html_path).read_text(encoding="utf-8")
+    match = re.search(r"const SUBMIT_ENDPOINT = (\{[^;]*\});", html)
+    assert match, "SUBMIT_ENDPOINT が埋め込まれていない"
+    return json.loads(match.group(1))
+
+
+def test_review_registers_a_submit_endpoint_and_embeds_it_only_in_the_html(ready):
+    body = json.loads(curation_tools.curation_review())
+    assert body["submit"] == {"via": "viewer", "idle_timeout_min": 30}
+    endpoint = _embedded_endpoint(body["html_path"])
+    assert set(endpoint) == {"port", "token"}
+    assert endpoint["port"] == submit_server.current_port()
+    json_text = Path(body["html_path"]).with_suffix(".json").read_text(encoding="utf-8")
+    assert endpoint["token"] not in json_text
+    assert endpoint["token"] not in json.dumps(body)          # LLM の文脈にも出さない
+
+
+def test_suggest_registers_its_own_token_on_the_shared_endpoint(suggest_env):
+    arf2 = str(suggest_env["arf2"])
+    review_ep = _embedded_endpoint(json.loads(curation_tools.curation_review(file_path=arf2))["html_path"])
+    out = json.loads(curation_tools.curation_suggest(file_path=arf2))
+    assert out["submit"]["via"] == "viewer"
+    suggest_ep = _embedded_endpoint(out["html_path"])
+    assert suggest_ep["port"] == review_ep["port"] and suggest_ep["token"] != review_ep["token"]
+
+
+def test_review_falls_back_to_copy_when_the_endpoint_cannot_start(ready, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise OSError("no port")
+    monkeypatch.setattr(submit_server, "register", refuse)
+    body = json.loads(curation_tools.curation_review())
+    assert body["submit"]["via"] == "copy" and "no port" in body["submit"]["reason"]
+    assert "const SUBMIT_ENDPOINT = null;" in Path(body["html_path"]).read_text(encoding="utf-8")

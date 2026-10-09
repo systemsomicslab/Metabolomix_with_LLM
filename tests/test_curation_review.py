@@ -102,6 +102,19 @@ def test_app_template_has_no_embedded_data():
     assert "const EMBEDDED = null" in html
 
 
+def test_app_template_has_no_submit_endpoint():
+    assert "const SUBMIT_ENDPOINT = null;" in viewer.render_html(None)
+    assert "const SUBMIT_ENDPOINT = null;" in viewer.render_suggest_html(None)
+
+
+def test_submit_endpoint_is_embedded_before_the_data(built):
+    _, result = built
+    html = viewer.render_html({**result, "warnings": ["/*__SUBMIT_ENDPOINT__*/null"]},
+                              {"port": 5, "token": "t", "idle_timeout_min": 30})
+    assert 'const SUBMIT_ENDPOINT = {"port":5,"token":"t"};' in html
+    assert "/*__SUBMIT_ENDPOINT__*/null" in html            # データの中の同じ文字列は書き換えない
+
+
 def test_template_avoids_horizontal_overflow_at_phone_width():
     # 実ファイル名にはスペースがなく、header h1 が縮められないと sticky header ごと
     # 横スクロールが出る（binding requirement: no horizontal page scroll at phone

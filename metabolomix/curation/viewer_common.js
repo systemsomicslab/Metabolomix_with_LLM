@@ -1,3 +1,6 @@
+// ビューアの受け口（curation_review / curation_suggest が立てる 127.0.0.1 の HTTP）。MCP Apps と
+// 受け口を立てられなかったときは null（Copy / Send だけ）。spec 2026-10-09。
+const SUBMIT_ENDPOINT = /*__SUBMIT_ENDPOINT__*/null;
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const el = (tag, attrs = {}, text) => { const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
