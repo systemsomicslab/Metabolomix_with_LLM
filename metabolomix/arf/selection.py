@@ -72,8 +72,13 @@ def build_selection(arf_state, arf2_path, *, items, groups, low_reliability_samp
         if review is None:
             caveats.append("このアラインメントの curation_review のレビューが無いため、自動判定 likely_wrong は除いていません。")
         else:
+            # 注釈を確かめたスポット（confirmed の記録・_tags.xml の Confirmed）には自動判定を当てない
+            effective = curation_flags.FlagStore(curation_flags.curation_dir(arf2_path)).effective(
+                curation_flags.alignment_key(arf2_path)["alignment_sha256"])
+            confirmed = curation_apply.confirmed_spots(arf2_path, effective)
             curation["auto_likely_wrong"] = {
-                int(s["spot_id"]) for s in review["spots"] if s.get("verdict") == "likely_wrong"}
+                int(s["spot_id"]) for s in review["spots"]
+                if s.get("verdict") == "likely_wrong" and int(s["spot_id"]) not in confirmed}
 
     standard = set()
     if standard_samples:

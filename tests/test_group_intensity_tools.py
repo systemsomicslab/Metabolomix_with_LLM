@@ -238,3 +238,15 @@ def test_save_writes_png_and_svg(loaded, tmp_path, monkeypatch):
     pngs = list(figures.glob("*_group_intensity.png"))
     assert len(pngs) == 1 and pngs[0].with_suffix(".svg").is_file()
     assert "group_intensity.png" in msg
+
+
+def test_auto_likely_wrong_keeps_confirmed_spots(loaded):
+    from metabolomix.msdial import tags as msdial_tags
+    arf2 = loaded["arf2"]
+    sha = curation_flags.alignment_key(arf2)["alignment_sha256"]
+    _write_review(arf2, "cr-20261006-120000-aaaa", sha, [{"spot_id": 1, "verdict": "likely_wrong"}])
+    msdial_tags.update_alignment_tag(msdial_tags.alignment_tag_path(arf2),
+                                     tag_id=msdial_tags.CONFIRMED_TAG_ID, add=[1], remove=[])
+    p = _payload(items=["PG"], groups=["ctrl"], exclude_auto_likely_wrong=True)
+    assert 1 in [s["spot_id"] for s in p["items"][0]["spots"]]
+    assert p["excluded"]["auto_likely_wrong"] == []

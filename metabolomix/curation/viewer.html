@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -27,6 +27,10 @@ main { padding:12px 16px 40px; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px; }
 .card.flag-wrong { outline:2px solid var(--wrong); }
 .card.flag-suspect { outline:2px solid var(--suspect); }
+.card.flag-confirmed { outline:2px solid var(--ok); }
+#grid .card { position:relative; }
+#grid .card h2 { padding-right:96px; }
+.card .confirm { position:absolute; top:8px; right:10px; font-size:12px; display:flex; gap:4px; align-items:center; }
 /* 自動判別 likely_wrong は赤の破線（未確認）。人が「間違い」を付けると実線になる。 */
 .card.verdict-likely_wrong { border:2px dashed var(--wrong); }
 .card.verdict-likely_wrong.flag-wrong { border-style:solid; }
@@ -46,17 +50,23 @@ textarea { width:100%; height:80px; font:12px monospace; }
 #zoom::backdrop { background:rgba(0,0,0,.5); }
 #zoom .zoom-head { display:flex; gap:8px; align-items:flex-start; justify-content:space-between; }
 #zoom h2 { font-size:15px; margin:0; min-width:0; overflow-wrap:anywhere; }
-#zoom canvas { height:min(280px, 35vh); cursor:default; }
+#zoom canvas { height:min(280px, 30vh); cursor:default; }
+.exclude { display:inline-flex; gap:8px; align-items:center; flex-wrap:wrap; }
+#trends .card { cursor:pointer; }
+#trends .card.trend-selected { box-shadow:0 0 0 3px var(--meas); }
+#trends .plot { width:100%; height:200px; margin-top:6px; }
 </style>
 </head>
 <body>
 <header>
   <h1 id="title">Alignment curation</h1>
-  <label>クラス <select id="f-class"><option value="">すべて</option></select></label>
-  <label>判定 <select id="f-verdict"><option value="">すべて</option><option value="flagged">suspect 以上</option></select></label>
-  <label>フラグ <select id="f-flag"><option value="">すべて</option><option value="set">付けたもの</option></select></label>
-  <button id="send" class="primary" hidden>送信</button>
-  <button id="copy">送信用テキストをコピー</button>
+  <label>Class <select id="f-class"><option value="">All</option></select></label>
+  <label>Verdict <select id="f-verdict"><option value="">All</option><option value="ok">ok</option><option value="suspect">suspect</option><option value="likely_wrong">likely_wrong</option><option value="flagged">suspect or worse</option></select></label>
+  <label>Flag <select id="f-flag"><option value="">All</option><option value="correct">Correct</option><option value="confirmed">Confirmed</option><option value="suspect">Suspect</option><option value="wrong">Wrong</option><option value="set">Flagged</option></select></label>
+  <span class="exclude">Exclude <label><input type="checkbox" id="x-low_score"> low score</label>
+    <label><input type="checkbox" id="x-msms_absent"> no MS/MS</label></span>
+  <button id="send" class="primary" hidden>Send</button>
+  <button id="copy">Copy submission text</button>
   <span id="status"></span>
 </header>
 <main>
@@ -66,9 +76,10 @@ textarea { width:100%; height:80px; font:12px monospace; }
   <textarea id="fallback" hidden readonly></textarea>
 </main>
 <dialog id="zoom" aria-labelledby="zoom-title">
-  <div class="zoom-head"><h2 id="zoom-title"></h2><button id="zoom-close" type="button">閉じる（Esc）</button></div>
+  <div class="zoom-head"><h2 id="zoom-title"></h2><button id="zoom-close" type="button">Close (Esc)</button></div>
   <div class="meta" id="zoom-meta"></div>
   <canvas id="zoom-eic"></canvas>
+  <canvas id="zoom-ms1"></canvas>
   <canvas id="zoom-mirror"></canvas>
 </dialog>
 <script>
@@ -78,23 +89,83 @@ let REVIEW = EMBEDDED;
 const edits = new Map();   // spot_id -> {flag, note}
 
 // --- presets (pure) ---
-// 自動判別 likely_wrong は「間違い」を初期選択にする（未送信の変更に入れる）。記録済みのフラグが
-// あるもの・人が明示的に取り消したもの（flag_cleared）には掛けない。メモ欄の既定値は記録済みの
-// メモ、無ければ判定根拠（auto_note）。
-function isPresetTarget(spot) { return spot.verdict === "likely_wrong" && !spot.flag && !spot.flag_cleared; }
-function presetEdit(spot) { return {flag: "wrong", note: spot.auto_note || "", preset: true}; }
-function defaultNote(spot) { return spot.flag_note || spot.auto_note || ""; }
+// 自動判別 likely_wrong・照合スコア不足（low_score）・MS/MS なし（msms_absent）は「間違い」を
+// 初期選択にする（未送信の変更に入れる。ユーザー決定 2026-09-29 / 2026-10-09）。記録済みの
+// フラグがあるもの・人が明示的に取り消したもの（flag_cleared）には掛けない。メモ欄の既定値は
+// 記録済みのメモ、無ければ判定根拠（auto_note。MS/MS なしは判定理由ではなく情報なので書き足す）。
+function presetCause(spot) {
+  if (spot.verdict === "likely_wrong") return "likely_wrong";
+  if ((spot.reasons || []).some(r => r.split(":")[0] === "low_score")) return "low_score";
+  if ((spot.info || []).includes("msms_absent")) return "msms_absent";
+  return null;
+}
+function isPresetTarget(spot) { return !!presetCause(spot) && !spot.flag && !spot.flag_cleared && !spot.confirmed; }
+function presetNote(spot) {
+  const parts = spot.auto_note ? [spot.auto_note] : [];
+  if ((spot.info || []).includes("msms_absent")) parts.push(parts.length ? "no MS/MS" : "Auto: no MS/MS");
+  return parts.join(" / ");
+}
+function presetEdit(spot) { return {flag: "wrong", note: presetNote(spot), preset: true}; }
+function defaultNote(spot) { return spot.flag_note || presetNote(spot); }
 // --- end presets ---
 
-function currentFlag(spot) { return edits.has(spot.spot_id) ? edits.get(spot.spot_id).flag : (spot.flag || ""); }
+// --- status filters (pure) ---
+// 判定（自動）は ok / suspect / likely_wrong を個別に、"flagged" は suspect 以上。
+// フラグ（人）は Correct（無印か confirmed）/ Confirmed / Suspect / Wrong を個別に、"set" は Suspect か Wrong。
+function matchesVerdictFilter(spot, value) {
+  if (!value) return true;
+  if (value === "flagged") return spot.verdict !== "ok";
+  return spot.verdict === value;
+}
+function matchesFlagFilter(flag, value) {
+  if (!value) return true;
+  if (value === "set") return flag === "suspect" || flag === "wrong";
+  if (value === "correct") return !flag || flag === "confirmed";
+  return flag === value;
+}
+// --- end status filters ---
+
+// --- exclusion (pure) ---
+// 絞り込みとは別の「除外」。チェックした項目に当たるスポットを一覧からも傾向の点からも隠す。
+// low score = 理由 low_score、MS/MS なし = 情報 msms_absent（「間違い」の初期選択と同じ定義）。
+// 隠しても未送信の変更（初期選択の「間違い」）は残り、送信される。
+const EXCLUSION_ITEMS = ["low_score", "msms_absent"];
+function exclusionCauses(spot) {
+  const causes = [];
+  if ((spot.reasons || []).some(r => r.split(":")[0] === "low_score")) causes.push("low_score");
+  if ((spot.info || []).includes("msms_absent")) causes.push("msms_absent");
+  return causes;
+}
+function isExcluded(spot, excluded) { return exclusionCauses(spot).some(c => excluded.includes(c)); }
+// --- end exclusion ---
+
+// --- confirmed (pure) ---
+// Confirmed（カード右上のチェック）は判断の 1 つで、Suspect / Wrong と排他（ユーザー決定 2026-10-09）。
+// 元の状態は記録のフラグ、無ければ spot.confirmed（_tags.xml の Confirmed。GUI で付けたものも）。
+// 外すと Correct（送信では clear。Confirmed タグも外れる）。
+function originalFlag(spot) { return spot.flag || (spot.confirmed ? "confirmed" : ""); }
+function flagControls(flag) {
+  return {radio: flag === "suspect" || flag === "wrong" ? flag : "", confirmed: flag === "confirmed"};
+}
+// --- end confirmed ---
+
+function currentFlag(spot) { return edits.has(spot.spot_id) ? edits.get(spot.spot_id).flag : originalFlag(spot); }
 
 /*__VIEWER_COMMON__*/
 
+// 傾向カードの軸は x = RT、y = m/z（ユーザー決定 2026-10-09）。範囲はクラスの全点で決め、
+// 絞り込みで点が減っても軸は動かさない（見比べやすさのため）。直線は RT = slope·m/z + intercept。
+function trendExtent(ontology) {
+  const all = REVIEW.spots.filter(s => s.ontology === ontology && s.composition);
+  if (!all.length) return null;
+  const xs = all.map(s => s.rt), ys = all.map(s => s.mz);
+  return {x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys)};
+}
+
 function drawTrend(prepare, ontology, spots) {
   const {ctx, w, h} = prepare(); const pts = spots.filter(s => s.ontology === ontology && s.composition);
-  if (!pts.length) return;
-  const x0 = Math.min(...pts.map(s => s.mz)), x1 = Math.max(...pts.map(s => s.mz));
-  const y0 = Math.min(...pts.map(s => s.rt)), y1 = Math.max(...pts.map(s => s.rt));
+  const ext = trendExtent(ontology); prepare.canvas._points = []; if (!ext) return;
+  const {x0, x1, y0, y1} = ext;
   const px = x => 24 + (x - x0) / ((x1 - x0) || 1) * (w - 32), py = y => h - 14 - (y - y0) / ((y1 - y0) || 1) * (h - 24);
   const palette = ["#2471a3", "#c0392b", "#27ae60", "#8e44ad", "#d35400", "#16a085", "#7f8c8d"];
   const groups = ((REVIEW.trend.groups || {})[ontology]) || {};
@@ -108,16 +179,135 @@ function drawTrend(prepare, ontology, spots) {
   for (const [db, g] of Object.entries(groups)) {
     if (g.slope === null) continue; const color = palette[Number(db) % palette.length];
     ctx.strokeStyle = color; ctx.globalAlpha = g.r2 !== null && g.r2 < 0.7 ? 0.35 : 0.9;
-    ctx.beginPath(); ctx.moveTo(px(x0), py(g.slope * x0 + g.intercept)); ctx.lineTo(px(x1), py(g.slope * x1 + g.intercept)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px(g.slope * y0 + g.intercept), py(y0)); ctx.lineTo(px(g.slope * y1 + g.intercept), py(y1)); ctx.stroke();
   }
   ctx.restore();
   ctx.globalAlpha = 1;
-  prepare.canvas._points = pts.map(s => ({x: px(s.mz), y: py(s.rt), spot_id: s.spot_id}));
+  prepare.canvas._points = pts.map(s => ({x: px(s.rt), y: py(s.mz), spot_id: s.spot_id}));
   for (const s of pts) { const db = s.composition[1]; ctx.fillStyle = palette[db % palette.length];
-    ctx.beginPath(); ctx.arc(px(s.mz), py(s.rt), s.trend && s.trend.outlier ? 5 : 3, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(px(s.rt), py(s.mz), s.trend && s.trend.outlier ? 5 : 3, 0, 7); ctx.fill();
     if (s.trend && s.trend.outlier) { ctx.strokeStyle = css("--wrong"); ctx.stroke(); } }
   ctx.fillStyle = css("--muted"); ctx.font = "10px system-ui";
-  ctx.fillText("m/z →", w - 40, h - 2); ctx.fillText("RT", 2, 10);
+  ctx.fillText("RT →", w - 34, h - 2); ctx.fillText("m/z", 2, 10);
+}
+
+// --- trend selection (pure) ---
+// 傾向カードのクリックでクラスの絞り込みを切り替える。いま選ばれているクラス（下位項目
+// "<クラス>\tlikely_wrong" も同じクラスとみなす）をもう一度押すと解除。
+function classOfFilter(value) {
+  return value && value.endsWith("\tlikely_wrong") ? value.slice(0, -"\tlikely_wrong".length) : (value || "");
+}
+function nextClassFilter(current, ontology) { return classOfFilter(current) === ontology ? "" : ontology; }
+// --- end trend selection ---
+
+// --- trend click (pure) ---
+// 傾向カードのクリックでクラスを切り替えてよいか。点のクリック（plotly_click）の直後と、
+// 同じ押下から重ねて届く click（Plotly は覆いの後に click を再送する）は切り替えない。
+const CARD_CLICK_GUARD_MS = 400;
+function cardClickToggles(now, guard) {
+  return now >= guard.suppressUntil && now - guard.lastToggleAt >= CARD_CLICK_GUARD_MS;
+}
+// --- end trend click ---
+
+// 点のクリック・hover を点の上（半径 + 数 px）に限る。Plotly 既定の 20 px では密な図のどこを
+// 押しても近くの点が拾われ、カードのクリックが別スポットへの移動になった（実地確認 2026-10-09）。
+const POINT_HIT_PX = 6;
+
+// Plotly は cdnjs から読む（固定版）。オフラインや MCP Apps の CSP で届かなければ null に
+// 解決し、従来の canvas 描画（drawTrend）に落とす。
+const PLOTLY_URL = "https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.35.3/plotly.min.js";
+const PLOTLY_TIMEOUT_MS = 10000;
+let plotlyPromise = null;
+function plotlyReady() {
+  if (!plotlyPromise) plotlyPromise = new Promise(resolve => {
+    if (window.Plotly) { resolve(window.Plotly); return; }
+    const script = document.createElement("script");
+    const timer = setTimeout(() => resolve(null), PLOTLY_TIMEOUT_MS);
+    script.src = PLOTLY_URL; script.async = true;
+    script.onload = () => { clearTimeout(timer); resolve(window.Plotly || null); };
+    script.onerror = () => { clearTimeout(timer); resolve(null); };
+    document.head.appendChild(script);
+  });
+  return plotlyPromise;
+}
+
+const TREND_PALETTE = ["#2471a3", "#c0392b", "#27ae60", "#8e44ad", "#d35400", "#16a085", "#7f8c8d"];
+
+function trendTraces(ontology, spots) {
+  const ext = trendExtent(ontology); if (!ext) return {traces: [], ext: null};
+  const {y0, y1} = ext;
+  const groups = ((REVIEW.trend.groups || {})[ontology]) || {};
+  const traces = [];
+  // 回帰直線（DB ごと。RT = slope·m/z + intercept を x = RT, y = m/z に描く）。当てはまりの悪い群は薄く。
+  for (const [db, g] of Object.entries(groups)) {
+    if (g.slope === null) continue;
+    traces.push({x: [g.slope * y0 + g.intercept, g.slope * y1 + g.intercept], y: [y0, y1], mode: "lines",
+      line: {color: TREND_PALETTE[Number(db) % TREND_PALETTE.length], width: 1.5},
+      opacity: g.r2 !== null && g.r2 < 0.7 ? 0.35 : 0.9, hoverinfo: "skip", showlegend: false});
+  }
+  const byDb = new Map();
+  for (const s of spots.filter(s => s.ontology === ontology && s.composition)) {
+    const db = s.composition[1]; if (!byDb.has(db)) byDb.set(db, []); byDb.get(db).push(s);
+  }
+  const wrong = css("--wrong");
+  for (const [db, members] of [...byDb.entries()].sort((a, b) => a[0] - b[0])) {
+    const outlier = members.map(s => !!(s.trend && s.trend.outlier));
+    traces.push({x: members.map(s => s.rt), y: members.map(s => s.mz), mode: "markers", type: "scatter",
+      name: `DB ${db}`, customdata: members.map(s => [s.spot_id, s.name || ""]),
+      hovertemplate: `#%{customdata[0]} %{customdata[1]}<br>DB ${db} / RT %{x:.2f} / m/z %{y:.4f}<extra></extra>`,
+      marker: {color: TREND_PALETTE[db % TREND_PALETTE.length], size: outlier.map(o => o ? 10 : 6),
+               line: {color: outlier.map(o => o ? wrong : "rgba(0,0,0,0)"), width: 2}}});
+  }
+  return {traces, ext};
+}
+
+function plotTrend(Plotly, box, ontology, spots, onPoint) {
+  const {traces, ext} = trendTraces(ontology, spots); if (!ext) return;
+  const {x0, x1, y0, y1} = ext;
+  const padX = (x1 - x0) * 0.04 || 0.1, padY = (y1 - y0) * 0.08 || 1;
+  const axis = {gridcolor: css("--line"), zeroline: false, tickfont: {size: 10}};
+  const layout = {
+    margin: {l: 48, r: 8, t: 4, b: 30}, paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+    font: {color: css("--fg"), size: 11}, dragmode: false, hovermode: "closest", hoverdistance: POINT_HIT_PX,
+    showlegend: false,   // DB は色と hover で示す（凡例は DB が多いクラスで描画域を潰す）
+    xaxis: {...axis, title: {text: "RT (min)", font: {size: 10}, standoff: 4}, range: [x0 - padX, x1 + padX]},
+    yaxis: {...axis, title: {text: "m/z", font: {size: 10}, standoff: 4}, range: [y0 - padY, y1 + padY]},
+  };
+  if (box._plotted) { Plotly.react(box, traces, layout); return; }   // 絞り込みの変更: 点だけ差し替える
+  Plotly.newPlot(box, traces, layout, {displayModeBar: false, responsive: true});
+  box._plotted = true;
+  box.on("plotly_click", event => {
+    const p = event && event.points && event.points.find(q => q.customdata);
+    if (p) onPoint(p.customdata[0]);
+  });
+}
+
+// MS1: 代表試料の同位体（.arf2 の IsotopicPeaks）を実測、組成式＋アダクトからの計算値を理論として
+// M, M+1, M+2 ごとに横並びの棒で描く（M = 100 %）。
+function drawIsotopes(prepare, spot) {
+  const {ctx, w, h} = prepare(); const iso = spot.isotopes || {};
+  const measured = iso.measured || [], theory = (iso.theoretical || {}).relative || [];
+  ctx.font = "10px system-ui"; ctx.fillStyle = css("--muted");
+  if (!measured.length && !theory.length) { ctx.font = "12px system-ui"; ctx.fillText("No MS1 isotopes", 8, h / 2); return; }
+  const n = Math.max(measured.length, theory.length), left = 26, top = 26, bottom = h - 14;
+  const slot = (w - left - 4) / n, bar = Math.min(18, slot / 3);
+  const py = v => bottom - Math.min(v, 100) / 100 * (bottom - top);
+  ctx.strokeStyle = css("--line"); ctx.beginPath(); ctx.moveTo(left, top); ctx.lineTo(left, bottom); ctx.lineTo(w, bottom); ctx.stroke();
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (const pct of [0, 50, 100]) ctx.fillText(String(pct), left - 4, py(pct));
+  ctx.textAlign = "center";
+  for (let k = 0; k < n; k++) {
+    const cx = left + slot * (k + 0.5);
+    const m = measured[k] ? measured[k][1] : null, t = theory[k] ?? null;
+    if (m !== null) { ctx.fillStyle = css("--meas"); ctx.fillRect(cx - bar - 1, py(m), bar, bottom - py(m)); }
+    if (t !== null) { ctx.strokeStyle = css("--ref"); ctx.lineWidth = 1.5; ctx.strokeRect(cx + 1, py(t), bar, bottom - py(t)); ctx.lineWidth = 1; }
+    ctx.fillStyle = css("--fg"); ctx.textBaseline = "bottom";
+    ctx.fillText(`${m === null ? "–" : m.toFixed(0)} / ${t === null ? "–" : t.toFixed(0)}`, cx, Math.min(py(m ?? 0), py(t ?? 0)) - 1);
+    ctx.fillStyle = css("--muted"); ctx.textBaseline = "top";
+    ctx.fillText(k ? `M+${k}` : "M" + (measured[0] ? ` ${measured[0][0].toFixed(4)}` : ""), cx, bottom + 2);
+  }
+  ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillStyle = css("--muted");
+  ctx.fillText("MS1 isotopes %  ■ measured  □ theory" + (iso.theoretical && iso.theoretical.basis === "formula" ? " (neutral formula)" : ""), left + 4, 0);
 }
 
 function spotCard(spot) {
@@ -133,36 +323,52 @@ function spotCard(spot) {
   if (spot.reasons.length || spot.info.length)
     card.appendChild(el("div", {class: "meta"}, [...spot.reasons, ...spot.info.map(r => "(" + r + ")")].join(", ")));
   if (spot.decision) card.appendChild(el("div", {class: "meta"}, spot.decision.flag === "assign"
-    ? `記録済み: 候補を採用（${spot.decision.name}）` : `記録済み: #${spot.decision.of} の別イオン`));
-  const eic = canvasFor(card), mirror = canvasFor(card);
-  for (const prepare of [eic, mirror]) prepare.canvas.addEventListener("click", () => openZoom(spot));
+    ? `Recorded: candidate adopted (${spot.decision.name})` : `Recorded: another ion of #${spot.decision.of}`));
+  const eic = canvasFor(card), ms1 = canvasFor(card), mirror = canvasFor(card);
+  for (const prepare of [eic, ms1, mirror]) prepare.canvas.addEventListener("click", () => openZoom(spot));
   const flagsRow = el("div", {class: "flags"});
-  for (const [value, label] of [["", "なし"], ["suspect", "疑わしい"], ["wrong", "間違い"]]) {
+  const radios = {};
+  const confirmId = `c-${spot.spot_id}`;
+  const confirmBox = el("input", {type: "checkbox", id: confirmId});
+  const confirmLabel = el("label", {class: "confirm", for: confirmId, title: "Mark the annotation as confirmed"});
+  confirmLabel.append(confirmBox, "Confirmed"); card.appendChild(confirmLabel);
+  const syncControls = () => {
+    const c = flagControls(currentFlag(spot));
+    for (const [value, radio] of Object.entries(radios)) radio.checked = c.radio === value;
+    confirmBox.checked = c.confirmed;
+  };
+  confirmBox.addEventListener("change", () => {
+    // 自動の判定根拠（Wrong の理由）を Confirmed のメモに残さない。人が書き換えたメモは残す。
+    if (confirmBox.checked && note.value === presetNote(spot)) note.value = "";
+    setFlag(spot, confirmBox.checked ? "confirmed" : "", note.value, card); syncControls();
+  });
+  for (const [value, label] of [["", "Correct"], ["suspect", "Suspect"], ["wrong", "Wrong"]]) {
     const id = `f-${spot.spot_id}-${value || "none"}`;
     const radio = el("input", {type: "radio", name: "flag-" + spot.spot_id, id, value});
-    radio.checked = currentFlag(spot) === value;
-    radio.addEventListener("change", () => setFlag(spot, value, note.value, card));
+    radios[value] = radio;
+    radio.addEventListener("change", () => { setFlag(spot, value, note.value, card); syncControls(); });
     const lab = el("label", {for: id}); lab.append(radio, " " + label); flagsRow.appendChild(lab);
   }
-  const note = el("input", {type: "text", placeholder: "メモ"});
+  const note = el("input", {type: "text", placeholder: "Note"});
   note.value = edits.has(spot.spot_id) ? (edits.get(spot.spot_id).note || "") : defaultNote(spot);
   note.addEventListener("change", () => setFlag(spot, currentFlag(spot), note.value, card));
-  flagsRow.appendChild(note); card.appendChild(flagsRow);
+  flagsRow.appendChild(note); card.appendChild(flagsRow); syncControls();
   // プリセットのまま（未送信・人が触っていない）は破線のまま。送信して記録されるか、人が選び直すと実線。
   if ((edits.get(spot.spot_id) || {}).preset) card.classList.add("flag-preset");
   else card.classList.toggle("flag-" + currentFlag(spot), !!currentFlag(spot));
-  card._draw = () => { drawEic(eic, spot); drawMirror(mirror, spot); };
+  card._draw = () => { drawEic(eic, spot); drawIsotopes(ms1, spot); drawMirror(mirror, spot); };
   return card;
 }
 
 function setFlag(spot, flag, note, card) {
-  const original = spot.flag || "";
-  // プリセット対象を「なし」に戻したら明示の取消として送る（次のレビューで掛け直さないため）。
-  const explicitClear = flag === "" && isPresetTarget(spot);
+  const original = originalFlag(spot);
+  // プリセット対象を Correct に戻したら明示の取消として送る（次のレビューで掛け直さないため）。
+  // GUI で付いていた Confirmed（記録なし）を外すときも clear を送ってタグを外す。
+  const explicitClear = flag === "" && (isPresetTarget(spot) || original !== "");
   if (!explicitClear && flag === original && (flag === "" || (note || "") === (spot.flag_note || "")))
     edits.delete(spot.spot_id);
   else edits.set(spot.spot_id, {flag, note});
-  card.classList.remove("flag-wrong", "flag-suspect", "flag-preset"); if (flag) card.classList.add("flag-" + flag);
+  card.classList.remove("flag-wrong", "flag-suspect", "flag-confirmed", "flag-preset"); if (flag) card.classList.add("flag-" + flag);
   document.getElementById("status").textContent = countsText();
 }
 
@@ -174,12 +380,21 @@ function submission() {
 const observer = new IntersectionObserver(entries => { for (const e of entries)
   if (e.isIntersecting && e.target._draw) { e.target._draw(); observer.unobserve(e.target); } }, {rootMargin: "200px"});
 
-let presetCount = 0;   // start() で「間違い」に初期選択した likely_wrong の件数
+let presetCount = 0;   // start() で「間違い」に初期選択した件数
+let presetCauses = {};  // その内訳（presetCause ごと）
+const PRESET_CAUSE_LABEL = {likely_wrong: "likely_wrong", low_score: "low score", msms_absent: "no MS/MS"};
 
 function countsText() {
   const counts = `ok ${REVIEW.counts.ok} / suspect ${REVIEW.counts.suspect} / likely_wrong ${REVIEW.counts.likely_wrong}`;
-  if (!edits.size) return counts;
-  return counts + ` — 未送信の変更 ${edits.size} 件` + (presetCount ? `（likely_wrong ${presetCount} 件を「間違い」に初期選択）` : "");
+  if (!edits.size) return counts + exclusionText();
+  const causes = Object.entries(presetCauses).map(([c, n]) => `${PRESET_CAUSE_LABEL[c] || c} ${n}`).join(", ");
+  return counts + ` — ${edits.size} unsent change(s)` + (presetCount ? ` (${presetCount} preset to Wrong: ${causes})` : "")
+    + exclusionText();
+}
+
+function exclusionText() {
+  const excluded = currentExclusions();
+  return excluded.length ? ` — ${REVIEW.spots.filter(s => isExcluded(s, excluded)).length} excluded` : "";
 }
 
 // requestAnimationFrame が無い環境(古い WebView 等)向けのフォールバック。
@@ -206,11 +421,11 @@ function classFilterOptions(spots) {
     total.set(s.ontology, (total.get(s.ontology) || 0) + 1);
     if (isWrong) wrong.set(s.ontology, (wrong.get(s.ontology) || 0) + 1);
   }
-  const options = [{value: "", label: "すべて"}];
-  if (wrongAll) options.push({value: LIKELY_WRONG_SUFFIX, label: `⚠ 自動判別: 間違い（全クラス ${wrongAll}）`});
+  const options = [{value: "", label: "All"}];
+  if (wrongAll) options.push({value: LIKELY_WRONG_SUFFIX, label: `⚠ likely_wrong (all classes, ${wrongAll})`});
   for (const c of [...total.keys()].sort()) {
     options.push({value: c, label: `${c} (${total.get(c)})`});
-    if (wrong.get(c)) options.push({value: c + LIKELY_WRONG_SUFFIX, label: `└ ${c} › 自動判別: 間違い (${wrong.get(c)})`});
+    if (wrong.get(c)) options.push({value: c + LIKELY_WRONG_SUFFIX, label: `└ ${c} › likely_wrong (${wrong.get(c)})`});
   }
   return options;
 }
@@ -224,21 +439,33 @@ function matchesClassFilter(spot, value) {
 }
 // --- end class filter ---
 
+// --- trend points (pure) ---
+// 傾向カードの点は一覧と同じ絞り込み（判定・フラグ・除外、クラスの「› likely_wrong」下位項目）に
+// 従う。クラスの選択そのものは他のカードの点を消さない（カードの強調だけ。ユーザー決定 2026-10-09）。
+// f = {classValue, verdict, flag, excluded}。flag は未送信の変更を含む現在のフラグ。
+function trendPointVisible(spot, flag, f) {
+  if ((f.classValue || "").endsWith(LIKELY_WRONG_SUFFIX) && spot.verdict !== "likely_wrong") return false;
+  return matchesVerdictFilter(spot, f.verdict) && matchesFlagFilter(flag, f.flag) && !isExcluded(spot, f.excluded);
+}
+// --- end trend points ---
+
 function passesFilters(spot) {
   const cls = document.getElementById("f-class").value, ver = document.getElementById("f-verdict").value,
         flg = document.getElementById("f-flag").value;
-  if (!matchesClassFilter(spot, cls)) return false;
-  if (ver === "flagged" && spot.verdict === "ok") return false;
-  if (flg === "set" && !currentFlag(spot)) return false;
-  return true;
+  return matchesClassFilter(spot, cls) && matchesVerdictFilter(spot, ver) && matchesFlagFilter(currentFlag(spot), flg)
+    && !isExcluded(spot, currentExclusions());
 }
 
-function resetFilters() {
-  for (const id of ["f-class", "f-verdict", "f-flag"]) document.getElementById(id).value = "";
+function currentExclusions() { return EXCLUSION_ITEMS.filter(c => document.getElementById("x-" + c).checked); }
+
+function resetFilters(keepClass) {
+  for (const id of keepClass ? ["f-verdict", "f-flag"] : ["f-class", "f-verdict", "f-flag"])
+    document.getElementById(id).value = "";
 }
 
 function render() {
   const generation = ++renderGeneration;
+  syncTrendSelection(); refreshTrends();
   const grid = document.getElementById("grid"); grid.textContent = "";
   const matched = REVIEW.spots.filter(passesFilters);
   const status = document.getElementById("status");
@@ -255,7 +482,7 @@ function render() {
     }
     grid.appendChild(frag);
     if (i < matched.length) {
-      status.textContent = `構築中… ${i}/${matched.length}`;
+      status.textContent = `Building… ${i}/${matched.length}`;
       scheduleChunk(buildChunk);
     } else {
       status.textContent = countsText();
@@ -278,7 +505,8 @@ function nearestPoint(canvas, event) {
 
 function jumpToSpot(spotId) {
   const spot = REVIEW.spots.find(s => s.spot_id === spotId); if (!spot) return;
-  if (!passesFilters(spot)) { resetFilters(); render(); }
+  // 絞り込みで隠れていれば外す。クラスはスポットが合っていれば残す（傾向カードから来たとき）。
+  if (!passesFilters(spot)) { resetFilters(true); if (!passesFilters(spot)) resetFilters(); render(); }
   // render() はチャンクで組み立てるので、カードができるまで次のフレームで探し直す。
   const generation = renderGeneration;
   const attempt = tries => {
@@ -291,20 +519,74 @@ function jumpToSpot(spotId) {
   attempt(0);
 }
 
+function setClassFilter(value) {
+  const select = document.getElementById("f-class");
+  if (select.value === value) return false;
+  select.value = value; render(); return true;
+}
+
+function syncTrendSelection() {
+  const selected = classOfFilter(document.getElementById("f-class").value);
+  for (const card of document.querySelectorAll("#trends .card"))
+    card.classList.toggle("trend-selected", !!selected && card.dataset.ontology === selected);
+}
+
+// 点のクリック（カーソルが点の上にあるとき）→ そのクラスを選んでスポットのカードへ。
+// カードのそれ以外の場所（見出し・図の空白・余白）→ クラスの選択を切り替え。
+function goToSpot(ontology, spotId) {
+  if (classOfFilter(document.getElementById("f-class").value) !== ontology) setClassFilter(ontology);
+  jumpToSpot(spotId);
+}
+
+function currentTrendFilter() {
+  return {classValue: document.getElementById("f-class").value, verdict: document.getElementById("f-verdict").value,
+          flag: document.getElementById("f-flag").value, excluded: currentExclusions()};
+}
+
+function visibleTrendSpots() {
+  const f = currentTrendFilter();
+  return REVIEW.spots.filter(s => trendPointVisible(s, currentFlag(s), f));
+}
+
+// 描いた傾向カードの点を今の絞り込みに合わせて描き直す（まだ描いていないカードは描くときに合わせる）。
+function refreshTrends() {
+  const spots = visibleTrendSpots();
+  for (const card of document.querySelectorAll("#trends .card")) if (card._redraw) card._redraw(spots);
+}
+
 function renderTrends() {
   const box = document.getElementById("trends"); box.textContent = "";
   for (const [ontology, info] of Object.entries(REVIEW.trend.classes || {})) {
-    const card = el("article", {class: "card"});
-    card.appendChild(el("h2", {}, `${ontology}（n=${info.n}, R²=${info.r2 ?? "–"}）`));
-    const prepare = canvasFor(card); box.appendChild(card);
-    prepare.canvas.addEventListener("click", event => {
-      const hit = nearestPoint(prepare.canvas, event); if (hit) jumpToSpot(hit.spot_id);
+    const card = el("article", {class: "card", "data-ontology": ontology,
+                                title: "Click to filter to this class (click a point to go to its spot)"});
+    card.appendChild(el("h2", {}, `${ontology} (n=${info.n}, R²=${info.r2 ?? "–"})`));
+    box.appendChild(card);
+    const guard = {suppressUntil: 0, lastToggleAt: -Infinity};
+    const onPoint = spotId => { guard.suppressUntil = performance.now() + CARD_CLICK_GUARD_MS; goToSpot(ontology, spotId); };
+    card.addEventListener("click", event => {
+      if (card._canvas) { const hit = nearestPoint(card._canvas, event); if (hit) { onPoint(hit.spot_id); return; } }
+      const now = performance.now();
+      if (!cardClickToggles(now, guard)) return;
+      guard.lastToggleAt = now;
+      setClassFilter(nextClassFilter(document.getElementById("f-class").value, ontology));
     });
-    card._draw = () => drawTrend(prepare, ontology, REVIEW.spots); observer.observe(card);
+    card._draw = () => plotlyReady().then(Plotly => {
+      if (Plotly) {
+        const plot = el("div", {class: "plot"}); card.appendChild(plot);
+        card._redraw = spots => plotTrend(Plotly, plot, ontology, spots, onPoint);
+      } else {
+        const prepare = canvasFor(card); card._canvas = prepare.canvas;
+        card._redraw = spots => drawTrend(prepare, ontology, spots);
+      }
+      card._redraw(visibleTrendSpots());
+    });
+    observer.observe(card);
   }
+  syncTrendSelection();
 }
 
 const zoomEic = preparerFor(document.getElementById("zoom-eic"));
+const zoomMs1 = preparerFor(document.getElementById("zoom-ms1"));
 const zoomMirror = preparerFor(document.getElementById("zoom-mirror"));
 
 function closeZoom() {
@@ -320,7 +602,7 @@ function openZoom(spot) {
   // 大きさは表示してからでないと決まらない（clientWidth が 0）ので、開いてから描く。
   if (typeof dialog.showModal === "function") { if (!dialog.open) dialog.showModal(); }
   else dialog.setAttribute("open", "");
-  drawEic(zoomEic, spot); drawMirror(zoomMirror, spot);
+  drawEic(zoomEic, spot); drawIsotopes(zoomMs1, spot); drawMirror(zoomMirror, spot);
 }
 
 document.getElementById("zoom-close").addEventListener("click", closeZoom);
@@ -331,9 +613,14 @@ function start() {
   const select = document.getElementById("f-class"); select.textContent = "";
   for (const o of classFilterOptions(REVIEW.spots)) select.appendChild(el("option", {value: o.value}, o.label));
   for (const id of ["f-class", "f-verdict", "f-flag"]) document.getElementById(id).addEventListener("change", render);
+  for (const c of EXCLUSION_ITEMS)
+    document.getElementById("x-" + c).addEventListener("change", render);
   const warnings = document.getElementById("warnings");
   for (const w of REVIEW.warnings || []) warnings.appendChild(el("div", {class: "warn"}, w));
-  for (const s of REVIEW.spots) if (isPresetTarget(s) && !edits.has(s.spot_id)) { edits.set(s.spot_id, presetEdit(s)); presetCount++; }
+  for (const s of REVIEW.spots) if (isPresetTarget(s) && !edits.has(s.spot_id)) {
+    edits.set(s.spot_id, presetEdit(s)); presetCount++;
+    const cause = presetCause(s); presetCauses[cause] = (presetCauses[cause] || 0) + 1;
+  }
   document.getElementById("status").textContent = countsText();
   renderTrends(); render();
 }
@@ -341,8 +628,8 @@ function start() {
 document.getElementById("copy").addEventListener("click", async () => {
   const text = PREFIX + " " + JSON.stringify(submission());
   const area = document.getElementById("fallback");
-  try { await navigator.clipboard.writeText(text); document.getElementById("status").textContent = "コピーしました。チャットに貼って送ってください。"; }
-  catch { area.hidden = false; area.value = text; area.select(); document.getElementById("status").textContent = "下の欄を選択してコピーしてください。"; }
+  try { await navigator.clipboard.writeText(text); document.getElementById("status").textContent = "Copied. Paste it into the chat and send."; }
+  catch { area.hidden = false; area.value = text; area.select(); document.getElementById("status").textContent = "Select the text below and copy it."; }
 });
 
 // ---- MCP Apps（ui:// で表示されたとき）。2026-09 時点で Claude Desktop のローカル stdio では未検証。 ----
@@ -353,11 +640,11 @@ function rpc(method, params) { const id = ++rpcId;
 function notify(method, params) { window.parent.postMessage({jsonrpc: "2.0", method, params}, "*"); }
 function toolText(result) { return ((result && result.content) || []).filter(c => c.type === "text").map(c => c.text).join(""); }
 
-function showError(message) { document.getElementById("status").textContent = "エラー: " + String(message).slice(0, 300); }
+function showError(message) { document.getElementById("status").textContent = "Error: " + String(message).slice(0, 300); }
 function errorMessage(body) {
-  if (!body || typeof body !== "object") return "応答を読めませんでした";
-  if (body.status === "error") return body.message || "エラー";
-  if (body.error) return body.error.message || body.error.code || "エラー";
+  if (!body || typeof body !== "object") return "Could not read the response";
+  if (body.status === "error") return body.message || "Error";
+  if (body.error) return body.error.message || body.error.code || "Error";
   return null;
 }
 function parseBody(text) { try { return JSON.parse(text); } catch { return null; } }
@@ -383,7 +670,7 @@ window.addEventListener("message", async event => {
 });
 
 document.getElementById("send").addEventListener("click", async () => {
-  if (!edits.size) { document.getElementById("status").textContent = "未送信の変更はありません。"; return; }
+  if (!edits.size) { document.getElementById("status").textContent = "No unsent changes."; return; }
   let text;
   try {
     text = toolText(await rpc("tools/call", {name: "curation_submit", arguments: {submission_text: PREFIX + " " + JSON.stringify(submission())}}));
@@ -393,8 +680,9 @@ document.getElementById("send").addEventListener("click", async () => {
   for (const [spotId, e] of edits) {
     const spot = REVIEW.spots.find(s => s.spot_id === spotId); if (!spot) continue;
     spot.flag = e.flag || null; spot.flag_note = e.flag ? (e.note || "") : null; spot.flag_cleared = !e.flag;
+    spot.confirmed = e.flag === "confirmed";
   }
-  edits.clear(); presetCount = 0; render();
+  edits.clear(); presetCount = 0; presetCauses = {}; render();
   document.getElementById("status").textContent = text.slice(0, 200);
 });
 

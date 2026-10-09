@@ -150,6 +150,7 @@ def parse_tag_file(path: str | Path) -> dict:
 #: `_tags.xml` が無いとき、MS-DIAL と同じ定義でファイルを作る。
 MSDIAL_TAG_DEFINITIONS = ((1, "Confirmed"), (2, "Low quality spectrum"), (3, "Misannotation"),
                           (4, "Coelution (mixed spectra)"), (5, "Overannotation"))
+CONFIRMED_TAG_ID = 1
 MISANNOTATION_TAG_ID = 3
 
 
@@ -189,6 +190,13 @@ def update_alignment_tag(path: str | Path, *, tag_id: int, add, remove) -> dict:
     ファイルが無ければ MS-DIAL と同じ定義で作る。書き込みは原子的。戻り値の
     `added` / `removed` は実際に変わったスポットだけ（昇順）。
     """
+    result = update_alignment_tags(path, {tag_id: {"add": add, "remove": remove}})
+    return {"path": result["path"], **result["tags"][tag_id], "created": result["created"]}
+
+
+def update_alignment_tags(path: str | Path, changes: dict) -> dict:
+    """複数のタグを 1 回の書き込みで変える。`changes` は `{tag_id: {"add": [...], "remove": [...]}}`。
+    戻り値の `tags` は `{tag_id: {"added": [...], "removed": [...]}}`（実際に変わったスポットだけ）。"""
     tag_path = Path(path)
     created = not tag_path.exists()
     if created:
@@ -196,20 +204,23 @@ def update_alignment_tag(path: str | Path, *, tag_id: int, add, remove) -> dict:
     else:
         parsed = parse_tag_file(tag_path)
         definitions, peaks = dict(parsed["definitions"]), dict(parsed["peaks"])
-    if tag_id not in definitions:
-        definitions[tag_id] = dict(MSDIAL_TAG_DEFINITIONS).get(tag_id, str(tag_id))
-    added, removed = [], []
-    for spot in sorted({int(s) for s in add}):
-        if tag_id not in peaks.get(spot, frozenset()):
-            peaks[spot] = peaks.get(spot, frozenset()) | {tag_id}
-            added.append(spot)
-    for spot in sorted({int(s) for s in remove}):
-        if tag_id in peaks.get(spot, frozenset()):
-            peaks[spot] = peaks[spot] - {tag_id}
-            removed.append(spot)
-    if created or added or removed:
+    out = {}
+    for tag_id, change in changes.items():
+        if tag_id not in definitions:
+            definitions[tag_id] = dict(MSDIAL_TAG_DEFINITIONS).get(tag_id, str(tag_id))
+        added, removed = [], []
+        for spot in sorted({int(s) for s in change.get("add") or ()}):
+            if tag_id not in peaks.get(spot, frozenset()):
+                peaks[spot] = peaks.get(spot, frozenset()) | {tag_id}
+                added.append(spot)
+        for spot in sorted({int(s) for s in change.get("remove") or ()}):
+            if tag_id in peaks.get(spot, frozenset()):
+                peaks[spot] = peaks[spot] - {tag_id}
+                removed.append(spot)
+        out[tag_id] = {"added": added, "removed": removed}
+    if created or any(c["added"] or c["removed"] for c in out.values()):
         atomic_write_bytes(tag_path, _serialize_tag_file(definitions, peaks))
-    return {"path": str(tag_path), "added": added, "removed": removed, "created": created}
+    return {"path": str(tag_path), "tags": out, "created": created}
 
 
 def resolve_alignment_tag_file(

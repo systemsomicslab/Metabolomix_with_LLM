@@ -218,11 +218,11 @@ def test_auto_note_lists_every_reason_with_its_value():
     spot = ev(dmz_mda=12.4, name_prefix="low score", match=rejected())
     spot.update(judge.judge_spot(spot, None, TH, lipid_rules=True))
     note = judge.auto_note(spot, TH)
-    assert note.startswith("自動: ")
-    parts = note[len("自動: "):].split(" / ")
-    assert parts[0] == "精密質量 — Δm/z 12.4 mDa（≥10 mDa）"
-    assert "MS2 — 脂質クラス規則（診断イオン）で棄却" in parts
-    assert "MS2 — 参照と一致せず（low score）" in parts
+    assert note.startswith("Auto: ")
+    parts = note[len("Auto: "):].split(" / ")
+    assert parts[0] == "m/z — Δm/z 12.4 mDa (≥10 mDa)"
+    assert "MS2 — rejected by the lipid class rules (diagnostic ions)" in parts
+    assert "MS2 — no match to the reference (low score)" in parts
 
 
 def test_auto_note_is_none_for_ok_spots():
@@ -238,10 +238,10 @@ def test_every_reason_code_has_a_note_text():
 def test_auto_note_rounds_the_rt_difference_to_two_decimals():
     spot = ev(drt=-1.9958)
     spot.update(judge.judge_spot(spot, None, TH))
-    assert "RT — ΔRT -2 分（>1 分）" in judge.auto_note(spot, TH)
+    assert "RT — ΔRT -2 min (>1 min)" in judge.auto_note(spot, TH)
     spot = ev(drt=1.2345)
     spot.update(judge.judge_spot(spot, None, TH))
-    assert "RT — ΔRT 1.23 分（>1 分）" in judge.auto_note(spot, TH)
+    assert "RT — ΔRT 1.23 min (>1 min)" in judge.auto_note(spot, TH)
 
 
 def test_rt_is_not_judged_when_the_annotator_did_not_use_rt():

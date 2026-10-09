@@ -251,3 +251,25 @@ def test_latest_review_skips_an_unreadable_review_file(built):
     (directory / "review-cr-99999999-999999-ffff.json").write_text("{not json", encoding="utf-8")   # 最も新しい ID
     found = suggest.latest_review(paths["arf2"], base["alignment"]["alignment_sha256"])
     assert found["review_id"] == base["review_id"]
+
+
+def test_confirmed_spots_are_not_likely_wrong_targets():
+    catalog = [{"MasterAlignmentID": 5}, {"MasterAlignmentID": 6}]
+    annotations = {5: {"representative": {"name": "PC 34:1"}}, 6: {"representative": {"name": "PC 36:1"}}}
+    base = {"spots": [{"spot_id": 5, "verdict": "likely_wrong", "reasons": []},
+                      {"spot_id": 6, "verdict": "likely_wrong", "reasons": []}]}
+    targets = suggest.select_targets(catalog, annotations, base, {}, wrong="flagged_or_likely",
+                                     unannotated=False, include_decided=False, confirmed={5})
+    assert [t["spot"]["MasterAlignmentID"] for t in targets] == [6]
+
+
+def test_confirmed_spots_combine_records_and_the_tags_file(tmp_path):
+    from metabolomix.curation import apply
+    from metabolomix.msdial import tags as msdial_tags
+    arf2 = tmp_path / "AlignmentResult_x.arf2"
+    arf2.write_bytes(b"x")
+    msdial_tags.update_alignment_tag(msdial_tags.alignment_tag_path(arf2),
+                                     tag_id=msdial_tags.CONFIRMED_TAG_ID, add=[1, 2], remove=[])
+    effective = {2: {"flag": "wrong"}, 3: {"flag": "confirmed"}, 4: {"flag": "suspect"}}
+    assert apply.confirmed_spots(arf2, effective) == {1, 3}
+    assert apply.confirmed_spots(tmp_path / "missing.arf2", {}) == set()

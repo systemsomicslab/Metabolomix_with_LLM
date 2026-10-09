@@ -25,7 +25,7 @@
 | `n_table_rows_total` | 載せる条件に合うスポットの総数（`max_rows` で切る前） |
 | `n_table_rows_shown` | `table` に実際に載せた行数。`n_table_rows_total` より小さければ残りは `html_path` のビューアでしか見られない |
 | `table_note` | `table` が全件か先頭だけかの 1 行の注記 |
-| `html_path` | ビューア HTML のパス。ユーザーがブラウザで開き、フラグを付けて「送信用テキストをコピー」する。**全件**（`max_rows` で切らない）が入る。自動判別が `likely_wrong` のカードは赤の破線枠（未確認）で、ユーザーが「間違い」を付けると実線になる。クラスの選択肢には、各クラスの下に「<クラス> › 自動判別: 間違い」、先頭に全クラス横断の「自動判別: 間違い」が並ぶ（該当が 1 件以上あるときだけ） |
+| `html_path` | ビューア HTML のパス（表示は英語）。ユーザーがブラウザで開き、フラグを付けて「Copy submission text」する。**全件**（`max_rows` で切らない）が入る。自動判別が `likely_wrong` のカードは赤の破線枠（未確認）で、ユーザーが Wrong を付けると実線になる。Class の選択肢には、各クラスの下に「<クラス> › likely_wrong」、先頭に全クラス横断の「likely_wrong (all classes, N)」が並ぶ（該当が 1 件以上あるときだけ）。Verdict（自動）は `ok` / `suspect` / `likely_wrong` / suspect or worse、Flag（人）は Correct / Suspect / Wrong / Flagged で個別に絞り込める。クラス別傾向のカードは Plotly（cdnjs から読む。届かなければ canvas 描画に落ちる）で、**横軸 RT・縦軸 m/z**（範囲はクラスの全点で固定）。点に重ねると `#spot_id 名前`・DB・RT・m/z が出る。カードを押すとそのクラスに絞り込み（もう一度押すと解除）、点を押すとそのクラスに絞ってスポットのカードへ移る（点として拾うのはカーソルが点の上＝hover が出ているときだけ。それ以外の場所はクラスの切り替え）。絞り込みとは別に Exclude のチェック（low score = 理由 `low_score` / no MS/MS = 情報 `msms_absent`）があり、当たるスポットを一覧から隠す。**傾向カードの点は一覧と同じ絞り込み（Verdict・Flag・Exclude、Class の「› likely_wrong」下位項目）に従う**。Class の選択そのものは他のカードの点を消さない（カードの強調だけ）。回帰直線はサーバで当てたまま。隠しても初期選択の Wrong は残り送信される |
 | `thresholds` | 実際に使ったしきい値（既定 `DEFAULT_THRESHOLDS` に `thresholds` 引数を上書きしたもの） |
 | `ms2_tol` | 対向照合に使った MS2 許容幅（`.dbs` の `search_params` があればそこから、無ければ既定値） |
 
@@ -73,14 +73,36 @@ mirror 5.5 MB）になったため導入した上限。
 ビューア用にスポットごとに次も持つ:
 
 - `auto_note`: 判定根拠の文（`likely_wrong` / `suspect` のとき。`ok` は `null`）。
-  `自動: ` に続けて理由コードごとの根拠を ` / ` でつなぐ（例
-  `自動: 精密質量 — Δm/z 12.4 mDa（≥10 mDa） / MS2 — 参照と一致せず（low score）`。
-  文面は `judge.REASON_TEXT`）。ビューアのメモ欄の既定値（記録済みのメモがあればそちら）。
+  `Auto: ` に続けて理由コードごとの根拠（英語）を ` / ` でつなぐ（例
+  `Auto: m/z — Δm/z 12.4 mDa (≥10 mDa) / MS2 — no match to the reference (low score)`。
+  文面は `judge.REASON_TEXT`。2026-10-09 に日本語から英語へ変えた。それより前に記録された
+  `flags.jsonl` のメモは日本語のまま）。ビューアのメモ欄の既定値（記録済みのメモがあればそちら）。
 - `flag_cleared`: このアラインメントで最新のフラグ行が `clear`（人が明示的に取り消した）。
 
-ビューアは `likely_wrong` のうち記録済みのフラグが無く `flag_cleared` でもないものを、
-開いた時点で「間違い」（メモ = `auto_note`）の未送信の変更にする。そのまま送信すれば記録
-され、「なし」に戻して送信すれば `clear` が記録される（次のレビューで掛け直さない）。
+- `isotopes`: MS1 の同位体パターン（ビューアの MS1 パネル用。判定には使わない）。
+  `measured` は `.arf2` Key 53 `IsotopicPeaks`（代表試料の M, M+1, M+2）の `[m/z, 相対強度 %]`
+  （M = 100）。MS-DIAL が書く m/z は単同位体 + 1.00467·k の計算値で、実測の質量ではない。
+  `theoretical` は `{"relative": [M, M+1, M+2 の %], "basis": ...}` で、組成式（`Formula`）に
+  アダクトの原子を足して整数質量の分解能で畳み込んだもの（`curation/isotope.py`）。
+  `basis` は `formula+adduct`、アダクトが読めなければ中性の組成式だけの `formula`。
+  組成式が無い・読めなければ `null`。
+
+ビューアは、記録済みのフラグが無く `flag_cleared` でもない次のスポットを、開いた時点で
+Wrong の未送信の変更にする: `likely_wrong`、理由に `low_score`（MS-DIAL の名前の
+`low score:`）、情報に `msms_absent`（`no MS2:` など。MS/MS なし）。メモは `auto_note`
+（MS/MS なしは判定理由ではないので `Auto: no MS/MS` を書き足す）。そのまま送信すれば記録
+され、Correct（無印。何も記録しないことの表示名）に戻して送信すれば `clear` が記録
+される（次のレビューで掛け直さない）。**送信すると `_tags.xml` の Misannotation にも
+反映される**ので、残したいスポットは送信前に Correct へ戻す。
+各スポットのカード右上の **Confirmed** チェック（2026-10-09）は判断 `confirmed`（注釈が正しいと確かめた）で、
+Suspect / Wrong と排他（チェックすると Correct に、Suspect / Wrong を選ぶと外れる。外すと Correct＝送信では `clear`）。
+初期状態は記録の `confirmed` か、レビュー作成時の `_tags.xml` の Confirmed（MS-DIAL の GUI で付けたものも）で、
+スポットの `confirmed`（真偽値）に出る（最新の記録が `wrong` / `suspect` なら `false`）。`confirmed` のスポットは
+Wrong を初期選択しない。メモが自動の判定根拠のままならチェックしたときに空にする。Flag の絞り込みは
+Correct（無印か confirmed）/ Confirmed / Suspect / Wrong / Flagged（Suspect か Wrong）。
+注釈を確かめたスポット（`curation/apply.py` `confirmed_spots`: 記録の `confirmed` ∪ `_tags.xml` の Confirmed −
+最新の記録が `wrong` / `suspect`）には自動判定の likely_wrong を当てない: 初期選択・`exclude_auto_likely_wrong`
+（`arf_plot_species` / `arf_pca_species` / `arf_plot_group_intensity`）・`curation_suggest` の likely_wrong 対象。
 ミラープロットは縦軸に相対強度（上下とも各側の最大値を 100）の目盛り 0/50/100 を付け、
 ピークに m/z（小数 4 桁）のラベルを `library_plot_mirror` と同じ規則（強度降順の貪欲法・
 縦横とも重なるものを飛ばす・片側 25 本まで・側ごとに独立）で付ける。
@@ -326,22 +348,31 @@ EIC（`partner_eic`）を持つ。
   保存済みの `suggest-<id>.json` から展開する。`level` の既定は `sum`（和組成。`name` = `sum_name`、解析できなければ分子種名）で、
   `species` なら `name` はレコードの分子種名。**和組成で記録しても、選んだレコードの InChIKey を持たせる**（MS-DIAL が和組成の名前にも
   ライブラリの構造の InChIKey を付けるのと同じ）。この InChIKey は MS/MS で鎖組成まで確かめたことを意味しない。
-- `curation_submit` の戻り値に `n_assign` / `n_redundant`（有効な判断の件数）が加わる。**`assign` / `redundant` は `_tags.xml` の
+- `curation_submit` の戻り値に `n_assign` / `n_redundant` / `n_confirmed`（有効な判断の件数）が加わる。**`assign` / `redundant` は `_tags.xml` の
   Misannotation を変えない**（MS-DIAL の中の名前はまだ誤ったままのため）。
 - 候補付けビューアの「元の注釈に戻す」は `clear` を送る。`clear` はそのスポットの**有効な判断を丸ごと**（`wrong` でも `assign` でも）消し、
   `_tags.xml` の Misannotation も外す。
 - `curation_flags` の TSV は 7 列: `spot_id`・`flag`・`name`（`assign` の記録名）・`of`（`redundant` の相手）・`note`・`source`・`ts`。
 - `arf2_annotate_identities` の `curation_flag` 列は有効な判断: `wrong` / `suspect` / `assign:<記録名>` / `redundant`（無ければ空）。
-- `curation_review` のスポットの `flag` / `flag_note` は `wrong` / `suspect` だけ。`assign` / `redundant` は別項目 `decision`
+- `curation_review` のスポットの `flag` / `flag_note` は `wrong` / `suspect` / `confirmed` だけ。`assign` / `redundant` は別項目 `decision`
   （`{flag, name}` または `{flag, of}`）に出る。
 - エクスポートでの扱い（下の「エクスポートのメタ行」以降）: `assign` は同定を置き換え、`redundant` は除外する。
 
 ### `curation_submit` の戻り値の `tags_xml`（MS-DIAL への反映）
 
 記録（`flags.jsonl`、正本）の後、アラインメントの `<.arf2 の stem>_tags.xml` の
-**Misannotation**（タグ Id 3）に反映する。`wrong` → 付ける、`clear` → 外す、`suspect` → 触らない。
-**`assign` / `redundant` も触らない**（MS-DIAL の中の名前はまだ誤ったままで、Misannotation を外す条件は満たさない）。
-候補付けビューアの「元の注釈に戻す」（`clear`）は、そのスポットの有効な判断が `wrong` でも `assign` でも `redundant` でも Misannotation を外す。
+**Misannotation**（タグ Id 3）と **Confirmed**（タグ Id 1）に反映する（2026-10-09 に Confirmed を追加）:
+
+| 判断 | Confirmed | Misannotation |
+|---|---|---|
+| `confirmed` | 付ける | 外す |
+| `wrong` | 外す | 付ける |
+| `suspect` | 外す | 触らない |
+| `clear` | 外す | 外す |
+
+**`assign` / `redundant` は触らない**（MS-DIAL の中の名前はまだ誤ったままで、Misannotation を外す条件は満たさない）。
+候補付けビューアの「元の注釈に戻す」（`clear`）は、そのスポットの有効な判断が `wrong` でも `assign` でも `redundant` でも両方のタグを外す。
+2 つのタグは 1 回の書き込みで変える（`msdial/tags.py` `update_alignment_tags`）。
 他のタグと定義は残し、ファイルが無ければ MS-DIAL と同じ 5 定義で作る。形式は上流
 `AlignmentResultContainer.Save` と同じ（`<Peak Id="<MasterAlignmentID>"><Tag>3</Tag></Peak>`、
 UTF-8 BOM・CRLF）。
@@ -350,6 +381,7 @@ UTF-8 BOM・CRLF）。
 |---|---|
 | `path` | 書いた（書こうとした）`_tags.xml` |
 | `added` / `removed` | 実際に Misannotation が付いた／外れた `spot_id`（元から同じ状態のものは含まない） |
+| `confirmed` | `{"added": [...], "removed": [...]}`。実際に Confirmed が付いた／外れた `spot_id` |
 | `created` | ファイルを新しく作ったか |
 | `backup` | 書く前の控え（`curation/tags-backup/<名前>.<UTC 時刻>`）。元のファイルが無ければ `null` |
 | `note` | **MS-DIAL でプロジェクトを開いたままだと GUI の保存で上書きされる**旨。ユーザーに伝える |

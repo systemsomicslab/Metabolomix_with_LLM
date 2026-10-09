@@ -264,7 +264,8 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
 
     ユーザーがビューアの「送信用テキストをコピー」で貼った文をそのまま `submission_text` に渡す
     （`CURATION_SUBMIT ` で始まる行だけを読む。書き写さないこと）。直接渡すなら `review_id` と
-    `flags=[{"spot_id": 12, "flag": "wrong" | "suspect" | "clear", "note": "..."}]`。
+    `flags=[{"spot_id": 12, "flag": "wrong" | "suspect" | "confirmed" | "clear", "note": "..."}]`
+    （confirmed = 注釈が正しいと確かめた。wrong / suspect と排他）。
     候補付け（`cs-…`）の送信は `flags=[{spot_id, flag: assign|redundant|clear, candidate: "L1"|"R1",
     level: sum|species, note}]`。候補の中身（名前・InChIKey）は保存済みの候補付けから展開するので、
     送信側で名前を書かない。assign / redundant は `_tags.xml` を変えない。
@@ -274,8 +275,10 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
     2 回以上名指しした場合も含む——どちらを採るか決められないため）。
     レビューはセッションの記録 → 送信用テキストの `arf2_path` → `file_path`（レビューを
     作った `.arf2`）→ 既定の `.arf2` の順に探すので、サーバ再起動の後でも貼った文で送れる。
-    記録の後、アラインメントの `_tags.xml` の Misannotation に反映する（wrong → 付ける、
-    clear → 外す、suspect → 触らない。控えは `curation/tags-backup/`）。結果は `tags_xml`。
+    記録の後、アラインメントの `_tags.xml` に反映する（wrong → Misannotation を付け Confirmed を外す、
+    confirmed → Confirmed を付け Misannotation を外す、suspect → Confirmed を外す、clear → 両方外す。
+    控えは `curation/tags-backup/`）。結果は `tags_xml`（`added` / `removed` は Misannotation、
+    `confirmed` は Confirmed の変化）。
     反映に失敗しても記録は残る。MS-DIAL でプロジェクトを開いたままだと GUI の保存で
     上書きされるので、`tags_xml.note` をユーザーに伝える。
     """
@@ -321,10 +324,11 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
         return _flag_file_error(exc)
     n = store.append(cleaned, alignment=current, review_id=review_id, source=source)
     effective = store.effective(current["alignment_sha256"])
-    tags_xml = msdial_writeback.sync_misannotation(saved["arf2_path"], cleaned)
+    tags_xml = msdial_writeback.sync_tags(saved["arf2_path"], cleaned)
     return json_payload({"status": "ok", "recorded": n, "review_id": review_id,
                          "n_wrong": sum(1 for r in effective.values() if r["flag"] == "wrong"),
                          "n_suspect": sum(1 for r in effective.values() if r["flag"] == "suspect"),
+                         "n_confirmed": sum(1 for r in effective.values() if r["flag"] == "confirmed"),
                          "n_assign": sum(1 for r in effective.values() if r["flag"] == "assign"),
                          "n_redundant": sum(1 for r in effective.values() if r["flag"] == "redundant"),
                          "tags_xml": tags_xml})

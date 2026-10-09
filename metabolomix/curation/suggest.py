@@ -19,6 +19,7 @@ from metabolomix.arf2.match_results import load_spot_annotations, load_spot_cand
 from metabolomix.arf2.reader import load_catalog
 from metabolomix.core.atomic_io import atomic_write_json
 from metabolomix.curation import candidates, evidence, flags, relations, review, trend, viewer
+from metabolomix.curation.apply import confirmed_spots
 from metabolomix.eic.reader import read_eic_spot_css1
 from metabolomix.library.defaults import pick_tol
 from metabolomix.msdial.analysis_params import resolve_analysis_params
@@ -58,7 +59,9 @@ def latest_review(arf2_path, alignment_sha256: str) -> dict | None:
     return None
 
 
-def select_targets(catalog, annotations, base_review, effective, *, wrong, unannotated, include_decided):
+def select_targets(catalog, annotations, base_review, effective, *, wrong, unannotated, include_decided,
+                   confirmed=frozenset()):
+    """`confirmed`（注釈を確かめたスポット）は likely_wrong の対象にしない。"""
     decisions = flags.split_decisions(effective)
     decided = set(decisions["assign"]) | set(decisions["redundant"])
     verdicts = {s["spot_id"]: s for s in base_review["spots"]}
@@ -73,7 +76,8 @@ def select_targets(catalog, annotations, base_review, effective, *, wrong, unann
             # include_decided=True のとき、判断済み（assign / redundant）の注釈付きスポットも "flagged" で戻す
             targets.append({"spot": spot, "target_kind": "flagged",
                             "target_reasons": list((judged or {}).get("reasons") or [])})
-        elif annotated and wrong == "flagged_or_likely" and judged and judged["verdict"] == "likely_wrong":
+        elif (annotated and wrong == "flagged_or_likely" and judged and judged["verdict"] == "likely_wrong"
+              and spot_id not in confirmed):
             targets.append({"spot": spot, "target_kind": "likely_wrong",
                             "target_reasons": list(judged.get("reasons") or [])})
         elif not annotated and unannotated:
@@ -152,7 +156,8 @@ def run_suggestion(arf2_path, *, base_review, store, th, options) -> dict:
                         f"RT 窓 {rt_window} 分を使いました。")
 
     targets = select_targets(catalog, annotations, base_review, effective, wrong=opts["wrong"],
-                             unannotated=opts["unannotated"], include_decided=opts["include_decided"])
+                             unannotated=opts["unannotated"], include_decided=opts["include_decided"],
+                             confirmed=confirmed_spots(arf2_path, effective))
     if len(targets) > evidence.MAX_SPOTS:
         raise ValueError(f"対象が {len(targets)} 件あり、上限 {evidence.MAX_SPOTS} を超えています。")
     target_ids = {t["spot"]["MasterAlignmentID"] for t in targets}

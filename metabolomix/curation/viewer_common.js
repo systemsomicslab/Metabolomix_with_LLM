@@ -64,7 +64,7 @@ function pickMirrorLabels(points, toPixel, measure, bounds) {
 function drawMirror(prepare, spot) {
   const {ctx, w, h} = prepare(); const m = spot.mirror;
   if (!m) { ctx.fillStyle = css("--muted"); ctx.font = "12px system-ui";
-    ctx.fillText(spot.mirror_empty_text || (spot.match && !spot.match.has_msms ? "MS/MS なし" : "参照スペクトルなし"), 8, h / 2); return; }
+    ctx.fillText(spot.mirror_empty_text || (spot.match && !spot.match.has_msms ? "No MS/MS" : "No reference spectrum"), 8, h / 2); return; }
   const all = m.measured.concat(m.reference).map(p => p[0]);
   const left = 26, headroom = 12;       // 縦軸目盛りの幅、ラベルの逃げ
   const x0 = Math.min(...all) - 5, x1 = Math.max(...all) + 5, mid = h / 2, amp = mid - headroom;

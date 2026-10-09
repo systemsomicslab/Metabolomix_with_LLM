@@ -130,6 +130,11 @@ Key 番号の割り当て対象ではない）。勝手に埋めない。
 宣言順は 0, 4, 1, 2, 3（Key 4 が Key 1 より先に書かれている）。**MoleculeMsReference
 の Key 27 と同じ「宣言順と Key 番号が一致しない」パターン**。
 
+`AlignmentSpotProperty` の Key 53 `IsotopicPeaks` も同じ型。実データ（kidney pos、
+2026-10-09 確認）では全スポットに M, M+1, M+2 の 3 要素が入り、Key 1 `Mass` は
+単同位体 + 1.004667751·k（Key 2 と同じ差）の計算値で、実測の質量ではない。Key 0 は M を 100 とする
+相対強度、Key 4 は絶対強度。キュレーションの MS1 パネル（`curation/isotope.py`）が Key 0・1 を読む。
+
 ## `LargeListMessagePack` の枠組み（`.lbm2` / `.msp2` / `.dbs` の `DataBase` 共通）
 
 出典: `src/Common/CommonStandard/MessagePack/LargeListMessagePack.cs`。
