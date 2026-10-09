@@ -21,11 +21,10 @@
 `.mcp.json` / `.vscode/mcp.json` がこのファイルを絶対パスで指しているため、
 ルートから動かしてはならない。
 
-可変状態（DATA_DIR / KNOWLEDGE_DIR / ANALYSES_DIR / session）の**正準**は
+可変状態（DATA_DIR / KNOWLEDGE_DIR / session）の**正準**は
 metabolomix.core.mcp_core / metabolomix.core.session_state 側にある。ここでの再エクスポートは
 読み取り用の束縛にすぎないため、差し替えは必ず正準モジュール
-（mcp_core.DATA_DIR / mcp_core.KNOWLEDGE_DIR / mcp_core.ANALYSES_DIR /
-session_state.session）に対して行うこと。
+（mcp_core.DATA_DIR / mcp_core.KNOWLEDGE_DIR / session_state.session）に対して行うこと。
 """
 import os
 
@@ -40,7 +39,6 @@ from metabolomix.core.mcp_core import (
     MCP_INSTRUCTIONS,
     KNOWLEDGE_DIR,
     PLAYBOOK_DIR,
-    ANALYSES_DIR,
     _build_report_meta,
     _dir_is_writable,
     _first_writable_dir,

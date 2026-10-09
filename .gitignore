@@ -16,11 +16,15 @@ docs/poster/
 __pycache__/
 obj/
 photos/
+# 旧パッケージ名の残骸（2026-10-06 に metabolomix へ改名。__pycache__ だけが残りうる）
+lipidmix/
 workspace/
 debug/
 /analysis/
-# analyses/ と knowledge/ はセッション毎に育つ蓄積物なので、既に追跡済みの
-# 種ノート以外は追跡しない（gitignore は追跡済みファイルには影響しない）。
+# analyses/ は廃止した旧 objective 置き場（解析記録は解析フォルダ配下 reports/ に
+# 書く契約。2026-10-09）。古いクライアントが作っても追跡しない。
+# knowledge/ はセッション毎に育つ蓄積物なので、既に追跡済みの種ノート以外は追跡しない
+# （gitignore は追跡済みファイルには影響しない）。
 # playbook/ は版管理された再利用手順で、GATEWAY 手順2 (lipidmix://playbook/index)
 # が参照する。ここに挙げると**新規**の playbook ノートが無言で追跡漏れするため外す。
 analyses/

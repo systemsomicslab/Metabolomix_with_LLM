@@ -5,10 +5,11 @@ Each member runs the MCP server on their own machine:
 - Source code: each member keeps a local clone.
 - MCP server: each member runs the local `server.py` through stdio.
 - Literature search: each local MCP server calls Europe PMC directly.
-- Knowledge, analyses/objectives, and reports: kept locally, under the clone by
-  default (`knowledge/`, `analyses/`, `reports/`). The `LIPIDMIX_*_DIR`
-  environment variables only override these locations; they do not imply any
-  shared storage.
+- Knowledge: kept locally under the clone (`knowledge/`).
+- Objectives and reports: written to `reports/` inside the analysis folder,
+  next to the raw data and MS-DIAL output (never under the clone).
+- The `LIPIDMIX_*_DIR` environment variables only override these locations;
+  they do not imply any shared storage.
 
 ```text
 [member PC] local python server.py --stdio
@@ -115,7 +116,7 @@ not "up to date".
 
 ## Operational Notes
 
-- `knowledge/`, `analyses/`, and `reports/` are each member's own local state.
+- `knowledge/` and each analysis folder's `reports/` are each member's own local state.
   Nothing is shared between members by the server.
 - Review `knowledge/_inbox` through `lipidmix://knowledge/inbox`, then promote
   or reject notes with `ingest_promote` / `ingest_reject`.

@@ -415,3 +415,15 @@ class DatasetFigureFallbackTests(unittest.TestCase):
         session_state.session.dataset = None
         msg = server.save_figure("pca", "none-1")
         self.assertIn("dataset_pca", msg)
+
+
+class ReportDirStaysWithDataTests(unittest.TestCase):
+    """解析記録は解析フォルダ側に置く契約。リポジトリ側へ退避する候補を持たない。"""
+
+    def test_candidates_without_override_are_data_dir_only(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ):
+            os.environ.pop("LIPIDMIX_REPORTS_DIR", None)
+            candidates = mcp_core._report_dir_candidates()
+        self.assertEqual(candidates, [mcp_core.DATA_DIR / "reports"])
+        self.assertNotIn(mcp_core.BASE_DIR / "reports", candidates)

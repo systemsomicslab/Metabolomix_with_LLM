@@ -1,5 +1,6 @@
 """objective ライフサイクル（knowledge_store 関数 ＋ server ツール）の検証。"""
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -71,17 +72,22 @@ class ObjectiveStoreTests(unittest.TestCase):
 
 class ObjectiveServerToolTests(unittest.TestCase):
     def setUp(self):
-        self._orig_analyses = mcp_core.ANALYSES_DIR
+        self._orig_data = mcp_core.DATA_DIR
         self._orig_knowledge = mcp_core.KNOWLEDGE_DIR
         self._tmp = tempfile.TemporaryDirectory()
         base = Path(self._tmp.name)
-        mcp_core.ANALYSES_DIR = base / "analyses"
+        mcp_core.DATA_DIR = base / "dataset"
         mcp_core.KNOWLEDGE_DIR = base / "knowledge"
-        mcp_core.ANALYSES_DIR.mkdir()
+        mcp_core.DATA_DIR.mkdir()
         mcp_core.KNOWLEDGE_DIR.mkdir()
+        self.reports = mcp_core.DATA_DIR / "reports"
+        self._env = mock.patch.dict("os.environ")
+        self._env.start()
+        os.environ.pop("LIPIDMIX_REPORTS_DIR", None)
 
     def tearDown(self):
-        mcp_core.ANALYSES_DIR = self._orig_analyses
+        self._env.stop()
+        mcp_core.DATA_DIR = self._orig_data
         mcp_core.KNOWLEDGE_DIR = self._orig_knowledge
         self._tmp.cleanup()
 
@@ -118,7 +124,7 @@ class ObjectiveServerToolTests(unittest.TestCase):
         )
         # セッションの解釈規則が切り替わる（脂質名文法を当てない）
         self.assertEqual(session_state.session.assay_kind, "metabolite")
-        meta, _subqs, _body = ks.parse_objective(mcp_core.ANALYSES_DIR / "exp-4.md")
+        meta, _subqs, _body = ks.parse_objective(self.reports / "exp-4.objective.md")
         self.assertEqual(meta["assay_kind"], "metabolite")
 
     def test_record_objective_defaults_to_unknown_kind(self):
@@ -126,14 +132,14 @@ class ObjectiveServerToolTests(unittest.TestCase):
         session_state.session = session_state.AnalysisSession()
         server.record_objective("exp-5", "NEG", "NEG", ["a", "b"], "c", ["問い"])
         self.assertEqual(session_state.session.assay_kind, "unknown")
-        meta, _subqs, _body = ks.parse_objective(mcp_core.ANALYSES_DIR / "exp-5.md")
+        meta, _subqs, _body = ks.parse_objective(self.reports / "exp-5.objective.md")
         self.assertEqual(meta["assay_kind"], "unknown")
 
     def test_record_objective_rejects_bad_assay_kind(self):
         out = server.record_objective(
             "exp-6", "NEG", "NEG", ["a", "b"], "c", ["問い"], assay_kind="proteomics")
         self.assertIn("assay_kind", out)
-        self.assertFalse((mcp_core.ANALYSES_DIR / "exp-6.md").exists())
+        self.assertFalse((self.reports / "exp-6.objective.md").exists())
 
     def test_update_objective_switches_assay_kind(self):
         from metabolomix.core import session_state
@@ -141,8 +147,27 @@ class ObjectiveServerToolTests(unittest.TestCase):
         server.record_objective("exp-7", "NEG", "NEG", ["a", "b"], "c", ["問い"])
         server.update_objective("exp-7", assay_kind="lipid")
         self.assertEqual(session_state.session.assay_kind, "lipid")
-        meta, _subqs, _body = ks.parse_objective(mcp_core.ANALYSES_DIR / "exp-7.md")
+        meta, _subqs, _body = ks.parse_objective(self.reports / "exp-7.objective.md")
         self.assertEqual(meta["assay_kind"], "lipid")
+
+    def test_objective_lives_with_the_data_not_the_project(self):
+        """objective は解析フォルダ配下 reports/ に書き、リポジトリ側に analyses/ を作らない。"""
+        server.record_objective("exp-8", "NEG", "NEG", ["a", "b"], "c", ["問い"])
+        self.assertTrue((self.reports / "exp-8.objective.md").is_file())
+        self.assertFalse((mcp_core.BASE_DIR / "analyses" / "exp-8.md").exists())
+        self.assertFalse((mcp_core.BASE_DIR / "analyses" / "exp-8.objective.md").exists())
+
+    def test_report_with_same_id_does_not_clobber_objective(self):
+        """同じ analysis_id のレポートと objective は同じ reports/ に並んで共存する。"""
+        server.record_objective("exp-9", "NEG", "NEG", ["a", "b"], "c", ["問い"])
+        server.write_report("exp-9", "NEG", "## 結論\nx")
+        self.assertTrue((self.reports / "exp-9.md").is_file())
+        meta, subqs, _body = ks.parse_objective(self.reports / "exp-9.objective.md")
+        self.assertEqual(meta["type"], "objective")
+        self.assertEqual([label for label, _ in subqs], ["Q1"])
+        self.assertIn("Q1", server.knowledge_coverage("exp-9"))
+        listing = server.list_reports()
+        self.assertEqual(listing.count("exp-9"), 1)
 
     def test_missing_objective_message(self):
         self.assertIn("見つかりません", server.knowledge_coverage("nope"))

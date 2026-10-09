@@ -34,7 +34,9 @@ fake Console までしか検証されていない**——`docs/workflow/metabolo
 差次的エクスポートの列定義は別リポジトリ（massbank-context）との契約を兼ねる。加えて、
 文献知識と再利用手順の蓄積層を持つ——`knowledge/` `playbook/` は **MCP リソース**として
 索引と本文を配信し（`lipidmix://{knowledge,playbook}/{index,expand/<slug>}`）、
-目的の `analyses/` とレポートの `reports/` はツール経由で読み書きする。
+目的（objective）とレポートはツール経由で**解析フォルダ配下の `reports/`** に読み書きする。
+**システム調整以外のデータ解析の記録は、生データと同じ解析フォルダ側の `reports/` に置く契約**で、
+リポジトリ側には書かない（旧 `analyses/` はバグとして廃止。2026-10-09）。
 
 クライアントは Claude Desktop / Claude Code と、別リポの WebUI（下記「関連リポジトリ」）。
 
@@ -58,7 +60,8 @@ Claude Code 用の `.mcp.json` はこれを絶対パスで指すが、`.git/info
 `.venv-1/` は 2026-07 のローカル LLM 検証用に残っている別環境で、通常の開発・テストでは使わない。
 
 環境変数（すべて任意・上書き用）: `LIPIDMIX_DATA_DIR`（データ探索先。既定 `<project>/data`）/
-`LIPIDMIX_KNOWLEDGE_DIR` `LIPIDMIX_PLAYBOOK_DIR` `LIPIDMIX_ANALYSES_DIR` `LIPIDMIX_REPORTS_DIR`（蓄積先の上書き用）/
+`LIPIDMIX_KNOWLEDGE_DIR` `LIPIDMIX_PLAYBOOK_DIR` `LIPIDMIX_REPORTS_DIR`（蓄積先の上書き用。
+`LIPIDMIX_REPORTS_DIR` は未指定が既定で、そのとき記録は解析フォルダ配下 `reports/` だけに書く）/
 `LIPIDMIX_TRANSPORT` `LIPIDMIX_HOST` `LIPIDMIX_PORT`（HTTP 待受）/ `LIPIDMIX_CAVEAT_MODE` /
 `LIPIDMIX_PLOT_OUTPUT`（描画系ツールの戻り値。既定 `image`。Plotly で自分で描く
 クライアント＝Use-LLLM は `payload` を置く）/
@@ -204,8 +207,8 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
     写しだけが腐るため）。README は詳細を他文書へ委譲した要約なので、
     ポインタが切れると案内そのものが壊れる。
 - `tests/test_server_registration.py` がツール/リソースの登録数と `ToolAnnotations` を検証する。
-- **fixture はテスト自身が作る**。`analyses/` `knowledge/` の実ファイルに依存させない
-  （追跡外なのでユーザ環境依存の不安定テストになる。tmp に作って `ANALYSES_DIR` を差し替える流儀）。
+- **fixture はテスト自身が作る**。解析フォルダの `reports/` や `knowledge/` の実ファイルに依存させない
+  （追跡外なのでユーザ環境依存の不安定テストになる。tmp に作って `mcp_core.DATA_DIR` を差し替える流儀）。
 
 ## 作業の記録と Git
 
@@ -251,14 +254,14 @@ sh scripts/new-worktree.sh <branch>    # .worktrees/ 配下に作る（/ は - �
 git worktree remove .worktrees/<slug>  # 片付け
 ```
 
-- **追跡外のものは worktree に来ない**: `data/` `analyses/` `.mcp.json`
+- **追跡外のものは worktree に来ない**: `data/` `.mcp.json`
   `docs/HISTRY.md` `docs/task.md`。テストはこれらに依存しない規約なので、
   新品の worktree でもテストは全数緑になる（実測で確認済み）。
 - スクリプトが worktree 専用の `.mcp.json` を生成する。`server.py` は**その worktree の
   もの**を指す（main を指すと、worktree のコードを編集しながら main の実装を試すことに
   なり、最も気づきにくい形で嘘をつく）。蓄積状態（`LIPIDMIX_DATA_DIR`
-  `LIPIDMIX_ANALYSES_DIR` `LIPIDMIX_KNOWLEDGE_DIR` `LIPIDMIX_REPORTS_DIR`）は
-  **main ツリー**を向けて分裂させない。版管理対象の `playbook/` だけは worktree ローカル
+  `LIPIDMIX_KNOWLEDGE_DIR`）は **main ツリー**を向けて分裂させない。`LIPIDMIX_REPORTS_DIR` は
+  置かない（記録は解析フォルダ側に付いて回る）。版管理対象の `playbook/` だけは worktree ローカル
   （変更対象そのものなので）。
 - **記録は main ツリー側の `docs/HISTRY.md` / `docs/task.md` へ書く**（task.md は並列中なので末尾への追記だけ）。
   worktree には存在しない。
@@ -271,7 +274,7 @@ git worktree remove .worktrees/<slug>  # 片付け
 ## 踏みやすい罠
 
 - `.gitignore` に `*.txt` があるため、**新規の .txt は無言で追跡漏れする**（`git add -f` が要る）。
-- `docs/HISTRY.md` `docs/task.md` `data/` `analyses/` `archives/` は追跡外。`knowledge/` は
+- `docs/HISTRY.md` `docs/task.md` `data/` `analysis/` `archives/` は追跡外。`knowledge/` は
   種ノートのみ追跡、`playbook/` は版管理対象。クリーンチェックアウトに無い前提で書く。
 - `archives/` は 2026-07 に退避したローカル LLM エージェント・解釈精度評価のコード置き場
   （`local_llm_agent/` `interp_eval/` ほか）。**ライブ側からの参照はゼロ**。動かすには

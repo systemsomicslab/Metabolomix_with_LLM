@@ -1,4 +1,4 @@
-"""蓄積ノート（knowledge / playbook / analyses）を読む純ロジック層。
+"""蓄積ノート（knowledge / playbook / objective）を読む純ロジック層。
 
 MCP には依存しない。``server.py`` がこの関数群を ``@mcp.resource`` から呼ぶ。
 
@@ -418,7 +418,7 @@ def write_note(directory: str | Path, slug: str, meta: dict, body: str) -> Path:
 
     slug の検証はロック取得より**前**に行う（promote / reject と同じ順序）。
     _directory_lock は mkdir を伴うので、あとで検証すると拒否した呼び出しが
-    空の置き場だけを残す——ユーザが消した analyses/ が pytest のたびに
+    空の置き場だけを残す——ユーザが消した旧 analyses/ が pytest のたびに
     復活していた経路がこれ。
     """
     directory = Path(directory)
@@ -690,20 +690,31 @@ def build_objective_body(
     return "\n".join(lines)
 
 
+#: objective ノートのファイル名の接尾辞。レポート（`<make_slug(id)>.md`）と同じ
+#: reports/ に置くので、同じ analysis_id でも互いを上書きしないよう名前を分ける
+#: （make_slug は "." を残さないので、レポートの名前とは衝突しない）。
+OBJECTIVE_SUFFIX = ".objective"
+
+
+def objective_slug(analysis_id: str) -> str:
+    """objective ノートの slug（`<analysis_id>.objective`）。"""
+    return f"{analysis_id}{OBJECTIVE_SUFFIX}"
+
+
 def write_objective(
-    analyses_dir: str | Path,
+    directory: str | Path,
     analysis_id: str,
     meta_fields: dict,
     sub_questions: list[str],
     evidence: list[str] | None = None,
 ) -> Path:
-    """objective レコードを analyses/<analysis_id>.md として書き出す。"""
+    """objective レコードを <directory>/<analysis_id>.objective.md として書き出す。"""
     meta = {"type": "objective", "analysis_id": analysis_id}
     meta.update(meta_fields)
     meta.setdefault("status", "active")
     meta["confirmed"] = bool(meta.get("confirmed_objective"))
     body = build_objective_body(meta.get("confirmed_objective", ""), sub_questions, evidence)
-    return write_note(analyses_dir, analysis_id, meta, body)
+    return write_note(directory, objective_slug(analysis_id), meta, body)
 
 
 def update_objective_meta(path: str | Path, updates: dict) -> Path:
