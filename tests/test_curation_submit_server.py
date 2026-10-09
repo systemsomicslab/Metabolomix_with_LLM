@@ -1,9 +1,13 @@
 import http.client
 import json
+import threading
 
 import pytest
 
-from metabolomix.curation import submit_server
+from metabolomix.curation import flags, submission, submit_server
+from metabolomix.library import store as library_store
+from metabolomix.msdial import tags as msdial_tags
+from tests.curation_fixtures import build_saved_review
 
 
 class FakeClock:
@@ -102,3 +106,134 @@ def test_options_preflight_allows_private_network_access():
     assert res.status == 204
     assert res.getheader("Access-Control-Allow-Origin") == "*"
     assert res.getheader("Access-Control-Allow-Private-Network") == "true"
+
+
+@pytest.fixture()
+def saved(tmp_path, monkeypatch):
+    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    built = build_saved_review(tmp_path / "neg")
+    r = built["review"]
+    built["endpoint"] = submit_server.register("review", r["review_id"], r["arf2_path"])
+    return built
+
+
+def _submit(saved, flag_entries, **overrides):
+    ep, r = saved["endpoint"], saved["review"]
+    body = {"token": ep["token"], "review_id": r["review_id"], "flags": flag_entries, **overrides}
+    return _post(ep["port"], "/v1/submit", body)
+
+
+def _n_rows(saved):
+    return len(flags.FlagStore(flags.curation_dir(saved["review"]["arf2_path"])).rows())
+
+
+def test_submit_records_as_the_user_and_updates_the_tags_file(saved):
+    status, body = _submit(saved, [{"spot_id": 1, "flag": "wrong", "note": "x"}])
+    assert status == 200 and body["recorded"] == 1 and body["tags_xml"]["added"] == [1]
+    rows = flags.FlagStore(flags.curation_dir(saved["review"]["arf2_path"])).rows()
+    assert rows[-1]["source"] == "user"
+    tag_path = msdial_tags.alignment_tag_path(saved["paths"]["arf2"])
+    assert msdial_tags.parse_tag_file(tag_path)["peaks"] == {1: frozenset({3})}
+
+
+def test_submit_can_be_sent_in_several_parts(saved):
+    assert _submit(saved, [{"spot_id": 1, "flag": "wrong", "note": ""}])[0] == 200
+    assert _submit(saved, [{"spot_id": 0, "flag": "confirmed", "note": ""}])[0] == 200
+    assert _n_rows(saved) == 2
+
+
+def test_a_mismatched_review_id_is_403_and_writes_nothing(saved):
+    status, body = _submit(saved, [{"spot_id": 1, "flag": "wrong"}], review_id="cr-20000101-000000-abcd")
+    assert status == 403 and body["status"] == "error"
+    assert _n_rows(saved) == 0
+
+
+def test_a_foreign_host_header_is_403(saved):
+    ep = saved["endpoint"]
+    status, _ = _post(ep["port"], "/v1/ping", {"token": ep["token"]},
+                      headers={"Host": f"evil.example:{ep['port']}"})
+    assert status == 403
+
+
+def test_an_oversized_body_is_413(saved, monkeypatch):
+    monkeypatch.setattr(submit_server, "MAX_BODY_BYTES", 64)
+    status, _ = _submit(saved, [{"spot_id": 1, "flag": "wrong", "note": "x" * 100}])
+    assert status == 413
+    assert _n_rows(saved) == 0
+
+
+def test_non_json_is_400_unknown_path_404_and_get_405(saved):
+    ep = saved["endpoint"]
+    assert _post(ep["port"], "/v1/submit", raw=b"not json")[0] == 400
+    assert _post(ep["port"], "/v1/nope", {"token": ep["token"]})[0] == 404
+    assert _post(ep["port"], "/v1/ping", method="GET")[0] == 405
+
+
+def test_a_negative_content_length_is_400_without_blocking(saved):
+    ep = saved["endpoint"]
+    status, body = _post(ep["port"], "/v1/submit", raw=b"{}", headers={"Content-Length": "-1"})
+    assert status == 400 and body["status"] == "error"
+    assert _post(ep["port"], "/v1/ping", {"token": ep["token"]})[0] == 200
+
+
+def test_an_invalid_flag_is_400_and_writes_nothing(saved):
+    status, body = _submit(saved, [{"spot_id": 1, "flag": "nope"}])
+    assert status == 400 and "flag" in body["message"]
+    assert _n_rows(saved) == 0
+
+
+def test_an_alignment_change_is_409(saved):
+    with open(saved["paths"]["arf2"], "ab") as handle:
+        handle.write(bytes([0]))
+    status, body = _submit(saved, [{"spot_id": 1, "flag": "wrong"}])
+    assert status == 409 and "curation_review" in body["message"]
+
+
+def test_a_deleted_review_is_410(saved):
+    r = saved["review"]
+    (flags.curation_dir(r["arf2_path"]) / f"review-{r['review_id']}.json").unlink()
+    status, body = _submit(saved, [{"spot_id": 1, "flag": "wrong"}])
+    assert status == 410 and body["status"] == "error"
+
+
+def test_an_unexpected_error_is_500_and_the_endpoint_survives(saved, monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(submission, "submit_flags", boom)
+    status, body = _submit(saved, [{"spot_id": 1, "flag": "wrong"}])
+    assert status == 500 and body["status"] == "error"
+    ep = saved["endpoint"]
+    assert _post(ep["port"], "/v1/ping", {"token": ep["token"]})[0] == 200
+
+
+def test_finish_unregisters_the_token(saved):
+    other = submit_server.register("review", "cr-20260101-000000-zzzz", "C:/x.arf2")   # 待受けを残す
+    ep = saved["endpoint"]
+    status, body = _post(ep["port"], "/v1/finish", {"token": ep["token"]})
+    assert status == 200 and body == {"status": "ok"}
+    assert _post(ep["port"], "/v1/ping", {"token": ep["token"]})[0] == 401
+    assert _post(ep["port"], "/v1/ping", {"token": other["token"]})[0] == 200
+
+
+def test_concurrent_submits_are_both_recorded(saved):
+    results = []
+    threads = [threading.Thread(target=lambda sid=sid: results.append(
+        _submit(saved, [{"spot_id": sid, "flag": "wrong", "note": ""}])[0])) for sid in (0, 1)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+    assert results == [200, 200]
+    assert _n_rows(saved) == 2
+    tag_path = msdial_tags.alignment_tag_path(saved["paths"]["arf2"])
+    assert msdial_tags.parse_tag_file(tag_path)["peaks"] == {0: frozenset({3}), 1: frozenset({3})}
+
+
+def test_requests_write_nothing_to_stdout(saved, capfd):
+    capfd.readouterr()
+    ep = saved["endpoint"]
+    _post(ep["port"], "/v1/ping", {"token": ep["token"]})
+    _post(ep["port"], "/v1/nope", {"token": ep["token"]})
+    _submit(saved, [{"spot_id": 1, "flag": "nope"}])
+    _submit(saved, [{"spot_id": 1, "flag": "wrong"}])
+    assert capfd.readouterr().out == ""
