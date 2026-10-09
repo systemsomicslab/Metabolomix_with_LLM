@@ -340,3 +340,23 @@ def write_suggest_set(folder: Path, *, with_param: bool = True, with_arf: bool =
             "MS1 tolerance for centroid: 0.01\nRetention time tolerance for alignment: 0.1\n", encoding="utf-8")
     (folder / "lib.msp").write_text(SUGGEST_MSP.format(pc342=pc342, pc341=pc341, pe362=pe362), encoding="utf-8")
     return {"arf2": folder / "AlignmentResult_x.arf2", "msp": folder / "lib.msp"}
+
+
+def build_saved_review(folder: Path) -> dict:
+    """`write_alignment_set` → `review.run_review` → `review.save_review` まで済ませる（送信系のテスト用）。
+    `LIBRARY_CACHE_ENV` は呼び出し側が tmp に向けておく。"""
+    from metabolomix.arf2.reader import load_catalog
+    from metabolomix.curation import evidence, judge, review
+    from metabolomix.library import store as library_store
+
+    paths = write_alignment_set(folder)
+    store = library_store.open_store(paths["msp"])
+    try:
+        spots = evidence.select_spots(load_catalog(paths["arf2"]), ontology=None, name_contains=None)
+        result = review.run_review(paths["arf2"], spots, store=store, ms2_tol=0.025,
+                                   th=judge.resolve_thresholds(None), file_ids=None, max_traces=12,
+                                   selection={"kind": "annotated"})
+    finally:
+        store.close()
+    review.save_review(result)
+    return {"paths": paths, "review": result}

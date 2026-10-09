@@ -231,13 +231,13 @@ def run_suggestion(arf2_path, *, base_review, store, th, options) -> dict:
             "scoring": scoring, "counts": counts, "warnings": warnings, "spots": spots_out}
 
 
-def save_suggestion(s: dict) -> dict:
+def save_suggestion(s: dict, submit_endpoint: dict | None = None) -> dict:
     directory = flags.curation_dir(s["arf2_path"])
     directory.mkdir(parents=True, exist_ok=True)
     json_path = directory / f"suggest-{s['suggestion_id']}.json"
     html_path = directory / f"suggest-{s['suggestion_id']}.html"
     atomic_write_json(json_path, s)
-    html_path.write_text(viewer.render_suggest_html(s), encoding="utf-8")
+    html_path.write_text(viewer.render_suggest_html(s, submit_endpoint), encoding="utf-8")
     return {"json": json_path, "html": html_path}
 
 

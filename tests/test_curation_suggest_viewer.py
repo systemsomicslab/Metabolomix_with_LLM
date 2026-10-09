@@ -103,3 +103,63 @@ def test_candidate_detail_shows_a_short_inchikey(tmp_path):
     assert "ABCDEFGHIJKLMN" in detail and "OPQRST" not in detail and detail.endswith("trend_outlier")
     empty = json.dumps({**base, "inchikey": ""})
     assert "mDa / – / trend_outlier" in _run(tmp_path, f"candidateDetail({empty})")
+
+
+def test_apply_suggest_recorded_marks_spots(tmp_path):
+    out = _run(tmp_path, "(applySuggestRecorded(SPOTS, new Map([[1, {candidate: 'L1', flag: 'assign', level: 'species', note: ''}], [2, {flag: 'clear', note: ''}]])), SPOTS.map(s => s.recorded))",
+               prelude="const SPOTS = [{spot_id: 1}, {spot_id: 2}, {spot_id: 3}];")
+    assert out == [{"flag": "assign", "candidate": "L1", "level": "species"}, {"flag": "clear"}, None]
+
+
+def test_recorded_text_names_the_decision(tmp_path):
+    out = _run(tmp_path, "[recordedText({flag:'assign', candidate:'L1', level:'sum'}), recordedText({flag:'redundant', candidate:'R1'}), recordedText({flag:'clear'})]")
+    assert out[0].startswith("記録済み") and "L1" in out[0]
+    assert "R1" in out[1] and "元の注釈" in out[2]
+
+
+def test_clear_sent_choices_keeps_choices_changed_while_sending(tmp_path):
+    prelude = (
+        "const A = {candidate: 'L1', flag: 'assign', level: 'sum', note: ''};\n"
+        "const sent = new Map([[1, A], [2, A], [3, A], [4, A], [5, A]]);\n"
+        "const cur = new Map([[1, {...A}], [2, {...A, note: 'x'}], [3, {...A, level: 'species'}],\n"
+        "                     [4, {...A, candidate: 'L2'}], [6, {...A}]]);\n"   # 5 は送信中に外した、6 は新規
+        "clearSentChoices(cur, sent);\n")
+    out = _run(tmp_path, "[...cur.keys()]", prelude=prelude)
+    assert out == [2, 3, 4, 6]
+
+
+def _script():
+    html = viewer.render_suggest_html(None)
+    return html[html.index("<script>"):html.index("</script>")]
+
+
+def test_suggest_viewer_has_submit_and_finish_wired():
+    html = viewer.render_suggest_html(None)
+    for element in ('id="submit"', 'id="finish"', 'id="result"'):
+        assert element in html
+    script = _script()
+    handler = script[script.index('getElementById("submit").addEventListener'):]
+    handler = handler[:handler.index("\n});")]
+    assert handler.index("if (!choices.size)") < handler.index("confirm(suggestConfirmText(")
+    assert handler.index("new Map(choices)") < handler.index("confirm(suggestConfirmText(")
+    assert handler.index("confirm(suggestConfirmText(") < handler.index("submitClient.submit(")
+    assert handler.index("disabled = true") < handler.index("submitClient.submit(") < handler.index("disabled = false")
+
+
+def test_suggest_extracted_script_is_valid_javascript(tmp_path):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node が無いので構文チェックを省略")
+    path = tmp_path / "suggest.js"
+    path.write_text(_script()[len("<script>"):], encoding="utf-8")
+    result = subprocess.run([node, "--check", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_suggest_submit_keeps_the_lost_reason_in_result():
+    script = _script()
+    handler = script[script.index('getElementById("submit").addEventListener'):]
+    after = handler[handler.index("await submitClient.submit("):handler.index("\n});")]
+    guard = after.index("if (r.status !== 401 && r.status !== 0)")
+    clears = [i for i in range(len(after)) if after.startswith('getElementById("result").textContent = ""', i)]
+    assert clears and all(i > guard for i in clears)   # 401/0 では onState("lost") が書いた理由を消さない

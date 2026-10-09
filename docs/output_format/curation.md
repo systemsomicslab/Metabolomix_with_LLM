@@ -25,7 +25,8 @@
 | `n_table_rows_total` | 載せる条件に合うスポットの総数（`max_rows` で切る前） |
 | `n_table_rows_shown` | `table` に実際に載せた行数。`n_table_rows_total` より小さければ残りは `html_path` のビューアでしか見られない |
 | `table_note` | `table` が全件か先頭だけかの 1 行の注記 |
-| `html_path` | ビューア HTML のパス（表示は英語）。ユーザーがブラウザで開き、フラグを付けて「Copy submission text」する。**全件**（`max_rows` で切らない）が入る。自動判別が `likely_wrong` のカードは赤の破線枠（未確認）で、ユーザーが Wrong を付けると実線になる。Class の選択肢には、各クラスの下に「<クラス> › likely_wrong」、先頭に全クラス横断の「likely_wrong (all classes, N)」が並ぶ（該当が 1 件以上あるときだけ）。Verdict（自動）は `ok` / `suspect` / `likely_wrong` / suspect or worse、Flag（人）は Correct / Suspect / Wrong / Flagged で個別に絞り込める。クラス別傾向のカードは Plotly（cdnjs から読む。届かなければ canvas 描画に落ちる）で、**横軸 RT・縦軸 m/z**（範囲はクラスの全点で固定）。点に重ねると `#spot_id 名前`・DB・RT・m/z が出る。カードを押すとそのクラスに絞り込み（もう一度押すと解除）、点を押すとそのクラスに絞ってスポットのカードへ移る（点として拾うのはカーソルが点の上＝hover が出ているときだけ。それ以外の場所はクラスの切り替え）。絞り込みとは別に Exclude のチェック（low score = 理由 `low_score` / no MS/MS = 情報 `msms_absent`）があり、当たるスポットを一覧から隠す。**傾向カードの点は一覧と同じ絞り込み（Verdict・Flag・Exclude、Class の「› likely_wrong」下位項目）に従う**。Class の選択そのものは他のカードの点を消さない（カードの強調だけ）。回帰直線はサーバで当てたまま。隠しても初期選択の Wrong は残り送信される |
+| `html_path` | ビューア HTML のパス（表示は英語）。ユーザーがブラウザで開き、フラグを付けて **Submit** で直接送る（受け口が無いときは「Copy submission text」でチャットへ貼る）。**全件**（`max_rows` で切らない）が入る。自動判別が `likely_wrong` のカードは赤の破線枠（未確認）で、ユーザーが Wrong を付けると実線になる。Class の選択肢には、各クラスの下に「<クラス> › likely_wrong」、先頭に全クラス横断の「likely_wrong (all classes, N)」が並ぶ（該当が 1 件以上あるときだけ）。Verdict（自動）は `ok` / `suspect` / `likely_wrong` / suspect or worse、Flag（人）は Correct / Suspect / Wrong / Flagged で個別に絞り込める。クラス別傾向のカードは Plotly（cdnjs から読む。届かなければ canvas 描画に落ちる）で、**横軸 RT・縦軸 m/z**（範囲はクラスの全点で固定）。点に重ねると `#spot_id 名前`・DB・RT・m/z が出る。カードを押すとそのクラスに絞り込み（もう一度押すと解除）、点を押すとそのクラスに絞ってスポットのカードへ移る（点として拾うのはカーソルが点の上＝hover が出ているときだけ。それ以外の場所はクラスの切り替え）。絞り込みとは別に Exclude のチェック（low score = 理由 `low_score` / no MS/MS = 情報 `msms_absent`）があり、当たるスポットを一覧から隠す。**傾向カードの点は一覧と同じ絞り込み（Verdict・Flag・Exclude、Class の「› likely_wrong」下位項目）に従う**。Class の選択そのものは他のカードの点を消さない（カードの強調だけ）。回帰直線はサーバで当てたまま。隠しても初期選択の Wrong は残り送信される |
+| `submit` | ビューアから直接送れるか。`{"via": "viewer", "idle_timeout_min": 30}` ならビューアの Submit(候補付けは「送信」)が記録と `_tags.xml` の反映を行う。`{"via": "copy", "reason"}` なら受け口を立てられず、送信用テキストを貼る経路だけ |
 | `thresholds` | 実際に使ったしきい値（既定 `DEFAULT_THRESHOLDS` に `thresholds` 引数を上書きしたもの） |
 | `ms2_tol` | 対向照合に使った MS2 許容幅（`.dbs` の `search_params` があればそこから、無ければ既定値） |
 
@@ -229,7 +230,8 @@ neg 154 件中 9 件・pos 469 件中 27 件に立った。
 | `counts` | `targets`（対象の種類別 `{flagged, likely_wrong, unannotated}`）・`with_candidates`（候補または情報でないイオン関係があるスポット数）・`with_strong_relation`（強い説明（後述）のあるスポット数）・`hard_removed`（ハード制約で削った候補の延べ数） |
 | `warnings` | param ファイルが無く既定の検索アダクトと RT 窓を使った、`PeakProperties.arf` が無く相関を計算できない、兄弟ファイルが無い、など。**`likely_wrong` は元レビューの対象範囲についてしか分からない**旨は常に出る |
 | `table` | 1 スポット 1 行の TSV（列は下表）。強い説明のあるスポットが先、次に対象の種類（`flagged` → `likely_wrong` → `unannotated`）、同順位は `spot_id` 昇順の**先頭 `max_rows` 行だけ**（引数、既定 100）。載せた行数は `n_table_rows_shown`。全件は `html_path` |
-| `html_path` | 候補付けビューア HTML のパス。ユーザーがブラウザで開いて選び、「送信用テキストをコピー」でチャットへ貼る |
+| `html_path` | 候補付けビューア HTML のパス。ユーザーがブラウザで開いて選び、「送信」で直接送る（受け口が無いときは「送信用テキストをコピー」でチャットへ貼る） |
+| `submit` | ビューアから直接送れるか。`{"via": "viewer", "idle_timeout_min": 30}` ならビューアの Submit(候補付けは「送信」)が記録と `_tags.xml` の反映を行う。`{"via": "copy", "reason"}` なら受け口を立てられず、送信用テキストを貼る経路だけ |
 | `library` | 使った参照ライブラリの `path` と `sha256` |
 | `analysis_params` | 検索アダクトと RT 窓の出所。`source`（param ファイルか既定か）・`path`・`rt_window`（分） |
 | `options` / `thresholds` | 実際に使った引数（`rt_window` は解決後の値）としきい値 |
@@ -390,6 +392,22 @@ UTF-8 BOM・CRLF）。
 
 MS-DIAL はアラインメントを保存するたびにメモリ上のタグで `_tags.xml` を丸ごと書き直し、
 読むのはプロジェクトを開くときだけ。反映を見るにはプロジェクトを閉じてから開き直す。
+
+### ビューアからの直接送信（2026-10-09）
+
+`curation_review` / `curation_suggest` は、`127.0.0.1` の空きポートに受け口を立て（プロセスで 1 つを共有）、
+レビューごとのトークンを HTML にだけ埋め込む（レビュー・候補付けの JSON とツールの戻り値には入れない）。
+ビューアの Submit は `curation_submit` と同じ検証・記録・`_tags.xml` 反映を行い、戻り値も同じ形。`source` は常に `user`。
+
+- 受け口は Finish か、最後の通信（ping は 5 分おき）から 30 分で登録を外し、登録が 0 件になれば止まる。MCP サーバが終われば消える。ハンドラのソケットは 30 秒で時間切れ。
+- 応答の状態コード: 401（トークン不明・期限切れ → ビューアは送信用テキストの欄を開く）/ 403（`review_id` 不一致・`Host` 不正）/
+  400（検証エラー・JSON でない・`Content-Length` が無い／不正（負を含む））/ 404（不明なパス）/ 405（GET）/
+  409（レビューの後でアラインメントが変わった）/ 410（保存済みレビューが無い）/
+  413（本文が 8 MB 超）/ 500（`flags.jsonl` が読めない・想定外の例外）。本文は `{status: "error", message, ...}`。
+- ビューアは送信中は Submit を無効にする。送信中に加えた変更は未送信のまま残り、送った時点の写しだけが反映・消去される。
+  受け口を失った理由（時間切れ・不達など）は結果の行に出て、送信用テキストの欄が開く。
+- 送った結果は `curation_flags` で確かめられる。
+- 受け口が記録した後で応答が届かなかった場合（ビューアは Copy に切り替わる）、その Copy の文を貼ると同じ行がもう一度記録される。無害——スポットごとに最新の 1 行が効き、値は同じ。
 
 ### エクスポートのメタ行（`# curation = ...`）
 

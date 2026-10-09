@@ -1,3 +1,6 @@
+// ビューアの受け口（curation_review / curation_suggest が立てる 127.0.0.1 の HTTP）。MCP Apps と
+// 受け口を立てられなかったときは null（Copy / Send だけ）。spec 2026-10-09。
+const SUBMIT_ENDPOINT = /*__SUBMIT_ENDPOINT__*/null;
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const el = (tag, attrs = {}, text) => { const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
@@ -92,4 +95,97 @@ function drawMirror(prepare, spot) {
     for (const label of pickMirrorLabels(pts, toPixel, measure, {xmin: left, xmax: w}))
       ctx.fillText(label.text, label.x, label.y - sign * 2);
   }
+}
+
+// --- submit client (pure) ---
+// ビューアの Submit / Finish（spec 2026-10-09）。受け口の状態: unavailable（受け口なし・未接続）/
+// live（ping が通った）/ lost（live の後で 401 か届かない＝時間切れ・サーバ再起動）/ finished。
+function countFlags(flags) { const n = {}; for (const f of flags) n[f.flag] = (n[f.flag] || 0) + 1; return n; }
+function reviewConfirmText(flags) {
+  const n = countFlags(flags);
+  return `Record Wrong ${n.wrong || 0} / Suspect ${n.suspect || 0} / Confirmed ${n.confirmed || 0} / clear ${n.clear || 0} and update _tags.xml.\n` +
+    "If this project is open in MS-DIAL, close it first.";
+}
+// assign / redundant は _tags.xml を変えない。clear（元の注釈に戻す）だけが Misannotation と Confirmed を外す。
+function suggestConfirmText(flags) {
+  const n = countFlags(flags);
+  const head = `assign ${n.assign || 0} / redundant ${n.redundant || 0} / clear ${n.clear || 0} を記録します。`;
+  return n.clear ? head + "\nclear は _tags.xml の Misannotation と Confirmed を外します。" +
+    "MS-DIAL でこのプロジェクトを開いているなら先に閉じてください。" : head;
+}
+function stateAfter(current, httpStatus) {
+  if (current === "finished" || current === "lost") return current;
+  if (httpStatus === 401 || httpStatus === 0) return current === "live" ? "lost" : "unavailable";
+  if (httpStatus === 200) return "live";
+  return current;             // 400 / 409 などは接続の状態を変えない
+}
+function submitControls(state) {
+  const live = state === "live";
+  return {submit: live, finish: live, copyPrimary: !live};
+}
+function tagsResultText(body, lang) {
+  body = body || {};
+  const t = body.tags_xml || {}, c = t.confirmed || {}, n = body.recorded, len = a => (a || []).length;
+  if (t.error) return lang === "ja" ? `${n} 件を記録しました。_tags.xml への反映に失敗: ${t.error}`
+                                    : `Recorded ${n}. Updating _tags.xml failed: ${t.error}`;
+  const tags = `Misannotation +${len(t.added)} / -${len(t.removed)}, Confirmed +${len(c.added)} / -${len(c.removed)}`;
+  return (lang === "ja" ? `${n} 件を記録しました。${tags}。` : `Recorded ${n}. ${tags}. `) + (t.note || "");
+}
+function lostText(lang) {
+  return lang === "ja" ? "送信の受け口がありません（時間切れかサーバの再起動）。下の欄をコピーしてチャットに貼ってください。未送信の選択は残っています。"
+    : "The submit endpoint is gone (timed out or the server restarted). Copy the text below and paste it into the chat; your unsent changes are kept.";
+}
+function finishConfirmText(n, lang) {
+  return lang === "ja" ? `${n} 件の未送信の変更があります。終了してよいですか（後から「送信用テキストをコピー」で送れます）。`
+    : `${n} unsent change(s). Finish anyway? (You can still send them later with Copy submission text.)`;
+}
+function finishedText(lang) {
+  return lang === "ja" ? "終了しました。以降は「送信用テキストをコピー」で送れます。"
+    : "Finished. Use Copy submission text to send anything else.";
+}
+// --- end submit client ---
+
+const HEARTBEAT_MS = 5 * 60 * 1000;
+
+// 本文は text/plain で送る（事前確認の要らない単純要求。中身は JSON）。届かなければ status 0。
+async function postEndpoint(path, extra) {
+  if (!SUBMIT_ENDPOINT) return {status: 0, body: null};
+  try {
+    const res = await fetch(`http://127.0.0.1:${SUBMIT_ENDPOINT.port}${path}`, {method: "POST",
+      headers: {"Content-Type": "text/plain;charset=UTF-8"},
+      body: JSON.stringify({token: SUBMIT_ENDPOINT.token, ...extra})});
+    let body = null; try { body = await res.json(); } catch { /* 本文なし */ }
+    return {status: res.status, body};
+  } catch { return {status: 0, body: null}; }
+}
+
+function startSubmitClient(hooks) {
+  let state = "unavailable";
+  const update = status => { const next = stateAfter(state, status);
+    if (next !== state) { state = next; hooks.onState(state); } };
+  const ping = async () => { if (state === "lost" || state === "finished") return;
+    update((await postEndpoint("/v1/ping", {})).status); };
+  if (SUBMIT_ENDPOINT) {
+    ping(); setInterval(ping, HEARTBEAT_MS);
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") ping(); });
+  }
+  return {
+    state: () => state,
+    async submit(payload) { const r = await postEndpoint("/v1/submit", payload); update(r.status); return r; },
+    async finish() { const r = await postEndpoint("/v1/finish", {}); state = "finished"; hooks.onState(state); return r; },
+  };
+}
+
+function showSubmitControls(state) {
+  const c = submitControls(state);
+  document.getElementById("submit").hidden = !c.submit;
+  document.getElementById("finish").hidden = !c.finish;
+  const copy = document.getElementById("copy");
+  copy.classList.toggle("primary", c.copyPrimary); copy.classList.toggle("quiet", !c.copyPrimary);
+}
+
+function openFallback(text, message) {
+  const area = document.getElementById("fallback");
+  area.hidden = false; area.value = text; area.select();
+  document.getElementById("result").textContent = message;   // #status は render() が書き直すので #result に出す
 }

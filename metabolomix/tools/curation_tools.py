@@ -17,7 +17,7 @@ from metabolomix.core.path_resolvers import resolve_arf2_file_path
 from metabolomix.core.serialization import json_payload, round_floats
 # モジュール名を flag_log にするのは、curation_submit の引数 `flags`（公開 API の名前）が
 # モジュールを隠すため。
-from metabolomix.curation import evidence, judge, msdial_writeback, review, suggest, viewer
+from metabolomix.curation import evidence, judge, review, submission, submit_server, suggest, viewer
 from metabolomix.curation import flags as flag_log
 from metabolomix.library.defaults import DEFAULT_MS2_TOL, pick_tol
 
@@ -69,9 +69,7 @@ def _candidate_dirs(review_id: str, *arf2_paths) -> list[Path]:
 
 
 def _load_any(directory, review_id: str) -> dict:
-    if suggest.is_valid_suggestion_id(review_id):
-        return suggest.load_suggestion(directory, review_id)
-    return review.load_review(directory, review_id)
+    return submission.load_saved(directory, review_id)
 
 
 def _find_review(review_id: str, *arf2_paths) -> tuple[dict | None, list[Path]]:
@@ -98,6 +96,15 @@ def curation_viewer_resource() -> str:
     return viewer.render_html(None)
 
 
+def _open_submit(kind: str, review_id: str, arf2_path) -> tuple[dict | None, dict]:
+    """ビューアの受け口に登録する。立てられなければ Copy の経路だけ（記録は curation_submit）。"""
+    try:
+        endpoint = submit_server.register(kind, review_id, arf2_path)
+    except OSError as exc:
+        return None, {"via": "copy", "reason": f"受け口を立てられませんでした: {exc}"}
+    return endpoint, {"via": "viewer", "idle_timeout_min": endpoint["idle_timeout_min"]}
+
+
 @mcp.tool(annotations=_LOCAL_WRITE_APPEND, structured_output=False, meta=_UI_META)
 def curation_review(ontology: list[str] | None = None, name_contains: str | None = None,
                     file_ids: list[int] | None = None, max_traces: int = 12,
@@ -113,8 +120,10 @@ def curation_review(ontology: list[str] | None = None, name_contains: str | None
     HTML ビューアにある）、判定の件数、クラス別の傾向要約（点数・R²・外れ数）、HTML
     ビューアのパス。`file_ids` は `.arf` の行にある試料 ID だけ（無い ID はエラー）。
     **EIC 系列やスペクトルは返さない**——ユーザーには
-    `html_path` をブラウザで開いてもらい、ビューアで付けたフラグを「送信用テキストを
-    コピー」→ チャットに貼ってもらう。貼られたら curation_submit(submission_text=...) に渡す。
+    `html_path` をブラウザで開いてもらい、ビューアの **Submit** で送ってもらう（記録と
+    `_tags.xml` の反映はビューアが直接行う。`submit.via == "viewer"`）。送信用テキストを貼るよう
+    頼まない。送った結果は curation_flags で確かめられる。Copy のテキストが貼られたとき
+    （受け口の時間切れ・`submit.via == "copy"`）は従来どおり curation_submit(submission_text=...) に渡す。
 
     判定: likely_wrong（強い不一致: polarity_mismatch / precursor_unmatched / dmz_out /
     class_rule_rejected（MS-DIAL の脂質クラス規則による棄却で、脂質規則が走ったデータに限る）/
@@ -160,7 +169,8 @@ def curation_review(ontology: list[str] | None = None, name_contains: str | None
         return _flag_file_error(exc)
     except evidence.UnknownFileIdsError as exc:
         return _error(str(exc), missing_file_ids=exc.missing)
-    saved = review.save_review(result)
+    endpoint, submit_info = _open_submit("review", result["review_id"], result["arf2_path"])
+    saved = review.save_review(result, submit_endpoint=endpoint)
     session_state.session.curation.last_review_id = result["review_id"]
     session_state.session.curation.review_dirs[result["review_id"]] = str(saved["json"].parent)
 
@@ -179,6 +189,7 @@ def curation_review(ontology: list[str] | None = None, name_contains: str | None
                        if len(table.splitlines()) - 1 < n_total else
                        "table は該当する全件です。カードは html_path のビューアで見られます。"),
         "html_path": str(saved["html"]),
+        "submit": submit_info,
         "thresholds": th, "ms2_tol": ms2_tol,
     }, 4))
 
@@ -202,8 +213,10 @@ def curation_suggest(review_id: str | None = None, wrong: str = "flagged_or_like
     一致ピーク 0 は順位を下げる。MS-DIAL の脂質規則は評価していない（鎖組成は保証しない）ので、
     既定では和組成で記録する。
     戻り値は 1 スポット 1 行の TSV（強い説明のあるものが先、先頭 `max_rows` 行）・件数・`html_path`。
-    ユーザーには `html_path` をブラウザで開いてもらい、選んだ内容を「送信用テキストをコピー」で
-    チャットに貼ってもらう。貼られたら curation_submit(submission_text=...) に渡す。
+    ユーザーには `html_path` をブラウザで開いてもらい、選んだ内容をビューアの **送信** で送ってもらう
+    （記録と `_tags.xml` の反映はビューアが直接行う。`submit.via == "viewer"`）。送信用テキストを
+    貼るよう頼まない。Copy のテキストが貼られたとき（受け口の時間切れ・`submit.via == "copy"`）は
+    curation_submit(submission_text=...) に渡す。
     **ユーザーの同意なしに curation_submit を呼ばない。**
     """
     arf2_path = resolve_arf2_file_path(file_path)
@@ -243,7 +256,8 @@ def curation_suggest(review_id: str | None = None, wrong: str = "flagged_or_like
         return _flag_file_error(exc)
     except ValueError as exc:
         return _error(str(exc))
-    saved = suggest.save_suggestion(result)
+    endpoint, submit_info = _open_submit("suggest", result["suggestion_id"], result["arf2_path"])
+    saved = suggest.save_suggestion(result, submit_endpoint=endpoint)
     session_state.session.curation.review_dirs[result["suggestion_id"]] = str(saved["json"].parent)
     table = suggest.summary_tsv(result, max_rows=max_rows)
     return json_payload(round_floats({
@@ -251,6 +265,7 @@ def curation_suggest(review_id: str | None = None, wrong: str = "flagged_or_like
         "n_spots": len(result["spots"]), "counts": result["counts"], "warnings": result["warnings"],
         "table": table, "n_table_rows_shown": len(table.splitlines()) - 1,
         "html_path": str(saved["html"]),
+        "submit": submit_info,
         "library": {**result["library"], "path": session_state.session.library.source_path},
         "analysis_params": {k: result["analysis_params"][k] for k in ("source", "path", "rt_window")},
         "options": result["options"], "thresholds": th}, 4))
@@ -302,36 +317,10 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
     if saved is None:
         return _not_found(review_id, searched)
     try:
-        if suggest.is_valid_suggestion_id(review_id):
-            cleaned = suggest.expand_entries(entries, saved)
-        else:
-            cleaned = flag_log.validate_entries(
-                entries, allowed_spot_ids={s["spot_id"] for s in saved["spots"]})
-    except ValueError as exc:
-        return _error(str(exc))
-    seen_spot_ids = set()
-    duplicated = sorted({e["spot_id"] for e in cleaned if e["spot_id"] in seen_spot_ids
-                         or seen_spot_ids.add(e["spot_id"])})
-    if duplicated:
-        return _error(f"同じ spot_id を 1 回の送信で複数回指定しています: {duplicated}")
-    current = flag_log.alignment_key(saved["arf2_path"])
-    if current["alignment_sha256"] != saved["alignment"]["alignment_sha256"]:
-        return _error("レビューの後でアラインメント（.arf2）が変わっています。curation_review（候補付けなら curation_suggest）をやり直してください。")
-    store = flag_log.FlagStore(flag_log.curation_dir(saved["arf2_path"]))
-    try:
-        store.rows()                       # 壊れた記録に追記しない（先に読めるか確かめる）
-    except flag_log.FlagFileError as exc:
-        return _flag_file_error(exc)
-    n = store.append(cleaned, alignment=current, review_id=review_id, source=source)
-    effective = store.effective(current["alignment_sha256"])
-    tags_xml = msdial_writeback.sync_tags(saved["arf2_path"], cleaned)
-    return json_payload({"status": "ok", "recorded": n, "review_id": review_id,
-                         "n_wrong": sum(1 for r in effective.values() if r["flag"] == "wrong"),
-                         "n_suspect": sum(1 for r in effective.values() if r["flag"] == "suspect"),
-                         "n_confirmed": sum(1 for r in effective.values() if r["flag"] == "confirmed"),
-                         "n_assign": sum(1 for r in effective.values() if r["flag"] == "assign"),
-                         "n_redundant": sum(1 for r in effective.values() if r["flag"] == "redundant"),
-                         "tags_xml": tags_xml})
+        result = submission.submit_flags(saved, entries, review_id=review_id, source=source)
+    except submission.SubmissionError as exc:
+        return _error(str(exc), **exc.details)
+    return json_payload(result)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)

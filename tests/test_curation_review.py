@@ -102,6 +102,19 @@ def test_app_template_has_no_embedded_data():
     assert "const EMBEDDED = null" in html
 
 
+def test_app_template_has_no_submit_endpoint():
+    assert "const SUBMIT_ENDPOINT = null;" in viewer.render_html(None)
+    assert "const SUBMIT_ENDPOINT = null;" in viewer.render_suggest_html(None)
+
+
+def test_submit_endpoint_is_embedded_before_the_data(built):
+    _, result = built
+    html = viewer.render_html({**result, "warnings": ["/*__SUBMIT_ENDPOINT__*/null"]},
+                              {"port": 5, "token": "t", "idle_timeout_min": 30})
+    assert 'const SUBMIT_ENDPOINT = {"port":5,"token":"t"};' in html
+    assert "/*__SUBMIT_ENDPOINT__*/null" in html            # データの中の同じ文字列は書き換えない
+
+
 def test_template_avoids_horizontal_overflow_at_phone_width():
     # 実ファイル名にはスペースがなく、header h1 が縮められないと sticky header ごと
     # 横スクロールが出る（binding requirement: no horizontal page scroll at phone
@@ -249,8 +262,10 @@ def test_app_loader_shows_error_payloads_and_send_updates_spots():
     assert "showError" in script
     send = script[script.index('getElementById("send").addEventListener'):]
     send = send[:send.index("\n});")]
-    assert "spot.flag = " in send and "spot.flag_note = " in send
-    assert send.index("spot.flag = ") < send.index("edits.clear()")
+    assert "afterRecorded(" in send
+    after = script[script.index("function afterRecorded"):]
+    after = after[:after.index("\n}")]
+    assert after.index("applyRecorded(REVIEW.spots, sent)") < after.index("clearSent(edits, sent)")
 
 
 def _review(paths):
@@ -675,7 +690,11 @@ def _strip_comments(source: str) -> str:
 def test_viewer_shows_no_japanese_outside_comments():
     folder = Path(viewer.__file__).parent
     for name in ("viewer.html", "viewer_common.js"):
-        text = _strip_comments((folder / name).read_text(encoding="utf-8"))
+        source = (folder / name).read_text(encoding="utf-8")
+        # 送信クライアントの純関数は両ビューア共用で、日本語は lang == "ja" の枝（日本語の提案ビューア用）に
+        # だけ現れる。英語のレビュービューアは lang "en" しか渡さない。
+        source = re.sub(r"// --- submit client \(pure\) ---.*?// --- end submit client ---", "", source, flags=re.S)
+        text = _strip_comments(source)
         hits = [line.strip() for line in text.splitlines() if _JA.search(line)]
         assert hits == [], f"{name}: {hits[:5]}"
 
@@ -786,3 +805,103 @@ def test_isotope_panel_wraps_the_absolute_value_when_it_does_not_fit():
     draw = script[script.index("function drawIsotopes"):]
     draw = draw[:draw.index("\n}")]
     assert "isotopeLabel(" in draw and "measureText" in draw
+
+
+def test_review_confirm_text_counts_each_flag(tmp_path):
+    text = _run_block(tmp_path, "submit client", "", "reviewConfirmText([{flag:'wrong'},{flag:'wrong'},{flag:'confirmed'},{flag:'clear'}])")
+    assert "Wrong 2 / Suspect 0 / Confirmed 1 / clear 1" in text and "MS-DIAL" in text
+
+
+def test_suggest_confirm_text_warns_about_ms_dial_only_with_clear(tmp_path):
+    without = _run_block(tmp_path, "submit client", "", "suggestConfirmText([{flag:'assign'},{flag:'redundant'}])")
+    assert "assign 1 / redundant 1 / clear 0" in without and "MS-DIAL" not in without
+    with_clear = _run_block(tmp_path, "submit client", "", "suggestConfirmText([{flag:'clear'}])")
+    assert "clear 1" in with_clear and "MS-DIAL" in with_clear
+
+
+def test_state_after_switches_to_copy_when_the_endpoint_is_lost(tmp_path):
+    cases = _run_block(tmp_path, "submit client", "", "[" + ",".join([
+        "stateAfter('unavailable', 200)", "stateAfter('unavailable', 0)", "stateAfter('live', 401)",
+        "stateAfter('live', 0)", "stateAfter('live', 400)", "stateAfter('live', 409)",
+        "stateAfter('lost', 200)", "stateAfter('finished', 200)"]) + "]")
+    assert cases == ["live", "unavailable", "lost", "lost", "live", "live", "lost", "finished"]
+
+
+def test_submit_controls_show_submit_and_finish_only_when_live(tmp_path):
+    out = _run_block(tmp_path, "submit client", "", "['live','unavailable','lost','finished'].map(submitControls)")
+    assert out[0] == {"submit": True, "finish": True, "copyPrimary": False}
+    assert all(c == {"submit": False, "finish": False, "copyPrimary": True} for c in out[1:])
+
+
+def test_tags_result_text_reports_changes_and_failures(tmp_path):
+    ok = _run_block(tmp_path, "submit client", "", "tagsResultText({recorded:2, tags_xml:{added:[1], removed:[], confirmed:{added:[0], removed:[]}, note:'N'}}, 'en')")
+    assert ok.startswith("Recorded 2.") and "Misannotation +1 / -0" in ok and "Confirmed +1 / -0" in ok and ok.endswith("N")
+    failed = _run_block(tmp_path, "submit client", "", "tagsResultText({recorded:1, tags_xml:{error:'OSError: x'}}, 'ja')")
+    assert "1 件を記録しました" in failed and "OSError: x" in failed
+
+
+def test_apply_recorded_moves_edits_onto_spots(tmp_path):
+    spots = json.dumps([{"spot_id": 0, "flag": None}, {"spot_id": 1, "flag": "wrong", "flag_note": "a"}])
+    out = _run_block(tmp_path, "recorded", f"const SPOTS = {spots};",
+                     "(applyRecorded(SPOTS, new Map([[0, {flag:'confirmed', note:'ok'}], [1, {flag:'', note:''}]])), SPOTS)")
+    assert out[0] == {"spot_id": 0, "flag": "confirmed", "flag_note": "ok", "flag_cleared": False, "confirmed": True}
+    assert out[1] == {"spot_id": 1, "flag": None, "flag_note": None, "flag_cleared": True, "confirmed": False}
+
+
+def test_review_submit_button_skips_empty_submissions_and_confirms_first():
+    script = _script()
+    handler = script[script.index('getElementById("submit").addEventListener'):]
+    handler = handler[:handler.index("\n});")]
+    assert handler.index("if (!edits.size)") < handler.index("confirm(reviewConfirmText(")
+    assert handler.index("confirm(reviewConfirmText(") < handler.index("submitClient.submit(")
+    assert "applyRecorded" in script[script.index("function afterRecorded"):]
+
+
+def test_clear_sent_keeps_edits_changed_during_flight(tmp_path):
+    prelude = ("const edits = new Map([[0, {flag:'wrong', note:'a'}], [1, {flag:'wrong', note:'b'}], [2, {flag:'suspect', note:''}]]);"
+               "const sent = new Map(edits);"
+               "edits.set(1, {flag:'confirmed', note:'b'}); edits.set(2, {flag:'suspect', note:'new'}); edits.set(3, {flag:'wrong', note:''});"
+               "clearSent(edits, sent);")
+    out = _run_block(tmp_path, "recorded", prelude, "[...edits.entries()]")
+    assert out == [[1, {"flag": "confirmed", "note": "b"}], [2, {"flag": "suspect", "note": "new"}],
+                   [3, {"flag": "wrong", "note": ""}]]
+
+
+def test_tags_result_text_survives_a_missing_body(tmp_path):
+    out = _run_block(tmp_path, "submit client", "", "tagsResultText(null, 'en')")
+    assert isinstance(out, str)
+
+
+def test_review_viewer_uses_only_english_helpers():
+    template = (Path(viewer.__file__).parent / "viewer.html").read_text(encoding="utf-8")
+    assert "suggestConfirmText(" not in template
+    assert '"ja"' not in template and "'ja'" not in template
+
+
+def test_submit_snapshots_edits_and_disables_the_button_in_flight():
+    script = _script()
+    handler = script[script.index('getElementById("submit").addEventListener'):]
+    handler = handler[:handler.index("\n});")]
+    assert handler.index("new Map(edits)") < handler.index("submitClient.submit(")
+    assert "disabled = true" in handler and "disabled = false" in handler
+    assert "clearSent(edits, sent)" in script[script.index("function afterRecorded"):]
+
+
+def test_submit_keeps_the_lost_reason_in_result():
+    script = _script()
+    handler = script[script.index('getElementById("submit").addEventListener'):]
+    after = handler[handler.index("await submitClient.submit("):handler.index("\n});")]
+    guard = after.index("if (r.status !== 401 && r.status !== 0)")
+    assert 'getElementById("result").textContent = ""' in after
+    for m in re.finditer(re.escape('getElementById("result").textContent = ""'), after):
+        assert m.start() > guard   # 401/0 では onState("lost") が書いた理由を消さない
+
+
+def test_plotly_loader_is_integrity_pinned():
+    # ページは書込みトークンを持つので、第三者スクリプトは SRI で固定する
+    html = viewer.render_html(None)
+    loader = html[html.index("function plotlyReady"):]
+    loader = loader[:loader.index("\n}\n")]
+    assert re.search(r'script\.integrity\s*=\s*"sha512-[A-Za-z0-9+/]+=*"', loader)
+    assert re.search(r'script\.crossOrigin\s*=\s*"anonymous"', loader)
+    assert "script.onerror" in loader

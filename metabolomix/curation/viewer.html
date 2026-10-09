@@ -19,6 +19,8 @@ header h1 { font-size:15px; margin:0 12px 0 0; min-width:0; overflow-wrap:anywhe
 select, button, input[type=text] { font:inherit; color:inherit; background:var(--card);
          border:1px solid var(--line); border-radius:6px; padding:4px 8px; }
 button.primary { background:var(--meas); color:#fff; border-color:var(--meas); }
+button.quiet { opacity:.7; }
+#result { color:var(--muted); overflow-wrap:anywhere; }
 #status { color:var(--muted); }
 main { padding:12px 16px 40px; }
 .warn { border-left:3px solid var(--suspect); padding:6px 10px; margin:6px 0; background:var(--card); }
@@ -66,8 +68,11 @@ textarea { width:100%; height:80px; font:12px monospace; }
   <span class="exclude">Exclude <label><input type="checkbox" id="x-low_score"> low score</label>
     <label><input type="checkbox" id="x-msms_absent"> no MS/MS</label></span>
   <button id="send" class="primary" hidden>Send</button>
+  <button id="submit" class="primary" hidden>Submit</button>
+  <button id="finish" hidden>Finish</button>
   <button id="copy">Copy submission text</button>
   <span id="status"></span>
+  <span id="result"></span>
 </header>
 <main>
   <div id="warnings"></div>
@@ -224,6 +229,9 @@ function plotlyReady() {
     const script = document.createElement("script");
     const timer = setTimeout(() => resolve(null), PLOTLY_TIMEOUT_MS);
     script.src = PLOTLY_URL; script.async = true;
+    // このページは書込みトークンを持つので、第三者スクリプトは内容ハッシュで固定する（cdnjs 公開の SRI と照合済み）。
+    script.integrity = "sha512-7H/XbvOmUsf6mawBvmmx9BsPt9ew2NTwQ3QDSzNe6iyacDbCJU+7pBbZY1NdmTpuj7snxSsXasMYMiR2tv906g==";
+    script.crossOrigin = "anonymous";
     script.onload = () => { clearTimeout(timer); resolve(window.Plotly || null); };
     script.onerror = () => { clearTimeout(timer); resolve(null); };
     document.head.appendChild(script);
@@ -400,6 +408,24 @@ function setFlag(spot, flag, note, card) {
   card.classList.remove("flag-wrong", "flag-suspect", "flag-confirmed", "flag-preset"); if (flag) card.classList.add("flag-" + flag);
   document.getElementById("status").textContent = countsText();
 }
+
+// --- recorded (pure) ---
+// 送信が記録されたら、未送信の変更をスポットへ写す（MCP Apps の Send とビューアの Submit で共通）。
+function applyRecorded(spots, edits) {
+  for (const [spotId, e] of edits) {
+    const spot = spots.find(s => s.spot_id === spotId); if (!spot) continue;
+    spot.flag = e.flag || null; spot.flag_note = e.flag ? (e.note || "") : null; spot.flag_cleared = !e.flag;
+    spot.confirmed = e.flag === "confirmed";
+  }
+}
+// 送信中に変わった変更は未送信のまま残す: 送った内容（flag と note）と今も同じ項目だけを消す。
+function clearSent(edits, sent) {
+  for (const [spotId, e] of sent) {
+    const cur = edits.get(spotId);
+    if (cur && cur.flag === e.flag && cur.note === e.note) edits.delete(spotId);
+  }
+}
+// --- end recorded ---
 
 function submission() {
   const flags = [...edits.entries()].map(([spot_id, e]) => ({spot_id, flag: e.flag || "clear", note: e.note || ""}));
@@ -661,6 +687,39 @@ document.getElementById("copy").addEventListener("click", async () => {
   catch { area.hidden = false; area.value = text; area.select(); document.getElementById("status").textContent = "Select the text below and copy it."; }
 });
 
+function afterRecorded(text, sent) {
+  applyRecorded(REVIEW.spots, sent);
+  clearSent(edits, sent); if (!edits.size) { presetCount = 0; presetCauses = {}; }
+  render();
+  document.getElementById("result").textContent = text;
+}
+
+const submitClient = startSubmitClient({onState: state => {
+  showSubmitControls(state);
+  if (state === "lost") openFallback(PREFIX + " " + JSON.stringify(submission()), lostText("en"));
+}});
+
+document.getElementById("submit").addEventListener("click", async () => {
+  if (!edits.size) { document.getElementById("status").textContent = "No unsent changes."; return; }
+  const payload = submission(), sent = new Map(edits);   // 送信中に変わった変更を巻き込まないよう、送る内容を控える
+  if (!confirm(reviewConfirmText(payload.flags))) return;
+  const button = document.getElementById("submit");
+  button.disabled = true; document.getElementById("result").textContent = "Submitting…";
+  const r = await submitClient.submit(payload);
+  button.disabled = false;
+  if (r.status === 200) { afterRecorded(tagsResultText(r.body, "en"), sent); return; }
+  if (r.status !== 401 && r.status !== 0) {   // 未送信の変更は残す。401/0 は onState("lost") が理由を #result に書いたので消さない
+    document.getElementById("result").textContent = "";
+    showError(errorMessage(r.body) || `HTTP ${r.status}`);
+  }
+});
+
+document.getElementById("finish").addEventListener("click", async () => {
+  if (edits.size && !confirm(finishConfirmText(edits.size, "en"))) return;
+  await submitClient.finish();
+  document.getElementById("result").textContent = finishedText("en");
+});
+
 // ---- MCP Apps（ui:// で表示されたとき）。2026-09 時点で Claude Desktop のローカル stdio では未検証。 ----
 let rpcId = 0; const pending = new Map();
 function rpc(method, params) { const id = ++rpcId;
@@ -700,19 +759,14 @@ window.addEventListener("message", async event => {
 
 document.getElementById("send").addEventListener("click", async () => {
   if (!edits.size) { document.getElementById("status").textContent = "No unsent changes."; return; }
+  const sent = new Map(edits);
   let text;
   try {
     text = toolText(await rpc("tools/call", {name: "curation_submit", arguments: {submission_text: PREFIX + " " + JSON.stringify(submission())}}));
   } catch (err) { showError(err && err.message ? err.message : JSON.stringify(err)); return; }
   const body = parseBody(text), problem = errorMessage(body);
   if (problem) { showError(problem); return; }        // 失敗したら未送信の変更は残す
-  for (const [spotId, e] of edits) {
-    const spot = REVIEW.spots.find(s => s.spot_id === spotId); if (!spot) continue;
-    spot.flag = e.flag || null; spot.flag_note = e.flag ? (e.note || "") : null; spot.flag_cleared = !e.flag;
-    spot.confirmed = e.flag === "confirmed";
-  }
-  edits.clear(); presetCount = 0; presetCauses = {}; render();
-  document.getElementById("status").textContent = text.slice(0, 200);
+  afterRecorded(text.slice(0, 200), sent);
 });
 
 if (REVIEW) start();
