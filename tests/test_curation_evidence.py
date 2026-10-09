@@ -54,6 +54,18 @@ def test_collect_builds_the_evidence_contract(dataset):
     assert stats["n_reference_resolved"] == 2
 
 
+def test_collect_attaches_the_measured_and_theoretical_ms1_isotopes(dataset):
+    paths, s = dataset
+    spots = evidence.select_spots(load_catalog(paths["arf2"]), ontology=None, name_contains=None)
+    evs, _ = evidence.collect(paths["arf2"], spots, store=s, ms2_tol=0.025,
+                              th=judge.resolve_thresholds(None))
+    iso = {e["spot_id"]: e for e in evs}[0]["isotopes"]
+    assert [p[1] for p in iso["measured"]] == [100.0, 46.0, 12.0]
+    assert iso["measured"][0][0] == pytest.approx(760.5851, abs=1e-4)
+    assert iso["theoretical"]["basis"] == "formula+adduct"
+    assert iso["theoretical"]["relative"][1] == pytest.approx(47.1, abs=0.5)
+
+
 def test_eic_points_are_trimmed_around_the_peak(dataset):
     paths, s = dataset
     catalog = load_catalog(paths["arf2"])

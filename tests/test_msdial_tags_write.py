@@ -78,3 +78,13 @@ def test_written_file_has_the_msdial_layout(tmp_path):
 def test_alignment_tag_path_sits_next_to_the_arf2(tmp_path):
     arf2 = tmp_path / "AlignmentResult_2026_09_09_17_31_52.arf2"
     assert tags.alignment_tag_path(arf2) == tmp_path / "AlignmentResult_2026_09_09_17_31_52_tags.xml"
+
+
+def test_several_tags_change_in_one_write(tmp_path):
+    path = write_existing(tmp_path)
+    result = tags.update_alignment_tags(path, {
+        tags.CONFIRMED_TAG_ID: {"add": [5], "remove": [4]},
+        tags.MISANNOTATION_TAG_ID: {"add": [4], "remove": [5]}})
+    assert tags.parse_tag_file(path)["peaks"] == {0: frozenset({1}), 4: frozenset({3}), 5: frozenset({1})}
+    assert result["tags"] == {1: {"added": [5], "removed": [4]}, 3: {"added": [], "removed": [5]}}   # 4 は元から 3 付き
+    assert result["created"] is False

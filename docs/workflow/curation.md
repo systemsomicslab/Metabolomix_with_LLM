@@ -56,36 +56,40 @@ flowchart TD
 8. │  └─ metabolomix/curation/flags.py  effective_flags()
 9. │  └─ metabolomix/curation/flags.py  orphaned_count()（以前の版の `.arf2` に付いたフラグ → `warnings`）
 10. │  └─ metabolomix/curation/flags.py  cleared_spots()（人が取り消したスポット → `flag_cleared`）
-11. │  └─ metabolomix/curation/evidence.py  collect()
-12. │     ├─ metabolomix/curation/evidence.py  _arf_rows()
-13. │     │  └─ metabolomix/arf/reader.py  deserialize()
-14. │     ├─ metabolomix/curation/evidence.py  _check_file_ids()（`.arf` に無い `file_ids` は `UnknownFileIdsError` → エラー payload）
-15. │     ├─ metabolomix/arf2/match_results.py  load_spot_annotations()
-16. │     ├─ metabolomix/dcl/reader.py  deserialize_dcl()
-17. │     ├─ metabolomix/curation/evidence.py  _reference()
-18. │     │  ├─ metabolomix/library/store.py  LibraryStore.library_id_for()（`.dbs` の注釈器 Key → ライブラリ名。無ければ GUI の `<名前>_<n>` 規則）
-19. │     │  └─ metabolomix/library/store.py  LibraryStore.record_by_scan_id()
-20. │     ├─ metabolomix/library/store.py  LibraryStore.rt_used_for()（MS-DIAL がその照合で RT を使ったか → `rt_used_by_annotation`）
-21. │     ├─ metabolomix/analysis/spectral_match.py  match_spectrum()
-22. │     ├─ metabolomix/plots/mirror.py  build_mirror_payload()
-23. │     ├─ metabolomix/eic/reader.py  read_eic_spot_css1()
-24. │     ├─ metabolomix/curation/eic_shape.py  spot_shape()
-25. │     └─ metabolomix/curation/evidence.py  _downsample_points()（形状計算の後に payload だけ間引く）
-26. │  └─ metabolomix/curation/trend.py  composition()（`LipidParser` はモジュールで 1 つだけ作る）
-27. │  └─ metabolomix/curation/trend.py  fit_trends()
-28. │  └─ metabolomix/curation/review.py  _adduct_isomer_pool()（対象に絞らずアラインメントの注釈付き全スポット）
-29. │     ├─ metabolomix/arf2/match_results.py  load_spot_annotations()
-30. │     ├─ metabolomix/arf2/reader.py  load_catalog()（同じファイルならキャッシュ済み）
-31. │     └─ metabolomix/curation/adduct_isomer.py  pool_entry()（`evidence_tier()` で証拠の段階を付ける）
-32. │  └─ metabolomix/curation/judge.py  lipid_rules_active()（脂質規則フラグが 1 件でも True か）
-33. │  └─ metabolomix/curation/adduct_isomer.py  find_adduct_isomer()（有効な `wrong` フラグのスポットは相手から外す → `adduct_isomer`）
-34. │  └─ metabolomix/curation/judge.py  judge_spot()
-35. │  └─ metabolomix/curation/judge.py  auto_note()（判定根拠の文 → `auto_note`）
-36. metabolomix/curation/review.py  save_review()
-37. └─ metabolomix/curation/viewer.py  render_html()
-38. metabolomix/curation/review.py  n_summary_rows()
-39. metabolomix/curation/review.py  summary_tsv()（`max_rows` で先頭だけ）
-40. metabolomix/curation/review.py  trend_summary()
+11. │  └─ metabolomix/curation/apply.py  confirmed_spots()（記録の confirmed ∪ `_tags.xml` の Confirmed − 最新が wrong / suspect → `confirmed`）
+12. │  └─ metabolomix/curation/evidence.py  collect()
+13. │     ├─ metabolomix/curation/evidence.py  _arf_rows()
+14. │     │  └─ metabolomix/arf/reader.py  deserialize()
+15. │     ├─ metabolomix/curation/evidence.py  _check_file_ids()（`.arf` に無い `file_ids` は `UnknownFileIdsError` → エラー payload）
+16. │     ├─ metabolomix/arf2/match_results.py  load_spot_annotations()
+17. │     ├─ metabolomix/arf2/reader.py  load_isotopic_peaks()（Key 53 IsotopicPeaks。カタログには載せない）
+18. │     ├─ metabolomix/dcl/reader.py  deserialize_dcl()
+19. │     ├─ metabolomix/curation/evidence.py  _reference()
+20. │     │  ├─ metabolomix/library/store.py  LibraryStore.library_id_for()（`.dbs` の注釈器 Key → ライブラリ名。無ければ GUI の `<名前>_<n>` 規則）
+21. │     │  └─ metabolomix/library/store.py  LibraryStore.record_by_scan_id()
+22. │     ├─ metabolomix/library/store.py  LibraryStore.rt_used_for()（MS-DIAL がその照合で RT を使ったか → `rt_used_by_annotation`）
+23. │     ├─ metabolomix/analysis/spectral_match.py  match_spectrum()
+24. │     ├─ metabolomix/plots/mirror.py  build_mirror_payload()
+25. │     ├─ metabolomix/eic/reader.py  read_eic_spot_css1()
+26. │     ├─ metabolomix/curation/eic_shape.py  spot_shape()
+27. │     ├─ metabolomix/curation/evidence.py  _downsample_points()（形状計算の後に payload だけ間引く）
+28. │     ├─ metabolomix/curation/isotope.py  measured_envelope()（→ `isotopes.measured`）
+29. │     └─ metabolomix/curation/isotope.py  theoretical_envelope()（組成式＋アダクトの原子。`msdial/adducts.py` `adduct_composition()` → `isotopes.theoretical`）
+30. │  └─ metabolomix/curation/trend.py  composition()（`LipidParser` はモジュールで 1 つだけ作る）
+31. │  └─ metabolomix/curation/trend.py  fit_trends()
+32. │  └─ metabolomix/curation/review.py  _adduct_isomer_pool()（対象に絞らずアラインメントの注釈付き全スポット）
+33. │     ├─ metabolomix/arf2/match_results.py  load_spot_annotations()
+34. │     ├─ metabolomix/arf2/reader.py  load_catalog()（同じファイルならキャッシュ済み）
+35. │     └─ metabolomix/curation/adduct_isomer.py  pool_entry()（`evidence_tier()` で証拠の段階を付ける）
+36. │  └─ metabolomix/curation/judge.py  lipid_rules_active()（脂質規則フラグが 1 件でも True か）
+37. │  └─ metabolomix/curation/adduct_isomer.py  find_adduct_isomer()（有効な `wrong` フラグのスポットは相手から外す → `adduct_isomer`）
+38. │  └─ metabolomix/curation/judge.py  judge_spot()
+39. │  └─ metabolomix/curation/judge.py  auto_note()（判定根拠の文 → `auto_note`）
+40. metabolomix/curation/review.py  save_review()
+41. └─ metabolomix/curation/viewer.py  render_html()
+42. metabolomix/curation/review.py  n_summary_rows()
+43. metabolomix/curation/review.py  summary_tsv()（`max_rows` で先頭だけ）
+44. metabolomix/curation/review.py  trend_summary()
 
 ## curation_suggest
 
@@ -117,7 +121,7 @@ flowchart TD
 ## curation_submit
 
 前提: `review_id` のレビューがディスクにあること。状態変更: `flags.jsonl` へ追記し、
-アラインメントの `_tags.xml` の Misannotation を書き換える（書く前に `curation/tags-backup/` へ控え）。
+アラインメントの `_tags.xml` の Misannotation と Confirmed を書き換える（書く前に `curation/tags-backup/` へ控え）。
 レビューの探し先は、セッションの `review_dirs` → 送信用テキストの `arf2_path` →
 引数 `file_path` → 既定の `.arf2` の順（サーバ再起動の後でも貼った文で送れる）。
 
@@ -132,8 +136,8 @@ flowchart TD
 9. metabolomix/curation/flags.py  alignment_key()（レビュー時の sha256 と一致しなければ拒否）
 10. metabolomix/curation/flags.py  FlagStore.rows()（読めない行があれば追記せずにエラー）
 11. metabolomix/curation/flags.py  FlagStore.append()
-12. metabolomix/curation/msdial_writeback.py  sync_misannotation()（失敗しても記録は残し `tags_xml.error`。assign / redundant は触らない）
-13. └─ metabolomix/msdial/tags.py  update_alignment_tag()
+12. metabolomix/curation/msdial_writeback.py  sync_tags()（失敗しても記録は残し `tags_xml.error`。assign / redundant は触らない）
+13. └─ metabolomix/msdial/tags.py  update_alignment_tags()（Misannotation と Confirmed を 1 回で書く）
 14.    └─ metabolomix/core/atomic_io.py  atomic_write_bytes()
 
 ## curation_flags

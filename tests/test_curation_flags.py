@@ -177,3 +177,12 @@ def test_digest_changes_when_only_the_assigned_record_changes():
 def test_review_submissions_still_reject_assign():
     with pytest.raises(ValueError, match="flag"):
         validate_entries([{"spot_id": 1, "flag": "assign"}], allowed_spot_ids={1})
+
+
+def test_confirmed_is_a_review_decision():
+    cleaned = flags.validate_entries([{"spot_id": 3, "flag": "confirmed"}], allowed_spot_ids={3})
+    assert cleaned == [{"spot_id": 3, "flag": "confirmed", "note": ""}]
+    rows = [{"alignment_sha256": "a", "spot_id": 3, "flag": "wrong"},
+            {"alignment_sha256": "a", "spot_id": 3, "flag": "confirmed"}]
+    assert flags.effective_flags(rows, "a")[3]["flag"] == "confirmed"
+    assert flags.split_decisions(flags.effective_flags(rows, "a"))["confirmed"] == {3}

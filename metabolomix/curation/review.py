@@ -16,6 +16,7 @@ from metabolomix.arf2.match_results import load_spot_annotations
 from metabolomix.arf2.reader import load_catalog
 from metabolomix.core.atomic_io import atomic_write_json
 from metabolomix.curation import adduct_isomer, evidence, flags, trend, viewer
+from metabolomix.curation.apply import confirmed_spots
 from metabolomix.curation.judge import auto_note, judge_spot, lipid_rules_active
 
 VERDICT_RANK = {"ok": 0, "suspect": 1, "likely_wrong": 2}
@@ -46,6 +47,7 @@ def run_review(arf2_path, spots, *, store, ms2_tol, th, file_ids, max_traces, se
     existing = flags.effective_flags(flag_rows, alignment["alignment_sha256"])
     orphaned = flags.orphaned_count(flag_rows, alignment)
     cleared = flags.cleared_spots(flag_rows, alignment["alignment_sha256"])
+    confirmed = confirmed_spots(arf2_path, flags.effective_flags(flag_rows, alignment["alignment_sha256"]))
     evs, stats = evidence.collect(arf2_path, spots, store=store, ms2_tol=ms2_tol, th=th,
                                   file_ids=file_ids, max_traces=max_traces)
     points = []
@@ -69,32 +71,34 @@ def run_review(arf2_path, spots, *, store, ms2_tol, th, file_ids, max_traces, se
         ev.update(judge_spot(ev, trends["spots"].get(ev["spot_id"]), th, lipid_rules=lipid_rules))
         ev["trend"] = trends["spots"].get(ev["spot_id"])
         row = existing.get(ev["spot_id"]) or {}
-        is_flag = row.get("flag") in ("wrong", "suspect")
+        is_flag = row.get("flag") in ("wrong", "suspect", "confirmed")
         ev["flag"] = row.get("flag") if is_flag else None
         ev["flag_note"] = row.get("note") if is_flag else None
         ev["decision"] = ({"flag": "assign", "name": row.get("name")} if row.get("flag") == "assign"
                           else {"flag": "redundant", "of": row.get("of")} if row.get("flag") == "redundant"
                           else None)
         ev["flag_cleared"] = ev["spot_id"] in cleared
+        # 記録の confirmed か、_tags.xml の Confirmed（GUI で付けたものも）。最新の記録が wrong / suspect なら False
+        ev["confirmed"] = ev["spot_id"] in confirmed
         ev["auto_note"] = auto_note(ev, th)
         counts[ev["verdict"]] += 1
 
     warnings = []
     if stats["n_with_match"] and stats["n_reference_resolved"] / stats["n_with_match"] < REFERENCE_WARN_FRACTION:
         warnings.append(
-            f"照合結果を持つ {stats['n_with_match']} 件のうち参照を引けたのは "
-            f"{stats['n_reference_resolved']} 件です。アラインメントに使われたものと別のライブラリを"
-            "読んでいる可能性があります（同じフォルダの *_Loaded.msp2.dbs を library_load してください）。")
+            f"Only {stats['n_reference_resolved']} of the {stats['n_with_match']} spots with a match result "
+            "resolved to a reference record. The loaded library may differ from the one used for the alignment "
+            "(library_load the *_Loaded.msp2.dbs in the same folder).")
     if stats["missing_files"]:
-        warnings.append(f"兄弟ファイルがありません: {', '.join(stats['missing_files'])}"
-                        "（その系統の判別は UNKNOWN になります）。")
+        warnings.append(f"Sibling files missing: {', '.join(stats['missing_files'])} "
+                        "(checks that need them are UNKNOWN).")
     if orphaned:
         warnings.append(flags.orphaned_warning(orphaned))
     if stats["n_with_match"] and not lipid_rules:
         warnings.append(
-            "MS-DIAL の脂質規則フラグ（IsLipidClassMatch / IsLipidChainsMatch / IsOtherLipidMatch）が"
-            "どのスポットにも立っていません（脂質以外の採点器の出力とみなしました）。"
-            "規則による判定（class_rule_rejected・class_rules_not_run・chains_unsupported）は使っていません。")
+            "No spot has an MS-DIAL lipid rule flag set (IsLipidClassMatch / IsLipidChainsMatch / "
+            "IsOtherLipidMatch), so the scorer was treated as non-lipid and the rule-based checks "
+            "(class_rule_rejected, class_rules_not_run, chains_unsupported) were not used.")
 
     return {
         "review_id": new_review_id(),

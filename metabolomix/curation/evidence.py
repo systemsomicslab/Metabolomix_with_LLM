@@ -6,7 +6,7 @@
 - 参照は `record_index == LibraryID` かつ `library_id == AnnotatorID - "_<n>"`。
 - Δ は代表試料の行(FileID == RepresentativeFileID)の Mass / RT と参照の差。
 deps: arf / arf2 / dcl / eic reader、library.store、analysis.spectral_match、
-plots.mirror、msdial.peak_verification、curation.eic_shape。tools_* は import しない。
+plots.mirror、msdial.peak_verification、curation.eic_shape / isotope。tools_* は import しない。
 
 **EIC と mirror の座標列は payload だけ間引く(判定は変えない)**。実データ check
 (kidney pos, 2196 spots)で JSON が 41.7 MB になり、内訳は EIC 31.0 MB(12 トレース
@@ -25,6 +25,8 @@ from pathlib import Path
 from metabolomix.analysis.spectral_match import match_spectrum
 from metabolomix.arf import reader as arf_reader
 from metabolomix.arf2.match_results import load_spot_annotations, name_prefix
+from metabolomix.arf2.reader import load_isotopic_peaks
+from metabolomix.curation import isotope
 from metabolomix.curation.eic_shape import spot_shape
 from metabolomix.dcl.reader import deserialize_dcl
 from metabolomix.eic.reader import read_eic_spot_css1
@@ -225,6 +227,7 @@ def collect(arf2_path, spots, *, store, ms2_tol, th, file_ids=None, max_traces=1
     rows_by_spot = _arf_rows(files["arf"])
     _check_file_ids(rows_by_spot, file_ids)
     annotations = load_spot_annotations(arf2_path)
+    isotopic_peaks = load_isotopic_peaks(arf2_path)
     dcl = (deserialize_dcl(str(files["dcl"]), include_spectrum=True, top_n_peaks=None)
            if files["dcl"] else [])
     stats = {"n_reference_resolved": 0, "n_with_match": 0,
@@ -319,6 +322,9 @@ def collect(arf2_path, spots, *, store, ms2_tol, th, file_ids=None, max_traces=1
                                       if store is not None and match is not None else None),
             "rescore": rescore, "mirror": mirror,
             "eic": {"samples": samples}, "eic_shape": shape, "notes": notes,
+            "isotopes": {"measured": isotope.measured_envelope(isotopic_peaks.get(spot_id)),
+                         "theoretical": isotope.theoretical_envelope(spot.get("Formula"),
+                                                                     spot.get("AdductType"))},
             **({"_measured": measured} if keep_measured else {}),
         })
     return results, stats

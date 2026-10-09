@@ -56,6 +56,29 @@ def parse_adduct(name) -> Adduct | None:
     return Adduct(name=str(name).strip(), n_mol=n_mol, shift=shift, charge=charge, polarity=polarity)
 
 
+def adduct_composition(name) -> tuple[int, int, dict[str, int]] | None:
+    """アダクト表記から (n_mol, charge, 付加・脱離する原子の符号付き個数) を返す。
+
+    同位体分布の計算用（電子の出入りは原子数に現れない）。読めなければ None。
+    """
+    if not name:
+        return None
+    match = _ADDUCT_RE.match(str(name).strip())
+    if not match:
+        return None
+    delta: dict[str, int] = {}
+    try:
+        for sign, count, token in _TERM_RE.findall(match.group(2)):
+            factor = (1 if sign == "+" else -1) * int(count or 1)
+            for element, n in parse_formula(_ALIASES.get(token, token)).items():
+                if element not in ELEMENT_MASSES:
+                    return None
+                delta[element] = delta.get(element, 0) + factor * n
+    except ValueError:
+        return None
+    return int(match.group(1) or 1), int(match.group(3) or 1), {k: v for k, v in delta.items() if v}
+
+
 def mz_from_neutral(neutral: float, adduct: Adduct) -> float:
     """中性質量からアダクト m/z を計算する。
 

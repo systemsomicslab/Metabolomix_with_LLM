@@ -149,6 +149,14 @@ def load_raw_spots(file_path) -> list:
     return list(iter_raw_spots(datas))
 
 
+def load_isotopic_peaks(file_path) -> dict:
+    """`.arf2` の Key 53 `IsotopicPeaks`（代表試料の同位体ピークの生配列）を
+    MasterAlignmentID ごとに返す。カタログ（`extract_arf2_data`）には載せない——
+    一覧系ツールの戻り値を太らせないため、使う側（キュレーション）だけがここから引く。"""
+    return {int(_to_float(raw[0])): (raw[53] if len(raw) > 53 else None)
+            for raw in load_raw_spots(file_path)}
+
+
 def deserialize(file_like_object) -> List[dict]:
     """バイナリストリームから .arf2 データをパースして辞書のリストを返す"""
     datas = deserialize_lz4_packed_msgpack(file_like_object.read())

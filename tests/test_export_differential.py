@@ -272,7 +272,7 @@ class TestExportDifferential(unittest.TestCase):
         self.assertEqual(payload["status"], "success")
         self.assertEqual(payload["curation"], {"state": None, "wrong_excluded": None,
                                                "suspect": None, "orphaned": 1})
-        self.assertTrue(any("以前の版" in w for w in payload["warnings"]))
+        self.assertTrue(any("earlier version" in w for w in payload["warnings"]))
         body = [l for l in text.splitlines() if not l.startswith("#")][1:]
         self.assertEqual(len(body), 2)                          # spot 1 は落とさない
         self.assertFalse(any(l.startswith("# curation") for l in text.splitlines()))

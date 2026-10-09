@@ -52,9 +52,15 @@ def arf2_spot_raw(*, spot_id: int, name: str = "PC 34:1", mz: float = 760.5851,
                   formula: str = "C42H82NO8P", ion_mode: int = 0,
                   representative_file_id: int = 0,
                   matches: list | None = None,
-                  peak_links: list | None = None) -> list:
+                  peak_links: list | None = None,
+                  isotopes: list | None = None) -> list:
     """AlignmentSpotProperty の生配列（Key 0..59）。matches は match_result() の並び。
-    peak_links は Key 10（IonFeatureCharacter）の PeakLinks で、(リンク先スポット ID, 種類の整数) の並び。"""
+    peak_links は Key 10（IonFeatureCharacter）の PeakLinks で、(リンク先スポット ID, 種類の整数) の並び。
+    isotopes は Key 53 IsotopicPeaks（要素は [相対強度 %, m/z, 単同位体からの差, コメント, 絶対強度]）。
+    既定は M=100 / M+1=46 / M+2=12。"""
+    if isotopes is None:
+        isotopes = [[100.0, mz, 0.0, "", 10000.0], [46.0, mz + 1.00467, 1.00467, "", 4600.0],
+                    [12.0, mz + 2.00934, 2.00934, "", 1200.0]]
     values = {
         0: spot_id, 1: spot_id, 3: representative_file_id,
         4: chromxs(rt, mz), 5: mz,
@@ -65,7 +71,7 @@ def arf2_spot_raw(*, spot_id: int, name: str = "PC 34:1", mz: float = 760.5851,
         13: [formula, 0.0], 14: ontology, 15: "", 16: "",
         31: 10000.0, 32: 100.0, 33: 20000.0, 34: 0.2,
         35: 30.0, 36: 50.0, 37: 10.0, 43: mz - 0.001, 44: mz + 0.001,
-        49: 1.0, 51: 1.0, 54: [0.0, 1, adduct],
+        49: 1.0, 51: 1.0, 53: isotopes, 54: [0.0, 1, adduct],
         56: [list(matches or []), {}, []],
         59: -1,
     }

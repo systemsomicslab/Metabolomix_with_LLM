@@ -1,6 +1,7 @@
 """キュレーションのフラグ記録（追記専用 JSON Lines）と送信用テキスト。spec §6。
 
-記録するのはユーザーの判断: レビューの wrong / suspect、候補付けの assign / redundant、取り消しの clear。
+記録するのはユーザーの判断: レビューの wrong / suspect / confirmed、候補付けの assign / redundant、取り消しの clear。
+confirmed（注釈が正しいと確かめた。2026-10-09）は wrong / suspect と排他で、スポットごとの最新 1 行が効く。
 無印のスポットは「間違っていない」で何も書かない。キーはアラインメントファイルの
 sha256 と MasterAlignmentID の組で、MS-DIAL を再実行して `.arf2` が作り直されたら
 古いフラグは当たらない（新しい ID に黙って当てない）。
@@ -13,8 +14,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-FLAG_VALUES = ("wrong", "suspect", "clear", "assign", "redundant")
-REVIEW_FLAG_VALUES = ("wrong", "suspect", "clear")
+FLAG_VALUES = ("wrong", "suspect", "confirmed", "clear", "assign", "redundant")
+REVIEW_FLAG_VALUES = ("wrong", "suspect", "confirmed", "clear")
 SUGGEST_FLAG_VALUES = ("assign", "redundant", "clear")
 SUBMISSION_PREFIX = "CURATION_SUBMIT "
 FLAGS_FILENAME = "flags.jsonl"
@@ -156,6 +157,7 @@ def flags_digest(effective: dict[int, dict]) -> str:
 def split_decisions(effective: dict[int, dict]) -> dict:
     return {"wrong": {s for s, r in effective.items() if r["flag"] == "wrong"},
             "suspect": {s for s, r in effective.items() if r["flag"] == "suspect"},
+            "confirmed": {s for s, r in effective.items() if r["flag"] == "confirmed"},
             "assign": {s: r for s, r in effective.items() if r["flag"] == "assign"},
             "redundant": {s: r for s, r in effective.items() if r["flag"] == "redundant"}}
 
@@ -170,8 +172,8 @@ def orphaned_count(rows: list[dict], alignment: dict) -> int:
 
 
 def orphaned_warning(n: int) -> str:
-    return (f"{n} 件のフラグはこのアラインメントの以前の版（ファイル名は同じで sha256 が違う "
-            ".arf2）に対して記録されたもので、適用していません。")
+    return (f"{n} flag(s) were recorded against an earlier version of this alignment (same file name, "
+            "different .arf2 sha256) and were not applied.")
 
 
 def build_submission_text(review_id: str, entries: list[dict], arf2_path: str | None = None) -> str:

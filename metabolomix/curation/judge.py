@@ -186,28 +186,28 @@ def _trend(entry: dict | None, info: list[str]) -> dict:
 
 #: 理由コード → 判定根拠の文（ビューアのメモ欄の既定値）。値は ev と th から差し込む。
 REASON_TEXT = {
-    "polarity_mismatch": lambda ev, th: "アダクト — 電荷の符号が測定極性と矛盾",
-    "precursor_unmatched": lambda ev, th: "精密質量 — MS-DIAL の precursor 判定が不一致",
-    "dmz_out": lambda ev, th: f"精密質量 — Δm/z {_num(ev.get('dmz_mda'))} mDa（≥{_num(th['dmz_fail_mda'])} mDa）",
-    "class_rule_rejected": lambda ev, th: "MS2 — 脂質クラス規則（診断イオン）で棄却",
-    "ppm_out": lambda ev, th: f"精密質量 — Δppm {_num(ev.get('ppm'))}（>{_num(th['ppm_borderline'])}）",
-    "low_score": lambda ev, th: "MS2 — 参照と一致せず（low score）",
-    "drt_out": lambda ev, th: f"RT — ΔRT {_num(ev.get('drt'), 2)} 分（>{_num(th['drt_borderline'])} 分）",
-    "eic_poor": lambda ev, th: "EIC — ピーク形状が不良",
-    "ppm_borderline": lambda ev, th: f"精密質量 — Δppm {_num(ev.get('ppm'))}（境界）",
-    "drt_borderline": lambda ev, th: f"RT — ΔRT {_num(ev.get('drt'), 2)} 分（境界）",
-    "eic_borderline": lambda ev, th: "EIC — ピーク形状が境界",
-    "rt_scatter": lambda ev, th: "EIC — 試料間で頂点 RT がばらつく",
-    "trend_outlier": lambda ev, th: "RT–m/z 傾向 — クラスの傾向から外れる",
-    "adduct_isomer_of": lambda ev, th: "アダクト — " + _isomer_text(ev, "証拠の強い"),
-    "adduct_isomer_minor_of": lambda ev, th: "アダクト — " + _isomer_text(ev, "同じ段階で強度の高い"),
+    "polarity_mismatch": lambda ev, th: "Adduct — charge sign contradicts the ion mode",
+    "precursor_unmatched": lambda ev, th: "m/z — MS-DIAL precursor match failed",
+    "dmz_out": lambda ev, th: f"m/z — Δm/z {_num(ev.get('dmz_mda'))} mDa (≥{_num(th['dmz_fail_mda'])} mDa)",
+    "class_rule_rejected": lambda ev, th: "MS2 — rejected by the lipid class rules (diagnostic ions)",
+    "ppm_out": lambda ev, th: f"m/z — Δppm {_num(ev.get('ppm'))} (>{_num(th['ppm_borderline'])})",
+    "low_score": lambda ev, th: "MS2 — no match to the reference (low score)",
+    "drt_out": lambda ev, th: f"RT — ΔRT {_num(ev.get('drt'), 2)} min (>{_num(th['drt_borderline'])} min)",
+    "eic_poor": lambda ev, th: "EIC — poor peak shape",
+    "ppm_borderline": lambda ev, th: f"m/z — Δppm {_num(ev.get('ppm'))} (borderline)",
+    "drt_borderline": lambda ev, th: f"RT — ΔRT {_num(ev.get('drt'), 2)} min (borderline)",
+    "eic_borderline": lambda ev, th: "EIC — borderline peak shape",
+    "rt_scatter": lambda ev, th: "EIC — apex RT scatters across samples",
+    "trend_outlier": lambda ev, th: "RT–m/z trend — off the class trend",
+    "adduct_isomer_of": lambda ev, th: "Adduct — " + _isomer_text(ev, "better-evidenced"),
+    "adduct_isomer_minor_of": lambda ev, th: "Adduct — " + _isomer_text(ev, "more intense same-tier"),
 }
 
 
 def _isomer_text(ev: dict, kind: str) -> str:
     hit = ev.get("adduct_isomer") or {}
-    return (f"同時溶出する{kind} #{hit.get('of')} {hit.get('of_name')} の {hit.get('as_adduct')} で説明できる"
-            f"（{_num(hit.get('ppm'))} ppm、ΔRT {_num(hit.get('drt'), 3)} 分）")
+    return (f"explained as {hit.get('as_adduct')} of the co-eluting {kind} #{hit.get('of')} {hit.get('of_name')}"
+            f" ({_num(hit.get('ppm'))} ppm, ΔRT {_num(hit.get('drt'), 3)} min)")
 
 
 def _num(value, digits: int | None = None) -> str:
@@ -224,7 +224,7 @@ def auto_note(spot: dict, th: dict) -> str | None:
         return None
     parts = [REASON_TEXT[reason_code(r)](spot, th) if reason_code(r) in REASON_TEXT else r
              for r in spot["reasons"]]
-    return "自動: " + " / ".join(parts)
+    return "Auto: " + " / ".join(parts)
 
 
 def judge_spot(ev: dict, trend_entry: dict | None, th: dict, *, lipid_rules: bool = False) -> dict:

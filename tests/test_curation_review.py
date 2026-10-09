@@ -1,6 +1,8 @@
 import json
+import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -86,7 +88,7 @@ def test_low_reference_resolution_warns_about_the_library(built, tmp_path):
                                    max_traces=12, selection={"kind": "annotated"})
     finally:
         s.close()
-    assert any("別のライブラリ" in w for w in result["warnings"])
+    assert any("library may differ" in w for w in result["warnings"])
 
 
 def test_page_splits_spots(built):
@@ -282,7 +284,7 @@ def test_rule_flags_are_ignored_when_no_spot_shows_lipid_rules(tmp_path, monkeyp
     by_id = {s["spot_id"]: s for s in result["spots"]}
     assert by_id[1]["verdict"] == "suspect"
     assert "class_rule_rejected" not in by_id[1]["reasons"]
-    assert any("脂質規則" in w for w in result["warnings"])
+    assert any("lipid rule flag" in w for w in result["warnings"])
 
 
 # --- ビューア: 自動判別 likely_wrong の赤破線枠と、クラス選択肢の下位項目（2026-09-29 ユーザー決定）---
@@ -314,10 +316,10 @@ def _run_class_filter(tmp_path, expression: str):
 def test_class_options_put_likely_wrong_subitems_under_each_class(tmp_path):
     options = _run_class_filter(tmp_path, "classFilterOptions(SPOTS)")
     labels = [o["label"] for o in options]
-    assert labels == ["すべて",
-                      "⚠ 自動判別: 間違い（全クラス 4）",
-                      "Cer_NS (1)", "└ Cer_NS › 自動判別: 間違い (1)",
-                      "PC (3)", "└ PC › 自動判別: 間違い (2)",
+    assert labels == ["All",
+                      "⚠ likely_wrong (all classes, 4)",
+                      "Cer_NS (1)", "└ Cer_NS › likely_wrong (1)",
+                      "PC (3)", "└ PC › likely_wrong (2)",
                       "PG (1)"]
     assert len({o["value"] for o in options}) == len(options)
 
@@ -325,16 +327,16 @@ def test_class_options_put_likely_wrong_subitems_under_each_class(tmp_path):
 def test_class_options_omit_the_overall_item_when_nothing_is_likely_wrong(tmp_path):
     options = _run_class_filter(
         tmp_path, "classFilterOptions(SPOTS.map(s => ({...s, verdict: 'ok'})))")
-    assert [o["label"] for o in options] == ["すべて", "Cer_NS (1)", "PC (3)", "PG (1)"]
+    assert [o["label"] for o in options] == ["All", "Cer_NS (1)", "PC (3)", "PG (1)"]
 
 
 def test_class_filter_values_select_the_right_spots(tmp_path):
     picked = _run_class_filter(tmp_path, """Object.fromEntries(classFilterOptions(SPOTS).map(o =>
         [o.label, SPOTS.filter(s => matchesClassFilter(s, o.value)).map(s => s.spot_id)]))""")
-    assert picked["すべて"] == [0, 1, 2, 3, 4, 5]
-    assert picked["⚠ 自動判別: 間違い（全クラス 4）"] == [0, 3, 4, 5]
+    assert picked["All"] == [0, 1, 2, 3, 4, 5]
+    assert picked["⚠ likely_wrong (all classes, 4)"] == [0, 3, 4, 5]
     assert picked["PC (3)"] == [0, 1, 4]
-    assert picked["└ PC › 自動判別: 間違い (2)"] == [0, 4]
+    assert picked["└ PC › likely_wrong (2)"] == [0, 4]
     assert picked["PG (1)"] == [2]
 
 
@@ -357,7 +359,7 @@ def test_review_attaches_auto_notes_and_cleared_state(built):
     paths, result = built
     by_id = {s["spot_id"]: s for s in result["spots"]}
     assert by_id[0]["auto_note"] is None
-    assert by_id[1]["auto_note"].startswith("自動: ")
+    assert by_id[1]["auto_note"].startswith("Auto: ")
     assert by_id[1]["flag_cleared"] is False
     store = flags.FlagStore(flags.curation_dir(paths["arf2"]))
     store.append([{"spot_id": 1, "flag": "wrong"}], alignment=result["alignment"],
@@ -518,3 +520,249 @@ def test_adduct_isomer_ignores_a_partner_flagged_wrong(tmp_path):
     [pi] = _review_without_library(arf2, ["PI"])["spots"]
     assert pi["adduct_isomer"] is None
     assert not any(r.startswith("adduct_isomer") for r in pi["reasons"])
+
+
+# --- ビューア: 「正しい」ラベル・判定/フラグの個別絞り込み・low score / MS/MS なしの初期選択・
+# 傾向カードの Plotly 化とクラス選択・MS1 同位体パネル（ユーザー決定 2026-10-09）---
+
+def test_unflagged_radio_is_labelled_correct():
+    card = _script()[_script().index("function spotCard"):]
+    card = card[:card.index("\n}")]
+    assert '["", "Correct"]' in card
+
+
+def test_verdict_and_flag_selects_offer_each_label():
+    html = viewer.render_html(None)
+    verdict = html[html.index('<select id="f-verdict">'):]
+    verdict = verdict[:verdict.index("</select>")]
+    for value in ('value="ok"', 'value="suspect"', 'value="likely_wrong"', 'value="flagged"'):
+        assert value in verdict
+    flag = html[html.index('<select id="f-flag">'):]
+    flag = flag[:flag.index("</select>")]
+    for label in (">Correct<", ">Suspect<", ">Wrong<", ">Flagged<"):
+        assert label in flag
+
+
+_FILTER_SPOTS = json.dumps([{"spot_id": 0, "verdict": "ok"}, {"spot_id": 1, "verdict": "suspect"},
+                            {"spot_id": 2, "verdict": "likely_wrong"}])
+
+
+def test_verdict_filter_matches_each_verdict(tmp_path):
+    picked = _run_block(tmp_path, "status filters", f"const SPOTS = {_FILTER_SPOTS};",
+                        """Object.fromEntries(["", "ok", "suspect", "likely_wrong", "flagged"].map(v =>
+                           [v, SPOTS.filter(s => matchesVerdictFilter(s, v)).map(s => s.spot_id)]))""")
+    assert picked == {"": [0, 1, 2], "ok": [0], "suspect": [1], "likely_wrong": [2], "flagged": [1, 2]}
+
+
+def test_flag_filter_matches_each_label(tmp_path):
+    picked = _run_block(tmp_path, "status filters", "const FLAGS = ['', 'suspect', 'wrong'];",
+                        """Object.fromEntries(["", "correct", "suspect", "wrong", "set"].map(v =>
+                           [v, FLAGS.filter(f => matchesFlagFilter(f, v))]))""")
+    assert picked == {"": ["", "suspect", "wrong"], "correct": [""], "suspect": ["suspect"],
+                      "wrong": ["wrong"], "set": ["suspect", "wrong"]}
+
+
+def test_low_score_and_missing_msms_are_preset_to_wrong(tmp_path):
+    spots = json.dumps([
+        {"spot_id": 0, "verdict": "suspect", "reasons": ["low_score", "drt_out"], "info": [],
+         "flag": None, "flag_cleared": False, "auto_note": "自動: スコア低"},
+        {"spot_id": 1, "verdict": "ok", "reasons": [], "info": ["msms_absent"],
+         "flag": None, "flag_cleared": False, "auto_note": None},
+        {"spot_id": 2, "verdict": "suspect", "reasons": ["low_score"], "info": [],
+         "flag": None, "flag_cleared": True, "auto_note": "自動: X"},
+        {"spot_id": 3, "verdict": "ok", "reasons": [], "info": ["msms_absent"],
+         "flag": "suspect", "flag_cleared": False, "auto_note": None},
+        {"spot_id": 4, "verdict": "suspect", "reasons": ["drt_out"], "info": [],
+         "flag": None, "flag_cleared": False, "auto_note": "自動: RT"}])
+    presets = _run_block(tmp_path, "presets", f"const SPOTS = {spots};",
+                         "SPOTS.filter(isPresetTarget).map(s => [s.spot_id, presetCause(s), presetEdit(s).note])")
+    assert presets == [[0, "low_score", "自動: スコア低"], [1, "msms_absent", "Auto: no MS/MS"]]
+
+
+def test_trend_card_click_toggles_the_class_filter(tmp_path):
+    result = _run_block(tmp_path, "trend selection", "",
+                        """[nextClassFilter("", "PC"), nextClassFilter("PC", "PC"),
+                            nextClassFilter("PC\tlikely_wrong", "PC"), nextClassFilter("PG", "PC"),
+                            classOfFilter("PC\tlikely_wrong"), classOfFilter("\tlikely_wrong")]""")
+    assert result == ["PC", "", "", "PC", "PC", ""]
+
+
+def test_trend_cards_use_plotly_with_id_and_name_on_hover_and_a_canvas_fallback():
+    html = viewer.render_html(None)
+    assert "cdnjs.cloudflare.com/ajax/libs/plotly.js/" in html
+    script = _script()
+    traces = script[script.index("function trendTraces"):script.index("function plotTrend")]
+    assert "customdata" in traces and "%{customdata[0]}" in traces and "%{customdata[1]}" in traces
+    plot = script[script.index("function plotTrend"):]
+    plot = plot[:plot.index("\n}")]
+    assert "plotly_click" in plot
+    trends = script[script.index("function renderTrends"):]
+    trends = trends[:trends.index("\n}")]
+    assert "plotlyReady" in trends and "drawTrend" in trends       # CDN に届かなければ canvas
+    assert "nextClassFilter" in script and "trend-selected" in html
+
+
+def test_cards_and_zoom_draw_the_ms1_isotope_panel():
+    script = _script()
+    card = script[script.index("function spotCard"):]
+    card = card[:card.index("\n}")]
+    assert "drawIsotopes" in card
+    zoom = script[script.index("function openZoom"):]
+    zoom = zoom[:zoom.index("\n}")]
+    assert "drawIsotopes" in zoom
+    assert 'id="zoom-ms1"' in viewer.render_html(None)
+
+
+# --- ビューア: 点のクリックは点の上だけ・カードのそれ以外はクラス切り替え・
+# low score / MS/MS なしの除外（ユーザー決定 2026-10-09）---
+
+_EXCLUSION_SPOTS = json.dumps([
+    {"spot_id": 0, "reasons": ["low_score", "drt_out"], "info": []},
+    {"spot_id": 1, "reasons": [], "info": ["msms_absent"]},
+    {"spot_id": 2, "reasons": ["drt_out"], "info": ["manually_modified"]},
+    {"spot_id": 3}])
+
+
+def test_exclusion_hides_low_score_and_missing_msms_independently(tmp_path):
+    picked = _run_block(tmp_path, "exclusion", f"const SPOTS = {_EXCLUSION_SPOTS};",
+                        """[[], ["low_score"], ["msms_absent"], ["low_score", "msms_absent"]].map(ex =>
+                           SPOTS.filter(s => !isExcluded(s, ex)).map(s => s.spot_id))""")
+    assert picked == [[0, 1, 2, 3], [1, 2, 3], [0, 2, 3], [2, 3]]
+
+
+def test_card_click_toggles_once_and_not_right_after_a_point_click(tmp_path):
+    result = _run_block(tmp_path, "trend click", "",
+                        """[cardClickToggles(1000, {suppressUntil: 0, lastToggleAt: -Infinity}),
+                            cardClickToggles(1000, {suppressUntil: 1200, lastToggleAt: -Infinity}),
+                            cardClickToggles(1000, {suppressUntil: 0, lastToggleAt: 900}),
+                            cardClickToggles(1500, {suppressUntil: 0, lastToggleAt: 900})]""")
+    assert result == [True, False, False, True]
+
+
+def test_point_clicks_need_the_cursor_on_the_point_and_jump_directly():
+    script = _script()
+    plot = script[script.index("function plotTrend"):]
+    plot = plot[:plot.index("\n}")]
+    # Plotly の既定 hoverdistance（20 px）では密な図のどこを押しても近くの点が拾われ、
+    # カードのクリックが別スポットへの移動になった（実地確認 2026-10-09）。
+    assert "hoverdistance: POINT_HIT_PX" in plot
+    trends = script[script.index("function renderTrends"):]
+    trends = trends[:trends.index("\n}")]
+    assert "goToSpot" in trends and "cardClickToggles" in trends
+    assert "visibleTrendSpots" in trends               # 絞り込み・除外したスポットは傾向の点からも消す
+
+
+def test_exclusion_checkboxes_drive_the_list_and_the_trends():
+    html = viewer.render_html(None)
+    assert 'id="x-low_score"' in html and 'id="x-msms_absent"' in html
+    script = _script()
+    filters = script[script.index("function passesFilters"):]
+    filters = filters[:filters.index("\n}")]
+    assert "isExcluded(spot, currentExclusions())" in filters
+
+
+# --- ビューア: 英語表示・傾向カードの軸（x = RT, y = m/z）・絞り込みに従う点（ユーザー決定 2026-10-09）---
+
+_JA = re.compile(r"[぀-ヿ㐀-鿿＀-￯]")
+
+
+def _strip_comments(source: str) -> str:
+    source = re.sub(r"<!--.*?-->", "", source, flags=re.S)
+    source = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
+    return re.sub(r"(?m)(^|[^:\"'])//.*$", r"\1", source)
+
+
+def test_viewer_shows_no_japanese_outside_comments():
+    folder = Path(viewer.__file__).parent
+    for name in ("viewer.html", "viewer_common.js"):
+        text = _strip_comments((folder / name).read_text(encoding="utf-8"))
+        hits = [line.strip() for line in text.splitlines() if _JA.search(line)]
+        assert hits == [], f"{name}: {hits[:5]}"
+
+
+def test_review_warnings_and_auto_notes_are_english(built):
+    _, result = built
+    texts = [s["auto_note"] or "" for s in result["spots"]] + list(result["warnings"])
+    assert not [t for t in texts if _JA.search(t)]
+    assert not _JA.search(flags.orphaned_warning(3))
+
+
+def test_trend_cards_put_rt_on_x_and_mz_on_y():
+    script = _script()
+    traces = script[script.index("function trendTraces"):script.index("function plotTrend")]
+    assert "x: members.map(s => s.rt), y: members.map(s => s.mz)" in traces
+    plot = script[script.index("function plotTrend"):]
+    plot = plot[:plot.index("\n}")]
+    assert 'xaxis: {...axis, title: {text: "RT (min)"' in plot
+    draw = script[script.index("function drawTrend"):]
+    draw = draw[:draw.index("\n}")]
+    assert "px(s.rt), py(s.mz)" in draw
+
+
+def _run_blocks(tmp_path, blocks, prelude, expression):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node が見つからないのでビューアの純関数を実行できない")
+    html = viewer.render_html(None)
+    source = "\n".join(html[html.index(f"// --- {b} (pure) ---"):html.index(f"// --- end {b} ---")]
+                       for b in blocks)
+    script = tmp_path / "blocks.js"
+    script.write_text(source + "\n" + prelude + f"\nconsole.log(JSON.stringify({expression}));\n",
+                      encoding="utf-8")
+    result = subprocess.run([node, str(script)], capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_trend_points_follow_every_filter_but_the_class_choice(tmp_path):
+    spots = json.dumps([
+        {"spot_id": 0, "verdict": "ok", "reasons": [], "info": [], "flag": ""},
+        {"spot_id": 1, "verdict": "suspect", "reasons": ["low_score"], "info": [], "flag": "wrong"},
+        {"spot_id": 2, "verdict": "likely_wrong", "reasons": [], "info": ["msms_absent"], "flag": "wrong"},
+        {"spot_id": 3, "verdict": "likely_wrong", "reasons": [], "info": [], "flag": ""}])
+    cases = json.dumps([
+        {"classValue": "", "verdict": "", "flag": "", "excluded": []},
+        {"classValue": "PC", "verdict": "", "flag": "", "excluded": []},
+        {"classValue": "PC\tlikely_wrong", "verdict": "", "flag": "", "excluded": []},
+        {"classValue": "", "verdict": "ok", "flag": "", "excluded": []},
+        {"classValue": "", "verdict": "", "flag": "wrong", "excluded": []},
+        {"classValue": "", "verdict": "", "flag": "", "excluded": ["low_score", "msms_absent"]}])
+    picked = _run_blocks(tmp_path, ["status filters", "exclusion", "class filter", "trend points"],
+                         f"const SPOTS = {spots}; const CASES = {cases};",
+                         "CASES.map(f => SPOTS.filter(s => trendPointVisible(s, s.flag, f)).map(s => s.spot_id))")
+    assert picked == [[0, 1, 2, 3], [0, 1, 2, 3], [2, 3], [0], [1, 2], [0, 3]]
+
+
+# --- ビューア: カード右上の Confirmed（ユーザー決定 2026-10-09）。判断の 1 つで Suspect / Wrong と排他 ---
+
+def test_confirmed_controls_are_exclusive_with_suspect_and_wrong(tmp_path):
+    spots = json.dumps([{"flag": None, "confirmed": False}, {"flag": None, "confirmed": True},
+                        {"flag": "confirmed", "confirmed": True}, {"flag": "wrong", "confirmed": False}])
+    result = _run_block(tmp_path, "confirmed", f"const SPOTS = {spots};",
+                        """[SPOTS.map(originalFlag), ["", "confirmed", "suspect", "wrong"].map(flagControls)]""")
+    assert result == [["", "confirmed", "confirmed", "wrong"],
+                      [{"radio": "", "confirmed": False}, {"radio": "", "confirmed": True},
+                       {"radio": "suspect", "confirmed": False}, {"radio": "wrong", "confirmed": False}]]
+
+
+def test_flag_filter_knows_confirmed(tmp_path):
+    picked = _run_block(tmp_path, "status filters", "const FLAGS = ['', 'confirmed', 'suspect', 'wrong'];",
+                        """Object.fromEntries(["correct", "confirmed", "set"].map(v =>
+                           [v, FLAGS.filter(f => matchesFlagFilter(f, v))]))""")
+    assert picked == {"correct": ["", "confirmed"], "confirmed": ["confirmed"], "set": ["suspect", "wrong"]}
+
+
+def test_confirmed_spots_are_not_preset_to_wrong(tmp_path):
+    spots = json.dumps([{"spot_id": 0, "verdict": "likely_wrong", "flag": None, "flag_cleared": False,
+                         "confirmed": True, "auto_note": "x"}])
+    assert _run_block(tmp_path, "presets", f"const SPOTS = {spots};", "SPOTS.filter(isPresetTarget).length") == 0
+
+
+def test_spot_cards_have_a_confirmed_checkbox_in_the_top_right():
+    html = viewer.render_html(None)
+    assert ".card .confirm { position:absolute; top:" in html
+    script = _script()
+    card = script[script.index("function spotCard"):]
+    card = card[:card.index("\nfunction setFlag")]
+    assert 'type: "checkbox"' in card and "Confirmed" in card and "flagControls" in card
+    assert '<option value="confirmed">Confirmed</option>' in html

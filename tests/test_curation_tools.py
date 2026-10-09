@@ -225,7 +225,7 @@ def test_review_warns_about_orphaned_flags(ready):
         alignment={"alignment_file": ready["arf2"].name, "alignment_sha256": "0" * 64},
         review_id="r", source="user")
     body = json.loads(curation_tools.curation_review())
-    assert any("1 件" in w and "以前の版" in w for w in body["warnings"]), body["warnings"]
+    assert any("1 flag(s)" in w and "earlier version" in w for w in body["warnings"]), body["warnings"]
 
 
 def test_review_warns_about_missing_siblings(ready):
@@ -386,3 +386,52 @@ def test_suggest_survives_a_corrupt_review_file(suggest_env):
         "{not json", encoding="utf-8")
     out = json.loads(curation_tools.curation_suggest(file_path=arf2))
     assert "suggestion_id" in out and "error" not in out
+
+
+# --- Confirmed（ユーザー決定 2026-10-09）: confirmed は判断の 1 つ（wrong / suspect と排他）。
+# confirmed → Confirmed を付け Misannotation を外す / wrong → Misannotation を付け Confirmed を外す /
+# suspect → Confirmed を外す / clear → 両方外す。---
+
+def _peaks(paths):
+    return msdial_tags.parse_tag_file(msdial_tags.alignment_tag_path(paths["arf2"]))["peaks"]
+
+
+def test_confirmed_sets_the_confirmed_tag_and_drops_misannotation(ready):
+    review_id = json.loads(curation_tools.curation_review())["review_id"]
+    _submit(review_id, [{"spot_id": 1, "flag": "wrong", "note": ""}])
+    body = _submit(review_id, [{"spot_id": 1, "flag": "confirmed", "note": ""},
+                               {"spot_id": 0, "flag": "confirmed", "note": ""}])
+    assert _peaks(ready) == {0: frozenset({1}), 1: frozenset({1})}
+    assert body["n_confirmed"] == 2 and body["n_wrong"] == 0
+    assert body["tags_xml"]["confirmed"] == {"added": [0, 1], "removed": []}
+    assert body["tags_xml"]["removed"] == [1]                       # Misannotation
+    listing = json.loads(curation_tools.curation_flags())
+    assert [r.split("\t")[:2] for r in listing["table"].splitlines()[1:]] == [["0", "confirmed"], ["1", "confirmed"]]
+
+
+def test_wrong_suspect_and_clear_remove_confirmed(ready):
+    review_id = json.loads(curation_tools.curation_review())["review_id"]
+    _submit(review_id, [{"spot_id": 0, "flag": "confirmed", "note": ""},
+                        {"spot_id": 1, "flag": "confirmed", "note": ""}])
+    _submit(review_id, [{"spot_id": 0, "flag": "wrong", "note": ""},
+                        {"spot_id": 1, "flag": "suspect", "note": ""}])
+    assert _peaks(ready) == {0: frozenset({3})}
+    _submit(review_id, [{"spot_id": 1, "flag": "confirmed", "note": ""}])
+    body = _submit(review_id, [{"spot_id": 0, "flag": "clear", "note": ""},
+                               {"spot_id": 1, "flag": "clear", "note": ""}])
+    assert _peaks(ready) == {}
+    assert body["tags_xml"]["confirmed"]["removed"] == [1] and body["tags_xml"]["removed"] == [0]
+
+
+def test_review_marks_spots_confirmed_from_the_tags_file_and_the_records(ready):
+    tag_path = msdial_tags.alignment_tag_path(ready["arf2"])
+    msdial_tags.update_alignment_tag(tag_path, tag_id=msdial_tags.CONFIRMED_TAG_ID, add=[0, 1], remove=[])
+    review_id = json.loads(curation_tools.curation_review())["review_id"]
+    # 記録で wrong にしたスポットは、タグが残っていても confirmed にしない
+    flags.FlagStore(flags.curation_dir(ready["arf2"])).append(
+        [{"spot_id": 1, "flag": "wrong", "note": ""}], alignment=flags.alignment_key(ready["arf2"]),
+        review_id=review_id, source="user")
+    again = json.loads(curation_tools.curation_review())["review_id"]
+    from metabolomix.curation import review as review_mod
+    spots = {s["spot_id"]: s for s in review_mod.load_review(ready["arf2"], again)["spots"]}
+    assert spots[0]["confirmed"] is True and spots[1]["confirmed"] is False

@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from metabolomix.msdial import tags as msdial_tags
 from metabolomix.curation.flags import (
     FlagStore, alignment_key, curation_dir, effective_flags, flags_digest, orphaned_count,
     split_decisions,
@@ -38,6 +39,24 @@ def flags_for_arf2(arf2_path) -> dict:
             "assign": decisions["assign"], "redundant": set(decisions["redundant"]),
             "digest": flags_digest(effective), "n": len(effective),
             "orphaned": orphaned_count(rows, key)}
+
+
+def confirmed_spots(arf2_path, effective: dict) -> set[int]:
+    """注釈が確かめられたスポット: 記録の confirmed と、`_tags.xml` の Confirmed タグ（MS-DIAL の GUI で
+    付けたものも含む）の和から、最新の記録が wrong / suspect のスポットを除く。自動判定の likely_wrong を
+    当てない（初期選択・exclude_auto_likely_wrong・候補付けの対象）ために使う。タグファイルが無い・
+    読めなければ記録だけで決める（判断を止めない）。"""
+    tagged: set[int] = set()
+    tag_path = msdial_tags.alignment_tag_path(arf2_path)
+    if tag_path.is_file():
+        try:
+            tagged = {int(s) for s, ids in msdial_tags.parse_tag_file(tag_path)["peaks"].items()
+                      if msdial_tags.CONFIRMED_TAG_ID in ids}
+        except Exception:  # noqa: BLE001 - 壊れたタグファイルでも記録の判断は使う
+            tagged = set()
+    recorded = {int(s) for s, row in effective.items() if row.get("flag") == "confirmed"}
+    overridden = {int(s) for s, row in effective.items() if row.get("flag") in ("wrong", "suspect")}
+    return (tagged | recorded) - overridden
 
 
 def identity_for(spot_id, flag_set) -> dict | None:
