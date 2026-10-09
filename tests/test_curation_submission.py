@@ -72,3 +72,15 @@ def test_load_saved_raises_file_not_found_for_a_missing_review(saved):
     r = saved["review"]
     with pytest.raises(FileNotFoundError):
         submission.load_saved(flags.curation_dir(r["arf2_path"]), "cr-20000101-000000-abcd")
+
+
+@pytest.mark.parametrize("tail", ['{"spot_id": 9, "flag": "wro', '{"spot_id": 9, "flag": "wrong"}'])
+def test_an_unterminated_tail_refuses_to_append_and_leaves_the_file_unchanged(saved, tail):
+    r = saved["review"]
+    path = flags.curation_dir(r["arf2_path"]) / flags.FLAGS_FILENAME
+    path.write_bytes(tail.encode("utf-8"))
+    with pytest.raises(submission.SubmissionError) as info:
+        submission.submit_flags(_load(saved), [{"spot_id": 0, "flag": "wrong"}],
+                                review_id=r["review_id"], source="user")
+    assert info.value.kind == "flag_file"
+    assert path.read_bytes() == tail.encode("utf-8")

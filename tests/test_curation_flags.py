@@ -211,3 +211,14 @@ def test_confirmed_is_a_review_decision():
             {"alignment_sha256": "a", "spot_id": 3, "flag": "confirmed"}]
     assert flags.effective_flags(rows, "a")[3]["flag"] == "confirmed"
     assert flags.split_decisions(flags.effective_flags(rows, "a"))["confirmed"] == {3}
+
+
+def test_strict_rows_raise_on_an_unterminated_tail_but_the_default_ignores_it(tmp_path):
+    store = flags.FlagStore(tmp_path)
+    store.append([{"spot_id": 1, "flag": "wrong"}], alignment=ALIGN, review_id="r", source="user")
+    with open(store.path, "a", encoding="utf-8") as handle:
+        handle.write('{"spot_id": 2, "flag": "wrong"}')       # 構文は正しいが改行がない
+    assert [r["spot_id"] for r in store.rows()] == [1]
+    with pytest.raises(flags.FlagFileError) as info:
+        store.rows(tolerate_partial_tail=False)
+    assert info.value.line_no == 2

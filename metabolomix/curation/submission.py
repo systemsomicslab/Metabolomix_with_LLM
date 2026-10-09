@@ -62,7 +62,7 @@ def submit_flags(saved: dict, entries, *, review_id: str, source: str) -> dict:
                 "curation_suggest）をやり直してください。", kind="alignment_changed")
         store = flag_log.FlagStore(flag_log.curation_dir(saved["arf2_path"]))
         try:
-            store.rows()                   # 壊れた記録に追記しない（先に読めるか確かめる）
+            store.rows(tolerate_partial_tail=False)   # 壊れた記録（書きかけの末尾を含む）に追記しない
         except flag_log.FlagFileError as exc:
             raise SubmissionError(str(exc), kind="flag_file", details=exc.details()) from exc
         n = store.append(cleaned, alignment=current, review_id=review_id, source=source)

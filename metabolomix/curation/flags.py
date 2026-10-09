@@ -90,7 +90,7 @@ class FlagStore:
     def exists(self) -> bool:
         return self.path.exists()
 
-    def rows(self) -> list[dict]:
+    def rows(self, *, tolerate_partial_tail: bool = True) -> list[dict]:
         """全行。読めない行があれば `FlagFileError`（行番号は 1 始まり）。"""
         if not self.path.exists():
             return []
@@ -98,9 +98,16 @@ class FlagStore:
         text = self.path.read_text(encoding="utf-8")
         lines = text.splitlines()
         # 受け口の HTTP スレッドが追記している最中に読むと、最終行が書きかけ（改行なし）のことがある。
-        # その最終行だけは読み飛ばす。改行で終わっている壊れた行は従来どおり FlagFileError にする。
+        # ロックを持たない読み手（既定 tolerate_partial_tail=True）はその最終行だけ読み飛ばす。
+        # 改行で終わっている壊れた行は常に FlagFileError。
+        # 書込み側の事前確認（submission.submit_flags）は _WRITE_LOCK の中で呼ぶので、他に追記中の
+        # 書き手はいない。そこでの書きかけ末尾は本物の破損で、その後ろへ追記すると新しい行が
+        # 癒着して判断が失われるため、tolerate_partial_tail=False で FlagFileError にする。
         if lines and not text.endswith(("\n", "\r")):
-            lines.pop()
+            if tolerate_partial_tail:
+                lines.pop()
+            elif lines[-1].strip():
+                raise FlagFileError(self.path, len(lines), "最終行が改行で終わっていない（書きかけ）")
         for line_no, line in enumerate(lines, 1):
             if not line.strip():
                 continue
