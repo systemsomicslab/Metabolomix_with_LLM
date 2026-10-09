@@ -18,6 +18,7 @@ flowchart TD
     RUN --> TR[curation.trend.fit_trends]
     RUN --> AI[curation.adduct_isomer.find_adduct_isomer]
     RUN --> JG[curation.judge.judge_spot]
+    CR --> REG[curation.submit_server.register]
     CR --> SAV[curation.review.save_review]
     SAV --> HTML[curation.viewer.render_html]
     CS[curation_submit] --> PAR[curation.flags.parse_submission_text]
@@ -34,8 +35,10 @@ flowchart TD
     RS --> COL
     RS --> LC[curation.candidates.build_library_candidates]
     RS --> FR[curation.relations.find_relations]
+    CG --> REG
     CG --> SS[curation.suggest.save_suggestion]
     SS --> SH[curation.viewer.render_suggest_html]
+    HTTP[viewer Submit] --> SUB
     CS --> LD[curation.submission.load_saved]
     LD --> LS[curation.suggest.load_suggestion]
     SUB --> EX[curation.suggest.expand_entries]
@@ -46,7 +49,7 @@ flowchart TD
 前提: `.arf2` が解決できること（無ければ `missing_state("arf2_file", ["load_dataset", "arf2_parser"])`）、
 `session.library.store` があること（無ければ `missing_state("library", ["library_load"])`）。
 状態変更: `session.curation.last_review_id` と `review_dirs[review_id]`。ディスクに
-`<arf2 のフォルダ>/curation/review-<id>.json` と `.html` を書く。
+`<arf2 のフォルダ>/curation/review-<id>.json` と `.html` を書く。受け口の登録表にトークンを足す（プロセス内）。
 
 1. metabolomix/core/path_resolvers.py  resolve_arf2_file_path()
 2. metabolomix/curation/judge.py  resolve_thresholds()
@@ -87,18 +90,20 @@ flowchart TD
 37. │  └─ metabolomix/curation/adduct_isomer.py  find_adduct_isomer()（有効な `wrong` フラグのスポットは相手から外す → `adduct_isomer`）
 38. │  └─ metabolomix/curation/judge.py  judge_spot()
 39. │  └─ metabolomix/curation/judge.py  auto_note()（判定根拠の文 → `auto_note`）
-40. metabolomix/curation/review.py  save_review()
-41. └─ metabolomix/curation/viewer.py  render_html()
-42. metabolomix/curation/review.py  n_summary_rows()
-43. metabolomix/curation/review.py  summary_tsv()（`max_rows` で先頭だけ）
-44. metabolomix/curation/review.py  trend_summary()
+40. metabolomix/tools/curation_tools.py  _open_submit()
+41. └─ metabolomix/curation/submit_server.py  register()（受け口が無ければ 127.0.0.1 の空きポートで起動。失敗したら `submit.via = "copy"`）
+42. metabolomix/curation/review.py  save_review()
+43. └─ metabolomix/curation/viewer.py  render_html()
+44. metabolomix/curation/review.py  n_summary_rows()
+45. metabolomix/curation/review.py  summary_tsv()（`max_rows` で先頭だけ）
+46. metabolomix/curation/review.py  trend_summary()
 
 ## curation_suggest
 
 前提: `.arf2` が解決できること、`session.library.store` があること（無ければ
 `missing_state("library", ["library_load"])`）、このアラインメントのレビューがあること（無ければ
 `missing_state("curation_review", ["curation_review"])`）。状態変更: `session.curation.review_dirs[suggestion_id]`。
-ディスクに `<arf2 のフォルダ>/curation/suggest-<id>.json` と `.html` を書く。
+ディスクに `<arf2 のフォルダ>/curation/suggest-<id>.json` と `.html` を書く。受け口の登録表にトークンを足す（プロセス内）。
 
 1. metabolomix/core/path_resolvers.py  resolve_arf2_file_path()
 2. metabolomix/curation/judge.py  resolve_thresholds()
@@ -113,9 +118,11 @@ flowchart TD
 11. │  └─ metabolomix/curation/evidence.py  collect()（`keep_measured=True` で対象の証拠を集める）
 12. │  └─ metabolomix/curation/candidates.py  build_library_candidates()（① MS-DIAL の下位候補 ② 閾値を緩めた再検索）
 13. │  └─ metabolomix/curation/relations.py  find_relations()（④ 別スポットの同位体・アダクト・インソース断片としての説明）
-14. metabolomix/curation/suggest.py  save_suggestion()
-15. └─ metabolomix/curation/viewer.py  render_suggest_html()
-16. metabolomix/curation/suggest.py  summary_tsv()（`max_rows` で先頭だけ）
+14. metabolomix/tools/curation_tools.py  _open_submit()
+15. └─ metabolomix/curation/submit_server.py  register()（受け口が無ければ 127.0.0.1 の空きポートで起動。失敗したら `submit.via = "copy"`）
+16. metabolomix/curation/suggest.py  save_suggestion()
+17. └─ metabolomix/curation/viewer.py  render_suggest_html()
+18. metabolomix/curation/suggest.py  summary_tsv()（`max_rows` で先頭だけ）
 
 `curation_submit` は `review_id` が `cs-…` のとき、`curation.flags.validate_entries` の代わりに
 `curation.suggest.expand_entries` で候補 ID を記録行へ展開する。
@@ -144,6 +151,18 @@ flowchart TD
 15.    └─ metabolomix/curation/msdial_writeback.py  sync_tags()（失敗しても記録は残し `tags_xml.error`。assign / redundant は触らない）
 16.       └─ metabolomix/msdial/tags.py  update_alignment_tags()（Misannotation と Confirmed を 1 回で書く）
 17.          └─ metabolomix/core/atomic_io.py  atomic_write_bytes()
+
+### ビューアからの直接送信（HTTP。MCP ツールではない）
+
+`POST /v1/submit` は登録時の `review_id` / `arf2_path` だけを使い、`source="user"` で記録する。
+
+1. metabolomix/curation/submit_server.py  _Handler.do_POST()（`Host` → パス → 本文の上限と JSON → トークン）
+2. └─ metabolomix/curation/submit_server.py  _touch()（定数時間で照合し、期限を延ばす）
+3. metabolomix/curation/submit_server.py  _submit()（本文の `review_id` が登録と違えば 403）
+4. ├─ metabolomix/curation/submission.py  load_saved()（無ければ 410）
+5. └─ metabolomix/curation/submission.py  submit_flags()（`curation_submit` と同じ。`SubmissionError.kind` → 400 / 409 / 500）
+6. metabolomix/curation/submit_server.py  unregister()（`/v1/finish` の応答の後。0 件なら別スレッドで止める）
+7. metabolomix/curation/submit_server.py  sweep()（daemon スレッドが 60 秒ごと。30 分無通信の登録を外す）
 
 ## curation_flags
 
