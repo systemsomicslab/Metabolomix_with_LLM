@@ -21,9 +21,10 @@ flowchart TD
     CR --> SAV[curation.review.save_review]
     SAV --> HTML[curation.viewer.render_html]
     CS[curation_submit] --> PAR[curation.flags.parse_submission_text]
-    CS --> VAL[curation.flags.validate_entries]
-    CS --> APP[curation.flags.FlagStore.append]
-    CS --> WB[curation.msdial_writeback.sync_misannotation]
+    CS --> SUB[curation.submission.submit_flags]
+    SUB --> VAL[curation.flags.validate_entries]
+    SUB --> APP[curation.flags.FlagStore.append]
+    SUB --> WB[curation.msdial_writeback.sync_tags]
     WB --> TAG[msdial.tags.update_alignment_tag]
     CG[curation_suggest] --> LRV[curation.suggest.latest_review]
     CG --> RS[curation.suggest.run_suggestion]
@@ -35,8 +36,9 @@ flowchart TD
     RS --> FR[curation.relations.find_relations]
     CG --> SS[curation.suggest.save_suggestion]
     SS --> SH[curation.viewer.render_suggest_html]
-    CS --> LS[curation.suggest.load_suggestion]
-    CS --> EX[curation.suggest.expand_entries]
+    CS --> LD[curation.submission.load_saved]
+    LD --> LS[curation.suggest.load_suggestion]
+    SUB --> EX[curation.suggest.expand_entries]
 ```
 
 ## curation_review
@@ -128,17 +130,20 @@ flowchart TD
 1. metabolomix/curation/flags.py  parse_submission_text()（`submission_text` のとき）
 2. metabolomix/curation/review.py  is_valid_review_id()（形が違えばパスに使う前にエラー。`cs-…` は metabolomix/curation/suggest.py  is_valid_suggestion_id() も許す）
 3. metabolomix/tools/curation_tools.py  _find_review()
-4. └─ metabolomix/tools/curation_tools.py  _load_any()（ID の接頭辞で読み分ける）
-5.    ├─ [cr-…] metabolomix/curation/review.py  load_review()（候補フォルダを順に）
-6.    └─ [cs-…] metabolomix/curation/suggest.py  load_suggestion()（候補フォルダを順に）
-7. ├─ [cr-…] metabolomix/curation/flags.py  validate_entries()
-8. └─ [cs-…] metabolomix/curation/suggest.py  expand_entries()（候補 ID を記録行へ展開。偽の候補 ID は書く前に拒否）
-9. metabolomix/curation/flags.py  alignment_key()（レビュー時の sha256 と一致しなければ拒否）
-10. metabolomix/curation/flags.py  FlagStore.rows()（読めない行があれば追記せずにエラー）
-11. metabolomix/curation/flags.py  FlagStore.append()
-12. metabolomix/curation/msdial_writeback.py  sync_tags()（失敗しても記録は残し `tags_xml.error`。assign / redundant は触らない）
-13. └─ metabolomix/msdial/tags.py  update_alignment_tags()（Misannotation と Confirmed を 1 回で書く）
-14.    └─ metabolomix/core/atomic_io.py  atomic_write_bytes()
+4. └─ metabolomix/tools/curation_tools.py  _load_any()
+5.    └─ metabolomix/curation/submission.py  load_saved()（ID の接頭辞で読み分ける）
+6.       ├─ [cr-…] metabolomix/curation/review.py  load_review()（候補フォルダを順に）
+7.       └─ [cs-…] metabolomix/curation/suggest.py  load_suggestion()（候補フォルダを順に）
+8. metabolomix/curation/submission.py  submit_flags()（ビューアの受け口と共有。`SubmissionError` → エラー payload）
+9. ├─ [cr-…] metabolomix/curation/flags.py  validate_entries()
+10. ├─ [cs-…] metabolomix/curation/suggest.py  expand_entries()（候補 ID を記録行へ展開。偽の候補 ID は書く前に拒否）
+11. └─ 以下は `_WRITE_LOCK` の中（MCP ツールと HTTP スレッドの書き込みを直列化）
+12.    ├─ metabolomix/curation/flags.py  alignment_key()（レビュー時の sha256 と一致しなければ拒否）
+13.    ├─ metabolomix/curation/flags.py  FlagStore.rows()（読めない行があれば追記せずにエラー）
+14.    ├─ metabolomix/curation/flags.py  FlagStore.append()
+15.    └─ metabolomix/curation/msdial_writeback.py  sync_tags()（失敗しても記録は残し `tags_xml.error`。assign / redundant は触らない）
+16.       └─ metabolomix/msdial/tags.py  update_alignment_tags()（Misannotation と Confirmed を 1 回で書く）
+17.          └─ metabolomix/core/atomic_io.py  atomic_write_bytes()
 
 ## curation_flags
 

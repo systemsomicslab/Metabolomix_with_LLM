@@ -17,7 +17,7 @@ from metabolomix.core.path_resolvers import resolve_arf2_file_path
 from metabolomix.core.serialization import json_payload, round_floats
 # モジュール名を flag_log にするのは、curation_submit の引数 `flags`（公開 API の名前）が
 # モジュールを隠すため。
-from metabolomix.curation import evidence, judge, msdial_writeback, review, suggest, viewer
+from metabolomix.curation import evidence, judge, review, submission, suggest, viewer
 from metabolomix.curation import flags as flag_log
 from metabolomix.library.defaults import DEFAULT_MS2_TOL, pick_tol
 
@@ -69,9 +69,7 @@ def _candidate_dirs(review_id: str, *arf2_paths) -> list[Path]:
 
 
 def _load_any(directory, review_id: str) -> dict:
-    if suggest.is_valid_suggestion_id(review_id):
-        return suggest.load_suggestion(directory, review_id)
-    return review.load_review(directory, review_id)
+    return submission.load_saved(directory, review_id)
 
 
 def _find_review(review_id: str, *arf2_paths) -> tuple[dict | None, list[Path]]:
@@ -302,36 +300,10 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
     if saved is None:
         return _not_found(review_id, searched)
     try:
-        if suggest.is_valid_suggestion_id(review_id):
-            cleaned = suggest.expand_entries(entries, saved)
-        else:
-            cleaned = flag_log.validate_entries(
-                entries, allowed_spot_ids={s["spot_id"] for s in saved["spots"]})
-    except ValueError as exc:
-        return _error(str(exc))
-    seen_spot_ids = set()
-    duplicated = sorted({e["spot_id"] for e in cleaned if e["spot_id"] in seen_spot_ids
-                         or seen_spot_ids.add(e["spot_id"])})
-    if duplicated:
-        return _error(f"同じ spot_id を 1 回の送信で複数回指定しています: {duplicated}")
-    current = flag_log.alignment_key(saved["arf2_path"])
-    if current["alignment_sha256"] != saved["alignment"]["alignment_sha256"]:
-        return _error("レビューの後でアラインメント（.arf2）が変わっています。curation_review（候補付けなら curation_suggest）をやり直してください。")
-    store = flag_log.FlagStore(flag_log.curation_dir(saved["arf2_path"]))
-    try:
-        store.rows()                       # 壊れた記録に追記しない（先に読めるか確かめる）
-    except flag_log.FlagFileError as exc:
-        return _flag_file_error(exc)
-    n = store.append(cleaned, alignment=current, review_id=review_id, source=source)
-    effective = store.effective(current["alignment_sha256"])
-    tags_xml = msdial_writeback.sync_tags(saved["arf2_path"], cleaned)
-    return json_payload({"status": "ok", "recorded": n, "review_id": review_id,
-                         "n_wrong": sum(1 for r in effective.values() if r["flag"] == "wrong"),
-                         "n_suspect": sum(1 for r in effective.values() if r["flag"] == "suspect"),
-                         "n_confirmed": sum(1 for r in effective.values() if r["flag"] == "confirmed"),
-                         "n_assign": sum(1 for r in effective.values() if r["flag"] == "assign"),
-                         "n_redundant": sum(1 for r in effective.values() if r["flag"] == "redundant"),
-                         "tags_xml": tags_xml})
+        result = submission.submit_flags(saved, entries, review_id=review_id, source=source)
+    except submission.SubmissionError as exc:
+        return _error(str(exc), **exc.details)
+    return json_payload(result)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
