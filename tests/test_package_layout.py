@@ -59,7 +59,7 @@ class TestRootLayout(unittest.TestCase):
 class TestStateDirsOutsidePackage(unittest.TestCase):
     def test_state_dirs_are_not_inside_lipidmix(self):
         package_dir = (REPO_ROOT / "metabolomix").resolve()
-        for name in ("KNOWLEDGE_DIR", "PLAYBOOK_DIR", "ANALYSES_DIR"):
+        for name in ("KNOWLEDGE_DIR", "PLAYBOOK_DIR"):
             with self.subTest(name=name):
                 resolved = getattr(mcp_core, name).resolve()
                 self.assertNotIn(
@@ -85,8 +85,8 @@ class TestReferenceTables(unittest.TestCase):
 class TestStateDirsAreNotCreatedOnImport(unittest.TestCase):
     """`metabolomix.core.mcp_core` の import が置き場ディレクトリを作らないことを縛る。
 
-    KNOWLEDGE_DIR / PLAYBOOK_DIR / ANALYSES_DIR はパス解決の時点で mkdir していた
-    ため、`analyses/` を消しても import のたび（＝pytest を回すたび、MCP サーバを
+    KNOWLEDGE_DIR / PLAYBOOK_DIR（と廃止した旧 ANALYSES_DIR）はパス解決の時点で
+    mkdir していたため、`analyses/` を消しても import のたび（＝pytest を回すたび、MCP サーバを
     起動するたび）に空ディレクトリが復活していた。置き場は書き込み時に作られれば
     十分で、解決は副作用を持ってはならない。
     """
@@ -101,7 +101,6 @@ class TestStateDirsAreNotCreatedOnImport(unittest.TestCase):
             env = dict(os.environ)
             env["LIPIDMIX_KNOWLEDGE_DIR"] = str(base / "knowledge")
             env["LIPIDMIX_PLAYBOOK_DIR"] = str(base / "playbook")
-            env["LIPIDMIX_ANALYSES_DIR"] = str(base / "analyses")
             proc = subprocess.run(
                 [sys.executable, "-c", "import metabolomix.core.mcp_core"],
                 cwd=str(REPO_ROOT), env=env,

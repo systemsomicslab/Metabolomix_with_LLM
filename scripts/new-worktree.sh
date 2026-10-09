@@ -7,7 +7,7 @@
 # もう片方のテスト結果に混ざり、HEAD も断りなく動く。実測で、同じスイートの結果が
 # 一度の調査中に 774 → 779 → 782 → 805 とぶれ、失敗件数も 5 → 1 → 0 と動いた。
 #
-# 追跡外のものは worktree に複製されない（data/ analyses/ .mcp.json docs/HISTRY.md
+# 追跡外のものは worktree に複製されない（data/ .mcp.json docs/HISTRY.md
 # docs/task.md）。テストはこれらに依存しない規約なので新品の worktree でも全数通るが、
 # MCP サーバとしての実行には効くので、ここで .mcp.json を生成して埋める。
 set -e
@@ -60,9 +60,7 @@ cat > "$path/.mcp.json" <<JSON
       "env": {
         $config_env
         "LIPIDMIX_DATA_DIR": "$main_w/data",
-        "LIPIDMIX_ANALYSES_DIR": "$main_w/analyses",
-        "LIPIDMIX_KNOWLEDGE_DIR": "$main_w/knowledge",
-        "LIPIDMIX_REPORTS_DIR": "$main_w/reports"
+        "LIPIDMIX_KNOWLEDGE_DIR": "$main_w/knowledge"
       }
     }
   }

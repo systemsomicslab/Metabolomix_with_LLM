@@ -4,7 +4,8 @@
 metabolomix.<形式>.tools や metabolomix.tools.* を import してはならない（循環回避の絶対ルール）。
 
 `BASE_DIR` はリポジトリルート（このファイルの 2 階層上）。docs/ knowledge/ playbook/
-analyses/ reports/ はすべてこれを起点に解決する。
+はこれを起点に解決する。解析の記録（objective とレポート）は解析フォルダ（`DATA_DIR`）
+配下の reports/ に置き、リポジトリ側には書かない。
 
 `DATA_DIR` は load_dataset により実行時に差し替えられる可変状態。参照は必ず
 `mcp_core.DATA_DIR`（module 修飾・動的）で行い、
@@ -19,8 +20,8 @@ from mcp.server.fastmcp import FastMCP
 
 from metabolomix.core.data_config import get_data_dir
 
-# このファイルは <root>/metabolomix/core/ にある。docs/ knowledge/ playbook/ analyses/
-# reports/ はすべてリポジトリルート基準で解決するため 2 階層上る。
+# このファイルは <root>/metabolomix/core/ にある。docs/ knowledge/ playbook/
+# はリポジトリルート基準で解決するため 2 階層上る。
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 # output-format はトピック別に分割してある。一枚岩（約700行）を毎回 pull させると
@@ -65,7 +66,7 @@ def _state_dir(env_var: str, default_name: str) -> Path:
     指せば、コードと蓄積された知識の置き場を分離できる。
 
     **ここで mkdir はしない**。この関数は import 時に評価されるので、作ってしまうと
-    ユーザが消した `analyses/` が pytest やサーバ起動のたびに空で復活する。
+    ユーザが消した置き場が pytest やサーバ起動のたびに空で復活する。
     置き場は書き込み側（knowledge_store の write_note / _directory_lock）が
     必要になった時点で作る。読み取り側は不在を空として扱う契約。
     """
@@ -111,12 +112,12 @@ def _build_report_meta(
     }
 
 
-# 蓄積ノートの置き場（再利用コーパス）。analyses/ はセッション固有なので分離。
-# 置き場を変えたいときは LIPIDMIX_KNOWLEDGE_DIR / LIPIDMIX_ANALYSES_DIR で上書きする。
+# 蓄積ノートの置き場（再利用コーパス）。置き場を変えたいときは
+# LIPIDMIX_KNOWLEDGE_DIR で上書きする。解析ごとの objective はここではなく
+# レポートと同じ解析フォルダ配下 reports/ に置く（_report_dir_candidates）。
 # playbook/ は版管理された手順なのでコード側（イメージ内）に置いたまま。
 KNOWLEDGE_DIR = _state_dir("LIPIDMIX_KNOWLEDGE_DIR", "knowledge")
 PLAYBOOK_DIR = _state_dir("LIPIDMIX_PLAYBOOK_DIR", "playbook")
-ANALYSES_DIR = _state_dir("LIPIDMIX_ANALYSES_DIR", "analyses")
 
 MCP_INSTRUCTIONS = """
 This server parses and analyzes MS-DIAL outputs — lipidomics and general
@@ -270,12 +271,16 @@ DATA_DIR = get_data_dir()
 
 
 def _report_dir_candidates() -> list[Path]:
-    """明示された保存先を優先し、未指定時は解析フォルダ配下を使う。"""
+    """明示された保存先を優先し、未指定時は解析フォルダ配下 reports/ だけを使う。
+
+    解析の記録（objective とレポート）は生データ（解析フォルダ）の側に置く契約。
+    リポジトリ側（`<project>/reports` や `<project>/analyses`）へ退避する経路は
+    持たない——コードの置き場に解析記録が溜まるバグの温床だった。
+    """
     override = os.environ.get("LIPIDMIX_REPORTS_DIR")
-    fallback = Path(override).expanduser() if override else BASE_DIR / "reports"
     if override:
-        return [fallback, DATA_DIR / "reports"]
-    return [DATA_DIR / "reports", fallback]
+        return [Path(override).expanduser(), DATA_DIR / "reports"]
+    return [DATA_DIR / "reports"]
 
 
 def _resolve_report_dir() -> Path:

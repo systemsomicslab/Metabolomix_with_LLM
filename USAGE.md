@@ -96,7 +96,7 @@ pipeline_run → pipeline_status(確認) → pipeline_resume(訂正・再開が�
 
 | ツール | 機能 |
 |--------|------|
-| `record_objective` | 確定した実験目的を `analyses/<analysis_id>.md` に記録。目的・比較・群・小問(Q1..Qn)を保存。`assay_kind`(`lipid`/`metabolite`/`unknown`)を渡すと以後の解釈規則が切り替わる。 |
+| `record_objective` | 確定した実験目的を解析フォルダ配下 `reports/<analysis_id>.objective.md` に記録。目的・比較・群・小問(Q1..Qn)を保存。`assay_kind`(`lipid`/`metabolite`/`unknown`)を渡すと以後の解釈規則が切り替わる。 |
 | `update_objective` | 目的/文脈/状態/`assay_kind` を更新し、創発的な小問を追記。 |
 
 ## 8. 知識カバレッジ・文献探索・取り込み
@@ -121,7 +121,7 @@ pipeline_run → pipeline_status(確認) → pipeline_resume(訂正・再開が�
 | `arf_pca_species` | 選んだ分子種(`arf_plot_species` と同じ項目指定・除外)で PCA を回し、スコア図を返す(`items`, `groups`, `low_reliability_samples`, `apply_curation`, `exclude_auto_likely_wrong`, `standard_samples`, `require_msms`, `normalize`, `log_transform`, `orient_by`, `title`, `output`)。対象は `groups` の試料。`low_reliability_samples` は主成分の計算に使わず投影だけする(白抜き)。`normalize="total"` は試料ごとに選んだ分子種の合計で割る(試料量の差を除く)。`log_transform`(既定 True)で log10(x+1)、計算に使う試料で autoscale、分散 0 の分子種は外す。`orient_by` の群の平均スコアが正になるよう符号をそろえる。ローディング(成分と相関 r)はセッションに残し `plot_pca_loadings(source="species")` が描く。スコア図のファイルは `save_figure(kind="pca", source="species")`。既定は PNG 画像と説明(寄与率・PC1 の r が正の上位と負の上位・除外の件数・caveat)、`output="payload"` で点列と要約。`items` に当たらない部品は `caveats` に書く。前提: ARF と兄弟 `.arf2`(無ければ `missing_state`)。計算に使う試料が 3 未満・合計 0 の試料などは `{"status":"error","message":...}`。 |
 | `plot_pca_loadings` | 保存済みの PCA(`arf_parser` / `arf_pca_preprocessed` / `arf_pca_species` / `dataset_pca`)のローディングを主成分ごとの横棒で描く(`source`, `result_id`, `pcs`, `top_n`, `value`, `title`, `output`)。`source` は `auto`/`arf`/`species`/`mztab` で、`auto` はどれも優先せず候補が 2 つ以上あると `AMBIGUOUS_RESULT_SOURCE`。`pcs` 既定 `[1, 2]`(1〜3 個)。`top_n`(既定 15)は主成分ごとに正の上位 N と負の上位 N、`None` は全件(60 特徴量まで)で行を最初の主成分の順にそろえる。`value="r"`(既定。特徴量と主成分スコアの相関)は autoscale した PCA でだけ出せ、出せなければ `coefficient` で描いて説明文に書く。棒の色はクラス。ローディングを持たない古い ARF の PCA 結果は候補にならない(PCA をやり直す)。ARF はスポットあたり複数の列(`props` が複数)の PCA だと `{"status":"error"}`(`props=["height"]` など 1 つでやり直す)。既定は PNG 画像と説明、`output="payload"` で `lipidmix.pca_loadings.v1`。ファイルは `save_figure(kind="pca_loadings")`。 |
 | `save_figure` | ユーザーがファイルとしての図を明示的に希望した場合だけ、直近の図を `reports/figures/<analysis_id>_<kind>.png` に保存(`kind`, `analysis_id`, `title`, `source`, `result_id`)。`kind` は `pca`(arf_parser / arf_pca_preprocessed / arf_pca_species / dataset_pca のスコア)/ `volcano`(arf_differential / dataset_differential。間引き前の全点)/ `eic`(eic_plot_chromatograms / eic_plot_compounds)/ `group_intensity`(arf_plot_group_intensity。dpi 300 の PNG と同名 `.svg`)/ `species`(arf_plot_species。dpi 300 の PNG と同名 `.svg`)/ `pca_loadings`(plot_pca_loadings。dpi 300 の PNG と同名 `.svg`)。`source`/`result_id` は `pca`/`volcano` だけ。`kind="pca"` の入力元は ARF・mzTab-M・分子種 PCA(arf_pca_species)で、`kind="volcano"` は ARF・mzTab-M だけ。**どれも優先しない** — 有効な結果が 2 つ以上あると `AMBIGUOUS_RESULT_SOURCE` で止まるので `source`(`arf`/`mztab`、`kind="pca"` だけ `species` も)か `result_id` を指定する。`pca_loadings` は、描いた後に PCA が入れ替わっていると古い図を保存せず `missing_state`(`plot_pca_loadings` をやり直す)。前処理をやり直して古くなった結果は選べない。探索専用データセットから描いた図には図の中に但し書きが入る。未知の `kind` と、`source`/`result_id` を使わない `kind` への指定は `{"status":"error"}`。図が無ければ `missing_state`(`required_tools` は kind ごと)。戻り値は保存した絶対パスと埋め込み用の相対パス。 |
-| `write_report` | 解析・解釈レポートを `reports/<analysis_id>.md` に上書き保存。 |
+| `write_report` | 解析・解釈レポートを解析フォルダ配下 `reports/<analysis_id>.md` に上書き保存。 |
 | `read_report` | 過去レポートを読み戻す(最新更新のものを返す。セッション継続用)。 |
 | `list_reports` | 既存レポートの1行索引(analysis_id / date / status)を返す。 |
 

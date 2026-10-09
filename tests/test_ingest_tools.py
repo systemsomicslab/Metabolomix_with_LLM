@@ -1,9 +1,11 @@
 """文献探索ツール群の登録と knowledge_coverage のスモーク検証。"""
 
 import asyncio
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from metabolomix.core import mcp_core
 import server
@@ -55,19 +57,21 @@ class SlugContainmentToolTests(unittest.TestCase):
 class KnowledgeCoverageSmokeTests(unittest.TestCase):
     """objective は tmp に自前で作る。
 
-    以前は追跡済みの analyses/ サンプルに依存していたが、analyses/ は解析記録を
-    ローカルに留めるため丸ごと追跡外になった（.gitignore）。ユーザ環境に残った
-    記録の有無でテストの成否が変わらないよう、対象の objective はここで作る。
+    objective は解析フォルダ配下 reports/ に住む解析記録でリポジトリには無い。
+    ユーザ環境に残った記録の有無でテストの成否が変わらないよう、対象の objective は
+    tmp の解析フォルダにここで作る。
     knowledge/ は追跡済みの種ノートを参照するので実ディレクトリのまま使う。
     """
 
     ANALYSIS_ID = "test-neg-lipidome-trt-vs-ctrl"
 
     def setUp(self):
-        self._orig_analyses = mcp_core.ANALYSES_DIR
+        self._orig_data = mcp_core.DATA_DIR
         self._tmp = tempfile.TemporaryDirectory()
-        mcp_core.ANALYSES_DIR = Path(self._tmp.name) / "analyses"
-        mcp_core.ANALYSES_DIR.mkdir()
+        mcp_core.DATA_DIR = Path(self._tmp.name)
+        self._env = mock.patch.dict("os.environ")
+        self._env.start()
+        os.environ.pop("LIPIDMIX_REPORTS_DIR", None)
         server.record_objective(
             analysis_id=self.ANALYSIS_ID,
             dataset="NEG / 2_lipidome_lcms",
@@ -82,7 +86,8 @@ class KnowledgeCoverageSmokeTests(unittest.TestCase):
         )
 
     def tearDown(self):
-        mcp_core.ANALYSES_DIR = self._orig_analyses
+        self._env.stop()
+        mcp_core.DATA_DIR = self._orig_data
         self._tmp.cleanup()
 
     def test_coverage_on_sample_objective(self):

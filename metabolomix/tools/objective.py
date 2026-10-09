@@ -1,4 +1,4 @@
-"""objective レコード（analyses/）と gap 駆動の文献探索ツール群。
+"""objective レコード（解析フォルダ配下 reports/）と gap 駆動の文献探索ツール群。
 
 record/update_objective, log_search, knowledge_coverage, paper_search,
 ingest_stage/review_queue/promote/reject。deps: mcp_core / knowledge_store /
@@ -27,14 +27,26 @@ __all__ = [
 
 
 def _resolve_objective_file(analysis_id: str) -> Path | None:
-    """analyses/ から analysis_id 一致（frontmatter優先、無ければファイル名stem）を探す。"""
-    direct = mcp_core.ANALYSES_DIR / f"{analysis_id}.md"
-    if direct.is_file():
-        return direct
-    if mcp_core.ANALYSES_DIR.is_dir():
-        for path in sorted(mcp_core.ANALYSES_DIR.glob("*.md")):
+    """レポート候補ディレクトリから objective を探す（ファイル名優先、無ければ frontmatter）。
+
+    objective はレポートと同じ解析フォルダ配下 reports/ に住むので、別の解析フォルダを
+    load_dataset した後は見えない（記録はデータの側に付いて回る契約）。
+    """
+    candidates = mcp_core._report_dir_candidates()
+    for directory in candidates:
+        try:
+            direct = knowledge_store.note_path(
+                directory, knowledge_store.objective_slug(analysis_id))
+        except ValueError:
+            return None
+        if direct.is_file():
+            return direct
+    for directory in candidates:
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.glob("*.md")):
             meta, _ = knowledge_store.parse_frontmatter(path.read_text(encoding="utf-8"))
-            if str(meta.get("analysis_id", "")) == analysis_id:
+            if meta.get("type") == "objective" and str(meta.get("analysis_id", "")) == analysis_id:
                 return path
     return None
 
@@ -55,7 +67,7 @@ def record_objective(
     expected_biology: list[str] | None = None,
     assay_kind: str = "unknown",
 ) -> str:
-    """確定した実験目的を analyses/<analysis_id>.md に記録する（gap駆動探索の前提）。
+    """確定した実験目的を解析フォルダ配下 reports/<analysis_id>.objective.md に記録する（gap駆動探索の前提）。
 
     GATEWAY 手順1で、データから推測した目的をユーザー確認したあとに呼ぶ。biological_context
     （対象系: 生物種/細胞/処理）も確認のうえ渡す。sub_questions は Q1..Qn の本文。
@@ -79,9 +91,9 @@ def record_objective(
     }
     try:
         path = knowledge_store.write_objective(
-            mcp_core.ANALYSES_DIR, analysis_id, meta_fields, sub_questions,
+            mcp_core._resolve_report_dir(), analysis_id, meta_fields, sub_questions,
         )
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         return str(exc)
     return (
         f"objective を記録: {path.name}（confirmed={bool(confirmed_objective)}, "

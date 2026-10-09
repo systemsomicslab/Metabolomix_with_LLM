@@ -139,8 +139,9 @@ following as known limits rather than surprises:
 - **Identification confidence is reported, not assumed.** An MS/MS *flag* and an actual
   acquired spectrum are distinguished throughout; check the reported band before claiming
   an MSI level.
-- **Generated artifacts are not checked in.** `data/`, `analyses/`, and `reports/` are
-  untracked; a clean checkout will not have them.
+- **Analysis records live with the data, not the code.** Objectives and reports are
+  written to `reports/` inside the analysis folder (next to the raw data and MS-DIAL
+  output), never under the clone; `data/` is untracked.
 
 ## License
 
