@@ -262,8 +262,10 @@ def test_app_loader_shows_error_payloads_and_send_updates_spots():
     assert "showError" in script
     send = script[script.index('getElementById("send").addEventListener'):]
     send = send[:send.index("\n});")]
-    assert "spot.flag = " in send and "spot.flag_note = " in send
-    assert send.index("spot.flag = ") < send.index("edits.clear()")
+    assert "afterRecorded(" in send
+    after = script[script.index("function afterRecorded"):]
+    after = after[:after.index("\n}")]
+    assert after.index("applyRecorded(REVIEW.spots, edits)") < after.index("edits.clear()")
 
 
 def _review(paths):
@@ -688,7 +690,11 @@ def _strip_comments(source: str) -> str:
 def test_viewer_shows_no_japanese_outside_comments():
     folder = Path(viewer.__file__).parent
     for name in ("viewer.html", "viewer_common.js"):
-        text = _strip_comments((folder / name).read_text(encoding="utf-8"))
+        source = (folder / name).read_text(encoding="utf-8")
+        # 送信クライアントの純関数は両ビューア共用で、日本語は lang == "ja" の枝（日本語の提案ビューア用）に
+        # だけ現れる。英語のレビュービューアは lang "en" しか渡さない。
+        source = re.sub(r"// --- submit client \(pure\) ---.*?// --- end submit client ---", "", source, flags=re.S)
+        text = _strip_comments(source)
         hits = [line.strip() for line in text.splitlines() if _JA.search(line)]
         assert hits == [], f"{name}: {hits[:5]}"
 
@@ -799,3 +805,53 @@ def test_isotope_panel_wraps_the_absolute_value_when_it_does_not_fit():
     draw = script[script.index("function drawIsotopes"):]
     draw = draw[:draw.index("\n}")]
     assert "isotopeLabel(" in draw and "measureText" in draw
+
+
+def test_review_confirm_text_counts_each_flag(tmp_path):
+    text = _run_block(tmp_path, "submit client", "", "reviewConfirmText([{flag:'wrong'},{flag:'wrong'},{flag:'confirmed'},{flag:'clear'}])")
+    assert "Wrong 2 / Suspect 0 / Confirmed 1 / clear 1" in text and "MS-DIAL" in text
+
+
+def test_suggest_confirm_text_warns_about_ms_dial_only_with_clear(tmp_path):
+    without = _run_block(tmp_path, "submit client", "", "suggestConfirmText([{flag:'assign'},{flag:'redundant'}])")
+    assert "assign 1 / redundant 1 / clear 0" in without and "MS-DIAL" not in without
+    with_clear = _run_block(tmp_path, "submit client", "", "suggestConfirmText([{flag:'clear'}])")
+    assert "clear 1" in with_clear and "MS-DIAL" in with_clear
+
+
+def test_state_after_switches_to_copy_when_the_endpoint_is_lost(tmp_path):
+    cases = _run_block(tmp_path, "submit client", "", "[" + ",".join([
+        "stateAfter('unavailable', 200)", "stateAfter('unavailable', 0)", "stateAfter('live', 401)",
+        "stateAfter('live', 0)", "stateAfter('live', 400)", "stateAfter('live', 409)",
+        "stateAfter('lost', 200)", "stateAfter('finished', 200)"]) + "]")
+    assert cases == ["live", "unavailable", "lost", "lost", "live", "live", "lost", "finished"]
+
+
+def test_submit_controls_show_submit_and_finish_only_when_live(tmp_path):
+    out = _run_block(tmp_path, "submit client", "", "['live','unavailable','lost','finished'].map(submitControls)")
+    assert out[0] == {"submit": True, "finish": True, "copyPrimary": False}
+    assert all(c == {"submit": False, "finish": False, "copyPrimary": True} for c in out[1:])
+
+
+def test_tags_result_text_reports_changes_and_failures(tmp_path):
+    ok = _run_block(tmp_path, "submit client", "", "tagsResultText({recorded:2, tags_xml:{added:[1], removed:[], confirmed:{added:[0], removed:[]}, note:'N'}}, 'en')")
+    assert ok.startswith("Recorded 2.") and "Misannotation +1 / -0" in ok and "Confirmed +1 / -0" in ok and ok.endswith("N")
+    failed = _run_block(tmp_path, "submit client", "", "tagsResultText({recorded:1, tags_xml:{error:'OSError: x'}}, 'ja')")
+    assert "1 件を記録しました" in failed and "OSError: x" in failed
+
+
+def test_apply_recorded_moves_edits_onto_spots(tmp_path):
+    spots = json.dumps([{"spot_id": 0, "flag": None}, {"spot_id": 1, "flag": "wrong", "flag_note": "a"}])
+    out = _run_block(tmp_path, "recorded", f"const SPOTS = {spots};",
+                     "(applyRecorded(SPOTS, new Map([[0, {flag:'confirmed', note:'ok'}], [1, {flag:'', note:''}]])), SPOTS)")
+    assert out[0] == {"spot_id": 0, "flag": "confirmed", "flag_note": "ok", "flag_cleared": False, "confirmed": True}
+    assert out[1] == {"spot_id": 1, "flag": None, "flag_note": None, "flag_cleared": True, "confirmed": False}
+
+
+def test_review_submit_button_skips_empty_submissions_and_confirms_first():
+    script = _script()
+    handler = script[script.index('getElementById("submit").addEventListener'):]
+    handler = handler[:handler.index("\n});")]
+    assert handler.index("if (!edits.size)") < handler.index("confirm(reviewConfirmText(")
+    assert handler.index("confirm(reviewConfirmText(") < handler.index("submitClient.submit(")
+    assert "applyRecorded" in script[script.index("function afterRecorded"):]
