@@ -48,9 +48,12 @@ def test_unreadable_formula_gives_none(formula):
     assert isotope.theoretical_envelope(formula, "[M+H]+") is None
 
 
-def test_measured_envelope_keeps_mz_and_relative_abundance():
-    raw = [[100.0, 760.5851, 0.0, "", 10000.0], [46.123456, 761.5898, 1.0047, "", 4612.0],
+def test_measured_envelope_keeps_mz_relative_and_absolute_abundance():
+    raw = [[100.0, 760.5851, 0.0, "", 10000.4], [46.123456, 761.5898, 1.0047, "", 4612.0],
            [12.5, 762.5945, 2.0093, "", 1250.0]]
-    assert isotope.measured_envelope(raw) == [[760.5851, 100.0], [761.5898, 46.12], [762.5945, 12.5]]
+    assert isotope.measured_envelope(raw) == [[760.5851, 100.0, 10000], [761.5898, 46.12, 4612],
+                                              [762.5945, 12.5, 1250]]
+    # 絶対強度（Key 4）が無い・読めなければ null（相対強度は出す）
+    assert isotope.measured_envelope([[100.0, 760.5851, 0.0, ""]]) == [[760.5851, 100.0, None]]
     assert isotope.measured_envelope(None) == []
     assert isotope.measured_envelope([["bad"]]) == []

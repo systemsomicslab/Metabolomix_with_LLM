@@ -1,7 +1,7 @@
 """MS1 の同位体パターン（純関数）。ビューアの MS1 パネル用で、判定には使わない。
 
 実測は `.arf2` の Key 53 `IsotopicPeaks`（代表試料の M, M+1, M+2。要素の Key 0 が
-相対強度 %、Key 1 が m/z。docs/schema/AlignmentSpotProperty.md・molecule_ms_reference.md）。
+相対強度 %、Key 1 が m/z、Key 4 が絶対強度。docs/schema/AlignmentSpotProperty.md・molecule_ms_reference.md）。
 理論は組成式＋アダクトの原子から、整数質量の分解能（M+k の k ごと）で畳み込む。
 アダクトが読めなければ中性の組成式だけで計算し、`basis` で区別する。
 deps: msdial.adducts / msdial.peak_verification。
@@ -81,14 +81,23 @@ def theoretical_envelope(formula, adduct, n: int = N_PEAKS) -> dict | None:
     return {"relative": [round(x / dist[0] * 100, 2) for x in dist], "basis": basis}
 
 
-def measured_envelope(raw) -> list[list[float]]:
-    """`.arf2` Key 53 の生配列から [[m/z, 相対強度 %], ...]。読めない要素は全体を捨てる。"""
+def measured_envelope(raw) -> list[list]:
+    """`.arf2` Key 53 の生配列から [[m/z, 相対強度 %, 絶対強度], ...]。絶対強度は要素の Key 4
+    `AbsoluteAbundance`（整数に丸める。無い・読めなければ None）。m/z と相対強度が読めない要素が
+    あれば全体を捨てる。"""
     if not isinstance(raw, list):
         return []
     peaks = []
     for item in raw:
         try:
-            peaks.append([round(float(item[1]), 4), round(float(item[0]), 2)])
+            peaks.append([round(float(item[1]), 4), round(float(item[0]), 2), _absolute(item)])
         except (TypeError, ValueError, IndexError):
             return []
     return peaks
+
+
+def _absolute(item) -> int | None:
+    try:
+        return round(float(item[4]))
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None

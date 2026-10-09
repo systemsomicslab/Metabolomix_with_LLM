@@ -282,15 +282,37 @@ function plotTrend(Plotly, box, ontology, spots, onPoint) {
   });
 }
 
+// --- isotope labels (pure) ---
+// MS1 同位体の棒の上の値: 実測の相対強度 %（横に絶対強度）/ 理論の相対強度 %（ユーザー決定 2026-10-09）。
+// 絶対強度は 1000 未満なら整数、以上は有効 2 桁の指数表記（5340 → 5.3e3）で、カードの幅に収める。
+function formatAbsolute(value) {
+  if (typeof value !== "number" || !isFinite(value)) return "–";
+  return value < 1000 ? String(Math.round(value)) : value.toExponential(1).replace("e+", "e");
+}
+function isotopeLabel(rel, abs, theory) {
+  const pct = v => (typeof v === "number" ? v.toFixed(0) + "%" : "–");
+  const measured = typeof rel === "number" ? pct(rel) + (typeof abs === "number" ? ` (${formatAbsolute(abs)})` : "") : "–";
+  return {measured, theory: pct(theory)};
+}
+// --- end isotope labels ---
+
 // MS1: 代表試料の同位体（.arf2 の IsotopicPeaks）を実測、組成式＋アダクトからの計算値を理論として
-// M, M+1, M+2 ごとに横並びの棒で描く（M = 100 %）。
+// M, M+1, M+2 ごとに横並びの棒で描く（M = 100 %）。棒の上は「実測 % (絶対強度) / 理論 %」。
+// 1 行で入らない幅（携帯など）では「(絶対強度)」を 1 段上に分けて描く。
 function drawIsotopes(prepare, spot) {
   const {ctx, w, h} = prepare(); const iso = spot.isotopes || {};
   const measured = iso.measured || [], theory = (iso.theoretical || {}).relative || [];
   ctx.font = "10px system-ui"; ctx.fillStyle = css("--muted");
   if (!measured.length && !theory.length) { ctx.font = "12px system-ui"; ctx.fillText("No MS1 isotopes", 8, h / 2); return; }
-  const n = Math.max(measured.length, theory.length), left = 26, top = 26, bottom = h - 14;
+  const n = Math.max(measured.length, theory.length), left = 26, bottom = h - 14;
   const slot = (w - left - 4) / n, bar = Math.min(18, slot / 3);
+  const labels = [...Array(n).keys()].map(k =>
+    isotopeLabel(measured[k] ? measured[k][1] : null, measured[k] ? measured[k][2] : null, theory[k] ?? null));
+  // 横に並べる。入らなければ文字を 10 → 9 px に下げ、それでも入らなければ 2 段に分ける。
+  const fits = font => { ctx.font = font; return labels.every(l => ctx.measureText(`${l.measured} / ${l.theory}`).width <= slot - 4); };
+  const labelFont = fits("10px system-ui") ? "10px system-ui" : "9px system-ui";
+  const wrap = !fits(labelFont); ctx.font = "10px system-ui";
+  const top = wrap ? 37 : 26;
   const py = v => bottom - Math.min(v, 100) / 100 * (bottom - top);
   ctx.strokeStyle = css("--line"); ctx.beginPath(); ctx.moveTo(left, top); ctx.lineTo(left, bottom); ctx.lineTo(w, bottom); ctx.stroke();
   ctx.textAlign = "right"; ctx.textBaseline = "middle";
@@ -301,13 +323,20 @@ function drawIsotopes(prepare, spot) {
     const m = measured[k] ? measured[k][1] : null, t = theory[k] ?? null;
     if (m !== null) { ctx.fillStyle = css("--meas"); ctx.fillRect(cx - bar - 1, py(m), bar, bottom - py(m)); }
     if (t !== null) { ctx.strokeStyle = css("--ref"); ctx.lineWidth = 1.5; ctx.strokeRect(cx + 1, py(t), bar, bottom - py(t)); ctx.lineWidth = 1; }
-    ctx.fillStyle = css("--fg"); ctx.textBaseline = "bottom";
-    ctx.fillText(`${m === null ? "–" : m.toFixed(0)} / ${t === null ? "–" : t.toFixed(0)}`, cx, Math.min(py(m ?? 0), py(t ?? 0)) - 1);
-    ctx.fillStyle = css("--muted"); ctx.textBaseline = "top";
+    ctx.fillStyle = css("--fg"); ctx.textBaseline = "bottom"; ctx.font = labelFont;
+    const y = Math.min(py(m ?? 0), py(t ?? 0)) - 1, l = labels[k];
+    if (!wrap) ctx.fillText(`${l.measured} / ${l.theory}`, cx, y);
+    else {
+      const split = l.measured.indexOf(" (");
+      const rel = split < 0 ? l.measured : l.measured.slice(0, split), abs = split < 0 ? "" : l.measured.slice(split + 1);
+      ctx.fillText(`${rel} / ${l.theory}`, cx, y);
+      if (abs) { ctx.fillStyle = css("--muted"); ctx.fillText(abs, cx, y - 11); }
+    }
+    ctx.fillStyle = css("--muted"); ctx.textBaseline = "top"; ctx.font = "10px system-ui";
     ctx.fillText(k ? `M+${k}` : "M" + (measured[0] ? ` ${measured[0][0].toFixed(4)}` : ""), cx, bottom + 2);
   }
   ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillStyle = css("--muted");
-  ctx.fillText("MS1 isotopes %  ■ measured  □ theory" + (iso.theoretical && iso.theoretical.basis === "formula" ? " (neutral formula)" : ""), left + 4, 0);
+  ctx.fillText("MS1 isotopes % (abs.)  ■ measured  □ theory" + (iso.theoretical && iso.theoretical.basis === "formula" ? " (neutral formula)" : ""), left + 4, 0);
 }
 
 function spotCard(spot) {
