@@ -265,7 +265,7 @@ def test_app_loader_shows_error_payloads_and_send_updates_spots():
     assert "afterRecorded(" in send
     after = script[script.index("function afterRecorded"):]
     after = after[:after.index("\n}")]
-    assert after.index("applyRecorded(REVIEW.spots, edits)") < after.index("edits.clear()")
+    assert after.index("applyRecorded(REVIEW.spots, sent)") < after.index("clearSent(edits, sent)")
 
 
 def _review(paths):
@@ -855,3 +855,33 @@ def test_review_submit_button_skips_empty_submissions_and_confirms_first():
     assert handler.index("if (!edits.size)") < handler.index("confirm(reviewConfirmText(")
     assert handler.index("confirm(reviewConfirmText(") < handler.index("submitClient.submit(")
     assert "applyRecorded" in script[script.index("function afterRecorded"):]
+
+
+def test_clear_sent_keeps_edits_changed_during_flight(tmp_path):
+    prelude = ("const edits = new Map([[0, {flag:'wrong', note:'a'}], [1, {flag:'wrong', note:'b'}], [2, {flag:'suspect', note:''}]]);"
+               "const sent = new Map(edits);"
+               "edits.set(1, {flag:'confirmed', note:'b'}); edits.set(2, {flag:'suspect', note:'new'}); edits.set(3, {flag:'wrong', note:''});"
+               "clearSent(edits, sent);")
+    out = _run_block(tmp_path, "recorded", prelude, "[...edits.entries()]")
+    assert out == [[1, {"flag": "confirmed", "note": "b"}], [2, {"flag": "suspect", "note": "new"}],
+                   [3, {"flag": "wrong", "note": ""}]]
+
+
+def test_tags_result_text_survives_a_missing_body(tmp_path):
+    out = _run_block(tmp_path, "submit client", "", "tagsResultText(null, 'en')")
+    assert isinstance(out, str)
+
+
+def test_review_viewer_uses_only_english_helpers():
+    template = (Path(viewer.__file__).parent / "viewer.html").read_text(encoding="utf-8")
+    assert "suggestConfirmText(" not in template
+    assert '"ja"' not in template and "'ja'" not in template
+
+
+def test_submit_snapshots_edits_and_disables_the_button_in_flight():
+    script = _script()
+    handler = script[script.index('getElementById("submit").addEventListener'):]
+    handler = handler[:handler.index("\n});")]
+    assert handler.index("new Map(edits)") < handler.index("submitClient.submit(")
+    assert "disabled = true" in handler and "disabled = false" in handler
+    assert "clearSent(edits, sent)" in script[script.index("function afterRecorded"):]

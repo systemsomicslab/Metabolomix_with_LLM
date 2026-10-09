@@ -415,6 +415,13 @@ function applyRecorded(spots, edits) {
     spot.confirmed = e.flag === "confirmed";
   }
 }
+// 送信中に変わった変更は未送信のまま残す: 送った内容（flag と note）と今も同じ項目だけを消す。
+function clearSent(edits, sent) {
+  for (const [spotId, e] of sent) {
+    const cur = edits.get(spotId);
+    if (cur && cur.flag === e.flag && cur.note === e.note) edits.delete(spotId);
+  }
+}
 // --- end recorded ---
 
 function submission() {
@@ -677,9 +684,10 @@ document.getElementById("copy").addEventListener("click", async () => {
   catch { area.hidden = false; area.value = text; area.select(); document.getElementById("status").textContent = "Select the text below and copy it."; }
 });
 
-function afterRecorded(text) {
-  applyRecorded(REVIEW.spots, edits);
-  edits.clear(); presetCount = 0; presetCauses = {}; render();
+function afterRecorded(text, sent) {
+  applyRecorded(REVIEW.spots, sent);
+  clearSent(edits, sent); if (!edits.size) { presetCount = 0; presetCauses = {}; }
+  render();
   document.getElementById("result").textContent = text;
 }
 
@@ -690,11 +698,13 @@ const submitClient = startSubmitClient({onState: state => {
 
 document.getElementById("submit").addEventListener("click", async () => {
   if (!edits.size) { document.getElementById("status").textContent = "No unsent changes."; return; }
-  const payload = submission();
+  const payload = submission(), sent = new Map(edits);   // 送信中に変わった変更を巻き込まないよう、送る内容を控える
   if (!confirm(reviewConfirmText(payload.flags))) return;
-  document.getElementById("result").textContent = "Submitting…";
+  const button = document.getElementById("submit");
+  button.disabled = true; document.getElementById("result").textContent = "Submitting…";
   const r = await submitClient.submit(payload);
-  if (r.status === 200) { afterRecorded(tagsResultText(r.body, "en")); return; }
+  button.disabled = false;
+  if (r.status === 200) { afterRecorded(tagsResultText(r.body, "en"), sent); return; }
   document.getElementById("result").textContent = "";
   if (r.status !== 401 && r.status !== 0) showError(errorMessage(r.body) || `HTTP ${r.status}`);   // 未送信の変更は残す
 });
@@ -744,13 +754,14 @@ window.addEventListener("message", async event => {
 
 document.getElementById("send").addEventListener("click", async () => {
   if (!edits.size) { document.getElementById("status").textContent = "No unsent changes."; return; }
+  const sent = new Map(edits);
   let text;
   try {
     text = toolText(await rpc("tools/call", {name: "curation_submit", arguments: {submission_text: PREFIX + " " + JSON.stringify(submission())}}));
   } catch (err) { showError(err && err.message ? err.message : JSON.stringify(err)); return; }
   const body = parseBody(text), problem = errorMessage(body);
   if (problem) { showError(problem); return; }        // 失敗したら未送信の変更は残す
-  afterRecorded(text.slice(0, 200));
+  afterRecorded(text.slice(0, 200), sent);
 });
 
 if (REVIEW) start();

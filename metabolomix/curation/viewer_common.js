@@ -124,6 +124,7 @@ function submitControls(state) {
   return {submit: live, finish: live, copyPrimary: !live};
 }
 function tagsResultText(body, lang) {
+  body = body || {};
   const t = body.tags_xml || {}, c = t.confirmed || {}, n = body.recorded, len = a => (a || []).length;
   if (t.error) return lang === "ja" ? `${n} 件を記録しました。_tags.xml への反映に失敗: ${t.error}`
                                     : `Recorded ${n}. Updating _tags.xml failed: ${t.error}`;
@@ -186,5 +187,5 @@ function showSubmitControls(state) {
 function openFallback(text, message) {
   const area = document.getElementById("fallback");
   area.hidden = false; area.value = text; area.select();
-  document.getElementById("status").textContent = message;
+  document.getElementById("result").textContent = message;   // #status は render() が書き直すので #result に出す
 }
