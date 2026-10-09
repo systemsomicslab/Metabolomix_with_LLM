@@ -101,6 +101,31 @@ def test_a_truncated_line_raises_flag_file_error_naming_the_line(tmp_path):
     assert "flags.jsonl" in str(info.value) and "2" in str(info.value)
 
 
+def test_a_partial_last_line_without_newline_is_ignored(tmp_path):
+    # 別スレッドの追記の途中を読んでも落ちない（改行で終わっていない最終行だけ無視）
+    store = flags.FlagStore(tmp_path)
+    store.append([{"spot_id": 1, "flag": "wrong"}], alignment=ALIGN, review_id="r", source="user")
+    with open(store.path, "a", encoding="utf-8") as handle:
+        handle.write('{"spot_id": 2, "flag": "wro')
+    assert [r["spot_id"] for r in store.rows()] == [1]
+
+
+def test_a_newline_terminated_broken_line_still_raises_even_when_last(tmp_path):
+    store = flags.FlagStore(tmp_path)
+    store.append([{"spot_id": 1, "flag": "wrong"}], alignment=ALIGN, review_id="r", source="user")
+    with open(store.path, "a", encoding="utf-8") as handle:
+        handle.write('{"spot_id": 2, "flag": "wro\n')
+    with pytest.raises(flags.FlagFileError):
+        store.rows()
+
+
+def test_a_broken_middle_line_raises_even_if_the_last_has_no_newline(tmp_path):
+    store = flags.FlagStore(tmp_path)
+    store.path.write_text('{bad\n{"spot_id": 1, "flag": "wrong"}', encoding="utf-8")
+    with pytest.raises(flags.FlagFileError):
+        store.rows()
+
+
 def test_a_line_without_an_integer_spot_id_is_a_flag_file_error(tmp_path):
     store = flags.FlagStore(tmp_path)
     store.path.write_text('{"flag": "wrong", "alignment_sha256": "x"}\n', encoding="utf-8")

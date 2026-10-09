@@ -199,7 +199,7 @@ def _break_flags_file(arf2):
     store.append([{"spot_id": 1, "flag": "wrong"}], alignment=flags.alignment_key(arf2),
                  review_id="r", source="user")
     with open(store.path, "a", encoding="utf-8") as handle:
-        handle.write('{"spot_id": 1, "fl')
+        handle.write('{"spot_id": 1, "fl\n')
     return store.path
 
 

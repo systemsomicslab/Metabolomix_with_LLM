@@ -297,7 +297,7 @@ class TestExportDifferential(unittest.TestCase):
 
     def test_malformed_flags_file_is_an_error_not_a_silent_drop(self):
         payload, text, flags_path = self._export_with_flags(
-            [{"spot_id": 1, "flag": "wrong"}], raw_tail='{"spot_id": 2, "fla')
+            [{"spot_id": 1, "flag": "wrong"}], raw_tail='{"spot_id": 2, "fla\n')
         self.assertEqual(payload["status"], "error")
         self.assertEqual(payload["flags_file"], flags_path)
         self.assertEqual(payload["line"], 2)

@@ -895,3 +895,13 @@ def test_submit_keeps_the_lost_reason_in_result():
     assert 'getElementById("result").textContent = ""' in after
     for m in re.finditer(re.escape('getElementById("result").textContent = ""'), after):
         assert m.start() > guard   # 401/0 では onState("lost") が書いた理由を消さない
+
+
+def test_plotly_loader_is_integrity_pinned():
+    # ページは書込みトークンを持つので、第三者スクリプトは SRI で固定する
+    html = viewer.render_html(None)
+    loader = html[html.index("function plotlyReady"):]
+    loader = loader[:loader.index("\n}\n")]
+    assert re.search(r'script\.integrity\s*=\s*"sha512-[A-Za-z0-9+/]+=*"', loader)
+    assert re.search(r'script\.crossOrigin\s*=\s*"anonymous"', loader)
+    assert "script.onerror" in loader

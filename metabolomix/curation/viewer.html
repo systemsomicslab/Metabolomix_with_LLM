@@ -229,6 +229,9 @@ function plotlyReady() {
     const script = document.createElement("script");
     const timer = setTimeout(() => resolve(null), PLOTLY_TIMEOUT_MS);
     script.src = PLOTLY_URL; script.async = true;
+    // このページは書込みトークンを持つので、第三者スクリプトは内容ハッシュで固定する（cdnjs 公開の SRI と照合済み）。
+    script.integrity = "sha512-7H/XbvOmUsf6mawBvmmx9BsPt9ew2NTwQ3QDSzNe6iyacDbCJU+7pBbZY1NdmTpuj7snxSsXasMYMiR2tv906g==";
+    script.crossOrigin = "anonymous";
     script.onload = () => { clearTimeout(timer); resolve(window.Plotly || null); };
     script.onerror = () => { clearTimeout(timer); resolve(null); };
     document.head.appendChild(script);

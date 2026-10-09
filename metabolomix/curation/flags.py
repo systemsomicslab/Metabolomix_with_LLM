@@ -95,7 +95,13 @@ class FlagStore:
         if not self.path.exists():
             return []
         rows = []
-        for line_no, line in enumerate(self.path.read_text(encoding="utf-8").splitlines(), 1):
+        text = self.path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        # 受け口の HTTP スレッドが追記している最中に読むと、最終行が書きかけ（改行なし）のことがある。
+        # その最終行だけは読み飛ばす。改行で終わっている壊れた行は従来どおり FlagFileError にする。
+        if lines and not text.endswith(("\n", "\r")):
+            lines.pop()
+        for line_no, line in enumerate(lines, 1):
             if not line.strip():
                 continue
             try:

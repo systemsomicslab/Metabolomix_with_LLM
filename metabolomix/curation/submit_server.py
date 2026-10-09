@@ -155,7 +155,7 @@ def _submit(handler, token, entry, body):
         return 200, submission.submit_flags(saved, body.get("flags"), review_id=entry["review_id"],
                                             source="user")
     except submission.SubmissionError as exc:
-        return _SUBMISSION_STATUS[exc.kind], _error_body(str(exc), **exc.details)
+        return _SUBMISSION_STATUS.get(exc.kind, 500), _error_body(str(exc), **exc.details)
 
 
 def _finish(handler, token, entry, body):
