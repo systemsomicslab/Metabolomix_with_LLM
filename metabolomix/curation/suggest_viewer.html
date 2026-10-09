@@ -19,7 +19,9 @@ header h1 { font-size:15px; margin:0 12px 0 0; min-width:0; overflow-wrap:anywhe
 select, button, input[type=text] { font:inherit; color:inherit; background:var(--card);
          border:1px solid var(--line); border-radius:6px; padding:4px 8px; }
 button.primary { background:var(--meas); color:#fff; border-color:var(--meas); }
+button.quiet { opacity:.7; }
 #status { color:var(--muted); }
+#result { color:var(--muted); overflow-wrap:anywhere; }
 main { padding:12px 16px 40px; }
 .warn { border-left:3px solid var(--suspect); padding:6px 10px; margin:6px 0; background:var(--card); }
 #trends { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(320px, 100%), 1fr)); gap:12px; margin-bottom:16px; }
@@ -65,8 +67,11 @@ textarea { width:100%; height:80px; font:12px monospace; }
     <option value="research">research を含む</option><option value="ion">イオン関係あり</option></select></label>
   <label>選択 <select id="f-chosen"><option value="">すべて</option><option value="chosen">選んだもの</option>
     <option value="open">未選択</option></select></label>
+  <button id="submit" class="primary" hidden>送信</button>
+  <button id="finish" hidden>終了</button>
   <button id="copy" class="primary">送信用テキストをコピー</button>
   <span id="status"></span>
+  <span id="result"></span>
 </header>
 <main>
   <div id="warnings"></div>
@@ -136,6 +141,28 @@ function candidateDetail(c) {
     `一致 ${countText(c.scores.matched_peaks_count)} / Δm/z ${c.dmz_mda ?? "–"} mDa / ${(c.inchikey || "").slice(0, 14) || "–"}` +
     (c.trend ? ` / 傾向 z ${c.trend.z}` : "") + (extra.length ? ` / ${extra.join(",")}` : "");
 }
+// 送信が記録されたら、選択をスポットへ写す（カードに「記録済み」を出す）。
+function applySuggestRecorded(spots, choiceMap) {
+  for (const [id, c] of choiceMap) {
+    const spot = spots.find(s => s.spot_id === id); if (!spot) continue;
+    spot.recorded = c.flag === "clear" ? {flag: "clear"}
+      : {flag: c.flag, candidate: c.candidate, level: c.flag === "assign" ? (c.level || "sum") : undefined};
+    if (spot.recorded.level === undefined) delete spot.recorded.level;
+  }
+}
+function recordedText(rec) {
+  if (rec.flag === "clear") return "記録済み: 元の注釈に戻した";
+  if (rec.flag === "assign") return `記録済み: 候補 ${rec.candidate} を採用（${rec.level === "species" ? "分子種" : "和組成"}）`;
+  return `記録済み: 別イオン ${rec.candidate}`;
+}
+// 送信中に変わった選択は未送信のまま残す: 送った内容と今も同じ項目だけを消す。
+function clearSentChoices(choiceMap, sent) {
+  for (const [id, c] of sent) {
+    const cur = choiceMap.get(id);
+    if (cur && cur.flag === c.flag && cur.candidate === c.candidate && cur.level === c.level && cur.note === c.note)
+      choiceMap.delete(id);
+  }
+}
 // --- end suggest ---
 
 // 選択中の ④（相手 Y との関係）。無ければ null。
@@ -151,6 +178,7 @@ function spotCard(spot) {
   card.appendChild(el("div", {class: "meta"},
     `#${spot.spot_id} ${spot.adduct || ""} m/z ${fixed(spot.mz, 4)} RT ${fixed(spot.rt, 2)} / ${kind}` +
     (spot.target_reasons.length ? ` / ${spot.target_reasons.join(", ")}` : "")));
+  if (spot.recorded) card.appendChild(el("div", {class: "meta"}, recordedText(spot.recorded)));
   const eic = canvasFor(card), mirror = canvasFor(card);
   // ミラーに出す候補: 選択中の候補、無ければ先頭。マウスを外したらここへ戻す。
   const pinned = () => spot.candidates.find(c => c.candidate_id === (choices.get(spot.spot_id) || {}).candidate)
@@ -276,6 +304,37 @@ document.getElementById("copy").addEventListener("click", async () => {
   const area = document.getElementById("fallback");
   try { await navigator.clipboard.writeText(text); document.getElementById("status").textContent = "コピーしました。チャットに貼って送ってください。"; }
   catch { area.hidden = false; area.value = text; area.select(); document.getElementById("status").textContent = "下の欄を選択してコピーしてください。"; }
+});
+
+function afterRecorded(text, sent) {
+  applySuggestRecorded(DATA.spots, sent); clearSentChoices(choices, sent); render();
+  document.getElementById("result").textContent = text;
+}
+
+const submitClient = startSubmitClient({onState: state => {
+  showSubmitControls(state);
+  if (state === "lost") openFallback(PREFIX + " " + JSON.stringify(suggestSubmission(DATA, choices)), lostText("ja"));
+}});
+
+document.getElementById("submit").addEventListener("click", async () => {
+  if (!choices.size) { document.getElementById("status").textContent = "未送信の選択はありません。"; return; }
+  const sent = new Map(choices);   // 送信中に変わった選択を巻き込まないよう、送る内容を控える
+  const payload = suggestSubmission(DATA, sent);
+  if (!confirm(suggestConfirmText(payload.flags))) return;
+  const button = document.getElementById("submit");
+  button.disabled = true; document.getElementById("result").textContent = "送信中…";
+  const r = await submitClient.submit(payload);
+  button.disabled = false;
+  if (r.status === 200) { afterRecorded(tagsResultText(r.body, "ja"), sent); return; }
+  document.getElementById("result").textContent = "";
+  if (r.status !== 401 && r.status !== 0)          // 未送信の選択は残す
+    document.getElementById("status").textContent = "エラー: " + String((r.body && r.body.message) || `HTTP ${r.status}`).slice(0, 300);
+});
+
+document.getElementById("finish").addEventListener("click", async () => {
+  if (choices.size && !confirm(finishConfirmText(choices.size, "ja"))) return;
+  await submitClient.finish();
+  document.getElementById("result").textContent = finishedText("ja");
 });
 
 if (DATA) start(); else document.getElementById("status").textContent = "データがありません。";
