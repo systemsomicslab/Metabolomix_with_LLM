@@ -71,8 +71,8 @@ SMF からこれらを読もうとすると常に `None` になり、「この�
 | `confidence_measure` | `best_id_confidence_measure` | |
 | `confidence_value` | `best_id_confidence_value`（無ければ SME 由来の total score でフォールバック。下記） | float |
 | `confidence_measures` | SME の `id_confidence_measure[2..8]` | dict。**どのツール戻り値にも出ない**（下記） |
-| `inchikey` | 導出 | `smiles` 経由でのみ到達しうる（下記） |
-| `inchikey_source` | 導出 | `smiles_derived` / `none` |
+| `inchikey` | 導出 | `smiles` 経由（RDKit）か、`MspDB:<名前>` を研究室 MSP の表で引いて到達しうる（下記・§13.6） |
+| `inchikey_source` | 導出 | `msp_library` / `smiles_derived` / `none` |
 
 **`confidence_value` のフォールバック（Minor 10）**: SML 行が `best_id_confidence_value`
 を持たない（実 mzTab で稀ではない: Text DB 経由でない同定はスコアが SME 側にしか
@@ -135,7 +135,7 @@ SME 由来という食い違った行ができる。
 |---|---|---|
 | `name_source` | `mztab_sme` | SME 由来（スペクトル照合の証拠） |
 | | `mztab_sml` | **SML 由来。MS1 照合のみ** |
-| `inchikey_source` | `database_identifier` / `inchi_derived` / `smiles_derived` | どこから導出したか |
+| `inchikey_source` | `database_identifier` / `msp_library` / `inchi_derived` / `smiles_derived` | どこから導出したか。`msp_library` は Console に渡した研究室 MSP の `INCHIKEY` を `MspDB:<名前>` で引いた値（RDKit 不要。spec 2026-10-10 `msp-inchikey-design`） |
 | `msi_level` | **常に空欄** | 下記 |
 | `spot_id` | `SMF_ID` | メタ行の `# id_space = mztab_smf_id` が ID 空間を宣言する |
 
@@ -156,9 +156,15 @@ SME 由来という食い違った行ができる。
 |---|---|
 | `total_features` | SMF 行数 |
 | `with_inchikey` | InChIKey が付いた特徴数（SME・SML 合算） |
-| `by_source` | `database_identifier` / `inchi_derived` / `smiles_derived` / `none` の内訳。全特徴を 1 回ずつ数える |
+| `by_source` | `database_identifier` / `msp_library` / `inchi_derived` / `smiles_derived` / `none` の内訳。全特徴を 1 回ずつ数える |
 | `rdkit_available` | RDKit で構造から導出できる環境か。`False` なら `smiles`/`inchi` 経路は静かに落ちる |
 | `identified_by` | **同定の出所内訳**。`sme`（MS/MS 証拠あり）/ `sml_only`（MS1 注釈のみ）/ `none` |
+| `msp_lookup` | MSP 表の使用状況。`status`（`used` / `no_msp` / `unavailable` / `not_applicable`）、`file`（MSP のファイル名だけ）、`resolved` / `conflicting_names` / `unmatched`（**照合の試行回数**: 特徴ごとの SME 最良証拠 1 件と、SML 行 × 参照特徴）。`conflicting_names` は同じ名前に別の InChIKey が MSP にあって付けなかった数 |
+
+**解決の順序**: `database_identifier` が InChIKey 形 → **研究室 MSP の表**（`MspDB:<名前>`）→ RDKit（InChI / SMILES）。
+MSP を RDKit より前に置くのは、RDKit の有無（Windows のアプリケーション制御がネイティブ DLL を
+拒否する機械がある）で結果を変えないため。MSP 表はジョブ経由の読み込み（`job_path`）でだけ作られ、
+実効メソッドの `Msp file path` を読む。直接読み（`mztab_path`）では `not_applicable`。
 
 `identified_by` は `dataset_load` の要約にも 1 行で出る。
 **`sml_only` を `sme` と足して「同定できた件数」にしないこと** — 証拠水準が違う。

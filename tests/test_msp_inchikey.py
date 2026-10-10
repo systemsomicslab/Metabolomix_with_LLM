@@ -148,3 +148,29 @@ def test_module_imports_no_mcp_or_library_store():
     assert not any(m.startswith(("metabolomix.core.mcp_core", "metabolomix.core.session_state",
                                  "metabolomix.library", "metabolomix.tools"))
                    for m in imported), imported
+
+
+def test_export_writes_msp_library_rows_with_the_contract_columns(tmp_path):
+    """エクスポートは inchikey_source を通すだけ。列は契約のまま（CONTRACT_VERSION 不変）。"""
+    from metabolomix.analysis import export_contract
+    from metabolomix.analysis.dataset_export import export_dataset_result
+    from metabolomix.analysis.dataset_service import compare_dataset, preprocess_dataset
+    from tests.pipeline_fixtures import make_dataset
+
+    ds = make_dataset()
+    fid = ds.feature_ids[0]
+    ds.feature_metadata.setdefault(fid, {}).update(
+        {"name": "Citrulline", "inchikey": CIT, "inchikey_source": "msp_library"})
+    preprocess_dataset(ds, {"normalize": "none", "impute": "half_min"})
+    result = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
+
+    export_dataset_result(ds, result, tmp_path / "out.tsv", curation=None)
+
+    lines = [l for l in (tmp_path / "out.tsv").read_text(encoding="utf-8").splitlines()
+             if not l.startswith("#")]
+    header = lines[0].split("\t")
+    assert header == export_contract.EXPORT_COLUMNS
+    rows = [dict(zip(header, l.split("\t"))) for l in lines[1:]]
+    hit = [r for r in rows if r["spot_id"] == str(fid)]
+    assert hit and hit[0]["inchikey_source"] == "msp_library"
+    assert hit[0]["inchikey"] == CIT
