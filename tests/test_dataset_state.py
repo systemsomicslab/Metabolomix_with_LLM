@@ -735,3 +735,128 @@ def test_a_manually_assigned_ninth_measure_and_an_unmapped_name_are_not_dropped(
     assert measures["simple_dot_product"] == pytest.approx(0.95)
     assert measures["matched_peaks_percentage"] == pytest.approx(0.7)
     assert "retention_time_similarity" not in measures
+
+
+# ---------- MSP の INCHIKEY（spec 2026-10-10 msp-inchikey-design）----------
+
+from metabolomix.mztab.msp_inchikey import MspInchikeyTable
+
+_CIT = "RHGKLRLOHDJJDR-BYPYZUCNSA-N"
+_ORN = "AHLPHDHHMVZTML-BYPYZUCNSA-N"
+_DBIK = "IPCSVZSSVZVIGE-UHFFFAOYSA-N"
+
+# msp_only の Console が書く実形状: database_identifier は MspDB:<名前>、smiles あり、
+# inchi は null。特徴 1 は SME（MS/MS 証拠）、特徴 2 は SML だけ（MS1 注釈）、
+# 特徴 3 は名前が衝突、特徴 4 は MSP に無い名前、特徴 5 は InChIKey 形の識別子。
+_MSPDB_MZTAB = textwrap.dedent("""\
+    MTD\tmzTab-version\t2.0.0-M
+    MTD\tmzTab-mode\tComplete
+    MTD\tmzTab-type\tQuantification
+    MTD\tms_run[1]-location\tfile:///s1.raw
+    MTD\tassay[1]-ms_run_ref\tms_run[1]
+    SMH\tSML_ID\tSMF_ID_REFS\tdatabase_identifier\tchemical_formula\tsmiles\tinchi\tchemical_name\tadduct_ions\treliability\tbest_id_confidence_measure\tbest_id_confidence_value
+    SML\t1\t1\tMspDB:Citrulline\tnull\tNC(=O)NCCCC(N)C(O)=O\tnull\tCitrulline\t[M+H]1+\t530\tnull\tnull
+    SML\t2\t2\tMspDB:Ornithine\tnull\tNCCCC(N)C(O)=O\tnull\tlow score: Ornithine\t[M+H]1+\t530\tnull\tnull
+    SML\t3\t3\tMspDB:Leucine\tnull\tCC(C)CC(N)C(O)=O\tnull\tLeucine\t[M+H]1+\t530\tnull\tnull
+    SML\t4\t4\tMspDB:Unlisted\tnull\tCCO\tnull\tUnlisted\t[M+H]1+\t530\tnull\tnull
+    SFH\tSMF_ID\tSME_ID_REFS\texp_mass_to_charge\tretention_time_in_seconds\tabundance_assay[1]
+    SMF\t1\t1\t176.1030\t300.0\t1000.0
+    SMF\t2\tnull\t133.0972\t310.0\t900.0
+    SMF\t3\tnull\t132.1019\t320.0\t800.0
+    SMF\t4\tnull\t47.0491\t330.0\t700.0
+    SMF\t5\t2\t786.6\t340.0\t600.0
+    SEH\tSME_ID\tdatabase_identifier\tsmiles\tinchi\tchemical_name\trank
+    SME\t1\tMspDB:Citrulline\tNC(=O)NCCCC(N)C(O)=O\tnull\tCitrulline\t1
+    SME\t2\tIPCSVZSSVZVIGE-UHFFFAOYSA-N\tnull\tnull\tPC 36:2\t1
+""")
+
+_TABLE = MspInchikeyTable("lab.msp", {"Citrulline": _CIT, "Ornithine": _ORN},
+                          frozenset({"Leucine"}))
+
+
+def _build_msp(tmp_path, msp_table=_TABLE):
+    p = tmp_path / "Height_mspdb.mzTab"
+    p.write_text(_MSPDB_MZTAB, encoding="utf-8")
+    return build_dataset_state(parse_mztab(p), p.name, p, msp_table=msp_table)
+
+
+def test_mspdb_evidence_gets_the_msp_inchikey(tmp_path, monkeypatch):
+    _without_rdkit(monkeypatch)
+    ds = _build_msp(tmp_path)
+    assert ds.feature_metadata["1"]["inchikey"] == _CIT
+    assert ds.feature_metadata["1"]["inchikey_source"] == "msp_library"
+
+
+def test_mspdb_sml_annotation_gets_the_msp_inchikey(tmp_path, monkeypatch):
+    _without_rdkit(monkeypatch)
+    ds = _build_msp(tmp_path)
+    assert ds.feature_annotations["2"]["inchikey"] == _ORN
+    assert ds.feature_annotations["2"]["inchikey_source"] == "msp_library"
+
+
+def test_conflicting_and_unmatched_names_get_no_inchikey(tmp_path, monkeypatch):
+    _without_rdkit(monkeypatch)
+    ds = _build_msp(tmp_path)
+    assert ds.feature_annotations["3"]["inchikey"] is None
+    assert ds.feature_annotations["4"]["inchikey"] is None
+
+
+def test_inchikey_shaped_identifier_wins_over_the_msp(tmp_path, monkeypatch):
+    _without_rdkit(monkeypatch)
+    ds = _build_msp(tmp_path)
+    assert ds.feature_metadata["5"]["inchikey"] == _DBIK
+    assert ds.feature_metadata["5"]["inchikey_source"] == "database_identifier"
+
+
+def test_msp_wins_over_rdkit(tmp_path, monkeypatch):
+    """RDKit が使えても MSP の値を採る（機械によって結果を変えない）。"""
+    def rdkit_derive(database_identifier, inchi, smiles):
+        if smiles:
+            return "ZZZZZZZZZZZZZZ-ZZZZZZZZZZ-Z", "smiles_derived"
+        return None, "none"
+    monkeypatch.setattr("metabolomix.mztab.dataset_state.derive_inchikey", rdkit_derive)
+    ds = _build_msp(tmp_path)
+    assert ds.feature_metadata["1"]["inchikey"] == _CIT
+    assert ds.feature_metadata["1"]["inchikey_source"] == "msp_library"
+    # MSP で決まらない名前は従来どおり RDKit へ落ちる。
+    assert ds.feature_annotations["4"]["inchikey_source"] == "smiles_derived"
+
+
+def test_by_source_counts_every_feature_once(tmp_path, monkeypatch):
+    _without_rdkit(monkeypatch)
+    ds = _build_msp(tmp_path)
+    cov = ds.inchikey_coverage
+    assert sum(cov["by_source"].values()) == cov["total_features"] == 5
+    assert cov["by_source"]["msp_library"] == 2      # 特徴 1（SME）と 2（SML）
+    assert cov["by_source"]["database_identifier"] == 1
+    assert cov["by_source"]["none"] == 2
+    assert cov["with_inchikey"] == 3
+
+
+def test_msp_lookup_reports_attempts(tmp_path, monkeypatch):
+    _without_rdkit(monkeypatch)
+    ds = _build_msp(tmp_path)
+    look = ds.inchikey_coverage["msp_lookup"]
+    assert look["status"] == "used"
+    assert look["file"] == "lab.msp"
+    # 試行: SME 最良証拠（特徴 1: Citrulline）+ SML 4 行（Citrulline/Ornithine/Leucine/Unlisted）
+    assert look["resolved"] == 3
+    assert look["conflicting_names"] == 1
+    assert look["unmatched"] == 1
+
+
+def test_without_a_table_the_lookup_is_not_applicable(tmp_path, monkeypatch):
+    _without_rdkit(monkeypatch)
+    ds = _build_msp(tmp_path, msp_table=None)
+    assert ds.feature_metadata["1"]["inchikey"] is None
+    assert ds.inchikey_coverage["by_source"]["msp_library"] == 0
+    assert ds.inchikey_coverage["msp_lookup"] == {
+        "status": "not_applicable", "file": None,
+        "resolved": 0, "conflicting_names": 0, "unmatched": 0}
+
+
+def test_msp_resolved_features_are_not_reported_as_rdkit_misses(tmp_path, monkeypatch):
+    _without_rdkit(monkeypatch)
+    ds = _build_msp(tmp_path)
+    # SME 由来で SMILES を持ち InChIKey が無いのは無い（特徴 1 は MSP で付いた）。
+    assert not any("RDKit" in w for w in ds.validation_result.get("warnings", []))

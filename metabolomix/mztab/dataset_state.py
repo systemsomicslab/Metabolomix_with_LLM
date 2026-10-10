@@ -12,7 +12,8 @@ from pathlib import Path
 import numpy as np
 
 from metabolomix.mztab import identity as mztab_identity
-from metabolomix.mztab.identity import derive_inchikey
+from metabolomix.mztab import msp_inchikey
+from metabolomix.mztab.identity import _INCHIKEY_RE, derive_inchikey
 from metabolomix.mztab.reader import extract_abundance_matrix
 from metabolomix.mztab.validator import detect_quantification_measure, validate_mztab
 
@@ -243,12 +244,43 @@ def _sha256(path: str | Path) -> str:
     return h.hexdigest()
 
 
+#: `msp_inchikey.lookup` の結果 → `inchikey_coverage["msp_lookup"]` の数のキー。
+_MSP_LOOKUP_COUNTERS = {"resolved": "resolved", "conflicting": "conflicting_names",
+                        "unmatched": "unmatched"}
+
+
+def _resolve_inchikey(database_identifier, inchi, smiles, msp_table, msp_counts: dict):
+    """InChIKey 形の識別子 → 研究室 MSP の表 → RDKit の順で解決する。
+
+    MSP を RDKit より前に置くのは、研究室が整備した値をそのまま使い、RDKit の有無
+    （機械のアプリケーション制御）で結果を変えないため（spec §3.2）。`derive_inchikey`
+    はモジュール属性として呼ぶ（既存テストがここを差し替えて RDKit 不在を再現する）。
+    """
+    text = str(database_identifier or "").strip()
+    if text and _INCHIKEY_RE.match(text):
+        return text, "database_identifier"
+    if msp_table is not None:
+        inchikey, outcome = msp_inchikey.lookup(msp_table, database_identifier)
+        counter = _MSP_LOOKUP_COUNTERS.get(outcome)
+        if counter is not None:
+            msp_counts[counter] += 1
+        if inchikey:
+            return inchikey, "msp_library"
+    return derive_inchikey(database_identifier, inchi, smiles)
+
+
 def build_dataset_state(
     parse_result: dict,
     filename: str,
     source_path: str | Path,
+    *,
+    msp_table: "msp_inchikey.MspInchikeyTable | None" = None,
 ) -> DatasetState:
-    """parse_mztab() の戻り値から DatasetState を構築する。"""
+    """parse_mztab() の戻り値から DatasetState を構築する。
+
+    `msp_table` は Console に渡した研究室 MSP の名前 → InChIKey 表（`mztab/loading.py`
+    がジョブの実効メソッドから作る）。あれば `MspDB:<名前>` の同定に MSP の InChIKey を付ける。
+    """
     ds = DatasetState()
 
     # ファイルハッシュ
@@ -279,7 +311,9 @@ def build_dataset_state(
     # 「この測定には同定が無い」と誤読される（実データで InChIKey 0/714 になっていた）。
     smf_rows = parse_result["sections"].get("SMF", {}).get("rows", [])
     sme_by_id = _index_sme_rows(parse_result["sections"].get("SME", {}).get("rows", []))
-    by_source: dict[str, int] = {"database_identifier": 0, "inchi_derived": 0, "smiles_derived": 0, "none": 0}
+    by_source: dict[str, int] = {"database_identifier": 0, "msp_library": 0,
+                                 "inchi_derived": 0, "smiles_derived": 0, "none": 0}
+    msp_counts = {"resolved": 0, "conflicting_names": 0, "unmatched": 0}
     derivable_but_missing = 0
     # `id_confidence_measure[N]` の宣言 → スネークケースキー。SME 行が持つ個別
     # スコアを後で feature_annotations（SML 由来）へ合流させるため、fid ごとに
@@ -293,10 +327,11 @@ def build_dataset_state(
         candidates = _all_candidates(row.get("SME_ID_REFS"), sme_by_id)
         ds.feature_candidates[fid] = candidates
         evidence = _best_evidence(row.get("SME_ID_REFS"), sme_by_id)
-        ik, src = derive_inchikey(
+        ik, src = _resolve_inchikey(
             evidence.get("database_identifier"),
             evidence.get("inchi"),
             evidence.get("smiles"),
+            msp_table, msp_counts,
         )
         ds.feature_metadata[fid] = {
             "name": evidence.get("chemical_name"),
@@ -337,7 +372,7 @@ def build_dataset_state(
 
     # SML 由来のラベル（証拠ではない）。証拠スロットの構築が終わってから作る。
     ds.feature_annotations, annotation_warnings = _build_feature_annotations(
-        ds.sml_rows, set(ds.feature_ids))
+        ds.sml_rows, set(ds.feature_ids), msp_table=msp_table, msp_counts=msp_counts)
     if annotation_warnings:
         existing = ds.validation_result.setdefault("warnings", [])
         ds.validation_result["warnings"] = [*existing, *annotation_warnings]
@@ -357,6 +392,12 @@ def build_dataset_state(
             fallback = confidence_value_by_fid.get(fid)
             if fallback is not None:
                 annotation["confidence_value"] = fallback
+
+    ds.inchikey_coverage["msp_lookup"] = {
+        "status": "used" if msp_table is not None else "not_applicable",
+        "file": msp_table.file_name if msp_table is not None else None,
+        **msp_counts,
+    }
 
     # 同定の出所内訳。MS1 注釈を MS/MS 裏付けと取り違えないために分けて数える。
     sme_named = sum(1 for m in ds.feature_metadata.values() if m.get("name"))
@@ -573,12 +614,16 @@ _SML_TEXT_FIELDS = {
 }
 
 
-def _build_feature_annotations(sml_rows, known_feature_ids: set) -> tuple[dict, list[str]]:
+def _build_feature_annotations(sml_rows, known_feature_ids: set, *,
+                               msp_table=None, msp_counts: dict | None = None
+                               ) -> tuple[dict, list[str]]:
     """SML 行を feature_id（SMF_ID）ごとのラベルへ畳む。
 
     戻り値は `(annotations, warnings)`。警告は**種類**で集約する（行ごとに積むと
     実データで数百件になり、表示制限で重要な警告が埋もれる）。
     """
+    if msp_counts is None:
+        msp_counts = {"resolved": 0, "conflicting_names": 0, "unmatched": 0}
     by_feature: dict[str, list[dict]] = {}
     unknown_refs = 0
     for row in sml_rows or []:
@@ -596,8 +641,9 @@ def _build_feature_annotations(sml_rows, known_feature_ids: set) -> tuple[dict, 
                 entry[key] = row.get(column)
             entry["confidence_value"] = _to_float(row.get("best_id_confidence_value"))
             # inchi は保持しないが、導出の材料としては渡す（他実装が書く余地を残す）。
-            ik, src = derive_inchikey(row.get("database_identifier"),
-                                      row.get("inchi"), row.get("smiles"))
+            ik, src = _resolve_inchikey(row.get("database_identifier"),
+                                        row.get("inchi"), row.get("smiles"),
+                                        msp_table, msp_counts)
             entry["inchikey"] = ik
             entry["inchikey_source"] = src
             by_feature.setdefault(fid, []).append(entry)
