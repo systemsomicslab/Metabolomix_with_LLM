@@ -461,10 +461,13 @@ def build_dataset_state(
     # database_identifier が InChIKey を持つ実データ（実測 162/271）でも
     # 「InChIKey は 0 件になる」と断言してしまい、同じ payload の
     # inchikey_coverage と矛盾する。警告の先頭スロットは実問題のために空けておく。
+    # 件数は SML 補完の**後**の値を出す（`with_ik` は SME だけの数。MSP 表で SML が
+    # 補う分を含めないと、payload の with_inchikey と食い違う。実データで 1,024 対 27,146）。
     if not has_rdkit and derivable_but_missing:
         name_warnings.insert(0, (
             f"RDKit が利用できないため、SMILES / InChI を持つ {derivable_but_missing} 件の"
-            f"特徴量で InChIKey を導出できていません（InChIKey 付きは {with_ik}/"
+            f"特徴量で InChIKey を導出できていません（InChIKey 付きは "
+            f"{ds.inchikey_coverage['with_inchikey']}/"
             f"{len(smf_rows)} 件）。この {derivable_but_missing} 件は『同定が無い』のではなく"
             "『導出できていない』状態で、dataset_export_differential の書き出し対象から"
             "外れます（InChIKey が 0 件なら書き出し自体を拒否します）。"))

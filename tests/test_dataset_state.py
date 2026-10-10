@@ -860,3 +860,21 @@ def test_msp_resolved_features_are_not_reported_as_rdkit_misses(tmp_path, monkey
     ds = _build_msp(tmp_path)
     # SME 由来で SMILES を持ち InChIKey が無いのは無い（特徴 1 は MSP で付いた）。
     assert not any("RDKit" in w for w in ds.validation_result.get("warnings", []))
+
+
+def test_rdkit_warning_counts_inchikeys_after_the_sml_fill(tmp_path, monkeypatch):
+    """RDKit 不在の警告の「InChIKey 付き」件数は inchikey_coverage と一致させる。
+
+    SME の Citrulline は名前が衝突して付かず（RDKit の取りこぼしとして警告対象）、
+    SML の Ornithine が MSP で付く。警告が SML 補完前の数を出すと、payload の
+    with_inchikey と食い違う（実データで 1,024 対 27,146）。
+    """
+    _without_rdkit(monkeypatch)
+    table = MspInchikeyTable("lab.msp", {"Ornithine": _ORN},
+                             frozenset({"Citrulline", "Leucine"}))
+    ds = _build_msp(tmp_path, msp_table=table)
+    with_ik = ds.inchikey_coverage["with_inchikey"]
+    assert with_ik == 2                      # 特徴 5（database_identifier）と 2（SML の MSP）
+    rdkit_warnings = [w for w in ds.validation_result["warnings"] if "RDKit" in w]
+    assert len(rdkit_warnings) == 1
+    assert f"InChIKey 付きは {with_ik}/5 件" in rdkit_warnings[0]
