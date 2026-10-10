@@ -28,9 +28,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from metabolomix.console.method_file import read_method_keys
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.mztab import evidence as mztab_evidence
 from metabolomix.mztab.dataset_state import build_dataset_state
+from metabolomix.mztab.msp_inchikey import MspInchikeyTable, load_msp_inchikey_table
 from metabolomix.mztab.reader import parse_mztab
 from metabolomix.mztab.validator import validate_mztab
 
@@ -186,7 +188,12 @@ def _load_from_job(job_path: Path, *, allow_incomplete: bool):
             {"job_id": job.job_id, "path": str(mztab_abs)})
 
     parse_result = _parse_and_validate(mztab_abs)
-    ds = build_dataset_state(parse_result, mztab_abs.name, mztab_abs)
+    msp_table, msp_status, msp_file, msp_warning = _msp_table_for_job(job)
+    ds = build_dataset_state(parse_result, mztab_abs.name, mztab_abs, msp_table=msp_table)
+    ds.inchikey_coverage["msp_lookup"]["status"] = msp_status
+    ds.inchikey_coverage["msp_lookup"]["file"] = msp_file
+    if msp_warning:
+        ds.validation_result.setdefault("warnings", []).insert(0, msp_warning)
 
     ds.exploratory_only = job.status != "completed"
     if ds.exploratory_only:
@@ -211,6 +218,38 @@ def _load_from_job(job_path: Path, *, allow_incomplete: bool):
     # 候補の先頭に使えるのは、この時点以降だけ。
     mztab_evidence.attach_to_dataset(ds, mztab_abs)
     return ds
+
+
+def _msp_table_for_job(job) -> tuple[MspInchikeyTable | None, str, str | None, str | None]:
+    """ジョブの実効メソッドが宣言する研究室 MSP から名前 → InChIKey 表を作る。
+
+    戻り値は (表, status, ファイル名, 警告文)。status は `used`（表を作れた）/
+    `no_msp`（実効メソッドが MSP を宣言していない、またはメソッド自体を読めない）/
+    `unavailable`（宣言はあるがファイルを読めない）。読めなくても読み込みは止めない
+    ——MSP 表は InChIKey の付け足しで、無くても従来どおり RDKit 経路で読める。
+    警告と戻り値に出すのはファイル名だけ（研究室ライブラリの置き場所は出さない）。
+    """
+    method_text = (getattr(job, "method_file", "") or "").strip()
+    if not method_text:
+        return None, "no_msp", None, None
+    method = Path(method_text)
+    try:
+        keys = read_method_keys(method)
+    except (OSError, DomainError):
+        return None, "no_msp", None, None
+    declared = (keys.get("msp file path") or "").strip()
+    if not declared:
+        return None, "no_msp", None, None
+    msp = Path(declared)
+    if not msp.is_absolute():
+        msp = method.parent / msp
+    try:
+        table = load_msp_inchikey_table(msp)
+    except OSError:
+        return None, "unavailable", msp.name, (
+            f"実効メソッドが宣言する MSP（{msp.name}）を読めないため、MSP の INCHIKEY で"
+            "InChIKey を付けられませんでした（RDKit 経路だけで読みました）。")
+    return table, "used", table.file_name, None
 
 
 def _parse_and_validate(path: Path) -> dict:
