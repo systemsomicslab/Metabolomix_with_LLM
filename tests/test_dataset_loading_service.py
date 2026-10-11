@@ -237,3 +237,101 @@ def test_loading_does_not_import_session_or_mcp_core():
     assert not any(m.startswith("metabolomix.core.session_state")
                    or m.startswith("metabolomix.core.mcp_core")
                    or m.startswith("metabolomix.tools") for m in imported), imported
+
+
+# ---------- MSP の INCHIKEY（spec 2026-10-10 msp-inchikey-design §3.3）----------
+
+from metabolomix.handoff.schema import AnalysisJob
+from metabolomix.mztab import msp_inchikey
+
+_CIT = "RHGKLRLOHDJJDR-BYPYZUCNSA-N"
+
+
+@pytest.fixture(autouse=False)
+def _fresh_msp_memo(monkeypatch):
+    monkeypatch.setattr(msp_inchikey, "_memo", {})
+
+
+def _write_msp(path: Path) -> Path:
+    path.write_text(f"NAME: Citrulline\nINCHIKEY: {_CIT}\nNum Peaks: 0\n\n",
+                    encoding="utf-8")
+    return path
+
+
+def _write_mspdb_mztab(path: Path, raws) -> None:
+    """msp_only の Console が書く形の同定（MspDB:<名前>、inchi は null）。"""
+    lines = ["MTD\tmzTab-version\t2.0.0-M", "MTD\tmzTab-mode\tComplete",
+             "MTD\tmzTab-type\tQuantification"]
+    for i, raw in enumerate(raws, start=1):
+        lines.append(f"MTD\tms_run[{i}]-location\t{Path(raw).resolve().as_uri()}")
+        lines.append(f"MTD\tassay[{i}]-ms_run_ref\tms_run[{i}]")
+        lines.append(f"MTD\tassay[{i}]\tS{i}")
+    cols = "\t".join(f"abundance_assay[{i}]" for i in range(1, len(raws) + 1))
+    vals = "\t".join("1000.0" for _ in raws)
+    lines.append(f"SFH\tSMF_ID\tSME_ID_REFS\texp_mass_to_charge\tretention_time_in_seconds\t{cols}")
+    lines.append(f"SMF\t1\t1\t176.1030\t300.0\t{vals}")
+    lines.append("SEH\tSME_ID\tdatabase_identifier\tsmiles\tinchi\tchemical_name\trank")
+    lines.append("SME\t1\tMspDB:Citrulline\tNC(=O)NCCCC(N)C(O)=O\tnull\tCitrulline\t1")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _job_declaring_msp(tmp_path, msp_line: str):
+    job_path, raws = _job_with_outputs(tmp_path)
+    job = AnalysisJob.load(job_path)
+    Path(job.method_file).write_text(f"Ion mode: Positive\n{msp_line}\n", encoding="ascii")
+    _write_mspdb_mztab(Path(job.run_dir) / "msdial" / "Height_AlignmentResult_1.mzTab", raws)
+    return job_path
+
+
+def _no_rdkit(monkeypatch):
+    monkeypatch.setattr("metabolomix.mztab.identity._rdkit_cache", None)
+
+
+def test_job_with_a_declared_msp_gets_msp_inchikeys(tmp_path, monkeypatch, _fresh_msp_memo):
+    _no_rdkit(monkeypatch)
+    msp = _write_msp(tmp_path / "lab.msp")
+    ds = load_dataset_state(job_path=_job_declaring_msp(tmp_path, f"Msp file path: {msp}"))
+    assert ds.feature_metadata["1"]["inchikey"] == _CIT
+    assert ds.feature_metadata["1"]["inchikey_source"] == "msp_library"
+    look = ds.inchikey_coverage["msp_lookup"]
+    assert look["status"] == "used"
+    assert look["file"] == "lab.msp"
+    assert look["resolved"] == 1
+
+
+def test_relative_msp_path_is_resolved_against_the_method_file(tmp_path, monkeypatch,
+                                                                _fresh_msp_memo):
+    _no_rdkit(monkeypatch)
+    job_path = _job_declaring_msp(tmp_path, "Msp file path: lab.msp")
+    method_dir = Path(AnalysisJob.load(job_path).method_file).parent
+    _write_msp(method_dir / "lab.msp")
+    ds = load_dataset_state(job_path=job_path)
+    assert ds.inchikey_coverage["msp_lookup"]["status"] == "used"
+    assert ds.feature_metadata["1"]["inchikey"] == _CIT
+
+
+def test_job_without_an_msp_declaration_is_no_msp(tmp_path, monkeypatch, _fresh_msp_memo):
+    _no_rdkit(monkeypatch)
+    ds = load_dataset_state(job_path=_job_declaring_msp(tmp_path, "Msp file path: "))
+    assert ds.inchikey_coverage["msp_lookup"]["status"] == "no_msp"
+    assert ds.feature_metadata["1"]["inchikey"] is None
+
+
+def test_declared_but_missing_msp_is_unavailable_with_a_warning(tmp_path, monkeypatch,
+                                                                 _fresh_msp_memo):
+    _no_rdkit(monkeypatch)
+    missing = tmp_path / "nowhere" / "lab.msp"
+    ds = load_dataset_state(job_path=_job_declaring_msp(tmp_path, f"Msp file path: {missing}"))
+    look = ds.inchikey_coverage["msp_lookup"]
+    assert look["status"] == "unavailable"
+    assert look["file"] == "lab.msp"
+    hits = [w for w in ds.validation_result["warnings"] if "MSP" in w]
+    assert len(hits) == 1
+    assert str(missing.parent) not in hits[0]     # 置き場所は出さない
+
+
+def test_direct_read_is_not_applicable(tmp_path, _fresh_msp_memo):
+    job_path, _ = _job_with_outputs(tmp_path)
+    mztab = Path(AnalysisJob.load(job_path).run_dir) / "msdial" / "Height_AlignmentResult_1.mzTab"
+    ds = load_dataset_state(mztab_path=mztab)
+    assert ds.inchikey_coverage["msp_lookup"]["status"] == "not_applicable"

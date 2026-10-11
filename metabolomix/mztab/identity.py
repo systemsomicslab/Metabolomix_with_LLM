@@ -1,6 +1,8 @@
 """SME同定情報からのInChIKey導出（純関数）。
 
 優先順位: database_identifier 正規表現一致 → inchi → smiles (RDKit) → None。
+（`build_dataset_state` は、正規表現一致と RDKit の間に研究室 MSP の表
+ `mztab/msp_inchikey.py` を挟む。この関数自体は MSP を知らない純関数のまま。）
 RDKit 非インストール時は smiles/inchi 経路が silent fallback する。
 spec §23 参照。
 
