@@ -137,3 +137,33 @@ def mztab_error(code: str, message: str, details: dict | None = None) -> str:
     if details is not None:
         payload["details"] = details
     return json_payload({"error": payload})
+
+
+PATHWAY_ERROR_CODES = frozenset({
+    # [mslipidmapper] rscript が未設定、または指す先が無い。
+    "MSLM_NOT_CONFIGURED",
+    # MSLipidMapper（R パッケージ）か、その公開関数が無い。自動インストールはしない。
+    "MSLM_R_PACKAGES_MISSING",
+    # Rscript が非ゼロ終了した（stderr 末尾を details に、全文は run の bridge.log）。
+    "MSLM_RUN_FAILED",
+    # Rscript が制限時間内に終わらなかった（プロセスツリーごと終了済み）。
+    "MSLM_TIMEOUT",
+    # JSON-LD が無い・壊れている・schemaVersion が想定外（上流の仕様変更の検知）。
+    "MSLM_OUTPUT_INVALID",
+    # PDF 描画だけが失敗した（ブラウザ不在・unpkg 不達）。pathway_project の結果は有効。
+    "PATHWAY_RENDER_FAILED",
+    # 引数を直して呼び直すしかない誤り（未知のパスウェイ名・群が小さい・鎖がデータに無い）。
+    "PATHWAY_BAD_REQUEST",
+})
+
+
+def pathway_error(code: str, message: str, details: dict | None = None) -> str:
+    """パスウェイ投影（MSLipidMapper 連携）固有の確定エラーを返す。"""
+    if code not in PATHWAY_ERROR_CODES:
+        raise ValueError(f"未知のパスウェイエラーコード: {code!r}")
+    if not message:
+        raise ValueError("message は必須です。")
+    payload: dict = {"code": code, "message": message}
+    if details is not None:
+        payload["details"] = details
+    return json_payload({"error": payload})

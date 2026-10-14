@@ -21,3 +21,10 @@ exe = 'C:\MS-DIAL\MSDIALCUI.exe'
 # library_load(ion_mode=...) が読む参照ライブラリ（.msp）。極性ごとに 1 つ。
 # msp_positive = 'D:\library\pos.msp'
 # msp_negative = 'D:\library\neg.msp'
+
+[mslipidmapper]
+# pathway_project / pathway_plot が呼ぶ Rscript（R 4.6 系）。パッケージは R 本体ではなく
+# リポジトリの renv 環境 r/ に入る。初回だけ: Rscript r/setup.R
+# rscript = 'C:\Program Files\R\R-4.6.0\bin\Rscript.exe'
+# pathway_plot の PDF 描画に使うヘッドレス Chromium（Chrome / Edge）。
+# browser = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
