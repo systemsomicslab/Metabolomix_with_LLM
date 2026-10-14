@@ -186,6 +186,12 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
         return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST", "group_a と group_b を指定してください。")
 
     src = _pick_source(source)
+    as_set = (lambda g: {str(g)} if isinstance(g, str) else {str(x) for x in g})
+    if (as_set(group_a) == as_set(group_b) if src == "arf"
+            else str(group_a_label) == str(group_b_label)):
+        return mcp_errors.pathway_error(
+            "PATHWAY_BAD_REQUEST",
+            "group_a と group_b（dataset では group_a_label と group_b_label）が同じです。")
     try:
         built, err = (_build_arf(group_a, group_b) if src == "arf"
                       else _build_dataset(group_a, group_b, group_a_label, group_b_label))
@@ -194,6 +200,8 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     if err:
         return err
     table, normalization, dataset_id, label_a, label_b = built
+    # 群名は mzTab-M に書いた形（# → _）で JSON-LD に戻ってくる
+    label_a, label_b = handoff.clean_text(label_a), handoff.clean_text(label_b)
 
     run_id = f"pw_{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:6]}"
     run_dir = _run_dir(run_id)
@@ -217,12 +225,24 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     except jsonld.JsonldError as exc:
         return mcp_errors.pathway_error(exc.code, exc.message)
 
+    # 上流は指定鎖ごとに全ノードへ空スコープを出すので、鎖がデータに無くても失敗しない。
+    # 分子種の入った鎖スコープがどのパスウェイにも無い鎖は指定の誤りとして返す（spec §5）
+    present = {c for g in graphs.values() for sc in g.scopes.values()
+               if sc.scope_type != "subclass" and sc.n_features > 0 for c in sc.chains}
+    missing_chains = [c for c in (acyl_chains or []) if c not in present]
+    if missing_chains:
+        return mcp_errors.pathway_error(
+            "PATHWAY_BAD_REQUEST",
+            f"指定した鎖がデータ（パスウェイ上のノード）にありません: {', '.join(missing_chains)}",
+            {"missing_chains": missing_chains, "run_dir": str(run_dir)})
+
     per_pathway, all_rows = {}, []
     for p, graph in graphs.items():
         rows = compare.compare_scopes(graph, label_a, label_b, q_threshold)
         pairs, undeterminable = compare.opposite_pairs(graph, rows)
-        # 上流の mapped_nodes は当てにならないので JSON-LD から数える
-        lipid_nodes = sum(1 for k in graph.node_kinds.values() if k != "junction")
+        # 値の付いた（分子種の入った whole スコープを持つ）脂質ノード / 脂質ノード。
+        # PathwayEntity（CDP-DAG 等の化合物）と接合ノードは分母に入れない
+        lipid_nodes = sum(1 for k in graph.node_kinds.values() if k == "lipid")
         valued = len({r["node_id"] for r in rows if r["scope"] == "whole"})
         per_pathway[p] = {
             "mapped_nodes": f"{valued}/{lipid_nodes}",
@@ -236,7 +256,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
         compare.rows_to_tsv(all_rows, ["pathway", *_NODE_COLUMNS]), encoding="utf-8")
 
     groups: dict[str, int] = {}
-    for g in table.groups:
+    for g in map(handoff.clean_text, table.groups):
         groups[g] = groups.get(g, 0) + 1
     manifest = {"run_id": run_id, "schema_version": jsonld.SCHEMA_VERSION, "source": src,
                 "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -278,7 +298,8 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
 
     - run_id: 省略時は直近の run。
     - pathways: その run に含まれるものから選ぶ（既定は全部）。1 枚約 2,400 画像トークン。
-    - plot_type: dot | box | violin（ノード内のグラフ）。
+    - plot_type: dot | box | violin（ノード内のグラフ）。横軸の群は group_a, group_b, その他の群の順
+      （上流は config の plot.x_order を軸順と配色の両方に使う）。
     PDF 描画にはヘッドレス Chromium（[mslipidmapper] browser）と unpkg.com への接続が要る。
     """
     manifest = _load_manifest(run_id)

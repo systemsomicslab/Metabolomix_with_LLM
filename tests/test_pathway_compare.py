@@ -66,6 +66,37 @@ def test_opposite_pairs_needs_both_significant():
     assert undeterminable == 1          # PC–PE（PE が ns）。PS–PC は同じ向きで不掲載・判定不能でもない
 
 
+def _empty_scope(g, label, scope_type="subclass", chains=()):
+    """上流が出す空スコープ（memberFeature: []、値は全部 null。NotMeasured）を足す。"""
+    nid = f"n/{label}"
+    g.node_kinds[nid] = "lipid"
+    g.node_labels[nid] = label
+    sid = f"{nid}/scope/" + ("whole" if scope_type == "subclass" else "acyl-" + "+".join(chains))
+    g.scopes[sid] = Scope(sid, nid, scope_type, tuple(chains), 0)
+    g.values[sid] = {f"S{i}": None for i in range(1, 7)}
+    return nid
+
+
+def test_empty_scopes_are_not_rows():
+    g = _graph({"PC": UP, "LPC": DOWN}, [("PC", "LPC")])
+    _empty_scope(g, "PS")                                   # データに無いサブクラスのノード
+    _empty_scope(g, "PC", "acyl_subset", ("22:6",))          # データに無い鎖
+    rows = compare.compare_scopes(g, "C", "P", 0.05)
+    assert [(r["node"], r["scope"]) for r in rows] == [("LPC", "whole"), ("PC", "whole")]
+    # 空スコープは BH の分母にも入らない
+    alone = compare.compare_scopes(_graph({"PC": UP, "LPC": DOWN}, [("PC", "LPC")]), "C", "P", 0.05)
+    assert [r["q"] for r in rows] == [r["q"] for r in alone]
+
+
+def test_pairs_touching_empty_node_are_excluded_not_undeterminable():
+    g = _graph({"PC": UP, "LPC": DOWN}, [("PC", "LPC"), ("PC", "PS"), ("PS", "LPC")])
+    _empty_scope(g, "PS")
+    rows = compare.compare_scopes(g, "C", "P", 0.05)
+    pairs, undeterminable = compare.opposite_pairs(g, rows)
+    assert [(p["node_1"], p["node_2"]) for p in pairs] == [("LPC", "PC")]
+    assert undeterminable == 0
+
+
 def test_tsv_rounds_floats():
     tsv = compare.rows_to_tsv([{"a": 1.23456789, "b": None, "c": "x"}], ["a", "b", "c"])
     assert tsv == "a\tb\tc\n1.235\t\tx"

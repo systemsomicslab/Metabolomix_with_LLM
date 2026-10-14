@@ -28,6 +28,10 @@ def compare_scopes(graph: PathwayGraph, group_a: str, group_b: str,
     labels = [graph.sample_groups[s] for s in samples]
     by_kind: dict[str, list] = {}
     for scope in graph.scopes.values():
+        if scope.n_features == 0:
+            # 上流はデータに無いサブクラスのノード・データに無い鎖にも空スコープ
+            # （memberFeature: []、値は全部 null）を出す。値の付いたノードではない（spec §3）
+            continue
         by_kind.setdefault(_scope_key(scope), []).append(scope)
 
     out: list[dict] = []

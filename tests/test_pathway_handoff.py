@@ -109,15 +109,17 @@ def test_uncompared_sample_whose_group_collides_with_a_label_is_not_written():
 
 def _ds_inputs(**over):
     kw = dict(
-        pp_matrix=np.array([[1.0, 50.0], [2.0, 60.0], [3.0, 70.0], [4.0, 80.0], [9.0, 9.0]]),
+        pp_matrix=np.array([[1.0, 50.0, 5.0], [2.0, 60.0, 6.0], [3.0, 70.0, 7.0],
+                            [4.0, 80.0, 8.0], [9.0, 9.0, 9.0]]),
         pp_sample_names=["a1", "a2", "b1", "b2", "qc"],
-        pp_feature_names=["11", "12"],
+        pp_feature_names=["11", "12", "13"],
         roles={"a1": "sample", "a2": "sample", "b1": "sample", "b2": "sample", "qc": "qc"},
         sample_names=["a1", "a2", "b1", "b2", "qc"],
         sample_ids=[],
         metadata_rows=None,
         annotations={"11": {"name": "LPC 18:1", "ontology": "LPC", "ambiguous": False},
-                     "12": {"name": None, "ambiguous": True}},
+                     "12": {"name": None, "ambiguous": True},
+                     "13": {"name": "PC 34:1", "ontology": "PC", "ambiguous": False}},
         group_a=["a1", "a2"], group_b=["b1", "b2"],
         group_a_label="ctl", group_b_label="trt")
     kw.update(over)
@@ -128,8 +130,8 @@ def test_dataset_uses_sml_ontology_and_labels():
     t = handoff.build_from_dataset(**_ds_inputs())
     assert t.sample_names == ["a1", "a2", "b1", "b2"]
     assert t.groups == ["ctl", "ctl", "trt", "trt"]
-    assert t.names == ["LPC 18:1"]
-    assert t.matrix.tolist() == [[1.0, 2.0, 3.0, 4.0]]
+    assert t.names == ["LPC 18:1", "PC 34:1"]
+    assert t.matrix.tolist() == [[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]
     assert t.report["dropped_unannotated"] == 1
 
 
@@ -139,7 +141,7 @@ def test_dataset_metadata_groups_add_uncompared_samples():
             for n, g, inc in [("a1", "A", True), ("a2", "A", True), ("b1", "B", True),
                               ("b2", "B", True), ("z1", "Z", True), ("x1", "X", False)]]
     kw = _ds_inputs(
-        pp_matrix=np.arange(14, dtype=float).reshape(7, 2) + 1,
+        pp_matrix=np.arange(21, dtype=float).reshape(7, 3) + 1,
         pp_sample_names=names, sample_names=names,
         roles={**{n: "sample" for n in names}, "qc": "qc"},
         metadata_rows=rows)
@@ -175,3 +177,35 @@ def test_write_mztab_matches_upstream_minimal_shape(tmp_path):
     assert sml[0][7] == "PC 16:0_18:1" and sml[0][-1] == "PC"
     cer = next(r for r in sml if r[7] == "Cer 18:1;O2/24:1")
     assert cer[16] == "null"   # P_1 の NaN
+
+
+def test_fewer_than_two_features_is_bad_request():
+    # 上流の apply(...) は 1 特徴の表で壊れる → こちらで止める
+    ann = {"11": {"name": "LPC 18:1", "ontology": "LPC", "ambiguous": False},
+           "12": {"name": None, "ambiguous": True}, "13": {"name": "Unknown", "ontology": "Unknown"}}
+    with pytest.raises(handoff.HandoffError) as exc:
+        handoff.build_from_dataset(**_ds_inputs(annotations=ann))
+    assert exc.value.code == "PATHWAY_BAD_REQUEST"
+    assert "2" in exc.value.message
+
+
+def test_same_group_labels_are_bad_request():
+    with pytest.raises(handoff.HandoffError) as exc:
+        handoff.build_from_dataset(**_ds_inputs(group_a_label="X", group_b_label="X"))
+    assert exc.value.code == "PATHWAY_BAD_REQUEST"
+    with pytest.raises(handoff.HandoffError) as exc:
+        handoff.build_from_arf(**_arf_inputs(group_a="C", group_b="C"))
+    assert exc.value.code == "PATHWAY_BAD_REQUEST"
+
+
+def test_write_mztab_replaces_hash_in_text_fields(tmp_path):
+    # 上流の read.table は # をコメント開始と読む → 書く文字列すべてから # を消す
+    t = handoff.HandoffTable(sample_names=["C#1", "C_2", "P_1", "P_2"],
+                             groups=["C#", "C#", "P", "P"],
+                             names=["PC 34:1#a", "PE 36:2"], ontologies=["PC#", "PE"],
+                             matrix=np.ones((2, 4)))
+    out = tmp_path / "input.mztab"
+    handoff.write_mztab(t, out, normalization="pqn#x")
+    text = out.read_text(encoding="utf-8")
+    assert "#" not in text
+    assert "PC 34:1_a" in text and "assay[1]	C_1" in text and "Normalization: pqn_x" in text

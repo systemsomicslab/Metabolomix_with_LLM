@@ -1,5 +1,6 @@
 # tests/test_pathway_tools.py
 import json
+import sys
 
 import fitz
 import numpy as np
@@ -9,7 +10,7 @@ from mcp.server.fastmcp import Image
 from metabolomix.core import mcp_core, session_state
 from metabolomix.pathway import bridge, tools
 
-from tests.test_pathway_jsonld import _graph  # 小さな JSON-LD 組み立て器を再利用
+from tests.test_pathway_jsonld import B, _graph  # 小さな JSON-LD 組み立て器を再利用
 
 
 @pytest.fixture
@@ -34,17 +35,22 @@ def lipid_arf(monkeypatch, tmp_path):
     return s
 
 
+#: fake_measure が JSON-LD に足す要素（テストごとに差し替える）
+_EXTRA: list = []
+
+
 @pytest.fixture
 def fake_measure(monkeypatch):
     """run_bridge を差し替え、measure で JSON-LD を書く。"""
     calls = []
+    monkeypatch.setattr(sys.modules[__name__], "_EXTRA", [])
 
     def run(request, run_dir, *, timeout_s=300.0):
         calls.append(request)
         out = {}
         for p in request["pathways"]:
             path = run_dir / f"{p}-measurements.json"
-            doc = _graph()
+            doc = _graph(extra=_EXTRA)
             # 群名を実際の比較に合わせる
             for x in doc["@graph"]:
                 if x["@type"] == "mslm:Sample":
@@ -94,6 +100,48 @@ def test_project_writes_run_and_returns_tables(lipid_arf, fake_measure, tmp_path
     assert lipid_arf.pathway.last_run_id == run_id
     req = fake_measure[0]
     assert req["mode"] == "measure" and req["networks"]["remodeling"] == "remodeling_lipidonly.cyjs"
+
+
+def _empty_scope_items(node, scope):
+    """上流の空スコープ（memberFeature: []、値は全部 null）。"""
+    sid = f"{B}n/{node}/scope/{scope}"
+    chains = [] if scope == "whole" else [scope.removeprefix("acyl-")]
+    return [{"@id": sid, "@type": "mslm:LipidMeasurementScope", "onPathwayNode": {"@id": f"{B}n/{node}"},
+             "scopeType": "subclass" if scope == "whole" else "acyl_subset",
+             "acylChainSignature": chains, "memberFeature": []},
+            {"@id": sid + "/m1", "@type": "mslm:SampleMeasurement", "measuredEntity": {"@id": sid},
+             "inSample": {"@id": f"{B}s/1"}, "value": None}]
+
+
+def test_mapped_nodes_counts_nonempty_whole_over_lipid_nodes(lipid_arf, fake_measure, monkeypatch):
+    # PE はノードがあるがデータに無い（空の whole スコープ）。分母は脂質ノード
+    # （PC/PE/LPC/DG）だけで、PathwayEntity（PA）と接合ノードは数えない
+    monkeypatch.setattr(sys.modules[__name__], "_EXTRA", _empty_scope_items("PE", "whole"))
+    body = json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling"]))
+    res = body["pathways"]["remodeling"]
+    assert res["mapped_nodes"] == "1/4"
+    assert {l.split("\t")[0] for l in res["nodes_tsv"].splitlines()[1:]} == {"PC"}   # PE は行にならない
+
+
+def test_requested_chain_absent_everywhere_is_bad_request(lipid_arf, fake_measure, monkeypatch):
+    # 22:6 は上流が空スコープとして出すだけ（どのパスウェイにも分子種が無い）
+    monkeypatch.setattr(sys.modules[__name__], "_EXTRA", _empty_scope_items("PC", "acyl-22:6"))
+    body = json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling"],
+                                            acyl_chains=["18:0", "22:6"]))
+    assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
+    assert body["error"]["details"]["missing_chains"] == ["22:6"]
+    ok = json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling"],
+                                          acyl_chains=["18:0"]))
+    assert "run_id" in ok
+
+
+def test_same_groups_are_bad_request(lipid_arf, fake_measure):
+    body = json.loads(tools.pathway_project(group_a="C", group_b="C"))
+    assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
+    body = json.loads(tools.pathway_project(source="dataset", group_a=["a"], group_b=["b"],
+                                            group_a_label="X", group_b_label="X"))
+    assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
+    assert fake_measure == []
 
 
 def test_bridge_error_becomes_envelope(lipid_arf, monkeypatch):
@@ -175,7 +223,7 @@ def test_unreadable_pdf_becomes_render_failed(lipid_arf, fake_measure, monkeypat
     assert "remodeling" in body["error"]["message"]
 
 
-@pytest.mark.parametrize("bad", ["../..", "..\..", "pw_x", "pw_20261014_120000_abcdef/../x"])
+@pytest.mark.parametrize("bad", ["../..", r"..\..", "pw_x", "pw_20261014_120000_abcdef/../x"])
 def test_plot_rejects_malformed_run_id(lipid_arf, bad):
     body = json.loads(tools.pathway_plot(run_id=bad))
     assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"

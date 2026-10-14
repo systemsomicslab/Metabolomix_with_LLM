@@ -17,6 +17,7 @@ import numpy as np
 _UNANNOTATED = {"", "unknown", "others", "null"}
 _SPOT_RE = re.compile(r"^Spot_(\d+)_(.+)$")
 _MIN_GROUP = 2
+_MIN_FEATURES = 2
 
 
 class HandoffError(Exception):
@@ -38,6 +39,9 @@ class HandoffTable:
 
 
 def _check_group_sizes(groups: list[str], label_a: str, label_b: str) -> None:
+    if str(label_a) == str(label_b) or clean_text(label_a) == clean_text(label_b):
+        raise HandoffError("PATHWAY_BAD_REQUEST",
+                           f"比較する 2 群の名前が同じです（{label_a}）。", {"group": str(label_a)})
     n_a, n_b = groups.count(label_a), groups.count(label_b)
     if n_a < _MIN_GROUP or n_b < _MIN_GROUP:
         raise HandoffError("PATHWAY_BAD_REQUEST",
@@ -73,9 +77,11 @@ def _finish(sample_names, groups, names, ontologies, rows, report) -> HandoffTab
     report["duplicate_name_examples"] = examples
     matrix = (np.vstack([rows[i] for i in keep]) if keep
               else np.empty((0, len(sample_names))))
-    if not keep:
+    if len(keep) < _MIN_FEATURES:
+        # 上流の読み込み（apply(...)）は 1 特徴の表で壊れる
         raise HandoffError("PATHWAY_BAD_REQUEST",
-                           "サブクラス注釈の付いた特徴が 1 件もありません。", dict(report))
+                           f"サブクラス注釈の付いた特徴が {len(keep)} 件しかありません"
+                           f"（{_MIN_FEATURES} 件以上が要ります）。", dict(report))
     return HandoffTable(sample_names=sample_names, groups=groups,
                         names=[names[i] for i in keep],
                         ontologies=[ontologies[i] for i in keep],
@@ -184,8 +190,13 @@ def _cell(v) -> str:
     return repr(float(v))
 
 
-def _clean(s: str) -> str:
-    return re.sub(r"[\t\r\n]+", " ", str(s))
+def clean_text(s) -> str:
+    """mzTab-M に書く文字列。タブ・改行は空白に、# は _ に（上流の read.table は
+    # をコメント開始と読み、行の残りを捨てる）。"""
+    return re.sub(r"[\t\r\n]+", " ", str(s)).replace("#", "_")
+
+
+_clean = clean_text
 
 
 def write_mztab(table: HandoffTable, path: Path, *, normalization: str) -> None:
