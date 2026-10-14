@@ -28,18 +28,59 @@ def configured(monkeypatch, tmp_path):
     renv = tmp_path / "r"
     (renv / "renv").mkdir(parents=True)
     (renv / "renv" / "activate.R").write_text("# fake", encoding="utf-8")
+    _restore_library(renv)
     monkeypatch.setattr(bridge, "RENV_PROJECT", renv)
     return tmp_path
 
 
+def _restore_library(renv):
+    """renv::restore 後の配置（library/<platform>/R-x.y/<arch>/<pkg>/DESCRIPTION）を模す。"""
+    pkg = renv / "renv" / "library" / "windows" / "R-4.6" / "x86_64-w64-mingw32" / "MSLipidMapper"
+    pkg.mkdir(parents=True)
+    (pkg / "DESCRIPTION").write_text("Package: MSLipidMapper\n", encoding="utf-8")
+
+
 def test_missing_renv_environment(configured, monkeypatch):
-    monkeypatch.setattr(bridge, "RENV_PROJECT", configured / "no_r")
+    # 実際の未復元状態: activate.R（追跡物）はあるが library が無い
+    renv = configured / "fresh" / "r"
+    (renv / "renv").mkdir(parents=True)
+    (renv / "renv" / "activate.R").write_text("# fake", encoding="utf-8")
+    monkeypatch.setattr(bridge, "RENV_PROJECT", renv)
     run_dir = configured / "run"
     run_dir.mkdir()
     with pytest.raises(bridge.BridgeError) as exc:
         bridge.run_bridge({"mode": "check", "out_dir": str(run_dir)}, run_dir, timeout_s=60)
     assert exc.value.code == "MSLM_R_PACKAGES_MISSING"
     assert "r/setup.R" in exc.value.message
+    assert exc.value.details["setup"] == "Rscript r/setup.R"
+    assert exc.value.details["renv_project"] == str(renv)
+    assert not (run_dir / "request.json").exists()
+
+
+def test_restored_library_proceeds(configured, monkeypatch):
+    run_dir = configured / "run"
+    run_dir.mkdir()
+    monkeypatch.setattr(bridge, "BRIDGE_SCRIPT", _fake(configured, """
+        (out / "bridge-result.json").write_text(json.dumps(
+            {"status": "ok", "outputs": {}, "mapped_nodes": {}}), encoding="utf-8")
+    """))
+    res = bridge.run_bridge({"mode": "check", "out_dir": str(run_dir)}, run_dir, timeout_s=60)
+    assert res["status"] == "ok"
+
+
+def test_spawn_failure_is_run_failed(configured, monkeypatch):
+    from metabolomix.core.atomic_io import DomainError
+
+    def boom(*a, **k):
+        raise DomainError("UNSUPPORTED_PLATFORM", "Windows 専用です")
+    monkeypatch.setattr(bridge, "start_owned_process", boom)
+    run_dir = configured / "run"
+    run_dir.mkdir()
+    with pytest.raises(bridge.BridgeError) as exc:
+        bridge.run_bridge({"mode": "check", "out_dir": str(run_dir)}, run_dir, timeout_s=60)
+    assert exc.value.code == "MSLM_RUN_FAILED"
+    assert exc.value.details["cause_code"] == "UNSUPPORTED_PLATFORM"
+    assert exc.value.details["cause_message"] == "Windows 専用です"
 
 
 def test_not_configured(monkeypatch):

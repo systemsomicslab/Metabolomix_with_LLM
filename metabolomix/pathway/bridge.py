@@ -21,6 +21,11 @@ PATHWAY_NETWORKS = {"remodeling": "remodeling_lipidonly.cyjs",
                     "ceramide": "ceramidepathway_lipidonly.cyjs",
                     "global": "global.cyjs"}
 _LOG_TAIL_LINES = 20
+#: 復元済みライブラリの目印。renv の既定配置は library/<platform>/R-x.y/<arch>/<pkg>、
+#: 古い renv は library/R-x.y/<arch>/<pkg>。activate.R は追跡物なので目印にならない。
+_RESTORED_MARKERS = ("renv/library/*/*/*/MSLipidMapper/DESCRIPTION",
+                     "renv/library/*/*/MSLipidMapper/DESCRIPTION")
+SETUP_COMMAND = "Rscript r/setup.R"
 
 
 class BridgeError(Exception):
@@ -58,12 +63,18 @@ def _log_tail(log_path: Path) -> str:
     return "\n".join(lines[-_LOG_TAIL_LINES:])
 
 
+def _environment_restored() -> bool:
+    return any(next(RENV_PROJECT.glob(pattern), None) is not None
+               for pattern in _RESTORED_MARKERS)
+
+
 def run_bridge(request: dict, run_dir: Path, *, timeout_s: float = 300.0) -> dict:
     rscript = resolve_rscript()
-    if not (RENV_PROJECT / "renv" / "activate.R").is_file():
+    if not _environment_restored():
         raise BridgeError("MSLM_R_PACKAGES_MISSING",
-                          "R の仮想環境が未作成です。リポジトリ直下で `Rscript r/setup.R` を一度実行してください。",
-                          {"renv_project": str(RENV_PROJECT)})
+                          f"R の仮想環境が未復元です（MSLipidMapper が r/renv/library にありません）。"
+                          f"リポジトリ直下で `{SETUP_COMMAND}` を一度実行してください。",
+                          {"setup": SETUP_COMMAND, "renv_project": str(RENV_PROJECT)})
     run_dir = Path(run_dir)
     request_path = run_dir / "request.json"
     result_path = run_dir / "bridge-result.json"
@@ -71,8 +82,13 @@ def run_bridge(request: dict, run_dir: Path, *, timeout_s: float = 300.0) -> dic
     result_path.unlink(missing_ok=True)
     request_path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
 
-    proc = start_owned_process([rscript, str(BRIDGE_SCRIPT), str(RENV_PROJECT), str(request_path)],
-                               cwd=run_dir, log_path=log_path)
+    try:
+        proc = start_owned_process([rscript, str(BRIDGE_SCRIPT), str(RENV_PROJECT), str(request_path)],
+                                   cwd=run_dir, log_path=log_path)
+    except DomainError as exc:
+        raise BridgeError("MSLM_RUN_FAILED", f"Rscript を起動できません: {exc.message}",
+                          {"cause_code": exc.code, "cause_message": exc.message,
+                           "log": str(log_path)}) from exc
     try:
         try:
             exit_code = proc.wait(timeout=timeout_s)

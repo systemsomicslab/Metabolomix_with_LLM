@@ -57,7 +57,8 @@ C:/Python314/python.exe -m pytest tests -q
 - パスウェイ投影（`pathway_*`）を使うときだけ、初回に `Rscript r/setup.R`（renv の仮想環境 `r/` を
   `r/renv.lock` から復元。R 本体のライブラリには入れない）。上流 MSLipidMapper の版を上げるときは
   `r/` で `renv::install("systemsomicslab/MSLipidMapper@<commit>")` → `renv::snapshot()` し、
-  `renv.lock` をコミットする。
+  `renv.lock` をコミットする（`r/renv/settings.json` の `snapshot.type` は `all`。この仮想環境は
+  専用なので、ライブラリにあるものをそのまま記録する）。
 
 **Python は `C:/Python314/python.exe` を使う**（PATH 上の `python` も同じ実体で、依存はここに入っている）。
 Claude Code 用の `.mcp.json` はこれを絶対パスで指すが、`.git/info/exclude` でローカル除外されており

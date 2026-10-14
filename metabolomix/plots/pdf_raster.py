@@ -6,12 +6,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import fitz  # PyMuPDF
-
 MAX_SIDE_PX = 1600
 
 
 def pdf_first_page_png(pdf_path: Path, max_side: int = MAX_SIDE_PX) -> tuple[bytes, int, int]:
+    import fitz  # PyMuPDF。遅延 import: 無くても server.py は起動できる（図を描くときだけ要る）
+
     with fitz.open(pdf_path) as doc:
         page = doc[0]
         rect = page.rect

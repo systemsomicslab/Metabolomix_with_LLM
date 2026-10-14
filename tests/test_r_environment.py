@@ -26,6 +26,13 @@ def test_measurement_dependencies_are_locked():
         assert name in lock["Packages"], name
 
 
+def test_snapshot_records_whole_library():
+    # 専用の仮想環境なので snapshot はライブラリ全体を記録する（implicit だと
+    # 依存解析にかからないパッケージが renv::status で out-of-sync になる）
+    settings = json.loads((R_DIR / "renv" / "settings.json").read_text(encoding="utf-8"))
+    assert settings["snapshot.type"] == "all"
+
+
 def test_bridge_points_at_this_environment():
     from metabolomix.pathway import bridge
     assert bridge.RENV_PROJECT == R_DIR

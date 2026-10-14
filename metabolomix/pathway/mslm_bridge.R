@@ -8,6 +8,14 @@ local({
   on.exit(setwd(owd))
   source(file.path("renv", "activate.R"))
 })
+# jsonlite が無いと request.json も読めず out_dir も分からない。Python 側は cwd = run_dir
+# （＝ out_dir）で起動するので、手書きの JSON を作業ディレクトリへ書いて終える。
+if (!requireNamespace("jsonlite", quietly = TRUE)) {
+  writeLines(paste0('{"status":"error","code":"MSLM_R_PACKAGES_MISSING",',
+                    '"message":"R の仮想環境に jsonlite がありません。リポジトリ直下で Rscript r/setup.R を実行してください。"}'),
+             "bridge-result.json", useBytes = TRUE)
+  quit(status = 2, save = "no")
+}
 req <- jsonlite::fromJSON(args[2], simplifyVector = TRUE)
 out_dir <- normalizePath(req$out_dir, winslash = "/", mustWork = TRUE)
 result_path <- file.path(out_dir, "bridge-result.json")
@@ -55,12 +63,11 @@ if (identical(req$mode, "measure")) {
         acyl_chains = as.character(unlist(req$acyl_chains)), aggregate = req$aggregation,
         normalization = req$normalization, unit = req$unit,
         dataset_id = paste0(req$dataset_id, "-", p)),
-      error = function(e) fail(
-        if (grepl("acyl", conditionMessage(e), ignore.case = TRUE)) "PATHWAY_BAD_REQUEST" else "MSLM_RUN_FAILED",
-        conditionMessage(e)))
+      error = function(e) fail("MSLM_RUN_FAILED", conditionMessage(e)))
     outputs[[p]] <- out_file
+    # 上流 node_mapping の status は measured / not_measured / unmatched（R/pathway_measurements.R）
     nm <- res$node_mapping
-    mapped[[p]] <- if (is.data.frame(nm) && "matched" %in% names(nm)) sum(nm$matched, na.rm = TRUE) else NA
+    mapped[[p]] <- if (is.data.frame(nm) && "status" %in% names(nm)) sum(nm$status == "measured") else NA
   }
 } else if (identical(req$mode, "render")) {
   cfg <- list(
