@@ -242,6 +242,19 @@ stdio サーバでは 2026-09 時点で未検証(ブラウザで `html_path` を
 パスウェイへ投影する。`lipidmix.local.toml` の `[mslipidmapper] rscript`(と描画用の `browser`)が要る。
 脂質アッセイ(`record_objective(assay_kind="lipid")`)でだけ使える。
 
+**初回のセットアップ**(このツール群を使うときだけ要る):
+
+1. R の 4.6 系を入れる。
+2. リポジトリ直下で `Rscript r/setup.R` を 1 度だけ実行する。MSLipidMapper と依存パッケージを
+   CRAN / Bioconductor / GitHub から取得し、renv の仮想環境 `r/` にだけ入れる(R 本体のライブラリは
+   触らない)。未実行のまま呼ぶと `MSLM_R_PACKAGES_MISSING` が返る。
+3. `lipidmix.example.toml` を `lipidmix.local.toml` に写し、`[mslipidmapper]` の `rscript`
+   (`Rscript.exe` のパス)と、図を描くなら `browser`(Edge / Chrome の実行ファイル)を書く。
+   環境変数 `MSLIPIDMAPPER_RSCRIPT` / `MSLIPIDMAPPER_BROWSER` でもよい。設定は呼ぶたびに読むので
+   サーバの再起動は要らない。
+4. `pathway_plot` は Edge か Chrome と、unpkg.com への HTTPS 接続が要る(図の部品をそこから取る)。
+   `pathway_project` はネットワークに出ない。
+
 | ツール | 機能 |
 |--------|------|
 | `pathway_project` | `arf_preprocess` / `dataset_preprocess` 後の行列から最小 mzTab-M を書き、MSLipidMapper でサブクラス(と任意のアシル鎖サブセット)をノードへ集計する。2 群を log2 空間の Welch＋BH(パスウェイ×スコープ種別ごと)で比べ、ノード表と「逆向きに動く隣接ペア」を TSV で返す。JSON-LD・mzTab・manifest は解析フォルダの `reports/pathway/<run_id>/`。 |

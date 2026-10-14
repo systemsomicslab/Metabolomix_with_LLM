@@ -39,7 +39,8 @@ session.arf（前処理後行列・sample_meta・除外・Ontology）
         │  Python: 上流 write_mztab_m と同形の最小 mzTab-M を書く（群 = こちらで設定した群）
         ▼
 <解析フォルダ>/reports/pathway/<run_id>/input.mztab
-        │  subprocess: Rscript metabolomix/pathway/mslm_bridge.R <mode> <args.json>
+        │  subprocess: Rscript metabolomix/pathway/mslm_bridge.R <renv プロジェクト r/> <request.json>
+        │    （mode は request.json の中。結果は <run_dir>/bridge-result.json）
         │    ├ measure: mztab_pathway_measurements() → <pathway>-measurements.json
         │    └ render : render_pathway_from_config()  → <pathway>.pdf
         ▼
@@ -107,7 +108,8 @@ pathway_project(
      エッジ方向は上流の `sourceEntity`→`targetEntity` をそのまま示すが、上流は反応とは主張しない
      （"not automatically curated reactions"）ので、生化学的解釈は LLM に委ね、出力にもその旨を書く。
 - 保存: `input.mztab`、`<pathway>-measurements.json`、`nodes.tsv`、`manifest.json`
-  （引数・群・source・`dataset_id`・上流クローンのコミット・schemaVersion）。
+  （引数・群・source・`dataset_id`・上流のコミット・schemaVersion）。上流のコミットは
+  インストール済みパッケージの `RemoteSha`（ブリッジ結果の `package_sha`）から取る。
 
 ### `pathway_plot`（人間向け、チャットに表示）
 
@@ -162,13 +164,13 @@ pathway_plot(run_id=None, pathways=None, plot_type="dot")   # run_id 省略時�
 
 | code | いつ | 対処 |
 |---|---|---|
-| `MSLM_NOT_CONFIGURED` | repo / rscript 未設定・不在 | 設定ファイルに書く（ユーザー） |
-| `MSLM_R_PACKAGES_MISSING` | `check` で R パッケージ不足（測定用・描画用を分けて判定） | 不足名とインストールコマンドを `details` に。自動インストールしない |
+| `MSLM_NOT_CONFIGURED` | rscript 未設定・不在 | 設定ファイルに書く（ユーザー） |
+| `MSLM_R_PACKAGES_MISSING` | 仮想環境 `r/` が未復元（`r/renv/library` に MSLipidMapper が無い）、または R 側で jsonlite / MSLipidMapper / 必要な関数が無い | `details` に `setup`（`Rscript r/setup.R`）と `renv_project`。自動インストールしない |
 | `MSLM_RUN_FAILED` | Rscript が非ゼロ終了 | stderr 末尾 20 行、全文は run ディレクトリの `bridge.log` |
 | `MSLM_TIMEOUT` | 既定 300 秒超過 | プロセスツリーごと終了（`core/process_control.py`） |
 | `MSLM_OUTPUT_INVALID` | JSON-LD 不在・破損・`schemaVersion != "2.0.0"` | 上流の仕様変更の検知 |
 | `PATHWAY_RENDER_FAILED` | ブラウザ不在・unpkg 不達 | `pathway_plot` 固有。`pathway_project` の結果は有効のまま |
-| `PATHWAY_BAD_REQUEST` | 未知のパスウェイ名、群のサンプル < 2、指定鎖がデータに無い | 引数を直す |
+| `PATHWAY_BAD_REQUEST` | 未知のパスウェイ名、群のサンプル < 2、2 群が同名、注釈付き特徴 < 2、指定鎖がデータに無い（分子種の入った鎖スコープがどのパスウェイにも無い） | 引数を直す |
 
 子プロセスは引数リストで起動（シェル不使用）、cwd は run ディレクトリ。再試行しない。
 
@@ -183,7 +185,12 @@ R が無くても `pytest tests` は全部緑。fixture はテスト自身が作
 - `compare`: 逆向きペア抽出、判定不能件数、BH の単位（パスウェイ×スコープ）。
 - PDF→PNG: fitz で作った PDF で寸法上限を検証。
 - `bridge`: 偽 Rscript（Python スクリプト）で正常・非ゼロ・タイムアウト・出力不在。
-- 実 R＋クローンの結合テストは `LIPIDMIX_TEST_MSLM=1` のときだけ走る。
+- 実 R の結合テスト（`tests/test_pathway_integration_r.py`）は `LIPIDMIX_TEST_MSLM=1` かつ
+  Windows で、`LIPIDMIX_TEST_RSCRIPT` に Rscript のパスがあるときだけ走る（パスはテストに書かない）。
+  合成の `HandoffTable`（PC / PE / LPC 各 2 特徴以上、3＋3 試料、欠損 1）を `write_mztab` で書き、
+  復元済みの仮想環境 `r/` で `run_bridge` の measure（remodeling、`acyl_chains=["18:1"]`）を回して、
+  JSON-LD の読み込み、PC / PE / LPC の whole スコープに 3＋3 の値、18:1 の鎖スコープ、
+  ブリッジ結果の `mapped_nodes` が整数であることを確かめる。ネットワークに出る描画は対象外。
 - 登録数（`test_server_registration`、CLAUDE.md 冒頭）、`USAGE.md`、`docs/workflow/`、
   新規 `docs/output_format/pathway.md` とリソーストピック `pathway` を更新。
 - vault 側の流れ図に新しい解析枝を追記。
