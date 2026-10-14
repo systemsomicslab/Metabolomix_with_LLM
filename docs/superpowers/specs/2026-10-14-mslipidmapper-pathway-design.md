@@ -64,13 +64,17 @@ LLM へ: 見出し＋ノード表＋逆向き隣接ペア（TSV）／チャッ�
 | `metabolomix/pathway/compare.py` | 2 群比較（既存 Welch＋BH を呼ぶ）と隣接の向き判定 |
 | `metabolomix/pathway/tools.py` | MCP ツール `pathway_project` / `pathway_plot` |
 
-- 設定: `lipidmix.local.toml` に `[mslipidmapper] repo` `rscript`、環境変数
-  `MSLIPIDMAPPER_REPO` `MSLIPIDMAPPER_RSCRIPT`（環境変数優先）。読むのは `core/user_config.get_setting` だけ。
-  描画用ブラウザは上流の `MSLIPIDMAPPER_BROWSER` を子プロセスへ渡す。雛形 `lipidmix.example.toml` にも追記。
-- 上流パッケージはインストールしない。クローン内の R ファイルを `source()` する
-  （上流 `scripts/run_mztab_pathway_measurements.R` と同じ方式）。依存 R パッケージ
-  （Bioconductor `SummarizedExperiment` `S4Vectors` ほか、描画用に CRAN の `ggplot2` `svglite` `processx` 等）は
-  ユーザーが一度入れる。正確な一覧は `mslm_bridge.R check` が出す。
+- 上流は **R パッケージとして renv の仮想環境 `r/` にインストールする**。
+  上流の R ファイルの多くがトップレベルで `library()` を呼ぶため、PDF 描画に要る関数群
+  （`aggregate_to_class_se` `get_plot_fun` `.render_pathway_cytoscape_pdf` ほか）を
+  部分的に `source()` することはできない（上流 REST ワーカーも `library(MSLipidMapper)` で動く）。
+  入れ元は GitHub `systemsomicslab/MSLipidMapper@<commit>` で、`r/renv.lock` に固定する。
+  利用者は `Rscript r/setup.R` の 1 コマンドで同じ環境を復元する。R 本体のユーザー
+  ライブラリには入れない。ブリッジは起動直後に `r/renv/activate.R` を読み、
+  `MSLipidMapper::` の公開関数だけを呼ぶ。上流のコミットはインストール済みパッケージの
+  `RemoteSha` から読む（ローカルクローンは不要）。
+  設定は `[mslipidmapper] rscript`（必須）・`browser`（描画時）。環境変数
+  `MSLIPIDMAPPER_RSCRIPT` `MSLIPIDMAPPER_BROWSER`。ブラウザは描画 YAML の `pathway.browser` で渡す。
 - 成果物は解析フォルダ配下 `reports/pathway/<run_id>/`。リポジトリ側には書かない。
 
 ## 3. ツール
@@ -81,6 +85,7 @@ LLM へ: 見出し＋ノード表＋逆向き隣接ペア（TSV）／チャッ�
 pathway_project(
   source="auto",            # auto | arf | dataset（auto: 直近に読んだ方、両方あれば arf）
   group_a=..., group_b=..., # source の流儀（arf: Class ID / 因子トークン、dataset: サンプル名リスト）
+  group_a_label="group_a", group_b_label="group_b",   # dataset のときだけ使う（arf は指定文字列）
   pathways=["remodeling","ceramide","global"],
   acyl_chains=[],           # 指定時は whole に加えて鎖サブセットのスコープを作る
   aggregation="sum",        # sum | mean | median（上流の集計）
@@ -132,10 +137,18 @@ pathway_plot(run_id=None, pathways=None, plot_type="dot")   # run_id 省略時�
 
 **サンプル（列）**
 - 役割 `sample` のみ。QC・ブランク・手動除外は書かない。
-- 群: arf は `sample_meta[...]["group"]`、dataset は `dataset_set_sample_metadata` の群。
+- 群: 比較に入るサンプルは**比較の指定名**（arf は `group_a`/`group_b` の文字列、dataset は
+  `group_a_label`/`group_b_label`）を群ラベルにする（因子トークンでプールした群が図でも 1 群に並ぶ）。
+  比較に入らない生体試料は、arf は `sample_meta[...]["group"]`、dataset は実験情報シート
+  （`sample_metadata_rows` の `group`、`include` が偽のものは除く）があればその群で書き、
+  無ければ書かない。
 
 **特徴（行）**
-- サブクラス: arf はスポットの `Ontology`。dataset は SML の `opt_global_Ontology` を新たに読み、
+- サブクラス: arf は**同じアラインメントの兄弟 `.arf2`** のスポット（`MasterAlignmentID` で結合）の
+  `Ontology` と `Name`（ARF のスポットは Ontology を持たない）。兄弟 `.arf2` が無ければ
+  `missing_state("sibling_arf2", ["load_dataset"])`（既存 `_require_arf_with_arf2` と同じ）。
+  前処理行列が複数の prop（`height` と `area` 等）を持つときはレシピ `props` の先頭だけを使う。
+  dataset は SML の `opt_global_Ontology` を新たに読み、
   SMF↔SML を結んで特徴メタデータに `ontology` を足す（差次的エクスポートの列は不変、
   `CONTRACT_VERSION` は据え置き）。
 - サブクラスが空・`Unknown`・`Others` の行と手動除外スポットは書かない（件数は見出しで報告）。
