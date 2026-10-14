@@ -20,6 +20,10 @@ arf は `session.arf.feature_matrix` と兄弟 `.arf2`、dataset は `DatasetSta
 `source="auto"` は前処理済み ARF があれば arf、無ければ `dataset_load` 済みなら dataset、
 どちらも無ければ arf（`arf_preprocess` を求める `missing_state`）を選ぶ。
 状態変更: `session.pathway.last_run_id` / `last_run_dir`。
+R の仮想環境は起動前に確かめる（`_check_environment()`）: `r/renv/library` に MSLipidMapper が無ければ
+`MSLM_R_PACKAGES_MISSING`（`reason=not_restored`）、`r/setup.R` が残す目印（復元に使った `renv.lock` の md5、
+`renv/library/restored-lock.md5`）が今の `renv.lock` と違えば同じコードで `reason=stale`。どちらも `Rscript r/setup.R` で直る。
+描画のブラウザは設定が無ければ Edge / Chrome の標準の置き場所から探す（`browser_path()`）。
 
 1. metabolomix/pathway/tools.py  pathway_project()
 2. ├─ [source=arf] metabolomix/pathway/tools.py  _build_arf()
@@ -30,12 +34,13 @@ arf は `session.arf.feature_matrix` と兄弟 `.arf2`、dataset は `DatasetSta
 7. │  └─ metabolomix/pathway/handoff.py  build_from_dataset()
 8. ├─ metabolomix/pathway/handoff.py  write_mztab()
 9. ├─ metabolomix/pathway/bridge.py  run_bridge()
-10. │  └─ （R 側。mode=measure で `mslm_bridge.R` が `MSLipidMapper::mztab_pathway_measurements` を呼ぶ）
-11. ├─ metabolomix/pathway/jsonld.py  load_graph()
-12. ├─ metabolomix/pathway/compare.py  compare_scopes()
-13. │  └─ metabolomix/analysis/differential.py  two_group_test()
-14. └─ metabolomix/pathway/compare.py  opposite_pairs()
-15.    └─ metabolomix/pathway/jsonld.py  adjacent_lipid_pairs()
+10. │  ├─ metabolomix/pathway/bridge.py  _check_environment()
+11. │  └─ （R 側。mode=measure で `mslm_bridge.R` が `MSLipidMapper::mztab_pathway_measurements` を呼ぶ）
+12. ├─ metabolomix/pathway/jsonld.py  load_graph()
+13. ├─ metabolomix/pathway/compare.py  compare_scopes()
+14. │  └─ metabolomix/analysis/differential.py  two_group_test()
+15. └─ metabolomix/pathway/compare.py  opposite_pairs()
+16.    └─ metabolomix/pathway/jsonld.py  adjacent_lipid_pairs()
 
 ## pathway_plot
 

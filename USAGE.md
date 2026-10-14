@@ -247,9 +247,11 @@ stdio サーバでは 2026-09 時点で未検証(ブラウザで `html_path` を
 1. R の 4.6 系を入れる。
 2. リポジトリ直下で `Rscript r/setup.R` を 1 度だけ実行する。MSLipidMapper と依存パッケージを
    CRAN / Bioconductor / GitHub から取得し、renv の仮想環境 `r/` にだけ入れる(R 本体のライブラリは
-   触らない)。未実行のまま呼ぶと `MSLM_R_PACKAGES_MISSING` が返る。
+   触らない)。未実行のまま呼ぶと `MSLM_R_PACKAGES_MISSING` が返る。更新(`server_update`)で
+   `r/renv.lock` が変わったときも再実行する(`server_update` が案内し、再実行するまでは同じ封筒で止まる)。
 3. `lipidmix.example.toml` を `lipidmix.local.toml` に写し、`[mslipidmapper]` の `rscript`
-   (`Rscript.exe` のパス)と、図を描くなら `browser`(Edge / Chrome の実行ファイル)を書く。
+   (`Rscript.exe` のパス)を書く。`browser`(Edge / Chrome の実行ファイル)は標準の場所に
+   あれば自動で見つけるので、別の場所に入れたときだけ書く。
    環境変数 `MSLIPIDMAPPER_RSCRIPT` / `MSLIPIDMAPPER_BROWSER` でもよい。設定は呼ぶたびに読むので
    サーバの再起動は要らない。
 4. `pathway_plot` は Edge か Chrome と、unpkg.com への HTTPS 接続が要る(図の部品をそこから取る)。

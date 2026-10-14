@@ -1,4 +1,5 @@
 # tests/test_pathway_bridge.py
+import hashlib
 import json
 import sys
 import textwrap
@@ -34,10 +35,74 @@ def configured(monkeypatch, tmp_path):
 
 
 def _restore_library(renv):
-    """renv::restore 後の配置（library/<platform>/R-x.y/<arch>/<pkg>/DESCRIPTION）を模す。"""
+    """`Rscript r/setup.R` の後の状態を模す。
+
+    renv::restore の配置（library/<platform>/R-x.y/<arch>/<pkg>/DESCRIPTION）に加え、
+    setup.R が復元に使った renv.lock の md5 を目印として残す。
+    """
     pkg = renv / "renv" / "library" / "windows" / "R-4.6" / "x86_64-w64-mingw32" / "MSLipidMapper"
     pkg.mkdir(parents=True)
     (pkg / "DESCRIPTION").write_text("Package: MSLipidMapper\n", encoding="utf-8")
+    lock = renv / "renv.lock"
+    lock.write_text('{"R": {"Version": "4.6.0"}}\n', encoding="utf-8")
+    (renv / bridge.RESTORE_STAMP).write_text(
+        hashlib.md5(lock.read_bytes()).hexdigest() + "\n", encoding="utf-8")
+
+
+def test_library_without_stamp_is_stale(configured, monkeypatch):
+    """目印の無いライブラリ（目印導入前の復元・手で入れたもの）は lock との一致を保証できない。"""
+    (bridge.RENV_PROJECT / bridge.RESTORE_STAMP).unlink()
+    run_dir = configured / "run"
+    run_dir.mkdir()
+    with pytest.raises(bridge.BridgeError) as exc:
+        bridge.run_bridge({"mode": "check", "out_dir": str(run_dir)}, run_dir, timeout_s=60)
+    assert exc.value.code == "MSLM_R_PACKAGES_MISSING"
+    assert "r/setup.R" in exc.value.message
+    assert exc.value.details["reason"] == "stale"
+
+
+def test_lock_changed_since_restore_is_stale(configured, monkeypatch):
+    """更新で renv.lock が変わったのに再復元していない＝古い版のまま黙って動かさない。"""
+    (bridge.RENV_PROJECT / "renv.lock").write_text('{"R": {"Version": "4.6.1"}}\n', encoding="utf-8")
+    run_dir = configured / "run"
+    run_dir.mkdir()
+    with pytest.raises(bridge.BridgeError) as exc:
+        bridge.run_bridge({"mode": "check", "out_dir": str(run_dir)}, run_dir, timeout_s=60)
+    assert exc.value.code == "MSLM_R_PACKAGES_MISSING"
+    assert exc.value.details["reason"] == "stale"
+    assert exc.value.details["setup"] == "Rscript r/setup.R"
+
+
+def test_browser_setting_wins(monkeypatch, tmp_path):
+    exe = tmp_path / "chosen.exe"
+    exe.write_text("", encoding="utf-8")
+    other = tmp_path / "msedge.exe"
+    other.write_text("", encoding="utf-8")
+    monkeypatch.setenv("MSLIPIDMAPPER_BROWSER", str(exe))
+    monkeypatch.setattr(bridge, "BROWSER_CANDIDATES", (str(other),))
+    assert bridge.browser_path() == str(exe)
+
+
+def test_browser_is_detected_from_standard_locations(monkeypatch, tmp_path):
+    """Edge は通常 Program Files (x86) にあり、上流の自動検出はそこを見ない。こちらで探して渡す。"""
+    edge = tmp_path / "x86" / "msedge.exe"
+    edge.parent.mkdir()
+    edge.write_text("", encoding="utf-8")
+    monkeypatch.delenv("MSLIPIDMAPPER_BROWSER", raising=False)
+    monkeypatch.setattr(bridge, "BROWSER_CANDIDATES",
+                        (str(tmp_path / "missing" / "chrome.exe"), str(edge)))
+    assert bridge.browser_path() == str(edge)
+
+
+def test_no_browser_found_leaves_detection_to_upstream(monkeypatch, tmp_path):
+    monkeypatch.delenv("MSLIPIDMAPPER_BROWSER", raising=False)
+    monkeypatch.setattr(bridge, "BROWSER_CANDIDATES", (str(tmp_path / "nope.exe"),))
+    assert bridge.browser_path() is None
+
+
+def test_browser_candidates_cover_edge_x86():
+    assert any("Program Files (x86)" in c and c.endswith("msedge.exe")
+               for c in bridge.BROWSER_CANDIDATES)
 
 
 def test_missing_renv_environment(configured, monkeypatch):

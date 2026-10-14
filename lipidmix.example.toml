@@ -26,5 +26,6 @@ exe = 'C:\MS-DIAL\MSDIALCUI.exe'
 # pathway_project / pathway_plot が呼ぶ Rscript（R 4.6 系）。パッケージは R 本体ではなく
 # リポジトリの renv 環境 r/ に入る。初回だけ: Rscript r/setup.R
 # rscript = 'C:\Program Files\R\R-4.6.0\bin\Rscript.exe'
-# pathway_plot の PDF 描画に使うヘッドレス Chromium（Chrome / Edge）。
+# pathway_plot の PDF 描画に使うヘッドレス Chromium（Chrome / Edge）。任意:
+# 書かなければ Edge / Chrome の標準の置き場所から自動で探す。
 # browser = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'

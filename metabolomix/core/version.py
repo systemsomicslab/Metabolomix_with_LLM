@@ -35,6 +35,9 @@ FETCH_TIMEOUT_SEC = 15.0
 PIP_TIMEOUT_SEC = 600.0
 #: 依存表。pull でこれが変わったときだけ pip を回す。
 REQUIREMENTS_FILE = "requirements.txt"
+#: R の仮想環境の lock（パスウェイ投影）。変わったら `r/setup.R` の再実行が要る。
+R_LOCK_FILE = "r/renv.lock"
+R_SETUP_COMMAND = "Rscript r/setup.R"
 #: pip の出力を戻り値へ載せる上限。失敗の理由は末尾に出るので後ろから取る。
 PIP_LOG_TAIL_CHARS = 500
 
@@ -237,6 +240,8 @@ def apply_update() -> dict:
     changed = _git("diff", "--name-only", f"HEAD..origin/{UPSTREAM_BRANCH}") or ""
     requirements_changed = any(
         line.strip() == REQUIREMENTS_FILE for line in changed.splitlines())
+    r_lock_changed = any(
+        line.strip() == R_LOCK_FILE for line in changed.splitlines())
 
     if _git("merge", "--ff-only", f"origin/{UPSTREAM_BRANCH}") is None:
         return _refused(
@@ -247,9 +252,16 @@ def apply_update() -> dict:
     head = _git("rev-parse", "--short", "HEAD")
     restart = ("反映するには Claude Desktop（MCP クライアント）を再起動してください。"
                "起動中のプロセスは古いコードのまま動き続けます。")
+    # R は数分かかりネットワークにも出るので自動では回さない。再実行するまで
+    # pathway_* はブリッジが目印の食い違いで止める（MSLM_R_PACKAGES_MISSING）。
+    r_environment = "setup_required" if r_lock_changed else "unchanged"
+    if r_lock_changed:
+        restart += (f" R の仮想環境（{R_LOCK_FILE}）も更新されたので、パスウェイ投影を使うなら"
+                    f"リポジトリ直下で `{R_SETUP_COMMAND}` を実行してください。")
     if not requirements_changed:
         return {
             "status": "updated", "behind": behind, "head": head,
+            "r_environment": r_environment,
             "dependencies": "unchanged",
             "message": f"{behind} コミット分を更新しました（{running} → {head}）。{restart}",
         }
@@ -258,15 +270,19 @@ def apply_update() -> dict:
     if installed:
         return {
             "status": "updated", "behind": behind, "head": head,
+            "r_environment": r_environment,
             "dependencies": "installed",
             "message": (f"{behind} コミット分を更新し、依存も入れ直しました"
                         f"（{running} → {head}）。{restart}"),
         }
     return {
         "status": "updated_with_warning", "behind": behind, "head": head,
+        "r_environment": r_environment,
         "dependencies": "failed",
         "message": (f"コードは {behind} コミット分更新しましたが、依存の更新に失敗しました"
                     f"（{running} → {head}）。このまま再起動すると起動しない可能性があります。"
                     f"手元で `pip install -r {REQUIREMENTS_FILE}` を実行してください。"
-                    f" pip の出力（末尾）: {log[-PIP_LOG_TAIL_CHARS:]}"),
+                    + (f" R の仮想環境（{R_LOCK_FILE}）も更新されたので、"
+                       f"`{R_SETUP_COMMAND}` も実行してください。" if r_lock_changed else "")
+                    + f" pip の出力（末尾）: {log[-PIP_LOG_TAIL_CHARS:]}"),
     }

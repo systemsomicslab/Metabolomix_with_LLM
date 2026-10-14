@@ -7,6 +7,7 @@ session_state / mcp_core を import しない。
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -25,7 +26,18 @@ _LOG_TAIL_LINES = 20
 #: 古い renv は library/R-x.y/<arch>/<pkg>。activate.R は追跡物なので目印にならない。
 _RESTORED_MARKERS = ("renv/library/*/*/*/MSLipidMapper/DESCRIPTION",
                      "renv/library/*/*/MSLipidMapper/DESCRIPTION")
+#: `r/setup.R` が復元に使った renv.lock の md5（RENV_PROJECT 相対。library/ ごと git の追跡外）。
+#: 今の renv.lock と食い違えば、更新で lock が変わったのに再復元していない＝古い版のまま。
+RESTORE_STAMP = "renv/library/restored-lock.md5"
 SETUP_COMMAND = "Rscript r/setup.R"
+#: 描画に使うヘッドレス Chromium の標準の置き場所（設定が無いときに順に探す）。
+#: Edge は通常 Program Files (x86) にあり、上流の自動検出はそこを見ない。
+BROWSER_CANDIDATES = (
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+)
 
 
 class BridgeError(Exception):
@@ -51,8 +63,15 @@ def resolve_rscript() -> str:
 
 
 def browser_path() -> str | None:
+    """設定（環境変数 → 設定ファイル）を優先し、無ければ標準の置き場所から探す。
+
+    どれも無ければ None（上流の自動検出に任せる。見つからなければ描画が
+    PATHWAY_RENDER_FAILED になる）。
+    """
     setting = user_config.get_setting("mslipidmapper.browser")
-    return setting.value if setting else None
+    if setting:
+        return setting.value
+    return next((c for c in BROWSER_CANDIDATES if Path(c).is_file()), None)
 
 
 def _log_tail(log_path: Path) -> str:
@@ -68,13 +87,34 @@ def _environment_restored() -> bool:
                for pattern in _RESTORED_MARKERS)
 
 
-def run_bridge(request: dict, run_dir: Path, *, timeout_s: float = 300.0) -> dict:
-    rscript = resolve_rscript()
+def _environment_matches_lock() -> bool:
+    """setup.R の目印が今の renv.lock と一致するか（目印が無い・lock が読めないときは False）。"""
+    try:
+        stamp = (RENV_PROJECT / RESTORE_STAMP).read_text(encoding="utf-8").strip().lower()
+        current = hashlib.md5((RENV_PROJECT / "renv.lock").read_bytes()).hexdigest()
+    except OSError:
+        return False
+    return stamp == current
+
+
+def _check_environment() -> None:
+    details = {"setup": SETUP_COMMAND, "renv_project": str(RENV_PROJECT)}
     if not _environment_restored():
         raise BridgeError("MSLM_R_PACKAGES_MISSING",
                           f"R の仮想環境が未復元です（MSLipidMapper が r/renv/library にありません）。"
                           f"リポジトリ直下で `{SETUP_COMMAND}` を一度実行してください。",
-                          {"setup": SETUP_COMMAND, "renv_project": str(RENV_PROJECT)})
+                          {**details, "reason": "not_restored"})
+    if not _environment_matches_lock():
+        raise BridgeError("MSLM_R_PACKAGES_MISSING",
+                          f"R の仮想環境が r/renv.lock と一致しません（更新で lock が変わった、"
+                          f"または目印の導入前に復元した環境です）。リポジトリ直下で "
+                          f"`{SETUP_COMMAND}` を再実行してください。",
+                          {**details, "reason": "stale"})
+
+
+def run_bridge(request: dict, run_dir: Path, *, timeout_s: float = 300.0) -> dict:
+    rscript = resolve_rscript()
+    _check_environment()
     run_dir = Path(run_dir)
     request_path = run_dir / "request.json"
     result_path = run_dir / "bridge-result.json"
