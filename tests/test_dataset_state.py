@@ -878,3 +878,17 @@ def test_rdkit_warning_counts_inchikeys_after_the_sml_fill(tmp_path, monkeypatch
     rdkit_warnings = [w for w in ds.validation_result["warnings"] if "RDKit" in w]
     assert len(rdkit_warnings) == 1
     assert f"InChIKey 付きは {with_ik}/5 件" in rdkit_warnings[0]
+
+
+def test_sml_opt_global_ontology_is_kept_as_ontology(tmp_path):
+    # SMH の最終列は best_id_confidence_value。そこへ opt_global_Ontology を足し、
+    # 各 SML 行の末尾にも 1 列ずつ足して並びを揃える。
+    text = _SML_ONLY_MZTAB.replace(
+        "best_id_confidence_value", "best_id_confidence_value\topt_global_Ontology", 1)
+    rows = []
+    for line in text.splitlines():
+        if line.startswith("SML\t"):
+            line = line + ("\tPC" if line.split("\t")[1] == "1" else "\tnull")
+        rows.append(line)
+    ds = _build_text(tmp_path, "\n".join(rows) + "\n", name="onto.mzTab")
+    assert ds.feature_annotations["1"]["ontology"] == "PC"

@@ -614,6 +614,8 @@ _SML_TEXT_FIELDS = {
     "adduct": "adduct_ions",
     "reliability": "reliability",
     "confidence_measure": "best_id_confidence_measure",
+    # MS-DIAL の SML 拡張列。脂質サブクラス（パスウェイ投影の照合キー）。
+    "ontology": "opt_global_Ontology",
 }
 
 

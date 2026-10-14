@@ -30,6 +30,9 @@ Install dependencies locally (running the server needs only `requirements.txt`;
 python -m pip install -r requirements.txt
 ```
 
+Pathway projection (`pathway_project` / `pathway_plot`) additionally needs R and a
+one-time `Rscript r/setup.R`; see the setup steps in [USAGE.md](USAGE.md) section 16.
+
 Set environment variables in the MCP client configuration, or in a shell when
 testing manually. Only `LIPIDMIX_DATA_DIR` is usually needed; the others are
 optional overrides:

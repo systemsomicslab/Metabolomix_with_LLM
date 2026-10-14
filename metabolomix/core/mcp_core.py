@@ -39,6 +39,7 @@ OUTPUT_FORMAT_SECTIONS: dict[str, str] = {
     "mztab": "mzTab-M 経路（dataset_load 以降）。SME/SML の同定、特徴表、差次的エクスポートの同定列",
     "library": "参照ライブラリ（.dbs/.msp）照合。スコアの意味、-1/0 の区別、意図的に写した瑕疵",
     "curation": "アラインメントのキュレーション（curation_review 等）。判定・理由コードの意味",
+    "pathway": "パスウェイ投影（pathway_project / pathway_plot、MSLipidMapper 連携）",
 }
 # 共通核。`lipidmix://docs/output-format` が返す本体。
 OUTPUT_FORMAT_DOC = OUTPUT_FORMAT_DIR / "core.md"
@@ -139,12 +140,14 @@ arf_parser, preprocessing/QC, differential), `arf2`, `pai2`, `dcl`, `eic`,
 `dataset_load`: SME vs SML identification, the feature table, the differential
 export's identity columns), `library` (reference-library MS/MS matching:
 what each score means, `-1` vs `0`, the deliberately ported upstream quirks),
-or `curation` (alignment curation: `curation_review`'s verdict, reason-code
-table, and mandatory caveats — e.g. `UNKNOWN` is not a mismatch).
+`curation` (alignment curation: `curation_review`'s verdict, reason-code
+table, and mandatory caveats — e.g. `UNKNOWN` is not a mismatch), or
+`pathway` (MSLipidMapper pathway projection: node table and adjacent opposite
+pairs — adjacency is a drawing template, not curated reactions).
 The ARF / ARF2 / PAI2 / DCL / EIC parser outputs carry a one-line pointer to
-their topic until you have fetched it; for `mztab`, `library`, and `curation`
-there is no pointer, so fetch those before interpreting `dataset_*`,
-`library_*`, or `curation_*` output.
+their topic until you have fetched it; for `mztab`, `library`, `curation`, and
+`pathway` there is no pointer, so fetch those before interpreting `dataset_*`,
+`library_*`, `curation_*`, or `pathway_*` output.
 
 MS/MS EVIDENCE — the real spectra live in `.dcl`, not `.pai2`; PAI2's `has_msms`
 only records that an acquisition reference exists. `pai2_parser` attaches the

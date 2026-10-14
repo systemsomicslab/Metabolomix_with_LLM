@@ -140,6 +140,11 @@ EXPECTED_ANNOTATIONS = {
     "curation_flags": READ_ONLY,
     "curation_view_data": READ_ONLY,
     "curation_suggest": LOCAL_WRITE_APPEND,
+    # --- パスウェイ投影（MSLipidMapper）。project は呼ぶたびに新しい run を作る（非冪等・
+    # measure はネットワークに出ない）。plot は run 内の PDF を同じパスへ上書きし、
+    # 描画で unpkg.com へ出る。 ---
+    "pathway_project": LOCAL_WRITE_APPEND,
+    "pathway_plot": REMOTE_WRITE,
 }
 
 
@@ -172,7 +177,7 @@ class ToolAnnotationTests(unittest.TestCase):
     def test_external_network_tools_also_declare_open_world(self):
         """openWorldHint が無いと汎用クライアントがネットワークゲートを迂回する。"""
         actual = actual_annotations()
-        for name in ("paper_search", "server_update"):
+        for name in ("paper_search", "server_update", "pathway_plot"):
             with self.subTest(tool=name):
                 self.assertIs(actual[name]["openWorldHint"], True)
 

@@ -33,6 +33,8 @@ SETTINGS: dict[str, str] = {
     "msdial.lbm": "MSDIAL_LBM",
     "library.msp_positive": "MSDIAL_MSP_POS",
     "library.msp_negative": "MSDIAL_MSP_NEG",
+    "mslipidmapper.rscript": "MSLIPIDMAPPER_RSCRIPT",
+    "mslipidmapper.browser": "MSLIPIDMAPPER_BROWSER",
 }
 
 #: 極性 → 研究室参照ライブラリ（.msp）の設定キー。正準はここ

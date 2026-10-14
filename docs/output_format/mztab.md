@@ -69,6 +69,7 @@ SMF からこれらを読もうとすると常に `None` になり、「この�
 | `adduct` | `adduct_ions` | |
 | `reliability` | `reliability` | 例: `annotated by user-defined text library` |
 | `confidence_measure` | `best_id_confidence_measure` | |
+| `ontology` | `opt_global_Ontology` | MS-DIAL の脂質サブクラス。列が無いファイルでは `None`。`pathway_project` の照合キーになる。差次的エクスポートの列には出ない |
 | `confidence_value` | `best_id_confidence_value`（無ければ SME 由来の total score でフォールバック。下記） | float |
 | `confidence_measures` | SME の `id_confidence_measure[2..8]` | dict。**どのツール戻り値にも出ない**（下記） |
 | `inchikey` | 導出 | `smiles` 経由（RDKit）か、`MspDB:<名前>` を研究室 MSP の表で引いて到達しうる（下記・§13.6） |
