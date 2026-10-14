@@ -28,7 +28,10 @@ import server
 # 分子種ごとの図: arf_plot_species を追加(71→72)。
 # 分子種 PCA: arf_pca_species を追加(72→73)。
 # PCA のローディング図: plot_pca_loadings を追加(73→74)。
+# パスウェイ投影: pathway_project / pathway_plot を追加(74→76)。
 EXPECTED_TOOLS = sorted([
+    "pathway_project",
+    "pathway_plot",
     "library_load",
     "library_match_feature",
     "library_plot_mirror",

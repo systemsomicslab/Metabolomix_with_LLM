@@ -5,7 +5,7 @@
 ## このリポジトリは何か
 
 MS-DIAL（LC-MS リピドミクス／メタボロミクス解析ソフト）の出力を読み、LLM から使える形で
-公開する **MCP サーバ `ms-data-parser`**。ツール 74・リソース 5・リソーステンプレート 3。
+公開する **MCP サーバ `ms-data-parser`**。ツール 76・リソース 5・リソーステンプレート 3。
 GUI の外では読めない圧縮 MessagePack と独自バイナリを解し、解析そのものをサーバ側で回して
 要約だけを返す（生の行列を LLM の文脈に載せない）。
 
@@ -22,6 +22,7 @@ ENTRY POINT は、まずフォルダに MS-DIAL を動かした形跡（`.arf` �
 **mzTab-M 2.0**（標準交換形式。Console 経路が産み、`DatasetState` の正準入力になる）。
 サイドカー（`*_tags.xml` `.mddata` `.mdproject`）はタグと試料クラスの取得に読む。
 生の測定ファイル（`.wiff`/`.raw` 等）は自分では解さず、MS-DIAL Console への入力として扱う。
+MSLipidMapper（R）が書く**パスウェイ測定 JSON-LD**も読む（`pathway_project`）。
 
 **やること** — (a) 前処理/QC（正規化・ブランク減算・QC RSD 足切り・ドリフト補正）・PCA・
 2 群差次的解析（Welch + BH-FDR）、(b) 同定の標準化と裏取り（GOSLIN 正規化・RefMet/LIPID MAPS
@@ -53,6 +54,10 @@ C:/Python314/python.exe -m pytest tests -q
   **テストの数はここに書かない**。pytest の出力が正準（写しだけが腐るため）。
 - MCP サーバ起動: `C:/Python314/python.exe server.py`（既定 stdio）。
 - パーサ単体の CLI: `python -m metabolomix.arf.reader --file <path> --pca` など（README「Command-line examples」）。
+- パスウェイ投影（`pathway_*`）を使うときだけ、初回に `Rscript r/setup.R`（renv の仮想環境 `r/` を
+  `r/renv.lock` から復元。R 本体のライブラリには入れない）。上流 MSLipidMapper の版を上げるときは
+  `r/` で `renv::install("systemsomicslab/MSLipidMapper@<commit>")` → `renv::snapshot()` し、
+  `renv.lock` をコミットする。
 
 **Python は `C:/Python314/python.exe` を使う**（PATH 上の `python` も同じ実体で、依存はここに入っている）。
 Claude Code 用の `.mcp.json` はこれを絶対パスで指すが、`.git/info/exclude` でローカル除外されており
@@ -70,8 +75,9 @@ Claude Code 用の `.mcp.json` はこれを絶対パスで指すが、`.git/info
 
 **外部資産の場所は設定ファイルか環境変数で指す**（spec 2026-10-06）。リポジトリ直下の
 `lipidmix.local.toml`（追跡外。雛形 `lipidmix.example.toml`）の `[msdial] exe` `lbm` と
-`[library] msp_positive` `msp_negative`、または環境変数 `MSDIAL_EXE` `MSDIAL_LBM`
-`MSDIAL_MSP_POS` `MSDIAL_MSP_NEG`（環境変数が優先）。読むのは `metabolomix/core/user_config.py`
+`[library] msp_positive` `msp_negative` と `[mslipidmapper] rscript` `browser`、または環境変数
+`MSDIAL_EXE` `MSDIAL_LBM` `MSDIAL_MSP_POS` `MSDIAL_MSP_NEG` `MSLIPIDMAPPER_RSCRIPT`
+`MSLIPIDMAPPER_BROWSER`（環境変数が優先）。読むのは `metabolomix/core/user_config.py`
 の `get_setting` だけで、各リゾルバは `os.environ` を直に読まない。設定ファイルは呼ばれる
 たびに読むので再起動は要らない。テストは conftest がこれらの環境変数を消し
 `LIPIDMIX_CONFIG` を存在しないパスへ向けている（手元の設定ファイルを掴ませない）。
@@ -107,6 +113,7 @@ metabolomix/pipeline/  生データフォルダ起点の統括（受付 request/
 metabolomix/handoff/   Console 成果物の受け渡しスキーマ（analysis-job.json）
 metabolomix/curation/  アラインメントのキュレーション（証拠収集・機械判別・フラグ記録・ビューア HTML）
 metabolomix/corpus/    蓄積ノートの純ロジック（knowledge_store / paper_ingest）
+metabolomix/pathway/   MSLipidMapper 連携（最小 mzTab-M の受け渡し・Rscript ブリッジ・JSON-LD 読み取り・隣接比較）
 metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サンプル検索・目的・レポート・リソース）
 ```
 
@@ -274,6 +281,8 @@ git worktree remove .worktrees/<slug>  # 片付け
 ## 踏みやすい罠
 
 - `.gitignore` に `*.txt` があるため、**新規の .txt は無言で追跡漏れする**（`git add -f` が要る）。
+- `r/renv/library/` は追跡外なので worktree には来ない。worktree で `pathway_*` を実機で試すときは、
+  その worktree でも `Rscript r/setup.R` を実行する（renv のグローバルキャッシュから入るので速い）。
 - `docs/HISTRY.md` `docs/task.md` `data/` `analysis/` `archives/` は追跡外。`knowledge/` は
   種ノートのみ追跡、`playbook/` は版管理対象。クリーンチェックアウトに無い前提で書く。
 - `archives/` は 2026-07 に退避したローカル LLM エージェント・解釈精度評価のコード置き場

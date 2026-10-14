@@ -28,6 +28,7 @@
 - `metabolomix/arf/` `arf2/` `pai2/` `dcl/` `eic/` — 形式ごとのパーサと MCP ツール
 - `metabolomix/analysis/` — 入力形式に依存しない数値処理
 - `metabolomix/plots/` — レンダラ中立の payload 組み立て
+- `metabolomix/pathway/` — MSLipidMapper 連携（最小 mzTab-M の受け渡し・Rscript ブリッジ・JSON-LD 読み取り・隣接比較）
 - `metabolomix/corpus/` — 蓄積ノートの純ロジック
 - `metabolomix/tools/` — 形式に紐づかない MCP 公開層
 
@@ -48,13 +49,14 @@
 | [metabolomics.md](metabolomics.md) | LC–MS メタボロミクス v2 — 名指しした解析行列への統計 | 2 |
 | [library.md](library.md) | 参照ライブラリ（`.dbs`/`.msp`）— MS/MS スペクトル照合と対向プロット | 3 |
 | [curation.md](curation.md) | アラインメントのキュレーション — 注釈の一覧確認・機械判別・フラグ記録・候補付け | 5 |
+| [pathway.md](pathway.md) | パスウェイ投影（MSLipidMapper）— サブクラスのノード集計・2 群比較・図 | 2 |
 
-合計 53 ツール。対象外は 21 ツール——文献探索・レポート記録系 12
+合計 55 ツール。対象外は 21 ツール——文献探索・レポート記録系 12
 （`record_objective` `knowledge_coverage` `paper_search` `ingest_*` `write_report` など）＋
 Console 実行層 8（`console_plan` `console_prepare_input` `console_method_template`
 `console_method_candidates` `console_run` `console_status` `console_cleanup` `job_list`）＋
 サーバ自身の保守 1（`server_update`。解析の流れに現れず、配布先クローンの更新だけを行う）。
-登録ツール総数は 74（53 + 21）。
+登録ツール総数は 76（55 + 21）。
 
 ## 一気通貫の順序
 

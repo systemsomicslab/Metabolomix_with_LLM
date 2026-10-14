@@ -59,7 +59,7 @@ LLM へ: 見出し＋ノード表＋逆向き隣接ペア（TSV）／チャッ�
 |---|---|
 | `metabolomix/pathway/handoff.py` | ARF / DatasetState → 最小 mzTab-M の書き出し（純ロジック） |
 | `metabolomix/pathway/bridge.py` | 設定解決・Rscript 起動・タイムアウト・終了判定 |
-| `metabolomix/pathway/mslm_bridge.R` | 上流 R ファイルを `source()` し、`check` / `measure` / `render` を実行する薄いラッパ |
+| `metabolomix/pathway/mslm_bridge.R` | 起動直後に renv の仮想環境 `r/` を有効化し、公開関数（`MSLipidMapper::` で始まるもの）だけを呼んで `check` / `measure` / `render` を実行する薄いラッパ（上流の R ファイルを `source()` しない） |
 | `metabolomix/pathway/jsonld.py` | JSON-LD の読み取り（ノード・接続・スコープ・サンプル値） |
 | `metabolomix/pathway/compare.py` | 2 群比較（既存 Welch＋BH を呼ぶ）と隣接の向き判定 |
 | `metabolomix/pathway/tools.py` | MCP ツール `pathway_project` / `pathway_plot` |

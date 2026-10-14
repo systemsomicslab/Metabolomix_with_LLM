@@ -318,6 +318,18 @@ class CurationState:
         self.review_dirs: dict[str, str] = {}
 
 
+class PathwayState:
+    """パスウェイ投影（pathway_project / pathway_plot）の直近 run へのポインタ。
+
+    run の正準は `reports/pathway/<run_id>/manifest.json`。ここは run_id 省略時の
+    既定を決めるためだけにある。他パーサのスロットに触らない。
+    """
+
+    def __init__(self):
+        self.last_run_id: str | None = None
+        self.last_run_dir: str | None = None
+
+
 class AnalysisSession:
     """パーサ別スロットと、パーサ横断の意味論ガードを束ねる。
 
@@ -362,6 +374,9 @@ class AnalysisSession:
 
         # --- キュレーションスロット（アラインメント注釈の一覧確認・機械判別・フラグ） ---
         self.curation = CurationState()
+
+        # --- パスウェイ投影スロット（MSLipidMapper。他スロットとは独立） ---
+        self.pathway = PathwayState()
 
         # --- Console ジョブスロット ---
         # ジョブ状態の正準はディスク上の analysis-job.json。ここはそのパスへのポインタ。
