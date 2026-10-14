@@ -79,7 +79,9 @@ top of its output) and in the `dataset_status` / `console_status` payloads (as a
 To apply an update, ask Claude to run the `server_update` tool (say "update the
 server"). It fast-forwards the clone to `origin/main` and, only when
 `requirements.txt` changed in that range, reinstalls dependencies with the same
-Python that runs the server.
+Python that runs the server. When `r/renv.lock` changed, it tells you to re-run
+`Rscript r/setup.R` (R is not run automatically — it takes minutes and goes to the
+network); until then `pathway_*` stops with `MSLM_R_PACKAGES_MISSING`.
 
 `server_update` **does not touch any process**. Restarting is the member's job:
 

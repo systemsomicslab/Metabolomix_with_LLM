@@ -252,3 +252,38 @@ def test_tool_reports_running_version(monkeypatch, no_pip):
     parsed = _json.loads(maintenance.server_update())
 
     assert parsed["running_version"] == version.server_version()
+
+
+# ---------- R の仮想環境（パスウェイ投影） ----------
+
+def test_asks_to_restore_r_environment_when_lock_changed(monkeypatch, no_pip):
+    """r/renv.lock が変わったら R 側も入れ直しが要る。R は数分かかりネットワークに出るので自動では回さない。"""
+    monkeypatch.setattr(version, "_git", FakeGit(_with(
+        **{"diff__--name-only": "r/renv.lock\nmetabolomix/pathway/tools.py"})))
+
+    result = version.apply_update()
+
+    assert result["status"] == "updated"
+    assert result["r_environment"] == "setup_required"
+    assert "Rscript r/setup.R" in result["message"]
+
+
+def test_r_environment_notice_survives_dependency_install(monkeypatch):
+    monkeypatch.setattr(version, "_git", FakeGit(_with(
+        **{"diff__--name-only": "requirements.txt\nr/renv.lock"})))
+    monkeypatch.setattr(version, "_pip_install", lambda: (True, ""))
+
+    result = version.apply_update()
+
+    assert result["dependencies"] == "installed"
+    assert result["r_environment"] == "setup_required"
+    assert "Rscript r/setup.R" in result["message"]
+
+
+def test_no_r_notice_when_lock_unchanged(monkeypatch, no_pip):
+    monkeypatch.setattr(version, "_git", FakeGit(CLEAN_BEHIND_ONE))
+
+    result = version.apply_update()
+
+    assert result["r_environment"] == "unchanged"
+    assert "setup.R" not in result["message"]
