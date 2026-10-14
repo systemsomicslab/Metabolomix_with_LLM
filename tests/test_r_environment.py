@@ -33,6 +33,14 @@ def test_snapshot_records_whole_library():
     assert settings["snapshot.type"] == "all"
 
 
+def test_render_dependencies_are_locked():
+    # 上流の描画経路（theme_lipidomics）は Suggests の ggprism を無条件に呼ぶ。
+    # Suggests は restore されないので lock に明示的に載せておく
+    lock = json.loads((R_DIR / "renv.lock").read_text(encoding="utf-8"))
+    for name in ("ggprism",):
+        assert name in lock["Packages"], name
+
+
 def test_bridge_points_at_this_environment():
     from metabolomix.pathway import bridge
     assert bridge.RENV_PROJECT == R_DIR
