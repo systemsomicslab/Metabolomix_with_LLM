@@ -7,6 +7,7 @@ handoff / jsonld / compare / bridge は純ロジックのまま保つ。
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,8 @@ _ADJACENCY_NOTE = (
     "上流は反応だとは主張していない（not curated reactions）。逆向きの組は観察の提示であり、"
     "基質・生成物の解釈は文献で裏を取ること。"
     "掲載条件は両端とも q < 閾値かつ向きが逆。片方が ns/NA の組は件数だけ示す。")
+#: pathway_project が採番する run_id の形。これ以外は reports/pathway の外を指しうるので受け付けない。
+_RUN_ID_RE = re.compile(r"pw_\d{8}_\d{6}_[0-9a-f]{6}")
 _FIGURE_NOTE = ("図のノード内の p 値ラベルは MSLipidMapper（Shiny と同じ計算）のもので、"
                 "pathway_project の q 値とは別物。")
 
@@ -53,11 +56,25 @@ def _load_manifest(run_id: str | None):
     if not run_id:
         return mcp_errors.missing_state("pathway_run", ["pathway_project"],
                                         "先に pathway_project を実行してください。")
+    if not _RUN_ID_RE.fullmatch(str(run_id)):
+        return mcp_errors.pathway_error(
+            "PATHWAY_BAD_REQUEST",
+            f"run_id の形が不正です: {run_id!r}（pathway_project が返す pw_YYYYmmdd_HHMMSS_xxxxxx）。")
     path = _run_dir(run_id) / "manifest.json"
     if not path.is_file():
         return mcp_errors.missing_state("pathway_run", ["pathway_project"],
                                         f"run {run_id} の manifest.json がありません。")
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return mcp_errors.pathway_error("MSLM_OUTPUT_INVALID",
+                                        f"run {run_id} の manifest.json を読めません: {exc}",
+                                        {"manifest": str(path)})
+    if not isinstance(manifest, dict):
+        return mcp_errors.pathway_error("MSLM_OUTPUT_INVALID",
+                                        f"run {run_id} の manifest.json が JSON オブジェクトではありません。",
+                                        {"manifest": str(path)})
+    return manifest
 
 
 def _pick_source(source: str) -> str:
@@ -138,6 +155,8 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     解析フォルダの reports/pathway/<run_id>/ に残る。図は pathway_plot。
 
     - source: auto | arf | dataset。arf は arf_preprocess 後、dataset は dataset_preprocess 後。
+      auto は「前処理済み ARF があれば arf、無ければ dataset_load 済みなら dataset、
+      どちらも無ければ arf（→ arf_preprocess を求める missing_state）」の順で選ぶ。
     - group_a / group_b: arf は Class ID か因子トークン（arf_differential と同じ）、
       dataset はサンプル名のリスト（group_a_label / group_b_label が群名になる）。
     - pathways: remodeling / ceramide / global（既定は 3 つ全部）。
@@ -219,7 +238,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     groups: dict[str, int] = {}
     for g in table.groups:
         groups[g] = groups.get(g, 0) + 1
-    manifest = {"run_id": run_id, "source": src,
+    manifest = {"run_id": run_id, "schema_version": jsonld.SCHEMA_VERSION, "source": src,
                 "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "group_a": label_a, "group_b": label_b, "groups": groups,
                 "pathways": pathways, "acyl_chains": list(acyl_chains or []),
@@ -228,6 +247,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
                 "upstream_commit": result.get("package_sha"),
                 "package_version": result.get("package_version"),
                 "report": table.report,
+                "mapped_nodes": {p: v["mapped_nodes"] for p, v in per_pathway.items()},
                 "files": {"mztab": "input.mztab", "nodes": "nodes.tsv",
                           **{p: Path(outputs[p]).name for p in pathways}}}
     (run_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1),
@@ -302,6 +322,8 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
                 "PATHWAY_RENDER_FAILED", f"{p} の PDF を画像にできません: {exc}",
                 {"pathway": p, "pdf": str(pdf)})
         images.append(Image(data=png, format="png"))
-        lines.append(f"- {p}: {pdf}（{w}×{h}px）")
+        mapped = (manifest.get("mapped_nodes") or {}).get(p)
+        mapped_text = f"、対応ノード {mapped}" if mapped else ""
+        lines.append(f"- {p}: {pdf}（{w}×{h}px{mapped_text}）")
     lines.append(_FIGURE_NOTE)
     return ["\n".join(lines), *images]

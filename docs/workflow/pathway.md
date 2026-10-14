@@ -17,6 +17,8 @@ run ディレクトリの `request.json` → `bridge-result.json`。
 
 前提: `session.assay_kind == "lipid"`（違えば `missing_state` → `record_objective`）。
 arf は `session.arf.feature_matrix` と兄弟 `.arf2`、dataset は `DatasetState.pp_matrix`。
+`source="auto"` は前処理済み ARF があれば arf、無ければ `dataset_load` 済みなら dataset、
+どちらも無ければ arf（`arf_preprocess` を求める `missing_state`）を選ぶ。
 状態変更: `session.pathway.last_run_id` / `last_run_dir`。
 
 1. metabolomix/pathway/tools.py  pathway_project()
@@ -38,7 +40,9 @@ arf は `session.arf.feature_matrix` と兄弟 `.arf2`、dataset は `DatasetSta
 ## pathway_plot
 
 前提: `pathway_project` の run（`run_id` 省略時は `session.pathway.last_run_id`）。
-無ければ `missing_state` → `pathway_project`。状態変更: なし（PDF を run ディレクトリに書く）。
+無ければ `missing_state` → `pathway_project`。`run_id` は `pathway_project` が採番する形
+（`pw_YYYYmmdd_HHMMSS_xxxxxx`）以外を `PATHWAY_BAD_REQUEST` で拒む（`reports/pathway` の外を
+指させない）。状態変更: なし（PDF を run ディレクトリに書く）。
 
 1. metabolomix/pathway/tools.py  pathway_plot()
 2. ├─ metabolomix/pathway/tools.py  _load_manifest()

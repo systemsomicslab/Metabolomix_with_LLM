@@ -84,6 +84,8 @@ def test_project_writes_run_and_returns_tables(lipid_arf, fake_measure, tmp_path
     assert (run_dir / "nodes.tsv").is_file()
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["upstream_commit"] == "abc123"
+    assert manifest["schema_version"] == "2.0.0"
+    assert manifest["mapped_nodes"] == {"remodeling": body["pathways"]["remodeling"]["mapped_nodes"]}
     assert manifest["groups"] == {"C": 2, "P": 2}
     assert body["pathways"]["remodeling"]["nodes_tsv"].startswith(
         "node\tscope\tn_features\tmean_a\tmean_b\tlog2fc\tq\tcall")
@@ -133,7 +135,10 @@ def test_plot_renders_pngs(lipid_arf, fake_measure, monkeypatch):
     out = tools.pathway_plot(pathways=["ceramide"])
     assert isinstance(out, list) and isinstance(out[0], str) and isinstance(out[1], Image)
     assert len(out) == 2
-    assert "ceramide.pdf" in out[0] and "q" in out[0]
+    assert "ceramide.pdf" in out[0] and tools._FIGURE_NOTE in out[0]
+    ceramide_line = next(l for l in out[0].splitlines() if "ceramide.pdf" in l)
+    manifest = json.loads((tools._run_dir(run_id) / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["mapped_nodes"]["ceramide"] in ceramide_line
     assert seen[0]["mode"] == "render" and seen[0]["x_order"] == ["C", "P"]
     assert seen[0]["mztab"].endswith("input.mztab")
     assert run_id in seen[0]["out_dir"]
@@ -168,3 +173,17 @@ def test_unreadable_pdf_becomes_render_failed(lipid_arf, fake_measure, monkeypat
     body = json.loads(tools.pathway_plot())
     assert body["error"]["code"] == "PATHWAY_RENDER_FAILED"
     assert "remodeling" in body["error"]["message"]
+
+
+@pytest.mark.parametrize("bad", ["../..", "..\..", "pw_x", "pw_20261014_120000_abcdef/../x"])
+def test_plot_rejects_malformed_run_id(lipid_arf, bad):
+    body = json.loads(tools.pathway_plot(run_id=bad))
+    assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
+
+
+def test_corrupt_manifest_is_output_invalid(lipid_arf, fake_measure):
+    run_id = json.loads(tools.pathway_project(group_a="C", group_b="P",
+                                              pathways=["remodeling"]))["run_id"]
+    (tools._run_dir(run_id) / "manifest.json").write_text("{not json", encoding="utf-8")
+    body = json.loads(tools.pathway_plot(run_id=run_id))
+    assert body["error"]["code"] == "MSLM_OUTPUT_INVALID"
