@@ -6,13 +6,16 @@
 
 **Architecture:** Python 側が上流 `write_mztab_m` と同形の最小 mzTab-M を書き、`metabolomix/pathway/mslm_bridge.R` を `Rscript` で起動して上流の公開関数（`mztab_pathway_measurements` / `render_pathway_from_config`）を呼ぶ。返ってきた JSON-LD を Python で読み、既存の Welch＋BH で 2 群比較し、接合ノード経由の隣接で向きを判定する。PDF は PyMuPDF で PNG にして `Image` で返す。
 
-**Tech Stack:** Python 3.14（`C:/Python314/python.exe`）、FastMCP、numpy、PyMuPDF（`fitz`）、R 4.6（上流 MSLipidMapper をローカルクローンからパッケージとしてインストール）。
+**Tech Stack:** Python 3.14（`C:/Python314/python.exe`）、FastMCP、numpy、PyMuPDF（`fitz`）、R 4.6 ＋ **renv**（リポジトリ直下 `r/` の仮想環境。MSLipidMapper は GitHub `systemsomicslab/MSLipidMapper@097a88b` を `renv.lock` に固定）。
 
 **Spec:** `docs/superpowers/specs/2026-10-14-mslipidmapper-pathway-design.md`
 
 ## Global Constraints
 
 - テストは `C:/Python314/python.exe -m pytest tests -q`（リポジトリルート）。R が無くても全部緑。
+- R は **renv の仮想環境 `r/`** だけを使う。R 4.6.0 本体のユーザーライブラリ（`%APPDATA%/R/win-library`）にはパッケージを入れない。ブリッジは起動直後に `r/renv/activate.R` を読む。追跡するのは `r/renv.lock` `r/.Rprofile` `r/renv/activate.R` `r/renv/settings.json` `r/setup.R` と renv が作る `r/renv/.gitignore`（ライブラリ本体は追跡しない）。
+- 利用者のセットアップは `Rscript r/setup.R` の 1 コマンド（renv の自己起動 → `renv::restore()`）。
+- Python の仮想環境化はこの計画の対象外（別 spec。Task 12 で `docs/task.md` に積む）。
 - 全ツールに `structured_output=False` と `ToolAnnotations`。JSON は `metabolomix.core.serialization.json_payload()`、float は丸める。
 - 外部契約は旧名: 新しい環境変数は既存規則に合わせる（上流と共有する `MSLIPIDMAPPER_*` はそのまま上流の名前を使う）。設定ファイルは `lipidmix.local.toml` の `[mslipidmapper]`。読むのは `core/user_config.get_setting` だけ。
 - `metabolomix.core.mcp_core` は leaf。`metabolomix/pathway/` の純ロジック（handoff / jsonld / compare / bridge）は `session_state` も `mcp_core` も import しない。import してよいのは `pathway/tools.py` だけ。
@@ -46,14 +49,17 @@
 「上流パッケージはインストールしない。クローン内の R ファイルを `source()` する…」の段落を次で置き換える:
 
 ```markdown
-- 上流はローカルクローンから **R パッケージとしてインストールする**
-  （`R CMD INSTALL <clone>`。上流 REST ワーカーも `library(MSLipidMapper)` で動く）。
+- 上流は **R パッケージとして renv の仮想環境 `r/` にインストールする**。
   上流の R ファイルの多くがトップレベルで `library()` を呼ぶため、PDF 描画に要る関数群
   （`aggregate_to_class_se` `get_plot_fun` `.render_pathway_cytoscape_pdf` ほか）を
-  部分的に `source()` することはできない。ブリッジは `MSLipidMapper::` の公開関数だけを呼ぶ。
-  設定は `[mslipidmapper] rscript`（必須）・`browser`（描画時）・`repo`（任意。来歴の
-  コミット記録とインストール案内に使う）。環境変数 `MSLIPIDMAPPER_RSCRIPT`
-  `MSLIPIDMAPPER_BROWSER` `MSLIPIDMAPPER_REPO`。ブラウザは描画 YAML の `pathway.browser` で渡す。
+  部分的に `source()` することはできない（上流 REST ワーカーも `library(MSLipidMapper)` で動く）。
+  入れ元は GitHub `systemsomicslab/MSLipidMapper@<commit>` で、`r/renv.lock` に固定する。
+  利用者は `Rscript r/setup.R` の 1 コマンドで同じ環境を復元する。R 本体のユーザー
+  ライブラリには入れない。ブリッジは起動直後に `r/renv/activate.R` を読み、
+  `MSLipidMapper::` の公開関数だけを呼ぶ。上流のコミットはインストール済みパッケージの
+  `RemoteSha` から読む（ローカルクローンは不要）。
+  設定は `[mslipidmapper] rscript`（必須）・`browser`（描画時）。環境変数
+  `MSLIPIDMAPPER_RSCRIPT` `MSLIPIDMAPPER_BROWSER`。ブラウザは描画 YAML の `pathway.browser` で渡す。
 ```
 
 - [ ] **Step 2: §4「特徴（行）」のサブクラスの出どころを直す**
@@ -105,7 +111,7 @@ git commit -m "docs(spec): パスウェイ投影の spec を実装前の調査�
 - Test: `tests/test_pathway_config.py`（新規）
 
 **Interfaces:**
-- Produces: 設定キー `"mslipidmapper.rscript"` `"mslipidmapper.browser"` `"mslipidmapper.repo"`、`mcp_errors.PATHWAY_ERROR_CODES: frozenset[str]`、`mcp_errors.pathway_error(code: str, message: str, details: dict | None = None) -> str`。
+- Produces: 設定キー `"mslipidmapper.rscript"` `"mslipidmapper.browser"`、`mcp_errors.PATHWAY_ERROR_CODES: frozenset[str]`、`mcp_errors.pathway_error(code: str, message: str, details: dict | None = None) -> str`。
 
 - [ ] **Step 1: 失敗するテストを書く**
 
@@ -132,7 +138,6 @@ def test_mslipidmapper_settings_read_env_first(monkeypatch, tmp_path):
 @pytest.mark.parametrize("key,env", [
     ("mslipidmapper.rscript", "MSLIPIDMAPPER_RSCRIPT"),
     ("mslipidmapper.browser", "MSLIPIDMAPPER_BROWSER"),
-    ("mslipidmapper.repo", "MSLIPIDMAPPER_REPO"),
 ])
 def test_mslipidmapper_setting_env_names(key, env):
     assert user_config.SETTINGS[key] == env
@@ -170,7 +175,6 @@ Expected: FAIL（`KeyError: 'mslipidmapper.rscript'` / `AttributeError: pathway_
 ```python
     "mslipidmapper.rscript": "MSLIPIDMAPPER_RSCRIPT",
     "mslipidmapper.browser": "MSLIPIDMAPPER_BROWSER",
-    "mslipidmapper.repo": "MSLIPIDMAPPER_REPO",
 ```
 
 `lipidmix.example.toml` の末尾に追加:
@@ -178,13 +182,11 @@ Expected: FAIL（`KeyError: 'mslipidmapper.rscript'` / `AttributeError: pathway_
 ```toml
 
 [mslipidmapper]
-# pathway_project / pathway_plot が呼ぶ Rscript。MSLipidMapper を R パッケージとして
-# インストール済みであること（R CMD INSTALL <クローン>）。
+# pathway_project / pathway_plot が呼ぶ Rscript（R 4.6 系）。パッケージは R 本体ではなく
+# リポジトリの renv 環境 r/ に入る。初回だけ: Rscript r/setup.R
 # rscript = 'C:\Program Files\R\R-4.6.0\bin\Rscript.exe'
 # pathway_plot の PDF 描画に使うヘッドレス Chromium（Chrome / Edge）。
 # browser = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
-# 上流クローンの場所。任意（来歴に上流のコミットを記録し、インストール案内に使う）。
-# repo = 'C:\path\to\MSLipidMapper'
 ```
 
 `metabolomix/core/mcp_errors.py` の `mztab_error` の後に追加:
@@ -1242,10 +1244,13 @@ git commit -m "feat(pathway): スコープ値の 2 群比較と、逆向きに�
   - `BRIDGE_SCRIPT: Path`（= `Path(__file__).with_name("mslm_bridge.R")`。テストが差し替える）
   - `PATHWAY_NETWORKS: dict[str, str] = {"remodeling": "remodeling_lipidonly.cyjs", "ceramide": "ceramidepathway_lipidonly.cyjs", "global": "global.cyjs"}`
   - `class BridgeError(Exception)`（`code`, `message`, `details`）
+  - `RENV_PROJECT: Path`（= `user_config.REPO_ROOT / "r"`。テストが差し替える）
   - `resolve_rscript() -> str`（未設定・不在は `BridgeError("MSLM_NOT_CONFIGURED")`）
-  - `upstream_commit() -> str | None`（`[mslipidmapper] repo` があれば `git -C <repo> rev-parse HEAD`、無ければ None）
+  - `browser_path() -> str | None`
   - `run_bridge(request: dict, run_dir: Path, *, timeout_s: float = 300.0) -> dict`
-    （`run_dir/request.json` を書き、`[rscript, BRIDGE_SCRIPT, request.json]` を `start_owned_process` で起動。結果 `run_dir/bridge-result.json` を dict で返す）
+    （`run_dir/request.json` を書き、`[rscript, BRIDGE_SCRIPT, RENV_PROJECT, request.json]` を `start_owned_process` で起動。結果 `run_dir/bridge-result.json` を dict で返す。`RENV_PROJECT/renv/activate.R` が無ければ起動前に `BridgeError("MSLM_R_PACKAGES_MISSING")`（「`Rscript r/setup.R` を実行」）。
+
+renv の有効化はコマンドライン引数で渡す（request.json の中ではなく）。R 本体には jsonlite が無いので、request を読む前に renv のライブラリを有効にしなければならないため。
 
 **ブリッジの request / result 契約**（R と Python の両方がこれを守る）:
 
@@ -1265,6 +1270,7 @@ bridge-result.json
  "code": null | "MSLM_R_PACKAGES_MISSING" | "PATHWAY_RENDER_FAILED" | "PATHWAY_BAD_REQUEST" | "MSLM_RUN_FAILED",
  "message": "...",
  "package_version": "0.1.0.9000",
+ "package_sha": "097a88b...（packageDescription の RemoteSha。無ければ null）",
  "outputs": {"remodeling": "<abs path of json or pdf>", ...},
  "mapped_nodes": {"remodeling": 12, ...}}
 ```
@@ -1285,11 +1291,12 @@ pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="start_owned_pro
 
 
 def _fake(tmp_path, body: str):
-    """偽ブリッジ: Python スクリプト。argv[1] が request.json。"""
+    """偽ブリッジ: Python スクリプト。argv[1] が renv プロジェクト、argv[2] が request.json。"""
     script = tmp_path / "fake_bridge.py"
     script.write_text(textwrap.dedent("""
         import json, sys, time, pathlib
-        req = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+        assert pathlib.Path(sys.argv[1]).name == "r"
+        req = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
         out = pathlib.Path(req["out_dir"])
     """) + textwrap.dedent(body), encoding="utf-8")
     return script
@@ -1298,7 +1305,21 @@ def _fake(tmp_path, body: str):
 @pytest.fixture
 def configured(monkeypatch, tmp_path):
     monkeypatch.setenv("MSLIPIDMAPPER_RSCRIPT", sys.executable)
+    renv = tmp_path / "r"
+    (renv / "renv").mkdir(parents=True)
+    (renv / "renv" / "activate.R").write_text("# fake", encoding="utf-8")
+    monkeypatch.setattr(bridge, "RENV_PROJECT", renv)
     return tmp_path
+
+
+def test_missing_renv_environment(configured, monkeypatch):
+    monkeypatch.setattr(bridge, "RENV_PROJECT", configured / "no_r")
+    run_dir = configured / "run"
+    run_dir.mkdir()
+    with pytest.raises(bridge.BridgeError) as exc:
+        bridge.run_bridge({"mode": "check", "out_dir": str(run_dir)}, run_dir, timeout_s=60)
+    assert exc.value.code == "MSLM_R_PACKAGES_MISSING"
+    assert "r/setup.R" in exc.value.message
 
 
 def test_not_configured(monkeypatch):
@@ -1400,7 +1421,6 @@ session_state / mcp_core を import しない。
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 from metabolomix.core import user_config
@@ -1408,6 +1428,8 @@ from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.process_control import start_owned_process
 
 BRIDGE_SCRIPT = Path(__file__).with_name("mslm_bridge.R")
+#: R の仮想環境（renv）。パッケージはここにだけ入る（spec §2）。
+RENV_PROJECT = user_config.REPO_ROOT / "r"
 PATHWAY_NETWORKS = {"remodeling": "remodeling_lipidonly.cyjs",
                     "ceramide": "ceramidepathway_lipidonly.cyjs",
                     "global": "global.cyjs"}
@@ -1441,18 +1463,6 @@ def browser_path() -> str | None:
     return setting.value if setting else None
 
 
-def upstream_commit() -> str | None:
-    setting = user_config.get_setting("mslipidmapper.repo")
-    if setting is None:
-        return None
-    try:
-        out = subprocess.run(["git", "-C", setting.value, "rev-parse", "HEAD"],
-                             capture_output=True, text=True, timeout=15)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return out.stdout.strip() or None if out.returncode == 0 else None
-
-
 def _log_tail(log_path: Path) -> str:
     try:
         lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -1463,6 +1473,10 @@ def _log_tail(log_path: Path) -> str:
 
 def run_bridge(request: dict, run_dir: Path, *, timeout_s: float = 300.0) -> dict:
     rscript = resolve_rscript()
+    if not (RENV_PROJECT / "renv" / "activate.R").is_file():
+        raise BridgeError("MSLM_R_PACKAGES_MISSING",
+                          "R の仮想環境が未作成です。リポジトリ直下で `Rscript r/setup.R` を一度実行してください。",
+                          {"renv_project": str(RENV_PROJECT)})
     run_dir = Path(run_dir)
     request_path = run_dir / "request.json"
     result_path = run_dir / "bridge-result.json"
@@ -1470,7 +1484,7 @@ def run_bridge(request: dict, run_dir: Path, *, timeout_s: float = 300.0) -> dic
     result_path.unlink(missing_ok=True)
     request_path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
 
-    proc = start_owned_process([rscript, str(BRIDGE_SCRIPT), str(request_path)],
+    proc = start_owned_process([rscript, str(BRIDGE_SCRIPT), str(RENV_PROJECT), str(request_path)],
                                cwd=run_dir, log_path=log_path)
     try:
         try:
@@ -1509,14 +1523,20 @@ def run_bridge(request: dict, run_dir: Path, *, timeout_s: float = 300.0) -> dic
 
 `DomainError` は `metabolomix/core/atomic_io.py` の定義（`process_control.py` の `OwnedProcess.wait` が timeout で送出する `PROCESS_WAIT_TIMEOUT` もこれ。`exc.code` で判定する——実装前に `DomainError` の属性名が `code` であることを確認）。`start_owned_process` は stdout/stderr を `log_path` へ落とす（`_open_child_stdio`）。
 
-- [ ] **Step 4: R 側を実装**（R はテストで走らない。Task 11 の実データ検証で走る）
+- [ ] **Step 4: R 側を実装**（R はテストで走らない。Task 12 の実データ検証で走る）
 
 ```r
 # metabolomix/pathway/mslm_bridge.R
 # MSLipidMapper（R パッケージ）を呼ぶ薄いブリッジ。契約は bridge.py の docstring と計画書を参照。
-# 引数: request.json のパス。結果は <out_dir>/bridge-result.json に書く。
+# 引数: [1] renv プロジェクト（リポジトリの r/）、[2] request.json。結果は <out_dir>/bridge-result.json。
 args <- commandArgs(trailingOnly = TRUE)
-req <- jsonlite::fromJSON(args[1], simplifyVector = TRUE)
+# 最初に renv を有効にする（R 本体には jsonlite も無い。パッケージは r/ の仮想環境だけから読む）。
+local({
+  owd <- setwd(args[1])
+  on.exit(setwd(owd))
+  source(file.path("renv", "activate.R"))
+})
+req <- jsonlite::fromJSON(args[2], simplifyVector = TRUE)
 out_dir <- normalizePath(req$out_dir, winslash = "/", mustWork = TRUE)
 result_path <- file.path(out_dir, "bridge-result.json")
 
@@ -1530,7 +1550,7 @@ fail <- function(code, message) {
 
 if (!requireNamespace("MSLipidMapper", quietly = TRUE)) {
   fail("MSLM_R_PACKAGES_MISSING",
-       "R パッケージ MSLipidMapper がありません。上流クローンで R CMD INSTALL を実行してください。")
+       "R の仮想環境に MSLipidMapper がありません。リポジトリ直下で `Rscript r/setup.R` を実行してください。")
 }
 needed <- c("mztab_pathway_measurements", "render_pathway_from_config")
 missing_fns <- needed[!needed %in% getNamespaceExports("MSLipidMapper")]
@@ -1539,6 +1559,8 @@ if (length(missing_fns)) {
        paste0("MSLipidMapper が古く、次の関数がありません: ", paste(missing_fns, collapse = ", ")))
 }
 version <- as.character(utils::packageVersion("MSLipidMapper"))
+sha <- utils::packageDescription("MSLipidMapper")$RemoteSha
+if (is.null(sha) || is.na(sha)) sha <- NULL
 network_path <- function(p) {
   f <- system.file("extdata", "examples", req$networks[[p]], package = "MSLipidMapper")
   if (!nzchar(f)) fail("PATHWAY_BAD_REQUEST", paste0("同梱パスウェイが見つかりません: ", p))
@@ -1547,7 +1569,7 @@ network_path <- function(p) {
 
 outputs <- list(); mapped <- list()
 if (identical(req$mode, "check")) {
-  write_result(list(status = "ok", code = NULL, message = "", package_version = version,
+  write_result(list(status = "ok", code = NULL, message = "", package_version = version, package_sha = sha,
                     outputs = outputs, mapped_nodes = mapped))
   quit(status = 0, save = "no")
 }
@@ -1589,11 +1611,11 @@ if (identical(req$mode, "measure")) {
 } else {
   fail("PATHWAY_BAD_REQUEST", paste0("未知の mode: ", req$mode))
 }
-write_result(list(status = "ok", code = NULL, message = "", package_version = version,
+write_result(list(status = "ok", code = NULL, message = "", package_version = version, package_sha = sha,
                   outputs = outputs, mapped_nodes = mapped))
 ```
 
-`res$node_mapping` の列名（`matched` 等）は上流 `R/pathway_measurements.R` の戻り値を実物で確認して直す（Task 11 Step 3 で実測）。違っていれば `mapped_nodes` は Python 側で JSON-LD から数えた値を正とし、R 側の値は参考値として扱う（Task 8 は JSON-LD 由来の数を出す）。
+`res$node_mapping` の列名（`matched` 等）は上流 `R/pathway_measurements.R` の戻り値を実物で確認して直す（Task 12 Step 2 で実測）。違っていれば `mapped_nodes` は Python 側で JSON-LD から数えた値を正とし、R 側の値は参考値として扱う（Task 8 は JSON-LD 由来の数を出す）。
 
 - [ ] **Step 5: 通ることを確認**
 
@@ -1765,10 +1787,10 @@ def fake_measure(monkeypatch):
                     x["sampleGroup"] = "C" if x["identifier"] == "S1" else "P"
             path.write_text(json.dumps(doc), encoding="utf-8")
             out[p] = str(path)
-        return {"status": "ok", "outputs": out, "mapped_nodes": {}, "package_version": "0.1"}
+        return {"status": "ok", "outputs": out, "mapped_nodes": {},
+                "package_version": "0.1", "package_sha": "abc123"}
 
     monkeypatch.setattr(bridge, "run_bridge", run)
-    monkeypatch.setattr(bridge, "upstream_commit", lambda: "abc123")
     return calls
 
 
@@ -2056,7 +2078,7 @@ def pathway_project(source: str = "auto", group_a=None, group_b=None,
                 "pathways": pathways, "acyl_chains": list(acyl_chains or []),
                 "aggregation": aggregation, "q_threshold": q_threshold,
                 "normalization": normalization, "dataset_id": dataset_id,
-                "upstream_commit": bridge.upstream_commit(),
+                "upstream_commit": result.get("package_sha"),
                 "package_version": result.get("package_version"),
                 "report": table.report,
                 "files": {"mztab": "input.mztab", "nodes": "nodes.tsv",
@@ -2391,7 +2413,9 @@ arf は `session.arf.feature_matrix` と兄弟 `.arf2`、dataset は `DatasetSta
 - 「読む形式」の段落末尾に 1 文: 「MSLipidMapper（R）が書く**パスウェイ測定 JSON-LD**も読む（`pathway_project`）。」
 - 構成図の `metabolomix/tools/` の行の前に:
   `metabolomix/pathway/   MSLipidMapper 連携（最小 mzTab-M の受け渡し・Rscript ブリッジ・JSON-LD 読み取り・隣接比較）`
-- 「外部資産の場所」の段落の設定キー列挙に `[mslipidmapper] rscript` `browser` `repo`、環境変数 `MSLIPIDMAPPER_RSCRIPT` `MSLIPIDMAPPER_BROWSER` `MSLIPIDMAPPER_REPO` を足す。
+- 「外部資産の場所」の段落の設定キー列挙に `[mslipidmapper] rscript` `browser`、環境変数 `MSLIPIDMAPPER_RSCRIPT` `MSLIPIDMAPPER_BROWSER` を足す。
+- 「コマンド」節に R の仮想環境を 1 段落足す: 「パスウェイ投影（`pathway_*`）を使うときだけ、初回に `Rscript r/setup.R`（renv の仮想環境 `r/` を `r/renv.lock` から復元。R 本体のライブラリには入れない）。上流 MSLipidMapper の版を上げるときは `r/` で `renv::install("systemsomicslab/MSLipidMapper@<commit>")` → `renv::snapshot()` し、`renv.lock` をコミットする。」
+- 「踏みやすい罠」に 1 行: 「`r/renv/library/` は追跡外なので worktree には来ない。worktree で `pathway_*` を実機で試すときは、その worktree でも `Rscript r/setup.R` を実行する（renv のグローバルキャッシュから入るので速い）。」
 
 - [ ] **Step 7: 全テスト**
 
@@ -2411,54 +2435,165 @@ git commit -m "feat(pathway): pathway_project / pathway_plot ツールと文書"
 
 ---
 
-### Task 11: R 環境の準備と実データ検証（手動・ユーザー同席）
+
+### Task 11: R の仮想環境（renv）を作る（コントローラが実行。ネットワークから大量に入る）
+
+**Files:**
+- Create: `r/.Rprofile` `r/renv/activate.R` `r/renv/settings.json` `r/renv/.gitignore`（`renv::init` が生成）
+- Create: `r/renv.lock`（`renv::snapshot` が生成）
+- Create: `r/setup.R`
+- Test: `tests/test_r_environment.py`
+
+**Interfaces:**
+- Produces: `r/renv/activate.R`（Task 6 の `bridge.RENV_PROJECT` が指す）と、MSLipidMapper を `097a88b` に固定した `r/renv.lock`。
+
+- [ ] **Step 1: 失敗するテストを書く**
+
+```python
+# tests/test_r_environment.py
+"""R の仮想環境（renv）の定義が追跡されていることを縛る。R が無くても走る。"""
+import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+R_DIR = ROOT / "r"
+
+
+def test_renv_files_are_present():
+    for rel in ("renv.lock", ".Rprofile", "setup.R", "renv/activate.R", "renv/settings.json"):
+        assert (R_DIR / rel).is_file(), rel
+
+
+def test_mslipidmapper_is_pinned_from_github():
+    lock = json.loads((R_DIR / "renv.lock").read_text(encoding="utf-8"))
+    pkg = lock["Packages"]["MSLipidMapper"]
+    assert pkg["Source"] == "GitHub"
+    assert pkg["RemoteUsername"] == "systemsomicslab"
+    assert pkg["RemoteRepo"] == "MSLipidMapper"
+    assert pkg["RemoteSha"].startswith("097a88b")
+
+
+def test_measurement_dependencies_are_locked():
+    lock = json.loads((R_DIR / "renv.lock").read_text(encoding="utf-8"))
+    for name in ("SummarizedExperiment", "S4Vectors", "jsonlite", "yaml", "renv"):
+        assert name in lock["Packages"], name
+
+
+def test_bridge_points_at_this_environment():
+    from metabolomix.pathway import bridge
+    assert bridge.RENV_PROJECT == R_DIR
+```
+
+- [ ] **Step 2: 失敗を確認**
+
+Run: `C:/Python314/python.exe -m pytest tests/test_r_environment.py -q`
+Expected: FAIL（`r/renv.lock` が無い）
+
+- [ ] **Step 3: renv を一時ライブラリに入れて、`r/` を renv プロジェクトにする**
+
+R 本体のユーザーライブラリを汚さないため、初期化用の renv は一時ディレクトリに入れる（以後は `r/renv/activate.R` が renv 自身をプロジェクト内に自動取得する）。
+
+```bash
+cd /c/Users/yuu18/Metabolomix_with_LLM
+mkdir -p r
+"/c/Program Files/R/R-4.6.0/bin/Rscript" -e 'lib <- file.path(tempdir(), "renv-boot"); dir.create(lib); install.packages("renv", lib = lib, repos = "https://cloud.r-project.org"); library(renv, lib.loc = lib); renv::init(project = "r", bare = TRUE, restart = FALSE)'
+ls -a r r/renv
+```
+
+Expected: `r/.Rprofile` `r/renv/activate.R` `r/renv/settings.json` `r/renv/.gitignore` ができる。
+
+- [ ] **Step 4: 依存と MSLipidMapper を仮想環境に入れ、固定する**（所要は数十分。`run_in_background` で回し、ログをファイルへ）
+
+```bash
+cd /c/Users/yuu18/Metabolomix_with_LLM/r
+"/c/Program Files/R/R-4.6.0/bin/Rscript" -e '
+source("renv/activate.R")
+renv::install("BiocManager")
+options(repos = BiocManager::repositories())
+renv::install(c("bioc::SummarizedExperiment", "bioc::S4Vectors",
+                "bioc::clusterProfiler", "bioc::ComplexHeatmap"))
+renv::install("systemsomicslab/MSLipidMapper@097a88b")
+stopifnot(all(c("mztab_pathway_measurements", "render_pathway_from_config") %in%
+              getNamespaceExports("MSLipidMapper")))
+renv::snapshot(type = "all", prompt = FALSE)
+' > "<scratchpad>/renv-install.log" 2>&1
+```
+
+失敗したパッケージは名前とエラーを記録し、ユーザーに報告して判断を仰ぐ（Rtools が要るソースパッケージ等）。勝手に R 本体のライブラリへ入れて回避しない。
+
+- [ ] **Step 5: `r/setup.R` を書く**
+
+```r
+# R の仮想環境（renv）を r/renv.lock から復元する。
+# リポジトリ直下で:  Rscript r/setup.R
+# R 本体のライブラリには何も入れない（renv 自身も r/ の中に自動で取得される）。
+file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)[1]
+here <- normalizePath(dirname(sub("^--file=", "", file_arg)), winslash = "/")
+setwd(here)
+source(file.path("renv", "activate.R"))
+renv::restore(prompt = FALSE)
+cat("MSLipidMapper", as.character(utils::packageVersion("MSLipidMapper")),
+    "ready in", here, "\n")
+```
+
+動作確認（復元が冪等に終わること）:
+
+```bash
+cd /c/Users/yuu18/Metabolomix_with_LLM && "/c/Program Files/R/R-4.6.0/bin/Rscript" r/setup.R
+```
+
+Expected: 最後に `MSLipidMapper 0.1.0.9000 ready in .../r`
+
+- [ ] **Step 6: テストを通す**
+
+Run: `C:/Python314/python.exe -m pytest tests/test_r_environment.py tests/test_package_layout.py -q`
+Expected: PASS（`test_package_layout` がルート直下の非 `.py` を咎めないことも確認）
+
+- [ ] **Step 7: コミット**（バックグラウンド。`git status` で `r/renv/library` 等が出ていないことを先に確かめる）
+
+```bash
+git add r/.Rprofile r/renv/activate.R r/renv/settings.json r/renv/.gitignore r/renv.lock r/setup.R tests/test_r_environment.py
+git commit -m "build(r): MSLipidMapper を固定した R の仮想環境（renv）を r/ に置く"
+```
+
+---
+
+### Task 12: 実データ検証・記録・仕上げ（手動・ユーザー同席）
 
 **Files:**
 - Modify（追跡外）: `lipidmix.local.toml`、`docs/HISTRY.md`、`docs/task.md`
 - Modify（リポジトリ外）: `C:\Users\yuu18\Documents\KnowledgeVault\30_Projects\ms-data-parser\ms-data-parser-flow.md`
-- Modify（必要なら）: `docs/superpowers/specs/2026-09-04-mslipidmapper-transferable-assets.md` §4-2 に実測結果を追記
+- Modify（必要なら）: `metabolomix/pathway/mslm_bridge.R`、`docs/superpowers/specs/2026-09-04-mslipidmapper-transferable-assets.md` §4-2
 
-- [ ] **Step 1: R 依存と MSLipidMapper をインストールする**（**ユーザーに確認してから**。CRAN/Bioconductor から大量に入る）
-
-```bash
-"/c/Program Files/R/R-4.6.0/bin/Rscript" -e 'install.packages("BiocManager", repos="https://cloud.r-project.org"); BiocManager::install(c("SummarizedExperiment","S4Vectors","clusterProfiler","ComplexHeatmap"), ask=FALSE, update=FALSE)'
-"/c/Program Files/R/R-4.6.0/bin/Rscript" -e 'd <- read.dcf("C:/Users/yuu18/MSLipidMapper/DESCRIPTION", "Imports"); p <- trimws(strsplit(gsub("\\(.*?\\)", "", d), ",")[[1]]); p <- setdiff(p[nzchar(p)], rownames(installed.packages())); if (length(p)) BiocManager::install(p, ask=FALSE, update=FALSE)'
-"/c/Program Files/R/R-4.6.0/bin/R" CMD INSTALL --no-test-load "C:/Users/yuu18/MSLipidMapper"
-```
-
-ユーザーライブラリへの書き込みになる。失敗したパッケージ名を記録し、`docs/HISTRY.md` に残す。
-
-- [ ] **Step 2: 設定ファイルを書く**（`lipidmix.local.toml`。追跡外）
+- [ ] **Step 1: 設定ファイル**（`lipidmix.local.toml`。追跡外）
 
 ```toml
 [mslipidmapper]
 rscript = 'C:\Program Files\R\R-4.6.0\bin\Rscript.exe'
 browser = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
-repo = 'C:\Users\yuu18\MSLipidMapper'
 ```
 
-- [ ] **Step 3: check モードとノード対応の実測**
+- [ ] **Step 2: check モードと `node_mapping` の列名の実測**
 
-`check.py`（スクラッチ）で `bridge.run_bridge({"mode": "check", "out_dir": <tmp>}, <tmp>)` を呼び、`package_version` が返ることを確かめる。続けて `mztab_pathway_measurements` の戻り値 `node_mapping` の列名を R で確認し（`str(res$node_mapping)`）、`mslm_bridge.R` の `matched` 参照を実物に合わせる（違っていれば修正をコミット）。
+`check.py`（スクラッチ）で `bridge.run_bridge({"mode": "check", "out_dir": <tmp>}, <tmp>)` を呼び、`package_version` と `package_sha`（`097a88b…`）が返ることを確かめる。続けて仮想環境の R で `str(MSLipidMapper::mztab_pathway_measurements(<小さな mzTab>, <cyjs>)$node_mapping)` を見て、`mslm_bridge.R` の `matched` 参照を実物に合わせる（違えば修正してコミット）。`check.py` は最後に空へ戻す。
 
-- [ ] **Step 4: 実データで pathway_project / pathway_plot**（MCP 経由。neg と pos それぞれ）
+- [ ] **Step 3: 実データで pathway_project / pathway_plot**（MCP 経由。neg と pos それぞれ）
 
 `load_dataset("C:\Users\yuu18\datasets\20260930_EV\neg_wiff")` → `record_objective(assay_kind="lipid", ...)`
-→ `arf_preprocess(...)` → `pathway_project(group_a="cell_C", group_b="cell_PlnA")`
-→ `pathway_plot()`。pos も同様。記録すること:
+→ `arf_preprocess(...)` → `pathway_project(group_a="cell_C", group_b="cell_PlnA")` → `pathway_plot()`。pos も同様。
+群名は `arf_list_classes` の実物に合わせる。記録すること:
   - 各パスウェイの `mapped_nodes` と `unmatched_subclasses`（spec 2026-09-04 §4-2 の答え）
   - 逆向き隣接ペアの件数、判定不能件数
   - 所要時間（measure / render）
-  - PNG がチャットに出たか（Claude Code / Claude Desktop）
-  群名は `arf_list_classes` の実物に合わせる。
+  - PNG がチャットに出たか
 
-- [ ] **Step 5: 記録**
+- [ ] **Step 4: 記録**
 
-- `docs/HISTRY.md` に日付見出しで追記（実測値・インストールで詰まった点）。
-- `docs/task.md` に残課題があれば追記（例: `unmatched_subclasses` の語彙対応表）。
+- `docs/HISTRY.md` に日付見出しで追記（実測値・renv のインストールで詰まった点）。
+- `docs/task.md` に追記: 「Python の仮想環境化（セットアップのわかりにくさへの対応。R の `r/setup.R` と揃えて 1 コマンド化。別 spec）」、ほか残課題（例: `unmatched_subclasses` の語彙対応表）。
 - vault の流れ図に「脂質アッセイ → 前処理 → `pathway_project` → `pathway_plot`」の枝を足し、末尾の出典行の日付を更新。
-- `C:/Users/yuu18/.claude/kb` に再利用できる知見（R の依存インストール手順・上流の JSON-LD の形）があれば INDEX.md を見て重複を確認のうえ 1 エントリ。
+- `C:/Users/yuu18/.claude/kb` に再利用できる知見（renv で Bioconductor＋GitHub パッケージを固定する手順、上流 JSON-LD の形）があれば INDEX.md で重複を確認のうえ 1 エントリ。
 
-- [ ] **Step 6: 仕上げ**
+- [ ] **Step 5: 仕上げ**
 
 `superpowers:finishing-a-development-branch` に従い、`main` へ `--no-ff` マージ（`Merge feat/mslm-pathway: MSLipidMapper を通したパスウェイ投影ツールを足す`）。push はユーザーに確認。
