@@ -6,6 +6,11 @@ PNG が要るときだけ `save_figure(kind="eic")`（[plots.md](plots.md)）を
 
 `peak_top` は座標であって強度ではない。混同しないこと。
 
+MS-DIAL 2023-11-20 より前の版が書いた `.EIC.aef` は、全スポットで m/z が `-1` になる
+（上流 `DataObjConverter` の既知の不具合。RT は正しい）。全ツールは読み込み直後に
+`mz_backfill.backfill_missing_mz()` を通し、同じバッチの ARF2 の `MassCenter` で補う
+（同じ AlignmentID の RT 一致が条件）。補ったことは注記に出る。
+
 ```mermaid
 flowchart TD
     SM[eic_search_by_mz_range] --> SPOT[spot_id を特定]
@@ -28,9 +33,12 @@ flowchart TD
 
 1. metabolomix/eic/tools.py  eic_parser()
 2. └─ metabolomix/core/path_resolvers.py  resolve_eicaef_file_path()
-3. └─ metabolomix/core/session_state.py  EicState.load_data()
-4. └─ metabolomix/eic/reader.py  summarize_eic_data()
-5. └─ metabolomix/core/session_state.py  AnalysisSession.maybe_prepend_caveat()
+3. └─ metabolomix/eic/tools.py  _load_session_spots()
+4. │  ├─ metabolomix/core/session_state.py  EicState.load_data()
+5. │  └─ metabolomix/eic/tools.py  _backfill_mz()
+6. │     └─ metabolomix/eic/mz_backfill.py  backfill_missing_mz()
+7. └─ metabolomix/eic/reader.py  summarize_eic_data()
+8. └─ metabolomix/core/session_state.py  AnalysisSession.maybe_prepend_caveat()
 
 ## eic_search_by_mz_range
 
@@ -39,8 +47,11 @@ flowchart TD
 
 1. metabolomix/eic/tools.py  eic_search_by_mz_range()
 2. └─ metabolomix/core/path_resolvers.py  resolve_eicaef_file_path()
-3. └─ metabolomix/core/session_state.py  EicState.load_data()
-4. └─ metabolomix/eic/reader.py  search_eic_by_mz_range()
+3. └─ metabolomix/eic/tools.py  _load_session_spots()
+4. │  ├─ metabolomix/core/session_state.py  EicState.load_data()
+5. │  └─ metabolomix/eic/tools.py  _backfill_mz()
+6. │     └─ metabolomix/eic/mz_backfill.py  backfill_missing_mz()
+7. └─ metabolomix/eic/reader.py  search_eic_by_mz_range()
 
 ## eic_search_by_rt_range
 
@@ -49,8 +60,11 @@ flowchart TD
 
 1. metabolomix/eic/tools.py  eic_search_by_rt_range()
 2. └─ metabolomix/core/path_resolvers.py  resolve_eicaef_file_path()
-3. └─ metabolomix/core/session_state.py  EicState.load_data()
-4. └─ metabolomix/eic/reader.py  search_eic_by_rt_range()
+3. └─ metabolomix/eic/tools.py  _load_session_spots()
+4. │  ├─ metabolomix/core/session_state.py  EicState.load_data()
+5. │  └─ metabolomix/eic/tools.py  _backfill_mz()
+6. │     └─ metabolomix/eic/mz_backfill.py  backfill_missing_mz()
+7. └─ metabolomix/eic/reader.py  search_eic_by_rt_range()
 
 ## eic_rank_by_max_intensity
 
@@ -61,8 +75,11 @@ flowchart TD
 
 1. metabolomix/eic/tools.py  eic_rank_by_max_intensity()
 2. └─ metabolomix/core/path_resolvers.py  resolve_eicaef_file_path()
-3. └─ metabolomix/core/session_state.py  EicState.load_data()
-4. └─ metabolomix/eic/reader.py  top_eic_spots_by_max_intensity()
+3. └─ metabolomix/eic/tools.py  _load_session_spots()
+4. │  ├─ metabolomix/core/session_state.py  EicState.load_data()
+5. │  └─ metabolomix/eic/tools.py  _backfill_mz()
+6. │     └─ metabolomix/eic/mz_backfill.py  backfill_missing_mz()
+7. └─ metabolomix/eic/reader.py  top_eic_spots_by_max_intensity()
 
 ## eic_plot_chromatograms
 
@@ -76,7 +93,9 @@ m/z 4 桁で図にも解釈にも足り、float の既定 repr の 17 桁は空�
 1. metabolomix/eic/tools.py  eic_plot_chromatograms()
 2. └─ metabolomix/core/path_resolvers.py  resolve_eicaef_file_path()
 3. └─ metabolomix/eic/reader.py  read_eic_spot_css1()
-4. └─ metabolomix/plots/eic.py  build_eic_plot_payload()
+4. └─ metabolomix/eic/tools.py  _backfill_mz()
+5. │  └─ metabolomix/eic/mz_backfill.py  backfill_missing_mz()
+6. └─ metabolomix/plots/eic.py  build_eic_plot_payload()
 
 ## eic_plot_compounds
 
@@ -89,7 +108,7 @@ env `LIPIDMIX_PLOT_OUTPUT=payload`（[plots.md](plots.md) 参照）。重ねる�
 8 本 —— それ以上は 1 枚の図として判読できず、payload も比例して膨らむ。
 
 ARF2 の同定候補を rt/mz で照合し、外れた物質は `selection.dropped` に理由付きで残る。
-照合（手順 10）は候補選抜の中ではなく payload 組み立ての中で走る —— 実際に読み出した
+照合（手順 12）は候補選抜の中ではなく payload 組み立ての中で走る —— 実際に読み出した
 EIC スポットと突き合わせないと検証にならないため。
 
 1. metabolomix/eic/tools.py  eic_plot_compounds()
@@ -100,5 +119,7 @@ EIC スポットと突き合わせないと検証にならないため。
 6. │  └─ metabolomix/arf2/reader.py  load_catalog()
 7. └─ metabolomix/eic/identity_map.py  select_identity_candidates()
 8. └─ metabolomix/eic/reader.py  read_eic_spots_css1()
-9. └─ metabolomix/plots/eic.py  build_multi_compound_plot_payload()
-10. │  └─ metabolomix/eic/identity_map.py  verify_spot_match()
+9. └─ metabolomix/eic/tools.py  _backfill_mz()
+10. │  └─ metabolomix/eic/mz_backfill.py  backfill_missing_mz()
+11. └─ metabolomix/plots/eic.py  build_multi_compound_plot_payload()
+12. │  └─ metabolomix/eic/identity_map.py  verify_spot_match()

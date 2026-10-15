@@ -300,7 +300,8 @@ def summarize_eic_data(results):
         }
 
     rt_values = [spot["rt"] for spot in results]
-    mz_values = [spot["mz"] for spot in results]
+    # m/z を欠く古い EIC は -1 を書く（mz_backfill 参照）。範囲から外す。
+    mz_values = [spot["mz"] for spot in results if spot["mz"] >= 0]
     total_samples = sum(spot["num_samples"] for spot in results)
     sample_entries = [sample for spot in results for sample in spot["samples"]]
     total_peaks = sum(sample["num_peaks"] for sample in sample_entries)

@@ -20,6 +20,12 @@ from metabolomix.eic.reader import (
     search_eic_by_rt_range,
 )
 from metabolomix.eic.identity_map import load_arf2_records, select_identity_candidates
+from metabolomix.eic.mz_backfill import (
+    backfill_caveat,
+    backfill_missing_mz,
+    has_missing_mz,
+    sibling_arf2_path,
+)
 from metabolomix.plots import render as plot_render
 from metabolomix.plots.eic import (
     EICMultiPlotPayload,
@@ -49,6 +55,40 @@ def _spot_line(spot: dict, with_intensity: bool = False) -> str:
         line += f" max_intensity={spot['max_intensity']:.0f}"
     return line + f" num_samples={spot['num_samples']}"
 
+
+def _backfill_mz(
+    spots: list[dict], eic_path: str, records: list[dict] | None = None,
+    arf2_name: str | None = None,
+) -> list[str]:
+    """欠損 m/z（古い MS-DIAL の -1）を ARF2 で補い、注記を返す（mz_backfill 参照）。
+
+    `records` を渡さなければ同じバッチの隣の `.arf2` を読む。
+    """
+    if not has_missing_mz(spots):
+        return []
+    if records is None:
+        arf2 = sibling_arf2_path(eic_path)
+        records = load_arf2_records(arf2) if arf2 else []
+        arf2_name = arf2.name if arf2 else None
+    note = backfill_caveat(backfill_missing_mz(spots, records), arf2_name)
+    return [note] if note else []
+
+
+def _load_session_spots(file_path: str) -> tuple[list, list[str]]:
+    """セッションの EIC を読み、欠損 m/z を 1 度だけ補う。注記はキャッシュと一緒に残す。"""
+    state = session_state.session.eic
+    parsed = state.load_data(file_path)
+    if isinstance(parsed, list) and state.mz_caveats is None:
+        state.mz_caveats = _backfill_mz(parsed, file_path)
+    return parsed, list(state.mz_caveats or [])
+
+
+def _with_notes(lines: list[str], notes: list[str]) -> str:
+    if notes:
+        lines = lines + ["== 注意 =="] + notes
+    return "\n".join(lines)
+
+
 __all__ = [
     "eic_parser",
     "eic_plot_chromatograms",
@@ -70,7 +110,7 @@ def eic_parser(file_path: str | None = None) -> str:
         return "データディレクトリに .aef ファイルが見つかりませんでした。"
 
     try:
-        parsed = session_state.session.eic.load_data(file_path)
+        parsed, notes = _load_session_spots(file_path)
         if not isinstance(parsed, list):
             return "EIC解析結果がリストではありません。"
 
@@ -83,7 +123,7 @@ def eic_parser(file_path: str | None = None) -> str:
             "この結果をもとに、m/z範囲検索やRT範囲検索、強度上位抽出（eic_rank_by_max_intensity）を実行できます。",
         ]
         return session_state.session.maybe_prepend_caveat(
-            "\n".join(output_text), topic="eic",
+            _with_notes(output_text, notes), topic="eic",
         )
     except Exception as e:
         return f"EIC解析中にエラーが発生しました: {str(e)}"
@@ -112,9 +152,11 @@ def eic_plot_chromatograms(
     if not resolved:
         raise FileNotFoundError("データディレクトリに .aef ファイルが見つかりませんでした。")
     spot = read_eic_spot_css1(resolved, spot_id, file_ids=file_ids)
+    notes = _backfill_mz([spot], resolved)
     payload = build_eic_plot_payload(
         spot, resolved, normalize=normalize, title=title,
     )
+    payload["caveats"].extend(notes)
     session_state.session.eic.last_plot = payload
     return json_payload(payload)
 
@@ -155,7 +197,9 @@ def eic_plot_compounds(
     least one of them is required.
 
     ``spot_id = AlignmentID`` is verified against the EIC spot RT and m/z, so a
-    compound whose identity cannot be confirmed is not drawn. Everything that was
+    compound whose identity cannot be confirmed is not drawn. EIC files written
+    by MS-DIAL before 2023-11-20 carry no spot m/z (-1); those spots borrow the
+    ARF2 ``MassCenter`` after an RT check, and a caveat says so. Everything that was
     excluded — mismatch, missing trace, or falling outside ``top_n`` — is listed
     with its reason in ``selection.dropped``; read it before concluding that a
     compound is absent from the sample.
@@ -189,6 +233,11 @@ def eic_plot_compounds(
         resolved,
         [candidate["spot_id"] for candidate in candidates],
         file_ids=[file_id],
+    )
+    # 欠損 m/z を照合前に補う。補うときに同じ AlignmentID の RT 一致を確かめるので、
+    # 以後の m/z 照合が自明に通っても RT による取り違え検出は残る。
+    caveats = caveats + _backfill_mz(
+        spots, resolved, records=records, arf2_name=Path(resolved_arf2).name,
     )
     payload = build_multi_compound_plot_payload(
         candidates,
@@ -242,7 +291,7 @@ def eic_rank_by_max_intensity(file_path: str | None = None, top_n: int = 20) -> 
         return "データディレクトリに .aef ファイルが見つかりませんでした。"
 
     try:
-        parsed = session_state.session.eic.load_data(file_path)
+        parsed, notes = _load_session_spots(file_path)
         if not isinstance(parsed, list):
             return "EIC解析結果がリストではありません。"
 
@@ -253,7 +302,7 @@ def eic_rank_by_max_intensity(file_path: str | None = None, top_n: int = 20) -> 
         ]
         for spot in top_spots:
             output_text.append(_spot_line(spot, with_intensity=True))
-        return "\n".join(output_text)
+        return _with_notes(output_text, notes)
     except Exception as e:
         return f"EIC強度上位抽出中にエラーが発生しました: {str(e)}"
 
@@ -272,7 +321,7 @@ def eic_search_by_mz_range(file_path: str | None = None, min_mz: float = 0.0,
         return "データディレクトリに .aef ファイルが見つかりませんでした。"
 
     try:
-        parsed = session_state.session.eic.load_data(file_path)
+        parsed, notes = _load_session_spots(file_path)
         if not isinstance(parsed, list):
             return "EIC解析結果がリストではありません。"
 
@@ -286,7 +335,7 @@ def eic_search_by_mz_range(file_path: str | None = None, min_mz: float = 0.0,
             output_text.append(_spot_line(spot))
         if len(matches) > max_results:
             output_text.append(f"(表示上限: {max_results} 件)")
-        return "\n".join(output_text)
+        return _with_notes(output_text, notes)
     except Exception as e:
         return f"EIC m/z検索中にエラーが発生しました: {str(e)}"
 
@@ -301,7 +350,7 @@ def eic_search_by_rt_range(file_path: str | None = None, min_rt: float = 0.0, ma
         return "データディレクトリに .aef ファイルが見つかりませんでした。"
 
     try:
-        parsed = session_state.session.eic.load_data(file_path)
+        parsed, notes = _load_session_spots(file_path)
         if not isinstance(parsed, list):
             return "EIC解析結果がリストではありません。"
 
@@ -315,6 +364,6 @@ def eic_search_by_rt_range(file_path: str | None = None, min_rt: float = 0.0, ma
             output_text.append(_spot_line(spot))
         if len(matches) > max_results:
             output_text.append(f"(表示上限: {max_results} 件)")
-        return "\n".join(output_text)
+        return _with_notes(output_text, notes)
     except Exception as e:
         return f"EIC RT検索中にエラーが発生しました: {str(e)}"

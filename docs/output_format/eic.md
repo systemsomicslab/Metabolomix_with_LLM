@@ -15,8 +15,17 @@
 | `spot_id` | int | ファイル中の0始まりスポット順序。今回のデータではARF/ARF2のID順と対応 |
 | `rt` | float | スポット代表RT（min） |
 | `ri` | float | スポット代表RI。LCデータでは0のことがある |
-| `mz` | float | スポット代表 m/z |
+| `mz` | float | スポット代表 m/z。**MS-DIAL 2023-11-20 より前の版の出力では全スポット `-1`**（下記） |
 | `drift` | float | スポット代表ドリフト時間。未使用時は `-1` |
+
+**m/z を欠く古い `.EIC.aef`。** 上流 `DataObjConverter` は 2023-11-20（MsdialWorkbench
+`20dfa60b4`）まで、EIC に書くスポット m/z を LC-MS では未設定（`-1`）の値の平均で求めていた。
+そのためこの頃の出力は全スポットで `mz = -1` になる（RT は正しい）。EIC 系ツールは
+読み込み直後に、同じバッチの `<stem>.arf2` から同じ `AlignmentID` の `MassCenter` を借りて
+補う。ただし RT が ±0.02 min で一致するときだけで、補ったスポットには
+`mz_source = "arf2"` が付く。補った旨は各ツールの注記（`== 注意 ==` / `caveats`）に出る。
+ARF2 が無い・RT が合わないスポットは `-1` のまま残る。この値は m/z 検索に掛からず、
+`summarize_eic_data()` の `mz_range` からも除かれる。
 | `main_type` | int | 横軸種別の列挙値。`0` はRT主軸を表す |
 | `num_samples` | int | このスポットに格納されたサンプル数 |
 | `samples` | list[dict] | サンプル別EIC要約。リスト長は通常 `num_samples` |
@@ -103,6 +112,8 @@ PNGが必要だとユーザーが明示した場合に限り、先に得たプ�
   物質は描画されない。除外理由は `rt_mismatch` / `mz_mismatch`（ID対応の崩れ）、
   `spot_out_of_range`、`file_id_absent`（その試料にトレースが無い）、
   `below_top_n`（`top_n` 件からあふれた。既定 8 件）の5種。**図に無い＝試料に無い、ではない。**
+  m/z を欠く古い EIC（7.1 節）では、照合の前に ARF2 の m/z で補う。このとき m/z 照合は
+  自明に通るので、取り違えの検出は RT 照合だけが担う（`caveats` にその旨が出る）。
   `dropped[]` は毎回、除外された物質を1件残らず列挙する。
 - `caveats[]` は `dropped[]` を理由ごとに1行へ要約したもの（例:
   `"below_top_n で 276 件を除外しました（詳細は selection.dropped）。"`）。ただし
