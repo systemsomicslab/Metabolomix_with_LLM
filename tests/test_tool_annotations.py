@@ -30,6 +30,10 @@ LOCAL_DELETE = {"readOnlyHint": False, "destructiveHint": True, "idempotentHint"
 # 追記に加えて外部アプリのファイルを書き換える（curation_submit は flags.jsonl に追記し、
 # MS-DIAL の _tags.xml の Misannotation を付け外しする。clear で外しうる）→ destructive・非冪等。
 APPEND_AND_REWRITE = {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False}
+# ネットワークへ出たうえでローカルに追記する（pathway_project は研究室サーバへ中間 mzTab-M を送り、
+# 呼ぶたびに新しい run を作る）→ 非冪等・open world。
+REMOTE_WRITE_APPEND = {"readOnlyHint": False, "destructiveHint": False,
+                       "idempotentHint": False, "openWorldHint": True}
 
 EXPECTED_ANNOTATIONS = {
     # --- ARF（多サンプル解析）。セッション状態は更新するが外部副作用は無い ---
@@ -140,10 +144,10 @@ EXPECTED_ANNOTATIONS = {
     "curation_flags": READ_ONLY,
     "curation_view_data": READ_ONLY,
     "curation_suggest": LOCAL_WRITE_APPEND,
-    # --- パスウェイ投影（MSLipidMapper）。project は呼ぶたびに新しい run を作る（非冪等・
-    # measure はネットワークに出ない）。plot は run 内の PDF を同じパスへ上書きし、
-    # 描画で unpkg.com へ出る。 ---
-    "pathway_project": LOCAL_WRITE_APPEND,
+    # --- パスウェイ投影（MSLipidMapper）。project は呼ぶたびに新しい run を作る（非冪等）。
+    # 両方とも [mslipidmapper] api_url の研究室サーバへ出うる。plot は run 内の PDF を
+    # 同じパスへ上書きし、ローカルの描画でも unpkg.com へ出る。 ---
+    "pathway_project": REMOTE_WRITE_APPEND,
     "pathway_plot": REMOTE_WRITE,
 }
 
@@ -177,7 +181,7 @@ class ToolAnnotationTests(unittest.TestCase):
     def test_external_network_tools_also_declare_open_world(self):
         """openWorldHint が無いと汎用クライアントがネットワークゲートを迂回する。"""
         actual = actual_annotations()
-        for name in ("paper_search", "server_update", "pathway_plot"):
+        for name in ("paper_search", "server_update", "pathway_project", "pathway_plot"):
             with self.subTest(tool=name):
                 self.assertIs(actual[name]["openWorldHint"], True)
 

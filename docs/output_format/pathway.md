@@ -4,6 +4,10 @@
 
 - MSLipidMapper は**正規化しない**。値はこちらの前処理後行列（`normalization` 欄にレシピ）を、
   パスウェイノードに対応するサブクラスごとに `aggregation`（既定 sum）で集計したもの。
+  研究室サーバ（`backend` が研究室サーバ）で動いた run の JSON-LD は `normalization` が `none` になる
+  （API が前処理の記述を受け付けないため）。前処理の正準は manifest.json の `normalization`。
+  サーバは版を返さないので、その run の `upstream_commit` / `package_version` は空（ローカルの
+  `r/renv.lock` の版と同じとは限らない）。
 - 中間 mzTab-M に載るのは生体試料（role=sample）だけ。サブクラスが空・Unknown・Others の行と、
   手動除外スポットは載らない（件数は `handoff`）。同名の行は平均強度最大の 1 行だけ残す
   （`dropped_duplicate_names`）——sum がアダクト違いを二重計上しないため。

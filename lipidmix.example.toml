@@ -23,6 +23,12 @@ exe = 'C:\MS-DIAL\MSDIALCUI.exe'
 # msp_negative = 'D:\library\neg.msp'
 
 [mslipidmapper]
+# 研究室サーバの MSLipidMapper REST API。書けば pathway_project / pathway_plot はまずここを使い、
+# 未到達・404・ジョブ失敗などで使えなければ下の rscript（ローカルの R）へ回す。
+# 書かない（または空文字）ならローカルの R だけを使う。中間 mzTab-M はサーバへ送られる。
+# api_url = 'http://10.0.0.1:8000'
+# サーバが認証を求めるときだけ（環境変数 MSLIPIDMAPPER_API_TOKEN でもよい）。
+# api_token = '...'
 # pathway_project / pathway_plot が呼ぶ Rscript（R 4.6 系）。パッケージは R 本体ではなく
 # リポジトリの renv 環境 r/ に入る。初回だけ: Rscript r/setup.R
 # rscript = 'C:\Program Files\R\R-4.6.0\bin\Rscript.exe'

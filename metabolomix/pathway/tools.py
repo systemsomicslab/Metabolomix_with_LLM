@@ -36,6 +36,20 @@ _FIGURE_NOTE = ("図のノード内の p 値ラベルは MSLipidMapper（Shiny �
                 "pathway_project の q 値とは別物。")
 
 
+def _backend_text(result: dict) -> str:
+    """どちらの MSLipidMapper で動いたか（サーバからローカルへ回ったならその理由も）の一文。"""
+    backend = result.get("backend") or {}
+    if backend.get("kind") == "remote":
+        text = f"研究室サーバ {backend.get('api_url')}（job {backend.get('job_id')}）"
+    else:
+        text = "ローカルの R"
+    fallback = result.get("remote_fallback")
+    if fallback:
+        text += (f"（サーバ {fallback.get('api_url')} が使えずローカルへ回した: "
+                 f"{fallback.get('code')} {fallback.get('message')}）")
+    return text
+
+
 def _arf2_catalog():
     """兄弟 .arf2 のスポット一覧。無ければ (None, missing_state 封筒)。"""
     from metabolomix.arf.tools import _require_arf_with_arf2
@@ -141,9 +155,10 @@ def _build_dataset(group_a, group_b, label_a, label_b):
 
 
 # 呼ぶたびに新しい run（reports/pathway/<run_id>/）を作る → 冪等ではない。
-# measure モードの Rscript はネットワークに出ない。
+# [mslipidmapper] api_url があれば研究室サーバへ中間 mzTab-M を送る（ローカルの R はネットワークに出ない）。
 @mcp.tool(annotations=ToolAnnotations(
-    readOnlyHint=False, destructiveHint=False, idempotentHint=False), structured_output=False)
+    readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
+    structured_output=False)
 def pathway_project(source: str = "auto", group_a: str | list[str] | None = None,
                     group_b: str | list[str] | None = None,
                     group_a_label: str = "group_a", group_b_label: str = "group_b",
@@ -164,6 +179,8 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     - aggregation: sum | mean | median（サブクラス内の分子種の集計）。
     検定は log2(x+1) の Welch、BH はパスウェイ×スコープ種別ごと。log2fc は正なら group_b が高い。
     脂質アッセイ（record_objective の assay_kind=lipid）でだけ使える。
+    MSLipidMapper は [mslipidmapper] api_url の研究室サーバを先に使い、使えなければローカルの R
+    （[mslipidmapper] rscript）で動かす。どちらで動いたかは戻り値の backend。
     """
     s = session_state.session
     if s.assay_kind != "lipid":
@@ -264,6 +281,8 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
                 "pathways": pathways, "acyl_chains": list(acyl_chains or []),
                 "aggregation": aggregation, "q_threshold": q_threshold,
                 "normalization": normalization, "dataset_id": dataset_id,
+                "backend": result.get("backend"),
+                "remote_fallback": result.get("remote_fallback"),
                 "upstream_commit": result.get("package_sha"),
                 "package_version": result.get("package_version"),
                 "report": table.report,
@@ -279,6 +298,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
         "run_id": run_id, "source": src, "run_dir": str(run_dir),
         "groups": groups, "group_a": label_a, "group_b": label_b,
         "normalization": normalization,
+        "backend": _backend_text(result),
         "handoff": table.report,
         "pathways": per_pathway,
         "notes": {"adjacency": _ADJACENCY_NOTE,
@@ -288,7 +308,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
 
 
 # run ディレクトリの <pathway>.pdf を同じパスへ上書きする（同じ引数なら同じ結果 → 冪等）。
-# 描画は unpkg.com から JS を取るのでネットワークに出る。
+# 描画は研究室サーバか、ローカルなら unpkg.com から JS を取るのでネットワークに出る。
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True),
     structured_output=False)
@@ -300,7 +320,9 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
     - pathways: その run に含まれるものから選ぶ（既定は全部）。1 枚約 2,400 画像トークン。
     - plot_type: dot | box | violin（ノード内のグラフ）。横軸の群は group_a, group_b, その他の群の順
       （上流は config の plot.x_order を軸順と配色の両方に使う）。
-    PDF 描画にはヘッドレス Chromium（[mslipidmapper] browser）と unpkg.com への接続が要る。
+    [mslipidmapper] api_url の研究室サーバを先に使い（サーバは 3 パスウェイ全部を描く）、
+    使えなければローカルの R で描く。ローカルではヘッドレス Chromium（[mslipidmapper] browser）と
+    unpkg.com への接続が要る。
     """
     manifest = _load_manifest(run_id)
     if isinstance(manifest, str):
@@ -329,7 +351,8 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
         return mcp_errors.pathway_error(exc.code, exc.message, exc.details)
 
     outputs = result.get("outputs") or {}
-    images, lines = [], [f"run {manifest['run_id']}（{manifest['group_a']} 対 {manifest['group_b']}）"]
+    images, lines = [], [f"run {manifest['run_id']}（{manifest['group_a']} 対 {manifest['group_b']}）",
+                         f"描画: {_backend_text(result)}"]
     for p in chosen:
         if not outputs.get(p):
             return mcp_errors.pathway_error(

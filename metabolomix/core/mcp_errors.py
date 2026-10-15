@@ -140,10 +140,13 @@ def mztab_error(code: str, message: str, details: dict | None = None) -> str:
 
 
 PATHWAY_ERROR_CODES = frozenset({
-    # [mslipidmapper] rscript が未設定、または指す先が無い。
+    # [mslipidmapper] rscript が未設定、または指す先が無い（api_url も無いか使えないとき）。
     "MSLM_NOT_CONFIGURED",
     # MSLipidMapper（R パッケージ）か、その公開関数が無い。自動インストールはしない。
     "MSLM_R_PACKAGES_MISSING",
+    # [mslipidmapper] api_url のサーバに届かない・生存確認が通らない・API が 404/5xx を返した
+    # （ローカルの R も使えなかったときだけ表に出る。使えればそちらへ回る）。
+    "MSLM_REMOTE_UNAVAILABLE",
     # Rscript が非ゼロ終了した（stderr 末尾を details に、全文は run の bridge.log）。
     "MSLM_RUN_FAILED",
     # Rscript が制限時間内に終わらなかった（プロセスツリーごと終了済み）。

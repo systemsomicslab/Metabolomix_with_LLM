@@ -35,7 +35,15 @@ SETTINGS: dict[str, str] = {
     "library.msp_negative": "MSDIAL_MSP_NEG",
     "mslipidmapper.rscript": "MSLIPIDMAPPER_RSCRIPT",
     "mslipidmapper.browser": "MSLIPIDMAPPER_BROWSER",
+    "mslipidmapper.api_url": "MSLIPIDMAPPER_API_URL",
+    "mslipidmapper.api_token": "MSLIPIDMAPPER_API_TOKEN",
 }
+
+#: パスではない設定（URL・トークン）。設定ファイルの値を設定ファイル基準のパスに解かない。
+NON_PATH_SETTINGS: frozenset[str] = frozenset({
+    "mslipidmapper.api_url",
+    "mslipidmapper.api_token",
+})
 
 #: 極性 → 研究室参照ライブラリ（.msp）の設定キー。正準はここ
 #: （`core/path_resolvers.LIBRARY_SETTING_KEYS` と `console/method_file.resolve_msp` が参照する。
@@ -58,7 +66,8 @@ class Setting:
 
     key: str
     #: 環境変数の値は前後の空白を除いてそのまま（既存の利用者とテストが相対名や
-    #: `/` 区切りを置いているので形を変えない）。設定ファイルの値は絶対パス。
+    #: `/` 区切りを置いているので形を変えない）。設定ファイルの値は絶対パス
+    #: （NON_PATH_SETTINGS のキーだけは前後の空白を除いてそのまま）。
     value: str
     source: str  # "env" | "config_file"
     env_var: str
@@ -155,7 +164,7 @@ def _parse(path: Path) -> _Parsed | None:
                     config_file=str(path))
             value = value.strip()
             if value:
-                values[key] = _resolve(value, path.parent)
+                values[key] = value if key in NON_PATH_SETTINGS else _resolve(value, path.parent)
 
     parsed = _Parsed(values=values, unknown_keys=tuple(sorted(unknown)))
     _cache.clear()

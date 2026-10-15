@@ -238,11 +238,21 @@ stdio サーバでは 2026-09 時点で未検証(ブラウザで `html_path` を
 
 ## 16. パスウェイ投影(MSLipidMapper)
 
-前処理済みの脂質データを MSLipidMapper(ローカルの Rscript)で remodeling / ceramide / global の
-パスウェイへ投影する。`lipidmix.local.toml` の `[mslipidmapper] rscript`(と描画用の `browser`)が要る。
+前処理済みの脂質データを MSLipidMapper で remodeling / ceramide / global の
+パスウェイへ投影する。MSLipidMapper は研究室サーバの REST API(`[mslipidmapper] api_url`)を先に使い、
+未設定・未到達・404・ジョブ失敗などで使えなければローカルの Rscript(`[mslipidmapper] rscript`)へ回す。
+どちらで動いたかは戻り値の `backend`(サーバから回ったときはその理由も)と manifest に残る。
 脂質アッセイ(`record_objective(assay_kind="lipid")`)でだけ使える。
 
-**初回のセットアップ**(このツール群を使うときだけ要る):
+**研究室サーバを使う**(R のセットアップは要らない): `lipidmix.local.toml` の `[mslipidmapper]` に
+`api_url`(例 `'http://<サーバ>:8000'`)を書く。環境変数 `MSLIPIDMAPPER_API_URL` でもよい。
+サーバが認証を求めるときだけ `api_token`(環境変数 `MSLIPIDMAPPER_API_TOKEN`)。中間 mzTab-M
+(試料名・群名・脂質名・強度)はサーバへ送られる。サーバ側のジョブ ID と送った config は
+run ディレクトリの `remote-job.json`。サーバは版を返さないので manifest の `upstream_commit` /
+`package_version` は空になる。どちらも使えないときは `MSLM_REMOTE_UNAVAILABLE`
+(`details.local` にローカルが使えない理由)。
+
+**ローカルの R を使う**ときの初回のセットアップ(サーバだけで足りるなら要らない):
 
 1. R の 4.6 系を入れる。
 2. リポジトリ直下で `Rscript r/setup.R` を 1 度だけ実行する。MSLipidMapper と依存パッケージを
@@ -254,13 +264,13 @@ stdio サーバでは 2026-09 時点で未検証(ブラウザで `html_path` を
    あれば自動で見つけるので、別の場所に入れたときだけ書く。
    環境変数 `MSLIPIDMAPPER_RSCRIPT` / `MSLIPIDMAPPER_BROWSER` でもよい。設定は呼ぶたびに読むので
    サーバの再起動は要らない。
-4. `pathway_plot` は Edge か Chrome と、unpkg.com への HTTPS 接続が要る(図の部品をそこから取る)。
-   `pathway_project` はネットワークに出ない。
+4. ローカルの `pathway_plot` は Edge か Chrome と、unpkg.com への HTTPS 接続が要る(図の部品をそこから取る)。
+   ローカルの `pathway_project` はネットワークに出ない。
 
 | ツール | 機能 |
 |--------|------|
 | `pathway_project` | `arf_preprocess` / `dataset_preprocess` 後の行列から最小 mzTab-M を書き、MSLipidMapper でサブクラス(と任意のアシル鎖サブセット)をノードへ集計する。2 群を log2 空間の Welch＋BH(パスウェイ×スコープ種別ごと)で比べ、ノード表と「逆向きに動く隣接ペア」を TSV で返す。JSON-LD・mzTab・manifest は解析フォルダの `reports/pathway/<run_id>/`。 |
-| `pathway_plot` | `pathway_project` の run を MSLipidMapper で PDF に描き、1 ページ目を PNG(長辺 1600px)でチャットに表示する。ヘッドレス Chromium と unpkg.com への接続が要る。図中の p 値は MSLipidMapper のもの。 |
+| `pathway_plot` | `pathway_project` の run を MSLipidMapper で PDF に描き、1 ページ目を PNG(長辺 1600px)でチャットに表示する。ローカルではヘッドレス Chromium と unpkg.com への接続が要る(サーバでは不要)。図中の p 値は MSLipidMapper のもの。 |
 
 ## 17. サーバ自身の更新
 
