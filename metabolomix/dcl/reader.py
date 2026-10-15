@@ -32,6 +32,65 @@ from metabolomix.core.data_config import get_data_dir
 DCL_MAGIC = b"DC"
 
 
+_HEADER_SIZE = 11
+_ENTRY_FIXED_SIZE = 60 + 40 + 20 + 12  # Scan + Quant + Scoring + Counts
+_PEAK_SIZE = 20
+
+
+def _read_header(raw: bytes, file_path) -> tuple[int, int]:
+    """(version, 結果数) を返す。seekpointer 配列はヘッダ直後に続く。"""
+    if raw[:2] != DCL_MAGIC:
+        raise ValueError(f"{file_path} は .dcl 形式ではありません（先頭が 'DC' でない）。")
+    version = struct.unpack_from("<i", raw, 2)[0]
+    count = struct.unpack_from("<i", raw, 7)[0]
+    return version, count
+
+
+def _parse_entry(raw: bytes, idx: int, o: int, include_spectrum: bool,
+                 top_n_peaks: int | None) -> dict:
+    """`raw` の位置 `o` から MSDecResult 1 件を読む。"""
+    # --- Scan block (60B) ---
+    scan_id = struct.unpack_from("<i", raw, o + 8)[0]
+    raw_spec_id = struct.unpack_from("<i", raw, o + 12)[0]
+    precursor_mz = struct.unpack_from("<d", raw, o + 16)[0]
+    ion_mode = struct.unpack_from("<i", raw, o + 24)[0]
+    rt = struct.unpack_from("<d", raw, o + 28)[0]
+    o += 60
+    # --- Quant block (40B) ---
+    model_mz, model_h, model_a, int_h, int_a = struct.unpack_from("<5d", raw, o)
+    o += 40
+    # --- Scoring block (20B) ---
+    amp, purity, quality, sn, est_noise = struct.unpack_from("<5f", raw, o)
+    o += 20
+    # --- Counts block (12B) ---
+    spectra_n, datapoint_n, model_n = struct.unpack_from("<3i", raw, o)
+    o += 12
+    # --- Spectrum peaks (spectra_n × 20B) ---
+    spectrum = []
+    if include_spectrum and spectra_n > 0:
+        for _ in range(spectra_n):
+            mass, inten = struct.unpack_from("<2d", raw, o)
+            o += _PEAK_SIZE  # double mass + double intensity + int32 peakquality
+            spectrum.append([mass, inten])
+        if top_n_peaks is not None and len(spectrum) > top_n_peaks:
+            spectrum = sorted(spectrum, key=lambda p: p[1], reverse=True)[:top_n_peaks]
+            spectrum.sort(key=lambda p: p[0])  # m/z昇順に戻す
+
+    return {
+        "dcl_index": idx,          # .dcl 内の順序（= MSDecResultID, .pai2ピークと対応）
+        "scan_id": scan_id,
+        "raw_spec_id": raw_spec_id,
+        "precursor_mz": precursor_mz,
+        "ion_mode": ion_mode,
+        "rt": rt,
+        "model_peak_height": model_h,
+        "signal_to_noise": sn,
+        "estimated_noise": est_noise,
+        "n_msms_peaks": spectra_n,
+        "msms_spectrum": spectrum,
+    }
+
+
 def deserialize_dcl(file_path: str, include_spectrum: bool = True,
                     top_n_peaks: int | None = None) -> list[dict]:
     """.dcl を解析して MSDecResult のリストを返す。
@@ -43,59 +102,31 @@ def deserialize_dcl(file_path: str, include_spectrum: bool = True,
     with open(file_path, "rb") as f:
         raw = f.read()
 
-    if raw[:2] != DCL_MAGIC:
-        raise ValueError(f"{file_path} は .dcl 形式ではありません（先頭が 'DC' でない）。")
+    _version, count = _read_header(raw, file_path)
+    seekpoints = struct.unpack_from(f"<{count}q", raw, _HEADER_SIZE)
+    return [
+        _parse_entry(raw, idx, sp, include_spectrum, top_n_peaks)
+        for idx, sp in enumerate(seekpoints)
+    ]
 
-    version = struct.unpack_from("<i", raw, 2)[0]
-    has_annotation = bool(raw[6])
-    count = struct.unpack_from("<i", raw, 7)[0]
-    seekpoints = struct.unpack_from(f"<{count}q", raw, 11)
 
-    results = []
-    for idx, sp in enumerate(seekpoints):
-        o = sp
-        # --- Scan block (60B) ---
-        scan_id = struct.unpack_from("<i", raw, o + 8)[0]
-        raw_spec_id = struct.unpack_from("<i", raw, o + 12)[0]
-        precursor_mz = struct.unpack_from("<d", raw, o + 16)[0]
-        ion_mode = struct.unpack_from("<i", raw, o + 24)[0]
-        rt = struct.unpack_from("<d", raw, o + 28)[0]
-        o += 60
-        # --- Quant block (40B) ---
-        model_mz, model_h, model_a, int_h, int_a = struct.unpack_from("<5d", raw, o)
-        o += 40
-        # --- Scoring block (20B) ---
-        amp, purity, quality, sn, est_noise = struct.unpack_from("<5f", raw, o)
-        o += 20
-        # --- Counts block (12B) ---
-        spectra_n, datapoint_n, model_n = struct.unpack_from("<3i", raw, o)
-        o += 12
-        # --- Spectrum peaks (spectra_n × 20B) ---
-        spectrum = []
-        if include_spectrum and spectra_n > 0:
-            for _ in range(spectra_n):
-                mass, inten = struct.unpack_from("<2d", raw, o)
-                o += 20  # double mass + double intensity + int32 peakquality
-                spectrum.append([mass, inten])
-            if top_n_peaks is not None and len(spectrum) > top_n_peaks:
-                spectrum = sorted(spectrum, key=lambda p: p[1], reverse=True)[:top_n_peaks]
-                spectrum.sort(key=lambda p: p[0])  # m/z昇順に戻す
+def read_dcl_entry(file_path: str, index: int) -> dict:
+    """`index` 番目の MSDecResult だけを seekpointer で直接読む（全ピーク）。
 
-        results.append({
-            "dcl_index": idx,          # .dcl 内の順序（= MSDecResultID, .pai2ピークと対応）
-            "scan_id": scan_id,
-            "raw_spec_id": raw_spec_id,
-            "precursor_mz": precursor_mz,
-            "ion_mode": ion_mode,
-            "rt": rt,
-            "model_peak_height": model_h,
-            "signal_to_noise": sn,
-            "estimated_noise": est_noise,
-            "n_msms_peaks": spectra_n,
-            "msms_spectrum": spectrum,
-        })
-
-    return results
+    アラインメント `.dcl` では `index = MasterAlignmentID`。範囲外は IndexError。
+    """
+    with open(file_path, "rb") as f:
+        header = f.read(_HEADER_SIZE)
+        _version, count = _read_header(header, file_path)
+        if not 0 <= index < count:
+            raise IndexError(f"dcl index {index} is out of range for {count} results")
+        f.seek(_HEADER_SIZE + 8 * index)
+        pointer = struct.unpack("<q", f.read(8))[0]
+        f.seek(pointer)
+        fixed = f.read(_ENTRY_FIXED_SIZE)
+        spectra_n = struct.unpack_from("<i", fixed, _ENTRY_FIXED_SIZE - 12)[0]
+        peaks = f.read(max(spectra_n, 0) * _PEAK_SIZE)
+    return _parse_entry(fixed + peaks, index, 0, True, None)
 
 
 def summarize_dcl(results: list[dict]) -> dict:

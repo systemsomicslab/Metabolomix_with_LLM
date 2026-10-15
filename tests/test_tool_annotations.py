@@ -104,9 +104,7 @@ EXPECTED_ANNOTATIONS = {
     "eic_parser": READ_ONLY,
     "eic_plot_chromatograms": READ_ONLY,
     "eic_plot_compounds": READ_ONLY,
-    "eic_rank_by_max_intensity": READ_ONLY,
-    "eic_search_by_mz_range": READ_ONLY,
-    "eic_search_by_rt_range": READ_ONLY,
+    "eic_search": READ_ONLY,
     # --- 読み取り系 ---
     "knowledge_coverage": READ_ONLY,
     "read_report": READ_ONLY,

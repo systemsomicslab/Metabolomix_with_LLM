@@ -85,28 +85,40 @@ MCP クライアントのタイムアウトに当たるときに使う。
 無ければ `status="not_found"` を返し、候補が 0 件なら `status="no_candidates"` を
 返す——どちらも例外にはしない。
 
-1. metabolomix/library/tools.py  library_match_feature()
-2. └─ metabolomix/library/defaults.py  pick_tol()
-3. └─ metabolomix/library/tools.py  _measured_spectrum()
-4. │  └─ metabolomix/core/path_resolvers.py  resolve_dcl_file_path()
-5. │  └─ metabolomix/dcl/reader.py  deserialize_dcl()
-6. │  └─ metabolomix/dcl/reader.py  get_msms_by_precursor()
-7. └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
-8. └─ metabolomix/library/store.py  LibraryStore.candidates()
-9. └─ metabolomix/analysis/spectral_match.py  match_spectrum()
-10. │  └─ metabolomix/analysis/spectral_match.py  normalize_measured()
-11. │  │  └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
-12. │  └─ metabolomix/analysis/spectral_match.py  simple_dot_product()
-13. │  └─ metabolomix/analysis/spectral_match.py  weighted_dot_product()
-14. │  └─ metabolomix/analysis/spectral_match.py  reverse_dot_product()
-15. │  └─ metabolomix/analysis/spectral_match.py  matched_peaks_scores()
-16. │  └─ metabolomix/analysis/spectral_match.py  spectral_entropy_similarity()
-17. └─ metabolomix/analysis/spectral_match.py  total_score()
-18. │  └─ metabolomix/analysis/spectral_match.py  gaussian_similarity()
-19. │  └─ metabolomix/analysis/spectral_match.py  fix_mass_tolerance()
-20. └─ metabolomix/arf2/reader.py  format_spots_as_table()
+照合対象は `precursor_mz` か `spot_id` のどちらか一方（両方・どちらも無しは
+`status="invalid_arguments"`）。`spot_id` のときは手順 2 で precursor m/z・RT・極性を
+同じバッチの `.arf2` から取り、測定スペクトルをアラインメント `.dcl` の `dcl[spot_id]` から
+直接読む（手順 8 の precursor 検索は通らない。同じ m/z の別スポットを拾わないため）。
+precursor・RT が ARF2 と ±0.05 Da・±0.2 分で合わなければ `dcl_precursor_mismatch`、ID が無ければ
+`spot_not_found` を返して照合しない。
 
-手順 7 の `cutoff_mask()` は候補ループの外で 1 回だけ呼ぶ（測定スペクトルと
+1. metabolomix/library/tools.py  library_match_feature()
+2. └─ metabolomix/library/tools.py  _spot_query()
+3. │  └─ metabolomix/core/path_resolvers.py  resolve_arf2_file_path()
+4. │  └─ metabolomix/msdial/alignment_spot.py  spot_record()
+5. │  └─ metabolomix/msdial/alignment_spot.py  alignment_msms()
+6. │     └─ metabolomix/dcl/reader.py  read_dcl_entry()
+7. └─ metabolomix/library/defaults.py  pick_tol()
+8. └─ metabolomix/library/tools.py  _measured_spectrum()
+9. │  └─ metabolomix/core/path_resolvers.py  resolve_dcl_file_path()
+10. │  └─ metabolomix/dcl/reader.py  deserialize_dcl()
+11. │  └─ metabolomix/dcl/reader.py  get_msms_by_precursor()
+12. └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
+13. └─ metabolomix/library/store.py  LibraryStore.candidates()
+14. └─ metabolomix/analysis/spectral_match.py  match_spectrum()
+15. │  └─ metabolomix/analysis/spectral_match.py  normalize_measured()
+16. │  │  └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
+17. │  └─ metabolomix/analysis/spectral_match.py  simple_dot_product()
+18. │  └─ metabolomix/analysis/spectral_match.py  weighted_dot_product()
+19. │  └─ metabolomix/analysis/spectral_match.py  reverse_dot_product()
+20. │  └─ metabolomix/analysis/spectral_match.py  matched_peaks_scores()
+21. │  └─ metabolomix/analysis/spectral_match.py  spectral_entropy_similarity()
+22. └─ metabolomix/analysis/spectral_match.py  total_score()
+23. │  └─ metabolomix/analysis/spectral_match.py  gaussian_similarity()
+24. │  └─ metabolomix/analysis/spectral_match.py  fix_mass_tolerance()
+25. └─ metabolomix/arf2/reader.py  format_spots_as_table()
+
+手順 12 の `cutoff_mask()` は候補ループの外で 1 回だけ呼ぶ（測定スペクトルと
 `.dbs` の足切りだけで決まり、候補には依存しないため）。ここで求めた
 「採点に入らなかったピークの m/z」を `last_match["unscored_mz"]` に持ち、
 `library_plot_mirror` が図の上でそれらを区別する。

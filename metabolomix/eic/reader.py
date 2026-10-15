@@ -320,6 +320,45 @@ def summarize_eic_data(results):
     }
 
 
+def search_eic_spots(results, *, spot_ids=None, min_mz=None, max_mz=None,
+                     min_rt=None, max_rt=None):
+    """spot ID・m/z・RT の AND 検索。`(一致スポット, 範囲外の spot_ids)` を返す。
+
+    一致スポットは ``top_eic_spots_by_max_intensity`` と同じ形（``max_intensity`` は
+    サンプル間で最大のクロマトグラム最大強度）で、spot_id 昇順。境界値は含む。
+    m/z を欠く（-1）スポットは、m/z 条件があるときは一致させない。
+    """
+    by_id = {spot["spot_id"]: spot for spot in results}
+    if spot_ids is None:
+        pool, unknown = results, []
+    else:
+        wanted = sorted(set(spot_ids))
+        pool = [by_id[i] for i in wanted if i in by_id]
+        unknown = [i for i in wanted if i not in by_id]
+
+    has_mz_bound = min_mz is not None or max_mz is not None
+    matches = []
+    for spot in pool:
+        mz, rt = spot.get("mz", -1.0), spot["rt"]
+        if has_mz_bound and mz < 0:
+            continue
+        if min_mz is not None and mz < min_mz or max_mz is not None and mz > max_mz:
+            continue
+        if min_rt is not None and rt < min_rt or max_rt is not None and rt > max_rt:
+            continue
+        matches.append({
+            "spot_id": spot["spot_id"],
+            "rt": rt,
+            "mz": mz,
+            "num_samples": spot["num_samples"],
+            "max_intensity": max(
+                (sample.get("max_intensity", 0.0) for sample in spot["samples"]), default=0.0
+            ),
+        })
+    matches.sort(key=lambda item: item["spot_id"])
+    return matches, unknown
+
+
 def search_eic_by_mz_range(results, min_mz, max_mz):
     return [spot for spot in results if min_mz <= spot.get("mz", 0.0) <= max_mz]
 

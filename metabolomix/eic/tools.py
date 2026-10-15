@@ -1,8 +1,9 @@
-"""EIC/AEF ツール群: eic_parser, eic_plot_chromatograms, eic_plot_compounds,
-eic_rank_by_max_intensity, m/z 範囲検索, RT 範囲検索。
+"""EIC/AEF ツール群: eic_parser, eic_search（spot ID・m/z・RT の AND 検索と強度順）,
+eic_plot_chromatograms, eic_plot_compounds。
 
 deps: mcp_core / session_state / path_resolvers / metabolomix.eic.reader /
-metabolomix.eic.identity_map / metabolomix.plots.eic。tools_* / server は import しない。
+metabolomix.eic.identity_map / metabolomix.eic.mz_backfill / metabolomix.msdial.alignment_spot /
+metabolomix.arf2.reader（TSV 整形）/ metabolomix.plots.eic。tools_* / server は import しない。
 """
 from pathlib import Path
 
@@ -14,10 +15,8 @@ from metabolomix.core.path_resolvers import resolve_arf2_file_path, resolve_eica
 from metabolomix.eic.reader import (
     read_eic_spot_css1,
     read_eic_spots_css1,
+    search_eic_spots,
     summarize_eic_data,
-    top_eic_spots_by_max_intensity,
-    search_eic_by_mz_range,
-    search_eic_by_rt_range,
 )
 from metabolomix.eic.identity_map import load_arf2_records, select_identity_candidates
 from metabolomix.eic.mz_backfill import (
@@ -26,6 +25,12 @@ from metabolomix.eic.mz_backfill import (
     has_missing_mz,
     sibling_arf2_path,
 )
+from metabolomix.msdial.alignment_spot import (
+    alignment_sibling,
+    msms_peak_counts,
+    precursor_agrees,
+)
+from metabolomix.arf2.reader import format_spots_as_table
 from metabolomix.plots import render as plot_render
 from metabolomix.plots.eic import (
     EICMultiPlotPayload,
@@ -38,23 +43,6 @@ from mcp.server.fastmcp import Image
 # 1枚に重ねて読める本数の上限。旧既定 24 は payload を実測 119,768 字まで膨らませ、
 # 図としても凡例で埋まって判読できなかった。
 DEFAULT_COMPOUND_TOP_N = 8
-
-# EIC 検索の既定 m/z 上限。リピドミクスでは TG / DGDG / AHexCer / CL など中性・複合脂質
-# が m/z 1000 を超える。旧既定 1000 は実データ（liver POS）で同定済み 1,994 スポットを
-# 含む 13% を黙って範囲外にしていた。実測の最大 m/z は約 1,250。
-DEFAULT_MAX_MZ = 1500.0
-
-
-def _spot_line(spot: dict, with_intensity: bool = False) -> str:
-    """検索結果 1 行。float をそのまま埋めると 17 桁出る（rt=12.376221656799316）ため、
-    RT は 3 桁（0.001 分 = 60 ms）、m/z は慣例どおり 4 桁、強度は整数に丸める。"""
-    line = (
-        f"spot_id={spot['spot_id']} rt={spot['rt']:.3f} mz={spot['mz']:.4f}"
-    )
-    if with_intensity:
-        line += f" max_intensity={spot['max_intensity']:.0f}"
-    return line + f" num_samples={spot['num_samples']}"
-
 
 def _backfill_mz(
     spots: list[dict], eic_path: str, records: list[dict] | None = None,
@@ -93,9 +81,7 @@ __all__ = [
     "eic_parser",
     "eic_plot_chromatograms",
     "eic_plot_compounds",
-    "eic_rank_by_max_intensity",
-    "eic_search_by_mz_range",
-    "eic_search_by_rt_range",
+    "eic_search",
 ]
 
 
@@ -120,7 +106,7 @@ def eic_parser(file_path: str | None = None) -> str:
             "== 基本要約 ==",
             json_payload(summary),
             "== コメント ==",
-            "この結果をもとに、m/z範囲検索やRT範囲検索、強度上位抽出（eic_rank_by_max_intensity）を実行できます。",
+            "この結果をもとに、eic_search で spot ID・m/z 範囲・RT 範囲の検索や強度上位抽出（sort=\"max_intensity\"）を実行できます。",
         ]
         return session_state.session.maybe_prepend_caveat(
             _with_notes(output_text, notes), topic="eic",
@@ -279,13 +265,112 @@ def _multi_plot_caption(payload: EICMultiPlotPayload) -> str:
     return caption
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def eic_rank_by_max_intensity(file_path: str | None = None, top_n: int = 20) -> str:
-    """EICスポットを強度（各サンプルのクロマトグラム最大強度の最大値）で降順に返します。
+_SORT_KEYS = ("spot_id", "max_intensity")
+_SEARCH_COLUMNS = [
+    "spot_id", "rt", "mz", "max_intensity", "num_samples",
+    "name", "ontology", "adduct", "n_msms",
+]
 
-    強度上位のスポットを抽出します。旧 eicaef_top_peak_tops は peak_top（ピーク頂点の
-    横軸=RT座標。強度ではない）で並べていたため強度上位にならず、本ツールで置き換えました。
+
+def _bound(low, high, unit: str) -> str:
+    low_text = "-∞" if low is None else f"{low}"
+    high_text = "∞" if high is None else f"{high}"
+    return f"{unit} {low_text}–{high_text}"
+
+
+def _search_condition(spot_ids, min_mz, max_mz, min_rt, max_rt, sort) -> str:
+    parts = []
+    if spot_ids is not None:
+        parts.append(f"spot_ids={sorted(set(spot_ids))}")
+    if min_mz is not None or max_mz is not None:
+        parts.append(_bound(min_mz, max_mz, "m/z"))
+    if min_rt is not None or max_rt is not None:
+        parts.append(_bound(min_rt, max_rt, "RT") + " min")
+    return (" かつ ".join(parts) or "条件なし（全件）") + f" / 並び: {sort}"
+
+
+def _annotate_rows(spots: list[dict], eic_path: str) -> tuple[list[dict], list[str]]:
+    """同じバッチの ARF2（同定名）とアラインメント .dcl（MS/MS ピーク数）を行へ付ける。"""
+    notes: list[str] = []
+    arf2 = sibling_arf2_path(eic_path)
+    records = {}
+    if arf2 is None:
+        notes.append("同じバッチの .arf2 が無いため name / ontology / adduct は空。")
+    else:
+        for record in load_arf2_records(arf2):
+            spot_id = record.get("AlignmentID")
+            if isinstance(spot_id, int) and not isinstance(spot_id, bool):
+                records.setdefault(spot_id, record)
+
+    dcl = alignment_sibling(eic_path, ".dcl")
+    counts = msms_peak_counts(dcl) if dcl is not None else None
+    if counts is None:
+        notes.append("同じバッチのアライメント .dcl が無いため n_msms は不明（-）。")
+
+    rows, has_dash = [], False
+    for spot in spots:
+        record = records.get(spot["spot_id"], {})
+        mz = spot["mz"] if spot["mz"] >= 0 else record.get("MassCenter")
+        n_msms = "-"
+        if counts is not None and spot["spot_id"] < len(counts):
+            entry = counts[spot["spot_id"]]
+            if entry["n_peaks"] > 0 and precursor_agrees(
+                entry["precursor_mz"], mz, entry["rt"], spot["rt"],
+            ):
+                n_msms = entry["n_peaks"]
+        has_dash = has_dash or n_msms == "-"
+        rows.append({
+            "spot_id": spot["spot_id"],
+            "rt": round(float(spot["rt"]), 3),
+            "mz": round(float(spot["mz"]), 4),
+            "max_intensity": int(round(float(spot["max_intensity"]))),
+            "num_samples": spot["num_samples"],
+            "name": str(record.get("Name") or ""),
+            "ontology": str(record.get("Ontology") or ""),
+            "adduct": str(record.get("AdductType") or ""),
+            "n_msms": n_msms,
+        })
+    if has_dash and counts is not None:
+        notes.append(
+            "n_msms の「-」は MS/MS 未取得か precursor 不一致（索引対応の崩れ）で、"
+            "0 本という意味ではない。"
+        )
+    return rows, notes
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+def eic_search(
+    spot_ids: list[int] | None = None,
+    min_mz: float | None = None,
+    max_mz: float | None = None,
+    min_rt: float | None = None,
+    max_rt: float | None = None,
+    sort: str = "spot_id",
+    max_results: int = 20,
+    file_path: str | None = None,
+) -> str:
+    """EIC スポットを spot ID・m/z 範囲・RT 範囲で検索し、TSV で返す。
+
+    指定した条件はすべて AND で掛かる（何も指定しなければ全件）。境界値は含む。
+    ``spot_ids`` は MasterAlignmentID（ARF / ARF2 / ``.dcl`` と共通）の完全一致で、
+    範囲外の ID は注記に列挙する。``sort="max_intensity"`` は各試料のクロマトグラム
+    最大強度の、そのまた最大値で降順に並べる（強度上位ランキング）。既定は spot_id 昇順。
+
+    各行は ``spot_id rt mz max_intensity num_samples name ontology adduct n_msms``。
+    ``name`` / ``ontology`` / ``adduct`` は同じバッチの ``.arf2``、``n_msms`` は
+    アラインメント ``.dcl`` の代表試料 MS/MS のピーク数。``-`` は未取得または
+    precursor 不一致で、0 本ではない。未注釈で ``n_msms`` がある行は
+    ``library_match_feature(spot_id=...)`` → ``library_plot_mirror`` で照合・確認できる。
     """
+    if sort not in _SORT_KEYS:
+        return f"sort は {' / '.join(_SORT_KEYS)} のいずれかを指定してください（指定: {sort!r}）。"
+    if min_mz is not None and max_mz is not None and min_mz > max_mz:
+        return f"min_mz（{min_mz}）が max_mz（{max_mz}）より大きいため一致しません。"
+    if min_rt is not None and max_rt is not None and min_rt > max_rt:
+        return f"min_rt（{min_rt}）が max_rt（{max_rt}）より大きいため一致しません。"
+    if isinstance(max_results, bool) or not isinstance(max_results, int) or max_results < 1:
+        return "max_results は 1 以上の整数を指定してください。"
+
     file_path = resolve_eicaef_file_path(file_path)
     if not file_path:
         return "データディレクトリに .aef ファイルが見つかりませんでした。"
@@ -295,75 +380,30 @@ def eic_rank_by_max_intensity(file_path: str | None = None, top_n: int = 20) -> 
         if not isinstance(parsed, list):
             return "EIC解析結果がリストではありません。"
 
-        top_spots = top_eic_spots_by_max_intensity(parsed, top_n=top_n)
+        matches, unknown = search_eic_spots(
+            parsed, spot_ids=spot_ids, min_mz=min_mz, max_mz=max_mz,
+            min_rt=min_rt, max_rt=max_rt,
+        )
+        if unknown:
+            notes.append(
+                f"spot_ids のうち {unknown} はこの EIC に無い（範囲外。"
+                f"スポットは 0〜{len(parsed) - 1}）。"
+            )
+        if sort == "max_intensity":
+            matches.sort(key=lambda item: item["max_intensity"], reverse=True)
+        shown = matches[:max_results]
+
         output_text = [
-            f"EIC強度上位スポット: {Path(file_path).name}",
-            f"上位{top_n}件（max_intensity 降順）:",
-        ]
-        for spot in top_spots:
-            output_text.append(_spot_line(spot, with_intensity=True))
-        return _with_notes(output_text, notes)
-    except Exception as e:
-        return f"EIC強度上位抽出中にエラーが発生しました: {str(e)}"
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def eic_search_by_mz_range(file_path: str | None = None, min_mz: float = 0.0,
-                           max_mz: float = DEFAULT_MAX_MZ, max_results: int = 20) -> str:
-    """EICデータのm/z範囲でスポットを検索します。
-
-    既定の上限は 1500。リピドミクスでは TG / DGDG / CL など m/z 1000 超の脂質が
-    普通にあるため（実データで全スポットの 5〜13%、その大半が同定済み）、既定で
-    そこを切り落とさない。
-    """
-    file_path = resolve_eicaef_file_path(file_path)
-    if not file_path:
-        return "データディレクトリに .aef ファイルが見つかりませんでした。"
-
-    try:
-        parsed, notes = _load_session_spots(file_path)
-        if not isinstance(parsed, list):
-            return "EIC解析結果がリストではありません。"
-
-        matches = search_eic_by_mz_range(parsed, min_mz, max_mz)
-        output_text = [
-            f"EIC m/z範囲検索: {min_mz} - {max_mz}",
+            f"EIC 検索: {Path(file_path).name} — "
+            f"{_search_condition(spot_ids, min_mz, max_mz, min_rt, max_rt, sort)}",
             f"一致件数: {len(matches)}",
-            "上位結果:",
         ]
-        for spot in matches[:max_results]:
-            output_text.append(_spot_line(spot))
+        if shown:
+            rows, row_notes = _annotate_rows(shown, file_path)
+            output_text.append(format_spots_as_table(rows, columns=_SEARCH_COLUMNS))
+            notes.extend(row_notes)
         if len(matches) > max_results:
-            output_text.append(f"(表示上限: {max_results} 件)")
+            output_text.append(f"(表示上限: {max_results} 件。条件か sort で絞り込める)")
         return _with_notes(output_text, notes)
     except Exception as e:
-        return f"EIC m/z検索中にエラーが発生しました: {str(e)}"
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def eic_search_by_rt_range(file_path: str | None = None, min_rt: float = 0.0, max_rt: float = 20.0, max_results: int = 20) -> str:
-    """
-    EICデータのRT範囲でスポットを検索します。
-    """
-    file_path = resolve_eicaef_file_path(file_path)
-    if not file_path:
-        return "データディレクトリに .aef ファイルが見つかりませんでした。"
-
-    try:
-        parsed, notes = _load_session_spots(file_path)
-        if not isinstance(parsed, list):
-            return "EIC解析結果がリストではありません。"
-
-        matches = search_eic_by_rt_range(parsed, min_rt, max_rt)
-        output_text = [
-            f"EIC RT範囲検索: {min_rt} - {max_rt}",
-            f"一致件数: {len(matches)}",
-            "上位結果:",
-        ]
-        for spot in matches[:max_results]:
-            output_text.append(_spot_line(spot))
-        if len(matches) > max_results:
-            output_text.append(f"(表示上限: {max_results} 件)")
-        return _with_notes(output_text, notes)
-    except Exception as e:
-        return f"EIC RT検索中にエラーが発生しました: {str(e)}"
+        return f"EIC検索中にエラーが発生しました: {str(e)}"

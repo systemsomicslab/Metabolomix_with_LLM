@@ -9,7 +9,8 @@ alignment (#262)"）まで、EIC に書くスポット中心 m/z を `ChromXsTop
 借りるのは同じ AlignmentID の ARF2 レコードで、RT が `RT_TOLERANCE` 内で一致する
 ときだけ（バッチ取り違えの安全弁）。補えなかったスポットは -1 のまま残す。
 
-deps: identity_map（RT 許容差）のみ。ARF2 の読み込みは呼び出し側が行う。
+deps: identity_map（RT 許容差）と msdial.alignment_spot（兄弟ファイルの解決）。
+ARF2 の読み込みは呼び出し側が行う。
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from metabolomix.eic.identity_map import RT_TOLERANCE
+from metabolomix.msdial.alignment_spot import alignment_sibling
 
 EIC_SUFFIX = ".EIC.aef"
 
@@ -32,12 +34,9 @@ def has_missing_mz(spots: list[dict]) -> bool:
 
 def sibling_arf2_path(eic_path: str | Path) -> Path | None:
     """`<stem>.EIC.aef` と同じバッチの `<stem>.arf2`。無ければ None。"""
-    path = Path(eic_path)
-    name = path.name
-    if not name.lower().endswith(EIC_SUFFIX.lower()):
+    if not Path(eic_path).name.lower().endswith(EIC_SUFFIX.lower()):
         return None
-    candidate = path.with_name(name[: -len(EIC_SUFFIX)] + ".arf2")
-    return candidate if candidate.is_file() else None
+    return alignment_sibling(eic_path, ".arf2")
 
 
 def backfill_missing_mz(

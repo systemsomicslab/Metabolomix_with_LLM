@@ -128,14 +128,14 @@ class MissingMzToolTests(unittest.TestCase):
         self.assertTrue(any("ARF2" in note for note in payload["caveats"]))
 
     def test_mz_search_finds_backfilled_spots_and_says_so(self):
-        from metabolomix.eic.tools import eic_search_by_mz_range
+        from metabolomix.eic.tools import eic_search
 
-        text = eic_search_by_mz_range(file_path=str(self.path), min_mz=700, max_mz=800)
+        text = eic_search(file_path=str(self.path), min_mz=700, max_mz=800)
         self.assertIn("一致件数: 1", text)
-        self.assertIn("mz=760.5851", text)
+        self.assertIn("\t760.5851\t", text)
         self.assertIn("ARF2", text)
         # 2 回目（キャッシュ済み）も注記を落とさない
-        again = eic_search_by_mz_range(file_path=str(self.path), min_mz=700, max_mz=800)
+        again = eic_search(file_path=str(self.path), min_mz=700, max_mz=800)
         self.assertIn("ARF2", again)
 
     def test_parser_summary_reports_real_mz_range(self):
@@ -155,10 +155,10 @@ class MissingMzToolTests(unittest.TestCase):
         self.assertTrue(any("ARF2" in note for note in payload["caveats"]))
 
     def test_without_sibling_arf2_the_gap_is_reported_not_silent(self):
-        from metabolomix.eic.tools import eic_search_by_mz_range
+        from metabolomix.eic.tools import eic_search
 
         self.arf2.unlink()
-        text = eic_search_by_mz_range(file_path=str(self.path), min_mz=700, max_mz=800)
+        text = eic_search(file_path=str(self.path), min_mz=700, max_mz=800)
         self.assertIn("一致件数: 0", text)
         self.assertIn("m/z", text)
         self.assertIn("2 件", text)

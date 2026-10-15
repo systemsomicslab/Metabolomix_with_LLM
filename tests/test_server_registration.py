@@ -29,6 +29,8 @@ import server
 # 分子種 PCA: arf_pca_species を追加(72→73)。
 # PCA のローディング図: plot_pca_loadings を追加(73→74)。
 # パスウェイ投影: pathway_project / pathway_plot を追加(74→76)。
+# EIC 検索の統合: eic_search_by_mz_range / eic_search_by_rt_range /
+# eic_rank_by_max_intensity を spot ID 検索も持つ eic_search に統合(76→74)。
 EXPECTED_TOOLS = sorted([
     "pathway_project",
     "pathway_plot",
@@ -59,9 +61,7 @@ EXPECTED_TOOLS = sorted([
     "eic_parser",
     "eic_plot_chromatograms",
     "eic_plot_compounds",
-    "eic_rank_by_max_intensity",
-    "eic_search_by_mz_range",
-    "eic_search_by_rt_range",
+    "eic_search",
     "ingest_promote",
     "ingest_reject",
     "ingest_review_queue",

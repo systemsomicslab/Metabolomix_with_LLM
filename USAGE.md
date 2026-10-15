@@ -1,4 +1,4 @@
-# USAGE — ms-data-parser MCP ツール一覧(全76ツール)
+# USAGE — ms-data-parser MCP ツール一覧(全74ツール)
 
 MS-DIAL 出力(`.arf` / `.arf2` / `.pai2` / `.dcl` / `.EIC.aef`)と mzTab-M を解析し、PCA・差次的解析・
 アノテーション検証・文献探索・レポート記録までを行う MCP サーバーのツール群です。
@@ -58,15 +58,13 @@ pipeline_run → pipeline_status(確認) → pipeline_resume(訂正・再開が�
 | ツール | 機能 |
 |--------|------|
 | `eic_parser` | `.EIC.aef` を解析しテキスト要約を返す。 |
-| `eic_search_by_mz_range` | m/z 範囲でスポットを検索。既定上限は **1500**(TG/DGDG/CL など m/z 1000 超の脂質を既定で切り落とさないため)。 |
-| `eic_search_by_rt_range` | RT 範囲でスポットを検索。 |
-| `eic_rank_by_max_intensity` | 各試料のクロマトグラム最大強度の最大値で降順に並べた強度上位ランキングを返す。 |
+| `eic_search` | スポットを `spot_ids`(MasterAlignmentID の完全一致)・m/z 範囲(`min_mz`/`max_mz`)・RT 範囲(`min_rt`/`max_rt`)で検索する。条件は **AND**、何も指定しなければ全件。`sort="max_intensity"` で各試料のクロマトグラム最大強度の最大値の降順(強度上位ランキング。既定は `spot_id` 昇順)。TSV の各行に、同じバッチの `.arf2` の同定(`name`/`ontology`/`adduct`)と、アラインメント `.dcl` の代表 MS/MS のピーク数 `n_msms` を付ける(`-` は未取得か precursor 不一致で、0 本ではない)。範囲外の ID は注記に出る。旧 `eic_search_by_mz_range` / `eic_search_by_rt_range` / `eic_rank_by_max_intensity` を統合した。 |
 | `eic_plot_chromatograms` | 指定 `spot_id` のEIC系列を読み、クライアント中立の構造化プロット情報(`lipidmix.eic.v1`)を返す。`file_ids` で最大12試料を選択でき、画像生成・ファイル保存は行わない。 |
 | `eic_plot_compounds` | 脂質名/オントロジーで選んだ複数物質のEICを、指定 `file_id` の**1試料分だけ**同一グラフへ重ねる。**既定はPNG画像＋1行キャプション**(`output="image"`)。点列(`lipidmix.eic.multi.v1`)が要るクライアントは `output="payload"` または env `LIPIDMIX_PLOT_OUTPUT=payload`。重ねる本数の既定は **8本**。ARF2の同定をrt/mzで検証し、除外した物質は `selection.dropped` に理由付きで残す。ファイル保存はしない。 |
 
 ### EICの描画フロー
 
-1. `eic_search_by_mz_range` または `eic_search_by_rt_range` で描画対象の `spot_id` を確認する。
+1. `eic_search`(m/z・RT・spot ID のいずれか、または組み合わせ)で描画対象の `spot_id` を確認する。
 2. `eic_plot_chromatograms(spot_id, file_ids=...)` を呼び、`series[].x` / `series[].y`、軸、試料、ピーク範囲を含む構造化プロット情報を取得する(座標は4桁に丸め済み)。
 3. 描画方法はクライアントに任せる。Use-LLLMではPlotlyのインタラクティブな線グラフとして表示し、Claude Desktop等は各UIの描画方式を使用する。
 4. 通常の対話描画ではPNGを生成しない。ユーザーがPNGの生成・保存を明示的に希望した場合だけ `save_figure(kind="eic")` を実行する。
@@ -210,7 +208,7 @@ QC/blank の扱いはツールごとに異なる。`arf_parser` の `class_ids` 
 | ツール | 機能 |
 |--------|------|
 | `library_load` | 参照ライブラリを解決し、照合用の SQLite store を構築(または既存キャッシュを再利用)して `session.library` へ持つ。要約(`record_count`/`ion_modes`/`compound_classes` 上位10/`search_params`/`records_without_ion_mode`/`non_utf8_lines`)を返す。`.msp` 由来で `search_params` が無いときは既定の許容幅を使う旨を明示する。`ion_mode`(`"positive"`/`"negative"`)を渡すと、その極性の設定(環境変数 `MSDIAL_MSP_POS`/`MSDIAL_MSP_NEG`、無ければ `lipidmix.local.toml` の `[library] msp_positive`/`msp_negative`)が指す研究室ライブラリを読む。解決順は `file_path` → `ion_mode` の設定 → `*_Loaded.msp2.dbs` → 設定済みの極性 → `*.msp` で、候補が 1 つに決まらなければ `code="MSP_AMBIGUOUS"` のエラーを返す(更新日時で黙って選ばない)。一度に持つライブラリは 1 つ。大きな `.msp` の初回構築は `python -m metabolomix.library.store --ion-mode <極性>` で事前に済ませられる([docs/cli.md](docs/cli.md))。 |
-| `library_match_feature` | 測定 MS/MS(`.dcl`、間引かずに全ピーク使用)を候補と照合し、上位をスコア付きの TSV で返す。**並び順は `total_score`**(MS-DIAL の `GetTotalScore` の移植。RT・precursor m/z の一致度を足した**正規化しない和**で 1 を超える)。RT 項を足したかは `scoring.use_rt` に出る(`.dbs` の `IsUseTimeForAnnotationScoring` 次第。`.msp` では常に false)。上流の順位付けタプル全体は再現していないので**上位に化学的にありえない候補が残ることがある** — 1 位の妥当性は対向プロットで確かめること。`.dcl` に MS/MS が無いときは `not_found`(「未取得」であって「合わなかった」ではない)。スペクトル座標は戻り値に含めず `session.library.last_match` へ持つ。 |
+| `library_match_feature` | 測定 MS/MS(`.dcl`、間引かずに全ピーク使用)を候補と照合し、上位をスコア付きの TSV で返す。**並び順は `total_score`**(MS-DIAL の `GetTotalScore` の移植。RT・precursor m/z の一致度を足した**正規化しない和**で 1 を超える)。RT 項を足したかは `scoring.use_rt` に出る(`.dbs` の `IsUseTimeForAnnotationScoring` 次第。`.msp` では常に false)。上流の順位付けタプル全体は再現していないので**上位に化学的にありえない候補が残ることがある** — 1 位の妥当性は対向プロットで確かめること。`.dcl` に MS/MS が無いときは `not_found`(「未取得」であって「合わなかった」ではない)。スペクトル座標は戻り値に含めず `session.library.last_match` へ持つ。照合対象は `precursor_mz` か `spot_id` の**どちらか一方**。`spot_id`(MasterAlignmentID。`eic_search` で引ける)を渡すと、precursor m/z・RT・極性を同じバッチの `.arf2`(`arf2_path`)から取り、測定スペクトルはアラインメント `.dcl` のそのスポットの代表 MS/MS を使う(m/z で探さないので同じ m/z の別スポットを拾わない)。precursor・RT が ARF2 と ±0.05 Da・±0.2 分で合わなければ照合せず `dcl_precursor_mismatch`、ID が無ければ `spot_not_found`。未注釈スポットの確認は `eic_search` → `library_match_feature(spot_id=…)` → `library_plot_mirror`。 |
 | `library_plot_mirror` | 直近の照合結果から対向プロット(上段=測定・下段=参照)を描く。既定は PNG 画像、`output="payload"` で座標 JSON。`scale` で縦軸の写し方を選ぶ(`"relative"` 既定 / `"sqrt"` / `"log10"`)——**precursor がベースピークのスペクトルは `relative` だと診断イオンが潰れて読めない**ので `"sqrt"` を使う。`label_policy` で m/z ラベルの衝突回避を選ぶ(`"auto"` 既定 = 水平・垂直の 2 次元判定 / `"msdial"` = 上流に忠実な水平のみの判定。忠実版のほうがラベルは少ない)。`.dbs` の強度足切りで**採点に入らなかった測定ピーク**は灰色で薄く描き分け、凡例と caption に件数が出る(足切りが 0 の run では現れない)。 |
 
 ## 15. アラインメントのキュレーション(注釈の一覧確認と機械判別)

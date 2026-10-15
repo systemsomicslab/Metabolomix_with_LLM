@@ -722,25 +722,24 @@ class TestNeverExecutedToolsSmoke(unittest.TestCase):
         self.assertIn("EIC解析完了", result)
         self.assertIn("total_spots", result)
 
-    def test_eic_rank_by_max_intensity_puts_the_strong_spot_first(self):
-        from metabolomix.eic.tools import eic_rank_by_max_intensity
+    def test_eic_search_by_intensity_puts_the_strong_spot_first(self):
+        from metabolomix.eic.tools import eic_search
 
-        result = eic_rank_by_max_intensity(file_path=self.eic_file(), top_n=2)
-        self.assertIn("EIC強度上位スポット", result)
-        lines = [line for line in result.splitlines() if "spot" in line.lower()]
-        self.assertTrue(lines, f"スポット行が出ていない: {result}")
-        self.assertIn("760", lines[0])
+        result = eic_search(file_path=self.eic_file(), sort="max_intensity", max_results=2)
+        lines = result.splitlines()
+        header = next(i for i, line in enumerate(lines) if line.startswith("spot_id\t"))
+        self.assertIn("760", lines[header + 1])
 
-    def test_eic_search_by_mz_range_filters(self):
-        from metabolomix.eic.tools import eic_search_by_mz_range
+    def test_eic_search_filters_by_mz_range(self):
+        from metabolomix.eic.tools import eic_search
 
-        result = eic_search_by_mz_range(file_path=self.eic_file(), min_mz=700.0, max_mz=800.0)
+        result = eic_search(file_path=self.eic_file(), min_mz=700.0, max_mz=800.0)
         self.assertIn("一致件数: 1", result)
 
-    def test_eic_search_by_rt_range_filters(self):
-        from metabolomix.eic.tools import eic_search_by_rt_range
+    def test_eic_search_filters_by_rt_range(self):
+        from metabolomix.eic.tools import eic_search
 
-        result = eic_search_by_rt_range(file_path=self.eic_file(), min_rt=0.0, max_rt=5.0)
+        result = eic_search(file_path=self.eic_file(), min_rt=0.0, max_rt=5.0)
         self.assertIn("一致件数: 1", result)
 
     def test_arf2_annotate_identities_returns_a_table(self):

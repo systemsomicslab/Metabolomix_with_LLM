@@ -13,16 +13,15 @@ MS-DIAL 2023-11-20 より前の版が書いた `.EIC.aef` は、全スポット�
 
 ```mermaid
 flowchart TD
-    SM[eic_search_by_mz_range] --> SPOT[spot_id を特定]
-    SR[eic_search_by_rt_range] --> SPOT
-    RK[eic_rank_by_max_intensity] --> SPOT
+    ES[eic_search<br/>spot ID・m/z・RT の AND / 強度順] --> SPOT[spot_id を特定]
     SPOT --> PC[eic_plot_chromatograms<br/>lipidmix.eic.v1]
     SPOT --> PM[eic_plot_compounds<br/>lipidmix.eic.multi.v1]
+    SPOT --> LM[library_match_feature spot_id=…<br/>→ library_plot_mirror（library.md）]
     PC --> SAVE[save_figure kind=eic → plots.md]
     PM --> SAVE
 ```
 
-`eic_parser` と検索系 3 ツールは `EicState.load_data()` を通るため、どれから呼んでも
+`eic_parser` と `eic_search` は `EicState.load_data()` を通るため、どれから呼んでも
 未ロードなら読み込まれる（`MissingState` にはならない）。描画系 2 ツールは
 `session.eic` を経由せず、必要なスポットだけをファイルから直接読む。
 
@@ -40,46 +39,32 @@ flowchart TD
 7. └─ metabolomix/eic/reader.py  summarize_eic_data()
 8. └─ metabolomix/core/session_state.py  AnalysisSession.maybe_prepend_caveat()
 
-## eic_search_by_mz_range
+## eic_search
 
 前提: なし
 状態変更: `session.eic` に EIC スポットを格納（未ロードなら読み込む）。
 
-1. metabolomix/eic/tools.py  eic_search_by_mz_range()
+`spot_ids`・m/z 範囲・RT 範囲を AND で掛ける（何も指定しなければ全件）。
+`sort="max_intensity"` は各試料のクロマトグラム最大強度の、そのまた最大値で降順
+（RT 座標順ではない）。表示する行にだけ、同じバッチの `.arf2` の同定（手順 11）と
+アラインメント `.dcl` の MS/MS ピーク数（手順 13–14）を付ける。旧
+`eic_search_by_mz_range` / `eic_search_by_rt_range` / `eic_rank_by_max_intensity` を統合した。
+
+1. metabolomix/eic/tools.py  eic_search()
 2. └─ metabolomix/core/path_resolvers.py  resolve_eicaef_file_path()
 3. └─ metabolomix/eic/tools.py  _load_session_spots()
 4. │  ├─ metabolomix/core/session_state.py  EicState.load_data()
 5. │  └─ metabolomix/eic/tools.py  _backfill_mz()
 6. │     └─ metabolomix/eic/mz_backfill.py  backfill_missing_mz()
-7. └─ metabolomix/eic/reader.py  search_eic_by_mz_range()
-
-## eic_search_by_rt_range
-
-前提: なし
-状態変更: `session.eic` に EIC スポットを格納（未ロードなら読み込む）。
-
-1. metabolomix/eic/tools.py  eic_search_by_rt_range()
-2. └─ metabolomix/core/path_resolvers.py  resolve_eicaef_file_path()
-3. └─ metabolomix/eic/tools.py  _load_session_spots()
-4. │  ├─ metabolomix/core/session_state.py  EicState.load_data()
-5. │  └─ metabolomix/eic/tools.py  _backfill_mz()
-6. │     └─ metabolomix/eic/mz_backfill.py  backfill_missing_mz()
-7. └─ metabolomix/eic/reader.py  search_eic_by_rt_range()
-
-## eic_rank_by_max_intensity
-
-前提: なし
-状態変更: `session.eic` に EIC スポットを格納（未ロードなら読み込む）。
-
-各試料のクロマトグラム最大強度の、そのまた最大値で降順に並べる。RT 座標順ではない。
-
-1. metabolomix/eic/tools.py  eic_rank_by_max_intensity()
-2. └─ metabolomix/core/path_resolvers.py  resolve_eicaef_file_path()
-3. └─ metabolomix/eic/tools.py  _load_session_spots()
-4. │  ├─ metabolomix/core/session_state.py  EicState.load_data()
-5. │  └─ metabolomix/eic/tools.py  _backfill_mz()
-6. │     └─ metabolomix/eic/mz_backfill.py  backfill_missing_mz()
-7. └─ metabolomix/eic/reader.py  top_eic_spots_by_max_intensity()
+7. └─ metabolomix/eic/reader.py  search_eic_spots()
+8. └─ metabolomix/eic/tools.py  _annotate_rows()
+9. │  ├─ metabolomix/eic/mz_backfill.py  sibling_arf2_path()
+10. │  ├─ metabolomix/eic/identity_map.py  load_arf2_records()
+11. │  │  └─ metabolomix/arf2/reader.py  load_catalog()
+12. │  ├─ metabolomix/msdial/alignment_spot.py  alignment_sibling()
+13. │  ├─ metabolomix/msdial/alignment_spot.py  msms_peak_counts()
+14. │  └─ metabolomix/msdial/alignment_spot.py  precursor_agrees()
+15. └─ metabolomix/arf2/reader.py  format_spots_as_table()
 
 ## eic_plot_chromatograms
 
