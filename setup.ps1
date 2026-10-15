@@ -43,7 +43,8 @@ function Find-Python {
 $uv = if ($NoUv) { $null } else { Get-Command uv -ErrorAction SilentlyContinue }
 if ($uv) {
     Write-Host '[setup] uv で .venv を作ります（uv.lock どおり）。'
-    $group = if ($Dev) { @('--group', 'dev') } else { @('--no-dev') }
+    # 1 要素の配列は代入で文字列に展開され、5.1 では @group が 1 文字ずつ渡るので @() で包む
+    $group = @(if ($Dev) { '--group'; 'dev' } else { '--no-dev' })
     & uv sync --locked @group
     if ($LASTEXITCODE -ne 0) { Fail 'uv sync が失敗しました。上の出力を確認してください。' }
 } else {
