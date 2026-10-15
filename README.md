@@ -43,25 +43,25 @@ class assignments where present.
 
 ## Quick start
 
-Requires Python 3.13+ (developed on 3.14).
+From the repository root, run the setup script once. It uses [uv](https://docs.astral.sh/uv/)
+when available (uv also fetches Python if you don't have it) and otherwise falls back to a
+standard `venv` with Python 3.13+. Dependency versions are pinned by `uv.lock`.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup.ps1          # Windows
+```
 
 ```bash
-python -m pip install -r requirements.txt
+sh setup.sh          # macOS / Linux
 ```
 
-Register the server with your MCP client — for example, in `.mcp.json`:
+(Windows blocks running `.ps1` files directly under the default execution policy, hence
+`-ExecutionPolicy Bypass`.)
 
-```json
-{
-  "mcpServers": {
-    "ms-data-parser": {
-      "type": "stdio",
-      "command": "python",
-      "args": ["/absolute/path/to/Lipidmix_with_LLM/server.py"]
-    }
-  }
-}
-```
+It creates `.venv/`, checks that every dependency imports, copies `lipidmix.local.toml` from
+the example if missing, writes a `.mcp.json` for Claude Code, and prints the snippet to paste
+into Claude Desktop's `claude_desktop_config.json`. Existing `.mcp.json` and
+`lipidmix.local.toml` are never overwritten — differences are reported instead.
 
 Point it at your data and ask the client to start:
 
@@ -118,11 +118,11 @@ implementation lives under `metabolomix/`.
 | Working on this repository | [CLAUDE.md](CLAUDE.md) |
 
 Tests run from the repository root. They need `pytest`, which is not part of the
-runtime dependencies; install it through the development requirements first:
+runtime dependencies; set up with the development group first:
 
-```bash
-python -m pip install -r requirements-dev.txt
-python -m pytest tests -q
+```powershell
+powershell -ExecutionPolicy Bypass -File setup.ps1 -Dev
+.venv/Scripts/python.exe -m pytest tests -q
 ```
 
 ## Status and caveats

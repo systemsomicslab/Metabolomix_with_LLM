@@ -44,15 +44,15 @@ fake Console までしか検証されていない**——`docs/workflow/metabolo
 ## コマンド
 
 ```bash
-C:/Python314/python.exe -m pip install -r requirements-dev.txt   # 初回のみ。pytest はここにだけ入る
-C:/Python314/python.exe -m pytest tests -q
+./setup.ps1 -Dev                                   # 初回のみ（pwsh）。.venv を作り pytest も入れる
+.venv/Scripts/python.exe -m pytest tests -q
 ```
 
 - **リポジトリルートから `pytest` で実行する**。`-m unittest discover -s tests -t .` は
   これより少なく拾う（`test_dataset_state.py` `test_console_runner.py` `test_mztab_tools.py` 等、
   pytest 関数形式で書かれたファイルは `unittest.TestCase` を継承しないため拾えない）。
   **テストの数はここに書かない**。pytest の出力が正準（写しだけが腐るため）。
-- MCP サーバ起動: `C:/Python314/python.exe server.py`（既定 stdio）。
+- MCP サーバ起動: `.venv/Scripts/python.exe server.py`（既定 stdio）。
 - パーサ単体の CLI: `python -m metabolomix.arf.reader --file <path> --pca` など（README「Command-line examples」）。
 - パスウェイ投影（`pathway_*`）を使うときだけ、初回に `Rscript r/setup.R`（renv の仮想環境 `r/` を
   `r/renv.lock` から復元。R 本体のライブラリには入れない）。上流 MSLipidMapper の版を上げるときは
@@ -60,10 +60,16 @@ C:/Python314/python.exe -m pytest tests -q
   `renv.lock` をコミットする（`r/renv/settings.json` の `snapshot.type` は `all`。この仮想環境は
   専用なので、ライブラリにあるものをそのまま記録する）。
 
-**Python は `C:/Python314/python.exe` を使う**（PATH 上の `python` も同じ実体で、依存はここに入っている）。
-Claude Code 用の `.mcp.json` はこれを絶対パスで指すが、`.git/info/exclude` でローカル除外されており
-追跡されない。追跡されている `.vscode/mcp.json` は PATH 上の `python` を使う。`.venv/` は存在しない。
-`.venv-1/` は 2026-07 のローカル LLM 検証用に残っている別環境で、通常の開発・テストでは使わない。
+**Python は `.venv` の Python を使う**（`./setup.ps1 -Dev` が作る。実行ポリシーで止まるときは
+`powershell -ExecutionPolicy Bypass -File setup.ps1 -Dev`。uv があれば `uv.lock` どおり、無ければ標準 venv + `requirements-dev.lock.txt`。
+spec 2026-10-15）。依存を変えるときは `pyproject.toml` を直し `uv lock` → `pyproject.toml` 冒頭
+コメントにある `uv export` → コミット（`tests/test_dependency_lock.py` が書き出し忘れを捕まえる）。
+`PyMuPDF` に上限を付けてあるのは、1.28.2 が Windows / py3.14 で `import mupdf` に失敗するため。
+`[tool.uv] package = false` は外さない（editable install が worktree に main のコードを掴ませる）。
+worktree は自前の `.venv` を持たず main ツリーの `.venv` を共有する（pre-commit と
+`new-worktree.sh` がそれを選ぶ）。Claude Code 用の `.mcp.json` は追跡外（`.gitignore`）で、
+setup が無ければ作る。追跡されている `.vscode/mcp.json` も `.venv` を指す（VS Code から使うには
+先に setup を済ませておく）。
 
 環境変数（すべて任意・上書き用）: `LIPIDMIX_DATA_DIR`（データ探索先。既定 `<project>/data`）/
 `LIPIDMIX_KNOWLEDGE_DIR` `LIPIDMIX_PLAYBOOK_DIR` `LIPIDMIX_REPORTS_DIR`（蓄積先の上書き用。
@@ -265,7 +271,7 @@ git worktree remove .worktrees/<slug>  # 片付け
 - **追跡外のものは worktree に来ない**: `data/` `.mcp.json`
   `docs/HISTRY.md` `docs/task.md`。テストはこれらに依存しない規約なので、
   新品の worktree でもテストは全数緑になる（実測で確認済み）。
-- スクリプトが worktree 専用の `.mcp.json` を生成する。`server.py` は**その worktree の
+- スクリプトが worktree 専用の `.mcp.json` を生成する。`command` は main ツリーの `.venv` の Python。`server.py` は**その worktree の
   もの**を指す（main を指すと、worktree のコードを編集しながら main の実装を試すことに
   なり、最も気づきにくい形で嘘をつく）。蓄積状態（`LIPIDMIX_DATA_DIR`
   `LIPIDMIX_KNOWLEDGE_DIR`）は **main ツリー**を向けて分裂させない。`LIPIDMIX_REPORTS_DIR` は
@@ -282,6 +288,7 @@ git worktree remove .worktrees/<slug>  # 片付け
 ## 踏みやすい罠
 
 - `.gitignore` に `*.txt` があるため、**新規の .txt は無言で追跡漏れする**（`git add -f` が要る）。
+  例外は `requirements*.txt`（依存のロック）だけ。
 - `r/renv/library/` は追跡外なので worktree には来ない。worktree で `pathway_*` を実機で試すときは、
   その worktree でも `Rscript r/setup.R` を実行する（renv のグローバルキャッシュから入るので速い）。
 - `docs/HISTRY.md` `docs/task.md` `data/` `analysis/` `archives/` は追跡外。`knowledge/` は

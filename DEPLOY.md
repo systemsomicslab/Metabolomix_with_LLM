@@ -23,12 +23,14 @@ Each member runs the MCP server on their own machine:
 
 ## Member Setup
 
-Install dependencies locally (running the server needs only `requirements.txt`;
-`requirements-dev.txt` adds `pytest` for running the tests):
+Run the setup script once from the clone (see [README.md](README.md) "Quick start"):
 
 ```powershell
-python -m pip install -r requirements.txt
+powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
+
+(mac / Linux: `sh setup.sh`.) It builds `.venv/` (uv if installed, otherwise Python 3.13+
+`venv` + pip with `requirements.lock.txt`), writes `.mcp.json`, and prints the Claude Desktop snippet.
 
 Pathway projection (`pathway_project` / `pathway_plot`) additionally needs R and a
 one-time `Rscript r/setup.R`; see the setup steps in [USAGE.md](USAGE.md) section 16.
@@ -41,7 +43,7 @@ optional overrides:
 $env:LIPIDMIX_DATA_DIR="C:\path\to\msdial\output"
 # Optional: keep accumulated notes outside the clone.
 # $env:LIPIDMIX_KNOWLEDGE_DIR="C:\path\to\metabolomix\knowledge"
-python server.py
+.venv\Scripts\python.exe server.py
 ```
 
 Do not set `LIPIDMIX_TRANSPORT=streamable-http` for this mode. The default
@@ -53,7 +55,7 @@ transport is `stdio`.
 {
   "mcpServers": {
     "ms-data-parser": {
-      "command": "python",
+      "command": "C:\\Users\\<name>\\Lipidmix_with_LLM\\.venv\\Scripts\\python.exe",
       "args": ["C:\\Users\\<name>\\Lipidmix_with_LLM\\server.py"],
       "env": {
         "LIPIDMIX_DATA_DIR": "C:\\path\\to\\msdial\\output"
@@ -78,8 +80,8 @@ top of its output) and in the `dataset_status` / `console_status` payloads (as a
 
 To apply an update, ask Claude to run the `server_update` tool (say "update the
 server"). It fast-forwards the clone to `origin/main` and, only when
-`requirements.txt` changed in that range, reinstalls dependencies with the same
-Python that runs the server. When `r/renv.lock` changed, it tells you to re-run
+`uv.lock` or `requirements.lock.txt` changed in that range, reinstalls the locked dependencies into the same
+Python that runs the server (with pip, or with `uv pip` in a uv-made `.venv`, which has no pip). When `r/renv.lock` changed, it tells you to re-run
 `Rscript r/setup.R` (R is not run automatically — it takes minutes and goes to the
 network); until then `pathway_*` stops with `MSLM_R_PACKAGES_MISSING`.
 
@@ -105,19 +107,27 @@ the notice itself is the entry point.
 | `git_unavailable` | No `git`, or the server was unpacked rather than cloned. |
 
 `status="updated_with_warning"` means the code moved but `pip install` failed:
-run `pip install -r requirements.txt` by hand **before** restarting, or the
+re-run `powershell -ExecutionPolicy Bypass -File setup.ps1` (mac / Linux: `sh setup.sh`) **before** restarting, or the
 server may not start.
 
 The equivalent by hand stays available:
 
 ```powershell
 git pull
-python -m pip install -r requirements.txt
+powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
 
 The check stays silent whenever it cannot be sure: no network, no credentials,
 no `git` on PATH, or a checkout that is not on `main`. Silence means "no news",
 not "up to date".
+
+### Moving an existing clone to `.venv`
+
+Clones set up before `.venv` existed run the server with a global Python. To move:
+run `powershell -ExecutionPolicy Bypass -File setup.ps1` once, then change `command` in your MCP client configuration
+(Claude Desktop's `claude_desktop_config.json`, or `.mcp.json`) to the `.venv` Python
+the script prints. Keep any `env` entries you added. Until you switch, `server_update`
+keeps working against the global Python.
 
 ## Operational Notes
 
