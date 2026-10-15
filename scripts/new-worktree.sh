@@ -40,6 +40,12 @@ main_w=$(win "$main")
 wt_w=$(win "$path")
 # 外部資産の場所の設定（lipidmix.local.toml、追跡外）は worktree に来ない。
 # main ツリーにあれば LIPIDMIX_CONFIG でそれを指す（設定を分裂させない）。
+# MCP サーバは main ツリーの .venv で動かす（pyproject の package = false により
+# import は常にこの worktree の server.py の隣から解決されるので共有して安全）。
+python_w="C:/Python314/python.exe"
+for candidate in "$main/.venv/Scripts/python.exe" "$main/.venv/bin/python"; do
+    if [ -f "$candidate" ]; then python_w=$(win "$candidate"); break; fi
+done
 config_env=""
 if [ -f "$main/lipidmix.local.toml" ]; then
     config_env="\"LIPIDMIX_CONFIG\": \"$main_w/lipidmix.local.toml\","
@@ -53,7 +59,7 @@ cat > "$path/.mcp.json" <<JSON
   "mcpServers": {
     "ms-data-parser": {
       "type": "stdio",
-      "command": "C:/Python314/python.exe",
+      "command": "$python_w",
       "args": [
         "$wt_w/server.py"
       ],
