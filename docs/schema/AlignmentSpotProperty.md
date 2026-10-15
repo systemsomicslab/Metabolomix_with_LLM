@@ -127,3 +127,5 @@ Key 0, 1, 4（RT）, 5, 11, 12, 13（index0）, 14, 15, 16, 31, 32, 33, 34, 35, 
 
 `metabolomix/arf/reader.py` はスポット層から Key8 `AlignedPeakProperties` を取り出し、
 その各要素を `AlignmentChromPeakFeature` として読む。
+読み込み時（`deserialize()`）に各行を細くし、読む Key（`_RETAINED_ROW_KEYS` と Key15 の RT・
+Key37 の先頭 2 要素）以外は `None` に落とす。行から新しい Key を読むときは `_RETAINED_ROW_KEYS` に足す。
