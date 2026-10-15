@@ -54,3 +54,23 @@ def test_no_library_file_is_already_tracked():
     offenders = [p for p in tracked if p.lower().endswith(suffixes)
                  or p.endswith(store.DIGEST_INDEX_NAME) or "/.library-cache/" in f"/{p}"]
     assert offenders == []
+
+
+#: 追跡しなければならない（`*.txt` の無視に巻き込まれてはいけない）依存のロック。
+_MUST_BE_TRACKABLE = ["requirements.txt", "requirements-dev.txt",
+                      "requirements.lock.txt", "requirements-dev.lock.txt"]
+
+
+@pytest.mark.skipif(not _git_available(), reason="git の作業ツリーでない（配備先など）")
+@pytest.mark.parametrize("relpath", _MUST_BE_TRACKABLE)
+def test_dependency_locks_are_not_ignored(relpath):
+    result = subprocess.run(["git", "check-ignore", "--no-index", "-q", relpath], cwd=ROOT)
+    assert result.returncode == 1, f"{relpath} が .gitignore で無視されている"
+
+
+@pytest.mark.skipif(not _git_available(), reason="git の作業ツリーでない（配備先など）")
+@pytest.mark.parametrize("relpath", [".mcp.json", ".venv/pyvenv.cfg"])
+def test_setup_outputs_are_ignored(relpath):
+    """setup が作るものが追跡外で残ると、server_update が dirty_worktree で拒否し続ける。"""
+    result = subprocess.run(["git", "check-ignore", "--no-index", "-q", relpath], cwd=ROOT)
+    assert result.returncode == 0, f"{relpath} が .gitignore で無視されていない"
