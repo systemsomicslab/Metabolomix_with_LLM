@@ -87,7 +87,8 @@ def ensure_mcp_json(root: Path) -> tuple[str, str]:
         return "created", f"{target} を作りました。"
     try:
         current = json.loads(target.read_text(encoding="utf-8"))["mcpServers"][SERVER_NAME]
-    except (ValueError, KeyError, TypeError):
+        current.get("command")  # dict でない項（文字列など）はここで AttributeError にする
+    except (ValueError, KeyError, TypeError, AttributeError):
         return "differs", (f"{target} は既にありますが {SERVER_NAME} の項がありません（触っていません）。"
                            f"次の項を mcpServers に足してください:\n"
                            f"{json.dumps({SERVER_NAME: wanted}, indent=2)}")

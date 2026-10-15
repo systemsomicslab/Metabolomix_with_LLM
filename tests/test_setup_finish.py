@@ -96,6 +96,14 @@ def test_mcp_json_without_our_server_is_reported_not_rewritten(repo):
     assert (repo / ".mcp.json").read_bytes() == original
 
 
+def test_mcp_json_with_non_dict_server_entry_is_reported_not_rewritten(repo):
+    original = b'{"mcpServers": {"ms-data-parser": "oops"}}'
+    (repo / ".mcp.json").write_bytes(original)
+    state, _ = setup_finish.ensure_mcp_json(repo)
+    assert state == "differs"
+    assert (repo / ".mcp.json").read_bytes() == original
+
+
 def test_desktop_snippet_is_valid_json_with_absolute_paths(repo):
     snippet = json.loads(setup_finish.desktop_snippet(repo))
     entry = snippet["mcpServers"]["ms-data-parser"]

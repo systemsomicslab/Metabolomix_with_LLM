@@ -41,7 +41,7 @@ DEPENDENCY_FILES = ("requirements.txt", "requirements.lock.txt", "uv.lock")
 #: 入れ直しに使うロック（uv.lock の pip 向け書き出し。spec 2026-10-15）。
 LOCK_FILE = "requirements.lock.txt"
 #: 依存の入れ直しに失敗したときに案内する手順。
-SETUP_COMMAND = "./setup.ps1（mac / Linux は sh setup.sh）"
+SETUP_COMMAND = "powershell -ExecutionPolicy Bypass -File setup.ps1（mac / Linux は sh setup.sh）"
 #: R の仮想環境の lock（パスウェイ投影）。変わったら `r/setup.R` の再実行が要る。
 R_LOCK_FILE = "r/renv.lock"
 R_SETUP_COMMAND = "Rscript r/setup.R"
@@ -305,5 +305,5 @@ def apply_update() -> dict:
                     f"手元のリポジトリ直下で `{SETUP_COMMAND}` を実行してください。"
                     + (f" R の仮想環境（{R_LOCK_FILE}）も更新されたので、"
                        f"`{R_SETUP_COMMAND}` も実行してください。" if r_lock_changed else "")
-                    + f" pip の出力（末尾）: {log[-PIP_LOG_TAIL_CHARS:]}"),
+                    + f" インストーラの出力（末尾）: {log[-PIP_LOG_TAIL_CHARS:]}"),
     }

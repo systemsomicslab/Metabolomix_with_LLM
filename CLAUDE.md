@@ -66,8 +66,11 @@ spec 2026-10-15）。依存を変えるときは `pyproject.toml` を直し `uv 
 コメントにある `uv export` → コミット（`tests/test_dependency_lock.py` が書き出し忘れを捕まえる）。
 `PyMuPDF` に上限を付けてあるのは、1.28.2 が Windows / py3.14 で `import mupdf` に失敗するため。
 `[tool.uv] package = false` は外さない（editable install が worktree に main のコードを掴ませる）。
+**開発者は setup を `-Dev` 付きで再実行する**（付けずに再実行すると `uv sync --no-dev` が
+ぴったり同期するので pytest が `.venv` から消え、全ツリーで pre-commit が壊れる）。
 worktree は自前の `.venv` を持たず main ツリーの `.venv` を共有する（pre-commit と
-`new-worktree.sh` がそれを選ぶ）。Claude Code 用の `.mcp.json` は追跡外（`.gitignore`）で、
+`new-worktree.sh` がそれを選ぶ）。worktree でのテストは main ツリーの `.venv` で回す
+（`<main>/.venv/Scripts/python.exe -m pytest tests -q`）。Claude Code 用の `.mcp.json` は追跡外（`.gitignore`）で、
 setup が無ければ作る。追跡されている `.vscode/mcp.json` も `.venv` を指す（VS Code から使うには
 先に setup を済ませておく）。
 

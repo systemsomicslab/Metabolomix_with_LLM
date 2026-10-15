@@ -3,8 +3,8 @@
   ms-data-parser の Python 環境（.venv）と MCP 設定を 1 回で揃える。
 
 .DESCRIPTION
-  リポジトリ直下で実行する:  ./setup.ps1        （利用者）
-                             ./setup.ps1 -Dev   （開発者。pytest も入る）
+  リポジトリ直下で実行する:  powershell -ExecutionPolicy Bypass -File setup.ps1        （利用者）
+                             powershell -ExecutionPolicy Bypass -File setup.ps1 -Dev   （開発者。pytest も入る）
   uv があれば uv.lock どおりに入れる。無ければ Python 3.13 以上で標準の venv を作り、
   requirements.lock.txt（uv.lock の書き出し）を pip で入れる。最後に
   scripts/setup_finish.py が import の自己確認と .mcp.json / lipidmix.local.toml の生成を行う。
