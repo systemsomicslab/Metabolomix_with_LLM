@@ -1,13 +1,1 @@
-mcp<2
-msgpack
-lz4
-numpy
-matplotlib
-pandas
-scikit-learn
-scipy
-pygoslin
-httpx
-plotly
-rdkit
-PyMuPDF
+-r requirements.lock.txt

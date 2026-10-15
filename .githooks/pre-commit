@@ -18,8 +18,17 @@ set -e
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
-PY=C:/Python314/python.exe
-[ -f "$PY" ] || PY=python
+# 解釈系: 自ツリーの .venv → main ツリーの .venv（worktree は自前の .venv を持たない）
+# → 従来の C:/Python314 → PATH の python（spec 2026-10-15）。
+main=$(cd "$(dirname "$(git rev-parse --git-common-dir)")" && pwd)
+PY=""
+for candidate in "$root/.venv/Scripts/python.exe" "$root/.venv/bin/python" \
+                 "$main/.venv/Scripts/python.exe" "$main/.venv/bin/python" \
+                 C:/Python314/python.exe; do
+    if [ -f "$candidate" ]; then PY=$candidate; break; fi
+done
+[ -n "$PY" ] || PY=python
+echo "pre-commit: interpreter $PY"
 
 echo "pre-commit: pytest tests -q"
 if ! "$PY" -m pytest tests -q; then

@@ -17,6 +17,8 @@
 """
 from __future__ import annotations
 
+import importlib.util
+import shutil
 import subprocess
 import sys
 import threading
@@ -33,8 +35,13 @@ GIT_TIMEOUT_SEC = 10.0
 FETCH_TIMEOUT_SEC = 15.0
 #: pip install の上限。依存が増えた更新ではホイールの取得に分単位かかりうる。
 PIP_TIMEOUT_SEC = 600.0
-#: 依存表。pull でこれが変わったときだけ pip を回す。
-REQUIREMENTS_FILE = "requirements.txt"
+#: 依存の宣言とロック。pull でどれかが変わったときだけ入れ直す。正準は uv.lock で、
+#: requirements.txt はロックへのポインタ（旧版の server_update が読むので残っている）。
+DEPENDENCY_FILES = ("requirements.txt", "requirements.lock.txt", "uv.lock")
+#: 入れ直しに使うロック（uv.lock の pip 向け書き出し。spec 2026-10-15）。
+LOCK_FILE = "requirements.lock.txt"
+#: 依存の入れ直しに失敗したときに案内する手順。
+SETUP_COMMAND = "powershell -ExecutionPolicy Bypass -File setup.ps1（mac / Linux は sh setup.sh）"
 #: R の仮想環境の lock（パスウェイ投影）。変わったら `r/setup.R` の再実行が要る。
 R_LOCK_FILE = "r/renv.lock"
 R_SETUP_COMMAND = "Rscript r/setup.R"
@@ -162,19 +169,33 @@ def update_status() -> dict | None:
 # 新しく依存が古い状態で次回起動時に ImportError になる。
 
 
-def _pip_install() -> tuple[bool, str]:
-    """`requirements.txt` を現在の Python へ入れ直す。`(成功したか, 出力)`。
+def _install_command(lock: Path) -> list[str] | None:
+    """`lock` を走行中の Python へ入れるコマンド。入れる手段が無ければ None。
 
-    `sys.executable` を使うのは、PATH 上の `pip` が別の Python を指しうるため
-    （このプロジェクトは `C:/Python314/python.exe` 固定で、`.venv` を持たない）。
+    `sys.executable` を使うのは、PATH 上の `pip` が別の Python を指しうるため。
+    uv が作った `.venv` は pip を持たないので、そのときは `uv pip --python` で
+    同じ解釈系へ入れる。`uv sync` は使わない（dev group の pytest など、
+    ロックに無いものを消してしまうため）。
     """
-    requirements = _repo_root() / REQUIREMENTS_FILE
-    if not requirements.is_file():
+    if importlib.util.find_spec("pip") is not None:
+        return [sys.executable, "-m", "pip", "install", "-r", str(lock)]
+    uv = shutil.which("uv")
+    if uv:
+        return [uv, "pip", "install", "--python", sys.executable, "-r", str(lock)]
+    return None
+
+
+def _pip_install() -> tuple[bool, str]:
+    """ロックを現在の Python へ入れ直す。`(成功したか, 出力)`。"""
+    lock = _repo_root() / LOCK_FILE
+    if not lock.is_file():
         return True, ""
+    command = _install_command(lock)
+    if command is None:
+        return False, "pip も uv も見つからないため依存を入れられませんでした。"
     try:
         out = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-r", str(requirements)],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL, timeout=PIP_TIMEOUT_SEC,
             text=True, errors="replace")
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -239,7 +260,7 @@ def apply_update() -> dict:
 
     changed = _git("diff", "--name-only", f"HEAD..origin/{UPSTREAM_BRANCH}") or ""
     requirements_changed = any(
-        line.strip() == REQUIREMENTS_FILE for line in changed.splitlines())
+        line.strip() in DEPENDENCY_FILES for line in changed.splitlines())
     r_lock_changed = any(
         line.strip() == R_LOCK_FILE for line in changed.splitlines())
 
@@ -281,8 +302,8 @@ def apply_update() -> dict:
         "dependencies": "failed",
         "message": (f"コードは {behind} コミット分更新しましたが、依存の更新に失敗しました"
                     f"（{running} → {head}）。このまま再起動すると起動しない可能性があります。"
-                    f"手元で `pip install -r {REQUIREMENTS_FILE}` を実行してください。"
+                    f"手元のリポジトリ直下で `{SETUP_COMMAND}` を実行してください。"
                     + (f" R の仮想環境（{R_LOCK_FILE}）も更新されたので、"
                        f"`{R_SETUP_COMMAND}` も実行してください。" if r_lock_changed else "")
-                    + f" pip の出力（末尾）: {log[-PIP_LOG_TAIL_CHARS:]}"),
+                    + f" インストーラの出力（末尾）: {log[-PIP_LOG_TAIL_CHARS:]}"),
     }

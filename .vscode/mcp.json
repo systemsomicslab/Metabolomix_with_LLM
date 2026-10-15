@@ -2,7 +2,7 @@
 	"servers": {
 		"ms-data-parser": {
 			"type": "stdio",
-			"command": "python",
+			"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
 			"args": [
 				"-u",
 				"${workspaceFolder}\\server.py"

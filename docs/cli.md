@@ -5,7 +5,7 @@ MCP サーバを起動せずに、各 reader を直接叩いて `.arf` / `.arf2`
 
 ## 前提
 
-- Python は `C:/Python314/python.exe`（`.mcp.json` / `.vscode/mcp.json` が指しているのと同じ環境）。
+- Python は `.venv/Scripts/python.exe`（`.mcp.json` / `.vscode/mcp.json` が指しているのと同じ環境。setup が作る。mac / Linux は `.venv/bin/python`）。
 - 探索先はすべて `metabolomix.core.data_config.get_data_dir()` 経由。環境変数
   `LIPIDMIX_DATA_DIR` を設定するとその MS-DIAL 出力フォルダが対象になる（未設定時は `<project>/data`）。
 - 出力（CSV / JSON / PNG）は、パスを渡さない限りカレントディレクトリに書かれる。
@@ -39,19 +39,19 @@ MCP サーバを起動せずに、各 reader を直接叩いて `.arf` / `.arf2`
 ピークプロパティを CSV に書き出す:
 
 ```bash
-C:/Python314/python.exe -m metabolomix.arf.reader --file "data/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf" --export output_peaks.csv
+.venv/Scripts/python.exe -m metabolomix.arf.reader --file "data/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf" --export output_peaks.csv
 ```
 
 PCA を実行して結果と図を保存する:
 
 ```bash
-C:/Python314/python.exe -m metabolomix.arf.reader --file "data/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf" --pca --output-pca pca_result.json --output-plot pca_plot.png --output-sample-scores sample_scores.png
+.venv/Scripts/python.exe -m metabolomix.arf.reader --file "data/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf" --pca --output-pca pca_result.json --output-plot pca_plot.png --output-sample-scores sample_scores.png
 ```
 
 PCA Loading の上位特徴量を見る:
 
 ```bash
-C:/Python314/python.exe -m metabolomix.arf.reader --file "data/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf" --pca --top-features 10 --props height
+.venv/Scripts/python.exe -m metabolomix.arf.reader --file "data/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf" --pca --top-features 10 --props height
 ```
 
 ## `metabolomix.arf2.reader` / `metabolomix.dcl.reader` / `metabolomix.eic.reader`
@@ -60,7 +60,7 @@ C:/Python314/python.exe -m metabolomix.arf.reader --file "data/AlignmentResult_2
 簡易確認用。対象を切り替えるときは `LIPIDMIX_DATA_DIR` を変える。
 
 ```bash
-C:/Python314/python.exe -m metabolomix.arf2.reader
+.venv/Scripts/python.exe -m metabolomix.arf2.reader
 ```
 
 ## `metabolomix.library.store` — 参照ライブラリの store 事前構築
@@ -79,13 +79,13 @@ C:/Python314/python.exe -m metabolomix.arf2.reader
 解決できないときは `MSP_AMBIGUOUS` などのコードを標準エラーに出して終了コード 2。
 
 ```bash
-C:/Python314/python.exe -m metabolomix.library.store --ion-mode negative
+.venv/Scripts/python.exe -m metabolomix.library.store --ion-mode negative
 ```
 
 ## テスト
 
 ```bash
-C:/Python314/python.exe -m pytest tests -q
+.venv/Scripts/python.exe -m pytest tests -q
 ```
 
 リポジトリルートから `pytest` で実行する。`unittest discover` は pytest 関数形式で

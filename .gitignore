@@ -1,4 +1,7 @@
 .venv/
+# setup が生成する MCP クライアント設定（利用者ごとの絶対パスが入る）。
+# 追跡外のまま残ると server_update が dirty_worktree で拒否する。
+.mcp.json
 .venv-1/
 .env
 # 外部資産の場所の設定（研究室の参照ライブラリのパスが入る）。雛形は lipidmix.example.toml
@@ -37,7 +40,7 @@ knowledge/
 # 追跡済みの requirements.txt 等は影響を受けないが、新規の .txt は
 # 明示的に git add -f しない限り無視される点に注意。
 *.txt
-# 依存宣言は追跡する（requirements.txt は追跡済み、dev 側も同様に除外しない）。
+# 依存の宣言とロックは追跡する（*.txt の無視の例外）。
 !requirements*.txt
 *.csproj
 *.sln

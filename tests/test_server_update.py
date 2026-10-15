@@ -217,6 +217,60 @@ def test_reports_dependency_failure_without_claiming_success(monkeypatch):
     assert "No matching distribution" in result["message"]
 
 
+@pytest.mark.parametrize("changed", ["uv.lock", "requirements.lock.txt"])
+def test_installs_dependencies_when_lock_changed(monkeypatch, changed):
+    """依存の正準は uv.lock。requirements.txt はロックへのポインタにすぎない。"""
+    monkeypatch.setattr(version, "_git", FakeGit(_with(
+        **{"diff__--name-only": f"{changed}\nserver.py"})))
+    calls = []
+    monkeypatch.setattr(version, "_pip_install",
+                        lambda: (calls.append(True), (True, ""))[1])
+
+    result = version.apply_update()
+
+    assert result["dependencies"] == "installed"
+    assert len(calls) == 1
+
+
+def test_install_command_uses_pip_when_available(monkeypatch, tmp_path):
+    monkeypatch.setattr(version.importlib.util, "find_spec",
+                        lambda name: object() if name == "pip" else None)
+    lock = tmp_path / "requirements.lock.txt"
+    assert version._install_command(lock) == [
+        version.sys.executable, "-m", "pip", "install", "-r", str(lock)]
+
+
+def test_install_command_falls_back_to_uv_pip_in_a_uv_venv(monkeypatch, tmp_path):
+    """uv が作った venv は pip を持たない。"""
+    monkeypatch.setattr(version.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setattr(version.shutil, "which", lambda name: "C:/bin/uv.exe" if name == "uv" else None)
+    lock = tmp_path / "requirements.lock.txt"
+    assert version._install_command(lock) == [
+        "C:/bin/uv.exe", "pip", "install", "--python", version.sys.executable, "-r", str(lock)]
+
+
+def test_pip_install_reports_failure_when_no_installer(monkeypatch, tmp_path):
+    (tmp_path / "requirements.lock.txt").write_text("numpy==2.0.0\n", encoding="utf-8")
+    monkeypatch.setattr(version, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(version, "_install_command", lambda lock: None)
+
+    ok, log = version._pip_install()
+
+    assert ok is False
+    assert "uv" in log and "pip" in log
+
+
+def test_dependency_failure_points_to_setup_script(monkeypatch):
+    monkeypatch.setattr(version, "_git", FakeGit(_with(
+        **{"diff__--name-only": "uv.lock"})))
+    monkeypatch.setattr(version, "_pip_install", lambda: (False, "boom"))
+
+    result = version.apply_update()
+
+    assert result["status"] == "updated_with_warning"
+    assert "setup.ps1" in result["message"]
+
+
 # ---------- 通知との接続 ----------
 
 def test_notice_names_the_tool(monkeypatch):

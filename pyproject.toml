@@ -1,0 +1,33 @@
+# 依存の宣言。版の正準は uv.lock（pip 経路用には requirements*.lock.txt へ書き出す）。
+# 更新手順: 依存をここで直す → `uv lock` → 下の 2 行で書き出す → コミット。
+#   uv export --frozen --no-hashes --no-emit-project --no-dev -o requirements.lock.txt
+#   uv export --frozen --no-hashes --no-emit-project --group dev -o requirements-dev.lock.txt
+[project]
+name = "ms-data-parser"
+version = "0.1.0"
+description = "MCP server that parses and analyzes MS-DIAL outputs"
+requires-python = ">=3.13"
+dependencies = [
+    "mcp<2",
+    "msgpack",
+    "lz4",
+    "numpy",
+    "matplotlib",
+    "pandas",
+    "scikit-learn",
+    "scipy",
+    "pygoslin",
+    "httpx",
+    "plotly",
+    "rdkit",
+    "PyMuPDF<1.28.2",  # 1.28.2 は Windows の py3.14 wheel で `import mupdf` が失敗する（2026-10-15 実測）
+]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.uv]
+# プロジェクト自身は入れない。editable install の .pth が main ツリーを指すと、
+# worktree から起動した server.py / pytest が main のコードを拾いうる
+# （全 worktree が main ツリーの .venv を共有する前提。spec 2026-10-15）。
+package = false
