@@ -23,9 +23,11 @@ from metabolomix.core.mcp_core import mcp
 from metabolomix.core.path_resolvers import (
     LIBRARY_SETTING_KEYS,
     LibraryPathError,
+    resolve_arf2_file_path,
     resolve_dcl_file_path,
     resolve_library_path,
 )
+from metabolomix.msdial import alignment_spot
 from metabolomix.core.serialization import json_payload, round_floats
 from metabolomix.dcl.reader import deserialize_dcl, get_msms_by_precursor
 from metabolomix.library.defaults import DEFAULT_MS2_TOL as _DEFAULT_MS2_TOL
@@ -217,9 +219,58 @@ def _measured_spectrum(precursor_mz: float, *, rt: float | None = None,
     return hits[0]["msms_spectrum"]
 
 
+_NO_MSMS_MESSAGE = (
+    "MS/MS 未取得（.dcl が無い、または該当の記録が無い）のであって、"
+    "期待フラグメントが合わなかったのではありません。"
+)
+
+
+def _spot_query(spot_id: int, *, arf2_path: str | None, dcl_file: str | None,
+                rt: float | None, ion_mode: str | None) -> dict:
+    """アラインメントのスポットから照合の入力を組む。失敗は `status` 付きの封筒。
+
+    precursor m/z・RT・極性は ARF2、測定スペクトルはアラインメント `.dcl` の
+    `dcl[spot_id]`（precursor を m/z で探さない——同じ m/z の別スポットを拾わないため）。
+    """
+    arf2 = resolve_arf2_file_path(arf2_path)
+    if not arf2:
+        return {"status": "not_found",
+                "message": "spot_id の解決に要る .arf2 が見つかりませんでした（arf2_path で指定できます）。"}
+    record = alignment_spot.spot_record(arf2, spot_id)
+    if record is None or record.get("MassCenter") is None:
+        return {"status": "spot_not_found",
+                "message": f"spot_id={spot_id} は {Path(arf2).name} にありません。"}
+    precursor_mz = float(record["MassCenter"])
+    dcl = Path(dcl_file) if dcl_file else alignment_spot.alignment_sibling(arf2, ".dcl")
+    if dcl is None or not dcl.is_file():
+        return {"status": "not_found",
+                "message": f"spot_id={spot_id} のアラインメント .dcl が見つかりません。" + _NO_MSMS_MESSAGE}
+    msms = alignment_spot.alignment_msms(dcl, spot_id, expected_mz=precursor_mz,
+                                         expected_rt=record.get("RT"))
+    if msms["status"] == "precursor_mismatch":
+        return {"status": "dcl_precursor_mismatch",
+                "message": (
+                    f"{dcl.name} の {spot_id} 番（precursor m/z {msms['precursor_mz']:.4f}・"
+                    f"RT {msms['rt']:.2f}）が ARF2（{precursor_mz:.4f}・{float(record.get('RT') or 0):.2f}）"
+                    f"と ±{alignment_spot.PRECURSOR_TOLERANCE} Da / ±{alignment_spot.RT_TOLERANCE} 分"
+                    "で合いません（索引対応の崩れ。照合しません）。"
+                )}
+    if msms["status"] != "ok":
+        return {"status": "not_found",
+                "message": f"spot_id={spot_id} に一致する MS/MS が見つかりませんでした。" + _NO_MSMS_MESSAGE}
+    polarity = ion_mode or str(record.get("IonMode") or "").lower() or None
+    return {
+        "status": "ok",
+        "precursor_mz": precursor_mz,
+        "rt": rt if rt is not None else record.get("RT"),
+        "ion_mode": polarity,
+        "measured": msms["spectrum"],
+    }
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def library_match_feature(
-    precursor_mz: float,
+    precursor_mz: float | None = None,
     rt: float | None = None,
     ion_mode: str | None = None,
     dcl_file: str | None = None,
@@ -227,9 +278,19 @@ def library_match_feature(
     ms2_tol: float | None = None,
     rt_tol: float | None = None,
     top_n: int = 5,
+    spot_id: int | None = None,
+    arf2_path: str | None = None,
 ) -> str:
     """測定 MS/MS（`.dcl`）を参照ライブラリ（`library_load` 済みの store）と照合し、
     上位候補を返す。
+
+    照合の対象は `precursor_mz` か `spot_id` の**どちらか一方**で指定する。
+    `spot_id`（MasterAlignmentID。`eic_search` 等で引ける）を渡すと、precursor m/z・
+    RT・極性を同じバッチの `.arf2`（`arf2_path`、省略時は現在のデータフォルダ）から取り、
+    測定スペクトルはアラインメント `.dcl`（`dcl_file`、省略時は `.arf2` と同じバッチ）の
+    そのスポットの代表 MS/MS を使う。precursor が ARF2 と ±0.01 で合わなければ
+    照合せず `status="dcl_precursor_mismatch"`、ID が無ければ `spot_not_found`。
+    `rt` / `ion_mode` を明示すれば ARF2 の値より優先する。
 
     `ion_mode` は `"positive"` / `"negative"`（大小は問わない——`store.candidates()`
     が `COLLATE NOCASE` で比較するため、PAI2 由来の `IonMode.Positive.name`
@@ -285,6 +346,19 @@ def library_match_feature(
             "library_store", ["library_load"],
             "先に library_load を実行してください（参照ライブラリが読み込まれていません）。",
         )
+    if (precursor_mz is None) == (spot_id is None):
+        return json_payload({
+            "status": "invalid_arguments",
+            "message": "precursor_mz か spot_id のどちらか一方を指定してください。",
+        })
+    measured = None
+    if spot_id is not None:
+        spot = _spot_query(spot_id, arf2_path=arf2_path, dcl_file=dcl_file,
+                           rt=rt, ion_mode=ion_mode)
+        if spot["status"] != "ok":
+            return json_payload(spot)
+        precursor_mz, rt, ion_mode, measured = (
+            spot["precursor_mz"], spot["rt"], spot["ion_mode"], spot["measured"])
 
     search_params = store_obj.summary().get("search_params") or {}
     resolved_mz_tol = _pick_tol(mz_tol, search_params, "ms1_tolerance", _DEFAULT_MZ_TOL)
@@ -301,7 +375,8 @@ def library_match_feature(
     # `.dcl` 側の窓は library 側の resolved_mz_tol/resolved_rt_tol を渡さない
     # （Important 7 — 上のクラス docstring参照）。_measured_spectrum 自身の
     # 固定既定（dcl/reader.py と同じ mz_tol=0.01/rt_tol=0.2）を使う。
-    measured = _measured_spectrum(precursor_mz, rt=rt, dcl_file=dcl_file)
+    if measured is None:
+        measured = _measured_spectrum(precursor_mz, rt=rt, dcl_file=dcl_file)
     if not measured:
         return json_payload({
             "status": "not_found",
@@ -365,6 +440,7 @@ def library_match_feature(
     top = scored[:top_n] if top_n >= 0 else scored
 
     session_state.session.library.last_match = {
+        "spot_id": spot_id,
         "precursor_mz": precursor_mz,
         "rt": rt,
         "ion_mode": ion_mode,
@@ -419,6 +495,7 @@ def library_match_feature(
     payload = {
         "status": "success",
         "query": {
+            "spot_id": spot_id,
             "precursor_mz": precursor_mz, "rt": rt, "ion_mode": ion_mode,
             "mz_tol": resolved_mz_tol, "ms2_tol": resolved_ms2_tol, "rt_tol": resolved_rt_tol,
             "mass_begin": mass_begin, "mass_end": mass_end,

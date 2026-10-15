@@ -15,8 +15,17 @@
 | `spot_id` | int | ファイル中の0始まりスポット順序。今回のデータではARF/ARF2のID順と対応 |
 | `rt` | float | スポット代表RT（min） |
 | `ri` | float | スポット代表RI。LCデータでは0のことがある |
-| `mz` | float | スポット代表 m/z |
+| `mz` | float | スポット代表 m/z。**MS-DIAL 2023-11-20 より前の版の出力では全スポット `-1`**（下記） |
 | `drift` | float | スポット代表ドリフト時間。未使用時は `-1` |
+
+**m/z を欠く古い `.EIC.aef`。** 上流 `DataObjConverter` は 2023-11-20（MsdialWorkbench
+`20dfa60b4`）まで、EIC に書くスポット m/z を LC-MS では未設定（`-1`）の値の平均で求めていた。
+そのためこの頃の出力は全スポットで `mz = -1` になる（RT は正しい）。EIC 系ツールは
+読み込み直後に、同じバッチの `<stem>.arf2` から同じ `AlignmentID` の `MassCenter` を借りて
+補う。ただし RT が ±0.02 min で一致するときだけで、補ったスポットには
+`mz_source = "arf2"` が付く。補った旨は各ツールの注記（`== 注意 ==` / `caveats`）に出る。
+ARF2 が無い・RT が合わないスポットは `-1` のまま残る。この値は m/z 検索に掛からず、
+`summarize_eic_data()` の `mz_range` からも除かれる。
 | `main_type` | int | 横軸種別の列挙値。`0` はRT主軸を表す |
 | `num_samples` | int | このスポットに格納されたサンプル数 |
 | `samples` | list[dict] | サンプル別EIC要約。リスト長は通常 `num_samples` |
@@ -50,23 +59,31 @@
 
 ### 7.4 検索・ランキング出力
 
-`search_eic_by_mz_range()` と `search_eic_by_rt_range()` は条件に合う**元のスポット辞書全体**を返す。境界値を含む。
-
-`top_eic_spots_by_max_intensity()` の1行:
+`search_eic_spots()` は spot ID・m/z 範囲・RT 範囲の AND 検索で、`(一致スポット, 範囲外の spot_ids)` を返す。境界値を含む。m/z を欠く（`-1` のまま補えなかった）スポットは、m/z 条件があるときは一致しない。一致スポットは spot_id 昇順で、各要素は次の形（`top_eic_spots_by_max_intensity()` と同じ）:
 
 | キー | 意味 |
 |---|---|
-| `spot_id` | スポットID |
+| `spot_id` | スポットID（= ARF / ARF2 の `MasterAlignmentID`、アラインメント `.dcl` の番号） |
 | `rt` | スポット代表RT |
 | `mz` | スポット代表 m/z |
 | `num_samples` | サンプル数 |
 | `max_intensity` | サンプル間で最大の「クロマトグラム最大強度」 |
 
-MCPツール `eic_rank_by_max_intensity` はこの `max_intensity` 降順で並べる**強度上位ランキング**である。旧 `top_eic_spots_by_peak_top` / `eicaef_top_peak_tops` は `peak_top`（ピーク頂点の横軸=RT座標。強度ではない）で並べており、実質「遅いRTのスポット一覧」で強度上位ではなかったため置き換えた。
+旧 `top_eic_spots_by_peak_top` / `eicaef_top_peak_tops` は `peak_top`（ピーク頂点の横軸=RT座標。強度ではない）で並べており、実質「遅いRTのスポット一覧」で強度上位ではなかったため置き換えた。強度で並べるには `max_intensity` を使う。
 
-### 8.4 `eic_parser()` と関連ツール
+### 8.4 `eic_parser()` と `eic_search()`
 
-`eic_parser()` は7.3節の要約をJSON文字列として返す。m/z/RT検索の各表示行は `spot_id`, `rt`, `mz`, `num_samples` を持つ。`eic_rank_by_max_intensity()` はさらに `max_intensity`（サンプル間で最大のクロマトグラム最大強度）を表示する強度上位ランキングである（7.4節）。
+`eic_parser()` は7.3節の要約をJSON文字列として返す。
+
+`eic_search()` は旧 `eic_search_by_mz_range` / `eic_search_by_rt_range` / `eic_rank_by_max_intensity` を統合したもので、条件の行・`一致件数: N`・TSV 表（列名 1 回）・注記（`== 注意 ==`）の順に返す。`sort="max_intensity"` で `max_intensity` 降順の**強度上位ランキング**になる（既定は spot_id 昇順）。表は先頭 `max_results` 行だけで、超えると `(表示上限: …)` 行が付く。
+
+| 列 | 意味 |
+|---|---|
+| `spot_id` `rt` `mz` `max_intensity` `num_samples` | 7.4節。`rt` は 3 桁、`mz` は 4 桁、`max_intensity` は整数に丸める |
+| `name` `ontology` `adduct` | 同じバッチ（同じ `AlignmentResult_<timestamp>`）の `.arf2` の `Name` / `Ontology` / `AdductType`。`Unknown` と空文字は区別したまま出す（core §9-1/§9-2）。`.arf2` が無ければ空で、注記に出る |
+| `n_msms` | アラインメント `.dcl` の `dcl[spot_id]`（代表試料の MS/MS）のピーク数。**`-` は「MS/MS 未取得」「precursor・RT がスポットと ±0.05 Da・±0.2 分で合わない（索引対応の崩れ）」「`.dcl` が無い」のいずれかで、0 本という意味ではない** |
+
+`spot_ids` の範囲外 ID は注記に列挙する。未注釈（`name` が空か `Unknown`）で `n_msms` が数値の行は、`library_match_feature(spot_id=…)` → `library_plot_mirror` で参照ライブラリと照合・目視できる（`lipidmix://docs/output-format/library`）。
 
 ### 8.5 `eic_plot_chromatograms()` の描画契約
 
@@ -103,6 +120,8 @@ PNGが必要だとユーザーが明示した場合に限り、先に得たプ�
   物質は描画されない。除外理由は `rt_mismatch` / `mz_mismatch`（ID対応の崩れ）、
   `spot_out_of_range`、`file_id_absent`（その試料にトレースが無い）、
   `below_top_n`（`top_n` 件からあふれた。既定 8 件）の5種。**図に無い＝試料に無い、ではない。**
+  m/z を欠く古い EIC（7.1 節）では、照合の前に ARF2 の m/z で補う。このとき m/z 照合は
+  自明に通るので、取り違えの検出は RT 照合だけが担う（`caveats` にその旨が出る）。
   `dropped[]` は毎回、除外された物質を1件残らず列挙する。
 - `caveats[]` は `dropped[]` を理由ごとに1行へ要約したもの（例:
   `"below_top_n で 276 件を除外しました（詳細は selection.dropped）。"`）。ただし

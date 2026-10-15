@@ -284,6 +284,9 @@ class EicState:
         self.features = None
         self.current_file_path = None
         self.last_plot = None  # 直近EICプロット情報（明示的なPNG保存時のみ参照）
+        # features の欠損 m/z を ARF2 で補ったときの注記。None は「未処理」
+        # （eic.tools が読み込み直後に 1 度だけ補い、ここへ残す）。
+        self.mz_caveats = None
 
     def load_data(self, file_path: str):
         """ファイルパスが前回と異なる場合のみEICデータを解析する"""
@@ -292,6 +295,7 @@ class EicState:
 
         self.features = parse_eic_aef_css1(file_path, include_chromatogram=False)
         self.current_file_path = file_path
+        self.mz_caveats = None
         return self.features
 
 

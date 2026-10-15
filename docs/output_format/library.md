@@ -159,13 +159,23 @@ store のスキーマは `precursor_mz REAL NOT NULL`。公開 `.msp`（MassBank
 
 ### 14.6 `library_match_feature`
 
-`status` は 3 通り。
+照合対象は `precursor_mz` か `spot_id` のどちらか一方で指定する。
 
 | `status` | 意味 |
 |---|---|
-| `not_found` | `.dcl` に該当 precursor の MS/MS が無い（**未取得**であって「合わなかった」ではない。`dcl_find_msms` の `not_found` と同じ文言方針） |
+| `not_found` | `.dcl` に該当 precursor（`spot_id` のときはそのスポット）の MS/MS が無い（**未取得**であって「合わなかった」ではない。`dcl_find_msms` の `not_found` と同じ文言方針） |
 | `no_candidates` | 測定 MS/MS はあるが、m/z 窓・極性・RT に該当する参照レコードが無い |
 | `success` | 候補を採点して `candidates_table`（TSV、`rank`/`name`/... 列。§14.1 の指標を含む）を返した |
+| `spot_not_found` | `spot_id` が `.arf2` に無い |
+| `dcl_precursor_mismatch` | アラインメント `.dcl` の `spot_id` 番の precursor・RT が ARF2 の `MassCenter`・`RT` と ±0.05 Da・±0.2 分で合わない（索引対応の崩れ。`.dcl` の値は代表試料の実測値なので完全一致はしない。実データでの差は最大 0.027 Da・0.106 分）。誤ったスペクトルで採点しないよう照合しない |
+| `invalid_arguments` | `precursor_mz` と `spot_id` を両方渡した、またはどちらも渡さなかった |
+
+**`spot_id` 経由の照合**: precursor m/z・RT・極性（`IonMode` を小文字化）は同じバッチの
+`.arf2` から取る（`rt` / `ion_mode` を明示すればそちらが優先）。測定スペクトルは
+アラインメント `.dcl` の `dcl[spot_id]`＝代表試料の MS/MS（`curation` と同じ対応）で、
+precursor m/z による `.dcl` 検索は通らない——同じ m/z の別スポット（異性体・別溶出）の
+スペクトルを拾わないため。`query.spot_id` と `session.library.last_match["spot_id"]` に
+照合したスポットが残る（precursor 経由では `null`）。
 
 候補は `total_score` の降順（`ranked_by` フィールドが基準を明示）。詳細と限界は §14.9。
 スペクトル座標・alignment は戻り値に含めず `session.library.last_match` に持つ
