@@ -31,7 +31,7 @@ python -m pip install -r requirements.txt
 ```
 
 Pathway projection (`pathway_project` / `pathway_plot`) uses the lab's MSLipidMapper
-server when `[mslipidmapper] api_url` is set, and falls back to local R otherwise. Local R
+server when `[mslipidmapper] mslipidmapper_api_url` is set, and falls back to local R otherwise. Local R
 needs a one-time `Rscript r/setup.R`; see [USAGE.md](USAGE.md) section 16.
 
 Set environment variables in the MCP client configuration, or in a shell when

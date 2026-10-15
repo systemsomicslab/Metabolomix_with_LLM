@@ -145,7 +145,7 @@ EXPECTED_ANNOTATIONS = {
     "curation_view_data": READ_ONLY,
     "curation_suggest": LOCAL_WRITE_APPEND,
     # --- パスウェイ投影（MSLipidMapper）。project は呼ぶたびに新しい run を作る（非冪等）。
-    # 両方とも [mslipidmapper] api_url の研究室サーバへ出うる。plot は run 内の PDF を
+    # 両方とも [mslipidmapper] mslipidmapper_api_url の研究室サーバへ出うる。plot は run 内の PDF を
     # 同じパスへ上書きし、ローカルの描画でも unpkg.com へ出る。 ---
     "pathway_project": REMOTE_WRITE_APPEND,
     "pathway_plot": REMOTE_WRITE,

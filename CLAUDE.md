@@ -76,11 +76,11 @@ Claude Code 用の `.mcp.json` はこれを絶対パスで指すが、`.git/info
 
 **外部資産の場所は設定ファイルか環境変数で指す**（spec 2026-10-06）。リポジトリ直下の
 `lipidmix.local.toml`（追跡外。雛形 `lipidmix.example.toml`）の `[msdial] exe` `lbm` と
-`[library] msp_positive` `msp_negative` と `[mslipidmapper] rscript` `browser` `api_url` `api_token`、または環境変数
+`[library] msp_positive` `msp_negative` と `[mslipidmapper] rscript` `browser` `mslipidmapper_api_url` `api_token`、または環境変数
 `MSDIAL_EXE` `MSDIAL_LBM` `MSDIAL_MSP_POS` `MSDIAL_MSP_NEG` `MSLIPIDMAPPER_RSCRIPT`
 `MSLIPIDMAPPER_BROWSER` `MSLIPIDMAPPER_API_URL` `MSLIPIDMAPPER_API_TOKEN`（環境変数が優先）。
-`api_url` / `api_token` だけはパスとして解かない（`user_config.NON_PATH_SETTINGS`）。
-`pathway_*` は `api_url` の研究室サーバを先に使い、使えなければローカルの R へ回す（`pathway/bridge.py` `run_bridge`）。読むのは `metabolomix/core/user_config.py`
+`mslipidmapper_api_url` / `api_token` だけはパスとして解かない（`user_config.NON_PATH_SETTINGS`）。
+`pathway_*` は `mslipidmapper_api_url` の研究室サーバを先に使い、使えなければローカルの R へ回す（`pathway/bridge.py` `run_bridge`）。読むのは `metabolomix/core/user_config.py`
 の `get_setting` だけで、各リゾルバは `os.environ` を直に読まない。設定ファイルは呼ばれる
 たびに読むので再起動は要らない。テストは conftest がこれらの環境変数を消し
 `LIPIDMIX_CONFIG` を存在しないパスへ向けている（手元の設定ファイルを掴ませない）。

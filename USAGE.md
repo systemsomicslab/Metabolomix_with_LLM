@@ -239,13 +239,13 @@ stdio サーバでは 2026-09 時点で未検証(ブラウザで `html_path` を
 ## 16. パスウェイ投影(MSLipidMapper)
 
 前処理済みの脂質データを MSLipidMapper で remodeling / ceramide / global の
-パスウェイへ投影する。MSLipidMapper は研究室サーバの REST API(`[mslipidmapper] api_url`)を先に使い、
+パスウェイへ投影する。MSLipidMapper は研究室サーバの REST API(`[mslipidmapper] mslipidmapper_api_url`)を先に使い、
 未設定・未到達・404・ジョブ失敗などで使えなければローカルの Rscript(`[mslipidmapper] rscript`)へ回す。
 どちらで動いたかは戻り値の `backend`(サーバから回ったときはその理由も)と manifest に残る。
 脂質アッセイ(`record_objective(assay_kind="lipid")`)でだけ使える。
 
 **研究室サーバを使う**(R のセットアップは要らない): `lipidmix.local.toml` の `[mslipidmapper]` に
-`api_url`(例 `'http://<サーバ>:8000'`)を書く。環境変数 `MSLIPIDMAPPER_API_URL` でもよい。
+`mslipidmapper_api_url`(例 `'http://<サーバ>:8000'`)を書く。環境変数 `MSLIPIDMAPPER_API_URL` でもよい。
 サーバが認証を求めるときだけ `api_token`(環境変数 `MSLIPIDMAPPER_API_TOKEN`)。中間 mzTab-M
 (試料名・群名・脂質名・強度)はサーバへ送られる。サーバ側のジョブ ID と送った config は
 run ディレクトリの `remote-job.json`。サーバは版を返さないので manifest の `upstream_commit` /

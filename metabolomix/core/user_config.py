@@ -35,13 +35,13 @@ SETTINGS: dict[str, str] = {
     "library.msp_negative": "MSDIAL_MSP_NEG",
     "mslipidmapper.rscript": "MSLIPIDMAPPER_RSCRIPT",
     "mslipidmapper.browser": "MSLIPIDMAPPER_BROWSER",
-    "mslipidmapper.api_url": "MSLIPIDMAPPER_API_URL",
+    "mslipidmapper.mslipidmapper_api_url": "MSLIPIDMAPPER_API_URL",
     "mslipidmapper.api_token": "MSLIPIDMAPPER_API_TOKEN",
 }
 
 #: パスではない設定（URL・トークン）。設定ファイルの値を設定ファイル基準のパスに解かない。
 NON_PATH_SETTINGS: frozenset[str] = frozenset({
-    "mslipidmapper.api_url",
+    "mslipidmapper.mslipidmapper_api_url",
     "mslipidmapper.api_token",
 })
 

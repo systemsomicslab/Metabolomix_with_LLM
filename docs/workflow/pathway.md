@@ -2,7 +2,7 @@
 
 前処理済みの脂質データを MSLipidMapper（R パッケージ）に渡し、
 同梱パスウェイ（remodeling / ceramide / global）へ投影する経路。MSLipidMapper は
-`[mslipidmapper] api_url` の研究室サーバ（REST API）を先に使い、使えなければローカルの Rscript へ回す。前提状態の連鎖は
+`[mslipidmapper] mslipidmapper_api_url` の研究室サーバ（REST API）を先に使い、使えなければローカルの Rscript へ回す。前提状態の連鎖は
 `record_objective(assay_kind="lipid")` ＋ `arf_preprocess`（または `dataset_preprocess`）→
 `pathway_project` → `pathway_plot`。値の**意味**は
 [pathway.md（output_format）](../output_format/pathway.md) を見ること。
@@ -10,7 +10,7 @@
 `session.pathway`（他スロットとは独立）は直近の `run_id` だけを持つ。run の正準は
 `reports/pathway/<run_id>/manifest.json`。
 
-入口は `bridge.run_bridge()` だけで、ここがサーバかローカルかを決める（`api_url()` が未設定ならローカルだけ）。
+入口は `bridge.run_bridge()` だけで、ここがサーバかローカルかを決める（`api_url()`＝`[mslipidmapper] mslipidmapper_api_url` が未設定ならローカルだけ）。
 サーバ側は `metabolomix/pathway/remote.py`（`GET /healthz` → `POST /v1/jobs` → 状態を succeeded / failed まで
 → 成果物の取得。config は JSON で送る）。request はローカルと同じ dict で、`_remote_config()` が API の
 config に写す（`analysis.normalization` は常に none。サーバは 3 パスウェイを全部計算し、頼んだ分だけ落とす）。
@@ -43,10 +43,10 @@ R の仮想環境は起動前に確かめる（`_check_environment()`）: `r/ren
 7. │  └─ metabolomix/pathway/handoff.py  build_from_dataset()
 8. ├─ metabolomix/pathway/handoff.py  write_mztab()
 9. ├─ metabolomix/pathway/bridge.py  run_bridge()
-10. │  ├─ [api_url あり] metabolomix/pathway/bridge.py  _run_remote()
+10. │  ├─ [mslipidmapper_api_url あり] metabolomix/pathway/bridge.py  _run_remote()
 11. │  │  ├─ metabolomix/pathway/bridge.py  _remote_config()
 12. │  │  └─ metabolomix/pathway/remote.py  run_job()（output.format=jsonld）
-13. │  └─ [api_url なし・サーバ失敗] metabolomix/pathway/bridge.py  _run_local()
+13. │  └─ [mslipidmapper_api_url なし・サーバ失敗] metabolomix/pathway/bridge.py  _run_local()
 14. │     ├─ metabolomix/pathway/bridge.py  _check_environment()
 15. │     └─ （R 側。mode=measure で `mslm_bridge.R` が `MSLipidMapper::mztab_pathway_measurements` を呼ぶ）
 16. ├─ metabolomix/pathway/jsonld.py  load_graph()
@@ -65,6 +65,6 @@ R の仮想環境は起動前に確かめる（`_check_environment()`）: `r/ren
 1. metabolomix/pathway/tools.py  pathway_plot()
 2. ├─ metabolomix/pathway/tools.py  _load_manifest()
 3. ├─ metabolomix/pathway/bridge.py  run_bridge()
-4. │  ├─ [api_url あり] metabolomix/pathway/remote.py  run_job()（output.format=pdf。ジョブ失敗は `PATHWAY_RENDER_FAILED`）
-5. │  └─ [api_url なし・サーバ失敗] （R 側。mode=render で `mslm_bridge.R` が `MSLipidMapper::render_pathway_from_config` を呼ぶ）
+4. │  ├─ [mslipidmapper_api_url あり] metabolomix/pathway/remote.py  run_job()（output.format=pdf。ジョブ失敗は `PATHWAY_RENDER_FAILED`）
+5. │  └─ [mslipidmapper_api_url なし・サーバ失敗] （R 側。mode=render で `mslm_bridge.R` が `MSLipidMapper::render_pathway_from_config` を呼ぶ）
 6. └─ metabolomix/plots/pdf_raster.py  pdf_first_page_png()

@@ -120,8 +120,8 @@ _LOCAL_UNAVAILABLE = frozenset({"MSLM_NOT_CONFIGURED", "MSLM_R_PACKAGES_MISSING"
 
 
 def api_url() -> str | None:
-    """[mslipidmapper] api_url（環境変数 MSLIPIDMAPPER_API_URL）。未設定なら None。"""
-    setting = user_config.get_setting("mslipidmapper.api_url")
+    """[mslipidmapper] mslipidmapper_api_url（環境変数 MSLIPIDMAPPER_API_URL）。未設定なら None。"""
+    setting = user_config.get_setting("mslipidmapper.mslipidmapper_api_url")
     return setting.value.rstrip("/") if setting else None
 
 
@@ -185,7 +185,7 @@ def _run_remote(base_url: str, request: dict, run_dir: Path, timeout_s: float) -
 def run_bridge(request: dict, run_dir: Path, *, timeout_s: float = 300.0) -> dict:
     """MSLipidMapper を 1 回呼ぶ。戻り値の `backend` がどちらで動いたかを示す。
 
-    api_url が設定されていればまずサーバへ。サーバが使えない・失敗したとき
+    mslipidmapper_api_url が設定されていればまずサーバへ。サーバが使えない・失敗したとき
     （未到達・404・ジョブ失敗・時間切れ・成果物の欠落）は、ローカルの R へ回し、
     その理由を `remote_fallback` に残す。ローカルの R も使えなければ（未設定・
     仮想環境が未復元）、サーバ側のエラーを上げる（details.local にローカルの理由）。

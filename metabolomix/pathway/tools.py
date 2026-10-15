@@ -155,7 +155,7 @@ def _build_dataset(group_a, group_b, label_a, label_b):
 
 
 # 呼ぶたびに新しい run（reports/pathway/<run_id>/）を作る → 冪等ではない。
-# [mslipidmapper] api_url があれば研究室サーバへ中間 mzTab-M を送る（ローカルの R はネットワークに出ない）。
+# [mslipidmapper] mslipidmapper_api_url があれば研究室サーバへ中間 mzTab-M を送る（ローカルの R はネットワークに出ない）。
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
     structured_output=False)
@@ -179,7 +179,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     - aggregation: sum | mean | median（サブクラス内の分子種の集計）。
     検定は log2(x+1) の Welch、BH はパスウェイ×スコープ種別ごと。log2fc は正なら group_b が高い。
     脂質アッセイ（record_objective の assay_kind=lipid）でだけ使える。
-    MSLipidMapper は [mslipidmapper] api_url の研究室サーバを先に使い、使えなければローカルの R
+    MSLipidMapper は [mslipidmapper] mslipidmapper_api_url の研究室サーバを先に使い、使えなければローカルの R
     （[mslipidmapper] rscript）で動かす。どちらで動いたかは戻り値の backend。
     """
     s = session_state.session
@@ -320,7 +320,7 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
     - pathways: その run に含まれるものから選ぶ（既定は全部）。1 枚約 2,400 画像トークン。
     - plot_type: dot | box | violin（ノード内のグラフ）。横軸の群は group_a, group_b, その他の群の順
       （上流は config の plot.x_order を軸順と配色の両方に使う）。
-    [mslipidmapper] api_url の研究室サーバを先に使い（サーバは 3 パスウェイ全部を描く）、
+    [mslipidmapper] mslipidmapper_api_url の研究室サーバを先に使い（サーバは 3 パスウェイ全部を描く）、
     使えなければローカルの R で描く。ローカルではヘッドレス Chromium（[mslipidmapper] browser）と
     unpkg.com への接続が要る。
     """
