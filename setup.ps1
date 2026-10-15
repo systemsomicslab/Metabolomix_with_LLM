@@ -17,8 +17,10 @@
   uv があっても使わず、標準の venv + pip で作る（検証用）。
 #>
 param([switch]$Dev, [switch]$NoUv)
-$ErrorActionPreference = 'Stop'
-Set-Location -LiteralPath $PSScriptRoot
+# 'Stop' にしない: Windows PowerShell 5.1 は native コマンドの stderr 出力を終了エラーにして
+# しまい、$LASTEXITCODE の確認や Fail の 1 行に届かないため。失敗は終了コードで判定する。
+$ErrorActionPreference = 'Continue'
+Set-Location -LiteralPath $PSScriptRoot -ErrorAction Stop
 
 function Fail([string]$message) {
     Write-Host "[setup] 失敗: $message" -ForegroundColor Red
