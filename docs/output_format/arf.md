@@ -22,7 +22,7 @@
 | `IonMode` | str | `Positive`、`Negative`、`Both`、`Unknown` のいずれか |
 | `Name` | str/null | 代表アノテーション名。空文字の場合は未注釈 |
 | `HeightAverage` | float/null | 現実装ではグループ先頭サンプルの `height` を格納する。名前に反して全サンプル平均を再計算していない |
-| `AlignedPeakProperties` | list[list] | そのスポットに属する全サンプルの生 MessagePack 配列。LLM 解析では通常、次節の表形式を使う |
+| `AlignedPeakProperties` | list[list] | そのスポットに属する全サンプルの MessagePack 配列（`AlignmentChromPeakFeature`）。長さと Key 位置は生のままだが、**読み込み時に解析で使う Key 以外は `null` に落としてある**（Key0〜10・18・20〜22 は生の値、Key15 は RT だけ、Key37 は先頭 2 要素。大規模 `.arf` のメモリ対策）。LLM 解析では通常、次節の表形式を使う |
 | `TagIds` / `Tags` | list | アラインメント結果の `*_tags.xml` から `MasterAlignmentID` で結合したタグ |
 | `SamplePeakTags` | dict | サンプル別 `*_tags.xml` から `FileName` と `MasterPeakID` で結合した、タグ付きピークのみの辞書 |
 | `SampleClasses` | dict | `.mddata` の `AnalysisFileBean` と `FileID`/`FileName` で結合したサンプルClass IDメタデータ |

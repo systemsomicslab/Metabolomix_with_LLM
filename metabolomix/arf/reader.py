@@ -189,7 +189,7 @@ def _msgpack_stream(data: bytes):
     )
 
 
-def _decode_lz4_msgpack_payload(compressed_data: bytes) -> list:
+def _decompress_lz4_payload(compressed_data: bytes) -> bytes:
     stream = io.BytesIO(compressed_data)
     unpacker = msgpack.Unpacker(
         stream,
@@ -200,12 +200,14 @@ def _decode_lz4_msgpack_payload(compressed_data: bytes) -> list:
     )
     size = next(unpacker)
     read_size = unpacker.tell()
-    decompressed_data = lz4.block.decompress(
+    return lz4.block.decompress(
         compressed_data[read_size:],
         uncompressed_size=size,
     )
 
-    return list(_msgpack_stream(decompressed_data))
+
+def _decode_lz4_msgpack_payload(compressed_data: bytes) -> list:
+    return list(_msgpack_stream(_decompress_lz4_payload(compressed_data)))
 
 
 def _payload_from_top_level_object(obj):
@@ -259,25 +261,81 @@ def _is_arf_feature_container_object(item) -> bool:
     return isinstance(item, list) and any(_is_arf_peak_group(e) for e in item)
 
 
-def _iter_arf_peak_groups(data: bytes):
-    for block_index, items in _iter_lz4_msgpack_blocks(data):
-        if not items:
-            continue
+def _iter_lz4_decompressed_blocks(data: bytes):
+    """トップレベルのブロックを展開済みバイト列のまま返す（msgpack は解かない）。
 
+    実ファイルは全体が 1 ブロックのことがある（185 MB → 展開 966 MB。issue #4）。
+    展開後を `list(...)` で一度に Python オブジェクト化すると全行が同時に生きるので、
+    解くのは呼び出し側がグループ単位で行う。
+    """
+    for block_index, obj in enumerate(_msgpack_stream(data)):
+        payload = _payload_from_top_level_object(obj)
+        obj = None  # 圧縮ペイロードの写しを展開後まで抱えない
+        if payload is None:
+            print(
+                f"[WARNING] ARF top-level object {block_index} is not a supported LZ4 MessagePack block; skipped",
+                file=sys.stderr,
+            )
+            continue
+        decompressed = _decompress_lz4_payload(payload)
+        payload = None
+        yield block_index, decompressed
+
+
+def _starts_array(first_byte: int) -> bool:
+    """msgpack の型バイトが配列（fixarray / array16 / array32）か。"""
+    return 0x90 <= first_byte <= 0x9F or first_byte in (0xDC, 0xDD)
+
+
+def _iter_peak_groups_in_stream(decompressed: bytes):
+    """展開済みストリームからグループ（1 スポット分の行の並び）を 1 個ずつ返す。
+
+    トップレベルの各項目を `read_array_header` で開き、要素を 1 個ずつ解く。
+    判定は旧来の「項目を丸ごと解いてから調べる」実装と同じ:
+    - グループ要素を 1 つ以上含む項目はコンテナ。グループ要素だけを返す
+      （先頭のヘッダのスカラー群は読み捨てる）。
+    - グループ要素を含まず、要素が全部行（list）なら、項目自体が単独グループ
+      （コンテナ外に置かれた末尾スポット等）。
+    - それ以外（グループを持たないメタデータ・配列でない項目）は読み飛ばす。
+    """
+    unpacker = msgpack.Unpacker(
+        io.BytesIO(decompressed),
+        raw=False,
+        # POSモードの .arf はヘッダ相当フィールドに不正なUTF-8バイトを含む
+        # ことがある（_msgpack_stream と同じ規約）。
+        unicode_errors="ignore",
+        strict_map_key=False,
+        max_buffer_size=1024 * 1024 * 1024,
+    )
+    end = len(decompressed)
+    try:
+        while unpacker.tell() < end:
+            if not _starts_array(decompressed[unpacker.tell()]):
+                unpacker.skip()
+                continue
+            length = unpacker.read_array_header()
+            found_group = False
+            others = []  # 単独グループの判定に要る。コンテナと分かったら溜めない
+            for _ in range(length):
+                element = unpacker.unpack()
+                if _is_arf_peak_group(element):
+                    found_group = True
+                    yield element
+                elif not found_group:
+                    others.append(element)
+            if not found_group and _is_arf_peak_group(others):
+                yield others
+    except msgpack.OutOfData:
+        # 末尾が切れている。そこまでに読めたグループは返し済み。
+        return
+
+
+def _iter_arf_peak_groups(data: bytes):
+    for block_index, decompressed in _iter_lz4_decompressed_blocks(data):
         local_index = 0
-        for item in items:
-            if _is_arf_feature_container_object(item):
-                # コンテナ: グループ要素のみを取り出す（先頭のヘッダ
-                # スカラー群は自動的にスキップされる）。
-                for element in item:
-                    if _is_arf_peak_group(element):
-                        yield block_index, local_index, element
-                        local_index += 1
-            elif _is_arf_peak_group(item):
-                # 単独グループ（コンテナ外に置かれた末尾スポット等）。
-                yield block_index, local_index, item
-                local_index += 1
-            # それ以外（グループを持たないメタデータ）はスキップ。
+        for group in _iter_peak_groups_in_stream(decompressed):
+            yield block_index, local_index, group
+            local_index += 1
 
 
 def deserialize_lz4_packed_msgpack(data: bytes) -> list:
@@ -320,10 +378,45 @@ class ArfMemoryError(MemoryError):
         self.rows = rows
 
 
+#: `deserialize` が行（`AlignedPeakProperties` の要素）にそのまま残す Key。
+#: 0〜9 は `_file_name_from_row` が先頭の文字列を探して走査し、10 は is_msms、
+#: 18/20/21/22 は height / area / area_above_baseline / m_z。15（rt）と
+#: 37（PeakShape）は読まれる部分だけに縮めて残す（`_slim_row`）。
+#: **行から新しい Key を読むときは、ここに足すこと**——足さないと None が返る。
+#: 同値性は `tests/test_arf_slim_rows.py` が公開境界ごとに固定している。
+_RETAINED_ROW_KEYS = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 18, 20, 21, 22)
+
+
+def _slim_row(row, shared_names: dict):
+    """行を、どの読み手にも同じ答えを返す範囲で細くする（issue #4）。
+
+    生の行は 1 行 6.5 KB あり、大半は誰も読まない入れ子フィールド（Key14 / 16 /
+    25 / 36 / 47 ほか）だった。長さは変えない（`len(data) > 25` 等の判定を保つ）。
+    """
+    if not isinstance(row, list):
+        return row
+    slim = [None] * len(row)
+    for key in _RETAINED_ROW_KEYS:
+        if key < len(row):
+            slim[key] = row[key]
+    name = slim[1] if len(slim) > 1 else None
+    if isinstance(name, str):
+        # 異なり値は注入の数しか無いので、spot をまたいで同じ str を共有する。
+        slim[1] = shared_names.setdefault(name, name)
+    rt = _rt_of(row)
+    if rt is not None:
+        # `_rt_of` は Key15 が無ければ Key16 を見る。縮めた形は Key15 に置く。
+        slim[15] = [[1, [rt]]]
+    if len(row) > 37 and isinstance(row[37], list):
+        slim[37] = row[37][:2]  # [EstimatedNoise, SignalToNoise] しか読まれない
+    return slim
+
+
 def deserialize(file_like_object) -> list[dict]:
     data = file_like_object.read()
     results = []
     rows = 0
+    shared_names: dict[str, str] = {}
 
     try:
         for group_index, (block_index, local_index, group) in enumerate(
@@ -339,6 +432,10 @@ def deserialize(file_like_object) -> list[dict]:
             if formatted is not None:
                 formatted["MasterAlignmentID"] = group_index
                 formatted["AlignmentID"] = group_index
+                # spot 単位の値（RT / Name 等）は生の代表行から取り終えている。
+                formatted["AlignedPeakProperties"] = [
+                    _slim_row(row, shared_names) for row in group
+                ]
                 results.append(formatted)
                 rows += len(group)
     except MemoryError as exc:
