@@ -71,7 +71,9 @@ pipeline_path 経路（完了した run の成果物をまとめて載せる）:
 13.      └─ metabolomix/pipeline/session_handoff.py _handoff_rejection()
 14.         └─ metabolomix/analysis/result_state.py dataset_fingerprint()
 15.         └─ metabolomix/analysis/result_state.py group_fingerprint()
-16. └─ metabolomix/tools/mztab_tools.py _handoff_lines()
+16.      └─ metabolomix/pipeline/session_handoff.py _run_preprocess_parameters()
+17.         └─ metabolomix/pipeline/store.py read_result_data()
+18. └─ metabolomix/tools/mztab_tools.py _handoff_lines()
 
 dataset・解決済み試料対応表・binding・解析行列を**同じ run から**載せる。
 行列だけを別ツールで載せる入口は置いていない——run A の dataset に run B の
@@ -85,6 +87,12 @@ DatasetState と照合し、一致したものだけを `ds.results` へ戻す�
 （pipeline の TSV のメタ行と同じ ID）。来歴に `handoff`（pipeline_root・comparison_id）を
 足すので、`result_state.is_current` は ID と前処理ではなく指紋で有効性を見る。
 `ds.last_differential` は設定しない（戻した結果は result_id で名指しして使う）。
+親の前処理（run の `preprocess` 成果物）は `ds.results` へ戻さず、そのレシピ
+（`resolved_recipe`）だけを `provenance.handoff.preprocess` へ写す。差次的結果の親は
+最後の前処理とは限らない（resume で前処理は作り直されるが、差次的工程は skip されうる）
+ので、ここだけは履歴を result_id で引いて hash を照合する。読めなければ None で、
+書き出しのメタ行 `# preprocess = ...` は session の前処理へフォールバックせず
+`unknown（…）` と書く（`dataset_export._preprocess_parameters`）。
 読むのは `current_result_refs()` が選ぶ今の ref だけ（export が同じ比較を再永続化すると
 履歴に古い ref が残るため）で、今の ref の成果物が改変されていれば
 `RESULT_INTEGRITY_MISMATCH` で読み込みごと止める。戻さなかったものは

@@ -18,23 +18,31 @@ from pathlib import Path
 from metabolomix.analysis import dataset_service, result_state
 from metabolomix.core import session_state
 from metabolomix.mztab import loading as mztab_loading
-from metabolomix.pipeline import report, session_handoff, store
+from metabolomix.pipeline import report, service, session_handoff, store
 from tests.test_pipeline_matrix_handoff import _completed_run
 
-_RECIPE = {"normalize": "none", "impute": "half_min"}
 _COMPARISON = {"comparison_id": "c1", "reference_group": "g1", "test_group": "g2"}
+#: session で後からやり直す、run（conservative-v1 の既定 = pqn）とは別のレシピ。
+_SESSION_RECIPE = {"normalize": "none", "impute": "half_min"}
 
 
 def _run_rows(harness) -> list[dict]:
     return list(harness.result_data("sample_manifest")["rows"])
 
 
-def _differential_from_same_job(job_path: Path, rows: list[dict]) -> dict:
-    """run と同じ job から ds を作り、pipeline と同じ関数で差次的結果を作る。"""
+def _pipeline_preprocess_and_compare(harness, job_path: Path) -> tuple[dict, dict]:
+    """run と同じ job から ds を作り、pipeline の前処理 handler と比較関数を回す。
+
+    前処理は `service._handle_preprocess` そのもので永続化する（run が残す
+    成果物の形をテスト側で真似しない）。戻り値は (前処理の ref, 差次的結果)。
+    """
+    rows = _run_rows(harness)
     ds = mztab_loading.load_dataset_state(job_path=job_path)
-    ds.sample_metadata_rows = list(rows)
-    dataset_service.preprocess_dataset(ds, _RECIPE)
-    return dataset_service.run_comparison(ds, _COMPARISON, rows)
+    context = {"runtime": {"dataset": ds, "metadata": rows},
+               "request": {"preprocess": {}}, "request_meta": {"revision": 1},
+               "pipeline_root": Path(harness.pipeline_path)}
+    preprocess_ref = service._handle_preprocess(context)["result_refs"][0]
+    return preprocess_ref, dataset_service.run_comparison(ds, _COMPARISON, rows)
 
 
 def _append_refs(harness, *refs: dict) -> None:
@@ -52,13 +60,24 @@ def _persist_differential(harness, result: dict, cid: str = "c1") -> dict:
     })
 
 
-def _run_with_differential(tmp_path, *, mutate=None):
+def _run_with_differential(tmp_path, *, mutate=None, with_preprocess=True):
     harness, job_path = _completed_run(tmp_path)
-    result = _differential_from_same_job(job_path, _run_rows(harness))
+    preprocess_ref, result = _pipeline_preprocess_and_compare(harness, job_path)
     if mutate is not None:
         result = mutate(copy.deepcopy(result))
-    _append_refs(harness, _persist_differential(harness, result))
+    refs = [preprocess_ref] if with_preprocess else []
+    _append_refs(harness, *refs, _persist_differential(harness, result))
     return harness, result
+
+
+def _exported_preprocess_line(tmp_path, result_id: str) -> str:
+    from metabolomix.tools.dataset_analysis_tools import dataset_export_differential
+
+    out = tmp_path / "restored.tsv"
+    payload = json.loads(dataset_export_differential(str(out), result_id=result_id))
+    assert payload.get("status") == "success", payload
+    return next(line for line in out.read_text(encoding="utf-8").splitlines()
+                if line.startswith("# preprocess = "))
 
 
 def test_loading_a_run_restores_its_differential_results(tmp_path):
@@ -134,13 +153,12 @@ def test_result_from_other_groups_is_reported_not_restored(tmp_path):
 
 def test_handoff_uses_only_current_refs_after_reexport(tmp_path):
     harness, job_path = _completed_run(tmp_path)
-    rows = _run_rows(harness)
-    first = _differential_from_same_job(job_path, rows)
+    first_pre, first = _pipeline_preprocess_and_compare(harness, job_path)
     first_ref = _persist_differential(harness, first)
     # export が同じ比較を再計算して、もう一度 `differential:c1` として永続化した。
-    second = _differential_from_same_job(job_path, rows)
+    second_pre, second = _pipeline_preprocess_and_compare(harness, job_path)
     second_ref = _persist_differential(harness, second)
-    _append_refs(harness, first_ref, second_ref)
+    _append_refs(harness, first_pre, first_ref, second_pre, second_ref)
     # 同じ出力先を再利用していた版では、古い ref の hash はもうファイルと一致しない。
     stale = Path(harness.pipeline_path) / first_ref["relative_path"]
     stale.write_text(json.dumps({"overwritten": True}), encoding="utf-8")
@@ -180,11 +198,10 @@ def test_dataset_load_summary_lists_restored_and_rejected(tmp_path):
     from metabolomix.tools.mztab_tools import dataset_load
 
     harness, job_path = _completed_run(tmp_path)
-    rows = _run_rows(harness)
-    kept = _differential_from_same_job(job_path, rows)
-    legacy = _differential_from_same_job(job_path, rows)
+    preprocess_ref, kept = _pipeline_preprocess_and_compare(harness, job_path)
+    _, legacy = _pipeline_preprocess_and_compare(harness, job_path)
     legacy["provenance"].pop("dataset_hash")
-    _append_refs(harness, _persist_differential(harness, kept, "c1"),
+    _append_refs(harness, preprocess_ref, _persist_differential(harness, kept, "c1"),
                  _persist_differential(harness, legacy, "c2"))
 
     session_state.session.dataset = None
@@ -198,3 +215,61 @@ def test_dataset_load_summary_lists_restored_and_rejected(tmp_path):
     assert "dataset_differential" in summary
     ds = session_state.session.dataset
     assert kept["provenance"]["result_id"] in ds.results
+
+
+# ---------- 書き出しのメタ行 `# preprocess = ...`（run の条件を名乗る） ----------
+
+def _run_recipe(harness) -> dict:
+    refs = [r for r in store.load_run(harness.pipeline_path)["results"]
+            if r.get("output_name") == "preprocess"]
+    return store.read_result_data(
+        harness.pipeline_path, refs[-1:], "preprocess")[0]["resolved_recipe"]
+
+
+def test_exporting_a_restored_result_states_the_runs_recipe(tmp_path):
+    from metabolomix.tools.dataset_analysis_tools import dataset_preprocess
+    from metabolomix.tools.mztab_tools import dataset_load
+
+    harness, result = _run_with_differential(tmp_path)
+    run_recipe = _run_recipe(harness)
+    assert run_recipe != _SESSION_RECIPE
+
+    session_state.session.dataset = None
+    dataset_load(pipeline_path=str(harness.pipeline_path))
+    # session で別のレシピの前処理をやり直しても、引き継いだ結果の条件は run のもの。
+    dataset_preprocess(**_SESSION_RECIPE)
+    session_recipe = session_state.session.dataset.preprocessing_recipe
+    assert session_recipe["normalize"] == "none" != run_recipe["normalize"]
+
+    line = _exported_preprocess_line(tmp_path, result["provenance"]["result_id"])
+    assert line == f"# preprocess = {run_recipe}"
+
+
+def test_exporting_a_restored_result_without_the_runs_preprocess_says_unknown(tmp_path):
+    from metabolomix.analysis.dataset_export import HANDOFF_PREPROCESS_UNKNOWN
+    from metabolomix.tools.dataset_analysis_tools import dataset_preprocess
+    from metabolomix.tools.mztab_tools import dataset_load
+
+    harness, result = _run_with_differential(tmp_path, with_preprocess=False)
+    result_id = result["provenance"]["result_id"]
+
+    session_state.session.dataset = None
+    dataset_load(pipeline_path=str(harness.pipeline_path))
+    assert result_id in session_state.session.dataset.results
+    dataset_preprocess(**_SESSION_RECIPE)
+
+    line = _exported_preprocess_line(tmp_path, result_id)
+    assert line == f"# preprocess = {HANDOFF_PREPROCESS_UNKNOWN}"
+    assert line.startswith("# preprocess = unknown")
+
+
+def test_the_runs_preprocess_result_is_not_restored_into_session_results(tmp_path):
+    harness, result = _run_with_differential(tmp_path)
+
+    ds = session_handoff.load_run_dataset(harness.pipeline_path)
+
+    # 戻すのはレシピだけ。前処理結果そのものを戻すと「今の前処理」に見える。
+    assert set(ds.results) == {result["provenance"]["result_id"]}
+    assert ds.preprocess_id is None
+    assert ds.results[result["provenance"]["result_id"]]["provenance"][
+        "handoff"]["preprocess"] == _run_recipe(harness)

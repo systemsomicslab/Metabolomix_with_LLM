@@ -50,7 +50,10 @@ gap-fill だけの特徴を実測として数えた行列が黙って下流に�
 どちらも正しく見えてずれが分からない）と、**探索専用のデータセットでないか**
 （中断された実行の出力では、欠けた検体が「その群には無い」ようにしか見えない）。
 メタ行の前処理条件は `ds.preprocessing_recipe`（今の状態）ではなく、その結果が親に
-持つ前処理の `provenance.effective_parameters` から取る。出力は一時ファイルへ書いてから
+持つ前処理の `provenance.effective_parameters` から取る。pipeline run から引き継いだ結果
+（来歴に `handoff`）は親の前処理が `ds.results` に無いので、引き継ぎ時に写した
+`provenance.handoff.preprocess` を使い、無ければ `unknown（…）` と書く——session の
+`preprocessing_recipe` へは決してフォールバックしない。出力は一時ファイルへ書いてから
 置換するので、途中で落ちた出力が「新しい完成品」として残らない。
 
 1. metabolomix/tools/dataset_analysis_tools.py  dataset_export_differential()

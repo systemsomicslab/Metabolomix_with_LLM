@@ -25,6 +25,9 @@ _MATRIX_SUBDIR = ("results", "matrices")
 #: `service._persist_differential` が差次的結果に付ける output_name の接頭辞。
 _DIFFERENTIAL_PREFIX = "differential:"
 
+#: `service._handle_preprocess` が前処理の成果物に付ける output_name。
+_PREPROCESS_OUTPUT = "preprocess"
+
 
 def load_run_dataset(pipeline_path, *, allow_incomplete: bool = False):
     """run の成果物から DatasetState を組み立てて返す（保存も session 更新もしない）。
@@ -92,6 +95,42 @@ def _handoff_rejection(ds, provenance: dict) -> str | None:
     return None
 
 
+def _run_preprocess_parameters(pipeline_root: Path, record: dict,
+                               parent_ids: list) -> dict | None:
+    """差次的結果の親（run の前処理）が実際に使ったレシピを返す。読めなければ None。
+
+    書き出しのメタ行 `# preprocess = ...` は本来 `ds.results` の親結果から引くが、
+    run の前処理結果は session へ戻さない（`is_current` の handoff 分岐は kind を
+    見ないので、戻すと「今の前処理」に見えてしまう）。そこでレシピだけを
+    引き継ぎ結果の来歴へ写す。写さないと、書き出しは session の
+    `preprocessing_recipe`（空、または session で後からやり直した別のレシピ）を
+    書き、正しい数字に違う条件のラベルが付く。
+
+    ここは `current_result_refs` ではなく**履歴を result_id で引く**。前処理は
+    resume のたびに作り直されて新しい result_id で永続化される一方、成果物で
+    検証が通った差次的工程は skip されるので、差次的結果の親は最後の前処理とは
+    限らない。前処理の成果物は result_id ごとに別ファイル（`results/<id>.json`）
+    なので、古い ref も hash 照合できる。照合できなければ None（不明）を返し、
+    読み込み自体は止めない——数字は差次的結果側で検証済みで、欠けるのはラベルだけ。
+    """
+    wanted = set(parent_ids or [])
+    for ref in reversed(record.get("results") or []):
+        if not isinstance(ref, dict) or ref.get("output_name") != _PREPROCESS_OUTPUT:
+            continue
+        if ref.get("result_id") not in wanted:
+            continue
+        try:
+            data = store.read_result_data(pipeline_root, [ref], _PREPROCESS_OUTPUT)[0]
+        except (DomainError, OSError, ValueError):
+            return None
+        # `preprocess_auto` が `_commit_preprocess` に渡したレシピ＝来歴の
+        # `effective_parameters` と同じもの（`_handle_preprocess` は provenance を
+        # 落として plan を保存するので、ここから読む）。
+        recipe = (data or {}).get("resolved_recipe")
+        return dict(recipe) if isinstance(recipe, dict) else None
+    return None
+
+
 def restore_differentials(ds, pipeline_root: Path, record: dict) -> dict:
     """run の差次的結果のうち、指紋が今の ds と一致するものを `ds.results` へ戻す。
 
@@ -120,8 +159,13 @@ def restore_differentials(ds, pipeline_root: Path, record: dict) -> dict:
             rejected.append({"comparison_id": comparison_id, "result_id": result_id,
                              "reason": reason})
             continue
-        provenance["handoff"] = {"pipeline_root": str(pipeline_root),
-                                 "comparison_id": comparison_id}
+        provenance["handoff"] = {
+            "pipeline_root": str(pipeline_root),
+            "comparison_id": comparison_id,
+            # None は「run の前処理結果を読めなかった」。書き出しは不明と書く。
+            "preprocess": _run_preprocess_parameters(
+                pipeline_root, record, provenance.get("parent_ids")),
+        }
         result["provenance"] = provenance
         ds.results[result_id] = result
         restored.append({"comparison_id": comparison_id, "result_id": result_id,
