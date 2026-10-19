@@ -222,7 +222,7 @@ p / q / 平均は有効 4 桁）。
 |---|---|
 | `resolved` | 「qualified がある最初の付加体の層」の「qualified がある最初の証拠の水準」に、qualified な特徴がちょうど 1 つ。`selected_feature_id` `selected_adduct` `selected_evidence` が埋まる |
 | `needs_input` | 規則では 1 つに決まらない。`reason` が `multiple_qualified_candidates`（同じ層・同じ水準に 2 つ以上）か `no_qualified_candidate`（どの層にも無い） |
-| `not_applicable` | 目標の `polarity` が読み込んだデータセットの極性と違う（`reason` は `polarity_mismatch`）。照合していない |
+| `not_applicable` | 目標の極性が読み込んだデータセットの極性と違う（`reason` は `polarity_mismatch`）。照合していない。目標の極性は `polarity`、省いたときは明示した付加体（`adduct` / `adduct_tiers`）の符号（陽陰が混ざる目標は `FEATURE_TARGET_INVALID`） |
 
 `needs_input` は「誰が次に何を見るか」を返している。**強度・ppm・RT の近さで 1 件を選び直さないこと**
 （選んだ時点で、規則ではなく読み手の好みが結論になる）。
@@ -255,7 +255,10 @@ bh_population, caveats}`。`bh_population = {n_features_total, n_in_matrix, n_te
 
 **`rule_hash` と `stats_source` は別物**。`rule = {targets, polarity, polarity_source, rule_hash}` の
 `targets` は既定値を埋めて付加体の層を解決した目標で、`rule_hash` はその正規化後の目標
-（統計の出所を含まない）から作る。既定値を明示しても省いても、別の session・別の実行役でも、
+（統計の出所を含まない）から作る。覆うのは照合を左右する欄（`target_id`・InChIKey 先頭ブロック・
+分子式か `expected_mz`・付加体の層と理論 m/z・`ppm`・RT・目標の極性・`applicable`）だけで、
+**表示名 `name` は入れず、目標は `target_id` の順に並べ替えてから作る**——改名や `targets` の
+並べ替えでは hash は変わらない。既定値を明示しても省いても、別の session・別の実行役でも、
 同じ目標・同じ極性なら同じ hash になる——判断ログには「この規則で呼んだ」とだけ書ける。
 **hash は表示用の丸め（`rule.targets` の理論 m/z を 4 桁に丸める）より前の値から作るので、
 返された `rule.targets` から hash を計算し直すことはできない**（計算し直すと別の値になり、

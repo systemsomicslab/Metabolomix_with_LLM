@@ -205,7 +205,7 @@ def register_result(ds, result: dict) -> dict:
     return result
 
 
-def is_current(ds, result: dict) -> bool:
+def is_current(ds, result: dict, *, dataset_hash: str | None = None) -> bool:
     """その結果が、今のデータセットの状態から出たものとして通用するか。
 
     **来歴を持たない結果は True**（古いと判定しない）。来歴が無いのは「古い」の
@@ -235,6 +235,10 @@ def is_current(ds, result: dict) -> bool:
     （来歴無しの「材料不足は通す」とは逆）。群の指紋だけが無い場合は、
     上の差次的結果と同じく通す。handoff の分岐は `kind == "differential"` にだけ
     当てる（それ以外の kind が handoff を持っていたら通さない）。
+
+    `dataset_hash` は呼び出し側が計算済みの `dataset_fingerprint(ds)`（任意）。指紋は
+    行列全体の hash なので、多数の結果を続けて照合する呼び出し側（`feature_search.
+    select_results`）は 1 回だけ計算して渡す。渡さなければ必要なときにここで計算する。
     """
     if not (result or {}).get("provenance"):
         return True
@@ -246,7 +250,10 @@ def is_current(ds, result: dict) -> bool:
             # 「今の結果」にしない（run の前処理が今の前処理の顔をする）。
             return False
         recorded_data = prov.get("dataset_hash")
-        if recorded_data is None or recorded_data != dataset_fingerprint(ds):
+        if recorded_data is None:
+            return False
+        current = dataset_hash if dataset_hash is not None else dataset_fingerprint(ds)
+        if recorded_data != current:
             return False
         recorded_groups = prov.get("group_fingerprint")
         return recorded_groups is None or recorded_groups == group_fingerprint(ds)

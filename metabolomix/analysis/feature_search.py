@@ -12,7 +12,8 @@
 **既定値を省いた呼び出しと明示した呼び出しを同じ規則として扱う。** `rule_hash` は
 正規化後の目標（既定の ppm・RT 許容幅・付加体の層を埋めたもの）から作るので、
 `ppm=10` を書いても省いても同じ hash になる。result_id・dataset_hash は入れない
-（それらは規則ではなく、規則を当てた対象の出所）。
+（それらは規則ではなく、規則を当てた対象の出所）。表示名 `name` も入れず、目標は
+`target_id` の順に並べてから作る（改名・並べ替えで規則が変わったように見せない）。
 
 **丸めない。** 正規化後の目標は理論 m/z を full float のまま持つ。丸めはツール層の仕事。
 """
@@ -72,6 +73,7 @@ _ALLOWED_KEYS = frozenset({
 })
 _POLARITIES = ("positive", "negative")
 _SIGN_OF = {"positive": "+", "negative": "-"}
+_POLARITY_OF_SIGN = {sign: polarity for polarity, sign in _SIGN_OF.items()}
 _INCHIKEY_BLOCK_RE = re.compile(r"[A-Z]{14}")
 # parse_formula は読めない部分を黙って捨てるので（"Ca(OH)2" が Ca+O+H2 になる等）、
 # 文字列全体が「元素記号+個数」の連なりであることを先に確かめる。
@@ -223,6 +225,18 @@ def _normalize_one(raw, dataset_polarity: str | None):
         formula = None
         expected = expected_mz
 
+    if polarity is None and (explicit_tiers is not None or not has_formula):
+        # 目標が付加体を明示していれば、その符号が目標の極性（polarity の書き忘れを
+        # データセットの極性との食い違い＝呼び出し全体の誤りにしない）。符号が
+        # 混ざる目標はどちらの極性のデータでも 1 回で照合できないので誤り。
+        signs = {parse_adduct(name_).polarity for tier in tiers for name_ in tier}
+        if len(signs) > 1:
+            field = "adduct_tiers" if explicit_tiers is not None else "adduct"
+            raise _invalid(target_id, field,
+                           f"付加体の極性が混ざっている: {[a for t in tiers for a in t]}")
+        polarity = _POLARITY_OF_SIGN[signs.pop()]
+        resolved = polarity
+
     if resolved is not None:
         sign = _SIGN_OF[resolved]
         for tier in tiers:
@@ -254,7 +268,9 @@ def normalize_targets(targets: list[dict], *, dataset_polarity: str | None) -> l
 
     検証失敗は ``FEATURE_TARGET_INVALID``（details に ``target_id`` と ``field``）。
     極性が決まらず層も作れない目標があれば ``POLARITY_UNKNOWN``（呼び出し全体のエラー）。
-    ``polarity`` が与えられ ``dataset_polarity`` と違う目標は ``applicable=False``。
+    目標の極性は ``polarity``、無ければ明示の付加体（``adduct`` か ``adduct_tiers``）の
+    符号（混ざっていれば ``FEATURE_TARGET_INVALID``）、それも無ければ ``dataset_polarity``。
+    目標の極性が ``dataset_polarity`` と違う目標は ``applicable=False``（→ ``not_applicable``）。
     """
     if dataset_polarity not in (None, *_POLARITIES):
         raise ValueError(f"dataset_polarity は positive / negative / None: {dataset_polarity!r}")
@@ -286,9 +302,24 @@ def normalize_targets(targets: list[dict], *, dataset_polarity: str | None) -> l
     return normalized
 
 
+#: rule_hash に入れない欄。``name`` は読み手のためのラベルで照合に使わない
+#: （改名しただけで「規則が変わった」ように見せない）。
+_RULE_HASH_EXCLUDED = frozenset({"name"})
+
+
 def rule_hash(normalized_targets: list[dict]) -> str:
-    """正規化後の目標リストから照合規則の hash を作る（result_id・dataset_hash は入れない）。"""
-    return canonical_hash(normalized_targets)
+    """正規化後の目標リストから照合規則の hash を作る（result_id・dataset_hash は入れない）。
+
+    覆うのは照合を左右する欄だけ: ``target_id``・InChIKey 先頭ブロック・分子式か
+    expected_mz・付加体の層と理論 m/z・ppm・RT・目標の極性・``applicable``。``name`` は
+    入れず、目標は ``target_id`` の順に並べ替えてから作る——表示名の変更や
+    ``targets`` の並べ替えでは hash は変わらない。
+    """
+    canonical = sorted(
+        ({k: v for k, v in target.items() if k not in _RULE_HASH_EXCLUDED}
+         for target in normalized_targets),
+        key=lambda target: target["target_id"])
+    return canonical_hash(canonical)
 
 
 # ---------- 目標照合の判定（spec §5） ----------
@@ -655,13 +686,17 @@ def _result_id(result: dict):
     return (result.get("provenance") or {}).get("result_id")
 
 
-def select_results(ds, result_ids: list[str] | None) -> dict:
+def select_results(ds, result_ids: list[str] | None, *,
+                   dataset_hash: str | None = None) -> dict:
     """統計を引く 2 群比較の結果を選ぶ。``{"results", "stale", "missing"}``。
 
     省略（None）なら ``ds.results`` のうち ``kind == "two_group"`` のすべて。名指しなら、その
     ID を引く。どちらも ``is_current`` でない結果は ``results`` に入れず ``stale`` に ID を
     挙げる（古い統計を現在のデータの顔で返さない）。名指しの ID が無い、または 2 群比較で
     ない結果（v2 の ``dataset_statistic`` = ``kind == "welch"`` など）は ``missing``。
+
+    ``dataset_hash`` は計算済みの ``dataset_fingerprint(ds)``（任意）。引き継いだ結果ごとに
+    行列全体の hash を計算し直さないよう ``is_current`` へそのまま渡す。
     """
     selected, stale, missing = [], [], []
     if result_ids is None:
@@ -675,7 +710,7 @@ def select_results(ds, result_ids: list[str] | None) -> dict:
             else:
                 missing.append(rid)
     for rid, result in pairs:
-        if is_current(ds, result):
+        if is_current(ds, result, dataset_hash=dataset_hash):
             selected.append(result)
         else:
             stale.append(rid)

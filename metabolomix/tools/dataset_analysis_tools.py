@@ -662,9 +662,11 @@ def dataset_feature_search(
     `needs_input`（`no_qualified_candidate`）。**強度・ppm・RT の近さでは選ばない。**
     `unannotated` は `rt_min` があるときだけ qualified。SME（MS/MS 同定）が別物質なら落とす。
     極性はジョブの宣言 → mzTab-M の付加体の多数決の順に決め、`rule.polarity_source` に書く。
+    目標の極性は `polarity`、省けば明示した付加体（`adduct`/`adduct_tiers`）の符号で、
+    データセットと違う目標は `not_applicable`（陽陰が混ざる付加体は `FEATURE_TARGET_INVALID`）。
     戻り値 `targets`（目標ごとの判定と段ごとの件数）・`candidates`（TSV。目標ごとに
-    `max_results` 件まで）・`rule`（正規化した規則と `rule_hash`。result_id を含まないので、
-    同じ目標・同じ極性なら別の session でも同じ hash）。hash は表示用の丸め（理論 m/z を
+    `max_results` 件まで）・`rule`（正規化した規則と `rule_hash`。result_id・表示名 `name`・
+    目標の並び順を含まないので、同じ目標・同じ極性なら別の session でも同じ hash）。hash は表示用の丸め（理論 m/z を
     4 桁に）より前の値から作るので、返された `rule.targets` から計算し直すことはできない
     ——照合は `rule_hash` の値どうしで行う。
 
@@ -740,8 +742,12 @@ def dataset_feature_search(
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
 
+    # データの指紋（行列全体の hash）は 1 回だけ計算し、引き継いだ結果の照合と
+    # stats_source の両方で使う。
+    dataset_hash = dataset_fingerprint(ds)
     if result_ids is not None:
-        chosen = feature_search.select_results(ds, list(dict.fromkeys(result_ids)))
+        chosen = feature_search.select_results(ds, list(dict.fromkeys(result_ids)),
+                                               dataset_hash=dataset_hash)
         if chosen["missing"] or chosen["stale"]:
             # 名指しの結果を黙って落とすと、呼び出し側は統計が付いたつもりで読む
             return _missing(
@@ -751,7 +757,7 @@ def dataset_feature_search(
                 "dataset_differential で計算し直すか、result_ids を省略して今も有効な結果だけを"
                 "使ってください。")
     else:
-        chosen = feature_search.select_results(ds, None)
+        chosen = feature_search.select_results(ds, None, dataset_hash=dataset_hash)
         if chosen["stale"]:
             notes.append("古い差次的結果（前処理・群の訂正前）は統計に使っていない: "
                          + ", ".join(chosen["stale"]))
@@ -777,7 +783,7 @@ def dataset_feature_search(
                            "rule_hash": feature_search.rule_hash(normalized)}
     payload["stats_source"] = {
         "result_ids": [(r.get("provenance") or {}).get("result_id") for r in results],
-        "dataset_hash": dataset_fingerprint(ds),
+        "dataset_hash": dataset_hash,
     }
     curation = _curation_note(ds)
     if curation:

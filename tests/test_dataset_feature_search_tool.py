@@ -313,3 +313,36 @@ def test_payload_has_no_structured_duplicate():
     tool = next(item for item in tools if item.name == "dataset_feature_search")
     assert tool.outputSchema is None              # content と structuredContent の二重送出をしない
     assert tool.annotations.readOnlyHint is True
+
+
+def test_dataset_fingerprint_is_computed_once_per_call(monkeypatch):
+    """データの指紋は行列全体の hash。引き継いだ結果ごとに計算し直さず、1 回で使い回す。"""
+    import copy
+
+    from metabolomix.analysis import result_state
+
+    _load_ds()
+    session_rid = _differential()
+    ds = session_state.session.dataset
+    handed = []
+    for i in range(3):
+        result = copy.deepcopy(ds.results[session_rid])
+        rid = f"res_handed_{i}"
+        result["provenance"].update(result_id=rid, dataset_id="ds_run",
+                                    handoff={"pipeline_root": "x", "comparison_id": f"c{i}"})
+        ds.results[rid] = result
+        handed.append(rid)
+
+    calls = []
+    original = result_state.dataset_fingerprint
+
+    def counting(target):
+        calls.append(target)
+        return original(target)
+
+    monkeypatch.setattr(result_state, "dataset_fingerprint", counting)
+    parsed = _search(min_mz=100.0, max_mz=101.0)
+
+    assert len(calls) == 1
+    assert parsed["stats_source"]["result_ids"] == [session_rid, *handed]
+    assert parsed["stats_source"]["dataset_hash"] == original(ds)

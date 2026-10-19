@@ -164,11 +164,7 @@ def test_invalid_targets_name_the_field(bad, field):
     assert "target_id" in exc.value.details
 
 
-def test_adduct_tiers_contradicting_polarity_is_invalid():
-    with pytest.raises(DomainError) as exc:
-        normalize_targets([_gaba(adduct_tiers=[["[M-H]-"]])], dataset_polarity="positive")
-    assert exc.value.code == "FEATURE_TARGET_INVALID"
-    assert exc.value.details["field"] == "adduct_tiers"
+def test_adduct_tiers_contradicting_the_declared_polarity_is_invalid():
     with pytest.raises(DomainError) as exc:
         normalize_targets([_gaba(polarity="negative", adduct_tiers=[["[M+H]+"]])],
                           dataset_polarity="negative")
@@ -856,3 +852,67 @@ def test_detection_counts_skipped_when_mask_shape_mismatches():
     ds.detected_mask = None
     [row] = feature_stats(ds, ["1"], [result])
     assert row["detected_a"] is None and row["detected_b"] is None
+
+
+# ---------- 極性を省いた目標は、付加体の符号から極性を読む ----------
+
+def test_target_polarity_is_inferred_from_its_adducts():
+    """polarity を省いても付加体が一方の極性に揃っていれば、それが目標の極性。
+    データセットと違えば呼び出し全体の誤りではなく、その目標だけ当てはまらない。"""
+    tiers = _gaba(adduct_tiers=[["[M-H]-"], ["[M+Cl]-"]])
+    mz = {"target_id": "c2", "inchikey": GABA_KEY, "expected_mz": 102.0561,
+          "adduct": "[M-H]-"}
+    same = _gaba(target_id="c3", adduct_tiers=[["[M+H]+"]])
+    out = normalize_targets([tiers, mz, same], dataset_polarity="positive")
+    assert [(t["target_id"], t["polarity"], t["applicable"]) for t in out] == [
+        ("c1", "negative", False), ("c2", "negative", False), ("c3", "positive", True)]
+    # データセットの極性が不明でも、付加体から目標の極性が決まる
+    [t] = normalize_targets([tiers], dataset_polarity=None)
+    assert t["polarity"] == "negative" and t["applicable"] is True
+
+
+def test_inferred_polarity_mismatch_is_not_applicable_in_matching():
+    [target] = normalize_targets([_gaba(adduct_tiers=[["[M-H]-"]])],
+                                 dataset_polarity="positive")
+    ds = _dataset({"1": {"mz": MH, "rt": 1.2, "candidates": [_candidate()]}})
+    out = match_target(ds, target, max_results=20)
+    assert out["status"] == "not_applicable" and out["reason"] == "polarity_mismatch"
+    assert out["candidates"] == []
+
+
+def test_adduct_tiers_of_mixed_sign_are_invalid():
+    for polarity in ("positive", None):
+        with pytest.raises(DomainError) as exc:
+            normalize_targets([_gaba(adduct_tiers=[["[M+H]+"], ["[M-H]-"]])],
+                              dataset_polarity=polarity)
+        assert exc.value.code == "FEATURE_TARGET_INVALID", polarity
+        assert exc.value.details["field"] == "adduct_tiers"
+
+
+# ---------- rule_hash が覆うもの ----------
+
+def test_rule_hash_ignores_the_display_name():
+    """name は読み手のためのラベルで、照合に使わない。改名で規則が変わったことにしない。"""
+    plain = normalize_targets([_gaba()], dataset_polarity="positive")
+    named = normalize_targets([_gaba(name="GABA")], dataset_polarity="positive")
+    renamed = normalize_targets([_gaba(name="4-aminobutanoate")], dataset_polarity="positive")
+    assert rule_hash(plain) == rule_hash(named) == rule_hash(renamed)
+
+
+def test_rule_hash_ignores_the_order_of_targets():
+    a = _gaba(target_id="a")
+    b = {"target_id": "b", "inchikey": GABA_KEY, "expected_mz": 104.0706, "adduct": "[M+H]+"}
+    forward = normalize_targets([a, b], dataset_polarity="positive")
+    backward = normalize_targets([b, a], dataset_polarity="positive")
+    assert rule_hash(forward) == rule_hash(backward)
+    # target_id は規則の一部（どの目標の判定かを決める）なので、変えれば hash も変わる
+    renamed_id = normalize_targets([_gaba(target_id="z"), b], dataset_polarity="positive")
+    assert rule_hash(renamed_id) != rule_hash(forward)
+
+
+def test_rule_hash_does_not_mutate_the_targets():
+    targets = normalize_targets([_gaba(target_id="b", name="x"), _gaba(target_id="a")],
+                                dataset_polarity="positive")
+    before = [dict(t) for t in targets]
+    rule_hash(targets)
+    assert targets == before
