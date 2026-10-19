@@ -65,12 +65,33 @@ pipeline_path 経路（完了した run の成果物をまとめて載せる）:
 7.       └─ metabolomix/pipeline/store.py verify_result_refs()
 8.    └─ metabolomix/analysis/feature_bindings.py resolved_targets()
 9.    └─ metabolomix/analysis/matrix_state.py load_matrix()
+10.   └─ metabolomix/pipeline/session_handoff.py restore_differentials()
+11.      └─ metabolomix/pipeline/store.py current_result_refs()
+12.      └─ metabolomix/pipeline/store.py read_result_data()
+13.      └─ metabolomix/pipeline/session_handoff.py _handoff_rejection()
+14.         └─ metabolomix/analysis/result_state.py dataset_fingerprint()
+15.         └─ metabolomix/analysis/result_state.py group_fingerprint()
+16. └─ metabolomix/tools/mztab_tools.py _handoff_lines()
 
 dataset・解決済み試料対応表・binding・解析行列を**同じ run から**載せる。
 行列だけを別ツールで載せる入口は置いていない——run A の dataset に run B の
 行列を混ぜられると、群の対応が黙ってずれた統計が出る。行列の値は
 `save_matrix` が残した npz から読み、meta・配列のどちらが書き換わっても
 `load_matrix` が拒否する。
+
+run の差次的結果（`differential:<comparison_id>`）は、試料対応表を戻した**後**に
+データの指紋（`provenance.dataset_hash`）と群の指紋（`group_fingerprint`）を今の
+DatasetState と照合し、一致したものだけを `ds.results` へ戻す。result_id は付け替えない
+（pipeline の TSV のメタ行と同じ ID）。来歴に `handoff`（pipeline_root・comparison_id）を
+足すので、`result_state.is_current` は ID と前処理ではなく指紋で有効性を見る。
+`ds.last_differential` は設定しない（戻した結果は result_id で名指しして使う）。
+読むのは `current_result_refs()` が選ぶ今の ref だけ（export が同じ比較を再永続化すると
+履歴に古い ref が残るため）で、今の ref の成果物が改変されていれば
+`RESULT_INTEGRITY_MISMATCH` で読み込みごと止める。戻さなかったものは
+`ds.handoff_report["rejected"]` に理由（`legacy_result_without_dataset_hash` /
+`dataset_mismatch` / `group_mismatch`）つきで残り、要約に並ぶ。指紋を持たない旧 run の
+結果は `pipeline_resume` で差次的工程だけを再計算させる手順が無いため、session で
+`dataset_preprocess` → `dataset_differential` を案内する。
 
 読み込みは「読めたか」だけでなく「どれだけ信用してよいか」も返す。
 `source_verification` は終了証跡（exit code・identity）とファイル hash が揃って初めて

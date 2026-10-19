@@ -222,6 +222,11 @@ class DatasetState:
         # 置けない——2本目の recipe が1本目を黙って上書きする。統計は
         # matrix_id で名指しして参照する。
         self.analysis_matrices: dict = {}
+        # handoff_report: pipeline run から読み込んだとき（session_handoff.load_run_dataset）
+        # だけ設定する。{"restored": [{comparison_id, result_id, group_a, group_b}],
+        # "rejected": [{comparison_id, result_id, reason}]}。run の差次的結果のうち
+        # 指紋（データ・群）が一致して `results` へ戻したものと、戻さなかったもの。
+        self.handoff_report: dict | None = None
 
         # --- 出所の信用度（metabolomix/mztab/loading.py が設定する） ---
         # source_verification: verified（終了証跡と hash で裏取り済み）/

@@ -34,7 +34,10 @@ def dataset_load(mztab_path: str | None = None, job_path: str | None = None,
         試料対応表・feature binding・解析行列も同じ run からまとめて**載せる。
         行列だけを別に載せる入口は置いていない——別 run の行列を混ぜると群の
         対応が黙ってずれるため。載せた行列は `dataset_statistic` へ
-        `matrix_id` で渡す。
+        `matrix_id` で渡す。run の差次的結果も、データと群の指紋が今の
+        データセットと一致するものだけを戻す（result_id は run の TSV と同じ。
+        直近の結果にはしないので result_id で名指しして使う）。戻せなかった
+        ものは理由つきで要約に並ぶ。
 
     3つとも省略するとエラー、2つ以上指定するとエラー。
 
@@ -87,7 +90,44 @@ def dataset_load(mztab_path: str | None = None, job_path: str | None = None,
         lines.append("- 付随アーティファクト: "
                      + str({role: len(paths)
                             for role, paths in ds.artifact_paths.items()}))
+    lines.extend(_handoff_lines(ds.handoff_report))
     return "\n".join(lines)
+
+
+#: 戻せなかった理由ごとの案内（`session_handoff.restore_differentials` の reason）。
+#: `pipeline_resume` には完了済みの差次的工程だけを再計算させる手順が無い
+#: （要求の変更か `rerun_upstream=true` でしか差し戻らない）ので、旧 run は
+#: session で計算し直すよう案内する。
+_HANDOFF_REASON_NOTES = {
+    "legacy_result_without_dataset_hash":
+        "指紋を持たない旧 run の結果。session で dataset_preprocess → "
+        "dataset_differential を実行して計算し直してください。",
+    "dataset_mismatch": "run の計算時とデータ（mzTab）が一致しません。",
+    "group_mismatch": "run の計算時と群割当が一致しません。",
+}
+
+
+def _handoff_lines(report: dict | None) -> list[str]:
+    """pipeline run から引き継いだ差次的結果の要約（TSV は列名 1 回）。"""
+    if not report:
+        return []
+    lines: list[str] = []
+    restored = report.get("restored") or []
+    rejected = report.get("rejected") or []
+    if restored:
+        lines.append("- 引き継いだ差次的結果（result_id で名指しして使う。"
+                     "直近の結果 last_differential にはしない）:")
+        lines.append("comparison_id\tresult_id\tgroup_a\tgroup_b")
+        lines.extend(f"{r['comparison_id']}\t{r['result_id']}\t{r['group_a']}\t{r['group_b']}"
+                     for r in restored)
+    if rejected:
+        lines.append("- 引き継がなかった差次的結果:")
+        lines.append("comparison_id\tresult_id\treason")
+        lines.extend(f"{r['comparison_id']}\t{r['result_id']}\t{r['reason']}"
+                     for r in rejected)
+        for reason in sorted({r["reason"] for r in rejected}):
+            lines.append(f"  - {reason}: {_HANDOFF_REASON_NOTES.get(reason, '')}")
+    return lines
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
