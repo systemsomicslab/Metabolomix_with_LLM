@@ -54,10 +54,10 @@ def load_run_dataset(pipeline_path, *, allow_incomplete: bool = False):
                                           allow_incomplete=allow_incomplete)
     results = record.get("results") or []
 
-    manifests = store.read_result_data(pipeline_root, results, "sample_manifest")
-    if manifests:
-        # 群・batch・注入順が無ければ、載せた行列で統計を組めない。
-        ds.sample_metadata_rows = list((manifests[-1] or {}).get("rows") or [])
+    # 群・batch・注入順が無ければ、載せた行列で統計を組めない。
+    rows = _run_manifest_rows(pipeline_root, record)
+    if rows is not None:
+        ds.sample_metadata_rows = rows
 
     bindings = store.read_result_data(pipeline_root, results, "feature_bindings")
     if bindings:
@@ -76,6 +76,27 @@ def load_run_dataset(pipeline_path, *, allow_incomplete: bool = False):
     # 群の指紋は試料対応表を戻した後でなければ run と同じ規則で計算できない。
     ds.handoff_report = restore_differentials(ds, pipeline_root, record)
     return ds
+
+
+def _run_manifest_rows(pipeline_root: Path, record: dict) -> list[dict] | None:
+    """run が解決した試料対応表の行を返す。どこにも無ければ None。
+
+    v2 は `sample_manifest` を hash 付きの result ref として残すので、そちらを先に読む。
+    v1 はそれを作らず、`resolve_metadata` が `record["inputs"]["manifest"]` にだけ
+    書く（`metabolomics_handlers.sample_manifest_outcome`）——どちらも
+    `resolve_sample_metadata` の同じ行なので、無ければそこへフォールバックする。
+    フォールバックしないと群の指紋が「群なし」になり、v1 の差次的結果が全部
+    `group_mismatch` で戻らない。`source_file` の絶対/相対の違いは群の指紋
+    （`group` と `biological_sample_id` だけを見る）に効かない。
+    """
+    manifests = store.read_result_data(pipeline_root, record.get("results") or [],
+                                       "sample_manifest")
+    if manifests:
+        return list((manifests[-1] or {}).get("rows") or [])
+    rows = (record.get("inputs") or {}).get("manifest")
+    if isinstance(rows, list) and rows:
+        return [dict(row) for row in rows if isinstance(row, dict)]
+    return None
 
 
 def _handoff_rejection(ds, provenance: dict) -> str | None:

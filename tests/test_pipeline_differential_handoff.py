@@ -309,3 +309,53 @@ def test_feature_search_uses_pipeline_statistics_without_recomputing(tmp_path, m
         assert stat["status"] == "tested"
         # TSV の q は有効数字 4 桁に丸めてある。保存した q と同じ丸めで突き合わせる。
         assert float(stat["q"]) == float(f"{saved[stat['feature_id']]['q']:.4g}")
+
+
+# ---------- 実際の v1 run（fake Console・実 worker）からの引き継ぎ ----------
+
+def test_a_real_v1_run_hands_its_differential_results_to_the_session(tmp_path, monkeypatch):
+    """v1 は試料対応表を result ref にせず `record["inputs"]["manifest"]` にだけ書く。
+
+    上のテストは v2 の run（`sample_manifest` を持つ）に v1 形の ref を足して作るので、
+    この違いを踏まない。読み側が `sample_manifest` しか見ないと、群の指紋が
+    「群なし」になり、run の差次的結果が全部 `group_mismatch` で戻らない。
+    """
+    from metabolomix.tools.dataset_analysis_tools import dataset_feature_search
+    from metabolomix.tools.mztab_tools import dataset_load
+    from tests.pipeline_fixtures import DEFAULT_COMPARISON, PipelineHarness
+
+    harness = PipelineHarness(tmp_path, monkeypatch)
+    try:
+        harness.write_manifest()
+        run = harness.start(target="differential", comparisons=[DEFAULT_COMPARISON],
+                            extra_request={"sample_manifest": "sample-manifest.tsv"})
+        record = harness.wait(run, expected="completed")
+    finally:
+        harness.close()
+    pipeline_root = Path(record["identity"]["pipeline_root"])
+    # 前提: v1 の run は試料対応表を result ref として持たない。
+    assert not [r for r in record["results"] if r.get("output_name") == "sample_manifest"]
+    assert record["inputs"]["manifest"]
+    run_result = harness.result_data(record, f"differential:{DEFAULT_COMPARISON['comparison_id']}")
+    result_id = run_result["provenance"]["result_id"]
+
+    session_state.session.dataset = None
+    summary = dataset_load(pipeline_path=str(pipeline_root))
+
+    ds = session_state.session.dataset
+    assert ds is not None, summary
+    assert ds.handoff_report["rejected"] == [], summary
+    assert [r["result_id"] for r in ds.handoff_report["restored"]] == [result_id]
+    assert result_state.is_current(ds, ds.results[result_id]) is True
+
+    feature_ids = [row["feature"] for row in run_result["results"]
+                   if row.get("p") is not None][:2]
+    assert feature_ids, "検定された特徴が無い"
+    payload = json.loads(dataset_feature_search(feature_ids=feature_ids))
+    assert payload["stats_source"]["result_ids"] == [result_id]
+    header, *lines = payload["stats"].splitlines()
+    stats = [dict(zip(header.split("\t"), line.split("\t"))) for line in lines]
+    assert {s["feature_id"] for s in stats} == set(feature_ids)
+    for stat in stats:
+        assert stat["result_id"] == result_id
+        assert stat["status"] == "tested"
