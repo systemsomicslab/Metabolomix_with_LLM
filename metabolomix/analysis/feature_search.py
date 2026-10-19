@@ -42,7 +42,8 @@ DEFAULT_ADDUCT_TIERS: dict[str, list[list[str]]] = {
 
 MAX_TARGETS = 50
 
-DEFAULT_PPM = 10
+# 数値は float に揃える（canonical_hash は 10 と 10.0 を別の JSON に書くため）。
+DEFAULT_PPM = 10.0
 DEFAULT_RT_TOL_MIN = 0.3
 
 _ALLOWED_KEYS = frozenset({
@@ -52,6 +53,22 @@ _ALLOWED_KEYS = frozenset({
 _POLARITIES = ("positive", "negative")
 _SIGN_OF = {"positive": "+", "negative": "-"}
 _INCHIKEY_BLOCK_RE = re.compile(r"[A-Z]{14}")
+# parse_formula は読めない部分を黙って捨てるので（"Ca(OH)2" が Ca+O+H2 になる等）、
+# 文字列全体が「元素記号+個数」の連なりであることを先に確かめる。
+_FORMULA_RE = re.compile(r"(?:[A-Z][a-z]?\d*)+")
+
+
+def _formula_mass(formula) -> float | None:
+    """分子式の中性モノアイソトピック質量。全体が読めない・未知元素なら None。"""
+    if not isinstance(formula, str):
+        return None
+    text = formula.strip()
+    if not _FORMULA_RE.fullmatch(text):
+        return None
+    try:
+        return monoisotopic_mass(parse_formula(text))
+    except (ValueError, KeyError):
+        return None
 
 
 def theoretical_mz(formula: str, adduct: str) -> float | None:
@@ -59,9 +76,8 @@ def theoretical_mz(formula: str, adduct: str) -> float | None:
     parsed = parse_adduct(adduct)
     if parsed is None:
         return None
-    try:
-        neutral = monoisotopic_mass(parse_formula(formula))
-    except (ValueError, KeyError, TypeError, AttributeError):
+    neutral = _formula_mass(formula)
+    if neutral is None:
         return None
     return mz_from_neutral(neutral, parsed)
 
@@ -82,12 +98,12 @@ def _positive_number(target_id, raw: dict, field: str, default):
     value = raw[field]
     if not _is_number(value) or value <= 0:
         raise _invalid(target_id, field, f"{field} は正の数で指定する: {value!r}")
-    return value
+    return float(value)
 
 
 def _clean_tiers(target_id, tiers) -> list[list[str]]:
-    if (not isinstance(tiers, list) or not tiers
-            or not all(isinstance(tier, list) and tier for tier in tiers)
+    if (not isinstance(tiers, (list, tuple)) or not tiers
+            or not all(isinstance(tier, (list, tuple)) and tier for tier in tiers)
             or not all(isinstance(a, str) and a.strip() for tier in tiers for a in tier)):
         raise _invalid(
             target_id, "adduct_tiers",
@@ -123,8 +139,10 @@ def _normalize_one(raw, dataset_polarity: str | None):
     ppm = _positive_number(target_id, raw, "ppm", DEFAULT_PPM)
     rt_tol_min = _positive_number(target_id, raw, "rt_tol_min", DEFAULT_RT_TOL_MIN)
     rt_min = raw.get("rt_min")
-    if rt_min is not None and (not _is_number(rt_min) or rt_min < 0):
-        raise _invalid(target_id, "rt_min", f"rt_min は 0 以上の数（分）で指定する: {rt_min!r}")
+    if rt_min is not None:
+        if not _is_number(rt_min) or rt_min < 0:
+            raise _invalid(target_id, "rt_min", f"rt_min は 0 以上の数（分）で指定する: {rt_min!r}")
+        rt_min = float(rt_min)
 
     polarity = raw.get("polarity")
     if polarity is not None and polarity not in _POLARITIES:
@@ -148,10 +166,8 @@ def _normalize_one(raw, dataset_polarity: str | None):
         if not isinstance(formula, str):
             raise _invalid(target_id, "formula", "formula は文字列で指定する")
         formula = formula.strip()
-        try:
-            monoisotopic_mass(parse_formula(formula))
-        except (ValueError, KeyError):
-            raise _invalid(target_id, "formula", f"分子式を読めない: {formula!r}") from None
+        if _formula_mass(formula) is None:
+            raise _invalid(target_id, "formula", f"分子式を読めない: {formula!r}")
         if explicit_tiers is not None:
             tiers = _clean_tiers(target_id, explicit_tiers)
         elif resolved is not None:
@@ -178,6 +194,7 @@ def _normalize_one(raw, dataset_polarity: str | None):
         if explicit_tiers is not None:
             raise _invalid(target_id, "adduct_tiers",
                            "expected_mz の目標は付加体が 1 つに固定される（adduct_tiers は使えない）")
+        expected_mz = float(expected_mz)
         adduct = adduct.strip()
         if parse_adduct(adduct) is None:
             raise _invalid(target_id, "adduct", f"付加体を読めない: {adduct!r}")

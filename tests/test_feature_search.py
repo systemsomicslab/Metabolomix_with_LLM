@@ -25,6 +25,9 @@ def test_theoretical_mz_of_gaba_protonated():
 def test_theoretical_mz_unreadable_returns_none():
     assert theoretical_mz("", "[M+H]+") is None
     assert theoretical_mz("Xx9", "[M+H]+") is None
+    # parse_formula は読めない部分を黙って捨てるので、全体が読めることを先に確かめる
+    for junk in ("C4H9NO2!!", "Ca(OH)2", "C4H9NO2-3", "C4H9NO2 junk", "c4h9no2"):
+        assert theoretical_mz(junk, "[M+H]+") is None, junk
     assert theoretical_mz("C4H9NO2", "[bogus]") is None
 
 
@@ -84,6 +87,22 @@ def test_rule_hash_is_the_same_whether_defaults_are_explicit():
     assert rule_hash(omitted) == rule_hash(explicit)
 
 
+def test_rule_hash_ignores_int_float_and_list_tuple_spelling():
+    omitted = normalize_targets([_gaba()], dataset_polarity="positive")
+    spelled = normalize_targets(
+        [_gaba(ppm=10.0, rt_tol_min=0.3,
+               adduct_tiers=tuple(tuple(t) for t in DEFAULT_ADDUCT_TIERS["positive"]))],
+        dataset_polarity="positive")
+    assert rule_hash(omitted) == rule_hash(spelled)
+    assert isinstance(spelled[0]["ppm"], float) and isinstance(spelled[0]["adduct_tiers"][0], list)
+    a = normalize_targets([_gaba(rt_min=3)], dataset_polarity="positive")
+    b = normalize_targets([_gaba(rt_min=3.0)], dataset_polarity="positive")
+    assert rule_hash(a) == rule_hash(b)
+    mz = {"target_id": "c1", "inchikey": GABA_KEY, "adduct": "[M+H]+"}
+    assert (rule_hash(normalize_targets([{**mz, "expected_mz": 104}], dataset_polarity="positive"))
+            == rule_hash(normalize_targets([{**mz, "expected_mz": 104.0}], dataset_polarity="positive")))
+
+
 def test_rule_hash_changes_with_the_rule():
     base = rule_hash(normalize_targets([_gaba()], dataset_polarity="positive"))
     assert base != rule_hash(normalize_targets([_gaba(ppm=5)], dataset_polarity="positive"))
@@ -109,6 +128,9 @@ def test_target_of_other_polarity_is_not_applicable():
     ({"inchikey": GABA_KEY, "formula": "C4H9NO2"}, "target_id"),
     ({"target_id": "c1", "inchikey": GABA_KEY, "formula": "C4H9NO2", "bogus": 1}, "bogus"),
     ({"target_id": "c1", "inchikey": GABA_KEY, "formula": "Xx9"}, "formula"),
+    ({"target_id": "c1", "inchikey": GABA_KEY, "formula": "C4H9NO2!!"}, "formula"),
+    ({"target_id": "c1", "inchikey": GABA_KEY, "formula": "Ca(OH)2"}, "formula"),
+    ({"target_id": "c1", "inchikey": GABA_KEY, "formula": "C4H9NO2-3"}, "formula"),
     ({"target_id": "c1", "inchikey": GABA_KEY, "formula": "C4H9NO2", "ppm": 0}, "ppm"),
     ({"target_id": "c1", "inchikey": GABA_KEY, "formula": "C4H9NO2", "ppm": True}, "ppm"),
     ({"target_id": "c1", "inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_tol_min": -1}, "rt_tol_min"),
