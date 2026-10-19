@@ -27,7 +27,7 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
     "arf.md": (
         "arf_parser", "arf_list_classes", "arf_list_tags", "arf_list_sample_roles",
         "arf_exclude", "arf_preprocess", "arf_pca_preprocessed", "arf_differential",
-        "arf_export_differential", "arf_plot_volcano", "arf_plot_group_intensity", "arf_plot_species",
+        "arf_export_differential", "arf_export_evidence_bundle", "arf_plot_volcano", "arf_plot_group_intensity", "arf_plot_species",
         "arf_pca_species",
     ),
     "arf2.md": ("arf2_parser", "arf2_annotate_identities"),
@@ -40,7 +40,7 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
     "mztab.md": ("dataset_load", "dataset_status"),
     "dataset_analysis.md": (
         "dataset_preprocess", "dataset_pca", "dataset_differential",
-        "dataset_export_differential", "dataset_set_sample_metadata",
+        "dataset_export_differential", "dataset_export_evidence_bundle", "dataset_set_sample_metadata",
     ),
     "pipeline.md": (
         "pipeline_plan", "pipeline_run", "pipeline_status",
@@ -185,4 +185,4 @@ class TestScopeBoundary(unittest.TestCase):
             registered,
             "対象範囲の分類と登録済みツールが一致しない",
         )
-        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 53)
+        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 55)

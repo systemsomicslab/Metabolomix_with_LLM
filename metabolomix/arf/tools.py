@@ -61,6 +61,7 @@ __all__ = [
     "arf_plot_volcano",
     "arf_plot_group_intensity",
     "arf_export_differential",
+    "arf_export_evidence_bundle",
 ]
 
 
@@ -384,6 +385,7 @@ def arf_preprocess(
     report["status"] = "success"
     report["matrix_shape"] = list(matrix2.shape)
     report["recipe"] = recipe
+    session_state.session.arf.preprocessing_report = report
     return json_payload(report)
 
 
@@ -752,6 +754,7 @@ def _commit_arf_selection(spots: list[dict], selection_requested: bool) -> None:
         state.pp_feature_names = None
         state.sample_meta = {}
         state.preprocessing_recipe = {}
+        state.preprocessing_report = None
         state.last_differential = None
     state.last_pca_plot = None
     state.pca_result = None
@@ -1455,3 +1458,43 @@ def _group_intensity_caption(payload: dict) -> str:
     if payload["caveats"]:
         caption += " 注意: " + " / ".join(payload["caveats"])
     return caption
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True), structured_output=False)
+def arf_export_evidence_bundle(output_dir: str, apply_curation: bool = True) -> str:
+    """全特徴量と出典別候補をmassbank-context用v2バンドルへ出力する。既存v1は変更しない。"""
+    import hashlib
+    from metabolomix.analysis.evidence_export import packed
+    from metabolomix.arf.evidence_export import export_arf_evidence
+    from metabolomix.arf2.reader import load_catalog
+    from metabolomix.curation.apply import flags_for_arf2
+    from metabolomix.curation.flags import FlagFileError
+    last = getattr(session_state.session.arf, 'last_differential', None)
+    if not last or last.get('kind') != 'two_group':
+        return mcp_errors.missing_state('two_group_differential', ['arf_differential'], '先に2群比較を実行してください。')
+    sibling = _sibling_arf2_path()
+    if not sibling:
+        return mcp_errors.missing_state('sibling_arf2', ['arf_parser'], '同一アラインメントの兄弟ARF2が必要です。')
+    try:
+        flags = flags_for_arf2(sibling)
+        catalog = {}
+        for item in load_catalog(sibling):
+            key = item.get('MasterAlignmentID')
+            if key in catalog:
+                raise ValueError('ARF2のMasterAlignmentIDが重複しています')
+            catalog[key] = item
+        with Path(sibling).open('rb') as stream:
+            source_hash = hashlib.file_digest(stream, 'sha256').hexdigest()
+        source_id = hashlib.sha256(packed([source_hash,last]).encode()).hexdigest()
+        result = export_arf_evidence(last,catalog,Path(output_dir),source_analysis_id=source_id,
+            preprocess=getattr(session_state.session.arf,'preprocessing_recipe',None),
+            preprocessing_report=getattr(session_state.session.arf,'preprocessing_report',None),
+            flags=flags if apply_curation else None,
+            dcl_path=Path(sibling).with_suffix('.dcl') if Path(sibling).with_suffix('.dcl').is_file() else None,
+            provenance=dict(source_arf=str(getattr(session_state.session.arf,'current_file_path','')),
+                source_arf2=str(sibling),source_arf2_sha256=source_hash,
+                curation_state='applied' if apply_curation else 'not_applied',
+                orphaned_curation=flags.get('orphaned',0)))
+        return json_payload(result)
+    except (ValueError,OSError,FlagFileError) as exc:
+        return json_payload({'error':{'code':'EVIDENCE_EXPORT_FAILED','message':str(exc)}})

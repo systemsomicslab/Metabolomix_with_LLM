@@ -84,3 +84,9 @@ QC/blank/unknown/standard・`include=false` を混ぜない（選択規則は
 完全交絡を `allow_confounded=true` の
 明示なしには通さない、という前提検証を `compare_dataset()` の前に挟む。単体ツール
 `dataset_differential` はこの前提検証を経ない汎用呼び出し（USAGE.md 参照）。
+
+## dataset_export_evidence_bundle
+
+全特徴量と候補の根拠を新しいv2バンドルへ保存する。旧15列TSVは変更しない。
+
+1. metabolomix/tools/dataset_analysis_tools.py  dataset_export_evidence_bundle()

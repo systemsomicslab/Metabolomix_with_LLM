@@ -137,6 +137,7 @@ class ArfState:
         self.pp_feature_names = None
         self.sample_meta = {}            # {sample_name: {role, group, run_order, batch}}
         self.preprocessing_recipe = {}   # 直近適用した前処理レシピ（空=未適用）
+        self.preprocessing_report = None  # 母集団形成とQC警告をv2根拠へ渡す
 
         # --- 直近解析の描画用データ ---
         self.last_pca_plot = None        # save_figure が参照
@@ -178,6 +179,7 @@ class ArfState:
         self.pp_feature_names = None
         self.sample_meta = {}
         self.preprocessing_recipe = {}
+        self.preprocessing_report = None
         # 手動除外（別データに持ち越さない）
         self.excluded_samples = set()
         self.excluded_spots = set()

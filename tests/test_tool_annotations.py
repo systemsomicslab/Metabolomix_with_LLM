@@ -32,6 +32,8 @@ LOCAL_DELETE = {"readOnlyHint": False, "destructiveHint": True, "idempotentHint"
 APPEND_AND_REWRITE = {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False}
 
 EXPECTED_ANNOTATIONS = {
+    "arf_export_evidence_bundle": LOCAL_WRITE,
+    "dataset_export_evidence_bundle": LOCAL_WRITE,
     # --- ARF（多サンプル解析）。セッション状態は更新するが外部副作用は無い ---
     "arf_list_tags": READ_ONLY,
     "arf_list_classes": READ_ONLY,

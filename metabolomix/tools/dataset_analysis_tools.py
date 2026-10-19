@@ -28,6 +28,7 @@ __all__ = [
     "dataset_pca",
     "dataset_differential",
     "dataset_export_differential",
+    "dataset_export_evidence_bundle",
     "dataset_set_sample_metadata",
     "dataset_statistic",
     "dataset_build_matrix",
@@ -484,3 +485,29 @@ def dataset_build_matrix(recipe: dict, recipe_id: str = "default") -> str:
         "caveats": matrix["caveats"],
         "values_note": "値は戻り値に非同梱（セッションに保持）。dataset_statistic に matrix_id を渡す。",
     })
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True), structured_output=False)
+def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curation: bool = True) -> str:
+    """指定2群結果の全特徴量と候補をv2根拠バンドルへ出力する。名前だけの候補も保持する。"""
+    from metabolomix.analysis.evidence_export import export_dataset_evidence
+    from metabolomix.curation import apply as curation_apply
+    from metabolomix.curation.flags import FlagFileError
+    from metabolomix.core.atomic_io import DomainError
+    ds = session_state.session.dataset
+    result = (getattr(ds,'results',None) or {}).get(result_id) if ds is not None else None
+    if result is None:
+        return _missing('dataset_differential_result','指定した2群結果がありません。先にdataset_differentialを実行してください。')
+    try:
+        curation = None
+        arf2 = next(filter(None,(curation_apply.arf2_for_mztab(p) for p in ds.source_files)),None)
+        if arf2 is not None:
+            flags = curation_apply.flags_for_arf2(arf2)
+            mapped = (getattr(ds,'feature_qc',None) or {}).get('source') == 'arf'
+            state = 'not_applied' if not apply_curation else 'applied' if mapped else 'unmapped'
+            curation = dict(state=state,flag_set=flags)
+        return json_payload(export_dataset_evidence(ds,result,Path(output_dir),curation=curation))
+    except DomainError as exc:
+        return mztab_error(exc.code,exc.message,exc.details())
+    except (ValueError,OSError,FlagFileError) as exc:
+        return mztab_error('EVIDENCE_EXPORT_FAILED',str(exc))
