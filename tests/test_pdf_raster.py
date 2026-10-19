@@ -1,9 +1,9 @@
-import fitz
-
 from metabolomix.plots import pdf_raster
+from tests.pymupdf_guard import require_pymupdf
 
 
 def _pdf(tmp_path, w=842, h=595):          # A4 横（pt）
+    fitz = require_pymupdf()
     doc = fitz.open()
     page = doc.new_page(width=w, height=h)
     page.insert_text((72, 72), "PC")
