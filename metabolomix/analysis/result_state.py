@@ -233,12 +233,18 @@ def is_current(ds, result: dict) -> bool:
     **群の指紋**で、同じデータ・同じ群割当から出た結果かを照合する。データの指紋が
     無い引き継ぎ結果は、同じデータから出たことを確かめられないので通さない
     （来歴無しの「材料不足は通す」とは逆）。群の指紋だけが無い場合は、
-    上の差次的結果と同じく通す。
+    上の差次的結果と同じく通す。handoff の分岐は `kind == "differential"` にだけ
+    当てる（それ以外の kind が handoff を持っていたら通さない）。
     """
     if not (result or {}).get("provenance"):
         return True
     prov = result["provenance"]
     if prov.get("handoff"):
+        if prov.get("kind") != "differential":
+            # run から戻すのは差次的結果だけ（`session_handoff.restore_differentials`）。
+            # 他の kind が handoff を名乗っていたら、ID も親も見ないこの分岐で
+            # 「今の結果」にしない（run の前処理が今の前処理の顔をする）。
+            return False
         recorded_data = prov.get("dataset_hash")
         if recorded_data is None or recorded_data != dataset_fingerprint(ds):
             return False

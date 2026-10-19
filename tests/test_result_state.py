@@ -499,3 +499,15 @@ def test_session_result_rules_are_unchanged():
     result = _handed_off_result(ds)
     result["provenance"].pop("handoff")
     assert is_current(ds, result) is False
+
+
+def test_a_handoff_marker_on_a_non_differential_result_is_not_current():
+    """run から戻すのは差次的結果だけ。他の kind に handoff が付いていたら通さない
+    （run の前処理結果が「今の前処理」の顔をするのを防ぐ）。"""
+    from metabolomix.analysis.result_state import is_current
+
+    ds, _rows = _dataset_with_groups("control", "treated")
+    for kind in ("preprocess", "pca", None):
+        result = _handed_off_result(ds)
+        result["provenance"]["kind"] = kind
+        assert is_current(ds, result) is False, kind

@@ -102,8 +102,13 @@ _HANDOFF_REASON_NOTES = {
     "legacy_result_without_dataset_hash":
         "指紋を持たない旧 run の結果。session で dataset_preprocess → "
         "dataset_differential を実行して計算し直してください。",
-    "dataset_mismatch": "run の計算時とデータ（mzTab）が一致しません。",
-    "group_mismatch": "run の計算時と群割当が一致しません。",
+    "dataset_mismatch":
+        "run の計算時とデータ（mzTab）が一致しません。今読み込んだデータで使うには、"
+        "session で dataset_preprocess → dataset_differential を実行して計算し直してください。",
+    "group_mismatch":
+        "run の計算時と群割当が一致しません。実験情報シート（または "
+        "dataset_set_sample_metadata で与えた群）を確かめるか、今の群のまま session で "
+        "dataset_preprocess → dataset_differential を実行して計算し直してください。",
 }
 
 

@@ -102,7 +102,8 @@ def _run_manifest_rows(pipeline_root: Path, record: dict) -> list[dict] | None:
 def _handoff_rejection(ds, provenance: dict) -> str | None:
     """引き継げない理由を返す（引き継げるなら None）。
 
-    判定の規則そのものは `result_state.is_current` の handoff 分岐と同じ。
+    判定の規則そのものは `result_state.is_current` の handoff 分岐と同じ
+    （kind はここでは見ない——呼び出し側が `differential:` の ref だけを渡す）。
     ここでは「なぜ戻さなかったか」を利用者に言えるよう、理由を分けて返す。
     """
     recorded_data = provenance.get("dataset_hash")
@@ -121,8 +122,9 @@ def _run_preprocess_parameters(pipeline_root: Path, record: dict,
     """差次的結果の親（run の前処理）が実際に使ったレシピを返す。読めなければ None。
 
     書き出しのメタ行 `# preprocess = ...` は本来 `ds.results` の親結果から引くが、
-    run の前処理結果は session へ戻さない（`is_current` の handoff 分岐は kind を
-    見ないので、戻すと「今の前処理」に見えてしまう）。そこでレシピだけを
+    run の前処理結果は session へ戻さない（session の前処理ではないので、戻すと
+    「今の前処理」に見えてしまう。`is_current` の handoff 分岐も差次的結果以外は
+    通さない）。そこでレシピだけを
     引き継ぎ結果の来歴へ写す。写さないと、書き出しは session の
     `preprocessing_recipe`（空、または session で後からやり直した別のレシピ）を
     書き、正しい数字に違う条件のラベルが付く。
