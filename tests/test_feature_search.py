@@ -6,10 +6,15 @@ import pytest
 from metabolomix.analysis.feature_search import (
     DEFAULT_ADDUCT_TIERS,
     MAX_TARGETS,
+    _feature_mz_array,
     classify_identity,
+    feature_stats,
     match_target,
     normalize_targets,
+    result_summaries,
     rule_hash,
+    search_window,
+    select_results,
     theoretical_mz,
 )
 from metabolomix.core.atomic_io import DomainError
@@ -388,8 +393,15 @@ def test_identity_adduct_and_charge_must_match():
     # 電荷は符号の書き方に依存しない（陰イオンで -1 と書かれていても 1 価として一致）
     assert classify_identity([_candidate(adduct="[M-H]1-", charge=-1)], None,
                              inchikey_block=block, adduct="[M-H]-")[0] == "sme_match"
-    # 電荷が読めない候補は一致を確かめられない
+    # 電荷が読めない候補は、付加体が一致していれば電荷で落とさない（欠測は反証ではない）。
+    # 付加体が違えば電荷が読めなくても付加体の不一致で落ちる。
     assert classify_identity([_candidate(charge=None)], None,
+                             inchikey_block=block, adduct="[M+H]+") == ("sme_match", [], 1)
+    assert classify_identity([_candidate(charge=None, adduct="[M+Na]1+")], None,
+                             inchikey_block=block, adduct="[M+H]+") \
+        == ("contradicted", ["adduct_mismatch"], None)
+    # 読めた電荷が違えば（None でなければ）従来どおり不一致
+    assert classify_identity([_candidate(charge=0)], None,
                              inchikey_block=block, adduct="[M+H]+")[0] == "contradicted"
 
 
@@ -546,3 +558,301 @@ def test_target_of_other_polarity_is_not_applicable_in_matching():
     assert out["candidates"] == [] and out["truncated"] == 0
     assert out["selected_feature_id"] is None
     assert out["counts"] == EMPTY_COUNTS
+
+
+# ---------- Task 7 の持ち越し（match_target の補足） ----------
+
+
+def test_needs_input_tie_records_the_evidence_level_where_it_happened():
+    # 同じ層・同じ水準（sme_match）に 2 特徴 → 選ばないが、決着が付かなかった水準は残す
+    ds = _dataset({
+        "1": {"mz": MH, "rt": 1.2, "candidates": [_candidate()]},
+        "2": {"mz": _shift(MH, 3), "rt": 1.2, "candidates": [_candidate(sme_id="2")]},
+        "3": {"mz": _shift(MH, -3), "rt": 1.2},          # 下位の unannotated は水準に影響しない
+    })
+    out = match_target(ds, _target(rt_min=1.2), max_results=20)
+    assert out["status"] == "needs_input" and out["reason"] == "multiple_qualified_candidates"
+    assert out["selected_feature_id"] is None and out["selected_adduct"] is None
+    assert out["selected_evidence"] == "sme_match"
+    assert out["adduct_tier_used"] == 1
+    # 候補が 1 つも無いときは決着した水準が無いので None のまま
+    empty = match_target(_dataset({"1": {"mz": 300.0, "rt": 1.2}}), _target(rt_min=1.2),
+                         max_results=20)
+    assert empty["selected_evidence"] is None
+    # unannotated 同士の同点は unannotated
+    tied = match_target(
+        _dataset({"1": {"mz": MH, "rt": 1.2}, "2": {"mz": _shift(MH, 2), "rt": 1.2}}),
+        _target(rt_min=1.2), max_results=20)
+    assert tied["status"] == "needs_input" and tied["selected_evidence"] == "unannotated"
+
+
+def test_precomputed_mz_array_is_used_when_given():
+    ds = _dataset({"1": {"mz": MH, "rt": 1.2, "candidates": [_candidate()]}})
+    target = _target(rt_min=1.2)
+    same = match_target(ds, target, max_results=20, mz_array=_feature_mz_array(ds))
+    assert same == match_target(ds, target, max_results=20)
+    # 渡した配列がそのまま使われる（ds の m/z ではなく）ことを、窓の外へずらして確かめる
+    shifted = match_target(ds, target, max_results=20, mz_array=np.array([MH + 50.0]))
+    assert shifted["candidates"] == [] and shifted["status"] == "needs_input"
+
+
+def test_expected_mz_target_matches_only_its_fixed_adduct():
+    # 理論値を expected_mz で与える目標は付加体が 1 つに固定される（MNA の特徴は拾わない）
+    [target] = normalize_targets(
+        [{"target_id": "c1", "inchikey": GABA_KEY, "expected_mz": MH, "adduct": "[M+H]+",
+          "rt_min": 1.2}],
+        dataset_polarity="positive")
+    ds = _dataset({"1": {"mz": MH, "rt": 1.2, "candidates": [_candidate()]},
+                   "2": {"mz": MNA, "rt": 1.2}})
+    out = match_target(ds, target, max_results=20)
+    assert out["status"] == "resolved" and out["selected_feature_id"] == "1"
+    assert out["selected_adduct"] == "[M+H]+" and out["selected_evidence"] == "sme_match"
+    assert out["theoretical_mz"] == {"[M+H]+": MH}
+    assert [r["feature_id"] for r in out["candidates"]] == ["1"]
+    assert out["candidates"][0]["sme_rank"] == 1
+
+
+def test_negative_polarity_target_uses_the_negative_default_tiers():
+    mh_neg = theoretical_mz("C4H9NO2", "[M-H]-")
+    [target] = normalize_targets([_gaba(rt_min=1.2)], dataset_polarity="negative")
+    cand = _candidate(adduct="[M-H]1-", charge=-1, exp_mass_to_charge=mh_neg)
+    ds = _dataset({"1": {"mz": mh_neg, "rt": 1.2, "candidates": [cand]},
+                   "2": {"mz": theoretical_mz("C4H9NO2", "[M+Cl]-"), "rt": 1.2}})
+    out = match_target(ds, target, max_results=20)
+    assert out["status"] == "resolved" and out["selected_feature_id"] == "1"
+    assert out["selected_adduct"] == "[M-H]-" and out["adduct_tier_used"] == 1
+    assert out["selected_evidence"] == "sme_match"
+    cl = _row(out, "2", "[M+Cl]-")
+    assert cl["adduct_tier"] == 2 and "lower_adduct_tier" in _reasons(cl)
+    # 陽イオンの付加体は候補に出ない
+    negative = {a for tier in DEFAULT_ADDUCT_TIERS["negative"] for a in tier}
+    assert all(r["adduct"] in negative for r in out["candidates"])
+
+
+def test_sme_rank_is_none_when_the_matched_candidate_has_no_rank():
+    ds = _dataset({"1": {"mz": MH, "rt": 1.2, "candidates": [_candidate(rank=None)]}})
+    out = match_target(ds, _target(rt_min=1.2), max_results=20)
+    row = _row(out, "1")
+    assert row["evidence"] == "sme_match" and row["sme_rank"] is None
+    assert out["status"] == "resolved"
+
+
+# ---------- 窓検索と統計の結合（spec §4.2・§6） ----------
+
+def _stats_dataset():
+    """4 特徴 × 4 試料。A=S1,S2 / B=S3,S4。特徴 4 は前処理で落ちた（結果の行列に無い）。"""
+    ds = _dataset({
+        "1": {"mz": 100.0, "rt": 1.0, "candidates": [_candidate(chemical_name="Alpha")]},
+        "2": {"mz": 200.0, "rt": 2.0,
+              "annotation": {"sml_id": "3", "ambiguous": False, "name": "Beta",
+                             "inchikey": OTHER_KEY, "adduct": "[M+Na]+"}},
+        "3": {"mz": 300.0, "rt": 3.0},
+        "4": {"mz": 400.0, "rt": 4.0},
+    }, assays=("a1", "a2", "a3", "a4"))
+    ds.dataset_id = "ds1"
+    ds.detected_mask = np.array([
+        [True, True, True, False],
+        [True, False, False, False],
+        [False, False, True, True],
+        [True, True, True, True],
+    ])
+    return ds
+
+
+def _two_group(ds, rows, *, result_id="diff_1", **extra):
+    result = {
+        "kind": "two_group", "a": "ctrl", "b": "treat",
+        "samples_a": ["S1", "S2"], "samples_b": ["S3", "S4"], "n_a": 2, "n_b": 2,
+        "log2fc_sign": "log2(b/a)", "caveats": ["小n"],
+        "results": rows,
+        "provenance": {"result_id": result_id, "kind": "differential", "dataset_id": "ds1",
+                       "parent_ids": []},
+    }
+    result.update(extra)
+    ds.results[result_id] = result
+    return result
+
+
+def _row_of(feature, **extra):
+    row = {"feature": feature, "mean_a": 1.0, "mean_b": 2.0, "log2fc": 1.0,
+           "t": 2.5, "p": 0.01, "q": 0.03}
+    row.update(extra)
+    return row
+
+
+def _window(ds, **kw):
+    args = dict(feature_ids=None, min_mz=None, max_mz=None, min_rt=None, max_rt=None,
+                max_results=50)
+    args.update(kw)
+    return search_window(ds, **args)
+
+
+def test_window_and_filters_are_anded_and_inclusive():
+    ds = _stats_dataset()
+    rows, truncated = _window(ds, min_mz=200.0, max_mz=300.0)
+    assert [r["feature_id"] for r in rows] == ["2", "3"] and truncated == 0   # 境界を含む
+    rows, _ = _window(ds, min_mz=100.0, max_mz=400.0, min_rt=2.0, max_rt=3.0)
+    assert [r["feature_id"] for r in rows] == ["2", "3"]
+    rows, _ = _window(ds, min_mz=100.0, max_mz=400.0, min_rt=2.0, max_rt=3.0,
+                      feature_ids=["3", "4"])
+    assert [r["feature_id"] for r in rows] == ["3"]                          # 条件は AND
+    rows, _ = _window(ds, feature_ids=["4", "1"])
+    assert [r["feature_id"] for r in rows] == ["1", "4"]                     # m/z 昇順
+    rows, _ = _window(ds, min_rt=3.5)                                        # 片側だけでも条件
+    assert [r["feature_id"] for r in rows] == ["4"]
+    assert list(rows[0]) == ["feature_id", "mz", "rt", "evidence", "name", "inchikey",
+                             "adduct", "n_sme"]
+
+
+def test_window_evidence_name_inchikey_adduct_and_truncation():
+    ds = _stats_dataset()
+    ds.feature_candidates["1"] = [
+        _candidate(rank=2, chemical_name="Second", inchikey=OTHER_KEY, adduct="[M+Na]1+"),
+        _candidate(rank=1, chemical_name="Alpha", adduct="[M+H]1+"),
+    ]
+    ds.feature_annotations["3"] = {"ambiguous": True, "sml_ids": ["1", "2"], "name": None,
+                                   "inchikeys": [OTHER_KEY, THIRD_KEY]}
+    rows, truncated = _window(ds, min_mz=0)
+    by = {r["feature_id"]: r for r in rows}
+    assert by["1"] == {"feature_id": "1", "mz": 100.0, "rt": 1.0, "evidence": "sme",
+                       "name": "Alpha", "inchikey": GABA_KEY, "adduct": "[M+H]1+", "n_sme": 2}
+    assert by["2"]["evidence"] == "sml" and by["2"]["name"] == "Beta"
+    assert by["2"]["inchikey"] == OTHER_KEY and by["2"]["adduct"] == "[M+Na]+"
+    assert by["2"]["n_sme"] == 0
+    assert by["3"]["evidence"] == "sml" and by["3"]["name"] is None
+    assert by["3"]["inchikey"] == f"{OTHER_KEY};{THIRD_KEY}"
+    assert by["4"] == {"feature_id": "4", "mz": 400.0, "rt": 4.0, "evidence": "none",
+                       "name": None, "inchikey": None, "adduct": None, "n_sme": 0}
+    rows, truncated = _window(ds, min_mz=0, max_results=3)
+    assert [r["feature_id"] for r in rows] == ["1", "2", "3"] and truncated == 1
+
+
+def test_empty_query_is_refused():
+    ds = _stats_dataset()
+    with pytest.raises(DomainError) as exc:
+        _window(ds)
+    assert exc.value.code == "FEATURE_SEARCH_EMPTY_QUERY"
+    for kw in ({"min_mz": 500.0, "max_mz": 400.0}, {"min_rt": 3.0, "max_rt": 2.0}):
+        with pytest.raises(DomainError) as exc:
+            _window(ds, **kw)
+        assert exc.value.code == "FEATURE_SEARCH_BAD_RANGE"
+
+
+def test_unannotated_feature_gets_its_statistics():
+    ds = _stats_dataset()
+    result = _two_group(ds, [_row_of("1"), _row_of("3", p=0.2, q=0.4, log2fc=-0.5)])
+    [row] = feature_stats(ds, ["3"], [result])
+    assert row["feature_id"] == "3" and row["result_id"] == "diff_1"
+    assert row["status"] == "tested"
+    assert (row["log2fc"], row["p"], row["q"]) == (-0.5, 0.2, 0.4)
+    assert (row["mean_a"], row["mean_b"]) == (1.0, 2.0)
+    assert list(row) == ["feature_id", "result_id", "status", "log2fc", "p", "q", "mean_a",
+                         "mean_b", "detected_a", "detected_b"]
+    # 行は特徴が外側、結果が内側の順
+    other = _two_group(ds, [_row_of("1")], result_id="diff_2")
+    rows = feature_stats(ds, ["1", "3"], [result, other])
+    assert [(r["feature_id"], r["result_id"], r["status"]) for r in rows] == [
+        ("1", "diff_1", "tested"), ("1", "diff_2", "tested"),
+        ("3", "diff_1", "tested"), ("3", "diff_2", "not_in_matrix")]
+
+
+def test_feature_dropped_by_preprocess_is_not_in_matrix():
+    ds = _stats_dataset()
+    result = _two_group(ds, [_row_of("1")])
+    [row] = feature_stats(ds, ["4"], [result])
+    assert row["status"] == "not_in_matrix"
+    for key in ("log2fc", "p", "q", "mean_a", "mean_b"):
+        assert row[key] is None
+    # 検出例数はマスクから取れるので、なぜ落ちたかの手がかりとして残す
+    assert (row["detected_a"], row["detected_b"]) == (2, 2)
+
+
+def test_null_p_from_persisted_result_is_not_testable():
+    ds = _stats_dataset()
+    result = _two_group(ds, [_row_of("1", p=None, q=None),
+                             _row_of("2", p=float("nan"), q=None)])
+    rows = feature_stats(ds, ["1", "2"], [result])
+    assert [r["status"] for r in rows] == ["not_testable", "not_testable"]
+    for r in rows:
+        for key in ("log2fc", "p", "q", "mean_a", "mean_b"):
+            assert r[key] is None
+
+
+def test_q_is_taken_from_the_result_not_recomputed():
+    ds = _stats_dataset()
+    # BH を掛け直せば別の値になる p でも、結果の q をそのまま返す
+    result = _two_group(ds, [_row_of("1", p=0.04, q=0.987654), _row_of("2", p=0.01, q=0.5)])
+    rows = feature_stats(ds, ["1", "2"], [result])
+    assert [r["q"] for r in rows] == [0.987654, 0.5]
+    # q が無い（None）が p は有限なら tested のまま q は None
+    result = _two_group(ds, [_row_of("1", p=0.04, q=None)], result_id="diff_3")
+    [row] = feature_stats(ds, ["1"], [result])
+    assert row["status"] == "tested" and row["p"] == 0.04 and row["q"] is None
+
+
+def test_bh_population_counts():
+    ds = _stats_dataset()
+    result = _two_group(ds, [_row_of("1"), _row_of("2", p=None, q=None),
+                             _row_of("3", p=float("nan"), q=float("nan"))])
+    [summary] = result_summaries(ds, [result])
+    assert summary == {
+        "result_id": "diff_1", "group_a": "ctrl", "group_b": "treat", "n_a": 2, "n_b": 2,
+        "log2fc_sign": "log2(b/a)",
+        "bh_population": {"n_features_total": 4, "n_in_matrix": 3, "n_tested": 1},
+        "caveats": ["小n"],
+    }
+    summary["caveats"].append("x")
+    assert result["caveats"] == ["小n"]                         # 元の結果を汚さない
+
+
+def test_default_selection_skips_stale_and_non_two_group():
+    ds = _stats_dataset()
+    good = _two_group(ds, [_row_of("1")], result_id="diff_ok")
+    _two_group(ds, [_row_of("1")], result_id="diff_old")
+    ds.results["diff_old"]["provenance"]["dataset_id"] = "other"      # 古い
+    ds.results["stat_1"] = {"kind": "welch", "results": [], "provenance": {
+        "result_id": "stat_1", "kind": "statistic", "dataset_id": "ds1", "parent_ids": []}}
+    selected = select_results(ds, None)
+    assert selected["results"] == [good]
+    assert selected["stale"] == ["diff_old"] and selected["missing"] == []
+    assert select_results(_stats_dataset(), None) == {"results": [], "stale": [], "missing": []}
+
+
+def test_named_stale_result_is_reported():
+    ds = _stats_dataset()
+    good = _two_group(ds, [_row_of("1")], result_id="diff_ok")
+    _two_group(ds, [_row_of("1")], result_id="diff_old")
+    ds.results["diff_old"]["provenance"]["dataset_id"] = "other"
+    ds.results["stat_1"] = {"kind": "welch", "results": []}
+    selected = select_results(ds, ["diff_ok", "diff_old", "nope", "stat_1"])
+    assert selected["results"] == [good]
+    assert selected["stale"] == ["diff_old"]
+    # 存在しない ID と、2 群比較でない結果（v2 の統計）は missing（2 群比較としては引けない）
+    assert selected["missing"] == ["nope", "stat_1"]
+
+
+def test_detection_counts_per_group():
+    ds = _stats_dataset()
+    result = _two_group(ds, [_row_of("1"), _row_of("2"), _row_of("3")])
+    rows = {r["feature_id"]: r for r in feature_stats(ds, ["1", "2", "3"], [result])}
+    # マスクの行は ds.feature_ids の位置、列は samples_a/b を sample_names の位置に直す
+    assert (rows["1"]["detected_a"], rows["1"]["detected_b"]) == (2, 1)
+    assert (rows["2"]["detected_a"], rows["2"]["detected_b"]) == (1, 0)
+    assert (rows["3"]["detected_a"], rows["3"]["detected_b"]) == (0, 2)
+    # 結果の試料の順が sample_names と違っても名前で引く
+    swapped = _two_group(ds, [_row_of("1")], result_id="diff_sw",
+                         samples_a=["S4", "S3"], samples_b=["S2", "S1"])
+    [row] = feature_stats(ds, ["1"], [swapped])
+    assert (row["detected_a"], row["detected_b"]) == (1, 2)
+
+
+def test_detection_counts_skipped_when_mask_shape_mismatches():
+    ds = _stats_dataset()
+    result = _two_group(ds, [_row_of("1")])
+    ds.detected_mask = ds.detected_mask[:, :3]                 # 列数が試料数と合わない
+    [row] = feature_stats(ds, ["1"], [result])
+    assert row["status"] == "tested"
+    assert row["detected_a"] is None and row["detected_b"] is None
+    ds.detected_mask = None
+    [row] = feature_stats(ds, ["1"], [result])
+    assert row["detected_a"] is None and row["detected_b"] is None

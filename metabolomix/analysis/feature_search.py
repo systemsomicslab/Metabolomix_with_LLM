@@ -1,8 +1,8 @@
-"""dataset_feature_search の純ロジック: 目標の正規化・理論 m/z・規則 hash（spec 2026-10-19 §4.1）と
-目標照合の判定（§5: `classify_identity` / `match_target`）。
+"""dataset_feature_search の純ロジック: 目標の正規化・理論 m/z・規則 hash（spec 2026-10-19 §4.1）、
+目標照合の判定（§5: `classify_identity` / `match_target`）、窓検索と差次的統計の結合
+（§4.2・§6: `search_window` / `select_results` / `feature_stats` / `result_summaries`）。
 
-数値・ドメイン層の純ロジックで、MCP にもセッションにも依存しない。統計の結合は同じ
-モジュールに後から足す。
+数値・ドメイン層の純ロジックで、MCP にもセッションにも依存しない。
 
 **判定は強度・ppm・RT の近さ・並び順で 1 件を選ばない**（ユーザー判断 2026-10-19）。
 付加体の層と証拠の水準は規則による決定的な順序で、その最上位の箱に qualified な特徴が
@@ -25,6 +25,7 @@ import re
 import numpy as np
 
 from metabolomix.analysis.feature_bindings import _normalize_adduct
+from metabolomix.analysis.result_state import is_current
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 from metabolomix.msdial.adducts import mz_from_neutral, parse_adduct
 from metabolomix.msdial.peak_verification import monoisotopic_mass, parse_formula
@@ -34,10 +35,16 @@ __all__ = [
     "DEFAULT_ADDUCT_TIERS",
     "EVIDENCE_LEVELS",
     "MAX_TARGETS",
+    "STATS_COLUMNS",
+    "WINDOW_COLUMNS",
     "classify_identity",
+    "feature_stats",
     "match_target",
     "normalize_targets",
+    "result_summaries",
     "rule_hash",
+    "search_window",
+    "select_results",
     "theoretical_mz",
 ]
 
@@ -334,8 +341,11 @@ def _identity(candidates, annotation, *, inchikey_block: str, adduct: str) -> di
             reasons.append("adduct_mismatch")
             continue
         charge = candidate.get("charge")
-        # 符号の書き方（-1 / 1）に依存しないよう価数で比べる。読めない電荷は一致を確かめられない。
-        if wanted_charge is None or not _is_number(charge) or abs(charge) != wanted_charge:
+        # 符号の書き方（-1 / 1）に依存しないよう価数で比べる。電荷が読めない（None）候補は、
+        # 付加体がすでに一致しているので電荷では落とさない（欠測は反証ではない）。
+        # 値があるのに数として読めない・価数が違うときだけ不一致。
+        if charge is not None and (
+                wanted_charge is None or not _is_number(charge) or abs(charge) != wanted_charge):
             reasons.append("charge_mismatch")
             continue
         return {"evidence": "sme_match", "reasons": [], "sme_rank": candidate.get("rank"),
@@ -374,7 +384,8 @@ def classify_identity(candidates: list[dict], annotation: dict | None, *,
     ときだけ一致した候補の rank、それ以外は None。
 
     - SME 候補（rank を問わない）のどれかが InChIKey 先頭ブロック・付加体（正規化して比較）・
-      価数のすべてで一致 → ``sme_match``。
+      価数のすべてで一致 → ``sme_match``。電荷が None の候補は、付加体が一致していれば
+      電荷の確認を通す（欠測は反証ではない）。
     - InChIKey を持つ SME 候補がどれも一致しない → ``contradicted``（理由は出た順に一意化）。
     - InChIKey を持つ SME 候補が無ければ SME は無いものとして SML を見る（SME 候補が
       あったなら ``sme_identity_unresolved``）。SML の InChIKey が一致 → ``sml_match``
@@ -399,7 +410,8 @@ def _feature_mz_array(ds) -> np.ndarray:
     return np.asarray(values, dtype=float)
 
 
-def match_target(ds, target: dict, *, max_results: int) -> dict:
+def match_target(ds, target: dict, *, max_results: int,
+                 mz_array: np.ndarray | None = None) -> dict:
     """正規化済みの目標 1 件をデータセットの特徴と照合し、判定と候補の全件を返す（spec §5）。
 
     候補の単位は（特徴, 付加体）。全層のどれかの付加体の質量窓に入った特徴を、RT で落ちた
@@ -408,12 +420,19 @@ def match_target(ds, target: dict, *, max_results: int) -> dict:
     2 つ以上なら ``needs_input``（``multiple_qualified_candidates``）。強度・ppm・RT の近さ・
     並び順では選ばない。``resolved`` の特徴がその箱に複数の付加体で現れたときは、層に並べた
     順で最初の付加体を ``selected_adduct`` にする（近さではなく規則の順）。
-    ``needs_input`` で複数のときは ``adduct_tier_used`` だけ埋め、``selected_*`` は None。
+    ``needs_input`` で複数のときは ``adduct_tier_used`` と ``selected_evidence`` を埋め、
+    ``selected_feature_id`` / ``selected_adduct`` は None。このときの ``selected_evidence`` は
+    選んだ水準ではなく**同点で決着が付かなかった水準**（決定を下した水準）で、qualified が
+    1 つも無い（``no_qualified_candidate``）ときは None。
+
+    ``mz_array`` は ``_feature_mz_array(ds)`` を事前に作った配列（``ds.feature_ids`` の並び）。
+    多数の目標を照合する呼び出し側が 1 回だけ作って使い回すための引数で、None なら内部で作る。
 
     行は（qualified が先、層の昇順、|ppm| の昇順）に並べ、``max_results`` 件で打ち切って
     残りの件数を ``truncated`` に書く。``counts`` は特徴 ID の一意な件数（打ち切り前）。
     ``ppm`` は符号つき（観測 − 理論）、``delta_rt`` は RT − rt_min。数値は丸めない
-    （丸めはツール層の仕事）。
+    （丸めはツール層の仕事）。``sme_rank`` は ``sme_match`` の行で一致した候補の rank だが、
+    その候補が rank を持たなければ ``sme_match`` でも None になりうる。
     """
     out = {
         "target_id": target["target_id"],
@@ -437,7 +456,8 @@ def match_target(ds, target: dict, *, max_results: int) -> dict:
     rt_min = target["rt_min"]
     rt_tol = target["rt_tol_min"]
     feature_ids = list(ds.feature_ids)
-    mz_array = _feature_mz_array(ds)
+    if mz_array is None:
+        mz_array = _feature_mz_array(ds)
 
     rows: list[dict] = []
     rt_ok_of: dict[str, bool] = {}
@@ -516,7 +536,8 @@ def match_target(ds, target: dict, *, max_results: int) -> dict:
             out.update(status="resolved", selected_feature_id=winners[0],
                        selected_adduct=bucket[0]["adduct"], selected_evidence=level_used)
         else:
-            out.update(status="needs_input", reason="multiple_qualified_candidates")
+            out.update(status="needs_input", reason="multiple_qualified_candidates",
+                       selected_evidence=level_used)
         for row in qualified_rows:
             if row["adduct_tier"] != tier_used:
                 row["reasons"].append("lower_adduct_tier")
@@ -530,3 +551,235 @@ def match_target(ds, target: dict, *, max_results: int) -> dict:
     out["candidates"] = rows[:limit]
     out["truncated"] = len(rows) - len(out["candidates"])
     return out
+
+
+# ---------- 窓検索と差次的統計の結合（spec §4.2・§6） ----------
+
+#: 窓検索の行の列（この順で TSV にする）。
+WINDOW_COLUMNS = ("feature_id", "mz", "rt", "evidence", "name", "inchikey", "adduct", "n_sme")
+
+#: 特徴ごとの統計の行の列。
+STATS_COLUMNS = ("feature_id", "result_id", "status", "log2fc", "p", "q", "mean_a", "mean_b",
+                 "detected_a", "detected_b")
+
+
+def _rank_key(candidate: dict):
+    rank = candidate.get("rank")
+    return (0, rank) if _is_number(rank) else (1, 0)
+
+
+def _window_identity(candidates, annotation) -> dict:
+    """窓検索の行に載せる証拠（sme / sml / none）と表示用の名前・InChIKey・付加体。
+
+    SME があれば rank が最小の候補（rank を持たない候補は後回し、同順なら出た順）の
+    ``chemical_name`` ・**その候補自身の** ``inchikey`` ・``adduct``。SME が無ければ SML 注釈
+    （曖昧なら名前は None、InChIKey は ``;`` 連結）。目標の判定（`_identity`）とは別物で、
+    ここは「この特徴には何が付いているか」を並べるだけ。
+    """
+    candidates = list(candidates or [])
+    if candidates:
+        top = min(candidates, key=_rank_key)
+        return {"evidence": "sme", "name": top.get("chemical_name"),
+                "inchikey": top.get("inchikey"), "adduct": top.get("adduct"),
+                "n_sme": len(candidates)}
+    annotation = annotation or {}
+    if annotation:
+        if annotation.get("ambiguous"):
+            keys = [key for key in annotation.get("inchikeys") or [] if key]
+            return {"evidence": "sml", "name": None, "inchikey": ";".join(keys) or None,
+                    "adduct": annotation.get("adduct"), "n_sme": 0}
+        return {"evidence": "sml", "name": annotation.get("name"),
+                "inchikey": annotation.get("inchikey"), "adduct": annotation.get("adduct"),
+                "n_sme": 0}
+    return {"evidence": "none", "name": None, "inchikey": None, "adduct": None, "n_sme": 0}
+
+
+def _check_range(low, high, label: str) -> None:
+    if low is not None and high is not None and low > high:
+        raise DomainError(
+            "FEATURE_SEARCH_BAD_RANGE", f"{label} の下限が上限より大きい: {low} > {high}",
+            {"field": label, "min": low, "max": high})
+
+
+def search_window(ds, *, feature_ids: list[str] | None, min_mz, max_mz, min_rt, max_rt,
+                  max_results: int) -> tuple[list[dict], int]:
+    """m/z・RT（分）の窓と特徴 ID の指定で特徴を探す（spec §4.2）。
+
+    条件は与えられたものすべての AND で、境界を含む。``feature_ids`` は None のときだけ
+    「条件なし」（空リストは「どの ID でもない」＝ 0 件）。条件が 1 つも無ければ
+    ``FEATURE_SEARCH_EMPTY_QUERY``（全特徴の列挙を黙って返さない）、下限 > 上限は
+    ``FEATURE_SEARCH_BAD_RANGE``。m/z や RT を持たない特徴は、その軸の条件があれば外れる。
+    行は m/z 昇順（m/z 無しは最後。同値は特徴の並び順）で、``max_results`` 件に打ち切り、
+    切り捨てた件数を返す。統計はここでは付けない（`feature_stats`）。
+    """
+    if all(v is None for v in (feature_ids, min_mz, max_mz, min_rt, max_rt)):
+        raise DomainError(
+            "FEATURE_SEARCH_EMPTY_QUERY",
+            "feature_ids・min_mz/max_mz・min_rt/max_rt のどれか 1 つは指定する",
+            {})
+    _check_range(min_mz, max_mz, "mz")
+    _check_range(min_rt, max_rt, "rt")
+    wanted = set(feature_ids) if feature_ids is not None else None
+
+    def _inside(value, low, high) -> bool:
+        if low is None and high is None:
+            return True
+        if not _is_number(value):
+            return False
+        return (low is None or value >= low) and (high is None or value <= high)
+
+    hits = []
+    for fid in ds.feature_ids:
+        if wanted is not None and fid not in wanted:
+            continue
+        meta = ds.feature_metadata.get(fid) or {}
+        mz, rt = meta.get("mz"), meta.get("rt")
+        if _inside(mz, min_mz, max_mz) and _inside(rt, min_rt, max_rt):
+            hits.append((fid, mz, rt))
+    hits.sort(key=lambda hit: (not _is_number(hit[1]), hit[1] if _is_number(hit[1]) else 0.0))
+
+    limit = max(0, int(max_results))
+    rows = []
+    for fid, mz, rt in hits[:limit]:
+        identity = _window_identity(ds.feature_candidates.get(fid), ds.feature_annotations.get(fid))
+        rows.append({
+            "feature_id": fid,
+            "mz": float(mz) if _is_number(mz) else None,
+            "rt": float(rt) if _is_number(rt) else None,
+            **identity,
+        })
+    return rows, len(hits) - len(rows)
+
+
+def _result_id(result: dict):
+    return (result.get("provenance") or {}).get("result_id")
+
+
+def select_results(ds, result_ids: list[str] | None) -> dict:
+    """統計を引く 2 群比較の結果を選ぶ。``{"results", "stale", "missing"}``。
+
+    省略（None）なら ``ds.results`` のうち ``kind == "two_group"`` のすべて。名指しなら、その
+    ID を引く。どちらも ``is_current`` でない結果は ``results`` に入れず ``stale`` に ID を
+    挙げる（古い統計を現在のデータの顔で返さない）。名指しの ID が無い、または 2 群比較で
+    ない結果（v2 の ``dataset_statistic`` = ``kind == "welch"`` など）は ``missing``。
+    """
+    selected, stale, missing = [], [], []
+    if result_ids is None:
+        pairs = [(rid, r) for rid, r in ds.results.items() if (r or {}).get("kind") == "two_group"]
+    else:
+        pairs = []
+        for rid in result_ids:
+            result = ds.results.get(rid)
+            if (result or {}).get("kind") == "two_group":
+                pairs.append((rid, result))
+            else:
+                missing.append(rid)
+    for rid, result in pairs:
+        if is_current(ds, result):
+            selected.append(result)
+        else:
+            stale.append(rid)
+    return {"results": selected, "stale": stale, "missing": missing}
+
+
+def _detected_counter(ds, result: dict):
+    """特徴 ID → ``(A 群の検出例数, B 群の検出例数)`` を返す関数を作る。作れなければ None。
+
+    マスクの行は ``ds.feature_ids`` の位置、列は結果の ``samples_a`` / ``samples_b`` を
+    ``ds.sample_names`` の位置に直したもの。マスクが無い・形が ``feature_ids`` × ``sample_names``
+    と違う・結果の試料名が ``ds.sample_names`` に無い（対応を保証できない）ときは None。
+    """
+    mask = getattr(ds, "detected_mask", None)
+    if mask is None:
+        return None
+    arr = np.asarray(mask)
+    if arr.ndim != 2 or arr.shape != (len(ds.feature_ids), len(ds.sample_names)):
+        return None
+    position = {name: i for i, name in enumerate(ds.sample_names)}
+    columns = []
+    for key in ("samples_a", "samples_b"):
+        names = result.get(key) or []
+        if any(name not in position for name in names):
+            return None
+        columns.append([position[name] for name in names])
+    row_of = {fid: i for i, fid in enumerate(ds.feature_ids)}
+
+    def counter(fid):
+        if fid not in row_of:
+            return None, None
+        row = arr[row_of[fid]]
+        return tuple(int(np.count_nonzero(row[cols])) for cols in columns)
+
+    return counter
+
+
+def _num_or_none(value):
+    return float(value) if _is_number(value) else None
+
+
+def feature_stats(ds, feature_ids: list[str], results: list[dict]) -> list[dict]:
+    """特徴 × 結果の統計行（特徴が外側、結果が内側）。注釈の有無に関わらず全特徴に付ける。
+
+    ``status``: ``tested``（p が有限）/ ``not_testable``（結果の行はあるが p が None・NaN。
+    pipeline run から復元した結果の JSON null を含む）/ ``not_in_matrix``（前処理で落ち、
+    結果の行列に無い）。後の 2 つは ``log2fc p q mean_a mean_b`` がすべて None。``q`` は結果の
+    値をそのまま返し、ここで BH を掛け直さない（母集団は結果が持つ）。``tested`` でも q が
+    None のことはある。``detected_a/b`` は検出例数で、マスクから対応を保証して取れないとき
+    None（呼び出し側が注記する）。取れるときは status に関わらず付ける。
+    """
+    prepared = []
+    for result in results:
+        by_feature = {row.get("feature"): row for row in result.get("results") or []}
+        prepared.append((_result_id(result), by_feature, _detected_counter(ds, result)))
+    rows = []
+    for fid in feature_ids:
+        for result_id, by_feature, counter in prepared:
+            source = by_feature.get(fid)
+            if source is None:
+                status = "not_in_matrix"
+            elif _is_number(source.get("p")):
+                status = "tested"
+            else:
+                status = "not_testable"
+            tested = status == "tested"
+            det_a, det_b = counter(fid) if counter is not None else (None, None)
+            rows.append({
+                "feature_id": fid,
+                "result_id": result_id,
+                "status": status,
+                "log2fc": _num_or_none(source.get("log2fc")) if tested else None,
+                "p": _num_or_none(source.get("p")) if tested else None,
+                "q": _num_or_none(source.get("q")) if tested else None,
+                "mean_a": _num_or_none(source.get("mean_a")) if tested else None,
+                "mean_b": _num_or_none(source.get("mean_b")) if tested else None,
+                "detected_a": det_a,
+                "detected_b": det_b,
+            })
+    return rows
+
+
+def result_summaries(ds, results: list[dict]) -> list[dict]:
+    """結果ごとの要約（群・n・log2FC の向き・BH の母集団・注意書き）。
+
+    ``bh_population``: ``n_features_total`` はデータセットの特徴数、``n_in_matrix`` は結果の
+    行数（前処理後に残った特徴）、``n_tested`` は p が有限の行数。q の解釈にはこの母集団が要る
+    （窓で絞った特徴の数ではなく、この母集団で BH が掛かっている）。
+    """
+    summaries = []
+    for result in results:
+        rows = result.get("results") or []
+        summaries.append({
+            "result_id": _result_id(result),
+            "group_a": result.get("a"),
+            "group_b": result.get("b"),
+            "n_a": result.get("n_a"),
+            "n_b": result.get("n_b"),
+            "log2fc_sign": result.get("log2fc_sign"),
+            "bh_population": {
+                "n_features_total": len(ds.feature_ids),
+                "n_in_matrix": len(rows),
+                "n_tested": sum(1 for row in rows if _is_number(row.get("p"))),
+            },
+            "caveats": list(result.get("caveats") or []),
+        })
+    return summaries
