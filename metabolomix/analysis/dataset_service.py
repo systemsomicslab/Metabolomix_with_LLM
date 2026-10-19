@@ -215,6 +215,10 @@ def compare_dataset(ds, group_a: list[str], group_b: list[str], *,
     # result_id で名指しされたとき、`result_state.is_current` がここを読んで
     # 拒否する（訂正前の数字が現在の条件のラベル付きで書き出されるのを防ぐ）。
     result["provenance"]["group_fingerprint"] = result_state.group_fingerprint(ds)
+    # データ本体の指紋も刻む。pipeline が回した結果を session へ渡すとき、
+    # 受け取る側が「同じデータで計算された結果か」をここで照合する。
+    # `input_fingerprint`（前処理設定ごとの派生指紋）とは別物で、中身は変えない。
+    result["provenance"]["dataset_hash"] = result_state.dataset_fingerprint(ds)
     ds.last_differential = result
     return result_state.register_result(ds, result)
 

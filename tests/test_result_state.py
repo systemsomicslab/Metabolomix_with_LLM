@@ -412,3 +412,15 @@ def test_a_differential_result_without_group_fingerprint_is_not_called_stale():
     _regroup(ds, rows, ["control"] * 3 + ["treated"] * 5)
 
     assert is_current(ds, legacy) is True
+
+
+# ---------- 差次的結果の来歴にデータの指紋を刻む ----------
+
+def test_differential_provenance_records_the_dataset_fingerprint():
+    """pipeline が返した結果を session が受け取るとき、同じデータで計算されたかを
+    照合できるよう、来歴にデータセットの指紋を刻む（実効パラメータには混ぜない）。"""
+    ds = make_dataset()
+    preprocess_dataset(ds, _BASE_RECIPE)
+    result = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
+    assert result["provenance"]["dataset_hash"] == dataset_fingerprint(ds)
+    assert "dataset_hash" not in result["provenance"]["effective_parameters"]
