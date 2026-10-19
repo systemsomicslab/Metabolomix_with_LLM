@@ -66,6 +66,41 @@ gap-fill だけの特徴を実測として数えた行列が黙って下流に�
 8. │  └─ metabolomix/analysis/export_contract.py  format_row()
 9. │  └─ metabolomix/analysis/dataset_export.py  _atomic_write_text()
 
+## dataset_feature_search
+
+読み取り専用。`targets` の有無で窓検索と目標照合に分かれ、どちらも最後に同じ統計の
+結合を通る。判定の純ロジックは `metabolomix/analysis/feature_search.py` にあり、session も
+MCP も import しない。ツール層の仕事は、極性の出所を決めること（ジョブの宣言 → mzTab-M の
+付加体の多数決）、差次的結果を選ぶこと（名指しの ID が無い・古ければ `missing_state`、
+省略時は今も有効な 2 群比較だけ）、丸めと TSV 化、注記。キュレーションのフラグは
+`dataset_export_differential` と同じ見つけ方で数えるだけで、**反映しない**（読めなくても
+検索は止めず、注記にする）。
+
+1. metabolomix/tools/dataset_analysis_tools.py  dataset_feature_search()
+2. ├─ [窓検索] metabolomix/analysis/feature_search.py  search_window()
+3. │  └─ metabolomix/analysis/feature_search.py  _window_identity()
+4. ├─ [目標照合] metabolomix/tools/dataset_analysis_tools.py  _dataset_polarity()
+5. │  ├─ metabolomix/console/job_manager.py  load_job()
+6. │  └─ metabolomix/console/output_collector.py  read_adduct_polarity()
+7. ├─ [目標照合] metabolomix/analysis/feature_search.py  normalize_targets()
+8. │  └─ metabolomix/analysis/feature_search.py  theoretical_mz()
+9. ├─ [目標照合] metabolomix/analysis/feature_search.py  match_target()
+10. │  └─ metabolomix/analysis/feature_search.py  _identity()
+11. ├─ [目標照合] metabolomix/analysis/feature_search.py  rule_hash()
+12. ├─ metabolomix/analysis/feature_search.py  select_results()
+13. │  └─ metabolomix/analysis/result_state.py  is_current()
+14. ├─ metabolomix/analysis/feature_search.py  feature_stats()
+15. │  └─ metabolomix/analysis/feature_search.py  _detected_counter()
+16. ├─ metabolomix/analysis/feature_search.py  result_summaries()
+17. ├─ metabolomix/analysis/result_state.py  dataset_fingerprint()
+18. └─ metabolomix/tools/dataset_analysis_tools.py  _curation_note()
+19.    ├─ metabolomix/curation/apply.py  arf2_for_mztab()
+20.    └─ metabolomix/curation/apply.py  flags_for_arf2()
+
+`rule_hash` は正規化後の目標（既定値を埋め、付加体の層を解決したもの）だけから作る。
+result_id は計算のたびに発行される UUID なので入れず、統計の出所は `stats_source`
+（`result_ids` と `dataset_fingerprint` の `dataset_hash`）に分けて返す。
+
 ## dataset_set_sample_metadata
 
 実験情報シート(sample-manifest.v1 / v2)を読み、全件検証してから一括反映する。版は

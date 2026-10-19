@@ -192,6 +192,80 @@ mzTab-M の `abundance_assay[N]` は非ゼロでも実測ピークか gap-fill �
 `dataset_preprocess` の `min_detection_rate` も使えない（0 より大きい値を渡すと
 引数エラーになる。黙って未検出 0 件として通さない）。
 
+### 13.8 `dataset_feature_search` の戻り値
+
+窓検索（`targets` なし）は `features stats results stats_source notes`、目標照合（`targets` あり）は
+`targets candidates stats results rule stats_source notes` を返す。`features` `candidates` `stats` は
+TSV（列名 1 回）で、空欄は「値が無い」。数値は丸めてある（m/z 4 桁・ppm 2 桁・RT 3 桁・log2FC 4 桁・
+p / q / 平均は有効 4 桁）。
+
+**`evidence`（証拠の水準）** は 2 種類ある。
+
+| 欄 | 値 | 意味 |
+|---|---|---|
+| `features.evidence`（窓検索） | `sme` | SME 候補（MS/MS を見た同定）がある。`name` `inchikey` `adduct` は rank 最上位の候補のもの |
+| | `sml` | SME は無く、SML 注釈（MS1 照合のラベル）だけがある。曖昧な注釈は `name` が空で `inchikey` を `;` で連結 |
+| | `none` | 注釈が無い。**統計は付く**（注釈が無いことは「調べていない」ではない） |
+| `candidates.evidence`（目標照合） | `sme_match` | SME 候補のどれか（rank を問わない）が InChIKey 先頭ブロック・付加体・価数のすべてで目標と一致。一致した rank が `sme_rank` |
+| | `sml_match` | SME が無い（または InChIKey を解決できた SME 候補が無い）特徴で、SML 注釈の InChIKey 先頭ブロックが一致 |
+| | `unannotated` | 注釈が無い、または SML が別物質（SML は MS1 照合だけで異性体を区別できないので矛盾としない）。**`rt_min` があるときだけ** qualified |
+| | `contradicted` | InChIKey を持つ SME 候補がどれも一致しない＝ MS/MS の同定が別物質。qualified にならない |
+
+`candidates.reasons` は `;` 区切りで、落ちた理由（`rt_outside_tolerance` `identifier_mismatch`
+`adduct_mismatch` `charge_mismatch` `mass_only_not_identified`）と、情報として残す印
+（`sme_identity_unresolved`: InChIKey を解決できない SME 候補しか無かった／`sml_ambiguous`／
+`lower_adduct_tier` `lower_evidence_tier`: 判定に使わなかった層・水準の qualified 候補）を並べる。
+
+**`targets[*].status`（判定）**
+
+| 値 | 意味 |
+|---|---|
+| `resolved` | 「qualified がある最初の付加体の層」の「qualified がある最初の証拠の水準」に、qualified な特徴がちょうど 1 つ。`selected_feature_id` `selected_adduct` `selected_evidence` が埋まる |
+| `needs_input` | 規則では 1 つに決まらない。`reason` が `multiple_qualified_candidates`（同じ層・同じ水準に 2 つ以上）か `no_qualified_candidate`（どの層にも無い） |
+| `not_applicable` | 目標の `polarity` が読み込んだデータセットの極性と違う（`reason` は `polarity_mismatch`）。照合していない |
+
+`needs_input` は「誰が次に何を見るか」を返している。**強度・ppm・RT の近さで 1 件を選び直さないこと**
+（選んだ時点で、規則ではなく読み手の好みが結論になる）。
+
+- `multiple_qualified_candidates`: `selected_evidence` は**同点で決着が付かなかった水準**（選んだ水準
+  ではない）、`adduct_tier_used` はその層。その層・水準の候補（`candidates` で `qualified=true`、
+  `lower_*` の印が無い行）の同定を MS/MS で確かめる——`dcl_find_msms` で実スペクトルを引き、
+  `library_match_feature` で参照ライブラリと照合する。
+- `no_qualified_candidate`: 規則とデータのどちらかが食い違っている。`counts`
+  （`mass` → `rt` → `qualified`、`by_evidence` は水準ごとの qualified 数。どれも特徴の一意な件数）で
+  どの段で 0 になったかを見て、`ppm`・`rt_min`・`rt_tol_min`・付加体の層・極性を確かめる。
+  `rt_min` が無い目標では未注釈の特徴は qualified にならない（質量だけでは同定と言わない）。
+
+`targets[*].truncated` は `max_results` で打ち切った候補の件数（`counts` は打ち切り前）。
+
+**`stats`（差次的統計）** は `candidates`（目標照合）か `features`（窓検索）に出た特徴だけを、
+特徴 × 結果で並べる。
+
+| 欄 | 意味 |
+|---|---|
+| `status` | `tested`（p が有限）/ `not_in_matrix`（前処理で落ち、検定の行列に居ない）/ `not_testable`（行列には居るが p が無い）。**後の 2 つは数値欄が空で、「差が無かった」ではない** |
+| `log2fc` | 正なら `group_b` が高い（`results[*].log2fc_sign`） |
+| `q` | その結果に付いた BH の q をそのまま（窓で絞った件数で掛け直していない） |
+| `detected_a` / `detected_b` | 群ごとの**実検出の例数**（§13.7 の検出状態から数える）。**gap-fill の値は検出に数えない**。検出状態が無い・試料の対応を保証できないときは空で、`notes` に理由。非ゼロの平均があっても検出 0 例はありうる（埋め値の平均） |
+
+`results[*]` は統計を付けた結果ごとの `{result_id, group_a, group_b, n_a, n_b, log2fc_sign,
+bh_population, caveats}`。`bh_population = {n_features_total, n_in_matrix, n_tested}` はデータセットの
+特徴数・前処理後に検定の行列に残った数・p が有限だった数で、**BH は `n_tested` 件に掛かっている**。
+`caveats` は差次的結果の注意書き（交絡の警告を含む）をそのまま写す。
+
+**`rule_hash` と `stats_source` は別物**。`rule = {targets, polarity, polarity_source, rule_hash}` の
+`targets` は既定値を埋めて付加体の層を解決した目標で、`rule_hash` はそこからだけ作る。既定値を
+明示しても省いても、別の session・別の実行役でも、同じ目標・同じ極性なら同じ hash になる——
+判断ログには「この規則で呼んだ」とだけ書ける。`polarity_source` は `job_declared`（ジョブの宣言）/
+`adduct_majority`（mzTab-M の SML 付加体の多数決）/ `unknown`。統計の出所は
+`stats_source = {result_ids, dataset_hash}`（`dataset_hash` はデータの指紋）に分けて返す。result_id は
+計算のたびに発行される ID なので `rule_hash` には入れない。同じ `rule_hash` でも `stats_source` が
+違えば、統計は別の計算から来ている。
+
+`notes` には、打ち切り・使わなかった古い差次的結果・差次的結果が無いこと・検出状態が無いこと・
+極性の宣言と多数決の食い違い・キュレーションのフラグがあるのに反映していないこと（この検索は
+SME / SML の生の同定だけを見るので、`dataset_export_differential` の同定と食い違いうる）が入る。
+
 ## `plot_pca_loadings(source="mztab")`
 
 `dataset_pca` の結果は `plot_pca_loadings(source="mztab")` で主成分ごとのローディング図に描ける（`source="auto"` でも、候補がこの 1 つだけなら選ばれる）。

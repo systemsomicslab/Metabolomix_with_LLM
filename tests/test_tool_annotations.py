@@ -70,6 +70,8 @@ EXPECTED_ANNOTATIONS = {
     "dataset_statistic": READ_ONLY,
     # 解析行列を1本作って session へ置くだけ（外界へは書かない）。
     "dataset_build_matrix": READ_ONLY,
+    # 特徴の検索と目標の判定。session も外界も書き換えない。
+    "dataset_feature_search": READ_ONLY,
     # --- Console 実行層（console_plan/run はジョブ状態・ファイルを生成する） ---
     "console_plan": LOCAL_WRITE_APPEND,
     "console_run": LOCAL_WRITE_APPEND,
