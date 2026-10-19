@@ -19,9 +19,28 @@ def test_mslipidmapper_settings_read_env_first(monkeypatch, tmp_path):
 @pytest.mark.parametrize("key,env", [
     ("mslipidmapper.rscript", "MSLIPIDMAPPER_RSCRIPT"),
     ("mslipidmapper.browser", "MSLIPIDMAPPER_BROWSER"),
+    ("mslipidmapper.mslipidmapper_api_url", "MSLIPIDMAPPER_API_URL"),
+    ("mslipidmapper.api_token", "MSLIPIDMAPPER_API_TOKEN"),
 ])
 def test_mslipidmapper_setting_env_names(key, env):
     assert user_config.SETTINGS[key] == env
+
+
+def test_api_url_in_config_file_is_not_resolved_as_a_path(monkeypatch, tmp_path):
+    cfg = tmp_path / "lipidmix.local.toml"
+    cfg.write_text("[mslipidmapper]\nmslipidmapper_api_url = 'http://10.0.0.1:8000/'\n"
+                   "api_token = ' t0k '\n", encoding="utf-8")
+    monkeypatch.setenv("LIPIDMIX_CONFIG", str(cfg))
+    got = user_config.get_setting("mslipidmapper.mslipidmapper_api_url")
+    assert got.value == "http://10.0.0.1:8000/"
+    assert user_config.get_setting("mslipidmapper.api_token").value == "t0k"
+
+
+def test_empty_api_url_is_unset(monkeypatch, tmp_path):
+    cfg = tmp_path / "lipidmix.local.toml"
+    cfg.write_text("[mslipidmapper]\nmslipidmapper_api_url = ''\n", encoding="utf-8")
+    monkeypatch.setenv("LIPIDMIX_CONFIG", str(cfg))
+    assert user_config.get_setting("mslipidmapper.mslipidmapper_api_url") is None
 
 
 def test_pathway_error_envelope():
@@ -39,4 +58,4 @@ def test_pathway_error_codes_are_the_spec_set():
     assert mcp_errors.PATHWAY_ERROR_CODES == frozenset({
         "MSLM_NOT_CONFIGURED", "MSLM_R_PACKAGES_MISSING", "MSLM_RUN_FAILED",
         "MSLM_TIMEOUT", "MSLM_OUTPUT_INVALID", "PATHWAY_RENDER_FAILED",
-        "PATHWAY_BAD_REQUEST"})
+        "PATHWAY_BAD_REQUEST", "MSLM_REMOTE_UNAVAILABLE"})

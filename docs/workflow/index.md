@@ -28,7 +28,7 @@
 - `metabolomix/arf/` `arf2/` `pai2/` `dcl/` `eic/` — 形式ごとのパーサと MCP ツール
 - `metabolomix/analysis/` — 入力形式に依存しない数値処理
 - `metabolomix/plots/` — レンダラ中立の payload 組み立て
-- `metabolomix/pathway/` — MSLipidMapper 連携（最小 mzTab-M の受け渡し・Rscript ブリッジ・JSON-LD 読み取り・隣接比較）
+- `metabolomix/pathway/` — MSLipidMapper 連携（最小 mzTab-M の受け渡し・研究室サーバの REST API とローカル Rscript のブリッジ・JSON-LD 読み取り・隣接比較）
 - `metabolomix/corpus/` — 蓄積ノートの純ロジック
 - `metabolomix/tools/` — 形式に紐づかない MCP 公開層
 
