@@ -424,3 +424,78 @@ def test_differential_provenance_records_the_dataset_fingerprint():
     result = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
     assert result["provenance"]["dataset_hash"] == dataset_fingerprint(ds)
     assert "dataset_hash" not in result["provenance"]["effective_parameters"]
+
+
+# ---------- run から引き継いだ差次的結果の有効性 ----------
+
+def _handed_off_result(ds) -> dict:
+    """pipeline run から読み込んだ差次的結果の来歴。dataset_id・親の前処理 ID は
+    別の ds（run 側）のもので、今の session の ds とは一致しない。"""
+    from metabolomix.analysis.result_state import group_fingerprint
+
+    return {"rows": [], "provenance": {
+        "result_id": "res_handed_off",
+        "kind": "differential",
+        "dataset_id": "ds_other",
+        "parent_ids": ["pp_other"],
+        "dataset_hash": dataset_fingerprint(ds),
+        "group_fingerprint": group_fingerprint(ds),
+        "handoff": {"pipeline_root": "x", "comparison_id": "c1"},
+    }}
+
+
+def test_handed_off_result_is_current_without_session_preprocess():
+    from metabolomix.analysis.result_state import is_current
+
+    ds, _rows = _dataset_with_groups("control", "treated")
+    result = _handed_off_result(ds)
+    assert ds.preprocess_id is None
+    assert is_current(ds, result) is True
+
+
+def test_handed_off_result_goes_stale_when_groups_change():
+    from metabolomix.analysis.result_state import is_current
+
+    ds, rows = _dataset_with_groups("control", "treated")
+    result = _handed_off_result(ds)
+    _regroup(ds, rows, ["control"] * 3 + ["treated"] * 5)
+    assert is_current(ds, result) is False
+
+
+def test_handed_off_result_with_other_data_is_not_current():
+    from metabolomix.analysis.result_state import is_current
+
+    ds, _rows = _dataset_with_groups("control", "treated")
+    result = _handed_off_result(ds)
+    result["provenance"]["dataset_hash"] = "0" * 64
+    assert is_current(ds, result) is False
+
+
+def test_handed_off_result_without_dataset_hash_is_not_current():
+    """データを照合できない引き継ぎ結果は通さない（来歴無しの「材料不足は通す」とは逆）。"""
+    from metabolomix.analysis.result_state import is_current
+
+    ds, _rows = _dataset_with_groups("control", "treated")
+    result = _handed_off_result(ds)
+    result["provenance"].pop("dataset_hash")
+    assert is_current(ds, result) is False
+
+
+def test_handed_off_result_without_group_fingerprint_is_current():
+    """群の指紋を持たない結果は、データが一致すれば通す（既存の差次的結果と同じ規則）。"""
+    from metabolomix.analysis.result_state import is_current
+
+    ds, _rows = _dataset_with_groups("control", "treated")
+    result = _handed_off_result(ds)
+    result["provenance"].pop("group_fingerprint")
+    assert is_current(ds, result) is True
+
+
+def test_session_result_rules_are_unchanged():
+    """handoff の無い結果は dataset_id が違えば、データの指紋が一致していても今まで通り False。"""
+    from metabolomix.analysis.result_state import is_current
+
+    ds, _rows = _dataset_with_groups("control", "treated")
+    result = _handed_off_result(ds)
+    result["provenance"].pop("handoff")
+    assert is_current(ds, result) is False

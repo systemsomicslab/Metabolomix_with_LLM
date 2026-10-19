@@ -224,10 +224,26 @@ def is_current(ds, result: dict) -> bool:
 
     群の指紋を持たない差次的結果（この検査より前に作られたもの・手で組んだ
     もの）は、来歴無しと同じく「調べる材料が無い」として通す。
+
+    **`provenance["handoff"]` を持つ結果**（pipeline run が作った差次的結果を
+    session の DatasetState へ読み込んだもの）は別の規則で見る。その ds は読み込みの
+    たびに新しく作られるので `dataset_id` は run 側のものと必ず食い違い、session の
+    前処理も通っていない（`preprocess_id` は None）。だから ID と親の前処理は見ず、
+    **データの指紋**（`dataset_hash == dataset_fingerprint(ds)`）と、持っていれば
+    **群の指紋**で、同じデータ・同じ群割当から出た結果かを照合する。データの指紋が
+    無い引き継ぎ結果は、同じデータから出たことを確かめられないので通さない
+    （来歴無しの「材料不足は通す」とは逆）。群の指紋だけが無い場合は、
+    上の差次的結果と同じく通す。
     """
     if not (result or {}).get("provenance"):
         return True
     prov = result["provenance"]
+    if prov.get("handoff"):
+        recorded_data = prov.get("dataset_hash")
+        if recorded_data is None or recorded_data != dataset_fingerprint(ds):
+            return False
+        recorded_groups = prov.get("group_fingerprint")
+        return recorded_groups is None or recorded_groups == group_fingerprint(ds)
     if prov.get("dataset_id") != getattr(ds, "dataset_id", None):
         return False
     parents = prov.get("parent_ids") or []
