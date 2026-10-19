@@ -340,3 +340,9 @@ autoscale して PCA（手順 7）。低信頼の試料は投影だけする。`
 10.├─ [output=payload] metabolomix/core/serialization.py  json_payload()
 11.└─ [output=image] metabolomix/plots/pca_scores.py  render_pca_scores()
 12.   └─ metabolomix/plots/render.py  figure_to_png()
+
+## arf_export_evidence_bundle
+
+全特徴量と候補の根拠を新しいv2バンドルへ保存する。旧15列TSVは変更しない。
+
+1. metabolomix/arf/tools.py  arf_export_evidence_bundle()

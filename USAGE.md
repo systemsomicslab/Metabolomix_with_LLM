@@ -1,4 +1,4 @@
-# USAGE — ms-data-parser MCP ツール一覧(全75ツール)
+# USAGE — ms-data-parser MCP ツール一覧(全77ツール)
 
 MS-DIAL 出力(`.arf` / `.arf2` / `.pai2` / `.dcl` / `.EIC.aef`)と mzTab-M を解析し、PCA・差次的解析・
 アノテーション検証・文献探索・レポート記録までを行う MCP サーバーのツール群です。
@@ -271,3 +271,12 @@ stdio サーバでは 2026-09 時点で未検証(ブラウザで `html_path` を
 | ツール | 機能 |
 |--------|------|
 | `server_update` | このMCPサーバ自身を `origin/main` へ早送りし、`uv.lock` / `requirements.lock.txt` が変わっていたときだけ依存も入れ直す。**プロセスは操作しない** — 適用後に Claude Desktop(MCPクライアント)を再起動するのは利用者。起動中のプロセスは import 済みの古いコードで動き続けるため、戻り値の `message` にある再起動の指示をそのまま利用者へ伝えること。未コミット変更がある・`main` 以外にいる・早送りできない(独自コミットがある)・オフラインのいずれでも**何もせずに** `status="refused"` と機械可読な `reason` を返す(例外は投げない)。`status` は `up_to_date` / `updated` / `updated_with_warning` / `refused`。`updated_with_warning` はコードだけ新しく依存の更新に失敗した状態で、再起動前に手元で `setup.ps1`(mac / Linux は `sh setup.sh`)の再実行が要る。 |
+
+## 根拠バンドル v2
+
+| ツール | 内容 |
+|---|---|
+| `arf_export_evidence_bundle` | 全2群比較対象と出典別候補をv2バンドルへ保存。同一語幹のalignment DCLをIDとm/z・RTで検証して接続。 |
+| `dataset_export_evidence_bundle` | result_idで指定した現行2群結果を全特徴量・複数候補付きで保存。旧v1を変更しない。 |
+
+出力先は新しいディレクトリを指定する。既存出力を上書きしない。未同定・手動訂正・前処理除外来歴を保持する。

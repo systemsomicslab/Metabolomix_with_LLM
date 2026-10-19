@@ -33,6 +33,8 @@ import server
 # eic_rank_by_max_intensity を spot ID 検索も持つ eic_search に統合(76→74)。
 # DatasetState の特徴検索と目的の物質の判定: dataset_feature_search を追加(74→75)。
 EXPECTED_TOOLS = sorted([
+    "arf_export_evidence_bundle",
+    "dataset_export_evidence_bundle",
     "pathway_project",
     "pathway_plot",
     "library_load",
