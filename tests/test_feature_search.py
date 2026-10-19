@@ -1,15 +1,19 @@
 # tests/test_feature_search.py
-"""feature_search の土台（目標の正規化・理論 m/z・規則 hash）のテスト。"""
+"""feature_search のテスト: 土台（目標の正規化・理論 m/z・規則 hash）と目標照合の判定（spec §5）。"""
+import numpy as np
 import pytest
 
 from metabolomix.analysis.feature_search import (
     DEFAULT_ADDUCT_TIERS,
     MAX_TARGETS,
+    classify_identity,
+    match_target,
     normalize_targets,
     rule_hash,
     theoretical_mz,
 )
 from metabolomix.core.atomic_io import DomainError
+from metabolomix.mztab.dataset_state import DatasetState
 
 GABA_KEY = "BTCSSZJGUNDROE-UHFFFAOYSA-N"
 
@@ -197,3 +201,348 @@ def test_unknown_polarity_without_explicit_adducts_is_refused():
     # 目標自身が極性を持てば、データセットの極性が不明でも既定の層が決まる
     [t] = normalize_targets([_gaba(polarity="positive")], dataset_polarity=None)
     assert t["adduct_tiers"] == DEFAULT_ADDUCT_TIERS["positive"] and t["applicable"] is True
+
+
+# ---------- 目標照合の判定（spec §5） ----------
+#
+# ds は tests/test_feature_bindings.py の _dataset / _candidate に倣った最小の合成。
+# SME 候補には Task 4 の「候補自身の」inchikey を入れる。
+
+OTHER_KEY = "QWERTYUIOPASDF-UHFFFAOYSA-N"
+THIRD_KEY = "ZXCVBNMLKJHGFD-UHFFFAOYSA-N"
+MH = theoretical_mz("C4H9NO2", "[M+H]+")
+MNA = theoretical_mz("C4H9NO2", "[M+Na]+")
+
+
+def _shift(mz, ppm):
+    return mz * (1 + ppm * 1e-6)
+
+
+def _candidate(**overrides) -> dict:
+    candidate = {
+        "sme_id": "1", "rank": 1, "charge": 1,
+        "exp_mass_to_charge": MH, "theoretical_mass_to_charge": MH,
+        "confidence_value": 0.92, "confidence_measure": "MS-DIAL total score",
+        "chemical_name": "GABA", "database_identifier": "HMDB:HMDB0000112",
+        "inchi": None, "smiles": None, "adduct": "[M+H]1+",
+        "identification_method": "matched to library", "spectra_ref": None,
+        "inchikey": GABA_KEY, "inchikey_source": "msp",
+    }
+    candidate.update(overrides)
+    return candidate
+
+
+def _dataset(features: dict, *, assays=("assay[1]", "assay[2]")) -> DatasetState:
+    """`{fid: {"mz":, "rt":, "inchikey":, "candidates": [...], "annotation": {...}}}` から最小の ds。"""
+    ds = DatasetState()
+    ds.feature_ids = list(features)
+    ds.sample_assay_ids = list(assays)
+    ds.sample_names = [f"S{i + 1}" for i in range(len(assays))]
+    for fid, spec in features.items():
+        ds.feature_metadata[fid] = {
+            "mz": spec.get("mz"), "rt": spec.get("rt"),
+            "name": spec.get("name"), "inchikey": spec.get("inchikey"),
+        }
+        ds.feature_candidates[fid] = list(spec.get("candidates", []))
+        if spec.get("annotation") is not None:
+            ds.feature_annotations[fid] = spec["annotation"]
+    return ds
+
+
+def _target(**extra) -> dict:
+    [target] = normalize_targets([_gaba(**extra)], dataset_polarity="positive")
+    return target
+
+
+def _rows(out, feature_id):
+    return [r for r in out["candidates"] if r["feature_id"] == feature_id]
+
+
+def _row(out, feature_id, adduct="[M+H]+"):
+    [row] = [r for r in _rows(out, feature_id) if r["adduct"] == adduct]
+    return row
+
+
+def _reasons(row):
+    return row["reasons"].split(";") if row["reasons"] else []
+
+
+EMPTY_COUNTS = {"mass": 0, "rt": 0, "qualified": 0,
+                "by_evidence": {"sme_match": 0, "sml_match": 0, "unannotated": 0}}
+
+
+def test_main_ion_tier_wins_over_other_adducts():
+    ds = _dataset({"1": {"mz": MH, "rt": 1.2}, "2": {"mz": MNA, "rt": 1.2}})
+    out = match_target(ds, _target(rt_min=1.2), max_results=20)
+    assert out["status"] == "resolved" and out["reason"] is None
+    assert out["selected_feature_id"] == "1"
+    assert out["selected_adduct"] == "[M+H]+"
+    assert out["selected_evidence"] == "unannotated"
+    assert out["adduct_tier_used"] == 1
+    na = _row(out, "2", "[M+Na]+")
+    assert na["qualified"] is True and na["adduct_tier"] == 2
+    assert "lower_adduct_tier" in _reasons(na)
+    assert "lower_adduct_tier" not in _reasons(_row(out, "1"))
+    assert out["counts"] == {"mass": 2, "rt": 2, "qualified": 2,
+                             "by_evidence": {"sme_match": 0, "sml_match": 0, "unannotated": 2}}
+
+
+def test_sme_match_beats_sml_and_unannotated():
+    ds = _dataset({
+        "1": {"mz": MH, "rt": 1.2, "candidates": [_candidate()]},
+        "2": {"mz": _shift(MH, 2), "rt": 1.2,
+              "annotation": {"sml_id": "5", "ambiguous": False, "name": "GABA",
+                             "inchikey": GABA_KEY}},
+        "3": {"mz": _shift(MH, -3), "rt": 1.2},
+    })
+    out = match_target(ds, _target(rt_min=1.2), max_results=20)
+    assert out["status"] == "resolved"
+    assert out["selected_feature_id"] == "1"
+    assert out["selected_evidence"] == "sme_match"
+    row1 = _row(out, "1")
+    assert row1["evidence"] == "sme_match" and row1["sme_rank"] == 1
+    assert row1["annotated_name"] == "GABA" and row1["annotated_inchikey"] == GABA_KEY
+    row2, row3 = _row(out, "2"), _row(out, "3")
+    assert row2["evidence"] == "sml_match" and row3["evidence"] == "unannotated"
+    assert row2["annotated_name"] == "GABA" and row2["annotated_inchikey"] == GABA_KEY
+    for row in (row2, row3):
+        assert row["qualified"] is True
+        assert "lower_evidence_tier" in _reasons(row)
+    assert out["counts"]["by_evidence"] == {"sme_match": 1, "sml_match": 1, "unannotated": 1}
+
+
+def test_two_qualified_in_best_tier_is_needs_input_even_if_one_is_far_more_intense():
+    ds = _dataset({
+        "1": {"mz": MH, "rt": 1.2, "candidates": [_candidate()]},
+        "2": {"mz": _shift(MH, 8), "rt": 1.45, "candidates": [_candidate(sme_id="2")]},
+    })
+    ds.feature_matrix = np.array([[1000.0, 1000.0], [1.0, 1.0]])
+    out = match_target(ds, _target(rt_min=1.2), max_results=20)
+    assert out["status"] == "needs_input"
+    assert out["reason"] == "multiple_qualified_candidates"
+    assert out["selected_feature_id"] is None and out["selected_adduct"] is None
+    assert out["counts"]["qualified"] == 2
+    # 強度を逆にしても結論は変わらない
+    ds.feature_matrix = ds.feature_matrix[::-1].copy()
+    again = match_target(ds, _target(rt_min=1.2), max_results=20)
+    assert again["status"] == "needs_input"
+    assert again["reason"] == "multiple_qualified_candidates"
+
+
+def test_no_candidate_is_needs_input_with_counts():
+    ds = _dataset({"1": {"mz": 300.1234, "rt": 1.2, "candidates": [_candidate()]}})
+    out = match_target(ds, _target(rt_min=1.2), max_results=20)
+    assert out["status"] == "needs_input"
+    assert out["reason"] == "no_qualified_candidate"
+    assert out["selected_feature_id"] is None and out["adduct_tier_used"] is None
+    assert out["counts"] == EMPTY_COUNTS
+    assert out["candidates"] == [] and out["truncated"] == 0
+    assert out["theoretical_mz"]["[M+H]+"] == pytest.approx(MH)
+
+
+def test_rt_outside_tolerance_is_listed_but_not_qualified():
+    ds = _dataset({"1": {"mz": MH, "rt": 2.0, "candidates": [_candidate()]},
+                   "2": {"mz": MH, "rt": None}})
+    out = match_target(ds, _target(rt_min=1.2), max_results=20)
+    for fid in ("1", "2"):
+        row = _row(out, fid)
+        assert row["qualified"] is False
+        assert "rt_outside_tolerance" in _reasons(row)
+    assert _row(out, "1")["delta_rt"] == pytest.approx(0.8)
+    assert _row(out, "2")["delta_rt"] is None
+    assert out["counts"]["mass"] == 2 and out["counts"]["rt"] == 0
+    assert out["reason"] == "no_qualified_candidate"
+
+
+def test_feature_without_mz_is_skipped():
+    ds = _dataset({"1": {"mz": None, "rt": 1.2}})
+    out = match_target(ds, _target(rt_min=1.2), max_results=20)
+    assert out["candidates"] == [] and out["counts"] == EMPTY_COUNTS
+
+
+def test_sme_of_another_compound_is_dropped():
+    ds = _dataset({"1": {"mz": MH, "rt": 1.2,
+                         "candidates": [_candidate(chemical_name="Other",
+                                                   inchikey=OTHER_KEY)]}})
+    out = match_target(ds, _target(rt_min=1.2), max_results=20)
+    row = _row(out, "1")
+    assert row["evidence"] == "contradicted"
+    assert "identifier_mismatch" in _reasons(row)
+    assert row["qualified"] is False
+    assert row["annotated_name"] == "Other" and row["annotated_inchikey"] == OTHER_KEY
+    assert out["status"] == "needs_input" and out["reason"] == "no_qualified_candidate"
+    assert out["counts"]["rt"] == 1 and out["counts"]["qualified"] == 0
+
+
+def test_identity_adduct_and_charge_must_match():
+    block = GABA_KEY[:14]
+    # 付加体の書き方の違い（[M+H]1+ と [M+H]+）は正規化して同じとみなす
+    assert classify_identity([_candidate(adduct="[M+H]1+")], None,
+                             inchikey_block=block, adduct="[M+H]+") == ("sme_match", [], 1)
+    assert classify_identity([_candidate(adduct="[M+Na]1+")], None,
+                             inchikey_block=block, adduct="[M+H]+") \
+        == ("contradicted", ["adduct_mismatch"], None)
+    assert classify_identity([_candidate(charge=2)], None,
+                             inchikey_block=block, adduct="[M+H]+") \
+        == ("contradicted", ["charge_mismatch"], None)
+    # 電荷は符号の書き方に依存しない（陰イオンで -1 と書かれていても 1 価として一致）
+    assert classify_identity([_candidate(adduct="[M-H]1-", charge=-1)], None,
+                             inchikey_block=block, adduct="[M-H]-")[0] == "sme_match"
+    # 電荷が読めない候補は一致を確かめられない
+    assert classify_identity([_candidate(charge=None)], None,
+                             inchikey_block=block, adduct="[M+H]+")[0] == "contradicted"
+
+
+def test_sml_of_another_isomer_is_not_a_contradiction():
+    ds = _dataset({"1": {"mz": MH, "rt": 1.2,
+                         "annotation": {"sml_id": "9", "ambiguous": False,
+                                        "name": "Other isomer", "inchikey": OTHER_KEY}}})
+    out = match_target(ds, _target(rt_min=1.2), max_results=20)
+    row = _row(out, "1")
+    assert row["evidence"] == "unannotated"
+    assert row["qualified"] is True
+    assert row["annotated_name"] is None and row["annotated_inchikey"] is None
+    assert out["status"] == "resolved" and out["selected_feature_id"] == "1"
+
+
+def test_unannotated_needs_rt():
+    ds = _dataset({"1": {"mz": MH, "rt": 1.2}})
+    out = match_target(ds, _target(), max_results=20)
+    row = _row(out, "1")
+    assert row["evidence"] == "unannotated"
+    assert row["qualified"] is False
+    assert "mass_only_not_identified" in _reasons(row)
+    assert row["delta_rt"] is None
+    assert out["status"] == "needs_input" and out["reason"] == "no_qualified_candidate"
+    assert out["counts"]["mass"] == 1 and out["counts"]["rt"] == 1
+    # 同定があれば RT 無しでも qualified
+    ds2 = _dataset({"1": {"mz": MH, "rt": 1.2, "candidates": [_candidate()]}})
+    assert match_target(ds2, _target(), max_results=20)["status"] == "resolved"
+
+
+def test_rank2_sme_match_is_found_and_rank1_inchikey_not_borrowed():
+    block = GABA_KEY[:14]
+    rank1_other = _candidate(rank=1, chemical_name="Other", inchikey=OTHER_KEY)
+    rank2_gaba = _candidate(sme_id="2", rank=2, chemical_name="GABA")
+    ds = _dataset({"1": {"mz": MH, "rt": 1.2, "inchikey": OTHER_KEY,
+                         "candidates": [rank1_other, rank2_gaba]}})
+    out = match_target(ds, _target(rt_min=1.2), max_results=20)
+    row = _row(out, "1")
+    assert row["evidence"] == "sme_match" and row["sme_rank"] == 2
+    assert row["annotated_name"] == "GABA" and row["annotated_inchikey"] == GABA_KEY
+    assert out["status"] == "resolved"
+
+    # rank1 が GABA でも付加体が違い、rank2 は別物質 → rank1 の InChIKey を rank2 に貸さない
+    rank1_gaba_na = _candidate(rank=1, adduct="[M+Na]1+")
+    rank2_other = _candidate(sme_id="2", rank=2, chemical_name="Other", inchikey=OTHER_KEY)
+    assert classify_identity([rank1_gaba_na, rank2_other], None,
+                             inchikey_block=block, adduct="[M+H]+") \
+        == ("contradicted", ["adduct_mismatch", "identifier_mismatch"], None)
+    # 特徴の rank1 InChIKey（feature_metadata）が目標と一致していても、候補自身が別物質なら矛盾
+    ds2 = _dataset({"1": {"mz": MH, "rt": 1.2, "inchikey": GABA_KEY,
+                          "candidates": [_candidate(chemical_name="Other",
+                                                    inchikey=OTHER_KEY)]}})
+    out2 = match_target(ds2, _target(rt_min=1.2), max_results=20)
+    assert _row(out2, "1")["evidence"] == "contradicted"
+
+
+def test_unresolved_sme_identity_is_not_a_contradiction():
+    unresolved = _candidate(chemical_name="Something", database_identifier="MspDB:Something",
+                            inchikey=None, inchikey_source="none")
+    ds = _dataset({"1": {"mz": MH, "rt": 1.2, "candidates": [unresolved]}})
+    out = match_target(ds, _target(rt_min=1.2), max_results=20)
+    row = _row(out, "1")
+    assert row["evidence"] == "unannotated"
+    assert "sme_identity_unresolved" in _reasons(row)
+    assert row["qualified"] is True and row["sme_rank"] is None
+    assert out["status"] == "resolved" and out["selected_feature_id"] == "1"
+    # 識別子の無い候補しか無い特徴は SML へ進む
+    sml = {"sml_id": "1", "ambiguous": False, "name": "GABA", "inchikey": GABA_KEY}
+    assert classify_identity([unresolved], sml, inchikey_block=GABA_KEY[:14],
+                             adduct="[M+H]+") \
+        == ("sml_match", ["sme_identity_unresolved"], None)
+    # 識別子の無い候補と、識別子を持ち一致する候補が並ぶなら一致が勝つ（理由は付けない）
+    assert classify_identity([unresolved, _candidate(rank=2)], None,
+                             inchikey_block=GABA_KEY[:14], adduct="[M+H]+") \
+        == ("sme_match", [], 2)
+
+
+def test_ambiguous_sml_with_a_matching_member_is_sml_match():
+    ambiguous = {"ambiguous": True, "sml_ids": ["1", "2"], "name": None,
+                 "inchikeys": [OTHER_KEY, GABA_KEY]}
+    ds = _dataset({"1": {"mz": MH, "rt": 1.2, "annotation": ambiguous}})
+    out = match_target(ds, _target(rt_min=1.2), max_results=20)
+    row = _row(out, "1")
+    assert row["evidence"] == "sml_match"
+    assert "sml_ambiguous" in _reasons(row)
+    assert row["annotated_inchikey"] == f"{OTHER_KEY};{GABA_KEY}"
+    assert out["status"] == "resolved" and out["selected_evidence"] == "sml_match"
+    # 曖昧な注釈のどれも一致しなければ unannotated（矛盾ではない）
+    none_match = dict(ambiguous, inchikeys=[OTHER_KEY, THIRD_KEY])
+    assert classify_identity([], none_match, inchikey_block=GABA_KEY[:14],
+                             adduct="[M+H]+") == ("unannotated", [], None)
+
+
+def test_same_feature_under_two_adducts_counts_once_per_tier():
+    # 広い ppm で、1 つの特徴が第 1 層の [M+H]+ と [M]+ の両方の窓に入る。
+    # 特徴は [M]+ の理論値のほうがずっと近いが、選ぶ付加体は層に並べた順（[M+H]+）。
+    m_plus = theoretical_mz("C4H9NO2", "[M]+")
+    target = _target(rt_min=1.2, ppm=9000)
+    ds = _dataset({"1": {"mz": 103.2, "rt": 1.2}})
+    out = match_target(ds, target, max_results=20)
+    assert abs(103.2 - m_plus) < abs(103.2 - MH)
+    assert sorted(r["adduct"] for r in _rows(out, "1")) == ["[M+H]+", "[M]+"]
+    assert all(r["qualified"] for r in _rows(out, "1"))
+    assert out["status"] == "resolved"
+    assert out["selected_feature_id"] == "1"
+    assert out["selected_adduct"] == "[M+H]+"
+    assert out["counts"]["mass"] == 1 and out["counts"]["qualified"] == 1
+    assert out["counts"]["by_evidence"]["unannotated"] == 1
+    # 2 つ目の特徴が同じ層に入れば、行は 4 本でも特徴は 2 つ → needs_input
+    ds2 = _dataset({"1": {"mz": 103.2, "rt": 1.2}, "2": {"mz": 103.5, "rt": 1.2}})
+    out2 = match_target(ds2, target, max_results=20)
+    assert len(out2["candidates"]) == 4
+    assert out2["status"] == "needs_input"
+    assert out2["reason"] == "multiple_qualified_candidates"
+    assert out2["adduct_tier_used"] == 1
+
+
+def test_candidates_are_truncated_with_count():
+    ds = _dataset({str(i): {"mz": _shift(MH, ppm), "rt": 1.2}
+                   for i, ppm in enumerate([-9, 1, 5, -3])})
+    out = match_target(ds, _target(), max_results=2)
+    assert len(out["candidates"]) == 2
+    assert out["truncated"] == 2
+    assert out["counts"]["mass"] == 4
+    # 打ち切りは並べたあと（|ppm| の小さい 2 件が残る）
+    assert [r["feature_id"] for r in out["candidates"]] == ["1", "3"]
+
+
+def test_candidate_rows_have_keys_and_order():
+    ds = _dataset({
+        "far": {"mz": _shift(MH, -9), "rt": 1.2},
+        "near": {"mz": _shift(MH, 1), "rt": 1.2, "candidates": [_candidate()]},
+        "na": {"mz": _shift(MNA, 0.5), "rt": 1.2},
+        "late": {"mz": _shift(MH, 0.1), "rt": 3.0},
+    })
+    out = match_target(ds, _target(rt_min=1.2), max_results=20)
+    assert list(out["candidates"][0]) == [
+        "target_id", "feature_id", "adduct", "adduct_tier", "theoretical_mz", "mz", "ppm",
+        "rt", "delta_rt", "evidence", "sme_rank", "annotated_name", "annotated_inchikey",
+        "qualified", "reasons"]
+    # qualified が先、層の昇順、|ppm| の昇順
+    assert [r["feature_id"] for r in out["candidates"]] == ["near", "far", "na", "late"]
+    near = _row(out, "near")
+    assert near["target_id"] == "c1" and near["reasons"] == ""
+    assert near["ppm"] == pytest.approx(1.0, abs=1e-6)
+    assert _row(out, "far")["ppm"] == pytest.approx(-9.0, abs=1e-6)
+
+
+def test_target_of_other_polarity_is_not_applicable_in_matching():
+    [target] = normalize_targets([_gaba(polarity="negative")], dataset_polarity="positive")
+    ds = _dataset({"1": {"mz": MH, "rt": 1.2, "candidates": [_candidate()]}})
+    out = match_target(ds, target, max_results=20)
+    assert out["status"] == "not_applicable" and out["reason"] == "polarity_mismatch"
+    assert out["candidates"] == [] and out["truncated"] == 0
+    assert out["selected_feature_id"] is None
+    assert out["counts"] == EMPTY_COUNTS
