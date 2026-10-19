@@ -664,7 +664,9 @@ def dataset_feature_search(
     極性はジョブの宣言 → mzTab-M の付加体の多数決の順に決め、`rule.polarity_source` に書く。
     戻り値 `targets`（目標ごとの判定と段ごとの件数）・`candidates`（TSV。目標ごとに
     `max_results` 件まで）・`rule`（正規化した規則と `rule_hash`。result_id を含まないので、
-    同じ目標・同じ極性なら別の session でも同じ hash）。
+    同じ目標・同じ極性なら別の session でも同じ hash）。hash は表示用の丸め（理論 m/z を
+    4 桁に）より前の値から作るので、返された `rule.targets` から計算し直すことはできない
+    ——照合は `rule_hash` の値どうしで行う。
 
     result_ids: 統計を付ける 2 群比較（`dataset_differential`）の結果。省略時は今も有効な
         2 群比較の全部（古いものは使わず `notes` に挙げる）。名指しした ID が無い・古いときは

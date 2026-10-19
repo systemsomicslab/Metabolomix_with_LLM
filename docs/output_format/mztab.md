@@ -254,9 +254,12 @@ bh_population, caveats}`。`bh_population = {n_features_total, n_in_matrix, n_te
 `caveats` は差次的結果の注意書き（交絡の警告を含む）をそのまま写す。
 
 **`rule_hash` と `stats_source` は別物**。`rule = {targets, polarity, polarity_source, rule_hash}` の
-`targets` は既定値を埋めて付加体の層を解決した目標で、`rule_hash` はそこからだけ作る。既定値を
-明示しても省いても、別の session・別の実行役でも、同じ目標・同じ極性なら同じ hash になる——
-判断ログには「この規則で呼んだ」とだけ書ける。`polarity_source` は `job_declared`（ジョブの宣言）/
+`targets` は既定値を埋めて付加体の層を解決した目標で、`rule_hash` はその正規化後の目標
+（統計の出所を含まない）から作る。既定値を明示しても省いても、別の session・別の実行役でも、
+同じ目標・同じ極性なら同じ hash になる——判断ログには「この規則で呼んだ」とだけ書ける。
+**hash は表示用の丸め（`rule.targets` の理論 m/z を 4 桁に丸める）より前の値から作るので、
+返された `rule.targets` から hash を計算し直すことはできない**（計算し直すと別の値になり、
+規則が変わったように見える）。照合するときは `rule_hash` の値どうしを比べる。`polarity_source` は `job_declared`（ジョブの宣言）/
 `adduct_majority`（mzTab-M の SML 付加体の多数決）/ `unknown`。統計の出所は
 `stats_source = {result_ids, dataset_hash}`（`dataset_hash` はデータの指紋）に分けて返す。result_id は
 計算のたびに発行される ID なので `rule_hash` には入れない。同じ `rule_hash` でも `stats_source` が

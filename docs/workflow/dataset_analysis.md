@@ -97,7 +97,9 @@ MCP も import しない。ツール層の仕事は、極性の出所を決め�
 19.    ├─ metabolomix/curation/apply.py  arf2_for_mztab()
 20.    └─ metabolomix/curation/apply.py  flags_for_arf2()
 
-`rule_hash` は正規化後の目標（既定値を埋め、付加体の層を解決したもの）だけから作る。
+`rule_hash` は正規化後の目標（既定値を埋め、付加体の層を解決したもの）から作り、統計の出所は
+混ぜない。hash は表示用の丸め（`_rule_targets()` が理論 m/z を 4 桁に丸める）より前の値から
+作るので、返された `rule.targets` から計算し直すことはできない——照合は `rule_hash` の値どうしで行う。
 result_id は計算のたびに発行される UUID なので入れず、統計の出所は `stats_source`
 （`result_ids` と `dataset_fingerprint` の `dataset_hash`）に分けて返す。
 
