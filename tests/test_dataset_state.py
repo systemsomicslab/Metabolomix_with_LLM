@@ -892,3 +892,77 @@ def test_sml_opt_global_ontology_is_kept_as_ontology(tmp_path):
         rows.append(line)
     ds = _build_text(tmp_path, "\n".join(rows) + "\n", name="onto.mzTab")
     assert ds.feature_annotations["1"]["ontology"] == "PC"
+
+
+# ---------- SME 候補ごとの InChIKey / 曖昧な SML 注釈の InChIKey 一覧 ----------
+# 特徴 1 は SME 2 件（rank 1 = MSP 名、rank 2 = InChIKey 形）を持つ。
+# 特徴 2 は SML が 3 行当たる曖昧注釈（InChIKey 形 2 件が同じ値で重複、MSP 名 1 件）。
+
+_CAND_IK = "WQZGKKKJIJFFOK-GASJEMHNSA-N"
+
+_CANDIDATE_MZTAB = textwrap.dedent("""\
+    MTD\tmzTab-version\t2.0.0-M
+    MTD\tmzTab-mode\tComplete
+    MTD\tmzTab-type\tQuantification
+    MTD\tms_run[1]-location\tfile:///s1.raw
+    MTD\tassay[1]-ms_run_ref\tms_run[1]
+    SMH\tSML_ID\tSMF_ID_REFS\tdatabase_identifier\tchemical_formula\tsmiles\tinchi\tchemical_name\tadduct_ions\treliability\tbest_id_confidence_measure\tbest_id_confidence_value
+    SML\t1\t2\tIPCSVZSSVZVIGE-UHFFFAOYSA-N\tnull\tnull\tnull\tPC 36:2\t[M+H]1+\t530\tnull\tnull
+    SML\t2\t2\tMspDB:Ornithine\tnull\tnull\tnull\tOrnithine\t[M+H]1+\t530\tnull\tnull
+    SML\t3\t2\tIPCSVZSSVZVIGE-UHFFFAOYSA-N\tnull\tnull\tnull\tPC 36:2 dup\t[M+H]1+\t530\tnull\tnull
+    SML\t4\t2\tMspDB:Unlisted\tnull\tnull\tnull\tUnlisted\t[M+H]1+\t530\tnull\tnull
+    SFH\tSMF_ID\tSME_ID_REFS\texp_mass_to_charge\tretention_time_in_seconds\tabundance_assay[1]
+    SMF\t1\t1|2\t176.1030\t300.0\t1000.0
+    SMF\t2\tnull\t133.0972\t310.0\t900.0
+    SEH\tSME_ID\tdatabase_identifier\tsmiles\tinchi\tchemical_name\trank
+    SME\t1\tMspDB:Citrulline\tnull\tnull\tCitrulline\t1
+    SME\t2\t{ck}\tnull\tnull\tOther\t2
+""".format(ck=_CAND_IK))
+
+
+def _build_candidate(tmp_path, monkeypatch, msp_table=_TABLE):
+    _without_rdkit(monkeypatch)
+    p = tmp_path / "Height_cand.mzTab"
+    p.write_text(_CANDIDATE_MZTAB, encoding="utf-8")
+    return build_dataset_state(parse_mztab(p), p.name, p, msp_table=msp_table)
+
+
+def test_each_sme_candidate_carries_its_own_inchikey(tmp_path, monkeypatch):
+    ds = _build_candidate(tmp_path, monkeypatch)
+    first, second = ds.feature_candidates["1"]
+    assert (first["rank"], first["inchikey"], first["inchikey_source"]) == (
+        1, _CIT, "msp_library")
+    assert (second["rank"], second["inchikey"], second["inchikey_source"]) == (
+        2, _CAND_IK, "database_identifier")
+    # 特徴単位の InChIKey は最良証拠のままで、候補ごとの値に引きずられない。
+    assert ds.feature_metadata["1"]["inchikey"] == _CIT
+
+
+def test_a_candidate_without_a_resolvable_structure_has_no_inchikey(tmp_path, monkeypatch):
+    ds = _build_candidate(tmp_path, monkeypatch, msp_table=None)
+    first, second = ds.feature_candidates["1"]
+    assert first["inchikey"] is None and first["inchikey_source"] == "none"
+    assert second["inchikey"] == _CAND_IK
+
+
+def test_candidate_inchikeys_do_not_change_feature_coverage_counts(tmp_path, monkeypatch):
+    """候補ごとの解決は特徴単位の被覆（msp_lookup の計数を含む）を動かさない。"""
+    ds = _build_candidate(tmp_path, monkeypatch)
+    cov = ds.inchikey_coverage
+    # 試行は SME 最良証拠（特徴 1: Citrulline）と SML 4 行だけ。rank 2 の候補は数えない。
+    assert cov["msp_lookup"] == {"status": "used", "file": "lab.msp", "resolved": 2,
+                                 "conflicting_names": 0, "unmatched": 1}
+    assert cov["total_features"] == 2
+    assert sum(cov["by_source"].values()) == 2
+    assert cov["by_source"]["msp_library"] == 1
+
+
+def test_ambiguous_sml_annotation_keeps_the_inchikey_list_but_no_inchikey(
+        tmp_path, monkeypatch):
+    ds = _build_candidate(tmp_path, monkeypatch)
+    annotation = ds.feature_annotations["2"]
+    assert annotation["ambiguous"] is True
+    assert annotation["name"] is None
+    # 解決できたものだけ・重複なし・SML 行の出現順。
+    assert annotation["inchikeys"] == ["IPCSVZSSVZVIGE-UHFFFAOYSA-N", _ORN]
+    assert "inchikey" not in annotation

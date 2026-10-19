@@ -329,7 +329,8 @@ def build_dataset_state(
     confidence_value_by_fid: dict[str, float] = {}
     for row in smf_rows:
         fid = row.get("SMF_ID", "")
-        candidates = _all_candidates(row.get("SME_ID_REFS"), sme_by_id)
+        candidates = _all_candidates(row.get("SME_ID_REFS"), sme_by_id,
+                                     msp_table=msp_table)
         ds.feature_candidates[fid] = candidates
         evidence = _best_evidence(row.get("SME_ID_REFS"), sme_by_id)
         ik, src = _resolve_inchikey(
@@ -576,13 +577,19 @@ _SME_TEXT_FIELDS = {
 }
 
 
-def _all_candidates(refs, sme_by_id: dict) -> list[dict]:
+def _all_candidates(refs, sme_by_id: dict, *, msp_table=None) -> list[dict]:
     """SME_ID_REFS が指す全候補を rank 昇順で返す（同定が無ければ空リスト）。
 
     `_best_evidence` は最上位1件しか返さない。binding（Task 7）は profile が
     要求する adduct / charge / ライブラリ識別子 / スコア閾値で選び直すので、
     候補を捨てずに持つ。順序は rank 昇順（`_sme_rank` と同じ規則）で、
     rank が無い候補は末尾に回す。
+
+    候補ごとに自分の InChIKey（`inchikey` / `inchikey_source`）も解決して持つ。
+    特徴単位の `feature_metadata[fid]["inchikey"]` は最良証拠 1 件の値で、候補の
+    同定を判定する側（dataset_feature_search）が rank 1 以外の候補も照らせるようにする。
+    MSP 照合の計数は捨てる別の dict で受け、`inchikey_coverage`（特徴単位の被覆）
+    を動かさない。
     """
     if not refs:
         return []
@@ -605,6 +612,9 @@ def _all_candidates(refs, sme_by_id: dict) -> list[dict]:
         }
         for key, column in _SME_TEXT_FIELDS.items():
             candidate[key] = row.get(column)
+        candidate["inchikey"], candidate["inchikey_source"] = _resolve_inchikey(
+            candidate["database_identifier"], candidate["inchi"], candidate["smiles"],
+            msp_table, {"resolved": 0, "conflicting_names": 0, "unmatched": 0})
         candidates.append(candidate)
     return candidates
 
@@ -665,9 +675,14 @@ def _build_feature_annotations(sml_rows, known_feature_ids: set, *,
             annotations[fid] = entries[0]
             continue
         ambiguous += 1
+        # 名前は選ばないが、当たった行の InChIKey は残す（解決できたものだけ・
+        # 重複なし・SML 行の出現順）。`inchikey` キーは持たない——書き出しは
+        # 曖昧な注釈を未注釈として扱い、単一の InChIKey を前提にしているため。
+        inchikeys = list(dict.fromkeys(e["inchikey"] for e in entries if e["inchikey"]))
         annotations[fid] = {"ambiguous": True,
                             "sml_ids": [e["sml_id"] for e in entries],
-                            "name": None}
+                            "name": None,
+                            "inchikeys": inchikeys}
 
     warnings: list[str] = []
     if ambiguous:
