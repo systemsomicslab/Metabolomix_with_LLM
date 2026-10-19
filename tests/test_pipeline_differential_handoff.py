@@ -273,3 +273,39 @@ def test_the_runs_preprocess_result_is_not_restored_into_session_results(tmp_pat
     assert ds.preprocess_id is None
     assert ds.results[result["provenance"]["result_id"]]["provenance"][
         "handoff"]["preprocess"] == _run_recipe(harness)
+
+
+# ---------- 一連の流れ: run → dataset_load → dataset_feature_search ----------
+
+def test_feature_search_uses_pipeline_statistics_without_recomputing(tmp_path, monkeypatch):
+    from metabolomix.tools.dataset_analysis_tools import dataset_feature_search
+    from metabolomix.tools.mztab_tools import dataset_load
+
+    harness, result = _run_with_differential(tmp_path)
+    result_id = result["provenance"]["result_id"]
+    saved = {row["feature"]: row for row in result["results"]
+             if row.get("q") is not None}
+    assert saved, "検証に使える q を持つ特徴が無い"
+    feature_ids = list(saved)[:3]
+
+    session_state.session.dataset = None
+    dataset_load(pipeline_path=str(harness.pipeline_path))
+
+    # 統計は run の結果をそのまま渡す。再計算（差次的解析）が走ったら検知して落とす。
+    def _must_not_recompute(*args, **kwargs):
+        raise AssertionError("dataset_feature_search が差次的解析を再計算した")
+
+    monkeypatch.setattr(dataset_service, "compare_dataset", _must_not_recompute)
+    monkeypatch.setattr(dataset_service, "run_dataset_differential", _must_not_recompute)
+
+    payload = json.loads(dataset_feature_search(feature_ids=feature_ids))
+
+    assert payload["stats_source"]["result_ids"] == [result_id]
+    header, *lines = payload["stats"].splitlines()
+    stats = [dict(zip(header.split("\t"), line.split("\t"))) for line in lines]
+    assert [s["feature_id"] for s in stats] == feature_ids
+    for stat in stats:
+        assert stat["result_id"] == result_id
+        assert stat["status"] == "tested"
+        # TSV の q は有効数字 4 桁に丸めてある。保存した q と同じ丸めで突き合わせる。
+        assert float(stat["q"]) == float(f"{saved[stat['feature_id']]['q']:.4g}")
