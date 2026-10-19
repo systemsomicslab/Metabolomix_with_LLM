@@ -4,7 +4,8 @@ dataset_load → dataset_preprocess → dataset_pca / dataset_differential
 → dataset_export_differential の順に実行する。ARF 経路
 （arf_preprocess → arf_pca_preprocessed → arf_differential →
 arf_export_differential）と同じ純関数を共有しており、同じ入力からは
-同じ数字が出る。
+同じ数字が出る。dataset_feature_search は読み取り専用で、特徴の検索・目的の物質の
+判定に差次的結果の統計を添えて返す（判定の純ロジックは analysis/feature_search.py）。
 
 戻り値には要約だけを載せ、全量（PCA の loadings・差次的の results/volcano）は
 session.dataset に保持する（CLAUDE.md の戻り値肥大禁止）。
@@ -31,6 +32,7 @@ __all__ = [
     "dataset_set_sample_metadata",
     "dataset_statistic",
     "dataset_build_matrix",
+    "dataset_feature_search",
 ]
 
 # 欠けている状態 → それを作れるツール。missing_state の required_tools になる。
@@ -484,3 +486,307 @@ def dataset_build_matrix(recipe: dict, recipe_id: str = "default") -> str:
         "caveats": matrix["caveats"],
         "values_note": "値は戻り値に非同梱（セッションに保持）。dataset_statistic に matrix_id を渡す。",
     })
+
+
+# ---------- dataset_feature_search（spec 2026-10-19） ----------
+
+_POLARITIES = ("positive", "negative")
+
+# 丸めの桁（spec §4.2）。m/z 4 桁・ppm 2 桁・RT 3 桁・log2FC 4 桁。p・q・平均は有効 4 桁。
+_CANDIDATE_DIGITS = {"theoretical_mz": 4, "mz": 4, "ppm": 2, "rt": 3, "delta_rt": 3}
+_WINDOW_DIGITS = {"mz": 4, "rt": 3}
+_STATS_DIGITS = {"log2fc": 4}
+_STATS_SIGNIFICANT = ("p", "q", "mean_a", "mean_b")
+
+
+def _round(value, digits: int):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    value = float(value)
+    if not math.isfinite(value):
+        return value
+    rounded = round(value, digits)
+    return 0.0 if rounded == 0 else rounded          # "-0.0" を出さない
+
+
+def _significant(value, digits: int = 4):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    value = float(value)
+    if not math.isfinite(value):
+        return value
+    return float(f"{value:.{digits}g}")
+
+
+def _cell(value):
+    """TSV の 1 セル。数値は丸め済みのものを repr のまま出す（format_spots_as_table の
+    固定小数 4 桁に任せると p = 1e-6 が 0 になる）。bool は JSON と同じ小文字。"""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _table(rows: list[dict], columns, *, digits: dict | None = None,
+           significant: tuple = ()) -> str:
+    """行を TSV（列名 1 回）にする。行が無ければ空文字。"""
+    from metabolomix.arf2.reader import format_spots_as_table
+
+    digits = digits or {}
+    cells = []
+    for row in rows:
+        out = {}
+        for column in columns:
+            value = row.get(column)
+            if column in digits:
+                value = _round(value, digits[column])
+            elif column in significant:
+                value = _significant(value)
+            out[column] = _cell(value)
+        cells.append(out)
+    return format_spots_as_table(cells, columns=list(columns)) if cells else ""
+
+
+def _dataset_polarity(ds) -> tuple[str | None, str, list[str]]:
+    """データセットの極性・その出所（`job_declared` / `adduct_majority` / `unknown`）・注記。
+
+    ジョブの宣言極性を優先し、mzTab-M の SML 付加体の多数決は裏取りに使う（spec §7）。
+    両方あって食い違えば宣言を使い、食い違いを注記する。
+    """
+    notes: list[str] = []
+    declared = None
+    if getattr(ds, "job_path", None):
+        from metabolomix.console import job_manager
+        try:
+            declared = job_manager.load_job(Path(ds.job_path)).polarity
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            notes.append(f"ジョブ記録を読めず、宣言極性を使っていない（{exc}）。")
+        if declared is not None and declared not in _POLARITIES:
+            notes.append(f"ジョブの宣言極性 {declared!r} を解釈できず、使っていない。")
+            declared = None
+
+    from metabolomix.console.output_collector import read_adduct_polarity
+    majorities = {read_adduct_polarity(path)["adduct_majority"]
+                  for path in (getattr(ds, "source_files", None) or {})}
+    majorities.discard(None)
+    majority = next(iter(majorities)) if len(majorities) == 1 else None
+    if len(majorities) > 1:
+        notes.append("読み込んだ mzTab-M の付加体の多数決が陽陰に割れたので、多数決は使っていない。")
+
+    if declared is not None:
+        if majority is not None and majority != declared:
+            notes.append(
+                f"ジョブの宣言極性（{declared}）と mzTab-M の付加体の多数決（{majority}）が"
+                "食い違う。宣言を使った。")
+        return declared, "job_declared", notes
+    if majority is not None:
+        return majority, "adduct_majority", notes
+    notes.append(
+        "データセットの極性を決められなかった（ジョブの宣言も mzTab-M の付加体の多数決も無い）。"
+        "目標の polarity による適用判定（not_applicable）はしていない。")
+    return None, "unknown", notes
+
+
+def _curation_note(ds) -> str | None:
+    """キュレーションのフラグがあれば「反映していない」注記。読めなくても検索は止めない。
+
+    フラグの見つけ方は dataset_export_differential と同じ（兄弟の `.arf2`）。
+    """
+    from metabolomix.curation import apply as curation_apply
+    from metabolomix.curation.flags import FlagFileError
+
+    arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p)
+                              for p in (getattr(ds, "source_files", None) or {}))), None)
+    if arf2 is None:
+        return None
+    try:
+        n_flags = curation_apply.flags_for_arf2(arf2)["n"]
+    except (FlagFileError, OSError) as exc:
+        return (f"キュレーションのフラグ記録を読めなかった（{exc}）。この検索はキュレーションを"
+                "反映していない（SME / SML の生の同定だけを見ている）。")
+    if not n_flags:
+        return None
+    return (f"キュレーションのフラグが {n_flags} 件あるが、この検索は反映していない"
+            "（SME / SML の生の同定だけを見ている）。dataset_export_differential の同定とは"
+            "食い違いうる。")
+
+
+def _target_summary(match: dict) -> dict:
+    """目標 1 件の判定（候補の行は TSV の側に 1 回だけ載せるので外す）。"""
+    keys = ("target_id", "status", "reason", "selected_feature_id", "selected_adduct",
+            "selected_evidence", "adduct_tier_used", "counts", "truncated")
+    out = {key: match[key] for key in keys}
+    out["theoretical_mz"] = {adduct: _round(mz, 4)
+                             for adduct, mz in match["theoretical_mz"].items()}
+    return out
+
+
+def _rule_targets(normalized: list[dict]) -> list[dict]:
+    """戻り値に写す正規化後の目標（理論 m/z だけ 4 桁に丸める。hash は丸める前から作る）。"""
+    shown = []
+    for target in normalized:
+        item = dict(target)
+        item["theoretical_mz"] = {adduct: _round(mz, 4)
+                                  for adduct, mz in target["theoretical_mz"].items()}
+        shown.append(item)
+    return shown
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+def dataset_feature_search(
+    feature_ids: list[str] | None = None,
+    min_mz: float | None = None,
+    max_mz: float | None = None,
+    min_rt: float | None = None,
+    max_rt: float | None = None,
+    targets: list[dict] | None = None,
+    result_ids: list[str] | None = None,
+    max_results: int = 20,
+) -> str:
+    """DatasetState の特徴を探し、目的の物質に当たる特徴を規則で判定する（読み取り専用）。
+
+    2 つの使い方があり、`targets` の有無で切り替わる（同時指定は `DATASET_BAD_REQUEST`）。
+
+    **窓検索**（`targets` なし）: `feature_ids`（SMF_ID の完全一致）・`min_mz`/`max_mz`・
+    `min_rt`/`max_rt`（分）の AND。境界を含む。何も指定しなければ `FEATURE_SEARCH_EMPTY_QUERY`
+    （全件を返さない）。`feature_ids=[]` は「どの ID でもない」条件で 0 件。並びは m/z 昇順。
+    戻り値 `features` は TSV（`feature_id mz rt evidence name inchikey adduct n_sme`。
+    `evidence` は `sme`/`sml`/`none`）。注釈の無い特徴にも統計を付ける。
+
+    **目標照合**（`targets` あり、1 回 50 件まで）: 各要素は `target_id`・`inchikey`（必須。
+    先頭 14 文字で照合）と、`formula` か（`expected_mz` と `adduct`）。任意で `name` `ppm`
+    （既定 10）`rt_min` `rt_tol_min`（既定 0.3）`adduct_tiers` `polarity`。付加体の層を上から、
+    証拠の水準 `sme_match` → `sml_match` → `unannotated` の順に見て、qualified がちょうど 1 つの
+    ときだけ `resolved`。2 つ以上なら `needs_input`（`multiple_qualified_candidates`）、無ければ
+    `needs_input`（`no_qualified_candidate`）。**強度・ppm・RT の近さでは選ばない。**
+    `unannotated` は `rt_min` があるときだけ qualified。SME（MS/MS 同定）が別物質なら落とす。
+    極性はジョブの宣言 → mzTab-M の付加体の多数決の順に決め、`rule.polarity_source` に書く。
+    目標の極性は `polarity`、省けば明示した付加体（`adduct`/`adduct_tiers`）の符号で、
+    データセットと違う目標は `not_applicable`（陽陰が混ざる付加体は `FEATURE_TARGET_INVALID`）。
+    戻り値 `targets`（目標ごとの判定と段ごとの件数）・`candidates`（TSV。目標ごとに
+    `max_results` 件まで）・`rule`（正規化した規則と `rule_hash`。result_id・表示名 `name`・
+    目標の並び順を含まないので、同じ目標・同じ極性なら別の session でも同じ hash）。hash は表示用の丸め（理論 m/z を
+    4 桁に）より前の値から作るので、返された `rule.targets` から計算し直すことはできない
+    ——照合は `rule_hash` の値どうしで行う。
+
+    result_ids: 統計を付ける 2 群比較（`dataset_differential`）の結果。省略時は今も有効な
+        2 群比較の全部（古いものは使わず `notes` に挙げる）。名指しした ID が無い・古いときは
+        `missing_state`。差次的結果が 1 件も無ければ統計なしで返す。
+    max_results: 窓検索の行数・目標ごとの候補数の上限（既定 20）。打ち切りは `notes` に書く。
+
+    `stats` は TSV（`feature_id result_id status log2fc p q mean_a mean_b detected_a detected_b`）。
+    `status` は `tested` / `not_in_matrix`（前処理で落ちた）/ `not_testable`（p が無い）で、
+    後の 2 つは数値欄が空（「差が無かった」ではない）。`detected_*` は群ごとの実検出例数
+    （gap-fill を数えない。検出状態が無ければ空）。`results` に BH の母集団
+    （`bh_population`）と caveat。キュレーションのフラグは反映しない（あれば `notes`）。
+    欄の意味は `lipidmix://docs/output-format/mztab`。
+    """
+    ds = session_state.session.dataset
+    if ds is None:
+        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+
+    window = {"feature_ids": feature_ids, "min_mz": min_mz, "max_mz": max_mz,
+              "min_rt": min_rt, "max_rt": max_rt}
+    given_window = [name for name, value in window.items() if value is not None]
+    if targets is not None and given_window:
+        return mztab_error(
+            "DATASET_BAD_REQUEST",
+            "targets（目標照合）と窓の引数（feature_ids・m/z・RT）は同時に指定できません"
+            "（どちらの意味か曖昧になる）。どちらか一方で呼び直してください。",
+            {"window_arguments": given_window})
+    if isinstance(max_results, bool) or not isinstance(max_results, int) or max_results < 1:
+        return mztab_error("DATASET_BAD_REQUEST",
+                           f"max_results は 1 以上の整数で指定してください: {max_results!r}",
+                           {"field": "max_results"})
+
+    from metabolomix.analysis import feature_search
+    from metabolomix.analysis.result_state import dataset_fingerprint
+    from metabolomix.core.atomic_io import DomainError
+
+    notes: list[str] = []
+    payload: dict = {}
+    try:
+        if targets is None:
+            rows, truncated = feature_search.search_window(
+                ds, **window, max_results=max_results)
+            if feature_ids is not None and not feature_ids:
+                notes.append("feature_ids=[] は「どの ID でもない」条件として扱った（0 件）。")
+            if truncated:
+                notes.append(f"max_results={max_results} で打ち切った（ほか {truncated} 件）。"
+                             "窓を狭めるか max_results を増やしてください。")
+            payload["features"] = _table(rows, feature_search.WINDOW_COLUMNS,
+                                         digits=_WINDOW_DIGITS)
+            stat_features = [row["feature_id"] for row in rows]
+        else:
+            if isinstance(targets, list) and not targets:
+                return mztab_error("FEATURE_TARGET_INVALID", "targets が空です（1 件以上渡す）。",
+                                   {"target_id": None, "field": "targets"})
+            polarity, polarity_source, polarity_notes = _dataset_polarity(ds)
+            notes.extend(polarity_notes)
+            normalized = feature_search.normalize_targets(targets, dataset_polarity=polarity)
+            # 特徴の m/z 配列は 1 回だけ作り、全目標で使い回す
+            mz_array = feature_search._feature_mz_array(ds)
+            matches = [feature_search.match_target(ds, target, max_results=max_results,
+                                                   mz_array=mz_array)
+                       for target in normalized]
+            cut = [f"{m['target_id']}: {m['truncated']} 件" for m in matches if m["truncated"]]
+            if cut:
+                notes.append(f"候補を目標ごとに max_results={max_results} 件で打ち切った"
+                             f"（{', '.join(cut)}）。")
+            candidates = [row for m in matches for row in m["candidates"]]
+            payload["targets"] = [_target_summary(m) for m in matches]
+            payload["candidates"] = _table(candidates, feature_search.CANDIDATE_COLUMNS,
+                                           digits=_CANDIDATE_DIGITS)
+            stat_features = list(dict.fromkeys(row["feature_id"] for row in candidates))
+    except DomainError as exc:
+        return mztab_error(exc.code, exc.message, exc.details or None)
+
+    # データの指紋（行列全体の hash）は 1 回だけ計算し、引き継いだ結果の照合と
+    # stats_source の両方で使う。
+    dataset_hash = dataset_fingerprint(ds)
+    if result_ids is not None:
+        chosen = feature_search.select_results(ds, list(dict.fromkeys(result_ids)),
+                                               dataset_hash=dataset_hash)
+        if chosen["missing"] or chosen["stale"]:
+            # 名指しの結果を黙って落とすと、呼び出し側は統計が付いたつもりで読む
+            return _missing(
+                "dataset_differential_result",
+                "result_ids に指定した差次的結果が使えません"
+                f"（無い・2 群比較でない: {chosen['missing']} / 古い: {chosen['stale']}）。"
+                "dataset_differential で計算し直すか、result_ids を省略して今も有効な結果だけを"
+                "使ってください。")
+    else:
+        chosen = feature_search.select_results(ds, None, dataset_hash=dataset_hash)
+        if chosen["stale"]:
+            notes.append("古い差次的結果（前処理・群の訂正前）は統計に使っていない: "
+                         + ", ".join(chosen["stale"]))
+    results = chosen["results"]
+    if not results:
+        notes.append("差次的結果（2 群比較）が 1 件も無いので統計を付けていない"
+                     "（dataset_differential を実行すると付く）。")
+
+    stats = feature_search.feature_stats(ds, stat_features, results)
+    if any(row["detected_a"] is None for row in stats):
+        if getattr(ds, "detected_mask", None) is None:
+            notes.append("検出状態（gap-fill の区別）を取り込めていないので detected_a / "
+                         "detected_b は空（非ゼロ値は実測と補間を区別しない）。")
+        else:
+            notes.append("結果の試料と検出状態の列の対応を保証できず、detected_a / detected_b を"
+                         "数えていない結果がある。")
+    payload["stats"] = _table(stats, feature_search.STATS_COLUMNS, digits=_STATS_DIGITS,
+                              significant=_STATS_SIGNIFICANT)
+    payload["results"] = feature_search.result_summaries(ds, results)
+    if targets is not None:
+        payload["rule"] = {"targets": _rule_targets(normalized), "polarity": polarity,
+                           "polarity_source": polarity_source,
+                           "rule_hash": feature_search.rule_hash(normalized)}
+    payload["stats_source"] = {
+        "result_ids": [(r.get("provenance") or {}).get("result_id") for r in results],
+        "dataset_hash": dataset_hash,
+    }
+    curation = _curation_note(ds)
+    if curation:
+        notes.append(curation)
+    payload["notes"] = notes
+    return json_payload(payload)

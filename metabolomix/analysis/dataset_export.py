@@ -174,8 +174,23 @@ def _as_spot_id(fid):
         return fid
 
 
-def _preprocess_parameters(ds, result: dict) -> dict:
-    """その結果が実際に使った前処理条件を返す（今の状態ではなく来歴から）。"""
+#: pipeline run から引き継いだ結果で、run の前処理レシピを読めなかったときの値。
+HANDOFF_PREPROCESS_UNKNOWN = "unknown（pipeline run の前処理結果を読めませんでした）"
+
+
+def _preprocess_parameters(ds, result: dict) -> dict | str:
+    """その結果が実際に使った前処理条件を返す（今の状態ではなく来歴から）。
+
+    pipeline run から引き継いだ結果（来歴に `handoff`）は、session の状態へ
+    **決して**フォールバックしない。親の前処理は run 側にあって `ds.results` には
+    無く、`ds.preprocessing_recipe` は空か、session で後からやり直した別の
+    レシピ——どちらを書いても正しい数字に違う条件のラベルが付く。引き継ぎ時に
+    写したレシピを使い、無ければ不明と明示する。
+    """
+    handoff = result["provenance"].get("handoff")
+    if handoff:
+        recipe = handoff.get("preprocess")
+        return dict(recipe) if recipe else HANDOFF_PREPROCESS_UNKNOWN
     for parent_id in result["provenance"].get("parent_ids") or []:
         parent = (ds.results or {}).get(parent_id)
         if parent:

@@ -61,16 +61,55 @@ pipeline_path 経路（完了した run の成果物をまとめて載せる）:
 3.    └─ metabolomix/pipeline/recovery.py normalize_pipeline_root()
 4.    └─ metabolomix/pipeline/store.py load_run()
 5.    └─ metabolomix/mztab/loading.py load_dataset_state()
-6.    └─ metabolomix/pipeline/store.py read_result_data()
-7.       └─ metabolomix/pipeline/store.py verify_result_refs()
-8.    └─ metabolomix/analysis/feature_bindings.py resolved_targets()
-9.    └─ metabolomix/analysis/matrix_state.py load_matrix()
+6.    └─ metabolomix/pipeline/session_handoff.py _run_manifest_rows()
+7.       └─ metabolomix/pipeline/store.py read_result_data()
+8.    └─ metabolomix/pipeline/store.py read_result_data()
+9.       └─ metabolomix/pipeline/store.py verify_result_refs()
+10.   └─ metabolomix/analysis/feature_bindings.py resolved_targets()
+11.   └─ metabolomix/analysis/matrix_state.py load_matrix()
+12.   └─ metabolomix/pipeline/session_handoff.py restore_differentials()
+13.      └─ metabolomix/pipeline/store.py current_result_refs()
+14.      └─ metabolomix/pipeline/store.py read_result_data()
+15.      └─ metabolomix/pipeline/session_handoff.py _handoff_rejection()
+16.         └─ metabolomix/analysis/result_state.py dataset_fingerprint()
+17.         └─ metabolomix/analysis/result_state.py group_fingerprint()
+18.      └─ metabolomix/pipeline/session_handoff.py _run_preprocess_parameters()
+19.         └─ metabolomix/pipeline/store.py read_result_data()
+20. └─ metabolomix/tools/mztab_tools.py _handoff_lines()
 
 dataset・解決済み試料対応表・binding・解析行列を**同じ run から**載せる。
 行列だけを別ツールで載せる入口は置いていない——run A の dataset に run B の
 行列を混ぜられると、群の対応が黙ってずれた統計が出る。行列の値は
 `save_matrix` が残した npz から読み、meta・配列のどちらが書き換わっても
 `load_matrix` が拒否する。
+
+run の差次的結果（`differential:<comparison_id>`）は、試料対応表を戻した**後**に
+データの指紋（`provenance.dataset_hash`）と群の指紋（`group_fingerprint`）を今の
+DatasetState と照合し、一致したものだけを `ds.results` へ戻す。result_id は付け替えない
+（pipeline の TSV のメタ行と同じ ID）。来歴に `handoff`（pipeline_root・comparison_id）を
+足すので、`result_state.is_current` は ID と前処理ではなく指紋で有効性を見る。
+`ds.last_differential` は設定しない（戻した結果は result_id で名指しして使う）。
+親の前処理（run の `preprocess` 成果物）は `ds.results` へ戻さず、そのレシピ
+（`resolved_recipe`）だけを `provenance.handoff.preprocess` へ写す。差次的結果の親は
+最後の前処理とは限らない（resume で前処理は作り直されるが、差次的工程は skip されうる）
+ので、ここだけは履歴を result_id で引いて hash を照合する。読めなければ None で、
+書き出しのメタ行 `# preprocess = ...` は session の前処理へフォールバックせず
+`unknown（…）` と書く（`dataset_export._preprocess_parameters`）。
+読むのは `current_result_refs()` が選ぶ今の ref だけ（export が同じ比較を再永続化すると
+履歴に古い ref が残るため）で、今の ref の成果物が改変されていれば
+`RESULT_INTEGRITY_MISMATCH` で読み込みごと止める。戻さなかったものは
+`ds.handoff_report["rejected"]` に理由（`legacy_result_without_dataset_hash` /
+`dataset_mismatch` / `group_mismatch`）つきで残り、要約に並ぶ。`pipeline_resume` には
+差次的工程だけを再計算させる手順が無いため、要約は理由ごとに次の一手を添える:
+指紋を持たない旧 run の結果とデータ違いには session での `dataset_preprocess` →
+`dataset_differential`、群違いには実験情報シート（`dataset_set_sample_metadata` で
+与えた群）の確認か、今の群のままの再計算。`result_state.is_current` の handoff 分岐は
+`kind == "differential"` の結果にだけ当たり、他の kind が handoff を名乗っていても通さない。
+
+試料対応表は v2 なら hash 付きの `sample_manifest` 成果物から、v1（それを作らない）なら
+`record["inputs"]["manifest"]`（`resolve_metadata` が書く同じ行）から戻す
+（`_run_manifest_rows`）。どちらも無いと群の指紋が「群なし」になり、run の差次的結果は
+すべて `group_mismatch` になる。
 
 読み込みは「読めたか」だけでなく「どれだけ信用してよいか」も返す。
 `source_verification` は終了証跡（exit code・identity）とファイル hash が揃って初めて

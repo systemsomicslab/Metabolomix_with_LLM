@@ -205,7 +205,7 @@ def register_result(ds, result: dict) -> dict:
     return result
 
 
-def is_current(ds, result: dict) -> bool:
+def is_current(ds, result: dict, *, dataset_hash: str | None = None) -> bool:
     """その結果が、今のデータセットの状態から出たものとして通用するか。
 
     **来歴を持たない結果は True**（古いと判定しない）。来歴が無いのは「古い」の
@@ -224,10 +224,39 @@ def is_current(ds, result: dict) -> bool:
 
     群の指紋を持たない差次的結果（この検査より前に作られたもの・手で組んだ
     もの）は、来歴無しと同じく「調べる材料が無い」として通す。
+
+    **`provenance["handoff"]` を持つ結果**（pipeline run が作った差次的結果を
+    session の DatasetState へ読み込んだもの）は別の規則で見る。その ds は読み込みの
+    たびに新しく作られるので `dataset_id` は run 側のものと必ず食い違い、session の
+    前処理も通っていない（`preprocess_id` は None）。だから ID と親の前処理は見ず、
+    **データの指紋**（`dataset_hash == dataset_fingerprint(ds)`）と、持っていれば
+    **群の指紋**で、同じデータ・同じ群割当から出た結果かを照合する。データの指紋が
+    無い引き継ぎ結果は、同じデータから出たことを確かめられないので通さない
+    （来歴無しの「材料不足は通す」とは逆）。群の指紋だけが無い場合は、
+    上の差次的結果と同じく通す。handoff の分岐は `kind == "differential"` にだけ
+    当てる（それ以外の kind が handoff を持っていたら通さない）。
+
+    `dataset_hash` は呼び出し側が計算済みの `dataset_fingerprint(ds)`（任意）。指紋は
+    行列全体の hash なので、多数の結果を続けて照合する呼び出し側（`feature_search.
+    select_results`）は 1 回だけ計算して渡す。渡さなければ必要なときにここで計算する。
     """
     if not (result or {}).get("provenance"):
         return True
     prov = result["provenance"]
+    if prov.get("handoff"):
+        if prov.get("kind") != "differential":
+            # run から戻すのは差次的結果だけ（`session_handoff.restore_differentials`）。
+            # 他の kind が handoff を名乗っていたら、ID も親も見ないこの分岐で
+            # 「今の結果」にしない（run の前処理が今の前処理の顔をする）。
+            return False
+        recorded_data = prov.get("dataset_hash")
+        if recorded_data is None:
+            return False
+        current = dataset_hash if dataset_hash is not None else dataset_fingerprint(ds)
+        if recorded_data != current:
+            return False
+        recorded_groups = prov.get("group_fingerprint")
+        return recorded_groups is None or recorded_groups == group_fingerprint(ds)
     if prov.get("dataset_id") != getattr(ds, "dataset_id", None):
         return False
     parents = prov.get("parent_ids") or []

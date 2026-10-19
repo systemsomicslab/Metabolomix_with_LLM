@@ -2,7 +2,6 @@
 import json
 import sys
 
-import fitz
 import numpy as np
 import pytest
 from mcp.server.fastmcp import Image
@@ -10,6 +9,7 @@ from mcp.server.fastmcp import Image
 from metabolomix.core import mcp_core, session_state
 from metabolomix.pathway import bridge, tools
 
+from tests.pymupdf_guard import require_pymupdf
 from tests.test_pathway_jsonld import B, _graph  # 小さな JSON-LD 組み立て器を再利用
 
 
@@ -155,6 +155,7 @@ def test_bridge_error_becomes_envelope(lipid_arf, monkeypatch):
 # --- pathway_plot ---
 
 def _write_pdf(path):
+    fitz = require_pymupdf()
     doc = fitz.open()
     doc.new_page(width=842, height=595).insert_text((72, 72), "PC")
     doc.save(path)

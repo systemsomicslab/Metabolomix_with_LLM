@@ -121,6 +121,15 @@ MZTAB_ERROR_CODES = frozenset({
     # キュレーションのフラグ記録（curation/flags.jsonl）に読めない行がある。
     # wrong を黙って落とさないよう、差次的エクスポートを書き出さずに止める。
     "CURATION_FLAGS_INVALID",
+    # dataset_feature_search の引数エラー（どれも引数を直して呼び直すしかない）。
+    # 目標の形・値が不正（details に target_id と field）。
+    "FEATURE_TARGET_INVALID",
+    # 極性が決まらず、目標にも polarity・adduct_tiers・(expected_mz と adduct) が無い。
+    "POLARITY_UNKNOWN",
+    # 窓検索の条件が 1 つも無い（全特徴を黙って列挙しない）。
+    "FEATURE_SEARCH_EMPTY_QUERY",
+    # 窓の下限が上限より大きい。
+    "FEATURE_SEARCH_BAD_RANGE",
 })
 
 
