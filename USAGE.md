@@ -1,4 +1,4 @@
-# USAGE — ms-data-parser MCP ツール一覧(全77ツール)
+# USAGE — ms-data-parser MCP ツール一覧(全80ツール)
 
 MS-DIAL 出力(`.arf` / `.arf2` / `.pai2` / `.dcl` / `.EIC.aef`)と mzTab-M を解析し、PCA・差次的解析・
 アノテーション検証・文献探索・レポート記録までを行う MCP サーバーのツール群です。
@@ -281,6 +281,20 @@ run ディレクトリの `remote-job.json`。サーバは版を返さないの�
 | ツール | 機能 |
 |--------|------|
 | `server_update` | このMCPサーバ自身を `origin/main` へ早送りし、`uv.lock` / `requirements.lock.txt` が変わっていたときだけ依存も入れ直す。**プロセスは操作しない** — 適用後に Claude Desktop(MCPクライアント)を再起動するのは利用者。起動中のプロセスは import 済みの古いコードで動き続けるため、戻り値の `message` にある再起動の指示をそのまま利用者へ伝えること。未コミット変更がある・`main` 以外にいる・早送りできない(独自コミットがある)・オフラインのいずれでも**何もせずに** `status="refused"` と機械可読な `reason` を返す(例外は投げない)。`status` は `up_to_date` / `updated` / `updated_with_warning` / `refused`。`updated_with_warning` はコードだけ新しく依存の更新に失敗した状態で、再起動前に手元で `setup.ps1`(mac / Linux は `sh setup.sh`)の再実行が要る。 |
+
+## 18. 再解析のデータセットのハンドル(並行のエージェント向け)
+
+**再解析で使う**。対話の使い方(`dataset_load` → `dataset_*`)は変わらない。ハンドルは
+1 つのサーバのプロセスにデータセット(とその極性のライブラリ)を複数並べて持つための ID で、
+並行の再解析のエージェントが別々のデータセット・極性を互いに干渉せずに扱える。
+`dataset_handle` を渡した呼び出しはサーバの別スレッドで回り、同じハンドルへの呼び出しは
+1 本ずつ、別のハンドルどうしは並行に進む。渡さない呼び出しは今までどおり対話のセッションに効く。
+
+| ツール | 機能 |
+|--------|------|
+| `dataset_handle_open` | `dataset_load` と同じ引数(`mztab_path` / `job_path` / `pipeline_path` のどれか 1 つ・`allow_incomplete`)でデータセットを読み、対話のセッションに置かずにハンドル(`dh_…`)を返す。`library="auto"`(既定)はデータセットの極性の参照ライブラリを設定(`[library] msp_positive` / `msp_negative`)だけから引いて読み取り専用で開く(設定に無い・極性が決まらないときはライブラリなしで開き `library_note` に理由。`"none"` は読まない)。戻り値はライブラリのファイル名と sha256 だけでパスを出さない。`arf2_path` はスポットの照合(spot_id = SMF_ID)に使う `.arf2`(省略時は検出状態を取り込んだ `.arf` の同じバッチ)。同じ入力(size・更新時刻が同じ)を開き直すと読み込み済みのものを使い回す(`reused_base`)が、ハンドルどうしの状態は別々。上限は `LIPIDMIX_MAX_DATASET_HANDLES`(既定 8)。 |
+| `dataset_handle_list` | 開いているハンドルの一覧(TSV)。 |
+| `dataset_handle_close` | ハンドルを閉じる(データセットの複製とライブラリの接続を手放す)。 |
 
 ## 根拠バンドル v2
 

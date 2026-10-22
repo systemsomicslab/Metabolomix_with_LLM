@@ -427,10 +427,15 @@ def _digest_for(source_path: Path, base: Path, *, trust_index: bool) -> str:
     return digest
 
 
-def open_store(path: str | Path, *, cache_dir: Path | None = None, rebuild: bool = False) -> LibraryStore:
+def open_store(path: str | Path, *, cache_dir: Path | None = None, rebuild: bool = False,
+               read_only: bool = False) -> LibraryStore:
     """`path` の store を開く。無ければ（または `rebuild=True` なら）構築してから開く。
 
     `rebuild=True` は元ファイルの破損を疑うときに使うので、記憶した sha256 も信じない。
+
+    `read_only=True` は構築済みの SQLite を読み取り専用（`mode=ro`）で開き、別スレッドからの
+    利用を許す（`check_same_thread=False`）。データセットのハンドルが使う——ハンドルへの
+    呼び出しはワーカースレッドで回り、同じハンドルの中では 1 本ずつに直列化されている。
     """
     source_path = Path(path)
     base = cache_dir if cache_dir is not None else globals()["cache_dir"]()
@@ -440,7 +445,11 @@ def open_store(path: str | Path, *, cache_dir: Path | None = None, rebuild: bool
     if rebuild or not dest_path.exists():
         _build(source_path, dest_path, digest)
 
-    conn = sqlite3.connect(str(dest_path))
+    if read_only:
+        conn = sqlite3.connect(f"{dest_path.resolve().as_uri()}?mode=ro", uri=True,
+                               check_same_thread=False)
+    else:
+        conn = sqlite3.connect(str(dest_path))
     try:
         return LibraryStore(conn, dest_path)
     except Exception:

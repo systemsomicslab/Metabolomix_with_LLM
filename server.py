@@ -87,6 +87,13 @@ from metabolomix.tools.pipeline_tools import *  # pipeline_plan, pipeline_run, p
 from metabolomix.tools.maintenance import *  # server_update
 from metabolomix.tools.curation_tools import *  # curation_review, curation_suggest, curation_submit, curation_flags, curation_view_data
 from metabolomix.pathway.tools import *  # pathway_project, pathway_plot（MSLipidMapper 連携）
+from metabolomix.tools.handle_tools import *  # dataset_handle_open / list / close（再解析のハンドル）
+
+# 全ツールの登録が済んでから 1 回だけ: dataset_handle を渡した呼び出しをスレッドへ退避する
+# （渡さない呼び出しは今までどおりイベントループ上で同期に動く）。
+from metabolomix.core import handle_dispatch as _handle_dispatch
+
+_handle_dispatch.install(mcp)
 
 
 if __name__ == "__main__":

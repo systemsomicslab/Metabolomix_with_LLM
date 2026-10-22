@@ -78,6 +78,11 @@ EXPECTED_ANNOTATIONS = {
     "dataset_build_matrix": READ_ONLY,
     # 特徴の検索と目標の判定。session も外界も書き換えない。
     "dataset_feature_search": READ_ONLY,
+    # --- 再解析のハンドル（サーバのプロセス内の状態だけを変える） ---
+    # open は呼ぶたびに新しいハンドルを作る → 非冪等。close はハンドルの状態を捨てる。
+    "dataset_handle_open": LOCAL_WRITE_APPEND,
+    "dataset_handle_list": READ_ONLY,
+    "dataset_handle_close": LOCAL_DELETE,
     # --- Console 実行層（console_plan/run はジョブ状態・ファイルを生成する） ---
     "console_plan": LOCAL_WRITE_APPEND,
     "console_run": LOCAL_WRITE_APPEND,

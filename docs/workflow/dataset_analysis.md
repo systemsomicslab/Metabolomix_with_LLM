@@ -79,7 +79,7 @@ MCP も import しない。ツール層の仕事は、極性の出所を決め�
 1. metabolomix/tools/dataset_analysis_tools.py  dataset_feature_search()
 2. ├─ [窓検索] metabolomix/analysis/feature_search.py  search_window()
 3. │  └─ metabolomix/analysis/feature_search.py  _window_identity()
-4. ├─ [目標照合] metabolomix/tools/dataset_analysis_tools.py  _dataset_polarity()
+4. ├─ [目標照合] metabolomix/mztab/polarity.py  dataset_polarity()
 5. │  ├─ metabolomix/console/job_manager.py  load_job()
 6. │  └─ metabolomix/console/output_collector.py  read_adduct_polarity()
 7. ├─ [目標照合] metabolomix/analysis/feature_search.py  normalize_targets()
