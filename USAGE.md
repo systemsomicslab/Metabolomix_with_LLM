@@ -296,6 +296,13 @@ run ディレクトリの `remote-job.json`。サーバは版を返さないの�
 | `dataset_handle_list` | 開いているハンドルの一覧(TSV)。 |
 | `dataset_handle_close` | ハンドルを閉じる(データセットの複製とライブラリの接続を手放す)。 |
 
+次の既存ツールは省略可能な引数 `dataset_handle` を受ける(省略時は今までどおり対話のセッション):
+`dataset_status` `dataset_preprocess` `dataset_pca` `dataset_differential`
+`dataset_export_differential` `dataset_export_evidence_bundle` `dataset_set_sample_metadata`
+`dataset_statistic` `dataset_build_matrix` `dataset_feature_search` `library_load`
+`library_match_feature` `library_plot_mirror`。開いていないハンドルは `DATASET_HANDLE_NOT_FOUND`
+で、対話のセッションへは落ちない。
+
 ## 根拠バンドル v2
 
 | ツール | 内容 |

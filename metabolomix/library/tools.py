@@ -18,7 +18,7 @@ from mcp.types import ToolAnnotations
 
 from metabolomix.analysis.spectral_match import cutoff_mask, match_spectrum, total_score
 from metabolomix.arf2.reader import format_spots_as_table
-from metabolomix.core import mcp_errors, session_state, user_config
+from metabolomix.core import mcp_errors, user_config
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.path_resolvers import (
     LIBRARY_SETTING_KEYS,
@@ -66,7 +66,7 @@ _CANDIDATE_TABLE_COLUMNS = [
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
           structured_output=False)
 def library_load(file_path: str | None = None, rebuild: bool = False,
-                 ion_mode: str | None = None) -> str:
+                 ion_mode: str | None = None, dataset_handle: str | None = None) -> str:
     """参照ライブラリを読み込み、照合用の SQLite store を構築（または既存キャッシュを
     再利用）する。
 
@@ -89,7 +89,16 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     `rebuild=True` はキャッシュを無視して構築し直す（元ファイルが壊れている
     疑いがあるときなど）。通常は不要——store は元ファイルの sha256 をキーに
     キャッシュされるため、内容が変わらない限り再構築しない。
+
+    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は対話のセッション。ハンドルのライブラリ・照合結果だけを読み書きする。
+        ハンドルへは読み取り専用で開く。
     """
+    from metabolomix.tools._holder import resolve_holder
+
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
     try:
         resolved = resolve_library_path(file_path, ion_mode=ion_mode)
     except LibraryPathError as exc:
@@ -112,7 +121,7 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
         })
 
     try:
-        store_obj = open_store(resolved, rebuild=rebuild)
+        store_obj = open_store(resolved, rebuild=rebuild, read_only=dataset_handle is not None)
     except Exception as exc:  # noqa: BLE001 - 壊れたライブラリは文言で返す（MCP が扱いやすい）
         # OSError の文言は置き場所（フルパス）を含む。研究室ライブラリの置き場所は
         # 戻り値（LLM の文脈）に出さないので、ディレクトリ部分を伏せる。
@@ -127,15 +136,16 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     # 古い store の sqlite3 接続を閉じてから差し替える（Minor 8: 閉じずに上書きすると
     # library_load を繰り返すたびに接続が漏れる。LibraryStore.close() は最初から
     # 存在していたが、ここで呼んでいなかった）。
-    old_store = session_state.session.library.store
+    old_store = holder.library.store
     if old_store is not None:
         old_store.close()
 
     # 別ライブラリへの切り替え起こりうるので、古い照合結果を新ライブラリのものと
     # 取り違えないよう破棄する（ArfState.reset_analysis と同じ考え方）。
-    session_state.session.library.store = store_obj
-    session_state.session.library.source_path = resolved
-    session_state.session.library.last_match = None
+    holder.library.store = store_obj
+    # ハンドルにはファイル名だけを持たせる（研究室のライブラリの置き場所を記録に残さない）。
+    holder.library.source_path = resolved if dataset_handle is None else Path(resolved).name
+    holder.library.last_match = None
 
     path = Path(resolved)
     summary = store_obj.summary()
@@ -280,6 +290,7 @@ def library_match_feature(
     top_n: int = 5,
     spot_id: int | None = None,
     arf2_path: str | None = None,
+    dataset_handle: str | None = None,
 ) -> str:
     """測定 MS/MS（`.dcl`）を参照ライブラリ（`library_load` 済みの store）と照合し、
     上位候補を返す。
@@ -339,8 +350,20 @@ def library_match_feature(
     候補一覧は TSV（列名 1 回）で返す。**スペクトル座標と alignment は戻り値に
     含めない**（LLM の文脈を食うため）。座標は `session.library.last_match` に
     持ち、`library_plot_mirror` がそこから読む。
+
+    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は対話のセッション。ハンドルのライブラリ・照合結果だけを読み書きする。
+        `spot_id` の解決は、`arf2_path` / `dcl_file` を省けばハンドルの `.arf2` / `.dcl` を使う。
     """
-    store_obj = session_state.session.library.store
+    from metabolomix.tools._holder import resolve_holder
+
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    if dataset_handle is not None:
+        arf2_path = arf2_path or holder.arf2_path
+        dcl_file = dcl_file or holder.dcl_path
+    store_obj = holder.library.store
     if store_obj is None:
         return mcp_errors.missing_state(
             "library_store", ["library_load"],
@@ -439,7 +462,7 @@ def library_match_feature(
     scored.sort(key=lambda item: item[1][_RANK_KEY], reverse=True)
     top = scored[:top_n] if top_n >= 0 else scored
 
-    session_state.session.library.last_match = {
+    holder.library.last_match = {
         "spot_id": spot_id,
         "precursor_mz": precursor_mz,
         "rt": rt,
@@ -522,7 +545,8 @@ def library_match_feature(
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def library_plot_mirror(rank: int = 1, output: str | None = None,
                         scale: str = mirror_plot.RELATIVE,
-                        label_policy: str = mirror_plot.AUTO) -> list | str:
+                        label_policy: str = mirror_plot.AUTO,
+                        dataset_handle: str | None = None) -> list | str:
     """直近の `library_match_feature` 結果から対向プロット（mirror plot）を描く。
 
     上段が測定、下段が参照（`rank` 位の候補）。`output="image"`（既定）は
@@ -565,8 +589,16 @@ def library_plot_mirror(rank: int = 1, output: str | None = None,
 
     どちらも上下は別枠で数える（上流は上下で別々の `Annotator` を持つため、
     側をまたぐ衝突は起きない）。
+
+    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は対話のセッション。ハンドルのライブラリ・照合結果だけを読み書きする。
     """
-    last_match = session_state.session.library.last_match
+    from metabolomix.tools._holder import resolve_holder
+
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    last_match = holder.library.last_match
     if not last_match or not last_match.get("candidates"):
         return mcp_errors.missing_state(
             "library_match", ["library_match_feature"],
