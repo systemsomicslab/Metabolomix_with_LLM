@@ -144,6 +144,10 @@ def _iter_dir_raw_files(root_entry: Path, source_root: Path) -> list[Path]:
             )
         for name in filenames:
             fpath = dpath / name
+            if job_manager.is_vendor_cache(fpath):
+                # Console の読み込みが書くキャッシュ（Bruker の analysis.sqlite）。入力の中身
+                # ではないので目録に入れない（入れると読み込みのたびに INPUT_CHANGED になる）。
+                continue
             if _resolves_outside_root(fpath, source_root):
                 raise DomainError(
                     "INPUT_ESCAPES_SOURCE_ROOT",
@@ -801,6 +805,9 @@ def verify_inputs(snapshot: dict) -> None:
     changed: list[str] = []
     for stat in snapshot["raw_stat"]:
         path = source_root / stat["relative_path"]
+        if job_manager.is_vendor_cache(path):
+            # 目録からキャッシュを外す前に記録した snapshot にも残っている。比べない。
+            continue
         try:
             st = path.stat()
         except OSError:
