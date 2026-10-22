@@ -93,30 +93,33 @@ precursor・RT が ARF2 と ±0.05 Da・±0.2 分で合わなければ `dcl_prec
 `spot_not_found` を返して照合しない。
 
 1. metabolomix/library/tools.py  library_match_feature()
-2. └─ metabolomix/library/tools.py  _spot_query()
-3. │  └─ metabolomix/core/path_resolvers.py  resolve_arf2_file_path()
-4. │  └─ metabolomix/msdial/alignment_spot.py  spot_record()
-5. │  └─ metabolomix/msdial/alignment_spot.py  alignment_msms()
-6. │     └─ metabolomix/dcl/reader.py  read_dcl_entry()
-7. └─ metabolomix/library/defaults.py  pick_tol()
+2. └─ metabolomix/tools/_holder.py  resolve_holder()
+3. └─ metabolomix/library/tools.py  _spot_query()
+4. │  └─ metabolomix/core/path_resolvers.py  resolve_arf2_file_path()
+5. │  └─ metabolomix/msdial/alignment_spot.py  spot_record()
+6. │  └─ metabolomix/msdial/alignment_spot.py  alignment_msms()
+7. │     └─ metabolomix/dcl/reader.py  read_dcl_entry()
 8. └─ metabolomix/library/tools.py  _measured_spectrum()
 9. │  └─ metabolomix/core/path_resolvers.py  resolve_dcl_file_path()
 10. │  └─ metabolomix/dcl/reader.py  deserialize_dcl()
 11. │  └─ metabolomix/dcl/reader.py  get_msms_by_precursor()
-12. └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
-13. └─ metabolomix/library/store.py  LibraryStore.candidates()
-14. └─ metabolomix/analysis/spectral_match.py  match_spectrum()
-15. │  └─ metabolomix/analysis/spectral_match.py  normalize_measured()
-16. │  │  └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
-17. │  └─ metabolomix/analysis/spectral_match.py  simple_dot_product()
-18. │  └─ metabolomix/analysis/spectral_match.py  weighted_dot_product()
-19. │  └─ metabolomix/analysis/spectral_match.py  reverse_dot_product()
-20. │  └─ metabolomix/analysis/spectral_match.py  matched_peaks_scores()
-21. │  └─ metabolomix/analysis/spectral_match.py  spectral_entropy_similarity()
-22. └─ metabolomix/analysis/spectral_match.py  total_score()
-23. │  └─ metabolomix/analysis/spectral_match.py  gaussian_similarity()
-24. │  └─ metabolomix/analysis/spectral_match.py  fix_mass_tolerance()
-25. └─ metabolomix/arf2/reader.py  format_spots_as_table()
+12. └─ metabolomix/library/matching.py  score_candidates()
+13. │  └─ metabolomix/library/defaults.py  pick_tol()
+14. │  └─ metabolomix/library/store.py  LibraryStore.candidates()
+15. │  └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
+16. │  └─ metabolomix/analysis/spectral_match.py  match_spectrum()
+17. │  │  └─ metabolomix/analysis/spectral_match.py  normalize_measured()
+18. │  │  │  └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
+19. │  │  └─ metabolomix/analysis/spectral_match.py  simple_dot_product()
+20. │  │  └─ metabolomix/analysis/spectral_match.py  weighted_dot_product()
+21. │  │  └─ metabolomix/analysis/spectral_match.py  reverse_dot_product()
+22. │  │  └─ metabolomix/analysis/spectral_match.py  matched_peaks_scores()
+23. │  │  └─ metabolomix/analysis/spectral_match.py  spectral_entropy_similarity()
+24. │  └─ metabolomix/analysis/spectral_match.py  total_score()
+25. │     └─ metabolomix/analysis/spectral_match.py  gaussian_similarity()
+26. │     └─ metabolomix/analysis/spectral_match.py  fix_mass_tolerance()
+27. └─ [detail=true] metabolomix/analysis/spectral_match.py  fragment_matches_excluding_precursor()
+28. └─ metabolomix/arf2/reader.py  format_spots_as_table()
 
 手順 12 の `cutoff_mask()` は候補ループの外で 1 回だけ呼ぶ（測定スペクトルと
 `.dbs` の足切りだけで決まり、候補には依存しないため）。ここで求めた
@@ -169,3 +172,13 @@ run（既定）では空なので、図も caption も従来と変わらない�
 だけを返す）。ただし**「最良」の基準は共有する**——どちらも
 `spectral_match.total_score()` の降順で選ぶ。食い違わせると、同じ feature について
 検証ドシエと候補一覧が別の候補を名指しすることになる。
+
+## library_search
+
+前提: `library_load` 済み（ハンドルならライブラリつきで開いたこと）。無ければ `missing_state`。
+状態変更: なし。読み取りだけ（`SELECT`）。ハンドルの store は `mode=ro` で開いてある。
+
+1. metabolomix/library/tools.py  library_search()
+2. └─ metabolomix/tools/_holder.py  resolve_holder()
+3. └─ metabolomix/library/store.py  LibraryStore.search()
+4. └─ metabolomix/arf2/reader.py  format_spots_as_table()

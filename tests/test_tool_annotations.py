@@ -111,6 +111,8 @@ EXPECTED_ANNOTATIONS = {
     "library_load": LOCAL_WRITE,
     "library_match_feature": READ_ONLY,
     "library_plot_mirror": READ_ONLY,
+    "library_search": READ_ONLY,
+    "dcl_spot_spectrum": READ_ONLY,
     "pai2_parser": READ_ONLY,
     "pai2_inspect_peak": READ_ONLY,
     "verify_peak_annotation": READ_ONLY,

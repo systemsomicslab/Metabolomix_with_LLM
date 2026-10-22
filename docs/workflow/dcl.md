@@ -36,3 +36,14 @@ RT を渡すと、同一 m/z の別溶出ピークを分離できる。
 2. └─ metabolomix/core/path_resolvers.py  resolve_dcl_file_path()
 3. └─ metabolomix/dcl/reader.py  deserialize_dcl()
 4. └─ metabolomix/dcl/reader.py  get_msms_by_precursor()
+
+## dcl_spot_spectrum
+
+前提: なし（`.arf2` は `arf2_path`、ハンドルならハンドルの `.arf2`、無ければ現在のデータフォルダ）。
+状態変更: なし。`library_match_feature(spot_id=...)` と同じ規則でスポットの代表 MS/MS を引く。
+
+1. metabolomix/dcl/tools.py  dcl_spot_spectrum()
+2. └─ metabolomix/tools/_holder.py  resolve_holder()
+3. └─ metabolomix/library/tools.py  _spot_query()
+4.    └─ metabolomix/msdial/alignment_spot.py  spot_record()
+5.    └─ metabolomix/msdial/alignment_spot.py  alignment_msms()

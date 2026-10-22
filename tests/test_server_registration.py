@@ -33,10 +33,13 @@ import server
 # eic_rank_by_max_intensity を spot ID 検索も持つ eic_search に統合(76→74)。
 # DatasetState の特徴検索と目的の物質の判定: dataset_feature_search を追加(74→75)。
 # 再解析のデータセットのハンドル: dataset_handle_open / list / close を追加(77→80)。
+# 照合の詳細: library_search / dcl_spot_spectrum を追加(80→82)。
 EXPECTED_TOOLS = sorted([
     "dataset_handle_open",
     "dataset_handle_list",
     "dataset_handle_close",
+    "library_search",
+    "dcl_spot_spectrum",
     "arf_export_evidence_bundle",
     "dataset_export_evidence_bundle",
     "pathway_project",

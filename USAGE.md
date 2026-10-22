@@ -1,4 +1,4 @@
-# USAGE — ms-data-parser MCP ツール一覧(全80ツール)
+# USAGE — ms-data-parser MCP ツール一覧(全82ツール)
 
 MS-DIAL 出力(`.arf` / `.arf2` / `.pai2` / `.dcl` / `.EIC.aef`)と mzTab-M を解析し、PCA・差次的解析・
 アノテーション検証・文献探索・レポート記録までを行う MCP サーバーのツール群です。
@@ -89,6 +89,7 @@ pipeline_run → pipeline_status(確認) → pipeline_resume(訂正・再開が�
 | `verify_peak_annotation` | 1ピークのアノテーション妥当性を検証するドシエ(精密質量誤差ppm・アダクト整合・MS/MS 証拠)を返す。要 `pai2_parser` 先行。`analytical_checks.msms.band` は `PASS`(実スペクトル)/`FLAG_ONLY`(取得フラグのみ)/`ABSENT` の3値。 |
 | `dcl_parser` | `.dcl`(MSDecResult＝デコンボリューション済み MS/MS)を解析し在庫要約と先頭数件の主要フラグメントを返す。 |
 | `dcl_find_msms` | precursor m/z(任意で RT)に一致する MS/MS を引く。アノテーションの裏取り用。該当ゼロは「MS/MS 未取得」であって「フラグメント不在」ではない。 |
+| `dcl_spot_spectrum` | アラインメントのスポット ID(mzTab-M の SMF_ID と同じ)で代表 MS/MS の全ピークを引く(`library_match_feature(spot_id=…)` と同じ規則で `.arf2` と照らす。再解析で使う)。 |
 
 ## 7. 実験目的の記録(gap駆動探索の前提)
 
@@ -209,7 +210,8 @@ QC/blank の扱いはツールごとに異なる。`arf_parser` の `class_ids` 
 | ツール | 機能 |
 |--------|------|
 | `library_load` | 参照ライブラリを解決し、照合用の SQLite store を構築(または既存キャッシュを再利用)して `session.library` へ持つ。要約(`record_count`/`ion_modes`/`compound_classes` 上位10/`search_params`/`records_without_ion_mode`/`non_utf8_lines`)を返す。`.msp` 由来で `search_params` が無いときは既定の許容幅を使う旨を明示する。`ion_mode`(`"positive"`/`"negative"`)を渡すと、その極性の設定(環境変数 `MSDIAL_MSP_POS`/`MSDIAL_MSP_NEG`、無ければ `lipidmix.local.toml` の `[library] msp_positive`/`msp_negative`)が指す研究室ライブラリを読む。解決順は `file_path` → `ion_mode` の設定 → `*_Loaded.msp2.dbs` → 設定済みの極性 → `*.msp` で、候補が 1 つに決まらなければ `code="MSP_AMBIGUOUS"` のエラーを返す(更新日時で黙って選ばない)。一度に持つライブラリは 1 つ。大きな `.msp` の初回構築は `python -m metabolomix.library.store --ion-mode <極性>` で事前に済ませられる([docs/cli.md](docs/cli.md))。 |
-| `library_match_feature` | 測定 MS/MS(`.dcl`、間引かずに全ピーク使用)を候補と照合し、上位をスコア付きの TSV で返す。**並び順は `total_score`**(MS-DIAL の `GetTotalScore` の移植。RT・precursor m/z の一致度を足した**正規化しない和**で 1 を超える)。RT 項を足したかは `scoring.use_rt` に出る(`.dbs` の `IsUseTimeForAnnotationScoring` 次第。`.msp` では常に false)。上流の順位付けタプル全体は再現していないので**上位に化学的にありえない候補が残ることがある** — 1 位の妥当性は対向プロットで確かめること。`.dcl` に MS/MS が無いときは `not_found`(「未取得」であって「合わなかった」ではない)。スペクトル座標は戻り値に含めず `session.library.last_match` へ持つ。照合対象は `precursor_mz` か `spot_id` の**どちらか一方**。`spot_id`(MasterAlignmentID。`eic_search` で引ける)を渡すと、precursor m/z・RT・極性を同じバッチの `.arf2`(`arf2_path`)から取り、測定スペクトルはアラインメント `.dcl` のそのスポットの代表 MS/MS を使う(m/z で探さないので同じ m/z の別スポットを拾わない)。precursor・RT が ARF2 と ±0.05 Da・±0.2 分で合わなければ照合せず `dcl_precursor_mismatch`、ID が無ければ `spot_not_found`。未注釈スポットの確認は `eic_search` → `library_match_feature(spot_id=…)` → `library_plot_mirror`。 |
+| `library_match_feature` | 測定 MS/MS(`.dcl`、間引かずに全ピーク使用)を候補と照合し、上位をスコア付きの TSV で返す。**並び順は `total_score`**(MS-DIAL の `GetTotalScore` の移植。RT・precursor m/z の一致度を足した**正規化しない和**で 1 を超える)。RT 項を足したかは `scoring.use_rt` に出る(`.dbs` の `IsUseTimeForAnnotationScoring` 次第。`.msp` では常に false)。上流の順位付けタプル全体は再現していないので**上位に化学的にありえない候補が残ることがある** — 1 位の妥当性は対向プロットで確かめること。`.dcl` に MS/MS が無いときは `not_found`(「未取得」であって「合わなかった」ではない)。スペクトル座標は戻り値に含めず `session.library.last_match` へ持つ。照合対象は `precursor_mz` か `spot_id` の**どちらか一方**。`spot_id`(MasterAlignmentID。`eic_search` で引ける)を渡すと、precursor m/z・RT・極性を同じバッチの `.arf2`(`arf2_path`)から取り、測定スペクトルはアラインメント `.dcl` のそのスポットの代表 MS/MS を使う(m/z で探さないので同じ m/z の別スポットを拾わない)。precursor・RT が ARF2 と ±0.05 Da・±0.2 分で合わなければ照合せず `dcl_precursor_mismatch`、ID が無ければ `spot_not_found`。未注釈スポットの確認は `eic_search` → `library_match_feature(spot_id=…)` → `library_plot_mirror`。`detail=true`(opt-in。再解析で使う)を渡すと、TSV の末尾に `inchikey` と `fragment_matches_excl_precursor`(前駆体 ±`precursor_exclusion_tol` を除いた一致の本数。`matched_peaks_count` は前駆体の一致も 1 本に数える)の列を足し、測定スペクトル(`measured_peaks`)と候補ごとの一致したピーク(`alignments`)を戻り値に載せる。 |
+| `library_search` | 読み込んだ参照ライブラリを名前(部分一致)・分子式(完全一致)・InChIKey(先頭 14 文字)で引く(読み取りだけ。再解析で使う)。`limit` 件まで TSV で返し、打ち切った件数を `truncated` に書く。 |
 | `library_plot_mirror` | 直近の照合結果から対向プロット(上段=測定・下段=参照)を描く。既定は PNG 画像、`output="payload"` で座標 JSON。`scale` で縦軸の写し方を選ぶ(`"relative"` 既定 / `"sqrt"` / `"log10"`)——**precursor がベースピークのスペクトルは `relative` だと診断イオンが潰れて読めない**ので `"sqrt"` を使う。`label_policy` で m/z ラベルの衝突回避を選ぶ(`"auto"` 既定 = 水平・垂直の 2 次元判定 / `"msdial"` = 上流に忠実な水平のみの判定。忠実版のほうがラベルは少ない)。`.dbs` の強度足切りで**採点に入らなかった測定ピーク**は灰色で薄く描き分け、凡例と caption に件数が出る(足切りが 0 の run では現れない)。 |
 
 ## 15. アラインメントのキュレーション(注釈の一覧確認と機械判別)

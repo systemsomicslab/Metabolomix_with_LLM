@@ -16,7 +16,7 @@ from metabolomix.core.serialization import json_payload
 from metabolomix.core.path_resolvers import resolve_dcl_file_path
 from metabolomix.dcl.reader import deserialize_dcl, summarize_dcl, get_msms_by_precursor
 
-__all__ = ["dcl_parser", "dcl_find_msms"]
+__all__ = ["dcl_parser", "dcl_find_msms", "dcl_spot_spectrum"]
 
 # LLM へ返すスペクトルは主要フラグメントに絞る（全ピークは容易に数百本になる）。
 _DEFAULT_TOP_PEAKS = 10
@@ -114,4 +114,41 @@ def dcl_find_msms(precursor_mz: float, file_path: str | None = None,
             }
             for r in hits
         ],
+    })
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+def dcl_spot_spectrum(spot_id: int, arf2_path: str | None = None, dcl_file: str | None = None,
+                      dataset_handle: str | None = None) -> str:
+    """アラインメントのスポット ID で代表 MS/MS（全ピーク）を引く（再解析で使う）。
+
+    `dcl_find_msms` は precursor m/z で引くので、同じ m/z の別スポットを拾いうる。ここは
+    `library_match_feature(spot_id=...)` と同じ規則で、`.arf2` の precursor・RT と照らした
+    アラインメント `.dcl` の `dcl[spot_id]` を返す（索引の崩れは `dcl_precursor_mismatch`、
+    ID が無ければ `spot_not_found`、MS/MS が無ければ `not_found`）。mzTab-M の SMF_ID は
+    スポット ID と同じ。
+    dataset_handle: `dataset_handle_open` が返したハンドル。`arf2_path` / `dcl_file` を省けば
+        ハンドルの `.arf2` / `.dcl` を使う。省略時は現在のデータフォルダから探す。
+    """
+    from metabolomix.library.tools import spot_msms_query
+    from metabolomix.tools._holder import resolve_holder
+
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    if dataset_handle is not None:
+        arf2_path = arf2_path or holder.arf2_path
+        dcl_file = dcl_file or holder.dcl_path
+    spot = spot_msms_query(int(spot_id), arf2_path=arf2_path, dcl_file=dcl_file, rt=None,
+                           ion_mode=None)
+    if spot["status"] != "ok":
+        return json_payload(spot)
+    return json_payload({
+        "status": "ok",
+        "spot_id": int(spot_id),
+        "precursor_mz": round(float(spot["precursor_mz"]), 4),
+        "rt": None if spot["rt"] is None else round(float(spot["rt"]), 3),
+        "ion_mode": spot["ion_mode"],
+        "n_peaks": len(spot["measured"]),
+        "peaks": [[round(float(mz), 4), float(f"{float(i):.6g}")] for mz, i in spot["measured"]],
     })

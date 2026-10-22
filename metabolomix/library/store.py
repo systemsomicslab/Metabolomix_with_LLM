@@ -395,6 +395,36 @@ class LibraryStore:
         row = self._conn.execute(query + " LIMIT 1", params).fetchone()
         return _row_to_record(row) if row else None
 
+    def search(self, *, name: str | None = None, formula: str | None = None,
+               inchikey_block: str | None = None, ion_mode: str | None = None,
+               limit: int = 50) -> tuple[list[dict], int]:
+        """名前（大小を問わない部分一致）・分子式（完全一致）・InChIKey の先頭ブロックで引く。
+
+        条件は与えたものの AND。並びは store の行の順。戻り値は（`limit` 件までの
+        レコード, 打ち切った件数）。読み取りだけ（SELECT）。
+        """
+        clauses: list[str] = []
+        params: list = []
+        if name is not None:
+            escaped = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            clauses.append("name LIKE ? ESCAPE '\\'")
+            params.append(f"%{escaped}%")
+        if formula is not None:
+            clauses.append("formula = ?")
+            params.append(formula)
+        if inchikey_block is not None:
+            clauses.append("UPPER(SUBSTR(inchikey, 1, 14)) = ?")
+            params.append(inchikey_block.upper())
+        if ion_mode is not None:
+            clauses.append("(ion_mode = ? COLLATE NOCASE OR ion_mode IS NULL)")
+            params.append(ion_mode)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        total = self._conn.execute(f"SELECT COUNT(*) FROM record{where}", params).fetchone()[0]
+        rows = self._conn.execute(
+            f"SELECT {_RECORD_COLUMNS} FROM record{where} ORDER BY id LIMIT ?",
+            [*params, int(limit)]).fetchall()
+        return [_row_to_record(row) for row in rows], max(0, total - len(rows))
+
     def close(self) -> None:
         self._conn.close()
 

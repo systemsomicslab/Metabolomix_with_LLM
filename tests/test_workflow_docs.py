@@ -32,7 +32,7 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
     ),
     "arf2.md": ("arf2_parser", "arf2_annotate_identities"),
     "pai2.md": ("pai2_parser", "pai2_inspect_peak", "verify_peak_annotation"),
-    "dcl.md": ("dcl_parser", "dcl_find_msms"),
+    "dcl.md": ("dcl_parser", "dcl_find_msms", "dcl_spot_spectrum"),
     "eic.md": (
         "eic_parser", "eic_search", "eic_plot_chromatograms", "eic_plot_compounds",
     ),
@@ -48,7 +48,8 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
         "pipeline_resume", "pipeline_cancel",
     ),
     "metabolomics.md": ("dataset_statistic", "dataset_build_matrix"),
-    "library.md": ("library_load", "library_match_feature", "library_plot_mirror"),
+    "library.md": ("library_load", "library_match_feature", "library_plot_mirror",
+                   "library_search"),
     "curation.md": (
         "curation_review", "curation_suggest", "curation_submit", "curation_flags",
         "curation_view_data",
@@ -187,4 +188,4 @@ class TestScopeBoundary(unittest.TestCase):
             registered,
             "対象範囲の分類と登録済みツールが一致しない",
         )
-        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 59)
+        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 61)
