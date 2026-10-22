@@ -621,7 +621,8 @@ def find_non_ascii(path: Path, *, skip_lines: frozenset = frozenset()) -> dict |
     first = None
     count = 0
     for line_no, line in enumerate(_source_lines(path), start=1):
-        if line_no in skip_lines:
+        # コメント行は Console（ConfigParser）が読み飛ばすので数えない。
+        if line_no in skip_lines or line.strip().startswith("#"):
             continue
         for column, char in enumerate(line, start=1):
             if ord(char) > 0x7F:
@@ -673,7 +674,10 @@ def write_effective_method_file(src: Path, dest: Path, overrides: dict[str, str]
             if positions:
                 override_key = by_lower.get(stripped[:min(positions)].strip().lower())
         if override_key is None:
-            lines.append(line)
+            # コメント行の ASCII 以外は "?" にして写す（Console は読まない。以前はここで
+            # 'ascii' codec の例外になっていた）。値の行は下の check_ascii が止める。
+            lines.append(line.encode("ascii", "replace").decode("ascii")
+                         if stripped.startswith("#") else line)
         else:
             lines.append(f"{override_key}: {overrides[override_key]}")
             applied.add(override_key)

@@ -184,10 +184,15 @@ def _polarity(holder, ds) -> str | None:
     return dataset_polarity(ds)[0]
 
 
-def _alignment_paths(holder, arf2_path, dcl_file):
-    if hasattr(holder, "handle_id"):
-        return arf2_path or holder.arf2_path, dcl_file or holder.dcl_path
-    return arf2_path, dcl_file
+def _spot_query_for(holder, dataset_handle):
+    """ハンドルに `.arf2` / `.dcl` が無ければ、対話のフォルダを探さずに断る spot の照会。"""
+    from metabolomix.library import tools as library_tools
+    from metabolomix.tools._holder import alignment_paths
+
+    arf2_path, dcl_path, lacking = alignment_paths(holder, dataset_handle, None, None)
+    if lacking:
+        return (lambda *_a, **_k: dict(lacking)), arf2_path, dcl_path
+    return library_tools.spot_msms_query, arf2_path, dcl_path
 
 
 def _library_sha(store) -> str | None:
@@ -236,7 +241,13 @@ def library_msms_qualify(rules: dict, spot_id: int | None = None,
         normalized = msms_rules.normalize_rules(rules)
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
-    arf2_path, dcl_file = _alignment_paths(holder, arf2_path, dcl_file)
+    from metabolomix.tools._holder import alignment_paths
+
+    arf2_path, dcl_file, lacking = alignment_paths(
+        holder, dataset_handle, arf2_path, dcl_file,
+        need=("arf2", "dcl") if spot_id is not None else ("dcl",))
+    if lacking:
+        return json_payload({**lacking, "verdict": "not_evaluable", "checks": []})
     if spot_id is not None:
         spot = library_tools.spot_msms_query(int(spot_id), arf2_path=arf2_path, dcl_file=dcl_file,
                                              rt=rt, ion_mode=ion_mode)
@@ -422,12 +433,12 @@ def dataset_claim_evidence(spec: dict, dataset_handle: str | None = None,
     if error:
         return error
     polarity = _polarity(holder, ds)
-    arf2_path, dcl_path = _alignment_paths(holder, None, None)
+    spot_query, arf2_path, dcl_path = _spot_query_for(holder, dataset_handle)
     store = holder.library.store
     try:
         normalized = claim_evidence.normalize_claim_spec(spec, dataset_polarity=polarity)
         bundle = claim_evidence.build(ds, normalized, store=store,
-                                      spot_query=library_tools.spot_msms_query,
+                                      spot_query=spot_query,
                                       arf2_path=arf2_path, dcl_path=dcl_path,
                                       dataset_polarity=polarity,
                                       library_sha256=_library_sha(store))

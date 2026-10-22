@@ -101,6 +101,25 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
         return holder
+    if dataset_handle is not None and file_path is None:
+        # ハンドルは極性の設定だけから引く（dataset_handle_open と同じ規則）。対話の
+        # データフォルダの .dbs / .msp を探さず、データセットと逆の極性も読まない。
+        mode = (ion_mode or holder.polarity or "").strip().lower() or None
+        if ion_mode and holder.polarity and mode != holder.polarity:
+            return json_payload({
+                "status": "error", "code": "LIBRARY_POLARITY_MISMATCH",
+                "message": (f"このハンドルのデータセットは {holder.polarity} です"
+                            f"（ion_mode={ion_mode!r}）。逆の極性のライブラリは読みません。")})
+        key = user_config.MSP_SETTING_KEYS.get(mode or "")
+        setting = user_config.get_setting(key) if key else None
+        if setting is None:
+            reason = ("データセットの極性が決まらないので ion_mode を指定してください。"
+                      if key is None else f"{key} が設定されていません。")
+            return json_payload({
+                "status": "error", "code": "LIBRARY_NOT_CONFIGURED",
+                "message": ("ハンドルのライブラリは極性の設定（[library] msp_positive / "
+                            "msp_negative）から引きます。" + reason)})
+        file_path = setting.value
     try:
         resolved = resolve_library_path(file_path, ion_mode=ion_mode)
     except LibraryPathError as exc:
@@ -371,14 +390,11 @@ def library_match_feature(
         省略時は対話のセッション。ハンドルのライブラリ・照合結果だけを読み書きする。
         `spot_id` の解決は、`arf2_path` / `dcl_file` を省けばハンドルの `.arf2` / `.dcl` を使う。
     """
-    from metabolomix.tools._holder import resolve_holder
+    from metabolomix.tools._holder import alignment_paths, resolve_holder
 
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
         return holder
-    if dataset_handle is not None:
-        arf2_path = arf2_path or holder.arf2_path
-        dcl_file = dcl_file or holder.dcl_path
     store_obj = holder.library.store
     if store_obj is None:
         return mcp_errors.missing_state(
@@ -390,6 +406,11 @@ def library_match_feature(
             "status": "invalid_arguments",
             "message": "precursor_mz か spot_id のどちらか一方を指定してください。",
         })
+    arf2_path, dcl_file, lacking = alignment_paths(
+        holder, dataset_handle, arf2_path, dcl_file,
+        need=("arf2", "dcl") if spot_id is not None else ("dcl",))
+    if lacking:
+        return json_payload(lacking)
     measured = None
     if spot_id is not None:
         spot = _spot_query(spot_id, arf2_path=arf2_path, dcl_file=dcl_file,

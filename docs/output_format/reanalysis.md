@@ -48,6 +48,14 @@
 ライブラリは**データセットの極性の設定だけ**から引く（`[library] msp_positive` /
 `msp_negative`、環境変数 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG`）。極性が決まらない・設定が
 無いときはライブラリなしで開き、逆の極性のライブラリを掴まない。読み取り専用で開く。
+ハンドルへの `library_load` も同じ規則（`file_path` を省けばハンドルの極性の設定。逆の
+`ion_mode` は `LIBRARY_POLARITY_MISMATCH`、設定が無ければ `LIBRARY_NOT_CONFIGURED`）。
+
+**ハンドルは対話のデータフォルダを探さない。** スポットの照合（`library_match_feature` の
+spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_msms_qualify`・
+証拠の束の MS/MS）は、ハンドルの `.arf2` / `.dcl`（か明示した `arf2_path` / `dcl_file`）だけを
+使い、無ければ `status: "no_alignment_files"` を返す——別のデータセットの同じ spot_id の
+スペクトルを黙って読まないため。
 
 ## 2. 統計の spec（analysis-spec.v1）と結果（analysis-result.v1）
 
@@ -133,14 +141,17 @@
 
 **参照する標準の定義:**
 
-- KNN は R の `impute::impute.knn`（Bioconductor）と同じ規則で、`maxp` = 特徴数（2 段の
-  分割をしない）に当たる。特徴を行に、`scale="log2"` なら正の値の log2 の上で、欠測のある
-  特徴ごとに、その特徴が観測された列のうち相手も観測された列での平方差の平均を距離にし
-  （共通の列が無い相手は除く）、近い `k` 個を選ぶ（同距離は特徴の並び順）。欠測の列は近傍の
-  うちその列を観測しているものの平均、全員が欠測なら列の平均。欠測の割合が `rowmax` を超える
-  特徴は列の平均、`colmax` を超える試料があれば `RECIPE_PRECONDITION`。R の既定
-  （`maxp=1500`）は特徴が多いと k-means で分割してから補完するので、特徴が 1500 を超える
-  データでは R の既定の結果とは一致しない（`maxp=nrow(data)` を渡した R とは同じ規則）。
+- KNN は R の `impute::impute.knn`（Bioconductor）の `knnimp` の規則を写したもので、`maxp` =
+  特徴数（2 段の分割をしない）に当たる。特徴を行に、`scale="log2"` なら正の値の log2 の上で:
+  欠測の割合が `rowmax` を超える特徴（重い行）は**重い行どうしの**列の平均で埋め、近傍にしない
+  （重い行の中にその列の観測が無ければ軽い行の列の平均）。残りの特徴（軽い行）は軽い行だけで、
+  欠測のある特徴ごとに、その特徴が観測された列のうち相手も観測された列での平方差の平均を距離に
+  し（共通の列が無い相手は除く）、近い `k` 個を選ぶ（同距離は特徴の並び順）。欠測の列は近傍の
+  うちその列を観測しているものの平均、全員が欠測なら**軽い行の**列の平均。`colmax` を超える
+  試料があれば `RECIPE_PRECONDITION`。R の既定（`maxp=1500`）は特徴が多いと k-means で
+  分割してから補完するので、特徴が 1500 を超えるデータでは R の既定の結果とは一致しない。
+  **R の実出力との突き合わせはまだしていない**（手元に Bioconductor の `impute` が無い。規則を
+  写し、手計算の例でテストしている）。
 - LOWESS は statsmodels 0.15 の
   `statsmodels.nonparametric.smoothers_lowess.lowess(endog=QC 値, exog=QC の注入順,
   frac=span, it=iterations, delta=0, xvals=全試料の注入順)`（1 次の局所重み付き回帰・

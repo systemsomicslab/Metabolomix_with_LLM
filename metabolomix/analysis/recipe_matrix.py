@@ -183,10 +183,14 @@ def _half_min(values, missing):
 def knn_impute(data: np.ndarray, *, k: int, rowmax: float, colmax: float) -> np.ndarray:
     """R `impute::impute.knn`（maxp = 行数）と同じ規則の補完。`data` は（特徴 × 試料）、欠測は NaN。
 
-    - 欠測のある特徴ごとに、その特徴が観測された列のうち相手も観測された列での平方差の
-      平均を距離にし（共通の列が無い相手は除く）、近い `k` 個を選ぶ（同距離は特徴の順）。
-    - 欠測の列を、近傍のうちその列を観測しているものの平均で埋める。全員が欠測なら列の平均。
-    - 欠測の割合が `rowmax` を超える特徴は列の平均で埋める。
+    R の `knnimp` に倣い、行を 2 つに分ける:
+
+    - 欠測の割合が `rowmax` を超える行（重い行）は、**重い行どうしの**列の平均で埋め
+      （`meanimp`）、KNN の近傍にしない。重い行の中にその列の観測が無ければ、軽い行の列の平均。
+    - それ以外の行（軽い行）は軽い行だけで KNN: 欠測のある行ごとに、その行が観測された列のうち
+      相手も観測された列での平方差の平均を距離にし（共通の列が無い相手は除く）、近い `k` 個を
+      選ぶ（同距離は行の順）。欠測の列を、近傍のうちその列を観測しているものの平均で埋める。
+      全員が欠測なら**軽い行の**列の平均。
     - 欠測の割合が `colmax` を超える列（試料）があれば RECIPE_PRECONDITION。
     """
     data = np.asarray(data, dtype=float)
@@ -198,21 +202,36 @@ def knn_impute(data: np.ndarray, *, k: int, rowmax: float, colmax: float) -> np.
         raise DomainError("RECIPE_PRECONDITION",
                           f"欠測の割合が colmax={colmax} を超える試料がある（列 {over}）。"
                           "impute.knn と同じく補完しない。", {"columns": over})
-    with np.errstate(all="ignore"):
-        col_mean = np.nanmean(np.where(observed, data, np.nan), axis=0)
     out = data.copy()
-    zeroed = np.where(observed, data, 0.0)
-    mask = observed.astype(float)
+    row_missing = 1.0 - observed.mean(axis=1) if n_cols else np.zeros(n_rows)
+    heavy_rows = np.nonzero(row_missing > rowmax)[0]
+    light_rows = np.nonzero(row_missing <= rowmax)[0]
+
+    def _column_means(rows):
+        if not len(rows):
+            return np.full(n_cols, np.nan)
+        # 観測の無い列は NaN（numpy の「空の平均」の警告は出さない）
+        values = np.where(observed[rows], data[rows], 0.0)
+        counts = observed[rows].sum(axis=0)
+        with np.errstate(all="ignore"):
+            return np.where(counts > 0, values.sum(axis=0) / counts, np.nan)
+
+    light_mean = _column_means(light_rows)
+    if len(heavy_rows):
+        heavy_mean = _column_means(heavy_rows)
+        heavy_mean = np.where(np.isfinite(heavy_mean), heavy_mean, light_mean)
+        for i in heavy_rows:
+            out[i, ~observed[i]] = heavy_mean[~observed[i]]
+
+    light = data[light_rows]
+    light_observed = observed[light_rows]
+    zeroed = np.where(light_observed, light, 0.0)
+    mask = light_observed.astype(float)
     sq = zeroed ** 2
-    row_missing = 1.0 - observed.mean(axis=1)
-    targets = np.nonzero(row_missing > 0)[0]
-    heavy = targets[row_missing[targets] > rowmax]
-    light = targets[row_missing[targets] <= rowmax]
-    for i in heavy:
-        out[i, ~observed[i]] = col_mean[~observed[i]]
+    targets = np.nonzero(~light_observed.all(axis=1))[0]
     block = 256
-    for start in range(0, len(light), block):
-        rows = light[start:start + block]
+    for start in range(0, len(targets), block):
+        rows = targets[start:start + block]
         o = mask[rows]
         shared = o @ mask.T
         with np.errstate(all="ignore"):
@@ -221,16 +240,18 @@ def knn_impute(data: np.ndarray, *, k: int, rowmax: float, colmax: float) -> np.
         dist[np.arange(len(rows)), rows] = np.inf
         for r, i in enumerate(rows):
             neighbours = _nearest(dist[r], k)
-            missing_cols = np.nonzero(~observed[i])[0]
+            missing_cols = np.nonzero(~light_observed[i])[0]
+            target_row = light_rows[i]
             if neighbours.size:
-                block_values = np.where(observed[np.ix_(neighbours, missing_cols)],
-                                        data[np.ix_(neighbours, missing_cols)], np.nan)
+                block_values = np.where(light_observed[np.ix_(neighbours, missing_cols)],
+                                        light[np.ix_(neighbours, missing_cols)], np.nan)
                 counts = np.isfinite(block_values).sum(axis=0)
                 with np.errstate(all="ignore"):
                     means = np.nansum(block_values, axis=0) / counts
-                out[i, missing_cols] = np.where(counts > 0, means, col_mean[missing_cols])
+                out[target_row, missing_cols] = np.where(counts > 0, means,
+                                                         light_mean[missing_cols])
             else:
-                out[i, missing_cols] = col_mean[missing_cols]
+                out[target_row, missing_cols] = light_mean[missing_cols]
     return out
 
 

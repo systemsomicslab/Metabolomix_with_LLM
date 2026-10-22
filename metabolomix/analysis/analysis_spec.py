@@ -368,10 +368,21 @@ def _external_matrix(spec_input: dict) -> tuple[np.ndarray, list[str], list[str]
     id_column = spec_input["id_column"]
     _require_column(columns, id_column, "input")
     others = [c for c in columns if c != id_column]
+    # csv.DictReader は同じ名前の列の最後の値しか残さない。重複した列名を通すと、
+    # 1 つの試料（特徴）が 2 回数えられて片方の値が黙って消える。
+    duplicated = sorted({c for c in others if others.count(c) > 1})
+    if duplicated or not all(c.strip() for c in others):
+        raise DomainError("ANALYSIS_INPUT_INVALID",
+                          f"input の列名が重複しているか空です（重複: {duplicated}）",
+                          {"field": "input", "duplicated": duplicated})
     ids = [(row.get(id_column) or "").strip() for row in rows]
+    if not all(ids):
+        raise DomainError("ANALYSIS_INPUT_INVALID", "input に ID が空の行がある",
+                          {"field": "input"})
     if len(set(ids)) != len(ids):
         raise DomainError("ANALYSIS_INPUT_INVALID", "input の行の ID が重複している",
-                          {"field": "input"})
+                          {"field": "input",
+                           "duplicated": sorted({i for i in ids if ids.count(i) > 1})})
     try:
         table = np.array([[_float_or_nan(row.get(c)) for c in others] for row in rows],
                          dtype=float)

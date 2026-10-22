@@ -90,17 +90,17 @@ def _method(tmp_path, text):
 
 
 def test_check_ascii_names_line_and_character(tmp_path):
-    path = _method(tmp_path, "Ion mode: Positive\n# 日本語のコメント\nMS1 tolerance: 0.01\n")
+    path = _method(tmp_path, "Ion mode: Positive\nMemo: 日本語のメモ書き\nMS1 tolerance: 0.01\n")
     with pytest.raises(DomainError) as info:
         method_file_mod.check_ascii(path)
     assert info.value.code == "METHOD_FILE_NOT_ASCII"
-    assert (info.value.details["line"], info.value.details["column"]) == (2, 3)
+    assert (info.value.details["line"], info.value.details["column"]) == (2, 7)
     assert info.value.details["char"] == "日" and info.value.details["count"] == 8
     method_file_mod.check_ascii(_method(tmp_path, "Ion mode: Positive\n"))
 
 
 def test_write_effective_method_file_refuses_non_ascii_without_crashing(tmp_path):
-    src = _method(tmp_path, "Ion mode: Positive\n# é\n")
+    src = _method(tmp_path, "Ion mode: Positive\nMemo: é\n")
     with pytest.raises(DomainError) as info:
         method_file_mod.write_effective_method_file(src, tmp_path / "out.txt",
                                                     {"Ion mode": "Negative"})
@@ -121,7 +121,7 @@ def test_console_plan_returns_envelope_for_non_ascii_method(tmp_path, monkeypatc
     root = tmp_path / "data"
     root.mkdir()
     (root / "a.wiff").touch()
-    method = _method(tmp_path, "Ion mode: Positive\n# メモ\n")
+    method = _method(tmp_path, "Ion mode: Positive\nMemo: メモ\n")
     out = json.loads(console_tools.console_plan(str(root), method_file=str(method)))
     assert out["error"]["code"] == "METHOD_FILE_NOT_ASCII"
     assert out["error"]["details"]["line"] == 2

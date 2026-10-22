@@ -131,14 +131,14 @@ def dcl_spot_spectrum(spot_id: int, arf2_path: str | None = None, dcl_file: str 
         ハンドルの `.arf2` / `.dcl` を使う。省略時は現在のデータフォルダから探す。
     """
     from metabolomix.library.tools import spot_msms_query
-    from metabolomix.tools._holder import resolve_holder
+    from metabolomix.tools._holder import alignment_paths, resolve_holder
 
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
         return holder
-    if dataset_handle is not None:
-        arf2_path = arf2_path or holder.arf2_path
-        dcl_file = dcl_file or holder.dcl_path
+    arf2_path, dcl_file, lacking = alignment_paths(holder, dataset_handle, arf2_path, dcl_file)
+    if lacking:
+        return json_payload(lacking)
     spot = spot_msms_query(int(spot_id), arf2_path=arf2_path, dcl_file=dcl_file, rt=None,
                            ion_mode=None)
     if spot["status"] != "ok":
@@ -179,7 +179,7 @@ def dcl_diagnostic_ions(spot_ids: list[int], ions: list[dict], arf2_path: str | 
     from metabolomix.core.atomic_io import DomainError
     from metabolomix.core.mcp_errors import mztab_error
     from metabolomix.library.tools import spot_msms_query
-    from metabolomix.tools._holder import resolve_holder
+    from metabolomix.tools._holder import alignment_paths, resolve_holder
 
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
@@ -203,13 +203,11 @@ def dcl_diagnostic_ions(spot_ids: list[int], ions: list[dict], arf2_path: str | 
                 normalized += msms_rules.normalize_ions([renamed], kind="loss", label=f"ions[{i}]")
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
-    if dataset_handle is not None:
-        arf2_path = arf2_path or holder.arf2_path
-        dcl_file = dcl_file or holder.dcl_path
+    arf2_path, dcl_file, lacking = alignment_paths(holder, dataset_handle, arf2_path, dcl_file)
     rows = []
     for spot_id in spot_ids:
-        spot = spot_msms_query(int(spot_id), arf2_path=arf2_path, dcl_file=dcl_file, rt=None,
-                               ion_mode=None)
+        spot = lacking or spot_msms_query(int(spot_id), arf2_path=arf2_path, dcl_file=dcl_file,
+                                          rt=None, ion_mode=None)
         if spot["status"] != "ok":
             rows += [{"spot_id": int(spot_id), "label": ion["label"],
                       "kind": "ion" if "mz" in ion else "neutral_loss",
