@@ -1,4 +1,4 @@
-# USAGE — ms-data-parser MCP ツール一覧(全83ツール)
+# USAGE — ms-data-parser MCP ツール一覧(全90ツール)
 
 MS-DIAL 出力(`.arf` / `.arf2` / `.pai2` / `.dcl` / `.EIC.aef`)と mzTab-M を解析し、PCA・差次的解析・
 アノテーション検証・文献探索・レポート記録までを行う MCP サーバーのツール群です。
@@ -90,6 +90,7 @@ pipeline_run → pipeline_status(確認) → pipeline_resume(訂正・再開が�
 | `dcl_parser` | `.dcl`(MSDecResult＝デコンボリューション済み MS/MS)を解析し在庫要約と先頭数件の主要フラグメントを返す。 |
 | `dcl_find_msms` | precursor m/z(任意で RT)に一致する MS/MS を引く。アノテーションの裏取り用。該当ゼロは「MS/MS 未取得」であって「フラグメント不在」ではない。 |
 | `dcl_spot_spectrum` | アラインメントのスポット ID(mzTab-M の SMF_ID と同じ)で代表 MS/MS の全ピークを引く(`library_match_feature(spot_id=…)` と同じ規則で `.arf2` と照らす。再解析で使う)。 |
+| `dcl_diagnostic_ions` | スポットの代表 MS/MS(spot_id の一覧)に診断イオン(m/z)・中性損失があるかを照会する(相対強度つき)。MS/MS が無いスポットは `status` で示し、「イオンが無かった」と区別する。再解析で使う。 |
 
 ## 7. 実験目的の記録(gap駆動探索の前提)
 
@@ -298,6 +299,12 @@ run ディレクトリの `remote-job.json`。サーバは版を返さないの�
 | `dataset_handle_list` | 開いているハンドルの一覧(TSV)。 |
 | `dataset_handle_close` | ハンドルを閉じる(データセットの複製とライブラリの接続を手放す)。 |
 | `dataset_analysis_run` | 論文の方法を写した spec(analysis-spec.v1)で行列を作り 2 群を検定する。行列の recipe(段の順序・役割ごとの検出率・特徴方向の KNN・PQN・LOESS・QC の RSD)、検定(`student` / `welch` / `mannwhitney` / `ols`=共変量で調整)、FC の定義・補正・BH の母集団・閾値を spec に書き、名前つきの解析を並べて感度解析にする。入力はデータセット(ハンドル)か外部の行列 TSV(較正用)。`aggregate` でクラスの和・2 特徴の比を 1 本として検定する。各行に群の名前・比較の向きの log2FC・`direction`・`meets_thresholds`。判定(再現したか)は返さない。`rule_hash` と `input_fingerprint` を返し、`output_path` には同じ spec なら同じ JSON を書く。 |
+| `library_msms_qualify` | MS/MS の照合(`library_match_feature` と同じ)に、spec で書いた合否の規則(msms-rules.v1: 目標の順位・前駆体を除いた断片の最小本数・同じ分子式の別物との差・脂質のクラス・診断イオン・中性損失)を当て、`verdict`(`qualified` / `not_qualified` / `not_evaluable`)・検査ごとの結果・`rule_hash` を返す。「明らかに別物か」は判断しない。 |
+| `dataset_homolog_check` | 同族列の RT の単調性(同じ二重結合数で炭素数が増えると RT が遅れ、同じ炭素数で二重結合が増えると早まる)を検査する。特徴を手で並べるか、脂質クラスの SME 名から自動で集める。違反の対・重複・`rule_hash`。 |
+| `dataset_feature_relations` | mzTab-M の特徴 1 つについて、同時溶出の特徴と付加体・同位体・源内断片の関係(キュレーションの関係と同じ規則。裏付けは強度の相関)を返す。 |
+| `dataset_claim_evidence` | 1 主張の証拠の束(claim-evidence.v1): 規則で選んだ既定の特徴(`dataset_feature_search` の目標照合と同じ規則)・許容幅や付加体を広げた走査・候補ごとの MS/MS の照合と合否・関係を 1 つの JSON にまとめる。特徴は決めない。同じ spec なら同じ JSON。 |
+| `dataset_mass_accuracy` | SME の質量誤差(ppm)の分布を m/z 帯ごとに返す(n・中央値・四分位・5/10 ppm 以内の割合)。許容幅は決めない。 |
+| `dataset_novel_candidates` | 新しい知見の候補の一覧: SME・m/z 帯ごとの許容幅・q の閾値で絞り、除く対象を外す。統計は 2 群比較の result_id か analysis-spec の解析から。 |
 
 次の既存ツールは省略可能な引数 `dataset_handle` を受ける(省略時は今までどおり対話のセッション):
 `dataset_status` `dataset_preprocess` `dataset_pca` `dataset_differential`

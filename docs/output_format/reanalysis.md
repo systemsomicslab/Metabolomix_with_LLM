@@ -146,3 +146,125 @@
   frac=span, it=iterations, delta=0, xvals=全試料の注入順)`（1 次の局所重み付き回帰・
   tricube の重み。`iterations=0` は頑健化の反復なし）。R の `loess`（既定は 2 次）とは別物。
   QC が少ないと当てはめが NaN になる点があり、その特徴は補正しない。
+
+## 4. MS/MS の合否（msms-rules.v1）と診断イオン
+
+`library_msms_qualify(rules, spot_id | precursor_mz, ...)`。照合は `library_match_feature` と
+同じ（採点の芯は `library/matching.py`）。規則（正規化後。既定はこのとおり）:
+
+```json
+{"schema": "msms-rules.v1",
+ "target": {"inchikey_block": "HVYWMOMLDIMFJA", "formula": null},
+ "top_rank": 5, "min_fragments_excl_precursor": null, "precursor_exclusion_tol": null,
+ "same_formula_margin": null, "lipid_class": null,
+ "diagnostic_ions": [], "neutral_losses": [], "ions_match": "all"}
+```
+
+入力の `target` は `{"inchikey": <InChIKey 全体か先頭 14 文字>, "formula": <任意>}`。
+設定した検査だけが `checks` に並ぶ（各行 `{check, status: pass|fail|not_evaluable, value, detail}`）:
+
+| 検査 | 合格の条件 | `value` |
+|---|---|---|
+| `target_in_top_rank`（常に） | 総合スコアの順で `top_rank` 位までに、InChIKey 先頭ブロックが目標と一致する候補がある（最上位のそれを「目標の候補」） | 目標の候補の順位（無ければ null） |
+| `min_fragments` | 目標の候補の、前駆体 ± `precursor_exclusion_tol`（省略時は採点の `ms2_tol`）を除いた一致の本数 ≥ 最小 | その本数 |
+| `same_formula_margin` | 全候補のうち、目標と同じ分子式（`target.formula`、無ければ目標の候補の分子式）で先頭ブロックが違うものの最高点との差 ≥ `min_delta`（`score` 既定 `total_score`）。別物が無ければ pass | 差（目標 − 別物） |
+| `lipid_class` | 1 位の候補の名前を GOSLIN で読んだクラス（正規化名の最初の空白の前）が一致 | 読めたクラス |
+| `diagnostic_ions` / `neutral_losses` | 測定スペクトルに ±`tol`（既定 0.01 Da）のピークがあり、最大ピークに対する相対強度 ≥ `min_relative_intensity`。`ions_match` が `all` なら全部、`any` なら 1 つ。中性損失は前駆体 − `delta` を探す | 見つかった数 |
+
+`verdict`: すべて pass → `qualified`、どれか fail → `not_qualified`、fail が無く判定できない
+検査がある → `not_evaluable`。目標の候補が無いと、それに依る検査は `not_evaluable`
+（`target_in_top_rank` が fail なので `verdict` は `not_qualified`）。MS/MS が無い・候補が無い
+ときは検査をせずに `not_evaluable`（「断片が合わなかった」ではない）。**「明らかに別物か」は
+判断しない**（再解析の計画の規則で決める）。`rule_hash` は正規化した規則の hash。
+
+`dcl_diagnostic_ions(spot_ids, ions)` は同じ照会（`find_ions`）をスポットの一覧に当てる。
+`ions` の各要素は `{"mz"}` か `{"neutral_loss"}`（任意で `label`・`tol`・
+`min_relative_intensity`）。行の `status` が `ok` 以外（MS/MS が無い・索引の崩れ）のスポットは
+照会していない——`found` が空なのは「イオンが無かった」ではない。
+
+## 5. 同族列の RT（homolog-check.v1）
+
+`dataset_homolog_check(spec)`。`members`（`feature_id`・`carbons`・`double_bonds`）か `auto`
+（`lipid_class`・`evidence` 既定 `["sme"]`・`adduct`）のどちらか一方と `rule`
+（`carbon_direction` 既定 `increasing`・`double_bond_direction` 既定 `decreasing`・
+`max_violations` 既定 0。逆相の LC の向き）。
+
+- `auto` は SME rank 1 の名前（`sml` を足せば SML の名前も）を GOSLIN で読み、分子種
+  （`16:0_18:1`）は鎖を足して種のレベル（`34:1`）に直す。エーテル（`O-` / `P-`）は別の
+  クラス（`PC O-`）として扱う。
+- 同じ（炭素数, 二重結合数）が複数あれば RT の中央値で並べ、`duplicates` に挙げる。
+- 同じ二重結合数の中で炭素数の昇順、同じ炭素数の中で二重結合数の昇順に並べた**隣どうし**で、
+  規則の向きに反する対を違反と数える（RT が同じ対は違反にしない）。違反が
+  `max_violations` 以下なら `pass`。違反に関わった特徴は `members` の `status` が `violation`。
+
+## 6. 特徴どうしの関係
+
+`dataset_feature_relations(feature_id, rt_window=0.05, mz_tol=0.01, min_r=0.7, adducts=None)`。
+規則はアラインメントのキュレーションの関係（`curation/relations.py`）と同じ。
+
+- `coeluting`: |ΔRT| ≤ `rt_window` の特徴（`drt` = 相手 − この特徴、`r` = 試料間の log1p 強度の
+  Pearson 相関。値が 5 組未満なら空）。
+- `as_ion_of`: この特徴が、相手の付加体（`adducts` の組）・同位体（M+1 / M+2）・源内断片
+  （`-H2O` ほか）として説明できる関係。`ions_of_this`: 相手がこの特徴のイオンとして説明できる関係。
+- 相手の付加体は SME rank 1 の付加体。**同定の無い相手には付加体の関係は出ない**（同位体・
+  源内断片だけ）。MS-DIAL のリンク（`.arf2`）は使わないので、裏付け（`strong`）は相関
+  `r ≥ min_r` と同位体の強度比だけで決まる。
+
+## 7. 証拠の束（claim-evidence.v1）
+
+`dataset_claim_evidence(spec, dataset_handle, output_path)`。1 主張について、オブザーバーの
+機械的な仕事（走らせ直しと照合、候補の網羅の走査）を道具が 1 つの JSON にまとめる。
+
+spec:
+
+```json
+{"claim_id": "C1",
+ "target": {"inchikey": "...", "formula": "...", "rt_min": 8.4},
+ "scan": {"ppm": [10, 20], "rt_tol_min": [0.3, 1.0], "adduct_tiers": null},
+ "msms": {"top_n": 10, "rules": {"min_fragments_excl_precursor": 2}},
+ "relations": {"rt_window": 0.05, "mz_tol": 0.01, "min_r": 0.7},
+ "max_candidates": 50}
+```
+
+- `target` は `dataset_feature_search` の目標と同じ形（`target_id` は `claim_id`）。
+- `scan` の `ppm` × `rt_tol_min` の全組で目標照合を走らせ直す（`adduct_tiers` を渡すと
+  付加体も広げる）。省略時は目標の `ppm` / `rt_tol_min` の 1 組。
+- `msms.rules` は msms-rules.v1 から `target` を除いたもの（target は主張の InChIKey・分子式）。
+- `msms` / `relations` を省くと、その欄を作らない。
+
+結果:
+
+| 欄 | 意味 |
+|---|---|
+| `default_selection` | `target` をそのまま当てた目標照合（`dataset_feature_search` と同じ規則）。`status` が `resolved` なら `selected_feature_id` が規則で選んだ既定の特徴、決まらなければ `needs_input`（`reason`） |
+| `scans` | 走査ごとの判定と、候補の特徴 ID |
+| `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか）・`msms`（spot_id = SMF_ID の照合の上位 `top` と `qualify`。ライブラリが無ければ `{"status": "no_library"}`、MS/MS が無い・索引の崩れはその `status`）・`relations` |
+| `truncated` | `max_candidates` で打ち切った候補の数 |
+| `rule` / `rule_hash` | 正規化した spec とその hash |
+| `input_fingerprint` | `dataset_hash`（データの指紋）・`library_sha256` |
+
+**束は特徴を決めない。** 最終の特徴は再解析の実行役が override の規則の範囲で決め、
+その特徴での統計は `dataset_analysis_run`（`features.feature_ids`）で別に出す。同じ spec・
+同じ入力なら同じ JSON になる（オブザーバーの「走らせ直しと照合」は JSON の一致で済む）。
+
+## 8. 質量精度と新しい知見の候補
+
+`dataset_mass_accuracy(band_edges=[200], rank=1)`: SME の `rank` 位の候補の
+(実測 − 理論)/理論 × 10⁶ を、理論 m/z の帯ごと（`[min_mz, max_mz)`）にまとめる。
+`n`・`median`・`q1`・`q3`（`statistics.quantiles(n=4)` の exclusive 法）・`within_5ppm`・
+`within_10ppm`（|ppm| ≤ 5・10 の割合）。n<2 の帯は `n` だけ。**許容幅は決めない**。
+
+`dataset_novel_candidates(spec)`（novel-candidates.v1）:
+
+```json
+{"statistics": {"result_id": "res_..."},
+ "ppm": {"default": 10.0, "bands": [{"max_mz": 200.0, "ppm": 10.0}]},
+ "q_max": 0.05,
+ "exclude": {"feature_ids": [], "inchikey_blocks": []}}
+```
+
+`statistics` は `{"result_id"}`（`dataset_differential` の 2 群比較。`group_a` が基準）か
+`{"analysis_spec", "analysis_id"}`（analysis-spec.v1 とその解析）。SME rank 1 の同定があり、
+|ppm| が帯の許容幅以内（`max_mz` 未満の最初の帯、無ければ `default`）で、q < `q_max` の特徴から
+除外を外した一覧（q の昇順）。行は `feature_id name inchikey adduct mz rt ppm group_ref group_test
+log2fc_test_over_ref p q direction`。論文の同定リストとの突き合わせはしない（再解析の側）。

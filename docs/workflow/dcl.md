@@ -47,3 +47,13 @@ RT を渡すと、同一 m/z の別溶出ピークを分離できる。
 3. └─ metabolomix/library/tools.py  _spot_query()
 4.    └─ metabolomix/msdial/alignment_spot.py  spot_record()
 5.    └─ metabolomix/msdial/alignment_spot.py  alignment_msms()
+
+## dcl_diagnostic_ions
+
+前提: なし（`.arf2` は `arf2_path`、ハンドルならハンドルの `.arf2`、無ければ現在のデータフォルダ）。
+状態変更: なし。
+
+1. metabolomix/dcl/tools.py  dcl_diagnostic_ions()
+2. ├─ metabolomix/analysis/msms_rules.py  normalize_ions()
+3. ├─ metabolomix/library/tools.py  _spot_query()
+4. └─ metabolomix/analysis/msms_rules.py  find_ions()

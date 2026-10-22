@@ -40,7 +40,7 @@
 | [arf.md](arf.md) | `.arf` — サンプル別強度・PCA・差次的解析 | 14 |
 | [arf2.md](arf2.md) | `.arf2` — スポット代表カタログ | 2 |
 | [pai2.md](pai2.md) | `.pai2` — 単一測定のピークと MS/MS 検証 | 3 |
-| [dcl.md](dcl.md) | `.dcl` — デコンボリューション済み MS/MS | 3 |
+| [dcl.md](dcl.md) | `.dcl` — デコンボリューション済み MS/MS | 4 |
 | [eic.md](eic.md) | `.EIC.aef` — クロマトグラムの検索と描画 | 4 |
 | [plots.md](plots.md) | 図の保存（save_figure）・PCA ローディング図と payload 契約の比較 | 2 |
 | [mztab.md](mztab.md) | mzTab-M — DatasetState への読み込み | 2 |
@@ -50,14 +50,14 @@
 | [library.md](library.md) | 参照ライブラリ（`.dbs`/`.msp`）— MS/MS スペクトル照合と対向プロット・ライブラリの検索 | 4 |
 | [curation.md](curation.md) | アラインメントのキュレーション — 注釈の一覧確認・機械判別・フラグ記録・候補付け | 5 |
 | [pathway.md](pathway.md) | パスウェイ投影（MSLipidMapper）— サブクラスのノード集計・2 群比較・図 | 2 |
-| [reanalysis.md](reanalysis.md) | 再解析 — データセットのハンドルと spec で呼ぶツール | 4 |
+| [reanalysis.md](reanalysis.md) | 再解析 — データセットのハンドルと spec で呼ぶツール | 10 |
 
-合計 62 ツール。対象外は 21 ツール——文献探索・レポート記録系 12
+合計 69 ツール。対象外は 21 ツール——文献探索・レポート記録系 12
 （`record_objective` `knowledge_coverage` `paper_search` `ingest_*` `write_report` など）＋
 Console 実行層 8（`console_plan` `console_prepare_input` `console_method_template`
 `console_method_candidates` `console_run` `console_status` `console_cleanup` `job_list`）＋
 サーバ自身の保守 1（`server_update`。解析の流れに現れず、配布先クローンの更新だけを行う）。
-登録ツール総数は 83（62 + 21）。
+登録ツール総数は 90（69 + 21）。
 
 ## 一気通貫の順序
 

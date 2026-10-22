@@ -37,7 +37,7 @@ RELATION_FEATURES = (
     {"id": "23", "mz": 86.0600, "rt": 2.02, "values": _scaled(8), "sme": []},
     {"id": "24", "mz": 300.0000, "rt": 2.00, "values": [5, 1, 9, 2, 8, 3, 4, 6], "sme": []},
     {"id": "25", "mz": 126.0526, "rt": 5.00, "values": _scaled(2), "sme": []},
-    {"id": "26", "mz": 250.1000, "rt": 6.00, "values": [9, 9, 9, 1, 1, 1, 5, 5],
+    {"id": "26", "mz": 250.1000, "rt": 6.00, "values": [9, 10, 8, 1, 2, 1, 5, 5],
      "sme": [{"name": "Other", "inchikey": "AAAAAAAAAAAAAA-UHFFFAOYSA-N", "formula": "C10H15NO5",
               "adduct": "[M+H]1+", "theo": 250.09997, "exp": 250.1000}]},
 )
@@ -174,3 +174,157 @@ def test_analysis_run_bad_spec_is_an_error_envelope(data):
     handle = _open(data)
     out = json.loads(R.dataset_analysis_run({"comparison": {}}, dataset_handle=handle))
     assert out["error"]["code"] == "ANALYSIS_SPEC_INVALID"
+
+
+# ---------- 質量精度・新しい知見の候補 ----------
+
+def test_mass_accuracy_by_band(data):
+    handle = _open(data)
+    out = json.loads(R.dataset_mass_accuracy(dataset_handle=handle))
+    assert out["overall"]["n"] == 2
+    low, high = out["bands"]
+    assert (low["min_mz"], low["max_mz"], low["n"]) == (None, 200.0, 1)
+    assert high["n"] == 1
+
+
+def test_novel_candidates_from_result_id_and_from_spec(data):
+    handle = _open(data)
+    T.dataset_preprocess(dataset_handle=handle)
+    diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
+                                             group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
+    spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
+    out = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
+    assert out["status"] == "success" and out["n_rows"] == 2
+    assert out["group_ref"] == "group_a"
+    excluded = json.loads(R.dataset_novel_candidates(
+        {**spec, "exclude": {"inchikey_blocks": [GABA_KEY]}}, dataset_handle=handle))
+    assert excluded["n_rows"] == 1
+    from_spec = json.loads(R.dataset_novel_candidates(
+        {"statistics": {"analysis_spec": _spec(data, features={"all": True}),
+                        "analysis_id": "main"}, "q_max": 1.0}, dataset_handle=handle))
+    assert from_spec["group_test"] == "RA" and from_spec["n_rows"] == 2
+    assert out["rule_hash"] != from_spec["rule_hash"]
+
+
+# ---------- 関係 ----------
+
+def test_feature_relations_name_adduct_isotope_and_insource(data):
+    handle = _open(data)
+    out = json.loads(R.dataset_feature_relations("20", dataset_handle=handle))
+    coeluting = out["coeluting"].splitlines()
+    assert {line.split("\t")[0] for line in coeluting[1:]} == {"21", "22", "23", "24"}
+    ions = {line.split("\t")[0]: line.split("\t")[1] for line in out["ions_of_this"].splitlines()[1:]}
+    assert ions["21"].startswith("adduct:[M+Na]+")
+    assert ions["22"] == "isotope_M+1"
+    assert ions["23"] == "insource:-H2O"
+    as_ion = json.loads(R.dataset_feature_relations("21", dataset_handle=handle))["as_ion_of"]
+    assert "adduct:[M+Na]+/[M+H]1+" in as_ion          # 相手の付加体は MS-DIAL の表記のまま
+
+
+def test_feature_relations_unknown_feature(data):
+    handle = _open(data)
+    out = json.loads(R.dataset_feature_relations("999", dataset_handle=handle))
+    assert out["error"]["code"] == "FEATURE_NOT_FOUND"
+
+
+# ---------- 証拠の束 ----------
+
+CLAIM = {"claim_id": "C1",
+         "target": {"inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": 2.0},
+         "scan": {"ppm": [10, 20], "rt_tol_min": [0.3]},
+         "relations": {"rt_window": 0.05}}
+
+
+def test_claim_evidence_default_matches_feature_search(data):
+    handle = _open(data)
+    out = json.loads(R.dataset_claim_evidence(CLAIM, dataset_handle=handle))
+    assert out["status"] == "success"
+    assert out["default_selection"]["status"] == "resolved"
+    assert out["default_selection"]["selected_feature_id"] == "20"
+    search = json.loads(T.dataset_feature_search(
+        targets=[{"target_id": "C1", "inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": 2.0}],
+        dataset_handle=handle))
+    assert search["targets"][0]["selected_feature_id"] == "20"
+    assert [s["ppm"] for s in out["scans"]] == [10.0, 20.0]
+    by_id = {c["feature_id"]: c for c in out["candidates"]}
+    assert "20" in by_id and "21" in by_id            # [M+Na]+ は第 2 層の候補
+    assert "msms" not in by_id["20"]                    # msms を頼んでいない
+    assert by_id["20"]["relations"]["n_coeluting"] == 4
+
+
+def test_claim_evidence_is_deterministic(data, tmp_path):
+    handle = _open(data)
+    a, b = tmp_path / "a.json", tmp_path / "b.json"
+    R.dataset_claim_evidence(CLAIM, dataset_handle=handle, output_path=str(a))
+    R.dataset_claim_evidence(CLAIM, dataset_handle=handle, output_path=str(b))
+    assert a.read_bytes() == b.read_bytes()
+    saved = json.loads(a.read_text(encoding="utf-8"))
+    assert saved["schema"] == "claim-evidence.v1" and len(saved["rule_hash"]) == 64
+
+
+def test_claim_evidence_with_library_runs_msms_rules(data, library):
+    handle = _open(data, library="auto")
+    claim = {**CLAIM, "msms": {"top_n": 3, "rules": {"min_fragments_excl_precursor": 2,
+                                                     "diagnostic_ions": [{"mz": 87.0441}]}}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    msms = {c["feature_id"]: c["msms"] for c in out["candidates"]}
+    assert msms["20"]["qualify"]["verdict"] == "qualified"
+    assert msms["20"]["top"][0]["fragment_matches_excl_precursor"] == 2
+    assert out["input_fingerprint"]["library_sha256"]
+
+
+def test_claim_evidence_without_library_says_so(data):
+    handle = _open(data)
+    claim = {**CLAIM, "msms": {"top_n": 3, "rules": {}}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    assert {c["msms"]["status"] for c in out["candidates"]} == {"no_library"}
+
+
+def test_claim_evidence_unresolved_is_needs_input(data):
+    handle = _open(data)
+    claim = {"claim_id": "C2", "target": {"inchikey": GABA_KEY, "formula": "C4H9NO2"}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    assert out["default_selection"]["status"] in ("resolved", "needs_input")
+    claim = {"claim_id": "C3", "target": {"inchikey": "ZZZZZZZZZZZZZZ-UHFFFAOYSA-N",
+                                          "formula": "C4H9NO2", "rt_min": 2.0}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    assert out["default_selection"]["status"] == "needs_input"
+
+
+# ---------- MS/MS の合否・診断イオン・同族列 ----------
+
+def test_msms_qualify_tool_on_handle(data, library):
+    handle = _open(data, library="auto")
+    out = json.loads(R.library_msms_qualify(
+        {"target": {"inchikey": GABA_KEY}, "min_fragments_excl_precursor": 2},
+        spot_id=20, dataset_handle=handle))
+    assert out["verdict"] == "qualified" and len(out["rule_hash"]) == 64
+    assert out["candidates"].splitlines()[1].split("\t")[1] == "GABA"
+    missing = json.loads(R.library_msms_qualify({"target": {"inchikey": GABA_KEY}}, spot_id=24,
+                                                dataset_handle=handle))
+    assert missing["verdict"] == "not_evaluable"
+
+
+def test_diagnostic_ions_tool(data, library):
+    handle = _open(data, library="auto")
+    out = json.loads(dcl_tools.dcl_diagnostic_ions(
+        [20, 21], [{"mz": 87.0441, "label": "a"}, {"neutral_loss": 17.0265, "label": "-NH3"}],
+        dataset_handle=handle))
+    rows = [line.split("\t") for line in out["ions"].splitlines()[1:]]
+    found = {(r[0], r[1]): r[4] for r in rows}
+    assert found[("20", "a")] == "true" and found[("21", "a")] == "false"
+    assert found[("20", "-NH3")] == "true"               # 104.0706 − 17.0265 = 87.0441
+
+
+def test_homolog_check_tool_with_members(data):
+    handle = _open(data)
+    out = json.loads(R.dataset_homolog_check(
+        {"members": [{"feature_id": "20", "carbons": 34, "double_bonds": 1},
+                     {"feature_id": "26", "carbons": 36, "double_bonds": 1}]},
+        dataset_handle=handle))
+    assert out["verdict"] == "pass" and out["n_violations"] == 0
+    bad = json.loads(R.dataset_homolog_check(
+        {"members": [{"feature_id": "26", "carbons": 34, "double_bonds": 1},
+                     {"feature_id": "20", "carbons": 36, "double_bonds": 1}]},
+        dataset_handle=handle))
+    assert bad["verdict"] == "fail"
