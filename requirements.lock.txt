@@ -30,6 +30,8 @@ cycler==0.12.1
     # via matplotlib
 fonttools==4.67.0
     # via matplotlib
+formulaic==1.2.2
+    # via statsmodels
 h11==0.16.0
     # via
     #   httpcore
@@ -46,6 +48,8 @@ idna==3.20
     # via
     #   anyio
     #   httpx
+interface-meta==2.0.1
+    # via formulaic
 joblib==1.6.0
     # via scikit-learn
 jsonschema==4.26.0
@@ -64,23 +68,34 @@ msgpack==1.2.3
     # via ms-data-parser
 narwhals==2.27.1
     # via
+    #   formulaic
     #   plotly
     #   scikit-learn
 numpy==2.5.4
     # via
     #   contourpy
+    #   formulaic
     #   matplotlib
     #   ms-data-parser
     #   pandas
+    #   patsy
     #   rdkit
     #   scikit-learn
     #   scipy
+    #   statsmodels
 packaging==26.3
     # via
     #   matplotlib
+    #   patsy
     #   plotly
+    #   statsmodels
 pandas==3.0.6
-    # via ms-data-parser
+    # via
+    #   formulaic
+    #   ms-data-parser
+    #   statsmodels
+patsy==1.0.3
+    # via statsmodels
 pillow==12.3.0
     # via
     #   matplotlib
@@ -129,8 +144,10 @@ scikit-learn==1.9.1
     # via ms-data-parser
 scipy==1.18.1
     # via
+    #   formulaic
     #   ms-data-parser
     #   scikit-learn
+    #   statsmodels
 six==1.17.0
     # via python-dateutil
 sse-starlette==3.5.0
@@ -139,11 +156,14 @@ starlette==1.8.0
     # via
     #   mcp
     #   sse-starlette
+statsmodels==0.15.0
+    # via ms-data-parser
 threadpoolctl==3.7.0
     # via scikit-learn
 typing-extensions==4.16.0
     # via
     #   anyio
+    #   formulaic
     #   mcp
     #   pydantic
     #   pydantic-core
@@ -158,3 +178,5 @@ tzdata==2026.5 ; sys_platform == 'emscripten' or sys_platform == 'win32'
     # via pandas
 uvicorn==0.54.0 ; sys_platform != 'emscripten'
     # via mcp
+wrapt==2.5.1
+    # via formulaic

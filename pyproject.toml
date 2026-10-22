@@ -16,6 +16,7 @@ dependencies = [
     "pandas",
     "scikit-learn",
     "scipy",
+    "statsmodels",  # LOWESS（再解析の行列の recipe のドリフト補正。spec 2026-10-22）
     "pygoslin",
     "httpx",
     "plotly",
