@@ -83,6 +83,8 @@ EXPECTED_ANNOTATIONS = {
     "dataset_handle_open": LOCAL_WRITE_APPEND,
     "dataset_handle_list": READ_ONLY,
     "dataset_handle_close": LOCAL_DELETE,
+    # 再解析の spec のツール。output_path を渡したときだけ JSON を書く（同じ spec なら同じ内容）。
+    "dataset_analysis_run": LOCAL_WRITE,
     # --- Console 実行層（console_plan/run はジョブ状態・ファイルを生成する） ---
     "console_plan": LOCAL_WRITE_APPEND,
     "console_run": LOCAL_WRITE_APPEND,

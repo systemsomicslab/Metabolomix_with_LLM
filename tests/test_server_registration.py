@@ -34,12 +34,14 @@ import server
 # DatasetState の特徴検索と目的の物質の判定: dataset_feature_search を追加(74→75)。
 # 再解析のデータセットのハンドル: dataset_handle_open / list / close を追加(77→80)。
 # 照合の詳細: library_search / dcl_spot_spectrum を追加(80→82)。
+# 再解析の統計の spec: dataset_analysis_run を追加(82→83)。
 EXPECTED_TOOLS = sorted([
     "dataset_handle_open",
     "dataset_handle_list",
     "dataset_handle_close",
     "library_search",
     "dcl_spot_spectrum",
+    "dataset_analysis_run",
     "arf_export_evidence_bundle",
     "dataset_export_evidence_bundle",
     "pathway_project",

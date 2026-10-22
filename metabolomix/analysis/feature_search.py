@@ -37,6 +37,7 @@ __all__ = [
     "EVIDENCE_LEVELS",
     "MAX_TARGETS",
     "STATS_COLUMNS",
+    "STATS_COLUMNS_LABELED",
     "WINDOW_COLUMNS",
     "classify_identity",
     "feature_stats",
@@ -593,6 +594,17 @@ WINDOW_COLUMNS = ("feature_id", "mz", "rt", "evidence", "name", "inchikey", "add
 STATS_COLUMNS = ("feature_id", "result_id", "status", "log2fc", "p", "q", "mean_a", "mean_b",
                  "detected_a", "detected_b")
 
+#: `with_group_labels=True` のときの列（既存の列の後ろに群の名前と比較の向きを足す）。
+STATS_COLUMNS_LABELED = STATS_COLUMNS + ("comparison", "group_a", "group_b",
+                                         "log2fc_test_over_ref")
+
+
+def comparison_name(result: dict) -> str:
+    """比較名。pipeline の比較なら `comparison_id`、そうでなければ `<group_b>_vs_<group_a>`
+    （v1 の log2fc は正なら group_b が高いので、group_b が「比較」・group_a が「基準」）。"""
+    declared = ((result.get("provenance") or {}).get("comparison") or {}).get("comparison_id")
+    return declared or f"{result.get('b')}_vs_{result.get('a')}"
+
 
 def _rank_key(candidate: dict):
     rank = candidate.get("rank")
@@ -752,7 +764,8 @@ def _num_or_none(value):
     return float(value) if _is_number(value) else None
 
 
-def feature_stats(ds, feature_ids: list[str], results: list[dict]) -> list[dict]:
+def feature_stats(ds, feature_ids: list[str], results: list[dict], *,
+                  with_labels: bool = False) -> list[dict]:
     """特徴 × 結果の統計行（特徴が外側、結果が内側）。注釈の有無に関わらず全特徴に付ける。
 
     ``status``: ``tested``（p が有限）/ ``not_testable``（結果の行はあるが p が None・NaN。
@@ -761,14 +774,17 @@ def feature_stats(ds, feature_ids: list[str], results: list[dict]) -> list[dict]
     値をそのまま返し、ここで BH を掛け直さない（母集団は結果が持つ）。``tested`` でも q が
     None のことはある。``detected_a/b`` は検出例数で、マスクから対応を保証して取れないとき
     None（呼び出し側が注記する）。取れるときは status に関わらず付ける。
+
+    ``with_labels=True`` のときだけ ``comparison``・``group_a``・``group_b``・
+    ``log2fc_test_over_ref``（v1 の ``log2fc`` と同じ値。group_b / group_a）を足す。
     """
     prepared = []
     for result in results:
         by_feature = {row.get("feature"): row for row in result.get("results") or []}
-        prepared.append((_result_id(result), by_feature, _detected_counter(ds, result)))
+        prepared.append((_result_id(result), by_feature, _detected_counter(ds, result), result))
     rows = []
     for fid in feature_ids:
-        for result_id, by_feature, counter in prepared:
+        for result_id, by_feature, counter, result in prepared:
             source = by_feature.get(fid)
             if source is None:
                 status = "not_in_matrix"
@@ -790,6 +806,10 @@ def feature_stats(ds, feature_ids: list[str], results: list[dict]) -> list[dict]
                 "detected_a": det_a,
                 "detected_b": det_b,
             })
+            if with_labels:
+                rows[-1].update({"comparison": comparison_name(result),
+                                 "group_a": result.get("a"), "group_b": result.get("b"),
+                                 "log2fc_test_over_ref": rows[-1]["log2fc"]})
     return rows
 
 

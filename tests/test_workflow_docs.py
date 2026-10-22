@@ -55,7 +55,8 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
         "curation_view_data",
     ),
     "pathway.md": ("pathway_project", "pathway_plot"),
-    "reanalysis.md": ("dataset_handle_open", "dataset_handle_list", "dataset_handle_close"),
+    "reanalysis.md": ("dataset_handle_open", "dataset_handle_list", "dataset_handle_close",
+                      "dataset_analysis_run"),
 }
 
 # 今回の範囲外。文書に混入したら落とす（線引きを固定するため）。
@@ -188,4 +189,4 @@ class TestScopeBoundary(unittest.TestCase):
             registered,
             "対象範囲の分類と登録済みツールが一致しない",
         )
-        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 61)
+        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 62)

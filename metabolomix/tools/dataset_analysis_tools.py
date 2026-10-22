@@ -653,6 +653,7 @@ def dataset_feature_search(
     targets: list[dict] | None = None,
     result_ids: list[str] | None = None,
     max_results: int = 20,
+    with_group_labels: bool = False,
     dataset_handle: str | None = None,
 ) -> str:
     """DatasetState の特徴を探し、目的の物質に当たる特徴を規則で判定する（読み取り専用）。
@@ -692,6 +693,11 @@ def dataset_feature_search(
     （gap-fill を数えない。検出状態が無ければ空）。`results` に BH の母集団
     （`bh_population`）と caveat。キュレーションのフラグは反映しない（あれば `notes`）。
     欄の意味は `lipidmix://docs/output-format/mztab`。
+
+    with_group_labels: True（opt-in。再解析で使う）なら `stats` の末尾に `comparison`
+        （pipeline の比較なら comparison_id、そうでなければ `<group_b>_vs_<group_a>`）・
+        `group_a`・`group_b`・`log2fc_test_over_ref`（`log2fc` と同じ値を、比較名と同じ向きの
+        名前で）を足す。既定 False では列は変わらない。
 
     dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
@@ -783,7 +789,8 @@ def dataset_feature_search(
         notes.append("差次的結果（2 群比較）が 1 件も無いので統計を付けていない"
                      "（dataset_differential を実行すると付く）。")
 
-    stats = feature_search.feature_stats(ds, stat_features, results)
+    stats = feature_search.feature_stats(ds, stat_features, results,
+                                         with_labels=with_group_labels)
     if any(row["detected_a"] is None for row in stats):
         if getattr(ds, "detected_mask", None) is None:
             notes.append("検出状態（gap-fill の区別）を取り込めていないので detected_a / "
@@ -791,7 +798,9 @@ def dataset_feature_search(
         else:
             notes.append("結果の試料と検出状態の列の対応を保証できず、detected_a / detected_b を"
                          "数えていない結果がある。")
-    payload["stats"] = _table(stats, feature_search.STATS_COLUMNS, digits=_STATS_DIGITS,
+    columns = (feature_search.STATS_COLUMNS_LABELED if with_group_labels
+               else feature_search.STATS_COLUMNS)
+    payload["stats"] = _table(stats, columns, digits={**_STATS_DIGITS, "log2fc_test_over_ref": 4},
                               significant=_STATS_SIGNIFICANT)
     payload["results"] = feature_search.result_summaries(ds, results)
     if targets is not None:
