@@ -269,6 +269,27 @@ bh_population, caveats}`。`bh_population = {n_features_total, n_in_matrix, n_te
 計算のたびに発行される ID なので `rule_hash` には入れない。同じ `rule_hash` でも `stats_source` が
 違えば、統計は別の計算から来ている。
 
+**脂質の種の目標（`lipid_species`。opt-in）。** InChIKey が一意に決まらない脂質の種（sn 位・
+二重結合の位置が未定の `PC 34:4`・`PC 18:3_16:1`）は、`inchikey` の代わりに `lipid_species` で
+指定する（`inchikey` と排他）。GOSLIN の種のレベル（`LipidLevel.SPECIES`）に直して照合に使うので、
+`PC 18:3_16:1` も `PC 16:1/18:3` も `PC 34:4` として照らす。上の表の「InChIKey 先頭ブロック」は、
+種の目標では「SME 候補の `chemical_name`（SML なら `name`）を種のレベルに読んだもの」に置き換わり、
+付加体・価数・層・水準の規則はそのまま。
+
+- **種のレベルの一致は分子種（どの鎖の組か）を確かめない。** `PC 16:1_18:3` と `PC 14:0_20:4` は
+  どちらも `PC 34:4` の `sme_match` で、両方が qualified なら `needs_input`（`multiple_qualified_candidates`）。
+  分子種の主張の裏取りは MS/MS（鎖の断片）で別に見る。
+- 修飾は種に残る（`PE 34:1;O` ≠ `PE 34:1`）。エーテルは別のクラス（`PC O-34:1` ≠ `PC 34:1`）。
+  GOSLIN は `P-` のビニルエーテルの二重結合を数えて `O-` に直すので、`PC P-34:1` は `PC O-34:2` と一致する。
+- 名前を種のレベルに読めない SME 候補（`Unknown`、クラスだけの名前など）は InChIKey の無い候補と
+  同じく評価できないものとして飛ばす（`sme_identity_unresolved`）。曖昧な SML は名前を持たないので
+  種では照らせず `unannotated`。
+- 正規化後の目標は `lipid_species`（種のレベル）・`lipid_species_input`（入力を GOSLIN で読んだ綴り）を持ち、
+  `inchikey_block` は null。`rule_hash` は `lipid_species` を含み、`lipid_species_input` は `name` と同じく
+  入れない（`PC 18:3_16:1` と `PC 34:4` は同じ規則）。**InChIKey の目標の正規化・`rule_hash`・戻り値は
+  この口を足す前と同じ**（キーを足さない）。
+- 種より粗い（`PC`）・読めない名前、`inchikey` との同時指定は `FEATURE_TARGET_INVALID`（`field` は `lipid_species`）。
+
 `notes` には、打ち切り・使わなかった古い差次的結果・差次的結果が無いこと・検出状態が無いこと・
 極性の宣言と多数決の食い違い・キュレーションのフラグがあるのに反映していないこと（この検索は
 SME / SML の生の同定だけを見るので、`dataset_export_differential` の同定と食い違いうる）が入る。

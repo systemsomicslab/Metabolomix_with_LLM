@@ -69,7 +69,7 @@ DEFAULT_PPM = 10.0
 DEFAULT_RT_TOL_MIN = 0.3
 
 _ALLOWED_KEYS = frozenset({
-    "target_id", "inchikey", "formula", "expected_mz", "adduct", "name",
+    "target_id", "inchikey", "lipid_species", "formula", "expected_mz", "adduct", "name",
     "ppm", "rt_min", "rt_tol_min", "adduct_tiers", "polarity",
 })
 _POLARITIES = ("positive", "negative")
@@ -134,6 +134,26 @@ def _clean_tiers(target_id, tiers) -> list[list[str]]:
     return [[a.strip() for a in tier] for tier in tiers]
 
 
+def _species_target(target_id, raw: dict) -> dict | None:
+    """``lipid_species`` を種のレベルに直す。指定が無ければ None（InChIKey の目標）。"""
+    from metabolomix.msdial.lipid_identity import lipid_species_of, normalize_lipid_name
+
+    value = raw.get("lipid_species")
+    if value is None:
+        return None
+    if raw.get("inchikey") is not None:
+        raise _invalid(target_id, "lipid_species",
+                       "inchikey と lipid_species は同時に指定できない（どちらか一方）")
+    species = lipid_species_of(value) if isinstance(value, str) else None
+    if species is None:
+        raise _invalid(
+            target_id, "lipid_species",
+            f"lipid_species を種のレベルの脂質名として読めない: {value!r}"
+            "（例 \"PC 34:4\"・\"PC 18:3_16:1\"。クラスだけの名前は不可）")
+    return {"lipid_species": species,
+            "lipid_species_input": normalize_lipid_name(value).get("normalized") or species}
+
+
 def _normalize_one(raw, dataset_polarity: str | None):
     """1 件を正規化する。極性が決まらず層も作れないときは None（呼び出し側が束ねて拒否する）。"""
     if not isinstance(raw, dict):
@@ -149,11 +169,15 @@ def _normalize_one(raw, dataset_polarity: str | None):
             f"未知のキー: {unknown}（使えるのは {sorted(_ALLOWED_KEYS)}）")
 
     inchikey = raw.get("inchikey")
-    block = inchikey.strip()[:14].upper() if isinstance(inchikey, str) else ""
-    if not _INCHIKEY_BLOCK_RE.fullmatch(block):
-        raise _invalid(
-            target_id, "inchikey",
-            "inchikey は必須（先頭 14 文字の英大文字ブロックを照合に使う。全体を渡してよい）")
+    species = _species_target(target_id, raw)
+    if species is not None:
+        block = None
+    else:
+        block = inchikey.strip()[:14].upper() if isinstance(inchikey, str) else ""
+        if not _INCHIKEY_BLOCK_RE.fullmatch(block):
+            raise _invalid(
+                target_id, "inchikey",
+                "inchikey は必須（先頭 14 文字の英大文字ブロックを照合に使う。全体を渡してよい）")
 
     name = raw.get("name")
     if name is not None and not isinstance(name, str):
@@ -251,6 +275,8 @@ def _normalize_one(raw, dataset_polarity: str | None):
         "target_id": target_id,
         "name": name,
         "inchikey_block": block,
+        # 種の目標だけが lipid_species* を持つ（InChIKey の目標の辞書と rule_hash を変えない）
+        **(species or {}),
         "formula": formula,
         "expected_mz": expected,
         "adduct_tiers": tiers,
@@ -304,14 +330,16 @@ def normalize_targets(targets: list[dict], *, dataset_polarity: str | None) -> l
 
 
 #: rule_hash に入れない欄。``name`` は読み手のためのラベルで照合に使わない
-#: （改名しただけで「規則が変わった」ように見せない）。
-_RULE_HASH_EXCLUDED = frozenset({"name"})
+#: （改名しただけで「規則が変わった」ように見せない）。``lipid_species_input`` は
+#: 照合に使う ``lipid_species``（種のレベル）の元の綴りで、``PC 18:3_16:1`` と ``PC 34:4`` は同じ規則。
+_RULE_HASH_EXCLUDED = frozenset({"name", "lipid_species_input"})
 
 
 def rule_hash(normalized_targets: list[dict]) -> str:
     """正規化後の目標リストから照合規則の hash を作る（result_id・dataset_hash は入れない）。
 
-    覆うのは照合を左右する欄だけ: ``target_id``・InChIKey 先頭ブロック・分子式か
+    覆うのは照合を左右する欄だけ: ``target_id``・InChIKey 先頭ブロック（種の目標は
+    ``lipid_species``）・分子式か
     expected_mz・付加体の層と理論 m/z・ppm・RT・目標の極性・``applicable``。``name`` は
     入れず、目標は ``target_id`` の順に並べ替えてから作る——表示名の変更や
     ``targets`` の並べ替えでは hash は変わらない。
@@ -346,13 +374,26 @@ def _key_block(value) -> str | None:
     return value.strip()[:14].upper() or None
 
 
-def _identity(candidates, annotation, *, inchikey_block: str, adduct: str) -> dict:
+def _identity(candidates, annotation, *, inchikey_block: str | None = None,
+              lipid_species: str | None = None, adduct: str) -> dict:
     """`classify_identity` の本体。表示用の名前・InChIKey も一緒に返す。
 
     SME 候補は**その候補自身の** ``inchikey`` だけを見る。特徴の rank1 の InChIKey
     （``feature_metadata[fid]["inchikey"]``）を混ぜると、別物質の rank2 候補が rank1 の
     識別子を借りて一致してしまう（``feature_bindings._identifier_values`` の癖。spec §2）。
+
+    ``lipid_species`` を渡すと（種の目標）、識別子は InChIKey の先頭ブロックではなく
+    候補自身の ``chemical_name``（SML なら ``name``）を種のレベルに読んだもの。読めない
+    名前は InChIKey の無い候補と同じく評価できないものとして飛ばす。
     """
+    if (inchikey_block is None) == (lipid_species is None):
+        raise ValueError("inchikey_block と lipid_species のどちらか一方を渡す")
+    if lipid_species is not None:
+        from metabolomix.msdial.lipid_identity import lipid_species_of
+
+        wanted, key_of, name_key = lipid_species, lipid_species_of, "chemical_name"
+    else:
+        wanted, key_of, name_key = inchikey_block, _key_block, "inchikey"
     wanted_adduct = _normalize_adduct(adduct)
     parsed = parse_adduct(adduct)
     wanted_charge = parsed.charge if parsed is not None else None
@@ -360,13 +401,13 @@ def _identity(candidates, annotation, *, inchikey_block: str, adduct: str) -> di
     reasons: list[str] = []
     first_informative = None
     for candidate in candidates or []:
-        block = _key_block(candidate.get("inchikey"))
+        block = key_of(candidate.get(name_key))
         if block is None:
-            # InChIKey を解決できない候補は、一致とも矛盾とも言えない（評価できない）。
+            # InChIKey（種の目標なら種の名前）を解決できない候補は、一致とも矛盾とも言えない（評価できない）。
             continue
         if first_informative is None:
             first_informative = candidate
-        if block != inchikey_block:
+        if block != wanted:
             reasons.append("identifier_mismatch")
             continue
         if _normalize_adduct(candidate.get("adduct")) != wanted_adduct:
@@ -392,7 +433,12 @@ def _identity(candidates, annotation, *, inchikey_block: str, adduct: str) -> di
     # SME が無い、または識別子を持つ SME 候補が無い → SML へ進む。
     prefix = ["sme_identity_unresolved"] if candidates else []
     annotation = annotation or {}
-    if annotation.get("ambiguous"):
+    if lipid_species is not None:
+        # 曖昧な SML は名前を持たない（dataset_state が選ばない）ので、種では照らせない
+        if not annotation.get("ambiguous") and key_of(annotation.get("name")) == wanted:
+            return {"evidence": "sml_match", "reasons": prefix, "sme_rank": None,
+                    "name": annotation.get("name"), "inchikey": annotation.get("inchikey")}
+    elif annotation.get("ambiguous"):
         keys = [key for key in annotation.get("inchikeys") or [] if key]
         if any(_key_block(key) == inchikey_block for key in keys):
             return {"evidence": "sml_match", "reasons": prefix + ["sml_ambiguous"],
@@ -408,7 +454,8 @@ def _identity(candidates, annotation, *, inchikey_block: str, adduct: str) -> di
 
 
 def classify_identity(candidates: list[dict], annotation: dict | None, *,
-                      inchikey_block: str, adduct: str) -> tuple[str, list[str], int | None]:
+                      inchikey_block: str | None = None, lipid_species: str | None = None,
+                      adduct: str) -> tuple[str, list[str], int | None]:
     """1 つの（特徴, 付加体）候補の同定の証拠を決める（spec §5 の 3）。
 
     戻り値は ``(evidence, reasons, sme_rank)``。``evidence`` は ``sme_match`` /
@@ -423,8 +470,14 @@ def classify_identity(candidates: list[dict], annotation: dict | None, *,
       あったなら ``sme_identity_unresolved``）。SML の InChIKey が一致 → ``sml_match``
       （曖昧な注釈はどれか 1 つの一致で足り、``sml_ambiguous`` を付ける）。
     - それ以外 → ``unannotated``。
+
+    ``inchikey_block`` の代わりに ``lipid_species``（種のレベルの脂質名）を渡すと、上の
+    「InChIKey」を「候補の名前を種のレベルに読んだもの」に置き換えて同じ規則で決める
+    （どちらか一方。両方・どちらも無しは ValueError）。曖昧な SML は名前を持たないので
+    種では照らせず ``unannotated``。
     """
-    result = _identity(candidates, annotation, inchikey_block=inchikey_block, adduct=adduct)
+    result = _identity(candidates, annotation, inchikey_block=inchikey_block,
+                       lipid_species=lipid_species, adduct=adduct)
     return result["evidence"], result["reasons"], result["sme_rank"]
 
 
@@ -483,7 +536,8 @@ def match_target(ds, target: dict, *, max_results: int,
         out.update(status="not_applicable", reason="polarity_mismatch")
         return out
 
-    block = target["inchikey_block"]
+    identifier = ({"lipid_species": target["lipid_species"]} if target.get("lipid_species")
+                  else {"inchikey_block": target["inchikey_block"]})
     ppm_tol = target["ppm"]
     rt_min = target["rt_min"]
     rt_tol = target["rt_tol_min"]
@@ -514,7 +568,7 @@ def match_target(ds, target: dict, *, max_results: int,
 
                 identity = _identity(ds.feature_candidates.get(fid) or [],
                                      ds.feature_annotations.get(fid),
-                                     inchikey_block=block, adduct=adduct)
+                                     **identifier, adduct=adduct)
                 evidence = identity["evidence"]
                 reasons = [] if rt_ok else ["rt_outside_tolerance"]
                 reasons += identity["reasons"]

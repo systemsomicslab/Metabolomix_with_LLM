@@ -161,9 +161,11 @@ def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
         if "target" in rules:
             raise _fail("msms.rules.target は書かない（主張の target から決まる）",
                         field="msms.rules")
+        # 種の主張は種を、InChIKey の主張は InChIKey を規則の target に渡す
+        identifier = ({"lipid_species": target["lipid_species"]} if target.get("lipid_species")
+                      else {"inchikey": raw_target.get("inchikey")})
         out_msms = {"top_n": top_n, "rules": msms_rules.normalize_rules(
-            rules, target={"inchikey": raw_target.get("inchikey"),
-                           "formula": target["formula"]})}
+            rules, target={**identifier, "formula": target["formula"]})}
 
     relations = spec.get("relations")
     out_relations = None
@@ -181,7 +183,11 @@ def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
 
 
 def rule_hash(normalized: dict) -> str:
-    return canonical_hash({k: v for k, v in normalized.items() if k != "raw_target"})
+    rule = {k: v for k, v in normalized.items() if k != "raw_target"}
+    if "lipid_species_input" in rule["target"]:
+        # 種の綴り（PC 18:3_16:1 と PC 34:4）は同じ規則（feature_search.rule_hash と同じ扱い）
+        rule["target"] = {k: v for k, v in rule["target"].items() if k != "lipid_species_input"}
+    return canonical_hash(rule)
 
 
 def _selection(match: dict) -> dict:

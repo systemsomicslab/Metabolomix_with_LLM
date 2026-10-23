@@ -214,7 +214,8 @@ def library_msms_qualify(rules: dict, spot_id: int | None = None,
     """MS/MS の照合に、spec で書いた合否の規則（msms-rules.v1）を当てる（再解析で使う）。
 
     照合は `library_match_feature` と同じ（`spot_id` か `precursor_mz` のどちらか一方）。
-    規則の形と検査の意味は `lipidmix://docs/output-format/reanalysis` §4。設定した検査だけを
+    規則の形と検査の意味は `lipidmix://docs/output-format/reanalysis` §4（`target` は
+    `inchikey` か、InChIKey が一意に決まらない脂質の種の `lipid_species`）。設定した検査だけを
     `checks` に並べ、`verdict` は `qualified` / `not_qualified` / `not_evaluable`。
     `rule_hash` は正規化した規則から作る。MS/MS が無ければ `not_evaluable`（「断片が
     合わなかった」ではない）。「明らかに別物か」は判断しない（再解析の規則で決める）。
@@ -412,7 +413,7 @@ def dataset_claim_evidence(spec: dict, dataset_handle: str | None = None,
     """1 主張（目標の物質）の証拠の束（claim-evidence.v1）を作る（再解析で使う）。
 
     spec: `claim_id`・`target`（`dataset_feature_search` の目標と同じ形。`target_id` は
-    `claim_id`）・`scan`（`ppm` と `rt_tol_min` の水準のリスト、任意で `adduct_tiers`——
+    `claim_id`。脂質の種の主張は `inchikey` の代わりに `lipid_species`）・`scan`（`ppm` と `rt_tol_min` の水準のリスト、任意で `adduct_tiers`——
     全組で走査する）・`msms`（`top_n` と msms-rules.v1 の `rules`。target は書かない）・
     `relations`（`rt_window` / `mz_tol` / `min_r`）・`max_candidates`（既定 50）。
     束に入るのは、規則で選んだ既定の特徴（`default_selection`。`dataset_feature_search`

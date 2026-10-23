@@ -56,6 +56,28 @@ def inchikey_block(value) -> str:
     return block
 
 
+def lipid_species(value) -> str:
+    """目標の脂質の種（`PC 34:4`・`PC 18:3_16:1` など）を種のレベルに直す。"""
+    from metabolomix.msdial.lipid_identity import lipid_species_of
+
+    species = lipid_species_of(value) if isinstance(value, str) else None
+    if species is None:
+        raise _fail("target.lipid_species は種のレベル以下の脂質名（例 PC 34:4。クラスだけは不可）",
+                    field="target.lipid_species")
+    return species
+
+
+def _normalize_target(raw_target: dict, formula) -> dict:
+    """InChIKey の目標は `{inchikey_block, formula}`、種の目標は `{lipid_species, formula}`。"""
+    formula = formula.strip() if formula else None
+    if raw_target.get("lipid_species") is None:
+        return {"inchikey_block": inchikey_block(raw_target.get("inchikey")), "formula": formula}
+    if raw_target.get("inchikey") is not None:
+        raise _fail("target.inchikey と target.lipid_species は同時に指定できない",
+                    field="target.lipid_species")
+    return {"lipid_species": lipid_species(raw_target["lipid_species"]), "formula": formula}
+
+
 def normalize_ions(items, *, kind: str, label: str) -> list[dict]:
     """診断イオン（`mz`）か中性損失（`delta`）の一覧。"""
     key = "mz" if kind == "ion" else "delta"
@@ -88,8 +110,8 @@ def normalize_rules(rules, *, target: dict | None = None) -> dict:
     if rules.get("schema", RULES_SCHEMA) != RULES_SCHEMA:
         raise _fail(f"schema は {RULES_SCHEMA}")
     raw_target = target if target is not None else rules.get("target")
-    if not isinstance(raw_target, dict) or set(raw_target) - {"inchikey", "formula"}:
-        raise _fail("target は {inchikey, formula} の辞書", field="target")
+    if not isinstance(raw_target, dict) or set(raw_target) - {"inchikey", "lipid_species", "formula"}:
+        raise _fail("target は {inchikey | lipid_species, formula} の辞書", field="target")
     formula = raw_target.get("formula")
     if formula is not None and (not isinstance(formula, str) or not formula.strip()):
         raise _fail("target.formula は文字列", field="target.formula")
@@ -126,10 +148,7 @@ def normalize_rules(rules, *, target: dict | None = None) -> dict:
                                             label="diagnostic_ions")
     out["neutral_losses"] = normalize_ions(out["neutral_losses"], kind="loss",
                                            label="neutral_losses")
-    return {"schema": RULES_SCHEMA,
-            "target": {"inchikey_block": inchikey_block(raw_target.get("inchikey")),
-                       "formula": formula.strip() if formula else None},
-            **out}
+    return {"schema": RULES_SCHEMA, "target": _normalize_target(raw_target, formula), **out}
 
 
 def rules_hash(normalized: dict) -> str:
@@ -171,6 +190,16 @@ def _block(record) -> str | None:
     return key.strip()[:14].upper() if isinstance(key, str) and key.strip() else None
 
 
+def _target_key(rules: dict):
+    """記録 → 目標と比べる識別子（InChIKey の先頭ブロックか、名前の種）と、目標の値。"""
+    target = rules["target"]
+    if "lipid_species" in target:
+        from metabolomix.msdial.lipid_identity import lipid_species_of
+
+        return (lambda record: lipid_species_of(record.get("name"))), target["lipid_species"]
+    return _block, target["inchikey_block"]
+
+
 def _lipid_class(name) -> str | None:
     from metabolomix.msdial.lipid_identity import normalize_lipid_name
 
@@ -187,10 +216,15 @@ def _check(check: str, status: str, value=None, detail=None) -> dict:
 
 
 def qualify(scored: list, measured, precursor_mz: float, rules: dict, *, ms2_tol: float) -> dict:
-    """照合の結果（`score_candidates` の `scored`。総合スコアの降順）に規則を当てる。"""
-    block = rules["target"]["inchikey_block"]
+    """照合の結果（`score_candidates` の `scored`。総合スコアの降順）に規則を当てる。
+
+    種の目標（`target.lipid_species`）では、目標か別物かを記録の `name` の種で決める
+    （同じ種の別の分子種は目標として数え、`same_formula_margin` の相手にしない）。
+    """
+    key_of, block = _target_key(rules)
     checks = []
-    target_index = next((i for i, (record, _) in enumerate(scored) if _block(record) == block), None)
+    target_index = next((i for i, (record, _) in enumerate(scored) if key_of(record) == block),
+                        None)
     in_top = target_index is not None and target_index < rules["top_rank"]
     checks.append(_check("target_in_top_rank", "pass" if in_top else "fail",
                          None if target_index is None else target_index + 1,
@@ -220,7 +254,7 @@ def qualify(scored: list, measured, precursor_mz: float, rules: dict, *, ms2_tol
             formula = rules["target"]["formula"] or target[0].get("formula")
             alternatives = [(r, s) for r, s in scored
                             if formula and (r.get("formula") or "").strip() == formula
-                            and _block(r) not in (None, block)]
+                            and key_of(r) not in (None, block)]
             if not formula:
                 checks.append(_check("same_formula_margin", "not_evaluable", None,
                                      {"reason": "formula_unknown"}))

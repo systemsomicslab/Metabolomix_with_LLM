@@ -667,7 +667,9 @@ def dataset_feature_search(
     `evidence` は `sme`/`sml`/`none`）。注釈の無い特徴にも統計を付ける。
 
     **目標照合**（`targets` あり、1 回 50 件まで）: 各要素は `target_id`・`inchikey`（必須。
-    先頭 14 文字で照合）と、`formula` か（`expected_mz` と `adduct`）。任意で `name` `ppm`
+    先頭 14 文字で照合）と、`formula` か（`expected_mz` と `adduct`）。InChIKey が一意に決まらない
+    脂質の種は `inchikey` の代わりに `lipid_species`（`PC 34:4`・`PC 18:3_16:1`。GOSLIN の種の
+    レベルに直し、SME 候補の名前の種と照らす。分子種は確かめない。opt-in）。任意で `name` `ppm`
     （既定 10）`rt_min` `rt_tol_min`（既定 0.3）`adduct_tiers` `polarity`。付加体の層を上から、
     証拠の水準 `sme_match` → `sml_match` → `unannotated` の順に見て、qualified がちょうど 1 つの
     ときだけ `resolved`。2 つ以上なら `needs_input`（`multiple_qualified_candidates`）、無ければ
