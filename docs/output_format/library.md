@@ -29,7 +29,7 @@
 | `weighted_dot_product` | `GetWeightedDotProduct` | m/z 重みとピーク数ペナルティを掛けたドット積。mzTab の `id_confidence_measure[5]`。**単独では並び順に使わない**（§14.9） |
 | `reverse_dot_product` | `GetReverseDotProduct` | 参照側のピークだけを基準に測定側で説明できているかを問う非対称スコア |
 | `matched_peaks_percentage` | `GetMatchedPeaksScores`（比） | 参照ピークのうち測定側でも観測された割合 |
-| `matched_peaks_count` | 同上（count） | 一致した参照ピークの本数 |
+| `matched_peaks_count` | 同上（count） | 一致した参照ピークの本数。**前駆体（precursor）の一致も 1 本に数える**——前駆体しか合っていない候補でも 1 になる。断片だけの本数は `detail=true` の `fragment_matches_excl_precursor` |
 | `entropy_similarity` | `GetSpectralEntropySimilarity` | スペクトルエントロピーに基づく類似度。**mzTab には出ないため実データとの突き合わせ対象外**（設計 §2.7） |
 | `total_score` | `GetTotalScore` | 上の指標に RT・precursor m/z の一致度を足した**候補の並び順（`ranked_by`）**。**0〜1 ではない**（§14.9） |
 
@@ -395,3 +395,21 @@ Console でも同じ判定が走る。一方**描画は GUI だけ**にある
 | 色 | `#2471a3` / `#c0392b`（volcano と同系統） | 純 Blue / 純 Red | |
 | **差分・積の重ね描き** | 無い | ある（`UpperDifferenceSpectrumModel` / `UpperProductSpectrumModel`） | |
 | **対話操作** | 無い（静止 PNG、`output="payload"` で座標） | ツールチップ（m/z・強度・`SpectrumComment`）・ズーム | |
+
+### 照合の詳細（`detail=true`）とライブラリの検索
+
+`library_match_feature(detail=true)`（opt-in。再解析で使う）は、既存の列の並びを変えずに
+TSV の末尾へ 2 列を足し、payload に 3 つの欄を足す。`detail` を渡さない戻り値は変わらない。
+
+| 欄 | 意味 |
+|---|---|
+| `inchikey`（列） | 候補のレコードの InChIKey（ライブラリに無ければ空） |
+| `fragment_matches_excl_precursor`（列） | 一致した参照ピーク（`matched_peaks_count` と同じ規則）のうち、前駆体 m/z ± `precursor_exclusion_tol` を除いた本数。比較できない（測定か参照が空）なら空 |
+| `precursor_exclusion_tol` | 前駆体を除く幅（Da）。省略時は採点に使った `ms2_tol` |
+| `measured_peaks` | 照合に使った測定スペクトル（全ピーク `[m/z, 強度]`） |
+| `alignments` | 候補ごと（`rank` 順）の一致したピーク `[m/z, 測定の強度, 参照の強度]`。強度は採点の前処理（足切り・正規化）の後の値 |
+
+`library_search` は読み込んだライブラリのレコードを名前（大小を問わない部分一致）・分子式
+（完全一致）・InChIKey（先頭 14 文字）で引く。スペクトルは返さず、ピーク数 `n_peaks` だけ。
+`dcl_spot_spectrum`（`.dcl` の節）は spot_id で代表 MS/MS の全ピークを返す。
+

@@ -289,10 +289,19 @@ def console_plan(
 
     # 実効メソッドを書いてジョブをそちらへ向ける。ユーザーのパラメータファイルは
     # 触らない（GUI が次に開いたときの整合が崩れる）。
-    if overrides:
-        effective = method_file_mod.write_effective_method_file(
-            mf, Path(job.run_dir) / "effective-method.txt", overrides)
-        job.method_file = str(effective)
+    # Console はメソッドファイルを ASCII でしか読めない。ASCII 以外があれば、直す行と文字を
+    # 示して止める（以前は実効メソッドを書く途中で 'ascii' codec の例外になった）。
+    from metabolomix.core.atomic_io import DomainError
+
+    try:
+        if overrides:
+            effective = method_file_mod.write_effective_method_file(
+                mf, Path(job.run_dir) / "effective-method.txt", overrides)
+            job.method_file = str(effective)
+        else:
+            method_file_mod.check_ascii(mf)
+    except DomainError as exc:
+        return console_error(exc.code, exc.message, exc.details)
     save_job(job, job_path)
     session_state.session.current_job_path = str(job_path)
 

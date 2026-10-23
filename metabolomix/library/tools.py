@@ -16,9 +16,9 @@ from pathlib import Path
 from mcp.server.fastmcp import Image
 from mcp.types import ToolAnnotations
 
-from metabolomix.analysis.spectral_match import cutoff_mask, match_spectrum, total_score
+from metabolomix.analysis.spectral_match import fragment_matches_excluding_precursor, match_spectrum
 from metabolomix.arf2.reader import format_spots_as_table
-from metabolomix.core import mcp_errors, session_state, user_config
+from metabolomix.core import mcp_errors, user_config
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.path_resolvers import (
     LIBRARY_SETTING_KEYS,
@@ -33,12 +33,12 @@ from metabolomix.dcl.reader import deserialize_dcl, get_msms_by_precursor
 from metabolomix.library.defaults import DEFAULT_MS2_TOL as _DEFAULT_MS2_TOL
 from metabolomix.library.defaults import DEFAULT_MZ_TOL as _DEFAULT_MZ_TOL
 from metabolomix.library.defaults import DEFAULT_RT_TOL as _DEFAULT_RT_TOL
-from metabolomix.library.defaults import pick_tol as _pick_tol
+from metabolomix.library import matching
 from metabolomix.library.store import open_store
 from metabolomix.plots import mirror as mirror_plot
 from metabolomix.plots import render as plot_render
 
-__all__ = ["library_load", "library_match_feature", "library_plot_mirror"]
+__all__ = ["library_load", "library_match_feature", "library_plot_mirror", "library_search"]
 
 # library_load が要約に添える化合物クラス分布の上位件数。
 _TOP_COMPOUND_CLASSES = 10
@@ -61,12 +61,14 @@ _CANDIDATE_TABLE_COLUMNS = [
     "reverse_dot_product", "matched_peaks_percentage", "matched_peaks_count",
     "entropy_similarity",
 ]
+#: `detail=True` のときだけ末尾に足す列（既存の列の並びは変えない）。
+_DETAIL_COLUMNS = ["inchikey", "fragment_matches_excl_precursor"]
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
           structured_output=False)
 def library_load(file_path: str | None = None, rebuild: bool = False,
-                 ion_mode: str | None = None) -> str:
+                 ion_mode: str | None = None, dataset_handle: str | None = None) -> str:
     """参照ライブラリを読み込み、照合用の SQLite store を構築（または既存キャッシュを
     再利用）する。
 
@@ -89,7 +91,35 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     `rebuild=True` はキャッシュを無視して構築し直す（元ファイルが壊れている
     疑いがあるときなど）。通常は不要——store は元ファイルの sha256 をキーに
     キャッシュされるため、内容が変わらない限り再構築しない。
+
+    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は対話のセッション。ハンドルのライブラリ・照合結果だけを読み書きする。
+        ハンドルへは読み取り専用で開く。
     """
+    from metabolomix.tools._holder import resolve_holder
+
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    if dataset_handle is not None and file_path is None:
+        # ハンドルは極性の設定だけから引く（dataset_handle_open と同じ規則）。対話の
+        # データフォルダの .dbs / .msp を探さず、データセットと逆の極性も読まない。
+        mode = (ion_mode or holder.polarity or "").strip().lower() or None
+        if ion_mode and holder.polarity and mode != holder.polarity:
+            return json_payload({
+                "status": "error", "code": "LIBRARY_POLARITY_MISMATCH",
+                "message": (f"このハンドルのデータセットは {holder.polarity} です"
+                            f"（ion_mode={ion_mode!r}）。逆の極性のライブラリは読みません。")})
+        key = user_config.MSP_SETTING_KEYS.get(mode or "")
+        setting = user_config.get_setting(key) if key else None
+        if setting is None:
+            reason = ("データセットの極性が決まらないので ion_mode を指定してください。"
+                      if key is None else f"{key} が設定されていません。")
+            return json_payload({
+                "status": "error", "code": "LIBRARY_NOT_CONFIGURED",
+                "message": ("ハンドルのライブラリは極性の設定（[library] msp_positive / "
+                            "msp_negative）から引きます。" + reason)})
+        file_path = setting.value
     try:
         resolved = resolve_library_path(file_path, ion_mode=ion_mode)
     except LibraryPathError as exc:
@@ -112,7 +142,7 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
         })
 
     try:
-        store_obj = open_store(resolved, rebuild=rebuild)
+        store_obj = open_store(resolved, rebuild=rebuild, read_only=dataset_handle is not None)
     except Exception as exc:  # noqa: BLE001 - 壊れたライブラリは文言で返す（MCP が扱いやすい）
         # OSError の文言は置き場所（フルパス）を含む。研究室ライブラリの置き場所は
         # 戻り値（LLM の文脈）に出さないので、ディレクトリ部分を伏せる。
@@ -127,15 +157,16 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     # 古い store の sqlite3 接続を閉じてから差し替える（Minor 8: 閉じずに上書きすると
     # library_load を繰り返すたびに接続が漏れる。LibraryStore.close() は最初から
     # 存在していたが、ここで呼んでいなかった）。
-    old_store = session_state.session.library.store
+    old_store = holder.library.store
     if old_store is not None:
         old_store.close()
 
     # 別ライブラリへの切り替え起こりうるので、古い照合結果を新ライブラリのものと
     # 取り違えないよう破棄する（ArfState.reset_analysis と同じ考え方）。
-    session_state.session.library.store = store_obj
-    session_state.session.library.source_path = resolved
-    session_state.session.library.last_match = None
+    holder.library.store = store_obj
+    # ハンドルにはファイル名だけを持たせる（研究室のライブラリの置き場所を記録に残さない）。
+    holder.library.source_path = resolved if dataset_handle is None else Path(resolved).name
+    holder.library.last_match = None
 
     path = Path(resolved)
     summary = store_obj.summary()
@@ -268,6 +299,10 @@ def _spot_query(spot_id: int, *, arf2_path: str | None, dcl_file: str | None,
     }
 
 
+#: スポットの代表 MS/MS を引く口（`dcl_spot_spectrum`・再解析の証拠の束が共有する）。
+spot_msms_query = _spot_query
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def library_match_feature(
     precursor_mz: float | None = None,
@@ -280,6 +315,9 @@ def library_match_feature(
     top_n: int = 5,
     spot_id: int | None = None,
     arf2_path: str | None = None,
+    detail: bool = False,
+    precursor_exclusion_tol: float | None = None,
+    dataset_handle: str | None = None,
 ) -> str:
     """測定 MS/MS（`.dcl`）を参照ライブラリ（`library_load` 済みの store）と照合し、
     上位候補を返す。
@@ -339,8 +377,25 @@ def library_match_feature(
     候補一覧は TSV（列名 1 回）で返す。**スペクトル座標と alignment は戻り値に
     含めない**（LLM の文脈を食うため）。座標は `session.library.last_match` に
     持ち、`library_plot_mirror` がそこから読む。
+
+    `detail=True`（opt-in。再解析で使う）のときだけ、TSV の末尾に `inchikey` と
+    `fragment_matches_excl_precursor`（前駆体 ± `precursor_exclusion_tol` を除いた一致の
+    本数。省略時の幅は採点に使った `ms2_tol`）の列を足し、payload に
+    `precursor_exclusion_tol`・`measured_peaks`（測定スペクトル）・`alignments`
+    （候補ごとの一致したピーク `[m/z, 測定, 参照]`）を足す——直前の照合の状態
+    （`last_match`）を読まずに、戻り値だけで照合の中身を確かめられる。
+    **`matched_peaks_count` は前駆体の一致も 1 本に数える**（意味は変えていない）。
+
+    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は対話のセッション。ハンドルのライブラリ・照合結果だけを読み書きする。
+        `spot_id` の解決は、`arf2_path` / `dcl_file` を省けばハンドルの `.arf2` / `.dcl` を使う。
     """
-    store_obj = session_state.session.library.store
+    from metabolomix.tools._holder import alignment_paths, resolve_holder
+
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    store_obj = holder.library.store
     if store_obj is None:
         return mcp_errors.missing_state(
             "library_store", ["library_load"],
@@ -351,6 +406,11 @@ def library_match_feature(
             "status": "invalid_arguments",
             "message": "precursor_mz か spot_id のどちらか一方を指定してください。",
         })
+    arf2_path, dcl_file, lacking = alignment_paths(
+        holder, dataset_handle, arf2_path, dcl_file,
+        need=("arf2", "dcl") if spot_id is not None else ("dcl",))
+    if lacking:
+        return json_payload(lacking)
     measured = None
     if spot_id is not None:
         spot = _spot_query(spot_id, arf2_path=arf2_path, dcl_file=dcl_file,
@@ -360,17 +420,11 @@ def library_match_feature(
         precursor_mz, rt, ion_mode, measured = (
             spot["precursor_mz"], spot["rt"], spot["ion_mode"], spot["measured"])
 
-    search_params = store_obj.summary().get("search_params") or {}
-    resolved_mz_tol = _pick_tol(mz_tol, search_params, "ms1_tolerance", _DEFAULT_MZ_TOL)
-    resolved_ms2_tol = _pick_tol(ms2_tol, search_params, "ms2_tolerance", _DEFAULT_MS2_TOL)
-    resolved_rt_tol = _pick_tol(rt_tol, search_params, "rt_tolerance", _DEFAULT_RT_TOL)
-    # match_spectrum の採点前処理パラメータ。検証 CLI（scripts/verify_spectral_match.py）
-    # と同じ集合を search_params から採る（Important 2）。既定は
-    # MsRefSearchParameterBase の Key 0/1/7/8（`dbs.py` の `_SEARCH_PARAM_KEYS`）。
-    mass_begin = _pick_tol(None, search_params, "mass_range_begin", 0.0)
-    mass_end = _pick_tol(None, search_params, "mass_range_end", 2000.0)
-    relative_amp_cutoff = _pick_tol(None, search_params, "relative_amp_cutoff", 0.0)
-    absolute_amp_cutoff = _pick_tol(None, search_params, "absolute_amp_cutoff", 0.0)
+    if precursor_exclusion_tol is not None and not precursor_exclusion_tol > 0:
+        return json_payload({
+            "status": "invalid_arguments",
+            "message": f"precursor_exclusion_tol は正の数で指定してください: {precursor_exclusion_tol!r}",
+        })
 
     # `.dcl` 側の窓は library 側の resolved_mz_tol/resolved_rt_tol を渡さない
     # （Important 7 — 上のクラス docstring参照）。_measured_spectrum 自身の
@@ -389,10 +443,15 @@ def library_match_feature(
             ),
         })
 
-    candidates = store_obj.candidates(
-        precursor_mz, mz_tol=resolved_mz_tol, ion_mode=ion_mode, rt=rt, rt_tol=resolved_rt_tol,
-    )
-    if not candidates:
+    # 許容幅の解決（明示 → store の search_params → 既定）・候補の検索・採点・並べ替えは
+    # library/matching.py が唯一の実装。採点の関数はこの module の名前を渡す
+    # （既存のテストがここの match_spectrum を差し替えて順位付けを確かめている）。
+    matched = matching.score_candidates(
+        store_obj, precursor_mz=precursor_mz, rt=rt, ion_mode=ion_mode, measured=measured,
+        mz_tol=mz_tol, ms2_tol=ms2_tol, rt_tol=rt_tol, match_fn=match_spectrum)
+    resolved_mz_tol = matched["query"]["mz_tol"]
+    resolved_ms2_tol = matched["query"]["ms2_tol"]
+    if matched["status"] == "no_candidates":
         return json_payload({
             "status": "no_candidates",
             "message": (
@@ -407,39 +466,14 @@ def library_match_feature(
             ),
         })
 
-    # 足切りで採点から外れたピーク。候補ごとに変わらない（測定スペクトルと cutoff
-    # だけで決まる）ので、候補ループの外で 1 回だけ求める。図はこの一覧を使って
-    # 「描かれてはいるが採点に入っていない」ピークを区別する。
-    kept = cutoff_mask(measured, relative_amp_cutoff=relative_amp_cutoff,
-                       absolute_amp_cutoff=absolute_amp_cutoff)
-    unscored_mz = [float(peak[0]) for peak, keep in zip(measured, kept) if not keep]
-
-    # RT 項を入れるかは `.dbs` の `IsUseTimeForAnnotationScoring`（Key 16）次第。
-    # `.msp` のようにフラグを持たないライブラリは上流の既定（False）に倣う。
-    use_rt_scoring = bool(search_params.get("use_time_for_annotation_scoring", False))
-
-    scored = []
-    for record in candidates:
-        result = match_spectrum(
-            measured, record["spectrum"], ms2_tol=resolved_ms2_tol,
-            mass_begin=mass_begin, mass_end=mass_end,
-            relative_amp_cutoff=relative_amp_cutoff, absolute_amp_cutoff=absolute_amp_cutoff,
-        )
-        result.update(total_score(
-            result,
-            precursor_mz=precursor_mz, reference_precursor_mz=record.get("precursor_mz"),
-            ms1_tol=resolved_mz_tol,
-            rt=rt, reference_rt=record.get("rt"),
-            rt_tol=resolved_rt_tol, use_rt=use_rt_scoring,
-        ))
-        scored.append((record, result))
-    # ランク付けの基準は _RANK_KEY（total_score、MS-DIAL の総合スコア）。
-    # 同点はそのまま候補順で温存する（安定ソート）。docstring と payload["ranked_by"]
-    # がこの基準を呼び出し側へ明示する（コード内コメントだけに留めない）。
-    scored.sort(key=lambda item: item[1][_RANK_KEY], reverse=True)
+    # 足切りで採点から外れたピーク（図が「描かれてはいるが採点に入っていない」ピークを
+    # 区別するのに使う）と、総合スコアの降順（同点は候補順）に並べた候補。
+    unscored_mz = matched["unscored_mz"]
+    scored = matched["scored"]
+    candidates = scored
     top = scored[:top_n] if top_n >= 0 else scored
 
-    session_state.session.library.last_match = {
+    holder.library.last_match = {
         "spot_id": spot_id,
         "precursor_mz": precursor_mz,
         "rt": rt,
@@ -490,39 +524,45 @@ def library_match_feature(
         }
         for i, (record, result) in enumerate(top)
     ]
-    table = format_spots_as_table(rows, columns=_CANDIDATE_TABLE_COLUMNS)
+    columns = list(_CANDIDATE_TABLE_COLUMNS)
+    exclusion_tol = precursor_exclusion_tol or resolved_ms2_tol
+    if detail:
+        columns += _DETAIL_COLUMNS
+        for row, (record, result) in zip(rows, top):
+            row["inchikey"] = record["inchikey"]
+            row["fragment_matches_excl_precursor"] = fragment_matches_excluding_precursor(
+                result["alignment"], precursor_mz, exclusion_tol)
+    table = format_spots_as_table(rows, columns=columns)
 
     payload = {
         "status": "success",
-        "query": {
-            "spot_id": spot_id,
-            "precursor_mz": precursor_mz, "rt": rt, "ion_mode": ion_mode,
-            "mz_tol": resolved_mz_tol, "ms2_tol": resolved_ms2_tol, "rt_tol": resolved_rt_tol,
-            "mass_begin": mass_begin, "mass_end": mass_end,
-            "relative_amp_cutoff": relative_amp_cutoff, "absolute_amp_cutoff": absolute_amp_cutoff,
-        },
+        "query": {"spot_id": spot_id, **matched["query"]},
         # 総合スコアの組み立て方。RT 項の有無は戻り値の数値だけでは分からないので、
         # 候補ごとではなく 1 回だけ載せる（内訳の 3 列は session 側にだけ持つ）。
-        "scoring": {
-            "rule": "MS-DIAL GetTotalScore: rt + precursor_mz + (weighted+simple+reverse)/3 "
-                    "+ matched_peaks_percentage（正規化しない和。各項は > 0 のときだけ加算）",
-            "use_rt": use_rt_scoring,
-            "ms1_tol": resolved_mz_tol,
-            "rt_tol": resolved_rt_tol if use_rt_scoring else None,
-        },
+        "scoring": matched["scoring"],
         "measured_peak_count": len(measured),
         "n_candidates": len(candidates),
         "top_n": len(top),
         "ranked_by": _RANK_KEY,
         "candidates_table": table,
     }
+    if detail:
+        payload["precursor_exclusion_tol"] = exclusion_tol
+        payload["measured_peaks"] = [[float(mz), float(intensity)] for mz, intensity in measured]
+        payload["alignments"] = [
+            {"rank": i + 1,
+             "matched": [[row["mz"], row["measured"], row["reference"]]
+                         for row in result["alignment"] if row.get("matched")]}
+            for i, (_record, result) in enumerate(top)
+        ]
     return json_payload(round_floats(payload))
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def library_plot_mirror(rank: int = 1, output: str | None = None,
                         scale: str = mirror_plot.RELATIVE,
-                        label_policy: str = mirror_plot.AUTO) -> list | str:
+                        label_policy: str = mirror_plot.AUTO,
+                        dataset_handle: str | None = None) -> list | str:
     """直近の `library_match_feature` 結果から対向プロット（mirror plot）を描く。
 
     上段が測定、下段が参照（`rank` 位の候補）。`output="image"`（既定）は
@@ -565,8 +605,16 @@ def library_plot_mirror(rank: int = 1, output: str | None = None,
 
     どちらも上下は別枠で数える（上流は上下で別々の `Annotator` を持つため、
     側をまたぐ衝突は起きない）。
+
+    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は対話のセッション。ハンドルのライブラリ・照合結果だけを読み書きする。
     """
-    last_match = session_state.session.library.last_match
+    from metabolomix.tools._holder import resolve_holder
+
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    last_match = holder.library.last_match
     if not last_match or not last_match.get("candidates"):
         return mcp_errors.missing_state(
             "library_match", ["library_match_feature"],
@@ -614,3 +662,56 @@ def library_plot_mirror(rank: int = 1, output: str | None = None,
             f"{payload['unscored_peak_count']} below cutoff (grey, not scored)."
         )
     return [caption, Image(data=png, format="png")]
+
+
+#: library_search の一覧の列。
+_SEARCH_COLUMNS = ["name", "precursor_mz", "ion_mode", "adduct", "rt", "formula", "inchikey",
+                   "ontology", "compound_class", "n_peaks"]
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+def library_search(name: str | None = None, formula: str | None = None,
+                   inchikey: str | None = None, ion_mode: str | None = None,
+                   limit: int = 50, dataset_handle: str | None = None) -> str:
+    """読み込んだ参照ライブラリを名前・分子式・InChIKey で引く（読み取りだけ。再解析で使う）。
+
+    name: 大小を問わない部分一致。formula: 完全一致（例 `C42H82NO8P`）。
+    inchikey: 先頭 14 文字（構造の骨格のブロック）で照合する（全体を渡してよい）。
+    ion_mode: `positive` / `negative`（極性不明のレコードは残す。`library_match_feature` と同じ）。
+    条件は与えたものの AND で、1 つも無ければ `invalid_arguments`。`limit`（既定 50）件まで
+    TSV（列名 1 回）で返し、打ち切った件数を `truncated` に書く。スペクトルは返さない
+    （ピーク数 `n_peaks` だけ）。
+    dataset_handle: `dataset_handle_open` が返したハンドル（そのハンドルのライブラリを引く）。
+        省略時は対話のセッションの `library_load` のライブラリ。
+    """
+    from metabolomix.tools._holder import resolve_holder
+
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    store_obj = holder.library.store
+    if store_obj is None:
+        return mcp_errors.missing_state(
+            "library_store", ["library_load", "dataset_handle_open"],
+            "参照ライブラリが読み込まれていません（library_load、またはライブラリつきの"
+            "dataset_handle_open）。")
+    if name is None and formula is None and inchikey is None:
+        return json_payload({"status": "invalid_arguments",
+                             "message": "name / formula / inchikey のどれか 1 つは指定してください。"})
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        return json_payload({"status": "invalid_arguments",
+                             "message": f"limit は 1 以上の整数で指定してください: {limit!r}"})
+    block = inchikey.strip()[:14].upper() if inchikey else None
+    records, truncated = store_obj.search(
+        name=name.strip() if name else None, formula=formula.strip() if formula else None,
+        inchikey_block=block, ion_mode=ion_mode, limit=limit)
+    rows = [{**{k: record.get(k) for k in _SEARCH_COLUMNS if k != "n_peaks"},
+             "n_peaks": len(record.get("spectrum") or [])} for record in records]
+    return json_payload(round_floats({
+        "status": "success",
+        "query": {"name": name, "formula": formula, "inchikey_block": block, "ion_mode": ion_mode,
+                  "limit": limit},
+        "n_hits": len(rows),
+        "truncated": truncated,
+        "records": format_spots_as_table(rows, columns=_SEARCH_COLUMNS) if rows else "",
+    }))

@@ -247,6 +247,7 @@ p / q / 平均は有効 4 桁）。
 | `log2fc` | 正なら `group_b` が高い（`results[*].log2fc_sign`） |
 | `q` | その結果に付いた BH の q をそのまま（窓で絞った件数で掛け直していない） |
 | `detected_a` / `detected_b` | 群ごとの**実検出の例数**（§13.7 の検出状態から数える）。**gap-fill の値は検出に数えない**。検出状態が無い・試料の対応を保証できないときは空で、`notes` に理由。非ゼロの平均があっても検出 0 例はありうる（埋め値の平均） |
+| `comparison` / `group_a` / `group_b` / `log2fc_test_over_ref` | `with_group_labels=true`（opt-in）のときだけ末尾に付く。`comparison` は pipeline の比較なら `comparison_id`、そうでなければ `<group_b>_vs_<group_a>`。`log2fc_test_over_ref` は `log2fc` と同じ値（正なら `group_b` が高い）を比較名と同じ向きの名前で書いたもの——`RA_vs_HC` の比較で `group_a=HC` と読み違えないための欄 |
 
 `results[*]` は統計を付けた結果ごとの `{result_id, group_a, group_b, n_a, n_b, log2fc_sign,
 bh_population, caveats}`。`bh_population = {n_features_total, n_in_matrix, n_tested}` はデータセットの

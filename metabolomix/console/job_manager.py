@@ -42,6 +42,20 @@ _RAW_EXTENSIONS = frozenset({
 _VENDOR_DIR_EXTENSIONS = frozenset({"d", "raw"})
 
 
+#: ベンダーのフォルダ形式の中に、読み込みのたびに作られうるキャッシュ（入力の中身ではない）。
+#: Bruker の `.d` は MS-DIAL Console（baf2sql）が読むときに `analysis.sqlite` を書く。
+#: 入力の指紋に数えると、Console 自身の読み込みで「入力が変わった」（INPUT_CHANGED）になる
+#: （reanalysis-study issues 2026-10-20、ST002755）。
+VENDOR_CACHE_NAMES = {"d": frozenset({"analysis.sqlite", "analysis.sqlite-journal"})}
+
+
+def is_vendor_cache(path: Path) -> bool:
+    """`path` がベンダーのフォルダ形式の直下にあるキャッシュか（入力の指紋から外すもの）。"""
+    path = Path(path)
+    ext = path.parent.suffix.lower().lstrip(".")
+    return path.name.lower() in VENDOR_CACHE_NAMES.get(ext, frozenset())
+
+
 def is_raw_input(entry: Path) -> bool:
     """`entry` が MS-DIAL の計測データ 1 件として読まれるかを返す。
 

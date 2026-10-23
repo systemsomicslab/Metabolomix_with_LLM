@@ -5,7 +5,7 @@
 ## このリポジトリは何か
 
 MS-DIAL（LC-MS リピドミクス／メタボロミクス解析ソフト）の出力を読み、LLM から使える形で
-公開する **MCP サーバ `ms-data-parser`**。ツール 77・リソース 5・リソーステンプレート 3。
+公開する **MCP サーバ `ms-data-parser`**。ツール 90・リソース 5・リソーステンプレート 3。
 GUI の外では読めない圧縮 MessagePack と独自バイナリを解し、解析そのものをサーバ側で回して
 要約だけを返す（生の行列を LLM の文脈に載せない）。
 
@@ -81,7 +81,8 @@ setup が無ければ作る。追跡されている `.vscode/mcp.json` も `.ven
 `LIPIDMIX_PLOT_OUTPUT`（描画系ツールの戻り値。既定 `image`。Plotly で自分で描く
 クライアント＝Use-LLLM は `payload` を置く）/
 `LIPIDMIX_LIBRARY_CACHE_DIR`（照合用 SQLite キャッシュの置き場所。既定 `data/.library-cache`）/
-`LIPIDMIX_CONFIG`（下記の設定ファイルの場所の上書き。worktree とテストが使う）。
+`LIPIDMIX_CONFIG`（下記の設定ファイルの場所の上書き。worktree とテストが使う）/
+`LIPIDMIX_MAX_DATASET_HANDLES`（再解析のデータセットのハンドルの上限）。
 
 **外部資産の場所は設定ファイルか環境変数で指す**（spec 2026-10-06）。リポジトリ直下の
 `lipidmix.local.toml`（追跡外。雛形 `lipidmix.example.toml`）の `[msdial] exe` `lbm` と
@@ -141,6 +142,15 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
   import してはならない（循環）。
 - **セッション状態はパーサ別に分離済み**: `session.arf` / `.arf2` / `.pai2` / `.eic`。あるパーサが
   別スロットを触ってはいけない（`pai2_parser` が ARF の前処理行列を無言破棄した過去のバグの再発防止）。
+- **データセットのハンドル（再解析の並行のエージェント向け。spec 2026-10-22）は
+  `metabolomix/core/handles.py` の登録簿に住み、対話のセッションとは共有しない**。
+  `DatasetHandle` は `dataset` / `library` を `AnalysisSession` と同じ名前で持つので、
+  `dataset_handle` を受けるツールは `metabolomix/tools/_holder.py` の `resolve_holder` が返した
+  ものを読み、`session_state.session` を直に読まない（閉じたハンドルを対話のセッションへ
+  黙って落とさない）。引数に `dataset_handle` を持つツールは `core/handle_dispatch.py` の
+  `install` が包み、**ハンドルを渡した呼び出しだけ**をワーカースレッドでハンドルのロックの下に
+  回す。渡さない呼び出しは今までどおりイベントループ上で同期に動く（対話のセッションは
+  1 つの可変状態なので並行にしない）。新しく `dataset_handle` を足すツールもこの 2 つに従う。
 - **解釈規則の選択軸は `session.assay_kind`**（`lipid` / `metabolite` / `unknown`、既定
   `unknown`）。脂質名文法は脂質アッセイでしか成り立たないので、ダイジェスト
   （`assay_digest()`）も `section_hint` もここで分岐する。**`caveat_emitted` の bool だけに
@@ -201,7 +211,7 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
 | 知りたいこと | 見る場所 |
 |---|---|
 | ツールの引数・用途（`tests/test_readme_links.py` が一覧と件数を実登録と突き合わせている） | `USAGE.md` |
-| 出力フィールドの**意味**（行の粒度・脂質名文法・必須注意） | `docs/output_format/core.md` ＋ トピック別（`arf` `arf2` `pai2` `dcl` `eic` `identity` `mztab` `library` `curation`）。MCP リソース `lipidmix://docs/output-format[/{topic}]` としても配信 |
+| 出力フィールドの**意味**（行の粒度・脂質名文法・必須注意） | `docs/output_format/core.md` ＋ トピック別（`arf` `arf2` `pai2` `dcl` `eic` `identity` `mztab` `library` `curation` `pathway` `reanalysis`）。MCP リソース `lipidmix://docs/output-format[/{topic}]` としても配信 |
 | ツールが**どのファイルのどの関数をどの順に呼ぶか** | `docs/workflow/`（対象範囲の線引きと内訳は `index.md` が正準。`tests/test_workflow_docs.py` が実登録と突き合わせている）。行番号は書かない規約 |
 | **生データ → Console → mzTab-M → 差次的解析 → パスウェイ**の一気通貫の順序と、内部関数の引数・戻り値 | [docs/superpowers/specs/2026-09-03-end-to-end-pipeline-design.md](docs/superpowers/specs/2026-09-03-end-to-end-pipeline-design.md)（**目標状態**の記述。実装状況は同文書 §9。完成後 `docs/workflow/Lipidmix/` へ昇格） |
 | MessagePack の Key 番号 | `docs/schema/*.md` |

@@ -1,5 +1,7 @@
 # metabolomix/arf2/reader.py
 import io
+import threading
+from collections import OrderedDict
 import msgpack
 import lz4.block
 import pandas as pd
@@ -245,8 +247,12 @@ def generate_text_summary(deserialized_list: List[dict]) -> str:
 # 同一ファイルの再デシリアライズを避けるキャッシュ。.arf2 は実データで 714〜19,388
 # スポットあり、差次的解析の名前補完・EIC の同定照合・同定注釈の3経路がそれぞれ
 # 独立に開いて読み直していた。ファイルが MS-DIAL で作り直されたら読み直すよう、
-# パスだけでなく mtime とサイズもキーに含める。保持は1件（大きいので溜めない）。
-_CATALOG_CACHE: dict[tuple, list] = {}
+# パスだけでなく mtime とサイズもキーに含める。保持は数件（再解析のハンドルが別々の
+# .arf2 を並行に引くので、1 件だと互いに追い出し合って毎回読み直す）。スレッドから
+# 呼ばれるのでロックで守る。
+_CATALOG_CACHE: "OrderedDict[tuple, list]" = OrderedDict()
+_CATALOG_CACHE_SIZE = 4
+_CATALOG_LOCK = threading.Lock()
 
 
 def load_catalog(file_path) -> list:
@@ -257,12 +263,18 @@ def load_catalog(file_path) -> list:
     path = os.fspath(file_path)
     stat = os.stat(path)
     key = (os.path.abspath(path), stat.st_mtime_ns, stat.st_size)
-    cached = _CATALOG_CACHE.get(key)
-    if cached is None:
-        with open(path, "rb") as handle:
-            cached = deserialize(io.BytesIO(handle.read()))
-        _CATALOG_CACHE.clear()
+    with _CATALOG_LOCK:
+        cached = _CATALOG_CACHE.get(key)
+        if cached is not None:
+            _CATALOG_CACHE.move_to_end(key)
+            return cached
+    with open(path, "rb") as handle:
+        cached = deserialize(io.BytesIO(handle.read()))
+    with _CATALOG_LOCK:
         _CATALOG_CACHE[key] = cached
+        _CATALOG_CACHE.move_to_end(key)
+        while len(_CATALOG_CACHE) > _CATALOG_CACHE_SIZE:
+            _CATALOG_CACHE.popitem(last=False)
     return cached
 
 

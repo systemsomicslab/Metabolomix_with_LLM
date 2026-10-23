@@ -395,6 +395,36 @@ class LibraryStore:
         row = self._conn.execute(query + " LIMIT 1", params).fetchone()
         return _row_to_record(row) if row else None
 
+    def search(self, *, name: str | None = None, formula: str | None = None,
+               inchikey_block: str | None = None, ion_mode: str | None = None,
+               limit: int = 50) -> tuple[list[dict], int]:
+        """名前（大小を問わない部分一致）・分子式（完全一致）・InChIKey の先頭ブロックで引く。
+
+        条件は与えたものの AND。並びは store の行の順。戻り値は（`limit` 件までの
+        レコード, 打ち切った件数）。読み取りだけ（SELECT）。
+        """
+        clauses: list[str] = []
+        params: list = []
+        if name is not None:
+            escaped = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            clauses.append("name LIKE ? ESCAPE '\\'")
+            params.append(f"%{escaped}%")
+        if formula is not None:
+            clauses.append("formula = ?")
+            params.append(formula)
+        if inchikey_block is not None:
+            clauses.append("UPPER(SUBSTR(inchikey, 1, 14)) = ?")
+            params.append(inchikey_block.upper())
+        if ion_mode is not None:
+            clauses.append("(ion_mode = ? COLLATE NOCASE OR ion_mode IS NULL)")
+            params.append(ion_mode)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        total = self._conn.execute(f"SELECT COUNT(*) FROM record{where}", params).fetchone()[0]
+        rows = self._conn.execute(
+            f"SELECT {_RECORD_COLUMNS} FROM record{where} ORDER BY id LIMIT ?",
+            [*params, int(limit)]).fetchall()
+        return [_row_to_record(row) for row in rows], max(0, total - len(rows))
+
     def close(self) -> None:
         self._conn.close()
 
@@ -427,10 +457,15 @@ def _digest_for(source_path: Path, base: Path, *, trust_index: bool) -> str:
     return digest
 
 
-def open_store(path: str | Path, *, cache_dir: Path | None = None, rebuild: bool = False) -> LibraryStore:
+def open_store(path: str | Path, *, cache_dir: Path | None = None, rebuild: bool = False,
+               read_only: bool = False) -> LibraryStore:
     """`path` の store を開く。無ければ（または `rebuild=True` なら）構築してから開く。
 
     `rebuild=True` は元ファイルの破損を疑うときに使うので、記憶した sha256 も信じない。
+
+    `read_only=True` は構築済みの SQLite を読み取り専用（`mode=ro`）で開き、別スレッドからの
+    利用を許す（`check_same_thread=False`）。データセットのハンドルが使う——ハンドルへの
+    呼び出しはワーカースレッドで回り、同じハンドルの中では 1 本ずつに直列化されている。
     """
     source_path = Path(path)
     base = cache_dir if cache_dir is not None else globals()["cache_dir"]()
@@ -440,7 +475,11 @@ def open_store(path: str | Path, *, cache_dir: Path | None = None, rebuild: bool
     if rebuild or not dest_path.exists():
         _build(source_path, dest_path, digest)
 
-    conn = sqlite3.connect(str(dest_path))
+    if read_only:
+        conn = sqlite3.connect(f"{dest_path.resolve().as_uri()}?mode=ro", uri=True,
+                               check_same_thread=False)
+    else:
+        conn = sqlite3.connect(str(dest_path))
     try:
         return LibraryStore(conn, dest_path)
     except Exception:

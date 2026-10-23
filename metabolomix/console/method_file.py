@@ -608,6 +608,49 @@ def past_run_method_files(dataset_root: Path) -> list[Path]:
     return out
 
 
+def _source_lines(path: Path) -> list[str]:
+    """表示用に UTF-8 で読んだ行（ASCII で読んだ行と 1 対 1 に対応する）。"""
+    return Path(path).read_bytes().decode("utf-8", errors="replace").splitlines()
+
+
+def find_non_ascii(path: Path, *, skip_lines: frozenset = frozenset()) -> dict | None:
+    """メソッドファイルの最初の ASCII 以外の文字（行・列は 1 始まり）と件数。無ければ None。
+
+    `skip_lines`（1 始まりの行番号）は数えない（上書きで置き換わる行）。
+    """
+    first = None
+    count = 0
+    for line_no, line in enumerate(_source_lines(path), start=1):
+        # コメント行は Console（ConfigParser）が読み飛ばすので数えない。
+        if line_no in skip_lines or line.strip().startswith("#"):
+            continue
+        for column, char in enumerate(line, start=1):
+            if ord(char) > 0x7F:
+                count += 1
+                if first is None:
+                    first = {"line": line_no, "column": column, "char": char}
+    return None if first is None else {**first, "count": count}
+
+
+def check_ascii(path: Path, *, skip_lines: frozenset = frozenset()) -> None:
+    """ASCII 以外の文字があれば、行と文字を示して `METHOD_FILE_NOT_ASCII` で止める。
+
+    MS-DIAL Console はメソッドファイルを ASCII で読む（`StreamReader(path, Encoding.ASCII)`）。
+    日本語のコメント 1 つで、以前は計画の途中で `'ascii' codec can't encode` の例外になった
+    （reanalysis-study issues 2026-10-20）。計画の前に、直す場所が分かる形で止める。
+    """
+    found = find_non_ascii(path, skip_lines=skip_lines)
+    if found is None:
+        return
+    raise DomainError(
+        "METHOD_FILE_NOT_ASCII",
+        f"メソッドファイル {Path(path).name} の {found['line']} 行目 {found['column']} 文字目に"
+        f" ASCII 以外の文字 {found['char']!r} があります（全 {found['count']} 文字）。"
+        "MS-DIAL Console はメソッドファイルを ASCII でしか読めません。"
+        "コメントを含めて ASCII だけにしてください。",
+        {"path": str(path), **found})
+
+
 def write_effective_method_file(src: Path, dest: Path, overrides: dict[str, str]) -> Path:
     """`src` を写して `overrides` のキーを差し替えたメソッドファイルを `dest` に書く。
 
@@ -621,7 +664,9 @@ def write_effective_method_file(src: Path, dest: Path, overrides: dict[str, str]
     by_lower = {key.lower(): key for key in overrides}
     applied: set[str] = set()
     lines: list[str] = []
-    for line in src.read_text(encoding="ascii", errors="replace").splitlines():
+    replaced: set[int] = set()
+    for line_no, line in enumerate(src.read_text(encoding="ascii", errors="replace").splitlines(),
+                                   start=1):
         stripped = line.strip()
         override_key = None
         if stripped and not stripped.startswith("#"):
@@ -629,10 +674,18 @@ def write_effective_method_file(src: Path, dest: Path, overrides: dict[str, str]
             if positions:
                 override_key = by_lower.get(stripped[:min(positions)].strip().lower())
         if override_key is None:
-            lines.append(line)
+            # コメント行の ASCII 以外は "?" にして写す（Console は読まない。以前はここで
+            # 'ascii' codec の例外になっていた）。値の行は下の check_ascii が止める。
+            lines.append(line.encode("ascii", "replace").decode("ascii")
+                         if stripped.startswith("#") else line)
         else:
             lines.append(f"{override_key}: {overrides[override_key]}")
             applied.add(override_key)
+            replaced.add(line_no)
+
+    # 写す行に ASCII 以外があれば、直す行と文字を示して止める（上書きで置き換わる行は
+    # 見ない——そこは上書きの値で決まる。上書きの値の ASCII は書き出しで検出する）。
+    check_ascii(src, skip_lines=frozenset(replaced))
 
     for key, value in overrides.items():
         if key not in applied:

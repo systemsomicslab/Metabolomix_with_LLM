@@ -136,7 +136,7 @@ def _handoff_lines(report: dict | None) -> list[str]:
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_status() -> str:
+def dataset_status(dataset_handle: str | None = None) -> str:
     """現在の DatasetState の概要を返す。
 
     `samples` に name/role の TSV が入る。dataset_differential の
@@ -144,8 +144,16 @@ def dataset_status() -> str:
 
     dataset_load を先に実行しておくこと。
     未実行の場合は missing_state エンベロープを返す。
+
+    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
-    ds = session_state.session.dataset
+    from metabolomix.tools._holder import resolve_holder
+
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    ds = holder.dataset
     if ds is None:
         return missing_state(
             "dataset",

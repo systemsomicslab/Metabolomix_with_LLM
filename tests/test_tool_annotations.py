@@ -78,6 +78,20 @@ EXPECTED_ANNOTATIONS = {
     "dataset_build_matrix": READ_ONLY,
     # 特徴の検索と目標の判定。session も外界も書き換えない。
     "dataset_feature_search": READ_ONLY,
+    # --- 再解析のハンドル（サーバのプロセス内の状態だけを変える） ---
+    # open は呼ぶたびに新しいハンドルを作る → 非冪等。close はハンドルの状態を捨てる。
+    "dataset_handle_open": LOCAL_WRITE_APPEND,
+    "dataset_handle_list": READ_ONLY,
+    "dataset_handle_close": LOCAL_DELETE,
+    # 再解析の spec のツール。output_path を渡したときだけ JSON を書く（同じ spec なら同じ内容）。
+    "dataset_analysis_run": LOCAL_WRITE,
+    "dataset_claim_evidence": LOCAL_WRITE,
+    "dataset_novel_candidates": LOCAL_WRITE,
+    "library_msms_qualify": READ_ONLY,
+    "dataset_homolog_check": READ_ONLY,
+    "dataset_feature_relations": READ_ONLY,
+    "dataset_mass_accuracy": READ_ONLY,
+    "dcl_diagnostic_ions": READ_ONLY,
     # --- Console 実行層（console_plan/run はジョブ状態・ファイルを生成する） ---
     "console_plan": LOCAL_WRITE_APPEND,
     "console_run": LOCAL_WRITE_APPEND,
@@ -106,6 +120,8 @@ EXPECTED_ANNOTATIONS = {
     "library_load": LOCAL_WRITE,
     "library_match_feature": READ_ONLY,
     "library_plot_mirror": READ_ONLY,
+    "library_search": READ_ONLY,
+    "dcl_spot_spectrum": READ_ONLY,
     "pai2_parser": READ_ONLY,
     "pai2_inspect_peak": READ_ONLY,
     "verify_peak_annotation": READ_ONLY,

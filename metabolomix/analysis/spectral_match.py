@@ -596,6 +596,19 @@ def match_spectrum(measured, reference, *, ms2_tol, mass_begin=0.0, mass_end=200
     }
 
 
+def fragment_matches_excluding_precursor(alignment, precursor_mz, tol):
+    """一致した参照ピークのうち、前駆体（`precursor_mz` ± `tol`）を除いた本数。
+
+    `alignment` は `match_spectrum` の `alignment`（`_matched_peaks_walk` の行）。
+    `matched_peaks_count` は前駆体の一致も 1 本に数えるので、前駆体しか合っていない
+    候補でも 1 になる（spec 2026-10-22 §2 の 3）。比較できない（alignment が空）なら None。
+    """
+    if not alignment:
+        return None
+    return sum(1 for row in alignment
+               if row.get("matched") and abs(float(row["mz"]) - float(precursor_mz)) > tol)
+
+
 def gaussian_similarity(actual, reference, tolerance):
     """RT / precursor m/z の一致度。上流 `MsScanMatching.GetGaussianSimilarity`。
 

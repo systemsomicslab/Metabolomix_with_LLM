@@ -256,13 +256,31 @@ def raw_fingerprint(paths: list[str]) -> str:
     必須条件にしないと決めてあるので、実行中に入力が差し替わったことを安く
     検出するためのstat比較に留める。
     """
+    from metabolomix.console.job_manager import is_vendor_cache
+
     entries = []
     for raw in sorted((str(p) for p in paths), key=str.lower):
+        if os.path.isdir(raw):
+            # フォルダ形式（.d / .raw）はフォルダ自身の更新時刻を見ない——中にキャッシュが
+            # 書かれただけで変わる。中のファイルを数え、キャッシュ（is_vendor_cache）は外す。
+            for dirpath, _dirnames, filenames in os.walk(raw):
+                for name in filenames:
+                    inner = os.path.join(dirpath, name)
+                    if is_vendor_cache(Path(inner)):
+                        continue
+                    try:
+                        st = os.stat(inner)
+                        entries.append({"path": inner, "size": st.st_size,
+                                        "mtime_ns": st.st_mtime_ns})
+                    except OSError:
+                        entries.append({"path": inner, "size": None, "mtime_ns": None})
+            continue
         try:
             st = os.stat(raw)
             entries.append({"path": raw, "size": st.st_size, "mtime_ns": st.st_mtime_ns})
         except OSError:
             entries.append({"path": raw, "size": None, "mtime_ns": None})
+    entries.sort(key=lambda e: e["path"].lower())
     return canonical_hash(entries)
 
 

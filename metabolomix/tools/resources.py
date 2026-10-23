@@ -46,7 +46,8 @@ def output_format_reference() -> str:
         "eic, identity, mztab (dataset_* / mzTab-M path), library (reference-library "
         "MS/MS matching), curation (alignment curation: curation_review's verdicts "
         "and reason codes), pathway (MSLipidMapper pathway projection: node table and "
-        "adjacent opposite pairs), or core for the shared ontology. Fetch the topic matching "
+        "adjacent opposite pairs), reanalysis (dataset handles and the spec-driven "
+        "reanalysis tools), or core for the shared ontology. Fetch the topic matching "
         "the output you are about to interpret instead of the whole document."
     ),
     mime_type="text/markdown",

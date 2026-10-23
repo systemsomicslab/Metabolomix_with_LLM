@@ -19,10 +19,12 @@ from mcp.types import ToolAnnotations
 
 from metabolomix.analysis import export_contract
 from metabolomix.analysis.dataset_analysis import PreconditionError
-from metabolomix.core import session_state
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import missing_state, mztab_error
 from metabolomix.core.serialization import json_payload
+from metabolomix.tools._holder import resolve_holder
+# 極性の決め方は mztab/polarity.py が唯一の実装（ハンドルの読み込みと共有）。
+from metabolomix.mztab.polarity import dataset_polarity as _dataset_polarity
 
 __all__ = [
     "dataset_preprocess",
@@ -61,6 +63,7 @@ def dataset_preprocess(
     max_qc_rsd: float | None = None,
     impute: str = "half_min",
     min_detection_rate: float = 0.0,
+    dataset_handle: str | None = None,
 ) -> str:
     """DatasetState の定量行列に前処理レシピを適用する。
 
@@ -82,8 +85,14 @@ def dataset_preprocess(
         取り込み状況は dataset_status の `detection` を見る。
 
     成功すると session.dataset.pp_matrix に前処理済み行列が設定される。
+
+    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
-    ds = session_state.session.dataset
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    ds = holder.dataset
     if ds is None:
         return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
 
@@ -125,7 +134,8 @@ def dataset_preprocess(
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_pca(n_components: int = 5, log_transform: bool = False) -> str:
+def dataset_pca(n_components: int = 5, log_transform: bool = False,
+                dataset_handle: str | None = None) -> str:
     """前処理済み DatasetState に PCA を実行する。
 
     dataset_preprocess を先に実行しておくこと。
@@ -133,8 +143,14 @@ def dataset_pca(n_components: int = 5, log_transform: bool = False) -> str:
     log_transform: 標準化の前に log10 変換を適用する（既定 False）。
 
     ローディング全量は戻り値に載せず session.dataset.last_pca に保持する。
+
+    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
-    ds = session_state.session.dataset
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    ds = holder.dataset
     if ds is None:
         return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
 
@@ -164,6 +180,7 @@ def dataset_differential(
     log_transform: bool = True,
     group_a_label: str = "group_a",
     group_b_label: str = "group_b",
+    dataset_handle: str | None = None,
 ) -> str:
     """前処理済み DatasetState で 2 群の差次的解析（Welch t 検定 + BH-FDR）を実行する。
 
@@ -177,8 +194,14 @@ def dataset_differential(
     **log2FC は正なら group_b が高い（上昇）。** group_a が基準（対照）。
     全特徴量の結果と volcano 点列は戻り値に載せず session.dataset.last_differential
     に保持する。エクスポートは dataset_export_differential を使う。
+
+    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
-    ds = session_state.session.dataset
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    ds = holder.dataset
     if ds is None:
         return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
 
@@ -218,7 +241,8 @@ def dataset_differential(
     structured_output=False)
 def dataset_export_differential(output_path: str,
                                 result_id: str | None = None,
-                                apply_curation: bool = True) -> str:
+                                apply_curation: bool = True,
+                                dataset_handle: str | None = None) -> str:
     """指定した差次的結果を InChIKey 付きの 1 ファイルへ書き出す。
 
     先に dataset_preprocess → dataset_differential を実行しておくこと。
@@ -245,8 +269,14 @@ def dataset_export_differential(output_path: str,
     ontology と msi_level は mzTab-M に対応物が無いため空欄で、その旨をメタ行に
     書く（空欄を「該当なし」と読み違えさせない）。メタ行には result_id と
     preprocess_id も入るので、あとから「どの計算の出力か」を辿れる。
+
+    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
-    ds = session_state.session.dataset
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    ds = holder.dataset
     if ds is None:
         return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
 
@@ -305,7 +335,7 @@ def dataset_export_differential(output_path: str,
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=True),
     structured_output=False)
-def dataset_set_sample_metadata(manifest_path: str) -> str:
+def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None = None) -> str:
     """実験情報シート(sample-manifest.v1)を読み込み、検証してから DatasetState へ
     一括適用する（spec §7.3）。
 
@@ -326,8 +356,14 @@ def dataset_set_sample_metadata(manifest_path: str) -> str:
     組み立てる）とは別に、比較を明示するのは pipeline 側の役割になる——群名だけで
     対照/処置の向きを決めない・QC/blank/unknown/include=false を混ぜない・完全交絡を
     止める、という前提検証は `resolve_comparison`/`run_comparison`（内部関数）が持つ。
+
+    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
-    ds = session_state.session.dataset
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    ds = holder.dataset
     if ds is None:
         return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
 
@@ -377,7 +413,8 @@ def _count_roles(roles: dict, sample_names: list[str]) -> dict:
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_statistic(specification: dict, matrix_result_id: str) -> str:
+def dataset_statistic(specification: dict, matrix_result_id: str,
+                      dataset_handle: str | None = None) -> str:
     """v2 の統計（welch / anova_tukey / pca）を、名指しした解析行列に実行する。
 
     specification: `analysis_recipe.statistics` の1要素と同じ形
@@ -392,8 +429,14 @@ def dataset_statistic(specification: dict, matrix_result_id: str) -> str:
     検定できた feature だけ。v1 の既定値・数値契約は変更していない。
 
     全量（feature ごとの結果）は戻り値に載せず session に保持する。
+
+    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
-    ds = session_state.session.dataset
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    ds = holder.dataset
     if ds is None:
         return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
     if not getattr(ds, "analysis_matrices", None):
@@ -412,8 +455,7 @@ def dataset_statistic(specification: dict, matrix_result_id: str) -> str:
         return json_payload({"error": {"code": exc.code, "message": str(exc.message),
                                        "details": exc.details}})
 
-    session_state.session.dataset.results[
-        f"stat_{result.get('statistic_id')}"] = result
+    ds.results[f"stat_{result.get('statistic_id')}"] = result
     payload = {k: v for k, v in result.items() if k != "features"}
     payload["status"] = "success"
     payload["n_features"] = len(result.get("features") or [])
@@ -424,7 +466,8 @@ def dataset_statistic(specification: dict, matrix_result_id: str) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_build_matrix(recipe: dict, recipe_id: str = "default") -> str:
+def dataset_build_matrix(recipe: dict, recipe_id: str = "default",
+                         dataset_handle: str | None = None) -> str:
     """v2 の解析行列（analysis-matrix.v1）を、セッションの DatasetState から1本作る。
 
     recipe: profile の `matrix_recipes` の1要素と同じ形
@@ -445,8 +488,14 @@ def dataset_build_matrix(recipe: dict, recipe_id: str = "default") -> str:
 
     値そのものは戻り値に載せず session に保持する。`dataset_statistic` へは
     戻り値の `matrix_id` を渡す。
+
+    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
-    ds = session_state.session.dataset
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    ds = holder.dataset
     if ds is None:
         return _missing("dataset",
                         "DatasetState がありません。先に dataset_load を実行してください。")
@@ -549,46 +598,6 @@ def _table(rows: list[dict], columns, *, digits: dict | None = None,
     return format_spots_as_table(cells, columns=list(columns)) if cells else ""
 
 
-def _dataset_polarity(ds) -> tuple[str | None, str, list[str]]:
-    """データセットの極性・その出所（`job_declared` / `adduct_majority` / `unknown`）・注記。
-
-    ジョブの宣言極性を優先し、mzTab-M の SML 付加体の多数決は裏取りに使う（spec §7）。
-    両方あって食い違えば宣言を使い、食い違いを注記する。
-    """
-    notes: list[str] = []
-    declared = None
-    if getattr(ds, "job_path", None):
-        from metabolomix.console import job_manager
-        try:
-            declared = job_manager.load_job(Path(ds.job_path)).polarity
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            notes.append(f"ジョブ記録を読めず、宣言極性を使っていない（{exc}）。")
-        if declared is not None and declared not in _POLARITIES:
-            notes.append(f"ジョブの宣言極性 {declared!r} を解釈できず、使っていない。")
-            declared = None
-
-    from metabolomix.console.output_collector import read_adduct_polarity
-    majorities = {read_adduct_polarity(path)["adduct_majority"]
-                  for path in (getattr(ds, "source_files", None) or {})}
-    majorities.discard(None)
-    majority = next(iter(majorities)) if len(majorities) == 1 else None
-    if len(majorities) > 1:
-        notes.append("読み込んだ mzTab-M の付加体の多数決が陽陰に割れたので、多数決は使っていない。")
-
-    if declared is not None:
-        if majority is not None and majority != declared:
-            notes.append(
-                f"ジョブの宣言極性（{declared}）と mzTab-M の付加体の多数決（{majority}）が"
-                "食い違う。宣言を使った。")
-        return declared, "job_declared", notes
-    if majority is not None:
-        return majority, "adduct_majority", notes
-    notes.append(
-        "データセットの極性を決められなかった（ジョブの宣言も mzTab-M の付加体の多数決も無い）。"
-        "目標の polarity による適用判定（not_applicable）はしていない。")
-    return None, "unknown", notes
-
-
 def _curation_note(ds) -> str | None:
     """キュレーションのフラグがあれば「反映していない」注記。読めなくても検索は止めない。
 
@@ -644,6 +653,8 @@ def dataset_feature_search(
     targets: list[dict] | None = None,
     result_ids: list[str] | None = None,
     max_results: int = 20,
+    with_group_labels: bool = False,
+    dataset_handle: str | None = None,
 ) -> str:
     """DatasetState の特徴を探し、目的の物質に当たる特徴を規則で判定する（読み取り専用）。
 
@@ -682,8 +693,19 @@ def dataset_feature_search(
     （gap-fill を数えない。検出状態が無ければ空）。`results` に BH の母集団
     （`bh_population`）と caveat。キュレーションのフラグは反映しない（あれば `notes`）。
     欄の意味は `lipidmix://docs/output-format/mztab`。
+
+    with_group_labels: True（opt-in。再解析で使う）なら `stats` の末尾に `comparison`
+        （pipeline の比較なら comparison_id、そうでなければ `<group_b>_vs_<group_a>`）・
+        `group_a`・`group_b`・`log2fc_test_over_ref`（`log2fc` と同じ値を、比較名と同じ向きの
+        名前で）を足す。既定 False では列は変わらない。
+
+    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
-    ds = session_state.session.dataset
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    ds = holder.dataset
     if ds is None:
         return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
 
@@ -767,7 +789,8 @@ def dataset_feature_search(
         notes.append("差次的結果（2 群比較）が 1 件も無いので統計を付けていない"
                      "（dataset_differential を実行すると付く）。")
 
-    stats = feature_search.feature_stats(ds, stat_features, results)
+    stats = feature_search.feature_stats(ds, stat_features, results,
+                                         with_labels=with_group_labels)
     if any(row["detected_a"] is None for row in stats):
         if getattr(ds, "detected_mask", None) is None:
             notes.append("検出状態（gap-fill の区別）を取り込めていないので detected_a / "
@@ -775,7 +798,9 @@ def dataset_feature_search(
         else:
             notes.append("結果の試料と検出状態の列の対応を保証できず、detected_a / detected_b を"
                          "数えていない結果がある。")
-    payload["stats"] = _table(stats, feature_search.STATS_COLUMNS, digits=_STATS_DIGITS,
+    columns = (feature_search.STATS_COLUMNS_LABELED if with_group_labels
+               else feature_search.STATS_COLUMNS)
+    payload["stats"] = _table(stats, columns, digits={**_STATS_DIGITS, "log2fc_test_over_ref": 4},
                               significant=_STATS_SIGNIFICANT)
     payload["results"] = feature_search.result_summaries(ds, results)
     if targets is not None:
@@ -794,13 +819,21 @@ def dataset_feature_search(
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True), structured_output=False)
-def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curation: bool = True) -> str:
-    """指定2群結果の全特徴量と候補をv2根拠バンドルへ出力する。名前だけの候補も保持する。"""
+def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curation: bool = True,
+                                   dataset_handle: str | None = None) -> str:
+    """指定2群結果の全特徴量と候補をv2根拠バンドルへ出力する。名前だけの候補も保持する。
+
+    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
+    """
     from metabolomix.analysis.evidence_export import export_dataset_evidence
     from metabolomix.curation import apply as curation_apply
     from metabolomix.curation.flags import FlagFileError
     from metabolomix.core.atomic_io import DomainError
-    ds = session_state.session.dataset
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    ds = holder.dataset
     result = (getattr(ds,'results',None) or {}).get(result_id) if ds is not None else None
     if result is None:
         return _missing('dataset_differential_result','指定した2群結果がありません。先にdataset_differentialを実行してください。')

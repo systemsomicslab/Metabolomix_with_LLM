@@ -1,0 +1,219 @@
+{
+ "differential": {
+  "a": "group_a",
+  "b": "group_b",
+  "caveats": [
+   "交絡評価不可: バッチ情報が無いため交絡判定不可。",
+   "小n（group_a=3, group_b=3）につき検出力が限られます。",
+   "log2FC の向き: 正なら group_b が高い（上昇）、負なら group_a が高い（低下）。"
+  ],
+  "contract_version": 1,
+  "differential_contract_version": 1,
+  "kind": "two_group",
+  "log2fc_sign": "positive means group_b is higher",
+  "log2fc_threshold": 1.0,
+  "log_transform": true,
+  "n_a": 3,
+  "n_b": 3,
+  "q_threshold": 0.05,
+  "result_id": "res_X",
+  "results_note": "全特徴の結果と volcano 点列は本要約に非同梱（セッション保持）。InChIKey 付きの全行が必要なら dataset_export_differential を実行してください。",
+  "samples_a": [
+   "HC1",
+   "HC2",
+   "HC3"
+  ],
+  "samples_b": [
+   "RA1",
+   "RA2",
+   "RA3"
+  ],
+  "status": "success",
+  "summary": {
+   "n_down": 0,
+   "n_significant": 0,
+   "n_tested": 3,
+   "n_up": 0,
+   "top": []
+  }
+ },
+ "preprocess": {
+  "caveats": [
+   "この試料群には QC もブランクも含まれていないため、ブランク背景除去・QC-RSD フィルタ・QC ドリフト補正はいずれも適用できません（要求の有無によらず）。注入順があれば、PCA の run_order_correlation でドリフトの有無だけは確認できます。",
+   "この mzTab-M は注入順（MTD assay[N]-custom[...] の MS:4000089 injection sequence label）を持たないため、QC ドリフト補正は実施できません。注入順に依存する品質評価が必要なら ARF 経路（arf_preprocess）を使ってください。"
+  ],
+  "excluded_from_matrix": {},
+  "features_before": 3,
+  "features_removed_total": 0,
+  "n_features": 3,
+  "n_samples": 8,
+  "next": "dataset_pca または dataset_differential を実行してください",
+  "recipe_applied": [
+   "normalize",
+   "impute"
+  ],
+  "result_id": "res_X",
+  "role_counts": {
+   "sample": 8
+  },
+  "status": "success",
+  "steps": {
+   "impute": {
+    "method": "half_min",
+    "missing": 0
+   },
+   "normalize": {
+    "factors_finite": 8,
+    "method": "pqn",
+    "n_samples": 8,
+    "pqn_reference": "all_sample_median"
+   },
+   "qc_health": {
+    "checked": 0,
+    "failed": []
+   }
+  }
+ },
+ "search_targets": {
+  "candidates": "target_id\tfeature_id\tadduct\tadduct_tier\ttheoretical_mz\tmz\tppm\trt\tdelta_rt\tevidence\tsme_rank\tannotated_name\tannotated_inchikey\tqualified\treasons\nt1\t1\t[M]+\t1\t104.107\t104.107\t0.0\t1.2\t0.0\tsme_match\t1\tCholine\tOEYIOHPDSNJKLS-UHFFFAOYSA-N\ttrue\t",
+  "notes": [
+   "検出状態（gap-fill の区別）を取り込めていないので detected_a / detected_b は空（非ゼロ値は実測と補間を区別しない）。"
+  ],
+  "results": [
+   {
+    "bh_population": {
+     "n_features_total": 3,
+     "n_in_matrix": 3,
+     "n_tested": 3
+    },
+    "caveats": [
+     "交絡評価不可: バッチ情報が無いため交絡判定不可。",
+     "小n（group_a=3, group_b=3）につき検出力が限られます。",
+     "log2FC の向き: 正なら group_b が高い（上昇）、負なら group_a が高い（低下）。"
+    ],
+    "group_a": "group_a",
+    "group_b": "group_b",
+    "log2fc_sign": "positive means group_b is higher",
+    "n_a": 3,
+    "n_b": 3,
+    "result_id": "res_X"
+   }
+  ],
+  "rule": {
+   "polarity": "positive",
+   "polarity_source": "adduct_majority",
+   "rule_hash": "0232cb69db839621112a1bd07c1536560e2d44c41e2b44c6261773a9ff8b1b0a",
+   "targets": [
+    {
+     "adduct_tiers": [
+      [
+       "[M]+"
+      ]
+     ],
+     "applicable": true,
+     "expected_mz": 104.107,
+     "formula": null,
+     "inchikey_block": "OEYIOHPDSNJKLS",
+     "name": null,
+     "polarity": "positive",
+     "ppm": 10.0,
+     "rt_min": 1.2,
+     "rt_tol_min": 0.3,
+     "target_id": "t1",
+     "theoretical_mz": {
+      "[M]+": 104.107
+     }
+    }
+   ]
+  },
+  "stats": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\n1\tres_X\ttested\t0.7888\t0.001732\t0.005195\t11.04\t19.78\t\t",
+  "stats_source": {
+   "dataset_hash": "X",
+   "result_ids": [
+    "res_X"
+   ]
+  },
+  "targets": [
+   {
+    "adduct_tier_used": 1,
+    "counts": {
+     "by_evidence": {
+      "sme_match": 1,
+      "sml_match": 0,
+      "unannotated": 0
+     },
+     "mass": 1,
+     "qualified": 1,
+     "rt": 1
+    },
+    "reason": null,
+    "selected_adduct": "[M]+",
+    "selected_evidence": "sme_match",
+    "selected_feature_id": "1",
+    "status": "resolved",
+    "target_id": "t1",
+    "theoretical_mz": {
+     "[M]+": 104.107
+    },
+    "truncated": 0
+   }
+  ]
+ },
+ "search_window": {
+  "features": "feature_id\tmz\trt\tevidence\tname\tinchikey\tadduct\tn_sme\n1\t104.107\t1.2\tsme\tCholine\tOEYIOHPDSNJKLS-UHFFFAOYSA-N\t[M]1+\t1\n2\t184.0733\t1.25\tnone\t\t\t\t0\n3\t500.2\t5.0\tnone\t\t\t\t0",
+  "notes": [
+   "差次的結果（2 群比較）が 1 件も無いので統計を付けていない（dataset_differential を実行すると付く）。"
+  ],
+  "results": [],
+  "stats": "",
+  "stats_source": {
+   "dataset_hash": "X",
+   "result_ids": []
+  }
+ },
+ "status": {
+  "detection": {
+   "available": false,
+   "note": "mzTab-M の非ゼロ値には gap-fill による補間値が含まれ得ます。検出状態が取り込めていないため、検出率・欠測率は語れません。",
+   "reason": "no_candidate"
+  },
+  "inchikey_coverage": {
+   "by_source": {
+    "database_identifier": 1,
+    "inchi_derived": 0,
+    "msp_library": 0,
+    "none": 2,
+    "smiles_derived": 0
+   },
+   "identified_by": {
+    "none": 2,
+    "sme": 1,
+    "sml_only": 0
+   },
+   "msp_lookup": {
+    "conflicting_names": 0,
+    "file": null,
+    "resolved": 0,
+    "status": "not_applicable",
+    "unmatched": 0
+   },
+   "rdkit_available": true,
+   "total_features": 3,
+   "with_inchikey": 1
+  },
+  "n_features": 3,
+  "n_samples": 8,
+  "quantification_confidence": "unknown",
+  "quantification_measure": null,
+  "samples": "name\trole\nHC1\tsample\nHC2\tsample\nHC3\tsample\nRA1\tsample\nRA2\tsample\nRA3\tsample\nQC1\tsample\nQC2\tsample",
+  "source_files": [
+   "<TMP>\\AlignResult-1.mzTab"
+  ],
+  "source_format": "mztab",
+  "validation": {
+   "n_errors": 0,
+   "n_warnings": 0,
+   "ok": true
+  }
+ }
+}
