@@ -172,6 +172,12 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 ```
 
 入力の `target` は `{"inchikey": <InChIKey 全体か先頭 14 文字>, "formula": <任意>}`。
+InChIKey が一意に決まらない脂質の種は `{"lipid_species": "PC 18:3_16:1", "formula": <任意>}`
+（`inchikey` と排他。opt-in）で、正規化後は `{"lipid_species": "PC 34:4", "formula": …}`（GOSLIN の
+種のレベル。読み方は `lipidmix://docs/output-format/mztab` §13.8）。種の目標では、下の
+`target_in_top_rank` と `same_formula_margin` の「目標か別物か」をライブラリの記録の `name` の種で
+決める——同じ種の別の分子種（`PC 14:0_20:4`）は目標の候補で、別物には数えない。種に読めない
+名前の記録は目標とも別物とも数えない。InChIKey の規則の正規化と `rule_hash` は変わらない。
 設定した検査だけが `checks` に並ぶ（各行 `{check, status: pass|fail|not_evaluable, value, detail}`）:
 
 | 検査 | 合格の条件 | `value` |
@@ -237,10 +243,14 @@ spec:
  "max_candidates": 50}
 ```
 
-- `target` は `dataset_feature_search` の目標と同じ形（`target_id` は `claim_id`）。
+- `target` は `dataset_feature_search` の目標と同じ形（`target_id` は `claim_id`）。脂質の種の主張
+  （InChIKey が無い C1〜C4 型）は `"target": {"lipid_species": "PC 18:3_16:1", "formula": …}`。
+  `rule.target` に `lipid_species`（種のレベル）と `lipid_species_input` が載り、`rule_hash` は
+  `lipid_species_input` を入れない（綴りの違う同じ種は同じ hash）。**束の既定の特徴は種のレベルの
+  一致で選ぶので、分子種（どの鎖の組か）は確かめていない**。
 - `scan` の `ppm` × `rt_tol_min` の全組で目標照合を走らせ直す（`adduct_tiers` を渡すと
   付加体も広げる）。省略時は目標の `ppm` / `rt_tol_min` の 1 組。
-- `msms.rules` は msms-rules.v1 から `target` を除いたもの（target は主張の InChIKey・分子式）。
+- `msms.rules` は msms-rules.v1 から `target` を除いたもの（target は主張の InChIKey か脂質の種と分子式）。
 - `msms` / `relations` を省くと、その欄を作らない。
 
 結果:

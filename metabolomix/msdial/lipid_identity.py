@@ -7,6 +7,7 @@ GOSLIN による脂質名正規化、同梱表による RefMet/LIPID MAPS ID 付
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from pathlib import Path
 
 from metabolomix.msdial import peak_verification as pv
@@ -76,6 +77,40 @@ def normalize_lipid_name(name: str) -> dict:
     except Exception as exc:
         result["error"] = f"parse error: {exc}"
     return result
+
+
+_SPECIES_PARSER = None
+
+
+@lru_cache(maxsize=4096)
+def lipid_species_of(name) -> str | None:
+    """脂質名を GOSLIN の種のレベル（``LipidLevel.SPECIES``）の文字列に直す（照合の鍵）。
+
+    ``PC 18:3_16:1`` → ``PC 34:4``、``PE 16:0_18:1;O`` → ``PE 34:1;O``（修飾は残る）、
+    ``PC O-34:1`` はエーテルのまま（``PC 34:1`` とは別）。``PC P-34:1`` は GOSLIN の規約で
+    ``PC O-34:2`` になる。付加体の表記は落とす。限定子接頭辞と ``|`` は
+    `normalize_lipid_name` と同じく除く。読めない・種より粗い（クラスだけ）名前は None。
+    """
+    global _SPECIES_PARSER
+    if not isinstance(name, str) or not name.strip():
+        return None
+    clean, _ = _clean_msdial_name(name)
+    if not clean:
+        return None
+    try:
+        from pygoslin.domain.LipidLevel import LipidLevel
+        from pygoslin.parser.Parser import LipidParser
+    except Exception:  # pygoslin 未導入
+        return None
+    try:
+        if _SPECIES_PARSER is None:
+            _SPECIES_PARSER = LipidParser()
+        species = _SPECIES_PARSER.parse(clean).lipid
+        if species.info.level.value < LipidLevel.SPECIES.value:
+            return None
+        return species.get_lipid_string(LipidLevel.SPECIES)
+    except Exception:
+        return None
 
 
 def _read_tsv(path: Path) -> list[dict]:
