@@ -17,6 +17,7 @@ import pytest
 import server
 from metabolomix.core import handles, session_state
 from metabolomix.library import tools as library_tools
+from metabolomix.mztab import identity as mztab_identity
 from metabolomix.tools import dataset_analysis_tools as T
 from metabolomix.tools import handle_tools, mztab_tools
 from tests.reanalysis_fixtures import NEG_FEATURES, write_mztab
@@ -160,9 +161,17 @@ def golden_outputs(directory: Path) -> dict:
     return _scrub(out, str(directory))
 
 
-def test_without_handle_output_is_unchanged(tmp_path):
-    """ハンドルを渡さない呼び出しの戻り値は、変更前のコードで採った値と同じ。"""
+@pytest.mark.parametrize("rdkit", [True, False])
+def test_without_handle_output_is_unchanged(tmp_path, monkeypatch, rdkit):
+    """ハンドルを渡さない呼び出しの戻り値は、変更前のコードで採った値と同じ。
+
+    golden は RDKit が読める機械で採った。fixture に SMILES / InChI が無いので RDKit の有無は
+    `inchikey_coverage.rdkit_available` の旗にしか出ない——旗を固定し、どちらでも比べる
+    （Windows のアプリケーション制御が RDKit の DLL を拒否する機械でも落ちないように）。
+    """
+    monkeypatch.setattr(mztab_identity, "rdkit_available", lambda: rdkit)
     golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
+    golden["status"]["inchikey_coverage"]["rdkit_available"] = rdkit
     assert golden_outputs(tmp_path) == golden
 
 
