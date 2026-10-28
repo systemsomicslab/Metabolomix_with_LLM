@@ -157,8 +157,13 @@ def build_evidence(
 
     arf_names = [cell["name"] for cell in (normalized_spots[0]["samples"]
                                           if normalized_spots else [])]
-    position = {name: i for i, name in enumerate(arf_names)}
-    missing = [name for name in sample_names if name not in position]
+    # 名前は前後の空白を落として比べる。raw ファイル名の末尾の空白（`... P15-AA-25 .wiff`）
+    # は `.arf` の FileName に残るが、mzTab の MTD の読み取りは値を strip する
+    # （`mztab/reader.py`）ので、そのままでは同じ試料が「ARF に無い」と棄却される。
+    position: dict[str, int] = {}
+    for i, name in enumerate(arf_names):
+        position.setdefault(name.strip(), i)
+    missing = [name for name in sample_names if name.strip() not in position]
     if missing:
         return {
             "status": "rejected",
@@ -166,7 +171,7 @@ def build_evidence(
             "detail": {"missing_in_arf": missing, "n_arf_samples": len(arf_names)},
         }
 
-    columns = [position[name] for name in sample_names]
+    columns = [position[name.strip()] for name in sample_names]
     mask = np.ones((n_features, len(sample_names)), dtype=bool)
     for row, spot in enumerate(normalized_spots):
         cells = spot["samples"]

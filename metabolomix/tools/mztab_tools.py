@@ -125,6 +125,10 @@ def _handoff_lines(report: dict | None) -> list[str]:
         lines.append("comparison_id\tresult_id\tgroup_a\tgroup_b")
         lines.extend(f"{r['comparison_id']}\t{r['result_id']}\t{r['group_a']}\t{r['group_b']}"
                      for r in restored)
+        if any(r.get("evidence_attached_after") for r in restored):
+            lines.append("  - evidence_attached_after: run の計算は検出状態（.arf の gap-fill）を"
+                         "取り込む前のもの（結果に evidence_attached_after: true）。"
+                         "検出率による絞り込みは、その計算では掛かっていない。")
     if rejected:
         lines.append("- 引き継がなかった差次的結果:")
         lines.append("comparison_id\tresult_id\treason")

@@ -99,6 +99,77 @@ def test_loading_a_run_restores_its_differential_results(tmp_path):
     assert ds.handoff_report["rejected"] == []
 
 
+def _run_with_differential_before_evidence(tmp_path):
+    """差次的結果の指紋を、検出マスクを除いて（= 検出状態の取り込み前に）計算した run。
+
+    再読み込みした ds は検出マスクを持つので、取り込みが後から付いた場合の再現になる。
+    """
+    harness, job_path = _completed_run(tmp_path)
+    preprocess_ref, result = _pipeline_preprocess_and_compare(harness, job_path)
+    ds = mztab_loading.load_dataset_state(job_path=job_path)
+    assert ds.detected_mask is not None, "この fixture は検出マスクを持つ前提"
+    result = copy.deepcopy(result)
+    result["provenance"]["dataset_hash"] = result_state.dataset_fingerprint(
+        ds, include_detected=False)
+    _append_refs(harness, preprocess_ref, _persist_differential(harness, result))
+    return harness, result
+
+
+def test_restore_accepts_result_computed_before_evidence(tmp_path):
+    """run の差次的結果は検出状態の取り込み前に計算されていることがある。取り込みが
+    入っただけで捨てると、完了済みの run の統計が使えなくなる。"""
+    harness, result = _run_with_differential_before_evidence(tmp_path)
+    result_id = result["provenance"]["result_id"]
+
+    ds = session_handoff.load_run_dataset(harness.pipeline_path)
+
+    report = ds.handoff_report
+    assert report["rejected"] == [], report
+    assert [r["result_id"] for r in report["restored"]] == [result_id]
+    assert report["restored"][0]["evidence_attached_after"] is True
+    restored = ds.results[result_id]
+    assert restored["evidence_attached_after"] is True
+    assert restored["provenance"]["evidence_attached_after"] is True
+    # 戻した結果は `is_current` でも使える（統計の検索・書き出しが通る）。
+    assert result_state.is_current(ds, restored) is True
+
+
+def test_restore_still_rejects_other_mismatch(tmp_path):
+    """検出状態を除いて比べても合わない（行列の値が違う）なら従来どおり捨てる。"""
+    def other_data(result):
+        result["provenance"]["dataset_hash"] = "0" * 64
+        return result
+
+    harness, result = _run_with_differential(tmp_path, mutate=other_data)
+    result_id = result["provenance"]["result_id"]
+
+    ds = session_handoff.load_run_dataset(harness.pipeline_path)
+
+    assert result_id not in ds.results
+    assert [r["reason"] for r in ds.handoff_report["rejected"]] == ["dataset_mismatch"]
+
+
+def test_a_matrix_change_is_not_excused_by_the_evidence_rule(tmp_path):
+    """検出状態の印が付いていても、行列が違えば `is_current` は通さない。"""
+    harness, result = _run_with_differential_before_evidence(tmp_path)
+    ds = session_handoff.load_run_dataset(harness.pipeline_path)
+    restored = ds.results[result["provenance"]["result_id"]]
+    ds.feature_matrix = ds.feature_matrix + 1.0
+
+    assert result_state.is_current(ds, restored) is False
+
+
+def test_a_result_computed_with_the_same_detection_is_not_marked(tmp_path):
+    """検出状態が最初から同じなら、後から付いた印は付けない。"""
+    harness, result = _run_with_differential(tmp_path)
+
+    ds = session_handoff.load_run_dataset(harness.pipeline_path)
+
+    restored = ds.results[result["provenance"]["result_id"]]
+    assert "evidence_attached_after" not in restored
+    assert "evidence_attached_after" not in restored["provenance"]
+
+
 def test_legacy_result_without_dataset_hash_is_reported_not_restored(tmp_path):
     def drop_hash(result):
         result["provenance"].pop("dataset_hash")

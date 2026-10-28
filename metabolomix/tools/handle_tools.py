@@ -59,8 +59,26 @@ def _load(kind: str, path: str, allow_incomplete: bool):
         allow_incomplete=allow_incomplete)
 
 
-def _alignment_files(ds, arf2_path: str | None) -> tuple[str | None, str | None]:
-    """スポットの照合に使う `.arf2` と `.dcl`。決まらなければ None。"""
+def _pipeline_arf2(pipeline_path: str) -> Path | None:
+    """pipeline の run の `input/AlignResult-*.arf2`。無ければ None。
+
+    run では mzTab が `console/attempt-*/msdial/` の下、`.arf`・`.arf2`・`.dcl` が
+    `input/` にあるので、mzTab の隣を探す既定の経路では見つからない。`AlignResult-*.arf2`
+    が複数あるときは名前が最も新しい（降順で先頭の）ものを選ぶ（決定的にするため。
+    `AlignResult-<日時など>` は名前の順が新しさの順になる）。
+    """
+    candidates = sorted((Path(pipeline_path) / "input").glob("AlignResult-*.arf2"),
+                        key=lambda p: p.name, reverse=True)
+    return next((p for p in candidates if p.is_file()), None)
+
+
+def _alignment_files(ds, arf2_path: str | None, kind: str | None = None,
+                     path: str | None = None) -> tuple[str | None, str | None]:
+    """スポットの照合に使う `.arf2` と `.dcl`。決まらなければ None。
+
+    探す順: 明示の `arf2_path` → 検出状態を取り込んだ `.arf` の同じバッチ → mzTab の隣
+    → （`kind == "pipeline_path"` のとき）run の `input/AlignResult-*.arf2`。
+    """
     from metabolomix.curation import apply as curation_apply
     from metabolomix.msdial import alignment_spot
 
@@ -74,6 +92,8 @@ def _alignment_files(ds, arf2_path: str | None) -> tuple[str | None, str | None]
     if arf2 is None:
         arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p)
                                   for p in (getattr(ds, "source_files", None) or {}))), None)
+    if arf2 is None and kind == "pipeline_path" and path:
+        arf2 = _pipeline_arf2(path)
     if arf2 is None or not arf2.is_file():
         return None, None
     dcl = alignment_spot.alignment_sibling(arf2, ".dcl")
@@ -125,7 +145,8 @@ def dataset_handle_open(mztab_path: str | None = None, job_path: str | None = No
         設定に無い・極性が決まらないときはライブラリなしで開き、`library_note` に理由。
         `"none"` は読まない。
     arf2_path: スポットの照合（spot_id = SMF_ID）に使う `.arf2`。省略時は検出状態を取り込んだ
-        `.arf` の同じバッチ、無ければ mzTab-M の隣を探す。
+        `.arf` の同じバッチ、無ければ mzTab-M の隣、`pipeline_path` なら run の
+        `input/AlignResult-*.arf2`（複数あれば名前の新しいもの）を探す。
 
     同じ入力（ファイルの size・更新時刻が同じ）を開き直すと読み込み済みのものを使い回す
     （`reused_base`）。それでもハンドルどうしの状態は別々。開けるのは
@@ -158,7 +179,7 @@ def dataset_handle_open(mztab_path: str | None = None, job_path: str | None = No
             handles.registry.put_base(key, base, _signature(base, input_path))
         ds = copy.deepcopy(base)
         polarity, polarity_source, polarity_notes = dataset_polarity(ds)
-        arf2, dcl = _alignment_files(ds, arf2_path)
+        arf2, dcl = _alignment_files(ds, arf2_path, kind, path)
         handle = handles.DatasetHandle(
             ds, polarity=polarity, polarity_source=polarity_source,
             source={"kind": kind, "path": str(input_path),

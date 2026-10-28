@@ -80,20 +80,26 @@ def array_fingerprint(array) -> str:
     return h.hexdigest()
 
 
-def dataset_fingerprint(ds) -> str:
+def dataset_fingerprint(ds, include_detected: bool = True) -> str:
     """解析の入力としてのデータセットの指紋。
 
     含めるのは「入力」だけ——定量行列・特徴 ID・検体の並び・検出マスク・出所。
     派生結果（pp_matrix / last_pca / last_differential）は含めない。含めると
     結果を 1 つ計算するたびに入力が変わったことになり、無限に再計算が要る。
+
+    `include_detected=False` は検出マスクを**未取り込みの値（None）として**数える。
+    検出状態の取り込みが入る前に計算された結果の指紋と、今の ds を比べるときに使う
+    （`session_handoff` の復元・`is_current` の引き継ぎ分岐）。既定（True）の値は
+    変わらない。
     """
+    mask = getattr(ds, "detected_mask", None) if include_detected else None
     return canonical_hash({
         "matrix": array_fingerprint(getattr(ds, "feature_matrix", None)),
         "features": list(getattr(ds, "feature_ids", []) or []),
         "samples": list(getattr(ds, "sample_names", []) or []),
         "assays": list(getattr(ds, "sample_assay_ids", []) or []),
         "measure": getattr(ds, "quantification_measure", None),
-        "detected_mask": array_fingerprint(getattr(ds, "detected_mask", None)),
+        "detected_mask": array_fingerprint(mask),
         "source_files": dict(getattr(ds, "source_files", {}) or {}),
     })
 
@@ -235,6 +241,8 @@ def is_current(ds, result: dict, *, dataset_hash: str | None = None) -> bool:
     （来歴無しの「材料不足は通す」とは逆）。群の指紋だけが無い場合は、
     上の差次的結果と同じく通す。handoff の分岐は `kind == "differential"` にだけ
     当てる（それ以外の kind が handoff を持っていたら通さない）。
+    `evidence_attached_after` の印がある結果（検出状態の取り込みが入る前に計算されたもの）は、
+    データの指紋を**検出マスクを除いて**計算した今の値とも照合する。
 
     `dataset_hash` は呼び出し側が計算済みの `dataset_fingerprint(ds)`（任意）。指紋は
     行列全体の hash なので、多数の結果を続けて照合する呼び出し側（`feature_search.
@@ -253,7 +261,10 @@ def is_current(ds, result: dict, *, dataset_hash: str | None = None) -> bool:
         if recorded_data is None:
             return False
         current = dataset_hash if dataset_hash is not None else dataset_fingerprint(ds)
-        if recorded_data != current:
+        if recorded_data != current and not (
+                prov.get("evidence_attached_after")
+                and recorded_data == dataset_fingerprint(ds, include_detected=False)):
+            # 後者: 検出状態の取り込みが入る前に計算された結果（復元時に印を付けた）。
             return False
         recorded_groups = prov.get("group_fingerprint")
         return recorded_groups is None or recorded_groups == group_fingerprint(ds)

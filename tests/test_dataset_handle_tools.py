@@ -74,6 +74,56 @@ def test_every_listed_tool_accepts_dataset_handle(tmp_path):
         assert inspect.signature(tool).parameters["dataset_handle"].default is None
 
 
+def _fake_pipeline_run(tmp_path, *names: str) -> Path:
+    """`input/` に `.arf2`・`.dcl` を置いた pipeline の run の殻（中身は読まれない）。"""
+    run = tmp_path / "pipeline_x"
+    (run / "input").mkdir(parents=True)
+    for name in names:
+        (run / "input" / name).write_bytes(b"")
+    return run
+
+
+def test_handle_open_finds_pipeline_arf2(tmp_path, monkeypatch, pos_mztab):
+    """pipeline の run では mzTab は console/ の下、`.arf2`・`.dcl` は input/ にある。"""
+    from metabolomix.mztab.loading import load_dataset_state
+
+    run = _fake_pipeline_run(tmp_path, "AlignResult-1.arf2", "AlignResult-1.dcl")
+    monkeypatch.setattr(handle_tools, "_load",
+                        lambda kind, path, allow: load_dataset_state(mztab_path=pos_mztab))
+
+    out = json.loads(handle_tools.dataset_handle_open(pipeline_path=str(run), library="none"))
+
+    assert out["status"] == "success", out
+    assert out["arf2"] == "AlignResult-1.arf2"
+    assert out["dcl"] == "AlignResult-1.dcl"
+
+
+def test_handle_open_picks_newest_arf2_name_in_pipeline_input(tmp_path, monkeypatch, pos_mztab):
+    from metabolomix.mztab.loading import load_dataset_state
+
+    run = _fake_pipeline_run(tmp_path, "AlignResult-1.arf2", "AlignResult-2.arf2",
+                             "AlignResult-2.dcl")
+    monkeypatch.setattr(handle_tools, "_load",
+                        lambda kind, path, allow: load_dataset_state(mztab_path=pos_mztab))
+
+    out = json.loads(handle_tools.dataset_handle_open(pipeline_path=str(run), library="none"))
+
+    assert out["arf2"] == "AlignResult-2.arf2"
+    assert out["dcl"] == "AlignResult-2.dcl"
+
+
+def test_handle_open_without_pipeline_arf2_stays_null(tmp_path, monkeypatch, pos_mztab):
+    from metabolomix.mztab.loading import load_dataset_state
+
+    run = _fake_pipeline_run(tmp_path)
+    monkeypatch.setattr(handle_tools, "_load",
+                        lambda kind, path, allow: load_dataset_state(mztab_path=pos_mztab))
+
+    out = json.loads(handle_tools.dataset_handle_open(pipeline_path=str(run), library="none"))
+
+    assert out["arf2"] is None and out["dcl"] is None
+
+
 def test_unknown_handle_is_an_error_not_the_global_session(tmp_path, pos_mztab):
     mztab_tools.dataset_load(mztab_path=str(pos_mztab))       # 対話のセッションにはデータがある
     for tool, kwargs in _tools(tmp_path):

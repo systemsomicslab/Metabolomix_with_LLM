@@ -110,11 +110,26 @@ def _handoff_rejection(ds, provenance: dict) -> str | None:
     if recorded_data is None:
         return "legacy_result_without_dataset_hash"
     if recorded_data != result_state.dataset_fingerprint(ds):
-        return "dataset_mismatch"
+        if not _computed_before_evidence(ds, provenance):
+            return "dataset_mismatch"
     recorded_groups = provenance.get("group_fingerprint")
     if recorded_groups is not None and recorded_groups != result_state.group_fingerprint(ds):
         return "group_mismatch"
     return None
+
+
+def _computed_before_evidence(ds, provenance: dict) -> bool:
+    """結果が、検出状態（`.arf` の gap-fill）の取り込み前に計算されたものか。
+
+    取り込みが入ると検出マスクが指紋に入るので、取り込み前に計算された完了済みの
+    run の結果は指紋が必ずずれる。検出マスクを除いて計算した今の指紋と一致し、かつ
+    今の ds に検出マスクがあるときだけ、取り込みが後から付いただけとみなす
+    （行列・特徴・検体など他のどこかが違えば一致しない）。
+    """
+    if getattr(ds, "detected_mask", None) is None:
+        return False
+    return provenance.get("dataset_hash") == result_state.dataset_fingerprint(
+        ds, include_detected=False)
 
 
 def _run_preprocess_parameters(pipeline_root: Path, record: dict,
@@ -189,8 +204,17 @@ def restore_differentials(ds, pipeline_root: Path, record: dict) -> dict:
             "preprocess": _run_preprocess_parameters(
                 pipeline_root, record, provenance.get("parent_ids")),
         }
+        if result_state.dataset_fingerprint(ds) != provenance.get("dataset_hash"):
+            # 検出状態の取り込み前に計算された結果。`is_current` が同じ規則で通せるよう
+            # 来歴に印を付ける（結果の数字は変えない。検出率による絞り込みは、その計算では
+            # 掛かっていなかった——利用者へは `restored` の印で知らせる）。
+            provenance["evidence_attached_after"] = True
+            result["evidence_attached_after"] = True
         result["provenance"] = provenance
         ds.results[result_id] = result
-        restored.append({"comparison_id": comparison_id, "result_id": result_id,
-                         "group_a": result.get("a"), "group_b": result.get("b")})
+        entry = {"comparison_id": comparison_id, "result_id": result_id,
+                 "group_a": result.get("a"), "group_b": result.get("b")}
+        if result.get("evidence_attached_after"):
+            entry["evidence_attached_after"] = True
+        restored.append(entry)
     return {"restored": restored, "rejected": rejected}
