@@ -70,7 +70,7 @@ def test_defaults_filled_and_unknown_key_rejected(files):
     assert analysis["fold_change"] == "arithmetic_mean_ratio"
     assert analysis["correction"] == "bh" and analysis["bh_population"] == "matrix"
     assert analysis["matrix"] == {"schema": "matrix-recipe.v2", "steps": []}
-    assert normalized["features"] == {"all": True}
+    assert normalized["features"] == {"all": True, "merge_split": True}
     with pytest.raises(DomainError):
         A.normalize_spec(_spec(files, [MAIN], extra_key=1))
     with pytest.raises(DomainError):
@@ -248,3 +248,239 @@ def test_dataset_without_metadata_needs_groups_tsv():
     with pytest.raises(DomainError) as info:
         A.run_spec(A.normalize_spec(spec), ds)
     assert info.value.code == "GROUPS_UNAVAILABLE"
+
+
+# ---------- 割れたスポットのまとめ（merge_split）・BH の母集団 annotated ----------
+
+def _split_ds(**kwargs):
+    """CE 18:2 が最初の 2 注入だけ別スポット（1266）に割れている（injection_block）+ 割れない 2000。"""
+    from tests.test_alignment_qc import ADDUCT, ALL, FIRST_TWO, _make_ds
+
+    return _make_ds([("1265", 650.6000, 20.00, ALL - FIRST_TWO, "CE 18:2", ADDUCT),
+                     ("1266", 650.6050, 20.61, FIRST_TWO, None, ADDUCT),
+                     ("2000", 900.5000, 12.00, ALL, "PC 34:1", ADDUCT)], **kwargs)
+
+
+def _split_spec(**extra):
+    spec = {"comparison": {"reference": "A", "test": "B"},
+            "analyses": [{"analysis_id": "main", "test": {"kind": "welch"}}]}
+    spec.update(extra)
+    return spec
+
+
+def _ds_rows(ds, spec, analysis=0):
+    result = A.run_spec(A.normalize_spec(spec), ds)
+    return result, {r["feature_id"]: r for r in result["analyses"][analysis]["rows"]}
+
+
+def test_merge_split_takes_per_sample_max():
+    ds = _split_ds()
+    merged = np.maximum(ds.feature_matrix[0], ds.feature_matrix[1])     # 試料ごとに大きい方
+    result, rows = _ds_rows(ds, _split_spec(features={"all": True, "merge_split": True}))
+    assert sorted(rows) == ["1265", "2000"]                    # 最も小さい ID を残す
+    assert rows["1265"]["mean_ref"] == pytest.approx(merged[:21].mean())
+    assert rows["1265"]["mean_test"] == pytest.approx(merged[21:].mean())
+    assert rows["1265"]["p"] == pytest.approx(
+        stats.ttest_ind(np.log2(merged[21:]), np.log2(merged[:21]), equal_var=False).pvalue)
+    assert result["analyses"][0]["merge_split"] == {"merged_from": {"1265": ["1265", "1266"]},
+                                                    "skipped": []}
+    assert result["merge_split"]["enabled"] and result["merge_split"]["source"] == "find_split_pairs"
+    assert result["merge_split"]["groups"] == [["1265", "1266"]]
+
+
+def test_merge_split_false_keeps_both():
+    ds = _split_ds()
+    result, rows = _ds_rows(ds, _split_spec(features={"all": True, "merge_split": False}))
+    assert sorted(rows) == ["1265", "1266", "2000"]
+    assert rows["1265"]["mean_ref"] == pytest.approx(ds.feature_matrix[0][:21].mean())
+    assert all(r["merged_from"] is None for r in rows.values())
+    assert result["merge_split"]["enabled"] is False and "merge_split" not in result["analyses"][0]
+
+
+def test_merge_split_default_is_true():
+    assert A.normalize_spec(_split_spec())["features"] == {"all": True, "merge_split": True}
+    assert A.normalize_spec(_split_spec(features={"feature_ids": ["1265"]}))["features"] == {
+        "feature_ids": ["1265"], "merge_split": True}
+    _, rows = _ds_rows(_split_ds(), _split_spec())                  # features を書かなくても
+    assert sorted(rows) == ["1265", "2000"]
+    with pytest.raises(DomainError):                                # 型の違う値・未知のキーは拒否
+        A.normalize_spec(_split_spec(features={"all": True, "merge_split": "yes"}))
+    with pytest.raises(DomainError):
+        A.normalize_spec(_split_spec(features={"all": True, "merge": True}))
+    with pytest.raises(DomainError):                                # 効かない設定は書かせない
+        A.normalize_spec(_split_spec(features={"all": True, "merge_split": False,
+                                               "alignment_qc": "qc.json"}))
+
+
+def test_merged_from_in_rows():
+    ds = _split_ds()
+    _, rows = _ds_rows(ds, _split_spec())
+    assert rows["1265"]["merged_from"] == ["1265", "1266"]
+    assert rows["2000"]["merged_from"] is None
+    # 消えた側の ID で報告を頼んでも、残した 1 行（1 回だけ）に当たる
+    _, rows = _ds_rows(ds, _split_spec(features={"feature_ids": ["1266", "1265"]}))
+    assert list(rows) == ["1265"] and rows["1265"]["merged_from"] == ["1265", "1266"]
+    # 行の TSV に merged_from の列が出る
+    from metabolomix.tools import reanalysis_tools as R
+
+    table = R.rows_table(list(rows.values())).splitlines()
+    assert table[0].endswith("merged_from") and table[1].endswith("1265;1266")
+
+
+def test_aggregate_counts_split_group_once():
+    # C6 の型: 和に割れた 2 スポット（1185/1186）の両方が選ばれても 1 回だけ数える
+    from tests.test_alignment_qc import ADDUCT, ALL, FIRST_TWO, _make_ds
+
+    ds = _make_ds([("1185", 650.6000, 20.00, ALL - FIRST_TWO, "CE 18:2", ADDUCT),
+                   ("1186", 650.6050, 20.61, FIRST_TWO, "CE 18:2", ADDUCT),
+                   ("1187", 700.5000, 22.00, ALL, "CE 20:4", ADDUCT)])
+    merged = np.maximum(ds.feature_matrix[0], ds.feature_matrix[1])
+    by_name = {"kind": "sum", "label": "CE", "select": {"name_regex": "^CE ", "evidence": ["sme"]}}
+    by_ids = {"kind": "sum", "label": "CE", "feature_ids": ["1185", "1186", "1187"]}
+    for aggregate in (by_name, by_ids):
+        result, _ = _ds_rows(ds, _split_spec(aggregate=aggregate))
+        info = result["analyses"][0]["aggregate"]
+        assert info["summed"] == ["1185", "1187"]
+        assert info["merged_from"] == {"1185": ["1185", "1186"]}
+        assert info["members"] == ["1185", "1186", "1187"] and info["dropped"] == []
+        row = result["analyses"][0]["rows"][0]
+        assert row["mean_ref"] == pytest.approx((merged[:21] + ds.feature_matrix[2][:21]).mean())
+        off = A.run_spec(A.normalize_spec(_split_spec(
+            aggregate=aggregate, features={"all": True, "merge_split": False})), ds)
+        assert off["analyses"][0]["aggregate"]["summed"] == ["1185", "1186", "1187"]
+        assert off["analyses"][0]["rows"][0]["mean_ref"] == pytest.approx(
+            ds.feature_matrix[:, :21].sum(axis=0).mean())
+    # 比の分子・分母が同じ物質にまとまるなら、比にならない
+    with pytest.raises(DomainError):
+        _ds_rows(ds, _split_spec(aggregate={"kind": "ratio", "label": "r", "numerator": "1185",
+                                            "denominator": "1186"}))
+
+
+def test_only_alignment_qc_merge_groups_are_merged():
+    # 群ごとに別の異性体の可能性がある group_aligned は、まとめない
+    from metabolomix.analysis import alignment_qc
+    from tests.test_alignment_qc import ADDUCT, ALL, GROUPS_ALTERNATE, _make_ds
+
+    owned = {i for i, g in enumerate(GROUPS_ALTERNATE) if g == "B"}     # 群が注入順で交互
+    ds = _make_ds([("1", 500.3000, 8.0, ALL - owned, None, ADDUCT),
+                   ("2", 500.3010, 8.3, owned, None, ADDUCT)], groups=GROUPS_ALTERNATE)
+    (pair,) = alignment_qc.find_split_pairs(ds)["pairs"]
+    assert pair["type"] == "group_aligned" and not pair["mergeable"]
+    result, rows = _ds_rows(ds, _split_spec())
+    assert sorted(rows) == ["1", "2"] and result["merge_split"]["groups"] == []
+    assert all(r["merged_from"] is None for r in rows.values())
+
+
+def test_alignment_qc_json_is_used_and_fingerprinted(tmp_path):
+    from metabolomix.analysis import alignment_qc
+
+    ds = _split_ds()
+    path = tmp_path / "alignment_qc_pos.json"
+    path.write_text(json.dumps(alignment_qc.find_split_pairs(ds)), encoding="utf-8")
+    spec = _split_spec(features={"all": True, "alignment_qc": str(path)})
+    result, rows = _ds_rows(ds, spec)
+    assert rows["1265"]["merged_from"] == ["1265", "1266"]
+    assert result["merge_split"]["source"] == "alignment_qc"
+    assert len(result["input_fingerprint"]["files"]["alignment_qc"]) == 64
+    live = A.run_spec(A.normalize_spec(_split_spec()), ds)
+    assert result["merge_split"]["groups_hash"] == live["merge_split"]["groups_hash"]
+    assert result["rule_hash"] == live["rule_hash"]               # 置き場所・出どころでは変わらない
+    # 空の merge_groups の JSON ならまとめない（まとめの判断は JSON の側）
+    path.write_text(json.dumps({"schema": "alignment-qc.v1", "merge_groups": []}), encoding="utf-8")
+    _, rows = _ds_rows(ds, spec)
+    assert sorted(rows) == ["1265", "1266", "2000"]
+    path.write_text("{}", encoding="utf-8")
+    with pytest.raises(DomainError) as info:
+        _ds_rows(ds, spec)
+    assert info.value.code == "ANALYSIS_INPUT_INVALID"
+
+
+def test_group_dropped_by_recipe_filter_is_not_merged_and_reported():
+    # recipe の篩で片方（1266。検出が 2 試料）が落ちたら、列は 1 つしか残らない → まとめない
+    ds = _split_ds(detected=True)
+    recipe = {"steps": ["detection_filter"],
+              "detection_filter": {"basis": "detected", "min_rate": {"sample": 0.5}}}
+    spec = _split_spec(analyses=[{"analysis_id": "main", "test": {"kind": "welch"},
+                                  "matrix": recipe}])
+    result, rows = _ds_rows(ds, spec)
+    assert sorted(rows) == ["1265", "2000"] and rows["1265"]["merged_from"] is None
+    assert result["analyses"][0]["merge_split"] == {"merged_from": {},
+                                                    "skipped": [["1265", "1266"]]}
+
+
+def test_rule_hash_changes_with_merge_split():
+    ds = _split_ds()
+    on = A.run_spec(A.normalize_spec(_split_spec()), ds)
+    off = A.run_spec(A.normalize_spec(_split_spec(features={"all": True, "merge_split": False})), ds)
+    assert on["rule_hash"] != off["rule_hash"]
+    normalized = A.normalize_spec(_split_spec())
+    # 使った群の一覧が変われば（同じ spec でも）別の規則
+    hashes = {A.rule_hash(normalized, [["1", "2"]]), A.rule_hash(normalized, [["1", "3"]]),
+              A.rule_hash(normalized, [])}
+    assert len(hashes) == 3
+    assert A.rule_hash(normalized, [["2", "1"]]) == A.rule_hash(normalized, [["1", "2"]])
+    assert on["merge_split"]["groups_hash"] == A.merge_groups_hash([["1266", "1265"]])
+
+
+def test_merge_split_is_a_no_op_for_tsv_input(files):
+    # 外部の行列にはアライメントが無い（較正用）。merge_split は何もせず、hash にも入らない
+    on = _run(_spec(files, [MAIN], features={"all": True, "merge_split": True}))
+    off = _run(_spec(files, [MAIN], features={"all": True, "merge_split": False}))
+    assert on["merge_split"]["enabled"] is False and on["merge_split"]["groups"] == []
+    assert on["rule_hash"] == off["rule_hash"]
+    assert on["analyses"] == off["analyses"] and "merge_split" not in on["analyses"][0]
+    assert all(r["merged_from"] is None for r in on["analyses"][0]["rows"])
+    with pytest.raises(DomainError):
+        A.normalize_spec(_spec(files, [MAIN], features={"all": True, "alignment_qc": "x.json"}))
+
+
+def _annotated_ds():
+    from tests.test_alignment_qc import ADDUCT, ALL, _make_ds
+
+    names = ["PC 34:1", None, "PC 36:2", None, "TG 52:3"]
+    ds = _make_ds([(str(k), 300.0 + 100 * k, 2.0 + k, ALL, name, ADDUCT)
+                   for k, name in enumerate(names, start=1)])
+    rng = np.random.default_rng(7)
+    shift = np.outer([0.0, 0.1, 0.5, 0.0, 0.9], np.arange(42) >= 21)
+    ds.feature_matrix = np.exp(rng.normal(8.0, 0.5, size=(5, 42)) + shift)
+    return ds
+
+
+def test_bh_population_annotated():
+    from metabolomix.analysis import spec_statistics
+
+    ds = _annotated_ds()
+    analyses = [{"analysis_id": "all", "test": {"kind": "welch"}},
+                {"analysis_id": "ann", "test": {"kind": "welch"}, "bh_population": "annotated"}]
+    result = A.run_spec(A.normalize_spec(_split_spec(analyses=analyses)), ds)
+    whole = {r["feature_id"]: r for r in result["analyses"][0]["rows"]}
+    ann = {r["feature_id"]: r for r in result["analyses"][1]["rows"]}
+    assert result["analyses"][0]["bh_population_n"] == 5
+    assert result["analyses"][1]["bh_population_n"] == 3
+    assert ann["2"]["q"] is None and ann["4"]["q"] is None        # SME の無い特徴は母集団の外
+    expected = spec_statistics.bh([whole[f]["p"] for f in ("1", "3", "5")])
+    assert [ann[f]["q"] for f in ("1", "3", "5")] == pytest.approx(expected)
+    assert ann["1"]["p"] == whole["1"]["p"]                       # p は同じ。q だけが母集団で変わる
+    assert expected != pytest.approx([whole[f]["q"] for f in ("1", "3", "5")])
+
+
+def test_bh_population_annotated_counts_a_merged_group_by_either_member():
+    # 1265（SME あり）と 1266（SME なし）をまとめた 1 本は annotated、割れない 2000（SME あり）も
+    ds = _split_ds()
+    analyses = [{"analysis_id": "ann", "test": {"kind": "welch"}, "bh_population": "annotated"}]
+    result = A.run_spec(A.normalize_spec(_split_spec(analyses=analyses)), ds)
+    assert result["analyses"][0]["bh_population_n"] == 2
+    # 残る ID（小さい方）が SME なしでも、相手に SME があれば母集団に入る
+    ds.feature_candidates["1265"] = []
+    ds.feature_candidates["1266"] = [{"rank": 1, "chemical_name": "CE 18:2", "adduct": "[M+H]1+"}]
+    result = A.run_spec(A.normalize_spec(_split_spec(analyses=analyses)), ds)
+    assert result["analyses"][0]["bh_population_n"] == 2
+    # どちらにも SME が無ければ入らない
+    ds.feature_candidates["1266"] = []
+    result = A.run_spec(A.normalize_spec(_split_spec(analyses=analyses)), ds)
+    assert result["analyses"][0]["bh_population_n"] == 1
+
+
+def test_bh_population_annotated_needs_a_dataset(files):
+    with pytest.raises(DomainError):
+        A.normalize_spec(_spec(files, [{**MAIN, "bh_population": "annotated"}]))

@@ -68,7 +68,7 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
  "comparison": {"reference": "HC", "test": "RA"},
  "injection_order": null,
  "covariates": null,
- "features": {"all": true},
+ "features": {"all": true, "merge_split": true},
  "aggregate": null,
  "analyses": [{"analysis_id": "main",
                "matrix": {"steps": ["detection_filter", "impute", "normalize", "drift_correct", "qc_rsd_filter"], "...": "§3"},
@@ -84,7 +84,7 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 | `comparison` | 必須 | `reference`（基準）と `test`（比較）の群の名前。比較名は `<test>_vs_<reference>` |
 | `injection_order` | `null` | ドリフト補正の注入順。`{"source": "metadata"}` か TSV `{"source": "tsv", "path", "sample_column", "order_column": "order"}` |
 | `covariates` | `null` | OLS の共変量の TSV `{"path", "sample_column": "sample", "missing": "drop" \| "error", "columns": [{"name", "type": "numeric"} \| {"name", "type": "categorical", "reference"}]}`。カテゴリは基準の水準に対する 0/1 の列に符号化する |
-| `features` | `{"all": true}` | 報告する特徴（`{"feature_ids": [...]}` で絞る）。BH の母集団は `bh_population` が決める |
+| `features` | `{"all": true, "merge_split": true}` | 報告する特徴（`{"feature_ids": [...]}` で絞る）と、割れたスポットのまとめ（下の「割れたスポットのまとめ」）。BH の母集団は `bh_population` が決める。`merge_split` は無ければ true（v8 の既定）、`alignment_qc` は `dataset_alignment_qc` の `output_path` の JSON のパス（任意） |
 | `aggregate` | `null` | 1 本に集約して検定する。`{"kind": "sum", "label", "feature_ids": [...]}`・`{"kind": "sum", "label", "select": {"name_regex", "evidence": ["sme"]}}`（クラスの主張）・`{"kind": "ratio", "label", "numerator", "denominator"}`（比の主張） |
 
 解析（`analyses[]`）:
@@ -97,8 +97,26 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 | `test.covariates` | `[]` | `ols` で使う共変量の名前（`covariates.columns` の部分集合） |
 | `fold_change` | `arithmetic_mean_ratio` | `arithmetic_mean_ratio`（変換前の算術平均の比 test/ref）・`geometric_mean_ratio`（log2 の平均の差） |
 | `correction` | `bh` | `bh`・`none` |
-| `bh_population` | `matrix` | `matrix`（その解析の行列で検定できた全特徴）・`reported`（報告する特徴だけ）。検定できない特徴は母集団に入れない |
+| `bh_population` | `matrix` | `matrix`（その解析の行列で検定できた全特徴）・`reported`（報告する特徴だけ）・`annotated`（SME のある特徴 = `ds.feature_candidates` に候補のある特徴だけ。論文が同定した種だけで補正したと読めるときの二次解析用）。検定できない特徴は母集団に入れない。`annotated` の母集団の外の特徴は、報告しても `q` は null。まとめた特徴は元のどちらかに SME があれば母集団に入る。外部の行列（SME を持たない）には使えない |
 | `thresholds` | すべて `null` | `p`・`q` は「未満」、`fc` は `|log2fc| ≥ log2(fc)`。null の閾値は見ない |
+
+**割れたスポットのまとめ（`features.merge_split`、既定 true）。** MS-DIAL のアライメントが 1 つの
+物質を 2 スポットに割ると、片方の「無い」試料に gap-fill の背景が入り、群の差でもない差が出る。
+`merge_split` が真なら、**recipe の後・集約と検定の前**に、割れた 2 スポットを試料ごとの大きい方の
+値（NaN は無視）の 1 列にまとめ、列の ID は 2 スポットのうち最も小さい特徴 ID にする。
+まとめるのは `alignment_qc`（§9）の `merge_groups`（互いに最も近い mergeable な組。常に 2 スポット）
+だけで、`features.alignment_qc` に `dataset_alignment_qc` の JSON を渡せばその群、無ければその場で
+`find_split_pairs`（既定の値）を回す。`group_aligned` などの mergeable でない組はまとめない。
+まとめるのは行列全体なので、`bh_population=matrix` の母集団も、まとめた後の特徴の数になる。
+報告する特徴（`features.feature_ids`）に消えた側の ID を書けば、残した 1 行（`merged_from` 付き）に当たる
+（両方書いても 1 行）。`aggregate` の `feature_ids`・`select`・比の分子と分母も同じ置き換えをしてから和・
+比をとるので、割れた 2 スポットが両方選ばれても 1 回だけ数える（`aggregate.members` は選んだままの
+並び、`summed` はまとめた後の並び、`aggregate.merged_from` は選んだ特徴のうちまとめたもの。比の分子と
+分母が同じ物質にまとまるなら `ANALYSIS_SPEC_INVALID`）。recipe の篩（検出率・QC の RSD）で片方が
+落ちた群は、列が 2 つ残らないのでまとめず、解析の `merge_split.skipped` に挙げる（recipe の段は
+まとめる前の特徴で走る）。外部の行列（`input.source=tsv`）にはアライメントが無く、`merge_split` は
+何もしない（`features.alignment_qc` と `bh_population=annotated` は `ANALYSIS_SPEC_INVALID`）。
+`merge_split=false` にすると 2 スポットのまま検定する（`alignment_qc` は書けない）。
 
 **試料の照合は完全一致。** 群の TSV は行列の試料と過不足なく一致しなければ
 `SAMPLE_MISMATCH`（欠け・余り・重複を名前で挙げる）。注入順・共変量の TSV は行列の試料を
@@ -119,11 +137,18 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 | `beta_log2` | OLS の群の係数（変換後の尺度。log2 なら log2 の差） |
 | `direction` | `test_higher` / `ref_higher`（OLS は `beta_log2`、ほかは FC の向き） |
 | `meets_thresholds` | 与えた閾値をすべて満たすか（閾値が無ければ null）。**再現の判定ではない** |
+| `merged_from` | 割れた 2 スポットをまとめた特徴だけ、まとめた特徴 ID（小さい順。`feature_id` は先頭 = 残した最小の ID）。ほかは null（TSV では `;` 区切り） |
 
-解析ごとに `matrix`（`n_features_in`・`n_features_out`・段ごとの報告 `steps`）、
-`bh_population_n`、集約なら `aggregate`（和: `members`・`summed`・`dropped`）、OLS なら
-`covariate_excluded_samples`。結果の全体に `spec`（正規化後）・`rule_hash`・
-`input_fingerprint`（`dataset_hash`・入力の TSV ごとの sha256）・`comparison`。
+解析ごとに `matrix`（`n_features_in`・`n_features_out`（まとめる前、recipe の後）・段ごとの報告
+`steps`）、`bh_population_n`、集約なら `aggregate`（和: `members`・`summed`・`dropped`、まとめがあれば
+`merged_from`）、データセットで `merge_split` が真なら `merge_split`（`merged_from`: 残した ID → まとめた
+特徴、`skipped`: 行列に 2 つ残らずまとめなかった群）、OLS なら `covariate_excluded_samples`。
+結果の全体に `spec`（正規化後）・`rule_hash`・`merge_split`（`enabled`・`source`: `find_split_pairs` か
+`alignment_qc`・`groups`: 使った群（行列に 2 つ以上ある群）・`groups_hash`・`n_groups_given`）・
+`input_fingerprint`（`dataset_hash`・入力の TSV と `alignment_qc` の JSON ごとの sha256）・`comparison`。
+`rule_hash` は正規化した spec（パスを除く）に、データセットの入力で `merge_split` が真なら使った群の
+hash も入れる——同じ spec でも割れの組が変われば別の規則で、`merge_split` を変えても変わる
+（外部の行列では `merge_split` は hash に入らない）。
 
 ## 3. 行列の recipe（matrix-recipe.v2）
 

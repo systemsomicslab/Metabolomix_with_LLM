@@ -31,7 +31,8 @@ MAX_INLINE_ROWS = 50
 
 ROW_COLUMNS = ("feature_id", "status", "reason", "group_ref", "group_test", "n_ref", "n_test",
                "mean_ref", "mean_test", "fc_test_over_ref", "log2fc_test_over_ref",
-               "statistic", "p", "q", "beta_log2", "direction", "meets_thresholds")
+               "statistic", "p", "q", "beta_log2", "direction", "meets_thresholds",
+               "merged_from")
 _SIGNIFICANT = frozenset({"mean_ref", "mean_test", "statistic", "p", "q", "beta_log2"})
 _DECIMAL4 = frozenset({"fc_test_over_ref", "log2fc_test_over_ref"})
 
@@ -41,6 +42,8 @@ def _cell(column: str, value):
         return None
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, (list, tuple)):
+        return ";".join(str(v) for v in value)
     if isinstance(value, float) and math.isfinite(value):
         if column in _SIGNIFICANT:
             return str(float(f"{value:.4g}"))
@@ -106,7 +109,10 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     `test`（`student` / `welch` / `mannwhitney` / `ols`）・`fold_change`・`correction`・
     `bh_population`・`thresholds`）、入力は `input`（データセットか外部の行列 TSV）、
     群は `groups`（実験情報シートか TSV）、`covariates`（OLS の共変量の TSV）、
-    `aggregate`（クラスの和・2 特徴の比を 1 本の特徴として検定）。
+    `aggregate`（クラスの和・2 特徴の比を 1 本の特徴として検定）、`features`（報告する特徴と、
+    `merge_split`——割れたスポットを試料ごとに大きい方の値の 1 列にまとめてから検定する。既定 true、
+    行の `merged_from`、外部の行列では何もしない）。`bh_population` は `matrix` / `reported` /
+    `annotated`（SME のある特徴だけ）。
 
     返すのは数字と向き（`direction`）と閾値を機械的に当てた `meets_thresholds` だけで、
     再現したかの判定は返さない。結果には正規化した spec・`rule_hash`・`input_fingerprint`
@@ -155,6 +161,8 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
         }
         if "aggregate" in analysis:
             item["aggregate"] = analysis["aggregate"]
+        if "merge_split" in analysis:
+            item["merge_split"] = analysis["merge_split"]
         if "covariate_excluded_samples" in analysis:
             item["covariate_excluded_samples"] = analysis["covariate_excluded_samples"]
         if written is None:
@@ -164,6 +172,10 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
         "status": "success",
         "schema": result["schema"],
         "rule_hash": result["rule_hash"],
+        "merge_split": {"enabled": result["merge_split"]["enabled"],
+                        "source": result["merge_split"]["source"],
+                        "n_groups_used": len(result["merge_split"]["groups"]),
+                        "groups_hash": result["merge_split"]["groups_hash"]},
         "input_fingerprint": result["input_fingerprint"],
         "comparison": result["comparison"],
         "group_ref": result["group_ref"],

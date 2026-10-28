@@ -129,6 +129,17 @@ def test_analysis_run_on_handle_returns_rows_and_leaves_states(data):
     assert handles.registry.get(handle).dataset.pp_matrix is None
 
 
+def test_analysis_run_reports_merge_split_state_and_merged_from_column(data):
+    handle = _open(data)
+    out = json.loads(R.dataset_analysis_run(_spec(data), dataset_handle=handle))
+    assert out["merge_split"]["enabled"] is True and out["merge_split"]["source"] == "find_split_pairs"
+    assert out["analyses"][0]["rows"].splitlines()[0].endswith("	merged_from")
+    off = json.loads(R.dataset_analysis_run(
+        _spec(data, features={"feature_ids": ["20", "26"], "merge_split": False}),
+        dataset_handle=handle))
+    assert off["merge_split"]["enabled"] is False and off["rule_hash"] != out["rule_hash"]
+
+
 def test_analysis_run_on_session_dataset(data):
     mztab_tools.dataset_load(mztab_path=str(data["mztab"]))
     out = json.loads(R.dataset_analysis_run(_spec(data)))

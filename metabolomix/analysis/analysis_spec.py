@@ -16,13 +16,14 @@ from __future__ import annotations
 import copy
 import csv
 import hashlib
+import json
 import math
 import re
 from pathlib import Path
 
 import numpy as np
 
-from metabolomix.analysis import recipe_matrix, spec_statistics
+from metabolomix.analysis import alignment_qc, recipe_matrix, spec_statistics
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 __all__ = ["ANALYSIS_SCHEMA", "RESULT_SCHEMA", "normalize_spec", "rule_hash", "run_spec"]
@@ -30,7 +31,7 @@ __all__ = ["ANALYSIS_SCHEMA", "RESULT_SCHEMA", "normalize_spec", "rule_hash", "r
 ANALYSIS_SCHEMA = "analysis-spec.v1"
 RESULT_SCHEMA = "analysis-result.v1"
 _INVALID = "ANALYSIS_SPEC_INVALID"
-_PATH_KEYS = frozenset({"path", "matrix_path"})
+_PATH_KEYS = frozenset({"path", "matrix_path", "alignment_qc"})
 _SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]*$")
 _MISSING_TOKENS = frozenset({"", "na", "nan", "null", "none"})
 
@@ -164,19 +165,43 @@ def _normalize_covariates(raw):
 
 
 def _normalize_features(raw) -> dict:
+    """報告する特徴（`all` か `feature_ids`）と、割れたスポットのまとめ方。
+
+    `merge_split`（既定 true）は、割れた 2 スポットを試料ごとの大きい方の値で 1 つにして
+    から検定する（`alignment_qc` の `merge_groups` だけを対象にする）。`alignment_qc` は
+    `dataset_alignment_qc` が書いた JSON のパスで、無ければその場で `find_split_pairs` を回す。
+    """
     raw = raw if raw is not None else {"all": True}
-    if not isinstance(raw, dict) or len(raw) != 1:
-        raise _fail('features は {"all": true} か {"feature_ids": [...]}', field="features")
-    if "all" in raw:
-        if raw["all"] is not True:
+    if not isinstance(raw, dict):
+        raise _fail('features は {"all": true} か {"feature_ids": [...]}（と merge_split・'
+                    "alignment_qc）", field="features")
+    unknown = sorted(set(raw) - {"all", "feature_ids", "merge_split", "alignment_qc"})
+    if unknown:
+        raise _fail(f"features の未知のキー: {unknown}", field="features", unknown=unknown)
+    if "all" in raw and "feature_ids" in raw:
+        raise _fail('features は {"all": true} か {"feature_ids": [...]} のどちらか一方',
+                    field="features")
+    merge = raw.get("merge_split", True)
+    if not isinstance(merge, bool):
+        raise _fail("features.merge_split は true / false", field="features.merge_split")
+    if "alignment_qc" in raw and not merge:
+        raise _fail("features.alignment_qc は merge_split=true のときだけ使える（効かない設定を"
+                    "書かない）", field="features.alignment_qc")
+    if "feature_ids" in raw:
+        ids = raw["feature_ids"]
+        if not isinstance(ids, list) or not ids or not all(isinstance(i, str) and i for i in ids):
+            raise _fail("features.feature_ids は空でない文字列のリスト", field="features.feature_ids")
+        if len(set(ids)) != len(ids):
+            raise _fail("features.feature_ids に重複がある", field="features.feature_ids")
+        out = {"feature_ids": list(ids)}
+    else:
+        if raw.get("all", True) is not True:
             raise _fail('features は {"all": true} か {"feature_ids": [...]}', field="features")
-        return {"all": True}
-    ids = raw.get("feature_ids")
-    if not isinstance(ids, list) or not ids or not all(isinstance(i, str) and i for i in ids):
-        raise _fail("features.feature_ids は空でない文字列のリスト", field="features.feature_ids")
-    if len(set(ids)) != len(ids):
-        raise _fail("features.feature_ids に重複がある", field="features.feature_ids")
-    return {"feature_ids": list(ids)}
+        out = {"all": True}
+    out["merge_split"] = merge
+    if "alignment_qc" in raw:
+        out["alignment_qc"] = _string(raw["alignment_qc"], "features.alignment_qc")
+    return out
 
 
 def _normalize_aggregate(raw, input_source: str):
@@ -252,8 +277,8 @@ def _normalize_analysis(raw, index: int, covariate_names: set) -> dict:
         "fold_change": _choice(raw.get("fold_change", "arithmetic_mean_ratio"),
                                spec_statistics.FC_DEFINITIONS, f"{label}.fold_change"),
         "correction": correction,
-        "bh_population": _choice(raw.get("bh_population", "matrix"), ("matrix", "reported"),
-                                 f"{label}.bh_population"),
+        "bh_population": _choice(raw.get("bh_population", "matrix"),
+                                 ("matrix", "reported", "annotated"), f"{label}.bh_population"),
         "thresholds": {"p": _optional_positive(thresholds.get("p"), f"{label}.thresholds.p"),
                        "q": _optional_positive(thresholds.get("q"), f"{label}.thresholds.q"),
                        "fc": _optional_positive(thresholds.get("fc"), f"{label}.thresholds.fc")},
@@ -285,9 +310,16 @@ def normalize_spec(spec) -> dict:
         raise _fail(f"analysis_id が重複している: {ids}", field="analyses")
     aggregate = _normalize_aggregate(spec.get("aggregate"), input_["source"])
     features = _normalize_features(spec.get("features"))
-    if aggregate is not None and features != {"all": True}:
-        raise _fail("aggregate を使うときは features を書かない（報告するのは集約した 1 本）",
+    if aggregate is not None and "feature_ids" in features:
+        raise _fail("aggregate を使うときは features.feature_ids を書かない（報告するのは集約した 1 本）",
                     field="features")
+    if input_["source"] != "dataset":
+        # 外部の行列にはアライメントが無い: merge_split は何もしない（既定の true のまま通す）。
+        if "alignment_qc" in features:
+            raise _fail("features.alignment_qc はデータセットの入力でだけ使える", field="features")
+        if any(a["bh_population"] == "annotated" for a in normalized_analyses):
+            raise _fail("bh_population=annotated（SME のある特徴）はデータセットの入力でだけ使える",
+                        field="analyses")
     return {
         "schema": ANALYSIS_SCHEMA,
         "input": input_,
@@ -309,9 +341,25 @@ def _strip_paths(value):
     return value
 
 
-def rule_hash(normalized: dict) -> str:
-    """正規化した spec の hash（パスの欄を除く——置き場所が違っても同じ規則なら同じ）。"""
-    return canonical_hash(_strip_paths(normalized))
+def merge_groups_hash(groups) -> str:
+    """まとめた割れの群（特徴 ID の並びの並び）の hash。順によらない。"""
+    return canonical_hash(sorted(sorted(str(f) for f in group) for group in groups))
+
+
+def rule_hash(normalized: dict, merged_groups=None) -> str:
+    """正規化した spec の hash（パスの欄を除く——置き場所が違っても同じ規則なら同じ）。
+
+    データセットの入力で `merge_split` が真なら、実際にまとめた割れの群の hash も入れる
+    （`merged_groups`。同じ spec でも割れの組が変われば別の規則）。外部の行列にはアライメントが
+    無く `merge_split` は何もしないので、hash にも入れない。
+    """
+    material = _strip_paths(normalized)
+    if normalized["input"]["source"] != "dataset":
+        material["features"] = {k: v for k, v in material["features"].items()
+                                if k != "merge_split"}
+    elif normalized["features"]["merge_split"] and merged_groups is not None:
+        material["merged_groups_hash"] = merge_groups_hash(merged_groups)
+    return canonical_hash(material)
 
 
 # ---------- 入力 ----------
@@ -488,6 +536,73 @@ def _load(normalized: dict, ds) -> dict:
             "files": files}
 
 
+# ---------- 割れたスポットのまとめ ----------
+
+def _read_alignment_qc(path_text: str) -> tuple[dict, str]:
+    path = Path(path_text)
+    if not path.is_file():
+        raise DomainError("ANALYSIS_INPUT_NOT_FOUND",
+                          f"features.alignment_qc の JSON が見つからない: {path}",
+                          {"field": "features.alignment_qc", "path": str(path)})
+    try:
+        qc = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        raise DomainError("ANALYSIS_INPUT_INVALID",
+                          f"features.alignment_qc を JSON として読めない: {exc}",
+                          {"field": "features.alignment_qc"}) from exc
+    groups = qc.get("merge_groups") if isinstance(qc, dict) else None
+    if (not isinstance(qc, dict) or qc.get("schema") != alignment_qc.SCHEMA
+            or not isinstance(groups, list)):
+        raise DomainError("ANALYSIS_INPUT_INVALID",
+                          f"features.alignment_qc は {alignment_qc.SCHEMA}（dataset_alignment_qc の "
+                          "output_path の JSON）で、merge_groups を持つこと",
+                          {"field": "features.alignment_qc"})
+    return qc, _sha256(path)
+
+
+def _merge_plan(normalized: dict, ds, data: dict) -> dict:
+    """まとめる割れの群を決める（`merge_groups` の mergeable な組だけ。まとめの判断は
+    `alignment_qc` が持ち、ここでは足さない・広げない）。
+
+    外部の行列にはアライメントが無いので何もしない。`groups` は、行列に 2 つ以上の特徴が
+    ある群（実際に使う群）。
+    """
+    plan = {"enabled": False, "source": None, "groups": [], "groups_hash": None,
+            "n_groups_given": 0}
+    features = normalized["features"]
+    if normalized["input"]["source"] != "dataset" or not features["merge_split"]:
+        return plan
+    path = features.get("alignment_qc")
+    if path is None:
+        qc, source = alignment_qc.find_split_pairs(ds), "find_split_pairs"
+    else:
+        qc, data["files"]["alignment_qc"] = _read_alignment_qc(path)
+        source = "alignment_qc"
+    given = [[str(f) for f in group["features"]] for group in qc.get("merge_groups") or []
+             if group.get("mergeable")]
+    present = {str(f) for f in data["feature_ids"]}
+    used = sorted(sorted(group) for group in given if sum(f in present for f in group) >= 2)
+    seen: set[str] = set()
+    for group in used:
+        if seen.intersection(group):
+            raise DomainError("ANALYSIS_INPUT_INVALID",
+                              f"割れの群が特徴を共有している: {sorted(seen.intersection(group))}",
+                              {"field": "features.alignment_qc"})
+        seen.update(group)
+    return {"enabled": True, "source": source, "groups": used,
+            "groups_hash": merge_groups_hash(used), "n_groups_given": len(given)}
+
+
+def _fold_members(members: list[str], rename: dict[str, str]) -> list[str]:
+    """まとめて消えた特徴を、残った ID に置き換える（重複は 1 つ）。"""
+    out: list[str] = []
+    for fid in members:
+        fid = rename.get(fid, fid)
+        if fid not in out:
+            out.append(fid)
+    return out
+
+
 # ---------- 集約・共変量 ----------
 
 def _selected_by_name(ds, select: dict) -> list[str]:
@@ -591,19 +706,51 @@ def _meets(row: dict, thresholds: dict):
     return all(checks)
 
 
-def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: list[str] | None):
+def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: list[str] | None,
+                  merge: dict):
     matrix = recipe_matrix.build_matrix(
         data["values"], data["samples"], data["feature_ids"], data["roles"], analysis["matrix"],
         detected=data["detected"], injection_order=data["order"])
+    # 割れた 2 スポットを 1 列にする（recipe の後・集約と検定の前）。recipe の篩で片方が
+    # 落ちた群は列に 2 つ残らないので、まとめない（`skipped`）。
+    merged_from: dict[str, list[str]] = {}
+    rename: dict[str, str] = {}
+    merge_info = None
+    if merge["enabled"]:
+        merged = alignment_qc.merge_matrix_columns(matrix["values"], matrix["feature_ids"],
+                                                   merge["groups"])
+        merged_from = merged.merged_from
+        rename = {f: kept for kept, group in merged_from.items() for f in group if f != kept}
+        matrix = {**matrix, "values": merged.matrix, "feature_ids": merged.feature_ids}
+        merged_ids = {f for group in merged_from.values() for f in group}
+        merge_info = {"merged_from": merged_from,
+                      "skipped": [g for g in merge["groups"] if not merged_ids.intersection(g)]}
+    origin = {fid: merged_from.get(fid, [fid]) for fid in matrix["feature_ids"]}
     aggregate_info = None
     aggregate = normalized["aggregate"]
     if aggregate is not None:
         members = (aggregate.get("feature_ids") or
                    ([aggregate["numerator"], aggregate["denominator"]] if aggregate["kind"] == "ratio"
                     else _selected_by_name(ds, aggregate["select"])))
-        column, aggregate_info = _aggregate(matrix, aggregate, members)
+        folded = _fold_members(members, rename)
+        if aggregate["kind"] == "ratio":
+            if len(folded) < 2:
+                raise _fail("aggregate の分子と分母が、まとめた後に同じ特徴になる",
+                            field="aggregate", members=members)
+            aggregate = {**aggregate, "numerator": folded[0], "denominator": folded[1]}
+        column, aggregate_info = _aggregate(matrix, aggregate, folded)
+        if merge_info is not None:
+            # 選んだ特徴のうち割れの相手を持つものは、まとめた 1 つとして 1 回だけ数える。
+            aggregate_info["members"] = list(members)
+            aggregate_info["merged_from"] = {f: merged_from[f] for f in folded if f in merged_from}
+        used = (aggregate_info["summed"] if aggregate["kind"] == "sum"
+                else [aggregate["numerator"], aggregate["denominator"]])
+        origin = {aggregate["label"]: [o for f in used if f in origin for o in origin[f]]}
         matrix = {**matrix, "values": column[:, None], "feature_ids": [aggregate["label"]]}
+        merged_from = {}
         reported = [aggregate["label"]]
+    elif reported is not None:
+        reported = _fold_members(reported, rename)
 
     reference, test = normalized["comparison"]["reference"], normalized["comparison"]["test"]
     index = {s: i for i, s in enumerate(matrix["sample_ids"])}
@@ -654,8 +801,16 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
         }
 
     wanted = matrix["feature_ids"] if reported is None else reported
-    population = (matrix["feature_ids"] if analysis["bh_population"] == "matrix"
-                  else [f for f in wanted if f in results])
+    if analysis["bh_population"] == "matrix":
+        population = matrix["feature_ids"]
+    elif analysis["bh_population"] == "annotated":
+        # SME（`ds.feature_candidates`）のある特徴だけ。まとめた特徴は、まとめた元のどちらかに
+        # SME があれば入る。母集団の外の特徴の q は null。
+        candidates = getattr(ds, "feature_candidates", None) or {}
+        population = [f for f in matrix["feature_ids"]
+                      if any(candidates.get(o) for o in origin.get(f, [f]))]
+    else:
+        population = [f for f in wanted if f in results]
     if analysis["correction"] == "bh":
         qs = spec_statistics.bh([results[f]["p"] for f in population])
         for fid, q in zip(population, qs):
@@ -672,6 +827,7 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
                    "log2fc_test_over_ref": None, "statistic": None, "p": None, "q": None,
                    "beta_log2": None}
         row = dict(row)
+        row["merged_from"] = merged_from.get(fid)
         row["direction"] = _direction(row)
         row["meets_thresholds"] = _meets(row, analysis["thresholds"])
         rows.append(row)
@@ -688,12 +844,15 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
         out["covariate_excluded_samples"] = excluded
     if aggregate_info is not None:
         out["aggregate"] = aggregate_info
+    if merge_info is not None:
+        out["merge_split"] = merge_info
     return out
 
 
 def run_spec(normalized: dict, ds=None) -> dict:
     """正規化済みの spec を実行して analysis-result.v1 を返す（丸めない）。"""
     data = _load(normalized, ds)
+    merge = _merge_plan(normalized, ds, data)
     reported = normalized["features"].get("feature_ids")
     if reported is not None:
         unknown = [f for f in reported if f not in set(data["feature_ids"])]
@@ -712,12 +871,14 @@ def run_spec(normalized: dict, ds=None) -> dict:
 
     from metabolomix.analysis.result_state import dataset_fingerprint
 
-    analyses = [_run_analysis(a, data, normalized, ds, reported) for a in normalized["analyses"]]
+    analyses = [_run_analysis(a, data, normalized, ds, reported, merge)
+                for a in normalized["analyses"]]
     reference, test = normalized["comparison"]["reference"], normalized["comparison"]["test"]
     return {
         "schema": RESULT_SCHEMA,
         "spec": copy.deepcopy(normalized),
-        "rule_hash": rule_hash(normalized),
+        "rule_hash": rule_hash(normalized, merge["groups"] if merge["enabled"] else None),
+        "merge_split": merge,
         "input_fingerprint": {
             "dataset_hash": dataset_fingerprint(ds) if normalized["input"]["source"] == "dataset"
             else None,

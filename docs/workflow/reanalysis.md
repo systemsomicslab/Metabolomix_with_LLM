@@ -62,17 +62,24 @@
 4. │  └─ metabolomix/analysis/recipe_matrix.py  normalize_recipe()
 5. ├─ metabolomix/analysis/analysis_spec.py  run_spec()
 6. │  ├─ metabolomix/analysis/analysis_spec.py  _load()
-7. │  ├─ metabolomix/analysis/analysis_spec.py  _run_analysis()
-8. │  │  ├─ metabolomix/analysis/recipe_matrix.py  build_matrix()
-9. │  │  │  └─ metabolomix/analysis/recipe_matrix.py  knn_impute()
-10. │  │  ├─ metabolomix/analysis/analysis_spec.py  _aggregate()
-11. │  │  ├─ metabolomix/analysis/analysis_spec.py  _design()
-12. │  │  ├─ metabolomix/analysis/spec_statistics.py  two_group()
-13. │  │  ├─ metabolomix/analysis/spec_statistics.py  ols_group()
-14. │  │  ├─ metabolomix/analysis/spec_statistics.py  fold_change()
-15. │  │  └─ metabolomix/analysis/spec_statistics.py  bh()
-16. │  └─ metabolomix/analysis/analysis_spec.py  rule_hash()
-17. └─ metabolomix/tools/reanalysis_tools.py  write_result()
+7. │  ├─ metabolomix/analysis/analysis_spec.py  _merge_plan()
+8. │  │  └─ metabolomix/analysis/alignment_qc.py  find_split_pairs()
+9. │  ├─ metabolomix/analysis/analysis_spec.py  _run_analysis()
+10. │  │  ├─ metabolomix/analysis/recipe_matrix.py  build_matrix()
+11. │  │  │  └─ metabolomix/analysis/recipe_matrix.py  knn_impute()
+12. │  │  ├─ metabolomix/analysis/alignment_qc.py  merge_matrix_columns()
+13. │  │  ├─ metabolomix/analysis/analysis_spec.py  _aggregate()
+14. │  │  ├─ metabolomix/analysis/analysis_spec.py  _design()
+15. │  │  ├─ metabolomix/analysis/spec_statistics.py  two_group()
+16. │  │  ├─ metabolomix/analysis/spec_statistics.py  ols_group()
+17. │  │  ├─ metabolomix/analysis/spec_statistics.py  fold_change()
+18. │  │  └─ metabolomix/analysis/spec_statistics.py  bh()
+19. │  └─ metabolomix/analysis/analysis_spec.py  rule_hash()
+20. └─ metabolomix/tools/reanalysis_tools.py  write_result()
+
+割れたスポットのまとめ（`features.merge_split`、既定 true）は recipe の後・集約と検定の前に、
+`alignment_qc` の `merge_groups` だけに行う（`features.alignment_qc` に JSON を渡せばその群、
+無ければその場の `find_split_pairs`）。外部の行列（`input.source=tsv`）では何もしない。
 
 ## library_msms_qualify
 
