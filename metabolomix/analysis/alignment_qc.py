@@ -48,8 +48,8 @@ import numpy as np
 from metabolomix.core.atomic_io import DomainError
 
 __all__ = ["SCHEMA", "TYPES", "MergedMatrix", "find_split_pairs", "merge_matrix_columns",
-           "id_order", "names_compatible", "read_qc_file", "split_partners",
-           "usable_merge_groups"]
+           "id_order", "names_compatible", "read_qc_file", "sample_injection_order",
+           "split_partners", "usable_merge_groups"]
 
 SCHEMA = "alignment-qc.v1"
 TYPES = ("injection_block", "group_aligned", "interleaved")
@@ -152,6 +152,16 @@ def _injection_order(names: list[str], rows: list[dict | None],
     for rank, i in enumerate(ranked, start=1):
         order[i] = float(rank)
     return order, "filename"
+
+
+def sample_injection_order(ds, given: dict | None = None) -> tuple[list[float], str]:
+    """`ds.sample_names` の並びの注入順の値と、その出所（manifest / metadata / filename）。
+
+    割れの組の判定（`find_split_pairs`）と同じ規則で、質量精度の注入順の傾向
+    （`mass_accuracy.injection_trend`）が共有する。
+    """
+    names = [str(n) for n in ds.sample_names]
+    return _injection_order(names, _rows_by_sample(ds, names), given)
 
 
 def _order_label(value: float):

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+from typing import Literal
 
 from mcp.types import ToolAnnotations
 
@@ -481,12 +482,20 @@ def dataset_claim_evidence(spec: dict, dataset_handle: str | None = None,
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def dataset_mass_accuracy(band_edges: list[float] | None = None, rank: int = 1,
+                          subset: Literal["rank1", "msms_matched"] = "rank1",
                           dataset_handle: str | None = None) -> str:
     """SME（MS/MS の照合で付いた同定）の質量誤差（ppm）の分布を m/z 帯ごとに返す（再解析で使う）。
 
     band_edges: 帯の境界（理論 m/z。既定 [200] → `<200` と `≥200`）。rank: 見る SME 候補の順位
     （既定 1）。帯ごとに `n median q1 q3 within_5ppm within_10ppm`（四分位は
     `statistics.quantiles(n=4)`）。許容幅は決めない（再解析の規則で決める）。
+    subset: `rank1`（既定。rank の SME すべて）か `msms_matched`（そのうち、特徴の MS/MS が参照
+    スペクトルに照合されたもの。SML の `opt_global_spectrum_matched` が真。LBM 由来も研究室 MSP
+    由来も数える。列の無い mzTab ではエラー）。
+    `injection_trend`: 試料ごとの実測 m/z（隣接 `.arf` の検出されたセル）があれば、試料ごとの
+    誤差の中央値 `per_injection`（`sample` `injection_order` `median_ppm` `n`）と注入順との
+    `spearman_rho`（5 試料未満は null）・`n_samples`・`injection_order_source`。無ければ
+    `{"status": "unavailable"}`。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     """
     from metabolomix.analysis import mass_accuracy
@@ -504,11 +513,20 @@ def dataset_mass_accuracy(band_edges: list[float] | None = None, rank: int = 1,
                            {"field": "band_edges"})
     if isinstance(rank, bool) or not isinstance(rank, int) or rank < 1:
         return mztab_error("DATASET_BAD_REQUEST", "rank は 1 以上の整数", {"field": "rank"})
-    rows = mass_accuracy.sme_ppm(ds, rank=rank)
+    if subset not in mass_accuracy.SUBSETS:
+        return mztab_error("DATASET_BAD_REQUEST", f"subset は {list(mass_accuracy.SUBSETS)}",
+                           {"field": "subset"})
+    if subset == "msms_matched" and not mass_accuracy.has_match_information(ds):
+        return mztab_error("DATASET_BAD_REQUEST",
+                           "この mzTab の SML に opt_global_spectrum_matched が無く、MS/MS で照合された"
+                           "同定を選べない（subset=rank1 を使う）", {"field": "subset"})
+    rows = mass_accuracy.sme_ppm(ds, rank=rank, subset=subset)
     summary = mass_accuracy.band_summary(rows, [float(e) for e in edges])
-    return json_payload(round_floats({"status": "success", "rank": rank,
+    return json_payload(round_floats({"status": "success", "rank": rank, "subset": subset,
                                       "band_edges": sorted(float(e) for e in edges),
-                                      **summary}, digits=4))
+                                      **summary,
+                                      "injection_trend": mass_accuracy.injection_trend(ds, rows)},
+                                     digits=4))
 
 
 def _novel_result_stats(ds, result: dict, source: dict, *,

@@ -45,9 +45,21 @@ def write_mztab(path: Path, *, features=POS_FEATURES, samples=SAMPLES,
         lines.append(f"MTD\tassay[{i}]-ms_run_ref\tms_run[{i}]")
         lines.append(f"MTD\tassay[{i}]\t{name}")
     abundance = "\t".join(f"abundance_assay[{i}]" for i in range(1, len(samples) + 1))
-    lines.append("SMH\tSML_ID\tSMF_ID_REFS\tdatabase_identifier\tchemical_name\tadduct_ions")
+    # 特徴に `matched`（True / False / None）があれば、SML に MS-DIAL の拡張列
+    # `opt_global_ms2_presence` / `opt_global_spectrum_matched` を足し、SML に同定（rank 1 の SME の
+    # 名前と InChIKey）を書く（同定の無い SML 行は注釈にならないため）。
+    with_match = any("matched" in feature for feature in features)
+    lines.append("SMH\tSML_ID\tSMF_ID_REFS\tdatabase_identifier\tchemical_name\tadduct_ions"
+                 + ("\topt_global_ms2_presence\topt_global_spectrum_matched" if with_match else ""))
     for feature in features:
-        lines.append(f"SML\t{feature['id']}\t{feature['id']}\tnull\tnull\t{sml_adduct}")
+        first = (feature.get("sme") or [None])[0] if with_match else None
+        identity = f"{first['inchikey']}\t{first['name']}" if first else "null\tnull"
+        match = ""
+        if with_match:
+            flag = feature.get("matched")
+            match = ("\tnull\tnull" if flag is None
+                     else f"\tTrue\t{'True' if flag else 'False'}")
+        lines.append(f"SML\t{feature['id']}\t{feature['id']}\t{identity}\t{sml_adduct}{match}")
     lines.append("SFH\tSMF_ID\tSML_ID_REFS\tSME_ID_REFS\texp_mass_to_charge\t"
                  f"retention_time_in_seconds\t{abundance}")
     sme_rows = []

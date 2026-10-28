@@ -157,9 +157,12 @@
 前提: データセット（無ければ `missing_state`）。状態変更: なし。
 
 1. metabolomix/tools/reanalysis_tools.py  dataset_mass_accuracy()
-2. ├─ metabolomix/analysis/mass_accuracy.py  sme_ppm()
-3. └─ metabolomix/analysis/mass_accuracy.py  band_summary()
-4.    └─ metabolomix/analysis/mass_accuracy.py  summarize()
+2. ├─ [subset=msms_matched] metabolomix/analysis/mass_accuracy.py  has_match_information()
+3. ├─ metabolomix/analysis/mass_accuracy.py  sme_ppm()
+4. ├─ metabolomix/analysis/mass_accuracy.py  band_summary()
+5. │  └─ metabolomix/analysis/mass_accuracy.py  summarize()
+6. └─ metabolomix/analysis/mass_accuracy.py  injection_trend()
+7.    └─ metabolomix/analysis/alignment_qc.py  sample_injection_order()
 
 ## dataset_novel_candidates
 

@@ -4,7 +4,10 @@
 
 - 質量精度: SME（MS/MS の照合で付いた同定）の実測 m/z と理論 m/z の差（ppm）の分布。
   許容幅の決定はしない（再解析の規則で決める）。四分位は `statistics.quantiles(n=4)`
-  （exclusive 法）。
+  （exclusive 法）。`subset="msms_matched"` は、その特徴の MS/MS が参照スペクトルに照合された
+  同定（SML の `opt_global_spectrum_matched` が真。研究室 MSP と LBM は区別しない）に絞る。
+  注入順の傾向（`injection_trend`）は、試料ごとの実測 m/z（`ds.per_sample_mz`）の誤差の中央値と
+  注入順の Spearman 相関。
 - 新しい知見の候補: SME の同定・m/z 帯ごとの許容幅・q の閾値で絞り、除く対象を外した
   特徴の一覧。統計は 2 群比較の結果（`result_id`）か analysis-spec の解析から引く。
   割れたアライメントスポットの組（`alignment_qc` の `merge_groups`）は 1 つの物質として
@@ -17,10 +20,14 @@ import statistics
 
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
-__all__ = ["NOVEL_SCHEMA", "band_summary", "normalize_novel_spec", "novel_candidates",
-           "sme_ppm", "summarize"]
+__all__ = ["NOVEL_SCHEMA", "SUBSETS", "band_summary", "has_match_information", "injection_trend",
+           "normalize_novel_spec", "novel_candidates", "sme_ppm", "summarize"]
 
 NOVEL_SCHEMA = "novel-candidates.v1"
+#: `sme_ppm` の絞り込み。rank1 = rank の SME すべて、msms_matched = そのうち MS/MS が照合されたもの。
+SUBSETS = ("rank1", "msms_matched")
+#: 注入順との Spearman 相関を出す最小の試料数（これ未満は rho を None にする）。
+MIN_INJECTIONS_FOR_RHO = 5
 _INVALID = "NOVEL_SPEC_INVALID"
 
 
@@ -30,10 +37,27 @@ def _number(value) -> float | None:
     return float(value)
 
 
-def sme_ppm(ds, rank: int = 1) -> list[dict]:
-    """特徴ごとに、その rank の SME 候補の (実測 − 理論)/理論 × 1e6。並びは ds.feature_ids。"""
+def _spectrum_matched(ds, fid) -> bool | None:
+    return ((getattr(ds, "feature_annotations", None) or {}).get(fid) or {}).get("spectrum_matched")
+
+
+def has_match_information(ds) -> bool:
+    """SML の `opt_global_spectrum_matched` を読めた特徴が 1 つでもあるか（列が無い mzTab は偽）。"""
+    return any(_spectrum_matched(ds, fid) is not None for fid in ds.feature_ids)
+
+
+def sme_ppm(ds, rank: int = 1, subset: str = "rank1") -> list[dict]:
+    """特徴ごとに、その rank の SME 候補の (実測 − 理論)/理論 × 1e6。並びは ds.feature_ids。
+
+    `subset="msms_matched"` は、その特徴の SML の `opt_global_spectrum_matched` が真のものだけ
+    （偽・不明の特徴は入れない。LBM 由来と MSP 由来は区別しない）。
+    """
+    if subset not in SUBSETS:
+        raise ValueError(f"subset は {SUBSETS}")
     out = []
     for fid in ds.feature_ids:
+        if subset == "msms_matched" and _spectrum_matched(ds, fid) is not True:
+            continue
         for candidate in (ds.feature_candidates or {}).get(fid) or []:
             if candidate.get("rank") != rank:
                 continue
@@ -56,6 +80,43 @@ def summarize(values: list[float]) -> dict:
     return {"n": len(values), "median": statistics.median(values), "q1": q1, "q3": q3,
             "within_5ppm": sum(abs(v) <= 5 for v in values) / len(values),
             "within_10ppm": sum(abs(v) <= 10 for v in values) / len(values)}
+
+
+def injection_trend(ds, rows: list[dict]) -> dict:
+    """試料ごとの質量誤差（ppm）の中央値と、注入順との Spearman 相関。
+
+    `rows` は `sme_ppm` の行。試料の誤差は、その試料で**検出された**（gap-fill でない）セルの
+    実測 m/z（`ds.per_sample_mz`）と理論 m/z の差。注入順は割れの組の判定と同じ規則
+    （`alignment_qc.sample_injection_order`。出所を `injection_order_source` に書く）。
+    試料ごとの m/z が無ければ `{"status": "unavailable"}`。rho は、データのある試料が
+    `MIN_INJECTIONS_FOR_RHO` 未満なら None。
+    """
+    per_sample = getattr(ds, "per_sample_mz", None)
+    if per_sample is None:
+        return {"status": "unavailable"}
+    from metabolomix.analysis.alignment_qc import _order_label, sample_injection_order
+
+    names = [str(n) for n in ds.sample_names]
+    order, source = sample_injection_order(ds)
+    errors: dict[str, list[float]] = {name: [] for name in names}
+    for row in rows:
+        theo = row["theoretical_mz"]
+        for name, mz in (per_sample.get(row["feature_id"]) or {}).items():
+            if name in errors:
+                errors[name].append((mz - theo) / theo * 1e6)
+    per_injection = [{"sample": names[i], "injection_order": _order_label(order[i]),
+                      "median_ppm": statistics.median(errors[names[i]]), "n": len(errors[names[i]])}
+                     for i in sorted(range(len(names)), key=lambda i: (order[i], i))
+                     if errors[names[i]]]
+    rho = None
+    if len(per_injection) >= MIN_INJECTIONS_FOR_RHO:
+        from scipy.stats import spearmanr
+
+        value = float(spearmanr([p["injection_order"] for p in per_injection],
+                                [p["median_ppm"] for p in per_injection]).statistic)
+        rho = value if math.isfinite(value) else None      # 片方が定数なら相関は定義できない
+    return {"per_injection": per_injection, "spearman_rho": rho,
+            "n_samples": len(per_injection), "injection_order_source": source}
 
 
 def band_summary(rows: list[dict], band_edges: list[float]) -> dict:

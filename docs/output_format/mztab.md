@@ -70,10 +70,15 @@ SMF からこれらを読もうとすると常に `None` になり、「この�
 | `reliability` | `reliability` | 例: `annotated by user-defined text library` |
 | `confidence_measure` | `best_id_confidence_measure` | |
 | `ontology` | `opt_global_Ontology` | MS-DIAL の脂質サブクラス。列が無いファイルでは `None`。`pathway_project` の照合キーになる。差次的エクスポートの列には出ない |
+| `ms2_presence` | `opt_global_ms2_presence` | bool。その特徴に MS/MS が取れているか。列が無い・値が読めないときは `None`（偽ではなく不明）。どのツール戻り値にも出ない |
+| `spectrum_matched` | `opt_global_spectrum_matched` | bool。その特徴の MS/MS が参照スペクトルに照合されたか（**研究室 MSP でも LBM でも真になる。出所は区別しない**）。列が無い・値が読めないときは `None`。`dataset_mass_accuracy` の `subset="msms_matched"` が読む |
 | `confidence_value` | `best_id_confidence_value`（無ければ SME 由来の total score でフォールバック。下記） | float |
 | `confidence_measures` | SME の `id_confidence_measure[2..8]` | dict。**どのツール戻り値にも出ない**（下記） |
 | `inchikey` | 導出 | `smiles` 経由（RDKit）か、`MspDB:<名前>` を研究室 MSP の表で引いて到達しうる（下記・§13.6） |
 | `inchikey_source` | 導出 | `msp_library` / `smiles_derived` / `none` |
+
+曖昧な注釈（1 つの特徴に SML が複数行当たる。下記）も `ms2_presence` / `spectrum_matched` を持つ。
+どの行の同定が正しいかは決めないが、行のどれかが真なら真、全部が偽なら偽、全部が不明なら `None`。
 
 **`confidence_value` のフォールバック（Minor 10）**: SML 行が `best_id_confidence_value`
 を持たない（実 mzTab で稀ではない: Text DB 経由でない同定はスコアが SME 側にしか
@@ -186,6 +191,11 @@ mzTab-M の `abundance_assay[N]` は非ゼロでも実測ピークか gap-fill �
 | `reason` | `source is None` のときだけ。`no_candidate` ほか |
 | `n_cells` / `n_detected` / `gap_filled_rate` | 取り込めたときの内訳 |
 | `join` | 接合の検証内訳（スポット数一致・m/z 差） |
+
+取り込めたときは、試料ごとの実測 m/z も `ds.per_sample_mz`（特徴 ID → {試料名: m/z}）に載る。
+**その試料で検出された（gap-fill でない）セルだけ**（補間値の m/z は実測ではない）。検出された
+セルが 1 つも無い特徴は持たない。取り込めていないときは `None`。検出マスクと違い**データセットの
+指紋（`dataset_fingerprint`）には入らない**（入力ではなく付随の証拠。質量精度の注入順の傾向だけが読む）。
 
 **`source is None` を「gap-fill が無い」と読まないこと。** 取り込めていないだけで、
 その mzTab-M の非ゼロ値には補間値が混じり得る。この状態では検出率・欠測率を語れず、

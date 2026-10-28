@@ -167,6 +167,12 @@ class DatasetState:
         # None のまま残し、feature_qc に理由を書く（0 件と混同させない）。
         self.detected_mask = None
         self.feature_qc: dict = {}
+        # per_sample_mz: 特徴 ID → {試料名: その試料で**検出された**（gap-fill でない）セルの m/z}。
+        # 隣接 `.arf` の注入ごとの実測 m/z（`evidence.apply_evidence` が載せる）。質量精度の
+        # 注入順の傾向（`dataset_mass_accuracy` の `injection_trend`）の材料。指紋には入れない
+        # （検出マスクと違い入力ではなく付随の証拠。`result_state.dataset_fingerprint`）。
+        # 取り込めなかった場合は None（空の辞書と混同させない）。
+        self.per_sample_mz: dict[str, dict[str, float]] | None = None
 
         # --- ジョブ由来フィールド（dataset_load(job_path=...) で設定） ---
         # job_path: analysis-job.json の絶対パス。mzTab-M を直接指定した場合は None。
@@ -633,6 +639,14 @@ _SML_TEXT_FIELDS = {
     "ontology": "opt_global_Ontology",
 }
 
+#: SML の MS-DIAL 拡張列のうち真偽で持つもの。`spectrum_matched` は、その特徴の MS/MS が
+#: 参照スペクトル（研究室 MSP でも LBM でも）に照合されたこと——質量精度を MS/MS で照合した
+#: 同定に絞る材料（`analysis/mass_accuracy.py`）。列が無い mzTab では None（偽ではなく不明）。
+_SML_FLAG_FIELDS = {
+    "ms2_presence": "opt_global_ms2_presence",
+    "spectrum_matched": "opt_global_spectrum_matched",
+}
+
 
 def _build_feature_annotations(sml_rows, known_feature_ids: set, *,
                                msp_table=None, msp_counts: dict | None = None
@@ -660,6 +674,8 @@ def _build_feature_annotations(sml_rows, known_feature_ids: set, *,
             for key, column in _SML_TEXT_FIELDS.items():
                 entry[key] = row.get(column)
             entry["confidence_value"] = _to_float(row.get("best_id_confidence_value"))
+            for key, column in _SML_FLAG_FIELDS.items():
+                entry[key] = _to_flag(row.get(column))
             # inchi は保持しないが、導出の材料としては渡す（他実装が書く余地を残す）。
             ik, src = _resolve_inchikey(row.get("database_identifier"),
                                         row.get("inchi"), row.get("smiles"),
@@ -679,10 +695,14 @@ def _build_feature_annotations(sml_rows, known_feature_ids: set, *,
         # 重複なし・SML 行の出現順）。`inchikey` キーは持たない——書き出しは
         # 曖昧な注釈を未注釈として扱い、単一の InChIKey を前提にしているため。
         inchikeys = list(dict.fromkeys(e["inchikey"] for e in entries if e["inchikey"]))
+        # どの SML 行の同定が正しいかは決めないが、MS/MS の有無・照合はどれかが真なら真
+        # （全部が不明なら不明）。
+        flags = {key: _any_flag([e[key] for e in entries]) for key in _SML_FLAG_FIELDS}
         annotations[fid] = {"ambiguous": True,
                             "sml_ids": [e["sml_id"] for e in entries],
                             "name": None,
-                            "inchikeys": inchikeys}
+                            "inchikeys": inchikeys,
+                            **flags}
 
     warnings: list[str] = []
     if ambiguous:
@@ -700,6 +720,22 @@ def _to_int(v) -> int | None:
         return int(str(v).strip())
     except (TypeError, ValueError, AttributeError):
         return None
+
+
+def _to_flag(v) -> bool | None:
+    """mzTab の真偽の文字列（MS-DIAL は `True` / `False`）。読めない・null は None。"""
+    text = str(v).strip().casefold() if v is not None else ""
+    if text in ("true", "1"):
+        return True
+    if text in ("false", "0"):
+        return False
+    return None
+
+
+def _any_flag(values: list[bool | None]) -> bool | None:
+    if any(v is True for v in values):
+        return True
+    return False if any(v is False for v in values) else None
 
 
 def _to_float(v: str | None) -> float | None:

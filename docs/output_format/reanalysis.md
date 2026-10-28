@@ -322,6 +322,27 @@ spec:
 `n`・`median`・`q1`・`q3`（`statistics.quantiles(n=4)` の exclusive 法）・`within_5ppm`・
 `within_10ppm`（|ppm| ≤ 5・10 の割合）。n<2 の帯は `n` だけ。**許容幅は決めない**。
 
+`subset`（既定 `rank1`）: `rank1` は `rank` 位の SME すべて。`msms_matched` はそのうち、その特徴の
+MS/MS が参照スペクトルに照合されたもの（SML の `opt_global_spectrum_matched` が真。mzTab-M の
+SML の列は `docs/output_format/mztab.md` §13.3。**研究室 MSP と LBM の同定を区別せず両方を数える**。
+偽・不明の特徴は入らない）。SML にその列が無い mzTab では `DATASET_BAD_REQUEST`（`field: subset`）。
+戻り値に `subset` を書く。
+
+`injection_trend`（選んだ `subset` の SME について）: 試料ごとの質量誤差の、注入順との関係。
+試料の誤差は、**その試料で検出された（gap-fill でない）セル**の実測 m/z と理論 m/z の差
+（ppm。`ds.per_sample_mz`。隣接 `.arf` を取り込めたときだけある）。
+
+| キー | 意味 |
+|---|---|
+| `per_injection` | `[{sample, injection_order, median_ppm, n}]`（注入順の昇順。`n` はその試料で使えた特徴の数。1 つも無い試料は載せない） |
+| `spearman_rho` | `injection_order` と `median_ppm` の Spearman の ρ。データのある試料が 5 未満、または片方が定数なら `null` |
+| `n_samples` | `per_injection` の件数 |
+| `injection_order_source` | 注入順の出所（`manifest` / `metadata` / `filename`。§9 の `alignment_qc` と同じ規則） |
+
+試料ごとの m/z が無い（`.arf` を取り込めていない）ときは `{"status": "unavailable"}` だけ。
+ρ が 0 に近いことは「ずれが無い」ではない——ずれが注入順に単調でないだけのこともある
+（`per_injection` の `median_ppm` を見る）。
+
 `dataset_novel_candidates(spec)`（novel-candidates.v1）:
 
 ```json

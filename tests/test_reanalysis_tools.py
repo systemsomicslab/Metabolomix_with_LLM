@@ -198,6 +198,91 @@ def test_mass_accuracy_by_band(data):
     assert high["n"] == 1
 
 
+#: SML の `opt_global_spectrum_matched` を持つ合成の特徴（ppm はそれぞれ +2 / +8 / -3、1 つは同定なし）。
+MATCH_FEATURES = (
+    {"id": "1", "mz": 200.0, "rt": 1.0, "values": [10] * 8, "matched": True,
+     "sme": [{"name": "A", "inchikey": "AAAAAAAAAAAAAA-UHFFFAOYSA-N", "formula": "C1", "adduct": "[M+H]1+",
+              "theo": 200.0, "exp": 200.0004}]},
+    {"id": "2", "mz": 300.0, "rt": 2.0, "values": [10] * 8, "matched": False,
+     "sme": [{"name": "B", "inchikey": "BBBBBBBBBBBBBB-UHFFFAOYSA-N", "formula": "C2", "adduct": "[M+H]1+",
+              "theo": 300.0, "exp": 300.0024}]},
+    {"id": "3", "mz": 400.0, "rt": 3.0, "values": [10] * 8, "matched": True,
+     "sme": [{"name": "C", "inchikey": "CCCCCCCCCCCCCC-UHFFFAOYSA-N", "formula": "C3", "adduct": "[M+H]1+",
+              "theo": 400.0, "exp": 399.9988}]},
+    {"id": "4", "mz": 500.0, "rt": 4.0, "values": [10] * 8, "matched": True, "sme": []},
+)
+
+
+@pytest.fixture
+def match_data(tmp_path):
+    return {"mztab": write_mztab(tmp_path / "m" / "AlignResult-1.mzTab", features=MATCH_FEATURES)}
+
+
+def test_mass_accuracy_msms_matched_subset(match_data):
+    handle = _open(match_data)
+    full = json.loads(R.dataset_mass_accuracy(dataset_handle=handle))
+    assert full["subset"] == "rank1" and full["overall"]["n"] == 3
+    matched = json.loads(R.dataset_mass_accuracy(subset="msms_matched", dataset_handle=handle))
+    assert matched["subset"] == "msms_matched"
+    # 特徴 1 と 3（SML の spectrum_matched が真）だけ。特徴 2（偽）と 4（SME なし）は入らない
+    assert matched["overall"]["n"] == 2
+    assert matched["overall"]["median"] == pytest.approx((2.0 + -3.0) / 2)
+    assert matched["overall"]["within_5ppm"] == 1.0
+
+
+def test_mass_accuracy_msms_matched_needs_the_sml_columns(data):
+    handle = _open(data)           # この mzTab の SML には opt_global_spectrum_matched が無い
+    out = json.loads(R.dataset_mass_accuracy(subset="msms_matched", dataset_handle=handle))
+    assert out["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert out["error"]["details"]["field"] == "subset"
+    # 既定の rank1 は今までどおり動く
+    assert json.loads(R.dataset_mass_accuracy(dataset_handle=handle))["subset"] == "rank1"
+    bad = json.loads(R.dataset_mass_accuracy(subset="nope", dataset_handle=handle))
+    assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
+
+
+def test_injection_trend_unavailable_without_per_sample_mz(match_data):
+    handle = _open(match_data)
+    assert handles.registry.get(handle).dataset.per_sample_mz is None
+    out = json.loads(R.dataset_mass_accuracy(dataset_handle=handle))
+    assert out["injection_trend"] == {"status": "unavailable"}
+
+
+def _with_trend(match_data, ppm_of_sample):
+    """特徴 1・3 の検出されたセルに、試料名の並び（注入順の代用）に比例する誤差を載せる。"""
+    handle = _open(match_data)
+    ds = handles.registry.get(handle).dataset
+    theo = {"1": 200.0, "3": 400.0}
+    ds.per_sample_mz = {fid: {name: mz * (1 + ppm_of_sample(i) * 1e-6)
+                              for i, name in enumerate(sorted(ds.sample_names)) if i != 7}
+                        for fid, mz in theo.items()}
+    return handle
+
+
+def test_injection_trend_spearman(match_data):
+    handle = _with_trend(match_data, lambda i: 1.0 + 0.5 * i)
+    out = json.loads(R.dataset_mass_accuracy(subset="msms_matched", dataset_handle=handle))
+    trend = out["injection_trend"]
+    assert trend["spearman_rho"] == pytest.approx(1.0)
+    assert trend["n_samples"] == 7                      # 8 試料のうち 1 試料はどの特徴も検出なし
+    assert trend["injection_order_source"] == "filename"
+    per = trend["per_injection"]
+    assert [p["injection_order"] for p in per] == sorted(p["injection_order"] for p in per)
+    assert per[0]["sample"] == "HC1" and per[0]["n"] == 2
+    assert per[0]["median_ppm"] == pytest.approx(1.0, abs=1e-3)
+    flipped = _with_trend(match_data, lambda i: 10.0 - i)
+    assert json.loads(R.dataset_mass_accuracy(dataset_handle=flipped)
+                      )["injection_trend"]["spearman_rho"] == pytest.approx(-1.0)
+
+
+def test_injection_trend_rho_is_none_below_five_samples(match_data):
+    handle = _open(match_data)
+    ds = handles.registry.get(handle).dataset
+    ds.per_sample_mz = {"1": {name: 200.0 for name in sorted(ds.sample_names)[:4]}}
+    trend = json.loads(R.dataset_mass_accuracy(dataset_handle=handle))["injection_trend"]
+    assert trend["n_samples"] == 4 and trend["spearman_rho"] is None
+
+
 def test_novel_candidates_from_result_id_and_from_spec(data):
     handle = _open(data)
     T.dataset_preprocess(dataset_handle=handle)
