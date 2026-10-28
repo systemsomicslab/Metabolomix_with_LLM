@@ -42,7 +42,7 @@ def _planned(tmp_path, monkeypatch, *, raw_count: int = 2):
     """planned 状態のジョブを 1 件作る（合成 raw と method ファイル付き）。"""
     monkeypatch.setenv("MSDIAL_EXE", str(tmp_path / "fake-msdialcui.exe"))
     (tmp_path / "fake-msdialcui.exe").write_bytes(b"fake console executable")
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     source = tmp_path / "source"
     source.mkdir(exist_ok=True)
     for i in range(1, raw_count + 1):

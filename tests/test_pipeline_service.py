@@ -325,7 +325,7 @@ def test_resume_pipeline_normalizes_the_run_json_path_before_launching(tmp_path,
 def _prepare_source(tmp_path, monkeypatch):
     """`start_pipeline`の実処理(受付冪等性込み)を通すための実生データフォルダ。
 
-    `MSDIAL_EXE`環境変数と`is_console_exe`だけを差し替え、他はすべて
+    `MSDIAL_EXE`環境変数と`probe_console_exe`だけを差し替え、他はすべて
     `inspect_inputs`/`find_or_create_run`本体を実際に通す
     （`tests/test_pipeline_recovery.py::_build_pipeline_with_real_inputs`と
     同じ流儀）。
@@ -333,7 +333,7 @@ def _prepare_source(tmp_path, monkeypatch):
     from tests.pipeline_fixtures import make_source
     source = make_source(tmp_path / "source")
     monkeypatch.setenv("MSDIAL_EXE", str(source["exe"]))
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     monkeypatch.setenv("LIPIDMIX_PIPELINE_INDEX_DIR", str(tmp_path / "_pipeline_index_base"))
     return source
 

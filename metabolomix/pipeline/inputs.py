@@ -491,7 +491,13 @@ def _resolve_exe(exe_path: Path) -> dict:
     if not exe_path.is_file():
         raise DomainError("MSDIAL_EXE_NOT_FOUND", f"実行体がありません: {exe_path}",
                           {"exe_path": str(exe_path)})
-    if not console_runner.is_console_exe(str(exe_path)):
+    probe = console_runner.probe_console_exe(str(exe_path))
+    if probe == "timeout":
+        # --help が返らないのは「Console でない」ではない（冷間起動の遅れでも起きる）。
+        raise DomainError(
+            "MSDIAL_EXE_PROBE_TIMEOUT", console_runner.probe_timeout_message(str(exe_path)),
+            {"exe_path": str(exe_path), **console_runner.probe_timeout_details()})
+    if probe != "console":
         raise DomainError(
             "MSDIAL_EXE_NOT_CONSOLE",
             f"Console の実行体（[msdial] exe / MSDIAL_EXE）が MS-DIAL Console ではありません: {exe_path}",
@@ -618,7 +624,12 @@ def plan_from_profile(source_root: Path, request: dict, profile: dict) -> dict:
 
     environment = resolved["execution_environment"]
     exe_path = Path(environment["executable_path"])
-    if not console_runner.is_console_exe(str(exe_path)):
+    probe = console_runner.probe_console_exe(str(exe_path))
+    if probe == "timeout":
+        raise DomainError(
+            "MSDIAL_EXE_PROBE_TIMEOUT", console_runner.probe_timeout_message(str(exe_path)),
+            {"exe_path": str(exe_path), **console_runner.probe_timeout_details()})
+    if probe != "console":
         # profileがGUIのMSDIAL.exeを固定していても、hashは一致してしまう。
         raise DomainError(
             "MSDIAL_EXE_NOT_CONSOLE",

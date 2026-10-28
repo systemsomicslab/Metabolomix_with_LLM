@@ -192,7 +192,12 @@ def console_plan(
         exe = console_runner.get_exe_path()
     except EnvironmentError as exc:
         return _exe_error(exc)
-    if not console_runner.is_console_exe(exe):
+    probe = console_runner.probe_console_exe(exe)
+    if probe == "timeout":
+        return console_error(
+            "MSDIAL_EXE_PROBE_TIMEOUT", console_runner.probe_timeout_message(exe),
+            {"exe": exe, **console_runner.probe_timeout_details()})
+    if probe != "console":
         return console_error(
             "MSDIAL_EXE_NOT_CONSOLE",
             f"Console の実行体（[msdial] exe / MSDIAL_EXE）が MS-DIAL Console ではありません: {exe}  "
@@ -425,11 +430,16 @@ def console_run(job_path: str | None = None, detach: bool = False) -> str:
         update_status(resolved, "failed", error=str(exc))
         return _exe_error(exc)
     try:
-        is_console = console_runner.is_console_exe(exe, raise_on_os_error=True)
+        probe = console_runner.probe_console_exe(exe, raise_on_os_error=True)
     except OSError as exc:
         update_status(resolved, "failed", error=str(exc))
         return console_error("MSDIAL_EXE_NOT_FOUND", str(exc))
-    if not is_console:
+    if probe == "timeout":
+        # ジョブは planned のまま残す（呼び直せば通りうる）。NOT_CONSOLE と別のコード。
+        return console_error(
+            "MSDIAL_EXE_PROBE_TIMEOUT", console_runner.probe_timeout_message(exe),
+            {"exe": exe, **console_runner.probe_timeout_details()})
+    if probe != "console":
         return console_error(
             "MSDIAL_EXE_NOT_CONSOLE",
             f"Console の実行体（[msdial] exe / MSDIAL_EXE）が MS-DIAL Console ではありません: {exe}  "

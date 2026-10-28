@@ -4,7 +4,7 @@
 stage_inputs / verify_inputs。実rawや既存成果物は使わず、
 tests.pipeline_fixtures.make_source が作る合成データだけを使う。
 
-fake.exe は実行しない（is_console_exe を差し替える）。fake.lbm2 も
+fake.exe は実行しない（probe_console_exe を差し替える）。fake.lbm2 も
 Console には読ませない合成バイト列。
 """
 from __future__ import annotations
@@ -28,7 +28,27 @@ from tests.pipeline_fixtures import make_source
 
 def _allow_fake_exe(monkeypatch) -> None:
     """fake.exe を実際には実行させず、Console 実行体として通す。"""
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
+
+
+def test_resolve_exe_reports_probe_timeout(tmp_path, monkeypatch):
+    """--help の時間切れは NOT_CONSOLE と別のコード・details で返る。"""
+    from metabolomix.pipeline.inputs import _resolve_exe
+
+    exe = tmp_path / "slow.exe"
+    exe.write_text("placeholder", encoding="ascii")
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe",
+                        lambda *a, **k: "timeout")
+    with pytest.raises(DomainError) as exc:
+        _resolve_exe(exe)
+    assert exc.value.code == "MSDIAL_EXE_PROBE_TIMEOUT"
+    assert exc.value.details == {"exe_path": str(exe), "timeout_s": 60, "attempts": 2}
+
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe",
+                        lambda *a, **k: "not_console")
+    with pytest.raises(DomainError) as exc:
+        _resolve_exe(exe)
+    assert exc.value.code == "MSDIAL_EXE_NOT_CONSOLE"
 
 
 def _method_lbm_exe(root: Path, *, ion_mode: str = "negative") -> dict:

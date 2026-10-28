@@ -576,7 +576,7 @@ def _build_pipeline_with_real_inputs(tmp_path, monkeypatch, *, target="explorato
     既に検証済み」という前提のもとでの再検証なので、ここでは
     UPSTREAM_RERUN_REQUIREDゲートを通過させるためだけに必要。
     """
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     from metabolomix.pipeline.inputs import inspect_inputs, stage_inputs
     from metabolomix.core.atomic_io import canonical_hash
 

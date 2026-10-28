@@ -85,7 +85,7 @@ def test_console_run_records_software_version_from_mztab(tmp_path, monkeypatch):
     from tests.pipeline_fixtures import fake_console_command, use_fake_console
 
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     _, job_path = create_job(dataset_root=tmp_path, method_file=method,
@@ -112,7 +112,7 @@ def test_console_run_crosschecks_polarity_without_overwriting_the_source(tmp_pat
     from tests.pipeline_fixtures import fake_console_command, use_fake_console
 
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     _, job_path = create_job(dataset_root=tmp_path, method_file=method,

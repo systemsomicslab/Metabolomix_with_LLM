@@ -64,6 +64,9 @@ CONSOLE_ERROR_CODES = frozenset({
     "METHOD_FILE_NOT_TEXT",
     # MSDIAL_EXE が Console ではなく GUI を指している場合。
     "MSDIAL_EXE_NOT_CONSOLE",
+    # Console の起動検査（--help）が時間切れを繰り返した場合。Console でないとは
+    # 判定できていない（冷間起動の遅れでも起きる）ので NOT_CONSOLE と分ける。
+    "MSDIAL_EXE_PROBE_TIMEOUT",
     # MS-DIAL が対象とする計測拡張子が混在する、または 0 種類の場合。
     "MIXED_RAW_FORMATS",
     # method_file 省略時に、使えるパラメータファイルが見つからなかった場合。

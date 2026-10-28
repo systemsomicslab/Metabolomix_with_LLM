@@ -37,7 +37,7 @@ def make_source(root: Path, *, extension: str = ".wiff", kind: str = "file") -> 
     root直下にS0..S7.wiff・GUI自動保存形式のlab_param_202609050001.txt
     （Ion mode/Target omics/Lbm file path）・fake.lbm2・fake.exeを作り、
     それぞれのPathを返す。fake.exeは実行しない（中身は placeholder テキスト）
-    ——単体テストではmetabolomix.console.runner.is_console_exeを差し替えて使う。
+    ——単体テストではmetabolomix.console.runner.probe_console_exeを差し替えて使う。
 
     Parameters
     ----------
@@ -428,8 +428,8 @@ class PipelineHarness:
         exe = self.tmp_path / "fake-msdialcui.exe"
         exe.write_text("fake console executable placeholder", encoding="ascii")
         self.monkeypatch.setenv("MSDIAL_EXE", str(exe))
-        self.monkeypatch.setattr("metabolomix.console.runner.is_console_exe",
-                                 lambda *a, **k: True)
+        self.monkeypatch.setattr("metabolomix.console.runner.probe_console_exe",
+                                 lambda *a, **k: "console")
         # 受付索引はユーザーのLOCALAPPDATAではなくtmpへ。テスト間で共有させない。
         self.monkeypatch.setenv("LIPIDMIX_PIPELINE_INDEX_DIR",
                                 str(self.tmp_path / "_pipeline_index"))

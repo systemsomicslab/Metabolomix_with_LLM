@@ -117,7 +117,7 @@ def test_console_plan_returns_envelope_for_non_ascii_method(tmp_path, monkeypatc
     (app / "Lipids.lbm2").touch()
     monkeypatch.setenv("MSDIAL_EXE", str(app / "MSDIALCUI.exe"))
     monkeypatch.delenv("MSDIAL_LBM", raising=False)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     root = tmp_path / "data"
     root.mkdir()
     (root / "a.wiff").touch()

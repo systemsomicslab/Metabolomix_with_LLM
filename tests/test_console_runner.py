@@ -68,6 +68,44 @@ def test_is_console_exe_rejects_missing_file():
         assert is_console_exe("nope.exe") is False
 
 
+def test_probe_returns_timeout_after_retry():
+    """--help が時間切れを繰り返せば "timeout"（NOT_CONSOLE と区別する）。1 回やり直す。"""
+    from metabolomix.console.runner import probe_console_exe
+    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("x", 60)) as run:
+        assert probe_console_exe("slow.exe") == "timeout"
+    assert run.call_count == 2
+    assert run.call_args.kwargs["timeout"] == 60
+
+
+def test_probe_retry_succeeds():
+    """1 回目は冷間起動で時間切れ、2 回目に lcms を含む出力が返れば "console"。"""
+    from metabolomix.console.runner import probe_console_exe
+    completed = MagicMock()
+    completed.stdout = "MSDIAL Console Application\n  lcms   Run LC-MS data processing\n"
+    with patch("subprocess.run",
+               side_effect=[subprocess.TimeoutExpired("x", 60), completed]) as run:
+        assert probe_console_exe("cold.exe") == "console"
+    assert run.call_count == 2
+
+
+def test_probe_not_console_does_not_retry():
+    """出力が返って lcms が無いのは確定判定。やり直さない。"""
+    from metabolomix.console.runner import probe_console_exe
+    completed = MagicMock()
+    completed.stdout = "GUI banner\n"
+    with patch("subprocess.run", return_value=completed) as run:
+        assert probe_console_exe("gui.exe") == "not_console"
+    assert run.call_count == 1
+
+
+def test_probe_os_error_is_not_console_unless_raised():
+    from metabolomix.console.runner import probe_console_exe
+    with patch("subprocess.run", side_effect=OSError("not found")):
+        assert probe_console_exe("nope.exe") == "not_console"
+        with pytest.raises(OSError):
+            probe_console_exe("nope.exe", raise_on_os_error=True)
+
+
 def test_build_msdial_cmd_passes_project_flag(tmp_path):
     """save_project=True のとき -p を渡す（GUI で開ける .mdproject を出させる）。"""
     cmd = build_msdial_cmd("fake.exe", tmp_path, tmp_path / "out",
@@ -425,11 +463,29 @@ def test_console_plan_rejects_non_console_exe(tmp_path, monkeypatch):
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     (tmp_path / "a.wiff").touch()
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: False)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "not_console")
     from metabolomix.tools.console_tools import console_plan
     result = console_plan(dataset_root=str(tmp_path), method_file=str(method),
                           polarity="negative", measure="peak_height")
     assert _json.loads(result)["error"]["code"] == "MSDIAL_EXE_NOT_CONSOLE"
+
+
+def test_console_plan_reports_probe_timeout(tmp_path, monkeypatch):
+    """--help の時間切れは「Console ではない」ではなく MSDIAL_EXE_PROBE_TIMEOUT で返す。"""
+    import json as _json
+    monkeypatch.setenv("MSDIAL_EXE", "slow.exe")
+    _stub_lbm(tmp_path, monkeypatch)
+    method = tmp_path / "params.txt"
+    method.write_text("Ion mode: Negative\n", encoding="ascii")
+    (tmp_path / "a.wiff").touch()
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe",
+                        lambda *a, **k: "timeout")
+    from metabolomix.tools.console_tools import console_plan
+    result = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
+                                      polarity="negative", measure="peak_height"))
+    assert result["error"]["code"] == "MSDIAL_EXE_PROBE_TIMEOUT"
+    assert result["error"]["details"]["timeout_s"] == 60
+    assert result["error"]["details"]["attempts"] == 2
 
 
 def test_console_plan_success(tmp_path, monkeypatch):
@@ -438,7 +494,7 @@ def test_console_plan_success(tmp_path, monkeypatch):
     session_state.session = session_state.AnalysisSession()
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.msdial"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     (tmp_path / "a.wiff").touch()
@@ -460,7 +516,7 @@ def test_console_plan_rejects_mixed_raw_formats(tmp_path, monkeypatch):
     import json as _json
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     (tmp_path / "a.wiff").touch()
@@ -476,7 +532,7 @@ def test_console_plan_rejects_empty_dataset_root(tmp_path, monkeypatch):
     import json as _json
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     from metabolomix.tools.console_tools import console_plan
@@ -492,7 +548,7 @@ def test_console_plan_warns_existing_alignment_results(tmp_path, monkeypatch):
     session_state.session = session_state.AnalysisSession()
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     (tmp_path / "a.wiff").touch()
@@ -509,7 +565,7 @@ def test_console_plan_rejects_binary_method_file(tmp_path, monkeypatch):
     import json as _json
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "a.wiff").touch()
     method = tmp_path / "project.mdproject"
     method.write_bytes(b"PK\x03\x04\x00\x00binary")
@@ -523,7 +579,7 @@ def test_console_plan_rejects_text_without_key_value(tmp_path, monkeypatch):
     import json as _json
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "a.wiff").touch()
     method = tmp_path / "empty.txt"
     method.write_text("# comment only\n\n", encoding="ascii")
@@ -539,7 +595,7 @@ def test_console_plan_accepts_key_value_method_file(tmp_path, monkeypatch):
     session_state.session = session_state.AnalysisSession()
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "a.wiff").touch()
     method = tmp_path / "params.txt"
     method.write_text("# MS-DIAL param\nIon mode: Negative\n", encoding="ascii")
@@ -586,8 +642,8 @@ def test_console_run_rejects_changed_non_console_exe_before_launch(tmp_path, mon
     session_state.session = session_state.AnalysisSession()
     monkeypatch.setenv("MSDIAL_EXE", "console.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    real_is_console_exe = runner.is_console_exe
-    monkeypatch.setattr(runner, "is_console_exe", lambda *a, **k: True)
+    real_probe_console_exe = runner.probe_console_exe
+    monkeypatch.setattr(runner, "probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     (tmp_path / "a.wiff").touch()
@@ -598,7 +654,7 @@ def test_console_run_rejects_changed_non_console_exe_before_launch(tmp_path, mon
 
     monkeypatch.setenv("MSDIAL_EXE", "MSDIAL.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr(runner, "is_console_exe", real_is_console_exe)
+    monkeypatch.setattr(runner, "probe_console_exe", real_probe_console_exe)
     completed = MagicMock()
     completed.stdout = "MS-DIAL GUI output without console commands\n"
     with patch("subprocess.run", return_value=completed) as mock_run:
@@ -611,7 +667,7 @@ def test_console_run_rejects_changed_non_console_exe_before_launch(tmp_path, mon
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
-        timeout=15,
+        timeout=60,
         text=True,
         errors="replace",
     )
@@ -695,7 +751,7 @@ def test_console_run_reports_no_output(tmp_path, monkeypatch):
     from metabolomix.tools.console_tools import console_run
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.msdial"
     method.touch()
     _, job_path = create_job(dataset_root=tmp_path, method_file=method,
@@ -711,7 +767,7 @@ def test_console_run_reports_no_output(tmp_path, monkeypatch):
 def test_console_run_marks_failed_when_the_executable_cannot_be_started(tmp_path, monkeypatch):
     """実在しない exe で起動に失敗しても封筒を返し、running に固着させない。
 
-    `is_console_exe` の事前確認をすり抜けた場合（計画後に exe が消える等）の
+    `probe_console_exe` の事前確認をすり抜けた場合（計画後に exe が消える等）の
     最後の砦。起動できなかった事実は終了証跡に termination=launch_failed として残る。
     """
     import json as _json
@@ -719,7 +775,7 @@ def test_console_run_marks_failed_when_the_executable_cannot_be_started(tmp_path
     from metabolomix.tools.console_tools import console_run
     monkeypatch.setenv("MSDIAL_EXE", str(tmp_path / "definitely_not_here.exe"))
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.msdial"
     method.touch()
     _, job_path = create_job(dataset_root=tmp_path, method_file=method,
@@ -747,7 +803,7 @@ def test_console_run_post_run_failure_marks_job_failed_not_running(tmp_path, mon
     from metabolomix.tools.console_tools import console_run
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.msdial"
     method.touch()
     job, job_path = create_job(dataset_root=tmp_path, method_file=method,
@@ -826,7 +882,7 @@ def test_console_run_records_declared_polarity_on_mztab_entries(tmp_path, monkey
     from metabolomix.tools.console_tools import console_run
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "S1.abf").write_bytes(b"raw")
     method = tmp_path / "params.msdial"
     method.touch()
@@ -850,7 +906,7 @@ def test_console_run_warns_when_filename_contradicts_declared_polarity(tmp_path,
     from metabolomix.tools.console_tools import console_run
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "S1.abf").write_bytes(b"raw")
     method = tmp_path / "params.msdial"
     method.touch()
@@ -881,7 +937,7 @@ def test_console_run_writes_no_sidecar_files(tmp_path, monkeypatch):
     from metabolomix.tools.console_tools import console_run
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "S1.abf").write_bytes(b"raw")
     method = tmp_path / "params.msdial"
     method.touch()
@@ -910,7 +966,7 @@ def test_console_run_warns_when_no_per_sample_pai2(tmp_path, monkeypatch):
     from metabolomix.tools.console_tools import console_run
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "S1.abf").write_bytes(b"raw")
     method = tmp_path / "params.msdial"
     method.touch()
@@ -933,7 +989,7 @@ def test_console_run_no_pai2_warning_when_pai2_present(tmp_path, monkeypatch):
     from metabolomix.tools.console_tools import console_run
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "S1.abf").write_bytes(b"raw")
     method = tmp_path / "params.msdial"
     method.touch()
@@ -960,7 +1016,7 @@ def _planned_task8_job(tmp_path, monkeypatch, **kwargs):
     session_state.session = session_state.AnalysisSession()
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "S1.wiff").touch()
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
