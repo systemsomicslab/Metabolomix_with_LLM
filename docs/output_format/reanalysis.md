@@ -102,8 +102,12 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 
 **割れたスポットのまとめ（`features.merge_split`、既定 true）。** MS-DIAL のアライメントが 1 つの
 物質を 2 スポットに割ると、片方の「無い」試料に gap-fill の背景が入り、群の差でもない差が出る。
-`merge_split` が真なら、**recipe の後・集約と検定の前**に、割れた 2 スポットを試料ごとの大きい方の
-値（NaN は無視）の 1 列にまとめ、列の ID は 2 スポットのうち最も小さい特徴 ID にする。
+`merge_split` が真なら、**recipe の前**（定量行列と検出状態を読んだ直後）に、割れた 2 スポットを
+試料ごとの大きい方の値（NaN は無視）の 1 列にまとめ、列の ID は 2 スポットのうち最も小さい特徴 ID に
+する。まとめた列の検出状態は「どちらかで検出」。recipe はそのまとめた行列に当たる——割れの少数側は
+検出された試料が少なく、まとめる前に検出率の篩を通すと落ちてまとめが打ち消されるため、また
+正規化（TIC・PQN・KNN）が 1 つの物質を 1 列として見るため。`features.alignment_qc` の JSON は
+`dataset_fingerprint` が今のデータセットと合わなければ `ANALYSIS_INPUT_INVALID`（§9）。
 まとめるのは `alignment_qc`（§9）の `merge_groups`（互いに最も近い mergeable な組。常に 2 スポット）
 だけで、`features.alignment_qc` に `dataset_alignment_qc` の JSON を渡せばその群、無ければその場で
 `find_split_pairs`（既定の値）を回す。`group_aligned` などの mergeable でない組はまとめない。
@@ -112,9 +116,8 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 （両方書いても 1 行）。`aggregate` の `feature_ids`・`select`・比の分子と分母も同じ置き換えをしてから和・
 比をとるので、割れた 2 スポットが両方選ばれても 1 回だけ数える（`aggregate.members` は選んだままの
 並び、`summed` はまとめた後の並び、`aggregate.merged_from` は選んだ特徴のうちまとめたもの。比の分子と
-分母が同じ物質にまとまるなら `ANALYSIS_SPEC_INVALID`）。recipe の篩（検出率・QC の RSD）で片方が
-落ちた群は、列が 2 つ残らないのでまとめず、解析の `merge_split.skipped` に挙げる（recipe の段は
-まとめる前の特徴で走る）。外部の行列（`input.source=tsv`）にはアライメントが無く、`merge_split` は
+分母が同じ物質にまとまるなら `ANALYSIS_SPEC_INVALID`）。行列に 2 つ揃わない群（別の run の JSON など）は
+まとめず、結果の `merge_split.skipped` に挙げる。外部の行列（`input.source=tsv`）にはアライメントが無く、`merge_split` は
 何もしない（`features.alignment_qc` と `bh_population=annotated` は `ANALYSIS_SPEC_INVALID`）。
 `merge_split=false` にすると 2 スポットのまま検定する（`alignment_qc` は書けない）。
 
@@ -139,12 +142,11 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 | `meets_thresholds` | 与えた閾値をすべて満たすか（閾値が無ければ null）。**再現の判定ではない** |
 | `merged_from` | 割れた 2 スポットをまとめた特徴だけ、まとめた特徴 ID（小さい順。`feature_id` は先頭 = 残した最小の ID）。ほかは null（TSV では `;` 区切り） |
 
-解析ごとに `matrix`（`n_features_in`・`n_features_out`（まとめる前、recipe の後）・段ごとの報告
+解析ごとに `matrix`（`n_features_in`（まとめた後、recipe の前）・`n_features_out`（recipe の後）・段ごとの報告
 `steps`）、`bh_population_n`、集約なら `aggregate`（和: `members`・`summed`・`dropped`、まとめがあれば
-`merged_from`）、データセットで `merge_split` が真なら `merge_split`（`merged_from`: 残した ID → まとめた
-特徴、`skipped`: 行列に 2 つ残らずまとめなかった群）、OLS なら `covariate_excluded_samples`。
+`merged_from`）、OLS なら `covariate_excluded_samples`。
 結果の全体に `spec`（正規化後）・`rule_hash`・`merge_split`（`enabled`・`source`: `find_split_pairs` か
-`alignment_qc`・`groups`: 使った群（行列に 2 つ以上ある群）・`groups_hash`・`n_groups_given`）・
+`alignment_qc`・`groups`: まとめた群（残す ID が先頭、ID の小さい順）・`groups_hash`・`n_groups_given`・`skipped`）・
 `input_fingerprint`（`dataset_hash`・入力の TSV と `alignment_qc` の JSON ごとの sha256）・`comparison`。
 `rule_hash` は正規化した spec（パスを除く）に、データセットの入力で `merge_split` が真なら使った群の
 hash も入れる——同じ spec でも割れの組が変われば別の規則で、`merge_split` を変えても変わる
@@ -370,6 +372,7 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
 
 ```json
 {"schema": "alignment-qc.v1",
+ "dataset_fingerprint": "<解析の入力としてのデータセットの指紋。result_state.dataset_fingerprint>",
  "params": {"ppm": 15.0, "min_rt_gap": 0.05, "max_rt_gap": 1.0, "max_both_detected": 0.1,
             "max_interleaved_rt_gap": 0.15, "min_block_size": 2,
             "min_dominance": 3.0, "min_complementary": 0.9, "group_purity": 0.9,
@@ -391,6 +394,11 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
              "n_mergeable_pairs": 1, "n_merged_pairs": 1, "n_groups": 1}}
 ```
 
+- `dataset_fingerprint` は組を探したデータセットの指紋（`dataset_analysis_run` の `input_fingerprint.dataset_hash` と
+  同じ関数。定量行列・特徴 ID・試料・検出状態・出所から作る。同じ run・同じハンドルなら同じ値）。
+  `dataset_analysis_run` の `features.alignment_qc` はこれが今のデータセットと違う JSON（別の極性・別の run。
+  特徴 ID は小さい整数でどちらにもあるので、黙ってまとめてしまう）、または無い JSON（この欄を足す前の版）を
+  `ANALYSIS_INPUT_INVALID`（`field: features.alignment_qc`）で拒む。
 - `pairs[].features` は `injection_block` なら [塊でない側, 塊の側]、ほかは RT の昇順。
   `delta_rt = rt[1] − rt[0]`（`injection_block` では塊の RT のずれ。符号つき）、
   `delta_ppm = (mz[1] − mz[0]) / mz[0] × 10⁶`。`block.injections` は塊の最初と最後の注入順。
@@ -400,7 +408,7 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
   全体が 1 つのまとめる組のときだけ真。
 - `merge_groups[]` はまとめる組ごとの 2 スポット（`merge_group_id`・`group_id`＝含まれる `groups[]` の
   成分・`features`・`pair_ids`・`type`・`types`・`mergeable: true`）。`features` は ID の小さい順で、
-  `merge_matrix_columns` は**最も小さい特徴 ID** を残す（渡した順によらない）。統計の側（Tasks 6・7）がまとめるのは
+  `merge_matrix_columns` は**最も小さい特徴 ID** を残す（渡した順によらない）。統計の側（`dataset_analysis_run` など）がまとめるのは
   `merge_groups` だけ。`summary.n_merged_pairs` はその数。
 - `split_partners(qc)`（統計の側が使う）: 特徴 → `{group_id, merge_group_id, partners, component,
   type, mergeable}`。まとめる特徴は `partners` がその相手 1 つで `mergeable` が真、`type` はその組の型。

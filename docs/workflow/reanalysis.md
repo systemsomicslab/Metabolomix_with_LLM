@@ -63,11 +63,11 @@
 5. ├─ metabolomix/analysis/analysis_spec.py  run_spec()
 6. │  ├─ metabolomix/analysis/analysis_spec.py  _load()
 7. │  ├─ metabolomix/analysis/analysis_spec.py  _merge_plan()
-8. │  │  └─ metabolomix/analysis/alignment_qc.py  find_split_pairs()
-9. │  ├─ metabolomix/analysis/analysis_spec.py  _run_analysis()
-10. │  │  ├─ metabolomix/analysis/recipe_matrix.py  build_matrix()
-11. │  │  │  └─ metabolomix/analysis/recipe_matrix.py  knn_impute()
-12. │  │  ├─ metabolomix/analysis/alignment_qc.py  merge_matrix_columns()
+8. │  │  ├─ metabolomix/analysis/alignment_qc.py  find_split_pairs()
+9. │  │  └─ metabolomix/analysis/alignment_qc.py  merge_matrix_columns()
+10. │  ├─ metabolomix/analysis/analysis_spec.py  _run_analysis()
+11. │  │  ├─ metabolomix/analysis/recipe_matrix.py  build_matrix()
+12. │  │  │  └─ metabolomix/analysis/recipe_matrix.py  knn_impute()
 13. │  │  ├─ metabolomix/analysis/analysis_spec.py  _aggregate()
 14. │  │  ├─ metabolomix/analysis/analysis_spec.py  _design()
 15. │  │  ├─ metabolomix/analysis/spec_statistics.py  two_group()
@@ -77,9 +77,9 @@
 19. │  └─ metabolomix/analysis/analysis_spec.py  rule_hash()
 20. └─ metabolomix/tools/reanalysis_tools.py  write_result()
 
-割れたスポットのまとめ（`features.merge_split`、既定 true）は recipe の後・集約と検定の前に、
+割れたスポットのまとめ（`features.merge_split`、既定 true）は recipe の前（行列を読んだ直後。recipe・集約・検定はまとめた行列に当たる）に、
 `alignment_qc` の `merge_groups` だけに行う（`features.alignment_qc` に JSON を渡せばその群、
-無ければその場の `find_split_pairs`）。外部の行列（`input.source=tsv`）では何もしない。
+無ければその場の `find_split_pairs`。JSON は `dataset_fingerprint` が今のデータセットと合うものだけ）。外部の行列（`input.source=tsv`）では何もしない。
 
 ## library_msms_qualify
 
@@ -180,10 +180,11 @@
 8. │  │  └─ metabolomix/analysis/alignment_qc.py  names_compatible()
 9. │  │     └─ metabolomix/msdial/lipid_identity.py  lipid_species_of()
 10. │  ├─ metabolomix/analysis/alignment_qc.py  _mutual_nearest()
-11. │  └─ metabolomix/analysis/alignment_qc.py  _components()
-12. │     └─ metabolomix/analysis/alignment_qc.py  _id_order()
-13. ├─ metabolomix/tools/reanalysis_tools.py  write_result()
-14. └─ metabolomix/tools/reanalysis_tools.py  rows_table()
+11. │  ├─ metabolomix/analysis/alignment_qc.py  _components()
+12. │  │  └─ metabolomix/analysis/alignment_qc.py  _id_order()
+13. │  └─ metabolomix/analysis/result_state.py  dataset_fingerprint()
+14. ├─ metabolomix/tools/reanalysis_tools.py  write_result()
+15. └─ metabolomix/tools/reanalysis_tools.py  rows_table()
 
 まとめは別のツールの側で行う: `alignment_qc.merge_matrix_columns()`（試料ごとに大きい方の値）と
 `alignment_qc.split_partners()`（特徴 → 割れの相手）が唯一の実装。

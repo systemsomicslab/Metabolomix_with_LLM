@@ -282,8 +282,7 @@ def test_merge_split_takes_per_sample_max():
     assert rows["1265"]["mean_test"] == pytest.approx(merged[21:].mean())
     assert rows["1265"]["p"] == pytest.approx(
         stats.ttest_ind(np.log2(merged[21:]), np.log2(merged[:21]), equal_var=False).pvalue)
-    assert result["analyses"][0]["merge_split"] == {"merged_from": {"1265": ["1265", "1266"]},
-                                                    "skipped": []}
+    assert "merge_split" not in result["analyses"][0] and result["merge_split"]["skipped"] == []
     assert result["merge_split"]["enabled"] and result["merge_split"]["source"] == "find_split_pairs"
     assert result["merge_split"]["groups"] == [["1265", "1266"]]
 
@@ -294,7 +293,7 @@ def test_merge_split_false_keeps_both():
     assert sorted(rows) == ["1265", "1266", "2000"]
     assert rows["1265"]["mean_ref"] == pytest.approx(ds.feature_matrix[0][:21].mean())
     assert all(r["merged_from"] is None for r in rows.values())
-    assert result["merge_split"]["enabled"] is False and "merge_split" not in result["analyses"][0]
+    assert result["merge_split"]["enabled"] is False and result["merge_split"]["groups"] == []
 
 
 def test_merge_split_default_is_true():
@@ -318,8 +317,9 @@ def test_merged_from_in_rows():
     assert rows["1265"]["merged_from"] == ["1265", "1266"]
     assert rows["2000"]["merged_from"] is None
     # 消えた側の ID で報告を頼んでも、残した 1 行（1 回だけ）に当たる
-    _, rows = _ds_rows(ds, _split_spec(features={"feature_ids": ["1266", "1265"]}))
-    assert list(rows) == ["1265"] and rows["1265"]["merged_from"] == ["1265", "1266"]
+    for ids in (["1266"], ["1266", "1265"]):
+        _, rows = _ds_rows(ds, _split_spec(features={"feature_ids": ids}))
+        assert list(rows) == ["1265"] and rows["1265"]["merged_from"] == ["1265", "1266"]
     # 行の TSV に merged_from の列が出る
     from metabolomix.tools import reanalysis_tools as R
 
@@ -385,27 +385,59 @@ def test_alignment_qc_json_is_used_and_fingerprinted(tmp_path):
     live = A.run_spec(A.normalize_spec(_split_spec()), ds)
     assert result["merge_split"]["groups_hash"] == live["merge_split"]["groups_hash"]
     assert result["rule_hash"] == live["rule_hash"]               # 置き場所・出どころでは変わらない
+    qc = alignment_qc.find_split_pairs(ds)
     # 空の merge_groups の JSON ならまとめない（まとめの判断は JSON の側）
-    path.write_text(json.dumps({"schema": "alignment-qc.v1", "merge_groups": []}), encoding="utf-8")
+    path.write_text(json.dumps({**qc, "merge_groups": []}), encoding="utf-8")
     _, rows = _ds_rows(ds, spec)
     assert sorted(rows) == ["1265", "1266", "2000"]
+    # 行列に 2 つ揃わない群はまとめず、skipped に挙げる
+    extra = {"merge_group_id": "M9", "features": ["1265", "9999"], "mergeable": True}
+    path.write_text(json.dumps({**qc, "merge_groups": [extra]}), encoding="utf-8")
+    result, rows = _ds_rows(ds, spec)
+    assert sorted(rows) == ["1265", "1266", "2000"]
+    assert result["merge_split"]["groups"] == [] and result["merge_split"]["skipped"] == [
+        ["1265", "9999"]]
     path.write_text("{}", encoding="utf-8")
     with pytest.raises(DomainError) as info:
         _ds_rows(ds, spec)
     assert info.value.code == "ANALYSIS_INPUT_INVALID"
 
 
-def test_group_dropped_by_recipe_filter_is_not_merged_and_reported():
-    # recipe の篩で片方（1266。検出が 2 試料）が落ちたら、列は 1 つしか残らない → まとめない
+def test_alignment_qc_json_from_another_dataset_is_rejected(tmp_path):
+    # 特徴 ID は小さい整数で別の run にも同じ ID がある。指紋の違う JSON は黙ってまとめず拒む
+    from metabolomix.analysis import alignment_qc
+
+    ds = _split_ds()
+    qc = alignment_qc.find_split_pairs(ds)
+    assert isinstance(qc["dataset_fingerprint"], str) and len(qc["dataset_fingerprint"]) == 64
+    spec = _split_spec(features={"all": True, "alignment_qc": str(tmp_path / "qc.json")})
+    other = _split_ds()
+    other.feature_matrix = other.feature_matrix * 2.0                # 同じ ID・別の値 = 別の run
+    assert alignment_qc.find_split_pairs(other)["dataset_fingerprint"] != qc["dataset_fingerprint"]
+    for bad in ({**qc, "dataset_fingerprint": alignment_qc.find_split_pairs(other)["dataset_fingerprint"]},
+                {k: v for k, v in qc.items() if k != "dataset_fingerprint"}):
+        (tmp_path / "qc.json").write_text(json.dumps(bad), encoding="utf-8")
+        with pytest.raises(DomainError) as info:
+            _ds_rows(ds, spec)
+        assert info.value.code == "ANALYSIS_INPUT_INVALID"
+        assert info.value.details["field"] == "features.alignment_qc"
+
+
+def test_merge_happens_before_the_recipe_so_a_detection_filter_keeps_the_group():
+    # 割れの少数側（1266）は検出が 2 試料だけで、単独なら検出率の篩に落ちる。recipe の前にまとめ、
+    # まとめた列の検出状態を「どちらかで検出」にするので、群は篩を通る
     ds = _split_ds(detected=True)
     recipe = {"steps": ["detection_filter"],
               "detection_filter": {"basis": "detected", "min_rate": {"sample": 0.5}}}
-    spec = _split_spec(analyses=[{"analysis_id": "main", "test": {"kind": "welch"},
-                                  "matrix": recipe}])
-    result, rows = _ds_rows(ds, spec)
-    assert sorted(rows) == ["1265", "2000"] and rows["1265"]["merged_from"] is None
-    assert result["analyses"][0]["merge_split"] == {"merged_from": {},
-                                                    "skipped": [["1265", "1266"]]}
+    analyses = [{"analysis_id": "main", "test": {"kind": "welch"}, "matrix": recipe}]
+    result, rows = _ds_rows(ds, _split_spec(analyses=analyses))
+    assert sorted(rows) == ["1265", "2000"] and rows["1265"]["merged_from"] == ["1265", "1266"]
+    assert rows["1265"]["status"] == "tested"
+    assert result["analyses"][0]["matrix"]["n_features_in"] == 2           # まとめた後の特徴数
+    assert result["analyses"][0]["matrix"]["steps"][0]["removed"] == []
+    off, _ = _ds_rows(ds, _split_spec(analyses=analyses, features={"all": True,
+                                                                  "merge_split": False}))
+    assert off["analyses"][0]["matrix"]["steps"][0]["removed"] == ["1266"]
 
 
 def test_rule_hash_changes_with_merge_split():

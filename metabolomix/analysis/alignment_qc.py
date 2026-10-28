@@ -392,8 +392,13 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
 
     by_type = {t: sum(p["type"] == t for p in pairs) for t in TYPES}
     block_shifts = [p["delta_rt"] for p in pairs if p["type"] == "injection_block"]
+    from metabolomix.analysis.result_state import dataset_fingerprint
+
     return {
         "schema": SCHEMA,
+        # どのデータセット（極性・run）で作ったか。統計の側が別の run の JSON を取り込まない
+        # ための照合に使う（`analysis_spec` の `features.alignment_qc`）。
+        "dataset_fingerprint": dataset_fingerprint(ds),
         "params": {**params, "min_dominance": MIN_DOMINANCE,
                    "min_complementary": MIN_COMPLEMENTARY, "group_purity": GROUP_PURITY,
                    "signal": "detected" if mask is not None else "values"},

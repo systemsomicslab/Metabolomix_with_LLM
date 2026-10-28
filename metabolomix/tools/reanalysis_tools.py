@@ -161,8 +161,6 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
         }
         if "aggregate" in analysis:
             item["aggregate"] = analysis["aggregate"]
-        if "merge_split" in analysis:
-            item["merge_split"] = analysis["merge_split"]
         if "covariate_excluded_samples" in analysis:
             item["covariate_excluded_samples"] = analysis["covariate_excluded_samples"]
         if written is None:
@@ -175,6 +173,7 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
         "merge_split": {"enabled": result["merge_split"]["enabled"],
                         "source": result["merge_split"]["source"],
                         "n_groups_used": len(result["merge_split"]["groups"]),
+                        "n_groups_skipped": len(result["merge_split"]["skipped"]),
                         "groups_hash": result["merge_split"]["groups_hash"]},
         "input_fingerprint": result["input_fingerprint"],
         "comparison": result["comparison"],
