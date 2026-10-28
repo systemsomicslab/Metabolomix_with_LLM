@@ -882,9 +882,19 @@ def test_reference_is_median_injection():
 
 
 def test_reference_counts_excluded_samples_too():
-    names = ["a.wiff", "b.wiff", "c.wiff"]
-    rows = _rows(names, [3, 1, 2], include=[True, False, True])
-    assert choose_alignment_reference(names, rows)["sample_file"] == "c.wiff"
+    names = ["a.wiff", "b.wiff", "c.wiff", "d.wiff", "e.wiff"]
+    rows = _rows(names, [1, 2, 3, 4, 5], include=[False, False, True, True, True])
+    # 全 5 件の中央は注入順 3 の c。除外を落とすと 3 件（3,4,5）の中央 4 の d になる。
+    ref = choose_alignment_reference(names, rows)
+    assert (ref["file_id"], ref["sample_file"]) == (2, "c.wiff")
+
+
+def test_reference_with_rows_for_only_some_primaries():
+    names = ["a.wiff", "b.wiff", "c.wiff", "d.wiff", "e.wiff"]
+    rows = _rows(names[:3], [5, 1, 3])  # 残り 2 件の行が無い
+    ref = choose_alignment_reference(names, rows)
+    assert ref["injection_order_source"] == "filename"
+    assert (ref["file_id"], ref["sample_file"]) == (2, "c.wiff")
 
 
 def test_reference_even_count_takes_lower_median():
