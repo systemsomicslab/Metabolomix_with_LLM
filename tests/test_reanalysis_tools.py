@@ -328,3 +328,49 @@ def test_homolog_check_tool_with_members(data):
                      {"feature_id": "20", "carbons": 36, "double_bonds": 1}]},
         dataset_handle=handle))
     assert bad["verdict"] == "fail"
+
+
+# ---------- dataset_alignment_qc ----------
+
+#: 最初の 2 注入（ファイル名の順で HC1・HC2）だけが RT +0.6 の別スポットに割れた CE。
+SPLIT_FEATURES = (
+    {"id": "30", "mz": 650.6000, "rt": 20.00, "values": [20, 21, 1000, 1010, 1020, 1030, 990, 995],
+     "sme": [{"name": "CE 18:2", "inchikey": "RJECHNNFRHZQKU-RMUVNZEASA-N", "formula": "C45H76O2",
+              "adduct": "[M+H]1+", "theo": 650.6000}]},
+    {"id": "31", "mz": 650.6040, "rt": 20.60, "values": [1005, 1015, 22, 20, 21, 23, 20, 22],
+     "sme": []},
+    {"id": "32", "mz": 300.0000, "rt": 3.00, "values": [5, 6, 5, 5, 6, 5, 5, 5], "sme": []},
+)
+
+
+def test_tool_writes_output_and_returns_summary(tmp_path):
+    mztab = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab", features=SPLIT_FEATURES)
+    handle = _open({"mztab": mztab})
+    target = tmp_path / "results" / "alignment_qc_pos.json"
+    out = json.loads(R.dataset_alignment_qc(output_path=str(target), dataset_handle=handle))
+    assert out["status"] == "success", out
+    assert out["injection_order_source"] == "filename"
+    assert out["summary"]["by_type"]["injection_block"] == 1
+    assert out["summary"]["n_features_affected"] == 2
+    assert out["output_path"] == str(target.resolve())
+    assert "pairs" not in out                             # 全体はファイルにだけ書く
+    written = json.loads(target.read_text(encoding="utf-8"))
+    assert written["schema"] == "alignment-qc.v1"
+    (pair,) = written["pairs"]
+    assert pair["features"] == ["30", "31"] and pair["mergeable"] is True
+    assert pair["block"] == {"spot": "31", "injections": [1, 2]}
+    assert written["params"]["ppm"] == 15.0
+    # 同じ入力なら同じファイル・出力先なしなら要約だけ・ハンドルの状態は変えない
+    again = tmp_path / "again.json"
+    R.dataset_alignment_qc(output_path=str(again), dataset_handle=handle)
+    assert again.read_bytes() == target.read_bytes()
+    inline = json.loads(R.dataset_alignment_qc(dataset_handle=handle))
+    assert inline["status"] == "success" and "output_path" not in inline
+    assert handles.registry.get(handle).dataset.pp_matrix is None
+    bad = json.loads(R.dataset_alignment_qc(ppm=-1, dataset_handle=handle))
+    assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
+
+
+def test_alignment_qc_without_dataset_is_missing_state():
+    out = json.loads(R.dataset_alignment_qc())
+    assert out["error"]["code"] == "missing_state"

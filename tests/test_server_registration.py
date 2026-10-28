@@ -36,6 +36,7 @@ import server
 # 照合の詳細: library_search / dcl_spot_spectrum を追加(80→82)。
 # 再解析の統計の spec: dataset_analysis_run を追加(82→83)。
 # 再解析の合否・同族列・関係・証拠の束・質量精度・新しい知見の候補と診断イオン(83→90)。
+# 割れたアライメントスポットの検出: dataset_alignment_qc を追加(90→91)。
 EXPECTED_TOOLS = sorted([
     "dataset_handle_open",
     "dataset_handle_list",
@@ -49,6 +50,7 @@ EXPECTED_TOOLS = sorted([
     "dataset_claim_evidence",
     "dataset_mass_accuracy",
     "dataset_novel_candidates",
+    "dataset_alignment_qc",
     "dcl_diagnostic_ions",
     "arf_export_evidence_bundle",
     "dataset_export_evidence_bundle",

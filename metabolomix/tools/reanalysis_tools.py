@@ -22,9 +22,9 @@ from metabolomix.core.mcp_errors import missing_state, mztab_error
 from metabolomix.core.serialization import json_payload, round_floats
 from metabolomix.tools._holder import resolve_holder
 
-__all__ = ["dataset_analysis_run", "dataset_claim_evidence", "dataset_feature_relations",
-           "dataset_homolog_check", "dataset_mass_accuracy", "dataset_novel_candidates",
-           "library_msms_qualify"]
+__all__ = ["dataset_alignment_qc", "dataset_analysis_run", "dataset_claim_evidence",
+           "dataset_feature_relations", "dataset_homolog_check", "dataset_mass_accuracy",
+           "dataset_novel_candidates", "library_msms_qualify"]
 
 #: output_path なしで行を返す上限（解析ごと）。超えれば output_path を求める。
 MAX_INLINE_ROWS = 50
@@ -568,3 +568,61 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
                                  "rt": None if r["rt"] is None else round(r["rt"], 3)}
                                 for r in rows], columns)}),
     })
+
+
+# ---------- アライメントの品質 ----------
+
+#: 戻り値に group_aligned の組を TSV で並べる上限（チームの監査に回す組。超えればファイルだけ）。
+_GROUP_ALIGNED_COLUMNS = ("pair_id", "feature_a", "feature_b", "mz", "rt_a", "rt_b", "delta_rt",
+                          "adduct", "name_a", "name_b")
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                      idempotentHint=True),
+          structured_output=False)
+def dataset_alignment_qc(output_path: str | None = None, ppm: float = 15.0,
+                         max_rt_gap: float = 1.0, dataset_handle: str | None = None) -> str:
+    """1 つの物質が 2 つ以上のアライメントスポットに割れた組を探す（alignment-qc.v1。再解析で使う）。
+
+    候補は同じ付加体・|Δm/z| ≤ ppm・0.05 < ΔRT ≤ max_rt_gap 分の 2 スポットで、試料ごとの
+    受け持ち（検出状態があれば検出、無ければ値の大きい方）が補い合う組を割れとする。型は
+    `injection_block`（片方が注入順で連続した塊だけを持つ。群と重なっても優先）・
+    `group_aligned`（受け持ちが群と一致。まとめない）・`interleaved`。`mergeable` は
+    `injection_block` か `interleaved` で注釈が両立する組（統計の側が試料ごとに大きい方の値で
+    1 つにまとめてよい）。注入順はハンドルの実験情報シート、無ければファイル名の順
+    （`injection_order_source`）。欄の意味は `lipidmix://docs/output-format/reanalysis`。
+
+    output_path: 全体（組・連結成分・試料ごとの受け持ち）を JSON でここへ書く
+        （例 `results/alignment_qc_pos.json`）。戻り値は要約と `group_aligned` の組だけ。
+    dataset_handle: ハンドルのデータセット。省略時は対話のセッション。状態は変えない。
+    """
+    from metabolomix.analysis import alignment_qc
+
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    ds, error = _dataset_or_error(holder, True)
+    if error:
+        return error
+    try:
+        qc = round_floats(alignment_qc.find_split_pairs(ds, ppm=ppm, max_rt_gap=max_rt_gap),
+                          digits=6)
+        written = write_result(output_path, qc) if output_path else None
+    except DomainError as exc:
+        return mztab_error(exc.code, exc.message, exc.details or None)
+    flagged = [p for p in qc["pairs"] if p["type"] == "group_aligned"]
+    payload = {"status": "success", "schema": qc["schema"],
+               "injection_order_source": qc["injection_order_source"],
+               "signal": qc["params"]["signal"],
+               "summary": round_floats(qc["summary"], digits=4)}
+    if written:
+        payload["output_path"] = written
+    if flagged and len(flagged) <= MAX_INLINE_ROWS:
+        payload["group_aligned"] = rows_table(
+            [{"pair_id": p["pair_id"], "feature_a": p["features"][0],
+              "feature_b": p["features"][1], "mz": round(p["mz"][0], 4),
+              "rt_a": round(p["rt"][0], 3), "rt_b": round(p["rt"][1], 3),
+              "delta_rt": round(p["delta_rt"], 3), "adduct": p["adduct"],
+              "name_a": p["names"][0], "name_b": p["names"][1]} for p in flagged],
+            _GROUP_ALIGNED_COLUMNS)
+    return json_payload(payload)

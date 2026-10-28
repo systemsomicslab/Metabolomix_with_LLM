@@ -20,6 +20,7 @@ from metabolomix.library import tools as library_tools
 from metabolomix.mztab import identity as mztab_identity
 from metabolomix.tools import dataset_analysis_tools as T
 from metabolomix.tools import handle_tools, mztab_tools
+from metabolomix.tools import reanalysis_tools as R
 from tests.reanalysis_fixtures import NEG_FEATURES, write_mztab
 
 GOLDEN = Path(__file__).parent / "fixtures" / "handle_golden_no_handle.json"
@@ -49,7 +50,7 @@ def _open(path) -> str:
 
 
 def _tools(tmp_path):
-    """ハンドルを受ける既存の 13 ツールと最小の引数。"""
+    """ハンドルを受けるツール（既存の 13 と dataset_alignment_qc）と最小の引数。"""
     return [
         (mztab_tools.dataset_status, {}),
         (T.dataset_preprocess, {}),
@@ -64,6 +65,7 @@ def _tools(tmp_path):
         (library_tools.library_load, {"ion_mode": "positive"}),
         (library_tools.library_match_feature, {"precursor_mz": 104.107}),
         (library_tools.library_plot_mirror, {}),
+        (R.dataset_alignment_qc, {}),
     ]
 
 

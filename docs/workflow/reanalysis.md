@@ -155,3 +155,26 @@
 5. ├─ metabolomix/analysis/mass_accuracy.py  novel_candidates()
 6. │  └─ metabolomix/analysis/mass_accuracy.py  sme_ppm()
 7. └─ metabolomix/analysis/mass_accuracy.py  rule_hash()
+
+## dataset_alignment_qc
+
+前提: データセット（無ければ `missing_state`）。状態変更: なし。`output_path` を渡すと JSON を書く。
+注入順は `ds.sample_metadata_rows`（pipeline の run では実験情報シート）の `injection_order`、
+1 試料でも欠ければファイル名の順。受け持ちは `ds.detected_mask`（`.arf` の検出状態）があれば検出、
+無ければ値の大きい方。
+
+1. metabolomix/tools/reanalysis_tools.py  dataset_alignment_qc()
+2. ├─ metabolomix/analysis/alignment_qc.py  find_split_pairs()
+3. │  ├─ metabolomix/analysis/alignment_qc.py  _injection_order()
+4. │  ├─ metabolomix/analysis/alignment_qc.py  _owners()
+5. │  ├─ metabolomix/analysis/alignment_qc.py  _pair()
+6. │  │  ├─ metabolomix/analysis/alignment_qc.py  _block()
+7. │  │  ├─ metabolomix/analysis/alignment_qc.py  _group_aligned()
+8. │  │  └─ metabolomix/analysis/alignment_qc.py  names_compatible()
+9. │  │     └─ metabolomix/msdial/lipid_identity.py  lipid_species_of()
+10. │  └─ metabolomix/analysis/alignment_qc.py  _components()
+11. ├─ metabolomix/tools/reanalysis_tools.py  write_result()
+12. └─ metabolomix/tools/reanalysis_tools.py  rows_table()
+
+まとめは別のツールの側で行う: `alignment_qc.merge_matrix_columns()`（試料ごとに大きい方の値）と
+`alignment_qc.split_partners()`（特徴 → 割れの相手）が唯一の実装。

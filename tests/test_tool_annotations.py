@@ -87,6 +87,7 @@ EXPECTED_ANNOTATIONS = {
     "dataset_analysis_run": LOCAL_WRITE,
     "dataset_claim_evidence": LOCAL_WRITE,
     "dataset_novel_candidates": LOCAL_WRITE,
+    "dataset_alignment_qc": LOCAL_WRITE,
     "library_msms_qualify": READ_ONLY,
     "dataset_homolog_check": READ_ONLY,
     "dataset_feature_relations": READ_ONLY,

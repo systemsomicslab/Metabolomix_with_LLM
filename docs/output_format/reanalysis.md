@@ -289,3 +289,71 @@ spec:
 |ppm| が帯の許容幅以内（`max_mz` 未満の最初の帯、無ければ `default`）で、q < `q_max` の特徴から
 除外を外した一覧（q の昇順）。行は `feature_id name inchikey adduct mz rt ppm group_ref group_test
 log2fc_test_over_ref p q direction`。論文の同定リストとの突き合わせはしない（再解析の側）。
+
+## 9. 割れたアライメントスポット（alignment-qc.v1）
+
+`dataset_alignment_qc(output_path=None, ppm=15.0, max_rt_gap=1.0)`: 1 つの物質が 2 つ以上の
+アライメントスポットに割れた組を探す（spec 2026-10-28 §4.3）。**組を見つけて型を付けるだけで、
+行列は変えない。** まとめは統計の側が `mergeable` の成分だけに行う（試料ごとに大きい方の値。
+gap-fill の値は背景で、本物のピークより大きくならないため）。
+
+- **候補**: 同じ付加体（SML の `adduct_ions`）・|Δm/z| ≤ `ppm`（m/z の小さい方に対して）・
+  0.05 < |ΔRT| ≤ `max_rt_gap` 分の 2 スポット。
+- **受け持ち（`owner`）**: 試料ごとに、その試料の信号を持つスポット。検出状態（`.arf` の
+  `detected_mask`）があれば検出された方（両方で検出なら値の大きい方）で、どちらでも検出されて
+  いない試料は、片方の値が他方の `min_dominance`（3）倍以上ならその方（gap-fill の値で補う。
+  検出の疎な run で本物のピークの多くが gap-fill に入るため）、そうでなければ `null`。
+  検出状態が無ければ値の大きい方。どちらにも信号（値 > 0）が無い試料は `null`。
+- **割れの判定**: 2 スポットがそれぞれ 1 試料以上を受け持ち、かつ補い合う——検出状態があれば
+  両方で検出された試料（`both_detected_fraction`。分母はどちらかで検出された試料）が
+  `max_both_detected`（0.10）以下で、かつ信号か検出のある試料のうち受け持ちの決まった試料が
+  `min_complementary`（0.9）以上。検出状態が無ければ（`both_detected_fraction` は `null`）、片方の値が
+  他方の `min_dominance` 倍以上の試料が、信号のある試料の `min_complementary` 以上。
+  検出だけで判定しないのは、どちらも数試料でしか検出されない無関係な 2 スポットが「両方で検出
+  0%」で割れに見えるから。3 スポットの連鎖は、3 つ目が受け持つ試料で 2 スポットの背景が同程度だと
+  その組が成り立たず、隣り合う組だけで成分になる。
+- **型**（`type`）:
+  - `injection_block` — 片方の受け持ちが注入順で連続した塊（信号の無い試料は飛ばす）。
+    群と重なっても優先する（測定順と群が重なる run では、測定順のずれは必ず群とも重なる）。
+    両方が塊なら受け持ちの少ない方を塊とする。
+  - `group_aligned` — 塊でなく、受け持ちが群と一致する（どの群でも多い方のスポットの受け持ちが
+    `group_purity`（0.9）以上で、2 スポットとも少なくとも 1 つの群の多い方）。群ごとに別の
+    異性体が出ている可能性があるので**まとめない**。印を付けてチームの監査とレポートに回す。
+  - `interleaved` — ほか（試料ごとに入れ替わる）。
+- **注釈の両立**（`names_compatible`）: 同じ名前（大文字小文字を無視）、GOSLIN の種のレベルで同じ
+  和組成（`PC 16:0_18:1` と `PC 34:1`）、または片方が注釈なし。名前は SME の rank 1、無ければ SML。
+- **`mergeable`** = 型が `injection_block` か `interleaved`、かつ `names_compatible`。
+- **注入順**（`injection_order_source`）: `manifest`（pipeline の実験情報シートの `injection_order`）・
+  `metadata`（シート以外から推した値、または呼び出し側が渡した順）・`filename`（1 試料でも
+  欠ければ試料名の順。`block.injections` はその順位）。
+
+`output_path` の JSON:
+
+```json
+{"schema": "alignment-qc.v1",
+ "params": {"ppm": 15.0, "min_rt_gap": 0.05, "max_rt_gap": 1.0, "max_both_detected": 0.1,
+            "min_dominance": 3.0, "min_complementary": 0.9, "group_purity": 0.9,
+            "signal": "detected"},
+ "injection_order_source": "manifest",
+ "pairs": [{"pair_id": "P1", "features": ["1265", "1266"], "mz": [..], "rt": [..],
+            "delta_rt": 0.61, "delta_ppm": 7.7, "adduct": "[M+NH4]1+",
+            "names": ["CE 18:2", null], "names_compatible": true, "type": "injection_block",
+            "owner": {"<試料名>": "1265"}, "n_owned": [40, 2], "both_detected_fraction": 0.0,
+            "block": {"spot": "1266", "injections": [1, 2]}, "mergeable": true}],
+ "groups": [{"group_id": "G1", "features": ["1265", "1266"], "pair_ids": ["P1"],
+             "type": "injection_block", "types": ["injection_block"], "mergeable": true}],
+ "summary": {"n_pairs": 1, "by_type": {"injection_block": 1, "group_aligned": 0, "interleaved": 0},
+             "n_features_affected": 2, "injection_block_median_delta_rt": 0.61,
+             "n_mergeable_pairs": 1, "n_groups": 1, "n_mergeable_groups": 1}}
+```
+
+- `pairs[].features` は `injection_block` なら [塊でない側, 塊の側]、ほかは RT の昇順。
+  `delta_rt = rt[1] − rt[0]`（`injection_block` では塊の RT のずれ。符号つき）、
+  `delta_ppm = (mz[1] − mz[0]) / mz[0] × 10⁶`。`block.injections` は塊の最初と最後の注入順。
+- `groups[]` は組の連結成分（3 スポット以上の連鎖を 1 つにする）。`features` の先頭が代表
+  （検出された試料、無ければ値が最大の試料の最も多いスポット）。`type` は成分の型で、組の型が
+  混ざれば `group_aligned` > `interleaved` > `injection_block` の順で強い方。`mergeable` は成分の
+  すべての組が mergeable のとき真。
+- 戻り値は `status`・`schema`・`injection_order_source`・`signal`（`detected` / `values`）・`summary`・
+  `output_path`（渡したとき）と、`group_aligned` の組（50 件以下のとき TSV: `pair_id feature_a
+  feature_b mz rt_a rt_b delta_rt adduct name_a name_b`）。

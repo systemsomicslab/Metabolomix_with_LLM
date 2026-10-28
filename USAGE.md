@@ -1,4 +1,4 @@
-# USAGE — ms-data-parser MCP ツール一覧(全90ツール)
+# USAGE — ms-data-parser MCP ツール一覧(全91ツール)
 
 MS-DIAL 出力(`.arf` / `.arf2` / `.pai2` / `.dcl` / `.EIC.aef`)と mzTab-M を解析し、PCA・差次的解析・
 アノテーション検証・文献探索・レポート記録までを行う MCP サーバーのツール群です。
@@ -305,6 +305,7 @@ run ディレクトリの `remote-job.json`。サーバは版を返さないの�
 | `dataset_claim_evidence` | 1 主張の証拠の束(claim-evidence.v1): 規則で選んだ既定の特徴(`dataset_feature_search` の目標照合と同じ規則)・許容幅や付加体を広げた走査・候補ごとの MS/MS の照合と合否・関係を 1 つの JSON にまとめる。特徴は決めない。同じ spec なら同じ JSON。InChIKey が無い脂質の種の主張は `target.lipid_species`(opt-in。MS/MS の規則の target にも種が渡る)。 |
 | `dataset_mass_accuracy` | SME の質量誤差(ppm)の分布を m/z 帯ごとに返す(n・中央値・四分位・5/10 ppm 以内の割合)。許容幅は決めない。 |
 | `dataset_novel_candidates` | 新しい知見の候補の一覧: SME・m/z 帯ごとの許容幅・q の閾値で絞り、除く対象を外す。統計は 2 群比較の result_id か analysis-spec の解析から。 |
+| `dataset_alignment_qc` | 1 つの物質が 2 つ以上のアライメントスポットに割れた組を探す(alignment-qc.v1)。同じ付加体・\|Δm/z\| ≤ 15 ppm・0.05 < ΔRT ≤ 1.0 分で、試料ごとの受け持ち(検出状態があれば検出、無ければ値の大きい方)が補い合う組。型は `injection_block`(片方が注入順の連続した塊)・`group_aligned`(受け持ちが群と一致。まとめない)・`interleaved`。`mergeable` は統計の側が試料ごとに大きい方の値で 1 つにまとめてよい組。注入順は実験情報シート、無ければファイル名の順。全体は `output_path` に JSON、戻り値は要約。 |
 
 次の既存ツールは省略可能な引数 `dataset_handle` を受ける(省略時は今までどおり対話のセッション):
 `dataset_status` `dataset_preprocess` `dataset_pca` `dataset_differential`
