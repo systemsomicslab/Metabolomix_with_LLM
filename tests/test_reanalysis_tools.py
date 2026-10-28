@@ -233,12 +233,23 @@ def test_mass_accuracy_msms_matched_subset(match_data):
 def test_mass_accuracy_msms_matched_needs_the_sml_columns(data):
     handle = _open(data)           # この mzTab の SML には opt_global_spectrum_matched が無い
     out = json.loads(R.dataset_mass_accuracy(subset="msms_matched", dataset_handle=handle))
-    assert out["error"]["code"] == "DATASET_BAD_REQUEST"
-    assert out["error"]["details"]["field"] == "subset"
-    # 既定の rank1 は今までどおり動く
-    assert json.loads(R.dataset_mass_accuracy(dataset_handle=handle))["subset"] == "rank1"
+    # エラーにしない（手順の後退を止めない）。n=0 と、選べなかった理由を返す
+    assert out["status"] == "success" and out["subset"] == "msms_matched"
+    assert out["subset_available"] is False and "opt_global_spectrum_matched" in out["note"]
+    assert out["overall"] == {"n": 0} and all(b["n"] == 0 for b in out["bands"])
+    # 既定の rank1 は今までどおり動く（旗の有無の注記は付かない）
+    plain = json.loads(R.dataset_mass_accuracy(dataset_handle=handle))
+    assert plain["subset"] == "rank1" and "subset_available" not in plain
     bad = json.loads(R.dataset_mass_accuracy(subset="nope", dataset_handle=handle))
     assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
+
+
+def test_mass_accuracy_msms_matched_is_rank1_only(match_data):
+    handle = _open(match_data)
+    out = json.loads(R.dataset_mass_accuracy(rank=2, subset="msms_matched", dataset_handle=handle))
+    assert out["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert out["error"]["details"]["field"] == "rank"
+    assert json.loads(R.dataset_mass_accuracy(rank=2, dataset_handle=handle))["subset"] == "rank1"
 
 
 def test_injection_trend_unavailable_without_per_sample_mz(match_data):
@@ -256,6 +267,8 @@ def _with_trend(match_data, ppm_of_sample):
     ds.per_sample_mz = {fid: {name: mz * (1 + ppm_of_sample(i) * 1e-6)
                               for i, name in enumerate(sorted(ds.sample_names)) if i != 7}
                         for fid, mz in theo.items()}
+    # 照合されていない特徴 2（msms_matched に入らない）には、まったく別の傾向（一定 +50 ppm）
+    ds.per_sample_mz["2"] = {name: 300.0 * (1 + 50e-6) for name in ds.sample_names}
     return handle
 
 
@@ -270,8 +283,13 @@ def test_injection_trend_spearman(match_data):
     assert [p["injection_order"] for p in per] == sorted(p["injection_order"] for p in per)
     assert per[0]["sample"] == "HC1" and per[0]["n"] == 2
     assert per[0]["median_ppm"] == pytest.approx(1.0, abs=1e-3)
+    # 特徴 2 の +50 ppm は subset の行に入らないので、傾向に混ざらない（試料 8 も載らないまま）
+    assert max(p["median_ppm"] for p in per) < 10
+    # rank1 では特徴 2 も数える（8 試料すべてに値が付き、1 試料目は 3 特徴）
+    rank1 = json.loads(R.dataset_mass_accuracy(dataset_handle=handle))["injection_trend"]
+    assert rank1["n_samples"] == 8 and rank1["per_injection"][0]["n"] == 3
     flipped = _with_trend(match_data, lambda i: 10.0 - i)
-    assert json.loads(R.dataset_mass_accuracy(dataset_handle=flipped)
+    assert json.loads(R.dataset_mass_accuracy(subset="msms_matched", dataset_handle=flipped)
                       )["injection_trend"]["spearman_rho"] == pytest.approx(-1.0)
 
 

@@ -325,11 +325,14 @@ spec:
 `subset`（既定 `rank1`）: `rank1` は `rank` 位の SME すべて。`msms_matched` はそのうち、その特徴の
 MS/MS が参照スペクトルに照合されたもの（SML の `opt_global_spectrum_matched` が真。mzTab-M の
 SML の列は `docs/output_format/mztab.md` §13.3。**研究室 MSP と LBM の同定を区別せず両方を数える**。
-偽・不明の特徴は入らない）。SML にその列が無い mzTab では `DATASET_BAD_REQUEST`（`field: subset`）。
-戻り値に `subset` を書く。
+偽・不明の特徴は入らない）。照合の旗は rank 1 の同定を表すので、**`msms_matched` は `rank=1` のときだけ**
+（それ以外は `DATASET_BAD_REQUEST`、`field: rank`。`subset` の値が不正でも `DATASET_BAD_REQUEST`）。
+SML にその列が無い mzTab では**エラーにせず**、`subset_available: false` と `note` を付けて
+`overall` `{"n": 0}`・帯の `n` 0 を返す（手順の後退——帯の n 不足 → 極性全体 → `rank1`——を止めない。
+`subset_available` は列が無いときだけ出る）。戻り値に `subset` を書く。
 
 `injection_trend`（選んだ `subset` の SME について）: 試料ごとの質量誤差の、注入順との関係。
-試料の誤差は、**その試料で検出された（gap-fill でない）セル**の実測 m/z と理論 m/z の差
+**全試料を数える**（ブランク・QC があれば含む）。試料の誤差は、**その試料で検出された（gap-fill でない）セル**の実測 m/z と理論 m/z の差
 （ppm。`ds.per_sample_mz`。隣接 `.arf` を取り込めたときだけある）。
 
 | キー | 意味 |

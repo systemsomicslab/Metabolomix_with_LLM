@@ -85,7 +85,8 @@ def summarize(values: list[float]) -> dict:
 def injection_trend(ds, rows: list[dict]) -> dict:
     """試料ごとの質量誤差（ppm）の中央値と、注入順との Spearman 相関。
 
-    `rows` は `sme_ppm` の行。試料の誤差は、その試料で**検出された**（gap-fill でない）セルの
+    `rows` は `sme_ppm` の行（選んだ subset のものだけ）。全試料を数える（ブランク・QC が
+    あれば含む。使える特徴が 1 つも無い試料は載せない）。試料の誤差は、その試料で**検出された**（gap-fill でない）セルの
     実測 m/z（`ds.per_sample_mz`）と理論 m/z の差。注入順は割れの組の判定と同じ規則
     （`alignment_qc.sample_injection_order`。出所を `injection_order_source` に書く）。
     試料ごとの m/z が無ければ `{"status": "unavailable"}`。rho は、データのある試料が
@@ -94,7 +95,7 @@ def injection_trend(ds, rows: list[dict]) -> dict:
     per_sample = getattr(ds, "per_sample_mz", None)
     if per_sample is None:
         return {"status": "unavailable"}
-    from metabolomix.analysis.alignment_qc import _order_label, sample_injection_order
+    from metabolomix.analysis.alignment_qc import order_label, sample_injection_order
 
     names = [str(n) for n in ds.sample_names]
     order, source = sample_injection_order(ds)
@@ -104,7 +105,7 @@ def injection_trend(ds, rows: list[dict]) -> dict:
         for name, mz in (per_sample.get(row["feature_id"]) or {}).items():
             if name in errors:
                 errors[name].append((mz - theo) / theo * 1e6)
-    per_injection = [{"sample": names[i], "injection_order": _order_label(order[i]),
+    per_injection = [{"sample": names[i], "injection_order": order_label(order[i]),
                       "median_ppm": statistics.median(errors[names[i]]), "n": len(errors[names[i]])}
                      for i in sorted(range(len(names)), key=lambda i: (order[i], i))
                      if errors[names[i]]]

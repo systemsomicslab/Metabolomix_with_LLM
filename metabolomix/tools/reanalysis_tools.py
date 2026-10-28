@@ -491,7 +491,9 @@ def dataset_mass_accuracy(band_edges: list[float] | None = None, rank: int = 1,
     `statistics.quantiles(n=4)`）。許容幅は決めない（再解析の規則で決める）。
     subset: `rank1`（既定。rank の SME すべて）か `msms_matched`（そのうち、特徴の MS/MS が参照
     スペクトルに照合されたもの。SML の `opt_global_spectrum_matched` が真。LBM 由来も研究室 MSP
-    由来も数える。列の無い mzTab ではエラー）。
+    由来も数える。この旗は rank 1 の同定を表すので `rank=1` のときだけ。列の無い mzTab では
+    `subset_available: false` と `note` を付けて n=0 を返す——手順の後退（帯の n 不足 → 極性全体 →
+    rank1）を止めない）。
     `injection_trend`: 試料ごとの実測 m/z（隣接 `.arf` の検出されたセル）があれば、試料ごとの
     誤差の中央値 `per_injection`（`sample` `injection_order` `median_ppm` `n`）と注入順との
     `spearman_rho`（5 試料未満は null）・`n_samples`・`injection_order_source`。無ければ
@@ -516,13 +518,19 @@ def dataset_mass_accuracy(band_edges: list[float] | None = None, rank: int = 1,
     if subset not in mass_accuracy.SUBSETS:
         return mztab_error("DATASET_BAD_REQUEST", f"subset は {list(mass_accuracy.SUBSETS)}",
                            {"field": "subset"})
-    if subset == "msms_matched" and not mass_accuracy.has_match_information(ds):
+    if subset == "msms_matched" and rank != 1:
         return mztab_error("DATASET_BAD_REQUEST",
-                           "この mzTab の SML に opt_global_spectrum_matched が無く、MS/MS で照合された"
-                           "同定を選べない（subset=rank1 を使う）", {"field": "subset"})
-    rows = mass_accuracy.sme_ppm(ds, rank=rank, subset=subset)
+                           "subset=msms_matched は rank 1 の同定だけ（SML の照合の旗は rank 1 の同定を"
+                           "表す）", {"field": "rank"})
+    available = subset != "msms_matched" or mass_accuracy.has_match_information(ds)
+    rows = mass_accuracy.sme_ppm(ds, rank=rank, subset=subset) if available else []
     summary = mass_accuracy.band_summary(rows, [float(e) for e in edges])
+    extra = {} if available else {
+        "subset_available": False,
+        "note": "この mzTab の SML に opt_global_spectrum_matched が無く、MS/MS で照合された同定を"
+                "選べない（n=0）。subset=rank1 を使う"}
     return json_payload(round_floats({"status": "success", "rank": rank, "subset": subset,
+                                      **extra,
                                       "band_edges": sorted(float(e) for e in edges),
                                       **summary,
                                       "injection_trend": mass_accuracy.injection_trend(ds, rows)},

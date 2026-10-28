@@ -48,8 +48,8 @@ import numpy as np
 from metabolomix.core.atomic_io import DomainError
 
 __all__ = ["SCHEMA", "TYPES", "MergedMatrix", "find_split_pairs", "merge_matrix_columns",
-           "id_order", "names_compatible", "read_qc_file", "sample_injection_order",
-           "split_partners", "usable_merge_groups"]
+           "id_order", "names_compatible", "order_label", "read_qc_file",
+           "sample_injection_order", "split_partners", "usable_merge_groups"]
 
 SCHEMA = "alignment-qc.v1"
 TYPES = ("injection_block", "group_aligned", "interleaved")
@@ -164,7 +164,7 @@ def sample_injection_order(ds, given: dict | None = None) -> tuple[list[float], 
     return _injection_order(names, _rows_by_sample(ds, names), given)
 
 
-def _order_label(value: float):
+def order_label(value: float):
     return int(value) if float(value).is_integer() else value
 
 
@@ -455,8 +455,8 @@ def _pair(ds, a, b, assessed, ranked, order, groups, names, adducts,
     if block is not None:
         members = block[1]
         block_out = {"spot": b[1],
-                     "injections": [_order_label(order[members[0]]),
-                                    _order_label(order[members[-1]])]}
+                     "injections": [order_label(order[members[0]]),
+                                    order_label(order[members[-1]])]}
     return {
         "pair_id": None,
         "features": fids,
