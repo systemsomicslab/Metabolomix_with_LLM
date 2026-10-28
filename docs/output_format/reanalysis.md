@@ -284,12 +284,31 @@ spec:
 
 | 欄 | 意味 |
 |---|---|
-| `default_selection` | `target` をそのまま当てた目標照合（`dataset_feature_search` と同じ規則）。`status` が `resolved` なら `selected_feature_id` が規則で選んだ既定の特徴、決まらなければ `needs_input`（`reason`） |
-| `scans` | 走査ごとの判定と、候補の特徴 ID |
-| `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか）・`msms`（spot_id = SMF_ID の照合の上位 `top` と `qualify`。ライブラリが無ければ `{"status": "no_library"}`、MS/MS が無い・索引の崩れはその `status`）・`relations` |
+| `default_selection` | `target` をそのまま当てた目標照合（`dataset_feature_search` と同じ規則）。`status` が `resolved` なら `selected_feature_id` が規則で選んだ既定の特徴、決まらなければ `needs_input`（`reason`）。`counts` は下の表 |
+| `scans` | 走査ごとの判定（`counts` は `default_selection` と同じ意味）と、候補の特徴 ID |
+| `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか）・`split`（下）・`msms`（spot_id = SMF_ID の照合の上位 `top` と `qualify`。ライブラリが無ければ `{"status": "no_library"}`、MS/MS が無い・索引の崩れはその `status`）・`relations` |
 | `truncated` | `max_candidates` で打ち切った候補の数 |
 | `rule` / `rule_hash` | 正規化した spec とその hash |
 | `input_fingerprint` | `dataset_hash`（データの指紋）・`library_sha256` |
+
+`counts`（`default_selection` と `scans[]`。どれも特徴の一意な件数）:
+
+| 欄 | 意味 |
+|---|---|
+| `mass` / `rt` / `by_evidence` | `dataset_feature_search` の `counts` と同じ（質量の窓・RT の窓に入った数、水準ごとの規則の qualified 数） |
+| `qualified` | 規則（質量・RT・注釈）で qualified になった特徴のうち、**MS/MS の合否 `msms.qualify.verdict` が `qualified`** の数。`msms` を頼んでいない・ライブラリが無いときは `null`（0 ではない）。`max_candidates` で打ち切った候補は数えない |
+| `msms_available` | 規則で qualified になった特徴の数（`dataset_feature_search` の `counts.qualified`、v7 までの束の `counts.qualified` と同じ数） |
+
+`split`（候補が割れたアライメントスポットの組に入るときだけ。入らなければ `null`。§9 の
+`find_split_pairs` を既定の閾値で回し、`split_partners` を写す）:
+
+| 欄 | 意味 |
+|---|---|
+| `group_id` | 全体の連結成分（§9 の `groups[].group_id`） |
+| `partners` | まとめる相手（§9 の `merge_groups`。互いに最も近い mergeable な組の相手 1 つ）。まとめない特徴（`group_aligned`・最も近くない組など）は空 |
+| `type` | まとめる特徴はその組の型、まとめない特徴は成分の型（`group_aligned` > `interleaved` > `injection_block` の順で強い方） |
+| `mergeable` | 統計の側（`dataset_feature_search` / `dataset_analysis_run` の `merge_split`）が 1 つにまとめるか |
+| `component` | 成分のほかの特徴（報告用。まとめない割れの相手もここで分かる） |
 
 **束は特徴を決めない。** 最終の特徴は再解析の実行役が override の規則の範囲で決め、
 その特徴での統計は `dataset_analysis_run`（`features.feature_ids`）で別に出す。同じ spec・
@@ -315,7 +334,18 @@ spec:
 `{"analysis_spec", "analysis_id"}`（analysis-spec.v1 とその解析）。SME rank 1 の同定があり、
 |ppm| が帯の許容幅以内（`max_mz` 未満の最初の帯、無ければ `default`）で、q < `q_max` の特徴から
 除外を外した一覧（q の昇順）。行は `feature_id name inchikey adduct mz rt ppm group_ref group_test
-log2fc_test_over_ref p q direction`。論文の同定リストとの突き合わせはしない（再解析の側）。
+log2fc_test_over_ref p q direction merged_from`（JSON には `sme_feature_id` も）。論文の同定リストとの
+突き合わせはしない（再解析の側）。
+
+**割れたスポットは 1 候補に数える**（spec 2026-10-28 §4.3 (c)）。§9 の `merge_groups` の 2 スポットは
+1 つの物質で、`feature_id` は残す小さい ID、`merged_from` は 2 つの ID。統計はまとめた行列で検定し直した
+値（`statistics.result_id` では `dataset_feature_search` の `merge_split` と同じ実装で、組に入る特徴だけを
+差し替える。analysis_spec では spec の `features.merge_split`）。**同定と質量誤差**（`name` `inchikey`
+`adduct` `mz` `ppm` `rt`）は SME（rank 1）を持つ方のスポットから取り、その ID を `sme_feature_id` に書く
+（両方にあれば残す ID）。`exclude.feature_ids` は組のどちらかの ID に当たれば組ごと外す。
+`statistics.result_id` の spec は `{"result_id", "merge_split": true（既定）, "alignment_qc": <JSON のパス、任意>}`
+（`alignment_qc` は `dataset_alignment_qc` の `output_path`。省略時はその場で探す。`rule_hash` にパスは入らない）。
+戻り値と JSON の `merge_split` は `{enabled, source, n_groups}`（`n_groups` はまとめた組の数）。
 
 ## 9. 割れたアライメントスポット（alignment-qc.v1）
 

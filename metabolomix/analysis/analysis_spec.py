@@ -16,7 +16,6 @@ from __future__ import annotations
 import copy
 import csv
 import hashlib
-import json
 import math
 import re
 from pathlib import Path
@@ -539,35 +538,8 @@ def _load(normalized: dict, ds) -> dict:
 # ---------- 割れたスポットのまとめ ----------
 
 def _read_alignment_qc(path_text: str, ds) -> tuple[dict, str]:
-    path = Path(path_text)
-    if not path.is_file():
-        raise DomainError("ANALYSIS_INPUT_NOT_FOUND",
-                          f"features.alignment_qc の JSON が見つからない: {path}",
-                          {"field": "features.alignment_qc", "path": str(path)})
-    try:
-        qc = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError) as exc:
-        raise DomainError("ANALYSIS_INPUT_INVALID",
-                          f"features.alignment_qc を JSON として読めない: {exc}",
-                          {"field": "features.alignment_qc"}) from exc
-    groups = qc.get("merge_groups") if isinstance(qc, dict) else None
-    if (not isinstance(qc, dict) or qc.get("schema") != alignment_qc.SCHEMA
-            or not isinstance(groups, list)):
-        raise DomainError("ANALYSIS_INPUT_INVALID",
-                          f"features.alignment_qc は {alignment_qc.SCHEMA}（dataset_alignment_qc の "
-                          "output_path の JSON）で、merge_groups を持つこと",
-                          {"field": "features.alignment_qc"})
-    from metabolomix.analysis.result_state import dataset_fingerprint
-
-    # 特徴 ID は小さい整数で、別の極性・別の run にも同じ ID がある。別のデータセットで作った
-    # JSON を取り込むと無関係な特徴を黙ってまとめるので、指紋が合わなければ拒む。
-    if qc.get("dataset_fingerprint") != dataset_fingerprint(ds):
-        raise DomainError("ANALYSIS_INPUT_INVALID",
-                          "features.alignment_qc は今のデータセットで作った JSON ではない"
-                          "（dataset_fingerprint が合わない、または無い）。このデータセットで "
-                          "dataset_alignment_qc を実行し直す",
-                          {"field": "features.alignment_qc"})
-    return qc, _sha256(path)
+    # 読み方と指紋の照合は `alignment_qc.read_qc_file` が唯一の実装（dataset_feature_search と共有）。
+    return alignment_qc.read_qc_file(path_text, ds, field="features.alignment_qc")
 
 
 def _merge_plan(normalized: dict, ds, data: dict) -> dict:
@@ -594,10 +566,7 @@ def _merge_plan(normalized: dict, ds, data: dict) -> dict:
     else:
         qc, data["files"]["alignment_qc"] = _read_alignment_qc(path, ds)
         source = "alignment_qc"
-    given = [[str(f) for f in group["features"]] for group in qc.get("merge_groups") or []
-             if group.get("mergeable")]
-    present = {str(f) for f in data["feature_ids"]}
-    usable = [g for g in given if sum(f in present for f in g) >= 2]
+    usable, skipped = alignment_qc.usable_merge_groups(qc, data["feature_ids"])
     try:
         merged = alignment_qc.merge_matrix_columns(data["values"], data["feature_ids"], usable,
                                                    detected=data["detected"])
@@ -611,8 +580,8 @@ def _merge_plan(normalized: dict, ds, data: dict) -> dict:
                       for f in group if f != kept}
     groups = list(merged.merged_from.values())
     return {"enabled": True, "source": source, "groups": groups,
-            "groups_hash": merge_groups_hash(groups), "n_groups_given": len(given),
-            "skipped": [g for g in given if g not in usable]}
+            "groups_hash": merge_groups_hash(groups), "n_groups_given": len(usable) + len(skipped),
+            "skipped": skipped}
 
 
 def _fold_members(members: list[str], rename: dict[str, str]) -> list[str]:

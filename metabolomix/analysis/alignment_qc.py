@@ -36,6 +36,8 @@ MS-DIAL のアライメントは、1 つの物質を 2 つ以上のスポット�
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import statistics
 from pathlib import Path
@@ -46,7 +48,7 @@ import numpy as np
 from metabolomix.core.atomic_io import DomainError
 
 __all__ = ["SCHEMA", "TYPES", "MergedMatrix", "find_split_pairs", "merge_matrix_columns",
-           "names_compatible", "split_partners"]
+           "names_compatible", "read_qc_file", "split_partners", "usable_merge_groups"]
 
 SCHEMA = "alignment-qc.v1"
 TYPES = ("injection_block", "group_aligned", "interleaved")
@@ -303,7 +305,8 @@ def _group_aligned(owner, groups: list[str | None]) -> bool:
 def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
                      max_rt_gap: float = 1.0, max_both_detected: float = 0.10,
                      max_interleaved_rt_gap: float = 0.15, min_block_size: int = 2,
-                     injection_order: dict[str, int] | None = None) -> dict:
+                     injection_order: dict[str, int] | None = None,
+                     dataset_hash: str | None = None) -> dict:
     """割れたスポットの組と、その連結成分（3 スポット以上の連鎖を 1 つにする）。
 
     戻り値は alignment-qc.v1（`lipidmix://docs/output-format/reanalysis` §9）。
@@ -317,6 +320,7 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
     `pairs[].merged` は互いに最も近い mergeable な組（`_mutual_nearest`）で、`merge_groups[]` は
     その組ごとの 2 スポット（まとめる単位）。mergeable だがまとめない組は `merge_reason:
     not_mutual_nearest`。`groups[].mergeable` は成分全体がその 1 つのまとめのときだけ真。
+    `dataset_hash` は計算済みの `dataset_fingerprint(ds)`（任意。行列全体の hash を計算し直さない）。
     """
     params = _check_params(ppm, min_rt_gap, max_rt_gap, max_both_detected,
                            max_interleaved_rt_gap, min_block_size)
@@ -398,7 +402,7 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
         "schema": SCHEMA,
         # どのデータセット（極性・run）で作ったか。統計の側が別の run の JSON を取り込まない
         # ための照合に使う（`analysis_spec` の `features.alignment_qc`）。
-        "dataset_fingerprint": dataset_fingerprint(ds),
+        "dataset_fingerprint": dataset_hash or dataset_fingerprint(ds),
         "params": {**params, "min_dominance": MIN_DOMINANCE,
                    "min_complementary": MIN_COMPLEMENTARY, "group_purity": GROUP_PURITY,
                    "signal": "detected" if mask is not None else "values"},
@@ -552,6 +556,55 @@ def split_partners(qc: dict) -> dict[str, dict]:
                              "partners": [f for f in merge["features"] if f != fid],
                              "type": merge["type"], "mergeable": merge["mergeable"]})
     return out
+
+
+def read_qc_file(path_text: str, ds, *, field: str,
+                 dataset_hash: str | None = None) -> tuple[dict, str]:
+    """`dataset_alignment_qc` が書いた JSON を読み、`(中身, sha256)` を返す。
+
+    alignment-qc.v1 で `merge_groups` を持ち、`dataset_fingerprint` が今のデータセットと
+    一致することを求める。特徴 ID は小さい整数で、別の極性・別の run にも同じ ID がある。
+    別のデータセットで作った JSON を取り込むと無関係な特徴を黙ってまとめるので、指紋が
+    合わない（または無い）JSON は拒む。`field` はエラーに書く欄の名前（呼ぶ側の引数・spec の欄）。
+    `dataset_hash` は計算済みの `dataset_fingerprint(ds)`（任意）。
+    """
+    path = Path(path_text)
+    if not path.is_file():
+        raise DomainError("ANALYSIS_INPUT_NOT_FOUND",
+                          f"{field} の JSON が見つからない: {path}",
+                          {"field": field, "path": str(path)})
+    try:
+        raw = path.read_bytes()
+        qc = json.loads(raw.decode("utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        raise DomainError("ANALYSIS_INPUT_INVALID",
+                          f"{field} を JSON として読めない: {exc}", {"field": field}) from exc
+    groups = qc.get("merge_groups") if isinstance(qc, dict) else None
+    if not isinstance(qc, dict) or qc.get("schema") != SCHEMA or not isinstance(groups, list):
+        raise DomainError("ANALYSIS_INPUT_INVALID",
+                          f"{field} は {SCHEMA}（dataset_alignment_qc の output_path の JSON）で、"
+                          "merge_groups を持つこと", {"field": field})
+    if dataset_hash is None:
+        from metabolomix.analysis.result_state import dataset_fingerprint
+
+        dataset_hash = dataset_fingerprint(ds)
+    if qc.get("dataset_fingerprint") != dataset_hash:
+        raise DomainError("ANALYSIS_INPUT_INVALID",
+                          f"{field} は今のデータセットで作った JSON ではない"
+                          "（dataset_fingerprint が合わない、または無い）。このデータセットで "
+                          "dataset_alignment_qc を実行し直す", {"field": field})
+    return qc, hashlib.sha256(raw).hexdigest()
+
+
+def usable_merge_groups(qc: dict, feature_ids) -> tuple[list[list[str]], list[list[str]]]:
+    """`(まとめる群, まとめない群)`。まとめるのは `merge_groups` の mergeable な群のうち、
+    `feature_ids` に 2 つ以上そろうもの（まとめの判断は `find_split_pairs` が持ち、ここでは
+    足さない・広げない）。そろわない群（別の run の JSON など）は 2 つ目に返す。"""
+    given = [[str(f) for f in group["features"]] for group in qc.get("merge_groups") or []
+             if group.get("mergeable")]
+    present = {str(f) for f in feature_ids}
+    usable = [g for g in given if sum(f in present for f in g) >= 2]
+    return usable, [g for g in given if g not in usable]
 
 
 # ---------- 公開: まとめる ----------

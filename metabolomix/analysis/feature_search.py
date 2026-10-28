@@ -1,6 +1,8 @@
 """dataset_feature_search の純ロジック: 目標の正規化・理論 m/z・規則 hash（spec 2026-10-19 §4.1）、
 目標照合の判定（§5: `classify_identity` / `match_target`）、窓検索と差次的統計の結合
-（§4.2・§6: `search_window` / `select_results` / `feature_stats` / `result_summaries`）。
+（§4.2・§6: `search_window` / `select_results` / `feature_stats` / `result_summaries`）、
+割れたスポットをまとめた行列での検定のやり直し（spec 2026-10-28 §4.3 (c): `merge_plan` /
+`merged_results` / `merged_feature_stats`）。
 
 数値・ドメイン層の純ロジックで、MCP にもセッションにも依存しない。
 
@@ -42,8 +44,13 @@ __all__ = [
     "classify_identity",
     "feature_stats",
     "match_target",
+    "merge_plan",
+    "merged_dataset",
+    "merged_feature_stats",
+    "merged_results",
     "normalize_targets",
     "result_summaries",
+    "retest_merged",
     "rule_hash",
     "search_window",
     "select_results",
@@ -892,3 +899,171 @@ def result_summaries(ds, results: list[dict]) -> list[dict]:
             "caveats": list(result.get("caveats") or []),
         })
     return summaries
+
+
+# ---------- 割れたスポットのまとめと検定のやり直し（spec 2026-10-28 §4.3 (c)） ----------
+
+def merge_plan(ds, *, alignment_qc_path: str | None = None, dataset_hash: str | None = None,
+               field: str = "alignment_qc_path") -> dict:
+    """まとめる割れの群を決める。``{"source", "groups", "skipped", "alignment_qc_sha256"}``。
+
+    群は `alignment_qc` の `merge_groups`（互いに最も近い mergeable な 2 スポット）だけで、
+    ここでは足さない・広げない（`analysis_spec` の `features.merge_split` と同じ規則・同じ実装）。
+    ``alignment_qc_path`` は `dataset_alignment_qc` が書いた JSON（今のデータセットの指紋で
+    作ったものだけを受ける）で、無ければその場で `find_split_pairs(ds)` を既定の閾値で回す。
+    ``groups`` は特徴 ID の小さい順（先頭が残す ID）、``skipped`` はデータセットに 2 つ揃わない群。
+    ``dataset_hash`` は計算済みの `dataset_fingerprint(ds)`（任意）、``field`` はエラーに書く欄の名前。
+    """
+    from metabolomix.analysis import alignment_qc
+
+    if alignment_qc_path is None:
+        qc = alignment_qc.find_split_pairs(ds, dataset_hash=dataset_hash)
+        source, sha256 = "find_split_pairs", None
+    else:
+        qc, sha256 = alignment_qc.read_qc_file(alignment_qc_path, ds, field=field,
+                                               dataset_hash=dataset_hash)
+        source = "alignment_qc"
+    usable, skipped = alignment_qc.usable_merge_groups(qc, ds.feature_ids)
+    return {"source": source, "groups": usable, "skipped": skipped,
+            "alignment_qc_sha256": sha256}
+
+
+def merged_dataset(ds, groups) -> tuple[object, dict[str, list[str]]]:
+    """割れの群を試料ごとの大きい方の値で 1 列にまとめた ``ds`` の写しと ``merged_from``。
+
+    元の ``ds`` は変えない（浅い写しの定量行列・特徴 ID・検出状態だけを置き換える）。まとめは
+    前処理の**前**の生の値に当て、検出状態は 2 スポットの「どちらかで検出」（`analysis_spec` と
+    同じ順序。前処理の篩と正規化が 1 つの物質を 1 列として見る）。実装は
+    `alignment_qc.merge_matrix_columns`（残す列は群の中で最も小さい特徴 ID）。
+    """
+    from metabolomix.analysis import alignment_qc
+
+    values = np.asarray(ds.feature_matrix, dtype=float)
+    mask = getattr(ds, "detected_mask", None)
+    if mask is not None:
+        mask = np.asarray(mask, dtype=bool)
+        if mask.shape != values.shape:
+            mask = None
+    merged = alignment_qc.merge_matrix_columns(values.T, ds.feature_ids, groups,
+                                               detected=None if mask is None else mask.T)
+    view = copy.copy(ds)
+    view.feature_matrix = merged.matrix.T
+    view.feature_ids = list(merged.feature_ids)
+    view.detected_mask = None if merged.detected is None else merged.detected.T
+    return view, merged.merged_from
+
+
+def _result_recipe(ds, result: dict) -> dict | None:
+    """その 2 群比較を計算した前処理のレシピ（分からなければ None）。
+
+    pipeline の run から引き継いだ結果は来歴の ``handoff.preprocess``
+    （`session_handoff._run_preprocess_parameters` が写した run の ``resolved_recipe``）、
+    session で計算した結果は親（前処理の結果）の ``effective_parameters``。
+    """
+    provenance = result.get("provenance") or {}
+    handoff = provenance.get("handoff")
+    if isinstance(handoff, dict):
+        recipe = handoff.get("preprocess")
+        return dict(recipe) if isinstance(recipe, dict) else None
+    for parent in provenance.get("parent_ids") or []:
+        params = (((getattr(ds, "results", None) or {}).get(parent) or {}).get("provenance")
+                  or {}).get("effective_parameters")
+        if isinstance(params, dict):
+            return dict(params)
+    return None
+
+
+def retest_merged(ds, view, result: dict) -> dict:
+    """まとめた行列（``view``）で、``result`` と同じ前処理・同じ 2 群検定をやり直す。
+
+    前処理は ``result`` を計算したレシピ（`_result_recipe`）を `run_dataset_preprocess` で
+    当て直し、検定は `differential.two_group_test`（``result`` の ``log_transform``。pipeline の
+    既定は log 変換の Welch）と `add_fdr`（**まとめた後の全特徴**で BH）。群は ``result`` の
+    ``samples_a`` / ``samples_b``（`dataset_service.compare_dataset` が検定に使った試料）。
+    検定と補正の種類は変えないので、判定の規則の意味は同じ。戻り値は ``result`` の写しで、
+    ``results`` だけがやり直した行。レシピが分からない・前処理を当て直せない・群の試料が
+    前処理の後に無いときは ``FEATURE_MERGE_UNAVAILABLE``（まとめる前の数字をまとめた後の顔で
+    返さない）。
+    """
+    from metabolomix.analysis import differential
+    from metabolomix.analysis.dataset_analysis import PreconditionError, run_dataset_preprocess
+
+    result_id = _result_id(result)
+    recipe = _result_recipe(ds, result)
+    if recipe is None:
+        raise DomainError("FEATURE_MERGE_UNAVAILABLE",
+                          f"差次的結果 {result_id} を計算した前処理のレシピが分からないので、割れた"
+                          "スポットをまとめて検定し直せない。merge_split=false で呼ぶか、"
+                          "dataset_differential で計算し直す。", {"result_id": result_id})
+    try:
+        matrix, names, features, *_ = run_dataset_preprocess(view, recipe)
+    except PreconditionError as exc:
+        raise DomainError("FEATURE_MERGE_UNAVAILABLE",
+                          f"まとめた行列に {result_id} の前処理を当て直せない: {exc.message}",
+                          {"result_id": result_id, "recipe": recipe}) from exc
+    position = {name: i for i, name in enumerate(names)}
+    samples_a = list(result.get("samples_a") or [])
+    samples_b = list(result.get("samples_b") or [])
+    absent = [name for name in samples_a + samples_b if name not in position]
+    if absent or not samples_a or not samples_b:
+        raise DomainError("FEATURE_MERGE_UNAVAILABLE",
+                          f"差次的結果 {result_id} の群の試料が、前処理を当て直した行列に無い"
+                          f"（{absent or 'samples_a / samples_b が空'}）。",
+                          {"result_id": result_id, "absent_samples": absent})
+    group_a, group_b = result.get("a"), result.get("b")
+    labels = [group_a] * len(samples_a) + [group_b] * len(samples_b)
+    rows = differential.two_group_test(
+        matrix[[position[name] for name in samples_a + samples_b], :], features, labels,
+        group_a, group_b, log_transform=bool(result.get("log_transform", True)))
+    return {**result, "results": differential.add_fdr(rows)}
+
+
+def merged_results(ds, results: list[dict], groups, feature_ids) -> dict:
+    """``feature_ids`` が割れの群に入るときだけ、まとめた行列で ``results`` を検定し直す。
+
+    戻り値 ``{"view", "merged_from", "touched", "results"}``。``merged_from`` は全群（残す ID →
+    群）、``touched`` はそのうち ``feature_ids`` のどれか（消える側の ID を含む）を含む群、
+    ``results`` は result_id → やり直した結果（``touched`` が空なら空で、検定はやり直さない）。
+    まとめは全群に当てる（BH の母集団は「まとめた後の全特徴」）。群が無ければ ``view`` は ``ds``。
+    """
+    if not groups:
+        return {"view": ds, "merged_from": {}, "touched": {}, "results": {}}
+    view, merged_from = merged_dataset(ds, groups)
+    wanted = {str(f) for f in feature_ids}
+    touched = {kept: group for kept, group in merged_from.items() if wanted.intersection(group)}
+    redone = {}
+    if touched:
+        for result in results:
+            redone[_result_id(result)] = retest_merged(ds, view, result)
+    return {"view": view, "merged_from": merged_from, "touched": touched, "results": redone}
+
+
+def merged_feature_stats(ds, feature_ids: list[str], results: list[dict], *, groups,
+                         with_labels: bool = False) -> dict:
+    """`feature_stats` の割れのまとめ版。
+
+    戻り値 ``{"stats", "stats_unmerged", "touched", "renamed", "results", "view"}``。
+    ``stats_unmerged`` は従来の ``feature_stats(ds, feature_ids, results)`` そのもの。``stats`` は
+    まとめて消える特徴 ID を残す ID（群の中で最も小さい ID）に置き換え（重複は 1 つ）、割れの群に
+    入る特徴の行だけを、まとめた行列で検定し直した値（`merged_results`）に差し替える。割れの群に
+    入らない特徴の行は従来の値のまま（その q は従来の BH の母集団）。各行の ``merged_from`` は
+    群（残す ID が先頭）か None。``renamed`` は置き換えた ID（消える ID → 残す ID）。
+    """
+    unmerged = feature_stats(ds, feature_ids, results, with_labels=with_labels)
+    merged = merged_results(ds, results, groups, feature_ids)
+    rename = {fid: kept for kept, group in merged["merged_from"].items()
+              for fid in group if fid != kept}
+    folded = list(dict.fromkeys(rename.get(fid, fid) for fid in feature_ids))
+    stats = feature_stats(ds, folded, results, with_labels=with_labels)
+    touched = merged["touched"]
+    if touched:
+        redone = feature_stats(merged["view"], [fid for fid in folded if fid in touched],
+                               [merged["results"][_result_id(r)] for r in results],
+                               with_labels=with_labels)
+        index = {(row["feature_id"], row["result_id"]): row for row in redone}
+        stats = [index.get((row["feature_id"], row["result_id"]), row) for row in stats]
+    for row in stats:
+        row["merged_from"] = touched.get(row["feature_id"])
+    return {"stats": stats, "stats_unmerged": unmerged, "touched": touched,
+            "renamed": {fid: rename[fid] for fid in feature_ids if fid in rename},
+            "results": merged["results"], "view": merged["view"]}

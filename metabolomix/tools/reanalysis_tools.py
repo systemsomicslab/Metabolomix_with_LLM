@@ -509,6 +509,32 @@ def dataset_mass_accuracy(band_edges: list[float] | None = None, rank: int = 1,
                                       **summary}, digits=4))
 
 
+def _novel_result_stats(ds, result: dict, source: dict) -> tuple[dict, dict]:
+    """2 群比較の結果からの統計（特徴 ID → log2fc・p・q）と、割れのまとめの記録。
+
+    `merge_split` が真なら、割れの組に入る特徴（残す ID）だけを、まとめた行列で検定し直した
+    値に差し替える（`dataset_feature_search` の `merge_split` と同じ規則・同じ実装）。
+    """
+    from metabolomix.analysis import feature_search
+
+    def _rows(found):
+        return {row["feature"]: {"log2fc_test_over_ref": row.get("log2fc"),
+                                 "p": row.get("p"), "q": row.get("q")}
+                for row in found.get("results") or []}
+
+    stats_rows = _rows(result)
+    merge = {"enabled": source["merge_split"], "source": None, "groups": []}
+    if source["merge_split"]:
+        plan = feature_search.merge_plan(ds, alignment_qc_path=source.get("alignment_qc"),
+                                         field="statistics.alignment_qc")
+        merged = feature_search.merged_results(ds, [result], plan["groups"], ds.feature_ids)
+        for redone in merged["results"].values():
+            fresh = _rows(redone)
+            stats_rows.update({kept: fresh[kept] for kept in merged["touched"] if kept in fresh})
+        merge.update(source=plan["source"], groups=list(merged["touched"].values()))
+    return stats_rows, merge
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                       idempotentHint=True),
           structured_output=False)
@@ -522,6 +548,12 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     `{"result_id"}`（`dataset_differential` の 2 群比較）か `{"analysis_spec", "analysis_id"}`
     （`dataset_analysis_run` と同じ spec のその解析）。q の昇順。`rule_hash` を返す。
     論文の同定リストとの突き合わせはしない（再解析の側）。
+    割れたアライメントスポットの組（`dataset_alignment_qc` の `merge_groups`）は 1 候補に数え
+    （`feature_id` は残す小さい ID、`merged_from` に 2 つの ID、同定と質量誤差は SME を持つ方の
+    スポット＝`sme_feature_id`。両方にあれば残す ID）、統計はまとめた行列で検定し直した値。
+    `{"result_id"}` では `statistics.merge_split`（既定 true）・`statistics.alignment_qc`
+    （`dataset_alignment_qc` の JSON。省略時はその場で探す）、analysis_spec では spec の
+    `features.merge_split` で決まる。
     output_path: JSON をここへ書き、要約だけを返す（行が 50 を超えるときは必須）。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     """
@@ -546,20 +578,23 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
                     f"（無い: {chosen['missing']} / 古い: {chosen['stale']}）。")
             result = chosen["results"][0]
             group_ref, group_test = result.get("a"), result.get("b")
-            stats_rows = {row["feature"]: {"log2fc_test_over_ref": row.get("log2fc"),
-                                           "p": row.get("p"), "q": row.get("q")}
-                          for row in result.get("results") or []}
+            stats_rows, merge = _novel_result_stats(ds, result, source)
         else:
             run = analysis_spec.run_spec(source["analysis_spec"], ds)
             analysis = next(a for a in run["analyses"] if a["analysis_id"] == source["analysis_id"])
             group_ref, group_test = run["group_ref"], run["group_test"]
             stats_rows = {row["feature_id"]: row for row in analysis["rows"]
                           if row["status"] == "tested"}
+            merge = {key: run["merge_split"][key] for key in ("enabled", "source", "groups")}
         rows = mass_accuracy.novel_candidates(ds, normalized, stats_rows,
-                                              group_ref=group_ref, group_test=group_test)
+                                              group_ref=group_ref, group_test=group_test,
+                                              merged_from={g[0]: g for g in merge["groups"]})
+        merge_info = {"enabled": merge["enabled"], "source": merge["source"],
+                      "n_groups": len(merge["groups"])}
         result_payload = {"schema": mass_accuracy.NOVEL_SCHEMA,
                           "rule": normalized, "rule_hash": mass_accuracy.rule_hash(normalized),
-                          "group_ref": group_ref, "group_test": group_test, "rows": rows}
+                          "group_ref": group_ref, "group_test": group_test,
+                          "merge_split": merge_info, "rows": rows}
         if output_path is None and len(rows) > MAX_INLINE_ROWS:
             raise DomainError("ANALYSIS_OUTPUT_REQUIRED",
                               f"行が {MAX_INLINE_ROWS} を超える（{len(rows)} 件）。output_path を"
@@ -568,11 +603,12 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
     columns = ("feature_id", "name", "inchikey", "adduct", "mz", "rt", "ppm", "group_ref",
-               "group_test", "log2fc_test_over_ref", "p", "q", "direction")
+               "group_test", "log2fc_test_over_ref", "p", "q", "direction", "merged_from")
     return json_payload({
         "status": "success",
         "rule_hash": result_payload["rule_hash"],
         "group_ref": group_ref, "group_test": group_test,
+        "merge_split": merge_info,
         "n_rows": len(rows),
         **({"output_path": written} if written else
            {"rows": rows_table([{**r, "mz": round(r["mz"], 4), "ppm": round(r["ppm"], 2),

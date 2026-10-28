@@ -7,6 +7,8 @@
   （exclusive 法）。
 - 新しい知見の候補: SME の同定・m/z 帯ごとの許容幅・q の閾値で絞り、除く対象を外した
   特徴の一覧。統計は 2 群比較の結果（`result_id`）か analysis-spec の解析から引く。
+  割れたアライメントスポットの組（`alignment_qc` の `merge_groups`）は 1 つの物質として
+  1 候補に数える（spec 2026-10-28 §4.3 (c)。`novel_candidates` の `merged_from`）。
 """
 from __future__ import annotations
 
@@ -77,8 +79,19 @@ def normalize_novel_spec(spec) -> dict:
     if not isinstance(stats_spec, dict):
         raise DomainError(_INVALID, "statistics は {result_id} か {analysis_spec, analysis_id}",
                           {"field": "statistics"})
-    if set(stats_spec) == {"result_id"}:
-        statistics_out = {"result_id": str(stats_spec["result_id"])}
+    if "result_id" in stats_spec and not set(stats_spec) - {"result_id", "merge_split",
+                                                            "alignment_qc"}:
+        # 割れたスポットのまとめ（既定 true）。analysis_spec の側は features.merge_split で決める。
+        merge = stats_spec.get("merge_split", True)
+        if not isinstance(merge, bool):
+            raise DomainError(_INVALID, "statistics.merge_split は true / false",
+                              {"field": "statistics.merge_split"})
+        statistics_out = {"result_id": str(stats_spec["result_id"]), "merge_split": merge}
+        if "alignment_qc" in stats_spec:
+            if not merge or not isinstance(stats_spec["alignment_qc"], str):
+                raise DomainError(_INVALID, "statistics.alignment_qc は merge_split=true のときの "
+                                  "JSON のパス", {"field": "statistics.alignment_qc"})
+            statistics_out["alignment_qc"] = stats_spec["alignment_qc"]
     elif set(stats_spec) == {"analysis_spec", "analysis_id"}:
         from metabolomix.analysis import analysis_spec
         statistics_out = {"analysis_spec": analysis_spec.normalize_spec(stats_spec["analysis_spec"]),
@@ -128,23 +141,42 @@ def _tolerance(mz: float, ppm_spec: dict) -> float:
     return ppm_spec["default"]
 
 
-def novel_candidates(ds, normalized: dict, stats_rows: dict, *, group_ref, group_test) -> list[dict]:
-    """`stats_rows` は feature_id → {log2fc_test_over_ref, p, q}（検定できた行）。"""
+def novel_candidates(ds, normalized: dict, stats_rows: dict, *, group_ref, group_test,
+                     merged_from: dict[str, list[str]] | None = None) -> list[dict]:
+    """`stats_rows` は feature_id → {log2fc_test_over_ref, p, q}（検定できた行）。
+
+    `merged_from` は割れたスポットをまとめた群（残す ID → 群。残す ID が先頭）。群は 1 候補に
+    数え、`feature_id` は残す ID・統計はその ID の行（まとめた行列での検定）。同定と質量誤差
+    （`name` `inchikey` `adduct` `mz` `ppm` `rt`）は SME（rank 1）を持つ方のスポット（両方に
+    あれば残す ID）から取り、その ID を `sme_feature_id` に書く。`exclude.feature_ids` は群の
+    どちらかの ID に当たれば群ごと外す（同じ物質なので）。
+    """
     excluded_ids = set(normalized["exclude"]["feature_ids"])
     excluded_blocks = set(normalized["exclude"]["inchikey_blocks"])
+    merged_from = merged_from or {}
+    absorbed = {fid for group in merged_from.values() for fid in group[1:]}
+    sme = {row["feature_id"]: row for row in sme_ppm(ds, rank=1)}
     out = []
-    for row in sme_ppm(ds, rank=1):
-        fid = row["feature_id"]
+    for fid in ds.feature_ids:
+        if fid in absorbed:
+            continue
+        group = merged_from.get(fid) or [fid]
+        row = next((sme[f] for f in group if f in sme), None)
+        if row is None:
+            continue
         stats = stats_rows.get(fid)
         if stats is None or stats.get("q") is None or not stats["q"] < normalized["q_max"]:
             continue
         if abs(row["ppm"]) > _tolerance(row["theoretical_mz"], normalized["ppm"]):
             continue
         block = (row["inchikey"] or "").strip()[:14].upper()
-        if fid in excluded_ids or (block and block in excluded_blocks):
+        if excluded_ids.intersection(group) or (block and block in excluded_blocks):
             continue
         log2fc = stats.get("log2fc_test_over_ref")
-        out.append({**row, "rt": (ds.feature_metadata.get(fid) or {}).get("rt"),
+        source = row["feature_id"]
+        out.append({**row, "feature_id": fid, "sme_feature_id": source,
+                    "merged_from": list(group) if len(group) > 1 else None,
+                    "rt": (ds.feature_metadata.get(source) or {}).get("rt"),
                     "group_ref": group_ref, "group_test": group_test,
                     "log2fc_test_over_ref": log2fc, "p": stats.get("p"), "q": stats["q"],
                     "direction": None if not log2fc else

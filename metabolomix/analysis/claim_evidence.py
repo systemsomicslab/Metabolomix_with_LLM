@@ -190,9 +190,39 @@ def rule_hash(normalized: dict) -> str:
     return canonical_hash(rule)
 
 
-def _selection(match: dict) -> dict:
-    return {k: match[k] for k in ("status", "reason", "selected_feature_id", "selected_adduct",
-                                  "selected_evidence", "adduct_tier_used", "counts")}
+def _selection(match: dict, verdicts: dict[str, str | None] | None) -> dict:
+    """目標照合の判定と段ごとの件数（`counts`）。
+
+    `counts.qualified` は**規則で qualified になった特徴（質量・RT・注釈）のうち、MS/MS の合否が
+    `qualified` の数**（`verdicts` は特徴 ID → `msms.qualify.verdict`。MS/MS を頼んでいない・
+    ライブラリが無いときは None で、数も None）。`dataset_feature_search` の `counts.qualified`
+    （規則で qualified の数）の意味の数は `msms_available` に置く。
+    """
+    out = {k: match[k] for k in ("status", "reason", "selected_feature_id", "selected_adduct",
+                                 "selected_evidence", "adduct_tier_used")}
+    counts = match["counts"]
+    passed = {row["feature_id"] for row in match["candidates"] if row["qualified"]}
+    out["counts"] = {
+        "mass": counts["mass"], "rt": counts["rt"],
+        "qualified": (None if verdicts is None
+                      else sum(verdicts.get(fid) == "qualified" for fid in passed)),
+        "msms_available": counts["qualified"],
+        "by_evidence": dict(counts["by_evidence"]),
+    }
+    return out
+
+
+def _split(info: dict | None) -> dict | None:
+    """候補の割れの相手（`alignment_qc.split_partners` の 1 件）。組に入らなければ None。
+
+    `partners` はまとめる相手（`merge_groups`。互いに最も近い mergeable な組）で、まとめない
+    特徴（`group_aligned` など）では空。`component` はすべての組の連結成分のほかの特徴（報告用）。
+    """
+    if info is None:
+        return None
+    return {"group_id": info["group_id"], "partners": list(info["partners"]),
+            "type": info["type"], "mergeable": info["mergeable"],
+            "component": list(info["component"])}
 
 
 def _msms_for(fid, *, store, spot_query, arf2_path, dcl_path, msms_spec) -> dict:
@@ -233,9 +263,17 @@ def _msms_for(fid, *, store, spot_query, arf2_path, dcl_path, msms_spec) -> dict
 
 def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
           dataset_polarity: str | None, library_sha256: str | None) -> dict:
-    """証拠の束（claim-evidence.v1）を作る。`spot_query` は `library.tools.spot_msms_query`。"""
+    """証拠の束（claim-evidence.v1）を作る。`spot_query` は `library.tools.spot_msms_query`。
+
+    候補ごとの `split` は割れたアライメントスポットの相手（`alignment_qc.find_split_pairs` を
+    既定の閾値で回した結果。`dataset_alignment_qc` の既定と同じ）。
+    """
+    from metabolomix.analysis import alignment_qc
     from metabolomix.analysis.result_state import dataset_fingerprint
 
+    dataset_hash = dataset_fingerprint(ds)
+    partners = alignment_qc.split_partners(
+        alignment_qc.find_split_pairs(ds, dataset_hash=dataset_hash))
     mz_array = feature_search._feature_mz_array(ds)
     unlimited = len(ds.feature_ids) * 16 + 1
     default = feature_search.match_target(ds, normalized["target"], max_results=unlimited,
@@ -253,7 +291,7 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
             entry["scans"].add(scan_label)
 
     _collect(default, "default")
-    scans = []
+    scan_matches = []
     raw = normalized["raw_target"]
     for ppm in normalized["scan"]["ppm"]:
         for rt_tol in normalized["scan"]["rt_tol_min"]:
@@ -266,9 +304,7 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
                                                 mz_array=mz_array)
             label = f"ppm={ppm:g},rt_tol_min={rt_tol:g}"
             _collect(match, label)
-            scans.append({"ppm": ppm, "rt_tol_min": rt_tol, **_selection(match),
-                          "candidate_feature_ids": sorted({r["feature_id"] for r in match["candidates"]},
-                                                          key=_feature_order(ds))})
+            scan_matches.append((ppm, rt_tol, match))
 
     order = _feature_order(ds)
     ordered = sorted(seen, key=order)
@@ -285,7 +321,8 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
                 "evidence": sorted(entry["evidence"]), "adducts": sorted(entry["adducts"]),
                 "annotated_name": entry["annotated_name"],
                 "annotated_inchikey": entry["annotated_inchikey"],
-                "scans": sorted(entry["scans"])}
+                "scans": sorted(entry["scans"]),
+                "split": _split(partners.get(fid))}
         if normalized["msms"] is not None:
             item["msms"] = _msms_for(fid, store=store, spot_query=spot_query,
                                      arf2_path=arf2_path, dcl_path=dcl_path,
@@ -298,16 +335,25 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
                                  "n_coeluting": len(relations["coeluting"])}
         candidates.append(item)
 
+    # MS/MS の合否（counts.qualified）。頼んでいない・ライブラリが無ければ数えない（None）。
+    verdicts = None
+    if normalized["msms"] is not None and store is not None:
+        verdicts = {c["feature_id"]: ((c["msms"].get("qualify") or {}).get("verdict"))
+                    for c in candidates}
+    scans = [{"ppm": ppm, "rt_tol_min": rt_tol, **_selection(match, verdicts),
+              "candidate_feature_ids": sorted({r["feature_id"] for r in match["candidates"]},
+                                              key=order)}
+             for ppm, rt_tol, match in scan_matches]
     rule = {k: copy.deepcopy(v) for k, v in normalized.items() if k != "raw_target"}
     return {
         "schema": CLAIM_SCHEMA,
         "claim_id": normalized["claim_id"],
         "rule_hash": rule_hash(normalized),
-        "input_fingerprint": {"dataset_hash": dataset_fingerprint(ds),
+        "input_fingerprint": {"dataset_hash": dataset_hash,
                               "library_sha256": library_sha256},
         "rule": rule,
         "dataset_polarity": polarity,
-        "default_selection": _selection(default),
+        "default_selection": _selection(default, verdicts),
         "scans": scans,
         "candidates": candidates,
         "truncated": truncated,

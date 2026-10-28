@@ -64,18 +64,20 @@
 6. │  ├─ metabolomix/analysis/analysis_spec.py  _load()
 7. │  ├─ metabolomix/analysis/analysis_spec.py  _merge_plan()
 8. │  │  ├─ metabolomix/analysis/alignment_qc.py  find_split_pairs()
-9. │  │  └─ metabolomix/analysis/alignment_qc.py  merge_matrix_columns()
-10. │  ├─ metabolomix/analysis/analysis_spec.py  _run_analysis()
-11. │  │  ├─ metabolomix/analysis/recipe_matrix.py  build_matrix()
-12. │  │  │  └─ metabolomix/analysis/recipe_matrix.py  knn_impute()
-13. │  │  ├─ metabolomix/analysis/analysis_spec.py  _aggregate()
-14. │  │  ├─ metabolomix/analysis/analysis_spec.py  _design()
-15. │  │  ├─ metabolomix/analysis/spec_statistics.py  two_group()
-16. │  │  ├─ metabolomix/analysis/spec_statistics.py  ols_group()
-17. │  │  ├─ metabolomix/analysis/spec_statistics.py  fold_change()
-18. │  │  └─ metabolomix/analysis/spec_statistics.py  bh()
-19. │  └─ metabolomix/analysis/analysis_spec.py  rule_hash()
-20. └─ metabolomix/tools/reanalysis_tools.py  write_result()
+9. │  │  ├─ metabolomix/analysis/alignment_qc.py  read_qc_file()
+10. │  │  ├─ metabolomix/analysis/alignment_qc.py  usable_merge_groups()
+11. │  │  └─ metabolomix/analysis/alignment_qc.py  merge_matrix_columns()
+12. │  ├─ metabolomix/analysis/analysis_spec.py  _run_analysis()
+13. │  │  ├─ metabolomix/analysis/recipe_matrix.py  build_matrix()
+14. │  │  │  └─ metabolomix/analysis/recipe_matrix.py  knn_impute()
+15. │  │  ├─ metabolomix/analysis/analysis_spec.py  _aggregate()
+16. │  │  ├─ metabolomix/analysis/analysis_spec.py  _design()
+17. │  │  ├─ metabolomix/analysis/spec_statistics.py  two_group()
+18. │  │  ├─ metabolomix/analysis/spec_statistics.py  ols_group()
+19. │  │  ├─ metabolomix/analysis/spec_statistics.py  fold_change()
+20. │  │  └─ metabolomix/analysis/spec_statistics.py  bh()
+21. │  └─ metabolomix/analysis/analysis_spec.py  rule_hash()
+22. └─ metabolomix/tools/reanalysis_tools.py  write_result()
 
 割れたスポットのまとめ（`features.merge_split`、既定 true）は recipe の前（行列を読んだ直後。recipe・集約・検定はまとめた行列に当たる）に、
 `alignment_qc` の `merge_groups` だけに行う（`features.alignment_qc` に JSON を渡せばその群、
@@ -132,14 +134,22 @@
 3. │  ├─ metabolomix/analysis/feature_search.py  normalize_targets()
 4. │  └─ metabolomix/analysis/msms_rules.py  normalize_rules()
 5. ├─ metabolomix/analysis/claim_evidence.py  build()
-6. │  ├─ metabolomix/analysis/feature_search.py  match_target()
-7. │  ├─ metabolomix/analysis/claim_evidence.py  _msms_for()
-8. │  │  ├─ metabolomix/library/tools.py  _spot_query()
-9. │  │  ├─ metabolomix/library/matching.py  score_candidates()
-10. │  │  └─ metabolomix/analysis/msms_rules.py  qualify()
-11. │  ├─ metabolomix/analysis/claim_evidence.py  feature_relations()
-12. │  └─ metabolomix/analysis/claim_evidence.py  rule_hash()
-13. └─ metabolomix/tools/reanalysis_tools.py  write_result()
+6. │  ├─ metabolomix/analysis/alignment_qc.py  find_split_pairs()
+7. │  ├─ metabolomix/analysis/alignment_qc.py  split_partners()
+8. │  ├─ metabolomix/analysis/feature_search.py  match_target()
+9. │  ├─ metabolomix/analysis/claim_evidence.py  _msms_for()
+10. │  │  ├─ metabolomix/library/tools.py  _spot_query()
+11. │  │  ├─ metabolomix/library/matching.py  score_candidates()
+12. │  │  └─ metabolomix/analysis/msms_rules.py  qualify()
+13. │  ├─ metabolomix/analysis/claim_evidence.py  feature_relations()
+14. │  ├─ metabolomix/analysis/claim_evidence.py  _selection()
+15. │  └─ metabolomix/analysis/claim_evidence.py  rule_hash()
+16. └─ metabolomix/tools/reanalysis_tools.py  write_result()
+
+候補ごとの `split` は `find_split_pairs`（既定の閾値）の `split_partners`。`default_selection.counts.qualified`
+（と走査ごとの `counts.qualified`）は、規則で qualified になった特徴のうち MS/MS の合否
+（`msms.qualify.verdict`）が `qualified` の数（`_selection`。MS/MS を頼んでいない・ライブラリが無ければ null）で、
+規則で qualified の数は `msms_available`。
 
 ## dataset_mass_accuracy
 
@@ -158,10 +168,20 @@
 1. metabolomix/tools/reanalysis_tools.py  dataset_novel_candidates()
 2. ├─ metabolomix/analysis/mass_accuracy.py  normalize_novel_spec()
 3. ├─ metabolomix/analysis/feature_search.py  select_results()
-4. ├─ metabolomix/analysis/analysis_spec.py  run_spec()
-5. ├─ metabolomix/analysis/mass_accuracy.py  novel_candidates()
-6. │  └─ metabolomix/analysis/mass_accuracy.py  sme_ppm()
-7. └─ metabolomix/analysis/mass_accuracy.py  rule_hash()
+4. ├─ [result_id] metabolomix/tools/reanalysis_tools.py  _novel_result_stats()
+5. │  ├─ metabolomix/analysis/feature_search.py  merge_plan()
+6. │  └─ metabolomix/analysis/feature_search.py  merged_results()
+7. │     ├─ metabolomix/analysis/feature_search.py  merged_dataset()
+8. │     └─ metabolomix/analysis/feature_search.py  retest_merged()
+9. ├─ [analysis_spec] metabolomix/analysis/analysis_spec.py  run_spec()
+10. ├─ metabolomix/analysis/mass_accuracy.py  novel_candidates()
+11. │  └─ metabolomix/analysis/mass_accuracy.py  sme_ppm()
+12. └─ metabolomix/analysis/mass_accuracy.py  rule_hash()
+
+割れたスポットの組は 1 候補（残す小さい ID）に数える。`statistics.result_id` では `statistics.merge_split`
+（既定 true）で、組に入る特徴だけをまとめた行列で検定し直した値に差し替える（`dataset_feature_search` の
+`merge_split` と同じ実装）。analysis_spec では spec の `features.merge_split` が決め、`run_spec` の
+`merge_split.groups` を使う。
 
 ## dataset_alignment_qc
 

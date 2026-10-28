@@ -916,3 +916,69 @@ def test_rule_hash_does_not_mutate_the_targets():
     before = [dict(t) for t in targets]
     rule_hash(targets)
     assert targets == before
+
+
+# ---------- 割れたスポットのまとめと検定のやり直し（spec 2026-10-28 §4.3 (c)） ----------
+
+def _computed_ds():
+    """前処理（正規化あり）→ 2 群比較まで session と同じ経路で回した DatasetState。"""
+    from metabolomix.analysis import dataset_service
+
+    rng = np.random.default_rng(7)
+    ds = DatasetState()
+    ds.feature_matrix = rng.random((12, 8)) * 1000.0 + 1.0
+    ds.sample_names = [f"ctrl_{i}" for i in range(4)] + [f"treat_{i}" for i in range(4)]
+    ds.feature_ids = [str(i) for i in range(12)]
+    ds.feature_metadata = {str(i): {"mz": 100.0 + i, "rt": 1.0 + i} for i in range(12)}
+    ds.validation_result = {"ok": True, "errors": [], "warnings": []}
+    dataset_service.preprocess_dataset(ds, {"normalize": "median", "impute": "half_min"})
+    result = dataset_service.compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:],
+                                             group_a_label="ctrl", group_b_label="treat")
+    return ds, result
+
+
+def _same(a, b):
+    return (a is None or np.isnan(a)) and (b is None or np.isnan(b)) or a == b
+
+
+def test_retest_without_groups_reproduces_the_stored_result_exactly():
+    from metabolomix.analysis.feature_search import merged_dataset, retest_merged
+
+    ds, result = _computed_ds()
+    view, merged_from = merged_dataset(ds, [])
+    assert merged_from == {} and view.feature_ids == ds.feature_ids
+    redone = retest_merged(ds, view, result)
+    assert [r["feature"] for r in redone["results"]] == [r["feature"] for r in result["results"]]
+    for got, want in zip(redone["results"], result["results"]):
+        for key in ("log2fc", "p", "q", "mean_a", "mean_b"):
+            assert _same(got[key], want[key]), (got["feature"], key)
+
+
+def test_retest_with_a_group_tests_the_merged_column_over_all_features():
+    from metabolomix.analysis.feature_search import merged_feature_stats
+
+    ds, result = _computed_ds()
+    out = merged_feature_stats(ds, ["3", "5"], [result], groups=[["3", "4"]])
+    assert out["touched"] == {"3": ["3", "4"]} and out["renamed"] == {}
+    rows = {row["feature_id"]: row for row in out["stats"]}
+    assert rows["3"]["merged_from"] == ["3", "4"] and rows["5"]["merged_from"] is None
+    # 割れの無い 5 は従来の値・3 はまとめた行列（11 特徴）で検定し直した値
+    unmerged = {row["feature_id"]: row for row in out["stats_unmerged"]}
+    assert rows["5"]["q"] == unmerged["5"]["q"]
+    assert rows["3"]["q"] != unmerged["3"]["q"]
+    redone = out["results"][result["provenance"]["result_id"]]
+    assert len(redone["results"]) == 11 and "4" not in {r["feature"] for r in redone["results"]}
+    # ds は変えない
+    assert len(ds.feature_ids) == 12 and ds.feature_matrix.shape == (12, 8)
+
+
+def test_retest_without_a_known_recipe_refuses():
+    from metabolomix.analysis.feature_search import merged_dataset, retest_merged
+
+    ds, result = _computed_ds()
+    handed = {**result, "provenance": {**result["provenance"],
+                                       "handoff": {"pipeline_root": "x", "preprocess": None}}}
+    view, _ = merged_dataset(ds, [["3", "4"]])
+    with pytest.raises(DomainError) as excinfo:
+        retest_merged(ds, view, handed)
+    assert excinfo.value.code == "FEATURE_MERGE_UNAVAILABLE"

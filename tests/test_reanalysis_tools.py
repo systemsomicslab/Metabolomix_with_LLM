@@ -133,7 +133,7 @@ def test_analysis_run_reports_merge_split_state_and_merged_from_column(data):
     handle = _open(data)
     out = json.loads(R.dataset_analysis_run(_spec(data), dataset_handle=handle))
     assert out["merge_split"]["enabled"] is True and out["merge_split"]["source"] == "find_split_pairs"
-    assert out["analyses"][0]["rows"].splitlines()[0].endswith("	merged_from")
+    assert out["analyses"][0]["rows"].splitlines()[0].endswith("\tmerged_from")
     off = json.loads(R.dataset_analysis_run(
         _spec(data, features={"feature_ids": ["20", "26"], "merge_split": False}),
         dataset_handle=handle))
@@ -388,3 +388,111 @@ def test_tool_writes_output_and_returns_summary(tmp_path):
 def test_alignment_qc_without_dataset_is_missing_state():
     out = json.loads(R.dataset_alignment_qc())
     assert out["error"]["code"] == "missing_state"
+
+
+# ---------- 割れたスポット: 証拠の束・counts・新しい知見の候補（spec 2026-10-28 §4.3 (c)） ----------
+
+CE_KEY = "RJECHNNFRHZQKU-RMUVNZEASA-N"
+CE_CLAIM = {"claim_id": "C9",
+            "target": {"inchikey": CE_KEY, "expected_mz": 650.6, "adduct": "[M+H]+", "rt_min": 20.0},
+            "scan": {"ppm": [10], "rt_tol_min": [1.0]}}
+
+
+def _split_handle(tmp_path, features=SPLIT_FEATURES):
+    mztab = write_mztab(tmp_path / "split" / "AlignResult-1.mzTab", features=features)
+    return _open({"mztab": mztab})
+
+
+def test_claim_evidence_candidate_has_split(tmp_path, data):
+    handle = _split_handle(tmp_path)
+    out = json.loads(R.dataset_claim_evidence(CE_CLAIM, dataset_handle=handle))
+    assert out["status"] == "success", out
+    by_id = {c["feature_id"]: c for c in out["candidates"]}
+    keys = ("group_id", "partners", "type", "mergeable")
+    assert {k: by_id["30"]["split"][k] for k in keys} == {
+        "group_id": "G1", "partners": ["31"], "type": "injection_block", "mergeable": True}
+    assert by_id["31"]["split"]["partners"] == ["30"]
+    # 割れの組に入らない候補は null
+    plain = json.loads(R.dataset_claim_evidence(CLAIM, dataset_handle=_open(data)))
+    assert all(c["split"] is None for c in plain["candidates"])
+
+
+def test_counts_qualified_is_msms_verdict(data, library):
+    handle = _open(data, library="auto")
+    target = {"inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": 2.0,
+              "adduct_tiers": [["[M+H]+"]]}
+
+    def counts(min_fragments):
+        claim = {"claim_id": "C1", "target": target,
+                 "msms": {"top_n": 3, "rules": {"min_fragments_excl_precursor": min_fragments}}}
+        out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+        assert out["default_selection"]["selected_feature_id"] == "20"
+        verdict = {c["feature_id"]: c["msms"]["qualify"]["verdict"] for c in out["candidates"]}
+        return out["default_selection"]["counts"], verdict["20"]
+
+    strict, verdict = counts(3)                        # 断片は前駆体を除いて 2 本
+    assert verdict == "not_qualified"
+    assert strict["qualified"] == 0 and strict["msms_available"] == 1
+    loose, verdict = counts(2)
+    assert verdict == "qualified"
+    assert loose["qualified"] == 1 and loose["msms_available"] == 1
+    # MS/MS を頼まなければ合否の数は無い
+    bare = json.loads(R.dataset_claim_evidence({"claim_id": "C1", "target": target},
+                                               dataset_handle=handle))
+    assert bare["default_selection"]["counts"]["qualified"] is None
+    assert bare["default_selection"]["counts"]["msms_available"] == 1
+
+
+def _tsv_rows(text):
+    lines = text.splitlines()
+    header = lines[0].split("\t")
+    return [dict(zip(header, line.split("\t"))) for line in lines[1:]]
+
+
+def _groups_tsv(tmp_path):
+    groups = tmp_path / "groups_split.tsv"
+    groups.write_text("sample\tgroup\trole\n" + "".join(
+        f"{s}\t{s[:2] if not s.startswith('QC') else ''}\t{'qc' if s.startswith('QC') else 'sample'}\n"
+        for s in SAMPLES), encoding="utf-8")
+    return groups
+
+
+def test_novel_candidates_count_split_once(tmp_path):
+    handle = _split_handle(tmp_path)
+    T.dataset_preprocess(dataset_handle=handle)
+    diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
+                                             group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
+    spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
+    out = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
+    assert out["status"] == "success", out
+    [row] = _tsv_rows(out["rows"])                     # 30 と 31 は 1 つの物質として 1 行
+    assert row["feature_id"] == "30" and row["merged_from"] == "30;31"
+    # q はまとめた行列で検定し直した値（dataset_feature_search の stats と同じ）
+    search = json.loads(T.dataset_feature_search(feature_ids=["30"], dataset_handle=handle))
+    [stat] = _tsv_rows(search["stats"])
+    [unmerged] = _tsv_rows(search["stats_unmerged"])
+    assert abs(float(row["q"]) - float(stat["q"])) <= 1e-3 * float(stat["q"])
+    assert stat["q"] != unmerged["q"]
+    off = json.loads(R.dataset_novel_candidates(
+        {**spec, "statistics": {"result_id": diff["result_id"], "merge_split": False}},
+        dataset_handle=handle))
+    assert off["rule_hash"] != out["rule_hash"]
+    assert [r["merged_from"] for r in _tsv_rows(off["rows"])] == [""]
+
+    # SME（rank 1）が消える側（31）にしか無くても、残す ID の 1 候補として数える
+    moved = (dict(SPLIT_FEATURES[0], sme=[]), dict(SPLIT_FEATURES[1], sme=SPLIT_FEATURES[0]["sme"]),
+             SPLIT_FEATURES[2])
+    other = tmp_path / "moved"
+    other.mkdir()
+    handle = _split_handle(other, moved)
+    analysis = {"groups": {"source": "tsv", "path": str(_groups_tsv(tmp_path)), "role_column": "role"},
+                "comparison": {"reference": "HC", "test": "RA"}, "features": {"all": True},
+                "analyses": [{"analysis_id": "main", "test": {"kind": "welch"}}]}
+    written = tmp_path / "novel.json"
+    from_spec = json.loads(R.dataset_novel_candidates(
+        {"statistics": {"analysis_spec": analysis, "analysis_id": "main"}, "q_max": 1.0},
+        dataset_handle=handle, output_path=str(written)))
+    assert from_spec["status"] == "success", from_spec
+    [saved] = json.loads(written.read_text(encoding="utf-8"))["rows"]
+    assert saved["feature_id"] == "30" and saved["sme_feature_id"] == "31"
+    assert saved["merged_from"] == ["30", "31"] and saved["name"] == "CE 18:2"

@@ -30,14 +30,18 @@ def _stats(**kwargs):
 
 
 def test_default_has_no_label_columns():
+    plain = ["feature_id", "result_id", "status", "log2fc", "p", "q", "mean_a", "mean_b",
+             "detected_a", "detected_b"]
+    header, _ = _stats(merge_split=False)
+    assert header == plain
+    # merge_split（既定 true）は末尾に merged_from だけを足す
     header, _ = _stats()
-    assert header == ["feature_id", "result_id", "status", "log2fc", "p", "q", "mean_a", "mean_b",
-                      "detected_a", "detected_b"]
+    assert header == plain + ["merged_from"]
 
 
 def test_labels_add_comparison_groups_and_direction():
     header, rows = _stats(with_group_labels=True)
-    assert header[-4:] == ["comparison", "group_a", "group_b", "log2fc_test_over_ref"]
+    assert header[-5:] == ["comparison", "group_a", "group_b", "log2fc_test_over_ref", "merged_from"]
     row = dict(zip(header, rows[0]))
     assert row["comparison"] == "RA_vs_HC"
     assert (row["group_a"], row["group_b"]) == ("HC", "RA")
