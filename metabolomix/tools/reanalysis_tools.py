@@ -590,8 +590,8 @@ def dataset_alignment_qc(output_path: str | None = None, ppm: float = 15.0,
     `injection_block`（片方が注入順で連続した塊だけを持つ。群と重なっても優先）・
     `group_aligned`（受け持ちが群と一致。まとめない）・`interleaved`。`mergeable` は注釈が
     両立する `injection_block` と、ΔRT ≤ max_interleaved_rt_gap（既定 0.15 分）の `interleaved`。
-    mergeable の組だけでつないだ成分（`merge_groups`）が 2 スポットのときだけ、統計の側が
-    試料ごとに大きい方の値で 1 つにまとめる（3 スポット以上は印だけ）。注入順はハンドルの実験情報シート、無ければファイル名の順
+    そのうち互いに |ΔRT| が最も近い相手どうしの 2 スポット（`merge_groups`）だけを、統計の側が
+    試料ごとに大きい方の値で 1 つにまとめる（ほかは `merge_reason: not_mutual_nearest` で印だけ）。注入順はハンドルの実験情報シート、無ければファイル名の順
     （`injection_order_source`）。欄の意味は `lipidmix://docs/output-format/reanalysis`。
 
     output_path: 全体（組・連結成分・試料ごとの受け持ち）を JSON でここへ書く

@@ -198,12 +198,13 @@ def test_three_spot_chain_is_one_group():
     assert sorted(group["features"]) == ["a", "b", "c"]
     assert group["features"][0] == "c"                     # 代表は受け持ちの最も多いスポット
     assert all(p["mergeable"] for p in qc["pairs"])
-    assert group["mergeable"] is False                     # 3 スポット以上の成分はまとめない
-    (merge,) = qc["merge_groups"]
-    assert merge["features"] == group["features"] and merge["mergeable"] is False
+    # b の最も近い相手は a と c の同点（0.3 分）→ b は相手なし。a と c の最も近い相手は b
+    # なので、互いに最も近い組は無く、何もまとめない
+    assert group["mergeable"] is False and qc["merge_groups"] == []
+    assert {p["merge_reason"] for p in qc["pairs"]} == {"not_mutual_nearest"}
     partners = Q.split_partners(qc)
     assert set(partners) == {"a", "b", "c"}
-    assert partners["a"]["partners"] == ["c", "b"] and partners["a"]["group_id"] == group["group_id"]
+    assert partners["a"]["partners"] == [] and partners["a"]["group_id"] == group["group_id"]
     assert partners["a"]["component"] == ["c", "b"]
     assert partners["b"]["mergeable"] is False and partners["b"]["type"] == "injection_block"
 
@@ -226,7 +227,7 @@ def test_four_spot_chain_merges_only_the_mergeable_pair():
     assert sorted(group["features"]) == ["A", "B", "C", "D"] and group["mergeable"] is False
     (merge,) = qc["merge_groups"]
     assert sorted(merge["features"]) == ["B", "C"] and merge["mergeable"] is True
-    assert qc["summary"]["n_mergeable_groups"] == 1
+    assert qc["summary"]["n_merged_pairs"] == 1
     partners = Q.split_partners(qc)
     assert partners["B"]["partners"] == ["C"] and partners["B"]["mergeable"] is True
     assert partners["A"]["partners"] == [] and partners["A"]["mergeable"] is False
@@ -238,13 +239,43 @@ def test_four_spot_chain_merges_only_the_mergeable_pair():
     assert len(merged.merged_from) == 1
 
 
-def test_three_spot_chain_with_two_mergeable_edges_merges_nothing():
+def test_tie_for_nearest_partner_merges_nothing():
+    # B の mergeable な相手 A と C がどちらも 0.8 分 → B は相手を決められず、何もまとめない
     qc = Q.find_split_pairs(_chain([None, None, None]))
     assert [p["mergeable"] for p in qc["pairs"]] == [True, True]
-    (merge,) = qc["merge_groups"]
-    assert len(merge["features"]) == 3 and merge["mergeable"] is False
-    assert qc["summary"]["n_mergeable_groups"] == 0
+    assert [p["merged"] for p in qc["pairs"]] == [False, False]
+    assert qc["merge_groups"] == [] and qc["summary"]["n_merged_pairs"] == 0
     assert not any(v["mergeable"] for v in Q.split_partners(qc).values())
+
+
+def test_fa_20_3_like_chain_merges_only_mutual_nearest():
+    # MTBLS6965 の陰イオンの FA 20:3: 402（前半の n-3/n-6）と 401（後半）は injection_block
+    # ΔRT 0.2、401 と 403（前半の n-9）は interleaved ΔRT 0.088、403 と 404 は injection_block
+    # ΔRT 0.38。m/z は隣どうしだけが 15 ppm に入る。互いに最も近いのは 401↔403 だけ
+    late_even = {i for i in range(10, N) if i % 2 == 0}
+    late_odd = {i for i in range(10, N) if i % 2 == 1}
+    early = set(range(10))
+    ds = _make_ds([("402", 305.2440, 3.000, early, "FA 20:3", "[M-H]1-"),
+                   ("401", 305.2464, 3.200, late_even, "FA 20:3", "[M-H]1-"),
+                   ("403", 305.2495, 3.288, late_odd, "FA 20:3", "[M-H]1-"),
+                   ("404", 305.2522, 3.668, early, "FA 20:3", "[M-H]1-")],
+                  detected=True, background=0.0)
+    qc = Q.find_split_pairs(ds)
+    pairs = {tuple(sorted(p["features"])): p for p in qc["pairs"]}
+    assert set(pairs) == {("401", "402"), ("401", "403"), ("403", "404")}
+    assert pairs[("401", "402")]["type"] == "injection_block"
+    assert pairs[("401", "403")]["type"] == "interleaved"
+    assert pairs[("403", "404")]["type"] == "injection_block"
+    assert all(p["mergeable"] for p in pairs.values())
+    assert [tuple(sorted(p["features"])) for p in qc["pairs"] if p["merged"]] == [("401", "403")]
+    assert pairs[("401", "402")]["merge_reason"] == "not_mutual_nearest"
+    assert pairs[("401", "403")]["merge_reason"] is None
+    (merge,) = qc["merge_groups"]
+    assert sorted(merge["features"]) == ["401", "403"]
+    partners = Q.split_partners(qc)
+    assert partners["401"]["partners"] == ["403"] and partners["401"]["mergeable"] is True
+    assert partners["402"]["partners"] == [] and partners["402"]["mergeable"] is False
+    assert sorted(partners["402"]["component"]) == ["401", "403", "404"]
 
 
 def test_far_mz_or_rt_not_paired():

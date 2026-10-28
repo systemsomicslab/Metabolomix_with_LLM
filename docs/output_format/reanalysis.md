@@ -327,9 +327,12 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
   別の異性体ではない。MTBLS6965 の陰イオンの FA 20:3 の異性体 401/402 は 0.20 分離れており、
   0.2 では別の異性体をまとめてしまう）の `interleaved`。ΔRT の大きい `interleaved` は載せるが
   まとめない。まとめると判定に使うデータが変わるので、迷う組はまとめない側に倒す。
-- **まとめの成分**（`merge_groups`）: mergeable の組**だけ**を辺とした連結成分。**ちょうど 2 スポット
-  の成分だけをまとめる**（`mergeable: true`）。3 スポット以上は載せるがまとめない。
-  例: 鎖 A–B–C–D で B–C だけが mergeable なら、B と C をまとめ、A と D はそのまま。
+- **まとめる組**（`merged`・`merge_groups`）: mergeable の組のうち**互いに最も近い相手**どうしだけ——
+  A の mergeable な相手の中で |ΔRT| が最小なのが B で、かつ B のそれが A（最小が同点なら相手なし）。
+  まとめは常に 2 スポットで、1 つのスポットは高々 1 組にしか入らない。ほかの mergeable な組は
+  `merge_reason: "not_mutual_nearest"` で載せるがまとめない。例: MTBLS6965 の陰イオンの FA 20:3 は
+  2 つの異性体が同じ後半の注入で一緒にずれ、401（後半の n-9）が 403（前半の n-9、ΔRT 0.088）とも
+  402（前半の n-3/n-6、ΔRT 0.199）とも組になる——互いに最も近い 401↔403 だけをまとめる。
 - **注入順**（`injection_order_source`）: `manifest`（pipeline の実験情報シートの `injection_order`）・
   `metadata`（シート以外から推した値、または呼び出し側が渡した順）・`filename`（1 試料でも
   欠ければ試料名の順。`block.injections` はその順位）。
@@ -347,7 +350,8 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
             "delta_rt": 0.61, "delta_ppm": 7.7, "adduct": "[M+NH4]1+",
             "names": ["CE 18:2", null], "names_compatible": true, "type": "injection_block",
             "owner": {"<試料名>": "1265"}, "n_owned": [40, 2], "both_detected_fraction": 0.0,
-            "block": {"spot": "1266", "injections": [1, 2]}, "mergeable": true}],
+            "block": {"spot": "1266", "injections": [1, 2]}, "mergeable": true,
+            "merged": true, "merge_reason": null}],
  "groups": [{"group_id": "G1", "features": ["1265", "1266"], "pair_ids": ["P1"],
              "type": "injection_block", "types": ["injection_block"], "mergeable": true}],
  "merge_groups": [{"merge_group_id": "M1", "group_id": "G1", "features": ["1265", "1266"],
@@ -355,8 +359,7 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
                    "mergeable": true}],
  "summary": {"n_pairs": 1, "by_type": {"injection_block": 1, "group_aligned": 0, "interleaved": 0},
              "n_features_affected": 2, "injection_block_median_delta_rt": 0.61,
-             "n_mergeable_pairs": 1, "n_groups": 1, "n_merge_groups": 1,
-             "n_mergeable_groups": 1}}
+             "n_mergeable_pairs": 1, "n_merged_pairs": 1, "n_groups": 1}}
 ```
 
 - `pairs[].features` は `injection_block` なら [塊でない側, 塊の側]、ほかは RT の昇順。
@@ -365,13 +368,15 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
 - `groups[]` は**すべての組**の連結成分（報告用。3 スポット以上の連鎖を 1 つにする）。`features` の
   先頭が代表（検出された試料、無ければ値が最大の試料の最も多いスポット）。`type` は成分の型で、組の
   型が混ざれば `group_aligned` > `interleaved` > `injection_block` の順で強い方。`mergeable` は成分
-  全体がちょうど 2 スポットのまとめのときだけ真。
-- `merge_groups[]` はまとめの成分（上）。`group_id` は含まれる `groups[]` の成分。`features` の先頭が
-  代表で、`merge_matrix_columns` はそれを代表の ID として残す。統計の側（Tasks 6・7）がまとめるのは
-  `mergeable` の `merge_groups` だけ。`summary.n_mergeable_groups` はその数。
+  全体が 1 つのまとめる組のときだけ真。
+- `merge_groups[]` はまとめる組ごとの 2 スポット（`merge_group_id`・`group_id`＝含まれる `groups[]` の
+  成分・`features`・`pair_ids`・`type`・`types`・`mergeable: true`）。`features` の先頭が代表で、
+  `merge_matrix_columns` はそれを代表の ID として残す。統計の側（Tasks 6・7）がまとめるのは
+  `merge_groups` だけ。`summary.n_merged_pairs` はその数。
 - `split_partners(qc)`（統計の側が使う）: 特徴 → `{group_id, merge_group_id, partners, component,
-  type, mergeable}`。`partners`・`mergeable`・`type` はまとめの成分から（mergeable の組が無ければ
-  `partners` は空・`mergeable` は偽）、`component` は全体の成分のほかの特徴。
+  type, mergeable}`。まとめる特徴は `partners` がその相手 1 つで `mergeable` が真、`type` はその組の型。
+  まとめない特徴は `partners` が空・`mergeable` が偽・`merge_group_id` が null。`component` は全体の
+  成分のほかの特徴（報告用）。
 - 戻り値は `status`・`schema`・`injection_order_source`・`signal`（`detected` / `values`）・`summary`・
   `output_path`（渡したとき）と、`group_aligned` の組（50 件以下のとき TSV: `pair_id feature_a
   feature_b mz rt_a rt_b delta_rt adduct name_a name_b`）。
