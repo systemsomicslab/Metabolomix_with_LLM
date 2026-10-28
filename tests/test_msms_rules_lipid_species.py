@@ -101,9 +101,13 @@ def test_inchikey_claim_rule_hash_is_unchanged():
             "scan": {"ppm": [10, 20], "rt_tol_min": [0.3]},
             "msms": {"top_n": 3, "rules": {"min_fragments_excl_precursor": 2}},
             "relations": {"rt_window": 0.05}}
-    normalized = C.normalize_claim_spec(spec, dataset_polarity="positive")
+    # merge_split=false（v7 と同じ規則）は v7 の hash のまま。既定（true）は merge_split が規則に入る
+    normalized = C.normalize_claim_spec({**spec, "merge_split": False}, dataset_polarity="positive")
     assert C.rule_hash(normalized) == \
         "fb597799f7388814f93093b472ee773769e40aabaaf6ad0bb0fabb56338f33db"
+    merged = C.normalize_claim_spec(spec, dataset_polarity="positive")
+    assert merged["merge_split"] is True
+    assert C.rule_hash(merged) != C.rule_hash(normalized)
 
 
 def test_species_claim_passes_the_species_to_the_msms_rules():

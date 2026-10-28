@@ -257,11 +257,13 @@ bh_population, caveats}`。`bh_population = {n_features_total, n_in_matrix, n_te
 
 **割れたスポットのまとめ（`merge_split`、既定 true。spec 2026-10-28 §4.3 (c)）。** MS-DIAL のアライメントが
 1 つの物質を 2 つのスポットに割ると（例: 最初の数注入だけ RT がずれて別のスポットへ行く）、片方のスポットの
-「無い」試料に gap-fill の背景が入り、群の差でない差が出る。`merge_split=true` では、統計を付ける特徴が
-`dataset_alignment_qc` の `merge_groups`（互いに最も近い mergeable な 2 スポット。`reanalysis` §9）に入るとき
-だけ、その 2 スポットを**試料ごとの大きい方の値**で 1 列にまとめた行列（前処理の前の生の値。検出状態は
-「どちらかで検出」）に、差次的結果を計算したのと同じ前処理のレシピを当て直し、同じ検定（`log_transform`
-も同じ。pipeline の既定は log 変換の Welch）と**まとめた後の全特徴**での BH をやり直す。
+「無い」試料に gap-fill の背景が入り、群の差でない差が出る。`merge_split=true` では、
+`dataset_alignment_qc` の `merge_groups`（互いに最も近い mergeable な 2 スポット。`reanalysis` §9）が
+データセットに 1 つでもあれば、すべての組の 2 スポットを**試料ごとの大きい方の値**で 1 列にまとめた行列
+（前処理の前の生の値。検出状態は「どちらかで検出」）に、差次的結果を計算したのと同じ前処理のレシピを
+当て直し、同じ検定（`log_transform` も同じ。pipeline の既定は log 変換の Welch）と**まとめた後の全特徴**での
+BH をやり直して、`stats` の**すべての行**をそこから出す（統計を付ける特徴が組に入るかどうかによらない。
+組が無ければやり直さない）。
 
 | 欄 | 意味 |
 |---|---|
@@ -280,7 +282,10 @@ bh_population, caveats}`。`bh_population = {n_features_total, n_in_matrix, n_te
 単位が「組の残す ID」になる——組の 2 スポットが同じ箱（層・水準）に qualified で入っても 1 つと数え、
 `resolved` なら `selected_feature_id` は残す ID、`targets[*].merged_from` にその組（それ以外は null）。
 `candidates` の行はスポットごとのまま（RT・ppm・証拠はそのスポットのもの）で、末尾の `merged_from` に組。
-組でない 2 スポットは従来どおり `needs_input`（`multiple_qualified_candidates`）。
+組の片方だけが質量の窓に入ったときは、相手のスポットも同じ付加体で行に足す（`reasons` に `merge_partner`。
+qualified にせず数にも入れない——選んだ残す ID の行が必ずある）。組でない 2 スポットは従来どおり
+`needs_input`（`multiple_qualified_candidates`）。`rule` には `merge_split` と、判定でまとめた組の hash
+`merge_groups_hash` が並び、`merge_split=true` のときだけ `rule_hash` に入る（false は v7 と同じ hash）。
 
 **`rule_hash` と `stats_source` は別物**。`rule = {targets, polarity, polarity_source, rule_hash}` の
 `targets` は既定値を埋めて付加体の層を解決した目標で、`rule_hash` はその正規化後の目標

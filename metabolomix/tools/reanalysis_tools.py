@@ -426,7 +426,9 @@ def dataset_claim_evidence(spec: dict, dataset_handle: str | None = None,
     spec: `claim_id`・`target`（`dataset_feature_search` の目標と同じ形。`target_id` は
     `claim_id`。脂質の種の主張は `inchikey` の代わりに `lipid_species`）・`scan`（`ppm` と `rt_tol_min` の水準のリスト、任意で `adduct_tiers`——
     全組で走査する）・`msms`（`top_n` と msms-rules.v1 の `rules`。target は書かない）・
-    `relations`（`rt_window` / `mz_tol` / `min_r`）・`max_candidates`（既定 50）。
+    `relations`（`rt_window` / `mz_tol` / `min_r`）・`max_candidates`（既定 50）・`merge_split`
+    （既定 true。割れたスポットの組を判定で 1 つの候補（残す ID）と数え、窓の外の相手も候補に
+    `merge_partner` で足す。false は v7 と同じ規則・同じ `rule_hash`）。
     束に入るのは、規則で選んだ既定の特徴（`default_selection`。`dataset_feature_search`
     の目標照合と同じ規則で、決まらなければ `needs_input`）、走査ごとの判定、候補ごとの
     照合（spot_id = SMF_ID）・合否・関係。**特徴は決めない**（実行役が決め、統計は
@@ -509,7 +511,8 @@ def dataset_mass_accuracy(band_edges: list[float] | None = None, rank: int = 1,
                                       **summary}, digits=4))
 
 
-def _novel_result_stats(ds, result: dict, source: dict) -> tuple[dict, dict]:
+def _novel_result_stats(ds, result: dict, source: dict, *,
+                        dataset_hash: str | None = None) -> tuple[dict, dict]:
     """2 群比較の結果からの統計（特徴 ID → log2fc・p・q）と、割れのまとめの記録。
 
     `merge_split` が真でまとめる組が 1 つでもあれば、すべての特徴の統計をまとめた行列で検定し
@@ -524,10 +527,12 @@ def _novel_result_stats(ds, result: dict, source: dict) -> tuple[dict, dict]:
                 for row in found.get("results") or []}
 
     stats_rows = _rows(result)
-    merge = {"enabled": source["merge_split"], "source": None, "groups": []}
-    if source["merge_split"]:
+    enabled = bool(source.get("merge_split"))
+    merge = {"enabled": enabled, "source": None, "groups": []}
+    if enabled:
         plan = feature_search.merge_plan(ds, alignment_qc_path=source.get("alignment_qc"),
-                                         field="statistics.alignment_qc")
+                                         field="statistics.alignment_qc",
+                                         dataset_hash=dataset_hash)
         merged = feature_search.merged_results(ds, [result], plan["groups"], ds.feature_ids)
         for redone in merged["results"].values():
             stats_rows = _rows(redone)
@@ -559,6 +564,7 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     """
     from metabolomix.analysis import analysis_spec, mass_accuracy
     from metabolomix.analysis.feature_search import select_results
+    from metabolomix.analysis.result_state import dataset_fingerprint
 
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
@@ -570,7 +576,9 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
         normalized = mass_accuracy.normalize_novel_spec(spec)
         source = normalized["statistics"]
         if "result_id" in source:
-            chosen = select_results(ds, [source["result_id"]])
+            # データの指紋は 1 回だけ計算し、結果の照合と割れの照合で使い回す
+            dataset_hash = dataset_fingerprint(ds)
+            chosen = select_results(ds, [source["result_id"]], dataset_hash=dataset_hash)
             if not chosen["results"]:
                 return missing_state(
                     "dataset_differential_result", ["dataset_differential"],
@@ -578,7 +586,8 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
                     f"（無い: {chosen['missing']} / 古い: {chosen['stale']}）。")
             result = chosen["results"][0]
             group_ref, group_test = result.get("a"), result.get("b")
-            stats_rows, merge = _novel_result_stats(ds, result, source)
+            stats_rows, merge = _novel_result_stats(ds, result, source,
+                                                    dataset_hash=dataset_hash)
         else:
             run = analysis_spec.run_spec(source["analysis_spec"], ds)
             analysis = next(a for a in run["analyses"] if a["analysis_id"] == source["analysis_id"])
@@ -586,15 +595,17 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
             stats_rows = {row["feature_id"]: row for row in analysis["rows"]
                           if row["status"] == "tested"}
             merge = {key: run["merge_split"][key] for key in ("enabled", "source", "groups")}
-        rows = mass_accuracy.novel_candidates(ds, normalized, stats_rows,
-                                              group_ref=group_ref, group_test=group_test,
-                                              merged_from={g[0]: g for g in merge["groups"]})
-        merge_info = {"enabled": merge["enabled"], "source": merge["source"],
-                      "n_groups": len(merge["groups"])}
+        # まとめないとき（merge_split=false）は行も戻り値も v7 と同じ形
+        rows = mass_accuracy.novel_candidates(
+            ds, normalized, stats_rows, group_ref=group_ref, group_test=group_test,
+            merged_from={g[0]: g for g in merge["groups"]} if merge["enabled"] else None)
+        merge_info = ({"enabled": True, "source": merge["source"],
+                       "n_groups": len(merge["groups"])} if merge["enabled"] else None)
         result_payload = {"schema": mass_accuracy.NOVEL_SCHEMA,
                           "rule": normalized, "rule_hash": mass_accuracy.rule_hash(normalized),
                           "group_ref": group_ref, "group_test": group_test,
-                          "merge_split": merge_info, "rows": rows}
+                          **({"merge_split": merge_info} if merge_info else {}),
+                          "rows": rows}
         if output_path is None and len(rows) > MAX_INLINE_ROWS:
             raise DomainError("ANALYSIS_OUTPUT_REQUIRED",
                               f"行が {MAX_INLINE_ROWS} を超える（{len(rows)} 件）。output_path を"
@@ -603,12 +614,14 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
     columns = ("feature_id", "name", "inchikey", "adduct", "mz", "rt", "ppm", "group_ref",
-               "group_test", "log2fc_test_over_ref", "p", "q", "direction", "merged_from")
+               "group_test", "log2fc_test_over_ref", "p", "q", "direction")
+    if merge_info:
+        columns += ("merged_from",)
     return json_payload({
         "status": "success",
         "rule_hash": result_payload["rule_hash"],
         "group_ref": group_ref, "group_test": group_test,
-        "merge_split": merge_info,
+        **({"merge_split": merge_info} if merge_info else {}),
         "n_rows": len(rows),
         **({"output_path": written} if written else
            {"rows": rows_table([{**r, "mz": round(r["mz"], 4), "ppm": round(r["ppm"], 2),

@@ -477,7 +477,19 @@ def test_novel_candidates_count_split_once(tmp_path):
         {**spec, "statistics": {"result_id": diff["result_id"], "merge_split": False}},
         dataset_handle=handle))
     assert off["rule_hash"] != out["rule_hash"]
-    assert [r["merged_from"] for r in _tsv_rows(off["rows"])] == [""]
+    # merge_split=false は v7 と同じ形・同じ規則（merged_from 列も merge_split も無い）
+    assert "merge_split" not in off
+    assert off["rows"].splitlines()[0].split("\t")[-1] == "direction"
+    from metabolomix.analysis import mass_accuracy
+    v7 = mass_accuracy.normalize_novel_spec({**spec, "statistics": {"result_id": diff["result_id"],
+                                                                    "merge_split": False}})
+    assert v7["statistics"] == {"result_id": diff["result_id"]}
+    assert off["rule_hash"] == mass_accuracy.rule_hash(v7)
+
+    # exclude.feature_ids に消える側の ID（31）だけを書いても、組ごと外れる
+    gone = json.loads(R.dataset_novel_candidates({**spec, "exclude": {"feature_ids": ["31"]}},
+                                                 dataset_handle=handle))
+    assert gone["n_rows"] == 0
 
     # SME（rank 1）が消える側（31）にしか無くても、残す ID の 1 候補として数える
     moved = (dict(SPLIT_FEATURES[0], sme=[]), dict(SPLIT_FEATURES[1], sme=SPLIT_FEATURES[0]["sme"]),
@@ -519,3 +531,32 @@ def test_claim_evidence_default_selection_counts_a_merged_pair_once(tmp_path):
     other = json.loads(R.dataset_claim_evidence(unrelated, dataset_handle=handle))
     assert other["default_selection"]["status"] == "needs_input"
     assert other["default_selection"]["merged_from"] is None
+
+
+def test_claim_evidence_adds_the_partner_outside_the_mass_window(tmp_path):
+    """組の片方（31）だけが質量の窓に入っても、選んだ残す ID（30）が候補に入る（レビューの再現）。"""
+    features = ({**SPLIT_FEATURES[0], "sme": []}, SPLIT_FEATURES[1], SPLIT_FEATURES[2])
+    handle = _split_handle(tmp_path, features)
+    claim = {"claim_id": "C", "target": {"inchikey": CE_KEY, "expected_mz": 650.608,
+                                         "adduct": "[M+H]+", "rt_min": 20.6, "rt_tol_min": 0.3}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    assert out["default_selection"]["selected_feature_id"] == "30"
+    by_id = {c["feature_id"]: c for c in out["candidates"]}
+    assert set(by_id) == {"30", "31"}
+    assert by_id["30"]["scans"] == ["merge_partner"]
+    assert "default" in by_id["31"]["scans"]
+    assert by_id["30"]["split"]["partners"] == ["31"]
+    assert out["merge_split"] is True and len(out["merge_groups_hash"]) == 64
+
+    # merge_split=false は v7 と同じ規則（同じ rule_hash）で、組を 1 つにしない・相手を足さない
+    from metabolomix.analysis import claim_evidence
+    off = json.loads(R.dataset_claim_evidence({**claim, "merge_split": False},
+                                              dataset_handle=handle))
+    assert off["merge_split"] is False and off["merge_groups_hash"] is None
+    assert "merge_split" not in off["rule"]
+    assert off["default_selection"]["selected_feature_id"] == "31"
+    assert {c["feature_id"] for c in off["candidates"]} == {"31"}
+    normalized = claim_evidence.normalize_claim_spec(claim, dataset_polarity="positive")
+    v7 = {k: v for k, v in normalized.items() if k != "merge_split"}
+    assert off["rule_hash"] == claim_evidence.rule_hash(v7)
+    assert out["rule_hash"] != off["rule_hash"]

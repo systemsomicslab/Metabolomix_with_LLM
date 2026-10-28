@@ -885,9 +885,16 @@ def dataset_feature_search(
     payload["merge_split"] = merge_block
     payload["results"] = feature_search.result_summaries(ds, results)
     if targets is not None:
+        from metabolomix.analysis.analysis_spec import merge_groups_hash
+
+        # merge_split=true は判定でまとめた割れの組の hash を規則の隣に置き、rule_hash にも入れる
+        # （false は v7 と同じ規則・同じ hash）
+        groups_hash = merge_groups_hash(plan["groups"]) if merge_split else None
         payload["rule"] = {"targets": _rule_targets(normalized), "polarity": polarity,
                            "polarity_source": polarity_source,
-                           "rule_hash": feature_search.rule_hash(normalized)}
+                           "merge_split": merge_split, "merge_groups_hash": groups_hash,
+                           "rule_hash": feature_search.rule_hash(
+                               normalized, merge_groups_hash=groups_hash)}
     payload["stats_source"] = {
         "result_ids": [(r.get("provenance") or {}).get("result_id") for r in results],
         "dataset_hash": dataset_hash,

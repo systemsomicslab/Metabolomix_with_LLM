@@ -86,7 +86,10 @@ def normalize_novel_spec(spec) -> dict:
         if not isinstance(merge, bool):
             raise DomainError(_INVALID, "statistics.merge_split は true / false",
                               {"field": "statistics.merge_split"})
-        statistics_out = {"result_id": str(stats_spec["result_id"]), "merge_split": merge}
+        statistics_out = {"result_id": str(stats_spec["result_id"])}
+        if merge:
+            # 真（既定）のときだけ規則に載せる。false は v7 と同じ規則・同じ rule_hash になる
+            statistics_out["merge_split"] = True
         if "alignment_qc" in stats_spec:
             if not merge or not isinstance(stats_spec["alignment_qc"], str):
                 raise DomainError(_INVALID, "statistics.alignment_qc は merge_split=true のときの "
@@ -145,7 +148,8 @@ def novel_candidates(ds, normalized: dict, stats_rows: dict, *, group_ref, group
                      merged_from: dict[str, list[str]] | None = None) -> list[dict]:
     """`stats_rows` は feature_id → {log2fc_test_over_ref, p, q}（検定できた行）。
 
-    `merged_from` は割れたスポットをまとめた群（残す ID → 群。残す ID が先頭）。群は 1 候補に
+    `merged_from` は割れたスポットをまとめた群（残す ID → 群。残す ID が先頭）。None（まとめない）
+    なら行は v7 と同じ形（`merged_from`・`sme_feature_id` を足さない）。群は 1 候補に
     数え、`feature_id` は残す ID・統計はその ID の行（まとめた行列での検定）。同定と質量誤差
     （`name` `inchikey` `adduct` `mz` `ppm` `rt`）は SME（rank 1）を持つ方のスポット（両方に
     あれば残す ID）から取り、その ID を `sme_feature_id` に書く。`exclude.feature_ids` は群の
@@ -153,6 +157,7 @@ def novel_candidates(ds, normalized: dict, stats_rows: dict, *, group_ref, group
     """
     excluded_ids = set(normalized["exclude"]["feature_ids"])
     excluded_blocks = set(normalized["exclude"]["inchikey_blocks"])
+    merging = merged_from is not None
     merged_from = merged_from or {}
     absorbed = {fid for group in merged_from.values() for fid in group[1:]}
     sme = {row["feature_id"]: row for row in sme_ppm(ds, rank=1)}
@@ -174,12 +179,14 @@ def novel_candidates(ds, normalized: dict, stats_rows: dict, *, group_ref, group
             continue
         log2fc = stats.get("log2fc_test_over_ref")
         source = row["feature_id"]
-        out.append({**row, "feature_id": fid, "sme_feature_id": source,
-                    "merged_from": list(group) if len(group) > 1 else None,
+        out.append({**row, "feature_id": fid,
                     "rt": (ds.feature_metadata.get(source) or {}).get("rt"),
                     "group_ref": group_ref, "group_test": group_test,
                     "log2fc_test_over_ref": log2fc, "p": stats.get("p"), "q": stats["q"],
                     "direction": None if not log2fc else
                     ("test_higher" if log2fc > 0 else "ref_higher")})
+        if merging:
+            out[-1].update(sme_feature_id=source,
+                           merged_from=list(group) if len(group) > 1 else None)
     out.sort(key=lambda r: (r["q"], r["feature_id"]))
     return out

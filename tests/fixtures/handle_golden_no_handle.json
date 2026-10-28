@@ -110,9 +110,11 @@
    }
   ],
   "rule": {
+   "merge_groups_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+   "merge_split": true,
    "polarity": "positive",
    "polarity_source": "adduct_majority",
-   "rule_hash": "0232cb69db839621112a1bd07c1536560e2d44c41e2b44c6261773a9ff8b1b0a",
+   "rule_hash": "c3c6d415c27851d79e0b062360a274a96cc90bfc7af0b35c384b1c8e59d0a3a1",
    "targets": [
     {
      "adduct_tiers": [

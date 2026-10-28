@@ -48,7 +48,8 @@ import numpy as np
 from metabolomix.core.atomic_io import DomainError
 
 __all__ = ["SCHEMA", "TYPES", "MergedMatrix", "find_split_pairs", "merge_matrix_columns",
-           "names_compatible", "read_qc_file", "split_partners", "usable_merge_groups"]
+           "id_order", "names_compatible", "read_qc_file", "split_partners",
+           "usable_merge_groups"]
 
 SCHEMA = "alignment-qc.v1"
 TYPES = ("injection_block", "group_aligned", "interleaved")
@@ -495,7 +496,7 @@ def _mutual_nearest(pairs: list[dict]) -> set[str]:
             and nearest.get(p["features"][1]) == p["features"][0]}
 
 
-def _id_order(ids) -> list[str]:
+def id_order(ids) -> list[str]:
     """特徴 ID の小さい順（すべて整数として読めれば数の順、そうでなければ文字列の順）。"""
     ids = [str(f) for f in ids]
     if all(f.strip().isdigit() for f in ids):
@@ -506,7 +507,7 @@ def _id_order(ids) -> list[str]:
 def _components(pairs: list[dict], feature_ids: list[str]) -> list[dict]:
     """`pairs` を辺とする連結成分（ID と mergeable は呼ぶ側が付ける）。
 
-    `features` は特徴 ID の小さい順（`_id_order`）。まとめでは先頭（最も小さい ID）が残る。
+    `features` は特徴 ID の小さい順（`id_order`）。まとめでは先頭（最も小さい ID）が残る。
     """
     parent: dict[str, str] = {}
 
@@ -527,7 +528,7 @@ def _components(pairs: list[dict], feature_ids: list[str]) -> list[dict]:
 
     components = []
     for features in sorted(members.values(), key=lambda m: position[m[0]]):
-        ordered = _id_order(features)
+        ordered = id_order(features)
         chosen = [p for p in pairs if p["features"][0] in features]
         types = sorted({p["type"] for p in chosen}, key=_TYPE_PRECEDENCE.index)
         components.append({"features": ordered, "pair_ids": [p["pair_id"] for p in chosen],
@@ -632,7 +633,7 @@ def merge_matrix_columns(matrix, feature_ids, groups, *, detected=None) -> Merge
     seen: set[str] = set()
     plans = []
     for group in groups:
-        present = _id_order(f for f in group if str(f) in position)
+        present = id_order(f for f in group if str(f) in position)
         if seen.intersection(present):
             raise ValueError(f"割れの群が特徴を共有している: {sorted(seen.intersection(present))}")
         seen.update(present)

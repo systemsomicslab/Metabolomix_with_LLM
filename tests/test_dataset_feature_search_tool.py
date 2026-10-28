@@ -539,3 +539,27 @@ def test_target_with_both_halves_in_the_window_resolves_to_the_kept_id(tmp_path)
                  "rt_min": 8.1, "rt_tol_min": 0.3}
     [still] = _search(targets=[unrelated])["targets"]
     assert still["status"] == "needs_input" and still["merged_from"] is None
+
+
+def test_target_candidates_include_the_partner_outside_the_mass_window(tmp_path):
+    _load_mztab(tmp_path / "gap" / "AlignResult-1.mzTab", BOTH_HALVES)
+    _differential_on_session()
+    target = {"target_id": "ce", "inchikey": CE_KEY, "expected_mz": 650.608, "adduct": "[M+H]+",
+              "rt_min": 20.6}
+    parsed = _search(targets=[target])
+    [summary] = parsed["targets"]
+    assert summary["status"] == "resolved" and summary["selected_feature_id"] == "30"
+    rows = {r["feature_id"]: r for r in _tsv(parsed["candidates"])}
+    assert set(rows) == {"30", "31"}
+    assert rows["30"]["qualified"] == "false" and "merge_partner" in rows["30"]["reasons"]
+    assert summary["counts"]["mass"] == 1 and summary["counts"]["qualified"] == 1
+    # 規則の隣に merge_split と組の hash。false は v7 と同じ hash
+    from metabolomix.analysis import feature_search
+    rule = parsed["rule"]
+    assert rule["merge_split"] is True and len(rule["merge_groups_hash"]) == 64
+    off = _search(targets=[target], merge_split=False)
+    assert off["rule"]["merge_split"] is False and off["rule"]["merge_groups_hash"] is None
+    [normalized] = feature_search.normalize_targets([target], dataset_polarity="positive")
+    assert off["rule"]["rule_hash"] == feature_search.rule_hash([normalized])
+    assert rule["rule_hash"] != off["rule"]["rule_hash"]
+    assert {r["feature_id"] for r in _tsv(off["candidates"])} == {"31"}

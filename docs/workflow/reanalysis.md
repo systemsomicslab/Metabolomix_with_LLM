@@ -202,7 +202,7 @@
 9. │  │     └─ metabolomix/msdial/lipid_identity.py  lipid_species_of()
 10. │  ├─ metabolomix/analysis/alignment_qc.py  _mutual_nearest()
 11. │  ├─ metabolomix/analysis/alignment_qc.py  _components()
-12. │  │  └─ metabolomix/analysis/alignment_qc.py  _id_order()
+12. │  │  └─ metabolomix/analysis/alignment_qc.py  id_order()
 13. │  └─ metabolomix/analysis/result_state.py  dataset_fingerprint()
 14. ├─ metabolomix/tools/reanalysis_tools.py  write_result()
 15. └─ metabolomix/tools/reanalysis_tools.py  rows_table()

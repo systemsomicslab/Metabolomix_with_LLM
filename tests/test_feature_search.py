@@ -1012,3 +1012,21 @@ def test_match_target_counts_a_merged_pair_as_one_candidate():
     # 別の組の群を渡しても、この 2 スポットは 1 つにならない
     other = match_target(ds, target, max_results=20, merged_from=merge_map([["7", "8"]]))
     assert other["status"] == "needs_input"
+
+
+def test_retest_uses_the_handoff_recipe_of_a_pipeline_result():
+    """pipeline の run から引き継いだ結果（来歴の handoff.preprocess）でも、同じレシピで再現する。"""
+    from metabolomix.analysis.feature_search import _result_recipe, merged_dataset, retest_merged
+
+    ds, result = _computed_ds()
+    recipe = ds.results[result["provenance"]["parent_ids"][0]]["provenance"]["effective_parameters"]
+    handed = {**result, "provenance": {**result["provenance"], "parent_ids": [],
+                                       "handoff": {"pipeline_root": "x", "comparison_id": "c1",
+                                                   "preprocess": {"policy": "conservative-v1",
+                                                                  **recipe}}}}
+    assert _result_recipe(ds, handed) == {"policy": "conservative-v1", **recipe}
+    view, _ = merged_dataset(ds, [])
+    redone = retest_merged(ds, view, handed)
+    for got, want in zip(redone["results"], result["results"]):
+        for key in ("log2fc", "p", "q"):
+            assert _same(got[key], want[key]), (got["feature"], key)

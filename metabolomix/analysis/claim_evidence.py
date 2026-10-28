@@ -111,7 +111,8 @@ def feature_relations(ds, feature_id: str, *, rt_window: float, mz_tol: float, m
 # ---------- 証拠の束 ----------
 
 def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
-    allowed = {"schema", "claim_id", "target", "scan", "msms", "relations", "max_candidates"}
+    allowed = {"schema", "claim_id", "target", "scan", "msms", "relations", "max_candidates",
+               "merge_split"}
     if not isinstance(spec, dict) or set(spec) - allowed:
         raise _fail(f"spec の未知のキー: {sorted(set(spec or {}) - allowed)}")
     if spec.get("schema", SPEC_SCHEMA) != SPEC_SCHEMA:
@@ -177,16 +178,27 @@ def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
     max_candidates = spec.get("max_candidates", 50)
     if isinstance(max_candidates, bool) or not isinstance(max_candidates, int) or max_candidates < 1:
         raise _fail("max_candidates は 1 以上の整数", field="max_candidates")
-    return {"schema": SPEC_SCHEMA, "claim_id": claim_id.strip(), "target": target,
-            "raw_target": raw_target, "scan": out_scan, "msms": out_msms,
-            "relations": out_relations, "max_candidates": max_candidates}
+    merge = spec.get("merge_split", True)
+    if not isinstance(merge, bool):
+        raise _fail("merge_split は true / false", field="merge_split")
+    out = {"schema": SPEC_SCHEMA, "claim_id": claim_id.strip(), "target": target,
+           "raw_target": raw_target, "scan": out_scan, "msms": out_msms,
+           "relations": out_relations, "max_candidates": max_candidates}
+    if merge:
+        # 既定（true）だけを規則に載せる。false は v7 と同じ規則（同じ rule_hash）になる
+        out["merge_split"] = True
+    return out
 
 
-def rule_hash(normalized: dict) -> str:
+def rule_hash(normalized: dict, merge_groups_hash: str | None = None) -> str:
+    """規則の hash。`merge_split` が真なら、判定でまとめた割れの組の hash（`merge_groups_hash`）も
+    入れる（同じ spec でも組が変われば別の規則。`analysis_spec.rule_hash` と同じ扱い）。偽なら v7 と同じ。"""
     rule = {k: v for k, v in normalized.items() if k != "raw_target"}
     if "lipid_species_input" in rule["target"]:
         # 種の綴り（PC 18:3_16:1 と PC 34:4）は同じ規則（feature_search.rule_hash と同じ扱い）
         rule["target"] = {k: v for k, v in rule["target"].items() if k != "lipid_species_input"}
+    if normalized.get("merge_split") and merge_groups_hash is not None:
+        rule["merge_groups_hash"] = merge_groups_hash
     return canonical_hash(rule)
 
 
@@ -202,7 +214,9 @@ def _selection(match: dict, verdicts: dict[str, str | None] | None) -> dict:
     `dataset_feature_search` の `counts.qualified` と同じ数）。
     """
     out = {k: match[k] for k in ("status", "reason", "selected_feature_id", "selected_adduct",
-                                 "selected_evidence", "adduct_tier_used", "merged_from")}
+                                 "selected_evidence", "adduct_tier_used")}
+    if "merged_from" in match:
+        out["merged_from"] = match["merged_from"]
     counts = match["counts"]
     units: dict[str, set[str]] = {}
     for row in match["candidates"]:
@@ -274,9 +288,13 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
     """証拠の束（claim-evidence.v1）を作る。`spot_query` は `library.tools.spot_msms_query`。
 
     候補ごとの `split` は割れたアライメントスポットの相手（`alignment_qc.find_split_pairs` を
-    既定の閾値で回した結果。`dataset_alignment_qc` の既定と同じ）。その `merge_groups` の組は
-    既定の特徴と走査の判定で 1 つの候補として数える（候補の一覧はスポットごとのまま）。
+    既定の閾値で回した結果。`dataset_alignment_qc` の既定と同じ）。`merge_split`（spec。既定 true）
+    なら、その `merge_groups` の組を既定の特徴と走査の判定で 1 つの候補として数え（候補の一覧は
+    スポットごとのまま）、組の片方だけが窓に入ったときは相手も候補に足す（`scans` に
+    `merge_partner`。`split`・`msms`・`relations` も相手について作る）。束の `merge_split` と
+    `merge_groups_hash`（判定でまとめた組の hash）を規則の隣に置き、真のときだけ `rule_hash` に入れる。
     """
+    from metabolomix.analysis.analysis_spec import merge_groups_hash
     from metabolomix.analysis import alignment_qc
     from metabolomix.analysis.result_state import dataset_fingerprint
 
@@ -284,7 +302,10 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
     qc = alignment_qc.find_split_pairs(ds, dataset_hash=dataset_hash)
     partners = alignment_qc.split_partners(qc)
     # 判定（既定の特徴・走査）でも割れの組は 1 つの候補（dataset_feature_search の merge_split と同じ）
-    merged_map = feature_search.merge_map(alignment_qc.usable_merge_groups(qc, ds.feature_ids)[0])
+    merge = bool(normalized.get("merge_split"))
+    merged_map = (feature_search.merge_map(alignment_qc.usable_merge_groups(qc, ds.feature_ids)[0])
+                  if merge else None)
+    groups_hash = merge_groups_hash(list(merged_map.values())) if merge else None
     mz_array = feature_search._feature_mz_array(ds)
     unlimited = len(ds.feature_ids) * 16 + 1
     default = feature_search.match_target(ds, normalized["target"], max_results=unlimited,
@@ -299,7 +320,9 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
                 "annotated_inchikey": row["annotated_inchikey"], "scans": set()})
             entry["evidence"].add(row["evidence"])
             entry["adducts"].add(row["adduct"])
-            entry["scans"].add(scan_label)
+            # 割れの相手として足した行（質量の窓の外）は、その走査で見えたものと区別する
+            partner = "merge_partner" in row["reasons"].split(";")
+            entry["scans"].add("merge_partner" if partner else scan_label)
 
     _collect(default, "default")
     scan_matches = []
@@ -359,10 +382,12 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
     return {
         "schema": CLAIM_SCHEMA,
         "claim_id": normalized["claim_id"],
-        "rule_hash": rule_hash(normalized),
+        "rule_hash": rule_hash(normalized, groups_hash),
         "input_fingerprint": {"dataset_hash": dataset_hash,
                               "library_sha256": library_sha256},
         "rule": rule,
+        "merge_split": merge,
+        "merge_groups_hash": groups_hash,
         "dataset_polarity": polarity,
         "default_selection": _selection(default, verdicts),
         "scans": scans,

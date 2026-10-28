@@ -343,7 +343,7 @@ def normalize_targets(targets: list[dict], *, dataset_polarity: str | None) -> l
 _RULE_HASH_EXCLUDED = frozenset({"name", "lipid_species_input"})
 
 
-def rule_hash(normalized_targets: list[dict]) -> str:
+def rule_hash(normalized_targets: list[dict], *, merge_groups_hash: str | None = None) -> str:
     """正規化後の目標リストから照合規則の hash を作る（result_id・dataset_hash は入れない）。
 
     覆うのは照合を左右する欄だけ: ``target_id``・InChIKey 先頭ブロック（種の目標は
@@ -351,12 +351,18 @@ def rule_hash(normalized_targets: list[dict]) -> str:
     expected_mz・付加体の層と理論 m/z・ppm・RT・目標の極性・``applicable``。``name`` は
     入れず、目標は ``target_id`` の順に並べ替えてから作る——表示名の変更や
     ``targets`` の並べ替えでは hash は変わらない。
+
+    ``merge_groups_hash``（`merge_split` で判定に使った割れの組の hash）を渡したときだけ、
+    ``merge_split`` と組の hash も入れる。渡さなければ従来（v7）と同じ hash。
     """
     canonical = sorted(
         ({k: v for k, v in target.items() if k not in _RULE_HASH_EXCLUDED}
          for target in normalized_targets),
         key=lambda target: target["target_id"])
-    return canonical_hash(canonical)
+    if merge_groups_hash is None:
+        return canonical_hash(canonical)
+    return canonical_hash({"targets": canonical, "merge_split": True,
+                           "merge_groups_hash": merge_groups_hash})
 
 
 # ---------- 目標照合の判定（spec §5） ----------
@@ -533,6 +539,8 @@ def match_target(ds, target: dict, *, max_results: int,
     スポットごとに作り（``merged_from`` 欄に群）、判定と ``counts`` は残す ID（群の中で最も小さい
     ID）に読み替えて一意化する。組の 2 スポットが同じ箱にあっても 1 つと数え、``resolved`` なら
     ``selected_feature_id`` は残す ID、``merged_from`` にその群（まとめないときは None）。
+    組の片方だけが質量の窓に入ったときは、相手のスポットも同じ付加体で行に足す（``reasons`` に
+    ``merge_partner``。qualified にせず数にも入れない。選んだ残す ID の行が候補に必ずあるように）。
     ``merged_from`` を渡さない（None）ときは戻り値も行も従来と同じ形（``merged_from`` 欄を足さない）。
     """
     collapse = merged_from is not None
@@ -566,6 +574,59 @@ def match_target(ds, target: dict, *, max_results: int,
     if mz_array is None:
         mz_array = _feature_mz_array(ds)
 
+    position = {fid: i for i, fid in enumerate(feature_ids)}
+
+    def make_row(index, tier_no, adduct, theo, *, partner=False):
+        fid = feature_ids[index]
+        mz = float(mz_array[index])
+        rt = (ds.feature_metadata.get(fid) or {}).get("rt")
+        if rt_min is None:
+            rt_ok, delta_rt = True, None
+        elif _is_number(rt):
+            delta_rt = rt - rt_min
+            rt_ok = abs(delta_rt) <= rt_tol + _BOUNDARY_EPS
+        else:
+            rt_ok, delta_rt = False, None
+        if not partner:
+            rt_ok_of[fid] = rt_ok
+
+        identity = _identity(ds.feature_candidates.get(fid) or [],
+                             ds.feature_annotations.get(fid),
+                             **identifier, adduct=adduct)
+        evidence = identity["evidence"]
+        # 割れの相手（質量の窓の外）は判定に入れず、行として見せるだけ
+        reasons = ["merge_partner"] if partner else []
+        reasons += [] if rt_ok else ["rt_outside_tolerance"]
+        reasons += identity["reasons"]
+        if partner or evidence == "contradicted":
+            qualified = False
+        elif evidence == "unannotated" and rt_min is None:
+            # 質量だけでは同定と言わない（feature_bindings の mass_rt が RT を必須にするのと同じ）
+            reasons.append("mass_only_not_identified")
+            qualified = False
+        else:
+            qualified = rt_ok
+        row = {
+            "target_id": target["target_id"],
+            "feature_id": fid,
+            "adduct": adduct,
+            "adduct_tier": tier_no,
+            "theoretical_mz": theo,
+            "mz": mz,
+            "ppm": (mz - theo) / theo * 1e6,
+            "rt": rt,
+            "delta_rt": delta_rt,
+            "evidence": evidence,
+            "sme_rank": identity["sme_rank"],
+            "annotated_name": identity["name"],
+            "annotated_inchikey": identity["inchikey"],
+            "qualified": qualified,
+            "reasons": reasons,
+        }
+        if collapse:
+            row["merged_from"] = merged_from.get(kept_of.get(fid))
+        return row
+
     rows: list[dict] = []
     rt_ok_of: dict[str, bool] = {}
     for tier_no, tier in enumerate(target["adduct_tiers"], start=1):
@@ -575,51 +636,18 @@ def match_target(ds, target: dict, *, max_results: int,
                 hits = np.nonzero(np.abs((mz_array - theo) / theo * 1e6)
                                   <= ppm_tol + _BOUNDARY_EPS)[0]
             for index in hits:
-                fid = feature_ids[index]
-                mz = float(mz_array[index])
-                rt = (ds.feature_metadata.get(fid) or {}).get("rt")
-                if rt_min is None:
-                    rt_ok, delta_rt = True, None
-                elif _is_number(rt):
-                    delta_rt = rt - rt_min
-                    rt_ok = abs(delta_rt) <= rt_tol + _BOUNDARY_EPS
-                else:
-                    rt_ok, delta_rt = False, None
-                rt_ok_of[fid] = rt_ok
+                rows.append(make_row(index, tier_no, adduct, theo))
 
-                identity = _identity(ds.feature_candidates.get(fid) or [],
-                                     ds.feature_annotations.get(fid),
-                                     **identifier, adduct=adduct)
-                evidence = identity["evidence"]
-                reasons = [] if rt_ok else ["rt_outside_tolerance"]
-                reasons += identity["reasons"]
-                if evidence == "contradicted":
-                    qualified = False
-                elif evidence == "unannotated" and rt_min is None:
-                    # 質量だけでは同定と言わない（feature_bindings の mass_rt が RT を必須にするのと同じ）
-                    reasons.append("mass_only_not_identified")
-                    qualified = False
-                else:
-                    qualified = rt_ok
-                rows.append({
-                    "target_id": target["target_id"],
-                    "feature_id": fid,
-                    "adduct": adduct,
-                    "adduct_tier": tier_no,
-                    "theoretical_mz": theo,
-                    "mz": mz,
-                    "ppm": (mz - theo) / theo * 1e6,
-                    "rt": rt,
-                    "delta_rt": delta_rt,
-                    "evidence": evidence,
-                    "sme_rank": identity["sme_rank"],
-                    "annotated_name": identity["name"],
-                    "annotated_inchikey": identity["inchikey"],
-                    "qualified": qualified,
-                    "reasons": reasons,
-                })
-                if collapse:
-                    rows[-1]["merged_from"] = merged_from.get(kept_of.get(fid))
+    if collapse:
+        # 組の片方だけが質量の窓に入ったとき、相手（組は ≤15 ppm、窓は ppm）も行に足す。
+        # 残す ID が窓の外でも、選んだ ID の行が候補に必ずある（`merge_partner`。qualified にしない）。
+        present = {row["feature_id"] for row in rows}
+        for row in list(rows):
+            for member in merged_from.get(kept_of.get(row["feature_id"]), []):
+                if member not in present and member in position:
+                    present.add(member)
+                    rows.append(make_row(position[member], row["adduct_tier"], row["adduct"],
+                                         row["theoretical_mz"], partner=True))
 
     def unit(fid):
         # 判定と数の単位（割れの組は残す ID で 1 つ）
@@ -1044,7 +1072,7 @@ def merge_map(groups) -> dict[str, list[str]]:
     """割れの群 → ``{残す ID: 群}``（残す ID は群の中で最も小さい ID。`merge_matrix_columns` と同じ）。"""
     from metabolomix.analysis import alignment_qc
 
-    ordered = [alignment_qc._id_order(group) for group in groups]
+    ordered = [alignment_qc.id_order(group) for group in groups]
     return {group[0]: group for group in ordered if len(group) >= 2}
 
 
