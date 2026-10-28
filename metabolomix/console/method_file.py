@@ -76,6 +76,10 @@ MSP_KEY = "Msp file path"
 #: `.lower()`後の比較なので大文字小文字は実害がないが、証拠に合わせておく。
 TEXT_DB_KEY = "Text DB file path"
 RT_REFERENCE_KEY = "Compounds library file path for RT correction"
+#: アライメントの基準にする試料の file ID（0 始まり。入力フォルダの主ファイルを
+#: `sorted()` した順の添字）。`ConfigParser` が読む既存のキーで、既定の 0 は
+#: 先頭の試料（ファイル名順の先頭）になる。
+ALIGNMENT_REFERENCE_KEY = "Alignment reference file ID"
 
 #: LC-MS の Console が**ファイルパスとして**読むキー（`ConfigParser.ReadCommonParameter`
 #: の `//File paths` 節）。`ReadForLcmsParameter` はこれらを解決しないので、相対値は

@@ -81,6 +81,8 @@ _TOP_LEVEL_KEYS = frozenset({
     "sample_manifest", "preprocess", "comparisons",
     # spec 2026-10-07（library_mode="msp_only"）
     "library_mode", "msp_file",
+    # v8（アライメントの参照ファイルを注入順の中央にする）
+    "alignment_reference",
 })
 
 #: 内部でだけ使う2キー。外部入力（explicit/updates）には現れてはいけない。
@@ -88,11 +90,15 @@ _INTERNAL_KEYS = frozenset({"effective_target", "value_sources"})
 
 _TARGET_VALUES = frozenset({"auto", "exploratory", "differential"})
 _LIBRARY_MODE_VALUES = frozenset({"auto", "msp_only"})
+#: MS-DIAL の `Alignment reference file ID`。`median_injection` は注入順の中央の試料を
+#: 計画で選んで実効メソッドへ書く（既定）。`method` はメソッドの宣言をそのまま使う。
+_ALIGNMENT_REFERENCE_VALUES = frozenset({"median_injection", "method"})
 
 #: 内容 hash から外す既定値（spec 2026-10-07 §3.1）。既定値のキーが増えただけで既存の
 #: 要求の hash が変わると、過去の run への再送が IDEMPOTENCY_CONFLICT になり、
 #: 完了済み run の再利用も外れる（tests/test_metabolomics_stages.py が実測値で縛る）。
-_FINGERPRINT_OMITTED_DEFAULTS = {"library_mode": "auto", "msp_file": None}
+_FINGERPRINT_OMITTED_DEFAULTS = {"library_mode": "auto", "msp_file": None,
+                                 "alignment_reference": "median_injection"}
 _POLARITY_VALUES = frozenset({"positive", "negative"})
 _MEASURE_VALUES = frozenset({"peak_height"})  # 初期版はpeak_heightのみ(spec §10.1)
 _NORMALIZE_VALUES = frozenset({"auto", "none", "tic", "median", "pqn"})
@@ -144,7 +150,7 @@ _NULL_ALLOWED_TOP_LEVEL_KEYS = frozenset({"sample_manifest"})
 #: ——nullは「無効化」を意味する設定だけの特別な語彙（上のR13）。
 _NULL_REJECTED_TOP_LEVEL_KEYS = frozenset({
     "method_file", "lbm_file", "polarity", "keep_extension", "output_root",
-    "comparisons", "library_mode", "msp_file",
+    "comparisons", "library_mode", "msp_file", "alignment_reference",
 })
 
 
@@ -355,6 +361,12 @@ def _validate_fields(data: dict) -> None:
     if library_mode == "auto" and data.get("msp_file"):
         _fail("msp_fileはlibrary_mode='msp_only'のときだけ使えます（autoではMSPを解決しない）。",
               library_mode=library_mode)
+
+    # 変更前に保存された要求（キー無し）は既定の "median_injection"。
+    alignment_reference = data.get("alignment_reference", "median_injection")
+    if alignment_reference not in _ALIGNMENT_REFERENCE_VALUES:
+        _fail(f"alignment_referenceが不正です: {alignment_reference!r}",
+              alignment_reference=alignment_reference)
 
     polarity = data.get("polarity")
     if polarity is not None and polarity not in _POLARITY_VALUES:
@@ -632,6 +644,7 @@ def resolve_request(source_root: Path, explicit: dict | None = None, *,
         "lbm_file": _pick("lbm_file"),
         "library_mode": _pick("library_mode", "auto"),
         "msp_file": _pick("msp_file"),
+        "alignment_reference": _pick("alignment_reference", "median_injection"),
         "polarity": _pick("polarity"),
         "measure": _pick("measure", "peak_height"),
         "keep_extension": _pick("keep_extension"),

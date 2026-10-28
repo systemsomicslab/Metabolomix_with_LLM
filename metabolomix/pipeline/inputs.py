@@ -505,13 +505,61 @@ def _resolve_exe(exe_path: Path) -> dict:
     return {"path": str(exe_path.resolve()), "sha256": _sha256_file(exe_path), "version": None}
 
 
+# ---------- アライメントの参照ファイル（v8） ----------
+
+def list_primary_names(source_root: Path, request: dict) -> list[str]:
+    """入力フォルダの主ファイル名を、Console が file ID を振る順（`sorted()`）で返す。
+
+    `inspect_inputs` の `entries` と同じ並び。受付が実験情報シートを先に解すとき
+    （`expected_sources`）と、参照ファイルの選択が同じ一覧を共有する。
+    """
+    source_root = Path(source_root).expanduser()
+    ext, _formats = _resolve_raw_format(source_root, request.get("keep_extension"))
+    primaries, _companions = _collect_primaries_and_companions(source_root, ext)
+    return [p.name for p in primaries]
+
+
+def choose_alignment_reference(primary_names: list[str], manifest_rows: list[dict] | None, *,
+                               method_value: str | None = None) -> dict:
+    """MS-DIAL の `Alignment reference file ID` にする試料を、注入順の中央から選ぶ。
+
+    `primary_names` は入力フォルダの主ファイル名を `_collect_primaries_and_companions`
+    と同じ順に並べたもの（Console の file ID は 0 始まりのこの添字）。中央は**全試料**
+    （`include` を問わない）の `injection_order` の中央値の試料で、偶数なら小さい方。
+    `injection_order` が 1 件でも欠ける（行が無い・None）ときは、推測した順を信じず
+    ファイル名の順の中央にし、`injection_order_source` に "filename" と残す。
+    `method_value` はメソッドの原本が宣言していた値（記録用。選択には使わない）。
+    """
+    if not primary_names:
+        raise DomainError("MIXED_RAW_FORMATS", "主ファイルが 1 件もありません。", {})
+    order_by_name: dict[str, int] = {}
+    for row in manifest_rows or []:
+        order = row.get("injection_order")
+        if isinstance(order, int) and not isinstance(order, bool):
+            order_by_name[Path(str(row.get("source_file") or "")).name] = order
+    source = "manifest" if all(name in order_by_name for name in primary_names) else "filename"
+    if source == "manifest":
+        # 同順位は並びの先（ファイル名順）を先にして決定的にする。
+        ranked = sorted(range(len(primary_names)),
+                        key=lambda i: (order_by_name[primary_names[i]], i))
+    else:
+        ranked = list(range(len(primary_names)))
+    file_id = ranked[(len(ranked) - 1) // 2]
+    return {"file_id": file_id, "sample_file": primary_names[file_id],
+            "injection_order_source": source, "method_value": method_value}
+
+
 # ---------- 公開API: inspect_inputs ----------
 
-def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path) -> dict:
+def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
+                   manifest_rows: list[dict] | None = None) -> dict:
     """元フォルダを読むだけで、採用する形式・メソッド・LBM・実行体・極性を決める。
 
     何も書き込まない（隔離・固定は`stage_inputs`の責務）。戻り値の「入力計画」は
     そのまま`stage_inputs`へ渡す。
+
+    `manifest_rows` は受付が先に解した実験情報シートの行（`parse_manifest` の戻り値）。
+    アライメントの参照ファイルを注入順の中央にするのに使う。無ければファイル名順。
     """
     source_root = Path(source_root).expanduser()
     if not source_root.is_dir():
@@ -565,6 +613,18 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path) -> dict:
         # 絶対宣言はそのまま（Console がそのまま読める）。
         overrides[method_file_mod.LBM_KEY] = lbm_info["path"]
 
+    # アライメントの参照ファイル。メソッドの既定（0 = ファイル名順の先頭）は注入順と
+    # 無関係な端の試料になりうるので、既定では注入順の中央の試料に書き換える（v8）。
+    # 計画の指紋には入れない（overrides は指紋の外）。"method" は原本のまま使う。
+    method_value = (method_keys.get(method_file_mod.ALIGNMENT_REFERENCE_KEY.lower()) or "").strip() or None
+    if request.get("alignment_reference", "median_injection") == "method":
+        alignment_reference = {"file_id": None, "sample_file": None,
+                               "injection_order_source": None, "method_value": method_value}
+    else:
+        alignment_reference = choose_alignment_reference(
+            [p.name for p in primaries], manifest_rows, method_value=method_value)
+        overrides[method_file_mod.ALIGNMENT_REFERENCE_KEY] = str(alignment_reference["file_id"])
+
     # Console を起動する前に判定する（起動後だと全検体の解析を終えてから落ちる）。
     _assert_project_save_possible(request, exe_info["path"])
 
@@ -581,6 +641,7 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path) -> dict:
             "effective_sha256": None,
             "overrides": overrides,
         },
+        "alignment_reference": alignment_reference,
         "lbm": {"path": lbm_info["path"], "sha256": lbm_info["sha256"]},
         "library_mode": library_mode,
         "msp": msp_info,

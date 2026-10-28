@@ -67,7 +67,7 @@ MCP層は薄い(`metabolomix/tools/pipeline_tools.py`)。実体は `metabolomix/
 手順5の `_resolved_settings` は `plan_pipeline` の発送receiptにだけ足される
 (`_dispatch_receipt(include_resolved=True)`)。載せるのは解決済みの
 method(`source_path`/`sha256`)・LBM・polarity(`value`/`source`)・`library_mode`・
-MSP(ファイル名・sha256・出どころ。置き場所は載せない)だけで、
+MSP(ファイル名・sha256・出どころ。置き場所は載せない)・`alignment_reference` だけで、
 `raw_stat`・`entries`・`overrides` のような大きな中間データは `record["inputs"]`
 に残したまま出さない。サーバー共通指示(`metabolomix/core/mcp_core.py` の ENTRY POINT)が
 このツールを「起動前に解決結果を確認する入口」として案内しているため、receiptが
@@ -81,6 +81,14 @@ receiptは従来どおり最小のまま。
 (MSP が変われば `pipeline_run` は別の run を作る)。上流をやり直さない `pipeline_resume` では
 `metabolomix/pipeline/inputs.py` の `verify_inputs()` が再検査する(変わっていれば `INPUT_CHANGED`、`which: "msp"`)。
 receipt にはファイル名・sha256・出どころだけを載せ、置き場所は載せない。
+
+アライメントの参照ファイル(要求の `alignment_reference`、既定 `"median_injection"`): 実効メソッドの
+`Alignment reference file ID` を、全試料(`include` を問わない)の注入順の中央の試料(偶数なら小さい方)の
+file ID(入力フォルダの主ファイルを `sorted()` した順の 0 始まりの添字)に書く。`_prepare_run` が実験情報シートを
+`inspect_inputs` より先に解して行を渡し、`injection_order` が 1 件でも欠ける・シートが無いときはファイル名順の中央
+(receipt の `injection_order_source` が `"filename"`)。`"method"` は上書きせず、メソッドの宣言を `method_value` に残す。
+`overrides` は計画の指紋の外なので、既存の要求の hash も完了済み run の再利用も変わらない——ただし
+古い要求を再送して新しい run を作ると、実効メソッドの参照ファイルが以前と違う(既定の 0 → 中央)。
 
 ## pipeline_status
 

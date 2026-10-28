@@ -505,7 +505,8 @@ def test_plan_receipt_shows_the_resolved_settings_the_instructions_promise(tmp_p
     assert resolved["polarity"]["source"]
 
     # コンパクトさ: 大きな中間データを持ち込んでいない。
-    assert set(resolved) == {"method", "lbm", "polarity", "library_mode", "msp"}
+    assert set(resolved) == {"method", "lbm", "polarity", "library_mode", "msp",
+                        "alignment_reference"}
     assert resolved["library_mode"] == "auto"
     assert resolved["msp"] == {"file": None, "sha256": None, "source": "not_used"}
     assert set(resolved["method"]) == {"source_path", "sha256"}
@@ -725,3 +726,25 @@ def test_status_details_do_not_reveal_the_lab_msp_location(tmp_path, monkeypatch
     saved = store.load_run(recovery.normalize_pipeline_root(Path(receipt["pipeline_path"])))
     assert saved["inputs"]["msp"]["path"].endswith("lab_neg.msp")
     assert "secret_share" in saved["inputs"]["msp"]["path"]
+
+
+def test_plan_receipt_shows_alignment_reference(tmp_path, monkeypatch):
+    from tests.pipeline_fixtures import write_sample_manifest
+    source = _prepare_source(tmp_path, monkeypatch)
+    names = [f"S{i}.wiff" for i in range(8)]
+    sheet = write_sample_manifest(source["root"] / "sample-manifest.tsv", source_names=names)
+    # 注入順をファイル名の逆にする（S7 が 1 番目）。
+    text = sheet.read_text(encoding="utf-8").splitlines()
+    for i in range(8):
+        cells = text[2 + i].split("\t")
+        cells[5] = str(8 - i)
+        text[2 + i] = "\t".join(cells)
+    sheet.write_text("\n".join(text) + "\n", encoding="utf-8", newline="\n")
+
+    receipt = service.plan_pipeline(source["root"])
+    reference = receipt["resolved"]["alignment_reference"]
+    assert reference["injection_order_source"] == "manifest"
+    assert (reference["file_id"], reference["sample_file"]) == (4, "S4.wiff")
+
+    method_receipt = service.plan_pipeline(source["root"], {"alignment_reference": "method"})
+    assert method_receipt["resolved"]["alignment_reference"]["file_id"] is None

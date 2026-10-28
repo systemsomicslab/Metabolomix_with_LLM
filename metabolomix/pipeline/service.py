@@ -162,6 +162,24 @@ def _precheck_manifest(source_root: Path, request: dict, plan: dict) -> DomainEr
     return None
 
 
+def _manifest_rows_for_planning(source_root: Path, request: dict) -> list[dict] | None:
+    """計画（アライメントの参照ファイルの選択）に使う実験情報シートの行を、先に読む。
+
+    シートが無い・読めない・予定の raw と合わない場合は None（ファイル名順へ戻す）。
+    不正なシートの報告は`_precheck_manifest`の役目で、ここでは止めない
+    （止めると needs_input を保存する経路が失われる）。
+    """
+    manifest_path = _resolve_manifest_path(source_root, request)
+    if manifest_path is None or not manifest_path.is_file():
+        return None
+    try:
+        expected_sources = inputs_mod.list_primary_names(source_root, request)
+        return parse_manifest(manifest_path, source_root=source_root,
+                              expected_sources=expected_sources)
+    except DomainError:
+        return None
+
+
 def _mark_needs_input_without_launch(pipeline_path: Path, exc: DomainError, *, stage_id: str) -> None:
     """事前検査で見つかった不正入力を、workerを起動せずneeds_inputとして保存する。
 
@@ -190,8 +208,8 @@ def _resolved_settings(record: dict) -> dict:
     `pipeline_status(include_details=True)`でrecord全体を引くしかない
     ——コンパクトなreceiptという拘束と正面から衝突する。
 
-    載せるのは method / lbm / polarity / library_mode / msp だけ（msp は置き場所を
-    載せずファイル名・sha256・出どころ。spec 2026-10-07 §3.3）。`raw_stat`・`entries`・`companions`・`overrides`の
+    載せるのは method / lbm / polarity / library_mode / msp / alignment_reference だけ
+    （msp は置き場所を載せずファイル名・sha256・出どころ。spec 2026-10-07 §3.3）。`raw_stat`・`entries`・`companions`・`overrides`の
     ような大きな中間データは`record["inputs"]`に残したまま、receiptへは
     出さない（CLAUDE.md「戻り値を肥大させない」）。
     """
@@ -200,6 +218,8 @@ def _resolved_settings(record: dict) -> dict:
     lbm = inputs.get("lbm") or {}
     polarity = inputs.get("polarity") or {}
     msp = inputs.get("msp") or {}
+    # v2 の計画と、v8 より前に保存された計画には無い。
+    alignment_reference = inputs.get("alignment_reference")
     return {
         "method": {"source_path": method.get("source_path"), "sha256": method.get("sha256")},
         "lbm": {"path": lbm.get("path"), "sha256": lbm.get("sha256")},
@@ -207,6 +227,7 @@ def _resolved_settings(record: dict) -> dict:
         "library_mode": inputs.get("library_mode", "auto"),
         "msp": {"file": msp.get("file"), "sha256": msp.get("sha256"),
                 "source": msp.get("source", "not_used")},
+        "alignment_reference": alignment_reference,
     }
 
 
@@ -303,7 +324,10 @@ def _prepare_run(dataset_root: Path, request: dict | None,
         plan = inputs_mod.plan_from_profile(source_root, request_resolved, profile)
     else:
         exe_path = _resolve_exe_path()
-        plan = inputs_mod.inspect_inputs(source_root, request_resolved, exe_path=exe_path)
+        # アライメントの参照ファイルを注入順の中央にするため、シートを先に解して渡す。
+        plan = inputs_mod.inspect_inputs(
+            source_root, request_resolved, exe_path=exe_path,
+            manifest_rows=_manifest_rows_for_planning(source_root, request_resolved))
     plan["fingerprint"] = _plan_fingerprint(plan)
 
     manifest_error = _precheck_manifest(source_root, request_resolved, plan)

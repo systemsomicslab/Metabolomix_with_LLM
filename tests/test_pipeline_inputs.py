@@ -114,7 +114,10 @@ def test_inspect_and_stage_the_default_source(tmp_path, monkeypatch):
     # 実効コピーは原本と別ディレクトリに置かれるため、コピー後も相対参照の意味を
     # 変えない（spec §4.3）よう、絶対パスへ書き換える上書きが必要になる
     # （空dictにはならない）。
-    assert plan["method"]["overrides"] == {method_file_mod.LBM_KEY: str(src["lbm"].resolve())}
+    # 注入順の中央の参照ファイル（v8。シートが無いのでファイル名順の中央 = S3、file ID 3）も足す。
+    assert plan["method"]["overrides"] == {
+        method_file_mod.LBM_KEY: str(src["lbm"].resolve()),
+        method_file_mod.ALIGNMENT_REFERENCE_KEY: "3"}
 
     pipeline_root = tmp_path / "pipeline_run"
     snapshot = stage_inputs(plan, pipeline_root)
@@ -854,3 +857,94 @@ def test_sha256_is_streamed_not_read_whole(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Path, "read_bytes", forbidden)
     assert inputs_mod._sha256_file(big) == expected
+
+
+# ---------- アライメントの参照ファイル（v8 Task 3） ----------
+
+from metabolomix.pipeline.inputs import choose_alignment_reference
+
+
+def _rows(names, orders, *, include=None):
+    """実験情報シートの行の最小形（`parse_manifest` の戻り値のうち使うキーだけ）。"""
+    include = include if include is not None else [True] * len(names)
+    return [{"source_file": f"C:/data/{n}", "sample_id": n.split(".")[0],
+             "injection_order": o, "include": inc}
+            for n, o, inc in zip(names, orders, include)]
+
+
+# 実データ確認（2026-10-28, MTBLS6965 陽イオン 42 検体）: .arf の file_id は 0 始まりで、
+# sorted() した主ファイル名の添字と全 42 件一致した（normalize_arf_spots で読んだ）。
+def test_reference_is_median_injection():
+    names = ["a.wiff", "b.wiff", "c.wiff", "d.wiff", "e.wiff"]
+    ref = choose_alignment_reference(names, _rows(names, [5, 1, 3, 2, 4]))
+    assert ref == {"file_id": 2, "sample_file": "c.wiff",
+                   "injection_order_source": "manifest", "method_value": None}
+
+
+def test_reference_counts_excluded_samples_too():
+    names = ["a.wiff", "b.wiff", "c.wiff"]
+    rows = _rows(names, [3, 1, 2], include=[True, False, True])
+    assert choose_alignment_reference(names, rows)["sample_file"] == "c.wiff"
+
+
+def test_reference_even_count_takes_lower_median():
+    names = ["a.wiff", "b.wiff", "c.wiff", "d.wiff"]
+    ref = choose_alignment_reference(names, _rows(names, [4, 3, 2, 1]))
+    # 注入順 1,2,3,4 の小さい方の中央は 2 → c.wiff
+    assert (ref["file_id"], ref["sample_file"]) == (2, "c.wiff")
+
+
+def test_reference_falls_back_to_filename_order():
+    names = ["a.wiff", "b.wiff", "c.wiff", "d.wiff", "e.wiff"]
+    ref = choose_alignment_reference(names, _rows(names, [5, 1, None, 2, 4]))
+    assert ref["injection_order_source"] == "filename"
+    assert (ref["file_id"], ref["sample_file"]) == (2, "c.wiff")
+    # シートが無いときも同じ。
+    none = choose_alignment_reference(names, None)
+    assert none["injection_order_source"] == "filename" and none["file_id"] == 2
+
+
+def test_reference_method_mode_keeps_method_value(tmp_path, monkeypatch):
+    _allow_fake_exe(monkeypatch)
+    src = make_source(tmp_path / "raw")
+    with src["method"].open("a", encoding="ascii", newline="\n") as f:
+        f.write("Alignment reference file ID: 6\n")
+    request = resolve_request(src["root"], {"alignment_reference": "method"})
+    plan = inspect_inputs(src["root"], request, exe_path=src["exe"])
+    assert plan["alignment_reference"]["method_value"] == "6"
+    assert plan["alignment_reference"]["file_id"] is None
+    assert method_file_mod.ALIGNMENT_REFERENCE_KEY not in plan["method"]["overrides"]
+
+
+def test_plan_overrides_the_alignment_reference_in_both_library_modes(tmp_path, monkeypatch):
+    _allow_fake_exe(monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch)
+    src = make_source(tmp_path / "raw")
+    with src["method"].open("a", encoding="ascii", newline="\n") as f:
+        f.write("Alignment reference file ID: 0\n")
+    names = [f"S{i}.wiff" for i in range(8)]
+    rows = _rows(names, [8 - i for i in range(8)])  # 注入順はファイル名の逆
+    for explicit in ({}, {"library_mode": "msp_only"}):
+        request = resolve_request(src["root"], explicit)
+        plan = inspect_inputs(src["root"], request, exe_path=src["exe"], manifest_rows=rows)
+        # 注入順 1..8 = S7..S0。小さい方の中央は 4 番目 = S4（file_id 4）。
+        assert plan["method"]["overrides"][method_file_mod.ALIGNMENT_REFERENCE_KEY] == "4"
+        assert plan["alignment_reference"] == {
+            "file_id": 4, "sample_file": "S4.wiff",
+            "injection_order_source": "manifest", "method_value": "0"}
+    snapshot = stage_inputs(plan, tmp_path / "pipeline_run")
+    effective = (tmp_path / "pipeline_run" / "inputs" / "effective-method.txt").read_text(
+        encoding="ascii")
+    assert "Alignment reference file ID: 4\n" in effective
+    assert "Alignment reference file ID: 0" not in effective
+    verify_inputs(snapshot)
+
+
+def test_plan_without_a_manifest_uses_filename_order(tmp_path, monkeypatch):
+    _allow_fake_exe(monkeypatch)
+    src = make_source(tmp_path / "raw")
+    plan = inspect_inputs(src["root"], resolve_request(src["root"]), exe_path=src["exe"])
+    assert plan["alignment_reference"]["injection_order_source"] == "filename"
+    assert plan["alignment_reference"]["sample_file"] == "S3.wiff"
+    # 原本に宣言が無くても実効メソッドへ足す。
+    assert plan["method"]["overrides"][method_file_mod.ALIGNMENT_REFERENCE_KEY] == "3"

@@ -59,6 +59,12 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
         ライブラリ（.msp）だけで同定する（`msp_file` か極性の設定 `[library]
         msp_positive` / `msp_negative`。メソッドの Text DB・注釈器設定表の宣言は空にする）。
         `lbm_file` との同時指定、`auto` での `msp_file` は `PIPELINE_REQUEST_INVALID`。
+        `alignment_reference`（既定 `"median_injection"`）は MS-DIAL の
+        `Alignment reference file ID` を、全試料（`include` を問わない）の注入順の中央
+        （偶数なら小さい方）の試料にする。注入順は実験情報シートの `injection_order` から
+        取り、1 件でも欠けるときはファイル名順の中央（receipt の
+        `injection_order_source` が `"filename"`）。`"method"` はメソッドの宣言をそのまま使う。
+        resume では変えられない（`NEW_PIPELINE_REQUIRED`）。
     request_id:
         冪等性キー。同一内容の再送は同じ結果を返し、別内容は `IDEMPOTENCY_CONFLICT`。
 
@@ -72,7 +78,8 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
 
     receiptの `resolved` に、解決済みの実行条件——`method`（`source_path` /
     `sha256`）・`lbm`・`polarity`（`value` とその `source`）・`library_mode`・
-    `msp`（ファイル名・sha256・出どころ。置き場所は載せない）——が入る。何も
+    `msp`（ファイル名・sha256・出どころ。置き場所は載せない）・`alignment_reference`
+    （`file_id`・`sample_file`・`injection_order_source`・`method_value`）——が入る。何も
     起動しないうちにこれらを確認するのがこのツールの用途。
 
     起動せずに `needs_input` を保存することがある（不正なsample_manifest等、
