@@ -359,7 +359,10 @@ def test_tool_writes_output_and_returns_summary(tmp_path):
     (pair,) = written["pairs"]
     assert pair["features"] == ["30", "31"] and pair["mergeable"] is True
     assert pair["block"] == {"spot": "31", "injections": [1, 2]}
-    assert written["params"]["ppm"] == 15.0
+    assert written["params"]["ppm"] == 15.0 and written["params"]["min_block_size"] == 2
+    (merge,) = written["merge_groups"]
+    assert merge["features"] == ["30", "31"] and merge["mergeable"] is True
+    assert pair["merged"] is True and out["summary"]["n_merged_pairs"] == 1
     # 同じ入力なら同じファイル・出力先なしなら要約だけ・ハンドルの状態は変えない
     again = tmp_path / "again.json"
     R.dataset_alignment_qc(output_path=str(again), dataset_handle=handle)

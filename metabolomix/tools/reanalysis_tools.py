@@ -582,12 +582,13 @@ _GROUP_ALIGNED_COLUMNS = ("pair_id", "feature_a", "feature_b", "mz", "rt_a", "rt
           structured_output=False)
 def dataset_alignment_qc(output_path: str | None = None, ppm: float = 15.0,
                          max_rt_gap: float = 1.0, max_interleaved_rt_gap: float = 0.15,
-                         dataset_handle: str | None = None) -> str:
+                         min_block_size: int = 2, dataset_handle: str | None = None) -> str:
     """1 つの物質が 2 つ以上のアライメントスポットに割れた組を探す（alignment-qc.v1。再解析で使う）。
 
     候補は同じ付加体・|Δm/z| ≤ ppm・0.05 < ΔRT ≤ max_rt_gap 分の 2 スポットで、試料ごとの
     受け持ち（検出状態があれば検出、無ければ値の大きい方）が補い合う組を割れとする。型は
-    `injection_block`（片方が注入順で連続した塊だけを持つ。群と重なっても優先）・
+    `injection_block`（片方が注入順で連続した塊だけを持つ。両方が min_block_size（既定 2）
+    試料以上を受け持つときだけ。群と重なっても優先）・
     `group_aligned`（受け持ちが群と一致。まとめない）・`interleaved`。`mergeable` は注釈が
     両立する `injection_block` と、ΔRT ≤ max_interleaved_rt_gap（既定 0.15 分）の `interleaved`。
     そのうち互いに |ΔRT| が最も近い相手どうしの 2 スポット（`merge_groups`）だけを、統計の側が
@@ -608,7 +609,8 @@ def dataset_alignment_qc(output_path: str | None = None, ppm: float = 15.0,
         return error
     try:
         qc = round_floats(alignment_qc.find_split_pairs(
-            ds, ppm=ppm, max_rt_gap=max_rt_gap, max_interleaved_rt_gap=max_interleaved_rt_gap),
+            ds, ppm=ppm, max_rt_gap=max_rt_gap, max_interleaved_rt_gap=max_interleaved_rt_gap,
+            min_block_size=min_block_size),
             digits=6)
         written = write_result(output_path, qc) if output_path else None
     except DomainError as exc:

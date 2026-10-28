@@ -292,12 +292,13 @@ log2fc_test_over_ref p q direction`。論文の同定リストとの突き合わ
 
 ## 9. 割れたアライメントスポット（alignment-qc.v1）
 
-`dataset_alignment_qc(output_path=None, ppm=15.0, max_rt_gap=1.0, max_interleaved_rt_gap=0.15)`: 1 つの物質が 2 つ以上の
+`dataset_alignment_qc(output_path=None, ppm=15.0, max_rt_gap=1.0, max_interleaved_rt_gap=0.15,
+min_block_size=2, dataset_handle=None)`: 1 つの物質が 2 つ以上の
 アライメントスポットに割れた組を探す（spec 2026-10-28 §4.3）。**組を見つけて型を付けるだけで、
 行列は変えない。** まとめは統計の側が `mergeable` の成分だけに行う（試料ごとに大きい方の値。
 gap-fill の値は背景で、本物のピークより大きくならないため）。
 
-- **候補**: 同じ付加体（SML の `adduct_ions`）・|Δm/z| ≤ `ppm`（m/z の小さい方に対して）・
+- **候補**: 同じ付加体（SML の `adduct_ions`。付加体が分からないスポットは組にしない）・|Δm/z| ≤ `ppm`（m/z の小さい方に対して）・
   0.05 < |ΔRT| ≤ `max_rt_gap` 分の 2 スポット。
 - **受け持ち（`owner`）**: 試料ごとに、その試料の信号を持つスポット。検出状態（`.arf` の
   `detected_mask`）があれば検出された方（両方で検出なら値の大きい方）で、どちらでも検出されて
@@ -314,6 +315,8 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
   その組が成り立たず、隣り合う組だけで成分になる。
 - **型**（`type`）:
   - `injection_block` — 片方の受け持ちが注入順で連続した塊（信号の無い試料は飛ばす）。
+    両スポットとも `min_block_size`（2）試料以上を受け持つときだけ（1 試料だけの受け持ちは
+    どこにあっても「連続」に見えるので塊にせず、`interleaved` か `group_aligned` に回す）。
     群と重なっても優先する（測定順と群が重なる run では、測定順のずれは必ず群とも重なる）。
     両方が塊なら受け持ちの少ない方を塊とする。
   - `group_aligned` — 塊でなく、受け持ちが群と一致する（どの群でも多い方のスポットの受け持ちが
@@ -334,7 +337,8 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
   2 つの異性体が同じ後半の注入で一緒にずれ、401（後半の n-9）が 403（前半の n-9、ΔRT 0.088）とも
   402（前半の n-3/n-6、ΔRT 0.199）とも組になる——互いに最も近い 401↔403 だけをまとめる。
 - **注入順**（`injection_order_source`）: `manifest`（pipeline の実験情報シートの `injection_order`）・
-  `metadata`（シート以外から推した値、または呼び出し側が渡した順）・`filename`（1 試料でも
+  `metadata`（シート以外から推した値、または呼び出し側が渡した順。渡した順に欠ける試料があれば
+  エラー）・`filename`（1 試料でも
   欠ければ試料名の順。`block.injections` はその順位）。
 
 `output_path` の JSON:
@@ -342,7 +346,7 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
 ```json
 {"schema": "alignment-qc.v1",
  "params": {"ppm": 15.0, "min_rt_gap": 0.05, "max_rt_gap": 1.0, "max_both_detected": 0.1,
-            "max_interleaved_rt_gap": 0.15,
+            "max_interleaved_rt_gap": 0.15, "min_block_size": 2,
             "min_dominance": 3.0, "min_complementary": 0.9, "group_purity": 0.9,
             "signal": "detected"},
  "injection_order_source": "manifest",
@@ -365,13 +369,13 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
 - `pairs[].features` は `injection_block` なら [塊でない側, 塊の側]、ほかは RT の昇順。
   `delta_rt = rt[1] − rt[0]`（`injection_block` では塊の RT のずれ。符号つき）、
   `delta_ppm = (mz[1] − mz[0]) / mz[0] × 10⁶`。`block.injections` は塊の最初と最後の注入順。
-- `groups[]` は**すべての組**の連結成分（報告用。3 スポット以上の連鎖を 1 つにする）。`features` の
-  先頭が代表（検出された試料、無ければ値が最大の試料の最も多いスポット）。`type` は成分の型で、組の
+- `groups[]` は**すべての組**の連結成分（報告用。3 スポット以上の連鎖を 1 つにする）。`features` は
+  特徴 ID の小さい順（すべて整数なら数の順）。`type` は成分の型で、組の
   型が混ざれば `group_aligned` > `interleaved` > `injection_block` の順で強い方。`mergeable` は成分
   全体が 1 つのまとめる組のときだけ真。
 - `merge_groups[]` はまとめる組ごとの 2 スポット（`merge_group_id`・`group_id`＝含まれる `groups[]` の
-  成分・`features`・`pair_ids`・`type`・`types`・`mergeable: true`）。`features` の先頭が代表で、
-  `merge_matrix_columns` はそれを代表の ID として残す。統計の側（Tasks 6・7）がまとめるのは
+  成分・`features`・`pair_ids`・`type`・`types`・`mergeable: true`）。`features` は ID の小さい順で、
+  `merge_matrix_columns` は**最も小さい特徴 ID** を残す（渡した順によらない）。統計の側（Tasks 6・7）がまとめるのは
   `merge_groups` だけ。`summary.n_merged_pairs` はその数。
 - `split_partners(qc)`（統計の側が使う）: 特徴 → `{group_id, merge_group_id, partners, component,
   type, mergeable}`。まとめる特徴は `partners` がその相手 1 つで `mergeable` が真、`type` はその組の型。

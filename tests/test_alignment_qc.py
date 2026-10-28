@@ -4,14 +4,17 @@
 受け持たない試料では gap-fill の 20 前後」、検出状態を渡すときは受け持つ試料だけ True。
 
 閾値の既定（両方で検出された試料 10% 以下・補い合い 3 倍が 90% 以上）は実データ
-（MTBLS6965 の陽イオン・陰イオン）で変えていない。変えたのは検出状態があるときの受け持ちの
-決め方で、どちらでも検出されていない試料を値（3 倍）で補い、受け持ちの決まる試料が 90% 以上を
-求める（`test_undetected_samples_are_owned_by_value` / `test_sparse_detection_alone_is_not_a_split`）。
-検出だけだと陽イオン（検出は全セルの 20%）で 1560 組（注入 1–2 の塊 549）になり、無関係な疎な
-スポットの組が混ざった。値だけだと陰イオンの FA 20:3 401/403（ΔRT 0.088 分）を見逃した。
-今の規則で陽イオン 885 組（injection_block 306、うち注入 1–2 の塊 253、ΔRT の中央値 +0.51）・
-CE の 4 組すべて mergeable・陰イオンの 401/403 は interleaved で mergeable（task-5 の報告の Step 4）。
-群の差は見ていない。
+（MTBLS6965 の陽イオン・陰イオン）で変えていない。検出状態があるときは、どちらでも検出されて
+いない試料を値（3 倍）で補い、受け持ちの決まる試料が 90% 以上を求める
+（`test_undetected_samples_are_owned_by_value` / `test_sparse_detection_alone_is_not_a_split`）。
+検出だけだと陽イオン（検出は全セルの 20%）で無関係な疎なスポットの組が 1560 組混ざり、値だけだと
+陰イオンの FA 20:3 401/403（ΔRT 0.088 分）を見逃した。
+
+まとめの規則（コントローラの決定 2026-10-29）: mergeable は注釈が両立する `injection_block`
+（両スポットが `min_block_size`=2 試料以上を受け持つ）と ΔRT ≤ 0.15 分の `interleaved`。実際に
+まとめるのは互いに |ΔRT| が最も近い mergeable な相手どうしの 2 スポットだけで、残す ID は小さい方。
+MTBLS6965 では CE 1265/1266・1185/1186・1257/1258 と陰イオンの 401/403・441/442 をまとめ、
+402 と CE 1178/1179（interleaved ΔRT 0.612）はまとめない（task-5 の報告）。群の差は見ていない。
 """
 from __future__ import annotations
 
@@ -196,7 +199,7 @@ def test_three_spot_chain_is_one_group():
     assert len(qc["pairs"]) == 3
     (group,) = qc["groups"]
     assert sorted(group["features"]) == ["a", "b", "c"]
-    assert group["features"][0] == "c"                     # 代表は受け持ちの最も多いスポット
+    assert group["features"] == ["a", "b", "c"]            # ID の小さい順
     assert all(p["mergeable"] for p in qc["pairs"])
     # b の最も近い相手は a と c の同点（0.3 分）→ b は相手なし。a と c の最も近い相手は b
     # なので、互いに最も近い組は無く、何もまとめない
@@ -205,7 +208,7 @@ def test_three_spot_chain_is_one_group():
     partners = Q.split_partners(qc)
     assert set(partners) == {"a", "b", "c"}
     assert partners["a"]["partners"] == [] and partners["a"]["group_id"] == group["group_id"]
-    assert partners["a"]["component"] == ["c", "b"]
+    assert partners["a"]["component"] == ["b", "c"]
     assert partners["b"]["mergeable"] is False and partners["b"]["type"] == "injection_block"
 
 
@@ -226,7 +229,7 @@ def test_four_spot_chain_merges_only_the_mergeable_pair():
     (group,) = qc["groups"]
     assert sorted(group["features"]) == ["A", "B", "C", "D"] and group["mergeable"] is False
     (merge,) = qc["merge_groups"]
-    assert sorted(merge["features"]) == ["B", "C"] and merge["mergeable"] is True
+    assert merge["features"] == ["B", "C"] and merge["mergeable"] is True
     assert qc["summary"]["n_merged_pairs"] == 1
     partners = Q.split_partners(qc)
     assert partners["B"]["partners"] == ["C"] and partners["B"]["mergeable"] is True
@@ -235,8 +238,8 @@ def test_four_spot_chain_merges_only_the_mergeable_pair():
     ds = _chain(["PC 34:1", "PC 34:2", "PC 34:2", "PC 36:1"])
     merged = Q.merge_matrix_columns(ds.feature_matrix.T, ds.feature_ids,
                                     [m["features"] for m in qc["merge_groups"] if m["mergeable"]])
-    assert sorted(merged.feature_ids) == ["A", "C", "D"] or sorted(merged.feature_ids) == ["A", "B", "D"]
-    assert len(merged.merged_from) == 1
+    assert merged.feature_ids == ["A", "B", "D"]                # 小さい ID（B）を残す
+    assert merged.merged_from == {"B": ["B", "C"]}
 
 
 def test_tie_for_nearest_partner_merges_nothing():
@@ -271,7 +274,7 @@ def test_fa_20_3_like_chain_merges_only_mutual_nearest():
     assert pairs[("401", "402")]["merge_reason"] == "not_mutual_nearest"
     assert pairs[("401", "403")]["merge_reason"] is None
     (merge,) = qc["merge_groups"]
-    assert sorted(merge["features"]) == ["401", "403"]
+    assert merge["features"] == ["401", "403"]
     partners = Q.split_partners(qc)
     assert partners["401"]["partners"] == ["403"] and partners["401"]["mergeable"] is True
     assert partners["402"]["partners"] == [] and partners["402"]["mergeable"] is False
@@ -346,10 +349,42 @@ def test_filename_order_when_metadata_lacks_injection_order():
     assert qc["pairs"][0]["block"] == {"spot": "2", "injections": [1, 2]}
 
 
+def test_single_sample_spot_is_not_an_injection_block():
+    # 片方が 1 試料（注入の途中・先頭）だけを受け持つ → 塊にせず interleaved（ΔRT 0.5 > 0.15 で
+    # まとめない）
+    for owned in ({20}, {0}):
+        ds = _make_ds([("1", 500.3000, 8.0, ALL - owned, None, ADDUCT),
+                       ("2", 500.3010, 8.5, owned, None, ADDUCT)], detected=True)
+        (pair,) = Q.find_split_pairs(ds)["pairs"]
+        assert pair["type"] == "interleaved" and pair["block"] is None, owned
+        assert pair["mergeable"] is False
+        assert Q.find_split_pairs(ds, min_block_size=1)["pairs"][0]["type"] == "injection_block"
+    # 2 試料なら塊（CE の注入 1–2）
+    ds = _make_ds([("1", 500.3000, 8.0, ALL - FIRST_TWO, None, ADDUCT),
+                   ("2", 500.3010, 8.5, FIRST_TWO, None, ADDUCT)], detected=True)
+    assert Q.find_split_pairs(ds)["pairs"][0]["type"] == "injection_block"
+
+
+def test_unknown_adduct_is_not_paired():
+    ds = _make_ds([("1", 650.6000, 20.0, ALL - FIRST_TWO, None, None),
+                   ("2", 650.6050, 20.6, FIRST_TWO, None, None)])
+    assert Q.find_split_pairs(ds)["pairs"] == []
+
+
+def test_injection_order_argument_must_cover_every_sample():
+    ds = _make_ds([("1", 650.6, 20.0, ALL - FIRST_TWO, None, ADDUCT),
+                   ("2", 650.6, 20.6, FIRST_TWO, None, ADDUCT)])
+    order = {name: i for i, name in enumerate(NAMES[:-1], start=1)}
+    with pytest.raises(DomainError) as info:
+        Q.find_split_pairs(ds, injection_order=order)
+    assert info.value.details["missing"] == ["S42"]
+
+
 def test_bad_parameters_are_domain_errors():
     ds = _make_ds([("1", 500.0, 8.0, ALL, None, ADDUCT)])
     for kwargs in ({"ppm": 0}, {"min_rt_gap": 1.0, "max_rt_gap": 0.5},
-                   {"max_both_detected": 1.5}, {"max_interleaved_rt_gap": -0.1}):
+                   {"max_both_detected": 1.5}, {"max_interleaved_rt_gap": -0.1},
+                   {"min_block_size": 0}, {"min_block_size": 1.5}):
         with pytest.raises(DomainError):
             Q.find_split_pairs(ds, **kwargs)
 
@@ -363,11 +398,14 @@ def test_merge_matrix_columns_takes_per_sample_max():
                          [False, False, True, True]])
     merged = Q.merge_matrix_columns(matrix, ["a", "b", "c", "d"], [["c", "a"]],
                                     detected=detected)
-    assert merged.feature_ids == ["b", "c", "d"]              # 代表（先頭）の位置に 1 列
-    assert merged.merged_from == {"c": ["c", "a"]}
-    np.testing.assert_array_equal(merged.matrix[:, 1], [7.0, 9.0, 1.0])
-    np.testing.assert_array_equal(merged.detected[:, 1], [True, False, True])
-    np.testing.assert_array_equal(merged.matrix[:, [0, 2]], matrix[:, [1, 3]])
+    assert merged.feature_ids == ["a", "b", "d"]              # 最も小さい ID の位置に 1 列
+    assert merged.merged_from == {"a": ["a", "c"]}
+    np.testing.assert_array_equal(merged.matrix[:, 0], [7.0, 9.0, 1.0])
+    np.testing.assert_array_equal(merged.detected[:, 0], [True, False, True])
+    np.testing.assert_array_equal(merged.matrix[:, [1, 2]], matrix[:, [1, 3]])
+    # 整数の ID は数の順（"9" < "10"）。渡した順によらない
+    numeric = Q.merge_matrix_columns(matrix, ["10", "b", "9", "d"], [["10", "9"]])
+    assert numeric.feature_ids == ["b", "9", "d"] and numeric.merged_from == {"9": ["9", "10"]}
     # 行列に無い特徴は飛ばし、1 つしか残らない群はまとめない
     same = Q.merge_matrix_columns(matrix, ["a", "b", "c", "d"], [["a", "zz"]])
     assert same.feature_ids == ["a", "b", "c", "d"] and same.merged_from == {}

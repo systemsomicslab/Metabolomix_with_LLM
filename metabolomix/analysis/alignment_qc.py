@@ -73,7 +73,7 @@ def _number(value) -> float | None:
 
 
 def _check_params(ppm, min_rt_gap, max_rt_gap, max_both_detected,
-                  max_interleaved_rt_gap) -> dict:
+                  max_interleaved_rt_gap, min_block_size) -> dict:
     values = {"ppm": _number(ppm), "min_rt_gap": _number(min_rt_gap),
               "max_rt_gap": _number(max_rt_gap), "max_both_detected": _number(max_both_detected),
               "max_interleaved_rt_gap": _number(max_interleaved_rt_gap)}
@@ -88,6 +88,9 @@ def _check_params(ppm, min_rt_gap, max_rt_gap, max_both_detected,
     if values["max_interleaved_rt_gap"] is None or values["max_interleaved_rt_gap"] < 0:
         raise DomainError(_BAD, "max_interleaved_rt_gap は 0 以上の数",
                           {"field": "max_interleaved_rt_gap"})
+    if isinstance(min_block_size, bool) or not isinstance(min_block_size, int) or min_block_size < 1:
+        raise DomainError(_BAD, "min_block_size は 1 以上の整数", {"field": "min_block_size"})
+    values["min_block_size"] = min_block_size
     return values
 
 
@@ -120,15 +123,22 @@ def _injection_order(names: list[str], rows: list[dict | None],
                      given: dict | None) -> tuple[list[float], str]:
     """試料ごとの注入順の値と、その出所（manifest / metadata / filename）。
 
-    引数で渡されればそれ（`metadata`）、無ければ実験情報シートの `injection_order`
+    引数で渡されればそれ（`metadata`。1 試料でも欠ける・数でなければ DomainError——
+    呼び出し側が明示した順を黙って捨てない）、無ければ実験情報シートの `injection_order`
     （出所が利用者のシートなら `manifest`、mzTab などから推した値なら `metadata`）。
-    1 試料でも欠ければ、推した順を信じずファイル名（試料名）の順にする
+    シートの値が 1 試料でも欠ければ、推した順を信じずファイル名（試料名）の順にする
     （pipeline の参照ファイルの選び方 `choose_alignment_reference` と同じ規約）。
     """
     if given is not None:
+        if not isinstance(given, dict):
+            raise DomainError(_BAD, "injection_order は {試料名: 注入順}",
+                              {"field": "injection_order"})
         order = [_number(given.get(n, given.get(n.strip()))) for n in names]
-        if all(v is not None for v in order):
-            return order, "metadata"
+        missing = [n for n, v in zip(names, order) if v is None]
+        if missing:
+            raise DomainError(_BAD, f"injection_order に無い・数でない試料がある（{len(missing)} 件）",
+                              {"field": "injection_order", "missing": missing})
+        return order, "metadata"
     order = [_number((row or {}).get("injection_order")) for row in rows]
     if all(v is not None for v in order) and names:
         sources = {(((row or {}).get("provenance") or {}).get("injection_order") or {})
@@ -250,11 +260,15 @@ def _owners(va, vb, da, db, max_both: float):
     return owner, fraction
 
 
-def _block(owner, ranked: list[int]) -> tuple[int, list[int]] | None:
+def _block(owner, ranked: list[int], min_block_size: int) -> tuple[int, list[int]] | None:
     """注入順で連続した塊だけを受け持つスポット（0/1）と、その試料の添字。
 
     信号の無い試料は塊を切らない（飛ばして並べる）。両方が塊なら受け持ちの少ない方。
+    どちらかの受け持ちが `min_block_size` 未満なら塊にしない（1 試料だけを受け持つ
+    スポットは、どこにあっても「連続」に見えるため。コントローラの決定）。
     """
+    if min((owner == 0).sum(), (owner == 1).sum()) < min_block_size:
+        return None
     sequence = [i for i in ranked if owner[i] >= 0]
     blocks = []
     for spot in (0, 1):
@@ -288,15 +302,16 @@ def _group_aligned(owner, groups: list[str | None]) -> bool:
 
 def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
                      max_rt_gap: float = 1.0, max_both_detected: float = 0.10,
-                     max_interleaved_rt_gap: float = 0.15,
+                     max_interleaved_rt_gap: float = 0.15, min_block_size: int = 2,
                      injection_order: dict[str, int] | None = None) -> dict:
     """割れたスポットの組と、その連結成分（3 スポット以上の連鎖を 1 つにする）。
 
     戻り値は alignment-qc.v1（`lipidmix://docs/output-format/reanalysis` §9）。
     `pairs[].features` は、`injection_block` なら [塊でない側, 塊の側]、ほかは RT の昇順。
     `delta_rt` は `rt[1] − rt[0]`（`injection_block` では塊の側のずれ。符号つき）。
-    `groups[].features` の先頭は代表（受け持ちの最も多いスポット）で、
-    `merge_matrix_columns` はこれを代表の ID として残す。
+    `groups[].features` と `merge_groups[].features` は特徴 ID の小さい順（すべて整数なら数の順）で、
+    `merge_matrix_columns` は最も小さい ID を残す。`injection_block` には両スポットが
+    `min_block_size` 試料以上を受け持つことを求める。付加体が分からないスポットは組にしない。
     `pairs[].mergeable` は注釈が両立し、型が `injection_block`、または ΔRT ≤
     `max_interleaved_rt_gap` の `interleaved`。`groups[]` はすべての組の連結成分（報告用）、
     `pairs[].merged` は互いに最も近い mergeable な組（`_mutual_nearest`）で、`merge_groups[]` は
@@ -304,7 +319,7 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
     not_mutual_nearest`。`groups[].mergeable` は成分全体がその 1 つのまとめのときだけ真。
     """
     params = _check_params(ppm, min_rt_gap, max_rt_gap, max_both_detected,
-                           max_interleaved_rt_gap)
+                           max_interleaved_rt_gap, min_block_size)
     if getattr(ds, "feature_matrix", None) is None:
         raise DomainError("DATASET_REQUIRED", "定量行列が無い", {})
     matrix = np.asarray(ds.feature_matrix, dtype=float)
@@ -340,7 +355,8 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
             gap = abs(rt_b - rt_a)
             if not params["min_rt_gap"] < gap <= params["max_rt_gap"]:
                 continue
-            if adducts.get(fid_a) != adducts.get(fid_b):
+            # 付加体が分からないスポットは組にしない（None どうしを「同じ」と読まない）。
+            if adducts.get(fid_a) is None or adducts.get(fid_a) != adducts.get(fid_b):
                 continue
             assessed = _owners(matrix[index_a], matrix[index_b],
                                None if mask is None else mask[index_a],
@@ -350,7 +366,7 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
                 continue
             pairs.append(_pair(ds, (index_a, fid_a, mz_a, rt_a), (index_b, fid_b, mz_b, rt_b),
                                assessed, ranked, order, groups, names, adducts,
-                               params["max_interleaved_rt_gap"]))
+                               params["max_interleaved_rt_gap"], params["min_block_size"]))
     pairs.sort(key=lambda p: (p["mz"][0], p["features"]))
     for n, pair in enumerate(pairs, start=1):
         pair["pair_id"] = f"P{n}"
@@ -359,7 +375,7 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
         pair["merged"] = pair["pair_id"] in matched
         pair["merge_reason"] = ("not_mutual_nearest" if pair["mergeable"] and not pair["merged"]
                                 else None)
-    components = _components(pairs, feature_ids, matrix, mask)
+    components = _components(pairs, feature_ids)
     for n, component in enumerate(components, start=1):
         component["group_id"] = f"G{n}"
         # 成分全体が 1 つのまとめのときだけ真（まとめの判断は merge_groups）。
@@ -368,7 +384,7 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
                                           if p["pair_id"] in component["pair_ids"]))
     group_of = {f: c["group_id"] for c in components for f in c["features"]}
     # 互いに最も近い組は特徴を共有しないので、成分はどれも 2 スポット（= その組）。
-    merges = _components([p for p in pairs if p["merged"]], feature_ids, matrix, mask)
+    merges = _components([p for p in pairs if p["merged"]], feature_ids)
     for n, merge in enumerate(merges, start=1):
         merge["merge_group_id"] = f"M{n}"
         merge["group_id"] = group_of[merge["features"][0]]
@@ -398,9 +414,9 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
 
 
 def _pair(ds, a, b, assessed, ranked, order, groups, names, adducts,
-          max_interleaved_rt_gap: float) -> dict:
+          max_interleaved_rt_gap: float, min_block_size: int) -> dict:
     owner, fraction = assessed
-    block = _block(owner, ranked)
+    block = _block(owner, ranked, min_block_size)
     if block is not None:
         kind = "injection_block"
         # 塊の側を後ろに置き、delta_rt を「塊のずれ」にする。
@@ -470,10 +486,18 @@ def _mutual_nearest(pairs: list[dict]) -> set[str]:
             and nearest.get(p["features"][1]) == p["features"][0]}
 
 
-def _components(pairs: list[dict], feature_ids: list[str], matrix, mask) -> list[dict]:
+def _id_order(ids) -> list[str]:
+    """特徴 ID の小さい順（すべて整数として読めれば数の順、そうでなければ文字列の順）。"""
+    ids = [str(f) for f in ids]
+    if all(f.strip().isdigit() for f in ids):
+        return sorted(ids, key=lambda f: (int(f), f))
+    return sorted(ids)
+
+
+def _components(pairs: list[dict], feature_ids: list[str]) -> list[dict]:
     """`pairs` を辺とする連結成分（ID と mergeable は呼ぶ側が付ける）。
 
-    代表は検出された試料（無ければ値が最大の試料）の最も多いスポット。
+    `features` は特徴 ID の小さい順（`_id_order`）。まとめでは先頭（最も小さい ID）が残る。
     """
     parent: dict[str, str] = {}
 
@@ -494,15 +518,7 @@ def _components(pairs: list[dict], feature_ids: list[str], matrix, mask) -> list
 
     components = []
     for features in sorted(members.values(), key=lambda m: position[m[0]]):
-        rows = [position[f] for f in features]
-        if mask is not None:
-            counts = mask[rows].sum(axis=1)
-        else:
-            values = np.nan_to_num(matrix[rows], nan=-np.inf)
-            winners = values.argmax(axis=0)
-            counts = np.bincount(winners, minlength=len(rows))
-        representative = features[int(np.argmax(counts))]
-        ordered = [representative] + [f for f in features if f != representative]
+        ordered = _id_order(features)
         chosen = [p for p in pairs if p["features"][0] in features]
         types = sorted({p["type"] for p in chosen}, key=_TYPE_PRECEDENCE.index)
         components.append({"features": ordered, "pair_ids": [p["pair_id"] for p in chosen],
@@ -536,9 +552,9 @@ def split_partners(qc: dict) -> dict[str, dict]:
 # ---------- 公開: まとめる ----------
 
 class MergedMatrix(NamedTuple):
-    matrix: np.ndarray                 # (試料, 特徴)。まとめた列は代表の位置に 1 列
+    matrix: np.ndarray                 # (試料, 特徴)。まとめた列は残す ID の位置に 1 列
     feature_ids: list[str]
-    merged_from: dict[str, list[str]]  # 代表 → まとめた特徴（代表が先頭）
+    merged_from: dict[str, list[str]]  # 残す ID → まとめた特徴（ID の小さい順）
     detected: np.ndarray | None        # 渡されたときだけ。まとめた列は「どれかで検出」
 
 
@@ -546,8 +562,9 @@ def merge_matrix_columns(matrix, feature_ids, groups, *, detected=None) -> Merge
     """割れの群ごとに列を 1 本へまとめる（試料ごとに大きい方の値。NaN は無視）。
 
     matrix は (試料, 特徴)（`analysis_spec` / `recipe_matrix` の並び）。`groups` は特徴 ID の
-    並びの並びで、先頭を代表とする（`find_split_pairs` の `merge_groups[].features` をそのまま
-    渡せる。まとめてよいかの判断は `find_split_pairs` の側で済んでいる）。行列に無い特徴は
+    並びの並び（`find_split_pairs` の `merge_groups[].features` をそのまま渡せる。まとめてよいかの
+    判断は `find_split_pairs` の側で済んでいる）。まとめた列の ID は群の中で**最も小さい特徴 ID**
+    （渡した順によらない。すべて整数なら数の順）で、その列の位置に置く。行列に無い特徴は
     飛ばし、残りが 1 つ以下ならまとめない。群どうしが特徴を共有していれば ValueError。
     """
     values = np.asarray(matrix, dtype=float)
@@ -557,7 +574,7 @@ def merge_matrix_columns(matrix, feature_ids, groups, *, detected=None) -> Merge
     seen: set[str] = set()
     plans = []
     for group in groups:
-        present = [str(f) for f in group if str(f) in position]
+        present = _id_order(f for f in group if str(f) in position)
         if seen.intersection(present):
             raise ValueError(f"割れの群が特徴を共有している: {sorted(seen.intersection(present))}")
         seen.update(present)

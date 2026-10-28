@@ -172,9 +172,11 @@
 7. │  │  ├─ metabolomix/analysis/alignment_qc.py  _group_aligned()
 8. │  │  └─ metabolomix/analysis/alignment_qc.py  names_compatible()
 9. │  │     └─ metabolomix/msdial/lipid_identity.py  lipid_species_of()
-10. │  └─ metabolomix/analysis/alignment_qc.py  _components()
-11. ├─ metabolomix/tools/reanalysis_tools.py  write_result()
-12. └─ metabolomix/tools/reanalysis_tools.py  rows_table()
+10. │  ├─ metabolomix/analysis/alignment_qc.py  _mutual_nearest()
+11. │  └─ metabolomix/analysis/alignment_qc.py  _components()
+12. │     └─ metabolomix/analysis/alignment_qc.py  _id_order()
+13. ├─ metabolomix/tools/reanalysis_tools.py  write_result()
+14. └─ metabolomix/tools/reanalysis_tools.py  rows_table()
 
 まとめは別のツールの側で行う: `alignment_qc.merge_matrix_columns()`（試料ごとに大きい方の値）と
 `alignment_qc.split_partners()`（特徴 → 割れの相手）が唯一の実装。
