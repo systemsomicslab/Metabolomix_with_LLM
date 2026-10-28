@@ -16,7 +16,11 @@ MS-DIAL のアライメントは、1 つの物質を 2 つ以上のスポット�
   `MIN_COMPLEMENTARY` 以上。どちらの場合も、2 スポットがそれぞれ 1 試料以上を受け持つ。
 - 型: 片方の受け持ちが注入順で連続した塊 → `injection_block`（群と重なっても優先）、
   そうでなく受け持ちが群と一致 → `group_aligned`、ほか → `interleaved`。
-- まとめてよい（`mergeable`）のは `injection_block` か `interleaved` で、注釈が両立する組だけ。
+- まとめてよい（`mergeable`）のは注釈が両立する組のうち、`injection_block` と、ΔRT が
+  `max_interleaved_rt_gap`（既定 0.2 分 = MS-DIAL のアライメントの RT 許容 0.1 分の 2 倍。
+  アライメントの窓で割れたもので、別の異性体ではない）以下の `interleaved` だけ。
+  連結成分は 2 スポットでその組が mergeable のときだけ mergeable（3 スポット以上は印だけ）。
+  まとめると判定に使うデータが変わるので、迷う組はまとめない側に倒す（コントローラの決定 2026-10-29）。
   `group_aligned` は群ごとに別の異性体が出ている可能性があるので、印を付けるだけにする。
 - まとめ方は試料ごとに 2 スポットの大きい方の値（gap-fill の値は背景で、本物のピークより
   大きくならない）。`merge_matrix_columns` が唯一の実装で、統計の側（feature_search・
@@ -60,9 +64,11 @@ def _number(value) -> float | None:
     return float(value)
 
 
-def _check_params(ppm, min_rt_gap, max_rt_gap, max_both_detected) -> dict:
+def _check_params(ppm, min_rt_gap, max_rt_gap, max_both_detected,
+                  max_interleaved_rt_gap) -> dict:
     values = {"ppm": _number(ppm), "min_rt_gap": _number(min_rt_gap),
-              "max_rt_gap": _number(max_rt_gap), "max_both_detected": _number(max_both_detected)}
+              "max_rt_gap": _number(max_rt_gap), "max_both_detected": _number(max_both_detected),
+              "max_interleaved_rt_gap": _number(max_interleaved_rt_gap)}
     if values["ppm"] is None or values["ppm"] <= 0:
         raise DomainError(_BAD, "ppm は正の数", {"field": "ppm"})
     if values["min_rt_gap"] is None or values["min_rt_gap"] < 0:
@@ -71,6 +77,9 @@ def _check_params(ppm, min_rt_gap, max_rt_gap, max_both_detected) -> dict:
         raise DomainError(_BAD, "max_rt_gap は min_rt_gap より大きい数", {"field": "max_rt_gap"})
     if values["max_both_detected"] is None or not 0 <= values["max_both_detected"] <= 1:
         raise DomainError(_BAD, "max_both_detected は 0〜1", {"field": "max_both_detected"})
+    if values["max_interleaved_rt_gap"] is None or values["max_interleaved_rt_gap"] < 0:
+        raise DomainError(_BAD, "max_interleaved_rt_gap は 0 以上の数",
+                          {"field": "max_interleaved_rt_gap"})
     return values
 
 
@@ -271,6 +280,7 @@ def _group_aligned(owner, groups: list[str | None]) -> bool:
 
 def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
                      max_rt_gap: float = 1.0, max_both_detected: float = 0.10,
+                     max_interleaved_rt_gap: float = 0.2,
                      injection_order: dict[str, int] | None = None) -> dict:
     """割れたスポットの組と、その連結成分（3 スポット以上の連鎖を 1 つにする）。
 
@@ -279,8 +289,12 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
     `delta_rt` は `rt[1] − rt[0]`（`injection_block` では塊の側のずれ。符号つき）。
     `groups[].features` の先頭は代表（受け持ちの最も多いスポット）で、
     `merge_matrix_columns` はこれを代表の ID として残す。
+    `pairs[].mergeable` は注釈が両立し、型が `injection_block`、または ΔRT ≤
+    `max_interleaved_rt_gap` の `interleaved`。`groups[].mergeable` は 2 スポットの成分で
+    その組が mergeable のときだけ（3 スポット以上はまとめない）。
     """
-    params = _check_params(ppm, min_rt_gap, max_rt_gap, max_both_detected)
+    params = _check_params(ppm, min_rt_gap, max_rt_gap, max_both_detected,
+                           max_interleaved_rt_gap)
     if getattr(ds, "feature_matrix", None) is None:
         raise DomainError("DATASET_REQUIRED", "定量行列が無い", {})
     matrix = np.asarray(ds.feature_matrix, dtype=float)
@@ -325,7 +339,8 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
             if assessed is None:
                 continue
             pairs.append(_pair(ds, (index_a, fid_a, mz_a, rt_a), (index_b, fid_b, mz_b, rt_b),
-                               assessed, ranked, order, groups, names, adducts))
+                               assessed, ranked, order, groups, names, adducts,
+                               params["max_interleaved_rt_gap"]))
     pairs.sort(key=lambda p: (p["mz"][0], p["features"]))
     for n, pair in enumerate(pairs, start=1):
         pair["pair_id"] = f"P{n}"
@@ -353,7 +368,8 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
     }
 
 
-def _pair(ds, a, b, assessed, ranked, order, groups, names, adducts) -> dict:
+def _pair(ds, a, b, assessed, ranked, order, groups, names, adducts,
+          max_interleaved_rt_gap: float) -> dict:
     owner, fraction = assessed
     block = _block(owner, ranked)
     if block is not None:
@@ -391,7 +407,9 @@ def _pair(ds, a, b, assessed, ranked, order, groups, names, adducts) -> dict:
         "n_owned": [int((owner == 0).sum()), int((owner == 1).sum())],
         "both_detected_fraction": fraction,
         "block": block_out,
-        "mergeable": kind in ("injection_block", "interleaved") and compatible,
+        "mergeable": compatible and (
+            kind == "injection_block"
+            or (kind == "interleaved" and abs(b[3] - a[3]) <= max_interleaved_rt_gap + 1e-9)),
     }
 
 
@@ -429,7 +447,8 @@ def _components(pairs: list[dict], feature_ids: list[str], matrix, mask) -> list
         types = sorted({p["type"] for p in chosen}, key=_TYPE_PRECEDENCE.index)
         components.append({"features": ordered, "pair_ids": [p["pair_id"] for p in chosen],
                            "type": types[0], "types": types,
-                           "mergeable": all(p["mergeable"] for p in chosen)})
+                           # 3 スポット以上の成分は印だけ（まとめない）。
+                           "mergeable": len(features) == 2 and all(p["mergeable"] for p in chosen)})
     for n, component in enumerate(components, start=1):
         component["group_id"] = f"G{n}"
     return components

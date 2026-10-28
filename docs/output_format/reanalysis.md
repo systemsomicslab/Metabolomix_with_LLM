@@ -292,7 +292,7 @@ log2fc_test_over_ref p q direction`。論文の同定リストとの突き合わ
 
 ## 9. 割れたアライメントスポット（alignment-qc.v1）
 
-`dataset_alignment_qc(output_path=None, ppm=15.0, max_rt_gap=1.0)`: 1 つの物質が 2 つ以上の
+`dataset_alignment_qc(output_path=None, ppm=15.0, max_rt_gap=1.0, max_interleaved_rt_gap=0.2)`: 1 つの物質が 2 つ以上の
 アライメントスポットに割れた組を探す（spec 2026-10-28 §4.3）。**組を見つけて型を付けるだけで、
 行列は変えない。** まとめは統計の側が `mergeable` の成分だけに行う（試料ごとに大きい方の値。
 gap-fill の値は背景で、本物のピークより大きくならないため）。
@@ -322,7 +322,10 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
   - `interleaved` — ほか（試料ごとに入れ替わる）。
 - **注釈の両立**（`names_compatible`）: 同じ名前（大文字小文字を無視）、GOSLIN の種のレベルで同じ
   和組成（`PC 16:0_18:1` と `PC 34:1`）、または片方が注釈なし。名前は SME の rank 1、無ければ SML。
-- **`mergeable`** = 型が `injection_block` か `interleaved`、かつ `names_compatible`。
+- **`mergeable`** = `names_compatible` で、型が `injection_block`、または ΔRT ≤ `max_interleaved_rt_gap`
+  （既定 0.2 分 = MS-DIAL のアライメントの RT 許容 0.1 分の 2 倍。アライメントの窓で割れたもので、
+  別の異性体ではない）の `interleaved`。ΔRT の大きい `interleaved` は載せるがまとめない。
+  まとめると判定に使うデータが変わるので、迷う組はまとめない側に倒す。
 - **注入順**（`injection_order_source`）: `manifest`（pipeline の実験情報シートの `injection_order`）・
   `metadata`（シート以外から推した値、または呼び出し側が渡した順）・`filename`（1 試料でも
   欠ければ試料名の順。`block.injections` はその順位）。
@@ -332,6 +335,7 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
 ```json
 {"schema": "alignment-qc.v1",
  "params": {"ppm": 15.0, "min_rt_gap": 0.05, "max_rt_gap": 1.0, "max_both_detected": 0.1,
+            "max_interleaved_rt_gap": 0.2,
             "min_dominance": 3.0, "min_complementary": 0.9, "group_purity": 0.9,
             "signal": "detected"},
  "injection_order_source": "manifest",
@@ -352,8 +356,8 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
   `delta_ppm = (mz[1] − mz[0]) / mz[0] × 10⁶`。`block.injections` は塊の最初と最後の注入順。
 - `groups[]` は組の連結成分（3 スポット以上の連鎖を 1 つにする）。`features` の先頭が代表
   （検出された試料、無ければ値が最大の試料の最も多いスポット）。`type` は成分の型で、組の型が
-  混ざれば `group_aligned` > `interleaved` > `injection_block` の順で強い方。`mergeable` は成分の
-  すべての組が mergeable のとき真。
+  混ざれば `group_aligned` > `interleaved` > `injection_block` の順で強い方。`mergeable` は成分が
+  **ちょうど 2 スポット**でその組が mergeable のときだけ真（3 スポット以上の成分は載せるがまとめない）。
 - 戻り値は `status`・`schema`・`injection_order_source`・`signal`（`detected` / `values`）・`summary`・
   `output_path`（渡したとき）と、`group_aligned` の組（50 件以下のとき TSV: `pair_id feature_a
   feature_b mz rt_a rt_b delta_rt adduct name_a name_b`）。

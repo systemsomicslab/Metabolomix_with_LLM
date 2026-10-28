@@ -113,6 +113,31 @@ def test_interleaved_pair():
     assert pair["delta_ppm"] == pytest.approx(10.2, abs=0.1)
 
 
+def _interleaved_ds(delta_rt):
+    owned = {i for i in range(N) if i % 3 == 0}
+    return _make_ds([("1", 500.3000, 8.0, ALL - owned, None, ADDUCT),
+                     ("2", 500.3010, 8.0 + delta_rt, owned, None, ADDUCT)], detected=True)
+
+
+def test_interleaved_mergeable_only_within_rt_gap():
+    # ΔRT ≤ 0.2 分（MS-DIAL のアライメントの RT 許容 0.1 分の 2 倍）だけまとめる
+    near = Q.find_split_pairs(_interleaved_ds(0.1))
+    (pair,) = near["pairs"]
+    assert pair["type"] == "interleaved" and pair["mergeable"] is True
+    assert near["groups"][0]["mergeable"] is True
+    far = Q.find_split_pairs(_interleaved_ds(0.3))
+    (pair,) = far["pairs"]
+    assert pair["type"] == "interleaved" and pair["mergeable"] is False
+    assert far["groups"][0]["mergeable"] is False
+    assert far["params"]["max_interleaved_rt_gap"] == 0.2
+    widened = Q.find_split_pairs(_interleaved_ds(0.3), max_interleaved_rt_gap=0.5)
+    assert widened["pairs"][0]["mergeable"] is True
+    # injection_block は ΔRT が大きくてもまとめる
+    ds = _make_ds([("1", 650.6, 20.0, ALL - FIRST_TWO, None, ADDUCT),
+                   ("2", 650.6, 20.9, FIRST_TWO, None, ADDUCT)])
+    assert Q.find_split_pairs(ds)["pairs"][0]["mergeable"] is True
+
+
 def test_group_aligned_not_mergeable():
     # 群が注入順で交互に並び、受け持ちが群と一致する → 注入順の塊ではない
     owned = {i for i, g in enumerate(GROUPS_ALTERNATE) if g == "B"}
@@ -166,11 +191,12 @@ def test_three_spot_chain_is_one_group():
     (group,) = qc["groups"]
     assert sorted(group["features"]) == ["a", "b", "c"]
     assert group["features"][0] == "c"                     # 代表は受け持ちの最も多いスポット
-    assert group["mergeable"] is True
+    assert all(p["mergeable"] for p in qc["pairs"])
+    assert group["mergeable"] is False                     # 3 スポット以上の成分はまとめない
     partners = Q.split_partners(qc)
     assert set(partners) == {"a", "b", "c"}
     assert partners["a"]["partners"] == ["c", "b"] and partners["a"]["group_id"] == group["group_id"]
-    assert partners["b"]["mergeable"] is True and partners["b"]["type"] == "injection_block"
+    assert partners["b"]["mergeable"] is False and partners["b"]["type"] == "injection_block"
 
 
 def test_far_mz_or_rt_not_paired():
@@ -244,7 +270,7 @@ def test_filename_order_when_metadata_lacks_injection_order():
 def test_bad_parameters_are_domain_errors():
     ds = _make_ds([("1", 500.0, 8.0, ALL, None, ADDUCT)])
     for kwargs in ({"ppm": 0}, {"min_rt_gap": 1.0, "max_rt_gap": 0.5},
-                   {"max_both_detected": 1.5}):
+                   {"max_both_detected": 1.5}, {"max_interleaved_rt_gap": -0.1}):
         with pytest.raises(DomainError):
             Q.find_split_pairs(ds, **kwargs)
 
