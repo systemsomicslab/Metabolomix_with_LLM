@@ -99,6 +99,9 @@ def test_injection_block_first_two_injections():
         assert qc["summary"]["injection_block_median_delta_rt"] == pytest.approx(0.61)
         (group,) = qc["groups"]
         assert group["features"] == ["1265", "1266"] and group["mergeable"] is True
+        (merge,) = qc["merge_groups"]
+        assert merge["features"] == ["1265", "1266"] and merge["mergeable"] is True
+        assert merge["group_id"] == group["group_id"]
 
 
 def test_interleaved_pair():
@@ -120,16 +123,19 @@ def _interleaved_ds(delta_rt):
 
 
 def test_interleaved_mergeable_only_within_rt_gap():
-    # ΔRT ≤ 0.2 分（MS-DIAL のアライメントの RT 許容 0.1 分の 2 倍）だけまとめる
+    # ΔRT ≤ 0.15 分（MS-DIAL のアライメントの RT 許容 0.1 分の 1.5 倍）だけまとめる。
+    # 0.2 にしないのは、MTBLS6965 の陰イオンの FA 20:3 の異性体 401/402 が 0.20 分離れているから。
     near = Q.find_split_pairs(_interleaved_ds(0.1))
     (pair,) = near["pairs"]
     assert pair["type"] == "interleaved" and pair["mergeable"] is True
     assert near["groups"][0]["mergeable"] is True
-    far = Q.find_split_pairs(_interleaved_ds(0.3))
-    (pair,) = far["pairs"]
-    assert pair["type"] == "interleaved" and pair["mergeable"] is False
-    assert far["groups"][0]["mergeable"] is False
-    assert far["params"]["max_interleaved_rt_gap"] == 0.2
+    assert near["merge_groups"][0]["mergeable"] is True
+    for delta in (0.18, 0.3):
+        far = Q.find_split_pairs(_interleaved_ds(delta))
+        (pair,) = far["pairs"]
+        assert pair["type"] == "interleaved" and pair["mergeable"] is False, delta
+        assert far["groups"][0]["mergeable"] is False and far["merge_groups"] == []
+    assert far["params"]["max_interleaved_rt_gap"] == 0.15
     widened = Q.find_split_pairs(_interleaved_ds(0.3), max_interleaved_rt_gap=0.5)
     assert widened["pairs"][0]["mergeable"] is True
     # injection_block は ΔRT が大きくてもまとめる
@@ -193,10 +199,52 @@ def test_three_spot_chain_is_one_group():
     assert group["features"][0] == "c"                     # 代表は受け持ちの最も多いスポット
     assert all(p["mergeable"] for p in qc["pairs"])
     assert group["mergeable"] is False                     # 3 スポット以上の成分はまとめない
+    (merge,) = qc["merge_groups"]
+    assert merge["features"] == group["features"] and merge["mergeable"] is False
     partners = Q.split_partners(qc)
     assert set(partners) == {"a", "b", "c"}
     assert partners["a"]["partners"] == ["c", "b"] and partners["a"]["group_id"] == group["group_id"]
+    assert partners["a"]["component"] == ["c", "b"]
     assert partners["b"]["mergeable"] is False and partners["b"]["type"] == "injection_block"
+
+
+def _chain(names):
+    """RT が 0.8 分ずつ離れた鎖（隣り合う組だけが ΔRT ≤ 1.0 分）。すべて injection_block。"""
+    owned = [FIRST_TWO, set(range(2, 11)), set(range(11, 21)), set(range(21, N))]
+    fids = "ABCD"[:len(names)]
+    return _make_ds([(fid, 400.2000 + 0.001 * k, 5.0 + 0.8 * k, owned[k], name, ADDUCT)
+                     for k, (fid, name) in enumerate(zip(fids, names))],
+                    detected=True, background=0.0)
+
+
+def test_four_spot_chain_merges_only_the_mergeable_pair():
+    # A–B と C–D は名前が両立しない。B–C だけが mergeable → B と C だけをまとめる
+    qc = Q.find_split_pairs(_chain(["PC 34:1", "PC 34:2", "PC 34:2", "PC 36:1"]))
+    edges = {tuple(sorted(p["features"])): p["mergeable"] for p in qc["pairs"]}
+    assert edges == {("A", "B"): False, ("B", "C"): True, ("C", "D"): False}
+    (group,) = qc["groups"]
+    assert sorted(group["features"]) == ["A", "B", "C", "D"] and group["mergeable"] is False
+    (merge,) = qc["merge_groups"]
+    assert sorted(merge["features"]) == ["B", "C"] and merge["mergeable"] is True
+    assert qc["summary"]["n_mergeable_groups"] == 1
+    partners = Q.split_partners(qc)
+    assert partners["B"]["partners"] == ["C"] and partners["B"]["mergeable"] is True
+    assert partners["A"]["partners"] == [] and partners["A"]["mergeable"] is False
+    assert partners["A"]["merge_group_id"] is None and sorted(partners["A"]["component"]) == ["B", "C", "D"]
+    ds = _chain(["PC 34:1", "PC 34:2", "PC 34:2", "PC 36:1"])
+    merged = Q.merge_matrix_columns(ds.feature_matrix.T, ds.feature_ids,
+                                    [m["features"] for m in qc["merge_groups"] if m["mergeable"]])
+    assert sorted(merged.feature_ids) == ["A", "C", "D"] or sorted(merged.feature_ids) == ["A", "B", "D"]
+    assert len(merged.merged_from) == 1
+
+
+def test_three_spot_chain_with_two_mergeable_edges_merges_nothing():
+    qc = Q.find_split_pairs(_chain([None, None, None]))
+    assert [p["mergeable"] for p in qc["pairs"]] == [True, True]
+    (merge,) = qc["merge_groups"]
+    assert len(merge["features"]) == 3 and merge["mergeable"] is False
+    assert qc["summary"]["n_mergeable_groups"] == 0
+    assert not any(v["mergeable"] for v in Q.split_partners(qc).values())
 
 
 def test_far_mz_or_rt_not_paired():

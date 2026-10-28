@@ -581,7 +581,7 @@ _GROUP_ALIGNED_COLUMNS = ("pair_id", "feature_a", "feature_b", "mz", "rt_a", "rt
                                       idempotentHint=True),
           structured_output=False)
 def dataset_alignment_qc(output_path: str | None = None, ppm: float = 15.0,
-                         max_rt_gap: float = 1.0, max_interleaved_rt_gap: float = 0.2,
+                         max_rt_gap: float = 1.0, max_interleaved_rt_gap: float = 0.15,
                          dataset_handle: str | None = None) -> str:
     """1 つの物質が 2 つ以上のアライメントスポットに割れた組を探す（alignment-qc.v1。再解析で使う）。
 
@@ -589,9 +589,9 @@ def dataset_alignment_qc(output_path: str | None = None, ppm: float = 15.0,
     受け持ち（検出状態があれば検出、無ければ値の大きい方）が補い合う組を割れとする。型は
     `injection_block`（片方が注入順で連続した塊だけを持つ。群と重なっても優先）・
     `group_aligned`（受け持ちが群と一致。まとめない）・`interleaved`。`mergeable` は注釈が
-    両立する `injection_block` と、ΔRT ≤ max_interleaved_rt_gap（既定 0.2 分）の `interleaved`
-    （統計の側が試料ごとに大きい方の値で 1 つにまとめてよい）。成分は 2 スポットのときだけ
-    mergeable（3 スポット以上は印だけ）。注入順はハンドルの実験情報シート、無ければファイル名の順
+    両立する `injection_block` と、ΔRT ≤ max_interleaved_rt_gap（既定 0.15 分）の `interleaved`。
+    mergeable の組だけでつないだ成分（`merge_groups`）が 2 スポットのときだけ、統計の側が
+    試料ごとに大きい方の値で 1 つにまとめる（3 スポット以上は印だけ）。注入順はハンドルの実験情報シート、無ければファイル名の順
     （`injection_order_source`）。欄の意味は `lipidmix://docs/output-format/reanalysis`。
 
     output_path: 全体（組・連結成分・試料ごとの受け持ち）を JSON でここへ書く

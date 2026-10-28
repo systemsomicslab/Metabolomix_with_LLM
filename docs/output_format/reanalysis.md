@@ -292,7 +292,7 @@ log2fc_test_over_ref p q direction`。論文の同定リストとの突き合わ
 
 ## 9. 割れたアライメントスポット（alignment-qc.v1）
 
-`dataset_alignment_qc(output_path=None, ppm=15.0, max_rt_gap=1.0, max_interleaved_rt_gap=0.2)`: 1 つの物質が 2 つ以上の
+`dataset_alignment_qc(output_path=None, ppm=15.0, max_rt_gap=1.0, max_interleaved_rt_gap=0.15)`: 1 つの物質が 2 つ以上の
 アライメントスポットに割れた組を探す（spec 2026-10-28 §4.3）。**組を見つけて型を付けるだけで、
 行列は変えない。** まとめは統計の側が `mergeable` の成分だけに行う（試料ごとに大きい方の値。
 gap-fill の値は背景で、本物のピークより大きくならないため）。
@@ -323,9 +323,13 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
 - **注釈の両立**（`names_compatible`）: 同じ名前（大文字小文字を無視）、GOSLIN の種のレベルで同じ
   和組成（`PC 16:0_18:1` と `PC 34:1`）、または片方が注釈なし。名前は SME の rank 1、無ければ SML。
 - **`mergeable`** = `names_compatible` で、型が `injection_block`、または ΔRT ≤ `max_interleaved_rt_gap`
-  （既定 0.2 分 = MS-DIAL のアライメントの RT 許容 0.1 分の 2 倍。アライメントの窓で割れたもので、
-  別の異性体ではない）の `interleaved`。ΔRT の大きい `interleaved` は載せるがまとめない。
-  まとめると判定に使うデータが変わるので、迷う組はまとめない側に倒す。
+  （既定 0.15 分 = MS-DIAL のアライメントの RT 許容 0.1 分の 1.5 倍。アライメントの窓で割れたもので、
+  別の異性体ではない。MTBLS6965 の陰イオンの FA 20:3 の異性体 401/402 は 0.20 分離れており、
+  0.2 では別の異性体をまとめてしまう）の `interleaved`。ΔRT の大きい `interleaved` は載せるが
+  まとめない。まとめると判定に使うデータが変わるので、迷う組はまとめない側に倒す。
+- **まとめの成分**（`merge_groups`）: mergeable の組**だけ**を辺とした連結成分。**ちょうど 2 スポット
+  の成分だけをまとめる**（`mergeable: true`）。3 スポット以上は載せるがまとめない。
+  例: 鎖 A–B–C–D で B–C だけが mergeable なら、B と C をまとめ、A と D はそのまま。
 - **注入順**（`injection_order_source`）: `manifest`（pipeline の実験情報シートの `injection_order`）・
   `metadata`（シート以外から推した値、または呼び出し側が渡した順）・`filename`（1 試料でも
   欠ければ試料名の順。`block.injections` はその順位）。
@@ -335,7 +339,7 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
 ```json
 {"schema": "alignment-qc.v1",
  "params": {"ppm": 15.0, "min_rt_gap": 0.05, "max_rt_gap": 1.0, "max_both_detected": 0.1,
-            "max_interleaved_rt_gap": 0.2,
+            "max_interleaved_rt_gap": 0.15,
             "min_dominance": 3.0, "min_complementary": 0.9, "group_purity": 0.9,
             "signal": "detected"},
  "injection_order_source": "manifest",
@@ -346,18 +350,28 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
             "block": {"spot": "1266", "injections": [1, 2]}, "mergeable": true}],
  "groups": [{"group_id": "G1", "features": ["1265", "1266"], "pair_ids": ["P1"],
              "type": "injection_block", "types": ["injection_block"], "mergeable": true}],
+ "merge_groups": [{"merge_group_id": "M1", "group_id": "G1", "features": ["1265", "1266"],
+                   "pair_ids": ["P1"], "type": "injection_block", "types": ["injection_block"],
+                   "mergeable": true}],
  "summary": {"n_pairs": 1, "by_type": {"injection_block": 1, "group_aligned": 0, "interleaved": 0},
              "n_features_affected": 2, "injection_block_median_delta_rt": 0.61,
-             "n_mergeable_pairs": 1, "n_groups": 1, "n_mergeable_groups": 1}}
+             "n_mergeable_pairs": 1, "n_groups": 1, "n_merge_groups": 1,
+             "n_mergeable_groups": 1}}
 ```
 
 - `pairs[].features` は `injection_block` なら [塊でない側, 塊の側]、ほかは RT の昇順。
   `delta_rt = rt[1] − rt[0]`（`injection_block` では塊の RT のずれ。符号つき）、
   `delta_ppm = (mz[1] − mz[0]) / mz[0] × 10⁶`。`block.injections` は塊の最初と最後の注入順。
-- `groups[]` は組の連結成分（3 スポット以上の連鎖を 1 つにする）。`features` の先頭が代表
-  （検出された試料、無ければ値が最大の試料の最も多いスポット）。`type` は成分の型で、組の型が
-  混ざれば `group_aligned` > `interleaved` > `injection_block` の順で強い方。`mergeable` は成分が
-  **ちょうど 2 スポット**でその組が mergeable のときだけ真（3 スポット以上の成分は載せるがまとめない）。
+- `groups[]` は**すべての組**の連結成分（報告用。3 スポット以上の連鎖を 1 つにする）。`features` の
+  先頭が代表（検出された試料、無ければ値が最大の試料の最も多いスポット）。`type` は成分の型で、組の
+  型が混ざれば `group_aligned` > `interleaved` > `injection_block` の順で強い方。`mergeable` は成分
+  全体がちょうど 2 スポットのまとめのときだけ真。
+- `merge_groups[]` はまとめの成分（上）。`group_id` は含まれる `groups[]` の成分。`features` の先頭が
+  代表で、`merge_matrix_columns` はそれを代表の ID として残す。統計の側（Tasks 6・7）がまとめるのは
+  `mergeable` の `merge_groups` だけ。`summary.n_mergeable_groups` はその数。
+- `split_partners(qc)`（統計の側が使う）: 特徴 → `{group_id, merge_group_id, partners, component,
+  type, mergeable}`。`partners`・`mergeable`・`type` はまとめの成分から（mergeable の組が無ければ
+  `partners` は空・`mergeable` は偽）、`component` は全体の成分のほかの特徴。
 - 戻り値は `status`・`schema`・`injection_order_source`・`signal`（`detected` / `values`）・`summary`・
   `output_path`（渡したとき）と、`group_aligned` の組（50 件以下のとき TSV: `pair_id feature_a
   feature_b mz rt_a rt_b delta_rt adduct name_a name_b`）。

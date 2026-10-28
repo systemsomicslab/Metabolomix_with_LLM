@@ -17,9 +17,11 @@ MS-DIAL のアライメントは、1 つの物質を 2 つ以上のスポット�
 - 型: 片方の受け持ちが注入順で連続した塊 → `injection_block`（群と重なっても優先）、
   そうでなく受け持ちが群と一致 → `group_aligned`、ほか → `interleaved`。
 - まとめてよい（`mergeable`）のは注釈が両立する組のうち、`injection_block` と、ΔRT が
-  `max_interleaved_rt_gap`（既定 0.2 分 = MS-DIAL のアライメントの RT 許容 0.1 分の 2 倍。
-  アライメントの窓で割れたもので、別の異性体ではない）以下の `interleaved` だけ。
-  連結成分は 2 スポットでその組が mergeable のときだけ mergeable（3 スポット以上は印だけ）。
+  `max_interleaved_rt_gap`（既定 0.15 分 = MS-DIAL のアライメントの RT 許容 0.1 分の 1.5 倍。
+  アライメントの窓で割れたもので、別の異性体ではない。MTBLS6965 の陰イオンでは FA 20:3 の
+  異性体 401/402 が 0.20 分離れており、0.2 では別の異性体をまとめてしまう）以下の
+  `interleaved` だけ。まとめの成分（`merge_groups`）は mergeable の組だけを辺として作り、
+  ちょうど 2 スポットのものだけをまとめる（3 スポット以上は印だけ）。
   まとめると判定に使うデータが変わるので、迷う組はまとめない側に倒す（コントローラの決定 2026-10-29）。
   `group_aligned` は群ごとに別の異性体が出ている可能性があるので、印を付けるだけにする。
 - まとめ方は試料ごとに 2 スポットの大きい方の値（gap-fill の値は背景で、本物のピークより
@@ -280,7 +282,7 @@ def _group_aligned(owner, groups: list[str | None]) -> bool:
 
 def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
                      max_rt_gap: float = 1.0, max_both_detected: float = 0.10,
-                     max_interleaved_rt_gap: float = 0.2,
+                     max_interleaved_rt_gap: float = 0.15,
                      injection_order: dict[str, int] | None = None) -> dict:
     """割れたスポットの組と、その連結成分（3 スポット以上の連鎖を 1 つにする）。
 
@@ -290,8 +292,9 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
     `groups[].features` の先頭は代表（受け持ちの最も多いスポット）で、
     `merge_matrix_columns` はこれを代表の ID として残す。
     `pairs[].mergeable` は注釈が両立し、型が `injection_block`、または ΔRT ≤
-    `max_interleaved_rt_gap` の `interleaved`。`groups[].mergeable` は 2 スポットの成分で
-    その組が mergeable のときだけ（3 スポット以上はまとめない）。
+    `max_interleaved_rt_gap` の `interleaved`。`groups[]` はすべての組の連結成分（報告用）、
+    `merge_groups[]` は mergeable の組だけを辺とした連結成分で、ちょうど 2 スポットのものだけが
+    `mergeable`（まとめる）。`groups[].mergeable` は成分全体がその 1 つのまとめのときだけ真。
     """
     params = _check_params(ppm, min_rt_gap, max_rt_gap, max_both_detected,
                            max_interleaved_rt_gap)
@@ -345,6 +348,19 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
     for n, pair in enumerate(pairs, start=1):
         pair["pair_id"] = f"P{n}"
     components = _components(pairs, feature_ids, matrix, mask)
+    for n, component in enumerate(components, start=1):
+        component["group_id"] = f"G{n}"
+        # 成分全体が 1 つの 2 スポットのまとめのときだけ真（まとめの判断は merge_groups）。
+        component["mergeable"] = (len(component["features"]) == 2
+                                  and all(p["mergeable"] for p in pairs
+                                          if p["pair_id"] in component["pair_ids"]))
+    group_of = {f: c["group_id"] for c in components for f in c["features"]}
+    merges = _components([p for p in pairs if p["mergeable"]], feature_ids, matrix, mask)
+    for n, merge in enumerate(merges, start=1):
+        merge["merge_group_id"] = f"M{n}"
+        merge["group_id"] = group_of[merge["features"][0]]
+        # 3 スポット以上のまとめの成分は印だけ（連鎖を 1 本にまとめない）。
+        merge["mergeable"] = len(merge["features"]) == 2
 
     by_type = {t: sum(p["type"] == t for p in pairs) for t in TYPES}
     block_shifts = [p["delta_rt"] for p in pairs if p["type"] == "injection_block"]
@@ -356,6 +372,7 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
         "injection_order_source": order_source,
         "pairs": pairs,
         "groups": components,
+        "merge_groups": merges,
         "summary": {
             "n_pairs": len(pairs), "by_type": by_type,
             "n_features_affected": len({f for p in pairs for f in p["features"]}),
@@ -363,7 +380,8 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
                                                 if block_shifts else None),
             "n_mergeable_pairs": sum(p["mergeable"] for p in pairs),
             "n_groups": len(components),
-            "n_mergeable_groups": sum(g["mergeable"] for g in components),
+            "n_merge_groups": len(merges),
+            "n_mergeable_groups": sum(m["mergeable"] for m in merges),
         },
     }
 
@@ -414,7 +432,10 @@ def _pair(ds, a, b, assessed, ranked, order, groups, names, adducts,
 
 
 def _components(pairs: list[dict], feature_ids: list[str], matrix, mask) -> list[dict]:
-    """組の連結成分。代表は検出された試料（無ければ値が最大の試料）の最も多いスポット。"""
+    """`pairs` を辺とする連結成分（ID と mergeable は呼ぶ側が付ける）。
+
+    代表は検出された試料（無ければ値が最大の試料）の最も多いスポット。
+    """
     parent: dict[str, str] = {}
 
     def find(x):
@@ -446,26 +467,30 @@ def _components(pairs: list[dict], feature_ids: list[str], matrix, mask) -> list
         chosen = [p for p in pairs if p["features"][0] in features]
         types = sorted({p["type"] for p in chosen}, key=_TYPE_PRECEDENCE.index)
         components.append({"features": ordered, "pair_ids": [p["pair_id"] for p in chosen],
-                           "type": types[0], "types": types,
-                           # 3 スポット以上の成分は印だけ（まとめない）。
-                           "mergeable": len(features) == 2 and all(p["mergeable"] for p in chosen)})
-    for n, component in enumerate(components, start=1):
-        component["group_id"] = f"G{n}"
+                           "type": types[0], "types": types})
     return components
 
 
 def split_partners(qc: dict) -> dict[str, dict]:
-    """特徴 ID → `{"group_id", "partners", "type", "mergeable"}`（割れの相手が無い特徴は載らない）。
+    """特徴 ID → `{"group_id", "merge_group_id", "partners", "component", "type", "mergeable"}`。
 
-    `partners` は同じ成分のほかの特徴（代表が先頭）。`type` は成分の型
-    （組の型が混ざれば `group_aligned` > `interleaved` > `injection_block` の順で強い方）。
+    割れの組を 1 つでも持つ特徴だけが載る。まとめの判断は `merge_groups`（mergeable の組だけを
+    辺とした成分）から取る: `partners` はまとめの成分のほかの特徴（代表が先頭。mergeable の組が
+    無ければ空）、`mergeable` はまとめの成分がちょうど 2 スポットのとき真、`type` はまとめの成分の
+    型（無ければ全体の成分の型）。`component` は全体の成分（すべての組）のほかの特徴で、報告用。
+    型は混ざれば `group_aligned` > `interleaved` > `injection_block` の順で強い方。
     """
     out = {}
     for group in qc.get("groups") or []:
         for fid in group["features"]:
-            out[fid] = {"group_id": group["group_id"],
-                        "partners": [f for f in group["features"] if f != fid],
-                        "type": group["type"], "mergeable": group["mergeable"]}
+            out[fid] = {"group_id": group["group_id"], "merge_group_id": None, "partners": [],
+                        "component": [f for f in group["features"] if f != fid],
+                        "type": group["type"], "mergeable": False}
+    for merge in qc.get("merge_groups") or []:
+        for fid in merge["features"]:
+            out[fid].update({"merge_group_id": merge["merge_group_id"],
+                             "partners": [f for f in merge["features"] if f != fid],
+                             "type": merge["type"], "mergeable": merge["mergeable"]})
     return out
 
 
@@ -482,8 +507,8 @@ def merge_matrix_columns(matrix, feature_ids, groups, *, detected=None) -> Merge
     """割れの群ごとに列を 1 本へまとめる（試料ごとに大きい方の値。NaN は無視）。
 
     matrix は (試料, 特徴)（`analysis_spec` / `recipe_matrix` の並び）。`groups` は特徴 ID の
-    並びの並びで、先頭を代表とする（`find_split_pairs` の `groups[].features` をそのまま
-    渡せる。まとめてよいかの判断は呼ぶ側——`mergeable` の群だけを渡す）。行列に無い特徴は
+    並びの並びで、先頭を代表とする（`find_split_pairs` の `merge_groups[].features` をそのまま
+    渡せる。まとめてよいかの判断は呼ぶ側——`merge_groups` のうち `mergeable` のものだけを渡す）。行列に無い特徴は
     飛ばし、残りが 1 つ以下ならまとめない。群どうしが特徴を共有していれば ValueError。
     """
     values = np.asarray(matrix, dtype=float)
