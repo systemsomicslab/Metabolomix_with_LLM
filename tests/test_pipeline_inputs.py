@@ -923,6 +923,30 @@ def test_msp_then_lbm_writes_annotator_table_with_priority_2(tmp_path, monkeypat
     # 再開（同じ配置先へもう一度）でも同じ中身になる。
     again = stage_inputs(plan, run_root)
     assert again["method"]["effective_sha256"] == snapshot["method"]["effective_sha256"]
+    assert again["msp"]["annotator_table_sha256"] == snapshot["msp"]["annotator_table_sha256"]
+
+
+def test_msp_then_lbm_resume_detects_a_changed_annotator_table(tmp_path, monkeypatch):
+    """v8 Task 4 fix 3: 設定表の sha256 を snapshot に固定し、再開時の照合で確かめる（実効メソッドと同じ）。"""
+    import hashlib
+    from metabolomix.pipeline import recovery
+    src, paths, plan = _msp_then_lbm_plan(tmp_path, monkeypatch)
+    run_root = tmp_path / "pipeline_run"
+    snapshot = stage_inputs(plan, run_root)
+    table = run_root / "inputs" / "msp-annotators.tsv"
+    assert snapshot["msp"]["annotator_table_relative_path"] == "inputs/msp-annotators.tsv"
+    assert snapshot["msp"]["annotator_table_sha256"] == hashlib.sha256(table.read_bytes()).hexdigest()
+
+    record = {"identity": {"pipeline_root": str(run_root)}, "inputs": snapshot}
+    recovery._verify_staged_inputs(record)            # 変わっていなければ通る
+
+    table.write_text("annotator_id\tmsp_file_path\tpriority\nLabMsp\tC:/other.msp\t1\n", encoding="ascii")
+    with pytest.raises(DomainError, match="STAGED_INPUT_MISMATCH") as changed:
+        recovery._verify_staged_inputs(record)
+    assert changed.value.details == {"path": "inputs/msp-annotators.tsv"}
+    table.unlink()
+    with pytest.raises(DomainError, match="STAGED_INPUT_MISMATCH"):
+        recovery._verify_staged_inputs(record)
 
 
 def test_msp_then_lbm_verify_detects_a_changed_lbm_without_its_location(tmp_path, monkeypatch):

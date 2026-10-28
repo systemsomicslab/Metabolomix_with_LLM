@@ -258,8 +258,11 @@ def _write_msp(path: Path) -> Path:
     return path
 
 
-def _write_mspdb_mztab(path: Path, raws) -> None:
-    """msp_only の Console が書く形の同定（MspDB:<名前>、inchi は null）。"""
+def _write_mspdb_mztab(path: Path, raws, db_id: str = "MspDB") -> None:
+    """msp_only の Console が書く形の同定（MspDB:<名前>、inchi は null）。
+
+    msp_then_lbm（注釈器設定表から MSP を入れる）では `db_id` が `MspDB_1_<stem>` になる。
+    """
     lines = ["MTD\tmzTab-version\t2.0.0-M", "MTD\tmzTab-mode\tComplete",
              "MTD\tmzTab-type\tQuantification"]
     for i, raw in enumerate(raws, start=1):
@@ -271,16 +274,61 @@ def _write_mspdb_mztab(path: Path, raws) -> None:
     lines.append(f"SFH\tSMF_ID\tSME_ID_REFS\texp_mass_to_charge\tretention_time_in_seconds\t{cols}")
     lines.append(f"SMF\t1\t1\t176.1030\t300.0\t{vals}")
     lines.append("SEH\tSME_ID\tdatabase_identifier\tsmiles\tinchi\tchemical_name\trank")
-    lines.append("SME\t1\tMspDB:Citrulline\tNC(=O)NCCCC(N)C(O)=O\tnull\tCitrulline\t1")
+    lines.append(f"SME\t1\t{db_id}:Citrulline\tNC(=O)NCCCC(N)C(O)=O\tnull\tCitrulline\t1")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _job_declaring_msp(tmp_path, msp_line: str):
+def _job_declaring_msp(tmp_path, msp_line: str, db_id: str = "MspDB"):
     job_path, raws = _job_with_outputs(tmp_path)
     job = AnalysisJob.load(job_path)
     Path(job.method_file).write_text(f"Ion mode: Positive\n{msp_line}\n", encoding="ascii")
-    _write_mspdb_mztab(Path(job.run_dir) / "msdial" / "Height_AlignmentResult_1.mzTab", raws)
+    _write_mspdb_mztab(Path(job.run_dir) / "msdial" / "Height_AlignmentResult_1.mzTab", raws,
+                       db_id=db_id)
     return job_path
+
+
+def test_msp_from_the_annotator_table_gets_msp_inchikeys(tmp_path, monkeypatch, _fresh_msp_memo):
+    """v8 Task 4 fix 2: msp_then_lbm は `Msp file path` が空で、MSP は注釈器設定表から入る。"""
+    from metabolomix.console import method_file as method_file_mod
+    _no_rdkit(monkeypatch)
+    msp = _write_msp(tmp_path / "lab_pos.msp")
+    table = tmp_path / "inputs" / "msp-annotators.tsv"
+    method_file_mod.write_msp_annotator_table(table, str(msp))
+    ds = load_dataset_state(job_path=_job_declaring_msp(
+        tmp_path, f"Msp file path: \nMSP annotator settings file path: {table}",
+        db_id="MspDB_1_lab_pos"))
+    assert ds.feature_metadata["1"]["inchikey"] == _CIT
+    assert ds.feature_metadata["1"]["inchikey_source"] == "msp_library"
+    look = ds.inchikey_coverage["msp_lookup"]
+    assert (look["status"], look["file"], look["resolved"]) == ("used", "lab_pos.msp", 1)
+
+
+def test_annotator_table_paths_resolve_like_the_console(tmp_path, monkeypatch, _fresh_msp_memo):
+    """設定表は実効メソッドの親基準、表の MSP は表の親基準で解く（ConfigParser と同じ）。
+    見出しは正規化して `msp_file_path` 系の列を探す。"""
+    _no_rdkit(monkeypatch)
+    job_path = _job_declaring_msp(tmp_path, "MSP search settings file path: tables/annot.tsv",
+                                  db_id="MspDB_1_lab")
+    method_dir = Path(AnalysisJob.load(job_path).method_file).parent
+    (method_dir / "tables").mkdir()
+    _write_msp(method_dir / "tables" / "lab.msp")
+    (method_dir / "tables" / "annot.tsv").write_text(
+        "# comment\n\"Priority\"\tMSP File Path\n2\tlab.msp\n", encoding="ascii")
+    ds = load_dataset_state(job_path=job_path)
+    assert ds.inchikey_coverage["msp_lookup"]["status"] == "used"
+    assert ds.feature_metadata["1"]["inchikey"] == _CIT
+
+
+def test_annotator_table_with_a_missing_msp_is_unavailable(tmp_path, monkeypatch, _fresh_msp_memo):
+    _no_rdkit(monkeypatch)
+    table = tmp_path / "msp-annotators.tsv"
+    missing = tmp_path / "nowhere_secret" / "lab.msp"
+    table.write_text(f"annotator_id\tmsp_file_path\tpriority\nLabMsp\t{missing}\t2\n", encoding="ascii")
+    ds = load_dataset_state(job_path=_job_declaring_msp(
+        tmp_path, f"Msp file path: \nMSP annotator settings file path: {table}", db_id="MspDB_1_lab"))
+    look = ds.inchikey_coverage["msp_lookup"]
+    assert (look["status"], look["file"]) == ("unavailable", "lab.msp")
+    assert not any("nowhere_secret" in w for w in ds.validation_result["warnings"])
 
 
 def _no_rdkit(monkeypatch):

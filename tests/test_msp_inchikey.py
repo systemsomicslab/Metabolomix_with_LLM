@@ -95,6 +95,22 @@ def test_lookup_resolves_only_mspdb_identifiers(tmp_path):
     assert MSP_DB_PREFIX == "MspDB:"
 
 
+def test_lookup_accepts_the_annotator_table_prefix_of_this_msp(tmp_path):
+    """v8 Task 4 fix 2: 注釈器設定表から入れた MSP は `MspDB_<n>_<安全化した stem>:<名前>` で出る
+    （Console 45a531c4d の `CommonProcess.GetSafeDataBaseId`）。表の MSP の名前のものだけを受ける。"""
+    table = MspInchikeyTable("lab_neg.msp", {"Citrulline": CIT, "LPC 18:0": ORN}, frozenset({"Leucine"}))
+    assert lookup(table, "MspDB_1_lab_neg:Citrulline") == (CIT, "resolved")
+    assert lookup(table, "MspDB_1_lab_neg:LPC 18:0") == (ORN, "resolved")
+    assert lookup(table, "MspDB_1_lab_neg:Leucine") == (None, "conflicting")
+    assert lookup(table, "MspDB_1_lab_neg:Unknown") == (None, "unmatched")
+    assert lookup(table, "MspDB_1_other:Citrulline") == (None, "not_msp")
+    assert lookup(table, "MspDB_x_lab_neg:Citrulline") == (None, "not_msp")
+    odd = MspInchikeyTable("lab neg.v2+.msp", {"Citrulline": CIT}, frozenset())
+    assert lookup(odd, "MspDB_1_lab_neg_v2_:Citrulline") == (CIT, "resolved")
+    long = MspInchikeyTable("a" * 70 + ".msp", {"Citrulline": CIT}, frozenset())
+    assert lookup(long, f"MspDB_1_{'a' * 64}:Citrulline") == (CIT, "resolved")
+
+
 def test_lookup_keeps_colons_in_the_name(tmp_path):
     table = MspInchikeyTable("lib.msp", {"LPC 18:0": CIT, "Citrulline": ORN}, frozenset())
     assert lookup(table, "MspDB:LPC 18:0") == (CIT, "resolved")

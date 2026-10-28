@@ -165,7 +165,7 @@ SME 由来という食い違った行ができる。
 **解決の順序**: `database_identifier` が InChIKey 形 → **研究室 MSP の表**（`MspDB:<名前>`）→ RDKit（InChI / SMILES）。
 MSP を RDKit より前に置くのは、RDKit の有無（Windows のアプリケーション制御がネイティブ DLL を
 拒否する機械がある）で結果を変えないため。MSP 表はジョブ経由の読み込み（`job_path`）でだけ作られ、
-実効メソッドの `Msp file path` を読む。直接読み（`mztab_path`）では `not_applicable`。
+実効メソッドの MSP の注釈器設定表（`MSP annotator settings file path`。`library_mode="msp_then_lbm"` の run）がMSP を指していればその最初の MSP を、無ければ `Msp file path` を読む（Console と同じ順）。設定表から入った MSP の同定は`MspDB_<n>_<MSP の stem>:<名前>` で出るので、stem がその MSP のものだけを引く。直接読み（`mztab_path`）では `not_applicable`。
 
 `identified_by` は `dataset_load` の要約にも 1 行で出る。
 **`sml_only` を `sme` と足して「同定できた件数」にしないこと** — 証拠水準が違う。

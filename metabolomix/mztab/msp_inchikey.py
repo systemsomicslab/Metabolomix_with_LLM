@@ -4,6 +4,8 @@
 `database_identifier = MspDB:<MSP の NAME>` で出て、InChIKey の列は無い。RDKit が
 使えない機械（Windows のアプリケーション制御がネイティブ DLL を拒否する）でも
 InChIKey に届くよう、Console に渡した MSP から名前で引く。
+`library_mode="msp_then_lbm"`（v8。MSP を注釈器設定表から入れる）では、Console 45a531c4d
+（`CommonProcess.GetSafeDataBaseId`）が接頭辞を `MspDB_<n>_<MSP の stem を安全化したもの>:` にする。
 
 読むのは各エントリの `NAME:` と `INCHIKEY:` 行だけで、ピーク行は解さない（研究室の
 MSP は 1 GB 級・数百万エントリで、全フィールドを解すと遅い）。同じ名前に別の
@@ -16,6 +18,7 @@ SQLite キャッシュは使わない。代わりに同じプロセスでは (�
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +28,16 @@ __all__ = ["MSP_DB_PREFIX", "MspInchikeyTable", "load_msp_inchikey_table", "look
 
 #: MS-DIAL が mzTab-M の `database_identifier` に書く MSP 由来の接頭辞。
 MSP_DB_PREFIX = "MspDB:"
+
+#: 注釈器設定表から入れた MSP の接頭辞 `MspDB_<n>_<安全化した stem>:`。
+_INDEXED_MSP_DB = re.compile(r"MspDB_\d+_([^:]*):")
+
+
+def _safe_database_stem(file_name: str) -> str:
+    """Console の `GetSafeDataBaseId` と同じ安全化（英数字・`-`・`_` 以外は `_`、64 文字まで）。"""
+    stem = Path(file_name).stem
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem)[:64]
+    return safe or "library"
 
 _BOM = b"\xef\xbb\xbf"
 
@@ -83,16 +96,22 @@ def _scan(path: Path) -> MspInchikeyTable:
 
 
 def lookup(table: MspInchikeyTable, database_identifier: str | None) -> tuple[str | None, str]:
-    """`MspDB:<名前>` を表で引く。
+    """`MspDB:<名前>`（または表の MSP の `MspDB_<n>_<stem>:<名前>`）を表で引く。
 
     戻り値の第 2 要素: `resolved`（付いた）/ `conflicting`（同名に別キーがあり決めない）/
     `unmatched`（MSP 由来なのに名前が表に無い）/ `not_msp`（MSP 由来の同定ではない）。
     名前は先頭の接頭辞だけを外して引く（`LPC 18:0` のようにコロンを含みうる）。
+    `MspDB_<n>_<stem>:` は stem が表の MSP のファイル名と一致するときだけ受ける（別の MSP の
+    同定を、たまたま同じ名前で引かない）。
     """
     text = (database_identifier or "").strip()
-    if not text.startswith(MSP_DB_PREFIX):
-        return None, "not_msp"
-    name = text[len(MSP_DB_PREFIX):].strip()
+    if text.startswith(MSP_DB_PREFIX):
+        name = text[len(MSP_DB_PREFIX):].strip()
+    else:
+        indexed = _INDEXED_MSP_DB.match(text)
+        if indexed is None or indexed.group(1) != _safe_database_stem(table.file_name):
+            return None, "not_msp"
+        name = text[indexed.end():].strip()
     inchikey = table.by_name.get(name)
     if inchikey is not None:
         return inchikey, "resolved"

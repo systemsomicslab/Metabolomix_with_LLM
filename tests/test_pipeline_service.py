@@ -758,6 +758,51 @@ def test_status_details_do_not_reveal_the_lab_msp_location(tmp_path, monkeypatch
     assert "secret_share" in saved["inputs"]["msp"]["path"]
 
 
+def test_status_details_do_not_reveal_the_lab_lbm_location(tmp_path, monkeypatch):
+    """v8 Task 4 fix 1: msp_then_lbm の LBM（[library] lbm）の置き場所も record の写しから除く。"""
+    from metabolomix.pipeline import recovery, store
+    from tests.lab_msp_fixtures import write_lab_msp_config
+    source = _prepare_source(tmp_path, monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share", lbm=True)
+    receipt = service.plan_pipeline(source["root"], {"library_mode": "msp_then_lbm"})
+    # データ側の記録そのものは絶対パスのまま（resume の再検査に要る）。
+    saved = store.load_run(recovery.normalize_pipeline_root(Path(receipt["pipeline_path"])))
+    assert "secret_share" in saved["inputs"]["lbm"]["path"]
+
+    status = recovery.read_status(Path(receipt["pipeline_path"]), include_details=True)
+    text = json.dumps(status, ensure_ascii=False)
+    assert "secret_share" not in text
+    inputs = status["record"]["inputs"]
+    assert inputs["lbm"]["path"] == "lab_lipids.lbm2"
+    assert inputs["lbm"]["file"] == "lab_lipids.lbm2"
+    assert inputs["method"]["overrides"]["Lbm file path"] == "lab_lipids.lbm2"
+    assert inputs["method"]["overrides"]["Msp file path"] == ""
+
+
+def test_without_library_location_redacts_absolute_annotator_tables():
+    from metabolomix.pipeline import recovery
+    record = {"inputs": {
+        "library_mode": "msp_then_lbm",
+        "lbm": {"path": "//nas/secret_share/lab.lbm2", "file": "lab.lbm2"},
+        "msp": {"path": "//nas/secret_share/lab_neg.msp", "file": "lab_neg.msp"},
+        "method": {"overrides": {
+            "Lbm file path": "//nas/secret_share/lab.lbm2",
+            "MSP annotator settings file path": "//nas/secret_share/msp-annotators.tsv",
+            "MSP search settings file path": "inputs/msp-annotators.tsv",
+        }},
+    }}
+    redacted = recovery._without_library_location(record)
+    assert "secret_share" not in json.dumps(redacted)
+    overrides = redacted["inputs"]["method"]["overrides"]
+    assert overrides["MSP annotator settings file path"] == "msp-annotators.tsv"
+    assert overrides["MSP search settings file path"] == "inputs/msp-annotators.tsv"  # 相対はそのまま
+    assert record["inputs"]["lbm"]["path"] == "//nas/secret_share/lab.lbm2"  # 元は変えない
+    # auto の LBM（[msdial] lbm）は従来どおり path を残す。
+    auto = {"inputs": {"library_mode": "auto", "lbm": {"path": "C:/MS-DIAL/x.lbm2"},
+                       "msp": {"path": None}, "method": {"overrides": {"Lbm file path": "C:/MS-DIAL/x.lbm2"}}}}
+    assert recovery._without_library_location(auto)["inputs"]["lbm"]["path"] == "C:/MS-DIAL/x.lbm2"
+
+
 def test_plan_receipt_shows_alignment_reference(tmp_path, monkeypatch):
     from tests.pipeline_fixtures import write_sample_manifest
     source = _prepare_source(tmp_path, monkeypatch)

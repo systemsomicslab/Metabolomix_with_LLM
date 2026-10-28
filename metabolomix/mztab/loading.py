@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from metabolomix.console.method_file import read_method_keys
+from metabolomix.console.method_file import MSP_ANNOTATOR_SETTINGS_KEYS, read_method_keys
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.mztab import evidence as mztab_evidence
 from metabolomix.mztab.dataset_state import build_dataset_state
@@ -237,12 +237,16 @@ def _msp_table_for_job(job) -> tuple[MspInchikeyTable | None, str, str | None, s
         keys = read_method_keys(method)
     except (OSError, DomainError):
         return None, "no_msp", None, None
-    declared = (keys.get("msp file path") or "").strip()
-    if not declared:
-        return None, "no_msp", None, None
-    msp = Path(declared)
-    if not msp.is_absolute():
-        msp = method.parent / msp
+    # Console と同じ順: 注釈器設定表から MSP が 1 件でも読めれば `Msp file path` は使わない
+    # （library_mode="msp_then_lbm" は `Msp file path` を空にして設定表で入れる。v8）。
+    msp = _msp_from_annotator_table(keys, method)
+    if msp is None:
+        declared = (keys.get("msp file path") or "").strip()
+        if not declared:
+            return None, "no_msp", None, None
+        msp = Path(declared)
+        if not msp.is_absolute():
+            msp = method.parent / msp
     try:
         table = load_msp_inchikey_table(msp)
     except OSError:
@@ -250,6 +254,49 @@ def _msp_table_for_job(job) -> tuple[MspInchikeyTable | None, str, str | None, s
             f"実効メソッドが宣言する MSP（{msp.name}）を読めないため、MSP の INCHIKEY で"
             "InChIKey を付けられませんでした（RDKit 経路だけで読みました）。")
     return table, "used", table.file_name, None
+
+
+#: Console の `ReadMspAnnotatorSettingsTable` がパスの列として探す見出し（正規化後、この順）。
+_MSP_TABLE_PATH_HEADERS = ("mspfilepath", "mspfile", "filepath", "path")
+
+
+def _normalize_header(text: str) -> str:
+    """Console の `NormalizeHeader` と同じ（前後の空白と引用符を外し、小文字の英数字だけ）。"""
+    return "".join(c for c in text.strip().strip('"').lower() if c.isalnum())
+
+
+def _msp_from_annotator_table(keys: dict[str, str], method: Path) -> Path | None:
+    """実効メソッドが指す MSP の注釈器設定表から、最初の MSP のパスを返す。無ければ None。
+
+    Console 45a531c4d の `ConfigParser.ReadMspAnnotatorSettings` と同じ規則で読む: 設定表は
+    メソッドの親基準、表の MSP は表の親基準で解く。`#` 行と空行を飛ばし、最初の行が見出し。
+    表が複数の MSP を持つときは最初の 1 本だけで引く（pipeline が書く表は 1 行）。
+    """
+    declared = next((keys[key.lower()].strip() for key in MSP_ANNOTATOR_SETTINGS_KEYS
+                     if key.lower() in keys), "")
+    if not declared:
+        return None
+    table_path = Path(declared)
+    if not table_path.is_absolute():
+        table_path = method.parent / table_path
+    try:
+        text = table_path.read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return None
+    rows = [line for line in text.splitlines() if line and not line.lstrip().startswith("#")]
+    if not rows:
+        return None
+    headers = [_normalize_header(cell) for cell in rows[0].split("\t")]
+    index = next((headers.index(name) for name in _MSP_TABLE_PATH_HEADERS if name in headers), -1)
+    if index < 0:
+        return None
+    for row in rows[1:]:
+        fields = row.split("\t")
+        value = fields[index].strip().strip('"') if index < len(fields) else ""
+        if value:
+            msp = Path(value)
+            return msp if msp.is_absolute() else table_path.parent / msp
+    return None
 
 
 def _parse_and_validate(path: Path) -> dict:

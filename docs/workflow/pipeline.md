@@ -92,6 +92,10 @@ scoring` / `filtering` に `False` を書く。メソッドが宣言する MSP �
 LBM の注釈器の priority を 1 に固定しているので、代表の同定は同じ証拠の水準なら MSP、MSP に MS/MS の照合が無く LBM にあるときだけ
 LBM になる。LBM と MSP の sha256 は計画の指紋に入り、`verify_inputs()` が再検査する(`which: "lbm"` の details もファイル名だけ)。
 receipt の `resolved.lbm` は `file` / `sha256` / `source`、`resolved.msp` は `priority`(2)も持つ。
+設定表の sha256 は配置時に snapshot(`msp.annotator_table_sha256`)へ固定し、再開時の照合が実効メソッドと同じく確かめる
+(変わっていれば `STAGED_INPUT_MISMATCH`)。`pipeline_status(include_details=true)` の record の写しでは、LBM の `path` と
+`Lbm file path` の上書き、絶対パスの設定表の上書きもファイル名だけにする。mzTab の読み込みは設定表の MSP で InChIKey を補う
+(同定は `MspDB_<n>_<MSP の stem>:<名前>`)。
 
 アライメントの参照ファイル(要求の `alignment_reference`、既定 `"median_injection"`): 実効メソッドの
 `Alignment reference file ID` を、全試料(`include` を問わない)の注入順の中央の試料(偶数なら小さい方)の

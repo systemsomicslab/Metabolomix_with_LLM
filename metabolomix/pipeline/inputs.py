@@ -940,7 +940,10 @@ def stage_inputs(plan: dict, pipeline_root: Path, *,
     snapshot["method"]["effective_relative_path"] = f"{_INPUTS_META_SUBDIR}/{_EFFECTIVE_METHOD_NAME}"
     snapshot["method"]["effective_sha256"] = _sha256_file(effective_path)
     if plan.get("library_mode") == "msp_then_lbm":
+        # 再開時の照合（`recovery._verify_staged_inputs`）が実効メソッドと同じく確かめる。
         snapshot["msp"]["annotator_table_relative_path"] = _MSP_ANNOTATOR_TABLE_RELATIVE
+        snapshot["msp"]["annotator_table_sha256"] = _sha256_file(
+            pipeline_root / _MSP_ANNOTATOR_TABLE_RELATIVE)
     return snapshot
 
 
