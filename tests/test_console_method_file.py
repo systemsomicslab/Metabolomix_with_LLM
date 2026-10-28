@@ -854,6 +854,75 @@ def test_msp_only_overrides_does_not_add_keys_the_method_never_declared():
     assert removed == []
 
 
+# ---------- library_mode="msp_then_lbm"（v8 Task 4） ----------
+
+_LBM_RT_SCORING = "Use retention information for LBM-based annotation scoring"
+_LBM_RT_FILTERING = "Use retention information for LBM-based annotation filtering"
+
+
+def test_msp_then_lbm_overrides_set_the_table_and_the_lbm():
+    overrides, removed = _mf.msp_then_lbm_overrides(
+        {"ion mode": "Negative", "lbm file path": ""}, "C:/run/inputs/msp-annotators.tsv",
+        "C:/lab/lab.lbm2")
+    assert overrides == {
+        _mf.MSP_KEY: "",
+        "MSP annotator settings file path": "C:/run/inputs/msp-annotators.tsv",
+        _mf.LBM_KEY: "C:/lab/lab.lbm2",
+        _LBM_RT_SCORING: "False",
+        _LBM_RT_FILTERING: "False",
+    }
+    assert removed == []
+
+
+def test_msp_then_lbm_overrides_clear_text_libraries_and_redirect_msp_table_aliases():
+    method_keys = {
+        "ion mode": "Negative",
+        "lbm file path": "C:/libs/other.lbm2",
+        "msp file path": "C:/public/other.msp",
+        "text db file path": "db.txt",
+        "msp annotation settings file path": "old-msp.tsv",   # 別名: Console は最初の行を読む
+        "text annotator settings file path": "text.tsv",
+        "isotope text db file path": "iso.txt",               # 同定用ではないので残す
+        "use retention information for lbm-based annotation scoring": "True",
+    }
+    overrides, removed = _mf.msp_then_lbm_overrides(method_keys, "C:/run/t.tsv", "C:/lab/lab.lbm2")
+    assert overrides[_mf.TEXT_DB_KEY] == ""
+    assert overrides["Text annotator settings file path"] == ""
+    # 別名の行を空にすると Console がそれを先に読んで注釈器の表が無いことになるので、同じ表を指す。
+    assert overrides["MSP annotation settings file path"] == "C:/run/t.tsv"
+    assert overrides["MSP annotator settings file path"] == "C:/run/t.tsv"
+    assert "Isotope text DB file path" not in overrides
+    assert removed == [_mf.LBM_KEY, _mf.MSP_KEY, _mf.TEXT_DB_KEY,
+                       "MSP annotation settings file path", "Text annotator settings file path"]
+    assert "Number of threads" not in overrides
+    assert not any("priority" in key.lower() for key in overrides)
+
+
+def test_msp_then_lbm_redirects_an_empty_alias_line_too(tmp_path):
+    """空の別名の行が先にあると Console はそれ（空）を読むので、空の行も設定表へ向ける。"""
+    src = tmp_path / "params.txt"
+    src.write_text("Ion mode: Negative\nMSP search settings file path:\nLbm file path:\n",
+                   encoding="ascii")
+    overrides, removed = _mf.msp_then_lbm_overrides(
+        _mf.read_method_keys(src), "C:/run/t.tsv", "C:/lab/lab.lbm2")
+    assert overrides["MSP search settings file path"] == "C:/run/t.tsv"
+    assert removed == []
+    lines = _mf.write_effective_method_file(src, tmp_path / "out" / "e.txt", overrides) \
+        .read_text(encoding="ascii").splitlines()
+    assert lines[1] == "MSP search settings file path: C:/run/t.tsv"
+    assert "MSP annotator settings file path: C:/run/t.tsv" in lines
+
+
+def test_write_msp_annotator_table_is_ascii_tsv_with_priority(tmp_path):
+    dest = tmp_path / "inputs" / "msp-annotators.tsv"
+    _mf.write_msp_annotator_table(dest, "C:\\lab\\lab_neg.msp")
+    assert dest.read_bytes() == b"annotator_id\tmsp_file_path\tpriority\nLabMsp\tC:\\lab\\lab_neg.msp\t2\n"
+    _mf.write_msp_annotator_table(dest, "C:/lab/x.msp", priority=5, annotator_id="Other")
+    assert dest.read_text(encoding="ascii").splitlines()[1] == "Other\tC:/lab/x.msp\t5"
+    with pytest.raises(UnicodeEncodeError):
+        _mf.write_msp_annotator_table(dest, "C:/研究室/x.msp")
+
+
 def test_blank_override_replaces_every_duplicate_line(tmp_path):
     src = tmp_path / "params.txt"
     src.write_text(

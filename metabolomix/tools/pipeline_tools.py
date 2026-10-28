@@ -58,7 +58,11 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
         `dataset_root` 基準。`library_mode="msp_only"` は LBM を使わず研究室の参照
         ライブラリ（.msp）だけで同定する（`msp_file` か極性の設定 `[library]
         msp_positive` / `msp_negative`。メソッドの Text DB・注釈器設定表の宣言は空にする）。
-        `lbm_file` との同時指定、`auto` での `msp_file` は `PIPELINE_REQUEST_INVALID`。
+        `library_mode="msp_then_lbm"`（脂質の run 用）は研究室 MSP（priority 2 の注釈器設定表）を
+        優先し、`[library] lbm` の LBM で補う（LBM の照合で RT を使わない。LBM は
+        `[msdial] lbm`・メソッドの宣言を見ない。無ければ `LBM_NOT_CONFIGURED`）。
+        `lbm_file` との同時指定（msp_only / msp_then_lbm）、`auto` での `msp_file` は
+        `PIPELINE_REQUEST_INVALID`。
         `alignment_reference`（既定 `"median_injection"`）は MS-DIAL の
         `Alignment reference file ID` を、全試料（`include` を問わない）の注入順の中央
         （偶数なら小さい方）の試料にする。注入順は実験情報シートの `injection_order` から
@@ -77,8 +81,9 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
     `PIPELINE_REQUEST_INVALID` にする。
 
     receiptの `resolved` に、解決済みの実行条件——`method`（`source_path` /
-    `sha256`）・`lbm`・`polarity`（`value` とその `source`）・`library_mode`・
-    `msp`（ファイル名・sha256・出どころ。置き場所は載せない）・`alignment_reference`
+    `sha256`）・`lbm`（msp_then_lbm ではファイル名・sha256・出どころだけ）・`polarity`
+    （`value` とその `source`）・`library_mode`・`msp`（ファイル名・sha256・出どころ、
+    msp_then_lbm では `priority` も。置き場所は載せない）・`alignment_reference`
     （`file_id`・`sample_file`・`injection_order_source`・`method_value`）——が入る。何も
     起動しないうちにこれらを確認するのがこのツールの用途。
 

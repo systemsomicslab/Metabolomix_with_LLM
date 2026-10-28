@@ -859,6 +859,120 @@ def test_sha256_is_streamed_not_read_whole(tmp_path, monkeypatch):
     assert inputs_mod._sha256_file(big) == expected
 
 
+# ---------- library_mode="msp_then_lbm"（v8 Task 4） ----------
+
+_RT_SCORING_KEY = "Use retention information for LBM-based annotation scoring"
+_RT_FILTERING_KEY = "Use retention information for LBM-based annotation filtering"
+
+
+def _msp_then_lbm_plan(tmp_path, monkeypatch, *, directory_name="lab_library", **explicit):
+    _allow_fake_exe(monkeypatch)
+    paths = write_lab_msp_config(tmp_path, monkeypatch, lbm=True, directory_name=directory_name)
+    src = make_source(tmp_path / "raw")
+    request = resolve_request(src["root"], {"library_mode": "msp_then_lbm", **explicit})
+    return src, paths, inspect_inputs(src["root"], request, exe_path=src["exe"])
+
+
+def test_msp_then_lbm_plan_pins_msp_and_lbm(tmp_path, monkeypatch):
+    # [msdial] lbm の経路（環境変数 MSDIAL_LBM）とメソッドの宣言（fake.lbm2）は使わない。
+    other = tmp_path / "auto_route.lbm2"
+    other.write_bytes(b"auto-route-lbm")
+    monkeypatch.setenv("MSDIAL_LBM", str(other))
+    src, paths, plan = _msp_then_lbm_plan(tmp_path, monkeypatch)
+    lib = paths["negative"].resolve()
+    lbm = paths["lbm"].resolve()
+    assert plan["library_mode"] == "msp_then_lbm"
+    assert plan["msp"]["path"] == str(lib)
+    assert plan["msp"]["file"] == "lab_neg.msp"
+    assert plan["msp"]["priority"] == 2
+    assert len(plan["msp"]["sha256"]) == 64
+    assert plan["lbm"]["path"] == str(lbm)
+    assert plan["lbm"]["file"] == "lab_lipids.lbm2"
+    assert plan["lbm"]["source"] == "config_file"
+    assert len(plan["lbm"]["sha256"]) == 64
+    overrides = plan["method"]["overrides"]
+    assert overrides[method_file_mod.MSP_KEY] == ""
+    assert overrides[method_file_mod.MSP_ANNOTATOR_SETTINGS_KEY] == "inputs/msp-annotators.tsv"
+    assert overrides[method_file_mod.LBM_KEY] == str(lbm)
+    assert overrides[_RT_SCORING_KEY] == "False"
+    assert overrides[_RT_FILTERING_KEY] == "False"
+    # メソッドの宣言（fake.lbm2）は [library] lbm に置き換わる。
+    assert plan["removed_declarations"] == [method_file_mod.LBM_KEY]
+
+
+def test_msp_then_lbm_writes_annotator_table_with_priority_2(tmp_path, monkeypatch):
+    src, paths, plan = _msp_then_lbm_plan(tmp_path, monkeypatch)
+    lib = paths["negative"].resolve()
+    lbm = paths["lbm"].resolve()
+    run_root = tmp_path / "pipeline_run"
+    snapshot = stage_inputs(plan, run_root)
+
+    table = run_root / "inputs" / "msp-annotators.tsv"
+    assert table.read_bytes() == f"annotator_id\tmsp_file_path\tpriority\nLabMsp\t{lib}\t2\n".encode("ascii")
+    effective = (run_root / "inputs" / "effective-method.txt").read_text(encoding="ascii")
+    assert f"MSP annotator settings file path: {table.resolve()}\n" in effective
+    assert "Msp file path: \n" in effective
+    assert f"Lbm file path: {lbm}\n" in effective
+    assert f"{_RT_SCORING_KEY}: False\n" in effective
+    assert f"{_RT_FILTERING_KEY}: False\n" in effective
+    # 計画（上書き）は pipeline_root 相対のまま。実効メソッドだけが絶対パスを持つ。
+    assert snapshot["method"]["overrides"][method_file_mod.MSP_ANNOTATOR_SETTINGS_KEY] == \
+        "inputs/msp-annotators.tsv"
+    verify_inputs(snapshot)
+
+    # 再開（同じ配置先へもう一度）でも同じ中身になる。
+    again = stage_inputs(plan, run_root)
+    assert again["method"]["effective_sha256"] == snapshot["method"]["effective_sha256"]
+
+
+def test_msp_then_lbm_verify_detects_a_changed_lbm_without_its_location(tmp_path, monkeypatch):
+    src, paths, plan = _msp_then_lbm_plan(tmp_path, monkeypatch, directory_name="secret_share")
+    snapshot = stage_inputs(plan, tmp_path / "pipeline_run")
+    paths["lbm"].write_bytes(b"changed")
+    with pytest.raises(DomainError, match="INPUT_CHANGED") as changed:
+        verify_inputs(snapshot)
+    assert changed.value.details == {"which": "lbm", "lbm_file": "lab_lipids.lbm2"}
+    assert "secret_share" not in str(changed.value)
+
+
+def test_msp_then_lbm_without_lbm_setting_stops(tmp_path, monkeypatch):
+    _allow_fake_exe(monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share")
+    # [msdial] lbm の経路があっても代わりに使わない。
+    other = tmp_path / "secret_share" / "auto_route.lbm2"
+    other.write_bytes(b"auto-route-lbm")
+    monkeypatch.setenv("MSDIAL_LBM", str(other))
+    src = make_source(tmp_path / "raw")
+    request = resolve_request(src["root"], {"library_mode": "msp_then_lbm"})
+    with pytest.raises(DomainError, match="LBM_NOT_CONFIGURED") as info:
+        inspect_inputs(src["root"], request, exe_path=src["exe"])
+    assert "[library] lbm" in info.value.message
+    assert "secret_share" not in info.value.message
+    assert "secret_share" not in str(info.value.details)
+
+
+def test_msp_then_lbm_missing_lbm_file_stops_without_its_location(tmp_path, monkeypatch):
+    _allow_fake_exe(monkeypatch)
+    paths = write_lab_msp_config(tmp_path, monkeypatch, lbm=True, directory_name="secret_share")
+    paths["lbm"].unlink()
+    src = make_source(tmp_path / "raw")
+    request = resolve_request(src["root"], {"library_mode": "msp_then_lbm"})
+    with pytest.raises(DomainError, match="LBM_NOT_FOUND") as info:
+        inspect_inputs(src["root"], request, exe_path=src["exe"])
+    assert "lab_lipids.lbm2" in info.value.message
+    assert "secret_share" not in info.value.message
+    assert "secret_share" not in str(info.value.details)
+
+
+def test_msp_then_lbm_without_msp_setting_stops(tmp_path, monkeypatch):
+    _allow_fake_exe(monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch, negative=False, lbm=True)
+    src = make_source(tmp_path / "raw")
+    request = resolve_request(src["root"], {"library_mode": "msp_then_lbm"})
+    with pytest.raises(DomainError, match="MSP_NOT_CONFIGURED"):
+        inspect_inputs(src["root"], request, exe_path=src["exe"])
+
+
 # ---------- アライメントの参照ファイル（v8 Task 3） ----------
 
 from metabolomix.pipeline.inputs import choose_alignment_reference

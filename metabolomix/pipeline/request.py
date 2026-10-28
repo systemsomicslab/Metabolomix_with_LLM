@@ -89,7 +89,8 @@ _TOP_LEVEL_KEYS = frozenset({
 _INTERNAL_KEYS = frozenset({"effective_target", "value_sources"})
 
 _TARGET_VALUES = frozenset({"auto", "exploratory", "differential"})
-_LIBRARY_MODE_VALUES = frozenset({"auto", "msp_only"})
+#: `msp_then_lbm`（v8）は研究室 MSP を優先し、`[library] lbm` の LBM で補う（脂質の run 用）。
+_LIBRARY_MODE_VALUES = frozenset({"auto", "msp_only", "msp_then_lbm"})
 #: MS-DIAL の `Alignment reference file ID`。`median_injection` は注入順の中央の試料を
 #: 計画で選んで実効メソッドへ書く（既定）。`method` はメソッドの宣言をそのまま使う。
 _ALIGNMENT_REFERENCE_VALUES = frozenset({"median_injection", "method"})
@@ -358,8 +359,13 @@ def _validate_fields(data: dict) -> None:
     if library_mode == "msp_only" and data.get("lbm_file"):
         _fail("library_mode='msp_only'はLBMを使わないので、lbm_fileと同時には指定できません。",
               library_mode=library_mode)
+    if library_mode == "msp_then_lbm" and data.get("lbm_file"):
+        _fail("library_mode='msp_then_lbm'のLBMは設定ファイルの[library] lbmだけから決めるので、"
+              "lbm_fileと同時には指定できません。",
+              library_mode=library_mode)
     if library_mode == "auto" and data.get("msp_file"):
-        _fail("msp_fileはlibrary_mode='msp_only'のときだけ使えます（autoではMSPを解決しない）。",
+        _fail("msp_fileはlibrary_mode='msp_only'か'msp_then_lbm'のときだけ使えます"
+              "（autoではMSPを解決しない）。",
               library_mode=library_mode)
 
     # 変更前に保存された要求（キー無し）は既定の "median_injection"。

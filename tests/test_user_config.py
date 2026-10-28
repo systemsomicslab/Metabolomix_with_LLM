@@ -86,6 +86,18 @@ def test_relative_path_resolves_against_the_config_folder(cfg):
     assert setting.value == str(cfg.parent / "libs" / "pos.msp")
 
 
+def test_library_lbm_is_separate_from_msdial_lbm(cfg, tmp_path):
+    """v8: library_mode="msp_then_lbm" の LBM は [library] lbm。[msdial] lbm と混ぜない。"""
+    _write(cfg, f"[msdial]\nlbm = '{tmp_path / 'auto.lbm2'}'\n")
+    assert user_config.get_setting("library.lbm") is None
+    # 大きさを変える（同じ大きさ・同じ更新時刻だと解析のキャッシュが当たる）。
+    _write(cfg, f"[library]\nlbm = '{tmp_path / 'lab_lipids.lbm2'}'\n")
+    setting = user_config.get_setting("library.lbm")
+    assert (setting.value, setting.source) == (str(tmp_path / "lab_lipids.lbm2"), "config_file")
+    assert user_config.get_setting("msdial.lbm") is None
+    assert user_config.SETTINGS["library.lbm"] != user_config.SETTINGS["msdial.lbm"]
+
+
 def test_tilde_is_expanded(cfg, tmp_path, monkeypatch):
     home = tmp_path / "home"
     monkeypatch.setenv("USERPROFILE", str(home))

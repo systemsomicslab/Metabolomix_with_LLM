@@ -63,6 +63,13 @@ _OMICS = "lipidomics"
 _INPUT_SUBDIR = "input"
 _INPUTS_META_SUBDIR = "inputs"
 _EFFECTIVE_METHOD_NAME = "effective-method.txt"
+#: library_mode="msp_then_lbm" の MSP の注釈器の設定表（pipeline_root 相対）。入力計画の
+#: 上書きはこの相対値のまま持ち、`stage_inputs` が設定表を書いて絶対パスへ置き換える
+#: （計画の時点では pipeline_root が決まっていない）。
+_MSP_ANNOTATOR_TABLE_RELATIVE = f"{_INPUTS_META_SUBDIR}/msp-annotators.tsv"
+#: 研究室 MSP の注釈器の priority。現用の Console（45a531c4d）は LBM の注釈器を 1 に
+#: 固定しているので、同じ証拠の水準では MSP が代表になる（設計 2026-10-28 §4.2）。
+_MSP_ANNOTATOR_PRIORITY = 2
 
 
 # ---------- 小さなユーティリティ ----------
@@ -448,8 +455,9 @@ def _resolve_lbm_pinned(method_keys: dict, method_path: Path, exe_path: str,
 _MSP_NOT_USED = {"path": None, "file": None, "sha256": None, "source": "not_used"}
 
 
-def _resolve_msp_pinned(request: dict, polarity: str, source_root: Path) -> dict:
-    """library_mode="msp_only" の研究室 MSP を解決し、sha256 で固定する。
+def _resolve_msp_pinned(request: dict, polarity: str, source_root: Path, *,
+                        library_mode: str = "msp_only") -> dict:
+    """library_mode="msp_only" / "msp_then_lbm" の研究室 MSP を解決し、sha256 で固定する。
 
     エラー文と details に置き場所（ディレクトリ）を載せない（ファイル名だけ。
     core/path_resolvers.LibraryPathError と同じ規約）。絶対パスは入力計画（データ側）にだけ置く。
@@ -463,7 +471,7 @@ def _resolve_msp_pinned(request: dict, polarity: str, source_root: Path) -> dict
         msp_setting = user_config.get_setting(key)
     except user_config.ConfigInvalidError as exc:
         raise DomainError(exc.code, exc.message, exc.details()) from exc
-    msp = method_file_mod.resolve_msp(override, polarity, msp_setting)
+    msp = method_file_mod.resolve_msp(override, polarity, msp_setting, library_mode=library_mode)
     if msp.error_code:
         details = ({"msp_file": Path(override).name} if msp.source == "argument"
                    else user_config.describe_missing(key, msp_setting))
@@ -484,6 +492,52 @@ def _resolve_msp_pinned(request: dict, polarity: str, source_root: Path) -> dict
             f"{type(exc).__name__}",
             {"msp_file": resolved.name}) from exc
     return {"path": str(resolved), "file": resolved.name, "sha256": digest, "source": msp.source}
+
+
+_LAB_LBM_WHAT = "研究室の脂質ライブラリ（.lbm2）"
+
+
+def _resolve_lbm_from_library_setting() -> dict:
+    """library_mode="msp_then_lbm" の LBM を `[library] lbm` だけから解決し、sha256 で固定する。
+
+    `[msdial] lbm`・メソッドの宣言・実行体のフォルダ・ビルド生成物は見ない（auto の経路と
+    混ざらないように。設計 2026-10-28 §4.2）。エラー文と details に置き場所を載せない
+    （ファイル名だけ。`_resolve_msp_pinned` と同じ規約）。
+    """
+    key = user_config.LIBRARY_LBM_SETTING_KEY
+    try:
+        setting = user_config.get_setting(key)
+    except user_config.ConfigInvalidError as exc:
+        raise DomainError(exc.code, exc.message, exc.details()) from exc
+    if setting is None:
+        raise DomainError(
+            "LBM_NOT_CONFIGURED",
+            f"library_mode='msp_then_lbm' には{_LAB_LBM_WHAT}が要ります。"
+            + user_config.missing_hint(key, _LAB_LBM_WHAT),
+            user_config.describe_missing(key))
+    candidate = Path(setting.value).expanduser()
+    if not candidate.is_file():
+        label = user_config.setting_label(setting)
+        raise DomainError(
+            "LBM_NOT_FOUND",
+            f"{label} が指すファイル（{candidate.name}）がありません。{label} を確認してください。",
+            {**user_config.describe_missing(key, setting), "lbm_file": candidate.name})
+    resolved = candidate.resolve()
+    if not str(resolved).isascii():
+        raise DomainError(
+            "METHOD_ENCODING_UNSUPPORTED",
+            f"{_LAB_LBM_WHAT}（{resolved.name}）のパスに ASCII 以外の文字があります。MS-DIAL Console は"
+            "メソッドファイルを ASCII で読むため、このライブラリは黙って無視されます。",
+            {"keys": [method_file_mod.LBM_KEY]})
+    try:
+        digest = _sha256_file(resolved)
+    except OSError as exc:
+        raise DomainError(
+            "LBM_NOT_FOUND",
+            f"{_LAB_LBM_WHAT}（{resolved.name}）を読めません（ネットワークの一時的な切断の可能性）: "
+            f"{type(exc).__name__}",
+            {"lbm_file": resolved.name}) from exc
+    return {"path": str(resolved), "file": resolved.name, "sha256": digest, "source": setting.source}
 
 
 def _resolve_exe(exe_path: Path) -> dict:
@@ -578,7 +632,8 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
     library_mode = request.get("library_mode", "auto")
     # 最終選択後にだけ厳格な参照解決を行う（select_methodのグルーピングは弱い版）。
     # msp_only では LBM を使わないので、その宣言の実在で止めない（spec 2026-10-07 §3.2）。
-    if library_mode != "msp_only":
+    # msp_then_lbm もメソッドの LBM の宣言は使わない（[library] lbm で置き換える。v8）。
+    if library_mode == "auto":
         method_file_mod.resolve_method_references(method_keys, method_path)
 
     polarity = _resolve_polarity(request, method_path)
@@ -586,6 +641,11 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
     if library_mode == "msp_only":
         lbm_info = {"path": None, "sha256": None, "source": "disabled"}
         msp_info = _resolve_msp_pinned(request, polarity["value"], source_root)
+    elif library_mode == "msp_then_lbm":
+        msp_info = _resolve_msp_pinned(request, polarity["value"], source_root,
+                                       library_mode=library_mode)
+        msp_info["priority"] = _MSP_ANNOTATOR_PRIORITY
+        lbm_info = _resolve_lbm_from_library_setting()
     else:
         lbm_info = _resolve_lbm_pinned(method_keys, method_path, exe_info["path"], request, source_root)
         msp_info = dict(_MSP_NOT_USED)
@@ -606,6 +666,12 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
         msp_overrides, removed_declarations = method_file_mod.msp_only_overrides(
             method_keys, msp_info["path"])
         overrides.update(msp_overrides)
+    elif library_mode == "msp_then_lbm":
+        # 研究室 MSP は注釈器の設定表（priority 2）から、LBM は [library] lbm から入れる。
+        # 設定表の場所はまだ pipeline_root 相対（`stage_inputs` が絶対パスにする）。
+        library_overrides, removed_declarations = method_file_mod.msp_then_lbm_overrides(
+            method_keys, _MSP_ANNOTATOR_TABLE_RELATIVE, lbm_info["path"])
+        overrides.update(library_overrides)
     elif lbm_info["path"] and (lbm_info["source"] != "method_file"
                                or method_file_mod.LBM_KEY in overrides):
         # 相対宣言なら resolve_lbm の解決結果で置き換え、build_tree/env/exe_dir
@@ -642,7 +708,10 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
             "overrides": overrides,
         },
         "alignment_reference": alignment_reference,
-        "lbm": {"path": lbm_info["path"], "sha256": lbm_info["sha256"]},
+        # msp_then_lbm の LBM は研究室の資産なので、receipt と report がファイル名と出どころで
+        # 示せるように `file`・`source` も持つ（ほかのモードの形は変えない）。
+        "lbm": (dict(lbm_info) if library_mode == "msp_then_lbm"
+                else {"path": lbm_info["path"], "sha256": lbm_info["sha256"]}),
         "library_mode": library_mode,
         "msp": msp_info,
         "removed_declarations": removed_declarations,
@@ -845,6 +914,15 @@ def stage_inputs(plan: dict, pipeline_root: Path, *,
                 "source_relative_path": name})
 
     overrides = dict(plan["method"]["overrides"])
+    if plan.get("library_mode") == "msp_then_lbm":
+        # 研究室 MSP の注釈器の設定表を書き、計画の相対値（設定表と別名の行）を絶対パスへ
+        # 置き換える。MSP のパスは計画で ASCII を確かめてある。毎回書き直す（同じ中身）。
+        table_path = pipeline_root / _MSP_ANNOTATOR_TABLE_RELATIVE
+        method_file_mod.write_msp_annotator_table(
+            table_path, plan["msp"]["path"], priority=plan["msp"]["priority"])
+        table_value = str(table_path.resolve())
+        overrides = {key: (table_value if value == _MSP_ANNOTATOR_TABLE_RELATIVE else value)
+                     for key, value in overrides.items()}
     method_path = Path(plan["method"]["source_path"])
     effective_path = inputs_meta_dir / _EFFECTIVE_METHOD_NAME
     try:
@@ -861,6 +939,8 @@ def stage_inputs(plan: dict, pipeline_root: Path, *,
     snapshot["staged_files"] = staged_files
     snapshot["method"]["effective_relative_path"] = f"{_INPUTS_META_SUBDIR}/{_EFFECTIVE_METHOD_NAME}"
     snapshot["method"]["effective_sha256"] = _sha256_file(effective_path)
+    if plan.get("library_mode") == "msp_then_lbm":
+        snapshot["msp"]["annotator_table_relative_path"] = _MSP_ANNOTATOR_TABLE_RELATIVE
     return snapshot
 
 
@@ -927,8 +1007,11 @@ def verify_inputs(snapshot: dict) -> None:
             continue
         path = Path(info[path_key])
         # 研究室 MSP は置き場所を返さない（ファイル名だけ。spec 2026-10-07 §3.3）。
-        shown = path.name if label == "msp" else str(path)
-        details = ({"which": label, "msp_file": path.name} if label == "msp"
+        # msp_then_lbm の LBM（[library] lbm）も研究室の資産なので同じ扱い（v8）。
+        lab_asset = label == "msp" or (
+            label == "lbm" and snapshot.get("library_mode") == "msp_then_lbm")
+        shown = path.name if lab_asset else str(path)
+        details = ({"which": label, f"{label}_file": path.name} if lab_asset
                    else {"which": label, "path": str(path)})
         try:
             digest = _sha256_file(path)

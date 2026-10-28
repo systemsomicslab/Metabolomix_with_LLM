@@ -392,18 +392,26 @@ def _section_method(record: dict) -> str:
     exe = inputs.get("exe") or {}
     # 研究室 MSP はファイル名だけ（置き場所は載せない。spec 2026-10-07 §3.3）。
     msp = inputs.get("msp") or {}
+    library_mode = inputs.get("library_mode") or "auto"
+    # msp_then_lbm の LBM（[library] lbm）も研究室の資産なのでファイル名と出どころだけ（v8）。
+    lab_lbm = library_mode == "msp_then_lbm"
+    lbm_lines = ([f"- lbm_file: {lbm.get('file') or '(unknown)'}",
+                  f"- lbm_source: {lbm.get('source') or '(unknown)'}"] if lab_lbm
+                 else [f"- lbm_path: {lbm.get('path') or '(unknown)'}"])
     lines = [
         "## Method / LBM / Version", "",
         f"- method_source_path: {method.get('source_path') or '(unknown)'}",
         f"- method_sha256: {method.get('sha256') or '(unknown)'}",
-        f"- lbm_path: {lbm.get('path') or '(unknown)'}",
+        *lbm_lines,
         f"- lbm_sha256: {lbm.get('sha256') or '(unknown)'}",
-        f"- library_mode: {inputs.get('library_mode') or 'auto'}",
+        f"- library_mode: {library_mode}",
         f"- msp_file: {msp.get('file') or '(not used)'}",
         f"- msp_sha256: {msp.get('sha256') or '(not used)'}",
         f"- msp_source: {msp.get('source') or 'not_used'}",
-        f"- exe_version: {exe.get('version') or '(unknown)'}",
     ]
+    if msp.get("priority") is not None:
+        lines.append(f"- msp_priority: {msp['priority']}")
+    lines.append(f"- exe_version: {exe.get('version') or '(unknown)'}")
     return "\n".join(lines)
 
 

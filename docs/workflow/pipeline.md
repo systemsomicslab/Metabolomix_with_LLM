@@ -82,6 +82,17 @@ receiptは従来どおり最小のまま。
 `metabolomix/pipeline/inputs.py` の `verify_inputs()` が再検査する(変わっていれば `INPUT_CHANGED`、`which: "msp"`)。
 receipt にはファイル名・sha256・出どころだけを載せ、置き場所は載せない。
 
+`library_mode="msp_then_lbm"`(v8。脂質の run 用)は研究室 MSP を優先し、LBM で補う。MSP は `msp_only` と同じ規則で決め、
+LBM は `[library] lbm`(環境変数 `MSDIAL_LIBRARY_LBM`)**だけ**から決める(`[msdial] lbm`・メソッドの宣言・実行体のフォルダ・
+ビルド生成物は見ない。無ければ `LBM_NOT_CONFIGURED`、指す先が無ければ `LBM_NOT_FOUND`)。実効メソッドは `Msp file path` を空にし、
+`MSP annotator settings file path` に `inputs/msp-annotators.tsv`(`stage_inputs` が書く。列 `annotator_id` / `msp_file_path` /
+`priority`、研究室 MSP を priority 2 で 1 行)、`Lbm file path` に LBM、`Use retention information for LBM-based annotation
+scoring` / `filtering` に `False` を書く。メソッドが宣言する MSP 設定表の別名は同じ設定表へ向け(Console は別名を含めて最初の行を
+空でも読むため)、Text DB と Text の設定表は空にする。Console(45a531c4d)は設定表から 1 件でも読めると `Msp file path` を使わず、
+LBM の注釈器の priority を 1 に固定しているので、代表の同定は同じ証拠の水準なら MSP、MSP に MS/MS の照合が無く LBM にあるときだけ
+LBM になる。LBM と MSP の sha256 は計画の指紋に入り、`verify_inputs()` が再検査する(`which: "lbm"` の details もファイル名だけ)。
+receipt の `resolved.lbm` は `file` / `sha256` / `source`、`resolved.msp` は `priority`(2)も持つ。
+
 アライメントの参照ファイル(要求の `alignment_reference`、既定 `"median_injection"`): 実効メソッドの
 `Alignment reference file ID` を、全試料(`include` を問わない)の注入順の中央の試料(偶数なら小さい方)の
 file ID(入力フォルダの主ファイルを `sorted()` した順の 0 始まりの添字)に書く。`_prepare_run` が実験情報シートを

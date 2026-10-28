@@ -86,8 +86,9 @@ setup が無ければ作る。追跡されている `.vscode/mcp.json` も `.ven
 
 **外部資産の場所は設定ファイルか環境変数で指す**（spec 2026-10-06）。リポジトリ直下の
 `lipidmix.local.toml`（追跡外。雛形 `lipidmix.example.toml`）の `[msdial] exe` `lbm` と
-`[library] msp_positive` `msp_negative` と `[mslipidmapper] rscript` `browser` `mslipidmapper_api_url` `api_token`、または環境変数
-`MSDIAL_EXE` `MSDIAL_LBM` `MSDIAL_MSP_POS` `MSDIAL_MSP_NEG` `MSLIPIDMAPPER_RSCRIPT`
+`[library] msp_positive` `msp_negative` `lbm`（`lbm` は pipeline の `library_mode="msp_then_lbm"` だけが読み、
+`[msdial] lbm` とは混ぜない）と `[mslipidmapper] rscript` `browser` `mslipidmapper_api_url` `api_token`、または環境変数
+`MSDIAL_EXE` `MSDIAL_LBM` `MSDIAL_MSP_POS` `MSDIAL_MSP_NEG` `MSDIAL_LIBRARY_LBM` `MSLIPIDMAPPER_RSCRIPT`
 `MSLIPIDMAPPER_BROWSER` `MSLIPIDMAPPER_API_URL` `MSLIPIDMAPPER_API_TOKEN`（環境変数が優先）。
 `mslipidmapper_api_url` / `api_token` だけはパスとして解かない（`user_config.NON_PATH_SETTINGS`）。
 `pathway_*` は `mslipidmapper_api_url` の研究室サーバを先に使い、使えなければローカルの R へ回す（`pathway/bridge.py` `run_bridge`）。読むのは `metabolomix/core/user_config.py`

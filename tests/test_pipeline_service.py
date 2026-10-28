@@ -689,6 +689,36 @@ def test_plan_receipt_shows_the_lab_msp_without_its_location(tmp_path, monkeypat
     assert "secret_share" not in json.dumps(receipt, ensure_ascii=False)
 
 
+def test_receipt_shows_lbm_without_location(tmp_path, monkeypatch):
+    """v8 Task 4: msp_then_lbm の receipt は LBM と MSP をファイル名・sha256・出どころで示す。"""
+    from tests.lab_msp_fixtures import write_lab_msp_config
+    source = _prepare_source(tmp_path, monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share", lbm=True)
+    receipt = service.plan_pipeline(source["root"], {"library_mode": "msp_then_lbm"})
+    resolved = receipt["resolved"]
+    assert resolved["library_mode"] == "msp_then_lbm"
+    assert set(resolved["lbm"]) == {"file", "sha256", "source"}
+    assert resolved["lbm"]["file"] == "lab_lipids.lbm2"
+    assert len(resolved["lbm"]["sha256"]) == 64
+    assert resolved["lbm"]["source"] == "config_file"
+    assert resolved["msp"]["file"] == "lab_neg.msp"
+    assert len(resolved["msp"]["sha256"]) == 64
+    assert resolved["msp"]["priority"] == 2
+    assert "secret_share" not in json.dumps(receipt, ensure_ascii=False)
+
+
+def test_plan_fingerprint_follows_the_lbm_of_msp_then_lbm():
+    plan = {
+        "raw_stat": [{"relative_path": "a.wiff", "size": 1, "mtime_ns": 2}],
+        "selected_format": "wiff",
+        "method": {"sha256": "m" * 64}, "lbm": {"sha256": "l" * 64},
+        "exe": {"sha256": "e" * 64}, "polarity": {"value": "negative"},
+        "msp": {"sha256": "s" * 64},
+    }
+    other = {**plan, "lbm": {"sha256": "x" * 64}}
+    assert service._plan_fingerprint(plan) != service._plan_fingerprint(other)
+
+
 def test_plan_fingerprint_is_unchanged_without_an_msp():
     from metabolomix.core.atomic_io import canonical_hash
     plan = {

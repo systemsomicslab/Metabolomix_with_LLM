@@ -126,7 +126,8 @@ def _plan_fingerprint(plan: dict) -> str:
         "exe_sha256": plan["exe"]["sha256"],
         "polarity": plan["polarity"]["value"],
     }
-    # 研究室 MSP は msp_only のときだけ入れる。auto の計画の指紋は変えない
+    # msp_then_lbm の LBM（[library] lbm）の sha256 は上の `lbm_sha256` に入る。
+    # 研究室 MSP は msp_only / msp_then_lbm のときだけ入れる。auto の計画の指紋は変えない
     # （受付冪等性と再開の同一性が既存 run で崩れないように。spec 2026-10-07 §3.3）。
     msp_sha256 = (plan.get("msp") or {}).get("sha256")
     if msp_sha256:
@@ -220,13 +221,23 @@ def _resolved_settings(record: dict) -> dict:
     msp = inputs.get("msp") or {}
     # v2 の計画と、v8 より前に保存された計画には無い。
     alignment_reference = inputs.get("alignment_reference")
+    library_mode = inputs.get("library_mode", "auto")
+    resolved_msp = {"file": msp.get("file"), "sha256": msp.get("sha256"),
+                    "source": msp.get("source", "not_used")}
+    if library_mode == "msp_then_lbm":
+        # LBM も研究室の資産（[library] lbm）なので置き場所を載せない。MSP は注釈器の
+        # priority（LBM は Console が 1 に固定）を添える（v8 設計 §4.2）。
+        resolved_lbm = {"file": lbm.get("file"), "sha256": lbm.get("sha256"),
+                        "source": lbm.get("source")}
+        resolved_msp["priority"] = msp.get("priority")
+    else:
+        resolved_lbm = {"path": lbm.get("path"), "sha256": lbm.get("sha256")}
     return {
         "method": {"source_path": method.get("source_path"), "sha256": method.get("sha256")},
-        "lbm": {"path": lbm.get("path"), "sha256": lbm.get("sha256")},
+        "lbm": resolved_lbm,
         "polarity": {"value": polarity.get("value"), "source": polarity.get("source")},
-        "library_mode": inputs.get("library_mode", "auto"),
-        "msp": {"file": msp.get("file"), "sha256": msp.get("sha256"),
-                "source": msp.get("source", "not_used")},
+        "library_mode": library_mode,
+        "msp": resolved_msp,
         "alignment_reference": alignment_reference,
     }
 

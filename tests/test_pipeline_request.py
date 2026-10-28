@@ -714,6 +714,23 @@ def test_msp_only_changes_the_request_fingerprint(tmp_path):
             != request_fingerprint(resolve_request(root)))
 
 
+def test_msp_then_lbm_is_accepted_with_an_msp_file(tmp_path):
+    root = _root(tmp_path)
+    req = resolve_request(root, {"library_mode": "msp_then_lbm", "msp_file": "lab.msp"})
+    assert req["library_mode"] == "msp_then_lbm"
+    assert req["msp_file"] == "lab.msp"
+    fingerprints = {request_fingerprint(resolve_request(root, explicit)) for explicit in
+                    ({}, {"library_mode": "msp_only"}, {"library_mode": "msp_then_lbm"})}
+    assert len(fingerprints) == 3
+
+
+def test_msp_then_lbm_rejects_lbm_file(tmp_path):
+    """LBM は設定ファイルの [library] lbm だけから決める。要求の lbm_file では差し替えない。"""
+    with pytest.raises(DomainError, match="PIPELINE_REQUEST_INVALID") as info:
+        resolve_request(_root(tmp_path), {"library_mode": "msp_then_lbm", "lbm_file": "x.lbm2"})
+    assert "[library] lbm" in str(info.value)
+
+
 def test_v2_rejects_library_mode_with_a_migration_hint(tmp_path):
     from metabolomix.pipeline import request_v2
     with pytest.raises(DomainError, match="PIPELINE_REQUEST_INVALID") as info:

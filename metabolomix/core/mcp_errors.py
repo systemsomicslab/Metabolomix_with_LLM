@@ -77,6 +77,8 @@ CONSOLE_ERROR_CODES = frozenset({
     # 空のまま実行すると MS-DIAL は警告なしで同定 0 件のまま完走する。
     "LBM_NOT_FOUND",
     "LBM_AMBIGUOUS",
+    # pipeline の library_mode="msp_then_lbm" で `[library] lbm` が未設定の場合（v8）。
+    "LBM_NOT_CONFIGURED",
     # console_prepare_input が単一フォーマットの入力フォルダを作れなかった場合。
     "INPUT_PREP_FAILED",
     # MS-DIAL 実行自体は成功したが、その後の生成物収集・ハッシュ計算・

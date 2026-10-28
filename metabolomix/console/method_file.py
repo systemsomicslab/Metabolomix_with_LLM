@@ -109,6 +109,16 @@ SETTINGS_PATH_KEYS: tuple[str, ...] = (
     "Text annotation settings file path",
 )
 
+#: MSP の注釈器設定表を指すキー（正準の綴り）と、その別名。Console
+#: （`ConfigParser.ReadMspAnnotatorSettingsFilePath`）は 3 つの綴りのうち**最初に現れた行**の
+#: 値を返す（空でも返す）。
+MSP_ANNOTATOR_SETTINGS_KEY = SETTINGS_PATH_KEYS[0]
+MSP_ANNOTATOR_SETTINGS_KEYS: tuple[str, ...] = SETTINGS_PATH_KEYS[:3]
+
+#: LBM の照合で RT を使うかのキー（`ConfigParser` の `ReadLcmsParameter` が読む。true / false）。
+LBM_RT_SCORING_KEY = "Use retention information for LBM-based annotation scoring"
+LBM_RT_FILTERING_KEY = "Use retention information for LBM-based annotation filtering"
+
 #: library_mode="msp_only" で実効メソッドから消す同定用の宣言。研究室 MSP 以外の
 #: ライブラリ（Text DB、複数 MSP / Text の注釈器設定表）が混ざらないようにする。
 #: 同定に使わないキー（アイソトープ追跡・ターゲット検出・RT 補正）は含めない。
@@ -473,13 +483,15 @@ def resolve_lbm(
 _MSP_WHAT = "研究室の参照ライブラリ（.msp）"
 
 
-def resolve_msp(override: str | None, polarity: str, msp_setting: Setting | None) -> MspResolution:
-    """library_mode="msp_only" の MSP を決める。順に: 明示引数 → 極性の設定。
+def resolve_msp(override: str | None, polarity: str, msp_setting: Setting | None, *,
+                library_mode: str = "msp_only") -> MspResolution:
+    """library_mode="msp_only" / "msp_then_lbm" の MSP を決める。順に: 明示引数 → 極性の設定。
 
     極性の設定は呼び出し側が `user_config.get_setting(MSP_SETTING_KEYS[polarity])` で引いて
     渡す（環境変数 MSDIAL_MSP_POS / MSDIAL_MSP_NEG → lipidmix.local.toml）。メソッドファイルの
     `Msp file path` の宣言は使わない——研究室 MSP 以外を宣言した GUI パラメータを流用しても
     契約から外れないようにする（spec 2026-10-07 §3.2）。返すパスは絶対パス。
+    `library_mode` は未設定のときの文面に出すだけ。
     """
     if override:
         candidate = Path(override).expanduser()
@@ -492,7 +504,7 @@ def resolve_msp(override: str | None, polarity: str, msp_setting: Setting | None
     if msp_setting is None:
         return MspResolution(
             path=None, source="not_configured", error_code="MSP_NOT_CONFIGURED",
-            message=(f"library_mode='msp_only' には {polarity} の{_MSP_WHAT}が要ります。"
+            message=(f"library_mode='{library_mode}' には {polarity} の{_MSP_WHAT}が要ります。"
                      + missing_hint(key, _MSP_WHAT)))
     candidate = Path(msp_setting.value).expanduser()
     if candidate.is_file():
@@ -520,6 +532,68 @@ def msp_only_overrides(method_keys: dict[str, str], msp_path: str) -> tuple[dict
             overrides[key] = ""
             removed.append(key)
     return overrides, removed
+
+
+def msp_then_lbm_overrides(method_keys: dict[str, str], annotator_table_path: str,
+                           lbm_path: str) -> tuple[dict[str, str], list[str]]:
+    """library_mode="msp_then_lbm"（v8）の実効メソッドの上書きと、消した宣言のキーを返す。
+
+    研究室 MSP は `Msp file path` ではなく注釈器の設定表（`annotator_table_path`。
+    `write_msp_annotator_table` が priority 2 で書く）から入れる。Console（45a531c4d）は
+    設定表から 1 件でも読めると `Msp file path` を使わず、LBM の注釈器の priority を 1 に
+    固定しているので、同じ証拠の水準では MSP が代表になる。
+
+    上書き: `Msp file path` = 空、`MSP annotator settings file path` = 設定表、
+    `Lbm file path` = `lbm_path`、LBM の照合の RT（scoring / filtering）= `False`
+    （LBM の RT は研究室の LC 条件のもので、公開データのカラムと合わない）。
+    原本が宣言する MSP 設定表の別名は同じ設定表へ向ける——Console は別名を含めて最初の
+    行を読むので、空にするとそちらが先に読まれて設定表が無いことになる。ほかの
+    `IDENTIFICATION_CLEAR_KEYS`（Text DB・Text の設定表）は空にする。
+
+    消した宣言: 原本が空でなく宣言していて、上の上書きで別の値に置き換わったキー
+    （`Lbm file path`・`Msp file path`・`IDENTIFICATION_CLEAR_KEYS`）。現用ビルドが読まない
+    キー（`LBM annotator priority`・`Number of threads`）は書かない。
+    """
+    overrides: dict[str, str] = {
+        MSP_KEY: "",
+        MSP_ANNOTATOR_SETTINGS_KEY: annotator_table_path,
+        LBM_KEY: lbm_path,
+        LBM_RT_SCORING_KEY: "False",
+        LBM_RT_FILTERING_KEY: "False",
+    }
+    for key in IDENTIFICATION_CLEAR_KEYS:
+        if key in overrides:
+            continue
+        if key in MSP_ANNOTATOR_SETTINGS_KEYS:
+            # 空の行でも Console は先に読むので、行があれば値を問わず設定表へ向ける。
+            if key.lower() in method_keys:
+                overrides[key] = annotator_table_path
+        elif (method_keys.get(key.lower()) or "").strip():
+            overrides[key] = ""
+    removed = [key for key in (LBM_KEY, MSP_KEY, *IDENTIFICATION_CLEAR_KEYS)
+               if (declared := (method_keys.get(key.lower()) or "").strip())
+               and declared != overrides[key]]
+    return overrides, removed
+
+
+#: Console 45a531c4d の `ReadMspAnnotatorSettingsTable` が読む列（見出しは正規化され、
+#: パスの列は `msp_file_path`、ほかに `annotator_id`・`priority`）。
+_MSP_ANNOTATOR_TABLE_HEADER = ("annotator_id", "msp_file_path", "priority")
+
+
+def write_msp_annotator_table(path: Path, msp_path: str, *, priority: int = 2,
+                              annotator_id: str = "LabMsp") -> None:
+    """MSP の注釈器の設定表（TSV・1 行）を `path` に書く（library_mode="msp_then_lbm"）。
+
+    Console は設定表を ASCII で読むので ASCII / LF で書く（ASCII にできない値は
+    `UnicodeEncodeError`）。`msp_path` は絶対パスで渡す（相対だと設定表の親基準で解かれる）。
+    """
+    rows = ["\t".join(_MSP_ANNOTATOR_TABLE_HEADER),
+            "\t".join((annotator_id, msp_path, str(priority)))]
+    data = ("\n".join(rows) + "\n").encode("ascii")
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
 
 
 def scan_dir_for_method_files(directory: Path, origin: str) -> list[MethodCandidate]:
