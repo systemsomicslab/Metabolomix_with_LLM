@@ -191,21 +191,29 @@ def rule_hash(normalized: dict) -> str:
 
 
 def _selection(match: dict, verdicts: dict[str, str | None] | None) -> dict:
-    """目標照合の判定と段ごとの件数（`counts`）。
+    """目標照合の判定と段ごとの件数（`counts`）。割れの組は 1 つの候補（`match_target` の
+    `merged_from`。`selected_feature_id` は残す ID、`merged_from` にその群）。
 
     `counts.qualified` は**規則で qualified になった特徴（質量・RT・注釈）のうち、MS/MS の合否が
     `qualified` の数**（`verdicts` は特徴 ID → `msms.qualify.verdict`。MS/MS を頼んでいない・
-    ライブラリが無いときは None で、数も None）。`dataset_feature_search` の `counts.qualified`
-    （規則で qualified の数）の意味の数は `msms_available` に置く。
+    ライブラリが無いときは None で、数も None。割れの組はどちらかのスポットが `qualified` なら 1）。
+    `counts.msms_available` は**旧 `qualified` の意味の数**——規則（質量の窓・RT の窓・注釈）で
+    qualified になった特徴の数で、MS/MS があるかどうかの数ではない（名前は計画のとおり。
+    `dataset_feature_search` の `counts.qualified` と同じ数）。
     """
     out = {k: match[k] for k in ("status", "reason", "selected_feature_id", "selected_adduct",
-                                 "selected_evidence", "adduct_tier_used")}
+                                 "selected_evidence", "adduct_tier_used", "merged_from")}
     counts = match["counts"]
-    passed = {row["feature_id"] for row in match["candidates"] if row["qualified"]}
+    units: dict[str, set[str]] = {}
+    for row in match["candidates"]:
+        if row["qualified"]:
+            unit = (row.get("merged_from") or [row["feature_id"]])[0]
+            units.setdefault(unit, set()).add(row["feature_id"])
     out["counts"] = {
         "mass": counts["mass"], "rt": counts["rt"],
         "qualified": (None if verdicts is None
-                      else sum(verdicts.get(fid) == "qualified" for fid in passed)),
+                      else sum(any(verdicts.get(fid) == "qualified" for fid in spots)
+                               for spots in units.values())),
         "msms_available": counts["qualified"],
         "by_evidence": dict(counts["by_evidence"]),
     }
@@ -266,18 +274,21 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
     """証拠の束（claim-evidence.v1）を作る。`spot_query` は `library.tools.spot_msms_query`。
 
     候補ごとの `split` は割れたアライメントスポットの相手（`alignment_qc.find_split_pairs` を
-    既定の閾値で回した結果。`dataset_alignment_qc` の既定と同じ）。
+    既定の閾値で回した結果。`dataset_alignment_qc` の既定と同じ）。その `merge_groups` の組は
+    既定の特徴と走査の判定で 1 つの候補として数える（候補の一覧はスポットごとのまま）。
     """
     from metabolomix.analysis import alignment_qc
     from metabolomix.analysis.result_state import dataset_fingerprint
 
     dataset_hash = dataset_fingerprint(ds)
-    partners = alignment_qc.split_partners(
-        alignment_qc.find_split_pairs(ds, dataset_hash=dataset_hash))
+    qc = alignment_qc.find_split_pairs(ds, dataset_hash=dataset_hash)
+    partners = alignment_qc.split_partners(qc)
+    # 判定（既定の特徴・走査）でも割れの組は 1 つの候補（dataset_feature_search の merge_split と同じ）
+    merged_map = feature_search.merge_map(alignment_qc.usable_merge_groups(qc, ds.feature_ids)[0])
     mz_array = feature_search._feature_mz_array(ds)
     unlimited = len(ds.feature_ids) * 16 + 1
     default = feature_search.match_target(ds, normalized["target"], max_results=unlimited,
-                                          mz_array=mz_array)
+                                          mz_array=mz_array, merged_from=merged_map)
     seen: dict[str, dict] = {}
 
     def _collect(match, scan_label):
@@ -301,7 +312,7 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
             target = feature_search.normalize_targets([variant],
                                                       dataset_polarity=dataset_polarity)[0]
             match = feature_search.match_target(ds, target, max_results=unlimited,
-                                                mz_array=mz_array)
+                                                mz_array=mz_array, merged_from=merged_map)
             label = f"ppm={ppm:g},rt_tol_min={rt_tol:g}"
             _collect(match, label)
             scan_matches.append((ppm, rt_tol, match))

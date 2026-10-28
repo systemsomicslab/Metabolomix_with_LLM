@@ -44,6 +44,7 @@ __all__ = [
     "classify_identity",
     "feature_stats",
     "match_target",
+    "merge_map",
     "merge_plan",
     "merged_dataset",
     "merged_feature_stats",
@@ -503,7 +504,8 @@ def _feature_mz_array(ds) -> np.ndarray:
 
 
 def match_target(ds, target: dict, *, max_results: int,
-                 mz_array: np.ndarray | None = None) -> dict:
+                 mz_array: np.ndarray | None = None,
+                 merged_from: dict[str, list[str]] | None = None) -> dict:
     """正規化済みの目標 1 件をデータセットの特徴と照合し、判定と候補の全件を返す（spec §5）。
 
     候補の単位は（特徴, 付加体）。全層のどれかの付加体の質量窓に入った特徴を、RT で落ちた
@@ -525,7 +527,17 @@ def match_target(ds, target: dict, *, max_results: int,
     ``ppm`` は符号つき（観測 − 理論）、``delta_rt`` は RT − rt_min。数値は丸めない
     （丸めはツール層の仕事）。``sme_rank`` は ``sme_match`` の行で一致した候補の rank だが、
     その候補が rank を持たなければ ``sme_match`` でも None になりうる。
+
+    ``merged_from``（`merge_map` の ``{残す ID: 群}``）を渡すと、割れたスポットの組を**1 つの候補**
+    として数える（spec 2026-10-28 §4.3 (c)・コントローラの決定 2026-10-29）: 行は従来どおり
+    スポットごとに作り（``merged_from`` 欄に群）、判定と ``counts`` は残す ID（群の中で最も小さい
+    ID）に読み替えて一意化する。組の 2 スポットが同じ箱にあっても 1 つと数え、``resolved`` なら
+    ``selected_feature_id`` は残す ID、``merged_from`` にその群（まとめないときは None）。
+    ``merged_from`` を渡さない（None）ときは戻り値も行も従来と同じ形（``merged_from`` 欄を足さない）。
     """
+    collapse = merged_from is not None
+    merged_from = merged_from or {}
+    kept_of = {fid: kept for kept, group in merged_from.items() for fid in group}
     out = {
         "target_id": target["target_id"],
         "status": None,
@@ -539,6 +551,8 @@ def match_target(ds, target: dict, *, max_results: int,
         "candidates": [],
         "truncated": 0,
     }
+    if collapse:
+        out["merged_from"] = None
     if not target.get("applicable", True):
         out.update(status="not_applicable", reason="polarity_mismatch")
         return out
@@ -604,15 +618,21 @@ def match_target(ds, target: dict, *, max_results: int,
                     "qualified": qualified,
                     "reasons": reasons,
                 })
+                if collapse:
+                    rows[-1]["merged_from"] = merged_from.get(kept_of.get(fid))
+
+    def unit(fid):
+        # 判定と数の単位（割れの組は残す ID で 1 つ）
+        return kept_of.get(fid, fid)
 
     qualified_rows = [row for row in rows if row["qualified"]]
     counts = out["counts"]
-    counts["mass"] = len({row["feature_id"] for row in rows})
-    counts["rt"] = sum(1 for ok in rt_ok_of.values() if ok)
-    counts["qualified"] = len({row["feature_id"] for row in qualified_rows})
+    counts["mass"] = len({unit(row["feature_id"]) for row in rows})
+    counts["rt"] = len({unit(fid) for fid, ok in rt_ok_of.items() if ok})
+    counts["qualified"] = len({unit(row["feature_id"]) for row in qualified_rows})
     for level in EVIDENCE_LEVELS:
         counts["by_evidence"][level] = len(
-            {row["feature_id"] for row in qualified_rows if row["evidence"] == level})
+            {unit(row["feature_id"]) for row in qualified_rows if row["evidence"] == level})
 
     if not qualified_rows:
         out.update(status="needs_input", reason="no_qualified_candidate")
@@ -623,11 +643,13 @@ def match_target(ds, target: dict, *, max_results: int,
                           if any(row["evidence"] == level for row in in_tier))
         # 行は層の中で付加体を並べた順に作ってあるので、bucket の順は層の順を保つ
         bucket = [row for row in in_tier if row["evidence"] == level_used]
-        winners = list(dict.fromkeys(row["feature_id"] for row in bucket))
+        winners = list(dict.fromkeys(unit(row["feature_id"]) for row in bucket))
         out["adduct_tier_used"] = tier_used
         if len(winners) == 1:
             out.update(status="resolved", selected_feature_id=winners[0],
                        selected_adduct=bucket[0]["adduct"], selected_evidence=level_used)
+            if collapse:
+                out["merged_from"] = merged_from.get(winners[0])
         else:
             out.update(status="needs_input", reason="multiple_qualified_candidates",
                        selected_evidence=level_used)
@@ -1018,23 +1040,29 @@ def retest_merged(ds, view, result: dict) -> dict:
     return {**result, "results": differential.add_fdr(rows)}
 
 
+def merge_map(groups) -> dict[str, list[str]]:
+    """割れの群 → ``{残す ID: 群}``（残す ID は群の中で最も小さい ID。`merge_matrix_columns` と同じ）。"""
+    from metabolomix.analysis import alignment_qc
+
+    ordered = [alignment_qc._id_order(group) for group in groups]
+    return {group[0]: group for group in ordered if len(group) >= 2}
+
+
 def merged_results(ds, results: list[dict], groups, feature_ids) -> dict:
-    """``feature_ids`` が割れの群に入るときだけ、まとめた行列で ``results`` を検定し直す。
+    """まとめる群が 1 つでもあれば、まとめた行列で ``results`` を全特徴について検定し直す。
 
     戻り値 ``{"view", "merged_from", "touched", "results"}``。``merged_from`` は全群（残す ID →
-    群）、``touched`` はそのうち ``feature_ids`` のどれか（消える側の ID を含む）を含む群、
-    ``results`` は result_id → やり直した結果（``touched`` が空なら空で、検定はやり直さない）。
-    まとめは全群に当てる（BH の母集団は「まとめた後の全特徴」）。群が無ければ ``view`` は ``ds``。
+    群）、``touched`` はそのうち ``feature_ids`` のどれか（消える側の ID を含む）を含む群（報告用）、
+    ``results`` は result_id → やり直した結果。まとめは全群に当て、BH の母集団は「まとめた後の
+    全特徴」——1 つの表の q はすべてこの母集団から出す（まとめた行と従来の行を混ぜない。
+    コントローラの決定 2026-10-29）。群が無ければ検定はやり直さず、``view`` は ``ds``。
     """
     if not groups:
         return {"view": ds, "merged_from": {}, "touched": {}, "results": {}}
     view, merged_from = merged_dataset(ds, groups)
     wanted = {str(f) for f in feature_ids}
     touched = {kept: group for kept, group in merged_from.items() if wanted.intersection(group)}
-    redone = {}
-    if touched:
-        for result in results:
-            redone[_result_id(result)] = retest_merged(ds, view, result)
+    redone = {_result_id(result): retest_merged(ds, view, result) for result in results}
     return {"view": view, "merged_from": merged_from, "touched": touched, "results": redone}
 
 
@@ -1043,27 +1071,25 @@ def merged_feature_stats(ds, feature_ids: list[str], results: list[dict], *, gro
     """`feature_stats` の割れのまとめ版。
 
     戻り値 ``{"stats", "stats_unmerged", "touched", "renamed", "results", "view"}``。
-    ``stats_unmerged`` は従来の ``feature_stats(ds, feature_ids, results)`` そのもの。``stats`` は
-    まとめて消える特徴 ID を残す ID（群の中で最も小さい ID）に置き換え（重複は 1 つ）、割れの群に
-    入る特徴の行だけを、まとめた行列で検定し直した値（`merged_results`）に差し替える。割れの群に
-    入らない特徴の行は従来の値のまま（その q は従来の BH の母集団）。各行の ``merged_from`` は
-    群（残す ID が先頭）か None。``renamed`` は置き換えた ID（消える ID → 残す ID）。
+    ``stats_unmerged`` は従来の ``feature_stats(ds, feature_ids, results)`` そのもの。まとめる群が
+    1 つでもあれば、``stats`` は**すべての行**をまとめた行列で検定し直した値（`merged_results`。
+    q はまとめた後の全特徴の BH）から出し、まとめて消える特徴 ID は残す ID（群の中で最も小さい
+    ID）に置き換える（重複は 1 つ）。群が無ければ ``stats`` は従来の値と同じ。各行の
+    ``merged_from`` は群（残す ID が先頭）か None。``renamed`` は置き換えた ID（消える ID → 残す ID）。
     """
     unmerged = feature_stats(ds, feature_ids, results, with_labels=with_labels)
     merged = merged_results(ds, results, groups, feature_ids)
-    rename = {fid: kept for kept, group in merged["merged_from"].items()
-              for fid in group if fid != kept}
+    merged_from = merged["merged_from"]
+    rename = {fid: kept for kept, group in merged_from.items() for fid in group if fid != kept}
     folded = list(dict.fromkeys(rename.get(fid, fid) for fid in feature_ids))
-    stats = feature_stats(ds, folded, results, with_labels=with_labels)
-    touched = merged["touched"]
-    if touched:
-        redone = feature_stats(merged["view"], [fid for fid in folded if fid in touched],
-                               [merged["results"][_result_id(r)] for r in results],
-                               with_labels=with_labels)
-        index = {(row["feature_id"], row["result_id"]): row for row in redone}
-        stats = [index.get((row["feature_id"], row["result_id"]), row) for row in stats]
+    if merged["results"]:
+        stats = feature_stats(merged["view"], folded,
+                              [merged["results"][_result_id(r)] for r in results],
+                              with_labels=with_labels)
+    else:
+        stats = feature_stats(ds, folded, results, with_labels=with_labels)
     for row in stats:
-        row["merged_from"] = touched.get(row["feature_id"])
-    return {"stats": stats, "stats_unmerged": unmerged, "touched": touched,
+        row["merged_from"] = merged_from.get(row["feature_id"])
+    return {"stats": stats, "stats_unmerged": unmerged, "touched": merged["touched"],
             "renamed": {fid: rename[fid] for fid in feature_ids if fid in rename},
             "results": merged["results"], "view": merged["view"]}

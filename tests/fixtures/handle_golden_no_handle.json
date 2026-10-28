@@ -75,7 +75,7 @@
   }
  },
  "search_targets": {
-  "candidates": "target_id\tfeature_id\tadduct\tadduct_tier\ttheoretical_mz\tmz\tppm\trt\tdelta_rt\tevidence\tsme_rank\tannotated_name\tannotated_inchikey\tqualified\treasons\nt1\t1\t[M]+\t1\t104.107\t104.107\t0.0\t1.2\t0.0\tsme_match\t1\tCholine\tOEYIOHPDSNJKLS-UHFFFAOYSA-N\ttrue\t",
+  "candidates": "target_id\tfeature_id\tadduct\tadduct_tier\ttheoretical_mz\tmz\tppm\trt\tdelta_rt\tevidence\tsme_rank\tannotated_name\tannotated_inchikey\tqualified\treasons\tmerged_from\nt1\t1\t[M]+\t1\t104.107\t104.107\t0.0\t1.2\t0.0\tsme_match\t1\tCholine\tOEYIOHPDSNJKLS-UHFFFAOYSA-N\ttrue\t\t",
   "merge_split": {
    "alignment_qc_sha256": null,
    "bh_population": {},
@@ -157,6 +157,7 @@
      "qualified": 1,
      "rt": 1
     },
+    "merged_from": null,
     "reason": null,
     "selected_adduct": "[M]+",
     "selected_evidence": "sme_match",

@@ -111,11 +111,13 @@ MCP も import しない。ツール層の仕事は、極性の出所を決め�
 33.    ├─ metabolomix/curation/apply.py  arf2_for_mztab()
 34.    └─ metabolomix/curation/apply.py  flags_for_arf2()
 
-`merge_split`（既定 true）は、統計を付ける特徴が割れの組（`alignment_qc` の `merge_groups`）に入るときだけ、
-その組を試料ごとの大きい方の値で 1 列にまとめた行列（前処理の**前**の生の値・検出状態は OR）に、差次的結果を
+`merge_split`（既定 true）は、割れの組（`alignment_qc` の `merge_groups`）がデータセットに 1 つでもあれば、
+組を試料ごとの大きい方の値で 1 列にまとめた行列（前処理の**前**の生の値・検出状態は OR）に、差次的結果を
 計算したレシピ（pipeline の run から引き継いだ結果は来歴の `handoff.preprocess`、session の結果は親の前処理の
-`effective_parameters`）を当て直し、同じ 2 群検定と**まとめた後の全特徴**での BH をやり直す。組に入らない特徴の
-行は従来の値のまま。まとめる組が 1 つも無いか、どの特徴も組に入らなければ検定はやり直さない。
+`effective_parameters`）を当て直し、同じ 2 群検定と**まとめた後の全特徴**での BH をやり直して、`stats` の
+**すべての行**をそこから出す（1 つの表に 2 つの BH の母集団を混ぜない）。組が無ければ検定はやり直さない。
+目標照合では `merge_plan` を照合の前に作り、`match_target(merged_from=merge_map(...))` が組を 1 つの候補
+（残す ID）として数える。
 
 `rule_hash` は正規化後の目標（既定値を埋め、付加体の層を解決したもの）から作り、統計の出所は
 混ぜない。覆うのは照合を左右する欄（`target_id`・InChIKey 先頭ブロック・分子式か expected_mz・

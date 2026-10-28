@@ -962,12 +962,16 @@ def test_retest_with_a_group_tests_the_merged_column_over_all_features():
     assert out["touched"] == {"3": ["3", "4"]} and out["renamed"] == {}
     rows = {row["feature_id"]: row for row in out["stats"]}
     assert rows["3"]["merged_from"] == ["3", "4"] and rows["5"]["merged_from"] is None
-    # 割れの無い 5 は従来の値・3 はまとめた行列（11 特徴）で検定し直した値
+    # 割れの無い 5 も含め、すべての行はまとめた行列（11 特徴）での検定と BH の値（1 つの母集団）
     unmerged = {row["feature_id"]: row for row in out["stats_unmerged"]}
-    assert rows["5"]["q"] == unmerged["5"]["q"]
-    assert rows["3"]["q"] != unmerged["3"]["q"]
     redone = out["results"][result["provenance"]["result_id"]]
     assert len(redone["results"]) == 11 and "4" not in {r["feature"] for r in redone["results"]}
+    fresh = {r["feature"]: r for r in redone["results"]}
+    for fid in ("3", "5"):
+        assert rows[fid]["q"] == fresh[fid]["q"] and rows[fid]["p"] == fresh[fid]["p"]
+    # 5 の列は割れていないが、正規化（median）と BH（11 特徴）はまとめた行列で回り直す
+    assert rows["5"]["q"] != unmerged["5"]["q"]
+    assert rows["3"]["q"] != unmerged["3"]["q"]
     # ds は変えない
     assert len(ds.feature_ids) == 12 and ds.feature_matrix.shape == (12, 8)
 
@@ -982,3 +986,29 @@ def test_retest_without_a_known_recipe_refuses():
     with pytest.raises(DomainError) as excinfo:
         retest_merged(ds, view, handed)
     assert excinfo.value.code == "FEATURE_MERGE_UNAVAILABLE"
+
+
+def test_match_target_counts_a_merged_pair_as_one_candidate():
+    """組の 2 スポットが同じ箱にあれば残す ID で resolved、無関係の 2 スポットは needs_input のまま。"""
+    from metabolomix.analysis.feature_search import merge_map
+
+    ds = _dataset({
+        "401": {"mz": _shift(MH, 1), "rt": 1.20},
+        "403": {"mz": _shift(MH, 2), "rt": 1.30},
+    })
+    target = _target(rt_min=1.25)
+    plain = match_target(ds, target, max_results=20)
+    assert plain["status"] == "needs_input"
+    assert plain["reason"] == "multiple_qualified_candidates" and "merged_from" not in plain
+
+    merged = match_target(ds, target, max_results=20, merged_from=merge_map([["403", "401"]]))
+    assert merged["status"] == "resolved" and merged["selected_feature_id"] == "401"
+    assert merged["merged_from"] == ["401", "403"]
+    assert merged["counts"]["qualified"] == 1 and merged["counts"]["mass"] == 1
+    # 行はスポットごとのまま（どちらにも群が付く）
+    assert {r["feature_id"]: r["merged_from"] for r in merged["candidates"]} == {
+        "401": ["401", "403"], "403": ["401", "403"]}
+
+    # 別の組の群を渡しても、この 2 スポットは 1 つにならない
+    other = match_target(ds, target, max_results=20, merged_from=merge_map([["7", "8"]]))
+    assert other["status"] == "needs_input"

@@ -284,7 +284,7 @@ spec:
 
 | 欄 | 意味 |
 |---|---|
-| `default_selection` | `target` をそのまま当てた目標照合（`dataset_feature_search` と同じ規則）。`status` が `resolved` なら `selected_feature_id` が規則で選んだ既定の特徴、決まらなければ `needs_input`（`reason`）。`counts` は下の表 |
+| `default_selection` | `target` をそのまま当てた目標照合（`dataset_feature_search` と同じ規則）。`status` が `resolved` なら `selected_feature_id` が規則で選んだ既定の特徴、決まらなければ `needs_input`（`reason`）。割れたスポットの組（§9 の `merge_groups`）は 1 つの候補として数え、`selected_feature_id` は残す小さい ID、`merged_from` にその組（それ以外は null。走査も同じ）。`counts` は下の表（組は 1 つと数える。MS/MS の合否はどちらかのスポットが `qualified` なら 1） |
 | `scans` | 走査ごとの判定（`counts` は `default_selection` と同じ意味）と、候補の特徴 ID |
 | `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか）・`split`（下）・`msms`（spot_id = SMF_ID の照合の上位 `top` と `qualify`。ライブラリが無ければ `{"status": "no_library"}`、MS/MS が無い・索引の崩れはその `status`）・`relations` |
 | `truncated` | `max_candidates` で打ち切った候補の数 |
@@ -297,7 +297,7 @@ spec:
 |---|---|
 | `mass` / `rt` / `by_evidence` | `dataset_feature_search` の `counts` と同じ（質量の窓・RT の窓に入った数、水準ごとの規則の qualified 数） |
 | `qualified` | 規則（質量・RT・注釈）で qualified になった特徴のうち、**MS/MS の合否 `msms.qualify.verdict` が `qualified`** の数。`msms` を頼んでいない・ライブラリが無いときは `null`（0 ではない）。`max_candidates` で打ち切った候補は数えない |
-| `msms_available` | 規則で qualified になった特徴の数（`dataset_feature_search` の `counts.qualified`、v7 までの束の `counts.qualified` と同じ数） |
+| `msms_available` | **旧 `qualified` の意味の数**: 規則（質量の窓・RT の窓・注釈）で qualified になった特徴の数（`dataset_feature_search` の `counts.qualified`、v7 までの束の `counts.qualified` と同じ数）。**MS/MS が取れているかどうかの数ではない**（名前は計画のまま） |
 
 `split`（候補が割れたアライメントスポットの組に入るときだけ。入らなければ `null`。§9 の
 `find_split_pairs` を既定の閾値で回し、`split_partners` を写す）:
@@ -339,8 +339,8 @@ log2fc_test_over_ref p q direction merged_from`（JSON には `sme_feature_id` �
 
 **割れたスポットは 1 候補に数える**（spec 2026-10-28 §4.3 (c)）。§9 の `merge_groups` の 2 スポットは
 1 つの物質で、`feature_id` は残す小さい ID、`merged_from` は 2 つの ID。統計はまとめた行列で検定し直した
-値（`statistics.result_id` では `dataset_feature_search` の `merge_split` と同じ実装で、組に入る特徴だけを
-差し替える。analysis_spec では spec の `features.merge_split`）。**同定と質量誤差**（`name` `inchikey`
+値（`statistics.result_id` では `dataset_feature_search` の `merge_split` と同じ実装で、組が 1 つでもあれば
+すべての特徴の統計をまとめた行列の検定・BH から出す。analysis_spec では spec の `features.merge_split`）。**同定と質量誤差**（`name` `inchikey`
 `adduct` `mz` `ppm` `rt`）は SME（rank 1）を持つ方のスポットから取り、その ID を `sme_feature_id` に書く
 （両方にあれば残す ID）。`exclude.feature_ids` は組のどちらかの ID に当たれば組ごと外す。
 `statistics.result_id` の spec は `{"result_id", "merge_split": true（既定）, "alignment_qc": <JSON のパス、任意>}`

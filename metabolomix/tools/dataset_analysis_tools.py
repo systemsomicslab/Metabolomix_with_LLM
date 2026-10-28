@@ -627,6 +627,8 @@ def _target_summary(match: dict) -> dict:
     keys = ("target_id", "status", "reason", "selected_feature_id", "selected_adduct",
             "selected_evidence", "adduct_tier_used", "counts", "truncated")
     out = {key: match[key] for key in keys}
+    if "merged_from" in match:
+        out["merged_from"] = match["merged_from"]           # merge_split=true のときだけ
     out["theoretical_mz"] = {adduct: _round(mz, 4)
                              for adduct, mz in match["theoretical_mz"].items()}
     return out
@@ -707,7 +709,9 @@ def dataset_feature_search(
         （`dataset_alignment_qc` の `merge_groups`。互いに最も近い mergeable な 2 スポット）を
         試料ごとの大きい方の値で 1 列にまとめた行列で、差次的結果と同じ前処理のレシピ・同じ検定
         （log 変換の Welch 等）・**まとめた後の全特徴**での BH をやり直した値を `stats` に出す。
-        やり直すのは統計を付ける特徴が割れの組に入るときだけで、組に入らない特徴の行は従来の値。
+        まとめる組がデータセットに 1 つでもあれば**すべての行**をやり直した値にする（1 つの表の q は
+        1 つの BH の母集団から）。組が無ければやり直さず従来の値。目標照合でも組の 2 スポットを
+        1 つの候補（残す ID。`targets[].merged_from`・`candidates` の末尾の `merged_from`）と数える。
         `stats` の末尾に `merged_from`（まとめた 2 つの ID を `;` で。残すのは小さい ID で、消える
         側の ID を頼んでも残す ID の行に解く）、`stats_unmerged` にまとめる前の従来の `stats`
         （同じ列・頼んだ ID のまま）、`merge_split` に出所・まとめた組・やり直した結果と BH の
@@ -752,6 +756,10 @@ def dataset_feature_search(
 
     notes: list[str] = []
     payload: dict = {}
+    # データの指紋（行列全体の hash）は 1 回だけ計算し、割れの照合・引き継いだ結果の照合・
+    # stats_source のすべてで使う。
+    dataset_hash = dataset_fingerprint(ds)
+    plan = None
     try:
         if targets is None:
             rows, truncated = feature_search.search_window(
@@ -773,8 +781,14 @@ def dataset_feature_search(
             normalized = feature_search.normalize_targets(targets, dataset_polarity=polarity)
             # 特徴の m/z 配列は 1 回だけ作り、全目標で使い回す
             mz_array = feature_search._feature_mz_array(ds)
+            merged_map = None
+            if merge_split:
+                # 割れたスポットの組は判定でも 1 つの候補（残す ID）として数える
+                plan = feature_search.merge_plan(ds, alignment_qc_path=alignment_qc_path,
+                                                 dataset_hash=dataset_hash)
+                merged_map = feature_search.merge_map(plan["groups"])
             matches = [feature_search.match_target(ds, target, max_results=max_results,
-                                                   mz_array=mz_array)
+                                                   mz_array=mz_array, merged_from=merged_map)
                        for target in normalized]
             cut = [f"{m['target_id']}: {m['truncated']} 件" for m in matches if m["truncated"]]
             if cut:
@@ -782,15 +796,19 @@ def dataset_feature_search(
                              f"（{', '.join(cut)}）。")
             candidates = [row for m in matches for row in m["candidates"]]
             payload["targets"] = [_target_summary(m) for m in matches]
-            payload["candidates"] = _table(candidates, feature_search.CANDIDATE_COLUMNS,
-                                           digits=_CANDIDATE_DIGITS)
+            if merge_split:
+                shown = [{**row, "merged_from": ";".join(row["merged_from"] or []) or None}
+                         for row in candidates]
+                payload["candidates"] = _table(
+                    shown, feature_search.CANDIDATE_COLUMNS + ("merged_from",),
+                    digits=_CANDIDATE_DIGITS)
+            else:
+                payload["candidates"] = _table(candidates, feature_search.CANDIDATE_COLUMNS,
+                                               digits=_CANDIDATE_DIGITS)
             stat_features = list(dict.fromkeys(row["feature_id"] for row in candidates))
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
 
-    # データの指紋（行列全体の hash）は 1 回だけ計算し、引き継いだ結果の照合と
-    # stats_source の両方で使う。
-    dataset_hash = dataset_fingerprint(ds)
     if result_ids is not None:
         chosen = feature_search.select_results(ds, list(dict.fromkeys(result_ids)),
                                                dataset_hash=dataset_hash)
@@ -818,12 +836,12 @@ def dataset_feature_search(
         stats = feature_search.feature_stats(ds, stat_features, results,
                                              with_labels=with_group_labels)
     else:
-        plan = {"source": None, "groups": [], "alignment_qc_sha256": None}
         try:
-            if results and stat_features:
-                # 統計を付けないなら割れを探さない（行列全体を掃くので）
+            if plan is None and results and stat_features:
+                # 窓検索で統計を付けないなら割れを探さない（行列全体を掃くので）
                 plan = feature_search.merge_plan(ds, alignment_qc_path=alignment_qc_path,
                                                  dataset_hash=dataset_hash)
+            plan = plan or {"source": None, "groups": [], "alignment_qc_sha256": None}
             merged = feature_search.merged_feature_stats(ds, stat_features, results,
                                                          groups=plan["groups"],
                                                          with_labels=with_group_labels)

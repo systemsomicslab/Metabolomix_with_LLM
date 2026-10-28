@@ -496,3 +496,26 @@ def test_novel_candidates_count_split_once(tmp_path):
     [saved] = json.loads(written.read_text(encoding="utf-8"))["rows"]
     assert saved["feature_id"] == "30" and saved["sme_feature_id"] == "31"
     assert saved["merged_from"] == ["30", "31"] and saved["name"] == "CE 18:2"
+
+
+def test_claim_evidence_default_selection_counts_a_merged_pair_once(tmp_path):
+    """組の 2 スポットが窓に入れば既定の特徴は残す ID。無関係な 2 スポットは needs_input のまま。"""
+    features = ({**SPLIT_FEATURES[0], "sme": []}, SPLIT_FEATURES[1], SPLIT_FEATURES[2],
+                {"id": "40", "mz": 500.0000, "rt": 8.00, "values": [100, 110, 90, 120, 105, 95, 100, 101],
+                 "sme": []},
+                {"id": "41", "mz": 500.0010, "rt": 8.20, "values": [98, 112, 91, 118, 104, 97, 99, 100],
+                 "sme": []})
+    handle = _split_handle(tmp_path, features)
+    claim = {"claim_id": "C9", "target": {"inchikey": CE_KEY, "expected_mz": 650.6,
+                                          "adduct": "[M+H]+", "rt_min": 20.3, "rt_tol_min": 0.5}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    selection = out["default_selection"]
+    assert selection["status"] == "resolved" and selection["selected_feature_id"] == "30"
+    assert selection["merged_from"] == ["30", "31"]
+    assert selection["counts"]["msms_available"] == 1
+    assert {c["feature_id"] for c in out["candidates"]} == {"30", "31"}   # 候補はスポットごと
+    unrelated = {"claim_id": "C10", "target": {"inchikey": CE_KEY, "expected_mz": 500.0,
+                                               "adduct": "[M+H]+", "rt_min": 8.1}}
+    other = json.loads(R.dataset_claim_evidence(unrelated, dataset_handle=handle))
+    assert other["default_selection"]["status"] == "needs_input"
+    assert other["default_selection"]["merged_from"] is None

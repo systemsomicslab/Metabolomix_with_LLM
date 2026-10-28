@@ -512,8 +512,9 @@ def dataset_mass_accuracy(band_edges: list[float] | None = None, rank: int = 1,
 def _novel_result_stats(ds, result: dict, source: dict) -> tuple[dict, dict]:
     """2 群比較の結果からの統計（特徴 ID → log2fc・p・q）と、割れのまとめの記録。
 
-    `merge_split` が真なら、割れの組に入る特徴（残す ID）だけを、まとめた行列で検定し直した
-    値に差し替える（`dataset_feature_search` の `merge_split` と同じ規則・同じ実装）。
+    `merge_split` が真でまとめる組が 1 つでもあれば、すべての特徴の統計をまとめた行列で検定し
+    直した値にする（q はまとめた後の全特徴の BH。`dataset_feature_search` の `merge_split` と
+    同じ規則・同じ実装）。組が無ければ結果の値のまま。
     """
     from metabolomix.analysis import feature_search
 
@@ -529,8 +530,7 @@ def _novel_result_stats(ds, result: dict, source: dict) -> tuple[dict, dict]:
                                          field="statistics.alignment_qc")
         merged = feature_search.merged_results(ds, [result], plan["groups"], ds.feature_ids)
         for redone in merged["results"].values():
-            fresh = _rows(redone)
-            stats_rows.update({kept: fresh[kept] for kept in merged["touched"] if kept in fresh})
+            stats_rows = _rows(redone)
         merge.update(source=plan["source"], groups=list(merged["touched"].values()))
     return stats_rows, merge
 
