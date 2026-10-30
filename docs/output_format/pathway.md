@@ -9,8 +9,14 @@
   サーバは版を返さないので、その run の `upstream_commit` / `package_version` は空（ローカルの
   `r/renv.lock` の版と同じとは限らない）。
 - 中間 mzTab-M に載るのは生体試料（role=sample）だけ。サブクラスが空・Unknown・Others の行と、
-  手動除外スポットは載らない（件数は `handoff`）。同名の行は平均強度最大の 1 行だけ残す
-  （`dropped_duplicate_names`）——sum がアダクト違いを二重計上しないため。
+  手動除外スポットは載らない（件数は `handoff`）。さらに**脂質でない行**も載らない:
+  Ontology が MS-DIAL の脂質クラス（`LbmClass`。`PC` `EtherPE` `Cer_NS` …。表は
+  `metabolomix/pathway/msdial_lipid_classes.py`）に無い行（`dropped_non_msdial_ontology`）と、
+  名前が脂質ショートハンドとして読めない行（`dropped_unparsable_name`。限定子 `no MS2:` 等は除いて読む）。
+  研究室 MSP だけで同定した run の Ontology は ClassyFire 系の名前（`Phosphatidylcholines` 等）で、
+  MS-DIAL の脂質クラスではないので、そのままでは**ほぼ全行が落ちる**（`PATHWAY_BAD_REQUEST`）。
+  パスウェイの投影は LBM でも同定した run（`msp_then_lbm`）で使う。
+  同名の行は平均強度最大の 1 行だけ残す（`dropped_duplicate_names`）——sum がアダクト違いを二重計上しないため。
 - arf はレシピ先頭の prop（`handoff.prop`）だけを使う。
 - 中間 mzTab-M に書く文字列（試料名・群名・脂質名・Ontology）の `#` は `_` に置き換わる
   （上流の `read.table` は `#` 以降をコメントとして捨てるため）。群名も置換後の形で返る。

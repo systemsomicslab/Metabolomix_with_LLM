@@ -58,9 +58,27 @@ def test_default_tiers_values_are_the_spec_ones():
     ]
     assert DEFAULT_ADDUCT_TIERS["negative"] == [
         ["[M-H]-"],
-        ["[M-H2O-H]-", "[M+Cl]-", "[M+FA-H]-", "[2M-H]-", "[M+Na-2H]-"],
+        ["[M-H2O-H]-", "[M+Cl]-", "[M+FA-H]-", "[M+CH3COO]-", "[2M-H]-", "[M+Na-2H]-"],
     ]
     assert MAX_TARGETS == 50
+
+
+def test_negative_tiers_include_acetate():
+    # 酢酸付加（MS-DIAL の mzTab は `[M+CH3COO]1-` と書く）は 2 層目。ギ酸は `[M+FA-H]-` が担う。
+    assert "[M+CH3COO]-" in DEFAULT_ADDUCT_TIERS["negative"][1]
+    assert "[M+CH3COO]-" not in DEFAULT_ADDUCT_TIERS["positive"][0] + DEFAULT_ADDUCT_TIERS["positive"][1]
+    flat = [a for tier in DEFAULT_ADDUCT_TIERS["negative"] for a in tier]
+    assert "[M+HCOO]-" not in flat   # [M+FA-H]- と同じ質量
+
+
+def test_acetate_adduct_mass():
+    neutral = 103.0633285365   # C4H9NO2
+    assert theoretical_mz("C4H9NO2", "[M+CH3COO]-") == pytest.approx(neutral + 59.013851, abs=1e-5)
+    # 酢酸 (C2H4O2) の付加 − H と同じ質量
+    assert theoretical_mz("C4H9NO2", "[M+CH3COO]-") == pytest.approx(
+        theoretical_mz("C4H9NO2", "[M+Hac-H]-"), abs=1e-9)
+    [t] = normalize_targets([_gaba()], dataset_polarity="negative")
+    assert t["theoretical_mz"]["[M+CH3COO]-"] == pytest.approx(neutral + 59.013851, abs=1e-5)
 
 
 def test_normalized_tiers_are_copies_of_defaults():

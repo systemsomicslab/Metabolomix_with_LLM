@@ -58,7 +58,9 @@ __all__ = [
     "theoretical_mz",
 ]
 
-# 付加体の層の既定（spec §4.1。手順書 v5 工程 7-1 の第 1 段と同じ集合）。
+# 付加体の層の既定（spec §4.1。手順書 v5 工程 7-1 の第 1 段と同じ集合に、陰イオンの酢酸付加
+# `[M+CH3COO]-` を足した。MS-DIAL の mzTab は `[M+CH3COO]1-` と書き、比較時に `1` を落とす）。
+# ギ酸付加は `[M+FA-H]-`（`[M+HCOO]-` と同じ質量なので別に持たない）。
 DEFAULT_ADDUCT_TIERS: dict[str, list[list[str]]] = {
     "positive": [
         ["[M+H]+", "[M]+"],
@@ -66,7 +68,7 @@ DEFAULT_ADDUCT_TIERS: dict[str, list[list[str]]] = {
     ],
     "negative": [
         ["[M-H]-"],
-        ["[M-H2O-H]-", "[M+Cl]-", "[M+FA-H]-", "[2M-H]-", "[M+Na-2H]-"],
+        ["[M-H2O-H]-", "[M+Cl]-", "[M+FA-H]-", "[M+CH3COO]-", "[2M-H]-", "[M+Na-2H]-"],
     ],
 }
 
