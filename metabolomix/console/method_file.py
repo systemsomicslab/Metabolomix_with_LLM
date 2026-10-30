@@ -548,7 +548,8 @@ def msp_then_lbm_overrides(method_keys: dict[str, str], annotator_table_path: st
     （LBM の RT は研究室の LC 条件のもので、公開データのカラムと合わない）。
     原本が宣言する MSP 設定表の別名は同じ設定表へ向ける——Console は別名を含めて最初の
     行を読むので、空にするとそちらが先に読まれて設定表が無いことになる。ほかの
-    `IDENTIFICATION_CLEAR_KEYS`（Text DB・Text の設定表）は空にする。
+    `IDENTIFICATION_CLEAR_KEYS`（Text DB・Text の設定表）は空にする。MSP と LBM の
+    dot product の足切りは平方根の側のキーで同じ値に揃える（`_square_root_cutoff_overrides`）。
 
     消した宣言: 原本が空でなく宣言していて、上の上書きで別の値に置き換わったキー
     （`Lbm file path`・`Msp file path`・`IDENTIFICATION_CLEAR_KEYS`）。現用ビルドが読まない
@@ -573,7 +574,42 @@ def msp_then_lbm_overrides(method_keys: dict[str, str], annotator_table_path: st
     removed = [key for key in (LBM_KEY, MSP_KEY, *IDENTIFICATION_CLEAR_KEYS)
                if (declared := (method_keys.get(key.lower()) or "").strip())
                and declared != overrides[key]]
+    overrides.update(_square_root_cutoff_overrides(method_keys))
     return overrides, removed
+
+
+#: dot product の足切りの種類と MS-DIAL の既定（平方根の側の値）。
+_DOT_PRODUCT_CUTOFFS: tuple[tuple[str, str], ...] = (
+    ("weighted", "0.6"), ("simple", "0.6"), ("reverse", "0.8"))
+
+
+def _square_root_cutoff_overrides(method_keys: dict[str, str]) -> dict[str, str]:
+    """MSP と LBM の dot product の足切りを、同じ値で平方根の側のキーに書く（v8）。
+
+    Console 45a531c4d の `ConfigParser` は `Weighted dot product cutoff for MSP-based
+    annotation` を**二乗の**足切り（`SquaredWeightedDotProductCutOff`）として読む——0.6 は
+    実効で 0.775。平方根の側（MS-DIAL の既定の尺度）は `Square root of ... cutoff for
+    MSP-based annotation`。LBM は足切りのキーが無ければ既定（平方根の側で 0.6 / 0.8）なので、
+    MSP だけが厳しくなり、同じ証拠の水準に並ばずに LBM が代表になっていた（2026-10-30 の試し）。
+
+    MSP の値は 平方根の側の宣言 → 二乗のキーの宣言（平方根の側の値と読む）→ 既定 の順。
+    LBM にも同じ値を書く。宣言された二乗のキーは空にする（空は `float.TryParse` に失敗して
+    読み飛ばされる。値を残すと、後の行が勝つ読み方で平方根の側を打ち消しうる）。
+    """
+    overrides: dict[str, str] = {}
+    for kind, default in _DOT_PRODUCT_CUTOFFS:
+        squared = {lib: f"{kind.capitalize()} dot product cutoff for {lib}-based annotation"
+                   for lib in ("MSP", "LBM")}
+        root = {lib: f"Square root of {kind} dot product cutoff for {lib}-based annotation"
+                for lib in ("MSP", "LBM")}
+        value = ((method_keys.get(root["MSP"].lower()) or "").strip()
+                 or (method_keys.get(squared["MSP"].lower()) or "").strip()
+                 or default)
+        for lib in ("MSP", "LBM"):
+            if squared[lib].lower() in method_keys:
+                overrides[squared[lib]] = ""
+            overrides[root[lib]] = value
+    return overrides
 
 
 #: Console 45a531c4d の `ReadMspAnnotatorSettingsTable` が読む列（見出しは正規化され、

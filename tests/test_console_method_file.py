@@ -870,8 +870,68 @@ def test_msp_then_lbm_overrides_set_the_table_and_the_lbm():
         _mf.LBM_KEY: "C:/lab/lab.lbm2",
         _LBM_RT_SCORING: "False",
         _LBM_RT_FILTERING: "False",
+        # 宣言が無ければ MS-DIAL の既定（平方根の側で 0.6 / 0.6 / 0.8）を MSP と LBM に明示する。
+        **_sqrt_cutoffs("MSP", "0.6", "0.6", "0.8"),
+        **_sqrt_cutoffs("LBM", "0.6", "0.6", "0.8"),
     }
     assert removed == []
+
+
+def _sqrt_cutoffs(library: str, weighted: str, simple: str, reverse: str) -> dict[str, str]:
+    return {f"Square root of {kind} dot product cutoff for {library}-based annotation": value
+            for kind, value in (("weighted", weighted), ("simple", simple), ("reverse", reverse))}
+
+
+def test_msp_then_lbm_reads_the_declared_msp_cutoffs_on_the_square_root_scale():
+    """Console は `Weighted dot product cutoff for MSP-based annotation` を二乗の足切りとして読む
+    （0.6 は実効で 0.775）。宣言した値を平方根の側のキーへ移し、二乗のキーは空にする（空は
+    Console の `float.TryParse` に失敗して読み飛ばされる）。LBM にも同じ値を書いて尺度をそろえる。"""
+    method_keys = {
+        "weighted dot product cutoff for msp-based annotation": "0.5",
+        "simple dot product cutoff for msp-based annotation": "0.55",
+        "reverse dot product cutoff for msp-based annotation": "0.7",
+        "weighted dot product cutoff for lbm-based annotation": "0.3",   # LBM の二乗のキーも空にする
+    }
+    overrides, removed = _mf.msp_then_lbm_overrides(method_keys, "C:/run/t.tsv", "C:/lab/lab.lbm2")
+    for library in ("MSP", "LBM"):
+        for kind in ("Weighted", "Simple", "Reverse"):
+            squared = f"{kind} dot product cutoff for {library}-based annotation"
+            if squared.lower() in method_keys:
+                assert overrides[squared] == ""
+            else:
+                assert squared not in overrides
+    assert {k: v for k, v in overrides.items() if k.startswith("Square root of")} == {
+        **_sqrt_cutoffs("MSP", "0.5", "0.55", "0.7"), **_sqrt_cutoffs("LBM", "0.5", "0.55", "0.7")}
+    assert removed == []
+
+
+def test_msp_then_lbm_keeps_a_declared_square_root_cutoff():
+    """平方根の側のキーが宣言されていれば、それが MSP の値（二乗のキーより優先）。"""
+    method_keys = {
+        "weighted dot product cutoff for msp-based annotation": "0.5",
+        "square root of weighted dot product cutoff for msp-based annotation": "0.65",
+    }
+    overrides, _ = _mf.msp_then_lbm_overrides(method_keys, "C:/run/t.tsv", "C:/lab/lab.lbm2")
+    assert overrides["Square root of weighted dot product cutoff for MSP-based annotation"] == "0.65"
+    assert overrides["Square root of weighted dot product cutoff for LBM-based annotation"] == "0.65"
+
+
+def test_msp_then_lbm_cutoffs_survive_the_effective_method_file(tmp_path):
+    """書き出した実効メソッドで、二乗のキーの行は空、平方根の側のキーが後ろに足される。"""
+    src = tmp_path / "params.txt"
+    src.write_text("Ion mode: Positive\n"
+                   "Weighted dot product cutoff for MSP-based annotation: 0.6\n"
+                   "Simple dot product cutoff for MSP-based annotation: 0.6\n"
+                   "Reverse dot product cutoff for MSP-based annotation: 0.8\n", encoding="ascii")
+    overrides, _ = _mf.msp_then_lbm_overrides(
+        _mf.read_method_keys(src), "C:/run/t.tsv", "C:/lab/lab.lbm2")
+    lines = _mf.write_effective_method_file(src, tmp_path / "out" / "e.txt", overrides) \
+        .read_text(encoding="ascii").splitlines()
+    assert lines[1:4] == ["Weighted dot product cutoff for MSP-based annotation: ",
+                          "Simple dot product cutoff for MSP-based annotation: ",
+                          "Reverse dot product cutoff for MSP-based annotation: "]
+    assert "Square root of reverse dot product cutoff for MSP-based annotation: 0.8" in lines
+    assert "Square root of reverse dot product cutoff for LBM-based annotation: 0.8" in lines
 
 
 def test_msp_then_lbm_overrides_clear_text_libraries_and_redirect_msp_table_aliases():
