@@ -208,7 +208,8 @@ def _selection(match: dict, verdicts: dict[str, str | None] | None) -> dict:
 
     `counts.qualified` は**規則で qualified になった特徴（質量・RT・注釈）のうち、MS/MS の合否が
     `qualified` の数**（`verdicts` は特徴 ID → `msms.qualify.verdict`。MS/MS を頼んでいない・
-    ライブラリが無いときは None で、数も None。割れの組はどちらかのスポットが `qualified` なら 1）。
+    ライブラリが無いときは None で、数も None。割れの組はどちらかのスポット——窓の外の
+    `merge_partner` も含む——が `qualified` なら 1）。
     `counts.msms_available` は**旧 `qualified` の意味の数**——規則（質量の窓・RT の窓・注釈）で
     qualified になった特徴の数で、MS/MS があるかどうかの数ではない（名前は計画のとおり。
     `dataset_feature_search` の `counts.qualified` と同じ数）。
@@ -221,8 +222,9 @@ def _selection(match: dict, verdicts: dict[str, str | None] | None) -> dict:
     units: dict[str, set[str]] = {}
     for row in match["candidates"]:
         if row["qualified"]:
-            unit = (row.get("merged_from") or [row["feature_id"]])[0]
-            units.setdefault(unit, set()).add(row["feature_id"])
+            # 割れの組は群の両スポット（窓の外の merge_partner も含む）を見る
+            spots = row.get("merged_from") or [row["feature_id"]]
+            units.setdefault(spots[0], set()).update(spots)
     out["counts"] = {
         "mass": counts["mass"], "rt": counts["rt"],
         "qualified": (None if verdicts is None

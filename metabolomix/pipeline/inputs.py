@@ -662,6 +662,7 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
     # 既存 lipidomics 実行を止めない（REFERENCE_KEYS を広げない方針と同じ）。
     overrides = method_file_mod.relative_path_overrides(method_keys, method_path)
     removed_declarations: list[str] = []
+    dot_product_cutoffs: dict | None = None
     if library_mode == "msp_only":
         msp_overrides, removed_declarations = method_file_mod.msp_only_overrides(
             method_keys, msp_info["path"])
@@ -672,6 +673,9 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
         library_overrides, removed_declarations = method_file_mod.msp_then_lbm_overrides(
             method_keys, _MSP_ANNOTATOR_TABLE_RELATIVE, lbm_info["path"])
         overrides.update(library_overrides)
+        # 受領に出す、実際に効く足切り（二乗のキーの宣言を読み替えたことが見えるように）。
+        # 計画の指紋には入れない。
+        dot_product_cutoffs = method_file_mod.resolved_dot_product_cutoffs(method_keys)
     elif lbm_info["path"] and (lbm_info["source"] != "method_file"
                                or method_file_mod.LBM_KEY in overrides):
         # 相対宣言なら resolve_lbm の解決結果で置き換え、build_tree/env/exe_dir
@@ -715,6 +719,7 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
         "library_mode": library_mode,
         "msp": msp_info,
         "removed_declarations": removed_declarations,
+        **({"dot_product_cutoffs": dot_product_cutoffs} if dot_product_cutoffs else {}),
         "exe": exe_info,
         "polarity": polarity,
         "unverified": unverified,

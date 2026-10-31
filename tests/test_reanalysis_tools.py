@@ -272,13 +272,22 @@ def _with_trend(match_data, ppm_of_sample):
     return handle
 
 
+def _with_sheet_order(handle):
+    """実験情報シートに注入順（試料名の並びと同じ）を載せる。出所が filename でなくなる。"""
+    ds = handles.registry.get(handle).dataset
+    ds.sample_metadata_rows = [{"sample_id": name, "injection_order": i + 1}
+                               for i, name in enumerate(sorted(ds.sample_names))]
+    return handle
+
+
 def test_injection_trend_spearman(match_data):
-    handle = _with_trend(match_data, lambda i: 1.0 + 0.5 * i)
+    handle = _with_sheet_order(_with_trend(match_data, lambda i: 1.0 + 0.5 * i))
     out = json.loads(R.dataset_mass_accuracy(subset="msms_matched", dataset_handle=handle))
     trend = out["injection_trend"]
     assert trend["spearman_rho"] == pytest.approx(1.0)
+    assert "rho_unavailable_reason" not in trend
     assert trend["n_samples"] == 7                      # 8 試料のうち 1 試料はどの特徴も検出なし
-    assert trend["injection_order_source"] == "filename"
+    assert trend["injection_order_source"] == "metadata"
     per = trend["per_injection"]
     assert [p["injection_order"] for p in per] == sorted(p["injection_order"] for p in per)
     assert per[0]["sample"] == "HC1" and per[0]["n"] == 2
@@ -288,9 +297,22 @@ def test_injection_trend_spearman(match_data):
     # rank1 では特徴 2 も数える（8 試料すべてに値が付き、1 試料目は 3 特徴）
     rank1 = json.loads(R.dataset_mass_accuracy(dataset_handle=handle))["injection_trend"]
     assert rank1["n_samples"] == 8 and rank1["per_injection"][0]["n"] == 3
-    flipped = _with_trend(match_data, lambda i: 10.0 - i)
+    flipped = _with_sheet_order(_with_trend(match_data, lambda i: 10.0 - i))
     assert json.loads(R.dataset_mass_accuracy(subset="msms_matched", dataset_handle=flipped)
                       )["injection_trend"]["spearman_rho"] == pytest.approx(-1.0)
+
+
+def test_injection_trend_rho_is_unavailable_under_filename_order(match_data):
+    """採取時刻（注入順）が読めずファイル名の順に落ちたときは、順位相関を出さない（設計 4.3(c)）。
+    試料ごとの中央値と試料数は、傾向を見る材料として残す。"""
+    handle = _with_trend(match_data, lambda i: 1.0 + 0.5 * i)   # 試料名の順に完全な単調増加
+    trend = json.loads(R.dataset_mass_accuracy(subset="msms_matched", dataset_handle=handle)
+                       )["injection_trend"]
+    assert trend["injection_order_source"] == "filename"
+    assert trend["spearman_rho"] is None
+    assert trend["rho_unavailable_reason"] == "filename_order"
+    assert trend["n_samples"] == 7 and len(trend["per_injection"]) == 7
+    assert trend["per_injection"][0]["sample"] == "HC1"
 
 
 def test_injection_trend_rho_is_none_below_five_samples(match_data):
@@ -299,6 +321,11 @@ def test_injection_trend_rho_is_none_below_five_samples(match_data):
     ds.per_sample_mz = {"1": {name: 200.0 for name in sorted(ds.sample_names)[:4]}}
     trend = json.loads(R.dataset_mass_accuracy(dataset_handle=handle))["injection_trend"]
     assert trend["n_samples"] == 4 and trend["spearman_rho"] is None
+    # 出所が filename なので、その理由が先に付く（試料数が足りても足りなくても rho は出ない）
+    assert trend["rho_unavailable_reason"] == "filename_order"
+    _with_sheet_order(handle)
+    trend = json.loads(R.dataset_mass_accuracy(dataset_handle=handle))["injection_trend"]
+    assert trend["spearman_rho"] is None and trend["rho_unavailable_reason"] == "too_few_samples"
 
 
 def test_novel_candidates_from_result_id_and_from_spec(data):
@@ -546,6 +573,32 @@ def test_counts_qualified_is_msms_verdict(data, library):
     assert bare["default_selection"]["counts"]["msms_available"] == 1
 
 
+def test_counts_qualified_counts_a_merged_pair_by_either_spot():
+    """割れの組は、どちらのスポットが MS/MS で qualified でも 1。相手が窓の外（規則で qualified で
+    ない merge_partner）でもよい。"""
+    from metabolomix.analysis import claim_evidence
+
+    def row(fid, qualified):
+        return {"feature_id": fid, "qualified": qualified, "merged_from": ["30", "31"]}
+
+    match = {"status": "resolved", "reason": None, "selected_feature_id": "30",
+             "selected_adduct": "[M+H]+", "selected_evidence": "sme_match",
+             "adduct_tier_used": 1, "merged_from": ["30", "31"],
+             "counts": {"mass": 1, "rt": 1, "qualified": 1, "by_evidence": {}},
+             # 窓に入って規則で qualified なのは 31 だけ。30 は merge_partner（qualified でない）
+             "candidates": [row("31", True), row("30", False)]}
+    got = claim_evidence._selection(match, {"30": "qualified", "31": "not_qualified"})
+    assert got["counts"]["qualified"] == 1
+    assert claim_evidence._selection(match, {"30": "not_qualified",
+                                             "31": "not_qualified"})["counts"]["qualified"] == 0
+    assert claim_evidence._selection(match, None)["counts"]["qualified"] is None
+    # 組でない候補は従来どおり自分のスポットだけで数える
+    single = {**match, "merged_from": None,
+              "candidates": [{"feature_id": "31", "qualified": True, "merged_from": None}]}
+    assert claim_evidence._selection(single, {"30": "qualified", "31": "not_qualified"}
+                                     )["counts"]["qualified"] == 0
+
+
 def _tsv_rows(text):
     lines = text.splitlines()
     header = lines[0].split("\t")
@@ -611,6 +664,33 @@ def test_novel_candidates_count_split_once(tmp_path):
     [saved] = json.loads(written.read_text(encoding="utf-8"))["rows"]
     assert saved["feature_id"] == "30" and saved["sme_feature_id"] == "31"
     assert saved["merged_from"] == ["30", "31"] and saved["name"] == "CE 18:2"
+
+
+def test_novel_candidates_rule_hash_includes_merge_groups(tmp_path):
+    """まとめた割れの組の hash を規則に入れる（まとめるときだけ。false は v7 と同じ hash）。"""
+    from metabolomix.analysis import mass_accuracy
+
+    handle = _split_handle(tmp_path)
+    T.dataset_preprocess(dataset_handle=handle)
+    diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
+                                             group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
+    spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
+    out = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
+    groups_hash = out["merge_split"]["groups_hash"]
+    assert len(groups_hash) == 64
+    normalized = mass_accuracy.normalize_novel_spec(spec)
+    assert out["rule_hash"] == mass_accuracy.rule_hash(normalized, groups_hash)
+    assert out["rule_hash"] != mass_accuracy.rule_hash(normalized)
+    # 組が変われば別の規則（同じ spec でも）
+    assert mass_accuracy.rule_hash(normalized, "0" * 64) != out["rule_hash"]
+    # merge_split=false は groups_hash を載せず、v7 と同じ hash
+    off = json.loads(R.dataset_novel_candidates(
+        {**spec, "statistics": {"result_id": diff["result_id"], "merge_split": False}},
+        dataset_handle=handle))
+    assert "merge_split" not in off
+    v7 = mass_accuracy.normalize_novel_spec({**spec, "statistics": {
+        "result_id": diff["result_id"], "merge_split": False}})
+    assert off["rule_hash"] == mass_accuracy.rule_hash(v7)
 
 
 def test_claim_evidence_default_selection_counts_a_merged_pair_once(tmp_path):

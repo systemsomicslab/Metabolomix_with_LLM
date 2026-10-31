@@ -94,6 +94,7 @@ def _finish(sample_names, groups, names, ontologies, rows, report) -> HandoffTab
     keep, n_dup, examples = _dedup_by_name(names, ontologies, rows)
     report["dropped_duplicate_names"] = n_dup
     report["duplicate_name_examples"] = examples
+    report["n_kept"] = len(keep)
     matrix = (np.vstack([rows[i] for i in keep]) if keep
               else np.empty((0, len(sample_names))))
     if len(keep) < _MIN_FEATURES:

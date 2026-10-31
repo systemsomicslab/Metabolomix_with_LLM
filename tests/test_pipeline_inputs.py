@@ -900,6 +900,26 @@ def test_msp_then_lbm_plan_pins_msp_and_lbm(tmp_path, monkeypatch):
     assert plan["removed_declarations"] == [method_file_mod.LBM_KEY]
 
 
+def test_msp_then_lbm_plan_records_the_effective_cutoffs(tmp_path, monkeypatch):
+    """受領に出す足切り（平方根の尺度）を計画に持つ。計画の指紋には入れない（再利用を壊さない）。"""
+    from metabolomix.pipeline.service import _plan_fingerprint
+    src, paths, plan = _msp_then_lbm_plan(tmp_path, monkeypatch)
+    cutoffs = plan["dot_product_cutoffs"]
+    assert (cutoffs["weighted"], cutoffs["simple"], cutoffs["reverse"]) == (0.6, 0.6, 0.8)
+    assert cutoffs["scale"] == "square_root"
+    assert set(cutoffs["source"].values()) <= {"default", "root_key", "unprefixed_key_read_as_root"}
+    changed = {**plan, "dot_product_cutoffs": {**cutoffs, "weighted": 0.9}}
+    assert _plan_fingerprint(plan) == _plan_fingerprint(changed)
+    # msp_only の計画には足切りの欄を作らない
+    msp_only = tmp_path / "only"
+    msp_only.mkdir()
+    only_src = make_source(msp_only / "raw")
+    only = inspect_inputs(only_src["root"],
+                          resolve_request(only_src["root"], {"library_mode": "msp_only"}),
+                          exe_path=only_src["exe"])
+    assert "dot_product_cutoffs" not in only
+
+
 def test_msp_then_lbm_writes_annotator_table_with_priority_2(tmp_path, monkeypatch):
     src, paths, plan = _msp_then_lbm_plan(tmp_path, monkeypatch)
     lib = paths["negative"].resolve()

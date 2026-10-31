@@ -338,9 +338,10 @@ SML にその列が無い mzTab では**エラーにせず**、`subset_available
 | キー | 意味 |
 |---|---|
 | `per_injection` | `[{sample, injection_order, median_ppm, n}]`（注入順の昇順。`n` はその試料で使えた特徴の数。1 つも無い試料は載せない） |
-| `spearman_rho` | `injection_order` と `median_ppm` の Spearman の ρ。データのある試料が 5 未満、または片方が定数なら `null` |
+| `spearman_rho` | `injection_order` と `median_ppm` の Spearman の ρ。**`injection_order_source` が `filename`（採取時刻・注入順が読めず、ファイル名の順に落ちた）なら出さず `null`**（ファイル名の順は注入順とは限らない）。データのある試料が 5 未満、または片方が定数でも `null` |
+| `rho_unavailable_reason` | `spearman_rho` を出さない理由（`filename_order` / `too_few_samples`）。ρ が出ているとき、片方が定数で `null` のときは無い |
 | `n_samples` | `per_injection` の件数 |
-| `injection_order_source` | 注入順の出所（`manifest` / `metadata` / `filename`。§9 の `alignment_qc` と同じ規則） |
+| `injection_order_source` | 注入順の出所（`manifest` / `metadata` / `filename`。§9 の `alignment_qc` と同じ規則）。`filename` のとき `per_injection` はファイル名の順で、ρ は無い |
 
 試料ごとの m/z が無い（`.arf` を取り込めていない）ときは `{"status": "unavailable"}` だけ。
 ρ が 0 に近いことは「ずれが無い」ではない——ずれが注入順に単調でないだけのこともある

@@ -704,6 +704,10 @@ def test_receipt_shows_lbm_without_location(tmp_path, monkeypatch):
     assert resolved["msp"]["file"] == "lab_neg.msp"
     assert len(resolved["msp"]["sha256"]) == 64
     assert resolved["msp"]["priority"] == 2
+    cutoffs = resolved["dot_product_cutoffs"]
+    assert (cutoffs["weighted"], cutoffs["simple"], cutoffs["reverse"]) == (0.6, 0.6, 0.8)
+    assert cutoffs["scale"] == "square_root" and set(cutoffs["source"]) == {
+        "weighted", "simple", "reverse"}
     assert "secret_share" not in json.dumps(receipt, ensure_ascii=False)
 
 

@@ -113,6 +113,22 @@ def _empty_scope_items(node, scope):
              "inSample": {"@id": f"{B}s/1"}, "value": None}]
 
 
+def test_handoff_note_warns_when_non_msdial_rows_were_dropped():
+    note = tools._handoff_note({"dropped_non_msdial_ontology": 120, "dropped_unparsable_name": 7,
+                                "n_kept": 300})
+    assert "120" in note and "7" in note and "300" in note and "msp_then_lbm" in note
+    # 落とした行が無ければ注意は出さない
+    assert tools._handoff_note({"dropped_non_msdial_ontology": 0, "dropped_unparsable_name": 0,
+                                "n_kept": 300}) is None
+    assert tools._handoff_note({}) is None
+
+
+def test_project_returns_handoff_counts_at_top_level(lipid_arf, fake_measure):
+    body = json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling"]))
+    for key in ("dropped_non_msdial_ontology", "dropped_unparsable_name", "n_kept"):
+        assert key in body["handoff"]
+
+
 def test_mapped_nodes_counts_nonempty_whole_over_lipid_nodes(lipid_arf, fake_measure, monkeypatch):
     # PE はノードがあるがデータに無い（空の whole スコープ）。分母は脂質ノード
     # （PC/PE/LPC/DG）だけで、PathwayEntity（PA）と接合ノードは数えない

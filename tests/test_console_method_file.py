@@ -902,7 +902,28 @@ def test_msp_then_lbm_reads_the_declared_msp_cutoffs_on_the_square_root_scale():
                 assert squared not in overrides
     assert {k: v for k, v in overrides.items() if k.startswith("Square root of")} == {
         **_sqrt_cutoffs("MSP", "0.5", "0.55", "0.7"), **_sqrt_cutoffs("LBM", "0.5", "0.55", "0.7")}
-    assert removed == []
+    # 空にした二乗のキー（原本が値を宣言していたもの）は消した宣言に載る
+    assert removed == ["Weighted dot product cutoff for MSP-based annotation",
+                       "Weighted dot product cutoff for LBM-based annotation",
+                       "Simple dot product cutoff for MSP-based annotation",
+                       "Reverse dot product cutoff for MSP-based annotation"]
+
+
+def test_resolved_dot_product_cutoffs_report_values_scale_and_source():
+    """受領（receipt）に出す、実際に効く足切りの値・尺度・出どころ（キーごと）。"""
+    assert _mf.resolved_dot_product_cutoffs({}) == {
+        "weighted": 0.6, "simple": 0.6, "reverse": 0.8, "scale": "square_root",
+        "source": {"weighted": "default", "simple": "default", "reverse": "default"}}
+    got = _mf.resolved_dot_product_cutoffs({
+        "square root of weighted dot product cutoff for msp-based annotation": "0.65",
+        "weighted dot product cutoff for msp-based annotation": "0.5",   # 平方根の側が優先
+        "simple dot product cutoff for msp-based annotation": "0.55",    # 平方根の側の値と読む
+        "reverse dot product cutoff for msp-based annotation": "",       # 空は宣言なし
+    })
+    assert got == {
+        "weighted": 0.65, "simple": 0.55, "reverse": 0.8, "scale": "square_root",
+        "source": {"weighted": "root_key", "simple": "unprefixed_key_read_as_root",
+                   "reverse": "default"}}
 
 
 def test_msp_then_lbm_keeps_a_declared_square_root_cutoff():

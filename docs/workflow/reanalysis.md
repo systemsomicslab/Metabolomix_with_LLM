@@ -164,6 +164,10 @@
 6. └─ metabolomix/analysis/mass_accuracy.py  injection_trend()
 7.    └─ metabolomix/analysis/alignment_qc.py  sample_injection_order()
 
+注入順の出所が `filename`（採取時刻が読めずファイル名の順に落ちた）のときは、`injection_trend` の
+`spearman_rho` を出さない（`null`。理由は `rho_unavailable_reason: "filename_order"`）。`per_injection` と
+`n_samples` は残す。
+
 ## dataset_novel_candidates
 
 前提: データセット（無ければ `missing_state`）。`statistics.result_id` なら今も有効な 2 群比較
@@ -185,7 +189,12 @@
 割れたスポットの組は 1 候補（残す小さい ID）に数える。`statistics.result_id` では `statistics.merge_split`
 （既定 true）で、組が 1 つでもあればすべての特徴の統計をまとめた行列で検定し直した値にする（`dataset_feature_search` の
 `merge_split` と同じ実装）。analysis_spec では spec の `features.merge_split` が決め、`run_spec` の
-`merge_split.groups` を使う。
+`merge_split.groups` を使う。まとめた組の hash は `rule_hash` に入る（`merge_split` が `groups_hash` に
+出す。`merge_split=false` は v7 と同じ hash）。
+
+`msp_then_lbm` の run をパスウェイ（`pathway_project`）へ渡すと、Ontology が MS-DIAL の脂質クラスでない MSP の同定は
+受け渡しで落ちるので、クラスごとの合計は LBM で同定した分子種が中心になり、MSP の一般名は届かない
+（試しでは前処理後の特徴の半数前後が落ちた。数は [pathway.md（output_format）](../output_format/pathway.md)）。
 
 ## dataset_alignment_qc
 

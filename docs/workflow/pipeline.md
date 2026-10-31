@@ -92,7 +92,8 @@ scoring` / `filtering` に `False` を書く。メソッドが宣言する MSP �
 `Square root of ... dot product cutoff for MSP-based annotation` / `...for LBM-based annotation` で書き、宣言された
 `Weighted dot product cutoff for MSP-based annotation` 等は空にする——Console はこの接頭辞の無いキーを**二乗の**足切りとして読む
 (0.6 は実効で 0.775)ので、そのままだと MSP だけが LBM(キー無し=既定の平方根の側 0.6 / 0.8)より厳しくなり、同じ証拠の水準に
-並ばない。値は平方根の側の宣言 → 接頭辞の無いキーの宣言(平方根の側の値と読む)→ 既定 0.6 / 0.6 / 0.8 の順。Console(45a531c4d)は設定表から 1 件でも読めると `Msp file path` を使わず、
+並ばない。値は平方根の側の宣言 → 接頭辞の無いキーの宣言(平方根の側の値と読む)→ 既定 0.6 / 0.6 / 0.8 の順で、空にした宣言（原本が値を宣言していたもの）は `removed_declarations` に載り、
+実効の足切りは receipt の `resolved.dot_product_cutoffs`(`weighted` / `simple` / `reverse` / `scale: "square_root"` / 種類ごとの `source`: `root_key` / `unprefixed_key_read_as_root` / `default`。msp_then_lbm だけ。計画の指紋の外)に出る。Console(45a531c4d)は設定表から 1 件でも読めると `Msp file path` を使わず、
 LBM の注釈器の priority を 1 に固定しているので、代表の同定は同じ証拠の水準なら MSP、MSP に MS/MS の照合が無く LBM にあるときだけ
 LBM になる。LBM と MSP の sha256 は計画の指紋に入り、`verify_inputs()` が再検査する(`which: "lbm"` の details もファイル名だけ)。
 receipt の `resolved.lbm` は `file` / `sha256` / `source`、`resolved.msp` は `priority`(2)も持つ。
@@ -108,6 +109,10 @@ file ID(入力フォルダの主ファイルを `sorted()` した順の 0 始ま
 (receipt の `injection_order_source` が `"filename"`)。`"method"` は上書きせず、メソッドの宣言を `method_value` に残す。
 `overrides` は計画の指紋の外なので、既存の要求の hash も完了済み run の再利用も変わらない——ただし
 古い要求を再送して新しい run を作ると、実効メソッドの参照ファイルが以前と違う(既定の 0 → 中央)。
+`alignment_reference` の既定(`"median_injection"`)は要求の hash の外なので、v7 で完了した run のある元フォルダへ既定のまま
+v8 の要求を出すと、その run を再利用する(上書きしたメソッドは使われていない)。このとき receipt の
+`resolved.alignment_reference` は `null`（v7 の計画に無い）で、参照ファイルが中央に変わっていないことの印になる——中央の参照で
+やり直したいときは `alignment_reference` を明示するか、新しい run を作る。
 
 ## pipeline_status
 

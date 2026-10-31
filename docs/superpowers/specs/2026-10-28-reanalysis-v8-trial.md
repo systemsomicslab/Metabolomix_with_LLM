@@ -43,3 +43,29 @@ effective-method の 5 キーは、`Msp file path` が空、`MSP annotator setti
 
 - 過去の accession（MTBLS3233、MTBLS6039、MTBLS6965、ST002901、ST003841）の effective-method にも、同じ二乗のキー（0.6/0.6/0.8）がある。
   そのため、研究室 MSP の同定は意図より厳しかった可能性がある。どう扱うかは別に決める。
+
+## パスウェイの受け渡しで落ちる行（最終レビューの確認）
+
+`msp_then_lbm` の試し（`_v8_trial/pipeline_r2` の pos / neg。MTBLS6965 の R17 と P17 の 2 群比較）の mzTab を
+`dataset_handle_open` で開き、`dataset_preprocess` の後に `pathway_project` が使う `handoff.build_from_dataset` を回した
+（MSLipidMapper・R は呼ばない）。MSP 由来かは `database_identifier` が `MspDB_` で始まるかで分けた。
+
+| 数（前処理後の特徴） | pos | neg |
+|---|---|---|
+| 特徴 | 1666 | 1619 |
+| 残った行（同名の整理の後。`n_kept`） | 251 | 388 |
+| `dropped_unannotated` | 461 | 350 |
+| `dropped_non_msdial_ontology` | 864 | 758 |
+| うち MSP 由来（`MspDB_`） | 864 | 758 |
+| うち MSP 由来で MS/MS 照合の旗が真 | 512 | 349 |
+| `dropped_unparsable_name` | 44 | 109 |
+| うち MSP 由来 | 0 | 0 |
+| `dropped_duplicate_names` | 46 | 14 |
+| 残った行のうち MSP 由来 | 0 | 0 |
+
+- 落ちた MSP 由来の Ontology は ClassyFire 系（Phosphatidylcholines、Phosphatidylethanolamines、Triacylglycerols、Acyl carnitines、
+  Long-chain ceramides など）で、MS-DIAL の脂質クラスと一致しない。
+- 残った行はすべて LBM 側の同定。MSP で代表になった同定は 1 行も残らない。クラスごとの合計は LBM で同定した分子種が中心になる偏りがある。
+- 扱い: 名前→クラスの対応表は作らない（判断）。`docs/output_format/pathway.md` と `docs/workflow/reanalysis.md` に偏りを書き、
+  `pathway_project` の `handoff`（`n_kept` を追加）と、落とした行があるときの `notes.handoff` で件数を読めるようにした。
+

@@ -496,7 +496,8 @@ def dataset_mass_accuracy(band_edges: list[float] | None = None, rank: int = 1,
     rank1）を止めない）。
     `injection_trend`: 試料ごとの実測 m/z（隣接 `.arf` の検出されたセル）があれば、試料ごとの
     誤差の中央値 `per_injection`（`sample` `injection_order` `median_ppm` `n`）と注入順との
-    `spearman_rho`（5 試料未満は null）・`n_samples`・`injection_order_source`。無ければ
+    `spearman_rho`（5 試料未満、または注入順の出所が `filename`＝採取時刻が読めないときは null。
+    理由は `rho_unavailable_reason`）・`n_samples`・`injection_order_source`。無ければ
     `{"status": "unavailable"}`。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     """
@@ -625,10 +626,15 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
         rows = mass_accuracy.novel_candidates(
             ds, normalized, stats_rows, group_ref=group_ref, group_test=group_test,
             merged_from={g[0]: g for g in merge["groups"]} if merge["enabled"] else None)
+        # まとめた組の hash は、まとめるとき（組が 0 でも）だけ規則に入れる
+        groups_hash = (analysis_spec.merge_groups_hash(merge["groups"]) if merge["enabled"]
+                       else None)
         merge_info = ({"enabled": True, "source": merge["source"],
-                       "n_groups": len(merge["groups"])} if merge["enabled"] else None)
+                       "n_groups": len(merge["groups"]),
+                       "groups_hash": groups_hash} if merge["enabled"] else None)
         result_payload = {"schema": mass_accuracy.NOVEL_SCHEMA,
-                          "rule": normalized, "rule_hash": mass_accuracy.rule_hash(normalized),
+                          "rule": normalized,
+                          "rule_hash": mass_accuracy.rule_hash(normalized, groups_hash),
                           "group_ref": group_ref, "group_test": group_test,
                           **({"merge_split": merge_info} if merge_info else {}),
                           "rows": rows}

@@ -89,8 +89,9 @@ def injection_trend(ds, rows: list[dict]) -> dict:
     あれば含む。使える特徴が 1 つも無い試料は載せない）。試料の誤差は、その試料で**検出された**（gap-fill でない）セルの
     実測 m/z（`ds.per_sample_mz`）と理論 m/z の差。注入順は割れの組の判定と同じ規則
     （`alignment_qc.sample_injection_order`。出所を `injection_order_source` に書く）。
-    試料ごとの m/z が無ければ `{"status": "unavailable"}`。rho は、データのある試料が
-    `MIN_INJECTIONS_FOR_RHO` 未満なら None。
+    試料ごとの m/z が無ければ `{"status": "unavailable"}`。rho は、注入順の出所が
+    `filename`（採取時刻が読めない）か、データのある試料が `MIN_INJECTIONS_FOR_RHO` 未満なら
+    None で、理由を `rho_unavailable_reason`（`filename_order` / `too_few_samples`）に書く。
     """
     per_sample = getattr(ds, "per_sample_mz", None)
     if per_sample is None:
@@ -110,13 +111,21 @@ def injection_trend(ds, rows: list[dict]) -> dict:
                      for i in sorted(range(len(names)), key=lambda i: (order[i], i))
                      if errors[names[i]]]
     rho = None
-    if len(per_injection) >= MIN_INJECTIONS_FOR_RHO:
+    reason = None
+    if source == "filename":
+        # 採取時刻（注入順）が読めずファイル名の順に落ちたときは、順位相関を出さない
+        # （ファイル名の順は注入順とは限らない。設計 4.3(c)）。試料ごとの中央値は残す
+        reason = "filename_order"
+    elif len(per_injection) < MIN_INJECTIONS_FOR_RHO:
+        reason = "too_few_samples"
+    else:
         from scipy.stats import spearmanr
 
         value = float(spearmanr([p["injection_order"] for p in per_injection],
                                 [p["median_ppm"] for p in per_injection]).statistic)
         rho = value if math.isfinite(value) else None      # 片方が定数なら相関は定義できない
     return {"per_injection": per_injection, "spearman_rho": rho,
+            **({"rho_unavailable_reason": reason} if reason else {}),
             "n_samples": len(per_injection), "injection_order_source": source}
 
 
@@ -193,10 +202,16 @@ def normalize_novel_spec(spec) -> dict:
                                                    for b in exclude.get("inchikey_blocks") or []})}}
 
 
-def rule_hash(normalized: dict) -> str:
+def rule_hash(normalized: dict, merge_groups_hash: str | None = None) -> str:
+    """規則の hash（パスの欄を除く）。まとめた割れの組の hash（`merge_groups_hash`）を渡したときだけ
+    規則に足す（同じ spec でも組が変われば別の規則。`analysis_spec.rule_hash` と同じ扱い）。
+    まとめない（None）なら v7 と同じ hash。"""
     from metabolomix.analysis.analysis_spec import _strip_paths
 
-    return canonical_hash(_strip_paths(normalized))
+    material = _strip_paths(normalized)
+    if merge_groups_hash is not None:
+        material["merged_groups_hash"] = merge_groups_hash
+    return canonical_hash(material)
 
 
 def _tolerance(mz: float, ppm_spec: dict) -> float:

@@ -15,7 +15,15 @@
   名前が脂質ショートハンドとして読めない行（`dropped_unparsable_name`。限定子 `no MS2:` 等は除いて読む）。
   研究室 MSP だけで同定した run の Ontology は ClassyFire 系の名前（`Phosphatidylcholines` 等）で、
   MS-DIAL の脂質クラスではないので、そのままでは**ほぼ全行が落ちる**（`PATHWAY_BAD_REQUEST`）。
-  パスウェイの投影は LBM でも同定した run（`msp_then_lbm`）で使う。
+  パスウェイの投影は LBM でも同定した run（`msp_then_lbm`）で使うが、**MSP で代表になった同定は
+  ここで落ちる**ので、クラスごとの合計は LBM で同定した分子種が中心になり、MSP の一般名
+  （`Glyceryl trioleate` など、脂質ショートハンドでない名前）は届かない。試し（MTBLS6965 の 2 群比較、
+  `msp_then_lbm`）では、前処理後の特徴 1666（pos）/ 1619（neg）のうち、残ったのは 251 / 388、
+  MS-DIAL の脂質クラスでない行が 864 / 758（すべて MSP 由来。うち MS/MS で照合された同定が
+  512 / 349）、名前が読めない行が 44 / 109（MSP 由来は 0）、注釈なしが 461 / 350、同名の整理が 46 / 14 だった。
+  残った行はすべて LBM 側の同定で、MSP で代表になった同定は 1 行も入らなかった。
+  **`handoff`（`n_kept`・`dropped_*`）と、落とした行があるときの `notes.handoff` で、使った行と落とした行の
+  数を必ず確かめる。**
   同名の行は平均強度最大の 1 行だけ残す（`dropped_duplicate_names`）——sum がアダクト違いを二重計上しないため。
 - arf はレシピ先頭の prop（`handoff.prop`）だけを使う。
 - 中間 mzTab-M に書く文字列（試料名・群名・脂質名・Ontology）の `#` は `_` に置き換わる

@@ -30,6 +30,25 @@ _ADJACENCY_NOTE = (
     "上流は反応だとは主張していない（not curated reactions）。逆向きの組は観察の提示であり、"
     "基質・生成物の解釈は文献で裏を取ること。"
     "掲載条件は両端とも q < 閾値かつ向きが逆。片方が ns/NA の組は件数だけ示す。")
+
+
+def _handoff_note(report: dict) -> str | None:
+    """脂質でない行・名前が読めない行を落としたときの注意（`handoff` の件数を読む手がかり）。
+
+    研究室 MSP と LBM の両方で同定した run（`msp_then_lbm`）では、MSP の同定の多くは Ontology が
+    MS-DIAL の脂質クラスでない（ClassyFire 系）ためここで落ちる。クラスごとの合計は LBM で
+    同定した分子種が中心になり、MSP の一般名（脂質ショートハンドでない名前）は載らない。
+    """
+    dropped_class = report.get("dropped_non_msdial_ontology") or 0
+    dropped_name = report.get("dropped_unparsable_name") or 0
+    if not dropped_class and not dropped_name:
+        return None
+    return (f"MS-DIAL の脂質クラスでない行を {dropped_class} 件、名前が脂質ショートハンドとして"
+            f"読めない行を {dropped_name} 件除いた（残り {report.get('n_kept')} 件）。"
+            "msp_then_lbm の run では MSP の同定の多くがここで除かれ、クラスごとの合計は LBM で"
+            "同定した分子種が中心になる（MSP の一般名は届かない）。")
+
+
 #: pathway_project が採番する run_id の形。これ以外は reports/pathway の外を指しうるので受け付けない。
 _RUN_ID_RE = re.compile(r"pw_\d{8}_\d{6}_[0-9a-f]{6}")
 _FIGURE_NOTE = ("図のノード内の p 値ラベルは MSLipidMapper（Shiny と同じ計算）のもので、"
@@ -302,6 +321,8 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
         "handoff": table.report,
         "pathways": per_pathway,
         "notes": {"adjacency": _ADJACENCY_NOTE,
+                  **({"handoff": handoff_note} if (handoff_note := _handoff_note(table.report))
+                     else {}),
                   "values": "MSLipidMapper は正規化しない。値はこちらの前処理後行列をサブクラスごとに集計したもの。",
                   "figure": "図は pathway_plot(run_id) で表示できる。"},
     })

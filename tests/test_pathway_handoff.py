@@ -246,6 +246,16 @@ def test_handoff_drops_classyfire_ontology():
     assert t.report["dropped_unannotated"] == 0
 
 
+def test_handoff_report_counts_the_kept_features():
+    """落とした行の件数と並べて、残った特徴の数（n_kept。重複名の整理の後）を返す。"""
+    t = handoff.build_from_dataset(**_ds_with(
+        _KEEP + [{"name": "PC 34:1", "ontology": "Phosphatidylcholines"},
+                 {"name": "PC 38:3", "ontology": "PC"}]))           # 同名は 1 行にまとめる
+    assert t.report["n_kept"] == len(t.names) == 2
+    assert t.report["dropped_non_msdial_ontology"] == 1
+    assert t.report["dropped_duplicate_names"] == 1
+
+
 def test_handoff_drops_unparsable_names():
     t = handoff.build_from_dataset(**_ds_with(
         _KEEP + [{"name": "3-Sulfamoylbenzoic acid", "ontology": "PC"}]))

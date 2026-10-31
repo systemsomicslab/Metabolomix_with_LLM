@@ -84,7 +84,9 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
     `sha256`）・`lbm`（msp_then_lbm ではファイル名・sha256・出どころだけ）・`polarity`
     （`value` とその `source`）・`library_mode`・`msp`（ファイル名・sha256・出どころ、
     msp_then_lbm では `priority` も。置き場所は載せない）・`alignment_reference`
-    （`file_id`・`sample_file`・`injection_order_source`・`method_value`）——が入る。何も
+    （`file_id`・`sample_file`・`injection_order_source`・`method_value`。v8 より前の計画から
+    再利用した run では null）・msp_then_lbm では実効の足切り `dot_product_cutoffs`
+    （`weighted`・`simple`・`reverse`・`scale: "square_root"`・種類ごとの `source`）——が入る。何も
     起動しないうちにこれらを確認するのがこのツールの用途。
 
     起動せずに `needs_input` を保存することがある（不正なsample_manifest等、
