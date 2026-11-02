@@ -8,7 +8,8 @@ MS-DIAL で複数のクラスに分かれる、組成式が無い・そのクラ
     鎖の炭素 n  = C − (C₀ − n₀)
     二重結合 db = db₀ + ((H₀ + 2(n − n₀)) − H) / 2
 を出す。C・H 以外の元素の数が基準と違う、db が整数でない・負、n < 1 の行は形に合わない。
-鎖ごとの内訳は出さない（和の組成のみ）。
+鎖ごとの内訳は出さない（和の組成のみ）。PC と PE は C3H6 しか違わず組成式では見分けられないので、
+名前に頭部の語（`cholin` / `ethanolamin` / `serin` / `inositol`）があればクラスと突き合わせる。
 
 名前で読む経路（設計書 4.2）は `from_name`: 古い MS-DIAL の書式・英語のクラス名を MS-DIAL 5 の略記に直し、
 GOSLIN で読めたものだけ、先頭の頭部から LbmClass を決める。
@@ -41,36 +42,42 @@ def parse_formula(formula: str | None) -> dict[str, int] | None:
 
 @dataclass(frozen=True)
 class ClassForm:
-    """名前は `f"{prefix}{n}:{db}{suffix}"`。基準の種 `ref_n`:`ref_db` の組成式が `ref_formula`。"""
+    """名前は `f"{prefix}{n}:{db}{suffix}"`。基準の種 `ref_n`:`ref_db` の組成式が `ref_formula`。
+
+    `head_word` は名前に出うる頭部の語（無ければ None）。
+    """
     lbm_class: str
     prefix: str
     suffix: str
     ref_n: int
     ref_db: int
     ref_formula: str
+    head_word: str | None = None
 
 
 CLASS_FORMS: dict[str, ClassForm] = {
-    "PC": ClassForm("PC", "PC ", "", 34, 1, "C42H82NO8P"),
-    "PE": ClassForm("PE", "PE ", "", 34, 1, "C39H76NO8P"),
-    "PS": ClassForm("PS", "PS ", "", 34, 1, "C40H76NO10P"),
+    "PC": ClassForm("PC", "PC ", "", 34, 1, "C42H82NO8P", "cholin"),
+    "PE": ClassForm("PE", "PE ", "", 34, 1, "C39H76NO8P", "ethanolamin"),
+    "PS": ClassForm("PS", "PS ", "", 34, 1, "C40H76NO10P", "serin"),
     "PG": ClassForm("PG", "PG ", "", 34, 1, "C40H77O10P"),
-    "PI": ClassForm("PI", "PI ", "", 34, 1, "C43H81O13P"),
+    "PI": ClassForm("PI", "PI ", "", 34, 1, "C43H81O13P", "inositol"),
     "PA": ClassForm("PA", "PA ", "", 34, 1, "C37H71O8P"),
-    "LPC": ClassForm("LPC", "LPC ", "", 16, 0, "C24H50NO7P"),
-    "LPE": ClassForm("LPE", "LPE ", "", 16, 0, "C21H44NO7P"),
-    "PE P-": ClassForm("EtherPE", "PE P-", "", 32, 1, "C37H72NO7P"),
-    "PE O-": ClassForm("EtherPE", "PE O-", "", 32, 1, "C37H74NO7P"),
-    "PC P-": ClassForm("EtherPC", "PC P-", "", 34, 1, "C42H82NO7P"),
-    "PC O-": ClassForm("EtherPC", "PC O-", "", 34, 1, "C42H84NO7P"),
+    "LPC": ClassForm("LPC", "LPC ", "", 16, 0, "C24H50NO7P", "cholin"),
+    "LPE": ClassForm("LPE", "LPE ", "", 16, 0, "C21H44NO7P", "ethanolamin"),
+    "PE P-": ClassForm("EtherPE", "PE P-", "", 32, 1, "C37H72NO7P", "ethanolamin"),
+    "PE O-": ClassForm("EtherPE", "PE O-", "", 32, 1, "C37H74NO7P", "ethanolamin"),
+    "PC P-": ClassForm("EtherPC", "PC P-", "", 34, 1, "C42H82NO7P", "cholin"),
+    "PC O-": ClassForm("EtherPC", "PC O-", "", 34, 1, "C42H84NO7P", "cholin"),
     "TG": ClassForm("TG", "TG ", "", 54, 3, "C57H104O6"),
     "DG": ClassForm("DG", "DG ", "", 34, 1, "C37H70O5"),
     "MG": ClassForm("MG", "MG ", "", 18, 1, "C21H40O4"),
     "FA": ClassForm("FA", "FA ", "", 18, 1, "C18H34O2"),
     "CAR": ClassForm("CAR", "CAR ", "", 16, 0, "C23H45NO4"),
-    "NAE": ClassForm("NAE", "NAE ", "", 16, 0, "C18H37NO2"),
-    "SM": ClassForm("SM", "SM ", ";O2", 34, 1, "C39H79N2O6P"),
+    "NAE": ClassForm("NAE", "NAE ", "", 16, 0, "C18H37NO2", "ethanolamin"),
+    "SM": ClassForm("SM", "SM ", ";O2", 34, 1, "C39H79N2O6P", "cholin"),
 }
+
+_HEAD_WORDS = ("cholin", "ethanolamin", "serin", "inositol")
 
 # ClassyFire の名前 → CLASS_FORMS の鍵。MS-DIAL で 1 つのクラスに決まるものだけ。
 CLASSYFIRE_TO_CLASS: dict[str, str] = {
@@ -132,18 +139,38 @@ def from_class_formula_key(key: str, formula: str | None) -> tuple[str, str] | s
     return f"{form.prefix}{n}:{db}{form.suffix}", form.lbm_class
 
 
-def from_class_formula(ontology: str | None, formula: str | None) -> tuple[str, str] | str:
-    """ClassyFire の Ontology と組成式から `(名前（限定子なし）, LbmClass)`。
+def class_name_conflict(key: str, name: str | None) -> bool:
+    """名前（限定子なし）の頭部の語がクラスの鍵と食い違うか。名前に頭部の語が 1 つも無ければ False。"""
+    text = (name or "").lower()
+    words = {w for w in _HEAD_WORDS if w in text}
+    return bool(words) and CLASS_FORMS[key].head_word not in words
 
-    作れなければ理由（この順に見る）: `unmapped_ontology` / `ambiguous_ontology` / `no_formula` / `formula_mismatch`。
+
+def from_class_formula(ontology: str | None, formula: str | None,
+                       name: str | None = None) -> tuple[str, str] | str:
+    """ClassyFire の Ontology と組成式から `(名前（限定子なし）, LbmClass)`。`name` は元の名前（限定子なし）。
+
+    作れなければ理由（この順に見る）: `ambiguous_ontology` / `unmapped_ontology` / `class_name_conflict`
+    （名前の頭部の語がクラスと食い違う）/ `no_formula` / `formula_mismatch`。
     """
-    name = (ontology or "").strip()
-    if name in AMBIGUOUS_CLASSYFIRE:
+    onto = (ontology or "").strip()
+    if onto in AMBIGUOUS_CLASSYFIRE:
         return "ambiguous_ontology"
-    key = CLASSYFIRE_TO_CLASS.get(name)
+    key = CLASSYFIRE_TO_CLASS.get(onto)
     if key is None:
         return "unmapped_ontology"
+    if class_name_conflict(key, name):
+        return "class_name_conflict"
     return from_class_formula_key(key, formula)
+
+
+# 同位体の標識: 重水素 `d5` / `(d7)` / `-d31`（長鎖塩基の `d18:1` は `:` が続くので当たらない）と `13C`。
+_ISOTOPE_LABEL = re.compile(r"(?<![A-Za-z0-9])d\d+(?![\d:])|(?<!\d)13C(?![a-z])")
+
+
+def has_isotope_label(name: str | None) -> bool:
+    """名前に同位体の標識（内部標準）があるか。"""
+    return bool(_ISOTOPE_LABEL.search(name or ""))
 
 
 # --- 名前から読む（経路 1） ---
@@ -169,6 +196,9 @@ _ENGLISH_MODIFIER = {"alkyl": "O-", "alkenyl": "P-"}
 
 # `;` の後ろが空白を含む注記（`LPC 16:0; PlaSMA ID-1486`）のときだけ切る。`;O2` の修飾は残す。
 _ANNOTATION = re.compile(r";(?=[^;]*\s)")
+# 酸化の修飾 `;O` / `;O2` …。Cer / HexCer / SM（長鎖塩基の ;O2 / ;O3）以外では経路 1 で読まない。
+_OXIDIZED = re.compile(r";O(?![a-z])")
+_SPHINGO_HEADS = ("Cer", "HexCer", "SM")
 
 # 頭部 → LbmClass（同名のもの）。PC / PE の `O-` / `P-` は EtherPC / EtherPE。
 _SAME_NAME_CLASSES = frozenset({
@@ -225,10 +255,12 @@ def from_name(name: str | None) -> tuple[str, str] | str | None:
     クラスが一意でなければ `"ambiguous_class"`、読めなければ None（経路 2 に回す）。
     返す名前は直した文字列であり、GOSLIN の正規化形ではない。Cer / HexCer のクラスの曖昧さは
     GOSLIN の可否より先に決める（水酸基付きの脂肪酸など、GOSLIN が読めない形でも曖昧と分かる）。
+    Cer / HexCer / SM 以外の頭部で `;O…` の修飾がある名前（`FA 18:1;O (9-HODE)` も。注記を切る前に見る）も None。
     """
     if not name or not name.strip():
         return None
     text = name.split("|", 1)[0].strip()
+    oxidized = _OXIDIZED.search(text) is not None
     m = _ANNOTATION.search(text)
     if m:
         text = text[:m.start()].strip()
@@ -237,6 +269,8 @@ def from_name(name: str | None) -> tuple[str, str] | str | None:
     if head_match is None:
         return None
     head, ether = head_match.groups()
+    if oxidized and head not in _SPHINGO_HEADS:
+        return None
     if head in ("Cer", "HexCer"):
         if ether:
             return None

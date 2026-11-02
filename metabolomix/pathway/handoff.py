@@ -70,11 +70,12 @@ class RowResolution:
 def resolve_row(name, ontology, formula=None) -> RowResolution:
     """行を残す経路か落とす理由を 1 つに決める（残る行・落ちる行の数がどの行も重ならない）。
 
-    順に: `unannotated`（名前か Ontology が空・Unknown・Others）→ 経路 0 `as_is`（Ontology が MS-DIAL の
+    順に: `unannotated`（名前か Ontology が空・null・Unknown・Others）→ 経路 0 `as_is`（Ontology が MS-DIAL の
     脂質クラス。名前が脂質ショートハンドとして読めなければ `unparsable_name`。名前・Ontology はそのまま）→
+    `isotope_label`（名前に同位体の標識。経路 1・2 に回る行だけ）→
     経路 1 `name`（限定子を外した名前から MS-DIAL 5 の略記と LbmClass。クラスが一意でなければ
     `ambiguous_class`）→ 経路 2 `class_formula`（ClassyFire の Ontology と組成式。作れなければ
-    `unmapped_ontology` / `ambiguous_ontology` / `no_formula` / `formula_mismatch`）。
+    `ambiguous_ontology` / `unmapped_ontology` / `class_name_conflict` / `no_formula` / `formula_mismatch`）。
     経路 1・2 の名前は限定子（`low score: ` 等）を先頭に残す。
     """
     if not _annotated(name, ontology):
@@ -86,19 +87,21 @@ def resolve_row(name, ontology, formula=None) -> RowResolution:
         return RowResolution(reason="unparsable_name")
     prefix, rest = msp_lipid.split_qualifier(str(name))
     prefix = prefix.lstrip()
+    if msp_lipid.has_isotope_label(rest):
+        return RowResolution(reason="isotope_label")
     by_name = msp_lipid.from_name(rest)
     if isinstance(by_name, tuple):
         return RowResolution(route="name", name=prefix + by_name[0], ontology=by_name[1])
     if by_name == msp_lipid.AMBIGUOUS_CLASS:
         return RowResolution(reason=by_name)
-    by_class = msp_lipid.from_class_formula(onto, None if formula is None else str(formula))
+    by_class = msp_lipid.from_class_formula(onto, None if formula is None else str(formula), rest)
     if isinstance(by_class, tuple):
         return RowResolution(route="class_formula", name=prefix + by_class[0], ontology=by_class[1])
     return RowResolution(reason=by_class)
 
 
-_DROP_REASONS = ("unannotated", "unparsable_name", "ambiguous_class", "unmapped_ontology",
-                 "ambiguous_ontology", "no_formula", "formula_mismatch")
+_DROP_REASONS = ("unannotated", "unparsable_name", "isotope_label", "ambiguous_class", "ambiguous_ontology",
+                 "unmapped_ontology", "class_name_conflict", "no_formula", "formula_mismatch")
 
 
 def _new_report(source: str) -> dict:

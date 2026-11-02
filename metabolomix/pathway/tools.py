@@ -35,25 +35,33 @@ _ADJACENCY_NOTE = (
 _ROUTE_LABELS = {"as_is": "MS-DIAL の名前のまま", "name": "名前から読み直し",
                  "class_formula": "クラスと組成式から作成"}
 _DROP_LABELS = {"unannotated": "名前か Ontology が空", "unparsable_name": "名前が脂質ショートハンドとして読めない",
-                "ambiguous_class": "名前だけではクラスが決まらない", "unmapped_ontology": "Ontology が脂質クラスの表に無い",
-                "ambiguous_ontology": "Ontology が複数のクラスにまたがる", "no_formula": "組成式が無い",
-                "formula_mismatch": "組成式がクラスの形に合わない"}
+                "isotope_label": "名前に同位体の標識", "ambiguous_class": "名前だけではクラスが決まらない",
+                "ambiguous_ontology": "Ontology が複数のクラスにまたがる",
+                "unmapped_ontology": "Ontology が脂質クラスの表に無い",
+                "class_name_conflict": "名前の頭部の語が Ontology のクラスと食い違う",
+                "no_formula": "組成式が無い", "formula_mismatch": "組成式がクラスの形に合わない"}
 
 
 def _handoff_note(report: dict) -> str | None:
-    """行を落としたときの注意（`handoff` の件数を読む手がかり）。落とした行が無ければ None。
+    """行を落としたときの注意（`handoff` の件数を読む手がかり）。落とした行も除外スポットも無ければ None。
 
     研究室 MSP の行（慣用名・ID・ClassyFire の Ontology）は名前かクラスと組成式から MS-DIAL の
     クラスと略記の名前に直して入れる。残した行は経路ごとに、落とした行は理由ごとに数える。
+    ARF の手動除外スポット（`dropped_excluded_spots`）は脂質の理由とは別に述べる。
     """
     dropped = {k: report.get(f"dropped_{k}") or 0 for k in _DROP_LABELS}
-    if not any(dropped.values()):
+    excluded = report.get("dropped_excluded_spots") or 0
+    if not any(dropped.values()) and not excluded:
         return None
     kept = report.get("kept_by_route") or {}
     kept_text = "、".join(f"{label} {kept.get(k, 0)}" for k, label in _ROUTE_LABELS.items())
-    dropped_text = "、".join(f"{_DROP_LABELS[k]} {n}" for k, n in dropped.items() if n)
-    return (f"脂質として入れられない行を計 {sum(dropped.values())} 件除いた（{dropped_text}）。"
-            f"残した行の経路は {kept_text}（重複名の整理後に {report.get('n_kept')} 件）。")
+    text = ""
+    if any(dropped.values()):
+        dropped_text = "、".join(f"{_DROP_LABELS[k]} {n}" for k, n in dropped.items() if n)
+        text += f"脂質として入れられない行を計 {sum(dropped.values())} 件除いた（{dropped_text}）。"
+    if excluded:
+        text += f"手動除外のスポット {excluded} 件は載せていない。"
+    return text + f"残した行の経路は {kept_text}（重複名の整理後に {report.get('n_kept')} 件）。"
 
 
 #: pathway_project が採番する run_id の形。これ以外は reports/pathway の外を指しうるので受け付けない。

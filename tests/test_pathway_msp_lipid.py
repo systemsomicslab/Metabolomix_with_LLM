@@ -123,3 +123,56 @@ def test_from_name_classes_and_unreadable():
     assert ml.from_name("XYZ 34:1") is None           # 表に無い頭部
     assert ml.from_name("PC 34:1:2:3") is None        # GOSLIN が読めない
     assert ml.from_name("low score: PC 34:1") is None  # 限定子は呼び出し側が外す
+
+
+_DHA_PE_P = "1-(1Z-Octadecenyl)-2-(4Z,7Z,10Z,13Z,16Z,19Z-docosahexaenoyl)-sn-glycero-3-phosphoethanolamine"
+
+
+def test_class_name_conflict():
+    # PC と PE は C3H6 しか違わないので、組成式では食い違いが分からない。名前の頭部の語で見る。
+    assert ml.from_class_formula("1-(1Z-alkenyl),2-acyl-glycerophosphocholines", "C45H78NO7P",
+                                 _DHA_PE_P) == "class_name_conflict"
+    assert ml.from_class_formula("1-acyl-sn-glycero-3-phosphocholines", "C21H44NO7P",
+                                 "1-hexadecanoyl-sn-glycero-3-phosphoethanolamine") == "class_name_conflict"
+    assert ml.from_class_formula("Triacylglycerols", "C57H104O6",
+                                 "1-oleoyl-sn-glycero-3-phosphocholine") == "class_name_conflict"   # 頭部の語の無いクラス
+    assert ml.from_class_formula("Phosphatidylserines", "C42H80NO10P",
+                                 "1,2-DIOLEOYL-SN-GLYCERO-3-PHOSPHOETHANOLAMINE") == "class_name_conflict"   # 大文字も
+
+
+def test_class_name_without_conflict_still_resolves():
+    assert ml.from_class_formula("1-(1Z-alkenyl),2-acylglycerophosphoethanolamines", "C45H78NO7P",
+                                 _DHA_PE_P) == ("PE P-40:6", "EtherPE")
+    assert ml.from_class_formula("Sphingomyelins", "C39H79N2O6P",
+                                 "N-hexadecanoylsphing-4-enine-1-phosphocholine") == ("SM 34:1;O2", "SM")
+    assert ml.from_class_formula("N-acylethanolamines", "C18H37NO2", "N-palmitoylethanolamine") == ("NAE 16:0", "NAE")
+    assert ml.from_class_formula("Phosphatidylinositols", "C47H83O13P",
+                                 "1-stearoyl-2-arachidonoyl-sn-glycero-3-phospho-(1'-myo-inositol)") == ("PI 38:4", "PI")
+    assert ml.from_class_formula("Triacylglycerols", "C57H104O6", "Glyceryl trioleate") == ("TG 54:3", "TG")
+    assert ml.from_class_formula("Phosphatidylcholines", "C36H72NO8P", "MassSpecGymID0400493") == ("PC 28:0", "PC")
+
+
+def test_class_name_conflict_comes_after_the_ontology_reasons():
+    assert ml.from_class_formula("Ceramides", "C34H67NO3", _DHA_PE_P) == "ambiguous_ontology"
+    assert ml.from_class_formula("Benzoic acid esters", "C16H22O4", _DHA_PE_P) == "unmapped_ontology"
+    assert ml.from_class_formula("1-(1Z-alkenyl),2-acyl-glycerophosphocholines", None, _DHA_PE_P) == "class_name_conflict"
+
+
+def test_isotope_label():
+    for name in ("no MS2: DHA-[21,21,22,22,22-d5]", "DHA-[21,21,22,22,22-d5]", "PC 15:0_18:1(d7)",
+                 "Palmitic acid-d31", "Cholesterol-d7", "13C16-Palmitic acid", "[U-13C]glucose"):
+        assert ml.has_isotope_label(name), name
+    for name in ("SM d18:1/16:0", "Cer[NS] d30:1", "Cer d18:1/24:0", "SM d34:2", "Cer[NS] t34:1",
+                 "Glyceryl trioleate", "PC 34:1", "MassSpecGymID0400493", "N-Palmitoyl-D-sphingosine",
+                 "N-palmitoyl-d-erythro-sphingosine", "Docosahexaenoic acid", "", None):
+        assert not ml.has_isotope_label(name), name
+
+
+def test_from_name_oxidized_shorthand_goes_to_route_2():
+    # Cer / HexCer / SM 以外の頭部の `;O…` は経路 1 で読まない（経路 2 の組成式の検査に回す）
+    for name in ("FA 18:1;O", "PC 16:0_18:2;O", "PE 18:0_20:4;O2", "TG 52:3;O", "FA 18:1;O (9-HODE)"):
+        assert ml.from_name(name) is None, name
+    assert ml.from_name("Cer 18:1;O2/16:0") == ("Cer 18:1;O2/16:0", "Cer_NS")
+    assert ml.from_name("SM 34:1;O2") == ("SM 34:1;O2", "SM")
+    assert ml.from_name("SM 34:1;O3") == ("SM 34:1;O3", "SM")
+    assert ml.from_name("LPC 16:0; PlaSMA ID-1486") == ("LPC 16:0", "LPC")   # `;` の注記は切るだけ

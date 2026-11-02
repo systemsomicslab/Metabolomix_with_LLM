@@ -306,6 +306,9 @@ def test_kept_name_never_starts_with_a_space():
     assert t.names[-1] == "low score: TG 54:3"
 
 
+_DHA_PE_P = "1-(1Z-Octadecenyl)-2-(4Z,7Z,10Z,13Z,16Z,19Z-docosahexaenoyl)-sn-glycero-3-phosphoethanolamine"
+
+
 def test_drop_reasons_partition_the_rows():
     rows = _KEEP + [
         {"name": None, "ontology": "Triacylglycerols"},                                            # unannotated
@@ -317,15 +320,19 @@ def test_drop_reasons_partition_the_rows():
         {"name": "Glyceryl trimyristate", "ontology": "Triacylglycerols"},                       # no_formula
         {"name": "1-Palmitoyl-2-linoleoyl-rac-glycerol", "ontology": "Lineolic acids and derivatives",
          "chemical_formula": "C37H68O5"},                                                         # formula_mismatch
+        {"name": "no MS2: DHA-[21,21,22,22,22-d5]", "ontology": "Very long-chain fatty acids",
+         "chemical_formula": "C22H32O2"},                                                         # isotope_label
+        {"name": _DHA_PE_P, "ontology": "1-(1Z-alkenyl),2-acyl-glycerophosphocholines",
+         "chemical_formula": "C45H78NO7P"},                                                       # class_name_conflict
         {"name": "Glyceryl trioleate", "ontology": "Triacylglycerols", "chemical_formula": "C57H104O6"},
         {"name": "TG 54:3", "ontology": "TG"},                                                    # 同じ名前 → 重複
     ]
     t = handoff.build_from_dataset(**_ds_with(rows))
     r = t.report
     dropped = {k: v for k, v in r.items() if k.startswith("dropped_") and k != "dropped_duplicate_names"}
-    assert dropped == {"dropped_unannotated": 2, "dropped_unparsable_name": 1, "dropped_ambiguous_class": 1,
-                       "dropped_unmapped_ontology": 1, "dropped_ambiguous_ontology": 1, "dropped_no_formula": 1,
-                       "dropped_formula_mismatch": 1}
+    assert dropped == {"dropped_unannotated": 2, "dropped_unparsable_name": 1, "dropped_isotope_label": 1,
+                       "dropped_ambiguous_class": 1, "dropped_unmapped_ontology": 1, "dropped_ambiguous_ontology": 1,
+                       "dropped_class_name_conflict": 1, "dropped_no_formula": 1, "dropped_formula_mismatch": 1}
     assert sum(r["kept_by_route"].values()) + sum(dropped.values()) == len(rows)
     assert r["n_kept"] == sum(r["kept_by_route"].values()) - r["dropped_duplicate_names"] == 3
     assert "dropped_non_msdial_ontology" not in r
@@ -345,3 +352,71 @@ def test_msdial_lipid_class_table_is_the_lbmclass_enum():
     from metabolomix.pathway.msdial_lipid_classes import MSDIAL_LIPID_CLASSES
     assert {"PC", "PE", "TG", "CE", "FA", "SM", "Cer_NS", "EtherPE", "LPC"} <= MSDIAL_LIPID_CLASSES
     assert not {"Undefined", "Others", "Unknown", "Phosphatidylcholines"} & MSDIAL_LIPID_CLASSES
+
+
+def test_msp_rows_with_an_isotope_label_are_dropped():
+    # 経路 1・2 の前に落とす（内部標準をクラスの和に入れない）。経路 0（as_is）は変えない。
+    for name, onto, formula in (("no MS2: DHA-[21,21,22,22,22-d5]", "Very long-chain fatty acids", "C22H32O2"),
+                                ("PC 15:0_18:1(d7)", "Phosphatidylcholines", "C41H73[2H]7NO8P"),
+                                ("Palmitic acid-d31", "Long-chain fatty acids", "C16H32O2"),
+                                ("13C16-Palmitic acid", "Long-chain fatty acids", "C16H32O2")):
+        assert handoff.resolve_row(name, onto, formula).reason == "isotope_label", name
+    assert handoff.resolve_row("PS 15:0_18:1(d7)", "PS", "C39H67[2H]7NO10P").route == "as_is"
+    assert handoff.resolve_row("SM d18:1/16:0", "Sphingomyelins", "C39H79N2O6P").route == "name"
+    assert handoff.resolve_row("Unknown", "Very long-chain fatty acids", "C22H32O2").reason == "unannotated"
+
+
+def test_class_name_conflict_drops_the_row():
+    res = handoff.resolve_row("low score: " + _DHA_PE_P, "1-(1Z-alkenyl),2-acyl-glycerophosphocholines", "C45H78NO7P")
+    assert res.reason == "class_name_conflict"
+    res = handoff.resolve_row("low score: " + _DHA_PE_P, "1-(1Z-alkenyl),2-acylglycerophosphoethanolamines",
+                              "C45H78NO7P")
+    assert (res.route, res.name, res.ontology) == ("class_formula", "low score: PE P-40:6", "EtherPE")
+
+
+def test_every_reason_resolve_row_can_return_is_a_report_key():
+    """`resolve_row` が返しうる理由の文字列はすべて report のキーにある（新しい理由で KeyError にしない）。"""
+    import ast
+    import inspect
+
+    from metabolomix.pathway import msp_lipid
+    reasons = set()
+    for module in (handoff, msp_lipid):
+        for node in ast.walk(ast.parse(inspect.getsource(module))):
+            if isinstance(node, ast.FunctionDef) and (node.name == "resolve_row" or node.name.startswith("from_")):
+                for sub in ast.walk(node):
+                    values = []
+                    if isinstance(sub, ast.Return) and sub.value is not None:
+                        values.append(sub.value)
+                    if isinstance(sub, ast.keyword) and sub.arg == "reason":
+                        values.append(sub.value)
+                    for v in values:
+                        if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                            reasons.add(v.value)
+                        elif isinstance(v, ast.Attribute) and isinstance(getattr(msp_lipid, v.attr, None), str):
+                            reasons.add(getattr(msp_lipid, v.attr))
+                        elif isinstance(v, ast.Name) and isinstance(getattr(module, v.id, None), str):
+                            reasons.add(getattr(module, v.id))
+    assert {"unannotated", "unparsable_name", "isotope_label", "ambiguous_class", "unmapped_ontology",
+            "ambiguous_ontology", "class_name_conflict", "no_formula", "formula_mismatch"} <= reasons
+    report = handoff._new_report("dataset")
+    assert {f"dropped_{r}" for r in reasons} <= set(report), reasons - {k[8:] for k in report}
+
+
+def test_arf_rows_partition_into_routes_and_reasons():
+    kw = _arf_inputs()
+    kw["catalog"] = {**kw["catalog"],
+                     2: {"Name": "no MS2: DHA-[21,21,22,22,22-d5]", "Ontology": "Very long-chain fatty acids",
+                         "Formula": "C22H32O2"},
+                     3: {"Name": _DHA_PE_P, "Ontology": "1-(1Z-alkenyl),2-acyl-glycerophosphocholines",
+                         "Formula": "C45H78NO7P"},
+                     4: {"Name": "Glyceryl trioleate", "Ontology": "Triacylglycerols", "Formula": "C57H104O6"}}
+    kw["excluded_spots"] = {5}
+    t = handoff.build_from_arf(**kw)
+    r = t.report
+    n_rows = sum(1 for f in kw["feature_names"] if f.endswith("_height"))
+    dropped = {k: v for k, v in r.items() if k.startswith("dropped_") and k != "dropped_duplicate_names"}
+    assert dropped["dropped_excluded_spots"] == 1
+    assert dropped["dropped_isotope_label"] == 1 and dropped["dropped_class_name_conflict"] == 1
+    assert sum(r["kept_by_route"].values()) + sum(dropped.values()) == n_rows
+    assert r["n_kept"] == sum(r["kept_by_route"].values()) - r["dropped_duplicate_names"] == len(t.names)
