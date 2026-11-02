@@ -847,11 +847,28 @@ def test_msp_only_overrides_blank_lbm_set_msp_and_clear_other_identification_key
     assert removed == [_mf.LBM_KEY, _mf.TEXT_DB_KEY, "MSP annotator settings file path"]
 
 
-def test_msp_only_overrides_does_not_add_keys_the_method_never_declared():
+def test_msp_only_overrides_adds_only_library_and_square_root_cutoff_keys():
     overrides, removed = _mf.msp_only_overrides({"ion mode": "Positive", "lbm file path": ""},
                                                 "C:/lab/lab_pos.msp")
-    assert overrides == {_mf.LBM_KEY: "", _mf.MSP_KEY: "C:/lab/lab_pos.msp"}
+    cutoffs = {f"Square root of {kind} dot product cutoff for {lib}-based annotation": value
+               for kind, value in (("weighted", "0.6"), ("simple", "0.6"), ("reverse", "0.8"))
+               for lib in ("MSP", "LBM")}
+    assert overrides == {_mf.LBM_KEY: "", _mf.MSP_KEY: "C:/lab/lab_pos.msp", **cutoffs}
     assert removed == []
+
+
+def test_msp_only_overrides_write_declared_cutoff_on_square_root_scale():
+    # 2026-11-02 から msp_only も msp_then_lbm と同じ尺度（接頭辞の無いキーの値を平方根の側で書く）。
+    method_keys = {"ion mode": "Negative",
+                   "weighted dot product cutoff for msp-based annotation": "0.5",
+                   "reverse dot product cutoff for msp-based annotation": ""}
+    overrides, removed = _mf.msp_only_overrides(method_keys, "C:/lab/lab_neg.msp")
+    assert overrides["Weighted dot product cutoff for MSP-based annotation"] == ""
+    assert overrides["Square root of weighted dot product cutoff for MSP-based annotation"] == "0.5"
+    assert overrides["Square root of reverse dot product cutoff for MSP-based annotation"] == "0.8"
+    assert removed == ["Weighted dot product cutoff for MSP-based annotation"]
+    assert _mf.resolved_dot_product_cutoffs(method_keys)["source"] == {
+        "weighted": "unprefixed_key_read_as_root", "simple": "default", "reverse": "default"}
 
 
 # ---------- library_mode="msp_then_lbm"（v8 Task 4） ----------

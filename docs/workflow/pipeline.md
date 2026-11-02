@@ -77,7 +77,7 @@ receiptは従来どおり最小のまま。
 
 `library_mode="msp_only"` の要求では LBM を解決せず(`Lbm file path` は空)、研究室の参照ライブラリ(.msp)を
 `msp_file` か極性の設定(`[library] msp_positive` / `msp_negative`)から決めて実効メソッドの `Msp file path` に書く。
-メソッドが宣言する Text DB と注釈器設定表は空にする。MSP の sha256 は入力計画に固定し、計画の指紋にも入れる
+メソッドが宣言する Text DB と注釈器設定表は空にする。dot product の足切りは下の `msp_then_lbm` と同じく平方根の側のキーで書き(2026-11-02 から。それより前の msp_only の run は接頭辞の無いキーを二乗で読ませていた)、receipt の `resolved.dot_product_cutoffs` に出す。MSP の sha256 は入力計画に固定し、計画の指紋にも入れる
 (MSP が変われば `pipeline_run` は別の run を作る)。上流をやり直さない `pipeline_resume` では
 `metabolomix/pipeline/inputs.py` の `verify_inputs()` が再検査する(変わっていれば `INPUT_CHANGED`、`which: "msp"`)。
 receipt にはファイル名・sha256・出どころだけを載せ、置き場所は載せない。
@@ -93,7 +93,7 @@ scoring` / `filtering` に `False` を書く。メソッドが宣言する MSP �
 `Weighted dot product cutoff for MSP-based annotation` 等は空にする——Console はこの接頭辞の無いキーを**二乗の**足切りとして読む
 (0.6 は実効で 0.775)ので、そのままだと MSP だけが LBM(キー無し=既定の平方根の側 0.6 / 0.8)より厳しくなり、同じ証拠の水準に
 並ばない。値は平方根の側の宣言 → 接頭辞の無いキーの宣言(平方根の側の値と読む)→ 既定 0.6 / 0.6 / 0.8 の順で、空にした宣言（原本が値を宣言していたもの）は `removed_declarations` に載り、
-実効の足切りは receipt の `resolved.dot_product_cutoffs`(`weighted` / `simple` / `reverse` / `scale: "square_root"` / 種類ごとの `source`: `root_key` / `unprefixed_key_read_as_root` / `default`。msp_then_lbm だけ。計画の指紋の外)に出る。Console(45a531c4d)は設定表から 1 件でも読めると `Msp file path` を使わず、
+実効の足切りは receipt の `resolved.dot_product_cutoffs`(`weighted` / `simple` / `reverse` / `scale: "square_root"` / 種類ごとの `source`: `root_key` / `unprefixed_key_read_as_root` / `default`。msp_only と msp_then_lbm。計画の指紋の外)に出る。Console(45a531c4d)は設定表から 1 件でも読めると `Msp file path` を使わず、
 LBM の注釈器の priority を 1 に固定しているので、代表の同定は同じ証拠の水準なら MSP、MSP に MS/MS の照合が無く LBM にあるときだけ
 LBM になる。LBM と MSP の sha256 は計画の指紋に入り、`verify_inputs()` が再検査する(`which: "lbm"` の details もファイル名だけ)。
 receipt の `resolved.lbm` は `file` / `sha256` / `source`、`resolved.msp` は `priority`(2)も持つ。

@@ -667,6 +667,7 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
         msp_overrides, removed_declarations = method_file_mod.msp_only_overrides(
             method_keys, msp_info["path"])
         overrides.update(msp_overrides)
+        dot_product_cutoffs = method_file_mod.resolved_dot_product_cutoffs(method_keys)
     elif library_mode == "msp_then_lbm":
         # 研究室 MSP は注釈器の設定表（priority 2）から、LBM は [library] lbm から入れる。
         # 設定表の場所はまだ pipeline_root 相対（`stage_inputs` が絶対パスにする）。

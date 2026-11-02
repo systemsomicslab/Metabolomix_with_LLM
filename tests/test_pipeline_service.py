@@ -686,6 +686,7 @@ def test_plan_receipt_shows_the_lab_msp_without_its_location(tmp_path, monkeypat
     assert resolved["msp"]["file"] == "lab_neg.msp"
     assert len(resolved["msp"]["sha256"]) == 64
     assert resolved["msp"]["source"] == "config_file"
+    assert resolved["dot_product_cutoffs"]["scale"] == "square_root"
     assert "secret_share" not in json.dumps(receipt, ensure_ascii=False)
 
 

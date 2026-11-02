@@ -519,7 +519,9 @@ def msp_only_overrides(method_keys: dict[str, str], msp_path: str) -> tuple[dict
     """library_mode="msp_only" の実効メソッドの上書きと、消した宣言のキーを返す。
 
     `Lbm file path` は空、`Msp file path` は `msp_path`。原本が空でなく宣言している
-    `IDENTIFICATION_CLEAR_KEYS` は空にする。キーは正準の綴りで返す
+    `IDENTIFICATION_CLEAR_KEYS` は空にする。dot product の足切りは msp_then_lbm と同じく
+    平方根の側のキーで書く（`_square_root_cutoff_overrides`。LBM のキーは `Lbm file path` が
+    空なので効かない）。キーは正準の綴りで返す
     （`write_effective_method_file` は大文字小文字を問わず全行を差し替える）。
     `method_keys` は `read_method_keys` の戻り値（キーは小文字）。
     """
@@ -531,6 +533,9 @@ def msp_only_overrides(method_keys: dict[str, str], msp_path: str) -> tuple[dict
         if (method_keys.get(key.lower()) or "").strip():
             overrides[key] = ""
             removed.append(key)
+    cutoff_overrides, blanked = _square_root_cutoff_overrides(method_keys)
+    overrides.update(cutoff_overrides)
+    removed.extend(blanked)
     return overrides, removed
 
 
@@ -610,7 +615,7 @@ def _msp_cutoff(method_keys: dict[str, str], kind: str, default: str) -> tuple[s
 
 
 def resolved_dot_product_cutoffs(method_keys: dict[str, str]) -> dict:
-    """msp_then_lbm で実際に効く足切り（MSP・LBM 共通。尺度は平方根の側）と、種類ごとの出どころ。
+    """msp_only / msp_then_lbm で実際に効く足切り（MSP・LBM 共通。尺度は平方根の側）と、種類ごとの出どころ。
 
     `{weighted, simple, reverse, scale: "square_root", source: {種類: root_key |
     unprefixed_key_read_as_root | default}}`。受領（receipt）に出して、メソッドの宣言
@@ -628,7 +633,7 @@ def resolved_dot_product_cutoffs(method_keys: dict[str, str]) -> dict:
 
 
 def _square_root_cutoff_overrides(method_keys: dict[str, str]) -> tuple[dict[str, str], list[str]]:
-    """MSP と LBM の dot product の足切りを、同じ値で平方根の側のキーに書く（v8）。
+    """MSP と LBM の dot product の足切りを、同じ値で平方根の側のキーに書く（v8。msp_only も同じ尺度）。
 
     Console 45a531c4d の `ConfigParser` は `Weighted dot product cutoff for MSP-based
     annotation` を**二乗の**足切り（`SquaredWeightedDotProductCutOff`）として読む——0.6 は

@@ -210,7 +210,7 @@ def _resolved_settings(record: dict) -> dict:
     ——コンパクトなreceiptという拘束と正面から衝突する。
 
     載せるのは method / lbm / polarity / library_mode / msp / alignment_reference
-    （msp_then_lbm では実効の足切り dot_product_cutoffs も）だけ
+    （msp_only / msp_then_lbm では実効の足切り dot_product_cutoffs も）だけ
     （msp は置き場所を載せずファイル名・sha256・出どころ。spec 2026-10-07 §3.3）。`raw_stat`・`entries`・`companions`・`overrides`の
     ような大きな中間データは`record["inputs"]`に残したまま、receiptへは
     出さない（CLAUDE.md「戻り値を肥大させない」）。
@@ -241,8 +241,8 @@ def _resolved_settings(record: dict) -> dict:
         "msp": resolved_msp,
         "alignment_reference": alignment_reference,
     }
-    if library_mode == "msp_then_lbm":
-        # MSP・LBM 共通の足切り（平方根の尺度）。v8 より前の計画には無い（null）。
+    if library_mode in ("msp_only", "msp_then_lbm"):
+        # MSP・LBM 共通の足切り（平方根の尺度）。それより前の計画には無い（null）。
         resolved["dot_product_cutoffs"] = inputs.get("dot_product_cutoffs")
     return resolved
 

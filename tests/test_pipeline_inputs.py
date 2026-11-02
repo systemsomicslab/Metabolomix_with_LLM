@@ -910,14 +910,16 @@ def test_msp_then_lbm_plan_records_the_effective_cutoffs(tmp_path, monkeypatch):
     assert set(cutoffs["source"].values()) <= {"default", "root_key", "unprefixed_key_read_as_root"}
     changed = {**plan, "dot_product_cutoffs": {**cutoffs, "weighted": 0.9}}
     assert _plan_fingerprint(plan) == _plan_fingerprint(changed)
-    # msp_only の計画には足切りの欄を作らない
+    # msp_only の計画も同じ尺度の足切りを持つ（2026-11-02 から）
     msp_only = tmp_path / "only"
     msp_only.mkdir()
     only_src = make_source(msp_only / "raw")
     only = inspect_inputs(only_src["root"],
                           resolve_request(only_src["root"], {"library_mode": "msp_only"}),
                           exe_path=only_src["exe"])
-    assert "dot_product_cutoffs" not in only
+    assert only["dot_product_cutoffs"]["scale"] == "square_root"
+    assert (float(only["method"]["overrides"]["Square root of weighted dot product cutoff for MSP-based annotation"])
+            == only["dot_product_cutoffs"]["weighted"])
 
 
 def test_msp_then_lbm_writes_annotator_table_with_priority_2(tmp_path, monkeypatch):
