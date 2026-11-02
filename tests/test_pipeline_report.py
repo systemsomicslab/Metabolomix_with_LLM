@@ -485,3 +485,23 @@ def test_method_section_shows_the_msp_file_but_not_its_location():
     assert f"- msp_sha256: {'b' * 64}" in text
     assert "- msp_source: config_file" in text
     assert "secret_share" not in text
+
+
+def test_method_section_shows_the_lab_lbm_file_but_not_its_location():
+    """v8 Task 4: msp_then_lbm の LBM も研究室の資産なのでファイル名だけを書く。"""
+    from metabolomix.pipeline.report import _section_method
+    record = {"inputs": {
+        "library_mode": "msp_then_lbm",
+        "method": {"source_path": "m.txt", "sha256": "a" * 64},
+        "lbm": {"path": "//nas/secret_share/lab.lbm2", "file": "lab.lbm2",
+                "sha256": "c" * 64, "source": "config_file"},
+        "msp": {"path": "//nas/secret_share/lab_neg.msp", "file": "lab_neg.msp",
+                "sha256": "b" * 64, "source": "config_file", "priority": 2},
+        "exe": {"version": None},
+    }}
+    text = _section_method(record)
+    assert "- library_mode: msp_then_lbm" in text
+    assert "- lbm_file: lab.lbm2" in text
+    assert f"- lbm_sha256: {'c' * 64}" in text
+    assert "- msp_priority: 2" in text
+    assert "secret_share" not in text

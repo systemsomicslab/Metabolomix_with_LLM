@@ -57,6 +57,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from metabolomix.console import execution as console_execution
+from metabolomix.console import method_file as method_file_mod
 from metabolomix.core.atomic_io import DomainError, atomic_write_json, canonical_hash
 from metabolomix.core.process_control import same_process
 from metabolomix.pipeline import engine
@@ -185,9 +186,16 @@ def read_status(path: Path, *, include_details: bool = False) -> dict:
     return result
 
 
-def _without_library_location(record: dict) -> dict:
-    """戻り値用の record の写しから、研究室 MSP の置き場所を除く（ファイル名だけ残す）。
+#: 研究室 MSP の注釈器設定表を指すキー（`method_file.MSP_ANNOTATOR_SETTINGS_KEYS` の小文字）。
+_MSP_TABLE_KEYS = frozenset(key.lower() for key in method_file_mod.MSP_ANNOTATOR_SETTINGS_KEYS)
 
+
+def _without_library_location(record: dict) -> dict:
+    """戻り値用の record の写しから、研究室ライブラリの置き場所を除く（ファイル名だけ残す）。
+
+    研究室 MSP（`msp.path` と `Msp file path` の上書き）、library_mode="msp_then_lbm" の
+    LBM（`[library] lbm` 由来の `lbm.path` と `Lbm file path` の上書き。v8）、絶対パスで
+    書かれた MSP 注釈器設定表の上書きが対象。auto の LBM（`[msdial] lbm` 等）は従来どおり残す。
     戻り値は LLM の文脈に入る（spec 2026-10-07 §3.3）。保存された record は変えない
     ——resume の再検査（`inputs.verify_inputs`）が絶対パスを要る。
     """
@@ -195,13 +203,22 @@ def _without_library_location(record: dict) -> dict:
     if not isinstance(inputs, dict) or not isinstance(inputs.get("msp"), dict):
         return record
     redacted = copy.deepcopy(record)
-    msp = redacted["inputs"]["msp"]
-    if msp.get("path"):
-        msp["path"] = Path(msp["path"]).name
+    lab_lbm = redacted["inputs"].get("library_mode") == "msp_then_lbm"
+    sections = [redacted["inputs"]["msp"]]
+    if lab_lbm and isinstance(redacted["inputs"].get("lbm"), dict):
+        sections.append(redacted["inputs"]["lbm"])
+    for section in sections:
+        if section.get("path"):
+            section["path"] = Path(section["path"]).name
     overrides = (redacted["inputs"].get("method") or {}).get("overrides")
     if isinstance(overrides, dict):
         for key, value in overrides.items():
-            if key.lower() == "msp file path" and value:
+            if not value or not isinstance(value, str):
+                continue
+            lowered = key.lower()
+            if (lowered == "msp file path"
+                    or (lab_lbm and lowered == "lbm file path")
+                    or (lowered in _MSP_TABLE_KEYS and Path(value).is_absolute())):
                 overrides[key] = Path(value).name
     return redacted
 
@@ -363,6 +380,33 @@ def _verify_effective_method(snapshot: dict, pipeline_root: Path) -> None:
         )
 
 
+def _verify_msp_annotator_table(snapshot: dict, pipeline_root: Path) -> None:
+    """library_mode="msp_then_lbm" の MSP 注釈器設定表（`stage_inputs` が書いて sha256 を
+    固定した `inputs/msp-annotators.tsv`）を実ファイルと照合する（実効メソッドと同じ扱い。v8）。
+
+    文面と details は pipeline_root 相対のパスだけ（表の中身は研究室 MSP の置き場所を持つ）。
+    """
+    msp = snapshot.get("msp") or {}
+    rel = msp.get("annotator_table_relative_path")
+    expected = msp.get("annotator_table_sha256")
+    if not rel or not expected:
+        return  # msp_then_lbm でない run、または設定表を固定する前に保存された run
+    try:
+        actual = _sha256_file(Path(pipeline_root) / rel)
+    except OSError as exc:
+        raise DomainError(
+            "STAGED_INPUT_MISMATCH",
+            f"MSP の注釈器設定表が読めません（再開時の照合）: {rel}",
+            {"path": rel},
+        ) from exc
+    if actual != expected:
+        raise DomainError(
+            "STAGED_INPUT_MISMATCH",
+            f"MSP の注釈器設定表が元の固定内容と一致しません（再開時の照合）: {rel}",
+            {"path": rel},
+        )
+
+
 def _verify_staged_inputs(record: dict) -> None:
     """再開時の入力再検証（D05）。`rerun_upstream=True`のときは呼ばない
     ——上流をやり直す以上、`prepare_input`が自分で再検証・再配置する。
@@ -373,6 +417,7 @@ def _verify_staged_inputs(record: dict) -> None:
         return  # 検証対象を持たない最小fixture（単体test）向けの安全側スキップ
     inputs_mod.verify_inputs(snapshot)
     _verify_effective_method(snapshot, pipeline_root)
+    _verify_msp_annotator_table(snapshot, pipeline_root)
 
 
 def _diff_comparisons(old: list, new: list) -> set:

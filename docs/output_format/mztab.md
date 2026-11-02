@@ -70,10 +70,15 @@ SMF からこれらを読もうとすると常に `None` になり、「この�
 | `reliability` | `reliability` | 例: `annotated by user-defined text library` |
 | `confidence_measure` | `best_id_confidence_measure` | |
 | `ontology` | `opt_global_Ontology` | MS-DIAL の脂質サブクラス。列が無いファイルでは `None`。`pathway_project` の照合キーになる。差次的エクスポートの列には出ない |
+| `ms2_presence` | `opt_global_ms2_presence` | bool。その特徴に MS/MS が取れているか。列が無い・値が読めないときは `None`（偽ではなく不明）。どのツール戻り値にも出ない |
+| `spectrum_matched` | `opt_global_spectrum_matched` | bool。その特徴の MS/MS が参照スペクトルに照合されたか（**研究室 MSP でも LBM でも真になる。出所は区別しない**）。列が無い・値が読めないときは `None`。`dataset_mass_accuracy` の `subset="msms_matched"` が読む |
 | `confidence_value` | `best_id_confidence_value`（無ければ SME 由来の total score でフォールバック。下記） | float |
 | `confidence_measures` | SME の `id_confidence_measure[2..8]` | dict。**どのツール戻り値にも出ない**（下記） |
 | `inchikey` | 導出 | `smiles` 経由（RDKit）か、`MspDB:<名前>` を研究室 MSP の表で引いて到達しうる（下記・§13.6） |
 | `inchikey_source` | 導出 | `msp_library` / `smiles_derived` / `none` |
+
+曖昧な注釈（1 つの特徴に SML が複数行当たる。下記）も `ms2_presence` / `spectrum_matched` を持つ。
+どの行の同定が正しいかは決めないが、行のどれかが真なら真、全部が偽なら偽、全部が不明なら `None`。
 
 **`confidence_value` のフォールバック（Minor 10）**: SML 行が `best_id_confidence_value`
 を持たない（実 mzTab で稀ではない: Text DB 経由でない同定はスコアが SME 側にしか
@@ -165,7 +170,7 @@ SME 由来という食い違った行ができる。
 **解決の順序**: `database_identifier` が InChIKey 形 → **研究室 MSP の表**（`MspDB:<名前>`）→ RDKit（InChI / SMILES）。
 MSP を RDKit より前に置くのは、RDKit の有無（Windows のアプリケーション制御がネイティブ DLL を
 拒否する機械がある）で結果を変えないため。MSP 表はジョブ経由の読み込み（`job_path`）でだけ作られ、
-実効メソッドの `Msp file path` を読む。直接読み（`mztab_path`）では `not_applicable`。
+実効メソッドの MSP の注釈器設定表（`MSP annotator settings file path`。`library_mode="msp_then_lbm"` の run）がMSP を指していればその最初の MSP を、無ければ `Msp file path` を読む（Console と同じ順）。設定表から入った MSP の同定は`MspDB_<n>_<MSP の stem>:<名前>` で出るので、stem がその MSP のものだけを引く。直接読み（`mztab_path`）では `not_applicable`。
 
 `identified_by` は `dataset_load` の要約にも 1 行で出る。
 **`sml_only` を `sme` と足して「同定できた件数」にしないこと** — 証拠水準が違う。
@@ -187,6 +192,11 @@ mzTab-M の `abundance_assay[N]` は非ゼロでも実測ピークか gap-fill �
 | `n_cells` / `n_detected` / `gap_filled_rate` | 取り込めたときの内訳 |
 | `join` | 接合の検証内訳（スポット数一致・m/z 差） |
 
+取り込めたときは、試料ごとの実測 m/z も `ds.per_sample_mz`（特徴 ID → {試料名: m/z}）に載る。
+**その試料で検出された（gap-fill でない）セルだけ**（補間値の m/z は実測ではない）。検出された
+セルが 1 つも無い特徴は持たない。取り込めていないときは `None`。検出マスクと違い**データセットの
+指紋（`dataset_fingerprint`）には入らない**（入力ではなく付随の証拠。質量精度の注入順の傾向だけが読む）。
+
 **`source is None` を「gap-fill が無い」と読まないこと。** 取り込めていないだけで、
 その mzTab-M の非ゼロ値には補間値が混じり得る。この状態では検出率・欠測率を語れず、
 `dataset_preprocess` の `min_detection_rate` も使えない（0 より大きい値を渡すと
@@ -194,8 +204,9 @@ mzTab-M の `abundance_assay[N]` は非ゼロでも実測ピークか gap-fill �
 
 ### 13.8 `dataset_feature_search` の戻り値
 
-窓検索（`targets` なし）は `features stats results stats_source notes`、目標照合（`targets` あり）は
-`targets candidates stats results rule stats_source notes` を返す。`features` `candidates` `stats` は
+窓検索（`targets` なし）は `features stats stats_unmerged merge_split results stats_source notes`、
+目標照合（`targets` あり）は `targets candidates stats stats_unmerged merge_split results rule stats_source
+notes` を返す（`stats_unmerged` は `merge_split=true`（既定）のときだけ）。`features` `candidates` `stats` は
 TSV（列名 1 回）で、空欄は「値が無い」。数値は丸めてある（m/z 4 桁・ppm 2 桁・RT 3 桁・log2FC 4 桁・
 p / q / 平均は有効 4 桁）。
 
@@ -253,6 +264,38 @@ p / q / 平均は有効 4 桁）。
 bh_population, caveats}`。`bh_population = {n_features_total, n_in_matrix, n_tested}` はデータセットの
 特徴数・前処理後に検定の行列に残った数・p が有限だった数で、**BH は `n_tested` 件に掛かっている**。
 `caveats` は差次的結果の注意書き（交絡の警告を含む）をそのまま写す。
+
+**割れたスポットのまとめ（`merge_split`、既定 true。spec 2026-10-28 §4.3 (c)）。** MS-DIAL のアライメントが
+1 つの物質を 2 つのスポットに割ると（例: 最初の数注入だけ RT がずれて別のスポットへ行く）、片方のスポットの
+「無い」試料に gap-fill の背景が入り、群の差でない差が出る。`merge_split=true` では、
+`dataset_alignment_qc` の `merge_groups`（互いに最も近い mergeable な 2 スポット。`reanalysis` §9）が
+データセットに 1 つでもあれば、すべての組の 2 スポットを**試料ごとの大きい方の値**で 1 列にまとめた行列
+（前処理の前の生の値。検出状態は「どちらかで検出」）に、差次的結果を計算したのと同じ前処理のレシピを
+当て直し、同じ検定（`log_transform` も同じ。pipeline の既定は log 変換の Welch）と**まとめた後の全特徴**での
+BH をやり直して、`stats` の**すべての行**をそこから出す（統計を付ける特徴が組に入るかどうかによらない。
+組が無ければやり直さない）。
+
+| 欄 | 意味 |
+|---|---|
+| `stats` | まとめた後の値。まとめる組がデータセットに 1 つでもあれば**すべての行**をまとめた行列で検定し直した値にする（1 つの表の q は 1 つの BH の母集団から。組に入らない特徴も、正規化と BH はまとめた行列で回り直す）。組に入る特徴は 1 行（`feature_id` は組の小さい方の ID。消える側の ID を頼んでも残す ID の行に解き、`notes` に書く）で、末尾の `merged_from` に 2 つの ID を `;` で（組に入らない行は空）。組が無ければ検定はやり直さず従来の値 |
+| `stats_unmerged` | まとめる前の従来の `stats`（頼んだ ID のまま・同じ列。`merged_from` は無い） |
+| `merge_split` | `{enabled, source, alignment_qc_sha256, n_groups, groups, renamed, recomputed, bh_population}`。`source` は `find_split_pairs`（その場で既定の閾値）か `alignment_qc`（`alignment_qc_path` の JSON）、`n_groups` はデータセットでまとめる組の数、`groups` はそのうち統計を付けた特徴に関わる組、`recomputed` は検定し直した result_id（組が無ければ空で、検定はやり直さない）、`bh_population` は検定し直した結果ごとの母集団（`n_features_total` はまとめた後の特徴数） |
+
+差次的結果を計算したレシピは、pipeline の run から引き継いだ結果なら来歴の `handoff.preprocess`、session で
+計算した結果なら親の前処理の `effective_parameters` から取る。分からないとき（古い run の引き継ぎなど）は
+`FEATURE_MERGE_UNAVAILABLE`（まとめる前の数字をまとめた後の顔で返さない。`merge_split=false` で呼び直す）。
+`merge_split=false` なら従来どおりで、`stats_unmerged` も `merged_from` 列も無く `merge_split` は
+`{"enabled": false}`。`alignment_qc_path` は `dataset_alignment_qc` が今のデータセットで書いた JSON だけを
+受け（`dataset_fingerprint` が違えば `ANALYSIS_INPUT_INVALID`）、`merge_split=false` とは併用できない。
+
+**目標照合でも組は 1 つの候補。** `merge_split=true` では、判定（`targets[*]` の `status`・`counts`）を数える
+単位が「組の残す ID」になる——組の 2 スポットが同じ箱（層・水準）に qualified で入っても 1 つと数え、
+`resolved` なら `selected_feature_id` は残す ID、`targets[*].merged_from` にその組（それ以外は null）。
+`candidates` の行はスポットごとのまま（RT・ppm・証拠はそのスポットのもの）で、末尾の `merged_from` に組。
+組の片方だけが質量の窓に入ったときは、相手のスポットも同じ付加体で行に足す（`reasons` に `merge_partner`。
+qualified にせず数にも入れない——選んだ残す ID の行が必ずある）。組でない 2 スポットは従来どおり
+`needs_input`（`multiple_qualified_candidates`）。`rule` には `merge_split` と、判定でまとめた組の hash
+`merge_groups_hash` が並び、`merge_split=true` のときだけ `rule_hash` に入る（false は v7 と同じ hash）。
 
 **`rule_hash` と `stats_source` は別物**。`rule = {targets, polarity, polarity_source, rule_hash}` の
 `targets` は既定値を埋めて付加体の層を解決した目標で、`rule_hash` はその正規化後の目標

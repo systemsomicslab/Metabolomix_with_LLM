@@ -68,7 +68,7 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
  "comparison": {"reference": "HC", "test": "RA"},
  "injection_order": null,
  "covariates": null,
- "features": {"all": true},
+ "features": {"all": true, "merge_split": true},
  "aggregate": null,
  "analyses": [{"analysis_id": "main",
                "matrix": {"steps": ["detection_filter", "impute", "normalize", "drift_correct", "qc_rsd_filter"], "...": "§3"},
@@ -84,7 +84,7 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 | `comparison` | 必須 | `reference`（基準）と `test`（比較）の群の名前。比較名は `<test>_vs_<reference>` |
 | `injection_order` | `null` | ドリフト補正の注入順。`{"source": "metadata"}` か TSV `{"source": "tsv", "path", "sample_column", "order_column": "order"}` |
 | `covariates` | `null` | OLS の共変量の TSV `{"path", "sample_column": "sample", "missing": "drop" \| "error", "columns": [{"name", "type": "numeric"} \| {"name", "type": "categorical", "reference"}]}`。カテゴリは基準の水準に対する 0/1 の列に符号化する |
-| `features` | `{"all": true}` | 報告する特徴（`{"feature_ids": [...]}` で絞る）。BH の母集団は `bh_population` が決める |
+| `features` | `{"all": true, "merge_split": true}` | 報告する特徴（`{"feature_ids": [...]}` で絞る）と、割れたスポットのまとめ（下の「割れたスポットのまとめ」）。BH の母集団は `bh_population` が決める。`merge_split` は無ければ true（v8 の既定）、`alignment_qc` は `dataset_alignment_qc` の `output_path` の JSON のパス（任意） |
 | `aggregate` | `null` | 1 本に集約して検定する。`{"kind": "sum", "label", "feature_ids": [...]}`・`{"kind": "sum", "label", "select": {"name_regex", "evidence": ["sme"]}}`（クラスの主張）・`{"kind": "ratio", "label", "numerator", "denominator"}`（比の主張） |
 
 解析（`analyses[]`）:
@@ -97,8 +97,29 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 | `test.covariates` | `[]` | `ols` で使う共変量の名前（`covariates.columns` の部分集合） |
 | `fold_change` | `arithmetic_mean_ratio` | `arithmetic_mean_ratio`（変換前の算術平均の比 test/ref）・`geometric_mean_ratio`（log2 の平均の差） |
 | `correction` | `bh` | `bh`・`none` |
-| `bh_population` | `matrix` | `matrix`（その解析の行列で検定できた全特徴）・`reported`（報告する特徴だけ）。検定できない特徴は母集団に入れない |
+| `bh_population` | `matrix` | `matrix`（その解析の行列で検定できた全特徴）・`reported`（報告する特徴だけ）・`annotated`（SME のある特徴 = `ds.feature_candidates` に候補のある特徴だけ。論文が同定した種だけで補正したと読めるときの二次解析用）。検定できない特徴は母集団に入れない。`annotated` の母集団の外の特徴は、報告しても `q` は null。まとめた特徴は元のどちらかに SME があれば母集団に入る。外部の行列（SME を持たない）には使えない |
 | `thresholds` | すべて `null` | `p`・`q` は「未満」、`fc` は `|log2fc| ≥ log2(fc)`。null の閾値は見ない |
+
+**割れたスポットのまとめ（`features.merge_split`、既定 true）。** MS-DIAL のアライメントが 1 つの
+物質を 2 スポットに割ると、片方の「無い」試料に gap-fill の背景が入り、群の差でもない差が出る。
+`merge_split` が真なら、**recipe の前**（定量行列と検出状態を読んだ直後）に、割れた 2 スポットを
+試料ごとの大きい方の値（NaN は無視）の 1 列にまとめ、列の ID は 2 スポットのうち最も小さい特徴 ID に
+する。まとめた列の検出状態は「どちらかで検出」。recipe はそのまとめた行列に当たる——割れの少数側は
+検出された試料が少なく、まとめる前に検出率の篩を通すと落ちてまとめが打ち消されるため、また
+正規化（TIC・PQN・KNN）が 1 つの物質を 1 列として見るため。`features.alignment_qc` の JSON は
+`dataset_fingerprint` が今のデータセットと合わなければ `ANALYSIS_INPUT_INVALID`（§9）。
+まとめるのは `alignment_qc`（§9）の `merge_groups`（互いに最も近い mergeable な組。常に 2 スポット）
+だけで、`features.alignment_qc` に `dataset_alignment_qc` の JSON を渡せばその群、無ければその場で
+`find_split_pairs`（既定の値）を回す。`group_aligned` などの mergeable でない組はまとめない。
+まとめるのは行列全体なので、`bh_population=matrix` の母集団も、まとめた後の特徴の数になる。
+報告する特徴（`features.feature_ids`）に消えた側の ID を書けば、残した 1 行（`merged_from` 付き）に当たる
+（両方書いても 1 行）。`aggregate` の `feature_ids`・`select`・比の分子と分母も同じ置き換えをしてから和・
+比をとるので、割れた 2 スポットが両方選ばれても 1 回だけ数える（`aggregate.members` は選んだままの
+並び、`summed` はまとめた後の並び、`aggregate.merged_from` は選んだ特徴のうちまとめたもの。比の分子と
+分母が同じ物質にまとまるなら `ANALYSIS_SPEC_INVALID`）。行列に 2 つ揃わない群（別の run の JSON など）は
+まとめず、結果の `merge_split.skipped` に挙げる。外部の行列（`input.source=tsv`）にはアライメントが無く、`merge_split` は
+何もしない（`features.alignment_qc` と `bh_population=annotated` は `ANALYSIS_SPEC_INVALID`）。
+`merge_split=false` にすると 2 スポットのまま検定する（`alignment_qc` は書けない）。
 
 **試料の照合は完全一致。** 群の TSV は行列の試料と過不足なく一致しなければ
 `SAMPLE_MISMATCH`（欠け・余り・重複を名前で挙げる）。注入順・共変量の TSV は行列の試料を
@@ -119,11 +140,17 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 | `beta_log2` | OLS の群の係数（変換後の尺度。log2 なら log2 の差） |
 | `direction` | `test_higher` / `ref_higher`（OLS は `beta_log2`、ほかは FC の向き） |
 | `meets_thresholds` | 与えた閾値をすべて満たすか（閾値が無ければ null）。**再現の判定ではない** |
+| `merged_from` | 割れた 2 スポットをまとめた特徴だけ、まとめた特徴 ID（小さい順。`feature_id` は先頭 = 残した最小の ID）。ほかは null（TSV では `;` 区切り） |
 
-解析ごとに `matrix`（`n_features_in`・`n_features_out`・段ごとの報告 `steps`）、
-`bh_population_n`、集約なら `aggregate`（和: `members`・`summed`・`dropped`）、OLS なら
-`covariate_excluded_samples`。結果の全体に `spec`（正規化後）・`rule_hash`・
-`input_fingerprint`（`dataset_hash`・入力の TSV ごとの sha256）・`comparison`。
+解析ごとに `matrix`（`n_features_in`（まとめた後、recipe の前）・`n_features_out`（recipe の後）・段ごとの報告
+`steps`）、`bh_population_n`、集約なら `aggregate`（和: `members`・`summed`・`dropped`、まとめがあれば
+`merged_from`）、OLS なら `covariate_excluded_samples`。
+結果の全体に `spec`（正規化後）・`rule_hash`・`merge_split`（`enabled`・`source`: `find_split_pairs` か
+`alignment_qc`・`groups`: まとめた群（残す ID が先頭、ID の小さい順）・`groups_hash`・`n_groups_given`・`skipped`）・
+`input_fingerprint`（`dataset_hash`・入力の TSV と `alignment_qc` の JSON ごとの sha256）・`comparison`。
+`rule_hash` は正規化した spec（パスを除く）に、データセットの入力で `merge_split` が真なら使った群の
+hash も入れる——同じ spec でも割れの組が変われば別の規則で、`merge_split` を変えても変わる
+（外部の行列では `merge_split` は hash に入らない）。
 
 ## 3. 行列の recipe（matrix-recipe.v2）
 
@@ -257,12 +284,32 @@ spec:
 
 | 欄 | 意味 |
 |---|---|
-| `default_selection` | `target` をそのまま当てた目標照合（`dataset_feature_search` と同じ規則）。`status` が `resolved` なら `selected_feature_id` が規則で選んだ既定の特徴、決まらなければ `needs_input`（`reason`） |
-| `scans` | 走査ごとの判定と、候補の特徴 ID |
-| `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか）・`msms`（spot_id = SMF_ID の照合の上位 `top` と `qualify`。ライブラリが無ければ `{"status": "no_library"}`、MS/MS が無い・索引の崩れはその `status`）・`relations` |
+| `default_selection` | `target` をそのまま当てた目標照合（`dataset_feature_search` と同じ規則）。`status` が `resolved` なら `selected_feature_id` が規則で選んだ既定の特徴、決まらなければ `needs_input`（`reason`）。割れたスポットの組（§9 の `merge_groups`）は 1 つの候補として数え、`selected_feature_id` は残す小さい ID、`merged_from` にその組（それ以外は null。走査も同じ）。`counts` は下の表（組は 1 つと数える。MS/MS の合否はどちらかのスポットが `qualified` なら 1） |
+| `scans` | 走査ごとの判定（`counts` は `default_selection` と同じ意味）と、候補の特徴 ID |
+| `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか。組の片方だけが質量の窓に入ったときに足した相手は `merge_partner`）・`split`（下）・`msms`（spot_id = SMF_ID の照合の上位 `top` と `qualify`。ライブラリが無ければ `{"status": "no_library"}`、MS/MS が無い・索引の崩れはその `status`）・`relations` |
 | `truncated` | `max_candidates` で打ち切った候補の数 |
-| `rule` / `rule_hash` | 正規化した spec とその hash |
+| `rule` / `rule_hash` | 正規化した spec とその hash。spec の `merge_split`（既定 true）は真のときだけ `rule` に載り、`rule_hash` には判定でまとめた組の hash も入る（false は v7 と同じ規則・同じ hash） |
+| `merge_split` / `merge_groups_hash` | 割れの組を判定で 1 つの候補にしたか（spec の `merge_split`）と、その組（§9 の `merge_groups`）の hash（false なら null） |
 | `input_fingerprint` | `dataset_hash`（データの指紋）・`library_sha256` |
+
+`counts`（`default_selection` と `scans[]`。どれも特徴の一意な件数）:
+
+| 欄 | 意味 |
+|---|---|
+| `mass` / `rt` / `by_evidence` | `dataset_feature_search` の `counts` と同じ（質量の窓・RT の窓に入った数、水準ごとの規則の qualified 数） |
+| `qualified` | 規則（質量・RT・注釈）で qualified になった特徴のうち、**MS/MS の合否 `msms.qualify.verdict` が `qualified`** の数。`msms` を頼んでいない・ライブラリが無いときは `null`（0 ではない）。`max_candidates` で打ち切った候補は数えない |
+| `msms_available` | **旧 `qualified` の意味の数**: 規則（質量の窓・RT の窓・注釈）で qualified になった特徴の数（`dataset_feature_search` の `counts.qualified`、v7 までの束の `counts.qualified` と同じ数）。**MS/MS が取れているかどうかの数ではない**（名前は計画のまま） |
+
+`split`（候補が割れたアライメントスポットの組に入るときだけ。入らなければ `null`。§9 の
+`find_split_pairs` を既定の閾値で回し、`split_partners` を写す）:
+
+| 欄 | 意味 |
+|---|---|
+| `group_id` | 全体の連結成分（§9 の `groups[].group_id`） |
+| `partners` | まとめる相手（§9 の `merge_groups`。互いに最も近い mergeable な組の相手 1 つ）。まとめない特徴（`group_aligned`・最も近くない組など）は空 |
+| `type` | まとめる特徴はその組の型、まとめない特徴は成分の型（`group_aligned` > `interleaved` > `injection_block` の順で強い方） |
+| `mergeable` | 統計の側（`dataset_feature_search` / `dataset_analysis_run` の `merge_split`）が 1 つにまとめるか |
+| `component` | 成分のほかの特徴（報告用。まとめない割れの相手もここで分かる） |
 
 **束は特徴を決めない。** 最終の特徴は再解析の実行役が override の規則の範囲で決め、
 その特徴での統計は `dataset_analysis_run`（`features.feature_ids`）で別に出す。同じ spec・
@@ -274,6 +321,31 @@ spec:
 (実測 − 理論)/理論 × 10⁶ を、理論 m/z の帯ごと（`[min_mz, max_mz)`）にまとめる。
 `n`・`median`・`q1`・`q3`（`statistics.quantiles(n=4)` の exclusive 法）・`within_5ppm`・
 `within_10ppm`（|ppm| ≤ 5・10 の割合）。n<2 の帯は `n` だけ。**許容幅は決めない**。
+
+`subset`（既定 `rank1`）: `rank1` は `rank` 位の SME すべて。`msms_matched` はそのうち、その特徴の
+MS/MS が参照スペクトルに照合されたもの（SML の `opt_global_spectrum_matched` が真。mzTab-M の
+SML の列は `docs/output_format/mztab.md` §13.3。**研究室 MSP と LBM の同定を区別せず両方を数える**。
+偽・不明の特徴は入らない）。照合の旗は rank 1 の同定を表すので、**`msms_matched` は `rank=1` のときだけ**
+（それ以外は `DATASET_BAD_REQUEST`、`field: rank`。`subset` の値が不正でも `DATASET_BAD_REQUEST`）。
+SML にその列が無い mzTab では**エラーにせず**、`subset_available: false` と `note` を付けて
+`overall` `{"n": 0}`・帯の `n` 0 を返す（手順の後退——帯の n 不足 → 極性全体 → `rank1`——を止めない。
+`subset_available` は列が無いときだけ出る）。戻り値に `subset` を書く。
+
+`injection_trend`（選んだ `subset` の SME について）: 試料ごとの質量誤差の、注入順との関係。
+**全試料を数える**（ブランク・QC があれば含む）。試料の誤差は、**その試料で検出された（gap-fill でない）セル**の実測 m/z と理論 m/z の差
+（ppm。`ds.per_sample_mz`。隣接 `.arf` を取り込めたときだけある）。
+
+| キー | 意味 |
+|---|---|
+| `per_injection` | `[{sample, injection_order, median_ppm, n}]`（注入順の昇順。`n` はその試料で使えた特徴の数。1 つも無い試料は載せない） |
+| `spearman_rho` | `injection_order` と `median_ppm` の Spearman の ρ。**`injection_order_source` が `filename`（採取時刻・注入順が読めず、ファイル名の順に落ちた）なら出さず `null`**（ファイル名の順は注入順とは限らない）。データのある試料が 5 未満、または片方が定数でも `null` |
+| `rho_unavailable_reason` | `spearman_rho` を出さない理由（`filename_order` / `too_few_samples`）。ρ が出ているとき、片方が定数で `null` のときは無い |
+| `n_samples` | `per_injection` の件数 |
+| `injection_order_source` | 注入順の出所（`manifest` / `metadata` / `filename`。§9 の `alignment_qc` と同じ規則）。`filename` のとき `per_injection` はファイル名の順で、ρ は無い |
+
+試料ごとの m/z が無い（`.arf` を取り込めていない）ときは `{"status": "unavailable"}` だけ。
+ρ が 0 に近いことは「ずれが無い」ではない——ずれが注入順に単調でないだけのこともある
+（`per_injection` の `median_ppm` を見る）。
 
 `dataset_novel_candidates(spec)`（novel-candidates.v1）:
 
@@ -288,4 +360,118 @@ spec:
 `{"analysis_spec", "analysis_id"}`（analysis-spec.v1 とその解析）。SME rank 1 の同定があり、
 |ppm| が帯の許容幅以内（`max_mz` 未満の最初の帯、無ければ `default`）で、q < `q_max` の特徴から
 除外を外した一覧（q の昇順）。行は `feature_id name inchikey adduct mz rt ppm group_ref group_test
-log2fc_test_over_ref p q direction`。論文の同定リストとの突き合わせはしない（再解析の側）。
+log2fc_test_over_ref p q direction merged_from`（JSON には `sme_feature_id` も）。論文の同定リストとの
+突き合わせはしない（再解析の側）。
+
+**割れたスポットは 1 候補に数える**（spec 2026-10-28 §4.3 (c)）。§9 の `merge_groups` の 2 スポットは
+1 つの物質で、`feature_id` は残す小さい ID、`merged_from` は 2 つの ID。統計はまとめた行列で検定し直した
+値（`statistics.result_id` では `dataset_feature_search` の `merge_split` と同じ実装で、組が 1 つでもあれば
+すべての特徴の統計をまとめた行列の検定・BH から出す。analysis_spec では spec の `features.merge_split`）。**同定と質量誤差**（`name` `inchikey`
+`adduct` `mz` `ppm` `rt`）は SME（rank 1）を持つ方のスポットから取り、その ID を `sme_feature_id` に書く
+（両方にあれば残す ID）。`exclude.feature_ids` は組のどちらかの ID に当たれば組ごと外す。
+`merge_split=false`（または analysis_spec の `features.merge_split=false`）では、行・戻り値・`rule`・`rule_hash` が
+v7 と同じ（`merged_from`・`sme_feature_id`・`merge_split` を出さず、正規化した spec にも `merge_split` を載せない）。
+`statistics.result_id` の spec は `{"result_id", "merge_split": true（既定）, "alignment_qc": <JSON のパス、任意>}`
+（`alignment_qc` は `dataset_alignment_qc` の `output_path`。省略時はその場で探す。`rule_hash` にパスは入らない）。
+戻り値と JSON の `merge_split` は `{enabled, source, n_groups}`（`n_groups` はまとめた組の数）。
+
+## 9. 割れたアライメントスポット（alignment-qc.v1）
+
+`dataset_alignment_qc(output_path=None, ppm=15.0, max_rt_gap=1.0, max_interleaved_rt_gap=0.15,
+min_block_size=2, dataset_handle=None)`: 1 つの物質が 2 つ以上の
+アライメントスポットに割れた組を探す（spec 2026-10-28 §4.3）。**組を見つけて型を付けるだけで、
+行列は変えない。** まとめは統計の側が `mergeable` の成分だけに行う（試料ごとに大きい方の値。
+gap-fill の値は背景で、本物のピークより大きくならないため）。
+
+- **候補**: 同じ付加体（SML の `adduct_ions`。付加体が分からないスポットは組にしない）・|Δm/z| ≤ `ppm`（m/z の小さい方に対して）・
+  0.05 < |ΔRT| ≤ `max_rt_gap` 分の 2 スポット。
+- **受け持ち（`owner`）**: 試料ごとに、その試料の信号を持つスポット。検出状態（`.arf` の
+  `detected_mask`）があれば検出された方（両方で検出なら値の大きい方）で、どちらでも検出されて
+  いない試料は、片方の値が他方の `min_dominance`（3）倍以上ならその方（gap-fill の値で補う。
+  検出の疎な run で本物のピークの多くが gap-fill に入るため）、そうでなければ `null`。
+  検出状態が無ければ値の大きい方。どちらにも信号（値 > 0）が無い試料は `null`。
+- **割れの判定**: 2 スポットがそれぞれ 1 試料以上を受け持ち、かつ補い合う——検出状態があれば
+  両方で検出された試料（`both_detected_fraction`。分母はどちらかで検出された試料）が
+  `max_both_detected`（0.10）以下で、かつ信号か検出のある試料のうち受け持ちの決まった試料が
+  `min_complementary`（0.9）以上。検出状態が無ければ（`both_detected_fraction` は `null`）、片方の値が
+  他方の `min_dominance` 倍以上の試料が、信号のある試料の `min_complementary` 以上。
+  検出だけで判定しないのは、どちらも数試料でしか検出されない無関係な 2 スポットが「両方で検出
+  0%」で割れに見えるから。3 スポットの連鎖は、3 つ目が受け持つ試料で 2 スポットの背景が同程度だと
+  その組が成り立たず、隣り合う組だけで成分になる。
+- **型**（`type`）:
+  - `injection_block` — 片方の受け持ちが注入順で連続した塊（信号の無い試料は飛ばす）。
+    両スポットとも `min_block_size`（2）試料以上を受け持つときだけ（1 試料だけの受け持ちは
+    どこにあっても「連続」に見えるので塊にせず、`interleaved` か `group_aligned` に回す）。
+    群と重なっても優先する（測定順と群が重なる run では、測定順のずれは必ず群とも重なる）。
+    両方が塊なら受け持ちの少ない方を塊とする。
+  - `group_aligned` — 塊でなく、受け持ちが群と一致する（どの群でも多い方のスポットの受け持ちが
+    `group_purity`（0.9）以上で、2 スポットとも少なくとも 1 つの群の多い方）。群ごとに別の
+    異性体が出ている可能性があるので**まとめない**。印を付けてチームの監査とレポートに回す。
+  - `interleaved` — ほか（試料ごとに入れ替わる）。
+- **注釈の両立**（`names_compatible`）: 同じ名前（大文字小文字を無視）、GOSLIN の種のレベルで同じ
+  和組成（`PC 16:0_18:1` と `PC 34:1`）、または片方が注釈なし。名前は SME の rank 1、無ければ SML。
+- **`mergeable`** = `names_compatible` で、型が `injection_block`、または ΔRT ≤ `max_interleaved_rt_gap`
+  （既定 0.15 分 = MS-DIAL のアライメントの RT 許容 0.1 分の 1.5 倍。アライメントの窓で割れたもので、
+  別の異性体ではない。MTBLS6965 の陰イオンの FA 20:3 の異性体 401/402 は 0.20 分離れており、
+  0.2 では別の異性体をまとめてしまう）の `interleaved`。ΔRT の大きい `interleaved` は載せるが
+  まとめない。まとめると判定に使うデータが変わるので、迷う組はまとめない側に倒す。
+- **まとめる組**（`merged`・`merge_groups`）: mergeable の組のうち**互いに最も近い相手**どうしだけ——
+  A の mergeable な相手の中で |ΔRT| が最小なのが B で、かつ B のそれが A（最小が同点なら相手なし）。
+  まとめは常に 2 スポットで、1 つのスポットは高々 1 組にしか入らない。ほかの mergeable な組は
+  `merge_reason: "not_mutual_nearest"` で載せるがまとめない。例: MTBLS6965 の陰イオンの FA 20:3 は
+  2 つの異性体が同じ後半の注入で一緒にずれ、401（後半の n-9）が 403（前半の n-9、ΔRT 0.088）とも
+  402（前半の n-3/n-6、ΔRT 0.199）とも組になる——互いに最も近い 401↔403 だけをまとめる。
+- **注入順**（`injection_order_source`）: `manifest`（pipeline の実験情報シートの `injection_order`）・
+  `metadata`（シート以外から推した値、または呼び出し側が渡した順。渡した順に欠ける試料があれば
+  エラー）・`filename`（1 試料でも
+  欠ければ試料名の順。`block.injections` はその順位）。
+
+`output_path` の JSON:
+
+```json
+{"schema": "alignment-qc.v1",
+ "dataset_fingerprint": "<解析の入力としてのデータセットの指紋。result_state.dataset_fingerprint>",
+ "params": {"ppm": 15.0, "min_rt_gap": 0.05, "max_rt_gap": 1.0, "max_both_detected": 0.1,
+            "max_interleaved_rt_gap": 0.15, "min_block_size": 2,
+            "min_dominance": 3.0, "min_complementary": 0.9, "group_purity": 0.9,
+            "signal": "detected"},
+ "injection_order_source": "manifest",
+ "pairs": [{"pair_id": "P1", "features": ["1265", "1266"], "mz": [..], "rt": [..],
+            "delta_rt": 0.61, "delta_ppm": 7.7, "adduct": "[M+NH4]1+",
+            "names": ["CE 18:2", null], "names_compatible": true, "type": "injection_block",
+            "owner": {"<試料名>": "1265"}, "n_owned": [40, 2], "both_detected_fraction": 0.0,
+            "block": {"spot": "1266", "injections": [1, 2]}, "mergeable": true,
+            "merged": true, "merge_reason": null}],
+ "groups": [{"group_id": "G1", "features": ["1265", "1266"], "pair_ids": ["P1"],
+             "type": "injection_block", "types": ["injection_block"], "mergeable": true}],
+ "merge_groups": [{"merge_group_id": "M1", "group_id": "G1", "features": ["1265", "1266"],
+                   "pair_ids": ["P1"], "type": "injection_block", "types": ["injection_block"],
+                   "mergeable": true}],
+ "summary": {"n_pairs": 1, "by_type": {"injection_block": 1, "group_aligned": 0, "interleaved": 0},
+             "n_features_affected": 2, "injection_block_median_delta_rt": 0.61,
+             "n_mergeable_pairs": 1, "n_merged_pairs": 1, "n_groups": 1}}
+```
+
+- `dataset_fingerprint` は組を探したデータセットの指紋（`dataset_analysis_run` の `input_fingerprint.dataset_hash` と
+  同じ関数。定量行列・特徴 ID・試料・検出状態・出所から作る。同じ run・同じハンドルなら同じ値）。
+  `dataset_analysis_run` の `features.alignment_qc` はこれが今のデータセットと違う JSON（別の極性・別の run。
+  特徴 ID は小さい整数でどちらにもあるので、黙ってまとめてしまう）、または無い JSON（この欄を足す前の版）を
+  `ANALYSIS_INPUT_INVALID`（`field: features.alignment_qc`）で拒む。
+- `pairs[].features` は `injection_block` なら [塊でない側, 塊の側]、ほかは RT の昇順。
+  `delta_rt = rt[1] − rt[0]`（`injection_block` では塊の RT のずれ。符号つき）、
+  `delta_ppm = (mz[1] − mz[0]) / mz[0] × 10⁶`。`block.injections` は塊の最初と最後の注入順。
+- `groups[]` は**すべての組**の連結成分（報告用。3 スポット以上の連鎖を 1 つにする）。`features` は
+  特徴 ID の小さい順（すべて整数なら数の順）。`type` は成分の型で、組の
+  型が混ざれば `group_aligned` > `interleaved` > `injection_block` の順で強い方。`mergeable` は成分
+  全体が 1 つのまとめる組のときだけ真。
+- `merge_groups[]` はまとめる組ごとの 2 スポット（`merge_group_id`・`group_id`＝含まれる `groups[]` の
+  成分・`features`・`pair_ids`・`type`・`types`・`mergeable: true`）。`features` は ID の小さい順で、
+  `merge_matrix_columns` は**最も小さい特徴 ID** を残す（渡した順によらない）。統計の側（`dataset_analysis_run` など）がまとめるのは
+  `merge_groups` だけ。`summary.n_merged_pairs` はその数。
+- `split_partners(qc)`（統計の側が使う）: 特徴 → `{group_id, merge_group_id, partners, component,
+  type, mergeable}`。まとめる特徴は `partners` がその相手 1 つで `mergeable` が真、`type` はその組の型。
+  まとめない特徴は `partners` が空・`mergeable` が偽・`merge_group_id` が null。`component` は全体の
+  成分のほかの特徴（報告用）。
+- 戻り値は `status`・`schema`・`injection_order_source`・`signal`（`detected` / `values`）・`summary`・
+  `output_path`（渡したとき）と、`group_aligned` の組（50 件以下のとき TSV: `pair_id feature_a
+  feature_b mz rt_a rt_b delta_rt adduct name_a name_b`）。

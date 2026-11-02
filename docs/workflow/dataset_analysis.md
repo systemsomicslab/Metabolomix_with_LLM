@@ -89,13 +89,35 @@ MCP も import しない。ツール層の仕事は、極性の出所を決め�
 11. ├─ [目標照合] metabolomix/analysis/feature_search.py  rule_hash()
 12. ├─ metabolomix/analysis/feature_search.py  select_results()
 13. │  └─ metabolomix/analysis/result_state.py  is_current()
-14. ├─ metabolomix/analysis/feature_search.py  feature_stats()
+14. ├─ [merge_split=false] metabolomix/analysis/feature_search.py  feature_stats()
 15. │  └─ metabolomix/analysis/feature_search.py  _detected_counter()
-16. ├─ metabolomix/analysis/feature_search.py  result_summaries()
-17. ├─ metabolomix/analysis/result_state.py  dataset_fingerprint()
-18. └─ metabolomix/tools/dataset_analysis_tools.py  _curation_note()
-19.    ├─ metabolomix/curation/apply.py  arf2_for_mztab()
-20.    └─ metabolomix/curation/apply.py  flags_for_arf2()
+16. ├─ [merge_split=true] metabolomix/analysis/feature_search.py  merge_plan()
+17. │  ├─ metabolomix/analysis/alignment_qc.py  find_split_pairs()
+18. │  ├─ metabolomix/analysis/alignment_qc.py  read_qc_file()
+19. │  └─ metabolomix/analysis/alignment_qc.py  usable_merge_groups()
+20. ├─ [merge_split=true] metabolomix/analysis/feature_search.py  merged_feature_stats()
+21. │  ├─ metabolomix/analysis/feature_search.py  feature_stats()
+22. │  └─ metabolomix/analysis/feature_search.py  merged_results()
+23. │     ├─ metabolomix/analysis/feature_search.py  merged_dataset()
+24. │     │  └─ metabolomix/analysis/alignment_qc.py  merge_matrix_columns()
+25. │     └─ metabolomix/analysis/feature_search.py  retest_merged()
+26. │        ├─ metabolomix/analysis/feature_search.py  _result_recipe()
+27. │        ├─ metabolomix/analysis/dataset_analysis.py  run_dataset_preprocess()
+28. │        ├─ metabolomix/analysis/differential.py  two_group_test()
+29. │        └─ metabolomix/analysis/differential.py  add_fdr()
+30. ├─ metabolomix/analysis/feature_search.py  result_summaries()
+31. ├─ metabolomix/analysis/result_state.py  dataset_fingerprint()
+32. └─ metabolomix/tools/dataset_analysis_tools.py  _curation_note()
+33.    ├─ metabolomix/curation/apply.py  arf2_for_mztab()
+34.    └─ metabolomix/curation/apply.py  flags_for_arf2()
+
+`merge_split`（既定 true）は、割れの組（`alignment_qc` の `merge_groups`）がデータセットに 1 つでもあれば、
+組を試料ごとの大きい方の値で 1 列にまとめた行列（前処理の**前**の生の値・検出状態は OR）に、差次的結果を
+計算したレシピ（pipeline の run から引き継いだ結果は来歴の `handoff.preprocess`、session の結果は親の前処理の
+`effective_parameters`）を当て直し、同じ 2 群検定と**まとめた後の全特徴**での BH をやり直して、`stats` の
+**すべての行**をそこから出す（1 つの表に 2 つの BH の母集団を混ぜない）。組が無ければ検定はやり直さない。
+目標照合では `merge_plan` を照合の前に作り、`match_target(merged_from=merge_map(...))` が組を 1 つの候補
+（残す ID）として数える。
 
 `rule_hash` は正規化後の目標（既定値を埋め、付加体の層を解決したもの）から作り、統計の出所は
 混ぜない。覆うのは照合を左右する欄（`target_id`・InChIKey 先頭ブロック・分子式か expected_mz・

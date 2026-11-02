@@ -58,9 +58,27 @@ def test_default_tiers_values_are_the_spec_ones():
     ]
     assert DEFAULT_ADDUCT_TIERS["negative"] == [
         ["[M-H]-"],
-        ["[M-H2O-H]-", "[M+Cl]-", "[M+FA-H]-", "[2M-H]-", "[M+Na-2H]-"],
+        ["[M-H2O-H]-", "[M+Cl]-", "[M+FA-H]-", "[M+CH3COO]-", "[2M-H]-", "[M+Na-2H]-"],
     ]
     assert MAX_TARGETS == 50
+
+
+def test_negative_tiers_include_acetate():
+    # 酢酸付加（MS-DIAL の mzTab は `[M+CH3COO]1-` と書く）は 2 層目。ギ酸は `[M+FA-H]-` が担う。
+    assert "[M+CH3COO]-" in DEFAULT_ADDUCT_TIERS["negative"][1]
+    assert "[M+CH3COO]-" not in DEFAULT_ADDUCT_TIERS["positive"][0] + DEFAULT_ADDUCT_TIERS["positive"][1]
+    flat = [a for tier in DEFAULT_ADDUCT_TIERS["negative"] for a in tier]
+    assert "[M+HCOO]-" not in flat   # [M+FA-H]- と同じ質量
+
+
+def test_acetate_adduct_mass():
+    neutral = 103.0633285365   # C4H9NO2
+    assert theoretical_mz("C4H9NO2", "[M+CH3COO]-") == pytest.approx(neutral + 59.013851, abs=1e-5)
+    # 酢酸 (C2H4O2) の付加 − H と同じ質量
+    assert theoretical_mz("C4H9NO2", "[M+CH3COO]-") == pytest.approx(
+        theoretical_mz("C4H9NO2", "[M+Hac-H]-"), abs=1e-9)
+    [t] = normalize_targets([_gaba()], dataset_polarity="negative")
+    assert t["theoretical_mz"]["[M+CH3COO]-"] == pytest.approx(neutral + 59.013851, abs=1e-5)
 
 
 def test_normalized_tiers_are_copies_of_defaults():
@@ -916,3 +934,117 @@ def test_rule_hash_does_not_mutate_the_targets():
     before = [dict(t) for t in targets]
     rule_hash(targets)
     assert targets == before
+
+
+# ---------- 割れたスポットのまとめと検定のやり直し（spec 2026-10-28 §4.3 (c)） ----------
+
+def _computed_ds():
+    """前処理（正規化あり）→ 2 群比較まで session と同じ経路で回した DatasetState。"""
+    from metabolomix.analysis import dataset_service
+
+    rng = np.random.default_rng(7)
+    ds = DatasetState()
+    ds.feature_matrix = rng.random((12, 8)) * 1000.0 + 1.0
+    ds.sample_names = [f"ctrl_{i}" for i in range(4)] + [f"treat_{i}" for i in range(4)]
+    ds.feature_ids = [str(i) for i in range(12)]
+    ds.feature_metadata = {str(i): {"mz": 100.0 + i, "rt": 1.0 + i} for i in range(12)}
+    ds.validation_result = {"ok": True, "errors": [], "warnings": []}
+    dataset_service.preprocess_dataset(ds, {"normalize": "median", "impute": "half_min"})
+    result = dataset_service.compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:],
+                                             group_a_label="ctrl", group_b_label="treat")
+    return ds, result
+
+
+def _same(a, b):
+    return (a is None or np.isnan(a)) and (b is None or np.isnan(b)) or a == b
+
+
+def test_retest_without_groups_reproduces_the_stored_result_exactly():
+    from metabolomix.analysis.feature_search import merged_dataset, retest_merged
+
+    ds, result = _computed_ds()
+    view, merged_from = merged_dataset(ds, [])
+    assert merged_from == {} and view.feature_ids == ds.feature_ids
+    redone = retest_merged(ds, view, result)
+    assert [r["feature"] for r in redone["results"]] == [r["feature"] for r in result["results"]]
+    for got, want in zip(redone["results"], result["results"]):
+        for key in ("log2fc", "p", "q", "mean_a", "mean_b"):
+            assert _same(got[key], want[key]), (got["feature"], key)
+
+
+def test_retest_with_a_group_tests_the_merged_column_over_all_features():
+    from metabolomix.analysis.feature_search import merged_feature_stats
+
+    ds, result = _computed_ds()
+    out = merged_feature_stats(ds, ["3", "5"], [result], groups=[["3", "4"]])
+    assert out["touched"] == {"3": ["3", "4"]} and out["renamed"] == {}
+    rows = {row["feature_id"]: row for row in out["stats"]}
+    assert rows["3"]["merged_from"] == ["3", "4"] and rows["5"]["merged_from"] is None
+    # 割れの無い 5 も含め、すべての行はまとめた行列（11 特徴）での検定と BH の値（1 つの母集団）
+    unmerged = {row["feature_id"]: row for row in out["stats_unmerged"]}
+    redone = out["results"][result["provenance"]["result_id"]]
+    assert len(redone["results"]) == 11 and "4" not in {r["feature"] for r in redone["results"]}
+    fresh = {r["feature"]: r for r in redone["results"]}
+    for fid in ("3", "5"):
+        assert rows[fid]["q"] == fresh[fid]["q"] and rows[fid]["p"] == fresh[fid]["p"]
+    # 5 の列は割れていないが、正規化（median）と BH（11 特徴）はまとめた行列で回り直す
+    assert rows["5"]["q"] != unmerged["5"]["q"]
+    assert rows["3"]["q"] != unmerged["3"]["q"]
+    # ds は変えない
+    assert len(ds.feature_ids) == 12 and ds.feature_matrix.shape == (12, 8)
+
+
+def test_retest_without_a_known_recipe_refuses():
+    from metabolomix.analysis.feature_search import merged_dataset, retest_merged
+
+    ds, result = _computed_ds()
+    handed = {**result, "provenance": {**result["provenance"],
+                                       "handoff": {"pipeline_root": "x", "preprocess": None}}}
+    view, _ = merged_dataset(ds, [["3", "4"]])
+    with pytest.raises(DomainError) as excinfo:
+        retest_merged(ds, view, handed)
+    assert excinfo.value.code == "FEATURE_MERGE_UNAVAILABLE"
+
+
+def test_match_target_counts_a_merged_pair_as_one_candidate():
+    """組の 2 スポットが同じ箱にあれば残す ID で resolved、無関係の 2 スポットは needs_input のまま。"""
+    from metabolomix.analysis.feature_search import merge_map
+
+    ds = _dataset({
+        "401": {"mz": _shift(MH, 1), "rt": 1.20},
+        "403": {"mz": _shift(MH, 2), "rt": 1.30},
+    })
+    target = _target(rt_min=1.25)
+    plain = match_target(ds, target, max_results=20)
+    assert plain["status"] == "needs_input"
+    assert plain["reason"] == "multiple_qualified_candidates" and "merged_from" not in plain
+
+    merged = match_target(ds, target, max_results=20, merged_from=merge_map([["403", "401"]]))
+    assert merged["status"] == "resolved" and merged["selected_feature_id"] == "401"
+    assert merged["merged_from"] == ["401", "403"]
+    assert merged["counts"]["qualified"] == 1 and merged["counts"]["mass"] == 1
+    # 行はスポットごとのまま（どちらにも群が付く）
+    assert {r["feature_id"]: r["merged_from"] for r in merged["candidates"]} == {
+        "401": ["401", "403"], "403": ["401", "403"]}
+
+    # 別の組の群を渡しても、この 2 スポットは 1 つにならない
+    other = match_target(ds, target, max_results=20, merged_from=merge_map([["7", "8"]]))
+    assert other["status"] == "needs_input"
+
+
+def test_retest_uses_the_handoff_recipe_of_a_pipeline_result():
+    """pipeline の run から引き継いだ結果（来歴の handoff.preprocess）でも、同じレシピで再現する。"""
+    from metabolomix.analysis.feature_search import _result_recipe, merged_dataset, retest_merged
+
+    ds, result = _computed_ds()
+    recipe = ds.results[result["provenance"]["parent_ids"][0]]["provenance"]["effective_parameters"]
+    handed = {**result, "provenance": {**result["provenance"], "parent_ids": [],
+                                       "handoff": {"pipeline_root": "x", "comparison_id": "c1",
+                                                   "preprocess": {"policy": "conservative-v1",
+                                                                  **recipe}}}}
+    assert _result_recipe(ds, handed) == {"policy": "conservative-v1", **recipe}
+    view, _ = merged_dataset(ds, [])
+    redone = retest_merged(ds, view, handed)
+    for got, want in zip(redone["results"], result["results"]):
+        for key in ("log2fc", "p", "q"):
+            assert _same(got[key], want[key]), (got["feature"], key)

@@ -209,3 +209,73 @@ def test_write_mztab_replaces_hash_in_text_fields(tmp_path):
     text = out.read_text(encoding="utf-8")
     assert "#" not in text
     assert "PC 34:1_a" in text and "assay[1]	C_1" in text and "Normalization: pqn_x" in text
+
+
+# ---------- 脂質でない行を除く（v8: MS-DIAL の脂質の Ontology ＋ 名前の検査） ----------
+
+def _ds_with(annotations):
+    n = len(annotations)
+    ids = [str(100 + i) for i in range(n)]
+    return _ds_inputs(
+        pp_matrix=np.arange(5 * n, dtype=float).reshape(5, n) + 1,
+        pp_feature_names=ids,
+        annotations={fid: {**a, "ambiguous": False} for fid, a in zip(ids, annotations)})
+
+
+_KEEP = [{"name": "PC 38:3", "ontology": "PC"}, {"name": "PE 18:0_20:4", "ontology": "PE"}]
+
+
+def test_handoff_keeps_msdial_lipids():
+    t = handoff.build_from_dataset(**_ds_with(_KEEP))
+    assert t.names == ["PC 38:3", "PE 18:0_20:4"] and t.ontologies == ["PC", "PE"]
+    assert t.report["dropped_non_msdial_ontology"] == 0
+    assert t.report["dropped_unparsable_name"] == 0
+    # 限定子接頭辞付きの名前は読める
+    t = handoff.build_from_dataset(**_ds_with(
+        _KEEP + [{"name": "no MS2: PC 34:1", "ontology": "PC"}]))
+    assert t.names[-1] == "no MS2: PC 34:1"
+
+
+def test_handoff_drops_classyfire_ontology():
+    # 研究室 MSP の Ontology は ClassyFire 系の名前。MS-DIAL の脂質クラスではないので落とす。
+    t = handoff.build_from_dataset(**_ds_with(
+        _KEEP + [{"name": "FA 16:0", "ontology": "Long-chain fatty acids"},
+                 {"name": "PC 34:1", "ontology": "Phosphatidylcholines"}]))
+    assert t.names == ["PC 38:3", "PE 18:0_20:4"]
+    assert t.report["dropped_non_msdial_ontology"] == 2
+    assert t.report["dropped_unannotated"] == 0
+
+
+def test_handoff_report_counts_the_kept_features():
+    """落とした行の件数と並べて、残った特徴の数（n_kept。重複名の整理の後）を返す。"""
+    t = handoff.build_from_dataset(**_ds_with(
+        _KEEP + [{"name": "PC 34:1", "ontology": "Phosphatidylcholines"},
+                 {"name": "PC 38:3", "ontology": "PC"}]))           # 同名は 1 行にまとめる
+    assert t.report["n_kept"] == len(t.names) == 2
+    assert t.report["dropped_non_msdial_ontology"] == 1
+    assert t.report["dropped_duplicate_names"] == 1
+
+
+def test_handoff_drops_unparsable_names():
+    t = handoff.build_from_dataset(**_ds_with(
+        _KEEP + [{"name": "3-Sulfamoylbenzoic acid", "ontology": "PC"}]))
+    assert t.names == ["PC 38:3", "PE 18:0_20:4"]
+    assert t.report["dropped_unparsable_name"] == 1
+    assert t.report["dropped_non_msdial_ontology"] == 0
+
+
+def test_arf_handoff_applies_the_same_lipid_checks():
+    kw = _arf_inputs()
+    kw["catalog"] = {**kw["catalog"],
+                     2: {"Name": "FA 16:0", "Ontology": "Long-chain fatty acids"},
+                     3: {"Name": "3-Sulfamoylbenzoic acid", "Ontology": "PC"}}
+    t = handoff.build_from_arf(**kw)
+    assert t.names == ["PC 16:0_18:1", "PE 18:0_20:4", "Cer 18:1;O2/24:1"]
+    assert t.report["dropped_non_msdial_ontology"] == 1
+    assert t.report["dropped_unparsable_name"] == 1
+
+
+def test_msdial_lipid_class_table_is_the_lbmclass_enum():
+    from metabolomix.pathway.msdial_lipid_classes import MSDIAL_LIPID_CLASSES
+    assert {"PC", "PE", "TG", "CE", "FA", "SM", "Cer_NS", "EtherPE", "LPC"} <= MSDIAL_LIPID_CLASSES
+    assert not {"Undefined", "Others", "Unknown", "Phosphatidylcholines"} & MSDIAL_LIPID_CLASSES

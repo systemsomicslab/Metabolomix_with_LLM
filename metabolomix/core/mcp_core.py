@@ -269,6 +269,8 @@ or write the interactive session. Decision numbers come from spec-driven tools
 (`dataset_analysis_run`, `dataset_claim_evidence`, `library_msms_qualify`), which
 return a `rule_hash` and give identical JSON for an identical spec — see
 `lipidmix://docs/output-format/reanalysis`. They return numbers, never verdicts.
+`dataset_alignment_qc` finds one compound split over two alignment spots (e.g. the
+first injections drifted in RT); run it before reading results.
 
 These steps are guidance, not hard gates — but interpretation requires passing
 through this gateway, so treat them as required preamble.

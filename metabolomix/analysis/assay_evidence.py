@@ -93,9 +93,10 @@ def _normalize_stem(value: str) -> str:
     """raw のパス→ファイル名（拡張子なし）の比較用正規化。
 
     `metabolomix/analysis/sample_manifest.py` と同じく `os.path.normcase` を使う
-    （Windows の大文字小文字差でだけ対応が切れるのを避ける）。
+    （Windows の大文字小文字差でだけ対応が切れるのを避ける）。語幹の前後の空白は落とす
+    （raw ファイル名の末尾の空白は `.arf` に残るが、mzTab の側は strip されている）。
     """
-    return os.path.normcase(Path(value).stem)
+    return os.path.normcase(Path(value).stem.strip())
 
 
 def _assay_targets(ds) -> tuple[dict, list]:

@@ -894,6 +894,41 @@ def test_sml_opt_global_ontology_is_kept_as_ontology(tmp_path):
     assert ds.feature_annotations["1"]["ontology"] == "PC"
 
 
+def test_sml_spectrum_matched_is_read(tmp_path):
+    """MS-DIAL の SML 拡張列 `opt_global_spectrum_matched` / `opt_global_ms2_presence` を真偽で持つ。
+
+    質量精度を MS/MS の照合で付いた同定に絞る材料（LBM と MSP は区別しない）。
+    """
+    text = _SML_ONLY_MZTAB.replace(
+        "best_id_confidence_value",
+        "best_id_confidence_value\topt_global_ms2_presence\topt_global_spectrum_matched", 1)
+    rows = []
+    for line in text.splitlines():
+        if line.startswith("SML\t"):
+            line += "\tTrue\tTrue" if line.split("\t")[1] == "1" else "\tFalse\tFalse"
+        rows.append(line)
+    ds = _build_text(tmp_path, "\n".join(rows) + "\n", name="matched.mzTab")
+    assert ds.feature_annotations["1"]["spectrum_matched"] is True
+    assert ds.feature_annotations["1"]["ms2_presence"] is True
+    # 列の無い mzTab では None（偽ではなく「分からない」）
+    plain = _build_text(tmp_path, _SML_ONLY_MZTAB, name="plain.mzTab")
+    assert plain.feature_annotations["1"]["spectrum_matched"] is None
+    assert plain.feature_annotations["1"]["ms2_presence"] is None
+
+
+def test_sml_spectrum_matched_of_an_ambiguous_annotation_is_any(tmp_path):
+    text = _AMBIGUOUS_MZTAB.replace("adduct_ions", "adduct_ions\topt_global_spectrum_matched", 1)
+    rows, flags = [], iter(["False", "True"])
+    for line in text.splitlines():
+        if line.startswith("SML\t"):
+            line += "\t" + next(flags)
+        rows.append(line)
+    ds = _build_text(tmp_path, "\n".join(rows) + "\n", name="amb_matched.mzTab")
+    # 1 つの特徴に SML が 2 行（曖昧）。どれかが照合済みなら、その特徴は MS/MS で照合されている
+    assert ds.feature_annotations["1"]["ambiguous"] is True
+    assert ds.feature_annotations["1"]["spectrum_matched"] is True
+
+
 # ---------- SME 候補ごとの InChIKey / 曖昧な SML 注釈の InChIKey 一覧 ----------
 # 特徴 1 は SME 2 件（rank 1 = MSP 名、rank 2 = InChIKey 形）を持つ。
 # 特徴 2 は SML が 3 行当たる曖昧注釈（InChIKey 形 2 件が同じ値で重複、MSP 名 1 件）。

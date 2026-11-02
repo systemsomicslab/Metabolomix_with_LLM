@@ -21,6 +21,10 @@ exe = 'C:\MS-DIAL\MSDIALCUI.exe'
 # library_load(ion_mode=...) が読む参照ライブラリ（.msp）。極性ごとに 1 つ。
 # msp_positive = 'D:\library\pos.msp'
 # msp_negative = 'D:\library\neg.msp'
+# pipeline の library_mode="msp_then_lbm" が研究室 MSP の補いに使う脂質ライブラリ（.lbm2）。
+# このモードはここだけを読む（[msdial] lbm・メソッドの宣言・実行体のフォルダは見ない）。
+# 環境変数 MSDIAL_LIBRARY_LBM が設定されていればそちらが優先される。
+# lbm = 'D:\library\lipids.lbm2'
 
 [mslipidmapper]
 # 研究室サーバの MSLipidMapper REST API。書けば pathway_project / pathway_plot はまずここを使い、

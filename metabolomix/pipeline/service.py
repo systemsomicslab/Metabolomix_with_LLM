@@ -126,7 +126,8 @@ def _plan_fingerprint(plan: dict) -> str:
         "exe_sha256": plan["exe"]["sha256"],
         "polarity": plan["polarity"]["value"],
     }
-    # 研究室 MSP は msp_only のときだけ入れる。auto の計画の指紋は変えない
+    # msp_then_lbm の LBM（[library] lbm）の sha256 は上の `lbm_sha256` に入る。
+    # 研究室 MSP は msp_only / msp_then_lbm のときだけ入れる。auto の計画の指紋は変えない
     # （受付冪等性と再開の同一性が既存 run で崩れないように。spec 2026-10-07 §3.3）。
     msp_sha256 = (plan.get("msp") or {}).get("sha256")
     if msp_sha256:
@@ -162,6 +163,24 @@ def _precheck_manifest(source_root: Path, request: dict, plan: dict) -> DomainEr
     return None
 
 
+def _manifest_rows_for_planning(source_root: Path, request: dict) -> list[dict] | None:
+    """計画（アライメントの参照ファイルの選択）に使う実験情報シートの行を、先に読む。
+
+    シートが無い・読めない・予定の raw と合わない場合は None（ファイル名順へ戻す）。
+    不正なシートの報告は`_precheck_manifest`の役目で、ここでは止めない
+    （止めると needs_input を保存する経路が失われる）。
+    """
+    manifest_path = _resolve_manifest_path(source_root, request)
+    if manifest_path is None or not manifest_path.is_file():
+        return None
+    try:
+        expected_sources = inputs_mod.list_primary_names(source_root, request)
+        return parse_manifest(manifest_path, source_root=source_root,
+                              expected_sources=expected_sources)
+    except DomainError:
+        return None
+
+
 def _mark_needs_input_without_launch(pipeline_path: Path, exc: DomainError, *, stage_id: str) -> None:
     """事前検査で見つかった不正入力を、workerを起動せずneeds_inputとして保存する。
 
@@ -190,8 +209,9 @@ def _resolved_settings(record: dict) -> dict:
     `pipeline_status(include_details=True)`でrecord全体を引くしかない
     ——コンパクトなreceiptという拘束と正面から衝突する。
 
-    載せるのは method / lbm / polarity / library_mode / msp だけ（msp は置き場所を
-    載せずファイル名・sha256・出どころ。spec 2026-10-07 §3.3）。`raw_stat`・`entries`・`companions`・`overrides`の
+    載せるのは method / lbm / polarity / library_mode / msp / alignment_reference
+    （msp_only / msp_then_lbm では実効の足切り dot_product_cutoffs も）だけ
+    （msp は置き場所を載せずファイル名・sha256・出どころ。spec 2026-10-07 §3.3）。`raw_stat`・`entries`・`companions`・`overrides`の
     ような大きな中間データは`record["inputs"]`に残したまま、receiptへは
     出さない（CLAUDE.md「戻り値を肥大させない」）。
     """
@@ -200,14 +220,31 @@ def _resolved_settings(record: dict) -> dict:
     lbm = inputs.get("lbm") or {}
     polarity = inputs.get("polarity") or {}
     msp = inputs.get("msp") or {}
-    return {
+    # v2 の計画と、v8 より前に保存された計画には無い。
+    alignment_reference = inputs.get("alignment_reference")
+    library_mode = inputs.get("library_mode", "auto")
+    resolved_msp = {"file": msp.get("file"), "sha256": msp.get("sha256"),
+                    "source": msp.get("source", "not_used")}
+    if library_mode == "msp_then_lbm":
+        # LBM も研究室の資産（[library] lbm）なので置き場所を載せない。MSP は注釈器の
+        # priority（LBM は Console が 1 に固定）を添える（v8 設計 §4.2）。
+        resolved_lbm = {"file": lbm.get("file"), "sha256": lbm.get("sha256"),
+                        "source": lbm.get("source")}
+        resolved_msp["priority"] = msp.get("priority")
+    else:
+        resolved_lbm = {"path": lbm.get("path"), "sha256": lbm.get("sha256")}
+    resolved = {
         "method": {"source_path": method.get("source_path"), "sha256": method.get("sha256")},
-        "lbm": {"path": lbm.get("path"), "sha256": lbm.get("sha256")},
+        "lbm": resolved_lbm,
         "polarity": {"value": polarity.get("value"), "source": polarity.get("source")},
-        "library_mode": inputs.get("library_mode", "auto"),
-        "msp": {"file": msp.get("file"), "sha256": msp.get("sha256"),
-                "source": msp.get("source", "not_used")},
+        "library_mode": library_mode,
+        "msp": resolved_msp,
+        "alignment_reference": alignment_reference,
     }
+    if library_mode in ("msp_only", "msp_then_lbm"):
+        # MSP・LBM 共通の足切り（平方根の尺度）。それより前の計画には無い（null）。
+        resolved["dot_product_cutoffs"] = inputs.get("dot_product_cutoffs")
+    return resolved
 
 
 def _dispatch_receipt(pipeline_path: Path, *, launched: bool, launch: dict | None = None,
@@ -303,7 +340,10 @@ def _prepare_run(dataset_root: Path, request: dict | None,
         plan = inputs_mod.plan_from_profile(source_root, request_resolved, profile)
     else:
         exe_path = _resolve_exe_path()
-        plan = inputs_mod.inspect_inputs(source_root, request_resolved, exe_path=exe_path)
+        # アライメントの参照ファイルを注入順の中央にするため、シートを先に解して渡す。
+        plan = inputs_mod.inspect_inputs(
+            source_root, request_resolved, exe_path=exe_path,
+            manifest_rows=_manifest_rows_for_planning(source_root, request_resolved))
     plan["fingerprint"] = _plan_fingerprint(plan)
 
     manifest_error = _precheck_manifest(source_root, request_resolved, plan)

@@ -100,8 +100,8 @@ def test_target_mode_payload_shape_and_rule_hash():
     _load_ds()
     rid = _differential()
     parsed = _search(targets=[_target()])
-    assert set(parsed) == {"targets", "candidates", "stats", "results", "rule",
-                           "stats_source", "notes"}
+    assert set(parsed) == {"targets", "candidates", "stats", "stats_unmerged", "merge_split",
+                           "results", "rule", "stats_source", "notes"}
 
     [target] = parsed["targets"]
     assert target["status"] == "resolved" and target["reason"] is None
@@ -110,16 +110,21 @@ def test_target_mode_payload_shape_and_rule_hash():
     assert target["selected_evidence"] == "sme_match"
     assert target["truncated"] == 0
     assert "candidates" not in target                     # 候補は TSV の側に 1 回だけ
+    assert target["merged_from"] is None                  # 割れの組でない
 
-    assert parsed["candidates"].splitlines()[0] == "\t".join(CANDIDATE_COLUMNS)
+    # merge_split（既定 true）は候補の末尾にも merged_from を足す
+    assert parsed["candidates"].splitlines()[0] == "\t".join(CANDIDATE_COLUMNS + ("merged_from",))
     [row] = _tsv(parsed["candidates"])
-    assert row["feature_id"] == "f5" and row["evidence"] == "sme_match"
+    assert row["feature_id"] == "f5" and row["evidence"] == "sme_match" and row["merged_from"] == ""
     assert row["ppm"] == "0.0" and row["mz"] == "105.0"
 
-    assert parsed["stats"].splitlines()[0] == "\t".join(STATS_COLUMNS)
+    # merge_split（既定 true）は末尾に merged_from を足す。割れの無い特徴では空で、値は従来どおり
+    assert parsed["stats"].splitlines()[0] == "\t".join(STATS_COLUMNS + ("merged_from",))
     [stat] = _tsv(parsed["stats"])
     assert stat["feature_id"] == "f5" and stat["result_id"] == rid
-    assert stat["status"] == "tested" and stat["p"] != ""
+    assert stat["status"] == "tested" and stat["p"] != "" and stat["merged_from"] == ""
+    assert _tsv(parsed["stats_unmerged"]) == [{k: v for k, v in stat.items() if k != "merged_from"}]
+    assert parsed["merge_split"]["groups"] == [] and parsed["merge_split"]["recomputed"] == []
 
     rule = parsed["rule"]
     assert len(rule["rule_hash"]) == 64
@@ -142,7 +147,8 @@ def test_window_mode_payload_shape_and_rounding():
     ds.feature_metadata["f1"]["rt"] = 1.123456789
     _differential()
     parsed = _search(min_mz=100.0, max_mz=102.0)
-    assert set(parsed) == {"features", "stats", "results", "stats_source", "notes"}
+    assert set(parsed) == {"features", "stats", "stats_unmerged", "merge_split", "results",
+                           "stats_source", "notes"}
     assert parsed["features"].splitlines()[0] == "\t".join(WINDOW_COLUMNS)
     rows = _tsv(parsed["features"])
     assert [r["feature_id"] for r in rows] == ["f0", "f1", "f2"]
@@ -346,3 +352,214 @@ def test_dataset_fingerprint_is_computed_once_per_call(monkeypatch):
     assert len(calls) == 1
     assert parsed["stats_source"]["result_ids"] == [session_rid, *handed]
     assert parsed["stats_source"]["dataset_hash"] == original(ds)
+
+
+# ---------- 割れたスポットのまとめ（merge_split。spec 2026-10-28 §4.3 (c)） ----------
+
+CE_KEY = "RJECHNNFRHZQKU-RMUVNZEASA-N"
+
+#: 最初の 2 注入（ファイル名の順で HC1・HC2）だけが RT +0.6 の別スポット 31 に割れた CE。
+#: 32〜37 は割れの無い特徴（BH の母集団を作る）。
+SPLIT = (
+    {"id": "30", "mz": 650.6000, "rt": 20.00, "values": [20, 21, 1000, 1010, 1020, 1030, 990, 995],
+     "sme": [{"name": "CE 18:2", "inchikey": CE_KEY, "formula": "C45H76O2", "adduct": "[M+H]1+",
+              "theo": 650.6000}]},
+    {"id": "31", "mz": 650.6040, "rt": 20.60, "values": [1005, 1015, 22, 20, 21, 23, 20, 22],
+     "sme": []},
+) + tuple(
+    {"id": str(32 + i), "mz": 300.0 + 37.0 * i, "rt": 3.0 + i,
+     "values": [50 + i, 61 + 2 * i, 55, 70 + 3 * i, 66, 90 - i, 60, 61], "sme": []}
+    for i in range(6))
+
+
+def _merged_values():
+    by_id = {f["id"]: f for f in SPLIT}
+    return [max(a, b) for a, b in zip(by_id["30"]["values"], by_id["31"]["values"])]
+
+
+def _load_mztab(path, features):
+    from metabolomix.tools import mztab_tools
+    from tests.reanalysis_fixtures import write_mztab
+
+    mztab_tools.dataset_load(mztab_path=str(write_mztab(path, features=features)))
+    assert session_state.session.dataset is not None
+
+
+def _differential_on_session():
+    from metabolomix.tools.dataset_analysis_tools import dataset_differential, dataset_preprocess
+    dataset_preprocess()
+    out = json.loads(dataset_differential(group_a=["HC1", "HC2", "HC3"],
+                                          group_b=["RA1", "RA2", "RA3"]))
+    return out["result_id"]
+
+
+def _oracle_rows(tmp_path):
+    """30 の列を試料ごとの大きい方の値にし、31 を除いた行列を最初から読み込んで検定した行（ID → 行）。"""
+    merged = ({**SPLIT[0], "values": _merged_values()},) + SPLIT[2:]
+    _load_mztab(tmp_path / "oracle" / "AlignResult-1.mzTab", merged)
+    _differential_on_session()
+    ids = [f["id"] for f in merged]
+    return {r["feature_id"]: r for r in _tsv(_search(feature_ids=ids, merge_split=False)["stats"])}
+
+
+def _oracle_stats(tmp_path):
+    return _oracle_rows(tmp_path)["30"]
+
+
+def _split_session(tmp_path):
+    _load_mztab(tmp_path / "split" / "AlignResult-1.mzTab", SPLIT)
+    return _differential_on_session()
+
+
+_NUMBERS = ("log2fc", "p", "q", "mean_a", "mean_b")
+
+
+def test_feature_search_merge_split_recomputes_q(tmp_path):
+    oracle = _oracle_stats(tmp_path)
+    rid = _split_session(tmp_path)
+    unmerged = {r["feature_id"]: r for r in _tsv(_search(feature_ids=["30", "31"],
+                                                         merge_split=False)["stats"])}
+
+    parsed = _search(feature_ids=["30", "31"])
+    [row] = _tsv(parsed["stats"])                      # 2 スポットは 1 つの物質として 1 行
+    assert parsed["stats"].splitlines()[0] == "\t".join(STATS_COLUMNS + ("merged_from",))
+    assert row["feature_id"] == "30" and row["merged_from"] == "30;31"
+    assert row["result_id"] == rid and row["status"] == "tested"
+    # まとめた行列で最初から回した検定（BH はまとめた後の全特徴）と同じ数字
+    assert {k: row[k] for k in _NUMBERS} == {k: oracle[k] for k in _NUMBERS}
+    assert row["q"] != unmerged["30"]["q"]
+    # まとめなかった場合の stats（従来の値）も同じ行の並びで残す
+    assert {r["feature_id"]: r for r in _tsv(parsed["stats_unmerged"])} == unmerged
+    assert parsed["stats_unmerged"].splitlines()[0] == "\t".join(STATS_COLUMNS)
+    block = parsed["merge_split"]
+    assert block["enabled"] is True and block["source"] == "find_split_pairs"
+    assert block["groups"] == [["30", "31"]] and block["recomputed"] == [rid]
+    assert block["bh_population"][rid]["n_features_total"] == len(SPLIT) - 1
+
+    # 消える側の ID（31）を名指しても、残す ID の行に解く
+    [only] = _tsv(_search(feature_ids=["31"])["stats"])
+    assert only["feature_id"] == "30" and only["q"] == oracle["q"]
+
+    # 目標照合でも、照合した特徴の stats はまとめた後の値
+    target = {"target_id": "ce", "inchikey": CE_KEY, "expected_mz": 650.6, "adduct": "[M+H]+",
+              "rt_min": 20.0}
+    matched = _search(targets=[target])
+    assert matched["targets"][0]["selected_feature_id"] == "30"
+    assert matched["targets"][0]["merged_from"] == ["30", "31"]
+    assert matched["candidates"].splitlines()[0].endswith("\treasons\tmerged_from")
+    [stat] = _tsv(matched["stats"])
+    assert stat["merged_from"] == "30;31" and stat["q"] == oracle["q"]
+    assert _tsv(matched["stats_unmerged"])[0]["q"] == unmerged["30"]["q"]
+
+
+def test_feature_search_no_split_stats_unchanged(tmp_path, monkeypatch):
+    """まとめる組がデータセットに無ければ検定をやり直さず、stats は従来の値。"""
+    from metabolomix.analysis import feature_search
+
+    _load_mztab(tmp_path / "nosplit" / "AlignResult-1.mzTab", (SPLIT[0],) + SPLIT[2:])
+    _differential_on_session()
+    plain = _tsv(_search(feature_ids=["32", "33"], merge_split=False)["stats"])
+
+    def _must_not_run(*args, **kwargs):
+        raise AssertionError("まとめる組が無ければ検定をやり直さない")
+
+    monkeypatch.setattr(feature_search, "retest_merged", _must_not_run)
+    parsed = _search(feature_ids=["32", "33"])
+    rows = _tsv(parsed["stats"])
+    assert [{k: v for k, v in r.items() if k != "merged_from"} for r in rows] == plain
+    assert all(r["merged_from"] == "" for r in rows)
+    assert _tsv(parsed["stats_unmerged"]) == plain
+    assert parsed["merge_split"]["recomputed"] == [] and parsed["merge_split"]["groups"] == []
+
+
+def test_feature_search_merge_split_false(tmp_path):
+    _split_session(tmp_path)
+    parsed = _search(feature_ids=["30", "31"], merge_split=False)
+    assert "stats_unmerged" not in parsed
+    assert parsed["merge_split"] == {"enabled": False}
+    assert parsed["stats"].splitlines()[0] == "\t".join(STATS_COLUMNS)
+    assert [r["feature_id"] for r in _tsv(parsed["stats"])] == ["30", "31"]
+
+    # 効かない設定は書かせない・別のデータセットの JSON は拒む
+    qc_path = tmp_path / "qc.json"
+    qc_path.write_text(json.dumps({"schema": "alignment-qc.v1", "dataset_fingerprint": "other",
+                                   "merge_groups": [{"features": ["30", "31"], "mergeable": True}]}),
+                       encoding="utf-8")
+    bad = _search(feature_ids=["30"], merge_split=False, alignment_qc_path=str(qc_path))
+    assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
+    foreign = _search(feature_ids=["30"], alignment_qc_path=str(qc_path))
+    assert foreign["error"]["code"] == "ANALYSIS_INPUT_INVALID"
+
+    # dataset_alignment_qc が書いた JSON を渡すと、その merge_groups でまとめる
+    from metabolomix.tools import reanalysis_tools as R
+    written = tmp_path / "alignment_qc_pos.json"
+    R.dataset_alignment_qc(output_path=str(written))
+    via_file = _search(feature_ids=["31"], alignment_qc_path=str(written))
+    assert via_file["merge_split"]["source"] == "alignment_qc"
+    assert _tsv(via_file["stats"])[0]["merged_from"] == "30;31"
+
+
+def test_feature_search_unrelated_feature_uses_the_merged_bh_population(tmp_path):
+    """組が 1 つでもあれば、組に入らない特徴の stats もまとめた行列の BH（1 つの母集団）から出す。"""
+    oracle = _oracle_rows(tmp_path)
+    _split_session(tmp_path)
+    [stored] = _tsv(_search(feature_ids=["32"], merge_split=False)["stats"])
+    parsed = _search(feature_ids=["32"])
+    [row] = _tsv(parsed["stats"])
+    assert row["merged_from"] == ""
+    assert {k: row[k] for k in _NUMBERS} == {k: oracle["32"][k] for k in _NUMBERS}
+    assert row["q"] != stored["q"]                       # 母集団が 8 → 7 特徴
+    assert _tsv(parsed["stats_unmerged"]) == [stored]
+    assert parsed["merge_split"]["groups"] == [] and parsed["merge_split"]["recomputed"]
+
+
+#: 30 に SME が無い（2 スポットとも unannotated）割れの組と、同じ m/z・近い RT に並ぶ無関係な 2 スポット。
+BOTH_HALVES = ({**SPLIT[0], "sme": []}, SPLIT[1]) + SPLIT[2:] + (
+    {"id": "40", "mz": 500.0000, "rt": 8.00, "values": [100, 110, 90, 120, 105, 95, 100, 101],
+     "sme": []},
+    {"id": "41", "mz": 500.0010, "rt": 8.20, "values": [98, 112, 91, 118, 104, 97, 99, 100],
+     "sme": []},
+)
+
+
+def test_target_with_both_halves_in_the_window_resolves_to_the_kept_id(tmp_path):
+    _load_mztab(tmp_path / "halves" / "AlignResult-1.mzTab", BOTH_HALVES)
+    _differential_on_session()
+    both = {"target_id": "ce", "inchikey": CE_KEY, "expected_mz": 650.6, "adduct": "[M+H]+",
+            "rt_min": 20.3, "rt_tol_min": 0.5}
+    [merged] = _search(targets=[both])["targets"]
+    assert merged["status"] == "resolved" and merged["selected_feature_id"] == "30"
+    assert merged["merged_from"] == ["30", "31"] and merged["counts"]["qualified"] == 1
+    [plain] = _search(targets=[both], merge_split=False)["targets"]
+    assert plain["status"] == "needs_input"
+    assert plain["reason"] == "multiple_qualified_candidates"
+
+    # 割れの組でない 2 スポットは、merge_split でも 1 つにならない
+    unrelated = {"target_id": "x", "inchikey": CE_KEY, "expected_mz": 500.0, "adduct": "[M+H]+",
+                 "rt_min": 8.1, "rt_tol_min": 0.3}
+    [still] = _search(targets=[unrelated])["targets"]
+    assert still["status"] == "needs_input" and still["merged_from"] is None
+
+
+def test_target_candidates_include_the_partner_outside_the_mass_window(tmp_path):
+    _load_mztab(tmp_path / "gap" / "AlignResult-1.mzTab", BOTH_HALVES)
+    _differential_on_session()
+    target = {"target_id": "ce", "inchikey": CE_KEY, "expected_mz": 650.608, "adduct": "[M+H]+",
+              "rt_min": 20.6}
+    parsed = _search(targets=[target])
+    [summary] = parsed["targets"]
+    assert summary["status"] == "resolved" and summary["selected_feature_id"] == "30"
+    rows = {r["feature_id"]: r for r in _tsv(parsed["candidates"])}
+    assert set(rows) == {"30", "31"}
+    assert rows["30"]["qualified"] == "false" and "merge_partner" in rows["30"]["reasons"]
+    assert summary["counts"]["mass"] == 1 and summary["counts"]["qualified"] == 1
+    # 規則の隣に merge_split と組の hash。false は v7 と同じ hash
+    from metabolomix.analysis import feature_search
+    rule = parsed["rule"]
+    assert rule["merge_split"] is True and len(rule["merge_groups_hash"]) == 64
+    off = _search(targets=[target], merge_split=False)
+    assert off["rule"]["merge_split"] is False and off["rule"]["merge_groups_hash"] is None
+    [normalized] = feature_search.normalize_targets([target], dataset_polarity="positive")
+    assert off["rule"]["rule_hash"] == feature_search.rule_hash([normalized])
+    assert rule["rule_hash"] != off["rule"]["rule_hash"]
+    assert {r["feature_id"] for r in _tsv(off["candidates"])} == {"31"}

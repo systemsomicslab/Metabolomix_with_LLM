@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
+from typing import Literal
 
 from metabolomix.core import user_config
 
@@ -65,37 +66,85 @@ def get_exe_path() -> str:
     return setting.value
 
 
-def is_console_exe(
+# 起動検査（--help）の既定。MSDIALCUI.exe は初回（冷間）起動で .NET の読み込みと
+# Defender の走査が重なり 15 秒を超えることがある。時間切れは Console でない根拠に
+# ならないので、待ちを長くし、時間切れだけ 1 回やり直す。
+PROBE_TIMEOUT_S = 60
+PROBE_RETRIES = 1
+
+
+def probe_console_exe(
     exe_path: str,
-    timeout_s: int = 15,
+    timeout_s: int = PROBE_TIMEOUT_S,
+    retries: int = PROBE_RETRIES,
     *,
     raise_on_os_error: bool = False,
-) -> bool:
-    """MSDIAL_EXE が Console 実行体かを --help の出力で判定する。
+) -> Literal["console", "not_console", "timeout"]:
+    """MSDIAL_EXE が Console 実行体かを --help の出力で判定し、時間切れを区別して返す。
 
     Console は旧ビルドも master ビルドも --help（旧は引数エラー時の usage）に
     サブコマンド名 `lcms` を含む。GUI の MSDIAL.exe はコンソール出力を持たず、
-    ウィンドウを開いたまま返らないため、ここで実行前に弾く。既定では
-    起動不能も False にするが、実行経路は `raise_on_os_error=True` で
-    起動不能を既存の NOT_FOUND 経路へ渡せる。
+    ウィンドウを開いたまま返らないため、ここで実行前に弾く。
+
+    - `"console"`: 出力に `lcms` がある。
+    - `"not_console"`: 出力が返ったが `lcms` が無い（既定では起動不能も同じ）。
+    - `"timeout"`: `timeout_s` 秒で返らなかった。`retries` 回やり直してもなお返らない
+      ときだけ。冷間起動の遅さと GUI のハングはここでは区別できないので、
+      「Console でない」と断定せず呼び出し側に別のコードで返させる。
+
+    出力が返った判定（console / not_console）はやり直さない。実行経路は
+    `raise_on_os_error=True` で起動不能を既存の NOT_FOUND 経路へ渡せる。
     """
-    try:
-        completed = subprocess.run(
-            [exe_path, "--help"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            timeout=timeout_s,
-            text=True,
-            errors="replace",
-        )
-    except subprocess.TimeoutExpired:
-        return False
-    except OSError:
-        if raise_on_os_error:
-            raise
-        return False
-    return "lcms" in (completed.stdout or "")
+    for _attempt in range(retries + 1):
+        try:
+            completed = subprocess.run(
+                [exe_path, "--help"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                timeout=timeout_s,
+                text=True,
+                errors="replace",
+            )
+        except subprocess.TimeoutExpired:
+            continue
+        except OSError:
+            if raise_on_os_error:
+                raise
+            return "not_console"
+        return "console" if "lcms" in (completed.stdout or "") else "not_console"
+    return "timeout"
+
+
+def is_console_exe(
+    exe_path: str,
+    timeout_s: int = PROBE_TIMEOUT_S,
+    *,
+    raise_on_os_error: bool = False,
+) -> bool:
+    """`probe_console_exe` が `"console"` を返したかだけを返す（時間切れは False）。
+
+    時間切れと「Console でない」を分けたい呼び出し元は `probe_console_exe` を使う。
+    """
+    return probe_console_exe(
+        exe_path, timeout_s, raise_on_os_error=raise_on_os_error) == "console"
+
+
+def probe_timeout_details() -> dict:
+    """`MSDIAL_EXE_PROBE_TIMEOUT` の details（待った秒数と試行回数）。"""
+    return {"timeout_s": PROBE_TIMEOUT_S, "attempts": PROBE_RETRIES + 1}
+
+
+def probe_timeout_message(exe: str) -> str:
+    """`MSDIAL_EXE_PROBE_TIMEOUT` の文面（3 つの呼び出し元で共有する）。"""
+    return (
+        f"Console の実行体（[msdial] exe / MSDIAL_EXE）の --help が {PROBE_TIMEOUT_S} 秒を"
+        f"{PROBE_RETRIES + 1} 回待っても返りませんでした: {exe}  "
+        "Console でないとは判定できていません。初回起動の遅れ（Defender の走査・.NET の"
+        "読み込み）なら、もう一度呼び直すと通ります。毎回この表示になるなら GUI の "
+        "MSDIAL.exe（ウィンドウを開いたまま返らない）を指している可能性があるので、"
+        "MsdialWorkbench の Console 実行体（MSDIALCUI.exe）のパスを確かめてください。"
+    )
 
 
 def build_msdial_cmd(

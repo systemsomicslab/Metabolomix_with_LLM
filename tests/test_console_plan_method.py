@@ -22,7 +22,7 @@ def _plan_ready(tmp_path, monkeypatch, exe):
     session_state.session = session_state.AnalysisSession()
     monkeypatch.setenv("MSDIAL_EXE", str(exe))
     monkeypatch.delenv("MSDIAL_LBM", raising=False)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "a.wiff").touch()
 
 

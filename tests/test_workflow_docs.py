@@ -58,7 +58,8 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
     "reanalysis.md": ("dataset_handle_open", "dataset_handle_list", "dataset_handle_close",
                       "dataset_analysis_run", "library_msms_qualify", "dataset_homolog_check",
                       "dataset_feature_relations", "dataset_claim_evidence",
-                      "dataset_mass_accuracy", "dataset_novel_candidates"),
+                      "dataset_mass_accuracy", "dataset_novel_candidates",
+                      "dataset_alignment_qc"),
 }
 
 # 今回の範囲外。文書に混入したら落とす（線引きを固定するため）。
@@ -191,4 +192,4 @@ class TestScopeBoundary(unittest.TestCase):
             registered,
             "対象範囲の分類と登録済みツールが一致しない",
         )
-        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 69)
+        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 70)

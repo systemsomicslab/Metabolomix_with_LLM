@@ -61,7 +61,7 @@ def _console_env(tmp_path: Path, monkeypatch) -> Path:
     (app / "x.lbm2").touch()
     monkeypatch.setenv("MSDIAL_EXE", str(app / "MSDIALCUI.exe"))
     monkeypatch.delenv("MSDIAL_LBM", raising=False)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     return method

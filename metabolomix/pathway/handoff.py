@@ -14,6 +14,9 @@ from pathlib import Path
 
 import numpy as np
 
+from metabolomix.msdial.lipid_identity import normalize_lipid_name
+from metabolomix.pathway.msdial_lipid_classes import MSDIAL_LIPID_CLASSES
+
 _UNANNOTATED = {"", "unknown", "others", "null"}
 _SPOT_RE = re.compile(r"^Spot_(\d+)_(.+)$")
 _MIN_GROUP = 2
@@ -54,6 +57,22 @@ def _annotated(name, ontology) -> bool:
             and str(ontology or "").strip().lower() not in _UNANNOTATED)
 
 
+def _drop_reason(name, ontology) -> str | None:
+    """行を落とす理由。残すなら None。
+
+    `unannotated`（名前か Ontology が空・Unknown・Others）→ `non_msdial_ontology`（Ontology が
+    MS-DIAL の脂質クラスでない。研究室 MSP のみの run の ClassyFire 系の名前はここで落ちる）→
+    `unparsable_name`（名前が脂質ショートハンドとして読めない）の順に見る。
+    """
+    if not _annotated(name, ontology):
+        return "unannotated"
+    if str(ontology).strip() not in MSDIAL_LIPID_CLASSES:
+        return "non_msdial_ontology"
+    if not normalize_lipid_name(str(name).strip())["parse_ok"]:
+        return "unparsable_name"
+    return None
+
+
 def _dedup_by_name(names, ontologies, rows):
     """同名の行は平均強度が最大の 1 行だけ残す（sum の二重計上を避ける。spec §4）。"""
     best: dict[str, int] = {}
@@ -75,6 +94,7 @@ def _finish(sample_names, groups, names, ontologies, rows, report) -> HandoffTab
     keep, n_dup, examples = _dedup_by_name(names, ontologies, rows)
     report["dropped_duplicate_names"] = n_dup
     report["duplicate_name_examples"] = examples
+    report["n_kept"] = len(keep)
     matrix = (np.vstack([rows[i] for i in keep]) if keep
               else np.empty((0, len(sample_names))))
     if len(keep) < _MIN_FEATURES:
@@ -117,6 +137,7 @@ def build_from_arf(*, matrix, sample_names, feature_names, sample_meta,
 
     names, ontologies, rows = [], [], []
     report = {"source": "arf", "prop": prop, "dropped_unannotated": 0,
+              "dropped_non_msdial_ontology": 0, "dropped_unparsable_name": 0,
               "dropped_excluded_spots": 0}
     for j, feat in enumerate(feature_names):
         m = _SPOT_RE.match(str(feat))
@@ -128,8 +149,9 @@ def build_from_arf(*, matrix, sample_names, feature_names, sample_meta,
             continue
         spot = catalog.get(spot_id) or {}
         name, onto = spot.get("Name"), spot.get("Ontology")
-        if not _annotated(name, onto):
-            report["dropped_unannotated"] += 1
+        reason = _drop_reason(name, onto)
+        if reason:
+            report[f"dropped_{reason}"] += 1
             continue
         names.append(str(name).strip())
         ontologies.append(str(onto).strip())
@@ -172,11 +194,14 @@ def build_from_dataset(*, pp_matrix, pp_sample_names, pp_feature_names, roles,
     _check_group_sizes(groups, group_a_label, group_b_label)
 
     names, ontologies, rows = [], [], []
-    report = {"source": "dataset", "dropped_unannotated": 0}
+    report = {"source": "dataset", "dropped_unannotated": 0,
+              "dropped_non_msdial_ontology": 0, "dropped_unparsable_name": 0}
     for j, fid in enumerate(pp_feature_names):
         ann = annotations.get(str(fid)) or {}
-        if ann.get("ambiguous") or not _annotated(ann.get("name"), ann.get("ontology")):
-            report["dropped_unannotated"] += 1
+        reason = ("unannotated" if ann.get("ambiguous")
+                  else _drop_reason(ann.get("name"), ann.get("ontology")))
+        if reason:
+            report[f"dropped_{reason}"] += 1
             continue
         names.append(str(ann["name"]).strip())
         ontologies.append(str(ann["ontology"]).strip())

@@ -114,7 +114,7 @@ def test_template_output_then_plans_cleanly(tmp_path, monkeypatch):
     session_state.session = session_state.AnalysisSession()
     from metabolomix.tools.console_tools import console_method_template, console_plan
     _ready(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     src = _neg_param(tmp_path / "neg_param_1.txt")
     data = tmp_path / "data"
     data.mkdir()

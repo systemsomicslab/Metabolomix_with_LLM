@@ -325,7 +325,7 @@ def test_resume_pipeline_normalizes_the_run_json_path_before_launching(tmp_path,
 def _prepare_source(tmp_path, monkeypatch):
     """`start_pipeline`の実処理(受付冪等性込み)を通すための実生データフォルダ。
 
-    `MSDIAL_EXE`環境変数と`is_console_exe`だけを差し替え、他はすべて
+    `MSDIAL_EXE`環境変数と`probe_console_exe`だけを差し替え、他はすべて
     `inspect_inputs`/`find_or_create_run`本体を実際に通す
     （`tests/test_pipeline_recovery.py::_build_pipeline_with_real_inputs`と
     同じ流儀）。
@@ -333,7 +333,7 @@ def _prepare_source(tmp_path, monkeypatch):
     from tests.pipeline_fixtures import make_source
     source = make_source(tmp_path / "source")
     monkeypatch.setenv("MSDIAL_EXE", str(source["exe"]))
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     monkeypatch.setenv("LIPIDMIX_PIPELINE_INDEX_DIR", str(tmp_path / "_pipeline_index_base"))
     return source
 
@@ -505,7 +505,8 @@ def test_plan_receipt_shows_the_resolved_settings_the_instructions_promise(tmp_p
     assert resolved["polarity"]["source"]
 
     # コンパクトさ: 大きな中間データを持ち込んでいない。
-    assert set(resolved) == {"method", "lbm", "polarity", "library_mode", "msp"}
+    assert set(resolved) == {"method", "lbm", "polarity", "library_mode", "msp",
+                        "alignment_reference"}
     assert resolved["library_mode"] == "auto"
     assert resolved["msp"] == {"file": None, "sha256": None, "source": "not_used"}
     assert set(resolved["method"]) == {"source_path", "sha256"}
@@ -685,7 +686,42 @@ def test_plan_receipt_shows_the_lab_msp_without_its_location(tmp_path, monkeypat
     assert resolved["msp"]["file"] == "lab_neg.msp"
     assert len(resolved["msp"]["sha256"]) == 64
     assert resolved["msp"]["source"] == "config_file"
+    assert resolved["dot_product_cutoffs"]["scale"] == "square_root"
     assert "secret_share" not in json.dumps(receipt, ensure_ascii=False)
+
+
+def test_receipt_shows_lbm_without_location(tmp_path, monkeypatch):
+    """v8 Task 4: msp_then_lbm の receipt は LBM と MSP をファイル名・sha256・出どころで示す。"""
+    from tests.lab_msp_fixtures import write_lab_msp_config
+    source = _prepare_source(tmp_path, monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share", lbm=True)
+    receipt = service.plan_pipeline(source["root"], {"library_mode": "msp_then_lbm"})
+    resolved = receipt["resolved"]
+    assert resolved["library_mode"] == "msp_then_lbm"
+    assert set(resolved["lbm"]) == {"file", "sha256", "source"}
+    assert resolved["lbm"]["file"] == "lab_lipids.lbm2"
+    assert len(resolved["lbm"]["sha256"]) == 64
+    assert resolved["lbm"]["source"] == "config_file"
+    assert resolved["msp"]["file"] == "lab_neg.msp"
+    assert len(resolved["msp"]["sha256"]) == 64
+    assert resolved["msp"]["priority"] == 2
+    cutoffs = resolved["dot_product_cutoffs"]
+    assert (cutoffs["weighted"], cutoffs["simple"], cutoffs["reverse"]) == (0.6, 0.6, 0.8)
+    assert cutoffs["scale"] == "square_root" and set(cutoffs["source"]) == {
+        "weighted", "simple", "reverse"}
+    assert "secret_share" not in json.dumps(receipt, ensure_ascii=False)
+
+
+def test_plan_fingerprint_follows_the_lbm_of_msp_then_lbm():
+    plan = {
+        "raw_stat": [{"relative_path": "a.wiff", "size": 1, "mtime_ns": 2}],
+        "selected_format": "wiff",
+        "method": {"sha256": "m" * 64}, "lbm": {"sha256": "l" * 64},
+        "exe": {"sha256": "e" * 64}, "polarity": {"value": "negative"},
+        "msp": {"sha256": "s" * 64},
+    }
+    other = {**plan, "lbm": {"sha256": "x" * 64}}
+    assert service._plan_fingerprint(plan) != service._plan_fingerprint(other)
 
 
 def test_plan_fingerprint_is_unchanged_without_an_msp():
@@ -725,3 +761,70 @@ def test_status_details_do_not_reveal_the_lab_msp_location(tmp_path, monkeypatch
     saved = store.load_run(recovery.normalize_pipeline_root(Path(receipt["pipeline_path"])))
     assert saved["inputs"]["msp"]["path"].endswith("lab_neg.msp")
     assert "secret_share" in saved["inputs"]["msp"]["path"]
+
+
+def test_status_details_do_not_reveal_the_lab_lbm_location(tmp_path, monkeypatch):
+    """v8 Task 4 fix 1: msp_then_lbm の LBM（[library] lbm）の置き場所も record の写しから除く。"""
+    from metabolomix.pipeline import recovery, store
+    from tests.lab_msp_fixtures import write_lab_msp_config
+    source = _prepare_source(tmp_path, monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share", lbm=True)
+    receipt = service.plan_pipeline(source["root"], {"library_mode": "msp_then_lbm"})
+    # データ側の記録そのものは絶対パスのまま（resume の再検査に要る）。
+    saved = store.load_run(recovery.normalize_pipeline_root(Path(receipt["pipeline_path"])))
+    assert "secret_share" in saved["inputs"]["lbm"]["path"]
+
+    status = recovery.read_status(Path(receipt["pipeline_path"]), include_details=True)
+    text = json.dumps(status, ensure_ascii=False)
+    assert "secret_share" not in text
+    inputs = status["record"]["inputs"]
+    assert inputs["lbm"]["path"] == "lab_lipids.lbm2"
+    assert inputs["lbm"]["file"] == "lab_lipids.lbm2"
+    assert inputs["method"]["overrides"]["Lbm file path"] == "lab_lipids.lbm2"
+    assert inputs["method"]["overrides"]["Msp file path"] == ""
+
+
+def test_without_library_location_redacts_absolute_annotator_tables():
+    from metabolomix.pipeline import recovery
+    record = {"inputs": {
+        "library_mode": "msp_then_lbm",
+        "lbm": {"path": "//nas/secret_share/lab.lbm2", "file": "lab.lbm2"},
+        "msp": {"path": "//nas/secret_share/lab_neg.msp", "file": "lab_neg.msp"},
+        "method": {"overrides": {
+            "Lbm file path": "//nas/secret_share/lab.lbm2",
+            "MSP annotator settings file path": "//nas/secret_share/msp-annotators.tsv",
+            "MSP search settings file path": "inputs/msp-annotators.tsv",
+        }},
+    }}
+    redacted = recovery._without_library_location(record)
+    assert "secret_share" not in json.dumps(redacted)
+    overrides = redacted["inputs"]["method"]["overrides"]
+    assert overrides["MSP annotator settings file path"] == "msp-annotators.tsv"
+    assert overrides["MSP search settings file path"] == "inputs/msp-annotators.tsv"  # 相対はそのまま
+    assert record["inputs"]["lbm"]["path"] == "//nas/secret_share/lab.lbm2"  # 元は変えない
+    # auto の LBM（[msdial] lbm）は従来どおり path を残す。
+    auto = {"inputs": {"library_mode": "auto", "lbm": {"path": "C:/MS-DIAL/x.lbm2"},
+                       "msp": {"path": None}, "method": {"overrides": {"Lbm file path": "C:/MS-DIAL/x.lbm2"}}}}
+    assert recovery._without_library_location(auto)["inputs"]["lbm"]["path"] == "C:/MS-DIAL/x.lbm2"
+
+
+def test_plan_receipt_shows_alignment_reference(tmp_path, monkeypatch):
+    from tests.pipeline_fixtures import write_sample_manifest
+    source = _prepare_source(tmp_path, monkeypatch)
+    names = [f"S{i}.wiff" for i in range(8)]
+    sheet = write_sample_manifest(source["root"] / "sample-manifest.tsv", source_names=names)
+    # 注入順をファイル名の逆にする（S7 が 1 番目）。
+    text = sheet.read_text(encoding="utf-8").splitlines()
+    for i in range(8):
+        cells = text[2 + i].split("\t")
+        cells[5] = str(8 - i)
+        text[2 + i] = "\t".join(cells)
+    sheet.write_text("\n".join(text) + "\n", encoding="utf-8", newline="\n")
+
+    receipt = service.plan_pipeline(source["root"])
+    reference = receipt["resolved"]["alignment_reference"]
+    assert reference["injection_order_source"] == "manifest"
+    assert (reference["file_id"], reference["sample_file"]) == (4, "S4.wiff")
+
+    method_receipt = service.plan_pipeline(source["root"], {"alignment_reference": "method"})
+    assert method_receipt["resolved"]["alignment_reference"]["file_id"] is None

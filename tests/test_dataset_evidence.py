@@ -140,6 +140,34 @@ def test_build_evidence_rejects_sample_axis_mismatch():
     assert "other" in result["detail"]["missing_in_arf"]
 
 
+def test_build_evidence_matches_names_with_trailing_space():
+    """raw ファイル名の末尾の空白は `.arf` に残るが、mzTab の読み取りが落とす（reader.py の strip）。
+    空白の違いだけで接合を棄却しない。"""
+    from metabolomix.mztab import evidence
+    spots = [
+        _spot(700.5, [
+            _raw_sample_row(0, "s1", 1000.0, 700.5, 10),
+            _raw_sample_row(1, "X-25 ", 900.0, 700.5, 11),
+        ]),
+        _spot(800.25, [
+            _raw_sample_row(0, "s1", 500.0, 800.25, 12),
+            _raw_sample_row(1, "X-25 ", 50.0, 800.25, -2),
+        ]),
+    ]
+    result = evidence.build_evidence(
+        evidence.normalize_arf_spots(spots),
+        feature_mz=[700.5, 800.25],
+        sample_names=["s1", "X-25"],
+    )
+    assert result["status"] == "ok", result
+    assert result["detected_mask"].tolist() == [[True, True], [True, False]]
+
+
+def test_normalize_stem_ignores_surrounding_spaces():
+    from metabolomix.analysis.assay_evidence import _normalize_stem
+    assert _normalize_stem("D:/raw/P15-AA-25 .wiff") == _normalize_stem("P15-AA-25.wiff")
+
+
 def test_detection_rates_are_per_feature():
     """率の定義は形式非依存なので analysis 側が正準（evidence から再輸出しない）。"""
     from metabolomix.analysis.preprocessing import detection_rates
@@ -309,3 +337,57 @@ def test_attach_to_dataset_records_which_arf_files_were_tried(tmp_path):
     evidence.attach_to_dataset(ds, tmp_path / "a.mzTab")
     assert ds.feature_qc["reason"] == "no_candidate"
     assert ds.feature_qc["tried"] == []
+
+
+# --- 試料ごとの m/z（質量精度の注入順の傾向。Task 8） ---
+
+def test_build_evidence_keeps_per_sample_mz_for_detected_cells_only():
+    from metabolomix.mztab import evidence
+    result = evidence.build_evidence(
+        evidence.normalize_arf_spots(_two_by_two()),
+        feature_mz=[700.5, 800.25], sample_names=["s2", "s1"])
+    # 特徴 2 × s2 は gap-fill（補間値の m/z は実測ではない）なので入れない
+    assert result["per_sample_mz"] == [{"s2": 700.5, "s1": 700.5}, {"s1": 800.25}]
+
+
+def test_apply_evidence_sets_per_sample_mz_by_feature_id():
+    from metabolomix.mztab import evidence
+    ds = _ds_with_features()
+    ds.feature_ids = ["10", "20"]
+    result = evidence.build_evidence(
+        evidence.normalize_arf_spots(_two_by_two()),
+        feature_mz=[700.5, 800.25], sample_names=["s1", "s2"])
+    evidence.apply_evidence(ds, result)
+    assert ds.per_sample_mz == {"10": {"s1": 700.5, "s2": 700.5}, "20": {"s1": 800.25}}
+
+
+def test_per_sample_mz_is_none_until_evidence_is_attached():
+    ds = _ds_with_features()
+    assert ds.per_sample_mz is None
+    from metabolomix.mztab import evidence
+    evidence.apply_evidence(ds, None)
+    assert ds.per_sample_mz is None
+    evidence.apply_evidence(ds, {"status": "rejected", "reason": "mz_mismatch", "detail": {}})
+    assert ds.per_sample_mz is None
+
+
+def test_per_sample_mz_does_not_enter_the_dataset_fingerprint():
+    """試料ごとの m/z は入力ではなく付随の証拠。指紋に入れると、完了済みの run の結果を
+    再利用できなくなる（Task 2 の互換規則は行列と検出マスクだけを数える）。"""
+    from metabolomix.analysis.result_state import dataset_fingerprint
+    from metabolomix.mztab import evidence
+    ds = _ds_with_features()
+    ds.feature_ids = ["10", "20"]
+    result = evidence.build_evidence(
+        evidence.normalize_arf_spots(_two_by_two()),
+        feature_mz=[700.5, 800.25], sample_names=["s1", "s2"])
+    without = dict(result)
+    without.pop("per_sample_mz")
+    evidence.apply_evidence(ds, without)
+    before = dataset_fingerprint(ds)
+    assert ds.per_sample_mz is None
+    evidence.apply_evidence(ds, result)
+    assert ds.per_sample_mz
+    assert dataset_fingerprint(ds) == before
+    ds.per_sample_mz["10"]["s1"] = 1.0
+    assert dataset_fingerprint(ds) == before

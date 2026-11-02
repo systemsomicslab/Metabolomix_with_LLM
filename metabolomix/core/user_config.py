@@ -33,6 +33,9 @@ SETTINGS: dict[str, str] = {
     "msdial.lbm": "MSDIAL_LBM",
     "library.msp_positive": "MSDIAL_MSP_POS",
     "library.msp_negative": "MSDIAL_MSP_NEG",
+    # pipeline の library_mode="msp_then_lbm" だけが読む研究室の LBM（v8）。auto の経路の
+    # `msdial.lbm` と混ざらないよう別のキー・別の環境変数にする。
+    "library.lbm": "MSDIAL_LIBRARY_LBM",
     "mslipidmapper.rscript": "MSLIPIDMAPPER_RSCRIPT",
     "mslipidmapper.browser": "MSLIPIDMAPPER_BROWSER",
     "mslipidmapper.mslipidmapper_api_url": "MSLIPIDMAPPER_API_URL",
@@ -52,6 +55,9 @@ MSP_SETTING_KEYS: dict[str, str] = {
     "positive": "library.msp_positive",
     "negative": "library.msp_negative",
 }
+
+#: library_mode="msp_then_lbm" の LBM の設定キー（`[library] lbm`）。
+LIBRARY_LBM_SETTING_KEY = "library.lbm"
 
 # 二重引用符の中の `\n` `\t` `\b` `\f` `\r` は TOML の正しいエスケープなので構文エラーに
 # ならない。`"C:\new\tool.exe"` は黙って改行とタブ入りの値になる。値の側で拾う。

@@ -847,11 +847,178 @@ def test_msp_only_overrides_blank_lbm_set_msp_and_clear_other_identification_key
     assert removed == [_mf.LBM_KEY, _mf.TEXT_DB_KEY, "MSP annotator settings file path"]
 
 
-def test_msp_only_overrides_does_not_add_keys_the_method_never_declared():
+def test_msp_only_overrides_adds_only_library_and_square_root_cutoff_keys():
     overrides, removed = _mf.msp_only_overrides({"ion mode": "Positive", "lbm file path": ""},
                                                 "C:/lab/lab_pos.msp")
-    assert overrides == {_mf.LBM_KEY: "", _mf.MSP_KEY: "C:/lab/lab_pos.msp"}
+    cutoffs = {f"Square root of {kind} dot product cutoff for {lib}-based annotation": value
+               for kind, value in (("weighted", "0.6"), ("simple", "0.6"), ("reverse", "0.8"))
+               for lib in ("MSP", "LBM")}
+    assert overrides == {_mf.LBM_KEY: "", _mf.MSP_KEY: "C:/lab/lab_pos.msp", **cutoffs}
     assert removed == []
+
+
+def test_msp_only_overrides_write_declared_cutoff_on_square_root_scale():
+    # 2026-11-02 から msp_only も msp_then_lbm と同じ尺度（接頭辞の無いキーの値を平方根の側で書く）。
+    method_keys = {"ion mode": "Negative",
+                   "weighted dot product cutoff for msp-based annotation": "0.5",
+                   "reverse dot product cutoff for msp-based annotation": ""}
+    overrides, removed = _mf.msp_only_overrides(method_keys, "C:/lab/lab_neg.msp")
+    assert overrides["Weighted dot product cutoff for MSP-based annotation"] == ""
+    assert overrides["Square root of weighted dot product cutoff for MSP-based annotation"] == "0.5"
+    assert overrides["Square root of reverse dot product cutoff for MSP-based annotation"] == "0.8"
+    assert removed == ["Weighted dot product cutoff for MSP-based annotation"]
+    assert _mf.resolved_dot_product_cutoffs(method_keys)["source"] == {
+        "weighted": "unprefixed_key_read_as_root", "simple": "default", "reverse": "default"}
+
+
+# ---------- library_mode="msp_then_lbm"（v8 Task 4） ----------
+
+_LBM_RT_SCORING = "Use retention information for LBM-based annotation scoring"
+_LBM_RT_FILTERING = "Use retention information for LBM-based annotation filtering"
+
+
+def test_msp_then_lbm_overrides_set_the_table_and_the_lbm():
+    overrides, removed = _mf.msp_then_lbm_overrides(
+        {"ion mode": "Negative", "lbm file path": ""}, "C:/run/inputs/msp-annotators.tsv",
+        "C:/lab/lab.lbm2")
+    assert overrides == {
+        _mf.MSP_KEY: "",
+        "MSP annotator settings file path": "C:/run/inputs/msp-annotators.tsv",
+        _mf.LBM_KEY: "C:/lab/lab.lbm2",
+        _LBM_RT_SCORING: "False",
+        _LBM_RT_FILTERING: "False",
+        # 宣言が無ければ MS-DIAL の既定（平方根の側で 0.6 / 0.6 / 0.8）を MSP と LBM に明示する。
+        **_sqrt_cutoffs("MSP", "0.6", "0.6", "0.8"),
+        **_sqrt_cutoffs("LBM", "0.6", "0.6", "0.8"),
+    }
+    assert removed == []
+
+
+def _sqrt_cutoffs(library: str, weighted: str, simple: str, reverse: str) -> dict[str, str]:
+    return {f"Square root of {kind} dot product cutoff for {library}-based annotation": value
+            for kind, value in (("weighted", weighted), ("simple", simple), ("reverse", reverse))}
+
+
+def test_msp_then_lbm_reads_the_declared_msp_cutoffs_on_the_square_root_scale():
+    """Console は `Weighted dot product cutoff for MSP-based annotation` を二乗の足切りとして読む
+    （0.6 は実効で 0.775）。宣言した値を平方根の側のキーへ移し、二乗のキーは空にする（空は
+    Console の `float.TryParse` に失敗して読み飛ばされる）。LBM にも同じ値を書いて尺度をそろえる。"""
+    method_keys = {
+        "weighted dot product cutoff for msp-based annotation": "0.5",
+        "simple dot product cutoff for msp-based annotation": "0.55",
+        "reverse dot product cutoff for msp-based annotation": "0.7",
+        "weighted dot product cutoff for lbm-based annotation": "0.3",   # LBM の二乗のキーも空にする
+    }
+    overrides, removed = _mf.msp_then_lbm_overrides(method_keys, "C:/run/t.tsv", "C:/lab/lab.lbm2")
+    for library in ("MSP", "LBM"):
+        for kind in ("Weighted", "Simple", "Reverse"):
+            squared = f"{kind} dot product cutoff for {library}-based annotation"
+            if squared.lower() in method_keys:
+                assert overrides[squared] == ""
+            else:
+                assert squared not in overrides
+    assert {k: v for k, v in overrides.items() if k.startswith("Square root of")} == {
+        **_sqrt_cutoffs("MSP", "0.5", "0.55", "0.7"), **_sqrt_cutoffs("LBM", "0.5", "0.55", "0.7")}
+    # 空にした二乗のキー（原本が値を宣言していたもの）は消した宣言に載る
+    assert removed == ["Weighted dot product cutoff for MSP-based annotation",
+                       "Weighted dot product cutoff for LBM-based annotation",
+                       "Simple dot product cutoff for MSP-based annotation",
+                       "Reverse dot product cutoff for MSP-based annotation"]
+
+
+def test_resolved_dot_product_cutoffs_report_values_scale_and_source():
+    """受領（receipt）に出す、実際に効く足切りの値・尺度・出どころ（キーごと）。"""
+    assert _mf.resolved_dot_product_cutoffs({}) == {
+        "weighted": 0.6, "simple": 0.6, "reverse": 0.8, "scale": "square_root",
+        "source": {"weighted": "default", "simple": "default", "reverse": "default"}}
+    got = _mf.resolved_dot_product_cutoffs({
+        "square root of weighted dot product cutoff for msp-based annotation": "0.65",
+        "weighted dot product cutoff for msp-based annotation": "0.5",   # 平方根の側が優先
+        "simple dot product cutoff for msp-based annotation": "0.55",    # 平方根の側の値と読む
+        "reverse dot product cutoff for msp-based annotation": "",       # 空は宣言なし
+    })
+    assert got == {
+        "weighted": 0.65, "simple": 0.55, "reverse": 0.8, "scale": "square_root",
+        "source": {"weighted": "root_key", "simple": "unprefixed_key_read_as_root",
+                   "reverse": "default"}}
+
+
+def test_msp_then_lbm_keeps_a_declared_square_root_cutoff():
+    """平方根の側のキーが宣言されていれば、それが MSP の値（二乗のキーより優先）。"""
+    method_keys = {
+        "weighted dot product cutoff for msp-based annotation": "0.5",
+        "square root of weighted dot product cutoff for msp-based annotation": "0.65",
+    }
+    overrides, _ = _mf.msp_then_lbm_overrides(method_keys, "C:/run/t.tsv", "C:/lab/lab.lbm2")
+    assert overrides["Square root of weighted dot product cutoff for MSP-based annotation"] == "0.65"
+    assert overrides["Square root of weighted dot product cutoff for LBM-based annotation"] == "0.65"
+
+
+def test_msp_then_lbm_cutoffs_survive_the_effective_method_file(tmp_path):
+    """書き出した実効メソッドで、二乗のキーの行は空、平方根の側のキーが後ろに足される。"""
+    src = tmp_path / "params.txt"
+    src.write_text("Ion mode: Positive\n"
+                   "Weighted dot product cutoff for MSP-based annotation: 0.6\n"
+                   "Simple dot product cutoff for MSP-based annotation: 0.6\n"
+                   "Reverse dot product cutoff for MSP-based annotation: 0.8\n", encoding="ascii")
+    overrides, _ = _mf.msp_then_lbm_overrides(
+        _mf.read_method_keys(src), "C:/run/t.tsv", "C:/lab/lab.lbm2")
+    lines = _mf.write_effective_method_file(src, tmp_path / "out" / "e.txt", overrides) \
+        .read_text(encoding="ascii").splitlines()
+    assert lines[1:4] == ["Weighted dot product cutoff for MSP-based annotation: ",
+                          "Simple dot product cutoff for MSP-based annotation: ",
+                          "Reverse dot product cutoff for MSP-based annotation: "]
+    assert "Square root of reverse dot product cutoff for MSP-based annotation: 0.8" in lines
+    assert "Square root of reverse dot product cutoff for LBM-based annotation: 0.8" in lines
+
+
+def test_msp_then_lbm_overrides_clear_text_libraries_and_redirect_msp_table_aliases():
+    method_keys = {
+        "ion mode": "Negative",
+        "lbm file path": "C:/libs/other.lbm2",
+        "msp file path": "C:/public/other.msp",
+        "text db file path": "db.txt",
+        "msp annotation settings file path": "old-msp.tsv",   # 別名: Console は最初の行を読む
+        "text annotator settings file path": "text.tsv",
+        "isotope text db file path": "iso.txt",               # 同定用ではないので残す
+        "use retention information for lbm-based annotation scoring": "True",
+    }
+    overrides, removed = _mf.msp_then_lbm_overrides(method_keys, "C:/run/t.tsv", "C:/lab/lab.lbm2")
+    assert overrides[_mf.TEXT_DB_KEY] == ""
+    assert overrides["Text annotator settings file path"] == ""
+    # 別名の行を空にすると Console がそれを先に読んで注釈器の表が無いことになるので、同じ表を指す。
+    assert overrides["MSP annotation settings file path"] == "C:/run/t.tsv"
+    assert overrides["MSP annotator settings file path"] == "C:/run/t.tsv"
+    assert "Isotope text DB file path" not in overrides
+    assert removed == [_mf.LBM_KEY, _mf.MSP_KEY, _mf.TEXT_DB_KEY,
+                       "MSP annotation settings file path", "Text annotator settings file path"]
+    assert "Number of threads" not in overrides
+    assert not any("priority" in key.lower() for key in overrides)
+
+
+def test_msp_then_lbm_redirects_an_empty_alias_line_too(tmp_path):
+    """空の別名の行が先にあると Console はそれ（空）を読むので、空の行も設定表へ向ける。"""
+    src = tmp_path / "params.txt"
+    src.write_text("Ion mode: Negative\nMSP search settings file path:\nLbm file path:\n",
+                   encoding="ascii")
+    overrides, removed = _mf.msp_then_lbm_overrides(
+        _mf.read_method_keys(src), "C:/run/t.tsv", "C:/lab/lab.lbm2")
+    assert overrides["MSP search settings file path"] == "C:/run/t.tsv"
+    assert removed == []
+    lines = _mf.write_effective_method_file(src, tmp_path / "out" / "e.txt", overrides) \
+        .read_text(encoding="ascii").splitlines()
+    assert lines[1] == "MSP search settings file path: C:/run/t.tsv"
+    assert "MSP annotator settings file path: C:/run/t.tsv" in lines
+
+
+def test_write_msp_annotator_table_is_ascii_tsv_with_priority(tmp_path):
+    dest = tmp_path / "inputs" / "msp-annotators.tsv"
+    _mf.write_msp_annotator_table(dest, "C:\\lab\\lab_neg.msp")
+    assert dest.read_bytes() == b"annotator_id\tmsp_file_path\tpriority\nLabMsp\tC:\\lab\\lab_neg.msp\t2\n"
+    _mf.write_msp_annotator_table(dest, "C:/lab/x.msp", priority=5, annotator_id="Other")
+    assert dest.read_text(encoding="ascii").splitlines()[1] == "Other\tC:/lab/x.msp\t5"
+    with pytest.raises(UnicodeEncodeError):
+        _mf.write_msp_annotator_table(dest, "C:/研究室/x.msp")
 
 
 def test_blank_override_replaces_every_duplicate_line(tmp_path):

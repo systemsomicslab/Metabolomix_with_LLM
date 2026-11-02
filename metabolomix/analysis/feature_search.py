@@ -1,6 +1,8 @@
 """dataset_feature_search の純ロジック: 目標の正規化・理論 m/z・規則 hash（spec 2026-10-19 §4.1）、
 目標照合の判定（§5: `classify_identity` / `match_target`）、窓検索と差次的統計の結合
-（§4.2・§6: `search_window` / `select_results` / `feature_stats` / `result_summaries`）。
+（§4.2・§6: `search_window` / `select_results` / `feature_stats` / `result_summaries`）、
+割れたスポットをまとめた行列での検定のやり直し（spec 2026-10-28 §4.3 (c): `merge_plan` /
+`merged_results` / `merged_feature_stats`）。
 
 数値・ドメイン層の純ロジックで、MCP にもセッションにも依存しない。
 
@@ -42,15 +44,23 @@ __all__ = [
     "classify_identity",
     "feature_stats",
     "match_target",
+    "merge_map",
+    "merge_plan",
+    "merged_dataset",
+    "merged_feature_stats",
+    "merged_results",
     "normalize_targets",
     "result_summaries",
+    "retest_merged",
     "rule_hash",
     "search_window",
     "select_results",
     "theoretical_mz",
 ]
 
-# 付加体の層の既定（spec §4.1。手順書 v5 工程 7-1 の第 1 段と同じ集合）。
+# 付加体の層の既定（spec §4.1。手順書 v5 工程 7-1 の第 1 段と同じ集合に、陰イオンの酢酸付加
+# `[M+CH3COO]-` を足した。MS-DIAL の mzTab は `[M+CH3COO]1-` と書き、比較時に `1` を落とす）。
+# ギ酸付加は `[M+FA-H]-`（`[M+HCOO]-` と同じ質量なので別に持たない）。
 DEFAULT_ADDUCT_TIERS: dict[str, list[list[str]]] = {
     "positive": [
         ["[M+H]+", "[M]+"],
@@ -58,7 +68,7 @@ DEFAULT_ADDUCT_TIERS: dict[str, list[list[str]]] = {
     ],
     "negative": [
         ["[M-H]-"],
-        ["[M-H2O-H]-", "[M+Cl]-", "[M+FA-H]-", "[2M-H]-", "[M+Na-2H]-"],
+        ["[M-H2O-H]-", "[M+Cl]-", "[M+FA-H]-", "[M+CH3COO]-", "[2M-H]-", "[M+Na-2H]-"],
     ],
 }
 
@@ -335,7 +345,7 @@ def normalize_targets(targets: list[dict], *, dataset_polarity: str | None) -> l
 _RULE_HASH_EXCLUDED = frozenset({"name", "lipid_species_input"})
 
 
-def rule_hash(normalized_targets: list[dict]) -> str:
+def rule_hash(normalized_targets: list[dict], *, merge_groups_hash: str | None = None) -> str:
     """正規化後の目標リストから照合規則の hash を作る（result_id・dataset_hash は入れない）。
 
     覆うのは照合を左右する欄だけ: ``target_id``・InChIKey 先頭ブロック（種の目標は
@@ -343,12 +353,18 @@ def rule_hash(normalized_targets: list[dict]) -> str:
     expected_mz・付加体の層と理論 m/z・ppm・RT・目標の極性・``applicable``。``name`` は
     入れず、目標は ``target_id`` の順に並べ替えてから作る——表示名の変更や
     ``targets`` の並べ替えでは hash は変わらない。
+
+    ``merge_groups_hash``（`merge_split` で判定に使った割れの組の hash）を渡したときだけ、
+    ``merge_split`` と組の hash も入れる。渡さなければ従来（v7）と同じ hash。
     """
     canonical = sorted(
         ({k: v for k, v in target.items() if k not in _RULE_HASH_EXCLUDED}
          for target in normalized_targets),
         key=lambda target: target["target_id"])
-    return canonical_hash(canonical)
+    if merge_groups_hash is None:
+        return canonical_hash(canonical)
+    return canonical_hash({"targets": canonical, "merge_split": True,
+                           "merge_groups_hash": merge_groups_hash})
 
 
 # ---------- 目標照合の判定（spec §5） ----------
@@ -496,7 +512,8 @@ def _feature_mz_array(ds) -> np.ndarray:
 
 
 def match_target(ds, target: dict, *, max_results: int,
-                 mz_array: np.ndarray | None = None) -> dict:
+                 mz_array: np.ndarray | None = None,
+                 merged_from: dict[str, list[str]] | None = None) -> dict:
     """正規化済みの目標 1 件をデータセットの特徴と照合し、判定と候補の全件を返す（spec §5）。
 
     候補の単位は（特徴, 付加体）。全層のどれかの付加体の質量窓に入った特徴を、RT で落ちた
@@ -518,7 +535,19 @@ def match_target(ds, target: dict, *, max_results: int,
     ``ppm`` は符号つき（観測 − 理論）、``delta_rt`` は RT − rt_min。数値は丸めない
     （丸めはツール層の仕事）。``sme_rank`` は ``sme_match`` の行で一致した候補の rank だが、
     その候補が rank を持たなければ ``sme_match`` でも None になりうる。
+
+    ``merged_from``（`merge_map` の ``{残す ID: 群}``）を渡すと、割れたスポットの組を**1 つの候補**
+    として数える（spec 2026-10-28 §4.3 (c)・コントローラの決定 2026-10-29）: 行は従来どおり
+    スポットごとに作り（``merged_from`` 欄に群）、判定と ``counts`` は残す ID（群の中で最も小さい
+    ID）に読み替えて一意化する。組の 2 スポットが同じ箱にあっても 1 つと数え、``resolved`` なら
+    ``selected_feature_id`` は残す ID、``merged_from`` にその群（まとめないときは None）。
+    組の片方だけが質量の窓に入ったときは、相手のスポットも同じ付加体で行に足す（``reasons`` に
+    ``merge_partner``。qualified にせず数にも入れない。選んだ残す ID の行が候補に必ずあるように）。
+    ``merged_from`` を渡さない（None）ときは戻り値も行も従来と同じ形（``merged_from`` 欄を足さない）。
     """
+    collapse = merged_from is not None
+    merged_from = merged_from or {}
+    kept_of = {fid: kept for kept, group in merged_from.items() for fid in group}
     out = {
         "target_id": target["target_id"],
         "status": None,
@@ -532,6 +561,8 @@ def match_target(ds, target: dict, *, max_results: int,
         "candidates": [],
         "truncated": 0,
     }
+    if collapse:
+        out["merged_from"] = None
     if not target.get("applicable", True):
         out.update(status="not_applicable", reason="polarity_mismatch")
         return out
@@ -545,6 +576,59 @@ def match_target(ds, target: dict, *, max_results: int,
     if mz_array is None:
         mz_array = _feature_mz_array(ds)
 
+    position = {fid: i for i, fid in enumerate(feature_ids)}
+
+    def make_row(index, tier_no, adduct, theo, *, partner=False):
+        fid = feature_ids[index]
+        mz = float(mz_array[index])
+        rt = (ds.feature_metadata.get(fid) or {}).get("rt")
+        if rt_min is None:
+            rt_ok, delta_rt = True, None
+        elif _is_number(rt):
+            delta_rt = rt - rt_min
+            rt_ok = abs(delta_rt) <= rt_tol + _BOUNDARY_EPS
+        else:
+            rt_ok, delta_rt = False, None
+        if not partner:
+            rt_ok_of[fid] = rt_ok
+
+        identity = _identity(ds.feature_candidates.get(fid) or [],
+                             ds.feature_annotations.get(fid),
+                             **identifier, adduct=adduct)
+        evidence = identity["evidence"]
+        # 割れの相手（質量の窓の外）は判定に入れず、行として見せるだけ
+        reasons = ["merge_partner"] if partner else []
+        reasons += [] if rt_ok else ["rt_outside_tolerance"]
+        reasons += identity["reasons"]
+        if partner or evidence == "contradicted":
+            qualified = False
+        elif evidence == "unannotated" and rt_min is None:
+            # 質量だけでは同定と言わない（feature_bindings の mass_rt が RT を必須にするのと同じ）
+            reasons.append("mass_only_not_identified")
+            qualified = False
+        else:
+            qualified = rt_ok
+        row = {
+            "target_id": target["target_id"],
+            "feature_id": fid,
+            "adduct": adduct,
+            "adduct_tier": tier_no,
+            "theoretical_mz": theo,
+            "mz": mz,
+            "ppm": (mz - theo) / theo * 1e6,
+            "rt": rt,
+            "delta_rt": delta_rt,
+            "evidence": evidence,
+            "sme_rank": identity["sme_rank"],
+            "annotated_name": identity["name"],
+            "annotated_inchikey": identity["inchikey"],
+            "qualified": qualified,
+            "reasons": reasons,
+        }
+        if collapse:
+            row["merged_from"] = merged_from.get(kept_of.get(fid))
+        return row
+
     rows: list[dict] = []
     rt_ok_of: dict[str, bool] = {}
     for tier_no, tier in enumerate(target["adduct_tiers"], start=1):
@@ -554,58 +638,31 @@ def match_target(ds, target: dict, *, max_results: int,
                 hits = np.nonzero(np.abs((mz_array - theo) / theo * 1e6)
                                   <= ppm_tol + _BOUNDARY_EPS)[0]
             for index in hits:
-                fid = feature_ids[index]
-                mz = float(mz_array[index])
-                rt = (ds.feature_metadata.get(fid) or {}).get("rt")
-                if rt_min is None:
-                    rt_ok, delta_rt = True, None
-                elif _is_number(rt):
-                    delta_rt = rt - rt_min
-                    rt_ok = abs(delta_rt) <= rt_tol + _BOUNDARY_EPS
-                else:
-                    rt_ok, delta_rt = False, None
-                rt_ok_of[fid] = rt_ok
+                rows.append(make_row(index, tier_no, adduct, theo))
 
-                identity = _identity(ds.feature_candidates.get(fid) or [],
-                                     ds.feature_annotations.get(fid),
-                                     **identifier, adduct=adduct)
-                evidence = identity["evidence"]
-                reasons = [] if rt_ok else ["rt_outside_tolerance"]
-                reasons += identity["reasons"]
-                if evidence == "contradicted":
-                    qualified = False
-                elif evidence == "unannotated" and rt_min is None:
-                    # 質量だけでは同定と言わない（feature_bindings の mass_rt が RT を必須にするのと同じ）
-                    reasons.append("mass_only_not_identified")
-                    qualified = False
-                else:
-                    qualified = rt_ok
-                rows.append({
-                    "target_id": target["target_id"],
-                    "feature_id": fid,
-                    "adduct": adduct,
-                    "adduct_tier": tier_no,
-                    "theoretical_mz": theo,
-                    "mz": mz,
-                    "ppm": (mz - theo) / theo * 1e6,
-                    "rt": rt,
-                    "delta_rt": delta_rt,
-                    "evidence": evidence,
-                    "sme_rank": identity["sme_rank"],
-                    "annotated_name": identity["name"],
-                    "annotated_inchikey": identity["inchikey"],
-                    "qualified": qualified,
-                    "reasons": reasons,
-                })
+    if collapse:
+        # 組の片方だけが質量の窓に入ったとき、相手（組は ≤15 ppm、窓は ppm）も行に足す。
+        # 残す ID が窓の外でも、選んだ ID の行が候補に必ずある（`merge_partner`。qualified にしない）。
+        present = {row["feature_id"] for row in rows}
+        for row in list(rows):
+            for member in merged_from.get(kept_of.get(row["feature_id"]), []):
+                if member not in present and member in position:
+                    present.add(member)
+                    rows.append(make_row(position[member], row["adduct_tier"], row["adduct"],
+                                         row["theoretical_mz"], partner=True))
+
+    def unit(fid):
+        # 判定と数の単位（割れの組は残す ID で 1 つ）
+        return kept_of.get(fid, fid)
 
     qualified_rows = [row for row in rows if row["qualified"]]
     counts = out["counts"]
-    counts["mass"] = len({row["feature_id"] for row in rows})
-    counts["rt"] = sum(1 for ok in rt_ok_of.values() if ok)
-    counts["qualified"] = len({row["feature_id"] for row in qualified_rows})
+    counts["mass"] = len({unit(row["feature_id"]) for row in rows})
+    counts["rt"] = len({unit(fid) for fid, ok in rt_ok_of.items() if ok})
+    counts["qualified"] = len({unit(row["feature_id"]) for row in qualified_rows})
     for level in EVIDENCE_LEVELS:
         counts["by_evidence"][level] = len(
-            {row["feature_id"] for row in qualified_rows if row["evidence"] == level})
+            {unit(row["feature_id"]) for row in qualified_rows if row["evidence"] == level})
 
     if not qualified_rows:
         out.update(status="needs_input", reason="no_qualified_candidate")
@@ -616,11 +673,13 @@ def match_target(ds, target: dict, *, max_results: int,
                           if any(row["evidence"] == level for row in in_tier))
         # 行は層の中で付加体を並べた順に作ってあるので、bucket の順は層の順を保つ
         bucket = [row for row in in_tier if row["evidence"] == level_used]
-        winners = list(dict.fromkeys(row["feature_id"] for row in bucket))
+        winners = list(dict.fromkeys(unit(row["feature_id"]) for row in bucket))
         out["adduct_tier_used"] = tier_used
         if len(winners) == 1:
             out.update(status="resolved", selected_feature_id=winners[0],
                        selected_adduct=bucket[0]["adduct"], selected_evidence=level_used)
+            if collapse:
+                out["merged_from"] = merged_from.get(winners[0])
         else:
             out.update(status="needs_input", reason="multiple_qualified_candidates",
                        selected_evidence=level_used)
@@ -892,3 +951,175 @@ def result_summaries(ds, results: list[dict]) -> list[dict]:
             "caveats": list(result.get("caveats") or []),
         })
     return summaries
+
+
+# ---------- 割れたスポットのまとめと検定のやり直し（spec 2026-10-28 §4.3 (c)） ----------
+
+def merge_plan(ds, *, alignment_qc_path: str | None = None, dataset_hash: str | None = None,
+               field: str = "alignment_qc_path") -> dict:
+    """まとめる割れの群を決める。``{"source", "groups", "skipped", "alignment_qc_sha256"}``。
+
+    群は `alignment_qc` の `merge_groups`（互いに最も近い mergeable な 2 スポット）だけで、
+    ここでは足さない・広げない（`analysis_spec` の `features.merge_split` と同じ規則・同じ実装）。
+    ``alignment_qc_path`` は `dataset_alignment_qc` が書いた JSON（今のデータセットの指紋で
+    作ったものだけを受ける）で、無ければその場で `find_split_pairs(ds)` を既定の閾値で回す。
+    ``groups`` は特徴 ID の小さい順（先頭が残す ID）、``skipped`` はデータセットに 2 つ揃わない群。
+    ``dataset_hash`` は計算済みの `dataset_fingerprint(ds)`（任意）、``field`` はエラーに書く欄の名前。
+    """
+    from metabolomix.analysis import alignment_qc
+
+    if alignment_qc_path is None:
+        qc = alignment_qc.find_split_pairs(ds, dataset_hash=dataset_hash)
+        source, sha256 = "find_split_pairs", None
+    else:
+        qc, sha256 = alignment_qc.read_qc_file(alignment_qc_path, ds, field=field,
+                                               dataset_hash=dataset_hash)
+        source = "alignment_qc"
+    usable, skipped = alignment_qc.usable_merge_groups(qc, ds.feature_ids)
+    return {"source": source, "groups": usable, "skipped": skipped,
+            "alignment_qc_sha256": sha256}
+
+
+def merged_dataset(ds, groups) -> tuple[object, dict[str, list[str]]]:
+    """割れの群を試料ごとの大きい方の値で 1 列にまとめた ``ds`` の写しと ``merged_from``。
+
+    元の ``ds`` は変えない（浅い写しの定量行列・特徴 ID・検出状態だけを置き換える）。まとめは
+    前処理の**前**の生の値に当て、検出状態は 2 スポットの「どちらかで検出」（`analysis_spec` と
+    同じ順序。前処理の篩と正規化が 1 つの物質を 1 列として見る）。実装は
+    `alignment_qc.merge_matrix_columns`（残す列は群の中で最も小さい特徴 ID）。
+    """
+    from metabolomix.analysis import alignment_qc
+
+    values = np.asarray(ds.feature_matrix, dtype=float)
+    mask = getattr(ds, "detected_mask", None)
+    if mask is not None:
+        mask = np.asarray(mask, dtype=bool)
+        if mask.shape != values.shape:
+            mask = None
+    merged = alignment_qc.merge_matrix_columns(values.T, ds.feature_ids, groups,
+                                               detected=None if mask is None else mask.T)
+    view = copy.copy(ds)
+    view.feature_matrix = merged.matrix.T
+    view.feature_ids = list(merged.feature_ids)
+    view.detected_mask = None if merged.detected is None else merged.detected.T
+    return view, merged.merged_from
+
+
+def _result_recipe(ds, result: dict) -> dict | None:
+    """その 2 群比較を計算した前処理のレシピ（分からなければ None）。
+
+    pipeline の run から引き継いだ結果は来歴の ``handoff.preprocess``
+    （`session_handoff._run_preprocess_parameters` が写した run の ``resolved_recipe``）、
+    session で計算した結果は親（前処理の結果）の ``effective_parameters``。
+    """
+    provenance = result.get("provenance") or {}
+    handoff = provenance.get("handoff")
+    if isinstance(handoff, dict):
+        recipe = handoff.get("preprocess")
+        return dict(recipe) if isinstance(recipe, dict) else None
+    for parent in provenance.get("parent_ids") or []:
+        params = (((getattr(ds, "results", None) or {}).get(parent) or {}).get("provenance")
+                  or {}).get("effective_parameters")
+        if isinstance(params, dict):
+            return dict(params)
+    return None
+
+
+def retest_merged(ds, view, result: dict) -> dict:
+    """まとめた行列（``view``）で、``result`` と同じ前処理・同じ 2 群検定をやり直す。
+
+    前処理は ``result`` を計算したレシピ（`_result_recipe`）を `run_dataset_preprocess` で
+    当て直し、検定は `differential.two_group_test`（``result`` の ``log_transform``。pipeline の
+    既定は log 変換の Welch）と `add_fdr`（**まとめた後の全特徴**で BH）。群は ``result`` の
+    ``samples_a`` / ``samples_b``（`dataset_service.compare_dataset` が検定に使った試料）。
+    検定と補正の種類は変えないので、判定の規則の意味は同じ。戻り値は ``result`` の写しで、
+    ``results`` だけがやり直した行。レシピが分からない・前処理を当て直せない・群の試料が
+    前処理の後に無いときは ``FEATURE_MERGE_UNAVAILABLE``（まとめる前の数字をまとめた後の顔で
+    返さない）。
+    """
+    from metabolomix.analysis import differential
+    from metabolomix.analysis.dataset_analysis import PreconditionError, run_dataset_preprocess
+
+    result_id = _result_id(result)
+    recipe = _result_recipe(ds, result)
+    if recipe is None:
+        raise DomainError("FEATURE_MERGE_UNAVAILABLE",
+                          f"差次的結果 {result_id} を計算した前処理のレシピが分からないので、割れた"
+                          "スポットをまとめて検定し直せない。merge_split=false で呼ぶか、"
+                          "dataset_differential で計算し直す。", {"result_id": result_id})
+    try:
+        matrix, names, features, *_ = run_dataset_preprocess(view, recipe)
+    except PreconditionError as exc:
+        raise DomainError("FEATURE_MERGE_UNAVAILABLE",
+                          f"まとめた行列に {result_id} の前処理を当て直せない: {exc.message}",
+                          {"result_id": result_id, "recipe": recipe}) from exc
+    position = {name: i for i, name in enumerate(names)}
+    samples_a = list(result.get("samples_a") or [])
+    samples_b = list(result.get("samples_b") or [])
+    absent = [name for name in samples_a + samples_b if name not in position]
+    if absent or not samples_a or not samples_b:
+        raise DomainError("FEATURE_MERGE_UNAVAILABLE",
+                          f"差次的結果 {result_id} の群の試料が、前処理を当て直した行列に無い"
+                          f"（{absent or 'samples_a / samples_b が空'}）。",
+                          {"result_id": result_id, "absent_samples": absent})
+    group_a, group_b = result.get("a"), result.get("b")
+    labels = [group_a] * len(samples_a) + [group_b] * len(samples_b)
+    rows = differential.two_group_test(
+        matrix[[position[name] for name in samples_a + samples_b], :], features, labels,
+        group_a, group_b, log_transform=bool(result.get("log_transform", True)))
+    return {**result, "results": differential.add_fdr(rows)}
+
+
+def merge_map(groups) -> dict[str, list[str]]:
+    """割れの群 → ``{残す ID: 群}``（残す ID は群の中で最も小さい ID。`merge_matrix_columns` と同じ）。"""
+    from metabolomix.analysis import alignment_qc
+
+    ordered = [alignment_qc.id_order(group) for group in groups]
+    return {group[0]: group for group in ordered if len(group) >= 2}
+
+
+def merged_results(ds, results: list[dict], groups, feature_ids) -> dict:
+    """まとめる群が 1 つでもあれば、まとめた行列で ``results`` を全特徴について検定し直す。
+
+    戻り値 ``{"view", "merged_from", "touched", "results"}``。``merged_from`` は全群（残す ID →
+    群）、``touched`` はそのうち ``feature_ids`` のどれか（消える側の ID を含む）を含む群（報告用）、
+    ``results`` は result_id → やり直した結果。まとめは全群に当て、BH の母集団は「まとめた後の
+    全特徴」——1 つの表の q はすべてこの母集団から出す（まとめた行と従来の行を混ぜない。
+    コントローラの決定 2026-10-29）。群が無ければ検定はやり直さず、``view`` は ``ds``。
+    """
+    if not groups:
+        return {"view": ds, "merged_from": {}, "touched": {}, "results": {}}
+    view, merged_from = merged_dataset(ds, groups)
+    wanted = {str(f) for f in feature_ids}
+    touched = {kept: group for kept, group in merged_from.items() if wanted.intersection(group)}
+    redone = {_result_id(result): retest_merged(ds, view, result) for result in results}
+    return {"view": view, "merged_from": merged_from, "touched": touched, "results": redone}
+
+
+def merged_feature_stats(ds, feature_ids: list[str], results: list[dict], *, groups,
+                         with_labels: bool = False) -> dict:
+    """`feature_stats` の割れのまとめ版。
+
+    戻り値 ``{"stats", "stats_unmerged", "touched", "renamed", "results", "view"}``。
+    ``stats_unmerged`` は従来の ``feature_stats(ds, feature_ids, results)`` そのもの。まとめる群が
+    1 つでもあれば、``stats`` は**すべての行**をまとめた行列で検定し直した値（`merged_results`。
+    q はまとめた後の全特徴の BH）から出し、まとめて消える特徴 ID は残す ID（群の中で最も小さい
+    ID）に置き換える（重複は 1 つ）。群が無ければ ``stats`` は従来の値と同じ。各行の
+    ``merged_from`` は群（残す ID が先頭）か None。``renamed`` は置き換えた ID（消える ID → 残す ID）。
+    """
+    unmerged = feature_stats(ds, feature_ids, results, with_labels=with_labels)
+    merged = merged_results(ds, results, groups, feature_ids)
+    merged_from = merged["merged_from"]
+    rename = {fid: kept for kept, group in merged_from.items() for fid in group if fid != kept}
+    folded = list(dict.fromkeys(rename.get(fid, fid) for fid in feature_ids))
+    if merged["results"]:
+        stats = feature_stats(merged["view"], folded,
+                              [merged["results"][_result_id(r)] for r in results],
+                              with_labels=with_labels)
+    else:
+        stats = feature_stats(ds, folded, results, with_labels=with_labels)
+    for row in stats:
+        row["merged_from"] = merged_from.get(row["feature_id"])
+    return {"stats": stats, "stats_unmerged": unmerged, "touched": merged["touched"],
+            "renamed": {fid: rename[fid] for fid in feature_ids if fid in rename},
+            "results": merged["results"], "view": merged["view"]}

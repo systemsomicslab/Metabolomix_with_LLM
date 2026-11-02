@@ -75,7 +75,17 @@
   }
  },
  "search_targets": {
-  "candidates": "target_id\tfeature_id\tadduct\tadduct_tier\ttheoretical_mz\tmz\tppm\trt\tdelta_rt\tevidence\tsme_rank\tannotated_name\tannotated_inchikey\tqualified\treasons\nt1\t1\t[M]+\t1\t104.107\t104.107\t0.0\t1.2\t0.0\tsme_match\t1\tCholine\tOEYIOHPDSNJKLS-UHFFFAOYSA-N\ttrue\t",
+  "candidates": "target_id\tfeature_id\tadduct\tadduct_tier\ttheoretical_mz\tmz\tppm\trt\tdelta_rt\tevidence\tsme_rank\tannotated_name\tannotated_inchikey\tqualified\treasons\tmerged_from\nt1\t1\t[M]+\t1\t104.107\t104.107\t0.0\t1.2\t0.0\tsme_match\t1\tCholine\tOEYIOHPDSNJKLS-UHFFFAOYSA-N\ttrue\t\t",
+  "merge_split": {
+   "alignment_qc_sha256": null,
+   "bh_population": {},
+   "enabled": true,
+   "groups": [],
+   "n_groups": 0,
+   "recomputed": [],
+   "renamed": {},
+   "source": "find_split_pairs"
+  },
   "notes": [
    "検出状態（gap-fill の区別）を取り込めていないので detected_a / detected_b は空（非ゼロ値は実測と補間を区別しない）。"
   ],
@@ -100,9 +110,11 @@
    }
   ],
   "rule": {
+   "merge_groups_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+   "merge_split": true,
    "polarity": "positive",
    "polarity_source": "adduct_majority",
-   "rule_hash": "0232cb69db839621112a1bd07c1536560e2d44c41e2b44c6261773a9ff8b1b0a",
+   "rule_hash": "c3c6d415c27851d79e0b062360a274a96cc90bfc7af0b35c384b1c8e59d0a3a1",
    "targets": [
     {
      "adduct_tiers": [
@@ -126,13 +138,14 @@
     }
    ]
   },
-  "stats": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\n1\tres_X\ttested\t0.7888\t0.001732\t0.005195\t11.04\t19.78\t\t",
+  "stats": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\tmerged_from\n1\tres_X\ttested\t0.7888\t0.001732\t0.005195\t11.04\t19.78\t\t\t",
   "stats_source": {
    "dataset_hash": "X",
    "result_ids": [
     "res_X"
    ]
   },
+  "stats_unmerged": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\n1\tres_X\ttested\t0.7888\t0.001732\t0.005195\t11.04\t19.78\t\t",
   "targets": [
    {
     "adduct_tier_used": 1,
@@ -146,6 +159,7 @@
      "qualified": 1,
      "rt": 1
     },
+    "merged_from": null,
     "reason": null,
     "selected_adduct": "[M]+",
     "selected_evidence": "sme_match",
@@ -161,6 +175,16 @@
  },
  "search_window": {
   "features": "feature_id\tmz\trt\tevidence\tname\tinchikey\tadduct\tn_sme\n1\t104.107\t1.2\tsme\tCholine\tOEYIOHPDSNJKLS-UHFFFAOYSA-N\t[M]1+\t1\n2\t184.0733\t1.25\tnone\t\t\t\t0\n3\t500.2\t5.0\tnone\t\t\t\t0",
+  "merge_split": {
+   "alignment_qc_sha256": null,
+   "bh_population": {},
+   "enabled": true,
+   "groups": [],
+   "n_groups": 0,
+   "recomputed": [],
+   "renamed": {},
+   "source": null
+  },
   "notes": [
    "差次的結果（2 群比較）が 1 件も無いので統計を付けていない（dataset_differential を実行すると付く）。"
   ],
@@ -169,7 +193,8 @@
   "stats_source": {
    "dataset_hash": "X",
    "result_ids": []
-  }
+  },
+  "stats_unmerged": ""
  },
  "status": {
   "detection": {

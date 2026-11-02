@@ -704,7 +704,7 @@ def test_default_library_mode_does_not_change_the_request_fingerprint(tmp_path):
     from metabolomix.core.atomic_io import canonical_hash
     from metabolomix.pipeline import request as request_mod
     req = resolve_request(_root(tmp_path))
-    legacy_keys = request_mod._TOP_LEVEL_KEYS - {"library_mode", "msp_file"}
+    legacy_keys = request_mod._TOP_LEVEL_KEYS - {"library_mode", "msp_file", "alignment_reference"}
     assert request_fingerprint(req) == canonical_hash({k: req[k] for k in legacy_keys if k in req})
 
 
@@ -712,6 +712,23 @@ def test_msp_only_changes_the_request_fingerprint(tmp_path):
     root = _root(tmp_path)
     assert (request_fingerprint(resolve_request(root, {"library_mode": "msp_only"}))
             != request_fingerprint(resolve_request(root)))
+
+
+def test_msp_then_lbm_is_accepted_with_an_msp_file(tmp_path):
+    root = _root(tmp_path)
+    req = resolve_request(root, {"library_mode": "msp_then_lbm", "msp_file": "lab.msp"})
+    assert req["library_mode"] == "msp_then_lbm"
+    assert req["msp_file"] == "lab.msp"
+    fingerprints = {request_fingerprint(resolve_request(root, explicit)) for explicit in
+                    ({}, {"library_mode": "msp_only"}, {"library_mode": "msp_then_lbm"})}
+    assert len(fingerprints) == 3
+
+
+def test_msp_then_lbm_rejects_lbm_file(tmp_path):
+    """LBM は設定ファイルの [library] lbm だけから決める。要求の lbm_file では差し替えない。"""
+    with pytest.raises(DomainError, match="PIPELINE_REQUEST_INVALID") as info:
+        resolve_request(_root(tmp_path), {"library_mode": "msp_then_lbm", "lbm_file": "x.lbm2"})
+    assert "[library] lbm" in str(info.value)
 
 
 def test_v2_rejects_library_mode_with_a_migration_hint(tmp_path):
@@ -731,3 +748,44 @@ def test_resume_of_a_request_saved_before_library_mode_still_validates(tmp_path)
     assert request_fingerprint(legacy) == request_fingerprint(req)
     updated = merge_updates(legacy, {"target": "exploratory"})
     assert updated["target"] == "exploratory"
+
+
+# ---------- alignment_reference（v8 Task 3） ----------
+
+def test_alignment_reference_defaults_to_median_injection(tmp_path):
+    root = _root(tmp_path)
+    assert resolve_request(root)["alignment_reference"] == "median_injection"
+    assert resolve_request(
+        root, {"alignment_reference": "method"})["alignment_reference"] == "method"
+
+
+@pytest.mark.parametrize("explicit", [
+    {"alignment_reference": "first"},
+    {"alignment_reference": None},
+    {"alignment_reference": 3},
+])
+def test_invalid_alignment_reference_is_rejected(tmp_path, explicit):
+    with pytest.raises(DomainError, match="PIPELINE_REQUEST_INVALID"):
+        resolve_request(_root(tmp_path), explicit)
+
+
+def test_alignment_reference_cannot_be_changed_on_resume(tmp_path):
+    with pytest.raises(DomainError, match="NEW_PIPELINE_REQUIRED"):
+        merge_updates(resolve_request(_root(tmp_path)), {"alignment_reference": "method"})
+
+
+def test_default_alignment_reference_does_not_change_the_request_fingerprint(tmp_path):
+    from metabolomix.core.atomic_io import canonical_hash
+    from metabolomix.pipeline import request as request_mod
+    root = _root(tmp_path)
+    req = resolve_request(root)
+    legacy_keys = request_mod._TOP_LEVEL_KEYS - {"alignment_reference"}
+    assert request_fingerprint(req) == canonical_hash({
+        k: req[k] for k in legacy_keys if k in req
+        and not (k in request_mod._FINGERPRINT_OMITTED_DEFAULTS
+                 and req[k] == request_mod._FINGERPRINT_OMITTED_DEFAULTS[k])})
+    assert (request_fingerprint(resolve_request(root, {"alignment_reference": "method"}))
+            != request_fingerprint(req))
+    # 変更前に保存された要求（キー無し）の hash も同じ。
+    legacy = {k: v for k, v in req.items() if k != "alignment_reference"}
+    assert request_fingerprint(legacy) == request_fingerprint(req)

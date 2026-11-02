@@ -76,6 +76,10 @@ MSP_KEY = "Msp file path"
 #: `.lower()`後の比較なので大文字小文字は実害がないが、証拠に合わせておく。
 TEXT_DB_KEY = "Text DB file path"
 RT_REFERENCE_KEY = "Compounds library file path for RT correction"
+#: アライメントの基準にする試料の file ID（0 始まり。入力フォルダの主ファイルを
+#: `sorted()` した順の添字）。`ConfigParser` が読む既存のキーで、既定の 0 は
+#: 先頭の試料（ファイル名順の先頭）になる。
+ALIGNMENT_REFERENCE_KEY = "Alignment reference file ID"
 
 #: LC-MS の Console が**ファイルパスとして**読むキー（`ConfigParser.ReadCommonParameter`
 #: の `//File paths` 節）。`ReadForLcmsParameter` はこれらを解決しないので、相対値は
@@ -104,6 +108,16 @@ SETTINGS_PATH_KEYS: tuple[str, ...] = (
     "Text DB annotator settings file path",
     "Text annotation settings file path",
 )
+
+#: MSP の注釈器設定表を指すキー（正準の綴り）と、その別名。Console
+#: （`ConfigParser.ReadMspAnnotatorSettingsFilePath`）は 3 つの綴りのうち**最初に現れた行**の
+#: 値を返す（空でも返す）。
+MSP_ANNOTATOR_SETTINGS_KEY = SETTINGS_PATH_KEYS[0]
+MSP_ANNOTATOR_SETTINGS_KEYS: tuple[str, ...] = SETTINGS_PATH_KEYS[:3]
+
+#: LBM の照合で RT を使うかのキー（`ConfigParser` の `ReadLcmsParameter` が読む。true / false）。
+LBM_RT_SCORING_KEY = "Use retention information for LBM-based annotation scoring"
+LBM_RT_FILTERING_KEY = "Use retention information for LBM-based annotation filtering"
 
 #: library_mode="msp_only" で実効メソッドから消す同定用の宣言。研究室 MSP 以外の
 #: ライブラリ（Text DB、複数 MSP / Text の注釈器設定表）が混ざらないようにする。
@@ -469,13 +483,15 @@ def resolve_lbm(
 _MSP_WHAT = "研究室の参照ライブラリ（.msp）"
 
 
-def resolve_msp(override: str | None, polarity: str, msp_setting: Setting | None) -> MspResolution:
-    """library_mode="msp_only" の MSP を決める。順に: 明示引数 → 極性の設定。
+def resolve_msp(override: str | None, polarity: str, msp_setting: Setting | None, *,
+                library_mode: str = "msp_only") -> MspResolution:
+    """library_mode="msp_only" / "msp_then_lbm" の MSP を決める。順に: 明示引数 → 極性の設定。
 
     極性の設定は呼び出し側が `user_config.get_setting(MSP_SETTING_KEYS[polarity])` で引いて
     渡す（環境変数 MSDIAL_MSP_POS / MSDIAL_MSP_NEG → lipidmix.local.toml）。メソッドファイルの
     `Msp file path` の宣言は使わない——研究室 MSP 以外を宣言した GUI パラメータを流用しても
     契約から外れないようにする（spec 2026-10-07 §3.2）。返すパスは絶対パス。
+    `library_mode` は未設定のときの文面に出すだけ。
     """
     if override:
         candidate = Path(override).expanduser()
@@ -488,7 +504,7 @@ def resolve_msp(override: str | None, polarity: str, msp_setting: Setting | None
     if msp_setting is None:
         return MspResolution(
             path=None, source="not_configured", error_code="MSP_NOT_CONFIGURED",
-            message=(f"library_mode='msp_only' には {polarity} の{_MSP_WHAT}が要ります。"
+            message=(f"library_mode='{library_mode}' には {polarity} の{_MSP_WHAT}が要ります。"
                      + missing_hint(key, _MSP_WHAT)))
     candidate = Path(msp_setting.value).expanduser()
     if candidate.is_file():
@@ -503,7 +519,9 @@ def msp_only_overrides(method_keys: dict[str, str], msp_path: str) -> tuple[dict
     """library_mode="msp_only" の実効メソッドの上書きと、消した宣言のキーを返す。
 
     `Lbm file path` は空、`Msp file path` は `msp_path`。原本が空でなく宣言している
-    `IDENTIFICATION_CLEAR_KEYS` は空にする。キーは正準の綴りで返す
+    `IDENTIFICATION_CLEAR_KEYS` は空にする。dot product の足切りは msp_then_lbm と同じく
+    平方根の側のキーで書く（`_square_root_cutoff_overrides`。LBM のキーは `Lbm file path` が
+    空なので効かない）。キーは正準の綴りで返す
     （`write_effective_method_file` は大文字小文字を問わず全行を差し替える）。
     `method_keys` は `read_method_keys` の戻り値（キーは小文字）。
     """
@@ -515,7 +533,152 @@ def msp_only_overrides(method_keys: dict[str, str], msp_path: str) -> tuple[dict
         if (method_keys.get(key.lower()) or "").strip():
             overrides[key] = ""
             removed.append(key)
+    cutoff_overrides, blanked = _square_root_cutoff_overrides(method_keys)
+    overrides.update(cutoff_overrides)
+    removed.extend(blanked)
     return overrides, removed
+
+
+def msp_then_lbm_overrides(method_keys: dict[str, str], annotator_table_path: str,
+                           lbm_path: str) -> tuple[dict[str, str], list[str]]:
+    """library_mode="msp_then_lbm"（v8）の実効メソッドの上書きと、消した宣言のキーを返す。
+
+    研究室 MSP は `Msp file path` ではなく注釈器の設定表（`annotator_table_path`。
+    `write_msp_annotator_table` が priority 2 で書く）から入れる。Console（45a531c4d）は
+    設定表から 1 件でも読めると `Msp file path` を使わず、LBM の注釈器の priority を 1 に
+    固定しているので、同じ証拠の水準では MSP が代表になる。
+
+    上書き: `Msp file path` = 空、`MSP annotator settings file path` = 設定表、
+    `Lbm file path` = `lbm_path`、LBM の照合の RT（scoring / filtering）= `False`
+    （LBM の RT は研究室の LC 条件のもので、公開データのカラムと合わない）。
+    原本が宣言する MSP 設定表の別名は同じ設定表へ向ける——Console は別名を含めて最初の
+    行を読むので、空にするとそちらが先に読まれて設定表が無いことになる。ほかの
+    `IDENTIFICATION_CLEAR_KEYS`（Text DB・Text の設定表）は空にする。MSP と LBM の
+    dot product の足切りは平方根の側のキーで同じ値に揃える（`_square_root_cutoff_overrides`）。
+
+    消した宣言: 原本が空でなく宣言していて、上の上書きで別の値に置き換わったキー
+    （`Lbm file path`・`Msp file path`・`IDENTIFICATION_CLEAR_KEYS`）と、空にした二乗の足切りの
+    キー（原本が値を宣言していたもの）。実際に効く足切りは `resolved_dot_product_cutoffs`。現用ビルドが読まない
+    キー（`LBM annotator priority`・`Number of threads`）は書かない。
+    """
+    overrides: dict[str, str] = {
+        MSP_KEY: "",
+        MSP_ANNOTATOR_SETTINGS_KEY: annotator_table_path,
+        LBM_KEY: lbm_path,
+        LBM_RT_SCORING_KEY: "False",
+        LBM_RT_FILTERING_KEY: "False",
+    }
+    for key in IDENTIFICATION_CLEAR_KEYS:
+        if key in overrides:
+            continue
+        if key in MSP_ANNOTATOR_SETTINGS_KEYS:
+            # 空の行でも Console は先に読むので、行があれば値を問わず設定表へ向ける。
+            if key.lower() in method_keys:
+                overrides[key] = annotator_table_path
+        elif (method_keys.get(key.lower()) or "").strip():
+            overrides[key] = ""
+    removed = [key for key in (LBM_KEY, MSP_KEY, *IDENTIFICATION_CLEAR_KEYS)
+               if (declared := (method_keys.get(key.lower()) or "").strip())
+               and declared != overrides[key]]
+    cutoff_overrides, blanked = _square_root_cutoff_overrides(method_keys)
+    overrides.update(cutoff_overrides)
+    removed.extend(blanked)
+    return overrides, removed
+
+
+#: dot product の足切りの種類と MS-DIAL の既定（平方根の側の値）。
+_DOT_PRODUCT_CUTOFFS: tuple[tuple[str, str], ...] = (
+    ("weighted", "0.6"), ("simple", "0.6"), ("reverse", "0.8"))
+
+
+def _cutoff_keys(kind: str) -> tuple[dict[str, str], dict[str, str]]:
+    """足切りの種類の、二乗のキーと平方根の側のキー（ライブラリ名 → 原本の表記のキー）。"""
+    squared = {lib: f"{kind.capitalize()} dot product cutoff for {lib}-based annotation"
+               for lib in ("MSP", "LBM")}
+    root = {lib: f"Square root of {kind} dot product cutoff for {lib}-based annotation"
+            for lib in ("MSP", "LBM")}
+    return squared, root
+
+
+def _msp_cutoff(method_keys: dict[str, str], kind: str, default: str) -> tuple[str, str]:
+    """MSP の足切りの値（平方根の側の値）と出どころ。
+
+    平方根の側の宣言（`root_key`）→ 二乗のキーの宣言を平方根の側の値と読む
+    （`unprefixed_key_read_as_root`）→ 既定（`default`）の順。
+    """
+    squared, root = _cutoff_keys(kind)
+    for key, source in ((root["MSP"], "root_key"),
+                        (squared["MSP"], "unprefixed_key_read_as_root")):
+        if value := (method_keys.get(key.lower()) or "").strip():
+            return value, source
+    return default, "default"
+
+
+def resolved_dot_product_cutoffs(method_keys: dict[str, str]) -> dict:
+    """msp_only / msp_then_lbm で実際に効く足切り（MSP・LBM 共通。尺度は平方根の側）と、種類ごとの出どころ。
+
+    `{weighted, simple, reverse, scale: "square_root", source: {種類: root_key |
+    unprefixed_key_read_as_root | default}}`。受領（receipt）に出して、メソッドの宣言
+    （二乗のキーとして書かれた値）を黙って読み替えたことを見えるようにする。
+    """
+    out: dict = {}
+    sources: dict[str, str] = {}
+    for kind, default in _DOT_PRODUCT_CUTOFFS:
+        value, sources[kind] = _msp_cutoff(method_keys, kind, default)
+        try:
+            out[kind] = float(value)
+        except ValueError:
+            out[kind] = value      # Console が読めない値は、そのまま見せる
+    return {**out, "scale": "square_root", "source": sources}
+
+
+def _square_root_cutoff_overrides(method_keys: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+    """MSP と LBM の dot product の足切りを、同じ値で平方根の側のキーに書く（v8。msp_only も同じ尺度）。
+
+    Console 45a531c4d の `ConfigParser` は `Weighted dot product cutoff for MSP-based
+    annotation` を**二乗の**足切り（`SquaredWeightedDotProductCutOff`）として読む——0.6 は
+    実効で 0.775。平方根の側（MS-DIAL の既定の尺度）は `Square root of ... cutoff for
+    MSP-based annotation`。LBM は足切りのキーが無ければ既定（平方根の側で 0.6 / 0.8）なので、
+    MSP だけが厳しくなり、同じ証拠の水準に並ばずに LBM が代表になっていた（2026-10-30 の試し）。
+
+    MSP の値は 平方根の側の宣言 → 二乗のキーの宣言（平方根の側の値と読む）→ 既定 の順
+    （`_msp_cutoff`）。LBM にも同じ値を書く。宣言された二乗のキーは空にする（空は
+    `float.TryParse` に失敗して読み飛ばされる。値を残すと、後の行が勝つ読み方で平方根の側を
+    打ち消しうる）。戻り値は `(上書き, 空にした宣言のキー)`。後者は原本が値を宣言していたものだけで、
+    `removed_declarations` に足す。
+    """
+    overrides: dict[str, str] = {}
+    blanked: list[str] = []
+    for kind, default in _DOT_PRODUCT_CUTOFFS:
+        squared, root = _cutoff_keys(kind)
+        value, _source = _msp_cutoff(method_keys, kind, default)
+        for lib in ("MSP", "LBM"):
+            if squared[lib].lower() in method_keys:
+                overrides[squared[lib]] = ""
+                if (method_keys[squared[lib].lower()] or "").strip():
+                    blanked.append(squared[lib])
+            overrides[root[lib]] = value
+    return overrides, blanked
+
+
+#: Console 45a531c4d の `ReadMspAnnotatorSettingsTable` が読む列（見出しは正規化され、
+#: パスの列は `msp_file_path`、ほかに `annotator_id`・`priority`）。
+_MSP_ANNOTATOR_TABLE_HEADER = ("annotator_id", "msp_file_path", "priority")
+
+
+def write_msp_annotator_table(path: Path, msp_path: str, *, priority: int = 2,
+                              annotator_id: str = "LabMsp") -> None:
+    """MSP の注釈器の設定表（TSV・1 行）を `path` に書く（library_mode="msp_then_lbm"）。
+
+    Console は設定表を ASCII で読むので ASCII / LF で書く（ASCII にできない値は
+    `UnicodeEncodeError`）。`msp_path` は絶対パスで渡す（相対だと設定表の親基準で解かれる）。
+    """
+    rows = ["\t".join(_MSP_ANNOTATOR_TABLE_HEADER),
+            "\t".join((annotator_id, msp_path, str(priority)))]
+    data = ("\n".join(rows) + "\n").encode("ascii")
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
 
 
 def scan_dir_for_method_files(directory: Path, origin: str) -> list[MethodCandidate]:

@@ -17,8 +17,10 @@ import pytest
 import server
 from metabolomix.core import handles, session_state
 from metabolomix.library import tools as library_tools
+from metabolomix.mztab import identity as mztab_identity
 from metabolomix.tools import dataset_analysis_tools as T
 from metabolomix.tools import handle_tools, mztab_tools
+from metabolomix.tools import reanalysis_tools as R
 from tests.reanalysis_fixtures import NEG_FEATURES, write_mztab
 
 GOLDEN = Path(__file__).parent / "fixtures" / "handle_golden_no_handle.json"
@@ -48,7 +50,7 @@ def _open(path) -> str:
 
 
 def _tools(tmp_path):
-    """ハンドルを受ける既存の 13 ツールと最小の引数。"""
+    """ハンドルを受けるツール（既存の 13 と dataset_alignment_qc）と最小の引数。"""
     return [
         (mztab_tools.dataset_status, {}),
         (T.dataset_preprocess, {}),
@@ -63,6 +65,7 @@ def _tools(tmp_path):
         (library_tools.library_load, {"ion_mode": "positive"}),
         (library_tools.library_match_feature, {"precursor_mz": 104.107}),
         (library_tools.library_plot_mirror, {}),
+        (R.dataset_alignment_qc, {}),
     ]
 
 
@@ -71,6 +74,56 @@ def test_every_listed_tool_accepts_dataset_handle(tmp_path):
     for tool, _ in _tools(tmp_path):
         assert "dataset_handle" in inspect.signature(tool).parameters, tool.__name__
         assert inspect.signature(tool).parameters["dataset_handle"].default is None
+
+
+def _fake_pipeline_run(tmp_path, *names: str) -> Path:
+    """`input/` に `.arf2`・`.dcl` を置いた pipeline の run の殻（中身は読まれない）。"""
+    run = tmp_path / "pipeline_x"
+    (run / "input").mkdir(parents=True)
+    for name in names:
+        (run / "input" / name).write_bytes(b"")
+    return run
+
+
+def test_handle_open_finds_pipeline_arf2(tmp_path, monkeypatch, pos_mztab):
+    """pipeline の run では mzTab は console/ の下、`.arf2`・`.dcl` は input/ にある。"""
+    from metabolomix.mztab.loading import load_dataset_state
+
+    run = _fake_pipeline_run(tmp_path, "AlignResult-1.arf2", "AlignResult-1.dcl")
+    monkeypatch.setattr(handle_tools, "_load",
+                        lambda kind, path, allow: load_dataset_state(mztab_path=pos_mztab))
+
+    out = json.loads(handle_tools.dataset_handle_open(pipeline_path=str(run), library="none"))
+
+    assert out["status"] == "success", out
+    assert out["arf2"] == "AlignResult-1.arf2"
+    assert out["dcl"] == "AlignResult-1.dcl"
+
+
+def test_handle_open_picks_newest_arf2_name_in_pipeline_input(tmp_path, monkeypatch, pos_mztab):
+    from metabolomix.mztab.loading import load_dataset_state
+
+    run = _fake_pipeline_run(tmp_path, "AlignResult-1.arf2", "AlignResult-2.arf2",
+                             "AlignResult-2.dcl")
+    monkeypatch.setattr(handle_tools, "_load",
+                        lambda kind, path, allow: load_dataset_state(mztab_path=pos_mztab))
+
+    out = json.loads(handle_tools.dataset_handle_open(pipeline_path=str(run), library="none"))
+
+    assert out["arf2"] == "AlignResult-2.arf2"
+    assert out["dcl"] == "AlignResult-2.dcl"
+
+
+def test_handle_open_without_pipeline_arf2_stays_null(tmp_path, monkeypatch, pos_mztab):
+    from metabolomix.mztab.loading import load_dataset_state
+
+    run = _fake_pipeline_run(tmp_path)
+    monkeypatch.setattr(handle_tools, "_load",
+                        lambda kind, path, allow: load_dataset_state(mztab_path=pos_mztab))
+
+    out = json.loads(handle_tools.dataset_handle_open(pipeline_path=str(run), library="none"))
+
+    assert out["arf2"] is None and out["dcl"] is None
 
 
 def test_unknown_handle_is_an_error_not_the_global_session(tmp_path, pos_mztab):
@@ -160,9 +213,17 @@ def golden_outputs(directory: Path) -> dict:
     return _scrub(out, str(directory))
 
 
-def test_without_handle_output_is_unchanged(tmp_path):
-    """ハンドルを渡さない呼び出しの戻り値は、変更前のコードで採った値と同じ。"""
+@pytest.mark.parametrize("rdkit", [True, False])
+def test_without_handle_output_is_unchanged(tmp_path, monkeypatch, rdkit):
+    """ハンドルを渡さない呼び出しの戻り値は、変更前のコードで採った値と同じ。
+
+    golden は RDKit が読める機械で採った。fixture に SMILES / InChI が無いので RDKit の有無は
+    `inchikey_coverage.rdkit_available` の旗にしか出ない——旗を固定し、どちらでも比べる
+    （Windows のアプリケーション制御が RDKit の DLL を拒否する機械でも落ちないように）。
+    """
+    monkeypatch.setattr(mztab_identity, "rdkit_available", lambda: rdkit)
     golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
+    golden["status"]["inchikey_coverage"]["rdkit_available"] = rdkit
     assert golden_outputs(tmp_path) == golden
 
 

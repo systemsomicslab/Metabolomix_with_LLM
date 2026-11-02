@@ -24,7 +24,7 @@ from tests.pipeline_fixtures import fake_console_command, use_fake_console
 
 
 def _source(tmp_path, monkeypatch) -> tuple[Path, dict, list[Path]]:
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     source_root = tmp_path / "source"
     source_root.mkdir()
     sources = []

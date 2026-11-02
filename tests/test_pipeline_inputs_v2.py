@@ -21,7 +21,7 @@ from tests.metabolomics_fixtures import write_profile
 def _setup(tmp_path, monkeypatch) -> tuple[Path, dict, dict]:
     # fixture の実行体は placeholder なので、Console 判定（実際に --help を
     # 起動する）は既存テストと同じ流儀で差し替える。
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     source_root = tmp_path / "source"
     source_root.mkdir()
     for name in ("A", "B"):

@@ -4,7 +4,7 @@
 stage_inputs / verify_inputs。実rawや既存成果物は使わず、
 tests.pipeline_fixtures.make_source が作る合成データだけを使う。
 
-fake.exe は実行しない（is_console_exe を差し替える）。fake.lbm2 も
+fake.exe は実行しない（probe_console_exe を差し替える）。fake.lbm2 も
 Console には読ませない合成バイト列。
 """
 from __future__ import annotations
@@ -28,7 +28,27 @@ from tests.pipeline_fixtures import make_source
 
 def _allow_fake_exe(monkeypatch) -> None:
     """fake.exe を実際には実行させず、Console 実行体として通す。"""
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
+
+
+def test_resolve_exe_reports_probe_timeout(tmp_path, monkeypatch):
+    """--help の時間切れは NOT_CONSOLE と別のコード・details で返る。"""
+    from metabolomix.pipeline.inputs import _resolve_exe
+
+    exe = tmp_path / "slow.exe"
+    exe.write_text("placeholder", encoding="ascii")
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe",
+                        lambda *a, **k: "timeout")
+    with pytest.raises(DomainError) as exc:
+        _resolve_exe(exe)
+    assert exc.value.code == "MSDIAL_EXE_PROBE_TIMEOUT"
+    assert exc.value.details == {"exe_path": str(exe), "timeout_s": 60, "attempts": 2}
+
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe",
+                        lambda *a, **k: "not_console")
+    with pytest.raises(DomainError) as exc:
+        _resolve_exe(exe)
+    assert exc.value.code == "MSDIAL_EXE_NOT_CONSOLE"
 
 
 def _method_lbm_exe(root: Path, *, ion_mode: str = "negative") -> dict:
@@ -94,7 +114,10 @@ def test_inspect_and_stage_the_default_source(tmp_path, monkeypatch):
     # 実効コピーは原本と別ディレクトリに置かれるため、コピー後も相対参照の意味を
     # 変えない（spec §4.3）よう、絶対パスへ書き換える上書きが必要になる
     # （空dictにはならない）。
-    assert plan["method"]["overrides"] == {method_file_mod.LBM_KEY: str(src["lbm"].resolve())}
+    # 注入順の中央の参照ファイル（v8。シートが無いのでファイル名順の中央 = S3、file ID 3）も足す。
+    assert plan["method"]["overrides"] == {
+        method_file_mod.LBM_KEY: str(src["lbm"].resolve()),
+        method_file_mod.ALIGNMENT_REFERENCE_KEY: "3"}
 
     pipeline_root = tmp_path / "pipeline_run"
     snapshot = stage_inputs(plan, pipeline_root)
@@ -834,3 +857,264 @@ def test_sha256_is_streamed_not_read_whole(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Path, "read_bytes", forbidden)
     assert inputs_mod._sha256_file(big) == expected
+
+
+# ---------- library_mode="msp_then_lbm"（v8 Task 4） ----------
+
+_RT_SCORING_KEY = "Use retention information for LBM-based annotation scoring"
+_RT_FILTERING_KEY = "Use retention information for LBM-based annotation filtering"
+
+
+def _msp_then_lbm_plan(tmp_path, monkeypatch, *, directory_name="lab_library", **explicit):
+    _allow_fake_exe(monkeypatch)
+    paths = write_lab_msp_config(tmp_path, monkeypatch, lbm=True, directory_name=directory_name)
+    src = make_source(tmp_path / "raw")
+    request = resolve_request(src["root"], {"library_mode": "msp_then_lbm", **explicit})
+    return src, paths, inspect_inputs(src["root"], request, exe_path=src["exe"])
+
+
+def test_msp_then_lbm_plan_pins_msp_and_lbm(tmp_path, monkeypatch):
+    # [msdial] lbm の経路（環境変数 MSDIAL_LBM）とメソッドの宣言（fake.lbm2）は使わない。
+    other = tmp_path / "auto_route.lbm2"
+    other.write_bytes(b"auto-route-lbm")
+    monkeypatch.setenv("MSDIAL_LBM", str(other))
+    src, paths, plan = _msp_then_lbm_plan(tmp_path, monkeypatch)
+    lib = paths["negative"].resolve()
+    lbm = paths["lbm"].resolve()
+    assert plan["library_mode"] == "msp_then_lbm"
+    assert plan["msp"]["path"] == str(lib)
+    assert plan["msp"]["file"] == "lab_neg.msp"
+    assert plan["msp"]["priority"] == 2
+    assert len(plan["msp"]["sha256"]) == 64
+    assert plan["lbm"]["path"] == str(lbm)
+    assert plan["lbm"]["file"] == "lab_lipids.lbm2"
+    assert plan["lbm"]["source"] == "config_file"
+    assert len(plan["lbm"]["sha256"]) == 64
+    overrides = plan["method"]["overrides"]
+    assert overrides[method_file_mod.MSP_KEY] == ""
+    assert overrides[method_file_mod.MSP_ANNOTATOR_SETTINGS_KEY] == "inputs/msp-annotators.tsv"
+    assert overrides[method_file_mod.LBM_KEY] == str(lbm)
+    assert overrides[_RT_SCORING_KEY] == "False"
+    assert overrides[_RT_FILTERING_KEY] == "False"
+    # メソッドの宣言（fake.lbm2）は [library] lbm に置き換わる。
+    assert plan["removed_declarations"] == [method_file_mod.LBM_KEY]
+
+
+def test_msp_then_lbm_plan_records_the_effective_cutoffs(tmp_path, monkeypatch):
+    """受領に出す足切り（平方根の尺度）を計画に持つ。計画の指紋には入れない（再利用を壊さない）。"""
+    from metabolomix.pipeline.service import _plan_fingerprint
+    src, paths, plan = _msp_then_lbm_plan(tmp_path, monkeypatch)
+    cutoffs = plan["dot_product_cutoffs"]
+    assert (cutoffs["weighted"], cutoffs["simple"], cutoffs["reverse"]) == (0.6, 0.6, 0.8)
+    assert cutoffs["scale"] == "square_root"
+    assert set(cutoffs["source"].values()) <= {"default", "root_key", "unprefixed_key_read_as_root"}
+    changed = {**plan, "dot_product_cutoffs": {**cutoffs, "weighted": 0.9}}
+    assert _plan_fingerprint(plan) == _plan_fingerprint(changed)
+    # msp_only の計画も同じ尺度の足切りを持つ（2026-11-02 から）
+    msp_only = tmp_path / "only"
+    msp_only.mkdir()
+    only_src = make_source(msp_only / "raw")
+    only = inspect_inputs(only_src["root"],
+                          resolve_request(only_src["root"], {"library_mode": "msp_only"}),
+                          exe_path=only_src["exe"])
+    assert only["dot_product_cutoffs"]["scale"] == "square_root"
+    assert (float(only["method"]["overrides"]["Square root of weighted dot product cutoff for MSP-based annotation"])
+            == only["dot_product_cutoffs"]["weighted"])
+
+
+def test_msp_then_lbm_writes_annotator_table_with_priority_2(tmp_path, monkeypatch):
+    src, paths, plan = _msp_then_lbm_plan(tmp_path, monkeypatch)
+    lib = paths["negative"].resolve()
+    lbm = paths["lbm"].resolve()
+    run_root = tmp_path / "pipeline_run"
+    snapshot = stage_inputs(plan, run_root)
+
+    table = run_root / "inputs" / "msp-annotators.tsv"
+    assert table.read_bytes() == f"annotator_id\tmsp_file_path\tpriority\nLabMsp\t{lib}\t2\n".encode("ascii")
+    effective = (run_root / "inputs" / "effective-method.txt").read_text(encoding="ascii")
+    assert f"MSP annotator settings file path: {table.resolve()}\n" in effective
+    assert "Msp file path: \n" in effective
+    assert f"Lbm file path: {lbm}\n" in effective
+    assert f"{_RT_SCORING_KEY}: False\n" in effective
+    assert f"{_RT_FILTERING_KEY}: False\n" in effective
+    # 計画（上書き）は pipeline_root 相対のまま。実効メソッドだけが絶対パスを持つ。
+    assert snapshot["method"]["overrides"][method_file_mod.MSP_ANNOTATOR_SETTINGS_KEY] == \
+        "inputs/msp-annotators.tsv"
+    verify_inputs(snapshot)
+
+    # 再開（同じ配置先へもう一度）でも同じ中身になる。
+    again = stage_inputs(plan, run_root)
+    assert again["method"]["effective_sha256"] == snapshot["method"]["effective_sha256"]
+    assert again["msp"]["annotator_table_sha256"] == snapshot["msp"]["annotator_table_sha256"]
+
+
+def test_msp_then_lbm_resume_detects_a_changed_annotator_table(tmp_path, monkeypatch):
+    """v8 Task 4 fix 3: 設定表の sha256 を snapshot に固定し、再開時の照合で確かめる（実効メソッドと同じ）。"""
+    import hashlib
+    from metabolomix.pipeline import recovery
+    src, paths, plan = _msp_then_lbm_plan(tmp_path, monkeypatch)
+    run_root = tmp_path / "pipeline_run"
+    snapshot = stage_inputs(plan, run_root)
+    table = run_root / "inputs" / "msp-annotators.tsv"
+    assert snapshot["msp"]["annotator_table_relative_path"] == "inputs/msp-annotators.tsv"
+    assert snapshot["msp"]["annotator_table_sha256"] == hashlib.sha256(table.read_bytes()).hexdigest()
+
+    record = {"identity": {"pipeline_root": str(run_root)}, "inputs": snapshot}
+    recovery._verify_staged_inputs(record)            # 変わっていなければ通る
+
+    table.write_text("annotator_id\tmsp_file_path\tpriority\nLabMsp\tC:/other.msp\t1\n", encoding="ascii")
+    with pytest.raises(DomainError, match="STAGED_INPUT_MISMATCH") as changed:
+        recovery._verify_staged_inputs(record)
+    assert changed.value.details == {"path": "inputs/msp-annotators.tsv"}
+    table.unlink()
+    with pytest.raises(DomainError, match="STAGED_INPUT_MISMATCH"):
+        recovery._verify_staged_inputs(record)
+
+
+def test_msp_then_lbm_verify_detects_a_changed_lbm_without_its_location(tmp_path, monkeypatch):
+    src, paths, plan = _msp_then_lbm_plan(tmp_path, monkeypatch, directory_name="secret_share")
+    snapshot = stage_inputs(plan, tmp_path / "pipeline_run")
+    paths["lbm"].write_bytes(b"changed")
+    with pytest.raises(DomainError, match="INPUT_CHANGED") as changed:
+        verify_inputs(snapshot)
+    assert changed.value.details == {"which": "lbm", "lbm_file": "lab_lipids.lbm2"}
+    assert "secret_share" not in str(changed.value)
+
+
+def test_msp_then_lbm_without_lbm_setting_stops(tmp_path, monkeypatch):
+    _allow_fake_exe(monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share")
+    # [msdial] lbm の経路があっても代わりに使わない。
+    other = tmp_path / "secret_share" / "auto_route.lbm2"
+    other.write_bytes(b"auto-route-lbm")
+    monkeypatch.setenv("MSDIAL_LBM", str(other))
+    src = make_source(tmp_path / "raw")
+    request = resolve_request(src["root"], {"library_mode": "msp_then_lbm"})
+    with pytest.raises(DomainError, match="LBM_NOT_CONFIGURED") as info:
+        inspect_inputs(src["root"], request, exe_path=src["exe"])
+    assert "[library] lbm" in info.value.message
+    assert "secret_share" not in info.value.message
+    assert "secret_share" not in str(info.value.details)
+
+
+def test_msp_then_lbm_missing_lbm_file_stops_without_its_location(tmp_path, monkeypatch):
+    _allow_fake_exe(monkeypatch)
+    paths = write_lab_msp_config(tmp_path, monkeypatch, lbm=True, directory_name="secret_share")
+    paths["lbm"].unlink()
+    src = make_source(tmp_path / "raw")
+    request = resolve_request(src["root"], {"library_mode": "msp_then_lbm"})
+    with pytest.raises(DomainError, match="LBM_NOT_FOUND") as info:
+        inspect_inputs(src["root"], request, exe_path=src["exe"])
+    assert "lab_lipids.lbm2" in info.value.message
+    assert "secret_share" not in info.value.message
+    assert "secret_share" not in str(info.value.details)
+
+
+def test_msp_then_lbm_without_msp_setting_stops(tmp_path, monkeypatch):
+    _allow_fake_exe(monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch, negative=False, lbm=True)
+    src = make_source(tmp_path / "raw")
+    request = resolve_request(src["root"], {"library_mode": "msp_then_lbm"})
+    with pytest.raises(DomainError, match="MSP_NOT_CONFIGURED"):
+        inspect_inputs(src["root"], request, exe_path=src["exe"])
+
+
+# ---------- アライメントの参照ファイル（v8 Task 3） ----------
+
+from metabolomix.pipeline.inputs import choose_alignment_reference
+
+
+def _rows(names, orders, *, include=None):
+    """実験情報シートの行の最小形（`parse_manifest` の戻り値のうち使うキーだけ）。"""
+    include = include if include is not None else [True] * len(names)
+    return [{"source_file": f"C:/data/{n}", "sample_id": n.split(".")[0],
+             "injection_order": o, "include": inc}
+            for n, o, inc in zip(names, orders, include)]
+
+
+# 実データ確認（2026-10-28, MTBLS6965 陽イオン 42 検体）: .arf の file_id は 0 始まりで、
+# sorted() した主ファイル名の添字と全 42 件一致した（normalize_arf_spots で読んだ）。
+def test_reference_is_median_injection():
+    names = ["a.wiff", "b.wiff", "c.wiff", "d.wiff", "e.wiff"]
+    ref = choose_alignment_reference(names, _rows(names, [5, 1, 3, 2, 4]))
+    assert ref == {"file_id": 2, "sample_file": "c.wiff",
+                   "injection_order_source": "manifest", "method_value": None}
+
+
+def test_reference_counts_excluded_samples_too():
+    names = ["a.wiff", "b.wiff", "c.wiff", "d.wiff", "e.wiff"]
+    rows = _rows(names, [1, 2, 3, 4, 5], include=[False, False, True, True, True])
+    # 全 5 件の中央は注入順 3 の c。除外を落とすと 3 件（3,4,5）の中央 4 の d になる。
+    ref = choose_alignment_reference(names, rows)
+    assert (ref["file_id"], ref["sample_file"]) == (2, "c.wiff")
+
+
+def test_reference_with_rows_for_only_some_primaries():
+    names = ["a.wiff", "b.wiff", "c.wiff", "d.wiff", "e.wiff"]
+    rows = _rows(names[:3], [5, 1, 3])  # 残り 2 件の行が無い
+    ref = choose_alignment_reference(names, rows)
+    assert ref["injection_order_source"] == "filename"
+    assert (ref["file_id"], ref["sample_file"]) == (2, "c.wiff")
+
+
+def test_reference_even_count_takes_lower_median():
+    names = ["a.wiff", "b.wiff", "c.wiff", "d.wiff"]
+    ref = choose_alignment_reference(names, _rows(names, [4, 3, 2, 1]))
+    # 注入順 1,2,3,4 の小さい方の中央は 2 → c.wiff
+    assert (ref["file_id"], ref["sample_file"]) == (2, "c.wiff")
+
+
+def test_reference_falls_back_to_filename_order():
+    names = ["a.wiff", "b.wiff", "c.wiff", "d.wiff", "e.wiff"]
+    ref = choose_alignment_reference(names, _rows(names, [5, 1, None, 2, 4]))
+    assert ref["injection_order_source"] == "filename"
+    assert (ref["file_id"], ref["sample_file"]) == (2, "c.wiff")
+    # シートが無いときも同じ。
+    none = choose_alignment_reference(names, None)
+    assert none["injection_order_source"] == "filename" and none["file_id"] == 2
+
+
+def test_reference_method_mode_keeps_method_value(tmp_path, monkeypatch):
+    _allow_fake_exe(monkeypatch)
+    src = make_source(tmp_path / "raw")
+    with src["method"].open("a", encoding="ascii", newline="\n") as f:
+        f.write("Alignment reference file ID: 6\n")
+    request = resolve_request(src["root"], {"alignment_reference": "method"})
+    plan = inspect_inputs(src["root"], request, exe_path=src["exe"])
+    assert plan["alignment_reference"]["method_value"] == "6"
+    assert plan["alignment_reference"]["file_id"] is None
+    assert method_file_mod.ALIGNMENT_REFERENCE_KEY not in plan["method"]["overrides"]
+
+
+def test_plan_overrides_the_alignment_reference_in_both_library_modes(tmp_path, monkeypatch):
+    _allow_fake_exe(monkeypatch)
+    write_lab_msp_config(tmp_path, monkeypatch)
+    src = make_source(tmp_path / "raw")
+    with src["method"].open("a", encoding="ascii", newline="\n") as f:
+        f.write("Alignment reference file ID: 0\n")
+    names = [f"S{i}.wiff" for i in range(8)]
+    rows = _rows(names, [8 - i for i in range(8)])  # 注入順はファイル名の逆
+    for explicit in ({}, {"library_mode": "msp_only"}):
+        request = resolve_request(src["root"], explicit)
+        plan = inspect_inputs(src["root"], request, exe_path=src["exe"], manifest_rows=rows)
+        # 注入順 1..8 = S7..S0。小さい方の中央は 4 番目 = S4（file_id 4）。
+        assert plan["method"]["overrides"][method_file_mod.ALIGNMENT_REFERENCE_KEY] == "4"
+        assert plan["alignment_reference"] == {
+            "file_id": 4, "sample_file": "S4.wiff",
+            "injection_order_source": "manifest", "method_value": "0"}
+    snapshot = stage_inputs(plan, tmp_path / "pipeline_run")
+    effective = (tmp_path / "pipeline_run" / "inputs" / "effective-method.txt").read_text(
+        encoding="ascii")
+    assert "Alignment reference file ID: 4\n" in effective
+    assert "Alignment reference file ID: 0" not in effective
+    verify_inputs(snapshot)
+
+
+def test_plan_without_a_manifest_uses_filename_order(tmp_path, monkeypatch):
+    _allow_fake_exe(monkeypatch)
+    src = make_source(tmp_path / "raw")
+    plan = inspect_inputs(src["root"], resolve_request(src["root"]), exe_path=src["exe"])
+    assert plan["alignment_reference"]["injection_order_source"] == "filename"
+    assert plan["alignment_reference"]["sample_file"] == "S3.wiff"
+    # 原本に宣言が無くても実効メソッドへ足す。
+    assert plan["method"]["overrides"][method_file_mod.ALIGNMENT_REFERENCE_KEY] == "3"

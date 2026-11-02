@@ -30,6 +30,7 @@ TSV は書かない。2026-09-03 に「消費者のいない `feature-qc.tsv`」
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -157,8 +158,13 @@ def build_evidence(
 
     arf_names = [cell["name"] for cell in (normalized_spots[0]["samples"]
                                           if normalized_spots else [])]
-    position = {name: i for i, name in enumerate(arf_names)}
-    missing = [name for name in sample_names if name not in position]
+    # 名前は前後の空白を落として比べる。raw ファイル名の末尾の空白（`... P15-AA-25 .wiff`）
+    # は `.arf` の FileName に残るが、mzTab の MTD の読み取りは値を strip する
+    # （`mztab/reader.py`）ので、そのままでは同じ試料が「ARF に無い」と棄却される。
+    position: dict[str, int] = {}
+    for i, name in enumerate(arf_names):
+        position.setdefault(name.strip(), i)
+    missing = [name for name in sample_names if name.strip() not in position]
     if missing:
         return {
             "status": "rejected",
@@ -166,19 +172,30 @@ def build_evidence(
             "detail": {"missing_in_arf": missing, "n_arf_samples": len(arf_names)},
         }
 
-    columns = [position[name] for name in sample_names]
+    columns = [position[name.strip()] for name in sample_names]
     mask = np.ones((n_features, len(sample_names)), dtype=bool)
+    # 特徴（行）ごとの {試料名: 検出されたセルの実測 m/z}。gap-fill のセルの m/z は
+    # 補間値で実測ではないので入れない。質量精度の注入順の傾向の材料（RT は持たない）。
+    per_sample_mz: list[dict[str, float]] = []
     for row, spot in enumerate(normalized_spots):
         cells = spot["samples"]
+        measured: dict[str, float] = {}
         for col, source in enumerate(columns):
             if source < len(cells):
-                mask[row, col] = not cells[source]["is_gap_filled"]
+                detected = not cells[source]["is_gap_filled"]
+                mask[row, col] = detected
+                mz = cells[source].get("m_z")
+                if (detected and isinstance(mz, (int, float)) and not isinstance(mz, bool)
+                        and math.isfinite(mz) and mz > 0):
+                    measured[sample_names[col]] = float(mz)
+        per_sample_mz.append(measured)
 
     n_cells = int(mask.size)
     n_detected = int(mask.sum())
     return {
         "status": "ok",
         "detected_mask": mask,
+        "per_sample_mz": per_sample_mz,
         "n_cells": n_cells,
         "n_detected": n_detected,
         "gap_filled_rate": round(1.0 - n_detected / n_cells, 4) if n_cells else None,
@@ -255,6 +272,7 @@ def apply_evidence(ds, result: dict | None, tried: list[str] | None = None) -> N
     状態、後者はデータが空という結論になる。`detected_mask` は None のまま残し、
     `feature_qc["source"] = None` と理由を書き、警告で利用者に伝える。
     """
+    ds.per_sample_mz = None
     if result is None:
         ds.feature_qc = {"source": None, "reason": "no_candidate", "tried": list(tried or [])}
         return
@@ -271,6 +289,11 @@ def apply_evidence(ds, result: dict | None, tried: list[str] | None = None) -> N
         return
 
     ds.detected_mask = result["detected_mask"]
+    rows = result.get("per_sample_mz")
+    if rows is not None and len(rows) == len(ds.feature_ids):
+        # 特徴 ID → {試料名: m/z}（検出されたセルが 1 つも無い特徴は持たない）。
+        # 指紋には入らない（`result_state.dataset_fingerprint` は行列と検出マスクだけを数える）。
+        ds.per_sample_mz = {fid: cells for fid, cells in zip(ds.feature_ids, rows) if cells}
     ds.feature_qc = {
         "source": "arf",
         "tried": list(tried or []),

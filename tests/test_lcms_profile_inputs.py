@@ -744,7 +744,7 @@ def test_inspect_inputs_ignores_unresolvable_msp_file_path_like_before(tmp_path,
     exe.touch()
     lbm = exe_dir / "lib.lbm2"
     lbm.touch()
-    monkeypatch.setattr("metabolomix.console.runner.is_console_exe", lambda *a, **k: True)
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
 
     # `lib1.msp`は実在しない（解決不能な宣言）。REFERENCE_KEYS拡張前と同じく
     # 無視されるはず。

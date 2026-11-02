@@ -67,7 +67,7 @@ MCP層は薄い(`metabolomix/tools/pipeline_tools.py`)。実体は `metabolomix/
 手順5の `_resolved_settings` は `plan_pipeline` の発送receiptにだけ足される
 (`_dispatch_receipt(include_resolved=True)`)。載せるのは解決済みの
 method(`source_path`/`sha256`)・LBM・polarity(`value`/`source`)・`library_mode`・
-MSP(ファイル名・sha256・出どころ。置き場所は載せない)だけで、
+MSP(ファイル名・sha256・出どころ。置き場所は載せない)・`alignment_reference` だけで、
 `raw_stat`・`entries`・`overrides` のような大きな中間データは `record["inputs"]`
 に残したまま出さない。サーバー共通指示(`metabolomix/core/mcp_core.py` の ENTRY POINT)が
 このツールを「起動前に解決結果を確認する入口」として案内しているため、receiptが
@@ -77,10 +77,42 @@ receiptは従来どおり最小のまま。
 
 `library_mode="msp_only"` の要求では LBM を解決せず(`Lbm file path` は空)、研究室の参照ライブラリ(.msp)を
 `msp_file` か極性の設定(`[library] msp_positive` / `msp_negative`)から決めて実効メソッドの `Msp file path` に書く。
-メソッドが宣言する Text DB と注釈器設定表は空にする。MSP の sha256 は入力計画に固定し、計画の指紋にも入れる
+メソッドが宣言する Text DB と注釈器設定表は空にする。dot product の足切りは下の `msp_then_lbm` と同じく平方根の側のキーで書き(2026-11-02 から。それより前の msp_only の run は接頭辞の無いキーを二乗で読ませていた)、receipt の `resolved.dot_product_cutoffs` に出す。MSP の sha256 は入力計画に固定し、計画の指紋にも入れる
 (MSP が変われば `pipeline_run` は別の run を作る)。上流をやり直さない `pipeline_resume` では
 `metabolomix/pipeline/inputs.py` の `verify_inputs()` が再検査する(変わっていれば `INPUT_CHANGED`、`which: "msp"`)。
 receipt にはファイル名・sha256・出どころだけを載せ、置き場所は載せない。
+
+`library_mode="msp_then_lbm"`(v8。脂質の run 用)は研究室 MSP を優先し、LBM で補う。MSP は `msp_only` と同じ規則で決め、
+LBM は `[library] lbm`(環境変数 `MSDIAL_LIBRARY_LBM`)**だけ**から決める(`[msdial] lbm`・メソッドの宣言・実行体のフォルダ・
+ビルド生成物は見ない。無ければ `LBM_NOT_CONFIGURED`、指す先が無ければ `LBM_NOT_FOUND`)。実効メソッドは `Msp file path` を空にし、
+`MSP annotator settings file path` に `inputs/msp-annotators.tsv`(`stage_inputs` が書く。列 `annotator_id` / `msp_file_path` /
+`priority`、研究室 MSP を priority 2 で 1 行)、`Lbm file path` に LBM、`Use retention information for LBM-based annotation
+scoring` / `filtering` に `False` を書く。メソッドが宣言する MSP 設定表の別名は同じ設定表へ向け(Console は別名を含めて最初の行を
+空でも読むため)、Text DB と Text の設定表は空にする。dot product の足切り(weighted / simple / reverse)は MSP と LBM に同じ値を
+`Square root of ... dot product cutoff for MSP-based annotation` / `...for LBM-based annotation` で書き、宣言された
+`Weighted dot product cutoff for MSP-based annotation` 等は空にする——Console はこの接頭辞の無いキーを**二乗の**足切りとして読む
+(0.6 は実効で 0.775)ので、そのままだと MSP だけが LBM(キー無し=既定の平方根の側 0.6 / 0.8)より厳しくなり、同じ証拠の水準に
+並ばない。値は平方根の側の宣言 → 接頭辞の無いキーの宣言(平方根の側の値と読む)→ 既定 0.6 / 0.6 / 0.8 の順で、空にした宣言（原本が値を宣言していたもの）は `removed_declarations` に載り、
+実効の足切りは receipt の `resolved.dot_product_cutoffs`(`weighted` / `simple` / `reverse` / `scale: "square_root"` / 種類ごとの `source`: `root_key` / `unprefixed_key_read_as_root` / `default`。msp_only と msp_then_lbm。計画の指紋の外)に出る。Console(45a531c4d)は設定表から 1 件でも読めると `Msp file path` を使わず、
+LBM の注釈器の priority を 1 に固定しているので、代表の同定は同じ証拠の水準なら MSP、MSP に MS/MS の照合が無く LBM にあるときだけ
+LBM になる。LBM と MSP の sha256 は計画の指紋に入り、`verify_inputs()` が再検査する(`which: "lbm"` の details もファイル名だけ)。
+receipt の `resolved.lbm` は `file` / `sha256` / `source`、`resolved.msp` は `priority`(2)も持つ。
+設定表の sha256 は配置時に snapshot(`msp.annotator_table_sha256`)へ固定し、再開時の照合が実効メソッドと同じく確かめる
+(変わっていれば `STAGED_INPUT_MISMATCH`)。`pipeline_status(include_details=true)` の record の写しでは、LBM の `path` と
+`Lbm file path` の上書き、絶対パスの設定表の上書きもファイル名だけにする。mzTab の読み込みは設定表の MSP で InChIKey を補う
+(同定は `MspDB_<n>_<MSP の stem>:<名前>`)。
+
+アライメントの参照ファイル(要求の `alignment_reference`、既定 `"median_injection"`): 実効メソッドの
+`Alignment reference file ID` を、全試料(`include` を問わない)の注入順の中央の試料(偶数なら小さい方)の
+file ID(入力フォルダの主ファイルを `sorted()` した順の 0 始まりの添字)に書く。`_prepare_run` が実験情報シートを
+`inspect_inputs` より先に解して行を渡し、`injection_order` が 1 件でも欠ける・シートが無いときはファイル名順の中央
+(receipt の `injection_order_source` が `"filename"`)。`"method"` は上書きせず、メソッドの宣言を `method_value` に残す。
+`overrides` は計画の指紋の外なので、既存の要求の hash も完了済み run の再利用も変わらない——ただし
+古い要求を再送して新しい run を作ると、実効メソッドの参照ファイルが以前と違う(既定の 0 → 中央)。
+`alignment_reference` の既定(`"median_injection"`)は要求の hash の外なので、v7 で完了した run のある元フォルダへ既定のまま
+v8 の要求を出すと、その run を再利用する(上書きしたメソッドは使われていない)。このとき receipt の
+`resolved.alignment_reference` は `null`（v7 の計画に無い）で、参照ファイルが中央に変わっていないことの印になる——中央の参照で
+やり直したいときは `alignment_reference` を明示するか、新しい run を作る。
 
 ## pipeline_status
 
