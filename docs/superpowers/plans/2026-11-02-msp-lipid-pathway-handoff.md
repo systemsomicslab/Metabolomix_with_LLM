@@ -53,7 +53,7 @@
 | Phosphatidylcholines | PC | PC | `PC n:db` | 34:1 = C42H82NO8P |
 | Phosphatidylethanolamines | PE | PE | `PE n:db` | 34:1 = C39H76NO8P |
 | Phosphatidylserines | PS | PS | `PS n:db` | 34:1 = C40H76NO10P |
-| Phosphatidylglycerols | PG | PG | `PG n:db` | 34:1 = C40H75O10P |
+| Phosphatidylglycerols | PG | PG | `PG n:db` | 34:1 = C40H77O10P |
 | Phosphatidylinositols, 1-phosphatidyl-1D-myo-inositols | PI | PI | `PI n:db` | 34:1 = C43H81O13P |
 | 1,2-diacylglycerol-3-phosphates | PA | PA | `PA n:db` | 34:1 = C37H71O8P |
 | 1-acyl-sn-glycero-3-phosphocholines, 2-acyl-sn-glycero-3-phosphocholines | LPC | LPC | `LPC n:db` | 16:0 = C24H50NO7P |

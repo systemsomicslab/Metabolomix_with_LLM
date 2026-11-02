@@ -49,7 +49,7 @@ CLASS_FORMS: dict[str, ClassForm] = {
     "PC": ClassForm("PC", "PC ", "", 34, 1, "C42H82NO8P"),
     "PE": ClassForm("PE", "PE ", "", 34, 1, "C39H76NO8P"),
     "PS": ClassForm("PS", "PS ", "", 34, 1, "C40H76NO10P"),
-    "PG": ClassForm("PG", "PG ", "", 34, 1, "C40H75O10P"),
+    "PG": ClassForm("PG", "PG ", "", 34, 1, "C40H77O10P"),
     "PI": ClassForm("PI", "PI ", "", 34, 1, "C43H81O13P"),
     "PA": ClassForm("PA", "PA ", "", 34, 1, "C37H71O8P"),
     "LPC": ClassForm("LPC", "LPC ", "", 16, 0, "C24H50NO7P"),
