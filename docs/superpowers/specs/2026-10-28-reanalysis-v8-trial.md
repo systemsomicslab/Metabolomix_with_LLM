@@ -81,31 +81,43 @@ MSLipidMapper・R は呼ばない）。MSP 由来かは `database_identifier` �
 | 数（前処理後の特徴） | 前 pos | 前 neg | 後 pos | 後 neg |
 |---|---|---|---|---|
 | 特徴 | 1666 | 1619 | 1666 | 1619 |
-| 残った行（同名の整理の後。`n_kept`） | 251 | 388 | 449 | 674 |
-| 残った行の絞る前の数（`kept_by_route` の合計。前は `n_kept` + `dropped_duplicate_names` で出した） | 297 | 402 | 670 | 818 |
+| 残った行（同名の整理の後。`n_kept`） | 251 | 388 | 448 | 672 |
+| 残った行の絞る前の数（`kept_by_route` の合計。前は `n_kept` + `dropped_duplicate_names` で出した） | 297 | 402 | 668 | 814 |
 | `kept_by_route.as_is` | – | – | 297 | 402 |
 | `kept_by_route.name` | – | – | 1 | 227 |
-| `kept_by_route.class_formula` | – | – | 372 | 189 |
+| `kept_by_route.class_formula` | – | – | 370 | 185 |
 | `dropped_unannotated` | 461 | 350 | 461 | 350 |
 | `dropped_non_msdial_ontology` | 864 | 758 | （キーなし） | （キーなし） |
 | `dropped_unparsable_name` | 44 | 109 | 44 | 109 |
+| `dropped_isotope_label` | – | – | 0 | 1 |
 | `dropped_ambiguous_class` | – | – | 0 | 0 |
-| `dropped_unmapped_ontology` | – | – | 414 | 287 |
 | `dropped_ambiguous_ontology` | – | – | 62 | 27 |
+| `dropped_unmapped_ontology` | – | – | 414 | 287 |
+| `dropped_class_name_conflict` | – | – | 2 | 3 |
 | `dropped_no_formula` | – | – | 0 | 0 |
 | `dropped_formula_mismatch` | – | – | 15 | 28 |
-| `dropped_duplicate_names` | 46 | 14 | 221 | 144 |
-| 残った行（`n_kept`）のうち MSP 由来 | 0 | 0 | 200 | 286 |
-| うち MS/MS 照合の旗（`spectrum_matched`）が真 | – | – | 141 | 176 |
+| `dropped_duplicate_names` | 46 | 14 | 220 | 142 |
+| 残った行（`n_kept`）のうち MSP 由来 | 0 | 0 | 199 | 284 |
+| うち MS/MS 照合の旗（`spectrum_matched`）が真 | – | – | 140 | 175 |
 
 - 「前」は上の節の数（`dropped_non_msdial_ontology` は 864 / 758 で、すべて MSP 由来）。「後」の `dropped_non_msdial_ontology` は新しい report に無い
-  （`unmapped_ontology`・`ambiguous_ontology`・`formula_mismatch`・`ambiguous_class` に分かれた）。「–」は前の report に無かった項目。
-- 区分は重ならず、全行 = `kept_by_route` の合計 + 落ちた理由の合計: pos 670 + 461 + 44 + 0 + 414 + 62 + 0 + 15 = 1666、neg 818 + 350 + 109 + 0 + 287 + 27 + 0 + 28 = 1619。
-  `n_kept` = 合計 − `dropped_duplicate_names`（pos 670 − 221 = 449、neg 818 − 144 = 674）。
-- 前の 864 / 758 の MSP 行（ClassyFire 系の Ontology）の行き先: 経路 `name` と `class_formula` で pos 373（1 + 372）/ neg 416（227 + 189）が入り、
-  落ちたのは pos 491（414 + 62 + 15）/ neg 342（287 + 27 + 28）。経路 `as_is` の 297 / 402 は、前の絞る前の数（251 + 46、388 + 14）と同じ。
+  （`isotope_label`・`ambiguous_class`・`ambiguous_ontology`・`unmapped_ontology`・`class_name_conflict`・`formula_mismatch` に分かれた）。
+  「–」は前の report に無かった項目。「後」は最終レビューの修正（`isotope_label`・`class_name_conflict`・経路 `name` の `;O…`）の後に測り直した数。
+- 区分は重ならず、全行 = `kept_by_route` の合計 + 落ちた理由の合計（`dropped_duplicate_names` を除く）:
+  pos 668 + 461 + 44 + 0 + 0 + 62 + 414 + 2 + 0 + 15 = 1666、neg 814 + 350 + 109 + 1 + 0 + 27 + 287 + 3 + 0 + 28 = 1619。
+  `n_kept` = 合計 − `dropped_duplicate_names`（pos 668 − 220 = 448、neg 814 − 142 = 672）。
+- 前の 864 / 758 の MSP 行（ClassyFire 系の Ontology）の行き先: 経路 `name` と `class_formula` で pos 371（1 + 370）/ neg 412（227 + 185）が入り、
+  落ちたのは pos 493（62 + 414 + 2 + 15）/ neg 346（1 + 27 + 287 + 3 + 28）。経路 `as_is` の 297 / 402 は、前の絞る前の数（251 + 46、388 + 14）と同じ。
 - MSP の SML 行は pos 980・neg 811。うち `dropped_unannotated` が pos 116・neg 53（Ontology が空・Unknown・Others）。
-- 同名の整理で落ちた行が前より増えた（46 → 221、14 → 144）。整理は名前の文字列で判定し、MSP の行と LBM の行が同じ名前になれば 1 行に絞られる。
+- 修正の前に同じ手順で測った数（`kept_by_route.class_formula` 372 / 189、`n_kept` 449 / 674、`dropped_duplicate_names` 221 / 144、
+  MSP 由来の `n_kept` 200 / 286）から、行の行き先が変わったのは 6 行（特徴ごとの解決を突き合わせた）。
+  `class_name_conflict` の 5 行（pos 2・neg 3）はすべて、名前 `1-(1Z-Octadecenyl)-2-(4Z,7Z,10Z,13Z,16Z,19Z-docosahexaenoyl)-sn-glycero-3-phosphoethanolamine`・
+  Ontology `1-(1Z-alkenyl),2-acyl-glycerophosphocholines`・組成式 C45H78NO7P で、前は経路 `class_formula` の `PC P-37:6`。
+  `isotope_label` の 1 行は neg の `no MS2: DHA-[21,21,22,22,22-d5]`（`Very long-chain fatty acids`、C22H32O2）で、前は `no MS2: FA 22:6`。
+  経路 `name` の `;O…` の修正で行き先が変わった行は無かった。
+- `dropped_duplicate_names` を、同名になった行の群の由来（`database_identifier` が `MspDB_` で始まるか）で分けた数
+  （群の数 / 落ちた行）: pos は MSP だけ 98 / 169、LBM だけ 38 / 44、混在 3 / 7。neg は MSP だけ 66 / 128、LBM だけ 14 / 14、混在 0 / 0。
+  MSP だけの群のうち、元の MSP の化合物名が 2 つ以上ある群は pos 55 群（154 行、落ちた行 99）、neg 21 群（81 行、落ちた行 60）。
   同名になった名前の例（report の `duplicate_name_examples`。名前順の先頭 5 件）は `CL …`・`Cer 18:1;O2/…` など。
 
 `unmapped_ontology` の多い ClassyFire の Ontology 名（上位 5 つ。件数は行数）:

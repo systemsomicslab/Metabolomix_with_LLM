@@ -194,7 +194,8 @@
 
 `msp_then_lbm` の run をパスウェイ（`pathway_project`）へ渡すと、受け渡しが MSP の行も LBM の行と同じ規則で入れる
 （Ontology が MS-DIAL の脂質クラスならそのまま、そうでなければ名前から、名前で読めなければ ClassyFire のクラスと組成式から
-MS-DIAL の名前とクラスに直す）。直せない行（クラスが 1 つに決まらない・対応表に無い・組成式が合わない）は推測せず、
+MS-DIAL の名前とクラスに直す）。直せない行（クラスが 1 つに決まらない・対応表に無い・名前の頭部の語がクラスと食い違う・
+組成式が合わない）と、名前に同位体の標識がある MSP の行（内部標準）は推測せず、
 理由ごとの件数（`handoff` の `kept_by_route` と `dropped_*`）つきで落とす。使った行と落とした行の数を `handoff` で確かめる
 （試しでの件数は [pathway.md（output_format）](../output_format/pathway.md) の規則と
 `docs/superpowers/specs/2026-10-28-reanalysis-v8-trial.md`）。

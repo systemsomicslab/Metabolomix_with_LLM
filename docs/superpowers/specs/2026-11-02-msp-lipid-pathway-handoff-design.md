@@ -86,8 +86,13 @@ ARF の経路（`build_from_arf`。catalog の行）の両方に通す。組成�
 
 読めたら、クラスは読めた名前から LbmClass を決める。このとき行の Ontology（ClassyFire）は使わない。名前と ClassyFire の
 クラスが食い違うとき（3 節の PE / PC の例）、名前を採る。GOSLIN のクラスが LbmClass の複数に当たるとき（Cer → Cer_NS / NDS / AS …、
-HexCer、SM の `;O3` など）は、名前が示す構造（`Cer 18:1;O2/16:0` の長鎖塩基と脂肪酸の水酸基、古い書式の `Cer[NS]`）で一意に
+HexCer など）は、名前が示す構造（`Cer 18:1;O2/16:0` の長鎖塩基と脂肪酸の水酸基、古い書式の `Cer[NS]`）で一意に
 決まるときだけ決め、決まらなければ推測せず落とす（`ambiguous_class`。和の組成だけの `Cer 34:1;O2` は落ちる）。
+SM は `;O2` も `;O3` も LbmClass `SM` に決まる。
+
+2026-11-02 の最終レビューで足したこと: Cer / HexCer / SM 以外の頭部で `;O…`（酸化の修飾）がある名前
+（`FA 18:1;O`、`PC 16:0_18:2;O`、`TG 52:3;O`、`;` の注記の形の `FA 18:1;O (9-HODE)` も）は経路 1 で読まず、経路 2 に回す
+（組成式の検査で決める）。
 
 名前の書式: 出す名前は MS-DIAL 5 の書式（3 節の LBM の行と同じ。`PE P-…` を GOSLIN の `PE O-…` に変えない）で、元の行の
 `low score: ` / `no MS2: ` は外さずに前に付け直す（LBM の行もこれを付けたまま handoff を通っている。`handoff.py:156, 206`）。
@@ -106,6 +111,12 @@ HexCer、SM の `;O3` など）は、名前が示す構造（`Cer 18:1;O2/16:0` 
    3 節の `Lineolic acids and derivatives` に入った DG（O5）は、FA（O2）の形に合わないので落ちる。
 3. 名前は和の組成（`TG 54:3`、`PE 38:4`、`PE P-36:4`、`SM 34:1;O2`、`CAR 18:1`、`FA 22:6`）。鎖ごとの内訳は出さない。
    接頭辞は経路 1 と同じく元の行のものを付け直す。組成式の無い行は `no_formula` で落とす。
+4. （2026-11-02 の最終レビューで足した）組成式を見る前に、名前（限定子を外したもの）の頭部の語を大文字小文字を問わず探す:
+   `cholin`（PC 系・LPC・PC O- / P-・SM）、`ethanolamin`（PE 系・LPE・PE O- / P-・NAE）、`serin`（PS）、`inositol`（PI）。
+   ほかのクラスは語を持たない。名前に語が 1 つ以上あり、そのクラスの語がその中に無い（またはクラスが語を持たない）なら
+   `class_name_conflict` で落とす。PC と PE は C3H6 しか違わないので、組成式の検査ではこの食い違い（3 節の例。ClassyFire が
+   `…-glycerophosphocholines` で名前が `…-phosphoethanolamine`）を捕まえられない。理由を見る順は `ambiguous_ontology`・
+   `unmapped_ontology`・`class_name_conflict`・`no_formula`・`formula_mismatch`。
 
 例: `Glyceryl trioleate`（C57H104O6、`Triacylglycerols`）→ `TG 54:3`。`1-Palmitoyl-2-oleoyl-sn-glycerol`（C37H70O5、
 `1,2-diacylglycerols`）→ `DG 34:1`。`MassSpecGymID0400493`（C36H72NO8P、`Phosphatidylcholines`）→ `PC 28:0`。
@@ -120,9 +131,11 @@ HexCer、SM の `;O3` など）は、名前が示す構造（`Cer 18:1;O2/16:0` 
 行はどれか 1 つの区分にだけ入る（設計者の判断）: 残る行は `kept_by_route` の `as_is`（経路 0）・`name`（経路 1）・
 `class_formula`（経路 2）のどれか。落ちる行は次の理由のどれか 1 つ:
 - `unannotated`（いまと同じ）、`unparsable_name`（経路 0 の行で名前が読めない。いまと同じ定義）、
+- （2026-11-02 の最終レビューで足した）経路 1・2 の前に、名前に同位体の標識（重水素 `d5`・`(d7)`・`-d31`、`13C`。長鎖塩基の
+  `d18:1` は `:` が続くので標識でない）がある行の `isotope_label`（内部標準をクラスの和に入れない。経路 0 の行には当てない）、
 - 経路 1 で読めて経路 2 に回らなかった行の `ambiguous_class`、
-- 経路 1 で読めず経路 2 で決まらなかった行の `unmapped_ontology`・`ambiguous_ontology`・`no_formula`・`formula_mismatch`
-  （経路 2 の最初に当たった理由）。
+- 経路 1 で読めず経路 2 で決まらなかった行の `ambiguous_ontology`・`unmapped_ontology`・`class_name_conflict`・`no_formula`・
+  `formula_mismatch`（経路 2 の最初に当たった理由）。
 `dropped_non_msdial_ontology` はこれらに分かれるので出さない（受け取る側の文書を直す）。重複で絞った行は、いまと同じ
 `dropped_duplicate_names` に数える。`kept_by_route` は重複で絞る前の数で、`n_kept` = その合計 − `dropped_duplicate_names`。
 全行 = 残る行（絞る前）+ 落ちる理由の合計、が成り立つことをテストで確かめる。
