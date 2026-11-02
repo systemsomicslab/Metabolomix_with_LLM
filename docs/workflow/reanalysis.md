@@ -192,9 +192,12 @@
 `merge_split.groups` を使う。まとめた組の hash は `rule_hash` に入る（`merge_split` が `groups_hash` に
 出す。`merge_split=false` は v7 と同じ hash）。
 
-`msp_then_lbm` の run をパスウェイ（`pathway_project`）へ渡すと、Ontology が MS-DIAL の脂質クラスでない MSP の同定は
-受け渡しで落ちるので、クラスごとの合計は LBM で同定した分子種が中心になり、MSP の一般名は届かない
-（試しでは前処理後の特徴の半数前後が落ちた。数は [pathway.md（output_format）](../output_format/pathway.md)）。
+`msp_then_lbm` の run をパスウェイ（`pathway_project`）へ渡すと、受け渡しが MSP の行も LBM の行と同じ規則で入れる
+（Ontology が MS-DIAL の脂質クラスならそのまま、そうでなければ名前から、名前で読めなければ ClassyFire のクラスと組成式から
+MS-DIAL の名前とクラスに直す）。直せない行（クラスが 1 つに決まらない・対応表に無い・組成式が合わない）は推測せず、
+理由ごとの件数（`handoff` の `kept_by_route` と `dropped_*`）つきで落とす。使った行と落とした行の数を `handoff` で確かめる
+（試しでの件数は [pathway.md（output_format）](../output_format/pathway.md) の規則と
+`docs/superpowers/specs/2026-10-28-reanalysis-v8-trial.md`）。
 
 ## dataset_alignment_qc
 
