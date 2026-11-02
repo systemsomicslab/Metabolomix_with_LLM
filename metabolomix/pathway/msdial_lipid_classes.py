@@ -7,7 +7,8 @@ mzTab の `opt_global_Ontology`（ARF の Ontology 列）はこのクラス名�
 
 メンバーのうち脂質クラスでないもの（`Undefined` `Others` `Unknown` `SPLASH`）は入れない。
 研究室 MSP のみで同定した run の Ontology は ClassyFire 系の名前（`Phosphatidylcholines` 等）で、
-ここには無い（MSLipidMapper のパスウェイのノード名と合わないので、handoff が落とす）。
+ここには無い。handoff はそれを `msp_lipid` で MS-DIAL のクラスと略記の名前に直して入れる
+（直せない行は理由を数えて落とす）。
 """
 from __future__ import annotations
 

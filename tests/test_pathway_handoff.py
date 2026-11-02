@@ -225,34 +225,40 @@ def _ds_with(annotations):
 _KEEP = [{"name": "PC 38:3", "ontology": "PC"}, {"name": "PE 18:0_20:4", "ontology": "PE"}]
 
 
+def _dropped(report):
+    return {k: v for k, v in report.items()
+            if k.startswith("dropped_") and k not in ("dropped_duplicate_names", "dropped_excluded_spots")}
+
+
 def test_handoff_keeps_msdial_lipids():
     t = handoff.build_from_dataset(**_ds_with(_KEEP))
     assert t.names == ["PC 38:3", "PE 18:0_20:4"] and t.ontologies == ["PC", "PE"]
-    assert t.report["dropped_non_msdial_ontology"] == 0
-    assert t.report["dropped_unparsable_name"] == 0
-    # 限定子接頭辞付きの名前は読める
+    assert t.report["kept_by_route"] == {"as_is": 2, "name": 0, "class_formula": 0}
+    assert not any(_dropped(t.report).values())
+    # 限定子接頭辞付きの名前は読める（経路 0 は名前をそのまま通す）
     t = handoff.build_from_dataset(**_ds_with(
         _KEEP + [{"name": "no MS2: PC 34:1", "ontology": "PC"}]))
     assert t.names[-1] == "no MS2: PC 34:1"
 
 
-def test_handoff_drops_classyfire_ontology():
-    # 研究室 MSP の Ontology は ClassyFire 系の名前。MS-DIAL の脂質クラスではないので落とす。
+def test_handoff_keeps_classyfire_rows_with_a_readable_name():
+    # 研究室 MSP の Ontology は ClassyFire 系。名前が MS-DIAL の略記で読めれば経路 1 で残す。
     t = handoff.build_from_dataset(**_ds_with(
         _KEEP + [{"name": "FA 16:0", "ontology": "Long-chain fatty acids"},
                  {"name": "PC 34:1", "ontology": "Phosphatidylcholines"}]))
-    assert t.names == ["PC 38:3", "PE 18:0_20:4"]
-    assert t.report["dropped_non_msdial_ontology"] == 2
-    assert t.report["dropped_unannotated"] == 0
+    assert t.names == ["PC 38:3", "PE 18:0_20:4", "FA 16:0", "PC 34:1"]
+    assert t.ontologies == ["PC", "PE", "FA", "PC"]
+    assert t.report["kept_by_route"] == {"as_is": 2, "name": 2, "class_formula": 0}
+    assert not any(_dropped(t.report).values())
 
 
 def test_handoff_report_counts_the_kept_features():
     """落とした行の件数と並べて、残った特徴の数（n_kept。重複名の整理の後）を返す。"""
     t = handoff.build_from_dataset(**_ds_with(
-        _KEEP + [{"name": "PC 34:1", "ontology": "Phosphatidylcholines"},
+        _KEEP + [{"name": "Dibutyl phthalate", "ontology": "Benzoic acid esters"},
                  {"name": "PC 38:3", "ontology": "PC"}]))           # 同名は 1 行にまとめる
     assert t.report["n_kept"] == len(t.names) == 2
-    assert t.report["dropped_non_msdial_ontology"] == 1
+    assert t.report["dropped_unmapped_ontology"] == 1
     assert t.report["dropped_duplicate_names"] == 1
 
 
@@ -261,18 +267,78 @@ def test_handoff_drops_unparsable_names():
         _KEEP + [{"name": "3-Sulfamoylbenzoic acid", "ontology": "PC"}]))
     assert t.names == ["PC 38:3", "PE 18:0_20:4"]
     assert t.report["dropped_unparsable_name"] == 1
-    assert t.report["dropped_non_msdial_ontology"] == 0
+    assert t.report["dropped_unmapped_ontology"] == 0
 
 
 def test_arf_handoff_applies_the_same_lipid_checks():
     kw = _arf_inputs()
     kw["catalog"] = {**kw["catalog"],
-                     2: {"Name": "FA 16:0", "Ontology": "Long-chain fatty acids"},
+                     2: {"Name": "Dibutyl phthalate", "Ontology": "Benzoic acid esters", "Formula": "C16H22O4"},
                      3: {"Name": "3-Sulfamoylbenzoic acid", "Ontology": "PC"}}
     t = handoff.build_from_arf(**kw)
     assert t.names == ["PC 16:0_18:1", "PE 18:0_20:4", "Cer 18:1;O2/24:1"]
-    assert t.report["dropped_non_msdial_ontology"] == 1
+    assert t.report["dropped_unmapped_ontology"] == 1
     assert t.report["dropped_unparsable_name"] == 1
+
+
+def test_msp_rows_reach_the_handoff():
+    """研究室 MSP の行（慣用名・ID・英語のクラス名 + ClassyFire + 組成式）から脂質が引ける（ユーザーの指示）。"""
+    t = handoff.build_from_dataset(**_ds_with(_KEEP + [
+        {"name": "Glyceryl trioleate", "ontology": "Triacylglycerols", "chemical_formula": "C57H104O6"},
+        {"name": "low score: MassSpecGymID0400493", "ontology": "Phosphatidylcholines", "chemical_formula": "C36H72NO8P"},
+        {"name": "Phosphatidylethanolamine alkenyl 16:0-20:2", "ontology": "1-(1Z-alkenyl),2-acylglycerophosphoethanolamines",
+         "chemical_formula": "C41H78NO7P"},
+    ]))
+    assert t.names == ["PC 38:3", "PE 18:0_20:4", "TG 54:3", "low score: PC 28:0", "PE P-16:0_20:2"]
+    assert t.ontologies == ["PC", "PE", "TG", "PC", "EtherPE"]
+    assert t.report["kept_by_route"] == {"as_is": 2, "name": 1, "class_formula": 2}
+
+
+def test_name_wins_over_classyfire():
+    t = handoff.build_from_dataset(**_ds_with(_KEEP + [
+        {"name": "PE 36:7", "ontology": "1-(1Z-alkenyl),2-acyl-glycerophosphocholines", "chemical_formula": "C41H68NO8P"}]))
+    assert t.names[-1] == "PE 36:7" and t.ontologies[-1] == "PE"
+
+
+def test_kept_name_never_starts_with_a_space():
+    t = handoff.build_from_dataset(**_ds_with(_KEEP + [
+        {"name": "  low score: Glyceryl trioleate", "ontology": "Triacylglycerols", "chemical_formula": "C57H104O6"}]))
+    assert t.names[-1] == "low score: TG 54:3"
+
+
+def test_drop_reasons_partition_the_rows():
+    rows = _KEEP + [
+        {"name": None, "ontology": "Triacylglycerols"},                                            # unannotated
+        {"name": "PE 32:1", "ontology": "null"},                                                  # unannotated（経路 1 に回さない）
+        {"name": "3-Sulfamoylbenzoic acid", "ontology": "PC"},                                    # unparsable_name
+        {"name": "Cer 34:1;O2", "ontology": "Ceramides", "chemical_formula": "C34H67NO3"},        # ambiguous_class
+        {"name": "Dibutyl phthalate", "ontology": "Benzoic acid esters", "chemical_formula": "C16H22O4"},   # unmapped_ontology
+        {"name": "N-Palmitoyl-D-sphingosine", "ontology": "Long-chain ceramides", "chemical_formula": "C34H67NO3"},  # ambiguous_ontology
+        {"name": "Glyceryl trimyristate", "ontology": "Triacylglycerols"},                       # no_formula
+        {"name": "1-Palmitoyl-2-linoleoyl-rac-glycerol", "ontology": "Lineolic acids and derivatives",
+         "chemical_formula": "C37H68O5"},                                                         # formula_mismatch
+        {"name": "Glyceryl trioleate", "ontology": "Triacylglycerols", "chemical_formula": "C57H104O6"},
+        {"name": "TG 54:3", "ontology": "TG"},                                                    # 同じ名前 → 重複
+    ]
+    t = handoff.build_from_dataset(**_ds_with(rows))
+    r = t.report
+    dropped = {k: v for k, v in r.items() if k.startswith("dropped_") and k != "dropped_duplicate_names"}
+    assert dropped == {"dropped_unannotated": 2, "dropped_unparsable_name": 1, "dropped_ambiguous_class": 1,
+                       "dropped_unmapped_ontology": 1, "dropped_ambiguous_ontology": 1, "dropped_no_formula": 1,
+                       "dropped_formula_mismatch": 1}
+    assert sum(r["kept_by_route"].values()) + sum(dropped.values()) == len(rows)
+    assert r["n_kept"] == sum(r["kept_by_route"].values()) - r["dropped_duplicate_names"] == 3
+    assert "dropped_non_msdial_ontology" not in r
+
+
+def test_arf_reads_formula_for_msp_rows():
+    kw = _arf_inputs()
+    # 鍵 3 は Unknown の行（Spot_3_height の列がある）。組成式は ARF の Formula 列から読む。
+    kw["catalog"] = {**kw["catalog"], 3: {"Name": "Glyceryl trioleate", "Ontology": "Triacylglycerols",
+                                          "Formula": "C57H104O6"}}
+    t = handoff.build_from_arf(**kw)
+    assert "TG 54:3" in t.names and t.report["kept_by_route"]["class_formula"] == 1
+    assert t.report["kept_by_route"]["as_is"] == 4 and "dropped_non_msdial_ontology" not in t.report
 
 
 def test_msdial_lipid_class_table_is_the_lbmclass_enum():

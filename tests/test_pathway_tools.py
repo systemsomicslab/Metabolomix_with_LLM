@@ -113,19 +113,25 @@ def _empty_scope_items(node, scope):
              "inSample": {"@id": f"{B}s/1"}, "value": None}]
 
 
-def test_handoff_note_warns_when_non_msdial_rows_were_dropped():
-    note = tools._handoff_note({"dropped_non_msdial_ontology": 120, "dropped_unparsable_name": 7,
-                                "n_kept": 300})
-    assert "120" in note and "7" in note and "300" in note and "msp_then_lbm" in note
+def test_handoff_note_counts_dropped_rows_by_reason_and_kept_rows_by_route():
+    note = tools._handoff_note({"dropped_unannotated": 0, "dropped_unparsable_name": 7, "dropped_no_formula": 120,
+                                "kept_by_route": {"as_is": 200, "name": 60, "class_formula": 45}, "n_kept": 300})
+    assert "127" in note and "組成式が無い 120" in note and "読めない 7" in note
+    assert "200" in note and "60" in note and "45" in note and "300" in note
+    assert "unannotated" not in note and "msp_then_lbm" not in note and "除かれ" not in note
     # 落とした行が無ければ注意は出さない
-    assert tools._handoff_note({"dropped_non_msdial_ontology": 0, "dropped_unparsable_name": 0,
+    zero = {f"dropped_{r}": 0 for r in ("unannotated", "unparsable_name", "ambiguous_class", "unmapped_ontology",
+                                        "ambiguous_ontology", "no_formula", "formula_mismatch")}
+    assert tools._handoff_note({**zero, "kept_by_route": {"as_is": 300, "name": 0, "class_formula": 0},
                                 "n_kept": 300}) is None
     assert tools._handoff_note({}) is None
 
 
 def test_project_returns_handoff_counts_at_top_level(lipid_arf, fake_measure):
     body = json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling"]))
-    for key in ("dropped_non_msdial_ontology", "dropped_unparsable_name", "n_kept"):
+    for key in ("kept_by_route", "dropped_unannotated", "dropped_unparsable_name", "dropped_ambiguous_class",
+                "dropped_unmapped_ontology", "dropped_ambiguous_ontology", "dropped_no_formula",
+                "dropped_formula_mismatch", "n_kept"):
         assert key in body["handoff"]
 
 
