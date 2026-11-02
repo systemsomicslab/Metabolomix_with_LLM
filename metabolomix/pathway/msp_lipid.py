@@ -9,11 +9,16 @@ MS-DIAL で複数のクラスに分かれる、組成式が無い・そのクラ
     二重結合 db = db₀ + ((H₀ + 2(n − n₀)) − H) / 2
 を出す。C・H 以外の元素の数が基準と違う、db が整数でない・負、n < 1 の行は形に合わない。
 鎖ごとの内訳は出さない（和の組成のみ）。
+
+名前で読む経路（設計書 4.2）は `from_name`: 古い MS-DIAL の書式・英語のクラス名を MS-DIAL 5 の略記に直し、
+GOSLIN で読めたものだけ、先頭の頭部から LbmClass を決める。
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+
+from metabolomix.msdial.lipid_identity import _MSDIAL_QUALIFIER_RE, normalize_lipid_name
 
 _FORMULA_TOKEN = re.compile(r"([A-Z][a-z]?)(\d*)")
 
@@ -139,3 +144,114 @@ def from_class_formula(ontology: str | None, formula: str | None) -> tuple[str, 
     if key is None:
         return "unmapped_ontology"
     return from_class_formula_key(key, formula)
+
+
+# --- 名前から読む（経路 1） ---
+
+AMBIGUOUS_CLASS = "ambiguous_class"
+
+# 古い MS-DIAL の書式: `Cer[NS] d30:1` / `SM d34:2` / `SM d18:1/16:0`（d は ;O2、t は ;O3）。括弧は Cer / HexCer だけ。
+_OLD_FORMAT = re.compile(r"^(Cer|HexCer|SM)(?:\[(NS|NDS)\])?\s+([dt])(\d+:\d+)(?:/(.+))?$")
+_OLD_FORMAT_BASE = {"d": ";O2", "t": ";O3"}
+
+_ENGLISH_HEADS = {
+    "phosphatidylcholine": "PC",
+    "phosphatidylethanolamine": "PE",
+    "phosphatidylserine": "PS",
+    "phosphatidylglyceride": "PG",
+    "phosphatidylglycerol": "PG",
+    "phosphatidylinositol": "PI",
+    "phosphatidic acid": "PA",
+}
+_ENGLISH_NAME = re.compile(
+    rf"^({'|'.join(_ENGLISH_HEADS)})(?:\s+(lyso|alkyl|alkenyl))?\s+(\d.*)$", re.IGNORECASE)
+_ENGLISH_MODIFIER = {"alkyl": "O-", "alkenyl": "P-"}
+
+# `;` の後ろが空白を含む注記（`LPC 16:0; PlaSMA ID-1486`）のときだけ切る。`;O2` の修飾は残す。
+_ANNOTATION = re.compile(r";(?=[^;]*\s)")
+
+# 頭部 → LbmClass（同名のもの）。PC / PE の `O-` / `P-` は EtherPC / EtherPE。
+_SAME_NAME_CLASSES = frozenset({
+    "PC", "PE", "PS", "PG", "PI", "PA", "LPC", "LPE", "LPG", "LPI", "LPS", "LPA",
+    "TG", "DG", "MG", "FA", "CAR", "CE", "NAE", "SM",
+})
+_ETHER_CLASSES = {"PC": "EtherPC", "PE": "EtherPE"}
+
+_HEAD = re.compile(r"^([A-Za-z0-9]+)\s+([OP]-)?")
+# 長鎖塩基 ;O2 ＋ 水酸基の注記の無い脂肪酸だけが Cer_NS / Cer_NDS に決まる（塩基の二重結合 ≥ 1 なら NS）。
+_CERAMIDE_NS_NDS = re.compile(r"^(?:Cer|HexCer) \d+:(\d+);O2/\d+:\d+$")
+
+
+def split_qualifier(name: str) -> tuple[str, str]:
+    """MS-DIAL の限定子接頭辞を分ける。`("low score: ", "PC 34:1")`。無ければ `("", name.strip())`。"""
+    m = _MSDIAL_QUALIFIER_RE.match(name)
+    if m is None:
+        return "", name.strip()
+    return m.group(0), name[m.end():].strip()
+
+
+def _to_msdial5(name: str) -> tuple[str, str | None]:
+    """古い書式・英語のクラス名を MS-DIAL 5 の略記に直す。`(直した名前, 括弧のクラス NS/NDS または None)`。"""
+    m = _OLD_FORMAT.match(name)
+    if m:
+        head, bracket, base, chain, fatty = m.groups()
+        if bracket and head == "SM":
+            return name, None
+        return f"{head} {chain}{_OLD_FORMAT_BASE[base]}" + (f"/{fatty}" if fatty else ""), bracket
+    m = _ENGLISH_NAME.match(name)
+    if m:
+        head, modifier, chains = m.groups()
+        abbrev = _ENGLISH_HEADS[head.lower()]
+        modifier = (modifier or "").lower()
+        if modifier == "lyso":
+            return f"L{abbrev} {chains.replace('-', '_')}", None
+        return f"{abbrev} {_ENGLISH_MODIFIER.get(modifier, '')}{chains.replace('-', '_')}", None
+    return name, None
+
+
+def _ceramide_class(head: str, name: str, bracket: str | None) -> str:
+    """Cer / HexCer の LbmClass。決められない形（和の組成だけ・;O3・水酸基付き）は `ambiguous_class`。"""
+    if bracket:
+        return f"{head}_{bracket}"
+    m = _CERAMIDE_NS_NDS.match(name)
+    if m is None:
+        return AMBIGUOUS_CLASS
+    return f"{head}_NS" if int(m.group(1)) >= 1 else f"{head}_NDS"
+
+
+def from_name(name: str | None) -> tuple[str, str] | str | None:
+    """限定子を外した名前から `(MS-DIAL 5 の名前, LbmClass)`。
+
+    クラスが一意でなければ `"ambiguous_class"`、読めなければ None（経路 2 に回す）。
+    返す名前は直した文字列であり、GOSLIN の正規化形ではない。Cer / HexCer のクラスの曖昧さは
+    GOSLIN の可否より先に決める（水酸基付きの脂肪酸など、GOSLIN が読めない形でも曖昧と分かる）。
+    """
+    if not name or not name.strip():
+        return None
+    text = name.split("|", 1)[0].strip()
+    m = _ANNOTATION.search(text)
+    if m:
+        text = text[:m.start()].strip()
+    text, bracket = _to_msdial5(text)
+    head_match = _HEAD.match(text)
+    if head_match is None:
+        return None
+    head, ether = head_match.groups()
+    if head in ("Cer", "HexCer"):
+        if ether:
+            return None
+        lbm_class = _ceramide_class(head, text, bracket)
+        if lbm_class == AMBIGUOUS_CLASS:
+            return AMBIGUOUS_CLASS
+    elif head in _SAME_NAME_CLASSES:
+        if ether:
+            lbm_class = _ETHER_CLASSES.get(head)
+            if lbm_class is None:
+                return None
+        else:
+            lbm_class = head
+    else:
+        return None
+    if not normalize_lipid_name(text)["parse_ok"]:
+        return None
+    return text, lbm_class

@@ -66,3 +66,60 @@ def test_independent_known_species():
     ]
     for ontology, formula, name, lbm_class in cases:
         assert ml.from_class_formula(ontology, formula) == (name, lbm_class), (ontology, formula)
+
+
+def test_split_qualifier():
+    assert ml.split_qualifier("low score: PC 34:1") == ("low score: ", "PC 34:1")
+    assert ml.split_qualifier("no MS2: Myristic acid") == ("no MS2: ", "Myristic acid")
+    assert ml.split_qualifier(" TG 54:3 ") == ("", "TG 54:3")
+
+
+def test_from_name_examples():
+    assert ml.from_name("PE 32:1") == ("PE 32:1", "PE")
+    assert ml.from_name("LPC 16:0; PlaSMA ID-1486") == ("LPC 16:0", "LPC")
+    assert ml.from_name("Cer 24:1;O2|Cer 12:0;O2/12:1") == "ambiguous_class"
+    assert ml.from_name("Cer[NS] d30:1") == ("Cer 30:1;O2", "Cer_NS")
+    assert ml.from_name("SM d34:2") == ("SM 34:2;O2", "SM")
+    assert ml.from_name("Phosphatidylcholine 16:0-22:6") == ("PC 16:0_22:6", "PC")
+    assert ml.from_name("Phosphatidylcholine lyso 18:2") == ("LPC 18:2", "LPC")
+    assert ml.from_name("Phosphatidylethanolamine alkyl 16:0-22:6") == ("PE O-16:0_22:6", "EtherPE")
+    assert ml.from_name("Phosphatidylethanolamine alkenyl 16:0-20:2") == ("PE P-16:0_20:2", "EtherPE")
+    assert ml.from_name("Cer 18:1;O2/16:0") == ("Cer 18:1;O2/16:0", "Cer_NS")
+    assert ml.from_name("Cer 18:0;O2/16:0") == ("Cer 18:0;O2/16:0", "Cer_NDS")
+
+
+def test_from_name_does_not_guess():
+    assert ml.from_name("Cer 34:1;O2") == "ambiguous_class"
+    assert ml.from_name("Cer 18:1;O2/18:4(2OH)") == "ambiguous_class"   # GOSLIN が読めなくても、クラスの曖昧さを先に決める
+    for unreadable in ("Glyceryl trioleate", "MassSpecGymID0400493", "Docosahexaenoic acid", "", None):
+        assert ml.from_name(unreadable) is None
+
+
+def test_from_name_old_format_and_english_names():
+    assert ml.from_name("Cer[NDS] d30:0") == ("Cer 30:0;O2", "Cer_NDS")
+    assert ml.from_name("HexCer[NS] d34:1") == ("HexCer 34:1;O2", "HexCer_NS")
+    assert ml.from_name("Cer[NS] t34:1") == ("Cer 34:1;O3", "Cer_NS")
+    assert ml.from_name("SM d18:1/16:0") == ("SM 18:1;O2/16:0", "SM")
+    assert ml.from_name("Cer d34:1") == "ambiguous_class"               # 括弧が無い和の組成
+    assert ml.from_name("Cer 34:1;O3") == "ambiguous_class"             # ;O3 の塩基
+    assert ml.from_name("HexCer 18:1;O2/16:0") == ("HexCer 18:1;O2/16:0", "HexCer_NS")
+    assert ml.from_name("Phosphatidic acid 16:0-18:1") == ("PA 16:0_18:1", "PA")
+    assert ml.from_name("Phosphatidylglyceride 16:0-18:1") == ("PG 16:0_18:1", "PG")
+    assert ml.from_name("Phosphatidylglycerol lyso 16:0") == ("LPG 16:0", "LPG")
+    assert ml.from_name("Phosphatidylcholine alkyl 16:0-18:1") == ("PC O-16:0_18:1", "EtherPC")
+    assert ml.from_name("Phosphatidylserine 18:0-20:4") == ("PS 18:0_20:4", "PS")
+    assert ml.from_name("Phosphatidylinositol 18:0-20:4") == ("PI 18:0_20:4", "PI")
+    assert ml.from_name("Phosphatidylethanolamine lyso alkyl 16:0") is None   # 表に無い組み合わせ
+    assert ml.from_name("  PC 34:1  ") == ("PC 34:1", "PC")
+
+
+def test_from_name_classes_and_unreadable():
+    for name, lbm in (("TG 54:3", "TG"), ("DG 34:1", "DG"), ("MG 18:1", "MG"), ("FA 18:1", "FA"),
+                      ("CAR 16:0", "CAR"), ("CE 18:1", "CE"), ("NAE 16:0", "NAE"),
+                      ("PC O-34:1", "EtherPC"), ("PC P-34:1", "EtherPC"),
+                      ("LPE 18:1", "LPE"), ("LPI 18:1", "LPI"), ("LPS 18:1", "LPS"), ("LPA 18:1", "LPA")):
+        assert ml.from_name(name) == (name, lbm), name
+    assert ml.from_name("TG O-54:3") is None          # 表に無い頭部の組み合わせ
+    assert ml.from_name("XYZ 34:1") is None           # 表に無い頭部
+    assert ml.from_name("PC 34:1:2:3") is None        # GOSLIN が読めない
+    assert ml.from_name("low score: PC 34:1") is None  # 限定子は呼び出し側が外す
