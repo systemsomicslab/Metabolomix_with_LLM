@@ -113,19 +113,39 @@ def _empty_scope_items(node, scope):
              "inSample": {"@id": f"{B}s/1"}, "value": None}]
 
 
-def test_handoff_note_warns_when_non_msdial_rows_were_dropped():
-    note = tools._handoff_note({"dropped_non_msdial_ontology": 120, "dropped_unparsable_name": 7,
-                                "n_kept": 300})
-    assert "120" in note and "7" in note and "300" in note and "msp_then_lbm" in note
+def test_handoff_note_counts_dropped_rows_by_reason_and_kept_rows_by_route():
+    note = tools._handoff_note({"dropped_unannotated": 0, "dropped_unparsable_name": 7, "dropped_no_formula": 120,
+                                "kept_by_route": {"as_is": 200, "name": 60, "class_formula": 45}, "n_kept": 300})
+    assert "127" in note and "組成式が無い 120" in note and "読めない 7" in note
+    assert "200" in note and "60" in note and "45" in note and "300" in note
+    assert "unannotated" not in note and "msp_then_lbm" not in note and "除かれ" not in note
     # 落とした行が無ければ注意は出さない
-    assert tools._handoff_note({"dropped_non_msdial_ontology": 0, "dropped_unparsable_name": 0,
+    zero = {f"dropped_{r}": 0 for r in ("unannotated", "unparsable_name", "isotope_label", "ambiguous_class",
+                                        "ambiguous_ontology", "unmapped_ontology", "class_name_conflict",
+                                        "no_formula", "formula_mismatch")}
+    assert tools._handoff_note({**zero, "kept_by_route": {"as_is": 300, "name": 0, "class_formula": 0},
                                 "n_kept": 300}) is None
     assert tools._handoff_note({}) is None
 
 
+def test_handoff_note_names_the_new_reasons_and_excluded_spots():
+    from metabolomix.pathway import handoff
+    assert {f"dropped_{k}" for k in tools._DROP_LABELS} == {
+        k for k in handoff._new_report("arf") if k.startswith("dropped_")}
+    note = tools._handoff_note({"dropped_isotope_label": 3, "dropped_class_name_conflict": 2,
+                                "kept_by_route": {"as_is": 10, "name": 0, "class_formula": 0}, "n_kept": 10})
+    assert "計 5 件" in note and "同位体の標識 3" in note and "頭部" in note and "除外" not in note
+    # ARF の手動除外スポットは脂質の理由とは別に述べる（それだけでも注意を出す）
+    note = tools._handoff_note({"dropped_excluded_spots": 4,
+                                "kept_by_route": {"as_is": 10, "name": 0, "class_formula": 0}, "n_kept": 10})
+    assert "手動除外のスポット 4 件" in note and "計" not in note
+
+
 def test_project_returns_handoff_counts_at_top_level(lipid_arf, fake_measure):
     body = json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling"]))
-    for key in ("dropped_non_msdial_ontology", "dropped_unparsable_name", "n_kept"):
+    for key in ("kept_by_route", "dropped_unannotated", "dropped_unparsable_name", "dropped_ambiguous_class",
+                "dropped_unmapped_ontology", "dropped_ambiguous_ontology", "dropped_no_formula",
+                "dropped_formula_mismatch", "dropped_isotope_label", "dropped_class_name_conflict", "n_kept"):
         assert key in body["handoff"]
 
 

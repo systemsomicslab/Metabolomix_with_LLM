@@ -32,21 +32,36 @@ _ADJACENCY_NOTE = (
     "掲載条件は両端とも q < 閾値かつ向きが逆。片方が ns/NA の組は件数だけ示す。")
 
 
-def _handoff_note(report: dict) -> str | None:
-    """脂質でない行・名前が読めない行を落としたときの注意（`handoff` の件数を読む手がかり）。
+_ROUTE_LABELS = {"as_is": "MS-DIAL の名前のまま", "name": "名前から読み直し",
+                 "class_formula": "クラスと組成式から作成"}
+_DROP_LABELS = {"unannotated": "名前か Ontology が空", "unparsable_name": "名前が脂質ショートハンドとして読めない",
+                "isotope_label": "名前に同位体の標識", "ambiguous_class": "名前だけではクラスが決まらない",
+                "ambiguous_ontology": "Ontology が複数のクラスにまたがる",
+                "unmapped_ontology": "Ontology が脂質クラスの表に無い",
+                "class_name_conflict": "名前の頭部の語が Ontology のクラスと食い違う",
+                "no_formula": "組成式が無い", "formula_mismatch": "組成式がクラスの形に合わない"}
 
-    研究室 MSP と LBM の両方で同定した run（`msp_then_lbm`）では、MSP の同定の多くは Ontology が
-    MS-DIAL の脂質クラスでない（ClassyFire 系）ためここで落ちる。クラスごとの合計は LBM で
-    同定した分子種が中心になり、MSP の一般名（脂質ショートハンドでない名前）は載らない。
+
+def _handoff_note(report: dict) -> str | None:
+    """行を落としたときの注意（`handoff` の件数を読む手がかり）。落とした行も除外スポットも無ければ None。
+
+    研究室 MSP の行（慣用名・ID・ClassyFire の Ontology）は名前かクラスと組成式から MS-DIAL の
+    クラスと略記の名前に直して入れる。残した行は経路ごとに、落とした行は理由ごとに数える。
+    ARF の手動除外スポット（`dropped_excluded_spots`）は脂質の理由とは別に述べる。
     """
-    dropped_class = report.get("dropped_non_msdial_ontology") or 0
-    dropped_name = report.get("dropped_unparsable_name") or 0
-    if not dropped_class and not dropped_name:
+    dropped = {k: report.get(f"dropped_{k}") or 0 for k in _DROP_LABELS}
+    excluded = report.get("dropped_excluded_spots") or 0
+    if not any(dropped.values()) and not excluded:
         return None
-    return (f"MS-DIAL の脂質クラスでない行を {dropped_class} 件、名前が脂質ショートハンドとして"
-            f"読めない行を {dropped_name} 件除いた（残り {report.get('n_kept')} 件）。"
-            "msp_then_lbm の run では MSP の同定の多くがここで除かれ、クラスごとの合計は LBM で"
-            "同定した分子種が中心になる（MSP の一般名は届かない）。")
+    kept = report.get("kept_by_route") or {}
+    kept_text = "、".join(f"{label} {kept.get(k, 0)}" for k, label in _ROUTE_LABELS.items())
+    text = ""
+    if any(dropped.values()):
+        dropped_text = "、".join(f"{_DROP_LABELS[k]} {n}" for k, n in dropped.items() if n)
+        text += f"脂質として入れられない行を計 {sum(dropped.values())} 件除いた（{dropped_text}）。"
+    if excluded:
+        text += f"手動除外のスポット {excluded} 件は載せていない。"
+    return text + f"残した行の経路は {kept_text}（重複名の整理後に {report.get('n_kept')} 件）。"
 
 
 #: pathway_project が採番する run_id の形。これ以外は reports/pathway の外を指しうるので受け付けない。

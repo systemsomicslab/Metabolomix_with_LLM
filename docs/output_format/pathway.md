@@ -9,22 +9,39 @@
   サーバは版を返さないので、その run の `upstream_commit` / `package_version` は空（ローカルの
   `r/renv.lock` の版と同じとは限らない）。
 - 中間 mzTab-M に載るのは生体試料（role=sample）だけ。サブクラスが空・Unknown・Others の行と、
-  手動除外スポットは載らない（件数は `handoff`）。さらに**脂質でない行**も載らない:
-  Ontology が MS-DIAL の脂質クラス（`LbmClass`。`PC` `EtherPE` `Cer_NS` …。表は
-  `metabolomix/pathway/msdial_lipid_classes.py`）に無い行（`dropped_non_msdial_ontology`）と、
-  名前が脂質ショートハンドとして読めない行（`dropped_unparsable_name`。限定子 `no MS2:` 等は除いて読む）。
-  研究室 MSP だけで同定した run の Ontology は ClassyFire 系の名前（`Phosphatidylcholines` 等）で、
-  MS-DIAL の脂質クラスではないので、そのままでは**ほぼ全行が落ちる**（`PATHWAY_BAD_REQUEST`）。
-  パスウェイの投影は LBM でも同定した run（`msp_then_lbm`）で使うが、**MSP で代表になった同定は
-  ここで落ちる**ので、クラスごとの合計は LBM で同定した分子種が中心になり、MSP の一般名
-  （`Glyceryl trioleate` など、脂質ショートハンドでない名前）は届かない。試し（MTBLS6965 の 2 群比較、
-  `msp_then_lbm`）では、前処理後の特徴 1666（pos）/ 1619（neg）のうち、残ったのは 251 / 388、
-  MS-DIAL の脂質クラスでない行が 864 / 758（すべて MSP 由来。うち MS/MS で照合された同定が
-  512 / 349）、名前が読めない行が 44 / 109（MSP 由来は 0）、注釈なしが 461 / 350、同名の整理が 46 / 14 だった。
-  残った行はすべて LBM 側の同定で、MSP で代表になった同定は 1 行も入らなかった。
-  **`handoff`（`n_kept`・`dropped_*`）と、落とした行があるときの `notes.handoff` で、使った行と落とした行の
-  数を必ず確かめる。**
-  同名の行は平均強度最大の 1 行だけ残す（`dropped_duplicate_names`）——sum がアダクト違いを二重計上しないため。
+  手動除外スポット（arf のみ。`dropped_excluded_spots`）は載らない（件数は `handoff`）。さらに**脂質として届かない行**も載らない。
+  行はちょうど 1 つの区分に入る（`handoff.kept_by_route` の経路か `dropped_*` の理由。
+  全行 = 経路の合計 + `dropped_duplicate_names` 以外の `dropped_*` の合計。arf は `dropped_excluded_spots` も含む）。
+  判定の順は `dropped_unannotated` → 経路 `as_is`（と `dropped_unparsable_name`）→ `dropped_isotope_label` → 経路 `name` → 経路 `class_formula`:
+  - 経路 `as_is`: Ontology が MS-DIAL の脂質クラス（`LbmClass`。`PC` `EtherPE` `Cer_NS` …。表は
+    `metabolomix/pathway/msdial_lipid_classes.py`）で、名前が脂質ショートハンドとして読める行。名前も Ontology もそのまま。
+    名前が読めない行は `dropped_unparsable_name`（限定子 `no MS2:` 等は除いて読む）。
+  - `dropped_isotope_label`: Ontology が MS-DIAL の脂質クラスでない行のうち、名前に同位体の標識（重水素
+    `-d31`・`(d7)`・`-[…-d5]`、`13C`）がある行（内部標準）。経路 `name` / `class_formula` より先に見る。
+    長鎖塩基の `d18:1` は標識ではない（`:` が続く）。経路 `as_is` の行には当てない（下の内部標準の注意）。
+  - 経路 `name`: Ontology が MS-DIAL の脂質クラスでない行（研究室 MSP の ClassyFire 系の Ontology。
+    `Phosphatidylcholines` 等）のうち、名前から脂質として読める行。古い MS-DIAL の書式・英語のクラス名と鎖も
+    MS-DIAL 5 の略記と `LbmClass` に直して入れる。ClassyFire の Ontology は使わず、名前と食い違えば名前を採る。
+    クラスが 1 つに決まらない行（`Cer 34:1;O2` など）は `dropped_ambiguous_class`。Cer / HexCer / SM 以外の
+    頭部で `;O…` の修飾がある名前（`FA 18:1;O`、`PC 16:0_18:2;O`、`FA 18:1;O (9-HODE)` 等）はこの経路で読まず、経路 `class_formula` に回す。
+  - 経路 `class_formula`: 名前が読めない行（慣用名・IUPAC 名・ID）のうち、ClassyFire の Ontology が 1 つの
+    `LbmClass` に決まり、組成式がそのクラスの基準の形に合う行。組成式から**和の組成**の名前（`TG 54:3` 等。
+    鎖ごとの内訳は無い）を作る。作れない行は、この順で最初に当たった理由で落ちる:
+    `dropped_ambiguous_ontology`（MS-DIAL で複数のクラスに分かれる。`Ceramides` 等）・`dropped_unmapped_ontology`
+    （Ontology が対応表に無い）・`dropped_class_name_conflict`（名前に頭部の語 `cholin` / `ethanolamin` / `serin` /
+    `inositol` があり、Ontology のクラスのものと食い違う。PC と PE は C3H6 しか違わず組成式では分からないため。
+    PC 系と SM は `cholin`、PE 系と NAE は `ethanolamin`、PS は `serin`、PI は `inositol`、ほかのクラスは語を持たない）・
+    `dropped_no_formula`・`dropped_formula_mismatch`。
+  - `dropped_unannotated`: 名前か Ontology が空・`null`・Unknown・Others の行と、dataset で 1 つの特徴を
+    複数の SML が指す（注釈が `ambiguous`。名前を選ばない）行。
+  クラスや組成は推測で埋めない（決まらない行は落として数える）。経路 `name` / `class_formula` の名前は、元の
+  `low score: ` / `no MS2: ` を先頭に残す。どの経路も MSP 由来か LBM 由来かは問わず、出力にも書かない。
+  **`handoff`（`kept_by_route`・`n_kept`・`dropped_*`）と、落とした行（arf の除外スポットを含む）があるときの
+  `notes.handoff` で、使った行と落とした行の数を必ず確かめる。**
+  試し（MTBLS6965 の 2 群比較、`msp_then_lbm`）の件数は
+  `docs/superpowers/specs/2026-10-28-reanalysis-v8-trial.md` の節「MSP の脂質の handoff（2026-11-02）」。
+  同名の行は平均強度最大の 1 行だけ残す（`dropped_duplicate_names`。`kept_by_route` は絞る前の数で、
+  `n_kept` = その合計 − `dropped_duplicate_names`）——sum がアダクト違いを二重計上しないため。
 - arf はレシピ先頭の prop（`handoff.prop`）だけを使う。
 - 中間 mzTab-M に書く文字列（試料名・群名・脂質名・Ontology）の `#` は `_` に置き換わる
   （上流の `read.table` は `#` 以降をコメントとして捨てるため）。群名も置換後の形で返る。
@@ -32,8 +49,9 @@
 - **sum は有限値だけを足す**（上流の仕様）。ある試料で一部の分子種が欠損していると、その試料の
   サブクラス合計はそのぶん小さくなる。JSON-LD には試料ごとの有効分子種数（`validFeatureCount`）が
   載るが、ノード表の比較には使っていない。欠損の多いサブクラスの sum の差は割り引いて読む。
-- **同位体標識の内部標準**（名前に `(d7)` などを含むもの）も、実在の Ontology が付いていれば
-  そのサブクラスに合算される。合算させたくないときは事前に除外する（例: `arf_exclude`）。
+- **同位体標識の内部標準**（名前に `(d7)` などを含むもの）も、Ontology が MS-DIAL の脂質クラスなら（経路 `as_is`）
+  そのサブクラスに合算される。合算させたくないときは事前に除外する（例: `arf_exclude`）。Ontology が MS-DIAL の
+  脂質クラスでない行（研究室 MSP の行）は `dropped_isotope_label` で落ちる。
 
 ## ノード表（nodes_tsv）
 
