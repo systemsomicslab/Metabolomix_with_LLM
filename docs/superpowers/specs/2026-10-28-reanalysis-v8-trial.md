@@ -141,4 +141,4 @@ MSLipidMapper・R は呼ばない）。MSP 由来かは `database_identifier` �
 | 5 | Glycosyl-N-acylsphingosines（7） | Cholesterols and derivatives（1） |
 
 - `unmapped_ontology` と `ambiguous_ontology` の行はすべて MSP 由来（pos 414 / 62、neg 287 / 27）。件数が同じ Ontology の並びは、出現順（`Counter.most_common`）。
-- 測定のスクリプトは追跡外（`.superpowers/sdd/2026-11-02-msp-lipid-pathway-handoff/measure_handoff.py`）。結果は観測のまま。
+- 測定のスクリプトと出力は追跡外（`datasets/reanalysis/_v8_trial/handoff_measure/` の `measure_handoff.py`・`measure_out.txt`（最終の修正の前）・`measure_out_final.txt`（最終の修正の後））。結果は観測のまま。
