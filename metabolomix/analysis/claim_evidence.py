@@ -208,7 +208,8 @@ def rule_hash(normalized: dict, merge_groups_hash: str | None = None) -> str:
     return canonical_hash(rule)
 
 
-def _selection(match: dict, verdicts: dict[str, str | None] | None) -> dict:
+def _selection(match: dict, verdicts: dict[str, str | None] | None,
+               spectra: dict[str, bool | None] | None = None) -> dict:
     """目標照合の判定と段ごとの件数（`counts`）。割れの組は 1 つの候補（`match_target` の
     `merged_from`。`selected_feature_id` は残す ID、`merged_from` にその群）。
 
@@ -216,9 +217,13 @@ def _selection(match: dict, verdicts: dict[str, str | None] | None) -> dict:
     `qualified` の数**（`verdicts` は特徴 ID → `msms.qualify.verdict`。MS/MS を頼んでいない・
     ライブラリが無いときは None で、数も None。割れの組はどちらかのスポット——窓の外の
     `merge_partner` も含む——が `qualified` なら 1）。
-    `counts.msms_available` は**旧 `qualified` の意味の数**——規則（質量の窓・RT の窓・注釈）で
-    qualified になった特徴の数で、MS/MS があるかどうかの数ではない（名前は計画のとおり。
-    `dataset_feature_search` の `counts.qualified` と同じ数）。
+    `counts.rule_qualified` は**規則（質量の窓・RT の窓・注釈）で qualified になった特徴の数**
+    （`dataset_feature_search` の `counts.qualified` と同じ数。MS/MS があるかどうかの数ではない）。
+    `counts.msms_available` は同じ値の非推奨の別名（claim-evidence.v1 の互換のため残す）。
+    `counts.msms_spectrum_available` は**質量の窓に入った候補（`counts.mass` と同じ母集団。
+    `merge_partner` の行を除き、割れの組は 1 つ）のうち、組のどれかのスポットに代表 MS/MS がある
+    数**（`spectra` は特徴 ID → `spectrum_available`。RT の窓では絞らない。MS/MS を頼んでいないときは
+    None で、数も None。`max_candidates` で打ち切られて照会していない候補は数えない）。
     """
     out = {k: match[k] for k in ("status", "reason", "selected_feature_id", "selected_adduct",
                                  "selected_evidence", "adduct_tier_used")}
@@ -231,12 +236,22 @@ def _selection(match: dict, verdicts: dict[str, str | None] | None) -> dict:
             # 割れの組は群の両スポット（窓の外の merge_partner も含む）を見る
             spots = row.get("merged_from") or [row["feature_id"]]
             units.setdefault(spots[0], set()).update(spots)
+    mass_units: dict[str, set[str]] = {}
+    for row in match["candidates"]:
+        if "merge_partner" not in row.get("reasons", "").split(";"):
+            spots = row.get("merged_from") or [row["feature_id"]]
+            mass_units.setdefault(spots[0], set()).update(spots)
     out["counts"] = {
         "mass": counts["mass"], "rt": counts["rt"],
         "qualified": (None if verdicts is None
                       else sum(any(verdicts.get(fid) == "qualified" for fid in spots)
                                for spots in units.values())),
+        "rule_qualified": counts["qualified"],
         "msms_available": counts["qualified"],
+        "msms_spectrum_available": (
+            None if spectra is None
+            else sum(any(spectra.get(fid) is True for fid in spots)
+                     for spots in mass_units.values())),
         "by_evidence": dict(counts["by_evidence"]),
     }
     return out
@@ -255,19 +270,34 @@ def _split(info: dict | None) -> dict | None:
             "component": list(info["component"])}
 
 
+def _spectrum_available(spot: dict) -> bool | None:
+    """spot の照会から代表 MS/MS の有無。`ok` なら True、`not_found` なら False、それ以外
+    （`spot_not_found` `dcl_precursor_mismatch` `spot_id_not_integer`、ハンドルに `.arf2` / `.dcl` が
+    無いときの封筒）は None（有無が分からない）。"""
+    status = spot.get("status")
+    if status == "ok":
+        return True
+    if status == "not_found":
+        return False
+    return None
+
+
 def _msms_for(fid, *, store, spot_query, arf2_path, dcl_path, msms_spec) -> dict:
     from metabolomix.analysis.spectral_match import fragment_matches_excluding_precursor
     from metabolomix.library import matching
 
-    if store is None:
-        return {"status": "no_library"}
     try:
         spot_id = int(fid)
     except (TypeError, ValueError):
-        return {"status": "spot_id_not_integer"}
+        return {"status": "spot_id_not_integer", "spectrum_available": None}
+    # 代表スペクトルの有無はライブラリの有無によらず先に照会する
     spot = spot_query(spot_id, arf2_path=arf2_path, dcl_file=dcl_path, rt=None, ion_mode=None)
-    if spot["status"] != "ok":
-        return {"status": spot["status"], "message": spot.get("message")}
+    available = _spectrum_available(spot)
+    if store is None:
+        return {"status": "no_library", "spectrum_available": available}
+    if spot.get("status") != "ok":
+        return {"status": spot.get("status"), "message": spot.get("message"),
+                "spectrum_available": available}
     matched = matching.score_candidates(store, precursor_mz=spot["precursor_mz"], rt=spot["rt"],
                                         ion_mode=spot["ion_mode"], measured=spot["measured"])
     ms2_tol = matched["query"]["ms2_tol"]
@@ -288,7 +318,7 @@ def _msms_for(fid, *, store, spot_query, arf2_path, dcl_path, msms_spec) -> dict
                                      msms_spec["rules"], ms2_tol=ms2_tol)
     return {"status": matched["status"], "precursor_mz": spot["precursor_mz"],
             "n_measured_peaks": len(spot["measured"]), "n_candidates": matched["n_candidates"],
-            "top": top, "qualify": qualify}
+            "top": top, "qualify": qualify, "spectrum_available": available}
 
 
 def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
@@ -382,7 +412,10 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
     if normalized["msms"] is not None and store is not None:
         verdicts = {c["feature_id"]: ((c["msms"].get("qualify") or {}).get("verdict"))
                     for c in candidates}
-    scans = [{"ppm": ppm, "rt_tol_min": rt_tol, **_selection(match, verdicts),
+    spectra = None
+    if normalized["msms"] is not None:
+        spectra = {c["feature_id"]: c["msms"].get("spectrum_available") for c in candidates}
+    scans = [{"ppm": ppm, "rt_tol_min": rt_tol, **_selection(match, verdicts, spectra),
               "candidate_feature_ids": sorted({r["feature_id"] for r in match["candidates"]},
                                               key=order)}
              for ppm, rt_tol, match in scan_matches]
@@ -397,7 +430,7 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
         "merge_split": merge,
         "merge_groups_hash": groups_hash,
         "dataset_polarity": polarity,
-        "default_selection": _selection(default, verdicts),
+        "default_selection": _selection(default, verdicts, spectra),
         "scans": scans,
         "candidates": candidates,
         "truncated": truncated,

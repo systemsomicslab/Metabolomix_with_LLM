@@ -574,6 +574,7 @@ def test_counts_qualified_is_msms_verdict(data, library):
     strict, verdict = counts(3)                        # 断片は前駆体を除いて 2 本
     assert verdict == "not_qualified"
     assert strict["qualified"] == 0 and strict["msms_available"] == 1
+    assert strict["rule_qualified"] == 1 and strict["msms_spectrum_available"] == 1
     loose, verdict = counts(2)
     assert verdict == "qualified"
     assert loose["qualified"] == 1 and loose["msms_available"] == 1
@@ -582,6 +583,25 @@ def test_counts_qualified_is_msms_verdict(data, library):
                                                dataset_handle=handle))
     assert bare["default_selection"]["counts"]["qualified"] is None
     assert bare["default_selection"]["counts"]["msms_available"] == 1
+    assert bare["default_selection"]["counts"]["msms_spectrum_available"] is None
+
+
+def test_spectrum_available_counts_mass_window_even_when_none_rule_qualified(data, library):
+    # 目標の RT を特徴 20（RT 2.0）から外す: 規則で qualified は 0、質量の窓の 20 の代表 MS/MS は数える
+    target = {"inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": 9.0, "adduct_tiers": [["[M+H]+"]]}
+    claim = {"claim_id": "C1", "target": target, "msms": {"top_n": 3, "rules": {"min_fragments_excl_precursor": 2}}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=_open(data, library="auto")))
+    counts = out["default_selection"]["counts"]
+    assert counts["rule_qualified"] == 0 and counts["msms_spectrum_available"] == 1
+
+
+def test_spectrum_available_without_library(data, library):
+    # ライブラリを開かない（library="none"）が .arf2 / .dcl はある（library フィクスチャが置く）
+    target = {"inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": 2.0, "adduct_tiers": [["[M+H]+"]]}
+    claim = {"claim_id": "C1", "target": target, "msms": {"top_n": 3, "rules": {"min_fragments_excl_precursor": 2}}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=_open(data)))
+    c = {x["feature_id"]: x for x in out["candidates"]}["20"]
+    assert c["msms"]["status"] == "no_library" and c["msms"]["spectrum_available"] is True
 
 
 def test_counts_qualified_counts_a_merged_pair_by_either_spot():
@@ -603,6 +623,12 @@ def test_counts_qualified_counts_a_merged_pair_by_either_spot():
     assert claim_evidence._selection(match, {"30": "not_qualified",
                                              "31": "not_qualified"})["counts"]["qualified"] == 0
     assert claim_evidence._selection(match, None)["counts"]["qualified"] is None
+    # 組のどちらかに代表 MS/MS があれば 1（相手が merge_partner でも）。頼んでいなければ None
+    assert claim_evidence._selection(match, None, {"30": True, "31": False}
+                                     )["counts"]["msms_spectrum_available"] == 1
+    assert claim_evidence._selection(match, None, {"30": False, "31": None}
+                                     )["counts"]["msms_spectrum_available"] == 0
+    assert claim_evidence._selection(match, None)["counts"]["msms_spectrum_available"] is None
     # 組でない候補は従来どおり自分のスポットだけで数える
     single = {**match, "merged_from": None,
               "candidates": [{"feature_id": "31", "qualified": True, "merged_from": None}]}
