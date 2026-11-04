@@ -587,7 +587,7 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     （`dataset_analysis_run` と同じ spec のその解析）。q の昇順。`rule_hash` を返す。
     論文の同定リストとの突き合わせはしない（再解析の側）。
     割れたアライメントスポットの組（`dataset_alignment_qc` の `merge_groups`）は 1 候補に数え
-    （`feature_id` は残す小さい ID、`merged_from` に 2 つの ID、同定と質量誤差は SME を持つ方の
+    （`feature_id` は残す ID＝受け持ちの多い側、同数なら小さい ID。`merged_from` に 2 つの ID、同定と質量誤差は SME を持つ方の
     スポット＝`sme_feature_id`。両方にあれば残す ID）、統計はまとめた行列で検定し直した値。
     `{"result_id"}` では `statistics.merge_split`（既定 true）・`statistics.alignment_qc`
     （`dataset_alignment_qc` の JSON。省略時はその場で探す）、analysis_spec では spec の

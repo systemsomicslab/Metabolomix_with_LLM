@@ -12,7 +12,8 @@
 
 まとめの規則（コントローラの決定 2026-10-29）: mergeable は注釈が両立する `injection_block`
 （両スポットが `min_block_size`=2 試料以上を受け持つ）と ΔRT ≤ 0.15 分の `interleaved`。実際に
-まとめるのは互いに |ΔRT| が最も近い mergeable な相手どうしの 2 スポットだけで、残す ID は小さい方。
+まとめるのは互いに |ΔRT| が最も近い mergeable な相手どうしの 2 スポットだけで、残す ID は受け持ちの
+多い側（同数なら小さい方）。
 MTBLS6965 では CE 1265/1266・1185/1186・1257/1258 と陰イオンの 401/403・441/442 をまとめ、
 402 と CE 1178/1179（interleaved ΔRT 0.612）はまとめない（task-5 の報告）。群の差は見ていない。
 """
@@ -229,7 +230,8 @@ def test_four_spot_chain_merges_only_the_mergeable_pair():
     (group,) = qc["groups"]
     assert sorted(group["features"]) == ["A", "B", "C", "D"] and group["mergeable"] is False
     (merge,) = qc["merge_groups"]
-    assert merge["features"] == ["B", "C"] and merge["mergeable"] is True
+    assert merge["features"] == ["C", "B"] and merge["mergeable"] is True
+    assert merge["n_owned"] == {"C": 10, "B": 9}
     assert qc["summary"]["n_merged_pairs"] == 1
     partners = Q.split_partners(qc)
     assert partners["B"]["partners"] == ["C"] and partners["B"]["mergeable"] is True
@@ -238,8 +240,8 @@ def test_four_spot_chain_merges_only_the_mergeable_pair():
     ds = _chain(["PC 34:1", "PC 34:2", "PC 34:2", "PC 36:1"])
     merged = Q.merge_matrix_columns(ds.feature_matrix.T, ds.feature_ids,
                                     [m["features"] for m in qc["merge_groups"] if m["mergeable"]])
-    assert merged.feature_ids == ["A", "B", "D"]                # 小さい ID（B）を残す
-    assert merged.merged_from == {"B": ["B", "C"]}
+    assert merged.feature_ids == ["A", "C", "D"]                # 受け持ちの多い側（C）を残す
+    assert merged.merged_from == {"C": ["C", "B"]}
 
 
 def test_tie_for_nearest_partner_merges_nothing():
@@ -389,6 +391,34 @@ def test_bad_parameters_are_domain_errors():
             Q.find_split_pairs(ds, **kwargs)
 
 
+def test_keep_side_is_the_one_owning_more_samples():                      # G142（6965-v8）
+    ds = _make_ds([("1265", 650.6000, 20.61, FIRST_TWO, None, ADDUCT),
+                   ("1266", 650.6050, 20.00, ALL - FIRST_TWO, "CE 18:2", ADDUCT)])
+    qc = Q.find_split_pairs(ds)
+    [merge] = qc["merge_groups"]
+    assert merge["features"] == ["1266", "1265"] and merge["keep"] == "1266"
+    assert merge["keep_basis"] == "n_owned" and merge["n_owned"] == {"1266": 40, "1265": 2}
+    assert qc["groups"][0]["features"] == ["1265", "1266"]     # 報告用の成分は ID の小さい順のまま
+    assert Q.usable_merge_groups(qc, ds.feature_ids)[0] == [["1266", "1265"]]
+
+
+def test_tie_keeps_the_smaller_id():
+    evens, odds = set(range(0, N, 2)), set(range(1, N, 2))
+    ds = _make_ds([("31", 500.0, 5.00, odds, "PC 34:1", ADDUCT),
+                   ("30", 500.001, 5.10, evens, "PC 34:1", ADDUCT)], groups=GROUPS_HALVES)
+    [merge] = Q.find_split_pairs(ds)["merge_groups"]
+    assert merge["features"] == ["30", "31"] and merge["keep_basis"] == "smaller_id_tie"
+    assert merge["keep"] == "30" and merge["n_owned"] == {"30": 21, "31": 21}
+
+
+def test_old_qc_json_without_keep_keeps_the_smaller_id():
+    qc = {"merge_groups": [{"features": ["1265", "1266"], "mergeable": True}]}
+    assert Q.usable_merge_groups(qc, ["1265", "1266"])[0] == [["1265", "1266"]]
+    # 並びに頼らない（`keep` の無い JSON の先頭は「残す ID」の約束の外）。整数は数の順
+    qc = {"merge_groups": [{"features": ["10", "9"], "mergeable": True}]}
+    assert Q.usable_merge_groups(qc, ["9", "10"])[0] == [["9", "10"]]
+
+
 def test_merge_matrix_columns_takes_per_sample_max():
     matrix = np.array([[1.0, 50.0, 7.0, 3.0],
                        [9.0, 2.0, np.nan, 3.0],
@@ -398,14 +428,19 @@ def test_merge_matrix_columns_takes_per_sample_max():
                          [False, False, True, True]])
     merged = Q.merge_matrix_columns(matrix, ["a", "b", "c", "d"], [["c", "a"]],
                                     detected=detected)
-    assert merged.feature_ids == ["a", "b", "d"]              # 最も小さい ID の位置に 1 列
-    assert merged.merged_from == {"a": ["a", "c"]}
-    np.testing.assert_array_equal(merged.matrix[:, 0], [7.0, 9.0, 1.0])
-    np.testing.assert_array_equal(merged.detected[:, 0], [True, False, True])
-    np.testing.assert_array_equal(merged.matrix[:, [1, 2]], matrix[:, [1, 3]])
-    # 整数の ID は数の順（"9" < "10"）。渡した順によらない
-    numeric = Q.merge_matrix_columns(matrix, ["10", "b", "9", "d"], [["10", "9"]])
+    assert merged.feature_ids == ["b", "c", "d"]              # 渡した並びの先頭の位置に 1 列
+    assert merged.merged_from == {"c": ["c", "a"]}
+    np.testing.assert_array_equal(merged.matrix[:, 1], [7.0, 9.0, 1.0])
+    np.testing.assert_array_equal(merged.detected[:, 1], [True, False, True])
+    np.testing.assert_array_equal(merged.matrix[:, [0, 2]], matrix[:, [1, 3]])
+    # 数の ID も渡した並びのまま（文字列の順や数の順に並べ直さない）
+    numeric = Q.merge_matrix_columns(matrix, ["10", "b", "9", "d"], [["9", "10"]])
     assert numeric.feature_ids == ["b", "9", "d"] and numeric.merged_from == {"9": ["9", "10"]}
+    larger = Q.merge_matrix_columns(matrix, ["10", "b", "9", "d"], [["10", "9"]])
+    assert larger.feature_ids == ["10", "b", "d"] and larger.merged_from == {"10": ["10", "9"]}
+    # 先頭が行列に無ければ、行列にある最初の ID を残す
+    absent = Q.merge_matrix_columns(matrix, ["a", "b", "c", "d"], [["zz", "c", "a"]])
+    assert absent.merged_from == {"c": ["c", "a"]}
     # 行列に無い特徴は飛ばし、1 つしか残らない群はまとめない
     same = Q.merge_matrix_columns(matrix, ["a", "b", "c", "d"], [["a", "zz"]])
     assert same.feature_ids == ["a", "b", "c", "d"] and same.merged_from == {}

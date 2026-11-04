@@ -341,8 +341,18 @@ def _strip_paths(value):
 
 
 def merge_groups_hash(groups) -> str:
-    """まとめた割れの群（特徴 ID の並びの並び）の hash。順によらない。"""
-    return canonical_hash(sorted(sorted(str(f) for f in group) for group in groups))
+    """まとめた割れの群（特徴 ID の並びの並び。先頭が残す ID）の hash。群どうしの順によらない。
+
+    残す ID が群の最小なら、受け持ちで決める前と同じ符号（ID を文字列の順に並べる）で hash も
+    同じ。ほかの ID を残す群は `keep=<残す ID>` を前に足し、残す側が違えば別の hash にする。
+    """
+    def encoded(group):
+        ids = [str(f) for f in group]
+        if ids[:1] == alignment_qc.id_order(ids)[:1]:
+            return sorted(ids)
+        return [f"keep={ids[0]}", *sorted(ids)]
+
+    return canonical_hash(sorted(encoded(group) for group in groups))
 
 
 def rule_hash(normalized: dict, merged_groups=None) -> str:
@@ -550,8 +560,8 @@ def _merge_plan(normalized: dict, ds, data: dict) -> dict:
     検出された試料の少ない列で、検出率の篩が落としてまとめを打ち消すのと、正規化（TIC・PQN・KNN）が
     1 つの物質を 1 列として見るため。まとめた列の検出状態は 2 スポットの「どちらかで検出」。
 
-    外部の行列にはアライメントが無いので何もしない。`groups` は実際にまとめた群（残す ID が先頭、
-    ID の小さい順。`merged_from` と同じ）、`skipped` は行列に 2 つ揃わず（別の run の JSON など）
+    外部の行列にはアライメントが無いので何もしない。`groups` は実際にまとめた群（残す ID が先頭。
+    `merged_from` と同じ）、`skipped` は行列に 2 つ揃わず（別の run の JSON など）
     まとめなかった群。
     """
     plan = {"enabled": False, "source": None, "groups": [], "groups_hash": None,

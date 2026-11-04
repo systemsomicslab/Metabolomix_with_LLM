@@ -33,6 +33,8 @@ MS-DIAL のアライメントは、1 つの物質を 2 つ以上のスポット�
 - まとめ方は試料ごとに 2 スポットの大きい方の値（gap-fill の値は背景で、本物のピークより
   大きくならない）。`merge_matrix_columns` が唯一の実装で、統計の側（feature_search・
   analysis_spec）はこれを呼ぶ。
+- 残すのは受け持ち（`n_owned`）の多い側、同数なら小さい ID（`_keep_first`）。割れの群の並びは
+  **残す ID が先頭**（`merge_groups[].features`・`usable_merge_groups` の戻り・`merged_from`）。
 """
 from __future__ import annotations
 
@@ -323,8 +325,10 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
     戻り値は alignment-qc.v1（`lipidmix://docs/output-format/reanalysis` §9）。
     `pairs[].features` は、`injection_block` なら [塊でない側, 塊の側]、ほかは RT の昇順。
     `delta_rt` は `rt[1] − rt[0]`（`injection_block` では塊の側のずれ。符号つき）。
-    `groups[].features` と `merge_groups[].features` は特徴 ID の小さい順（すべて整数なら数の順）で、
-    `merge_matrix_columns` は最も小さい ID を残す。`injection_block` には両スポットが
+    `groups[].features` は特徴 ID の小さい順（すべて整数なら数の順）、`merge_groups[].features` は
+    残す ID が先頭（`keep`。受け持ちの多い側、同数なら小さい ID。`keep_basis` が `n_owned` /
+    `smaller_id_tie`、`n_owned` が特徴 ID ごとの受け持ちの数）で、`merge_matrix_columns` はその先頭を
+    残す。`injection_block` には両スポットが
     `min_block_size` 試料以上を受け持つことを求める。付加体が分からないスポットは組にしない。
     `pairs[].mergeable` は注釈が両立し、型が `injection_block`、または ΔRT ≤
     `max_interleaved_rt_gap` の `interleaved`。`groups[]` はすべての組の連結成分（報告用）、
@@ -400,10 +404,15 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
     group_of = {f: c["group_id"] for c in components for f in c["features"]}
     # 互いに最も近い組は特徴を共有しないので、成分はどれも 2 スポット（= その組）。
     merges = _components([p for p in pairs if p["merged"]], feature_ids)
+    by_pair_id = {p["pair_id"]: p for p in pairs}
     for n, merge in enumerate(merges, start=1):
         merge["merge_group_id"] = f"M{n}"
         merge["group_id"] = group_of[merge["features"][0]]
         merge["mergeable"] = True
+        pair = by_pair_id[merge["pair_ids"][0]]
+        merge["features"], merge["keep_basis"] = _keep_first(pair)
+        merge["keep"] = merge["features"][0]
+        merge["n_owned"] = dict(zip(pair["features"], pair["n_owned"]))
 
     by_type = {t: sum(p["type"] == t for p in pairs) for t in TYPES}
     block_shifts = [p["delta_rt"] for p in pairs if p["type"] == "injection_block"]
@@ -506,6 +515,19 @@ def _mutual_nearest(pairs: list[dict]) -> set[str]:
             and nearest.get(p["features"][1]) == p["features"][0]}
 
 
+def _keep_first(pair: dict) -> tuple[list[str], str]:
+    """組の `features` と `n_owned` から（残す ID が先頭の並び, keep_basis）。
+
+    残すのは受け持ちの多い側（`n_owned`）、同数なら小さい ID（`smaller_id_tie`）。
+    """
+    owned = dict(zip(pair["features"], pair["n_owned"]))
+    smaller, larger = id_order(pair["features"])
+    if owned[smaller] == owned[larger]:
+        return [smaller, larger], "smaller_id_tie"
+    ordered = [smaller, larger] if owned[smaller] > owned[larger] else [larger, smaller]
+    return ordered, "n_owned"
+
+
 def id_order(ids) -> list[str]:
     """特徴 ID の小さい順（すべて整数として読めれば数の順、そうでなければ文字列の順）。"""
     ids = [str(f) for f in ids]
@@ -517,7 +539,7 @@ def id_order(ids) -> list[str]:
 def _components(pairs: list[dict], feature_ids: list[str]) -> list[dict]:
     """`pairs` を辺とする連結成分（ID と mergeable は呼ぶ側が付ける）。
 
-    `features` は特徴 ID の小さい順（`id_order`）。まとめでは先頭（最も小さい ID）が残る。
+    `features` は特徴 ID の小さい順（`id_order`）。まとめの組の残す ID は呼ぶ側が決める（`_keep_first`）。
     """
     parent: dict[str, str] = {}
 
@@ -610,12 +632,23 @@ def read_qc_file(path_text: str, ds, *, field: str,
 def usable_merge_groups(qc: dict, feature_ids) -> tuple[list[list[str]], list[list[str]]]:
     """`(まとめる群, まとめない群)`。まとめるのは `merge_groups` の mergeable な群のうち、
     `feature_ids` に 2 つ以上そろうもの（まとめの判断は `find_split_pairs` が持ち、ここでは
-    足さない・広げない）。そろわない群（別の run の JSON など）は 2 つ目に返す。"""
-    given = [[str(f) for f in group["features"]] for group in qc.get("merge_groups") or []
+    足さない・広げない）。そろわない群（別の run の JSON など）は 2 つ目に返す。
+
+    群の並びは残す ID（`keep`）が先頭。`keep` の無い古い JSON は小さい ID を残す（`id_order`）。"""
+    given = [_keep_leading(group) for group in qc.get("merge_groups") or []
              if group.get("mergeable")]
     present = {str(f) for f in feature_ids}
     usable = [g for g in given if sum(f in present for f in g) >= 2]
     return usable, [g for g in given if g not in usable]
+
+
+def _keep_leading(group: dict) -> list[str]:
+    """`merge_groups` の 1 群の特徴 ID（`keep` が先頭。無ければ `id_order`）。"""
+    ordered = id_order(group["features"])
+    keep = group.get("keep")
+    if keep is None:
+        return ordered
+    return [str(keep), *(f for f in ordered if f != str(keep))]
 
 
 # ---------- 公開: まとめる ----------
@@ -623,7 +656,7 @@ def usable_merge_groups(qc: dict, feature_ids) -> tuple[list[list[str]], list[li
 class MergedMatrix(NamedTuple):
     matrix: np.ndarray                 # (試料, 特徴)。まとめた列は残す ID の位置に 1 列
     feature_ids: list[str]
-    merged_from: dict[str, list[str]]  # 残す ID → まとめた特徴（ID の小さい順）
+    merged_from: dict[str, list[str]]  # 残す ID → まとめた特徴（残す ID が先頭）
     detected: np.ndarray | None        # 渡されたときだけ。まとめた列は「どれかで検出」
 
 
@@ -632,8 +665,8 @@ def merge_matrix_columns(matrix, feature_ids, groups, *, detected=None) -> Merge
 
     matrix は (試料, 特徴)（`analysis_spec` / `recipe_matrix` の並び）。`groups` は特徴 ID の
     並びの並び（`find_split_pairs` の `merge_groups[].features` をそのまま渡せる。まとめてよいかの
-    判断は `find_split_pairs` の側で済んでいる）。まとめた列の ID は群の中で**最も小さい特徴 ID**
-    （渡した順によらない。すべて整数なら数の順）で、その列の位置に置く。行列に無い特徴は
+    判断は `find_split_pairs` の側で済んでいる）。まとめた列の ID は群の中で**行列にある最初の ID**
+    （渡した並びに従う。並べ直さない）で、その列の位置に置く。行列に無い特徴は
     飛ばし、残りが 1 つ以下ならまとめない。群どうしが特徴を共有していれば ValueError。
     """
     values = np.asarray(matrix, dtype=float)
@@ -643,7 +676,7 @@ def merge_matrix_columns(matrix, feature_ids, groups, *, detected=None) -> Merge
     seen: set[str] = set()
     plans = []
     for group in groups:
-        present = id_order(f for f in group if str(f) in position)
+        present = [str(f) for f in group if str(f) in position]
         if seen.intersection(present):
             raise ValueError(f"割れの群が特徴を共有している: {sorted(seen.intersection(present))}")
         seen.update(present)

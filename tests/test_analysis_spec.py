@@ -9,7 +9,7 @@ import pytest
 from scipy import stats
 
 from metabolomix.analysis import analysis_spec as A
-from metabolomix.core.atomic_io import DomainError
+from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 SAMPLES = ["HC1", "HC2", "HC3", "RA1", "RA2", "RA3", "QC1", "QC2"]
 VALUES = {
@@ -451,8 +451,50 @@ def test_rule_hash_changes_with_merge_split():
     hashes = {A.rule_hash(normalized, [["1", "2"]]), A.rule_hash(normalized, [["1", "3"]]),
               A.rule_hash(normalized, [])}
     assert len(hashes) == 3
-    assert A.rule_hash(normalized, [["2", "1"]]) == A.rule_hash(normalized, [["1", "2"]])
-    assert on["merge_split"]["groups_hash"] == A.merge_groups_hash([["1266", "1265"]])
+    # 群の先頭は残す ID: 残す側が違えば別の規則（群どうしの順にはよらない）
+    assert A.rule_hash(normalized, [["2", "1"]]) != A.rule_hash(normalized, [["1", "2"]])
+    assert (A.rule_hash(normalized, [["3", "4"], ["1", "2"]])
+            == A.rule_hash(normalized, [["1", "2"], ["3", "4"]]))
+    assert on["merge_split"]["groups_hash"] == A.merge_groups_hash([["1265", "1266"]])
+
+
+def test_merge_groups_hash_unchanged_when_keep_is_smallest():
+    assert A.merge_groups_hash([["1", "2"]]) == canonical_hash([["1", "2"]])
+    assert A.merge_groups_hash([["2", "1"]]) != A.merge_groups_hash([["1", "2"]])
+    # 残す ID が最小なら今までどおり文字列の順で符号化する（"10" < "9"）
+    assert A.merge_groups_hash([["9", "10"]]) == canonical_hash([["10", "9"]])
+    assert A.merge_groups_hash([["10", "9"]]) != A.merge_groups_hash([["9", "10"]])
+
+
+def _owning_split_ds():
+    from tests.test_alignment_qc import ADDUCT, ALL, FIRST_TWO, _make_ds
+
+    return _make_ds([("1265", 650.6000, 20.61, FIRST_TWO, None, ADDUCT),
+                     ("1266", 650.6050, 20.00, ALL - FIRST_TWO, "CE 18:2", ADDUCT),
+                     ("2000", 300.0, 3.0, ALL, "PC 34:1", ADDUCT)])
+
+
+def test_merge_split_keeps_the_owning_spot():
+    result, rows = _ds_rows(_owning_split_ds(), _split_spec())
+    assert sorted(rows) == ["1266", "2000"]
+    assert rows["1266"]["merged_from"] == ["1266", "1265"]
+    assert result["merge_split"]["groups"] == [["1266", "1265"]]
+
+
+def test_alignment_qc_json_without_keep_keeps_the_smaller_id(tmp_path):
+    from metabolomix.analysis import alignment_qc
+
+    ds = _owning_split_ds()
+    qc = alignment_qc.find_split_pairs(ds)
+    for merge in qc["merge_groups"]:                          # 受け持ちで決める前の版の JSON
+        merge["features"] = alignment_qc.id_order(merge["features"])
+        for key in ("keep", "keep_basis", "n_owned"):
+            merge.pop(key, None)
+    path = tmp_path / "alignment_qc_old.json"
+    path.write_text(json.dumps(qc), encoding="utf-8")
+    _, rows = _ds_rows(ds, _split_spec(features={"all": True, "alignment_qc": str(path)}))
+    assert sorted(rows) == ["1265", "2000"]
+    assert rows["1265"]["merged_from"] == ["1265", "1266"]
 
 
 def test_merge_split_is_a_no_op_for_tsv_input(files):

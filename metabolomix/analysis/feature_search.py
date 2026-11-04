@@ -547,8 +547,8 @@ def match_target(ds, target: dict, *, max_results: int,
 
     ``merged_from``（`merge_map` の ``{残す ID: 群}``）を渡すと、割れたスポットの組を**1 つの候補**
     として数える（spec 2026-10-28 §4.3 (c)・コントローラの決定 2026-10-29）: 行は従来どおり
-    スポットごとに作り（``merged_from`` 欄に群）、判定と ``counts`` は残す ID（群の中で最も小さい
-    ID）に読み替えて一意化する。組の 2 スポットが同じ箱にあっても 1 つと数え、``resolved`` なら
+    スポットごとに作り（``merged_from`` 欄に群）、判定と ``counts`` は残す ID（群の先頭。受け持ちの
+    多い側、同数なら小さい ID）に読み替えて一意化する。組の 2 スポットが同じ箱にあっても 1 つと数え、``resolved`` なら
     ``selected_feature_id`` は残す ID、``merged_from`` にその群（まとめないときは None）。
     組の片方だけが質量の窓に入ったときは、相手のスポットも同じ付加体で行に足す（``reasons`` に
     ``merge_partner``。qualified にせず数にも入れない。選んだ残す ID の行が候補に必ずあるように）。
@@ -973,7 +973,7 @@ def merge_plan(ds, *, alignment_qc_path: str | None = None, dataset_hash: str | 
     ここでは足さない・広げない（`analysis_spec` の `features.merge_split` と同じ規則・同じ実装）。
     ``alignment_qc_path`` は `dataset_alignment_qc` が書いた JSON（今のデータセットの指紋で
     作ったものだけを受ける）で、無ければその場で `find_split_pairs(ds)` を既定の閾値で回す。
-    ``groups`` は特徴 ID の小さい順（先頭が残す ID）、``skipped`` はデータセットに 2 つ揃わない群。
+    ``groups`` は残す ID が先頭の並び、``skipped`` はデータセットに 2 つ揃わない群。
     ``dataset_hash`` は計算済みの `dataset_fingerprint(ds)`（任意）、``field`` はエラーに書く欄の名前。
     """
     from metabolomix.analysis import alignment_qc
@@ -996,7 +996,7 @@ def merged_dataset(ds, groups) -> tuple[object, dict[str, list[str]]]:
     元の ``ds`` は変えない（浅い写しの定量行列・特徴 ID・検出状態だけを置き換える）。まとめは
     前処理の**前**の生の値に当て、検出状態は 2 スポットの「どちらかで検出」（`analysis_spec` と
     同じ順序。前処理の篩と正規化が 1 つの物質を 1 列として見る）。実装は
-    `alignment_qc.merge_matrix_columns`（残す列は群の中で最も小さい特徴 ID）。
+    `alignment_qc.merge_matrix_columns`（残す列は群の先頭の特徴 ID）。
     """
     from metabolomix.analysis import alignment_qc
 
@@ -1081,11 +1081,8 @@ def retest_merged(ds, view, result: dict) -> dict:
 
 
 def merge_map(groups) -> dict[str, list[str]]:
-    """割れの群 → ``{残す ID: 群}``（残す ID は群の中で最も小さい ID。`merge_matrix_columns` と同じ）。"""
-    from metabolomix.analysis import alignment_qc
-
-    ordered = [alignment_qc.id_order(group) for group in groups]
-    return {group[0]: group for group in ordered if len(group) >= 2}
+    """割れの群 → ``{残す ID: 群}``（残す ID は群の先頭。`merge_matrix_columns` と同じ）。"""
+    return {group[0]: list(group) for group in groups if len(group) >= 2}
 
 
 def merged_results(ds, results: list[dict], groups, feature_ids) -> dict:
@@ -1113,8 +1110,8 @@ def merged_feature_stats(ds, feature_ids: list[str], results: list[dict], *, gro
     戻り値 ``{"stats", "stats_unmerged", "touched", "renamed", "results", "view"}``。
     ``stats_unmerged`` は従来の ``feature_stats(ds, feature_ids, results)`` そのもの。まとめる群が
     1 つでもあれば、``stats`` は**すべての行**をまとめた行列で検定し直した値（`merged_results`。
-    q はまとめた後の全特徴の BH）から出し、まとめて消える特徴 ID は残す ID（群の中で最も小さい
-    ID）に置き換える（重複は 1 つ）。群が無ければ ``stats`` は従来の値と同じ。各行の
+    q はまとめた後の全特徴の BH）から出し、まとめて消える特徴 ID は残す ID（群の先頭）に
+    置き換える（重複は 1 つ）。群が無ければ ``stats`` は従来の値と同じ。各行の
     ``merged_from`` は群（残す ID が先頭）か None。``renamed`` は置き換えた ID（消える ID → 残す ID）。
     """
     unmerged = feature_stats(ds, feature_ids, results, with_labels=with_labels)

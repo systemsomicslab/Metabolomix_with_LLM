@@ -1019,7 +1019,7 @@ def test_match_target_counts_a_merged_pair_as_one_candidate():
     assert plain["status"] == "needs_input"
     assert plain["reason"] == "multiple_qualified_candidates" and "merged_from" not in plain
 
-    merged = match_target(ds, target, max_results=20, merged_from=merge_map([["403", "401"]]))
+    merged = match_target(ds, target, max_results=20, merged_from=merge_map([["401", "403"]]))
     assert merged["status"] == "resolved" and merged["selected_feature_id"] == "401"
     assert merged["merged_from"] == ["401", "403"]
     assert merged["counts"]["qualified"] == 1 and merged["counts"]["mass"] == 1

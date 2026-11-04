@@ -716,7 +716,7 @@ def dataset_feature_search(
         まとめる組がデータセットに 1 つでもあれば**すべての行**をやり直した値にする（1 つの表の q は
         1 つの BH の母集団から）。組が無ければやり直さず従来の値。目標照合でも組の 2 スポットを
         1 つの候補（残す ID。`targets[].merged_from`・`candidates` の末尾の `merged_from`）と数える。
-        `stats` の末尾に `merged_from`（まとめた 2 つの ID を `;` で。残すのは小さい ID で、消える
+        `stats` の末尾に `merged_from`（まとめた 2 つの ID を `;` で。先頭が残す ID＝受け持ちの多い側、同数なら小さい ID で、消える
         側の ID を頼んでも残す ID の行に解く）、`stats_unmerged` にまとめる前の従来の `stats`
         （同じ列・頼んだ ID のまま）、`merge_split` に出所・まとめた組・やり直した結果と BH の
         母集団。False なら従来どおり（`stats_unmerged` も `merged_from` 列も無い）。
