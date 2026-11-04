@@ -33,8 +33,10 @@ MAX_INLINE_ROWS = 50
 ROW_COLUMNS = ("feature_id", "status", "reason", "group_ref", "group_test", "n_ref", "n_test",
                "mean_ref", "mean_test", "fc_test_over_ref", "log2fc_test_over_ref",
                "statistic", "p", "q", "beta_log2", "direction", "meets_thresholds",
-               "merged_from")
-_SIGNIFICANT = frozenset({"mean_ref", "mean_test", "statistic", "p", "q", "beta_log2"})
+               "merged_from", "detected_reference", "detected_test", "detection_fisher_p",
+               "detection_driven")
+_SIGNIFICANT = frozenset({"mean_ref", "mean_test", "statistic", "p", "q", "beta_log2",
+                          "detection_fisher_p"})
 _DECIMAL4 = frozenset({"fc_test_over_ref", "log2fc_test_over_ref"})
 
 
@@ -159,6 +161,8 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
             "n_rows": len(rows),
             "n_tested": sum(1 for r in rows if r["status"] == "tested"),
             "n_meets_thresholds": sum(1 for r in rows if r["meets_thresholds"]),
+            "detection_available": any(r["detected_reference"] is not None for r in rows),
+            "n_detection_driven": sum(1 for r in rows if r["detection_driven"]),
         }
         if "aggregate" in analysis:
             item["aggregate"] = analysis["aggregate"]
@@ -429,7 +433,9 @@ def dataset_claim_evidence(spec: dict, dataset_handle: str | None = None,
     全組で走査する）・`msms`（`top_n` と msms-rules.v1 の `rules`。target は書かない）・
     `relations`（`rt_window` / `mz_tol` / `min_r`）・`max_candidates`（既定 50）・`merge_split`
     （既定 true。割れたスポットの組を判定で 1 つの候補（残す ID）と数え、窓の外の相手も候補に
-    `merge_partner` で足す。false は v7 と同じ規則・同じ `rule_hash`）。
+    `merge_partner` で足す。false は v7 と同じ規則・同じ `rule_hash`）・`ppm_offset`（任意。
+    質量の窓の中心を帯ごとにずらす。`dataset_feature_search` と同じ形で、既定の特徴と走査の全変種に
+    効く。幅は変えず、渡したときだけ `rule_hash` に入る）。
     束に入るのは、規則で選んだ既定の特徴（`default_selection`。`dataset_feature_search`
     の目標照合と同じ規則で、決まらなければ `needs_input`）、走査ごとの判定、候補ごとの
     照合（spot_id = SMF_ID）・合否・関係。**特徴は決めない**（実行役が決め、統計は
@@ -581,11 +587,18 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     （`dataset_analysis_run` と同じ spec のその解析）。q の昇順。`rule_hash` を返す。
     論文の同定リストとの突き合わせはしない（再解析の側）。
     割れたアライメントスポットの組（`dataset_alignment_qc` の `merge_groups`）は 1 候補に数え
-    （`feature_id` は残す小さい ID、`merged_from` に 2 つの ID、同定と質量誤差は SME を持つ方の
+    （`feature_id` は残す ID＝受け持ちの多い側、同数なら小さい ID。`merged_from` に 2 つの ID、同定と質量誤差は SME を持つ方の
     スポット＝`sme_feature_id`。両方にあれば残す ID）、統計はまとめた行列で検定し直した値。
     `{"result_id"}` では `statistics.merge_split`（既定 true）・`statistics.alignment_qc`
     （`dataset_alignment_qc` の JSON。省略時はその場で探す）、analysis_spec では spec の
     `features.merge_split` で決まる。
+    spec の `labels`（`{path, name, feature_column="feature_id", label_column="level",
+    order=["A","B","C","D"]}`）は外部の印の TSV。行に `labels.<name>` の列（特徴ごとの最も強い
+    水準、割れの組はどちらかの最も強い水準）と水準ごとの件数 `labels.counts`（全体と上位 20）を
+    足すだけで、並び・件数・除外・`rule_hash` は変えない。
+    spec の `ppm_offset`（任意。`{default, bands: [{max_mz, offset}]}`）は質量の窓の中心のずれ
+    （判定が `|ppm − 中心| ≤ 許容幅`。幅と行の `ppm` 列は変えず、渡したときだけ `rule_hash` に入る。
+    帯は理論 m/z が `max_mz` 未満の最初のもの。形の誤りは `NOVEL_SPEC_INVALID`）。
     output_path: JSON をここへ書き、要約だけを返す（行が 50 を超えるときは必須）。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     """
@@ -626,6 +639,17 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
         rows = mass_accuracy.novel_candidates(
             ds, normalized, stats_rows, group_ref=group_ref, group_test=group_test,
             merged_from={g[0]: g for g in merge["groups"]} if merge["enabled"] else None)
+        labels_info = None
+        if "labels" in normalized:
+            spec_labels = normalized["labels"]
+            read = mass_accuracy.read_labels(spec_labels)
+            counts = mass_accuracy.attach_labels(rows, read["by_feature"], name=spec_labels["name"],
+                                                 order=spec_labels["order"])
+            known = set(ds.feature_ids)
+            labels_info = {"name": spec_labels["name"], "sha256": read["sha256"],
+                           "order": spec_labels["order"], "n_rows": read["n_rows"],
+                           "n_unmatched": sum(1 for f in read["by_feature"] if f not in known),
+                           "counts": counts}
         # まとめた組の hash は、まとめるとき（組が 0 でも）だけ規則に入れる
         groups_hash = (analysis_spec.merge_groups_hash(merge["groups"]) if merge["enabled"]
                        else None)
@@ -637,6 +661,7 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
                           "rule_hash": mass_accuracy.rule_hash(normalized, groups_hash),
                           "group_ref": group_ref, "group_test": group_test,
                           **({"merge_split": merge_info} if merge_info else {}),
+                          **({"labels": labels_info} if labels_info else {}),
                           "rows": rows}
         if output_path is None and len(rows) > MAX_INLINE_ROWS:
             raise DomainError("ANALYSIS_OUTPUT_REQUIRED",
@@ -649,11 +674,14 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
                "group_test", "log2fc_test_over_ref", "p", "q", "direction")
     if merge_info:
         columns += ("merged_from",)
+    if labels_info:
+        columns += (f"labels.{labels_info['name']}",)
     return json_payload({
         "status": "success",
         "rule_hash": result_payload["rule_hash"],
         "group_ref": group_ref, "group_test": group_test,
         **({"merge_split": merge_info} if merge_info else {}),
+        **({"labels": labels_info} if labels_info else {}),
         "n_rows": len(rows),
         **({"output_path": written} if written else
            {"rows": rows_table([{**r, "mz": round(r["mz"], 4), "ppm": round(r["ppm"], 2),

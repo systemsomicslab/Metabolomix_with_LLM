@@ -149,7 +149,9 @@
 候補ごとの `split` は `find_split_pairs`（既定の閾値）の `split_partners`。`default_selection.counts.qualified`
 （と走査ごとの `counts.qualified`）は、規則で qualified になった特徴のうち MS/MS の合否
 （`msms.qualify.verdict`）が `qualified` の数（`_selection`。MS/MS を頼んでいない・ライブラリが無ければ null）で、
-規則で qualified の数（旧 `qualified` の意味。MS/MS の有無ではない）は `msms_available`。既定の特徴と走査の判定は
+規則で qualified の数（旧 `qualified` の意味。MS/MS の有無ではない）は `rule_qualified`（`msms_available` は同じ値の非推奨の別名）。
+代表 MS/MS の有無で数えるのは `msms_spectrum_available`（質量の窓の候補。割れの組は 1 つ、RT で絞らない）で、候補ごとの
+`msms.spectrum_available` は `_msms_for` がライブラリの有無より先に spot を照会して決める（MS/MS を頼まなければ null。`.arf2` / `.dcl` のファイルが無い `not_found`（`reason` が `no_arf2` / `no_dcl`）は False でなく null）。`msms_spectrum_available` は `_spectrum_count` が数え、0 は照会して無かった・null は頼まなかったか分からなかった（True の単位が無く null の単位がある）・数は下限。既定の特徴と走査の判定は
 `match_target(merged_from=merge_map(...))` で割れの組を 1 つの候補（残す ID）として数える。
 
 ## dataset_mass_accuracy
@@ -186,7 +188,7 @@
 11. │  └─ metabolomix/analysis/mass_accuracy.py  sme_ppm()
 12. └─ metabolomix/analysis/mass_accuracy.py  rule_hash()
 
-割れたスポットの組は 1 候補（残す小さい ID）に数える。`statistics.result_id` では `statistics.merge_split`
+割れたスポットの組は 1 候補（残す ID＝受け持ちの多い側（同数なら小さい ID））に数える。`statistics.result_id` では `statistics.merge_split`
 （既定 true）で、組が 1 つでもあればすべての特徴の統計をまとめた行列で検定し直した値にする（`dataset_feature_search` の
 `merge_split` と同じ実装）。analysis_spec では spec の `features.merge_split` が決め、`run_spec` の
 `merge_split.groups` を使う。まとめた組の hash は `rule_hash` に入る（`merge_split` が `groups_hash` に

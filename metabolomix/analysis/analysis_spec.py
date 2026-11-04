@@ -341,8 +341,18 @@ def _strip_paths(value):
 
 
 def merge_groups_hash(groups) -> str:
-    """まとめた割れの群（特徴 ID の並びの並び）の hash。順によらない。"""
-    return canonical_hash(sorted(sorted(str(f) for f in group) for group in groups))
+    """まとめた割れの群（特徴 ID の並びの並び。先頭が残す ID）の hash。群どうしの順によらない。
+
+    残す ID が群の最小なら、受け持ちで決める前と同じ符号（ID を文字列の順に並べる）で hash も
+    同じ。ほかの ID を残す群は `keep=<残す ID>` を前に足し、残す側が違えば別の hash にする。
+    """
+    def encoded(group):
+        ids = [str(f) for f in group]
+        if ids[:1] == alignment_qc.id_order(ids)[:1]:
+            return sorted(ids)
+        return [f"keep={ids[0]}", *sorted(ids)]
+
+    return canonical_hash(sorted(encoded(group) for group in groups))
 
 
 def rule_hash(normalized: dict, merged_groups=None) -> str:
@@ -550,8 +560,8 @@ def _merge_plan(normalized: dict, ds, data: dict) -> dict:
     検出された試料の少ない列で、検出率の篩が落としてまとめを打ち消すのと、正規化（TIC・PQN・KNN）が
     1 つの物質を 1 列として見るため。まとめた列の検出状態は 2 スポットの「どちらかで検出」。
 
-    外部の行列にはアライメントが無いので何もしない。`groups` は実際にまとめた群（残す ID が先頭、
-    ID の小さい順。`merged_from` と同じ）、`skipped` は行列に 2 つ揃わず（別の run の JSON など）
+    外部の行列にはアライメントが無いので何もしない。`groups` は実際にまとめた群（残す ID が先頭。
+    `merged_from` と同じ）、`skipped` は行列に 2 つ揃わず（別の run の JSON など）
     まとめなかった群。
     """
     plan = {"enabled": False, "source": None, "groups": [], "groups_hash": None,
@@ -743,6 +753,9 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
                           {"group_n": {k: len(v) for k, v in members.items()}})
     rows_ref = [index[s] for s in members[reference]]
     rows_test = [index[s] for s in members[test]]
+    # 検出の例数は _load の検出状態（まとめた後はどちらかで検出）から数える。集約の行では数えない。
+    detected = None if aggregate_info is not None or data["detected"] is None else data["detected"]
+    det_col = {fid: j for j, fid in enumerate(data["feature_ids"])}
 
     kind = analysis["test"]["kind"]
     transform = analysis["test"]["transform"]
@@ -778,6 +791,9 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
             "statistic": outcome["statistic"], "p": outcome["p"], "q": None,
             "beta_log2": outcome["beta_log2"],
         }
+        if detected is not None:
+            results[fid]["detected_reference"] = int(detected[rows_ref, det_col[fid]].sum())
+            results[fid]["detected_test"] = int(detected[rows_test, det_col[fid]].sum())
 
     wanted = matrix["feature_ids"] if reported is None else reported
     if analysis["bh_population"] == "matrix":
@@ -808,6 +824,15 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
         row = dict(row)
         row["merged_from"] = merged_from.get(fid)
         row["direction"] = _direction(row)
+        row.setdefault("detected_reference", None)
+        row.setdefault("detected_test", None)
+        d_ref, d_test = row["detected_reference"], row["detected_test"]
+        row["detection_fisher_p"] = (
+            None if d_ref is None else spec_statistics.detection_fisher_p(
+                d_ref, len(rows_ref), d_test, len(rows_test)))
+        row["detection_driven"] = (
+            spec_statistics.detection_driven(row["direction"], d_ref, len(rows_ref), d_test,
+                                             len(rows_test)) if row["status"] == "tested" else None)
         row["meets_thresholds"] = _meets(row, analysis["thresholds"])
         rows.append(row)
     out = {

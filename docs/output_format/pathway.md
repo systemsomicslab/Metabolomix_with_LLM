@@ -79,6 +79,16 @@
 - MSLipidMapper のつながりは描画用テンプレートで、反応の主張ではない（上流文書:
   "not automatically curated reactions"）。**観察の提示**として扱い、基質・生成物の解釈は文献で裏を取る。
 
+## run の manifest.json に残る要約
+
+`pathway_project` は戻り値と同じ注意と隣接ペアを `reports/pathway/<run_id>/manifest.json` にも書く
+（MCP の時間切れで戻り値が失われても run に残る）。
+
+- `notes`: `adjacency`（隣接の注意）と `handoff`（行を落としたときの注意。落とした行が無ければ null）。
+- `opposite_pairs`: パスウェイ名 → `{"rows": [...], "undeterminable": 件数}`。`rows` は
+  `opposite_pairs_tsv` と同じ欄（`node_1` `call_1` `log2fc_1` `node_2` `call_2` `log2fc_2` `via`）の辞書。
+- 非有限の数値（NaN・inf）は null で書く。
+
 ## 対応付けの見出し
 
 - `mapped_nodes` = 値の付いたノード（分子種の入った whole スコープを持つ脂質ノード）の数 /
@@ -89,6 +99,11 @@
 
 ## 図（pathway_plot）
 
-- 各パスウェイの PDF（`reports/pathway/<run_id>/<pathway>.pdf`）の 1 ページ目を PNG にしたもの。
+- 各パスウェイの PDF（`reports/pathway/<run_id>/<pathway>.pdf`）と、その 1 ページ目の PNG
+  （`<pathway>.png`）を run のディレクトリに書く。
+- **既定の戻り値は図のファイルの場所と要約だけ**（`run_id` `group_a` `group_b` `backend` と、
+  `figures`＝`pathway` `pdf` `png` `width` `height` `mapped_nodes`、`note`）。画像はファイルにしか
+  出ない（設計者の判断 2026-11-04）。チャットに図を出すときは `inline_image=true`
+  （要約の JSON に続けて PNG を画像で返す。1 枚約 2,400 画像トークン）。
 - ノード内の p 値ラベルは MSLipidMapper（Shiny と同じ計算）のもので、ノード表の q とは**別物**。
 - ノード内グラフの横軸は group_a, group_b, その他の群の順（上流が config の `plot.x_order` を軸順と配色に使う）。

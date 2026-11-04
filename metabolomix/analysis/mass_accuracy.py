@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import math
+import re
 import statistics
 
 from metabolomix.core.atomic_io import DomainError, canonical_hash
@@ -144,8 +145,10 @@ def band_summary(rows: list[dict], band_edges: list[float]) -> dict:
 # ---------- 新しい知見の候補 ----------
 
 def normalize_novel_spec(spec) -> dict:
-    if not isinstance(spec, dict) or set(spec) - {"schema", "statistics", "ppm", "q_max", "exclude"}:
-        raise DomainError(_INVALID, "spec は {statistics, ppm, q_max, exclude}", {})
+    if not isinstance(spec, dict) or set(spec) - {"schema", "statistics", "ppm", "q_max", "exclude",
+                                                         "labels", "ppm_offset"}:
+        raise DomainError(_INVALID, "spec は {statistics, ppm, q_max, exclude, labels, ppm_offset}",
+                          {})
     stats_spec = spec.get("statistics")
     if not isinstance(stats_spec, dict):
         raise DomainError(_INVALID, "statistics は {result_id} か {analysis_spec, analysis_id}",
@@ -193,13 +196,122 @@ def normalize_novel_spec(spec) -> dict:
     exclude = spec.get("exclude") or {}
     if not isinstance(exclude, dict) or set(exclude) - {"feature_ids", "inchikey_blocks"}:
         raise DomainError(_INVALID, "exclude は {feature_ids, inchikey_blocks}", {"field": "exclude"})
-    return {"schema": NOVEL_SCHEMA, "statistics": statistics_out,
-            "ppm": {"default": float(ppm.get("default", 10.0)),
-                    "bands": sorted(bands, key=lambda b: b["max_mz"])},
-            "q_max": q_max,
-            "exclude": {"feature_ids": sorted(set(map(str, exclude.get("feature_ids") or []))),
-                        "inchikey_blocks": sorted({str(b).strip()[:14].upper()
-                                                   for b in exclude.get("inchikey_blocks") or []})}}
+    normalized = {"schema": NOVEL_SCHEMA, "statistics": statistics_out,
+                  "ppm": {"default": float(ppm.get("default", 10.0)),
+                          "bands": sorted(bands, key=lambda b: b["max_mz"])},
+                  "q_max": q_max,
+                  "exclude": {"feature_ids": sorted(set(map(str, exclude.get("feature_ids") or []))),
+                              "inchikey_blocks": sorted({str(b).strip()[:14].upper()
+                                                         for b in exclude.get("inchikey_blocks") or []})}}
+    if "labels" in spec:
+        normalized["labels"] = _normalize_labels(spec["labels"])
+    if spec.get("ppm_offset") is not None:
+        # 渡したときだけ規則に載せる（省けば v8 と同じ spec・同じ rule_hash）
+        normalized["ppm_offset"] = normalize_ppm_offset(spec["ppm_offset"], code=_INVALID)
+    return normalized
+
+
+def normalize_ppm_offset(raw, *, code: str, field: str = "ppm_offset") -> dict | None:
+    """質量の窓の中心のずれ `{"default": 0.0, "bands": [{"max_mz", "offset"}]}` を正規化する。
+
+    中心は「実測 − 理論」の ppm の符号つきの値。帯の選び方は ppm の帯と同じ（理論 m/z が
+    `max_mz` 未満の最初の帯、無ければ `default`）。None なら None。
+    """
+    if raw is None:
+        return None
+    detail = {"field": field}
+    if (not isinstance(raw, dict) or set(raw) - {"default", "bands"}
+            or _number(raw.get("default", 0.0)) is None):
+        raise DomainError(code, f"{field} は {{default, bands: [{{max_mz, offset}}]}}", detail)
+    bands = []
+    for i, band in enumerate(raw.get("bands") or []):
+        if (not isinstance(band, dict) or set(band) != {"max_mz", "offset"}
+                or _number(band["max_mz"]) is None or _number(band["offset"]) is None):
+            raise DomainError(code, f"{field}.bands[{i}] は {{max_mz, offset}}", detail)
+        bands.append({"max_mz": float(band["max_mz"]), "offset": float(band["offset"])})
+    return {"default": float(raw.get("default", 0.0)),
+            "bands": sorted(bands, key=lambda b: b["max_mz"])}
+
+
+def offset_for(mz: float, offset_spec: dict | None) -> float:
+    """理論 m/z の帯の中心のずれ（ppm）。帯の境目の m/z は次の帯（`_tolerance` と同じ `<`）。"""
+    if offset_spec is None:
+        return 0.0
+    for band in offset_spec["bands"]:
+        if mz < band["max_mz"]:
+            return band["offset"]
+    return offset_spec["default"]
+
+
+#: 外部の印の既定（強い順）
+LABEL_ORDER = ["A", "B", "C", "D"]
+_LABEL_NAME = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def _normalize_labels(labels) -> dict:
+    """印の spec。`path` と `name` は必須。印は選び方を変えないので `rule_hash` には入れない。"""
+    allowed = {"path", "name", "feature_column", "label_column", "order"}
+    if (not isinstance(labels, dict) or set(labels) - allowed
+            or not isinstance(labels.get("path"), str) or not labels["path"]
+            or not isinstance(labels.get("name"), str)
+            or not _LABEL_NAME.match(labels["name"])):
+        raise DomainError(_INVALID, "labels は {path, name（英数字と _）, feature_column, "
+                          "label_column, order}", {"field": "labels"})
+    order = labels.get("order", LABEL_ORDER)
+    columns = [labels.get("feature_column", "feature_id"), labels.get("label_column", "level")]
+    if (not isinstance(order, list) or not order
+            or not all(isinstance(x, str) and x for x in order) or len(set(order)) != len(order)
+            or not all(isinstance(c, str) and c for c in columns)):
+        raise DomainError(_INVALID, "labels.order は重ならない水準の並び（強い順）、列名は文字列",
+                          {"field": "labels"})
+    return {"path": labels["path"], "name": labels["name"], "feature_column": columns[0],
+            "label_column": columns[1], "order": list(order)}
+
+
+def read_labels(labels: dict) -> dict:
+    """印の TSV を読む。特徴ごとに最も強い水準を残す。空の水準は無視、`order` に無い水準は拒む。"""
+    from metabolomix.analysis import analysis_spec
+
+    columns, rows, sha256 = analysis_spec._read_tsv(labels["path"], "labels")
+    analysis_spec._require_column(columns, labels["feature_column"], "labels")
+    analysis_spec._require_column(columns, labels["label_column"], "labels")
+    rank = {level: i for i, level in enumerate(labels["order"])}
+    by_feature: dict[str, str] = {}
+    unknown: set[str] = set()
+    for row in rows:
+        level = (row.get(labels["label_column"]) or "").strip()
+        feature = (row.get(labels["feature_column"]) or "").strip()
+        if not level or not feature:
+            continue
+        if level not in rank:
+            unknown.add(level)
+        elif feature not in by_feature or rank[level] < rank[by_feature[feature]]:
+            by_feature[feature] = level
+    if unknown:
+        raise DomainError(_INVALID, f"labels に order に無い水準がある: {sorted(unknown)}",
+                          {"field": "labels", "unknown_levels": sorted(unknown)})
+    return {"by_feature": by_feature, "sha256": sha256, "n_rows": len(rows)}
+
+
+def attach_labels(rows: list[dict], by_feature: dict[str, str], *, name: str, order: list[str],
+                  top_n: int = 20) -> dict:
+    """各行に `labels.<name>`（水準か None）を足し、水準ごとの件数を返す。並びは変えない。
+    割れの組（`merged_from`）は群のどれかの最も強い水準。"""
+    rank = {level: i for i, level in enumerate(order)}
+    column = f"labels.{name}"
+    for row in rows:
+        group = row.get("merged_from") or [row["feature_id"]]
+        found = [by_feature[f] for f in group if f in by_feature]
+        row[column] = min(found, key=rank.__getitem__) if found else None
+
+    def count(part: list[dict]) -> dict:
+        out = {level: 0 for level in order}
+        out["none"] = 0
+        for row in part:
+            out[row[column] or "none"] += 1
+        return out
+
+    return {"all": count(rows), "top20": count(rows[:top_n])}
 
 
 def rule_hash(normalized: dict, merge_groups_hash: str | None = None) -> str:
@@ -209,6 +321,7 @@ def rule_hash(normalized: dict, merge_groups_hash: str | None = None) -> str:
     from metabolomix.analysis.analysis_spec import _strip_paths
 
     material = _strip_paths(normalized)
+    material.pop("labels", None)          # 印は選び方を変えない
     if merge_groups_hash is not None:
         material["merged_groups_hash"] = merge_groups_hash
     return canonical_hash(material)
@@ -249,7 +362,8 @@ def novel_candidates(ds, normalized: dict, stats_rows: dict, *, group_ref, group
         stats = stats_rows.get(fid)
         if stats is None or stats.get("q") is None or not stats["q"] < normalized["q_max"]:
             continue
-        if abs(row["ppm"]) > _tolerance(row["theoretical_mz"], normalized["ppm"]):
+        center = offset_for(row["theoretical_mz"], normalized.get("ppm_offset"))
+        if abs(row["ppm"] - center) > _tolerance(row["theoretical_mz"], normalized["ppm"]):
             continue
         block = (row["inchikey"] or "").strip()[:14].upper()
         if excluded_ids.intersection(group) or (block and block in excluded_blocks):

@@ -13,9 +13,11 @@ gap-fill（未検出セルの補間）かを区別しない。実データ（60 
 
   - スポット数 == 特徴数（完全一致）
   - |m/z(.arf 代表値) − m/z(mzTab 平均値)| が許容（既定 0.01 Da）を超える特徴が
-    全体の 1% 以下、**かつ** 1 件も MZ_HARD_LIMIT（1 Da）を超えない
+    全体の 1% 以下、**かつ** 1 件も MZ_HARD_LIMIT（1 Da）を超えない。
+    または、許容を超える特徴の外れがすべて MZ_OUTLIER_SMALL_DELTA（0.02 Da）未満で、
+    1 件も MZ_HARD_LIMIT（1 Da）を超えない（割合が 1% を超えても合格）
 
-**最悪値では判定しない**。実データ 3944 特徴では許容超えが 1 件だけあり
+**最悪値だけでは判定しない**（最悪値が小さいときだけ、割合の条件を外す救済がある）。実データ 3944 特徴では許容超えが 1 件だけあり
 （14.8 mDa。幅の広いピークでは代表値と平均値が離れる）、最悪値で見ると
 3943 件の一致を棄却してしまった。一方、位置を 1 つずらした誤接合は 87 Da・
 RT 20 分に爆発するので、割合で緩めても誤接合は MZ_HARD_LIMIT が捕まえる。
@@ -45,6 +47,12 @@ MZ_TOLERANCE = 0.01
 #: 許容を超えてよい特徴の割合。実データ 3944 特徴のうち許容超えは 1 件
 #: （0.025%）だった。最悪値で判定すると、この 1 件が 3943 件の一致を veto する。
 MZ_OUTLIER_MAX_FRACTION = 0.01
+
+#: 割合が `MZ_OUTLIER_MAX_FRACTION` を超えても、外れがすべてこの幅未満なら合格にする。
+#: 実測（MTBLS9365 陰イオン）: 2547 特徴のうち 36 件（1.41%）が許容を超えたが、最大は
+#: 0.0188 Da で、代表値と平均値の幅の広いピークに由来する外れだった。接合は正しい。
+#: 誤接合は 1 Da 以上（87 Da 等）に爆発するので、この幅未満の外れは誤接合の証拠にならない。
+MZ_OUTLIER_SMALL_DELTA = 0.02
 
 #: 1 件でも超えたら誤接合と断じる幅。位置を 1 つずらした誤接合は実測で
 #: 87 Da に爆発するので、外れ値の許容が誤接合の見逃しにならないための床。
@@ -92,8 +100,9 @@ def compare_feature_mz(spot_mz: list, feature_mz: list,
                        mz_tolerance: float = MZ_TOLERANCE) -> tuple[bool, dict]:
     """スポット代表 m/z と mzTab 側 m/z の一致を、外れの**割合**で判定する。
 
-    「最悪値で棄却しない、ただし MZ_HARD_LIMIT は1件でも棄却する」という判定を
-    `build_evidence` と `analysis/assay_evidence` で共有するための唯一の実装。
+    「MZ_HARD_LIMIT は1件でも棄却する。許容超えの割合が多くても、外れがすべて
+    MZ_OUTLIER_SMALL_DELTA 未満なら合格にする」という判定を `build_evidence` と
+    `analysis/assay_evidence` で共有するための唯一の実装。
     片方だけ緩めると、gap-fill マスクは棄却した接合から per-injection 証拠だけが
     採用される（逆も同じ）ことになる。
     """
@@ -115,12 +124,23 @@ def compare_feature_mz(spot_mz: list, feature_mz: list,
             worst, worst_index = delta, index
 
     over_fraction = (n_over / n_compared) if n_compared else 0.0
+    # worst は全特徴の最大差。worst < 0.02 なら外れ（許容超え）はすべて 0.02 未満。
+    fraction_ok = over_fraction <= MZ_OUTLIER_MAX_FRACTION
+    small_outliers_ok = n_over > 0 and worst < MZ_OUTLIER_SMALL_DELTA
+    ok = not over_hard_limit and (fraction_ok or small_outliers_ok)
+    if not ok:
+        accepted_by = None
+    elif fraction_ok:
+        accepted_by = "fraction"
+    else:
+        accepted_by = "small_outliers"
     detail = {"worst_mz_delta": worst, "at_feature_index": worst_index,
               "tolerance": mz_tolerance, "n_compared": n_compared,
               "n_over_tolerance": n_over,
               "over_tolerance_fraction": round(over_fraction, 6),
-              "hard_limit": MZ_HARD_LIMIT}
-    ok = not (over_hard_limit or over_fraction > MZ_OUTLIER_MAX_FRACTION)
+              "hard_limit": MZ_HARD_LIMIT,
+              "small_outlier_limit": MZ_OUTLIER_SMALL_DELTA,
+              "accepted_by": accepted_by}
     return ok, detail
 
 
@@ -145,7 +165,8 @@ def build_evidence(
                        "n_mztab_features": n_features},
         }
 
-    # 判定は「最悪値」ではなく「外れの割合」で行う。実データ 3944 特徴では
+    # 判定は主に「外れの割合」で行う（最悪値だけでは決めない。外れがすべて 0.02 Da 未満なら
+    # 割合が 1% を超えても通す救済があり、1 Da 超は割合によらず棄却する）。実データ 3944 特徴では
     # 許容超えが 1 件（14.8 mDa）だけあり、最悪値で見ると 3943 件の一致を
     # 捨てることになった。スポット代表値とアライメント平均値の差は、幅の広い
     # ピークや共溶出で稀に許容を超える。

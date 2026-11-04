@@ -210,6 +210,14 @@ notes` を返す（`stats_unmerged` は `merge_split=true`（既定）のとき�
 TSV（列名 1 回）で、空欄は「値が無い」。数値は丸めてある（m/z 4 桁・ppm 2 桁・RT 3 桁・log2FC 4 桁・
 p / q / 平均は有効 4 桁）。
 
+**`ppm_offset`（質量の窓の中心のずれ、目標照合だけ・任意）**。形は `docs/output_format/reanalysis.md` §8 と同じ
+（`{"default": 0.0, "bands": [{"max_mz": 200, "offset": -8.3}]}`。中心は「実測 − 理論」の ppm の符号つきの値で、帯は
+理論 m/z が `max_mz` 未満の最初の帯、無ければ `default`）。付加体ごとの理論 m/z で帯を引いた中心に対し、質量の窓は
+`|ppm − 中心| ≤ ppm`。**窓の幅（目標の `ppm`）と `candidates.ppm` 列は変わらない**（実測 − 理論のまま）。`rule.ppm_offset` に
+正規化した spec（渡したときだけ。渡さなければ欄ごと無い）、`rule.targets[].ppm_offset` に付加体ごとの中心（2 桁。渡したときだけ）が出て、
+`rule_hash` に入る（渡さなければ従来と同じ hash）。窓検索（`targets` なし）で渡すと `DATASET_BAD_REQUEST`
+（`field: ppm_offset`）。形の誤りも `DATASET_BAD_REQUEST`。
+
 **`evidence`（証拠の水準）** は 2 種類ある。
 
 | 欄 | 値 | 意味 |
@@ -277,7 +285,7 @@ BH をやり直して、`stats` の**すべての行**をそこから出す（�
 
 | 欄 | 意味 |
 |---|---|
-| `stats` | まとめた後の値。まとめる組がデータセットに 1 つでもあれば**すべての行**をまとめた行列で検定し直した値にする（1 つの表の q は 1 つの BH の母集団から。組に入らない特徴も、正規化と BH はまとめた行列で回り直す）。組に入る特徴は 1 行（`feature_id` は組の小さい方の ID。消える側の ID を頼んでも残す ID の行に解き、`notes` に書く）で、末尾の `merged_from` に 2 つの ID を `;` で（組に入らない行は空）。組が無ければ検定はやり直さず従来の値 |
+| `stats` | まとめた後の値。まとめる組がデータセットに 1 つでもあれば**すべての行**をまとめた行列で検定し直した値にする（1 つの表の q は 1 つの BH の母集団から。組に入らない特徴も、正規化と BH はまとめた行列で回り直す）。組に入る特徴は 1 行（`feature_id` は組の残す ID＝受け持ちの多い側（同数なら小さい ID）。消える側の ID を頼んでも残す ID の行に解き、`notes` に書く）で、末尾の `merged_from` に 2 つの ID を `;` で（組に入らない行は空）。組が無ければ検定はやり直さず従来の値 |
 | `stats_unmerged` | まとめる前の従来の `stats`（頼んだ ID のまま・同じ列。`merged_from` は無い） |
 | `merge_split` | `{enabled, source, alignment_qc_sha256, n_groups, groups, renamed, recomputed, bh_population}`。`source` は `find_split_pairs`（その場で既定の閾値）か `alignment_qc`（`alignment_qc_path` の JSON）、`n_groups` はデータセットでまとめる組の数、`groups` はそのうち統計を付けた特徴に関わる組、`recomputed` は検定し直した result_id（組が無ければ空で、検定はやり直さない）、`bh_population` は検定し直した結果ごとの母集団（`n_features_total` はまとめた後の特徴数） |
 

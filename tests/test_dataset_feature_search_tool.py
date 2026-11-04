@@ -563,3 +563,23 @@ def test_target_candidates_include_the_partner_outside_the_mass_window(tmp_path)
     assert off["rule"]["rule_hash"] == feature_search.rule_hash([normalized])
     assert rule["rule_hash"] != off["rule"]["rule_hash"]
     assert {r["feature_id"] for r in _tsv(off["candidates"])} == {"31"}
+
+
+def test_ppm_offset_with_window_search_is_bad_request():
+    _load_ds()
+    parsed = _search(feature_ids=["f1"], ppm_offset={"default": -3})
+    assert parsed["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert parsed["error"]["details"]["field"] == "ppm_offset"
+
+
+def test_ppm_offset_appears_in_rule():
+    _load_ds()
+    plain = _search(targets=[_target()])
+    shifted = _search(targets=[_target()], ppm_offset={"bands": [{"max_mz": 200, "offset": -8.0}]})
+    assert "ppm_offset" not in plain["rule"]
+    assert shifted["rule"]["ppm_offset"]["bands"][0]["offset"] == -8.0
+    assert shifted["rule"]["targets"][0]["ppm_offset"] == {"[M+H]+": -8.0}
+    assert "ppm_offset" not in plain["rule"]["targets"][0]
+    assert shifted["rule"]["rule_hash"] != plain["rule"]["rule_hash"]
+    bad = _search(targets=[_target()], ppm_offset={"default": "x"})
+    assert bad["error"]["code"] == "DATASET_BAD_REQUEST"

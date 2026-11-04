@@ -103,7 +103,7 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 **割れたスポットのまとめ（`features.merge_split`、既定 true）。** MS-DIAL のアライメントが 1 つの
 物質を 2 スポットに割ると、片方の「無い」試料に gap-fill の背景が入り、群の差でもない差が出る。
 `merge_split` が真なら、**recipe の前**（定量行列と検出状態を読んだ直後）に、割れた 2 スポットを
-試料ごとの大きい方の値（NaN は無視）の 1 列にまとめ、列の ID は 2 スポットのうち最も小さい特徴 ID に
+試料ごとの大きい方の値（NaN は無視）の 1 列にまとめ、列の ID は 2 スポットのうち受け持ちの多い側（同数なら小さい ID。§9）に
 する。まとめた列の検出状態は「どちらかで検出」。recipe はそのまとめた行列に当たる——割れの少数側は
 検出された試料が少なく、まとめる前に検出率の篩を通すと落ちてまとめが打ち消されるため、また
 正規化（TIC・PQN・KNN）が 1 つの物質を 1 列として見るため。`features.alignment_qc` の JSON は
@@ -140,13 +140,16 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 | `beta_log2` | OLS の群の係数（変換後の尺度。log2 なら log2 の差） |
 | `direction` | `test_higher` / `ref_higher`（OLS は `beta_log2`、ほかは FC の向き） |
 | `meets_thresholds` | 与えた閾値をすべて満たすか（閾値が無ければ null）。**再現の判定ではない** |
-| `merged_from` | 割れた 2 スポットをまとめた特徴だけ、まとめた特徴 ID（小さい順。`feature_id` は先頭 = 残した最小の ID）。ほかは null（TSV では `;` 区切り） |
+| `merged_from` | 割れた 2 スポットをまとめた特徴だけ、まとめた特徴 ID（先頭が `feature_id` = 残した ID。受け持ちの多い側、同数なら小さい ID）。ほかは null（TSV では `;` 区切り） |
+| `detected_reference` / `detected_test` | 検定に入れた群の試料のうち、検出された（gap-fill でない）数。gap-fill は数えない。まとめた特徴は「どちらかのスポットで検出」の試料を数える。外部の行列・検出状態の無いデータセット・`aggregate` の行・`not_in_matrix` の行は null。群の試料数は `n_ref` / `n_test` ではなく群の `members`（値が欠けた試料も入る） |
+| `detection_fisher_p` | 検出の有無（検出 / 未検出）の 2×2 に対する Fisher の正確検定の両側 p（上の 2 欄が null なら null） |
+| `detection_driven` | 差が値の大小より検出の有無から来ているか。高い側の群（`direction`）の検出が群の試料数の半分に満たない（`<`）か、低い側の群の検出が 0 なら true。`status` が `tested` で向きがある行だけ（ほかは null）。`direction` が null の行は `detection_driven` も null（一方の群の平均がちょうど 0 で、変換も補完も無い行は向きが決まらないので、検出の差が大きくても null）。**判定（`meets_thresholds` など）は変えない。使い方は手順書** |
 
 解析ごとに `matrix`（`n_features_in`（まとめた後、recipe の前）・`n_features_out`（recipe の後）・段ごとの報告
-`steps`）、`bh_population_n`、集約なら `aggregate`（和: `members`・`summed`・`dropped`、まとめがあれば
+`steps`）、`bh_population_n`、`detection_available`（検出の例数を出せたか）・`n_detection_driven`（要約のみ）、集約なら `aggregate`（和: `members`・`summed`・`dropped`、まとめがあれば
 `merged_from`）、OLS なら `covariate_excluded_samples`。
 結果の全体に `spec`（正規化後）・`rule_hash`・`merge_split`（`enabled`・`source`: `find_split_pairs` か
-`alignment_qc`・`groups`: まとめた群（残す ID が先頭、ID の小さい順）・`groups_hash`・`n_groups_given`・`skipped`）・
+`alignment_qc`・`groups`: まとめた群（残す ID が先頭）・`groups_hash`・`n_groups_given`・`skipped`）・
 `input_fingerprint`（`dataset_hash`・入力の TSV と `alignment_qc` の JSON ごとの sha256）・`comparison`。
 `rule_hash` は正規化した spec（パスを除く）に、データセットの入力で `merge_split` が真なら使った群の
 hash も入れる——同じ spec でも割れの組が変われば別の規則で、`merge_split` を変えても変わる
@@ -270,6 +273,10 @@ spec:
  "max_candidates": 50}
 ```
 
+- `ppm_offset`（任意）は質量の窓の中心のずれ。形と帯の規則は `dataset_feature_search` と同じ
+  （`{"default": 0.0, "bands": [{"max_mz": 200, "offset": -8.0}]}`。中心は実測 − 理論の ppm、帯は理論 m/z が
+  `max_mz` 未満の最初の帯）。既定の特徴と `scan` の全変種に同じ spec が効き、**窓の幅（`scan.ppm`）は変えない**。
+  渡したときだけ `rule.ppm_offset` と `rule_hash` に入る（省けば v8 と同じ hash）。形の誤りは `CLAIM_SPEC_INVALID`。
 - `target` は `dataset_feature_search` の目標と同じ形（`target_id` は `claim_id`）。脂質の種の主張
   （InChIKey が無い C1〜C4 型）は `"target": {"lipid_species": "PC 18:3_16:1", "formula": …}`。
   `rule.target` に `lipid_species`（種のレベル）と `lipid_species_input` が載り、`rule_hash` は
@@ -284,9 +291,9 @@ spec:
 
 | 欄 | 意味 |
 |---|---|
-| `default_selection` | `target` をそのまま当てた目標照合（`dataset_feature_search` と同じ規則）。`status` が `resolved` なら `selected_feature_id` が規則で選んだ既定の特徴、決まらなければ `needs_input`（`reason`）。割れたスポットの組（§9 の `merge_groups`）は 1 つの候補として数え、`selected_feature_id` は残す小さい ID、`merged_from` にその組（それ以外は null。走査も同じ）。`counts` は下の表（組は 1 つと数える。MS/MS の合否はどちらかのスポットが `qualified` なら 1） |
+| `default_selection` | `target` をそのまま当てた目標照合（`dataset_feature_search` と同じ規則）。`status` が `resolved` なら `selected_feature_id` が規則で選んだ既定の特徴、決まらなければ `needs_input`（`reason`）。割れたスポットの組（§9 の `merge_groups`）は 1 つの候補として数え、`selected_feature_id` は残す ID（受け持ちの多い側、同数なら小さい ID）、`merged_from` にその組（それ以外は null。走査も同じ）。`counts` は下の表（組は 1 つと数える。MS/MS の合否はどちらかのスポットが `qualified` なら 1） |
 | `scans` | 走査ごとの判定（`counts` は `default_selection` と同じ意味）と、候補の特徴 ID |
-| `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか。組の片方だけが質量の窓に入ったときに足した相手は `merge_partner`）・`split`（下）・`msms`（spot_id = SMF_ID の照合の上位 `top` と `qualify`。ライブラリが無ければ `{"status": "no_library"}`、MS/MS が無い・索引の崩れはその `status`）・`relations` |
+| `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか。組の片方だけが質量の窓に入ったときに足した相手は `merge_partner`）・`split`（下）・`msms`（spot_id = SMF_ID の照合の上位 `top` と `qualify`。ライブラリが無ければ `{"status": "no_library", "spectrum_available": ...}`、MS/MS が無い・索引の崩れはその `status`。`spectrum_available` は代表スペクトルの有無で、ライブラリの有無によらず spot を先に照会して決める: `true`=ある、`false`=照会して無かった（`not_found` で `reason` が `no_spectrum`）、`null`=分からない（`.arf2` / `.dcl` のファイル自体が無い `not_found` の `reason` `no_arf2` / `no_dcl`・`spot_not_found`・`dcl_precursor_mismatch`・`spot_id_not_integer`、ハンドルに `.arf2` / `.dcl` が無いとき））・`relations` |
 | `truncated` | `max_candidates` で打ち切った候補の数 |
 | `rule` / `rule_hash` | 正規化した spec とその hash。spec の `merge_split`（既定 true）は真のときだけ `rule` に載り、`rule_hash` には判定でまとめた組の hash も入る（false は v7 と同じ規則・同じ hash） |
 | `merge_split` / `merge_groups_hash` | 割れの組を判定で 1 つの候補にしたか（spec の `merge_split`）と、その組（§9 の `merge_groups`）の hash（false なら null） |
@@ -298,7 +305,9 @@ spec:
 |---|---|
 | `mass` / `rt` / `by_evidence` | `dataset_feature_search` の `counts` と同じ（質量の窓・RT の窓に入った数、水準ごとの規則の qualified 数） |
 | `qualified` | 規則（質量・RT・注釈）で qualified になった特徴のうち、**MS/MS の合否 `msms.qualify.verdict` が `qualified`** の数。`msms` を頼んでいない・ライブラリが無いときは `null`（0 ではない）。`max_candidates` で打ち切った候補は数えない |
-| `msms_available` | **旧 `qualified` の意味の数**: 規則（質量の窓・RT の窓・注釈）で qualified になった特徴の数（`dataset_feature_search` の `counts.qualified`、v7 までの束の `counts.qualified` と同じ数）。**MS/MS が取れているかどうかの数ではない**（名前は計画のまま） |
+| `rule_qualified` | 規則（質量の窓・RT の窓・注釈）で qualified になった特徴の数（`dataset_feature_search` の `counts.qualified`、v7 までの束の `counts.qualified` と同じ数）。**MS/MS が取れているかどうかの数ではない** |
+| `msms_available` | **非推奨の別名**（`rule_qualified` と同じ値。claim-evidence.v1 の互換のため残し、次の版で消す）。名前に反して MS/MS の有無の数ではない |
+| `msms_spectrum_available` | 質量の窓に入った候補（`mass` と同じ母集団。`merge_partner` の行を除き、割れの組は 1 つ）のうち、組のどれかのスポットに**代表 MS/MS がある**（候補の `msms.spectrum_available` が `true`）数。RT の窓では絞らない（RT の窓の外のスポットの代表 MS/MS も数える）。**0 は照会して無かった**（全部の単位が `false`）、**`null` は頼まなかった（`msms` なし）か分からなかった**（`true` の単位が無く、`null` の単位が 1 つでもある）、**数は下限**（`null` の単位は数に入らない）。単位の中は、どれか `true` なら `true`、`true` が無く `null` があれば `null`、全部 `false` なら `false`。`max_candidates` で打ち切って照会していない候補は数えない |
 
 `split`（候補が割れたアライメントスポットの組に入るときだけ。入らなければ `null`。§9 の
 `find_split_pairs` を既定の閾値で回し、`split_partners` を写す）:
@@ -364,7 +373,7 @@ log2fc_test_over_ref p q direction merged_from`（JSON には `sme_feature_id` �
 突き合わせはしない（再解析の側）。
 
 **割れたスポットは 1 候補に数える**（spec 2026-10-28 §4.3 (c)）。§9 の `merge_groups` の 2 スポットは
-1 つの物質で、`feature_id` は残す小さい ID、`merged_from` は 2 つの ID。統計はまとめた行列で検定し直した
+1 つの物質で、`feature_id` は残す ID（受け持ちの多い側、同数なら小さい ID）、`merged_from` は 2 つの ID（残す ID が先頭）。統計はまとめた行列で検定し直した
 値（`statistics.result_id` では `dataset_feature_search` の `merge_split` と同じ実装で、組が 1 つでもあれば
 すべての特徴の統計をまとめた行列の検定・BH から出す。analysis_spec では spec の `features.merge_split`）。**同定と質量誤差**（`name` `inchikey`
 `adduct` `mz` `ppm` `rt`）は SME（rank 1）を持つ方のスポットから取り、その ID を `sme_feature_id` に書く
@@ -374,6 +383,21 @@ v7 と同じ（`merged_from`・`sme_feature_id`・`merge_split` を出さず、�
 `statistics.result_id` の spec は `{"result_id", "merge_split": true（既定）, "alignment_qc": <JSON のパス、任意>}`
 （`alignment_qc` は `dataset_alignment_qc` の `output_path`。省略時はその場で探す。`rule_hash` にパスは入らない）。
 戻り値と JSON の `merge_split` は `{enabled, source, n_groups}`（`n_groups` はまとめた組の数）。
+
+**外部の印（`labels`、任意）**。spec に `"labels": {"path": "<TSV>", "name": "xenobiotic", "feature_column": "feature_id",
+"label_column": "level", "order": ["A","B","C","D"]}` を足すと、行に `labels.<name>` の列（TSV の末尾。印が無い行は空）を足す。
+`path` と `name`（英数字と `_`）は必須、ほかの既定は上のとおり。`order` は強い順で、同じ特徴に複数の行があれば最も強い水準を取る。
+空の水準の行は無視、`order` に無い水準は `NOVEL_SPEC_INVALID`（`details.unknown_levels`。黙って最弱にしない）。
+**割れの組**（`merged_from`）は組のどれかの最も強い水準。戻り値と JSON の
+`labels` は `{name, sha256, order, n_rows, n_unmatched, counts}`（`n_unmatched` はデータセットの特徴 ID に無い、印のある ID の数。無視する）で、
+`counts` は `{"all": {水準: 件数, "none": 件数}, "top20": {...}}`（`top20` は q の昇順の先頭 20 行）。
+**印は列と件数を足すだけ**で、並び・行数・除外は変えず、`rule_hash` にも入れない（`path` を含む `labels` 全体が hash の材料から外れる）。
+
+**質量の窓の中心のずれ（`ppm_offset`、任意）**。spec に `"ppm_offset": {"default": 0.0, "bands": [{"max_mz": 200, "offset": -8.3}]}`
+を足すと、判定が `|ppm − 中心| ≤ 許容幅` になる。中心は「実測 − 理論」の ppm の符号つきの値で、帯は `ppm` の帯と同じ選び方
+（理論 m/z が `max_mz` **未満**の最初の帯、無ければ `default`。ちょうど `max_mz` の特徴は次の帯）。**窓の幅（`ppm`）は変えず、
+行の `ppm` 列も実測 − 理論のまま**。渡したときだけ正規化した spec と `rule_hash` に入る（省けば v8 と同じ）。形の誤りは
+`NOVEL_SPEC_INVALID`（`field: ppm_offset`）。
 
 ## 9. 割れたアライメントスポット（alignment-qc.v1）
 
@@ -465,9 +489,14 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
   型が混ざれば `group_aligned` > `interleaved` > `injection_block` の順で強い方。`mergeable` は成分
   全体が 1 つのまとめる組のときだけ真。
 - `merge_groups[]` はまとめる組ごとの 2 スポット（`merge_group_id`・`group_id`＝含まれる `groups[]` の
-  成分・`features`・`pair_ids`・`type`・`types`・`mergeable: true`）。`features` は ID の小さい順で、
-  `merge_matrix_columns` は**最も小さい特徴 ID** を残す（渡した順によらない）。統計の側（`dataset_analysis_run` など）がまとめるのは
-  `merge_groups` だけ。`summary.n_merged_pairs` はその数。
+  成分・`features`・`pair_ids`・`type`・`types`・`mergeable: true`・`keep`・`keep_basis`・`n_owned`）。
+  残すのは**受け持ちの多い側**、同数なら小さい ID（すべて整数なら数の順）で、`keep` がその ID、
+  `keep_basis` が決め手（`n_owned` / `smaller_id_tie`）、`n_owned` が `{特徴 ID: 受け持ちの試料の数}`。
+  **群の並びは残す ID が先頭**（`features`・`merged_from` の値。`groups[]` は ID の小さい順のまま）で、
+  `merge_matrix_columns` は渡した並びで行列にある最初の ID を残す。`keep` の無い古い JSON の群は
+  従来どおり小さい ID を残す。統計の側（`dataset_analysis_run` など）がまとめるのは
+  `merge_groups` だけ。`summary.n_merged_pairs` はその数。`rule_hash` に入る群の hash
+  （`merge_groups_hash`）は、残す ID が群の最小なら前の版と同じで、ほかの ID を残す群では変わる。
 - `split_partners(qc)`（統計の側が使う）: 特徴 → `{group_id, merge_group_id, partners, component,
   type, mergeable}`。まとめる特徴は `partners` がその相手 1 つで `mergeable` が真、`type` はその組の型。
   まとめない特徴は `partners` が空・`mergeable` が偽・`merge_group_id` が null。`component` は全体の
@@ -475,3 +504,65 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
 - 戻り値は `status`・`schema`・`injection_order_source`・`signal`（`detected` / `values`）・`summary`・
   `output_path`（渡したとき）と、`group_aligned` の組（50 件以下のとき TSV: `pair_id feature_a
   feature_b mz rt_a rt_b delta_rt adduct name_a name_b`）。
+
+## 10. 根拠バンドル v3（evidence-v3）
+
+`dataset_export_evidence_bundle` が書く。v2 に試料表・試料ごとの値と検出・付加体・極性を足したもの。
+`arf_export_evidence_bundle`（ARF 経路）は試料ごとの値を取り出さないので v2 のまま。契約の正は
+massbank-context の `docs/contracts/evidence-bundle-v3.md`。TSV は全ファイルとも同じ書き方（タブ区切り・
+UTF-8・改行は CRLF）。
+
+**特徴 ID はスポットの ID のまま。** 割れの組（§9）へまとめた値は書かない。まとめた組への読み替えは
+呼び出し側が `merged_from` で行う。
+
+`manifest.json` の v2 との差分:
+
+| 欄 | 意味 |
+|---|---|
+| `contract_version` / `exporter.version` | `3` / `evidence-v3` |
+| `comparison.polarity` | データセットの極性（`positive` / `negative`）。ハンドルなら `dataset_handle_open` の `polarity`、対話のセッションなら同じ規則で決める。決まらなければ `null` |
+| `comparison.preprocess` | `value` に当たった前処理のレシピ。pipeline から引き継いだ結果は、その run のレシピ |
+| `intensities_stage` | `pre_imputation`（補完の前）/ `post_imputation`（補完の後） |
+| `population.detection_unavailable_reason` | `detected` が全行空のときの理由。検出状態を使えれば `null` |
+| `files[].role` | `samples` と `intensities` が増える |
+
+`samples.tsv`（データセットの全試料）:
+
+| 列 | 意味 |
+|---|---|
+| `sample_id` | 行列の試料名 |
+| `group` | 比較の群 A の試料は `a`、群 B は `b`、比較に入らない試料（QC・ブランク・群なし・`include=false` で除いた試料）は空。`samples.tsv` には全試料が載るが、`intensities.tsv` には比較の試料だけ |
+| `role` | 実験情報シートの `role`（除外された試料も `sample` のことがある）。シートが無ければ名前の `_` 区切りのトークンからの推定で、`QC1` のようにトークンにならない名前は `sample` になる（`group` が空でも QC とは限らない） |
+| `injection_order` | 整数。分からなければ空 |
+
+`intensities.tsv`（縦持ち。全特徴 × 比較に入る試料。QC・ブランクの行は無い）:
+
+| 列 | 意味 |
+|---|---|
+| `feature_id` | `features.tsv` の行と同じ |
+| `sample_id` | `samples.tsv` の試料名 |
+| `value` | log 変換の前の値（有効数字 10 桁）。欠測は空。結果の試料が値の行列に無いときも空。実データでは `0` が多い（実測で全セルの 17〜28%、すべて `detected=false`）。補完は NaN だけを触るので `0` は実際の値で、欠測の空とは別。この場合 `pre_imputation` と `post_imputation` の値は同じになりうる。検出の有無は `value` でなく `detected` で読む |
+| `detected` | `true` / `false` / 空。`false` は gap-fill か補完で、実測のピークではない。**空は「不明」で、gap-fill の意味ではない** |
+
+`intensities_stage` の決め方:
+
+- `pre_imputation`: 結果を計算した前処理のレシピが分かるとき（session の結果・pipeline から引き継いだ結果の
+  どちらも）。レシピを `impute: none` で当て直す。補完は前処理の最後の段なので、正規化などは比較に入った値と同じ。
+- `post_imputation`: レシピが分からず、今の前処理の行列がその結果の親のとき。その行列の値を書く。
+- どちらでもなければ書かずに `EVIDENCE_INTENSITIES_UNAVAILABLE`（別の前処理の値で埋めない）。結果が群の試料を
+  持たないとき・前処理を当て直せないときも同じ。当て直した特徴の集合が結果の行と違えば
+  `EVIDENCE_INTENSITIES_MISMATCH`。
+
+`detection_unavailable_reason` の値:
+
+| 値 | 意味 |
+|---|---|
+| `dataset_status` の `detection` と同じ理由（`sample_axis_mismatch`・`mz_mismatch` など） | 検出状態を取り込めなかった。取り込みのときの理由 |
+| `not_imported` | 検出状態が無く、理由も記録されていない |
+| `mask_shape_mismatch` | 検出状態の形が特徴 × 試料と合わない |
+| `sample_axis_mismatch` | 結果の試料が `ds.sample_names` に無い（検出状態の試料軸とずれている） |
+
+`features.tsv` に任意の列 `adduct` が増える。mzTab-M の SML の `adduct_ions`（SML が無い特徴は rank 1 の
+SME の付加体）。無ければ空。
+
+戻り値には v2 の欄に `n_samples`・`n_intensity_rows`・`intensities_stage` が足される。

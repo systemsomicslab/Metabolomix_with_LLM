@@ -133,11 +133,22 @@ def test_analysis_run_reports_merge_split_state_and_merged_from_column(data):
     handle = _open(data)
     out = json.loads(R.dataset_analysis_run(_spec(data), dataset_handle=handle))
     assert out["merge_split"]["enabled"] is True and out["merge_split"]["source"] == "find_split_pairs"
-    assert out["analyses"][0]["rows"].splitlines()[0].endswith("\tmerged_from")
+    assert "merged_from" in out["analyses"][0]["rows"].splitlines()[0].split("\t")
     off = json.loads(R.dataset_analysis_run(
         _spec(data, features={"feature_ids": ["20", "26"], "merge_split": False}),
         dataset_handle=handle))
     assert off["merge_split"]["enabled"] is False and off["rule_hash"] != out["rule_hash"]
+
+
+def test_analysis_run_rows_have_detection_columns(data):
+    handle = _open(data)
+    out = json.loads(R.dataset_analysis_run(_spec(data), dataset_handle=handle))
+    analysis = out["analyses"][0]
+    header = analysis["rows"].splitlines()[0].split("	")
+    assert header[-4:] == ["detected_reference", "detected_test", "detection_fisher_p",
+                           "detection_driven"]
+    assert analysis["detection_available"] is False       # 合成の mzTab は .arf が無い
+    assert analysis["n_detection_driven"] == 0
 
 
 def test_analysis_run_on_session_dataset(data):
@@ -563,6 +574,7 @@ def test_counts_qualified_is_msms_verdict(data, library):
     strict, verdict = counts(3)                        # 断片は前駆体を除いて 2 本
     assert verdict == "not_qualified"
     assert strict["qualified"] == 0 and strict["msms_available"] == 1
+    assert strict["rule_qualified"] == 1 and strict["msms_spectrum_available"] == 1
     loose, verdict = counts(2)
     assert verdict == "qualified"
     assert loose["qualified"] == 1 and loose["msms_available"] == 1
@@ -571,6 +583,55 @@ def test_counts_qualified_is_msms_verdict(data, library):
                                                dataset_handle=handle))
     assert bare["default_selection"]["counts"]["qualified"] is None
     assert bare["default_selection"]["counts"]["msms_available"] == 1
+    assert bare["default_selection"]["counts"]["msms_spectrum_available"] is None
+
+
+def test_spectrum_available_counts_mass_window_even_when_none_rule_qualified(data, library):
+    # 目標の RT を特徴 20（RT 2.0）から外す: 規則で qualified は 0、質量の窓の 20 の代表 MS/MS は数える
+    target = {"inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": 9.0, "adduct_tiers": [["[M+H]+"]]}
+    claim = {"claim_id": "C1", "target": target, "msms": {"top_n": 3, "rules": {"min_fragments_excl_precursor": 2}}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=_open(data, library="auto")))
+    counts = out["default_selection"]["counts"]
+    assert counts["rule_qualified"] == 0 and counts["msms_spectrum_available"] == 1
+
+
+def test_spectrum_available_without_library(data, library):
+    # ライブラリを開かない（library="none"）が .arf2 / .dcl はある（library フィクスチャが置く）
+    target = {"inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": 2.0, "adduct_tiers": [["[M+H]+"]]}
+    claim = {"claim_id": "C1", "target": target, "msms": {"top_n": 3, "rules": {"min_fragments_excl_precursor": 2}}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=_open(data)))
+    c = {x["feature_id"]: x for x in out["candidates"]}["20"]
+    assert c["msms"]["status"] == "no_library" and c["msms"]["spectrum_available"] is True
+
+
+def test_spectrum_available_count_is_a_lower_bound_when_some_are_unknown():
+    from metabolomix.analysis import claim_evidence
+
+    def row(fid):
+        return {"feature_id": fid, "qualified": False, "merged_from": None}
+
+    match = {"status": "resolved", "reason": None, "selected_feature_id": "1",
+             "selected_adduct": "[M+H]+", "selected_evidence": "sme_match",
+             "adduct_tiers_used": 1, "adduct_tier_used": 1,
+             "counts": {"mass": 3, "rt": 3, "qualified": 0, "by_evidence": {}},
+             "candidates": [row("1"), row("2"), row("3")]}
+
+    def count(spectra):
+        return claim_evidence._selection(match, None, spectra)["counts"]["msms_spectrum_available"]
+
+    assert count({"1": None, "2": None, "3": None}) is None
+    assert count({"1": True, "2": None, "3": False}) == 1       # 下限
+    assert count({"1": False, "2": False, "3": False}) == 0
+
+
+def test_spectrum_available_is_unknown_when_the_files_are_missing():
+    from metabolomix.analysis import claim_evidence
+
+    missing = {"status": "not_found", "reason": "no_arf2"}
+    assert claim_evidence._spectrum_available(missing) is None
+    assert claim_evidence._spectrum_available({"status": "not_found", "reason": "no_dcl"}) is None
+    assert claim_evidence._spectrum_available({"status": "not_found", "reason": "no_spectrum"}) is False
+    assert claim_evidence._spectrum_available({"status": "not_found"}) is False
 
 
 def test_counts_qualified_counts_a_merged_pair_by_either_spot():
@@ -592,6 +653,17 @@ def test_counts_qualified_counts_a_merged_pair_by_either_spot():
     assert claim_evidence._selection(match, {"30": "not_qualified",
                                              "31": "not_qualified"})["counts"]["qualified"] == 0
     assert claim_evidence._selection(match, None)["counts"]["qualified"] is None
+    # 組のどちらかに代表 MS/MS があれば 1（相手が merge_partner でも）。頼んでいなければ None
+    assert claim_evidence._selection(match, None, {"30": True, "31": False}
+                                     )["counts"]["msms_spectrum_available"] == 1
+    assert claim_evidence._selection(match, None, {"30": False, "31": False}
+                                     )["counts"]["msms_spectrum_available"] == 0
+    # True が無く、分からない（None）が 1 つでもあれば 0 ではなく None（#12 の再発を防ぐ）
+    assert claim_evidence._selection(match, None, {"30": False, "31": None}
+                                     )["counts"]["msms_spectrum_available"] is None
+    assert claim_evidence._selection(match, None, {"30": None, "31": None}
+                                     )["counts"]["msms_spectrum_available"] is None
+    assert claim_evidence._selection(match, None)["counts"]["msms_spectrum_available"] is None
     # 組でない候補は従来どおり自分のスポットだけで数える
     single = {**match, "merged_from": None,
               "candidates": [{"feature_id": "31", "qualified": True, "merged_from": None}]}
@@ -743,3 +815,58 @@ def test_claim_evidence_adds_the_partner_outside_the_mass_window(tmp_path):
     v7 = {k: v for k, v in normalized.items() if k != "merge_split"}
     assert off["rule_hash"] == claim_evidence.rule_hash(v7)
     assert out["rule_hash"] != off["rule_hash"]
+
+
+def test_novel_candidates_labels_column_and_counts(data, tmp_path):
+    handle = _open(data)
+    T.dataset_preprocess(dataset_handle=handle)
+    diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
+                                             group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
+    spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
+    plain = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
+    labels = tmp_path / "labels.tsv"
+    first = _tsv_rows(plain["rows"])[0]["feature_id"]
+    labels.write_text(f"feature_id\tlevel\n{first}\tA\n999999\tB\n", encoding="utf-8")
+    out = json.loads(R.dataset_novel_candidates(
+        {**spec, "labels": {"path": str(labels), "name": "xenobiotic"}}, dataset_handle=handle))
+    assert out["n_rows"] == plain["n_rows"] and out["rule_hash"] == plain["rule_hash"]
+    assert out["rows"].splitlines()[0].split("\t")[-1] == "labels.xenobiotic"
+    assert ([r["feature_id"] for r in _tsv_rows(out["rows"])]
+            == [r["feature_id"] for r in _tsv_rows(plain["rows"])])
+    assert out["labels"]["counts"]["all"]["A"] == 1
+    assert out["labels"]["n_unmatched"] == 1
+    assert out["labels"]["name"] == "xenobiotic" and out["labels"]["n_rows"] == 2
+    assert out["labels"]["order"] == ["A", "B", "C", "D"] and len(out["labels"]["sha256"]) == 64
+
+
+# ---------- ppm_offset（質量の窓の中心のずれ） ----------
+
+#: ppm_offset を足す前（v8）の実装で CLAIM を処理した rule_hash
+_CLAIM_RULE_HASH_V8 = "41f68e9459154e44cd3fe48101cdb088bc4969e917940bcfa3fb25b7410b524c"
+
+
+def test_claim_evidence_ppm_offset_matches_feature_search(data):
+    handle = _open(data)
+    offset = {"bands": [{"max_mz": 200, "offset": -8.0}]}
+    claim = {**CLAIM, "ppm_offset": offset}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    search = json.loads(T.dataset_feature_search(
+        targets=[{"target_id": "C1", **CLAIM["target"]}], ppm_offset=offset, dataset_handle=handle))
+    assert out["default_selection"]["status"] == search["targets"][0]["status"]
+    assert out["default_selection"]["selected_feature_id"] == search["targets"][0]["selected_feature_id"]
+    assert out["rule"]["ppm_offset"]["bands"][0]["offset"] == -8.0
+
+
+def test_claim_evidence_without_offset_keeps_rule_hash(data):
+    handle = _open(data)
+    before = _CLAIM_RULE_HASH_V8
+    assert json.loads(R.dataset_claim_evidence(CLAIM, dataset_handle=handle))["rule_hash"] == before
+    shifted = json.loads(R.dataset_claim_evidence({**CLAIM, "ppm_offset": {"default": -3}},
+                                                  dataset_handle=handle))
+    assert shifted["rule_hash"] != before
+
+
+def test_claim_evidence_bad_offset_is_spec_invalid(data):
+    out = json.loads(R.dataset_claim_evidence({**CLAIM, "ppm_offset": {"default": "x"}},
+                                              dataset_handle=_open(data)))
+    assert out["error"]["code"] == "CLAIM_SPEC_INVALID"

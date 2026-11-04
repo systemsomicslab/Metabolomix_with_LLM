@@ -60,11 +60,11 @@ R の仮想環境は起動前に確かめる（`_check_environment()`）: `r/ren
 前提: `pathway_project` の run（`run_id` 省略時は `session.pathway.last_run_id`）。
 無ければ `missing_state` → `pathway_project`。`run_id` は `pathway_project` が採番する形
 （`pw_YYYYmmdd_HHMMSS_xxxxxx`）以外を `PATHWAY_BAD_REQUEST` で拒む（`reports/pathway` の外を
-指させない）。状態変更: なし（PDF を run ディレクトリに書く）。
+指させない）。`inline_image` が bool でなければ `PATHWAY_BAD_REQUEST`。状態変更: なし（PDF と PNG を run ディレクトリに書く）。
 
 1. metabolomix/pathway/tools.py  pathway_plot()
 2. ├─ metabolomix/pathway/tools.py  _load_manifest()
 3. ├─ metabolomix/pathway/bridge.py  run_bridge()
 4. │  ├─ [mslipidmapper_api_url あり] metabolomix/pathway/remote.py  run_job()（output.format=pdf。ジョブ失敗は `PATHWAY_RENDER_FAILED`）
 5. │  └─ [mslipidmapper_api_url なし・サーバ失敗] （R 側。mode=render で `mslm_bridge.R` が `MSLipidMapper::render_pathway_from_config` を呼ぶ）
-6. └─ metabolomix/plots/pdf_raster.py  pdf_first_page_png()
+6. └─ metabolomix/plots/pdf_raster.py  pdf_first_page_png()（PNG を `<pathway>.png` に書く。戻り値は既定で場所と要約の JSON、`inline_image=true` は [JSON, 画像…]）

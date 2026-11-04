@@ -29,6 +29,7 @@ import numpy as np
 
 from metabolomix.analysis.feature_bindings import _normalize_adduct
 from metabolomix.analysis.result_state import is_current
+from metabolomix.analysis.mass_accuracy import offset_for
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 from metabolomix.msdial.adducts import mz_from_neutral, parse_adduct
 from metabolomix.msdial.peak_verification import monoisotopic_mass, parse_formula
@@ -300,7 +301,8 @@ def _normalize_one(raw, dataset_polarity: str | None):
     }
 
 
-def normalize_targets(targets: list[dict], *, dataset_polarity: str | None) -> list[dict]:
+def normalize_targets(targets: list[dict], *, dataset_polarity: str | None,
+                      ppm_offset: dict | None = None) -> list[dict]:
     """目標のリストを検証して正規化する（既定値を埋め、理論 m/z を全付加体について計算する）。
 
     検証失敗は ``FEATURE_TARGET_INVALID``（details に ``target_id`` と ``field``）。
@@ -308,6 +310,10 @@ def normalize_targets(targets: list[dict], *, dataset_polarity: str | None) -> l
     目標の極性は ``polarity``、無ければ明示の付加体（``adduct`` か ``adduct_tiers``）の
     符号（混ざっていれば ``FEATURE_TARGET_INVALID``）、それも無ければ ``dataset_polarity``。
     目標の極性が ``dataset_polarity`` と違う目標は ``applicable=False``（→ ``not_applicable``）。
+
+    ``ppm_offset``（正規化済み。`mass_accuracy.normalize_ppm_offset`）を渡したときだけ、各目標に
+    ``ppm_offset``（付加体 → その理論 m/z の帯の中心のずれ）を足す（rule_hash に入る）。渡さなければ
+    目標の辞書は今と同じ。
     """
     if dataset_polarity not in (None, *_POLARITIES):
         raise ValueError(f"dataset_polarity は positive / negative / None: {dataset_polarity!r}")
@@ -329,6 +335,9 @@ def normalize_targets(targets: list[dict], *, dataset_polarity: str | None) -> l
         if item is None:
             undecided.append(target_id)
         else:
+            if ppm_offset is not None:
+                item["ppm_offset"] = {adduct: offset_for(mz, ppm_offset)
+                                      for adduct, mz in item["theoretical_mz"].items()}
             normalized.append(item)
     if undecided:
         raise DomainError(
@@ -538,8 +547,8 @@ def match_target(ds, target: dict, *, max_results: int,
 
     ``merged_from``（`merge_map` の ``{残す ID: 群}``）を渡すと、割れたスポットの組を**1 つの候補**
     として数える（spec 2026-10-28 §4.3 (c)・コントローラの決定 2026-10-29）: 行は従来どおり
-    スポットごとに作り（``merged_from`` 欄に群）、判定と ``counts`` は残す ID（群の中で最も小さい
-    ID）に読み替えて一意化する。組の 2 スポットが同じ箱にあっても 1 つと数え、``resolved`` なら
+    スポットごとに作り（``merged_from`` 欄に群）、判定と ``counts`` は残す ID（群の先頭。受け持ちの
+    多い側、同数なら小さい ID）に読み替えて一意化する。組の 2 スポットが同じ箱にあっても 1 つと数え、``resolved`` なら
     ``selected_feature_id`` は残す ID、``merged_from`` にその群（まとめないときは None）。
     組の片方だけが質量の窓に入ったときは、相手のスポットも同じ付加体で行に足す（``reasons`` に
     ``merge_partner``。qualified にせず数にも入れない。選んだ残す ID の行が候補に必ずあるように）。
@@ -570,6 +579,7 @@ def match_target(ds, target: dict, *, max_results: int,
     identifier = ({"lipid_species": target["lipid_species"]} if target.get("lipid_species")
                   else {"inchikey_block": target["inchikey_block"]})
     ppm_tol = target["ppm"]
+    centers = target.get("ppm_offset") or {}
     rt_min = target["rt_min"]
     rt_tol = target["rt_tol_min"]
     feature_ids = list(ds.feature_ids)
@@ -635,7 +645,7 @@ def match_target(ds, target: dict, *, max_results: int,
         for adduct in tier:
             theo = target["theoretical_mz"][adduct]
             with np.errstate(invalid="ignore"):
-                hits = np.nonzero(np.abs((mz_array - theo) / theo * 1e6)
+                hits = np.nonzero(np.abs((mz_array - theo) / theo * 1e6 - centers.get(adduct, 0.0))
                                   <= ppm_tol + _BOUNDARY_EPS)[0]
             for index in hits:
                 rows.append(make_row(index, tier_no, adduct, theo))
@@ -963,7 +973,7 @@ def merge_plan(ds, *, alignment_qc_path: str | None = None, dataset_hash: str | 
     ここでは足さない・広げない（`analysis_spec` の `features.merge_split` と同じ規則・同じ実装）。
     ``alignment_qc_path`` は `dataset_alignment_qc` が書いた JSON（今のデータセットの指紋で
     作ったものだけを受ける）で、無ければその場で `find_split_pairs(ds)` を既定の閾値で回す。
-    ``groups`` は特徴 ID の小さい順（先頭が残す ID）、``skipped`` はデータセットに 2 つ揃わない群。
+    ``groups`` は残す ID が先頭の並び、``skipped`` はデータセットに 2 つ揃わない群。
     ``dataset_hash`` は計算済みの `dataset_fingerprint(ds)`（任意）、``field`` はエラーに書く欄の名前。
     """
     from metabolomix.analysis import alignment_qc
@@ -986,7 +996,7 @@ def merged_dataset(ds, groups) -> tuple[object, dict[str, list[str]]]:
     元の ``ds`` は変えない（浅い写しの定量行列・特徴 ID・検出状態だけを置き換える）。まとめは
     前処理の**前**の生の値に当て、検出状態は 2 スポットの「どちらかで検出」（`analysis_spec` と
     同じ順序。前処理の篩と正規化が 1 つの物質を 1 列として見る）。実装は
-    `alignment_qc.merge_matrix_columns`（残す列は群の中で最も小さい特徴 ID）。
+    `alignment_qc.merge_matrix_columns`（残す列は群の先頭の特徴 ID）。
     """
     from metabolomix.analysis import alignment_qc
 
@@ -1071,11 +1081,8 @@ def retest_merged(ds, view, result: dict) -> dict:
 
 
 def merge_map(groups) -> dict[str, list[str]]:
-    """割れの群 → ``{残す ID: 群}``（残す ID は群の中で最も小さい ID。`merge_matrix_columns` と同じ）。"""
-    from metabolomix.analysis import alignment_qc
-
-    ordered = [alignment_qc.id_order(group) for group in groups]
-    return {group[0]: group for group in ordered if len(group) >= 2}
+    """割れの群 → ``{残す ID: 群}``（残す ID は群の先頭。`merge_matrix_columns` と同じ）。"""
+    return {group[0]: list(group) for group in groups if len(group) >= 2}
 
 
 def merged_results(ds, results: list[dict], groups, feature_ids) -> dict:
@@ -1103,8 +1110,8 @@ def merged_feature_stats(ds, feature_ids: list[str], results: list[dict], *, gro
     戻り値 ``{"stats", "stats_unmerged", "touched", "renamed", "results", "view"}``。
     ``stats_unmerged`` は従来の ``feature_stats(ds, feature_ids, results)`` そのもの。まとめる群が
     1 つでもあれば、``stats`` は**すべての行**をまとめた行列で検定し直した値（`merged_results`。
-    q はまとめた後の全特徴の BH）から出し、まとめて消える特徴 ID は残す ID（群の中で最も小さい
-    ID）に置き換える（重複は 1 つ）。群が無ければ ``stats`` は従来の値と同じ。各行の
+    q はまとめた後の全特徴の BH）から出し、まとめて消える特徴 ID は残す ID（群の先頭）に
+    置き換える（重複は 1 つ）。群が無ければ ``stats`` は従来の値と同じ。各行の
     ``merged_from`` は群（残す ID が先頭）か None。``renamed`` は置き換えた ID（消える ID → 残す ID）。
     """
     unmerged = feature_stats(ds, feature_ids, results, with_labels=with_labels)

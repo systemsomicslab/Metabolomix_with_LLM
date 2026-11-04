@@ -7,6 +7,7 @@ handoff / jsonld / compare / bridge は純ロジックのまま保つ。
 from __future__ import annotations
 
 import json
+import math
 import re
 import uuid
 from datetime import datetime, timezone
@@ -40,6 +41,17 @@ _DROP_LABELS = {"unannotated": "名前か Ontology が空", "unparsable_name": "
                 "unmapped_ontology": "Ontology が脂質クラスの表に無い",
                 "class_name_conflict": "名前の頭部の語が Ontology のクラスと食い違う",
                 "no_formula": "組成式が無い", "formula_mismatch": "組成式がクラスの形に合わない"}
+
+
+def _finite(value):
+    """非有限の float（NaN・±inf）を None にして返す（manifest を正しい JSON に保つ）。"""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _finite(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite(v) for v in value]
+    return value
 
 
 def _handoff_note(report: dict) -> str | None:
@@ -287,7 +299,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
             f"指定した鎖がデータ（パスウェイ上のノード）にありません: {', '.join(missing_chains)}",
             {"missing_chains": missing_chains, "run_dir": str(run_dir)})
 
-    per_pathway, all_rows = {}, []
+    per_pathway, all_rows, pair_rows = {}, [], {}
     for p, graph in graphs.items():
         rows = compare.compare_scopes(graph, label_a, label_b, q_threshold)
         pairs, undeterminable = compare.opposite_pairs(graph, rows)
@@ -302,6 +314,8 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
             "opposite_pairs_tsv": compare.rows_to_tsv(pairs, _PAIR_COLUMNS),
             "undeterminable_pairs": undeterminable,
         }
+        pair_rows[p] = {"rows": [{c: pr.get(c) for c in _PAIR_COLUMNS} for pr in pairs],
+                        "undeterminable": undeterminable}
         all_rows += [dict(r, pathway=p) for r in rows]
     (run_dir / "nodes.tsv").write_text(
         compare.rows_to_tsv(all_rows, ["pathway", *_NODE_COLUMNS]), encoding="utf-8")
@@ -320,11 +334,14 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
                 "upstream_commit": result.get("package_sha"),
                 "package_version": result.get("package_version"),
                 "report": table.report,
+                # MCP の時間切れで戻り値が失われても、注意と隣接ペアは run に残す
+                "notes": {"adjacency": _ADJACENCY_NOTE, "handoff": _handoff_note(table.report)},
+                "opposite_pairs": pair_rows,
                 "mapped_nodes": {p: v["mapped_nodes"] for p, v in per_pathway.items()},
                 "files": {"mztab": "input.mztab", "nodes": "nodes.tsv",
                           **{p: Path(outputs[p]).name for p in pathways}}}
-    (run_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1),
-                                           encoding="utf-8")
+    (run_dir / "manifest.json").write_text(
+        json.dumps(_finite(manifest), ensure_ascii=False, indent=1, allow_nan=False), encoding="utf-8")
     s.pathway.last_run_id = run_id
     s.pathway.last_run_dir = str(run_dir)
 
@@ -339,7 +356,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
                   **({"handoff": handoff_note} if (handoff_note := _handoff_note(table.report))
                      else {}),
                   "values": "MSLipidMapper は正規化しない。値はこちらの前処理後行列をサブクラスごとに集計したもの。",
-                  "figure": "図は pathway_plot(run_id) で表示できる。"},
+                  "figure": "図のファイルは pathway_plot(run_id) で作る（チャットに出すときは inline_image=true）。"},
     })
 
 
@@ -349,11 +366,15 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True),
     structured_output=False)
 def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
-                 plot_type: str = "dot"):
-    """pathway_project の run をパスウェイ図（PDF）に描き、チャットに PNG で表示する。
+                 plot_type: str = "dot", inline_image: bool = False):
+    """pathway_project の run をパスウェイ図（PDF）に描く。既定は図のファイルの場所と要約だけを返す。
+
+    PDF と PNG（<pathway>.png）は run のディレクトリに書く。チャットに図を出したいときは
+    inline_image=true（PNG を画像で添えて返す。1 枚約 2,400 画像トークン）。
 
     - run_id: 省略時は直近の run。
-    - pathways: その run に含まれるものから選ぶ（既定は全部）。1 枚約 2,400 画像トークン。
+    - pathways: その run に含まれるものから選ぶ（既定は全部）。
+    - inline_image: true なら [要約の JSON, 画像…] を返す。既定 false は要約の JSON 文字列だけ。
     - plot_type: dot | box | violin（ノード内のグラフ）。横軸の群は group_a, group_b, その他の群の順
       （上流は config の plot.x_order を軸順と配色の両方に使う）。
     [mslipidmapper] mslipidmapper_api_url の研究室サーバを先に使い（サーバは 3 パスウェイ全部を描く）、
@@ -372,6 +393,8 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
     if plot_type not in ("dot", "box", "violin"):
         return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST",
                                         "plot_type は dot / box / violin のどれかです。")
+    if not isinstance(inline_image, bool):
+        return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST", "inline_image は true / false です。")
     run_dir = _run_dir(manifest["run_id"])
     others = [g for g in manifest["groups"] if g not in (manifest["group_a"], manifest["group_b"])]
     request = {"mode": "render", "mztab": str(run_dir / manifest["files"]["mztab"]),
@@ -387,8 +410,7 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
         return mcp_errors.pathway_error(exc.code, exc.message, exc.details)
 
     outputs = result.get("outputs") or {}
-    images, lines = [], [f"run {manifest['run_id']}（{manifest['group_a']} 対 {manifest['group_b']}）",
-                         f"描画: {_backend_text(result)}"]
+    images, figures = [], []
     for p in chosen:
         if not outputs.get(p):
             return mcp_errors.pathway_error(
@@ -401,9 +423,12 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
             return mcp_errors.pathway_error(
                 "PATHWAY_RENDER_FAILED", f"{p} の PDF を画像にできません: {exc}",
                 {"pathway": p, "pdf": str(pdf)})
+        png_path = run_dir / f"{p}.png"
+        png_path.write_bytes(png)
         images.append(Image(data=png, format="png"))
-        mapped = (manifest.get("mapped_nodes") or {}).get(p)
-        mapped_text = f"、対応ノード {mapped}" if mapped else ""
-        lines.append(f"- {p}: {pdf}（{w}×{h}px{mapped_text}）")
-    lines.append(_FIGURE_NOTE)
-    return ["\n".join(lines), *images]
+        figures.append({"pathway": p, "pdf": str(pdf), "png": str(png_path), "width": w, "height": h,
+                        "mapped_nodes": (manifest.get("mapped_nodes") or {}).get(p)})
+    summary = json_payload({
+        "run_id": manifest["run_id"], "group_a": manifest["group_a"], "group_b": manifest["group_b"],
+        "backend": _backend_text(result), "figures": figures, "note": _FIGURE_NOTE})
+    return [summary, *images] if inline_image else summary

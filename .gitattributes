@@ -2,3 +2,5 @@
 
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+tests/fixtures/evidence_bundle_v3/** -text
