@@ -99,6 +99,11 @@
 
 ## 図（pathway_plot）
 
-- 各パスウェイの PDF（`reports/pathway/<run_id>/<pathway>.pdf`）の 1 ページ目を PNG にしたもの。
+- 各パスウェイの PDF（`reports/pathway/<run_id>/<pathway>.pdf`）と、その 1 ページ目の PNG
+  （`<pathway>.png`）を run のディレクトリに書く。
+- **既定の戻り値は図のファイルの場所と要約だけ**（`run_id` `group_a` `group_b` `backend` と、
+  `figures`＝`pathway` `pdf` `png` `width` `height` `mapped_nodes`、`note`）。画像はファイルにしか
+  出ない（設計者の判断 2026-11-04）。チャットに図を出すときは `inline_image=true`
+  （要約の JSON に続けて PNG を画像で返す。1 枚約 2,400 画像トークン）。
 - ノード内の p 値ラベルは MSLipidMapper（Shiny と同じ計算）のもので、ノード表の q とは**別物**。
 - ノード内グラフの横軸は group_a, group_b, その他の群の順（上流が config の `plot.x_order` を軸順と配色に使う）。

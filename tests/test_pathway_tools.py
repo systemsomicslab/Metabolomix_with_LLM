@@ -1,6 +1,7 @@
 # tests/test_pathway_tools.py
 import json
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -213,11 +214,7 @@ def test_plot_without_run_is_missing_state(lipid_arf):
     assert body["error"]["required_tools"] == ["pathway_project"]
 
 
-def test_plot_renders_pngs(lipid_arf, fake_measure, monkeypatch):
-    run_id = json.loads(tools.pathway_project(group_a="C", group_b="P",
-                                              pathways=["remodeling", "ceramide"]))["run_id"]
-    seen = []
-
+def _render_stub(monkeypatch, seen):
     def render(request, run_dir, *, timeout_s=300.0):
         seen.append(request)
         out = {}
@@ -228,16 +225,42 @@ def test_plot_renders_pngs(lipid_arf, fake_measure, monkeypatch):
         return {"status": "ok", "outputs": out, "mapped_nodes": {}}
 
     monkeypatch.setattr(bridge, "run_bridge", render)
+
+
+def test_plot_returns_paths_and_summary_by_default(lipid_arf, fake_measure, monkeypatch):
+    run_id = json.loads(tools.pathway_project(group_a="C", group_b="P",
+                                              pathways=["remodeling", "ceramide"]))["run_id"]
+    seen = []
+    _render_stub(monkeypatch, seen)
     out = tools.pathway_plot(pathways=["ceramide"])
-    assert isinstance(out, list) and isinstance(out[0], str) and isinstance(out[1], Image)
-    assert len(out) == 2
-    assert "ceramide.pdf" in out[0] and tools._FIGURE_NOTE in out[0]
-    ceramide_line = next(l for l in out[0].splitlines() if "ceramide.pdf" in l)
+    assert isinstance(out, str)
+    body = json.loads(out)
     manifest = json.loads((tools._run_dir(run_id) / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["mapped_nodes"]["ceramide"] in ceramide_line
+    [figure] = body["figures"]
+    assert figure["pathway"] == "ceramide"
+    assert figure["pdf"].endswith("ceramide.pdf") and Path(figure["png"]).is_file()
+    assert figure["png"].endswith("ceramide.png")
+    assert figure["mapped_nodes"] == manifest["mapped_nodes"]["ceramide"]
+    assert body["run_id"] == run_id and body["group_a"] == "C" and body["group_b"] == "P"
+    assert body["note"] == tools._FIGURE_NOTE and len(out) < 2000
     assert seen[0]["mode"] == "render" and seen[0]["x_order"] == ["C", "P"]
     assert seen[0]["mztab"].endswith("input.mztab")
     assert run_id in seen[0]["out_dir"]
+
+
+def test_plot_inline_image_keeps_the_old_payload(lipid_arf, fake_measure, monkeypatch):
+    json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling", "ceramide"]))
+    _render_stub(monkeypatch, [])
+    out = tools.pathway_plot(pathways=["ceramide"], inline_image=True)
+    assert isinstance(out, list) and isinstance(out[0], str) and isinstance(out[1], Image)
+    assert len(out) == 2
+    assert json.loads(out[0])["figures"][0]["pathway"] == "ceramide"
+
+
+def test_plot_inline_image_must_be_bool(lipid_arf, fake_measure):
+    json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling"]))
+    body = json.loads(tools.pathway_plot(inline_image="yes"))
+    assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
 
 
 def test_plot_pathway_not_in_run_is_bad_request(lipid_arf, fake_measure):

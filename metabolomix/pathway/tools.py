@@ -366,11 +366,15 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True),
     structured_output=False)
 def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
-                 plot_type: str = "dot"):
-    """pathway_project の run をパスウェイ図（PDF）に描き、チャットに PNG で表示する。
+                 plot_type: str = "dot", inline_image: bool = False):
+    """pathway_project の run をパスウェイ図（PDF）に描く。既定は図のファイルの場所と要約だけを返す。
+
+    PDF と PNG（<pathway>.png）は run のディレクトリに書く。チャットに図を出したいときは
+    inline_image=true（PNG を画像で添えて返す。1 枚約 2,400 画像トークン）。
 
     - run_id: 省略時は直近の run。
-    - pathways: その run に含まれるものから選ぶ（既定は全部）。1 枚約 2,400 画像トークン。
+    - pathways: その run に含まれるものから選ぶ（既定は全部）。
+    - inline_image: true なら [要約の JSON, 画像…] を返す。既定 false は要約の JSON 文字列だけ。
     - plot_type: dot | box | violin（ノード内のグラフ）。横軸の群は group_a, group_b, その他の群の順
       （上流は config の plot.x_order を軸順と配色の両方に使う）。
     [mslipidmapper] mslipidmapper_api_url の研究室サーバを先に使い（サーバは 3 パスウェイ全部を描く）、
@@ -389,6 +393,8 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
     if plot_type not in ("dot", "box", "violin"):
         return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST",
                                         "plot_type は dot / box / violin のどれかです。")
+    if not isinstance(inline_image, bool):
+        return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST", "inline_image は true / false です。")
     run_dir = _run_dir(manifest["run_id"])
     others = [g for g in manifest["groups"] if g not in (manifest["group_a"], manifest["group_b"])]
     request = {"mode": "render", "mztab": str(run_dir / manifest["files"]["mztab"]),
@@ -404,8 +410,7 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
         return mcp_errors.pathway_error(exc.code, exc.message, exc.details)
 
     outputs = result.get("outputs") or {}
-    images, lines = [], [f"run {manifest['run_id']}（{manifest['group_a']} 対 {manifest['group_b']}）",
-                         f"描画: {_backend_text(result)}"]
+    images, figures = [], []
     for p in chosen:
         if not outputs.get(p):
             return mcp_errors.pathway_error(
@@ -418,9 +423,12 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
             return mcp_errors.pathway_error(
                 "PATHWAY_RENDER_FAILED", f"{p} の PDF を画像にできません: {exc}",
                 {"pathway": p, "pdf": str(pdf)})
+        png_path = run_dir / f"{p}.png"
+        png_path.write_bytes(png)
         images.append(Image(data=png, format="png"))
-        mapped = (manifest.get("mapped_nodes") or {}).get(p)
-        mapped_text = f"、対応ノード {mapped}" if mapped else ""
-        lines.append(f"- {p}: {pdf}（{w}×{h}px{mapped_text}）")
-    lines.append(_FIGURE_NOTE)
-    return ["\n".join(lines), *images]
+        figures.append({"pathway": p, "pdf": str(pdf), "png": str(png_path), "width": w, "height": h,
+                        "mapped_nodes": (manifest.get("mapped_nodes") or {}).get(p)})
+    summary = json_payload({
+        "run_id": manifest["run_id"], "group_a": manifest["group_a"], "group_b": manifest["group_b"],
+        "backend": _backend_text(result), "figures": figures, "note": _FIGURE_NOTE})
+    return [summary, *images] if inline_image else summary
