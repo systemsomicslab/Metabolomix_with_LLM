@@ -1,0 +1,9 @@
+sample_id	group	role	injection_order
+HC1	a	sample	
+HC2	a	sample	
+HC3	a	sample	
+RA1	b	sample	
+RA2	b	sample	
+RA3	b	sample	
+QC1		qc	
+QC2		qc	
