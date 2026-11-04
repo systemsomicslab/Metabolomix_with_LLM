@@ -97,9 +97,20 @@ def test_project_writes_run_and_returns_tables(lipid_arf, fake_measure, tmp_path
         "node\tscope\tn_features\tmean_a\tmean_b\tlog2fc\tq\tcall")
     assert body["pathways"]["remodeling"]["unmatched_subclasses"] == ["TG"]
     assert "not curated reactions" in body["notes"]["adjacency"] or "反応" in body["notes"]["adjacency"]
+    assert manifest["notes"]["adjacency"] == body["notes"]["adjacency"]
+    assert manifest["notes"].get("handoff") == body["notes"].get("handoff")
+    pairs = manifest["opposite_pairs"]["remodeling"]
+    assert pairs["undeterminable"] == body["pathways"]["remodeling"]["undeterminable_pairs"]
+    assert len(pairs["rows"]) == len(body["pathways"]["remodeling"]["opposite_pairs_tsv"].splitlines()[1:])
     assert lipid_arf.pathway.last_run_id == run_id
     req = fake_measure[0]
     assert req["mode"] == "measure" and req["networks"]["remodeling"] == "remodeling_lipidonly.cyjs"
+
+
+def test_finite_turns_nonfinite_floats_into_none():
+    out = tools._finite({"a": [float("nan"), 1.5, float("inf")], "b": {"c": float("-inf")}})
+    assert out == {"a": [None, 1.5, None], "b": {"c": None}}
+    json.dumps(out, allow_nan=False)
 
 
 def _empty_scope_items(node, scope):

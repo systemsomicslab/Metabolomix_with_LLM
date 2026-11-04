@@ -7,6 +7,7 @@ handoff / jsonld / compare / bridge は純ロジックのまま保つ。
 from __future__ import annotations
 
 import json
+import math
 import re
 import uuid
 from datetime import datetime, timezone
@@ -40,6 +41,17 @@ _DROP_LABELS = {"unannotated": "名前か Ontology が空", "unparsable_name": "
                 "unmapped_ontology": "Ontology が脂質クラスの表に無い",
                 "class_name_conflict": "名前の頭部の語が Ontology のクラスと食い違う",
                 "no_formula": "組成式が無い", "formula_mismatch": "組成式がクラスの形に合わない"}
+
+
+def _finite(value):
+    """非有限の float（NaN・±inf）を None にして返す（manifest を正しい JSON に保つ）。"""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _finite(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite(v) for v in value]
+    return value
 
 
 def _handoff_note(report: dict) -> str | None:
@@ -287,7 +299,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
             f"指定した鎖がデータ（パスウェイ上のノード）にありません: {', '.join(missing_chains)}",
             {"missing_chains": missing_chains, "run_dir": str(run_dir)})
 
-    per_pathway, all_rows = {}, []
+    per_pathway, all_rows, pair_rows = {}, [], {}
     for p, graph in graphs.items():
         rows = compare.compare_scopes(graph, label_a, label_b, q_threshold)
         pairs, undeterminable = compare.opposite_pairs(graph, rows)
@@ -302,6 +314,8 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
             "opposite_pairs_tsv": compare.rows_to_tsv(pairs, _PAIR_COLUMNS),
             "undeterminable_pairs": undeterminable,
         }
+        pair_rows[p] = {"rows": [{c: pr.get(c) for c in _PAIR_COLUMNS} for pr in pairs],
+                        "undeterminable": undeterminable}
         all_rows += [dict(r, pathway=p) for r in rows]
     (run_dir / "nodes.tsv").write_text(
         compare.rows_to_tsv(all_rows, ["pathway", *_NODE_COLUMNS]), encoding="utf-8")
@@ -320,11 +334,14 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
                 "upstream_commit": result.get("package_sha"),
                 "package_version": result.get("package_version"),
                 "report": table.report,
+                # MCP の時間切れで戻り値が失われても、注意と隣接ペアは run に残す
+                "notes": {"adjacency": _ADJACENCY_NOTE, "handoff": _handoff_note(table.report)},
+                "opposite_pairs": pair_rows,
                 "mapped_nodes": {p: v["mapped_nodes"] for p, v in per_pathway.items()},
                 "files": {"mztab": "input.mztab", "nodes": "nodes.tsv",
                           **{p: Path(outputs[p]).name for p in pathways}}}
-    (run_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1),
-                                           encoding="utf-8")
+    (run_dir / "manifest.json").write_text(
+        json.dumps(_finite(manifest), ensure_ascii=False, indent=1, allow_nan=False), encoding="utf-8")
     s.pathway.last_run_id = run_id
     s.pathway.last_run_dir = str(run_dir)
 

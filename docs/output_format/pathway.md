@@ -79,6 +79,16 @@
 - MSLipidMapper のつながりは描画用テンプレートで、反応の主張ではない（上流文書:
   "not automatically curated reactions"）。**観察の提示**として扱い、基質・生成物の解釈は文献で裏を取る。
 
+## run の manifest.json に残る要約
+
+`pathway_project` は戻り値と同じ注意と隣接ペアを `reports/pathway/<run_id>/manifest.json` にも書く
+（MCP の時間切れで戻り値が失われても run に残る）。
+
+- `notes`: `adjacency`（隣接の注意）と `handoff`（行を落としたときの注意。落とした行が無ければ null）。
+- `opposite_pairs`: パスウェイ名 → `{"rows": [...], "undeterminable": 件数}`。`rows` は
+  `opposite_pairs_tsv` と同じ欄（`node_1` `call_1` `log2fc_1` `node_2` `call_2` `log2fc_2` `via`）の辞書。
+- 非有限の数値（NaN・inf）は null で書く。
+
 ## 対応付けの見出し
 
 - `mapped_nodes` = 値の付いたノード（分子種の入った whole スコープを持つ脂質ノード）の数 /
