@@ -433,7 +433,9 @@ def dataset_claim_evidence(spec: dict, dataset_handle: str | None = None,
     全組で走査する）・`msms`（`top_n` と msms-rules.v1 の `rules`。target は書かない）・
     `relations`（`rt_window` / `mz_tol` / `min_r`）・`max_candidates`（既定 50）・`merge_split`
     （既定 true。割れたスポットの組を判定で 1 つの候補（残す ID）と数え、窓の外の相手も候補に
-    `merge_partner` で足す。false は v7 と同じ規則・同じ `rule_hash`）。
+    `merge_partner` で足す。false は v7 と同じ規則・同じ `rule_hash`）・`ppm_offset`（任意。
+    質量の窓の中心を帯ごとにずらす。`dataset_feature_search` と同じ形で、既定の特徴と走査の全変種に
+    効く。幅は変えず、渡したときだけ `rule_hash` に入る）。
     束に入るのは、規則で選んだ既定の特徴（`default_selection`。`dataset_feature_search`
     の目標照合と同じ規則で、決まらなければ `needs_input`）、走査ごとの判定、候補ごとの
     照合（spot_id = SMF_ID）・合否・関係。**特徴は決めない**（実行役が決め、統計は

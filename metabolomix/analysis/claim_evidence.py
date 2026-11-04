@@ -17,7 +17,7 @@ import math
 
 import numpy as np
 
-from metabolomix.analysis import feature_search, msms_rules
+from metabolomix.analysis import feature_search, mass_accuracy, msms_rules
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 __all__ = ["CLAIM_SCHEMA", "build", "feature_relations", "normalize_claim_spec"]
@@ -112,7 +112,7 @@ def feature_relations(ds, feature_id: str, *, rt_window: float, mz_tol: float, m
 
 def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
     allowed = {"schema", "claim_id", "target", "scan", "msms", "relations", "max_candidates",
-               "merge_split"}
+               "merge_split", "ppm_offset"}
     if not isinstance(spec, dict) or set(spec) - allowed:
         raise _fail(f"spec の未知のキー: {sorted(set(spec or {}) - allowed)}")
     if spec.get("schema", SPEC_SCHEMA) != SPEC_SCHEMA:
@@ -124,7 +124,10 @@ def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
     if not isinstance(raw_target, dict):
         raise _fail("target は dataset_feature_search の目標と同じ形の辞書", field="target")
     raw_target = {"target_id": claim_id.strip(), **raw_target}
-    target = feature_search.normalize_targets([raw_target], dataset_polarity=dataset_polarity)[0]
+    # 質量の窓の中心のずれ（任意）。既定の目標と走査の全変種に同じ spec を渡す（幅は変えない）
+    offset = mass_accuracy.normalize_ppm_offset(spec.get("ppm_offset"), code="CLAIM_SPEC_INVALID")
+    target = feature_search.normalize_targets([raw_target], dataset_polarity=dataset_polarity,
+                                              ppm_offset=offset)[0]
 
     scan = spec.get("scan") or {}
     if not isinstance(scan, dict) or set(scan) - {"ppm", "rt_tol_min", "adduct_tiers"}:
@@ -148,7 +151,7 @@ def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
         # 検証は目標の正規化に任せる（読めない付加体・極性の食い違いを同じ規則で落とす）
         feature_search.normalize_targets(
             [{**raw_target, "adduct_tiers": out_scan["adduct_tiers"]}],
-            dataset_polarity=dataset_polarity)
+            dataset_polarity=dataset_polarity, ppm_offset=offset)
 
     msms = spec.get("msms")
     out_msms = None
@@ -187,6 +190,9 @@ def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
     if merge:
         # 既定（true）だけを規則に載せる。false は v7 と同じ規則（同じ rule_hash）になる
         out["merge_split"] = True
+    if offset is not None:
+        # 渡したときだけ規則に載せる（省けば v8 と同じ spec・同じ rule_hash）
+        out["ppm_offset"] = offset
     return out
 
 
@@ -334,8 +340,8 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
             variant = {**raw, "ppm": ppm, "rt_tol_min": rt_tol}
             if normalized["scan"]["adduct_tiers"] is not None:
                 variant["adduct_tiers"] = normalized["scan"]["adduct_tiers"]
-            target = feature_search.normalize_targets([variant],
-                                                      dataset_polarity=dataset_polarity)[0]
+            target = feature_search.normalize_targets([variant], dataset_polarity=dataset_polarity,
+                                                      ppm_offset=normalized.get("ppm_offset"))[0]
             match = feature_search.match_target(ds, target, max_results=unlimited,
                                                 mz_array=mz_array, merged_from=merged_map)
             label = f"ppm={ppm:g},rt_tol_min={rt_tol:g}"

@@ -273,6 +273,10 @@ spec:
  "max_candidates": 50}
 ```
 
+- `ppm_offset`（任意）は質量の窓の中心のずれ。形と帯の規則は `dataset_feature_search` と同じ
+  （`{"default": 0.0, "bands": [{"max_mz": 200, "offset": -8.0}]}`。中心は実測 − 理論の ppm、帯は理論 m/z が
+  `max_mz` 未満の最初の帯）。既定の特徴と `scan` の全変種に同じ spec が効き、**窓の幅（`scan.ppm`）は変えない**。
+  渡したときだけ `rule.ppm_offset` と `rule_hash` に入る（省けば v8 と同じ hash）。形の誤りは `CLAIM_SPEC_INVALID`。
 - `target` は `dataset_feature_search` の目標と同じ形（`target_id` は `claim_id`）。脂質の種の主張
   （InChIKey が無い C1〜C4 型）は `"target": {"lipid_species": "PC 18:3_16:1", "formula": …}`。
   `rule.target` に `lipid_species`（種のレベル）と `lipid_species_input` が載り、`rule_hash` は

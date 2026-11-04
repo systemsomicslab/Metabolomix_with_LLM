@@ -776,3 +776,36 @@ def test_novel_candidates_labels_column_and_counts(data, tmp_path):
     assert out["labels"]["n_unmatched"] == 1
     assert out["labels"]["name"] == "xenobiotic" and out["labels"]["n_rows"] == 2
     assert out["labels"]["order"] == ["A", "B", "C", "D"] and len(out["labels"]["sha256"]) == 64
+
+
+# ---------- ppm_offset（質量の窓の中心のずれ） ----------
+
+#: ppm_offset を足す前（v8）の実装で CLAIM を処理した rule_hash
+_CLAIM_RULE_HASH_V8 = "41f68e9459154e44cd3fe48101cdb088bc4969e917940bcfa3fb25b7410b524c"
+
+
+def test_claim_evidence_ppm_offset_matches_feature_search(data):
+    handle = _open(data)
+    offset = {"bands": [{"max_mz": 200, "offset": -8.0}]}
+    claim = {**CLAIM, "ppm_offset": offset}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    search = json.loads(T.dataset_feature_search(
+        targets=[{"target_id": "C1", **CLAIM["target"]}], ppm_offset=offset, dataset_handle=handle))
+    assert out["default_selection"]["status"] == search["targets"][0]["status"]
+    assert out["default_selection"]["selected_feature_id"] == search["targets"][0]["selected_feature_id"]
+    assert out["rule"]["ppm_offset"]["bands"][0]["offset"] == -8.0
+
+
+def test_claim_evidence_without_offset_keeps_rule_hash(data):
+    handle = _open(data)
+    before = _CLAIM_RULE_HASH_V8
+    assert json.loads(R.dataset_claim_evidence(CLAIM, dataset_handle=handle))["rule_hash"] == before
+    shifted = json.loads(R.dataset_claim_evidence({**CLAIM, "ppm_offset": {"default": -3}},
+                                                  dataset_handle=handle))
+    assert shifted["rule_hash"] != before
+
+
+def test_claim_evidence_bad_offset_is_spec_invalid(data):
+    out = json.loads(R.dataset_claim_evidence({**CLAIM, "ppm_offset": {"default": "x"}},
+                                              dataset_handle=_open(data)))
+    assert out["error"]["code"] == "CLAIM_SPEC_INVALID"
