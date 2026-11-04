@@ -62,3 +62,20 @@ def test_rule_hash_unchanged_without_offset_and_changed_with_it():
     assert rule_hash(normalize_novel_spec(base)) == _V8_HASH_OF_BASE
     assert "ppm_offset" not in normalize_novel_spec(base)
     assert rule_hash(normalize_novel_spec({**base, "ppm_offset": {"default": -3}})) != _V8_HASH_OF_BASE
+
+
+def test_match_target_uses_shifted_center():
+    from metabolomix.analysis.feature_search import match_target, normalize_targets
+    from metabolomix.analysis.feature_search import rule_hash as search_rule_hash
+    from tests.test_feature_search import MH, _candidate, _dataset, _gaba, _shift
+
+    ds = _dataset({"20": {"mz": _shift(MH, -9.0), "rt": 2.0, "candidates": [_candidate()]}})
+    offset = normalize_ppm_offset({"bands": [{"max_mz": 200, "offset": -8.0}]}, code="X")
+    [plain] = normalize_targets([_gaba(ppm=5, rt_min=2.0)], dataset_polarity="positive")
+    [shifted] = normalize_targets([_gaba(ppm=5, rt_min=2.0)], dataset_polarity="positive",
+                                 ppm_offset=offset)
+    assert match_target(ds, plain, max_results=5)["counts"]["mass"] == 0
+    out = match_target(ds, shifted, max_results=5)
+    assert out["status"] == "resolved" and out["candidates"][0]["ppm"] == pytest.approx(-9.0, abs=1e-6)
+    assert search_rule_hash([plain]) != search_rule_hash([shifted])
+    assert "ppm_offset" not in plain

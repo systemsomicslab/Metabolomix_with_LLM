@@ -641,6 +641,9 @@ def _rule_targets(normalized: list[dict]) -> list[dict]:
         item = dict(target)
         item["theoretical_mz"] = {adduct: _round(mz, 4)
                                   for adduct, mz in target["theoretical_mz"].items()}
+        if "ppm_offset" in target:
+            item["ppm_offset"] = {adduct: _round(value, 2)
+                                  for adduct, value in target["ppm_offset"].items()}
         shown.append(item)
     return shown
 
@@ -658,6 +661,7 @@ def dataset_feature_search(
     with_group_labels: bool = False,
     merge_split: bool = True,
     alignment_qc_path: str | None = None,
+    ppm_offset: dict | None = None,
     dataset_handle: str | None = None,
 ) -> str:
     """DatasetState の特徴を探し、目的の物質に当たる特徴を規則で判定する（読み取り専用）。
@@ -719,6 +723,12 @@ def dataset_feature_search(
     alignment_qc_path: `dataset_alignment_qc` が書いた JSON（今のデータセットで作ったものだけ）。
         省略時はその場で割れを探す（既定の閾値）。`merge_split=False` とは併用できない。
 
+    ppm_offset: 目標照合の質量の窓の中心のずれ（任意）。`{"default": 0.0, "bands": [{"max_mz": 200,
+        "offset": -8.3}]}`。中心は「実測 − 理論」の ppm の符号つきの値で、帯は理論 m/z が `max_mz`
+        未満の最初の帯（無ければ `default`）。幅（目標の `ppm`）は変えず、候補の `ppm` 列も実測 − 理論の
+        まま。`rule.ppm_offset` と各目標の `ppm_offset`（付加体ごと）に出て `rule_hash` に入る。
+        窓検索（`targets` なし）では使えない（`DATASET_BAD_REQUEST`）。
+
     dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
@@ -728,6 +738,10 @@ def dataset_feature_search(
     ds = holder.dataset
     if ds is None:
         return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+    if ppm_offset is not None and targets is None:
+        return mztab_error("DATASET_BAD_REQUEST",
+                           "ppm_offset は目標照合（targets）のときだけ使える（効かない設定を渡さない）。",
+                           {"field": "ppm_offset"})
     if not isinstance(merge_split, bool):
         return mztab_error("DATASET_BAD_REQUEST", f"merge_split は true / false: {merge_split!r}",
                            {"field": "merge_split"})
@@ -751,6 +765,7 @@ def dataset_feature_search(
                            {"field": "max_results"})
 
     from metabolomix.analysis import feature_search
+    from metabolomix.analysis.mass_accuracy import normalize_ppm_offset
     from metabolomix.analysis.result_state import dataset_fingerprint
     from metabolomix.core.atomic_io import DomainError
 
@@ -778,7 +793,9 @@ def dataset_feature_search(
                                    {"target_id": None, "field": "targets"})
             polarity, polarity_source, polarity_notes = _dataset_polarity(ds)
             notes.extend(polarity_notes)
-            normalized = feature_search.normalize_targets(targets, dataset_polarity=polarity)
+            offset_spec = normalize_ppm_offset(ppm_offset, code="DATASET_BAD_REQUEST")
+            normalized = feature_search.normalize_targets(targets, dataset_polarity=polarity,
+                                                          ppm_offset=offset_spec)
             # 特徴の m/z 配列は 1 回だけ作り、全目標で使い回す
             mz_array = feature_search._feature_mz_array(ds)
             merged_map = None
@@ -895,6 +912,9 @@ def dataset_feature_search(
                            "merge_split": merge_split, "merge_groups_hash": groups_hash,
                            "rule_hash": feature_search.rule_hash(
                                normalized, merge_groups_hash=groups_hash)}
+        if offset_spec is not None:
+            # 渡したときだけ出す（省けば従来と同じ戻り値）
+            payload["rule"]["ppm_offset"] = offset_spec
     payload["stats_source"] = {
         "result_ids": [(r.get("provenance") or {}).get("result_id") for r in results],
         "dataset_hash": dataset_hash,

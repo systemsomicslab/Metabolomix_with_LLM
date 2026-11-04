@@ -210,6 +210,14 @@ notes` を返す（`stats_unmerged` は `merge_split=true`（既定）のとき�
 TSV（列名 1 回）で、空欄は「値が無い」。数値は丸めてある（m/z 4 桁・ppm 2 桁・RT 3 桁・log2FC 4 桁・
 p / q / 平均は有効 4 桁）。
 
+**`ppm_offset`（質量の窓の中心のずれ、目標照合だけ・任意）**。形は `docs/output_format/reanalysis.md` §8 と同じ
+（`{"default": 0.0, "bands": [{"max_mz": 200, "offset": -8.3}]}`。中心は「実測 − 理論」の ppm の符号つきの値で、帯は
+理論 m/z が `max_mz` 未満の最初の帯、無ければ `default`）。付加体ごとの理論 m/z で帯を引いた中心に対し、質量の窓は
+`|ppm − 中心| ≤ ppm`。**窓の幅（目標の `ppm`）と `candidates.ppm` 列は変わらない**（実測 − 理論のまま）。`rule.ppm_offset` に
+正規化した spec（渡したときだけ。渡さなければ欄ごと無い）、`rule.targets[].ppm_offset` に付加体ごとの中心（2 桁。渡したときだけ）が出て、
+`rule_hash` に入る（渡さなければ従来と同じ hash）。窓検索（`targets` なし）で渡すと `DATASET_BAD_REQUEST`
+（`field: ppm_offset`）。形の誤りも `DATASET_BAD_REQUEST`。
+
 **`evidence`（証拠の水準）** は 2 種類ある。
 
 | 欄 | 値 | 意味 |

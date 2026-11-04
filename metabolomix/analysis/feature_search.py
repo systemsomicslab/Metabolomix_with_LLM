@@ -29,6 +29,7 @@ import numpy as np
 
 from metabolomix.analysis.feature_bindings import _normalize_adduct
 from metabolomix.analysis.result_state import is_current
+from metabolomix.analysis.mass_accuracy import offset_for
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 from metabolomix.msdial.adducts import mz_from_neutral, parse_adduct
 from metabolomix.msdial.peak_verification import monoisotopic_mass, parse_formula
@@ -300,7 +301,8 @@ def _normalize_one(raw, dataset_polarity: str | None):
     }
 
 
-def normalize_targets(targets: list[dict], *, dataset_polarity: str | None) -> list[dict]:
+def normalize_targets(targets: list[dict], *, dataset_polarity: str | None,
+                      ppm_offset: dict | None = None) -> list[dict]:
     """目標のリストを検証して正規化する（既定値を埋め、理論 m/z を全付加体について計算する）。
 
     検証失敗は ``FEATURE_TARGET_INVALID``（details に ``target_id`` と ``field``）。
@@ -308,6 +310,10 @@ def normalize_targets(targets: list[dict], *, dataset_polarity: str | None) -> l
     目標の極性は ``polarity``、無ければ明示の付加体（``adduct`` か ``adduct_tiers``）の
     符号（混ざっていれば ``FEATURE_TARGET_INVALID``）、それも無ければ ``dataset_polarity``。
     目標の極性が ``dataset_polarity`` と違う目標は ``applicable=False``（→ ``not_applicable``）。
+
+    ``ppm_offset``（正規化済み。`mass_accuracy.normalize_ppm_offset`）を渡したときだけ、各目標に
+    ``ppm_offset``（付加体 → その理論 m/z の帯の中心のずれ）を足す（rule_hash に入る）。渡さなければ
+    目標の辞書は今と同じ。
     """
     if dataset_polarity not in (None, *_POLARITIES):
         raise ValueError(f"dataset_polarity は positive / negative / None: {dataset_polarity!r}")
@@ -329,6 +335,9 @@ def normalize_targets(targets: list[dict], *, dataset_polarity: str | None) -> l
         if item is None:
             undecided.append(target_id)
         else:
+            if ppm_offset is not None:
+                item["ppm_offset"] = {adduct: offset_for(mz, ppm_offset)
+                                      for adduct, mz in item["theoretical_mz"].items()}
             normalized.append(item)
     if undecided:
         raise DomainError(
@@ -570,6 +579,7 @@ def match_target(ds, target: dict, *, max_results: int,
     identifier = ({"lipid_species": target["lipid_species"]} if target.get("lipid_species")
                   else {"inchikey_block": target["inchikey_block"]})
     ppm_tol = target["ppm"]
+    centers = target.get("ppm_offset") or {}
     rt_min = target["rt_min"]
     rt_tol = target["rt_tol_min"]
     feature_ids = list(ds.feature_ids)
@@ -635,7 +645,7 @@ def match_target(ds, target: dict, *, max_results: int,
         for adduct in tier:
             theo = target["theoretical_mz"][adduct]
             with np.errstate(invalid="ignore"):
-                hits = np.nonzero(np.abs((mz_array - theo) / theo * 1e6)
+                hits = np.nonzero(np.abs((mz_array - theo) / theo * 1e6 - centers.get(adduct, 0.0))
                                   <= ppm_tol + _BOUNDARY_EPS)[0]
             for index in hits:
                 rows.append(make_row(index, tier_no, adduct, theo))
