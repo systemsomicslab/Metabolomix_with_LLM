@@ -604,6 +604,36 @@ def test_spectrum_available_without_library(data, library):
     assert c["msms"]["status"] == "no_library" and c["msms"]["spectrum_available"] is True
 
 
+def test_spectrum_available_count_is_a_lower_bound_when_some_are_unknown():
+    from metabolomix.analysis import claim_evidence
+
+    def row(fid):
+        return {"feature_id": fid, "qualified": False, "merged_from": None}
+
+    match = {"status": "resolved", "reason": None, "selected_feature_id": "1",
+             "selected_adduct": "[M+H]+", "selected_evidence": "sme_match",
+             "adduct_tiers_used": 1, "adduct_tier_used": 1,
+             "counts": {"mass": 3, "rt": 3, "qualified": 0, "by_evidence": {}},
+             "candidates": [row("1"), row("2"), row("3")]}
+
+    def count(spectra):
+        return claim_evidence._selection(match, None, spectra)["counts"]["msms_spectrum_available"]
+
+    assert count({"1": None, "2": None, "3": None}) is None
+    assert count({"1": True, "2": None, "3": False}) == 1       # 下限
+    assert count({"1": False, "2": False, "3": False}) == 0
+
+
+def test_spectrum_available_is_unknown_when_the_files_are_missing():
+    from metabolomix.analysis import claim_evidence
+
+    missing = {"status": "not_found", "reason": "no_arf2"}
+    assert claim_evidence._spectrum_available(missing) is None
+    assert claim_evidence._spectrum_available({"status": "not_found", "reason": "no_dcl"}) is None
+    assert claim_evidence._spectrum_available({"status": "not_found", "reason": "no_spectrum"}) is False
+    assert claim_evidence._spectrum_available({"status": "not_found"}) is False
+
+
 def test_counts_qualified_counts_a_merged_pair_by_either_spot():
     """割れの組は、どちらのスポットが MS/MS で qualified でも 1。相手が窓の外（規則で qualified で
     ない merge_partner）でもよい。"""
@@ -626,8 +656,13 @@ def test_counts_qualified_counts_a_merged_pair_by_either_spot():
     # 組のどちらかに代表 MS/MS があれば 1（相手が merge_partner でも）。頼んでいなければ None
     assert claim_evidence._selection(match, None, {"30": True, "31": False}
                                      )["counts"]["msms_spectrum_available"] == 1
-    assert claim_evidence._selection(match, None, {"30": False, "31": None}
+    assert claim_evidence._selection(match, None, {"30": False, "31": False}
                                      )["counts"]["msms_spectrum_available"] == 0
+    # True が無く、分からない（None）が 1 つでもあれば 0 ではなく None（#12 の再発を防ぐ）
+    assert claim_evidence._selection(match, None, {"30": False, "31": None}
+                                     )["counts"]["msms_spectrum_available"] is None
+    assert claim_evidence._selection(match, None, {"30": None, "31": None}
+                                     )["counts"]["msms_spectrum_available"] is None
     assert claim_evidence._selection(match, None)["counts"]["msms_spectrum_available"] is None
     # 組でない候補は従来どおり自分のスポットだけで数える
     single = {**match, "merged_from": None,

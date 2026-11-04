@@ -31,7 +31,9 @@ def test_fixture_covers_the_cases_massbank_context_reads():
     rows = _tsv(FIXTURE / "intensities.tsv")
     assert {r["detected"] for r in rows} == {"true", "false"}
     assert any(r["value"] == "" for r in rows)
-    assert "" in {r["group"] for r in _tsv(FIXTURE / "samples.tsv")}
+    samples = _tsv(FIXTURE / "samples.tsv")
+    assert "" in {r["group"] for r in samples}
+    assert all(r["injection_order"].isdigit() for r in samples)
     adducts = {r["adduct"] for r in _tsv(FIXTURE / "features.tsv")}
     assert "" in adducts and adducts - {""}
     manifest = json.loads((FIXTURE / "manifest.json").read_text(encoding="utf-8"))

@@ -356,7 +356,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
                   **({"handoff": handoff_note} if (handoff_note := _handoff_note(table.report))
                      else {}),
                   "values": "MSLipidMapper は正規化しない。値はこちらの前処理後行列をサブクラスごとに集計したもの。",
-                  "figure": "図は pathway_plot(run_id) で表示できる。"},
+                  "figure": "図のファイルは pathway_plot(run_id) で作る（チャットに出すときは inline_image=true）。"},
     })
 
 

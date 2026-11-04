@@ -262,10 +262,12 @@ def _spot_query(spot_id: int, *, arf2_path: str | None, dcl_file: str | None,
 
     precursor m/z・RT・極性は ARF2、測定スペクトルはアラインメント `.dcl` の
     `dcl[spot_id]`（precursor を m/z で探さない——同じ m/z の別スポットを拾わないため）。
+    `not_found` には `reason` が付く: `no_arf2` / `no_dcl`（ファイルが無い＝スペクトルの有無は
+    分からない）と `no_spectrum`（照会して無かった）。`status` の値は変えない。
     """
     arf2 = resolve_arf2_file_path(arf2_path)
     if not arf2:
-        return {"status": "not_found",
+        return {"status": "not_found", "reason": "no_arf2",
                 "message": "spot_id の解決に要る .arf2 が見つかりませんでした（arf2_path で指定できます）。"}
     record = alignment_spot.spot_record(arf2, spot_id)
     if record is None or record.get("MassCenter") is None:
@@ -274,7 +276,7 @@ def _spot_query(spot_id: int, *, arf2_path: str | None, dcl_file: str | None,
     precursor_mz = float(record["MassCenter"])
     dcl = Path(dcl_file) if dcl_file else alignment_spot.alignment_sibling(arf2, ".dcl")
     if dcl is None or not dcl.is_file():
-        return {"status": "not_found",
+        return {"status": "not_found", "reason": "no_dcl",
                 "message": f"spot_id={spot_id} のアラインメント .dcl が見つかりません。" + _NO_MSMS_MESSAGE}
     msms = alignment_spot.alignment_msms(dcl, spot_id, expected_mz=precursor_mz,
                                          expected_rt=record.get("RT"))
@@ -287,7 +289,7 @@ def _spot_query(spot_id: int, *, arf2_path: str | None, dcl_file: str | None,
                     "で合いません（索引対応の崩れ。照合しません）。"
                 )}
     if msms["status"] != "ok":
-        return {"status": "not_found",
+        return {"status": "not_found", "reason": "no_spectrum",
                 "message": f"spot_id={spot_id} に一致する MS/MS が見つかりませんでした。" + _NO_MSMS_MESSAGE}
     polarity = ion_mode or str(record.get("IonMode") or "").lower() or None
     return {

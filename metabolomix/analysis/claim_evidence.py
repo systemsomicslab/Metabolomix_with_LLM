@@ -208,6 +208,23 @@ def rule_hash(normalized: dict, merge_groups_hash: str | None = None) -> str:
     return canonical_hash(rule)
 
 
+def _spectrum_count(spectra: dict | None, units: dict[str, set[str]]) -> int | None:
+    """代表 MS/MS のある単位の数。頼んでいなければ None。True の単位があればその数（分からない単位が
+    あれば下限）。True が無く、分からない（None）単位が 1 つでもあれば None、全部 False なら 0。
+    単位の中は、どれか True なら True、True が無く None があれば None、全部 False なら False。"""
+    if spectra is None:
+        return None
+    states = []
+    for spots in units.values():
+        values = [spectra.get(fid) for fid in spots]
+        states.append(True if any(v is True for v in values)
+                      else None if any(v is None for v in values) else False)
+    n_true = sum(s is True for s in states)
+    if n_true == 0 and any(s is None for s in states):
+        return None
+    return n_true
+
+
 def _selection(match: dict, verdicts: dict[str, str | None] | None,
                spectra: dict[str, bool | None] | None = None) -> dict:
     """目標照合の判定と段ごとの件数（`counts`）。割れの組は 1 つの候補（`match_target` の
@@ -248,10 +265,7 @@ def _selection(match: dict, verdicts: dict[str, str | None] | None,
                                for spots in units.values())),
         "rule_qualified": counts["qualified"],
         "msms_available": counts["qualified"],
-        "msms_spectrum_available": (
-            None if spectra is None
-            else sum(any(spectra.get(fid) is True for fid in spots)
-                     for spots in mass_units.values())),
+        "msms_spectrum_available": _spectrum_count(spectra, mass_units),
         "by_evidence": dict(counts["by_evidence"]),
     }
     return out
@@ -271,13 +285,14 @@ def _split(info: dict | None) -> dict | None:
 
 
 def _spectrum_available(spot: dict) -> bool | None:
-    """spot の照会から代表 MS/MS の有無。`ok` なら True、`not_found` なら False、それ以外
-    （`spot_not_found` `dcl_precursor_mismatch` `spot_id_not_integer`、ハンドルに `.arf2` / `.dcl` が
-    無いときの封筒）は None（有無が分からない）。"""
+    """spot の照会から代表 MS/MS の有無。`ok` なら True、照会して無かった（`not_found` で
+    `reason` が `no_spectrum`、または無い）なら False、それ以外（`.arf2` / `.dcl` のファイル自体が
+    無い `reason` の `no_arf2` / `no_dcl`、`spot_not_found` `dcl_precursor_mismatch`
+    `spot_id_not_integer`、ハンドルに `.arf2` / `.dcl` が無いときの封筒）は None（有無が分からない）。"""
     status = spot.get("status")
     if status == "ok":
         return True
-    if status == "not_found":
+    if status == "not_found" and spot.get("reason") not in ("no_arf2", "no_dcl"):
         return False
     return None
 

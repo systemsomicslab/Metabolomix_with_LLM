@@ -100,8 +100,22 @@ def test_spot_without_msms_is_not_found(workspace):
         {"precursor_mz": 104.0706, "rt": 1.2, "spectrum": []},
     ]))
     payload = _match(spot_id=1)
-    assert payload["status"] == "not_found"
+    assert payload["status"] == "not_found" and payload["reason"] == "no_spectrum"
     assert "未取得" in payload["message"]
+
+
+def test_spot_query_tells_a_missing_dcl_from_a_spot_without_msms(workspace):
+    from metabolomix.library.tools import spot_msms_query
+
+    arf2 = str(workspace / "AlignmentResult_1.arf2")
+    assert spot_msms_query(1, arf2_path=arf2, dcl_file=None, rt=None,
+                           ion_mode=None)["status"] == "ok"
+    (workspace / "AlignmentResult_1.dcl").unlink()
+    no_dcl = spot_msms_query(1, arf2_path=arf2, dcl_file=None, rt=None, ion_mode=None)
+    assert no_dcl["status"] == "not_found" and no_dcl["reason"] == "no_dcl"
+    (workspace / "AlignmentResult_1.arf2").unlink()
+    no_arf2 = spot_msms_query(1, arf2_path=None, dcl_file=None, rt=None, ion_mode=None)
+    assert no_arf2["status"] == "not_found" and no_arf2["reason"] == "no_arf2"
 
 
 def test_mirror_plot_follows_a_spot_match():

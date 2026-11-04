@@ -596,6 +596,9 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     order=["A","B","C","D"]}`）は外部の印の TSV。行に `labels.<name>` の列（特徴ごとの最も強い
     水準、割れの組はどちらかの最も強い水準）と水準ごとの件数 `labels.counts`（全体と上位 20）を
     足すだけで、並び・件数・除外・`rule_hash` は変えない。
+    spec の `ppm_offset`（任意。`{default, bands: [{max_mz, offset}]}`）は質量の窓の中心のずれ
+    （判定が `|ppm − 中心| ≤ 許容幅`。幅と行の `ppm` 列は変えず、渡したときだけ `rule_hash` に入る。
+    帯は理論 m/z が `max_mz` 未満の最初のもの。形の誤りは `NOVEL_SPEC_INVALID`）。
     output_path: JSON をここへ書き、要約だけを返す（行が 50 を超えるときは必須）。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     """

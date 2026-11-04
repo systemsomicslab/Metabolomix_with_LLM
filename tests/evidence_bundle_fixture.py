@@ -44,8 +44,10 @@ def build_fixture_bundle(output_dir: Path) -> Path:
     ds.detected_mask = mask
     ds.feature_matrix[ds.feature_ids.index("2"), ds.sample_names.index("HC1")] = np.nan
     # 名前からの推定は `QC1` を qc にしないので、役割は実験情報シートで与える。
-    ds.sample_metadata_rows = [{"sample_id": name, "role": "qc" if name.startswith("QC") else "sample"}
-                               for name in ds.sample_names]
+    # 注入順（injection_order）は全試料に整数で与える（samples.tsv の injection_order が埋まる）。
+    ds.sample_metadata_rows = [{"sample_id": name, "injection_order": order,
+                                "role": "qc" if name.startswith("QC") else "sample"}
+                               for order, name in enumerate(ds.sample_names, start=1)]
     dataset_service.preprocess_dataset(ds, {"normalize": "none"})
     result = dataset_service.compare_dataset(ds, HC, RA, group_a_label="HC", group_b_label="RA")
     export_dataset_evidence(ds, result, Path(output_dir), polarity="positive")
