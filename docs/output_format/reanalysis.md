@@ -475,3 +475,65 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
 - 戻り値は `status`・`schema`・`injection_order_source`・`signal`（`detected` / `values`）・`summary`・
   `output_path`（渡したとき）と、`group_aligned` の組（50 件以下のとき TSV: `pair_id feature_a
   feature_b mz rt_a rt_b delta_rt adduct name_a name_b`）。
+
+## 10. 根拠バンドル v3（evidence-v3）
+
+`dataset_export_evidence_bundle` が書く。v2 に試料表・試料ごとの値と検出・付加体・極性を足したもの。
+`arf_export_evidence_bundle`（ARF 経路）は試料ごとの値を取り出さないので v2 のまま。契約の正は
+massbank-context の `docs/contracts/evidence-bundle-v3.md`。TSV は全ファイルとも同じ書き方（タブ区切り・
+UTF-8・改行は CRLF）。
+
+**特徴 ID はスポットの ID のまま。** 割れの組（§9）へまとめた値は書かない。まとめた組への読み替えは
+呼び出し側が `merged_from` で行う。
+
+`manifest.json` の v2 との差分:
+
+| 欄 | 意味 |
+|---|---|
+| `contract_version` / `exporter.version` | `3` / `evidence-v3` |
+| `comparison.polarity` | データセットの極性（`positive` / `negative`）。ハンドルなら `dataset_handle_open` の `polarity`、対話のセッションなら同じ規則で決める。決まらなければ `null` |
+| `comparison.preprocess` | `value` に当たった前処理のレシピ。pipeline から引き継いだ結果は、その run のレシピ |
+| `intensities_stage` | `pre_imputation`（補完の前）/ `post_imputation`（補完の後） |
+| `population.detection_unavailable_reason` | `detected` が全行空のときの理由。検出状態を使えれば `null` |
+| `files[].role` | `samples` と `intensities` が増える |
+
+`samples.tsv`（データセットの全試料）:
+
+| 列 | 意味 |
+|---|---|
+| `sample_id` | 行列の試料名 |
+| `group` | 比較の群 A の試料は `a`、群 B は `b`、比較に入らない試料（QC・ブランク・群なし）は空 |
+| `role` | 実験情報シートの `role`。シートが無ければ名前の `_` 区切りのトークンからの推定で、`QC1` のようにトークンにならない名前は `sample` になる（`group` が空でも QC とは限らない） |
+| `injection_order` | 整数。分からなければ空 |
+
+`intensities.tsv`（縦持ち。全特徴 × 比較に入る試料。QC・ブランクの行は無い）:
+
+| 列 | 意味 |
+|---|---|
+| `feature_id` | `features.tsv` の行と同じ |
+| `sample_id` | `samples.tsv` の試料名 |
+| `value` | log 変換の前の値（有効数字 10 桁）。欠測は空。結果の試料が値の行列に無いときも空 |
+| `detected` | `true` / `false` / 空。`false` は gap-fill か補完で、実測のピークではない。**空は「不明」で、gap-fill の意味ではない** |
+
+`intensities_stage` の決め方:
+
+- `pre_imputation`: 結果を計算した前処理のレシピが分かるとき（session の結果・pipeline から引き継いだ結果の
+  どちらも）。レシピを `impute: none` で当て直す。補完は前処理の最後の段なので、正規化などは比較に入った値と同じ。
+- `post_imputation`: レシピが分からず、今の前処理の行列がその結果の親のとき。その行列の値を書く。
+- どちらでもなければ書かずに `EVIDENCE_INTENSITIES_UNAVAILABLE`（別の前処理の値で埋めない）。結果が群の試料を
+  持たないとき・前処理を当て直せないときも同じ。当て直した特徴の集合が結果の行と違えば
+  `EVIDENCE_INTENSITIES_MISMATCH`。
+
+`detection_unavailable_reason` の値:
+
+| 値 | 意味 |
+|---|---|
+| `dataset_status` の `detection` と同じ理由（`sample_axis_mismatch`・`mz_mismatch` など） | 検出状態を取り込めなかった。取り込みのときの理由 |
+| `not_imported` | 検出状態が無く、理由も記録されていない |
+| `mask_shape_mismatch` | 検出状態の形が特徴 × 試料と合わない |
+| `sample_axis_mismatch` | 結果の試料が `ds.sample_names` に無い（検出状態の試料軸とずれている） |
+
+`features.tsv` に任意の列 `adduct` が増える。mzTab-M の SML の `adduct_ions`（SML が無い特徴は rank 1 の
+SME の付加体）。無ければ空。
+
+戻り値には v2 の欄に `n_samples`・`n_intensity_rows`・`intensities_stage` が足される。

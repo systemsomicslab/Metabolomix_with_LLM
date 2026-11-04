@@ -909,7 +909,7 @@ def dataset_feature_search(
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True), structured_output=False)
 def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curation: bool = True,
                                    dataset_handle: str | None = None) -> str:
-    """指定2群結果の全特徴量と候補をv2根拠バンドルへ出力する。名前だけの候補も保持する。
+    """指定した 2 群結果を根拠バンドル v3（samples・intensities・adduct・comparison.polarity）へ出力する。
 
     dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
@@ -933,8 +933,10 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curati
             mapped = (getattr(ds,'feature_qc',None) or {}).get('source') == 'arf'
             state = 'not_applied' if not apply_curation else 'applied' if mapped else 'unmapped'
             curation = dict(state=state,flag_set=flags)
-        return json_payload(export_dataset_evidence(ds,result,Path(output_dir),curation=curation))
+        polarity = holder.polarity if dataset_handle else _dataset_polarity(ds)[0]
+        return json_payload(export_dataset_evidence(ds,result,Path(output_dir),curation=curation,
+                                                    polarity=polarity))
     except DomainError as exc:
-        return mztab_error(exc.code,exc.message,exc.details())
+        return mztab_error(exc.code,exc.message,exc.details or None)
     except (ValueError,OSError,FlagFileError) as exc:
         return mztab_error('EVIDENCE_EXPORT_FAILED',str(exc))

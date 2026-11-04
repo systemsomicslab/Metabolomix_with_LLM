@@ -151,6 +151,10 @@ QC/blank/unknown/standard・`include=false` を混ぜない（選択規則は
 
 ## dataset_export_evidence_bundle
 
-全特徴量と候補の根拠を新しいv2バンドルへ保存する。旧15列TSVは変更しない。
+全特徴量と候補の根拠と、試料ごとの値と検出を新しいv3バンドルへ保存する。旧15列TSVは変更しない。
 
 1. metabolomix/tools/dataset_analysis_tools.py  dataset_export_evidence_bundle()
+2.    └─ metabolomix/analysis/evidence_export.py  export_dataset_evidence()
+3.       └─ metabolomix/analysis/evidence_export.py  _samples_table()
+4.       └─ metabolomix/analysis/evidence_export.py  _intensity_rows()
+5.       └─ metabolomix/analysis/evidence_export.py  write_evidence_bundle()
