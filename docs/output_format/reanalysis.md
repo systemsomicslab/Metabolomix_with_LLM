@@ -143,7 +143,7 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 | `merged_from` | 割れた 2 スポットをまとめた特徴だけ、まとめた特徴 ID（先頭が `feature_id` = 残した ID。受け持ちの多い側、同数なら小さい ID）。ほかは null（TSV では `;` 区切り） |
 | `detected_reference` / `detected_test` | 検定に入れた群の試料のうち、検出された（gap-fill でない）数。gap-fill は数えない。まとめた特徴は「どちらかのスポットで検出」の試料を数える。外部の行列・検出状態の無いデータセット・`aggregate` の行・`not_in_matrix` の行は null。群の試料数は `n_ref` / `n_test` ではなく群の `members`（値が欠けた試料も入る） |
 | `detection_fisher_p` | 検出の有無（検出 / 未検出）の 2×2 に対する Fisher の正確検定の両側 p（上の 2 欄が null なら null） |
-| `detection_driven` | 差が値の大小より検出の有無から来ているか。高い側の群（`direction`）の検出が群の試料数の半分に満たない（`<`）か、低い側の群の検出が 0 なら true。`status` が `tested` で向きがある行だけ（ほかは null）。**判定（`meets_thresholds` など）は変えない。使い方は手順書** |
+| `detection_driven` | 差が値の大小より検出の有無から来ているか。高い側の群（`direction`）の検出が群の試料数の半分に満たない（`<`）か、低い側の群の検出が 0 なら true。`status` が `tested` で向きがある行だけ（ほかは null）。`direction` が null の行は `detection_driven` も null（一方の群の平均がちょうど 0 で、変換も補完も無い行は向きが決まらないので、検出の差が大きくても null）。**判定（`meets_thresholds` など）は変えない。使い方は手順書** |
 
 解析ごとに `matrix`（`n_features_in`（まとめた後、recipe の前）・`n_features_out`（recipe の後）・段ごとの報告
 `steps`）、`bh_population_n`、`detection_available`（検出の例数を出せたか）・`n_detection_driven`（要約のみ）、集約なら `aggregate`（和: `members`・`summed`・`dropped`、まとめがあれば
@@ -293,7 +293,7 @@ spec:
 |---|---|
 | `default_selection` | `target` をそのまま当てた目標照合（`dataset_feature_search` と同じ規則）。`status` が `resolved` なら `selected_feature_id` が規則で選んだ既定の特徴、決まらなければ `needs_input`（`reason`）。割れたスポットの組（§9 の `merge_groups`）は 1 つの候補として数え、`selected_feature_id` は残す ID（受け持ちの多い側、同数なら小さい ID）、`merged_from` にその組（それ以外は null。走査も同じ）。`counts` は下の表（組は 1 つと数える。MS/MS の合否はどちらかのスポットが `qualified` なら 1） |
 | `scans` | 走査ごとの判定（`counts` は `default_selection` と同じ意味）と、候補の特徴 ID |
-| `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか。組の片方だけが質量の窓に入ったときに足した相手は `merge_partner`）・`split`（下）・`msms`（spot_id = SMF_ID の照合の上位 `top` と `qualify`。ライブラリが無ければ `{"status": "no_library", "spectrum_available": ...}`、MS/MS が無い・索引の崩れはその `status`。`spectrum_available` は代表スペクトルの有無で、ライブラリの有無によらず spot を先に照会して決める: `true`=ある、`false`=`not_found`（取れていない）、`null`=分からない（`spot_not_found`・`dcl_precursor_mismatch`・`spot_id_not_integer`、ハンドルに `.arf2` / `.dcl` が無いとき））・`relations` |
+| `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか。組の片方だけが質量の窓に入ったときに足した相手は `merge_partner`）・`split`（下）・`msms`（spot_id = SMF_ID の照合の上位 `top` と `qualify`。ライブラリが無ければ `{"status": "no_library", "spectrum_available": ...}`、MS/MS が無い・索引の崩れはその `status`。`spectrum_available` は代表スペクトルの有無で、ライブラリの有無によらず spot を先に照会して決める: `true`=ある、`false`=照会して無かった（`not_found` で `reason` が `no_spectrum`）、`null`=分からない（`.arf2` / `.dcl` のファイル自体が無い `not_found` の `reason` `no_arf2` / `no_dcl`・`spot_not_found`・`dcl_precursor_mismatch`・`spot_id_not_integer`、ハンドルに `.arf2` / `.dcl` が無いとき））・`relations` |
 | `truncated` | `max_candidates` で打ち切った候補の数 |
 | `rule` / `rule_hash` | 正規化した spec とその hash。spec の `merge_split`（既定 true）は真のときだけ `rule` に載り、`rule_hash` には判定でまとめた組の hash も入る（false は v7 と同じ規則・同じ hash） |
 | `merge_split` / `merge_groups_hash` | 割れの組を判定で 1 つの候補にしたか（spec の `merge_split`）と、その組（§9 の `merge_groups`）の hash（false なら null） |
@@ -307,7 +307,7 @@ spec:
 | `qualified` | 規則（質量・RT・注釈）で qualified になった特徴のうち、**MS/MS の合否 `msms.qualify.verdict` が `qualified`** の数。`msms` を頼んでいない・ライブラリが無いときは `null`（0 ではない）。`max_candidates` で打ち切った候補は数えない |
 | `rule_qualified` | 規則（質量の窓・RT の窓・注釈）で qualified になった特徴の数（`dataset_feature_search` の `counts.qualified`、v7 までの束の `counts.qualified` と同じ数）。**MS/MS が取れているかどうかの数ではない** |
 | `msms_available` | **非推奨の別名**（`rule_qualified` と同じ値。claim-evidence.v1 の互換のため残し、次の版で消す）。名前に反して MS/MS の有無の数ではない |
-| `msms_spectrum_available` | 質量の窓に入った候補（`mass` と同じ母集団。`merge_partner` の行を除き、割れの組は 1 つ）のうち、組のどれかのスポットに**代表 MS/MS がある**（候補の `msms.spectrum_available` が `true`）数。RT の窓では絞らない（RT の窓の外のスポットの代表 MS/MS も数える）。`msms` を頼んでいないときは `null`。`max_candidates` で打ち切って照会していない候補は数えない |
+| `msms_spectrum_available` | 質量の窓に入った候補（`mass` と同じ母集団。`merge_partner` の行を除き、割れの組は 1 つ）のうち、組のどれかのスポットに**代表 MS/MS がある**（候補の `msms.spectrum_available` が `true`）数。RT の窓では絞らない（RT の窓の外のスポットの代表 MS/MS も数える）。**0 は照会して無かった**（全部の単位が `false`）、**`null` は頼まなかった（`msms` なし）か分からなかった**（`true` の単位が無く、`null` の単位が 1 つでもある）、**数は下限**（`null` の単位は数に入らない）。単位の中は、どれか `true` なら `true`、`true` が無く `null` があれば `null`、全部 `false` なら `false`。`max_candidates` で打ち切って照会していない候補は数えない |
 
 `split`（候補が割れたアライメントスポットの組に入るときだけ。入らなければ `null`。§9 の
 `find_split_pairs` を既定の閾値で回し、`split_partners` を写す）:
@@ -531,8 +531,8 @@ UTF-8・改行は CRLF）。
 | 列 | 意味 |
 |---|---|
 | `sample_id` | 行列の試料名 |
-| `group` | 比較の群 A の試料は `a`、群 B は `b`、比較に入らない試料（QC・ブランク・群なし）は空 |
-| `role` | 実験情報シートの `role`。シートが無ければ名前の `_` 区切りのトークンからの推定で、`QC1` のようにトークンにならない名前は `sample` になる（`group` が空でも QC とは限らない） |
+| `group` | 比較の群 A の試料は `a`、群 B は `b`、比較に入らない試料（QC・ブランク・群なし・`include=false` で除いた試料）は空。`samples.tsv` には全試料が載るが、`intensities.tsv` には比較の試料だけ |
+| `role` | 実験情報シートの `role`（除外された試料も `sample` のことがある）。シートが無ければ名前の `_` 区切りのトークンからの推定で、`QC1` のようにトークンにならない名前は `sample` になる（`group` が空でも QC とは限らない） |
 | `injection_order` | 整数。分からなければ空 |
 
 `intensities.tsv`（縦持ち。全特徴 × 比較に入る試料。QC・ブランクの行は無い）:
@@ -541,7 +541,7 @@ UTF-8・改行は CRLF）。
 |---|---|
 | `feature_id` | `features.tsv` の行と同じ |
 | `sample_id` | `samples.tsv` の試料名 |
-| `value` | log 変換の前の値（有効数字 10 桁）。欠測は空。結果の試料が値の行列に無いときも空 |
+| `value` | log 変換の前の値（有効数字 10 桁）。欠測は空。結果の試料が値の行列に無いときも空。実データでは `0` が多い（実測で全セルの 17〜28%、すべて `detected=false`）。補完は NaN だけを触るので `0` は実際の値で、欠測の空とは別。この場合 `pre_imputation` と `post_imputation` の値は同じになりうる。検出の有無は `value` でなく `detected` で読む |
 | `detected` | `true` / `false` / 空。`false` は gap-fill か補完で、実測のピークではない。**空は「不明」で、gap-fill の意味ではない** |
 
 `intensities_stage` の決め方:

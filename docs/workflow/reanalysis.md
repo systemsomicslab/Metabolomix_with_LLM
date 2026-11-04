@@ -151,7 +151,7 @@
 （`msms.qualify.verdict`）が `qualified` の数（`_selection`。MS/MS を頼んでいない・ライブラリが無ければ null）で、
 規則で qualified の数（旧 `qualified` の意味。MS/MS の有無ではない）は `rule_qualified`（`msms_available` は同じ値の非推奨の別名）。
 代表 MS/MS の有無で数えるのは `msms_spectrum_available`（質量の窓の候補。割れの組は 1 つ、RT で絞らない）で、候補ごとの
-`msms.spectrum_available` は `_msms_for` がライブラリの有無より先に spot を照会して決める（MS/MS を頼まなければ null）。既定の特徴と走査の判定は
+`msms.spectrum_available` は `_msms_for` がライブラリの有無より先に spot を照会して決める（MS/MS を頼まなければ null。`.arf2` / `.dcl` のファイルが無い `not_found`（`reason` が `no_arf2` / `no_dcl`）は False でなく null）。`msms_spectrum_available` は `_spectrum_count` が数え、0 は照会して無かった・null は頼まなかったか分からなかった（True の単位が無く null の単位がある）・数は下限。既定の特徴と走査の判定は
 `match_target(merged_from=merge_map(...))` で割れの組を 1 つの候補（残す ID）として数える。
 
 ## dataset_mass_accuracy
