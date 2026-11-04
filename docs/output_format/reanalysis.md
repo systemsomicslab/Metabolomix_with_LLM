@@ -387,6 +387,12 @@ v7 と同じ（`merged_from`・`sme_feature_id`・`merge_split` を出さず、�
 `counts` は `{"all": {水準: 件数, "none": 件数}, "top20": {...}}`（`top20` は q の昇順の先頭 20 行）。
 **印は列と件数を足すだけ**で、並び・行数・除外は変えず、`rule_hash` にも入れない（`path` を含む `labels` 全体が hash の材料から外れる）。
 
+**質量の窓の中心のずれ（`ppm_offset`、任意）**。spec に `"ppm_offset": {"default": 0.0, "bands": [{"max_mz": 200, "offset": -8.3}]}`
+を足すと、判定が `|ppm − 中心| ≤ 許容幅` になる。中心は「実測 − 理論」の ppm の符号つきの値で、帯は `ppm` の帯と同じ選び方
+（理論 m/z が `max_mz` **未満**の最初の帯、無ければ `default`。ちょうど `max_mz` の特徴は次の帯）。**窓の幅（`ppm`）は変えず、
+行の `ppm` 列も実測 − 理論のまま**。渡したときだけ正規化した spec と `rule_hash` に入る（省けば v8 と同じ）。形の誤りは
+`NOVEL_SPEC_INVALID`（`field: ppm_offset`）。
+
 ## 9. 割れたアライメントスポット（alignment-qc.v1）
 
 `dataset_alignment_qc(output_path=None, ppm=15.0, max_rt_gap=1.0, max_interleaved_rt_gap=0.15,

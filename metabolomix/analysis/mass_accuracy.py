@@ -146,8 +146,9 @@ def band_summary(rows: list[dict], band_edges: list[float]) -> dict:
 
 def normalize_novel_spec(spec) -> dict:
     if not isinstance(spec, dict) or set(spec) - {"schema", "statistics", "ppm", "q_max", "exclude",
-                                                         "labels"}:
-        raise DomainError(_INVALID, "spec は {statistics, ppm, q_max, exclude, labels}", {})
+                                                         "labels", "ppm_offset"}:
+        raise DomainError(_INVALID, "spec は {statistics, ppm, q_max, exclude, labels, ppm_offset}",
+                          {})
     stats_spec = spec.get("statistics")
     if not isinstance(stats_spec, dict):
         raise DomainError(_INVALID, "statistics は {result_id} か {analysis_spec, analysis_id}",
@@ -204,7 +205,42 @@ def normalize_novel_spec(spec) -> dict:
                                                          for b in exclude.get("inchikey_blocks") or []})}}
     if "labels" in spec:
         normalized["labels"] = _normalize_labels(spec["labels"])
+    if spec.get("ppm_offset") is not None:
+        # 渡したときだけ規則に載せる（省けば v8 と同じ spec・同じ rule_hash）
+        normalized["ppm_offset"] = normalize_ppm_offset(spec["ppm_offset"], code=_INVALID)
     return normalized
+
+
+def normalize_ppm_offset(raw, *, code: str, field: str = "ppm_offset") -> dict | None:
+    """質量の窓の中心のずれ `{"default": 0.0, "bands": [{"max_mz", "offset"}]}` を正規化する。
+
+    中心は「実測 − 理論」の ppm の符号つきの値。帯の選び方は ppm の帯と同じ（理論 m/z が
+    `max_mz` 未満の最初の帯、無ければ `default`）。None なら None。
+    """
+    if raw is None:
+        return None
+    detail = {"field": field}
+    if (not isinstance(raw, dict) or set(raw) - {"default", "bands"}
+            or _number(raw.get("default", 0.0)) is None):
+        raise DomainError(code, f"{field} は {{default, bands: [{{max_mz, offset}}]}}", detail)
+    bands = []
+    for i, band in enumerate(raw.get("bands") or []):
+        if (not isinstance(band, dict) or set(band) != {"max_mz", "offset"}
+                or _number(band["max_mz"]) is None or _number(band["offset"]) is None):
+            raise DomainError(code, f"{field}.bands[{i}] は {{max_mz, offset}}", detail)
+        bands.append({"max_mz": float(band["max_mz"]), "offset": float(band["offset"])})
+    return {"default": float(raw.get("default", 0.0)),
+            "bands": sorted(bands, key=lambda b: b["max_mz"])}
+
+
+def offset_for(mz: float, offset_spec: dict | None) -> float:
+    """理論 m/z の帯の中心のずれ（ppm）。帯の境目の m/z は次の帯（`_tolerance` と同じ `<`）。"""
+    if offset_spec is None:
+        return 0.0
+    for band in offset_spec["bands"]:
+        if mz < band["max_mz"]:
+            return band["offset"]
+    return offset_spec["default"]
 
 
 #: 外部の印の既定（強い順）
@@ -326,7 +362,8 @@ def novel_candidates(ds, normalized: dict, stats_rows: dict, *, group_ref, group
         stats = stats_rows.get(fid)
         if stats is None or stats.get("q") is None or not stats["q"] < normalized["q_max"]:
             continue
-        if abs(row["ppm"]) > _tolerance(row["theoretical_mz"], normalized["ppm"]):
+        center = offset_for(row["theoretical_mz"], normalized.get("ppm_offset"))
+        if abs(row["ppm"] - center) > _tolerance(row["theoretical_mz"], normalized["ppm"]):
             continue
         block = (row["inchikey"] or "").strip()[:14].upper()
         if excluded_ids.intersection(group) or (block and block in excluded_blocks):
