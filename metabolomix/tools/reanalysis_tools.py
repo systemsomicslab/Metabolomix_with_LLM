@@ -586,6 +586,10 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     `{"result_id"}` では `statistics.merge_split`（既定 true）・`statistics.alignment_qc`
     （`dataset_alignment_qc` の JSON。省略時はその場で探す）、analysis_spec では spec の
     `features.merge_split` で決まる。
+    spec の `labels`（`{path, name, feature_column="feature_id", label_column="level",
+    order=["A","B","C","D"]}`）は外部の印の TSV。行に `labels.<name>` の列（特徴ごとの最も強い
+    水準、割れの組はどちらかの最も強い水準）と水準ごとの件数 `labels.counts`（全体と上位 20）を
+    足すだけで、並び・件数・除外・`rule_hash` は変えない。
     output_path: JSON をここへ書き、要約だけを返す（行が 50 を超えるときは必須）。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     """
@@ -626,6 +630,17 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
         rows = mass_accuracy.novel_candidates(
             ds, normalized, stats_rows, group_ref=group_ref, group_test=group_test,
             merged_from={g[0]: g for g in merge["groups"]} if merge["enabled"] else None)
+        labels_info = None
+        if "labels" in normalized:
+            spec_labels = normalized["labels"]
+            read = mass_accuracy.read_labels(spec_labels)
+            counts = mass_accuracy.attach_labels(rows, read["by_feature"], name=spec_labels["name"],
+                                                 order=spec_labels["order"])
+            known = set(ds.feature_ids)
+            labels_info = {"name": spec_labels["name"], "sha256": read["sha256"],
+                           "order": spec_labels["order"], "n_rows": read["n_rows"],
+                           "n_unmatched": sum(1 for f in read["by_feature"] if f not in known),
+                           "counts": counts}
         # まとめた組の hash は、まとめるとき（組が 0 でも）だけ規則に入れる
         groups_hash = (analysis_spec.merge_groups_hash(merge["groups"]) if merge["enabled"]
                        else None)
@@ -637,6 +652,7 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
                           "rule_hash": mass_accuracy.rule_hash(normalized, groups_hash),
                           "group_ref": group_ref, "group_test": group_test,
                           **({"merge_split": merge_info} if merge_info else {}),
+                          **({"labels": labels_info} if labels_info else {}),
                           "rows": rows}
         if output_path is None and len(rows) > MAX_INLINE_ROWS:
             raise DomainError("ANALYSIS_OUTPUT_REQUIRED",
@@ -649,11 +665,14 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
                "group_test", "log2fc_test_over_ref", "p", "q", "direction")
     if merge_info:
         columns += ("merged_from",)
+    if labels_info:
+        columns += (f"labels.{labels_info['name']}",)
     return json_payload({
         "status": "success",
         "rule_hash": result_payload["rule_hash"],
         "group_ref": group_ref, "group_test": group_test,
         **({"merge_split": merge_info} if merge_info else {}),
+        **({"labels": labels_info} if labels_info else {}),
         "n_rows": len(rows),
         **({"output_path": written} if written else
            {"rows": rows_table([{**r, "mz": round(r["mz"], 4), "ppm": round(r["ppm"], 2),

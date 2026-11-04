@@ -375,6 +375,15 @@ v7 と同じ（`merged_from`・`sme_feature_id`・`merge_split` を出さず、�
 （`alignment_qc` は `dataset_alignment_qc` の `output_path`。省略時はその場で探す。`rule_hash` にパスは入らない）。
 戻り値と JSON の `merge_split` は `{enabled, source, n_groups}`（`n_groups` はまとめた組の数）。
 
+**外部の印（`labels`、任意）**。spec に `"labels": {"path": "<TSV>", "name": "xenobiotic", "feature_column": "feature_id",
+"label_column": "level", "order": ["A","B","C","D"]}` を足すと、行に `labels.<name>` の列（TSV の末尾。印が無い行は空）を足す。
+`path` と `name`（英数字と `_`）は必須、ほかの既定は上のとおり。`order` は強い順で、同じ特徴に複数の行があれば最も強い水準を取る。
+空の水準の行は無視、`order` に無い水準は `NOVEL_SPEC_INVALID`（`details.unknown_levels`。黙って最弱にしない）。
+**割れの組**（`merged_from`）は組のどれかの最も強い水準。戻り値と JSON の
+`labels` は `{name, sha256, order, n_rows, n_unmatched, counts}`（`n_unmatched` はデータセットの特徴 ID に無い、印のある ID の数。無視する）で、
+`counts` は `{"all": {水準: 件数, "none": 件数}, "top20": {...}}`（`top20` は q の昇順の先頭 20 行）。
+**印は列と件数を足すだけ**で、並び・行数・除外は変えず、`rule_hash` にも入れない（`path` を含む `labels` 全体が hash の材料から外れる）。
+
 ## 9. 割れたアライメントスポット（alignment-qc.v1）
 
 `dataset_alignment_qc(output_path=None, ppm=15.0, max_rt_gap=1.0, max_interleaved_rt_gap=0.15,

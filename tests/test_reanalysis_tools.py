@@ -743,3 +743,25 @@ def test_claim_evidence_adds_the_partner_outside_the_mass_window(tmp_path):
     v7 = {k: v for k, v in normalized.items() if k != "merge_split"}
     assert off["rule_hash"] == claim_evidence.rule_hash(v7)
     assert out["rule_hash"] != off["rule_hash"]
+
+
+def test_novel_candidates_labels_column_and_counts(data, tmp_path):
+    handle = _open(data)
+    T.dataset_preprocess(dataset_handle=handle)
+    diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
+                                             group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
+    spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
+    plain = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
+    labels = tmp_path / "labels.tsv"
+    first = _tsv_rows(plain["rows"])[0]["feature_id"]
+    labels.write_text(f"feature_id\tlevel\n{first}\tA\n999999\tB\n", encoding="utf-8")
+    out = json.loads(R.dataset_novel_candidates(
+        {**spec, "labels": {"path": str(labels), "name": "xenobiotic"}}, dataset_handle=handle))
+    assert out["n_rows"] == plain["n_rows"] and out["rule_hash"] == plain["rule_hash"]
+    assert out["rows"].splitlines()[0].split("\t")[-1] == "labels.xenobiotic"
+    assert ([r["feature_id"] for r in _tsv_rows(out["rows"])]
+            == [r["feature_id"] for r in _tsv_rows(plain["rows"])])
+    assert out["labels"]["counts"]["all"]["A"] == 1
+    assert out["labels"]["n_unmatched"] == 1
+    assert out["labels"]["name"] == "xenobiotic" and out["labels"]["n_rows"] == 2
+    assert out["labels"]["order"] == ["A", "B", "C", "D"] and len(out["labels"]["sha256"]) == 64
