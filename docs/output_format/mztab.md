@@ -285,7 +285,7 @@ BH をやり直して、`stats` の**すべての行**をそこから出す（�
 
 | 欄 | 意味 |
 |---|---|
-| `stats` | まとめた後の値。まとめる組がデータセットに 1 つでもあれば**すべての行**をまとめた行列で検定し直した値にする（1 つの表の q は 1 つの BH の母集団から。組に入らない特徴も、正規化と BH はまとめた行列で回り直す）。組に入る特徴は 1 行（`feature_id` は組の小さい方の ID。消える側の ID を頼んでも残す ID の行に解き、`notes` に書く）で、末尾の `merged_from` に 2 つの ID を `;` で（組に入らない行は空）。組が無ければ検定はやり直さず従来の値 |
+| `stats` | まとめた後の値。まとめる組がデータセットに 1 つでもあれば**すべての行**をまとめた行列で検定し直した値にする（1 つの表の q は 1 つの BH の母集団から。組に入らない特徴も、正規化と BH はまとめた行列で回り直す）。組に入る特徴は 1 行（`feature_id` は組の残す ID＝受け持ちの多い側（同数なら小さい ID）。消える側の ID を頼んでも残す ID の行に解き、`notes` に書く）で、末尾の `merged_from` に 2 つの ID を `;` で（組に入らない行は空）。組が無ければ検定はやり直さず従来の値 |
 | `stats_unmerged` | まとめる前の従来の `stats`（頼んだ ID のまま・同じ列。`merged_from` は無い） |
 | `merge_split` | `{enabled, source, alignment_qc_sha256, n_groups, groups, renamed, recomputed, bh_population}`。`source` は `find_split_pairs`（その場で既定の閾値）か `alignment_qc`（`alignment_qc_path` の JSON）、`n_groups` はデータセットでまとめる組の数、`groups` はそのうち統計を付けた特徴に関わる組、`recomputed` は検定し直した result_id（組が無ければ空で、検定はやり直さない）、`bh_population` は検定し直した結果ごとの母集団（`n_features_total` はまとめた後の特徴数） |
 

@@ -186,7 +186,7 @@
 11. │  └─ metabolomix/analysis/mass_accuracy.py  sme_ppm()
 12. └─ metabolomix/analysis/mass_accuracy.py  rule_hash()
 
-割れたスポットの組は 1 候補（残す小さい ID）に数える。`statistics.result_id` では `statistics.merge_split`
+割れたスポットの組は 1 候補（残す ID＝受け持ちの多い側（同数なら小さい ID））に数える。`statistics.result_id` では `statistics.merge_split`
 （既定 true）で、組が 1 つでもあればすべての特徴の統計をまとめた行列で検定し直した値にする（`dataset_feature_search` の
 `merge_split` と同じ実装）。analysis_spec では spec の `features.merge_split` が決め、`run_spec` の
 `merge_split.groups` を使う。まとめた組の hash は `rule_hash` に入る（`merge_split` が `groups_hash` に
