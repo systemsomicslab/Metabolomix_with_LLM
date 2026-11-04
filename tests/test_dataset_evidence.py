@@ -256,12 +256,12 @@ def test_arf_candidates_puts_handoff_artifact_first(tmp_path):
 
 # ---------- 外れ値 1 件で接合全体を棄却しない（実データ 3944 特徴で 1 件） ----------
 
-def _many_spots(n, mz_offsets=None):
-    """特徴 n × サンプル 2。mz_offsets[i] だけ mzTab 側をずらす。"""
+def _many_spots(n, mz_offsets=None, base=100.0):
+    """特徴 n × サンプル 2。mz_offsets[i] だけ mzTab 側をずらす。特徴 i の m/z は base + i。"""
     offsets = mz_offsets or {}
     spots, feature_mz = [], []
     for i in range(n):
-        mz = 100.0 + i
+        mz = base + i
         spots.append(_spot(mz, [
             _raw_sample_row(0, "s1", 1000.0, mz, 10),
             _raw_sample_row(1, "s2", 900.0, mz, 11),
@@ -283,6 +283,31 @@ def test_build_evidence_tolerates_a_single_outlier_among_many():
         sample_names=["s1", "s2"])
     assert result["status"] == "ok"
     assert result["detail"]["n_over_tolerance"] == 1
+
+
+def test_build_evidence_accepts_many_small_outliers():
+    """陰イオン 36/2547（1.41%）・最大 0.0188 Da。割合は 1% を超えるが、外れがすべて 0.02 Da 未満なら合格。"""
+    from metabolomix.mztab import evidence
+    spots, feature_mz = _many_spots(100, {i: 0.0188 for i in range(2)})
+    result = evidence.build_evidence(
+        evidence.normalize_arf_spots(spots), feature_mz=feature_mz,
+        sample_names=["s1", "s2"])
+    assert result["status"] == "ok"
+    assert result["detail"]["accepted_by"] == "small_outliers"
+
+
+def test_one_outlier_at_or_beyond_002_da_still_rejects():
+    """外れの 1 件でも 0.02 Da 以上なら、小さな外れの救済は効かない。"""
+    from metabolomix.mztab import evidence
+    # 基準 m/z を 199.0 にする。0.020 の差を浮動小数の減算で取ると、基準が 100.0 のとき
+    # 0.0199999999999960 になり 0.02 を割る。199.0 + 1 = 200.0 では 0.0200000000000102 で
+    # 境界の内側に入る（差が 0.02 以上であることを下の assert で確かめる）。
+    spots, feature_mz = _many_spots(100, {0: 0.015, 1: 0.020}, base=199.0)
+    assert abs(feature_mz[1] - spots[1]["MassCenter"]) >= 0.02
+    result = evidence.build_evidence(
+        evidence.normalize_arf_spots(spots), feature_mz=feature_mz,
+        sample_names=["s1", "s2"])
+    assert result["status"] == "rejected" and result["reason"] == "mz_mismatch"
 
 
 def test_build_evidence_rejects_when_many_features_exceed_tolerance():
