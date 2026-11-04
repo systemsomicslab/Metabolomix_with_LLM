@@ -3,7 +3,7 @@
 - 日付: 2026-11-04
 - 関連: massbank-context `docs/superpowers/specs/2026-11-04-xenobiotic-screen-design.md`（外来の分子の走査。このバンドルを読む）、
   reanalysis-study `docs/specs/2026-11-04-xenobiotic-signals-design.md`（手順書での使い方）
-- 状態: 設計（未実装）
+- 状態: 実装済み（2026-11-04。ブランチ feat/reanalysis-v9。ARF 経路は v2 のまま）
 
 ## 1. 目的
 
