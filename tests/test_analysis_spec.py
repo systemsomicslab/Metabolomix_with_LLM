@@ -324,7 +324,8 @@ def test_merged_from_in_rows():
     from metabolomix.tools import reanalysis_tools as R
 
     table = R.rows_table(list(rows.values())).splitlines()
-    assert table[0].endswith("merged_from") and table[1].endswith("1265;1266")
+    header, first = table[0].split("	"), table[1].split("	")
+    assert first[header.index("merged_from")] == "1265;1266"
 
 
 def test_aggregate_counts_split_group_once():

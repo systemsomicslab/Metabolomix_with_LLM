@@ -141,9 +141,12 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 | `direction` | `test_higher` / `ref_higher`（OLS は `beta_log2`、ほかは FC の向き） |
 | `meets_thresholds` | 与えた閾値をすべて満たすか（閾値が無ければ null）。**再現の判定ではない** |
 | `merged_from` | 割れた 2 スポットをまとめた特徴だけ、まとめた特徴 ID（小さい順。`feature_id` は先頭 = 残した最小の ID）。ほかは null（TSV では `;` 区切り） |
+| `detected_reference` / `detected_test` | 検定に入れた群の試料のうち、検出された（gap-fill でない）数。gap-fill は数えない。まとめた特徴は「どちらかのスポットで検出」の試料を数える。外部の行列・検出状態の無いデータセット・`aggregate` の行・`not_in_matrix` の行は null。群の試料数は `n_ref` / `n_test` ではなく群の `members`（値が欠けた試料も入る） |
+| `detection_fisher_p` | 検出の有無（検出 / 未検出）の 2×2 に対する Fisher の正確検定の両側 p（上の 2 欄が null なら null） |
+| `detection_driven` | 差が値の大小より検出の有無から来ているか。高い側の群（`direction`）の検出が群の試料数の半分に満たない（`<`）か、低い側の群の検出が 0 なら true。`status` が `tested` で向きがある行だけ（ほかは null）。**判定（`meets_thresholds` など）は変えない。使い方は手順書** |
 
 解析ごとに `matrix`（`n_features_in`（まとめた後、recipe の前）・`n_features_out`（recipe の後）・段ごとの報告
-`steps`）、`bh_population_n`、集約なら `aggregate`（和: `members`・`summed`・`dropped`、まとめがあれば
+`steps`）、`bh_population_n`、`detection_available`（検出の例数を出せたか）・`n_detection_driven`（要約のみ）、集約なら `aggregate`（和: `members`・`summed`・`dropped`、まとめがあれば
 `merged_from`）、OLS なら `covariate_excluded_samples`。
 結果の全体に `spec`（正規化後）・`rule_hash`・`merge_split`（`enabled`・`source`: `find_split_pairs` か
 `alignment_qc`・`groups`: まとめた群（残す ID が先頭、ID の小さい順）・`groups_hash`・`n_groups_given`・`skipped`）・

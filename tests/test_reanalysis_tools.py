@@ -133,11 +133,22 @@ def test_analysis_run_reports_merge_split_state_and_merged_from_column(data):
     handle = _open(data)
     out = json.loads(R.dataset_analysis_run(_spec(data), dataset_handle=handle))
     assert out["merge_split"]["enabled"] is True and out["merge_split"]["source"] == "find_split_pairs"
-    assert out["analyses"][0]["rows"].splitlines()[0].endswith("\tmerged_from")
+    assert "merged_from" in out["analyses"][0]["rows"].splitlines()[0].split("\t")
     off = json.loads(R.dataset_analysis_run(
         _spec(data, features={"feature_ids": ["20", "26"], "merge_split": False}),
         dataset_handle=handle))
     assert off["merge_split"]["enabled"] is False and off["rule_hash"] != out["rule_hash"]
+
+
+def test_analysis_run_rows_have_detection_columns(data):
+    handle = _open(data)
+    out = json.loads(R.dataset_analysis_run(_spec(data), dataset_handle=handle))
+    analysis = out["analyses"][0]
+    header = analysis["rows"].splitlines()[0].split("	")
+    assert header[-4:] == ["detected_reference", "detected_test", "detection_fisher_p",
+                           "detection_driven"]
+    assert analysis["detection_available"] is False       # 合成の mzTab は .arf が無い
+    assert analysis["n_detection_driven"] == 0
 
 
 def test_analysis_run_on_session_dataset(data):

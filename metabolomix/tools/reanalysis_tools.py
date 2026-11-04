@@ -33,8 +33,10 @@ MAX_INLINE_ROWS = 50
 ROW_COLUMNS = ("feature_id", "status", "reason", "group_ref", "group_test", "n_ref", "n_test",
                "mean_ref", "mean_test", "fc_test_over_ref", "log2fc_test_over_ref",
                "statistic", "p", "q", "beta_log2", "direction", "meets_thresholds",
-               "merged_from")
-_SIGNIFICANT = frozenset({"mean_ref", "mean_test", "statistic", "p", "q", "beta_log2"})
+               "merged_from", "detected_reference", "detected_test", "detection_fisher_p",
+               "detection_driven")
+_SIGNIFICANT = frozenset({"mean_ref", "mean_test", "statistic", "p", "q", "beta_log2",
+                          "detection_fisher_p"})
 _DECIMAL4 = frozenset({"fc_test_over_ref", "log2fc_test_over_ref"})
 
 
@@ -159,6 +161,8 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
             "n_rows": len(rows),
             "n_tested": sum(1 for r in rows if r["status"] == "tested"),
             "n_meets_thresholds": sum(1 for r in rows if r["meets_thresholds"]),
+            "detection_available": any(r["detected_reference"] is not None for r in rows),
+            "n_detection_driven": sum(1 for r in rows if r["detection_driven"]),
         }
         if "aggregate" in analysis:
             item["aggregate"] = analysis["aggregate"]

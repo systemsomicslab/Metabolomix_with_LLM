@@ -743,6 +743,9 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
                           {"group_n": {k: len(v) for k, v in members.items()}})
     rows_ref = [index[s] for s in members[reference]]
     rows_test = [index[s] for s in members[test]]
+    # 検出の例数は _load の検出状態（まとめた後はどちらかで検出）から数える。集約の行では数えない。
+    detected = None if aggregate_info is not None or data["detected"] is None else data["detected"]
+    det_col = {fid: j for j, fid in enumerate(data["feature_ids"])}
 
     kind = analysis["test"]["kind"]
     transform = analysis["test"]["transform"]
@@ -778,6 +781,9 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
             "statistic": outcome["statistic"], "p": outcome["p"], "q": None,
             "beta_log2": outcome["beta_log2"],
         }
+        if detected is not None:
+            results[fid]["detected_reference"] = int(detected[rows_ref, det_col[fid]].sum())
+            results[fid]["detected_test"] = int(detected[rows_test, det_col[fid]].sum())
 
     wanted = matrix["feature_ids"] if reported is None else reported
     if analysis["bh_population"] == "matrix":
@@ -808,6 +814,15 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
         row = dict(row)
         row["merged_from"] = merged_from.get(fid)
         row["direction"] = _direction(row)
+        row.setdefault("detected_reference", None)
+        row.setdefault("detected_test", None)
+        d_ref, d_test = row["detected_reference"], row["detected_test"]
+        row["detection_fisher_p"] = (
+            None if d_ref is None else spec_statistics.detection_fisher_p(
+                d_ref, len(rows_ref), d_test, len(rows_test)))
+        row["detection_driven"] = (
+            spec_statistics.detection_driven(row["direction"], d_ref, len(rows_ref), d_test,
+                                             len(rows_test)) if row["status"] == "tested" else None)
         row["meets_thresholds"] = _meets(row, analysis["thresholds"])
         rows.append(row)
     out = {

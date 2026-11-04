@@ -20,8 +20,8 @@ import warnings
 import numpy as np
 from scipy import stats
 
-__all__ = ["FC_DEFINITIONS", "KINDS", "bh", "fold_change", "ols_group", "transform_values",
-           "two_group"]
+__all__ = ["FC_DEFINITIONS", "KINDS", "bh", "detection_driven", "detection_fisher_p", "fold_change",
+           "ols_group", "transform_values", "two_group"]
 
 KINDS = ("student", "welch", "mannwhitney", "ols")
 FC_DEFINITIONS = ("arithmetic_mean_ratio", "geometric_mean_ratio")
@@ -130,3 +130,25 @@ def bh(pvalues: list) -> list:
     for i, value in zip(index, q):
         out[i] = float(value)
     return out
+
+
+def detection_fisher_p(detected_ref: int, n_ref: int, detected_test: int, n_test: int) -> float:
+    """検出の有無（検出 / 未検出）の 2×2 の Fisher の正確検定、両側 p。"""
+    return float(stats.fisher_exact([[detected_test, n_test - detected_test],
+                                     [detected_ref, n_ref - detected_ref]])[1])
+
+
+def detection_driven(direction: str | None, detected_ref: int | None, n_ref: int,
+                     detected_test: int | None, n_test: int) -> bool | None:
+    """群の差が、値の大小でなく検出の有無から来ているか（機械的な当てはめで、判定は変えない）。
+
+    高い側の群の検出が群の例数の半分に満たない（`<`）か、低い側の群の検出が 0 なら True。
+    向きが無いか検出の例数が無ければ None。
+    """
+    if direction is None or detected_ref is None or detected_test is None:
+        return None
+    if direction == "test_higher":
+        high, n_high, low = detected_test, n_test, detected_ref
+    else:
+        high, n_high, low = detected_ref, n_ref, detected_test
+    return bool(high < n_high / 2 or low == 0)
