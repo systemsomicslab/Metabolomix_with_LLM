@@ -37,6 +37,10 @@ def build_fixture_bundle(output_dir: Path) -> Path:
     ds.source_files = {"fixture.mzTab": next(iter(ds.source_files.values()))}
     mask = np.ones((len(ds.feature_ids), len(ds.sample_names)), dtype=bool)
     mask[ds.feature_ids.index("1"), ds.sample_names.index("RA1")] = False
+    # 付加体の無い行（SME 候補も無い特徴 3）を作る。付加体は SML の adduct_ions から読まれる。
+    for row in ds.sml_rows:
+        if row.get("SML_ID") == "3":
+            row["adduct_ions"] = None
     ds.detected_mask = mask
     ds.feature_matrix[ds.feature_ids.index("2"), ds.sample_names.index("HC1")] = np.nan
     # 名前からの推定は `QC1` を qc にしないので、役割は実験情報シートで与える。
