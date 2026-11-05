@@ -931,6 +931,11 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curati
                                    dataset_handle: str | None = None) -> str:
     """指定した 2 群結果を根拠バンドル v3（samples・intensities・adduct・comparison.polarity）へ出力する。
 
+    spectrum_links は同じアラインメントの `.dcl` へ ID（SMF_ID == AlignmentID == `.dcl` の番号）で
+    結び、m/z・RT は検証にだけ使う。`.arf2` / `.dcl` はハンドルならそのハンドルのもの、対話の
+    セッションなら `dataset_handle_open` と同じ探し方で決める。結べないときは links を空にし、
+    manifest の `provenance.spectrum_links_status` と `spectrum_links_reason` に理由を書く。
+
     dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
@@ -954,8 +959,14 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curati
             state = 'not_applied' if not apply_curation else 'applied' if mapped else 'unmapped'
             curation = dict(state=state,flag_set=flags)
         polarity = holder.polarity if dataset_handle else _dataset_polarity(ds)[0]
+        if dataset_handle:
+            arf2_path, dcl_path = holder.arf2_path, holder.dcl_path
+        else:
+            from metabolomix.tools.handle_tools import _alignment_files
+            arf2_path, dcl_path = _alignment_files(ds, None)
         return json_payload(export_dataset_evidence(ds,result,Path(output_dir),curation=curation,
-                                                    polarity=polarity))
+                                                    polarity=polarity,arf2_path=arf2_path,
+                                                    dcl_path=dcl_path))
     except DomainError as exc:
         return mztab_error(exc.code,exc.message,exc.details or None)
     except (ValueError,OSError,FlagFileError) as exc:

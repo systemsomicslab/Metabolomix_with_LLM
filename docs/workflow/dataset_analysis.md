@@ -154,7 +154,15 @@ QC/blank/unknown/standard・`include=false` を混ぜない（選択規則は
 全特徴量と候補の根拠と、試料ごとの値と検出を新しいv3バンドルへ保存する。旧15列TSVは変更しない。
 
 1. metabolomix/tools/dataset_analysis_tools.py  dataset_export_evidence_bundle()
-2.    └─ metabolomix/analysis/evidence_export.py  export_dataset_evidence()
-3.       └─ metabolomix/analysis/evidence_export.py  _samples_table()
-4.       └─ metabolomix/analysis/evidence_export.py  _intensity_rows()
-5.       └─ metabolomix/analysis/evidence_export.py  write_evidence_bundle()
+2.    └─ metabolomix/tools/handle_tools.py  _alignment_files()（対話のセッションのとき。ハンドルはその `.arf2` / `.dcl`）
+3.    └─ metabolomix/analysis/evidence_export.py  export_dataset_evidence()
+4.       └─ metabolomix/analysis/evidence_export.py  _samples_table()
+5.       └─ metabolomix/analysis/evidence_export.py  _intensity_rows()
+6.       └─ metabolomix/analysis/evidence_export.py  dataset_spectrum_links()
+7.          └─ metabolomix/analysis/evidence_export.py  _id_space_check()
+8.          └─ metabolomix/analysis/evidence_export.py  link_alignment_spectra()
+9.       └─ metabolomix/analysis/evidence_export.py  write_evidence_bundle()
+
+spectrum_links は同じアラインメントの `.dcl` に ID（SMF_ID == AlignmentID == `.dcl` の番号）で結び、
+m/z・RT は検証にだけ使う（ARF 経路の `alignment_links()` と `link_alignment_spectra()` を共有）。
+結べないときの状態と理由は manifest の provenance（`docs/output_format/reanalysis.md` §10）。
