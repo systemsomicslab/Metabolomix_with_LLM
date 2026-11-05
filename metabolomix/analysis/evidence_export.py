@@ -185,6 +185,111 @@ def curate_annotations(annotations, flags, fid_to_spot):
     return out
 
 
+DATASET_LINK_EVIDENCE = 'same-alignment-stem; SMF_ID == AlignmentID == DCL index; precursor/RT verified'
+
+
+def link_alignment_spectra(items, catalog, entries, dcl_path, source_analysis_id, mapping_evidence):
+    """(特徴 ID, スポット番号) を同じアラインメントの `.dcl` の同じ番号に結ぶ（両経路で共有）。
+
+    結ぶのは番号だけで、`.arf2` のスポットの m/z・RT と `.dcl` の precursor・RT が合うかは
+    検証にだけ使う（m/z の近さでは結ばない）。番号が None・範囲外は `out_of_range`。
+    戻り値は (links, 特徴ごとの状態)。
+    """
+    from metabolomix.msdial.alignment_spot import precursor_agrees
+    links, statuses = [], {}
+    for fid, spot in items:
+        if spot is None or not 0 <= spot < len(entries):
+            statuses[fid] = dict(status='out_of_range')
+            continue
+        raw = catalog.get(spot,{})
+        entry = entries[spot]
+        if raw.get('MassCenter') is None or raw.get('RT') is None:
+            status = 'metadata_missing'
+        elif not precursor_agrees(entry['precursor_mz'],raw['MassCenter'],entry['rt'],raw['RT']):
+            status = 'precursor_mismatch'
+        elif not entry['msms_spectrum']:
+            status = 'no_msms'
+        else:
+            status = 'ok'
+            links.append(dict(feature_id=fid,spectrum_file=dcl_path.name,
+                              spectrum_id=f'{dcl_path.stem}:{spot}',source_analysis_id=source_analysis_id,
+                              mapping_evidence=mapping_evidence))
+        statuses[fid] = dict(status=status,dcl_index=spot)
+    return links, statuses
+
+
+def _spot_of(fid):
+    """SMF_ID をスポット番号として読む。整数でなければ None。"""
+    try:
+        return int(fid)
+    except (TypeError,ValueError):
+        return None
+
+
+def _id_space_check(ds, items, catalog):
+    """SMF_ID と `.arf2` の AlignmentID が同じ番号の空間かを、mzTab と `.arf2` の m/z・RT で確かめる。"""
+    from metabolomix.msdial.alignment_spot import precursor_agrees
+    checked, mismatched = 0, []
+    for fid, spot in items:
+        raw = catalog.get(spot) if spot is not None else None
+        meta = ds.feature_metadata.get(fid) or {}
+        if not raw or raw.get('MassCenter') is None or meta.get('mz') is None:
+            continue
+        checked += 1
+        if not precursor_agrees(meta['mz'],raw['MassCenter'],meta.get('rt'),raw.get('RT')):
+            mismatched.append(dict(feature_id=fid,smf_mz=meta.get('mz'),smf_rt=meta.get('rt'),
+                                   arf2_mz=raw.get('MassCenter'),arf2_rt=raw.get('RT')))
+    return dict(n_checked=checked,n_mismatch=len(mismatched),examples=mismatched[:20])
+
+
+def dataset_spectrum_links(ds, rows, arf2_path, dcl_path, source_analysis_id):
+    """dataset 経路の spectrum_links。戻り値は (links, spectra_files, provenance に足す dict)。
+
+    ARF 経路の `alignment_links` と同じ規則（SMF_ID == AlignmentID == `.dcl` の番号）。
+    結べないときは空の links に `spectrum_links_status` と `spectrum_links_reason` を添える:
+    - `not_provided`: 同じアラインメントの `.arf2` か `.dcl` が見つからない
+    - `id_space_mismatch`: SMF_ID の m/z・RT が同じ番号の `.arf2` のスポットと合わない特徴がある
+      （番号の空間が違う。1 件でもあれば全体を結ばない）
+    - `id_space_unverified`: m/z を比べられる特徴が 1 件も無く、番号の空間を確かめられない
+    結べたときは `verified_alignment`。特徴ごとの状態（`msms_link_statuses`）は ARF 経路と同じ形。
+    """
+    files = dict(arf2=Path(arf2_path).name if arf2_path else None,
+                 dcl=Path(dcl_path).name if dcl_path else None)
+    extra = dict(alignment_files=files,spectrum_links_reason=None,msms_link_statuses={},
+                 msms_link_status_counts={},id_space_check=None)
+    lacking = [name for name,path in (('arf2',arf2_path),('dcl',dcl_path))
+               if path is None or not Path(path).is_file()]
+    if lacking:
+        return [], [], dict(extra,spectrum_links_status='not_provided',
+                            spectrum_links_reason='同じアラインメントの '+' と '.join('.'+n for n in lacking)
+                            +' が見つからないので、MS/MS を結んでいない（links は未提供で、MS/MS が無いという意味ではない）')
+    from metabolomix.arf2.reader import load_catalog
+    from metabolomix.dcl.reader import deserialize_dcl
+    dcl_path = Path(dcl_path)
+    catalog = {spot.get('AlignmentID'): spot for spot in load_catalog(Path(arf2_path))}
+    items = [(str(row['feature']),_spot_of(row['feature'])) for row in rows]
+    check = _id_space_check(ds,items,catalog)
+    extra['id_space_check'] = check
+    if check['n_mismatch']:
+        return [], [], dict(extra,spectrum_links_status='id_space_mismatch',
+                            spectrum_links_reason=f"{check['n_mismatch']} / {check['n_checked']} 特徴で SMF_ID の m/z・RT が"
+                            '同じ番号の .arf2 のスポット（AlignmentID）と合わない。番号の空間が違うので MS/MS を結んでいない')
+    if not check['n_checked']:
+        return [], [], dict(extra,spectrum_links_status='id_space_unverified',
+                            spectrum_links_reason='m/z を .arf2 と比べられる特徴が無く、SMF_ID と AlignmentID が'
+                            '同じ番号の空間かを確かめられないので、MS/MS を結んでいない')
+    links, statuses = link_alignment_spectra(
+        items,catalog,deserialize_dcl(str(dcl_path)),dcl_path,source_analysis_id,DATASET_LINK_EVIDENCE)
+    for fid,spot in items:
+        if spot is None:
+            statuses[fid] = dict(status='spot_id_not_integer')
+    counts = {}
+    for value in statuses.values():
+        counts[value['status']] = counts.get(value['status'],0) + 1
+    return links, [dcl_path] if links else [], dict(extra,spectrum_links_status='verified_alignment',
+                                                    msms_link_statuses=statuses,msms_link_status_counts=counts)
+
+
 def _injection_order(value):
     """注入順。整数として読めなければ None（`samples.tsv` では空）。"""
     if isinstance(value,bool):
@@ -279,7 +384,10 @@ def _intensity_rows(ds, result):
     return rows, stage, reason
 
 
-def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=None):
+def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=None,
+                            arf2_path=None, dcl_path=None):
+    """dataset 経路の根拠バンドル v3。`arf2_path` / `dcl_path` は同じアラインメントの `.arf2` / `.dcl`
+    （spectrum_links を結ぶのに使う。`dataset_spectrum_links`）。"""
     if getattr(ds,'exploratory_only',False):
         raise DomainError('EXPLORATORY_ONLY_DATASET','探索専用データセットは比較の根拠として出力できません',{})
     # 値の出所が無い結果は、古いかどうかより先に止める（出所の無さは計算し直す以外に直らない）。
@@ -331,11 +439,12 @@ def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=N
     flags = curation.get('flag_set') if curation and curation.get('state') == 'applied' else None
     annotations = curate_annotations(annotations,flags,mapping)
     source_id = provenance.get('result_id') or hashlib.sha256(packed(result).encode()).hexdigest()
+    links, spectra, link_provenance = dataset_spectrum_links(ds,result['results'],arf2_path,dcl_path,source_id)
     return write_evidence_bundle(comparison=comparison,features=features,annotations=annotations,
-                                  spectrum_links=[],spectra_files=[],output_dir=output_dir,
+                                  spectrum_links=links,spectra_files=spectra,output_dir=output_dir,
                                   source_analysis_id=source_id,provenance=dict(result=provenance,
                                       source_files=getattr(ds,'source_files',[]),curation_state=(curation or {}).get('state'),
-                                      spectrum_links_status='not_provided'),preprocessing_report=report,
+                                      **link_provenance),preprocessing_report=report,
                                   exclusions=exclusion_steps(report),samples=samples,
                                   intensities=intensities,intensities_stage=stage,
                                   detection_unavailable_reason=detection_reason)

@@ -566,3 +566,32 @@ UTF-8・改行は CRLF）。
 SME の付加体）。無ければ空。
 
 戻り値には v2 の欄に `n_samples`・`n_intensity_rows`・`intensities_stage` が足される。
+
+### `spectrum_links.tsv` と `.dcl` の出どころ
+
+dataset 経路も ARF 経路（`arf_export_evidence_bundle`）と同じ規則で、**同じアラインメントの `.dcl`** の
+代表スペクトルに結ぶ。結ぶのは ID だけ（**SMF_ID == `.arf2` の AlignmentID == `.dcl` の番号**）で、
+m/z・RT は結びの検証にだけ使う（m/z の近さでは結ばない）。結べた特徴は 1 行（`spectrum_file` は `.dcl`
+のファイル名、`spectrum_id` は `<.dcl の語幹>:<番号>`、`mapping_evidence` は
+`same-alignment-stem; SMF_ID == AlignmentID == DCL index; precursor/RT verified`）。結べた行が 1 件でも
+あれば `.dcl` をバンドルへ写し、`files[]` に `role: spectra` で載る。
+
+使う `.arf2` / `.dcl`: ハンドルなら `dataset_handle_open` が決めたもの（§1）。対話のセッションなら
+同じ探し方（検出状態を取り込んだ `.arf` の同じバッチ → mzTab-M の隣）。
+
+検証は 2 段:
+
+1. **番号の空間**: SMF_ID の m/z・RT（mzTab-M）と、同じ番号の `.arf2` のスポットの m/z・RT を比べる。
+   1 件でも合わなければ全体を結ばない（番号の付け方が違う別のアラインメントとみなす）。
+2. **特徴ごと**: `.arf2` のスポットと `.dcl` の同じ番号の precursor・RT を比べる（ARF 経路と同じ）。
+
+`manifest.json` の `provenance` の欄:
+
+| 欄 | 意味 |
+|---|---|
+| `spectrum_links_status` | `verified_alignment`（結んだ）/ `not_provided`（`.arf2` か `.dcl` が見つからない）/ `id_space_mismatch`（1 の検証で合わない特徴があった）/ `id_space_unverified`（m/z を比べられる特徴が無く、1 を確かめられない）。`verified_alignment` 以外は links が空で、**空は「MS/MS が無い」の意味ではない** |
+| `spectrum_links_reason` | `verified_alignment` 以外のときの理由（文）。結べたときは `null` |
+| `alignment_files` | 使った `{arf2, dcl}` のファイル名。見つからなければ `null` |
+| `id_space_check` | 1 の検証の `{n_checked, n_mismatch, examples}`（`examples` は合わない特徴の先頭 20 件。SMF と `.arf2` の m/z・RT）。`.arf2` / `.dcl` が無ければ `null` |
+| `msms_link_statuses` | 特徴ごとの `{status, dcl_index}`（ARF 経路と同じ形）。`status` は `ok`（結んだ）/ `no_msms`（エントリはあるがピークが無い＝MS/MS 未取得）/ `precursor_mismatch` / `metadata_missing`（`.arf2` にそのスポットが無いか m/z・RT が無い）/ `out_of_range`（`.dcl` にその番号が無い）/ `spot_id_not_integer`。`verified_alignment` 以外では `{}` |
+| `msms_link_status_counts` | `msms_link_statuses` の `status` ごとの件数（0 件の状態は載らない） |

@@ -1,37 +1,22 @@
 """ARF比較結果に兄弟ARF2の候補を付け、未同定行も保持する。"""
+from pathlib import Path
+
 from metabolomix.arf.identity_join import spot_id_of
 from metabolomix.analysis.evidence_export import (
-    comparison_of,feature_row,annotation_row,curate_annotations,write_evidence_bundle,exclusion_steps)
+    comparison_of,feature_row,annotation_row,curate_annotations,write_evidence_bundle,exclusion_steps,
+    link_alignment_spectra)
 from metabolomix.analysis.export_contract import is_significant
+
+
+ARF_LINK_EVIDENCE = 'same-alignment-stem; MasterAlignmentID == DCL index; precursor/RT verified'
 
 
 def alignment_links(rows,catalog,dcl_path,source_analysis_id):
     """同一語幹のalignment DCLをIDで接続し、m/zとRTは検証だけに使う。"""
     from metabolomix.dcl.reader import deserialize_dcl
-    from metabolomix.msdial.alignment_spot import precursor_agrees
     entries = deserialize_dcl(str(dcl_path))
-    links, statuses = [], {}
-    for row in rows:
-        fid = str(row['feature'])
-        spot = spot_id_of(fid)
-        raw = catalog.get(spot,{})
-        if spot is None or not 0 <= spot < len(entries):
-            statuses[fid] = dict(status='out_of_range')
-            continue
-        entry = entries[spot]
-        if raw.get('MassCenter') is None or raw.get('RT') is None:
-            status = 'metadata_missing'
-        elif not precursor_agrees(entry['precursor_mz'],raw['MassCenter'],entry['rt'],raw['RT']):
-            status = 'precursor_mismatch'
-        elif not entry['msms_spectrum']:
-            status = 'no_msms'
-        else:
-            status = 'ok'
-            links.append(dict(feature_id=fid,spectrum_file=dcl_path.name,
-                spectrum_id=f'{dcl_path.stem}:{spot}',source_analysis_id=source_analysis_id,
-                mapping_evidence='same-alignment-stem; MasterAlignmentID == DCL index; precursor/RT verified'))
-        statuses[fid] = dict(status=status,dcl_index=spot)
-    return links,statuses
+    return link_alignment_spectra([(str(row['feature']),spot_id_of(str(row['feature']))) for row in rows],
+                                  catalog,entries,Path(dcl_path),source_analysis_id,ARF_LINK_EVIDENCE)
 
 
 def export_arf_evidence(result, catalog, output_dir, *, source_analysis_id,

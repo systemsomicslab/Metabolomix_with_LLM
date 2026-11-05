@@ -319,6 +319,6 @@ run ディレクトリの `remote-job.json`。サーバは版を返さないの�
 | ツール | 内容 |
 |---|---|
 | `arf_export_evidence_bundle` | 全2群比較対象と出典別候補をv2バンドルへ保存。同一語幹のalignment DCLをIDとm/z・RTで検証して接続。 |
-| `dataset_export_evidence_bundle` | result_idで指定した現行2群結果を全特徴量・複数候補付きでv3バンドル（samples・intensities・adduct・comparison.polarity）へ保存。旧v1を変更しない。列の意味は `docs/output_format/reanalysis.md` §10。 |
+| `dataset_export_evidence_bundle` | result_idで指定した現行2群結果を全特徴量・複数候補付きでv3バンドル（samples・intensities・adduct・comparison.polarity、同じアラインメントの `.dcl` への spectrum_links）へ保存。旧v1を変更しない。列の意味は `docs/output_format/reanalysis.md` §10。 |
 
 出力先は新しいディレクトリを指定する。既存出力を上書きしない。未同定・手動訂正・前処理除外来歴を保持する。
