@@ -1,6 +1,8 @@
 """完了した run の成果物を、対話セッションが使える DatasetState へ戻す層。
 
-`dataset_load(pipeline_path=...)` だけがここを呼ぶ。行列だけを別ツールで
+`dataset_load(pipeline_path=..., source="mztab")`（と同じ入口 `dataset.opening` を通る
+`dataset_handle_open`）だけが `load_run_dataset` を呼ぶ。解析フォルダのアダプタで run を読む
+ときは `run_console_job` と `_run_manifest_rows` だけを借り、行列も差次的結果も戻さない。行列だけを別ツールで
 載せられる形にしないのは、run A の dataset に run B の行列を混ぜられると
 群の対応が黙ってずれるため——dataset・解決済み試料対応表・binding・解析行列は
 同じ run から**まとめて**載せる。
@@ -17,7 +19,7 @@ from metabolomix.core.atomic_io import DomainError
 from metabolomix.mztab import loading as mztab_loading
 from metabolomix.pipeline import recovery, store
 
-__all__ = ["load_run_dataset"]
+__all__ = ["load_run_dataset", "run_console_job"]
 
 #: `metabolomics_handlers._MATRIX_SUBDIR` と同じ置き場（保存側と読み側の対）。
 _MATRIX_SUBDIR = ("results", "matrices")
@@ -39,18 +41,8 @@ def load_run_dataset(pipeline_path, *, allow_incomplete: bool = False):
     戻したもの・戻さなかったものを `ds.handoff_report` に残す
     （`restore_differentials`）。
     """
-    pipeline_root = recovery.normalize_pipeline_root(Path(pipeline_path).expanduser())
-    record = store.load_run(pipeline_root)
-
-    job_path = (record.get("upstream") or {}).get("console_job_path")
-    if not job_path:
-        raise DomainError(
-            "PIPELINE_UPSTREAM_INCOMPLETE",
-            "この run はまだ上流（Console）の成果物を持っていません。"
-            "pipeline_status で状態を確認してください。",
-            {"pipeline_root": str(pipeline_root)})
-
-    ds = mztab_loading.load_dataset_state(job_path=Path(job_path),
+    pipeline_root, record, job_path = run_console_job(pipeline_path)
+    ds = mztab_loading.load_dataset_state(job_path=job_path,
                                           allow_incomplete=allow_incomplete)
     results = record.get("results") or []
 
@@ -76,6 +68,26 @@ def load_run_dataset(pipeline_path, *, allow_incomplete: bool = False):
     # 群の指紋は試料対応表を戻した後でなければ run と同じ規則で計算できない。
     ds.handoff_report = restore_differentials(ds, pipeline_root, record)
     return ds
+
+
+def run_console_job(pipeline_path) -> tuple[Path, dict, Path]:
+    """run の (pipeline_root, record, 上流の Console の analysis-job.json のパス)。
+
+    `pipeline_path` は `pipeline-run.json` でもその親ディレクトリでもよい。上流がまだ
+    成果物を持っていなければ `PIPELINE_UPSTREAM_INCOMPLETE`。mzTab-M・解析フォルダの
+    どちらのアダプタで run を読むときも、ここで同じジョブを引く。
+    """
+    pipeline_root = recovery.normalize_pipeline_root(Path(pipeline_path).expanduser())
+    record = store.load_run(pipeline_root)
+
+    job_path = (record.get("upstream") or {}).get("console_job_path")
+    if not job_path:
+        raise DomainError(
+            "PIPELINE_UPSTREAM_INCOMPLETE",
+            "この run はまだ上流（Console）の成果物を持っていません。"
+            "pipeline_status で状態を確認してください。",
+            {"pipeline_root": str(pipeline_root)})
+    return pipeline_root, record, Path(job_path)
 
 
 def _run_manifest_rows(pipeline_root: Path, record: dict) -> list[dict] | None:

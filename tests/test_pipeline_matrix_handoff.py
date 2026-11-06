@@ -96,7 +96,7 @@ def test_loading_a_run_brings_the_dataset_and_its_matrices_together(tmp_path):
     session_state.session.dataset = None
 
     # 成功時は要約テキスト（エラー時だけ JSON 封筒）。
-    summary = dataset_load(pipeline_path=str(harness.pipeline_path))
+    summary = dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab")
     assert "解析行列" in summary, summary
 
     ds = session_state.session.dataset
@@ -111,7 +111,7 @@ def test_loading_a_run_restores_the_resolved_sample_metadata(tmp_path):
 
     harness, _ = _completed_run(tmp_path)
     session_state.session.dataset = None
-    dataset_load(pipeline_path=str(harness.pipeline_path))
+    dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab")
 
     rows = session_state.session.dataset.sample_metadata_rows
     expected = harness.result_data("sample_manifest")["rows"]
@@ -125,7 +125,7 @@ def test_loading_a_run_restores_the_resolved_binding_targets(tmp_path):
 
     harness, _ = _completed_run(tmp_path)
     session_state.session.dataset = None
-    dataset_load(pipeline_path=str(harness.pipeline_path))
+    dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab")
 
     bindings = harness.result_data("feature_bindings") or {}
     expected = {tid: b["selected_feature_id"]
@@ -140,7 +140,7 @@ def test_a_restored_matrix_can_be_used_by_dataset_statistic(tmp_path):
 
     harness, _ = _completed_run(tmp_path)
     session_state.session.dataset = None
-    dataset_load(pipeline_path=str(harness.pipeline_path))
+    dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab")
 
     matrix_id = sorted(session_state.session.dataset.analysis_matrices)[0]
     result = _payload(dataset_statistic(
@@ -174,6 +174,6 @@ def test_a_tampered_matrix_file_is_refused_and_leaves_the_session_alone(tmp_path
     np.savez(arrays_path, **arrays)
 
     session_state.session.dataset = None
-    payload = _payload(dataset_load(pipeline_path=str(harness.pipeline_path)))
+    payload = _payload(dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab"))
     assert payload["error"]["code"] == "MATRIX_INTEGRITY_MISMATCH"
     assert session_state.session.dataset is None

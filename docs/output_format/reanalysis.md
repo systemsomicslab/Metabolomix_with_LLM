@@ -38,11 +38,14 @@
 | 欄 | 意味 |
 |---|---|
 | `dataset_handle` | ハンドルの ID |
-| `polarity` / `polarity_source` | データセットの極性と出所（`job_declared` / `adduct_majority` / `unknown`）。`dataset_feature_search` の目標照合と同じ決め方 |
-| `n_features` / `n_samples` | mzTab-M の特徴数・試料数 |
+| `adapter` | 読んだアダプタ。`msdial_folder`（解析フォルダの `.arf` / `.arf2` を直接）/ `mztab`（mzTab-M）。`job_path` / `pipeline_path` の既定は `msdial_folder`（`source="mztab"` で `mztab`） |
+| `polarity` / `polarity_source` | データセットの極性と出所（`job_declared` / `adduct_majority` / `arf2_ion_mode` / `unknown`）。`dataset_feature_search` の目標照合と同じ決め方 |
+| `n_features` / `n_samples` | 特徴数・試料数 |
 | `detection_available` | 検出状態（gap-fill の区別）を取り込めたか |
+| `arf` / `not_chosen` | 解析フォルダで読んだとき、選んだ `.arf` と選ばなかった `.arf` のファイル名。mzTab-M で読んだときは `null` |
 | `library` | `{file, sha256, record_count}`。読まなかったときは `null` で、理由が `library_note` |
-| `arf2` / `dcl` | スポットの照合（spot_id = SMF_ID）に使うファイル名。決まらなければ `null` |
+| `library_record` | データセットが同定に使ったライブラリの記録（[library.md](library.md) の LibraryRecord。置き場所は出さない） |
+| `arf2` / `dcl` | スポットの照合（spot_id = SMF_ID）に使うファイル名。解析フォルダで読んだならその `.arf2` / `.dcl`。決まらなければ `null` |
 | `reused_base` | 読み込み済みのものを使い回したか |
 
 ライブラリは**データセットの極性の設定だけ**から引く（`[library] msp_positive` /

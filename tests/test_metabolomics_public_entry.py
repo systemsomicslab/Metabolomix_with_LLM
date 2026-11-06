@@ -156,7 +156,7 @@ def test_a_completed_run_can_be_opened_for_interactive_work(tmp_path, monkeypatc
     assert worker.run_worker(pipeline_path)["status"] == "completed"
 
     session_state.session.dataset = None
-    summary = dataset_load(pipeline_path=str(pipeline_path))
+    summary = dataset_load(pipeline_path=str(pipeline_path), source="mztab")
     assert "解析行列" in summary, summary
 
     ds = session_state.session.dataset

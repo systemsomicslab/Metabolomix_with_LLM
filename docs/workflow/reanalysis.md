@@ -16,22 +16,26 @@
 
 ## dataset_handle_open
 
-前提: なし。引数は `dataset_load` と同じ（3 つのパスのうち 1 つ）。
+前提: なし。引数は `dataset_load` と同じ（`directory` / `mztab_path` / `job_path` /
+`pipeline_path` のどれか 1 つ・`source`・`measure`・`allow_incomplete`）。
 状態変更: `handles.registry` にハンドルを 1 本足す（対話のセッションは変えない）。
-読み込み済みの基を `HandleRegistry.put_base` で覚え、同じ入力（size・mtime が同じ）なら
-読み直さずに複製を渡す。ライブラリは極性の設定だけから引き、読み取り専用で開く。
+読み込みは `dataset_load` と同じ入口 `open_dataset` が持ち、読み込み済みの基を
+`HandleRegistry.put_base` で覚え、同じ入力（size・mtime が同じ）なら読み直さずに複製を渡す。
+ライブラリは極性の設定だけから引き、読み取り専用で開く。スポットの照合に使う `.arf2` / `.dcl` は、
+解析フォルダで読んだならその選択（`AlignmentSelection`）のもの、mzTab-M で読んだなら
+`_alignment_files()` が探す。
 
 1. metabolomix/tools/handle_tools.py  dataset_handle_open()
-2. ├─ metabolomix/core/handles.py  HandleRegistry.cached_base()
-3. ├─ metabolomix/tools/handle_tools.py  _load()
-4. │  ├─ metabolomix/pipeline/session_handoff.py  load_run_dataset()
-5. │  └─ metabolomix/mztab/loading.py  load_dataset_state()
-6. ├─ metabolomix/core/handles.py  HandleRegistry.put_base()
-7. ├─ metabolomix/mztab/polarity.py  dataset_polarity()
-8. ├─ metabolomix/tools/handle_tools.py  _alignment_files()
-9. ├─ metabolomix/tools/handle_tools.py  _open_library()
-10. │  ├─ metabolomix/core/user_config.py  get_setting()
-11. │  └─ metabolomix/library/store.py  open_store()
+2. ├─ metabolomix/dataset/opening.py  open_dataset()（連鎖は [mztab.md](mztab.md) の dataset_load）
+3. │  ├─ metabolomix/core/handles.py  HandleRegistry.cached_base()
+4. │  └─ metabolomix/core/handles.py  HandleRegistry.put_base()
+5. ├─ metabolomix/mztab/polarity.py  dataset_polarity()
+6. ├─ [mzTab-M で読んだとき] metabolomix/tools/handle_tools.py  _alignment_files()
+7. │  └─ [pipeline_path のとき] metabolomix/dataset/opening.py  _pipeline_arf2()
+8. ├─ metabolomix/tools/handle_tools.py  _open_library()
+9. │  ├─ metabolomix/core/user_config.py  get_setting()
+10. │  └─ metabolomix/library/store.py  open_store()
+11. ├─ metabolomix/dataset/library_memory.py  public_view()
 12. └─ metabolomix/core/handles.py  HandleRegistry.add()
 
 ## dataset_handle_list

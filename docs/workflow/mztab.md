@@ -6,12 +6,54 @@ gap-fill）は `docs/output_format/mztab.md`（`lipidmix://docs/output-format/mz
 
 ## dataset_load
 
-読み込みの実体は `metabolomix/mztab/loading.py`（session に依存しない層）。MCP ツールは
-戻ってきた DatasetState を成功時だけ `session.dataset` へ置く。pipeline のワーカーは
-同じ関数を呼び、自分が持つ DatasetState として使う。
+入口は `metabolomix/dataset/opening.py` の `open_dataset()`（`dataset_handle_open` と共有）。
+4 つの入口（`directory` / `mztab_path` / `job_path` / `pipeline_path`）のちょうど 1 つを、
+`source`（`auto` / `folder` / `mztab`）で決まるアダプタで読む: `directory` は解析フォルダ、
+`mztab_path` は mzTab-M、`job_path` / `pipeline_path` は既定で解析フォルダ・`source="mztab"`
+で mzTab-M。読み込み済みの基はハンドルの登録簿に覚え（キーは入口・アダプタ・measure・
+allow_incomplete・絶対パス）、読んだファイルの size と更新時刻が同じなら読み直さずに複製を返す。
+MCP ツールは戻ってきた DatasetState を成功時だけ `session.dataset` へ置く。pipeline の
+ワーカーは `loading.load_dataset_state` を直に呼び、自分が持つ DatasetState として使う。
+
+入口とアダプタの選び方:
+1. metabolomix/tools/mztab_tools.py dataset_load()
+2. └─ metabolomix/dataset/opening.py open_dataset()
+3.    └─ metabolomix/core/handles.py HandleRegistry.cached_base()
+4.    └─ metabolomix/dataset/opening.py _open()
+5.       └─ [mzTab-M のアダプタ] metabolomix/dataset/opening.py _load()（下の 3 経路）
+6.       └─ [directory] metabolomix/dataset/alignment_files.py select_alignment()
+7.       └─ [directory] metabolomix/dataset/msdial_adapter.py load_msdial_folder()
+8.       └─ [job_path を解析フォルダで] metabolomix/dataset/opening.py _folder_via_job()
+9.          └─ metabolomix/mztab/loading.py job_gate()
+10.         └─ metabolomix/mztab/evidence.py arf_candidates()
+11.         └─ metabolomix/dataset/alignment_files.py select_alignment()
+12.         └─ metabolomix/dataset/msdial_adapter.py load_msdial_folder()
+13.      └─ [pipeline_path を解析フォルダで] metabolomix/dataset/opening.py _folder_via_run()
+14.         └─ metabolomix/pipeline/session_handoff.py run_console_job()
+15.         └─ metabolomix/dataset/opening.py _folder_via_job()（隣に `.arf` が無ければ _pipeline_arf2()）
+16.         └─ metabolomix/pipeline/session_handoff.py _run_manifest_rows()
+17.         └─ metabolomix/analysis/sample_manifest.py resolve_metadata()
+18.         └─ metabolomix/analysis/sample_manifest.py apply_metadata()
+19.      └─ [directory] metabolomix/dataset/library_memory.py remember_from_folder()
+20.      └─ [job_path] metabolomix/dataset/library_memory.py remember_from_job()
+21.      └─ [pipeline_path] metabolomix/dataset/library_memory.py remember_from_run()
+22.      └─ [mztab_path] metabolomix/dataset/library_memory.py unknown_record()
+23.   └─ metabolomix/core/handles.py HandleRegistry.put_base()
+24. └─ [解析フォルダ] metabolomix/tools/mztab_tools.py _folder_summary_text()
+25. └─ [mzTab-M] metabolomix/tools/mztab_tools.py _summary_text()
+26. └─ metabolomix/tools/mztab_tools.py _opening_lines()
+27.    └─ metabolomix/dataset/library_memory.py public_view()
+
+job / pipeline を解析フォルダで読むときも、ジョブの門（`job_gate()`: ジョブの記録・完了・
+正準 mzTab-M の一意な選択と実在・出所の裏取り）は mzTab-M で読むときと同じものを通り、
+`exploratory_only`・`source_verification`・`job_path` を同じ規則で書く。`.arf` は正準
+mzTab-M の evidence と同じ候補順（`arf_candidates()`）の先頭で、見つからなければ
+`ALIGNMENT_NOT_FOUND`（`source="mztab"` を案内し、mzTab-M へ黙って切り替えない）。
+pipeline の run を解析フォルダで読むときに run から引き継ぐのは解決済みの試料対応表だけで、
+解析行列・feature binding・差次的結果は `source="mztab"`（下の pipeline_path 経路）だけが載せる。
 
 mztab_path 経路（直接指定）:
-1. metabolomix/tools/mztab_tools.py dataset_load()
+1. metabolomix/dataset/opening.py _load()
 2. └─ metabolomix/mztab/loading.py load_dataset_state()
 3. └─ metabolomix/mztab/reader.py parse_mztab()
 3. └─ metabolomix/mztab/validator.py validate_mztab()
@@ -32,50 +74,53 @@ mztab_path 経路（直接指定）:
 18.       └─ metabolomix/mztab/evidence.py build_evidence()
 19.    └─ metabolomix/mztab/evidence.py apply_evidence()
 
-job_path 経路（analysis-job.json の宣言 polarity + measure で正準を選ぶ）:
-1. metabolomix/tools/mztab_tools.py dataset_load()
+job_path 経路（`source="mztab"`。analysis-job.json の宣言 polarity + measure で正準を選ぶ）:
+1. metabolomix/dataset/opening.py _load()
 2. └─ metabolomix/mztab/loading.py load_dataset_state()
-3.    └─ metabolomix/handoff/schema.py AnalysisJob.load()
-4.    └─ metabolomix/mztab/loading.py select_primary_entry()
-5.    └─ metabolomix/mztab/reader.py parse_mztab()
-6.    └─ metabolomix/mztab/validator.py validate_mztab()
-7.    └─ metabolomix/mztab/loading.py _msp_table_for_job()
-8.       └─ metabolomix/console/method_file.py read_method_keys()
-9.       └─ metabolomix/mztab/msp_inchikey.py load_msp_inchikey_table()
-10.   └─ metabolomix/mztab/validator.py detect_quantification_measure()
-11.   └─ metabolomix/mztab/dataset_state.py build_dataset_state()
-12.      └─ metabolomix/mztab/reader.py extract_abundance_matrix()
-13.      └─ metabolomix/mztab/dataset_state.py _index_sme_rows()
-14.      └─ metabolomix/mztab/dataset_state.py _best_evidence()
-15.      └─ metabolomix/mztab/dataset_state.py _resolve_inchikey()
-16.         └─ metabolomix/mztab/msp_inchikey.py lookup()
-17.         └─ metabolomix/mztab/identity.py derive_inchikey()
-18.      └─ metabolomix/mztab/dataset_state.py _build_feature_annotations()
-19.         └─ metabolomix/mztab/dataset_state.py _resolve_inchikey()
-20.      └─ metabolomix/mztab/dataset_state.py _resolve_sample_names()
-21. └─ metabolomix/mztab/evidence.py attach_to_dataset()
+3.    └─ metabolomix/mztab/loading.py job_gate()
+4.       └─ metabolomix/handoff/schema.py AnalysisJob.load()
+5.       └─ metabolomix/mztab/loading.py select_primary_entry()
+6.       └─ metabolomix/mztab/loading.py _verify_source()
+7.    └─ metabolomix/mztab/reader.py parse_mztab()
+8.    └─ metabolomix/mztab/validator.py validate_mztab()
+9.    └─ metabolomix/mztab/loading.py _msp_table_for_job()
+10.      └─ metabolomix/console/method_file.py read_method_keys()
+11.      └─ metabolomix/mztab/msp_inchikey.py load_msp_inchikey_table()
+12.   └─ metabolomix/mztab/validator.py detect_quantification_measure()
+13.   └─ metabolomix/mztab/dataset_state.py build_dataset_state()
+14.      └─ metabolomix/mztab/reader.py extract_abundance_matrix()
+15.      └─ metabolomix/mztab/dataset_state.py _index_sme_rows()
+16.      └─ metabolomix/mztab/dataset_state.py _best_evidence()
+17.      └─ metabolomix/mztab/dataset_state.py _resolve_inchikey()
+18.         └─ metabolomix/mztab/msp_inchikey.py lookup()
+19.         └─ metabolomix/mztab/identity.py derive_inchikey()
+20.      └─ metabolomix/mztab/dataset_state.py _build_feature_annotations()
+21.         └─ metabolomix/mztab/dataset_state.py _resolve_inchikey()
+22.      └─ metabolomix/mztab/dataset_state.py _resolve_sample_names()
+23. └─ metabolomix/mztab/evidence.py attach_to_dataset()
 
-pipeline_path 経路（完了した run の成果物をまとめて載せる）:
-1. metabolomix/tools/mztab_tools.py dataset_load()
+pipeline_path 経路（`source="mztab"`。完了した run の成果物をまとめて載せる）:
+1. metabolomix/dataset/opening.py _load()
 2. └─ metabolomix/pipeline/session_handoff.py load_run_dataset()
-3.    └─ metabolomix/pipeline/recovery.py normalize_pipeline_root()
-4.    └─ metabolomix/pipeline/store.py load_run()
-5.    └─ metabolomix/mztab/loading.py load_dataset_state()
-6.    └─ metabolomix/pipeline/session_handoff.py _run_manifest_rows()
-7.       └─ metabolomix/pipeline/store.py read_result_data()
-8.    └─ metabolomix/pipeline/store.py read_result_data()
-9.       └─ metabolomix/pipeline/store.py verify_result_refs()
-10.   └─ metabolomix/analysis/feature_bindings.py resolved_targets()
-11.   └─ metabolomix/analysis/matrix_state.py load_matrix()
-12.   └─ metabolomix/pipeline/session_handoff.py restore_differentials()
-13.      └─ metabolomix/pipeline/store.py current_result_refs()
-14.      └─ metabolomix/pipeline/store.py read_result_data()
-15.      └─ metabolomix/pipeline/session_handoff.py _handoff_rejection()
-16.         └─ metabolomix/analysis/result_state.py dataset_fingerprint()
-17.         └─ metabolomix/analysis/result_state.py group_fingerprint()
-18.      └─ metabolomix/pipeline/session_handoff.py _run_preprocess_parameters()
-19.         └─ metabolomix/pipeline/store.py read_result_data()
-20. └─ metabolomix/tools/mztab_tools.py _handoff_lines()
+3.    └─ metabolomix/pipeline/session_handoff.py run_console_job()
+4.       └─ metabolomix/pipeline/recovery.py normalize_pipeline_root()
+5.       └─ metabolomix/pipeline/store.py load_run()
+6.    └─ metabolomix/mztab/loading.py load_dataset_state()
+7.    └─ metabolomix/pipeline/session_handoff.py _run_manifest_rows()
+8.       └─ metabolomix/pipeline/store.py read_result_data()
+9.    └─ metabolomix/pipeline/store.py read_result_data()
+10.      └─ metabolomix/pipeline/store.py verify_result_refs()
+11.   └─ metabolomix/analysis/feature_bindings.py resolved_targets()
+12.   └─ metabolomix/analysis/matrix_state.py load_matrix()
+13.   └─ metabolomix/pipeline/session_handoff.py restore_differentials()
+14.      └─ metabolomix/pipeline/store.py current_result_refs()
+15.      └─ metabolomix/pipeline/store.py read_result_data()
+16.      └─ metabolomix/pipeline/session_handoff.py _handoff_rejection()
+17.         └─ metabolomix/analysis/result_state.py dataset_fingerprint()
+18.         └─ metabolomix/analysis/result_state.py group_fingerprint()
+19.      └─ metabolomix/pipeline/session_handoff.py _run_preprocess_parameters()
+20.         └─ metabolomix/pipeline/store.py read_result_data()
+21. └─ metabolomix/tools/mztab_tools.py _handoff_lines()
 
 dataset・解決済み試料対応表・binding・解析行列を**同じ run から**載せる。
 行列だけを別ツールで載せる入口は置いていない——run A の dataset に run B の
@@ -127,7 +172,7 @@ completed は「実行後にファイルが増えた」以上の意味を持た�
 （`QUANTIFICATION_CONFLICT` / `POLARITY_MISMATCH` / `AMBIGUOUS_PRIMARY_MZTAB`）。
 どのファイルを読むかは解析結果そのものを変えるため、辞書順にも LLM にも決めさせない。
 
-job_path 経路では手順 16（`attach_to_dataset`）が `artifact_paths` を入れ終えた
+job_path 経路では手順 23（`attach_to_dataset`）が `artifact_paths` を入れ終えた
 **後**に来る。handoff が
 記録した `peak_matrix_source` を `.arf` 候補の先頭に使えるのはその時点以降だけ。
 

@@ -26,6 +26,7 @@ import しない**——グローバルな現在状態を触る関数はワー�
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from metabolomix.console.method_file import MSP_ANNOTATOR_SETTINGS_KEYS, read_method_keys
@@ -36,7 +37,8 @@ from metabolomix.mztab.msp_inchikey import MspInchikeyTable, load_msp_inchikey_t
 from metabolomix.mztab.reader import parse_mztab
 from metabolomix.mztab.validator import validate_mztab
 
-__all__ = ["artifact_abs_path", "load_dataset_state", "select_primary_entry"]
+__all__ = ["JobGate", "artifact_abs_path", "job_gate", "load_dataset_state",
+           "select_primary_entry"]
 
 #: 完了していない実行の出力に付ける警告。読み手が最初に見る位置へ差す。
 _INCOMPLETE_WARNING = (
@@ -147,7 +149,45 @@ def _load_from_mztab(path: Path):
 
 # ---------- ジョブ経由 ----------
 
-def _load_from_job(job_path: Path, *, allow_incomplete: bool):
+@dataclass
+class JobGate:
+    """ジョブの門（`job_gate`）を通った結果。どのアダプタで読むかに依らない。
+
+    `mztab_path` はジョブの宣言（polarity + measure）で一意に選んだ正準 mzTab-M の絶対パス。
+    `verified` / `reason` は終了証跡とファイル hash による出所の裏取り（`reason` は
+    裏取りできなかった理由。できたときは None）。
+    """
+
+    job: object
+    mztab_path: Path
+    exploratory_only: bool
+    verified: bool
+    reason: str | None
+
+    @property
+    def incomplete_warning(self) -> str | None:
+        """完了していない実行の出力に付ける警告（完了していれば None）。"""
+        if not self.exploratory_only:
+            return None
+        return _INCOMPLETE_WARNING.format(status=self.job.status)
+
+    @property
+    def unverified_warning(self) -> str | None:
+        """出所を裏取りできなかったときの警告（裏取りできていれば None）。"""
+        if self.verified:
+            return None
+        return (f"この出力は実行証跡で裏取りできていません（{self.reason}）。"
+                "単体の解析には使えますが、パイプラインは検証済みの出力だけを受け付けます。")
+
+
+def job_gate(job_path: Path, *, allow_incomplete: bool) -> JobGate:
+    """ジョブを読む前の門。mzTab-M のアダプタも解析フォルダのアダプタもここを通る。
+
+    ジョブの記録が読めること・完了していること（`allow_incomplete=True` のときだけ
+    未完了を通す）・正準 mzTab-M が一意に決まって実在することを確かめ、出所を裏取りする。
+    どちらのアダプタで読んでも同じ規則で止め、同じ信用度を書くためにここへ寄せてある。
+    """
+    job_path = Path(job_path)
     if not job_path.is_file():
         raise DomainError("MZTAB_NOT_FOUND",
                           f"analysis-job.json が見つかりません: {job_path}",
@@ -187,6 +227,16 @@ def _load_from_job(job_path: Path, *, allow_incomplete: bool):
             f"（job_id={job.job_id}, entry.path={entry.path}）",
             {"job_id": job.job_id, "path": str(mztab_abs)})
 
+    verified, reason = _verify_source(job, entry, mztab_abs)
+    return JobGate(job=job, mztab_path=mztab_abs,
+                   exploratory_only=job.status != "completed",
+                   verified=verified, reason=None if verified else reason)
+
+
+def _load_from_job(job_path: Path, *, allow_incomplete: bool):
+    gate = job_gate(job_path, allow_incomplete=allow_incomplete)
+    job, mztab_abs = gate.job, gate.mztab_path
+
     parse_result = _parse_and_validate(mztab_abs)
     msp_table, msp_status, msp_file, msp_warning = _msp_table_for_job(job)
     ds = build_dataset_state(parse_result, mztab_abs.name, mztab_abs, msp_table=msp_table)
@@ -195,22 +245,18 @@ def _load_from_job(job_path: Path, *, allow_incomplete: bool):
     if msp_warning:
         ds.validation_result.setdefault("warnings", []).insert(0, msp_warning)
 
-    ds.exploratory_only = job.status != "completed"
+    ds.exploratory_only = gate.exploratory_only
     if ds.exploratory_only:
-        ds.validation_result.setdefault("warnings", []).insert(
-            0, _INCOMPLETE_WARNING.format(status=job.status))
+        ds.validation_result.setdefault("warnings", []).insert(0, gate.incomplete_warning)
 
     ds.job_path = str(job_path)
     for art in job.artifacts:
         abs_p = str(artifact_abs_path(job, getattr(art, "root", "run_dir"), art.path))
         ds.artifact_paths.setdefault(art.role, []).append(abs_p)
 
-    verified, reason = _verify_source(job, entry, mztab_abs, ds)
-    ds.source_verification = "verified" if verified else "legacy_unverified"
-    if not verified:
-        ds.validation_result.setdefault("warnings", []).append(
-            f"この出力は実行証跡で裏取りできていません（{reason}）。"
-            "単体の解析には使えますが、パイプラインは検証済みの出力だけを受け付けます。")
+    ds.source_verification = "verified" if gate.verified else "legacy_unverified"
+    if not gate.verified:
+        ds.validation_result.setdefault("warnings", []).append(gate.unverified_warning)
 
     ds.assay_sources = _assay_sources(job, parse_result)
 
@@ -330,7 +376,7 @@ def _parse_and_validate(path: Path) -> dict:
     return parse_result
 
 
-def _verify_source(job, entry, mztab_abs: Path, ds) -> tuple[bool, str]:
+def _verify_source(job, entry, mztab_abs: Path) -> tuple[bool, str]:
     """終了証跡とファイル hash で「この出力の出所」を裏取りする。
 
     `completed` という文字列は根拠にしない。旧経路の completed は「実行後に
