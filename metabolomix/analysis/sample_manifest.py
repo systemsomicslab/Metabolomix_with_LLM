@@ -352,6 +352,32 @@ def _mztab_batch_and_order(ds, index: int) -> tuple[str | None, int | None]:
     return meta.get("batch"), meta.get("run_order")
 
 
+_DATE_RE = re.compile(r"(\d{8})")
+
+
+def batch_labels_informative(labels) -> bool:
+    """バッチのラベルが情報を持つか（2 種類以上あるか）。
+
+    MS-DIAL のバッチラベルは CSV インポートで指定しない限り全件 "1"（Console は設定しない）。
+    定数のラベルは情報を持たないので採らず、ファイル名の日付の推定に戻す——定数を採ると、日付で
+    分かれていた交絡が検出できなくなる。mzTab 経路（`dataset_analysis.build_dataset_pp_inputs`）と
+    解析フォルダの経路が同じ規則を使うための唯一の定義。
+    """
+    return len({label for label in labels if label is not None}) > 1
+
+
+def filename_date_batch(name: str) -> str | None:
+    """試料名の中の 8 桁の日付（バッチの推定）。無ければ None。"""
+    match = _DATE_RE.search(name or "")
+    return match.group(1) if match else None
+
+
+def _filename_date_prov(value) -> dict:
+    if value is None:
+        return {"value": None, "source": None, "confidence": None}
+    return {"value": value, "source": "filename_date", "confidence": "inferred"}
+
+
 def _unverified_mztab_prov(value) -> dict:
     if value is None:
         return {"value": None, "source": None, "confidence": None}
@@ -366,9 +392,15 @@ def _msdial_row(ds, index: int, sample: dict, name: str) -> dict:
     """
     declared = {"source": "msdial_mddata", "confidence": "declared"}
     in_mddata = sample.get("in_mddata", True)
-    batch = None if sample.get("batch") is None else str(sample["batch"])
+    declared_labels = [None if s.get("batch") is None else str(s["batch"])
+                       for s in ds.msdial_samples]
+    batch = (None if sample.get("batch") is None or not batch_labels_informative(declared_labels)
+             else str(sample["batch"]))
     injection_order = sample.get("injection_order")
     mz_batch, mz_order = _mztab_batch_and_order(ds, index)
+    if not batch_labels_informative(
+            [_mztab_batch_and_order(ds, i)[0] for i in range(len(ds.sample_names))]):
+        mz_batch = None
     values = {
         "sample_id": name, "source_file": sample.get("file_path"), "role": sample["role"],
         "group": sample.get("group"), "batch": batch,
@@ -393,6 +425,9 @@ def _msdial_row(ds, index: int, sample: dict, name: str) -> dict:
         if values[field] is None and fallback is not None:
             values[field] = fallback
             provenance[field] = _unverified_mztab_prov(fallback)
+    if values["batch"] is None:
+        values["batch"] = filename_date_batch(name)
+        provenance["batch"] = _filename_date_prov(values["batch"])
     row = dict(values)
     row["provenance"] = provenance
     row["conflicts"] = []
@@ -407,6 +442,13 @@ def _default_row(ds, index: int, name: str) -> dict:
     source_file = _raw_path_for_sample(ds, index)
     role = preprocessing.detect_sample_roles([name]).get(name, "sample")
     batch, injection_order = _mztab_batch_and_order(ds, index)
+    if not batch_labels_informative(
+            [_mztab_batch_and_order(ds, i)[0] for i in range(len(ds.sample_names))]):
+        batch = None
+    batch_prov = _unverified_mztab_prov(batch)
+    if batch is None:
+        batch = filename_date_batch(name)
+        batch_prov = _filename_date_prov(batch)
 
     values = {
         "sample_id": name, "source_file": source_file, "role": role,
@@ -419,7 +461,7 @@ def _default_row(ds, index: int, name: str) -> dict:
                         else {"value": None, "source": None, "confidence": None}),
         "role": {"value": role, "source": "filename_token", "confidence": "inferred"},
         "group": {"value": None, "source": None, "confidence": None},
-        "batch": _unverified_mztab_prov(batch),
+        "batch": batch_prov,
         "injection_order": _unverified_mztab_prov(injection_order),
         "qc_pool": {"value": None, "source": None, "confidence": None},
         "include": {"value": True, "source": "default", "confidence": "inferred"},

@@ -171,15 +171,15 @@ def build_dataset_pp_inputs(ds):
     # MS-DIAL のバッチラベルは CSV インポートで指定しない限り全件 "1" になる。
     # 定数のラベルは情報を持たないので、その場合はファイル名日付の推定に戻す。
     # 定数を採ると、日付で分かれていた交絡が検出できなくなる。
-    use_mztab_batch = len({b for b in mztab_batches if b is not None}) > 1
+    use_mztab_batch = sample_manifest.batch_labels_informative(mztab_batches)
 
     sample_meta: dict = {}
     for i, name in enumerate(sample_names):
-        m = _DATE_RE.search(name)
+        date = sample_manifest.filename_date_batch(name)
         if use_mztab_batch and mztab_batches[i] is not None:
             batch, batch_source = mztab_batches[i], "mztab_batch_label"
-        elif m:
-            batch, batch_source = m.group(1), "filename_date"
+        elif date:
+            batch, batch_source = date, "filename_date"
         else:
             batch, batch_source = None, None
 

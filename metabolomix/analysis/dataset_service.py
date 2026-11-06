@@ -424,7 +424,11 @@ def _raw_manifest_layout(ds) -> tuple[Path, list[str]]:
             sample_manifest._raw_path_for_sample(ds, i)
             for i in range(len(getattr(ds, "sample_names", []) or []))) if p]
     if not paths:
-        if getattr(ds, "source_format", None) == "msdial_folder":
+        if getattr(ds, "source_format", None) == "msdial_folder" and getattr(ds, "job_path", None):
+            reason = ("この job の mzTab-M の ms_run の場所にも .mddata の file_path にも、試料の raw の"
+                      "パスが無いため、シートの source_file を試料に結べません"
+                      "（読み直しても変わらない。raw のパスを持つ .mddata か mzTab-M が要る）")
+        elif getattr(ds, "source_format", None) == "msdial_folder":
             reason = ("この解析フォルダのデータセットは、試料の raw のパスを持っていません"
                       "（.mddata が無いか、.mddata に FileID ごとの file_path が無く、job の"
                       " mzTab-M の場所も使っていない）。.mddata のある解析フォルダ、または"

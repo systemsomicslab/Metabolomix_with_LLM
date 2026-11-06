@@ -474,7 +474,8 @@ def _folder_via_run(pipeline_path: str, *, measure: str, allow_incomplete: bool)
                                           allow_incomplete=allow_incomplete, pipeline_root=root)
     rows = session_handoff.run_manifest_rows(root, record)
     if rows is not None:
-        sample_manifest.apply_metadata(ds, sample_manifest.resolve_metadata(ds, rows))
+        # roles / sample_meta も組み直す（run の試料対応表の役割を、前処理の前から見せる）。
+        sample_manifest.apply_defaults_and_inputs(ds, sample_manifest.resolve_metadata(ds, rows))
     notes = [_folder_note(gate, "run"),
              "run の解析行列・feature binding・差次的結果は読んでいない（解析フォルダの"
              "アダプタが run から引き継ぐのは解決済みの試料対応表だけ）。それらも載せるなら"

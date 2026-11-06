@@ -889,5 +889,6 @@ def test_claim_evidence_on_an_lbm_only_dataset_is_not_evaluable_not_no_library(d
     out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
     msms = {c["feature_id"]: c["msms"] for c in out["candidates"]}
     assert {m["status"] for m in msms.values()} == {"not_evaluable"}
-    assert all("LBM" in m["reason"] for m in msms.values())
+    assert all(m["reason"] == "lbm_only" for m in msms.values())
+    assert "LBM" in out["msms_not_evaluable_reason"]
     assert msms["20"]["spectrum_available"] is True

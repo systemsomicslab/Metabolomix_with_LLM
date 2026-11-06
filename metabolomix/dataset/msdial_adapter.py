@@ -166,7 +166,7 @@ def _fill_summaries(ds, selection: AlignmentSelection, detected, metadata: dict)
     ds.feature_qc = {
         "source": "arf", "tried": [str(selection.arf)],
         "n_cells": n_cells, "n_detected": n_detected,
-        "gap_filled_rate": (n_cells - n_detected) / n_cells if n_cells else 0.0,
+        "gap_filled_rate": round(1.0 - n_detected / n_cells, 4) if n_cells else None,
         "join": {"path": str(selection.arf), "feature_axis": "arf2_master_id"},
     }
     with_ik = sum(1 for m in metadata.values() if m.get("inchikey"))

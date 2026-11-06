@@ -98,3 +98,38 @@ def test_the_base_cache_reloads_when_a_mddata_appears_later(tmp_path):
     reopened = open_dataset(directory=str(folder))
     assert reopened.reused_base is False
     assert reopened.dataset.msdial_samples is not None
+
+
+# ---------- 形式の壊れは MddataFormatError → 注記（プログラムの誤りは通す） ----------
+
+def test_a_malformed_lz4_ext_header_is_a_format_error(tmp_path):
+    import msgpack
+
+    from metabolomix.msdial.classes import MddataFormatError, parse_analysis_file_classes
+
+    for data in (b"", msgpack.packb("not an int") + b"zz"):
+        path = tmp_path / "bad.mddata"
+        path.write_bytes(msgpack.packb(msgpack.ExtType(99, data)))
+        with pytest.raises(MddataFormatError):
+            parse_analysis_file_classes(path)
+
+
+def test_a_malformed_lz4_ext_header_in_the_folder_is_a_load_note(tmp_path):
+    import msgpack
+
+    paths = _folder(tmp_path)
+    paths["mddata"].write_bytes(msgpack.packb(msgpack.ExtType(99, b"")))
+    ds = load_msdial_folder(select_alignment(tmp_path))
+    assert any("読めなかった" in note for note in ds.load_notes) and ds.msdial_samples is None
+
+
+def test_an_mdproject_without_a_project_entry_is_a_note_not_a_keyerror(tmp_path):
+    import zipfile
+
+    _folder(tmp_path, with_mddata=False)
+    with zipfile.ZipFile(tmp_path / "x.mdproject", "w") as archive:
+        archive.writestr("Other", b"1")
+    selection = select_alignment(tmp_path)
+    assert selection.mddata is None and "Project" in selection.mddata_error
+    ds = load_msdial_folder(selection)
+    assert any("Project" in note for note in ds.load_notes)

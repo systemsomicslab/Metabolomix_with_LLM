@@ -147,7 +147,8 @@ None に戻す。別のハンドルへは落ちない）。
 ## dataset_claim_evidence
 
 前提: データセット（無ければ `missing_state`）。`msms` を頼むときはライブラリ（無ければ候補ごとに
-`no_library`）。状態変更: なし。`output_path` を渡すと JSON を書く。
+`no_library`。同定が LBM だけのデータセット＝記憶が `lbm_only` なら候補ごとに `not_evaluable`
+（`reason: lbm_only`）で、理由の文は束の `msms_not_evaluable_reason` に 1 回）。状態変更: なし。`output_path` を渡すと JSON を書く。
 
 1. metabolomix/tools/reanalysis_tools.py  dataset_claim_evidence()
 2. ├─ metabolomix/analysis/claim_evidence.py  normalize_claim_spec()

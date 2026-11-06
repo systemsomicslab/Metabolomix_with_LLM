@@ -179,3 +179,15 @@ def test_annotator_id_keeps_only_the_file_name(tmp_path):
     ids = [ds.feature_metadata[f]["annotator_id"] for f in ds.feature_ids]
     assert ids == ["some.lbm2", "lab.msp", "LabMsp"]
     assert is_lbm_annotator(ids[0]) is True and is_lbm_annotator(ids[1]) is None
+
+
+def test_gap_filled_rate_is_rounded_and_none_without_cells(tmp_path):
+    write_msdial_folder(tmp_path, spots=[{"name": "a", "gap_filled": [True, False, False]},
+                                         {"name": "b", "mz": 600.0}], samples=_samples())
+    ds = load_msdial_folder(select_alignment(tmp_path))
+    assert ds.feature_qc["gap_filled_rate"] == 0.1667      # 1/6 を evidence.py と同じ 4 桁に
+    from metabolomix.dataset.msdial_adapter import _fill_summaries
+    import numpy as np
+    empty = type(ds)()
+    _fill_summaries(empty, select_alignment(tmp_path), np.zeros((0, 0), dtype=bool), {})
+    assert empty.feature_qc["gap_filled_rate"] is None

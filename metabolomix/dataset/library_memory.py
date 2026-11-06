@@ -94,7 +94,8 @@ def remember_from_job(job_path: Path) -> dict:
 def _pinned_sha256(job, method_key: str) -> str | None:
     """ジョブの依存一覧（v3）が、メソッドのこのキーに対して記録した sha256。無ければ None。"""
     for dep in job.dependencies:
-        if str(dep.get("method_key") or "").strip().lower() == method_key.lower()                 and dep.get("sha256"):
+        if str(dep.get("method_key") or "").strip().lower() == method_key.lower() \
+                and dep.get("sha256"):
             return str(dep["sha256"])
     return None
 

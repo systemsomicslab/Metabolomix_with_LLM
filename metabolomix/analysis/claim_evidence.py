@@ -298,7 +298,7 @@ def _spectrum_available(spot: dict) -> bool | None:
 
 
 def _msms_for(fid, *, store, spot_query, arf2_path, dcl_path, msms_spec,
-              no_library_reason: str | None = None) -> dict:
+              lbm_only: bool = False) -> dict:
     from metabolomix.analysis.spectral_match import fragment_matches_excluding_precursor
     from metabolomix.library import matching
 
@@ -310,9 +310,10 @@ def _msms_for(fid, *, store, spot_query, arf2_path, dcl_path, msms_spec,
     spot = spot_query(spot_id, arf2_path=arf2_path, dcl_file=dcl_path, rt=None, ion_mode=None)
     available = _spectrum_available(spot)
     if store is None:
-        if no_library_reason:
+        if lbm_only:
             # LBM だけで同定したデータセット: ライブラリが「無い」のではなく、評価できない。
-            return {"status": "not_evaluable", "reason": no_library_reason,
+            # 理由の文は候補ごとに繰り返さず、束に 1 回（`msms_not_evaluable_reason`）。
+            return {"status": "not_evaluable", "reason": "lbm_only",
                     "spectrum_available": available}
         return {"status": "no_library", "spectrum_available": available}
     if spot.get("status") != "ok":
@@ -420,7 +421,7 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
             item["msms"] = _msms_for(fid, store=store, spot_query=spot_query,
                                      arf2_path=arf2_path, dcl_path=dcl_path,
                                      msms_spec=normalized["msms"],
-                                     no_library_reason=no_library_reason)
+                                     lbm_only=bool(no_library_reason))
         if normalized["relations"] is not None:
             relations = feature_relations(ds, fid, adducts=adducts, formulas=formulas,
                                           **normalized["relations"])
@@ -442,7 +443,10 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
                                               key=order)}
              for ppm, rt_tol, match in scan_matches]
     rule = {k: copy.deepcopy(v) for k, v in normalized.items() if k != "raw_target"}
+    extra = ({"msms_not_evaluable_reason": no_library_reason}
+             if no_library_reason and normalized["msms"] is not None and store is None else {})
     return {
+        **extra,
         "schema": CLAIM_SCHEMA,
         "claim_id": normalized["claim_id"],
         "rule_hash": rule_hash(normalized, groups_hash),
