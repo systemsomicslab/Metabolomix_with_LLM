@@ -306,7 +306,13 @@ def test_arf_spot_mz_is_the_highest_detected_cell_not_sample_zero(tmp_path):
     spec = _shifted_spec()
     paths = write_msdial_folder(tmp_path / "gui", **spec)
     _shift_sample0_mz(paths["arf"], spec)
-    # 試料 0 の行の m/z だけ 0.023 ずれたスポットが 4%。スポットの m/z はずれていない。
+    # 試料 0 の行の m/z だけ 0.023 ずれたスポットが 4%。`.arf` から作ったスポットの代表 m/z
+    # （検出されたセルのうち高さ最大＝試料 3）はずれていない。試料 0 の m/z（400.023）ではない。
+    from metabolomix.dataset import msdial_adapter
+    from metabolomix.mztab import evidence
+
+    groups = msdial_adapter._read_groups(paths["arf"])
+    assert evidence.group_representative_mz(groups[10]) == pytest.approx(400.0)
     assert open_dataset(directory=str(tmp_path / "gui")).dataset.feature_metadata["10"]["mz"] == 400.0
 
 

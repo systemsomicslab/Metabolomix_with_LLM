@@ -125,7 +125,8 @@ def arf_row(*, file_id: int, mz: float, rt: float, height: float, gap_filled: bo
     row[0] = file_id
     row[1] = f"sample_{file_id}"
     row[2] = -2 if gap_filled else file_id + 100
-    row[3] = file_id + 1000
+    # 上流の GapFiller はギャップフィルのセルの MasterPeakID と PeakID の両方を -2 にする。
+    row[3] = -2 if gap_filled else file_id + 1000
     row[10] = {}
     row[15] = chromxs(rt, mz)
     row[18] = height

@@ -4,9 +4,6 @@ import unittest
 from pathlib import Path
 import zipfile
 
-import lz4.block
-import msgpack
-
 from metabolomix.msdial.classes import (
     assign_sample_groups,
     attach_class_ids_to_spots,

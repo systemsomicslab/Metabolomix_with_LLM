@@ -30,6 +30,10 @@ def _samples(n=3):
     ("PC 34:1", {26: 16}, True, False),            # (c) Text DB
     ("", {}, True, False),                         # (d) 名前が空
     ("no MS2: PC 34:1", {}, True, False),          # (f)
+    # `w/o MS2:` は上流の ShouldWriteSmeLine が除外していない（`no MS2` だけ）。MS/MS が付いて
+    # いれば SME 相当（mzTab-M の書き出しと同じ）。付いていなければ (a) で落ちる。
+    ("w/o MS2: PC 34:1", {}, True, True),
+    ("w/o MS2: PC 34:1", {}, False, False),
 ])
 def test_sme_rule_ported_from_mztab_export(name, overrides, msms, expected):
     raw = arf2_spot_raw(spot_id=0, name=name, matches=[match_result(overrides)])

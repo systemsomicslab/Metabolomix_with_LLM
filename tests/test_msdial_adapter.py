@@ -52,6 +52,18 @@ def test_without_mddata_falls_back_to_name_roles(tmp_path):
     assert ds.roles == {"QC_1": "qc", "blank_1": "blank", "plain": "sample"}
 
 
+def test_equal_spot_count_with_different_mz_is_refused(tmp_path):    # Review Focus 1
+    """スポット数が同じでも、m/z が合わない `.arf` / `.arf2`（別のバッチの混在）は拒否する。"""
+    paths = write_msdial_folder(tmp_path, spots=[{"name": "a", "mz": 500.0},
+                                                 {"name": "b", "mz": 600.0}], samples=_samples())
+    write_arf2(paths["arf2"], [arf2_spot_raw(spot_id=0, mz=510.0),
+                               arf2_spot_raw(spot_id=1, mz=650.0)])
+    with pytest.raises(DomainError) as exc:
+        load_msdial_folder(select_alignment(tmp_path))
+    assert exc.value.code == "ALIGNMENT_MISMATCH"
+    assert "m/z" in exc.value.message and "worst_mz_delta" in exc.value.details
+
+
 def test_mismatched_arf_and_arf2_refused(tmp_path):          # Review Focus 1
     paths = write_msdial_folder(tmp_path, spots=[{"name": "a"}, {"name": "b", "mz": 600.0}],
                                 samples=_samples())

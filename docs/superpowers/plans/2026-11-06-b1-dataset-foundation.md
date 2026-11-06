@@ -47,7 +47,7 @@
 2. **アライン後に試料の名前を変えたフォルダ**（`.arf` の `FileName` と `.mddata` の名前が違う）→ `FileID` で結び、群とバッチを取り違えない。（Task 4 のテスト `test_renamed_sample_joined_by_file_id`）
 3. **対話の直近のデータセットを `dataset_handle_close` で閉じた後**の `dataset_status` → `missing_state`。開いている別のハンドルを使わない。（Task 9 のテスト `test_closing_current_handle_does_not_fall_back`）
 4. **覚えたライブラリのファイルが後から差し替わった**（sha256 が違う）→ 状態 `mismatch` で開かず、極性の設定にも落ちない。（Task 10 のテスト `test_library_sha_mismatch_not_opened`）
-5. **名前が `Unknown` / `no MS2: …` / `w/o MS2: …` / 空のスポット、Text DB 由来・手で直した代表** → SME 相当にしない。`Unknown` と空は SML 相当にもしない。（Task 5 のテスト `test_sme_rule_ported_from_mztab_export`）
+5. **名前が `Unknown` / `no MS2: …` / 空のスポット、Text DB 由来・手で直した代表** → SME 相当にしない（`w/o MS2: …` は上流の `ShouldWriteSmeLine` が除外しないので、MS/MS が付いていれば SME 相当。2026-11-06 の最終レビューで上流に合わせて直した。以前はここに `w/o MS2` を「SME 相当にしない」と書いていた）。`Unknown` と空は SML 相当にもしない。（Task 5 のテスト `test_sme_rule_ported_from_mztab_export`）
 
 ---
 

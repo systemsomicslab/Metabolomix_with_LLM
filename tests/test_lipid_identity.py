@@ -136,10 +136,6 @@ class TestIdentityBlock(unittest.TestCase):
         self.assertTrue(block["reference"]["matched"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # ---------- GOSLIN のパーサを使い回す（B-1 実データ照合） ----------
 
 def test_goslin_parser_is_built_once_and_output_is_unchanged(monkeypatch):
@@ -149,11 +145,14 @@ def test_goslin_parser_is_built_once_and_output_is_unchanged(monkeypatch):
 
     names = ["PC 34:1", "PE 16:0_18:1", "no MS2: FA 5:0", "Cer 24:1;O2|Cer 12:0;O2/12:1"]
     real = goslin.LipidParser
-    # 名前ごとに新しいパーサを作った場合の答え（基準）。
-    monkeypatch.setattr(li, "_SHARED_PARSER", None)
-    li.lipid_species_of.cache_clear()
-    expected_norm = [li.normalize_lipid_name(n) for n in names]
-    expected_species = [li.lipid_species_of(n) for n in names]
+    # 名前ごとに新しいパーサを作った場合の答え（基準）。共有のパーサを名前のたびに捨てて、
+    # 前の名前の状態が次の名前へ漏れない基準を作る（共有のパーサで取ると漏れを検出できない）。
+    expected_norm, expected_species = [], []
+    for name in names:
+        monkeypatch.setattr(li, "_SHARED_PARSER", None)
+        li.lipid_species_of.cache_clear()
+        expected_norm.append(li.normalize_lipid_name(name))
+        expected_species.append(li.lipid_species_of(name))
 
     built = []
 
@@ -171,3 +170,7 @@ def test_goslin_parser_is_built_once_and_output_is_unchanged(monkeypatch):
         assert [li.lipid_species_of(n) for n in names] == expected_species
     assert len(built) == 1
     li.lipid_species_of.cache_clear()
+
+
+if __name__ == "__main__":
+    unittest.main()
