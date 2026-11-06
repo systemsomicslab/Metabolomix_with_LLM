@@ -325,12 +325,37 @@ def apply_evidence(ds, result: dict | None, tried: list[str] | None = None) -> N
     }
 
 
+def join_axes(ds) -> tuple[list[float | None], list[str]]:
+    """`.arf` と照合する mzTab-M 側の軸（特徴の m/z を SMF の順に、試料名を assay の順に）。"""
+    feature_mz = [ds.feature_metadata.get(fid, {}).get("mz") for fid in ds.feature_ids]
+    return feature_mz, list(ds.sample_names)
+
+
+def matching_arfs(candidates: list[Path], *, feature_mz: list[float | None],
+                  sample_names: list[str]) -> tuple[list[Path], dict[str, str]]:
+    """候補の `.arf` を 1 本ずつ `load_arf_evidence`（＝`build_evidence` の検証）にかける。
+
+    戻り値は (検証を通った候補（候補の順）, 落ちた候補のファイル名 → 却下理由)。
+    mzTab-M のアダプタが検出状態を取り込むときと同じ判定で、解析フォルダのアダプタが
+    「ジョブの正準 mzTab-M と同じアラインメント」の `.arf` を選ぶ（名前では決めない）。
+    """
+    passed: list[Path] = []
+    rejected: dict[str, str] = {}
+    for candidate in candidates:
+        result = load_arf_evidence(candidate, feature_mz=feature_mz, sample_names=sample_names)
+        if result.get("status") == "ok":
+            passed.append(Path(candidate))
+        else:
+            rejected[Path(candidate).name] = result.get("reason", "unknown")
+    return passed, rejected
+
+
 def attach_to_dataset(ds, mztab_path: str | Path) -> None:
     """候補 `.arf` を順に試し、最初に検証を通ったものを DatasetState に載せる。
 
     候補が無ければ `no_candidate`、全部落ちたら最後の却下理由を残す。
     """
-    feature_mz = [ds.feature_metadata.get(fid, {}).get("mz") for fid in ds.feature_ids]
+    feature_mz, _ = join_axes(ds)
     candidates = arf_candidates(mztab_path, ds.artifact_paths)
     last = None
     for candidate in candidates:

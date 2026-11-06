@@ -20,7 +20,8 @@
 `pipeline_path` のどれか 1 つ・`source`・`measure`・`allow_incomplete`）。
 状態変更: `handles.registry` にハンドルを 1 本足す（対話のセッションは変えない）。
 読み込みは `dataset_load` と同じ入口 `open_dataset` が持ち、読み込み済みの基を
-`HandleRegistry.put_base` で覚え、同じ入力（size・mtime が同じ）なら読み直さずに複製を渡す。
+`HandleRegistry.put_base` で覚え、同じ入力（読んだ・探したファイルの size・mtime が同じ）なら
+読み直さずに複製を渡す。
 ライブラリは極性の設定だけから引き、読み取り専用で開く。スポットの照合に使う `.arf2` / `.dcl` は、
 解析フォルダで読んだならその選択（`AlignmentSelection`）のもの、mzTab-M で読んだなら
 `_alignment_files()` が探す。
@@ -31,7 +32,7 @@
 4. │  └─ metabolomix/core/handles.py  HandleRegistry.put_base()
 5. ├─ metabolomix/mztab/polarity.py  dataset_polarity()
 6. ├─ [mzTab-M で読んだとき] metabolomix/tools/handle_tools.py  _alignment_files()
-7. │  └─ [pipeline_path のとき] metabolomix/dataset/opening.py  _pipeline_arf2()
+7. │  └─ [pipeline_path のとき] metabolomix/dataset/opening.py  pipeline_arf2()
 8. ├─ metabolomix/tools/handle_tools.py  _open_library()
 9. │  ├─ metabolomix/core/user_config.py  get_setting()
 10. │  └─ metabolomix/library/store.py  open_store()

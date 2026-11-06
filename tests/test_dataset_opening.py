@@ -189,6 +189,12 @@ def test_mztab_source_matches_current_loader(tmp_path):
         assert opened.feature_ids == current.feature_ids
         assert opened.sample_names == current.sample_names
         assert opened.source_format == current.source_format == "mztab"
+        assert (opened.detected_mask is None) == (current.detected_mask is None)
+        if current.detected_mask is not None:
+            np.testing.assert_array_equal(opened.detected_mask, current.detected_mask)
+        assert opened.validation_result.get("warnings") == current.validation_result.get("warnings")
+        assert opened.source_verification == current.source_verification
+        assert opened.exploratory_only == current.exploratory_only
 
 
 def test_base_cache_returns_independent_copies(tmp_path):
@@ -399,3 +405,149 @@ def test_both_tools_reject_a_non_bool_allow_incomplete(tmp_path):
                                                       allow_incomplete="false"))
     assert out["error"]["code"] == "DATASET_BAD_REQUEST"
     assert handles.registry.list() == []
+
+
+# ---------- 修正 1 回目（レビューの再現を回帰テストにしたもの） ----------
+
+def _other_spec() -> dict:
+    """`_spec()` と同じ試料・同じスポット数で、m/z が違う別のアラインメント。"""
+    spec = _spec()
+    for spot, mz in zip(spec["spots"], (300.1, 400.2)):
+        spot["mz"] = mz
+    return spec
+
+
+def test_job_folder_picks_the_batch_that_matches_the_mztab(tmp_path):
+    """名前の古いバッチが mzTab-M と合わないなら、合う新しいバッチを選ぶ（先頭を決め打ちしない）。"""
+    job = _job(tmp_path)
+    write_msdial_folder(job.parent / "msdial", **_other_spec(),
+                        stem="AlignmentResult_2026_01_01_00_00_00")
+    opened = open_dataset(job_path=str(job))
+    assert opened.selection.arf.name == f"{_STEM}_PeakProperties.arf"
+    assert opened.dataset.feature_metadata["0"]["mz"] == pytest.approx(760.5851)
+    assert any("同じアラインメント" in note for note in opened.notes)
+
+
+def test_job_folder_with_two_matching_batches_is_ambiguous(tmp_path):
+    job = _job(tmp_path)
+    write_msdial_folder(job.parent / "msdial", **_spec(), stem="AlignmentResult_2026_03_01_00_00_00")
+    err = _code(lambda: open_dataset(job_path=str(job)))
+    assert err.code == "ALIGNMENT_AMBIGUOUS"
+    assert 'source="mztab"' in err.message
+    assert sorted(err.details["candidates"]) == [
+        f"{_STEM}_PeakProperties.arf", "AlignmentResult_2026_03_01_00_00_00_PeakProperties.arf"]
+
+
+def test_job_folder_with_no_matching_batch_is_not_found(tmp_path):
+    job = _job(tmp_path, with_folder=False)
+    write_msdial_folder(job.parent / "msdial", **_other_spec())
+    err = _code(lambda: open_dataset(job_path=str(job)))
+    assert err.code == "ALIGNMENT_NOT_FOUND"
+    assert 'source="mztab"' in err.message
+    assert err.details["candidates"] == [f"{_STEM}_PeakProperties.arf"]
+
+
+def test_pipeline_input_fallback_is_verified_too(tmp_path):
+    job = _job(tmp_path, with_folder=False)
+    run = _pipeline(tmp_path, job)
+    write_msdial_folder(run / "input", **_other_spec(), stem="AlignResult-1")
+    err = _code(lambda: open_dataset(pipeline_path=str(run)))
+    assert err.code == "ALIGNMENT_NOT_FOUND"
+    assert err.details["candidates"] == ["AlignResult-1_PeakProperties.arf"]
+
+
+def test_mztab_cache_reloads_when_an_arf_appears(tmp_path):
+    """mzTab-M の隣に後から `.arf` が置かれたら、検出状態を取り込み直す（古い基を渡さない）。"""
+    folder = tmp_path / "direct"
+    mztab = write_matching_mztab(folder / "x.mzTab", _spec())
+    assert open_dataset(mztab_path=str(mztab)).dataset.detected_mask is None
+    write_msdial_folder(folder, **_spec())
+    again = open_dataset(mztab_path=str(mztab))
+    assert again.reused_base is False
+    assert again.dataset.detected_mask is not None
+
+
+def test_mztab_cache_reloads_when_the_evidence_arf_changes(tmp_path):
+    folder = tmp_path / "direct"
+    write_msdial_folder(folder, **_spec())
+    mztab = write_matching_mztab(folder / "x.mzTab", _spec())
+    first = open_dataset(mztab_path=str(mztab))
+    assert first.dataset.detected_mask is not None
+    changed = _spec()
+    changed["spots"][1]["gap_filled"] = [True, True, False, False]
+    write_msdial_folder(folder, **changed)
+    again = open_dataset(mztab_path=str(mztab))
+    assert again.reused_base is False
+    assert again.dataset.detected_mask[1].tolist() == [False, False, True, True]
+
+
+def test_folder_cache_reloads_when_the_dcl_changes(tmp_path):
+    folder = _folder(tmp_path / "gui")
+    dcl = folder / f"{_STEM}.dcl"
+    dcl.write_bytes(b"")
+    open_dataset(directory=str(folder))
+    assert open_dataset(directory=str(folder)).reused_base is True
+    with open(dcl, "ab") as handle:
+        handle.write(b"\0")
+    assert open_dataset(directory=str(folder)).reused_base is False
+
+
+def test_job_cache_reloads_when_the_method_changes(tmp_path):
+    """ジョブ経由の読み込みは実効メソッド（と、それが宣言する MSP）も読むので、それも数える。"""
+    method = tmp_path / "method.txt"
+    method.write_text("Msp file path: \n", encoding="ascii")
+    job = _job(tmp_path / "j", method_file=str(method))
+    for source in ("auto", "mztab"):
+        open_dataset(job_path=str(job), source=source)
+        assert open_dataset(job_path=str(job), source=source).reused_base is True, source
+    with open(method, "a", encoding="ascii") as handle:
+        handle.write("Lbm file path: \n")
+    for source in ("auto", "mztab"):
+        assert open_dataset(job_path=str(job), source=source).reused_base is False, source
+
+
+def test_pipeline_cache_reloads_when_the_run_record_changes(tmp_path):
+    job = _job(tmp_path)
+    run = _pipeline(tmp_path, job)
+    open_dataset(pipeline_path=str(run))
+    assert open_dataset(pipeline_path=str(run)).reused_base is True
+    with open(run / "pipeline-run.json", "a", encoding="utf-8") as handle:
+        handle.write("\n")
+    assert open_dataset(pipeline_path=str(run)).reused_base is False
+
+
+def test_folder_polarity_cross_checks_arf2_ion_mode(tmp_path):
+    """解析フォルダをジョブ経由で読んでも、宣言極性を `.arf2` の ion_mode の多数で裏取りする。"""
+    from metabolomix.mztab.polarity import dataset_polarity
+
+    ds = open_dataset(job_path=str(_job(tmp_path))).dataset  # 宣言は positive
+    ds.ion_mode_majority = "negative"
+    polarity, origin, notes = dataset_polarity(ds)
+    assert (polarity, origin) == ("positive", "job_declared")
+    assert any("食い違う" in note and "positive" in note and "negative" in note for note in notes)
+
+
+def test_job_folder_carries_the_job_artifacts(tmp_path):
+    """ジョブ経由で読んだ解析フォルダにも、ジョブが記録した付随アーティファクトを載せる。"""
+    from metabolomix.tools.mztab_tools import dataset_load
+
+    job = _job(tmp_path)
+    data = json.loads(job.read_text(encoding="utf-8"))
+    data["artifacts"] = [{"path": "msdial/msdial.log", "role": "console_log",
+                          "format": "text", "sha256": ""}]
+    job.write_text(json.dumps(data), encoding="utf-8")
+    ds = open_dataset(job_path=str(job)).dataset
+    assert ds.artifact_paths["console_log"] == [str(job.parent / "msdial" / "msdial.log")]
+    assert "console_log" in dataset_load(job_path=str(job))
+
+
+@pytest.mark.parametrize("entry", ["job_path", "pipeline_path"])
+def test_dataset_handle_open_defaults_to_the_folder_for_job_and_pipeline(tmp_path, entry):
+    from metabolomix.tools import handle_tools
+
+    job = _job(tmp_path)
+    path = job if entry == "job_path" else _pipeline(tmp_path, job)
+    out = json.loads(handle_tools.dataset_handle_open(**{entry: str(path)}, library="none"))
+    assert out["status"] == "success", out
+    assert out["adapter"] == "msdial_folder"
+    assert out["arf"] == f"{_STEM}_PeakProperties.arf"

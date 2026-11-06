@@ -56,7 +56,7 @@ def _alignment_files(ds, arf2_path: str | None, kind: str | None = None,
         arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p)
                                   for p in (getattr(ds, "source_files", None) or {}))), None)
     if arf2 is None and kind == "pipeline_path" and path:
-        arf2 = opening._pipeline_arf2(path)
+        arf2 = opening.pipeline_arf2(path)
     if arf2 is None or not arf2.is_file():
         return None, None
     dcl = alignment_spot.alignment_sibling(arf2, ".dcl")
@@ -122,7 +122,8 @@ def dataset_handle_open(mztab_path: str | None = None, job_path: str | None = No
         同じバッチ、無ければ mzTab-M の隣、`pipeline_path` なら run の
         `input/AlignResult-*.arf2`（複数あれば名前の新しいもの）を探す。
 
-    同じ入力（ファイルの size・更新時刻が同じ）を開き直すと読み込み済みのものを使い回す
+    同じ入力（読み込みが読んだ・探したファイルの size・更新時刻が同じ）を開き直すと
+    読み込み済みのものを使い回す
     （`reused_base`）。それでもハンドルどうしの状態は別々。開けるのは
     `LIPIDMIX_MAX_DATASET_HANDLES`（既定 8）本まで。使い終えたら `dataset_handle_close`。
     """

@@ -37,8 +37,8 @@ from metabolomix.mztab.msp_inchikey import MspInchikeyTable, load_msp_inchikey_t
 from metabolomix.mztab.reader import parse_mztab
 from metabolomix.mztab.validator import validate_mztab
 
-__all__ = ["JobGate", "artifact_abs_path", "job_gate", "load_dataset_state",
-           "select_primary_entry"]
+__all__ = ["JobGate", "artifact_abs_path", "job_artifact_paths", "job_gate",
+           "load_dataset_state", "read_mztab", "select_primary_entry"]
 
 #: 完了していない実行の出力に付ける警告。読み手が最初に見る位置へ差す。
 _INCOMPLETE_WARNING = (
@@ -132,13 +132,22 @@ def load_dataset_state(*, mztab_path: Path | None = None,
 
 # ---------- 直接読み ----------
 
-def _load_from_mztab(path: Path):
+def read_mztab(path: Path):
+    """mzTab-M を読んで構造を検証し、DatasetState を組む（隣の `.arf` はまだ見ない）。
+
+    解析フォルダのアダプタが、ジョブの正準 mzTab-M と同じアラインメントの `.arf` を
+    選ぶときの照合の相手もこれ（`.arf` と照合する軸を mzTab-M のアダプタと同じにする）。
+    """
+    path = Path(path)
     if not path.is_file():
         raise DomainError("MZTAB_NOT_FOUND",
                           f"mzTab-M ファイルが見つかりません: {path}",
                           {"path": str(path)})
-    parse_result = _parse_and_validate(path)
-    ds = build_dataset_state(parse_result, path.name, path)
+    return build_dataset_state(_parse_and_validate(path), path.name, path)
+
+
+def _load_from_mztab(path: Path):
+    ds = read_mztab(path)
     # 検出状態（gap-fill）は mzTab-M に無い。隣接 `.arf` から補えるかを試す。
     # 取り込めなくても解析は続けられるので、例外ではなく warning で伝える。
     mztab_evidence.attach_to_dataset(ds, path)
@@ -250,9 +259,8 @@ def _load_from_job(job_path: Path, *, allow_incomplete: bool):
         ds.validation_result.setdefault("warnings", []).insert(0, gate.incomplete_warning)
 
     ds.job_path = str(job_path)
-    for art in job.artifacts:
-        abs_p = str(artifact_abs_path(job, getattr(art, "root", "run_dir"), art.path))
-        ds.artifact_paths.setdefault(art.role, []).append(abs_p)
+    for role, paths in job_artifact_paths(job).items():
+        ds.artifact_paths.setdefault(role, []).extend(paths)
 
     ds.source_verification = "verified" if gate.verified else "legacy_unverified"
     if not gate.verified:
@@ -264,6 +272,19 @@ def _load_from_job(job_path: Path, *, allow_incomplete: bool):
     # 候補の先頭に使えるのは、この時点以降だけ。
     mztab_evidence.attach_to_dataset(ds, mztab_abs)
     return ds
+
+
+def job_artifact_paths(job) -> dict[str, list[str]]:
+    """ジョブが記録した付随アーティファクトの role → 絶対パスの一覧（記録の順）。
+
+    どちらのアダプタでジョブを読んでも、`ds.artifact_paths` と `.arf` の候補
+    （handoff の `peak_matrix_source`）はここから作る。
+    """
+    out: dict[str, list[str]] = {}
+    for art in job.artifacts:
+        out.setdefault(art.role, []).append(
+            str(artifact_abs_path(job, getattr(art, "root", "run_dir"), art.path)))
+    return out
 
 
 def effective_method_keys(job) -> tuple[Path, dict[str, str]] | None:

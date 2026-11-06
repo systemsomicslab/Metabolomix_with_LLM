@@ -40,10 +40,12 @@ def dataset_load(mztab_path: str | None = None, job_path: str | None = None,
         - `directory` は解析フォルダ（`"mztab"` はエラー）、`mztab_path` は mzTab-M
           （`"folder"` はエラー）。
         - `job_path` / `pipeline_path` は既定（`"auto"` / `"folder"`）で、そのジョブの正準
-          mzTab-M と同じアラインメントの**解析フォルダ**（mzTab-M の隣の `.arf` 一式。
-          pipeline は無ければ run の `input/AlignResult-*.arf2`）を読む。見つからなければ
-          `ALIGNMENT_NOT_FOUND` で止まり、mzTab-M へ黙って切り替えない。
-          `"mztab"` を渡すと今までどおり mzTab-M を読む。
+          mzTab-M と同じアラインメントの**解析フォルダ**を読む。候補（mzTab-M の隣の `.arf`。
+          pipeline はどれも合わなければ run の `input/AlignResult-*.arf2` と同じバッチも）を
+          mzTab-M と特徴数・m/z・試料名で照合し、合うものがちょうど 1 本ならそれを読む。
+          無ければ `ALIGNMENT_NOT_FOUND`、2 本以上なら `ALIGNMENT_AMBIGUOUS`（どちらも
+          候補のファイル名を `details.candidates` に載せる）で止まり、mzTab-M へ黙って
+          切り替えない。`"mztab"` を渡すと今までどおり mzTab-M を読む。
         - **pipeline の run を解析フォルダで読んだときに run から引き継ぐのは、解決済みの
           試料対応表だけ**。run の解析行列・feature binding・差次的結果は
           `source="mztab"` のときだけ載せる——その run の mzTab に加えて、解決済みの
@@ -69,6 +71,8 @@ def dataset_load(mztab_path: str | None = None, job_path: str | None = None,
     成功すると session.dataset に DatasetState が格納され、
     dataset_status で内容を確認できる。要約には読んだアダプタ・選んだ `.arf`・
     同定に使ったライブラリの記録（ファイル名と sha256。置き場所は出さない）が並ぶ。
+    同じ入力を読み直すと読み込み済みのものの複製を使う（読み込みが読んだ・探したファイル
+    ——mzTab-M の隣に後から置かれた `.arf` なども——の size・更新時刻が同じとき）。
     既存の session.arf / .arf2 / .pai2 / .eic は変更しない。
     """
     from metabolomix.core.atomic_io import DomainError

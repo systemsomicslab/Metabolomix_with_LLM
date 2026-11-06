@@ -24,9 +24,9 @@ from metabolomix.msdial.tags import parse_tag_file
 from metabolomix.mztab import evidence
 from metabolomix.mztab.dataset_state import DatasetState, _sha256
 
-__all__ = ["load_msdial_folder"]
+__all__ = ["MEASURES", "load_msdial_folder"]
 
-_MEASURES = {"peak_height": "height", "peak_area_above_zero": "area"}
+MEASURES = {"peak_height": "height", "peak_area_above_zero": "area"}
 _ROLE_BY_FILE_TYPE = {0: "sample", 1: "standard", 2: "qc", 3: "blank"}
 
 
@@ -167,11 +167,11 @@ def _load_curation(ds, selection: AlignmentSelection) -> None:
 
 
 def load_msdial_folder(selection: AlignmentSelection, *, measure: str = "peak_height") -> DatasetState:
-    if measure not in _MEASURES:
+    if measure not in MEASURES:
         raise DomainError(
             "DATASET_BAD_REQUEST",
-            f"measure は {sorted(_MEASURES)} のどちらか: {measure!r}", {"measure": measure})
-    cell_key = _MEASURES[measure]
+            f"measure は {sorted(MEASURES)} のどちらか: {measure!r}", {"measure": measure})
+    cell_key = MEASURES[measure]
 
     groups = _read_groups(selection.arf)
     fields = load_spot_fields(selection.arf2)
