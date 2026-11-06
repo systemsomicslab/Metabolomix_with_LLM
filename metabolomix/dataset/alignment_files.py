@@ -12,7 +12,7 @@ from pathlib import Path
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.path_resolvers import _pick_latest, _select_latest_batch
 from metabolomix.msdial.alignment_spot import alignment_sibling
-from metabolomix.msdial.classes import resolve_mddata_path
+from metabolomix.msdial.classes import MDDATA_READ_ERRORS, resolve_mddata_path
 from metabolomix.msdial.tags import alignment_tag_path
 
 # MS-DIAL が実際に書く綴りは DriftSopts。DriftSpots も受ける。
@@ -30,6 +30,8 @@ class AlignmentSelection:
     mddata: Path | None
     loaded_libraries: tuple[Path, ...]
     not_chosen: tuple[str, ...]
+    #: `.mddata` を決められなかった理由（読み取りの失敗）。無い・決まったときは None。
+    mddata_error: str | None = None
 
 
 def _arf_stem(name: str) -> str:
@@ -91,10 +93,14 @@ def select_alignment(path: str | Path) -> AlignmentSelection:
         arf2 = matches[0]
 
     tags = alignment_tag_path(arf2)
+    mddata_error = None
     try:
         mddata = resolve_mddata_path(arf2)
-    except Exception:  # noqa: BLE001 — .mddata が無い／曖昧でも選択自体は成り立つ
+    except MDDATA_READ_ERRORS as exc:
+        # .mddata が読めなくても選択自体は成り立つ。読み込みの注記に残して先へ進む
+        # （プログラムの誤りまでは握りつぶさない）。
         mddata = None
+        mddata_error = f"{type(exc).__name__}: {exc}"
     loaded = tuple(sorted(folder.glob("*_Loaded.*.dbs")))
     return AlignmentSelection(
         arf=arf,
@@ -105,4 +111,5 @@ def select_alignment(path: str | Path) -> AlignmentSelection:
         mddata=mddata,
         loaded_libraries=loaded,
         not_chosen=tuple(p.name for p in arfs if p != arf),
+        mddata_error=mddata_error,
     )

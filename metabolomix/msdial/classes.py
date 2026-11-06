@@ -21,6 +21,11 @@ from metabolomix.msdial.sample_factors import (
 
 
 MSGPACK_LZ4_BLOCK_TYPE = 99
+#: `.mddata` / `.mdproject` を読む・解くときに起こる失敗（ファイル・形式・圧縮・構造の壊れ）。
+#: 呼び出し側が「読めなかった」と扱ってよいものだけで、プログラムの誤り（TypeError など）は
+#: 含めない。
+MDDATA_READ_ERRORS = (OSError, ValueError, msgpack.exceptions.UnpackException,
+                      lz4.block.LZ4BlockError, zipfile.BadZipFile)
 _ALIGNMENT_TIMESTAMP_RE = re.compile(r"(\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2})")
 _COMPACT_TIMESTAMP_RE = re.compile(r"(\d{12,14})")
 

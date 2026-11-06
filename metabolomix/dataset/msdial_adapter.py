@@ -19,7 +19,7 @@ from metabolomix.curation.apply import flags_for_arf2
 from metabolomix.curation.flags import FlagFileError
 from metabolomix.dataset import msdial_identity
 from metabolomix.dataset.alignment_files import AlignmentSelection
-from metabolomix.msdial.classes import parse_analysis_file_classes
+from metabolomix.msdial.classes import MDDATA_READ_ERRORS, parse_analysis_file_classes
 from metabolomix.msdial.tags import parse_tag_file
 from metabolomix.mztab import evidence
 from metabolomix.mztab.dataset_state import DatasetState, _sha256
@@ -83,12 +83,21 @@ def _clean(name: str | None) -> str | None:
 def _msdial_samples(file_ids: list[int], arf_names: dict[int, str | None],
                     mddata: Path | None, notes: list[str]) -> tuple[list[str], list[dict] | None]:
     """列の試料名と、.mddata 由来の試料の行（無ければ None）。名前は .mddata を優先する。"""
-    if mddata is None:
-        notes.append(".mddata が無いので、試料の役割・群・バッチは宣言から読めず、"
-                     "ファイル名からの推定になる。")
+    records = None
+    if mddata is not None:
+        try:
+            records = parse_analysis_file_classes(mddata)
+        except MDDATA_READ_ERRORS as exc:
+            # 読めない・解けない .mddata は、無いときと同じに続ける（宣言とは名乗らない）。
+            notes.append(f".mddata（{mddata.name}）を読めなかった（{type(exc).__name__}: {exc}）。"
+                         ".mddata が無いときと同じに、試料の役割・群・バッチはファイル名からの"
+                         "推定にした。")
+    if records is None:
+        if mddata is None:
+            notes.append(".mddata が無いので、試料の役割・群・バッチは宣言から読めず、"
+                         "ファイル名からの推定になる。")
         return [_clean(arf_names[i]) or f"Sample_{i}" for i in file_ids], None
-    by_id = {r["file_id"]: r for r in parse_analysis_file_classes(mddata)
-             if isinstance(r["file_id"], int)}
+    by_id = {r["file_id"]: r for r in records if isinstance(r["file_id"], int)}
     names, samples = [], []
     for file_id in file_ids:
         record = by_id.get(file_id)
@@ -216,6 +225,9 @@ def load_msdial_folder(selection: AlignmentSelection, *, measure: str = "peak_he
 
     ds = DatasetState()
     ds.source_format = "msdial_folder"
+    if selection.mddata_error:
+        ds.load_notes.append(
+            f".mddata を決められなかった（{selection.mddata_error}）。.mddata が無いときと同じに続ける。")
     ds.quantification_measure = measure
     names, samples = _msdial_samples(file_ids, arf_names, selection.mddata, ds.load_notes)
     ds.sample_names = names

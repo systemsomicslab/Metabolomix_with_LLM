@@ -42,7 +42,9 @@ __all__ = [
 
 MAX_HANDLES_ENV = "LIPIDMIX_MAX_DATASET_HANDLES"
 DEFAULT_MAX_HANDLES = 8
-#: 読み込み済みの基を何本まで覚えておくか（LRU）。1 本は数十 MB 程度。
+#: 読み込み済みの基を何本まで覚えておくか（LRU）。mzTab-M の基は 1 本数十 MB 程度だが、解析フォルダの
+#: 大きな基はそれでは済まない（`per_sample_mz` だけで特徴 × 試料の数百万要素。`dataset_load` は
+#: 基と開くたびの複製を持つ）。大きさを見た上限は B-2 で入れる（ここは本数だけ）。
 MAX_BASES = 4
 
 

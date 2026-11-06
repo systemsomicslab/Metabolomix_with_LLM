@@ -228,10 +228,13 @@ def _folder_sidecars(ds) -> list[str]:
 
 
 def _folder_listing(folder: Path) -> list[str]:
-    """`select_alignment` が探すもの: フォルダの `.arf` と `*_Loaded.*.dbs`（今の一覧）。"""
+    """`select_alignment` が探すもの: フォルダの `.arf` と `*_Loaded.*.dbs` と `.mddata`（今の一覧）。
+
+    `.mddata` は後から現れうる（試料の役割・群・バッチの宣言元で、2 本目が現れて選択が変わることも
+    ある）ので、無かった基を使い回さない。"""
     try:
         return [str(p) for p in folder.iterdir()
-                if p.is_file() and (p.name.lower().endswith(".arf")
+                if p.is_file() and (p.name.lower().endswith((".arf", ".mddata"))
                                     or p.match("*_Loaded.*.dbs"))]
     except OSError:
         return []
