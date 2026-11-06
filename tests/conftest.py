@@ -28,6 +28,19 @@ def _isolate_external_asset_settings(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _fresh_handle_registry(monkeypatch):
+    """テストごとに新しいハンドルの登録簿にする。
+
+    `session.dataset = ds` も登録簿にハンドルを足す（spec 2026-11-06 §5）。登録簿を
+    テストをまたいで持ち越すと、前のテストのハンドルが上限（既定 8）を食い、
+    `session.dataset` が前のテストのデータセットを指し続ける。
+    """
+    from metabolomix.core import handles
+
+    monkeypatch.setattr(handles, "registry", handles.HandleRegistry())
+
+
+@pytest.fixture(autouse=True)
 def _stop_curation_submit_server():
     """curation_review / curation_suggest はビューアの受け口（daemon スレッドの HTTP サーバ）を
     立てる。テストをまたいで登録と待受けを残さない。未 import なら何もしない（重い import を避ける）。"""

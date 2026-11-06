@@ -252,7 +252,7 @@ def test_a_tampered_current_differential_is_refused(tmp_path):
         json.dumps({"tampered": True}), encoding="utf-8")
 
     session_state.session.dataset = None
-    payload = json.loads(dataset_load(pipeline_path=str(harness.pipeline_path)))
+    payload = json.loads(dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab"))
     assert payload["error"]["code"] == "RESULT_INTEGRITY_MISMATCH"
     assert session_state.session.dataset is None
 
@@ -276,7 +276,7 @@ def test_dataset_load_summary_lists_restored_and_rejected(tmp_path):
                  _persist_differential(harness, legacy, "c2"))
 
     session_state.session.dataset = None
-    summary = dataset_load(pipeline_path=str(harness.pipeline_path))
+    summary = dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab")
 
     assert "comparison_id\tresult_id\tgroup_a\tgroup_b" in summary, summary
     assert f"c1\t{kept['provenance']['result_id']}\tg1\tg2" in summary
@@ -306,7 +306,7 @@ def test_exporting_a_restored_result_states_the_runs_recipe(tmp_path):
     assert run_recipe != _SESSION_RECIPE
 
     session_state.session.dataset = None
-    dataset_load(pipeline_path=str(harness.pipeline_path))
+    dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab")
     # session で別のレシピの前処理をやり直しても、引き継いだ結果の条件は run のもの。
     dataset_preprocess(**_SESSION_RECIPE)
     session_recipe = session_state.session.dataset.preprocessing_recipe
@@ -325,7 +325,7 @@ def test_exporting_a_restored_result_without_the_runs_preprocess_says_unknown(tm
     result_id = result["provenance"]["result_id"]
 
     session_state.session.dataset = None
-    dataset_load(pipeline_path=str(harness.pipeline_path))
+    dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab")
     assert result_id in session_state.session.dataset.results
     dataset_preprocess(**_SESSION_RECIPE)
 
@@ -360,7 +360,7 @@ def test_feature_search_uses_pipeline_statistics_without_recomputing(tmp_path, m
     feature_ids = list(saved)[:3]
 
     session_state.session.dataset = None
-    dataset_load(pipeline_path=str(harness.pipeline_path))
+    dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab")
 
     # 統計は run の結果をそのまま渡す。再計算（差次的解析）が走ったら検知して落とす。
     def _must_not_recompute(*args, **kwargs):
@@ -411,7 +411,7 @@ def test_a_real_v1_run_hands_its_differential_results_to_the_session(tmp_path, m
     result_id = run_result["provenance"]["result_id"]
 
     session_state.session.dataset = None
-    summary = dataset_load(pipeline_path=str(pipeline_root))
+    summary = dataset_load(pipeline_path=str(pipeline_root), source="mztab")
 
     ds = session_state.session.dataset
     assert ds is not None, summary

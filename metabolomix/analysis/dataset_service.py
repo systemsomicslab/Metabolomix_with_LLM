@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from metabolomix.analysis import differential, result_state
+from metabolomix.analysis import differential, result_state, sample_manifest
 from metabolomix.analysis.dataset_analysis import (
     run_dataset_differential,
     run_dataset_pca,
@@ -411,17 +411,32 @@ def apply_sample_manifest(ds, manifest_path: str) -> dict:
 
 
 def _raw_manifest_layout(ds) -> tuple[Path, list[str]]:
-    """``ds.assay_sources``（実行時に予定したrawの絶対パス）から、
-    sample-manifest.v1 検証に使う ``source_root``/相対パス一覧を逆算する。
+    """sample-manifest.v1 検証に使う ``source_root``/相対パス一覧を、予定した raw の絶対パスから逆算する。
+
+    mzTab-M のアダプタのデータセットは ``ds.assay_sources``（abundance_assay[N] -> raw）を持つ。
+    解析フォルダのアダプタのデータセットは持たないので、試料ごとに
+    ``sample_manifest._raw_path_for_sample``（job の mzTab-M の場所 → ``.mddata`` の
+    ``file_path`` → assay id の優先順。resolve_metadata がシートの行を試料へ結ぶのと同じ関数）を使う。
     """
     paths = [Path(p) for p in (getattr(ds, "assay_sources", None) or {}).values() if p]
     if not paths:
-        raise DomainError(
-            "SAMPLE_MANIFEST_INVALID",
-            "raw参照(assay_sources)が無いため実験情報シートを検証できません"
-            "（console_run経由のjob_pathからdataset_loadしたデータセットが必要です）。",
-            {},
-        )
+        paths = [Path(p) for p in (
+            sample_manifest._raw_path_for_sample(ds, i)
+            for i in range(len(getattr(ds, "sample_names", []) or []))) if p]
+    if not paths:
+        if getattr(ds, "source_format", None) == "msdial_folder" and getattr(ds, "job_path", None):
+            reason = ("この job の mzTab-M の ms_run の場所にも .mddata の file_path にも、試料の raw の"
+                      "パスが無いため、シートの source_file を試料に結べません"
+                      "（読み直しても変わらない。raw のパスを持つ .mddata か mzTab-M が要る）")
+        elif getattr(ds, "source_format", None) == "msdial_folder":
+            reason = ("この解析フォルダのデータセットは、試料の raw のパスを持っていません"
+                      "（.mddata が無いか、.mddata に FileID ごとの file_path が無く、job の"
+                      " mzTab-M の場所も使っていない）。.mddata のある解析フォルダ、または"
+                      " job_path / pipeline_path から読み込み直してください")
+        else:
+            reason = ("raw参照(assay_sources)が無いため実験情報シートを検証できません"
+                      "（console_run経由のjob_pathからdataset_loadしたデータセットが必要です）")
+        raise DomainError("SAMPLE_MANIFEST_INVALID", f"{reason}。", {})
     root = paths[0].parent if len(paths) == 1 else Path(os.path.commonpath([str(p) for p in paths]))
     expected = [str(p.relative_to(root)) for p in paths]
     return root, expected

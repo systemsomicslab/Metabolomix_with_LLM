@@ -31,7 +31,9 @@ flowchart TD
 
 ## library_load
 
-前提: なし。解決順は `file_path` の明示 → `ion_mode` に対応する極性の設定
+前提: なし。解決順は `file_path` の明示 → 直近のデータセット（または `dataset_handle`）が覚えた
+同定のライブラリ（`library_record`。`verify_record` が通った `known` だけ。`mismatch` / `lbm_only` は
+設定へ落ちずに理由を返し、`unknown` か無いときだけ次へ進む）→ `ion_mode` に対応する極性の設定
 （環境変数 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG` → `lipidmix.local.toml` の
 `[library] msp_positive` / `msp_negative`。`metabolomix/core/user_config.py` の
 `get_setting` が引く。研究室の参照ライブラリはリポジトリの外に置いてここで指す）→
@@ -55,17 +57,18 @@ sha256 はキャッシュ置き場の対応表（`.library-digests.json`）に
 MCP クライアントのタイムアウトに当たるときに使う。
 
 1. metabolomix/library/tools.py  library_load()
-2. └─ metabolomix/core/path_resolvers.py  resolve_library_path()
-3. └─ metabolomix/library/store.py  open_store()
-4. │  └─ metabolomix/library/store.py  _digest_for()
+2. ├─ [file_path / ion_mode を省いたとき] metabolomix/dataset/library_memory.py  verify_record()
+3. └─ metabolomix/core/path_resolvers.py  resolve_library_path()
+4. └─ metabolomix/library/store.py  open_store()
+5. │  └─ metabolomix/library/store.py  _digest_for()
    │     └─ metabolomix/library/store.py  source_sha256()  [対応表に無い／変わった時、または rebuild=True]
-5. │  └─ metabolomix/library/store.py  _build()  [未キャッシュ時、または rebuild=True]
-6. │     ├─ metabolomix/library/store.py  _iter_records_for()
-7. │     │  ├─ [.msp] metabolomix/library/msp.py  iter_records()
-8. │     │  └─ [.dbs/.lbm2] metabolomix/library/dbs.py  iter_records()
-9. │     └─ metabolomix/library/dbs.py  read_storage_meta()
-10. └─ metabolomix/library/store.py  LibraryStore.summary()
-11. └─ metabolomix/library/store.py  LibraryStore.compound_class_counts()
+6. │  └─ metabolomix/library/store.py  _build()  [未キャッシュ時、または rebuild=True]
+7. │     ├─ metabolomix/library/store.py  _iter_records_for()
+8. │     │  ├─ [.msp] metabolomix/library/msp.py  iter_records()
+9. │     │  └─ [.dbs/.lbm2] metabolomix/library/dbs.py  iter_records()
+10. │     └─ metabolomix/library/dbs.py  read_storage_meta()
+11. └─ metabolomix/library/store.py  LibraryStore.summary()
+12. └─ metabolomix/library/store.py  LibraryStore.compound_class_counts()
 
 ## library_match_feature
 
@@ -94,32 +97,35 @@ precursor・RT が ARF2 と ±0.05 Da・±0.2 分で合わなければ `dcl_prec
 
 1. metabolomix/library/tools.py  library_match_feature()
 2. └─ metabolomix/tools/_holder.py  resolve_holder()
-3. └─ metabolomix/library/tools.py  _spot_query()
-4. │  └─ metabolomix/core/path_resolvers.py  resolve_arf2_file_path()
-5. │  └─ metabolomix/msdial/alignment_spot.py  spot_record()
-6. │  └─ metabolomix/msdial/alignment_spot.py  alignment_msms()
-7. │     └─ metabolomix/dcl/reader.py  read_dcl_entry()
-8. └─ metabolomix/library/tools.py  _measured_spectrum()
-9. │  └─ metabolomix/core/path_resolvers.py  resolve_dcl_file_path()
-10. │  └─ metabolomix/dcl/reader.py  deserialize_dcl()
-11. │  └─ metabolomix/dcl/reader.py  get_msms_by_precursor()
-12. └─ metabolomix/library/matching.py  score_candidates()
-13. │  └─ metabolomix/library/defaults.py  pick_tol()
-14. │  └─ metabolomix/library/store.py  LibraryStore.candidates()
-15. │  └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
-16. │  └─ metabolomix/analysis/spectral_match.py  match_spectrum()
-17. │  │  └─ metabolomix/analysis/spectral_match.py  normalize_measured()
-18. │  │  │  └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
-19. │  │  └─ metabolomix/analysis/spectral_match.py  simple_dot_product()
-20. │  │  └─ metabolomix/analysis/spectral_match.py  weighted_dot_product()
-21. │  │  └─ metabolomix/analysis/spectral_match.py  reverse_dot_product()
-22. │  │  └─ metabolomix/analysis/spectral_match.py  matched_peaks_scores()
-23. │  │  └─ metabolomix/analysis/spectral_match.py  spectral_entropy_similarity()
-24. │  └─ metabolomix/analysis/spectral_match.py  total_score()
-25. │     └─ metabolomix/analysis/spectral_match.py  gaussian_similarity()
-26. │     └─ metabolomix/analysis/spectral_match.py  fix_mass_tolerance()
-27. └─ [detail=true] metabolomix/analysis/spectral_match.py  fragment_matches_excluding_precursor()
-28. └─ metabolomix/arf2/reader.py  format_spots_as_table()
+3. └─ [ライブラリ無しで記憶が lbm_only のとき] metabolomix/library/tools.py  lbm_only_not_evaluable()（`not_evaluable` を返す）
+4. └─ metabolomix/library/tools.py  _spot_query()
+5. │  └─ metabolomix/core/path_resolvers.py  resolve_arf2_file_path()
+6. │  └─ metabolomix/msdial/alignment_spot.py  spot_record()
+7. │  └─ metabolomix/msdial/alignment_spot.py  alignment_msms()
+8. │     └─ metabolomix/dcl/reader.py  read_dcl_entry()
+9. └─ metabolomix/library/tools.py  _measured_spectrum()
+10. │  └─ metabolomix/core/path_resolvers.py  resolve_dcl_file_path()
+11. │  └─ metabolomix/dcl/reader.py  deserialize_dcl()
+12. │  └─ metabolomix/dcl/reader.py  get_msms_by_precursor()
+13. └─ metabolomix/library/matching.py  score_candidates()
+14. │  └─ metabolomix/library/defaults.py  pick_tol()
+15. │  └─ metabolomix/library/store.py  LibraryStore.candidates()
+16. │  └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
+17. │  └─ metabolomix/analysis/spectral_match.py  match_spectrum()
+18. │  │  └─ metabolomix/analysis/spectral_match.py  normalize_measured()
+19. │  │  │  └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
+20. │  │  └─ metabolomix/analysis/spectral_match.py  simple_dot_product()
+21. │  │  └─ metabolomix/analysis/spectral_match.py  weighted_dot_product()
+22. │  │  └─ metabolomix/analysis/spectral_match.py  reverse_dot_product()
+23. │  │  └─ metabolomix/analysis/spectral_match.py  matched_peaks_scores()
+24. │  │  └─ metabolomix/analysis/spectral_match.py  spectral_entropy_similarity()
+25. │  └─ metabolomix/analysis/spectral_match.py  total_score()
+26. │     └─ metabolomix/analysis/spectral_match.py  gaussian_similarity()
+27. │     └─ metabolomix/analysis/spectral_match.py  fix_mass_tolerance()
+28. └─ [detail=true] metabolomix/analysis/spectral_match.py  fragment_matches_excluding_precursor()
+29. └─ metabolomix/arf2/reader.py  format_spots_as_table()
+30. └─ metabolomix/library/tools.py  identified_by_lbm()
+31.    └─ metabolomix/dataset/library_memory.py  is_lbm_annotator()  [記憶が lbm_also で spot_id の照合のとき]
 
 手順 12 の `cutoff_mask()` は候補ループの外で 1 回だけ呼ぶ（測定スペクトルと
 `.dbs` の足切りだけで決まり、候補には依存しないため）。ここで求めた

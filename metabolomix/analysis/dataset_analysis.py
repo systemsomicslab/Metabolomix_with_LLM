@@ -18,7 +18,7 @@ import re
 
 import numpy as np
 
-from metabolomix.analysis import differential, export_contract, preprocessing
+from metabolomix.analysis import differential, export_contract, preprocessing, sample_manifest
 from metabolomix.analysis.pca import run_pca
 
 _DATE_RE = re.compile(r"(\d{8})")
@@ -57,52 +57,6 @@ class PreconditionError(Exception):
         if kind == "missing_state" and not state:
             raise ValueError("kind='missing_state' には state が必須です。")
         self.state = state
-
-
-def _pp_inputs_from_explicit_metadata(sample_names: list[str], rows: list[dict]) -> tuple[dict, dict]:
-    """Task 9 で適用済みの実験情報シートを、前処理入力（roles/sample_meta）へ変換する。
-
-    `ds.sample_metadata_rows` は `sample_manifest.resolve_metadata` が
-    `ds.sample_names` と同じ順に揃えてから `apply_metadata` が書き込むので、
-    ここでは位置で対応させる（sample_id では結合しない——表示名を上書きしない
-    設計と対称に、サンプル名の並びだけを唯一の対応軸にする）。
-
-    ここでは各行の role/batch/injection_order を roles/sample_meta へ写すだけで、
-    `row["include"]` は見ない——include=false を matrix/sample_names から落とす
-    判断は呼び出し側（`build_dataset_pp_inputs`）が行毎に持つ（spec §8.1
-    「include=falseの試料はこれらの評価前に除外する」）。ここで返す roles/
-    sample_meta は除外対象も含めた全件分のまま返す。数値評価に渡す入力を絞る
-    ことと、役割の写像（監査・表示用）を保持することは別の判断だからである。
-    """
-    roles: dict[str, str] = {}
-    sample_meta: dict = {}
-    for name, row in zip(sample_names, rows):
-        # role はここでは "sample"/"qc"/"blank" へ絞り込まず、シートの値を
-        # そのまま渡す（空欄だけ "sample" を既定にする）。明示 role="unknown"
-        # （sample_manifest が正当な列挙値として保持する）はそのまま
-        # preprocessing.preprocess() へ渡り、"blank" のように弾かれることも
-        # "qc"/"sample" として扱われることもない——preprocessing.py は
-        # role を `== "qc"` / `== "sample"` の完全一致と `drop_roles=("blank",)`
-        # でしか見ないため、"unknown" は前処理を素通りして解析行列に残る。
-        # role="unknown" を比較（compare_dataset）から除外するルールは Task 12
-        # （resolve_comparison の比較ガード、spec §7.4）が持つ。ここで先回りして
-        # 弾くと、その判定基準を2箇所に複製することになる。
-        # 一方 include=false は「数値評価（前処理）からの除外」（spec §8.1）
-        # ——role とは別の軸なので、ここでは弾かず、呼び出し側
-        # （build_dataset_pp_inputs）が matrix/sample_names を絞る。
-        role = row.get("role") or "sample"
-        roles[name] = role
-        provenance = row.get("provenance") or {}
-        batch_prov = provenance.get("batch") or {}
-        order_prov = provenance.get("injection_order") or {}
-        sample_meta[name] = {
-            "role": role,
-            "batch": row.get("batch"),
-            "batch_source": batch_prov.get("source"),
-            "run_order": row.get("injection_order"),
-            "run_order_source": order_prov.get("source"),
-        }
-    return roles, sample_meta
 
 
 def _included_sample_indices(ds) -> list[int] | None:
@@ -182,7 +136,7 @@ def build_dataset_pp_inputs(ds):
                 "dataset_load をやり直してから metadata を再適用してください。",
                 {"rows": len(explicit_rows), "samples": len(sample_names)},
             )
-        roles, sample_meta = _pp_inputs_from_explicit_metadata(sample_names, explicit_rows)
+        roles, sample_meta = sample_manifest.pp_inputs_from_rows(sample_names, explicit_rows)
 
         # include=false は数値評価（ブランク評価・正規化・ドリフト補正・RSD
         # フィルタ等）へ一切参加させない（spec §8.1「include=falseの試料はこれら
@@ -217,15 +171,15 @@ def build_dataset_pp_inputs(ds):
     # MS-DIAL のバッチラベルは CSV インポートで指定しない限り全件 "1" になる。
     # 定数のラベルは情報を持たないので、その場合はファイル名日付の推定に戻す。
     # 定数を採ると、日付で分かれていた交絡が検出できなくなる。
-    use_mztab_batch = len({b for b in mztab_batches if b is not None}) > 1
+    use_mztab_batch = sample_manifest.batch_labels_informative(mztab_batches)
 
     sample_meta: dict = {}
     for i, name in enumerate(sample_names):
-        m = _DATE_RE.search(name)
+        date = sample_manifest.filename_date_batch(name)
         if use_mztab_batch and mztab_batches[i] is not None:
             batch, batch_source = mztab_batches[i], "mztab_batch_label"
-        elif m:
-            batch, batch_source = m.group(1), "filename_date"
+        elif date:
+            batch, batch_source = date, "filename_date"
         else:
             batch, batch_source = None, None
 

@@ -21,35 +21,54 @@
 ライブラリ）を複数並べて持つための ID。`dataset_handle_open` が返し、`dataset_*`・
 `library_*`・再解析のツールの `dataset_handle` に渡す。
 
-- **対話のセッションとは別の状態。** ハンドルを渡した呼び出しは、ハンドルを渡さない呼び出しが
-  使う状態（`dataset_load` で読んだデータセット・`library_load` のライブラリ・直近の照合）を
-  読みも書きもしない。閉じた・無いハンドルは `DATASET_HANDLE_NOT_FOUND`（開いている
-  ハンドルの一覧つき）で、対話のセッションへ黙って落ちない。
+- **対話のセッションは直近のハンドルを指すだけ。** `dataset_load` で読んだデータセットも
+  ハンドル（`dataset_load` の要約の `dataset_handle`、`dataset_handle_list` の `current`）で、
+  ハンドルを渡さない呼び出しはこの直近のハンドル（のデータセット・`library_load` の
+  ライブラリ・直近の照合）を使う。`dataset_handle_open` で開いたハンドルは直近にならないので、
+  そのハンドルを渡した呼び出しは対話の状態を読みも書きもしない。閉じた・無いハンドルは
+  `DATASET_HANDLE_NOT_FOUND`（開いているハンドルの一覧つき）で、対話のセッションへ黙って
+  落ちない。直近のハンドルを閉じると、渡さない呼び出しはデータセットもライブラリも無い状態
+  （`missing_state`）になり、開いている別のハンドルへも、前に読んだライブラリへも落ちない。
+  順番を待つ間に直近のハンドルが閉じられた呼び出しも、何もせずに `missing_state` を返す。
+  `dataset_load` より前に `library_load` で読んだライブラリは、最初の `dataset_load` の
+  ハンドルへ移る（写しではない）。
 - **ハンドルどうしも別の状態。** 同じ入力を開き直すと読み込み済みのもの（`reused_base`）を
-  使い回すが、ハンドルには複製が渡る。片方の前処理はもう片方に見えない。入力のファイルの
-  size か更新時刻が変われば読み直す。
+  使い回すが、ハンドルには複製が渡る。片方の前処理はもう片方に見えない。読み込みが読んだ・
+  探したファイル（入力・`.dcl` などの付随ファイル・ライブラリ・ジョブの記録と実効メソッド・
+  後から置かれうる `.arf` の候補）の size か更新時刻が変われば読み直す。
 - **並行と直列。** ハンドルを渡した呼び出しはサーバの別スレッドで回り、別のハンドルどうしは
-  並行に進む。同じハンドルへの呼び出しは 1 本ずつ（到着順は保証しない）。
-- **上限。** `LIPIDMIX_MAX_DATASET_HANDLES`（既定 8）。超えると `DATASET_HANDLE_LIMIT`。
-  寿命は明示の `dataset_handle_close` か、サーバの終了まで。
+  並行に進む。同じハンドルへの呼び出しは 1 本ずつ（到着順は保証しない）。ハンドルを渡さない
+  呼び出しも、直近のハンドルがあればそのハンドルの呼び出しとして 1 本ずつに並ぶ（途中で
+  `dataset_load` が直近を切り替えても、始めたときの直近のハンドルで最後まで動く）。
+- **上限。** `LIPIDMIX_MAX_DATASET_HANDLES`（既定 8）。`dataset_load` もハンドルを 1 本使う
+  （前に読んだものは閉じずに残る）。超えると `DATASET_HANDLE_LIMIT` で止め、古いハンドルを
+  黙って閉じない。寿命は明示の `dataset_handle_close` か、サーバの終了まで。
 
 `dataset_handle_open` の戻り値:
 
 | 欄 | 意味 |
 |---|---|
 | `dataset_handle` | ハンドルの ID |
-| `polarity` / `polarity_source` | データセットの極性と出所（`job_declared` / `adduct_majority` / `unknown`）。`dataset_feature_search` の目標照合と同じ決め方 |
-| `n_features` / `n_samples` | mzTab-M の特徴数・試料数 |
+| `adapter` | 読んだアダプタ。`msdial_folder`（解析フォルダの `.arf` / `.arf2` を直接）/ `mztab`（mzTab-M）。`job_path` / `pipeline_path` の既定は `msdial_folder`（`source="mztab"` で `mztab`） |
+| `polarity` / `polarity_source` | データセットの極性と出所（`job_declared` / `adduct_majority` / `arf2_ion_mode` / `unknown`）。`dataset_feature_search` の目標照合と同じ決め方 |
+| `n_features` / `n_samples` | 特徴数・試料数 |
 | `detection_available` | 検出状態（gap-fill の区別）を取り込めたか |
+| `arf` / `not_chosen` | 解析フォルダで読んだとき、選んだ `.arf` と選ばなかった `.arf` のファイル名。mzTab-M で読んだときは `null` |
 | `library` | `{file, sha256, record_count}`。読まなかったときは `null` で、理由が `library_note` |
-| `arf2` / `dcl` | スポットの照合（spot_id = SMF_ID）に使うファイル名。決まらなければ `null` |
+| `library_record` | データセットが同定に使ったライブラリの記録（[library.md](library.md) の LibraryRecord。置き場所は出さない） |
+| `arf2` / `dcl` | スポットの照合（spot_id = SMF_ID）に使うファイル名。解析フォルダで読んだならその `.arf2` / `.dcl`。決まらなければ `null` |
 | `reused_base` | 読み込み済みのものを使い回したか |
 
-ライブラリは**データセットの極性の設定だけ**から引く（`[library] msp_positive` /
-`msp_negative`、環境変数 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG`）。極性が決まらない・設定が
-無いときはライブラリなしで開き、逆の極性のライブラリを掴まない。読み取り専用で開く。
-ハンドルへの `library_load` も同じ規則（`file_path` を省けばハンドルの極性の設定。逆の
-`ion_mode` は `LIBRARY_POLARITY_MISMATCH`、設定が無ければ `LIBRARY_NOT_CONFIGURED`）。
+ライブラリは**データセットが同定に使ったものの記憶**（`library_record`。[library.md](library.md)）から
+引く。実体の sha256 を測り直して `known` のままなら読み取り専用で開き、`mismatch`（内容が変わった・
+ファイルが無い）・`unknown`（決められない）・`lbm_only`（LBM だけ）は開かずに `library_note` に
+理由を書く。**極性の設定（`[library] msp_positive` / `msp_negative`）には落ちない**ので、逆の
+極性のライブラリを掴まない。
+ハンドルへの `library_load`（`file_path` を省く）も、記憶が `known` ならそれを開く。`mismatch` /
+`lbm_only` は設定へ落ちずに理由（`LIBRARY_RECORD_MISMATCH` / `LIBRARY_RECORD_LBM_ONLY`）を返す。
+記憶が `unknown` のときだけ従来どおりハンドルの極性の設定（逆の `ion_mode` は
+`LIBRARY_POLARITY_MISMATCH`、設定が無ければ `LIBRARY_NOT_CONFIGURED`）。`file_path` を明示すれば
+記憶と違っても開き、戻り値の `differs_from_record` に記憶したファイル名と開いたファイル名を書く。
 
 **ハンドルは対話のデータフォルダを探さない。** スポットの照合（`library_match_feature` の
 spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_msms_qualify`・
@@ -293,7 +312,7 @@ spec:
 |---|---|
 | `default_selection` | `target` をそのまま当てた目標照合（`dataset_feature_search` と同じ規則）。`status` が `resolved` なら `selected_feature_id` が規則で選んだ既定の特徴、決まらなければ `needs_input`（`reason`）。割れたスポットの組（§9 の `merge_groups`）は 1 つの候補として数え、`selected_feature_id` は残す ID（受け持ちの多い側、同数なら小さい ID）、`merged_from` にその組（それ以外は null。走査も同じ）。`counts` は下の表（組は 1 つと数える。MS/MS の合否はどちらかのスポットが `qualified` なら 1） |
 | `scans` | 走査ごとの判定（`counts` は `default_selection` と同じ意味）と、候補の特徴 ID |
-| `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか。組の片方だけが質量の窓に入ったときに足した相手は `merge_partner`）・`split`（下）・`msms`（spot_id = SMF_ID の照合の上位 `top` と `qualify`。ライブラリが無ければ `{"status": "no_library", "spectrum_available": ...}`、MS/MS が無い・索引の崩れはその `status`。`spectrum_available` は代表スペクトルの有無で、ライブラリの有無によらず spot を先に照会して決める: `true`=ある、`false`=照会して無かった（`not_found` で `reason` が `no_spectrum`）、`null`=分からない（`.arf2` / `.dcl` のファイル自体が無い `not_found` の `reason` `no_arf2` / `no_dcl`・`spot_not_found`・`dcl_precursor_mismatch`・`spot_id_not_integer`、ハンドルに `.arf2` / `.dcl` が無いとき））・`relations` |
+| `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか。組の片方だけが質量の窓に入ったときに足した相手は `merge_partner`）・`split`（下）・`msms`（spot_id = SMF_ID の照合の上位 `top` と `qualify`。ライブラリが無ければ `{"status": "no_library", "spectrum_available": ...}`（データセットの同定が LBM だけ＝記憶が `lbm_only` のときは、MSP のスペクトルが無いので評価できない: 候補ごとは `{"status": "not_evaluable", "reason": "lbm_only", "spectrum_available": ...}` で、理由の文は束の `msms_not_evaluable_reason` に 1 回だけ。`no_library` は `library_load` を促すが、このデータセットには照合に使える MSP が無い）、MS/MS が無い・索引の崩れはその `status`。`spectrum_available` は代表スペクトルの有無で、ライブラリの有無によらず spot を先に照会して決める: `true`=ある、`false`=照会して無かった（`not_found` で `reason` が `no_spectrum`）、`null`=分からない（`.arf2` / `.dcl` のファイル自体が無い `not_found` の `reason` `no_arf2` / `no_dcl`・`spot_not_found`・`dcl_precursor_mismatch`・`spot_id_not_integer`、ハンドルに `.arf2` / `.dcl` が無いとき））・`relations` |
 | `truncated` | `max_candidates` で打ち切った候補の数 |
 | `rule` / `rule_hash` | 正規化した spec とその hash。spec の `merge_split`（既定 true）は真のときだけ `rule` に載り、`rule_hash` には判定でまとめた組の hash も入る（false は v7 と同じ規則・同じ hash） |
 | `merge_split` / `merge_groups_hash` | 割れの組を判定で 1 つの候補にしたか（spec の `merge_split`）と、その組（§9 の `merge_groups`）の hash（false なら null） |

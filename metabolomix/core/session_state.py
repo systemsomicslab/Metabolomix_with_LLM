@@ -16,11 +16,20 @@ LLM には破棄の事実が伝わらないため「手動除外が過度」と�
 互いに代入不能なので、スロットも分ける。新しいパーサを足すときも専用スロットを
 作ること。無修飾の共有スロットへは絶対に書かない。
 
+**データセットとライブラリはハンドルの登録簿に住む**（spec 2026-11-06 §5）。
+`session.dataset` / `session.library` は直近のハンドル（`current_handle_id`）を指す property で、
+`session.dataset = ds` は `ds` を新しいハンドルとして登録簿に入れて直近にする。閉じた直近の
+ハンドルは `None`（`missing_state`）になり、開いている別のハンドルへ黙って落ちない。
+
 依存: 各種 reader / preprocessing（いずれも leaf）のみ。tools_* / server は
-import しない（循環回避）。`arf_reader` は module オブジェクトのまま参照するので、
+import しない（循環回避）。`core.handles` は property の中で遅延 import する（handles が
+この module を import するため）。`arf_reader` は module オブジェクトのまま参照するので、
 テストの `patch.object(server.arf_reader, ...)` が共有 module 経由でここにも効く。
 """
+import contextlib
+import contextvars
 import io
+import threading
 import uuid
 import os
 import re
@@ -76,6 +85,27 @@ _ASSAY_CAVEAT_LINE = {
 def assay_digest(assay_kind: str) -> str:
     """共通部＋その種別の1行を組んだ意味論ダイジェストを返す。"""
     return f"{SEMANTICS_CAVEAT}\n{_ASSAY_CAVEAT_LINE[assay_kind]}"
+
+
+#: `dataset_handle` を省いた呼び出しが、ロックを取ったハンドルの ID（`core.handle_dispatch` が
+#: ワーカースレッドの中で置く）。置かれている間、`session.dataset` / `session.library` は
+#: 直近のハンドルでなくこのハンドルを読む——呼び出しの途中で `dataset_load` が直近を
+#: 切り替えても、ロックを取っていない別のハンドルの状態を触らないため。
+_PINNED_HANDLE_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "pinned_handle_id", default=None)
+
+
+@contextlib.contextmanager
+def pinned_handle(handle_id: str):
+    """この文脈の中の `session.dataset` / `session.library` を `handle_id` のハンドルに固定する。
+
+    そのハンドルが閉じられていれば `dataset` は `None`（直近や別のハンドルへは落ちない）。
+    """
+    token = _PINNED_HANDLE_ID.set(handle_id)
+    try:
+        yield
+    finally:
+        _PINNED_HANDLE_ID.reset(token)
 
 
 def _build_sample_meta(sample_names, class_index):
@@ -372,11 +402,15 @@ class AnalysisSession:
         # パーサ出力からは決まらない。既定の unknown は「脂質」ではない。
         self.assay_kind = "unknown"
 
-        # --- mzTab-M / DatasetState スロット（session.arf とは独立） ---
-        self.dataset = None  # DatasetState | None
+        # --- mzTab-M / DatasetState（session.arf とは独立） ---
+        # データセットはハンドルの登録簿（core.handles.registry）に住む。ここが持つのは
+        # 直近のハンドルの ID だけで、`dataset` / `library` はそれを読む property（下）。
+        self.current_handle_id: str | None = None
+        self._current_lock = threading.Lock()
 
-        # --- 参照ライブラリスロット（MS/MS スペクトル照合。他スロットとは独立） ---
-        self.library = LibraryState()
+        # --- 参照ライブラリ（MS/MS スペクトル照合。他スロットとは独立） ---
+        # 直近のハンドルが無いときに `library` が指すセッション自身の LibraryState。
+        self._library = LibraryState()
 
         # --- キュレーションスロット（アラインメント注釈の一覧確認・機械判別・フラグ） ---
         self.curation = CurationState()
@@ -388,6 +422,102 @@ class AnalysisSession:
         # ジョブ状態の正準はディスク上の analysis-job.json。ここはそのパスへのポインタ。
         # MCP ツールが job_path 省略で呼ばれたときのフォールバックにのみ使う。
         self.current_job_path: str | None = None
+
+    # ---------- データセットとライブラリ（直近のハンドルを指す） ----------
+
+    def _handle(self):
+        """`dataset` / `library` を読む先のハンドル（無ければ None）。
+
+        `pinned_handle` の中ならそのハンドル、そうでなければ直近のハンドル。直近のハンドルが
+        閉じられていたら `current_handle_id` を None に戻す——開いている別のハンドルへは
+        落ちない。`core.handles.registry` は module 修飾で読む（テストが差し替える）。
+        """
+        from metabolomix.core import handles
+
+        pinned = _PINNED_HANDLE_ID.get()
+        if pinned is not None:
+            return handles.registry.peek(pinned)
+        return self._current_handle()
+
+    def _current_handle(self):
+        """固定を見ずに、直近のハンドル（無ければ None。閉じられていれば ID を None に戻す）。"""
+        from metabolomix.core import handles
+
+        handle_id = self.current_handle_id
+        if handle_id is None:
+            return None
+        handle = handles.registry.peek(handle_id)
+        if handle is None:
+            with self._current_lock:
+                if self.current_handle_id == handle_id:  # 別のスレッドが置いた直近は消さない
+                    self.current_handle_id = None
+        return handle
+
+    @property
+    def dataset(self):
+        """直近のハンドルの DatasetState（無い・閉じられていれば None）。"""
+        handle = self._handle()
+        return handle.dataset if handle is not None else None
+
+    @dataset.setter
+    def dataset(self, value) -> None:
+        """`None` なら直近のハンドルを外す（ハンドルは閉じない）。DatasetState なら新しい
+        ハンドルとして登録簿に入れ、直近にする。
+
+        既に直近のハンドルのデータセットと同じ実体なら何もしない（代入し直すたびにハンドルを
+        増やして上限に当たらないため）。上限なら `DATASET_HANDLE_LIMIT`（DomainError）を投げ、
+        直近もライブラリも動かさない——古いハンドルを黙って閉じると、閉じられた側の呼び出しが
+        別のデータを読むため。
+
+        直近のハンドルが無いあいだにセッションが持っていたライブラリ（store つき。
+        `library_load` → `dataset_load` の順）は、新しいハンドルへ**移す**（写さない——2 か所が
+        同じ store を閉じないため）。セッション自身には空の LibraryState が残るので、後で
+        このハンドルを閉じても古いライブラリへ黙って落ちない。
+        """
+        if value is None:
+            with self._current_lock:
+                self.current_handle_id = None
+            return
+        current = self._handle()
+        if current is not None and current.dataset is value:
+            return
+        from metabolomix.core import handles
+        from metabolomix.mztab.polarity import dataset_polarity
+
+        polarity, polarity_source, _notes = dataset_polarity(value)
+        own = self._library
+        move = current is None and _PINNED_HANDLE_ID.get() is None and own.store is not None
+        handle = handles.DatasetHandle(value, polarity=polarity, polarity_source=polarity_source,
+                                       source={"kind": "session"},
+                                       library=own if move else None)
+        handles.registry.add(handle)  # 上限ならここで止まり、ライブラリはセッションに残る
+        with self._current_lock:
+            if move:
+                self._library = LibraryState()
+            self.current_handle_id = handle.handle_id
+
+    @property
+    def library(self) -> LibraryState:
+        """直近のハンドルがあればその `library`、無ければセッション自身の LibraryState。
+
+        `pinned_handle` の固定先が閉じられていたら、どこにも属さない空の LibraryState を返す
+        （セッション自身の、古いかもしれないライブラリへは落ちない）。
+        """
+        handle = self._handle()
+        if handle is not None:
+            return handle.library
+        if _PINNED_HANDLE_ID.get() is not None:
+            return LibraryState()
+        return self._library
+
+    @library.setter
+    def library(self, value: LibraryState) -> None:
+        handle = self._handle()
+        if handle is not None:
+            handle.library = value
+        elif _PINNED_HANDLE_ID.get() is None:
+            self._library = value
+        # 固定先が閉じられていれば置き先が無い（セッション自身へは書かない）。
 
     def section_hint(self, topic: str) -> str | None:
         """未読トピックなら、該当セクションを引くよう促す1行を返す。既読なら None。

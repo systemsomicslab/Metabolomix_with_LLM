@@ -12,6 +12,7 @@ import pytest
 
 from metabolomix.core import handles, mcp_core, session_state
 from metabolomix.dcl import tools as dcl_tools
+from metabolomix.library import tools as library_tools
 from metabolomix.msdial import alignment_spot
 from metabolomix.tools import dataset_analysis_tools as T
 from metabolomix.tools import handle_tools, mztab_tools
@@ -101,8 +102,13 @@ def library(tmp_path, monkeypatch, data):
 
 def _open(data, **kwargs):
     kwargs.setdefault("library", "none")
+    library = kwargs["library"]
     out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(data["mztab"]), **kwargs))
     assert out["status"] == "success", out
+    if library == "auto":
+        # mzTab-M の記憶は `unknown` なので、library_load は極性の設定（MSDIAL_MSP_POS）から引く
+        # （mzTab-M の本番の経路）。
+        library_tools.library_load(dataset_handle=out["dataset_handle"])
     return out["dataset_handle"]
 
 
@@ -870,3 +876,19 @@ def test_claim_evidence_bad_offset_is_spec_invalid(data):
     out = json.loads(R.dataset_claim_evidence({**CLAIM, "ppm_offset": {"default": "x"}},
                                               dataset_handle=_open(data)))
     assert out["error"]["code"] == "CLAIM_SPEC_INVALID"
+
+
+def test_claim_evidence_on_an_lbm_only_dataset_is_not_evaluable_not_no_library(data, library):
+    """同定が LBM だけのデータセット（MSP が無い）。no_library は library_load を促すので使わない。"""
+    from metabolomix.core import handles
+
+    handle = _open(data)
+    handles.registry.get(handle).dataset.library_record = {
+        "status": "lbm_only", "kind": "lbm", "file": "lab.lbm2", "path": None}
+    claim = {**CLAIM, "msms": {"top_n": 3, "rules": {}}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    msms = {c["feature_id"]: c["msms"] for c in out["candidates"]}
+    assert {m["status"] for m in msms.values()} == {"not_evaluable"}
+    assert all(m["reason"] == "lbm_only" for m in msms.values())
+    assert "LBM" in out["msms_not_evaluable_reason"]
+    assert msms["20"]["spectrum_available"] is True

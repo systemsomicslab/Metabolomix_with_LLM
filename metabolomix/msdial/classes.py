@@ -21,6 +21,21 @@ from metabolomix.msdial.sample_factors import (
 
 
 MSGPACK_LZ4_BLOCK_TYPE = 99
+
+
+class MddataFormatError(Exception):
+    """`.mddata` / `.mdproject` の中身が形式に合わない（拡張ヘッダの欠落・zip に Project が無い など）。
+
+    デコードの各所はこの型だけを上げる。読み込み側はこれを「読めなかった」として扱い、
+    それ以外の例外（プログラムの誤り）は握りつぶさない。
+    """
+
+
+#: `.mddata` / `.mdproject` を読む・解くときに起こる失敗（ファイル・形式・圧縮・構造の壊れ）。
+#: 呼び出し側が「読めなかった」と扱ってよいものだけで、プログラムの誤り（TypeError など）は
+#: 含めない。
+MDDATA_READ_ERRORS = (OSError, ValueError, MddataFormatError, msgpack.exceptions.UnpackException,
+                      lz4.block.LZ4BlockError, zipfile.BadZipFile)
 _ALIGNMENT_TIMESTAMP_RE = re.compile(r"(\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2})")
 _COMPACT_TIMESTAMP_RE = re.compile(r"(\d{12,14})")
 
@@ -35,6 +50,7 @@ ANALYSIS_FILE_CLASS_INDEX = 3
 ANALYTICAL_ORDER_INDEX = 4
 ANALYSIS_FILE_ID_INDEX = 5
 ANALYSIS_FILE_INCLUDED_INDEX = 6
+ANALYSIS_BATCH_INDEX = 11  # docs/schema/AnalysisFileBean.md
 
 # ProjectBaseParameter MessagePack keys.
 PROJECT_FOLDER_INDEX = 3
@@ -54,7 +70,12 @@ def decode_msdial_messagepack(data: bytes):
         raise ValueError(f"Unsupported MS-DIAL MessagePack extension type: {packed.code}")
 
     unpacker = msgpack.Unpacker(io.BytesIO(packed.data), raw=False)
-    uncompressed_size = next(unpacker)
+    try:
+        uncompressed_size = next(unpacker)
+    except StopIteration:
+        raise MddataFormatError("MS-DIAL の LZ4 拡張データに伸長後の長さが無い") from None
+    if isinstance(uncompressed_size, bool) or not isinstance(uncompressed_size, int):
+        raise MddataFormatError("MS-DIAL の LZ4 拡張データの伸長後の長さが整数でない")
     compressed = packed.data[unpacker.tell():]
     unpacked = lz4.block.decompress(
         compressed,
@@ -115,6 +136,7 @@ def parse_analysis_file_classes(mddata_path: str | Path) -> list[dict]:
             "analysis_file_type": _at(row, ANALYSIS_FILE_TYPE_INDEX),
             "analytical_order": _at(row, ANALYTICAL_ORDER_INDEX),
             "included": bool(_at(row, ANALYSIS_FILE_INCLUDED_INDEX, True)),
+            "analysis_batch": _at(row, ANALYSIS_BATCH_INDEX),
         })
     return records
 
@@ -353,7 +375,12 @@ def _mddata_paths_from_project(project_path: Path) -> list[Path]:
     if not project_path.is_file():
         return []
     with zipfile.ZipFile(project_path) as archive:
-        project_data = decode_msdial_messagepack(archive.read("Project"))
+        try:
+            raw_project = archive.read("Project")
+        except KeyError:
+            raise MddataFormatError(
+                f".mdproject に Project のエントリが無い: {project_path.name}") from None
+        project_data = decode_msdial_messagepack(raw_project)
     parameters = project_data.get("ProjectParameters", []) if isinstance(project_data, dict) else []
     candidates = []
     for parameter in parameters:

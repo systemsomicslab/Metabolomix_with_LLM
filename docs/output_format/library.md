@@ -132,6 +132,24 @@
 | `records_without_ion_mode` | 極性（`IONMODE`）を持たないレコード件数（`record_count` に含まれる）。`library_match_feature` の `ion_mode` 絞り込みはこれらを**極性不明として候補に残す** |
 | `non_utf8_lines` | UTF-8 で読めず cp932（無理なら latin-1）で読んだ `.msp` の行数。0 より多ければ化合物名が化けている可能性がある |
 
+**記憶から開く（`file_path` を省いたとき）**: 直近のデータセット（`dataset_handle` を渡せばそのハンドル）が
+同定に使ったライブラリの記憶（下の「データセットが覚えているライブラリ（LibraryRecord）」）が `known` で、sha256 を測り直して通れば、
+その実体を開く（戻り値に `library_source: "dataset_record"`）。記憶が `unknown` か無いときだけ、
+下の解決順（`ion_mode` の設定など）へ進む。`mismatch` と `lbm_only` は落ちずに
+`code="LIBRARY_RECORD_MISMATCH"` / `"LIBRARY_RECORD_LBM_ONLY"` と理由を返す（`file_path` で
+明示すれば開ける）。`file_path` も `ion_mode` も省いたときだけ記憶が先で、`ion_mode` を渡せば従来どおり設定から引く
+（逆の極性は `LIBRARY_POLARITY_MISMATCH`）。`file_path` や設定から引いたものが記憶と違う
+ライブラリ（中身の sha256 で比べる。同じ内容のコピーは違わない）なら、そのまま開いて
+`differs_from_record: {"remembered": <記憶のファイル名>, "opened": <開いたファイル名>}` を足す。
+`library_match_feature` / `library_msms_qualify` は、ライブラリが開かれておらず記憶が `lbm_only` のとき
+`missing_state` ではなく `{"status": "not_evaluable", "reason": ...}`（qualify は `verdict` も
+`not_evaluable`）を返す。記憶が `lbm_also` で、`spot_id` で照合した特徴の代表の注釈器が LBM 由来
+（`is_lbm_annotator` が True）なら、結果に `identified_by_lbm: true` を足す（そうでなければキーが無い。
+`false` は書かない）。**この印を付けられるのは解析フォルダ（`.arf2`）から読んだデータセットだけ**
+——注釈器 ID（`annotator_id`）は `.arf2` が持つ値で、mzTab-M のアダプタのデータセットは持たないので、
+`lbm_also` でも印は付かない（付かないことは「LBM 由来でない」の証拠ではない）。記憶が `lbm_only` のまま別のライブラリを明示して開いたときは、同定に使った
+ものではない旨が `note` に付く。
+
 **エラー戻り値**: ライブラリを 1 つに決められないときは `{"status": "error", "code": ..., "message": ..., "details": ...}`
 を返し、store は差し替えない。`code` は `MSP_AMBIGUOUS`（候補が複数。`ion_mode` か
 `file_path` を指定する）/ `MSP_ENV_NOT_FOUND`（極性の設定——環境変数 `MSDIAL_MSP_POS` /
@@ -413,3 +431,45 @@ TSV の末尾へ 2 列を足し、payload に 3 つの欄を足す。`detail` �
 （完全一致）・InChIKey（先頭 14 文字）で引く。スペクトルは返さず、ピーク数 `n_peaks` だけ。
 `dcl_spot_spectrum`（`.dcl` の節）は spot_id で代表 MS/MS の全ピークを返す。
 
+
+### データセットが覚えているライブラリ（LibraryRecord）
+
+データセットは、同定に使われた参照ライブラリを 1 件覚える（`metabolomix.dataset.library_memory`）。
+後段の MS/MS 照合は、利用者にライブラリを名指しさせずにこれを引く。戻り値に出るのは
+ファイル名と sha256 だけで、置き場所（`path`）は出さない。
+
+解析フォルダで読んだとき、記憶はそのフォルダの**今の** `*_Loaded.*.dbs`（MS-DIAL 自身が保存した写し）に
+従う。読み込みのたびに測り直すので、フォルダの dbs が書き換わっていれば、読み直した記憶は新しい
+中身に付け直される（`mismatch` になるのは、読み込み済みのデータセットの記憶と今のファイルが
+食い違うとき、またはジョブ・pipeline の run が固定した sha256 と今のファイルが違うとき）。
+
+| 欄 | 意味 |
+|---|---|
+| `status` | `known`（1 本に決まった）/ `unknown`（決められない。`candidates` に候補のファイル名）/ `mismatch`（記録した sha256 と今のファイルが違う、またはファイルが無い）/ `lbm_only`（LBM だけで MSP は使っていない） |
+| `kind` | `dbs`（解析フォルダの `*_Loaded.*.dbs`）/ `msp` / `lbm` / 無し |
+| `origin` | `loaded_dbs`（フォルダ）/ `effective_method`（ジョブの実効メソッド。sha256 は読んだ時点で測る）/ `run_inputs`（pipeline の run が固定した入力。固定時の sha256 と今を突き合わせる）/ 無し |
+| `lbm_also` | MSP に加えて LBM も照合に使った（`library_mode="msp_then_lbm"`、フォルダに LBM の dbs もある、またはジョブの実効メソッドが MSP と LBM の両方を宣言している） |
+
+- 解析フォルダに非 LBM の `*_Loaded.*.dbs` が 2 本以上あると `unknown`（どちらが代表になったか
+  フォルダからは決められない）。LBM の dbs（`.lbm2.dbs` など）は数えず、`lbm_also` にする。
+- LBM の dbs だけが 2 本以上あるときは `lbm_only` で `file` / `path` は無し、`candidates` に LBM のファイル名。
+- ジョブの実効メソッドが宣言するファイルが無い・読めないときは `mismatch`。
+- mzTab-M を直接読んだときは常に `unknown`（mzTab-M は使ったライブラリを持たない）。
+- 入口ごとの出どころ（`dataset_load` / `dataset_handle_open`）: `directory` はフォルダの
+  `*_Loaded.*.dbs`、`job_path` はジョブの実効メソッド、`pipeline_path` は run が固定した入力
+  （どちらのアダプタで読んでも同じ）、`mztab_path` は `unknown`。`dataset_load` の要約と
+  `dataset_handle_open` の `library_record` がこの記録を（`path` を外して）返す。
+
+#### LBM が代表になった特徴の印（`is_lbm_annotator`）
+
+`.arf2` の代表の `annotator_id` が、LBM 由来かどうかの手がかりになる。Console の注釈器キーは
+ライブラリのファイルのパスになりうる: LBM は常にそのパス（末尾が `.lbm` + 数字）、MSP は
+`library_mode="msp_only"` のとき `Msp file path` のパス、`msp_then_lbm` では設定表の名前
+（pipeline の既定は `LabMsp`）。実データ（`msp_then_lbm` の run）では、MSP 由来の代表は名前の ID、
+LBM 由来の代表はパスの ID だった。
+
+- 末尾（ファイル名の部分）が `.lbm` + 数字なら **True**（LBM 由来）。それ以外は **None**（判定できない）で、
+  False は返さない。GUI の注釈器 ID は自由名なので、規則に合わないことは MSP 由来の証拠にならない。
+- **注釈器 ID は、どちらのライブラリのフルパスも含みうる**（`msp_only` の MSP、LBM は常に）。
+  ツールの戻り値に `annotator_id` の生の値を出さない。出してよいのは導出した真偽かファイル名だけ。
+  データセットの `feature_metadata[].annotator_id` はファイル名の部分だけを持つ。

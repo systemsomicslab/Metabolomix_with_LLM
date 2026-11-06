@@ -167,7 +167,7 @@ def test_dataset_load_via_job_path_success(tmp_path):
     mztab_file.write_text(_CONTENT, encoding="utf-8")
 
     job_path, _ = _make_job_json(tmp_path, "mztab/neg-height.mzTab")
-    result = dataset_load(job_path=str(job_path))
+    result = dataset_load(job_path=str(job_path), source="mztab")
     assert "dataset_load" in result or "neg-height" in result
     ds = session_state.session.dataset
     assert ds is not None
@@ -181,7 +181,7 @@ def test_dataset_load_via_job_path_sets_source_format(tmp_path):
     (mztab_dir / "neg-height.mzTab").write_text(_CONTENT, encoding="utf-8")
 
     job_path, _ = _make_job_json(tmp_path, "mztab/neg-height.mzTab")
-    dataset_load(job_path=str(job_path))
+    dataset_load(job_path=str(job_path), source="mztab")
     assert session_state.session.dataset.source_format == "mztab"
 
 
@@ -194,7 +194,7 @@ def test_dataset_load_via_job_path_stores_artifacts(tmp_path):
 
     artifacts = [{"path": "result.arf", "role": "peak_matrix_source", "format": "arf", "sha256": "def"}]
     job_path, _ = _make_job_json(tmp_path, "mztab/neg-height.mzTab", extra_artifacts=artifacts)
-    dataset_load(job_path=str(job_path))
+    dataset_load(job_path=str(job_path), source="mztab")
     ds = session_state.session.dataset
     assert "peak_matrix_source" in ds.artifact_paths
     assert len(ds.artifact_paths["peak_matrix_source"]) == 1
@@ -237,7 +237,7 @@ def test_dataset_load_resolves_recorded_artifact_roots(tmp_path, primary_root):
         "warnings": [], "error": None,
     }, ensure_ascii=False), encoding="utf-8")
 
-    out = dataset_load(job_path=str(job_path))
+    out = dataset_load(job_path=str(job_path), source="mztab")
     assert "dataset_load 完了" in out
     ds = session_state.session.dataset
     assert str((run_mztab if primary_root == "run_dir" else dataset_mztab).resolve()) in ds.source_files
@@ -293,7 +293,7 @@ def test_dataset_status_shows_job_path(tmp_path):
     mztab_dir.mkdir(parents=True)
     (mztab_dir / "neg-height.mzTab").write_text(_CONTENT, encoding="utf-8")
     job_path, _ = _make_job_json(tmp_path, "mztab/neg-height.mzTab")
-    dataset_load(job_path=str(job_path))
+    dataset_load(job_path=str(job_path), source="mztab")
 
     status = json.loads(dataset_status())
     assert "job_path" in status
@@ -322,7 +322,7 @@ def test_dataset_load_via_job_path_selects_entry_matching_declared_measure(tmp_p
         _entry("mztab/Area_Alignment.mzTab", measure="peak_area_above_zero"),
         _entry("mztab/Height_Alignment.mzTab", measure="peak_height"),
     ])
-    result = dataset_load(job_path=str(job_path))
+    result = dataset_load(job_path=str(job_path), source="mztab")
     assert "Height_Alignment.mzTab" in result
     ds = session_state.session.dataset
     assert "Height_Alignment.mzTab" in next(iter(ds.source_files))
@@ -430,7 +430,7 @@ def test_dataset_load_reads_an_incomplete_job_only_when_asked(tmp_path):
     from metabolomix.tools.mztab_tools import dataset_load
     job_path = _job_with_mztab(tmp_path, "partial")
 
-    result = dataset_load(job_path=str(job_path), allow_incomplete=True)
+    result = dataset_load(job_path=str(job_path), allow_incomplete=True, source="mztab")
 
     assert "partial" in result
     ds = session_state.session.dataset
@@ -452,7 +452,7 @@ def test_dataset_load_does_not_warn_for_completed_job(tmp_path):
     from metabolomix.tools.mztab_tools import dataset_load
     job_path = _job_with_mztab(tmp_path, "completed")
 
-    dataset_load(job_path=str(job_path))
+    dataset_load(job_path=str(job_path), source="mztab")
 
     ds = session_state.session.dataset
     assert not any("partial" in w for w in ds.validation_result.get("warnings", []))

@@ -6,13 +6,17 @@
 
 `DatasetHandle` は `dataset` と `library` を `AnalysisSession` と**同じ名前**で持つ。
 ツールは `holder_for(dataset_handle)` が返したものの `.dataset` / `.library` を読むだけで、
-ハンドルを渡さない呼び出しは今までどおり `session_state.session` に効く。
+ハンドルを渡さない呼び出しは `session_state.session` に効く。
 
-**ハンドルの状態は対話のセッションと共有しない。** 同じ入力を開き直したときは読み込み済みの
-基（DatasetState）を使い回すが、ハンドルには複製を渡す——片方の前処理がもう片方に
-見えないようにするため。
+**読み込んだデータセットはすべてここに住む**（spec 2026-11-06 §5）。`dataset_load` も
+`session.dataset = ds` でハンドルを 1 本足し、対話のセッションはその直近のハンドル
+（`session.current_handle_id`）を指すだけになる。`dataset_handle_open` で開いたハンドルは
+直近にならないので、そのハンドルの状態は対話の呼び出しから見えない。同じ入力を開き直した
+ときは読み込み済みの基（DatasetState）を使い回すが、ハンドルには複製を渡す——片方の
+前処理がもう片方に見えないようにするため。
 
-同じハンドルへの呼び出しは `lock` で直列化する（`core.handle_dispatch` が取る）。
+同じハンドルへの呼び出しは `lock` で直列化する（`core.handle_dispatch` が取る。ハンドルを
+省いた対話の呼び出しも、直近のハンドルのロックを取る）。
 
 依存: session_state（LibraryState）と atomic_io だけ。tools は import しない。
 """
@@ -38,7 +42,9 @@ __all__ = [
 
 MAX_HANDLES_ENV = "LIPIDMIX_MAX_DATASET_HANDLES"
 DEFAULT_MAX_HANDLES = 8
-#: 読み込み済みの基を何本まで覚えておくか（LRU）。1 本は数十 MB 程度。
+#: 読み込み済みの基を何本まで覚えておくか（LRU）。mzTab-M の基は 1 本数十 MB 程度だが、解析フォルダの
+#: 大きな基はそれでは済まない（`per_sample_mz` だけで特徴 × 試料の数百万要素。`dataset_load` は
+#: 基と開くたびの複製を持つ）。大きさを見た上限は B-2 で入れる（ここは本数だけ）。
 MAX_BASES = 4
 
 
@@ -90,15 +96,28 @@ class HandleRegistry:
     def _open_ids(self) -> list[str]:
         return sorted(self._handles)
 
+    def _refuse_if_full(self) -> None:
+        """上限なら `DATASET_HANDLE_LIMIT`。`self._lock` を持って呼ぶ。"""
+        limit = max_handles()
+        if len(self._handles) >= limit:
+            raise DomainError(
+                "DATASET_HANDLE_LIMIT",
+                f"開いているハンドルが上限（{limit}）に達しています。使い終えたハンドルを "
+                f"dataset_handle_close で閉じてください（上限は {MAX_HANDLES_ENV} で変えられます）。",
+                {"open_handles": self._open_ids(), "max_handles": limit})
+
+    def check_capacity(self) -> None:
+        """もう 1 本足せるかを読み込みの**前に**確かめる（上限なら `DATASET_HANDLE_LIMIT`）。
+
+        長い読み込みを済ませてから断らないための前置き。読み込みの間に別の呼び出しが
+        足しうるので、`add` も同じ検査をもう一度する。
+        """
+        with self._lock:
+            self._refuse_if_full()
+
     def add(self, handle: DatasetHandle) -> None:
         with self._lock:
-            limit = max_handles()
-            if len(self._handles) >= limit:
-                raise DomainError(
-                    "DATASET_HANDLE_LIMIT",
-                    f"開いているハンドルが上限（{limit}）に達しています。使い終えたハンドルを "
-                    f"dataset_handle_close で閉じてください（上限は {MAX_HANDLES_ENV} で変えられます）。",
-                    {"open_handles": self._open_ids(), "max_handles": limit})
+            self._refuse_if_full()
             seq = next(self._seq)
             handle.created_seq = handle.last_used_seq = seq
             self._handles[handle.handle_id] = handle

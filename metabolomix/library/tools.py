@@ -72,13 +72,22 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     """参照ライブラリを読み込み、照合用の SQLite store を構築（または既存キャッシュを
     再利用）する。
 
-    解決順: `file_path` の明示 → `ion_mode`（`"positive"` / `"negative"`）に対応する
+    解決順: `file_path` の明示 → 直近のデータセット（または `dataset_handle`）が覚えた、同定に
+    使ったライブラリ（`library_record`。実体の sha256 を測り直して通れば開く。**`file_path` も
+    `ion_mode` も省いたときだけ**。`ion_mode` を渡せば記憶ではなく設定から引く）→ `ion_mode`（`"positive"` / `"negative"`）に対応する
     設定（環境変数 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG` → `lipidmix.local.toml` の
     `[library] msp_positive` / `msp_negative`）→ データディレクトリの
     `*_Loaded.msp2.dbs` → 設定済みの極性（両方あれば `ion_mode` を求める）→
     データディレクトリの `*.msp`。候補が 1 つに決まらなければ `code` 付きの
     エラー（`MSP_AMBIGUOUS` など）を返し、黙って選ばない。一度に保持する
     ライブラリは 1 つだけ——測定の極性に合わせて `ion_mode` を指定する。
+
+    記憶が `mismatch`（内容が変わった・ファイルが無い）や `lbm_only`（LBM だけで MSP を使って
+    いない）のときは、上の設定の順には**落ちず**理由を返す（`file_path` で明示すれば開ける）。
+    `file_path` や `ion_mode` の設定から引いたものが記憶と違うライブラリ（中身の sha256 で比べる）
+    なら、そのまま開き、戻り値の `differs_from_record` に記憶したファイル名と開いたファイル名を書く。
+    記憶が `lbm_only` なら、開いたライブラリで同定したものではない旨を `note` に書く。記憶から開いたときは `library_source` が
+    `"dataset_record"`。
 
     初回の構築は大きな `.msp`（1 GB 級）で数分かかる。MCP のタイムアウトに当たる
     なら、手元で `python -m metabolomix.library.store --ion-mode <極性>` を 1 度
@@ -101,6 +110,32 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
         return holder
+    from_record = False
+    differs = None
+    record_for_diff = None
+    record = getattr(holder.dataset, "library_record", None)
+    if record is not None and record.get("status") != "unknown":
+        from metabolomix.dataset.library_memory import verify_record
+
+        record = verify_record(record)
+        status, remembered = record["status"], record.get("file")
+        if file_path is None and ion_mode is None:  # R23: 記憶が先なのは両方とも省いたときだけ
+            if status == "known":
+                file_path, from_record = record["path"], True
+            elif status == "mismatch":
+                return json_payload({
+                    "status": "error", "code": "LIBRARY_RECORD_MISMATCH",
+                    "message": (f"データセットが覚えたライブラリ（{remembered}）が不一致です"
+                                "（内容が変わったか、ファイルが無い）。設定の順には落ちません。"
+                                "使うライブラリを file_path で明示してください。")})
+            else:  # lbm_only
+                return json_payload({
+                    "status": "error", "code": "LIBRARY_RECORD_LBM_ONLY",
+                    "message": ("このデータセットの同定は LBM（脂質のルールベース）だけで、MS/MS の"
+                                "照合に使う MSP のライブラリがありません。設定の順には落ちません。"
+                                "別のライブラリで照合するなら file_path で明示してください。")})
+        else:
+            record_for_diff = record  # 開いたあと、中身（sha256）で記憶と比べる
     if dataset_handle is not None and file_path is None:
         # ハンドルは極性の設定だけから引く（dataset_handle_open と同じ規則）。対話の
         # データフォルダの .dbs / .msp を探さず、データセットと逆の極性も読まない。
@@ -186,6 +221,24 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
         "non_utf8_lines": summary["non_utf8_lines"],
     }
     notes = []
+    if from_record:
+        payload["library_source"] = "dataset_record"
+    rec = record_for_diff
+    if rec is not None and not from_record:
+        if rec.get("status") == "lbm_only":
+            notes.append("このデータセットの同定は LBM だけで、開いたライブラリ"
+                         f"（{path.name}）で同定したものではありません。")
+        elif rec.get("status") in ("known", "mismatch") and rec.get("file"):
+            # 中身で比べる（同じ内容のコピーは「違う」にしない。同じ場所の書き換えは違う）。
+            pinned = rec.get("sha256")
+            same = (summary["source_sha256"] == pinned if pinned
+                    else rec.get("path") and Path(rec["path"]).resolve() == path.resolve())
+            if not same:
+                differs = {"remembered": rec["file"], "opened": path.name}
+                payload["differs_from_record"] = differs
+                notes.append(
+                    f"データセットが同定に使ったライブラリ（{differs['remembered']}）とは違う"
+                    f"（{differs['opened']}）を開きました。")
     if search_params is None:
         notes.append(
             f"`.msp` には照合の許容幅（search_params）が同梱されないため、"
@@ -305,6 +358,39 @@ def _spot_query(spot_id: int, *, arf2_path: str | None, dcl_file: str | None,
 spot_msms_query = _spot_query
 
 
+def lbm_only_not_evaluable(holder) -> dict | None:
+    """ライブラリが開かれておらず、データセットの同定が LBM だけだったときの `not_evaluable`。
+
+    MSP のスペクトルが無いので、照合は「合わなかった」のではなく評価できない。
+    `missing_state`（先に library_load を）とは違い、library_load でも開けない状態を指す。
+    """
+    record = getattr(holder.dataset, "library_record", None)
+    if not record or record.get("status") != "lbm_only":
+        return None
+    return {"status": "not_evaluable",
+            "reason": ("このデータセットの同定は LBM（脂質のルールベース）だけで、MS/MS の照合に"
+                       "使う MSP のライブラリがありません。評価できない（照合が合わなかった"
+                       "のではない）。別のライブラリで照合するなら library_load の file_path で"
+                       "明示する。")}
+
+
+def identified_by_lbm(holder, spot_id) -> dict:
+    """`{"identified_by_lbm": True}`、または `{}`（False は書かない）。
+
+    データセットの同定が MSP と LBM の両方を使い（`lbm_also`）、照合した特徴の代表の注釈器が
+    LBM 由来と分かるときだけ。照合結果が LBM の同定と食い違って見えるのを読み手が取り違えない
+    ための印で、注釈器 ID そのもの（ライブラリの置き場所を含みうる）は返さない。
+    """
+    from metabolomix.dataset.library_memory import is_lbm_annotator
+
+    ds = holder.dataset
+    record = getattr(ds, "library_record", None)
+    if spot_id is None or not record or not record.get("lbm_also"):
+        return {}
+    meta = (getattr(ds, "feature_metadata", None) or {}).get(str(spot_id)) or {}
+    return {"identified_by_lbm": True} if is_lbm_annotator(meta.get("annotator_id")) else {}
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def library_match_feature(
     precursor_mz: float | None = None,
@@ -399,6 +485,9 @@ def library_match_feature(
         return holder
     store_obj = holder.library.store
     if store_obj is None:
+        lbm_only = lbm_only_not_evaluable(holder)
+        if lbm_only is not None:
+            return json_payload(lbm_only)
         return mcp_errors.missing_state(
             "library_store", ["library_load"],
             "先に library_load を実行してください（参照ライブラリが読み込まれていません）。",
@@ -538,6 +627,7 @@ def library_match_feature(
 
     payload = {
         "status": "success",
+        **identified_by_lbm(holder, spot_id),
         "query": {"spot_id": spot_id, **matched["query"]},
         # 総合スコアの組み立て方。RT 項の有無は戻り値の数値だけでは分からないので、
         # 候補ごとではなく 1 回だけ載せる（内訳の 3 列は session 側にだけ持つ）。

@@ -5,38 +5,52 @@
 （`dataset_load` → `dataset_*`）は変わらない。値の**意味**は
 [reanalysis.md（output_format）](../output_format/reanalysis.md) を見ること。
 
-ハンドルの状態は `metabolomix/core/handles.py` の登録簿（`handles.registry`）に住み、
-`session_state.session` とは共有しない。`DatasetHandle` は `dataset` と `library` を
-`AnalysisSession` と同じ名前で持つので、既存のツールは `holder_for(dataset_handle)` が
-返したものを読むだけでハンドルにも対話のセッションにも効く。
+ハンドルの状態は `metabolomix/core/handles.py` の登録簿（`handles.registry`）に住む。
+`dataset_load` で読んだデータセットも同じ登録簿のハンドルで、`session_state.session` は
+その直近のハンドル（`current_handle_id`）を指すだけ（`session.dataset` / `session.library` は
+property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` と同じ名前で持つので、
+既存のツールは `holder_for(dataset_handle)` が返したものを読むだけでハンドルにも対話の
+セッションにも効く。
 
 `dataset_handle` を渡した呼び出しは `metabolomix/core/handle_dispatch.py` の
 `install()` が包んだ関数がワーカースレッドで回し、そのハンドルの `lock` で直列化する。
-渡さない呼び出しは今までどおりイベントループのスレッドで同期に呼ぶ。
+渡さない呼び出しも、直近のハンドルがあればそのハンドルの `lock` の下でワーカースレッドで回し、
+`session_state.pinned_handle()` でそのハンドルに固定する。ロックを取った時点でそのハンドルが
+閉じられていれば、ツールを呼ばずに `missing_state` を返す。直近のハンドルが無ければ
+イベントループのスレッドで同期に呼ぶ。`dataset_handle` を持たないのに `session.dataset` /
+`.library` を読むツール（`handle_dispatch.SESSION_READERS`）も同じ経路で包む。
 
 ## dataset_handle_open
 
-前提: なし。引数は `dataset_load` と同じ（3 つのパスのうち 1 つ）。
+前提: なし。引数は `dataset_load` と同じ（`directory` / `mztab_path` / `job_path` /
+`pipeline_path` のどれか 1 つ・`source`・`measure`・`allow_incomplete`）。
 状態変更: `handles.registry` にハンドルを 1 本足す（対話のセッションは変えない）。
-読み込み済みの基を `HandleRegistry.put_base` で覚え、同じ入力（size・mtime が同じ）なら
-読み直さずに複製を渡す。ライブラリは極性の設定だけから引き、読み取り専用で開く。
+読み込みは `dataset_load` と同じ入口 `open_dataset` が持ち、読み込み済みの基を
+`HandleRegistry.put_base` で覚え、同じ入力（読んだ・探したファイルの size・mtime が同じ）なら
+読み直さずに複製を渡す。
+ライブラリはデータセットが覚えた同定のライブラリ（`library_record`）を、sha256 を測り直して
+読み取り専用で開く（極性の設定には落ちない）。スポットの照合に使う `.arf2` / `.dcl` は、
+解析フォルダで読んだならその選択（`AlignmentSelection`）のもの、mzTab-M で読んだなら
+`_alignment_files()` が探す。
 
 1. metabolomix/tools/handle_tools.py  dataset_handle_open()
-2. ├─ metabolomix/core/handles.py  HandleRegistry.cached_base()
-3. ├─ metabolomix/tools/handle_tools.py  _load()
-4. │  ├─ metabolomix/pipeline/session_handoff.py  load_run_dataset()
-5. │  └─ metabolomix/mztab/loading.py  load_dataset_state()
-6. ├─ metabolomix/core/handles.py  HandleRegistry.put_base()
-7. ├─ metabolomix/mztab/polarity.py  dataset_polarity()
-8. ├─ metabolomix/tools/handle_tools.py  _alignment_files()
-9. ├─ metabolomix/tools/handle_tools.py  _open_library()
-10. │  ├─ metabolomix/core/user_config.py  get_setting()
-11. │  └─ metabolomix/library/store.py  open_store()
-12. └─ metabolomix/core/handles.py  HandleRegistry.add()
+2. ├─ metabolomix/core/handles.py  HandleRegistry.check_capacity()
+3. ├─ metabolomix/dataset/opening.py  open_dataset()（連鎖は [mztab.md](mztab.md) の dataset_load）
+4. │  ├─ metabolomix/core/handles.py  HandleRegistry.cached_base()
+5. │  └─ metabolomix/core/handles.py  HandleRegistry.put_base()
+6. ├─ metabolomix/mztab/polarity.py  dataset_polarity()
+7. ├─ metabolomix/tools/handle_tools.py  alignment_files_for()
+8. │  └─ metabolomix/tools/handle_tools.py  _alignment_files()
+9. │     └─ [pipeline_path のとき] metabolomix/dataset/opening.py  pipeline_arf2()
+10. ├─ metabolomix/tools/handle_tools.py  _open_library_for()
+11. │  ├─ metabolomix/dataset/library_memory.py  verify_record()
+12. │  └─ metabolomix/library/store.py  open_store()
+13. ├─ metabolomix/dataset/library_memory.py  public_view()
+14. └─ metabolomix/core/handles.py  HandleRegistry.add()
 
 ## dataset_handle_list
 
-前提: なし。状態変更: なし。
+前提: なし。状態変更: なし。`current` は `session.current_handle_id` と同じハンドルか。
 
 1. metabolomix/tools/handle_tools.py  dataset_handle_list()
 2. └─ metabolomix/core/handles.py  HandleRegistry.list()
@@ -44,7 +58,10 @@
 ## dataset_handle_close
 
 前提: そのハンドルが開いていること（無ければ `DATASET_HANDLE_NOT_FOUND`）。
-状態変更: 登録簿から外し、ライブラリの接続を閉じる。
+状態変更: 登録簿から外し、ライブラリの接続を閉じる（そのハンドルのライブラリは、ハンドルと一緒に
+無くなる。対話のセッションの `session.library` が直近のハンドルのライブラリなら、これも無くなる）。直近のハンドルなら、対話のセッションは
+データセットが無い状態になる（次に `session.dataset` を読んだときに `current_handle_id` を
+None に戻す。別のハンドルへは落ちない）。
 
 1. metabolomix/tools/handle_tools.py  dataset_handle_close()
 2. └─ metabolomix/core/handles.py  HandleRegistry.close()
@@ -90,16 +107,19 @@
 
 1. metabolomix/tools/reanalysis_tools.py  library_msms_qualify()
 2. ├─ metabolomix/tools/_holder.py  resolve_holder()
-3. ├─ metabolomix/analysis/msms_rules.py  normalize_rules()
-4. ├─ metabolomix/library/tools.py  _spot_query()
-5. ├─ metabolomix/library/tools.py  _measured_spectrum()
-6. ├─ metabolomix/library/matching.py  score_candidates()
-7. ├─ metabolomix/analysis/msms_rules.py  qualify()
-8. │  ├─ metabolomix/analysis/spectral_match.py  fragment_matches_excluding_precursor()
-9. │  ├─ metabolomix/analysis/msms_rules.py  _lipid_class()
-10. │  │  └─ metabolomix/msdial/lipid_identity.py  normalize_lipid_name()
-11. │  └─ metabolomix/analysis/msms_rules.py  find_ions()
-12. └─ metabolomix/analysis/msms_rules.py  rules_hash()
+3. ├─ [ライブラリ無しで記憶が lbm_only のとき] metabolomix/library/tools.py  lbm_only_not_evaluable()（`not_evaluable` を返す）
+4. ├─ metabolomix/analysis/msms_rules.py  normalize_rules()
+5. ├─ metabolomix/library/tools.py  _spot_query()
+6. ├─ metabolomix/library/tools.py  _measured_spectrum()
+7. ├─ metabolomix/library/matching.py  score_candidates()
+8. ├─ metabolomix/analysis/msms_rules.py  qualify()
+9. │  ├─ metabolomix/analysis/spectral_match.py  fragment_matches_excluding_precursor()
+10. │  ├─ metabolomix/analysis/msms_rules.py  _lipid_class()
+11. │  │  └─ metabolomix/msdial/lipid_identity.py  normalize_lipid_name()
+12. │  └─ metabolomix/analysis/msms_rules.py  find_ions()
+13. └─ metabolomix/analysis/msms_rules.py  rules_hash()
+14. └─ metabolomix/library/tools.py  identified_by_lbm()
+15.    └─ metabolomix/dataset/library_memory.py  is_lbm_annotator()  [記憶が lbm_also で spot_id の照合のとき]
 
 ## dataset_homolog_check
 
@@ -127,7 +147,8 @@
 ## dataset_claim_evidence
 
 前提: データセット（無ければ `missing_state`）。`msms` を頼むときはライブラリ（無ければ候補ごとに
-`no_library`）。状態変更: なし。`output_path` を渡すと JSON を書く。
+`no_library`。同定が LBM だけのデータセット＝記憶が `lbm_only` なら候補ごとに `not_evaluable`
+（`reason: lbm_only`）で、理由の文は束の `msms_not_evaluable_reason` に 1 回）。状態変更: なし。`output_path` を渡すと JSON を書く。
 
 1. metabolomix/tools/reanalysis_tools.py  dataset_claim_evidence()
 2. ├─ metabolomix/analysis/claim_evidence.py  normalize_claim_spec()

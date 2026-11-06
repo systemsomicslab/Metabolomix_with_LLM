@@ -246,6 +246,26 @@ class DatasetState:
         # 完了ゲート（console/validation.map_assays）と同じ対応関係。
         self.assay_sources: dict = {}
 
+        # --- MS-DIAL 解析フォルダ由来（metabolomix/dataset/msdial_adapter.py が設定する） ---
+        # msdial_samples: 試料ごとの {file_id, name, arf_file_name, group, role, file_type,
+        # batch, injection_order}（.mddata を読めたときだけ。無ければ None）。
+        self.msdial_samples: list[dict] | None = None
+        # sample_raw_paths: sample_names と同じ順の raw のパス（job / pipeline の解析フォルダが、
+        # 正準 mzTab-M の `ms_run[N]-location` から与える。無ければ None。試料名で引けなかった
+        # 試料は None）。`.mddata` が無い Console の出力でも対応表と結べるようにする。
+        self.sample_raw_paths: list[str | None] | None = None
+        # ion_mode_majority: .arf2 の ion_mode の多数（positive / negative。決められなければ None）。
+        self.ion_mode_majority: str | None = None
+        # artifact_sha256: 読んだ成果物のパス -> sha256。
+        self.artifact_sha256: dict[str, str] = {}
+        # library_record: 同定に使った参照ライブラリの記録（Task 6）。
+        self.library_record: dict | None = None
+        # feature_tags / curation_flags: 特徴ごとのタグとキュレーションのフラグ（Task 5）。
+        self.feature_tags: dict[str, list[str]] = {}
+        self.curation_flags: dict | None = None
+        # load_notes: 読み込み時に分かった注記（.mddata が無い等）。
+        self.load_notes: list[str] = []
+
 
 def _sha256(path: str | Path) -> str:
     h = hashlib.sha256()

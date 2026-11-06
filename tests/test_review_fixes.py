@@ -95,6 +95,10 @@ def _handle(tmp_path, library="auto"):
     path = write_mztab(tmp_path / "handle_data" / "AlignResult-1.mzTab")
     out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(path), library=library))
     assert out["arf2"] is None and out["dcl"] is None
+    if library == "auto":
+        # mzTab-M の記憶は `unknown` なので、library_load は極性の設定（MSDIAL_MSP_POS）から引く
+        # （mzTab-M の本番の経路）。
+        library_tools.library_load(dataset_handle=out["dataset_handle"])
     return out["dataset_handle"]
 
 

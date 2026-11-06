@@ -261,11 +261,13 @@ findings, never bury them. `arf_differential` runs on the preprocessed matrix an
 errors clearly if `arf_preprocess` was not run.
 
 PARALLEL REANALYSIS — when several agents share this server (a reanalysis team),
-do not use `dataset_load` / `library_load`: they replace the single interactive
-session that every agent would then overwrite. Open a handle with
-`dataset_handle_open` and pass `dataset_handle` to `dataset_*`, `library_*` and
-the reanalysis tools; calls on different handles run in parallel and never read
-or write the interactive session. Decision numbers come from spec-driven tools
+do not use `dataset_load` / `library_load` without `dataset_handle`:
+`dataset_load` adds a handle and makes it the one current dataset that every call
+without `dataset_handle` uses, and `library_load` loads into that current dataset,
+so the agents would switch it under each other. Open a handle with
+`dataset_handle_open` (it never becomes current) and pass `dataset_handle` to
+`dataset_*`, `library_*` and the reanalysis tools; calls on different handles run
+in parallel and never touch the current dataset. Decision numbers come from spec-driven tools
 (`dataset_analysis_run`, `dataset_claim_evidence`, `library_msms_qualify`), which
 return a `rule_hash` and give identical JSON for an identical spec — see
 `lipidmix://docs/output-format/reanalysis`. They return numbers, never verdicts.

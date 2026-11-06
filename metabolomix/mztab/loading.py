@@ -26,6 +26,8 @@ import しない**——グローバルな現在状態を触る関数はワー�
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from metabolomix.console.method_file import MSP_ANNOTATOR_SETTINGS_KEYS, read_method_keys
@@ -36,7 +38,9 @@ from metabolomix.mztab.msp_inchikey import MspInchikeyTable, load_msp_inchikey_t
 from metabolomix.mztab.reader import parse_mztab
 from metabolomix.mztab.validator import validate_mztab
 
-__all__ = ["artifact_abs_path", "load_dataset_state", "select_primary_entry"]
+__all__ = ["JobGate", "artifact_abs_path", "job_artifact_paths", "job_gate",
+           "load_dataset_state", "read_mztab", "read_mztab_parsed",
+           "sample_raw_paths", "select_primary_entry"]
 
 #: 完了していない実行の出力に付ける警告。読み手が最初に見る位置へ差す。
 _INCOMPLETE_WARNING = (
@@ -130,13 +134,41 @@ def load_dataset_state(*, mztab_path: Path | None = None,
 
 # ---------- 直接読み ----------
 
-def _load_from_mztab(path: Path):
+def read_mztab(path: Path):
+    """mzTab-M を読んで構造を検証し、DatasetState を組む（隣の `.arf` はまだ見ない）。
+
+    解析フォルダのアダプタが、ジョブの正準 mzTab-M と同じアラインメントの `.arf` を
+    選ぶときの照合の相手もこれ（`.arf` と照合する軸を mzTab-M のアダプタと同じにする）。
+    """
+    return read_mztab_parsed(path)[0]
+
+
+def read_mztab_parsed(path: Path):
+    """`read_mztab` と同じ。パース結果も返す（(DatasetState, parse_result)）。"""
+    path = Path(path)
     if not path.is_file():
         raise DomainError("MZTAB_NOT_FOUND",
                           f"mzTab-M ファイルが見つかりません: {path}",
                           {"path": str(path)})
-    parse_result = _parse_and_validate(path)
-    ds = build_dataset_state(parse_result, path.name, path)
+    parsed = _parse_and_validate(path)
+    return build_dataset_state(parsed, path.name, path), parsed
+
+
+def sample_raw_paths(job, state, parse_result: dict) -> list[str | None]:
+    """`state.sample_names` と同じ順の raw のパス（mzTab-M の `ms_run[N]-location`）。
+
+    `assay[N]` の対応は `_assay_sources`（mzTab-M のアダプタの `ds.assay_sources` と同じ）。
+    """
+    sources = _assay_sources(job, parse_result)
+    out: list[str | None] = []
+    for assay_id in state.sample_assay_ids:
+        m = re.fullmatch(r"assay\[(\d+)\]", assay_id or "")
+        out.append(sources.get(f"abundance_assay[{m.group(1)}]") if m else None)
+    return out
+
+
+def _load_from_mztab(path: Path):
+    ds = read_mztab(path)
     # 検出状態（gap-fill）は mzTab-M に無い。隣接 `.arf` から補えるかを試す。
     # 取り込めなくても解析は続けられるので、例外ではなく warning で伝える。
     mztab_evidence.attach_to_dataset(ds, path)
@@ -147,7 +179,45 @@ def _load_from_mztab(path: Path):
 
 # ---------- ジョブ経由 ----------
 
-def _load_from_job(job_path: Path, *, allow_incomplete: bool):
+@dataclass
+class JobGate:
+    """ジョブの門（`job_gate`）を通った結果。どのアダプタで読むかに依らない。
+
+    `mztab_path` はジョブの宣言（polarity + measure）で一意に選んだ正準 mzTab-M の絶対パス。
+    `verified` / `reason` は終了証跡とファイル hash による出所の裏取り（`reason` は
+    裏取りできなかった理由。できたときは None）。
+    """
+
+    job: object
+    mztab_path: Path
+    exploratory_only: bool
+    verified: bool
+    reason: str | None
+
+    @property
+    def incomplete_warning(self) -> str | None:
+        """完了していない実行の出力に付ける警告（完了していれば None）。"""
+        if not self.exploratory_only:
+            return None
+        return _INCOMPLETE_WARNING.format(status=self.job.status)
+
+    @property
+    def unverified_warning(self) -> str | None:
+        """出所を裏取りできなかったときの警告（裏取りできていれば None）。"""
+        if self.verified:
+            return None
+        return (f"この出力は実行証跡で裏取りできていません（{self.reason}）。"
+                "単体の解析には使えますが、パイプラインは検証済みの出力だけを受け付けます。")
+
+
+def job_gate(job_path: Path, *, allow_incomplete: bool) -> JobGate:
+    """ジョブを読む前の門。mzTab-M のアダプタも解析フォルダのアダプタもここを通る。
+
+    ジョブの記録が読めること・完了していること（`allow_incomplete=True` のときだけ
+    未完了を通す）・正準 mzTab-M が一意に決まって実在することを確かめ、出所を裏取りする。
+    どちらのアダプタで読んでも同じ規則で止め、同じ信用度を書くためにここへ寄せてある。
+    """
+    job_path = Path(job_path)
     if not job_path.is_file():
         raise DomainError("MZTAB_NOT_FOUND",
                           f"analysis-job.json が見つかりません: {job_path}",
@@ -187,6 +257,16 @@ def _load_from_job(job_path: Path, *, allow_incomplete: bool):
             f"（job_id={job.job_id}, entry.path={entry.path}）",
             {"job_id": job.job_id, "path": str(mztab_abs)})
 
+    verified, reason = _verify_source(job, entry, mztab_abs)
+    return JobGate(job=job, mztab_path=mztab_abs,
+                   exploratory_only=job.status != "completed",
+                   verified=verified, reason=None if verified else reason)
+
+
+def _load_from_job(job_path: Path, *, allow_incomplete: bool):
+    gate = job_gate(job_path, allow_incomplete=allow_incomplete)
+    job, mztab_abs = gate.job, gate.mztab_path
+
     parse_result = _parse_and_validate(mztab_abs)
     msp_table, msp_status, msp_file, msp_warning = _msp_table_for_job(job)
     ds = build_dataset_state(parse_result, mztab_abs.name, mztab_abs, msp_table=msp_table)
@@ -195,22 +275,17 @@ def _load_from_job(job_path: Path, *, allow_incomplete: bool):
     if msp_warning:
         ds.validation_result.setdefault("warnings", []).insert(0, msp_warning)
 
-    ds.exploratory_only = job.status != "completed"
+    ds.exploratory_only = gate.exploratory_only
     if ds.exploratory_only:
-        ds.validation_result.setdefault("warnings", []).insert(
-            0, _INCOMPLETE_WARNING.format(status=job.status))
+        ds.validation_result.setdefault("warnings", []).insert(0, gate.incomplete_warning)
 
     ds.job_path = str(job_path)
-    for art in job.artifacts:
-        abs_p = str(artifact_abs_path(job, getattr(art, "root", "run_dir"), art.path))
-        ds.artifact_paths.setdefault(art.role, []).append(abs_p)
+    for role, paths in job_artifact_paths(job).items():
+        ds.artifact_paths.setdefault(role, []).extend(paths)
 
-    verified, reason = _verify_source(job, entry, mztab_abs, ds)
-    ds.source_verification = "verified" if verified else "legacy_unverified"
-    if not verified:
-        ds.validation_result.setdefault("warnings", []).append(
-            f"この出力は実行証跡で裏取りできていません（{reason}）。"
-            "単体の解析には使えますが、パイプラインは検証済みの出力だけを受け付けます。")
+    ds.source_verification = "verified" if gate.verified else "legacy_unverified"
+    if not gate.verified:
+        ds.validation_result.setdefault("warnings", []).append(gate.unverified_warning)
 
     ds.assay_sources = _assay_sources(job, parse_result)
 
@@ -218,6 +293,54 @@ def _load_from_job(job_path: Path, *, allow_incomplete: bool):
     # 候補の先頭に使えるのは、この時点以降だけ。
     mztab_evidence.attach_to_dataset(ds, mztab_abs)
     return ds
+
+
+def job_artifact_paths(job) -> dict[str, list[str]]:
+    """ジョブが記録した付随アーティファクトの role → 絶対パスの一覧（記録の順）。
+
+    どちらのアダプタでジョブを読んでも、`ds.artifact_paths` と `.arf` の候補
+    （handoff の `peak_matrix_source`）はここから作る。
+    """
+    out: dict[str, list[str]] = {}
+    for art in job.artifacts:
+        out.setdefault(art.role, []).append(
+            str(artifact_abs_path(job, getattr(art, "root", "run_dir"), art.path)))
+    return out
+
+
+def effective_method_keys(job) -> tuple[Path, dict[str, str]] | None:
+    """ジョブの実効メソッドのパスと `key: value`（小文字キー）。メソッドが無い・読めないなら None。"""
+    method_text = (getattr(job, "method_file", "") or "").strip()
+    if not method_text:
+        return None
+    method = Path(method_text)
+    try:
+        return method, read_method_keys(method)
+    except (OSError, DomainError):
+        return None
+
+
+def effective_method_msp(job, method_keys=None) -> Path | None:
+    """ジョブの実効メソッドが宣言する MSP のパス。宣言が無い・メソッドを読めないなら None。
+
+    ファイルの存在は見ない（読めるかどうかは呼び出し側が決める）。
+    `method_keys` は `effective_method_keys(job)` の結果（呼び出し側が持っていれば渡す）。
+    """
+    loaded = method_keys if method_keys is not None else effective_method_keys(job)
+    if loaded is None:
+        return None
+    method, keys = loaded
+    # Console と同じ順: 注釈器設定表から MSP が 1 件でも読めれば `Msp file path` は使わない
+    # （library_mode="msp_then_lbm" は `Msp file path` を空にして設定表で入れる。v8）。
+    msp = _msp_from_annotator_table(keys, method)
+    if msp is None:
+        declared = (keys.get("msp file path") or "").strip()
+        if not declared:
+            return None
+        msp = Path(declared)
+        if not msp.is_absolute():
+            msp = method.parent / msp
+    return msp
 
 
 def _msp_table_for_job(job) -> tuple[MspInchikeyTable | None, str, str | None, str | None]:
@@ -229,24 +352,9 @@ def _msp_table_for_job(job) -> tuple[MspInchikeyTable | None, str, str | None, s
     ——MSP 表は InChIKey の付け足しで、無くても従来どおり RDKit 経路で読める。
     警告と戻り値に出すのはファイル名だけ（研究室ライブラリの置き場所は出さない）。
     """
-    method_text = (getattr(job, "method_file", "") or "").strip()
-    if not method_text:
-        return None, "no_msp", None, None
-    method = Path(method_text)
-    try:
-        keys = read_method_keys(method)
-    except (OSError, DomainError):
-        return None, "no_msp", None, None
-    # Console と同じ順: 注釈器設定表から MSP が 1 件でも読めれば `Msp file path` は使わない
-    # （library_mode="msp_then_lbm" は `Msp file path` を空にして設定表で入れる。v8）。
-    msp = _msp_from_annotator_table(keys, method)
+    msp = effective_method_msp(job)
     if msp is None:
-        declared = (keys.get("msp file path") or "").strip()
-        if not declared:
-            return None, "no_msp", None, None
-        msp = Path(declared)
-        if not msp.is_absolute():
-            msp = method.parent / msp
+        return None, "no_msp", None, None
     try:
         table = load_msp_inchikey_table(msp)
     except OSError:
@@ -310,7 +418,7 @@ def _parse_and_validate(path: Path) -> dict:
     return parse_result
 
 
-def _verify_source(job, entry, mztab_abs: Path, ds) -> tuple[bool, str]:
+def _verify_source(job, entry, mztab_abs: Path) -> tuple[bool, str]:
     """終了証跡とファイル hash で「この出力の出所」を裏取りする。
 
     `completed` という文字列は根拠にしない。旧経路の completed は「実行後に

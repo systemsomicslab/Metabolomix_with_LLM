@@ -327,6 +327,13 @@ def _abundance_key(assay_id: str | None) -> str | None:
 
 def _raw_path_for_sample(ds, index: int) -> str | None:
     """i番目サンプルへ実行時に予定されたrawの絶対パス（分かれば）。"""
+    # 優先順: job の mzTab-M の場所 → .mddata の file_path → assay id。
+    job_paths = getattr(ds, "sample_raw_paths", None)
+    if job_paths and index < len(job_paths) and job_paths[index]:
+        return job_paths[index]
+    msdial_samples = getattr(ds, "msdial_samples", None)
+    if msdial_samples:  # 解析フォルダ: .mddata が持つ raw のパス（assay[N] は無い）
+        return msdial_samples[index].get("file_path") if index < len(msdial_samples) else None
     assay_ids = list(getattr(ds, "sample_assay_ids", []) or [])
     if index >= len(assay_ids):
         return None
@@ -345,17 +352,103 @@ def _mztab_batch_and_order(ds, index: int) -> tuple[str | None, int | None]:
     return meta.get("batch"), meta.get("run_order")
 
 
+_DATE_RE = re.compile(r"(\d{8})")
+
+
+def batch_labels_informative(labels) -> bool:
+    """バッチのラベルが情報を持つか（2 種類以上あるか）。
+
+    MS-DIAL のバッチラベルは CSV インポートで指定しない限り全件 "1"（Console は設定しない）。
+    定数のラベルは情報を持たないので採らず、ファイル名の日付の推定に戻す——定数を採ると、日付で
+    分かれていた交絡が検出できなくなる。mzTab 経路（`dataset_analysis.build_dataset_pp_inputs`）と
+    解析フォルダの経路が同じ規則を使うための唯一の定義。
+    """
+    return len({label for label in labels if label is not None}) > 1
+
+
+def filename_date_batch(name: str) -> str | None:
+    """試料名の中の 8 桁の日付（バッチの推定）。無ければ None。"""
+    match = _DATE_RE.search(name or "")
+    return match.group(1) if match else None
+
+
+def _filename_date_prov(value) -> dict:
+    if value is None:
+        return {"value": None, "source": None, "confidence": None}
+    return {"value": value, "source": "filename_date", "confidence": "inferred"}
+
+
 def _unverified_mztab_prov(value) -> dict:
     if value is None:
         return {"value": None, "source": None, "confidence": None}
     return {"value": value, "source": "mztab", "confidence": "unverified"}
 
 
+def _msdial_row(ds, index: int, sample: dict, name: str) -> dict:
+    """.mddata が宣言した役割・群・バッチ・注入順から作る v2 形の1行。
+
+    .mddata に FileID が無い試料（`in_mddata` が偽）の役割は宣言ではなく既定（推定）。バッチと
+    注入順は、.mddata が持たなければ job の mzTab-M の MTD（未確認）で補う（.mddata が勝つ）。
+    """
+    declared = {"source": "msdial_mddata", "confidence": "declared"}
+    in_mddata = sample.get("in_mddata", True)
+    declared_labels = [None if s.get("batch") is None else str(s["batch"])
+                       for s in ds.msdial_samples]
+    batch = (None if sample.get("batch") is None or not batch_labels_informative(declared_labels)
+             else str(sample["batch"]))
+    injection_order = sample.get("injection_order")
+    mz_batch, mz_order = _mztab_batch_and_order(ds, index)
+    if not batch_labels_informative(
+            [_mztab_batch_and_order(ds, i)[0] for i in range(len(ds.sample_names))]):
+        mz_batch = None
+    values = {
+        "sample_id": name, "source_file": sample.get("file_path"), "role": sample["role"],
+        "group": sample.get("group"), "batch": batch,
+        "injection_order": injection_order,
+        "qc_pool": None, "include": True, "biological_sample_id": None,
+    }
+    provenance = {
+        "sample_id": {"value": name, "source": "default", "confidence": "inferred"},
+        "source_file": ({"value": values["source_file"], **declared} if values["source_file"]
+                        else {"value": None, "source": None, "confidence": None}),
+        "qc_pool": {"value": None, "source": None, "confidence": None},
+        "include": {"value": True, "source": "default", "confidence": "inferred"},
+        "biological_sample_id": {"value": None, "source": None, "confidence": None},
+    }
+    for field in ("role", "group", "batch", "injection_order"):
+        provenance[field] = ({"value": values[field], **declared} if values[field] is not None
+                             else {"value": None, "source": None, "confidence": None})
+    if not in_mddata:
+        provenance["role"] = {"value": values["role"], "source": "default",
+                              "confidence": "inferred"}
+    for field, fallback in (("batch", mz_batch), ("injection_order", mz_order)):
+        if values[field] is None and fallback is not None:
+            values[field] = fallback
+            provenance[field] = _unverified_mztab_prov(fallback)
+    if values["batch"] is None:
+        values["batch"] = filename_date_batch(name)
+        provenance["batch"] = _filename_date_prov(values["batch"])
+    row = dict(values)
+    row["provenance"] = provenance
+    row["conflicts"] = []
+    return row
+
+
 def _default_row(ds, index: int, name: str) -> dict:
     """明示シートが全く無いときの1行。既存のトークン/mzTab推定経路を使う。"""
+    msdial_samples = getattr(ds, "msdial_samples", None)
+    if msdial_samples:
+        return _msdial_row(ds, index, msdial_samples[index], name)
     source_file = _raw_path_for_sample(ds, index)
     role = preprocessing.detect_sample_roles([name]).get(name, "sample")
     batch, injection_order = _mztab_batch_and_order(ds, index)
+    if not batch_labels_informative(
+            [_mztab_batch_and_order(ds, i)[0] for i in range(len(ds.sample_names))]):
+        batch = None
+    batch_prov = _unverified_mztab_prov(batch)
+    if batch is None:
+        batch = filename_date_batch(name)
+        batch_prov = _filename_date_prov(batch)
 
     values = {
         "sample_id": name, "source_file": source_file, "role": role,
@@ -368,7 +461,7 @@ def _default_row(ds, index: int, name: str) -> dict:
                         else {"value": None, "source": None, "confidence": None}),
         "role": {"value": role, "source": "filename_token", "confidence": "inferred"},
         "group": {"value": None, "source": None, "confidence": None},
-        "batch": _unverified_mztab_prov(batch),
+        "batch": batch_prov,
         "injection_order": _unverified_mztab_prov(injection_order),
         "qc_pool": {"value": None, "source": None, "confidence": None},
         "include": {"value": True, "source": "default", "confidence": "inferred"},
@@ -536,6 +629,63 @@ def apply_metadata(ds, rows: list[dict]) -> dict:
         "changed_fields": sorted(changed),
         "sample_ids": list(ds.sample_ids),
     }
+
+
+def pp_inputs_from_rows(sample_names: list[str], rows: list[dict]) -> tuple[dict, dict]:
+    """Task 9 で適用済みの実験情報シートを、前処理入力（roles/sample_meta）へ変換する。
+
+    `ds.sample_metadata_rows` は `sample_manifest.resolve_metadata` が
+    `ds.sample_names` と同じ順に揃えてから `apply_metadata` が書き込むので、
+    ここでは位置で対応させる（sample_id では結合しない——表示名を上書きしない
+    設計と対称に、サンプル名の並びだけを唯一の対応軸にする）。
+
+    ここでは各行の role/batch/injection_order を roles/sample_meta へ写すだけで、
+    `row["include"]` は見ない——include=false を matrix/sample_names から落とす
+    判断は呼び出し側（`build_dataset_pp_inputs`）が行毎に持つ（spec §8.1
+    「include=falseの試料はこれらの評価前に除外する」）。ここで返す roles/
+    sample_meta は除外対象も含めた全件分のまま返す。数値評価に渡す入力を絞る
+    ことと、役割の写像（監査・表示用）を保持することは別の判断だからである。
+    """
+    roles: dict[str, str] = {}
+    sample_meta: dict = {}
+    for name, row in zip(sample_names, rows):
+        # role はここでは "sample"/"qc"/"blank" へ絞り込まず、シートの値を
+        # そのまま渡す（空欄だけ "sample" を既定にする）。明示 role="unknown"
+        # （sample_manifest が正当な列挙値として保持する）はそのまま
+        # preprocessing.preprocess() へ渡り、"blank" のように弾かれることも
+        # "qc"/"sample" として扱われることもない——preprocessing.py は
+        # role を `== "qc"` / `== "sample"` の完全一致と `drop_roles=("blank",)`
+        # でしか見ないため、"unknown" は前処理を素通りして解析行列に残る。
+        # role="unknown" を比較（compare_dataset）から除外するルールは Task 12
+        # （resolve_comparison の比較ガード、spec §7.4）が持つ。ここで先回りして
+        # 弾くと、その判定基準を2箇所に複製することになる。
+        # 一方 include=false は「数値評価（前処理）からの除外」（spec §8.1）
+        # ——role とは別の軸なので、ここでは弾かず、呼び出し側
+        # （build_dataset_pp_inputs）が matrix/sample_names を絞る。
+        role = row.get("role") or "sample"
+        roles[name] = role
+        provenance = row.get("provenance") or {}
+        batch_prov = provenance.get("batch") or {}
+        order_prov = provenance.get("injection_order") or {}
+        sample_meta[name] = {
+            "role": role,
+            "batch": row.get("batch"),
+            "batch_source": batch_prov.get("source"),
+            "run_order": row.get("injection_order"),
+            "run_order_source": order_prov.get("source"),
+        }
+    return roles, sample_meta
+
+
+def apply_defaults_and_inputs(ds, rows: list[dict]) -> None:
+    """`rows`（`resolve_metadata` の出力）を適用し、前処理入力 `ds.roles` / `ds.sample_meta` を組み直す。
+
+    解析フォルダのアダプタと、読み込み後にバッチ・注入順を足す入口（`opening`）が共有する。
+    前処理が実際に読む組み立て（`pp_inputs_from_rows`）と同じ関数を通すので、2 か所が
+    食い違わない。
+    """
+    apply_metadata(ds, rows)
+    ds.roles, ds.sample_meta = pp_inputs_from_rows(list(ds.sample_names), rows)
 
 
 # ---------- 統計母集団の選択（spec §7・§9） ----------

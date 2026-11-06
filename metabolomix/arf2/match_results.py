@@ -30,6 +30,8 @@ MATCH_KEYS = {
 }
 
 SOURCE_UNKNOWN = 1
+SOURCE_MSP = 4
+SOURCE_GENERATED_LIPID = 32
 SOURCE_MANUAL = 64
 
 # Mapping from normalized qualifier text to label.

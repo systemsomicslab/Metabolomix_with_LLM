@@ -12,6 +12,7 @@ import pytest
 
 from metabolomix.analysis.feature_search import theoretical_mz
 from metabolomix.core import handles, mcp_core, session_state
+from metabolomix.library import tools as library_tools
 from metabolomix.msdial import alignment_spot
 from metabolomix.tools import dataset_analysis_tools as T
 from metabolomix.tools import handle_tools
@@ -97,8 +98,13 @@ def library(tmp_path, monkeypatch, mztab):
 
 def _open(mztab, **kwargs):
     kwargs.setdefault("library", "none")
+    library = kwargs["library"]
     out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(mztab), **kwargs))
     assert out["status"] == "success", out
+    if library == "auto":
+        # mzTab-M の記憶は `unknown` なので、library_load は極性の設定（MSDIAL_MSP_POS）から引く
+        # （mzTab-M の本番の経路）。
+        library_tools.library_load(dataset_handle=out["dataset_handle"])
     return out["dataset_handle"]
 
 

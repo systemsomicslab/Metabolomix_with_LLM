@@ -21,6 +21,14 @@ ARF 経路（`.arf` を直接読む）とは**別の ID 空間・別の粒度**�
 | 同定の出所 | SME 行 / SML 行（§13.1） | `.arf2` の注釈 |
 | MSI レベル | **常に空欄**（§13.5） | ヒューリスティック推定あり（`identity` トピック §12.3） |
 
+`dataset_load` は解析フォルダ（`directory`、または `job_path` / `pipeline_path` の既定）も
+読む。そのときの要約は行で、読んだアダプタ（`アダプタ: msdial_folder`）・読んだ `.arf` と
+選ばなかった `.arf` の候補・同定に使ったライブラリの記録（`library_record`。ファイル名と
+sha256 だけで置き場所は出さない）を示す。アダプタと `library_record` の行は mzTab-M で
+読んだときにも出る。同じアラインメントでも、mzTab-M 経由の Height は上流が整数に丸めて
+（偶数丸め）書き出した値で、解析フォルダ経由は `.arf` の丸める前の値なので、2 つの経路の値は
+最大 0.5 違う。
+
 ### 13.1 同定の出所: SME と SML
 
 mzTab-M では同定が 2 か所に出る。**意味が違うので混ぜてはいけない。**
@@ -190,7 +198,12 @@ mzTab-M の `abundance_assay[N]` は非ゼロでも実測ピークか gap-fill �
 | `source` | `"arf"`（取り込めた）/ `None`（取り込めていない） |
 | `reason` | `source is None` のときだけ。`no_candidate` ほか |
 | `n_cells` / `n_detected` / `gap_filled_rate` | 取り込めたときの内訳 |
-| `join` | 接合の検証内訳（スポット数一致・m/z 差） |
+| `join` | 接合の検証内訳（スポット数一致・m/z 差）。解析フォルダのデータセットでは読んだ `.arf` のパスと `feature_axis="arf2_master_id"` |
+
+解析フォルダ（`source_format="msdial_folder"`）のデータセットでは、検出状態は読んだ `.arf` そのものが
+持つので、`source="arf"` は「隣の `.arf` を照合して取り込めた」ではなく「`.arf` から読んだ」の意味で
+常に付く（`source is None` にはならない）。`inchikey_coverage` も同じキー（`total_features` /
+`with_inchikey` / `by_source` / `identified_by`）で埋まるが、`by_source` の出所は `arf2` と `none` だけ。
 
 取り込めたときは、試料ごとの実測 m/z も `ds.per_sample_mz`（特徴 ID → {試料名: m/z}）に載る。
 **その試料で検出された（gap-fill でない）セルだけ**（補間値の m/z は実測ではない）。検出された

@@ -4,9 +4,6 @@ import unittest
 from pathlib import Path
 import zipfile
 
-import lz4.block
-import msgpack
-
 from metabolomix.msdial.classes import (
     assign_sample_groups,
     attach_class_ids_to_spots,
@@ -19,26 +16,7 @@ from metabolomix.msdial.classes import (
     resolve_mddata_path,
 )
 from metabolomix.msdial.tags import normalize_sample_name
-
-
-def pack_msdial(value) -> bytes:
-    unpacked = msgpack.packb(value, use_bin_type=True)
-    size_header = msgpack.packb(len(unpacked))
-    compressed = lz4.block.compress(unpacked, store_size=False)
-    extension = msgpack.ExtType(99, size_header + compressed)
-    return msgpack.packb(extension, use_bin_type=True)
-
-
-def analysis_file_row(file_id: int, name: str, class_id: str) -> list:
-    return [
-        f"C:/data/{name}.wiff",
-        name,
-        0,
-        class_id,
-        file_id + 1,
-        file_id,
-        True,
-    ]
+from tests.msdial_folder_fixtures import analysis_file_row, pack_msdial, write_mddata
 
 
 class MsdialClassTests(unittest.TestCase):
@@ -247,6 +225,14 @@ class FilterTokenSubsetTests(unittest.TestCase):
             set(stats["matched_class_ids"]),
             {"Cerebellum_gf_AIN", "Hippocampus_gf_AIN"},
         )
+
+
+def test_parse_reads_analysis_batch(tmp_path):
+    path = write_mddata(tmp_path / "d.mddata",
+                        [analysis_file_row(0, "s1", "A", batch=2, file_type=2, order=5)])
+    row = parse_analysis_file_classes(path)[0]
+    assert row["analysis_batch"] == 2
+    assert row["analysis_file_type"] == 2 and row["analytical_order"] == 5
 
 
 if __name__ == "__main__":

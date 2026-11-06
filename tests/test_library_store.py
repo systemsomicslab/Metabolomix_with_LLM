@@ -543,3 +543,52 @@ def test_rt_used_for_is_unknown_for_a_plain_msp(library):
         assert s.rt_used_for("Msp1_lib_1") is None
     finally:
         s.close()
+
+
+def test_library_id_fallback_never_returns_a_directory(tmp_path, monkeypatch):
+    """Console のデータの AnnotatorID はライブラリのフルパス。置き場所を library_id に残さない。"""
+    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    s = store.open_store(_console_dbs(tmp_path))
+    try:
+        for raw in ("D:/secret_lab/libs/Made_Up_Lib_3", r"D:\secret_lab\libs\Made_Up_Lib_3"):
+            got = s.library_id_for(raw)
+            assert got == "Made_Up_Lib" and "secret_lab" not in got
+        assert store.library_id_from_annotator("/srv/secret_lab/Made_Up_Lib_3") == "Made_Up_Lib"
+    finally:
+        s.close()
+
+
+def test_two_threads_opening_the_same_destination_build_it_once(library, monkeypatch):
+    """`library_load` とハンドルを開く処理が同じ構築先を同時に作らない（構築先ごとのロック）。"""
+    import threading
+    import time
+
+    builds = []
+    real_build = store._build
+
+    def slow_build(source_path, dest_path, digest):
+        builds.append(threading.current_thread().name)
+        time.sleep(0.3)
+        real_build(source_path, dest_path, digest)
+
+    monkeypatch.setattr(store, "_build", slow_build)
+    barrier = threading.Barrier(2)
+    opened, errors = [], []
+
+    def work():
+        try:
+            barrier.wait()
+            opened.append(store.open_store(library, read_only=False))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=work, name=f"w{i}") for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert not errors
+    assert len(builds) == 1
+    assert [s.record_count for s in opened] == [4, 4]
+    for s in opened:
+        s.close()

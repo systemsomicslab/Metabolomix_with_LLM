@@ -6,7 +6,7 @@ metabolomix.tools.* の他モジュールと server は import しない。
 """
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from mcp.types import ToolAnnotations
 
@@ -30,6 +30,11 @@ _APP_ONLY_META = {"ui": {"resourceUri": VIEWER_URI, "visibility": ["app"]}}
 _LOCAL_WRITE_APPEND = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False)
 # curation_submit は MS-DIAL の _tags.xml を書き換える（clear で Misannotation を外す）ので destructive。
 _SUBMIT_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False)
+
+
+def _file_name(path) -> str | None:
+    """ライブラリの置き場所は戻り値に出さない（ファイル名だけ。区切りは `/` でも バックスラッシュでも）。"""
+    return PureWindowsPath(str(path)).name if path else None
 
 
 def _error(message: str, **details) -> str:
@@ -266,7 +271,7 @@ def curation_suggest(review_id: str | None = None, wrong: str = "flagged_or_like
         "table": table, "n_table_rows_shown": len(table.splitlines()) - 1,
         "html_path": str(saved["html"]),
         "submit": submit_info,
-        "library": {**result["library"], "path": session_state.session.library.source_path},
+        "library": {**result["library"], "path": _file_name(session_state.session.library.source_path)},
         "analysis_params": {k: result["analysis_params"][k] for k in ("source", "path", "rt_window")},
         "options": result["options"], "thresholds": th}, 4))
 

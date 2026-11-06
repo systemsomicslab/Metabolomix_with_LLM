@@ -3,7 +3,7 @@ from pathlib import Path
 
 from mcp.types import ToolAnnotations
 
-from metabolomix.core import session_state
+from metabolomix.core import handles, session_state
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import missing_state, mztab_error
 from metabolomix.core.serialization import json_payload
@@ -21,65 +21,102 @@ __all__ = ["dataset_load", "dataset_status"]
           structured_output=False)
 def dataset_load(mztab_path: str | None = None, job_path: str | None = None,
                  pipeline_path: str | None = None,
-                 allow_incomplete: bool = False) -> str:
-    """mzTab-M 2.0 ファイルを読み込んで正準状態（DatasetState）を作る。
+                 allow_incomplete: bool = False, directory: str | None = None,
+                 source: str = "auto", measure: str = "peak_height") -> str:
+    """データセットを読み込んで正準状態（DatasetState）を作る。
 
-    呼び出し方:
+    入口（**どれか 1 つ**。全省略・2 つ以上の指定はエラー）:
+      - directory: MS-DIAL の解析フォルダ（`.arf` / `.arf2` / `.mddata`）。フォルダの中の
+        特定の `.arf` / `.arf2` を渡してもよい。同じフォルダに `DriftSpots.arf` と
+        `PeakProperties.arf` があれば `PeakProperties.arf`、複数のバッチがあれば最新を選び、
+        選ばなかった `.arf` を要約に並べる。
       - mztab_path: .mzTab ファイルへの絶対パスを直接指定する場合。
       - job_path: analysis-job.json へのパスを指定する場合。ジョブの宣言
-        （polarity・measure）で正準エントリを一意に選ぶ。console_run 完了後は
-        こちらを推奨。
+        （polarity・measure）で正準 mzTab-M を一意に選ぶ。
       - pipeline_path: `pipeline_run` が返した pipeline-run.json（またはその親
-        ディレクトリ）を指定する場合。その run の mzTab に加えて、**解決済みの
-        試料対応表・feature binding・解析行列も同じ run からまとめて**載せる。
-        行列だけを別に載せる入口は置いていない——別 run の行列を混ぜると群の
-        対応が黙ってずれるため。載せた行列は `dataset_statistic` へ
-        `matrix_id` で渡す。run の差次的結果も、データと群の指紋が今の
-        データセットと一致するものだけを戻す（result_id は run の TSV と同じ。
-        直近の結果にはしないので result_id で名指しして使う）。戻せなかった
-        ものは理由つきで要約に並ぶ。
+        ディレクトリ）。
 
-    3つとも省略するとエラー、2つ以上指定するとエラー。
+    source: どのアダプタで読むか。`"auto"`（既定）/ `"folder"` / `"mztab"`。
+        - `directory` は解析フォルダ（`"mztab"` はエラー）、`mztab_path` は mzTab-M
+          （`"folder"` はエラー）。
+        - `job_path` / `pipeline_path` は既定（`"auto"` / `"folder"`）で、そのジョブの正準
+          mzTab-M と同じアラインメントの**解析フォルダ**を読む。候補（mzTab-M の隣の `.arf`。
+          pipeline はどれも合わなければ run の `input/AlignResult-*.arf2` と同じバッチも）を
+          mzTab-M と特徴数・m/z・試料名で照合し、合うものがちょうど 1 本ならそれを読む。
+          無ければ `ALIGNMENT_NOT_FOUND`、2 本以上なら `ALIGNMENT_AMBIGUOUS`（どちらも
+          候補のファイル名を `details.candidates` に載せる）で止まり、mzTab-M へ黙って
+          切り替えない。`"mztab"` を渡すと今までどおり mzTab-M を読む。
+        - **pipeline の run を解析フォルダで読んだときに run から引き継ぐのは、解決済みの
+          試料対応表だけ**。run の解析行列・feature binding・差次的結果は
+          `source="mztab"` のときだけ載せる——その run の mzTab に加えて、解決済みの
+          試料対応表・feature binding・解析行列を**同じ run からまとめて**載せる
+          （行列だけを別に載せる入口は置いていない。別 run の行列を混ぜると群の対応が
+          黙ってずれるため）。載せた行列は `dataset_statistic` へ `matrix_id` で渡す。
+          run の差次的結果も、データと群の指紋が今のデータセットと一致するものだけを戻す
+          （result_id は run の TSV と同じ。直近の結果にはしないので result_id で名指しして
+          使う）。戻せなかったものは理由つきで要約に並ぶ。
+    measure: 解析フォルダのアダプタが値に使う `.arf` の欄（`"peak_height"`（既定）/
+        `"peak_area_above_zero"`）。**この引数が効くのは解析フォルダのアダプタだけ**。
+        mzTab-M のアダプタでは定量種別がファイル（job / pipeline ならジョブの宣言）で
+        決まるので、既定値以外を渡すと `DATASET_BAD_REQUEST`。
 
     allow_incomplete: **完了していない実行**（partial / failed / running）の出力を
-        読み込みます（既定 False）。中断時点の生成物なので、既定では拒否します
-        （`INCOMPLETE_ANALYSIS_JOB`）。True で読んだデータセットは探索専用になり、
-        2 群比較（dataset_differential）と差次的エクスポートは拒否されます——
-        欠けた検体を「その群には無い」と読み違えたまま結論が出てしまうためです。
+        読み込みます（既定 False。bool 以外は `DATASET_BAD_REQUEST`——`"false"` という
+        文字列を真と読まないため。どちらのアダプタでも同じ門を通る）。中断時点の生成物
+        なので、既定では拒否します（`INCOMPLETE_ANALYSIS_JOB`）。True で読んだ
+        データセットは探索専用になり、2 群比較（dataset_differential）と差次的
+        エクスポートは拒否されます——欠けた検体を「その群には無い」と読み違えたまま
+        結論が出てしまうためです。
 
-    成功すると session.dataset に DatasetState が格納され、
-    dataset_status で内容を確認できる。
+    成功すると DatasetState を新しいデータセットのハンドル（`dh_…`）として登録簿に入れ、
+    対話のセッションの直近にする（要約の `dataset_handle`）。`dataset_handle` を省いた
+    `dataset_*` / `library_*` はこの直近のハンドルに効き、dataset_status で内容を確認できる。
+    前に読んだデータセットのハンドルは閉じずに残る（`dataset_handle_list` / `dataset_handle_close`）。
+    開いているハンドルが上限（`LIPIDMIX_MAX_DATASET_HANDLES`、既定 8）なら
+    `DATASET_HANDLE_LIMIT` で止め、古いハンドルを黙って閉じない（直近も動かさない）。
+    要約には読んだアダプタ・選んだ `.arf`・
+    同定に使ったライブラリの記録（ファイル名と sha256。置き場所は出さない）が並ぶ。
+    同じ入力を読み直すと読み込み済みのものの複製を使う（読み込みが読んだ・探したファイル
+    ——mzTab-M の隣に後から置かれた `.arf` なども——の size・更新時刻が同じとき）。
     既存の session.arf / .arf2 / .pai2 / .eic は変更しない。
     """
     from metabolomix.core.atomic_io import DomainError
-    from metabolomix.mztab.loading import load_dataset_state
-    from metabolomix.pipeline import session_handoff
+    from metabolomix.dataset.opening import open_dataset
 
     try:
-        if pipeline_path:
-            if mztab_path or job_path:
-                raise DomainError(
-                    "DATASET_BAD_REQUEST",
-                    "pipeline_path は mztab_path / job_path と同時に指定できません"
-                    "（run の成果物はまとめて載せます）。",
-                    {"pipeline_path": pipeline_path})
-            ds = session_handoff.load_run_dataset(
-                pipeline_path, allow_incomplete=allow_incomplete)
-        else:
-            ds = load_dataset_state(
-                mztab_path=Path(mztab_path) if mztab_path else None,
-                job_path=Path(job_path) if job_path else None,
-                allow_incomplete=allow_incomplete)
+        # 長い読み込みの前に上限を確かめる。読み込みの間に別の呼び出しが足しうるので、
+        # 直近にする代入（registry.add）でももう一度確かめる。
+        handles.registry.check_capacity()
+        opened = open_dataset(directory=directory, mztab_path=mztab_path, job_path=job_path,
+                              pipeline_path=pipeline_path, source=source, measure=measure,
+                              allow_incomplete=allow_incomplete)
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
 
-    # 成功したときだけ session を差し替える。途中で失敗した読み込みが
+    # 成功したときだけ直近を差し替える。途中で失敗した読み込み（上限を含む）が
     # 現在のデータセットを壊さない。
-    session_state.session.dataset = ds
+    ds = opened.dataset
+    try:
+        session_state.session.dataset = ds
+    except DomainError as exc:
+        return mztab_error(exc.code, exc.message, exc.details or None)
+    handle_id = session_state.session.current_handle_id
+    # ハンドルに持たせる `.arf2` / `.dcl`（`dataset_handle_open` と同じ規則）。ID を明示した
+    # 呼び出しはこれを使う。ID を省いた呼び出しは `_holder.alignment_paths` とデータフォルダの
+    # 探索で決めるので、同じファイルになるとは限らない。
+    from metabolomix.tools.handle_tools import alignment_files_for
 
-    filename = Path(ds.source_files and list(ds.source_files)[-1]
-                    or (mztab_path or "")).name or "mzTab-M"
-    lines = [_summary_text(ds, filename)]
+    handle = handles.registry.peek(handle_id)
+    if handle is not None:
+        handle.arf2_path, handle.dcl_path = alignment_files_for(opened)
+
+    if opened.selection is not None:
+        lines = [_folder_summary_text(ds, opened.selection.arf.name)]
+    else:
+        filename = Path(ds.source_files and list(ds.source_files)[-1]
+                        or (mztab_path or "")).name or "mzTab-M"
+        lines = [_summary_text(ds, filename)]
+    lines.append(f"- dataset_handle: {handle_id}（直近のデータセット。省略の呼び出しが使う）")
     lines.append(f"- 出所の裏取り: {ds.source_verification}"
                  + ("（探索専用: 2 群比較と差次的エクスポートは拒否されます）"
                     if ds.exploratory_only else ""))
@@ -91,7 +128,23 @@ def dataset_load(mztab_path: str | None = None, job_path: str | None = None,
                      + str({role: len(paths)
                             for role, paths in ds.artifact_paths.items()}))
     lines.extend(_handoff_lines(ds.handoff_report))
+    lines.extend(_opening_lines(opened))
     return "\n".join(lines)
+
+
+def _opening_lines(opened) -> list[str]:
+    """どのアダプタで何を読んだか・同定に使ったライブラリの記録（置き場所は出さない）。"""
+    from metabolomix.dataset.library_memory import public_view
+
+    lines = [f"- アダプタ: {opened.adapter}"]
+    if opened.selection is not None:
+        lines.append(f"- 読んだ .arf: {opened.selection.arf.name}")
+        if opened.selection.not_chosen:
+            lines.append("- 選ばなかった .arf: " + ", ".join(opened.selection.not_chosen))
+    lines.append("- 同定に使ったライブラリ（library_record）: "
+                 + json_payload(public_view(opened.dataset.library_record)))
+    lines.extend(f"- 注記: {note}" for note in opened.notes)
+    return lines
 
 
 #: 戻せなかった理由ごとの案内（`session_handoff.restore_differentials` の reason）。
@@ -179,11 +232,7 @@ def dataset_status(dataset_handle: str | None = None) -> str:
         "quantification_confidence": ds.quantification_confidence,
         "n_features": len(ds.feature_ids),
         "n_samples": len(ds.sample_names),
-        "validation": {
-            "ok": ds.validation_result.get("ok"),
-            "n_errors": len(ds.validation_result.get("errors", [])),
-            "n_warnings": len(ds.validation_result.get("warnings", [])),
-        },
+        "validation": _validation_summary(ds),
         "inchikey_coverage": ds.inchikey_coverage,
         # 群指定（dataset_differential）に必要なサンプル名。件数だけ返していた頃は、
         # 名前を知る手段が「わざと群サイズ不足のエラーを起こして details を読む」
@@ -193,6 +242,10 @@ def dataset_status(dataset_handle: str | None = None) -> str:
         # 率だけを返して available を省くことはしない。
         "detection": _detection_summary(ds),
     }
+    if ds.load_notes:
+        # 読み込み時の注記（ジョブの未完了・未検証の警告ほか）。dataset_load の要約を見ていない
+        # クライアントが、状態を組み直すときにも気づけるよう件数と先頭だけ出す。
+        payload["load_notes"] = {"n": len(ds.load_notes), "first": ds.load_notes[:3]}
     if ds.job_path:
         payload["job_path"] = ds.job_path
     if ds.artifact_paths:
@@ -201,6 +254,18 @@ def dataset_status(dataset_handle: str | None = None) -> str:
 
 
 # ---------- 内部ヘルパ ----------
+
+
+def _validation_summary(ds) -> dict:
+    """mzTab-M の構造検査の要約。解析フォルダ（`.arf` / `.arf2`）は mzTab-M ではないので当てはまらない。"""
+    if ds.source_format == "msdial_folder":
+        return {"applicable": False,
+                "note": "解析フォルダのデータセットに mzTab-M の構造検査は無い（読み込みの注記は load_notes）"}
+    return {
+        "ok": ds.validation_result.get("ok"),
+        "n_errors": len(ds.validation_result.get("errors", [])),
+        "n_warnings": len(ds.validation_result.get("warnings", [])),
+    }
 
 
 def _detection_summary(ds) -> dict:
@@ -293,3 +358,42 @@ def _summary_text(ds, filename: str) -> str:
         lines.append(f"- 警告 {len(ds.validation_result['warnings'])} 件: " +
                      "; ".join(ds.validation_result["warnings"][:3]))
     return "\n".join(lines)
+
+
+def _folder_summary_text(ds, filename: str) -> str:
+    """解析フォルダのアダプタで読んだときの要約（mzTab-M の検証・InChIKey 表の行は無い）。"""
+    n_features = len(ds.feature_ids)
+    with_inchikey = sum(1 for meta in ds.feature_metadata.values() if meta.get("inchikey"))
+    lines = [
+        f"## dataset_load 完了: {filename}",
+        f"- source_format: {ds.source_format}",
+        f"- 特徴量数: {n_features}",
+        f"- サンプル数: {len(ds.sample_names)}",
+        f"- 定量種別: {ds.quantification_measure}（.arf の試料ごとの値）",
+        f"- InChIKey 付き: {with_inchikey}/{n_features} 件",
+        _folder_identification_line(ds),
+        _folder_detection_line(ds),
+    ]
+    if ds.load_notes:
+        lines.append(f"- 読み込みの注記 {len(ds.load_notes)} 件: " + "; ".join(ds.load_notes[:3]))
+    return "\n".join(lines)
+
+
+def _folder_identification_line(ds) -> str:
+    """同定の出所内訳（mzTab-M の SME / SML / なしと同じ 3 つに写したもの）。"""
+    sme = {fid for fid, candidates in ds.feature_candidates.items() if candidates}
+    sml_only = {fid for fid, annotation in ds.feature_annotations.items()
+                if fid not in sme and (annotation or {}).get("name")}
+    return (f"- 同定: MS/MS 証拠あり {len(sme)} 件 / "
+            f"MS1 注釈のみ {len(sml_only)} 件 / "
+            f"同定なし {len(ds.feature_ids) - len(sme) - len(sml_only)} 件"
+            "（MS1 注釈は m/z 照合のみ。MS/MS 裏付けと同一視しないこと）")
+
+
+def _folder_detection_line(ds) -> str:
+    mask = ds.detected_mask
+    if mask is None or not mask.size:
+        return "- 検出状態: 無し（.arf にセルが無い）"
+    n_cells, n_detected = int(mask.size), int(mask.sum())
+    return (f"- 検出状態: .arf の gap-fill の印 — 実測 {n_detected}/{n_cells} セル"
+            f"（gap-fill・欠測 {(1.0 - n_detected / n_cells) * 100:.1f}%）")

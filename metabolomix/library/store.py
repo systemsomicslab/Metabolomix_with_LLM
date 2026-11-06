@@ -30,8 +30,9 @@ import os
 import re
 import sqlite3
 import tempfile
+import threading
 import zipfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Iterable
 
 import msgpack
@@ -82,7 +83,9 @@ def library_id_from_annotator(annotator_id: str | None) -> str | None:
     """MsScanMatchResult の AnnotatorID（`<.dbs のエントリ名>_<n>`）を store の library_id にする。"""
     if annotator_id is None:
         return None
-    return _ANNOTATOR_COUNTER.sub("", str(annotator_id))
+    # Console のデータでは AnnotatorID がライブラリのフルパスのことがある（研究室ライブラリの
+    # 置き場所）。区切りが `/` でも `\` でも最後の 1 要素だけを残す。
+    return _ANNOTATOR_COUNTER.sub("", PureWindowsPath(str(annotator_id)).name)
 
 
 def _annotators_from_source(source_path_json: str | None) -> tuple[dict[str, str], dict[str, dict]]:
@@ -457,15 +460,37 @@ def _digest_for(source_path: Path, base: Path, *, trust_index: bool) -> str:
     return digest
 
 
+#: 構築先（キャッシュの SQLite）ごとのロック。同じ構築先を 2 つのスレッドが同時に作らない
+#: （`library_load` もデータセットのハンドルを開く処理もワーカースレッドで回る）。Windows では
+#: 別のスレッドが開いている構築先への `os.replace` が `PermissionError` になりうる。
+_BUILD_LOCKS: dict[str, threading.Lock] = {}
+_BUILD_LOCKS_GUARD = threading.Lock()
+
+
+def _build_lock(dest_path: Path) -> threading.Lock:
+    key = os.path.normcase(os.path.abspath(str(dest_path)))
+    with _BUILD_LOCKS_GUARD:
+        return _BUILD_LOCKS.setdefault(key, threading.Lock())
+
+
 def open_store(path: str | Path, *, cache_dir: Path | None = None, rebuild: bool = False,
                read_only: bool = False) -> LibraryStore:
     """`path` の store を開く。無ければ（または `rebuild=True` なら）構築してから開く。
 
     `rebuild=True` は元ファイルの破損を疑うときに使うので、記憶した sha256 も信じない。
 
-    `read_only=True` は構築済みの SQLite を読み取り専用（`mode=ro`）で開き、別スレッドからの
-    利用を許す（`check_same_thread=False`）。データセットのハンドルが使う——ハンドルへの
-    呼び出しはワーカースレッドで回り、同じハンドルの中では 1 本ずつに直列化されている。
+    `read_only=True` は構築済みの SQLite を読み取り専用（`mode=ro`）で開く。データセットの
+    ハンドルが使う。
+
+    どちらの接続も別スレッドからの利用を許す（`check_same_thread=False`）。データセットへの
+    呼び出しは、`dataset_handle` を省いたものも直近のハンドルがあればワーカースレッドで回り
+    （`core.handle_dispatch`）、store を開いたスレッドと使うスレッド（anyio のスレッドプールの
+    別のワーカー）が一致しない。`LibraryStore` は開いた後は読むだけ（SELECT）なので、読みどうしは
+    スレッドをまたいでも安全。**ただし `close()` は使用と競合してはいけない**——閉じた接続を
+    別の呼び出しが使うと `Cannot operate on a closed database` になる。閉じる側
+    （`library_load` の差し替え・`dataset_handle_close`）と使う側（`library_*`・`curation_*`・
+    `verify_peak_annotation` ほか）を直列にするのはハンドルのロックで、`handle_dispatch` が
+    どちらもそのロックの下で回す（`dataset_handle` を持たない読み手は `SESSION_READERS`）。
     """
     source_path = Path(path)
     base = cache_dir if cache_dir is not None else globals()["cache_dir"]()
@@ -473,13 +498,16 @@ def open_store(path: str | Path, *, cache_dir: Path | None = None, rebuild: bool
     dest_path = _store_path_for_digest(source_path, digest, cache_dir=base)
 
     if rebuild or not dest_path.exists():
-        _build(source_path, dest_path, digest)
+        with _build_lock(dest_path):
+            # 待っている間に別のスレッドが作り終えたなら作り直さない（rebuild の明示は作り直す）。
+            if rebuild or not dest_path.exists():
+                _build(source_path, dest_path, digest)
 
     if read_only:
         conn = sqlite3.connect(f"{dest_path.resolve().as_uri()}?mode=ro", uri=True,
                                check_same_thread=False)
     else:
-        conn = sqlite3.connect(str(dest_path))
+        conn = sqlite3.connect(str(dest_path), check_same_thread=False)
     try:
         return LibraryStore(conn, dest_path)
     except Exception:
