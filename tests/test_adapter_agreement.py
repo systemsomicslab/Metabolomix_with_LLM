@@ -53,6 +53,26 @@ def test_same_alignment_agrees(tmp_path):
     assert report["known_differences"]
 
 
+def test_exact_half_heights_agree_after_half_to_even_rounding(tmp_path):
+    spec = _spec()
+    exact = _variant(spec, 1, heights=[2.5, 3.5, 0.5, 1.5])   # 偶数丸めで 2 / 4 / 0 / 2
+    folder, mztab = _states(tmp_path, exact)
+    assert mztab.feature_matrix[1].tolist() == [2.0, 4.0, 0.0, 2.0]
+    assert folder.feature_matrix[1].tolist() == [2.5, 3.5, 0.5, 1.5]     # アダプタは丸めない
+    report = compare_states(folder, mztab)
+    assert report["ok"] is True and report["checks"]["values"]["n_over"] == 0
+    assert report["checks"]["values"]["folder_rounded"] == "half_to_even"
+    assert any("偶数丸め" in text for text in report["known_differences"])
+
+
+def test_difference_beyond_rounding_is_still_counted(tmp_path):
+    spec = _spec()
+    folder_spec = _variant(spec, 1, heights=[2.5, 3.5, 30.0, 40.0])
+    other = _variant(spec, 1, heights=[3.0, 3.5, 30.0, 40.0])   # 3 は 2.5 の丸め（2）と違う
+    report = compare_states(*_states(tmp_path, folder_spec, other))
+    assert report["ok"] is False and report["checks"]["values"]["n_over"] == 1
+
+
 def test_value_difference_is_reported(tmp_path):
     spec = _spec()
     other = _variant(spec, 1, heights=[10.0, 22.0, 30.0, 40.0])   # 1 セルだけ 10% 違う

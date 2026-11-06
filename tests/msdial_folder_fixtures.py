@@ -165,7 +165,8 @@ def write_matching_mztab(path, folder_spec: dict) -> Path:
         if _has_name(name):
             sml.append(f"SML\t{spot_id}\t{spot_id}\tnull\t{_last_segment(name)}\t{adduct}")
         heights = spot.get("heights") or [100.0] * len(samples)
-        values = "\t".join(str(float(heights[j])) for j in ordered)
+        # 上流の Height は Math.Round(PeakHeightTop, 0)（C# 既定の偶数丸め）の整数。Python の round も偶数丸め。
+        values = "\t".join(str(int(round(float(heights[j])))) for j in ordered)
         smf.append(f"SMF\t{spot_id}\t{spot_id if _has_name(name) else 'null'}\t{refs or 'null'}\t"
                    f"{mz}\t{spot.get('rt', 12.0) * 60.0}\t{values}")
     lines.append("SMH\tSML_ID\tSMF_ID_REFS\tdatabase_identifier\tchemical_name\tadduct_ions")

@@ -15,6 +15,9 @@ _MAX_EXAMPLES = 5
 KNOWN_DIFFERENCES = [
     "解析フォルダ側の SME 相当は、上流 ShouldWriteSmeLine の内部標準による正規化の条件を移植していない"
     "（パラメータを読まないため）。内部標準で正規化した解析の mzTab-M とは SME の有無が食い違いうる。",
+    "Console の mzTab-M は Height を Math.Round(PeakHeightTop, 0)（C# 既定の偶数丸め）の整数で書く。"
+    "解析フォルダのアダプタは .arf の丸める前の値を返すので、2 つの経路の値は最大 0.5 違う。"
+    "比べるときは解析フォルダ側を偶数丸め（np.round）の整数にしてから見る（values.folder_rounded）。",
 ]
 
 
@@ -65,7 +68,9 @@ def compare_states(folder_ds, mztab_ds, *, rel_tol: float = 1e-4) -> dict:
     n_cmp = n_over = n_one_side = 0
     worst_rel = None
     if fr.size and fc.size:
-        a = np.asarray(folder_ds.feature_matrix, dtype=float)[np.ix_(fr, fc)]
+        # 上流の書き出しは Height を偶数丸めの整数にする。アダプタの値は丸めないので、比べる前に
+        # 解析フォルダ側だけを同じ丸め（np.round は偶数丸め）にそろえる。
+        a = np.round(np.asarray(folder_ds.feature_matrix, dtype=float)[np.ix_(fr, fc)])
         b = np.asarray(mztab_ds.feature_matrix, dtype=float)[np.ix_(mr, mc)]
         n_cmp = int(a.size)
         a_nan, b_nan = np.isnan(a), np.isnan(b)
@@ -108,7 +113,7 @@ def compare_states(folder_ds, mztab_ds, *, rel_tol: float = 1e-4) -> dict:
         "samples": {"same_set": same_set, "same_order": same_order, "same_length": same_length,
                     "duplicates": duplicates[:_MAX_EXAMPLES]},
         "values": {"n_compared": n_cmp, "n_over": n_over, "n_nan_one_side": n_one_side,
-                   "worst_rel": worst_rel},
+                   "worst_rel": worst_rel, "folder_rounded": "half_to_even"},
         "detected": {"n_compared": n_det_cmp, "n_diff": n_det_diff, "skipped": skipped},
         "names": {"n_diff": n_name_diff, "examples": name_examples},
         "evidence": {"n_diff": n_evidence_diff, "examples": evidence_examples},
