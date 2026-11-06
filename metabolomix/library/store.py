@@ -463,9 +463,14 @@ def open_store(path: str | Path, *, cache_dir: Path | None = None, rebuild: bool
 
     `rebuild=True` は元ファイルの破損を疑うときに使うので、記憶した sha256 も信じない。
 
-    `read_only=True` は構築済みの SQLite を読み取り専用（`mode=ro`）で開き、別スレッドからの
-    利用を許す（`check_same_thread=False`）。データセットのハンドルが使う——ハンドルへの
-    呼び出しはワーカースレッドで回り、同じハンドルの中では 1 本ずつに直列化されている。
+    `read_only=True` は構築済みの SQLite を読み取り専用（`mode=ro`）で開く。データセットの
+    ハンドルが使う。
+
+    どちらの接続も別スレッドからの利用を許す（`check_same_thread=False`）。データセットへの
+    呼び出しは、`dataset_handle` を省いたものも直近のハンドルがあればワーカースレッドで回り
+    （`core.handle_dispatch`）、開いたスレッドと使うスレッド（別のワーカーや、イベントループで
+    動く `curation_*` / `verify_peak_annotation`）が一致しない。`LibraryStore` は開いた後は
+    読むだけ（SELECT）なので、スレッドをまたいでも書き込みの競合は起きない。
     """
     source_path = Path(path)
     base = cache_dir if cache_dir is not None else globals()["cache_dir"]()
@@ -479,7 +484,7 @@ def open_store(path: str | Path, *, cache_dir: Path | None = None, rebuild: bool
         conn = sqlite3.connect(f"{dest_path.resolve().as_uri()}?mode=ro", uri=True,
                                check_same_thread=False)
     else:
-        conn = sqlite3.connect(str(dest_path))
+        conn = sqlite3.connect(str(dest_path), check_same_thread=False)
     try:
         return LibraryStore(conn, dest_path)
     except Exception:

@@ -1,16 +1,22 @@
-"""ハンドルつきの呼び出しをワーカースレッドへ退避する（spec 2026-10-22 §4 の 1）。
+"""データセットへの呼び出しをワーカースレッドへ退避する（spec 2026-10-22 §4 の 1・
+spec 2026-11-06 §5）。
 
 FastMCP は同期関数のツールをイベントループのスレッドでそのまま呼ぶ。数分かかる読み込みが
-1 本走ると、ほかの呼び出しはすべて待たされる。並行の再解析のエージェントは別々の
-ハンドルで動くので、**`dataset_handle` を渡した呼び出しだけ**をスレッドで回し、
-同じハンドルへの呼び出しはそのハンドルのロックで直列化する。
+1 本走ると、ほかの呼び出しはすべて待たされる。そこで、引数に `dataset_handle` を持つツールの
+呼び出しをスレッドで回し、同じハンドルへの呼び出しはそのハンドルのロックで直列化する。
 
-`dataset_handle` を渡さない呼び出しは今までどおりイベントループのスレッドで同期に呼ぶ
-（対話のセッションは 1 つの可変状態なので、並行にすると壊れる。挙動を変えない）。
+- `dataset_handle` を渡した呼び出し: そのハンドルのロックの下でワーカースレッドに回す。
+- 渡さない呼び出し: 対話のセッションの直近のハンドル（`session.current_handle_id`）があれば、
+  **そのロックの下で**ワーカースレッドに回す（同じデータセットへの対話と再解析の呼び出しが
+  重ならない）。呼び出しの間は `session_state.pinned_handle` でそのハンドルに固定するので、
+  途中で `dataset_load` が直近を切り替えても、ロックを取っていない別のハンドルの状態を
+  触らない。直近のハンドルが無ければ今までどおりイベントループのスレッドで同期に呼ぶ。
 
 `install(mcp)` は全ツールの登録が済んだ後（server.py の末尾）で 1 回呼ぶ。包むのは
 引数に `dataset_handle` を持つツールと `ALWAYS_THREADED`（グローバルなセッションに
-触れない重いツール）だけ。
+触れない重いツール）だけ。包んだ関数は `tool.fn` を差し替えるだけで、module の関数は
+そのまま——ツールの中から別のツールの関数を直に呼んでも、同じスレッドでそのまま走る
+（もう一度スレッドへ回したりロックを取り直したりしない）。
 """
 from __future__ import annotations
 
@@ -19,7 +25,7 @@ import inspect
 
 import anyio
 
-from metabolomix.core import handles
+from metabolomix.core import handles, session_state
 
 __all__ = ["ALWAYS_THREADED", "install"]
 
@@ -36,12 +42,31 @@ def _call_locked(fn, kwargs: dict):
         return fn(**kwargs)
 
 
+def _call_pinned(fn, kwargs: dict, handle):
+    """`dataset_handle` を省いた呼び出しを、直近だったハンドルのロックと固定の下で呼ぶ。
+
+    ロックを待つ間にそのハンドルが閉じられていれば、固定の先は無い（`session.dataset` は
+    None になり、ツールは `missing_state` で答える。別のハンドルへは落ちない）。
+    """
+    with handle.lock, session_state.pinned_handle(handle.handle_id):
+        return fn(**kwargs)
+
+
+def _current_handle():
+    """対話のセッションの直近のハンドル（無ければ None）。登録簿は module 修飾で読む。"""
+    handle_id = getattr(session_state.session, "current_handle_id", None)
+    return handles.registry.peek(handle_id) if handle_id is not None else None
+
+
 def _wrap(fn, *, always: bool):
     @functools.wraps(fn)
     async def runner(**kwargs):
-        if not always and kwargs.get("dataset_handle") is None:
+        if always or kwargs.get("dataset_handle") is not None:
+            return await anyio.to_thread.run_sync(functools.partial(_call_locked, fn, kwargs))
+        handle = _current_handle()
+        if handle is None:
             return fn(**kwargs)
-        return await anyio.to_thread.run_sync(functools.partial(_call_locked, fn, kwargs))
+        return await anyio.to_thread.run_sync(functools.partial(_call_pinned, fn, kwargs, handle))
 
     return runner
 

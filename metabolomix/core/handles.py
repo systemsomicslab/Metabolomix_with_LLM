@@ -6,13 +6,17 @@
 
 `DatasetHandle` は `dataset` と `library` を `AnalysisSession` と**同じ名前**で持つ。
 ツールは `holder_for(dataset_handle)` が返したものの `.dataset` / `.library` を読むだけで、
-ハンドルを渡さない呼び出しは今までどおり `session_state.session` に効く。
+ハンドルを渡さない呼び出しは `session_state.session` に効く。
 
-**ハンドルの状態は対話のセッションと共有しない。** 同じ入力を開き直したときは読み込み済みの
-基（DatasetState）を使い回すが、ハンドルには複製を渡す——片方の前処理がもう片方に
-見えないようにするため。
+**読み込んだデータセットはすべてここに住む**（spec 2026-11-06 §5）。`dataset_load` も
+`session.dataset = ds` でハンドルを 1 本足し、対話のセッションはその直近のハンドル
+（`session.current_handle_id`）を指すだけになる。`dataset_handle_open` で開いたハンドルは
+直近にならないので、そのハンドルの状態は対話の呼び出しから見えない。同じ入力を開き直した
+ときは読み込み済みの基（DatasetState）を使い回すが、ハンドルには複製を渡す——片方の
+前処理がもう片方に見えないようにするため。
 
-同じハンドルへの呼び出しは `lock` で直列化する（`core.handle_dispatch` が取る）。
+同じハンドルへの呼び出しは `lock` で直列化する（`core.handle_dispatch` が取る。ハンドルを
+省いた対話の呼び出しも、直近のハンドルのロックを取る）。
 
 依存: session_state（LibraryState）と atomic_io だけ。tools は import しない。
 """

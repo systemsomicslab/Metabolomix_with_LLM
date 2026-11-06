@@ -5,14 +5,18 @@
 （`dataset_load` → `dataset_*`）は変わらない。値の**意味**は
 [reanalysis.md（output_format）](../output_format/reanalysis.md) を見ること。
 
-ハンドルの状態は `metabolomix/core/handles.py` の登録簿（`handles.registry`）に住み、
-`session_state.session` とは共有しない。`DatasetHandle` は `dataset` と `library` を
-`AnalysisSession` と同じ名前で持つので、既存のツールは `holder_for(dataset_handle)` が
-返したものを読むだけでハンドルにも対話のセッションにも効く。
+ハンドルの状態は `metabolomix/core/handles.py` の登録簿（`handles.registry`）に住む。
+`dataset_load` で読んだデータセットも同じ登録簿のハンドルで、`session_state.session` は
+その直近のハンドル（`current_handle_id`）を指すだけ（`session.dataset` / `session.library` は
+property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` と同じ名前で持つので、
+既存のツールは `holder_for(dataset_handle)` が返したものを読むだけでハンドルにも対話の
+セッションにも効く。
 
 `dataset_handle` を渡した呼び出しは `metabolomix/core/handle_dispatch.py` の
 `install()` が包んだ関数がワーカースレッドで回し、そのハンドルの `lock` で直列化する。
-渡さない呼び出しは今までどおりイベントループのスレッドで同期に呼ぶ。
+渡さない呼び出しも、直近のハンドルがあればそのハンドルの `lock` の下でワーカースレッドで回し、
+`session_state.pinned_handle()` でそのハンドルに固定する。直近のハンドルが無ければ
+イベントループのスレッドで同期に呼ぶ。
 
 ## dataset_handle_open
 
@@ -41,7 +45,7 @@
 
 ## dataset_handle_list
 
-前提: なし。状態変更: なし。
+前提: なし。状態変更: なし。`current` は `session.current_handle_id` と同じハンドルか。
 
 1. metabolomix/tools/handle_tools.py  dataset_handle_list()
 2. └─ metabolomix/core/handles.py  HandleRegistry.list()
@@ -49,7 +53,9 @@
 ## dataset_handle_close
 
 前提: そのハンドルが開いていること（無ければ `DATASET_HANDLE_NOT_FOUND`）。
-状態変更: 登録簿から外し、ライブラリの接続を閉じる。
+状態変更: 登録簿から外し、ライブラリの接続を閉じる。直近のハンドルなら、対話のセッションは
+データセットが無い状態になる（次に `session.dataset` を読んだときに `current_handle_id` を
+None に戻す。別のハンドルへは落ちない）。
 
 1. metabolomix/tools/handle_tools.py  dataset_handle_close()
 2. └─ metabolomix/core/handles.py  HandleRegistry.close()

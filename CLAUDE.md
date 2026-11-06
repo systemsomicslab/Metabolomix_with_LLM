@@ -145,15 +145,25 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
   import してはならない（循環）。
 - **セッション状態はパーサ別に分離済み**: `session.arf` / `.arf2` / `.pai2` / `.eic`。あるパーサが
   別スロットを触ってはいけない（`pai2_parser` が ARF の前処理行列を無言破棄した過去のバグの再発防止）。
-- **データセットのハンドル（再解析の並行のエージェント向け。spec 2026-10-22）は
-  `metabolomix/core/handles.py` の登録簿に住み、対話のセッションとは共有しない**。
-  `DatasetHandle` は `dataset` / `library` を `AnalysisSession` と同じ名前で持つので、
+- **読み込んだデータセットはすべて `metabolomix/core/handles.py` の登録簿にハンドルとして
+  住み、対話のセッションは直近のハンドルを指すだけ**（spec 2026-10-22・2026-11-06 §5）。
+  `session.dataset` / `session.library` は `current_handle_id` のハンドルを読む property で、
+  `session.dataset = ds` は `ds` を新しいハンドル（`source.kind="session"`）として足して直近に
+  する（同じ実体の代入し直しは何もしない）。上限なら `DATASET_HANDLE_LIMIT` で止め、古い
+  ハンドルを黙って閉じない。直近のハンドルが閉じられたら `session.dataset` は `None`
+  （`missing_state`）で、開いている別のハンドルへ黙って落とさない。`handles.registry` は
+  module 修飾で読む（conftest がテストごとに差し替える）。
   `dataset_handle` を受けるツールは `metabolomix/tools/_holder.py` の `resolve_holder` が返した
   ものを読み、`session_state.session` を直に読まない（閉じたハンドルを対話のセッションへ
   黙って落とさない）。引数に `dataset_handle` を持つツールは `core/handle_dispatch.py` の
-  `install` が包み、**ハンドルを渡した呼び出しだけ**をワーカースレッドでハンドルのロックの下に
-  回す。渡さない呼び出しは今までどおりイベントループ上で同期に動く（対話のセッションは
-  1 つの可変状態なので並行にしない）。新しく `dataset_handle` を足すツールもこの 2 つに従う。
+  `install` が包み、ハンドルを渡した呼び出しはそのハンドルの、**渡さない呼び出しも直近の
+  ハンドルがあればそのロックの下で**ワーカースレッドに回す（同じデータセットへの対話と
+  再解析の呼び出しが重ならない）。渡さない呼び出しは `session_state.pinned_handle` で
+  ロックを取ったハンドルに固定され、途中で直近が切り替わっても別のハンドルを触らない。
+  直近のハンドルが無ければイベントループ上で同期に動く。新しく `dataset_handle` を足す
+  ツールもこれに従う。`dataset_handle` を持たないツール（`pathway_project` `save_figure`
+  `curation_*` など）はイベントループ上でロックを取らずに `session.dataset` / `.library` を
+  読むので、スレッドに縛られる資源（sqlite3 の接続など）をスレッドをまたいで使える形で持つ。
 - **解釈規則の選択軸は `session.assay_kind`**（`lipid` / `metabolite` / `unknown`、既定
   `unknown`）。脂質名文法は脂質アッセイでしか成り立たないので、ダイジェスト
   （`assay_digest()`）も `section_hint` もここで分岐する。**`caveat_emitted` の bool だけに

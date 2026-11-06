@@ -68,8 +68,13 @@ def dataset_load(mztab_path: str | None = None, job_path: str | None = None,
         エクスポートは拒否されます——欠けた検体を「その群には無い」と読み違えたまま
         結論が出てしまうためです。
 
-    成功すると session.dataset に DatasetState が格納され、
-    dataset_status で内容を確認できる。要約には読んだアダプタ・選んだ `.arf`・
+    成功すると DatasetState を新しいデータセットのハンドル（`dh_…`）として登録簿に入れ、
+    対話のセッションの直近にする（要約の `dataset_handle`）。`dataset_handle` を省いた
+    `dataset_*` / `library_*` はこの直近のハンドルに効き、dataset_status で内容を確認できる。
+    前に読んだデータセットのハンドルは閉じずに残る（`dataset_handle_list` / `dataset_handle_close`）。
+    開いているハンドルが上限（`LIPIDMIX_MAX_DATASET_HANDLES`、既定 8）なら
+    `DATASET_HANDLE_LIMIT` で止め、古いハンドルを黙って閉じない（直近も動かさない）。
+    要約には読んだアダプタ・選んだ `.arf`・
     同定に使ったライブラリの記録（ファイル名と sha256。置き場所は出さない）が並ぶ。
     同じ入力を読み直すと読み込み済みのものの複製を使う（読み込みが読んだ・探したファイル
     ——mzTab-M の隣に後から置かれた `.arf` なども——の size・更新時刻が同じとき）。
@@ -85,10 +90,14 @@ def dataset_load(mztab_path: str | None = None, job_path: str | None = None,
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
 
-    # 成功したときだけ session を差し替える。途中で失敗した読み込みが
+    # 成功したときだけ直近を差し替える。途中で失敗した読み込み（上限を含む）が
     # 現在のデータセットを壊さない。
     ds = opened.dataset
-    session_state.session.dataset = ds
+    try:
+        session_state.session.dataset = ds
+    except DomainError as exc:
+        return mztab_error(exc.code, exc.message, exc.details or None)
+    handle_id = session_state.session.current_handle_id
 
     if opened.selection is not None:
         lines = [_folder_summary_text(ds, opened.selection.arf.name)]
@@ -96,6 +105,7 @@ def dataset_load(mztab_path: str | None = None, job_path: str | None = None,
         filename = Path(ds.source_files and list(ds.source_files)[-1]
                         or (mztab_path or "")).name or "mzTab-M"
         lines = [_summary_text(ds, filename)]
+    lines.append(f"- dataset_handle: {handle_id}（直近のデータセット。省略の呼び出しが使う）")
     lines.append(f"- 出所の裏取り: {ds.source_verification}"
                  + ("（探索専用: 2 群比較と差次的エクスポートは拒否されます）"
                     if ds.exploratory_only else ""))

@@ -2,11 +2,13 @@
 
 **再解析で使う**（並行のエージェントが、別々のデータセット・極性を互いに干渉せずに扱う）。
 対話の使い方（`dataset_load` → `dataset_*`）は変わらない——ハンドルを渡さない呼び出しは
-今までどおり対話のセッションに効く。
+対話のセッションの直近のハンドル（`dataset_load` で読んだもの）に効く。
 
+読み込んだデータセットはすべてハンドルの登録簿（`core.handles.registry`）に住む
+（spec 2026-11-06 §5）。`dataset_load` も同じ登録簿にハンドルを足して直近にする。
 `dataset_handle_open` は `dataset_load` と同じ入口（`dataset.opening.open_dataset`）を呼ぶが、
-結果を対話のセッションに置かず、ハンドルの登録簿（`core.handles.registry`）に置く。同じ入力を
-開き直したときは読み込み済みの基を使い回し、ハンドルには複製を渡す（`open_dataset` が持つ）。
+直近は動かさない。同じ入力を開き直したときは読み込み済みの基を使い回し、ハンドルには複製を
+渡す（`open_dataset` が持つ）。
 
 ライブラリは極性で設定（`[library] msp_positive` / `msp_negative`。環境変数
 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG`）だけから引き（`library_mode=msp_only` と同じ規則）、
@@ -20,7 +22,7 @@ from pathlib import Path
 
 from mcp.types import ToolAnnotations
 
-from metabolomix.core import handles, user_config
+from metabolomix.core import handles, session_state, user_config
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import mztab_error
@@ -202,15 +204,19 @@ def dataset_handle_open(mztab_path: str | None = None, job_path: str | None = No
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def dataset_handle_list() -> str:
-    """開いているハンドルの一覧（TSV: `dataset_handle polarity source_kind source n_features
-    n_samples library_sha256`）。古く開いた順。"""
+    """開いているハンドルの一覧（TSV: `dataset_handle current polarity source_kind source
+    n_features n_samples library_sha256`）。古く開いた順。`current` は対話のセッションの直近の
+    ハンドル（`dataset_handle` を省いた呼び出しが使うもの。`dataset_load` で読んだものは
+    `source_kind` が `session`）。"""
     from metabolomix.arf2.reader import format_spots_as_table
 
+    current = session_state.session.current_handle_id
     rows = []
     for handle in handles.registry.list():
         store = handle.library.store
         rows.append({
             "dataset_handle": handle.handle_id,
+            "current": handle.handle_id == current,
             "polarity": handle.polarity,
             "source_kind": handle.source.get("kind"),
             "source": Path(handle.source.get("path") or "").name,
@@ -218,7 +224,7 @@ def dataset_handle_list() -> str:
             "n_samples": len(handle.dataset.sample_names),
             "library_sha256": store.summary()["source_sha256"][:16] if store is not None else None,
         })
-    columns = ["dataset_handle", "polarity", "source_kind", "source", "n_features",
+    columns = ["dataset_handle", "current", "polarity", "source_kind", "source", "n_features",
                "n_samples", "library_sha256"]
     return json_payload({
         "n_open": len(rows),
@@ -231,7 +237,12 @@ def dataset_handle_list() -> str:
                                       idempotentHint=True),
           structured_output=False)
 def dataset_handle_close(dataset_handle: str) -> str:
-    """ハンドルを閉じる（データセットの複製とライブラリの接続を手放す）。対話のセッションは変えない。"""
+    """ハンドルを閉じる（データセットの複製とライブラリの接続を手放す）。
+
+    対話のセッションの直近のハンドル（`dataset_handle_list` の `current`）を閉じると、
+    `dataset_handle` を省いた呼び出しはデータセットが無い状態（`missing_state`）になる。
+    開いている別のハンドルへは落ちない（もう一度 `dataset_load` で読む）。
+    """
     try:
         handles.registry.close(dataset_handle)
     except DomainError as exc:
