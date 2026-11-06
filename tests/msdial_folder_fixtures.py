@@ -147,7 +147,7 @@ def write_matching_mztab(path, folder_spec: dict) -> Path:
         "MTD\tsmall_molecule-quantification_unit\t[PRIDE, PRIDE:0000429, Abundance, ]",
     ]
     for k, j in enumerate(ordered, start=1):
-        lines += [f"MTD\tms_run[{k}]-location\tfile:///{samples[j]['name']}.raw",
+        lines += [f"MTD\tms_run[{k}]-location\tfile:///C:/data/{samples[j]['name']}.wiff",
                   f"MTD\tassay[{k}]-ms_run_ref\tms_run[{k}]",
                   f"MTD\tassay[{k}]\t{samples[j]['name']}"]
     abundance = "\t".join(f"abundance_assay[{k}]" for k in range(1, len(samples) + 1))

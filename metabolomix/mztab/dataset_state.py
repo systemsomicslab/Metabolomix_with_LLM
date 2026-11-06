@@ -250,6 +250,10 @@ class DatasetState:
         # msdial_samples: 試料ごとの {file_id, name, arf_file_name, group, role, file_type,
         # batch, injection_order}（.mddata を読めたときだけ。無ければ None）。
         self.msdial_samples: list[dict] | None = None
+        # sample_raw_paths: sample_names と同じ順の raw のパス（job / pipeline の解析フォルダが、
+        # 正準 mzTab-M の `ms_run[N]-location` から与える。無ければ None。試料名で引けなかった
+        # 試料は None）。`.mddata` が無い Console の出力でも対応表と結べるようにする。
+        self.sample_raw_paths: list[str | None] | None = None
         # ion_mode_majority: .arf2 の ion_mode の多数（positive / negative。決められなければ None）。
         self.ion_mode_majority: str | None = None
         # artifact_sha256: 読んだ成果物のパス -> sha256。

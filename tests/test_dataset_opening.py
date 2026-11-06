@@ -254,6 +254,25 @@ def test_pipeline_folder_reads_run_manifest_but_not_matrices(tmp_path):
     assert any('source="mztab"' in note for note in opened.notes)
 
 
+def test_pipeline_folder_without_mddata_binds_manifest_by_mztab_raw_paths(tmp_path):
+    # Console は save_project=False なので run の input/ に .mddata は無い。試料の raw のパスは
+    # 正準 mzTab-M の ms_run[N]-location から与える。
+    job = _job(tmp_path, with_folder=False)
+    rows = [_manifest_row(f"s{i}", "ctrl" if i < 2 else "case") for i in range(4)]
+    run = _pipeline(tmp_path, job, rows=rows)
+    write_msdial_folder(run / "input", **_spec(), stem="AlignResult-1", with_mddata=False)
+    opened = open_dataset(pipeline_path=str(run), source="folder")
+    ds = opened.dataset
+    assert opened.adapter == "msdial_folder" and ds.msdial_samples is None
+    assert [p.replace("\\", "/") for p in ds.sample_raw_paths] == [
+        f"C:/data/s{i}.wiff" for i in range(4)]
+    assert [r["group"] for r in ds.sample_metadata_rows] == ["ctrl", "ctrl", "case", "case"]
+    assert [r["sample_id"] for r in ds.sample_metadata_rows] == ds.sample_names
+    # directory= で開くときは変わらない（job の mzTab-M が無いので raw のパスは None のまま）。
+    direct = open_dataset(directory=str(run / "input")).dataset
+    assert direct.sample_raw_paths is None
+
+
 def test_pipeline_folder_falls_back_to_run_input_arf2(tmp_path):
     job = _job(tmp_path, with_folder=False)
     run = _pipeline(tmp_path, job)

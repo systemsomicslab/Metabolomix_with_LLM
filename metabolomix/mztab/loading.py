@@ -26,6 +26,7 @@ import しない**——グローバルな現在状態を触る関数はワー�
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,7 +39,8 @@ from metabolomix.mztab.reader import parse_mztab
 from metabolomix.mztab.validator import validate_mztab
 
 __all__ = ["JobGate", "artifact_abs_path", "job_artifact_paths", "job_gate",
-           "load_dataset_state", "read_mztab", "select_primary_entry"]
+           "load_dataset_state", "read_mztab", "read_mztab_parsed",
+           "sample_raw_paths", "select_primary_entry"]
 
 #: 完了していない実行の出力に付ける警告。読み手が最初に見る位置へ差す。
 _INCOMPLETE_WARNING = (
@@ -138,12 +140,31 @@ def read_mztab(path: Path):
     解析フォルダのアダプタが、ジョブの正準 mzTab-M と同じアラインメントの `.arf` を
     選ぶときの照合の相手もこれ（`.arf` と照合する軸を mzTab-M のアダプタと同じにする）。
     """
+    return read_mztab_parsed(path)[0]
+
+
+def read_mztab_parsed(path: Path):
+    """`read_mztab` と同じ。パース結果も返す（(DatasetState, parse_result)）。"""
     path = Path(path)
     if not path.is_file():
         raise DomainError("MZTAB_NOT_FOUND",
                           f"mzTab-M ファイルが見つかりません: {path}",
                           {"path": str(path)})
-    return build_dataset_state(_parse_and_validate(path), path.name, path)
+    parsed = _parse_and_validate(path)
+    return build_dataset_state(parsed, path.name, path), parsed
+
+
+def sample_raw_paths(job, state, parse_result: dict) -> list[str | None]:
+    """`state.sample_names` と同じ順の raw のパス（mzTab-M の `ms_run[N]-location`）。
+
+    `assay[N]` の対応は `_assay_sources`（mzTab-M のアダプタの `ds.assay_sources` と同じ）。
+    """
+    sources = _assay_sources(job, parse_result)
+    out: list[str | None] = []
+    for assay_id in state.sample_assay_ids:
+        m = re.fullmatch(r"assay\[(\d+)\]", assay_id or "")
+        out.append(sources.get(f"abundance_assay[{m.group(1)}]") if m else None)
+    return out
 
 
 def _load_from_mztab(path: Path):

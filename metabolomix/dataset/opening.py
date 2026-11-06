@@ -332,13 +332,17 @@ def _folder_via_job(job_path: Path, *, measure: str, allow_incomplete: bool,
 
     gate = loading.job_gate(job_path, allow_incomplete=allow_incomplete)
     artifact_paths = loading.job_artifact_paths(gate.job)
-    target = _matching_arf(gate, artifact_paths, pipeline_root)
+    target, raw_by_name = _matching_arf(gate, artifact_paths, pipeline_root)
     try:
         selection = select_alignment(target)
     except DomainError as exc:
         raise _with_hint(exc) from exc
 
     ds = load_msdial_folder(selection, measure=measure)
+    # 試料ごとの raw のパスは正準 mzTab-M（`ms_run[N]-location`）から。`.mddata` が無い
+    # Console の出力でも、run の試料対応表と結べる。
+    raws = [raw_by_name.get((name or "").strip()) for name in ds.sample_names]
+    ds.sample_raw_paths = raws if any(raws) else None
     for role, paths in artifact_paths.items():
         known = ds.artifact_paths.setdefault(role, [])
         known.extend(p for p in paths if p not in known)
@@ -352,8 +356,12 @@ def _folder_via_job(job_path: Path, *, measure: str, allow_incomplete: bool,
     return ds, selection, gate
 
 
-def _matching_arf(gate, artifact_paths: dict[str, list[str]], pipeline_root: Path | None) -> Path:
+def _matching_arf(gate, artifact_paths: dict[str, list[str]],
+                  pipeline_root: Path | None) -> tuple[Path, dict[str, str]]:
     """正準 mzTab-M と同じアラインメントの `.arf` をちょうど 1 本選ぶ。
+
+    戻り値は (その `.arf`, 試料名（strip 済み） -> raw のパス)。raw のパスは照合に読んだ
+    mzTab-M の `ms_run[N]-location`（読み直さずに使う）。
 
     候補は mzTab-M のアダプタの evidence と同じ順（`arf_candidates`。handoff の
     `peak_matrix_source` → 隣の `*PeakProperties.arf` → 隣のその他）。どれも検証
@@ -365,16 +373,21 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]], pipeline_root: Pat
     from metabolomix.mztab import evidence, loading
 
     axes: list = []
+    raw_by_name: dict[str, str] = {}
 
     def verify(paths: list[Path]) -> tuple[list[Path], dict[str, str]]:
         if not axes:
             try:
-                state = loading.read_mztab(gate.mztab_path)
+                state, parsed = loading.read_mztab_parsed(gate.mztab_path)
             except DomainError as exc:
                 message = exc.message if exc.message.endswith("。") else f"{exc.message}。"
                 raise DomainError(exc.code, f"{message}{_BROKEN_MZTAB_HINT}",
                                   exc.details) from exc
             axes.extend(evidence.join_axes(state))
+            raw_by_name.update(
+                (name.strip(), raw) for name, raw in zip(
+                    state.sample_names, loading.sample_raw_paths(gate.job, state, parsed))
+                if raw)
         return evidence.matching_arfs(paths, feature_mz=axes[0], sample_names=axes[1])
 
     candidates = evidence.arf_candidates(gate.mztab_path, artifact_paths)
@@ -394,7 +407,7 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]], pipeline_root: Pat
     details = {"mztab": gate.mztab_path.name, "candidates": [p.name for p in candidates],
                "source_hint": "mztab"}
     if len(passed) == 1:
-        return passed[0]
+        return passed[0], raw_by_name
     if passed:
         # directory で開くとジョブの門を通らない。未完了のジョブでそれを勧めると、探索専用の
         # 印が外れたまま比較まで進めてしまうので、そのときは mzTab-M だけを案内する。

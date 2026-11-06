@@ -327,6 +327,10 @@ def _abundance_key(assay_id: str | None) -> str | None:
 
 def _raw_path_for_sample(ds, index: int) -> str | None:
     """i番目サンプルへ実行時に予定されたrawの絶対パス（分かれば）。"""
+    # 優先順: job の mzTab-M の場所 → .mddata の file_path → assay id。
+    job_paths = getattr(ds, "sample_raw_paths", None)
+    if job_paths and index < len(job_paths) and job_paths[index]:
+        return job_paths[index]
     msdial_samples = getattr(ds, "msdial_samples", None)
     if msdial_samples:  # 解析フォルダ: .mddata が持つ raw のパス（assay[N] は無い）
         return msdial_samples[index].get("file_path") if index < len(msdial_samples) else None
