@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import io
 import math
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
@@ -18,8 +19,8 @@ from metabolomix.curation.apply import flags_for_arf2
 from metabolomix.curation.flags import FlagFileError
 from metabolomix.dataset import msdial_identity
 from metabolomix.dataset.alignment_files import AlignmentSelection
-from metabolomix.msdial.tags import parse_tag_file
 from metabolomix.msdial.classes import parse_analysis_file_classes
+from metabolomix.msdial.tags import parse_tag_file
 from metabolomix.mztab import evidence
 from metabolomix.mztab.dataset_state import DatasetState, _sha256
 
@@ -118,12 +119,13 @@ def _msdial_samples(file_ids: list[int], arf_names: dict[int, str | None],
 def _fill_identity(ds, fid: str, spot: dict, meta: dict, cache) -> None:
     rep = spot["representative"]
     msms = meta["msms_assigned"]
+    inchikey = msdial_identity.resolve_inchikey(spot)
     meta.update({
-        "inchikey": spot["inchikey"] or (rep or {}).get("inchikey"), "inchikey_source": "arf2",
+        "inchikey": inchikey, "inchikey_source": "arf2" if inchikey else None,
         "smiles": spot["smiles"], "inchi": None,
         "annotator_id": (rep or {}).get("annotator_id"),
         "annotation_source": msdial_identity.annotation_source(spot),
-        "spectrum_matched": None if rep is None else rep.get("is_spectrum_match"),
+        "spectrum_matched": msdial_identity.spectrum_matched(spot),
         "total_score": (rep or {}).get("total_score"),
         "identity": cache.columns(spot, msms_assigned=msms),
     })
@@ -137,7 +139,12 @@ def _fill_identity(ds, fid: str, spot: dict, meta: dict, cache) -> None:
 def _load_tags(ds, selection: AlignmentSelection, fields: list[dict]) -> None:
     if selection.tags is None:
         return
-    parsed = parse_tag_file(selection.tags)
+    try:
+        parsed = parse_tag_file(selection.tags)
+    except (ET.ParseError, ValueError, OSError) as exc:
+        ds.load_notes.append(f"タグファイルを読めなかったので無視した: {exc}")
+        return
+    # Peak の Id は MasterAlignmentID（既存の attach_tags_to_spots と同じ）。
     for spot in fields:
         tag_ids = parsed["peaks"].get(spot["master_id"])
         if tag_ids:

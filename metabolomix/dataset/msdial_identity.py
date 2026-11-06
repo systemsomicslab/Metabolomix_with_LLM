@@ -7,29 +7,39 @@ SME 相当（feature_candidates）の規則は上流 `MztabFormatExport.cs` の
 """
 from __future__ import annotations
 
-from metabolomix.core.tool_helpers import _identity_tables
+from functools import lru_cache
+
+from metabolomix.arf2.match_results import SOURCE_GENERATED_LIPID, SOURCE_MANUAL, SOURCE_MSP
+from metabolomix.arf2.spot_fields import SOURCE_TEXT_DB
 from metabolomix.msdial import lipid_identity
 
 __all__ = ["is_sme_like", "sme_candidate", "sml_annotation", "identity_columns",
-           "annotation_source", "IdentityCache"]
+           "annotation_source", "resolve_inchikey", "spectrum_matched", "IdentityCache"]
 
-_SOURCE_MSP, _SOURCE_TEXT_DB, _SOURCE_GENERATED, _SOURCE_MANUAL = 4, 16, 32, 64
+@lru_cache(maxsize=1)
+def _identity_tables():
+    """同梱の RefMet / LIPID MAPS 対応表（core.tool_helpers を引かないよう、この層で持つ）。"""
+    return lipid_identity.load_reference_tables()
 
 
 def _has_name(name) -> bool:
-    return bool(name) and str(name).strip().lower() not in ("unknown", "null", "")
+    """上流の SML / SME の名前条件。大文字小文字を区別する（`spot.Name != "Unknown"` と同じ）。"""
+    return name is not None and name not in ("Unknown", "null", "")
+
+
+def _last_segment(name) -> str | None:
+    """MS-DIAL の名前は `|` 区切りで、mzTab-M の chemical_name は最後の区間（上流 :350-351, :559）。"""
+    return None if name is None else name.split("|")[-1]
 
 
 def is_sme_like(fields: dict, *, msms_assigned: bool) -> bool:
     """上流 ShouldWriteSmeLine の (a)〜(f)。"""
-    rep = fields.get("representative")
     name = fields.get("name")
     return bool(
         msms_assigned                                              # (a)
-        and rep is not None
-        and not int(rep.get("source") or 0) & _SOURCE_MANUAL       # (b)
+        and not fields.get("is_manually_modified")                 # (b)
         and not fields.get("is_text_db_representative")            # (c)
-        and name and str(name).strip()                             # (d)
+        and _has_name(name) and str(name).strip()                  # (d) ＋ SME_ID_REFS の名前条件
         and not fields.get("blank_filtered")                       # (e)
         and "no MS2" not in name)                                  # (f)
 
@@ -40,27 +50,34 @@ def annotation_source(fields: dict) -> str:
         return "none"
     source = int(rep.get("source") or 0)
     # 複数のビットが立つときの優先順: manual > text_db > generated_lipid > msp。
-    for bit, label in ((_SOURCE_MANUAL, "manual"), (_SOURCE_TEXT_DB, "text_db"),
-                       (_SOURCE_GENERATED, "generated_lipid"), (_SOURCE_MSP, "msp")):
+    for bit, label in ((SOURCE_MANUAL, "manual"), (SOURCE_TEXT_DB, "text_db"),
+                       (SOURCE_GENERATED_LIPID, "generated_lipid"), (SOURCE_MSP, "msp")):
         if source & bit:
             return label
-    return "none"
+    return "other"  # 既知のビットが無い。"none" は代表が無いときだけ
 
 
-def _inchikey(fields: dict) -> str | None:
+def resolve_inchikey(fields: dict) -> str | None:
     rep = fields.get("representative") or {}
     return fields.get("inchikey") or rep.get("inchikey") or None
+
+
+def spectrum_matched(fields: dict) -> bool | None:
+    """代表の is_spectrum_match。代表が無ければ None（偽ではなく不明。mzTab の列欠落と同じ）。"""
+    rep = fields.get("representative")
+    return None if rep is None else bool(rep.get("is_spectrum_match"))
 
 
 def sme_candidate(fields: dict, fid: str) -> dict:
     """mzTab の `_all_candidates` の 1 件と同じキーの集合。mzTab にしか無い欄は None。"""
     rep = fields.get("representative") or {}
-    inchikey = _inchikey(fields)
+    inchikey = resolve_inchikey(fields)
     return {
         "sme_id": f"arf2:{fid}", "rank": 1, "charge": None,
         "exp_mass_to_charge": fields.get("mz"), "theoretical_mass_to_charge": None,
         "confidence_value": rep.get("total_score"),
-        "chemical_name": fields.get("name"), "database_identifier": None, "inchi": None,
+        "chemical_name": _last_segment(rep.get("name")) if rep else None,
+        "database_identifier": None, "inchi": None,
         "smiles": fields.get("smiles"), "adduct": fields.get("adduct"),
         "identification_method": None, "confidence_measure": None, "spectra_ref": None,
         "inchikey": inchikey, "inchikey_source": "arf2" if inchikey else None,
@@ -72,16 +89,16 @@ def sml_annotation(fields: dict, *, msms_assigned: bool | None = None) -> dict |
     if not _has_name(fields.get("name")):
         return None
     rep = fields.get("representative")
-    inchikey = _inchikey(fields)
+    inchikey = resolve_inchikey(fields)
     return {
         "sml_id": f"arf2:{fields['master_id']}", "ambiguous": False,
-        "name": fields["name"], "database_identifier": None,
+        "name": _last_segment(fields["name"]), "database_identifier": None,
         "chemical_formula": fields.get("formula"), "smiles": fields.get("smiles"),
         "adduct": fields.get("adduct"), "reliability": None, "confidence_measure": None,
         "ontology": fields.get("ontology"),
         "confidence_value": (rep or {}).get("total_score"),
         "ms2_presence": msms_assigned,
-        "spectrum_matched": None if rep is None else bool(rep.get("is_spectrum_match")),
+        "spectrum_matched": spectrum_matched(fields),
         "inchikey": inchikey, "inchikey_source": "arf2" if inchikey else None,
     }
 
