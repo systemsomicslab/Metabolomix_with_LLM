@@ -220,6 +220,32 @@ def _load_from_job(job_path: Path, *, allow_incomplete: bool):
     return ds
 
 
+def effective_method_msp(job) -> Path | None:
+    """ジョブの実効メソッドが宣言する MSP のパス。宣言が無い・メソッドを読めないなら None。
+
+    ファイルの存在は見ない（読めるかどうかは呼び出し側が決める）。
+    """
+    method_text = (getattr(job, "method_file", "") or "").strip()
+    if not method_text:
+        return None
+    method = Path(method_text)
+    try:
+        keys = read_method_keys(method)
+    except (OSError, DomainError):
+        return None
+    # Console と同じ順: 注釈器設定表から MSP が 1 件でも読めれば `Msp file path` は使わない
+    # （library_mode="msp_then_lbm" は `Msp file path` を空にして設定表で入れる。v8）。
+    msp = _msp_from_annotator_table(keys, method)
+    if msp is None:
+        declared = (keys.get("msp file path") or "").strip()
+        if not declared:
+            return None
+        msp = Path(declared)
+        if not msp.is_absolute():
+            msp = method.parent / msp
+    return msp
+
+
 def _msp_table_for_job(job) -> tuple[MspInchikeyTable | None, str, str | None, str | None]:
     """ジョブの実効メソッドが宣言する研究室 MSP から名前 → InChIKey 表を作る。
 
@@ -229,24 +255,9 @@ def _msp_table_for_job(job) -> tuple[MspInchikeyTable | None, str, str | None, s
     ——MSP 表は InChIKey の付け足しで、無くても従来どおり RDKit 経路で読める。
     警告と戻り値に出すのはファイル名だけ（研究室ライブラリの置き場所は出さない）。
     """
-    method_text = (getattr(job, "method_file", "") or "").strip()
-    if not method_text:
-        return None, "no_msp", None, None
-    method = Path(method_text)
-    try:
-        keys = read_method_keys(method)
-    except (OSError, DomainError):
-        return None, "no_msp", None, None
-    # Console と同じ順: 注釈器設定表から MSP が 1 件でも読めれば `Msp file path` は使わない
-    # （library_mode="msp_then_lbm" は `Msp file path` を空にして設定表で入れる。v8）。
-    msp = _msp_from_annotator_table(keys, method)
+    msp = effective_method_msp(job)
     if msp is None:
-        declared = (keys.get("msp file path") or "").strip()
-        if not declared:
-            return None, "no_msp", None, None
-        msp = Path(declared)
-        if not msp.is_absolute():
-            msp = method.parent / msp
+        return None, "no_msp", None, None
     try:
         table = load_msp_inchikey_table(msp)
     except OSError:

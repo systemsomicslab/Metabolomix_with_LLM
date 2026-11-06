@@ -413,3 +413,31 @@ TSV の末尾へ 2 列を足し、payload に 3 つの欄を足す。`detail` �
 （完全一致）・InChIKey（先頭 14 文字）で引く。スペクトルは返さず、ピーク数 `n_peaks` だけ。
 `dcl_spot_spectrum`（`.dcl` の節）は spot_id で代表 MS/MS の全ピークを返す。
 
+
+### データセットが覚えているライブラリ（LibraryRecord）
+
+データセットは、同定に使われた参照ライブラリを 1 件覚える（`metabolomix.dataset.library_memory`）。
+後段の MS/MS 照合は、利用者にライブラリを名指しさせずにこれを引く。戻り値に出るのは
+ファイル名と sha256 だけで、置き場所（`path`）は出さない。
+
+| 欄 | 意味 |
+|---|---|
+| `status` | `known`（1 本に決まった）/ `unknown`（決められない。`candidates` に候補のファイル名）/ `mismatch`（記録した sha256 と今のファイルが違う、またはファイルが無い）/ `lbm_only`（LBM だけで MSP は使っていない） |
+| `kind` | `dbs`（解析フォルダの `*_Loaded.*.dbs`）/ `msp` / `lbm` / 無し |
+| `origin` | `loaded_dbs`（フォルダ）/ `effective_method`（ジョブの実効メソッド。sha256 は読んだ時点で測る）/ `run_inputs`（pipeline の run が固定した入力。固定時の sha256 と今を突き合わせる）/ 無し |
+| `lbm_also` | MSP に加えて LBM も照合に使った（`library_mode="msp_then_lbm"`、またはフォルダに LBM の dbs もある） |
+
+- 解析フォルダに非 LBM の `*_Loaded.*.dbs` が 2 本以上あると `unknown`（どちらが代表になったか
+  フォルダからは決められない）。LBM の dbs（`.lbm2.dbs` など）は数えず、`lbm_also` にする。
+- mzTab-M を直接読んだときは常に `unknown`（mzTab-M は使ったライブラリを持たない）。
+
+#### LBM が代表になった特徴の印（`is_lbm_annotator`）
+
+`.arf2` の代表の `annotator_id` が、LBM 由来かどうかの手がかりになる。Console は LBM の注釈器キー
+に LBM ファイルのパスを使い（末尾が `.lbm` + 数字）、MSP の注釈器キーは利用者の付けた名前
+（例: 設定表の `annotator_id`）になる。実データ（`msp_then_lbm` の run）で、MSP 由来の代表は名前の ID、
+LBM 由来の代表はパスの ID だった。
+
+- 末尾が `.lbm` + 数字なら **True**（LBM 由来）。それ以外は **None**（判定できない）で、False は返さない。
+  GUI の注釈器 ID は自由名なので、規則に合わないことは MSP 由来の証拠にならない。
+- **注釈器 ID は LBM のフルパスを含みうる**。ツールの戻り値に `annotator_id` を出さず、印（真偽）だけを出す。
