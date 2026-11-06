@@ -54,7 +54,8 @@ def write_msdial_folder(
 ) -> dict:
     """`.arf` / `.arf2`（と `.mddata`）を 1 組、フォルダへ書く。
 
-    spots[i]: name, mz, rt, ontology, adduct, heights, gap_filled, msms, matches, ion_mode（すべて任意）。
+    spots[i]: name, mz, rt, ontology, adduct, heights, gap_filled, msms, matches, ion_mode,
+    blank_filtered（`.arf2` Key58。すべて任意）。
     samples[j]: file_id, name, class_id（必須）と file_type / order / batch、
     `.arf` に書く名前 arf_name（既定は name。改名後の `.mddata` との突き合わせ用）。
     """
@@ -78,10 +79,13 @@ def write_msdial_folder(
                 row[10] = {1: 30.0}
             rows.append(row)
         groups.append(rows)
-        raws.append(arf2_spot_raw(
+        raw = arf2_spot_raw(
             spot_id=spot_id, name=spot.get("name", "Unknown"), mz=mz, rt=rt,
             ontology=spot.get("ontology", ""), adduct=spot.get("adduct", "[M+H]+"),
-            ion_mode=spot.get("ion_mode", 0), matches=spot.get("matches")))
+            ion_mode=spot.get("ion_mode", 0), matches=spot.get("matches"))
+        if spot.get("blank_filtered"):
+            raw[58] = True
+        raws.append(raw)
     paths = {
         "arf": write_arf(folder / f"{stem}_PeakProperties.arf", groups),
         "arf2": write_arf2(folder / f"{stem}.arf2", raws),
@@ -103,12 +107,34 @@ def _has_name(name) -> bool:
     return name is not None and name not in ("Unknown", "null", "") and bool(str(name).strip())
 
 
+#: MsScanMatchResult Key26 のビット（上流の SourceType）。
+_SOURCE_TEXT_DB, _SOURCE_MANUAL = 16, 64
+
+
+def _upstream_writes_sme(spot: dict) -> bool:
+    """MS-DIAL の exporter が SME を書く条件（MztabFormatExport.cs の ShouldWriteSmeLine ∧
+    SME_ID_REFS の条件）を、アダプタの `is_sme_like` を呼ばずに fixture 側で独立に書き下したもの。
+    内部標準の正規化の条件（IsNormalizeIS / IsNormalizeSplash）は移植しない（既定は無効）。"""
+    name = spot.get("name", "Unknown")
+    matches = spot.get("matches") or []
+    if not matches:
+        return False
+    rep_name, source = matches[0][0], int(matches[0][26] or 0)
+    return bool(
+        any(spot.get("msms") or [])                    # (a) MS/MS assigned
+        and not source & _SOURCE_MANUAL                # (b) 手動修正でない
+        and not source & _SOURCE_TEXT_DB               # (c) Text DB 由来でない
+        and _has_name(name) and _has_name(rep_name)    # (d) 名前あり
+        and not spot.get("blank_filtered")             # (e) ブランク除外でない
+        and "no MS2" not in name)                      # (f)
+
+
 def write_matching_mztab(path, folder_spec: dict) -> Path:
     """`write_msdial_folder` に渡したのと同じ spots / samples から、同じアラインメントの mzTab-M を書く。
 
     MS-DIAL 自身の書き出しに合わせる: SMF_ID = スポットの MasterAlignmentID（fixture では連番）、
     assay は FileID 昇順で同じ名前、値はピーク高、SME は MS/MS があり代表（matches の先頭）を
-    持つ名前付きスポットだけ（名前は代表名の最後の `|` 区間）、SML は名前付きスポット全部
+    持つスポットのうち上流の条件（`_upstream_writes_sme`）を満たすものだけ（名前は代表名の最後の `|` 区間）、SML は名前付きスポット全部
     （名前はスポット名の最後の区間）。
     """
     spots, samples = folder_spec["spots"], folder_spec["samples"]
@@ -128,15 +154,13 @@ def write_matching_mztab(path, folder_spec: dict) -> Path:
     sml, smf, sme = [], [], []
     for spot_id, spot in enumerate(spots):
         name = spot.get("name", "Unknown")
-        matches = spot.get("matches") or []
-        is_sme = (any(spot.get("msms") or []) and _has_name(name) and bool(matches)
-                  and _has_name(matches[0][0]))
+        is_sme = _upstream_writes_sme(spot)
         refs = ""
         mz = spot.get("mz", 500.0)
         adduct = spot.get("adduct", "[M+H]+")
         if is_sme:
             refs = f"{spot_id}_1"
-            sme.append(f"SME\t{refs}\tSMF:{spot_id}\tnull\tnull\t{_last_segment(matches[0][0])}\t"
+            sme.append(f"SME\t{refs}\tSMF:{spot_id}\tnull\tnull\t{_last_segment(spot["matches"][0][0])}\t"
                        f"null\tnull\t{adduct}\t{mz}\t1\t{mz}\t1\tMS-DIAL total score\t0.9")
         if _has_name(name):
             sml.append(f"SML\t{spot_id}\t{spot_id}\tnull\t{_last_segment(name)}\t{adduct}")

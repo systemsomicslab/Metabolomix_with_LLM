@@ -4,8 +4,6 @@
 """
 from __future__ import annotations
 
-import math
-
 import numpy as np
 
 from metabolomix.analysis.feature_search import _window_identity
@@ -25,6 +23,22 @@ def _identity(ds, fid: str) -> dict:
     return _window_identity(ds.feature_candidates.get(fid) or [], ds.feature_annotations.get(fid))
 
 
+def _duplicates(names: list[str]) -> list[str]:
+    seen, dups = set(), []
+    for name in names:
+        if name in seen and name not in dups:
+            dups.append(name)
+        seen.add(name)
+    return dups
+
+
+def _first_index(names: list[str]) -> dict[str, int]:
+    index: dict[str, int] = {}
+    for j, name in enumerate(names):
+        index.setdefault(name, j)
+    return index
+
+
 def compare_states(folder_ds, mztab_ds, *, rel_tol: float = 1e-4) -> dict:
     ids_f, ids_m = list(folder_ds.feature_ids), list(mztab_ds.feature_ids)
     set_f, set_m = set(ids_f), set(ids_m)
@@ -33,62 +47,73 @@ def compare_states(folder_ds, mztab_ds, *, rel_tol: float = 1e-4) -> dict:
     common = [f for f in ids_f if f in set_m]
 
     names_f, names_m = list(folder_ds.sample_names), list(mztab_ds.sample_names)
-    same_set = set(names_f) == set(names_m)
+    name_set_m = set(names_m)
+    same_set = set(names_f) == name_set_m
     same_order = names_f == names_m
-    common_samples = [n for n in names_f if n in set(names_m)]
+    same_length = len(names_f) == len(names_m)
+    duplicates = _duplicates(names_f)
+    duplicates += [n for n in _duplicates(names_m) if n not in duplicates]
 
-    f_row = {fid: i for i, fid in enumerate(ids_f)}
-    m_row = {fid: i for i, fid in enumerate(ids_m)}
-    f_col = {n: j for j, n in enumerate(names_f)}
-    m_col = {n: j for j, n in enumerate(names_m)}
+    f_col, m_col = _first_index(names_f), _first_index(names_m)
+    common_samples = [n for n in f_col if n in name_set_m]
+    f_row, m_row = _first_index(ids_f), _first_index(ids_m)
+    fr = np.array([f_row[f] for f in common], dtype=int)
+    mr = np.array([m_row[f] for f in common], dtype=int)
+    fc = np.array([f_col[n] for n in common_samples], dtype=int)
+    mc = np.array([m_col[n] for n in common_samples], dtype=int)
 
-    n_cmp = n_over = n_det_cmp = n_det_diff = 0
-    worst = 0.0
+    n_cmp = n_over = n_one_side = 0
+    worst_rel = None
+    if fr.size and fc.size:
+        a = np.asarray(folder_ds.feature_matrix, dtype=float)[np.ix_(fr, fc)]
+        b = np.asarray(mztab_ds.feature_matrix, dtype=float)[np.ix_(mr, mc)]
+        n_cmp = int(a.size)
+        a_nan, b_nan = np.isnan(a), np.isnan(b)
+        one_side = a_nan != b_nan
+        n_one_side = int(one_side.sum())
+        finite = ~a_nan & ~b_nan
+        if finite.any():
+            fa, fb = a[finite], b[finite]
+            rel = np.abs(fa - fb) / np.maximum(np.maximum(np.abs(fa), np.abs(fb)), 1.0)
+            n_over = int((rel > rel_tol).sum())
+            worst_rel = float(f"{float(rel.max()):.6g}")
+        n_over += n_one_side
+
     f_mask, m_mask = folder_ds.detected_mask, mztab_ds.detected_mask
-    compare_detected = f_mask is not None and m_mask is not None
-    for fid in common:
-        for name in common_samples:
-            a = folder_ds.feature_matrix[f_row[fid], f_col[name]]
-            b = mztab_ds.feature_matrix[m_row[fid], m_col[name]]
-            a_nan, b_nan = bool(np.isnan(a)), bool(np.isnan(b))
-            n_cmp += 1
-            if a_nan != b_nan:
-                n_over += 1
-                worst = math.inf
-            elif not a_nan:
-                rel = abs(a - b) / max(abs(a), abs(b), 1.0)
-                worst = max(worst, rel)
-                if rel > rel_tol:
-                    n_over += 1
-            if compare_detected:
-                n_det_cmp += 1
-                if bool(f_mask[f_row[fid], f_col[name]]) != bool(m_mask[m_row[fid], m_col[name]]):
-                    n_det_diff += 1
+    skipped = f_mask is None or m_mask is None
+    n_det_cmp = n_det_diff = 0
+    if not skipped and fr.size and fc.size:
+        da = np.asarray(f_mask, dtype=bool)[np.ix_(fr, fc)]
+        db = np.asarray(m_mask, dtype=bool)[np.ix_(mr, mc)]
+        n_det_cmp, n_det_diff = int(da.size), int((da != db).sum())
 
     name_examples, evidence_examples = [], []
     n_name_diff = n_evidence_diff = 0
     for fid in common:
-        a, b = _identity(folder_ds, fid), _identity(mztab_ds, fid)
-        if a["evidence"] != b["evidence"]:
+        a_id, b_id = _identity(folder_ds, fid), _identity(mztab_ds, fid)
+        if a_id["evidence"] != b_id["evidence"]:
             n_evidence_diff += 1
             if len(evidence_examples) < _MAX_EXAMPLES:
                 evidence_examples.append(
-                    {"feature_id": fid, "folder": a["evidence"], "mztab": b["evidence"]})
-        if a["name"] != b["name"]:
+                    {"feature_id": fid, "folder": a_id["evidence"], "mztab": b_id["evidence"]})
+        if a_id["name"] != b_id["name"]:
             n_name_diff += 1
             if len(name_examples) < _MAX_EXAMPLES:
-                name_examples.append({"feature_id": fid, "folder": a["name"], "mztab": b["name"]})
+                name_examples.append(
+                    {"feature_id": fid, "folder": a_id["name"], "mztab": b_id["name"]})
 
-    worst_rel = worst if math.isinf(worst) else float(f"{worst:.6g}")
     checks = {
         "feature_ids": {"only_folder": only_folder[:_MAX_EXAMPLES],
                         "only_mztab": only_mztab[:_MAX_EXAMPLES], "n_common": len(common)},
-        "samples": {"same_set": same_set, "same_order": same_order},
-        "values": {"n_compared": n_cmp, "n_over": n_over, "worst_rel": worst_rel},
-        "detected": {"n_compared": n_det_cmp, "n_diff": n_det_diff},
+        "samples": {"same_set": same_set, "same_order": same_order, "same_length": same_length,
+                    "duplicates": duplicates[:_MAX_EXAMPLES]},
+        "values": {"n_compared": n_cmp, "n_over": n_over, "n_nan_one_side": n_one_side,
+                   "worst_rel": worst_rel},
+        "detected": {"n_compared": n_det_cmp, "n_diff": n_det_diff, "skipped": skipped},
         "names": {"n_diff": n_name_diff, "examples": name_examples},
         "evidence": {"n_diff": n_evidence_diff, "examples": evidence_examples},
     }
-    ok = (not only_folder and not only_mztab and same_set and n_over == 0 and n_det_diff == 0
-          and n_name_diff == 0 and n_evidence_diff == 0)
+    ok = bool(common and not only_folder and not only_mztab
+              and same_set and same_length and not duplicates
+              and n_over == 0 and n_det_diff == 0 and n_name_diff == 0 and n_evidence_diff == 0)
     return {"ok": ok, "checks": checks, "known_differences": list(KNOWN_DIFFERENCES)}
