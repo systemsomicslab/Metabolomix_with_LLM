@@ -137,13 +137,16 @@
 その実体を開く（戻り値に `library_source: "dataset_record"`）。記憶が `unknown` か無いときだけ、
 下の解決順（`ion_mode` の設定など）へ進む。`mismatch` と `lbm_only` は落ちずに
 `code="LIBRARY_RECORD_MISMATCH"` / `"LIBRARY_RECORD_LBM_ONLY"` と理由を返す（`file_path` で
-明示すれば開ける）。`file_path` が記憶と違うライブラリなら、そのまま開いて
+明示すれば開ける）。`file_path` も `ion_mode` も省いたときだけ記憶が先で、`ion_mode` を渡せば従来どおり設定から引く
+（逆の極性は `LIBRARY_POLARITY_MISMATCH`）。`file_path` や設定から引いたものが記憶と違う
+ライブラリ（中身の sha256 で比べる。同じ内容のコピーは違わない）なら、そのまま開いて
 `differs_from_record: {"remembered": <記憶のファイル名>, "opened": <開いたファイル名>}` を足す。
 `library_match_feature` / `library_msms_qualify` は、ライブラリが開かれておらず記憶が `lbm_only` のとき
 `missing_state` ではなく `{"status": "not_evaluable", "reason": ...}`（qualify は `verdict` も
 `not_evaluable`）を返す。記憶が `lbm_also` で、`spot_id` で照合した特徴の代表の注釈器が LBM 由来
 （`is_lbm_annotator` が True）なら、結果に `identified_by_lbm: true` を足す（そうでなければキーが無い。
-`false` は書かない）。
+`false` は書かない）。記憶が `lbm_only` のまま別のライブラリを明示して開いたときは、同定に使った
+ものではない旨が `note` に付く。
 
 **エラー戻り値**: ライブラリを 1 つに決められないときは `{"status": "error", "code": ..., "message": ..., "details": ...}`
 を返し、store は差し替えない。`code` は `MSP_AMBIGUOUS`（候補が複数。`ion_mode` か
@@ -432,6 +435,11 @@ TSV の末尾へ 2 列を足し、payload に 3 つの欄を足す。`detail` �
 データセットは、同定に使われた参照ライブラリを 1 件覚える（`metabolomix.dataset.library_memory`）。
 後段の MS/MS 照合は、利用者にライブラリを名指しさせずにこれを引く。戻り値に出るのは
 ファイル名と sha256 だけで、置き場所（`path`）は出さない。
+
+解析フォルダで読んだとき、記憶はそのフォルダの**今の** `*_Loaded.*.dbs`（MS-DIAL 自身が保存した写し）に
+従う。読み込みのたびに測り直すので、フォルダの dbs が書き換わっていれば、読み直した記憶は新しい
+中身に付け直される（`mismatch` になるのは、読み込み済みのデータセットの記憶と今のファイルが
+食い違うとき、またはジョブ・pipeline の run が固定した sha256 と今のファイルが違うとき）。
 
 | 欄 | 意味 |
 |---|---|

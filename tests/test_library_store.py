@@ -543,3 +543,16 @@ def test_rt_used_for_is_unknown_for_a_plain_msp(library):
         assert s.rt_used_for("Msp1_lib_1") is None
     finally:
         s.close()
+
+
+def test_library_id_fallback_never_returns_a_directory(tmp_path, monkeypatch):
+    """Console のデータの AnnotatorID はライブラリのフルパス。置き場所を library_id に残さない。"""
+    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    s = store.open_store(_console_dbs(tmp_path))
+    try:
+        for raw in ("D:/secret_lab/libs/Made_Up_Lib_3", r"D:\secret_lab\libs\Made_Up_Lib_3"):
+            got = s.library_id_for(raw)
+            assert got == "Made_Up_Lib" and "secret_lab" not in got
+        assert store.library_id_from_annotator("/srv/secret_lab/Made_Up_Lib_3") == "Made_Up_Lib"
+    finally:
+        s.close()

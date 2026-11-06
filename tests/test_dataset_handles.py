@@ -11,7 +11,6 @@ import pytest
 import server
 from metabolomix.core import handle_dispatch, handles, session_state
 from metabolomix.tools import handle_tools
-from tests.lab_msp_fixtures import remember_library_for_mztab
 from tests.reanalysis_fixtures import NEG_FEATURES, write_mztab
 
 
@@ -104,25 +103,39 @@ def test_open_requires_exactly_one_path(pos_mztab):
     assert out["error"]["code"] == "DATASET_BAD_REQUEST"
 
 
-def test_library_auto_without_config_opens_without_library(pos_mztab):
+def test_library_auto_on_mztab_opens_nothing_and_ignores_the_polarity_setting(
+        monkeypatch, tmp_path, pos_mztab):
+    # mzTab-M は同定に使ったライブラリを持てない（unknown）。極性の設定があっても auto は引かない。
+    pos = _write_msp(tmp_path / "lab" / "pos.msp", ion_mode="Positive")
+    monkeypatch.setenv("MSDIAL_MSP_POS", str(pos))
     out = _open(pos_mztab, library="auto")
-    assert out["status"] == "success"
-    assert out["library"] is None and "極性の設定" in out["library_note"]
+    assert out["status"] == "success" and out["polarity"] == "positive"
+    assert out["library"] is None and out["library_record"]["status"] == "unknown"
+    assert "library_note" in out
+    assert handles.registry.get(out["dataset_handle"]).library.store is None
 
 
-def test_library_auto_uses_only_the_remembered_library(monkeypatch, tmp_path, pos_mztab):
-    # 記憶（Task 10）から開く。mzTab-M は記憶を持てないので、同定に使ったライブラリを覚えている
-    # データセットとして差し込む。極性の設定（neg の方も）は引かれない。
+def test_library_auto_uses_only_the_remembered_library(monkeypatch, tmp_path):
+    # 解析フォルダの `*_Loaded.msp2.dbs`（MS-DIAL が同定に使った実体）を開く。極性の設定が
+    # 別のファイルを指していても、そちらは引かない。
+    from tests.dbs_fixture import record, write_dbs
+    from tests.msdial_folder_fixtures import write_msdial_folder
+
+    folder = tmp_path / "gui"
+    write_msdial_folder(folder, spots=[{"name": "GABA"}], samples=[
+        {"file_id": i, "name": f"s{i}", "class_id": "A" if i < 2 else "B"} for i in range(3)])
+    write_dbs(folder / "Proj_Loaded.msp2.dbs", [("lib", [record()], ["k"])])
     lib = tmp_path / "lab"
-    pos = _write_msp(lib / "pos.msp", ion_mode="Positive")
-    neg = _write_msp(lib / "neg.msp", ion_mode="Negative")
-    monkeypatch.setenv("MSDIAL_MSP_NEG", str(neg))
-    remember_library_for_mztab(monkeypatch, pos)
+    setting_file = _write_msp(lib / "setting_pos.msp", ion_mode="Positive")
+    monkeypatch.setenv("MSDIAL_MSP_POS", str(setting_file))
+    monkeypatch.setenv("MSDIAL_MSP_NEG", str(setting_file))
     monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
-    out = _open(pos_mztab, library="auto")
-    assert out["library"]["file"] == "pos.msp"
+    out = json.loads(handle_tools.dataset_handle_open(directory=str(folder), library="auto"))
+    assert out["library"]["file"] == "Proj_Loaded.msp2.dbs"
     assert len(out["library"]["sha256"]) == 64 and out["library"]["record_count"] == 1
-    assert str(lib) not in json.dumps(out) and lib.as_posix() not in json.dumps(out)
+    dumped = json.dumps(out)
+    assert str(folder) not in dumped and folder.as_posix() not in dumped
+    assert "setting_pos" not in dumped
     store = handles.registry.get(out["dataset_handle"]).library.store
     with pytest.raises(Exception):
         store._conn.execute("INSERT INTO meta(key, value) VALUES ('x', '1')")

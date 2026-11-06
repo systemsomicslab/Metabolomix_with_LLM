@@ -107,16 +107,19 @@ None に戻す。別のハンドルへは落ちない）。
 
 1. metabolomix/tools/reanalysis_tools.py  library_msms_qualify()
 2. ├─ metabolomix/tools/_holder.py  resolve_holder()
-3. ├─ metabolomix/analysis/msms_rules.py  normalize_rules()
-4. ├─ metabolomix/library/tools.py  _spot_query()
-5. ├─ metabolomix/library/tools.py  _measured_spectrum()
-6. ├─ metabolomix/library/matching.py  score_candidates()
-7. ├─ metabolomix/analysis/msms_rules.py  qualify()
-8. │  ├─ metabolomix/analysis/spectral_match.py  fragment_matches_excluding_precursor()
-9. │  ├─ metabolomix/analysis/msms_rules.py  _lipid_class()
-10. │  │  └─ metabolomix/msdial/lipid_identity.py  normalize_lipid_name()
-11. │  └─ metabolomix/analysis/msms_rules.py  find_ions()
-12. └─ metabolomix/analysis/msms_rules.py  rules_hash()
+3. ├─ [ライブラリ無しで記憶が lbm_only のとき] metabolomix/library/tools.py  lbm_only_not_evaluable()（`not_evaluable` を返す）
+4. ├─ metabolomix/analysis/msms_rules.py  normalize_rules()
+5. ├─ metabolomix/library/tools.py  _spot_query()
+6. ├─ metabolomix/library/tools.py  _measured_spectrum()
+7. ├─ metabolomix/library/matching.py  score_candidates()
+8. ├─ metabolomix/analysis/msms_rules.py  qualify()
+9. │  ├─ metabolomix/analysis/spectral_match.py  fragment_matches_excluding_precursor()
+10. │  ├─ metabolomix/analysis/msms_rules.py  _lipid_class()
+11. │  │  └─ metabolomix/msdial/lipid_identity.py  normalize_lipid_name()
+12. │  └─ metabolomix/analysis/msms_rules.py  find_ions()
+13. └─ metabolomix/analysis/msms_rules.py  rules_hash()
+14. └─ metabolomix/library/tools.py  identified_by_lbm()
+15.    └─ metabolomix/dataset/library_memory.py  is_lbm_annotator()  [記憶が lbm_also で spot_id の照合のとき]
 
 ## dataset_homolog_check
 

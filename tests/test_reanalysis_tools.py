@@ -12,12 +12,12 @@ import pytest
 
 from metabolomix.core import handles, mcp_core, session_state
 from metabolomix.dcl import tools as dcl_tools
+from metabolomix.library import tools as library_tools
 from metabolomix.msdial import alignment_spot
 from metabolomix.tools import dataset_analysis_tools as T
 from metabolomix.tools import handle_tools, mztab_tools
 from metabolomix.tools import reanalysis_tools as R
 from tests.dcl_fixture import build_dcl_bytes
-from tests.lab_msp_fixtures import remember_library_for_mztab
 from tests.reanalysis_fixtures import SAMPLES, write_mztab
 
 GABA_KEY = "BTCSSZJGUNDROE-UHFFFAOYSA-N"
@@ -86,7 +86,6 @@ def library(tmp_path, monkeypatch, data):
     msp.parent.mkdir()
     msp.write_text(_MSP, encoding="ascii")
     monkeypatch.setenv("MSDIAL_MSP_POS", str(msp))
-    remember_library_for_mztab(monkeypatch, msp)
     monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
     run = data["mztab"].parent
     (run / "AlignResult-1.arf2").write_bytes(b"placeholder")
@@ -103,8 +102,13 @@ def library(tmp_path, monkeypatch, data):
 
 def _open(data, **kwargs):
     kwargs.setdefault("library", "none")
+    library = kwargs["library"]
     out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(data["mztab"]), **kwargs))
     assert out["status"] == "success", out
+    if library == "auto":
+        # mzTab-M の記憶は `unknown` なので、library_load は極性の設定（MSDIAL_MSP_POS）から引く
+        # （mzTab-M の本番の経路）。
+        library_tools.library_load(dataset_handle=out["dataset_handle"])
     return out["dataset_handle"]
 
 

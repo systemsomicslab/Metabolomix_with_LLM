@@ -345,6 +345,17 @@ def test_suggest_requires_the_library(suggest_env):
     assert out["error"]["required_tools"] == ["library_load"]
 
 
+def test_suggest_reports_the_library_file_name_not_its_directory(suggest_env):
+    arf2 = str(suggest_env["arf2"])
+    msp = Path(suggest_env["msp"])
+    session_state.session.library.source_path = str(msp)     # 対話の library_load はフルパスを持つ
+    json.loads(curation_tools.curation_review(file_path=arf2))
+    out = json.loads(curation_tools.curation_suggest(file_path=arf2))
+    assert out["library"]["path"] == msp.name
+    dumped = json.dumps(out)
+    assert str(msp.parent) not in dumped and msp.parent.as_posix() not in dumped
+
+
 def test_suggest_then_submit_assign_and_redundant(suggest_env):
     arf2 = str(suggest_env["arf2"])
     json.loads(curation_tools.curation_review(file_path=arf2))

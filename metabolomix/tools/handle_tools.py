@@ -104,7 +104,8 @@ def _open_library_for(ds) -> tuple[object | None, str | None]:
         candidates = record.get("candidates") or []
         hint = f"（候補: {', '.join(candidates)}）" if candidates else ""
         return None, ("データセットが同定に使ったライブラリを特定できないので、読んでいない"
-                      f"{hint}。極性の設定からは引かない。library_load の file_path で明示する。")
+                      f"{hint}。極性の設定からは引かない（`library_load(dataset_handle=…)` を `file_path` なしで"
+                      "呼ぶと、記憶が無いときだけ極性の設定から引く）。`file_path` で明示もできる。")
     path = Path(record["path"])
     try:
         with _BUILD_LOCK:

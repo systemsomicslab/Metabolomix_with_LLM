@@ -31,7 +31,7 @@ import re
 import sqlite3
 import tempfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Iterable
 
 import msgpack
@@ -82,7 +82,9 @@ def library_id_from_annotator(annotator_id: str | None) -> str | None:
     """MsScanMatchResult の AnnotatorID（`<.dbs のエントリ名>_<n>`）を store の library_id にする。"""
     if annotator_id is None:
         return None
-    return _ANNOTATOR_COUNTER.sub("", str(annotator_id))
+    # Console のデータでは AnnotatorID がライブラリのフルパスのことがある（研究室ライブラリの
+    # 置き場所）。区切りが `/` でも `\` でも最後の 1 要素だけを残す。
+    return _ANNOTATOR_COUNTER.sub("", PureWindowsPath(str(annotator_id)).name)
 
 
 def _annotators_from_source(source_path_json: str | None) -> tuple[dict[str, str], dict[str, dict]]:

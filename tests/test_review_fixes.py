@@ -18,7 +18,6 @@ from metabolomix.library import tools as library_tools
 from metabolomix.msdial import alignment_spot
 from metabolomix.tools import handle_tools
 from tests.dcl_fixture import build_dcl_bytes
-from tests.lab_msp_fixtures import remember_library_for_mztab
 from tests.reanalysis_fixtures import write_mztab
 
 NAN = math.nan
@@ -94,13 +93,12 @@ def interactive_folder(tmp_path, monkeypatch):
 
 def _handle(tmp_path, library="auto"):
     path = write_mztab(tmp_path / "handle_data" / "AlignResult-1.mzTab")
-    with pytest.MonkeyPatch.context() as patch:
-        # library="auto" は記憶から開く。mzTab-M は記憶を持てないので、pos.msp を同定に使った
-        # データセットとして差し込む（開く間だけ。"none" のときは差し込まない）。
-        if library == "auto":
-            remember_library_for_mztab(patch, tmp_path / "lab" / "pos.msp")
-        out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(path), library=library))
+    out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(path), library=library))
     assert out["arf2"] is None and out["dcl"] is None
+    if library == "auto":
+        # mzTab-M の記憶は `unknown` なので、library_load は極性の設定（MSDIAL_MSP_POS）から引く
+        # （mzTab-M の本番の経路）。
+        library_tools.library_load(dataset_handle=out["dataset_handle"])
     return out["dataset_handle"]
 
 

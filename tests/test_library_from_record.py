@@ -208,3 +208,112 @@ def test_identified_by_lbm_only_when_lbm_also_and_annotator_is_lbm(tmp_path, wit
         assert out["identified_by_lbm"] is True
     else:
         assert "identified_by_lbm" not in out  # False も書かない
+
+
+# ---------- fix round 1 ----------
+
+def _msp(path, name="x"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"NAME: {name}\nPRECURSORMZ: 500.0\nIONMODE: Positive\nNum Peaks: 1\n60.08 100\n",
+                    encoding="ascii")
+    return path
+
+
+def test_pipeline_pinned_sha_differs_from_current_file_is_not_opened(tmp_path):
+    """Review Focus 4: run が固定した sha256 と今のファイルが違えば、開かず「不一致」。"""
+    from tests.test_dataset_opening import _job, _pipeline
+
+    lib = _msp(tmp_path / "libs" / "Run_Lab.msp")
+    run = _pipeline(tmp_path / "p", _job(tmp_path / "p"))
+    record_path = run / "pipeline-run.json"
+    data = json.loads(record_path.read_text(encoding="utf-8"))
+    data["inputs"] = {"library_mode": "msp_only", "msp": {
+        "path": str(lib), "file": lib.name, "source": "config_file", "sha256": "0" * 64}}
+    record_path.write_text(json.dumps(data), encoding="utf-8")
+    out = json.loads(handle_tools.dataset_handle_open(pipeline_path=str(run), library="auto"))
+    assert out["status"] == "success", out
+    assert out["library"] is None and "不一致" in out["library_note"]
+    assert out["library_record"]["status"] == "mismatch"
+    assert handles.registry.get(out["dataset_handle"]).library.store is None
+    assert str(lib.parent) not in json.dumps(out, ensure_ascii=False)
+
+
+def test_stale_dataset_library_load_refuses_after_the_file_changes(tmp_path):
+    """データセットを開いた後で記憶のファイルが変わったら、引数なしの library_load は開かない。"""
+    from metabolomix.tools import mztab_tools
+
+    folder = _folder(tmp_path)
+    dbs = _dbs(folder / "Proj_Loaded.msp2.dbs")
+    mztab_tools.dataset_load(directory=str(folder))
+    _dbs(dbs, mz=501.0)
+    out = json.loads(library_tools.library_load())
+    assert out["status"] == "error" and "不一致" in out["message"]
+    assert session_state.session.library.store is None
+
+
+def test_ion_mode_skips_the_record_and_reports_the_difference(tmp_path, monkeypatch):
+    folder = _folder(tmp_path)
+    _dbs(folder / "Proj_Loaded.msp2.dbs")
+    setting = _msp(tmp_path / "lab" / "Setting_Pos.msp")
+    monkeypatch.setenv("MSDIAL_MSP_POS", str(setting))
+    h = _open(folder, library="none")["dataset_handle"]
+    out = json.loads(library_tools.library_load(ion_mode="positive", dataset_handle=h))
+    assert out["status"] == "success" and out["file"] == "Setting_Pos.msp"
+    assert "library_source" not in out
+    assert out["differs_from_record"] == {"remembered": "Proj_Loaded.msp2.dbs",
+                                          "opened": "Setting_Pos.msp"}
+    assert str(setting.parent) not in json.dumps(out, ensure_ascii=False)
+
+
+def test_ion_mode_opposite_to_the_handle_polarity_still_mismatches(tmp_path, monkeypatch):
+    folder = _folder(tmp_path)
+    _dbs(folder / "Proj_Loaded.msp2.dbs")
+    monkeypatch.setenv("MSDIAL_MSP_NEG", str(_msp(tmp_path / "lab" / "Setting_Neg.msp")))
+    h = _open(folder, library="none")["dataset_handle"]
+    handles.registry.get(h).polarity = "positive"
+    out = json.loads(library_tools.library_load(ion_mode="negative", dataset_handle=h))
+    assert out["code"] == "LIBRARY_POLARITY_MISMATCH"
+
+
+def test_identical_copy_is_not_different_but_a_rewritten_file_is(tmp_path):
+    import shutil
+
+    folder = _folder(tmp_path)
+    dbs = _dbs(folder / "Proj_Loaded.msp2.dbs")
+    copy = tmp_path / "elsewhere" / "Copy_Of_Loaded.msp2.dbs"
+    copy.parent.mkdir()
+    shutil.copy(dbs, copy)
+    h = _open(folder, library="none")["dataset_handle"]
+    same = json.loads(library_tools.library_load(file_path=str(copy), dataset_handle=h))
+    assert same["status"] == "success" and "differs_from_record" not in same
+    _dbs(dbs, mz=501.0)  # 同じ場所で中身が変わった
+    changed = json.loads(library_tools.library_load(file_path=str(dbs), dataset_handle=h))
+    assert changed["status"] == "success"
+    assert changed["differs_from_record"] == {"remembered": "Proj_Loaded.msp2.dbs",
+                                              "opened": "Proj_Loaded.msp2.dbs"}
+
+
+def test_lbm_only_with_explicit_file_path_says_it_was_not_identified_with_it(tmp_path):
+    folder = _folder(tmp_path)
+    write_dbs(folder / "Proj_Loaded.lbm2.dbs", [("lib", [record()], ["k"])])
+    (tmp_path / "other").mkdir()
+    other = _dbs(tmp_path / "other" / "Other.msp2.dbs")
+    h = _open(folder)["dataset_handle"]
+    out = json.loads(library_tools.library_load(file_path=str(other), dataset_handle=h))
+    assert out["status"] == "success" and "LBM" in out["note"] and "Other.msp2.dbs" in out["note"]
+    assert "differs_from_record" not in out
+
+
+def test_session_dataset_without_a_record_falls_back_to_the_settings(tmp_path, monkeypatch):
+    """R21: mzTab-M の記憶は unknown。引数なしの library_load は極性の設定へ落ちる。"""
+    from metabolomix.tools import mztab_tools
+    from tests.reanalysis_fixtures import write_mztab
+
+    setting = _msp(tmp_path / "lab" / "Setting_Pos.msp")
+    monkeypatch.setenv("MSDIAL_MSP_POS", str(setting))
+    mztab = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab")
+    mztab_tools.dataset_load(mztab_path=str(mztab))
+    assert session_state.session.dataset.library_record["status"] == "unknown"
+    out = json.loads(library_tools.library_load())
+    assert out["status"] == "success" and out["file"] == "Setting_Pos.msp"
+    assert "library_source" not in out

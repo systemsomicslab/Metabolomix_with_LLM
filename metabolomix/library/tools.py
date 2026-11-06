@@ -73,7 +73,8 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     再利用）する。
 
     解決順: `file_path` の明示 → 直近のデータセット（または `dataset_handle`）が覚えた、同定に
-    使ったライブラリ（`library_record`。実体の sha256 を測り直して通れば開く）→ `ion_mode`（`"positive"` / `"negative"`）に対応する
+    使ったライブラリ（`library_record`。実体の sha256 を測り直して通れば開く。**`file_path` も
+    `ion_mode` も省いたときだけ**。`ion_mode` を渡せば記憶ではなく設定から引く）→ `ion_mode`（`"positive"` / `"negative"`）に対応する
     設定（環境変数 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG` → `lipidmix.local.toml` の
     `[library] msp_positive` / `msp_negative`）→ データディレクトリの
     `*_Loaded.msp2.dbs` → 設定済みの極性（両方あれば `ion_mode` を求める）→
@@ -83,8 +84,9 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
 
     記憶が `mismatch`（内容が変わった・ファイルが無い）や `lbm_only`（LBM だけで MSP を使って
     いない）のときは、上の設定の順には**落ちず**理由を返す（`file_path` で明示すれば開ける）。
-    `file_path` が記憶と違うライブラリなら、そのまま開き、戻り値の `differs_from_record` に
-    記憶したファイル名と開いたファイル名を書く。記憶から開いたときは `library_source` が
+    `file_path` や `ion_mode` の設定から引いたものが記憶と違うライブラリ（中身の sha256 で比べる）
+    なら、そのまま開き、戻り値の `differs_from_record` に記憶したファイル名と開いたファイル名を書く。
+    記憶が `lbm_only` なら、開いたライブラリで同定したものではない旨を `note` に書く。記憶から開いたときは `library_source` が
     `"dataset_record"`。
 
     初回の構築は大きな `.msp`（1 GB 級）で数分かかる。MCP のタイムアウトに当たる
@@ -110,13 +112,14 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
         return holder
     from_record = False
     differs = None
+    record_for_diff = None
     record = getattr(holder.dataset, "library_record", None)
     if record is not None and record.get("status") != "unknown":
         from metabolomix.dataset.library_memory import verify_record
 
         record = verify_record(record)
         status, remembered = record["status"], record.get("file")
-        if file_path is None:
+        if file_path is None and ion_mode is None:  # R23: 記憶が先なのは両方とも省いたときだけ
             if status == "known":
                 file_path, from_record = record["path"], True
             elif status == "mismatch":
@@ -131,9 +134,8 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
                     "message": ("このデータセットの同定は LBM（脂質のルールベース）だけで、MS/MS の"
                                 "照合に使う MSP のライブラリがありません。設定の順には落ちません。"
                                 "別のライブラリで照合するなら file_path で明示してください。")})
-        elif status in ("known", "mismatch") and record.get("path"):
-            if Path(file_path).expanduser().resolve() != Path(record["path"]).resolve():
-                differs = {"remembered": remembered, "opened": Path(file_path).name}
+        else:
+            record_for_diff = record  # 開いたあと、中身（sha256）で記憶と比べる
     if dataset_handle is not None and file_path is None:
         # ハンドルは極性の設定だけから引く（dataset_handle_open と同じ規則）。対話の
         # データフォルダの .dbs / .msp を探さず、データセットと逆の極性も読まない。
@@ -221,11 +223,22 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     notes = []
     if from_record:
         payload["library_source"] = "dataset_record"
-    if differs is not None:
-        payload["differs_from_record"] = differs
-        notes.append(
-            f"データセットが同定に使ったライブラリ（{differs['remembered']}）とは違う"
-            f"（{differs['opened']}）を開きました。")
+    rec = record_for_diff
+    if rec is not None and not from_record:
+        if rec.get("status") == "lbm_only":
+            notes.append("このデータセットの同定は LBM だけで、開いたライブラリ"
+                         f"（{path.name}）で同定したものではありません。")
+        elif rec.get("status") in ("known", "mismatch") and rec.get("file"):
+            # 中身で比べる（同じ内容のコピーは「違う」にしない。同じ場所の書き換えは違う）。
+            pinned = rec.get("sha256")
+            same = (summary["source_sha256"] == pinned if pinned
+                    else rec.get("path") and Path(rec["path"]).resolve() == path.resolve())
+            if not same:
+                differs = {"remembered": rec["file"], "opened": path.name}
+                payload["differs_from_record"] = differs
+                notes.append(
+                    f"データセットが同定に使ったライブラリ（{differs['remembered']}）とは違う"
+                    f"（{differs['opened']}）を開きました。")
     if search_params is None:
         notes.append(
             f"`.msp` には照合の許容幅（search_params）が同梱されないため、"
