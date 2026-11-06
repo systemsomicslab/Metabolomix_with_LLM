@@ -351,8 +351,38 @@ def _unverified_mztab_prov(value) -> dict:
     return {"value": value, "source": "mztab", "confidence": "unverified"}
 
 
+def _msdial_row(sample: dict, name: str) -> dict:
+    """.mddata が宣言した役割・群・バッチ・注入順から作る v2 形の1行。"""
+    declared = {"source": "msdial_mddata", "confidence": "declared"}
+    batch = None if sample.get("batch") is None else str(sample["batch"])
+    values = {
+        "sample_id": name, "source_file": sample.get("file_path"), "role": sample["role"],
+        "group": sample.get("group"), "batch": batch,
+        "injection_order": sample.get("injection_order"),
+        "qc_pool": None, "include": True, "biological_sample_id": None,
+    }
+    provenance = {
+        "sample_id": {"value": name, "source": "default", "confidence": "inferred"},
+        "source_file": ({"value": values["source_file"], **declared} if values["source_file"]
+                        else {"value": None, "source": None, "confidence": None}),
+        "qc_pool": {"value": None, "source": None, "confidence": None},
+        "include": {"value": True, "source": "default", "confidence": "inferred"},
+        "biological_sample_id": {"value": None, "source": None, "confidence": None},
+    }
+    for field in ("role", "group", "batch", "injection_order"):
+        provenance[field] = ({"value": values[field], **declared} if values[field] is not None
+                             else {"value": None, "source": None, "confidence": None})
+    row = dict(values)
+    row["provenance"] = provenance
+    row["conflicts"] = []
+    return row
+
+
 def _default_row(ds, index: int, name: str) -> dict:
     """明示シートが全く無いときの1行。既存のトークン/mzTab推定経路を使う。"""
+    msdial_samples = getattr(ds, "msdial_samples", None)
+    if msdial_samples:
+        return _msdial_row(msdial_samples[index], name)
     source_file = _raw_path_for_sample(ds, index)
     role = preprocessing.detect_sample_roles([name]).get(name, "sample")
     batch, injection_order = _mztab_batch_and_order(ds, index)

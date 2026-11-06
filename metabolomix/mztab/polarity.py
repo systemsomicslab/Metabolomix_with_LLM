@@ -30,6 +30,15 @@ def dataset_polarity(ds) -> tuple[str | None, str, list[str]]:
             notes.append(f"ジョブの宣言極性 {declared!r} を解釈できず、使っていない。")
             declared = None
 
+    if declared is None and getattr(ds, "source_format", None) == "msdial_folder":
+        # 解析フォルダには mzTab-M の付加体の多数決が無い。.arf2 の ion_mode の多数を使う。
+        folder_majority = getattr(ds, "ion_mode_majority", None)
+        if folder_majority in _POLARITIES:
+            return folder_majority, "arf2_ion_mode", notes
+        notes.append("データセットの極性を決められなかった（.arf2 の ion_mode が陽陰で決まらない）。"
+                     "目標の polarity による適用判定（not_applicable）はしていない。")
+        return None, "unknown", notes
+
     from metabolomix.console.output_collector import read_adduct_polarity
     majorities = {read_adduct_polarity(path)["adduct_majority"]
                   for path in (getattr(ds, "source_files", None) or {})}
