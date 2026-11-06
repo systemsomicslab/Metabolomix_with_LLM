@@ -15,8 +15,10 @@ property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` 
 `dataset_handle` を渡した呼び出しは `metabolomix/core/handle_dispatch.py` の
 `install()` が包んだ関数がワーカースレッドで回し、そのハンドルの `lock` で直列化する。
 渡さない呼び出しも、直近のハンドルがあればそのハンドルの `lock` の下でワーカースレッドで回し、
-`session_state.pinned_handle()` でそのハンドルに固定する。直近のハンドルが無ければ
-イベントループのスレッドで同期に呼ぶ。
+`session_state.pinned_handle()` でそのハンドルに固定する。ロックを取った時点でそのハンドルが
+閉じられていれば、ツールを呼ばずに `missing_state` を返す。直近のハンドルが無ければ
+イベントループのスレッドで同期に呼ぶ。`dataset_handle` を持たないのに `session.dataset` /
+`.library` を読むツール（`handle_dispatch.SESSION_READERS`）も同じ経路で包む。
 
 ## dataset_handle_open
 

@@ -468,9 +468,13 @@ def open_store(path: str | Path, *, cache_dir: Path | None = None, rebuild: bool
 
     どちらの接続も別スレッドからの利用を許す（`check_same_thread=False`）。データセットへの
     呼び出しは、`dataset_handle` を省いたものも直近のハンドルがあればワーカースレッドで回り
-    （`core.handle_dispatch`）、開いたスレッドと使うスレッド（別のワーカーや、イベントループで
-    動く `curation_*` / `verify_peak_annotation`）が一致しない。`LibraryStore` は開いた後は
-    読むだけ（SELECT）なので、スレッドをまたいでも書き込みの競合は起きない。
+    （`core.handle_dispatch`）、store を開いたスレッドと使うスレッド（anyio のスレッドプールの
+    別のワーカー）が一致しない。`LibraryStore` は開いた後は読むだけ（SELECT）なので、読みどうしは
+    スレッドをまたいでも安全。**ただし `close()` は使用と競合してはいけない**——閉じた接続を
+    別の呼び出しが使うと `Cannot operate on a closed database` になる。閉じる側
+    （`library_load` の差し替え・`dataset_handle_close`）と使う側（`library_*`・`curation_*`・
+    `verify_peak_annotation` ほか）を直列にするのはハンドルのロックで、`handle_dispatch` が
+    どちらもそのロックの下で回す（`dataset_handle` を持たない読み手は `SESSION_READERS`）。
     """
     source_path = Path(path)
     base = cache_dir if cache_dir is not None else globals()["cache_dir"]()

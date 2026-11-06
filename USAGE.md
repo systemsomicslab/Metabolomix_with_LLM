@@ -293,7 +293,12 @@ run ディレクトリの `remote-job.json`。サーバは版を返さないの�
 `dataset_handle` を渡した呼び出しはサーバの別スレッドで回り、同じハンドルへの呼び出しは
 1 本ずつ、別のハンドルどうしは並行に進む。渡さない呼び出しは対話のセッションの直近のハンドル
 (`dataset_load` で読んだもの)に効き、直近のハンドルがあればそのハンドルへの呼び出しとして
-同じく 1 本ずつに並ぶ。
+同じく 1 本ずつに並ぶ(`dataset_handle` を持たない `curation_review` / `curation_suggest` /
+`pathway_project` / `verify_peak_annotation` / `save_figure` / `plot_pca_loadings` も)。
+順番を待つ間に直近のハンドルが閉じられたら、何もせずに `missing_state` を返す。
+`dataset_load` より前に `library_load` で読んだライブラリは、最初の `dataset_load` のハンドルへ
+移る。直近のハンドルを閉じると、渡さない呼び出しはデータセットもライブラリも無い状態
+(`missing_state`)になり、前に読んだライブラリへは戻らない。
 
 | ツール | 機能 |
 |--------|------|

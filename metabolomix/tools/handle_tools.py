@@ -37,6 +37,20 @@ _BUILD_LOCK = threading.Lock()
 _ARF_SUFFIX_RE = re.compile(r"_(?:PeakProperties|DriftSopts|DriftSpots)\.arf$", re.IGNORECASE)
 
 
+def alignment_files_for(opened, arf2_path: str | None = None) -> tuple[str | None, str | None]:
+    """`open_dataset` が開いたデータセットのスポットの照合に使う `.arf2` と `.dcl`。
+
+    `dataset_handle_open` と `dataset_load`（直近のハンドル）が同じ規則で決める——
+    `dataset_load` の要約に出たハンドル ID を明示した呼び出しが、省略したときと同じ
+    `.arf2` / `.dcl` を使うように。解析フォルダで読んだなら（明示が無ければ）その選択、
+    そうでなければ `_alignment_files` が探す。
+    """
+    selection = opened.selection
+    if selection is not None and not arf2_path:
+        return str(selection.arf2), (str(selection.dcl) if selection.dcl else None)
+    return _alignment_files(opened.dataset, arf2_path, opened.kind, opened.path)
+
+
 def _alignment_files(ds, arf2_path: str | None, kind: str | None = None,
                      path: str | None = None) -> tuple[str | None, str | None]:
     """スポットの照合に使う `.arf2` と `.dcl`。決まらなければ None。
@@ -138,6 +152,7 @@ def dataset_handle_open(mztab_path: str | None = None, job_path: str | None = No
     from metabolomix.mztab.polarity import dataset_polarity
 
     try:
+        handles.registry.check_capacity()  # 長い読み込みの前に断る（add でもう一度確かめる）
         opened = opening.open_dataset(directory=directory, mztab_path=mztab_path,
                                       job_path=job_path, pipeline_path=pipeline_path,
                                       source=source, measure=measure,
@@ -145,11 +160,7 @@ def dataset_handle_open(mztab_path: str | None = None, job_path: str | None = No
         ds = opened.dataset
         polarity, polarity_source, polarity_notes = dataset_polarity(ds)
         selection = opened.selection
-        if selection is not None and not arf2_path:
-            arf2 = str(selection.arf2)
-            dcl = str(selection.dcl) if selection.dcl else None
-        else:
-            arf2, dcl = _alignment_files(ds, arf2_path, opened.kind, opened.path)
+        arf2, dcl = alignment_files_for(opened, arf2_path)
         handle = handles.DatasetHandle(
             ds, polarity=polarity, polarity_source=polarity_source,
             source={"kind": opened.kind, "path": opened.path,

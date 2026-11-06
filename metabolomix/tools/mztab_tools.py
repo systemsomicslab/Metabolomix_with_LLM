@@ -3,7 +3,7 @@ from pathlib import Path
 
 from mcp.types import ToolAnnotations
 
-from metabolomix.core import session_state
+from metabolomix.core import handles, session_state
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import missing_state, mztab_error
 from metabolomix.core.serialization import json_payload
@@ -84,6 +84,9 @@ def dataset_load(mztab_path: str | None = None, job_path: str | None = None,
     from metabolomix.dataset.opening import open_dataset
 
     try:
+        # 長い読み込みの前に上限を確かめる。読み込みの間に別の呼び出しが足しうるので、
+        # 直近にする代入（registry.add）でももう一度確かめる。
+        handles.registry.check_capacity()
         opened = open_dataset(directory=directory, mztab_path=mztab_path, job_path=job_path,
                               pipeline_path=pipeline_path, source=source, measure=measure,
                               allow_incomplete=allow_incomplete)
@@ -98,6 +101,13 @@ def dataset_load(mztab_path: str | None = None, job_path: str | None = None,
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
     handle_id = session_state.session.current_handle_id
+    # 要約に出すハンドル ID を明示した呼び出しが、省略と同じ `.arf2` / `.dcl` を使うように
+    # （`dataset_handle_open` と同じ規則）。
+    from metabolomix.tools.handle_tools import alignment_files_for
+
+    handle = handles.registry.peek(handle_id)
+    if handle is not None:
+        handle.arf2_path, handle.dcl_path = alignment_files_for(opened)
 
     if opened.selection is not None:
         lines = [_folder_summary_text(ds, opened.selection.arf.name)]

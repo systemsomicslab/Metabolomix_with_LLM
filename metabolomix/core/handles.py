@@ -94,15 +94,28 @@ class HandleRegistry:
     def _open_ids(self) -> list[str]:
         return sorted(self._handles)
 
+    def _refuse_if_full(self) -> None:
+        """上限なら `DATASET_HANDLE_LIMIT`。`self._lock` を持って呼ぶ。"""
+        limit = max_handles()
+        if len(self._handles) >= limit:
+            raise DomainError(
+                "DATASET_HANDLE_LIMIT",
+                f"開いているハンドルが上限（{limit}）に達しています。使い終えたハンドルを "
+                f"dataset_handle_close で閉じてください（上限は {MAX_HANDLES_ENV} で変えられます）。",
+                {"open_handles": self._open_ids(), "max_handles": limit})
+
+    def check_capacity(self) -> None:
+        """もう 1 本足せるかを読み込みの**前に**確かめる（上限なら `DATASET_HANDLE_LIMIT`）。
+
+        長い読み込みを済ませてから断らないための前置き。読み込みの間に別の呼び出しが
+        足しうるので、`add` も同じ検査をもう一度する。
+        """
+        with self._lock:
+            self._refuse_if_full()
+
     def add(self, handle: DatasetHandle) -> None:
         with self._lock:
-            limit = max_handles()
-            if len(self._handles) >= limit:
-                raise DomainError(
-                    "DATASET_HANDLE_LIMIT",
-                    f"開いているハンドルが上限（{limit}）に達しています。使い終えたハンドルを "
-                    f"dataset_handle_close で閉じてください（上限は {MAX_HANDLES_ENV} で変えられます）。",
-                    {"open_handles": self._open_ids(), "max_handles": limit})
+            self._refuse_if_full()
             seq = next(self._seq)
             handle.created_seq = handle.last_used_seq = seq
             self._handles[handle.handle_id] = handle

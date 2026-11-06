@@ -160,10 +160,16 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
   ハンドルがあればそのロックの下で**ワーカースレッドに回す（同じデータセットへの対話と
   再解析の呼び出しが重ならない）。渡さない呼び出しは `session_state.pinned_handle` で
   ロックを取ったハンドルに固定され、途中で直近が切り替わっても別のハンドルを触らない。
-  直近のハンドルが無ければイベントループ上で同期に動く。新しく `dataset_handle` を足す
-  ツールもこれに従う。`dataset_handle` を持たないツール（`pathway_project` `save_figure`
-  `curation_*` など）はイベントループ上でロックを取らずに `session.dataset` / `.library` を
-  読むので、スレッドに縛られる資源（sqlite3 の接続など）をスレッドをまたいで使える形で持つ。
+  直近のハンドルが無ければイベントループ上で同期に動く。ロックを待つ間に直近のハンドルが
+  閉じられたら、ツールを呼ばずに `missing_state` を返す。新しく `dataset_handle` を足す
+  ツールもこれに従う。**`dataset_handle` を持たないのに `session.dataset` / `.library` を
+  （ヘルパー経由でも）読むツールは `handle_dispatch.SESSION_READERS` に載せる**——載せないと
+  イベントループでロックを取らずに読み、ワーカーの `library_load` が閉じた store や書き換え
+  途中の行列を掴む。自身のソースで読むものは `tests/test_session_handle_unification.py` が
+  捕まえるが、ヘルパー経由の読み取りは捕まらない。スレッドに縛られる資源（sqlite3 の接続
+  など）はスレッドをまたいで使える形で持ち、閉じるのと使うのはハンドルのロックで直列にする。
+  `library_load` → `dataset_load` の順なら、セッション自身のライブラリは新しいハンドルへ
+  移る（写さない。閉じたあと古いライブラリへ落ちない）。
 - **解釈規則の選択軸は `session.assay_kind`**（`lipid` / `metabolite` / `unknown`、既定
   `unknown`）。脂質名文法は脂質アッセイでしか成り立たないので、ダイジェスト
   （`assay_digest()`）も `section_hint` もここで分岐する。**`caveat_emitted` の bool だけに
