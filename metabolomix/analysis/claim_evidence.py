@@ -297,7 +297,8 @@ def _spectrum_available(spot: dict) -> bool | None:
     return None
 
 
-def _msms_for(fid, *, store, spot_query, arf2_path, dcl_path, msms_spec) -> dict:
+def _msms_for(fid, *, store, spot_query, arf2_path, dcl_path, msms_spec,
+              no_library_reason: str | None = None) -> dict:
     from metabolomix.analysis.spectral_match import fragment_matches_excluding_precursor
     from metabolomix.library import matching
 
@@ -309,6 +310,10 @@ def _msms_for(fid, *, store, spot_query, arf2_path, dcl_path, msms_spec) -> dict
     spot = spot_query(spot_id, arf2_path=arf2_path, dcl_file=dcl_path, rt=None, ion_mode=None)
     available = _spectrum_available(spot)
     if store is None:
+        if no_library_reason:
+            # LBM だけで同定したデータセット: ライブラリが「無い」のではなく、評価できない。
+            return {"status": "not_evaluable", "reason": no_library_reason,
+                    "spectrum_available": available}
         return {"status": "no_library", "spectrum_available": available}
     if spot.get("status") != "ok":
         return {"status": spot.get("status"), "message": spot.get("message"),
@@ -337,7 +342,8 @@ def _msms_for(fid, *, store, spot_query, arf2_path, dcl_path, msms_spec) -> dict
 
 
 def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
-          dataset_polarity: str | None, library_sha256: str | None) -> dict:
+          dataset_polarity: str | None, library_sha256: str | None,
+          no_library_reason: str | None = None) -> dict:
     """証拠の束（claim-evidence.v1）を作る。`spot_query` は `library.tools.spot_msms_query`。
 
     候補ごとの `split` は割れたアライメントスポットの相手（`alignment_qc.find_split_pairs` を
@@ -413,7 +419,8 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
         if normalized["msms"] is not None:
             item["msms"] = _msms_for(fid, store=store, spot_query=spot_query,
                                      arf2_path=arf2_path, dcl_path=dcl_path,
-                                     msms_spec=normalized["msms"])
+                                     msms_spec=normalized["msms"],
+                                     no_library_reason=no_library_reason)
         if normalized["relations"] is not None:
             relations = feature_relations(ds, fid, adducts=adducts, formulas=formulas,
                                           **normalized["relations"])

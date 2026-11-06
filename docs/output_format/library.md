@@ -145,7 +145,9 @@
 `missing_state` ではなく `{"status": "not_evaluable", "reason": ...}`（qualify は `verdict` も
 `not_evaluable`）を返す。記憶が `lbm_also` で、`spot_id` で照合した特徴の代表の注釈器が LBM 由来
 （`is_lbm_annotator` が True）なら、結果に `identified_by_lbm: true` を足す（そうでなければキーが無い。
-`false` は書かない）。記憶が `lbm_only` のまま別のライブラリを明示して開いたときは、同定に使った
+`false` は書かない）。**この印を付けられるのは解析フォルダ（`.arf2`）から読んだデータセットだけ**
+——注釈器 ID（`annotator_id`）は `.arf2` が持つ値で、mzTab-M のアダプタのデータセットは持たないので、
+`lbm_also` でも印は付かない（付かないことは「LBM 由来でない」の証拠ではない）。記憶が `lbm_only` のまま別のライブラリを明示して開いたときは、同定に使った
 ものではない旨が `note` に付く。
 
 **エラー戻り値**: ライブラリを 1 つに決められないときは `{"status": "error", "code": ..., "message": ..., "details": ...}`

@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import re
-import threading
 from pathlib import Path
 
 from mcp.types import ToolAnnotations
@@ -32,8 +31,6 @@ from metabolomix.dataset import opening
 __all__ = ["dataset_handle_open", "dataset_handle_list", "dataset_handle_close"]
 
 _LIBRARY_MODES = ("auto", "none")
-#: ライブラリの store の構築（初回だけ数分）を 1 本ずつにする。
-_BUILD_LOCK = threading.Lock()
 _ARF_SUFFIX_RE = re.compile(r"_(?:PeakProperties|DriftSopts|DriftSpots)\.arf$", re.IGNORECASE)
 
 
@@ -108,8 +105,7 @@ def _open_library_for(ds) -> tuple[object | None, str | None]:
                       "呼ぶと、記憶が無いときだけ極性の設定から引く）。`file_path` で明示もできる。")
     path = Path(record["path"])
     try:
-        with _BUILD_LOCK:
-            store = open_store(path, read_only=True)
+        store = open_store(path, read_only=True)  # 同じ構築先の同時構築は open_store が直列にする
     except Exception as exc:  # noqa: BLE001 - 壊れたライブラリでもハンドルは開く
         # 例外の文言は置き場所（フルパス）を含みうるので、種類だけを返す。
         return None, (f"ライブラリ（{path.name}）を開けなかったので、読んでいない"

@@ -299,3 +299,42 @@ def test_folder_with_several_lbm_dbs_is_lbm_only_with_candidates(tmp_path):
 
 def test_is_lbm_annotator_works_on_the_file_name_part():
     assert is_lbm_annotator("some.lbm2") is True
+
+
+# ---------- v3 のジョブが記録した sha256（R36） ----------
+
+def _job_with_pinned_msp(tmp_path, msp: Path, pinned: str | None) -> Path:
+    path = _job(tmp_path, f"Msp file path: {msp}\n")
+    if pinned is not None:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["schema"] = "analysis-job.v3"
+        data["profile"] = {"dependencies": [
+            {"dependency_id": "msp", "kind": "msp", "method_key": "Msp file path",
+             "path": str(msp), "sha256": pinned}]}
+        path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def test_job_pinned_sha_that_matches_the_file_is_known(tmp_path):
+    msp = tmp_path / "lab.msp"
+    msp.write_text("NAME: x\n", encoding="ascii")
+    rec = remember_from_job(_job_with_pinned_msp(tmp_path, msp, _sha(msp)))
+    assert rec["status"] == "known" and rec["sha256"] == _sha(msp)
+
+
+def test_job_pinned_sha_that_differs_from_the_file_is_mismatch(tmp_path):
+    msp = tmp_path / "lab.msp"
+    msp.write_text("NAME: x\n", encoding="ascii")
+    pinned = _sha(msp)
+    msp.write_text("NAME: replaced in place\n", encoding="ascii")
+    rec = remember_from_job(_job_with_pinned_msp(tmp_path, msp, pinned))
+    assert rec["status"] == "mismatch"
+    assert rec["sha256"] == pinned  # 記録した値を持つので、あとで verify_record しても mismatch のまま
+    assert verify_record(rec)["status"] == "mismatch"
+
+
+def test_job_without_a_recorded_sha_uses_the_measured_one(tmp_path):
+    msp = tmp_path / "lab.msp"
+    msp.write_text("NAME: x\n", encoding="ascii")
+    rec = remember_from_job(_job_with_pinned_msp(tmp_path, msp, None))
+    assert rec["status"] == "known" and rec["sha256"] == _sha(msp)

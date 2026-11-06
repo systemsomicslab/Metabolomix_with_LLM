@@ -876,3 +876,18 @@ def test_claim_evidence_bad_offset_is_spec_invalid(data):
     out = json.loads(R.dataset_claim_evidence({**CLAIM, "ppm_offset": {"default": "x"}},
                                               dataset_handle=_open(data)))
     assert out["error"]["code"] == "CLAIM_SPEC_INVALID"
+
+
+def test_claim_evidence_on_an_lbm_only_dataset_is_not_evaluable_not_no_library(data, library):
+    """同定が LBM だけのデータセット（MSP が無い）。no_library は library_load を促すので使わない。"""
+    from metabolomix.core import handles
+
+    handle = _open(data)
+    handles.registry.get(handle).dataset.library_record = {
+        "status": "lbm_only", "kind": "lbm", "file": "lab.lbm2", "path": None}
+    claim = {**CLAIM, "msms": {"top_n": 3, "rules": {}}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    msms = {c["feature_id"]: c["msms"] for c in out["candidates"]}
+    assert {m["status"] for m in msms.values()} == {"not_evaluable"}
+    assert all("LBM" in m["reason"] for m in msms.values())
+    assert msms["20"]["spectrum_available"] is True

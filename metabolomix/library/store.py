@@ -30,6 +30,7 @@ import os
 import re
 import sqlite3
 import tempfile
+import threading
 import zipfile
 from pathlib import Path, PureWindowsPath
 from typing import Iterable
@@ -459,6 +460,19 @@ def _digest_for(source_path: Path, base: Path, *, trust_index: bool) -> str:
     return digest
 
 
+#: 構築先（キャッシュの SQLite）ごとのロック。同じ構築先を 2 つのスレッドが同時に作らない
+#: （`library_load` もデータセットのハンドルを開く処理もワーカースレッドで回る）。Windows では
+#: 別のスレッドが開いている構築先への `os.replace` が `PermissionError` になりうる。
+_BUILD_LOCKS: dict[str, threading.Lock] = {}
+_BUILD_LOCKS_GUARD = threading.Lock()
+
+
+def _build_lock(dest_path: Path) -> threading.Lock:
+    key = os.path.normcase(os.path.abspath(str(dest_path)))
+    with _BUILD_LOCKS_GUARD:
+        return _BUILD_LOCKS.setdefault(key, threading.Lock())
+
+
 def open_store(path: str | Path, *, cache_dir: Path | None = None, rebuild: bool = False,
                read_only: bool = False) -> LibraryStore:
     """`path` の store を開く。無ければ（または `rebuild=True` なら）構築してから開く。
@@ -484,7 +498,10 @@ def open_store(path: str | Path, *, cache_dir: Path | None = None, rebuild: bool
     dest_path = _store_path_for_digest(source_path, digest, cache_dir=base)
 
     if rebuild or not dest_path.exists():
-        _build(source_path, dest_path, digest)
+        with _build_lock(dest_path):
+            # 待っている間に別のスレッドが作り終えたなら作り直さない（rebuild の明示は作り直す）。
+            if rebuild or not dest_path.exists():
+                _build(source_path, dest_path, digest)
 
     if read_only:
         conn = sqlite3.connect(f"{dest_path.resolve().as_uri()}?mode=ro", uri=True,

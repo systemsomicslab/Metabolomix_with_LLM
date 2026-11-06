@@ -460,13 +460,17 @@ def dataset_claim_evidence(spec: dict, dataset_handle: str | None = None,
     polarity = _polarity(holder, ds)
     spot_query, arf2_path, dcl_path = _spot_query_for(holder, dataset_handle)
     store = holder.library.store
+    # 同定が LBM だけのデータセットでライブラリが無いときは、MS/MS の照合を no_library でなく
+    # not_evaluable（理由つき）にする（no_library は library_load を促すが、MSP は無い）。
+    lbm_only = library_tools.lbm_only_not_evaluable(holder) if store is None else None
     try:
         normalized = claim_evidence.normalize_claim_spec(spec, dataset_polarity=polarity)
         bundle = claim_evidence.build(ds, normalized, store=store,
                                       spot_query=spot_query,
                                       arf2_path=arf2_path, dcl_path=dcl_path,
                                       dataset_polarity=polarity,
-                                      library_sha256=_library_sha(store))
+                                      library_sha256=_library_sha(store),
+                                      no_library_reason=(lbm_only or {}).get("reason"))
         if output_path is None and len(bundle["candidates"]) > MAX_INLINE_CANDIDATES:
             raise DomainError(
                 "ANALYSIS_OUTPUT_REQUIRED",
