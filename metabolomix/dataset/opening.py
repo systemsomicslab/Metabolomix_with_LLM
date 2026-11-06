@@ -327,12 +327,13 @@ def _folder_via_job(job_path: Path, *, measure: str, allow_incomplete: bool,
     読む `.arf` は `_matching_arf` が mzTab-M との照合で選ぶ。ジョブが記録した付随
     アーティファクトは mzTab-M のアダプタと同じく `ds.artifact_paths` に載せる。
     """
+    from metabolomix.analysis import sample_manifest
     from metabolomix.dataset.msdial_adapter import load_msdial_folder
     from metabolomix.mztab import loading
 
     gate = loading.job_gate(job_path, allow_incomplete=allow_incomplete)
     artifact_paths = loading.job_artifact_paths(gate.job)
-    target, raw_by_name = _matching_arf(gate, artifact_paths, pipeline_root)
+    target, raw_by_name, meta_by_name = _matching_arf(gate, artifact_paths, pipeline_root)
     try:
         selection = select_alignment(target)
     except DomainError as exc:
@@ -343,6 +344,17 @@ def _folder_via_job(job_path: Path, *, measure: str, allow_incomplete: bool,
     # Console の出力でも、run の試料対応表と結べる。
     raws = [raw_by_name.get((name or "").strip()) for name in ds.sample_names]
     ds.sample_raw_paths = raws if any(raws) else None
+    # バッチと注入順も同じ mzTab-M の MTD から（`.mddata` が宣言した値は勝つ）。`.mddata` が無い
+    # Console の出力では、ここで引き継がないと注入順が無いことになりドリフト補正が使えない。
+    ds.assay_metadata = {
+        assay_id: dict(meta_by_name[name.strip()])
+        for assay_id, name in zip(ds.sample_assay_ids, ds.sample_names)
+        if name.strip() in meta_by_name}
+    # raw のパスもバッチも既定の行に入るので、読み込み時に作った行を作り直す（読み込みの
+    # 一部なので metadata_revision は進めない）。
+    revision = ds.metadata_revision
+    sample_manifest.apply_defaults_and_inputs(ds, sample_manifest.resolve_metadata(ds, None))
+    ds.metadata_revision = revision
     for role, paths in artifact_paths.items():
         known = ds.artifact_paths.setdefault(role, [])
         known.extend(p for p in paths if p not in known)
@@ -357,11 +369,12 @@ def _folder_via_job(job_path: Path, *, measure: str, allow_incomplete: bool,
 
 
 def _matching_arf(gate, artifact_paths: dict[str, list[str]],
-                  pipeline_root: Path | None) -> tuple[Path, dict[str, str]]:
+                  pipeline_root: Path | None) -> tuple[Path, dict[str, str], dict[str, dict]]:
     """正準 mzTab-M と同じアラインメントの `.arf` をちょうど 1 本選ぶ。
 
-    戻り値は (その `.arf`, 試料名（strip 済み） -> raw のパス)。raw のパスは照合に読んだ
-    mzTab-M の `ms_run[N]-location`（読み直さずに使う）。
+    戻り値は (その `.arf`, 試料名（strip 済み） -> raw のパス, 試料名 -> {batch, run_order})。
+    raw のパスは照合に読んだ mzTab-M の `ms_run[N]-location`、バッチと注入順は同じ mzTab-M の
+    MTD（`MS:4000088` / `MS:4000089`。どちらも読み直さずに使う）。
 
     候補は mzTab-M のアダプタの evidence と同じ順（`arf_candidates`。handoff の
     `peak_matrix_source` → 隣の `*PeakProperties.arf` → 隣のその他）。どれも検証
@@ -374,6 +387,7 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]],
 
     axes: list = []
     raw_by_name: dict[str, str] = {}
+    meta_by_name: dict[str, dict] = {}
 
     def verify(paths: list[Path]) -> tuple[list[Path], dict[str, str]]:
         if not axes:
@@ -388,6 +402,11 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]],
                 (name.strip(), raw) for name, raw in zip(
                     state.sample_names, loading.sample_raw_paths(gate.job, state, parsed))
                 if raw)
+            for name, assay_id in zip(state.sample_names, state.sample_assay_ids):
+                meta = (state.assay_metadata or {}).get(assay_id) or {}
+                if meta.get("batch") is not None or meta.get("run_order") is not None:
+                    meta_by_name[name.strip()] = {"batch": meta.get("batch"),
+                                                  "run_order": meta.get("run_order")}
         return evidence.matching_arfs(paths, feature_mz=axes[0], sample_names=axes[1])
 
     candidates = evidence.arf_candidates(gate.mztab_path, artifact_paths)
@@ -409,7 +428,7 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]],
     details = {"mztab": gate.mztab_path.name, "candidates": [p.name for p in candidates],
                "source_hint": "mztab"}
     if len(passed) == 1:
-        return passed[0], raw_by_name
+        return passed[0], raw_by_name, meta_by_name
     if passed:
         # directory で開くとジョブの門を通らない。未完了のジョブでそれを勧めると、探索専用の
         # 印が外れたまま比較まで進めてしまうので、そのときは mzTab-M だけを案内する。

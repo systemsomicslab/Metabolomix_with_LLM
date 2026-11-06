@@ -198,7 +198,12 @@ mzTab-M の `abundance_assay[N]` は非ゼロでも実測ピークか gap-fill �
 | `source` | `"arf"`（取り込めた）/ `None`（取り込めていない） |
 | `reason` | `source is None` のときだけ。`no_candidate` ほか |
 | `n_cells` / `n_detected` / `gap_filled_rate` | 取り込めたときの内訳 |
-| `join` | 接合の検証内訳（スポット数一致・m/z 差） |
+| `join` | 接合の検証内訳（スポット数一致・m/z 差）。解析フォルダのデータセットでは読んだ `.arf` のパスと `feature_axis="arf2_master_id"` |
+
+解析フォルダ（`source_format="msdial_folder"`）のデータセットでは、検出状態は読んだ `.arf` そのものが
+持つので、`source="arf"` は「隣の `.arf` を照合して取り込めた」ではなく「`.arf` から読んだ」の意味で
+常に付く（`source is None` にはならない）。`inchikey_coverage` も同じキー（`total_features` /
+`with_inchikey` / `by_source` / `identified_by`）で埋まるが、`by_source` の出所は `arf2` と `none` だけ。
 
 取り込めたときは、試料ごとの実測 m/z も `ds.per_sample_mz`（特徴 ID → {試料名: m/z}）に載る。
 **その試料で検出された（gap-fill でない）セルだけ**（補間値の m/z は実測ではない）。検出された

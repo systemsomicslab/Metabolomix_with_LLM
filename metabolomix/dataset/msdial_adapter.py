@@ -112,6 +112,7 @@ def _msdial_samples(file_ids: list[int], arf_names: dict[int, str | None],
             "file_type": file_type, "batch": None if batch is None else str(batch),
             "injection_order": record.get("analytical_order"),
             "file_path": record.get("file_path") or None,
+            "in_mddata": bool(record),
         })
     return names, samples
 
@@ -141,6 +142,35 @@ def _fill_identity(ds, fid: str, spot: dict, meta: dict, cache) -> None:
     annotation = msdial_identity.sml_annotation(spot, msms_assigned=msms)
     if annotation is not None:
         ds.feature_annotations[fid] = annotation
+
+
+def _fill_summaries(ds, selection: AlignmentSelection, detected, metadata: dict) -> None:
+    """検出状態と InChIKey 被覆の要約（mzTab-M のアダプタの `feature_qc` / `inchikey_coverage` と同じキー）。
+
+    検出状態は `.arf`（`is_gap_filled`）由来なので `source` は "arf"（mzTab-M のアダプタが
+    隣の `.arf` から取り込んだときと同じ値。キュレーションの適用の「接合済み」判定がそのまま
+    成り立つ）。特徴の軸は `.arf2` の MasterAlignmentID で、フラグの ID 空間と同じ。
+    """
+    from metabolomix.mztab import identity as mztab_identity
+
+    n_cells, n_detected = int(detected.size), int(detected.sum())
+    ds.feature_qc = {
+        "source": "arf", "tried": [str(selection.arf)],
+        "n_cells": n_cells, "n_detected": n_detected,
+        "gap_filled_rate": (n_cells - n_detected) / n_cells if n_cells else 0.0,
+        "join": {"path": str(selection.arf), "feature_axis": "arf2_master_id"},
+    }
+    with_ik = sum(1 for m in metadata.values() if m.get("inchikey"))
+    sme = len(ds.feature_candidates)
+    sml_only = sum(1 for fid in ds.feature_annotations if fid not in ds.feature_candidates)
+    ds.inchikey_coverage = {
+        "total_features": len(metadata), "with_inchikey": with_ik,
+        "by_source": {"arf2": with_ik, "none": len(metadata) - with_ik},
+        "rdkit_available": mztab_identity.rdkit_available(),
+        "msp_lookup": {"status": "not_applicable"},
+        "identified_by": {"sme": sme, "sml_only": sml_only,
+                          "none": len(metadata) - sme - sml_only},
+    }
 
 
 def _load_tags(ds, selection: AlignmentSelection, fields: list[dict]) -> None:
@@ -230,6 +260,7 @@ def load_msdial_folder(selection: AlignmentSelection, *, measure: str = "peak_he
     ds.detected_mask = detected
     ds.per_sample_mz = per_sample_mz
     ds.feature_metadata = metadata
+    _fill_summaries(ds, selection, detected, metadata)
     _load_tags(ds, selection, fields)
     _load_curation(ds, selection)
 
@@ -245,14 +276,5 @@ def load_msdial_folder(selection: AlignmentSelection, *, measure: str = "peak_he
         "tags": [str(selection.tags)] if selection.tags else [],
     }
 
-    rows = sample_manifest.resolve_metadata(ds, None)
-    sample_manifest.apply_metadata(ds, rows)
-    ds.roles = {row["sample_id"]: row["role"] for row in rows}
-    ds.sample_meta = {
-        row["sample_id"]: {
-            "role": row["role"], "batch": row["batch"],
-            "batch_source": row["provenance"]["batch"]["source"],
-            "run_order": row["injection_order"],
-            "run_order_source": row["provenance"]["injection_order"]["source"],
-        } for row in rows}
+    sample_manifest.apply_defaults_and_inputs(ds, sample_manifest.resolve_metadata(ds, None))
     return ds

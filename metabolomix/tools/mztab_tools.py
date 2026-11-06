@@ -232,11 +232,7 @@ def dataset_status(dataset_handle: str | None = None) -> str:
         "quantification_confidence": ds.quantification_confidence,
         "n_features": len(ds.feature_ids),
         "n_samples": len(ds.sample_names),
-        "validation": {
-            "ok": ds.validation_result.get("ok"),
-            "n_errors": len(ds.validation_result.get("errors", [])),
-            "n_warnings": len(ds.validation_result.get("warnings", [])),
-        },
+        "validation": _validation_summary(ds),
         "inchikey_coverage": ds.inchikey_coverage,
         # 群指定（dataset_differential）に必要なサンプル名。件数だけ返していた頃は、
         # 名前を知る手段が「わざと群サイズ不足のエラーを起こして details を読む」
@@ -246,6 +242,10 @@ def dataset_status(dataset_handle: str | None = None) -> str:
         # 率だけを返して available を省くことはしない。
         "detection": _detection_summary(ds),
     }
+    if ds.load_notes:
+        # 読み込み時の注記（ジョブの未完了・未検証の警告ほか）。dataset_load の要約を見ていない
+        # クライアントが、状態を組み直すときにも気づけるよう件数と先頭だけ出す。
+        payload["load_notes"] = {"n": len(ds.load_notes), "first": ds.load_notes[:3]}
     if ds.job_path:
         payload["job_path"] = ds.job_path
     if ds.artifact_paths:
@@ -254,6 +254,18 @@ def dataset_status(dataset_handle: str | None = None) -> str:
 
 
 # ---------- 内部ヘルパ ----------
+
+
+def _validation_summary(ds) -> dict:
+    """mzTab-M の構造検査の要約。解析フォルダ（`.arf` / `.arf2`）は mzTab-M ではないので当てはまらない。"""
+    if ds.source_format == "msdial_folder":
+        return {"applicable": False,
+                "note": "解析フォルダのデータセットに mzTab-M の構造検査は無い（読み込みの注記は load_notes）"}
+    return {
+        "ok": ds.validation_result.get("ok"),
+        "n_errors": len(ds.validation_result.get("errors", [])),
+        "n_warnings": len(ds.validation_result.get("warnings", [])),
+    }
 
 
 def _detection_summary(ds) -> dict:

@@ -52,13 +52,15 @@ def _folder(path: Path, **kwargs) -> Path:
 
 
 def _job(tmp_path: Path, *, status: str = "completed", with_folder: bool = True,
-         method_file: str = "m.txt") -> Path:
+         method_file: str = "m.txt", spec: dict | None = None,
+         with_mddata: bool = True, mztab_name: str = "Height_x.mzTab") -> Path:
     """Console の run の形（run_dir/msdial/ に mzTab-M と、あれば `.arf` 一式）の job。"""
+    spec = spec or _spec()
     run_dir = tmp_path / "runs" / "job1"
     out = run_dir / "msdial"
     if with_folder:
-        write_msdial_folder(out, **_spec())
-    write_matching_mztab(out / "Height_x.mzTab", _spec())
+        write_msdial_folder(out, **spec, with_mddata=with_mddata)
+    write_matching_mztab(out / mztab_name, spec)
     job_path = run_dir / "analysis-job.json"
     job_path.write_text(json.dumps({
         "schema": SCHEMA_VERSION, "job_id": "job1", "status": status,
@@ -68,7 +70,7 @@ def _job(tmp_path: Path, *, status: str = "completed", with_folder: bool = True,
                      "method_file": method_file},
         "project": {"omics": "lipidomics", "polarity": "positive", "measure": "peak_height"},
         "run_dir": str(run_dir),
-        "primary_mztab_files": [{"path": "msdial/Height_x.mzTab", "polarity": "positive",
+        "primary_mztab_files": [{"path": f"msdial/{mztab_name}", "polarity": "positive",
                                  "measure": "peak_height", "sha256": "", "validation": {},
                                  "root": "run_dir"}],
         "artifacts": [], "sample_manifest": None, "warnings": [], "error": None,

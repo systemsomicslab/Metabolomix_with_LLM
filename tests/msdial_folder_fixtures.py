@@ -160,7 +160,7 @@ def write_matching_mztab(path, folder_spec: dict) -> Path:
         adduct = spot.get("adduct", "[M+H]+")
         if is_sme:
             refs = f"{spot_id}_1"
-            sme.append(f"SME\t{refs}\tSMF:{spot_id}\tnull\tnull\t{_last_segment(spot["matches"][0][0])}\t"
+            sme.append(f"SME\t{refs}\tSMF:{spot_id}\t{spot.get('inchikey') or 'null'}\tnull\t{_last_segment(spot["matches"][0][0])}\t"
                        f"null\tnull\t{adduct}\t{mz}\t1\t{mz}\t1\tMS-DIAL total score\t0.9")
         if _has_name(name):
             sml.append(f"SML\t{spot_id}\t{spot_id}\tnull\t{_last_segment(name)}\t{adduct}")
