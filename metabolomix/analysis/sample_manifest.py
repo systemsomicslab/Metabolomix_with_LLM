@@ -327,6 +327,9 @@ def _abundance_key(assay_id: str | None) -> str | None:
 
 def _raw_path_for_sample(ds, index: int) -> str | None:
     """i番目サンプルへ実行時に予定されたrawの絶対パス（分かれば）。"""
+    msdial_samples = getattr(ds, "msdial_samples", None)
+    if msdial_samples:  # 解析フォルダ: .mddata が持つ raw のパス（assay[N] は無い）
+        return msdial_samples[index].get("file_path") if index < len(msdial_samples) else None
     assay_ids = list(getattr(ds, "sample_assay_ids", []) or [])
     if index >= len(assay_ids):
         return None

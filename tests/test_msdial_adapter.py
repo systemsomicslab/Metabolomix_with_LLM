@@ -70,6 +70,7 @@ def test_renamed_sample_joined_by_file_id(tmp_path):         # Review Focus 2
     assert ds.sample_names[1] == "s1"
     assert ds.msdial_samples[1]["arf_file_name"] == "old_b"
     assert {r["sample_id"]: r["group"] for r in ds.sample_metadata_rows}["s1"] == "B"
+    assert any("old_b" in n and "s1" in n and "FileID 1" in n for n in ds.load_notes)
 
 
 def test_area_measure_and_bad_measure(tmp_path):
@@ -100,3 +101,52 @@ def test_msms_assigned_and_internal_standard_sentinel(tmp_path):
     assert ds.feature_metadata["0"]["msms_assigned"] is True
     assert ds.feature_metadata["1"]["msms_assigned"] is False
     assert ds.feature_metadata["0"]["internal_standard_id"] is None
+
+
+def test_feature_ids_are_arf2_master_ids(tmp_path):
+    paths = write_msdial_folder(tmp_path, spots=[{"name": "a"}, {"name": "b", "mz": 600.0}],
+                                samples=_samples())
+    write_arf2(paths["arf2"], [arf2_spot_raw(spot_id=0, name="a", mz=500.0),
+                               arf2_spot_raw(spot_id=5, name="b", mz=600.0)])
+    ds = load_msdial_folder(select_alignment(tmp_path))
+    assert ds.feature_ids == ["0", "5"]
+    assert set(ds.feature_metadata) == {"0", "5"} and ds.feature_metadata["5"]["name"] == "b"
+    assert set(ds.per_sample_mz) == {"0", "5"}
+
+
+def test_dcl_and_eic_hashed_not_in_source_files(tmp_path):
+    from metabolomix.mztab.dataset_state import _sha256
+    paths = write_msdial_folder(tmp_path, spots=[{"name": "a"}], samples=_samples())
+    dcl = tmp_path / "AlignmentResult_2026_02_01_00_00_00.dcl"
+    eic = tmp_path / "AlignmentResult_2026_02_01_00_00_00.EIC.aef"
+    dcl.write_bytes(b"dcl")
+    eic.write_bytes(b"eic")
+    ds = load_msdial_folder(select_alignment(tmp_path))
+    assert ds.artifact_sha256 == {str(dcl): _sha256(dcl), str(eic): _sha256(eic)}
+    assert set(ds.source_files) == {str(paths["arf"]), str(paths["arf2"]), str(paths["mddata"])}
+    assert ds.artifact_paths["dcl"] == [str(dcl)] and ds.artifact_paths["eic"] == [str(eic)]
+
+
+def test_explicit_sheet_joins_folder_dataset_by_source_file(tmp_path):
+    from metabolomix.analysis.sample_manifest import resolve_metadata
+    write_msdial_folder(tmp_path, spots=[{"name": "a"}], samples=_samples())
+    ds = load_msdial_folder(select_alignment(tmp_path))
+    rows = []
+    for row in reversed(resolve_metadata(ds, None)):   # シートの行順は逆
+        row = dict(row, group="Z" if row["sample_id"] == "s1" else row["group"])
+        assert row["source_file"] == ds.msdial_samples[int(row["sample_id"][1:])]["file_path"]
+        rows.append(row)
+    resolved = resolve_metadata(ds, rows)
+    assert [r["sample_id"] for r in resolved] == ["s0", "s1", "s2"]
+    assert [r["group"] for r in resolved] == ["A", "Z", "B"]
+
+
+def test_sample_display_names_are_stripped(tmp_path):
+    write_msdial_folder(tmp_path, spots=[{"name": "a"}], samples=[
+        {"file_id": 0, "name": "s0 ", "class_id": "A"},
+        {"file_id": 1, "name": "s1", "class_id": "A", "arf_name": " s1"},
+        {"file_id": 2, "name": "s2", "class_id": "B"}])
+    ds = load_msdial_folder(select_alignment(tmp_path))
+    assert ds.sample_names == ["s0", "s1", "s2"]
+    assert ds.msdial_samples[0]["arf_file_name"] == "s0 "
+    assert ds.msdial_samples[1]["arf_file_name"] == " s1"

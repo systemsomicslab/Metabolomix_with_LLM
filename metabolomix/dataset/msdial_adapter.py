@@ -70,24 +70,33 @@ def _ion_mode_majority(fields: list[dict]) -> str | None:
     return "positive" if positive > negative else "negative"
 
 
+def _clean(name: str | None) -> str | None:
+    """表示名の前後の空白を落とす（mzTab-M の MTD 値と同じ扱い）。"""
+    return name.strip() if isinstance(name, str) else name
+
+
 def _msdial_samples(file_ids: list[int], arf_names: dict[int, str | None],
                     mddata: Path | None, notes: list[str]) -> tuple[list[str], list[dict] | None]:
     """列の試料名と、.mddata 由来の試料の行（無ければ None）。名前は .mddata を優先する。"""
     if mddata is None:
         notes.append(".mddata が無いので、試料の役割・群・バッチは宣言から読めず、"
                      "ファイル名からの推定になる。")
-        return [arf_names[i] or f"Sample_{i}" for i in file_ids], None
+        return [_clean(arf_names[i]) or f"Sample_{i}" for i in file_ids], None
     by_id = {r["file_id"]: r for r in parse_analysis_file_classes(mddata)
              if isinstance(r["file_id"], int)}
     names, samples = [], []
     for file_id in file_ids:
         record = by_id.get(file_id)
         if record is None:
-            name = arf_names[file_id] or f"Sample_{file_id}"
+            name = _clean(arf_names[file_id]) or f"Sample_{file_id}"
             notes.append(f".mddata に FileID {file_id}（{name}）が無いので、その試料の役割は sample とした。")
             record = {}
         else:
-            name = record["file_name"] or arf_names[file_id] or f"Sample_{file_id}"
+            name = _clean(record["file_name"]) or _clean(arf_names[file_id]) or f"Sample_{file_id}"
+            if arf_names[file_id] is not None and arf_names[file_id] != record["file_name"]:
+                notes.append(f"FileID {file_id}: .mddata の名前 {record['file_name']!r} と "
+                             f".arf の名前 {arf_names[file_id]!r} が違う。FileID で結び、"
+                             ".mddata の名前を使った。")
         file_type = record.get("analysis_file_type")
         batch = record.get("analysis_batch")
         names.append(name)
@@ -134,8 +143,10 @@ def load_msdial_folder(selection: AlignmentSelection, *, measure: str = "peak_he
     detected = np.zeros((n_spots, n_samples), dtype=bool)
     per_sample_mz: dict[str, dict[str, float]] = {}
     feature_ids, metadata = [], {}
+    # 特徴 ID は .arf2 の MasterID（Key0）。mzTab-M の SMF_ID と同じ番号空間で、
+    # イオンモビリティでは連番にならない。
     for i, (cells, spot) in enumerate(zip(cells_by_spot, fields)):
-        fid = str(i)
+        fid = str(spot["master_id"])
         feature_ids.append(fid)
         per_sample_mz[fid] = {}
         for j, file_id in enumerate(file_ids):
@@ -165,9 +176,10 @@ def load_msdial_folder(selection: AlignmentSelection, *, measure: str = "peak_he
 
     for path in (selection.arf, selection.arf2, selection.mddata):
         if path is not None:
-            digest = _sha256(path)
-            ds.source_files[str(path)] = digest
-            ds.artifact_sha256[str(path)] = digest
+            ds.source_files[str(path)] = _sha256(path)
+    for path in (selection.dcl, selection.eic):
+        if path is not None:
+            ds.artifact_sha256[str(path)] = _sha256(path)
     ds.artifact_paths = {
         "dcl": [str(selection.dcl)] if selection.dcl else [],
         "eic": [str(selection.eic)] if selection.eic else [],
