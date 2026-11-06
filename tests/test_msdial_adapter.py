@@ -152,12 +152,15 @@ def test_sample_display_names_are_stripped(tmp_path):
     assert ds.msdial_samples[1]["arf_file_name"] == " s1"
 
 
+BACKSLASH_PATH = chr(92).join(["D:", "lab", "share", "lab.msp"])
+
+
 def test_annotator_id_keeps_only_the_file_name(tmp_path):
     from metabolomix.dataset.library_memory import is_lbm_annotator
     from tests.curation_fixtures import match_result
     write_msdial_folder(tmp_path, spots=[
         {"name": "PC 34:1", "matches": [match_result({0: "PC 34:1", 14: 0, 27: "D:/x/some.lbm2"})]},
-        {"name": "PC 36:2", "matches": [match_result({0: "PC 36:2", 14: 0, 27: "\\host\share\lab.msp"})]},
+        {"name": "PC 36:2", "matches": [match_result({0: "PC 36:2", 14: 0, 27: BACKSLASH_PATH})]},
         {"name": "PC 38:4", "matches": [match_result({0: "PC 38:4", 14: 0, 27: "LabMsp"})]},
     ], samples=_samples())
     ds = load_msdial_folder(select_alignment(tmp_path))
