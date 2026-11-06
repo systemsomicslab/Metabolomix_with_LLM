@@ -7,6 +7,7 @@ GOSLIN による脂質名正規化、同梱表による RefMet/LIPID MAPS ID 付
 from __future__ import annotations
 
 import re
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -36,6 +37,24 @@ def _clean_msdial_name(name: str):
     return s, stripped
 
 
+#: pygoslin のパーサは構築が重い（1 回 0.1 秒前後。文法 6 本）ので、モジュールで 1 つ遅延生成して
+#: 使い回す。`LipidParser` は parse のたびに自分の状態を書き換えるので、ロックで排他する
+#: （ハンドルの読み込みはワーカースレッドで走る。`curation/trend.py` と同じ流儀）。
+_SHARED_PARSER = None
+_PARSER_LOCK = threading.Lock()
+
+
+def _parse_lipid(clean: str):
+    """共有パーサで 1 つ解析する（pygoslin が無ければ ImportError、解析不能なら例外）。"""
+    global _SHARED_PARSER
+    from pygoslin.parser.Parser import LipidParser
+
+    with _PARSER_LOCK:
+        if _SHARED_PARSER is None:
+            _SHARED_PARSER = LipidParser()
+        return _SHARED_PARSER.parse(clean)
+
+
 def normalize_lipid_name(name: str) -> dict:
     """脂質ショートハンド名を GOSLIN で正規化する（オフライン）。
 
@@ -54,12 +73,12 @@ def normalize_lipid_name(name: str) -> dict:
         result["error"] = "empty after stripping qualifier"
         return result
     try:
-        from pygoslin.parser.Parser import LipidParser
+        import pygoslin.parser.Parser  # noqa: F401
     except Exception as exc:  # pygoslin 未導入
         result["error"] = f"pygoslin unavailable: {exc}"
         return result
     try:
-        lipid = LipidParser().parse(clean)
+        lipid = _parse_lipid(clean)
         result["parse_ok"] = True
         result["normalized"] = lipid.get_lipid_string()
         # 構造レベル（species/molecular species/sn-position 等）。版差に強い経路を優先。
@@ -79,9 +98,6 @@ def normalize_lipid_name(name: str) -> dict:
     return result
 
 
-_SPECIES_PARSER = None
-
-
 @lru_cache(maxsize=4096)
 def lipid_species_of(name) -> str | None:
     """脂質名を GOSLIN の種のレベル（``LipidLevel.SPECIES``）の文字列に直す（照合の鍵）。
@@ -91,7 +107,6 @@ def lipid_species_of(name) -> str | None:
     ``PC O-34:2`` になる。付加体の表記は落とす。限定子接頭辞と ``|`` は
     `normalize_lipid_name` と同じく除く。読めない・種より粗い（クラスだけ）名前は None。
     """
-    global _SPECIES_PARSER
     if not isinstance(name, str) or not name.strip():
         return None
     clean, _ = _clean_msdial_name(name)
@@ -99,13 +114,11 @@ def lipid_species_of(name) -> str | None:
         return None
     try:
         from pygoslin.domain.LipidLevel import LipidLevel
-        from pygoslin.parser.Parser import LipidParser
+        import pygoslin.parser.Parser  # noqa: F401
     except Exception:  # pygoslin 未導入
         return None
     try:
-        if _SPECIES_PARSER is None:
-            _SPECIES_PARSER = LipidParser()
-        species = _SPECIES_PARSER.parse(clean).lipid
+        species = _parse_lipid(clean).lipid
         if species.info.level.value < LipidLevel.SPECIES.value:
             return None
         return species.get_lipid_string(LipidLevel.SPECIES)

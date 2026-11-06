@@ -138,3 +138,36 @@ class TestIdentityBlock(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------- GOSLIN のパーサを使い回す（B-1 実データ照合） ----------
+
+def test_goslin_parser_is_built_once_and_output_is_unchanged(monkeypatch):
+    import pygoslin.parser.Parser as goslin
+
+    from metabolomix.msdial import lipid_identity as li
+
+    names = ["PC 34:1", "PE 16:0_18:1", "no MS2: FA 5:0", "Cer 24:1;O2|Cer 12:0;O2/12:1"]
+    real = goslin.LipidParser
+    # 名前ごとに新しいパーサを作った場合の答え（基準）。
+    monkeypatch.setattr(li, "_SHARED_PARSER", None)
+    li.lipid_species_of.cache_clear()
+    expected_norm = [li.normalize_lipid_name(n) for n in names]
+    expected_species = [li.lipid_species_of(n) for n in names]
+
+    built = []
+
+    class CountingParser(real):
+        def __init__(self, *args, **kwargs):
+            built.append(1)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(goslin, "LipidParser", CountingParser)
+    monkeypatch.setattr(li, "_SHARED_PARSER", None)
+    li.lipid_species_of.cache_clear()
+    for _ in range(3):
+        assert [li.normalize_lipid_name(n) for n in names] == expected_norm
+        li.lipid_species_of.cache_clear()
+        assert [li.lipid_species_of(n) for n in names] == expected_species
+    assert len(built) == 1
+    li.lipid_species_of.cache_clear()
