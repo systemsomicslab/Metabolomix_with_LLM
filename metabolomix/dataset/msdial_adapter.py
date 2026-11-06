@@ -14,7 +14,11 @@ from metabolomix.analysis import sample_manifest
 from metabolomix.arf import reader as arf_reader
 from metabolomix.arf2.spot_fields import load_spot_fields
 from metabolomix.core.atomic_io import DomainError
+from metabolomix.curation.apply import flags_for_arf2
+from metabolomix.curation.flags import FlagFileError
+from metabolomix.dataset import msdial_identity
 from metabolomix.dataset.alignment_files import AlignmentSelection
+from metabolomix.msdial.tags import parse_tag_file
 from metabolomix.msdial.classes import parse_analysis_file_classes
 from metabolomix.mztab import evidence
 from metabolomix.mztab.dataset_state import DatasetState, _sha256
@@ -111,6 +115,43 @@ def _msdial_samples(file_ids: list[int], arf_names: dict[int, str | None],
     return names, samples
 
 
+def _fill_identity(ds, fid: str, spot: dict, meta: dict, cache) -> None:
+    rep = spot["representative"]
+    msms = meta["msms_assigned"]
+    meta.update({
+        "inchikey": spot["inchikey"] or (rep or {}).get("inchikey"), "inchikey_source": "arf2",
+        "smiles": spot["smiles"], "inchi": None,
+        "annotator_id": (rep or {}).get("annotator_id"),
+        "annotation_source": msdial_identity.annotation_source(spot),
+        "spectrum_matched": None if rep is None else rep.get("is_spectrum_match"),
+        "total_score": (rep or {}).get("total_score"),
+        "identity": cache.columns(spot, msms_assigned=msms),
+    })
+    if msdial_identity.is_sme_like(spot, msms_assigned=msms):
+        ds.feature_candidates[fid] = [msdial_identity.sme_candidate(spot, fid)]
+    annotation = msdial_identity.sml_annotation(spot, msms_assigned=msms)
+    if annotation is not None:
+        ds.feature_annotations[fid] = annotation
+
+
+def _load_tags(ds, selection: AlignmentSelection, fields: list[dict]) -> None:
+    if selection.tags is None:
+        return
+    parsed = parse_tag_file(selection.tags)
+    for spot in fields:
+        tag_ids = parsed["peaks"].get(spot["master_id"])
+        if tag_ids:
+            ds.feature_tags[str(spot["master_id"])] = [
+                parsed["definitions"].get(t, str(t)) for t in sorted(tag_ids)]
+
+
+def _load_curation(ds, selection: AlignmentSelection) -> None:
+    try:
+        ds.curation_flags = flags_for_arf2(selection.arf2)
+    except FlagFileError as exc:
+        ds.load_notes.append(f"キュレーションのフラグを読めなかったので無視した: {exc}")
+
+
 def load_msdial_folder(selection: AlignmentSelection, *, measure: str = "peak_height") -> DatasetState:
     if measure not in _MEASURES:
         raise DomainError(
@@ -143,6 +184,7 @@ def load_msdial_folder(selection: AlignmentSelection, *, measure: str = "peak_he
     detected = np.zeros((n_spots, n_samples), dtype=bool)
     per_sample_mz: dict[str, dict[str, float]] = {}
     feature_ids, metadata = [], {}
+    identity_cache = msdial_identity.IdentityCache()
     # 特徴 ID は .arf2 の MasterID（Key0）。mzTab-M の SMF_ID と同じ番号空間で、
     # イオンモビリティでは連番にならない。
     for i, (cells, spot) in enumerate(zip(cells_by_spot, fields)):
@@ -168,11 +210,14 @@ def load_msdial_folder(selection: AlignmentSelection, *, measure: str = "peak_he
             "internal_standard_id": None if istd is None or istd < 0 else istd,
             "msms_assigned": any(c.get("is_msms") for c in cells.values()),
         }
+        _fill_identity(ds, fid, spot, metadata[fid], identity_cache)
     ds.feature_ids = feature_ids
     ds.feature_matrix = matrix
     ds.detected_mask = detected
     ds.per_sample_mz = per_sample_mz
     ds.feature_metadata = metadata
+    _load_tags(ds, selection, fields)
+    _load_curation(ds, selection)
 
     for path in (selection.arf, selection.arf2, selection.mddata):
         if path is not None:
