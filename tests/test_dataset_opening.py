@@ -551,3 +551,59 @@ def test_dataset_handle_open_defaults_to_the_folder_for_job_and_pipeline(tmp_pat
     assert out["status"] == "success", out
     assert out["adapter"] == "msdial_folder"
     assert out["arf"] == f"{_STEM}_PeakProperties.arf"
+
+
+# ---------- 修正 2 回目 ----------
+
+def test_job_folder_cache_reloads_when_the_mztab_changes(tmp_path):
+    """解析フォルダの経路も正準 mzTab-M を読んで `.arf` を選ぶので、mzTab-M が変われば読み直す。"""
+    job = _job(tmp_path)
+    open_dataset(job_path=str(job))
+    assert open_dataset(job_path=str(job)).reused_base is True
+    write_matching_mztab(job.parent / "msdial" / "Height_x.mzTab", _other_spec())
+    err = _code(lambda: open_dataset(job_path=str(job)))
+    assert err.code == "ALIGNMENT_NOT_FOUND"
+
+
+def test_ambiguous_hint_names_directory_only_with_its_caveat(tmp_path):
+    """`directory` で開くとジョブの門を通らない。完了したジョブではその注意つきで案内する。"""
+    job = _job(tmp_path)
+    write_msdial_folder(job.parent / "msdial", **_spec(), stem="AlignmentResult_2026_03_01_00_00_00")
+    err = _code(lambda: open_dataset(job_path=str(job)))
+    assert err.code == "ALIGNMENT_AMBIGUOUS"
+    assert "directory" in err.message and 'source="mztab"' in err.message
+    assert "裏取り" in err.message and "探索専用" in err.message
+
+
+def test_ambiguous_hint_for_an_incomplete_job_names_only_mztab(tmp_path):
+    """未完了のジョブで `directory` を案内すると、探索専用の印が外れた読み方を勧めてしまう。"""
+    job = _job(tmp_path, status="partial")
+    write_msdial_folder(job.parent / "msdial", **_spec(), stem="AlignmentResult_2026_03_01_00_00_00")
+    err = _code(lambda: open_dataset(job_path=str(job), allow_incomplete=True))
+    assert err.code == "ALIGNMENT_AMBIGUOUS"
+    assert 'source="mztab"' in err.message
+    assert "directory" not in err.message
+
+
+def test_mztab_path_with_another_extension_still_tracks_arf_candidates(tmp_path):
+    """mzTab-M の読み取りは拡張子を問わない。入力のパスから候補を数えるので、隣に後から
+    置かれた `.arf` で読み直す（拡張子で mzTab-M を探すと、ここで候補を見失う）。"""
+    folder = tmp_path / "direct"
+    mztab = write_matching_mztab(folder / "x.mztab.tsv", _spec())
+    first = open_dataset(mztab_path=str(mztab))
+    assert first.dataset.detected_mask is None
+    write_msdial_folder(folder, **_spec())
+    again = open_dataset(mztab_path=str(mztab))
+    assert again.reused_base is False
+    assert again.dataset.detected_mask is not None
+
+
+def test_broken_mztab_on_the_folder_route_explains_the_way_out(tmp_path):
+    """ジョブの mzTab-M が壊れていると、解析フォルダの経路はバッチを選べない。code は変えずに、
+    ジョブの検査なしで解析フォルダを開く道（directory）を案内する。"""
+    job = _job(tmp_path)
+    (job.parent / "msdial" / "Height_x.mzTab").write_text(
+        "MTD\tmzTab-version\t2.0.0-M\n", encoding="utf-8")
+    err = _code(lambda: open_dataset(job_path=str(job)))
+    assert err.code == "MZTAB_STRUCTURE_INVALID"
+    assert "directory" in err.message and "msdial" in err.message

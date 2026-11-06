@@ -12,8 +12,8 @@ gap-fill）は `docs/output_format/mztab.md`（`lipidmix://docs/output-format/mz
 `mztab_path` は mzTab-M、`job_path` / `pipeline_path` は既定で解析フォルダ・`source="mztab"`
 で mzTab-M。読み込み済みの基はハンドルの登録簿に覚え（キーは入口・アダプタ・measure・
 allow_incomplete・絶対パス）、読み込みが読んだファイルと探したファイル（`_signature()`:
-入力・`source_files`・解析フォルダの付随ファイルと `.arf` / `*_Loaded.*.dbs` の一覧・今の
-`arf_candidates()`・検出状態を取り込んだ `.arf`・ジョブの記録と実効メソッドと MSP と
+入力・`source_files`・解析フォルダの付随ファイルと `.arf` / `*_Loaded.*.dbs` の一覧・正準
+mzTab-M と今の `arf_candidates()`・検出状態を取り込んだ `.arf`・ジョブの記録と実効メソッドと MSP と
 終了証跡・`pipeline-run.json`）の size と更新時刻が同じなら読み直さずに複製を返す。
 MCP ツールは戻ってきた DatasetState を成功時だけ `session.dataset` へ置く。pipeline の
 ワーカーは `loading.load_dataset_state` を直に呼び、自分が持つ DatasetState として使う。
@@ -63,7 +63,9 @@ mzTab-M の evidence と同じ候補（`arf_candidates()`。pipeline はどれ�
 取り込むときと同じ検証（`matching_arfs()` → `load_arf_evidence()` → `build_evidence()`。
 特徴数・m/z・試料名）を通ったちょうど 1 本。通るものが無ければ `ALIGNMENT_NOT_FOUND`、
 2 本以上なら `ALIGNMENT_AMBIGUOUS`（どちらも候補のファイル名を `details.candidates` に載せ、
-`source="mztab"` を案内し、mzTab-M へ黙って切り替えない）。ジョブが記録した付随
+`source="mztab"` を案内し、mzTab-M へ黙って切り替えない。`ALIGNMENT_AMBIGUOUS` は、完了した
+ジョブでだけ「ジョブの検査を通らない」注意つきで `directory` も案内する）。ジョブの mzTab-M が
+壊れていれば code はそのまま（`MZTAB_STRUCTURE_INVALID`）で、`directory` で開く道を案内する。ジョブが記録した付随
 アーティファクト（`job_artifact_paths()`）は mzTab-M のアダプタと同じく `artifact_paths` に載せる。
 pipeline の run を解析フォルダで読むときに run から引き継ぐのは解決済みの試料対応表だけで、
 解析行列・feature binding・差次的結果は `source="mztab"`（下の pipeline_path 経路）だけが載せる。

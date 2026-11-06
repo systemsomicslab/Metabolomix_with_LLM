@@ -46,6 +46,10 @@ _MZTAB_MEASURE = "peak_height"
 #: 解析フォルダが見つからないときの案内。
 _MZTAB_HINT = ("mzTab-M のアダプタで読むなら source=\"mztab\" を指定してください"
                "（解析フォルダが決まらないときに mzTab-M へ黙って切り替えることはしない）。")
+#: ジョブの正準 mzTab-M を読めず、解析フォルダの経路がバッチを選べないときの案内。
+_BROKEN_MZTAB_HINT = ("解析フォルダの経路は、どのバッチの .arf を読むかを正しい mzTab-M との照合で"
+                      "決める。ジョブの検査（出所の裏取り・探索専用の印）なしで解析フォルダを"
+                      "開くなら directory=<run の msdial フォルダ> を渡してください。")
 
 
 @dataclass
@@ -185,6 +189,8 @@ def _dependencies(base: OpenedDataset) -> set[str]:
     if base.mztab_path:
         from metabolomix.mztab import evidence
 
+        # 正準 mzTab-M そのもの（解析フォルダの経路も `.arf` の照合と出所の裏取りに読む）。
+        paths.add(str(base.mztab_path))
         paths.update(str(p) for p in evidence.arf_candidates(base.mztab_path,
                                                              ds.artifact_paths))
     if base.selection is not None:
@@ -267,7 +273,11 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
     mztab_path = None
     if adapter == "mztab":
         ds = _load(kind, raw, allow_incomplete)
-        mztab_path = next((p for p in ds.source_files if p.lower().endswith(".mztab")), None)
+        # 直接指定なら入力そのもの（mzTab-M の読み取りは拡張子を問わない）。job / pipeline は
+        # 読み込んだ mzTab-M（この経路の source_files は mzTab-M だけ）。
+        mztab_path = path if kind == "mztab_path" else next(
+            (p for p in ds.source_files if p.lower().endswith(".mztab")),
+            next(iter(ds.source_files), None))
     elif kind == "directory":
         from metabolomix.dataset.msdial_adapter import load_msdial_folder
 
@@ -358,7 +368,13 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]], pipeline_root: Pat
 
     def verify(paths: list[Path]) -> tuple[list[Path], dict[str, str]]:
         if not axes:
-            axes.extend(evidence.join_axes(loading.read_mztab(gate.mztab_path)))
+            try:
+                state = loading.read_mztab(gate.mztab_path)
+            except DomainError as exc:
+                message = exc.message if exc.message.endswith("。") else f"{exc.message}。"
+                raise DomainError(exc.code, f"{message}{_BROKEN_MZTAB_HINT}",
+                                  exc.details) from exc
+            axes.extend(evidence.join_axes(state))
         return evidence.matching_arfs(paths, feature_mz=axes[0], sample_names=axes[1])
 
     candidates = evidence.arf_candidates(gate.mztab_path, artifact_paths)
@@ -380,11 +396,15 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]], pipeline_root: Pat
     if len(passed) == 1:
         return passed[0]
     if passed:
+        # directory で開くとジョブの門を通らない。未完了のジョブでそれを勧めると、探索専用の
+        # 印が外れたまま比較まで進めてしまうので、そのときは mzTab-M だけを案内する。
+        way_out = _MZTAB_HINT if gate.exploratory_only else (
+            "どれを読むかは directory に .arf を直接渡して決められるが、その読み方はジョブの検査"
+            "（出所の裏取り・探索専用の印）を通らない。" + _MZTAB_HINT)
         raise DomainError(
             "ALIGNMENT_AMBIGUOUS",
             f"ジョブの mzTab-M（{gate.mztab_path.name}）と同じアラインメントだと検証できた .arf が"
-            f"複数あります（{', '.join(p.name for p in passed)}）。どれを読むかは directory に"
-            f" .arf を直接渡して決めてください。{_MZTAB_HINT}",
+            f"複数あります（{', '.join(p.name for p in passed)}）。{way_out}",
             {**details, "matching": [p.name for p in passed]})
     if not candidates:
         where = (f"ジョブの mzTab-M（{gate.mztab_path.name}）の隣"
