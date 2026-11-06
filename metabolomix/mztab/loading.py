@@ -220,19 +220,28 @@ def _load_from_job(job_path: Path, *, allow_incomplete: bool):
     return ds
 
 
-def effective_method_msp(job) -> Path | None:
-    """ジョブの実効メソッドが宣言する MSP のパス。宣言が無い・メソッドを読めないなら None。
-
-    ファイルの存在は見ない（読めるかどうかは呼び出し側が決める）。
-    """
+def effective_method_keys(job) -> tuple[Path, dict[str, str]] | None:
+    """ジョブの実効メソッドのパスと `key: value`（小文字キー）。メソッドが無い・読めないなら None。"""
     method_text = (getattr(job, "method_file", "") or "").strip()
     if not method_text:
         return None
     method = Path(method_text)
     try:
-        keys = read_method_keys(method)
+        return method, read_method_keys(method)
     except (OSError, DomainError):
         return None
+
+
+def effective_method_msp(job, method_keys=None) -> Path | None:
+    """ジョブの実効メソッドが宣言する MSP のパス。宣言が無い・メソッドを読めないなら None。
+
+    ファイルの存在は見ない（読めるかどうかは呼び出し側が決める）。
+    `method_keys` は `effective_method_keys(job)` の結果（呼び出し側が持っていれば渡す）。
+    """
+    loaded = method_keys if method_keys is not None else effective_method_keys(job)
+    if loaded is None:
+        return None
+    method, keys = loaded
     # Console と同じ順: 注釈器設定表から MSP が 1 件でも読めれば `Msp file path` は使わない
     # （library_mode="msp_then_lbm" は `Msp file path` を空にして設定表で入れる。v8）。
     msp = _msp_from_annotator_table(keys, method)

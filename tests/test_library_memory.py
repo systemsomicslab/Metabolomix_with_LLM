@@ -223,3 +223,79 @@ def test_is_lbm_annotator_follows_the_console_key_rule():
     assert is_lbm_annotator("LabMsp") is None
     assert is_lbm_annotator(None) is None
     assert is_lbm_annotator("") is None
+
+
+# ---------- 修正ラウンド 1 ----------
+
+def test_job_with_a_missing_declared_msp_is_mismatch(tmp_path):
+    rec = remember_from_job(_job(tmp_path, f"Msp file path: {tmp_path / 'gone.msp'}\n"))
+    assert rec["status"] == "mismatch" and rec["file"] == "gone.msp" and rec["sha256"] is None
+
+
+def test_job_with_a_missing_declared_lbm_is_mismatch(tmp_path):
+    rec = remember_from_job(_job(tmp_path, f"Msp file path: \nLbm file path: {tmp_path / 'gone.lbm2'}\n"))
+    assert rec["status"] == "mismatch" and rec["kind"] == "lbm"
+
+
+def test_job_declaring_both_msp_and_lbm_has_lbm_also(tmp_path):
+    msp = tmp_path / "lab.msp"
+    msp.write_text("NAME: x\n", encoding="ascii")
+    lbm = tmp_path / "lab.lbm2"
+    lbm.write_text("x", encoding="ascii")
+    rec = remember_from_job(_job(tmp_path, f"Msp file path: {msp}\nLbm file path: {lbm}\n"))
+    assert rec["status"] == "known" and rec["kind"] == "msp" and rec["lbm_also"] is True
+
+
+def test_job_record_paths_are_absolute(tmp_path, monkeypatch):
+    (tmp_path / "lab.msp").write_text("NAME: x\n", encoding="ascii")
+    job_path = _job(tmp_path, "Msp file path: lab.msp\n")  # メソッドの親基準の相対
+    rec = remember_from_job(job_path)
+    assert rec["status"] == "known" and Path(rec["path"]).is_absolute()
+
+
+def test_run_relative_path_is_resolved_to_absolute(tmp_path):
+    root = _run(tmp_path, library_mode="msp_only", msp={
+        "path": "inputs/lab.msp", "file": "lab.msp", "sha256": None, "source": "config_file"})
+    (root / "inputs").mkdir()
+    msp = root / "inputs" / "lab.msp"
+    msp.write_text("NAME: x\n", encoding="ascii")
+    rec = remember_from_run(root)
+    assert Path(rec["path"]).is_absolute() and Path(rec["path"]) == msp.resolve()
+    assert rec["status"] == "known"
+
+
+def test_lbm_only_run_with_mismatched_sha_is_mismatch(tmp_path):
+    lbm = tmp_path / "lab.lbm2"
+    lbm.write_text("x", encoding="ascii")
+    rec = remember_from_run(_run(
+        tmp_path, library_mode="auto",
+        msp={"path": None, "file": None, "sha256": None, "source": "not_used"},
+        lbm={"path": str(lbm), "sha256": "0" * 64}))
+    assert rec["status"] == "mismatch" and rec["kind"] == "lbm"
+
+
+def test_malformed_run_inputs_are_treated_as_absent(tmp_path):
+    rec = remember_from_run(_run(tmp_path, library_mode="auto", msp="oops", lbm=["x"]))
+    assert rec["status"] == "unknown"
+
+
+def test_folder_with_only_lbm_dbs_records_file_origin_and_absolute_path(tmp_path):
+    _folder(tmp_path)
+    _dbs(tmp_path / "Proj_Loaded.lbm2.dbs")
+    rec = remember_from_folder(select_alignment(tmp_path))
+    assert rec["file"] == "Proj_Loaded.lbm2.dbs" and rec["origin"] == "loaded_dbs"
+    assert Path(rec["path"]).is_absolute()
+
+
+def test_folder_with_several_lbm_dbs_is_lbm_only_with_candidates(tmp_path):
+    _folder(tmp_path)
+    _dbs(tmp_path / "A_Loaded.lbm2.dbs")
+    _dbs(tmp_path / "B_Loaded.lbm3.dbs")
+    rec = remember_from_folder(select_alignment(tmp_path))
+    assert rec["status"] == "lbm_only" and rec["kind"] == "lbm"
+    assert rec["file"] is None and rec["path"] is None
+    assert rec["candidates"] == ["A_Loaded.lbm2.dbs", "B_Loaded.lbm3.dbs"]
+
+
+def test_is_lbm_annotator_works_on_the_file_name_part():
+    assert is_lbm_annotator("some.lbm2") is True

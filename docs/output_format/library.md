@@ -425,19 +425,24 @@ TSV の末尾へ 2 列を足し、payload に 3 つの欄を足す。`detail` �
 | `status` | `known`（1 本に決まった）/ `unknown`（決められない。`candidates` に候補のファイル名）/ `mismatch`（記録した sha256 と今のファイルが違う、またはファイルが無い）/ `lbm_only`（LBM だけで MSP は使っていない） |
 | `kind` | `dbs`（解析フォルダの `*_Loaded.*.dbs`）/ `msp` / `lbm` / 無し |
 | `origin` | `loaded_dbs`（フォルダ）/ `effective_method`（ジョブの実効メソッド。sha256 は読んだ時点で測る）/ `run_inputs`（pipeline の run が固定した入力。固定時の sha256 と今を突き合わせる）/ 無し |
-| `lbm_also` | MSP に加えて LBM も照合に使った（`library_mode="msp_then_lbm"`、またはフォルダに LBM の dbs もある） |
+| `lbm_also` | MSP に加えて LBM も照合に使った（`library_mode="msp_then_lbm"`、フォルダに LBM の dbs もある、またはジョブの実効メソッドが MSP と LBM の両方を宣言している） |
 
 - 解析フォルダに非 LBM の `*_Loaded.*.dbs` が 2 本以上あると `unknown`（どちらが代表になったか
   フォルダからは決められない）。LBM の dbs（`.lbm2.dbs` など）は数えず、`lbm_also` にする。
+- LBM の dbs だけが 2 本以上あるときは `lbm_only` で `file` / `path` は無し、`candidates` に LBM のファイル名。
+- ジョブの実効メソッドが宣言するファイルが無い・読めないときは `mismatch`。
 - mzTab-M を直接読んだときは常に `unknown`（mzTab-M は使ったライブラリを持たない）。
 
 #### LBM が代表になった特徴の印（`is_lbm_annotator`）
 
-`.arf2` の代表の `annotator_id` が、LBM 由来かどうかの手がかりになる。Console は LBM の注釈器キー
-に LBM ファイルのパスを使い（末尾が `.lbm` + 数字）、MSP の注釈器キーは利用者の付けた名前
-（例: 設定表の `annotator_id`）になる。実データ（`msp_then_lbm` の run）で、MSP 由来の代表は名前の ID、
+`.arf2` の代表の `annotator_id` が、LBM 由来かどうかの手がかりになる。Console の注釈器キーは
+ライブラリのファイルのパスになりうる: LBM は常にそのパス（末尾が `.lbm` + 数字）、MSP は
+`library_mode="msp_only"` のとき `Msp file path` のパス、`msp_then_lbm` では設定表の名前
+（pipeline の既定は `LabMsp`）。実データ（`msp_then_lbm` の run）では、MSP 由来の代表は名前の ID、
 LBM 由来の代表はパスの ID だった。
 
-- 末尾が `.lbm` + 数字なら **True**（LBM 由来）。それ以外は **None**（判定できない）で、False は返さない。
-  GUI の注釈器 ID は自由名なので、規則に合わないことは MSP 由来の証拠にならない。
-- **注釈器 ID は LBM のフルパスを含みうる**。ツールの戻り値に `annotator_id` を出さず、印（真偽）だけを出す。
+- 末尾（ファイル名の部分）が `.lbm` + 数字なら **True**（LBM 由来）。それ以外は **None**（判定できない）で、
+  False は返さない。GUI の注釈器 ID は自由名なので、規則に合わないことは MSP 由来の証拠にならない。
+- **注釈器 ID は、どちらのライブラリのフルパスも含みうる**（`msp_only` の MSP、LBM は常に）。
+  ツールの戻り値に `annotator_id` の生の値を出さない。出してよいのは導出した真偽かファイル名だけ。
+  データセットの `feature_metadata[].annotator_id` はファイル名の部分だけを持つ。

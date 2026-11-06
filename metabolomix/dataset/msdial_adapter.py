@@ -7,7 +7,7 @@ from __future__ import annotations
 import io
 import math
 import xml.etree.ElementTree as ET
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import numpy as np
 
@@ -116,6 +116,13 @@ def _msdial_samples(file_ids: list[int], arf_names: dict[int, str | None],
     return names, samples
 
 
+def _annotator_file_name(annotator_id):
+    """注釈器 ID はライブラリのフルパスのことがある（研究室ライブラリの置き場所）。名前だけ残す。"""
+    if not annotator_id:
+        return annotator_id
+    return PureWindowsPath(str(annotator_id)).name or annotator_id
+
+
 def _fill_identity(ds, fid: str, spot: dict, meta: dict, cache) -> None:
     rep = spot["representative"]
     msms = meta["msms_assigned"]
@@ -123,7 +130,7 @@ def _fill_identity(ds, fid: str, spot: dict, meta: dict, cache) -> None:
     meta.update({
         "inchikey": inchikey, "inchikey_source": "arf2" if inchikey else None,
         "smiles": spot["smiles"], "inchi": None,
-        "annotator_id": (rep or {}).get("annotator_id"),
+        "annotator_id": _annotator_file_name((rep or {}).get("annotator_id")),
         "annotation_source": msdial_identity.annotation_source(spot),
         "spectrum_matched": msdial_identity.spectrum_matched(spot),
         "total_score": (rep or {}).get("total_score"),

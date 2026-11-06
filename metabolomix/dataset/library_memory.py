@@ -10,10 +10,9 @@ status: `known`（1 本に決まった）/ `unknown`（決められない）/ `m
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
-from metabolomix.console.method_file import LBM_KEY, read_method_keys
-from metabolomix.core.atomic_io import DomainError
+from metabolomix.console.method_file import LBM_KEY
 from metabolomix.handoff.schema import sha256_file
 
 # 解析フォルダの `*_Loaded.<kind>.dbs` のうち LBM のもの（`.lbm2.dbs` など）。
@@ -51,40 +50,46 @@ def remember_from_folder(selection) -> dict:
                        sha256=_measure(path), origin="loaded_dbs", lbm_also=bool(lbm))
     if len(other) >= 2:
         return _record(candidates=[p.name for p in other])
-    if lbm:
+    if len(lbm) == 1:
         path = lbm[0]
         return _record(status="lbm_only", kind="lbm", file=path.name, path=str(path.resolve()),
                        sha256=_measure(path), origin="loaded_dbs")
+    if lbm:
+        return _record(status="lbm_only", kind="lbm", origin="loaded_dbs",
+                       candidates=[p.name for p in lbm])
     return _record()
 
 
 def remember_from_job(job_path: Path) -> dict:
-    """ジョブの実効メソッドが宣言するライブラリから覚える（sha256 は今測る）。"""
+    """ジョブの実効メソッドが宣言するライブラリから覚える（sha256 は今測る）。
+
+    宣言のファイルが無い・読めないなら `mismatch`（同じ読み込みで MSP 表は `unavailable` になる）。
+    """
     from metabolomix.handoff.schema import AnalysisJob
-    from metabolomix.mztab.loading import effective_method_msp
+    from metabolomix.mztab.loading import effective_method_keys, effective_method_msp
 
     job = AnalysisJob.load(Path(job_path))
-    msp = effective_method_msp(job)
+    loaded = effective_method_keys(job)
+    msp = effective_method_msp(job, loaded)
+    lbm = _declared_lbm(loaded)
     if msp is not None:
-        return _record(status="known", kind="msp", file=msp.name, path=str(msp),
-                       sha256=_measure(msp), origin="effective_method",
-                       lbm_also=_declared_lbm(job) is not None)
-    lbm = _declared_lbm(job)
-    if lbm is not None:
-        return _record(status="lbm_only", kind="lbm", file=lbm.name, path=str(lbm),
-                       sha256=_measure(lbm), origin="effective_method")
-    return _record()
+        rec = _record(status="known", kind="msp", file=msp.name, path=str(msp.resolve()),
+                      origin="effective_method", lbm_also=lbm is not None)
+    elif lbm is not None:
+        rec = _record(status="lbm_only", kind="lbm", file=lbm.name, path=str(lbm.resolve()),
+                      origin="effective_method")
+    else:
+        return _record()
+    rec["sha256"] = _measure(Path(rec["path"]))
+    if rec["sha256"] is None:
+        rec["status"] = "mismatch"
+    return rec
 
 
-def _declared_lbm(job) -> Path | None:
-    method_text = (getattr(job, "method_file", "") or "").strip()
-    if not method_text:
+def _declared_lbm(loaded) -> Path | None:
+    if loaded is None:
         return None
-    method = Path(method_text)
-    try:
-        keys = read_method_keys(method)
-    except (OSError, DomainError):
-        return None
+    method, keys = loaded
     declared = (keys.get(LBM_KEY.lower()) or "").strip()
     if not declared:
         return None
@@ -94,7 +99,7 @@ def _declared_lbm(job) -> Path | None:
 
 def _abs_in_run(value, pipeline_root: Path) -> Path:
     path = Path(value)
-    return path if path.is_absolute() else pipeline_root / path
+    return (path if path.is_absolute() else pipeline_root / path).resolve()
 
 
 def remember_from_run(pipeline_root: Path) -> dict:
@@ -105,9 +110,10 @@ def remember_from_run(pipeline_root: Path) -> dict:
     from metabolomix.pipeline.store import load_run
 
     pipeline_root = Path(pipeline_root)
-    inputs = load_run(pipeline_root).get("inputs") or {}
-    msp = inputs.get("msp") or {}
-    lbm = inputs.get("lbm") or {}
+    inputs = load_run(pipeline_root).get("inputs")
+    inputs = inputs if isinstance(inputs, dict) else {}
+    msp = inputs.get("msp") if isinstance(inputs.get("msp"), dict) else {}
+    lbm = inputs.get("lbm") if isinstance(inputs.get("lbm"), dict) else {}
     mode = inputs.get("library_mode")
     if msp.get("source") != "not_used" and msp.get("path"):
         path = _abs_in_run(msp["path"], pipeline_root)
@@ -149,11 +155,13 @@ def public_view(record: dict | None) -> dict | None:
 def is_lbm_annotator(annotator_id: str | None) -> bool | None:
     """代表の `annotator_id` が LBM 由来なら True、判定できなければ None（False は返さない）。
 
-    Console は LBM の注釈器キーに LBM ファイルのパス（末尾が `.lbm` + 数字）を使い、MSP の
-    注釈器キーは利用者の付けた名前になる（実データで確認。docs/output_format/library.md）。
-    GUI の注釈器 ID は自由名なので、規則に合わないことは「LBM でない」の証拠にならない。
-    注釈器キーは研究室ライブラリの置き場所を含みうるので、この関数の呼び出し側も ID を出さない。
+    Console の注釈器キーはライブラリのファイルのパスになりうる: LBM は常にそのパス（末尾が
+    `.lbm` + 数字）、MSP は `msp_only` のとき `Msp file path` のパス（`msp_then_lbm` は設定表の
+    名前）。GUI の注釈器 ID は自由名なので、規則に合わないことは MSP 由来の証拠にならない。
+    **注釈器 ID はどちらのライブラリのフルパス（研究室ライブラリの置き場所）も含みうる**。
+    ツールは ID を返さず、この真偽かファイル名だけを返す。
     """
     if not annotator_id:
         return None
-    return True if _LBM_KEY_RE.search(annotator_id.strip()) else None
+    name = PureWindowsPath(annotator_id.strip()).name
+    return True if _LBM_KEY_RE.search(name) else None
