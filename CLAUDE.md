@@ -118,6 +118,7 @@ metabolomix/analysis/  入力形式に依存しない数値処理（前処理/QC
 metabolomix/plots/     描画 payload の組み立てと matplotlib 描画（volcano / eic / render）
 metabolomix/{arf,arf2,pai2,dcl,eic}/   形式ごとの reader.py（パーサ）と tools.py（MCP ツール）
 metabolomix/mztab/     mzTab-M リーダ・DatasetState 構築
+metabolomix/dataset/   MS-DIAL 解析フォルダ（.arf / .arf2 ほか）から DatasetState を作る adapter の部品（まずファイルの選択）
 metabolomix/library/   参照ライブラリ（.dbs / .msp）の読み取りと永続 store。
                     形式ごとに分けないのは、2 つが同じレコード形と同じ store を
                     共有する 2 つの入口にすぎないため（spec 2026-09-19）
