@@ -17,6 +17,7 @@ from metabolomix.tools import dataset_analysis_tools as T
 from metabolomix.tools import handle_tools
 from metabolomix.tools import reanalysis_tools as R
 from tests.dcl_fixture import build_dcl_bytes
+from tests.lab_msp_fixtures import remember_library_for_mztab
 from tests.reanalysis_fixtures import write_mztab
 
 PC_FORMULA = "C42H76NO8P"
@@ -82,6 +83,7 @@ def library(tmp_path, monkeypatch, mztab):
     msp.parent.mkdir()
     msp.write_text(_MSP, encoding="ascii")
     monkeypatch.setenv("MSDIAL_MSP_POS", str(msp))
+    remember_library_for_mztab(monkeypatch, msp)
     monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
     run = mztab.parent
     (run / "AlignResult-1.arf2").write_bytes(b"placeholder")

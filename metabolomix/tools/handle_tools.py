@@ -22,7 +22,7 @@ from pathlib import Path
 
 from mcp.types import ToolAnnotations
 
-from metabolomix.core import handles, session_state, user_config
+from metabolomix.core import handles, session_state
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import mztab_error
@@ -40,10 +40,11 @@ _ARF_SUFFIX_RE = re.compile(r"_(?:PeakProperties|DriftSopts|DriftSpots)\.arf$", 
 def alignment_files_for(opened, arf2_path: str | None = None) -> tuple[str | None, str | None]:
     """`open_dataset` が開いたデータセットのスポットの照合に使う `.arf2` と `.dcl`。
 
-    `dataset_handle_open` と `dataset_load`（直近のハンドル）が同じ規則で決める——
-    `dataset_load` の要約に出たハンドル ID を明示した呼び出しが、省略したときと同じ
-    `.arf2` / `.dcl` を使うように。解析フォルダで読んだなら（明示が無ければ）その選択、
-    そうでなければ `_alignment_files` が探す。
+    `dataset_handle_open` と `dataset_load`（直近のハンドル）が同じ規則で決め、ハンドルに
+    `arf2_path` / `dcl_path` として持たせる。ハンドル ID を明示した呼び出しはこの値を使う。
+    **ID を省いた呼び出しは `_holder.alignment_paths` とデータフォルダの探索で決めるので、
+    同じファイルになるとは限らない**（データフォルダに別のバッチがあれば食い違いうる）。
+    解析フォルダで読んだなら（明示が無ければ）その選択、そうでなければ `_alignment_files` が探す。
     """
     selection = opened.selection
     if selection is not None and not arf2_path:
@@ -79,22 +80,32 @@ def _alignment_files(ds, arf2_path: str | None, kind: str | None = None,
     return str(arf2), (str(dcl) if dcl else None)
 
 
-def _open_library(polarity: str | None) -> tuple[object | None, str | None]:
-    """(store, note)。設定に無い・極性が決まらないときは store なしで理由を返す。"""
-    if polarity is None:
-        return None, ("データセットの極性が決まらないので、ライブラリを読んでいない"
-                      "（逆の極性のライブラリを掴まないため）。")
-    key = user_config.MSP_SETTING_KEYS[polarity]
-    setting = user_config.get_setting(key)
-    if setting is None:
-        return None, (f"[library] {key.split('.', 1)[1]} が設定されていないので、ライブラリを"
-                      "読んでいない（library_* はこのハンドルでは missing_state を返す）。")
+def _open_library_for(ds) -> tuple[object | None, str | None]:
+    """(store, note)。データセットが覚えたライブラリ（`ds.library_record`）を開く。
+
+    記憶が `known` で `verify_record` が通ればその実体を読み取り専用で開く。`mismatch` /
+    `unknown` / `lbm_only` は開かず理由を返す。**極性の設定（`[library] msp_positive` /
+    `msp_negative`）には落ちない**——データセットと違う極性のライブラリを掴まないため。
+    理由にはファイル名だけを書く（研究室のライブラリの置き場所を戻り値に出さない）。
+    """
+    from metabolomix.dataset.library_memory import unknown_record, verify_record
     from metabolomix.library.store import open_store
 
-    path = Path(setting.value)
-    if not path.is_file():
-        return None, (f"{user_config.setting_label(setting)} のライブラリ（{path.name}）が"
-                      "見つからないので、読んでいない。")
+    record = verify_record(getattr(ds, "library_record", None) or unknown_record())
+    status, file = record.get("status"), record.get("file")
+    if status == "mismatch":
+        return None, (f"記憶したライブラリ（{file}）が不一致（内容が変わったか、ファイルが"
+                      "無い）なので、読んでいない。library_load の file_path で明示できる。")
+    if status == "lbm_only":
+        return None, ("データセットの同定は LBM（脂質のルールベース）だけで、MS/MS の照合に使う"
+                      "MSP のライブラリが無いので、読んでいない（library_* は not_evaluable を返す）。"
+                      "別のライブラリで照合するなら library_load の file_path で明示する。")
+    if status != "known" or not record.get("path"):
+        candidates = record.get("candidates") or []
+        hint = f"（候補: {', '.join(candidates)}）" if candidates else ""
+        return None, ("データセットが同定に使ったライブラリを特定できないので、読んでいない"
+                      f"{hint}。極性の設定からは引かない。library_load の file_path で明示する。")
+    path = Path(record["path"])
     try:
         with _BUILD_LOCK:
             store = open_store(path, read_only=True)
@@ -128,11 +139,12 @@ def dataset_handle_open(mztab_path: str | None = None, job_path: str | None = No
     データセットとライブラリで動く。ハンドルを渡した呼び出しはサーバの別スレッドで回り、
     同じハンドルへの呼び出しは 1 本ずつ、別のハンドルどうしは並行に進む。
 
-    library: `"auto"`（既定）はデータセットの極性の参照ライブラリを設定
-        （`[library] msp_positive` / `msp_negative`）だけから引き、読み取り専用で開く。
-        設定に無い・極性が決まらないときはライブラリなしで開き、`library_note` に理由。
-        `"none"` は読まない。（データセットが同定に使ったライブラリの記録は別に
-        `library_record` として返す。）
+    library: `"auto"`（既定）はデータセットが同定に使ったライブラリの記憶
+        （`library_record`）を読み取り専用で開く。実体の sha256 を測り直し、変わっている・
+        無いとき（`mismatch`）、記憶が決められないとき（`unknown`）、LBM だけのとき
+        （`lbm_only`）は開かず、`library_note` に理由。**極性の設定
+        （`[library] msp_positive` / `msp_negative`）には落ちない**。別のライブラリは
+        `library_load` の `file_path` で明示する。`"none"` は読まない。
     arf2_path: スポットの照合（spot_id = SMF_ID）に使う `.arf2`。省略時、解析フォルダで
         読んだならその `.arf2` と `.dcl`。mzTab-M で読んだなら検出状態を取り込んだ `.arf` の
         同じバッチ、無ければ mzTab-M の隣、`pipeline_path` なら run の
@@ -168,7 +180,7 @@ def dataset_handle_open(mztab_path: str | None = None, job_path: str | None = No
                     "adapter": opened.adapter, "measure": measure},
             arf2_path=arf2, dcl_path=dcl)
         store, note = (None, "library=\"none\" なので読んでいない。") if library == "none" \
-            else _open_library(polarity)
+            else _open_library_for(ds)
         handle.library.store = store
         # 対話のセッションの source_path はフルパスだが、ハンドルはファイル名だけを持つ
         # （研究室のライブラリの置き場所を戻り値・記録に出さない）。

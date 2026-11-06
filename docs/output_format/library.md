@@ -132,6 +132,19 @@
 | `records_without_ion_mode` | 極性（`IONMODE`）を持たないレコード件数（`record_count` に含まれる）。`library_match_feature` の `ion_mode` 絞り込みはこれらを**極性不明として候補に残す** |
 | `non_utf8_lines` | UTF-8 で読めず cp932（無理なら latin-1）で読んだ `.msp` の行数。0 より多ければ化合物名が化けている可能性がある |
 
+**記憶から開く（`file_path` を省いたとき）**: 直近のデータセット（`dataset_handle` を渡せばそのハンドル）が
+同定に使ったライブラリの記憶（下の「データセットが覚えているライブラリ（LibraryRecord）」）が `known` で、sha256 を測り直して通れば、
+その実体を開く（戻り値に `library_source: "dataset_record"`）。記憶が `unknown` か無いときだけ、
+下の解決順（`ion_mode` の設定など）へ進む。`mismatch` と `lbm_only` は落ちずに
+`code="LIBRARY_RECORD_MISMATCH"` / `"LIBRARY_RECORD_LBM_ONLY"` と理由を返す（`file_path` で
+明示すれば開ける）。`file_path` が記憶と違うライブラリなら、そのまま開いて
+`differs_from_record: {"remembered": <記憶のファイル名>, "opened": <開いたファイル名>}` を足す。
+`library_match_feature` / `library_msms_qualify` は、ライブラリが開かれておらず記憶が `lbm_only` のとき
+`missing_state` ではなく `{"status": "not_evaluable", "reason": ...}`（qualify は `verdict` も
+`not_evaluable`）を返す。記憶が `lbm_also` で、`spot_id` で照合した特徴の代表の注釈器が LBM 由来
+（`is_lbm_annotator` が True）なら、結果に `identified_by_lbm: true` を足す（そうでなければキーが無い。
+`false` は書かない）。
+
 **エラー戻り値**: ライブラリを 1 つに決められないときは `{"status": "error", "code": ..., "message": ..., "details": ...}`
 を返し、store は差し替えない。`code` は `MSP_AMBIGUOUS`（候補が複数。`ion_mode` か
 `file_path` を指定する）/ `MSP_ENV_NOT_FOUND`（極性の設定——環境変数 `MSDIAL_MSP_POS` /

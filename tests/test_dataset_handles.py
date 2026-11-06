@@ -11,6 +11,7 @@ import pytest
 import server
 from metabolomix.core import handle_dispatch, handles, session_state
 from metabolomix.tools import handle_tools
+from tests.lab_msp_fixtures import remember_library_for_mztab
 from tests.reanalysis_fixtures import NEG_FEATURES, write_mztab
 
 
@@ -106,15 +107,17 @@ def test_open_requires_exactly_one_path(pos_mztab):
 def test_library_auto_without_config_opens_without_library(pos_mztab):
     out = _open(pos_mztab, library="auto")
     assert out["status"] == "success"
-    assert out["library"] is None and "msp_positive" in out["library_note"]
+    assert out["library"] is None and "極性の設定" in out["library_note"]
 
 
-def test_library_auto_uses_only_the_polarity_setting(monkeypatch, tmp_path, pos_mztab):
+def test_library_auto_uses_only_the_remembered_library(monkeypatch, tmp_path, pos_mztab):
+    # 記憶（Task 10）から開く。mzTab-M は記憶を持てないので、同定に使ったライブラリを覚えている
+    # データセットとして差し込む。極性の設定（neg の方も）は引かれない。
     lib = tmp_path / "lab"
     pos = _write_msp(lib / "pos.msp", ion_mode="Positive")
     neg = _write_msp(lib / "neg.msp", ion_mode="Negative")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(pos))
     monkeypatch.setenv("MSDIAL_MSP_NEG", str(neg))
+    remember_library_for_mztab(monkeypatch, pos)
     monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
     out = _open(pos_mztab, library="auto")
     assert out["library"]["file"] == "pos.msp"

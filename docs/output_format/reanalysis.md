@@ -59,11 +59,16 @@
 | `arf2` / `dcl` | スポットの照合（spot_id = SMF_ID）に使うファイル名。解析フォルダで読んだならその `.arf2` / `.dcl`。決まらなければ `null` |
 | `reused_base` | 読み込み済みのものを使い回したか |
 
-ライブラリは**データセットの極性の設定だけ**から引く（`[library] msp_positive` /
-`msp_negative`、環境変数 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG`）。極性が決まらない・設定が
-無いときはライブラリなしで開き、逆の極性のライブラリを掴まない。読み取り専用で開く。
-ハンドルへの `library_load` も同じ規則（`file_path` を省けばハンドルの極性の設定。逆の
-`ion_mode` は `LIBRARY_POLARITY_MISMATCH`、設定が無ければ `LIBRARY_NOT_CONFIGURED`）。
+ライブラリは**データセットが同定に使ったものの記憶**（`library_record`。[library.md](library.md)）から
+引く。実体の sha256 を測り直して `known` のままなら読み取り専用で開き、`mismatch`（内容が変わった・
+ファイルが無い）・`unknown`（決められない）・`lbm_only`（LBM だけ）は開かずに `library_note` に
+理由を書く。**極性の設定（`[library] msp_positive` / `msp_negative`）には落ちない**ので、逆の
+極性のライブラリを掴まない。
+ハンドルへの `library_load`（`file_path` を省く）も、記憶が `known` ならそれを開く。`mismatch` /
+`lbm_only` は設定へ落ちずに理由（`LIBRARY_RECORD_MISMATCH` / `LIBRARY_RECORD_LBM_ONLY`）を返す。
+記憶が `unknown` のときだけ従来どおりハンドルの極性の設定（逆の `ion_mode` は
+`LIBRARY_POLARITY_MISMATCH`、設定が無ければ `LIBRARY_NOT_CONFIGURED`）。`file_path` を明示すれば
+記憶と違っても開き、戻り値の `differs_from_record` に記憶したファイル名と開いたファイル名を書く。
 
 **ハンドルは対話のデータフォルダを探さない。** スポットの照合（`library_match_feature` の
 spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_msms_qualify`・

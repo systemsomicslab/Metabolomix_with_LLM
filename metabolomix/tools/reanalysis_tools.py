@@ -247,6 +247,9 @@ def library_msms_qualify(rules: dict, spot_id: int | None = None,
         return holder
     store = holder.library.store
     if store is None:
+        lbm_only = library_tools.lbm_only_not_evaluable(holder)
+        if lbm_only is not None:
+            return json_payload({**lbm_only, "verdict": "not_evaluable", "checks": []})
         return missing_state("library_store", ["library_load", "dataset_handle_open"],
                              "参照ライブラリが読み込まれていません。")
     if (spot_id is None) == (precursor_mz is None):
@@ -298,7 +301,8 @@ def library_msms_qualify(rules: dict, spot_id: int | None = None,
                  result["alignment"], precursor_mz, tol)}
             for rank, (record, result) in enumerate(matched["scored"][:top_n], start=1)]
     return json_payload(round_floats({
-        "status": "success", **outcome, **base,
+        "status": "success", **library_tools.identified_by_lbm(holder, spot_id),
+        **outcome, **base,
         "n_candidates": matched["n_candidates"],
         "candidates": rows_table(rows, _QUALIFY_COLUMNS),
     }))

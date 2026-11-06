@@ -28,22 +28,25 @@ property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` 
 読み込みは `dataset_load` と同じ入口 `open_dataset` が持ち、読み込み済みの基を
 `HandleRegistry.put_base` で覚え、同じ入力（読んだ・探したファイルの size・mtime が同じ）なら
 読み直さずに複製を渡す。
-ライブラリは極性の設定だけから引き、読み取り専用で開く。スポットの照合に使う `.arf2` / `.dcl` は、
+ライブラリはデータセットが覚えた同定のライブラリ（`library_record`）を、sha256 を測り直して
+読み取り専用で開く（極性の設定には落ちない）。スポットの照合に使う `.arf2` / `.dcl` は、
 解析フォルダで読んだならその選択（`AlignmentSelection`）のもの、mzTab-M で読んだなら
 `_alignment_files()` が探す。
 
 1. metabolomix/tools/handle_tools.py  dataset_handle_open()
-2. ├─ metabolomix/dataset/opening.py  open_dataset()（連鎖は [mztab.md](mztab.md) の dataset_load）
-3. │  ├─ metabolomix/core/handles.py  HandleRegistry.cached_base()
-4. │  └─ metabolomix/core/handles.py  HandleRegistry.put_base()
-5. ├─ metabolomix/mztab/polarity.py  dataset_polarity()
-6. ├─ [mzTab-M で読んだとき] metabolomix/tools/handle_tools.py  _alignment_files()
-7. │  └─ [pipeline_path のとき] metabolomix/dataset/opening.py  pipeline_arf2()
-8. ├─ metabolomix/tools/handle_tools.py  _open_library()
-9. │  ├─ metabolomix/core/user_config.py  get_setting()
-10. │  └─ metabolomix/library/store.py  open_store()
-11. ├─ metabolomix/dataset/library_memory.py  public_view()
-12. └─ metabolomix/core/handles.py  HandleRegistry.add()
+2. ├─ metabolomix/core/handles.py  HandleRegistry.check_capacity()
+3. ├─ metabolomix/dataset/opening.py  open_dataset()（連鎖は [mztab.md](mztab.md) の dataset_load）
+4. │  ├─ metabolomix/core/handles.py  HandleRegistry.cached_base()
+5. │  └─ metabolomix/core/handles.py  HandleRegistry.put_base()
+6. ├─ metabolomix/mztab/polarity.py  dataset_polarity()
+7. ├─ metabolomix/tools/handle_tools.py  alignment_files_for()
+8. │  └─ metabolomix/tools/handle_tools.py  _alignment_files()
+9. │     └─ [pipeline_path のとき] metabolomix/dataset/opening.py  pipeline_arf2()
+10. ├─ metabolomix/tools/handle_tools.py  _open_library_for()
+11. │  ├─ metabolomix/dataset/library_memory.py  verify_record()
+12. │  └─ metabolomix/library/store.py  open_store()
+13. ├─ metabolomix/dataset/library_memory.py  public_view()
+14. └─ metabolomix/core/handles.py  HandleRegistry.add()
 
 ## dataset_handle_list
 
@@ -55,7 +58,8 @@ property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` 
 ## dataset_handle_close
 
 前提: そのハンドルが開いていること（無ければ `DATASET_HANDLE_NOT_FOUND`）。
-状態変更: 登録簿から外し、ライブラリの接続を閉じる。直近のハンドルなら、対話のセッションは
+状態変更: 登録簿から外し、ライブラリの接続を閉じる（そのハンドルのライブラリは、ハンドルと一緒に
+無くなる。対話のセッションの `session.library` が直近のハンドルのライブラリなら、これも無くなる）。直近のハンドルなら、対話のセッションは
 データセットが無い状態になる（次に `session.dataset` を読んだときに `current_handle_id` を
 None に戻す。別のハンドルへは落ちない）。
 

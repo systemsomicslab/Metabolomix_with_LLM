@@ -33,3 +33,19 @@ def write_lab_msp_config(tmp_path: Path, monkeypatch, *, positive: bool = True,
     config.write_text("\n".join(lines) + "\n", encoding="utf-8")
     monkeypatch.setenv("LIPIDMIX_CONFIG", str(config))
     return paths
+
+
+def remember_library_for_mztab(monkeypatch, msp_path: Path) -> None:
+    """mzTab-M を直接読んだデータセットが、`msp_path` を同定に使ったと覚えているようにする。
+
+    mzTab-M からは同定に使ったライブラリが分からない（`unknown`）ので、`dataset_handle_open
+    (library="auto")` が記憶から開く経路を、解析フォルダを組まずに通すための差し込み。
+    """
+    from metabolomix.dataset import library_memory
+    from metabolomix.handoff.schema import sha256_file
+
+    msp_path = Path(msp_path)
+    record = {"status": "known", "kind": "msp", "file": msp_path.name,
+              "path": str(msp_path.resolve()), "sha256": sha256_file(msp_path),
+              "origin": "effective_method", "candidates": [], "lbm_also": False}
+    monkeypatch.setattr(library_memory, "unknown_record", lambda: dict(record))

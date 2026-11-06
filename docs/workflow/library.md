@@ -31,7 +31,9 @@ flowchart TD
 
 ## library_load
 
-前提: なし。解決順は `file_path` の明示 → `ion_mode` に対応する極性の設定
+前提: なし。解決順は `file_path` の明示 → 直近のデータセット（または `dataset_handle`）が覚えた
+同定のライブラリ（`library_record`。`verify_record` が通った `known` だけ。`mismatch` / `lbm_only` は
+設定へ落ちずに理由を返し、`unknown` か無いときだけ次へ進む）→ `ion_mode` に対応する極性の設定
 （環境変数 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG` → `lipidmix.local.toml` の
 `[library] msp_positive` / `msp_negative`。`metabolomix/core/user_config.py` の
 `get_setting` が引く。研究室の参照ライブラリはリポジトリの外に置いてここで指す）→
@@ -55,6 +57,7 @@ sha256 はキャッシュ置き場の対応表（`.library-digests.json`）に
 MCP クライアントのタイムアウトに当たるときに使う。
 
 1. metabolomix/library/tools.py  library_load()
+   ├─ metabolomix/dataset/library_memory.py  verify_record()
 2. └─ metabolomix/core/path_resolvers.py  resolve_library_path()
 3. └─ metabolomix/library/store.py  open_store()
 4. │  └─ metabolomix/library/store.py  _digest_for()

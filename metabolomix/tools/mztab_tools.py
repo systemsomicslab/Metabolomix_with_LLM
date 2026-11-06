@@ -101,8 +101,9 @@ def dataset_load(mztab_path: str | None = None, job_path: str | None = None,
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
     handle_id = session_state.session.current_handle_id
-    # 要約に出すハンドル ID を明示した呼び出しが、省略と同じ `.arf2` / `.dcl` を使うように
-    # （`dataset_handle_open` と同じ規則）。
+    # ハンドルに持たせる `.arf2` / `.dcl`（`dataset_handle_open` と同じ規則）。ID を明示した
+    # 呼び出しはこれを使う。ID を省いた呼び出しは `_holder.alignment_paths` とデータフォルダの
+    # 探索で決めるので、同じファイルになるとは限らない。
     from metabolomix.tools.handle_tools import alignment_files_for
 
     handle = handles.registry.peek(handle_id)
