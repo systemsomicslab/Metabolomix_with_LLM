@@ -416,3 +416,38 @@ def test_per_sample_mz_does_not_enter_the_dataset_fingerprint():
     assert dataset_fingerprint(ds) == before
     ds.per_sample_mz["10"]["s1"] = 1.0
     assert dataset_fingerprint(ds) == before
+
+
+# ---------- スポットの m/z（上流の MassCenter の定義） ----------
+
+def _cell(peak_id, height, mz):
+    return {"peak_id": peak_id, "height": height, "m_z": mz}
+
+
+def test_spot_mz_is_the_highest_detected_cell():
+    from metabolomix.mztab.evidence import spot_representative_mz
+
+    cells = [_cell(1, 10.0, 500.00), _cell(2, 90.0, 500.02), _cell(3, 50.0, 500.04)]
+    assert spot_representative_mz(cells, 123.0) == 500.02
+
+
+def test_spot_mz_never_picks_a_gap_filled_cell():
+    from metabolomix.mztab.evidence import spot_representative_mz
+
+    cells = [_cell(1, 10.0, 500.00), _cell(-2, 9999.0, 777.0), _cell(3, 20.0, 500.04)]
+    assert spot_representative_mz(cells, 123.0) == 500.04
+
+
+def test_spot_mz_ties_keep_the_first_like_upstream_argmax():
+    from metabolomix.mztab.evidence import spot_representative_mz
+
+    cells = [_cell(1, 10.0, 500.00), _cell(2, 10.0, 500.04)]
+    assert spot_representative_mz(cells, 123.0) == 500.00
+
+
+def test_spot_mz_falls_back_when_nothing_was_detected():
+    from metabolomix.mztab.evidence import spot_representative_mz
+
+    assert spot_representative_mz([_cell(-2, 5.0, 777.0)], 123.0) == 123.0
+    assert spot_representative_mz([], 123.0) == 123.0
+    assert spot_representative_mz([_cell(1, None, 500.0)], 123.0) == 123.0

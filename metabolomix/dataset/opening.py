@@ -399,10 +399,12 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]],
                 fallback = select_alignment(arf2).arf
             except DomainError as exc:
                 raise _with_hint(exc) from exc
-            candidates.append(fallback)
-            more, more_rejected = verify([fallback])
-            passed += more
-            rejected.update(more_rejected)
+            # すでに候補に入っている `.arf`（解決後のパスで比べる）は二重に検証・列挙しない。
+            if fallback.resolve() not in {p.resolve() for p in candidates}:
+                candidates.append(fallback)
+                more, more_rejected = verify([fallback])
+                passed += more
+                rejected.update(more_rejected)
 
     details = {"mztab": gate.mztab_path.name, "candidates": [p.name for p in candidates],
                "source_hint": "mztab"}

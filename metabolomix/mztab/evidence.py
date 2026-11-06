@@ -12,13 +12,13 @@ gap-fill（未検出セルの補間）かを区別しない。実データ（60 
 「検出/未検出」を特徴間で入れ替えたまま静かに嘘をつく。代わりに数値で確かめる:
 
   - スポット数 == 特徴数（完全一致）
-  - |m/z(.arf 代表値) − m/z(mzTab 平均値)| が許容（既定 0.01 Da）を超える特徴が
+  - |m/z(.arf のスポットの m/z) − m/z(mzTab のスポットの m/z)| が許容（既定 0.01 Da）を超える特徴が
     全体の 1% 以下、**かつ** 1 件も MZ_HARD_LIMIT（1 Da）を超えない。
     または、許容を超える特徴の外れがすべて MZ_OUTLIER_SMALL_DELTA（0.02 Da）未満で、
     1 件も MZ_HARD_LIMIT（1 Da）を超えない（割合が 1% を超えても合格）
 
 **最悪値だけでは判定しない**（最悪値が小さいときだけ、割合の条件を外す救済がある）。実データ 3944 特徴では許容超えが 1 件だけあり
-（14.8 mDa。幅の広いピークでは代表値と平均値が離れる）、最悪値で見ると
+（14.8 mDa。幅の広いピークではスポットの m/z と平均値が離れる。当時の測定は試料 0 のピークの m/z との比較）、最悪値で見ると
 3943 件の一致を棄却してしまった。一方、位置を 1 つずらした誤接合は 87 Da・
 RT 20 分に爆発するので、割合で緩めても誤接合は MZ_HARD_LIMIT が捕まえる。
 
@@ -39,8 +39,10 @@ import numpy as np
 
 from metabolomix.arf import reader as arf_reader
 
-#: m/z 一致の許容。`.arf` はスポット代表サンプルの m/z、mzTab はアライメント平均値を
-#: 書くため、同一特徴でも完全一致はしない。実データの最大差 6.7 mDa に対して
+#: m/z 一致の許容。`.arf` から組むスポットの m/z は「検出セルのうち高さ最大のものの m/z」
+#: （`spot_representative_mz`。上流の `MassCenter` の定義）。mzTab-M は同じスポットの値を
+#: 書くが、丸めと書き出しの差で完全一致はしない。実データの最大差 6.7 mDa（この値は
+#: スポットの m/z をグループ先頭の行＝試料 0 のピークの m/z で読んでいた版での実測）に対して
 #: 1 桁の余裕を取り、隣接特徴（実データ最小間隔は Da オーダー）とは混同しない幅。
 MZ_TOLERANCE = 0.01
 
@@ -50,7 +52,7 @@ MZ_OUTLIER_MAX_FRACTION = 0.01
 
 #: 割合が `MZ_OUTLIER_MAX_FRACTION` を超えても、外れがすべてこの幅未満なら合格にする。
 #: 実測（MTBLS9365 陰イオン）: 2547 特徴のうち 36 件（1.41%）が許容を超えたが、最大は
-#: 0.0188 Da で、代表値と平均値の幅の広いピークに由来する外れだった。接合は正しい。
+#: 0.0188 Da で、幅の広いピークに由来する外れだった（比べたのは試料 0 のピークの m/z）。接合は正しい。
 #: 誤接合は 1 Da 以上（87 Da 等）に爆発するので、この幅未満の外れは誤接合の証拠にならない。
 MZ_OUTLIER_SMALL_DELTA = 0.02
 
@@ -62,6 +64,46 @@ MZ_HARD_LIMIT = 1.0
 #: 揺れ（DriftSopts）も含める。イオンモビリティのドリフトスポットは
 #: アライメント特徴と 1:1 対応しない。
 _EXCLUDED_ARF_TOKENS = ("driftspots", "driftsopts")
+
+
+def spot_representative_mz(cells: list[dict], fallback=None):
+    """`.arf` のスポット 1 つ分のセルから、スポットの m/z（上流の `MassCenter`）を返す。
+
+    上流の定義（MsdialWorkbench `DataObjConverter.SetRepresentativeProperty`）:
+    `PeakID >= 0` のセル（検出されたピーク）のうち `PeakHeightTop` が最大のものの `Mass`
+    （`Argmax` は同点で先頭を残す）。`.arf` の reader が `MassCenter` として返すのは
+    グループ先頭の行（＝試料 0 自身のピークの m/z）で、スポットの m/z ではない。
+    gap-fill（`peak_id < 0`）のセルは選ばない。`.arf` に `QuantMass` は無いので、
+    `QuantMass > 0` のとき上流が `MassCenter` を `QuantMass` で上書きする分は再現しない。
+
+    cells: `arf_reader.alignment_feature_row` の辞書（`peak_id` `height` `m_z`）。
+    検出セルが 1 つも無い（高さ・m/z が数でない場合も含む）ときは `fallback`。
+    """
+    best_height = None
+    best_mz = fallback
+    for cell in cells:
+        peak_id, height, mz = cell.get("peak_id"), cell.get("height"), cell.get("m_z")
+        if (not isinstance(peak_id, int) or isinstance(peak_id, bool) or peak_id < 0
+                or not _is_number(height) or not _is_number(mz)):
+            continue
+        if best_height is None or height > best_height:
+            best_height, best_mz = height, mz
+    return best_mz
+
+
+def group_representative_mz(group: dict):
+    """`arf_reader.deserialize()` のスポット 1 つの m/z（`spot_representative_mz`。退避は `MassCenter`）。"""
+    cells = []
+    for raw in group.get("AlignedPeakProperties") or []:
+        feature = arf_reader.alignment_feature_row(raw)
+        if feature:
+            cells.append(feature)
+    return spot_representative_mz(cells, group.get("MassCenter"))
+
+
+def _is_number(value) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value))
 
 
 def normalize_arf_spots(spots: list[dict]) -> list[dict]:
@@ -91,8 +133,10 @@ def normalize_arf_spots(spots: list[dict]) -> list[dict]:
                 "m_z": feature.get("m_z"),
                 "file_id": feature.get("file_id"),
                 "peak_id": feature.get("peak_id"),
+                "height": feature.get("height"),
             })
-        normalized.append({"mz": spot.get("MassCenter"), "samples": cells})
+        normalized.append({"mz": spot_representative_mz(cells, spot.get("MassCenter")),
+                           "samples": cells})
     return normalized
 
 

@@ -58,7 +58,7 @@ def _check_alignment(groups: list[dict], fields: list[dict]) -> None:
             "別のバッチの出力が混ざっている。",
             {"arf_spots": len(groups), "arf2_spots": len(fields)})
     ok, detail = evidence.compare_feature_mz(
-        [g.get("MassCenter") for g in groups], [f["mz"] for f in fields])
+        [evidence.group_representative_mz(g) for g in groups], [f["mz"] for f in fields])
     if not ok:
         raise DomainError(
             "ALIGNMENT_MISMATCH",

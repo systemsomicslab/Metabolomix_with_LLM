@@ -273,6 +273,68 @@ def test_pipeline_folder_without_mddata_binds_manifest_by_mztab_raw_paths(tmp_pa
     assert direct.sample_raw_paths is None
 
 
+def _shifted_spec() -> dict:
+    """50 スポット × 4 試料。"""
+    samples = [{"file_id": i, "name": f"s{i}", "class_id": "A" if i < 2 else "B"}
+               for i in range(4)]
+    spots = [{"name": "Unknown", "mz": 300.0 + 10 * k, "heights": [100.0, 110.0, 120.0, 130.0]}
+             for k in range(50)]
+    return {"spots": spots, "samples": samples}
+
+
+def _shift_sample0_mz(arf: Path, spec: dict, spot_indices=(10, 20), delta=0.023) -> None:
+    """同じアラインメントのまま、試料 0 自身のピークの m/z だけを `delta` ずらす（スポットの
+    m/z = 検出セルの高さ最大のもの = 試料 3 は変わらない）。"""
+    from tests.curation_fixtures import arf_row, write_arf
+
+    groups = []
+    for k, spot in enumerate(spec["spots"]):
+        rows = []
+        for sample, height in zip(spec["samples"], spot["heights"]):
+            mz = spot["mz"] + (delta if k in spot_indices and sample["file_id"] == 0 else 0.0)
+            row = arf_row(file_id=sample["file_id"], mz=mz, rt=12.0, height=height,
+                          gap_filled=False)
+            row[1] = sample["name"]
+            rows.append(row)
+        groups.append(rows)
+    write_arf(arf, groups)
+
+
+def test_arf_spot_mz_is_the_highest_detected_cell_not_sample_zero(tmp_path):
+    spec = _shifted_spec()
+    paths = write_msdial_folder(tmp_path / "gui", **spec)
+    _shift_sample0_mz(paths["arf"], spec)
+    # 試料 0 の行の m/z だけ 0.023 ずれたスポットが 4%。スポットの m/z はずれていない。
+    assert open_dataset(directory=str(tmp_path / "gui")).dataset.feature_metadata["10"]["mz"] == 400.0
+
+
+def test_pipeline_opens_when_sample_zero_mz_is_shifted(tmp_path):
+    spec = _shifted_spec()
+    job = _job(tmp_path, with_folder=False)
+    write_matching_mztab(job.parent / "msdial" / "Height_x.mzTab", spec)
+    run = _pipeline(tmp_path, job)
+    paths = write_msdial_folder(run / "input", **spec, stem="AlignResult-1")
+    _shift_sample0_mz(paths["arf"], spec)
+    opened = open_dataset(pipeline_path=str(run), source="folder")
+    assert opened.dataset.source_format == "msdial_folder"
+    assert len(opened.dataset.feature_ids) == 50
+
+
+def test_pipeline_input_fallback_already_a_candidate_is_listed_once(tmp_path):
+    # mzTab-M の隣の `.arf` が候補にあり、run の input/ の `.arf2` も同じ `.arf` を指すとき、
+    # 二重に検証・列挙しない（解決後のパスで比べる）。
+    job = _job(tmp_path, with_folder=False)
+    run = _pipeline(tmp_path, job)
+    paths = write_msdial_folder(run / "input", **_other_spec(), stem="AlignResult-1")
+    artifacts = json.loads(job.read_text(encoding="utf-8"))
+    artifacts["artifacts"] = [{"role": "peak_matrix_source", "path": str(paths["arf"]),
+                               "format": "arf", "root": "run_dir", "sha256": ""}]
+    job.write_text(json.dumps(artifacts), encoding="utf-8")
+    err = _code(lambda: open_dataset(pipeline_path=str(run)))
+    assert err.code == "ALIGNMENT_NOT_FOUND"
+    assert err.details["candidates"] == ["AlignResult-1_PeakProperties.arf"]
+
+
 def test_pipeline_folder_falls_back_to_run_input_arf2(tmp_path):
     job = _job(tmp_path, with_folder=False)
     run = _pipeline(tmp_path, job)
