@@ -35,6 +35,7 @@ ANALYSIS_FILE_CLASS_INDEX = 3
 ANALYTICAL_ORDER_INDEX = 4
 ANALYSIS_FILE_ID_INDEX = 5
 ANALYSIS_FILE_INCLUDED_INDEX = 6
+ANALYSIS_BATCH_INDEX = 11  # docs/schema/AnalysisFileBean.md
 
 # ProjectBaseParameter MessagePack keys.
 PROJECT_FOLDER_INDEX = 3
@@ -115,6 +116,7 @@ def parse_analysis_file_classes(mddata_path: str | Path) -> list[dict]:
             "analysis_file_type": _at(row, ANALYSIS_FILE_TYPE_INDEX),
             "analytical_order": _at(row, ANALYTICAL_ORDER_INDEX),
             "included": bool(_at(row, ANALYSIS_FILE_INCLUDED_INDEX, True)),
+            "analysis_batch": _at(row, ANALYSIS_BATCH_INDEX),
         })
     return records
 
