@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from metabolomix.core.atomic_io import DomainError
+
 #: セルの状態。DETECTED = 実検出、GAP_FILLED = 値はあるが検出は偽（gap-fill）、
 #: MISSING = 値が無い（0 以下・非有限）、PRESENT_UNKNOWN = 値はあるが検出の別が分からない。
 DETECTED, GAP_FILLED, MISSING, PRESENT_UNKNOWN = 1, 2, 0, 3
@@ -114,10 +116,13 @@ def _float_or_none(value) -> float | None:
     return out if math.isfinite(out) else None
 
 
-def _bool_include(value) -> bool:
-    if isinstance(value, str):
-        return value.strip().lower() not in ("false", "0", "no", "n", "")
-    return True if value is None else bool(value)
+def _include(row: dict) -> bool:
+    """`include` の読み方は analysis_spec._load と同じ: 欄が無ければ真、あれば Python の真偽値。
+
+    （文字列 "false" や "0" も真になる。sample_metadata_rows の include は取り込み時に bool へ
+    正規化済みという前提で、ここで独自に解釈し直して _load と食い違わせない。）
+    """
+    return bool(row.get("include", True))
 
 
 def _role(value) -> str | None:
@@ -132,13 +137,25 @@ def _samples_table(ds, names: list[str]) -> list[SampleInfo]:
     roles = getattr(ds, "roles", None) or {}
     meta = getattr(ds, "sample_meta", None) or {}
     by_name = {s.get("name"): s for s in msdial}
+    display = list(getattr(ds, "sample_names", None) or [])
+    detected_roles = None
     out = []
     for i, name in enumerate(names):
+        # 安定 ID を先に、次に表示名（sample_names[i]）で引く。ID ≠ 表示名でも取りこぼさない。
+        keys = [name] + ([display[i]] if i < len(display) and display[i] != name else [])
         row = rows[i] if i < len(rows) else {}
-        ms = by_name.get(name) or (msdial[i] if len(msdial) == len(names) else {})
-        sm = meta.get(name) or {}
-        role = (_role(row.get("role")) or _role(ms.get("role")) or _role(roles.get(name))
-                or _role(sm.get("role")) or "sample")
+        ms = (next((by_name[k] for k in keys if k in by_name), None)
+              or (msdial[i] if len(msdial) == len(names) else {}))
+        sm = next((meta[k] for k in keys if meta.get(k)), {})
+        role = (_role(row.get("role")) or _role(ms.get("role"))
+                or next((r for k in keys if (r := _role(roles.get(k)))), None)
+                or _role(sm.get("role")))
+        if role is None:
+            # どこにも役割が無い試料は名前から推定する（msdial/sample_factors と同じ規則）。
+            if detected_roles is None:
+                from metabolomix.analysis.preprocessing import detect_sample_roles
+                detected_roles = detect_sample_roles(list(names))
+            role = _role(detected_roles.get(name)) or "sample"
         group = _str_or_none(row.get("group")) or _str_or_none(ms.get("group"))
         batch = (_str_or_none(row.get("batch")) or _str_or_none(ms.get("batch"))
                  or _str_or_none(sm.get("batch")))
@@ -150,7 +167,7 @@ def _samples_table(ds, names: list[str]) -> list[SampleInfo]:
                  and (s := _str_or_none(v)) is not None}
         out.append(SampleInfo(sample_id=name, role=role, group=group, batch=batch,
                               injection_order=order, subject_id=subject,
-                              include=_bool_include(row.get("include")), attributes=attrs))
+                              include=_include(row), attributes=attrs))
     return out
 
 
@@ -166,6 +183,10 @@ def from_dataset(ds) -> StudyData:
     """DatasetState から StudyData を作る。ds は書き換えない（配列も写す）。"""
     values = np.array(np.asarray(ds.feature_matrix, dtype=float).T, copy=True)
     mask = getattr(ds, "detected_mask", None)
+    if mask is not None and np.shape(mask) != values.T.shape:
+        raise DomainError("STUDY_DATA_INVALID", "detected_mask の形が feature_matrix と合わない",
+                          {"feature_matrix_shape": list(values.T.shape),
+                           "detected_mask_shape": list(np.shape(mask))})
     detected = None if mask is None else np.array(np.asarray(mask, dtype=bool).T, copy=True)
     rows = getattr(ds, "sample_metadata_rows", None)
     ids = list(getattr(ds, "sample_ids", None) or []) if rows else []

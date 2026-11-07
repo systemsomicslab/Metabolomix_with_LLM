@@ -17,7 +17,7 @@ def _ds(**kw):
 def test_from_dataset_reads_metadata_rows_and_subject_id():
     rows = [{"sample_id": "a", "role": "Sample", "group": "G1", "batch": "B1",
              "injection_order": "3", "subject_id": "S1", "biological_sample_id": "X", "age": "40"},
-            {"sample_id": "b", "role": "qc", "biological_sample_id": "BIO2", "include": "false"},
+            {"sample_id": "b", "role": "qc", "biological_sample_id": "BIO2", "include": False},
             {"sample_id": "c", "group": "G2"}]
     sd = D.from_dataset(_ds(sample_metadata_rows=rows, sample_ids=["a", "b", "c"]))
     a, b, c = sd.samples
@@ -79,3 +79,33 @@ def test_from_dataset_does_not_mutate_dataset():
     sd.values[:] = 99
     sd.detected[:] = False
     assert np.array_equal(ds.feature_matrix, fm) and np.array_equal(ds.detected_mask, dm)
+
+
+def test_role_inferred_from_names_when_no_source_gives_one():
+    ds = _ds(sample_names=["QC_01", "Blank_1", "S01"])
+    assert [s.role for s in D.from_dataset(ds).samples] == ["qc", "blank", "sample"]
+
+
+def test_detected_mask_shape_mismatch_raises():
+    import pytest
+    from metabolomix.core.atomic_io import DomainError
+    with pytest.raises(DomainError) as e:
+        D.from_dataset(_ds(detected_mask=np.ones((2, 2), dtype=bool)))
+    assert e.value.code == "STUDY_DATA_INVALID"
+
+
+def test_fallbacks_found_by_display_name_when_ids_differ():
+    ds = _ds(sample_ids=["id1", "id2", "id3"], sample_names=["a", "b", "c"],
+             sample_metadata_rows=[{}, {}, {}],
+             roles={"a": "QC"}, sample_meta={"b": {"role": "blank", "batch": "Z", "run_order": 4}},
+             msdial_samples=[{"name": "c", "group": "G9"}, {"name": "x"}, {"name": "y"}][:0] or
+             [{"name": "a"}, {"name": "b"}, {"name": "c", "group": "G9"}])
+    s = D.from_dataset(ds).samples
+    assert s[0].sample_id == "id1" and s[0].role == "qc"
+    assert s[1].role == "blank" and s[1].batch == "Z" and s[1].injection_order == 4.0
+    assert s[2].group == "G9"
+
+
+def test_include_follows_analysis_spec_truthiness():
+    ds = _ds(sample_metadata_rows=[{"include": False}, {"include": "0"}, {}], sample_ids=["a", "b", "c"])
+    assert [s.include for s in D.from_dataset(ds).samples] == [False, True, True]
