@@ -134,6 +134,20 @@ def test_end_to_end_on_fake_dataset_and_all_analyses_reported():
     assert all("result" in a for a in r["analyses"])
     assert r["analyses"][0]["result"]["schema"] == "stats-compare.v1"
     assert r["analyses"][1]["result"]["schema"] == "stats-composition.v1"
+    assert [a["analysis_id"] for a in r["analyses"]] == [a["analysis_id"] for a in n["analyses"]]
+    cmp_r = r["analyses"][0]["result"]
+    comp_r = r["analyses"][1]["result"]
+    defs = [(cmp_r, r["matrix_id"]), (comp_r["clr"], r["matrix_id"] + ":clr"),
+            (comp_r["absolute"], r["matrix_id"] + ":class_total")]
+    for res, mid in defs:
+        assert res["effect_size_definition"]["name"] == "log2_mean_difference"
+        assert res["test"] == "moderated_t"
+        assert res["bh_population"]["name"] == "matrix"
+        assert res["ci_level"] == 0.95
+        assert res["matrix_id"] == mid
+    pr = r["analyses"][2]["result"]
+    assert len(pr["scores"]["units"]) == len(pr["unit_ids"]) > 0
+    assert pr["explained_variance_ratio"]
 
 
 def test_same_spec_same_dataset_same_result():
@@ -151,3 +165,31 @@ def test_needs_input_passthrough_for_is_normalized_dataset_with_qc():
     r = run_spec_v2(n, ds)
     assert r["status"] == "needs_input"
     assert r["rule_hash"] == rule_hash_v2(n) and r["spec"] == n
+
+
+def test_rule_hash_ignores_key_order_but_tracks_values():
+    a = _spec(**_FULL)
+    b = json.loads(json.dumps(a))
+    b = {k: b[k] for k in reversed(list(b))}
+    b["analyses"] = [{k: x[k] for k in reversed(list(x))} for x in b["analyses"]]
+    b["comparisons"] = [{k: x[k] for k in reversed(list(x))} for x in b["comparisons"]]
+    b["preprocess"] = {k: b["preprocess"][k] for k in reversed(list(b["preprocess"]))}
+    assert rule_hash_v2(normalize_spec_v2(a)) == rule_hash_v2(normalize_spec_v2(b))
+    c = copy.deepcopy(a)
+    c["analyses"][0]["verdict"] = {"q": 0.1}
+    assert rule_hash_v2(normalize_spec_v2(a)) != rule_hash_v2(normalize_spec_v2(c))
+
+
+def test_pca_knn_impute_and_interaction_comparison_normalize():
+    n = normalize_spec_v2(_spec(analyses=[{"analysis_id": "p", "kind": "pca", "impute": "knn"}]))
+    assert n["analyses"][0]["impute"] == "knn"
+    inter = {"id": "ix", "kind": "interaction", "factors": ["group", "sex"],
+             "levels": {"group": ["C", "T"], "sex": ["F", "M"]}}
+    n = normalize_spec_v2(_spec(design={"factors": ["group", "sex"]}, comparisons=[inter]))
+    assert n["comparisons"][0] == inter
+
+
+def test_preprocess_error_details_are_flat():
+    e = _code(normalize_spec_v2, _spec(preprocess={"drift": {"mode": "bogus"}}))
+    assert e.code == "ANALYSIS_SPEC_INVALID" and "details" not in e.details
+    assert e.details["field"].startswith("preprocess.")

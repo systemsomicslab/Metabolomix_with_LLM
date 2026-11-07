@@ -24,7 +24,7 @@ _INVALID = "ANALYSIS_SPEC_INVALID"
 _ID_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 _KINDS = ("compare", "composition", "pca")
 _PCA_SCALING = ("autoscale", "pareto")
-_PCA_IMPUTE = ("half_min", "none")
+_PCA_IMPUTE = ("half_min", "knn", "none")
 _VERDICT_DEFAULT = {"q": 0.05, "equivalence_fc": 1.2}
 
 
@@ -192,8 +192,8 @@ def normalize_spec_v2(spec) -> dict:
     try:
         pre = normalize_preprocess_config(spec.get("preprocess"))
     except DomainError as e:
-        raise _fail(f"preprocess が不正: {e.message}", field="preprocess",
-                    details=e.details) from e
+        raise _fail(f"preprocess が不正: {e.message}",
+                    **{**e.details, "field": "preprocess." + str(e.details.get("field", ""))}) from e
     design = _design(spec.get("design"))
     comps = spec["comparisons"]
     if not isinstance(comps, list) or not comps:
@@ -241,6 +241,8 @@ def run_spec_v2(normalized: dict, ds, *, assay_kind: str = "unknown") -> dict:
     """正規化済み spec を実行する。前処理は 1 回で、全解析が同じ行列を読む。
 
     前処理が利用者への確認を要するときは `{"status": "needs_input", ...}` を返す。
+    どれかの解析が DomainError を出したら全体を失敗させる（一部だけ載せた analysis-result.v2 は
+    「全解析を報告する」契約を壊すので返さない）。
     """
     spec = copy.deepcopy(normalized)
     rule_hash = rule_hash_v2(spec)
