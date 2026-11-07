@@ -121,11 +121,27 @@ def name_prefix(name) -> str | None:
     return _QUALIFIER_LABELS.get(normalized)
 
 
+def spot_master_id(raw_spot) -> int:
+    """スポットの MasterAlignmentID（Key0）。空・短い・数でない配列は `ARF2_SPOT_MALFORMED`。"""
+    from metabolomix.core.atomic_io import DomainError
+
+    try:
+        return int(raw_spot[0])
+    except (TypeError, ValueError, IndexError, KeyError) as exc:
+        shape = f"{len(raw_spot)} 要素" if isinstance(raw_spot, (list, tuple)) else type(raw_spot).__name__
+        raise DomainError(
+            "ARF2_SPOT_MALFORMED",
+            f".arf2 のスポットの形が壊れている（{shape}。Key0 の MasterAlignmentID を読めない）。",
+            {"spot_shape": shape}) from exc
+
+
 def spot_annotation(raw_spot: list) -> dict:
+    master_id = spot_master_id(raw_spot)
     container = raw_spot[56] if len(raw_spot) > 56 else None
     return {
-        "spot_id": int(raw_spot[0]),
-        "representative_file_id": int(raw_spot[3]) if raw_spot[3] is not None else None,
+        "spot_id": master_id,
+        "representative_file_id": (
+            int(raw_spot[3]) if len(raw_spot) > 3 and raw_spot[3] is not None else None),
         "representative": representative(container),
         "n_candidates": len(_candidates(container)),
     }
@@ -139,5 +155,5 @@ def load_spot_annotations(file_path) -> dict[int, dict]:
 
 def load_spot_candidates(file_path) -> dict[int, list[dict]]:
     """MasterAlignmentID → 使える候補の一覧（代表を含む）。"""
-    return {int(raw[0]): usable_candidates(raw[56] if len(raw) > 56 else None)
+    return {spot_master_id(raw): usable_candidates(raw[56] if len(raw) > 56 else None)
             for raw in load_raw_spots(file_path)}

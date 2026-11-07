@@ -19,6 +19,7 @@ from metabolomix.core import file_digest
 _LBM_DBS_RE = re.compile(r"\.lbm\d*\.dbs$", re.IGNORECASE)
 # Console は LBM の注釈器キーに LBM ファイルのパスを使う（`.lbm` + 数字で終わる）。
 _LBM_KEY_RE = re.compile(r"\.lbm\d*$", re.IGNORECASE)
+_MSP_KEY_RE = re.compile(r"\.msp\d*$", re.IGNORECASE)
 
 
 def _record(**fields) -> dict:
@@ -167,15 +168,18 @@ def public_view(record: dict | None) -> dict | None:
 
 
 def is_lbm_annotator(annotator_id: str | None) -> bool | None:
-    """代表の `annotator_id` が LBM 由来なら True、判定できなければ None（False は返さない）。
+    """代表の `annotator_id` が LBM 由来なら True、MSP のファイルのパス（末尾が `.msp` + 数字）なら False、
+    ほかは None。
 
     Console の注釈器キーはライブラリのファイルのパスになりうる: LBM は常にそのパス（末尾が
     `.lbm` + 数字）、MSP は `msp_only` のとき `Msp file path` のパス（`msp_then_lbm` は設定表の
-    名前）。GUI の注釈器 ID は自由名なので、規則に合わないことは MSP 由来の証拠にならない。
+    名前）。GUI の注釈器 ID は自由名なので、どの規則にも合わないことは MSP 由来の証拠にならない（None）。
     **注釈器 ID はどちらのライブラリのフルパス（研究室ライブラリの置き場所）も含みうる**。
     ツールは ID を返さず、この真偽かファイル名だけを返す。
     """
     if not annotator_id:
         return None
     name = PureWindowsPath(annotator_id.strip()).name
-    return True if _LBM_KEY_RE.search(name) else None
+    if _LBM_KEY_RE.search(name):
+        return True
+    return False if _MSP_KEY_RE.search(name) else None

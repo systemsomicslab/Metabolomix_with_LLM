@@ -83,7 +83,8 @@ def _msdial_samples(file_ids: list[int], arf_names: dict[int, str | None],
             record = {}
         else:
             name = _clean(record["file_name"]) or _clean(arf_names[file_id]) or f"Sample_{file_id}"
-            if arf_names[file_id] is not None and arf_names[file_id] != record["file_name"]:
+            if (arf_names[file_id] is not None
+                    and str(arf_names[file_id]).strip() != str(record["file_name"]).strip()):
                 notes.append(f"FileID {file_id}: .mddata の名前 {record['file_name']!r} と "
                              f".arf の名前 {arf_names[file_id]!r} が違う。FileID で結び、"
                              ".mddata の名前を使った。")
@@ -249,8 +250,12 @@ def _build_dataset(selection: AlignmentSelection, scan: evidence.ArfScan, measur
         fid = str(spot["master_id"])
         feature_ids.append(fid)
         # 検出されたセルの実測 m/z（数でないものと gap-fill は scan の時点で NaN）。
-        per_sample_mz[fid] = {names[j]: float(mz) for j, mz in enumerate(scan.per_sample_mz[i])
-                              if not math.isnan(mz)}
+        # m/z が 0 以下・NaN のセルは持たない。検出セルが 1 つも無い特徴はキーごと省く
+        # （mzTab-M の経路と同じ）。
+        cells = {names[j]: float(mz) for j, mz in enumerate(scan.per_sample_mz[i])
+                 if math.isfinite(mz) and mz > 0}
+        if cells:
+            per_sample_mz[fid] = cells
         istd = spot["internal_standard_id"]
         metadata[fid] = {
             "name": spot["name"], "mz": spot["mz"], "rt": spot["rt"],

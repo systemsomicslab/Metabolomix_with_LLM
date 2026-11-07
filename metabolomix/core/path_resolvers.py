@@ -44,10 +44,24 @@ def _recency_key(path: str) -> tuple[str, float]:
 
 
 def _pick_latest(paths: list[str]) -> str | None:
-    """同種ファイルが重複（旧版/新版）する場合に最新版のパスを返す。"""
+    """同種ファイルが重複（旧版/新版）する場合に最新版のパスを返す。
+
+    時刻を持つ候補があれば、時刻の無い候補より先に選ぶ（時刻の無い候補どうしは mtime）。
+    """
     if not paths:
         return None
-    return max(paths, key=_recency_key)
+    return max(_timestamped_first(paths), key=_recency_key)
+
+
+def _timestamped_first(paths: list[str]) -> list[str]:
+    """ファイル名に処理時刻を持つ候補があればそれだけ、無ければ全件。
+
+    `_select_latest_batch` は時刻の無いファイルを温存するので、その後に種別（PeakProperties）の
+    優先を当てると、時刻の無い PeakProperties が時刻つきの別バッチに勝ってしまう。
+    種別の優先はこの絞り込みのあとに当てる。
+    """
+    stamped = [p for p in paths if _batch_key(p)]
+    return stamped or list(paths)
 
 
 def _batch_key(path: str) -> str:
@@ -202,7 +216,7 @@ def _resolve_data_file(
                   if os.path.isfile(p)]
     if not real_paths:
         return None
-    real_paths = _select_latest_batch(real_paths)  # 複数バッチ混在時は最新バッチへ
+    real_paths = _timestamped_first(_select_latest_batch(real_paths))  # 最新バッチへ
     if prefer_suffix:
         preferred = [p for p in real_paths if p.lower().endswith(prefer_suffix)]
         if preferred:

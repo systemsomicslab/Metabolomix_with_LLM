@@ -338,3 +338,13 @@ def test_job_without_a_recorded_sha_uses_the_measured_one(tmp_path):
     msp.write_text("NAME: x\n", encoding="ascii")
     rec = remember_from_job(_job_with_pinned_msp(tmp_path, msp, None))
     assert rec["status"] == "known" and rec["sha256"] == _sha(msp)
+
+
+def test_is_lbm_annotator_false_for_msp():
+    """末尾が `.msp` + 数字（大文字小文字を問わない）の注釈器キーは LBM でない。"""
+    assert is_lbm_annotator("D:/x/lib.msp") is False
+    assert is_lbm_annotator("D:/x/lib.MSP2") is False
+    assert is_lbm_annotator("lib.msp12") is False
+    assert is_lbm_annotator("D:/x/some.lbm2") is True
+    assert is_lbm_annotator("LabMsp") is None
+    assert is_lbm_annotator("lib.msp.bak") is None

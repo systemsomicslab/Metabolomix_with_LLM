@@ -37,7 +37,8 @@ from metabolomix.core.atomic_io import DomainError
 from metabolomix.dataset.alignment_files import AlignmentSelection, select_alignment
 from metabolomix.mztab.dataset_state import DatasetState
 
-__all__ = ["KINDS", "SOURCES", "OpenedDataset", "open_dataset", "pipeline_arf2"]
+__all__ = ["KINDS", "SOURCES", "OpenedDataset", "open_dataset", "pipeline_arf2",
+           "pipeline_arf2_candidates"]
 
 #: 入口の引数名（`kind`）。
 KINDS = ("directory", "mztab_path", "job_path", "pipeline_path")
@@ -250,7 +251,7 @@ def _folder_sidecars(ds) -> list[str]:
     `.EIC.aef`。無くても数える（後から現れたら読み直す）。
     """
     from metabolomix.curation.flags import FLAGS_FILENAME, curation_dir
-    from metabolomix.msdial.alignment_spot import alignment_stem
+    from metabolomix.msdial.alignment_spot import alignment_stem, find_by_name
     from metabolomix.msdial.tags import alignment_tag_path
 
     out = []
@@ -260,7 +261,10 @@ def _folder_sidecars(ds) -> list[str]:
         out += [str(alignment_tag_path(path)), str(curation_dir(path) / FLAGS_FILENAME)]
         stem = alignment_stem(path)
         if stem is not None:
-            out += [str(stem.with_name(stem.name + suffix)) for suffix in (".dcl", ".EIC.aef")]
+            for suffix in (".dcl", ".EIC.aef"):
+                # 大文字小文字違いの綴りで実在するものはその名前で数える（無ければ標準の綴り）。
+                found = find_by_name(stem.parent, stem.name + suffix)
+                out.append(str(found or stem.with_name(stem.name + suffix)))
     return out
 
 
@@ -439,7 +443,9 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]],
                 state, parsed = loading.read_mztab_parsed(gate.mztab_path)
             except DomainError as exc:
                 message = exc.message if exc.message.endswith("。") else f"{exc.message}。"
-                raise DomainError(exc.code, f"{message}{_BROKEN_MZTAB_HINT}",
+                reason = (f"読めなかった理由: {exc.code}。この mzTab-M 自体が読めないので、"
+                          "source=\"mztab\" でも読めない。")
+                raise DomainError(exc.code, f"{message}{reason}{_BROKEN_MZTAB_HINT}",
                                   exc.details) from exc
             axes.extend(evidence.join_axes(state))
             raw_by_name.update(
@@ -457,19 +463,22 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]],
     candidates = evidence.arf_candidates(gate.mztab_path, artifact_paths)
     passed, rejected, scan = verify(candidates) if candidates else ([], {}, None)
     if not passed and pipeline_root is not None:
-        arf2 = pipeline_arf2(pipeline_root)
-        if arf2 is not None:
+        # run の input/ のバッチを新しい順に、合うものが見つかるまで試す。
+        # すでに候補に入っている `.arf`（解決後のパスで比べる）は二重に検証・列挙しない。
+        for arf2 in pipeline_arf2_candidates(pipeline_root):
             try:
                 fallback = select_alignment(arf2).arf
             except DomainError as exc:
                 raise _with_hint(exc) from exc
-            # すでに候補に入っている `.arf`（解決後のパスで比べる）は二重に検証・列挙しない。
-            if fallback.resolve() not in {p.resolve() for p in candidates}:
-                candidates.append(fallback)
-                more, more_rejected, more_scan = verify([fallback])
-                passed += more
-                rejected.update(more_rejected)
-                scan = scan or more_scan
+            if fallback.resolve() in {p.resolve() for p in candidates}:
+                continue
+            candidates.append(fallback)
+            more, more_rejected, more_scan = verify([fallback])
+            passed += more
+            rejected.update(more_rejected)
+            scan = scan or more_scan
+            if passed:
+                break
 
     details = {"mztab": gate.mztab_path.name, "candidates": [p.name for p in candidates],
                "source_hint": "mztab"}
@@ -531,18 +540,21 @@ def _folder_note(gate, where: str) -> str:
             "読んだ。mzTab-M を読むなら source=\"mztab\"。")
 
 
-def pipeline_arf2(pipeline_path) -> Path | None:
-    """pipeline の run の `input/AlignResult-*.arf2`。無ければ None。
+def pipeline_arf2_candidates(pipeline_path) -> list[Path]:
+    """pipeline の run の `input/AlignResult-*.arf2` を、名前の新しい順に並べる。
 
     run では mzTab が `console/attempt-*/msdial/` の下、`.arf`・`.arf2`・`.dcl` が
-    `input/` にあるので、mzTab の隣を探す既定の経路では見つからない。`AlignResult-*.arf2`
-    が複数あるときは名前が最も新しい（降順で先頭の）ものを選ぶ（決定的にするため。
-    `AlignResult-<日時など>` は名前の順が新しさの順になる）。`pipeline_path` は
-    `pipeline-run.json` でもその親でもよい。
+    `input/` にあるので、mzTab の隣を探す既定の経路では見つからない。バッチが複数あるときは
+    名前の降順（決定的にするため。`AlignResult-<日時など>` は名前の順が新しさの順になる）。
+    `pipeline_path` は `pipeline-run.json` でもその親でもよい。
     """
     from metabolomix.pipeline.recovery import normalize_pipeline_root
 
     root = normalize_pipeline_root(Path(pipeline_path))
-    candidates = sorted((root / "input").glob("AlignResult-*.arf2"),
-                        key=lambda p: p.name, reverse=True)
-    return next((p for p in candidates if p.is_file()), None)
+    return [p for p in sorted((root / "input").glob("AlignResult-*.arf2"),
+                              key=lambda p: p.name, reverse=True) if p.is_file()]
+
+
+def pipeline_arf2(pipeline_path) -> Path | None:
+    """pipeline の run の `input/AlignResult-*.arf2` のうち名前が最も新しいもの。無ければ None。"""
+    return next(iter(pipeline_arf2_candidates(pipeline_path)), None)

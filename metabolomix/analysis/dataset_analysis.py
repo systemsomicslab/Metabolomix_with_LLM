@@ -14,14 +14,11 @@ ARF 経路と DatasetState 経路で違う数字が出ないことが、この�
 """
 from __future__ import annotations
 
-import re
-
 import numpy as np
 
 from metabolomix.analysis import differential, export_contract, preprocessing, sample_manifest
 from metabolomix.analysis.pca import run_pca
 
-_DATE_RE = re.compile(r"(\d{8})")
 
 # 差次的解析の群に混ぜてはいけないロール。
 _NON_SAMPLE_ROLES = ("qc", "blank")

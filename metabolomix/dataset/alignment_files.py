@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from metabolomix.core.atomic_io import DomainError
-from metabolomix.core.path_resolvers import _pick_latest, _select_latest_batch
+from metabolomix.core.path_resolvers import (
+    _pick_latest, _select_latest_batch, _timestamped_first)
 from metabolomix.msdial.alignment_spot import alignment_sibling
 from metabolomix.msdial.classes import MDDATA_READ_ERRORS, resolve_mddata_path
 from metabolomix.msdial.tags import alignment_tag_path
@@ -50,7 +51,7 @@ def _list_arfs(folder: Path) -> list[Path]:
 
 
 def _choose_arf(candidates: list[Path]) -> Path:
-    batch = _select_latest_batch([str(p) for p in candidates])
+    batch = _timestamped_first(_select_latest_batch([str(p) for p in candidates]))
     preferred = [p for p in batch if _PEAK_PROPERTIES_RE.search(p)] or batch
     return Path(_pick_latest(preferred))
 

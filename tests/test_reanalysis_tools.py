@@ -893,3 +893,18 @@ def test_claim_evidence_on_an_lbm_only_dataset_is_not_evaluable_not_no_library(d
     assert all(m["reason"] == "lbm_only" for m in msms.values())
     assert "LBM" in out["msms_not_evaluable_reason"]
     assert msms["20"]["spectrum_available"] is True
+
+
+def test_not_evaluable_reason_is_last_key(data, library):
+    """理由の文は束の先頭に置かず、末尾に置く（読み手が最初に見るのは status / schema）。"""
+    from metabolomix.core import handles
+
+    handle = _open(data)
+    handles.registry.get(handle).dataset.library_record = {
+        "status": "lbm_only", "kind": "lbm", "file": "lab.lbm2", "path": None}
+    claim = {**CLAIM, "msms": {"top_n": 3, "rules": {}}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    keys = list(out)
+    assert "msms_not_evaluable_reason" in keys
+    assert keys[-1] == "msms_not_evaluable_reason" and keys[0] != "msms_not_evaluable_reason"
+    assert "schema" in keys

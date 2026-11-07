@@ -179,3 +179,20 @@ def test_corrupt_tag_file_becomes_a_load_note(tmp_path):
     assert ds.feature_tags == {}
     assert any("タグファイル" in n for n in ds.load_notes)
     assert ds.feature_annotations
+
+
+@pytest.mark.parametrize("name", ["   ", "\t", " Unknown ", " null "])
+def test_whitespace_name_is_not_sml(name):
+    fields = spot_fields(arf2_spot_raw(spot_id=0, name="x"))
+    fields["name"] = name
+    assert sml_annotation(fields) is None
+
+
+@pytest.mark.parametrize("name", ["unknown", "UNKNOWN", " Unknown "])
+def test_unknown_name_case_insensitive(name):
+    fields = spot_fields(arf2_spot_raw(spot_id=0, name="x"))
+    fields["name"] = name
+    cols = identity_columns(fields, msms_assigned=False, tables=IdentityCache().tables)
+    ref = identity_columns({**fields, "name": "Unknown"}, msms_assigned=False,
+                           tables=IdentityCache().tables)
+    assert cols == ref

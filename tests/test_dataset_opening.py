@@ -795,3 +795,35 @@ def test_job_folder_reads_arf_once(tmp_path, monkeypatch):
     assert opened.dataset.source_format == "msdial_folder"
     assert len(opened.dataset.feature_ids) == 2
     assert len(calls) == 1
+
+
+def test_pipeline_falls_back_to_older_input_batch(tmp_path):
+    """run の input/ に複数のバッチがあるとき、最新が合わなくても古いバッチで合えば読む。"""
+    job = _job(tmp_path, with_folder=False)
+    run = _pipeline(tmp_path, job)
+    write_msdial_folder(run / "input", **_other_spec(), stem="AlignResult-2")   # 新しい・合わない
+    write_msdial_folder(run / "input", **_spec(), stem="AlignResult-1")         # 古い・合う
+    opened = open_dataset(pipeline_path=str(run), source="folder")
+    assert opened.selection.arf.name == "AlignResult-1_PeakProperties.arf"
+    assert opened.dataset.feature_metadata["0"]["mz"] == pytest.approx(760.5851)
+
+
+def test_pipeline_arf2_candidates_newest_first(tmp_path):
+    from metabolomix.dataset import opening
+
+    job = _job(tmp_path, with_folder=False)
+    run = _pipeline(tmp_path, job)
+    for stem in ("AlignResult-1", "AlignResult-3", "AlignResult-2"):
+        write_msdial_folder(run / "input", **_spec(), stem=stem)
+    names = [p.name for p in opening.pipeline_arf2_candidates(run)]
+    assert names == ["AlignResult-3.arf2", "AlignResult-2.arf2", "AlignResult-1.arf2"]
+    assert opening.pipeline_arf2(run).name == "AlignResult-3.arf2"
+
+
+def test_broken_mztab_hint_names_reason(tmp_path):
+    job = _job(tmp_path)
+    (job.parent / "msdial" / "Height_x.mzTab").write_text(
+        "MTD\tmzTab-version\t2.0.0-M\n", encoding="utf-8")
+    err = _code(lambda: open_dataset(job_path=str(job)))
+    assert "読めなかった理由" in err.message and err.code in err.message
+    assert 'source="mztab"' in err.message and "でも読めない" in err.message
