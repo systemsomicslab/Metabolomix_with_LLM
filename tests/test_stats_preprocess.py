@@ -197,6 +197,23 @@ def test_feature_not_correctable_in_one_batch_is_left_uncorrected_everywhere():
     assert np.nanstd(prep.log2[:, 0]) < 1e-9
 
 
+def test_drift_skipped_when_no_feature_is_correctable_in_all_batches():
+    study = _drift_study()
+    qc = {b: [i for i, s in enumerate(study.samples) if s.role == "qc" and s.batch == b]
+          for b in ("B1", "B2")}
+    study.values[qc["B1"][:3], 1] = np.nan              # f1 は B1 で、f0 は B2 で補正できない
+    study.values[qc["B2"][:3], 0] = np.nan
+    cfg = {"filters": OFF_FILTERS, "normalize": {"method": "none"}}
+    prep = P.preprocess(study, cfg)
+    drift = _step(prep, "drift")
+    assert drift["status"] == "skipped" and drift["reason"] == "no_feature_correctable_in_all_batches"
+    assert drift["uncorrected_too_few_qc"] == {"B1": 1, "B2": 1}
+    assert np.array_equal(prep.log2, _raw_bio_log2(study))
+    with pytest.raises(DomainError) as e:
+        P.preprocess(study, {**cfg, "drift": {"mode": "on"}})
+    assert e.value.code == "PREPROCESS_PRECONDITION"
+
+
 def test_drift_records_rows_not_corrected():
     study = _with_rows(_drift_study(), [
         (("blank_nobatch", "blank", None, None, 5.5, None), [10.0, 10.0]),

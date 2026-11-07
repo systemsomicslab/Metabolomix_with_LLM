@@ -262,6 +262,9 @@ def _drift(values: np.ndarray, samples, cfg: dict) -> dict:
         corrected &= in_batch
     record = {"step": "drift", "method": "loess", "span": span, "batches": batches,
               "uncorrected_too_few_qc": too_few, "uncorrected_fit_invalid": fit_invalid}
+    if not empty and not corrected.any():
+        # バッチごとには補正できても、全バッチで補正できる特徴が 1 つも無い
+        empty = ["no_feature_correctable_in_all_batches"]
     if empty:
         return {**record, "status": "skipped", "reason": empty[0], "reasons": empty}
     # 一部のバッチでしか補正できなかった特徴は、どのバッチでも補正しない
