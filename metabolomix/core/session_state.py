@@ -74,6 +74,15 @@ SEMANTICS_CAVEAT = (
 #: アッセイ種別。`unknown` は「まだ確定していない」であって「脂質」ではない。
 ASSAY_KINDS = ("lipid", "metabolite", "unknown")
 
+
+def normalize_assay_kind(assay_kind: str) -> str:
+    """アッセイ種別を正規化する（状態は変えない）。未知の値は ValueError。"""
+    normalized = str(assay_kind).strip().lower()
+    if normalized not in ASSAY_KINDS:
+        raise ValueError(
+            f"assay_kind は {'/'.join(ASSAY_KINDS)} のいずれかです: {assay_kind!r}")
+    return normalized
+
 #: 種別ごとの追加1行。行数は種別によらず1行（前置の総量を種別で変えない）。
 _ASSAY_CAVEAT_LINE = {
     "lipid": "- 脂質名: 34:1(species)と 16:0/18:1(molecular)は別粒度。P-/O-は曖昧(§2.1)。",
@@ -561,10 +570,7 @@ class AnalysisSession:
         黙って `unknown` へ落とさない——落とすと、利用者が種別を伝えたつもりのまま
         サーバは未確定として振る舞い、どちらの規則も当たらない状態が続く。
         """
-        normalized = str(assay_kind).strip().lower()
-        if normalized not in ASSAY_KINDS:
-            raise ValueError(
-                f"assay_kind は {'/'.join(ASSAY_KINDS)} のいずれかです: {assay_kind!r}")
+        normalized = normalize_assay_kind(assay_kind)
         self.assay_kind = normalized
         return normalized
 
@@ -579,13 +585,22 @@ class AnalysisSession:
           既読になるまで出し続ける。これがオンデマンド参照の起点になる）。
 
         設定ファイルの `[server] caveat_mode = 'off'` で両方とも無効化（ローカルの操作
-        ナビゲータ専用デプロイ向け。既定 digest）。設定ファイルが読めなければ
-        ConfigInvalidError（打ち間違いを黙って既定に落とさない）。エラー文字列など
-        解釈材料でない出力には呼ばない。
+        ナビゲータ専用デプロイ向け。既定 digest）。設定ファイルが読めない（`caveat_mode` の
+        値が digest / off 以外、旧 `[msdial] lbm` が残っている、TOML の構文など）ときは
+        **送出しない**: 既定の digest で続け、問題を 1 行だけ末尾に添える（パーサや
+        load_dataset が状態を変えたあとで落ちないため。黙って既定に落とすのでもない）。
+        エラー文字列など解釈材料でない出力には呼ばない。
         """
-        setting = user_config.get_setting("server.caveat_mode")
+        try:
+            setting = user_config.get_setting("server.caveat_mode")
+        except user_config.ConfigInvalidError as exc:
+            return self._prepend_caveat(text, topic) + "\n\n" + _config_problem_note(exc)
         if setting is not None and setting.value == "off":
             return text
+        return self._prepend_caveat(text, topic)
+
+    def _prepend_caveat(self, text: str, topic: str | None) -> str:
+        """caveat_mode=digest のときの本体（`maybe_prepend_caveat` を参照）。"""
         out = text
         if topic:
             hint = self.section_hint(topic)
@@ -598,6 +613,13 @@ class AnalysisSession:
         self.caveat_emitted = True
         self.caveat_emitted_kind = self.assay_kind
         return f"{assay_digest(self.assay_kind)}\n\n{out}"
+
+
+def _config_problem_note(exc: "user_config.ConfigInvalidError") -> str:
+    """設定ファイルが読めないことを出力の末尾に添える 1 行。"""
+    name = exc.config_file.replace("\\", "/").rsplit("/", 1)[-1]
+    return (f"⚠ 設定ファイル {name} が読めないので [server] caveat_mode を既定の digest として"
+            f"扱った（CONFIG_INVALID: {exc.message}）。")
 
 
 # インスタンスを1つ作成（サーバー起動中に保持される）

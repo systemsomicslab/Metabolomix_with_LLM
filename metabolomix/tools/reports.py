@@ -8,6 +8,7 @@ tools_* / server は import しない。
 
 from metabolomix.corpus import knowledge_store
 from metabolomix.core import mcp_errors
+from metabolomix.core.mcp_errors import config_invalid_as_envelope
 from metabolomix.core import session_state
 from mcp.types import ToolAnnotations
 from metabolomix.core.serialization import json_payload
@@ -118,6 +119,7 @@ def _choose_figure_result(kind: str, source: str, result_id: str | None):
 # --- 解析・解釈レポート（reports/<analysis_id>.md） ---
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=True), structured_output=False)
+@config_invalid_as_envelope
 def write_report(
     analysis_id: str,
     dataset: str,
@@ -159,6 +161,7 @@ def write_report(
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+@config_invalid_as_envelope
 def read_report(analysis_id: str) -> str:
     """過去レポートを読み戻す（候補ディレクトリ横断で最新更新のものを返す）。セッション継続用。
 
@@ -175,6 +178,7 @@ def read_report(analysis_id: str) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+@config_invalid_as_envelope
 def list_reports() -> str:
     """既存レポートの1行索引（analysis_id / date / status）を返す。
 
@@ -210,6 +214,7 @@ _SOURCE_KINDS = ("pca", "volcano")
 
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=True), structured_output=False)
+@config_invalid_as_envelope
 def save_figure(kind: str, analysis_id: str, title: str | None = None,
                 source: str = "auto", result_id: str | None = None) -> str:
     """明示的なユーザー要求時だけ、直近の図を reports/figures/<analysis_id>_<kind>.png に保存する。

@@ -179,6 +179,9 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
 
     try:
         store_obj = open_store(resolved, rebuild=rebuild, read_only=dataset_handle is not None)
+    except user_config.ConfigInvalidError as exc:  # キャッシュの置き場所（[paths] library_cache）が読めない
+        return json_payload({"status": "error", "code": exc.code, "message": exc.message,
+                             "details": exc.details()})
     except Exception as exc:  # noqa: BLE001 - 壊れたライブラリは文言で返す（MCP が扱いやすい）
         # OSError の文言は置き場所（フルパス）を含む。研究室ライブラリの置き場所は
         # 戻り値（LLM の文脈）に出さないので、ディレクトリ部分を伏せる。

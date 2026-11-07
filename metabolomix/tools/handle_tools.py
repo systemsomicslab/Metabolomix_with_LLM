@@ -21,7 +21,7 @@ from pathlib import Path
 
 from mcp.types import ToolAnnotations
 
-from metabolomix.core import handles, session_state
+from metabolomix.core import handles, session_state, user_config
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import mztab_error
@@ -107,12 +107,23 @@ def _open_library_for(ds) -> tuple[object | None, str | None]:
     path = Path(record["path"])
     try:
         store = open_store(path, read_only=True)  # 同じ構築先の同時構築は open_store が直列にする
+    except user_config.ConfigInvalidError as exc:  # キャッシュの置き場所（[paths] library_cache）が読めない
+        return None, (f"設定ファイルが読めないので、ライブラリ（{path.name}）を開いていない"
+                      f"（CONFIG_INVALID: {exc.message}）。")
     except Exception as exc:  # noqa: BLE001 - 壊れたライブラリでもハンドルは開く
         # 例外の文言は置き場所（フルパス）を含みうるので、種類だけを返す。
         return None, (f"ライブラリ（{path.name}）を開けなかったので、読んでいない"
                       f"（{type(exc).__name__}）。")
     store.library_file_name = path.name
     return store, None
+
+
+def _max_handles_or_none() -> int | None:
+    """要約に載せる上限。開いた直後に設定ファイルが壊れていたら None（開いたハンドルは返す）。"""
+    try:
+        return handles.max_handles()
+    except DomainError:
+        return None
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
@@ -218,7 +229,7 @@ def dataset_handle_open(mztab_path: str | None = None, job_path: str | None = No
         "dcl": Path(dcl).name if dcl else None,
         "reused_base": opened.reused_base,
         "open_handles": len(handles.registry.list()),
-        "max_handles": handles.max_handles(),
+        "max_handles": _max_handles_or_none(),
         **({"notes": notes} if notes else {}),
     })
 
@@ -247,9 +258,13 @@ def dataset_handle_list() -> str:
         })
     columns = ["dataset_handle", "current", "polarity", "source_kind", "source", "n_features",
                "n_samples", "library_sha256"]
+    try:
+        limit = handles.max_handles()
+    except DomainError as exc:  # 設定ファイルが読めない（CONFIG_INVALID）
+        return mztab_error(exc.code, exc.message, exc.details or None)
     return json_payload({
         "n_open": len(rows),
-        "max_handles": handles.max_handles(),
+        "max_handles": limit,
         "handles": format_spots_as_table(rows, columns=columns) if rows else "",
     })
 

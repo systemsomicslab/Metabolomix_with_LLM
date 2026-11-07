@@ -54,5 +54,5 @@ exe = 'C:\MS-DIAL\MSDIALCUI.exe'
 # 同時に開いておけるデータセットのハンドルの上限（整数。既定 8、1 未満は 1）。
 # max_dataset_handles = 8
 # 解析出力の先頭に付く意味論ダイジェストと出力形式の案内。digest（既定）か off。
-# off はローカルの操作ナビゲータ専用のデプロイ向け。ほかの値は CONFIG_INVALID。
+# off はローカルの操作ナビゲータ専用のデプロイ向け。ほかの値は CONFIG_INVALID（解析出力は既定の digest で続き、その旨が 1 行添えられる）。
 # caveat_mode = 'digest'

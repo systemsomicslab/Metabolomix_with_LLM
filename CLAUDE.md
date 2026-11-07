@@ -87,6 +87,8 @@ setup が無ければ作る。追跡されている `.vscode/mcp.json` も `.ven
 **設定ファイルのフォルダ**の `data/.library-cache` で、`LIPIDMIX_DATA_DIR` には付いて動かない）
 `[server] max_dataset_handles`（データセットのハンドルの上限。既定 8）`[server] caveat_mode`
 （意味論ダイジェスト。`digest` 既定 / `off`。他の値は `CONFIG_INVALID`）。
+設定ファイルが読めないとき、記録・ハンドル・ライブラリのツールは `CONFIG_INVALID` の封筒を返し
+（`mcp_errors.config_invalid_as_envelope`）、ダイジェストだけは送出せず `digest` で続けて問題を 1 行添える。
 
 **外部資産の場所は設定ファイルだけで指す**（spec 2026-10-06・2026-11-06 §7.4。資産の場所の
 環境変数は読まない）。リポジトリ直下の `lipidmix.local.toml`（追跡外。雛形 `lipidmix.example.toml`）の

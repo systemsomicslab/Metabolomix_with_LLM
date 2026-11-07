@@ -12,8 +12,11 @@ outputSchema を導出するため、`-> str` のツールが失敗時だけ dic
 機械可読なエラーはテキストに載せるしかない。
 
 このモジュールは依存グラフの leaf（stdlib と同じく leaf の
-metabolomix.core.serialization のみ）。tools_* / server を import しない。
+metabolomix.core.serialization と metabolomix.core.atomic_io のみ）。tools_* / server を import しない。
 """
+import functools
+
+from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.serialization import json_payload
 
 MISSING_STATE = "missing_state"
@@ -187,3 +190,23 @@ def pathway_error(code: str, message: str, details: dict | None = None) -> str:
     if details is not None:
         payload["details"] = details
     return json_payload({"error": payload})
+
+
+def config_invalid_as_envelope(fn):
+    """ツール本体の `DomainError("CONFIG_INVALID")`（設定ファイルが読めない）を封筒にして返す。
+
+    記録の置き場所（`[paths] reports_dir`）を読むツール（レポート・objective・図の保存・
+    パスウェイ）は、設定ファイルが壊れていると例外のまま落ちていた。ほかのコードの
+    DomainError はそのまま送出する。`@mcp.tool` の内側に付ける（`functools.wraps` が
+    引数の形と docstring を保つ）。
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except DomainError as exc:
+            if exc.code != "CONFIG_INVALID":
+                raise
+            return json_payload({"error": {"code": exc.code, "message": exc.message,
+                                           "details": exc.details}})
+    return wrapper

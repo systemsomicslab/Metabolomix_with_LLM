@@ -17,6 +17,7 @@ from mcp.server.fastmcp import Image
 from mcp.types import ToolAnnotations
 
 from metabolomix.core import mcp_core, mcp_errors, session_state
+from metabolomix.core.mcp_errors import config_invalid_as_envelope
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.serialization import json_payload
 from metabolomix.pathway import bridge, compare, handoff, jsonld
@@ -205,6 +206,7 @@ def _build_dataset(group_a, group_b, label_a, label_b):
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
     structured_output=False)
+@config_invalid_as_envelope
 def pathway_project(source: str = "auto", group_a: str | list[str] | None = None,
                     group_b: str | list[str] | None = None,
                     group_a_label: str = "group_a", group_b_label: str = "group_b",
@@ -365,6 +367,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True),
     structured_output=False)
+@config_invalid_as_envelope
 def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
                  plot_type: str = "dot", inline_image: bool = False):
     """pathway_project の run をパスウェイ図（PDF）に描く。既定は図のファイルの場所と要約だけを返す。

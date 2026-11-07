@@ -19,6 +19,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from metabolomix.core import user_config
+from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.data_config import get_data_dir
 
 # このファイルは <root>/metabolomix/core/ にある。docs/ knowledge/ playbook/
@@ -297,14 +298,17 @@ def _report_dir_candidates() -> list[Path]:
     """明示された保存先を優先し、未指定時は解析フォルダ配下 reports/ だけを使う。
 
     明示先は設定ファイルの `[paths] reports_dir`（環境変数では指さない。spec 2026-11-06
-    §7.4）。設定ファイルが読めなければ ConfigInvalidError（黙って解析フォルダへ書き先を
-    変えない）。
+    §7.4）。設定ファイルが読めなければ `CONFIG_INVALID` の DomainError（黙って解析フォルダへ
+    書き先を変えない。ツールの境界は `mcp_errors.config_invalid_as_envelope` が封筒にする）。
 
     解析の記録（objective とレポート）は生データ（解析フォルダ）の側に置く契約。
     リポジトリ側（`<project>/reports` や `<project>/analyses`）へ退避する経路は
     持たない——コードの置き場に解析記録が溜まるバグの温床だった。
     """
-    setting = user_config.get_setting("paths.reports_dir")
+    try:
+        setting = user_config.get_setting("paths.reports_dir")
+    except user_config.ConfigInvalidError as exc:
+        raise DomainError(exc.code, exc.message, exc.details()) from exc
     if setting is not None:
         return [Path(setting.value), DATA_DIR / "reports"]
     return [DATA_DIR / "reports"]

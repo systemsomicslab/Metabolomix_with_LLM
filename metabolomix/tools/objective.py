@@ -12,6 +12,7 @@ from metabolomix.core import mcp_core
 from metabolomix.core import session_state
 from mcp.types import ToolAnnotations
 from metabolomix.core.mcp_core import mcp
+from metabolomix.core.mcp_errors import config_invalid_as_envelope
 
 __all__ = [
     "record_objective",
@@ -54,6 +55,7 @@ def _resolve_objective_file(analysis_id: str) -> Path | None:
 # record_objective（ノートを同じパスへ上書きするので冪等）
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=True), structured_output=False)
+@config_invalid_as_envelope
 def record_objective(
     analysis_id: str,
     dataset: str,
@@ -75,9 +77,16 @@ def record_objective(
     解釈規則（脂質名文法か候補集合か）がサーバ側で切り替わる。
     """
     try:
-        assay_kind = session_state.session.set_assay_kind(assay_kind)
+        assay_kind = session_state.normalize_assay_kind(assay_kind)
     except ValueError as exc:
         return str(exc)
+    # 置き場所を先に決める。設定ファイルが読めない（CONFIG_INVALID）・書けないときに、
+    # assay_kind だけが切り替わった半端な状態を残さない。
+    try:
+        report_dir = mcp_core._resolve_report_dir()
+    except OSError as exc:
+        return str(exc)
+    session_state.session.set_assay_kind(assay_kind)
     meta_fields = {
         "assay_kind": assay_kind,
         "dataset": dataset,
@@ -91,7 +100,7 @@ def record_objective(
     }
     try:
         path = knowledge_store.write_objective(
-            mcp_core._resolve_report_dir(), analysis_id, meta_fields, sub_questions,
+            report_dir, analysis_id, meta_fields, sub_questions,
         )
     except (ValueError, OSError) as exc:
         return str(exc)
@@ -104,6 +113,7 @@ def record_objective(
 # update_objective（add_subquestions が既存 Q の最大+1 で採番して追記するため冪等でない）
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=False), structured_output=False)
+@config_invalid_as_envelope
 def update_objective(
     analysis_id: str,
     confirmed_objective: str | None = None,
@@ -144,6 +154,7 @@ def update_objective(
 # 同じログを2回追記すれば2行増えるため idempotent でもない。
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=False), structured_output=False)
+@config_invalid_as_envelope
 def log_search(analysis_id: str, subquestion: str, query: str, hits: int, promoted: int = 0) -> str:
     """探索結果を objective の探索ログに記録する（既探索 Qi の再探索を防ぐ）。
 
@@ -163,6 +174,7 @@ def log_search(analysis_id: str, subquestion: str, query: str, hits: int, promot
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+@config_invalid_as_envelope
 def knowledge_coverage(analysis_id: str) -> str:
     """objective の各小問 Qi を COVERED / WEAK / GAP に分類する（探索候補=GAP）。
 

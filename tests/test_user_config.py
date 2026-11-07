@@ -416,7 +416,10 @@ def test_conftest_points_the_default_cache_into_the_test_tmp(tmp_path_factory):
 
 
 def test_caveat_mode_invalid_value_rejected(cfg):
-    """`[server] caveat_mode` は digest / off だけ。他の値は黙って既定に落とさず CONFIG_INVALID。"""
+    """`[server] caveat_mode` は digest / off だけ。他の値は設定の読み取りでは CONFIG_INVALID。
+
+    ダイジェストを付ける側（maybe_prepend_caveat）は送出せず、既定の digest で続けて問題を
+    1 行添える（パーサや load_dataset が状態を変えたあとで落ちないため。controller 裁定）。"""
     from metabolomix.core import session_state
 
     _write(cfg, "[server]\ncaveat_mode = 'Off'\n")       # 大文字小文字は問わない
@@ -428,8 +431,12 @@ def test_caveat_mode_invalid_value_rejected(cfg):
     assert exc.value.code == "CONFIG_INVALID"
     assert "[server] caveat_mode" in exc.value.message
     assert "digest" in exc.value.message and "off" in exc.value.message
-    with pytest.raises(ConfigInvalidError):
-        session_state.AnalysisSession().maybe_prepend_caveat("BODY")
+    out = session_state.AnalysisSession().maybe_prepend_caveat("BODY")
+    assert out.startswith(session_state.SEMANTICS_CAVEAT) and "BODY" in out   # digest に落ちる
+    note = out.splitlines()[-1]                                      # 末尾の 1 行
+    assert "CONFIG_INVALID" in note and "lipidmix.local.toml" in note
+    assert "[server] caveat_mode" in note and "'quiet'" in note
+    assert str(cfg.parent) not in out
 
 
 def test_broken_config_is_config_invalid_for_the_handle_limit(cfg):
