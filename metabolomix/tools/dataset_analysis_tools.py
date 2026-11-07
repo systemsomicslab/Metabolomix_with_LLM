@@ -667,6 +667,7 @@ def dataset_feature_search(
     merge_split: bool = True,
     alignment_qc_path: str | None = None,
     ppm_offset: dict | None = None,
+    sort: str = "mz",
     dataset_handle: str | None = None,
 ) -> str:
     """DatasetState の特徴を探し、目的の物質に当たる特徴を規則で判定する（読み取り専用）。
@@ -675,9 +676,16 @@ def dataset_feature_search(
 
     **窓検索**（`targets` なし）: `feature_ids`（SMF_ID の完全一致）・`min_mz`/`max_mz`・
     `min_rt`/`max_rt`（分）の AND。境界を含む。何も指定しなければ `FEATURE_SEARCH_EMPTY_QUERY`
-    （全件を返さない）。`feature_ids=[]` は「どの ID でもない」条件で 0 件。並びは m/z 昇順。
-    戻り値 `features` は TSV（`feature_id mz rt evidence name inchikey adduct n_sme`。
-    `evidence` は `sme`/`sml`/`none`）。注釈の無い特徴にも統計を付ける。
+    （全件を返さない。`sort="intensity"` なら条件なしで上位 `max_results` 件）。`feature_ids=[]` は
+    「どの ID でもない」条件で 0 件。`dataset_exclude` した特徴は出さない。
+    並びは `sort="mz"`（既定）で m/z 昇順、`sort="intensity"` で強度の降順。強度は検出セル
+    （gap-fill でない実測。除外した試料の列を除く）の値の**最大**で、ピークの高さ（データセットの
+    測定値）の最大——EIC のクロマトグラムの最大ではない。検出セルが無い特徴は最後。
+    戻り値 `features` は TSV（`feature_id mz rt evidence name inchikey adduct n_sme ontology
+    n_detected normalized msi_level`。`evidence` は `sme`/`sml`/`none`、`n_detected` は検出セルの数
+    （除外した試料を除く。検出状態が無ければ空）、`normalized`（GOSLIN で標準化した名前）と
+    `msi_level` は解析フォルダのデータセットだけが持ち、mzTab-M では空。意味は
+    `lipidmix://docs/output-format/identity`）。注釈の無い特徴にも統計を付ける。
 
     **目標照合**（`targets` あり、1 回 50 件まで）: 各要素は `target_id`・`inchikey`（必須。
     先頭 14 文字で照合）と、`formula` か（`expected_mz` と `adduct`）。InChIKey が一意に決まらない
@@ -701,6 +709,8 @@ def dataset_feature_search(
         2 群比較の全部（古いものは使わず `notes` に挙げる）。名指しした ID が無い・古いときは
         `missing_state`。差次的結果が 1 件も無ければ統計なしで返す。
     max_results: 窓検索の行数・目標ごとの候補数の上限（既定 20）。打ち切りは `notes` に書く。
+    sort: 窓検索の並び（`mz` 既定 / `intensity`）。`targets` とは併用できない（`DATASET_BAD_REQUEST`。
+        目標照合は規則の順で並べる）。
 
     `stats` は TSV（`feature_id result_id status log2fc p q mean_a mean_b detected_a detected_b`）。
     `status` は `tested` / `not_in_matrix`（前処理で落ちた）/ `not_testable`（p が無い）で、
@@ -755,6 +765,14 @@ def dataset_feature_search(
                            "alignment_qc_path は merge_split=true のときだけ使える"
                            "（効かない設定を渡さない）。", {"field": "alignment_qc_path"})
 
+    if sort not in ("mz", "intensity"):
+        return mztab_error("DATASET_BAD_REQUEST", f"sort は mz か intensity: {sort!r}",
+                           {"field": "sort"})
+    if targets is not None and sort != "mz":
+        return mztab_error("DATASET_BAD_REQUEST",
+                           "sort は窓検索（targets なし）のときだけ使える（目標照合は規則の順で"
+                           "並ぶ。効かない設定を渡さない）。", {"field": "sort"})
+
     window = {"feature_ids": feature_ids, "min_mz": min_mz, "max_mz": max_mz,
               "min_rt": min_rt, "max_rt": max_rt}
     given_window = [name for name, value in window.items() if value is not None]
@@ -783,7 +801,7 @@ def dataset_feature_search(
     try:
         if targets is None:
             rows, truncated = feature_search.search_window(
-                ds, **window, max_results=max_results)
+                ds, **window, max_results=max_results, sort=sort)
             if feature_ids is not None and not feature_ids:
                 notes.append("feature_ids=[] は「どの ID でもない」条件として扱った（0 件）。")
             if truncated:

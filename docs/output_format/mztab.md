@@ -251,6 +251,16 @@ p / q / 平均は有効 4 桁）。
 `rule_hash` に入る（渡さなければ従来と同じ hash）。窓検索（`targets` なし）で渡すと `DATASET_BAD_REQUEST`
 （`field: ppm_offset`）。形の誤りも `DATASET_BAD_REQUEST`。
 
+**窓検索の `sort` と追加の列**。`sort="mz"`（既定）は m/z 昇順、`sort="intensity"` は強度の降順で、条件が無くても
+上位 `max_results` 件を返す（`sort="mz"` で条件が無ければ `FEATURE_SEARCH_EMPTY_QUERY`。`targets` と併用すると
+`DATASET_BAD_REQUEST`）。**強度は検出セル（gap-fill でない実測。`dataset_exclude` した試料の列を除く）の値の最大**、
+つまりピークの高さ（データセットの測定値）の最大で、**EIC のクロマトグラムの最大ではない**。検出セルが無い特徴
+（検出状態の無いデータセットは全特徴）は最後に並ぶ。`dataset_exclude` した特徴は両方の並びで出さない。
+`features` は `evidence` の後ろに `ontology`（MS-DIAL の Ontology。mzTab-M では SML 注釈にあれば）・`n_detected`
+（検出セルの数。除外した試料を数えない。検出状態が無いデータセットでは空で、0 ではない）・`normalized`（GOSLIN で
+標準化した脂質名）・`msi_level`（MSI の同定水準）を持つ。`normalized` と `msi_level` は解析フォルダのデータセット
+（`.arf2` の同定の標準化。意味は `docs/output_format/identity.md`）だけで、mzTab-M のデータセットでは空。
+
 **`evidence`（証拠の水準）** は 2 種類ある。
 
 | 欄 | 値 | 意味 |

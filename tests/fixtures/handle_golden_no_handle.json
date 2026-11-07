@@ -174,7 +174,7 @@
   ]
  },
  "search_window": {
-  "features": "feature_id\tmz\trt\tevidence\tname\tinchikey\tadduct\tn_sme\n1\t104.107\t1.2\tsme\tCholine\tOEYIOHPDSNJKLS-UHFFFAOYSA-N\t[M]1+\t1\n2\t184.0733\t1.25\tnone\t\t\t\t0\n3\t500.2\t5.0\tnone\t\t\t\t0",
+  "features": "feature_id\tmz\trt\tevidence\tname\tinchikey\tadduct\tn_sme\tontology\tn_detected\tnormalized\tmsi_level\n1\t104.107\t1.2\tsme\tCholine\tOEYIOHPDSNJKLS-UHFFFAOYSA-N\t[M]1+\t1\t\t\t\t\n2\t184.0733\t1.25\tnone\t\t\t\t0\t\t\t\t\n3\t500.2\t5.0\tnone\t\t\t\t0\t\t\t\t",
   "merge_split": {
    "alignment_qc_sha256": null,
    "bh_population": {},
