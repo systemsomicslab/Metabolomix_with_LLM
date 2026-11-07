@@ -97,16 +97,6 @@ def _backend_text(result: dict) -> str:
     return text
 
 
-def _arf2_catalog():
-    """兄弟 .arf2 のスポット一覧。無ければ (None, missing_state 封筒)。"""
-    from metabolomix.arf.tools import _require_arf_with_arf2
-    from metabolomix.arf2.reader import load_catalog
-    found = _require_arf_with_arf2()
-    if isinstance(found, str):
-        return None, found
-    return load_catalog(found), None
-
-
 def _run_dir(run_id: str) -> Path:
     return mcp_core._resolve_report_dir() / "pathway" / run_id
 
@@ -138,47 +128,9 @@ def _load_manifest(run_id: str | None):
     return manifest
 
 
-def _pick_source(source: str) -> str:
-    s = session_state.session
-    if source != "auto":
-        return source
-    if s.arf.feature_matrix is not None:
-        return "arf"
-    if s.dataset is not None:
-        return "dataset"
-    return "arf"
-
-
 def _recipe_text(recipe: dict) -> str:
     parts = [f"{k}={v}" for k, v in sorted((recipe or {}).items()) if v not in (None, "", [])]
     return "; ".join(parts) or "none"
-
-
-def _build_arf(group_a, group_b):
-    from metabolomix.arf.tools import _pool_group_labels
-    a = session_state.session.arf
-    if a.feature_matrix is None:
-        return None, mcp_errors.missing_state(
-            "preprocessed_matrix", ["arf_preprocess"],
-            "先に arf_preprocess を実行してください（前処理後行列が必要）。")
-    catalog, err = _arf2_catalog()
-    if err:
-        return None, err
-    labels = [None if (a.sample_meta.get(n) or {}).get("role", "sample") != "sample"
-              else (a.sample_meta.get(n) or {}).get("group") for n in a.pp_sample_names]
-    try:
-        _, _, resolved = _pool_group_labels(a.pp_sample_names, labels, group_a, group_b)
-    except ValueError as exc:
-        raise handoff.HandoffError("PATHWAY_BAD_REQUEST", str(exc)) from exc
-    table = handoff.build_from_arf(
-        matrix=a.feature_matrix, sample_names=a.pp_sample_names,
-        feature_names=a.pp_feature_names, sample_meta=a.sample_meta,
-        excluded_samples=a.excluded_samples, excluded_spots=a.excluded_spots,
-        catalog={int(s["MasterAlignmentID"]): s for s in catalog},
-        props=(a.preprocessing_recipe or {}).get("props"),
-        group_a=str(group_a), group_b=str(group_b), compared=resolved)
-    return (table, _recipe_text(a.preprocessing_recipe), a.dataset_id,
-            str(group_a), str(group_b)), None
 
 
 def _build_dataset(group_a, group_b, label_a, label_b):
@@ -207,7 +159,7 @@ def _build_dataset(group_a, group_b, label_a, label_b):
     readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
     structured_output=False)
 @config_invalid_as_envelope
-def pathway_project(source: str = "auto", group_a: str | list[str] | None = None,
+def pathway_project(group_a: str | list[str] | None = None,
                     group_b: str | list[str] | None = None,
                     group_a_label: str = "group_a", group_b_label: str = "group_b",
                     pathways: list[str] | None = None, acyl_chains: list[str] | None = None,
@@ -217,11 +169,8 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     返すのは小さな表だけ（ノード表と、逆向きに動く隣接ペア）。JSON-LD・中間 mzTab-M は
     解析フォルダの reports/pathway/<run_id>/ に残る。図は pathway_plot。
 
-    - source: auto | arf | dataset。arf は arf_preprocess 後、dataset は dataset_preprocess 後。
-      auto は「前処理済み ARF があれば arf、無ければ load_dataset 済みなら dataset、
-      どちらも無ければ arf（→ arf_preprocess を求める missing_state）」の順で選ぶ。
-    - group_a / group_b: arf は Class ID か因子トークン（arf_differential と同じ）、
-      dataset はサンプル名のリスト（group_a_label / group_b_label が群名になる）。
+    - 入力は `load_dataset` で開き `dataset_preprocess` を済ませた直近のデータセット。
+    - group_a / group_b: サンプル名のリスト（group_a_label / group_b_label が群名になる）。
     - pathways: remodeling / ceramide / global（既定は 3 つ全部）。
     - acyl_chains: 例 ["18:0","20:4"]。指定すると鎖サブセットのスコープも比べる。
     - aggregation: sum | mean | median（サブクラス内の分子種の集計）。
@@ -244,22 +193,14 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     if aggregation not in ("sum", "mean", "median"):
         return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST",
                                         "aggregation は sum / mean / median のどれかです。")
-    if source not in ("auto", "arf", "dataset"):
-        return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST",
-                                        "source は auto / arf / dataset のどれかです。")
     if group_a is None or group_b is None:
         return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST", "group_a と group_b を指定してください。")
 
-    src = _pick_source(source)
-    as_set = (lambda g: {str(g)} if isinstance(g, str) else {str(x) for x in g})
-    if (as_set(group_a) == as_set(group_b) if src == "arf"
-            else str(group_a_label) == str(group_b_label)):
+    if str(group_a_label) == str(group_b_label):
         return mcp_errors.pathway_error(
-            "PATHWAY_BAD_REQUEST",
-            "group_a と group_b（dataset では group_a_label と group_b_label）が同じです。")
+            "PATHWAY_BAD_REQUEST", "group_a_label と group_b_label が同じです。")
     try:
-        built, err = (_build_arf(group_a, group_b) if src == "arf"
-                      else _build_dataset(group_a, group_b, group_a_label, group_b_label))
+        built, err = _build_dataset(group_a, group_b, group_a_label, group_b_label)
     except handoff.HandoffError as exc:
         return mcp_errors.pathway_error(exc.code, exc.message, exc.details)
     if err:
@@ -325,7 +266,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     groups: dict[str, int] = {}
     for g in map(handoff.clean_text, table.groups):
         groups[g] = groups.get(g, 0) + 1
-    manifest = {"run_id": run_id, "schema_version": jsonld.SCHEMA_VERSION, "source": src,
+    manifest = {"run_id": run_id, "schema_version": jsonld.SCHEMA_VERSION, "source": "dataset",
                 "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "group_a": label_a, "group_b": label_b, "groups": groups,
                 "pathways": pathways, "acyl_chains": list(acyl_chains or []),
@@ -348,7 +289,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     s.pathway.last_run_dir = str(run_dir)
 
     return json_payload({
-        "run_id": run_id, "source": src, "run_dir": str(run_dir),
+        "run_id": run_id, "source": "dataset", "run_dir": str(run_dir),
         "groups": groups, "group_a": label_a, "group_b": label_b,
         "normalization": normalization,
         "backend": _backend_text(result),

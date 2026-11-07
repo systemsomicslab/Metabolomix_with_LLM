@@ -202,7 +202,7 @@ def msi_level(*, name, ontology, has_msms, mass_error_band, adduct_band,
             rationale = (
                 "名称あり＋精密質量整合。ただし MS/MS は取得フラグのみで実スペクトルを"
                 "確認できていない（.dcl 未添付）ため、この Level 2 の根拠は弱い。"
-                "dcl_parser / dcl_find_msms で実フラグメントを確認すること。"
+                "dcl_find_msms で実フラグメントを確認すること。"
             )
         elif msms_band == "PASS":
             rationale = (

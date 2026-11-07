@@ -17,15 +17,15 @@
 `tests/test_workflow_docs.py` が AST で実在を検証しており、実装から乖離すると
 テストが落ちる。
 
-メソッドは `ClassName.method()` と書く。特に `session` の状態は形式ごとに別クラス
-（`ArfState` / `Arf2State` / `Pai2State` / `EicState`）が持っており、`AnalysisSession`
-自身のメソッドは `maybe_prepend_caveat()` / `section_hint()` だけである点に注意。
+メソッドは `ClassName.method()` と書く。`session`（`AnalysisSession`）の状態は、データセットと
+ライブラリがハンドルの登録簿（`core/handles.py`）に、キュレーション・パスウェイ・Console ジョブが
+専用スロットにある。旧パーサ別のスロット（`session.arf` / `arf2` / `pai2` / `eic`）は B-2b Task 8 で消えた。
 
 ## 層の構成
 
 - `metabolomix/core/` — FastMCP インスタンス、セッション状態、パス解決、共通ヘルパ
 - `metabolomix/msdial/` — MS-DIAL 固有のサイドカー（`*_tags.xml` / `.mddata`）と同定・検証
-- `metabolomix/arf/` `arf2/` `pai2/` `dcl/` `eic/` — 形式ごとのパーサと MCP ツール
+- `metabolomix/arf/` `arf2/` `pai2/` `dcl/` `eic/` — 形式ごとのパーサ（`reader.py`）。MCP ツールを持つのは `dcl/` だけ
 - `metabolomix/analysis/` — 入力形式に依存しない数値処理
 - `metabolomix/plots/` — レンダラ中立の payload 組み立て
 - `metabolomix/pathway/` — MSLipidMapper 連携（最小 mzTab-M の受け渡し・研究室サーバの REST API とローカル Rscript のブリッジ・JSON-LD 読み取り・隣接比較）
@@ -35,13 +35,9 @@
 
 | 文書 | 対象 | ツール数 |
 |---|---|---|
-| [dataset.md](dataset.md) | ファイルの一覧と試料の検索（入口 `load_dataset` は mztab.md） | 2 |
-| [arf.md](arf.md) | `.arf` — サンプル別強度・PCA・差次的解析 | 14 |
-| [arf2.md](arf2.md) | `.arf2` — スポット代表カタログ | 2 |
-| [pai2.md](pai2.md) | `.pai2` — 単一測定のピークと MS/MS 検証 | 3 |
-| [dcl.md](dcl.md) | `.dcl` — デコンボリューション済み MS/MS | 4 |
-| [eic.md](eic.md) | `.EIC.aef` — クロマトグラムの検索と描画 | 4 |
-| [plots.md](plots.md) | 図（dataset_plot）と図の保存（save_figure）・PCA ローディング図（旧ツール）と payload 契約の比較 | 3 |
+| [dataset.md](dataset.md) | ファイルの一覧（入口 `load_dataset` は mztab.md） | 1 |
+| [dcl.md](dcl.md) | `.dcl` — デコンボリューション済み MS/MS | 3 |
+| [plots.md](plots.md) | 図（dataset_plot）と図の保存（save_figure）と payload 契約の比較 | 2 |
 | [mztab.md](mztab.md) | データセットを開く入口（`load_dataset`）と状態（`dataset_status`）・除外（`dataset_exclude`） | 3 |
 | [dataset_analysis.md](dataset_analysis.md) | DatasetState — 前処理・PCA・差次的解析・エクスポート・実験情報訂正・特徴検索 | 7 |
 | [pipeline.md](pipeline.md) | 生データフォルダ起点の統括(pipeline) — 上流検証・前処理・PCA・比較・レポートまでの自動進行 | 5 |
@@ -51,12 +47,12 @@
 | [pathway.md](pathway.md) | パスウェイ投影（MSLipidMapper）— サブクラスのノード集計・2 群比較・図 | 2 |
 | [reanalysis.md](reanalysis.md) | 再解析 — ハンドルの一覧・クローズと spec で呼ぶツール | 10 |
 
-合計 70 ツール。対象外は 12 ツール——レポート記録系 3
+合計 44 ツール。対象外は 12 ツール——レポート記録系 3
 （`record_objective` `write_report` `read_report`）＋
 Console 実行層 8（`console_plan` `console_prepare_input` `console_method_template`
 `console_method_candidates` `console_run` `console_status` `console_cleanup` `job_list`）＋
 サーバ自身の保守 1（`server_update`。解析の流れに現れず、配布先クローンの更新だけを行う）。
-登録ツール総数は 82（70 + 12）。
+登録ツール総数は 56（44 + 12）。
 
 ## 一気通貫の順序
 

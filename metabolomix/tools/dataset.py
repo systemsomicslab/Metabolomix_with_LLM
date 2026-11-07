@@ -30,7 +30,7 @@ def list_data_files(
       Agilent・Bruker の .d と Waters の .raw は**フォルダ**が 1 検体なので、
       末尾に `/` を付けて示す。
 
-    返すのは絶対パスで、`pai2_parser(file_path=...)` 等へそのまま渡せる。
+    返すのは絶対パスで、`dcl_find_msms(file_path=...)` 等へそのまま渡せる。
     フォルダ全体をまず解析するなら `load_dataset(directory=...)` が入口。
     """
     target_dir = Path(directory).expanduser() if directory else mcp_core.DATA_DIR

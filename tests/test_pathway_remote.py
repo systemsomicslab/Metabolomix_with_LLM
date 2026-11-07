@@ -13,7 +13,7 @@ from metabolomix.pathway import bridge, remote, tools
 from tests.config_fixtures import use_config
 
 from tests.test_pathway_jsonld import _graph
-from tests.test_pathway_tools import lipid_arf  # noqa: F401  （fixture）
+from tests.test_pathway_tools import _GROUPS, lipid_arf  # noqa: F401  （fixture と 2 群の指定）
 
 URL = "http://lab.example:8000"
 
@@ -252,8 +252,7 @@ def test_pathway_project_through_the_server(lipid_arf, serve, tmp_path):  # noqa
     serve(FakeServer(result={"measurements": {"pathways": {"remodeling": {"measured_nodes": 2}}}},
                      artifacts={f"{p}-measurements.json": body
                                 for p in ("remodeling", "ceramide", "global")}))
-    out = json.loads(tools.pathway_project(source="arf", group_a="C", group_b="P",
-                                           pathways=["remodeling"]))
+    out = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
     assert "error" not in out, out
     assert out["backend"] == f"研究室サーバ {URL}（job job_1）"
     manifest = json.loads((tmp_path / "reports" / "pathway" / out["run_id"] / "manifest.json")

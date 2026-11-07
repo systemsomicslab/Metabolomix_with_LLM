@@ -5,7 +5,7 @@
 ## このリポジトリは何か
 
 MS-DIAL（LC-MS リピドミクス／メタボロミクス解析ソフト）の出力を読み、LLM から使える形で
-公開する **MCP サーバ `ms-data-parser`**。ツール 82・リソース 2・リソーステンプレート 1。
+公開する **MCP サーバ `ms-data-parser`**。ツール 56・リソース 2・リソーステンプレート 1。
 GUI の外では読めない圧縮 MessagePack と独自バイナリを解し、解析そのものをサーバ側で回して
 要約だけを返す（生の行列を LLM の文脈に載せない）。
 
@@ -125,7 +125,7 @@ metabolomix/core/      FastMCP インスタンス・設定・セッション状�
 metabolomix/msdial/    MS-DIAL 固有サイドカー（*_tags.xml / .mddata）・同定・ピーク検証・サンプル因子
 metabolomix/analysis/  入力形式に依存しない数値処理（前処理/QC・PCA・差次的解析・エクスポート契約）
 metabolomix/plots/     描画 payload の組み立てと matplotlib 描画（volcano / eic / render）
-metabolomix/{arf,arf2,pai2,dcl,eic}/   形式ごとの reader.py（パーサ）と tools.py（MCP ツール）
+metabolomix/{arf,arf2,pai2,dcl,eic}/   形式ごとの reader.py（パーサ）。MCP ツールを持つのは dcl/tools.py だけ
 metabolomix/mztab/     mzTab-M リーダ・DatasetState 構築
 metabolomix/dataset/   MS-DIAL 解析フォルダ（.arf / .arf2 ほか）から DatasetState を作る adapter の部品（まずファイルの選択）。
                     データセットを開く入口は opening.open_dataset だけ（load_dataset が呼ぶ）
@@ -151,8 +151,9 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
   module 修飾で行い、`from ... import DATA_DIR` を書かない。
 - **`metabolomix.core.mcp_core` は leaf**。ここから `metabolomix.<形式>.tools` や `metabolomix.tools.*` を
   import してはならない（循環）。
-- **セッション状態はパーサ別に分離済み**: `session.arf` / `.arf2` / `.pai2` / `.eic`。あるパーサが
-  別スロットを触ってはいけない（`pai2_parser` が ARF の前処理行列を無言破棄した過去のバグの再発防止）。
+- **セッションにパーサ別のスロットは無い**（旧 `session.arf` / `.arf2` / `.pai2` / `.eic` は B-2b で
+  消した。`tests/test_session_namespaces.py` が固定している）。読み込んだものはすべて `DatasetState` として
+  ハンドルの登録簿に住む。共有の無修飾スロットを作らない（別の読み込みが進行中の解析を無言で消すため）。
 - **読み込んだデータセットはすべて `metabolomix/core/handles.py` の登録簿にハンドルとして
   住み、対話のセッションは直近のハンドルを指すだけ**（spec 2026-10-22・2026-11-06 §5）。
   `session.dataset` / `session.library` は `current_handle_id` のハンドルを読む property で、
@@ -189,12 +190,10 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
 - **reader の MessagePack Key インデックスの正解表は `docs/schema/*.md`**（MS-DIAL の C# クラス
   `[Key(N)]` から抽出した Key 番号表。上流のコミットと欠番も記載してある）。
   インデックス定数を変える前に必ず参照する。推測で直さない。
-- **`run_pca` の正準は `metabolomix/analysis/pca.py`**。`metabolomix/arf/reader.py` の同名は後方互換の
-  再エクスポートで、ARF テストが `patch.object(server.arf_reader, "run_pca", ...)` で module 属性
-  としてこの束縛を差し替えてモックしている。**消すとモックが効かなくなり、テストは緑のまま
-  実物の scikit-learn PCA が走り出す。**
+- **`run_pca` の正準は `metabolomix/analysis/pca.py`**。`metabolomix/arf/reader.py` は再エクスポートしない
+  （`tests/test_analysis_pca.py` が固定。パーサ単体の CLI だけがここから import する）。
 - **差次的エクスポートの列定義は `metabolomix/analysis/export_contract.py` が唯一の正準**。
-  ARF（`arf_export_differential`）と mzTab-M（`dataset_export_differential`）の両経路がここを
+  `dataset_export_differential`（と、生データ起点の `pipeline` の書き出し）がここを
   共有しており、**別リポジトリ（massbank-context）との契約**でもある。列の追加・改名・並べ替えは
   `CONTRACT_VERSION` の引き上げと下流の同時更新なしにやってはいけない。
 - **ツールの戻り値を肥大させない**。戻り値はそのまま LLM の文脈を占め、結論が埋没する。

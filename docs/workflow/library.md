@@ -165,19 +165,6 @@ run（既定）では空なので、図も caption も従来と変わらない�
 8.    │  └─ metabolomix/plots/mirror.py  _is_overlap()
 9.    └─ metabolomix/plots/render.py  figure_to_png()
 
-## `verify_peak_annotation` との関係
-
-`library_load` 済み（`session.library.store` あり）のときだけ、
-`pai2_parser` → `verify_peak_annotation` の `analytical_checks.msms` が
-`band == "PASS"` の内側に `spectral_match` ブロックを追加で載せる
-（[pai2.md](pai2.md) の `verify_peak_annotation` 節、および
-[output_format/library.md](../output_format/library.md) §14.8）。この呼び出し連鎖
-自体は `metabolomix/msdial/peak_verification.py` の内部（`_spectral_match_for_feature`）
-に閉じており、`library_match_feature` とは独立した実装（候補一覧を持たず最良候補
-だけを返す）。ただし**「最良」の基準は共有する**——どちらも
-`spectral_match.total_score()` の降順で選ぶ。食い違わせると、同じ feature について
-検証ドシエと候補一覧が別の候補を名指しすることになる。
-
 ## library_search
 
 前提: `library_load` 済み（ハンドルならライブラリつきで開いたこと）。無ければ `missing_state`。

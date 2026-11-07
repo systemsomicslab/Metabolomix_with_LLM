@@ -290,8 +290,8 @@ def run_dataset_preprocess(ds, recipe: dict):
         report.setdefault("caveats", []).append(
             "この mzTab-M は注入順（MTD assay[N]-custom[...] の "
             "MS:4000089 injection sequence label）を持たないため、QC ドリフト補正は"
-            "実施できません。注入順に依存する品質評価が必要なら ARF 経路"
-            "（arf_preprocess）を使ってください。")
+            "実施できません。注入順に依存する品質評価が必要なら、解析フォルダ（.arf）を "
+            "load_dataset の directory で読んでください。")
     elif recipe.get("drift_correct"):
         report.setdefault("caveats", []).append(
             "注入順は mzTab-M の injection sequence label から取得しました。"
@@ -535,7 +535,7 @@ def _apply_detection_filter(ds, matrix, feature_names, min_detection_rate, *,
                 "min_detection_rate を適用できません。mzTab-M の非ゼロ値は実測ピークと "
                 "gap-fill 補間値の区別を持たず、隣接する .arf からも取り込めませんでした"
                 "（理由は dataset_status の detection を参照）。検出率での足切りが必要なら "
-                "ARF 経路（arf_parser / arf_preprocess）を使ってください。",
+                "解析フォルダ（.arf）を load_dataset で読んでください。",
                 {"min_detection_rate": min_detection_rate,
                  "detection": (ds.feature_qc or {}).get("reason")},
             )

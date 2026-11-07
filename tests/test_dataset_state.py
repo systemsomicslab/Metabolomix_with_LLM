@@ -94,13 +94,6 @@ def test_session_has_dataset_slot():
     assert sess.dataset is None
 
 
-def test_session_dataset_does_not_affect_arf_slot():
-    sess = session_state.AnalysisSession()
-    sess.dataset = "dummy"
-    # ARF スロットはそのまま
-    assert sess.arf.features is None
-
-
 def test_dataset_state_has_analysis_fields():
     from metabolomix.mztab.dataset_state import DatasetState
     ds = DatasetState()

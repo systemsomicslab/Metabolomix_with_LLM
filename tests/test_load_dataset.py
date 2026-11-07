@@ -394,7 +394,6 @@ def test_load_dataset_has_no_initial_pca(tmp_path, fresh_state):
     assert "概観" not in text
     ds = session_state.session.dataset
     assert ds.last_pca is None and ds.pp_matrix is None
-    assert session_state.session.arf.features is None or not session_state.session.arf.features
 
 
 def test_load_dataset_is_always_threaded(tmp_path, fresh_state):
@@ -407,11 +406,6 @@ def test_old_entry_names_are_gone():
     assert {"load_dataset", "dataset_list", "dataset_close"} <= names
     assert not names & {"dataset_load", "dataset_handle_open", "dataset_handle_list",
                         "dataset_handle_close"}
-
-
-def test_load_dataset_leaves_the_arf_slot_alone(tmp_path, fresh_state):
-    _load(directory=str(_folder(tmp_path / "a")))
-    assert not session_state.session.arf.features
 
 
 def test_analysis_dir_per_adapter(tmp_path, fresh_state):

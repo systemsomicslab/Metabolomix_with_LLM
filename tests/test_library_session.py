@@ -7,8 +7,8 @@ def test_the_new_slot_does_not_disturb_the_others():
     assert s.library.store is None
     assert s.library.source_path is None
     assert s.library.last_match is None
-    # 既存スロットが消えていないこと（無言の破棄の再発防止）。
-    for name in ("arf", "arf2", "pai2", "eic"):
+    # パーサ別のスロットは無い（B-2b で消した）。残りのスロットが消えていないこと。
+    for name in ("curation", "pathway"):
         assert getattr(s, name) is not None
     assert s.dataset is None
 

@@ -981,7 +981,7 @@ def test_console_run_warns_when_no_per_sample_pai2(tmp_path, monkeypatch):
     """.pai2 が 1 つも出なければ warning を残す（MS/MS 経路が空になる合図）。
 
     サイドカー生成の副産物として出ていた警告だが、価値はサイドカーではなく
-    「サンプル別ファイルが無い＝pai2_parser / dcl_find_msms が読むものが無い」
+    「サンプル別ファイルが無い＝dcl_find_msms が読むものが無い」
     という事実の側にある。廃止後も独立した検査として残す。
     """
     from metabolomix.console.job_manager import create_job, load_job

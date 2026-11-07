@@ -4,9 +4,8 @@
 DatasetState（mzTab-M）の双方から**同一実装**を呼ぶため、形式非依存の
 analysis/ 層に置く。analysis/ が arf/ を import する層序の逆転を作らない。
 
-metabolomix/arf/reader.py はトップレベルで同名を再エクスポートしている。
-既存 ARF テストが patch.object(server.arf_reader, "run_pca", ...) で
-モジュール属性を差し替えるため、その束縛は消してはならない。
+metabolomix/arf/reader.py は同名を再エクスポートしない（B-2b で ARF のツールとそのモックごと
+消した。パーサ単体の CLI だけがここから import して使う）。
 
 依存は numpy + sklearn のみ。metabolomix.* を import しない leaf。
 """

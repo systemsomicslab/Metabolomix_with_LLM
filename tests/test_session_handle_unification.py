@@ -218,7 +218,7 @@ def test_interactive_call_keeps_the_handle_it_locked(tmp_path):
 
 def test_library_loaded_by_interactive_call_is_usable_from_another_thread(tmp_path, monkeypatch):
     """省略の `library_load` はワーカースレッドで開く。その store をイベントループ側の
-    ツール（`curation_*` / `verify_peak_annotation`）や別のワーカーが読めること
+    ツール（`curation_*`）や別のワーカーが読めること
     （sqlite3 の接続は既定では開いたスレッドでしか使えない）。"""
     msp = _msp(tmp_path / "lab" / "pos.msp")
     use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
@@ -287,8 +287,7 @@ def test_tools_reading_the_session_dataset_take_the_current_handle_lock():  # R2
     ロックの下で動く）。
 
     見るのはツールの関数**自身の**ソースだけ。ヘルパー経由で読むもの（`pathway_project` の
-    `_build_dataset`、`save_figure` / `plot_pca_loadings` の候補集め、`verify_peak_annotation` の
-    `msms_evidence`）はこの検査では見つからない——推移的な読み取りは範囲外で、
+    `_build_dataset`、`save_figure` の候補集め）はこの検査では見つからない——推移的な読み取りは範囲外で、
     SESSION_READERS に手で載せてある。
     """
     import inspect

@@ -33,30 +33,13 @@ REMOTE_WRITE_APPEND = {"readOnlyHint": False, "destructiveHint": False,
                        "idempotentHint": False, "openWorldHint": True}
 
 EXPECTED_ANNOTATIONS = {
-    "arf_export_evidence_bundle": LOCAL_WRITE,
     "dataset_export_evidence_bundle": LOCAL_WRITE,
-    # --- ARF（多サンプル解析）。セッション状態は更新するが外部副作用は無い ---
-    "arf_list_tags": READ_ONLY,
-    "arf_list_classes": READ_ONLY,
-    "arf_list_sample_roles": READ_ONLY,
-    "arf_exclude": READ_ONLY,
-    "arf_preprocess": READ_ONLY,
-    "arf_pca_preprocessed": READ_ONLY,
-    "arf_parser": READ_ONLY,
-    "arf_differential": READ_ONLY,
-    "arf_plot_volcano": READ_ONLY,
-    "arf_plot_group_intensity": READ_ONLY,
-    "arf_plot_species": READ_ONLY,
-    "arf_pca_species": READ_ONLY,
-    "plot_pca_loadings": READ_ONLY,
-    "arf2_parser": READ_ONLY,
-    "arf2_annotate_identities": READ_ONLY,
     # --- データセット入口 ---
     "list_data_files": READ_ONLY,
     "dataset_status": READ_ONLY,
     # --- DatasetState 解析層 ---
     # readOnlyHint はファイル/ネットワークへの副作用の有無。セッション状態の
-    # 更新は数えない（このファイル冒頭の規約）。ARF の同一操作も READ_ONLY。
+    # 更新は数えない（このファイル冒頭の規約）。
     "dataset_preprocess": READ_ONLY,
     "dataset_pca": READ_ONLY,
     "dataset_differential": READ_ONLY,
@@ -110,8 +93,7 @@ EXPECTED_ANNOTATIONS = {
     "pipeline_status": READ_ONLY,
     "pipeline_resume": LOCAL_WRITE,
     "pipeline_cancel": LOCAL_WRITE,
-    # --- DCL / PAI2 / EIC ---
-    "dcl_parser": READ_ONLY,
+    # --- DCL ---
     "dcl_find_msms": READ_ONLY,
     # --- 参照ライブラリ（MS/MS スペクトル照合） ---
     # library_load は SQLite キャッシュを書くので唯一 False。同じ元ファイルなら
@@ -121,22 +103,13 @@ EXPECTED_ANNOTATIONS = {
     "library_plot_mirror": READ_ONLY,
     "library_search": READ_ONLY,
     "dcl_spot_spectrum": READ_ONLY,
-    "pai2_parser": READ_ONLY,
-    "pai2_inspect_peak": READ_ONLY,
-    "verify_peak_annotation": READ_ONLY,
-    "eic_parser": READ_ONLY,
-    "eic_plot_chromatograms": READ_ONLY,
-    "eic_plot_compounds": READ_ONLY,
-    "eic_search": READ_ONLY,
     # --- 読み取り系 ---
     "read_report": READ_ONLY,
-    "sample_search": READ_ONLY,
     # --- ローカル書き出し（同じ引数なら同じパスへ上書き＝idempotent） ---
     "record_objective": LOCAL_WRITE_APPEND,  # add_subquestions が追記で積み増す
     "write_report": LOCAL_WRITE,
     "save_figure": LOCAL_WRITE,
     "dataset_plot": READ_ONLY,    # 図は返すだけ（ds.figures はメモリ上の置き場。ファイルは save_figure）
-    "arf_export_differential": LOCAL_WRITE,
     # --- サーバ自身の更新（origin へ出て、作業ツリーを早送りする） ---
     "server_update": REMOTE_WRITE,
     # --- キュレーション。review は呼ぶたびに新しい review-<id>.json/.html を作る（console_plan /

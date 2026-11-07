@@ -394,7 +394,7 @@ def msms_evidence(feature: dict, top_n: int = 5) -> dict:
             "caveat": (
                 "MS/MS 取得フラグ（has_msms）は立っているが、実スペクトルが添付されていない。"
                 "PAI2 の has_msms は取得参照の有無を示すだけなので、これだけを根拠に同定確度を"
-                "主張しないこと。実体は同名 .dcl にあり、dcl_parser で読み込むと付与される。"
+                "主張しないこと。実体は同名 .dcl にあり、dcl_find_msms で実フラグメントを確認すること。"
             ),
         }
     return {"band": "ABSENT", "source": None, "n_peaks": n_peaks or 0,

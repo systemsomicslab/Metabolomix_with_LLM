@@ -115,12 +115,6 @@ def test_dataset_status_after_load(mztab_file):
     assert "mztab" in result.lower() or "source_format" in result
 
 
-def test_dataset_load_does_not_touch_arf_slot(mztab_file):
-    from metabolomix.tools.handle_tools import load_dataset
-    load_dataset(mztab_path=str(mztab_file))
-    assert session_state.session.arf.features is None
-
-
 # ---------- job_path 経路 ----------
 
 def _make_job_json(tmp_path, mztab_rel_path: str, extra_artifacts=None,

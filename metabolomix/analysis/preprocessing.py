@@ -351,7 +351,7 @@ def detect_failed_qc(matrix, roles, sample_names, min_ratio=0.2) -> dict:
         report["caveat"] = (
             f"QC {len(failed)}/{len(qc_names)} 件の総強度が QC 中央値の {min_ratio:.0%} 未満です"
             f"（{', '.join(failed)}）。失敗注入の可能性が高く、残したまま max_qc_rsd を適用すると"
-            "ほぼ全特徴が除去されます。arf_exclude で除外してから前処理し直してください。")
+            "ほぼ全特徴が除去されます。dataset_exclude で除外してから前処理し直してください。")
     return report
 
 

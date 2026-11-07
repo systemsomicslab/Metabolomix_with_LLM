@@ -179,53 +179,6 @@ def _run_dataset_preprocess_for_test(ds):
     })
 
 
-def test_run_dataset_preprocess_matches_arf_preprocess_for_qc_drift(monkeypatch):
-    """DatasetState 側だけで補正式を複製すると、ARF 経路との数値乖離を見逃す。"""
-    import json
-
-    from metabolomix.arf.tools import arf_preprocess
-    from metabolomix.core import session_state
-    from metabolomix.core.session_state import AnalysisSession
-
-    ds, names, values, orders = _drift_fixture_dataset()
-    dataset_matrix, dataset_names, _, _, _, dataset_report = _run_dataset_preprocess_for_test(ds)
-
-    monkeypatch.setattr(session_state, "session", AnalysisSession())
-    rows = []
-    for i, (name, value) in enumerate(zip(names, values)):
-        row = [0] * 40
-        row[1] = name
-        row[2] = 101
-        row[18] = value
-        rows.append(row)
-    session_state.session.arf.filtered_features = [{
-        "MasterAlignmentID": 0,
-        "Name": "Lipid_0",
-        "MassCenter": 700.0,
-        "RT": 5.0,
-        "AlignedPeakProperties": rows,
-    }]
-    session_state.session.arf.class_index = {"records": [
-        {"file_name": name, "class_id": "QC" if name.startswith("QC_") else "sample",
-         "analytical_order": order}
-        for name, order in zip(names, orders)
-    ]}
-
-    arf_report = json.loads(arf_preprocess(
-        normalize="none", drift_correct=True, impute="half_min",
-    ))
-    arf_by_name = dict(zip(session_state.session.arf.pp_sample_names,
-                           session_state.session.arf.feature_matrix[:, 0]))
-    dataset_by_name = dict(zip(dataset_names, dataset_matrix[:, 0]))
-
-    assert dataset_report["steps"]["drift_correct"]["status"] == "applied"
-    assert arf_report["steps"]["drift_correct"]["status"] == "applied"
-    np.testing.assert_allclose(
-        [dataset_by_name[name] for name in names],
-        [arf_by_name[name] for name in names],
-    )
-
-
 def test_run_dataset_preprocess_rejects_unknown_normalize():
     from metabolomix.analysis.dataset_analysis import PreconditionError
     ds = _make_ds()

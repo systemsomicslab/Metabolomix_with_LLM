@@ -1,10 +1,8 @@
 """DatasetState に対する解析 MCP ツール。
 
 load_dataset → dataset_preprocess → dataset_pca / dataset_differential
-→ dataset_export_differential の順に実行する。ARF 経路
-（arf_preprocess → arf_pca_preprocessed → arf_differential →
-arf_export_differential）と同じ純関数を共有しており、同じ入力からは
-同じ数字が出る。dataset_feature_search は読み取り専用で、特徴の検索・目的の物質の
+→ dataset_export_differential の順に実行する。解析フォルダも mzTab-M も
+`load_dataset` が同じ DatasetState にするので、同じ入力からは同じ数字が出る。dataset_feature_search は読み取り専用で、特徴の検索・目的の物質の
 判定に差次的結果の統計を添えて返す（判定の純ロジックは analysis/feature_search.py）。
 
 戻り値には要約だけを載せ、全量（PCA の loadings・差次的の results/volcano）は
@@ -67,7 +65,7 @@ def dataset_preprocess(
 ) -> str:
     """DatasetState の定量行列に前処理レシピを適用する。
 
-    引数は arf_preprocess と同一。以降の dataset_pca / dataset_differential は
+    以降の dataset_pca / dataset_differential は
     ここで作った前処理済み行列を消費する。
 
     normalize: "none"（既定）/ "tic"（行総和）/ "median"（行中央値）/ "pqn"。
@@ -246,14 +244,13 @@ def dataset_export_differential(output_path: str,
     """指定した差次的結果を InChIKey 付きの 1 ファイルへ書き出す。
 
     先に dataset_preprocess → dataset_differential を実行しておくこと。
-    出力は arf_export_differential と**同一の契約**（15 列 + contract_version
-    メタ行）なので、下流のパスウェイ解析にそのまま渡せる。
+    出力は差次的エクスポートの契約（`analysis/export_contract.py`。15 列 + contract_version
+    メタ行）に従うので、下流のパスウェイ解析にそのまま渡せる。
 
     apply_curation（既定 true）: curation_submit で wrong を付けたスポットを
     同定なしとして扱い、出力から外す。フラグがあればメタ行 # curation = ... で
     適用状況を宣言する。フラグが無ければ出力は変わらない。成功 payload の
-    `curation` は `{state, wrong_excluded, suspect, orphaned}`（arf_export_differential と
-    同じ形）。assign（curation_submit の候補付け）は同定を置き換え（name_source /
+    `curation` は `{state, wrong_excluded, suspect, orphaned}`。assign（curation_submit の候補付け）は同定を置き換え（name_source /
     inchikey_source = curation）、redundant は除外する。どちらかがあれば `curation` に
     `assigned` と `redundant_excluded` が足される。
     フラグ記録に読めない行があれば書き出さずに `CURATION_FLAGS_INVALID`。

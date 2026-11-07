@@ -47,12 +47,3 @@ def test_unknown_catalog_name_falls_back_to_arf_and_no_match_stays_empty():
     assert path_resolvers._filter_arf_spots(spots, annotation_keyword='SL',
         catalog=[{'MasterAlignmentID':1,'Name':'Unknown'}])[0]['annotation_source'] == 'arf'
     assert path_resolvers._filter_arf_spots(spots, spot_ids=[999]) == []
-
-
-@pytest.mark.parametrize('value', [True, 1.0, '1'])
-def test_mcp_rejects_coerced_spot_ids(value):
-    import server
-    from pydantic import ValidationError
-    model = server.mcp._tool_manager.get_tool('arf_parser').fn_metadata.arg_model
-    with pytest.raises(ValidationError):
-        model.model_validate({'spot_ids':[value]})

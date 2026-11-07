@@ -3,8 +3,7 @@
 データセットの図は `dataset_plot` が描く（既定は画像。ファイルは書かない）。作った図の記録は
 `ds.figures[kind]`（kind ごとに最後の 1 つ。指紋に含めない）に置かれ、ユーザーが明示的に保存を
 求めたときだけ `save_figure` がそこから `reports/figures/<analysis_id>_<kind>.png` に書く。
-旧 ARF 系の描画ツール（`arf_plot_*` `arf_pca_species` `plot_pca_loadings` `eic_plot_*`）は B-2b Task 8 まで残るが、
-`save_figure` はもう読まない（画像返しだけ）。
+旧 ARF 系の描画ツール（`arf_plot_*` `arf_pca_species` `plot_pca_loadings` `eic_plot_*`）は B-2b Task 8 で消えた。
 
 ## payload 契約の比較
 
@@ -127,26 +126,3 @@ EIC は特徴 ID（= `.arf2` の MasterAlignmentID）をそのまま `.EIC.aef` 
 10.   ├─ [kind=group_intensity / species / species_pca] metabolomix/tools/reports.py  _write_png_and_svg()
 11.   │  └─ metabolomix/plots/group_intensity.py  render_group_intensity_plot()
 12.   └─ [kind=eic / eic_compounds] metabolomix/plots/eic.py  render_eic_plot()
-
-## plot_pca_loadings
-
-前提: ローディングを持つ PCA 結果がある（`arf_parser` / `arf_pca_preprocessed` / `arf_pca_species` /
-`dataset_pca`。無ければ `MissingState`）
-状態変更: `session.last_loadings_plot`（payload・title）を更新。ファイルは書かない。
-
-入力元は 3 つ（手順 2）。選び方は `save_figure(kind="pca")` と同じで、どれも優先せず曖昧なら
-`AMBIGUOUS_RESULT_SOURCE` で止まる（手順 3）。ARF は上位 N の選び方とスポット情報に
-`get_pca_loading_features()` を使い（手順 4〜5）、分子種 PCA は保存済みの行を、mzTab は
-`pp_feature_names` と特徴量の注釈を使う（手順 6）。r は autoscale した PCA でだけ
-成分 × 特異値 / √n で出し、出せなければ coefficient で描く（手順 7）。
-
-1. metabolomix/tools/pca_loadings_tools.py  plot_pca_loadings()
-2. └─ metabolomix/tools/pca_loadings_tools.py  _candidates()
-3. └─ metabolomix/plots/result_output.py  select_result()
-4. ├─ [source=arf] metabolomix/tools/pca_loadings_tools.py  _arf_features()
-5. │  └─ metabolomix/arf/reader.py  get_pca_loading_features()
-6. ├─ [source=mztab] metabolomix/tools/pca_loadings_tools.py  _mztab_features()
-7. └─ metabolomix/plots/pca_loadings.py  build_loadings_payload()
-8. ├─ [output=payload] metabolomix/core/serialization.py  json_payload()
-9. └─ [output=image] metabolomix/plots/pca_loadings.py  render_loadings_plot()
-10.   └─ metabolomix/plots/render.py  figure_to_png()

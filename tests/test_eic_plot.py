@@ -172,54 +172,5 @@ class EicBatchReadTests(unittest.TestCase):
             )
 
 
-class EicPlotToolTests(unittest.TestCase):
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self.tmp = Path(self._tmp.name)
-        self.path = self.tmp / "alignment.EIC.aef"
-        _write_css1(self.path, [{
-            "rt": 3.25, "mz": 512.3456, "samples": [{
-                "file_id": 7, "peak_top": 3.25, "peak_left": 3.1,
-                "peak_right": 3.4,
-                "points": [(3.1, 5.0), (3.25, 10.0), (3.4, 2.0)],
-            }],
-        }])
-        self._saved_data_dir = mcp_core.DATA_DIR
-        self._saved_plot = session_state.session.eic.last_plot
-        mcp_core.DATA_DIR = self.tmp
-        self.enterContext(config_env(self.tmp, {"paths.reports_dir": self.tmp / "fallback"}))
-        session_state.session.eic.last_plot = None
-
-    def tearDown(self):
-        mcp_core.DATA_DIR = self._saved_data_dir
-        session_state.session.eic.last_plot = self._saved_plot
-        self._tmp.cleanup()
-
-    def test_returns_structured_plot_data_without_writing_png(self):
-        payload = json.loads(server.eic_plot_chromatograms(
-            0, file_path=str(self.path), file_ids=[7], normalize="per_trace_max",
-        ))
-        self.assertEqual(payload["plot_schema"], "lipidmix.eic.v1")
-        self.assertEqual(payload["plot_type"], "line")
-        self.assertEqual(payload["axes"]["x"]["unit"], "min")
-        for actual, expected in zip(payload["series"][0]["x"], [3.1, 3.25, 3.4]):
-            self.assertAlmostEqual(actual, expected, places=5)
-        self.assertEqual(payload["series"][0]["y"], [0.5, 1.0, 0.2])
-        self.assertEqual(session_state.session.eic.last_plot, payload)
-        self.assertEqual(list(self.tmp.rglob("*.png")), [])
-
-    def test_fastmcp_does_not_publish_an_output_schema(self):
-        """outputSchema を publish しない（structured_output=False）。
-
-        publish すると payload が content と structuredContent へ二重に載る。
-        クライアントは content のテキストから `plot_schema` を読む契約。
-        """
-        tools = asyncio.run(server.mcp.list_tools())
-        tool = next(item for item in tools if item.name == "eic_plot_chromatograms")
-        self.assertIsNone(tool.outputSchema)
-
-
-
-
 if __name__ == "__main__":
     unittest.main()

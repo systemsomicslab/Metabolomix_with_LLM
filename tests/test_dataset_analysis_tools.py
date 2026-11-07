@@ -127,18 +127,6 @@ def test_dataset_differential_small_group_is_bad_request():
     assert "群サイズ" in parsed["error"]["message"]
 
 
-def test_dataset_differential_does_not_touch_arf_slot():
-    _load_ds()
-    from metabolomix.tools.dataset_analysis_tools import (
-        dataset_differential, dataset_preprocess,
-    )
-    dataset_preprocess()
-    a, b = _groups(session_state.session.dataset)
-    dataset_differential(group_a=a, group_b=b)
-    assert session_state.session.arf.feature_matrix is None
-    assert getattr(session_state.session.arf, "last_differential", None) is None
-
-
 # ---------- dataset_export_differential ----------
 
 def test_dataset_export_requires_differential(tmp_path):

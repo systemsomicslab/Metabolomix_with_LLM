@@ -6,51 +6,24 @@
 `from session_state import session` のようなスナップショット束縛を作ると
 差し替えが見えなくなる。
 
-**状態はパーサ単位に分離されている**（`session.arf` / `session.arf2` /
-`session.pai2` / `session.eic`）。以前は `features` / `filtered_features` /
-`current_file_path` を全パーサが共有していたため、単一サンプルの `pai2_parser` を
-1回呼ぶだけで進行中の ARF 解析（前処理行列・差次的結果・手動除外）が無言で消え、
-後続の `arf_pca_preprocessed` が「前処理後の行列がありません」で落ちていた。
-LLM には破棄の事実が伝わらないため「手動除外が過度」という誤原因が報告される。
-粒度の違う成果物（1スポット×1サンプル / 全サンプル統合 / 単一測定ファイル）は
-互いに代入不能なので、スロットも分ける。新しいパーサを足すときも専用スロットを
-作ること。無修飾の共有スロットへは絶対に書かない。
+**パーサ別のスロット（旧 `session.arf` / `arf2` / `pai2` / `eic`）は無い**（B-2b で消した）。
+読み込んだものはすべて `DatasetState` としてハンドルの登録簿に住む。粒度の違う成果物を
+共有の無修飾スロットへ書くと、別の読み込みが進行中の解析を無言で消す——新しい入口を足すときも
+共有スロットを作らない（`tests/test_session_namespaces.py` が固定している）。
 
 **データセットとライブラリはハンドルの登録簿に住む**（spec 2026-11-06 §5）。
 `session.dataset` / `session.library` は直近のハンドル（`current_handle_id`）を指す property で、
 `session.dataset = ds` は `ds` を新しいハンドルとして登録簿に入れて直近にする。閉じた直近の
 ハンドルは `None`（`missing_state`）になり、開いている別のハンドルへ黙って落ちない。
 
-依存: 各種 reader / preprocessing（いずれも leaf）のみ。tools_* / server は
-import しない（循環回避）。`core.handles` は property の中で遅延 import する（handles が
-この module を import するため）。`arf_reader` は module オブジェクトのまま参照するので、
-テストの `patch.object(server.arf_reader, ...)` が共有 module 経由でここにも効く。
+依存: `user_config`（stdlib だけの leaf）のみ。tools_* / server は import しない（循環回避）。
+`core.handles` は property の中で遅延 import する（handles がこの module を import するため）。
 """
 import contextlib
 import contextvars
-import io
 import threading
-import uuid
-import re
 
-from metabolomix.arf import reader as arf_reader
 from metabolomix.core import user_config
-from metabolomix.analysis import preprocessing
-from metabolomix.arf2.reader import deserialize
-from metabolomix.eic.reader import parse_eic_aef_css1
-from metabolomix.pai2.reader import filter_features_by_params
-from metabolomix.msdial.classes import (
-    assign_sample_groups,
-    attach_class_ids_to_spots,
-    discover_arf_class_index,
-)
-from metabolomix.msdial.tags import (
-    attach_tags_to_spots,
-    discover_arf_tag_index,
-    normalize_sample_name,
-)
-
-_BATCH_DATE_RE = re.compile(r"(\d{8})")
 
 # output-format リソースを LLM が pull していないときに、解釈直結のパーサー出力の
 # 先頭へ最大1回だけ前置する意味論ダイジェスト（自己完結・~7行）。round-trip 不要で
@@ -117,229 +90,6 @@ def pinned_handle(handle_id: str):
         _PINNED_HANDLE_ID.reset(token)
 
 
-def _build_sample_meta(sample_names, class_index):
-    """サンプル名から role/group/run_order/batch を組み立てる。"""
-    class_ids = {}
-    orders = {}
-    if class_index:
-        by_name = {}
-        for rec in class_index.get("records", []):
-            key = normalize_sample_name(rec.get("file_name"), strip_processing_timestamp=False)
-            if key:
-                by_name[key] = rec
-        for name in sample_names:
-            rec = by_name.get(normalize_sample_name(name, strip_processing_timestamp=False))
-            if rec:
-                class_ids[name] = rec.get("class_id") or ""
-                orders[name] = rec.get("analytical_order")
-    roles = preprocessing.detect_sample_roles(sample_names, class_ids)
-    groups = assign_sample_groups(sample_names, class_index, None)
-    meta = {}
-    for name in sample_names:
-        m = _BATCH_DATE_RE.search(name)
-        # バッチは MS-DIAL メタに専用項目が無いため、ファイル名中の8桁日付から推定する。
-        # 出所を batch_source に明示し、交絡判定の脆さ（名前依存）を下流で開示できるようにする。
-        meta[name] = {
-            "role": roles.get(name, "sample"),
-            "group": groups.get(name),
-            "run_order": orders.get(name),
-            "batch": m.group(1) if m else None,
-            "batch_source": "filename_date" if m else None,
-        }
-    return meta
-
-
-def _new_dataset_id() -> str:
-    """ARF データセットの同一性 ID を発行する。"""
-    return f"arf_{uuid.uuid4().hex}"
-
-
-class ArfState:
-    """ARF（1スポット×1サンプル）解析の状態。多変量解析の基盤はここだけが持つ。
-
-    ここに載る派生状態（feature_matrix / last_differential / excluded_*）は
-    ARF の行構造に強く紐づくので、他パーサのデータで置き換えることはできない。
-    """
-
-    def __init__(self):
-        self.features = None            # デシリアライズ済みの全スポット
-        self.filtered_features = None   # arf_parser の絞り込み後
-        self.current_file_path = None
-        self.current_tag_directory = None
-        self.tag_index = None
-        self.class_index = None
-        self.pca_result = None          # 直近のPCA計算結果
-
-        # --- P2a 前処理用の正準行列とサンプルメタ ---
-        self.feature_matrix = None       # 前処理後のサンプル×特徴量行列
-        self.pp_sample_names = None
-        self.pp_feature_names = None
-        self.sample_meta = {}            # {sample_name: {role, group, run_order, batch}}
-        self.preprocessing_recipe = {}   # 直近適用した前処理レシピ（空=未適用）
-        self.preprocessing_report = None  # 母集団形成とQC警告をv2根拠へ渡す
-
-        # --- 直近解析の描画用データ ---
-        self.last_pca_plot = None        # save_figure が参照
-        self.last_differential = None    # arf_plot_volcano / save_figure が参照
-        self.last_group_intensity = None  # arf_plot_group_intensity / save_figure が参照
-        self.last_species_plot = None  # arf_plot_species / save_figure(kind="species") が参照
-        self.last_species_pca = None  # arf_pca_species / save_figure(kind="pca", source="species") / plot_pca_loadings が参照
-
-        # --- 手動除外集合（PCA 外れサンプル / 特定ピークの可逆・非破壊除外） ---
-        self.excluded_samples = set()   # 除外する file_name（サンプル）
-        self.excluded_spots = set()     # 除外する MasterAlignmentID（スポット）
-
-        # --- 同一性（図・出力が「どの結果か」を名指しできるようにする） ---
-        # dataset_id: 今読んでいる ARF データセットの ID。ファイルを切り替えるたびに
-        # 発行し直す（reset_analysis）。DatasetState 側の dataset_id と同じ役割で、
-        # 「前のデータの結果を今のデータの図として保存する」取り違えを機械的に防ぐ。
-        self.dataset_id = _new_dataset_id()
-
-    def reset_analysis(self):
-        """別 ARF データセットへ切り替える際に、前データ由来の解析成果を一括で破棄する。
-
-        新ファイルの load 開始時に必ず呼ぶ。前回の feature_matrix / sample_meta /
-        preprocessing_recipe / 差次的解析・PCA プロットなどが残ると、データ切替後に
-        前回データの図や結果を「今のデータのもの」として保存・解釈してしまう。
-        本メソッドは解析成果（派生状態）だけを消し、これから load される features や
-        current_file_path は触らない。他パーサのスロットにも触れない（別データセットへの
-        切替は ARF の話であって、PAI2 の在庫要約や EIC のクロマトグラムを消す理由はない）。
-        """
-        self.pca_result = None
-        self.filtered_features = None
-        self.last_pca_plot = None
-        self.last_differential = None
-        self.last_group_intensity = None
-        self.last_species_plot = None
-        self.last_species_pca = None
-        # 前処理由来の正準行列とサンプルメタ
-        self.feature_matrix = None
-        self.pp_sample_names = None
-        self.pp_feature_names = None
-        self.sample_meta = {}
-        self.preprocessing_recipe = {}
-        self.preprocessing_report = None
-        # 手動除外（別データに持ち越さない）
-        self.excluded_samples = set()
-        self.excluded_spots = set()
-        # 別データセットになったので同一性も作り直す。ID を据え置くと、前データの
-        # 結果 ID を指定した図の保存が「有効」に見えてしまう。
-        self.dataset_id = _new_dataset_id()
-
-    def load_data(self, file_path: str, tag_directory: str | None = None):
-        """ファイルパスが前回と異なる場合のみデシリアライズを実行する"""
-        if (
-            self.current_file_path == file_path
-            and self.features is not None
-            and self.current_tag_directory == tag_directory
-        ):
-            if str(file_path).lower().endswith('.arf'):
-                self.tag_index = discover_arf_tag_index(
-                    file_path, self.features, tag_directory=tag_directory,
-                )
-                attach_tags_to_spots(self.features, self.tag_index)
-                self.class_index = discover_arf_class_index(file_path)
-                attach_class_ids_to_spots(self.features, self.class_index)
-            return self.features
-
-        # 別データセットへ切り替えるので、前データ由来の解析成果（差次・PCA・前処理行列・
-        # 手動除外等）を open 前に一括破棄する。前回の結果を新データのものとして
-        # 保存・解釈する取り違えを防ぐ。
-        self.reset_analysis()
-
-        with open(file_path, 'rb') as f:
-            # 【修正点】ファイルの拡張子を見て正しいパーサーを呼び分ける
-            file_ext = str(file_path).lower()
-            if file_ext.endswith('.arf'):
-                self.features = arf_reader.deserialize(io.BytesIO(f.read()))
-                self.tag_index = discover_arf_tag_index(
-                    file_path, self.features, tag_directory=tag_directory,
-                )
-                attach_tags_to_spots(self.features, self.tag_index)
-                self.class_index = discover_arf_class_index(file_path)
-                attach_class_ids_to_spots(self.features, self.class_index)
-            else:
-                self.features = deserialize(io.BytesIO(f.read())) # 元からインポートされている arf2_reader 用
-                self.tag_index = None
-                self.class_index = None
-
-            self.current_file_path = file_path
-            self.current_tag_directory = tag_directory
-
-        return self.features
-
-
-class Arf2State:
-    """ARF2（全サンプル統合カタログ）の状態。
-
-    サンプル別強度を持たないため多変量解析には使えない。ARF の解析基盤とは
-    粒度が違うので、同じスロットに置かない。
-    """
-
-    def __init__(self):
-        self.features = None
-        self.current_file_path = None
-
-    def load(self, file_path: str, features: list):
-        self.features = features
-        self.current_file_path = file_path
-        return self.features
-
-
-class Pai2State:
-    """PAI2（単一測定ファイルのピーク一覧）の状態。
-
-    単一サンプルなのでサンプル間比較（PCA・差次的解析）は原理的にできない。
-    ARF の解析基盤とは独立で、ピーク検証のために往復しても ARF 側は壊れない。
-    """
-
-    def __init__(self):
-        self.features = None
-        self.filtered_features = None
-        self.filter_params = {}
-        self.current_file_path = None
-
-    def load(self, file_path: str, features: list, filter_params: dict | None = None):
-        self.features = features
-        self.current_file_path = file_path
-        self.apply_filter(filter_params)
-        return self.features
-
-    def apply_filter(self, filter_params: dict | None = None):
-        """現データに対して動的にフィルタを適用する。"""
-        if filter_params is None:
-            filter_params = {}
-        self.filter_params = filter_params
-        if self.features is None:
-            self.filtered_features = None
-            return None
-
-        self.filtered_features = filter_features_by_params(self.features, filter_params)
-        return self.filtered_features
-
-
-class EicState:
-    """EIC/AEF（クロマトグラム）の状態。パスで自己検証するので再読込は安全。"""
-
-    def __init__(self):
-        self.features = None
-        self.current_file_path = None
-        self.last_plot = None  # 直近EICプロット情報（明示的なPNG保存時のみ参照）
-        # features の欠損 m/z を ARF2 で補ったときの注記。None は「未処理」
-        # （eic.tools が読み込み直後に 1 度だけ補い、ここへ残す）。
-        self.mz_caveats = None
-
-    def load_data(self, file_path: str):
-        """ファイルパスが前回と異なる場合のみEICデータを解析する"""
-        if self.current_file_path == file_path and self.features is not None:
-            return self.features
-
-        self.features = parse_eic_aef_css1(file_path, include_chromatogram=False)
-        self.current_file_path = file_path
-        self.mz_caveats = None
-        return self.features
-
-
 class LibraryState:
     """参照ライブラリのスロット。他スロットとは共有しない。
 
@@ -384,14 +134,6 @@ class AnalysisSession:
     """
 
     def __init__(self):
-        self.arf = ArfState()
-        self.arf2 = Arf2State()
-        self.pai2 = Pai2State()
-        self.eic = EicState()
-
-        # --- パーサ横断の図（どの経路の PCA でも 1 か所。ArfState の reset では消さない） ---
-        self.last_loadings_plot = None  # plot_pca_loadings / save_figure(kind="pca_loadings") が参照（どの経路の PCA でも 1 か所）
-
         # --- 意味論 caveat ガード（output-format 未 pull 時に1回だけ前置） ---
         # プロセス内で真に1回だけ発火させる。output-format リソースが読まれたら
         # output_format_seen=True になり以後は前置しない。データ切替では

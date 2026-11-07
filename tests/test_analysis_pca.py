@@ -12,15 +12,11 @@ def test_run_pca_importable_from_analysis():
     assert len(result["explained_variance_ratio"]) == 2
 
 
-def test_arf_reader_reexports_the_same_object():
-    """arf/reader.py の束縛が analysis/pca.py の関数と同一であること。
-
-    既存 ARF テストが patch.object(server.arf_reader, "run_pca", ...) で
-    差し替えるため、この束縛が消えるとモックが効かなくなる。
-    """
-    from metabolomix.analysis.pca import run_pca as canonical
-    from metabolomix.arf.reader import run_pca as reexported
-    assert reexported is canonical
+def test_arf_reader_does_not_reexport_run_pca():
+    """`run_pca` の正準は analysis/pca.py だけ。arf/reader.py に後方互換の束縛を残さない
+    （ARF のツールとそのモックは B-2b で消えた）。"""
+    from metabolomix.arf import reader
+    assert not hasattr(reader, "run_pca")
 
 
 def test_run_pca_rejects_degenerate_matrix():

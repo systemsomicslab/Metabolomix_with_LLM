@@ -62,12 +62,6 @@ def test_the_payload_carries_no_coordinate_arrays(fresh_session, monkeypatch):
     assert stored == [[69.0335, 500.0], [87.0441, 999.0]]
 
 
-def test_loading_does_not_disturb_the_other_slots(fresh_session):
-    before = session_state.session.arf
-    tools.library_load()
-    assert session_state.session.arf is before
-
-
 def test_missing_dcl_reports_not_found_without_confusing_it_for_no_match(fresh_session):
     """`.dcl` に MS/MS が無いときは `not_found`。「合わなかった」と読めない文言にする。"""
     tools.library_load()

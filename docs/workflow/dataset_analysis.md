@@ -1,7 +1,7 @@
 # DatasetState 解析ツール呼び出し連鎖
 
-ARF 経路（`docs/workflow/arf.md`）と同じ純関数を共有している。同じ入力からは
-同じ数字が出る。違いは入口（mzTab-M か .arf か）とセッションスロットだけ。
+解析フォルダ（`.arf` / `.arf2`）も mzTab-M も、`load_dataset` が同じ `DatasetState` にして
+このツール群へ渡す。旧 ARF 経路（`arf_*` ツールとそのセッションスロット）は B-2b Task 8 で消えた。
 
 ## dataset_preprocess
 
@@ -164,5 +164,5 @@ QC/blank/unknown/standard・`include=false` を混ぜない（選択規則は
 9.       └─ metabolomix/analysis/evidence_export.py  write_evidence_bundle()
 
 spectrum_links は同じアラインメントの `.dcl` に ID（SMF_ID == AlignmentID == `.dcl` の番号）で結び、
-m/z・RT は検証にだけ使う（ARF 経路の `alignment_links()` と `link_alignment_spectra()` を共有）。
+m/z・RT は検証にだけ使う（`link_alignment_spectra()` が結ぶ）。
 結べないときの状態と理由は manifest の provenance（`docs/output_format/reanalysis.md` §10）。

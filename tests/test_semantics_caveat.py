@@ -7,7 +7,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from metabolomix.arf import reader as arf_reader
 from metabolomix.core import session_state
 from tests.config_fixtures import config_env
 
@@ -50,30 +49,6 @@ class TestSemanticsCaveatGuard(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, config_env(Path(tmp), {}):  # キーが無い
             out = s.maybe_prepend_caveat("BODY")
         self.assertTrue(out.startswith(session_state.SEMANTICS_CAVEAT))
-
-    def test_flags_survive_arf_reset_analysis(self):
-        s = session_state.session
-        s.maybe_prepend_caveat("BODY")  # caveat_emitted -> True
-        s.output_format_seen = True
-        s.arf.reset_analysis()
-        # データ切替のたびに再注入しないため、両フラグは保持される
-        self.assertTrue(s.caveat_emitted)
-        self.assertTrue(s.output_format_seen)
-
-    def test_flags_survive_new_file_load(self):
-        s = session_state.session
-        s.caveat_emitted = True
-        s.output_format_seen = True
-        orig = arf_reader.deserialize
-        arf_reader.deserialize = lambda buf: []
-        self.addCleanup(setattr, arf_reader, "deserialize", orig)
-        try:
-            s.load_data("dummy_path.arf")
-        except Exception:
-            pass  # discover 系がファイル不在で落ちても、フラグは触られない
-        self.assertTrue(s.caveat_emitted)
-        self.assertTrue(s.output_format_seen)
-
 
 class TestResourceReadClearsGuard(unittest.TestCase):
     """output_format_reference() を実際に呼ぶと output_format_seen が立つこと。"""
@@ -150,13 +125,6 @@ class TestAssayKindDigest(unittest.TestCase):
         s.output_format_seen = True
         s.set_assay_kind("lipid")
         self.assertEqual(s.maybe_prepend_caveat("BODY-2"), "BODY-2")
-
-    def test_kind_survives_reset_analysis(self):
-        s = session_state.session
-        s.set_assay_kind("metabolite")
-        s.arf.reset_analysis()
-        self.assertEqual(s.assay_kind, "metabolite")
-
 
 if __name__ == "__main__":
     unittest.main()

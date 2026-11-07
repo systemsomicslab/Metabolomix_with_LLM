@@ -16,7 +16,6 @@ matplotlib.use('Agg')  # 非インタラクティブバックエンドを使用
 import matplotlib.pyplot as plt
 import pprint
 
-from metabolomix.analysis.pca import run_pca  # 後方互換の再エクスポート。消すと ARF テストのモックが効かなくなる
 from metabolomix.core.data_config import get_data_dir
 from metabolomix.msdial.classes import get_sample_class_id
 from metabolomix.msdial.tags import get_sample_peak_tag_info
@@ -1269,6 +1268,7 @@ def main():
         if args.log_transform:
             print("[INFO] log10 変換: 有効")
         try:
+            from metabolomix.analysis.pca import run_pca
             pca_result = run_pca(matrix, n_components=args.components,
                                  log_transform=args.log_transform)
             print(f"[INFO] PCA 実行完了 (計算された主成分数: {len(pca_result['explained_variance_ratio'])})")

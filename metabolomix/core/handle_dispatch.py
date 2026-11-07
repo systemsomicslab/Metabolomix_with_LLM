@@ -46,8 +46,6 @@ ALWAYS_THREADED = frozenset({"load_dataset"})
 #: `tests/test_session_handle_unification.py` の検査が捕まえる（ヘルパー経由は手で載せる）。
 SESSION_READERS = frozenset({
     "pathway_project",          # _build_dataset → session.dataset
-    "verify_peak_annotation",   # peak_verification.msms_evidence → session.library.store
-    "plot_pca_loadings",        # pca_loadings_tools._candidates → session.dataset
 })
 
 

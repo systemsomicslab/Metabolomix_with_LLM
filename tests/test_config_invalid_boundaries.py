@@ -43,11 +43,8 @@ def _error(out: str) -> dict:
 
 # ---------- 意味論ダイジェスト: 落ちずに digest で続け、1 行添える ----------
 
-def test_arf2_parser_survives_a_broken_config(tmp_path, broken_config, fresh_session):
-    from metabolomix.arf2.tools import arf2_parser
-
-    paths = write_alignment_set(tmp_path / "neg")
-    out = arf2_parser(file_path=str(paths["arf2"]))
+def test_caveat_digest_survives_a_broken_config(tmp_path, broken_config, fresh_session):
+    out = fresh_session.maybe_prepend_caveat("BODY", topic="dcl")
     assert out.startswith(session_state.SEMANTICS_CAVEAT)          # 既定の digest で続ける
     assert "CONFIG_INVALID" in out and "[server] caveat_mode" in out
     assert "lipidmix.local.toml" in out
@@ -58,7 +55,7 @@ def test_arf2_parser_survives_a_broken_config(tmp_path, broken_config, fresh_ses
 
 def test_caveat_off_still_works_and_the_note_is_absent(tmp_path, monkeypatch, fresh_session):
     use_config(monkeypatch, tmp_path, {"server.caveat_mode": "off"})
-    assert fresh_session.maybe_prepend_caveat("BODY", topic="arf") == "BODY"
+    assert fresh_session.maybe_prepend_caveat("BODY", topic="dcl") == "BODY"
 
 
 # ---------- 記録（レポート・objective）: CONFIG_INVALID の封筒 ----------

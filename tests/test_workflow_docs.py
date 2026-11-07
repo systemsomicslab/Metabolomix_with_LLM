@@ -11,32 +11,21 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = REPO_ROOT / "docs" / "workflow"
 
-# 呼び出し連鎖行の書式:  `1. └─ metabolomix/arf/reader.py  run_pca()`
+# 呼び出し連鎖行の書式:  `1. └─ metabolomix/analysis/pca.py  run_pca()`
 # 分岐（排他的な if/else 経路）は `├─` / `│  └─` で表し、経路の説明を角括弧で
-# 添えてよい: `4. ├─ [specs 省略時] metabolomix/tools/samples.py  _apply_role_filter()`
+# 添えてよい: `4. ├─ [source=mztab] metabolomix/pathway/tools.py  _build_dataset()`
 CHAIN_RE = re.compile(
     r"^\s*\d+\.\s*(?:[└├│─]\s*)*(?:\[[^\]]*\]\s*)?"
     r"(?P<path>[\w/]+\.py)\s+(?P<func>[\w.]+)\(\)"
 )
-# 節見出し: `## arf_parser`
+# 節見出し: `## dcl_find_msms`
 HEADING_RE = re.compile(r"^##\s+(?P<tool>[a-z][a-z0-9_]*)\s*$", re.MULTILINE)
 
 # 設計書 §4 の対象範囲表と一対一で対応する。増減させる場合は設計書も直すこと。
 IN_SCOPE: dict[str, tuple[str, ...]] = {
-    "dataset.md": ("list_data_files", "sample_search"),
-    "arf.md": (
-        "arf_parser", "arf_list_classes", "arf_list_tags", "arf_list_sample_roles",
-        "arf_exclude", "arf_preprocess", "arf_pca_preprocessed", "arf_differential",
-        "arf_export_differential", "arf_export_evidence_bundle", "arf_plot_volcano", "arf_plot_group_intensity", "arf_plot_species",
-        "arf_pca_species",
-    ),
-    "arf2.md": ("arf2_parser", "arf2_annotate_identities"),
-    "pai2.md": ("pai2_parser", "pai2_inspect_peak", "verify_peak_annotation"),
-    "dcl.md": ("dcl_parser", "dcl_find_msms", "dcl_spot_spectrum", "dcl_diagnostic_ions"),
-    "eic.md": (
-        "eic_parser", "eic_search", "eic_plot_chromatograms", "eic_plot_compounds",
-    ),
-    "plots.md": ("dataset_plot", "save_figure", "plot_pca_loadings"),
+    "dataset.md": ("list_data_files",),
+    "dcl.md": ("dcl_find_msms", "dcl_spot_spectrum", "dcl_diagnostic_ions"),
+    "plots.md": ("dataset_plot", "save_figure"),
     "mztab.md": ("load_dataset", "dataset_status", "dataset_exclude"),
     "dataset_analysis.md": (
         "dataset_preprocess", "dataset_pca", "dataset_differential",
@@ -175,7 +164,7 @@ class TestScopeBoundary(unittest.TestCase):
     def test_scope_totals_match_registered_tool_count(self):
         """対象範囲の分割が、実際に登録されているツール数と一致することを縛る。
 
-        46 / 20 という分割は設計上の線引きだが、その合計は「全ツールを漏れなく
+        44 / 12 という分割は設計上の線引きだが、その合計は「全ツールを漏れなく
         分類した」という主張でもある。リテラルどうしの比較では自分自身を検証して
         しまうので、実際の登録数を引いて突き合わせる。
         """
@@ -190,4 +179,4 @@ class TestScopeBoundary(unittest.TestCase):
             registered,
             "対象範囲の分類と登録済みツールが一致しない",
         )
-        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 70)
+        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 44)

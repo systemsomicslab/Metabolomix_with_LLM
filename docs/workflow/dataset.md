@@ -1,12 +1,11 @@
 # ワークフロー: データセット投入の入口
 
 データセットを開く入口 `load_dataset` は [mztab.md](mztab.md)（解析フォルダも mzTab-M も同じ入口）。
-ここには、その前にフォルダの中身を確かめる `list_data_files` と、試料の検索 `sample_search` を置く。
+ここには、その前にフォルダの中身を確かめる `list_data_files` を置く（試料の検索は `dataset_status(view="samples", query=...)`。[mztab.md](mztab.md)）。
 
 ```mermaid
 flowchart TD
     LDF[list_data_files] --> PR[path_resolvers.list_data_files<br/>純関数（絶対パスのリスト）]
-    SS[sample_search] --> SF[msdial.sample_factors]
 ```
 
 ## list_data_files
@@ -32,15 +31,3 @@ flowchart TD
 
 1. metabolomix/tools/dataset.py  list_data_files()
 2. └─ metabolomix/core/path_resolvers.py  list_data_files()
-
-## sample_search
-
-前提: なし（ARF ロード前でも動く）
-状態変更: なし
-
-1. metabolomix/tools/samples.py  sample_search()
-2. └─ metabolomix/msdial/sample_factors.py  token_vocabulary()
-3. └─ metabolomix/msdial/sample_factors.py  expand_sample_specs()
-4. └─ metabolomix/tools/samples.py  _collect_facets()
-5. └─ metabolomix/tools/samples.py  _apply_role_filter()
-6. └─ metabolomix/tools/samples.py  _describe()

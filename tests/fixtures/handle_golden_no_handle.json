@@ -40,7 +40,7 @@
  "preprocess": {
   "caveats": [
    "この試料群には QC もブランクも含まれていないため、ブランク背景除去・QC-RSD フィルタ・QC ドリフト補正はいずれも適用できません（要求の有無によらず）。注入順があれば、PCA の run_order_correlation でドリフトの有無だけは確認できます。",
-   "この mzTab-M は注入順（MTD assay[N]-custom[...] の MS:4000089 injection sequence label）を持たないため、QC ドリフト補正は実施できません。注入順に依存する品質評価が必要なら ARF 経路（arf_preprocess）を使ってください。"
+   "この mzTab-M は注入順（MTD assay[N]-custom[...] の MS:4000089 injection sequence label）を持たないため、QC ドリフト補正は実施できません。注入順に依存する品質評価が必要なら、解析フォルダ（.arf）を load_dataset の directory で読んでください。"
   ],
   "excluded_from_matrix": {},
   "features_before": 3,

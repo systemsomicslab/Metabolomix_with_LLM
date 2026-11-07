@@ -127,65 +127,6 @@ class PcaPlotHelperTests(unittest.TestCase):
         self.assertEqual(x_label, "PC1 (50.00%)")
         self.assertEqual(title, "T")
 
-    def test_remember_arf_pca_plot_builds_session_state(self):
-        saved = session_state.session.arf.last_pca_plot
-        try:
-            server._remember_arf_pca_plot(
-                {"components": [[1.0, 2.0], [3.0, 4.0]],
-                 "explained_variance_ratio": [0.5, 0.3]},
-                ["s1", "s2"],
-                "PCA Score Plot (x.arf)",
-            )
-            plot = session_state.session.arf.last_pca_plot
-            self.assertEqual(plot["title"], "PCA Score Plot (x.arf)")
-            self.assertEqual(plot["points"][0], {"x": 1.0, "y": 2.0, "label": "s1"})
-            self.assertIn("50.00%", plot["x_label"])
-        finally:
-            session_state.session.arf.last_pca_plot = saved
-
-    def test_format_pca_plot_block_includes_points_and_summary(self):
-        import json as _json
-        from metabolomix.core import tool_helpers
-        block = tool_helpers._format_pca_plot_block(
-            {"components": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]],
-             "explained_variance_ratio": [0.24, 0.15]},
-            ["s1", "s2", "s3", "s4"],
-            title="PCA Score Plot (x.arf)",
-            intro="\n#### 📊 PCA スコア要約\n",
-            groups={"s1": "A", "s2": "A", "s3": "B", "s4": "B"},
-        )
-        # 座標点列が JSON フェンスで同梱される
-        self.assertIn("```json", block)
-        self.assertIn('"sample": "s1"', block)
-        self.assertIn('"pc1"', block)
-        self.assertIn('"pc2"', block)
-        self.assertIn('"group": "A"', block)
-        # 結論・群別サンプル数・図示 note も残る
-        self.assertIn("24.00%", block)
-        self.assertIn("15.00%", block)
-        self.assertIn("A=2", block)
-        self.assertIn("B=2", block)
-        self.assertIn("save_figure", block)
-        # JSON は valid で points が 4 件、座標が一致
-        payload = _json.loads(block.split("```json")[1].split("```")[0].strip())
-        self.assertEqual(len(payload["points"]), 4)
-        self.assertEqual(payload["points"][0]["pc1"], 1.0)
-        self.assertEqual(payload["points"][0]["pc2"], 2.0)
-
-    def test_format_pca_plot_block_no_groups_includes_points_without_group(self):
-        from metabolomix.core import tool_helpers
-        block = tool_helpers._format_pca_plot_block(
-            {"components": [[1.0, 2.0], [3.0, 4.0]],
-             "explained_variance_ratio": [0.5, 0.3]},
-            ["s1", "s2"],
-            title="T",
-            intro="\n#### PCA\n",
-        )
-        self.assertIn("サンプル数: 2", block)
-        self.assertIn('"pc1"', block)
-        self.assertNotIn('"group"', block)
-
-
 class ReportEdgeCaseTests(unittest.TestCase):
     def setUp(self):
         import tempfile

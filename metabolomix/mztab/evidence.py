@@ -579,7 +579,7 @@ def apply_evidence(ds, result: dict | None, tried: list[str] | None = None) -> N
             f"隣接する .arf から検出状態（gap-fill）を取り込めませんでした"
             f"（理由: {reason}）。この mzTab-M の非ゼロ値には gap-fill による補間値が"
             "含まれる可能性があり、**検出率・欠測率を語れません**。"
-            "検出状態が必要なら ARF 経路（arf_parser / arf_preprocess）を使ってください。")
+            "検出状態が必要なら、解析フォルダ（.arf）を load_dataset の directory で読んでください。")
         return
 
     ds.detected_mask = result["detected_mask"]

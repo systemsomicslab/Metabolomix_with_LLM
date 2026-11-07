@@ -419,7 +419,7 @@ def missing_per_sample_output_warnings(artifacts) -> list[str]:
     MS-DIAL Console は .pai2 を**生データフォルダ側**に書く（-o ではない。
     docs/HISTRY.md 2026-09-03(6) の実走で確認）。collect_artifacts が両ルートを
     見るようになったので、この検査は「本当に出ていない」ときだけ発火する。
-    .pai2 が無いと pai2_parser / dcl_find_msms が読むものが無く、MS/MS 根拠の
+    .pai2 が無いと dcl_find_msms が読むものが無く、MS/MS 根拠の
     経路が丸ごと空になる。アライメント結果だけは出ているので実行は成功扱いの
     まま、「後で MS/MS を辿れない」ことだけ先に知らせる。
     """
@@ -427,5 +427,5 @@ def missing_per_sample_output_warnings(artifacts) -> list[str]:
         return []
     return [
         "サンプル別ファイル（.pai2）が 1 つも生成されていません。"
-        "MS/MS 根拠（pai2_parser / dcl_find_msms）を辿る経路が使えません。"
+        "MS/MS 根拠（dcl_find_msms）を辿る経路が使えません。"
     ]

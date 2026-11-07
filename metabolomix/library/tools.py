@@ -420,7 +420,7 @@ def library_match_feature(
     上位候補を返す。
 
     照合の対象は `precursor_mz` か `spot_id` の**どちらか一方**で指定する。
-    `spot_id`（MasterAlignmentID。`eic_search` 等で引ける）を渡すと、precursor m/z・
+    `spot_id`（MasterAlignmentID。`dataset_feature_search` 等で引ける）を渡すと、precursor m/z・
     RT・極性を同じバッチの `.arf2`（`arf2_path`、省略時は現在のデータフォルダ）から取り、
     測定スペクトルはアラインメント `.dcl`（`dcl_file`、省略時は `.arf2` と同じバッチ）の
     そのスポットの代表 MS/MS を使う。precursor が ARF2 と ±0.01 で合わなければ
