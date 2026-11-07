@@ -15,6 +15,9 @@
 #   cell_means_complete  ~0+group、対比 B-A・C-A（欠測の無い 24 特徴。自由度が揃う＝fitFDist の経路）
 #   batch_covariate      ~0+group+batch、対比 B-A
 #   paired_block         B と C の 8 試料、~0+group+subject、対比 C-B
+#   missing_cell         cell_means と同じ ~0+group、対比 B-A・C-A。ただし f05 の C を全部 NA、
+#                        f12 の C2〜C4 を NA にする（na_cells に記録）。C の係数が推定できない特徴・
+#                        1 試料だけから推定される特徴が当てはめと事前分布に入る経路（lm.series の NA 係数）を縛る
 # 各設計で lmFit -> contrasts.fit -> eBayes（trend=FALSE, robust=FALSE）を回し、
 # topTable(coef=, confint=0.95, number=Inf, sort.by="none") の logFC, CI.L, CI.R, t, P.Value と
 # fit の df.total, s2.prior, df.prior, s2.post, F, F.p.value などを書く。
@@ -38,7 +41,7 @@ y_all <- as.matrix(read.delim(file.path(here, "limma_input.tsv"), row.names = 1,
 info <- read.delim(file.path(here, "limma_design.tsv"), stringsAsFactors = FALSE)
 stopifnot(identical(colnames(y_all), info$sample))
 
-run_design <- function(samples, features, formula, contrast_list) {
+run_design <- function(samples, features, formula, contrast_list, na_cells = list()) {
   d <- info[match(samples, info$sample), , drop = FALSE]
   d$group <- factor(d$group)
   d$batch <- factor(d$batch)
@@ -48,6 +51,7 @@ run_design <- function(samples, features, formula, contrast_list) {
   attr(X, "contrasts") <- NULL
   stopifnot(is.fullrank(X))
   y <- y_all[features, samples, drop = FALSE]
+  for (f in names(na_cells)) y[f, na_cells[[f]]] <- NA
   C <- sapply(contrast_list, function(v) v[colnames(X)])
   C <- matrix(C, nrow = ncol(X), dimnames = list(colnames(X), names(contrast_list)))
   fit <- lmFit(y, X)
@@ -76,7 +80,8 @@ run_design <- function(samples, features, formula, contrast_list) {
     df_total = unname(eb$df.total),
     F = unname(eb$F),
     F_p_value = unname(eb$F.p.value),
-    contrast = per_contrast
+    contrast = per_contrast,
+    na_cells = lapply(na_cells, I)
   )
 }
 
@@ -102,7 +107,12 @@ out <- list(
                                list(BvsA = c(groupA = -1, groupB = 1, groupC = 0, batchb2 = 0))),
   paired_block = run_design(bc, all_features, ~0 + group + subject,
                             list(CvsB = c(groupB = -1, groupC = 1, subjectS2 = 0,
-                                          subjectS3 = 0, subjectS4 = 0)))
+                                          subjectS3 = 0, subjectS4 = 0))),
+  missing_cell = run_design(all_samples, all_features, ~0 + group,
+                            list(BvsA = c(groupA = -1, groupB = 1, groupC = 0),
+                                 CvsA = c(groupA = -1, groupB = 0, groupC = 1)),
+                            na_cells = list(f05 = c("C1", "C2", "C3", "C4"),
+                                            f12 = c("C2", "C3", "C4")))
 )
 
 writeLines(toJSON(out, auto_unbox = TRUE, digits = NA, matrix = "rowmajor", pretty = FALSE),

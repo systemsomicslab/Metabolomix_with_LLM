@@ -86,25 +86,32 @@ def _limma_prepared(design_id):
     si = [samples.index(s) for s in exp["samples"]]
     log2 = values[np.ix_(fi, si)].T
     ss = exp["samples"]
+    for f, cols in (exp.get("na_cells") or {}).items():    # make_limma_expected.R が NA にした値
+        log2[[ss.index(c) for c in cols], exp["features"].index(f)] = np.nan
     prep = _prepared(log2, [info[s]["group"] for s in ss], batches=[info[s]["batch"] for s in ss],
                      subjects=[info[s]["subject"] for s in ss], feature_ids=exp["features"],
                      unit_ids=ss)
     return prep, exp
 
 
-def _check_against_limma(res, exp, mapping):
-    """mapping: compare の対比 id -> limma の対比名。"""
+def _check_against_limma(res, exp, mapping, skip=None):
+    """mapping: compare の対比 id -> limma の対比名。skip: {対比 id: 突き合わせない特徴}。"""
     for cid, name in mapping.items():
         ref = exp["contrast"][name]
         rows = [r for r in res["rows"] if r["contrast_id"] == cid]
         assert [r["feature_id"] for r in rows] == exp["features"]
+        keep = [i for i, r in enumerate(rows) if r["feature_id"] not in (skip or {}).get(cid, ())]
+        rows = [rows[i] for i in keep]
         assert all(r["status"] == "tested" for r in rows)
-        assert np.array([r["log2fc"] for r in rows]) == approx(np.array(ref["logFC"]), **TOL)
-        assert np.array([r["statistic"] for r in rows]) == approx(np.array(ref["t"]), **TOL)
-        assert np.array([r["p"] for r in rows]) == approx(np.array(ref["P.Value"]), **TOL)
-        assert np.array([r["ci_low"] for r in rows]) == approx(np.array(ref["CI.L"]), **TOL)
-        assert np.array([r["ci_high"] for r in rows]) == approx(np.array(ref["CI.R"]), **TOL)
-        assert np.array([r["df"] for r in rows]) == approx(np.array(exp["df_total"]), **TOL)
+
+        def want(values):
+            return approx(np.array([values[i] for i in keep], dtype=float), **TOL)
+        assert np.array([r["log2fc"] for r in rows]) == want(ref["logFC"])
+        assert np.array([r["statistic"] for r in rows]) == want(ref["t"])
+        assert np.array([r["p"] for r in rows]) == want(ref["P.Value"])
+        assert np.array([r["ci_low"] for r in rows]) == want(ref["CI.L"])
+        assert np.array([r["ci_high"] for r in rows]) == want(ref["CI.R"])
+        assert np.array([r["df"] for r in rows]) == want(exp["df_total"])
     assert res["prior"]["s2_prior"] == approx(float(exp["s2_prior"]), rel=1e-6)
     df_prior = math.inf if exp["df_prior"] == "Inf" else float(exp["df_prior"])
     assert res["prior"]["df_prior"] == approx(df_prior, rel=1e-6)
@@ -156,6 +163,85 @@ def test_paired_block_matches_limma_reference():
                   block="subject_id")
     _check_against_limma(res, exp, {"CvsB": "CvsB"})
     assert res["design"]["block"] == "subject_id"
+
+
+def test_cell_without_values_matches_limma_na_coefficients():
+    """C が全部欠測の特徴（f05）と C が 1 試料だけの特徴（f12）: 当てはめと事前分布には入り（limma と同じ）、
+    B_vs_A は検定し、C_vs_A は insufficient_units、omnibus は出さない。"""
+    prep, exp = _limma_prepared("missing_cell")
+    assert np.isnan(prep.log2[8:, exp["features"].index("f05")]).all()
+    comps = [{"id": "BvsA", "factor": "group", "reference": "A", "test": "B"},
+             {"id": "CvsA", "factor": "group", "reference": "A", "test": "C"}]
+    res = compare(prep, factors=["group"], comparisons=comps)
+    _check_against_limma(res, exp, {"BvsA": "BvsA", "CvsA": "CvsA"},
+                         skip={"CvsA": {"f05", "f12"}})
+    rows = _rows(res, "CvsA")
+    for f, n_test in (("f05", 0), ("f12", 1)):
+        assert rows[f]["status"] == "not_tested" and rows[f]["reason"] == "insufficient_units"
+        assert rows[f]["n_reference"] == 4 and rows[f]["n_test"] == n_test
+    om = {o["feature_id"]: o for o in res["omnibus"]}
+    assert om["f05"] == {"feature_id": "f05", "f": None, "f_p": None, "f_q": None}
+    assert om["f12"]["f"] is None
+    others = [i for i, f in enumerate(exp["features"]) if f not in ("f05", "f12")]
+    assert [om[exp["features"][i]]["f"] for i in others] == approx([exp["F"][i] for i in others], rel=1e-6)
+    f_p = [om[exp["features"][i]]["f_p"] for i in others]
+    assert [om[exp["features"][i]]["f_q"] for i in others] == approx(spec_statistics.bh(f_p))
+
+
+def _three_groups_with_empty_c():
+    rng = np.random.default_rng(21)
+    x = rng.normal(20.0, 0.1, (12, 6))
+    x[4:8, 0] += 2.0          # B − A = +2
+    x[8:, 0] = np.nan         # C は全部欠測
+    return _prepared(x, ["A"] * 4 + ["B"] * 4 + ["C"] * 4), x
+
+
+THREE = [{"id": "B_vs_A", "factor": "group", "reference": "A", "test": "B"},
+         {"id": "C_vs_A", "factor": "group", "reference": "A", "test": "C"}]
+
+
+@pytest.mark.parametrize("test", ["moderated_t", "welch"])
+def test_eligibility_is_per_contrast(test):
+    prep, x = _three_groups_with_empty_c()
+    res = compare(prep, factors=["group"], comparisons=THREE, test=test)
+    r = _rows(res, "B_vs_A")["f00"]
+    assert r["status"] == "tested" and r["verdict"] == "changed"
+    assert r["log2fc"] == approx(x[4:8, 0].mean() - x[:4, 0].mean())
+    c = _rows(res, "C_vs_A")["f00"]
+    assert c["status"] == "not_tested" and c["reason"] == "insufficient_units"
+    assert (c["n_reference"], c["n_test"]) == (4, 0)
+    if test == "moderated_t":
+        om = {o["feature_id"]: o for o in res["omnibus"]}
+        assert om["f00"]["f"] is None and om["f00"]["f_q"] is None
+        assert om["f01"]["f"] is not None
+        # 独立の計算: t = (B − A) / (√s2_post · stdev_unscaled)、s2_post は結果の事前分布で縮めた分散
+        a, b = x[:4, 0], x[4:8, 0]
+        s2 = (((a - a.mean()) ** 2).sum() + ((b - b.mean()) ** 2).sum()) / 6
+        d0, s0 = res["prior"]["df_prior"], res["prior"]["s2_prior"]
+        s2_post = (d0 * s0 + 6 * s2) / (d0 + 6)
+        assert r["statistic"] == approx((b.mean() - a.mean()) / math.sqrt(s2_post * (1 / 4 + 1 / 4)),
+                                        rel=1e-9)
+    else:
+        assert r["p"] == spec_statistics.two_group(x[:4, 0], x[4:8, 0], kind="welch",
+                                                   transform="none")["p"]
+
+
+def test_inestimable_contrast_is_not_tested(monkeypatch):
+    """検定できる対比でも、当てはめで係数が推定できなければ inestimable_contrast（防御の分岐）。"""
+    from metabolomix.analysis.stats import compare as module
+
+    real = module.lm_fit
+
+    def broken(y, x, names):
+        fit = real(y, x, names)
+        fit.coefficients[0, 1] = np.nan
+        fit.stdev_unscaled[0, 1] = np.nan
+        return fit
+
+    monkeypatch.setattr(module, "lm_fit", broken)
+    prep, _ = _two_groups(4, 4, 5)
+    r = _rows(compare(prep, factors=["group"], comparisons=BVA))["f00"]
+    assert r["status"] == "not_tested" and r["reason"] == "inestimable_contrast"
 
 
 # --- 判定 -----------------------------------------------------------------------
@@ -242,6 +328,28 @@ def test_replicates_collapse_before_group_size_check():
     assert e.value.details["cell_n"] == {"A": 1, "B": 1}
 
 
+def test_replicates_collapse_through_preprocess_then_group_too_small():
+    """preprocess() → compare(): 1 匹 3 注入 × 各群 1 匹は、まとめた後の n=1 で止まる。"""
+    from metabolomix.analysis.stats.data import SampleInfo, StudyData
+    from metabolomix.analysis.stats.preprocess import preprocess
+
+    samples = [SampleInfo(sample_id=f"{g}{k}", role="sample", group=g, batch="b1",
+                          injection_order=None, subject_id=f"m_{g}", include=True)
+               for g in ("A", "B") for k in range(3)]
+    rng = np.random.default_rng(4)
+    study = StudyData(values=rng.uniform(1e5, 2e5, (6, 4)), detected=None,
+                      sample_ids=[s.sample_id for s in samples],
+                      feature_ids=[f"f{j}" for j in range(4)], samples=samples)
+    prep = preprocess(study, {"filters": {"blank_ratio": None, "detection": None, "qc_rsd": None,
+                                          "d_ratio": None},
+                              "normalize": {"method": "none"}, "drift": {"mode": "off"}})
+    assert [u.n_injections for u in prep.units] == [3, 3]
+    with pytest.raises(DomainError) as e:
+        compare(prep, factors=["group"], comparisons=BVA)
+    assert e.value.code == "STATISTIC_GROUP_TOO_SMALL"
+    assert e.value.details["cell_n"] == {"A": 1, "B": 1}
+
+
 def test_presence_bh_is_separate_from_quantity_bh():
     prep, x = _two_groups(5, 5, 10)
     det = np.ones_like(x, dtype=bool)
@@ -283,6 +391,44 @@ def test_bh_population_annotated_uses_annotated_features():
     assert res["bh_population"]["n_by_contrast"] == {"BvsA": 4}
     rows = _rows(res)
     assert rows["f00"]["q"] is None and rows["f01"]["q"] is not None
+    inside = ["f01", "f02", "f05", "f09"]
+    assert [rows[f]["q"] for f in inside] == approx(spec_statistics.bh([rows[f]["p"] for f in inside]))
+    assert all(rows[f]["q"] is None for f in rows if f not in inside)
+
+
+def test_outside_bh_population_is_never_changed_or_unchanged():
+    rng = np.random.default_rng(2)
+    x = rng.normal(20.0, 0.1, (40, 10))
+    x[20:, 0] += 2.0                                         # 大きな差
+    x[20:, 1] += x[:20, 1].mean() - x[20:, 1].mean()         # 差 0・区間は狭い
+    prep = _prepared(x, ["A"] * 20 + ["B"] * 20)
+    res = compare(prep, factors=["group"], comparisons=BVA, bh_population="reported",
+                  reported_feature_ids=["f02", "f03"])
+    rows = _rows(res)
+    for f in ("f00", "f01"):
+        assert rows[f]["status"] == "tested" and rows[f]["q"] is None and rows[f]["p"] is not None
+        assert rows[f]["verdict"] == "inconclusive"
+        assert rows[f]["verdict_reason"] == "outside_bh_population"
+    # 同じ特徴は母集団の中なら changed / unchanged になる
+    full = _rows(compare(prep, factors=["group"], comparisons=BVA))
+    assert full["f00"]["verdict"] == "changed" and full["f01"]["verdict"] == "unchanged"
+
+
+def test_verdict_boundaries_are_strict_for_equivalence_and_inclusive_for_q():
+    from metabolomix.analysis.stats.compare import _verdict
+
+    eq = math.log2(1.2)
+    base = {"status": "tested", "quantity_judgeable": True, "q": 0.5}
+    assert _verdict({**base, "ci_low": -0.1, "ci_high": eq}, 0.05, eq) == ("inconclusive", "neither")
+    assert _verdict({**base, "ci_low": -eq, "ci_high": 0.1}, 0.05, eq) == ("inconclusive", "neither")
+    assert _verdict({**base, "ci_low": -0.1, "ci_high": 0.1}, 0.05, eq) ==         ("unchanged", "ci_within_equivalence")
+    # q が閾値ちょうどなら changed（compare を通して: 閾値を行の q そのものにする）
+    prep, _ = _two_groups(4, 4, 10, shift={0: 1.0})
+    q = _rows(compare(prep, factors=["group"], comparisons=BVA))["f00"]["q"]
+    r = _rows(compare(prep, factors=["group"], comparisons=BVA, q_threshold=q))["f00"]
+    assert r["q"] == q and r["verdict"] == "changed"
+    r = _rows(compare(prep, factors=["group"], comparisons=BVA, q_threshold=q * (1 - 1e-12)))["f00"]
+    assert r["verdict"] != "changed"
 
 
 # --- 2 群の検定の選択肢 ----------------------------------------------------------
@@ -348,16 +494,13 @@ def test_mannwhitney_and_arithmetic_ratio_have_no_ci_and_never_unchanged():
 
 def test_two_by_two_interaction_contrast_runs():
     rng = np.random.default_rng(11)
-    attrs, rows = [], []
-    for geno in ("wt", "ko"):
-        for treat in ("ctl", "drug"):
-            for _ in range(4):
-                attrs.append({"geno": geno, "treat": treat})
-    x = rng.normal(20.0, 0.1, (16, 8))
+    sizes = {("wt", "ctl"): 3, ("wt", "drug"): 4, ("ko", "ctl"): 5, ("ko", "drug"): 3}
+    attrs = [{"geno": g, "treat": t} for (g, t), n in sizes.items() for _ in range(n)]
+    x = rng.normal(20.0, 0.1, (len(attrs), 8))
     for i, a in enumerate(attrs):
         if a["geno"] == "ko" and a["treat"] == "drug":
             x[i, 0] += 2.0                                  # 交互作用 = 2
-    prep = _prepared(x, ["g"] * 16, attributes=attrs)
+    prep = _prepared(x, ["g"] * len(attrs), attributes=attrs)
     comps = [{"id": "drug_in_wt", "factor": "treat", "reference": "ctl", "test": "drug",
               "at": {"geno": "wt"}},
              {"id": "inter", "kind": "interaction", "factors": ["geno", "treat"],
@@ -370,10 +513,14 @@ def test_two_by_two_interaction_contrast_runs():
     assert r["log2fc"] == approx(want)
     assert r["verdict"] == "changed"
     assert r["presence_p"] is None and r["presence_q"] is None
-    assert r["n_reference"] == 8 and r["n_test"] == 8
+    # 交互作用の reference は係数が負の cell、test は正の cell
+    assert r["reference"] == "wt:drug + ko:ctl" and r["test"] == "ko:drug + wt:ctl"
+    assert r["n_reference"] == 4 + 5 and r["n_test"] == 3 + 3
+    s = _rows(res, "drug_in_wt")["f00"]
+    assert (s["reference"], s["test"], s["n_reference"], s["n_test"]) == ("ctl", "drug", 3, 4)
     assert set(res["presence"]["bh_n_by_contrast"]) <= {"drug_in_wt"}
     assert res["omnibus"] is not None and len(res["omnibus"]) == 8
-    assert res["group_n"] == {"ko:ctl": 4, "ko:drug": 4, "wt:ctl": 4, "wt:drug": 4}
+    assert res["group_n"] == {"ko:ctl": 5, "ko:drug": 3, "wt:ctl": 3, "wt:drug": 4}
 
 
 # --- 交絡 ----------------------------------------------------------------------

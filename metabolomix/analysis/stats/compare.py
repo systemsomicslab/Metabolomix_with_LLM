@@ -3,12 +3,15 @@
 入口は `compare` の 1 つ。moderated t / F（limma 型）・welch・student・mannwhitney をすべてここから回す。
 
 - 量（§6・§7）: 個体 × 特徴の log2（`PreparedMatrix.log2`）を検定する。欠測は欠測のまま。
-  モデルのどれかの cell で有限値の個体が 2 未満の特徴は全対比で `not_tested`（`insufficient_units`）とし、
-  当てはめにも事前分布の推定にも入れない。
+  検定できるかは対比ごとに決める: 対比の reference・test の各 cell に有限値の個体が 2 以上あるときだけ検定し、
+  さもなくばその行は `not_tested`（`insufficient_units`）。moderated t では、どれか 1 つの対比が検定できる
+  特徴を当てはめ（limma と同じく事前分布の推定にも入る）、どの対比も検定できない特徴は外す。
+  有限値の無い cell の係数は NaN になる（limma `lm.series` の NA 係数）。omnibus の F は全 cell に
+  有限値の個体が 2 以上ある特徴だけに出す。
 - 出方（§5）: `detected_units` があれば、単純な対比ごとに検出の例数の Fisher の正確検定。BH は量とは別に、
   対比ごとに Fisher の p を持つ特徴全体で掛ける。どちらかの群で実検出の割合が
   `min_detected_fraction` 未満なら `quantity_judgeable=false`（判定は `inconclusive`）。
-- 判定（§7・§15）: ①検定していない・§5 の印 → `inconclusive`、②q ≤ 閾値 → `changed`、
+- 判定（§7・§15）: ①検定していない・§5 の印・BH の母集団の外（q が無い）→ `inconclusive`、②q ≤ 閾値 → `changed`、
   ③区間が ±幅の内 → `unchanged`、④それ以外 → `inconclusive`。区間が無ければ `unchanged` にしない。
 - BH の母集団（§8）と交絡（§9）の表を結果に必ず書く。
 
@@ -111,12 +114,15 @@ def _tested(log2fc, ci_low, ci_high, statistic, df, p, ci_reason=None) -> dict:
 
 # --- 量の検定 -------------------------------------------------------------------
 
-def _moderated(log2, design: Design, cids, eligible, want_omnibus):
-    """moderated t（対比ごと）と、必要なら moderated F（omnibus）。"""
+def _moderated(log2, design: Design, cids, testable, omnibus_ok, want_omnibus):
+    """moderated t（対比ごと）と、必要なら moderated F（omnibus）。
+
+    `testable[cid]` は対比ごとに検定できる特徴（G,）。どれか 1 つの対比で検定できる特徴を当てはめる。
+    """
     g = log2.shape[1]
     out = {cid: [_not_tested("insufficient_units") for _ in range(g)] for cid in cids}
     omnibus = [None] * g if want_omnibus else None
-    idx = np.flatnonzero(eligible)
+    idx = np.flatnonzero(np.logical_or.reduce([testable[c] for c in cids]))
     if idx.size == 0:
         return out, None, omnibus
     fit = lm_fit(log2[:, idx].T, design.matrix, design.columns)
@@ -126,7 +132,8 @@ def _moderated(log2, design: Design, cids, eligible, want_omnibus):
     except ValueError:  # どの特徴にも残差の自由度・有限の分散が無い
         for cid in cids:
             for j in idx:
-                out[cid][j] = _not_tested("no_residual_degrees_of_freedom")
+                if testable[cid][j]:
+                    out[cid][j] = _not_tested("no_residual_degrees_of_freedom")
         return out, None, omnibus
     # 事後分散が 0 か浮動小数の丸めの大きさ（値の大きさ × 1e3·eps 以下の SD）なら退化とみなす。
     # 群の中で値が完全に同じ特徴は、残差が丸めの誤差だけになり t が 1e14 のような値になるため。
@@ -136,10 +143,12 @@ def _moderated(log2, design: Design, cids, eligible, want_omnibus):
         ok = np.isfinite(mod.s2_post) & (mod.s2_post > tol)
     for k, cid in enumerate(cids):
         for pos, j in enumerate(idx):
+            if not testable[cid][j]:
+                continue
             if not ok[pos]:
                 out[cid][j] = _not_tested("degenerate_variance")
             elif not (math.isfinite(mod.coefficients[pos, k]) and math.isfinite(mod.t[pos, k])):
-                out[cid][j] = _not_tested("not_estimable")
+                out[cid][j] = _not_tested("inestimable_contrast")
             else:
                 out[cid][j] = _tested(mod.coefficients[pos, k], mod.ci_low[pos, k],
                                       mod.ci_high[pos, k], mod.t[pos, k], mod.df_total[pos],
@@ -147,9 +156,10 @@ def _moderated(log2, design: Design, cids, eligible, want_omnibus):
     prior = {"s2_prior": float(mod.s2_prior), "df_prior": float(mod.df_prior)}
     if want_omnibus and design.omnibus.shape[1] > 0:
         names = [f"{c}-{design.cells[0]}" for c in design.cells[1:]]
-        om = ebayes(contrasts_fit(fit, design.omnibus, names), ci_level=CI_LEVEL)
+        with np.errstate(invalid="ignore"):  # 推定できない cell を持つ特徴の F は NaN（使わない）
+            om = ebayes(contrasts_fit(fit, design.omnibus, names), ci_level=CI_LEVEL)
         for pos, j in enumerate(idx):
-            if ok[pos] and _num(om.f[pos]) is not None and _num(om.f_p[pos]) is not None:
+            if omnibus_ok[j] and ok[pos] and _num(om.f[pos]) is not None and _num(om.f_p[pos]) is not None:
                 omnibus[j] = (float(om.f[pos]), float(om.f_p[pos]))
     return out, prior, omnibus
 
@@ -170,7 +180,7 @@ def _two_group_ci(a, b, kind):
     return d, d - half, d + half, df
 
 
-def _two_group_tests(log2, cell_idx, info, cids, eligible, kind):
+def _two_group_tests(log2, cell_idx, info, cids, testable, kind):
     g = log2.shape[1]
     out = {}
     for cid in cids:
@@ -178,7 +188,7 @@ def _two_group_tests(log2, cell_idx, info, cids, eligible, kind):
         test_rows = cell_idx[info[cid]["test_cells"][0]]
         res = []
         for j in range(g):
-            if not eligible[j]:
+            if not testable[cid][j]:
                 res.append(_not_tested("insufficient_units"))
                 continue
             a, b = log2[ref_rows, j], log2[test_rows, j]
@@ -228,7 +238,9 @@ def _verdict(row: dict, q_threshold: float, eq_log2: float) -> tuple[str, str]:
         return "inconclusive", "not_tested"
     if row["quantity_judgeable"] is False:
         return "inconclusive", "quantity_not_judgeable"
-    if row["q"] is not None and row["q"] <= q_threshold:
+    if row["q"] is None:  # 検定したが BH の母集団の外（q を出さない特徴は changed / unchanged にしない）
+        return "inconclusive", "outside_bh_population"
+    if row["q"] <= q_threshold:
         return "changed", "q_below_threshold"
     if row["ci_low"] is None or row["ci_high"] is None:
         return "inconclusive", "no_ci"
@@ -292,16 +304,19 @@ def compare(prepared: PreparedMatrix, *, factors: list[str], comparisons: list[d
               if covariates or block is not None else base)
 
     finite = np.isfinite(log2)
-    eligible = np.ones(n_feat, dtype=bool)
-    for c in base.cells:
-        eligible &= finite[cell_idx[c]].sum(axis=0) >= _MIN_UNITS
+    cell_ok = {c: finite[cell_idx[c]].sum(axis=0) >= _MIN_UNITS for c in base.cells}
+    testable = {cid: np.logical_and.reduce([cell_ok[c] for c in
+                                            info[cid]["reference_cells"] + info[cid]["test_cells"]])
+                for cid in cids}
+    omnibus_ok = np.logical_and.reduce([cell_ok[c] for c in base.cells])
 
     # 量
     want_omnibus = test == "moderated_t" and (len(base.cells) >= 3 or len(cids) >= 2)
     if test == "moderated_t":
-        quant, prior, omnibus_raw = _moderated(log2, design, cids, eligible, want_omnibus)
+        quant, prior, omnibus_raw = _moderated(log2, design, cids, testable, omnibus_ok,
+                                               want_omnibus)
     else:
-        quant = _two_group_tests(log2, cell_idx, info, cids, eligible, test)
+        quant = _two_group_tests(log2, cell_idx, info, cids, testable, test)
         prior, omnibus_raw = None, None
     if effect_size == "arithmetic_mean_ratio":
         _apply_arithmetic_ratio(quant, log2, design, cell_idx, cids)
