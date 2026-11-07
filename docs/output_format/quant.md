@@ -5,6 +5,11 @@
 `{"error": {"code": "quant_rules_unavailable", ...}}`（message に設定の書き方）を返す。
 共通核（`lipidmix://docs/output-format`）の必須注意（gap-fill と検出の区別ほか）が先に効く。
 
+**入力は MS-DIAL の解析フォルダ（`.arf` / `.arf2`）から読んだデータセットだけ**
+（`source_format == "msdial_folder"`）。規則の入力（クラス・付加体・コメント・MS/MS の有無）を
+同じ意味で持たないほかの形式（mzTab-M など）は、空欄のまま黙って定量せず
+`QUANT_SOURCE_UNSUPPORTED` で止める。
+
 ## 1. 単位と値
 
 - `unit` は規則が返す文字列（例: 細胞あたりの pmol）。**正規化していない（`skip=True`）データセットは
@@ -38,7 +43,7 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 | `skipped` | 飛ばした工程（`normalize` / `adduct_filter`） |
 | `internal_standard_ids` | 内部標準の特徴 ID（選別後は残ったものだけ。統合後は `positive:<id>` / `negative:<id>`） |
 | `record_folder` | 統合後の記録の置き場（`dataset_merge_polarities` が足す） |
-| `curation_by_polarity` | 統合前のキュレーションのフラグを極性ごとに移したもの（ID 空間が違うため） |
+| `arf2_by_polarity` | 統合後に、極性ごとのキュレーションのフラグを引く `.arf2`（`dataset_merge_polarities` が足す。フラグそのものは写さない） |
 
 ## 4. `status` と `needs_input`
 
@@ -61,9 +66,14 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 - **採用表**: `lipidmix.local.toml` の `[quant] adducts` を設定するか `skip_adduct_filter=True`
   （内部標準・名前・MS/MS の除外は行う。`quant_state.skipped` に `adduct_filter` が入る）。
 
-エラー封筒は他の mzTab-M 系ツールと同じ形（`{"error": {"code", "message", "details"?}}`）。主な code:
+エラー封筒は他の `dataset_*` ツールと同じ形（`{"error": {"code", "message", "details"?}}`）。主な code:
 `quant_rules_unavailable`（規則未設定）・`QUANT_RULES_REJECTED`（規則が入力を拒否。`details.rule_code`）・
-`QUANT_BAD_REQUEST`・`QUANT_POLARITY_REQUIRED`（`polarity` を渡す）・`QUANT_ALREADY_NORMALIZED`・
+`QUANT_BAD_REQUEST`（UTF-8 でない表もこれ）・`QUANT_POLARITY_REQUIRED`（`polarity` を渡す）・
+`QUANT_SOURCE_UNSUPPORTED`（解析フォルダ以外の入力）・`QUANT_ALREADY_NORMALIZED`・
+`QUANT_ALREADY_SELECTED`（選別済みのデータセットは正規化しない）・
+`QUANT_NORMALIZE_STEP_REQUIRED`（統合の前に正規化かその skip が要る）・
+`QUANT_CURATION_UNREADABLE`（キュレーションの記録が読めない。`apply_curation=False` で進められる）・
+`DATASET_HANDLE_LIMIT`（新しいハンドルを足せない。記録を書く前に止める）・
 `QUANT_NEEDS_DETECTION`（検出の印が無い入力）・`QUANT_MERGE_STATE_MISMATCH`・
 `QUANT_MERGE_SAMPLE_CONFLICT`（同じ試料の群・役割が陽陰で食い違う）・`QUANT_HANDLE_BUSY`・
 `QUANT_REFERENCE_NOT_FOUND`。封筒・戻り値には**ローカルのパスを載せない**（参照表は sha256・
@@ -91,11 +101,16 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
   sha256・参照表 `reference:<名前>`・採用表 `adducts:<名前>`）・前の工程の記録 ID（`parent_ids`）・
   設定（`settings.rules` に規則の版と digest）・結果の要約・時刻。**上書きも削除もしない**。
   やり直しは新しい記録。リポジトリ側には書かない。
+- 選別のキュレーションは、読み込み時の写しではなく**選別の時点の** `flags.jsonl` を読み直して当てる
+  （統合後は極性ごとの `.arf2`）。当てた判断（wrong / redundant / assign の name・ontology）の
+  digest を極性ごとに `settings.curation_digest` に残す（`apply_curation=False` なら null）。
 - 選別の判断の全件は `<record_id>.audit.json`（`lipidmix.quant-select-audit.v1`: `decisions` と
   `curation`）。記録としては読まれない。
 - 入力が変わる（元ファイルや参照表の sha256 が違う）か前の記録が無くなる・古くなると、その記録は
-  **古い**（`input_changed:` / `parent_stale:` / `parent_missing:`）。消さずに示すだけで、規則の digest が
-  記録と違えば計算し直した派生は戻さない。
+  **古い**（`input_changed:` / `parent_stale:` / `parent_missing:`）。選別の記録はキュレーションの
+  digest がいまと違っても古い（`curation_changed`）。消さずに示すだけで、規則の digest が
+  記録と違えば計算し直した派生は戻さない。途中の工程を戻せなければ、それより後ろの記録は
+  `prior_step_not_restored` として挙げる。
 
 ## 必須の注意
 
@@ -103,7 +118,7 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 2. 単位は規則が決める。`normalized=false` の値に単位は無い。単位・normalized が違うものを混ぜない。
 3. 内部標準の欠測・0・負の試料の値は欠測。補完していない。
 4. 統合後の特徴 ID は `positive:` / `negative:` の接頭辞つき。統合前の ID・キュレーションの
-   フラグと同じものではない（フラグは `curation_by_polarity`）。
+   フラグと同じものではない（フラグは極性ごとの `.arf2` から元の特徴 ID で引く）。
 5. 参照表・採用表・内部標準の係数の**中身はこのサーバの戻り値に載らない**。データセットに現れた
    クラスの分だけ `classes` に出る。
 6. 選別の除外は audit を見て判断する。付加体の選別を飛ばした派生は `skipped` に `adduct_filter` が入る。

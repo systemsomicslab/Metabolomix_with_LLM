@@ -13,6 +13,7 @@ from metabolomix.core import handles, session_state
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.dataset.alignment_files import select_alignment
 from metabolomix.dataset.msdial_adapter import load_msdial_folder
+from metabolomix.quant import derive as qd
 from metabolomix.quant import normalize as qn
 from metabolomix.quant.inputs import reference_input
 from tests.msdial_folder_fixtures import write_msdial_folder
@@ -229,7 +230,10 @@ def test_analysis_folder_rules(tmp_path):
     ds.source_files = {arf: "h", str(tmp_path / "o" / "a.mddata"): "h"}  # arf2 無し → arf
     assert qn.analysis_folder(ds) == tmp_path / "analysis"
     ds.source_files = {str(tmp_path / "z" / "x.mzTab"): "h", str(tmp_path / "o" / "a.mddata"): "h"}
-    assert qn.analysis_folder(ds) == tmp_path / "z"
+    with pytest.raises(DomainError) as exc:  # mzTab-M は解析フォルダの主ファイルではない
+        qn.analysis_folder(ds)
+    assert exc.value.code == "QUANT_RECORD_LOCATION_REQUIRED"
+    assert "mzTab" not in exc.value.message
     ds.source_files = {str(tmp_path / "o" / "a.mddata"): "h"}  # 主ファイル無し
     with pytest.raises(DomainError) as exc:
         qn.analysis_folder(ds)
@@ -312,3 +316,71 @@ def test_reference_rows_for_absent_classes_do_not_block(tmp_path, monkeypatch):
     assert [c["target_class"] for c in out["classes"]] == ["PC"]
     new, info = qn.apply(ds, ref, None, "positive")
     assert new is not None and info["classes"][0]["target_class"] == "PC"
+
+
+# ---- 入力の形式・工程の順序・極性の引き継ぎ・ハンドルの上限 ----
+
+def test_non_msdial_source_refused(tmp_path, monkeypatch):
+    """mzTab-M 由来はクラス・付加体・コメント・MS/MS の欄の意味が違うので定量しない。"""
+    _point(tmp_path, monkeypatch)
+    ds = _simple(tmp_path)
+    ds.source_format = "mztab"
+    for call in (lambda: qn.preview(ds, _ref(tmp_path), None, "positive"),
+                 lambda: qn.apply(ds, _ref(tmp_path), None, "positive"),
+                 lambda: qn.skip(ds, "positive")):
+        with pytest.raises(DomainError) as exc:
+            call()
+        assert exc.value.code == "QUANT_SOURCE_UNSUPPORTED"
+    out = json.loads(qn.apply_tool(ds, _ref(tmp_path), None, "positive", holder=None,
+                                   parent_handle_id=None))
+    assert out["error"]["code"] == "QUANT_SOURCE_UNSUPPORTED"
+    assert not (tmp_path / "analysis" / "reports").exists()
+
+
+def test_apply_refused_after_select(tmp_path, monkeypatch):
+    """選別で行を落としたデータセットは正規化しない（内部標準の行がもう無いかもしれない）。"""
+    _point(tmp_path, monkeypatch)
+    ds = _simple(tmp_path)
+    ds.quant_state = qd.quant_state(normalized=False, method=None, unit=None, record_id="q_s",
+                                    steps=["select"], skipped=[])
+    for call in (lambda: qn.preview(ds, _ref(tmp_path), None, "positive"),
+                 lambda: qn.apply(ds, _ref(tmp_path), None, "positive"),
+                 lambda: qn.skip(ds, "positive")):
+        with pytest.raises(DomainError) as exc:
+            call()
+        assert exc.value.code == "QUANT_ALREADY_SELECTED"
+
+
+def _unknown_polarity(monkeypatch):
+    for target in ("metabolomix.mztab.polarity.dataset_polarity",
+                   "metabolomix.quant.derive.dataset_polarity"):
+        monkeypatch.setattr(target, lambda d: (None, "unknown", []))
+
+
+def test_new_handle_keeps_resolved_polarity(tmp_path, monkeypatch):
+    """極性の決まらないデータセットに polarity を渡して正規化したら、新しいハンドルもその極性。"""
+    _point(tmp_path, monkeypatch)
+    _unknown_polarity(monkeypatch)
+    for skip_step, root in ((False, "a"), (True, "b")):
+        ds = _simple(tmp_path / root)
+        handle = handles.DatasetHandle(ds, polarity=None, polarity_source="test",
+                                       source={"kind": "test"})
+        handles.registry.add(handle)
+        out = json.loads(qn.apply_tool(ds, None if skip_step else _ref(tmp_path), None,
+                                       "positive", holder=handle,
+                                       parent_handle_id=handle.handle_id, skip_step=skip_step))
+        assert handles.registry.get(out["dataset_handle"]).polarity == "positive", skip_step
+
+
+def test_handle_capacity_checked_before_record(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    ds = _simple(tmp_path)
+    session_state.session.dataset = ds
+    parent = session_state.session.current_handle_id
+    monkeypatch.setenv("LIPIDMIX_MAX_DATASET_HANDLES", "1")
+    for skip_step in (False, True):
+        out = json.loads(qn.apply_tool(ds, None if skip_step else _ref(tmp_path), None,
+                                       "positive", holder=session_state.session,
+                                       parent_handle_id=parent, skip_step=skip_step))
+        assert out["error"]["code"] == "DATASET_HANDLE_LIMIT", skip_step
+    assert not (tmp_path / "analysis" / "reports").exists()  # 登録できない記録を残さない

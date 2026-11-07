@@ -21,6 +21,20 @@ __all__ = ["dataset_quant_preview", "dataset_quant_apply", "dataset_merge_polari
            "dataset_select_features"]
 
 
+def _parent_id(dataset_handle) -> str | None:
+    """新しいハンドルの親＝この呼び出しが実際に読んだハンドル。
+
+    `dataset_handle` を省いた呼び出しは `handle_dispatch` が直近のハンドルに固定して回す
+    （`session_state.pinned_handle`）。固定の間に別の呼び出しが直近を切り替えうるので、
+    `current_handle_id` ではなく固定先を親にする。固定が無いとき（直近のハンドルが無い・
+    同期で呼ばれた）だけ直近を読む。
+    """
+    if dataset_handle:
+        return dataset_handle
+    return session_state.pinned_handle_id() or getattr(session_state.session,
+                                                       "current_handle_id", None)
+
+
 def _context(dataset_handle, polarity):
     """(holder, ds, polarity, 親ハンドル ID) か、返すべき封筒（str）。"""
     holder = resolve_holder(dataset_handle)
@@ -36,8 +50,7 @@ def _context(dataset_handle, polarity):
         resolved = resolve_quant_polarity(ds, holder, polarity)
     except DomainError as exc:
         return quant_error(exc.code, exc.message, exc.details or None)
-    parent = dataset_handle or getattr(session_state.session, "current_handle_id", None)
-    return holder, ds, resolved, parent
+    return holder, ds, resolved, _parent_id(dataset_handle)
 
 
 def _reference(reference_path, method, concentrations, solvent_volume, cells_millions, unit):
@@ -64,6 +77,7 @@ def dataset_quant_preview(reference_path: str, bindings: dict | None = None,
     bindings は {内部標準の名前: 特徴 ID}（unresolved の standard_name が鍵）で候補を選ぶ。濃度から係数を作るなら
     concentrations（{内部標準名: 濃度}）と solvent_volume・cells_millions（unit 任意）。
     polarity は極性が決まらないデータセットのとき必須。規則プラグイン（[quant] rules）が要る。
+    MS-DIAL の解析フォルダ（.arf / .arf2）から読んだデータセットだけ（ほかは QUANT_SOURCE_UNSUPPORTED）。
     dataset_handle: ハンドルのデータセット。省略時は直近のデータセット。
     """
     ctx = _context(dataset_handle, polarity)
@@ -92,7 +106,8 @@ def dataset_quant_apply(reference_path: str | None = None, bindings: dict | None
     dataset_handle・status_counts・単位・record_id を返す（gap-fill のセルも値を計算し、
     detected_mask で印を引き継ぐ。内部標準が 0・負・欠測の試料は欠測にして理由を数える）。
     正規化済みのデータセットには掛けない。skip=True は値を変えず「正規化を飛ばした」記録と
-    派生を作る（reference_path は skip=True のときだけ省ける。読まない）。
+    派生を作る（reference_path は skip=True のときだけ省ける。読まない）。選別済みの
+    データセットには掛けない（QUANT_ALREADY_SELECTED）。新しいハンドルの極性は解いた polarity。
     dataset_handle: ハンドルのデータセット。省略時は直近のデータセット。
     """
     ctx = _context(dataset_handle, polarity)
@@ -128,6 +143,7 @@ def dataset_merge_polarities(positive_handle: str, negative_handle: str,
     適用しない（試料の実験情報は POS のものを使う）。
     記録は 2 つの解析フォルダの共通の親の reports/quant/。共通の親が決められなければ
     needs_input で record_folder（既存のフォルダ）を求める。規則プラグイン（[quant] rules）が要る。
+    キュレーションのフラグは写さず、選別が極性ごとの .arf2 からその時点のものを読む。
     """
     pos = resolve_holder(positive_handle)
     if isinstance(pos, str):
@@ -146,8 +162,8 @@ def dataset_select_features(skip_adduct_filter: bool = False, apply_curation: bo
                             dataset_handle: str | None = None) -> str:
     """付加体の採用表と除外規則で特徴を選別し、残る行だけの新しいハンドルを作る（元は変えない）。
 
-    順序: キュレーション（apply_curation=True のとき。wrong / redundant は除外、assign は名前・
-    クラスの差し替え）→ 内部標準（正規化した記録の内部標準。正規化していなければ内部標準は
+    順序: キュレーション（apply_curation=True のとき。選別の時点の flags.jsonl を読み直す。
+    wrong / redundant は除外、assign は名前・クラスの差し替え）→ 内部標準（正規化した記録の内部標準。正規化していなければ内部標準は
     除かない）→ 名前・コメント・MS/MS の除外 → 付加体の採用表（lipidmix.local.toml の
     [quant] adducts）。採用表が未設定なら needs_input（設定するか skip_adduct_filter=True で
     付加体の選別だけ飛ばす）。統合前のデータセットにも使える（mode はそのデータセットの極性。
@@ -159,7 +175,6 @@ def dataset_select_features(skip_adduct_filter: bool = False, apply_curation: bo
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
         return holder
-    parent = dataset_handle or getattr(session_state.session, "current_handle_id", None)
-    return select_mod.select_tool(holder, parent_handle_id=parent,
+    return select_mod.select_tool(holder, parent_handle_id=_parent_id(dataset_handle),
                                   skip_adduct_filter=skip_adduct_filter,
                                   apply_curation=apply_curation, polarity=polarity)

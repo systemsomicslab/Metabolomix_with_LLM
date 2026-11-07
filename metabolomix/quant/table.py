@@ -6,13 +6,19 @@ msms_assigned は "True" / "False"、NaN の高さ → None。
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from dataclasses import dataclass, replace
 
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.curation.apply import identity_for
 
-__all__ = ["FeatureRow", "resolve_quant_polarity", "feature_rows", "apply_curation"]
+__all__ = ["FeatureRow", "resolve_quant_polarity", "require_msdial_source", "feature_rows",
+           "apply_curation", "has_curation_decisions", "curation_digest"]
+
+#: 定量を掛けられる入力の形式（`DatasetState.source_format`）。
+MSDIAL_SOURCE = "msdial_folder"
 
 _POLARITY_ALIASES = {"positive": "positive", "pos": "positive",
                      "negative": "negative", "neg": "negative"}
@@ -70,8 +76,26 @@ def _height(value) -> float | None:
     return None if math.isnan(value) else value
 
 
+def require_msdial_source(ds) -> None:
+    """MS-DIAL の解析フォルダから読んだデータセットでなければ QUANT_SOURCE_UNSUPPORTED。
+
+    規則の入力（クラス・付加体・コメント・MS/MS の有無）は解析フォルダのアダプタが
+    `feature_metadata` に置く欄だけを読む。ほかの形式はこれらを同じ意味で持たないため、
+    黙って空欄のまま定量しない。
+    """
+    source = getattr(ds, "source_format", None)
+    if source != MSDIAL_SOURCE:
+        raise DomainError("QUANT_SOURCE_UNSUPPORTED",
+                          "定量は MS-DIAL の解析フォルダ（.arf / .arf2）から読んだデータセットにだけ"
+                          "掛けます（クラス・付加体・コメント・MS/MS の有無を同じ意味で読めるのは"
+                          "解析フォルダだけ）。解析フォルダを dataset_load / dataset_handle_open で"
+                          "開いてください。", {"source_format": source})
+
+
 def feature_rows(ds) -> list[FeatureRow]:
-    """特徴ごとに 1 行（`ds.feature_ids` の順）。gap-fill を区別できない入力では定量しない。"""
+    """特徴ごとに 1 行（`ds.feature_ids` の順）。解析フォルダ以外の入力と、gap-fill を区別
+    できない入力では定量しない。"""
+    require_msdial_source(ds)
     if getattr(ds, "detected_mask", None) is None or getattr(ds, "feature_matrix", None) is None:
         raise DomainError("QUANT_NEEDS_DETECTION",
                           "検出の印（detected_mask）と値の行列が無い入力では、gap-fill を区別できないため"
@@ -135,3 +159,27 @@ def apply_curation(rows: list[FeatureRow], flags: dict | None) -> tuple[list[Fea
             row = replace(row, **new)
         out.append(row)
     return out, audit
+
+
+def has_curation_decisions(flags: dict | None) -> bool:
+    """当てる判断（wrong / redundant / assign）が 1 件でもあるか。"""
+    flags = flags or {}
+    return bool(flags.get("wrong") or flags.get("redundant") or flags.get("assign"))
+
+
+def curation_digest(flags: dict | None) -> str:
+    """`apply_curation` が当てる判断だけの安定した sha256（suspect などは含めない）。
+
+    wrong / redundant のスポットと、assign のスポットと置換後の name・ontology。
+    判断が無ければ空の集合の digest（後から判断が付けば変わる）。
+    """
+    flags = flags or {}
+    canonical = {
+        "wrong": sorted(str(s) for s in flags.get("wrong") or ()),
+        "redundant": sorted(str(s) for s in flags.get("redundant") or ()),
+        "assign": sorted([str(s), (identity_for(s, flags) or {}).get("name", ""),
+                          (identity_for(s, flags) or {}).get("ontology", "")]
+                         for s in (flags.get("assign") or {})),
+    }
+    text = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()

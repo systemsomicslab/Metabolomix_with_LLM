@@ -24,7 +24,7 @@ from metabolomix.quant import derive as qderive
 from metabolomix.quant.inputs import ReferenceInput, quant_error, reference_key
 from metabolomix.quant.plugin import call, load_rules, rules_settings
 from metabolomix.quant.records import record_dir, write_record
-from metabolomix.quant.table import feature_rows
+from metabolomix.quant.table import feature_rows, require_msdial_source
 
 __all__ = ["analysis_folder", "apply", "apply_tool", "preview", "preview_tool", "skip"]
 
@@ -34,12 +34,12 @@ _KEEP = ("ok", "gap_filled")
 _ANY_OTHERS = "any others"  # 参照表の「それ以外のクラス」の行（assignments の鍵）
 
 
-_PRIMARY_SUFFIXES = ((".arf2",), (".arf",), (".mztab", ".json"))
+_PRIMARY_SUFFIXES = ((".arf2",), (".arf",))
 
 
 def analysis_folder(ds) -> Path:
-    """記録を置く解析フォルダ＝データセット自身の解析フォルダ（`.arf2`、無ければ `.arf`、無ければ
-    mzTab-M / ジョブ）の置き場所。サイドカー（`.mddata` `_tags.xml` `.dcl` `.aef`）は見ない。
+    """記録を置く解析フォルダ＝データセット自身の解析フォルダ（`.arf2`、無ければ `.arf`）の
+    置き場所。サイドカー（`.mddata` `_tags.xml` `.dcl` `.aef`）は見ない。
     主ファイルが無い・別のフォルダに散るときは QUANT_RECORD_LOCATION_REQUIRED。
     """
     paths = [Path(p) for p in (getattr(ds, "source_files", None) or {})]
@@ -51,12 +51,19 @@ def analysis_folder(ds) -> Path:
             break
     raise DomainError("QUANT_RECORD_LOCATION_REQUIRED",
                       "データセットの解析フォルダを 1 つに決められないため、記録を置けません。"
-                      "MS-DIAL の解析フォルダ（.arf2 / .arf）か mzTab-M から読んだデータセットで"
+                      "MS-DIAL の解析フォルダ（.arf2 / .arf）から読んだデータセットで"
                       "実行してください。")
 
 
 def _check_not_normalized(ds) -> None:
+    """正規化を掛けてよいか: 解析フォルダ由来・未正規化・未選別。"""
+    require_msdial_source(ds)
     state = getattr(ds, "quant_state", None)
+    if state and "select" in (state.get("steps") or []):
+        raise DomainError("QUANT_ALREADY_SELECTED",
+                          "このデータセットは選別済みです（行を落としたあとでは内部標準の行が無い"
+                          "ことがある）。正規化は選別の前に、元のハンドルから行ってください。",
+                          {"record_id": state.get("record_id")})
     if state and state.get("normalized"):
         raise DomainError("QUANT_ALREADY_NORMALIZED",
                           "このデータセットは正規化済みです（二重に割らない）。元のハンドルから"
@@ -208,6 +215,7 @@ def apply(ds, ref: ReferenceInput, bindings: dict | None, polarity: str, *,
         record_id = reuse["record_id"]
     else:
         folder = Path(folder) if folder is not None else analysis_folder(ds)
+        qderive.check_capacity()  # 登録できない記録を残さない
         inputs = dict(ds.source_files)
         if ref.path is not None:
             inputs[reference_key(ref.label)] = ref.sha256
@@ -243,6 +251,7 @@ def skip(ds, polarity: str, *, folder: Path | None = None, reuse: dict | None = 
         record = reuse
     else:
         folder = Path(folder) if folder is not None else analysis_folder(ds)
+        qderive.check_capacity()
         record = write_record(
             folder, "normalize", inputs=dict(ds.source_files), parent_ids=_parent_ids(ds),
             settings={"reference": None, "rules": None, "polarity": polarity},
@@ -278,7 +287,7 @@ def apply_tool(ds, ref: ReferenceInput | None, bindings, polarity: str, *, holde
             new, info = apply(ds, ref, bindings, polarity)
             if new is None:
                 return json_payload(info)  # needs_input: preview と同じ封筒
-        handle_id = qderive.register(holder, new, step="normalize",
+        handle_id = qderive.register(holder, new, step="normalize", polarity=polarity,
                                      parent_handle_ids=[parent_handle_id] if parent_handle_id else [])
     except DomainError as exc:
         return _error(exc)

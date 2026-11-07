@@ -267,8 +267,10 @@ def test_merged_quant_state_and_record(tmp_path, monkeypatch):
     assert st["normalized"] is True and st["unit"] == "nmol" and st["method"] == "internal_standard"
     assert st["steps"] == ["normalize", "merge"] and st["record_id"] == info["record_id"]
     assert st["internal_standard_ids"] == ["positive:0", "negative:0"]
-    assert st["curation_by_polarity"]["positive"] == {"flags": {"1": "keep"}}
-    assert st["curation_by_polarity"]["negative"] == neg.curation_flags
+    assert "curation_by_polarity" not in st  # 読み込み時の写しは持たない（選別がその場で読む）
+    arf2s = st["arf2_by_polarity"]
+    assert arf2s["positive"] == next(p for p in pos.source_files if p.endswith(".arf2"))
+    assert arf2s["negative"] == next(p for p in neg.source_files if p.endswith(".arf2"))
     assert merged.curation_flags is None
     rec = json.loads((tmp_path / "run" / "reports" / "quant"
                       / f"{info['record_id']}.json").read_text(encoding="utf-8"))
@@ -463,3 +465,46 @@ def test_merge_tool_registers_in_subprocess():
         "print('ok')\n")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert out.returncode == 0 and "ok" in out.stdout, out.stderr
+
+
+def test_merge_refuses_non_msdial_source(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    neg.source_format = "mztab"
+    with pytest.raises(DomainError) as exc:
+        _merge(pos, neg, mapping_rows=None)
+    assert exc.value.code == "QUANT_SOURCE_UNSUPPORTED"
+    assert not (tmp_path / "run" / "reports").exists()
+
+
+def test_merge_requires_normalize_step_not_just_any_state(tmp_path, monkeypatch):
+    """quant_state があっても、正規化（か、その skip）を通っていなければ統合しない。"""
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    for ds, rid in ((pos, "q_p"), (neg, "q_n")):
+        ds.quant_state = qd.quant_state(normalized=False, method=None, unit=None, record_id=rid,
+                                        steps=["select"], skipped=[])
+    with pytest.raises(DomainError) as exc:
+        _merge(pos, neg, mapping_rows=None)
+    assert exc.value.code == "QUANT_NORMALIZE_STEP_REQUIRED"
+
+
+def test_tool_checks_handle_capacity_before_writing(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    hp, hn = _open(pos, "positive"), _open(neg, "negative")
+    monkeypatch.setenv("LIPIDMIX_MAX_DATASET_HANDLES", "2")
+    out = json.loads(_tool()(hp, hn))
+    assert out["error"]["code"] == "DATASET_HANDLE_LIMIT"
+    assert not (tmp_path / "run" / "reports").exists()
+
+
+def test_read_mapping_non_utf8_is_bad_request(tmp_path):
+    path = tmp_path / "deep" / "map.csv"
+    path.parent.mkdir()
+    path.write_bytes("mode,source_sample,sample_id,group,sample_type\npos,試料1,S1,g,x\n"
+                     .encode("cp932"))
+    with pytest.raises(DomainError) as exc:
+        qm.read_mapping(path)
+    assert exc.value.code == "QUANT_BAD_REQUEST"
+    assert "map.csv" in exc.value.message and str(path.parent) not in exc.value.message

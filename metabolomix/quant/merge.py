@@ -6,8 +6,9 @@
 
 特徴 ID は `positive:<id>` / `negative:<id>`（msdial-workflow と同じ書式）。`derive` は親に無い
 ID の副次データを落とすので、特徴ごとの副次データ（候補・注釈・タグ・試料ごとの m/z）は
-ここで両側の ID に付け替えて載せる。統合前のキュレーションのフラグは極性ごとに
-`quant_state["curation_by_polarity"]` へ移す（統合後の ID と ID 空間が違うため）。
+ここで両側の ID に付け替えて載せる。キュレーションのフラグは写さず、極性ごとの `.arf2` の
+場所を `quant_state["arf2_by_polarity"]` に置く（統合後の ID と ID 空間が違うため。選別が
+その時点のフラグを極性ごとに読み直す）。
 """
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ from metabolomix.quant.inputs import quant_error
 from metabolomix.quant.normalize import analysis_folder
 from metabolomix.quant.plugin import call, load_rules, rules_settings
 from metabolomix.quant.records import merged_record_folder, write_record
-from metabolomix.quant.table import resolve_quant_polarity
+from metabolomix.quant.table import require_msdial_source, resolve_quant_polarity
 
 __all__ = ["MAPPING_COLUMNS", "merge", "merge_tool", "read_mapping"]
 
@@ -54,7 +55,13 @@ def read_mapping(path: Path) -> tuple[list[dict], str]:
         raise DomainError("QUANT_MAPPING_NOT_FOUND",
                           f"対応表を読めません: {path.name}（{type(exc).__name__}）",
                           {"label": path.name}) from None
-    reader = csv.DictReader(data.decode("utf-8-sig").splitlines())
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise DomainError("QUANT_BAD_REQUEST",
+                          f"対応表を UTF-8 として読めません: {path.name}（UTF-8 で保存し直して"
+                          "ください）", {"field": "mapping_csv", "label": path.name}) from None
+    reader = csv.DictReader(text.splitlines())
     missing = [c for c in MAPPING_COLUMNS if c not in (reader.fieldnames or [])]
     if missing:
         raise DomainError("QUANT_BAD_REQUEST",
@@ -82,7 +89,8 @@ def _check_states(pos_ds, neg_ds) -> tuple[dict, dict]:
     states = []
     for label, ds in (("positive", pos_ds), ("negative", neg_ds)):
         state = getattr(ds, "quant_state", None)
-        if not state:
+        if not state or not ({"normalize"} & set((state.get("steps") or [])
+                                                  + (state.get("skipped") or []))):
             raise DomainError(
                 "QUANT_NORMALIZE_STEP_REQUIRED",
                 f"{label} のデータセットは正規化の工程を通っていません。統合の前に "
@@ -176,6 +184,12 @@ def _is_ids(state: dict, prefix: str) -> list[str]:
     return [f"{prefix}:{i}" for i in state.get("internal_standard_ids") or []]
 
 
+def _arf2_path(ds) -> str | None:
+    """そのデータセットの `.arf2`（キュレーションのフラグの鍵。1 本に決まらなければ None）。"""
+    found = [p for p in (ds.source_files or {}) if str(p).lower().endswith(".arf2")]
+    return found[0] if len(found) == 1 else None
+
+
 def _union(a, b) -> list:
     return list(a) + [x for x in b if x not in a]
 
@@ -201,6 +215,8 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     記録は検査がすべて通ってから書く（止まるときは何も書かない）。
     """
     plugin = load_rules()
+    require_msdial_source(pos_ds)
+    require_msdial_source(neg_ds)
     _check_polarities(pos_ds, neg_ds, polarities)
     pos_state, neg_state = _check_states(pos_ds, neg_ds)
     rule, pos_ids, neg_ids = _match(plugin, pos_ds, neg_ds, mapping_rows)
@@ -233,6 +249,7 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     parents = [pos_state.get("record_id"), neg_state.get("record_id")]
     n_pos, n_neg = len(pos_ds.feature_ids), len(neg_ds.feature_ids)
     counts = {"positive": n_pos, "negative": n_neg, "merged": n_pos + n_neg}
+    qderive.check_capacity()  # 登録できない記録を残さない
     record = write_record(
         folder, "merge", inputs=inputs, parent_ids=[p for p in parents if p],
         settings={"rules": rules_settings(plugin), "match_rule": rule,
@@ -246,8 +263,7 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
         steps=_union(pos_state.get("steps") or [], neg_state.get("steps") or []) + ["merge"],
         skipped=_union(pos_state.get("skipped") or [], neg_state.get("skipped") or []),
         record_folder=str(folder),
-        curation_by_polarity={"positive": copy.deepcopy(pos_ds.curation_flags),
-                              "negative": copy.deepcopy(neg_ds.curation_flags)},
+        arf2_by_polarity={"positive": _arf2_path(pos_ds), "negative": _arf2_path(neg_ds)},
         internal_standard_ids=_is_ids(pos_state, "positive") + _is_ids(neg_state, "negative"))
     new = qderive.derive(pos_ds, matrix=matrix, detected=detected, feature_ids=fids,
                          feature_metadata=metadata, sample_names=pos_ids,
@@ -272,7 +288,7 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     new.artifact_paths = {}
     new.job_path = None
     new.ion_mode_majority = None  # 陽陰の両方を持つので極性は決まらない
-    new.curation_flags = None  # 極性ごとに quant_state["curation_by_polarity"] にある
+    new.curation_flags = None  # 選別が極性ごとの .arf2（quant_state["arf2_by_polarity"]）から読む
     new.sample_metadata_rows = None
     new.library_record = None
     info = {"record_id": record["record_id"], "rule": rule, "n_features": counts,

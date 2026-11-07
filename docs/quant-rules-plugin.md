@@ -73,7 +73,7 @@ sha256・単位・ファイル名の末尾だけで、パスと中身は載せ�
 
 規則のメッセージ・`details` は封筒へ写す前に ms-data-parser が整える（300 字まで・絶対パスはファイル名の末尾へ・`details` は JSON のスカラ値だけ）。**規則側も、メッセージに参照表の行を載せないこと。**
 
-エラーは他の mzTab-M 系ツールと同じ形（`{"error": {"code", "message", "details"?}}`）。
+エラーは他の `dataset_*` ツールと同じ形（`{"error": {"code", "message", "details"?}}`）。
 
 | code | 意味 |
 |---|---|

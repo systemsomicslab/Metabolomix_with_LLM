@@ -98,3 +98,23 @@ def test_quant_error_matches_mztab_envelope():
     from metabolomix.core.mcp_errors import mztab_error
     assert inputs.quant_error("X", "m", {"a": 1}) == mztab_error("X", "m", {"a": 1})
     assert json.loads(inputs.quant_error("X", "m"))["error"] == {"code": "X", "message": "m"}
+
+
+
+def test_non_utf8_tables_are_bad_request(tmp_path, monkeypatch):
+    """cp932 など UTF-8 でない表は、生の UnicodeDecodeError でなく名前の末尾だけの封筒にする。"""
+    path = tmp_path / "deep" / "ref-sjis.csv"
+    path.parent.mkdir()
+    path.write_bytes("TargetClass,StandardName,Coefficient,Unit\nPC,内部標準,2.0,nmol\n"
+                     .encode("cp932"))
+    with pytest.raises(DomainError) as e:
+        inputs.reference_input(str(path))
+    assert e.value.code == "QUANT_BAD_REQUEST"
+    assert "ref-sjis.csv" in e.value.message and str(path.parent) not in e.value.message
+    assert str(path.parent) not in json.dumps(e.value.details or {})
+    cfg = tmp_path / "lipidmix.local.toml"
+    cfg.write_text(f"[quant]\nadducts = '{path}'\n", encoding="utf-8")
+    monkeypatch.setenv(user_config.CONFIG_ENV, str(cfg))
+    with pytest.raises(DomainError) as e:
+        inputs.adduct_table()
+    assert e.value.code == "QUANT_BAD_REQUEST"

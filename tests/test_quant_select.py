@@ -5,7 +5,11 @@ import json
 import subprocess
 import sys
 
+import pytest
+
 from metabolomix.core import handles, session_state
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.curation import flags as cflags
 from metabolomix.dataset.alignment_files import select_alignment
 from metabolomix.dataset.msdial_adapter import load_msdial_folder
 from metabolomix.quant import derive as qd
@@ -73,6 +77,29 @@ def _adduct():
     return qi.adduct_table()
 
 
+def _arf2(ds):
+    return next(p for p in ds.source_files if p.lower().endswith(".arf2"))
+
+
+def _flag(ds, *entries):
+    """解析フォルダのキュレーション記録（flags.jsonl）に判断を書く（読み込んだ後でもよい）。
+
+    entries は {"spot_id": int, "flag": "wrong" | "redundant" | "assign", ...}（assign は name・ontology）。
+    """
+    arf2 = _arf2(ds)
+    cflags.FlagStore(cflags.curation_dir(arf2)).append(
+        [dict(e) for e in entries], alignment=cflags.alignment_key(arf2), review_id="r",
+        source="user")
+
+
+def _wrong(spot):
+    return {"spot_id": spot, "flag": "wrong"}
+
+
+def _assign(spot, name, ontology):
+    return {"spot_id": spot, "flag": "assign", "name": name, "ontology": ontology}
+
+
 def _audit(tmp_path, info, root="run"):
     path = tmp_path / root / "reports" / "quant" / f"{info['record_id']}.audit.json"
     return json.loads(path.read_text(encoding="utf-8"))
@@ -121,9 +148,7 @@ def test_not_normalized_role_unassigned(tmp_path, monkeypatch):
 def test_curation_applied_before_rules(tmp_path, monkeypatch):
     _point(tmp_path, monkeypatch)
     ds = _pos(tmp_path)
-    ds.curation_flags = {"wrong": {1}, "redundant": set(),
-                         "assign": {2: {"name": "PC 36:2", "ontology": "PE"},
-                                    5: {"name": "PC 30:0", "ontology": "PC"}}}
+    _flag(ds, _wrong(1), _assign(2, "PC 36:2", "PE"), _assign(5, "PC 30:0", "PC"))
     new, info = qs.select(ds, adduct=_adduct(), polarity="positive")
     audit = _audit(tmp_path, info)
     dec = {d["feature_id"]: d for d in audit["decisions"]}
@@ -136,7 +161,6 @@ def test_curation_applied_before_rules(tmp_path, monkeypatch):
     assert {(a["feature_id"], a["action"]) for a in audit["curation"]} == {
         ("1", "excluded"), ("2", "replaced"), ("5", "replaced")}
     # apply_curation=False: 判断を当てない
-    ds.curation_flags = {"wrong": {1}}
     new2, info2 = qs.select(ds, adduct=_adduct(), polarity="positive", apply_curation=False)
     assert "curation_excluded" not in info2["reasons"] and "1" in new2.feature_ids
     assert info2["curation"] is None
@@ -145,7 +169,7 @@ def test_curation_applied_before_rules(tmp_path, monkeypatch):
 def test_curation_keeps_internal_standard_reason(tmp_path, monkeypatch):
     _point(tmp_path, monkeypatch)
     ds = _pos(tmp_path)
-    ds.curation_flags = {"wrong": {0}}
+    _flag(ds, _wrong(0))
     _new, info = qs.select(ds, adduct=_adduct(), polarity="positive")
     assert info["reasons"]["internal_standard"] == 1  # 既に除外の行の理由は書き換えない
     assert "curation_excluded" not in info["reasons"]
@@ -154,7 +178,7 @@ def test_curation_keeps_internal_standard_reason(tmp_path, monkeypatch):
 def test_replaced_identity_carried_to_retained_rows(tmp_path, monkeypatch):
     _point(tmp_path, monkeypatch)
     ds = _pos(tmp_path)
-    ds.curation_flags = {"assign": {1: {"name": "PC 35:1", "ontology": "PC"}}}
+    _flag(ds, _assign(1, "PC 35:1", "PC"))
     new, _info = qs.select(ds, adduct=_adduct(), polarity="positive")
     assert new.feature_metadata["1"]["name"] == "PC 35:1"
     assert ds.feature_metadata["1"]["name"] == "PC 34:1"
@@ -227,8 +251,8 @@ def _merged(tmp_path):
     _normalized(pos, ("0",))
     _normalized(neg, ("0",))
     neg.quant_state["record_id"] = "q_neg"
-    pos.curation_flags = {"wrong": {1}}
-    neg.curation_flags = {"wrong": {2}, "assign": {1: {"name": "PE 40:6", "ontology": "PE"}}}
+    _flag(pos, _wrong(1))
+    _flag(neg, _wrong(2), _assign(1, "PE 40:6", "PE"))
     merged, _ = qm.merge(pos, neg, polarities=("positive", "negative"))
     return merged
 
@@ -254,7 +278,9 @@ def test_merged_dataset_curation_per_polarity(tmp_path, monkeypatch):
     assert new.feature_metadata["negative:1"]["origin"]["feature_id"] == "1"
     assert new.quant_state["steps"][-2:] == ["merge", "select"]
     assert new.quant_state["internal_standard_ids"] == []
-    assert new.quant_state["curation_by_polarity"]["positive"] == {"wrong": {1}}
+    arf2s = new.quant_state["arf2_by_polarity"]
+    assert set(arf2s) == {"positive", "negative"}
+    assert all(str(v).lower().endswith(".arf2") for v in arf2s.values())
     assert {(a["feature_id"], a["action"]) for a in audit["curation"]} == {
         ("positive:1", "excluded"), ("negative:2", "excluded"), ("negative:1", "replaced")}
     recs, warnings = qr.read_records(tmp_path / "run")  # 統合後の記録は共通の親
@@ -266,7 +292,8 @@ def test_merged_polarity_without_flags_reports_no_flags(tmp_path, monkeypatch):
     """統合後で apply_curation=True なのに、ある極性の判断が無いときは黙って飛ばさず理由を返す。"""
     _point(tmp_path, monkeypatch)
     merged = _merged(tmp_path)
-    merged.quant_state["curation_by_polarity"].pop("negative")
+    neg_arf2 = merged.quant_state["arf2_by_polarity"]["negative"]
+    (cflags.curation_dir(neg_arf2) / cflags.FLAGS_FILENAME).unlink()
     _new, info = qs.select(merged, adduct=_adduct())
     assert info["curation_by_polarity"]["negative"] == {"applied": False, "reason": "no_flags"}
     assert info["curation_by_polarity"]["positive"]["applied"] is True
@@ -376,3 +403,107 @@ def test_select_tool_registers_in_subprocess():
         "print('ok')\n")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert out.returncode == 0 and "ok" in out.stdout, out.stderr
+
+
+# ---- キュレーションはその場で読み直す・digest・入力の形式 ----
+
+def test_curation_read_fresh_not_load_snapshot(tmp_path, monkeypatch):
+    """読み込み時の写し（ds.curation_flags）ではなく、選別の時点の flags.jsonl を読む。"""
+    _point(tmp_path, monkeypatch)
+    ds = _pos(tmp_path)
+    ds.curation_flags = {"wrong": {1}}  # 写しだけ（記録には無い）は当てない
+    new, info = qs.select(ds, adduct=_adduct(), polarity="positive")
+    assert new.feature_ids == ["1"] and "curation_excluded" not in info["reasons"]
+    _flag(ds, _wrong(1))  # 読み込んだ後に付けた判断も当たる
+    new2, info2 = qs.select(ds, adduct=_adduct(), polarity="positive")
+    assert new2.feature_ids == [] and info2["reasons"]["curation_excluded"] == 1
+
+
+def test_record_carries_curation_digest(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    ds = _pos(tmp_path)
+
+    def rec(info):
+        return json.loads((tmp_path / "run" / "reports" / "quant"
+                           / f"{info['record_id']}.json").read_text(encoding="utf-8"))
+
+    _new, a = qs.select(ds, adduct=_adduct(), polarity="positive")
+    _new, b = qs.select(ds, adduct=_adduct(), polarity="positive")
+    da, db = rec(a)["settings"]["curation_digest"], rec(b)["settings"]["curation_digest"]
+    assert set(da) == {"positive"} and len(da["positive"]) == 64 and da == db  # 安定
+    _flag(ds, {"spot_id": 4, "flag": "suspect"})  # 当てない判断は digest を変えない
+    _new, c = qs.select(ds, adduct=_adduct(), polarity="positive")
+    assert rec(c)["settings"]["curation_digest"] == da
+    _flag(ds, _wrong(1))
+    _new, d = qs.select(ds, adduct=_adduct(), polarity="positive")
+    assert rec(d)["settings"]["curation_digest"]["positive"] != da["positive"]
+    _new, e = qs.select(ds, adduct=_adduct(), polarity="positive", apply_curation=False)
+    assert rec(e)["settings"]["curation_digest"] is None
+
+
+def test_merged_reads_each_polarity_flags_fresh(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    pos = _load(tmp_path / "run" / "pos", [_spot("IS-A"), _spot("PC 34:1")],
+                names=("S1_pos", "S2_pos", "S3_pos"))
+    neg = _load(tmp_path / "run" / "neg", [_spot("IS-B", "PE", "[M-H]-"),
+                                           _spot("PE 36:2", "PE", "[M-H]-")],
+                names=("S1_neg", "S2_neg", "S3_neg"))
+    _normalized(pos, ("0",))
+    _normalized(neg, ("0",))
+    neg.quant_state["record_id"] = "q_neg"
+    merged, _ = qm.merge(pos, neg, polarities=("positive", "negative"))
+    _flag(pos, _wrong(1))  # 統合の後に付けた判断
+    new, info = qs.select(merged, adduct=_adduct())
+    assert new.feature_ids == ["negative:1"]
+    assert info["curation_by_polarity"]["positive"] == {"applied": True}
+    assert info["curation_by_polarity"]["negative"] == {"applied": False, "reason": "no_flags"}
+    rec = json.loads((tmp_path / "run" / "reports" / "quant"
+                      / f"{info['record_id']}.json").read_text(encoding="utf-8"))
+    assert set(rec["settings"]["curation_digest"]) == {"positive", "negative"}
+
+
+def test_unreadable_flags_are_coded_without_path(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    ds = _pos(tmp_path)
+    path = cflags.curation_dir(_arf2(ds)) / cflags.FLAGS_FILENAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not json\n", encoding="utf-8")
+    with pytest.raises(DomainError) as exc:
+        qs.select(ds, adduct=_adduct(), polarity="positive")
+    assert exc.value.code == "QUANT_CURATION_UNREADABLE"
+    assert str(tmp_path) not in exc.value.message + json.dumps(exc.value.details or {})
+    _new, info = qs.select(ds, adduct=_adduct(), polarity="positive", apply_curation=False)
+    assert info["n_retained"] == 1  # 当てないなら読まない
+
+
+def test_select_refuses_non_msdial_source(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    ds = _pos(tmp_path)
+    ds.source_format = "mztab"
+    with pytest.raises(DomainError) as exc:
+        qs.select(ds, adduct=_adduct(), polarity="positive")
+    assert exc.value.code == "QUANT_SOURCE_UNSUPPORTED"
+    assert not (tmp_path / "run" / "reports").exists()
+    h = _open(ds, "positive")
+    out = json.loads(_tool(h))
+    assert out["error"]["code"] == "QUANT_SOURCE_UNSUPPORTED"
+
+
+def test_tool_new_handle_keeps_resolved_polarity(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    h = _open(_pos(tmp_path), None)
+    monkeypatch.setattr("metabolomix.mztab.polarity.dataset_polarity",
+                        lambda d: (None, "unknown", []))
+    monkeypatch.setattr("metabolomix.quant.derive.dataset_polarity",
+                        lambda d: (None, "unknown", []))
+    out = json.loads(_tool(h, polarity="positive"))
+    assert handles.registry.get(out["dataset_handle"]).polarity == "positive"
+
+
+def test_tool_checks_handle_capacity_before_writing(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    h = _open(_pos(tmp_path), "positive")
+    monkeypatch.setenv("LIPIDMIX_MAX_DATASET_HANDLES", "1")
+    out = json.loads(_tool(h))
+    assert out["error"]["code"] == "DATASET_HANDLE_LIMIT"
+    assert not (tmp_path / "run" / "reports").exists()  # 登録できない記録を残さない

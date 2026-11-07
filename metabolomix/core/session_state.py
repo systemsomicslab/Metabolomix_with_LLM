@@ -108,6 +108,11 @@ def pinned_handle(handle_id: str):
         _PINNED_HANDLE_ID.reset(token)
 
 
+def pinned_handle_id() -> str | None:
+    """この文脈で `pinned_handle` が固定しているハンドルの ID（固定していなければ None）。"""
+    return _PINNED_HANDLE_ID.get()
+
+
 def _build_sample_meta(sample_names, class_index):
     """サンプル名から role/group/run_order/batch を組み立てる。"""
     class_ids = {}

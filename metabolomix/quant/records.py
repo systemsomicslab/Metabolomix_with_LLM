@@ -28,27 +28,59 @@ def _new_record_id() -> str:
     return f"q_{stamp}_{uuid.uuid4().hex[:8]}"
 
 
+def _exists_error(path: Path) -> DomainError:
+    return DomainError("QUANT_RECORD_EXISTS", f"同名の記録が既にある（上書きしない）: {path.name}")
+
+
+def _create_exclusive_direct(path: Path, data: bytes) -> None:
+    """`O_CREAT | O_EXCL` で本名を直接作って書く（既存なら上書きせず失敗）。
+
+    ハードリンクを持たないファイルシステム（exFAT / FAT の外付けドライブなど）向けの代わり。
+    書き途中で失敗したら、自分で作った本名ファイルだけを消す。
+    """
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(path, flags, 0o644)
+    except FileExistsError:
+        raise _exists_error(path) from None
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+
+
 def _create_exclusive(path: Path, payload: dict) -> None:
     """一時ファイルへ書いてから `os.link` で本名にする（既存があれば上書きせず失敗）。
 
     `os.replace` は上書きしてしまうので使えない。`os.link` は宛先が在れば
     FileExistsError になり、書き途中の本名ファイルが読まれることも無い。
+    ハードリンクを作れないファイルシステム（exFAT / FAT など。`os.link` が FileExistsError
+    以外の OSError）では、`O_CREAT | O_EXCL` の直接作成に落とす（やはり上書きしない）。
     """
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"),
+                      allow_nan=False).encode("utf-8")
     tmp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.",
-            suffix=".tmp", delete=False,
+            mode="wb", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False,
         ) as tmp:
             tmp_path = Path(tmp.name)
-            json.dump(payload, tmp, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+            tmp.write(data)
             tmp.flush()
             os.fsync(tmp.fileno())
         try:
             os.link(tmp_path, path)
         except FileExistsError:
-            raise DomainError("QUANT_RECORD_EXISTS",
-                              f"同名の記録が既にある（上書きしない）: {path.name}") from None
+            raise _exists_error(path) from None
+        except OSError:
+            _create_exclusive_direct(path, data)
     finally:
         if tmp_path is not None and tmp_path.exists():
             os.unlink(tmp_path)

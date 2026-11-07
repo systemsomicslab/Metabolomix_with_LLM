@@ -95,3 +95,42 @@ def test_rules_unavailable_envelopes_do_not_leak_paths(tmp_path, monkeypatch):
         out = _call(name, **args)
         assert out["error"]["code"] == "quant_rules_unavailable", (name, out)
         assert str(tmp_path) not in json.dumps(out), name
+
+
+
+def test_merge_runs_on_a_worker_thread(tmp_path, monkeypatch):
+    """dataset_merge_polarities は dataset_handle を持たないが、イベントループを塞がない。"""
+    import threading
+
+    tool = server.mcp._tool_manager._tools["dataset_merge_polarities"]
+    assert tool.is_async
+    hid = _open(_simple(tmp_path))
+    hid2 = _open(_simple(tmp_path / "second"), polarity="negative")
+    seen = []
+
+    def fake_merge_tool(pos, neg, mapping_csv, record_folder):
+        seen.append(threading.get_ident())
+        return json.dumps({"status": "fake"})
+
+    monkeypatch.setattr("metabolomix.quant.merge.merge_tool", fake_merge_tool)
+    out = _call("dataset_merge_polarities", positive_handle=hid, negative_handle=hid2)
+    assert out == {"status": "fake"}
+    assert seen and seen[0] != threading.get_ident()
+
+
+def test_parent_is_the_pinned_handle_not_the_current_one(tmp_path, monkeypatch):
+    """dataset_handle を省いた呼び出しが固定されたハンドルで動くとき、親はそのハンドル。"""
+    from metabolomix.core import session_state
+    from metabolomix.quant import tools as qt
+
+    _point(tmp_path, monkeypatch)
+    a = _open(_simple(tmp_path / "a"))
+    b = _open(_simple(tmp_path / "b"))
+    session_state.session.set_current(b)  # 直近は b、固定は a
+    with session_state.pinned_handle(a):
+        out = json.loads(qt.dataset_quant_apply(skip=True))
+        assert handles.registry.get(out["dataset_handle"]).source["parents"] == [a]
+    session_state.session.set_current(b)
+    with session_state.pinned_handle(a):
+        out = json.loads(qt.dataset_select_features(skip_adduct_filter=True))
+        assert handles.registry.get(out["dataset_handle"]).source["parents"] == [a]

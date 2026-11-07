@@ -36,7 +36,10 @@ from metabolomix.core.mcp_errors import missing_state
 __all__ = ["ALWAYS_THREADED", "SESSION_READERS", "install"]
 
 #: ハンドルの有無に依らずスレッドで回すツール（対話のセッションを読み書きしないもの）。
-ALWAYS_THREADED = frozenset({"dataset_handle_open"})
+ALWAYS_THREADED = frozenset({
+    "dataset_handle_open",
+    "dataset_merge_polarities",  # 2 つのハンドルのロックを自分で取る（最大 LOCK_TIMEOUT 待つ）
+})
 
 #: `dataset_handle` を持たないが、直近のハンドルの `session.dataset` / `session.library` を
 #: （自身か、ヘルパー経由で）読むツール。直近のハンドルがあれば、そのロックと固定の下で

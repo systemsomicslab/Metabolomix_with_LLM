@@ -12,8 +12,15 @@
 （`metabolomix/quant/derive.py` の `register()`）。
 
 `dataset_handle` を持つ 3 ツールは `handle_dispatch.install` が包み、そのハンドルの `lock` の下で
-ワーカースレッドに回す。`dataset_merge_polarities` は `dataset_handle` も `session.dataset` も持たず、
-2 つのハンドルのロックを `handle_id` の順に自分で取る（`SESSION_READERS` には載せない）。
+ワーカースレッドに回す。`dataset_merge_polarities` は `dataset_handle` も `session.dataset` も持たないが、
+`handle_dispatch.ALWAYS_THREADED` に載せてあり、セッションのロックを取らずにワーカースレッドで
+回る（ロックの待ちでイベントループを塞がない）。2 つのハンドルのロックは `handle_id` の順に
+自分で取る（`SESSION_READERS` には載せない）。
+
+4 ツールとも入力は MS-DIAL の解析フォルダから読んだデータセットだけ
+（`metabolomix/quant/table.py` の `require_msdial_source()`。ほかは `QUANT_SOURCE_UNSUPPORTED`）。
+記録を書く工程は、書く前に `metabolomix/quant/derive.py` の `check_capacity()` で新しいハンドルを
+足せるかを確かめる。
 
 ## dataset_quant_preview
 
@@ -95,10 +102,13 @@
 7.    │  ├─ metabolomix/quant/plugin.py  load_rules()
 8.    │  ├─ metabolomix/quant/table.py  feature_rows()
 9.    │  ├─ metabolomix/quant/select.py  _curation_groups()
-10.    │  │  └─ metabolomix/quant/table.py  apply_curation()
-11.    │  ├─ metabolomix/quant/select.py  _decide()
-12.    │  │  └─ metabolomix/quant/plugin.py  call()
-13.    │  ├─ metabolomix/quant/records.py  write_record()
-14.    │  ├─ metabolomix/quant/records.py  write_audit()
-15.    │  └─ metabolomix/quant/derive.py  derive()
-16.    └─ metabolomix/quant/derive.py  register()
+10.    │  │  ├─ metabolomix/quant/select.py  _flags_for()
+11.    │  │  │  └─ metabolomix/curation/apply.py  flags_for_arf2()
+12.    │  │  ├─ metabolomix/quant/table.py  curation_digest()
+13.    │  │  └─ metabolomix/quant/table.py  apply_curation()
+14.    │  ├─ metabolomix/quant/select.py  _decide()
+15.    │  │  └─ metabolomix/quant/plugin.py  call()
+16.    │  ├─ metabolomix/quant/records.py  write_record()
+17.    │  ├─ metabolomix/quant/records.py  write_audit()
+18.    │  └─ metabolomix/quant/derive.py  derive()
+19.    └─ metabolomix/quant/derive.py  register()

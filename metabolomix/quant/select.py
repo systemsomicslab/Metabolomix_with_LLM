@@ -5,9 +5,12 @@
 
 - 内部標準の行は、正規化の記録が持つ内部標準の特徴 ID（`quant_state["internal_standard_ids"]`）で
   決める。正規化していなければ role は "unassigned"（内部標準を除かない）。
-- 統合後のデータセットは、極性ごとのキュレーション（`quant_state["curation_by_polarity"]`）を
-  `feature_metadata[fid]["origin"]` の極性・元の特徴 ID で当て、mode も origin の極性。統合前の
-  データセットは `ds.curation_flags` と、そのデータセット自身の極性。
+- キュレーションは読み込み時の写し（`ds.curation_flags`）ではなく、選別の時点の `flags.jsonl` を
+  `curation.apply.flags_for_arf2` で読み直す（ほかのキュレーションの読み手と同じ）。統合前の
+  データセットはそのデータセットの `.arf2`、統合後は極性ごとの `.arf2`
+  （`quant_state["arf2_by_polarity"]`）を `feature_metadata[fid]["origin"]` の極性・元の特徴 ID で
+  当て、mode も origin の極性。当てた判断の digest を極性ごとに記録の
+  `settings.curation_digest` に残す（再開がキュレーションの変化で古いと示すため）。
 - `assign` は name / ontology を差し替えてから規則へ。`wrong` / `redundant` は、規則が残すと
   した行だけを理由 "curation_excluded" の除外にする（msdial-workflow の `_curated` と同じ。
   内部標準など規則がもう除外した行の理由は書き換えない）。
@@ -25,15 +28,22 @@ import numpy as np
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_errors import missing_state
 from metabolomix.core.serialization import json_payload, round_floats
+from metabolomix.curation.apply import flags_for_arf2
+from metabolomix.curation.flags import FlagFileError
 from metabolomix.quant import derive as qderive
 from metabolomix.quant.inputs import ReferenceInput, adduct_key, adduct_table, quant_error
 from metabolomix.quant.normalize import analysis_folder
 from metabolomix.quant.plugin import call, load_rules, rules_settings
 from metabolomix.quant.records import AUDIT_SUFFIX, write_audit, write_record
 from metabolomix.quant.table import apply_curation as curate
-from metabolomix.quant.table import feature_rows, resolve_quant_polarity
+from metabolomix.quant.table import (curation_digest, feature_rows, has_curation_decisions,
+                                     resolve_quant_polarity)
 
-__all__ = ["AUDIT_SCHEMA", "is_merged", "select", "select_tool"]
+__all__ = ["AUDIT_SCHEMA", "CURATION_CHANGED", "current_curation_digests", "is_merged", "select",
+           "select_tool"]
+
+#: 復元のとき、記録の digest と今のキュレーションが違う（`resume` が古い扱いにする）。
+CURATION_CHANGED = "QUANT_CURATION_CHANGED"
 
 AUDIT_SCHEMA = "lipidmix.quant-select-audit.v1"
 _MAX_EXAMPLES = 5
@@ -50,12 +60,43 @@ def is_merged(ds) -> bool:
     return bool(ids) and all(isinstance(metadata.get(f, {}).get("origin"), dict) for f in ids)
 
 
+def _arf2_for(ds, key: str, merged: bool) -> str | None:
+    """キュレーションのフラグを引く `.arf2`（統合後は極性ごと）。1 本に決まらなければ None。"""
+    if merged:
+        return ((getattr(ds, "quant_state", None) or {}).get("arf2_by_polarity") or {}).get(key)
+    found = [p for p in (getattr(ds, "source_files", None) or {})
+             if str(p).lower().endswith(".arf2")]
+    return found[0] if len(found) == 1 else None
+
+
+def _flags_for(ds, key: str, merged: bool) -> dict | None:
+    """その極性の、いまのキュレーションのフラグ（`.arf2` が無ければ統合前は読み込み時の写し）。"""
+    path = _arf2_for(ds, key, merged)
+    if path is None:
+        return None if merged else getattr(ds, "curation_flags", None)
+    try:
+        return flags_for_arf2(path)
+    except (FlagFileError, OSError) as exc:
+        name = Path(path).name
+        raise DomainError("QUANT_CURATION_UNREADABLE",
+                          f"{name} のキュレーションのフラグを読めません（{type(exc).__name__}）。"
+                          "記録を直すか、apply_curation=False で判断を当てずに選別してください。",
+                          {"label": name, "polarity": key}) from None
+
+
+def current_curation_digests(ds, keys, *, merged: bool | None = None) -> dict[str, str]:
+    """各極性（`keys`）の、いまのキュレーションの digest（記録の `settings.curation_digest` と比べる）。"""
+    merged = is_merged(ds) if merged is None else merged
+    return {key: curation_digest(_flags_for(ds, key, merged)) for key in keys}
+
+
 def _curation_groups(ds, rows, polarity, apply_curation: bool):
-    """(行ごとの mode, 差し替え後の行, 除外する特徴 ID の集合, audit, 極性ごとの適用の報告)。
+    """(行ごとの mode, 差し替え後の行, 除外する特徴 ID の集合, audit, 極性ごとの適用の報告,
+    極性ごとの digest)。
 
     報告は統合後で apply_curation=True のときだけ（それ以外は None）。判断の無い極性は
-    {"applied": False, "reason": "no_flags"}。"""
-    state = getattr(ds, "quant_state", None) or {}
+    {"applied": False, "reason": "no_flags"}。digest は apply_curation=True のときだけ
+    （判断の無い極性も空の digest を持つ。後から判断が付けば変わる）。"""
     modes: dict[str, str] = {}
     groups: dict[str, list] = {}
     origin_ids: dict[str, str] = {}
@@ -74,11 +115,13 @@ def _curation_groups(ds, rows, polarity, apply_curation: bool):
     excluded: set[str] = set()
     audit: list[dict] = []
     if not apply_curation:
-        return modes, {r.feature_id: r for r in rows}, excluded, audit, None
+        return modes, {r.feature_id: r for r in rows}, excluded, audit, None, None
     report: dict | None = {} if merged else None
+    digests: dict[str, str] = {}
     for key, members in groups.items():
-        flags = (state.get("curation_by_polarity") or {}).get(key) if merged else ds.curation_flags
-        if not flags:
+        flags = _flags_for(ds, key, merged)
+        digests[key] = curation_digest(flags)
+        if not has_curation_decisions(flags):
             if report is not None:
                 report[key] = {"applied": False, "reason": "no_flags"}
             continue
@@ -96,7 +139,7 @@ def _curation_groups(ds, rows, polarity, apply_curation: bool):
                 excluded.add(row.feature_id)
         audit.extend({**a, "feature_id": back[a["feature_id"]]} for a in sub_audit)
     final = {r.feature_id: replaced.get(r.feature_id, r) for r in rows}
-    return modes, final, excluded, audit, report
+    return modes, final, excluded, audit, report, digests
 
 
 def _decide(plugin, rows, modes, adduct, ds):
@@ -126,6 +169,8 @@ def select(ds, *, adduct: ReferenceInput | None, apply_curation: bool = True,
     行う）。`polarity` は統合前のデータセットの mode（省くとデータセットから決め、決まらなければ
     QUANT_POLARITY_REQUIRED）。統合後は各特徴の出自の極性を使い、引数は見ない。
     `reuse` は既存の記録（復元用）: 記録と audit を書かず、その `record_id` で派生を作る。
+    記録に `settings.curation_digest` があり、いまのキュレーションの digest と違えば
+    `QUANT_CURATION_CHANGED`（今の判断で黙って作り直さない）。
     """
     plugin = load_rules()
     merged = is_merged(ds)
@@ -136,7 +181,14 @@ def select(ds, *, adduct: ReferenceInput | None, apply_curation: bool = True,
     folder = Path(state["record_folder"]) if state and state.get("record_folder") \
         else analysis_folder(ds)
 
-    modes, final, excluded, curation_audit, by_polarity = _curation_groups(ds, rows, polarity, apply_curation)
+    modes, final, excluded, curation_audit, by_polarity, digests = _curation_groups(
+        ds, rows, polarity, apply_curation)
+    if reuse is not None:
+        recorded = (reuse.get("settings") or {})
+        if "curation_digest" in recorded and recorded["curation_digest"] != digests:
+            raise DomainError(CURATION_CHANGED,
+                              "記録の選別のあとでキュレーションが変わりました（記録の判断では"
+                              "作り直せません）。", {"record_id": reuse.get("record_id")})
     ordered = [final[r.feature_id] for r in rows]
     decisions = _decide(plugin, ordered, modes, adduct, ds)
     for d in decisions:
@@ -156,10 +208,12 @@ def select(ds, *, adduct: ReferenceInput | None, apply_curation: bool = True,
         record_id = reuse["record_id"]
         audit_name = f"{record_id}{AUDIT_SUFFIX}"
     else:
+        qderive.check_capacity()  # 登録できない記録を残さない
         record = write_record(
             folder, "select", inputs=inputs, parent_ids=parents,
             settings={"adducts": adduct_info, "apply_curation": bool(apply_curation),
-                      "polarity": None if merged else polarity, "rules": rules_settings(plugin)},
+                      "polarity": None if merged else polarity, "rules": rules_settings(plugin),
+                      "curation_digest": digests},
             summary={"n_features": counts, "reasons": dict(reasons), "curation": curation})
         record_id = record["record_id"]
         audit_name = write_audit(folder, record_id, {
@@ -217,6 +271,7 @@ def select_tool(holder, *, parent_handle_id: str | None, skip_adduct_filter: boo
             polarity = resolve_quant_polarity(ds, holder, polarity)
         new, info = select(ds, adduct=adduct, apply_curation=apply_curation, polarity=polarity)
         handle_id = qderive.register(holder, new, step="select",
+                                     polarity=None if is_merged(ds) else polarity,
                                      parent_handle_ids=[parent_handle_id] if parent_handle_id else [])
     except DomainError as exc:
         return quant_error(exc.code, exc.message, exc.details or None)

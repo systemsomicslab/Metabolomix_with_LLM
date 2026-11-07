@@ -10,6 +10,10 @@
   （古い扱い）で、その工程から先を戻さない。
 - 統合の記録と、統合後の選別は v1 では戻さない（両極性のデータセットが要る）。
   `merge_restore_needs_both_polarities` として skipped に挙げる。
+- 選別の記録の `settings.curation_digest` が、いまのキュレーション（`flags.jsonl`）の digest と
+  違えば `curation_changed`（古い扱い）。一致するときだけ、いまのフラグで計算し直す。
+- 途中の工程を戻せなければ、鎖のそれより後ろの記録は `prior_step_not_restored` として
+  skipped に挙げる（黙って消さない）。
 - `load_dataset` からの呼び出しは B-2 の入口と衝突するので、統合時に足す。
 """
 from __future__ import annotations
@@ -28,6 +32,8 @@ from metabolomix.quant.records import is_stale, read_records, record_dir
 __all__ = ["restore_chain"]
 
 MERGE_REASON = "merge_restore_needs_both_polarities"
+CURATION_CHANGED = "curation_changed"
+AFTER_BREAK = "prior_step_not_restored"
 _REFERENCE_PREFIX = "reference:"
 
 
@@ -68,6 +74,20 @@ def _current_adduct_inputs() -> dict[str, str]:
     return {adduct_key(table.label): table.sha256} if table is not None else {}
 
 
+def _curation_reason(record: dict, base_ds) -> str | None:
+    """選別の記録のキュレーションが、いまの判断と違えば理由（同じ・記録に digest が無ければ None）。"""
+    if record.get("step") != "select":
+        return None
+    recorded = (record.get("settings") or {}).get("curation_digest")
+    if not isinstance(recorded, dict):
+        return None
+    try:
+        current = qselect.current_curation_digests(base_ds, recorded, merged=False)
+    except DomainError:
+        return "curation_unreadable"
+    return CURATION_CHANGED if current != recorded else None
+
+
 def _classify(records: list[dict], base_ds, out: dict) -> list[dict]:
     """古くない・統合に絡まない記録を作った順に返す（古いものは stale、統合は skipped へ）。"""
     current = dict(base_ds.source_files or {})
@@ -86,7 +106,7 @@ def _classify(records: list[dict], base_ds, out: dict) -> list[dict]:
         # 参照表は sha256 で別に解く（濃度形では記録の入力の指紋が元の表のもので、保存した係数表とは違う）
         view = {**record, "inputs": {k: v for k, v in record.get("inputs", {}).items()
                                      if not k.startswith(_REFERENCE_PREFIX)}}
-        reason = is_stale(view, current, known, stale_ids=stale_ids)
+        reason = is_stale(view, current, known, stale_ids=stale_ids) or _curation_reason(record, base_ds)
         if reason is not None:
             stale_ids.add(rid)
             out["stale"].append(_entry(record, reason))
@@ -146,6 +166,8 @@ def _restore_step(record: dict, ds, folder: Path, reference_paths):
                 polarity=settings.get("polarity"), reuse=record)
             return new, None
     except DomainError as exc:
+        if exc.code == qselect.CURATION_CHANGED:  # 分類のあとで判断が変わった
+            return None, ("stale", CURATION_CHANGED)
         return None, ("skipped", exc.code)
     return None, ("skipped", f"unsupported_step:{step}")
 
@@ -166,10 +188,11 @@ def restore_chain(folder: Path, base_ds, base_holder, *, fresh: bool = False,
         out["warnings"] = warnings
     chain = _chain_to(_classify(records, base_ds, out))
     ds, parent = base_ds, getattr(base_holder, "handle_id", None)
-    for record in chain:
+    for position, record in enumerate(chain):
         new, problem = _restore_step(record, ds, folder, reference_paths)
         if problem is not None:
             out[problem[0]].append(_entry(record, problem[1]))
+            out["skipped"].extend(_entry(later, AFTER_BREAK) for later in chain[position + 1:])
             break
         handle_id = qderive.register(base_holder, new, step=record["step"],
                                      parent_handle_ids=[parent] if parent else [])

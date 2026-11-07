@@ -11,6 +11,7 @@ import importlib
 import importlib.util
 import re
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -34,6 +35,10 @@ class RulesPlugin:
 
 #: (解決済みフォルダ, digest) → プラグイン
 _cache: dict[tuple[str, str], RulesPlugin] = {}
+#: キャッシュの参照と import を直列にする。別々のハンドルの呼び出しはワーカースレッドで並列に
+#: 走るので、守らないと同じ名前のモジュールを 2 本が同時に import し、片方の失敗の後始末が
+#: もう片方の使っている `sys.modules` の項目を消す。
+_load_lock = threading.Lock()
 
 
 def _digest(folder: Path) -> str:
@@ -47,7 +52,8 @@ def _digest(folder: Path) -> str:
 
 _MAX_TEXT = 300
 _STOP = r"""[^\s'"<>|*?:,;)\]]"""
-_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\)" + _STOP + r"*|(?<![\w.:/])/" + _STOP + "+")
+#: 絶対パス: ドライブ（語の途中の `x:` は除く）・UNC・POSIX（`(nmol)/mg` のような単位の割り算は除く）。
+_PATH = re.compile(r"(?:\b[A-Za-z]:[\\/]|\\\\)" + _STOP + r"*|(?<![\w.:/)\]])/" + _STOP + "+")
 
 
 def _tail(match: re.Match) -> str:
@@ -108,6 +114,12 @@ def load_rules() -> RulesPlugin:
         raise _unavailable(f"[quant] rules のフォルダに __init__.py がありません: {folder.name}")
     digest = _digest(folder)
     key = (str(folder.resolve()), digest)
+    with _load_lock:
+        return _load_locked(folder, digest, key)
+
+
+def _load_locked(folder: Path, digest: str, key: tuple[str, str]) -> RulesPlugin:
+    """`_load_lock` を持って呼ぶ。キャッシュに無ければ import して検査し、入れる。"""
     cached = _cache.get(key)
     if cached is not None:
         return cached

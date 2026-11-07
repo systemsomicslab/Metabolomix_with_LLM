@@ -16,7 +16,7 @@ import numpy as np
 from metabolomix.core import handles, session_state
 from metabolomix.mztab.polarity import dataset_polarity
 
-__all__ = ["QUANT_STATE_SCHEMA", "derive", "quant_state", "register"]
+__all__ = ["QUANT_STATE_SCHEMA", "check_capacity", "derive", "quant_state", "register"]
 
 QUANT_STATE_SCHEMA = "lipidmix.quant-state.v1"
 
@@ -144,16 +144,27 @@ def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
     return new
 
 
-def register(holder, ds, *, step: str, parent_handle_ids: list[str]) -> str:
+def check_capacity() -> None:
+    """記録を書く**前に**、新しいハンドルを 1 本足せるかを確かめる（上限なら
+    `DATASET_HANDLE_LIMIT`）。書いてから登録で断ると、どのハンドルにも繋がらない記録が残る。
+    上限の意味は登録簿のまま（`register` も同じ検査をもう一度する）。"""
+    handles.registry.check_capacity()
+
+
+def register(holder, ds, *, step: str, parent_handle_ids: list[str],
+             polarity: str | None = None) -> str:
     """派生データセットを新しいハンドルとして登録し、直近にして handle_id を返す。
 
     上限なら `DATASET_HANDLE_LIMIT`（古いハンドルは閉じず、直近も動かさない）。ライブラリは
     新しい LibraryState（親の store を 2 か所で閉じないため。必要なら呼び出し側が
     `library_load` し直す）。分光の参照先（.arf2 / .dcl）は親が 1 本のときだけ引き継ぐ。
+    `polarity` は呼び出し側が決めた極性（引数・ハンドル・データセットの順に解いたもの）。
+    `polarity` を省くと、データセット由来 → 親のハンドルの極性の順。
     """
     single = len(parent_handle_ids) == 1
-    polarity = None  # 親が複数（統合）なら極性は決まらない。親のハンドルの極性へ落とさない
-    if single:
+    if len(parent_handle_ids) > 1:
+        polarity = None  # 親が複数（統合）なら極性は決まらない。親のハンドルの極性へ落とさない
+    elif polarity is None:
         polarity, _source, _notes = dataset_polarity(ds)
         if polarity is None:
             polarity = getattr(holder, "polarity", None)

@@ -15,6 +15,7 @@ from metabolomix.quant import resume
 from metabolomix.quant import select as qs
 from tests.msdial_folder_fixtures import write_msdial_folder
 from tests.quant_fake_rules import write_fake_rules
+from tests.test_quant_select import _flag, _wrong
 
 UNIT = "pmol / 10^6 cells"
 REF = f"TargetClass,StandardName,Coefficient,Unit\nPC,IS-A,2.0,{UNIT}\n"
@@ -51,7 +52,7 @@ def _base(tmp_path):
     for meta in ds.feature_metadata.values():
         meta["msms_assigned"] = True
         meta["comment"] = ""
-    ds.curation_flags = {"wrong": {3}}
+    _flag(ds, _wrong(3))  # 解析フォルダのキュレーション記録（選別がその場で読む）
     return ds
 
 
@@ -232,3 +233,29 @@ def test_merge_records_are_skipped_with_reason(tmp_path, monkeypatch):
     assert {(s["record_id"], s["reason"]) for s in out["skipped"]} == {
         (merge["record_id"], "merge_restore_needs_both_polarities"),
         (post["record_id"], "merge_restore_needs_both_polarities")}
+
+
+def test_curation_change_marks_select_stale(tmp_path, monkeypatch):
+    """選別の記録の後にキュレーションが変わったら、その選別は古い（今の判断で黙って作り直さない）。"""
+    _env(tmp_path, monkeypatch)
+    ds = _base(tmp_path)
+    _chain(tmp_path, ds)
+    holder = _holder(ds)
+    _flag(ds, _wrong(1))
+    out = resume.restore_chain(_folder(tmp_path), ds, holder, reference_paths=_refs(tmp_path))
+    assert [e["step"] for e in out["restored"]] == ["normalize"]
+    assert [(s["step"], s["reason"]) for s in out["stale"]] == [("select", "curation_changed")]
+    _flag(ds, {"spot_id": 1, "flag": "clear"})  # 元の判断に戻せば、記録の選別がまた戻る
+    again = resume.restore_chain(_folder(tmp_path), ds, holder, reference_paths=_refs(tmp_path))
+    assert [e["step"] for e in again["restored"]] == ["normalize", "select"]
+
+
+def test_break_lists_remaining_chain_entries(tmp_path, monkeypatch):
+    _env(tmp_path, monkeypatch)
+    ds = _base(tmp_path)
+    _n1, _n2, info = _chain(tmp_path, ds)
+    out = resume.restore_chain(_folder(tmp_path), ds, _holder(ds))  # 参照表の場所を渡さない
+    assert out["restored"] == []
+    assert [(s["step"], s["reason"]) for s in out["skipped"]] == [
+        ("normalize", "reference_missing"), ("select", "prior_step_not_restored")]
+    assert out["skipped"][1]["record_id"] == info["record_id"]

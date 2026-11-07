@@ -56,7 +56,12 @@ def _read(path: Path) -> tuple[str, str]:
         raise DomainError("QUANT_REFERENCE_UNREADABLE",
                           f"表を読めません: {path.name}（{type(exc).__name__}）",
                           {"label": path.name}) from None
-    return data.decode("utf-8-sig"), hashlib.sha256(data).hexdigest()
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise _bad(f"表を UTF-8 として読めません: {path.name}（UTF-8 で保存し直してください）",
+                   label=path.name) from None
+    return text, hashlib.sha256(data).hexdigest()
 
 
 def reference_input(reference_path: str | None, *, method: str = "cell_coefficient",

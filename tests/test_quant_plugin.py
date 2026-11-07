@@ -194,3 +194,48 @@ def test_plugin_errors_are_sanitized(tmp_path, monkeypatch):
 def test_sanitize_text_keeps_plain_slashes():
     assert plugin.sanitize_text("(positive / negative)") == "(positive / negative)"
     assert plugin.sanitize_text(r"at C:\x\y\z.csv") == "at z.csv"
+
+
+
+def test_sanitize_text_keeps_units_after_brackets_and_word_drives():
+    assert plugin.sanitize_text("value in (nmol)/mg") == "value in (nmol)/mg"
+    assert plugin.sanitize_text("[pmol]/10^6 cells") == "[pmol]/10^6 cells"
+    assert plugin.sanitize_text("unitC:/x is odd") == "unitC:/x is odd"
+    assert plugin.sanitize_text("bad row in C:\\lab\\ref.csv") == "bad row in ref.csv"
+    assert plugin.sanitize_text("see (C:/lab/ref.csv)") == "see (ref.csv)"
+    assert plugin.sanitize_text("at /home/u/ref.csv") == "at ref.csv"
+
+
+def test_concurrent_loads_import_once(tmp_path, monkeypatch):
+    """別々のハンドルの POS / NEG を並列に回しても、同じプラグインを 2 回 import しない。"""
+    import threading
+    import time
+
+    _point(tmp_path, monkeypatch, write_fake_rules(tmp_path / "rules"))
+    plugin._cache.clear()
+    real = plugin._import
+    calls = []
+
+    def slow_import(folder, digest):
+        calls.append(digest)
+        time.sleep(0.2)
+        return real(folder, digest)
+
+    monkeypatch.setattr(plugin, "_import", slow_import)
+    barrier = threading.Barrier(2)
+    got, errors = [], []
+
+    def worker():
+        barrier.wait()
+        try:
+            got.append(plugin.load_rules())
+        except BaseException as exc:  # noqa: BLE001 - スレッドの失敗をテストへ持ち帰る
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert errors == [] and len(got) == 2
+    assert len(calls) == 1 and got[0] is got[1]

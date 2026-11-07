@@ -1,6 +1,7 @@
 """定量の工程の記録（metabolomix.quant.records）。fixture は tmp に合成する。"""
 from __future__ import annotations
 
+import errno
 import json
 import sys
 
@@ -91,3 +92,21 @@ def test_corrupt_record_is_listed_as_warning(tmp_path):
 
 def test_read_records_missing_folder(tmp_path):
     assert records.read_records(tmp_path) == ([], [])
+
+
+@pytest.mark.parametrize("err", [errno.EPERM, getattr(errno, "ENOTSUP", errno.EOPNOTSUPP)])
+def test_link_unsupported_falls_back_to_exclusive_create(tmp_path, monkeypatch, err):
+    """exFAT / FAT の外付けドライブは os.link を持たない。上書きしない排他作成に落とす。"""
+    def no_link(src, dst):
+        raise OSError(err, "hard links not supported")
+
+    monkeypatch.setattr(records.os, "link", no_link)
+    r = _write(tmp_path)
+    directory = records.record_dir(tmp_path)
+    path = directory / f"{r['record_id']}.json"
+    assert json.loads(path.read_text(encoding="utf-8"))["record_id"] == r["record_id"]
+    assert [p.name for p in directory.iterdir()] == [path.name]  # 一時ファイルを残さない
+    with pytest.raises(DomainError) as exc:
+        records._create_exclusive(path, {"x": 1})
+    assert exc.value.code == "QUANT_RECORD_EXISTS"
+    assert json.loads(path.read_text(encoding="utf-8"))["record_id"] == r["record_id"]
