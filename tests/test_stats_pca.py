@@ -117,3 +117,14 @@ def test_all_missing_column_after_imputation():
     with pytest.raises(DomainError) as e:
         pca(_prep(x))
     assert e.value.code == "PCA_MISSING_VALUES" and e.value.details["columns"] == ["f2"]
+
+
+def test_unknown_impute_rejected_with_and_without_missing():
+    x = _data()
+    with pytest.raises(DomainError) as e:
+        pca(_prep(x), impute="bogus")
+    assert e.value.code == "PCA_SPECIFICATION_INVALID"
+    x[0, 0] = np.nan
+    with pytest.raises(DomainError) as e:
+        pca(_prep(x), impute="bogus")
+    assert e.value.code == "PCA_SPECIFICATION_INVALID"

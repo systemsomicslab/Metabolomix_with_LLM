@@ -19,6 +19,9 @@ def pca(prepared: PreparedMatrix, *, scaling: str = "autoscale",
     if scaling not in ("autoscale", "pareto"):
         raise DomainError("PCA_SPECIFICATION_INVALID", f"未知の scaling: {scaling!r}",
                           {"field": "scaling", "value": repr(scaling)})
+    if impute not in ("half_min", "knn", "none"):
+        raise DomainError("PCA_SPECIFICATION_INVALID", f"未知の補完法: {impute!r}",
+                          {"field": "impute", "value": repr(impute)})
     if n_components is not None and (isinstance(n_components, bool)
                                      or not isinstance(n_components, (int, np.integer))
                                      or n_components < 1):
@@ -35,7 +38,10 @@ def pca(prepared: PreparedMatrix, *, scaling: str = "autoscale",
         if impute == "none":
             raise DomainError("PCA_MISSING_VALUES", "欠測があるため PCA を計算できません（補完なし）",
                               {"missing_cells": n_nan})
-        stacked, rep = impute_for_pca(stacked, method=impute, reference_rows=np.arange(n_units))
+        try:
+            stacked, rep = impute_for_pca(stacked, method=impute, reference_rows=np.arange(n_units))
+        except ValueError as exc:
+            raise DomainError("PCA_SPECIFICATION_INVALID", str(exc), {"field": "impute"}) from exc
         imputation = {"method": rep["method"], "imputed_cells": rep["imputed_cells"], "used": True}
     else:
         imputation = {"method": impute, "imputed_cells": 0, "used": False}
