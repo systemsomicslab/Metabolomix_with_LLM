@@ -84,15 +84,8 @@ EXPECTED_TOOLS = sorted([
     "eic_plot_chromatograms",
     "eic_plot_compounds",
     "eic_search",
-    "ingest_promote",
-    "ingest_reject",
-    "ingest_review_queue",
-    "ingest_stage",
-    "knowledge_coverage",
     "list_data_files",
-    "list_reports",
     "load_dataset",
-    "log_search",
     "pai2_inspect_peak",
     "pipeline_cancel",
     "pipeline_plan",
@@ -120,29 +113,22 @@ EXPECTED_TOOLS = sorted([
     "dcl_find_msms",
     "dcl_parser",
     "pai2_parser",
-    "paper_search",
     "read_report",
     "record_objective",
     "sample_search",
     "server_update",
     "save_figure",
-    "update_objective",
     "verify_peak_annotation",
     "write_report",
 ])
 
 EXPECTED_RESOURCES = sorted([
     "lipidmix://docs/output-format",
-    "lipidmix://knowledge/index",
-    "lipidmix://playbook/index",
-    "lipidmix://knowledge/inbox",
     "ui://ms-data-parser/curation-viewer",
 ])
 
 EXPECTED_TEMPLATES = sorted([
     "lipidmix://docs/output-format/{topic}",
-    "lipidmix://knowledge/expand/{slug}",
-    "lipidmix://playbook/expand/{slug}",
 ])
 
 

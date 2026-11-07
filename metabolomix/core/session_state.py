@@ -407,7 +407,7 @@ class AnalysisSession:
         self.sections_seen: set[str] = set()
 
         # --- アッセイ種別（解釈規則の選択軸。データ切替では消さない） ---
-        # 確定は利用者との合意事項（record_objective / update_objective）で、
+        # 確定は利用者との合意事項（record_objective）で、
         # パーサ出力からは決まらない。既定の unknown は「脂質」ではない。
         self.assay_kind = "unknown"
 

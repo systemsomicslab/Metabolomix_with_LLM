@@ -29,8 +29,7 @@
 - `metabolomix/analysis/` — 入力形式に依存しない数値処理
 - `metabolomix/plots/` — レンダラ中立の payload 組み立て
 - `metabolomix/pathway/` — MSLipidMapper 連携（最小 mzTab-M の受け渡し・研究室サーバの REST API とローカル Rscript のブリッジ・JSON-LD 読み取り・隣接比較）
-- `metabolomix/corpus/` — 蓄積ノートの純ロジック
-- `metabolomix/tools/` — 形式に紐づかない MCP 公開層
+- `metabolomix/tools/` — 形式に紐づかない MCP 公開層（`notes.py` はレポートと objective の読み書き）
 
 ## 目次
 
@@ -52,12 +51,12 @@
 | [pathway.md](pathway.md) | パスウェイ投影（MSLipidMapper）— サブクラスのノード集計・2 群比較・図 | 2 |
 | [reanalysis.md](reanalysis.md) | 再解析 — データセットのハンドルと spec で呼ぶツール | 11 |
 
-合計 70 ツール。対象外は 21 ツール——文献探索・レポート記録系 12
-（`record_objective` `knowledge_coverage` `paper_search` `ingest_*` `write_report` など）＋
+合計 70 ツール。対象外は 12 ツール——レポート記録系 3
+（`record_objective` `write_report` `read_report`）＋
 Console 実行層 8（`console_plan` `console_prepare_input` `console_method_template`
 `console_method_candidates` `console_run` `console_status` `console_cleanup` `job_list`）＋
 サーバ自身の保守 1（`server_update`。解析の流れに現れず、配布先クローンの更新だけを行う）。
-登録ツール総数は 91（70 + 21）。
+登録ツール総数は 82（70 + 12）。
 
 ## 一気通貫の順序
 

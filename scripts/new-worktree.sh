@@ -63,8 +63,7 @@ cat > "$path/.mcp.json" <<JSON
       ],
       "env": {
         "LIPIDMIX_CONFIG": "$main_w/lipidmix.local.toml",
-        "LIPIDMIX_DATA_DIR": "$main_w/data",
-        "LIPIDMIX_KNOWLEDGE_DIR": "$main_w/knowledge"
+        "LIPIDMIX_DATA_DIR": "$main_w/data"
       }
     }
   }

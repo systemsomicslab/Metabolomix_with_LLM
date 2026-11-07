@@ -80,7 +80,7 @@ def test_report_tools_return_the_envelope(broken_config, fresh_session):
 
     for out in (reports.write_report("a-1", "DS", "本文"),
                 reports.read_report("a-1"),
-                reports.list_reports()):
+                reports.read_report()):
         err = _error(out)
         assert err["code"] == "CONFIG_INVALID"
         assert "[library] lbm" in err["message"]
@@ -96,10 +96,8 @@ def test_objective_tools_return_the_envelope_without_half_applied_state(broken_c
         sub_questions=["Q"], assay_kind="lipid")
     assert _error(out)["code"] == "CONFIG_INVALID"
     assert fresh_session.assay_kind == "unknown"                   # 種別だけが切り替わらない
-    for out in (objective.update_objective("a-1", status="done"),
-                objective.log_search("a-1", "Q1", "q", 0),
-                objective.knowledge_coverage("a-1")):
-        assert _error(out)["code"] == "CONFIG_INVALID"
+    out = objective.record_objective("a-1", status="done")         # 既存の目的を直す経路も同じ
+    assert _error(out)["code"] == "CONFIG_INVALID"
 
 
 def test_record_objective_rejects_an_unknown_assay_kind_before_touching_anything(fresh_session):

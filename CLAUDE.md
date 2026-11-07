@@ -5,7 +5,7 @@
 ## このリポジトリは何か
 
 MS-DIAL（LC-MS リピドミクス／メタボロミクス解析ソフト）の出力を読み、LLM から使える形で
-公開する **MCP サーバ `ms-data-parser`**。ツール 91・リソース 5・リソーステンプレート 3。
+公開する **MCP サーバ `ms-data-parser`**。ツール 82・リソース 2・リソーステンプレート 1。
 GUI の外では読めない圧縮 MessagePack と独自バイナリを解し、解析そのものをサーバ側で回して
 要約だけを返す（生の行列を LLM の文脈に載せない）。
 
@@ -33,9 +33,8 @@ ID・MSI レベル・`.dcl` の実スペクトル照合）、(c) EIC の検索�
 fake Console までしか検証されていない**——`docs/workflow/metabolomics.md` を先に読む。
 
 差次的エクスポートの列定義は別リポジトリ（massbank-context）との契約を兼ねる。加えて、
-文献知識と再利用手順の蓄積層を持つ——`knowledge/` `playbook/` は **MCP リソース**として
-索引と本文を配信し（`lipidmix://{knowledge,playbook}/{index,expand/<slug>}`）、
-目的（objective）とレポートはツール経由で**解析フォルダ配下の `reports/`** に読み書きする。
+目的（objective）とレポートはツール経由で**解析フォルダ配下の `reports/`** に読み書きする
+（文献検索と知識の蓄積の層は 2026-11 に消した。種ノートは vault の `archived-knowledge/` へ移した）。
 **システム調整以外のデータ解析の記録は、生データと同じ解析フォルダ側の `reports/` に置く契約**で、
 リポジトリ側には書かない（旧 `analyses/` はバグとして廃止。2026-10-09）。
 
@@ -79,8 +78,7 @@ setup が無ければ作る。追跡されている `.vscode/mcp.json` も `.ven
 `LIPIDMIX_DATA_DIR`（データ探索先。既定 `<project>/data`。B-2b で探索ごと消える）/
 `LIPIDMIX_TRANSPORT` `LIPIDMIX_HOST` `LIPIDMIX_PORT`（HTTP 待受）/
 `LIPIDMIX_PLOT_OUTPUT`（描画系ツールの戻り値。既定 `image`。Plotly で自分で描く
-クライアント＝Use-LLLM は `payload` を置く）。知識の蓄積の上書き `LIPIDMIX_KNOWLEDGE_DIR`
-`LIPIDMIX_PLAYBOOK_DIR` は、蓄積そのものを消すときに一緒に消える（spec 2026-11-06 §9）。
+クライアント＝Use-LLLM は `payload` を置く）。
 置き場所とサーバの振る舞いは環境変数でなく設定ファイルに書く: `[paths] reports_dir`（解析フォルダ
 配下 `reports/` より先に試す記録の書き込み先。未指定が既定で、そのとき記録は解析フォルダ配下
 `reports/` だけに書く）`[paths] library_cache`（照合用 SQLite キャッシュの置き場所。既定は
@@ -139,7 +137,6 @@ metabolomix/pipeline/  生データフォルダ起点の統括（受付 request/
                     工程 handler の service・再開/取消の recovery・必須出力判定と品質レポートの report）
 metabolomix/handoff/   Console 成果物の受け渡しスキーマ（analysis-job.json）
 metabolomix/curation/  アラインメントのキュレーション（証拠収集・機械判別・フラグ記録・ビューア HTML）
-metabolomix/corpus/    蓄積ノートの純ロジック（knowledge_store / paper_ingest）
 metabolomix/pathway/   MSLipidMapper 連携（最小 mzTab-M の受け渡し・Rscript ブリッジ・JSON-LD 読み取り・隣接比較）
 metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サンプル検索・目的・レポート・リソース）
 ```
@@ -148,7 +145,7 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
   （各モジュールの `__all__` ＝そのモジュールのツール名）で公開面を再エクスポートするだけ。
   新しいツールを足すときは、実体を該当モジュールに書き `__all__` に載せる。
 - **`server.py` をルートから動かさない**。`.mcp.json` / `.vscode/mcp.json` が絶対パスで指している。
-- **可変状態の正準は `metabolomix.core.mcp_core`（`DATA_DIR` `KNOWLEDGE_DIR` `ANALYSES_DIR`）と
+- **可変状態の正準は `metabolomix.core.mcp_core`（`DATA_DIR`）と
   `metabolomix.core.session_state`（`session`）**。`server.<name>` はスナップショット束縛にすぎないので、
   差し替え・モンキーパッチは必ず正準モジュール側に当てる。参照も `mcp_core.DATA_DIR` の
   module 修飾で行い、`from ... import DATA_DIR` を書かない。
@@ -266,7 +263,7 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
     写しだけが腐るため）。README は詳細を他文書へ委譲した要約なので、
     ポインタが切れると案内そのものが壊れる。
 - `tests/test_server_registration.py` がツール/リソースの登録数と `ToolAnnotations` を検証する。
-- **fixture はテスト自身が作る**。解析フォルダの `reports/` や `knowledge/` の実ファイルに依存させない
+- **fixture はテスト自身が作る**。解析フォルダの `reports/` の実ファイルに依存させない
   （追跡外なのでユーザ環境依存の不安定テストになる。tmp に作って `mcp_core.DATA_DIR` を差し替える流儀）。
 
 ## 作業の記録と Git
@@ -319,11 +316,9 @@ git worktree remove .worktrees/<slug>  # 片付け
 - スクリプトが worktree 専用の `.mcp.json` を生成する。`command` は main ツリーの `.venv` の Python。`server.py` は**その worktree の
   もの**を指す（main を指すと、worktree のコードを編集しながら main の実装を試すことに
   なり、最も気づきにくい形で嘘をつく）。設定ファイル（`LIPIDMIX_CONFIG`。main ツリーの
-  `lipidmix.local.toml` を、まだ無くても指す）と蓄積状態（`LIPIDMIX_DATA_DIR`
-  `LIPIDMIX_KNOWLEDGE_DIR`）は **main ツリー**を向けて分裂させない。参照ライブラリのキャッシュは
+  `lipidmix.local.toml` を、まだ無くても指す）と蓄積状態（`LIPIDMIX_DATA_DIR`）は **main ツリー**を向けて分裂させない。参照ライブラリのキャッシュは
   設定ファイルのフォルダに付くので、これで main ツリーのものを共有する。記録の書き込み先は
-  指さない（記録は解析フォルダ側に付いて回る）。版管理対象の `playbook/` だけは worktree ローカル
-  （変更対象そのものなので）。
+  指さない（記録は解析フォルダ側に付いて回る）。
 - **記録は main ツリー側の `docs/HISTRY.md` / `docs/task.md` へ書く**（task.md は並列中なので末尾への追記だけ）。
   worktree には存在しない。
 - `core.hooksPath` は worktree 間で共有され `.githooks/` は追跡対象なので、
@@ -338,8 +333,8 @@ git worktree remove .worktrees/<slug>  # 片付け
   例外は `requirements*.txt`（依存のロック）だけ。
 - `r/renv/library/` は追跡外なので worktree には来ない。worktree で `pathway_*` を実機で試すときは、
   その worktree でも `Rscript r/setup.R` を実行する（renv のグローバルキャッシュから入るので速い）。
-- `docs/HISTRY.md` `docs/task.md` `data/` `analysis/` `archives/` は追跡外。`knowledge/` は
-  種ノートのみ追跡、`playbook/` は版管理対象。クリーンチェックアウトに無い前提で書く。
+- `docs/HISTRY.md` `docs/task.md` `data/` `analysis/` `archives/` は追跡外。
+  クリーンチェックアウトに無い前提で書く。
 - `archives/` は 2026-07 に退避したローカル LLM エージェント・解釈精度評価のコード置き場
   （`local_llm_agent/` `interp_eval/` ほか）。**ライブ側からの参照はゼロ**。動かすには
   ルート＋当該フォルダを `PYTHONPATH` に載せる必要がある参照用の退避物。現行開発では触らない。

@@ -2,7 +2,7 @@
 
 分子式→質量、アダクト→m/z、精密質量誤差、アダクト-極性整合、脂質クラストークン
 抽出を提供する。``server.py`` の ``verify_peak_annotation`` ツールがこれを使う。
-``metabolomix.corpus.knowledge_store`` と同じく MCP に依存しない純関数群で、単体テスト可能。
+MCP に依存しない純関数群で、単体テスト可能。
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """ツール本体が使う整形・同定・検証ヘルパ（PCA プロット／ローディング整形、
 ARF 要約整形、identity 正規化、検証ドシエ、前処理行列ビルダ）。
 
-依存: mcp_core / session_state / 各 reader / lipid_identity / knowledge_store /
+依存: mcp_core / session_state / 各 reader / lipid_identity /
 peak_verification（いずれも下位レイヤ）。tools_* / server は import しない。
 session への参照は session_state.session（動的）で行う。
 """
@@ -9,7 +9,6 @@ from pathlib import Path
 import json
 
 from metabolomix.msdial import lipid_identity
-from metabolomix.corpus import knowledge_store
 from metabolomix.msdial import peak_verification as pv
 from metabolomix.core import session_state
 from metabolomix.pai2.reader import get_signal_to_noise
@@ -48,25 +47,19 @@ def _build_verification_dossier(feat: dict, vocab: dict) -> dict:
         caveats = caveats + [msms["caveat"]]
 
     if name.strip():
-        cov = knowledge_store.coverage([f"{name} {ontology}"], mcp_core.KNOWLEDGE_DIR, vocab)
-        matches_info = next(iter(cov.values()))["matches"]
-        candidate_slugs = [m["slug"] for m in matches_info]
         bio = {
             "class_token": class_token,
             "vocab_hits": pv.vocab_hits(class_token, vocab),
-            "candidate_knowledge_slugs": candidate_slugs,
             "caveats": caveats,
         }
         instruction = (
-            "candidate_knowledge_slugs を knowledge_expand で裏取りし、この試料系に"
-            "この脂質種が生物学的に妥当か・表記の落とし穴に当たらないかを判断して"
-            "総合判定せよ。"
+            "この試料系にこの脂質種が生物学的に妥当か・表記の落とし穴に当たらないかを"
+            "判断して総合判定せよ。"
         )
     else:
         bio = {
             "class_token": None,
             "vocab_hits": [],
-            "candidate_knowledge_slugs": [],
             "caveats": ["アノテーション無しにつき生物学的妥当性は判定不可。"],
         }
         instruction = "アノテーションが無いため分析化学的事実のみで判断せよ。"

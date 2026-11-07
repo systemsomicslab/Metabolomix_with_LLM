@@ -15,16 +15,13 @@ import unittest
 import server
 
 READ_ONLY = {"readOnlyHint": True}
-EXTERNAL = {"readOnlyHint": True, "openWorldHint": True}
 LOCAL_WRITE = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True}
 # ファイルを書き、かつ冪等でない（同じ引数の再実行で結果が積み増される）。
-# ingest_stage は _inbox に新規ノートを増やし、log_search は探索ログに行を追記し、
-# update_objective(add_subquestions=...) は既存 Q の最大+1 で採番して小問を追記する。
+# record_objective(add_subquestions=...) は既存 Q の最大+1 で採番して小問を追記する。
 LOCAL_WRITE_APPEND = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False}
 # ネットワークへ出たうえでローカルを書き換える。二度目は「最新です」で止まる → 冪等。
 REMOTE_WRITE = {"readOnlyHint": False, "destructiveHint": False,
                 "idempotentHint": True, "openWorldHint": True}
-DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True}
 # ファイルを消すが、二度目は何も残っていないので同じ状態に落ち着く → 冪等。
 LOCAL_DELETE = {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True}
 # 追記に加えて外部アプリのファイルを書き換える（curation_submit は flags.jsonl に追記し、
@@ -131,28 +128,13 @@ EXPECTED_ANNOTATIONS = {
     "eic_plot_compounds": READ_ONLY,
     "eic_search": READ_ONLY,
     # --- 読み取り系 ---
-    "knowledge_coverage": READ_ONLY,
     "read_report": READ_ONLY,
-    "list_reports": READ_ONLY,
     "sample_search": READ_ONLY,
-    "ingest_review_queue": READ_ONLY,
-    # --- 外部ネットワーク ---
-    "paper_search": EXTERNAL,
     # --- ローカル書き出し（同じ引数なら同じパスへ上書き＝idempotent） ---
-    "record_objective": LOCAL_WRITE,
+    "record_objective": LOCAL_WRITE_APPEND,  # add_subquestions が追記で積み増す
     "write_report": LOCAL_WRITE,
     "save_figure": LOCAL_WRITE,
     "arf_export_differential": LOCAL_WRITE,
-    # --- knowledge の変更 ---
-    "ingest_stage": LOCAL_WRITE_APPEND,
-    "ingest_promote": DESTRUCTIVE,
-    "ingest_reject": DESTRUCTIVE,
-    # --- 追記書き込み（読み取り系ではない: 既存の最大値+1で採番して追記するため冪等でない） ---
-    # update_objective は add_subquestions が既存 Q の最大+1 で採番して追記する。
-    # log_search / ingest_stage と同じ「追記で結果が積み増される」理由でこの3件が
-    # LOCAL_WRITE_APPEND を共有する。
-    "update_objective": LOCAL_WRITE_APPEND,
-    "log_search": LOCAL_WRITE_APPEND,
     # --- サーバ自身の更新（origin へ出て、作業ツリーを早送りする） ---
     "server_update": REMOTE_WRITE,
     # --- キュレーション。review は呼ぶたびに新しい review-<id>.json/.html を作る（console_plan /
@@ -200,7 +182,7 @@ class ToolAnnotationTests(unittest.TestCase):
     def test_external_network_tools_also_declare_open_world(self):
         """openWorldHint が無いと汎用クライアントがネットワークゲートを迂回する。"""
         actual = actual_annotations()
-        for name in ("paper_search", "server_update", "pathway_project", "pathway_plot"):
+        for name in ("server_update", "pathway_project", "pathway_plot"):
             with self.subTest(tool=name):
                 self.assertIs(actual[name]["openWorldHint"], True)
 

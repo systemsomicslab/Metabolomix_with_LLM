@@ -4,8 +4,6 @@ Each member runs the MCP server on their own machine:
 
 - Source code: each member keeps a local clone.
 - MCP server: each member runs the local `server.py` through stdio.
-- Literature search: each local MCP server calls Europe PMC directly.
-- Knowledge: kept locally under the clone (`knowledge/`).
 - Objectives and reports: written to `reports/` inside the analysis folder,
   next to the raw data and MS-DIAL output (never under the clone).
 - The `LIPIDMIX_*_DIR` environment variables only override these locations;
@@ -16,9 +14,8 @@ Each member runs the MCP server on their own machine:
       |
       | reads/writes local notes
       v
-<clone>\knowledge
-      ├─ *.md
-      └─ _inbox\*.md
+<analysis folder>\reports
+      └─ *.md
 ```
 
 ## Member Setup
@@ -42,8 +39,6 @@ optional overrides:
 
 ```powershell
 $env:LIPIDMIX_DATA_DIR="C:\path\to\msdial\output"
-# Optional: keep accumulated notes outside the clone.
-# $env:LIPIDMIX_KNOWLEDGE_DIR="C:\path\to\metabolomix\knowledge"
 # Optional: read the settings file from somewhere other than the clone root.
 # $env:LIPIDMIX_CONFIG="C:\path\to\lipidmix.local.toml"
 .venv\Scripts\python.exe server.py
@@ -140,11 +135,9 @@ keeps working against the global Python.
 
 ## Operational Notes
 
-- `knowledge/` and each analysis folder's `reports/` are each member's own local state.
+- Each analysis folder's `reports/` is each member's own local state.
   Nothing is shared between members by the server.
-- Review `knowledge/_inbox` through `lipidmix://knowledge/inbox`, then promote
-  or reject notes with `ingest_promote` / `ingest_reject`.
-- Note writes, promote, and reject operations serialize through a per-directory
+- Note writes serialize through a per-directory
   lock file (`.metabolomix.lock`), so concurrent tool calls (for example, two MCP
   client sessions on the same machine) do not interleave writes to the same
   directory. If a crashed process leaves a stale `.metabolomix.lock` behind, note

@@ -3,12 +3,11 @@
 pai2_parser（在庫要約）, pai2_inspect_peak, verify_peak_annotation。
 PAI2 は単一サンプルなのでサンプル間比較（オミクス PCA）は行わない（複数サンプルの
 多変量比較は ARF/ARF2 を使う）。deps: mcp_core / session_state / path_resolvers /
-tool_helpers / pai2_reader / knowledge_store。tools_* / server は import しない。
+tool_helpers / pai2_reader。tools_* / server は import しない。
 """
 import io
 from pathlib import Path
 
-from metabolomix.corpus import knowledge_store
 from metabolomix.core import mcp_core
 from metabolomix.core import mcp_errors
 from metabolomix.core import session_state
@@ -166,7 +165,6 @@ def verify_peak_annotation(
     if not matches:
         return json_payload({"status": "not_found", "message": "指定された代謝物がフィルタ済みデータ内に見つかりませんでした。"})
 
-    vocab = knowledge_store.load_vocab(mcp_core.KNOWLEDGE_DIR)
-    dossiers = [_build_verification_dossier(feat, vocab) for feat in matches]
+    dossiers = [_build_verification_dossier(feat, {}) for feat in matches]
     payload = dossiers[0] if len(dossiers) == 1 else {"status": "success", "matches": dossiers}
     return json_payload(payload)

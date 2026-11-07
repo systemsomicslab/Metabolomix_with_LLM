@@ -1,12 +1,12 @@
 """解析・解釈レポートと図の保存ツール群。
 
-write/read/list_reports, save_figure。
+write_report / read_report（ID を省くと一覧）/ save_figure。
 レポート先の解決は mcp_core（DATA_DIR を動的参照）に委ねる。deps: mcp_core /
-session_state / tool_helpers / knowledge_store / matplotlib。
+session_state / tool_helpers / notes / matplotlib。
 tools_* / server は import しない。
 """
 
-from metabolomix.corpus import knowledge_store
+from metabolomix.tools import notes
 from metabolomix.core import mcp_errors
 from metabolomix.core.mcp_errors import config_invalid_as_envelope
 from metabolomix.core import session_state
@@ -21,7 +21,6 @@ from metabolomix.plots.volcano import render_volcano_plot
 __all__ = [
     "write_report",
     "read_report",
-    "list_reports",
     "save_figure",
 ]
 
@@ -125,27 +124,26 @@ def write_report(
     dataset: str,
     body: str,
     status: str = "draft",
-    knowledge_refs: list[str] | None = None,
 ) -> str:
     """解析・解釈レポートを reports/<analysis_id>.md に上書き保存する（成果物＋記録）。
 
     body は frontmatter を含まない Markdown 本文。推奨セクション見出し:
     `## 目的` / `## 実施した解析` / `## 主要な所見` / `## 解釈` /
     `## 注意点・コンフリクト` / `## 結論`。所見が増えたら本文を作り直して再度呼ぶ
-    （ファイルは毎回上書き）。引用した knowledge/playbook の slug を knowledge_refs に渡す。
+    （ファイルは毎回上書き）。
     lipidmix.local.toml の [paths] reports_dir の明示先を優先し、書込不可なら解析フォルダ配下reports/。
     未指定時は解析フォルダ配下reports/だけを使う（リポジトリ側へは退避しない）。
 
     analysis_id はファイル名 slug の元になるため ASCII で一意に。別IDが同一slugに潰れて既存
     レポートを上書きしそうな場合は保存を中止して通知する（objectiveレコードと同じIDを推奨）。
     """
-    slug = knowledge_store.make_slug(analysis_id)
+    slug = notes.make_slug(analysis_id)
     # slug衝突ガード: 別の analysis_id が同一ファイル名に潰れる場合は、既存レポートを
     # 黙って上書きせず中止する（同一IDの上書きは意図どおり許可）。非ASCII/記号違いのIDで起きうる。
     for directory in _report_dir_candidates():
         existing = directory / f"{slug}.md"
         if existing.is_file():
-            ex_meta, _ = knowledge_store.parse_frontmatter(existing.read_text(encoding="utf-8"))
+            ex_meta, _ = notes.parse_frontmatter(existing.read_text(encoding="utf-8"))
             ex_id = str(ex_meta.get("analysis_id", ""))
             if ex_id and ex_id != analysis_id:
                 return (
@@ -155,20 +153,25 @@ def write_report(
                 )
             break  # 同一ID → 上書きしてよい
     reports_dir = _resolve_report_dir()
-    meta = _build_report_meta(analysis_id, dataset, status, knowledge_refs)
-    path = knowledge_store.write_note(reports_dir, slug, meta, body)
+    meta = _build_report_meta(analysis_id, dataset, status)
+    path = notes.write_note(reports_dir, slug, meta, body)
     return f"レポートを保存: {path}（status={status}）。read_report('{analysis_id}') で読み戻せます。"
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 @config_invalid_as_envelope
-def read_report(analysis_id: str) -> str:
-    """過去レポートを読み戻す（候補ディレクトリ横断で最新更新のものを返す）。セッション継続用。
+def read_report(analysis_id: str | None = None) -> str:
+    """過去レポートを読み戻す。analysis_id を省くと既存レポートの 1 行索引を返す。
 
+    analysis_id を渡すと、候補ディレクトリ横断で最新更新のものの本文を返す（セッション継続用）。
     解析フォルダ配下と退避先の両方に同名レポートが残る場合（書き込み可否が途中で変化した等）、
     古い方を返さないよう mtime が最新のファイルを採用する。
+    省いた場合の索引は 1 行ずつ `analysis_id / date / status`。候補ディレクトリ横断で同一
+    analysis_id が重複するときは mtime が最新の 1 件を採用する。
     """
-    slug = knowledge_store.make_slug(analysis_id)
+    if analysis_id is None:
+        return _list_reports()
+    slug = notes.make_slug(analysis_id)
     matches = [d / f"{slug}.md" for d in _report_dir_candidates()]
     matches = [p for p in matches if p.is_file()]
     if not matches:
@@ -177,20 +180,15 @@ def read_report(analysis_id: str) -> str:
     return newest.read_text(encoding="utf-8")
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-@config_invalid_as_envelope
-def list_reports() -> str:
-    """既存レポートの1行索引（analysis_id / date / status）を返す。
-
-    候補ディレクトリ横断で同一 analysis_id が重複する場合は mtime が最新の1件を採用する。
-    """
+def _list_reports() -> str:
+    """既存レポートの 1 行索引（analysis_id / date / status）。"""
     # analysis_id -> (mtime, 表示行)。最新更新の行を残す。
     best: dict[str, tuple[float, str]] = {}
     for directory in _report_dir_candidates():
         if not directory.is_dir():
             continue
         for path in sorted(directory.glob("*.md")):
-            meta, _body = knowledge_store.parse_frontmatter(path.read_text(encoding="utf-8"))
+            meta, _body = notes.parse_frontmatter(path.read_text(encoding="utf-8"))
             if meta.get("type") != "report":
                 continue
             aid = str(meta.get("analysis_id", path.stem))
@@ -264,7 +262,7 @@ def _save_figure(chosen: dict, analysis_id: str, title: str | None, *,
     """選ばれた結果を PNG にして、どの結果から描いたかを添えて返す。"""
     from metabolomix.plots.result_output import save_result_figure
 
-    slug = knowledge_store.make_slug(analysis_id)
+    slug = notes.make_slug(analysis_id)
     figures_dir = _resolve_report_dir() / "figures"
     out_path = save_result_figure(
         chosen.get("ds"), chosen["result"],
@@ -287,7 +285,7 @@ def _save_eic(analysis_id: str, title: str | None) -> str:
             "先に eic_plot_chromatograms または eic_plot_compounds を実行してください"
             "（EICプロット情報がありません）。")
 
-    slug = knowledge_store.make_slug(analysis_id)
+    slug = notes.make_slug(analysis_id)
     reports_dir = _resolve_report_dir()
     figures_dir = reports_dir / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
@@ -307,7 +305,7 @@ def _save_group_intensity(analysis_id: str, title: str | None) -> str:
         return mcp_errors.missing_state(
             "group_intensity_plot", ["arf_plot_group_intensity"],
             "先に arf_plot_group_intensity を実行してください（群別強度の図がありません）。")
-    out_path = _figures_dir() / f"{knowledge_store.make_slug(analysis_id)}_group_intensity.png"
+    out_path = _figures_dir() / f"{notes.make_slug(analysis_id)}_group_intensity.png"
     _write_png_and_svg(render_group_intensity_plot, out_path, last["payload"],
                        title=title or last.get("title"), ncols=last.get("ncols"))
     rel = f"figures/{out_path.name}"
@@ -324,7 +322,7 @@ def _save_species(analysis_id: str, title: str | None) -> str:
         return mcp_errors.missing_state(
             "species_plot", ["arf_plot_species"],
             "先に arf_plot_species を実行してください（分子種ごとの図がありません）。")
-    out_path = _figures_dir() / f"{knowledge_store.make_slug(analysis_id)}_species.png"
+    out_path = _figures_dir() / f"{notes.make_slug(analysis_id)}_species.png"
     _write_png_and_svg(render_species_plot, out_path, last["payload"],
                        title=title or last.get("title"), ncols=last.get("ncols"))
     return (f"分子種ごとの図を保存: {out_path}（同名の .svg も保存）\n"
@@ -350,7 +348,7 @@ def _save_pca_loadings(analysis_id: str, title: str | None) -> str:
             "直前のローディング図は、いまの PCA 結果から描いたものではありません"
             f"（source={payload['source']} result_id={payload['result_id'] or '(なし)'} は現在の結果にありません）。"
             "plot_pca_loadings をもう一度実行してください。")
-    out_path = _figures_dir() / f"{knowledge_store.make_slug(analysis_id)}_pca_loadings.png"
+    out_path = _figures_dir() / f"{notes.make_slug(analysis_id)}_pca_loadings.png"
     _write_png_and_svg(render_loadings_plot, out_path, payload, title=title or last.get("title"))
     return (f"ローディング図を保存: {out_path}（同名の .svg も保存。source={payload['source']} "
             f"result_id={payload['result_id'] or '(なし)'}）\n"

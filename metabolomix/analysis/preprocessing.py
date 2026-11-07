@@ -1,7 +1,7 @@
 """MS-DIAL ロード後のサンプル×特徴量行列に対する前処理・QC（純ロジック層、MCP 非依存）。
 
 役割検出・ブランク処理・正規化・QCドリフト補正・特徴量フィルタ・欠損補完を提供する。
-metabolomix.corpus.knowledge_store / metabolomix.msdial.peak_verification と同じく MCP に依存しない純関数群。
+metabolomix.msdial.peak_verification と同じく MCP に依存しない純関数群。
 行列は行=サンプル、列=特徴量（test_arf.build_pca_matrix の向き）。
 """
 

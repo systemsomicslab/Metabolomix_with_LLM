@@ -62,11 +62,9 @@ MSI Level 2 を主張する前に、返り値の `analytical_checks.msms.band` �
 両者を同一視してはならない。`PASS` を得るには `pai2_parser` が兄弟 `.dcl` の充填に
 成功している必要がある。
 
-蓄積ノートの語彙（手順 3）は生物学的妥当性の材料としてドシエに載る。ヒットが複数ある
-場合は手順 4 が件数分繰り返される。
+ヒットが複数ある場合は手順 3 が件数分繰り返される。
 
 1. metabolomix/pai2/tools.py  verify_peak_annotation()
 2. └─ metabolomix/core/mcp_errors.py  missing_state()
-3. └─ metabolomix/corpus/knowledge_store.py  load_vocab()
-4. └─ metabolomix/core/tool_helpers.py  _build_verification_dossier()
-5. │  └─ metabolomix/pai2/reader.py  get_signal_to_noise()
+3. └─ metabolomix/core/tool_helpers.py  _build_verification_dossier()
+4. │  └─ metabolomix/pai2/reader.py  get_signal_to_noise()

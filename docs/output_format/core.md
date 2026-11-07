@@ -158,6 +158,6 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
   ネットワークを変更しないこと。**サーバ自身の解析セッション状態の更新は
   副作用に数えない** — その依存関係は上のエンベロープで伝えるため、annotations で
   二重に表現しない。
-- `openWorldHint=true` は外部ネットワークへ出ることを示す（`paper_search` のみ）。
+- `openWorldHint=true` は外部ネットワークへ出ることを示す（`server_update` と `pathway_*`）。
 - リプレイ安全（同じ引数での再実行が安全）は `readOnlyHint=true` または
   `idempotentHint=true` で判断できる。

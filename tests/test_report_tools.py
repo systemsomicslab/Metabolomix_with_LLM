@@ -9,7 +9,7 @@ matplotlib.use("Agg")  # import server が pyplot を読む前にヘッドレス
 import server
 from metabolomix.core import session_state
 from metabolomix.core import mcp_core
-from metabolomix.corpus import knowledge_store
+from metabolomix.tools import notes
 from tests.config_fixtures import config_env
 
 
@@ -46,17 +46,13 @@ class WriteLocationHelpers(unittest.TestCase):
                 server._first_writable_dir([blocker / "a", blocker / "b"])
 
     def test_build_report_meta_shape(self):
-        meta = server._build_report_meta("a-1", "DS", "draft", ["s1", "s2"])
+        meta = server._build_report_meta("a-1", "DS", "draft")
         self.assertEqual(meta["type"], "report")
         self.assertEqual(meta["analysis_id"], "a-1")
         self.assertEqual(meta["dataset"], "DS")
         self.assertEqual(meta["status"], "draft")
-        self.assertEqual(meta["knowledge_refs"], ["s1", "s2"])
+        self.assertNotIn("knowledge_refs", meta)
         self.assertRegex(meta["date"], r"^\d{4}-\d{2}-\d{2}$")
-
-    def test_build_report_meta_defaults_refs_to_empty_list(self):
-        meta = server._build_report_meta("a-1", "DS", "draft", None)
-        self.assertEqual(meta["knowledge_refs"], [])
 
 
 class ReportToolTests(unittest.TestCase):
@@ -77,7 +73,7 @@ class ReportToolTests(unittest.TestCase):
         path = self.tmp / "reports_fallback" / "a-1.md"
         self.assertTrue(path.is_file())
         self.assertIn("reports", msg)
-        meta, body = knowledge_store.parse_frontmatter(path.read_text(encoding="utf-8"))
+        meta, body = notes.parse_frontmatter(path.read_text(encoding="utf-8"))
         self.assertEqual(meta["type"], "report")
         self.assertEqual(meta["analysis_id"], "a-1")
         self.assertEqual(meta["status"], "draft")
@@ -87,7 +83,7 @@ class ReportToolTests(unittest.TestCase):
         server.write_report("a-1", "DS", "## 目的\n古い本文")
         server.write_report("a-1", "DS", "## 目的\n新しい本文", status="final")
         path = self.tmp / "reports_fallback" / "a-1.md"
-        meta, body = knowledge_store.parse_frontmatter(path.read_text(encoding="utf-8"))
+        meta, body = notes.parse_frontmatter(path.read_text(encoding="utf-8"))
         self.assertEqual(meta["status"], "final")
         self.assertIn("新しい本文", body)
         self.assertNotIn("古い本文", body)
@@ -102,14 +98,14 @@ class ReportToolTests(unittest.TestCase):
         text = server.read_report("does-not-exist")
         self.assertIn("見つかりません", text)
 
-    def test_list_reports_shows_written_report(self):
+    def test_read_report_without_id_shows_written_report(self):
         server.write_report("a-1", "DS", "## 目的\nx", status="final")
-        listing = server.list_reports()
+        listing = server.read_report()
         self.assertIn("a-1", listing)
         self.assertIn("status=final", listing)
 
-    def test_list_reports_empty(self):
-        listing = server.list_reports()
+    def test_read_report_without_id_empty(self):
+        listing = server.read_report()
         self.assertIn("まだありません", listing)
 
 
@@ -240,8 +236,8 @@ class ReportEdgeCaseTests(unittest.TestCase):
 
     def test_write_report_refuses_slug_collision_with_different_id(self):
         # Both analysis_ids collapse to the same slug.
-        slug = knowledge_store.make_slug("Group A vs B")
-        self.assertEqual(slug, knowledge_store.make_slug("group-a-vs-b"))
+        slug = notes.make_slug("Group A vs B")
+        self.assertEqual(slug, notes.make_slug("group-a-vs-b"))
 
         server.write_report("Group A vs B", "DS", "## 目的\nfirst")
         msg = server.write_report("group-a-vs-b", "DS", "## 目的\nsecond")
@@ -249,7 +245,7 @@ class ReportEdgeCaseTests(unittest.TestCase):
         self.assertIn("衝突", msg)
         # The original report must be intact (not overwritten).
         path = self.tmp / "reports_fallback" / f"{slug}.md"
-        meta, body = knowledge_store.parse_frontmatter(path.read_text(encoding="utf-8"))
+        meta, body = notes.parse_frontmatter(path.read_text(encoding="utf-8"))
         self.assertEqual(meta["analysis_id"], "Group A vs B")
         self.assertIn("first", body)
         self.assertNotIn("second", body)
@@ -260,7 +256,7 @@ class ReportEdgeCaseTests(unittest.TestCase):
         msg = server.write_report("a-1", "DS", "## 目的\n新しい", status="final")
         self.assertIn("保存", msg)
         path = self.tmp / "reports_fallback" / "a-1.md"
-        meta, body = knowledge_store.parse_frontmatter(path.read_text(encoding="utf-8"))
+        meta, body = notes.parse_frontmatter(path.read_text(encoding="utf-8"))
         self.assertEqual(meta["status"], "final")
         self.assertIn("新しい", body)
         self.assertNotIn("古い", body)
@@ -278,18 +274,18 @@ class ReportEdgeCaseTests(unittest.TestCase):
         return path
 
     def test_read_report_prefers_newest_across_candidates(self):
-        slug = knowledge_store.make_slug("a-1")
+        slug = notes.make_slug("a-1")
         self._write_report_file(self.tmp / "reports", slug, "a-1", "OLD primary", "draft", 1000)
         self._write_report_file(self.tmp / "reports_fallback", slug, "a-1", "NEW fallback", "final", 2000)
         text = server.read_report("a-1")
         self.assertIn("NEW fallback", text)
         self.assertNotIn("OLD primary", text)
 
-    def test_list_reports_dedupes_keeping_newest(self):
-        slug = knowledge_store.make_slug("a-1")
+    def test_read_report_without_id_dedupes_keeping_newest(self):
+        slug = notes.make_slug("a-1")
         self._write_report_file(self.tmp / "reports", slug, "a-1", "old", "draft", 1000)
         self._write_report_file(self.tmp / "reports_fallback", slug, "a-1", "new", "final", 2000)
-        listing = server.list_reports()
+        listing = server.read_report()
         self.assertEqual(listing.count("a-1"), 1)
         self.assertIn("status=final", listing)
         self.assertNotIn("status=draft", listing)

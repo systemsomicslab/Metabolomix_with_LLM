@@ -19,8 +19,8 @@ drive a full analysis without ever seeing the raw matrices.
 - **Keeps results out of the context window** — plots are rendered to PNG on the server
   rather than shipped as coordinate lists, and full result tables stay in session state
   until exported.
-- **Accumulates knowledge** — literature notes and reusable analysis playbooks are served
-  back to the LLM as MCP resources, so findings compound across sessions.
+- **Records the analysis** — objectives and reports are written next to the raw data, in
+  the analysis folder's `reports/`, so a later session can read them back.
 - **Can drive MS-DIAL itself (auxiliary)** — the main workflow reads output MS-DIAL has
   already written (for example after processing in the MS-DIAL GUI). Given a folder, the
   server first checks for such output and goes straight to analysis if it is there. Only
@@ -103,7 +103,6 @@ implementation lives under `metabolomix/`.
 | `metabolomix/analysis/` | Format-independent numerics: preprocessing/QC, PCA, differential analysis, the export contract. |
 | `metabolomix/plots/` | Renderer-neutral plot payloads and matplotlib rendering. |
 | `metabolomix/msdial/` | MS-DIAL-specific sidecars, identification, peak verification. |
-| `metabolomix/corpus/` | Pure logic for the knowledge and playbook notes. |
 | `metabolomix/tools/` | MCP tools not tied to a single input format. |
 
 ## Documentation

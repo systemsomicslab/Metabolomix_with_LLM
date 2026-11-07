@@ -7,7 +7,6 @@
     metabolomix.plots    … レンダラ中立の payload 組み立て（volcano / eic）
     metabolomix.arf / arf2 / pai2 / dcl / eic
                       … 形式ごとのバイナリパーサ（reader）と MCP ツール（tools）
-    metabolomix.corpus   … 蓄積ノートの純ロジック（knowledge_store / paper_ingest）
     metabolomix.tools    … 形式に紐づかない MCP 公開層（入口・サンプル検索・目的・レポート・リソース）
 
 呼び出し連鎖の詳細は docs/workflow/ を参照。
@@ -15,16 +14,16 @@
 このファイルは薄い層に徹する:
   (1) 各モジュールを import して mcp にツール/リソースを登録する
   (2) テスト・外部が参照する公開面（server.<tool> / server.<helper> / server.mcp /
-      server.arf_reader / server.AnalysisSession / server.KNOWLEDGE_DIR 等）を再エクスポートする
+      server.arf_reader / server.AnalysisSession 等）を再エクスポートする
   (3) __main__ で mcp.run() する
 
 `.mcp.json` / `.vscode/mcp.json` がこのファイルを絶対パスで指しているため、
 ルートから動かしてはならない。
 
-可変状態（DATA_DIR / KNOWLEDGE_DIR / session）の**正準**は
+可変状態（DATA_DIR / session）の**正準**は
 metabolomix.core.mcp_core / metabolomix.core.session_state 側にある。ここでの再エクスポートは
 読み取り用の束縛にすぎないため、差し替えは必ず正準モジュール
-（mcp_core.DATA_DIR / mcp_core.KNOWLEDGE_DIR / session_state.session）に対して行うこと。
+（mcp_core.DATA_DIR / session_state.session）に対して行うこと。
 """
 import os
 
@@ -37,8 +36,6 @@ from metabolomix.core.mcp_core import (
     BASE_DIR,
     OUTPUT_FORMAT_DOC,
     MCP_INSTRUCTIONS,
-    KNOWLEDGE_DIR,
-    PLAYBOOK_DIR,
     _build_report_meta,
     _dir_is_writable,
     _first_writable_dir,
@@ -67,7 +64,7 @@ from metabolomix.core.tool_helpers import (
 # import 副作用で @mcp.tool / @mcp.resource が mcp に登録される。star import は各
 # モジュールの __all__（＝そのモジュールのツール名）だけを取り込む。
 # metabolomix.tools.dataset は arf/arf2 に依存するため最後に読み込む。
-from metabolomix.tools import resources as tools_resources  # リソース 4 + テンプレート 3
+from metabolomix.tools import resources as tools_resources  # リソース 1 + テンプレート 1
 from metabolomix.tools.objective import *
 from metabolomix.tools.reports import *
 from metabolomix.pai2.tools import *

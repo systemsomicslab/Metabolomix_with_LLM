@@ -159,11 +159,8 @@ class TestExpandedTables(unittest.TestCase):
 
 
 import json
-import tempfile
-from pathlib import Path
 
 import server
-from metabolomix.core import mcp_core
 from metabolomix.core import session_state
 from metabolomix.pai2.reader import IonMode
 
@@ -187,15 +184,9 @@ def _feat(**over):
 class VerifyPeakToolTests(unittest.TestCase):
     def setUp(self):
         self._orig_features = session_state.session.pai2.filtered_features
-        self._orig_knowledge = mcp_core.KNOWLEDGE_DIR
-        self._tmp = tempfile.TemporaryDirectory()
-        mcp_core.KNOWLEDGE_DIR = Path(self._tmp.name) / "knowledge"
-        mcp_core.KNOWLEDGE_DIR.mkdir()
 
     def tearDown(self):
         session_state.session.pai2.filtered_features = self._orig_features
-        mcp_core.KNOWLEDGE_DIR = self._orig_knowledge
-        self._tmp.cleanup()
 
     def test_error_when_not_loaded(self):
         session_state.session.pai2.filtered_features = None
@@ -231,22 +222,6 @@ class VerifyPeakToolTests(unittest.TestCase):
         session_state.session.pai2.filtered_features = [_feat(name="PE O-38:5", ontology="PE", id=2)]
         out = json.loads(server.verify_peak_annotation(peak_id="2"))
         self.assertTrue(out["biological_plausibility"]["caveats"])
-
-    def test_candidate_slugs_from_knowledge(self):
-        note = mcp_core.KNOWLEDGE_DIR / "pe-p-vs-pe-o-annotation.md"
-        note.write_text(
-            "---\ntype: knowledge\n"
-            "description: PE の P-/O- 表記の混同に注意\n"
-            "claim_strength: established\n"
-            "tags: [annotation, plasmalogen]\n---\n\n本文\n",
-            encoding="utf-8",
-        )
-        session_state.session.pai2.filtered_features = [_feat(name="PE 38:5", ontology="PE", id=3)]
-        out = json.loads(server.verify_peak_annotation(peak_id="3"))
-        self.assertIn(
-            "pe-p-vs-pe-o-annotation",
-            out["biological_plausibility"]["candidate_knowledge_slugs"],
-        )
 
     def test_multiple_matches_wrapped(self):
         session_state.session.pai2.filtered_features = [_feat(id=1), _feat(id=2)]

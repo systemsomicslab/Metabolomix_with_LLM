@@ -1,13 +1,13 @@
-# USAGE — ms-data-parser MCP ツール一覧(全91ツール)
+# USAGE — ms-data-parser MCP ツール一覧(全82ツール)
 
 MS-DIAL 出力(`.arf` / `.arf2` / `.pai2` / `.dcl` / `.EIC.aef`)と mzTab-M を解析し、PCA・差次的解析・
-アノテーション検証・文献探索・レポート記録までを行う MCP サーバーのツール群です。
+アノテーション検証・レポート記録までを行う MCP サーバーのツール群です。
 おおまかな標準フロー:
 
 ```
 list_data_files → load_dataset → arf_list_classes / arf_preprocess
    → arf_pca_preprocessed / arf_differential → save_figure
-   → record_objective → knowledge_coverage → paper_search → ingest_* → write_report
+   → record_objective → write_report
 
 生データから始める場合(補助経路。まずフォルダに MS-DIAL を動かした形跡(.arf 等)があるかを確かめ、
 あれば上の主経路へ。形跡が無く、Console を回すことにユーザーが同意したときだけ。手動で繋ぐなら):
@@ -92,26 +92,13 @@ pipeline_run → pipeline_status(確認) → pipeline_resume(訂正・再開が�
 | `dcl_spot_spectrum` | アラインメントのスポット ID(mzTab-M の SMF_ID と同じ)で代表 MS/MS の全ピークを引く(`library_match_feature(spot_id=…)` と同じ規則で `.arf2` と照らす。再解析で使う)。 |
 | `dcl_diagnostic_ions` | スポットの代表 MS/MS(spot_id の一覧)に診断イオン(m/z)・中性損失があるかを照会する(相対強度つき)。MS/MS が無いスポットは `status` で示し、「イオンが無かった」と区別する。再解析で使う。 |
 
-## 7. 実験目的の記録(gap駆動探索の前提)
+## 7. 実験目的の記録
 
 | ツール | 機能 |
 |--------|------|
-| `record_objective` | 確定した実験目的を解析フォルダ配下 `reports/<analysis_id>.objective.md` に記録。目的・比較・群・小問(Q1..Qn)を保存。`assay_kind`(`lipid`/`metabolite`/`unknown`)を渡すと以後の解釈規則が切り替わる。 |
-| `update_objective` | 目的/文脈/状態/`assay_kind` を更新し、創発的な小問を追記。 |
+| `record_objective` | 実験目的を解析フォルダ配下 `reports/<analysis_id>.objective.md` に記録する(作成と更新の両方)。目的が無ければ作る(`dataset` / `polarity` / `groups` / `comparison` / `sub_questions`(Q1..Qn)が要る)。あれば**渡した欄だけ**を直す(`confirmed_objective` / `biological_context` / `status` / `assay_kind` など)。創発した小問は `add_subquestions` で既存 Q の最大+1 から採番して追記(既存の小問は書き換えない)。`assay_kind`(`lipid`/`metabolite`/`unknown`)を渡すと以後の解釈規則が切り替わる。 |
 
-## 8. 知識カバレッジ・文献探索・取り込み
-
-| ツール | 機能 |
-|--------|------|
-| `knowledge_coverage` | objective の各小問 Qi を COVERED / WEAK / GAP に分類(未探索 GAP が自動探索対象)。 |
-| `paper_search` | Europe PMC を検索し撤回・重複除外した候補を返す(ユーザー確認済みクエリ前提)。 |
-| `log_search` | 探索結果を objective の探索ログに記録(既探索 Qi の再探索防止)。 |
-| `ingest_stage` | 関連候補を `knowledge/_inbox` に speculative 隔離(出典必須)。 |
-| `ingest_review_queue` | `_inbox` の保留ノートを analysis_id×Qi でグルーピングして返す。 |
-| `ingest_promote` | `_inbox` の保留ノートを `knowledge/` へ昇格(信頼知識化の唯一の経路)。 |
-| `ingest_reject` | `_inbox` の保留ノートを破棄。 |
-
-## 9. 図の保存・レポート
+## 8. 図の保存・レポート
 
 | ツール | 機能 |
 |--------|------|
@@ -122,10 +109,9 @@ pipeline_run → pipeline_status(確認) → pipeline_resume(訂正・再開が�
 | `plot_pca_loadings` | 保存済みの PCA(`arf_parser` / `arf_pca_preprocessed` / `arf_pca_species` / `dataset_pca`)のローディングを主成分ごとの横棒で描く(`source`, `result_id`, `pcs`, `top_n`, `value`, `title`, `output`)。`source` は `auto`/`arf`/`species`/`mztab` で、`auto` はどれも優先せず候補が 2 つ以上あると `AMBIGUOUS_RESULT_SOURCE`。`pcs` 既定 `[1, 2]`(1〜3 個)。`top_n`(既定 15)は主成分ごとに正の上位 N と負の上位 N、`None` は全件(60 特徴量まで)で行を最初の主成分の順にそろえる。`value="r"`(既定。特徴量と主成分スコアの相関)は autoscale した PCA でだけ出せ、出せなければ `coefficient` で描いて説明文に書く。棒の色はクラス。ローディングを持たない古い ARF の PCA 結果は候補にならない(PCA をやり直す)。ARF はスポットあたり複数の列(`props` が複数)の PCA だと `{"status":"error"}`(`props=["height"]` など 1 つでやり直す)。既定は PNG 画像と説明、`output="payload"` で `lipidmix.pca_loadings.v1`。ファイルは `save_figure(kind="pca_loadings")`。 |
 | `save_figure` | ユーザーがファイルとしての図を明示的に希望した場合だけ、直近の図を `reports/figures/<analysis_id>_<kind>.png` に保存(`kind`, `analysis_id`, `title`, `source`, `result_id`)。`kind` は `pca`(arf_parser / arf_pca_preprocessed / arf_pca_species / dataset_pca のスコア)/ `volcano`(arf_differential / dataset_differential。間引き前の全点)/ `eic`(eic_plot_chromatograms / eic_plot_compounds)/ `group_intensity`(arf_plot_group_intensity。dpi 300 の PNG と同名 `.svg`)/ `species`(arf_plot_species。dpi 300 の PNG と同名 `.svg`)/ `pca_loadings`(plot_pca_loadings。dpi 300 の PNG と同名 `.svg`)。`source`/`result_id` は `pca`/`volcano` だけ。`kind="pca"` の入力元は ARF・mzTab-M・分子種 PCA(arf_pca_species)で、`kind="volcano"` は ARF・mzTab-M だけ。**どれも優先しない** — 有効な結果が 2 つ以上あると `AMBIGUOUS_RESULT_SOURCE` で止まるので `source`(`arf`/`mztab`、`kind="pca"` だけ `species` も)か `result_id` を指定する。`pca_loadings` は、描いた後に PCA が入れ替わっていると古い図を保存せず `missing_state`(`plot_pca_loadings` をやり直す)。前処理をやり直して古くなった結果は選べない。探索専用データセットから描いた図には図の中に但し書きが入る。未知の `kind` と、`source`/`result_id` を使わない `kind` への指定は `{"status":"error"}`。図が無ければ `missing_state`(`required_tools` は kind ごと)。戻り値は保存した絶対パスと埋め込み用の相対パス。 |
 | `write_report` | 解析・解釈レポートを解析フォルダ配下 `reports/<analysis_id>.md` に上書き保存。 |
-| `read_report` | 過去レポートを読み戻す(最新更新のものを返す。セッション継続用)。 |
-| `list_reports` | 既存レポートの1行索引(analysis_id / date / status)を返す。 |
+| `read_report` | 過去レポートを読み戻す(最新更新のものを返す。セッション継続用)。`analysis_id` を省くと既存レポートの1行索引(analysis_id / date / status)を返す。 |
 
-## 10. MS-DIAL Console 実行(補助経路。生データ → mzTab-M)
+## 9. MS-DIAL Console 実行(補助経路。生データ → mzTab-M)
 
 MS-DIAL 本体を CLI 実行して解析結果そのものを生成する経路。GUI であらかじめ
 メソッドファイルを作っておき、以降をこのサーバから回す。成果物は
@@ -142,7 +128,7 @@ MS-DIAL 本体を CLI 実行して解析結果そのものを生成する経路�
 | `console_cleanup` | あるジョブが生成したファイルだけを一覧・削除する(`job_path`, `dry_run`(既定 True))。再実行のたびに生データフォルダへ別タイムスタンプの一式が積まれる問題への対処。**消すのは `analysis-job.json` が記録した生成物だけ**で、タイムスタンプの推測はしない(記録が無いジョブは `NO_JOB_OUTPUT` で拒否)。生データには触れない。削除後のジョブ status は `cleaned`。**監視ワーカーが実行中のジョブは削除を拒否する**(`JOB_BUSY`。書き込み中のファイルを実行中のプロセスから奪わないため。所有者の生死は pid ではなく process identity で見る)。`dry_run` の一覧はその場合も返すが `warnings` を添える。 |
 | `job_list` | `dataset_root/runs/` 以下のジョブ一覧を新しい順に返す。 |
 
-## 11. DatasetState 解析(mzTab-M 経路)
+## 10. DatasetState 解析(mzTab-M 経路)
 
 mzTab-M 2.0 を正準状態(`DatasetState`)として読み、ARF 経路と同じ前処理・PCA・
 差次的解析を回す。**`session.arf` / `.arf2` / `.pai2` / `.eic` とは独立したスロット**なので、
@@ -161,7 +147,7 @@ ARF 経路の状態を壊さない。
 | `dataset_statistic` | v2(LC–MSメタボロミクス)の統計を、**名指しした解析行列**(`matrix_result_id`、`analysis-matrix.v1`)に対して1件実行する。`specification` は profile の `analysis_recipe.statistics` 1要素と同じ形(`kind` は `welch`/`anova_tukey`/`pca`)。直近の前処理を暗黙に使わない — recipe 違いの行列が2本ある前提の設計で、どの行列の数字かを結果に残す。`dataset_differential`(v1)とは効果量の定義が違う: v2 は**統計変換前の算術平均比の log2**(`effect_size_definition=log2_arithmetic_mean_ratio`)で、log2 変換に pseudocount を足さず、BH の母集団は検定できた feature だけ。行列は pipeline の preprocess/qc_processed か `dataset_build_matrix` が作る。 |
 | `dataset_set_sample_metadata` | 実験情報シート(`sample-manifest.v1`、TSV)を読み込み、全件検証してから `session.dataset` へ一括反映する。上流の Console 実行をやり直さずに群・バッチ・注入順・qc_pool 等の誤記入を訂正できる。**一部だけ適用される状態は作らない**(シートに不備があれば `session.dataset` を一切変更せずエラーを返すので、そのまま再送してよい)。前処理入力(role/batch/injection_order/qc_pool/include/sample_id/source_file)が変われば前処理済み行列・PCA・差次的解析まで無効化するが、**`group` だけの変更なら差次的解析だけを無効化し PCA は生かす**(`changed_fields` で確認できる)。**`dataset_differential` を直接呼ぶ経路との違い**: `dataset_differential` は呼び出し側が `group_a`/`group_b` にサンプル名のリストを都度自分で組み立てる汎用ツールで、群名から対照/処置の向きを決めたり QC/blank/unknown・除外行を弾いたりはしない。pipeline 側が使う明示比較(`comparison_id`/`reference_group`/`test_group`)は、群名だけでは向きを推測しない・QC/blank/unknown・`include=false` を混ぜない・完全交絡(群⟂バッチが分離不能)を `allow_confounded=true` の明示なしには実行しない、という前提検証を経てから同じ計算を呼ぶ(内部関数 `resolve_comparison`/`run_comparison`。バッチ情報が無い場合は「評価不可」であって「交絡あり」ではない)。 |
 
-## 12. Class ID に無い因子で絞る・比べる
+## 11. Class ID に無い因子で絞る・比べる
 
 MS-DIAL の Class ID は入力された1文字列にすぎず、時点や複製がサンプル名にしか
 無いことがある(例: Class ID = `ILG`/`control` だけで、時点 `6h` はサンプル名のみ)。
@@ -184,7 +170,7 @@ QC/blank の扱いはツールごとに異なる。`arf_parser` の `class_ids` 
 で軸を指定した場合に `"qc"`/`"blank"` ラベルとして残る(前処理品質の判断材料になるため。
 軸を指定しない場合は生の Class ID でラベルされる)。
 
-## 13. 生データフォルダからの統括(補助経路。pipeline、生データ → 上流検証 → 前処理 → PCA → 差次的解析 → レポート)
+## 12. 生データフォルダからの統括(補助経路。pipeline、生データ → 上流検証 → 前処理 → PCA → 差次的解析 → レポート)
 
 生データフォルダ1つを渡すだけで、上流(MS-DIAL Console)の実行・検証、`dataset_load`
 相当の読込、メタデータ解決、前処理、PCA、指定した2群比較の差次的解析、TSV/volcano
@@ -202,7 +188,7 @@ QC/blank の扱いはツールごとに異なる。`arf_parser` の `class_ids` 
 | `pipeline_resume` | 入力訂正(`updates`: `target`/`sample_manifest`/`preprocess`/`comparisons` に限定)、下流の再計算、または中断した工程からの再開を行う。`rerun_upstream=True` を明示しない限り Console 実行はやり直さない(自動再試行はしない)。`request_id` を指定した再送は、直前と同じ内容なら新しい revision を作らず直前の結果を返す。 |
 | `pipeline_cancel` | 取消要求を保存する(`pipeline_path`)。**生データを削除しない** — 保存するのは協調的な取消フラグだけで、実際に停止したかどうかは `pipeline_status` で確認する。二重に呼んでも同じ状態に落ち着く(冪等)。 |
 
-## 14. 参照ライブラリ(MS/MS スペクトル照合)
+## 13. 参照ライブラリ(MS/MS スペクトル照合)
 
 `.dcl` の測定 MS/MS を参照ライブラリ(`*_Loaded.msp2.dbs` または `*.msp`)と照合し、
 対向プロット(mirror plot)で確認する経路。`library_load` → `library_match_feature` →
@@ -215,7 +201,7 @@ QC/blank の扱いはツールごとに異なる。`arf_parser` の `class_ids` 
 | `library_search` | 読み込んだ参照ライブラリを名前(部分一致)・分子式(完全一致)・InChIKey(先頭 14 文字)で引く(読み取りだけ。再解析で使う)。`limit` 件まで TSV で返し、打ち切った件数を `truncated` に書く。 |
 | `library_plot_mirror` | 直近の照合結果から対向プロット(上段=測定・下段=参照)を描く。既定は PNG 画像、`output="payload"` で座標 JSON。`scale` で縦軸の写し方を選ぶ(`"relative"` 既定 / `"sqrt"` / `"log10"`)——**precursor がベースピークのスペクトルは `relative` だと診断イオンが潰れて読めない**ので `"sqrt"` を使う。`label_policy` で m/z ラベルの衝突回避を選ぶ(`"auto"` 既定 = 水平・垂直の 2 次元判定 / `"msdial"` = 上流に忠実な水平のみの判定。忠実版のほうがラベルは少ない)。`.dbs` の強度足切りで**採点に入らなかった測定ピーク**は灰色で薄く描き分け、凡例と caption に件数が出る(足切りが 0 の run では現れない)。 |
 
-## 15. アラインメントのキュレーション(注釈の一覧確認と機械判別)
+## 14. アラインメントのキュレーション(注釈の一覧確認と機械判別)
 
 注釈付きスポットを、EIC・対向プロット・Δppm・ΔRT・脂質クラス×不飽和度の RT–m/z 傾向と
 機械判別つきで**一覧**確認し、ユーザーが付けたフラグ(「間違い」「疑わしい」)を記録する経路。
@@ -238,7 +224,7 @@ MasterAlignmentID の組で記録する(MS-DIAL を再実行すると古いフ�
 MCP Apps で会話内にビューアを出す経路は、Claude Desktop のローカル
 stdio サーバでは 2026-09 時点で未検証(ブラウザで `html_path` を開く経路が主)。
 
-## 16. パスウェイ投影(MSLipidMapper)
+## 15. パスウェイ投影(MSLipidMapper)
 
 前処理済みの脂質データを MSLipidMapper で remodeling / ceramide / global の
 パスウェイへ投影する。MSLipidMapper は研究室サーバの REST API(`[mslipidmapper] mslipidmapper_api_url`)を先に使い、
@@ -274,7 +260,7 @@ run ディレクトリの `remote-job.json`。サーバは版を返さないの�
 | `pathway_project` | `arf_preprocess` / `dataset_preprocess` 後の行列から最小 mzTab-M を書き、MSLipidMapper でサブクラス(と任意のアシル鎖サブセット)をノードへ集計する。2 群を log2 空間の Welch＋BH(パスウェイ×スコープ種別ごと)で比べ、ノード表と「逆向きに動く隣接ペア」を TSV で返す。JSON-LD・mzTab・manifest は解析フォルダの `reports/pathway/<run_id>/`。 |
 | `pathway_plot` | `pathway_project` の run を MSLipidMapper で PDF に描き、1 ページ目を PNG(長辺 1600px)にして、既定では図のファイル(PDF・PNG)の場所と要約だけを返す。チャットに図を出すときは `inline_image=true`(1 枚約 2,400 画像トークン)。ローカルではヘッドレス Chromium と unpkg.com への接続が要る(サーバでは不要)。図中の p 値は MSLipidMapper のもの。 |
 
-## 17. サーバ自身の更新
+## 16. サーバ自身の更新
 
 配布先のクローンを `origin/main` へ追従させるための保守ツール。解析の流れには現れない。
 遅れているときは更新通知が出る(`load_dataset` の冒頭行、`dataset_status` /
@@ -285,7 +271,7 @@ run ディレクトリの `remote-job.json`。サーバは版を返さないの�
 |--------|------|
 | `server_update` | このMCPサーバ自身を `origin/main` へ早送りし、`uv.lock` / `requirements.lock.txt` が変わっていたときだけ依存も入れ直す。**プロセスは操作しない** — 適用後に Claude Desktop(MCPクライアント)を再起動するのは利用者。起動中のプロセスは import 済みの古いコードで動き続けるため、戻り値の `message` にある再起動の指示をそのまま利用者へ伝えること。未コミット変更がある・`main` 以外にいる・早送りできない(独自コミットがある)・オフラインのいずれでも**何もせずに** `status="refused"` と機械可読な `reason` を返す(例外は投げない)。`status` は `up_to_date` / `updated` / `updated_with_warning` / `refused`。`updated_with_warning` はコードだけ新しく依存の更新に失敗した状態で、再起動前に手元で `setup.ps1`(mac / Linux は `sh setup.sh`)の再実行が要る。 |
 
-## 18. 再解析のデータセットのハンドル(並行のエージェント向け)
+## 17. 再解析のデータセットのハンドル(並行のエージェント向け)
 
 **再解析で使う**。対話の使い方(`dataset_load` → `dataset_*`)は変わらない。ハンドルは
 1 つのサーバのプロセスにデータセット(とその極性のライブラリ)を複数並べて持つための ID で、
