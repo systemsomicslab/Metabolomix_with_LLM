@@ -43,16 +43,23 @@ def load_summary_lines(ds, opened) -> list[str]:
     return lines
 
 
-def sample_group_role_counts(ds) -> dict:
-    """試料の群（Class ID）ごと・役割ごとの件数。`load_dataset` が返す（`dataset_status` の要約は Task 3 がこの部品で拡張する）。
+def _metadata_rows(ds) -> list[dict]:
+    """試料の対応表の行（`ds.sample_names` の順）。
 
-    群と役割は試料の対応表（適用済みの `ds.sample_metadata_rows`、無ければ読み込みが決めた既定の行。
-    `sample_manifest.resolve_metadata`）から数える。群の宣言が無い試料は `n_ungrouped`。
+    適用済みの `ds.sample_metadata_rows`（解決済みの行）があればそれ、無ければ読み込みが決めた
+    既定の行（`sample_manifest.resolve_metadata`）。
     """
     from metabolomix.analysis import sample_manifest
 
-    # 適用済みの対応表（`sample_metadata_rows`。解決済みの行）があればそれ、無ければ既定の行。
-    rows = getattr(ds, "sample_metadata_rows", None) or sample_manifest.resolve_metadata(ds, None)
+    return getattr(ds, "sample_metadata_rows", None) or sample_manifest.resolve_metadata(ds, None)
+
+
+def sample_group_role_counts(ds) -> dict:
+    """試料の群（Class ID）ごと・役割ごとの件数。`load_dataset` の戻り値と `dataset_status` の要約が共有する。
+
+    群と役割は試料の対応表（`_metadata_rows`）から数える。群の宣言が無い試料は `n_ungrouped`。
+    """
+    rows = _metadata_rows(ds)
     groups: dict[str, int] = {}
     roles: dict[str, int] = {}
     n_ungrouped = 0
@@ -113,11 +120,23 @@ def _handoff_lines(report: dict | None) -> list[str]:
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_status(dataset_handle: str | None = None) -> str:
-    """現在の DatasetState の概要を返す。
+def dataset_status(dataset_handle: str | None = None, view: str = "summary",
+                   query: str | None = None) -> str:
+    """現在の DatasetState の状態を返す。`view` で何を見るかを選ぶ。
 
-    `samples` に name/role の TSV が入る。dataset_differential の
-    group_a / group_b はここに出る名前をそのまま使う。
+    view:
+      - `"summary"`（既定）: 概要。`samples` に name/role の TSV が入り、dataset_differential の
+        group_a / group_b はここに出る名前をそのまま使う。群（Class ID）ごとの件数 `groups`・
+        役割ごとの件数 `roles`・群の無い試料の数 `n_ungrouped`・特徴のタグごとの件数 `tags`・
+        除外の件数 `excluded`（`dataset_exclude`）を含む。
+      - `"samples"`: 試料の TSV（name・group・role・batch・injection_order・subject_id・excluded。
+        `excluded` は除外の理由、除外していなければ空）。`query` で絞れる。
+      - `"tags"`: タグごとの特徴 ID（各タグ先頭 50 件まで。`n_features` は全件数）。`query` に
+        タグ名を渡すとそのタグだけ。
+    query: `view="samples"` では因子トークン。`_` 区切りで全トークンを含む試料に一致（順不同の AND）し、
+        `,` で区切った複数の指定は OR。トークンは試料名・群（Class ID）から取る（日付や拡張子の
+        処理タイムスタンプは除く）。QC・ブランクも落とさない（role 列で見分ける）。例 `"ILG_6h"`、
+        `"ILG_6h,control_6h"`。1 件も一致しなければ使えるトークンの語彙を添えて拒む。
 
     load_dataset を先に実行しておくこと。
     未実行の場合は missing_state エンベロープを返す。
@@ -138,6 +157,18 @@ def dataset_status(dataset_handle: str | None = None) -> str:
             "DatasetState がありません。先に load_dataset を実行してください。"
             "console_run 完了後は load_dataset(job_path=<analysis-job.json へのパス>) を推奨します。",
         )
+    if view not in VIEWS:
+        return mztab_error("DATASET_BAD_REQUEST",
+                           f"view は {list(VIEWS)} のどれかです: {view!r}", {"view": view})
+    if query is not None and view == "summary":
+        return mztab_error("DATASET_BAD_REQUEST",
+                           "query は view=samples（因子トークン）か view=tags（タグ名）で使います。",
+                           {"view": view})
+    if view == "samples":
+        return _samples_view(ds, query)
+    if view == "tags":
+        return _tags_view(ds, query)
+
     from metabolomix.core import version
     update = version.update_status()
     payload = {
@@ -161,6 +192,11 @@ def dataset_status(dataset_handle: str | None = None) -> str:
         # 検出状態の有無。「無い」と「全部未検出」は解釈が正反対なので、
         # 率だけを返して available を省くことはしない。
         "detection": _detection_summary(ds),
+        # 群（Class ID）・役割ごとの件数、特徴のタグごとの件数、除外の件数。
+        # 試料ごと・特徴ごとの中身は view="samples" / view="tags"。
+        **sample_group_role_counts(ds),
+        "tags": _tag_counts(ds),
+        "excluded": {"samples": len(ds.excluded_samples), "features": len(ds.excluded_features)},
     }
     if ds.load_notes:
         # 読み込み時の注記（ジョブの未完了・未検証の警告ほか）。load_dataset の要約を見ていない
@@ -174,6 +210,86 @@ def dataset_status(dataset_handle: str | None = None) -> str:
 
 
 # ---------- 内部ヘルパ ----------
+
+VIEWS = ("summary", "samples", "tags")
+
+#: `view="tags"` がタグごとに返す特徴 ID の上限。
+_TAG_FEATURE_CAP = 50
+
+
+def _tag_counts(ds) -> dict[str, int]:
+    """タグ -> 特徴の件数（`ds.feature_tags`: 特徴 ID -> タグのリスト）。"""
+    counts: dict[str, int] = {}
+    for tags in (ds.feature_tags or {}).values():
+        for tag in tags:
+            counts[tag] = counts.get(tag, 0) + 1
+    return counts
+
+
+def _tags_view(ds, query: str | None) -> str:
+    wanted = (query or "").strip().casefold()
+    by_tag: dict[str, list[str]] = {}
+    for feature_id in ds.feature_ids:
+        for tag in (ds.feature_tags or {}).get(feature_id, []):
+            if not wanted or tag.casefold() == wanted:
+                by_tag.setdefault(tag, []).append(feature_id)
+    return json_payload({
+        "view": "tags",
+        "tags": {tag: {"n_features": len(ids), "feature_ids": ids[:_TAG_FEATURE_CAP],
+                       "truncated": len(ids) > _TAG_FEATURE_CAP}
+                 for tag, ids in by_tag.items()},
+    })
+
+
+def _tsv_cell(value) -> str:
+    """TSV の 1 セル。None は空、タブ・改行は空白に潰す（行を壊さない）。"""
+    return "" if value is None else str(value).replace("\t", " ").replace("\n", " ")
+
+
+def _excluded_cell(ds, name: str, row: dict) -> str:
+    """除外の理由。`dataset_exclude` の除外はその理由、実験情報シートの include=false はその旨。"""
+    reason = ds.excluded_samples.get(name)
+    if reason is not None:
+        return _tsv_cell(reason)
+    return "include=false（実験情報シート）" if not row.get("include", True) else ""
+
+
+def _samples_view(ds, query: str | None) -> str:
+    """試料の TSV。`query` は因子トークン（旧 `sample_search` の `specs` と同じ文法）。"""
+    from metabolomix.msdial import sample_factors
+
+    names = list(ds.sample_names)
+    rows = _metadata_rows(ds)
+    by_name = dict(zip(names, rows))
+    facets = sample_factors.build_sample_facets(
+        names, None,
+        {name: {"role": row.get("role"), "group": row.get("group")}
+         for name, row in by_name.items()})
+
+    specs = [part.strip() for part in (query or "").split(",") if part.strip()]
+    selected = names
+    if specs:
+        try:
+            # 役割では落とさない（include_roles=None）。QC・ブランクは role 列で見分ける。
+            matches, _ = sample_factors.expand_sample_specs(specs, facets, include_roles=None)
+        except ValueError as exc:
+            return mztab_error("DATASET_BAD_REQUEST", str(exc), {
+                "query": query,
+                "token_vocabulary": sample_factors.token_vocabulary(facets)})
+        hit = {name for found in matches.values() for name in found}
+        selected = [name for name in names if name in hit]
+
+    lines = ["name\tgroup\trole\tbatch\tinjection_order\tsubject_id\texcluded"]
+    for name in selected:
+        row = by_name[name]
+        subject = (ds.sample_meta.get(name) or {}).get("subject_id", row.get("subject_id"))
+        lines.append("\t".join([
+            _tsv_cell(name), _tsv_cell(row.get("group")), _tsv_cell(row.get("role")),
+            _tsv_cell(row.get("batch")), _tsv_cell(row.get("injection_order")),
+            _tsv_cell(subject), _excluded_cell(ds, name, row)]))
+    return json_payload({"view": "samples", "query": query, "n_total": len(names),
+                         "n_matched": len(selected), "samples": "\n".join(lines)})
+
 
 
 def _validation_summary(ds) -> dict:

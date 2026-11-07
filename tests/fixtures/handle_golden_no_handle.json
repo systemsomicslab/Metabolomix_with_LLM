@@ -202,6 +202,11 @@
    "note": "mzTab-M の非ゼロ値には gap-fill による補間値が含まれ得ます。検出状態が取り込めていないため、検出率・欠測率は語れません。",
    "reason": "no_candidate"
   },
+  "excluded": {
+   "features": 0,
+   "samples": 0
+  },
+  "groups": {},
   "inchikey_coverage": {
    "by_source": {
     "database_identifier": 1,
@@ -228,13 +233,18 @@
   },
   "n_features": 3,
   "n_samples": 8,
+  "n_ungrouped": 8,
   "quantification_confidence": "unknown",
   "quantification_measure": null,
+  "roles": {
+   "sample": 8
+  },
   "samples": "name\trole\nHC1\tsample\nHC2\tsample\nHC3\tsample\nRA1\tsample\nRA2\tsample\nRA3\tsample\nQC1\tsample\nQC2\tsample",
   "source_files": [
    "<TMP>\\AlignResult-1.mzTab"
   ],
   "source_format": "mztab",
+  "tags": {},
   "validation": {
    "n_errors": 0,
    "n_warnings": 0,

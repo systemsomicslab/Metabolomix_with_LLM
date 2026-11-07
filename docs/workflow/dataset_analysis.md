@@ -136,7 +136,7 @@ result_id は計算のたびに発行される UUID なので入れず、統計�
 1. metabolomix/tools/dataset_analysis_tools.py  dataset_set_sample_metadata()
 2. └─ metabolomix/analysis/dataset_service.py  apply_sample_manifest()
 3.    └─ metabolomix/analysis/dataset_service.py  _raw_manifest_layout()
-4.    └─ metabolomix/analysis/sample_manifest.py  parse_manifest()
+4.    └─ metabolomix/analysis/sample_manifest.py  parse_manifest()（任意の列 `subject_id` を読む。`sample_meta` に持つだけで統計には使わない）
 5.    └─ metabolomix/analysis/sample_manifest.py  resolve_metadata()
 6.    └─ metabolomix/analysis/sample_manifest.py  apply_metadata()
 7.       └─ metabolomix/analysis/result_state.py  invalidate_results()

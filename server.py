@@ -77,6 +77,7 @@ from metabolomix.arf2.tools import *
 from metabolomix.eic.tools import *
 from metabolomix.tools.dataset import *  # list_data_files
 from metabolomix.tools.mztab_tools import *  # dataset_status
+from metabolomix.tools.sample_tools import *  # dataset_exclude
 from metabolomix.tools.console_tools import *  # console_plan, console_run, console_status, job_list
 from metabolomix.tools.dataset_analysis_tools import *  # dataset_preprocess, dataset_pca, dataset_differential, dataset_export_differential, dataset_set_sample_metadata, dataset_feature_search
 from metabolomix.tools.pca_loadings_tools import *  # plot_pca_loadings（mzTab の DatasetState を読むので dataset 系の後）

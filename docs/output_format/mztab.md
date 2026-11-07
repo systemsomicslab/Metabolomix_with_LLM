@@ -162,6 +162,26 @@ SME 由来という食い違った行ができる。
 （別リポ massbank-context）が InChIKey を結合キーにするため。名前だけの SML 注釈は
 このゲートを越えられない。
 
+### 13.5b `dataset_status` の views と除外
+
+`dataset_status(view=...)`:
+
+- `summary`（既定）: 概要。`groups`（群＝Class ID ごとの件数）・`roles`・`n_ungrouped`（群の宣言が
+  無い試料の数）・`tags`（タグごとの特徴数）・`excluded`（除外の件数）を含む。`samples`（name/role）は従来どおり。
+- `samples`: 試料の TSV（name・group・role・batch・injection_order・subject_id・excluded）。`excluded` は
+  `dataset_exclude` の理由、実験情報シートの `include=false` の試料は「include=false（実験情報シート）」、
+  除外していなければ空。`query` は因子トークン（`_` 区切りの AND・順不同、`,` 区切りの複数指定は OR。旧
+  `sample_search` の `specs` と同じ文法）。役割では落とさない。
+- `tags`: タグごとの特徴 ID（先頭 50 件）。**特徴のタグは MS-DIAL の `_tags.xml` から読んだもの**で、
+  アノテーションの確かさそのものではない。
+
+**除外（`dataset_exclude`）は入力を変えない。** `excluded_samples` / `excluded_features`（名前・特徴 ID -> 理由）は
+解析の状態で、定量行列・試料名・特徴 ID・データセットの指紋は元のまま。前処理（`dataset_preprocess`）が除外した
+試料・特徴を**前処理済み行列から外す**（検出率の足切りの分母からも外す）。除外を変えると `metadata_revision` が進み、
+前処理済み行列から先の結果（PCA・差次的解析）は古い結果になる——`ds.results` には残るが現在の結果としては
+通らない。`dataset_exclude` を使う前に作った結果の数字を、除外後の結果として読んではいけない。
+任意の列 `subject_id`（実験情報シートの末尾）は `sample_meta` に持つだけで、統計にはまだ使わない。
+
 ### 13.6 `inchikey_coverage`
 
 `load_dataset` の要約と `dataset_status` が読む集計。

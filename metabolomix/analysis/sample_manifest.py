@@ -64,6 +64,7 @@ from metabolomix.core.atomic_io import DomainError
 __all__ = [
     "FIELDS",
     "FIELDS_V2",
+    "OPTIONAL_FIELDS",
     "apply_metadata",
     "parse_injection_order",
     "parse_manifest",
@@ -81,6 +82,10 @@ FIELDS = ("sample_id", "source_file", "role", "group", "batch",
 #: （spec §7）。列を挿入せず末尾に足すのは、v1の読み書きをする既存経路と
 #: 見出し行の突き合わせが位置で壊れないようにするため。
 FIELDS_V2 = FIELDS + ("biological_sample_id",)
+
+#: 任意の末尾の列。シートが持つなら読んで行に載せる（`sample_meta` へ運ぶだけ。B では統計に使わない）。
+#: 持たないシートの行には鍵を足さない。見出しの完全一致は、この 1 列の有無だけを許す。
+OPTIONAL_FIELDS = ("subject_id",)
 
 _SCHEMA_HEADERS = {
     "# schema = sample-manifest.v1": FIELDS,
@@ -156,11 +161,14 @@ def parse_manifest(path: Path, *, source_root: Path,
     reader = csv.DictReader(lines[1:], delimiter="\t",
                             restkey=_EXTRA_KEY, restval=None)
     fieldnames = list(reader.fieldnames or [])
-    if fieldnames != list(fields):
+    # 任意の末尾の列（`subject_id`）だけは有っても無くてもよい。それ以外の過不足・順序違いは拒む。
+    if fieldnames == list(fields) + list(OPTIONAL_FIELDS):
+        fields = fields + OPTIONAL_FIELDS
+    elif fieldnames != list(fields):
         raise DomainError(
             "SAMPLE_MANIFEST_INVALID",
             "列見出しが仕様と一致しません（過不足または順序違い）。",
-            {"expected": list(fields), "found": fieldnames},
+            {"expected": list(fields), "optional": list(OPTIONAL_FIELDS), "found": fieldnames},
         )
 
     # 予定raw（相対パス）を正規化して索引化。全件へ1行ずつ来ることを後で照合する。
@@ -267,7 +275,9 @@ def parse_manifest(path: Path, *, source_root: Path,
             "group": group, "batch": batch, "injection_order": injection_order,
             "qc_pool": qc_pool, "include": include,
         }
-        if fields is FIELDS_V2:
+        if "subject_id" in fields:
+            values["subject_id"] = raw_row["subject_id"] or None
+        if "biological_sample_id" in fields:
             # 空欄は「生物学的独立性が未確認」（spec §7）。ここでは欠落として
             # 通し、検定の直前 `validate_independent_samples` で止める——
             # シートは標準品・blankのように生物単位を持たない行も載せるため。
@@ -542,6 +552,7 @@ _TYPE_CHECKS: dict[str, tuple[type, ...]] = {
     "batch": (str, type(None)), "injection_order": (int, type(None)),
     "qc_pool": (str, type(None)), "include": (bool,),
     "biological_sample_id": (str, type(None)),
+    "subject_id": (str, type(None)),
 }
 
 
@@ -606,7 +617,7 @@ def apply_metadata(ds, rows: list[dict]) -> dict:
     old_rows = getattr(ds, "sample_metadata_rows", None) or []
     if not old_rows:
         # 初回適用は「全列が確定した」ことそのものが前処理入力の変化にあたる。
-        changed = {field for field in FIELDS_V2
+        changed = {field for field in FIELDS_V2 + OPTIONAL_FIELDS
                    if field in FIELDS or any(field in row for row in rows)}
     else:
         before = metadata_fingerprints(old_rows)
@@ -615,7 +626,7 @@ def apply_metadata(ds, rows: list[dict]) -> dict:
         # `biological_sample_id` の付け替えが「何も変わっていない」と読まれ、
         # 旧IDのnで出した検定結果が生き残る（列がv1行に無い場合は新旧とも
         # 欠落＝同値なので、v1経路の changed_fields は従来どおり）。
-        changed = {field for field in FIELDS_V2
+        changed = {field for field in FIELDS_V2 + OPTIONAL_FIELDS
                    if before.get(field) != after.get(field)}
 
     # ここまでの検証が全部通ってから、まとめて反映する（半端な適用を作らない）。
@@ -674,6 +685,9 @@ def pp_inputs_from_rows(sample_names: list[str], rows: list[dict]) -> tuple[dict
             "run_order": row.get("injection_order"),
             "run_order_source": order_prov.get("source"),
         }
+        # 任意の列。シートが持ち、値があるときだけ載せる（B では持つだけで統計には使わない）。
+        if row.get("subject_id") is not None:
+            sample_meta[name]["subject_id"] = row["subject_id"]
     return roles, sample_meta
 
 

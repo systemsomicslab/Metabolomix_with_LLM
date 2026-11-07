@@ -227,7 +227,46 @@ TSV は書かない（消費者のいない `feature-qc.tsv` を 2026-09-03 に�
 
 ## dataset_status
 
+`view` で 3 通り。`summary`（既定）は概要に群・役割・タグ・除外の件数を足し、`samples` は試料の
+TSV（`query` は因子トークン。旧 `sample_search` の `specs` と同じ文法で、
+`metabolomix/msdial/sample_factors.py` が照合する）、`tags` はタグごとの特徴 ID。
+
+`summary`:
 1. metabolomix/tools/mztab_tools.py dataset_status()
 2. └─ metabolomix/tools/mztab_tools.py _samples_tsv()
 3.    └─ metabolomix/analysis/preprocessing.py detect_sample_roles()
 4. └─ metabolomix/tools/mztab_tools.py _detection_summary()
+5. └─ metabolomix/tools/mztab_tools.py sample_group_role_counts()
+6.    └─ metabolomix/tools/mztab_tools.py _metadata_rows()
+7. └─ metabolomix/tools/mztab_tools.py _tag_counts()
+
+`samples`:
+1. metabolomix/tools/mztab_tools.py dataset_status()
+2. └─ metabolomix/tools/mztab_tools.py _samples_view()
+3.    └─ metabolomix/tools/mztab_tools.py _metadata_rows()
+4.    └─ metabolomix/msdial/sample_factors.py build_sample_facets()
+5.    └─ metabolomix/msdial/sample_factors.py expand_sample_specs()
+6.    └─ metabolomix/msdial/sample_factors.py token_vocabulary()
+
+`tags`:
+1. metabolomix/tools/mztab_tools.py dataset_status()
+2. └─ metabolomix/tools/mztab_tools.py _tags_view()
+
+## dataset_exclude
+
+試料・特徴を解析から外す（可逆）。状態は `DatasetState.excluded_samples` /
+`excluded_features`（名前・特徴 ID -> 理由）。入力の指紋には入れず、変わったときだけ
+`metadata_revision` を進めて前処理済み行列から先の結果を古くする（`apply_metadata` と同じ
+`invalidate_results` の経路）。除外を当てるのは前処理（`run_dataset_preprocess`）。
+
+1. metabolomix/tools/sample_tools.py dataset_exclude()
+2. └─ metabolomix/analysis/dataset_exclusions.py apply_exclusions()
+3.    └─ metabolomix/analysis/dataset_exclusions.py _resolve_samples()
+4.    └─ metabolomix/analysis/dataset_exclusions.py _resolve_features()
+5.    └─ metabolomix/analysis/result_state.py invalidate_results()
+
+除外の適用（`dataset_preprocess` → `run_dataset_preprocess` の中）:
+1. metabolomix/analysis/dataset_analysis.py run_dataset_preprocess()
+2. └─ metabolomix/analysis/dataset_analysis.py build_dataset_pp_inputs()
+3.    └─ metabolomix/analysis/dataset_analysis.py _included_sample_indices()
+4. └─ metabolomix/analysis/dataset_analysis.py _drop_excluded_features()

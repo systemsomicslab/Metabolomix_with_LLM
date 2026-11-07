@@ -66,6 +66,9 @@ EXPECTED_ANNOTATIONS = {
     # 状態の更新のみ（ファイル書き込みは無い）が、同じシートの再送は同じ状態に
     # 落ち着く → destructive ではなく idempotent。
     "dataset_set_sample_metadata": LOCAL_WRITE,
+    # 除外の足し引きはセッション状態だけを変える（ファイルは書かない）。同じ引数の再実行は同じ状態に
+    # 落ち着く（add は理由を置き換えるだけ）→ 冪等。除外は可逆なので destructive ではない。
+    "dataset_exclude": LOCAL_WRITE,
     # v2統計は名指しした解析行列を読むだけ（行列も session も書き換えない。
     # 結果全量の保持は session.dataset.results への追加で、外界へは書かない）。
     "dataset_statistic": READ_ONLY,

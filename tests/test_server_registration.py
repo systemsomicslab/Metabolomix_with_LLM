@@ -101,6 +101,7 @@ EXPECTED_TOOLS = sorted([
     "console_run",
     "console_status",
     "dataset_status",
+    "dataset_exclude",
     "job_list",
     "dataset_differential",
     "dataset_export_differential",

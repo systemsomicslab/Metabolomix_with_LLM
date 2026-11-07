@@ -349,6 +349,9 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     シートに不備があれば `session.dataset` を一切変更せずエラーを返すので、
     そのまま再送してよい。
 
+    任意の列 `subject_id`（見出しの末尾に足す。反復測定の被験者）も読み、`sample_meta` に持つ
+    （統計にはまだ使わない）。列が無いシートは今までどおり。
+
     前処理入力（role/batch/injection_order/qc_pool/include/sample_id/source_file）が
     変われば前処理済み行列ごと・PCA・差次的解析まで無効化する。`group` だけの変更なら
     差次的解析だけを無効化し、PCA は生かしたまま返す（`changed_fields` で確認できる）。

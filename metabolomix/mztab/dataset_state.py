@@ -270,6 +270,11 @@ class DatasetState:
         self.curation_flags: dict | None = None
         # load_notes: 読み込み時に分かった注記（.mddata が無い等）。
         self.load_notes: list[str] = []
+        # excluded_samples / excluded_features: `dataset_exclude` が持つ除外（名前または特徴 ID -> 理由）。
+        # 解析の状態であって入力ではないので指紋（`result_state.dataset_fingerprint`）には入れない
+        # （`sample_meta` の編集と同じ扱い）。前処理（`dataset_analysis`）が行列から外す。
+        self.excluded_samples: dict[str, str] = {}
+        self.excluded_features: dict[str, str] = {}
 
 
 def _sha256(path: str | Path) -> str:

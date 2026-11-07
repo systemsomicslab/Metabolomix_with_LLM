@@ -57,26 +57,48 @@ class PreconditionError(Exception):
 
 
 def _included_sample_indices(ds) -> list[int] | None:
-    """明示メタデータで include=true の試料が占める ds.sample_names 上の位置。
+    """解析に残す試料が占める ds.sample_names 上の位置。
 
-    None は「絞り込む必要が無い」——明示メタデータが無い、行数が合わない
-    （`build_dataset_pp_inputs` が別途 PreconditionError にする）、あるいは
-    全件 include=true の場合。
+    外す試料は 2 種類ある: 明示メタデータで include=false の試料と、`dataset_exclude` で
+    除外した試料（`ds.excluded_samples`。名前で持つ）。
 
-    include=false の除外は行列（`build_dataset_pp_inputs`）と検出マスク
-    （`_apply_detection_filter`）の**両方**に効かせる必要があるので、位置の
-    計算はここ 1 か所に置く。片方だけに効かせると、除外した試料の未検出が
-    残ったまま検出率が計算され、min_detection_rate=1.0 が正当な特徴量を
+    None は「絞る必要が無い」——どちらも無い、または全件を残す場合。明示メタデータの行数が
+    試料数と合わない場合（`build_dataset_pp_inputs` が別途 PreconditionError にする）は
+    include の側を見ず、除外だけを適用する。
+
+    除外は行列（`build_dataset_pp_inputs`）と検出マスク（`_apply_detection_filter`）の
+    **両方**に効かせる必要があるので、位置の計算はここ 1 か所に置く。片方だけに効かせると、
+    除外した試料の未検出が残ったまま検出率が計算され、min_detection_rate=1.0 が正当な特徴量を
     削り落とす。
     """
-    rows = getattr(ds, "sample_metadata_rows", None)
-    if not rows:
-        return None
     sample_names = list(getattr(ds, "sample_names", []) or [])
-    if len(rows) != len(sample_names):
-        return None
-    keep = [i for i, row in enumerate(rows) if row.get("include", True)]
-    return keep if len(keep) != len(rows) else None
+    rows = getattr(ds, "sample_metadata_rows", None)
+    use_rows = bool(rows) and len(rows) == len(sample_names)
+    excluded = getattr(ds, "excluded_samples", None) or {}
+    keep = [i for i, name in enumerate(sample_names)
+            if name not in excluded and (not use_rows or rows[i].get("include", True))]
+    return keep if len(keep) != len(sample_names) else None
+
+
+def _drop_excluded_features(ds, matrix, feature_names):
+    """`dataset_exclude` で除外した特徴（列）を行列から外す。無ければそのまま返す。
+
+    検出率の足切りの**後**に呼ぶ（検出マスクの行は ds.feature_ids の並びのままなので、先に
+    列を落とすと対応がずれる）。
+    """
+    excluded = getattr(ds, "excluded_features", None) or {}
+    if not excluded:
+        return matrix, feature_names
+    keep = [i for i, name in enumerate(feature_names) if name not in excluded]
+    if len(keep) == len(feature_names):
+        return matrix, feature_names
+    if not keep:
+        raise PreconditionError(
+            "bad_request",
+            "除外した特徴で、前処理に残る特徴が 0 件になります。"
+            "dataset_exclude(mode=\"remove\" または \"clear\") で戻してください。",
+            {"n_excluded_features": len(excluded)})
+    return matrix[:, keep], [feature_names[i] for i in keep]
 
 
 def build_dataset_pp_inputs(ds):
@@ -87,7 +109,8 @@ def build_dataset_pp_inputs(ds):
                         明示メタデータ適用済みなら include=false の行は含まない
                         （spec §8.1「include=falseの試料はこれらの評価前に除外する」。
                         下記 sample_names と同じ行だけを残す）。
-        sample_names  : list[str] — 同上の理由で include=false のサンプル名は
+        sample_names  : list[str] — 同上の理由で include=false のサンプル名と、
+                        `dataset_exclude` で除外した試料（`ds.excluded_samples`）は
                         含まない。
         feature_names : list[str]（SMF_ID）
         roles         : {sample_name: "sample"|"qc"|"blank"} — preprocess の第3引数。
@@ -188,6 +211,12 @@ def build_dataset_pp_inputs(ds):
             "run_order": run_order,
             "run_order_source": "mztab_injection_sequence" if run_order is not None else None,
         }
+    # `dataset_exclude` で除外した試料は、明示メタデータの経路と同じく行列と名前から外す
+    # （roles / sample_meta の写像は全件分のまま）。
+    keep_idx = _included_sample_indices(ds)
+    if keep_idx is not None:
+        matrix = matrix[keep_idx, :]
+        sample_names = [sample_names[i] for i in keep_idx]
     return matrix, sample_names, feature_names, roles, sample_meta
 
 
@@ -206,6 +235,9 @@ def run_dataset_preprocess(ds, recipe: dict):
     matrix, feature_names, detection_report = _apply_detection_filter(
         ds, matrix, feature_names, recipe.get("min_detection_rate"),
         sample_indices=_included_sample_indices(ds))
+
+    # `dataset_exclude` で除外した特徴は、検出率の足切りの後で外す（検出マスクの行の対応を保つ）。
+    matrix, feature_names = _drop_excluded_features(ds, matrix, feature_names)
 
     run_order = {n: sample_meta[n]["run_order"] for n in sample_names}
 

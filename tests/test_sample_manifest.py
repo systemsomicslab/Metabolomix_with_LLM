@@ -684,3 +684,44 @@ def test_detection_rate_ignores_samples_excluded_by_include_false():
     assert "F1" not in feature_names      # 残す検体で未検出のものは従来どおり落ちる
     assert report["detection"]["n_samples"] == 7
     assert report["detection"]["n_cells"] == 6 * 7
+
+
+# ---------- subject_id（B-2b Task 3。任意の列。B では持つだけで統計に使わない） ----------
+
+def test_subject_id_read_from_manifest(tmp_path):
+    root = tmp_path / "source"
+    root.mkdir()
+    _touch(root, "S0.wiff", "S1.wiff")
+    sheet = tmp_path / "sample-manifest.tsv"
+    sheet.write_text(
+        "# schema = sample-manifest.v1\n" + _HEADER + "\tsubject_id\n"
+        + _row("S0", "S0.wiff", group="a", injection_order="1").rstrip("\n") + "\tP01\n"
+        + _row("S1", "S1.wiff", group="b", injection_order="2").rstrip("\n") + "\t\n",
+        encoding="utf-8")
+
+    rows = parse_manifest(sheet, source_root=root, expected_sources=["S0.wiff", "S1.wiff"])
+
+    assert [r["subject_id"] for r in rows] == ["P01", None]
+    assert rows[0]["provenance"]["subject_id"]["source"] == "user_manifest"
+
+    # 列が無いシートは今までどおり（行に subject_id の鍵を足さない）
+    plain = _sheet(tmp_path, _row("S0", "S0.wiff") + _row("S1", "S1.wiff", injection_order="2"))
+    assert all("subject_id" not in r for r in parse_manifest(
+        plain, source_root=root, expected_sources=["S0.wiff", "S1.wiff"]))
+
+
+def test_subject_id_is_stored_in_sample_meta_and_validated():
+    ds = make_dataset()
+    rows = metadata_rows(ds, n_qc=0)
+    rows[0]["subject_id"] = "P01"
+    apply_metadata(ds, rows)
+
+    _, names, _, _, sample_meta = build_dataset_pp_inputs(ds)
+
+    assert sample_meta[names[0]]["subject_id"] == "P01"
+    assert "subject_id" not in sample_meta[names[1]]
+
+    bad = metadata_rows(ds, n_qc=0)
+    bad[0]["subject_id"] = 5
+    with pytest.raises(DomainError, match="SAMPLE_MANIFEST_INVALID"):
+        apply_metadata(make_dataset(), bad)

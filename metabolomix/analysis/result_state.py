@@ -59,7 +59,7 @@ _STAT_INVALIDATING = STAT_FIELDS | {"comparison"}
 #: `matrix_recipe` を含めるのは、これらが変われば解析行列の値そのものが
 #: 変わるため——行列を作り直さずに結果だけ残すと、次の解析が新しい設定の
 #: 顔をした古い数字で走る。
-_PP_INVALIDATING = PP_FIELDS | {"dataset", "detection", "recipe",
+_PP_INVALIDATING = PP_FIELDS | {"dataset", "detection", "recipe", "exclusion",
                                 "standard_assays", "bindings", "matrix_recipe"}
 
 
@@ -140,12 +140,22 @@ def group_fingerprint(ds) -> str:
 
 
 def preprocess_fingerprint(ds, recipe: dict, metadata_hash: str | None = None) -> str:
-    """前処理の入力（データセット・レシピ・関与するメタデータ）の指紋。"""
-    return canonical_hash({
+    """前処理の入力（データセット・レシピ・関与するメタデータ・除外）の指紋。
+
+    除外（`dataset_exclude`）は前処理の行列を変えるので混ぜる。**除外が無いときは鍵ごと
+    入れない**（除外を使わない既存の結果の指紋を動かさない）。理由の文面は行列に効かないので
+    名前の集合だけを見る。
+    """
+    payload = {
         "dataset": dataset_fingerprint(ds),
         "recipe": recipe,
         "metadata": metadata_hash,
-    })
+    }
+    excluded_samples = sorted(getattr(ds, "excluded_samples", None) or {})
+    excluded_features = sorted(getattr(ds, "excluded_features", None) or {})
+    if excluded_samples or excluded_features:
+        payload["exclusions"] = {"samples": excluded_samples, "features": excluded_features}
+    return canonical_hash(payload)
 
 
 def invalidate_results(ds, changed: set[str]) -> None:
@@ -159,6 +169,7 @@ def invalidate_results(ds, changed: set[str]) -> None:
     - 群・比較の指定（`STAT_FIELDS`。どの注入を独立した n と数えるかを決める
       `biological_sample_id` を含む）が変われば差次的解析だけ。PCA は群を
       入力にしていない。
+    - 除外（`exclusion`。`dataset_exclude`）も前処理の行列を変えるので、前処理済み行列ごと捨てる。
     - PCA の設定だけなら PCA だけ。
 
     「消す」を選ぶのは、古い数字を返し続けるより無いことにするほうが安全だから。
