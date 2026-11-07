@@ -138,8 +138,13 @@ def test_fake_match_and_select(tmp_path, monkeypatch):
     p = plugin.load_rules()
     m = plugin.call(p, "match_samples",
                     names_by_mode={"pos": ["s1_pos", "s2_pos"], "neg": ["s1_neg", "s3"]})
-    assert m["ids_by_mode"] == {"pos": ["s1"], "neg": ["s1"]}
-    assert m["mismatched"]["pos"] == ["s2"]
+    assert m["rule"] == "exact_name"  # 除いた名前の集合も違うので名前は変えない
+    assert m["ids_by_mode"] == {"pos": ["s1_pos", "s2_pos"], "neg": ["s1_neg", "s3"]}
+    assert m["mismatched"]["pos"] == ["s1_pos", "s2_pos"]
+    ok = plugin.call(p, "match_samples", names_by_mode={"pos": ["s1_pos", "s2_pos"],
+                                                        "neg": ["s2_neg", "s1_neg"]})
+    assert ok["rule"] == "polarity_token_removed" and ok["mismatched"] == {}
+    assert ok["ids_by_mode"] == {"pos": ["s1", "s2"], "neg": ["s2", "s1"]}
     sel = plugin.call(p, "select", adduct_text=ADDUCTS,
                       features=[_sel("a", "PC 34:1"), _sel("b", "Unknown"),
                                 _sel("c", "IS-A", "internal_standard")])
@@ -156,11 +161,11 @@ def test_fake_match_samples_with_mapping(tmp_path, monkeypatch):
     names = {"pos": ["b_pos", "a_pos"], "neg": ["zz", "yy"]}
     m = plugin.call(p, "match_samples", names_by_mode=names, mapping_rows=rows)
     assert m["rule"] == "mapping_csv"
-    assert m["ids_by_mode"] == {"pos": ["S1"], "neg": ["S1"]}
+    assert m["ids_by_mode"] == {"pos": ["S2", "S1"], "neg": ["S1", "S3"]}
     assert m["mismatched"] == {"pos": ["S2"], "neg": ["S3"]}
     assert m["rows_by_mode"]["pos"]["a_pos"]["sample_id"] == "S1"
     # the mapping resolves a pair the suffix rule cannot
-    assert plugin.call(p, "match_samples", names_by_mode=names)["ids_by_mode"]["neg"] == []
+    assert plugin.call(p, "match_samples", names_by_mode=names)["ids_by_mode"]["neg"] == ["zz", "yy"]
     with pytest.raises(DomainError) as e:
         plugin.call(p, "match_samples", names_by_mode={"pos": ["c_pos"]}, mapping_rows=rows)
     assert e.value.details["rule_code"] == "mapping_invalid"

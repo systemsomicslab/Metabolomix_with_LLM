@@ -154,25 +154,35 @@ def _strip(name):
 
 
 def match_samples(names_by_mode, mapping_rows=None):
+    """Mirrors msdial_rules: full position-aligned ids, rule choice, mismatched_samples."""
     if mapping_rows is not None:
         by_key = {{(r["mode"], r["source_sample"]): r for r in mapping_rows}}
-        ids, rows = {{}}, {{}}
-        for m, names in names_by_mode.items():
-            for n in names:
-                if (m, n) not in by_key:
-                    raise FakeRuleError(f"no mapping row for {{n}} ({{m}})", "mapping_invalid",
-                                        {{"mode": m, "source_sample": n}})
-            ids[m] = [by_key[(m, n)]["sample_id"] for n in names]
-            rows[m] = {{n: by_key[(m, n)] for n in names}}
+        expected = {{(m, n) for m, names in names_by_mode.items() for n in names}}
+        if len(by_key) != len(mapping_rows) or set(by_key) != expected:
+            raise FakeRuleError("mapping must cover exactly the input samples", "mapping_invalid")
+        ids = {{m: [by_key[(m, n)]["sample_id"] for n in names]
+               for m, names in names_by_mode.items()}}
+        rows = {{m: {{n: by_key[(m, n)] for n in names}} for m, names in names_by_mode.items()}}
         rule = "mapping_csv"
     else:
-        ids = {{m: [_strip(n) for n in names] for m, names in names_by_mode.items()}}
-        rows, rule = None, "polarity_token_removed"
-    common = set.intersection(*(set(v) for v in ids.values())) if ids else set()
-    return {{"rule": rule,
-            "ids_by_mode": {{m: [i for i in v if i in common] for m, v in ids.items()}},
-            "mismatched": {{m: [i for i in v if i not in common] for m, v in ids.items()}},
-            "rows_by_mode": rows}}
+        rows = None
+        if len({{frozenset(v) for v in names_by_mode.values()}}) == 1:
+            rule, ids = "exact_name", {{m: list(v) for m, v in names_by_mode.items()}}
+        else:
+            stripped = {{m: [_strip(n) for n in v] for m, v in names_by_mode.items()}}
+            if any("" in v or len(set(v)) != len(v) for v in stripped.values()):
+                raise FakeRuleError("sample names are ambiguous", "sample_names_ambiguous")
+            if len({{frozenset(v) for v in stripped.values()}}) != 1:
+                rule, ids = "exact_name", {{m: list(v) for m, v in names_by_mode.items()}}
+            else:
+                rule, ids = "polarity_token_removed", stripped
+    mismatched = {{}}
+    for m, v in ids.items():
+        others = [set(o) for k, o in ids.items() if k != m]
+        missing = [i for i in v if not all(i in o for o in others)]
+        if missing:
+            mismatched[m] = missing
+    return {{"rule": rule, "ids_by_mode": ids, "mismatched": mismatched, "rows_by_mode": rows}}
 
 
 def select(features, adduct_text):

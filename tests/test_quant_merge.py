@@ -98,9 +98,11 @@ def test_merge_stops_on_mismatched_samples(tmp_path, monkeypatch):
         _merge(pos, neg, mapping_rows=None)
     assert exc.value.code == "QUANT_MERGE_SAMPLE_MISMATCH"
     only = exc.value.details["only_in"]
-    assert only["positive"] == ["S3_pos"] and only["negative"] == ["S9_neg"]
-    assert exc.value.details["only_in_ids"] == {"positive": ["S3"], "negative": ["S9"]}
-    assert exc.value.details["rule"] == "polarity_token_removed"
+    # 除いた名前の集合も揃わないので規則は名前を変えない（exact_name）。元の名前がそのまま出る
+    assert exc.value.details["rule"] == "exact_name"
+    assert only["positive"] == ["S1_pos", "S2_pos", "S3_pos"]
+    assert only["negative"] == ["S1_neg", "S2_neg", "S9_neg"]
+    assert exc.value.details["only_in_ids"] == only
     # 混在（トークンが付く側と付かない側）でも黙って部分集合にしない
     pos, neg = _pair(tmp_path, neg_names=("S1_neg", "S2_neg", "S3"), root="run2")
     merged, _ = _merge(pos, neg, mapping_rows=None)  # 付かない名前は正確一致で S2
@@ -215,6 +217,15 @@ def test_lock_timeout_is_busy(tmp_path, monkeypatch):
     assert out["error"]["code"] == "QUANT_HANDLE_BUSY"
     ok = json.loads(_tool()(hp, hn))  # 取ったロックは戻っている
     assert ok["status"] == "merged"
+
+
+def test_merge_by_exact_name(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path, pos_names=("a", "b", "c"), neg_names=("b", "c", "a"))
+    merged, info = _merge(pos, neg, mapping_rows=None)
+    assert info["rule"] == "exact_name" and merged.sample_names == ["a", "b", "c"]
+    row = merged.feature_ids.index("negative:0")
+    assert list(merged.feature_matrix[row]) == [60.0, 30.0, 40.0]  # a は NEG の 3 列目
 
 
 def test_merge_requires_quant_state(tmp_path, monkeypatch):
@@ -378,7 +389,7 @@ def test_tool_mismatch_needs_input_and_mapping(tmp_path, monkeypatch):
     hp, hn = _open(pos, "positive"), _open(neg, "negative")
     out = json.loads(_tool()(hp, hn))
     assert out["status"] == "needs_input" and out["reason"] == "sample_mismatch"
-    assert out["rule"] == "polarity_token_removed"
+    assert out["rule"] == "exact_name"
     assert set(out["only_in"]) == {"positive", "negative"}
     assert sorted(out["only_in"]["negative"]) == ["ww", "yy", "zz"]
     assert "mode, source_sample, sample_id, group, sample_type" in out["how_to_answer"]

@@ -101,26 +101,18 @@ def _check_states(pos_ds, neg_ds) -> tuple[dict, dict]:
     return pos, neg
 
 
-def _source_names(plugin, names, mismatched, result, mapping_rows) -> dict:
-    """食い違った共通 ID を、利用者が書く元の試料名に戻す（戻せなければ ID のまま）。"""
+def _source_names(names, ids_by_mode, mismatched) -> dict:
+    """食い違った共通 ID を、利用者が書く元の試料名に位置で戻す。
+
+    規則の ids_by_mode は入力の名前と位置がそろう。規則が名前を変えない（exact_name）と
+    ID は元の名前そのもの。
+    """
     out = {}
     for mode, bad in mismatched.items():
-        bad_set = set(bad)
-        rows = (result.get("rows_by_mode") or {}).get(mode)
-        found = []
-        for name in names.get(mode, []):
-            if mapping_rows is not None and rows is not None and name in rows:
-                sid = rows[name].get("sample_id")
-            else:
-                try:
-                    single = call(plugin, "match_samples", names_by_mode={mode: [name]})
-                    sid = single["ids_by_mode"][mode][0]
-                except Exception:  # noqa: BLE001 規則が単独の照合を拒むなら ID のまま返す
-                    found = None
-                    break
-            if sid in bad_set:
-                found.append(name)
-        out[mode] = found if found else list(bad)
+        by_id = {}
+        for name, sid in zip(names.get(mode, []), ids_by_mode.get(mode, [])):
+            by_id.setdefault(sid, name)
+        out[mode] = [by_id.get(i, i) for i in bad]
     return out
 
 
@@ -133,8 +125,8 @@ def _match(plugin, pos_ds, neg_ds, mapping_rows):
         raise DomainError("QUANT_MERGE_SAMPLE_MISMATCH",
                           "試料名が 2 つのデータセットで揃いません。mapping_csv で対応づけてください。",
                           {"rule": result.get("rule"), "only_in_ids": mismatched,
-                           "only_in": _source_names(plugin, names, mismatched, result,
-                                                    mapping_rows)})
+                           "only_in": _source_names(names, result.get("ids_by_mode") or {},
+                                                    mismatched)})
     ids = result["ids_by_mode"]
     pos_ids, neg_ids = list(ids[MODES["positive"]]), list(ids[MODES["negative"]])
     for label, got, src in (("positive", pos_ids, pos_ds), ("negative", neg_ids, neg_ds)):
