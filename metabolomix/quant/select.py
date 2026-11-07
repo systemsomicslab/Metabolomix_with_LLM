@@ -26,10 +26,10 @@ from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_errors import missing_state
 from metabolomix.core.serialization import json_payload, round_floats
 from metabolomix.quant import derive as qderive
-from metabolomix.quant.inputs import ReferenceInput, adduct_table, quant_error
+from metabolomix.quant.inputs import ReferenceInput, adduct_key, adduct_table, quant_error
 from metabolomix.quant.normalize import analysis_folder
 from metabolomix.quant.plugin import call, load_rules, rules_settings
-from metabolomix.quant.records import write_audit, write_record
+from metabolomix.quant.records import AUDIT_SUFFIX, write_audit, write_record
 from metabolomix.quant.table import apply_curation as curate
 from metabolomix.quant.table import feature_rows, resolve_quant_polarity
 
@@ -51,7 +51,10 @@ def is_merged(ds) -> bool:
 
 
 def _curation_groups(ds, rows, polarity, apply_curation: bool):
-    """(行ごとの mode, 差し替え後の行, 除外する特徴 ID の集合, audit)。"""
+    """(行ごとの mode, 差し替え後の行, 除外する特徴 ID の集合, audit, 極性ごとの適用の報告)。
+
+    報告は統合後で apply_curation=True のときだけ（それ以外は None）。判断の無い極性は
+    {"applied": False, "reason": "no_flags"}。"""
     state = getattr(ds, "quant_state", None) or {}
     modes: dict[str, str] = {}
     groups: dict[str, list] = {}
@@ -71,11 +74,16 @@ def _curation_groups(ds, rows, polarity, apply_curation: bool):
     excluded: set[str] = set()
     audit: list[dict] = []
     if not apply_curation:
-        return modes, {r.feature_id: r for r in rows}, excluded, audit
+        return modes, {r.feature_id: r for r in rows}, excluded, audit, None
+    report: dict | None = {} if merged else None
     for key, members in groups.items():
         flags = (state.get("curation_by_polarity") or {}).get(key) if merged else ds.curation_flags
         if not flags:
+            if report is not None:
+                report[key] = {"applied": False, "reason": "no_flags"}
             continue
+        if report is not None:
+            report[key] = {"applied": True}
         back = {origin_ids[r.feature_id]: r.feature_id for r in members}
         out, sub_audit = curate([replace(r, feature_id=origin_ids[r.feature_id]) for r in members],
                                 flags)
@@ -88,7 +96,7 @@ def _curation_groups(ds, rows, polarity, apply_curation: bool):
                 excluded.add(row.feature_id)
         audit.extend({**a, "feature_id": back[a["feature_id"]]} for a in sub_audit)
     final = {r.feature_id: replaced.get(r.feature_id, r) for r in rows}
-    return modes, final, excluded, audit
+    return modes, final, excluded, audit, report
 
 
 def _decide(plugin, rows, modes, adduct, ds):
@@ -111,12 +119,13 @@ def _decide(plugin, rows, modes, adduct, ds):
 
 
 def select(ds, *, adduct: ReferenceInput | None, apply_curation: bool = True,
-           polarity: str | None = None):
+           polarity: str | None = None, reuse: dict | None = None):
     """選別して記録と audit を書き、残る行だけの派生データセットを返す。`(new, info)`。
 
     `adduct` が None なら付加体は見ない（規則の filter_disabled。内部標準・名前・MS/MS の除外は
     行う）。`polarity` は統合前のデータセットの mode（省くとデータセットから決め、決まらなければ
     QUANT_POLARITY_REQUIRED）。統合後は各特徴の出自の極性を使い、引数は見ない。
+    `reuse` は既存の記録（復元用）: 記録と audit を書かず、その `record_id` で派生を作る。
     """
     plugin = load_rules()
     merged = is_merged(ds)
@@ -127,7 +136,7 @@ def select(ds, *, adduct: ReferenceInput | None, apply_curation: bool = True,
     folder = Path(state["record_folder"]) if state and state.get("record_folder") \
         else analysis_folder(ds)
 
-    modes, final, excluded, curation_audit = _curation_groups(ds, rows, polarity, apply_curation)
+    modes, final, excluded, curation_audit, by_polarity = _curation_groups(ds, rows, polarity, apply_curation)
     ordered = [final[r.feature_id] for r in rows]
     decisions = _decide(plugin, ordered, modes, adduct, ds)
     for d in decisions:
@@ -140,18 +149,22 @@ def select(ds, *, adduct: ReferenceInput | None, apply_curation: bool = True,
     adduct_info = {"sha256": adduct.sha256, "label": adduct.label} if adduct is not None else None
     inputs = dict(ds.source_files)
     if adduct is not None:
-        inputs[f"adducts:{adduct.label}"] = adduct.sha256
+        inputs[adduct_key(adduct.label)] = adduct.sha256
     parents = [state["record_id"]] if state and state.get("record_id") else []
     counts = {"input": len(rows), "retained": len(keep), "excluded": len(rows) - len(keep)}
-    record = write_record(
-        folder, "select", inputs=inputs, parent_ids=parents,
-        settings={"adducts": adduct_info, "apply_curation": bool(apply_curation),
-                  "rules": rules_settings(plugin)},
-        summary={"n_features": counts, "reasons": dict(reasons), "curation": curation})
-    record_id = record["record_id"]
-    audit_path = write_audit(folder, record_id, {
-        "schema": AUDIT_SCHEMA, "record_id": record_id, "decisions": decisions,
-        "curation": curation_audit})
+    if reuse is not None:
+        record_id = reuse["record_id"]
+        audit_name = f"{record_id}{AUDIT_SUFFIX}"
+    else:
+        record = write_record(
+            folder, "select", inputs=inputs, parent_ids=parents,
+            settings={"adducts": adduct_info, "apply_curation": bool(apply_curation),
+                      "polarity": None if merged else polarity, "rules": rules_settings(plugin)},
+            summary={"n_features": counts, "reasons": dict(reasons), "curation": curation})
+        record_id = record["record_id"]
+        audit_name = write_audit(folder, record_id, {
+            "schema": AUDIT_SCHEMA, "record_id": record_id, "decisions": decisions,
+            "curation": curation_audit}).name
 
     kept_ids = {rows[i].feature_id for i in keep}
     extras = {k: v for k, v in (state or {}).items() if k not in _STATE_KEYS}
@@ -177,9 +190,10 @@ def select(ds, *, adduct: ReferenceInput | None, apply_curation: bool = True,
     examples = [{"feature_id": d["feature_id"], "name": final[d["feature_id"]].name,
                  "reason": d["reason"]}
                 for d in decisions if d["action"] == "excluded"][:_MAX_EXAMPLES]
-    info = {"record_id": record_id, "audit_file": audit_path.name,
+    info = {"record_id": record_id, "audit_file": audit_name,
             "n_retained": counts["retained"], "n_excluded": counts["excluded"],
-            "reasons": dict(reasons), "curation": curation, "adducts": adduct_info,
+            "reasons": dict(reasons), "curation": curation, "curation_by_polarity": by_polarity,
+            "adducts": adduct_info,
             "skipped": skipped, "examples": examples}
     return new, info
 

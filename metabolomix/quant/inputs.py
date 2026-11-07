@@ -44,6 +44,11 @@ def reference_key(label: str) -> str:
     return f"reference:{label}"
 
 
+def adduct_key(label: str) -> str:
+    """記録の `inputs` での付加体の採用表のキー（`reference_key` と同じ流儀）。"""
+    return f"adducts:{label}"
+
+
 def _read(path: Path) -> tuple[str, str]:
     try:
         data = path.read_bytes()

@@ -18,8 +18,9 @@ from metabolomix.quant.inputs import reference_input
 from tests.msdial_folder_fixtures import write_msdial_folder
 from tests.quant_fake_rules import write_fake_rules
 
-REF = ("TargetClass,StandardName,Coefficient,Unit\nPC,IS-A,2.0,nmol\n"
-       "PE,IS-B,3.0,nmol\nAny others,IS-A,1.0,nmol\n")
+UNIT = "pmol / 10^6 cells"  # 本物の規則も受け付ける書き方
+REF = (f"TargetClass,StandardName,Coefficient,Unit\nPC,IS-A,2.0,{UNIT}\n"
+       f"PE,IS-B,3.0,{UNIT}\nAny others,IS-A,1.0,{UNIT}\n")
 SAMPLES = [{"file_id": i, "name": f"s{i}", "class_id": "A"} for i in range(3)]
 
 
@@ -75,7 +76,7 @@ def test_preview_needs_input_for_ambiguous_standard(tmp_path, monkeypatch):
     assert out["reference"]["label"] == "ref_table.csv"
     text = qn.preview_tool(ds, ref, None, "positive")
     assert str(tmp_path) not in text and "ref_table.csv" in text
-    ready = qn.preview(ds, ref, {"PE": 2}, "positive")
+    ready = qn.preview(ds, ref, {"IS-B": 2}, "positive")
     assert ready["status"] == "ready" and ready["unresolved"] == []
     pe = next(c for c in ready["classes"] if c["target_class"] == "PE")
     assert pe["feature_id"] == "2" and pe["coefficient"] == 3.0 and pe["via_any_others"] is False
@@ -90,7 +91,7 @@ def test_apply_with_bindings_values(tmp_path, monkeypatch):
     assert np.isnan(new.feature_matrix[row, 2])
     assert info["status_counts"]["standard_invalid_height"] >= 1
     assert new.quant_state["normalized"] is True and new.quant_state["method"] == "internal_standard"
-    assert new.quant_state["unit"] == "nmol" and info["unit"] == "nmol"
+    assert new.quant_state["unit"] == UNIT and info["unit"] == UNIT
     assert new.quant_state["internal_standard_ids"] == ["0"]
     assert ds.quant_state is None and ds.feature_matrix[row, 0] == 1000.0  # 元は不変
 
@@ -98,7 +99,7 @@ def test_apply_with_bindings_values(tmp_path, monkeypatch):
 def test_apply_with_ambiguous_binding(tmp_path, monkeypatch):
     _point(tmp_path, monkeypatch)
     ds = _ambiguous(tmp_path)
-    new, info = qn.apply(ds, _ref(tmp_path), {"PE": 2}, "positive")
+    new, info = qn.apply(ds, _ref(tmp_path), {"IS-B": 2}, "positive")
     row = ds.feature_ids.index("3")
     assert new.feature_matrix[row, 0] == pytest.approx(1200 / 200 * 3.0)
     none, preview = qn.apply(ds, _ref(tmp_path), None, "positive")
@@ -122,8 +123,8 @@ def test_any_others_row_used(tmp_path, monkeypatch):
     row = ds.feature_ids.index("2")
     assert new.feature_matrix[row, 0] == pytest.approx(100 / 500 * 1.0)
     pv = qn.preview(ds, _ref(tmp_path), None, "positive")
-    tg = next(c for c in pv["classes"] if c["target_class"] == "TG")
-    assert tg["via_any_others"] is True
+    other = next(c for c in pv["classes"] if c["target_class"] == "Any others")
+    assert other["via_any_others"] is True and other["dataset_classes"] == ["TG"]
 
 
 def test_apply_refuses_already_normalized(tmp_path, monkeypatch):
@@ -243,9 +244,10 @@ def test_mask_follows_resolved_class_alias_and_any_others(tmp_path, monkeypatch)
     _point(tmp_path, monkeypatch)
     ds = _load(tmp_path, [
         _spot("IS-A", "PC", [500.0, 500.0, 500.0], gap=[False, True, False]),
-        _spot("PC alias", "PCx", [1000.0] * 3, mz=600.0),
-        _spot("TG alias", "TGx", [100.0] * 3, mz=800.0)])
-    new, _ = qn.apply(ds, _ref(tmp_path), None, "positive")
+        _spot("Cer alias", "Cer_NS", [1000.0] * 3, mz=600.0),
+        _spot("TG 50:1", "TG", [100.0] * 3, mz=800.0)])
+    ref = _ref(tmp_path, text=REF + f"Cer-NS,IS-A,2.0,{UNIT}\n")  # Cer_NS は Cer-NS の別名
+    new, _ = qn.apply(ds, ref, None, "positive")
     for fid, val in (("1", 4.0), ("2", 0.2)):
         row = ds.feature_ids.index(fid)
         assert new.feature_matrix[row, 0] == pytest.approx(val)
@@ -296,3 +298,17 @@ def test_tools_register_in_subprocess():
         "print('ok')\n")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert out.returncode == 0 and "ok" in out.stdout, out.stderr
+
+
+def test_reference_rows_for_absent_classes_do_not_block(tmp_path, monkeypatch):
+    """参照表に載る内部標準が、データセットに無いクラスのぶんは needs_input にしない（本物の規則は
+    参照表の全行の assignments を返すため、現れたクラスだけに絞る）。"""
+    _point(tmp_path, monkeypatch)
+    ds = _load(tmp_path, [_spot("IS-A", "PC", [500.0] * 3), _spot("PC 34:1", "PC", [1000.0] * 3)])
+    ref = _ref(tmp_path, text=("TargetClass,StandardName,Coefficient,Unit\n"
+                               f"PC,IS-A,2.0,{UNIT}\nPE,IS-B,3.0,{UNIT}\n"))
+    out = qn.preview(ds, ref, None, "positive")
+    assert out["status"] == "ready" and out["unresolved"] == []
+    assert [c["target_class"] for c in out["classes"]] == ["PC"]
+    new, info = qn.apply(ds, ref, None, "positive")
+    assert new is not None and info["classes"][0]["target_class"] == "PC"

@@ -61,7 +61,7 @@ def dataset_quant_preview(reference_path: str, bindings: dict | None = None,
     reference_path: 内部標準の参照表 CSV（毎回指定。設定の既定は無い）。戻り値は表の sha256・
     単位・ファイル名の末尾だけで、パスと表の中身は返さない。classes はデータセットに現れた
     クラスだけ。内部標準の候補が複数・無いものは unresolved に候補を並べ status は needs_input。
-    bindings は {対象クラス: 内部標準の特徴 ID} で候補を選ぶ。濃度から係数を作るなら
+    bindings は {内部標準の名前: 特徴 ID}（unresolved の standard_name が鍵）で候補を選ぶ。濃度から係数を作るなら
     concentrations（{内部標準名: 濃度}）と solvent_volume・cells_millions（unit 任意）。
     polarity は極性が決まらないデータセットのとき必須。規則プラグイン（[quant] rules）が要る。
     dataset_handle: ハンドルのデータセット。省略時は直近のデータセット。

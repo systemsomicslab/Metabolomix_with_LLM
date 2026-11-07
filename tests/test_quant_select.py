@@ -262,6 +262,29 @@ def test_merged_dataset_curation_per_polarity(tmp_path, monkeypatch):
     assert recs[-1]["parent_ids"] == [merged.quant_state["record_id"]]
 
 
+def test_merged_polarity_without_flags_reports_no_flags(tmp_path, monkeypatch):
+    """統合後で apply_curation=True なのに、ある極性の判断が無いときは黙って飛ばさず理由を返す。"""
+    _point(tmp_path, monkeypatch)
+    merged = _merged(tmp_path)
+    merged.quant_state["curation_by_polarity"].pop("negative")
+    _new, info = qs.select(merged, adduct=_adduct())
+    assert info["curation_by_polarity"]["negative"] == {"applied": False, "reason": "no_flags"}
+    assert info["curation_by_polarity"]["positive"]["applied"] is True
+    _new, off = qs.select(merged, adduct=_adduct(), apply_curation=False)
+    assert off["curation_by_polarity"] is None  # 当てない指定なら報告するものが無い
+
+
+def test_adduct_key_matches_record_inputs(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    assert qi.adduct_key("adduct-table.csv") == "adducts:adduct-table.csv"
+    ds = _pos(tmp_path)
+    _new, info = qs.select(ds, adduct=_adduct(), polarity="positive")
+    rec = json.loads((tmp_path / "run" / "reports" / "quant"
+                      / f"{info['record_id']}.json").read_text(encoding="utf-8"))
+    assert qi.adduct_key(_adduct().label) in rec["inputs"]
+    assert rec["settings"]["polarity"] == "positive"
+
+
 # ---- ツール ----
 
 def _open(ds, polarity):

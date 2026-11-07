@@ -31,6 +31,7 @@ __all__ = ["analysis_folder", "apply", "apply_tool", "preview", "preview_tool", 
 _UNRESOLVED = ("standard_ambiguous", "standard_missing")
 #: 値を残す status（それ以外のセルは NaN）。
 _KEEP = ("ok", "gap_filled")
+_ANY_OTHERS = "any others"  # 参照表の「それ以外のクラス」の行（assignments の鍵）
 
 
 _PRIMARY_SUFFIXES = ((".arf2",), (".arf",), (".mztab", ".json"))
@@ -69,8 +70,8 @@ def _bindings(bindings) -> dict[str, int]:
             out[str(key)] = int(value)
         except (TypeError, ValueError):
             raise DomainError("QUANT_BAD_REQUEST",
-                              "bindings は {対象クラス: 内部標準の特徴 ID（整数）} です。",
-                              {"field": "bindings", "target_class": str(key)}) from None
+                              "bindings は {内部標準の名前: 特徴 ID（整数）} です（規則の対応指定は内部標準の名前が鍵）。",
+                              {"field": "bindings", "standard_name": str(key)}) from None
     return out
 
 
@@ -119,9 +120,12 @@ def _by_id(rows):
 
 def _preview_dict(rows, ref: ReferenceInput, sha: str, polarity: str, result: dict) -> dict:
     by_id = _by_id(rows)
-    any_others = set(result.get("any_others_classes") or ())
+    any_others = sorted(result.get("any_others_classes") or ())
     classes, grouped = [], {}
+    present = {c for c in result.get("target_class_by_feature") or () if c is not None}
     for cls, a in sorted(result["assignments"].items()):
+        if cls not in present:  # 参照表の全行が返るが、データセットに現れたクラスだけを扱う
+            continue
         if a["status"] == "ok":
             fid = str(a["feature_id"])
             std = by_id.get(fid)
@@ -129,7 +133,9 @@ def _preview_dict(rows, ref: ReferenceInput, sha: str, polarity: str, result: di
                 "target_class": cls, "standard_name": a["standard_name"], "feature_id": fid,
                 "adduct": a.get("standard_adduct"), "mz": std.mz if std else None,
                 "rt": std.rt if std else None, "coefficient": a["coefficient"],
-                "via_any_others": cls in any_others})
+                "via_any_others": cls.strip().casefold() == _ANY_OTHERS,
+                **({"dataset_classes": any_others}
+                   if cls.strip().casefold() == _ANY_OTHERS else {})})
         elif a["status"] in _UNRESOLVED:
             entry = grouped.setdefault((a["standard_name"], a["status"]), {
                 "standard_name": a["standard_name"], "target_classes": [], "status": a["status"],
@@ -166,17 +172,16 @@ def _used_classes(preview_dict: dict) -> list[dict]:
 
 
 def apply(ds, ref: ReferenceInput, bindings: dict | None, polarity: str, *,
-          folder: Path | None = None):
+          folder: Path | None = None, reuse: dict | None = None):
     """正規化して記録を書き、派生データセットを返す。`(new, info)`。
 
-    未解決の内部標準が残るときは何も書かず `(None, preview)`。
+    未解決の内部標準が残るときは何も書かず `(None, preview)`。`reuse` は既存の記録（復元用）:
+    記録を書かず、その `record_id` で派生を作る。
     """
     plugin, rows, text, sha, result = _compute(ds, ref, bindings)
     pv = _preview_dict(rows, ref, sha, polarity, result)
     if pv["status"] == "needs_input":
         return None, pv
-    folder = Path(folder) if folder is not None else analysis_folder(ds)
-
     n_f, n_s = len(rows), len(ds.sample_names)
     assignments = result["assignments"]
     index = {r.feature_id: i for i, r in enumerate(rows)}
@@ -199,19 +204,25 @@ def apply(ds, ref: ReferenceInput, bindings: dict | None, polarity: str, *,
     is_ids = [r.feature_id for r, role in zip(rows, result["roles"]) if role == "internal_standard"]
 
     reference = {"sha256": sha, "label": ref.label, "method": ref.method, "unit": result.get("unit")}
-    inputs = dict(ds.source_files)
-    if ref.path is not None:
-        inputs[reference_key(ref.label)] = ref.sha256
-    record = write_record(
-        folder, "normalize", inputs=inputs, parent_ids=_parent_ids(ds),
-        settings={"reference": reference, "rules": rules_settings(plugin), "polarity": polarity,
-                  "bindings": _bindings(bindings), "gap_fill": "computed"},
-        summary={"status_counts": dict(counts), "unit": result.get("unit"),
-                 "n_features": n_f, "n_samples": n_s, "internal_standard_ids": is_ids,
-                 "classes": _used_classes(pv)})
-    record_id = record["record_id"]
-    if ref.concentrations is not None:
-        atomic_write_bytes(record_dir(folder) / f"{record_id}.reference.csv", text.encode("utf-8"))
+    if reuse is not None:
+        record_id = reuse["record_id"]
+    else:
+        folder = Path(folder) if folder is not None else analysis_folder(ds)
+        inputs = dict(ds.source_files)
+        if ref.path is not None:
+            inputs[reference_key(ref.label)] = ref.sha256
+        record = write_record(
+            folder, "normalize", inputs=inputs, parent_ids=_parent_ids(ds),
+            settings={"reference": reference, "rules": rules_settings(plugin),
+                      "polarity": polarity, "bindings": _bindings(bindings),
+                      "gap_fill": "computed"},
+            summary={"status_counts": dict(counts), "unit": result.get("unit"),
+                     "n_features": n_f, "n_samples": n_s, "internal_standard_ids": is_ids,
+                     "classes": _used_classes(pv)})
+        record_id = record["record_id"]
+        if ref.concentrations is not None:
+            atomic_write_bytes(record_dir(folder) / f"{record_id}.reference.csv",
+                               text.encode("utf-8"))
     state = qderive.quant_state(
         normalized=True, method="internal_standard", unit=result.get("unit"),
         record_id=record_id, steps=["normalize"], skipped=[], internal_standard_ids=is_ids)
@@ -222,14 +233,20 @@ def apply(ds, ref: ReferenceInput, bindings: dict | None, polarity: str, *,
     return new, info
 
 
-def skip(ds, polarity: str, *, folder: Path | None = None):
-    """値を変えず、「正規化を飛ばした」記録と派生データセットを作る。規則は読まない。"""
+def skip(ds, polarity: str, *, folder: Path | None = None, reuse: dict | None = None):
+    """値を変えず、「正規化を飛ばした」記録と派生データセットを作る。規則は読まない。
+
+    `reuse` は既存の記録（復元用）: 記録を書かず、その `record_id` で派生を作る。
+    """
     _check_not_normalized(ds)
-    folder = Path(folder) if folder is not None else analysis_folder(ds)
-    record = write_record(
-        folder, "normalize", inputs=dict(ds.source_files), parent_ids=_parent_ids(ds),
-        settings={"reference": None, "rules": None, "polarity": polarity},
-        summary={"skipped": True}, skipped=True)
+    if reuse is not None:
+        record = reuse
+    else:
+        folder = Path(folder) if folder is not None else analysis_folder(ds)
+        record = write_record(
+            folder, "normalize", inputs=dict(ds.source_files), parent_ids=_parent_ids(ds),
+            settings={"reference": None, "rules": None, "polarity": polarity},
+            summary={"skipped": True}, skipped=True)
     state = qderive.quant_state(normalized=False, method=None, unit=None,
                                 record_id=record["record_id"], steps=[], skipped=["normalize"])
     new = qderive.derive(ds, matrix=ds.feature_matrix, detected=ds.detected_mask, state=state)

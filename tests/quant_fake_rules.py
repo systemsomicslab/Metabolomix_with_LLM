@@ -19,7 +19,7 @@ import io
 API_VERSION = {api_version}
 RULES_VERSION = "fake-rules-1"
 _ANY = "Any others"
-_ALIAS = {{"PCx": "PC", "TGx": "TG"}}  # class aliases (the real rules resolve aliases)
+_ALIAS = {{"Cer_NS": "Cer-NS", "Cer_AS": "Cer-AS"}}  # class aliases (the real rules resolve aliases)
 
 
 def _canon(cls):
@@ -45,7 +45,7 @@ def _table(reference_text):
     if not rows or not need <= set(rows[0]):
         raise FakeRuleError("reference table needs TargetClass,StandardName,Coefficient,Unit",
                             "reference_invalid")
-    return {{r["TargetClass"]: r for r in rows}}
+    return {{_canon(r["TargetClass"]): r for r in rows}}
 
 
 def normalize(features, n_samples, reference_text, method="cell_coefficient", bindings=None):
@@ -58,7 +58,7 @@ def normalize(features, n_samples, reference_text, method="cell_coefficient", bi
                                 {{"feature_id": f["feature_id"]}})
     roles = ["internal_standard" if f["name"] in standards else "target" for f in features]
     classes = sorted({{_canon(f["lipid_class"]) for f, r in zip(features, roles) if r == "target"}})
-    assignments, any_others = {{}}, []
+    assignments, any_others, key_of = {{}}, [], {{}}
     for cls in classes:
         row = table.get(cls)
         if row is None:
@@ -66,9 +66,11 @@ def normalize(features, n_samples, reference_text, method="cell_coefficient", bi
             if row is not None:
                 any_others.append(cls)
         if row is None:
-            assignments[cls] = {{"standard_name": None, "feature_id": None, "coefficient": None,
-                                "concentration": None, "standard_adduct": None, "unit": None,
-                                "status": "standard_missing", "candidates": []}}
+            key_of[cls] = None  # class_unmapped
+            continue
+        key = row["TargetClass"]
+        key_of[cls] = key
+        if key in assignments:
             continue
         cands = [f for f in features if f["name"] == row["StandardName"]]
         entry = {{"standard_name": row["StandardName"], "feature_id": None,
@@ -80,7 +82,7 @@ def normalize(features, n_samples, reference_text, method="cell_coefficient", bi
         if len(cands) == 1:
             chosen = cands[0]
         elif len(cands) > 1:
-            chosen = next((c for c in cands if c["feature_id"] == bindings.get(cls)), None)
+            chosen = next((c for c in cands if c["feature_id"] == bindings.get(row["StandardName"])), None)
             if chosen is None:
                 entry["status"] = "standard_ambiguous"
         else:
@@ -88,7 +90,7 @@ def normalize(features, n_samples, reference_text, method="cell_coefficient", bi
         if chosen is not None:
             entry["feature_id"] = chosen["feature_id"]
             entry["standard_adduct"] = chosen["adduct"]
-        assignments[cls] = entry
+        assignments[key] = entry
     by_id = {{f["feature_id"]: f for f in features}}
     values, statuses, fallback, by_feature = [], [], [], []
     for f, role in zip(features, roles):
@@ -98,10 +100,15 @@ def normalize(features, n_samples, reference_text, method="cell_coefficient", bi
             fallback.append(False)
             by_feature.append(None)
             continue
-        key = _canon(f["lipid_class"])
-        a = assignments[key]
+        cls = _canon(f["lipid_class"])
+        key = key_of[cls]
         by_feature.append(key)
-        fallback.append(key in any_others)
+        fallback.append(cls in any_others)
+        if key is None:
+            values.append([None] * n_samples)
+            statuses.append(["class_unmapped"] * n_samples)
+            continue
+        a = assignments[key]
         if a["status"] != "ok":
             values.append([None] * n_samples)
             statuses.append([a["status"]] * n_samples)
@@ -235,8 +242,17 @@ def select(features, adduct_text):
 '''
 
 
+#: conftest が `--quant-rules` 付きのときだけ置く本物の規則のフォルダ（既定は None＝偽を書く）。
+REAL_RULES_FOLDER: Path | None = None
+
+
 def write_fake_rules(tmp_path, api_version: int = 1, extra: str = "") -> Path:
-    """tmp に `msdial_rules/` を書いてそのフォルダを返す。`extra` は api.py の末尾に足す。"""
+    """tmp に `msdial_rules/` を書いてそのフォルダを返す。`extra` は api.py の末尾に足す。
+
+    `--quant-rules` 付きの定量スイートでは、書かずに本物の規則のフォルダを返す。
+    """
+    if REAL_RULES_FOLDER is not None and api_version == 1 and not extra:
+        return REAL_RULES_FOLDER
     folder = Path(tmp_path) / "msdial_rules"
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "__init__.py").write_text(_INIT, encoding="utf-8")

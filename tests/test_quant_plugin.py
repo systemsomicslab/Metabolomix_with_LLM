@@ -113,7 +113,7 @@ def test_fake_normalize(tmp_path, monkeypatch):
     out = plugin.call(p, "normalize", features=twin, n_samples=2, reference_text=REF)
     assert out["assignments"]["PC"]["status"] == "standard_ambiguous"
     out = plugin.call(p, "normalize", features=twin, n_samples=2, reference_text=REF,
-                      bindings={"PC": 6})
+                      bindings={"IS-A": 6})
     assert out["values"][2] == [10.0, 10.0]
     std = ("TargetClass\tStandardName\tStandardAdduct\nPC\tIS-A\t[M+H]+\n"
            "Any others\tIS-B\t[M+H]+\n")
