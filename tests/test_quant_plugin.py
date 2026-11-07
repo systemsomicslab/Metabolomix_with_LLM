@@ -115,9 +115,22 @@ def test_fake_normalize(tmp_path, monkeypatch):
     out = plugin.call(p, "normalize", features=twin, n_samples=2, reference_text=REF,
                       bindings={"PC": 6})
     assert out["values"][2] == [10.0, 10.0]
-    text = plugin.call(p, "coefficient_reference_text", reference_text=REF,
-                       concentrations={"IS-A": 2.0}, solvent_volume=10.0, cells_millions=4.0)
-    assert "IS-A,IS-A,5.0," in text
+    std = ("TargetClass\tStandardName\tStandardAdduct\nPC\tIS-A\t[M+H]+\n"
+           "Any others\tIS-B\t[M+H]+\n")
+    text = plugin.call(p, "coefficient_reference_text", reference_text=std,
+                       concentrations={"IS-A": 2.0, "IS-B": 1.0}, solvent_volume=10.0,
+                       cells_millions=4.0)
+    lines = text.splitlines()
+    assert lines[0] == "TargetClass,StandardName,Coefficient,Unit,StandardAdduct"
+    assert lines[1] == "PC,IS-A,5.0,pmol / 10^6 cells,[M+H]+"
+    assert lines[2] == "Any others,IS-B,2.5,pmol / 10^6 cells,[M+H]+"
+    out = plugin.call(p, "normalize", features=feats, n_samples=2, reference_text=text)
+    assert out["values"][2] == [10.0, None]  # 20/10*5; second sample IS height 0
+    assert out["values"][3][0] == 5.0  # 10/5*2.5 via Any others
+    with pytest.raises(DomainError) as e:
+        plugin.call(p, "coefficient_reference_text", reference_text=std,
+                    concentrations={"IS-A": 2.0}, solvent_volume=10.0, cells_millions=4.0)
+    assert e.value.details["rule_code"] == "concentration_missing"
 
 
 def test_fake_match_and_select(tmp_path, monkeypatch):
@@ -131,3 +144,23 @@ def test_fake_match_and_select(tmp_path, monkeypatch):
                       features=[_sel("a", "PC 34:1"), _sel("b", "Unknown"),
                                 _sel("c", "IS-A", "internal_standard")])
     assert [s["action"] for s in sel] == ["keep", "exclude", "exclude"]
+
+
+def test_fake_match_samples_with_mapping(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch, write_fake_rules(tmp_path))
+    p = plugin.load_rules()
+    rows = [{"mode": "pos", "source_sample": "a_pos", "sample_id": "S1", "group": "g", "sample_type": "x"},
+            {"mode": "pos", "source_sample": "b_pos", "sample_id": "S2", "group": "g", "sample_type": "x"},
+            {"mode": "neg", "source_sample": "zz", "sample_id": "S1", "group": "g", "sample_type": "x"},
+            {"mode": "neg", "source_sample": "yy", "sample_id": "S3", "group": "g", "sample_type": "x"}]
+    names = {"pos": ["b_pos", "a_pos"], "neg": ["zz", "yy"]}
+    m = plugin.call(p, "match_samples", names_by_mode=names, mapping_rows=rows)
+    assert m["rule"] == "mapping_csv"
+    assert m["ids_by_mode"] == {"pos": ["S1"], "neg": ["S1"]}
+    assert m["mismatched"] == {"pos": ["S2"], "neg": ["S3"]}
+    assert m["rows_by_mode"]["pos"]["a_pos"]["sample_id"] == "S1"
+    # the mapping resolves a pair the suffix rule cannot
+    assert plugin.call(p, "match_samples", names_by_mode=names)["ids_by_mode"]["neg"] == []
+    with pytest.raises(DomainError) as e:
+        plugin.call(p, "match_samples", names_by_mode={"pos": ["c_pos"]}, mapping_rows=rows)
+    assert e.value.details["rule_code"] == "mapping_invalid"

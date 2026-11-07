@@ -28,8 +28,14 @@ class FakeRuleError(ValueError):
         self.details = details or {{}}
 
 
+def _rows(text):
+    first = text.splitlines()[0] if text.strip() else ""
+    delim = "\t" if "\t" in first else ","
+    return list(csv.DictReader(io.StringIO(text), delimiter=delim))
+
+
 def _table(reference_text):
-    rows = list(csv.DictReader(io.StringIO(reference_text)))
+    rows = _rows(reference_text)
     need = {{"TargetClass", "StandardName", "Coefficient", "Unit"}}
     if not rows or not need <= set(rows[0]):
         raise FakeRuleError("reference table needs TargetClass,StandardName,Coefficient,Unit",
@@ -115,10 +121,20 @@ def normalize(features, n_samples, reference_text, method="cell_coefficient", bi
 
 def coefficient_reference_text(reference_text, concentrations, solvent_volume, cells_millions,
                                unit=None):
-    lines = ["TargetClass,StandardName,Coefficient,Unit"]
-    for name, conc in concentrations.items():
-        lines.append(f"{{name}},{{name}},{{conc * solvent_volume / cells_millions}},{{unit or 'u'}}")
-    return "\\n".join(lines) + "\\n"
+    rows = _rows(reference_text)
+    if not rows or not {{"TargetClass", "StandardName"}} <= set(rows[0]):
+        raise FakeRuleError("reference table needs TargetClass,StandardName", "reference_invalid")
+    out = io.StringIO()
+    w = csv.writer(out, lineterminator="\\n")
+    w.writerow(["TargetClass", "StandardName", "Coefficient", "Unit", "StandardAdduct"])
+    for r in rows:
+        name = r["StandardName"]
+        if name not in concentrations:
+            raise FakeRuleError(f"no concentration for {{name}}", "concentration_missing",
+                                {{"standard_name": name}})
+        w.writerow([r["TargetClass"], name, concentrations[name] * solvent_volume / cells_millions,
+                    unit or "pmol / 10^6 cells", r.get("StandardAdduct", "")])
+    return out.getvalue()
 
 
 def _strip(name):
@@ -129,14 +145,22 @@ def _strip(name):
 
 
 def match_samples(names_by_mode, mapping_rows=None):
-    ids = {{m: [_strip(n) for n in names] for m, names in names_by_mode.items()}}
-    common = set.intersection(*(set(v) for v in ids.values())) if ids else set()
-    rows = None
     if mapping_rows is not None:
-        by_id = {{r.get("id"): r for r in mapping_rows}}
-        rows = {{m: {{n: by_id[_strip(n)] for n in names if _strip(n) in by_id}}
-                for m, names in names_by_mode.items()}}
-    return {{"rule": "exact_or_polarity_suffix",
+        by_key = {{(r["mode"], r["source_sample"]): r for r in mapping_rows}}
+        ids, rows = {{}}, {{}}
+        for m, names in names_by_mode.items():
+            for n in names:
+                if (m, n) not in by_key:
+                    raise FakeRuleError(f"no mapping row for {{n}} ({{m}})", "mapping_invalid",
+                                        {{"mode": m, "source_sample": n}})
+            ids[m] = [by_key[(m, n)]["sample_id"] for n in names]
+            rows[m] = {{n: by_key[(m, n)] for n in names}}
+        rule = "mapping_csv"
+    else:
+        ids = {{m: [_strip(n) for n in names] for m, names in names_by_mode.items()}}
+        rows, rule = None, "exact_or_polarity_suffix"
+    common = set.intersection(*(set(v) for v in ids.values())) if ids else set()
+    return {{"rule": rule,
             "ids_by_mode": {{m: [i for i in v if i in common] for m, v in ids.items()}},
             "mismatched": {{m: [i for i in v if i not in common] for m, v in ids.items()}},
             "rows_by_mode": rows}}
