@@ -138,7 +138,6 @@ def _samples_table(ds, names: list[str]) -> list[SampleInfo]:
     meta = getattr(ds, "sample_meta", None) or {}
     by_name = {s.get("name"): s for s in msdial}
     display = list(getattr(ds, "sample_names", None) or [])
-    detected_roles = None
     out = []
     for i, name in enumerate(names):
         # 安定 ID を先に、次に表示名（sample_names[i]）で引く。ID ≠ 表示名でも取りこぼさない。
@@ -151,11 +150,13 @@ def _samples_table(ds, names: list[str]) -> list[SampleInfo]:
                 or next((r for k in keys if (r := _role(roles.get(k)))), None)
                 or _role(sm.get("role")))
         if role is None:
-            # どこにも役割が無い試料は名前から推定する（msdial/sample_factors と同じ規則）。
-            if detected_roles is None:
-                from metabolomix.analysis.preprocessing import detect_sample_roles
-                detected_roles = detect_sample_roles(list(names))
-            role = _role(detected_roles.get(name)) or "sample"
+            # どこにも役割が無い試料は表示名（無ければ ID）から推定する。MS-DIAL の Class ID
+            # （msdial_samples の group）があれば sample_factors と同じく class_ids として渡す。
+            label = keys[-1]
+            class_id = _str_or_none(ms.get("group"))
+            from metabolomix.analysis.preprocessing import detect_sample_roles
+            role = _role(detect_sample_roles(
+                [label], {label: class_id} if class_id else None).get(label)) or "sample"
         group = _str_or_none(row.get("group")) or _str_or_none(ms.get("group"))
         batch = (_str_or_none(row.get("batch")) or _str_or_none(ms.get("batch"))
                  or _str_or_none(sm.get("batch")))

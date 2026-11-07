@@ -98,8 +98,7 @@ def test_fallbacks_found_by_display_name_when_ids_differ():
     ds = _ds(sample_ids=["id1", "id2", "id3"], sample_names=["a", "b", "c"],
              sample_metadata_rows=[{}, {}, {}],
              roles={"a": "QC"}, sample_meta={"b": {"role": "blank", "batch": "Z", "run_order": 4}},
-             msdial_samples=[{"name": "c", "group": "G9"}, {"name": "x"}, {"name": "y"}][:0] or
-             [{"name": "a"}, {"name": "b"}, {"name": "c", "group": "G9"}])
+             msdial_samples=[{"name": "a"}, {"name": "b"}, {"name": "c", "group": "G9"}])
     s = D.from_dataset(ds).samples
     assert s[0].sample_id == "id1" and s[0].role == "qc"
     assert s[1].role == "blank" and s[1].batch == "Z" and s[1].injection_order == 4.0
@@ -109,3 +108,16 @@ def test_fallbacks_found_by_display_name_when_ids_differ():
 def test_include_follows_analysis_spec_truthiness():
     ds = _ds(sample_metadata_rows=[{"include": False}, {"include": "0"}, {}], sample_ids=["a", "b", "c"])
     assert [s.include for s in D.from_dataset(ds).samples] == [False, True, True]
+
+
+def test_role_inferred_from_display_names_when_ids_are_opaque():
+    ds = _ds(sample_ids=["s001", "s002", "s003"], sample_names=["QC_01", "Blank_1", "S01"],
+             sample_metadata_rows=[{}, {}, {}])
+    assert [s.role for s in D.from_dataset(ds).samples] == ["qc", "blank", "sample"]
+
+
+def test_role_inference_uses_msdial_class_id():
+    ds = _ds(sample_names=["x1", "x2", "x3"],
+             msdial_samples=[{"name": "x1", "group": "QC"}, {"name": "x2", "group": "Blank"},
+                             {"name": "x3", "group": "KO"}])
+    assert [s.role for s in D.from_dataset(ds).samples] == ["qc", "blank", "sample"]
