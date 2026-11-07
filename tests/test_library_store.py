@@ -595,19 +595,25 @@ def test_two_threads_opening_the_same_destination_build_it_once(library, monkeyp
         s.close()
 
 
-def test_rebuild_really_rereads_the_source_despite_the_in_memory_memo(library, monkeypatch):
-    """`rebuild=True` は sha256 の記憶（ディスクの索引もメモリの記憶も）を信じず、元ファイルを読み直す。"""
-    import builtins
+def test_rebuild_really_rereads_the_source_despite_the_in_memory_memo(library):
+    """`rebuild=True` は sha256 の記憶（ディスクの索引もメモリの記憶も）を信じない。
 
-    real = builtins.open
-    opened = []
+    記憶が当たる状態（同じ大きさ・同じ更新時刻）で中身だけを書き換え、rebuild が新しい中身の
+    sha256 を記録することを見る。記憶を信じる実装なら古い sha256 が返る。
+    """
+    import hashlib
+    import os
 
-    def counting(file, *args, **kwargs):
-        if Path(str(file)).resolve() == Path(library).resolve():
-            opened.append(file)
-        return real(file, *args, **kwargs)
-
-    store.open_store(library).close()
-    monkeypatch.setattr(builtins, "open", counting)
-    store.open_store(library, rebuild=True).close()
-    assert any(True for _ in opened), "rebuild が元ファイルを読み直していない"
+    path = Path(library)
+    store.open_store(path).close()  # 記憶を作る
+    stat = path.stat()
+    old = path.read_bytes()
+    new = old.replace(b"NAME: A", b"NAME: B", 1)
+    assert new != old and len(new) == len(old)
+    path.write_bytes(new)
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    s = store.open_store(path, rebuild=True)
+    try:
+        assert s.summary()["source_sha256"] == hashlib.sha256(new).hexdigest()
+    finally:
+        s.close()

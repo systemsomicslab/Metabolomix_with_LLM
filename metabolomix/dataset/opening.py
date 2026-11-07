@@ -149,8 +149,8 @@ def open_dataset(*, directory=None, mztab_path=None, job_path=None, pipeline_pat
 
 
 def _changed_during_load(started_ns: int, signature: tuple) -> bool:
-    """読み込みの開始後に更新された依存があるか（更新時刻が開始時刻より新しい）。"""
-    return any(mtime is not None and mtime > started_ns for _path, _size, mtime in signature)
+    """読み込みの開始後に更新された依存があるか（更新時刻が開始時刻以降）。"""
+    return any(mtime is not None and mtime >= started_ns for _path, _size, mtime in signature)
 
 
 #: 基のキャッシュのキーごとの「読み込み中」ロック。辞書は `_INFLIGHT_GUARD` で守る。
