@@ -303,6 +303,13 @@ def is_current(ds, result: dict, *, dataset_hash: str | None = None) -> bool:
     parents = prov.get("parent_ids") or []
     if parents and getattr(ds, "preprocess_id", None) not in parents:
         return False
+    if prov.get("kind") == "species_pca":
+        # 分子種の PCA は前処理済み行列を使わず群・除外を引数と試料の対応表から取るので、親の前処理では
+        # 古さが分からない。試料の情報（群・役割・除外。`metadata_revision`）が動いたら古い。
+        # キュレーションの判断の更新では古くしない（旧 arf_pca_species と同じ）。
+        recorded = prov.get("metadata_revision")
+        if recorded is not None and recorded != getattr(ds, "metadata_revision", 0):
+            return False
     if prov.get("kind") == "preprocess":
         return prov.get("result_id") == getattr(ds, "preprocess_id", None)
     if prov.get("kind") == "differential":

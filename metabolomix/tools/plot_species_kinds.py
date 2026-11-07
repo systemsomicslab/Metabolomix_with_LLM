@@ -270,6 +270,7 @@ def species_pca(ds, req) -> dict:
     provenance = result_state.new_provenance(
         ds, kind="species_pca", input_fingerprint=result_state.array_fingerprint(X),
         effective_parameters=settings, warnings=caveats)
+    provenance["metadata_revision"] = _revision(ds)     # `is_current` が試料の情報の更新を古さと読む
     result_id = provenance["result_id"]
     dropped = len(spots) - len(kept)
     payload = {

@@ -121,12 +121,13 @@ def _record(kind: str, payload: dict, *, title, caption: str, result_id=None, re
 
 # ---------- 結果の選び方（古い結果は描かない） ----------
 
-def _pick_result(ds, family: str, result_id: str | None) -> dict:
+def _pick_result(ds, family: str, result_id: str | None, *, also_kinds: tuple = ()) -> dict:
     """PCA（family="pca"）か差次的結果（"differential"）を 1 つに決める。
 
     `result_id` があれば `ds.results` から引き、現在のものでなければ `STALE_ANALYSIS_RESULT`
     （古い結果を現在のものとして描かない）。無ければ直近（`ds.last_pca` / `ds.last_differential`）で、
-    無ければ作り直すツールを案内する。
+    無ければ作り直すツールを案内する。`also_kinds` は `result_id` で名指しされたときに family のほかに
+    受ける来歴の kind（loadings が `species_pca` の結果を受ける）。
     """
     tool = "dataset_pca" if family == "pca" else "dataset_differential"
     if result_id is None:
@@ -142,7 +143,7 @@ def _pick_result(ds, family: str, result_id: str | None) -> dict:
     if result is None:
         raise _bad(f"result_id={result_id} の結果がありません。{tool} の戻り値の result_id を渡すか、"
                    "省いて直近の結果を使ってください。", result_id=result_id)
-    if (result.get("provenance") or {}).get("kind") != family:
+    if (result.get("provenance") or {}).get("kind") not in (family, *also_kinds):
         raise _bad(f"result_id={result_id} は{'PCA' if family == 'pca' else '差次的解析'}の結果ではありません"
                    f"（{tool} の result_id を渡してください）。", result_id=result_id)
     result_state.assert_current(ds, result)
@@ -207,9 +208,13 @@ def _loadings(ds, req: _Request) -> dict:
                                   or req.top_n < 0):
         raise _bad(f"top_n は 0 以上の整数を指定してください（0 は全特徴量。受け取った値: {req.top_n!r}）。")
     top_n = _DEFAULT_TOP_N if req.top_n is None else (None if req.top_n == 0 else req.top_n)
-    result = _pick_result(ds, "pca", req.result_id)
+    result = _pick_result(ds, "pca", req.result_id, also_kinds=("species_pca",))
     try:
-        features, r_ok = loadings_plot.dataset_features(ds, result)
+        if (result.get("provenance") or {}).get("kind") == "species_pca":
+            # 分子種 PCA: 特徴の行は結果が持つ（相関 r は autoscale した PCA で計算済み）
+            features, r_ok = result["loadings_rows"], True
+        else:
+            features, r_ok = loadings_plot.dataset_features(ds, result)
         payload = loadings_plot.build_loadings_payload(
             features, source="dataset", result_id=_result_id(result),
             explained_variance_ratio=result.get("explained_variance_ratio") or [], pcs=pcs,
@@ -468,7 +473,7 @@ def dataset_plot(
     kind と、その kind だけの引数（別の kind の引数を渡すと DATASET_BAD_REQUEST）:
       - `volcano`: 直近の 2 群の差次的結果（`dataset_differential`）。`result_id` で名指しもできる。
       - `pca`: 直近の `dataset_pca`（`result_id` で名指し）。`color_by="group"`（既定）/ `"batch"` / `"role"`。
-      - `loadings`: 同じ PCA のローディング（横棒、色は特徴のクラス＝`ontology`）。`pcs`（既定 [1, 2]、
+      - `loadings`: 同じ PCA のローディング（`result_id` に `species_pca` の結果も渡せる。横棒、色は特徴のクラス＝`ontology`）。`pcs`（既定 [1, 2]、
         1〜3 個）、`top_n`（主成分ごとに正負の上位 N。既定 15、0 は全特徴量で 60 まで）、
         `value="r"`（既定。特徴量と主成分スコアの相関）/ `"coefficient"`。
       - `eic`: `feature_id`（`dataset_feature_search` の ID）の試料別クロマトグラム。`file_ids` で試料を絞る
@@ -483,7 +488,7 @@ def dataset_plot(
         平均 ± SD。検定はしない（`dataset_differential`）。`detection_limit` は検出下限の破線（省略時は
         param ファイルの Minimum peak height）。
       - `species`: `items` を分子種（特徴）に展開し、1 分子種 1 パネル（1 回 40 まで）。`value="share"`（既定。
-        試料ごとの 値 ÷ 分母の合計 × 100。棒 = 群平均、ひげ = SD）/ `"intensity"`（log10 の平均 ± SD）。
+        試料ごとの 値 ÷ 分母の合計 × 100。棒 = 群平均、ひげ = SD）/ `"intensity"`（log10 の平均 ± SD。payload の `value` は形式を保つため `"height"`）。
         `share_basis` は割合の分母にする項目（省略時は `items`。当たらない部品があると分母が変わるので描かずに
         エラー）。`require_msms=True` で MS/MS の裏付けの無い分子種も（分母からも）除く。
       - `species_pca`: 選んだ分子種（`species` と同じ `items` `groups` `require_msms`）の PCA のスコア図。

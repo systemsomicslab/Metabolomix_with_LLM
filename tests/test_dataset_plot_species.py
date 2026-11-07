@@ -445,9 +445,44 @@ def test_species_pca_registers_a_result_and_a_figure(loaded):
     record = ds.figures["species_pca"]
     assert record["result_id"] == p["result_id"] and record["result"] is ds.results[p["result_id"]]
     assert record["metadata_revision"] == ds.metadata_revision
-    # PCA の結果として描く kind（pca / loadings）には使えない
+    # スコア図の kind（pca）には使えない。loadings は受ける
     err = _error(plot_tools.dataset_plot(kind="pca", result_id=p["result_id"]))
     assert err["code"] == "DATASET_BAD_REQUEST"
+
+
+def test_species_pca_loadings_are_drawable_and_savable(loaded, tmp_path):
+    p = _pca(items=["PG", "DGDG", "DG"], standard_samples=["std"])
+    rid = p["result_id"]
+    out = _p("loadings", result_id=rid, top_n=3)
+    assert out["plot_schema"] == "lipidmix.pca_loadings.v1" and out["result_id"] == rid
+    labels = {r["label"] for panel in out["panels"] for r in panel["rows"]}
+    assert labels <= {"PG 16:0_18:1", "PG 16:0_19:1", "DGDG 16:0_18:1", "DG 16:0_18:1"}
+    image = plot_tools.dataset_plot(kind="loadings", result_id=rid)
+    assert isinstance(image[1], Image)
+    assert "l-1_loadings.png" in reports.save_figure("loadings", "l-1", result_id=rid)
+    assert (tmp_path / "reports" / "figures" / "l-1_loadings.svg").is_file()
+    # result_id を省いた loadings は直近の dataset_pca を使う（分子種 PCA の結果は使わない）
+    err = _error(plot_tools.dataset_plot(kind="loadings"))
+    assert err["code"] == "missing_state"
+
+
+def test_species_pca_result_goes_stale_after_exclusion_or_metadata_change(loaded, tmp_path):
+    from metabolomix.tools.sample_tools import dataset_exclude
+
+    ds = loaded["ds"]
+    rid = _pca(items=["PG", "DGDG", "DG"], standard_samples=["std"])["result_id"]
+    plot_tools.dataset_plot(kind="loadings", result_id=rid)
+    body = json.loads(dataset_exclude(samples=[NAME["ko_3"]], reason="test"))
+    assert body.get("changed") is True, body
+    for call in (lambda: plot_tools.dataset_plot(kind="loadings", result_id=rid),
+                 lambda: reports.save_figure("loadings", "s-1", result_id=rid)):
+        assert _error(call())["code"] == "STALE_ANALYSIS_RESULT"
+    # キュレーションの判断の更新では古くしない
+    rid2 = _pca(items=["PG", "DGDG", "DG"], standard_samples=["std"])["result_id"]
+    _write_flags(loaded, [{"spot_id": 1, "flag": "wrong", "note": ""}])
+    assert _p("loadings", result_id=rid2)["result_id"] == rid2
+    ds.metadata_revision += 1
+    assert _error(plot_tools.dataset_plot(kind="loadings", result_id=rid2))["code"] == "STALE_ANALYSIS_RESULT"
 
 
 def test_species_pca_total_normalization_with_zero_total_names_the_sample(loaded):
