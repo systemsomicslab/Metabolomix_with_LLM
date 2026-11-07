@@ -33,6 +33,7 @@ TSV は書かない。2026-09-03 に「消費者のいない `feature-qc.tsv`」
 from __future__ import annotations
 
 import math
+import os
 from array import array
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -150,12 +151,9 @@ class ArfScan:
 #: HISTRY 2026-10-15 の実測（966 MB / 1.47M 行 ≒ 660 バイト）。行数の見積もりだけに使う。
 _ARF_UNCOMPRESSED_BYTES_PER_ROW = 660
 
-#: `scan_arf` が行 1 本あたりに追加で持つ大きさの見積もり（バイト）。ストリーミングなので行そのものは
-#: 持たず、セルごとに平たい `array`（最大 37 バイト = 2 つの定量値のとき）と、行列へ置くときの numpy の
-#: 複製（最終の行列は 25 バイト前後。置く間は両方が生きる）と添字の配列（16 バイト）で 90 バイト前後
-#: になり、2 経路目（解析フォルダのアダプタ）は `DatasetState` の行列・`per_sample_mz`（セルあたり
-#: 100 バイト）が続く。余裕を見て丸めた値で、下限ではなく「これを超えたら危うい」側に倒す。
-_SCAN_BYTES_PER_ROW = 300
+#: 行 1 本あたりに追加で持つ大きさの見積もり（バイト）。展開が終わったあとの区間で、セルごとの平たい
+#: `array`（最大 37 バイト）と行列へ置くときの複製・添字（合わせて数十バイト）が生きる分。
+_SCAN_BYTES_PER_ROW = 100
 
 #: 見積もりが空きメモリのこの割合を超えたら、読む前に断る。
 _AVAILABLE_FRACTION = 0.8
@@ -166,14 +164,21 @@ _TOO_LARGE_REMEDY = (
 
 
 def estimate_scan_bytes(path: str | Path) -> int:
-    """`scan_arf` が `.arf` を読むのに要るメモリの見積もり（バイト）。伸長しない。
+    """`scan_arf` が `.arf` を読むときのメモリのピークの見積もり（バイト）。伸長しない。
 
-    伸長後の大きさ（LZ4 ブロックの先頭の整数の和。`arf_reader.uncompressed_size`）に、
-    行あたりの固定費（`_SCAN_BYTES_PER_ROW`）× 見積もりの行数（伸長後の大きさ ÷ 660 バイト）を足す。
+    ピークは LZ4 ブロックの伸長中にある。python-lz4 の `lz4.block.decompress` は出力の 2 倍を
+    一時的に持ち（出力の大きさの 2 倍）、圧縮ペイロードの写しも同時に生きる（圧縮ファイルの大きさの
+    2 倍: Unpacker のバッファと ExtType の中身）。展開後の大きさは `arf_reader.uncompressed_size`
+    （ブロックごとの大きさを分けて得られないので、全ブロックの和を使う＝最大ブロックだけが倍になる
+    実際より少し多め）。展開後に生きるセルの配列は、行数（展開後の大きさ ÷ 660 バイト）×
+    `_SCAN_BYTES_PER_ROW` を足す。`DatasetState` は展開後のバッファが解放されてから組むので、
+    同時には生きない。
     """
     with open(path, "rb") as handle:
         raw = arf_reader.uncompressed_size(handle)
-    return raw + _SCAN_BYTES_PER_ROW * (raw // _ARF_UNCOMPRESSED_BYTES_PER_ROW)
+    compressed = os.path.getsize(path)
+    rows = raw // _ARF_UNCOMPRESSED_BYTES_PER_ROW
+    return 2 * raw + 2 * compressed + _SCAN_BYTES_PER_ROW * rows
 
 
 def _too_large(path: Path, estimated: int, available: int | None, message: str) -> DomainError:
@@ -181,6 +186,18 @@ def _too_large(path: Path, estimated: int, available: int | None, message: str) 
         "ARF_TOO_LARGE", message,
         {"path_name": path.name, "estimated_bytes": estimated, "available_bytes": available,
          "remedy": _TOO_LARGE_REMEDY})
+
+
+def too_large_error(path: Path, reason: str) -> DomainError:
+    """読んだあとの組み立て中に `MemoryError` が出たときの `ARF_TOO_LARGE`（見積もりは今の値で付ける）。"""
+    from metabolomix.core import handles
+
+    try:
+        estimated = estimate_scan_bytes(path)
+    except OSError:
+        estimated = 0
+    return _too_large(path, estimated, handles.available_memory_bytes(),
+                      f"{path.name}: {reason}（要るメモリの見積もり {estimated / 1024 ** 2:.0f} MB）。")
 
 
 def scan_arf(path: str | Path, *, measures: tuple[str, ...]) -> ArfScan:

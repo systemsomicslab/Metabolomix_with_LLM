@@ -178,7 +178,11 @@ def test_400_samples_stream_within_bound(tmp_path):
     path = write_arf(tmp_path / "big.arf", groups)
     del groups
     matrix_bytes = n_spots * n_samples * 9
-    bound = 40 * matrix_bytes
+    with open(path, "rb") as handle:
+        uncompressed = arf_reader.uncompressed_size(handle)
+    # 1 ブロックの伸長（python-lz4 は出力の 2 倍を持つ）と圧縮ペイロードの写しは避けられない。
+    # それに行列の 20 倍までなら許す（行ごとの dict を持つ実装は 150 MB 前後になり超える）。
+    bound = 2 * uncompressed + 2 * path.stat().st_size + 20 * matrix_bytes
 
     tracemalloc.start()
     try:
@@ -187,8 +191,9 @@ def test_400_samples_stream_within_bound(tmp_path):
     finally:
         tracemalloc.stop()
     print(f"\ntracemalloc peak = {peak} bytes, bound = {bound} bytes, "
-          f"matrix = {matrix_bytes} bytes, ratio = {peak / matrix_bytes:.1f}x")
+          f"matrix = {matrix_bytes} bytes, estimate = {evidence.estimate_scan_bytes(path)}")
     assert peak < bound
+    assert evidence.estimate_scan_bytes(path) >= peak  # 見積もりはピークを下回らない
 
     old = _old_expectation(path)
     assert scan.file_ids == old["file_ids"]
@@ -198,6 +203,23 @@ def test_400_samples_stream_within_bound(tmp_path):
     np.testing.assert_array_equal(scan.detected, old["detected"])
     np.testing.assert_array_equal(scan.per_sample_mz, old["mz"])
     np.testing.assert_array_equal(scan.msms_assigned, old["msms"])
+
+
+def test_memory_error_while_building_dataset_becomes_too_large(tmp_path, monkeypatch):
+    from metabolomix.dataset import msdial_adapter
+
+    _small_folder(tmp_path)
+
+    def failing(*args, **kwargs):
+        raise MemoryError()
+
+    monkeypatch.setattr(msdial_adapter, "load_spot_fields", failing)
+    with pytest.raises(DomainError) as exc:
+        load_msdial_folder(select_alignment(tmp_path))
+    assert exc.value.code == "ARF_TOO_LARGE"
+    details = exc.value.details
+    assert details["path_name"].endswith(".arf") and details["estimated_bytes"] > 0
+    assert "available_bytes" in details and "remedy" in details
 
 
 # ---------- 基のキャッシュの大きさ ----------

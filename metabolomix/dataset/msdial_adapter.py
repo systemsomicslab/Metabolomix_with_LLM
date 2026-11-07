@@ -209,6 +209,17 @@ def load_msdial_folder(selection: AlignmentSelection, *, measure: str = "peak_he
     scan = _usable_scan(scan, selection, cell_key)
     if scan is None:
         scan = evidence.scan_arf(selection.arf, measures=(cell_key,))
+    try:
+        return _build_dataset(selection, scan, measure, cell_key)
+    except MemoryError as exc:
+        # 読み取りのあと、行列・per_sample_mz（セルあたり約 100 バイト）を組む間に尽きた。
+        raise evidence.too_large_error(
+            Path(selection.arf), "DatasetState を組む間にメモリが尽きました") from exc
+
+
+def _build_dataset(selection: AlignmentSelection, scan: evidence.ArfScan, measure: str,
+                   cell_key: str) -> DatasetState:
+    """`scan`（`.arf` の読み取り結果）と `.arf2` ほかから `DatasetState` を組む。"""
     fields = load_spot_fields(selection.arf2)
     _check_alignment(scan, fields)
 
