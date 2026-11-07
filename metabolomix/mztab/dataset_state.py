@@ -265,6 +265,8 @@ class DatasetState:
         self.curation_flags: dict | None = None
         # load_notes: 読み込み時に分かった注記（.mddata が無い等）。
         self.load_notes: list[str] = []
+        # quant_state: 定量の工程（metabolomix/quant）が置く受け渡し。統計側は normalized / method / unit を読む。
+        self.quant_state: dict | None = None
 
 
 def _sha256(path: str | Path) -> str:
