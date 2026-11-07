@@ -77,15 +77,23 @@ def test_select_drops_excluded_and_other_roles():
 
 # --- ドリフト ---------------------------------------------------------------
 
-def _drift_study(*, b2_not_interspersed=False, quant=None, qc_step=3):
-    """2 バッチ × 16 注入。QC は qc_step ごと。B1 は上向き・B2 は下向きの線形ドリフトで水準も違う。"""
+def _drift_study(*, b2_not_interspersed=False, quant=None, qc_step=3, noisy=False):
+    """2 バッチ × 16 注入。QC は qc_step ごと。B1 は上向き・B2 は下向きの線形ドリフトで水準も違う。
+
+    noisy=True で 3 つ目の特徴（非線形のドリフト × 決まった揺れ）を足す。補正後の QC 中央値は
+    補正前の中央値と変わるので、水準合わせが補正前の中央値を使うと揃わない。
+    """
     rows, vals = [], []
     for batch, start, base, slope in (("B1", 1, 1000.0, 0.03), ("B2", 17, 3000.0, -0.02)):
         for o in range(start, start + 16):
             is_qc = (o - start) % qc_step == 0 and not (batch == "B2" and b2_not_interspersed)
             group = None if is_qc else ("G1" if o % 2 else "G2")
             rows.append((f"{batch}_{o}", "qc" if is_qc else "sample", group, batch, float(o), None))
-            vals.append([base * (1 + slope * (o - start)), 2 * base * (1 + slope * (o - start))])
+            t = o - start
+            row = [base * (1 + slope * t), 2 * base * (1 + slope * t)]
+            if noisy:
+                row.append(base * (1 + 0.004 * slope * t * t) * (1 + 0.15 * np.sin(1.3 * o)))
+            vals.append(row)
     if b2_not_interspersed:
         # QC を挟まない配置: B2 の QC を試料より前の注入順に置く
         for k in range(6):
@@ -94,21 +102,36 @@ def _drift_study(*, b2_not_interspersed=False, quant=None, qc_step=3):
     return _study(vals, rows, quant=quant)
 
 
+def _with_rows(study, extra):
+    """extra: ((sample_id, role, group, batch, order, subject), values) の列を足した写し。"""
+    rows = [(s.sample_id, s.role, s.group, s.batch, s.injection_order, s.subject_id) for s in study.samples]
+    rows += [r for r, _ in extra]
+    values = np.vstack([study.values] + [np.asarray(v, float)[None, :] for _, v in extra])
+    return _study(values, rows, quant=study.quant)
+
+
+def _raw_bio_log2(study):
+    keep = [i for i, s in enumerate(study.samples) if s.role == "sample"]
+    return np.log2(study.values[keep])
+
+
 def test_drift_is_corrected_per_batch_then_levels_aligned():
-    prep = P.preprocess(_drift_study(), {"filters": OFF_FILTERS, "normalize": {"method": "none"}})
+    prep = P.preprocess(_drift_study(noisy=True),
+                        {"filters": OFF_FILTERS, "normalize": {"method": "none"}})
     drift = _step(prep, "drift")
     assert drift["status"] == "applied" and drift["batches"] == ["B1", "B2"]
+    assert drift["corrected_features"] == 3 and drift["uncorrected_features"] == 0
     qc_batch = [i.split("_")[0] for i in prep.qc_ids]
     orders = np.array([float(i.split("_")[1]) for i in prep.qc_ids])
     medians = []
     for b in ("B1", "B2"):
         rows = [k for k, x in enumerate(qc_batch) if x == b]
-        for j in range(2):
+        for j in range(2):          # 線形のドリフトは局所線形の LOESS で消える
             y = prep.qc_log2[rows, j]
             assert abs(np.polyfit(orders[rows], y, 1)[0]) < 1e-9
-        medians.append(np.median(prep.qc_log2[rows], axis=0))
-    assert np.allclose(medians[0], medians[1])
-    # 生体試料も同じ水準へ（線形のドリフトは局所線形の LOESS で消える）
+        medians.append(np.median(2 ** prep.qc_log2[rows], axis=0))
+    # 補正後の QC 中央値で水準を合わせるので、非線形・揺れのある特徴でも中央値が揃う
+    assert medians[0] == pytest.approx(medians[1], rel=1e-9)
     assert np.nanstd(prep.log2[:, 0]) < 1e-9
 
 
@@ -129,13 +152,61 @@ def test_drift_skipped_reasons_no_order_and_too_few_qc():
     assert _step(prep, "drift")["reasons"] == ["too_few_qc:B1", "too_few_qc:B2"]
 
 
-def test_evenly_spaced_four_qc_fit_is_recorded_not_hidden():
-    """statsmodels の xvals 経路は等間隔の 4 QC（span 0.75 → 近傍 3）で内側の QC に NaN を返す。
-    その特徴はそのバッチで補正せず、数をバッチ別に記録する（補間で埋めない）。"""
-    prep = P.preprocess(_drift_study(qc_step=5), {"filters": OFF_FILTERS, "normalize": {"method": "none"}})
+def test_drift_requires_enough_qc_for_the_loess_span():
+    """span 0.75 × 4 QC → 近傍 3（statsmodels は等間隔の QC で NaN を返す）→ 全体を飛ばし、値は触らない。"""
+    cfg = {"filters": OFF_FILTERS, "normalize": {"method": "none"}}
+    study = _drift_study(qc_step=5)                     # 各バッチ 4 QC
+    prep = P.preprocess(study, cfg)
+    drift = _step(prep, "drift")
+    assert drift["status"] == "skipped"
+    assert drift["reasons"] == ["too_few_qc_for_span:B1", "too_few_qc_for_span:B2"]
+    assert np.array_equal(prep.log2, _raw_bio_log2(study))
+    with pytest.raises(DomainError) as e:
+        P.preprocess(study, {**cfg, "drift": {"mode": "on"}})
+    assert e.value.code == "PREPROCESS_PRECONDITION"
+    # 各バッチ 6 QC（近傍 4）なら補正する
+    prep6 = P.preprocess(_drift_study(qc_step=3), cfg)
+    assert _step(prep6, "drift")["status"] == "applied"
+    assert np.nanstd(prep6.log2[:, 0]) < 1e-9
+
+
+def test_drift_skipped_when_every_feature_fit_is_invalid_in_a_batch():
+    # B2 の下向きのドリフトを遠い注入順のブランクへ外挿すると当てはめが負になる
+    study = _with_rows(_drift_study(), [(("blank_far", "blank", None, "B2", 200.0, None), [10.0, 10.0])])
+    cfg = {"filters": OFF_FILTERS, "normalize": {"method": "none"}}
+    prep = P.preprocess(study, cfg)
+    drift = _step(prep, "drift")
+    assert drift["status"] == "skipped" and drift["reason"] == "fit_invalid:B2"
+    assert drift["uncorrected_fit_invalid"] == {"B1": 0, "B2": 2}
+    assert np.array_equal(prep.log2, _raw_bio_log2(study))
+    with pytest.raises(DomainError) as e:
+        P.preprocess(study, {**cfg, "drift": {"mode": "on"}})
+    assert e.value.code == "PREPROCESS_PRECONDITION"
+
+
+def test_feature_not_correctable_in_one_batch_is_left_uncorrected_everywhere():
+    study = _drift_study()
+    b2_qc = [i for i, s in enumerate(study.samples) if s.role == "qc" and s.batch == "B2"]
+    study.values[b2_qc[:3], 1] = np.nan                 # f1: B2 の有限 QC が 3 本 < 4
+    prep = P.preprocess(study, {"filters": OFF_FILTERS, "normalize": {"method": "none"}})
     drift = _step(prep, "drift")
     assert drift["status"] == "applied"
-    assert drift["uncorrected_fit_invalid"] == {"B1": 2, "B2": 2}
+    assert drift["corrected_features"] == 1 and drift["uncorrected_features"] == 1
+    assert drift["uncorrected_too_few_qc"] == {"B1": 0, "B2": 1}
+    assert np.array_equal(prep.log2[:, 1], _raw_bio_log2(study)[:, 1])   # B1 でも触らない
+    assert np.nanstd(prep.log2[:, 0]) < 1e-9
+
+
+def test_drift_records_rows_not_corrected():
+    study = _with_rows(_drift_study(), [
+        (("blank_nobatch", "blank", None, None, 5.5, None), [10.0, 10.0]),
+        (("blank_noorder", "blank", None, "B1", None, None), [10.0, 10.0])])
+    prep = P.preprocess(study, {"filters": OFF_FILTERS})
+    drift = _step(prep, "drift")
+    assert drift["status"] == "applied"
+    assert drift["rows_not_corrected"] == [
+        {"sample_id": "blank_nobatch", "reason": "batch_without_sample_or_qc"},
+        {"sample_id": "blank_noorder", "reason": "no_injection_order"}]
 
 
 def test_is_normalized_with_qc_and_auto_drift_returns_needs_input():
@@ -240,13 +311,17 @@ def test_detection_filter_by_group_keeps_presence_only_features():
     rows += [(f"b{i}", "sample", "G2", None, None, None) for i in range(4)]
     values = np.full((8, 3), 100.0)
     det = np.ones((8, 3), bool)
-    det[4:, 1] = False                       # f1: G1 だけで検出（G2 は gap-fill）→ 残す
+    det[3:, 1] = False                       # f1: G1 で 3/4・G2 で 0/4（全体 3/8）→ 群ごとなら残す
     det[:, 2] = [True, False, False, False, True, False, False, False]  # f2: 各群 1/4 → 落とす
     prep = P.preprocess(_study(values, rows, detected=det), {})
     filt = _step(prep, "filter")["filters"]["detection"]
     assert filt["status"] == "applied" and filt["dropped_ids"] == ["f2"]
     assert prep.feature_ids == ["f0", "f1"]
-    assert prep.detected_units[:, 1].tolist() == [True] * 4 + [False] * 4
+    assert prep.detected_units[:, 1].tolist() == [True] * 3 + [False] * 5
+    # 全体で見ると f1 は 3/8 < 0.5 で落ちる
+    prep_all = P.preprocess(_study(values, rows, detected=det),
+                            {"filters": {"detection": {"by": "all", "min_rate": 0.5}}})
+    assert _step(prep_all, "filter")["filters"]["detection"]["dropped_ids"] == ["f1", "f2"]
     # detected が無ければ飛ばす
     prep2 = P.preprocess(_study(values, rows), {})
     assert _step(prep2, "filter")["filters"]["detection"]["reason"] == "no_detected_mask"
@@ -297,6 +372,14 @@ def test_subject_inconsistent_and_mixed_source():
     rows[1] = ("i2", "sample", "G1", None, None, "S1")
     prep = P.preprocess(_study(np.ones((3, 1)), rows), {"filters": OFF_FILTERS})
     assert prep.subject_source == "mixed" and [u.unit_id for u in prep.units] == ["S1", "i3"]
+
+
+def test_unit_id_collision_between_subject_and_injection_is_rejected():
+    rows = [("i1", "sample", "G1", None, None, "X"), ("i2", "sample", "G1", None, None, "X"),
+            ("X", "sample", "G1", None, None, None), ("i4", "sample", "G2", None, None, None)]
+    with pytest.raises(DomainError) as e:
+        P.preprocess(_study(np.ones((4, 1)), rows), {"filters": OFF_FILTERS})
+    assert e.value.code == "SUBJECT_INCONSISTENT" and e.value.details["unit_id"] == "X"
 
 
 def test_injection_source_reports_replicate_name_warnings():

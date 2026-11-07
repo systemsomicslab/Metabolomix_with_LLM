@@ -189,35 +189,54 @@ def _batch_key(s) -> str:
     return s.batch if s.batch is not None else _NO_BATCH
 
 
-def _drift_eligibility(samples, min_qc: int) -> list[str]:
+#: LOESS の近傍の最小数。statsmodels は近傍数を int(frac·n) で決め、最も遠い近傍の重みは 0。
+#: 近傍が 3 だと等間隔の QC で等距離の 2 点がともに重み 0 になり、xvals 経路の当てはめが NaN になる。
+_MIN_LOESS_NEIGHBOURS = 4
+
+
+def _neighbours(span: float, n: int) -> int:
+    return int(span * n + 1e-10)    # statsmodels の lowess と同じ数え方
+
+
+def _drift_batches(samples) -> list[str]:
+    return sorted({_batch_key(s) for s in samples if s.role in ("sample", "qc")})
+
+
+def _drift_eligibility(samples, cfg: dict) -> list[str]:
     """補正できない理由（空なら全バッチで補正できる）。plan §15: 1 つでも欠ければ全体を飛ばす。"""
     if not any(s.role == "qc" for s in samples):
         return ["no_qc"]
     if any(s.injection_order is None for s in samples if s.role in ("sample", "qc")):
         return ["no_injection_order"]
     reasons = []
-    for b in sorted({_batch_key(s) for s in samples if s.role in ("sample", "qc")}):
+    for b in _drift_batches(samples):
         qc = [s.injection_order for s in samples if s.role == "qc" and _batch_key(s) == b]
         bio = [s.injection_order for s in samples if s.role == "sample" and _batch_key(s) == b]
-        if len(qc) < min_qc:
+        if len(qc) < cfg["min_qc_per_batch"]:
             reasons.append(f"too_few_qc:{b}")
+        elif _neighbours(cfg["span"], len(qc)) < _MIN_LOESS_NEIGHBOURS:
+            reasons.append(f"too_few_qc_for_span:{b}")
         elif bio and not (min(qc) <= min(bio) and max(qc) >= max(bio)):
             reasons.append(f"qc_not_interspersed:{b}")
     return reasons
 
 
 def _drift(values: np.ndarray, samples, cfg: dict) -> dict:
-    """バッチごとの LOESS（生の尺度）→ 特徴ごとのバッチ水準合わせ。values を書き換える。"""
+    """バッチごとの LOESS（生の尺度）→ 特徴ごとのバッチ水準合わせ。
+
+    全バッチで補正できた特徴だけを補正し（一部のバッチだけの補正はしない）、水準もその特徴だけ
+    合わせる。補正できた特徴が 1 つも無いバッチがあれば全体を飛ばす。成功したときだけ values を書き換える。
+    """
     from statsmodels.nonparametric.smoothers_lowess import lowess
 
     span, min_qc = cfg["span"], cfg["min_qc_per_batch"]
-    batches = sorted({_batch_key(s) for s in samples if s.role in ("sample", "qc")})
+    batches = _drift_batches(samples)
     n_feat = values.shape[1]
-    corrected = {b: np.zeros(n_feat, dtype=bool) for b in batches}
+    work = values.copy()
+    corrected = np.ones(n_feat, dtype=bool)
     too_few = {b: 0 for b in batches}
     fit_invalid = {b: 0 for b in batches}
-    rows_of, qc_of = {}, {}
-    no_order = [i for i, s in enumerate(samples) if s.injection_order is None]
+    rows_of, qc_of, empty = {}, {}, []
     for b in batches:
         rows = np.array([i for i, s in enumerate(samples)
                          if _batch_key(s) == b and s.injection_order is not None], dtype=int)
@@ -225,33 +244,45 @@ def _drift(values: np.ndarray, samples, cfg: dict) -> dict:
         rows_of[b], qc_of[b] = rows, qc
         x_all = np.array([samples[i].injection_order for i in rows], dtype=float)
         x_qc = np.array([samples[i].injection_order for i in qc], dtype=float)
+        in_batch = np.zeros(n_feat, dtype=bool)
         for j in range(n_feat):
             y = _positive(values[qc, j])
             ok = np.isfinite(y)
-            if ok.sum() < min_qc:
+            if ok.sum() < min_qc or _neighbours(span, int(ok.sum())) < _MIN_LOESS_NEIGHBOURS:
                 too_few[b] += 1
                 continue
             fit = lowess(y[ok], x_qc[ok], frac=span, it=0, delta=0.0, xvals=x_all)
             if not np.all(np.isfinite(fit)) or np.any(fit <= 0):
                 fit_invalid[b] += 1
                 continue
-            values[rows, j] = values[rows, j] / fit * float(np.median(y[ok]))
-            corrected[b][j] = True
-    # 水準合わせ: 全 QC の中央値 / そのバッチの QC 中央値（そのバッチで補正した特徴だけ）
+            work[rows, j] = values[rows, j] / fit * float(np.median(y[ok]))
+            in_batch[j] = True
+        if not in_batch.any():
+            empty.append(f"fit_invalid:{b}" if fit_invalid[b] else f"no_correctable_feature:{b}")
+        corrected &= in_batch
+    record = {"step": "drift", "method": "loess", "span": span, "batches": batches,
+              "uncorrected_too_few_qc": too_few, "uncorrected_fit_invalid": fit_invalid}
+    if empty:
+        return {**record, "status": "skipped", "reason": empty[0], "reasons": empty}
+    # 一部のバッチでしか補正できなかった特徴は、どのバッチでも補正しない
+    cols = np.nonzero(corrected)[0]
+    out = values.copy()
+    out[:, cols] = work[:, cols]
+    # 水準合わせ: 補正後の全 QC の中央値 / そのバッチの補正後の QC 中央値
     all_qc = np.concatenate([qc_of[b] for b in batches])
-    global_med = _nanmedian(_positive(values[all_qc]))
-    level_skipped = 0
+    global_med = _nanmedian(_positive(out[np.ix_(all_qc, cols)]))
     for b in batches:
         with np.errstate(all="ignore"):
-            factor = global_med / _nanmedian(_positive(values[qc_of[b]]))
-        good = corrected[b] & np.isfinite(factor) & (factor > 0)
-        level_skipped += int((corrected[b] & ~good).sum())
-        rows = rows_of[b]
-        values[np.ix_(rows, np.nonzero(good)[0])] *= factor[good]
-    return {"step": "drift", "status": "applied", "method": "loess", "span": span,
-            "batches": batches, "uncorrected_too_few_qc": too_few,
-            "uncorrected_fit_invalid": fit_invalid, "level_alignment_skipped": level_skipped,
-            "rows_without_order": [samples[i].sample_id for i in no_order]}
+            factor = global_med / _nanmedian(_positive(out[np.ix_(qc_of[b], cols)]))
+        out[np.ix_(rows_of[b], cols)] *= factor
+    values[:] = out
+    done = {i for b in batches for i in rows_of[b]}
+    not_corrected = [{"sample_id": s.sample_id,
+                      "reason": "no_injection_order" if s.injection_order is None
+                      else "batch_without_sample_or_qc"}
+                     for i, s in enumerate(samples) if i not in done]
+    return {**record, "status": "applied", "corrected_features": int(len(cols)),
+            "uncorrected_features": int(n_feat - len(cols)), "rows_not_corrected": not_corrected}
 
 
 _NEEDS_DRIFT_REASON = (
@@ -269,14 +300,14 @@ def _drift_step(values, samples, cfg, quant) -> dict | NeedsInput:
         return NeedsInput(field="preprocess.drift.mode", reason=_NEEDS_DRIFT_REASON, options=[
             {"value": "on", "label": "QC の LOESS でドリフト補正する（換算済みの値に重ねる）"},
             {"value": "off", "label": "ドリフト補正をしない（内部標準の換算だけに任せる）"}])
-    reasons = _drift_eligibility(samples, cfg["min_qc_per_batch"])
-    if reasons:
-        if mode == "on":
-            raise DomainError("PREPROCESS_PRECONDITION",
-                              f"drift.mode=on だがドリフト補正の条件を満たさない: {reasons}",
-                              {"reasons": reasons})
-        return {"step": "drift", "status": "skipped", "reason": reasons[0], "reasons": reasons}
-    return _drift(values, samples, cfg)
+    reasons = _drift_eligibility(samples, cfg)
+    step = ({"step": "drift", "status": "skipped", "reason": reasons[0], "reasons": reasons}
+            if reasons else _drift(values, samples, cfg))
+    if step["status"] == "skipped" and mode == "on":
+        raise DomainError("PREPROCESS_PRECONDITION",
+                          f"drift.mode=on だがドリフト補正の条件を満たさない: {step['reasons']}",
+                          {"reasons": step["reasons"]})
+    return step
 
 
 # --- 3. 品質の足切り ---------------------------------------------------------
@@ -439,6 +470,14 @@ def _collapse(log2, det, samples, enabled: bool):
         key = ("s", s.subject_id) if enabled and s.subject_id is not None else ("i", s.sample_id)
         groups.setdefault(key, []).append(k)
     units = [_unit_of([samples[k] for k in idx], enabled) for idx in groups.values()]
+    seen: dict[str, UnitInfo] = {}
+    for u in units:
+        if u.unit_id in seen:
+            raise DomainError("SUBJECT_INCONSISTENT",
+                              f"個体 ID {u.unit_id} が別の単位の ID と衝突する（subject_id と試料 ID が同じ）",
+                              {"unit_id": u.unit_id,
+                               "samples": seen[u.unit_id].sample_ids + u.sample_ids})
+        seen[u.unit_id] = u
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         out = np.vstack([np.nanmean(log2[idx], axis=0) if len(idx) > 1 else log2[idx[0]]
