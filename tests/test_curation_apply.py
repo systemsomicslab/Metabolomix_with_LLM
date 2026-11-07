@@ -218,3 +218,25 @@ def test_arf2_not_guessed_when_mz_differs(tmp_path):
     mztab.write_text("", encoding="utf-8")
     assert apply.arf2_for_mztab(mztab, feature_mz=[510.1, 620.2, 730.3]) is None
     assert apply.arf2_for_mztab(mztab, feature_mz=[500.1, 600.2]) is None  # 数が違う
+
+
+def test_spot_catalog_in_another_folder_is_found_via_extra_candidates(tmp_path):
+    out, elsewhere = tmp_path / "msdial", tmp_path / "other"
+    out.mkdir(); elsewhere.mkdir()
+    arf2 = _arf2_with_mz(elsewhere / "AlignmentResult_2026_01_01.arf2", [500.1, 600.2, 700.3])
+    mztab = out / "Height_x.mzTab"
+    mztab.write_text("", encoding="utf-8")
+    mz = [500.1, 600.2, 700.3]
+    assert apply.arf2_for_mztab(mztab, feature_mz=mz) is None
+    assert apply.arf2_for_mztab(mztab, feature_mz=mz, extra_candidates=[arf2]) == arf2
+    # 語幹が名前にあれば、m/z が無くても extra の候補を語幹で見つける
+    stem_mztab = out / "Height_AlignmentResult_2026_01_01_x.mzTab"
+    assert apply.arf2_for_mztab(stem_mztab, extra_candidates=[arf2]) == arf2
+
+
+def test_malformed_arf2_is_skipped_without_crashing(tmp_path):
+    (tmp_path / "broken.arf2").write_bytes(b"not an arf2 at all")
+    good = _arf2_with_mz(tmp_path / "AlignmentResult_2026_01_01.arf2", [500.1, 600.2, 700.3])
+    mztab = tmp_path / "Height_x.mzTab"
+    mztab.write_text("", encoding="utf-8")
+    assert apply.arf2_for_mztab(mztab, feature_mz=[500.1, 600.2, 700.3]) == good
