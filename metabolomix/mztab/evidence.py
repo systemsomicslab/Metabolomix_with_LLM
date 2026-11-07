@@ -40,6 +40,7 @@ from pathlib import Path
 import numpy as np
 
 from metabolomix.arf import reader as arf_reader
+from metabolomix.core.atomic_io import DomainError
 
 #: m/z 一致の許容。`.arf` から組むスポットの m/z は「検出セルのうち高さ最大のものの m/z」
 #: （`spot_representative_mz`。上流の `MassCenter` の定義）。mzTab-M は同じスポットの値を
@@ -145,13 +146,74 @@ class ArfScan:
         return len(self.spot_mz)
 
 
+#: 伸長後の `.arf` の 1 行（アラインされた 1 試料のピーク）の平均の大きさ（バイト）。
+#: HISTRY 2026-10-15 の実測（966 MB / 1.47M 行 ≒ 660 バイト）。行数の見積もりだけに使う。
+_ARF_UNCOMPRESSED_BYTES_PER_ROW = 660
+
+#: `scan_arf` が行 1 本あたりに追加で持つ大きさの見積もり（バイト）。ストリーミングなので行そのものは
+#: 持たず、セルごとに平たい `array`（最大 37 バイト = 2 つの定量値のとき）と、行列へ置くときの numpy の
+#: 複製（最終の行列は 25 バイト前後。置く間は両方が生きる）と添字の配列（16 バイト）で 90 バイト前後
+#: になり、2 経路目（解析フォルダのアダプタ）は `DatasetState` の行列・`per_sample_mz`（セルあたり
+#: 100 バイト）が続く。余裕を見て丸めた値で、下限ではなく「これを超えたら危うい」側に倒す。
+_SCAN_BYTES_PER_ROW = 300
+
+#: 見積もりが空きメモリのこの割合を超えたら、読む前に断る。
+_AVAILABLE_FRACTION = 0.8
+
+_TOO_LARGE_REMEDY = (
+    "試料を分けてアラインメントし直す、メモリの多い機械で読む、または mzTab-M のアダプタ"
+    "（source=\"mztab\"）で読む（値は読めるが、検出状態〔gap-fill〕は付かない）。")
+
+
+def estimate_scan_bytes(path: str | Path) -> int:
+    """`scan_arf` が `.arf` を読むのに要るメモリの見積もり（バイト）。伸長しない。
+
+    伸長後の大きさ（LZ4 ブロックの先頭の整数の和。`arf_reader.uncompressed_size`）に、
+    行あたりの固定費（`_SCAN_BYTES_PER_ROW`）× 見積もりの行数（伸長後の大きさ ÷ 660 バイト）を足す。
+    """
+    with open(path, "rb") as handle:
+        raw = arf_reader.uncompressed_size(handle)
+    return raw + _SCAN_BYTES_PER_ROW * (raw // _ARF_UNCOMPRESSED_BYTES_PER_ROW)
+
+
+def _too_large(path: Path, estimated: int, available: int | None, message: str) -> DomainError:
+    return DomainError(
+        "ARF_TOO_LARGE", message,
+        {"path_name": path.name, "estimated_bytes": estimated, "available_bytes": available,
+         "remedy": _TOO_LARGE_REMEDY})
+
+
 def scan_arf(path: str | Path, *, measures: tuple[str, ...]) -> ArfScan:
     """`.arf` を 1 回だけストリーミングで読み、`ArfScan` を作る。
 
-    行から `arf_reader.peak_field` で直接取り、セルごとの dict（`alignment_feature_row`）を
-    作らない。途中は列の数が決まらないので、セルを平たい配列に貯めてから最後に行列へ置く。
+    読む前に伸長後の大きさから要るメモリを見積もり（`estimate_scan_bytes`）、空きの物理メモリの
+    80% を超えるなら `ARF_TOO_LARGE`（`DomainError`）で断る。読んでいる途中の `MemoryError`
+    （`ArfMemoryError` を含む）も同じコードにする。空きが分からないとき（None）は断らない。
     """
+    from metabolomix.core import handles
+
     path = Path(path)
+    estimated = estimate_scan_bytes(path)
+    available = handles.available_memory_bytes()
+    if available is not None and estimated > _AVAILABLE_FRACTION * available:
+        raise _too_large(
+            path, estimated, available,
+            f"{path.name} は大きすぎて読めません（要るメモリの見積もり {estimated / 1024 ** 2:.0f} MB、"
+            f"空き {available / 1024 ** 2:.0f} MB）。")
+    try:
+        return _scan_arf(path, measures=measures)
+    except MemoryError as exc:
+        raise _too_large(
+            path, estimated, available,
+            f"{path.name} の読み込み中にメモリが尽きました"
+            f"（要るメモリの見積もり {estimated / 1024 ** 2:.0f} MB）。") from exc
+
+
+def _scan_arf(path: Path, *, measures: tuple[str, ...]) -> ArfScan:
+    """`scan_arf` の本体（行から `arf_reader.peak_field` で直接取り、セルごとの dict を作らない）。
+
+    途中は列の数が決まらないので、セルを平たい配列に貯めてから最後に行列へ置く。
+    """
     field_of = arf_reader.peak_field
     spot_mz: list = []
     msms = array("b")
@@ -453,6 +515,8 @@ def _scan_and_join(arf_path: str | Path, *, feature_mz: list[float | None],
     """`.arf` を 1 回読み（`scan_arf`）、接合を確かめる。(封筒, 読めたなら ArfScan)。"""
     try:
         scan = scan_arf(arf_path, measures=measures)
+    except DomainError:                           # ARF_TOO_LARGE は「壊れている」ではないので包まない
+        raise
     except Exception as exc:                      # noqa: BLE001 - 破損/別形式を包む
         return {"status": "rejected", "reason": "arf_unreadable",
                 "detail": {"path": str(arf_path), "error": str(exc)}}, None
@@ -536,6 +600,7 @@ def matching_arfs(candidates: list[Path], *, feature_mz: list[float | None],
     passed: list[Path] = []
     rejected: dict[str, str] = {}
     first: ArfScan | None = None
+    scan: ArfScan | None = None
     for candidate in candidates:
         result, scan = _scan_and_join(candidate, feature_mz=feature_mz,
                                       sample_names=sample_names, measures=measures)
@@ -545,6 +610,7 @@ def matching_arfs(candidates: list[Path], *, feature_mz: list[float | None],
                 first = scan
         else:
             rejected[Path(candidate).name] = result.get("reason", "unknown")
+        scan = None   # 次の候補を読む間、却下した（または 2 本目以降の）読み取り結果を生かさない
     return passed, rejected, first
 
 
@@ -557,8 +623,16 @@ def attach_to_dataset(ds, mztab_path: str | Path) -> None:
     candidates = arf_candidates(mztab_path, ds.artifact_paths)
     last = None
     for candidate in candidates:
-        last = load_arf_evidence(
-            candidate, feature_mz=feature_mz, sample_names=ds.sample_names)
+        try:
+            last = load_arf_evidence(
+                candidate, feature_mz=feature_mz, sample_names=ds.sample_names)
+        except DomainError as exc:
+            if exc.code != "ARF_TOO_LARGE":
+                raise
+            # 大きすぎて読めない。mzTab-M の値は読めているので、読めない `.arf` の理由と規模を残して進む
+            # （「壊れている」の arf_unreadable とは分ける）。
+            last = {"status": "rejected", "reason": "arf_too_large",
+                    "detail": {"path": str(candidate), **exc.details}}
         if last.get("status") == "ok":
             break
     # どの .arf と照合したかを必ず残す。これが無いと、棄却されたときに

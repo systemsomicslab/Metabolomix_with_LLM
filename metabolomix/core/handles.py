@@ -33,6 +33,10 @@ from metabolomix.core.atomic_io import DomainError
 
 __all__ = [
     "DEFAULT_MAX_HANDLES",
+    "MAX_BASES",
+    "MAX_BASE_BYTES",
+    "available_memory_bytes",
+    "estimate_state_bytes",
     "DatasetHandle",
     "HandleRegistry",
     "MAX_HANDLES_ENV",
@@ -44,8 +48,75 @@ MAX_HANDLES_ENV = "LIPIDMIX_MAX_DATASET_HANDLES"
 DEFAULT_MAX_HANDLES = 8
 #: 読み込み済みの基を何本まで覚えておくか（LRU）。mzTab-M の基は 1 本数十 MB 程度だが、解析フォルダの
 #: 大きな基はそれでは済まない（`per_sample_mz` だけで特徴 × 試料の数百万要素。`dataset_load` は
-#: 基と開くたびの複製を持つ）。大きさを見た上限は B-2 で入れる（ここは本数だけ）。
+#: 基と開くたびの複製を持つ）。本数の上限がこれで、大きさの上限は `MAX_BASE_BYTES`（両方で追い出す）。
 MAX_BASES = 4
+#: 覚えておく基の見積もりの合計の上限（バイト。`estimate_state_bytes` の和）。1 つでこれを超える基は
+#: キャッシュしない（毎回読み直す）。ハンドルの複製は基と別に持つので、実メモリはこの数倍になりうる。
+MAX_BASE_BYTES = 2 * 1024 ** 3
+
+#: `per_sample_mz` の 1 要素（試料名 → m/z の dict の 1 項目）と `feature_metadata` の 1 件の
+#: 見積もりの大きさ（バイト。CPython の dict と float / 小さな dict の実測の桁）。
+_BYTES_PER_MZ_CELL = 100
+_BYTES_PER_FEATURE_META = 1500
+
+
+def available_memory_bytes() -> int | None:
+    """今、使える物理メモリ（バイト）。取れなければ None（呼び出し側は「分からない」として進む）。
+
+    Windows は `GlobalMemoryStatusEx` の `ullAvailPhys`、POSIX は `SC_AVPHYS_PAGES × SC_PAGE_SIZE`。
+    """
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class _MemoryStatus(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            status = _MemoryStatus()
+            status.dwLength = ctypes.sizeof(_MemoryStatus)
+            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return None
+            value = int(status.ullAvailPhys)
+        else:
+            value = int(os.sysconf("SC_AVPHYS_PAGES")) * int(os.sysconf("SC_PAGE_SIZE"))
+    except (AttributeError, OSError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _array_bytes(value) -> int:
+    """配列（と、配列を値に持つ dict / list）の `nbytes` の和。"""
+    nbytes = getattr(value, "nbytes", None)
+    if isinstance(nbytes, int):
+        return nbytes
+    if isinstance(value, dict):
+        return sum(_array_bytes(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return sum(_array_bytes(v) for v in value)
+    return 0
+
+
+def estimate_state_bytes(ds) -> int:
+    """`DatasetState` が抱える大きさの見積もり（バイト）。
+
+    行列（`feature_matrix` `detected_mask` `pp_matrix` と `analysis_matrices` の配列）の `nbytes` に、
+    検出された全セルの m/z（`per_sample_mz` の要素数 × 100）と特徴のメタデータ（件数 × 1500）を足す。
+    基のキャッシュの上限の判定だけに使う概算で、他の入れ物（同定の候補など）は数えない。
+    """
+    total = sum(_array_bytes(getattr(ds, name, None))
+                for name in ("feature_matrix", "detected_mask", "pp_matrix", "analysis_matrices"))
+    per_sample_mz = getattr(ds, "per_sample_mz", None) or {}
+    total += sum(len(cells) for cells in per_sample_mz.values()) * _BYTES_PER_MZ_CELL
+    total += len(getattr(ds, "feature_metadata", None) or {}) * _BYTES_PER_FEATURE_META
+    return total
 
 
 def max_handles() -> int:
@@ -91,6 +162,7 @@ class HandleRegistry:
         self._lock = threading.Lock()
         self._handles: dict[str, DatasetHandle] = {}
         self._bases: OrderedDict = OrderedDict()
+        self._base_sizes: dict[str, int] = {}  # key -> `estimate_state_bytes`（置いた時点）
         self._seq = itertools.count(1)
 
     def _open_ids(self) -> list[str]:
@@ -166,11 +238,22 @@ class HandleRegistry:
             return entry
 
     def put_base(self, key: str, dataset, signature) -> None:
+        """基を覚える。件数（`MAX_BASES`）と見積もりの合計（`MAX_BASE_BYTES`）の両方で LRU を追い出す。
+
+        1 つで `MAX_BASE_BYTES` を超える基は入れない（同じキーの古い基は捨てる。既存の他の基は残す）。
+        """
+        size = estimate_state_bytes(dataset)
         with self._lock:
+            self._bases.pop(key, None)
+            self._base_sizes.pop(key, None)
+            if size > MAX_BASE_BYTES:
+                return
             self._bases[key] = (dataset, signature)
-            self._bases.move_to_end(key)
-            while len(self._bases) > MAX_BASES:
-                self._bases.popitem(last=False)
+            self._base_sizes[key] = size
+            while len(self._bases) > MAX_BASES or (
+                    len(self._bases) > 1 and sum(self._base_sizes.values()) > MAX_BASE_BYTES):
+                evicted, _entry = self._bases.popitem(last=False)
+                self._base_sizes.pop(evicted, None)
 
 
 registry = HandleRegistry()

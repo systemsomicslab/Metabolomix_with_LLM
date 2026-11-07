@@ -135,6 +135,9 @@ MZTAB_ERROR_CODES = frozenset({
     "FEATURE_SEARCH_EMPTY_QUERY",
     # 窓の下限が上限より大きい。
     "FEATURE_SEARCH_BAD_RANGE",
+    # `.arf` が大きすぎて読めない（伸長後の大きさの見積もりが空きメモリを超える、または読む途中で
+    # メモリが尽きた）。details に path_name / estimated_bytes / available_bytes / remedy。
+    "ARF_TOO_LARGE",
 })
 
 

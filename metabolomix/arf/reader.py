@@ -201,8 +201,10 @@ def _decompress_lz4_payload(compressed_data: bytes) -> bytes:
     )
     size = next(unpacker)
     read_size = unpacker.tell()
+    # スライスの写しを作らない（圧縮ペイロードの写しが 1 つ増える。展開後の大きさに比べ小さいが、
+    # 1 ブロックが数百 MB の実ファイルでは無視できない）。
     return lz4.block.decompress(
-        compressed_data[read_size:],
+        memoryview(compressed_data)[read_size:],
         uncompressed_size=size,
     )
 

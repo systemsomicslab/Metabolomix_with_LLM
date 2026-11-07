@@ -191,10 +191,11 @@ def _odd_groups() -> list[list[list]]:
                 row(3, 400.03, 20.0)]
     duplicated = [row(0, 410.0, 10.0), row(1, 410.1, 20.0), row(1, 410.2, 5.0),
                   row(3, 410.3, 40.0)]
-    not_a_peak = [0] * 30  # Key18 が数でない行は読まない
+    not_a_peak = [0] * 30
+    not_a_peak[18] = "not a number"  # Key18 が数でない行はピークの行でない（読まない）
     nameless = row(5, 420.5, 60.0)  # FileID 5 はこのスポットにしか無い（他のスポットでは欠ける列）
     nameless[1] = None
-    odd_values = row(0, 420.0, 70.0)
+    odd_values = row(6, 420.0, 70.0)  # 自分だけの FileID（非ピークの行や他の行に上書きされない）
     odd_values[20] = None
     odd_values[22] = True
     with_extras = [odd_values, not_a_peak, row(1, 420.1, 15.0), nameless]
