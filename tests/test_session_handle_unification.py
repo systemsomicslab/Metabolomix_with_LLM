@@ -367,7 +367,7 @@ def test_library_load_does_not_close_the_store_under_curation_review(tmp_path, m
             used.append(("error", repr(exc)))
         raise flag_log.FlagFileError("flags.jsonl", 1, "テストの打ち切り")
 
-    monkeypatch.setattr(curation_tools, "resolve_arf2_file_path", lambda file_path=None: "x.arf2")
+    handle.arf2_path = "x.arf2"        # データセットの .arf2（モックの run_review は読まない）
     monkeypatch.setattr(curation_tools.judge, "resolve_thresholds", thresholds)
     monkeypatch.setattr(curation_tools, "load_catalog", lambda path: [])
     monkeypatch.setattr(curation_tools.evidence, "select_spots", lambda *a, **k: [{"spot": 0}])

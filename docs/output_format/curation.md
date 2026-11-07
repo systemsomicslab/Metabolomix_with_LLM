@@ -220,7 +220,7 @@ neg 154 件中 9 件・pos 469 件中 27 件に立った。
 ### `curation_suggest` の戻り値
 
 間違いになったスポットと未注釈スポットに、注釈の候補（①②）と別スポットのイオンとしての説明（④）を並べる。
-**先に `library_load` と `curation_review`**（どちらも無ければ `missing_state`）。
+**先に `library_load` と `curation_review`**（どちらも無ければ `missing_state`）。対象のデータセットは `dataset_handle`（省けば直近）。
 
 | キー | 意味 |
 |---|---|
@@ -360,6 +360,14 @@ EIC（`partner_eic`）を持つ。
 - `curation_review` のスポットの `flag` / `flag_note` は `wrong` / `suspect` / `confirmed` だけ。`assign` / `redundant` は別項目 `decision`
   （`{flag, name}` または `{flag, of}`）に出る。
 - エクスポートでの扱い（下の「エクスポートのメタ行」以降）: `assign` は同定を置き換え、`redundant` は除外する。
+
+### `curation_submit` の戻り値の `open_handles`（開いているデータセットへの反映）
+
+記録の後、同じ `.arf2`（sha256 で照合）を開いているハンドルすべての `curation_flags`（データセットが持つ
+有効な判断の写し）を読み直す。書き出しの `apply_curation` は出したばかりの `wrong` / `redundant` をすぐ使う。
+`refreshed` は読み直したハンドル ID、`not_refreshed` は別の呼び出しがそのハンドルのロックを持っていて待ち切れず
+（数秒）読み直さなかったもの。後者は、そのハンドルの呼び出しが終わった後で
+`dataset_close` → `load_dataset` で開き直すと新しい判断を読む。同じ `.arf2` を開いているハンドルが無ければこのキーは出ない。
 
 ### `curation_submit` の戻り値の `tags_xml`（MS-DIAL への反映）
 

@@ -132,7 +132,7 @@ def _scoring(store) -> dict:
             "use_rt": bool(sp.get("use_time_for_annotation_scoring", False))}
 
 
-def run_suggestion(arf2_path, *, base_review, store, th, options) -> dict:
+def run_suggestion(arf2_path, *, base_review, store, th, options, files: dict | None = None) -> dict:
     arf2_path = Path(arf2_path).resolve()
     opts = {**DEFAULTS, **{k: v for k, v in (options or {}).items() if v is not None}}
     if opts["wrong"] not in WRONG_MODES:
@@ -164,7 +164,7 @@ def run_suggestion(arf2_path, *, base_review, store, th, options) -> dict:
     decisions = flags.split_decisions(effective)
     excluded_partners = target_ids | decisions["wrong"] | set(decisions["redundant"])
 
-    files = evidence.sibling_files(arf2_path)
+    files = files if files is not None else evidence.sibling_files(arf2_path)
     rows_by_spot = evidence.arf_rows_by_spot(files["arf"])
     if files["arf"] is None:
         warnings.append("PeakProperties.arf が無いので試料間の相関を計算できません（MS-DIAL のリンクだけで裏付けを判定）。")
@@ -184,7 +184,7 @@ def run_suggestion(arf2_path, *, base_review, store, th, options) -> dict:
 
     scoring = _scoring(store)
     evs, stats = evidence.collect(arf2_path, [t["spot"] for t in targets], store=store,
-                                  ms2_tol=scoring["ms2_tol"], th=th, keep_measured=True)
+                                  ms2_tol=scoring["ms2_tol"], th=th, keep_measured=True, files=files)
     by_id = {t["spot"]["MasterAlignmentID"]: t for t in targets}
     spots_out, n_hard = [], 0
     for ev in evs:

@@ -45,8 +45,6 @@ ALWAYS_THREADED = frozenset({"load_dataset"})
 #: ワーカースレッドに回す。自身のソースで読むものは
 #: `tests/test_session_handle_unification.py` の検査が捕まえる（ヘルパー経由は手で載せる）。
 SESSION_READERS = frozenset({
-    "curation_review",          # session.library.store
-    "curation_suggest",         # session.library.store / source_path
     "pathway_project",          # _build_dataset → session.dataset
     "verify_peak_annotation",   # peak_verification.msms_evidence → session.library.store
     "save_figure",              # reports._pca_candidates / _differential_candidates → session.dataset

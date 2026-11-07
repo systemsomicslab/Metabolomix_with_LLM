@@ -133,6 +133,14 @@ def sibling_files(arf2_path) -> dict:
             "arf": existing(f"{stem}_PeakProperties.arf")}
 
 
+def dataset_files(ds) -> dict:
+    """データセットが覚えている付随ファイル（`sibling_files` と同じキー）。探索はしない。"""
+    from metabolomix.dataset.artifacts import artifact_path
+
+    return {"dcl": artifact_path(ds, "dcl"), "eic": artifact_path(ds, "eic"),
+            "arf": artifact_path(ds, "arf")}
+
+
 def select_spots(catalog, *, ontology, name_contains) -> list[dict]:
     wanted = {o.strip().lower() for o in ontology} if ontology else None
     needle = name_contains.lower() if name_contains else None
@@ -220,10 +228,12 @@ def _reference(store, match, rep_mz):
 
 
 def collect(arf2_path, spots, *, store, ms2_tol, th, file_ids=None, max_traces=12,
-            keep_measured: bool = False):
+            keep_measured: bool = False, files: dict | None = None):
     """スポットごとの証拠を集める。`file_ids` に `.arf` の行に無い ID があれば、重い読み込み
-    (`.dcl`・EIC)の前に `UnknownFileIdsError` を投げる。"""
-    files = sibling_files(arf2_path)
+    (`.dcl`・EIC)の前に `UnknownFileIdsError` を投げる。
+
+    `files` は `.dcl` / `.EIC.aef` / `.arf` の場所（`dataset_files(ds)`）。省けば `.arf2` の隣を見る。"""
+    files = files if files is not None else sibling_files(arf2_path)
     rows_by_spot = _arf_rows(files["arf"])
     _check_file_ids(rows_by_spot, file_ids)
     annotations = load_spot_annotations(arf2_path)

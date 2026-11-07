@@ -233,6 +233,16 @@ class HandleRegistry:
         with self._lock:
             return sorted(self._handles.values(), key=lambda h: h.created_seq)
 
+    def handles_for_arf2(self, sha256: str) -> list[DatasetHandle]:
+        """開いているハンドルのうち、データセットの `.arf2` の sha256 が `sha256` のもの（開いた順）。
+
+        ハンドルの `.arf2`（`load_dataset(arf2_path=…)` の明示、無ければデータセットの記録）の
+        ハッシュは、読み込みが `source_files` に残した値を使い、無ければ `file_digest.sha256_of`
+        で測る。読めない・無い `.arf2` のハンドルは数えない。ハンドルのロックは取らない
+        （呼び出し側が、ハンドルごとに自分のロックの下で触る）。
+        """
+        return [h for h in self.list() if _arf2_sha256(h) == sha256]
+
     # ---------- 読み込み済みの基 ----------
 
     def cached_base(self, key: str):
@@ -260,6 +270,24 @@ class HandleRegistry:
                     len(self._bases) > 1 and sum(self._base_sizes.values()) > MAX_BASE_BYTES):
                 evicted, _entry = self._bases.popitem(last=False)
                 self._base_sizes.pop(evicted, None)
+
+
+def _arf2_sha256(handle: DatasetHandle) -> str | None:
+    """ハンドルの `.arf2` の sha256（無い・読めなければ None）。"""
+    from metabolomix.core import file_digest
+    from metabolomix.dataset.artifacts import artifact_path
+
+    ds = handle.dataset
+    path = handle.arf2_path or artifact_path(ds, "arf2")
+    if not path:
+        return None
+    recorded = (getattr(ds, "source_files", None) or {}).get(str(path))
+    if recorded:
+        return recorded
+    try:
+        return file_digest.sha256_of(path)
+    except OSError:
+        return None
 
 
 registry = HandleRegistry()

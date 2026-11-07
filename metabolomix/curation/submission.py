@@ -15,6 +15,11 @@ from metabolomix.curation import msdial_writeback, review, suggest
 
 _WRITE_LOCK = threading.Lock()
 
+#: 書いた後に呼ぶ `(arf2_path) -> dict | None`（書いた `.arf2` を開いているデータセットのフラグを
+#: 読み直す。`tools/curation_tools` が登録する）。戻り値は結果の `open_handles` に載る。
+#: この層は session を import しない——読み直しの実体は登録側にある。
+after_write = None
+
 
 class SubmissionError(ValueError):
     """送信を記録しなかった理由。`kind` は invalid（形・候補・重複）/ alignment_changed /
@@ -68,7 +73,16 @@ def submit_flags(saved: dict, entries, *, review_id: str, source: str) -> dict:
         n = store.append(cleaned, alignment=current, review_id=review_id, source=source)
         effective = store.effective(current["alignment_sha256"])
         tags_xml = msdial_writeback.sync_tags(saved["arf2_path"], cleaned)
-    return {"status": "ok", "recorded": n, "review_id": review_id,
-            "n_wrong": _count(effective, "wrong"), "n_suspect": _count(effective, "suspect"),
-            "n_confirmed": _count(effective, "confirmed"), "n_assign": _count(effective, "assign"),
-            "n_redundant": _count(effective, "redundant"), "tags_xml": tags_xml}
+    result = {"status": "ok", "recorded": n, "review_id": review_id,
+              "n_wrong": _count(effective, "wrong"), "n_suspect": _count(effective, "suspect"),
+              "n_confirmed": _count(effective, "confirmed"), "n_assign": _count(effective, "assign"),
+              "n_redundant": _count(effective, "redundant"), "tags_xml": tags_xml}
+    if after_write is not None:
+        # 書き込みのロックの外で呼ぶ。読み直しに失敗しても、記録は済んでいる。
+        try:
+            refreshed = after_write(saved["arf2_path"])
+        except Exception as exc:  # noqa: BLE001
+            refreshed = {"error": f"開いているデータセットのフラグの読み直しに失敗しました: {exc}"}
+        if refreshed:
+            result["open_handles"] = refreshed
+    return result

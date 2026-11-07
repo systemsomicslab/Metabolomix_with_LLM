@@ -362,3 +362,21 @@ def build_saved_review(folder: Path) -> dict:
         store.close()
     review.save_review(result)
     return {"paths": paths, "review": result}
+
+
+def open_curation_dataset(paths: dict, *, library: bool = True):
+    """`write_alignment_set` / `write_suggest_set` の解析フォルダを `load_dataset` で開き（直近になる）、
+    ハンドルを返す。`library=True` ならそのハンドルのライブラリに `paths["msp"]` の store を置く
+    （`library_load` を呼ぶ代わり。閉じるのはハンドルの `close()`）。"""
+    import json
+
+    from metabolomix.core import handles
+    from metabolomix.library import store as library_store
+    from metabolomix.tools import handle_tools
+
+    body = json.loads(handle_tools.load_dataset(directory=str(paths["arf2"].parent)))
+    assert body["status"] == "success", body
+    handle = handles.registry.get(body["dataset_handle"])
+    if library:
+        handle.library.store = library_store.open_store(paths["msp"])
+    return handle

@@ -5,11 +5,10 @@ import threading
 import pytest
 
 from metabolomix.curation import flags, submission, submit_server
-from metabolomix.library import store as library_store
 from metabolomix.msdial import tags as msdial_tags
-from metabolomix.core import mcp_core, session_state
+from metabolomix.core import session_state
 from metabolomix.tools import curation_tools
-from tests.curation_fixtures import build_saved_review, write_suggest_set
+from tests.curation_fixtures import build_saved_review, open_curation_dataset, write_suggest_set
 from tests.config_fixtures import use_config
 
 
@@ -245,14 +244,12 @@ def test_requests_write_nothing_to_stdout(saved, capfd):
 def test_a_suggestion_submit_over_http_records_assign_and_redundant(tmp_path, monkeypatch):
     use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     paths = write_suggest_set(tmp_path / "neg")
-    monkeypatch.setattr(mcp_core, "DATA_DIR", paths["arf2"].parent)
     session_state.session.__init__()
-    lib = library_store.open_store(paths["msp"])
-    session_state.session.library.store = lib
+    handle = open_curation_dataset(paths)
     try:
         arf2 = str(paths["arf2"])
-        json.loads(curation_tools.curation_review(file_path=arf2))
-        sid = json.loads(curation_tools.curation_suggest(file_path=arf2))["suggestion_id"]
+        json.loads(curation_tools.curation_review())
+        sid = json.loads(curation_tools.curation_suggest())["suggestion_id"]
         ep = submit_server.register("suggest", sid, arf2)
         status, body = _post(ep["port"], "/v1/submit", {"token": ep["token"], "review_id": sid, "flags": [
             {"spot_id": 2, "flag": "assign", "candidate": "L1", "level": "sum", "note": ""},
@@ -261,5 +258,5 @@ def test_a_suggestion_submit_over_http_records_assign_and_redundant(tmp_path, mo
         assert body["recorded"] == 2 and body["n_assign"] == 1 and body["n_redundant"] == 1
         assert body["tags_xml"]["added"] == [] and body["tags_xml"]["removed"] == []   # _tags.xml は不変
     finally:
-        lib.close()
+        handle.close()
         session_state.session.__init__()

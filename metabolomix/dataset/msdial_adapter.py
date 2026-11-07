@@ -175,11 +175,26 @@ def _load_tags(ds, selection: AlignmentSelection, fields: list[dict]) -> None:
                 parsed["definitions"].get(t, str(t)) for t in sorted(tag_ids)]
 
 
-def _load_curation(ds, selection: AlignmentSelection) -> None:
+def reload_curation(ds, arf2_path=None) -> None:
+    """`.arf2` に当たる有効なキュレーションのフラグを読み直して `ds.curation_flags` に置く。
+
+    `arf2_path` を省けばデータセットの `.arf2`（`artifact_path(ds, "arf2")`）。無ければ何もしない。
+    読めないとき（`FlagFileError`）は `load_notes` に理由を足し、前の値は残す。
+    `curation_submit` が書いた後、同じ `.arf2` を開いているハンドルすべてで呼ばれる。
+    """
+    from metabolomix.dataset.artifacts import artifact_path
+
+    arf2_path = arf2_path or artifact_path(ds, "arf2")
+    if arf2_path is None:
+        return
     try:
-        ds.curation_flags = flags_for_arf2(selection.arf2)
+        ds.curation_flags = flags_for_arf2(arf2_path)
     except FlagFileError as exc:
         ds.load_notes.append(f"キュレーションのフラグを読めなかったので無視した: {exc}")
+
+
+def _load_curation(ds, selection: AlignmentSelection) -> None:
+    reload_curation(ds, selection.arf2)
 
 
 def _usable_scan(scan: evidence.ArfScan | None, selection: AlignmentSelection,
