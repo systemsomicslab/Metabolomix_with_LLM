@@ -77,7 +77,7 @@ def test_renamed_sample_joined_by_file_id(tmp_path):         # Review Focus 2
     write_msdial_folder(tmp_path, spots=[{"name": "a"}], samples=[
         {"file_id": 0, "name": "s0", "class_id": "A"},
         {"file_id": 1, "name": "s1", "class_id": "B", "arf_name": "old_b"},
-        {"file_id": 2, "name": "s2", "class_id": "B"}])   # .arf の群は 3 行未満だと読まれない
+        {"file_id": 2, "name": "s2", "class_id": "B"}])
     ds = load_msdial_folder(select_alignment(tmp_path))
     assert ds.sample_names[1] == "s1"
     assert ds.msdial_samples[1]["arf_file_name"] == "old_b"

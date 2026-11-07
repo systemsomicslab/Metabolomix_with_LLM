@@ -430,9 +430,11 @@ class TestArfBlockDecode(unittest.TestCase):
         blob = msgpack.packb("メタデータ", use_bin_type=True) + good
         self.assertEqual(len(arf_reader.deserialize(io.BytesIO(blob))), 1)
 
-    def test_groups_shorter_than_three_rows_are_dropped(self):
+    def test_groups_of_one_or_two_rows_are_kept(self):
+        # 1〜2 試料のアラインメントは行が 1〜2 本。群は行数でなく行の形で見分ける。
         blob = lz4_container(msgpack_stream([[arf_row(), arf_row()]]))
-        self.assertEqual(arf_reader.deserialize(io.BytesIO(blob)), [])
+        spots = arf_reader.deserialize(io.BytesIO(blob))
+        self.assertEqual([len(s["AlignedPeakProperties"]) for s in spots], [2])
 
     def test_representative_row_supplies_the_spot_fields(self):
         blob = lz4_container(msgpack_stream([arf_group()]))

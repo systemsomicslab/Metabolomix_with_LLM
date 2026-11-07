@@ -54,30 +54,13 @@ def _decode(value):
     return value.decode('utf-8', errors='ignore') if isinstance(value, bytes) else value
 
 
-def _is_arf_feature_container(datas) -> bool:
-    if not isinstance(datas, list) or len(datas) < 1:
-        return False
-    first = datas[0]
-    if not isinstance(first, list) or len(first) < 10:
-        return False
-    if not isinstance(first[0], int) or not isinstance(first[1], int):
-        return False
-
-    nested_groups = [item for item in first[2:] if isinstance(item, list) and len(item) >= 3 and all(isinstance(sub, list) for sub in item)]
-    if nested_groups:
-        sample_group = nested_groups[0]
-        print(f"[INFO] Detected ARF format: peak groups have {len(sample_group)} elements", file=sys.stderr)
-
-    return len(nested_groups) >= max(10, len(first[2:]) // 2)
-
-
 def _convert_arf_peak_group(
     group: list,
     group_index: int | None = None,
     source_block_index: int | None = None,
     source_local_index: int | None = None,
 ) -> dict | None:
-    if not isinstance(group, list) or len(group) < 3 or not all(isinstance(row, list) for row in group):
+    if not _is_arf_peak_group(group):
         return None
 
     representative = group[0]
@@ -242,14 +225,15 @@ def _iter_lz4_msgpack_blocks(data: bytes):
 def _is_arf_peak_group(item) -> bool:
     """item が 1スポット分の「グループ（= サンプル行の並び）」か判定する。
 
-    グループは行(AlignmentChromPeakFeature)のリストなので、非空かつ全要素が
-    リストになる。行そのものは大半がスカラー要素を持つため、この条件では
-    グループと誤認されない。
+    グループは空でないリストで、要素がすべてピークの行（`_is_alignment_peak_row`）。
+    行数では見分けない（1〜2 試料のアラインメントは行が 1〜2 本）。ヘッダの入れ子リスト
+    （ChromXs の形 `[[1.0, 0, 0], ...]` など）は行の形（25 要素超・Key18 が数）を満たさず、
+    群に数えない。
     """
     return (
         isinstance(item, list)
         and len(item) > 0
-        and all(isinstance(row, list) for row in item)
+        and all(_is_alignment_peak_row(row) for row in item)
     )
 
 
@@ -375,7 +359,7 @@ def extract_arf_data(
     source_block_index: int | None = None,
     source_local_index: int | None = None,
 ) -> dict | None:
-    if isinstance(data, list) and len(data) >= 3 and all(isinstance(row, list) for row in data):
+    if _is_arf_peak_group(data):
         return _convert_arf_peak_group(
             data,
             group_index=group_index,
@@ -560,7 +544,7 @@ def _is_alignment_peak_row(data) -> bool:
     file_name だけ欲しい呼び出し（`exclusions._entry_file_name`）と、dict を組む
     本体とで判定が食い違わないよう、ここ 1 か所に置く。
     """
-    return (isinstance(data, list) and len(data) >= 3
+    return (isinstance(data, list)
             and len(data) > 25 and isinstance(data[18], (int, float)))
 
 

@@ -438,6 +438,8 @@ def _join(spot_mz: list, arf_names: list[str], detected: np.ndarray, measured: n
         return {
             "status": "rejected",
             "reason": "feature_count_mismatch",
+            "note": "`.arf` のスポット数と mzTab-M の特徴数が違う。同じアラインメントの出力でないか、"
+                    ".arf を読み切れていない。",
             "detail": {"n_arf_spots": len(spot_mz),
                        "n_mztab_features": n_features},
         }
@@ -557,7 +559,7 @@ def load_arf_evidence(
 
 
 def apply_evidence(ds, result: dict | None, tried: list[str] | None = None) -> None:
-    """`build_evidence` の封筒を DatasetState に反映する。
+    """`scan_evidence` / `build_evidence` の封筒を DatasetState に反映する。
 
     取り込めなかった場合に **黙って検出 0 として畳まない**のが要点。検出状態が
     「無い」のと「全部未検出」は解釈が正反対で、前者は検出率を語ってはいけない

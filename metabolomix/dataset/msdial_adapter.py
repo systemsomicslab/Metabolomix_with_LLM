@@ -32,7 +32,7 @@ def _check_alignment(scan: evidence.ArfScan, fields: list[dict]) -> None:
         raise DomainError(
             "ALIGNMENT_MISMATCH",
             f".arf のスポット数（{scan.n_spots}）と .arf2 のスポット数（{len(fields)}）が違う。"
-            "別のバッチの出力が混ざっている。",
+            "同じアラインメントの出力でないか、.arf を読み切れていない。",
             {"arf_spots": scan.n_spots, "arf2_spots": len(fields)})
     ok, detail = evidence.compare_feature_mz(scan.spot_mz, [f["mz"] for f in fields])
     if not ok:
