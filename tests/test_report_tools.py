@@ -13,6 +13,16 @@ from metabolomix.tools import notes
 from tests.config_fixtures import config_env
 
 
+def _open_analysis_dir(directory):
+    """解析フォルダが `directory` のデータセットを直近にする（記録の置き場所の基準）。"""
+    from metabolomix.mztab.dataset_state import DatasetState
+
+    session_state.session = session_state.AnalysisSession()
+    ds = DatasetState()
+    ds.analysis_dir = str(directory)
+    session_state.session.dataset = ds
+
+
 class WriteLocationHelpers(unittest.TestCase):
     def test_dir_is_writable_true_for_new_dir(self):
         import tempfile
@@ -60,12 +70,10 @@ class ReportToolTests(unittest.TestCase):
         import tempfile
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
-        self._saved_data_dir = mcp_core.DATA_DIR
-        mcp_core.DATA_DIR = self.tmp
+        _open_analysis_dir(self.tmp)
         self.enterContext(config_env(self.tmp, {"paths.reports_dir": self.tmp / "reports_fallback"}))
 
     def tearDown(self):
-        mcp_core.DATA_DIR = self._saved_data_dir
         self._tmp.cleanup()
 
     def test_write_report_creates_file_with_frontmatter_and_body(self):
@@ -132,12 +140,10 @@ class ReportEdgeCaseTests(unittest.TestCase):
         import tempfile
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
-        self._saved_data_dir = mcp_core.DATA_DIR
-        mcp_core.DATA_DIR = self.tmp
+        _open_analysis_dir(self.tmp)
         self.enterContext(config_env(self.tmp, {"paths.reports_dir": self.tmp / "reports_fallback"}))
 
     def tearDown(self):
-        mcp_core.DATA_DIR = self._saved_data_dir
         self._tmp.cleanup()
 
     def test_write_report_refuses_slug_collision_with_different_id(self):
@@ -204,9 +210,19 @@ if __name__ == "__main__":
 class ReportDirStaysWithDataTests(unittest.TestCase):
     """解析記録は解析フォルダ側に置く契約。リポジトリ側へ退避する候補を持たない。"""
 
-    def test_candidates_without_override_are_data_dir_only(self):
+    def test_candidates_without_override_are_the_analysis_dir_only(self):
         import tempfile
         with tempfile.TemporaryDirectory() as tmp, config_env(Path(tmp), {}):
-            candidates = mcp_core._report_dir_candidates()   # [paths] reports_dir が無い
-        self.assertEqual(candidates, [mcp_core.DATA_DIR / "reports"])
+            _open_analysis_dir(Path(tmp) / "analysis")
+            candidates = mcp_core._report_dir_candidates(session_state.session)  # [paths] reports_dir が無い
+        self.assertEqual(candidates, [Path(tmp) / "analysis" / "reports"])
         self.assertNotIn(mcp_core.BASE_DIR / "reports", candidates)
+
+    def test_no_dataset_and_no_setting_is_missing_state(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp, config_env(Path(tmp), {}):
+            session_state.session = session_state.AnalysisSession()
+            out = json.loads(server.write_report("a-1", "DS", "本文"))
+        self.assertEqual(out["error"]["code"], "missing_state")
+        self.assertEqual(out["error"]["state"], "dataset")
+        self.assertEqual(out["error"]["required_tools"], ["load_dataset"])

@@ -33,12 +33,12 @@ Pathway projection (`pathway_project` / `pathway_plot`) uses the lab's MSLipidMa
 server when `[mslipidmapper] mslipidmapper_api_url` is set, and falls back to local R otherwise. Local R
 needs a one-time `Rscript r/setup.R`; see [USAGE.md](USAGE.md) section 16.
 
-Set environment variables in the MCP client configuration, or in a shell when
-testing manually. Only `LIPIDMIX_DATA_DIR` is usually needed; the others are
-optional overrides:
+No environment variable is required. The data location is never configured: pass the MS-DIAL
+output folder to `list_data_files` / `load_dataset`, and the tools that take no path use the
+current dataset's files. Environment variables are optional overrides, set in the MCP client
+configuration or in a shell when testing manually:
 
 ```powershell
-$env:LIPIDMIX_DATA_DIR="C:\path\to\msdial\output"
 # Optional: read the settings file from somewhere other than the clone root.
 # $env:LIPIDMIX_CONFIG="C:\path\to\lipidmix.local.toml"
 .venv\Scripts\python.exe server.py
@@ -60,10 +60,7 @@ transport is `stdio`.
   "mcpServers": {
     "ms-data-parser": {
       "command": "C:\\Users\\<name>\\Lipidmix_with_LLM\\.venv\\Scripts\\python.exe",
-      "args": ["C:\\Users\\<name>\\Lipidmix_with_LLM\\server.py"],
-      "env": {
-        "LIPIDMIX_DATA_DIR": "C:\\path\\to\\msdial\\output"
-      }
+      "args": ["C:\\Users\\<name>\\Lipidmix_with_LLM\\server.py"]
     }
   }
 }

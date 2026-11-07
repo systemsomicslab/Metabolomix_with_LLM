@@ -1,7 +1,7 @@
 # ワークフロー: 参照ライブラリ（MS/MS スペクトル照合）
 
-`.dcl` の測定 MS/MS を参照ライブラリ（`*_Loaded.msp2.dbs` 優先、無ければ `*.msp`）と
-突き合わせ、MS-DIAL の個別スコア定義を移植して採点し、対向プロットで確認する経路。
+`.dcl` の測定 MS/MS を参照ライブラリ（データセットが同定に使ったもの、または `file_path` で渡した
+`.msp` / `.dbs`）と突き合わせ、MS-DIAL の個別スコア定義を移植して採点し、対向プロットで確認する経路。
 前提状態の連鎖は 1 本道: `library_load` → `library_match_feature` →
 `library_plot_mirror`。どちらも未実行なら `missing_state` 封筒が前段のツール名を指す。
 
@@ -12,7 +12,7 @@
 
 ```mermaid
 flowchart TD
-    LL[library_load] --> RES[path_resolvers.resolve_library_path]
+    LL[library_load] --> RES[path_resolvers.resolve_library_path<br/>明示パスの確認だけ]
     LL --> OS[library.store.open_store]
     OS --> BLD[library.store._build]
     BLD --> ITR[library.store._iter_records_for]
@@ -31,15 +31,15 @@ flowchart TD
 
 ## library_load
 
-前提: なし。解決順は `file_path` の明示 → 直近のデータセット（または `dataset_handle`）が覚えた
-同定のライブラリ（`library_record`。`verify_record` が通った `known` だけ。`mismatch` / `lbm_only` は
-設定へ落ちずに理由を返し、`unknown` か無いときだけ次へ進む）→ `ion_mode` に対応する極性の設定
-（`lipidmix.local.toml` の `[library] msp_positive` / `msp_negative`。`metabolomix/core/user_config.py` の
-`get_setting` が引く。研究室の参照ライブラリはリポジトリの外に置いてここで指す）→
-データディレクトリの `*_Loaded.msp2.dbs` → 設定済みの極性
-（両方あれば `MSP_AMBIGUOUS`）→ データディレクトリの `*.msp`（複数あれば
-`MSP_AMBIGUOUS`）。候補を更新日時で黙って選ばない。解決できなければ
-`LibraryPathError` を `code` 付きのエラー戻り値にする。
+前提: なし（`file_path` を渡すか、直近のデータセットが同定のライブラリを覚えていること）。
+**探索は無い**（B-2b）: `file_path` の明示、無ければ直近のデータセット（または `dataset_handle`）が
+覚えた同定のライブラリ（`library_record`。`verify_record` が通った `known` だけ）。`mismatch`
+（`LIBRARY_RECORD_MISMATCH`）/ `lbm_only`（`LIBRARY_RECORD_LBM_ONLY`）は理由を返し、`unknown` なら
+`LIBRARY_NOT_REMEMBERED`（候補のファイル名と「`file_path` を渡す」の案内。名前だけで置き場所は出さない）。
+データセットが無ければ `missing_state("dataset", ["load_dataset"])`。`ion_mode` 引数も、データフォルダの
+`.dbs` / `.msp` の探索も、設定の極性の MSP（`[library] msp_positive` / `msp_negative`。Console にどれを
+使わせるかだけに残る）への後退も無い。明示の `file_path` が無いファイルなら `LibraryPathError` を `code` 付きの
+エラー戻り値（`LIBRARY_NOT_FOUND`）にする。
 状態変更: `session.library.store` / `source_path` を格納。`last_match` は
 `None` にリセットする（別ライブラリへの切り替えで、古い照合結果を新ライブラリの
 ものと取り違えないため）。
@@ -52,11 +52,11 @@ sha256 はキャッシュ置き場の対応表（`.library-digests.json`）に
 `.msp` は 1 行ずつ読み、文字コードは行ごとに UTF-8 → cp932 → latin-1。
 
 同じ構築は MCP の外からも走らせられる（`python -m metabolomix.library.store`、
-`store.main()`。解決規則は同じ `resolve_library_path()`）。初回の構築が
+`store.main()`。`--file` か `--ion-mode` の設定で指す）。初回の構築が
 MCP クライアントのタイムアウトに当たるときに使う。
 
 1. metabolomix/library/tools.py  library_load()
-2. ├─ [file_path / ion_mode を省いたとき] metabolomix/dataset/library_memory.py  verify_record()
+2. ├─ [file_path を省いたとき] metabolomix/dataset/library_memory.py  verify_record()
 3. └─ metabolomix/core/path_resolvers.py  resolve_library_path()
 4. └─ metabolomix/library/store.py  open_store()
 5. │  └─ metabolomix/library/store.py  _digest_for()
@@ -89,7 +89,7 @@ MCP クライアントのタイムアウトに当たるときに使う。
 
 照合対象は `precursor_mz` か `spot_id` のどちらか一方（両方・どちらも無しは
 `status="invalid_arguments"`）。`spot_id` のときは手順 2 で precursor m/z・RT・極性を
-同じバッチの `.arf2` から取り、測定スペクトルをアラインメント `.dcl` の `dcl[spot_id]` から
+`.arf2`（省けばデータセットの `.arf2`。データフォルダは探さない）から取り、測定スペクトルをアラインメント `.dcl` の `dcl[spot_id]` から
 直接読む（手順 8 の precursor 検索は通らない。同じ m/z の別スポットを拾わないため）。
 precursor・RT が ARF2 と ±0.05 Da・±0.2 分で合わなければ `dcl_precursor_mismatch`、ID が無ければ
 `spot_not_found` を返して照合しない。
@@ -97,19 +97,18 @@ precursor・RT が ARF2 と ±0.05 Da・±0.2 分で合わなければ `dcl_prec
 1. metabolomix/library/tools.py  library_match_feature()
 2. └─ metabolomix/tools/_holder.py  resolve_holder()
 3. └─ [ライブラリ無しで記憶が lbm_only のとき] metabolomix/library/tools.py  lbm_only_not_evaluable()（`not_evaluable` を返す）
-4. └─ metabolomix/library/tools.py  _spot_query()
-5. │  └─ metabolomix/core/path_resolvers.py  resolve_arf2_file_path()
+4. └─ metabolomix/tools/_holder.py  alignment_paths()（省いた `.arf2` / `.dcl` はデータセットのもの。無ければ `missing_state` / `no_alignment_files`）
+5. └─ metabolomix/library/tools.py  _spot_query()
 6. │  └─ metabolomix/msdial/alignment_spot.py  spot_record()
 7. │  └─ metabolomix/msdial/alignment_spot.py  alignment_msms()
 8. │     └─ metabolomix/dcl/reader.py  read_dcl_entry()
 9. └─ metabolomix/library/tools.py  _measured_spectrum()
-10. │  └─ metabolomix/core/path_resolvers.py  resolve_dcl_file_path()
-11. │  └─ metabolomix/dcl/reader.py  deserialize_dcl()
-12. │  └─ metabolomix/dcl/reader.py  get_msms_by_precursor()
-13. └─ metabolomix/library/matching.py  score_candidates()
-14. │  └─ metabolomix/library/defaults.py  pick_tol()
-15. │  └─ metabolomix/library/store.py  LibraryStore.candidates()
-16. │  └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
+10. │  └─ metabolomix/dcl/reader.py  deserialize_dcl()
+11. │  └─ metabolomix/dcl/reader.py  get_msms_by_precursor()
+12. └─ metabolomix/library/matching.py  score_candidates()
+13. │  └─ metabolomix/library/defaults.py  pick_tol()
+14. │  └─ metabolomix/library/store.py  LibraryStore.candidates()
+15. │  └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
 17. │  └─ metabolomix/analysis/spectral_match.py  match_spectrum()
 18. │  │  └─ metabolomix/analysis/spectral_match.py  normalize_measured()
 19. │  │  │  └─ metabolomix/analysis/spectral_match.py  cutoff_mask()

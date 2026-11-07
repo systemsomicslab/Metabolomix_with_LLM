@@ -1,16 +1,15 @@
 """参照ライブラリ照合の既定許容幅（stdlib のみの leaf）。
 
 store の `search_params` が無い（`.msp` 由来など）ときのフォールバックとして、
-`metabolomix.library.tools`（MCP 面）と `metabolomix.msdial.peak_verification`
-（`verify_peak_annotation` の判断材料）の**両方**がここから読む。
+`metabolomix.library.tools`（MCP 面）と、照合を使う下位レイヤ（`library/matching.py`・
+`curation/suggest.py`）が、ここから読む。
 
-以前は 2 箇所に同じ 3 つのリテラルを複写していた。上流の既定が変わったとき、
-MCP に面していて目に付きやすい `library/tools.py` だけが更新され、
-`peak_verification.py` 側がテストに気付かれず古くなる恐れがあったため、
-値の置き場をここ 1 箇所に一本化した（Task 11 レビュー Important 1）。
+以前は複数箇所に同じ 3 つのリテラルを複写していた。上流の既定が変わったとき、MCP に面していて
+目に付きやすい側だけが更新されて古くなる恐れがあったため、値の置き場をここ 1 箇所に一本化した
+（Task 11 レビュー Important 1）。
 
 `library.store`（sqlite3 / msgpack / reader 群に依存）には置かない——定数 3 つの
-ためだけに `peak_verification.py`（下位レイヤ）へその依存を引き込むのは割に合わない。
+ためだけに下位レイヤへその依存を引き込むのは割に合わない。
 
 **出所の訂正（最終レビュー Important 6）**: 以前の docstring は 3 定数すべてを
 「`MsRefSearchParameterBase` の既定値」と説明していたが誤り。実際は 2 つの
@@ -41,12 +40,9 @@ def pick_tol(explicit: float | None, search_params: dict, key: str, default: flo
     `search_params.get(key)` が `0.0` のような偽値でも正しく採用されるよう、
     `or` ではなく `is None` で判定する。
 
-    最終レビュー Important 5: `metabolomix.library.tools._pick_tol` が正しくこの
-    判定をしていた一方、`metabolomix.msdial.peak_verification._spectral_match_for_feature`
-    は `search_params.get(key) or default` という `or` 判定を独自に持っていて、
-    `0.0`（"足切りなし"のような正当な値）を黙って既定値に差し替えていた。
-    2 箇所が同じロジックを別々に書くと再びずれるので、ここに一本化して両方から
-    import する。
+    最終レビュー Important 5: 呼び出し側ごとに `search_params.get(key) or default` と
+    独自に書くと、`0.0`（"足切りなし"のような正当な値）を黙って既定値に差し替える。
+    同じロジックを別々に書くと再びずれるので、ここに一本化して全部から import する。
     """
     if explicit is not None:
         return explicit

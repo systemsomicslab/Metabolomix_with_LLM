@@ -12,14 +12,16 @@ import json
 
 import pytest
 
-from metabolomix.core import handles, mcp_core, session_state, user_config
+from metabolomix.core import handles, session_state, user_config
 from tests.config_fixtures import use_config
 from tests.curation_fixtures import write_alignment_set
 
 
 @pytest.fixture
-def broken_config(tmp_path, monkeypatch):
-    """旧 `[msdial] lbm` が残った設定ファイル（どのキーを読んでも CONFIG_INVALID）。"""
+def broken_config(tmp_path, monkeypatch, fresh_session):
+    """旧 `[msdial] lbm` が残った設定ファイル（どのキーを読んでも CONFIG_INVALID）。
+
+    直近のデータセットを立てる `fresh_session` の後で壊す（立てるにはハンドルの上限の設定を読む）。"""
     path = tmp_path / "conf" / "lipidmix.local.toml"
     path.parent.mkdir()
     path.write_text(f"[msdial]\nlbm = '{tmp_path / 'old.lbm2'}'\n", encoding="utf-8")
@@ -32,8 +34,13 @@ def broken_config(tmp_path, monkeypatch):
 
 @pytest.fixture
 def fresh_session(monkeypatch, tmp_path):
+    """直近のデータセットが 1 つあるセッション（解析フォルダは tmp_path/data。記録の置き場所の基準）。"""
+    from metabolomix.mztab.dataset_state import DatasetState
+
     monkeypatch.setattr(session_state, "session", session_state.AnalysisSession())
-    monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path / "data")
+    ds = DatasetState()
+    ds.analysis_dir = str(tmp_path / "data")
+    session_state.session.dataset = ds
     return session_state.session
 
 
@@ -60,7 +67,7 @@ def test_caveat_off_still_works_and_the_note_is_absent(tmp_path, monkeypatch, fr
 
 # ---------- 記録（レポート・objective）: CONFIG_INVALID の封筒 ----------
 
-def test_report_tools_return_the_envelope(broken_config, fresh_session):
+def test_report_tools_return_the_envelope(tmp_path, broken_config, fresh_session):
     from metabolomix.tools import reports
 
     for out in (reports.write_report("a-1", "DS", "本文"),
@@ -70,7 +77,7 @@ def test_report_tools_return_the_envelope(broken_config, fresh_session):
         assert err["code"] == "CONFIG_INVALID"
         assert "[library] lbm" in err["message"]
         assert err["details"]["config_file"] == str(broken_config)
-    assert not (mcp_core.DATA_DIR / "reports").exists()            # 黙って解析フォルダへ書かない
+    assert not (tmp_path / "data" / "reports").exists()            # 黙って解析フォルダへ書かない
 
 
 def test_objective_tools_return_the_envelope_without_half_applied_state(broken_config, fresh_session):
@@ -85,7 +92,7 @@ def test_objective_tools_return_the_envelope_without_half_applied_state(broken_c
     assert _error(out)["code"] == "CONFIG_INVALID"
 
 
-def test_record_objective_rejects_an_unknown_assay_kind_before_touching_anything(fresh_session):
+def test_record_objective_rejects_an_unknown_assay_kind_before_touching_anything(tmp_path, fresh_session):
     from metabolomix.tools import objective
 
     out = objective.record_objective(
@@ -93,7 +100,7 @@ def test_record_objective_rejects_an_unknown_assay_kind_before_touching_anything
         sub_questions=["Q"], assay_kind="protein")
     assert "assay_kind は lipid/metabolite/unknown のいずれかです" in out
     assert fresh_session.assay_kind == "unknown"
-    assert not (mcp_core.DATA_DIR / "reports").exists()
+    assert not (tmp_path / "data" / "reports").exists()
 
 
 def test_pathway_plot_returns_the_envelope(broken_config, fresh_session):
@@ -116,10 +123,11 @@ def test_dataset_handle_list_returns_the_envelope(broken_config):
 def test_dataset_handle_open_refuses_with_the_envelope(tmp_path, broken_config):
     from metabolomix.tools import handle_tools
 
+    before = list(handles.registry.list())  # fresh_session が立てた 1 つ
     paths = write_alignment_set(tmp_path / "neg")
     err = _error(handle_tools.load_dataset(directory=str(paths["arf2"].parent)))
     assert err["code"] == "CONFIG_INVALID"
-    assert handles.registry.list() == []
+    assert handles.registry.list() == before
 
 
 def test_max_handles_or_none_hides_a_broken_config(broken_config):

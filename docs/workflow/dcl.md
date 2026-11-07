@@ -16,30 +16,38 @@ MS/MS スペクトルの実体。msgpack/lz4 ではない独自バイナリ（MS
 
 ## dcl_find_msms
 
-前提: なし
+前提: `file_path` を渡すか、直近のデータセット（または `dataset_handle`）が `.dcl` を持つこと。
+`file_path` を省くとそのデータセットの `.dcl`（`handles` の `dcl_path`、無ければ `artifact_paths` の
+`msms_evidence`）を使う。**データフォルダは探さない**。データセットが無い・閉じたなら
+`missing_state("dataset", ["load_dataset"])`、あるが `.dcl` を持たなければ `no_alignment_files`。
 状態変更: なし
 
 RT を渡すと、同一 m/z の別溶出ピークを分離できる。
 
 1. metabolomix/dcl/tools.py  dcl_find_msms()
-2. └─ metabolomix/core/path_resolvers.py  resolve_dcl_file_path()
-3. └─ metabolomix/dcl/reader.py  deserialize_dcl()
-4. └─ metabolomix/dcl/reader.py  get_msms_by_precursor()
+2. ├─ metabolomix/tools/_holder.py  resolve_holder()
+3. ├─ metabolomix/tools/_holder.py  alignment_paths()
+4. │  └─ metabolomix/dataset/artifacts.py  artifact_path()
+5. ├─ metabolomix/dcl/reader.py  deserialize_dcl()
+6. └─ metabolomix/dcl/reader.py  get_msms_by_precursor()
 
 ## dcl_spot_spectrum
 
-前提: なし（`.arf2` は `arf2_path`、ハンドルならハンドルの `.arf2`、無ければ現在のデータフォルダ）。
+前提: `arf2_path` / `dcl_file` を渡すか、直近のデータセット（または `dataset_handle`）が `.arf2` / `.dcl` を
+持つこと（省いたものはそのデータセットのファイル。データフォルダは探さない。データセットが無ければ
+`missing_state("dataset", ["load_dataset"])`、ファイルが無ければ `no_alignment_files`）。
 状態変更: なし。`library_match_feature(spot_id=...)` と同じ規則でスポットの代表 MS/MS を引く。
 
 1. metabolomix/dcl/tools.py  dcl_spot_spectrum()
 2. └─ metabolomix/tools/_holder.py  resolve_holder()
-3. └─ metabolomix/library/tools.py  _spot_query()
-4.    └─ metabolomix/msdial/alignment_spot.py  spot_record()
-5.    └─ metabolomix/msdial/alignment_spot.py  alignment_msms()
+3. └─ metabolomix/tools/_holder.py  alignment_paths()
+4. └─ metabolomix/library/tools.py  _spot_query()
+5.    └─ metabolomix/msdial/alignment_spot.py  spot_record()
+6.    └─ metabolomix/msdial/alignment_spot.py  alignment_msms()
 
 ## dcl_diagnostic_ions
 
-前提: なし（`.arf2` は `arf2_path`、ハンドルならハンドルの `.arf2`、無ければ現在のデータフォルダ）。
+前提: `dcl_spot_spectrum` と同じ（省いたパスは直近のデータセットのファイル）。
 状態変更: なし。
 
 1. metabolomix/dcl/tools.py  dcl_diagnostic_ions()

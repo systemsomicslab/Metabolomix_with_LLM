@@ -63,13 +63,10 @@ the example if missing, writes a `.mcp.json` for Claude Code, and prints the sni
 into Claude Desktop's `claude_desktop_config.json`. Existing `.mcp.json` and
 `lipidmix.local.toml` are never overwritten — differences are reported instead.
 
-Point it at your data and ask the client to start:
+Tell the client where your MS-DIAL output is and ask it to start (there is no default data
+directory or environment variable; every path is passed to a tool):
 
-```bash
-export LIPIDMIX_DATA_DIR=/path/to/your/msdial/output
-```
-
-> Load the dataset in `LIPIDMIX_DATA_DIR` and show me the PCA.
+> Load the dataset in `/path/to/your/msdial/output` and show me its samples and groups.
 
 That calls `load_dataset`, the entry point: it picks the latest alignment batch, opens the
 dataset as the current one, and reports its samples, groups and library for everything that

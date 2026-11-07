@@ -193,18 +193,23 @@ def pathway_error(code: str, message: str, details: dict | None = None) -> str:
 
 
 def config_invalid_as_envelope(fn):
-    """ツール本体の `DomainError("CONFIG_INVALID")`（設定ファイルが読めない）を封筒にして返す。
+    """記録の置き場所を決めるときの `DomainError` を、ツールの封筒にして返す。
 
-    記録の置き場所（`[paths] reports_dir`）を読むツール（レポート・objective・図の保存・
-    パスウェイ）は、設定ファイルが壊れていると例外のまま落ちていた。ほかのコードの
-    DomainError はそのまま送出する。`@mcp.tool` の内側に付ける（`functools.wraps` が
-    引数の形と docstring を保つ）。
+    記録の置き場所（`[paths] reports_dir` と、データセットの解析フォルダ配下 `reports/`）を
+    読むツール（レポート・objective・図の保存・パスウェイ）が対象。
+    - `CONFIG_INVALID`（設定ファイルが読めない）: そのままの封筒。以前は例外のまま落ちていた。
+    - `NO_REPORT_DIR`（設定の置き場所が無く、データセットも無い）: `missing_state("dataset",
+      ["load_dataset"])`。
+    ほかのコードの DomainError はそのまま送出する。`@mcp.tool` の内側に付ける
+    （`functools.wraps` が引数の形と docstring を保つ）。
     """
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
         except DomainError as exc:
+            if exc.code == "NO_REPORT_DIR":
+                return missing_state("dataset", ["load_dataset"], exc.message)
             if exc.code != "CONFIG_INVALID":
                 raise
             return json_payload({"error": {"code": exc.code, "message": exc.message,

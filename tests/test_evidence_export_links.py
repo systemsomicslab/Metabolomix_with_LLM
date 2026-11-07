@@ -14,7 +14,7 @@ import pytest
 
 from metabolomix.analysis import dataset_service
 from metabolomix.analysis.evidence_export import export_dataset_evidence
-from metabolomix.core import handles, mcp_core, session_state
+from metabolomix.core import handles, session_state
 from metabolomix.mztab import loading
 from metabolomix.tools import dataset_analysis_tools as T
 from metabolomix.tools import handle_tools
@@ -191,8 +191,7 @@ def test_tool_on_handle_uses_the_handles_alignment_files(tmp_path):
     assert _manifest(tmp_path / "b")["provenance"]["spectrum_links_status"] == "verified_alignment"
 
 
-def test_tool_on_session_finds_the_alignment_files(tmp_path, monkeypatch):
-    monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path)
+def test_tool_on_session_finds_the_alignment_files(tmp_path):
     path = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab")
     _alignment(tmp_path / "run")
     from metabolomix.tools import mztab_tools

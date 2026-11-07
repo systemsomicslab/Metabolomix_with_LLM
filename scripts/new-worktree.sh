@@ -62,8 +62,7 @@ cat > "$path/.mcp.json" <<JSON
         "$wt_w/server.py"
       ],
       "env": {
-        "LIPIDMIX_CONFIG": "$main_w/lipidmix.local.toml",
-        "LIPIDMIX_DATA_DIR": "$main_w/data"
+        "LIPIDMIX_CONFIG": "$main_w/lipidmix.local.toml"
       }
     }
   }

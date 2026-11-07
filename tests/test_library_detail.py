@@ -9,7 +9,7 @@ import textwrap
 import pytest
 
 from metabolomix.analysis.spectral_match import fragment_matches_excluding_precursor
-from metabolomix.core import mcp_core, session_state
+from metabolomix.core import session_state
 from metabolomix.dcl import tools as dcl_tools
 from metabolomix.library import tools
 from metabolomix.library.store import open_store
@@ -59,7 +59,6 @@ _RECORDS = [
 @pytest.fixture(autouse=True)
 def workspace(tmp_path, monkeypatch):
     monkeypatch.setattr(session_state, "session", session_state.AnalysisSession())
-    monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path)
     use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     (tmp_path / "lib.msp").write_text(_MSP, encoding="utf-8")
     (tmp_path / "AlignmentResult_1.arf2").write_bytes(b"placeholder")
@@ -69,11 +68,19 @@ def workspace(tmp_path, monkeypatch):
         {"precursor_mz": 104.0706, "rt": 1.2, "spectrum": [(87.0441, 999.0), (69.0335, 500.0)]},
     ]))
     monkeypatch.setattr(alignment_spot, "load_catalog", lambda _path: _RECORDS)
-    tools.library_load()
+    assert json.loads(tools.library_load(file_path=str(tmp_path / "lib.msp")))["status"] == "success"
+    _FILES.update(arf2_path=str(tmp_path / "AlignmentResult_1.arf2"),
+                  dcl_file=str(tmp_path / "AlignmentResult_1.dcl"))
     return tmp_path
 
 
+#: workspace が書いた `.arf2` / `.dcl`（データセットを開かずに、明示のパスで照合する）。
+_FILES: dict = {}
+
+
 def _match(**kwargs):
+    for key, value in _FILES.items():
+        kwargs.setdefault(key, value)
     return json.loads(tools.library_match_feature(**kwargs))
 
 
@@ -141,9 +148,9 @@ def test_read_only_store_rejects_writes(workspace):
 
 
 def test_spot_spectrum_returns_peaks(workspace):
-    out = json.loads(dcl_tools.dcl_spot_spectrum(spot_id=1))
+    out = json.loads(dcl_tools.dcl_spot_spectrum(spot_id=1, **_FILES))
     assert out["status"] == "ok" and out["n_peaks"] == 2
     assert out["peaks"][0] == [87.0441, 999.0]
     assert out["precursor_mz"] == pytest.approx(104.0706)
-    missing = json.loads(dcl_tools.dcl_spot_spectrum(spot_id=9))
+    missing = json.loads(dcl_tools.dcl_spot_spectrum(spot_id=9, **_FILES))
     assert missing["status"] == "spot_not_found"

@@ -24,9 +24,11 @@ Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT
 呼び出しごとに `output="payload"` を渡す。判定は `plots/render.py resolve_plot_output()`。
 描画は `plots/` 側に置き、画像返しと保存が同じ関数を通る（画面の図とレポートの図がずれない）。
 
-保存先は `_resolve_report_dir()` が解決する。`lipidmix.local.toml` の `[paths] reports_dir` の明示先を優先し、書き込めなければ
-解析フォルダ配下の `reports/` に退避する。未指定時は解析フォルダの `reports/` だけを使い、
-リポジトリ側へは退避しない（書けなければエラー）。
+保存先は `mcp_core._resolve_report_dir(holder)` が解決する（`holder` は `dataset_handle` で選んだハンドル、
+省略時は直近）。`lipidmix.local.toml` の `[paths] reports_dir` の明示先を優先し、書き込めなければ
+そのデータセットの解析フォルダ（`DatasetState.analysis_dir`）配下の `reports/` に退避する。未指定時は解析フォルダの
+`reports/` だけを使い、リポジトリ側へは退避しない（書けなければエラー）。設定も無く、データセットも無ければ
+`missing_state("dataset", ["load_dataset"])`。
 
 ## dataset_plot
 

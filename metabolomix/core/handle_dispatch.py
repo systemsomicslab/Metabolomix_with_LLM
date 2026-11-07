@@ -44,9 +44,7 @@ ALWAYS_THREADED = frozenset({"load_dataset"})
 #: （自身か、ヘルパー経由で）読むツール。直近のハンドルがあれば、そのロックと固定の下で
 #: ワーカースレッドに回す。自身のソースで読むものは
 #: `tests/test_session_handle_unification.py` の検査が捕まえる（ヘルパー経由は手で載せる）。
-SESSION_READERS = frozenset({
-    "pathway_project",          # _build_dataset → session.dataset
-})
+SESSION_READERS: frozenset[str] = frozenset()  # 今は無い（全部が `dataset_handle` を持つ）
 
 
 def _call_locked(fn, kwargs: dict):

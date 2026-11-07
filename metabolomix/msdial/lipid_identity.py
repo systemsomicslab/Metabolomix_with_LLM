@@ -187,7 +187,7 @@ def msi_level(*, name, ontology, has_msms, mass_error_band, adduct_band,
     - 3: クラス（ontology）は分かるが上記を満たさない（putative class）
     - 4: 名称もクラスも無い（unknown）
 
-    ``msms_band``（``peak_verification.msms_evidence`` の band）を渡すと、Level 2 の
+    ``msms_band``（MS/MS の証拠の band）を渡すと、Level 2 の
     根拠が**実スペクトル**（``PASS``）なのか**取得フラグのみ**（``FLAG_ONLY``）なのかを
     rationale で開示する。PAI2 の has_msms は取得参照の有無を示すだけなので、
     フラグ由来の Level 2 は弱い根拠であることを下流に伝える必要がある。

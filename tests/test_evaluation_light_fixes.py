@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from metabolomix.console.validation import map_assays
-from metabolomix.core import mcp_core, session_state
+from metabolomix.core import session_state
 from metabolomix.tools.reports import write_report, read_report
 from tests.config_fixtures import use_config
 
@@ -27,11 +27,21 @@ def test_uri_does_not_match_another_directory_with_same_basename():
     assert map_assays(parsed, ['C:/expected/a.wiff']) != {'abundance_assay[1]': 'C:/expected/a.wiff'}
 
 
-def test_report_override_wins_over_mutable_input_directory(tmp_path, monkeypatch):
+def _open_analysis_dir(monkeypatch, directory):
+    """解析フォルダが `directory` のデータセットを直近にする（記録の置き場所の基準）。"""
+    from metabolomix.mztab.dataset_state import DatasetState
+
+    monkeypatch.setattr(session_state, "session", session_state.AnalysisSession())
+    ds = DatasetState()
+    ds.analysis_dir = str(directory)
+    session_state.session.dataset = ds
+
+
+def test_report_override_wins_over_analysis_directory(tmp_path, monkeypatch):
     input_dir = tmp_path / 'input' / 'neg'
     output_dir = tmp_path / 'trial-reports'
     input_dir.mkdir(parents=True)
-    monkeypatch.setattr(mcp_core, 'DATA_DIR', input_dir)
+    _open_analysis_dir(monkeypatch, input_dir)
     use_config(monkeypatch, tmp_path, {"paths.reports_dir": output_dir})
     write_report('trial-1', 'synthetic', '保存内容')
     assert (output_dir / 'trial-1.md').is_file()
@@ -39,7 +49,7 @@ def test_report_override_wins_over_mutable_input_directory(tmp_path, monkeypatch
     assert '保存内容' in read_report('trial-1')
 
 
-def test_report_without_override_uses_input_directory(tmp_path, monkeypatch):
-    monkeypatch.setattr(mcp_core, 'DATA_DIR', tmp_path)
+def test_report_without_override_uses_analysis_directory(tmp_path, monkeypatch):
+    _open_analysis_dir(monkeypatch, tmp_path)
     write_report('local-1', 'synthetic', '保存内容')
     assert (tmp_path / 'reports/local-1.md').is_file()

@@ -1,5 +1,4 @@
 import argparse
-import glob
 import io
 import os
 from enum import Enum
@@ -16,7 +15,6 @@ matplotlib.use('Agg')  # 非インタラクティブバックエンドを使用
 import matplotlib.pyplot as plt
 import pprint
 
-from metabolomix.core.data_config import get_data_dir
 from metabolomix.msdial.classes import get_sample_class_id
 from metabolomix.msdial.tags import get_sample_peak_tag_info
 
@@ -1093,62 +1091,6 @@ def _print_feature_details(feature_pairs: list[tuple], deserialized_list: list[d
         print(f"    ID {spot_id:>4}  loading={loading_value:+.6f}  m/z={mz_s}  RT={rt_s} min  {name}")
 
 
-def find_input_file(file_path: str | None = None, index: int = 0) -> str | None:
-    if file_path and os.path.exists(file_path):
-        return file_path
-
-    # .arf ファイルのみを検索（探索先は data_config 経由で環境変数上書き可）
-    candidates = glob.glob(os.path.join(str(get_data_dir()), "*.arf"))
-    return candidates[index] if candidates else None
-
-
-def _list_arf_files() -> list[str]:
-    """データディレクトリ内の .arf ファイルを名前順で返す。"""
-    return sorted(glob.glob(os.path.join(str(get_data_dir()), "*.arf")))
-
-
-def _select_arf_file(file_path: str | None, index: int | None) -> str | None:
-    """解析対象 .arf を決定する（非対話対応）。
-
-    優先順位: --file > --index > 対話プロンプト(端末時のみ) > 先頭ファイル[0]。
-    """
-    if file_path:
-        if os.path.exists(file_path):
-            return file_path
-        print(f"[WARNING] 指定ファイルが見つかりません: {file_path}", file=sys.stderr)
-        return None
-
-    candidates = _list_arf_files()
-    if not candidates:
-        return None
-
-    if index is not None:
-        if 0 <= index < len(candidates):
-            return candidates[index]
-        print(f"[WARNING] index {index} は範囲外です (0..{len(candidates) - 1})。", file=sys.stderr)
-        return None
-
-    # 番号未指定: 一覧を提示
-    print("解析可能な .arf ファイル:")
-    for i, c in enumerate(candidates):
-        print(f"  [{i}] {os.path.basename(c)}")
-
-    # 対話端末のときだけプロンプト。非対話(パイプ/リダイレクト)時は先頭を既定採用
-    if sys.stdin and sys.stdin.isatty():
-        try:
-            choice = int(input("何番目のファイルを解析しますか？ "))
-        except (ValueError, EOFError):
-            print("[INFO] 無効な入力のため [0] を使用します。", file=sys.stderr)
-            choice = 0
-        if not (0 <= choice < len(candidates)):
-            print("[INFO] 範囲外のため [0] を使用します。", file=sys.stderr)
-            choice = 0
-        return candidates[choice]
-
-    print("[INFO] 非対話モードのため先頭ファイル [0] を使用します。(--file/--index で明示指定可)",
-          file=sys.stderr)
-    return candidates[0]
-
 def summarize_arf_data(deserialized_list):
     """
     ARFデータの統計的要約を生成
@@ -1173,7 +1115,7 @@ def summarize_arf_data(deserialized_list):
 
 def main():
     parser = argparse.ArgumentParser(description="MS-DIAL .arf ファイルを解析します。")
-    parser.add_argument("--file", "-f", help="解析する .arf ファイルのパス")
+    parser.add_argument("--file", "-f", required=True, help="解析する .arf ファイルのパス（必須。データフォルダは探さない）")
     parser.add_argument("--export", "-e", help="CSV に書き出すパス")
     parser.add_argument("--pca", action="store_true", help="PCA を実行する")
     parser.add_argument("--output-pca", help="PCA 結果を JSON で保存するパス")
@@ -1189,17 +1131,15 @@ def main():
                         help="PCAに使用するプロパティ (例: height area). m_zやrtは量ではないため非推奨です。")
     parser.add_argument("--components", type=int, default=None,
                         help="計算する主成分の数 (デフォルト: 計算可能な最大数)")
-    parser.add_argument("--index", "-i", type=int, default=None,
-                        help="data/ 内の .arf 一覧から解析するファイルを番号で指定（非対話）。--file指定時は無視")
     parser.add_argument("--log-transform", action="store_true",
                         help="[任意] PCA前に log10 変換を適用する（強度の歪みを抑え条件分離が向上しやすい）")
     parser.add_argument("--min-detection-rate", type=float, default=0.0,
                         help="[任意] 特徴量(スポット)の実検出率による足切り 0.0-1.0（既定0=無効。例 0.5）")
     args = parser.parse_args()
 
-    file_path = _select_arf_file(args.file, args.index)
-    if not file_path:
-        raise FileNotFoundError(".arf ファイルが見つかりません。")
+    file_path = args.file
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f".arf ファイルが見つかりません: {file_path}")
 
     print(f"[INFO] 解析対象ファイル: {file_path}")
     with open(file_path, "rb") as f:

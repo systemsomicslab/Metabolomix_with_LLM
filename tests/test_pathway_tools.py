@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from mcp.server.fastmcp import Image
 
-from metabolomix.core import mcp_core, session_state
+from metabolomix.core import session_state
 from metabolomix.pathway import bridge, tools
 
 from tests.pymupdf_guard import require_pymupdf
@@ -24,9 +24,9 @@ def lipid_arf(monkeypatch, tmp_path):
 
     s = session_state.AnalysisSession()
     monkeypatch.setattr(session_state, "session", s)
-    monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path)
     s.assay_kind = "lipid"
     ds = DatasetState()
+    ds.analysis_dir = str(tmp_path)   # 記録（run）の置き場所の基準: <tmp>/reports/pathway
     ds.pp_matrix = np.array([[10.0, 1.0], [11.0, 1.1], [30.0, 0.3], [31.0, 0.31]])
     ds.pp_sample_names = ["C_1", "C_2", "P_1", "P_2"]
     ds.pp_feature_names = ["1", "2"]
@@ -257,7 +257,7 @@ def test_plot_returns_paths_and_summary_by_default(lipid_arf, fake_measure, monk
     out = tools.pathway_plot(pathways=["ceramide"])
     assert isinstance(out, str)
     body = json.loads(out)
-    manifest = json.loads((tools._run_dir(run_id) / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((tools._run_dir(run_id, session_state.session) / "manifest.json").read_text(encoding="utf-8"))
     [figure] = body["figures"]
     assert figure["pathway"] == "ceramide"
     assert figure["pdf"].endswith("ceramide.pdf") and Path(figure["png"]).is_file()
@@ -325,6 +325,6 @@ def test_plot_rejects_malformed_run_id(lipid_arf, bad):
 def test_corrupt_manifest_is_output_invalid(lipid_arf, fake_measure):
     run_id = json.loads(tools.pathway_project(**_GROUPS,
                                               pathways=["remodeling"]))["run_id"]
-    (tools._run_dir(run_id) / "manifest.json").write_text("{not json", encoding="utf-8")
+    (tools._run_dir(run_id, session_state.session) / "manifest.json").write_text("{not json", encoding="utf-8")
     body = json.loads(tools.pathway_plot(run_id=run_id))
     assert body["error"]["code"] == "MSLM_OUTPUT_INVALID"

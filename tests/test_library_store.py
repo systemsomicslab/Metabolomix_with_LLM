@@ -278,8 +278,7 @@ def test_candidates_rejects_an_rt_without_a_tolerance(library):
 
 def test_candidates_ion_mode_comparison_is_case_insensitive(library):
     """Critical 1 の再発防止: store の `ion_mode` 列は小文字（`record.ION_MODES`）
-    だが、呼び出し側（`peak_verification._spectral_match_for_feature`）は
-    PAI2 由来の `IonMode.Positive.name`（`"Positive"`、大文字始まり）をそのまま
+    だが、呼び出し側は PAI2 由来の `IonMode.Positive.name`（`"Positive"`、大文字始まり）をそのまま
     渡す。以前は SQLite の既定 BINARY 照合で一致せず常に 0 件になっていた。"""
     s = store.open_store(library)
     try:

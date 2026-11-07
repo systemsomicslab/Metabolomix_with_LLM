@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from metabolomix.core import handles, mcp_core, session_state
+from metabolomix.core import handles, session_state
 from metabolomix.library import tools as library_tools
 from metabolomix.tools import handle_tools
 from metabolomix.tools import reanalysis_tools as R
@@ -25,7 +25,6 @@ _STEM = "AlignmentResult_2026_02_01_00_00_00"
 def fresh_state(tmp_path, monkeypatch):
     session_state.session = session_state.AnalysisSession()
     handles.registry = handles.HandleRegistry()
-    monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path / "datadir")
     use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     yield
     for handle in handles.registry.list():
@@ -252,31 +251,6 @@ def test_stale_dataset_library_load_refuses_after_the_file_changes(tmp_path):
     assert session_state.session.library.store is None
 
 
-def test_ion_mode_skips_the_record_and_reports_the_difference(tmp_path, monkeypatch):
-    folder = _folder(tmp_path)
-    _dbs(folder / "Proj_Loaded.msp2.dbs")
-    setting = _msp(tmp_path / "lab" / "Setting_Pos.msp")
-    use_config(monkeypatch, tmp_path, {"library.msp_positive": str(setting)})
-    h = _open(folder, library="none")["dataset_handle"]
-    out = json.loads(library_tools.library_load(ion_mode="positive", dataset_handle=h))
-    assert out["status"] == "success" and out["file"] == "Setting_Pos.msp"
-    assert "library_source" not in out
-    assert out["differs_from_record"] == {"remembered": "Proj_Loaded.msp2.dbs",
-                                          "opened": "Setting_Pos.msp"}
-    assert str(setting.parent) not in json.dumps(out, ensure_ascii=False)
-
-
-def test_ion_mode_opposite_to_the_handle_polarity_still_mismatches(tmp_path, monkeypatch):
-    folder = _folder(tmp_path)
-    _dbs(folder / "Proj_Loaded.msp2.dbs")
-    setting = _msp(tmp_path / "lab" / "Setting_Neg.msp")
-    use_config(monkeypatch, tmp_path, {"library.msp_negative": str(setting)})
-    h = _open(folder, library="none")["dataset_handle"]
-    handles.registry.get(h).polarity = "positive"
-    out = json.loads(library_tools.library_load(ion_mode="negative", dataset_handle=h))
-    assert out["code"] == "LIBRARY_POLARITY_MISMATCH"
-
-
 def test_identical_copy_is_not_different_but_a_rewritten_file_is(tmp_path):
     import shutil
 
@@ -306,9 +280,9 @@ def test_lbm_only_with_explicit_file_path_says_it_was_not_identified_with_it(tmp
     assert "differs_from_record" not in out
 
 
-def test_session_dataset_without_a_record_falls_back_to_the_settings(tmp_path, monkeypatch):
-    """R21: mzTab-M の記憶は unknown。引数なしの library_load は極性の設定へ落ちる。"""
-    from metabolomix.tools import mztab_tools
+def test_session_dataset_without_a_record_asks_for_file_path(tmp_path, monkeypatch):
+    """mzTab-M の記憶は unknown。引数なしの library_load は極性の設定へ落ちず、候補の名前を挙げて
+    `file_path` を求める（置き場所は出さない）。"""
     from tests.reanalysis_fixtures import write_mztab
 
     setting = _msp(tmp_path / "lab" / "Setting_Pos.msp")
@@ -317,5 +291,7 @@ def test_session_dataset_without_a_record_falls_back_to_the_settings(tmp_path, m
     handle_tools.load_dataset(mztab_path=str(mztab))
     assert session_state.session.dataset.library_record["status"] == "unknown"
     out = json.loads(library_tools.library_load())
-    assert out["status"] == "success" and out["file"] == "Setting_Pos.msp"
-    assert "library_source" not in out
+    assert out["status"] == "error" and out["code"] == "LIBRARY_NOT_REMEMBERED"
+    assert out["candidates"] == ["Setting_Pos.msp"] and "file_path" in out["message"]
+    assert session_state.session.library.store is None
+    assert str(setting.parent) not in json.dumps(out, ensure_ascii=False)

@@ -12,119 +12,10 @@ from pathlib import Path
 import tempfile
 
 import server
-from metabolomix.core import mcp_core
-
-
-class ResolveArfPreferenceTests(unittest.TestCase):
-    def setUp(self):
-        self._orig_data_dir = mcp_core.DATA_DIR
-
-    def tearDown(self):
-        mcp_core.DATA_DIR = self._orig_data_dir
-
-    def _touch(self, directory: Path, name: str) -> None:
-        (directory / name).write_bytes(b"")  # 中身は不要（パス解決のみ検証）
-
-    def test_prefers_peakproperties_over_driftspots(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self._touch(directory, "Sample_DriftSpots.arf")
-            self._touch(directory, "Sample_PeakProperties.arf")
-            mcp_core.DATA_DIR = directory
-            resolved = server.resolve_arf_file_path()
-            self.assertIsNotNone(resolved)
-            self.assertTrue(resolved.lower().endswith("peakproperties.arf"))
-
-    def test_falls_back_when_no_peakproperties(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self._touch(directory, "Sample_DriftSpots.arf")
-            mcp_core.DATA_DIR = directory
-            resolved = server.resolve_arf_file_path()
-            self.assertTrue(resolved.lower().endswith("driftspots.arf"))
-
-    def test_explicit_path_is_respected(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self._touch(directory, "Sample_DriftSpots.arf")
-            explicit = str(directory / "Sample_DriftSpots.arf")
-            self.assertEqual(server.resolve_arf_file_path(explicit), explicit)
-
-
-class PickLatestDuplicateTests(unittest.TestCase):
-    """同種ファイルが重複（旧版/新版）する場合に最新版を選ぶこと。"""
-
-    def setUp(self):
-        self._orig_data_dir = mcp_core.DATA_DIR
-
-    def tearDown(self):
-        mcp_core.DATA_DIR = self._orig_data_dir
-
-    def _touch(self, directory: Path, name: str, mtime: float | None = None) -> Path:
-        path = directory / name
-        path.write_bytes(b"")
-        if mtime is not None:
-            os.utime(path, (mtime, mtime))
-        return path
-
-    def test_arf2_picks_latest_embedded_timestamp(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self._touch(directory, "AlignmentResult_2026_05_15_10_13_35.arf2")
-            self._touch(directory, "AlignmentResult_2026_06_01_09_00_00.arf2")
-            mcp_core.DATA_DIR = directory
-            resolved = server.resolve_arf2_file_path()
-            self.assertTrue(resolved.endswith("2026_06_01_09_00_00.arf2"))
-
-    def test_arf_embedded_timestamp_beats_mtime(self):
-        # 旧タイムスタンプ版に新しい mtime を与えても、埋め込みタイムスタンプが優先される
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self._touch(
-                directory,
-                "AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf",
-                mtime=10_000_000_000,  # わざと新しい mtime
-            )
-            self._touch(
-                directory,
-                "AlignmentResult_2026_06_01_09_00_00_PeakProperties.arf",
-                mtime=1_000_000_000,  # わざと古い mtime
-            )
-            mcp_core.DATA_DIR = directory
-            resolved = server.resolve_arf_file_path()
-            self.assertTrue(resolved.endswith("2026_06_01_09_00_00_PeakProperties.arf"))
-
-    def test_falls_back_to_mtime_without_timestamp(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self._touch(directory, "older.EIC.aef", mtime=1_000_000_000)
-            self._touch(directory, "newer.EIC.aef", mtime=2_000_000_000)
-            mcp_core.DATA_DIR = directory
-            resolved = server.resolve_eicaef_file_path()
-            self.assertTrue(resolved.endswith("newer.EIC.aef"))
-
-    def test_eicaef_resolver_uses_canonical_uppercase_extension(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self._touch(directory, "newer.eic.aef", mtime=2_000_000_000)
-            expected = self._touch(
-                directory, "older.EIC.aef", mtime=1_000_000_000
-            )
-            mcp_core.DATA_DIR = directory
-
-            resolved = server.resolve_eicaef_file_path()
-
-            self.assertEqual(resolved, str(expected.absolute()))
 
 
 class BatchAnnounceTests(unittest.TestCase):
     """複数バッチ混在時のバッチ選択の注記（`_describe_batch_selection`）。"""
-
-    def setUp(self):
-        self._orig_data_dir = mcp_core.DATA_DIR
-
-    def tearDown(self):
-        mcp_core.DATA_DIR = self._orig_data_dir
 
     def _touch(self, directory: Path, name: str) -> None:
         (directory / name).write_bytes(b"")
@@ -182,58 +73,6 @@ class SelectLatestBatchTests(unittest.TestCase):
         self.assertEqual(set(server._select_latest_batch(paths)), set(paths))
 
 
-class ResolvePai2LatestBatchTests(unittest.TestCase):
-    def setUp(self):
-        self._orig_data_dir = mcp_core.DATA_DIR
-
-    def tearDown(self):
-        mcp_core.DATA_DIR = self._orig_data_dir
-
-    def _touch(self, directory: Path, name: str) -> None:
-        (directory / name).write_bytes(b"")
-
-    def test_resolve_pai2_picks_latest_batch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self._touch(directory, "AlignmentResult_2026_05_15_10_13_35.pai2")
-            self._touch(directory, "AlignmentResult_2026_06_01_09_00_00.pai2")
-            mcp_core.DATA_DIR = directory
-            resolved = server.resolve_pai2_file_path()
-            self.assertIsNotNone(resolved)
-            self.assertTrue(resolved.endswith("2026_06_01_09_00_00.pai2"))
-
-    def test_resolve_pai2_explicit_path_is_respected(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self._touch(directory, "AlignmentResult_2026_05_15_10_13_35.pai2")
-            explicit = str(directory / "AlignmentResult_2026_05_15_10_13_35.pai2")
-            self.assertEqual(server.resolve_pai2_file_path(explicit), explicit)
-
-
-class ResolveArfCrossBatchTests(unittest.TestCase):
-    """旧バッチの PeakProperties.arf があっても最新バッチの方を選ぶこと。"""
-
-    def setUp(self):
-        self._orig_data_dir = mcp_core.DATA_DIR
-
-    def tearDown(self):
-        mcp_core.DATA_DIR = self._orig_data_dir
-
-    def _touch(self, directory: Path, name: str) -> None:
-        (directory / name).write_bytes(b"")
-
-    def test_arf_picks_peakproperties_from_latest_batch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self._touch(directory, "AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf")
-            self._touch(directory, "AlignmentResult_2026_05_15_10_13_35_DriftSpots.arf")
-            self._touch(directory, "AlignmentResult_2026_06_01_09_00_00_PeakProperties.arf")
-            self._touch(directory, "AlignmentResult_2026_06_01_09_00_00_DriftSpots.arf")
-            mcp_core.DATA_DIR = directory
-            resolved = server.resolve_arf_file_path()
-            self.assertTrue(resolved.endswith("2026_06_01_09_00_00_PeakProperties.arf"))
-
-
 class ListDataFilesTests(unittest.TestCase):
     """入口ツールの一覧が、解析できないファイルで文脈を埋めないことを縛る。
 
@@ -243,7 +82,6 @@ class ListDataFilesTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self._orig_data_dir = mcp_core.DATA_DIR
         self._tmp = tempfile.TemporaryDirectory()
         self.directory = Path(self._tmp.name)
         for name in ("AlignmentResult_2026_01_01_00_00_00_PeakProperties.arf",
@@ -252,25 +90,26 @@ class ListDataFilesTests(unittest.TestCase):
                      "s1.wiff", "s1.wiff.scan", "s1.wiff2",
                      "s1.timeseries.data", "s1.txt", "s1_tags.xml"):
             (self.directory / name).write_bytes(b"")
-        mcp_core.DATA_DIR = self.directory
 
     def tearDown(self):
-        mcp_core.DATA_DIR = self._orig_data_dir
         self._tmp.cleanup()
 
+    def _list(self, **kwargs):
+        return server.list_data_files(directory=str(self.directory), **kwargs)
+
     def test_raw_acquisition_files_are_excluded_by_default(self):
-        out = server.list_data_files()
+        out = self._list()
         for parseable in (".arf", ".arf2", ".pai2", ".dcl", ".mddata"):
             self.assertIn(parseable, out)
         for raw in ("s1.wiff", "s1.timeseries.data", "s1.txt"):
             self.assertNotIn(raw, out)
 
     def test_all_files_opts_back_in(self):
-        out = server.list_data_files(all_files=True)
+        out = self._list(all_files=True)
         self.assertIn("s1.wiff", out)
 
     def test_extension_filter_still_narrows(self):
-        out = server.list_data_files(extension=".pai2")
+        out = self._list(extension=".pai2")
         self.assertIn("s1.pai2", out)
         self.assertNotIn("s1.dcl", out)
 
@@ -283,18 +122,18 @@ class ListDataFilesTests(unittest.TestCase):
         (self.directory / "s2.d").mkdir()
         (self.directory / "s2.d" / "AcqData").mkdir()
 
-        self.assertNotIn("s2.d", server.list_data_files())
-        self.assertIn("s2.d", server.list_data_files(all_files=True))
-        self.assertIn("s2.d", server.list_data_files(extension=".d"))
+        self.assertNotIn("s2.d", self._list())
+        self.assertIn("s2.d", self._list(all_files=True))
+        self.assertIn("s2.d", self._list(extension=".d"))
 
     def test_non_vendor_directories_never_appear(self):
         """`.d` / `.raw` 以外はフォルダでは計測データにならない（上流の規則）。"""
         (self.directory / "backup.mzml").mkdir()
-        self.assertNotIn("backup.mzml", server.list_data_files(all_files=True))
+        self.assertNotIn("backup.mzml", self._list(all_files=True))
 
     def test_waters_raw_directory_appears_when_opted_in(self):
         (self.directory / "s3.raw").mkdir()
-        self.assertIn("s3.raw", server.list_data_files(all_files=True))
+        self.assertIn("s3.raw", self._list(all_files=True))
 
     def test_missing_directory_is_reported_not_returned_as_a_path(self):
         """純関数側は空リストを返し、文面はツール側だけが持つ。

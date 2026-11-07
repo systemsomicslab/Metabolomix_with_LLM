@@ -68,7 +68,7 @@ def _tools(tmp_path):
         (T.dataset_statistic, {"specification": {}, "matrix_result_id": "m"}),
         (T.dataset_build_matrix, {"recipe": {}}),
         (T.dataset_feature_search, {"feature_ids": ["1"]}),
-        (library_tools.library_load, {"ion_mode": "positive"}),
+        (library_tools.library_load, {}),
         (library_tools.library_match_feature, {"precursor_mz": 104.107}),
         (library_tools.library_plot_mirror, {}),
         (R.dataset_alignment_qc, {}),
@@ -180,10 +180,9 @@ def test_library_load_into_handle_keeps_global_empty(monkeypatch, tmp_path, pos_
     msp.parent.mkdir()
     msp.write_text("NAME: Choline\nPRECURSORMZ: 104.107\nIONMODE: Positive\nNum Peaks: 2\n"
                    "60.0808 100\n104.107 50\n", encoding="ascii")
-    use_config(monkeypatch, tmp_path, {"library.msp_positive": str(msp)})
     use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     a = _open(pos_mztab)
-    out = json.loads(library_tools.library_load(ion_mode="positive", dataset_handle=a))
+    out = json.loads(library_tools.library_load(file_path=str(msp), dataset_handle=a))
     assert out["status"] == "success"
     assert str(msp.parent) not in json.dumps(out)
     assert handles.registry.get(a).library.store is not None

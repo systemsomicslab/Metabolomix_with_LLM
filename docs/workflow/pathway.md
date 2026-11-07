@@ -8,7 +8,8 @@
 [pathway.md（output_format）](../output_format/pathway.md) を見ること。
 
 `session.pathway`（他スロットとは独立）は直近の `run_id` だけを持つ。run の正準は
-`reports/pathway/<run_id>/manifest.json`。
+`reports/pathway/<run_id>/manifest.json`（置き場所は `[paths] reports_dir` → データセットの `analysis_dir` 配下。
+`pathway_project` / `pathway_plot` は `dataset_handle` を持つ）。
 
 入口は `bridge.run_bridge()` だけで、ここがサーバかローカルかを決める（`api_url()`＝`[mslipidmapper] mslipidmapper_api_url` が未設定ならローカルだけ）。
 サーバ側は `metabolomix/pathway/remote.py`（`GET /healthz` → `POST /v1/jobs` → 状態を succeeded / failed まで

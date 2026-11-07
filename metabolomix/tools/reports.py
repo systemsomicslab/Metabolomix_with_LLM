@@ -1,7 +1,8 @@
 """解析・解釈レポートと図の保存ツール群。
 
 write_report / read_report（ID を省くと一覧）/ save_figure。
-レポート先の解決は mcp_core（DATA_DIR を動的参照）に委ねる。save_figure は `dataset_plot` が置いた
+レポート先は `[paths] reports_dir`（あれば先）→ データセットの解析フォルダ配下 `reports/`（mcp_core）。
+各ツールは `dataset_handle` で読み書きするハンドルを選ぶ（省略時は直近）。save_figure は `dataset_plot` が置いた
 `ds.figures` から描く。deps: mcp_core / plot_tools（遅延 import）/ notes / matplotlib。
 server は import しない。
 """
@@ -13,6 +14,7 @@ from mcp.types import ToolAnnotations
 from metabolomix.core.serialization import json_payload
 from metabolomix.core.mcp_core import mcp, _resolve_report_dir, _report_dir_candidates, _build_report_meta
 from metabolomix.plots.render import render_files
+from metabolomix.tools._holder import resolve_holder as _resolve_holder
 
 __all__ = [
     "write_report",
@@ -30,6 +32,7 @@ def write_report(
     dataset: str,
     body: str,
     status: str = "draft",
+    dataset_handle: str | None = None,
 ) -> str:
     """解析・解釈レポートを reports/<analysis_id>.md に上書き保存する（成果物＋記録）。
 
@@ -39,14 +42,19 @@ def write_report(
     （ファイルは毎回上書き）。
     lipidmix.local.toml の [paths] reports_dir の明示先を優先し、書込不可なら解析フォルダ配下reports/。
     未指定時は解析フォルダ配下reports/だけを使う（リポジトリ側へは退避しない）。
+    解析フォルダは直近のデータセット（または dataset_handle）のもの。設定の置き場所も
+    データセットも無いときは missing_state（load_dataset）。
 
     analysis_id はファイル名 slug の元になるため ASCII で一意に。別IDが同一slugに潰れて既存
     レポートを上書きしそうな場合は保存を中止して通知する（objectiveレコードと同じIDを推奨）。
     """
+    holder = _resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
     slug = notes.make_slug(analysis_id)
     # slug衝突ガード: 別の analysis_id が同一ファイル名に潰れる場合は、既存レポートを
     # 黙って上書きせず中止する（同一IDの上書きは意図どおり許可）。非ASCII/記号違いのIDで起きうる。
-    for directory in _report_dir_candidates():
+    for directory in _report_dir_candidates(holder):
         existing = directory / f"{slug}.md"
         if existing.is_file():
             ex_meta, _ = notes.parse_frontmatter(existing.read_text(encoding="utf-8"))
@@ -58,7 +66,7 @@ def write_report(
                     "上書きを避けました。ASCIIで一意な analysis_id を指定してください。"
                 )
             break  # 同一ID → 上書きしてよい
-    reports_dir = _resolve_report_dir()
+    reports_dir = _resolve_report_dir(holder)
     meta = _build_report_meta(analysis_id, dataset, status)
     path = notes.write_note(reports_dir, slug, meta, body)
     return f"レポートを保存: {path}（status={status}）。read_report('{analysis_id}') で読み戻せます。"
@@ -66,19 +74,23 @@ def write_report(
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 @config_invalid_as_envelope
-def read_report(analysis_id: str | None = None) -> str:
+def read_report(analysis_id: str | None = None, dataset_handle: str | None = None) -> str:
     """過去レポートを読み戻す。analysis_id を省くと既存レポートの 1 行索引を返す。
 
+    dataset_handle: 解析フォルダを決めるハンドル（省略時は直近）。
     analysis_id を渡すと、候補ディレクトリ横断で最新更新のものの本文を返す（セッション継続用）。
     解析フォルダ配下と退避先の両方に同名レポートが残る場合（書き込み可否が途中で変化した等）、
     古い方を返さないよう mtime が最新のファイルを採用する。
     省いた場合の索引は 1 行ずつ `analysis_id / date / status`。候補ディレクトリ横断で同一
     analysis_id が重複するときは mtime が最新の 1 件を採用する。
     """
+    holder = _resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
     if analysis_id is None:
-        return _list_reports()
+        return _list_reports(holder)
     slug = notes.make_slug(analysis_id)
-    matches = [d / f"{slug}.md" for d in _report_dir_candidates()]
+    matches = [d / f"{slug}.md" for d in _report_dir_candidates(holder)]
     matches = [p for p in matches if p.is_file()]
     if not matches:
         return f"レポートが見つかりません: {analysis_id}（write_report で作成してください）"
@@ -86,11 +98,11 @@ def read_report(analysis_id: str | None = None) -> str:
     return newest.read_text(encoding="utf-8")
 
 
-def _list_reports() -> str:
+def _list_reports(holder) -> str:
     """既存レポートの 1 行索引（analysis_id / date / status）。"""
     # analysis_id -> (mtime, 表示行)。最新更新の行を残す。
     best: dict[str, tuple[float, str]] = {}
-    for directory in _report_dir_candidates():
+    for directory in _report_dir_candidates(holder):
         if not directory.is_dir():
             continue
         for path in sorted(directory.glob("*.md")):
@@ -174,7 +186,7 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
             stale = _stale_figure(ds, record)
             if stale:
                 return mcp_errors.missing_state(f"{kind}_figure", ["dataset_plot"], stale)
-        return _save_record(ds, record, analysis_id, title)
+        return _save_record(ds, record, analysis_id, title, holder)
     except plot_tools._Missing as exc:
         return mcp_errors.missing_state(exc.state, exc.required_tools, exc.message)
     except DomainError as exc:
@@ -200,7 +212,7 @@ def _stale_figure(ds, record: dict) -> str | None:
     return None
 
 
-def _save_record(ds, record: dict, analysis_id: str, title: str | None) -> str:
+def _save_record(ds, record: dict, analysis_id: str, title: str | None, holder) -> str:
     """図の記録を `reports/figures/` に保存し、どの結果から描いたかを添えて返す。"""
     from metabolomix.plots import eic as eic_plot
     from metabolomix.plots import group_intensity as group_intensity_plot
@@ -210,7 +222,7 @@ def _save_record(ds, record: dict, analysis_id: str, title: str | None) -> str:
     from metabolomix.plots.result_output import save_result_figure
 
     kind = record["kind"]
-    out_path = _figures_dir() / f"{notes.make_slug(analysis_id)}_{kind}.png"
+    out_path = _figures_dir(holder) / f"{notes.make_slug(analysis_id)}_{kind}.png"
     title = title or record.get("title")
     both = ""
     if kind == "pca":
@@ -235,8 +247,8 @@ def _save_record(ds, record: dict, analysis_id: str, title: str | None) -> str:
             f"本文に ![{label}](figures/{out_path.name}) で埋め込めます。")
 
 
-def _figures_dir():
-    figures_dir = _resolve_report_dir() / "figures"
+def _figures_dir(holder):
+    figures_dir = _resolve_report_dir(holder) / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
     return figures_dir
 

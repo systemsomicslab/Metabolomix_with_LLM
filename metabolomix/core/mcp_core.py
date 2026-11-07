@@ -1,15 +1,11 @@
 """MCP コア: FastMCP インスタンス・共通設定・状態ディレクトリ・レポート先解決。
 
-このモジュールは依存グラフの **leaf**（stdlib / FastMCP / metabolomix.core.data_config のみ）。
+このモジュールは依存グラフの **leaf**（stdlib / FastMCP / metabolomix.core.user_config のみ）。
 metabolomix.<形式>.tools や metabolomix.tools.* を import してはならない（循環回避の絶対ルール）。
 
-`BASE_DIR` はリポジトリルート（このファイルの 2 階層上）。docs/ はこれを起点に解決する。解析の記録（objective とレポート）は解析フォルダ（`DATA_DIR`）
-配下の reports/ に置き、リポジトリ側には書かない。
-
-`DATA_DIR` は実行時に差し替えられる可変状態（B-2b で消える）。参照は必ず
-`mcp_core.DATA_DIR`（module 修飾・動的）で行い、
-`from metabolomix.core.mcp_core import DATA_DIR` のようなスナップショット束縛を
-作らないこと（差し替えが伝播しなくなる）。
+`BASE_DIR` はリポジトリルート（このファイルの 2 階層上）。docs/ はこれを起点に解決する。解析の記録（objective とレポート）はデータセットの解析フォルダ
+（`DatasetState.analysis_dir`）配下の reports/ に置き、リポジトリ側には書かない。
+データの探索先（旧 `DATA_DIR`）は無い——ツールは直近のデータセットのファイルを使う。
 """
 import os
 from datetime import date as _date
@@ -19,7 +15,6 @@ from mcp.server.fastmcp import FastMCP
 
 from metabolomix.core import user_config
 from metabolomix.core.atomic_io import DomainError
-from metabolomix.core.data_config import get_data_dir
 
 # このファイルは <root>/metabolomix/core/ にある。docs/
 # はリポジトリルート基準で解決するため 2 階層上る。
@@ -240,31 +235,43 @@ mcp = FastMCP(
     port=int(os.environ.get("LIPIDMIX_PORT", "8000")),
 )
 
-# データ探索先。環境変数 LIPIDMIX_DATA_DIR で上書き可（既定: <project>/data）。
-# 実行時に差し替えうるため、参照は mcp_core.DATA_DIR（動的）で行う。
-DATA_DIR = get_data_dir()
+def _report_dir_candidates(holder=None) -> list[Path]:
+    """記録の書き込み先の候補（先に試すものから）。
 
-
-def _report_dir_candidates() -> list[Path]:
-    """明示された保存先を優先し、未指定時は解析フォルダ配下 reports/ だけを使う。
-
-    明示先は設定ファイルの `[paths] reports_dir`（環境変数では指さない。spec 2026-11-06
-    §7.4）。設定ファイルが読めなければ `CONFIG_INVALID` の DomainError（黙って解析フォルダへ
-    書き先を変えない。ツールの境界は `mcp_errors.config_invalid_as_envelope` が封筒にする）。
+    設定ファイルの `[paths] reports_dir`（あれば先。環境変数では指さない。spec 2026-11-06
+    §7.4）→ `holder`（`.dataset` を持つ、ハンドルか対話のセッション）のデータセットの
+    `analysis_dir` 配下 `reports/`。どちらも無い（設定が無く、データセットも無い）ときは
+    `NO_REPORT_DIR` の DomainError（ツールの境界は `mcp_errors.config_invalid_as_envelope` が
+    `missing_state("dataset", ["load_dataset"])` にする）。設定ファイルが読めなければ
+    `CONFIG_INVALID` の DomainError（黙って解析フォルダへ書き先を変えない）。
 
     解析の記録（objective とレポート）は生データ（解析フォルダ）の側に置く契約。
     リポジトリ側（`<project>/reports` や `<project>/analyses`）へ退避する経路は
-    持たない——コードの置き場に解析記録が溜まるバグの温床だった。
+    持たない——コードの置き場に解析記録が溜まるバグの温床だった。`holder` は呼び出し側が
+    渡す（このモジュールは leaf なので、ハンドルの登録簿も session も import しない）。
     """
     try:
         setting = user_config.get_setting("paths.reports_dir")
     except user_config.ConfigInvalidError as exc:
         raise DomainError(exc.code, exc.message, exc.details()) from exc
+    candidates: list[Path] = []
     if setting is not None:
-        return [Path(setting.value), DATA_DIR / "reports"]
-    return [DATA_DIR / "reports"]
+        candidates.append(Path(setting.value))
+    analysis_dir = getattr(getattr(holder, "dataset", None), "analysis_dir", None)
+    if analysis_dir:
+        candidates.append(Path(analysis_dir) / "reports")
+    if not candidates:
+        raise DomainError(
+            NO_REPORT_DIR,
+            "記録の置き場所が決まりません（設定ファイルの [paths] reports_dir が無く、"
+            "データセットも開いていません）。先に load_dataset を実行してください。")
+    return candidates
 
 
-def _resolve_report_dir() -> Path:
+#: 記録の置き場所が決まらないときの `DomainError` のコード（`missing_state` の封筒になる）。
+NO_REPORT_DIR = "NO_REPORT_DIR"
+
+
+def _resolve_report_dir(holder=None) -> Path:
     """候補順に書き込み可能なレポートディレクトリを返す。"""
-    return _first_writable_dir(_report_dir_candidates())
+    return _first_writable_dir(_report_dir_candidates(holder))

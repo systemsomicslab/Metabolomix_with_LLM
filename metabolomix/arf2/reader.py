@@ -9,11 +9,9 @@ import numpy as np
 from enum import Enum
 from typing import List, Optional, Dict
 import os
-import glob
 import sys
 import pprint
 
-from metabolomix.core.data_config import get_data_dir
 
 class IonMode(Enum):
     Positive = 0
@@ -309,19 +307,16 @@ def format_spots_as_table(deserialized_list: List[dict], delimiter: str = "\t",
     return "\n".join(lines)
 
 
-def find_input_file(file_path: str | None = None, index: int = 0) -> str | None:
-    if file_path and os.path.exists(file_path):
-        return file_path
-
-    # .arf2 ファイルのみを検索（探索先は data_config 経由で環境変数上書き可）
-    candidates = glob.glob(os.path.join(str(get_data_dir()), "*.arf2"))
-    return candidates[index] if candidates else None
-
 if __name__ == "__main__":
-    file_path = find_input_file()
+    import argparse
 
-    if not file_path:
-        print(".arf2 ファイルが見つかりません。")
+    parser = argparse.ArgumentParser(description="MS-DIAL .arf2 ファイルを解析します。")
+    parser.add_argument("--file", "-f", required=True,
+                        help="解析する .arf2 ファイルのパス（必須。データフォルダは探さない）")
+    file_path = parser.parse_args().file
+
+    if not os.path.isfile(file_path):
+        print(f".arf2 ファイルが見つかりません: {file_path}")
         sys.exit(1)
 
     print(f"Loading {file_path}...")

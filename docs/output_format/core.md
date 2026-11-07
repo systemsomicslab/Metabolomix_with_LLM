@@ -38,7 +38,7 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 | EIC/AEF | `*.EIC.aef` | `metabolomix/eic/reader.py` | `eic` |
 | mzTab-M | `*.mzTab` | `metabolomix/mztab/reader.py` | `mztab` |
 
-記載内容は、実装、`docs/schema/AlignmentSpotProperty.md`、`docs/schema/AlignmentChromPeakFeature.md`、`docs/schema/ChromatogramPeakFeature.md`、および NEG 実測データセット（`LIPIDMIX_DATA_DIR` 配下）の実ファイルに対する出力確認に基づく。
+記載内容は、実装、`docs/schema/AlignmentSpotProperty.md`、`docs/schema/AlignmentChromPeakFeature.md`、`docs/schema/ChromatogramPeakFeature.md`、および NEG 実測データセット（MS-DIAL の解析フォルダ）の実ファイルに対する出力確認に基づく。
 
 代表テストファイル: `AlignmentResult_2026_05_15_10_13_35{_PeakProperties.arf,.arf2,.EIC.aef}` および `20220901_RAW_control_0h_1_NEG_202605151012{.pai2,.dcl}`。
 

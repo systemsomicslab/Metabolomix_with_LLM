@@ -35,8 +35,8 @@ def alignment_files_for(opened, arf2_path: str | None = None) -> tuple[str | Non
 
     `load_dataset` が決め、ハンドルに `arf2_path` / `dcl_path` として持たせる。ハンドル ID を
     明示した呼び出しはこの値を使う。
-    **ID を省いた呼び出しは `_holder.alignment_paths` とデータフォルダの探索で決めるので、
-    同じファイルになるとは限らない**（データフォルダに別のバッチがあれば食い違いうる）。
+    ID を省いた呼び出しも、直近のハンドルのこの値を使う（`_holder.alignment_paths`。
+    データフォルダは探さない）。
     解析フォルダで読んだなら（明示が無ければ）その選択、そうでなければ `_alignment_files` が探す。
     """
     selection = opened.selection
@@ -98,8 +98,8 @@ def _open_library_for(ds) -> tuple[object | None, str | None]:
         candidates = record.get("candidates") or []
         hint = f"（候補: {', '.join(candidates)}）" if candidates else ""
         return None, ("データセットが同定に使ったライブラリを特定できないので、読んでいない"
-                      f"{hint}。極性の設定からは引かない（`library_load(dataset_handle=…)` を `file_path` なしで"
-                      "呼ぶと、記憶が無いときだけ極性の設定から引く）。`file_path` で明示もできる。")
+                      f"{hint}。極性の設定からは引かない（`library_load` も `file_path` なしでは"
+                      "開けない）。`file_path` で明示できる。")
     path = Path(record["path"])
     try:
         store = open_store(path, read_only=True)  # 同じ構築先の同時構築は open_store が直列にする

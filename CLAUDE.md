@@ -75,14 +75,14 @@ setup が無ければ作る。追跡されている `.vscode/mcp.json` も `.ven
 
 環境変数（すべて任意。起動ごとに変わるものだけを残す。spec 2026-11-06 §7.4）:
 `LIPIDMIX_CONFIG`（下記の設定ファイルの場所の上書き。worktree とテストが使う）/
-`LIPIDMIX_DATA_DIR`（データ探索先。既定 `<project>/data`。B-2b で探索ごと消える）/
 `LIPIDMIX_TRANSPORT` `LIPIDMIX_HOST` `LIPIDMIX_PORT`（HTTP 待受）/
 `LIPIDMIX_PLOT_OUTPUT`（描画系ツールの戻り値。既定 `image`。Plotly で自分で描く
 クライアント＝Use-LLLM は `payload` を置く）。
 置き場所とサーバの振る舞いは環境変数でなく設定ファイルに書く: `[paths] reports_dir`（解析フォルダ
-配下 `reports/` より先に試す記録の書き込み先。未指定が既定で、そのとき記録は解析フォルダ配下
-`reports/` だけに書く）`[paths] library_cache`（照合用 SQLite キャッシュの置き場所。既定は
-**設定ファイルのフォルダ**の `data/.library-cache` で、`LIPIDMIX_DATA_DIR` には付いて動かない）
+配下 `reports/` より先に試す記録の書き込み先。未指定が既定で、そのとき記録は直近のデータセットの
+解析フォルダ（`DatasetState.analysis_dir`）配下 `reports/` だけに書く。設定も無く、データセットも
+無ければ `missing_state("dataset", ["load_dataset"])`）`[paths] library_cache`（照合用 SQLite キャッシュの置き場所。既定は
+**設定ファイルのフォルダ**の `data/.library-cache`）
 `[server] max_dataset_handles`（データセットのハンドルの上限。既定 8）`[server] caveat_mode`
 （意味論ダイジェスト。`digest` 既定 / `off`。他の値は `CONFIG_INVALID`）。
 設定ファイルが読めないとき、記録・ハンドル・ライブラリのツールは `CONFIG_INVALID` の封筒を返し
@@ -145,10 +145,16 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
   （各モジュールの `__all__` ＝そのモジュールのツール名）で公開面を再エクスポートするだけ。
   新しいツールを足すときは、実体を該当モジュールに書き `__all__` に載せる。
 - **`server.py` をルートから動かさない**。`.mcp.json` / `.vscode/mcp.json` が絶対パスで指している。
-- **可変状態の正準は `metabolomix.core.mcp_core`（`DATA_DIR`）と
-  `metabolomix.core.session_state`（`session`）**。`server.<name>` はスナップショット束縛にすぎないので、
-  差し替え・モンキーパッチは必ず正準モジュール側に当てる。参照も `mcp_core.DATA_DIR` の
-  module 修飾で行い、`from ... import DATA_DIR` を書かない。
+- **可変状態の正準は `metabolomix.core.session_state`（`session`）**。`server.<name>` は
+  スナップショット束縛にすぎないので、差し替え・モンキーパッチは必ず正準モジュール側に当てる。
+  **データの探索先（旧 `DATA_DIR`・`LIPIDMIX_DATA_DIR`）は無い**（B-2b で消した。
+  `tests/test_no_asset_env_vars.py` が固定している）: `list_data_files` は `directory` 必須で、
+  パスを省いたツール（`dcl_*`・`library_*`）は直近のデータセット（または `dataset_handle`）が覚えた
+  `.arf2` / `.dcl` を使う（`dataset/artifacts.py` `artifact_path` と `tools/_holder.py` `alignment_paths`）。
+  直近が無い・閉じたなら `missing_state("dataset", ["load_dataset"])`で、`data/` や開いている
+  別のハンドルへは落ちない。記録（objective・レポート・図・パスウェイ）の置き場所は
+  `mcp_core._report_dir_candidates(holder)`（設定の `[paths] reports_dir` → データセットの
+  `analysis_dir` 配下 `reports/`。`holder` は呼び出し側が渡す）。
 - **`metabolomix.core.mcp_core` は leaf**。ここから `metabolomix.<形式>.tools` や `metabolomix.tools.*` を
   import してはならない（循環）。
 - **セッションにパーサ別のスロットは無い**（旧 `session.arf` / `.arf2` / `.pai2` / `.eic` は B-2b で
@@ -263,7 +269,7 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
     ポインタが切れると案内そのものが壊れる。
 - `tests/test_server_registration.py` がツール/リソースの登録数と `ToolAnnotations` を検証する。
 - **fixture はテスト自身が作る**。解析フォルダの `reports/` の実ファイルに依存させない
-  （追跡外なのでユーザ環境依存の不安定テストになる。tmp に作って `mcp_core.DATA_DIR` を差し替える流儀）。
+  （追跡外なのでユーザ環境依存の不安定テストになる。tmp に作った解析フォルダを `load_dataset(directory=...)` で開く流儀）。
 
 ## 作業の記録と Git
 
@@ -315,7 +321,7 @@ git worktree remove .worktrees/<slug>  # 片付け
 - スクリプトが worktree 専用の `.mcp.json` を生成する。`command` は main ツリーの `.venv` の Python。`server.py` は**その worktree の
   もの**を指す（main を指すと、worktree のコードを編集しながら main の実装を試すことに
   なり、最も気づきにくい形で嘘をつく）。設定ファイル（`LIPIDMIX_CONFIG`。main ツリーの
-  `lipidmix.local.toml` を、まだ無くても指す）と蓄積状態（`LIPIDMIX_DATA_DIR`）は **main ツリー**を向けて分裂させない。参照ライブラリのキャッシュは
+  `lipidmix.local.toml` を、まだ無くても指す）は **main ツリー**を向けて分裂させない（データの探索先の環境変数は無い）。参照ライブラリのキャッシュは
   設定ファイルのフォルダに付くので、これで main ツリーのものを共有する。記録の書き込み先は
   指さない（記録は解析フォルダ側に付いて回る）。
 - **記録は main ツリー側の `docs/HISTRY.md` / `docs/task.md` へ書く**（task.md は並列中なので末尾への追記だけ）。

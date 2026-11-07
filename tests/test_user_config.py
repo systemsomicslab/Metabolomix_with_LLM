@@ -298,6 +298,12 @@ _PLACE_ENV_VARS = ("LIPIDMIX_REPORTS_DIR", "LIPIDMIX_LIBRARY_CACHE_DIR",
                    "LIPIDMIX_MAX_DATASET_HANDLES", "LIPIDMIX_CAVEAT_MODE")
 
 
+def _holder_with_analysis_dir(path):
+    """`.dataset.analysis_dir` だけを持つ読み書きの先（ハンドルか対話のセッションの代わり）。"""
+    import types
+    return types.SimpleNamespace(dataset=types.SimpleNamespace(analysis_dir=str(path)))
+
+
 def _fresh_session():
     from metabolomix.core import session_state
     return session_state.AnalysisSession()
@@ -306,18 +312,20 @@ def _fresh_session():
 def test_place_settings_from_config(tmp_path, monkeypatch):
     """4 つのキーがそれぞれの利用者（レポートの置き場所・キャッシュ・ハンドルの上限・ダイジェスト）に効く。"""
     from metabolomix.core import handles, mcp_core, session_state
+    from metabolomix.core.atomic_io import DomainError
     from metabolomix.library import store
     from tests.config_fixtures import use_config
 
-    monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path / "data")
+    holder = _holder_with_analysis_dir(tmp_path / "data")
     use_config(monkeypatch, tmp_path, {
         "paths.reports_dir": tmp_path / "my_reports",
         "paths.library_cache": "cache_here",      # 相対パスは設定ファイルのフォルダ基準
         "server.max_dataset_handles": 3,
         "server.caveat_mode": "off",
     })
-    assert mcp_core._report_dir_candidates() == [tmp_path / "my_reports",
-                                                 tmp_path / "data" / "reports"]
+    assert mcp_core._report_dir_candidates(holder) == [tmp_path / "my_reports",
+                                                       tmp_path / "data" / "reports"]
+    assert mcp_core._report_dir_candidates() == [tmp_path / "my_reports"]  # データセットが無くても設定があれば書ける
     assert store.cache_dir() == tmp_path / "cache_here"
     assert handles.max_handles() == 3
     assert _fresh_session().maybe_prepend_caveat("BODY", topic="arf") == "BODY"
@@ -331,7 +339,10 @@ def test_place_settings_from_config(tmp_path, monkeypatch):
 
     use_config(monkeypatch, tmp_path, {"paths.reports_dir": None, "server.max_dataset_handles": None,
                                        "server.caveat_mode": None})
-    assert mcp_core._report_dir_candidates() == [tmp_path / "data" / "reports"]
+    assert mcp_core._report_dir_candidates(holder) == [tmp_path / "data" / "reports"]
+    with pytest.raises(DomainError) as exc:  # 設定も無く、データセットも無い
+        mcp_core._report_dir_candidates()
+    assert exc.value.code == mcp_core.NO_REPORT_DIR
     assert handles.max_handles() == handles.DEFAULT_MAX_HANDLES
     assert _fresh_session().maybe_prepend_caveat("BODY").startswith(session_state.SEMANTICS_CAVEAT)
 
@@ -358,29 +369,18 @@ def test_place_env_vars_are_ignored(tmp_path, monkeypatch):
     from metabolomix.core import handles, mcp_core, session_state
     from metabolomix.library import store
 
-    monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path / "data")
+    holder = _holder_with_analysis_dir(tmp_path / "data")
     monkeypatch.setenv("LIPIDMIX_REPORTS_DIR", str(tmp_path / "env_reports"))
     monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "env_cache"))
     monkeypatch.setenv("LIPIDMIX_MAX_DATASET_HANDLES", "2")
     monkeypatch.setenv("LIPIDMIX_CAVEAT_MODE", "off")
-    assert mcp_core._report_dir_candidates() == [tmp_path / "data" / "reports"]
+    assert mcp_core._report_dir_candidates(holder) == [tmp_path / "data" / "reports"]
     assert store.cache_dir() == user_config.config_file_path().parent / "data" / ".library-cache"
     assert store.cache_dir() != tmp_path / "env_cache"
     assert handles.max_handles() == handles.DEFAULT_MAX_HANDLES
     assert _fresh_session().maybe_prepend_caveat("BODY").startswith(session_state.SEMANTICS_CAVEAT)
     for name in _PLACE_ENV_VARS:
         assert name in os.environ  # 置いたまま効かない
-
-
-def test_library_cache_does_not_follow_data_dir(tmp_path, monkeypatch):
-    """`mcp_core.DATA_DIR` を差し替えてもキャッシュの場所は変わらない（決めたこと 5）。"""
-    from metabolomix.core import mcp_core
-    from metabolomix.library import store
-
-    before = store.cache_dir()
-    monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path / "elsewhere")
-    assert store.cache_dir() == before
-    assert tmp_path / "elsewhere" not in store.cache_dir().parents
 
 
 def test_library_cache_default_follows_config_folder(tmp_path, monkeypatch):

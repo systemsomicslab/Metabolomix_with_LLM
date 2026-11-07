@@ -24,7 +24,7 @@ from pathlib import Path
 CONFIG_ENV = "LIPIDMIX_CONFIG"
 CONFIG_FILENAME = "lipidmix.local.toml"
 EXAMPLE_FILENAME = "lipidmix.example.toml"
-#: core/data_config.py の DEFAULT_DATA_DIR と同じ起点（mcp_core.BASE_DIR との一致は
+#: リポジトリのルート（mcp_core.BASE_DIR との一致は
 #: tests/test_user_config.py が縛る。mcp_core は leaf ではないのでここから参照しない）。
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -67,7 +67,7 @@ NON_PATH_SETTINGS: frozenset[str] = frozenset(
     key for key, kind in SETTINGS.items() if kind != "path")
 
 #: 極性 → 研究室参照ライブラリ（.msp）の設定キー。正準はここ
-#: （`core/path_resolvers.LIBRARY_SETTING_KEYS` と `console/method_file.resolve_msp` が参照する。
+#: （`console/method_file.resolve_msp` と `library/store.py` の CLI が参照する。
 #: pipeline の worker も使うので、mcp_core を引き込まない leaf のここに置く）。
 MSP_SETTING_KEYS: dict[str, str] = {
     "positive": "library.msp_positive",

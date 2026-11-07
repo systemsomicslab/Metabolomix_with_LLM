@@ -214,6 +214,12 @@ class AnalysisSession:
         return handle.arf2_path if handle is not None else None
 
     @property
+    def dcl_path(self):
+        """直近のハンドルの `.dcl`（`DatasetHandle.dcl_path`。無い・ハンドルが無ければ None）。"""
+        handle = self._handle()
+        return handle.dcl_path if handle is not None else None
+
+    @property
     def dataset(self):
         """直近のハンドルの DatasetState（無い・閉じられていれば None）。"""
         handle = self._handle()

@@ -199,18 +199,17 @@ def _assert_not_in_repo(path: Path) -> None:
     """path が「リポジトリ内かつデータディレクトリ外」でないことを確認する。
 
     ランディレクトリを版管理下のソースツリーに掘らせないためのガード。
-    ただし既定のデータディレクトリは <repo>/data（data_config.DEFAULT_DATA_DIR）で
-    あり、これはリポジトリ配下だが .gitignore 済みの運用領域なので許可する。
+    ただし <repo>/data（`mcp_core.BASE_DIR / "data"`）は、リポジトリ配下だが
+    .gitignore 済みの運用領域なので許可する。
     「リポジトリ配下すべて禁止」にすると既定構成が丸ごと使えなくなる。
     """
     from metabolomix.core import mcp_core
-    from metabolomix.core.data_config import get_data_dir
 
     target = path.resolve()
     repo_root = mcp_core.BASE_DIR.resolve()
     if not _is_relative_to(target, repo_root):
         return  # リポジトリ外。何も言わない
-    data_dir = get_data_dir().resolve()
+    data_dir = (mcp_core.BASE_DIR / "data").resolve()
     if _is_relative_to(target, data_dir):
         return  # <repo>/data 配下は運用領域として許可
     raise ValueError(

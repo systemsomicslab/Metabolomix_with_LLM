@@ -16,19 +16,22 @@ from metabolomix.core import session_state
 
 class ObjectiveServerToolTests(unittest.TestCase):
     def setUp(self):
-        self._orig_data = mcp_core.DATA_DIR
         self._tmp = tempfile.TemporaryDirectory()
         base = Path(self._tmp.name)
-        mcp_core.DATA_DIR = base / "dataset"
-        mcp_core.DATA_DIR.mkdir()
-        self.reports = mcp_core.DATA_DIR / "reports"
+        self.dataset_dir = base / "dataset"
+        self.dataset_dir.mkdir()
+        self.reports = self.dataset_dir / "reports"
         self._env = mock.patch.dict("os.environ")
         self._env.start()
         session_state.session = session_state.AnalysisSession()
+        # 記録の置き場所は直近のデータセットの解析フォルダ配下 reports/。
+        from metabolomix.mztab.dataset_state import DatasetState
+        ds = DatasetState()
+        ds.analysis_dir = str(self.dataset_dir)
+        session_state.session.dataset = ds
 
     def tearDown(self):
         self._env.stop()
-        mcp_core.DATA_DIR = self._orig_data
         self._tmp.cleanup()
 
     def _create(self, analysis_id, **over):

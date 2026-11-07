@@ -11,6 +11,7 @@ from metabolomix.core import session_state
 from mcp.types import ToolAnnotations
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import config_invalid_as_envelope
+from metabolomix.tools._holder import resolve_holder
 
 __all__ = [
     "record_objective",
@@ -20,13 +21,14 @@ __all__ = [
 _REQUIRED_FOR_CREATE = ("dataset", "polarity", "groups", "comparison", "sub_questions")
 
 
-def _resolve_objective_file(analysis_id: str) -> Path | None:
+def _resolve_objective_file(analysis_id: str, holder) -> Path | None:
     """レポート候補ディレクトリから objective を探す（ファイル名優先、無ければ frontmatter）。
 
     objective はレポートと同じ解析フォルダ配下 reports/ に住むので、別の解析フォルダを
-    load_dataset した後は見えない（記録はデータの側に付いて回る契約）。
+    load_dataset した後は見えない（記録はデータの側に付いて回る契約）。`holder` は
+    読み書きするハンドル（または対話のセッション）。
     """
-    candidates = mcp_core._report_dir_candidates()
+    candidates = mcp_core._report_dir_candidates(holder)
     for directory in candidates:
         try:
             direct = notes.note_path(directory, notes.objective_slug(analysis_id))
@@ -63,6 +65,7 @@ def record_objective(
     assay_kind: str | None = None,
     status: str | None = None,
     add_subquestions: list[str] | None = None,
+    dataset_handle: str | None = None,
 ) -> str:
     """実験目的を解析フォルダ配下 reports/<analysis_id>.objective.md に記録する（作成と更新）。
 
@@ -75,7 +78,13 @@ def record_objective(
     biological_context は対象系（生物種/細胞/処理）。assay_kind は lipid / metabolite /
     unknown で、確定した種別を渡すと以後のツール出力の解釈規則（脂質名文法か候補集合か）が
     サーバ側で切り替わる（作成時に省けば unknown）。
+    dataset_handle: 置き場所（そのデータセットの解析フォルダ配下 reports/）を決めるハンドル
+    （省略時は直近。設定の `[paths] reports_dir` があればそちらが先）。どちらも無ければ
+    missing_state（load_dataset）。
     """
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
     if assay_kind is not None:
         try:
             assay_kind = session_state.normalize_assay_kind(assay_kind)
@@ -86,8 +95,8 @@ def record_objective(
     # 置き場所を先に決める。設定ファイルが読めない（CONFIG_INVALID）・書けないときに、
     # assay_kind だけが切り替わった半端な状態を残さない。
     try:
-        existing = _resolve_objective_file(analysis_id)
-        report_dir = mcp_core._resolve_report_dir() if existing is None else None
+        existing = _resolve_objective_file(analysis_id, holder)
+        report_dir = mcp_core._resolve_report_dir(holder) if existing is None else None
     except OSError as exc:
         return str(exc)
 

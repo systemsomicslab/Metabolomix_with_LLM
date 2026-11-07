@@ -8,7 +8,6 @@ import os
 import unittest
 from pathlib import Path
 
-from metabolomix.core import data_config
 from metabolomix.core import mcp_core
 from metabolomix.core import tool_helpers
 
@@ -31,13 +30,6 @@ class TestBaseDirResolution(unittest.TestCase):
 
     def test_output_format_doc_resolves(self):
         self.assertTrue(mcp_core.OUTPUT_FORMAT_DOC.is_file())
-
-    def test_data_config_root_matches_mcp_core(self):
-        # 循環回避のため両者は独立に root を計算する。一致することをここで縛る。
-        self.assertEqual(
-            data_config.DEFAULT_DATA_DIR.resolve(),
-            (mcp_core.BASE_DIR / "data").resolve(),
-        )
 
 
 class TestRootLayout(unittest.TestCase):
@@ -85,7 +77,7 @@ class TestStateDirsAreNotCreatedOnImport(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             env = dict(os.environ)
-            env["LIPIDMIX_DATA_DIR"] = str(base / "data")
+            env["LIPIDMIX_CONFIG"] = str(base / "lipidmix.local.toml")  # 置き場の既定はここの隣
             proc = subprocess.run(
                 [sys.executable, "-c", "import metabolomix.core.mcp_core"],
                 cwd=str(REPO_ROOT), env=env,

@@ -8,8 +8,7 @@
 
 キャッシュ先は設定ファイルの `[paths] library_cache`、無ければ設定ファイルのフォルダの
 `data/.library-cache`（`user_config.config_file_path().parent`。設定ファイルが無くても同じ式で、
-既定の場所なら `<repo>/data/.library-cache`）。`mcp_core.DATA_DIR`（データの探索先）には
-付いて動かない——worktree は `LIPIDMIX_CONFIG` で main ツリーの設定ファイルを指すので、
+既定の場所なら `<repo>/data/.library-cache`）。データの探索先は無い（B-2b）——worktree は `LIPIDMIX_CONFIG` で main ツリーの設定ファイルを指すので、
 キャッシュも main ツリーのものを共有する。ファイル名は `<stem>-<sha256[:16]>.sqlite`
 なので、元ファイルが変われば別ファイルになり、無効化の判断が要らない（古い
 キャッシュは孤立するだけで、参照されなくなる）。
@@ -19,7 +18,7 @@
 `DIGEST_INDEX_NAME` に覚え、変わっていなければ計算し直さない（研究室の `.msp` は
 1 GB 級で、全読みを `library_load` のたびに払わないため）。
 
-`python -m metabolomix.library.store --ion-mode negative` で MCP の外から事前構築できる
+`python -m metabolomix.library.store --file <path>`（または `--ion-mode negative`）で MCP の外から事前構築できる
 （`main()`。初回構築が MCP クライアントのタイムアウトに当たるとき用）。
 
 deps: record 経由で `.dbs` / `.msp` の iter_records、user_config（キャッシュの場所）。
@@ -350,9 +349,7 @@ class LibraryStore:
             # COLLATE NOCASE: 呼び出し元の大小表記は揃っていない
             # （`.dcl`/pai2 の feature は IonMode Enum の `.name` = "Positive"、
             # store の列は record.ION_MODES = "positive"。Task 11 レビュー
-            # Critical 1 —
-            # `peak_verification._spectral_match_for_feature` がここを大小区別の
-            # BINARY 照合のまま呼び、常に 0 件になっていた。呼び出し側で `lower()`
+            # Critical 1 — 呼び出し側が大小区別の BINARY 照合のまま呼び、常に 0 件になっていた。呼び出し側で `lower()`
             # を撒くのではなくここで正規化する——呼び出し側が増えるたびに同じ穴が
             # 開くのを防ぐため）。
             # `ion_mode IS NULL` は「極性不明」として残す。極性ごとに分かれた
@@ -516,34 +513,50 @@ def main(argv: list[str] | None = None) -> int:
 
     研究室ライブラリ（pos ≈ 1.2 GB）の初回構築は数分かかり、MCP クライアントの
     タイムアウトに当たりうる。手元で 1 度走らせておけば、以後の `library_load` は
-    キャッシュを開くだけで済む。パスの解決規則は `library_load` と同じ
-    （`resolve_library_path`）。出力にはファイル名だけを出し、置き場所は出さない。
+    キャッシュを開くだけで済む。ライブラリは `--file` で明示するか、`--ion-mode` で設定
+    （lipidmix.local.toml の `[library] msp_positive` / `msp_negative`）の極性のものを使う
+    （データフォルダは探さない）。出力にはファイル名だけを出し、置き場所は出さない。
 
         python -m metabolomix.library.store --ion-mode negative
         python -m metabolomix.library.store --file <path> --rebuild
     """
     import argparse
+    import os
     import sys
     import time
 
     from metabolomix.core.path_resolvers import LibraryPathError, resolve_library_path
+    from metabolomix.core import user_config
 
     parser = argparse.ArgumentParser(prog="python -m metabolomix.library.store",
                                      description="参照ライブラリの照合用 store を事前構築する。")
     parser.add_argument("--ion-mode", choices=("positive", "negative"),
                         help="どちらの極性の設定（lipidmix.local.toml の "
                              "[library] msp_positive / msp_negative）を使うか")
-    parser.add_argument("--file", help="ライブラリのパス（極性の設定より優先）")
+    parser.add_argument("--file", help="ライブラリのパス（極性の設定より優先。どちらか一方が要る）")
     parser.add_argument("--rebuild", action="store_true", help="キャッシュを無視して作り直す")
     args = parser.parse_args(argv)
 
     try:
-        resolved = resolve_library_path(args.file, ion_mode=args.ion_mode)
+        resolved = resolve_library_path(args.file)
+        if resolved is None and args.ion_mode:
+            setting = user_config.get_setting(user_config.MSP_SETTING_KEYS[args.ion_mode])
+            if setting is not None:
+                if not os.path.isfile(setting.value):
+                    label = user_config.setting_label(setting)
+                    print(f"MSP_ENV_NOT_FOUND: {label} が指すファイル（{os.path.basename(setting.value)}）"
+                          f"がありません。{label} を確認してください。", file=sys.stderr)
+                    return 2
+                resolved = setting.value
     except LibraryPathError as exc:
         print(f"{exc.code}: {exc.message}", file=sys.stderr)
         return 2
+    except user_config.ConfigInvalidError as exc:
+        print(f"{exc.code}: {exc.message}", file=sys.stderr)
+        return 2
     if not resolved:
-        print("LIBRARY_NOT_FOUND: 参照ライブラリが見つかりませんでした。", file=sys.stderr)
+        print("LIBRARY_NOT_FOUND: 参照ライブラリが決まりません（--file を渡すか、--ion-mode に対応する"
+              "設定を書いてください）。", file=sys.stderr)
         return 2
 
     started = time.perf_counter()

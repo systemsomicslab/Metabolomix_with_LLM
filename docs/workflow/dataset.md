@@ -13,8 +13,8 @@ flowchart TD
 前提: なし
 状態変更: なし
 
-ツール層（`tools/dataset.py`）は純関数（`path_resolvers.list_data_files`、
-`resolve_*_file_path` から呼ばれるのと同じもの）の結果を拡張子ごとにまとめて返す。
+ツール層（`tools/dataset.py`）は純関数（`path_resolvers.list_data_files`）の結果を拡張子ごとに
+まとめて返す。**`directory` は必須**（既定の探索先・環境変数は無い。B-2b）。
 **既定は解析できる拡張子だけ**（.arf / .arf2 / .pai2 / .dcl / .EIC.aef / .mddata /
 .mdproject）。MS-DIAL の出力フォルダには測定生データ（.wiff 等）が同居し、実データでは
 495 ファイル中 7 割以上がそれだった。全部見たいときだけ `all_files=True`。

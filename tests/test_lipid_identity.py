@@ -14,9 +14,8 @@ class TestNormalizeLipidName(unittest.TestCase):
     def test_ether_forms_parse(self):
         # NOTE: at the species shorthand level, GOSLIN represents plasmalogen
         # `PC P-34:0` and ether `PC O-34:1` with the SAME normalized string
-        # (the P-/O- plasmalogen ambiguity). Downstream must rely on the ether
-        # caveat (peak_verification.ether_caveats), not the normalized name, to
-        # tell them apart. Here we only assert both parse cleanly.
+        # (the P-/O- plasmalogen ambiguity). Downstream must not rely on the
+        # normalized name alone to tell them apart. Here we only assert both parse cleanly.
         o = li.normalize_lipid_name("PC O-34:1")
         p = li.normalize_lipid_name("PC P-34:0")
         if o["parse_ok"] and p["parse_ok"]:

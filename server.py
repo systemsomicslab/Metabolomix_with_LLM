@@ -20,10 +20,10 @@
 `.mcp.json` / `.vscode/mcp.json` がこのファイルを絶対パスで指しているため、
 ルートから動かしてはならない。
 
-可変状態（DATA_DIR / session）の**正準**は
+可変状態（session）の**正準**は
 metabolomix.core.mcp_core / metabolomix.core.session_state 側にある。ここでの再エクスポートは
 読み取り用の束縛にすぎないため、差し替えは必ず正準モジュール
-（mcp_core.DATA_DIR / session_state.session）に対して行うこと。
+（session_state.session）に対して行うこと。
 """
 import os
 
@@ -39,14 +39,8 @@ from metabolomix.core.mcp_core import (
 )
 from metabolomix.core.session_state import AnalysisSession
 from metabolomix.core.path_resolvers import (
-    resolve_arf_file_path,
-    resolve_arf2_file_path,
-    resolve_dcl_file_path,
-    resolve_eicaef_file_path,
-    resolve_pai2_file_path,
     _select_latest_batch,
     _describe_batch_selection,
-    _filter_arf_spots,
 )
 from metabolomix.core.tool_helpers import (
     _identity_tables,

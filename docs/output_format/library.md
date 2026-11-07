@@ -134,11 +134,12 @@
 
 **記憶から開く（`file_path` を省いたとき）**: 直近のデータセット（`dataset_handle` を渡せばそのハンドル）が
 同定に使ったライブラリの記憶（下の「データセットが覚えているライブラリ（LibraryRecord）」）が `known` で、sha256 を測り直して通れば、
-その実体を開く（戻り値に `library_source: "dataset_record"`）。記憶が `unknown` か無いときだけ、
-下の解決順（`ion_mode` の設定など）へ進む。`mismatch` と `lbm_only` は落ちずに
+その実体を開く（戻り値に `library_source: "dataset_record"`）。**記憶以外には落ちない**（データフォルダの
+探索も、設定の極性の MSP も、`ion_mode` 引数も無い。B-2b）: 記憶が `unknown` か無ければ
+`code="LIBRARY_NOT_REMEMBERED"`（候補のファイル名と「`file_path` を渡す」の案内。置き場所は出さない）、データセットが
+無ければ `missing_state`（`load_dataset`）。`mismatch` と `lbm_only` は
 `code="LIBRARY_RECORD_MISMATCH"` / `"LIBRARY_RECORD_LBM_ONLY"` と理由を返す（`file_path` で
-明示すれば開ける）。`file_path` も `ion_mode` も省いたときだけ記憶が先で、`ion_mode` を渡せば従来どおり設定から引く
-（逆の極性は `LIBRARY_POLARITY_MISMATCH`）。`file_path` や設定から引いたものが記憶と違う
+明示すれば開ける）。`file_path` で開いたものが記憶と違う
 ライブラリ（中身の sha256 で比べる。同じ内容のコピーは違わない）なら、そのまま開いて
 `differs_from_record: {"remembered": <記憶のファイル名>, "opened": <開いたファイル名>}` を足す。
 `library_match_feature` / `library_msms_qualify` は、ライブラリが開かれておらず記憶が `lbm_only` のとき
@@ -151,14 +152,10 @@
 ものではない旨が `note` に付く。
 
 **エラー戻り値**: ライブラリを 1 つに決められないときは `{"status": "error", "code": ..., "message": ..., "details": ...}`
-を返し、store は差し替えない。`code` は `MSP_AMBIGUOUS`（候補が複数。`ion_mode` か
-`file_path` を指定する）/ `MSP_ENV_NOT_FOUND`（極性の設定——`lipidmix.local.toml` の
-`[library] msp_positive` / `msp_negative`——の指す先が無い。コード名は環境変数で指していた頃のまま）/ `LIBRARY_NOT_FOUND`（明示した `file_path` が無い）/
-`INVALID_ION_MODE` / `CONFIG_INVALID`（設定ファイルが読めない。`details` に `config_file`
-`line` `column`）。`details` は `MSP_ENV_NOT_FOUND` と、何も見つからなかったときに付き、
-`setting`（設定キー）`config_key`（`[節] 名前` の書き方）`source`（`config_file` / null）`config_file`
-`config_file_exists` `example`、あれば `unknown_keys`（打ち間違いの疑い）と `config_invalid`（設定ファイルが読めないときの理由）を持つ。
-`message` と `details` にはファイル名・設定キー・設定ファイルのパスだけが入り、
+を返し、store は差し替えない。`code` は `LIBRARY_NOT_REMEMBERED`（`file_path` を省いたが、データセットが同定に使ったライブラリを
+覚えていない）/ `LIBRARY_RECORD_MISMATCH` / `LIBRARY_RECORD_LBM_ONLY` / `LIBRARY_NOT_FOUND`（明示した
+`file_path` が無い）/ `CONFIG_INVALID`（設定ファイルが読めない。`details` に `config_file` `line`
+`column`）。`message` と `details` にはファイル名・設定キー・設定ファイルのパスだけが入り、
 ライブラリの置き場所は入らない。
 
 **`records_without_ion_mode`**: 研究室ライブラリのように極性ごとにファイルが分かれて

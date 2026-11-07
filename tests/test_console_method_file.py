@@ -776,7 +776,6 @@ def test_write_effective_method_file_replaces_every_duplicate_line(tmp_path):
 import os
 
 from metabolomix.console import method_file as _mf
-from metabolomix.core import path_resolvers as _path_resolvers
 from metabolomix.core import user_config as _user_config
 
 
@@ -788,7 +787,6 @@ def _msp_setting(path, *, key="library.msp_negative"):
 def test_msp_setting_keys_are_the_single_source_for_library_lookup():
     assert _user_config.MSP_SETTING_KEYS == {
         "positive": "library.msp_positive", "negative": "library.msp_negative"}
-    assert _path_resolvers.LIBRARY_SETTING_KEYS is _user_config.MSP_SETTING_KEYS
 
 
 def test_resolve_msp_prefers_the_argument(tmp_path):

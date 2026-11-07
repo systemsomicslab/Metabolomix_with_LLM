@@ -720,18 +720,17 @@ def test_console_run_marks_missing_changed_exe_failed(tmp_path, monkeypatch):
 
 # ---------- Task 0: ブロッカー回帰 ----------
 
-def test_create_job_allows_default_data_dir(tmp_path, monkeypatch):
-    """既定データディレクトリ（<repo>/data 配下）を dataset_root にできる。"""
+def test_create_job_allows_repo_data_dir(tmp_path, monkeypatch):
+    """<repo>/data 配下（BASE_DIR / "data"）を dataset_root にできる。"""
     from metabolomix.core import mcp_core
     from metabolomix.console.job_manager import create_job
-    # リポジトリ直下の data/ を模す: BASE_DIR 配下だが DATA_DIR 配下でもある
+    # リポジトリ直下の data/ を模す: BASE_DIR 配下だが BASE_DIR / "data" 配下でもある
     fake_repo = tmp_path / "repo"
     data_root = fake_repo / "data" / "study-001"
     data_root.mkdir(parents=True)
     method = tmp_path / "params.msdial"
     method.touch()
     monkeypatch.setattr(mcp_core, "BASE_DIR", fake_repo)
-    monkeypatch.setenv("LIPIDMIX_DATA_DIR", str(fake_repo / "data"))
 
     job, job_path = create_job(dataset_root=data_root, method_file=method,
                               polarity="positive", measure="peak_height")
@@ -748,7 +747,6 @@ def test_create_job_still_rejects_source_tree(tmp_path, monkeypatch):
     method = tmp_path / "params.msdial"
     method.touch()
     monkeypatch.setattr(mcp_core, "BASE_DIR", fake_repo)
-    monkeypatch.setenv("LIPIDMIX_DATA_DIR", str(fake_repo / "data"))
 
     with pytest.raises(ValueError):
         create_job(dataset_root=fake_repo / "metabolomix", method_file=method,
