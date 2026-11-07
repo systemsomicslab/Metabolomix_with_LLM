@@ -8,9 +8,9 @@
 ツールは `holder_for(dataset_handle)` が返したものの `.dataset` / `.library` を読むだけで、
 ハンドルを渡さない呼び出しは `session_state.session` に効く。
 
-**読み込んだデータセットはすべてここに住む**（spec 2026-11-06 §5）。`dataset_load` も
+**読み込んだデータセットはすべてここに住む**（spec 2026-11-06 §5）。`load_dataset` も
 `session.dataset = ds` でハンドルを 1 本足し、対話のセッションはその直近のハンドル
-（`session.current_handle_id`）を指すだけになる。`dataset_handle_open` で開いたハンドルは
+（`session.current_handle_id`）を指すだけになる。`load_dataset` で開いたハンドルは
 直近にならないので、そのハンドルの状態は対話の呼び出しから見えない。同じ入力を開き直した
 ときは読み込み済みの基（DatasetState）を使い回すが、ハンドルには複製を渡す——片方の
 前処理がもう片方に見えないようにするため。
@@ -47,7 +47,7 @@ __all__ = [
 MAX_HANDLES_SETTING = "server.max_dataset_handles"
 DEFAULT_MAX_HANDLES = 8
 #: 読み込み済みの基を何本まで覚えておくか（LRU）。mzTab-M の基は 1 本数十 MB 程度だが、解析フォルダの
-#: 大きな基はそれでは済まない（`per_sample_mz` だけで特徴 × 試料の数百万要素。`dataset_load` は
+#: 大きな基はそれでは済まない（`per_sample_mz` だけで特徴 × 試料の数百万要素。`load_dataset` は
 #: 基と開くたびの複製を持つ）。本数の上限がこれで、大きさの上限は `MAX_BASE_BYTES`（両方で追い出す）。
 MAX_BASES = 4
 #: 覚えておく基の見積もりの合計の上限（バイト。`estimate_state_bytes` の和）。1 つでこれを超える基は
@@ -179,7 +179,7 @@ class HandleRegistry:
             raise DomainError(
                 "DATASET_HANDLE_LIMIT",
                 f"開いているハンドルが上限（{limit}）に達しています。使い終えたハンドルを "
-                "dataset_handle_close で閉じてください（上限は "
+                "dataset_close で閉じてください（上限は "
                 f"{user_config.config_file_path().name} の {user_config.config_key(MAX_HANDLES_SETTING)} "
                 "で変えられます）。",
                 {"open_handles": self._open_ids(), "max_handles": limit})
@@ -207,7 +207,7 @@ class HandleRegistry:
                 raise DomainError(
                     "DATASET_HANDLE_NOT_FOUND",
                     f"ハンドル {handle_id!r} は開いていません（閉じたか、サーバが再起動した）。"
-                    "dataset_handle_open で開き直してください。対話のセッションの状態には"
+                    "load_dataset で開き直してください。対話のセッションの状態には"
                     "落としていません。",
                     {"dataset_handle": handle_id, "open_handles": self._open_ids()})
             handle.last_used_seq = next(self._seq)

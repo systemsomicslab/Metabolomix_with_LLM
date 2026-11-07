@@ -1,7 +1,7 @@
 """完了した run の成果物を、対話セッションが使える DatasetState へ戻す層。
 
-`dataset_load(pipeline_path=..., source="mztab")`（と同じ入口 `dataset.opening` を通る
-`dataset_handle_open`）だけが `load_run_dataset` を呼ぶ。解析フォルダのアダプタで run を読む
+`load_dataset(pipeline_path=..., source="mztab")`（と同じ入口 `dataset.opening` を通る
+`load_dataset`）だけが `load_run_dataset` を呼ぶ。解析フォルダのアダプタで run を読む
 ときは `run_console_job` と `run_manifest_rows` だけを借り、行列も差次的結果も戻さない。行列だけを別ツールで
 載せられる形にしないのは、run A の dataset に run B の行列を混ぜられると
 群の対応が黙ってずれるため——dataset・解決済み試料対応表・binding・解析行列は

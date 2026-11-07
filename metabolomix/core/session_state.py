@@ -98,7 +98,7 @@ def assay_digest(assay_kind: str) -> str:
 
 #: `dataset_handle` を省いた呼び出しが、ロックを取ったハンドルの ID（`core.handle_dispatch` が
 #: ワーカースレッドの中で置く）。置かれている間、`session.dataset` / `session.library` は
-#: 直近のハンドルでなくこのハンドルを読む——呼び出しの途中で `dataset_load` が直近を
+#: 直近のハンドルでなくこのハンドルを読む——呼び出しの途中で `load_dataset` が直近を
 #: 切り替えても、ロックを取っていない別のハンドルの状態を触らないため。
 _PINNED_HANDLE_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "pinned_handle_id", default=None)
@@ -482,7 +482,7 @@ class AnalysisSession:
         別のデータを読むため。
 
         直近のハンドルが無いあいだにセッションが持っていたライブラリ（store つき。
-        `library_load` → `dataset_load` の順）は、新しいハンドルへ**移す**（写さない——2 か所が
+        `library_load` → `load_dataset` の順）は、新しいハンドルへ**移す**（写さない——2 か所が
         同じ store を閉じないため）。セッション自身には空の LibraryState が残るので、後で
         このハンドルを閉じても古いライブラリへ黙って落ちない。
         """
@@ -512,6 +512,34 @@ class AnalysisSession:
                                            source={"kind": "session"},
                                            library=own if move else None)
             handles.registry.add(handle)  # 上限ならここで止まり、ライブラリはセッションに残る
+            if move:
+                self._library = LibraryState()
+            self.current_handle_id = handle.handle_id
+
+    def adopt_handle(self, handle, *, move_library: bool = False) -> None:
+        """出来上がったハンドルを登録簿に入れ、**直近にする**（`load_dataset` が使う）。
+
+        上限なら `DATASET_HANDLE_LIMIT`（DomainError）を投げ、直近もライブラリも動かさない。
+        `move_library` が真で、ハンドルが自分のライブラリ（store）を持たず、直近のハンドルが
+        無いあいだにセッションが store つきのライブラリを持っていたなら（`library_load` →
+        `load_dataset` の順）、そのライブラリを新しいハンドルへ**移す**（`dataset` の setter と
+        同じ規則）。登録・移動・直近の切り替えは 1 つのロックの下で行う。
+        """
+        from metabolomix.core import handles
+
+        with self._current_lock:
+            own = self._library
+            move = (move_library and handle.library.store is None
+                    and self._current_handle() is None
+                    and _PINNED_HANDLE_ID.get() is None and own.store is not None)
+            if move:
+                handle.library = own
+            try:
+                handles.registry.add(handle)  # 上限ならここで止まり、ライブラリはセッションに残る
+            except Exception:
+                if move:
+                    handle.library = LibraryState()
+                raise
             if move:
                 self._library = LibraryState()
             self.current_handle_id = handle.handle_id

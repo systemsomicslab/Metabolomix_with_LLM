@@ -53,8 +53,6 @@ EXPECTED_ANNOTATIONS = {
     "arf2_annotate_identities": READ_ONLY,
     # --- データセット入口 ---
     "list_data_files": READ_ONLY,
-    "load_dataset": READ_ONLY,
-    "dataset_load": LOCAL_WRITE,
     "dataset_status": READ_ONLY,
     # --- DatasetState 解析層 ---
     # readOnlyHint はファイル/ネットワークへの副作用の有無。セッション状態の
@@ -77,9 +75,9 @@ EXPECTED_ANNOTATIONS = {
     "dataset_feature_search": READ_ONLY,
     # --- 再解析のハンドル（サーバのプロセス内の状態だけを変える） ---
     # open は呼ぶたびに新しいハンドルを作る → 非冪等。close はハンドルの状態を捨てる。
-    "dataset_handle_open": LOCAL_WRITE_APPEND,
-    "dataset_handle_list": READ_ONLY,
-    "dataset_handle_close": LOCAL_DELETE,
+    "load_dataset": LOCAL_WRITE_APPEND,
+    "dataset_list": READ_ONLY,
+    "dataset_close": LOCAL_DELETE,
     # 再解析の spec のツール。output_path を渡したときだけ JSON を書く（同じ spec なら同じ内容）。
     "dataset_analysis_run": LOCAL_WRITE,
     "dataset_claim_evidence": LOCAL_WRITE,

@@ -44,7 +44,7 @@ def test_dataset_preprocess_without_dataset_returns_missing_state():
     from metabolomix.tools.dataset_analysis_tools import dataset_preprocess
     parsed = json.loads(dataset_preprocess())
     assert parsed["error"]["code"] == MISSING_STATE
-    assert parsed["error"]["required_tools"] == ["dataset_load"]
+    assert parsed["error"]["required_tools"] == ["load_dataset"]
 
 
 def test_dataset_preprocess_success_sets_pp_matrix():
@@ -458,7 +458,7 @@ def test_dataset_set_sample_metadata_without_dataset_returns_missing_state():
     from metabolomix.tools.dataset_analysis_tools import dataset_set_sample_metadata
     parsed = json.loads(dataset_set_sample_metadata("manifest.tsv"))
     assert parsed["error"]["code"] == MISSING_STATE
-    assert parsed["error"]["required_tools"] == ["dataset_load"]
+    assert parsed["error"]["required_tools"] == ["load_dataset"]
 
 
 def test_dataset_set_sample_metadata_success_applies_rows(tmp_path):

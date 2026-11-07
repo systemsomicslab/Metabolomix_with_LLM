@@ -32,15 +32,17 @@ import server
 # EIC 検索の統合: eic_search_by_mz_range / eic_search_by_rt_range /
 # eic_rank_by_max_intensity を spot ID 検索も持つ eic_search に統合(76→74)。
 # DatasetState の特徴検索と目的の物質の判定: dataset_feature_search を追加(74→75)。
-# 再解析のデータセットのハンドル: dataset_handle_open / list / close を追加(77→80)。
+# 再解析のデータセットのハンドル: load_dataset / list / close を追加(77→80)。
 # 照合の詳細: library_search / dcl_spot_spectrum を追加(80→82)。
 # 再解析の統計の spec: dataset_analysis_run を追加(82→83)。
 # 再解析の合否・同族列・関係・証拠の束・質量精度・新しい知見の候補と診断イオン(83→90)。
 # 割れたアライメントスポットの検出: dataset_alignment_qc を追加(90→91)。
+# B-2b Task 2: 入口を load_dataset 1 本にまとめ（旧 ARF の load_dataset・dataset_load・
+# dataset_handle_open を統合）、dataset_handle_list / close を dataset_list / dataset_close へ改名（82→80）。
 EXPECTED_TOOLS = sorted([
-    "dataset_handle_open",
-    "dataset_handle_list",
-    "dataset_handle_close",
+    "load_dataset",
+    "dataset_list",
+    "dataset_close",
     "library_search",
     "dcl_spot_spectrum",
     "dataset_analysis_run",
@@ -85,7 +87,6 @@ EXPECTED_TOOLS = sorted([
     "eic_plot_compounds",
     "eic_search",
     "list_data_files",
-    "load_dataset",
     "pai2_inspect_peak",
     "pipeline_cancel",
     "pipeline_plan",
@@ -99,7 +100,6 @@ EXPECTED_TOOLS = sorted([
     "console_prepare_input",
     "console_run",
     "console_status",
-    "dataset_load",
     "dataset_status",
     "job_list",
     "dataset_differential",

@@ -9,7 +9,7 @@ FastMCP は同期関数のツールをイベントループのスレッドでそ
 - 渡さない呼び出し: 対話のセッションの直近のハンドル（`session.current_handle_id`）があれば、
   **そのロックの下で**ワーカースレッドに回す（同じデータセットへの対話と再解析の呼び出しが
   重ならない）。呼び出しの間は `session_state.pinned_handle` でそのハンドルに固定するので、
-  途中で `dataset_load` が直近を切り替えても、ロックを取っていない別のハンドルの状態を
+  途中で `load_dataset` が直近を切り替えても、ロックを取っていない別のハンドルの状態を
   触らない。ロックを待つ間にそのハンドルが閉じられたら、ツールを呼ばずに `missing_state`
   を返す。直近のハンドルが無ければ今までどおりイベントループのスレッドで同期に呼ぶ。
 - `SESSION_READERS`（`dataset_handle` を持たないが `session.dataset` / `session.library` を
@@ -36,12 +36,9 @@ from metabolomix.core.mcp_errors import missing_state
 __all__ = ["ALWAYS_THREADED", "SESSION_READERS", "install"]
 
 #: ハンドルの有無に依らずスレッドで回すツール。読み込みは数分かかりうるので、イベントループ
-#: から外す。`dataset_handle_open` は対話のセッションを読み書きしない。`dataset_load` が
-#: セッションへ書くのは成功時の `session.dataset = ds`（`_current_lock` の下）だけ。
-#: 旧 ARF 経路の `load_dataset` は載せない——`session.arf` と `mcp_core.DATA_DIR` を無ロックで
-#: 書くので、イベントループの ARF のツールが同時に読むとちぎれる（B-2b で新しい
-#: `load_dataset` に置き換わり、そちらを載せる）。
-ALWAYS_THREADED = frozenset({"dataset_handle_open", "dataset_load"})
+#: から外す。`load_dataset` がセッションへ書くのは成功時の直近の切り替え
+#: （`session.adopt_handle`。`_current_lock` の下）だけ。
+ALWAYS_THREADED = frozenset({"load_dataset"})
 
 #: `dataset_handle` を持たないが、直近のハンドルの `session.dataset` / `session.library` を
 #: （自身か、ヘルパー経由で）読むツール。直近のハンドルがあれば、そのロックと固定の下で
@@ -76,10 +73,10 @@ def _call_pinned(fn, kwargs: dict, handle):
     with handle.lock:
         if handles.registry.peek(handle.handle_id) is not handle:
             return missing_state(
-                "dataset", ["dataset_load"],
+                "dataset", ["load_dataset"],
                 f"この呼び出しが動く前に、直近のデータセットのハンドル {handle.handle_id} が"
                 "閉じられました。何もしていません（別のハンドルへは落としていません）。"
-                "dataset_load で読み直すか、呼び直してください。")
+                "load_dataset で読み直すか、呼び直してください。")
         with session_state.pinned_handle(handle.handle_id):
             return fn(**kwargs)
 

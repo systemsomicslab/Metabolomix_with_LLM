@@ -1,6 +1,6 @@
 """DatasetState に対する解析 MCP ツール。
 
-dataset_load → dataset_preprocess → dataset_pca / dataset_differential
+load_dataset → dataset_preprocess → dataset_pca / dataset_differential
 → dataset_export_differential の順に実行する。ARF 経路
 （arf_preprocess → arf_pca_preprocessed → arf_differential →
 arf_export_differential）と同じ純関数を共有しており、同じ入力からは
@@ -41,14 +41,14 @@ __all__ = [
 # 欠けている状態 → それを作れるツール。missing_state の required_tools になる。
 # **自分自身は入れない**（クライアントが同じ呼び出しを繰り返すループになる）。
 _RECOVERY_TOOLS = {
-    "dataset": ["dataset_load"],
+    "dataset": ["load_dataset"],
     "dataset_preprocessed": ["dataset_preprocess"],
     "dataset_differential_result": ["dataset_differential"],
     # v2 の解析行列は pipeline（preprocess / qc_processed）が作る。単体ツールの
     # dataset_build_matrix でも作れるが、そちらは binding と証拠を持たない分
     # できることが狭い（内部標準比は作れず、検出率filterは評価不能になる）。
     # 先頭ほど優先＝上流の証拠ごと揃う pipeline を先に案内する。
-    "analysis_matrix": ["pipeline_run", "pipeline_status", "dataset_load",
+    "analysis_matrix": ["pipeline_run", "pipeline_status", "load_dataset",
                         "dataset_build_matrix"],
     # 対象feature↔内部標準の対応付け。pipeline の resolve_feature_bindings が作る。
     "feature_bindings": ["pipeline_run", "pipeline_status"],
@@ -86,7 +86,7 @@ def dataset_preprocess(
 
     成功すると session.dataset.pp_matrix に前処理済み行列が設定される。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -94,7 +94,7 @@ def dataset_preprocess(
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
 
     from metabolomix.analysis.dataset_service import preprocess_dataset
 
@@ -144,7 +144,7 @@ def dataset_pca(n_components: int = 5, log_transform: bool = False,
 
     ローディング全量は戻り値に載せず session.dataset.last_pca に保持する。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -152,7 +152,7 @@ def dataset_pca(n_components: int = 5, log_transform: bool = False,
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
 
     from metabolomix.analysis.dataset_service import pca_dataset
 
@@ -195,7 +195,7 @@ def dataset_differential(
     全特徴量の結果と volcano 点列は戻り値に載せず session.dataset.last_differential
     に保持する。エクスポートは dataset_export_differential を使う。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -203,7 +203,7 @@ def dataset_differential(
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
 
     from metabolomix.analysis.dataset_service import compare_dataset
 
@@ -270,7 +270,7 @@ def dataset_export_differential(output_path: str,
     書く（空欄を「該当なし」と読み違えさせない）。メタ行には result_id と
     preprocess_id も入るので、あとから「どの計算の出力か」を辿れる。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -278,7 +278,7 @@ def dataset_export_differential(output_path: str,
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
 
     last = ds.last_differential
     if result_id is not None:
@@ -358,7 +358,7 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     対照/処置の向きを決めない・QC/blank/unknown/include=false を混ぜない・完全交絡を
     止める、という前提検証は `resolve_comparison`/`run_comparison`（内部関数）が持つ。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -366,7 +366,7 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
 
     from metabolomix.analysis.dataset_service import apply_sample_manifest
     from metabolomix.core.atomic_io import DomainError
@@ -431,7 +431,7 @@ def dataset_statistic(specification: dict, matrix_result_id: str,
 
     全量（feature ごとの結果）は戻り値に載せず session に保持する。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -439,7 +439,7 @@ def dataset_statistic(specification: dict, matrix_result_id: str,
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
     if not getattr(ds, "analysis_matrices", None):
         return _missing(
             "analysis_matrix",
@@ -490,7 +490,7 @@ def dataset_build_matrix(recipe: dict, recipe_id: str = "default",
     値そのものは戻り値に載せず session に保持する。`dataset_statistic` へは
     戻り値の `matrix_id` を渡す。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -499,7 +499,7 @@ def dataset_build_matrix(recipe: dict, recipe_id: str = "default",
     ds = holder.dataset
     if ds is None:
         return _missing("dataset",
-                        "DatasetState がありません。先に dataset_load を実行してください。")
+                        "DatasetState がありません。先に load_dataset を実行してください。")
 
     from metabolomix.analysis.dataset_service import build_analysis_matrix
     from metabolomix.console.profile_schema import validate_matrix_recipe
@@ -731,7 +731,7 @@ def dataset_feature_search(
         まま。`rule.ppm_offset` と各目標の `ppm_offset`（付加体ごと）に出て `rule_hash` に入る。
         窓検索（`targets` なし）では使えない（`DATASET_BAD_REQUEST`）。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -739,7 +739,7 @@ def dataset_feature_search(
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
     if ppm_offset is not None and targets is None:
         return mztab_error("DATASET_BAD_REQUEST",
                            "ppm_offset は目標照合（targets）のときだけ使える（効かない設定を渡さない）。",
@@ -935,10 +935,10 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curati
 
     spectrum_links は同じアラインメントの `.dcl` へ ID（SMF_ID == AlignmentID == `.dcl` の番号）で
     結び、m/z・RT は検証にだけ使う。`.arf2` / `.dcl` はハンドルならそのハンドルのもの、対話の
-    セッションなら `dataset_handle_open` と同じ探し方で決める。結べないときは links を空にし、
+    セッションなら `load_dataset` と同じ探し方で決める。結べないときは links を空にし、
     manifest の `provenance.spectrum_links_status` と `spectrum_links_reason` に理由を書く。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     from metabolomix.analysis.evidence_export import export_dataset_evidence

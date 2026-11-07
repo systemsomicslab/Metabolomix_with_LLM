@@ -1,9 +1,8 @@
-"""データフォルダ入口ツール load_dataset と arf 自動選択の検証。
+"""入口ツール `load_dataset`（B-2b Task 2）と、ファイル解決・一覧の検証。
 
-実バイナリ(.arf2/.arf)が無くても通る範囲を確認する:
-- PeakProperties.arf を DriftSpots.arf より優先すること
-- load_dataset が未登録/欠損を握りつぶさず警告で返すこと
-- load_dataset がツールとして登録されていること
+`load_dataset` は新しいハンドルを**いつも直近にする**。戻り値は読んだ中身の要約・群と役割の
+件数・次の一手で、`.arf2` の概観も前処理前の PCA も返さない。解析の記録の置き場所の基準
+`DatasetState.analysis_dir` はここで決まる。fixture はすべてテスト自身が tmp に作る。
 """
 
 import asyncio
@@ -50,31 +49,6 @@ class ResolveArfPreferenceTests(unittest.TestCase):
             self._touch(directory, "Sample_DriftSpots.arf")
             explicit = str(directory / "Sample_DriftSpots.arf")
             self.assertEqual(server.resolve_arf_file_path(explicit), explicit)
-
-
-class LoadDatasetTests(unittest.TestCase):
-    def setUp(self):
-        self._orig_data_dir = mcp_core.DATA_DIR
-
-    def tearDown(self):
-        mcp_core.DATA_DIR = self._orig_data_dir
-
-    def test_registered_as_tool(self):
-        tools = asyncio.run(server.mcp.list_tools())
-        names = {t.name for t in tools}
-        self.assertIn("load_dataset", names)
-
-    def test_missing_directory_returns_error(self):
-        out = server.load_dataset(directory=str(Path(tempfile.gettempdir()) / "no_such_dir_xyz"))
-        self.assertIn("存在しません", out)
-
-    def test_empty_directory_warns_for_both_files(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            out = server.load_dataset(directory=tmp)
-            self.assertIn(".arf2 ファイルが見つかりませんでした", out)
-            self.assertIn(".arf", out)
-            # 既定探索先が指定フォルダに更新される
-            self.assertEqual(str(mcp_core.DATA_DIR), tmp)
 
 
 class PickLatestDuplicateTests(unittest.TestCase):
@@ -143,8 +117,8 @@ class PickLatestDuplicateTests(unittest.TestCase):
             self.assertEqual(resolved, str(expected.absolute()))
 
 
-class LoadDatasetBatchAnnounceTests(unittest.TestCase):
-    """複数バッチ混在時に load_dataset が選択結果を明示すること。"""
+class BatchAnnounceTests(unittest.TestCase):
+    """複数バッチ混在時のバッチ選択の注記（`_describe_batch_selection`）。"""
 
     def setUp(self):
         self._orig_data_dir = mcp_core.DATA_DIR
@@ -154,19 +128,6 @@ class LoadDatasetBatchAnnounceTests(unittest.TestCase):
 
     def _touch(self, directory: Path, name: str) -> None:
         (directory / name).write_bytes(b"")
-
-    def test_announces_selected_latest_batch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self._touch(directory, "AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf")
-            self._touch(directory, "AlignmentResult_2026_05_15_10_13_35.arf2")
-            self._touch(directory, "AlignmentResult_2026_06_01_09_00_00_PeakProperties.arf")
-            self._touch(directory, "AlignmentResult_2026_06_01_09_00_00.arf2")
-            out = server.load_dataset(directory=str(directory))
-            # 検出した最新バッチのタイムスタンプを明示する
-            self.assertIn("2026_06_01_09_00_00", out)
-            # 旧バッチをスキップした旨が分かる（バッチ数に言及）
-            self.assertIn("バッチ", out)
 
     def test_batch_note_matches_analyzed_arf_not_persample_files(self):
         # A newer per-sample file (.pai2 with a compact 12-digit timestamp) must
@@ -189,96 +150,6 @@ class LoadDatasetBatchAnnounceTests(unittest.TestCase):
             self.assertIn("2024_06_13_09_21_45", note)
             self.assertNotIn("202606171407", note)
             self.assertNotIn("2026_06_17", note)
-
-    def test_no_batch_note_for_single_batch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self._touch(directory, "AlignmentResult_2026_06_01_09_00_00_PeakProperties.arf")
-            self._touch(directory, "AlignmentResult_2026_06_01_09_00_00.arf2")
-            out = server.load_dataset(directory=str(directory))
-            self.assertNotIn("複数バッチ", out)
-
-
-class SelectLatestBatchTests(unittest.TestCase):
-    """複数バッチ（処理タイムスタンプ）混在時に最新バッチだけを採用すること。"""
-
-    def test_keeps_only_latest_batch(self):
-        paths = [
-            "/d/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf",
-            "/d/AlignmentResult_2026_05_15_10_13_35.arf2",
-            "/d/AlignmentResult_2026_06_01_09_00_00_PeakProperties.arf",
-            "/d/AlignmentResult_2026_06_01_09_00_00.arf2",
-        ]
-        selected = server._select_latest_batch(paths)
-        self.assertTrue(all("2026_06_01_09_00_00" in p for p in selected))
-        self.assertEqual(len(selected), 2)
-
-    def test_untimestamped_files_are_preserved(self):
-        paths = [
-            "/d/AlignmentResult_2026_05_15_10_13_35.arf2",
-            "/d/AlignmentResult_2026_06_01_09_00_00.arf2",
-            "/d/notes.aef",  # タイムスタンプ無し
-        ]
-        selected = server._select_latest_batch(paths)
-        self.assertIn("/d/notes.aef", selected)
-        self.assertIn("/d/AlignmentResult_2026_06_01_09_00_00.arf2", selected)
-        self.assertNotIn("/d/AlignmentResult_2026_05_15_10_13_35.arf2", selected)
-
-    def test_all_untimestamped_returns_all(self):
-        paths = ["/d/a.aef", "/d/b.aef"]
-        self.assertEqual(set(server._select_latest_batch(paths)), set(paths))
-
-
-class ResolvePai2LatestBatchTests(unittest.TestCase):
-    def setUp(self):
-        self._orig_data_dir = mcp_core.DATA_DIR
-
-    def tearDown(self):
-        mcp_core.DATA_DIR = self._orig_data_dir
-
-    def _touch(self, directory: Path, name: str) -> None:
-        (directory / name).write_bytes(b"")
-
-    def test_resolve_pai2_picks_latest_batch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self._touch(directory, "AlignmentResult_2026_05_15_10_13_35.pai2")
-            self._touch(directory, "AlignmentResult_2026_06_01_09_00_00.pai2")
-            mcp_core.DATA_DIR = directory
-            resolved = server.resolve_pai2_file_path()
-            self.assertIsNotNone(resolved)
-            self.assertTrue(resolved.endswith("2026_06_01_09_00_00.pai2"))
-
-    def test_resolve_pai2_explicit_path_is_respected(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self._touch(directory, "AlignmentResult_2026_05_15_10_13_35.pai2")
-            explicit = str(directory / "AlignmentResult_2026_05_15_10_13_35.pai2")
-            self.assertEqual(server.resolve_pai2_file_path(explicit), explicit)
-
-
-class ResolveArfCrossBatchTests(unittest.TestCase):
-    """旧バッチの PeakProperties.arf があっても最新バッチの方を選ぶこと。"""
-
-    def setUp(self):
-        self._orig_data_dir = mcp_core.DATA_DIR
-
-    def tearDown(self):
-        mcp_core.DATA_DIR = self._orig_data_dir
-
-    def _touch(self, directory: Path, name: str) -> None:
-        (directory / name).write_bytes(b"")
-
-    def test_arf_picks_peakproperties_from_latest_batch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self._touch(directory, "AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf")
-            self._touch(directory, "AlignmentResult_2026_05_15_10_13_35_DriftSpots.arf")
-            self._touch(directory, "AlignmentResult_2026_06_01_09_00_00_PeakProperties.arf")
-            self._touch(directory, "AlignmentResult_2026_06_01_09_00_00_DriftSpots.arf")
-            mcp_core.DATA_DIR = directory
-            resolved = server.resolve_arf_file_path()
-            self.assertTrue(resolved.endswith("2026_06_01_09_00_00_PeakProperties.arf"))
 
 
 class ListDataFilesTests(unittest.TestCase):
@@ -358,3 +229,147 @@ class ListDataFilesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------- load_dataset ----------
+
+import json
+
+import pytest
+
+from metabolomix.core import handle_dispatch, handles, session_state
+from metabolomix.tools import handle_tools
+from tests.dbs_fixture import record, write_dbs
+from tests.msdial_folder_fixtures import write_msdial_folder
+from tests.reanalysis_fixtures import write_mztab
+from tests.config_fixtures import use_config
+
+_SAMPLES = [{"file_id": i, "name": f"s{i}", "class_id": "A" if i < 2 else "B"}
+            for i in range(4)]
+_SPOTS = [{"name": "PC 34:1", "mz": 760.5851, "heights": [100.0, 0.0, 50.0, 70.0]},
+          {"name": "Unknown", "mz": 500.1, "heights": [1.0, 2.0, 3.0, 4.0]}]
+
+
+@pytest.fixture
+def fresh_state():
+    session_state.session = session_state.AnalysisSession()
+    yield
+    for handle in handles.registry.list():
+        handles.registry.close(handle.handle_id)
+    session_state.session = session_state.AnalysisSession()
+
+
+def _folder(path):
+    write_msdial_folder(path, spots=_SPOTS, samples=_SAMPLES)
+    return path
+
+
+def _load(**kwargs) -> dict:
+    out = json.loads(handle_tools.load_dataset(**kwargs))
+    assert out["status"] == "success", out
+    return out
+
+
+def test_load_dataset_makes_current_handle(tmp_path, fresh_state):
+    first = _load(directory=str(_folder(tmp_path / "a")))
+    assert session_state.session.current_handle_id == first["dataset_handle"]
+    second = _load(directory=str(_folder(tmp_path / "b")))
+    # 何度開いても、開いたハンドルがいつも直近になる（前のは閉じずに残る）。
+    assert session_state.session.current_handle_id == second["dataset_handle"]
+    assert {h.handle_id for h in handles.registry.list()} == {
+        first["dataset_handle"], second["dataset_handle"]}
+    handle = handles.registry.peek(second["dataset_handle"])
+    assert handle.dataset is session_state.session.dataset
+
+
+def test_load_dataset_opens_remembered_library(tmp_path, fresh_state, monkeypatch):
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
+    folder = _folder(tmp_path / "gui")
+    write_dbs(folder / "Proj_Loaded.msp2.dbs", [("lib", [record(mz=500.0, ion_mode=0)], ["k"])])
+    out = _load(directory=str(folder))
+    assert out["library"]["file"] == "Proj_Loaded.msp2.dbs" and out["library"]["record_count"] == 1
+    assert str(folder) not in json.dumps(out, ensure_ascii=False)
+    assert handles.registry.get(out["dataset_handle"]).library.store is not None
+
+
+def test_load_dataset_returns_group_and_role_counts(tmp_path, fresh_state):
+    out = _load(directory=str(_folder(tmp_path / "a")))
+    counts = out["sample_counts"]
+    assert counts["groups"] == {"A": 2, "B": 2}
+    assert sum(counts["roles"].values()) == 4
+    assert counts["n_ungrouped"] == 0
+    assert len(out["next"]) == 3
+    # 共有の部品（`dataset_status` の要約がこれを使う）が数えたものと同じ。
+    from metabolomix.tools import mztab_tools
+    assert mztab_tools.sample_group_role_counts(session_state.session.dataset) == counts
+
+
+def test_load_dataset_has_no_initial_pca(tmp_path, fresh_state):
+    """読み込みの後の概観（`.arf2` の要約・前処理前の PCA）は返さず、PCA の状態も作らない。"""
+    out = _load(directory=str(_folder(tmp_path / "a")))
+    text = json.dumps(out, ensure_ascii=False)
+    assert "PCA" not in text.replace("dataset_pca", "")
+    assert "概観" not in text
+    ds = session_state.session.dataset
+    assert ds.last_pca is None and ds.pp_matrix is None
+    assert session_state.session.arf.features is None or not session_state.session.arf.features
+
+
+def test_load_dataset_is_always_threaded(tmp_path, fresh_state):
+    assert handle_dispatch.ALWAYS_THREADED == frozenset({"load_dataset"})
+    assert server.mcp._tool_manager._tools["load_dataset"].is_async
+
+
+def test_old_entry_names_are_gone():
+    names = set(server.mcp._tool_manager._tools)
+    assert {"load_dataset", "dataset_list", "dataset_close"} <= names
+    assert not names & {"dataset_load", "dataset_handle_open", "dataset_handle_list",
+                        "dataset_handle_close"}
+
+
+def test_load_dataset_leaves_the_arf_slot_alone(tmp_path, fresh_state):
+    _load(directory=str(_folder(tmp_path / "a")))
+    assert not session_state.session.arf.features
+
+
+def test_analysis_dir_per_adapter(tmp_path, fresh_state):
+    # 解析フォルダ → 選んだ .arf のフォルダ（ファイルを渡しても同じ）
+    folder = _folder(tmp_path / "gui")
+    _load(directory=str(folder))
+    assert session_state.session.dataset.analysis_dir == str(folder.resolve())
+    arf = next(folder.glob("*_PeakProperties.arf"))
+    _load(directory=str(arf))
+    assert Path(session_state.session.dataset.analysis_dir).resolve() == folder.resolve()
+    # mzTab-M → mzTab-M のフォルダ
+    mztab = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab")
+    _load(mztab_path=str(mztab))
+    assert Path(session_state.session.dataset.analysis_dir).resolve() == mztab.parent.resolve()
+
+
+def test_analysis_dir_is_not_part_of_the_fingerprint(tmp_path, fresh_state):
+    from metabolomix.analysis.result_state import dataset_fingerprint
+
+    _load(directory=str(_folder(tmp_path / "a")))
+    ds = session_state.session.dataset
+    before = dataset_fingerprint(ds)
+    ds.analysis_dir = str(tmp_path / "elsewhere")
+    assert dataset_fingerprint(ds) == before
+
+
+def test_analysis_dir_for_job_and_pipeline_is_the_chosen_arf_folder(tmp_path, fresh_state):
+    """job / pipeline の解析フォルダ経路は、mzTab-M との照合に通った .arf のフォルダ。
+    `source="mztab"` で読めば mzTab-M のフォルダ。"""
+    from tests.test_dataset_opening import _job, _pipeline
+
+    job = _job(tmp_path)
+    _load(job_path=str(job))
+    ds = session_state.session.dataset
+    assert Path(ds.analysis_dir).resolve() == (job.parent / "msdial").resolve()
+    _load(job_path=str(job), source="mztab")
+    assert Path(session_state.session.dataset.analysis_dir).resolve() == (
+        job.parent / "msdial").resolve()
+
+    run = _pipeline(tmp_path, job)
+    _load(pipeline_path=str(run))
+    assert Path(session_state.session.dataset.analysis_dir).resolve() == (
+        job.parent / "msdial").resolve()

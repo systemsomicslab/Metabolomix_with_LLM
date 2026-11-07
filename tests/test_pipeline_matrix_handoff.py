@@ -6,7 +6,7 @@ worker は別プロセスで走るので、行列は `context["runtime"]` にし
 
 - **保存側**: 行列は `save_matrix`（npz + meta hash + 配列 fingerprint）で
   results/matrices/ へ残り、参照が run record 側に載る。
-- **読み側**: `dataset_load(pipeline_path=...)` が、その run の dataset・
+- **読み側**: `load_dataset(pipeline_path=...)` が、その run の dataset・
   解決済み試料対応表・binding・行列を**まとめて**セッションへ載せる。
   行列だけを別ツールで載せられると、run A の dataset に run B の行列を
   混ぜられてしまう（群の対応が黙ってずれる）。
@@ -90,13 +90,13 @@ def test_saved_matrices_can_be_read_back_with_the_recorded_reference(tmp_path):
 # ---------- 読み側 ----------
 
 def test_loading_a_run_brings_the_dataset_and_its_matrices_together(tmp_path):
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     harness, _ = _completed_run(tmp_path)
     session_state.session.dataset = None
 
     # 成功時は要約テキスト（エラー時だけ JSON 封筒）。
-    summary = dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab")
+    summary = load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab")
     assert "解析行列" in summary, summary
 
     ds = session_state.session.dataset
@@ -107,11 +107,11 @@ def test_loading_a_run_brings_the_dataset_and_its_matrices_together(tmp_path):
 
 
 def test_loading_a_run_restores_the_resolved_sample_metadata(tmp_path):
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     harness, _ = _completed_run(tmp_path)
     session_state.session.dataset = None
-    dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab")
+    load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab")
 
     rows = session_state.session.dataset.sample_metadata_rows
     expected = harness.result_data("sample_manifest")["rows"]
@@ -121,11 +121,11 @@ def test_loading_a_run_restores_the_resolved_sample_metadata(tmp_path):
 
 
 def test_loading_a_run_restores_the_resolved_binding_targets(tmp_path):
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     harness, _ = _completed_run(tmp_path)
     session_state.session.dataset = None
-    dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab")
+    load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab")
 
     bindings = harness.result_data("feature_bindings") or {}
     expected = {tid: b["selected_feature_id"]
@@ -136,11 +136,11 @@ def test_loading_a_run_restores_the_resolved_binding_targets(tmp_path):
 
 def test_a_restored_matrix_can_be_used_by_dataset_statistic(tmp_path):
     from metabolomix.tools.dataset_analysis_tools import dataset_statistic
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     harness, _ = _completed_run(tmp_path)
     session_state.session.dataset = None
-    dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab")
+    load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab")
 
     matrix_id = sorted(session_state.session.dataset.analysis_matrices)[0]
     result = _payload(dataset_statistic(
@@ -152,16 +152,16 @@ def test_a_restored_matrix_can_be_used_by_dataset_statistic(tmp_path):
 
 
 def test_pipeline_path_cannot_be_combined_with_the_other_entry_points(tmp_path):
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     harness, _ = _completed_run(tmp_path)
-    payload = _payload(dataset_load(mztab_path=str(harness.mztab_path),
+    payload = _payload(load_dataset(mztab_path=str(harness.mztab_path),
                                     pipeline_path=str(harness.pipeline_path)))
     assert payload["error"]["code"] == "DATASET_BAD_REQUEST"
 
 
 def test_a_tampered_matrix_file_is_refused_and_leaves_the_session_alone(tmp_path):
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     harness, _ = _completed_run(tmp_path)
     record = harness.record()
@@ -174,6 +174,6 @@ def test_a_tampered_matrix_file_is_refused_and_leaves_the_session_alone(tmp_path
     np.savez(arrays_path, **arrays)
 
     session_state.session.dataset = None
-    payload = _payload(dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab"))
+    payload = _payload(load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab"))
     assert payload["error"]["code"] == "MATRIX_INTEGRITY_MISMATCH"
     assert session_state.session.dataset is None

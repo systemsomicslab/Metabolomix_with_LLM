@@ -1,17 +1,10 @@
 # ワークフロー: データセット投入の入口
 
-`load_dataset` はユーザーがフォルダを渡したときの唯一の入口で、arf2 概観 → arf PCA を
-一括実行するオーケストレータ。`arf2_parser` / `arf_parser` を**そのまま呼ぶ**ので、
-連鎖の続きは [arf2.md](arf2.md) / [arf.md](arf.md) を参照。
+データセットを開く入口 `load_dataset` は [mztab.md](mztab.md)（解析フォルダも mzTab-M も同じ入口）。
+ここには、その前にフォルダの中身を確かめる `list_data_files` と、試料の検索 `sample_search` を置く。
 
 ```mermaid
 flowchart TD
-    LD[load_dataset] --> RES1[path_resolvers.resolve_arf2_file_path]
-    LD --> RES2[path_resolvers.resolve_arf_file_path]
-    LD --> CAV[session.maybe_prepend_caveat]
-    LD --> BATCH[path_resolvers._describe_batch_selection]
-    LD --> A2[arf2_parser → arf2.md]
-    LD --> A1[arf_parser → arf.md]
     LDF[list_data_files] --> PR[path_resolvers.list_data_files<br/>純関数（絶対パスのリスト）]
     SS[sample_search] --> SF[msdial.sample_factors]
 ```
@@ -39,23 +32,6 @@ flowchart TD
 
 1. metabolomix/tools/dataset.py  list_data_files()
 2. └─ metabolomix/core/path_resolvers.py  list_data_files()
-
-## load_dataset
-
-前提: なし（`directory` 省略時は `mcp_core.DATA_DIR` を使う）
-状態変更: `directory` 指定時に `mcp_core.DATA_DIR` を差し替える。以降 `arf2_parser` /
-`arf_parser` がそれぞれ `session` を更新する。
-
-意味論ダイジェストは入口の先頭で 1 回だけ前置する。ここで発火させると、後段の
-`arf2_parser` / `arf_parser` 内の同じガードは `caveat_emitted` により no-op になる。
-
-1. metabolomix/tools/dataset.py  load_dataset()
-2. └─ metabolomix/core/path_resolvers.py  resolve_arf2_file_path()
-3. └─ metabolomix/core/path_resolvers.py  resolve_arf_file_path()
-4. └─ metabolomix/core/session_state.py  AnalysisSession.maybe_prepend_caveat()
-5. └─ metabolomix/core/path_resolvers.py  _describe_batch_selection()
-6. └─ metabolomix/arf2/tools.py  arf2_parser()
-7. └─ metabolomix/arf/tools.py  arf_parser()
 
 ## sample_search
 

@@ -56,18 +56,6 @@ def test_arf2_parser_survives_a_broken_config(tmp_path, broken_config, fresh_ses
     assert out.count("CONFIG_INVALID") == 1
 
 
-def test_load_dataset_survives_a_broken_config(tmp_path, broken_config, fresh_session):
-    import server
-
-    paths = write_alignment_set(tmp_path / "neg")
-    out = server.load_dataset(directory=str(paths["arf2"].parent))
-    assert "データセット読み込み" in out
-    assert session_state.SEMANTICS_CAVEAT in out
-    assert "CONFIG_INVALID" in out
-    assert mcp_core.DATA_DIR == paths["arf2"].parent
-    assert session_state.session.arf.features                      # arf の段まで進んでいる
-
-
 def test_caveat_off_still_works_and_the_note_is_absent(tmp_path, monkeypatch, fresh_session):
     use_config(monkeypatch, tmp_path, {"server.caveat_mode": "off"})
     assert fresh_session.maybe_prepend_caveat("BODY", topic="arf") == "BODY"
@@ -123,7 +111,7 @@ def test_pathway_plot_returns_the_envelope(broken_config, fresh_session):
 def test_dataset_handle_list_returns_the_envelope(broken_config):
     from metabolomix.tools import handle_tools
 
-    err = _error(handle_tools.dataset_handle_list())
+    err = _error(handle_tools.dataset_list())
     assert err["code"] == "CONFIG_INVALID"
     assert err["details"]["config_file"] == str(broken_config)
 
@@ -132,7 +120,7 @@ def test_dataset_handle_open_refuses_with_the_envelope(tmp_path, broken_config):
     from metabolomix.tools import handle_tools
 
     paths = write_alignment_set(tmp_path / "neg")
-    err = _error(handle_tools.dataset_handle_open(directory=str(paths["arf2"].parent)))
+    err = _error(handle_tools.load_dataset(directory=str(paths["arf2"].parent)))
     assert err["code"] == "CONFIG_INVALID"
     assert handles.registry.list() == []
 
@@ -183,7 +171,7 @@ def test_remembered_library_note_says_config_invalid(tmp_path, monkeypatch):
                                              config_file=str(tmp_path / "lipidmix.local.toml"))
 
     monkeypatch.setattr(store, "cache_dir", broken_cache_dir)
-    out = json.loads(handle_tools.dataset_handle_open(directory=str(folder), library="auto"))
+    out = json.loads(handle_tools.load_dataset(directory=str(folder), library="auto"))
     assert out["dataset_handle"].startswith("dh_")
     assert "CONFIG_INVALID" in out["library_note"]
     assert "ConfigInvalidError" not in out["library_note"]

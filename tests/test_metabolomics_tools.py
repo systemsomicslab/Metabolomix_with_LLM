@@ -3,7 +3,7 @@
 MCP 層は数値を持たない。ここで縛るのは「どの前提が欠けているか」を利用者が
 **区別できる形で**返すこと:
 
-- DatasetState が無いのか、解析行列が無いのか（前者は `dataset_load`、後者は
+- DatasetState が無いのか、解析行列が無いのか（前者は `load_dataset`、後者は
   pipeline を回す、と次の一手が違う）。
 - 指定した `matrix_result_id` が無いのか（近い行列で代用しない）。
 - 統計が計算できなかったのか（結果は返るが `status=not_evaluable`）。
@@ -102,7 +102,7 @@ def test_without_a_dataset_it_says_to_load_one():
     payload = _payload(dataset_statistic(_spec(), "mat_x"))
     assert payload["error"]["code"] == "missing_state"
     assert payload["error"]["state"] == "dataset"
-    assert "dataset_load" in payload["error"]["required_tools"]
+    assert "load_dataset" in payload["error"]["required_tools"]
 
 
 def test_without_a_matrix_it_points_at_the_pipeline_not_at_itself():
@@ -213,7 +213,7 @@ def test_building_without_a_dataset_says_to_load_one():
     payload = _payload(dataset_build_matrix(_recipe()))
     assert payload["error"]["code"] == "missing_state"
     assert payload["error"]["state"] == "dataset"
-    assert "dataset_load" in payload["error"]["required_tools"]
+    assert "load_dataset" in payload["error"]["required_tools"]
 
 
 def test_an_invalid_recipe_is_rejected_not_reported_as_missing_state():

@@ -1,6 +1,6 @@
 # mzTab-M 経路の出力フィールド
 
-`dataset_load` が作る `DatasetState` と、その下流（特徴表・差次的エクスポート）が
+`load_dataset` が作る `DatasetState` と、その下流（特徴表・差次的エクスポート）が
 出す値の意味。
 
 > 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項はそちらで定義され、ここでは繰り返さない。節番号は分割前の通し番号。
@@ -8,7 +8,7 @@
 ツールが**どのファイルのどの関数をどの順に呼ぶか**は `docs/workflow/mztab.md`。
 ここは**値の意味**だけを定義する。
 
-## 13. mzTab-M 経路（`dataset_load` 以降）
+## 13. mzTab-M 経路（`load_dataset` 以降）
 
 mzTab-M 2.0.0-M は MS-DIAL Console が産む標準交換形式で、`DatasetState` の正準入力。
 ARF 経路（`.arf` を直接読む）とは**別の ID 空間・別の粒度**なので、両者の値を
@@ -21,7 +21,7 @@ ARF 経路（`.arf` を直接読む）とは**別の ID 空間・別の粒度**�
 | 同定の出所 | SME 行 / SML 行（§13.1） | `.arf2` の注釈 |
 | MSI レベル | **常に空欄**（§13.5） | ヒューリスティック推定あり（`identity` トピック §12.3） |
 
-`dataset_load` は解析フォルダ（`directory`、または `job_path` / `pipeline_path` の既定）も
+`load_dataset` は解析フォルダ（`directory`、または `job_path` / `pipeline_path` の既定）も
 読む。そのときの要約は行で、読んだアダプタ（`アダプタ: msdial_folder`）・読んだ `.arf` と
 選ばなかった `.arf` の候補・同定に使ったライブラリの記録（`library_record`。ファイル名と
 sha256 だけで置き場所は出さない）を示す。アダプタと `library_record` の行は mzTab-M で
@@ -164,7 +164,7 @@ SME 由来という食い違った行ができる。
 
 ### 13.6 `inchikey_coverage`
 
-`dataset_load` の要約と `dataset_status` が読む集計。
+`load_dataset` の要約と `dataset_status` が読む集計。
 
 | キー | 意味 |
 |---|---|
@@ -180,7 +180,7 @@ MSP を RDKit より前に置くのは、RDKit の有無（Windows のアプリ�
 拒否する機械がある）で結果を変えないため。MSP 表はジョブ経由の読み込み（`job_path`）でだけ作られ、
 実効メソッドの MSP の注釈器設定表（`MSP annotator settings file path`。`library_mode="msp_then_lbm"` の run）がMSP を指していればその最初の MSP を、無ければ `Msp file path` を読む（Console と同じ順）。設定表から入った MSP の同定は`MspDB_<n>_<MSP の stem>:<名前>` で出るので、stem がその MSP のものだけを引く。直接読み（`mztab_path`）では `not_applicable`。
 
-`identified_by` は `dataset_load` の要約にも 1 行で出る。
+`identified_by` は `load_dataset` の要約にも 1 行で出る。
 **`sml_only` を `sme` と足して「同定できた件数」にしないこと** — 証拠水準が違う。
 
 ### 13.7 `abundance` は実測か gap-fill かを区別しない

@@ -23,7 +23,7 @@ HEADING_RE = re.compile(r"^##\s+(?P<tool>[a-z][a-z0-9_]*)\s*$", re.MULTILINE)
 
 # 設計書 §4 の対象範囲表と一対一で対応する。増減させる場合は設計書も直すこと。
 IN_SCOPE: dict[str, tuple[str, ...]] = {
-    "dataset.md": ("list_data_files", "load_dataset", "sample_search"),
+    "dataset.md": ("list_data_files", "sample_search"),
     "arf.md": (
         "arf_parser", "arf_list_classes", "arf_list_tags", "arf_list_sample_roles",
         "arf_exclude", "arf_preprocess", "arf_pca_preprocessed", "arf_differential",
@@ -37,7 +37,7 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
         "eic_parser", "eic_search", "eic_plot_chromatograms", "eic_plot_compounds",
     ),
     "plots.md": ("save_figure", "plot_pca_loadings"),
-    "mztab.md": ("dataset_load", "dataset_status"),
+    "mztab.md": ("load_dataset", "dataset_status"),
     "dataset_analysis.md": (
         "dataset_preprocess", "dataset_pca", "dataset_differential",
         "dataset_export_differential", "dataset_export_evidence_bundle", "dataset_set_sample_metadata",
@@ -55,7 +55,7 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
         "curation_view_data",
     ),
     "pathway.md": ("pathway_project", "pathway_plot"),
-    "reanalysis.md": ("dataset_handle_open", "dataset_handle_list", "dataset_handle_close",
+    "reanalysis.md": ("dataset_list", "dataset_close",
                       "dataset_analysis_run", "library_msms_qualify", "dataset_homolog_check",
                       "dataset_feature_relations", "dataset_claim_evidence",
                       "dataset_mass_accuracy", "dataset_novel_candidates",
@@ -190,4 +190,4 @@ class TestScopeBoundary(unittest.TestCase):
             registered,
             "対象範囲の分類と登録済みツールが一致しない",
         )
-        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 70)
+        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 68)

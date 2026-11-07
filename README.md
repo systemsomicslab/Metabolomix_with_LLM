@@ -71,8 +71,9 @@ export LIPIDMIX_DATA_DIR=/path/to/your/msdial/output
 
 > Load the dataset in `LIPIDMIX_DATA_DIR` and show me the PCA.
 
-That calls `load_dataset`, the entry point: it picks the latest alignment batch, runs the
-standard overview, and primes the session for everything that follows.
+That calls `load_dataset`, the entry point: it picks the latest alignment batch, opens the
+dataset as the current one, and reports its samples, groups and library for everything that
+follows.
 
 ### MS-DIAL Console and reference libraries (optional)
 

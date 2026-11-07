@@ -63,7 +63,7 @@ from metabolomix.core.tool_helpers import (
 # --- ツール/リソースの登録＋公開面の再エクスポート ---
 # import 副作用で @mcp.tool / @mcp.resource が mcp に登録される。star import は各
 # モジュールの __all__（＝そのモジュールのツール名）だけを取り込む。
-# metabolomix.tools.dataset は arf/arf2 に依存するため最後に読み込む。
+# （入口 `load_dataset` は handle_tools に置く。）
 from metabolomix.tools import resources as tools_resources  # リソース 1 + テンプレート 1
 from metabolomix.tools.objective import *
 from metabolomix.tools.reports import *
@@ -75,8 +75,8 @@ from metabolomix.arf.species_tools import *  # arf_plot_species, arf_pca_species
 from metabolomix.tools.samples import *  # sample_search
 from metabolomix.arf2.tools import *
 from metabolomix.eic.tools import *
-from metabolomix.tools.dataset import *  # list_data_files, load_dataset
-from metabolomix.tools.mztab_tools import *  # dataset_load, dataset_status
+from metabolomix.tools.dataset import *  # list_data_files
+from metabolomix.tools.mztab_tools import *  # dataset_status
 from metabolomix.tools.console_tools import *  # console_plan, console_run, console_status, job_list
 from metabolomix.tools.dataset_analysis_tools import *  # dataset_preprocess, dataset_pca, dataset_differential, dataset_export_differential, dataset_set_sample_metadata, dataset_feature_search
 from metabolomix.tools.pca_loadings_tools import *  # plot_pca_loadings（mzTab の DatasetState を読むので dataset 系の後）
@@ -84,7 +84,7 @@ from metabolomix.tools.pipeline_tools import *  # pipeline_plan, pipeline_run, p
 from metabolomix.tools.maintenance import *  # server_update
 from metabolomix.tools.curation_tools import *  # curation_review, curation_suggest, curation_submit, curation_flags, curation_view_data
 from metabolomix.pathway.tools import *  # pathway_project, pathway_plot（MSLipidMapper 連携）
-from metabolomix.tools.handle_tools import *  # dataset_handle_open / list / close（再解析のハンドル）
+from metabolomix.tools.handle_tools import *  # load_dataset / dataset_list / dataset_close
 from metabolomix.tools.reanalysis_tools import *  # 再解析の spec で呼ぶツール（dataset_analysis_run ほか）
 
 # 全ツールの登録が済んでから 1 回だけ: dataset_handle を渡した呼び出しをスレッドへ退避する

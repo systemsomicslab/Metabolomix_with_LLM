@@ -92,9 +92,9 @@ def _dataset_or_error(holder, needed: bool):
     ds = getattr(holder, "dataset", None)
     if needed and ds is None:
         return None, missing_state(
-            "dataset", ["dataset_load", "dataset_handle_open"],
-            "データセットがありません。dataset_handle_open で開いたハンドルを渡すか、"
-            "dataset_load を実行してください。")
+            "dataset", ["load_dataset"],
+            "データセットがありません。load_dataset が返したハンドルを渡すか、"
+            "先に load_dataset を実行してください。")
     return ds, None
 
 
@@ -250,7 +250,7 @@ def library_msms_qualify(rules: dict, spot_id: int | None = None,
         lbm_only = library_tools.lbm_only_not_evaluable(holder)
         if lbm_only is not None:
             return json_payload({**lbm_only, "verdict": "not_evaluable", "checks": []})
-        return missing_state("library_store", ["library_load", "dataset_handle_open"],
+        return missing_state("library_store", ["library_load", "load_dataset"],
                              "参照ライブラリが読み込まれていません。")
     if (spot_id is None) == (precursor_mz is None):
         return mztab_error("DATASET_BAD_REQUEST", "spot_id か precursor_mz のどちらか一方を指定する",

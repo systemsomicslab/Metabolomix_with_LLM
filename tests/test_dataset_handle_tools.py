@@ -47,7 +47,11 @@ def pos_mztab(tmp_path):
 
 
 def _open(path) -> str:
-    out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(path), library="none"))
+    # 旧 `dataset_handle_open` は直近を動かさなかった。この検査は「ハンドルを渡す呼び出しは対話の状態に
+    # 触れない」ことを縛るので、開いたあとで直近を元に戻す（`load_dataset` はいつも直近にする）。
+    previous = session_state.session.current_handle_id
+    out = json.loads(handle_tools.load_dataset(mztab_path=str(path), library="none"))
+    session_state.session.current_handle_id = previous
     return out["dataset_handle"]
 
 
@@ -99,7 +103,7 @@ def test_handle_open_finds_pipeline_arf2(tmp_path, monkeypatch, pos_mztab):
     monkeypatch.setattr(opening, "_load",
                         lambda kind, path, allow: load_dataset_state(mztab_path=pos_mztab))
 
-    out = json.loads(handle_tools.dataset_handle_open(pipeline_path=str(run), library="none",
+    out = json.loads(handle_tools.load_dataset(pipeline_path=str(run), library="none",
                                                       source="mztab"))
 
     assert out["status"] == "success", out
@@ -115,7 +119,7 @@ def test_handle_open_picks_newest_arf2_name_in_pipeline_input(tmp_path, monkeypa
     monkeypatch.setattr(opening, "_load",
                         lambda kind, path, allow: load_dataset_state(mztab_path=pos_mztab))
 
-    out = json.loads(handle_tools.dataset_handle_open(pipeline_path=str(run), library="none",
+    out = json.loads(handle_tools.load_dataset(pipeline_path=str(run), library="none",
                                                       source="mztab"))
 
     assert out["arf2"] == "AlignResult-2.arf2"
@@ -129,14 +133,14 @@ def test_handle_open_without_pipeline_arf2_stays_null(tmp_path, monkeypatch, pos
     monkeypatch.setattr(opening, "_load",
                         lambda kind, path, allow: load_dataset_state(mztab_path=pos_mztab))
 
-    out = json.loads(handle_tools.dataset_handle_open(pipeline_path=str(run), library="none",
+    out = json.loads(handle_tools.load_dataset(pipeline_path=str(run), library="none",
                                                       source="mztab"))
 
     assert out["arf2"] is None and out["dcl"] is None
 
 
 def test_unknown_handle_is_an_error_not_the_global_session(tmp_path, pos_mztab):
-    mztab_tools.dataset_load(mztab_path=str(pos_mztab))       # 対話のセッションにはデータがある
+    handle_tools.load_dataset(mztab_path=str(pos_mztab))       # 対話のセッションにはデータがある
     for tool, kwargs in _tools(tmp_path):
         out = json.loads(tool(**kwargs, dataset_handle=UNKNOWN))
         assert out["error"]["code"] == "DATASET_HANDLE_NOT_FOUND", tool.__name__
@@ -144,7 +148,7 @@ def test_unknown_handle_is_an_error_not_the_global_session(tmp_path, pos_mztab):
 
 
 def test_preprocess_on_handle_leaves_global_and_other_handle_untouched(pos_mztab):
-    mztab_tools.dataset_load(mztab_path=str(pos_mztab))
+    handle_tools.load_dataset(mztab_path=str(pos_mztab))
     a, b = _open(pos_mztab), _open(pos_mztab)
     out = json.loads(T.dataset_preprocess(normalize="pqn", dataset_handle=a))
     assert out["status"] == "success"
@@ -202,7 +206,7 @@ def golden_outputs(directory: Path) -> dict:
     """ハンドルを渡さない呼び出しの戻り値（変更前のコードでも同じ関数で採る）。"""
     path = write_mztab(directory / "AlignResult-1.mzTab")
     session_state.session = session_state.AnalysisSession()
-    mztab_tools.dataset_load(mztab_path=str(path))
+    handle_tools.load_dataset(mztab_path=str(path))
 
     def load(text, drop=()):
         data = json.loads(text)

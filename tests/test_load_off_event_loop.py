@@ -1,6 +1,6 @@
 """データセットの読み込みをイベントループから外す（B-2a Task 2）。
 
-- `dataset_load` はワーカースレッドで走り、読み込みの間もイベントループが進む。
+- `load_dataset` はワーカースレッドで走り、読み込みの間もイベントループが進む。
 - 同じ入力を同時に開いても読むのは 1 回（別の入力どうしは並ぶ）。
 - セッションのライブラリを新しいハンドルへ移す箇所と `library_load` の書き込みは排他。
 """
@@ -64,7 +64,7 @@ def test_dataset_load_does_not_block_loop(monkeypatch, pos_mztab):
 
         task = asyncio.create_task(ticker())
         try:
-            return await server.mcp.call_tool("dataset_load", {"mztab_path": str(pos_mztab)})
+            return await server.mcp.call_tool("load_dataset", {"mztab_path": str(pos_mztab)})
         finally:
             done.set()
             await task
@@ -74,10 +74,9 @@ def test_dataset_load_does_not_block_loop(monkeypatch, pos_mztab):
     assert session_state.session.dataset is not None
 
 
-def test_old_arf_load_dataset_stays_on_loop():
-    """旧 ARF 経路の load_dataset は session.arf と DATA_DIR を無ロックで書くので回さない。"""
-    assert not server.mcp._tool_manager._tools["load_dataset"].is_async
-    assert server.mcp._tool_manager._tools["dataset_load"].is_async
+def test_load_dataset_runs_in_a_worker_thread():
+    """`load_dataset` は常にワーカースレッドで走る（`handle_dispatch.ALWAYS_THREADED`）。"""
+    assert server.mcp._tool_manager._tools["load_dataset"].is_async
 
 
 def test_concurrent_open_same_input_reads_once(monkeypatch, pos_mztab):

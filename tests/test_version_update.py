@@ -175,19 +175,23 @@ def test_console_status_carries_notice(tmp_path, monkeypatch):
 
 
 def test_load_dataset_shows_notice(tmp_path, monkeypatch):
-    """入口ツールは Markdown を返すので、キーではなく 1 行のブロックで出す。"""
-    from metabolomix.core import mcp_core, session_state
-    from metabolomix.tools.dataset import load_dataset
+    """入口ツールは `update_available` の鍵で更新を知らせる（最新なら鍵ごと出さない）。"""
+    import json as _json
 
+    from metabolomix.core import handles, session_state
+    from metabolomix.tools.handle_tools import load_dataset
+    from tests.reanalysis_fixtures import write_mztab
+
+    mztab = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab")
     session_state.session = session_state.AnalysisSession()
-    original = mcp_core.DATA_DIR
     try:
         monkeypatch.setattr(version, "update_status", lambda: None)
-        assert "更新があります" not in load_dataset(str(tmp_path))
+        assert "update_available" not in _json.loads(load_dataset(mztab_path=str(mztab)))
 
-        session_state.session = session_state.AnalysisSession()
         monkeypatch.setattr(version, "update_status",
                             lambda: {"behind": 2, "message": "更新があります"})
-        assert "更新があります" in load_dataset(str(tmp_path))
+        assert _json.loads(load_dataset(mztab_path=str(mztab)))["update_available"]["behind"] == 2
     finally:
-        mcp_core.DATA_DIR = original
+        for handle in handles.registry.list():
+            handles.registry.close(handle.handle_id)
+        session_state.session = session_state.AnalysisSession()

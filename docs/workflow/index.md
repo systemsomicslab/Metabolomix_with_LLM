@@ -35,28 +35,28 @@
 
 | 文書 | 対象 | ツール数 |
 |---|---|---|
-| [dataset.md](dataset.md) | データセット投入の入口 | 3 |
+| [dataset.md](dataset.md) | ファイルの一覧と試料の検索（入口 `load_dataset` は mztab.md） | 2 |
 | [arf.md](arf.md) | `.arf` — サンプル別強度・PCA・差次的解析 | 14 |
 | [arf2.md](arf2.md) | `.arf2` — スポット代表カタログ | 2 |
 | [pai2.md](pai2.md) | `.pai2` — 単一測定のピークと MS/MS 検証 | 3 |
 | [dcl.md](dcl.md) | `.dcl` — デコンボリューション済み MS/MS | 4 |
 | [eic.md](eic.md) | `.EIC.aef` — クロマトグラムの検索と描画 | 4 |
 | [plots.md](plots.md) | 図の保存（save_figure）・PCA ローディング図と payload 契約の比較 | 2 |
-| [mztab.md](mztab.md) | mzTab-M — DatasetState への読み込み | 2 |
+| [mztab.md](mztab.md) | データセットを開く入口（`load_dataset`）と状態（`dataset_status`） | 2 |
 | [dataset_analysis.md](dataset_analysis.md) | DatasetState — 前処理・PCA・差次的解析・エクスポート・実験情報訂正・特徴検索 | 7 |
 | [pipeline.md](pipeline.md) | 生データフォルダ起点の統括(pipeline) — 上流検証・前処理・PCA・比較・レポートまでの自動進行 | 5 |
 | [metabolomics.md](metabolomics.md) | LC–MS メタボロミクス v2 — 名指しした解析行列への統計 | 2 |
 | [library.md](library.md) | 参照ライブラリ（`.dbs`/`.msp`）— MS/MS スペクトル照合と対向プロット・ライブラリの検索 | 4 |
 | [curation.md](curation.md) | アラインメントのキュレーション — 注釈の一覧確認・機械判別・フラグ記録・候補付け | 5 |
 | [pathway.md](pathway.md) | パスウェイ投影（MSLipidMapper）— サブクラスのノード集計・2 群比較・図 | 2 |
-| [reanalysis.md](reanalysis.md) | 再解析 — データセットのハンドルと spec で呼ぶツール | 11 |
+| [reanalysis.md](reanalysis.md) | 再解析 — ハンドルの一覧・クローズと spec で呼ぶツール | 10 |
 
-合計 70 ツール。対象外は 12 ツール——レポート記録系 3
+合計 68 ツール。対象外は 12 ツール——レポート記録系 3
 （`record_objective` `write_report` `read_report`）＋
 Console 実行層 8（`console_plan` `console_prepare_input` `console_method_template`
 `console_method_candidates` `console_run` `console_status` `console_cleanup` `job_list`）＋
 サーバ自身の保守 1（`server_update`。解析の流れに現れず、配布先クローンの更新だけを行う）。
-登録ツール総数は 82（70 + 12）。
+登録ツール総数は 80（68 + 12）。
 
 ## 一気通貫の順序
 

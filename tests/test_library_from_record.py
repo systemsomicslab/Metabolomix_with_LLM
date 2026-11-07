@@ -46,7 +46,7 @@ def _dbs(path, mz=500.0):
 
 
 def _open(folder, **kwargs) -> dict:
-    return json.loads(handle_tools.dataset_handle_open(directory=str(folder), **kwargs))
+    return json.loads(handle_tools.load_dataset(directory=str(folder), **kwargs))
 
 
 def test_handle_opens_remembered_library(tmp_path):
@@ -84,7 +84,7 @@ def test_no_record_does_not_use_polarity_setting(tmp_path, monkeypatch):
                    encoding="ascii")
     use_config(monkeypatch, tmp_path, {"library.msp_positive": str(msp)})
     mztab = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab")
-    out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(mztab)))
+    out = json.loads(handle_tools.load_dataset(mztab_path=str(mztab)))
     assert out["polarity"] == "positive" and out["library"] is None
     assert out["library_record"]["status"] == "unknown"
     assert "極性の設定" in out["library_note"]
@@ -107,7 +107,7 @@ def test_library_load_without_args_uses_latest_dataset_record(tmp_path):
 
     folder = _folder(tmp_path)
     _dbs(folder / "Proj_Loaded.msp2.dbs")
-    mztab_tools.dataset_load(directory=str(folder))
+    handle_tools.load_dataset(directory=str(folder))
     assert session_state.session.dataset is not None
     out = json.loads(library_tools.library_load())
     assert out["status"] == "success" and out["library_source"] == "dataset_record"
@@ -231,7 +231,7 @@ def test_pipeline_pinned_sha_differs_from_current_file_is_not_opened(tmp_path):
     data["inputs"] = {"library_mode": "msp_only", "msp": {
         "path": str(lib), "file": lib.name, "source": "config_file", "sha256": "0" * 64}}
     record_path.write_text(json.dumps(data), encoding="utf-8")
-    out = json.loads(handle_tools.dataset_handle_open(pipeline_path=str(run), library="auto"))
+    out = json.loads(handle_tools.load_dataset(pipeline_path=str(run), library="auto"))
     assert out["status"] == "success", out
     assert out["library"] is None and "不一致" in out["library_note"]
     assert out["library_record"]["status"] == "mismatch"
@@ -245,7 +245,7 @@ def test_stale_dataset_library_load_refuses_after_the_file_changes(tmp_path):
 
     folder = _folder(tmp_path)
     dbs = _dbs(folder / "Proj_Loaded.msp2.dbs")
-    mztab_tools.dataset_load(directory=str(folder))
+    handle_tools.load_dataset(directory=str(folder), library="none")
     _dbs(dbs, mz=501.0)
     out = json.loads(library_tools.library_load())
     assert out["status"] == "error" and "不一致" in out["message"]
@@ -314,7 +314,7 @@ def test_session_dataset_without_a_record_falls_back_to_the_settings(tmp_path, m
     setting = _msp(tmp_path / "lab" / "Setting_Pos.msp")
     use_config(monkeypatch, tmp_path, {"library.msp_positive": str(setting)})
     mztab = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab")
-    mztab_tools.dataset_load(mztab_path=str(mztab))
+    handle_tools.load_dataset(mztab_path=str(mztab))
     assert session_state.session.dataset.library_record["status"] == "unknown"
     out = json.loads(library_tools.library_load())
     assert out["status"] == "success" and out["file"] == "Setting_Pos.msp"

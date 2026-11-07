@@ -174,7 +174,7 @@ class DatasetState:
         # 取り込めなかった場合は None（空の辞書と混同させない）。
         self.per_sample_mz: dict[str, dict[str, float]] | None = None
 
-        # --- ジョブ由来フィールド（dataset_load(job_path=...) で設定） ---
+        # --- ジョブ由来フィールド（load_dataset(job_path=...) で設定） ---
         # job_path: analysis-job.json の絶対パス。mzTab-M を直接指定した場合は None。
         self.job_path: str | None = None
         # artifact_paths: role -> [絶対パス, ...] のマップ。
@@ -258,6 +258,11 @@ class DatasetState:
         self.ion_mode_majority: str | None = None
         # artifact_sha256: 読んだ成果物のパス -> sha256。
         self.artifact_sha256: dict[str, str] = {}
+        # analysis_dir: 解析の記録（レポート）の置き場所を決める基準のフォルダ。`dataset.opening` が
+        # 読み込みで入れる——解析フォルダのアダプタは選んだ `.arf` のフォルダ、mzTab-M のアダプタは
+        # mzTab-M のフォルダ。指紋（`result_state.dataset_fingerprint`）には入れない
+        # （入力ではなく置き場所なので、データを動かしても結果が古くならない）。
+        self.analysis_dir: str | None = None
         # library_record: 同定に使った参照ライブラリの記録（Task 6）。
         self.library_record: dict | None = None
         # feature_tags / curation_flags: 特徴ごとのタグとキュレーションのフラグ（Task 5）。
@@ -502,7 +507,7 @@ def build_dataset_state(
     if name_warnings:
         # **先頭に差す**。パーサ層の良性 warning（末尾空列の除去など）は実データで
         # 数百件になり得るので、後ろに append すると件数を絞って表示する
-        # dataset_load の要約に載る余地がなくなる。表示されない warning は
+        # load_dataset の要約に載る余地がなくなる。表示されない warning は
         # 無いのと同じで、群選択が黙って誤るのを止められない。
         existing = ds.validation_result.setdefault("warnings", [])
         ds.validation_result["warnings"] = [*name_warnings, *existing]

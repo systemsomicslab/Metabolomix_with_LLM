@@ -49,7 +49,7 @@ def _bundle_inputs(tmp_path, *, detected: bool):
 def _handle_with_result(tmp_path) -> tuple[str, str]:
     """ハンドルで開き、前処理と HC 対 RA の比較まで進めた (handle, result_id)。"""
     path = write_mztab(tmp_path / "in" / "t.mzTab")
-    opened = json.loads(handle_tools.dataset_handle_open(mztab_path=str(path), library="none"))
+    opened = json.loads(handle_tools.load_dataset(mztab_path=str(path), library="none"))
     handle = opened["dataset_handle"]
     T.dataset_preprocess(dataset_handle=handle)
     result = json.loads(T.dataset_differential(group_a=HC, group_b=RA, dataset_handle=handle))

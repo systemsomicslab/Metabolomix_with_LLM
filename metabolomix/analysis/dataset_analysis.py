@@ -112,7 +112,7 @@ def build_dataset_pp_inputs(ds):
     if ds.feature_matrix is None or not ds.sample_names or not ds.feature_ids:
         raise PreconditionError(
             "missing_state",
-            "DatasetState に定量行列がありません。dataset_load を先に実行してください。",
+            "DatasetState に定量行列がありません。load_dataset を先に実行してください。",
             state="dataset",
         )
 
@@ -130,7 +130,7 @@ def build_dataset_pp_inputs(ds):
             raise PreconditionError(
                 "bad_request",
                 "適用済みの実験情報シートの行数がサンプル数と一致しません。"
-                "dataset_load をやり直してから metadata を再適用してください。",
+                "load_dataset をやり直してから metadata を再適用してください。",
                 {"rows": len(explicit_rows), "samples": len(sample_names)},
             )
         roles, sample_meta = sample_manifest.pp_inputs_from_rows(sample_names, explicit_rows)

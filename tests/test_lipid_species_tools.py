@@ -100,7 +100,7 @@ def library(tmp_path, monkeypatch, mztab):
 def _open(mztab, **kwargs):
     kwargs.setdefault("library", "none")
     library = kwargs["library"]
-    out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(mztab), **kwargs))
+    out = json.loads(handle_tools.load_dataset(mztab_path=str(mztab), **kwargs))
     assert out["status"] == "success", out
     if library == "auto":
         # mzTab-M の記憶は `unknown` なので、library_load は極性の設定（[library] msp_positive）から引く

@@ -26,7 +26,7 @@ run ディレクトリの `request.json` → `bridge-result.json`。
 
 前提: `session.assay_kind == "lipid"`（違えば `missing_state` → `record_objective`）。
 arf は `session.arf.feature_matrix` と兄弟 `.arf2`、dataset は `DatasetState.pp_matrix`。
-`source="auto"` は前処理済み ARF があれば arf、無ければ `dataset_load` 済みなら dataset、
+`source="auto"` は前処理済み ARF があれば arf、無ければ `load_dataset` 済みなら dataset、
 どちらも無ければ arf（`arf_preprocess` を求める `missing_state`）を選ぶ。
 状態変更: `session.pathway.last_run_id` / `last_run_dir`。
 R の仮想環境は起動前に確かめる（`_check_environment()`）: `r/renv/library` に MSLipidMapper が無ければ

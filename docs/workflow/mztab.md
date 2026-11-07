@@ -4,9 +4,9 @@
 （SME と SML の区別、`identification_status`、`name_source`、`inchikey_coverage`、
 gap-fill）は `docs/output_format/mztab.md`（`lipidmix://docs/output-format/mztab`）。
 
-## dataset_load
+## load_dataset
 
-入口は `metabolomix/dataset/opening.py` の `open_dataset()`（`dataset_handle_open` と共有）。
+入口は `metabolomix/dataset/opening.py` の `open_dataset()`（対話も再解析も `load_dataset` の 1 本）。
 4 つの入口（`directory` / `mztab_path` / `job_path` / `pipeline_path`）のちょうど 1 つを、
 `source`（`auto` / `folder` / `mztab`）で決まるアダプタで読む: `directory` は解析フォルダ、
 `mztab_path` は mzTab-M、`job_path` / `pipeline_path` は既定で解析フォルダ・`source="mztab"`
@@ -15,13 +15,15 @@ allow_incomplete・絶対パス）、読み込みが読んだファイルと探�
 入力・`source_files`・解析フォルダの付随ファイルと `.arf` / `*_Loaded.*.dbs` の一覧・正準
 mzTab-M と今の `arf_candidates()`・検出状態を取り込んだ `.arf`・ジョブの記録と実効メソッドと MSP と
 終了証跡・`pipeline-run.json`）の size と更新時刻が同じなら読み直さずに複製を返す。
-MCP ツールは戻ってきた DatasetState を成功時だけ `session.dataset` へ置く。この代入は
-DatasetState を新しいハンドル（`source.kind="session"`）として登録簿に足し、直近にする
-（上限なら `DATASET_HANDLE_LIMIT` で止め、直近は動かさない）。pipeline の
+`load_dataset` は戻ってきた DatasetState をハンドルに包み（極性・`.arf2` / `.dcl`・
+データセットが覚えたライブラリ）、`session.adopt_handle()` が登録簿に足して**いつも直近にする**
+（上限なら `DATASET_HANDLE_LIMIT` で止め、直近は動かさない）。DatasetState は読み込みの
+アダプタが `analysis_dir`（記録の置き場所の基準: 解析フォルダは選んだ `.arf` のフォルダ、
+mzTab-M は mzTab-M のフォルダ。指紋には入れない）を決める。pipeline の
 ワーカーは `loading.load_dataset_state` を直に呼び、自分が持つ DatasetState として使う。
 
 入口とアダプタの選び方:
-1. metabolomix/tools/mztab_tools.py dataset_load()
+1. metabolomix/tools/handle_tools.py load_dataset()
 2. └─ metabolomix/core/handles.py HandleRegistry.check_capacity()
 3. └─ metabolomix/dataset/opening.py open_dataset()
 4.    └─ metabolomix/core/handles.py HandleRegistry.cached_base()
@@ -53,14 +55,16 @@ DatasetState を新しいハンドル（`source.kind="session"`）として登�
 30.      └─ [mztab_path] metabolomix/dataset/library_memory.py unknown_record()
 31.   └─ metabolomix/dataset/opening.py _signature()
 32.   └─ metabolomix/core/handles.py HandleRegistry.put_base()
-33. └─ metabolomix/core/session_state.py AnalysisSession.dataset()（代入）
-34.    └─ metabolomix/mztab/polarity.py dataset_polarity()
-35.    └─ metabolomix/core/handles.py HandleRegistry.add()
-36. └─ metabolomix/tools/handle_tools.py alignment_files_for()
-37. └─ [解析フォルダ] metabolomix/tools/mztab_tools.py _folder_summary_text()
-38. └─ [mzTab-M] metabolomix/tools/mztab_tools.py _summary_text()
-39. └─ metabolomix/tools/mztab_tools.py _opening_lines()
-40.    └─ metabolomix/dataset/library_memory.py public_view()
+33. └─ metabolomix/mztab/polarity.py dataset_polarity()
+34. └─ metabolomix/tools/handle_tools.py alignment_files_for()
+35. └─ metabolomix/tools/handle_tools.py _open_library_for()
+36. └─ metabolomix/core/session_state.py AnalysisSession.adopt_handle()（直近にする）
+37.    └─ metabolomix/core/handles.py HandleRegistry.add()
+38. └─ metabolomix/tools/mztab_tools.py load_summary_lines()
+39.    └─ [解析フォルダ] metabolomix/tools/mztab_tools.py _folder_summary_text()
+40.    └─ [mzTab-M] metabolomix/tools/mztab_tools.py _summary_text()
+41. └─ metabolomix/tools/mztab_tools.py sample_group_role_counts()
+42. └─ metabolomix/dataset/library_memory.py public_view()
 
 job / pipeline を解析フォルダで読むときも、ジョブの門（`job_gate()`: ジョブの記録・完了・
 正準 mzTab-M の一意な選択と実在・出所の裏取り）は mzTab-M で読むときと同じものを通り、

@@ -2,11 +2,11 @@
 
 **再解析で使う**経路（spec 2026-10-22）。並行の再解析のエージェントが、対話と同じ MCP の
 ツールを**データセットのハンドル**と宣言的な spec で呼ぶ。対話の使い方
-（`dataset_load` → `dataset_*`）は変わらない。値の**意味**は
+（`load_dataset` → `dataset_*`）は変わらない。値の**意味**は
 [reanalysis.md（output_format）](../output_format/reanalysis.md) を見ること。
 
 ハンドルの状態は `metabolomix/core/handles.py` の登録簿（`handles.registry`）に住む。
-`dataset_load` で読んだデータセットも同じ登録簿のハンドルで、`session_state.session` は
+`load_dataset` が開いたデータセットは登録簿のハンドルで、いつも直近になり、`session_state.session` は
 その直近のハンドル（`current_handle_id`）を指すだけ（`session.dataset` / `session.library` は
 property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` と同じ名前で持つので、
 既存のツールは `holder_for(dataset_handle)` が返したものを読むだけでハンドルにも対話の
@@ -20,42 +20,24 @@ property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` 
 イベントループのスレッドで同期に呼ぶ。`dataset_handle` を持たないのに `session.dataset` /
 `.library` を読むツール（`handle_dispatch.SESSION_READERS`）も同じ経路で包む。
 
-## dataset_handle_open
+## ハンドルを開く（load_dataset）
 
-前提: なし。引数は `dataset_load` と同じ（`directory` / `mztab_path` / `job_path` /
-`pipeline_path` のどれか 1 つ・`source`・`measure`・`allow_incomplete`）。
-状態変更: `handles.registry` にハンドルを 1 本足す（対話のセッションは変えない）。
-読み込みは `dataset_load` と同じ入口 `open_dataset` が持ち、読み込み済みの基を
-`HandleRegistry.put_base` で覚え、同じ入力（読んだ・探したファイルの size・mtime が同じ）なら
-読み直さずに複製を渡す。
+`load_dataset` は [mztab.md](mztab.md) の節が連鎖を持つ。再解析のエージェントは、返った
+`dataset_handle` を各ツールに渡して使い、直近（`current_handle_id`）を当てにしない。
+開いたハンドルはいつも直近になるが、`dataset_handle` を渡した呼び出しは直近を読み書きしない。
 ライブラリはデータセットが覚えた同定のライブラリ（`library_record`）を、sha256 を測り直して
 読み取り専用で開く（極性の設定には落ちない）。スポットの照合に使う `.arf2` / `.dcl` は、
 解析フォルダで読んだならその選択（`AlignmentSelection`）のもの、mzTab-M で読んだなら
 `_alignment_files()` が探す。
 
-1. metabolomix/tools/handle_tools.py  dataset_handle_open()
-2. ├─ metabolomix/core/handles.py  HandleRegistry.check_capacity()
-3. ├─ metabolomix/dataset/opening.py  open_dataset()（連鎖は [mztab.md](mztab.md) の dataset_load）
-4. │  ├─ metabolomix/core/handles.py  HandleRegistry.cached_base()
-5. │  └─ metabolomix/core/handles.py  HandleRegistry.put_base()
-6. ├─ metabolomix/mztab/polarity.py  dataset_polarity()
-7. ├─ metabolomix/tools/handle_tools.py  alignment_files_for()
-8. │  └─ metabolomix/tools/handle_tools.py  _alignment_files()
-9. │     └─ [pipeline_path のとき] metabolomix/dataset/opening.py  pipeline_arf2()
-10. ├─ metabolomix/tools/handle_tools.py  _open_library_for()
-11. │  ├─ metabolomix/dataset/library_memory.py  verify_record()
-12. │  └─ metabolomix/library/store.py  open_store()
-13. ├─ metabolomix/dataset/library_memory.py  public_view()
-14. └─ metabolomix/core/handles.py  HandleRegistry.add()
-
-## dataset_handle_list
+## dataset_list
 
 前提: なし。状態変更: なし。`current` は `session.current_handle_id` と同じハンドルか。
 
-1. metabolomix/tools/handle_tools.py  dataset_handle_list()
+1. metabolomix/tools/handle_tools.py  dataset_list()
 2. └─ metabolomix/core/handles.py  HandleRegistry.list()
 
-## dataset_handle_close
+## dataset_close
 
 前提: そのハンドルが開いていること（無ければ `DATASET_HANDLE_NOT_FOUND`）。
 状態変更: 登録簿から外し、ライブラリの接続を閉じる（そのハンドルのライブラリは、ハンドルと一緒に
@@ -63,7 +45,7 @@ property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` 
 データセットが無い状態になる（次に `session.dataset` を読んだときに `current_handle_id` を
 None に戻す。別のハンドルへは落ちない）。
 
-1. metabolomix/tools/handle_tools.py  dataset_handle_close()
+1. metabolomix/tools/handle_tools.py  dataset_close()
 2. └─ metabolomix/core/handles.py  HandleRegistry.close()
 3.    └─ metabolomix/core/handles.py  DatasetHandle.close()
 
@@ -102,7 +84,7 @@ None に戻す。別のハンドルへは落ちない）。
 
 ## library_msms_qualify
 
-前提: ライブラリ（`library_load` か、ライブラリつきの `dataset_handle_open`）。無ければ
+前提: ライブラリ（`library_load` か、ライブラリつきの `load_dataset`）。無ければ
 `missing_state`。状態変更: なし（直近の照合 `last_match` も書かない）。
 
 1. metabolomix/tools/reanalysis_tools.py  library_msms_qualify()

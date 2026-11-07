@@ -181,7 +181,7 @@ def _differential(handle=None):
 def test_tool_on_handle_uses_the_handles_alignment_files(tmp_path):
     path = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab")
     _alignment(tmp_path / "run")
-    opened = json.loads(handle_tools.dataset_handle_open(mztab_path=str(path), library="none"))
+    opened = json.loads(handle_tools.load_dataset(mztab_path=str(path), library="none"))
     handle = opened["dataset_handle"]
     result_id = _differential(handle)
     out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b"), result_id,
@@ -196,7 +196,7 @@ def test_tool_on_session_finds_the_alignment_files(tmp_path, monkeypatch):
     path = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab")
     _alignment(tmp_path / "run")
     from metabolomix.tools import mztab_tools
-    mztab_tools.dataset_load(mztab_path=str(path))
+    handle_tools.load_dataset(mztab_path=str(path))
     result_id = _differential()
     out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b"), result_id))
     assert out["status"] == "success", out

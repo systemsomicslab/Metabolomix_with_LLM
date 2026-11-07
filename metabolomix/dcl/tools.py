@@ -127,7 +127,7 @@ def dcl_spot_spectrum(spot_id: int, arf2_path: str | None = None, dcl_file: str 
     アラインメント `.dcl` の `dcl[spot_id]` を返す（索引の崩れは `dcl_precursor_mismatch`、
     ID が無ければ `spot_not_found`、MS/MS が無ければ `not_found`）。mzTab-M の SMF_ID は
     スポット ID と同じ。
-    dataset_handle: `dataset_handle_open` が返したハンドル。`arf2_path` / `dcl_file` を省けば
+    dataset_handle: `load_dataset` が返したハンドル。`arf2_path` / `dcl_file` を省けば
         ハンドルの `.arf2` / `.dcl` を使う。省略時は現在のデータフォルダから探す。
     """
     from metabolomix.library.tools import spot_msms_query

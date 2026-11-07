@@ -94,7 +94,7 @@ def interactive_folder(tmp_path, monkeypatch):
 
 def _handle(tmp_path, library="auto"):
     path = write_mztab(tmp_path / "handle_data" / "AlignResult-1.mzTab")
-    out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(path), library=library))
+    out = json.loads(handle_tools.load_dataset(mztab_path=str(path), library=library))
     assert out["arf2"] is None and out["dcl"] is None
     if library == "auto":
         # mzTab-M の記憶は `unknown` なので、library_load は極性の設定（[library] msp_positive）から引く

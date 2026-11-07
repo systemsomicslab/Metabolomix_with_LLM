@@ -125,7 +125,7 @@ def collect_artifacts(
         mztab_entries: 正準候補になれる .mzTab を MztabEntry として返す。
         other_artifacts: それ以外。未対応 measure の .mzTab（Normalized*）も
             role=unsupported_mztab としてここに入る——記録は残すが、
-            dataset_load が正準として選べないようにするため。
+            load_dataset が正準として選べないようにするため。
     """
     mztab_entries: list[MztabEntry] = []
     other_artifacts: list[Artifact] = []
@@ -400,7 +400,7 @@ def unsupported_mztab_warnings(artifacts) -> list[str]:
     """未対応 measure の .mzTab（Normalized*）を拾ったことを伝える。
 
     記録は残すが正準候補にはしない（spec §8.1）。黙って捨てると
-    「出力があるのに dataset_load が読めない」という説明不能な状態になる。
+    「出力があるのに load_dataset が読めない」という説明不能な状態になる。
     """
     paths = [a.path for a in artifacts if a.role == UNSUPPORTED_MZTAB_ROLE]
     if not paths:

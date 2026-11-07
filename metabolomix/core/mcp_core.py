@@ -6,7 +6,7 @@ metabolomix.<形式>.tools や metabolomix.tools.* を import してはならな
 `BASE_DIR` はリポジトリルート（このファイルの 2 階層上）。docs/ はこれを起点に解決する。解析の記録（objective とレポート）は解析フォルダ（`DATA_DIR`）
 配下の reports/ に置き、リポジトリ側には書かない。
 
-`DATA_DIR` は load_dataset により実行時に差し替えられる可変状態。参照は必ず
+`DATA_DIR` は実行時に差し替えられる可変状態（B-2b で消える）。参照は必ず
 `mcp_core.DATA_DIR`（module 修飾・動的）で行い、
 `from metabolomix.core.mcp_core import DATA_DIR` のようなスナップショット束縛を
 作らないこと（差し替えが伝播しなくなる）。
@@ -37,7 +37,7 @@ OUTPUT_FORMAT_SECTIONS: dict[str, str] = {
     "dcl": ".dcl パーサ（デコンボリューション済み MS/MS）",
     "eic": ".EIC.aef パーサ、EIC 検索・ランキング、描画契約",
     "identity": "同定信頼度・名前正規化・MSI レベル",
-    "mztab": "mzTab-M 経路（dataset_load 以降）。SME/SML の同定、特徴表、差次的エクスポートの同定列",
+    "mztab": "mzTab-M 経路（load_dataset 以降）。SME/SML の同定、特徴表、差次的エクスポートの同定列",
     "library": "参照ライブラリ（.dbs/.msp）照合。スコアの意味、-1/0 の区別、意図的に写した瑕疵",
     "curation": "アラインメントのキュレーション（curation_review 等）。判定・理由コードの意味",
     "pathway": "パスウェイ投影（pathway_project / pathway_plot、MSLipidMapper 連携）",
@@ -114,7 +114,7 @@ matching the output you are about to interpret, not the whole document:
 `lipidmix://docs/output-format/{topic}` where topic is one of `arf` (.arf,
 arf_parser, preprocessing/QC, differential), `arf2`, `pai2`, `dcl`, `eic`,
 `identity` (annotation confidence), `mztab` (everything downstream of
-`dataset_load`: SME vs SML identification, the feature table, the differential
+`load_dataset`: SME vs SML identification, the feature table, the differential
 export's identity columns), `library` (reference-library MS/MS matching:
 what each score means, `-1` vs `0`, the deliberately ported upstream quirks),
 `curation` (alignment curation: `curation_review`'s verdict, reason-code
@@ -157,11 +157,12 @@ output in the folder, and `all_files=True` also shows raw instrument files.
    .pai2/.dcl/.EIC.aef, an mzTab-M file, a completed analysis-job.json, or a
    completed pipeline run). Go downstream — this is the main path, and it
    applies even when raw files sit in the same folder. Call
-   `load_dataset(directory)` (or `dataset_load` for an mzTab-M / job /
-   pipeline path). It runs the standard initial analysis (arf2 overview ->
-   arf PCA, auto-selecting PeakProperties.arf over DriftSpots.arf) and primes
-   the session. Its output (group structure, compound classes, polarity) is
-   exactly the material for the GATEWAY below. Re-run MS-DIAL on such a
+   `load_dataset(directory=...)` (or `mztab_path=` / `job_path=` /
+   `pipeline_path=`). It opens the dataset as a new handle that becomes the
+   current one (auto-selecting PeakProperties.arf over DriftSpots.arf) and
+   returns the counts, group and role breakdown and the library record — no
+   overview or PCA is run for you. That output (group structure, polarity) is
+   the material for the GATEWAY below. Re-run MS-DIAL on such a
    folder only if the user explicitly asks for it.
 2. NO TRACE OF MS-DIAL (only unprocessed instrument files). Any format
    MS-DIAL itself reads qualifies: .abf .ibf .cdf .mzml .wiff .raw .d .wiff2
@@ -214,13 +215,13 @@ findings, never bury them. `arf_differential` runs on the preprocessed matrix an
 errors clearly if `arf_preprocess` was not run.
 
 PARALLEL REANALYSIS — when several agents share this server (a reanalysis team),
-do not use `dataset_load` / `library_load` without `dataset_handle`:
-`dataset_load` adds a handle and makes it the one current dataset that every call
-without `dataset_handle` uses, and `library_load` loads into that current dataset,
-so the agents would switch it under each other. Open a handle with
-`dataset_handle_open` (it never becomes current) and pass `dataset_handle` to
-`dataset_*`, `library_*` and the reanalysis tools; calls on different handles run
-in parallel and never touch the current dataset. Decision numbers come from spec-driven tools
+do not rely on the current dataset: `load_dataset` always makes the handle it
+opens the current one, which every call without `dataset_handle` uses, and
+`library_load` without `dataset_handle` loads into that current dataset, so the
+agents would switch it under each other. Pass the `dataset_handle` that
+`load_dataset` returned to `dataset_*`, `library_*` and the reanalysis tools
+(`dataset_list` / `dataset_close` manage the open handles); calls on different
+handles run in parallel and never touch each other. Decision numbers come from spec-driven tools
 (`dataset_analysis_run`, `dataset_claim_evidence`, `library_msms_qualify`), which
 return a `rule_hash` and give identical JSON for an identical spec — see
 `lipidmix://docs/output-format/reanalysis`. They return numbers, never verdicts.
@@ -240,7 +241,7 @@ mcp = FastMCP(
 )
 
 # データ探索先。環境変数 LIPIDMIX_DATA_DIR で上書き可（既定: <project>/data）。
-# load_dataset が実行時に差し替えるため、参照は mcp_core.DATA_DIR（動的）で行う。
+# 実行時に差し替えうるため、参照は mcp_core.DATA_DIR（動的）で行う。
 DATA_DIR = get_data_dir()
 
 

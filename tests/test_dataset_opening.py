@@ -1,5 +1,5 @@
 """入口 `open_dataset`（解析フォルダ・mzTab-M・job・pipeline を 1 つの入口で開く）と、
-既存の入口ツール 2 つ（`dataset_load` / `dataset_handle_open`）への配線（B-1 Task 8）。
+既存の入口ツール 2 つ（`load_dataset` / `load_dataset`）への配線（B-1 Task 8）。
 
 fixture はすべてこのテストが tmp に作る（研究室のライブラリ・研究データに依存しない）。
 """
@@ -389,10 +389,10 @@ def test_library_record_per_entry(tmp_path):
 # ---------- ツール ----------
 
 def test_dataset_load_tool_accepts_directory(tmp_path):
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     folder = _folder(tmp_path / "gui")
-    text = dataset_load(directory=str(folder))
+    text = load_dataset(directory=str(folder))
     assert "msdial_folder" in text
     assert f"{_STEM}_PeakProperties.arf" in text
     assert session_state.session.dataset.source_format == "msdial_folder"
@@ -400,19 +400,19 @@ def test_dataset_load_tool_accepts_directory(tmp_path):
 
 
 def test_dataset_load_tool_reports_library_without_path(tmp_path):
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     folder = _folder(tmp_path / "gui")
     write_dbs(folder / "Proj_Loaded.msp2.dbs", [("lib", [record()], ["k"])])
-    text = dataset_load(directory=str(folder))
+    text = load_dataset(directory=str(folder))
     assert "Proj_Loaded.msp2.dbs" in text and str(folder) not in text
 
 
 def test_dataset_load_tool_job_error_names_mztab_source(tmp_path):
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     job = _job(tmp_path, with_folder=False)
-    err = json.loads(dataset_load(job_path=str(job)))["error"]
+    err = json.loads(load_dataset(job_path=str(job)))["error"]
     assert err["code"] == "ALIGNMENT_NOT_FOUND" and 'source="mztab"' in err["message"]
     assert session_state.session.dataset is None
 
@@ -423,7 +423,7 @@ def test_dataset_handle_open_directory_uses_selection_files(tmp_path):
     folder = _folder(tmp_path / "gui")
     (folder / f"{_STEM}.dcl").write_bytes(b"")
     write_dbs(folder / "Proj_Loaded.msp2.dbs", [("lib", [record()], ["k"])])
-    out = json.loads(handle_tools.dataset_handle_open(directory=str(folder), library="none"))
+    out = json.loads(handle_tools.load_dataset(directory=str(folder), library="none"))
     assert out["status"] == "success", out
     assert out["adapter"] == "msdial_folder"
     assert out["arf"] == f"{_STEM}_PeakProperties.arf" and out["not_chosen"] == []
@@ -439,9 +439,9 @@ def test_dataset_handle_open_directory_uses_selection_files(tmp_path):
 # ---------- 決めたこと（R15）を縛る ----------
 
 def test_dataset_load_reuses_the_base_and_gives_a_fresh_dataset(tmp_path, monkeypatch):
-    """`dataset_load` も基を使い回すが、セッションに置くのは毎回別の実体（別の dataset_id）。"""
+    """`load_dataset` も基を使い回すが、セッションに置くのは毎回別の実体（別の dataset_id）。"""
     from metabolomix.dataset import msdial_adapter
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     folder = _folder(tmp_path / "gui")
     calls = []
@@ -452,10 +452,10 @@ def test_dataset_load_reuses_the_base_and_gives_a_fresh_dataset(tmp_path, monkey
         return real(*args, **kwargs)
 
     monkeypatch.setattr(msdial_adapter, "load_msdial_folder", spy)
-    dataset_load(directory=str(folder))
+    load_dataset(directory=str(folder))
     first = session_state.session.dataset
     first.feature_matrix[0, 0] = -1.0
-    dataset_load(directory=str(folder))
+    load_dataset(directory=str(folder))
     second = session_state.session.dataset
     assert len(calls) == 1
     assert second is not first and second.dataset_id != first.dataset_id
@@ -466,15 +466,15 @@ def test_dataset_load_reuses_the_base_and_gives_a_fresh_dataset(tmp_path, monkey
 def test_mztab_adapter_rejects_a_non_default_measure_in_both_tools(tmp_path, entry):
     """mzTab-M の定量種別はファイル（ジョブの宣言）に従う。measure は解析フォルダだけに効く。"""
     from metabolomix.tools import handle_tools
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     job = _job(tmp_path)
     path = str(job.parent / "msdial" / "Height_x.mzTab") if entry == "mztab_path" else str(job)
     kwargs = {entry: path, "measure": "peak_area_above_zero"}
     if entry == "job_path":
         kwargs["source"] = "mztab"
-    assert json.loads(dataset_load(**kwargs))["error"]["code"] == "DATASET_BAD_REQUEST"
-    out = json.loads(handle_tools.dataset_handle_open(**kwargs, library="none"))
+    assert json.loads(load_dataset(**kwargs))["error"]["code"] == "DATASET_BAD_REQUEST"
+    out = json.loads(handle_tools.load_dataset(**kwargs, library="none"))
     assert out["error"]["code"] == "DATASET_BAD_REQUEST"
     # 解析フォルダのアダプタでは面積を選べる。
     folder = open_dataset(job_path=str(job), measure="peak_area_above_zero")
@@ -484,13 +484,13 @@ def test_mztab_adapter_rejects_a_non_default_measure_in_both_tools(tmp_path, ent
 def test_both_tools_reject_a_non_bool_allow_incomplete(tmp_path):
     """"false" という文字列を真偽として読まない（以前のハンドルは bool() で True にしていた）。"""
     from metabolomix.tools import handle_tools
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     folder = _folder(tmp_path / "gui")
-    load = json.loads(dataset_load(directory=str(folder), allow_incomplete="false"))
+    load = json.loads(load_dataset(directory=str(folder), allow_incomplete="false"))
     assert load["error"]["code"] == "DATASET_BAD_REQUEST"
     assert session_state.session.dataset is None
-    out = json.loads(handle_tools.dataset_handle_open(directory=str(folder), library="none",
+    out = json.loads(handle_tools.load_dataset(directory=str(folder), library="none",
                                                       allow_incomplete="false"))
     assert out["error"]["code"] == "DATASET_BAD_REQUEST"
     assert handles.registry.list() == []
@@ -618,7 +618,7 @@ def test_folder_polarity_cross_checks_arf2_ion_mode(tmp_path):
 
 def test_job_folder_carries_the_job_artifacts(tmp_path):
     """ジョブ経由で読んだ解析フォルダにも、ジョブが記録した付随アーティファクトを載せる。"""
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     job = _job(tmp_path)
     data = json.loads(job.read_text(encoding="utf-8"))
@@ -627,7 +627,7 @@ def test_job_folder_carries_the_job_artifacts(tmp_path):
     job.write_text(json.dumps(data), encoding="utf-8")
     ds = open_dataset(job_path=str(job)).dataset
     assert ds.artifact_paths["console_log"] == [str(job.parent / "msdial" / "msdial.log")]
-    assert "console_log" in dataset_load(job_path=str(job))
+    assert "console_log" in load_dataset(job_path=str(job))
 
 
 @pytest.mark.parametrize("entry", ["job_path", "pipeline_path"])
@@ -636,7 +636,7 @@ def test_dataset_handle_open_defaults_to_the_folder_for_job_and_pipeline(tmp_pat
 
     job = _job(tmp_path)
     path = job if entry == "job_path" else _pipeline(tmp_path, job)
-    out = json.loads(handle_tools.dataset_handle_open(**{entry: str(path)}, library="none"))
+    out = json.loads(handle_tools.load_dataset(**{entry: str(path)}, library="none"))
     assert out["status"] == "success", out
     assert out["adapter"] == "msdial_folder"
     assert out["arf"] == f"{_STEM}_PeakProperties.arf"

@@ -388,7 +388,7 @@ def console_run(job_path: str | None = None, detach: bool = False) -> str:
     入力が全て assay に対応していなければ completed にはなりません（partial / failed）。
 
     実行完了後、session.current_job_path は同じジョブを指し続けます。
-    結果は console_status または dataset_load で確認してください。
+    結果は console_status または load_dataset で確認してください。
     """
     resolved = _resolve_job_path(job_path)
     if isinstance(resolved, str):
@@ -880,7 +880,7 @@ def console_cleanup(job_path: str | None = None, dry_run: bool = True) -> str:
 
     dry_run: True（既定）なら一覧を返すだけ。False で実際に削除します。
         削除後、ジョブの status は `cleaned` になります（生成物を指したまま
-        completed で残ると、dataset_load が存在しないファイルを読もうとします）。
+        completed で残ると、load_dataset が存在しないファイルを読もうとします）。
     """
     resolved = _resolve_job_path(job_path)
     if isinstance(resolved, str):
@@ -1088,7 +1088,7 @@ def _console_run_result(job_path: Path, receipt: dict) -> str:
             "other_artifacts": len(job.artifacts),
             "run_dir": job.run_dir,
             "warnings": job.warnings,
-            "next": "dataset_load でmzTab-M を読み込み、解析を開始してください",
+            "next": "load_dataset でmzTab-M を読み込み、解析を開始してください",
         })
 
     if receipt["termination"] == "launch_failed":

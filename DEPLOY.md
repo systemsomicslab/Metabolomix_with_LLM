@@ -78,9 +78,8 @@ already-imported modules in memory, so swapping code underneath a live process
 leaves it half-old and half-new; applying an update is therefore an explicit
 user action.
 
-When the clone is behind, the notice appears in `load_dataset` (as a line at the
-top of its output) and in the `dataset_status` / `console_status` payloads (as an
-`update_available` key). Up to date, nothing is added.
+When the clone is behind, the notice appears in the `load_dataset`, `dataset_status` and
+`console_status` payloads (as an `update_available` key). Up to date, nothing is added.
 
 To apply an update, ask Claude to run the `server_update` tool (say "update the
 server"). It fast-forwards the clone to `origin/main` and, only when

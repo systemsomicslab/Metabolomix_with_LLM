@@ -454,10 +454,10 @@ TSV の末尾へ 2 列を足し、payload に 3 つの欄を足す。`detail` �
 - LBM の dbs だけが 2 本以上あるときは `lbm_only` で `file` / `path` は無し、`candidates` に LBM のファイル名。
 - ジョブの実効メソッドが宣言するファイルが無い・読めないときは `mismatch`。
 - mzTab-M を直接読んだときは常に `unknown`（mzTab-M は使ったライブラリを持たない）。
-- 入口ごとの出どころ（`dataset_load` / `dataset_handle_open`）: `directory` はフォルダの
+- 入口ごとの出どころ（`load_dataset`）: `directory` はフォルダの
   `*_Loaded.*.dbs`、`job_path` はジョブの実効メソッド、`pipeline_path` は run が固定した入力
-  （どちらのアダプタで読んでも同じ）、`mztab_path` は `unknown`。`dataset_load` の要約と
-  `dataset_handle_open` の `library_record` がこの記録を（`path` を外して）返す。
+  （どちらのアダプタで読んでも同じ）、`mztab_path` は `unknown`。`load_dataset` の
+  `library_record` がこの記録を（`path` を外して）返す。
 
 #### LBM が代表になった特徴の印（`is_lbm_annotator`）
 

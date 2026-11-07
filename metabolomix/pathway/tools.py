@@ -184,8 +184,8 @@ def _build_arf(group_a, group_b):
 def _build_dataset(group_a, group_b, label_a, label_b):
     ds = session_state.session.dataset
     if ds is None:
-        return None, mcp_errors.missing_state("dataset", ["dataset_load"],
-                                              "先に dataset_load を実行してください。")
+        return None, mcp_errors.missing_state("dataset", ["load_dataset"],
+                                              "先に load_dataset を実行してください。")
     if ds.pp_matrix is None:
         return None, mcp_errors.missing_state("preprocessed_matrix", ["dataset_preprocess"],
                                               "先に dataset_preprocess を実行してください。")
@@ -218,7 +218,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     解析フォルダの reports/pathway/<run_id>/ に残る。図は pathway_plot。
 
     - source: auto | arf | dataset。arf は arf_preprocess 後、dataset は dataset_preprocess 後。
-      auto は「前処理済み ARF があれば arf、無ければ dataset_load 済みなら dataset、
+      auto は「前処理済み ARF があれば arf、無ければ load_dataset 済みなら dataset、
       どちらも無ければ arf（→ arf_preprocess を求める missing_state）」の順で選ぶ。
     - group_a / group_b: arf は Class ID か因子トークン（arf_differential と同じ）、
       dataset はサンプル名のリスト（group_a_label / group_b_label が群名になる）。

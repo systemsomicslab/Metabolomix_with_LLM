@@ -85,7 +85,7 @@ def test_delete_removes_only_recorded_outputs(tmp_path):
 
 
 def test_delete_marks_the_job_as_cleaned(tmp_path):
-    """掃除後のジョブを dataset_load が完了品として読むと、存在しない生成物を指す。"""
+    """掃除後のジョブを load_dataset が完了品として読むと、存在しない生成物を指す。"""
     from metabolomix.tools.console_tools import console_cleanup
     job_path = _job_with_outputs(tmp_path)
     console_cleanup(str(job_path), dry_run=False)

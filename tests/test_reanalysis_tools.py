@@ -104,8 +104,12 @@ def library(tmp_path, monkeypatch, data):
 def _open(data, **kwargs):
     kwargs.setdefault("library", "none")
     library = kwargs["library"]
-    out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(data["mztab"]), **kwargs))
+    # 旧 `dataset_handle_open` は直近を動かさなかった。この検査は「ハンドルを渡す呼び出しは対話の状態に
+    # 触れない」ことを縛るので、開いたあとで直近を元に戻す（`load_dataset` はいつも直近にする）。
+    previous = session_state.session.current_handle_id
+    out = json.loads(handle_tools.load_dataset(mztab_path=str(data["mztab"]), **kwargs))
     assert out["status"] == "success", out
+    session_state.session.current_handle_id = previous
     if library == "auto":
         # mzTab-M の記憶は `unknown` なので、library_load は極性の設定（[library] msp_positive）から引く
         # （mzTab-M の本番の経路）。
@@ -159,7 +163,7 @@ def test_analysis_run_rows_have_detection_columns(data):
 
 
 def test_analysis_run_on_session_dataset(data):
-    mztab_tools.dataset_load(mztab_path=str(data["mztab"]))
+    handle_tools.load_dataset(mztab_path=str(data["mztab"]))
     out = json.loads(R.dataset_analysis_run(_spec(data)))
     assert out["status"] == "success"
     assert out["input_fingerprint"]["dataset_hash"]

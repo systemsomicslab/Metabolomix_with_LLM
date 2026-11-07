@@ -1,7 +1,6 @@
 """データセットを開く 1 つの入口（解析フォルダ・mzTab-M・Console の job・pipeline の run）。
 
-`dataset_load`（対話のセッション）と `dataset_handle_open`（再解析のハンドル）はどちらも
-ここを呼ぶ。入口は 4 つのうちちょうど 1 つで、読むアダプタは `source` で決まる:
+`load_dataset`（対話も再解析も）はここを呼ぶ。入口は 4 つのうちちょうど 1 つで、読むアダプタは `source` で決まる:
 
 | 入口 | `auto`（既定） | `folder` | `mztab` |
 |---|---|---|---|
@@ -348,12 +347,18 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
     else:
         record = library_memory.unknown_record()
     ds.library_record = record
+    # 記録の置き場所の基準: 解析フォルダは選んだ `.arf` のフォルダ（job / pipeline もここ）、
+    # mzTab-M は mzTab-M のフォルダ。
+    if selection is not None:
+        ds.analysis_dir = str(Path(selection.arf).parent)
+    elif mztab_path:
+        ds.analysis_dir = str(Path(mztab_path).parent)
     return OpenedDataset(dataset=ds, kind=kind, path=path, adapter=adapter,
                          selection=selection, notes=notes, mztab_path=mztab_path)
 
 
 def _load(kind: str, path: str, allow_incomplete: bool):
-    """mzTab-M のアダプタ（今までの `dataset_load` / `dataset_handle_open` の読み込みそのまま）。"""
+    """mzTab-M のアダプタ（今までの読み込みそのまま）。"""
     if kind == "pipeline_path":
         from metabolomix.pipeline import session_handoff
         return session_handoff.load_run_dataset(path, allow_incomplete=allow_incomplete)

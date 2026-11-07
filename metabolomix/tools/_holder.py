@@ -42,6 +42,6 @@ def alignment_paths(holder, dataset_handle: str | None, arf2_path: str | None,
         "status": "no_alignment_files",
         "message": ("このハンドルにはスポットの照合に要る "
                     + " / ".join("." + name for name in lacking)
-                    + " が見つかりません（dataset_handle_open の arf2_path で指定するか、"
+                    + " が見つかりません（load_dataset の arf2_path で指定するか、"
                     "arf2_path / dcl_file を渡してください）。対話のデータフォルダは探しません。"),
     }

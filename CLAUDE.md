@@ -5,7 +5,7 @@
 ## このリポジトリは何か
 
 MS-DIAL（LC-MS リピドミクス／メタボロミクス解析ソフト）の出力を読み、LLM から使える形で
-公開する **MCP サーバ `ms-data-parser`**。ツール 82・リソース 2・リソーステンプレート 1。
+公開する **MCP サーバ `ms-data-parser`**。ツール 80・リソース 2・リソーステンプレート 1。
 GUI の外では読めない圧縮 MessagePack と独自バイナリを解し、解析そのものをサーバ側で回して
 要約だけを返す（生の行列を LLM の文脈に載せない）。
 
@@ -128,7 +128,7 @@ metabolomix/plots/     描画 payload の組み立てと matplotlib 描画（vol
 metabolomix/{arf,arf2,pai2,dcl,eic}/   形式ごとの reader.py（パーサ）と tools.py（MCP ツール）
 metabolomix/mztab/     mzTab-M リーダ・DatasetState 構築
 metabolomix/dataset/   MS-DIAL 解析フォルダ（.arf / .arf2 ほか）から DatasetState を作る adapter の部品（まずファイルの選択）。
-                    データセットを開く入口は opening.open_dataset だけ（dataset_load / dataset_handle_open が共有）
+                    データセットを開く入口は opening.open_dataset だけ（load_dataset が呼ぶ）
 metabolomix/library/   参照ライブラリ（.dbs / .msp）の読み取りと永続 store。
                     形式ごとに分けないのは、2 つが同じレコード形と同じ store を
                     共有する 2 つの入口にすぎないため（spec 2026-09-19）
@@ -176,7 +176,7 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
   途中の行列を掴む。自身のソースで読むものは `tests/test_session_handle_unification.py` が
   捕まえるが、ヘルパー経由の読み取りは捕まらない。スレッドに縛られる資源（sqlite3 の接続
   など）はスレッドをまたいで使える形で持ち、閉じるのと使うのはハンドルのロックで直列にする。
-  `library_load` → `dataset_load` の順なら、セッション自身のライブラリは新しいハンドルへ
+  `library_load` → `load_dataset` の順なら、セッション自身のライブラリは新しいハンドルへ
   移る（写さない。閉じたあと古いライブラリへ落ちない）。
 - **解釈規則の選択軸は `session.assay_kind`**（`lipid` / `metabolite` / `unknown`、既定
   `unknown`）。脂質名文法は脂質アッセイでしか成り立たないので、ダイジェスト

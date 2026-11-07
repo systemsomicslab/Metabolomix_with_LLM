@@ -85,7 +85,7 @@ def test_without_dataset_returns_missing_state():
     parsed = _search(min_mz=100.0)
     assert parsed["error"]["code"] == MISSING_STATE
     assert parsed["error"]["state"] == "dataset"
-    assert parsed["error"]["required_tools"] == ["dataset_load"]
+    assert parsed["error"]["required_tools"] == ["load_dataset"]
 
 
 def test_window_and_targets_together_is_bad_request():
@@ -378,10 +378,10 @@ def _merged_values():
 
 
 def _load_mztab(path, features):
-    from metabolomix.tools import mztab_tools
+    from metabolomix.tools import handle_tools, mztab_tools
     from tests.reanalysis_fixtures import write_mztab
 
-    mztab_tools.dataset_load(mztab_path=str(write_mztab(path, features=features)))
+    handle_tools.load_dataset(mztab_path=str(write_mztab(path, features=features)))
     assert session_state.session.dataset is not None
 
 

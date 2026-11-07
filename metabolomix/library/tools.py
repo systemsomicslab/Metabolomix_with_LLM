@@ -102,7 +102,7 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     疑いがあるときなど）。通常は不要——store は元ファイルの sha256 をキーに
     キャッシュされるため、内容が変わらない限り再構築しない。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッション。ハンドルのライブラリ・照合結果だけを読み書きする。
         ハンドルへは読み取り専用で開く。
     """
@@ -138,7 +138,7 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
         else:
             record_for_diff = record  # 開いたあと、中身（sha256）で記憶と比べる
     if dataset_handle is not None and file_path is None:
-        # ハンドルは極性の設定だけから引く（dataset_handle_open と同じ規則）。対話の
+        # ハンドルは極性の設定だけから引く（load_dataset と同じ規則）。対話の
         # データフォルダの .dbs / .msp を探さず、データセットと逆の極性も読まない。
         mode = (ion_mode or holder.polarity or "").strip().lower() or None
         if ion_mode and holder.polarity and mode != holder.polarity:
@@ -483,7 +483,7 @@ def library_match_feature(
     （`last_match`）を読まずに、戻り値だけで照合の中身を確かめられる。
     **`matched_peaks_count` は前駆体の一致も 1 本に数える**（意味は変えていない）。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッション。ハンドルのライブラリ・照合結果だけを読み書きする。
         `spot_id` の解決は、`arf2_path` / `dcl_file` を省けばハンドルの `.arf2` / `.dcl` を使う。
     """
@@ -707,7 +707,7 @@ def library_plot_mirror(rank: int = 1, output: str | None = None,
     どちらも上下は別枠で数える（上流は上下で別々の `Annotator` を持つため、
     側をまたぐ衝突は起きない）。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッション。ハンドルのライブラリ・照合結果だけを読み書きする。
     """
     from metabolomix.tools._holder import resolve_holder
@@ -782,7 +782,7 @@ def library_search(name: str | None = None, formula: str | None = None,
     条件は与えたものの AND で、1 つも無ければ `invalid_arguments`。`limit`（既定 50）件まで
     TSV（列名 1 回）で返し、打ち切った件数を `truncated` に書く。スペクトルは返さない
     （ピーク数 `n_peaks` だけ）。
-    dataset_handle: `dataset_handle_open` が返したハンドル（そのハンドルのライブラリを引く）。
+    dataset_handle: `load_dataset` が返したハンドル（そのハンドルのライブラリを引く）。
         省略時は対話のセッションの `library_load` のライブラリ。
     """
     from metabolomix.tools._holder import resolve_holder
@@ -793,9 +793,9 @@ def library_search(name: str | None = None, formula: str | None = None,
     store_obj = holder.library.store
     if store_obj is None:
         return mcp_errors.missing_state(
-            "library_store", ["library_load", "dataset_handle_open"],
+            "library_store", ["library_load", "load_dataset"],
             "参照ライブラリが読み込まれていません（library_load、またはライブラリつきの"
-            "dataset_handle_open）。")
+            "load_dataset で開いたデータセット）。")
     if name is None and formula is None and inchikey is None:
         return json_payload({"status": "invalid_arguments",
                              "message": "name / formula / inchikey のどれか 1 つは指定してください。"})
