@@ -8,6 +8,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from metabolomix.plots.eic import build_multi_compound_plot_payload, render_eic_plot
+from tests.config_fixtures import config_env
 
 
 def _candidate(spot_id, name, ontology, rt, mz):
@@ -313,10 +314,9 @@ class EicPlotCompoundsToolTests(unittest.TestCase):
         ]
 
         self._saved_data_dir = mcp_core.DATA_DIR
-        self._saved_reports = os.environ.get("LIPIDMIX_REPORTS_DIR")
         self._saved_plot = session_state.session.eic.last_plot
         mcp_core.DATA_DIR = self.tmp
-        os.environ["LIPIDMIX_REPORTS_DIR"] = str(self.tmp / "fallback")
+        self.enterContext(config_env(self.tmp, {"paths.reports_dir": self.tmp / "fallback"}))
         session_state.session.eic.last_plot = None
 
         from metabolomix.eic import tools as tools_eic
@@ -334,10 +334,6 @@ class EicPlotCompoundsToolTests(unittest.TestCase):
         tools_eic.load_arf2_records = self._saved_loader
         mcp_core.DATA_DIR = self._saved_data_dir
         session_state.session.eic.last_plot = self._saved_plot
-        if self._saved_reports is None:
-            os.environ.pop("LIPIDMIX_REPORTS_DIR", None)
-        else:
-            os.environ["LIPIDMIX_REPORTS_DIR"] = self._saved_reports
         self._tmp.cleanup()
 
     def test_returns_multi_payload_and_writes_no_png(self):

@@ -72,7 +72,7 @@ def dataset_load(mztab_path: str | None = None, job_path: str | None = None,
     対話のセッションの直近にする（要約の `dataset_handle`）。`dataset_handle` を省いた
     `dataset_*` / `library_*` はこの直近のハンドルに効き、dataset_status で内容を確認できる。
     前に読んだデータセットのハンドルは閉じずに残る（`dataset_handle_list` / `dataset_handle_close`）。
-    開いているハンドルが上限（`LIPIDMIX_MAX_DATASET_HANDLES`、既定 8）なら
+    開いているハンドルが上限（`lipidmix.local.toml` の `[server] max_dataset_handles`、既定 8）なら
     `DATASET_HANDLE_LIMIT` で止め、古いハンドルを黙って閉じない（直近も動かさない）。
     要約には読んだアダプタ・選んだ `.arf`・
     同定に使ったライブラリの記録（ファイル名と sha256。置き場所は出さない）が並ぶ。

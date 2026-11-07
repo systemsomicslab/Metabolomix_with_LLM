@@ -74,29 +74,38 @@ worktree は自前の `.venv` を持たず main ツリーの `.venv` を共有�
 setup が無ければ作る。追跡されている `.vscode/mcp.json` も `.venv` を指す（VS Code から使うには
 先に setup を済ませておく）。
 
-環境変数（すべて任意・上書き用）: `LIPIDMIX_DATA_DIR`（データ探索先。既定 `<project>/data`）/
-`LIPIDMIX_KNOWLEDGE_DIR` `LIPIDMIX_PLAYBOOK_DIR` `LIPIDMIX_REPORTS_DIR`（蓄積先の上書き用。
-`LIPIDMIX_REPORTS_DIR` は未指定が既定で、そのとき記録は解析フォルダ配下 `reports/` だけに書く）/
-`LIPIDMIX_TRANSPORT` `LIPIDMIX_HOST` `LIPIDMIX_PORT`（HTTP 待受）/ `LIPIDMIX_CAVEAT_MODE` /
-`LIPIDMIX_PLOT_OUTPUT`（描画系ツールの戻り値。既定 `image`。Plotly で自分で描く
-クライアント＝Use-LLLM は `payload` を置く）/
-`LIPIDMIX_LIBRARY_CACHE_DIR`（照合用 SQLite キャッシュの置き場所。既定 `data/.library-cache`）/
+環境変数（すべて任意。起動ごとに変わるものだけを残す。spec 2026-11-06 §7.4）:
 `LIPIDMIX_CONFIG`（下記の設定ファイルの場所の上書き。worktree とテストが使う）/
-`LIPIDMIX_MAX_DATASET_HANDLES`（再解析のデータセットのハンドルの上限）。
+`LIPIDMIX_DATA_DIR`（データ探索先。既定 `<project>/data`。B-2b で探索ごと消える）/
+`LIPIDMIX_TRANSPORT` `LIPIDMIX_HOST` `LIPIDMIX_PORT`（HTTP 待受）/
+`LIPIDMIX_PLOT_OUTPUT`（描画系ツールの戻り値。既定 `image`。Plotly で自分で描く
+クライアント＝Use-LLLM は `payload` を置く）。知識の蓄積の上書き `LIPIDMIX_KNOWLEDGE_DIR`
+`LIPIDMIX_PLAYBOOK_DIR` は、蓄積そのものを消すときに一緒に消える（spec 2026-11-06 §9）。
+置き場所とサーバの振る舞いは環境変数でなく設定ファイルに書く: `[paths] reports_dir`（解析フォルダ
+配下 `reports/` より先に試す記録の書き込み先。未指定が既定で、そのとき記録は解析フォルダ配下
+`reports/` だけに書く）`[paths] library_cache`（照合用 SQLite キャッシュの置き場所。既定は
+**設定ファイルのフォルダ**の `data/.library-cache` で、`LIPIDMIX_DATA_DIR` には付いて動かない）
+`[server] max_dataset_handles`（データセットのハンドルの上限。既定 8）`[server] caveat_mode`
+（意味論ダイジェスト。`digest` 既定 / `off`。他の値は `CONFIG_INVALID`）。
 
-**外部資産の場所は設定ファイルか環境変数で指す**（spec 2026-10-06）。リポジトリ直下の
-`lipidmix.local.toml`（追跡外。雛形 `lipidmix.example.toml`）の `[msdial] exe` `lbm` と
-`[library] msp_positive` `msp_negative` `lbm`（`lbm` は pipeline の `library_mode="msp_then_lbm"` だけが読み、
-`[msdial] lbm` とは混ぜない）と `[mslipidmapper] rscript` `browser` `mslipidmapper_api_url` `api_token`、または環境変数
-`MSDIAL_EXE` `MSDIAL_LBM` `MSDIAL_MSP_POS` `MSDIAL_MSP_NEG` `MSDIAL_LIBRARY_LBM` `MSLIPIDMAPPER_RSCRIPT`
-`MSLIPIDMAPPER_BROWSER` `MSLIPIDMAPPER_API_URL` `MSLIPIDMAPPER_API_TOKEN`（環境変数が優先）。
-`mslipidmapper_api_url` / `api_token` だけはパスとして解かない（`user_config.NON_PATH_SETTINGS`）。
+**外部資産の場所は設定ファイルだけで指す**（spec 2026-10-06・2026-11-06 §7.4。資産の場所の
+環境変数は読まない）。リポジトリ直下の `lipidmix.local.toml`（追跡外。雛形 `lipidmix.example.toml`）の
+`[msdial] exe` と `[library] msp_positive` `msp_negative` `lbm` と
+`[mslipidmapper] rscript` `browser` `mslipidmapper_api_url` `api_token`。脂質ライブラリ（`.lbm2`）の
+キーは `[library] lbm` の 1 つで、Console の LBM の自動解決（メソッドの宣言 → MsdialWorkbench の
+ビルド生成物 → この設定 → 実行体のフォルダ）と pipeline の `library_mode="msp_then_lbm"`（ここ**だけ**を
+読む）の両方が読む。旧 `[msdial] lbm` が残っていれば `CONFIG_INVALID`（`[library] lbm` へ移すよう案内する）。
+`[library] lbm` から採った LBM は、どの経路の戻り値・エラー・receipt でもファイル名だけを示す
+（保存する run の記録は絶対パスのまま）。キーと値の種類（`path` / `text` / `int`）の正準は
+`user_config.SETTINGS` で、`text` と `int` はパスとして解かない（`user_config.NON_PATH_SETTINGS`）。
 `pathway_*` は `mslipidmapper_api_url` の研究室サーバを先に使い、使えなければローカルの R へ回す（`pathway/bridge.py` `run_bridge`）。読むのは `metabolomix/core/user_config.py`
 の `get_setting` だけで、各リゾルバは `os.environ` を直に読まない。設定ファイルは呼ばれる
-たびに読むので再起動は要らない。テストは conftest がこれらの環境変数を消し
-`LIPIDMIX_CONFIG` を存在しないパスへ向けている（手元の設定ファイルを掴ませない）。
+たびに読むので再起動は要らない。テストは conftest が `LIPIDMIX_CONFIG` をテストごとの tmp の中の
+存在しないパスへ向けている（手元の設定ファイルを掴ませず、既定のキャッシュをリポジトリに作らない）。
+設定が要るテストは `tests/config_fixtures.py` の `use_config`（`unittest.TestCase` は `config_env`）で
+tmp に書いて指す。
 
-**研究室の参照ライブラリは外部流出禁止**。本体はリポジトリの外に置いて設定ファイルか環境変数で指し、
+**研究室の参照ライブラリは外部流出禁止**。本体はリポジトリの外に置いて設定ファイルで指し、
 パスを追跡対象の文書・テストに書かない。本体とキャッシュの拡張子は `.gitignore` が
 置き場所を問わず無視し、`tests/test_gitignore_library.py` がその網を縛っている。
 照合の上位候補（化合物名・スコア）がツール戻り値に出るのは許容されている。
@@ -307,9 +316,11 @@ git worktree remove .worktrees/<slug>  # 片付け
   新品の worktree でもテストは全数緑になる（実測で確認済み）。
 - スクリプトが worktree 専用の `.mcp.json` を生成する。`command` は main ツリーの `.venv` の Python。`server.py` は**その worktree の
   もの**を指す（main を指すと、worktree のコードを編集しながら main の実装を試すことに
-  なり、最も気づきにくい形で嘘をつく）。蓄積状態（`LIPIDMIX_DATA_DIR`
-  `LIPIDMIX_KNOWLEDGE_DIR`）は **main ツリー**を向けて分裂させない。`LIPIDMIX_REPORTS_DIR` は
-  置かない（記録は解析フォルダ側に付いて回る）。版管理対象の `playbook/` だけは worktree ローカル
+  なり、最も気づきにくい形で嘘をつく）。設定ファイル（`LIPIDMIX_CONFIG`。main ツリーの
+  `lipidmix.local.toml` を、まだ無くても指す）と蓄積状態（`LIPIDMIX_DATA_DIR`
+  `LIPIDMIX_KNOWLEDGE_DIR`）は **main ツリー**を向けて分裂させない。参照ライブラリのキャッシュは
+  設定ファイルのフォルダに付くので、これで main ツリーのものを共有する。記録の書き込み先は
+  指さない（記録は解析フォルダ側に付いて回る）。版管理対象の `playbook/` だけは worktree ローカル
   （変更対象そのものなので）。
 - **記録は main ツリー側の `docs/HISTRY.md` / `docs/task.md` へ書く**（task.md は並列中なので末尾への追記だけ）。
   worktree には存在しない。

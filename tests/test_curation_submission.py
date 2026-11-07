@@ -4,11 +4,12 @@ from metabolomix.curation import flags, submission
 from metabolomix.library import store as library_store
 from metabolomix.msdial import tags as msdial_tags
 from tests.curation_fixtures import build_saved_review
+from tests.config_fixtures import use_config
 
 
 @pytest.fixture()
 def saved(tmp_path, monkeypatch):
-    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     return build_saved_review(tmp_path / "neg")
 
 

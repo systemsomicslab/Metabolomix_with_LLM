@@ -88,7 +88,7 @@ def interactive_folder(tmp_path, monkeypatch):
                                 "Num Peaks: 1\n60.08 100\n", encoding="ascii")
     use_config(monkeypatch, tmp_path, {"library.msp_positive": str(lab / "pos.msp"),
                                        "library.msp_negative": str(lab / "neg.msp")})
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     return folder
 
 

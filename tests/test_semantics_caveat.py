@@ -3,12 +3,13 @@
 条件付きガードの4条件（未読時のみ / 1回のみ / リソース読了で解除 / MODE=off で無効）
 と、フラグがデータ切替（reset_analysis_state / load_data）で消えないことを検証する。
 """
-import os
+import tempfile
 import unittest
-from unittest import mock
+from pathlib import Path
 
 from metabolomix.arf import reader as arf_reader
 from metabolomix.core import session_state
+from tests.config_fixtures import config_env
 
 
 class TestSemanticsCaveatGuard(unittest.TestCase):
@@ -38,15 +39,15 @@ class TestSemanticsCaveatGuard(unittest.TestCase):
 
     def test_mode_off_disables(self):
         s = session_state.session
-        with mock.patch.dict(os.environ, {"LIPIDMIX_CAVEAT_MODE": "off"}):
+        with (tempfile.TemporaryDirectory() as tmp,
+              config_env(Path(tmp), {"server.caveat_mode": "off"})):
             out = s.maybe_prepend_caveat("BODY")
         self.assertEqual(out, "BODY")
         self.assertFalse(s.caveat_emitted)
 
     def test_mode_default_is_digest(self):
         s = session_state.session
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("LIPIDMIX_CAVEAT_MODE", None)
+        with tempfile.TemporaryDirectory() as tmp, config_env(Path(tmp), {}):  # キーが無い
             out = s.maybe_prepend_caveat("BODY")
         self.assertTrue(out.startswith(session_state.SEMANTICS_CAVEAT))
 

@@ -7,6 +7,7 @@ import pytest
 
 import server
 from metabolomix.core import session_state
+from tests.config_fixtures import use_config
 
 _PCA_PLOT = {"title": "PCA", "x_label": "PC1 (60.00%)", "y_label": "PC2 (20.00%)",
              "points": [{"x": 1.0, "y": 2.0, "label": "a"}, {"x": -1.0, "y": 0.5, "label": "b"},
@@ -16,7 +17,7 @@ _PCA_PLOT = {"title": "PCA", "x_label": "PC1 (60.00%)", "y_label": "PC2 (20.00%)
 @pytest.fixture(autouse=True)
 def _fresh(tmp_path, monkeypatch):
     session_state.session = server.AnalysisSession()
-    monkeypatch.setenv("LIPIDMIX_REPORTS_DIR", str(tmp_path / "reports"))
+    use_config(monkeypatch, tmp_path, {"paths.reports_dir": tmp_path / "reports"})
     yield
 
 

@@ -28,7 +28,7 @@ import threading
 import uuid
 from collections import OrderedDict
 
-from metabolomix.core import session_state
+from metabolomix.core import session_state, user_config
 from metabolomix.core.atomic_io import DomainError
 
 __all__ = [
@@ -39,12 +39,12 @@ __all__ = [
     "estimate_state_bytes",
     "DatasetHandle",
     "HandleRegistry",
-    "MAX_HANDLES_ENV",
     "holder_for",
     "registry",
 ]
 
-MAX_HANDLES_ENV = "LIPIDMIX_MAX_DATASET_HANDLES"
+#: ハンドルの上限の設定キー（`[server] max_dataset_handles`）と、それが無いときの上限。
+MAX_HANDLES_SETTING = "server.max_dataset_handles"
 DEFAULT_MAX_HANDLES = 8
 #: 読み込み済みの基を何本まで覚えておくか（LRU）。mzTab-M の基は 1 本数十 MB 程度だが、解析フォルダの
 #: 大きな基はそれでは済まない（`per_sample_mz` だけで特徴 × 試料の数百万要素。`dataset_load` は
@@ -120,14 +120,18 @@ def estimate_state_bytes(ds) -> int:
 
 
 def max_handles() -> int:
-    raw = (os.environ.get(MAX_HANDLES_ENV) or "").strip()
-    if not raw:
-        return DEFAULT_MAX_HANDLES
+    """開いておけるハンドルの上限（設定ファイルの `[server] max_dataset_handles`。1 未満は 1）。
+
+    設定ファイルが読めなければ `CONFIG_INVALID`（DomainError。`DATASET_HANDLE_LIMIT` と同じく
+    読み込みの入口が封筒にする）。黙って既定の上限に落とさない。
+    """
     try:
-        value = int(raw)
-    except ValueError:
+        setting = user_config.get_setting(MAX_HANDLES_SETTING)
+    except user_config.ConfigInvalidError as exc:
+        raise DomainError(exc.code, exc.message, exc.details()) from exc
+    if setting is None:
         return DEFAULT_MAX_HANDLES
-    return max(1, value)
+    return max(1, int(setting.value))
 
 
 class DatasetHandle:
@@ -175,7 +179,9 @@ class HandleRegistry:
             raise DomainError(
                 "DATASET_HANDLE_LIMIT",
                 f"開いているハンドルが上限（{limit}）に達しています。使い終えたハンドルを "
-                f"dataset_handle_close で閉じてください（上限は {MAX_HANDLES_ENV} で変えられます）。",
+                "dataset_handle_close で閉じてください（上限は "
+                f"{user_config.config_file_path().name} の {user_config.config_key(MAX_HANDLES_SETTING)} "
+                "で変えられます）。",
                 {"open_handles": self._open_ids(), "max_handles": limit})
 
     def check_capacity(self) -> None:

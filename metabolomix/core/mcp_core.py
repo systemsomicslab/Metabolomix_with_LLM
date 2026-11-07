@@ -18,6 +18,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from metabolomix.core import user_config
 from metabolomix.core.data_config import get_data_dir
 
 # このファイルは <root>/metabolomix/core/ にある。docs/ knowledge/ playbook/
@@ -96,7 +97,8 @@ def _first_writable_dir(candidates: list[Path]) -> Path:
     raise OSError(
         "レポートの書き込み先がありません: "
         + ", ".join(str(c) for c in candidates)
-        + "（LIPIDMIX_REPORTS_DIR に書き込み可能なパスを設定してください）"
+        + f"（{user_config.CONFIG_FILENAME} の [paths] reports_dir に書き込み可能なフォルダを"
+        "書いてください）"
     )
 
 
@@ -294,13 +296,17 @@ DATA_DIR = get_data_dir()
 def _report_dir_candidates() -> list[Path]:
     """明示された保存先を優先し、未指定時は解析フォルダ配下 reports/ だけを使う。
 
+    明示先は設定ファイルの `[paths] reports_dir`（環境変数では指さない。spec 2026-11-06
+    §7.4）。設定ファイルが読めなければ ConfigInvalidError（黙って解析フォルダへ書き先を
+    変えない）。
+
     解析の記録（objective とレポート）は生データ（解析フォルダ）の側に置く契約。
     リポジトリ側（`<project>/reports` や `<project>/analyses`）へ退避する経路は
     持たない——コードの置き場に解析記録が溜まるバグの温床だった。
     """
-    override = os.environ.get("LIPIDMIX_REPORTS_DIR")
-    if override:
-        return [Path(override).expanduser(), DATA_DIR / "reports"]
+    setting = user_config.get_setting("paths.reports_dir")
+    if setting is not None:
+        return [Path(setting.value), DATA_DIR / "reports"]
     return [DATA_DIR / "reports"]
 
 

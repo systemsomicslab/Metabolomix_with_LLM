@@ -177,7 +177,7 @@ def test_library_load_into_handle_keeps_global_empty(monkeypatch, tmp_path, pos_
     msp.write_text("NAME: Choline\nPRECURSORMZ: 104.107\nIONMODE: Positive\nNum Peaks: 2\n"
                    "60.0808 100\n104.107 50\n", encoding="ascii")
     use_config(monkeypatch, tmp_path, {"library.msp_positive": str(msp)})
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     a = _open(pos_mztab)
     out = json.loads(library_tools.library_load(ion_mode="positive", dataset_handle=a))
     assert out["status"] == "success"

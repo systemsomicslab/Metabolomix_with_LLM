@@ -83,7 +83,6 @@ class ObjectiveServerToolTests(unittest.TestCase):
         self.reports = mcp_core.DATA_DIR / "reports"
         self._env = mock.patch.dict("os.environ")
         self._env.start()
-        os.environ.pop("LIPIDMIX_REPORTS_DIR", None)
 
     def tearDown(self):
         self._env.stop()

@@ -69,11 +69,13 @@ PCA Loading の上位特徴量を見る:
 （既にあれば開くだけ）。大きな `.msp` の初回構築は MCP クライアントのタイムアウトに
 当たりうるので、手元で 1 度走らせておくと以後の `library_load` はキャッシュを開くだけで
 済む。標準出力にはファイル名・件数・所要秒数を 1 行の JSON で出す（置き場所は出さない）。
+キャッシュの置き場所は `library_load` と同じ（`lipidmix.local.toml` の `[paths] library_cache`、
+既定は設定ファイルのフォルダの `data/.library-cache`）。
 
 | フラグ | 意味 |
 |---|---|
-| `--ion-mode {positive,negative}` | どちらの極性の設定（環境変数 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG`、無ければ `lipidmix.local.toml` の `[library] msp_positive` / `msp_negative`）を使うか |
-| `--file <path>` | ライブラリのパス（環境変数より優先） |
+| `--ion-mode {positive,negative}` | どちらの極性の設定（`lipidmix.local.toml` の `[library] msp_positive` / `msp_negative`）を使うか |
+| `--file <path>` | ライブラリのパス（設定より優先） |
 | `--rebuild` | キャッシュと記憶した sha256 を無視して作り直す |
 
 解決できないときは `MSP_AMBIGUOUS` などのコードを標準エラーに出して終了コード 2。

@@ -31,10 +31,10 @@ import contextvars
 import io
 import threading
 import uuid
-import os
 import re
 
 from metabolomix.arf import reader as arf_reader
+from metabolomix.core import user_config
 from metabolomix.analysis import preprocessing
 from metabolomix.arf2.reader import deserialize
 from metabolomix.eic.reader import parse_eic_aef_css1
@@ -578,11 +578,13 @@ class AnalysisSession:
         - topic 誘導: そのトピックが未読のあいだ、毎回末尾に1行だけ付す（安いので
           既読になるまで出し続ける。これがオンデマンド参照の起点になる）。
 
-        環境変数 LIPIDMIX_CAVEAT_MODE=off で両方とも無効化（ローカルの操作ナビゲータ
-        専用デプロイ向け。既定 digest）。エラー文字列など解釈材料でない出力には呼ばない。
+        設定ファイルの `[server] caveat_mode = 'off'` で両方とも無効化（ローカルの操作
+        ナビゲータ専用デプロイ向け。既定 digest）。設定ファイルが読めなければ
+        ConfigInvalidError（打ち間違いを黙って既定に落とさない）。エラー文字列など
+        解釈材料でない出力には呼ばない。
         """
-        mode = os.getenv("LIPIDMIX_CAVEAT_MODE", "digest").strip().lower()
-        if mode == "off":
+        setting = user_config.get_setting("server.caveat_mode")
+        if setting is not None and setting.value == "off":
             return text
         out = text
         if topic:

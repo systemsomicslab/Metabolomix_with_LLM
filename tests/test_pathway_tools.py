@@ -20,7 +20,6 @@ def lipid_arf(monkeypatch, tmp_path):
     s = session_state.AnalysisSession()
     monkeypatch.setattr(session_state, "session", s)
     monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path)
-    monkeypatch.delenv("LIPIDMIX_REPORTS_DIR", raising=False)
     s.assay_kind = "lipid"
     a = s.arf
     a.features = [{"MasterAlignmentID": i} for i in (1, 2)]

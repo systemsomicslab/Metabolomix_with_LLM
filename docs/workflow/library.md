@@ -34,8 +34,7 @@ flowchart TD
 前提: なし。解決順は `file_path` の明示 → 直近のデータセット（または `dataset_handle`）が覚えた
 同定のライブラリ（`library_record`。`verify_record` が通った `known` だけ。`mismatch` / `lbm_only` は
 設定へ落ちずに理由を返し、`unknown` か無いときだけ次へ進む）→ `ion_mode` に対応する極性の設定
-（環境変数 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG` → `lipidmix.local.toml` の
-`[library] msp_positive` / `msp_negative`。`metabolomix/core/user_config.py` の
+（`lipidmix.local.toml` の `[library] msp_positive` / `msp_negative`。`metabolomix/core/user_config.py` の
 `get_setting` が引く。研究室の参照ライブラリはリポジトリの外に置いてここで指す）→
 データディレクトリの `*_Loaded.msp2.dbs` → 設定済みの極性
 （両方あれば `MSP_AMBIGUOUS`）→ データディレクトリの `*.msp`（複数あれば

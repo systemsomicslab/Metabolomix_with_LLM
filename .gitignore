@@ -63,9 +63,9 @@ archives/
 docs/research/
 
 # 参照ライブラリとその照合用キャッシュ。研究室の参照ライブラリ（.msp）は外部流出
-# 禁止の資産で、本体は環境変数 MSDIAL_MSP_POS / MSDIAL_MSP_NEG でリポジトリの外を
-# 指す。store のキャッシュ（SQLite）と sha256 の対応表はその完全な写し／置き場所を
-# 含むので、LIPIDMIX_LIBRARY_CACHE_DIR を data/ の外へ向けても置き場所を問わず
+# 禁止の資産で、本体は lipidmix.local.toml の [library] msp_positive / msp_negative で
+# リポジトリの外を指す。store のキャッシュ（SQLite）と sha256 の対応表はその完全な写し／
+# 置き場所を含むので、[paths] library_cache を data/ の外へ向けても置き場所を問わず
 # 追跡しない。tests/test_gitignore_library.py がこの網を縛っている。
 *.msp
 *.msp2

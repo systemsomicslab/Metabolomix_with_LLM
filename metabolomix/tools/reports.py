@@ -131,7 +131,7 @@ def write_report(
     `## 目的` / `## 実施した解析` / `## 主要な所見` / `## 解釈` /
     `## 注意点・コンフリクト` / `## 結論`。所見が増えたら本文を作り直して再度呼ぶ
     （ファイルは毎回上書き）。引用した knowledge/playbook の slug を knowledge_refs に渡す。
-    LIPIDMIX_REPORTS_DIRの明示先を優先し、書込不可なら解析フォルダ配下reports/。
+    lipidmix.local.toml の [paths] reports_dir の明示先を優先し、書込不可なら解析フォルダ配下reports/。
     未指定時は解析フォルダ配下reports/だけを使う（リポジトリ側へは退避しない）。
 
     analysis_id はファイル名 slug の元になるため ASCII で一意に。別IDが同一slugに潰れて既存

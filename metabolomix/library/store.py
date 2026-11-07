@@ -6,8 +6,11 @@
 `[m/z, intensity]` だけ）。そこで初回に 1 度だけコンパクトな SQLite へ変換し、
 以後は precursor m/z 窓 × 極性で候補を引く（spec §5.2）。
 
-キャッシュ先は環境変数 `LIPIDMIX_LIBRARY_CACHE_DIR`、無ければ
-`mcp_core.DATA_DIR / ".library-cache"`。ファイル名は `<stem>-<sha256[:16]>.sqlite`
+キャッシュ先は設定ファイルの `[paths] library_cache`、無ければ設定ファイルのフォルダの
+`data/.library-cache`（`user_config.config_file_path().parent`。設定ファイルが無くても同じ式で、
+既定の場所なら `<repo>/data/.library-cache`）。`mcp_core.DATA_DIR`（データの探索先）には
+付いて動かない——worktree は `LIPIDMIX_CONFIG` で main ツリーの設定ファイルを指すので、
+キャッシュも main ツリーのものを共有する。ファイル名は `<stem>-<sha256[:16]>.sqlite`
 なので、元ファイルが変われば別ファイルになり、無効化の判断が要らない（古い
 キャッシュは孤立するだけで、参照されなくなる）。
 
@@ -19,8 +22,8 @@
 `python -m metabolomix.library.store --ion-mode negative` で MCP の外から事前構築できる
 （`main()`。初回構築が MCP クライアントのタイムアウトに当たるとき用）。
 
-deps: record 経由で `.dbs` / `.msp` の iter_records、mcp_core（leaf の DATA_DIR
-解決のみ）。session_state / tools_* は import しない。
+deps: record 経由で `.dbs` / `.msp` の iter_records、user_config（キャッシュの場所）。
+session_state / tools_* は import しない。
 """
 from __future__ import annotations
 
@@ -36,12 +39,10 @@ from typing import Iterable
 
 import msgpack
 
-from metabolomix.core import file_digest, mcp_core
+from metabolomix.core import file_digest, user_config
 from metabolomix.core.atomic_io import atomic_write_json, read_text_stable
 from metabolomix.library import dbs as dbs_reader
 from metabolomix.library import msp as msp_reader
-
-LIBRARY_CACHE_ENV = "LIPIDMIX_LIBRARY_CACHE_DIR"
 
 #: `record.RECORD_FIELDS` が「store のスキーマであり、採点エンジンの入力契約」
 #: （spec `docs/superpowers/specs/2026-09-19-msms-spectral-matching-design.md`）
@@ -115,11 +116,13 @@ def _row_to_record(row) -> dict:
 
 
 def cache_dir() -> Path:
-    """store の置き場所。環境変数優先、無ければ `mcp_core.DATA_DIR` 配下。"""
-    override = os.getenv(LIBRARY_CACHE_ENV)
-    if override:
-        return Path(override)
-    return mcp_core.DATA_DIR / ".library-cache"
+    """store の置き場所。設定ファイルの `[paths] library_cache`、無ければ設定ファイルのフォルダの
+    `data/.library-cache`。設定ファイルが読めなければ ConfigInvalidError（黙って別の場所に
+    1 GB 級のキャッシュを作らない）。"""
+    setting = user_config.get_setting("paths.library_cache")
+    if setting is not None:
+        return Path(setting.value)
+    return user_config.config_file_path().parent / "data" / ".library-cache"
 
 
 def source_sha256(path: str | Path, *, trust: bool = True) -> str:

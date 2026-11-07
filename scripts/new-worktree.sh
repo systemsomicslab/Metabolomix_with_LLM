@@ -38,18 +38,16 @@ fi
 
 main_w=$(win "$main")
 wt_w=$(win "$path")
-# 外部資産の場所の設定（lipidmix.local.toml、追跡外）は worktree に来ない。
-# main ツリーにあれば LIPIDMIX_CONFIG でそれを指す（設定を分裂させない）。
+# 外部資産と置き場所の設定（lipidmix.local.toml、追跡外）は worktree に来ない。
+# LIPIDMIX_CONFIG で main ツリーのものを指す（設定を分裂させない）。main ツリーに
+# まだ無くても指す: 参照ライブラリのキャッシュの既定は「設定ファイルのフォルダの
+# data/.library-cache」なので、これで worktree も main ツリーのキャッシュを共有する。
 # MCP サーバは main ツリーの .venv で動かす（pyproject の package = false により
 # import は常にこの worktree の server.py の隣から解決されるので共有して安全）。
 python_w="C:/Python314/python.exe"
 for candidate in "$main/.venv/Scripts/python.exe" "$main/.venv/bin/python"; do
     if [ -f "$candidate" ]; then python_w=$(win "$candidate"); break; fi
 done
-config_env=""
-if [ -f "$main/lipidmix.local.toml" ]; then
-    config_env="\"LIPIDMIX_CONFIG\": \"$main_w/lipidmix.local.toml\","
-fi
 
 # server.py はこの worktree のものを指す。main を指すと、worktree のコードを
 # 編集しながら main の実装を試すことになり、最も気づきにくい形で嘘をつく。
@@ -64,7 +62,7 @@ cat > "$path/.mcp.json" <<JSON
         "$wt_w/server.py"
       ],
       "env": {
-        $config_env
+        "LIPIDMIX_CONFIG": "$main_w/lipidmix.local.toml",
         "LIPIDMIX_DATA_DIR": "$main_w/data",
         "LIPIDMIX_KNOWLEDGE_DIR": "$main_w/knowledge"
       }

@@ -71,7 +71,6 @@ class KnowledgeCoverageSmokeTests(unittest.TestCase):
         mcp_core.DATA_DIR = Path(self._tmp.name)
         self._env = mock.patch.dict("os.environ")
         self._env.start()
-        os.environ.pop("LIPIDMIX_REPORTS_DIR", None)
         server.record_objective(
             analysis_id=self.ANALYSIS_ID,
             dataset="NEG / 2_lipidome_lcms",

@@ -7,6 +7,7 @@ from metabolomix.arf import tools as arf_tools
 from metabolomix.console.validation import map_assays
 from metabolomix.core import mcp_core, session_state
 from metabolomix.tools.reports import write_report, read_report
+from tests.config_fixtures import use_config
 
 
 @pytest.mark.parametrize('uri,source', [
@@ -44,7 +45,7 @@ def test_report_override_wins_over_mutable_input_directory(tmp_path, monkeypatch
     output_dir = tmp_path / 'trial-reports'
     input_dir.mkdir(parents=True)
     monkeypatch.setattr(mcp_core, 'DATA_DIR', input_dir)
-    monkeypatch.setenv('LIPIDMIX_REPORTS_DIR', str(output_dir))
+    use_config(monkeypatch, tmp_path, {"paths.reports_dir": output_dir})
     write_report('trial-1', 'synthetic', '保存内容')
     assert (output_dir / 'trial-1.md').is_file()
     assert not (input_dir / 'reports').exists()
@@ -53,6 +54,5 @@ def test_report_override_wins_over_mutable_input_directory(tmp_path, monkeypatch
 
 def test_report_without_override_uses_input_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(mcp_core, 'DATA_DIR', tmp_path)
-    monkeypatch.delenv('LIPIDMIX_REPORTS_DIR', raising=False)
     write_report('local-1', 'synthetic', '保存内容')
     assert (tmp_path / 'reports/local-1.md').is_file()

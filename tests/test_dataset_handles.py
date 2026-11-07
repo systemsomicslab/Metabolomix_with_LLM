@@ -77,8 +77,8 @@ def test_changed_input_is_reloaded(pos_mztab):
     assert _open(pos_mztab)["reused_base"] is False
 
 
-def test_handle_limit(monkeypatch, pos_mztab):
-    monkeypatch.setenv(handles.MAX_HANDLES_ENV, "1")
+def test_handle_limit(monkeypatch, tmp_path, pos_mztab):
+    use_config(monkeypatch, tmp_path, {"server.max_dataset_handles": 1})
     _open(pos_mztab)
     err = _open(pos_mztab)
     assert err["error"]["code"] == "DATASET_HANDLE_LIMIT"
@@ -130,7 +130,7 @@ def test_library_auto_uses_only_the_remembered_library(monkeypatch, tmp_path):
     setting_file = _write_msp(lib / "setting_pos.msp", ion_mode="Positive")
     use_config(monkeypatch, tmp_path, {"library.msp_positive": str(setting_file),
                                        "library.msp_negative": str(setting_file)})
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     out = json.loads(handle_tools.dataset_handle_open(directory=str(folder), library="auto"))
     assert out["library"]["file"] == "Proj_Loaded.msp2.dbs"
     assert len(out["library"]["sha256"]) == 64 and out["library"]["record_count"] == 1

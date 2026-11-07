@@ -1,11 +1,12 @@
-"""外部資産（MS-DIAL Console・脂質ライブラリ・研究室の参照ライブラリ）の場所の設定。
+"""外部資産（MS-DIAL Console・脂質ライブラリ・研究室の参照ライブラリ）と置き場所
+（レポート・ライブラリのキャッシュ）とサーバの振る舞い（ハンドルの上限・意味論ダイジェスト）の設定。
 
 spec: docs/superpowers/specs/2026-10-06-user-config-file-design.md・2026-11-06 §7.4
 
 値は設定ファイルだけから引く。設定ファイルは `LIPIDMIX_CONFIG` が指すファイル、
-無ければ `<repo>/lipidmix.local.toml`（雛形 `lipidmix.example.toml`）。資産の場所を
-上書きする環境変数は読まない（spec 2026-11-06 §7.4。`LIPIDMIX_CONFIG` は起動ごとに
-変わる設定ファイルの場所なので残る）。
+無ければ `<repo>/lipidmix.local.toml`（雛形 `lipidmix.example.toml`）。資産の場所・
+置き場所を上書きする環境変数は読まない（spec 2026-11-06 §7.4。`LIPIDMIX_CONFIG` は
+起動ごとに変わる設定ファイルの場所なので残る）。
 
 呼ばれるたびに読む（パス・更新時刻・大きさが同じなら前回の解析結果を使う）ので、
 設定ファイルの書き換えはサーバを再起動しなくても次の呼び出しから効く。
@@ -42,7 +43,19 @@ SETTINGS: dict[str, str] = {
     "mslipidmapper.browser": "path",
     "mslipidmapper.mslipidmapper_api_url": "text",
     "mslipidmapper.api_token": "text",
+    # 置き場所（置き場所の環境変数から移した。計画 B-2a の決めたこと 2）。
+    # reports_dir は解析フォルダ配下 reports/ より先に試す書き込み先。library_cache は
+    # 参照ライブラリの SQLite キャッシュ（既定は設定ファイルのフォルダの data/.library-cache）。
+    "paths.reports_dir": "path",
+    "paths.library_cache": "path",
+    # サーバの振る舞い（同じく環境変数から移した）。
+    "server.max_dataset_handles": "int",
+    "server.caveat_mode": "text",
 }
+
+#: 値を選択肢に限る設定 → 選べる値（小文字。大文字小文字は問わず、小文字にそろえて返す）。
+#: 他の値は ConfigInvalidError（黙って既定に落とすと、`off` のつもりの打ち間違いが気づかれない）。
+CHOICES: dict[str, tuple[str, ...]] = {"server.caveat_mode": ("digest", "off")}
 
 #: 移した旧キー → 新しいキー。設定ファイルに旧キーがあれば ConfigInvalidError
 #: （黙って無視すると、`[msdial] lbm` に書いた LBM が Console の解決から消え、
@@ -157,7 +170,16 @@ def _value(path: Path, key: str, value: object) -> str | int | None:
     value = value.strip()
     if not value:
         return None
-    return _resolve(value, path.parent) if kind == "path" else value
+    if kind == "path":
+        return _resolve(value, path.parent)
+    choices = CHOICES.get(key)
+    if choices is not None:
+        if value.lower() not in choices:
+            raise ConfigInvalidError(
+                f"{where} は {' / '.join(choices)} のどれかで書いてください（受け取った値: {value!r}）。",
+                config_file=str(path))
+        return value.lower()
+    return value
 
 
 def _parse(path: Path) -> _Parsed | None:
@@ -241,16 +263,30 @@ def _unknown_keys_quietly(path: Path) -> tuple[tuple[str, ...], str | None]:
     return (parsed.unknown_keys if parsed else ()), None
 
 
+def _instruction(key: str, what: str) -> str:
+    """「〜を書いてください」を値の種類に合わせる（パスでない設定に「パス」と言わない）。"""
+    kind = SETTINGS[key]
+    if kind == "path":
+        return f"{what}のパスを書いてください"
+    if kind == "int":
+        return f"{what}を整数で書いてください"
+    choices = CHOICES.get(key)
+    if choices is not None:
+        return f"{what}を {' / '.join(choices)} のどれかで書いてください"
+    return f"{what}を書いてください"
+
+
 def missing_hint(key: str, what: str) -> str:
     """未設定のとき利用者に伝える文。`what` は「MS-DIAL Console の実行体」など。"""
     path = config_file_path()
+    instruction = _instruction(key, what)
     if path.is_file():
-        head = f"{path.name} の {config_key(key)} に{what}のパスを書いてください"
+        head = f"{path.name} の {config_key(key)} に{instruction}"
     else:
         head = (f"{EXAMPLE_FILENAME} を {path} として複製し、"
-                f"{config_key(key)} に{what}のパスを書いてください")
-    message = (f"{head}（Windows のパスは単一引用符で囲む。"
-               "書き換えは次の呼び出しから効き、サーバの再起動は要りません）。")
+                f"{config_key(key)} に{instruction}")
+    quote = "Windows のパスは単一引用符で囲む。" if SETTINGS[key] == "path" else ""
+    message = f"{head}（{quote}書き換えは次の呼び出しから効き、サーバの再起動は要りません）。"
     unknown, _ = _unknown_keys_quietly(path)
     if unknown:
         message += f" 認識できないキーがあります: {', '.join(unknown)}。"

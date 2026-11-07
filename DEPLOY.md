@@ -44,8 +44,16 @@ optional overrides:
 $env:LIPIDMIX_DATA_DIR="C:\path\to\msdial\output"
 # Optional: keep accumulated notes outside the clone.
 # $env:LIPIDMIX_KNOWLEDGE_DIR="C:\path\to\metabolomix\knowledge"
+# Optional: read the settings file from somewhere other than the clone root.
+# $env:LIPIDMIX_CONFIG="C:\path\to\lipidmix.local.toml"
 .venv\Scripts\python.exe server.py
 ```
+
+External assets (MS-DIAL Console, reference libraries, MSLipidMapper), where reports and the
+library cache go (`[paths] reports_dir` / `library_cache`), the open dataset-handle limit
+(`[server] max_dataset_handles`) and the semantics digest (`[server] caveat_mode`) are set in
+`lipidmix.local.toml` (copy `lipidmix.example.toml`), not in environment variables. The library
+cache defaults to `data/.library-cache` next to that settings file.
 
 Do not set `LIPIDMIX_TRANSPORT=streamable-http` for this mode. The default
 transport is `stdio`.

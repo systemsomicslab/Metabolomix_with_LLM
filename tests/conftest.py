@@ -5,24 +5,32 @@
 置かれている。そのまま読むと `resolve_library_path()` がテストの tmp ではなく実ライブラリを
 掴み、結果が機械ごとに変わる（しかも実ライブラリは外部流出禁止の資産）。設定ファイルは
 存在しないパスへ向ける。使うテストは tmp に書いて `LIPIDMIX_CONFIG` で指す
-（`tests/config_fixtures.py` の `use_config`）。資産の場所の環境変数は読まない
+（`tests/config_fixtures.py` の `use_config`）。資産と置き場所の環境変数は読まない
 （spec 2026-11-06 §7.4）ので消す必要もない。
+
+向け先はテストごとの tmp の中にする。参照ライブラリのキャッシュの既定は「設定ファイルの
+フォルダの data/.library-cache」なので、リポジトリの中を向けるとテストがリポジトリに
+キャッシュを作る。`use_config` も `tmp_path` に書くので、そのテストのキャッシュも tmp に入る。
 """
+import itertools
 import sys
-from pathlib import Path
 
 import pytest
 
 from metabolomix.core.user_config import CONFIG_ENV
 
-#: 作られることの無いパス。autouse で tmp_path を要求すると全テストに tmp ディレクトリが
-#: できるので、存在しない固定パスで済ませる。
-_NO_CONFIG = Path(__file__).resolve().parent / "_no_such_dir" / "lipidmix.local.toml"
+_NO_CONFIG_SEQ = itertools.count()
 
 
 @pytest.fixture(autouse=True)
-def _isolate_external_asset_settings(monkeypatch):
-    monkeypatch.setenv(CONFIG_ENV, str(_NO_CONFIG))
+def _isolate_external_asset_settings(monkeypatch, tmp_path_factory):
+    """設定ファイルを、テストごとに別の・存在しないパスへ向ける（何も作らない）。
+
+    autouse で `tmp_path` を要求すると全テストに tmp ディレクトリができるので、基底の tmp の
+    下に番号違いのパスを組むだけにする（キャッシュを作るテストだけがフォルダを作る）。
+    """
+    base = tmp_path_factory.getbasetemp() / "no-config" / str(next(_NO_CONFIG_SEQ))
+    monkeypatch.setenv(CONFIG_ENV, str(base / "lipidmix.local.toml"))
 
 
 @pytest.fixture(autouse=True)

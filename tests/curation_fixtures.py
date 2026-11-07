@@ -345,7 +345,8 @@ def write_suggest_set(folder: Path, *, with_param: bool = True, with_arf: bool =
 
 def build_saved_review(folder: Path) -> dict:
     """`write_alignment_set` → `review.run_review` → `review.save_review` まで済ませる（送信系のテスト用）。
-    `LIBRARY_CACHE_ENV` は呼び出し側が tmp に向けておく。"""
+    ライブラリのキャッシュ（`[paths] library_cache`）は呼び出し側が tmp に向けておく
+    （`tests/config_fixtures.py` の `use_config`）。"""
     from metabolomix.arf2.reader import load_catalog
     from metabolomix.curation import evidence, judge, review
     from metabolomix.library import store as library_store

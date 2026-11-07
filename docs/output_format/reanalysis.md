@@ -40,7 +40,7 @@
   並行に進む。同じハンドルへの呼び出しは 1 本ずつ（到着順は保証しない）。ハンドルを渡さない
   呼び出しも、直近のハンドルがあればそのハンドルの呼び出しとして 1 本ずつに並ぶ（途中で
   `dataset_load` が直近を切り替えても、始めたときの直近のハンドルで最後まで動く）。
-- **上限。** `LIPIDMIX_MAX_DATASET_HANDLES`（既定 8）。`dataset_load` もハンドルを 1 本使う
+- **上限。** `lipidmix.local.toml` の `[server] max_dataset_handles`（既定 8。1 未満は 1）。`dataset_load` もハンドルを 1 本使う
   （前に読んだものは閉じずに残る）。超えると `DATASET_HANDLE_LIMIT` で止め、古いハンドルを
   黙って閉じない。寿命は明示の `dataset_handle_close` か、サーバの終了まで。
 

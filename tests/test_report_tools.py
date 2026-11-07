@@ -10,6 +10,7 @@ import server
 from metabolomix.core import session_state
 from metabolomix.core import mcp_core
 from metabolomix.corpus import knowledge_store
+from tests.config_fixtures import config_env
 
 
 class WriteLocationHelpers(unittest.TestCase):
@@ -65,15 +66,10 @@ class ReportToolTests(unittest.TestCase):
         self.tmp = Path(self._tmp.name)
         self._saved_data_dir = mcp_core.DATA_DIR
         mcp_core.DATA_DIR = self.tmp
-        self._saved_env = os.environ.get("LIPIDMIX_REPORTS_DIR")
-        os.environ["LIPIDMIX_REPORTS_DIR"] = str(self.tmp / "reports_fallback")
+        self.enterContext(config_env(self.tmp, {"paths.reports_dir": self.tmp / "reports_fallback"}))
 
     def tearDown(self):
         mcp_core.DATA_DIR = self._saved_data_dir
-        if self._saved_env is None:
-            os.environ.pop("LIPIDMIX_REPORTS_DIR", None)
-        else:
-            os.environ["LIPIDMIX_REPORTS_DIR"] = self._saved_env
         self._tmp.cleanup()
 
     def test_write_report_creates_file_with_frontmatter_and_body(self):
@@ -201,17 +197,12 @@ class SavePcaFigureTests(unittest.TestCase):
         self.tmp = Path(self._tmp.name)
         self._saved_data_dir = mcp_core.DATA_DIR
         mcp_core.DATA_DIR = self.tmp
-        self._saved_env = os.environ.get("LIPIDMIX_REPORTS_DIR")
-        os.environ["LIPIDMIX_REPORTS_DIR"] = str(self.tmp / "reports_fallback")
+        self.enterContext(config_env(self.tmp, {"paths.reports_dir": self.tmp / "reports_fallback"}))
         self._saved_plot = session_state.session.arf.last_pca_plot
 
     def tearDown(self):
         mcp_core.DATA_DIR = self._saved_data_dir
         session_state.session.arf.last_pca_plot = self._saved_plot
-        if self._saved_env is None:
-            os.environ.pop("LIPIDMIX_REPORTS_DIR", None)
-        else:
-            os.environ["LIPIDMIX_REPORTS_DIR"] = self._saved_env
         self._tmp.cleanup()
 
     def test_save_pca_figure_writes_png_and_returns_relpath(self):
@@ -241,15 +232,10 @@ class ReportEdgeCaseTests(unittest.TestCase):
         self.tmp = Path(self._tmp.name)
         self._saved_data_dir = mcp_core.DATA_DIR
         mcp_core.DATA_DIR = self.tmp
-        self._saved_env = os.environ.get("LIPIDMIX_REPORTS_DIR")
-        os.environ["LIPIDMIX_REPORTS_DIR"] = str(self.tmp / "reports_fallback")
+        self.enterContext(config_env(self.tmp, {"paths.reports_dir": self.tmp / "reports_fallback"}))
 
     def tearDown(self):
         mcp_core.DATA_DIR = self._saved_data_dir
-        if self._saved_env is None:
-            os.environ.pop("LIPIDMIX_REPORTS_DIR", None)
-        else:
-            os.environ["LIPIDMIX_REPORTS_DIR"] = self._saved_env
         self._tmp.cleanup()
 
     def test_write_report_refuses_slug_collision_with_different_id(self):
@@ -327,8 +313,7 @@ class DatasetFigureFallbackTests(unittest.TestCase):
         self.tmp = Path(self._tmp.name)
         self._saved_data_dir = mcp_core.DATA_DIR
         mcp_core.DATA_DIR = self.tmp
-        self._saved_env = os.environ.get("LIPIDMIX_REPORTS_DIR")
-        os.environ["LIPIDMIX_REPORTS_DIR"] = str(self.tmp / "reports_fallback")
+        self.enterContext(config_env(self.tmp, {"paths.reports_dir": self.tmp / "reports_fallback"}))
         self._saved_plot = session_state.session.arf.last_pca_plot
         self._saved_diff = session_state.session.arf.last_differential
         self._saved_ds = session_state.session.dataset
@@ -341,10 +326,6 @@ class DatasetFigureFallbackTests(unittest.TestCase):
         session_state.session.arf.last_pca_plot = self._saved_plot
         session_state.session.arf.last_differential = self._saved_diff
         session_state.session.dataset = self._saved_ds
-        if self._saved_env is None:
-            os.environ.pop("LIPIDMIX_REPORTS_DIR", None)
-        else:
-            os.environ["LIPIDMIX_REPORTS_DIR"] = self._saved_env
         self._tmp.cleanup()
 
     def test_save_pca_figure_falls_back_to_dataset_state(self):
@@ -421,9 +402,8 @@ class ReportDirStaysWithDataTests(unittest.TestCase):
     """解析記録は解析フォルダ側に置く契約。リポジトリ側へ退避する候補を持たない。"""
 
     def test_candidates_without_override_are_data_dir_only(self):
-        from unittest import mock
-        with mock.patch.dict(os.environ):
-            os.environ.pop("LIPIDMIX_REPORTS_DIR", None)
-            candidates = mcp_core._report_dir_candidates()
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp, config_env(Path(tmp), {}):
+            candidates = mcp_core._report_dir_candidates()   # [paths] reports_dir が無い
         self.assertEqual(candidates, [mcp_core.DATA_DIR / "reports"])
         self.assertNotIn(mcp_core.BASE_DIR / "reports", candidates)

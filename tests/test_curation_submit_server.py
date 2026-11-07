@@ -10,6 +10,7 @@ from metabolomix.msdial import tags as msdial_tags
 from metabolomix.core import mcp_core, session_state
 from metabolomix.tools import curation_tools
 from tests.curation_fixtures import build_saved_review, write_suggest_set
+from tests.config_fixtures import use_config
 
 
 class FakeClock:
@@ -112,7 +113,7 @@ def test_options_preflight_allows_private_network_access():
 
 @pytest.fixture()
 def saved(tmp_path, monkeypatch):
-    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     built = build_saved_review(tmp_path / "neg")
     r = built["review"]
     built["endpoint"] = submit_server.register("review", r["review_id"], r["arf2_path"])
@@ -242,7 +243,7 @@ def test_requests_write_nothing_to_stdout(saved, capfd):
 
 
 def test_a_suggestion_submit_over_http_records_assign_and_redundant(tmp_path, monkeypatch):
-    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     paths = write_suggest_set(tmp_path / "neg")
     monkeypatch.setattr(mcp_core, "DATA_DIR", paths["arf2"].parent)
     session_state.session.__init__()

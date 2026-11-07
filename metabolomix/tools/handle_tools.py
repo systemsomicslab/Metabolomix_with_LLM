@@ -151,7 +151,7 @@ def dataset_handle_open(mztab_path: str | None = None, job_path: str | None = No
     同じ入力（読み込みが読んだ・探したファイルの size・更新時刻が同じ）を開き直すと
     読み込み済みのものを使い回す
     （`reused_base`）。それでもハンドルどうしの状態は別々。開けるのは
-    `LIPIDMIX_MAX_DATASET_HANDLES`（既定 8）本まで。使い終えたら `dataset_handle_close`。
+    `lipidmix.local.toml` の `[server] max_dataset_handles`（既定 8）本まで。使い終えたら `dataset_handle_close`。
     """
     if library not in _LIBRARY_MODES:
         return mztab_error("DATASET_BAD_REQUEST",

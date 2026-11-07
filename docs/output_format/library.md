@@ -152,14 +152,13 @@
 
 **エラー戻り値**: ライブラリを 1 つに決められないときは `{"status": "error", "code": ..., "message": ..., "details": ...}`
 を返し、store は差し替えない。`code` は `MSP_AMBIGUOUS`（候補が複数。`ion_mode` か
-`file_path` を指定する）/ `MSP_ENV_NOT_FOUND`（極性の設定——環境変数 `MSDIAL_MSP_POS` /
-`MSDIAL_MSP_NEG` か `lipidmix.local.toml` の `[library] msp_positive` / `msp_negative`——の
-指す先が無い。設定ファイル由来でも同じコード）/ `LIBRARY_NOT_FOUND`（明示した `file_path` が無い）/
+`file_path` を指定する）/ `MSP_ENV_NOT_FOUND`（極性の設定——`lipidmix.local.toml` の
+`[library] msp_positive` / `msp_negative`——の指す先が無い。コード名は環境変数で指していた頃のまま）/ `LIBRARY_NOT_FOUND`（明示した `file_path` が無い）/
 `INVALID_ION_MODE` / `CONFIG_INVALID`（設定ファイルが読めない。`details` に `config_file`
 `line` `column`）。`details` は `MSP_ENV_NOT_FOUND` と、何も見つからなかったときに付き、
-`setting`（設定キー）`env_var` `source`（`env` / `config_file` / null）`config_file`
+`setting`（設定キー）`config_key`（`[節] 名前` の書き方）`source`（`config_file` / null）`config_file`
 `config_file_exists` `example`、あれば `unknown_keys`（打ち間違いの疑い）と `config_invalid`（設定ファイルが読めないときの理由）を持つ。
-`message` と `details` にはファイル名・設定キー・環境変数名・設定ファイルのパスだけが入り、
+`message` と `details` にはファイル名・設定キー・設定ファイルのパスだけが入り、
 ライブラリの置き場所は入らない。
 
 **`records_without_ion_mode`**: 研究室ライブラリのように極性ごとにファイルが分かれて

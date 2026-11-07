@@ -2,6 +2,7 @@ import pytest
 
 from metabolomix.curation import candidates, judge
 from metabolomix.library import store as library_store
+from tests.config_fixtures import use_config
 
 TH = judge.resolve_thresholds(None)
 SCORING = {"mz_tol": 0.01, "ms2_tol": 0.025, "mass_begin": 0.0, "mass_end": 2000.0,
@@ -36,7 +37,7 @@ Num Peaks: 1
 
 @pytest.fixture()
 def store(tmp_path, monkeypatch):
-    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     path = tmp_path / "lib.msp"
     path.write_text(MSP, encoding="utf-8")
     s = library_store.open_store(path)

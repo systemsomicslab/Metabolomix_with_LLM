@@ -6,12 +6,13 @@ from metabolomix.core import mcp_core, session_state
 from metabolomix.curation import flags, suggest
 from metabolomix.library import store as library_store
 from metabolomix.tools import curation_tools
+from tests.config_fixtures import use_config
 from tests.curation_fixtures import write_alignment_set, write_suggest_set
 
 
 @pytest.fixture()
 def ready(tmp_path, monkeypatch):
-    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     paths = write_alignment_set(tmp_path / "neg")
     monkeypatch.setattr(mcp_core, "DATA_DIR", paths["arf2"].parent)
     session_state.session.__init__()
@@ -323,7 +324,7 @@ def test_submit_is_annotated_as_destructive_because_it_rewrites_the_tags_file():
 
 @pytest.fixture()
 def suggest_env(tmp_path, monkeypatch):
-    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     paths = write_suggest_set(tmp_path / "neg")
     monkeypatch.setattr(mcp_core, "DATA_DIR", paths["arf2"].parent)
     session_state.session.__init__()

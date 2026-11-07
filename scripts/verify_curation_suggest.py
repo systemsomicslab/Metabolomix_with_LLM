@@ -9,7 +9,8 @@
    （前駆体）の向きに限り、Δm/z の関係表で名指しできた割合。リンクは相互なので、向きを限らないと
    同じ対が 2 回数えられ、断片になりえない「重い側 X」の向きも混ざる。
 非公開ヘルパ（suggest._scoring / relations._explanations）を直接呼ぶ。open_store は照合用キャッシュを
-LIPIDMIX_LIBRARY_CACHE_DIR に作る／更新することがある（.arf2 の隣には何も書かない）。
+lipidmix.local.toml の [paths] library_cache（既定は設定ファイルのフォルダの data/.library-cache）に
+作る／更新することがある（.arf2 の隣には何も書かない）。
 使い方: python scripts/verify_curation_suggest.py --arf2 <AlignmentResult_*.arf2> --library <*_Loaded.msp2.dbs>
 """
 from __future__ import annotations

@@ -23,7 +23,7 @@ _MSP = textwrap.dedent("""\
 def fresh_session(tmp_path, monkeypatch):
     monkeypatch.setattr(session_state, "session", session_state.AnalysisSession())
     monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path)   # 実物は pathlib.Path
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     (tmp_path / "lib.msp").write_text(_MSP, encoding="utf-8")
     return tmp_path
 

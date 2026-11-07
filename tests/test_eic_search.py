@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.config_fixtures import config_env
 from tests.dcl_fixture import build_dcl_bytes
 from tests.test_eic_plot import _write_css1
 
@@ -55,10 +56,9 @@ class EicSearchTests(unittest.TestCase):
         ]
 
         self._saved_data_dir = mcp_core.DATA_DIR
-        self._saved_reports = os.environ.get("LIPIDMIX_REPORTS_DIR")
         self._saved_eic = session_state.session.eic
         mcp_core.DATA_DIR = self.tmp
-        os.environ["LIPIDMIX_REPORTS_DIR"] = str(self.tmp / "fallback")
+        self.enterContext(config_env(self.tmp, {"paths.reports_dir": self.tmp / "fallback"}))
         session_state.session.eic = session_state.EicState()
         self._saved_loader = tools_eic.load_arf2_records
         tools_eic.load_arf2_records = lambda _path: self.records
@@ -70,10 +70,6 @@ class EicSearchTests(unittest.TestCase):
         tools_eic.load_arf2_records = self._saved_loader
         mcp_core.DATA_DIR = self._saved_data_dir
         session_state.session.eic = self._saved_eic
-        if self._saved_reports is None:
-            os.environ.pop("LIPIDMIX_REPORTS_DIR", None)
-        else:
-            os.environ["LIPIDMIX_REPORTS_DIR"] = self._saved_reports
         self._tmp.cleanup()
 
     def search(self, **kwargs):

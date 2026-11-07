@@ -80,8 +80,10 @@ Running MS-DIAL Console from raw data (`console_*`, `pipeline_*`) or matching ag
 `.msp` library (`library_load`) needs to know where those files live. Copy
 `lipidmix.example.toml` to `lipidmix.local.toml` next to `server.py` and fill in the paths
 (Windows paths in single quotes). The file is not tracked by git and is read on every call, so
-edits take effect without restarting the server. The environment variables `MSDIAL_EXE`,
-`MSDIAL_LBM`, `MSDIAL_MSP_POS` and `MSDIAL_MSP_NEG` still work and take precedence over the file.
+edits take effect without restarting the server. These locations are read from the file only
+(environment variables no longer override it); the lipid library (`.lbm2`) goes under
+`[library] lbm`. The same file also holds where reports and the library cache go (`[paths]`) and
+server behaviour such as the open dataset-handle limit (`[server]`).
 If something is missing, the tool's error names the file and the key to fill in.
 
 To run the parsers without an MCP client, see [docs/cli.md](docs/cli.md).

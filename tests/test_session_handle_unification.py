@@ -22,6 +22,7 @@ from metabolomix.mztab.dataset_state import DatasetState
 from metabolomix.tools import handle_tools, mztab_tools
 from tests.msdial_folder_fixtures import write_msdial_folder
 from tests.reanalysis_fixtures import NEG_FEATURES, write_mztab
+from tests.config_fixtures import use_config
 
 
 @pytest.fixture(autouse=True)
@@ -110,7 +111,7 @@ def test_library_follows_current_handle(tmp_path):
 
 
 def test_handle_limit_refuses_instead_of_evicting(monkeypatch, tmp_path):
-    monkeypatch.setenv(handles.MAX_HANDLES_ENV, "2")
+    use_config(monkeypatch, tmp_path, {"server.max_dataset_handles": 2})
     paths = [write_mztab(tmp_path / str(i) / "AlignResult-1.mzTab") for i in range(3)]
     mztab_tools.dataset_load(mztab_path=str(paths[0]))
     first = _current()
@@ -216,7 +217,7 @@ def test_library_loaded_by_interactive_call_is_usable_from_another_thread(tmp_pa
     ツール（`curation_*` / `verify_peak_annotation`）や別のワーカーが読めること
     （sqlite3 の接続は既定では開いたスレッドでしか使えない）。"""
     msp = _msp(tmp_path / "lab" / "pos.msp")
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
     loaded = json.loads(_text(asyncio.run(
         server.mcp.call_tool("library_load", {"file_path": str(msp)}))))
@@ -317,7 +318,7 @@ def test_library_load_does_not_close_the_store_under_curation_review(tmp_path, m
     from metabolomix.library import tools as library_tools
     from metabolomix.tools import curation_tools
 
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
     old = json.loads(library_tools.library_load(file_path=str(_msp(tmp_path / "a" / "old.msp"))))
     assert old["status"] == "success", old
@@ -386,7 +387,7 @@ def test_library_load_does_not_close_the_store_under_curation_review(tmp_path, m
 def test_library_loaded_before_dataset_load_moves_into_the_new_handle(tmp_path, monkeypatch):  # R19
     from metabolomix.library import tools as library_tools
 
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     loaded = json.loads(library_tools.library_load(file_path=str(_msp(tmp_path / "lab" / "pos.msp"))))
     assert loaded["status"] == "success", loaded
     store = session_state.session.library.store
@@ -402,8 +403,8 @@ def test_refused_dataset_assignment_keeps_the_library_in_the_session(tmp_path, m
     from metabolomix.core.atomic_io import DomainError
     from metabolomix.library import tools as library_tools
 
-    monkeypatch.setenv(handles.MAX_HANDLES_ENV, "1")
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"server.max_dataset_handles": 1})
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     _open(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))  # 上限を埋める（直近にならない）
     library_tools.library_load(file_path=str(_msp(tmp_path / "lab" / "pos.msp")))
     store = session_state.session.library.store
@@ -418,7 +419,7 @@ def test_closing_the_current_handle_does_not_fall_back_to_an_older_library(tmp_p
                                                                             monkeypatch):  # R19
     from metabolomix.library import tools as library_tools
 
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     library_tools.library_load(file_path=str(_msp(tmp_path / "a" / "old.msp")))
     mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
     library_tools.library_load(file_path=str(_msp(tmp_path / "b" / "new.msp", name="Betaine")))
@@ -456,7 +457,7 @@ def test_call_pinned_to_a_handle_closed_before_the_lock_does_nothing(tmp_path,
     from metabolomix.core import handle_dispatch
     from metabolomix.library import tools as library_tools
 
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "a" / "AlignResult-1.mzTab")))
     first = handles.registry.peek(_current())
     mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "b" / "AlignResult-1.mzTab")))
@@ -481,7 +482,7 @@ def test_call_pinned_to_a_handle_closed_before_the_lock_does_nothing(tmp_path,
 def test_dataset_load_refuses_at_the_limit_before_loading(monkeypatch, tmp_path):  # Minor 4
     from metabolomix.dataset import opening
 
-    monkeypatch.setenv(handles.MAX_HANDLES_ENV, "1")
+    use_config(monkeypatch, tmp_path, {"server.max_dataset_handles": 1})
     mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "a" / "AlignResult-1.mzTab")))
     calls = []
     real = opening.open_dataset

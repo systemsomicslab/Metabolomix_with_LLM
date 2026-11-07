@@ -1,11 +1,12 @@
-# ms-data-parser の外部資産の場所。
+# ms-data-parser の外部資産の場所・置き場所・サーバの振る舞い。
 #
 # このファイルを lipidmix.local.toml という名前でリポジトリ直下（server.py の隣）に
 # 複製して編集する。lipidmix.local.toml は git に追跡されない。
 #
 # - Windows のパスは単一引用符で囲む（二重引用符だと \ がエスケープとして読まれる）。
 # - 相対パスは、このファイルのあるフォルダ基準で解く。
-# - 外部資産の場所はこのファイルだけで指す（環境変数では指せない）。
+# - 外部資産の場所・置き場所・サーバの振る舞いはこのファイルだけで指す（環境変数では指せない）。
+#   別の場所の設定ファイルを読ませるときだけ、起動時の環境変数 LIPIDMIX_CONFIG でそのパスを指す。
 # - 書き換えは次のツール呼び出しから効く（MCP サーバの再起動は不要）。
 
 [msdial]
@@ -23,6 +24,7 @@ exe = 'C:\MS-DIAL\MSDIALCUI.exe'
 #   実行体と同じフォルダの .lbm2 から推定する。
 # - pipeline の library_mode="msp_then_lbm": ここだけを読む（メソッドの宣言・実行体の
 #   フォルダは見ない）。
+# ここから採った LBM は、ツールの戻り値・エラーにファイル名だけで示す（置き場所は出さない）。
 # lbm = 'D:\library\lipids.lbm2'
 
 [mslipidmapper]
@@ -38,3 +40,19 @@ exe = 'C:\MS-DIAL\MSDIALCUI.exe'
 # pathway_plot の PDF 描画に使うヘッドレス Chromium（Chrome / Edge）。任意:
 # 書かなければ Edge / Chrome の標準の置き場所から自動で探す。
 # browser = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+
+[paths]
+# 解析の記録（objective・レポート・図）の書き込み先。任意。書けば解析フォルダ配下の reports/
+# より先に試し、書き込めなければ解析フォルダ配下の reports/ へ退避する。書かなければ
+# 解析フォルダ配下の reports/ だけを使う（記録は解析フォルダ側に付いて回る）。
+# reports_dir = 'D:\analysis_records'
+# 参照ライブラリの照合用 SQLite キャッシュ。任意。書かなければこのファイルのフォルダの
+# data/.library-cache（研究室ライブラリの完全な写しなので、リポジトリに追跡させない）。
+# library_cache = 'D:\cache\library'
+
+[server]
+# 同時に開いておけるデータセットのハンドルの上限（整数。既定 8、1 未満は 1）。
+# max_dataset_handles = 8
+# 解析出力の先頭に付く意味論ダイジェストと出力形式の案内。digest（既定）か off。
+# off はローカルの操作ナビゲータ専用のデプロイ向け。ほかの値は CONFIG_INVALID。
+# caveat_mode = 'digest'

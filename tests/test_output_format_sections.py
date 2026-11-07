@@ -10,13 +10,14 @@
 を固定する。
 """
 import asyncio
-import os
+import tempfile
 import unittest
-from unittest import mock
+from pathlib import Path
 
 from metabolomix.core import mcp_core
 from metabolomix.core import session_state
 from metabolomix.tools import resources as tools_resources
+from tests.config_fixtures import config_env
 
 
 # 分割で絶対に失ってはならない意味論。トピック -> そのトピックに必ず残る語。
@@ -143,7 +144,8 @@ class SectionHintTests(unittest.TestCase):
         self.assertIn("lipidmix://docs/output-format/arf", out)
 
     def test_mode_off_disables_hint(self):
-        with mock.patch.dict(os.environ, {"LIPIDMIX_CAVEAT_MODE": "off"}):
+        with (tempfile.TemporaryDirectory() as tmp,
+              config_env(Path(tmp), {"server.caveat_mode": "off"})):
             out = session_state.session.maybe_prepend_caveat("BODY", topic="eic")
         self.assertEqual(out, "BODY")
 

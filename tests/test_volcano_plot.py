@@ -9,6 +9,7 @@ import math
 import unittest
 
 from metabolomix.plots import volcano as volcano_plot
+from tests.config_fixtures import config_env
 
 
 def _point(feature, log2fc, neg_log10_p, sig):
@@ -232,23 +233,15 @@ class TestArfPlotVolcanoTool(unittest.TestCase):
         self.assertIn("arf_differential", out["error"]["required_tools"])
 
     def test_writes_no_png(self):
-        import os
         import tempfile
         from pathlib import Path
         self.session_state.session.arf.last_differential = {
             "kind": "two_group", "a": "A", "b": "B",
             "volcano": [_point("PC 34:1", 1.8, 3.4, "up")]}
-        with tempfile.TemporaryDirectory() as tmp:
-            saved = os.environ.get("LIPIDMIX_REPORTS_DIR")
-            os.environ["LIPIDMIX_REPORTS_DIR"] = str(Path(tmp) / "reports")
-            try:
-                self.server.arf_plot_volcano()
-                self.assertEqual(list(Path(tmp).rglob("*.png")), [])
-            finally:
-                if saved is None:
-                    os.environ.pop("LIPIDMIX_REPORTS_DIR", None)
-                else:
-                    os.environ["LIPIDMIX_REPORTS_DIR"] = saved
+        with (tempfile.TemporaryDirectory() as tmp,
+              config_env(Path(tmp), {"paths.reports_dir": Path(tmp) / "reports"})):
+            self.server.arf_plot_volcano()
+            self.assertEqual(list(Path(tmp).rglob("*.png")), [])
 
     def test_fastmcp_does_not_publish_an_output_schema(self):
         """outputSchema を publish しない（structured_output=False）。

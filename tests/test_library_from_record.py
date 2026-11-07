@@ -26,7 +26,7 @@ def fresh_state(tmp_path, monkeypatch):
     session_state.session = session_state.AnalysisSession()
     handles.registry = handles.HandleRegistry()
     monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path / "datadir")
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     yield
     for handle in handles.registry.list():
         handles.registry.close(handle.handle_id)

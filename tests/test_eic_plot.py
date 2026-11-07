@@ -16,6 +16,7 @@ from metabolomix.core import mcp_core
 import server
 from metabolomix.core import session_state
 from metabolomix.eic.reader import read_eic_spot_css1, read_eic_spots_css1
+from tests.config_fixtures import config_env
 
 
 def _write_css1(path: Path, spots: list[dict]) -> None:
@@ -184,19 +185,14 @@ class EicPlotToolTests(unittest.TestCase):
             }],
         }])
         self._saved_data_dir = mcp_core.DATA_DIR
-        self._saved_reports = os.environ.get("LIPIDMIX_REPORTS_DIR")
         self._saved_plot = session_state.session.eic.last_plot
         mcp_core.DATA_DIR = self.tmp
-        os.environ["LIPIDMIX_REPORTS_DIR"] = str(self.tmp / "fallback")
+        self.enterContext(config_env(self.tmp, {"paths.reports_dir": self.tmp / "fallback"}))
         session_state.session.eic.last_plot = None
 
     def tearDown(self):
         mcp_core.DATA_DIR = self._saved_data_dir
         session_state.session.eic.last_plot = self._saved_plot
-        if self._saved_reports is None:
-            os.environ.pop("LIPIDMIX_REPORTS_DIR", None)
-        else:
-            os.environ["LIPIDMIX_REPORTS_DIR"] = self._saved_reports
         self._tmp.cleanup()
 
     def test_returns_structured_plot_data_without_writing_png(self):

@@ -10,6 +10,7 @@ from metabolomix.arf import reader as arf_reader
 from metabolomix.core import session_state
 from metabolomix.curation import flags as curation_flags
 from tests.curation_fixtures import arf2_spot_raw, arf_row, match_result, write_arf, write_arf2
+from tests.config_fixtures import use_config
 
 STEM = "AlignmentResult_2026_01_01_00_00_00"
 SAMPLES = ["blank_1", "ctrl_1", "ctrl_2", "ko_1", "ko_2", "std_1"]
@@ -231,7 +232,7 @@ def test_save_without_plot_is_missing_state():
 def test_save_writes_png_and_svg(loaded, tmp_path, monkeypatch):
     from metabolomix.arf.tools import arf_plot_group_intensity
     from metabolomix.tools.reports import save_figure
-    monkeypatch.setenv("LIPIDMIX_REPORTS_DIR", str(tmp_path / "reports"))
+    use_config(monkeypatch, tmp_path, {"paths.reports_dir": tmp_path / "reports"})
     arf_plot_group_intensity(items=["PG"], groups=["ctrl", "ko"], output="payload")
     msg = save_figure("group_intensity", "EV membrane")
     figures = tmp_path / "reports" / "figures"

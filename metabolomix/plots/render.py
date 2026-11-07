@@ -24,7 +24,7 @@ matplotlib.use("Agg")
 IMAGE = "image"
 PAYLOAD = "payload"
 
-# デプロイ単位の既定（`LIPIDMIX_CAVEAT_MODE` と同じ流儀）。チャット系クライアント
+# クライアント単位の既定（起動ごとに変わるので設定ファイルでなく環境変数）。チャット系クライアント
 # （Claude Desktop / Claude Code）は画像を表示できるので既定は image。Plotly で
 # 対話的に描く Use-LLLM 側は、MCP サーバ起動時の env に
 # `LIPIDMIX_PLOT_OUTPUT=payload` を置いて点列を受け取る。

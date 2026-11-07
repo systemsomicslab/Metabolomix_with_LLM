@@ -84,7 +84,7 @@ def library(tmp_path, monkeypatch, mztab):
     msp.parent.mkdir()
     msp.write_text(_MSP, encoding="ascii")
     use_config(monkeypatch, tmp_path, {"library.msp_positive": str(msp)})
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     run = mztab.parent
     (run / "AlignResult-1.arf2").write_bytes(b"placeholder")
     entries = [{"precursor_mz": 999.0, "rt": 9.0, "spectrum": []} for _ in range(33)]

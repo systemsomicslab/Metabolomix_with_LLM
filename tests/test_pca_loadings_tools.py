@@ -8,6 +8,7 @@ import pytest
 
 import server
 from metabolomix.core import session_state
+from tests.config_fixtures import use_config
 
 
 def _arf_plot(n_feat=4, with_loadings=True):
@@ -88,7 +89,7 @@ def test_two_sources_need_a_choice_and_bad_pcs_is_an_error():
 def test_image_and_save_figure(tmp_path, monkeypatch):
     from mcp.server.fastmcp import Image
     from metabolomix.tools.pca_loadings_tools import plot_pca_loadings
-    monkeypatch.setenv("LIPIDMIX_REPORTS_DIR", str(tmp_path / "reports"))
+    use_config(monkeypatch, tmp_path, {"paths.reports_dir": tmp_path / "reports"})
     session_state.session.arf.last_pca_plot = _arf_plot()
     out = plot_pca_loadings()
     assert isinstance(out[1], Image) and "source=arf" in out[0]
@@ -130,7 +131,7 @@ def test_multi_property_arf_pca_is_an_error():
 
 
 def test_save_figure_refuses_a_loadings_figure_from_a_replaced_pca(tmp_path, monkeypatch):
-    monkeypatch.setenv("LIPIDMIX_REPORTS_DIR", str(tmp_path / "reports"))
+    use_config(monkeypatch, tmp_path, {"paths.reports_dir": tmp_path / "reports"})
     session_state.session.arf.last_pca_plot = _arf_plot()
     _call()
     session_state.session.arf.last_pca_plot = {**_arf_plot(), "provenance": {"result_id": "arf-2", "dataset_id": "d"}}
@@ -142,7 +143,7 @@ def test_save_figure_refuses_a_loadings_figure_from_a_replaced_pca(tmp_path, mon
 
 
 def test_save_figure_refuses_a_loadings_figure_when_the_pca_is_gone(tmp_path, monkeypatch):
-    monkeypatch.setenv("LIPIDMIX_REPORTS_DIR", str(tmp_path / "reports"))
+    use_config(monkeypatch, tmp_path, {"paths.reports_dir": tmp_path / "reports"})
     session_state.session.arf.last_pca_plot = _arf_plot()
     _call()
     session_state.session.arf.last_pca_plot = None

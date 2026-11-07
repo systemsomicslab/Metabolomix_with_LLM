@@ -16,6 +16,7 @@ matplotlib.use("Agg")
 
 from metabolomix.eic.mz_backfill import backfill_missing_mz, sibling_arf2_path
 from metabolomix.eic.reader import summarize_eic_data
+from tests.config_fixtures import config_env
 
 
 def _spot(spot_id, rt, mz):
@@ -94,10 +95,9 @@ class MissingMzToolTests(unittest.TestCase):
         ]
 
         self._saved_data_dir = mcp_core.DATA_DIR
-        self._saved_reports = os.environ.get("LIPIDMIX_REPORTS_DIR")
         self._saved_eic = session_state.session.eic
         mcp_core.DATA_DIR = self.tmp
-        os.environ["LIPIDMIX_REPORTS_DIR"] = str(self.tmp / "fallback")
+        self.enterContext(config_env(self.tmp, {"paths.reports_dir": self.tmp / "fallback"}))
         session_state.session.eic = session_state.EicState()
 
         self._saved_loader = tools_eic.load_arf2_records
@@ -110,10 +110,6 @@ class MissingMzToolTests(unittest.TestCase):
         tools_eic.load_arf2_records = self._saved_loader
         mcp_core.DATA_DIR = self._saved_data_dir
         session_state.session.eic = self._saved_eic
-        if self._saved_reports is None:
-            os.environ.pop("LIPIDMIX_REPORTS_DIR", None)
-        else:
-            os.environ["LIPIDMIX_REPORTS_DIR"] = self._saved_reports
         self._tmp.cleanup()
 
     def test_plot_compounds_draws_with_arf2_mz(self):

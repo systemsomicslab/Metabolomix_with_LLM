@@ -4,6 +4,7 @@ import textwrap
 import unittest
 
 from metabolomix.msdial import peak_verification as pv
+from tests.config_fixtures import use_config
 
 
 class FormulaMassTests(unittest.TestCase):
@@ -333,7 +334,7 @@ class _FakeIonModePositive:
 
 def _open_gaba_store(tmp_path, monkeypatch):
     from metabolomix.library import store as library_store
-    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     msp_path = tmp_path / "lib.msp"
     msp_path.write_text(_MSP_GABA, encoding="utf-8")
     return library_store.open_store(msp_path)
