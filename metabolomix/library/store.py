@@ -24,7 +24,6 @@ deps: record 経由で `.dbs` / `.msp` の iter_records、mcp_core（leaf の DA
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -37,7 +36,7 @@ from typing import Iterable
 
 import msgpack
 
-from metabolomix.core import mcp_core
+from metabolomix.core import file_digest, mcp_core
 from metabolomix.core.atomic_io import atomic_write_json, read_text_stable
 from metabolomix.library import dbs as dbs_reader
 from metabolomix.library import msp as msp_reader
@@ -70,7 +69,6 @@ _INDEX = "CREATE INDEX record_mz ON record(precursor_mz);"
 #: sha256 で、この表はその計算を省く近道にすぎない（壊れていたら黙って捨てて計算し直す）。
 DIGEST_INDEX_NAME = ".library-digests.json"
 
-_HASH_CHUNK_SIZE = 1 << 20  # 1 MiB
 
 _RECORD_COLUMNS = (
     "name, precursor_mz, ion_mode, adduct, rt, formula, inchikey, "
@@ -126,14 +124,7 @@ def cache_dir() -> Path:
 
 def source_sha256(path: str | Path) -> str:
     """元ファイルの sha256 を、全体をメモリへ載せずに計算する。"""
-    digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        while True:
-            chunk = fh.read(_HASH_CHUNK_SIZE)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
+    return file_digest.sha256_of(path)
 
 
 def _store_path_for_digest(path: str | Path, digest: str, cache_dir: Path | None = None) -> Path:

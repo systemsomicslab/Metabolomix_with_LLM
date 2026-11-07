@@ -48,3 +48,15 @@ def _stop_curation_submit_server():
     module = sys.modules.get("metabolomix.curation.submit_server")
     if module is not None:
         module.reset()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_file_digest():
+    """sha256 の記憶（パス・大きさ・更新時刻がキー）をテストごとに空にする。
+
+    同じ tmp パスへ同じ大きさで素早く書き直すテストが、更新時刻の刻みの粗い環境で
+    前の中身の値を拾わないようにする。"""
+    from metabolomix.core import file_digest
+
+    file_digest.clear()
+    yield

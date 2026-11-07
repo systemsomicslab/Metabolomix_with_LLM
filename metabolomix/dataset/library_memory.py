@@ -13,7 +13,7 @@ import re
 from pathlib import Path, PureWindowsPath
 
 from metabolomix.console.method_file import LBM_KEY, MSP_KEY
-from metabolomix.handoff.schema import sha256_file
+from metabolomix.core import file_digest
 
 # 解析フォルダの `*_Loaded.<kind>.dbs` のうち LBM のもの（`.lbm2.dbs` など）。
 _LBM_DBS_RE = re.compile(r"\.lbm\d*\.dbs$", re.IGNORECASE)
@@ -35,7 +35,7 @@ def unknown_record() -> dict:
 
 def _measure(path: Path) -> str | None:
     try:
-        return sha256_file(path)
+        return file_digest.sha256_of(path)
     except OSError:
         return None
 

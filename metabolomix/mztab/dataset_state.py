@@ -4,13 +4,13 @@ session.arf の ARF 専用構造とは完全に独立している。session.data
 """
 from __future__ import annotations
 
-import hashlib
 import re
 import uuid
 from pathlib import Path
 
 import numpy as np
 
+from metabolomix.core import file_digest
 from metabolomix.mztab import identity as mztab_identity
 from metabolomix.mztab import msp_inchikey
 from metabolomix.mztab.identity import _INCHIKEY_RE, derive_inchikey
@@ -268,11 +268,7 @@ class DatasetState:
 
 
 def _sha256(path: str | Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    return file_digest.sha256_of(path)
 
 
 #: `msp_inchikey.lookup` の結果 → `inchikey_coverage["msp_lookup"]` の数のキー。

@@ -6,6 +6,7 @@ fixture はすべてこのテストが tmp に作る（研究室のライブラ�
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -696,3 +697,27 @@ def test_broken_mztab_on_the_folder_route_explains_the_way_out(tmp_path):
     err = _code(lambda: open_dataset(job_path=str(job)))
     assert err.code == "MZTAB_STRUCTURE_INVALID"
     assert "directory" in err.message and "msdial" in err.message
+
+
+def test_file_changed_during_load_is_not_cached(tmp_path, monkeypatch):
+    """読み込みの途中でファイルが変わったら、基をキャッシュしない（次は読み直す）。"""
+    from metabolomix.dataset import opening
+
+    folder = _folder(tmp_path / "gui")
+    key = f"directory:msdial_folder:peak_height:False:{folder.resolve()}"
+    real_open = opening._open
+
+    def changing_open(*args, **kwargs):
+        base = real_open(*args, **kwargs)
+        # 中身は壊さず、更新時刻だけ進める（読み込み後の読み直しが成り立つように）。
+        target = next(folder.glob("*.arf2"))
+        stat = target.stat()
+        os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+        return base
+
+    monkeypatch.setattr(opening, "_open", changing_open)
+    first = open_dataset(directory=str(folder))
+    assert handles.registry.cached_base(key) is None
+    assert any("読み込みの間に入力が変わった" in note for note in first.notes)
+    monkeypatch.setattr(opening, "_open", real_open)
+    assert open_dataset(directory=str(folder)).reused_base is False
