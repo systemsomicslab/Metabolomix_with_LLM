@@ -680,7 +680,7 @@ def dataset_feature_search(
     「どの ID でもない」条件で 0 件。`dataset_exclude` した特徴は出さない。
     並びは `sort="mz"`（既定）で m/z 昇順、`sort="intensity"` で強度の降順。強度は検出セル
     （gap-fill でない実測。除外した試料の列を除く）の値の**最大**で、ピークの高さ（データセットの
-    測定値）の最大——EIC のクロマトグラムの最大ではない。検出セルが無い特徴は最後。
+    測定値）の最大——EIC のクロマトグラムの最大ではない。検出セルが無い特徴は最後。検出の印が無いデータセットは全セルの最大で並べ、`notes` に書く。
     戻り値 `features` は TSV（`feature_id mz rt evidence name inchikey adduct n_sme ontology
     n_detected normalized msi_level`。`evidence` は `sme`/`sml`/`none`、`n_detected` は検出セルの数
     （除外した試料を除く。検出状態が無ければ空）、`normalized`（GOSLIN で標準化した名前）と
@@ -804,6 +804,9 @@ def dataset_feature_search(
                 ds, **window, max_results=max_results, sort=sort)
             if feature_ids is not None and not feature_ids:
                 notes.append("feature_ids=[] は「どの ID でもない」条件として扱った（0 件）。")
+            if sort == "intensity" and ds.detected_mask is None:
+                notes.append("このデータセットには検出の印（detected_mask）が無く gap-fill のセルを"
+                             "見分けられないので、強度順は全セル（除外した試料を除く）の最大で並べた。")
             if truncated:
                 notes.append(f"max_results={max_results} で打ち切った（ほか {truncated} 件）。"
                              "窓を狭めるか max_results を増やしてください。")

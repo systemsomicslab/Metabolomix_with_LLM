@@ -675,3 +675,17 @@ def test_sort_with_targets_is_rejected_and_bad_sort_too():
     assert parsed["error"]["code"] == "DATASET_BAD_REQUEST"
     assert _search(min_mz=100.0, sort="bogus")["error"]["code"] == "DATASET_BAD_REQUEST"
     assert "error" not in _search(targets=[_target()], sort="mz")
+
+
+def test_intensity_sort_without_detected_mask_uses_all_cells_and_notes():
+    ds = _intensity_ds()
+    ds.detected_mask = None
+    ds.feature_matrix[4, 1] = np.nan                  # NaN は無視される
+    ds.excluded_samples = {"s3": "テスト"}            # 除外した試料の列も使わない
+    parsed = _search(min_mz=100.0, sort="intensity")
+    # f3 の gap-fill 値が全セルの最大として先頭になる。f1 は s3 を除いて 5、f0=10, f2=30, f4=20
+    assert _ids(parsed) == ["f3", "f2", "f4", "f0", "f1"]
+    assert all(r["n_detected"] == "" for r in _tsv(parsed["features"]))
+    assert any("detected_mask" in n and "全セル" in n for n in parsed["notes"])
+    # mz 順には注記を足さない
+    assert not any("detected_mask" in n for n in _search(min_mz=100.0)["notes"])

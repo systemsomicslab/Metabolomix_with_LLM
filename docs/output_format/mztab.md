@@ -255,7 +255,7 @@ p / q / 平均は有効 4 桁）。
 上位 `max_results` 件を返す（`sort="mz"` で条件が無ければ `FEATURE_SEARCH_EMPTY_QUERY`。`targets` と併用すると
 `DATASET_BAD_REQUEST`）。**強度は検出セル（gap-fill でない実測。`dataset_exclude` した試料の列を除く）の値の最大**、
 つまりピークの高さ（データセットの測定値）の最大で、**EIC のクロマトグラムの最大ではない**。検出セルが無い特徴
-（検出状態の無いデータセットは全特徴）は最後に並ぶ。`dataset_exclude` した特徴は両方の並びで出さない。
+は最後に並ぶ。**検出の印（`detected_mask`）が無いデータセット**は gap-fill を見分けられないので、除外していない試料の全セル（NaN は無視）の最大で並べ、`notes` に 1 行そう書く（`n_detected` は空のまま）。`dataset_exclude` した特徴は両方の並びで出さない。
 `features` は `evidence` の後ろに `ontology`（MS-DIAL の Ontology。mzTab-M では SML 注釈にあれば）・`n_detected`
 （検出セルの数。除外した試料を数えない。検出状態が無いデータセットでは空で、0 ではない）・`normalized`（GOSLIN で
 標準化した脂質名）・`msi_level`（MSI の同定水準）を持つ。`normalized` と `msi_level` は解析フォルダのデータセット

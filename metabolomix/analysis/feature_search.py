@@ -772,21 +772,28 @@ def _detected_intensity(ds) -> tuple[np.ndarray, np.ndarray | None]:
     """特徴ごとの（検出セルの値の最大, 検出セル数）。除外した試料の列は使わない。
 
     検出セルだけを数える（gap-fill は含めない）。検出セルが 1 つも無い特徴の最大は NaN。
-    検出状態（``detected_mask``）が無いデータセットは、最大を全 NaN・検出数を None とする
-    （どのセルが実測か分からないので、強度で順位を付けない）。
+    検出状態（``detected_mask``）が無いデータセットは、gap-fill を見分けられないので
+    除外していない試料の全セルの最大（NaN は無視）を使い、検出数は None とする。
     """
     n_features = len(ds.feature_ids)
     mask = ds.detected_mask
-    if mask is None or ds.feature_matrix is None:
+    if ds.feature_matrix is None:
         return np.full(n_features, np.nan), None
     keep = np.array([name not in ds.excluded_samples for name in ds.sample_names], dtype=bool)
     values = np.asarray(ds.feature_matrix, dtype=float)[:, keep]
-    detected = np.asarray(mask, dtype=bool)[:, keep] & np.isfinite(values)
-    counts = detected.sum(axis=1)
+    finite = np.isfinite(values)
+    if mask is None:
+        # 検出の印が無い: gap-fill を見分けられないので、除外していない試料の全セルの最大
+        # （NaN は無視）。検出数は分からないので None。
+        counts = None
+        detected = finite
+    else:
+        detected = np.asarray(mask, dtype=bool)[:, keep] & finite
+        counts = detected.sum(axis=1)
     if values.shape[1] == 0:
         return np.full(n_features, np.nan), counts
     best = np.where(detected, values, -np.inf).max(axis=1)
-    return np.where(counts > 0, best, np.nan), counts
+    return np.where(np.isfinite(best), best, np.nan), counts
 
 
 def search_window(ds, *, feature_ids: list[str] | None, min_mz, max_mz, min_rt, max_rt,
