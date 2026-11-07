@@ -26,17 +26,15 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 OUTPUT_FORMAT_DIR = BASE_DIR / "docs" / "output_format"
 OUTPUT_FORMAT_SECTIONS: dict[str, str] = {
     "core": "共通オントロジー・脂質名文法・LLM必須注意（全ツール共通。最初に読む）",
-    "arf": ".arf パーサ、arf_parser、前処理・QC、差次的解析",
-    "arf2": ".arf2 パーサ、arf2_parser",
-    "pai2": ".pai2 パーサ、pai2_parser",
-    "dcl": ".dcl パーサ（デコンボリューション済み MS/MS）",
-    "eic": ".EIC.aef パーサ、EIC 検索・ランキング、描画契約",
+    "dataset": "MS-DIAL 解析フォルダ（.arf/.arf2）から読んだデータセット。特徴×試料の行・gap-fill と detected_mask・.arf2 の代表と同定の列・試料の役割・前処理と差次的解析",
+    "dcl": ".dcl（デコンボリューション済み MS/MS）と dcl_* ツール",
+    "eic": "dataset_plot の EIC の図（kind=eic / eic_compounds）。.EIC.aef の peak_top と描画契約",
     "identity": "同定信頼度・名前正規化・MSI レベル",
-    "mztab": "mzTab-M 経路（load_dataset 以降）。SME/SML の同定、特徴表、差次的エクスポートの同定列",
+    "mztab": "mzTab-M から読んだデータセット。SME/SML の同定、特徴表、差次的エクスポートの同定列",
     "library": "参照ライブラリ（.dbs/.msp）照合。スコアの意味、-1/0 の区別、意図的に写した瑕疵",
     "curation": "アラインメントのキュレーション（curation_review 等）。判定・理由コードの意味",
     "pathway": "パスウェイ投影（pathway_project / pathway_plot、MSLipidMapper 連携）",
-    "reanalysis": "再解析のハンドル・統計と行列の spec・MS/MS の合否・証拠の束（dataset_handle_* ほか）",
+    "reanalysis": "再解析のデータセットのハンドル（load_dataset / dataset_list / dataset_close）・統計と行列の spec・MS/MS の合否・証拠の束",
 }
 # 共通核。`lipidmix://docs/output-format` が返す本体。
 OUTPUT_FORMAT_DOC = OUTPUT_FORMAT_DIR / "core.md"
@@ -96,69 +94,54 @@ MCP_INSTRUCTIONS = """
 This server parses and analyzes MS-DIAL outputs — lipidomics and general
 (hydrophilic) metabolomics both.
 
-Before interpreting any output from ARF, ARF2, PAI2, DCL, or EIC/AEF parser
-tools, you MUST read the MCP resource `lipidmix://docs/output-format` (the shared
-core: row granularity, lipid-name grammar, mandatory caveats) and use it as the
-authoritative definition. Do not infer a field's meaning from its name alone. In
-particular, distinguish alignment spots from sample-level peaks, gap-filled
-values from detected peaks, PAI2 peak-level PCA from sample-level PCA, and EIC
-`peak_top` coordinates from intensity.
+Before interpreting any output from `load_dataset` / `dataset_*` / `curation_*` /
+`library_*` / `dcl_*`, you MUST read the MCP resource `lipidmix://docs/output-format`
+(the shared core: row granularity, lipid-name grammar, mandatory caveats) and use
+it as the authoritative definition. Do not infer a field's meaning from its name
+alone. In particular, distinguish a feature (alignment spot) from one sample's
+value of it, gap-filled values from detected peaks, and EIC `peak_top`
+coordinates from intensity.
 
-The per-parser field definitions are split into topic resources — read the one
+The per-topic field definitions are split into topic resources — read the one
 matching the output you are about to interpret, not the whole document:
-`lipidmix://docs/output-format/{topic}` where topic is one of `arf` (.arf,
-arf_parser, preprocessing/QC, differential), `arf2`, `pai2`, `dcl`, `eic`,
-`identity` (annotation confidence), `mztab` (everything downstream of
-`load_dataset`: SME vs SML identification, the feature table, the differential
-export's identity columns), `library` (reference-library MS/MS matching:
-what each score means, `-1` vs `0`, the deliberately ported upstream quirks),
-`curation` (alignment curation: `curation_review`'s verdict, reason-code
-table, and mandatory caveats — e.g. `UNKNOWN` is not a mismatch),
-`pathway` (MSLipidMapper pathway projection: node table and adjacent opposite
-pairs — adjacency is a drawing template, not curated reactions), or
-`reanalysis` (dataset handles for parallel reanalysis agents, the spec-driven
-matrix/statistics tools, MS/MS pass/fail rules and the claim evidence bundle).
-The ARF / ARF2 / PAI2 / DCL / EIC parser outputs carry a one-line pointer to
-their topic until you have fetched it; for `mztab`, `library`, `curation`,
-`pathway`, and `reanalysis` there is no pointer, so fetch those before
-interpreting `dataset_*`, `library_*`, `curation_*`, `pathway_*`, or the
-reanalysis tools' output.
-
-MS/MS EVIDENCE — the real spectra live in `.dcl`, not `.pai2`; PAI2's `has_msms`
-only records that an acquisition reference exists. `pai2_parser` attaches the
-sibling `.dcl` automatically, and `dcl_parser` / `dcl_find_msms` read it directly.
-When you claim identification confidence (MSI Level 2), check
-`verify_peak_annotation`'s `analytical_checks.msms.band`: `PASS` means a real
-spectrum was seen, `FLAG_ONLY` means only the flag was set — never treat the two
-as equivalent. A `not_found` from `dcl_find_msms` means no MS/MS was acquired for
-that precursor, NOT that the expected fragments are absent.
-
-ASSAY KIND — settle whether this is `lipid` (lipidomics) or `metabolite`
-(general/hydrophilic metabolomics) before interpreting any compound name. THE
-FILE FORMAT DOES NOT TELL YOU: MS-DIAL writes both into the same .arf/.mzTab.
-Until it is settled, apply neither lipid shorthand grammar nor lipid-class
-knowledge. For `metabolite`, GOSLIN/LIPID MAPS normalization and the lipid
-checks (`arf2_annotate_identities`, `verify_peak_annotation`) do not apply;
-identification rests on the candidate set (adducts, isomers, rank). Record it
-with `record_objective(assay_kind=...)`, which also switches the semantics
-digest this server prepends to parser output.
+`lipidmix://docs/output-format/{topic}` where topic is one of `dataset` (a
+dataset loaded from a MS-DIAL analysis folder: rows are feature x sample,
+gap-fill and `detected_mask`, the `.arf2` representative and its identity
+columns, sample roles, preprocessing/QC and differential), `dcl` (.dcl
+deconvoluted MS/MS), `eic` (EIC figures from `dataset_plot`), `identity`
+(annotation confidence), `mztab` (a dataset loaded from mzTab-M: SME vs SML
+identification, the feature table, the differential export's identity columns),
+`library` (reference-library MS/MS matching: what each score means, `-1` vs `0`,
+the deliberately ported upstream quirks), `curation` (alignment curation:
+`curation_review`'s verdict, reason-code table, and mandatory caveats — e.g.
+`UNKNOWN` is not a mismatch), `pathway` (MSLipidMapper pathway projection: node
+table and adjacent opposite pairs — adjacency is a drawing template, not
+curated reactions), or `reanalysis` (dataset handles for parallel reanalysis
+agents, the spec-driven matrix/statistics tools, MS/MS pass/fail rules and the
+claim evidence bundle). `load_dataset` carries a short semantics digest in its
+`caveat` field until you have fetched the core; fetch the topic before
+interpreting the matching tool's output.
 
 ENTRY POINT — first check whether MS-DIAL has already been run on the user's
 folder, then go downstream if it has, or ask before running it if it has not.
-Look before picking a tool: `list_data_files(directory=...)` lists MS-DIAL
-output in the folder, and `all_files=True` also shows raw instrument files.
+Look before picking a tool: `list_data_files(directory)` (the directory is
+required; nothing is searched on its own) lists MS-DIAL output in the folder, and
+`all_files=True` also shows raw instrument files.
 
 1. MS-DIAL HAS BEEN RUN (the folder contains MS-DIAL output: .arf/.arf2/
-   .pai2/.dcl/.EIC.aef, an mzTab-M file, a completed analysis-job.json, or a
+   .dcl/.EIC.aef, an mzTab-M file, a completed analysis-job.json, or a
    completed pipeline run). Go downstream — this is the main path, and it
    applies even when raw files sit in the same folder. Call
    `load_dataset(directory=...)` (or `mztab_path=` / `job_path=` /
-   `pipeline_path=`). It opens the dataset as a new handle that becomes the
-   current one (auto-selecting PeakProperties.arf over DriftSpots.arf) and
-   returns the counts, group and role breakdown and the library record — no
-   overview or PCA is run for you. That output (group structure, polarity) is
-   the material for the GATEWAY below. Re-run MS-DIAL on such a
-   folder only if the user explicitly asks for it.
+   `pipeline_path=`). It opens the dataset as a new handle that EVERY time
+   becomes the current one (auto-selecting PeakProperties.arf over
+   DriftSpots.arf) and returns the counts, the group and role breakdown and the
+   library record — no overview or PCA is run for you. Tools called without
+   `dataset_handle` act on that current dataset and use its files; a tool that
+   needs a file the dataset does not have says so instead of searching a data
+   folder. Look at `dataset_status` (`view=summary|samples|tags`) for the groups,
+   roles and tags before proposing a comparison. Re-run MS-DIAL on such a folder
+   only if the user explicitly asks for it.
 2. NO TRACE OF MS-DIAL (only unprocessed instrument files). Any format
    MS-DIAL itself reads qualifies: .abf .ibf .cdf .mzml .wiff .raw .d .wiff2
    .qgd .lcd .lrp .imzml. For Agilent/Bruker .d and Waters .raw, one
@@ -179,52 +162,63 @@ output in the folder, and `all_files=True` also shows raw instrument files.
 
 MIXED-DATE FOLDERS ARE FINE — a folder may contain files from several MS-DIAL
 processing runs (multiple dates/batches). This is NOT a blocker and must not be
-treated as unanalyzable: every file resolver auto-selects the LATEST batch (by the
-`AlignmentResult_<timestamp>` embedded in the filenames) across all file types
-(.arf/.arf2/.pai2/.aef). `load_dataset` reports which batch it selected. Proceed
-with analysis; only ask the user if they explicitly want an older batch.
+treated as unanalyzable: the file selection auto-selects the LATEST batch (by
+the `AlignmentResult_<timestamp>` embedded in the filenames). `load_dataset`
+reports which batch it selected and which `.arf` it did not choose. Proceed with
+analysis; only ask the user if they explicitly want an older batch.
 
-GATEWAY — before proposing any interpretation or analysis workflow:
+ASSAY KIND — settle whether this is `lipid` (lipidomics) or `metabolite`
+(general/hydrophilic metabolomics) before interpreting any compound name. THE
+FILE FORMAT DOES NOT TELL YOU: MS-DIAL writes both into the same .arf/.mzTab.
+Until it is settled, apply neither lipid shorthand grammar nor lipid-class
+knowledge. Settle it AFTER `load_dataset`, because a record needs a loaded
+dataset to know where it goes: from the groups, polarity and compound classes the
+load shows, infer the likely objective and the biological context (organism/cell
+line/treatment) and present 1-2 candidates WITH the evidence behind each — never
+a single confident statement. Only the user's confirmation settles it. Then
+record it with `record_objective(assay_kind=...)` (create it with analysis_id,
+dataset, polarity, groups, comparison and sub_questions; later calls change only
+the fields they pass, e.g. `add_subquestions`). That call also switches the
+semantics digest this server sends: the rules for the settled kind arrive once
+in its reply. For `metabolite`, GOSLIN/LIPID MAPS normalization and the lipid
+checks do not apply; identification rests on the candidate set (adducts,
+isomers, rank). Never send filename-derived terms to external services before
+the user confirms them.
 
-CONFIRM THE OBJECTIVE (mandatory). From the deterministic parser output
-   (group structure, ionization polarity, compound classes present, spot/feature
-   counts) infer the likely experimental objective. Present it to the user as
-   1-2 candidate objectives WITH the data evidence behind each guess — never a
-   single confident statement (avoid anchoring). ALSO confirm the BIOLOGICAL
-   CONTEXT (organism/cell line/treatment, e.g. "LPS-stimulated macrophages") and
-   the ASSAY KIND above: you may draft a guess from filenames, but only as a
-   suggestion to confirm — never send filename-derived terms to external
-   services before confirmation. Record it by calling
-   `record_objective(analysis_id, dataset, polarity, groups, comparison,
-   sub_questions, biological_context, inferred_objective, confirmed_objective,
-   assay_kind)` — do not hand-write the file. If a new sub-question emerges
-   mid-analysis, add it with `record_objective(analysis_id,
-   add_subquestions=[...])` (with user confirmation); the same call updates any
-   other field of an existing objective (`confirmed_objective`, `status`, ...).
+MS/MS EVIDENCE — the real spectra live in `.dcl`; the acquisition flags that
+loaded rows carry (has_msms) only record that an MS/MS acquisition reference
+exists. Read the spectrum itself with `dcl_spot_spectrum`, `dcl_diagnostic_ions`
+or `dcl_find_msms` (`dcl_*`; they read the dataset's alignment `.dcl`, and a
+per-sample `.dcl` needs `file_path`), score it against a reference library with
+`library_msms_qualify` / `library_match_feature`, and take the pass/fail numbers
+for a claim from `dataset_claim_evidence` (they return numbers and a `rule_hash`,
+never verdicts). When you claim identification confidence (MSI Level 2), rest it
+on a spectrum seen in the `.dcl` — never on the acquisition flag alone. A
+`not_found` from `dcl_find_msms` means no MS/MS was acquired for that precursor,
+NOT that the expected fragments are absent.
 
-DIFFERENTIAL ANALYSIS — before running `arf_differential`, consider `arf_preprocess`
-(normalization / QC filtering / imputation) so fold changes are not dominated by
-per-sample loading differences. Always surface the tool's caveats — group⟂batch
-confounding, small n (few replicates), and normalization status — as first-class
-findings, never bury them. `arf_differential` runs on the preprocessed matrix and
-errors clearly if `arf_preprocess` was not run.
+DIFFERENTIAL ANALYSIS — before running `dataset_differential`, run
+`dataset_preprocess` (normalization / QC filtering / imputation) so fold changes
+are not dominated by per-sample loading differences; `dataset_exclude` removes
+samples or features (reversibly) before it. Always surface the tool's caveats —
+group/batch confounding, small n (few replicates), and normalization status — as
+first-class findings, never bury them. `dataset_differential` runs on the
+preprocessed matrix and errors clearly if `dataset_preprocess` was not run.
 
 PARALLEL REANALYSIS — when several agents share this server (a reanalysis team),
 do not rely on the current dataset: `load_dataset` always makes the handle it
 opens the current one, which every call without `dataset_handle` uses, and
 `library_load` without `dataset_handle` loads into that current dataset, so the
 agents would switch it under each other. Pass the `dataset_handle` that
-`load_dataset` returned to `dataset_*`, `library_*` and the reanalysis tools
-(`dataset_list` / `dataset_close` manage the open handles); calls on different
-handles run in parallel and never touch each other. Decision numbers come from spec-driven tools
-(`dataset_analysis_run`, `dataset_claim_evidence`, `library_msms_qualify`), which
-return a `rule_hash` and give identical JSON for an identical spec — see
+`load_dataset` returned to `dataset_*`, `library_*`, `curation_*` and the
+reanalysis tools (`dataset_list` / `dataset_close` manage the open handles);
+calls on different handles run in parallel and never touch each other. Decision
+numbers come from spec-driven tools (`dataset_analysis_run`,
+`dataset_claim_evidence`, `library_msms_qualify`), which return a `rule_hash` and
+give identical JSON for an identical spec — see
 `lipidmix://docs/output-format/reanalysis`. They return numbers, never verdicts.
 `dataset_alignment_qc` finds one compound split over two alignment spots (e.g. the
 first injections drifted in RT); run it before reading results.
-
-These steps are guidance, not hard gates — but interpretation requires passing
-through this gateway, so treat them as required preamble.
 """.strip()
 
 mcp = FastMCP(

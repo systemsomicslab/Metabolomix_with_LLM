@@ -6,7 +6,7 @@
 の配列として入る。
 
 **リーダのインデックスを変える前にこの表を見る。推測で直さない。**
-関連: [../output_format/arf2.md](../output_format/arf2.md)（フィールドの意味）
+関連: [../output_format/dataset.md](../output_format/dataset.md)（フィールドの意味）
 
 ## 出典
 

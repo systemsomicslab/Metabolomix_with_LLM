@@ -46,6 +46,19 @@ def _resolve_objective_file(analysis_id: str, holder) -> Path | None:
     return None
 
 
+def _with_caveat(text: str, assay_kind: str | None) -> str:
+    """種別を渡した呼び出しの戻り値の先頭へ、確定した種別の意味論ダイジェストを（1 回だけ）前置する。
+
+    入口の `load_dataset` はたいてい種別が `unknown` のうちに走るので、確定後の規則
+    （脂質名文法か候補集合か）はここで届く。同じ種別のままなら何も付かない
+    （`session.take_caveat` の規則: リソース既読・`caveat_mode=off` でも付かない）。
+    """
+    if assay_kind is None:
+        return text
+    caveat = session_state.session.take_caveat()
+    return f"{caveat}\n\n{text}" if caveat else text
+
+
 # 目的を作る呼び出しは同じパスへ上書きするので冪等だが、既存の目的に add_subquestions を渡すと
 # 既存 Q の最大+1 で採番して追記するため、ツール全体としては冪等でない。
 @mcp.tool(annotations=ToolAnnotations(
@@ -126,8 +139,8 @@ def record_objective(
             return str(exc)
         session_state.session.set_assay_kind(assay_kind or "unknown")
         total = len(sub_questions) + len(add_subquestions or [])
-        return (f"objective を記録: {path.name}（confirmed={bool(confirmed_objective)}, "
-                f"小問{total}件）。")
+        return _with_caveat(f"objective を記録: {path.name}（confirmed={bool(confirmed_objective)}, "
+                            f"小問{total}件）。", assay_kind)
 
     updates = {name: value for name, value in (
         ("dataset", dataset), ("polarity", polarity), ("groups", groups),
@@ -148,5 +161,5 @@ def record_objective(
         session_state.session.set_assay_kind(assay_kind)
     note = ("。sub_questions は既存の目的には使わない（追記は add_subquestions）"
             if sub_questions is not None else "")
-    return (f"objective を更新: {existing.name}（更新フィールド={list(updates) or 'なし'}, "
-            f"追加小問={len(add_subquestions or [])}件）{note}")
+    return _with_caveat(f"objective を更新: {existing.name}（更新フィールド={list(updates) or 'なし'}, "
+                        f"追加小問={len(add_subquestions or [])}件）{note}", assay_kind)

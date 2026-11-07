@@ -3,12 +3,15 @@
 条件付きガードの4条件（未読時のみ / 1回のみ / リソース読了で解除 / MODE=off で無効）
 と、フラグがデータ切替（reset_analysis_state / load_data）で消えないことを検証する。
 """
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from metabolomix.core import session_state
+from metabolomix.core import handles, session_state
+from metabolomix.tools import handle_tools, objective
 from tests.config_fixtures import config_env
+from tests.reanalysis_fixtures import write_mztab
 
 
 class TestSemanticsCaveatGuard(unittest.TestCase):
@@ -125,6 +128,58 @@ class TestAssayKindDigest(unittest.TestCase):
         s.output_format_seen = True
         s.set_assay_kind("lipid")
         self.assertEqual(s.maybe_prepend_caveat("BODY-2"), "BODY-2")
+
+class TestDigestTravelsWithLoadDataset(unittest.TestCase):
+    """`load_dataset` の戻り値（JSON）の `caveat` に意味論ダイジェストが載る（B-2b Task 10）。
+
+    旧パーサが消えて `maybe_prepend_caveat` を呼ぶ口が無くなったので、入口の `load_dataset` が
+    JSON の最上位の `caveat` 文字列として運ぶ。1 回だけ・種別ごと・`caveat_mode=off` で止まる。
+    """
+
+    def setUp(self):
+        session_state.session = session_state.AnalysisSession()
+        handles.registry = handles.HandleRegistry()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.mztab = write_mztab(Path(self._tmp.name) / "AlignResult-1.mzTab")
+
+    def _load(self) -> dict:
+        return json.loads(handle_tools.load_dataset(mztab_path=str(self.mztab), library="none"))
+
+    def test_first_call_carries_the_digest_and_the_second_does_not(self):
+        first = self._load()
+        self.assertTrue(first["caveat"].startswith(session_state.SEMANTICS_CAVEAT))
+        self.assertIn("未確定", first["caveat"])        # 種別はまだ unknown
+        self.assertNotIn("caveat", self._load())
+
+    def test_mode_off_withholds_the_digest(self):
+        with config_env(Path(self._tmp.name), {"server.caveat_mode": "off"}):
+            self.assertNotIn("caveat", self._load())
+
+    def test_output_format_resource_read_withholds_the_digest(self):
+        session_state.session.output_format_seen = True
+        self.assertNotIn("caveat", self._load())
+
+    def test_settling_the_kind_emits_the_digest_once_more(self):
+        self._load()                                    # unknown 用が出る
+        out = objective.record_objective(
+            "exp-1", dataset="POS", polarity="positive", groups=["HC", "RA"],
+            comparison="HC vs RA", sub_questions=["問い"], assay_kind="lipid")
+        self.assertTrue(out.startswith(session_state.SEMANTICS_CAVEAT))
+        self.assertIn("16:0/18:1", out)                 # 脂質の規則が届く
+        self.assertIn("objective を記録", out)
+        # 同じ種別のままなら、続く入口にも更新にも付かない。
+        self.assertNotIn("caveat", self._load())
+        again = objective.record_objective("exp-1", status="active", assay_kind="lipid")
+        self.assertFalse(again.startswith(session_state.SEMANTICS_CAVEAT))
+
+    def test_record_objective_without_assay_kind_adds_no_digest(self):
+        self._load()
+        out = objective.record_objective(
+            "exp-2", dataset="POS", polarity="positive", groups=["HC", "RA"],
+            comparison="HC vs RA", sub_questions=["問い"])
+        self.assertFalse(out.startswith(session_state.SEMANTICS_CAVEAT))
+
 
 if __name__ == "__main__":
     unittest.main()

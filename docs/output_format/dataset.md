@@ -1,15 +1,48 @@
-# ARF (`.arf` / サンプル別ピーク)
+# データセット（MS-DIAL 解析フォルダから読んだ `DatasetState`）
+
+`load_dataset(directory=...)` で MS-DIAL の解析フォルダ（`.arf` / `.arf2` / `.mddata`）を読んだデータセットの
+出力定義。旧 `arf` `arf2` `pai2` トピックをここにまとめた（B-2b）。
+
+> 先に `lipidmix://docs/output-format`（共通核）を読むこと。**脂質名の文法（§2.1。脂質アッセイのときだけ当てる）**、
+> 必須注意事項（§9）はそちらで定義され、ここでは繰り返さない。
+
+## 概要
+
+- **行の粒度は 特徴×試料**。特徴＝アラインメントスポット（`MasterAlignmentID`、特徴 ID は `.arf2` の `SMF_ID` と同じ軸）。
+  1 つの特徴の名前・m/z・RT・同定は**特徴ごとに 1 つ**（全試料で共通の代表値）で、試料ごとの値は
+  強度の行列（`feature_matrix`。値は `measure` で選んだ `.arf` の欄）だけが持つ。
+- **gap-fill と検出の印**。`detected_mask`（特徴 × 試料の bool 行列）が `False` のセルは、検出された
+  ピークではなく MS-DIAL が埋めた補間値（`.arf` の `IsGapFilled` / 負の `MasterPeakID`）。検出数・存在判定・
+  検出率には `detected_mask` を使い、非ゼロかどうかで数えない。解析フォルダのデータセットでは検出の印は
+  読んだ `.arf` そのものが持つので、常に付く。
+- **`.arf2` は特徴の代表**（スポット代表カタログ）。`Name` `Ontology` `Formula` `InChIKey` `AdductType` と、
+  試料間の統計（`HeightAverage` `FillPercentage` `SignalToNoise*` など）を持つが、試料別の強度は持たない。
+  `.arf` の `Name` と食い違うことがあり、代表の注釈は `.arf2` を優先する（`feature_metadata`）。
+- **同定の標準化の列**。`.arf2` の注釈は GOSLIN で正規化され、`feature_metadata["identity"]` に
+  `normalized`（標準化した脂質名）・`msi_level`（MSI の同定水準。**`.arf2` 由来のヒューリスティックで、
+  MS/MS の有無ではない**）が入る。`dataset_feature_search` の行にも出る。意味は `identity` トピック。
+  脂質アッセイでないデータセットでは当たらない。
+- **試料の役割と群**。試料は `sample` / `qc` / `blank` の役割と群（Class ID）・バッチ・注入順を持つ
+  （`dataset_status` の `samples`）。ブランクは前処理で行列から外れ、QC は残る。QC・ブランクは 2 群比較に入らない。
+  `dataset_exclude` で除いた試料・特徴は前処理と図と強度順の検索が除く（可逆）。
+- **MS/MS の実スペクトルは `.dcl`**（`dcl` トピック）。`.arf` のセルの MS/MS の有無は取得の参照があることだけを示す。
+- **EIC**。クロマトグラムは `.EIC.aef` から `dataset_plot(kind="eic" | "eic_compounds")` が描く（`eic` トピック）。
+  `peak_top` は強度でなく頂点の座標。
+
+以下は旧トピックの本文を**逐語で**移した節。旧ツール名（`arf_*` `arf2_*` `pai2_*` `plot_pca_loadings` など）で
+書かれた箇所は、対応する新しいツール（`dataset_*`）の意味に読み替える——書き直しは後続の作業が行う。
+移した行の対応表は `.superpowers/sdd/2026-11-07-b2b-tool-surface/output-format-mapping.md`。
+
+## 旧 `arf` トピック（`.arf` / サンプル別ピーク。§3, §8.1, §10, §11）
 
 `.arf` パーサ、`arf_parser`、前処理・QC（`arf_preprocess`）、差次的解析（`arf_differential`）の出力定義。
 
-> 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項はそちらで定義され、ここでは繰り返さない。節番号は分割前の通し番号。
->
 > 対応する Key 番号表: `docs/schema/AlignmentChromPeakFeature.md`（MS-DIAL の `[Key(N)]` から抽出した一次資料）。
 > リーダーのインデックス定数を変更するときは必ずこちらを先に確認する。
 
-## 3. ARF (`metabolomix/arf/reader.py`)
+### 3. ARF (`metabolomix/arf/reader.py`)
 
-### 3.1 `deserialize()` のスポット出力
+#### 3.1 `deserialize()` のスポット出力
 
 型は `list[dict]`。**1要素は1アラインメントスポット**であり、全サンプルのピークを `AlignedPeakProperties` に保持する。
 
@@ -27,7 +60,7 @@
 | `SamplePeakTags` | dict | サンプル別 `*_tags.xml` から `FileName` と `MasterPeakID` で結合した、タグ付きピークのみの辞書 |
 | `SampleClasses` | dict | `.mddata` の `AnalysisFileBean` と `FileID`/`FileName` で結合したサンプルClass IDメタデータ |
 
-### 3.2 `extract_peak_properties()` の表/CSV
+#### 3.2 `extract_peak_properties()` の表/CSV
 
 型は `pandas.DataFrame`。**1行は「1アラインメントスポット × 1サンプル」の1ピーク**である。同じ `MasterAlignmentID` がサンプル数だけ繰り返される。
 
@@ -56,7 +89,7 @@
 | `IsGapFilled` | bool | `MasterPeakID < 0` か。`true` は実検出ではなくギャップフィルされた値 |
 | `PeakTags` | list[str] | 当該サンプルピークの `MasterPeakID` に付与されたMS-DIALタグ |
 
-### 3.3 `build_pca_matrix()` の行列
+#### 3.3 `build_pca_matrix()` の行列
 
 返り値は `(matrix, sample_names, feature_names)`。
 
@@ -68,7 +101,7 @@
 
 `property` は `_convert_to_alignment_feature()` の `height`, `area`, `area_above_baseline`, `m_z`, `rt`, `signal_to_noise` などを指定できる。欠けた値の扱いは 2 通りある。行はあるが指定プロパティの値が `None`（フィールド欠落・読めない値）のセルは **0.0** になる。ある試料の行がそのスポットに無いセルだけが欠損（NaN）になり、列平均で補完され、全試料で欠損の列は 0 となる。gap-fill（`IsGapFilled=true`）のセルは MS-DIAL の補間値をそのまま値として持つ。分散 0 の列は除外される。`min_detection_rate > 0` の場合は、非ギャップフィルサンプル率が閾値未満の列も除外される。
 
-### 3.4 `run_pca()` と Loading 出力
+#### 3.4 `run_pca()` と Loading 出力
 
 PCA 前に各列を `StandardScaler` で標準化する。`log_transform=true` の場合は値を 1 以上にクリップして `log10` 変換してから標準化する。
 
@@ -95,7 +128,7 @@ PCA 前に各列を `StandardScaler` で標準化する。`log_transform=true` �
 | `positive/negative[].m_z` | スポット代表 m/z |
 | `positive/negative[].rt` | スポット代表RT（min） |
 
-### 3.5 ARF要約
+#### 3.5 ARF要約
 
 `summarize_arf_data()` は次の辞書を返す。
 
@@ -109,7 +142,7 @@ PCA 前に各列を `StandardScaler` で標準化する。`log_transform=true` �
 | `ion_modes` | イオンモード別スポット数 |
 | `named_compounds` | `Name` が null でない件数。**空文字も数えるため、真の注釈済み件数とは限らない** |
 
-### 3.6 MS-DIALタグ
+#### 3.6 MS-DIALタグ
 
 `metabolomix/msdial/tags.py` はARFと同じディレクトリの `*_tags.xml`（互換用に拡張子なしの `*_tags` も可）を読む。サンプル別ファイルは処理時刻の12桁接尾辞を除いた名前でARFの `FileName` と対応させ、XMLの `Peak/@Id` をARF行の `MasterPeakID` と結合する。アラインメント結果用ファイルは `Peak/@Id` を `MasterAlignmentID` と結合する。
 
@@ -117,13 +150,13 @@ PCA 前に各列を `StandardScaler` で標準化する。`log_transform=true` �
 
 サンプル名は完全一致を優先し、MS-DIAL処理時刻の12桁接尾辞を除く補助照合は一意に決まる場合だけ使用する。重複・曖昧照合はエラーとなる。タグファイル未対応サンプルは既定でエラーにし、`missing_sample_policy=exclude` で除外、`untagged` で明示的にタグなし扱いへ変更できる。サンプル数は固定せず、ARFから検出した件数を使用する。
 
-### 3.7 Class ID
+#### 3.7 Class ID
 
 `metabolomix/msdial/classes.py` は `.mddata` の `MsdialDataStorageBase.Key0 AnalysisFiles` を読み、各 `AnalysisFileBean` の `AnalysisFileId`、`AnalysisFileName`、`AnalysisFileClass` を抽出する。`.mddata` は明示パス、`.mdproject` 内の参照、またはARFと同じディレクトリから解決する。
 
 ARFサンプルとの結合は `FileID` を優先し、欠損時は正規化した `FileName` を使用する。両方が異なるサンプルへ解決された場合はエラーとする。`filter_arf_by_class_ids()` は選択Class ID以外のサンプル行を各スポットから除外し、その結果を `build_pca_matrix()` に渡すことでPCAの行をClass IDで選別できる。
 
-### 8.1 `arf_parser()`
+#### 8.1 `arf_parser()`
 
 返り値はMarkdownテキスト1件（`str`）。総スポット数、適用フィルタ/手動除外の注記、Class ID分布、タグファイル対応数、タグ別件数、総サンプル別レコード数、平均サンプル数/スポット、PCA行列形状、PC1/PC2説明分散比、Loading上位、PCAスコアプロット用ブロック（群別サンプル数・描画指示・サンプル別座標の json 点列）を含む。`class_ids` を指定すると、選択したClass IDに属するサンプル行だけを残してPCAを実行する。複数Class IDはOR条件で、照合は大文字小文字を区別しない。`min_intensity`（スポット平均強度の下限）と `annotation_keyword`（脂質クラス/化合物名の部分一致）で生スポットを絞ってPCAをやり直せる（**フィルタ条件を変えたPCAのやり直しは本ツールの再呼び出しで行う**。ファイルはセッションキャッシュされ再パースは走らない）。手動除外（`arf_exclude`）も行列構築前に反映される。正規化・QC・欠損補完を経た「前処理後」行列でのPCAは `arf_preprocess` → `arf_pca_preprocessed`。`arf_list_classes()` は `.mddata` のパスとClass ID別サンプル数をJSONで返す。`arf_list_tags()` は現在のARFセッションについてタグ定義、サンプルファイル対応数、タグ付与数をJSONで返す。
 
@@ -149,15 +182,15 @@ PCAスコアプロット用ブロック（返り値の末尾。**サンプル別
 | 描画指示 | 上記座標から散布図を描く（group があれば群ごとに色分け・凡例付き）。PNG が必要なときのみ `save_figure(kind="pca")` |
 | json 点列 | `x_label` / `y_label`（説明分散率つき軸名）と `points`。各点は `pc1` / `pc2` / `sample`、群分け時は `group` |
 
-## 10. 前処理・QC（P2a）
+### 10. 前処理・QC（P2a）
 
 `metabolomix/analysis/preprocessing.py`（MCP非依存の純ロジック層）と `metabolomix/arf/tools.py` の `arf_list_sample_roles()` / `arf_preprocess()` / `arf_pca_preprocessed()` が、ARFロード後のサンプル×特徴量行列に対する前処理・QCを担う。既定では**何も適用されない（opt-in）**。生行列を消費する `arf_parser` の既定挙動は変えない。
 
-### 10.1 役割検出（sample/qc/blank）
+#### 10.1 役割検出（sample/qc/blank）
 
 `preprocessing.detect_sample_roles()` が、ファイル名と Class ID を `_` 区切りでトークン化し、大小無視で `qc`/`blank` トークンと照合してサンプルを `sample`/`qc`/`blank` に分類する（`blank` を `qc` より優先評価）。`arf_list_sample_roles()` はこの分類結果と役割別件数を、前処理適用前の確認用にJSONで返す。
 
-### 10.2 前処理レシピ（`arf_preprocess`）
+#### 10.2 前処理レシピ（`arf_preprocess`）
 
 `arf_preprocess(normalize, blank_min_fold, drift_correct, max_qc_rsd, impute, props)` が、`preprocessing.preprocess()` に処理を委譲し、以下の順で適用する。
 
@@ -172,7 +205,7 @@ PCAスコアプロット用ブロック（返り値の末尾。**サンプル別
 
 処理結果は `session.arf.feature_matrix`（前処理後行列）・`session.arf.pp_sample_names`・`session.arf.pp_feature_names`・`session.arf.sample_meta`・`session.arf.preprocessing_recipe` に保存され、以降の `arf_pca_preprocessed()` や将来の差次的解析（P2b）はこの前処理後行列を消費する。適用したレシピそのものが `session.arf.preprocessing_recipe` に記録され、`arf_pca_preprocessed()` の出力にも「前処理レシピ」として明示される。
 
-### 10.3 caveatの扱い
+#### 10.3 caveatの扱い
 
 QC/ブランク/注入順のいずれかが欠けているためにスキップされたステップは、無言で無視されるのではなく `report["caveats"]`（`arf_preprocess()` のJSON応答）に文言として残る（例:「注入順が欠落、または QC が不足のためドリフト補正は未実施。」）。LLMはこれらのcaveatを解釈結果や報告書の注意点として引用すべきである。追加で前景化される caveat:
 
@@ -183,11 +216,11 @@ QC/ブランク/注入順のいずれかが欠けているためにスキップ�
 
 なお `load_dataset` の複数バッチ告知は、解析対象である **`.arf`/`.arf2` のバッチ**にのみ基づく（`.mddata`/`.mdproject`/`.msp2`/`.pai2` 等も `AlignmentResult` 形式のタイムスタンプを持つため、拡張子で限定しないと告知バッチが実際に解析する `.arf` とズレる）。
 
-### 10.4 `arf_pca_preprocessed()`
+#### 10.4 `arf_pca_preprocessed()`
 
 前処理後行列が無い（`session.arf.feature_matrix is None`）場合はエラーメッセージ1件を返す。あれば `metabolomix/analysis/pca.py` の `run_pca` でPCAを実行し、`arf_parser` と同じ整形ヘルパー（スコアプロット用JSON、Loadings上位）を使って結果を返す。出力テキストの構造・キー意味は8.1節のスコアプロット用JSONと同一（座標点列を同梱し、散布図はそこからチャットで描く。`save_figure(kind="pca")` はPNGファイルが明示的に求められたときだけ）。生スポットの選択とは別の計算経路であり、選択を変更した場合は `arf_preprocess()` を再実行する必要がある。
 
-### 10.5 手動サンプル/ピーク除外（`arf_exclude`）
+#### 10.5 手動サンプル/ピーク除外（`arf_exclude`）
 
 PCAスコアプロットで明らかに外れた1サンプルや、特定のピーク（スポット）を**名前/IDで手動除外**するためのツール。`metabolomix/arf/exclusions.py`（MCP非依存の純ロジック層、`prune_spots()` / `roster()`）と `metabolomix/arf/tools.py` の `arf_exclude()` が担う。除外は**可逆・非破壊**で、`session.arf.filtered_features` 自体は変更しない。
 
@@ -203,11 +236,11 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 
 運用フロー: `arf_parser`（全体PCAで外れ俯瞰）→ `arf_exclude(exclude_samples=[...])` → `arf_parser` 再呼び出し または `arf_preprocess`＋`arf_pca_preprocessed` で除外後PCAを確認 → `arf_differential`。戻したいときは `mode="remove"` / `mode="clear"`。
 
-## 11. 差次的解析（P2b）
+### 11. 差次的解析（P2b）
 
 `metabolomix/analysis/differential.py`（MCP非依存の純ロジック層）と、`metabolomix/arf/tools.py` の `arf_differential()` / `metabolomix/tools/reports.py` の `save_figure()`（`kind="volcano"`）が、前処理後のサンプル×特徴量行列に対する群間比較を担う。既定挙動・既存ツールは不変で、明示呼び出し時のみ作用する。
 
-### 11.1 群ラベルの由来
+#### 11.1 群ラベルの由来
 
 群ラベルは `session.arf.sample_meta[<sample>]["group"]`（ファイル名由来の factor トークン / Class ID 機構、`metabolomix/msdial/classes.py` の `assign_sample_groups`）から取得する。バッチは同 `sample_meta` の `batch`（ファイル名中の8桁日付）。`arf_differential()` は `session.arf.feature_matrix`（前処理後行列）を消費し、無ければエラーを返す（先に `arf_preprocess()` が必要）。
 
@@ -224,7 +257,7 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 
 **QC・ブランクは比較群に入らない**。`sample_meta[...]["role"]` が `qc` / `blank` の試料は群ラベルを `None` にしてから展開するため、どちらのプールにも寄らない。QC の Class ID が指定トークンを含む場合（例 `QC_24M` と `group_a="24M"`）に黙って群平均へ混ざるのを防ぐための明示的な封鎖であり、除外内訳は caveat「比較対象から除外（生体試料でないため）」に出る。`n_a` / `n_b` は除外後の実 n。
 
-### 11.1.1 上位ヒットの命名（ARF/ARF2 橋渡し）
+#### 11.1.1 上位ヒットの命名（ARF/ARF2 橋渡し）
 
 `summary.top` の各行には `spot_id` / `name` / `name_source` が付く。`name_source="arf"` は ARF スポットの `Name`、`"arf2"` は ARF が `Unknown` のときに **同一アラインメントの兄弟 `.arf2`** から補った注釈（`ontology` も併記）。
 
@@ -232,7 +265,7 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 
 補完元はGUIの `AlignmentResult_<timestamp>` またはConsoleの `AlignResult-<digits>` の語幹が完全一致する隣接 `.arf2` に限定する（`MasterAlignmentID` はアラインメント実行ごとに振り直されるため、別バッチの `.arf2` を引くと ID 対応が黙って崩れる）。兄弟が無ければ補完せず `name=null` のままにする。
 
-### 11.2 統計
+#### 11.2 統計
 
 - **2群比較**（`group_a` と `group_b` を指定）: 特徴量ごとに Welch t 検定（等分散を仮定しない）と log2 fold change を計算する。**正=群Bで高い（上昇）**。group_a が基準（対照）、group_b が比較対象。2026-08-31 に慣習（log2FC=log2(比較対象/基準)）へ合わせて符号を反転した——それ以前の出力とは符号が逆。擬似カウントは既定 1.0。定義は `log_transform` で 2 通りある:
   - `log_transform=true`（**既定**）: 各値を `log2(max(x, 0) + 擬似カウント)` に変換して Welch 検定し、`log2fc = mean(log2 値_B) − mean(log2 値_A)`（＝ x+1 の幾何平均比の log2）。
@@ -244,7 +277,7 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 - **多重検定補正**: いずれも Benjamini-Hochberg で `p → q`（FDR）を付与（NaN は補正から除外し位置は保持）。p値は scipy があればそれで、無ければ自前の t 分布裾確率（正則化不完全ベータ関数）で計算し、どちらも正確（近似ではない）。
 - **volcano**: 2群比較のみ。各点は `feature` / `log2fc` / `neg_log10_p` / `sig`（`up`=q≤閾値かつlog2fc≥+閾値（群Bで高い＝上昇） / `down`=q≤閾値かつlog2fc≤−閾値（群Aで高い＝低下） / `ns`）。全特徴分の点列は `session.arf.last_differential["volcano"]` に保持し、`arf_plot_volcano()`（構造化点列）と `save_figure(kind="volcano")`（PNG）の両方がここから読む。**`arf_differential()` の応答 payload には全量 volcano を同梱せず**、`summary`（`n_tested`/`n_significant`/`n_up`/`n_down`＋有意上位 `top`）中心の要約と `volcano_note` のみを返す（先頭の結論が巨大配列＋文脈切り詰めで埋没し「全て ns」と誤読される退行を避けるため）。
 
-### 11.2.1 `arf_plot_volcano` の返り値（`lipidmix.volcano.v1`）
+#### 11.2.1 `arf_plot_volcano` の返り値（`lipidmix.volcano.v1`）
 
 `arf_differential`（2群）の後に呼ぶ read-only ツール。**既定（`output="image"`）では
 サーバ側で描いた PNG と件数入りの1行キャプションを返す**ので、以下の表は
@@ -275,7 +308,7 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 `selection.significant_total` を見ること（画面や `points` の点を数えてはいけない）。
 間引きは `ns` 点に対する等間隔サンプリングで決定的（同じ入力なら同じ点集合）。
 
-### 11.3 必須caveat
+#### 11.3 必須caveat
 
 `arf_differential()` の応答 `caveats` には、該当時に以下を前景化する（無言で握りつぶさない）:
 
@@ -286,7 +319,7 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 
 LLMはこれらを解釈結果・報告書の注意点として必ず引用すること。統計値は「事実」だが、交絡・小nの下での因果的解釈は保留し、人間の判断に委ねる（既存の分業に整合）。
 
-### 11.4 `arf_export_differential` — 差次的結果のエクスポート契約
+#### 11.4 `arf_export_differential` — 差次的結果のエクスポート契約
 
 `arf_preprocess` → `arf_differential`（2群）の後に呼ぶ。同一アラインメントの
 兄弟 `.arf2` から InChIKey・Ontology・m/z・RT を `MasterAlignmentID` で結合し、
@@ -309,7 +342,7 @@ mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`。
 （`.arf2` は MS/MS 取得フラグを持たない）。`arf2_annotate_identities` と同じ
 保守的なクラス上限を使う。
 
-### 11.4.9 データセットの上の同じ図（`dataset_plot`。B-2b Task 7）
+#### 11.4.9 データセットの上の同じ図（`dataset_plot`。B-2b Task 7）
 
 `dataset_plot(kind="group_intensity" | "species" | "species_pca")` が、下の §11.5〜11.7 の旧ツール
 （`arf_plot_group_intensity` `arf_plot_species` `arf_pca_species`）と**同じ payload 契約**
@@ -325,7 +358,7 @@ mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`。
 `save_figure(kind=...)` が dpi 300 の PNG と SVG を書く（試料の情報の更新後は作り直しを求められる）。
 Task 11 でこの節は `dataset` トピックへまとめ直す。
 
-### 11.5 `arf_plot_group_intensity` の返り値（`lipidmix.group_intensity.v1`）
+#### 11.5 `arf_plot_group_intensity` の返り値（`lipidmix.group_intensity.v1`）
 
 選んだクラス・分子種が、指定した試料群のそれぞれで**見つかるか・どれくらいあるか**を示す
 read-only ツール。ARF 経路のみ（読み込み済み `.arf` と、同じアラインメントの兄弟 `.arf2` が要る）。
@@ -382,7 +415,7 @@ read-only ツール。ARF 経路のみ（読み込み済み `.arf` と、同じ�
 
 除外は**解析の前提を変える**ので、図を報告に載せるときは `excluded` の件数と理由を併記すること。
 
-### 11.6 `arf_plot_species` の返り値（`lipidmix.species_intensity.v1`）
+#### 11.6 `arf_plot_species` の返り値（`lipidmix.species_intensity.v1`）
 
 選んだクラスを**分子種（アラインメントスポット）に展開**し、1 分子種 1 パネルで、群ごとの試料別の値
 （割合 % または PeakHeight）を並べる read-only ツール。ARF 経路のみ（読み込み済み `.arf` と兄弟 `.arf2` が要る）。
@@ -414,7 +447,7 @@ read-only ツール。ARF 経路のみ（読み込み済み `.arf` と、同じ�
 `share_basis` の部品が 1 つでも当たらない（名前の綴り違いなど）と分母が変わるため、図は描かずに `{"status": "error"}`
 （当たらなかった部品名入り）を返す。`items` の当たらない部品は図を描いたうえで `caveats` と説明文に書く。
 
-### 11.7 `arf_pca_species` の返り値
+#### 11.7 `arf_pca_species` の返り値
 
 選んだ分子種（`arf_plot_species` と同じ項目指定・除外）の PeakHeight 行列（試料 × 分子種）で PCA を回す read-only ツール。
 ARF 経路のみ（読み込み済み `.arf` と兄弟 `.arf2` が要る）。既定（`output="image"`）はサーバ側で描いたスコア図の PNG と
@@ -438,7 +471,7 @@ ARF 経路のみ（読み込み済み `.arf` と兄弟 `.arf2` が要る）。�
 autoscale の順。主成分の**符号は本来任意**で、`orient_by` を指定したときだけ、その群の平均スコアが正になるようにそろえる。
 `normalize="total"` は試料量の差を除いて組成を比べるときの選択で、合計が 0 の試料があると計算しない。
 
-### 11.8 `plot_pca_loadings` の返り値（`lipidmix.pca_loadings.v1`）
+#### 11.8 `plot_pca_loadings` の返り値（`lipidmix.pca_loadings.v1`）
 
 保存済みの PCA（`arf_parser` / `arf_pca_preprocessed` / `arf_pca_species` / `dataset_pca`）のローディングを、主成分ごとの
 横棒で描く read-only ツール。既定（`output="image"`）はサーバ側で描いた PNG と説明、以下は `output="payload"` の契約。
@@ -465,3 +498,177 @@ PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（
 ARF のローディング図は**単一の props の PCA** だけに対応する（`arf_parser(props=["height","area"])` のようにスポットあたり
 複数の列があると、どの列を描くか決まらないので `{"status": "error"}`。props を 1 つにして PCA をやり直す）。
 棒の色は `.arf2` の Ontology（クラス）。
+
+## 旧 `arf2` トピック（`.arf2` / スポット代表。§4, §8.2）
+
+`.arf2` パーサと `arf2_parser` の出力定義。
+
+> 対応する Key 番号表: `docs/schema/AlignmentSpotProperty.md`（MS-DIAL の `[Key(N)]` から抽出した一次資料）。
+> リーダーのインデックス定数を変更するときは必ずこちらを先に確認する。
+
+### 4. ARF2 (`metabolomix/arf2/reader.py`)
+
+#### 4.1 `deserialize()` / `extract_arf2_data()`
+
+型は `list[dict]`。**1行/1要素は1アラインメントスポットのカタログ情報**で、サンプル別強度は含まない。
+
+| 列/キー | 型 | 意味 |
+|---|---|---|
+| `MasterAlignmentID` | int | MS-DIAL のマスターアラインメントID |
+| `AlignmentID` | int | アラインメントID |
+| `RT` | float | スポット中心RT（min） |
+| `MassCenter` | float | スポット中心 m/z |
+| `IonMode` | str | `Positive`、`Negative`、`Both`、`Unknown` |
+| `Name` | str | 候補化合物名。欠落時は `Unknown`。`no MS2:` や `low score:` は注釈の確度に関する接頭辞 |
+| `HeightAverage` | float | アラインメントスポットのサンプル間平均ピーク高さ |
+| `Formula` | str | 分子式。例: `C5H10O2` |
+| `Ontology` | str | 化学/脂質クラス。例: `FA`, `PC`, `Cer_NS` |
+| `SMILES` | str | 分子構造の SMILES 表現 |
+| `InChIKey` | str | 構造同定子 InChIKey |
+| `AdductType` | str | 観測イオンの付加体。例: `[M-H]-` |
+| `HeightMin` | float | サンプル間ピーク高さの最小値 |
+| `HeightMax` | float | サンプル間ピーク高さの最大値 |
+| `PeakWidthAverage` | float | サンプル間の平均ピーク幅。LC の場合は通常 min |
+| `SignalToNoiseAve` | float | サンプル間 S/N の平均 |
+| `SignalToNoiseMax` | float | サンプル間 S/N の最大値 |
+| `SignalToNoiseMin` | float | サンプル間 S/N の最小値 |
+| `MassMin` | float | サンプル間観測 m/z の最小値 |
+| `MassMax` | float | サンプル間観測 m/z の最大値 |
+| `FillPercentage` | float | 当該スポットが値を持つサンプルの割合。**0..1 の比率**で、百分率表示には100倍する |
+| `MonoIsotopicPercentage` | float | 単同位体ピークとして扱われる割合。**0..1 の比率** |
+
+#### 4.2 `summarize_arf2_data()`
+
+| キー | 意味 |
+|---|---|
+| `total_spots` | スポット総数 |
+| `height_average_median` | 0より大きい `HeightAverage` の中央値 |
+| `height_average_max` | 0より大きい `HeightAverage` の最大値 |
+| `rt_range` | RT の `(min, max)` |
+| `mass_range` | m/z の `(min, max)` |
+| `ion_modes` | イオンモード別件数 |
+| `annotated_count` | `Name` が空、null、`Unknown` ではない件数。注釈確度は考慮しない |
+| `annotation_rate` | `annotated_count / total_spots * 100` |
+| `ontology_top` | 空でない `Ontology` の件数上位10クラス。文字列 `Unknown` も集計対象 |
+| `sn_median` | 0より大きい `SignalToNoiseAve` の中央値 |
+| `error` | データが空のときのエラーメッセージ |
+
+#### 4.3 `format_spots_as_table()`
+
+1行目が列名、2行目以降が1スポットの TSV/CSV 文字列。既定列順は上記22列の順である。浮動小数は最大4桁程度に丸め、区切り文字・改行・引用符を含むセルは二重引用符で囲む。空値は空セルになる。この丸め済み表はLLM受け渡し用であり、精密な再計算には元の辞書値を使う。
+
+#### 8.2 `arf2_parser()`
+
+返り値はMarkdownテキスト1件（`str`）。`total_spots`, `annotated_count`, `annotation_rate`, RT/m/z範囲、強度中央値、イオンモード、S/N中央値、Ontology上位を自然言語で表示する。個々の22列は返さず、セッション内部に保持する。
+
+## 旧 `pai2` トピック（`.pai2` / 単一測定ファイルのピーク。§5, §8.3）
+
+`.pai2` パーサと `pai2_parser` の出力定義。
+
+> 対応する Key 番号表: `docs/schema/ChromatogramPeakFeature.md`（MS-DIAL の `[Key(N)]` から抽出した一次資料）。
+> リーダーのインデックス定数を変更するときは必ずこちらを先に確認する。
+
+### 5. PAI2 (`metabolomix/pai2/reader.py`)
+
+#### 5.1 `deserialize()` のピーク出力
+
+型は `list[dict]`。**1要素は1測定ファイル内の1検出ピーク**である。
+
+| キー | 型 | 意味 |
+|---|---|---|
+| `time` | dict | ピーク頂点の座標。通常 `{"rt": value}` |
+| `time_left` | dict | ピーク左端の座標 |
+| `time_right` | dict | ピーク右端の座標 |
+| `peak_height` | float | ピーク頂点強度 |
+| `peak_height_left` | float | 左端の強度 |
+| `peak_height_right` | float | 右端の強度 |
+| `peak_area` | float | ピーク面積 |
+| `peak_area_above_baseline` | float | ベースラインより上のピーク面積 |
+| `m/z` | float | ピーク m/z |
+| `S/N` | float | `PeakShape[1]` 由来の S/N |
+| `id` | int | 当該 PAI2 ファイル内のピークID |
+| `ion_mode` | `IonMode` Enum | `IonMode.Positive`（値0）、`IonMode.Negative`（値1）、`IonMode.Both`（値2）。JSON化時は文字列/数値への変換が必要 |
+| `name` | str | 候補化合物名。空文字は未注釈 |
+| `formula` | str | 分子式 |
+| `ontology` | str | 化学/脂質クラス |
+| `smiles` | str | SMILES |
+| `inchikey` | str | InChIKey |
+| `adduct` | str | 付加体。例: `[M-H]-` |
+| `collision_cross_section` | float | CCS。イオンモビリティ未使用時は 0 のことがある |
+| `comment` | str | MS-DIAL由来の注釈コメント |
+| `has_msms` | bool | MS2 raw ID が非負、または collision-energy map が非空か。MS/MS取得情報の有無 |
+| `ms2_raw_id` | int | 元データの MS2 raw spectrum ID。未設定は `-1` |
+| `collision_energies` | list[float] | MS/MS取得時の衝突エネルギー一覧。負イオンモードでは `-42.0` など負値もある |
+| `msms_peak_count` | int | PAI2 内 `msms_spectrum` の要素数。通常はスペクトル本体がDCL側にあるため0 |
+| `msms_spectrum` | list[list] | PAI2自体に格納された `[fragment_mz, intensity]`。通常は空で、本体はDCL側にある |
+
+`time` 系辞書には、入力に存在する非負値だけが入る。
+
+| サブキー | 意味 |
+|---|---|
+| `rt` | retention time |
+| `ri` | retention index |
+| `m/z` | 座標表現内の m/z |
+| `dt` | drift time |
+
+#### 5.2 フィルタ
+
+`filter_features_by_params()` は元と同じピーク辞書を保持したリストを返す。
+
+| パラメータ | 意味 |
+|---|---|
+| `min_intensity` / `min_height` | `peak_height` の下限 |
+| `min_sn` | `S/N` の下限。S/Nが取得できないピークも除外 |
+
+#### 5.3 ピーク属性PCA（撤去済み）
+
+**`perform_pca_summary()` は撤去済みで、コード上に存在しない。** 以前この関数は
+`[RT, m/z, Height]` の3変数PCAと、その散布図のPNGバイト列を返していた。撤去理由:
+
+- **行がサンプルではなくピーク**だった。PAI2 は単一測定ファイルなのでサンプル間比較
+  （オミクスPCA）は原理的にできず、この3変数PCAは生物学的仮説を検定しない
+  （RT×m/z散布図の言い換えに近い）。サンプル間の多変量比較は ARF/ARF2 を使う。
+- 図をPNGとして返す設計自体も現方針（構造化データを返しクライアントが描画、PNGは
+  ユーザーの明示要求時のみ）に反していた。
+
+`pai2_parser()` が返すのは `summarize_pai2_inventory()` による在庫要約（5.5節）のみ。
+
+#### 5.4 `inspect_peak_details()`
+
+成功時は `{"status":"success", "matches":[...], "note":...}` を返す。`peak_name` は大文字小文字を無視した部分一致で、複数件返り得る。
+
+| `matches[]` キー | 意味 |
+|---|---|
+| `id` | PAI2ピークID |
+| `name` | 候補化合物名 |
+| `m/z` | ピーク m/z |
+| `rt` | ピーク頂点RT |
+| `height` | ピーク高さ |
+| `area` | ピーク面積 |
+| `signal_to_noise` | S/N |
+| `has_msms_like_fields` | キー名に `msms`、`fragment`、`spectrum` のいずれかを含むフィールドが存在するか。**実スペクトルが非空かは判定しない** |
+| `formula` | 分子式 |
+| `adduct` | 付加体 |
+| `comment` | コメント |
+
+検索条件なしは `status=error`、該当なしは `status=not_found` となる。
+
+#### 5.5 `summarize_pai2_inventory()`
+
+`pai2_parser()` が返す在庫要約。PCA を介さず、単一測定ファイルのピーク分布を素直にまとめる。
+
+| キー | 意味 |
+|---|---|
+| `total_peaks` | フィルタ後のピーク総数 |
+| `annotated_peaks` | 確定注釈とみなせるピーク数（空文字・`Unknown`・`no MS2:`・`low score:` は除外） |
+| `annotated_fraction` | `annotated_peaks / total_peaks` |
+| `ion_mode_counts` | イオンモード別件数 |
+| `mz_range` / `rt_range` | m/z・RT の `{min, max}` |
+| `height_summary` | ピーク高さの `{min, median, max}` |
+| `sn_summary` | S/N の取得割合と `{min, median, max}` |
+| `top_by_height` | 強度上位10ピーク（`id`/`name`/`m/z`/`rt`/`height`/`signal_to_noise`） |
+| `note` | PAI2は単一サンプルでオミクスPCA不能・MS/MSは`.dcl`参照、の断り書き |
+
+#### 8.3 `pai2_parser()` と関連ツール
+
+`pai2_parser()` はテキスト1件を返す（PCA・画像は返さない）。JSONは `summarize_pai2_inventory()` の在庫要約で、`total_peaks` / `annotated_peaks`（`Unknown`・`no MS2:`・`low score:` を除いた確定注釈数）/ `annotated_fraction` / `ion_mode_counts` / `mz_range` / `rt_range` / `height_summary` / `sn_summary` / `top_by_height`（強度上位10ピーク）を含む。PAI2 は単一測定ファイルのピーク一覧なので、サンプル間比較（オミクスPCA）はこの単位では行わない（複数サンプルの多変量比較は ARF/ARF2）。旧 `pai2_get_top_metabolites()` / `pai2_update_analysis_filter()`（いずれもピーク属性PCA依存）は撤去した。`pai2_inspect_peak(peak_id=None, peak_name=None)` は5.4節の辞書をJSON文字列で返す（旧名 `pai2_inspect_metabolite_details` から peak 語彙へ統一）。MS/MS は同名 `.dcl`（`dcl_index` がリスト順に対応）を参照する。

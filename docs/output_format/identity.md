@@ -1,6 +1,6 @@
 # 同定信頼度・標準化
 
-名前正規化（GOSLIN）、参照表マッピング、MSI レベル推定、`verify_peak_annotation` の材料。
+名前正規化（GOSLIN）、参照表マッピング、MSI レベル推定。
 
 > 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項はそちらで定義され、ここでは繰り返さない。節番号は分割前の通し番号。
 
@@ -14,7 +14,7 @@
 
 **MS-DIAL 限定子接頭辞の除去**: MS-DIAL は Name に信頼度の限定子（`"no MS2: "` / `"low score: "` / `"w/o MS2:"` 等）を前置し、複数候補を `|` で連結する。解析前にこれら接頭辞と `|` 以降を除去して単一の species 表記に整える（除去した場合 `stripped=True`）。この修正で正規化名の付与が増える。`"RIKEN N-VS1 ID-…"` 等の真の未同定名は接頭辞除去後も解析不能のまま（`parse_ok=False`）で正しい。
 
-**プラズマローゲン注意**: pygoslin は species レベルで `PC P-34:0` を `PC O-34:1` に**同一化**する（P-/O- エーテルの曖昧性）。P- と O- を区別したい場合は正規化名ではなく `peak_verification.ether_caveats()` の caveat（[[pe-p-vs-pe-o-annotation]] / [[plasmalogen-oxidation]] に直結）に依拠すること。
+**プラズマローゲン注意**: pygoslin は species レベルで `PC P-34:0` を `PC O-34:1` に**同一化**する（P-/O- エーテルの曖昧性）。P- と O- を区別したい場合は正規化名に頼らず、元の `Name` の表記と MS/MS の裏付け（`.dcl` のスペクトル。[[pe-p-vs-pe-o-annotation]] / [[plasmalogen-oxidation]] に直結）で読むこと。この曖昧さを注意として添えるツールは無いので、読み手が覚えておく。
 
 ### 12.2 同梱マッピング表（`load_reference_tables` / `map_to_reference`）
 
@@ -29,22 +29,29 @@
 - **Level 4**（unknown）: 名称・クラスとも無し。
 - **Level 1（標準品照合）は決して主張しない**。返り値の `heuristic=True` が示すとおり、これは決定論的推定であって同定の確定ではない。
 
-### 12.4 統合ツール
+### 12.4 MS/MS の証拠の読み方と、`.arf2` の同定の標準化
 
-- `verify_peak_annotation` のドシエに `identity_normalization` ブロック（`goslin` / `reference` / `msi` / `class_token`）を追加。既存の `analytical_checks`（精密質量誤差・アダクト整合・**MS/MS 証拠**）から算出したバンドを MSI 推定に流用する（質量・アダクトロジックの二重化を回避）。
-- **MS/MS 証拠 `analytical_checks.msms`**（`peak_verification.msms_evidence`）。`band` は3値で、実スペクトルと取得フラグを峻別する:
+旧 `verify_peak_annotation`（ピークごとの裏取りのドシエ）と `arf2_annotate_identities` は撤去した
+（B-2b）。その `analytical_checks.msms` の 3 状態は、**ツールが返す値としては残っていない**が、
+MS/MS を同定確度の根拠にするときの読み方の規則としては変わらない:
 
-  | `band` | `source` | 意味 | MSI への効き方 |
-  |---|---|---|---|
-  | `PASS` | `spectrum` | 実スペクトルあり（`.dcl` 由来）。`top_fragments` に強度上位が入る | Level 2 の根拠として有効。rationale に「実 MS/MS スペクトル確認」と明記 |
-  | `FLAG_ONLY` | `flag` | `has_msms` は立つがスペクトル本体が無い | Level 2 にはなるが **rationale で「根拠が弱い」と開示**し、`dcl_parser` / `dcl_find_msms` での確認を促す。caveat にも出る |
-  | `ABSENT` | `null` | フラグもスペクトルも無い | Level 2 に到達しない |
+| 状態 | 意味 | MSI への効き方 |
+|---|---|---|
+| 実スペクトルあり（`.dcl` 由来） | `dcl_spot_spectrum` / `dcl_find_msms` でフラグメントの強度上位を確かめられる | Level 2 の根拠として有効 |
+| フラグのみ（取得の参照はあるがスペクトル本体を読んでいない） | `.arf` のセルの MS/MS の有無（`has_msms` 系）が立つだけ | Level 2 にはなり得るが**根拠が弱い**。`.dcl` を読んで確かめる |
+| どちらも無い | MS/MS を取得していない（または未確認） | Level 2 に到達しない |
 
-  `n_peaks` は間引き前の元本数、`top_fragments` は強度降順の上位5本（`[[mz, intensity], ...]`）。`llm_decision.deterministic_summary` にも `msms=<band>` が出る。**`FLAG_ONLY` を `PASS` と同等に扱わないこと**——`.dcl` を読んでいないだけかもしれず、「MS/MS で裏が取れている」とは言えない。
+**フラグのみを実スペクトルと同等に扱わないこと**——`.dcl` を読んでいないだけかもしれず、「MS/MS で
+裏が取れている」とは言えない。参照ライブラリとの照合スコアは `library_match_feature` /
+`library_msms_qualify`、主張の合否の数値は `dataset_claim_evidence`（`library` / `reanalysis` トピック）。
 
-  `band == "PASS"` かつ参照ライブラリが読み込み済み（`library_load` 実行済み）のときは、この内側に `spectral_match` ブロックが追加で載る（参照ライブラリとの照合スコア）。3状態契約自体は変えない追加情報であり、`status` 語彙は暫定。定義は `lipidmix://docs/output-format/library` §14.8 を見ること。
-- `arf2_annotate_identities(file_path=None, max_rows=50)`: ARF2 スポットカタログの注釈を一括で正規化・ID/レベル付与し、上位 `max_rows` 件を返す。**ARF2 には MS/MS 取得フラグ・精密質量誤差が無いため MSI は保守的にクラス上限で評価**（`has_msms=False`、バンド UNKNOWN）。より確度の高い MSI 評価は個別ピークの `verify_peak_annotation` を用いること。
-  列は `MasterAlignmentID` `name` `normalized` `refmet` `lipid_maps_category` `msi_level` `curation_flag`。`curation_flag` はそのスポットに有効なキュレーションフラグ（`curation_submit` で付けた `wrong` / `suspect`。スポットごとの最新 1 行、`clear` 済みと未フラグは空）。`.arf2` の sha256 が記録時と違う（MS-DIAL を再実行した）フラグは当てない。フラグ記録（`curation/flags.jsonl`）に読めない行があるときは列を空にし、ヘッダにその旨を 1 行出す（`curation` トピック「フラグ記録が壊れているとき」）。
+`.arf2` スポットカタログの注釈は、データセットを読むときに GOSLIN で正規化され、ID と MSI レベルが付く
+（`feature_metadata["identity"]`。`dataset_feature_search` の行の `normalized` / `msi_level` 列に出る）。
+**`.arf2` には MS/MS 取得フラグ・精密質量誤差が無いため MSI は保守的にクラス上限で評価される**
+（`has_msms=False`、バンド UNKNOWN）。より確度の高い MSI の主張には `.dcl` のスペクトルと質量誤差を
+別に確かめる。キュレーションの判断（`curation_submit` で付けた `wrong` / `suspect` / `assign:<記録名>` /
+`redundant`）は `curation_flags` で読む。`.arf2` の sha256 が記録時と違う（MS-DIAL を再実行した）
+フラグは当てない。
 
 ### 12.5 アダクト/元素表の拡張（`metabolomix/msdial/peak_verification.py`）
 

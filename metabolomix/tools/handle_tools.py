@@ -193,7 +193,8 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
     ハンドルどうしの状態は別々。
 
     戻り値: `dataset_handle`・読んだアダプタ・選んだ `.arf`・ライブラリの記録（ファイル名と
-    sha256。置き場所は出さない）に、`summary`（特徴・試料の数、検出状態、同定の内訳、読み込みの
+    sha256。置き場所は出さない）に、`caveat`（意味論の要約。未読で、その種別にまだ出していないときだけ
+    先頭に載る。`assay_kind` が確定したあとの最初の 1 回は `record_objective` の戻り値が運ぶ）、`summary`（特徴・試料の数、検出状態、同定の内訳、読み込みの
     注記）、`sample_counts`（群と役割ごとの試料数）、`next`（次の一手の例）。`.arf2` の概観や
     前処理前の PCA は返さない。
     """
@@ -247,8 +248,12 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
                         "record_count": summary["record_count"]}
     detection = getattr(ds, "detected_mask", None) is not None
     notes = [*polarity_notes, *opened.notes]
+    # 意味論ダイジェスト（未読・種別ごとに 1 回・`caveat_mode=off` で止まる）。最上位の文字列として
+    # 先頭に置く——結論より前に解釈の前提が目に入るように。無ければ鍵ごと出さない。
+    caveat = session_state.session.take_caveat()
     return json_payload({
         "status": "success",
+        **({"caveat": caveat} if caveat else {}),
         # 配布先のクローンが origin/main より遅れているときだけ載せる（最新なら鍵ごと出さない）。
         **({"update_available": update} if (update := version.update_status()) else {}),
         "dataset_handle": handle.handle_id,

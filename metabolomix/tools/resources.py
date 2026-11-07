@@ -15,9 +15,9 @@ from metabolomix.core.mcp_core import mcp, OUTPUT_FORMAT_DOC
     title="MS-DIAL parser output format and ontology",
     description=(
         "Shared core of the output-format reference (row granularity, lipid-name "
-        "grammar, mandatory caveats) plus the index of per-topic sections: arf, "
-        "arf2, pai2, dcl, eic, identity, mztab, library, curation, pathway. Read before "
-        "interpreting parser or dataset results."
+        "grammar, mandatory caveats) plus the index of per-topic sections: dataset, "
+        "dcl, eic, identity, mztab, library, curation, pathway, reanalysis. Read before "
+        "interpreting dataset results."
     ),
     mime_type="text/markdown",
 )
@@ -41,8 +41,9 @@ def output_format_reference() -> str:
     name="output_format_section",
     title="Per-parser output format section",
     description=(
-        "Field-by-field reference for one parser/tool family: arf, arf2, pai2, dcl, "
-        "eic, identity, mztab (dataset_* / mzTab-M path), library (reference-library "
+        "Field-by-field reference for one tool family: dataset (a dataset loaded from "
+        "a MS-DIAL analysis folder), dcl (.dcl MS/MS), eic (EIC figures of dataset_plot), "
+        "identity, mztab (a dataset loaded from mzTab-M), library (reference-library "
         "MS/MS matching), curation (alignment curation: curation_review's verdicts "
         "and reason codes), pathway (MSLipidMapper pathway projection: node table and "
         "adjacent opposite pairs), reanalysis (dataset handles and the spec-driven "

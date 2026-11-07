@@ -9,17 +9,15 @@
 | トピック | リソース | 収録する節 | 内容 |
 |---|---|---|---|
 | `core` | `lipidmix://docs/output-format` | §1, §2, §2.1, §9 | 共通オントロジー・脂質名文法（脂質アッセイのみ）・必須注意（**常に先に読む**） |
-| `arf` | `lipidmix://docs/output-format/arf` | §3, §8.1, §10, §11 | `.arf` パーサ、`arf_parser`、前処理・QC、差次的解析 |
-| `arf2` | `lipidmix://docs/output-format/arf2` | §4, §8.2 | `.arf2` パーサ、`arf2_parser` |
-| `pai2` | `lipidmix://docs/output-format/pai2` | §5, §8.3 | `.pai2` パーサ、`pai2_parser` |
-| `dcl` | `lipidmix://docs/output-format/dcl` | §6 | `.dcl` パーサ、`dcl_parser` / `dcl_find_msms`、PAI2 への MS/MS 付与 |
-| `eic` | `lipidmix://docs/output-format/eic` | §7, §8.4, §8.5 | `.EIC.aef` パーサ、EIC 検索、描画契約 |
+| `dataset` | `lipidmix://docs/output-format/dataset` | §3, §4, §5, §8, §10, §11（旧 `arf` `arf2` `pai2` を統合） | MS-DIAL 解析フォルダから読んだデータセット。特徴×試料の行・gap-fill と `detected_mask`・`.arf2` の代表と同定の列・試料の役割・前処理と差次的解析 |
+| `dcl` | `lipidmix://docs/output-format/dcl` | §6 | `.dcl` パーサ、`dcl_find_msms` ほか `dcl_*` |
+| `eic` | `lipidmix://docs/output-format/eic` | §7, §8 | `dataset_plot` の EIC の図（`kind="eic"` / `"eic_compounds"`）。`.EIC.aef` の `peak_top` と描画契約 |
 | `identity` | `lipidmix://docs/output-format/identity` | §12 | 同定信頼度・名前正規化・MSI レベル |
-| `mztab` | `lipidmix://docs/output-format/mztab` | §13 | mzTab-M 経路（`load_dataset` 以降）。SME/SML の同定、特徴表、差次的エクスポートの同定列 |
+| `mztab` | `lipidmix://docs/output-format/mztab` | §13 | mzTab-M から読んだデータセット。SME/SML の同定、特徴表、差次的エクスポートの同定列 |
 | `library` | `lipidmix://docs/output-format/library` | §14 | 参照ライブラリ（`.dbs`/`.msp`）照合。スコアの意味、`-1`/`0` の区別、意図的に写した瑕疵 |
 | `curation` | `lipidmix://docs/output-format/curation` | — | アラインメントのキュレーション（`curation_review` 等）。判定・理由コードの意味 |
 | `pathway` | `lipidmix://docs/output-format/pathway` | — | パスウェイ投影（`pathway_project` / `pathway_plot`、MSLipidMapper 連携）。ノード表・隣接ペア・図の p 値の意味 |
-| `reanalysis` | `lipidmix://docs/output-format/reanalysis` | — | 再解析のデータセットのハンドル（`dataset_handle_*`）と、spec で呼ぶ再解析のツール（行列と統計・MS/MS の合否・証拠の束）。spec と結果の JSON の欄の意味 |
+| `reanalysis` | `lipidmix://docs/output-format/reanalysis` | — | 再解析のデータセットのハンドル（`load_dataset` / `dataset_list` / `dataset_close`）と、spec で呼ぶ再解析のツール（行列と統計・MS/MS の合否・証拠の束）。spec と結果の JSON の欄の意味 |
 
 節番号は分割前の通し番号をそのまま保持している（`curation`・`pathway`・`reanalysis` は分割後に追加したトピックなので節番号を持たない）。本文中の `§11.1.1` のような相互参照は、この表からトピックを引いて辿ること。
 
@@ -31,9 +29,9 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 
 | パーサー | 入力 | 主な実装 | トピック |
 |---|---|---|---|
-| ARF | `*_PeakProperties.arf` | `metabolomix/arf/reader.py` | `arf` |
-| ARF2 | `*.arf2` | `metabolomix/arf2/reader.py` | `arf2` |
-| PAI2 | `*.pai2` | `metabolomix/pai2/reader.py` | `pai2` |
+| ARF | `*_PeakProperties.arf` | `metabolomix/arf/reader.py` | `dataset` |
+| ARF2 | `*.arf2` | `metabolomix/arf2/reader.py` | `dataset` |
+| PAI2 | `*.pai2` | `metabolomix/pai2/reader.py` | `dataset`（読むツールは無い。個別測定のピークの定義は旧 `pai2` トピックの移し書きに残す） |
 | DCL | `*.dcl` | `metabolomix/dcl/reader.py` | `dcl` |
 | EIC/AEF | `*.EIC.aef` | `metabolomix/eic/reader.py` | `eic` |
 | mzTab-M | `*.mzTab` | `metabolomix/mztab/reader.py` | `mztab` |
@@ -105,7 +103,7 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 注意点:
 
 - **species と molecular species は別粒度**。`PC 34:1` は鎖組成を主張しない。`16:0/18:1` と `17:0/17:1` はいずれも sum 34:1 で、species 名からは判別できない。
-- **`P-` と `O-` は species レベルで曖昧**。pygoslin は `PC P-34:0` を `PC O-34:1` に同一化する（プラズマローゲンの二重結合1本 ＝ エーテル鎖の二重結合1本と解釈されるため）。P-/O- を区別したいときは正規化名ではなく `peak_verification.ether_caveats()` の caveat に依拠する（§12.1、[[pe-p-vs-pe-o-annotation]]）。
+- **`P-` と `O-` は species レベルで曖昧**。pygoslin は `PC P-34:0` を `PC O-34:1` に同一化する（プラズマローゲンの二重結合1本 ＝ エーテル鎖の二重結合1本と解釈されるため）。P-/O- を区別したいときは正規化名に頼らず、元の `Name` の表記と MS/MS の裏付け（`.dcl` のスペクトル）で読む——この区別を注意として添えるツールは無いので、読み手が覚えておく（§12.1、[[pe-p-vs-pe-o-annotation]]）。
 - **`Ontology` の空文字と文字列 `Unknown` は別扱い**（§9-2）。クラストークンが取れないものを勝手にクラス化しない。
 - 同じスポットで ARF の `Name` と ARF2 の `Name` が食い違うことがある（§11.1.1）。統合注釈は ARF2 側を優先しつつ、両者の不一致は所見として明示する。
 
@@ -117,8 +115,8 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 4. ARFの `IsGapFilled=true` は実測ピークではなく補間値である。検出率や存在判定では別扱いする。
 5. ARFの `HeightAverage` は現実装ではグループ先頭値であり、名前どおりの再計算平均ではない。統合統計にはARF2側を優先する。
 6. ARF要約の `named_compounds` は空文字も数えるため、注釈率には使わない。
-7. PAI2 の `pai2_parser()` は在庫要約のみを返し PCA は行わない（PAI2 は単一サンプルでオミクスPCA不能）。旧ピーク属性PCA系ツール（`pai2_get_top_metabolites` / `pai2_update_analysis_filter`）は撤去済み。複数サンプルの多変量比較は ARF/ARF2 を使う。
-8. PAI2の `has_msms=true` は取得参照があることを示すだけで、PAI2内 `msms_spectrum` が非空とは限らない。実スペクトルはDCLを参照する（`pai2_parser` が同名 `.dcl` から自動付与し、`dcl_parser` / `dcl_find_msms` で直接引ける）。**同定確度（MSI Level 2）を MS/MS で主張するときは、`verify_peak_annotation` の `analytical_checks.msms.band` が `PASS`（実スペクトル確認）か `FLAG_ONLY`（フラグのみ）かを必ず見る。**
+7. PAI2 は単一サンプルのピーク一覧でオミクスPCA不能（PAI2 を読むツールは撤去済み）。複数サンプルの多変量比較は、データセット（`load_dataset`）の `dataset_pca` を使う。
+8. PAI2の `has_msms=true` は取得参照があることを示すだけで、PAI2内 `msms_spectrum` が非空とは限らない。実スペクトルはDCLを参照する（`dcl_spot_spectrum` / `dcl_diagnostic_ions` / `dcl_find_msms` で引ける）。**同定確度（MSI Level 2）を MS/MS で主張するときは、`.dcl` の実スペクトルを見た上で主張する。取得のフラグ（`has_msms` など）だけでは主張しない**——フラグは取得の参照があることだけを示す。
 9. DCLの `n_msms_peaks` は元本数であり、`top_n_peaks` 適用後の配列長とは異なり得る。
 10. EICの `peak_top` は強度ではなく頂点座標である。強度は `max_intensity`、平均強度は `mean_intensity` を使う。
 11. `total_samples` はEIC全スポットにわたるサンプルエントリ総数であり、ユニークサンプル数は `len(unique_file_ids)` である。
@@ -128,16 +126,16 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 ## 状態不足の伝え方（MCP クライアント向けの契約）
 
 多くのツールは、先行するツールが作ったセッション状態に依存する。
-`arf_pca_preprocessed` は `arf_preprocess` の行列を、`arf_plot_volcano` は
-`arf_differential` の結果を必要とする。
+`dataset_pca` は `dataset_preprocess` の行列を、`dataset_plot(kind="volcano")` は
+`dataset_differential` の結果を必要とする。
 
 その状態が無いとき、ツールは本文に次の JSON を返す。
 
 ```json
 {"error": {"code":           "missing_state",
            "state":          "preprocessed_matrix",
-           "required_tools": ["arf_preprocess"],
-           "message":        "前処理後の行列がありません。先に arf_preprocess を実行してください。"}}
+           "required_tools": ["dataset_preprocess"],
+           "message":        "前処理後の行列がありません。先に dataset_preprocess を実行してください。"}}
 ```
 
 - `state` は欠けている状態の識別子。クライアントは**不透明な文字列として扱う**。

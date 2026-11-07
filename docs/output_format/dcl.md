@@ -1,10 +1,10 @@
 # DCL (`.dcl` / デコンボリューション済み MS/MS)
 
-`.dcl` パーサ、`dcl_parser` / `dcl_find_msms`、および PAI2 ピークへの MS/MS 付与の出力定義。
+`.dcl` パーサと `dcl_*` ツール（`dcl_spot_spectrum` / `dcl_diagnostic_ions` / `dcl_find_msms`）の出力定義。
 
 > 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項はそちらで定義され、ここでは繰り返さない。節番号は分割前の通し番号。
 
-> **MS/MS の所在（重要）**: 実スペクトルを持つのは `.dcl` であって `.pai2` ではない。PAI2 の `has_msms` は**取得参照の有無**を示すだけで、`msms_spectrum` が非空である保証はない（共通核 §9-8）。同定確度（MSI Level 2）は MS/MS を根拠にするため、フラグだけで確度を主張してはならない。`pai2_parser` は同名 `.dcl` を自動で読み、索引対応で PAI2 ピークへ MS/MS を付与する。
+> **MS/MS の所在（重要）**: 実スペクトルを持つのは `.dcl` であって `.pai2` ではない。PAI2 の `has_msms` は**取得参照の有無**を示すだけで、`msms_spectrum` が非空である保証はない（共通核 §9-8）。同定確度（MSI Level 2）は MS/MS を根拠にするため、フラグだけで確度を主張してはならない。`.dcl` を読むツールは `dcl_*` で、データセットのアラインメントの `.dcl`（スポットの代表スペクトル）を既定に読む。
 
 ## 6. DCL (`metabolomix/dcl/reader.py`)
 
@@ -57,28 +57,16 @@
 
 ### 6.4 MCPツール
 
-#### `dcl_parser(file_path=None, top_n_peaks=None, preview=5)`
-
-1つの `.dcl` を解析し、`summary`（§6.2 と同一キー）と `preview`（先頭 `preview` 件）を JSON で返す。`preview[]` の各要素は `dcl_index` / `precursor_mz` / `rt` / `n_msms_peaks` / `signal_to_noise` / `top_fragments`（`[[mz, intensity], ...]`）。
-
-- `top_n_peaks` の既定は **10**（全ピークは容易に数百本になり文脈を食うため）。全件が必要なときだけ `0` を渡す。
-- `n_msms_peaks` は**間引き前の元本数**であり `top_fragments` の長さとは異なり得る（共通核 §9-9）。
-- `file_path` 省略時は最新バッチの `.dcl` を自動選択する（他パーサと同じ `_select_latest_batch`）。`.dcl` は測定ファイル1つにつき1個なので、**特定サンプルの MS/MS が欲しいときは `file_path` を明示すること**。
-
-#### `dcl_find_msms(precursor_mz, file_path=None, rt=None, mz_tol=0.01, rt_tol=0.2, top_n_peaks=None)`
+#### `dcl_find_msms(precursor_mz, file_path=None, rt=None, mz_tol=0.01, rt_tol=0.2, top_n_peaks=None, dataset_handle=None)`
 
 precursor m/z（任意で RT）に一致する MS/MS を引く。アノテーションの裏取り（期待されるフラグメントが実際に出ているか）に使う。RT を渡すと同一 m/z の別溶出ピークを分離できる。該当なしは `status="not_found"` を返し、「MS/MS 未取得のピークである可能性を同定確度に反映せよ」と促す——**該当ゼロを「フラグメントが無い＝別化合物」と解釈してはならない**（そもそも MS/MS が取られていない場合と区別できない）。
 
-### 6.5 PAI2 ピークへの MS/MS 付与
+- `top_n_peaks` の既定は **10**（全ピークは容易に数百本になり文脈を食うため）。全件が必要なときだけ `0` を渡す。`n_msms_peaks` は**間引き前の元本数**であり、返るフラグメントの数とは異なり得る（共通核 §9-9）。
+- **`dataset_handle` を渡せばそのデータセットの、省けば直近のデータセットの `.dcl`（アラインメント結果の `.dcl`＝スポットの代表スペクトル）を読む**。データフォルダは探さない。データセットが無ければ `missing_state`。
+- `.dcl` は測定ファイル 1 つにつき 1 個なので、**特定サンプルの MS/MS が欲しいときは `file_path` を明示すること**（省くとアラインメントの `.dcl` を読む）。
 
-`pai2_parser` は解析時に `metabolomix/pai2/tools.py` の `_attach_sibling_msms()` を通じて同名 `.dcl` を読み、`metabolomix/dcl/reader.py` の `attach_msms_to_features()` で索引対応（`dcl_index` ↔ PAI2 のピーク順）により `msms_spectrum` / `n_msms_peaks` を書き込む。安全弁として **precursor m/z が feature の `m/z` と 0.01 を超えて食い違う場合は付与しない**（索引対応が崩れている疑いがあるため、誤った MS/MS を貼るより欠測にする）。
+`dcl_spot_spectrum` と `dcl_diagnostic_ions` も同じ `.dcl` を `dataset_handle` / 直近のデータセットから読む（引数は `USAGE.md`）。
 
-結果は `pai2_parser` の応答 `summary.msms_attachment` に出る。
+### 6.5 `.dcl` が読めないとき
 
-| キー | 意味 |
-|---|---|
-| `attached` | MS/MS を付与できたピーク数 |
-| `dcl_file` | 読んだ `.dcl` のファイル名。隣接ファイルが無ければ `null` |
-| `caveat` | `.dcl` 不在／読み込み失敗／付与0件のときの説明。`null` なら正常 |
-
-`.dcl` が無い・壊れている場合でも PAI2 の在庫要約は成立するため解析は続行する。ただし caveat が出ている状態を「MS/MS 無し」と読み替えないこと（**未確認**であって**不在**ではない）。
+`.dcl` が見つからない・壊れている場合に「MS/MS 無し」と読み替えないこと（**未確認**であって**不在**ではない）。`attach_msms_to_features()`（`metabolomix/dcl/reader.py`）は同じリスト位置の PAI2 ピークと DCL を対応付ける関数として残るが、PAI2 を読むツールは無い。その安全弁——**precursor m/z がピークの `m/z` と 0.01 を超えて食い違う場合は付与しない**（索引対応が崩れている疑いがあるため、誤った MS/MS を貼るより欠測にする）——は、対応づけを自前で行うときにも守る。

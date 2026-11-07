@@ -25,10 +25,12 @@ import threading
 
 from metabolomix.core import user_config
 
-# output-format リソースを LLM が pull していないときに、解釈直結のパーサー出力の
-# 先頭へ最大1回だけ前置する意味論ダイジェスト（自己完結・~7行）。round-trip 不要で
-# ローカルLLM でも意味が届く。全文定義は docs/output_format/（共通核 core.md ＋
-# パーサ別トピック）/ lipidmix://docs/output-format[/{topic}]。§2.1 は脂質名文法。
+# output-format リソースを LLM が pull していないときに、解釈の材料になる出力へ最大 1 回
+# （種別が確定したらもう 1 回）届ける意味論ダイジェスト（自己完結・~6 行）。入口の
+# `load_dataset` が JSON の `caveat` として運び、`record_objective(assay_kind=...)` が確定後の
+# 1 回を前置する。round-trip 不要でローカル LLM でも意味が届く。全文定義は docs/output_format/
+# （共通核 core.md ＋ トピック別）/ lipidmix://docs/output-format[/{topic}]。§2.1 は脂質名文法。
+# 行は `DatasetState` の形（特徴×試料）で語る——旧パーサ別の粒度（ARF / ARF2 / PAI2）は無い。
 #
 # **共通部（ここ）とアッセイ種別行（_ASSAY_CAVEAT_LINE）を分ける。** 脂質名文法は
 # 脂質アッセイでしか成り立たない規則で、一般代謝物の出力に当てると「PC 34:1 形式で
@@ -37,11 +39,14 @@ from metabolomix.core import user_config
 # （同じ .arf / .mzTab に両方が出る）ので、確定するまではどちらの規則も当てない。
 SEMANTICS_CAVEAT = (
     "[意味論] 解釈前に lipidmix://docs/output-format を参照。要点:\n"
-    "- 粒度: ARF行=1スポット×1サンプル / ARF2行=全サンプル統合スポット。\n"
-    "- IsGapFilled=true は補間値（実測でない）。\n"
+    "- 粒度: データセットの 1 行 = 特徴×試料（特徴＝アラインメントスポット）。"
+    "名前・m/z・RT は特徴ごとに 1 つで、試料別の値ではない。\n"
+    "- detected_mask が False のセルは gap-fill（補間値）で、実測のピークではない。"
+    "検出数・存在判定には使わない。\n"
     "- Nameの存在≠確定同定。空/Unknown/no MS2:/low score: を区別。\n"
-    "- EIC peak_top は横軸座標(RT)で強度でない。強度はmax_intensity。\n"
-    "- PAI2は単一サンプル→PCA不能。多変量比較はARF/ARF2。"
+    "- MS/MS の実スペクトルは .dcl にある。has_msms 系の印は取得の参照があるだけで、"
+    "スペクトルの裏付けではない。\n"
+    "- EIC peak_top は横軸座標(RT)で強度でない。強度は max_intensity。"
 )
 
 #: アッセイ種別。`unknown` は「まだ確定していない」であって「脂質」ではない。
@@ -381,6 +386,34 @@ class AnalysisSession:
             return text
         return self._prepend_caveat(text, topic)
 
+    def take_caveat(self) -> str | None:
+        """いま届けるべき意味論ダイジェストを返す（無ければ None）。出したことを記録する。
+
+        `maybe_prepend_caveat` と同じ規則（`caveat_mode=off` で止める・リソース既読で止める・
+        同じ種別では 1 回だけ・種別が変わったらもう 1 回）で、文字列を前置せず返すだけ。
+        JSON を返す入口（`load_dataset`）が最上位の `caveat` として載せる。設定ファイルが
+        読めないときは送出せず、既定の digest に問題の 1 行を添える。
+        """
+        try:
+            setting = user_config.get_setting("server.caveat_mode")
+        except user_config.ConfigInvalidError as exc:
+            digest = self._take_digest()
+            note = _config_problem_note(exc)
+            return f"{digest}\n\n{note}" if digest else note
+        if setting is not None and setting.value == "off":
+            return None
+        return self._take_digest()
+
+    def _take_digest(self) -> str | None:
+        """ダイジェスト本体。出す条件を満たせば記録して返し、満たさなければ None。"""
+        if self.output_format_seen:
+            return None
+        if self.caveat_emitted and self.caveat_emitted_kind == self.assay_kind:
+            return None
+        self.caveat_emitted = True
+        self.caveat_emitted_kind = self.assay_kind
+        return assay_digest(self.assay_kind)
+
     def _prepend_caveat(self, text: str, topic: str | None) -> str:
         """caveat_mode=digest のときの本体（`maybe_prepend_caveat` を参照）。"""
         out = text
@@ -388,13 +421,8 @@ class AnalysisSession:
             hint = self.section_hint(topic)
             if hint:
                 out = f"{out}\n\n{hint}"
-        if self.output_format_seen:
-            return out
-        if self.caveat_emitted and self.caveat_emitted_kind == self.assay_kind:
-            return out
-        self.caveat_emitted = True
-        self.caveat_emitted_kind = self.assay_kind
-        return f"{assay_digest(self.assay_kind)}\n\n{out}"
+        digest = self._take_digest()
+        return f"{digest}\n\n{out}" if digest else out
 
 
 def _config_problem_note(exc: "user_config.ConfigInvalidError") -> str:
