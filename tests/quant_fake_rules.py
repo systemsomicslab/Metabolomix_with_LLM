@@ -185,26 +185,50 @@ def match_samples(names_by_mode, mapping_rows=None):
     return {{"rule": rule, "ids_by_mode": ids, "mismatched": mismatched, "rows_by_mode": rows}}
 
 
+def _exclusion_reason(name, comment, msms_assigned):
+    """Mirrors msdial_rules.selection.exclusion_reason (same order and reason names)."""
+    if name.strip() == "Unknown":
+        return "name_unknown"
+    if "w/o" in name:
+        return "name_without_ms2"
+    if "RIKEN" in name:
+        return "name_riken"
+    if "(d" in name:
+        return "name_deuterated"
+    if "low score" in name.casefold():
+        return "name_low_score"
+    if comment.strip().startswith("x"):
+        return "comment_excluded"
+    if msms_assigned.strip().casefold() == "false":
+        return "msms_not_assigned"
+    return None
+
+
 def select(features, adduct_text):
+    """Mirrors msdial_rules.selection.select_feature: internal standard, then name /
+    comment / MS-MS exclusions, then the adduct table (None = filter_disabled)."""
     chosen = None
     if adduct_text is not None:
-        chosen = {{}}
+        chosen = set()
         for r in csv.DictReader(io.StringIO(adduct_text)):
-            chosen[(r["Class"], r["Adduct"], r["Ion mode"])] = r["IsSelected"].strip().lower() == "true"
+            if r["IsSelected"].strip().lower() == "true":
+                chosen.add((_canon(r["Class"].strip()), r["Adduct"].strip(),
+                            r["Ion mode"].strip().lower()))
     out = []
     for f in features:
+        reason = _exclusion_reason(f["name"], f["comment"], f["msms_assigned"])
         if f["role"] == "internal_standard":
-            action, reason = "exclude", "internal_standard"
-        elif f["name"] == "Unknown":
-            action, reason = "exclude", "unknown"
+            action, reason = "excluded", "internal_standard"
+        elif reason:
+            action = "excluded"
         elif chosen is None:
-            action, reason = "keep", "no_adduct_table"
+            action, reason = "retained", "filter_disabled"
+        elif (_canon(f["ontology"]), f["adduct"], f["mode"]) in chosen:
+            action, reason = "retained", "reference_selected"
         else:
-            hit = chosen.get((f["ontology"], f["adduct"], f["mode"]))
-            action, reason = (("keep", "selected") if hit else
-                              ("exclude", "not_selected" if hit is False else "not_in_table"))
+            action, reason = "excluded", "reference_not_selected"
         out.append({{"feature_id": f["feature_id"], "action": action, "reason": reason,
-                    "original_class": f["ontology"], "canonical_class": f["ontology"],
+                    "original_class": f["ontology"], "canonical_class": _canon(f["ontology"]),
                     "adduct": f["adduct"], "mode": f["mode"],
                     "class_rule_version": RULES_VERSION}})
     return out

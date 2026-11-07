@@ -12,11 +12,13 @@ from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import missing_state
 from metabolomix.quant import merge, normalize
+from metabolomix.quant import select as select_mod
 from metabolomix.quant.inputs import quant_error, reference_input
 from metabolomix.quant.table import resolve_quant_polarity
 from metabolomix.tools._holder import resolve_holder
 
-__all__ = ["dataset_quant_preview", "dataset_quant_apply", "dataset_merge_polarities"]
+__all__ = ["dataset_quant_preview", "dataset_quant_apply", "dataset_merge_polarities",
+           "dataset_select_features"]
 
 
 def _context(dataset_handle, polarity):
@@ -134,3 +136,30 @@ def dataset_merge_polarities(positive_handle: str, negative_handle: str,
     if isinstance(neg, str):
         return neg
     return merge.merge_tool(pos, neg, mapping_csv, record_folder)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                      idempotentHint=False),
+          structured_output=False)
+def dataset_select_features(skip_adduct_filter: bool = False, apply_curation: bool = True,
+                            polarity: str | None = None,
+                            dataset_handle: str | None = None) -> str:
+    """付加体の採用表と除外規則で特徴を選別し、残る行だけの新しいハンドルを作る（元は変えない）。
+
+    順序: キュレーション（apply_curation=True のとき。wrong / redundant は除外、assign は名前・
+    クラスの差し替え）→ 内部標準（正規化した記録の内部標準。正規化していなければ内部標準は
+    除かない）→ 名前・コメント・MS/MS の除外 → 付加体の採用表（lipidmix.local.toml の
+    [quant] adducts）。採用表が未設定なら needs_input（設定するか skip_adduct_filter=True で
+    付加体の選別だけ飛ばす）。統合前のデータセットにも使える（mode はそのデータセットの極性。
+    決まらなければ polarity が必須。統合後は各特徴の出自の極性）。
+    全判断は解析フォルダの reports/quant/<record_id>.audit.json に書き、戻り値は理由ごとの
+    件数と例 5 件・record_id・採用表の sha256 とファイル名だけ。規則プラグイン（[quant] rules）が要る。
+    dataset_handle: ハンドルのデータセット。省略時は直近のデータセット。
+    """
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    parent = dataset_handle or getattr(session_state.session, "current_handle_id", None)
+    return select_mod.select_tool(holder, parent_handle_id=parent,
+                                  skip_adduct_filter=skip_adduct_filter,
+                                  apply_curation=apply_curation, polarity=polarity)

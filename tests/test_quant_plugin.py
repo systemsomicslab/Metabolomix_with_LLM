@@ -27,7 +27,7 @@ def _feat(i, name, cls, heights, detected=None):
 
 def _sel(fid, name, role="target"):
     return {"feature_id": fid, "name": name, "comment": "", "msms_assigned": "True",
-            "ontology": "PC", "adduct": "[M+H]+", "mode": "Positive", "role": role}
+            "ontology": "PC", "adduct": "[M+H]+", "mode": "positive", "role": role}
 
 
 def test_rules_unconfigured():
@@ -148,7 +148,7 @@ def test_fake_match_and_select(tmp_path, monkeypatch):
     sel = plugin.call(p, "select", adduct_text=ADDUCTS,
                       features=[_sel("a", "PC 34:1"), _sel("b", "Unknown"),
                                 _sel("c", "IS-A", "internal_standard")])
-    assert [s["action"] for s in sel] == ["keep", "exclude", "exclude"]
+    assert [s["action"] for s in sel] == ["retained", "excluded", "excluded"]
 
 
 def test_fake_match_samples_with_mapping(tmp_path, monkeypatch):

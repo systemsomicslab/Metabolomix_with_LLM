@@ -16,6 +16,7 @@ from metabolomix.core.atomic_io import DomainError, read_text_stable
 
 RECORD_SCHEMA = "lipidmix.quant-record.v1"
 STEPS = ("normalize", "merge", "select")
+AUDIT_SUFFIX = ".audit.json"
 
 
 def record_dir(folder: Path) -> Path:
@@ -79,6 +80,15 @@ def write_record(
     return record
 
 
+def write_audit(folder: Path, record_id: str, payload: dict) -> Path:
+    """記録の横の `<record_id>.audit.json`（上書きしない。`read_records` は記録として読まない）。"""
+    target = record_dir(folder)
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"{record_id}{AUDIT_SUFFIX}"
+    _create_exclusive(path, payload)
+    return path
+
+
 def read_records(folder: Path) -> tuple[list[dict], list[str]]:
     """(作った順の記録, 除いたファイルを挙げる警告)。schema 違い・読めないものは除く。"""
     directory = record_dir(folder)
@@ -87,6 +97,8 @@ def read_records(folder: Path) -> tuple[list[dict], list[str]]:
     found: list[dict] = []
     warnings: list[str] = []
     for path in sorted(directory.glob("*.json")):
+        if path.name.endswith(AUDIT_SUFFIX):  # 記録の横の audit（記録ではない）
+            continue
         try:
             data = json.loads(read_text_stable(path))
         except (OSError, ValueError) as exc:
