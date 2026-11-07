@@ -1,4 +1,4 @@
-# USAGE — ms-data-parser MCP ツール一覧(全91ツール)
+# USAGE — ms-data-parser MCP ツール一覧(全95ツール)
 
 MS-DIAL 出力(`.arf` / `.arf2` / `.pai2` / `.dcl` / `.EIC.aef`)と mzTab-M を解析し、PCA・差次的解析・
 アノテーション検証・文献探索・レポート記録までを行う MCP サーバーのツール群です。
@@ -313,11 +313,16 @@ run ディレクトリの `remote-job.json`。サーバは版を返さないの�
 | `dataset_mass_accuracy` | SME の質量誤差(ppm)の分布を m/z 帯ごとに返す(n・中央値・四分位・5/10 ppm 以内の割合)。許容幅は決めない。`subset="msms_matched"` で MS/MS が照合された同定に絞れ、試料ごとの誤差と注入順の Spearman 相関(`injection_trend`)も返す。 |
 | `dataset_novel_candidates` | 新しい知見の候補の一覧: SME・m/z 帯ごとの許容幅・q の閾値で絞り、除く対象を外す。統計は 2 群比較の result_id か analysis-spec の解析から。割れたアライメントスポットの組は 1 候補(`merged_from`、同定と質量誤差は SME を持つ方 `sme_feature_id`)に数え、統計はまとめた行列で検定し直した値(`statistics.merge_split`、既定 true)。 spec の `labels`(外部の印の TSV)で行に `labels.<name>` の列と水準ごとの件数を足す(並び・件数・除外・`rule_hash` は変えない)。spec の `ppm_offset`(`{default, bands:[{max_mz, offset}]}`)で質量の窓の中心をずらせる(幅と行の `ppm` 列は変えず、渡したときだけ `rule_hash` に入る)。 |
 | `dataset_alignment_qc` | 1 つの物質が 2 つ以上のアライメントスポットに割れた組を探す(alignment-qc.v1)。同じ付加体・\|Δm/z\| ≤ 15 ppm・0.05 < ΔRT ≤ 1.0 分で、試料ごとの受け持ち(検出状態があれば検出、無ければ値の大きい方)が補い合う組。型は `injection_block`(片方が注入順の連続した塊)・`group_aligned`(受け持ちが群と一致。まとめない)・`interleaved`。`mergeable` は統計の側が試料ごとに大きい方の値で 1 つにまとめてよい組(注釈が両立する `injection_block` と ΔRT ≤ 0.15 分の `interleaved`。まとめるのはそのうち互いに |ΔRT| が最も近い相手どうしの 2 スポットだけ)。注入順は実験情報シート、無ければファイル名の順。全体は `output_path` に JSON、戻り値は要約。 |
+| `dataset_quant_preview` | 定量(1/4)。内部標準の参照表 CSV(`reference_path`。毎回指定)で、データセットに現れたクラスをどの内部標準・係数で割るかを確かめる(値は作らない・読み取り専用)。内部標準の候補が複数・無いものは `unresolved` に並べ `status="needs_input"`、`bindings`(`{内部標準名: 特徴 ID}`)で選んで再実行。濃度から係数を作るなら `concentrations`・`solvent_volume`・`cells_millions`(`method`・`unit`)。極性が決まらないデータセットは `polarity` 必須。戻り値は参照表の sha256・単位・ファイル名の末尾だけ。**規則プラグイン(`[quant] rules`)が要る**(未設定は `quant_rules_unavailable`。[docs/quant-rules-plugin.md](docs/quant-rules-plugin.md))。欄の意味は `lipidmix://docs/output-format/quant`。 |
+| `dataset_quant_apply` | 定量(2/4)。preview と同じ引数で内部標準により正規化し、**新しいハンドル**の派生データセットを作る(元は変えない)。未解決なら何もせず preview と同じ `needs_input`。成功なら解析フォルダの `reports/quant/` に記録を書き、`dataset_handle`・`status_counts`・`unit`・`record_id` を返す。gap-fill のセルも値を計算し `detected_mask` で印を引き継ぐ。内部標準が 0・負・欠測の試料は欠測にして理由を数える。正規化済みには掛けない。`skip=True` は値を変えず「飛ばした」記録と派生を作る(`reference_path` 不要)。 |
+| `dataset_merge_polarities` | 定量(3/4)。陽・陰イオンのハンドル(`positive_handle` / `negative_handle`。どちらも `dataset_quant_apply` 済みで normalized・method・unit が同じ)を 1 つに統合し新しいハンドルを作る。特徴 ID は `positive:<id>` / `negative:<id>`。試料は名前で照合し、食い違えば `needs_input`(`only_in`)で止まり、`mapping_csv`(列: mode, source_sample, sample_id, group, sample_type)で対応づけて再実行。記録の置き場が決まらなければ `record_folder` を求める。 |
+| `dataset_select_features` | 定量(4/4)。キュレーション(`apply_curation`)→内部標準→名前・コメント・MS/MS の除外→付加体の採用表(`[quant] adducts`)の順で特徴を選別し、残る行だけの新しいハンドルを作る。採用表が未設定なら `needs_input`(設定するか `skip_adduct_filter=True`)。全判断は `reports/quant/<record_id>.audit.json`、戻り値は理由ごとの件数と例 5 件・`record_id`・採用表の sha256 とファイル名だけ。統合前後どちらにも使える(極性が決まらなければ `polarity`)。 |
 
 次の既存ツールは省略可能な引数 `dataset_handle` を受ける(省略時は対話のセッションの直近のハンドル):
 `dataset_status` `dataset_preprocess` `dataset_pca` `dataset_differential`
 `dataset_export_differential` `dataset_export_evidence_bundle` `dataset_set_sample_metadata`
-`dataset_statistic` `dataset_build_matrix` `dataset_feature_search` `library_load`
+`dataset_statistic` `dataset_build_matrix` `dataset_feature_search` `dataset_quant_preview`
+`dataset_quant_apply` `dataset_select_features` `library_load`
 `library_match_feature` `library_plot_mirror`。開いていないハンドルは `DATASET_HANDLE_NOT_FOUND`
 で、対話のセッションへは落ちない。
 

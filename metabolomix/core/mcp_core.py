@@ -41,6 +41,7 @@ OUTPUT_FORMAT_SECTIONS: dict[str, str] = {
     "curation": "アラインメントのキュレーション（curation_review 等）。判定・理由コードの意味",
     "pathway": "パスウェイ投影（pathway_project / pathway_plot、MSLipidMapper 連携）",
     "reanalysis": "再解析のハンドル・統計と行列の spec・MS/MS の合否・証拠の束（dataset_handle_* ほか）",
+    "quant": "定量（dataset_quant_* / dataset_merge_polarities / dataset_select_features）。gap-fill の印・単位・needs_input・記録",
 }
 # 共通核。`lipidmix://docs/output-format` が返す本体。
 OUTPUT_FORMAT_DOC = OUTPUT_FORMAT_DIR / "core.md"
@@ -146,12 +147,15 @@ table, and mandatory caveats — e.g. `UNKNOWN` is not a mismatch),
 `pathway` (MSLipidMapper pathway projection: node table and adjacent opposite
 pairs — adjacency is a drawing template, not curated reactions), or
 `reanalysis` (dataset handles for parallel reanalysis agents, the spec-driven
-matrix/statistics tools, MS/MS pass/fail rules and the claim evidence bundle).
+matrix/statistics tools, MS/MS pass/fail rules and the claim evidence bundle), or
+`quant` (internal-standard normalization, polarity merge and feature selection:
+`dataset_quant_*`, `dataset_merge_polarities`, `dataset_select_features` - the
+gap-fill mark in `detected_mask`, units, `needs_input` envelopes, records).
 The ARF / ARF2 / PAI2 / DCL / EIC parser outputs carry a one-line pointer to
 their topic until you have fetched it; for `mztab`, `library`, `curation`,
-`pathway`, and `reanalysis` there is no pointer, so fetch those before
+`pathway`, `reanalysis`, and `quant` there is no pointer, so fetch those before
 interpreting `dataset_*`, `library_*`, `curation_*`, `pathway_*`, or the
-reanalysis tools' output.
+reanalysis tools' or quantification tools' output.
 
 MS/MS EVIDENCE — the real spectra live in `.dcl`, not `.pai2`; PAI2's `has_msms`
 only records that an acquisition reference exists. `pai2_parser` attaches the

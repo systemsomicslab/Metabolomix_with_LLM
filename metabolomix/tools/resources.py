@@ -47,7 +47,8 @@ def output_format_reference() -> str:
         "MS/MS matching), curation (alignment curation: curation_review's verdicts "
         "and reason codes), pathway (MSLipidMapper pathway projection: node table and "
         "adjacent opposite pairs), reanalysis (dataset handles and the spec-driven "
-        "reanalysis tools), or core for the shared ontology. Fetch the topic matching "
+        "reanalysis tools), quant (internal-standard normalization, polarity "
+        "merge, feature selection), or core for the shared ontology. Fetch the topic matching "
         "the output you are about to interpret instead of the whole document."
     ),
     mime_type="text/markdown",
