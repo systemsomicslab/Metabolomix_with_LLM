@@ -77,7 +77,7 @@ def dataset_quant_preview(reference_path: str, bindings: dict | None = None,
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                       idempotentHint=False),
           structured_output=False)
-def dataset_quant_apply(reference_path: str, bindings: dict | None = None,
+def dataset_quant_apply(reference_path: str | None = None, bindings: dict | None = None,
                         method: str = "cell_coefficient", concentrations: dict | None = None,
                         solvent_volume: float | None = None,
                         cells_millions: float | None = None, unit: str | None = None,
@@ -90,7 +90,7 @@ def dataset_quant_apply(reference_path: str, bindings: dict | None = None,
     dataset_handle・status_counts・単位・record_id を返す（gap-fill のセルも値を計算し、
     detected_mask で印を引き継ぐ。内部標準が 0・負・欠測の試料は欠測にして理由を数える）。
     正規化済みのデータセットには掛けない。skip=True は値を変えず「正規化を飛ばした」記録と
-    派生を作る（reference_path は読まない）。
+    派生を作る（reference_path は skip=True のときだけ省ける。読まない）。
     dataset_handle: ハンドルのデータセット。省略時は直近のデータセット。
     """
     ctx = _context(dataset_handle, polarity)

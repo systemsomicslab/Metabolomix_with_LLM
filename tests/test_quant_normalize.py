@@ -211,6 +211,79 @@ def test_no_analysis_folder_is_coded(tmp_path, monkeypatch):
     assert exc.value.code == "QUANT_RECORD_LOCATION_REQUIRED"
 
 
+def test_record_next_to_arf2_even_if_mddata_elsewhere(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    ds = _simple(tmp_path)
+    ds.source_files[str(tmp_path / "elsewhere" / "proj.mddata")] = "0" * 64
+    _new, info = qn.apply(ds, _ref(tmp_path), None, "positive")
+    assert (tmp_path / "analysis" / "reports" / "quant" / f"{info['record_id']}.json").is_file()
+    assert not (tmp_path / "elsewhere").exists()
+
+
+def test_analysis_folder_rules(tmp_path):
+    ds = _simple(tmp_path)
+    arf2 = next(p for p in ds.source_files if p.endswith(".arf2"))
+    arf = next(p for p in ds.source_files if p.endswith(".arf"))
+    assert qn.analysis_folder(ds) == tmp_path / "analysis"
+    ds.source_files = {arf: "h", str(tmp_path / "o" / "a.mddata"): "h"}  # arf2 無し → arf
+    assert qn.analysis_folder(ds) == tmp_path / "analysis"
+    ds.source_files = {str(tmp_path / "z" / "x.mzTab"): "h", str(tmp_path / "o" / "a.mddata"): "h"}
+    assert qn.analysis_folder(ds) == tmp_path / "z"
+    ds.source_files = {str(tmp_path / "o" / "a.mddata"): "h"}  # 主ファイル無し
+    with pytest.raises(DomainError) as exc:
+        qn.analysis_folder(ds)
+    assert exc.value.code == "QUANT_RECORD_LOCATION_REQUIRED"
+    ds.source_files = {arf2: "h", str(tmp_path / "other" / "b.arf2"): "h"}  # 主ファイルが別フォルダ
+    with pytest.raises(DomainError) as exc:
+        qn.analysis_folder(ds)
+    assert exc.value.code == "QUANT_RECORD_LOCATION_REQUIRED"
+
+
+def test_mask_follows_resolved_class_alias_and_any_others(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    ds = _load(tmp_path, [
+        _spot("IS-A", "PC", [500.0, 500.0, 500.0], gap=[False, True, False]),
+        _spot("PC alias", "PCx", [1000.0] * 3, mz=600.0),
+        _spot("TG alias", "TGx", [100.0] * 3, mz=800.0)])
+    new, _ = qn.apply(ds, _ref(tmp_path), None, "positive")
+    for fid, val in (("1", 4.0), ("2", 0.2)):
+        row = ds.feature_ids.index(fid)
+        assert new.feature_matrix[row, 0] == pytest.approx(val)
+        assert [bool(x) for x in new.detected_mask[row]] == [True, False, True]
+
+
+def test_record_inputs_hold_no_reference_path(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    ds = _simple(tmp_path)
+    ref = _ref(tmp_path)
+    _new, info = qn.apply(ds, ref, None, "positive")
+    rec = json.loads((tmp_path / "analysis" / "reports" / "quant"
+                      / f"{info['record_id']}.json").read_text(encoding="utf-8"))
+    assert rec["inputs"]["reference:ref_table.csv"] == ref.sha256
+    assert not any(str(tmp_path / "ref_table.csv") == k for k in rec["inputs"])
+
+
+def test_reference_read_error_carries_label_only(tmp_path, monkeypatch):
+    from pathlib import Path
+    path = tmp_path / "ref_table.csv"
+    path.write_text(REF, encoding="utf-8")
+
+    def boom(self):
+        raise PermissionError(13, "denied", str(self))
+    monkeypatch.setattr(Path, "read_bytes", boom)
+    with pytest.raises(DomainError) as exc:
+        reference_input(str(path))
+    assert str(tmp_path) not in exc.value.message and str(tmp_path) not in str(exc.value.details)
+    assert exc.value.details.get("label") == "ref_table.csv"
+
+
+def test_apply_without_reference_needs_skip(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    ds = _simple(tmp_path)
+    out = qn.apply_tool(ds, None, None, "positive", holder=None, parent_handle_id=None)
+    assert json.loads(out)["error"]["code"] == "QUANT_BAD_REQUEST"
+
+
 def test_tools_register_in_subprocess():
     code = (
         "from metabolomix.core.mcp_core import mcp\n"

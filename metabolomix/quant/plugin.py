@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.util
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,8 +45,37 @@ def _digest(folder: Path) -> str:
     return h.hexdigest()
 
 
+_MAX_TEXT = 300
+_STOP = r"""[^\s'"<>|*?:,;)\]]"""
+_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\)" + _STOP + r"*|(?<![\w.:/])/" + _STOP + "+")
+
+
+def _tail(match: re.Match) -> str:
+    parts = [p for p in re.split(r"[\\/]+", match.group(0)) if p]
+    return parts[-1] if parts else ""
+
+
+def sanitize_text(text) -> str:
+    """プラグイン由来の文字列を封筒へ写す前に整える: 絶対パスはファイル名の末尾へ、300 字まで。"""
+    text = _PATH.sub(_tail, str(text))
+    return text if len(text) <= _MAX_TEXT else text[:_MAX_TEXT] + "..."
+
+
+def sanitize_details(details) -> dict:
+    """JSON のスカラ値（str は整える・int・float・bool・None）の値だけ残す。"""
+    out = {}
+    if not isinstance(details, dict):
+        return out
+    for key, value in details.items():
+        if isinstance(value, str):
+            out[str(key)] = sanitize_text(value)
+        elif value is None or isinstance(value, (bool, int, float)):
+            out[str(key)] = value
+    return out
+
+
 def _unavailable(message: str) -> DomainError:
-    return DomainError(UNAVAILABLE, message)
+    return DomainError(UNAVAILABLE, sanitize_text(message))
 
 
 def _import(folder: Path, digest: str) -> ModuleType:
@@ -111,6 +141,8 @@ def call(plugin: RulesPlugin, name: str, **kwargs):
     try:
         return getattr(plugin.api, name)(**kwargs)
     except ValueError as exc:
-        details = getattr(exc, "details", None) or {}
-        raise DomainError(REJECTED, str(exc),
-                          {"rule_code": getattr(exc, "code", None), **details}) from exc
+        code = getattr(exc, "code", None)
+        details = sanitize_details(getattr(exc, "details", None))
+        raise DomainError(REJECTED, sanitize_text(exc),
+                          {"rule_code": sanitize_text(code) if isinstance(code, str) else None,
+                           **details}) from exc

@@ -4,6 +4,9 @@
 変換・記録・派生データセットの組み立てだけをする。値は gap-fill も計算し（利用者の判断 2）、
 `detected_mask` で「内部標準も対象も検出された」セルだけを True にする。
 
+記録の置き場所は、データセット自身の解析フォルダ（`reports/quant/`）。`mcp_core._resolve_report_dir`
+や DATA_DIR ではない（B-3 の規約: 統合前の記録は各極性の解析フォルダの `reports/`）。
+
 規則の `feature_id` は int なので `int()` で渡し、戻すときに str にする。統合後の ID
 （`positive:...`）は正規化の対象にしない（正規化は統合の前）。
 """
@@ -18,7 +21,7 @@ import numpy as np
 from metabolomix.core.atomic_io import DomainError, atomic_write_bytes
 from metabolomix.core.serialization import json_payload, round_floats
 from metabolomix.quant import derive as qderive
-from metabolomix.quant.inputs import ReferenceInput, quant_error
+from metabolomix.quant.inputs import ReferenceInput, quant_error, reference_key
 from metabolomix.quant.plugin import call, load_rules, rules_settings
 from metabolomix.quant.records import record_dir, write_record
 from metabolomix.quant.table import feature_rows
@@ -30,14 +33,25 @@ _UNRESOLVED = ("standard_ambiguous", "standard_missing")
 _KEEP = ("ok", "gap_filled")
 
 
+_PRIMARY_SUFFIXES = ((".arf2",), (".arf",), (".mztab", ".json"))
+
+
 def analysis_folder(ds) -> Path:
-    """記録を置く解析フォルダ＝元ファイル（.arf / .arf2 / mzTab-M）の置き場所。決まらなければ止める。"""
-    parents = {Path(p).parent for p in (getattr(ds, "source_files", None) or {})}
-    if len(parents) != 1:
-        raise DomainError("QUANT_RECORD_LOCATION_REQUIRED",
-                          "データセットの解析フォルダを 1 つに決められないため、記録を置けません。"
-                          "MS-DIAL の解析フォルダか mzTab-M から読んだデータセットで実行してください。")
-    return parents.pop()
+    """記録を置く解析フォルダ＝データセット自身の解析フォルダ（`.arf2`、無ければ `.arf`、無ければ
+    mzTab-M / ジョブ）の置き場所。サイドカー（`.mddata` `_tags.xml` `.dcl` `.aef`）は見ない。
+    主ファイルが無い・別のフォルダに散るときは QUANT_RECORD_LOCATION_REQUIRED。
+    """
+    paths = [Path(p) for p in (getattr(ds, "source_files", None) or {})]
+    for suffixes in _PRIMARY_SUFFIXES:
+        found = {p.parent for p in paths if p.suffix.lower() in suffixes}
+        if len(found) == 1:
+            return found.pop()
+        if found:
+            break
+    raise DomainError("QUANT_RECORD_LOCATION_REQUIRED",
+                      "データセットの解析フォルダを 1 つに決められないため、記録を置けません。"
+                      "MS-DIAL の解析フォルダ（.arf2 / .arf）か mzTab-M から読んだデータセットで"
+                      "実行してください。")
 
 
 def _check_not_normalized(ds) -> None:
@@ -172,7 +186,8 @@ def apply(ds, ref: ReferenceInput, bindings: dict | None, polarity: str, *,
     for i, row in enumerate(rows):
         if result["roles"][i] == "internal_standard":
             continue
-        std = assignments.get(row.ontology) or {}
+        key = result["target_class_by_feature"][i]
+        std = assignments.get(key) or {} if key is not None else {}
         j = index.get(str(std.get("feature_id")))
         std_detected = rows[j].detected if j is not None else (False,) * n_s
         for s in range(n_s):
@@ -186,7 +201,7 @@ def apply(ds, ref: ReferenceInput, bindings: dict | None, polarity: str, *,
     reference = {"sha256": sha, "label": ref.label, "method": ref.method, "unit": result.get("unit")}
     inputs = dict(ds.source_files)
     if ref.path is not None:
-        inputs[str(ref.path)] = ref.sha256
+        inputs[reference_key(ref.label)] = ref.sha256
     record = write_record(
         folder, "normalize", inputs=inputs, parent_ids=_parent_ids(ds),
         settings={"reference": reference, "rules": rules_settings(plugin), "polarity": polarity,
@@ -235,6 +250,10 @@ def preview_tool(ds, ref: ReferenceInput, bindings, polarity: str) -> str:
 def apply_tool(ds, ref: ReferenceInput | None, bindings, polarity: str, *, holder,
                parent_handle_id: str | None, skip_step: bool = False) -> str:
     """apply / skip の封筒つきの実体（ハンドルの登録まで）。"""
+    if ref is None and not skip_step:
+        return quant_error("QUANT_BAD_REQUEST",
+                           "reference_path は必須です（省略できるのは skip=True のときだけ）。",
+                           {"field": "reference_path"})
     try:
         if skip_step:
             new, info = skip(ds, polarity)

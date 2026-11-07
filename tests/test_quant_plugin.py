@@ -164,3 +164,28 @@ def test_fake_match_samples_with_mapping(tmp_path, monkeypatch):
     with pytest.raises(DomainError) as e:
         plugin.call(p, "match_samples", names_by_mode={"pos": ["c_pos"]}, mapping_rows=rows)
     assert e.value.details["rule_code"] == "mapping_invalid"
+
+
+_RAISING = r'''
+def normalize(*a, **k):
+    raise FakeRuleError(
+        "bad row in C:\\lab\\secret\\ref.csv and /srv/lab/ref.csv: " + "x" * 500, "row_bad",
+        {"rows": [["PC", "IS-A"]], "path": "D:\\lab\\r.csv", "n": 3})
+'''
+
+
+def test_plugin_errors_are_sanitized(tmp_path, monkeypatch):
+    folder = write_fake_rules(tmp_path, extra=_RAISING)
+    _point(tmp_path, monkeypatch, folder)
+    p = plugin.load_rules()
+    with pytest.raises(DomainError) as e:
+        plugin.call(p, "normalize", features=[], n_samples=0, reference_text="")
+    text = e.value.message + repr(e.value.details)
+    assert "lab" not in text and "secret" not in text and "PC" not in text
+    assert "ref.csv" in e.value.message and len(e.value.message) <= 303
+    assert e.value.details == {"rule_code": "row_bad", "path": "r.csv", "n": 3}
+
+
+def test_sanitize_text_keeps_plain_slashes():
+    assert plugin.sanitize_text("(positive / negative)") == "(positive / negative)"
+    assert plugin.sanitize_text(r"at C:\x\y\z.csv") == "at z.csv"

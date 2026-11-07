@@ -39,8 +39,18 @@ def _bad(message: str, **details) -> DomainError:
     return DomainError("QUANT_BAD_REQUEST", message, details or None)
 
 
+def reference_key(label: str) -> str:
+    """記録の `inputs` での参照表のキー（絶対パスは載せない。is_stale の現在の入力も同じキーで作る）。"""
+    return f"reference:{label}"
+
+
 def _read(path: Path) -> tuple[str, str]:
-    data = path.read_bytes()
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise DomainError("QUANT_REFERENCE_UNREADABLE",
+                          f"表を読めません: {path.name}（{type(exc).__name__}）",
+                          {"label": path.name}) from None
     return data.decode("utf-8-sig"), hashlib.sha256(data).hexdigest()
 
 

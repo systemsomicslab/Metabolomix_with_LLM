@@ -42,7 +42,8 @@ def normalize(features: list[dict], n_samples: int, reference_text: str,
     # -> {unit, normalization_method, values:[[float|None]], statuses:[[str]], roles:[str],
     #     assignments:{target_class: {standard_name, feature_id, coefficient, concentration,
     #                  standard_adduct, unit, status, candidates:[{feature_id,name,adduct,mz,rt}]}},
-    #     any_others_classes:[str], fallback_by_feature:[bool]}
+    #     any_others_classes:[str], fallback_by_feature:[bool],
+    #     target_class_by_feature:[str|None]}  # 各特徴を割った `assignments` のキー（None = クラス未対応）
 
 def coefficient_reference_text(reference_text: str, concentrations: dict[str, float],
                                solvent_volume: float, cells_millions: float,
@@ -69,6 +70,8 @@ def select(features: list[dict], adduct_text: str | None) -> list[dict]
 sha256・単位・ファイル名の末尾だけで、パスと中身は載せない。
 
 ## 封筒
+
+規則のメッセージ・`details` は封筒へ写す前に ms-data-parser が整える（300 字まで・絶対パスはファイル名の末尾へ・`details` は JSON のスカラ値だけ）。**規則側も、メッセージに参照表の行を載せないこと。**
 
 エラーは他の mzTab-M 系ツールと同じ形（`{"error": {"code", "message", "details"?}}`）。
 

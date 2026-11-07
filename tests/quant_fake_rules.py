@@ -19,6 +19,11 @@ import io
 API_VERSION = {api_version}
 RULES_VERSION = "fake-rules-1"
 _ANY = "Any others"
+_ALIAS = {{"PCx": "PC", "TGx": "TG"}}  # class aliases (the real rules resolve aliases)
+
+
+def _canon(cls):
+    return _ALIAS.get(cls, cls)
 
 
 class FakeRuleError(ValueError):
@@ -52,7 +57,7 @@ def normalize(features, n_samples, reference_text, method="cell_coefficient", bi
             raise FakeRuleError("heights length differs from n_samples", "bad_features",
                                 {{"feature_id": f["feature_id"]}})
     roles = ["internal_standard" if f["name"] in standards else "target" for f in features]
-    classes = sorted({{f["lipid_class"] for f, r in zip(features, roles) if r == "target"}})
+    classes = sorted({{_canon(f["lipid_class"]) for f, r in zip(features, roles) if r == "target"}})
     assignments, any_others = {{}}, []
     for cls in classes:
         row = table.get(cls)
@@ -85,15 +90,18 @@ def normalize(features, n_samples, reference_text, method="cell_coefficient", bi
             entry["standard_adduct"] = chosen["adduct"]
         assignments[cls] = entry
     by_id = {{f["feature_id"]: f for f in features}}
-    values, statuses, fallback = [], [], []
+    values, statuses, fallback, by_feature = [], [], [], []
     for f, role in zip(features, roles):
         if role != "target":
             values.append([None] * n_samples)
             statuses.append([role] * n_samples)
             fallback.append(False)
+            by_feature.append(None)
             continue
-        a = assignments[f["lipid_class"]]
-        fallback.append(f["lipid_class"] in any_others)
+        key = _canon(f["lipid_class"])
+        a = assignments[key]
+        by_feature.append(key)
+        fallback.append(key in any_others)
         if a["status"] != "ok":
             values.append([None] * n_samples)
             statuses.append([a["status"]] * n_samples)
@@ -116,7 +124,8 @@ def normalize(features, n_samples, reference_text, method="cell_coefficient", bi
     unit = next(iter(table.values()))["Unit"]
     return {{"unit": unit, "normalization_method": method, "values": values,
             "statuses": statuses, "roles": roles, "assignments": assignments,
-            "any_others_classes": any_others, "fallback_by_feature": fallback}}
+            "any_others_classes": any_others, "fallback_by_feature": fallback,
+            "target_class_by_feature": by_feature}}
 
 
 def coefficient_reference_text(reference_text, concentrations, solvent_volume, cells_millions,
