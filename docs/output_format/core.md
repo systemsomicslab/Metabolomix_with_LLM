@@ -31,7 +31,7 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 |---|---|---|---|
 | ARF | `*_PeakProperties.arf` | `metabolomix/arf/reader.py` | `dataset` |
 | ARF2 | `*.arf2` | `metabolomix/arf2/reader.py` | `dataset` |
-| PAI2 | `*.pai2` | `metabolomix/pai2/reader.py` | `dataset`（読むツールは無い。個別測定のピークの定義は旧 `pai2` トピックの移し書きに残す） |
+| PAI2 | `*.pai2` | `metabolomix/pai2/reader.py` | `dataset`（読むツールは無い。個別測定のピークの定義は `dataset` トピックの PAI2 の節に残す） |
 | DCL | `*.dcl` | `metabolomix/dcl/reader.py` | `dcl` |
 | EIC/AEF | `*.EIC.aef` | `metabolomix/eic/reader.py` | `eic` |
 | mzTab-M | `*.mzTab` | `metabolomix/mztab/reader.py` | `mztab` |

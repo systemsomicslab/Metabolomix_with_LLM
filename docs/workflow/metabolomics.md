@@ -15,7 +15,7 @@ profile が method・依存・実行体・極性の唯一の情報源になる�
 `load_dataset` → `dataset_set_sample_metadata` → `dataset_build_matrix` → `dataset_statistic`。
 この経路は binding と注入証拠を持たないぶん、内部標準比を作れず検出率 filter も評価不能になる。
 完了した v2 run がある場合は `load_dataset(pipeline_path=...)` が、その run の dataset・
-試料対応表・binding・解析行列をまとめてセッションへ載せる（[mztab.md](mztab.md)）。
+試料対応表・binding・解析行列をまとめてセッションへ載せる（[dataset.md](dataset.md)）。
 検証範囲と残タスクは[実装監査](../superpowers/plans/2026-09-16-validated-lcms-metabolomics-audit.md)を参照。
 
 v1（`dataset_differential` ほか、[dataset_analysis.md](dataset_analysis.md)）とは

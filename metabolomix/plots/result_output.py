@@ -121,8 +121,8 @@ def save_result_figure(ds, result: dict, path: Path, *, kind: str,
 def _pca_plot_payload(result: dict) -> dict:
     """PCA 結果を、描画が食う散布図 dict（`points` を持つ形）へ揃える。
 
-    PCA の結果は経路によって**形が違う**。ARF 経路（`session.arf.last_pca_plot`）は
-    最初から `points` を持つが、DatasetState 経路
+    PCA の結果は経路によって**形が違う**。旧 ARF 経路の PCA は
+    最初から `points` を持っていたが、DatasetState 経路
     （`analysis.dataset_service.pca_dataset` → `dataset_analysis.run_dataset_pca`）は
     `scores`（name / role / PC1..PCn）しか持たない。ここで揃えずに `points` だけを
     読むと、DatasetState 経路では点が 0 件のまま**枠だけの図**が保存され、しかも
@@ -146,10 +146,10 @@ def _pca_plot_payload(result: dict) -> dict:
 
 def _render(result: dict, *, kind: str, title: str | None):
     if kind == "pca":
-        # 描画は arf_pca_species（画像返し）と共有する。群があれば色分けされる。
+        # 描画は `dataset_plot`（画像返し）と共有する。群があれば色分けされる。
         return render_pca_scores(_pca_plot_payload(result), title=title)
     if kind == "volcano":
-        # 描画は arf_plot_volcano（画像返し）と共有する。色や軸がツール間でずれると
+        # 描画は `dataset_plot`（画像返し）と共有する。色や軸がツール間でずれると
         # 「画面で見た図」と「レポートに貼った図」が別物になるため。
         return render_volcano_plot(result, title=title)
     raise DomainError("UNSUPPORTED_FIGURE_KIND",

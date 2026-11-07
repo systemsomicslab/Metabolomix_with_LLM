@@ -529,7 +529,7 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
 ## 10. 根拠バンドル v3（evidence-v3）
 
 `dataset_export_evidence_bundle` が書く。v2 に試料表・試料ごとの値と検出・付加体・極性を足したもの。
-`arf_export_evidence_bundle`（ARF 経路）は試料ごとの値を取り出さないので v2 のまま。契約の正は
+`dataset_export_evidence_bundle`（ARF 経路）は試料ごとの値を取り出さないので v2 のまま。契約の正は
 massbank-context の `docs/contracts/evidence-bundle-v3.md`。TSV は全ファイルとも同じ書き方（タブ区切り・
 UTF-8・改行は CRLF）。
 
@@ -590,7 +590,7 @@ SME の付加体）。無ければ空。
 
 ### `spectrum_links.tsv` と `.dcl` の出どころ
 
-dataset 経路も ARF 経路（`arf_export_evidence_bundle`）と同じ規則で、**同じアラインメントの `.dcl`** の
+dataset 経路も ARF 経路（`dataset_export_evidence_bundle`）と同じ規則で、**同じアラインメントの `.dcl`** の
 代表スペクトルに結ぶ。結ぶのは ID だけ（**SMF_ID == `.arf2` の AlignmentID == `.dcl` の番号**）で、
 m/z・RT は結びの検証にだけ使う（m/z の近さでは結ばない）。結べた特徴は 1 行（`spectrum_file` は `.dcl`
 のファイル名、`spectrum_id` は `<.dcl の語幹>:<番号>`、`mapping_evidence` は

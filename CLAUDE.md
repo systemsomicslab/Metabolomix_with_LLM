@@ -9,15 +9,17 @@ MS-DIAL（LC-MS リピドミクス／メタボロミクス解析ソフト）の�
 GUI の外では読めない圧縮 MessagePack と独自バイナリを解し、解析そのものをサーバ側で回して
 要約だけを返す（生の行列を LLM の文脈に載せない）。
 
-**主経路は MS-DIAL GUI で解析済みの出力を読むこと**（`load_dataset` → ARF / ARF2 / 同定 /
-キュレーション）。生データから MS-DIAL Console を回す経路（`console_*` / `pipeline_*`）は
-**補助**で、保守はするが優先度は低い（ユーザー判断 2026-10-06）。`MCP_INSTRUCTIONS` の
-ENTRY POINT は、まずフォルダに MS-DIAL を動かした形跡（`.arf` 等の出力）があるかを確かめ、
-あれば下流へ進み、無ければユーザーの許可を取ってから Console を回す（ユーザー判断 2026-10-07）。
-新しい機能は主経路から設計する。
+**入口は 2 つで、合流点は「MS-DIAL の解析フォルダ」**（全体設計 `docs/superpowers/specs/2026-11-06-overhaul-overview-design.md`
+§2）。GUI で解析済みのフォルダを読む入口（`list_data_files` → `load_dataset` → 同定 / キュレーション /
+前処理 / 比較）と、生データから MS-DIAL Console を回してそのフォルダを作る入口（`console_*` / `pipeline_*`）を
+**対等に扱う**（2026-10 の「主経路と補助」は改めた）。どちらから来ても、その先は同じ 1 本の鎖を通る。
+`MCP_INSTRUCTIONS` の ENTRY POINT は変えない: まずフォルダに MS-DIAL を動かした形跡（`.arf` 等の出力）が
+あるかを確かめ、あれば下流へ進み、無ければユーザーの許可を取ってから Console を回す（ユーザー判断 2026-10-07）。
+ASSAY KIND（脂質か一般代謝物か）は `load_dataset` の後に `record_objective(assay_kind=...)` で確定する
+（記録は読み込み済みのデータセットが要るため）。意味論の要約は `load_dataset` の戻り値の `caveat`。
 
 **読む形式** — `.arf`（アライン後・サンプル別ピーク。サンプル間比較の主データ源）/
-`.arf2`（スポット代表カタログと注釈）/ `.pai2`（個別測定のピーク）/ `.dcl`（デコンボリュー
+`.arf2`（スポット代表カタログと注釈）/ `.dcl`（デコンボリュー
 ション済み MS/MS。MessagePack ではない独自バイナリ）/ `.EIC.aef`（クロマトグラム）/
 **mzTab-M 2.0**（標準交換形式。Console 経路が産み、`DatasetState` の正準入力になる）。
 サイドカー（`*_tags.xml` `.mddata` `.mdproject`）はタグと試料クラスの取得に読む。
@@ -26,7 +28,7 @@ MSLipidMapper（R）が書く**パスウェイ測定 JSON-LD**も読む（`pathw
 
 **やること** — (a) 前処理/QC（正規化・ブランク減算・QC RSD 足切り・ドリフト補正）・PCA・
 2 群差次的解析（Welch + BH-FDR）、(b) 同定の標準化と裏取り（GOSLIN 正規化・RefMet/LIPID MAPS
-ID・MSI レベル・`.dcl` の実スペクトル照合）、(c) EIC の検索と描画、(d) **生データ起点の統括（補助経路）**
+ID・MSI レベル・`.dcl` の実スペクトル照合）、(c) EIC の描画（`dataset_plot`）、(d) **生データ起点の統括（補助経路）**
 ——MS-DIAL Console を計画・実行し、mzTab-M を経て前処理・PCA・比較・品質レポートまでを
 永続 run として自動で進める（`pipeline_run`。中断・訂正をまたいで冪等）、(e) LC–MS メタボロ
 ミクス v2（内部標準比・feature binding・注入ごとの測定証拠・固定母集団 QC）。**v2 は合成入力と
@@ -138,7 +140,7 @@ metabolomix/pipeline/  生データフォルダ起点の統括（受付 request/
 metabolomix/handoff/   Console 成果物の受け渡しスキーマ（analysis-job.json）
 metabolomix/curation/  アラインメントのキュレーション（証拠収集・機械判別・フラグ記録・ビューア HTML）
 metabolomix/pathway/   MSLipidMapper 連携（最小 mzTab-M の受け渡し・Rscript ブリッジ・JSON-LD 読み取り・隣接比較）
-metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サンプル検索・目的・レポート・リソース）
+metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料・目的・レポート・リソース）
 ```
 
 - **`server.py` は薄いファサード**。import 副作用で `@mcp.tool` を登録し、`from ... import *`
@@ -259,6 +261,11 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
 - 腐敗防止テストが効いている。壊すと落ちる:
   - `tests/test_workflow_docs.py` — `docs/workflow/` が挙げるパス・関数名を AST で実在検証し、
     対象ツール数を実登録数と突き合わせる。
+  - `tests/test_removed_tools_not_mentioned.py` — 消したツールの名前が入口の文書（README / USAGE / DEPLOY /
+    CLAUDE / `docs/workflow` / `docs/output_format` / `docs/cli.md`）と `metabolomix/` の文字列・コメントに
+    単語として残らないことを縛る（`docs/superpowers/**` と `docs/schema/**` は対象外）。ツールを消したら、
+    `REMOVED_TOOLS` に足して文面を直す。
+  - `tests/test_instructions_text.py` — `MCP_INSTRUCTIONS` と意味論の要約が、登録されたツールの名前だけを語る。
   - `tests/test_package_layout.py` — 移動で静かに壊れる `BASE_DIR` 起点の解決と、
     ルート直下の `.py` が `server.py` `check.py` だけであることを縛る。
   - `tests/test_readme_links.py` — 入口文書（`README.md` `USAGE.md` `DEPLOY.md` `CLAUDE.md`）の

@@ -51,7 +51,7 @@ def _error(out: str) -> dict:
 # ---------- 意味論ダイジェスト: 落ちずに digest で続け、1 行添える ----------
 
 def test_caveat_digest_survives_a_broken_config(tmp_path, broken_config, fresh_session):
-    out = fresh_session.maybe_prepend_caveat("BODY", topic="dcl")
+    out = fresh_session.take_caveat()
     assert out.startswith(session_state.SEMANTICS_CAVEAT)          # 既定の digest で続ける
     assert "CONFIG_INVALID" in out and "[server] caveat_mode" in out
     assert "lipidmix.local.toml" in out
@@ -62,7 +62,7 @@ def test_caveat_digest_survives_a_broken_config(tmp_path, broken_config, fresh_s
 
 def test_caveat_off_still_works_and_the_note_is_absent(tmp_path, monkeypatch, fresh_session):
     use_config(monkeypatch, tmp_path, {"server.caveat_mode": "off"})
-    assert fresh_session.maybe_prepend_caveat("BODY", topic="dcl") == "BODY"
+    assert fresh_session.take_caveat() is None
 
 
 # ---------- 記録（レポート・objective）: CONFIG_INVALID の封筒 ----------

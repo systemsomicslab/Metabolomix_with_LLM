@@ -138,5 +138,5 @@ keeps working against the global Python.
   client sessions on the same machine) do not interleave writes to the same
   directory. If a crashed process leaves a stale `.metabolomix.lock` behind, note
   writes time out; delete the file once no server is running.
-- `pai2_parser` returns the PCA plot through MCP only. It no longer writes
-  `pca_plot_latest.png` into the data directory.
+- Figures are returned through MCP (`dataset_plot`); `save_figure` writes files only under the
+  dataset's `reports/figures/`, never into the data directory.

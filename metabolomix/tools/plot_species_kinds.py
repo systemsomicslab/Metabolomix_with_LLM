@@ -1,8 +1,8 @@
 """`dataset_plot` の kind のうち、項目（クラス・分子種）を選んで群ごとに描く 3 つ（B-2b Task 7）。
 
-    group_intensity  lipidmix.group_intensity.v1   項目ごとの群別の試料別強度（旧 arf_plot_group_intensity）
-    species          lipidmix.species_intensity.v1 分子種（スポット）ごとの群別の値（旧 arf_plot_species）
-    species_pca      lipidmix.species_pca.v1       選んだ分子種の PCA のスコア図（旧 arf_pca_species）
+    group_intensity  lipidmix.group_intensity.v1   項目ごとの群別の試料別強度（旧 ARF 経路の同名の図）
+    species          lipidmix.species_intensity.v1 分子種（スポット）ごとの群別の値（旧 ARF 経路の同名の図）
+    species_pca      lipidmix.species_pca.v1       選んだ分子種の PCA のスコア図（旧 ARF 経路の同名の図）
 
 `plot_tools.py` の `_KINDS` へ登録される（`plot_tools` が末尾でこの関数群を引く）。`plot_tools` を読み込みの時に
 import しない（循環するため）——記録の組み立てと `_Request` は呼ばれたときに引く。項目の解決・行・除外は

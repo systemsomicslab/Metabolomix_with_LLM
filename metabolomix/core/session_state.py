@@ -149,16 +149,16 @@ class AnalysisSession:
         # 1回だけ再注入するために持つ。これが無いと、load_dataset 時点の unknown で
         # 1回出て終わり、後から種別が確定しても解釈規則が二度と届かない。
         self.caveat_emitted_kind: str | None = None
-        # 既読の output-format トピック（core/arf/eic/…）。トピック別リソースが
-        # 読まれるたびに増える。未読トピックのツール出力にだけ誘導1行を足す。
-        self.sections_seen: set[str] = set()
+        # `load_dataset` はワーカースレッドで走り、同時に呼ばれうる。出したかの判定と記録を
+        # 1 つの区間にして、ダイジェストが 2 回出ないようにする。
+        self._caveat_lock = threading.Lock()
 
         # --- アッセイ種別（解釈規則の選択軸。データ切替では消さない） ---
         # 確定は利用者との合意事項（record_objective）で、
         # パーサ出力からは決まらない。既定の unknown は「脂質」ではない。
         self.assay_kind = "unknown"
 
-        # --- mzTab-M / DatasetState（session.arf とは独立） ---
+        # --- DatasetState（ハンドルの登録簿が持つ。session はその直近を指す） ---
         # データセットはハンドルの登録簿（core.handles.registry）に住む。ここが持つのは
         # 直近のハンドルの ID だけで、`dataset` / `library` はそれを読む property（下）。
         self.current_handle_id: str | None = None
@@ -336,21 +336,6 @@ class AnalysisSession:
             self._library = value
         # 固定先が閉じられていれば置き先が無い（セッション自身へは書かない）。
 
-    def section_hint(self, topic: str) -> str | None:
-        """未読トピックなら、該当セクションを引くよう促す1行を返す。既読なら None。
-
-        core を読んでも各パーサの節を読んだことにはならないのでトピック単位で持つ。
-        全文（約700行）を毎回前置する代わりに、1行の誘導＋LLM 側の pull で済ませる。
-        """
-        if topic in self.sections_seen:
-            return None
-        # 脂質名文法は脂質アッセイでしか成り立たないので、種別が脂質のときだけ挙げる。
-        shared = "共通の粒度・脂質名文法" if self.assay_kind == "lipid" else "共通の粒度"
-        return (
-            f"[意味論] この出力の定義は `lipidmix://docs/output-format/{topic}` にある。"
-            f"解釈前に参照すること（{shared}は `lipidmix://docs/output-format`）。"
-        )
-
     def set_assay_kind(self, assay_kind: str) -> str:
         """アッセイ種別を確定する。正規化した値を返し、未知の値は拒否する。
 
@@ -361,38 +346,16 @@ class AnalysisSession:
         self.assay_kind = normalized
         return normalized
 
-    def maybe_prepend_caveat(self, text: str, topic: str | None = None) -> str:
-        """解釈直結パーサー出力へ意味論ダイジェスト（最大1回）と誘導1行を付す。
-
-        - 意味論ダイジェスト: output-format リソースが未 fetch（output_format_seen=False）
-          のとき、その時点の `assay_kind` で1回だけ先頭へ前置する。種別が確定して
-          変わったときだけもう1回出す（合計で最大2回。unknown のまま解析が進むと
-          種別固有の規則が一度も届かないため）。
-        - topic 誘導: そのトピックが未読のあいだ、毎回末尾に1行だけ付す（安いので
-          既読になるまで出し続ける。これがオンデマンド参照の起点になる）。
-
-        設定ファイルの `[server] caveat_mode = 'off'` で両方とも無効化（ローカルの操作
-        ナビゲータ専用デプロイ向け。既定 digest）。設定ファイルが読めない（`caveat_mode` の
-        値が digest / off 以外、旧 `[msdial] lbm` が残っている、TOML の構文など）ときは
-        **送出しない**: 既定の digest で続け、問題を 1 行だけ末尾に添える（パーサや
-        load_dataset が状態を変えたあとで落ちないため。黙って既定に落とすのでもない）。
-        エラー文字列など解釈材料でない出力には呼ばない。
-        """
-        try:
-            setting = user_config.get_setting("server.caveat_mode")
-        except user_config.ConfigInvalidError as exc:
-            return self._prepend_caveat(text, topic) + "\n\n" + _config_problem_note(exc)
-        if setting is not None and setting.value == "off":
-            return text
-        return self._prepend_caveat(text, topic)
-
     def take_caveat(self) -> str | None:
         """いま届けるべき意味論ダイジェストを返す（無ければ None）。出したことを記録する。
 
-        `maybe_prepend_caveat` と同じ規則（`caveat_mode=off` で止める・リソース既読で止める・
-        同じ種別では 1 回だけ・種別が変わったらもう 1 回）で、文字列を前置せず返すだけ。
-        JSON を返す入口（`load_dataset`）が最上位の `caveat` として載せる。設定ファイルが
-        読めないときは送出せず、既定の digest に問題の 1 行を添える。
+        規則: `[server] caveat_mode = 'off'` で止める・output-format の核が読まれていれば止める・
+        同じ種別では 1 回だけ・種別が変わったらもう 1 回（unknown のまま解析が進むと種別固有の
+        規則が一度も届かないため）。JSON を返す入口（`load_dataset`）が最上位の `caveat` として載せ、
+        `record_objective(assay_kind=...)` が確定後の 1 回を戻り値の先頭へ前置する。設定ファイルが
+        読めない（`caveat_mode` の値が digest / off 以外、旧 `[msdial] lbm` が残っている、TOML の
+        構文など）ときは**送出しない**: 既定の digest で続け、問題を 1 行だけ添える
+        （状態を変えたあとで落ちないため。黙って既定に落とすのでもない）。
         """
         try:
             setting = user_config.get_setting("server.caveat_mode")
@@ -406,23 +369,14 @@ class AnalysisSession:
 
     def _take_digest(self) -> str | None:
         """ダイジェスト本体。出す条件を満たせば記録して返し、満たさなければ None。"""
-        if self.output_format_seen:
-            return None
-        if self.caveat_emitted and self.caveat_emitted_kind == self.assay_kind:
-            return None
-        self.caveat_emitted = True
-        self.caveat_emitted_kind = self.assay_kind
-        return assay_digest(self.assay_kind)
-
-    def _prepend_caveat(self, text: str, topic: str | None) -> str:
-        """caveat_mode=digest のときの本体（`maybe_prepend_caveat` を参照）。"""
-        out = text
-        if topic:
-            hint = self.section_hint(topic)
-            if hint:
-                out = f"{out}\n\n{hint}"
-        digest = self._take_digest()
-        return f"{digest}\n\n{out}" if digest else out
+        with self._caveat_lock:
+            if self.output_format_seen:
+                return None
+            if self.caveat_emitted and self.caveat_emitted_kind == self.assay_kind:
+                return None
+            self.caveat_emitted = True
+            self.caveat_emitted_kind = self.assay_kind
+            return assay_digest(self.assay_kind)
 
 
 def _config_problem_note(exc: "user_config.ConfigInvalidError") -> str:

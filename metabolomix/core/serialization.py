@@ -2,7 +2,7 @@
 
 このサーバの戻り値は最終的に LLM の文脈を占める。`json.dumps(..., indent=2)` は
 1 ネストにつき改行＋空白 2 文字を全キーに掛けるため、実測で戻り値の 15〜57% が
-空白だった（`arf_list_classes` 3,513→1,502 字、`dcl_find_msms` 953→441 字）。
+空白だった（`dataset_status` 3,513→1,502 字、`dcl_find_msms` 953→441 字）。
 人間向けの整形はクライアント側の責務なので、サーバは最小形で返す。
 
 tools_* / server / mcp_core を import しない（mcp_errors からも使うため）。

@@ -32,7 +32,6 @@ def output_format_reference() -> str:
     # リソースが読まれた＝意味論が既に届いているので、以後パーサー出力へ
     # ダイジェストを前置しない（条件付きガードの「未読」条件を解除）。
     session_state.session.output_format_seen = True
-    session_state.session.sections_seen.add("core")
     return text
 
 
@@ -59,7 +58,6 @@ def output_format_section(topic: str) -> str:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise FileNotFoundError(f"Output format section was not found: {path}") from exc
-    session_state.session.sections_seen.add(topic)
     if topic == "core":
         session_state.session.output_format_seen = True
     return text

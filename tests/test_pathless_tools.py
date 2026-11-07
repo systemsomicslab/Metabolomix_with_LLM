@@ -11,7 +11,7 @@ import pytest
 from metabolomix.core import handles, session_state
 from metabolomix.dcl import tools as dcl_tools
 from metabolomix.library import tools as library_tools
-from metabolomix.tools import curation_tools, handle_tools, reports
+from metabolomix.tools import curation_tools, handle_tools, reanalysis_tools, reports
 from metabolomix.tools import dataset as dataset_tools
 from tests.config_fixtures import use_config
 from tests.curation_fixtures import write_alignment_set
@@ -89,11 +89,20 @@ def test_pathless_tools_do_not_fall_back_after_close(tmp_path, monkeypatch):
 
     for raw in (dcl_tools.dcl_spot_spectrum(spot_id=0),
                 dcl_tools.dcl_find_msms(precursor_mz=760.5851),
+                dcl_tools.dcl_diagnostic_ions(spot_ids=[0], ions=[{"mz": 184.0733}]),
                 curation_tools.curation_review(),
                 reports.write_report("a-1", "DS", "本文")):
         error = code(raw)
         assert error["code"] == "missing_state" and error["state"] == "dataset", raw
         assert error["required_tools"] == ["load_dataset"]
+    # 照合の 3 本（と対向プロット）は、閉じたハンドルのライブラリ（記憶）や照合結果を読むので、データセット・
+    # ライブラリ・照合結果のどれかが無い missing_state で止まる。別のハンドルのライブラリや `data/` へは落ちない。
+    for raw in (library_tools.library_match_feature(precursor_mz=760.5851),
+                reanalysis_tools.library_msms_qualify(rules={}, spot_id=0),
+                library_tools.library_plot_mirror()):
+        error = code(raw)
+        assert error["code"] == "missing_state" and error["state"] in ("dataset", "library_store", "library_match"), raw
+        assert set(error["required_tools"]) <= {"load_dataset", "library_load", "library_match_feature"}, raw
     assert not (data / "reports").exists() and not (tmp_path / "reports").exists()
     assert not (other["arf2"].parent / "reports").exists()  # 別のハンドルの解析フォルダにも書いていない
     assert other_handle.dataset.analysis_dir == str(other["arf2"].parent)

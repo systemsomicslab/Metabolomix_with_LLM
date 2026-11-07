@@ -23,10 +23,10 @@ HEADING_RE = re.compile(r"^##\s+(?P<tool>[a-z][a-z0-9_]*)\s*$", re.MULTILINE)
 
 # 設計書 §4 の対象範囲表と一対一で対応する。増減させる場合は設計書も直すこと。
 IN_SCOPE: dict[str, tuple[str, ...]] = {
-    "dataset.md": ("list_data_files",),
+    "dataset.md": ("list_data_files", "load_dataset", "dataset_list", "dataset_close",
+                   "dataset_status", "dataset_exclude"),
     "dcl.md": ("dcl_find_msms", "dcl_spot_spectrum", "dcl_diagnostic_ions"),
     "plots.md": ("dataset_plot", "save_figure"),
-    "mztab.md": ("load_dataset", "dataset_status", "dataset_exclude"),
     "dataset_analysis.md": (
         "dataset_preprocess", "dataset_pca", "dataset_differential",
         "dataset_export_differential", "dataset_export_evidence_bundle", "dataset_set_sample_metadata",
@@ -44,8 +44,7 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
         "curation_view_data",
     ),
     "pathway.md": ("pathway_project", "pathway_plot"),
-    "reanalysis.md": ("dataset_list", "dataset_close",
-                      "dataset_analysis_run", "library_msms_qualify", "dataset_homolog_check",
+    "reanalysis.md": ("dataset_analysis_run", "library_msms_qualify", "dataset_homolog_check",
                       "dataset_feature_relations", "dataset_claim_evidence",
                       "dataset_mass_accuracy", "dataset_novel_candidates",
                       "dataset_alignment_qc"),

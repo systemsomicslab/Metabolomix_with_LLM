@@ -2,19 +2,24 @@
 
 MS-DIAL 出力(`.arf` / `.arf2` / `.dcl` / `.EIC.aef`)と mzTab-M を解析し、PCA・差次的解析・
 アノテーション検証・レポート記録までを行う MCP サーバーのツール群です。
+入口は 2 つで、合流点は「MS-DIAL の解析フォルダ」です(2 つの入口は対等。まずフォルダに MS-DIAL を動かした
+形跡があるかを確かめ、あれば下流へ、無ければユーザーの許可を取ってから Console を回す)。
 おおまかな標準フロー:
 
 ```
-list_data_files → load_dataset → dataset_status / dataset_preprocess
+list_data_files(directory) → load_dataset(directory=...)
+   (戻り値の `caveat` は意味論の要約。未読なら 1 回だけ載る。`assay_kind` が未確定のうちは「未確定」の行つき)
+   → record_objective(assay_kind=...)(目的と種別を確かめて記録。記録は読み込み済みのデータセットが要る)
+   → dataset_status / dataset_preprocess
    → dataset_pca / dataset_differential → dataset_plot → (保存が要るときだけ) save_figure
    → record_objective → write_report
 
-生データから始める場合(補助経路。まずフォルダに MS-DIAL を動かした形跡(.arf 等)があるかを確かめ、
-あれば上の主経路へ。形跡が無く、Console を回すことにユーザーが同意したときだけ。手動で繋ぐなら):
+生データから始める場合(もう一方の入口。まずフォルダに MS-DIAL を動かした形跡(.arf 等)があるかを確かめ、
+あれば上の流れへ。形跡が無く、Console を回すことにユーザーが同意したときだけ。手動で繋ぐなら):
 console_plan → console_run → load_dataset → dataset_preprocess
    → dataset_pca / dataset_differential → dataset_export_differential
 
-生データから始める場合(補助経路を自動で一括統括するなら):
+生データから始める場合(Console の入口を自動で一括統括するなら):
 pipeline_run → pipeline_status(確認) → pipeline_resume(訂正・再開が必要な場合)
 ```
 
@@ -28,8 +33,8 @@ pipeline_run → pipeline_status(確認) → pipeline_resume(訂正・再開が�
 
 | ツール | 機能 |
 |--------|------|
-| `list_data_files` | 指定ディレクトリ(`directory`。**必須**。既定の探索先・環境変数は無い)内のファイル一覧を拡張子別に取得。**既定は解析できる拡張子のみ**(.arf/.arf2/.pai2/.dcl/.EIC.aef/.mddata/.mdproject)。測定生データ(MS-DIAL が読む abf/ibf/cdf/mzml/wiff/raw/d/wiff2/qgd/lcd/lrp/imzml)も見たいときは `all_files=True`。Agilent・Bruker の `.d` と Waters の `.raw` は**フォルダ**が 1 検体なので末尾に `/` を付けて示す(`.d`/`.raw` 以外は同名のフォルダがあっても計測データとして数えない — MS-DIAL の `isVendorDirectory` と同じ規則)。`extension`(例 `.arf2`)で絞り込みも可。 |
-| `load_dataset` | **データセットの入口**。データセットを読み、新しいハンドル(`dh_…`。戻り値の `dataset_handle`)として開いて**いつも対話の直近にする**(再解析のエージェントは返ったハンドルを各ツールの `dataset_handle` に渡して使い、直近を当てにしない。`dataset_handle` を省いた `dataset_*` / `library_*` が使う。前に読んだハンドルは閉じずに残り、上限(`lipidmix.local.toml` の `[server] max_dataset_handles`、既定 8)に達したら `DATASET_HANDLE_LIMIT` で止める。古いハンドルは黙って閉じない)。入口は `directory`(MS-DIAL の解析フォルダ。中の特定の `.arf` / `.arf2` でもよい。`DriftSpots.arf` より `PeakProperties.arf`、複数バッチなら最新を選び、選ばなかった `.arf` を戻り値に並べる)・`mztab_path`・`job_path`・`pipeline_path` の**いずれか一つ**。`source`(`auto` 既定 / `folder` / `mztab`)で読むアダプタを決める: `directory` は解析フォルダ(`mztab` はエラー)、`mztab_path` は mzTab-M(`folder` はエラー)、**`job_path` / `pipeline_path` の既定は解析フォルダ**(そのジョブの正準 mzTab-M と特徴数・m/z・試料名で照合して同じアラインメントと検証できた `.arf` 一式をちょうど 1 本。候補は mzTab-M の隣の `.arf`、pipeline はどれも合わなければ run の `input/AlignResult-*.arf2` と同じバッチも。合うものが無ければ `ALIGNMENT_NOT_FOUND`、2 本以上なら `ALIGNMENT_AMBIGUOUS` で止まり(どちらも候補のファイル名を `details.candidates` に載せる)、mzTab-M へ黙って切り替えない)で、`source="mztab"` なら今までどおり mzTab-M を読む。pipeline の run を解析フォルダで読むと run から引き継ぐのは解決済みの試料対応表だけ(解析行列・feature binding・差次的結果は `source="mztab"` のときだけ)。`measure`(`peak_height` 既定 / `peak_area_above_zero`)は解析フォルダの値の欄で、効くのは解析フォルダのアダプタだけ(mzTab-M のアダプタでは定量種別がファイル・ジョブの宣言で決まるので、既定値以外は `DATASET_BAD_REQUEST`)。`allow_incomplete` も bool 以外は `DATASET_BAD_REQUEST`。`library`(`auto` 既定 / `none`)は、データセットが同定に使ったライブラリの記憶(`library_record`)を sha256 を測り直して読み取り専用で開くか(`mismatch` / `unknown` / `lbm_only` はライブラリなしで開き `library_note` に理由。**極性の設定には落ちない**。別のライブラリは `library_load` の `file_path` で)、読まないか。`arf2_path` はスポットの照合に使う `.arf2`(省略時は読んだフォルダの `.arf2` / `.dcl`)。戻り値にはアダプタ・選んだ `.arf`・ライブラリの記録(`library_record`。ファイル名と sha256 だけでパスは出さない)・`summary`(特徴・試料の数、検出状態、同定の内訳、読み込みの注記)・`sample_counts`(群と役割ごとの試料数)・`next`(次の一手の例)が並ぶ。`.arf2` の概観や前処理前の PCA は返さない。同じ入力(読み込みが読んだ・探したファイルの size・更新時刻が同じ。mzTab-M の隣に後から置かれた `.arf`・`.dcl`・ライブラリ・ジョブの記録と実効メソッド・`pipeline-run.json` も数える)を読み直すと読み込み済みのものの複製を使う。以下は mzTab-M のアダプタの説明: 隣接する `.arf` が同一アライメントだと**数値で検証できた場合だけ**、検出状態(gap-fill の区別)を evidence sidecar として取り込む(要約は戻り値の「検出状態」行)。`mztab_path`(絶対パス直指定)・`job_path`(ジョブの宣言 polarity・measure で正準エントリを一意選択。曖昧なら停止)・`pipeline_path`(`pipeline_run` の pipeline-run.json かその親。`source="mztab"` ならその run の**解決済み試料対応表・feature binding・解析行列もまとめて**セッションへ載せる。行列だけを別に載せる入口は無い——別 run の行列を混ぜると群の対応が黙ってずれるため。pipeline 経路では差次的結果も(データと群の指紋が一致するものだけ)戻す: result_id は run の TSV と同じで、直近の結果にはしないので `dataset_export_differential(result_id=...)` などで名指しして使う。戻した比較は `comparison_id result_id group_a group_b` の TSV、戻せなかったものは理由(`legacy_result_without_dataset_hash` / `dataset_mismatch` / `group_mismatch`)つきで `summary` に並ぶ)の**いずれか一つ**を渡す(全省略・2つ以上の指定はエラー)。`console_run` 後は `job_path` 推奨(polarity・measure が確定済み)。生成物の絶対パスは記録された `root` から復元する。ジョブが `completed` 以外(`partial` 等)なら**既定で読み込みを拒否する**(`INCOMPLETE_ANALYSIS_JOB`。どちらのアダプタでも同じ門)。探索目的なら `allow_incomplete=True` を明示する — その場合は中断された実行の生成物である旨を警告の先頭に差し、**探索専用**として `dataset_differential` と `dataset_export_differential` を `EXPLORATORY_ONLY_DATASET` で拒否する(欠けた検体が「その群には無い」ように見え、比較がその欠落ごと結論になるため)。出所の裏取り `source_verification` を返す: `verified`(終了証跡と mzTab の hash が一致した完了実行)/`legacy_unverified`(ジョブ経由だが証跡が無い・一致しない)/`direct_unverified`(`mztab_path` 直接指定)。**`completed` という文字列だけでは `verified` にしない**。`summary` には**同定の出所内訳**の行が出る(MS/MS 証拠あり = SME 由来 / MS1 注釈のみ = SML 由来 / 同定なし)。同じ内訳は `inchikey_coverage["identified_by"]`(`sme` / `sml_only` / `none`)にも入る。**MS1 注釈は m/z 照合だけで付くので MS/MS 裏付けと同一視しないこと** — MS-DIAL は Text DB 由来の同定を SME へ書かないため、Text DB 運用では SME 0 件・SML のみが正常な形になる(`lipidmix://docs/output-format/identity` §13)。 |
+| `list_data_files` | 指定ディレクトリ(`directory`。**必須**。既定の探索先・環境変数は無い)内のファイル一覧を拡張子別に取得。**既定は解析できる拡張子のみ**(.arf/.arf2/.dcl/.EIC.aef/.mddata/.mdproject)。測定生データ(MS-DIAL が読む abf/ibf/cdf/mzml/wiff/raw/d/wiff2/qgd/lcd/lrp/imzml)も見たいときは `all_files=True`。Agilent・Bruker の `.d` と Waters の `.raw` は**フォルダ**が 1 検体なので末尾に `/` を付けて示す(`.d`/`.raw` 以外は同名のフォルダがあっても計測データとして数えない — MS-DIAL の `isVendorDirectory` と同じ規則)。`extension`(例 `.arf2`)で絞り込みも可。 |
+| `load_dataset` | **データセットの入口**。データセットを読み、新しいハンドル(`dh_…`。戻り値の `dataset_handle`)として開いて**いつも対話の直近にする**(再解析のエージェントは返ったハンドルを各ツールの `dataset_handle` に渡して使い、直近を当てにしない。`dataset_handle` を省いた `dataset_*` / `library_*` が使う。前に読んだハンドルは閉じずに残り、上限(`lipidmix.local.toml` の `[server] max_dataset_handles`、既定 8)に達したら `DATASET_HANDLE_LIMIT` で止める。古いハンドルは黙って閉じない)。入口は `directory`(MS-DIAL の解析フォルダ。中の特定の `.arf` / `.arf2` でもよい。`DriftSpots.arf` より `PeakProperties.arf`、複数バッチなら最新を選び、選ばなかった `.arf` を戻り値に並べる)・`mztab_path`・`job_path`・`pipeline_path` の**いずれか一つ**。`source`(`auto` 既定 / `folder` / `mztab`)で読むアダプタを決める: `directory` は解析フォルダ(`mztab` はエラー)、`mztab_path` は mzTab-M(`folder` はエラー)、**`job_path` / `pipeline_path` の既定は解析フォルダ**(そのジョブの正準 mzTab-M と特徴数・m/z・試料名で照合して同じアラインメントと検証できた `.arf` 一式をちょうど 1 本。候補は mzTab-M の隣の `.arf`、pipeline はどれも合わなければ run の `input/AlignResult-*.arf2` と同じバッチも。合うものが無ければ `ALIGNMENT_NOT_FOUND`、2 本以上なら `ALIGNMENT_AMBIGUOUS` で止まり(どちらも候補のファイル名を `details.candidates` に載せる)、mzTab-M へ黙って切り替えない)で、`source="mztab"` なら今までどおり mzTab-M を読む。pipeline の run を解析フォルダで読むと run から引き継ぐのは解決済みの試料対応表だけ(解析行列・feature binding・差次的結果は `source="mztab"` のときだけ)。`measure`(`peak_height` 既定 / `peak_area_above_zero`)は解析フォルダの値の欄で、効くのは解析フォルダのアダプタだけ(mzTab-M のアダプタでは定量種別がファイル・ジョブの宣言で決まるので、既定値以外は `DATASET_BAD_REQUEST`)。`allow_incomplete` も bool 以外は `DATASET_BAD_REQUEST`。`library`(`auto` 既定 / `none`)は、データセットが同定に使ったライブラリの記憶(`library_record`)を sha256 を測り直して読み取り専用で開くか(`mismatch` / `unknown` / `lbm_only` はライブラリなしで開き `library_note` に理由。**極性の設定には落ちない**。別のライブラリは `library_load` の `file_path` で)、読まないか。`arf2_path` はスポットの照合に使う `.arf2`(省略時は読んだフォルダの `.arf2` / `.dcl`)。戻り値にはアダプタ・選んだ `.arf`・ライブラリの記録(`library_record`。ファイル名と sha256 だけでパスは出さない)・`summary`(特徴・試料の数、検出状態、同定の内訳、読み込みの注記)・`sample_counts`(群と役割ごとの試料数)・`next`(次の一手の例)が並ぶ。`.arf2` の概観や前処理前の PCA は返さない。同じ入力(読み込みが読んだ・探したファイルの size・更新時刻が同じ。mzTab-M の隣に後から置かれた `.arf`・`.dcl`・ライブラリ・ジョブの記録と実効メソッド・`pipeline-run.json` も数える)を読み直すと読み込み済みのものの複製を使う。以下は mzTab-M のアダプタの説明: 隣接する `.arf` が同一アライメントだと**数値で検証できた場合だけ**、検出状態(gap-fill の区別)を evidence sidecar として取り込む(要約は戻り値の「検出状態」行)。`mztab_path`(絶対パス直指定)・`job_path`(ジョブの宣言 polarity・measure で正準エントリを一意選択。曖昧なら停止)・`pipeline_path`(`pipeline_run` の pipeline-run.json かその親。`source="mztab"` ならその run の**解決済み試料対応表・feature binding・解析行列もまとめて**セッションへ載せる。行列だけを別に載せる入口は無い——別 run の行列を混ぜると群の対応が黙ってずれるため。pipeline 経路では差次的結果も(データと群の指紋が一致するものだけ)戻す: result_id は run の TSV と同じで、直近の結果にはしないので `dataset_export_differential(result_id=...)` などで名指しして使う。戻した比較は `comparison_id result_id group_a group_b` の TSV、戻せなかったものは理由(`legacy_result_without_dataset_hash` / `dataset_mismatch` / `group_mismatch`)つきで `summary` に並ぶ)の**いずれか一つ**を渡す(全省略・2つ以上の指定はエラー)。`console_run` 後は `job_path` 推奨(polarity・measure が確定済み)。生成物の絶対パスは記録された `root` から復元する。ジョブが `completed` 以外(`partial` 等)なら**既定で読み込みを拒否する**(`INCOMPLETE_ANALYSIS_JOB`。どちらのアダプタでも同じ門)。探索目的なら `allow_incomplete=True` を明示する — その場合は中断された実行の生成物である旨を警告の先頭に差し、**探索専用**として `dataset_differential` と `dataset_export_differential` を `EXPLORATORY_ONLY_DATASET` で拒否する(欠けた検体が「その群には無い」ように見え、比較がその欠落ごと結論になるため)。出所の裏取り `source_verification` を返す: `verified`(終了証跡と mzTab の hash が一致した完了実行)/`legacy_unverified`(ジョブ経由だが証跡が無い・一致しない)/`direct_unverified`(`mztab_path` 直接指定)。**`completed` という文字列だけでは `verified` にしない**。`summary` には**同定の出所内訳**の行が出る(MS/MS 証拠あり = SME 由来 / MS1 注釈のみ = SML 由来 / 同定なし)。同じ内訳は `inchikey_coverage["identified_by"]`(`sme` / `sml_only` / `none`)にも入る。戻り値の最上位の `caveat` は意味論の要約(output-format の核を未読で、その `assay_kind` にまだ出していないときだけ載る。`assay_kind` の確定後の 1 回は `record_objective(assay_kind=...)` の戻り値の先頭)。**MS1 注釈は m/z 照合だけで付くので MS/MS 裏付けと同一視しないこと** — MS-DIAL は Text DB 由来の同定を SME へ書かないため、Text DB 運用では SME 0 件・SML のみが正常な形になる(`lipidmix://docs/output-format/identity` §13)。 |
 
 ## 2. MS/MS(`.dcl`)
 
@@ -73,9 +78,9 @@ MS-DIAL 本体を CLI 実行して解析結果そのものを生成する経路�
 
 ## 6. DatasetState 解析(mzTab-M 経路)
 
-mzTab-M 2.0 を正準状態(`DatasetState`)として読み、ARF 経路と同じ前処理・PCA・
-差次的解析を回す。**`session.arf` / `.arf2` / `.pai2` / `.eic` とは独立したスロット**なので、
-ARF 経路の状態を壊さない。
+`DatasetState`(解析フォルダも mzTab-M も同じ)に前処理・PCA・
+差次的解析を回す。読み込んだものはすべてハンドルの登録簿の `DatasetState` に住む
+(解析フォルダで読んだものも mzTab-M で読んだものも同じ)。
 
 | ツール | 機能 |
 |--------|------|

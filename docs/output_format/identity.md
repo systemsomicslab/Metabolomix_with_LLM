@@ -6,7 +6,7 @@
 
 ## 12. 同定信頼度・標準化（P2c）
 
-`metabolomix/msdial/lipid_identity.py`（MCP非依存の純ロジック層、**完全オフライン**）と `metabolomix/msdial/peak_verification.py` の拡張が、脂質同定名の標準化と信頼度レベルの推定を担う。外部識別子の取得はネットワークを一切使わず、`pygoslin`（同梱・純Python）と同梱 TSV 表のみで行う。既存ツール・既定挙動・`verify_peak_annotation` の既存キーは不変で、新データは新ブロックに追加する。
+`metabolomix/msdial/lipid_identity.py`（MCP非依存の純ロジック層、**完全オフライン**）と `metabolomix/msdial/peak_verification.py` の拡張が、脂質同定名の標準化と信頼度レベルの推定を担う。外部識別子の取得はネットワークを一切使わず、`pygoslin`（同梱・純Python）と同梱 TSV 表のみで行う。新データは新ブロックに追加し、既存の既定挙動は変えない。
 
 ### 12.1 GOSLIN 名正規化（`normalize_lipid_name`）
 
@@ -31,8 +31,8 @@
 
 ### 12.4 MS/MS の証拠の読み方と、`.arf2` の同定の標準化
 
-旧 `verify_peak_annotation`（ピークごとの裏取りのドシエ）と `arf2_annotate_identities` は撤去した
-（B-2b）。その `analytical_checks.msms` の 3 状態は、**ツールが返す値としては残っていない**が、
+旧ピークごとの裏取りのドシエ（`analytical_checks.msms` を返したツール）と、旧 `.arf2` の同定の一括標準化ツールは撤去した
+（B-2b。後者の列は `dataset_feature_search` が引き継ぐ）。そのドシエの MS/MS の 3 状態は、**ツールが返す値としては残っていない**が、
 MS/MS を同定確度の根拠にするときの読み方の規則としては変わらない:
 
 | 状態 | 意味 | MSI への効き方 |

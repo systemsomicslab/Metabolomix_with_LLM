@@ -1,6 +1,6 @@
 # EIC/AEF (`.EIC.aef` / クロマトグラム)
 
-`.EIC.aef` パーサ、EIC 検索・ランキング、`eic_plot_chromatograms` / `eic_plot_compounds` の描画契約。
+`.EIC.aef` パーサ、EIC 検索・ランキング、`dataset_plot(kind="eic")` / `dataset_plot(kind="eic_compounds")` の描画契約。
 
 > 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項はそちらで定義され、ここでは繰り返さない。節番号は分割前の通し番号。
 
@@ -71,11 +71,11 @@ ARF2 が無い・RT が合わないスポットは `-1` のまま残る。この
 
 旧 `top_eic_spots_by_peak_top` / `eicaef_top_peak_tops` は `peak_top`（ピーク頂点の横軸=RT座標。強度ではない）で並べており、実質「遅いRTのスポット一覧」で強度上位ではなかったため置き換えた。強度で並べるには `max_intensity` を使う。
 
-### 8.4 `eic_parser()` と `eic_search()`
+### 8.4 `dataset_feature_search` と `dataset_feature_search(sort=...)`
 
-`eic_parser()` は7.3節の要約をJSON文字列として返す。
+`dataset_feature_search` は7.3節の要約をJSON文字列として返す。
 
-`eic_search()` は旧 `eic_search_by_mz_range` / `eic_search_by_rt_range` / `eic_rank_by_max_intensity` を統合したもので、条件の行・`一致件数: N`・TSV 表（列名 1 回）・注記（`== 注意 ==`）の順に返す。`sort="max_intensity"` で `max_intensity` 降順の**強度上位ランキング**になる（既定は spot_id 昇順）。表は先頭 `max_results` 行だけで、超えると `(表示上限: …)` 行が付く。
+`dataset_feature_search(sort=...)` は旧 `eic_search_by_mz_range` / `eic_search_by_rt_range` / `eic_rank_by_max_intensity` を統合したもので、条件の行・`一致件数: N`・TSV 表（列名 1 回）・注記（`== 注意 ==`）の順に返す。`sort="max_intensity"` で `max_intensity` 降順の**強度上位ランキング**になる（既定は spot_id 昇順）。表は先頭 `max_results` 行だけで、超えると `(表示上限: …)` 行が付く。
 
 | 列 | 意味 |
 |---|---|
@@ -85,9 +85,9 @@ ARF2 が無い・RT が合わないスポットは `-1` のまま残る。この
 
 `spot_ids` の範囲外 ID は注記に列挙する。未注釈（`name` が空か `Unknown`）で `n_msms` が数値の行は、`library_match_feature(spot_id=…)` → `library_plot_mirror` で参照ライブラリと照合・目視できる（`lipidmix://docs/output-format/library`）。
 
-### 8.5 `eic_plot_chromatograms()` の描画契約
+### 8.5 `dataset_plot(kind="eic")` の描画契約
 
-`eic_plot_chromatograms()` は画像ではなく、クライアント中立の構造化JSON
+`dataset_plot(kind="eic")` は画像ではなく、クライアント中立の構造化JSON
 `plot_schema="lipidmix.eic.v1"` を返す。主要フィールドは `axes`、スポットの
 `rt`/`mz`、および各試料の `series[].x` / `series[].y` / `file_id` /
 `peak_left` / `peak_top` / `peak_right` である。Use-LLLMはこれをPlotlyへ変換し、
@@ -105,16 +105,16 @@ PNGが必要だとユーザーが明示した場合に限り、先に得たプ�
 `ds.figures["eic"]` に置かれ `save_figure(kind="eic")` が保存する。`.EIC.aef` の無いデータセット
 （mzTab-M だけから読んだもの）は `COMPANION_ARTIFACT_MISSING`。Task 11 でこの節は `dataset_plot` 中心に書き直す。
 
-### 8.6 `eic_plot_compounds()` の描画契約
+### 8.6 `dataset_plot(kind="eic_compounds")` の描画契約
 
-`eic_plot_compounds()` は**複数物質 × 1サンプル**のオーバーレイを返す。**既定
+`dataset_plot(kind="eic_compounds")` は**複数物質 × 1サンプル**のオーバーレイを返す。**既定
 （`output="image"`）ではサーバ側で描いた PNG と、何を描き何を落としたかを書いた1行の
 キャプション**を返し、ファイルは書かない。以下の構造化JSON
 `plot_schema="lipidmix.eic.multi.v1"` は `output="payload"`（または env
 `LIPIDMIX_PLOT_OUTPUT=payload`）でクライアントが自分で描くときの契約。
 
 - **1呼び出し1サンプル**。`file_id` は必須。複数サンプルを比べるときはサンプルごとに
-  呼び出し、図を並べる。1物質×全サンプルの比較は従来どおり `eic_plot_chromatograms`。
+  呼び出し、図を並べる。1物質×全サンプルの比較は従来どおり `dataset_plot(kind="eic")`。
 - 物質は ARF2 の同定情報から選ぶ。`names` は `Name` への大小無視の部分一致、
   `ontologies` は `Ontology` への大小無視の完全一致で、両者は和集合。
 - 単一の `spot` フィールドは持たない。代わりに `sample`（`file_id` / `sample_name` /

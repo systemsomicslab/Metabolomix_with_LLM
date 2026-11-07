@@ -38,10 +38,7 @@ from metabolomix.core.mcp_core import (
     _first_writable_dir,
 )
 from metabolomix.core.session_state import AnalysisSession
-from metabolomix.core.path_resolvers import (
-    _select_latest_batch,
-    _describe_batch_selection,
-)
+from metabolomix.core.path_resolvers import _select_latest_batch
 from metabolomix.core.tool_helpers import (
     _identity_tables,
     _pca_scatter_arrays,

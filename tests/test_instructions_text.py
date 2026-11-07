@@ -18,6 +18,7 @@ NON_TOOL_IDENTIFIERS = {
     "needs_input",  # `pipeline_status` の状態名
     "add_subquestions",  # `record_objective` の引数
     "not_found",  # `dcl_find_msms` の status の値
+    "missing_state",  # エラー封筒の code
 }
 WILDCARD_RE = re.compile(r"^(dataset|library|curation|dcl|pathway|console|pipeline)_\*$")
 #: バッククォートの中身が「名前」か「名前(...)」か「名前=...」のどれかで、名前に `_` を含むもの。
@@ -74,6 +75,13 @@ def test_assay_kind_is_settled_after_load_dataset_with_record_objective():
     section = text[text.index("ASSAY KIND"):]
     assert "record_objective(assay_kind=" in section
     assert "AFTER" in section and "load_dataset" in section
+
+
+def test_records_need_a_loaded_dataset():
+    text = mcp_core.MCP_INSTRUCTIONS
+    section = text[text.index("RECORDS"):text.index("MS/MS EVIDENCE")]
+    for name in ("record_objective", "write_report", "save_figure", "[paths]", "reports_dir", "loaded dataset"):
+        assert name in section
 
 
 def test_removed_sections_are_gone():

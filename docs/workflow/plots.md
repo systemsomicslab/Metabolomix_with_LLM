@@ -3,7 +3,7 @@
 データセットの図は `dataset_plot` が描く（既定は画像。ファイルは書かない）。作った図の記録は
 `ds.figures[kind]`（kind ごとに最後の 1 つ。指紋に含めない）に置かれ、ユーザーが明示的に保存を
 求めたときだけ `save_figure` がそこから `reports/figures/<analysis_id>_<kind>.png` に書く。
-旧 ARF 系の描画ツール（`arf_plot_*` `arf_pca_species` `plot_pca_loadings` `eic_plot_*`）は B-2b Task 8 で消えた。
+旧 ARF 系の描画ツール（`arf_plot_*` `dataset_plot(kind="species_pca")` `dataset_plot(kind="loadings")` `eic_plot_*`）は B-2b Task 8 で消えた。
 
 ## payload 契約の比較
 
@@ -39,7 +39,7 @@ Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT
 状態変更: `ds.figures[kind]` を更新（メモリ上。ファイルは書かない）。`species_pca` はさらに結果を
 `ds.results` へ登録する（来歴の kind は `species_pca`。`loadings` の `result_id` には使え、分子種のローディングを描く。
 `pca` の `result_id` には使えない）。この結果は来歴に `metadata_revision` を持ち、試料の情報の更新・`dataset_exclude` で
-`is_current` が False になる（`STALE_ANALYSIS_RESULT`）。キュレーションの判断の更新では古くしない（旧 `arf_pca_species` と同じ）。
+`is_current` が False になる（`STALE_ANALYSIS_RESULT`）。キュレーションの判断の更新では古くしない（旧 `dataset_plot(kind="species_pca")` と同じ）。
 
 結果の選び方（`_pick_result`）: `result_id` があれば `ds.results` から引き、現在のものでなければ
 `STALE_ANALYSIS_RESULT`（`result_state.assert_current`）。無ければ直近（`ds.last_pca` /

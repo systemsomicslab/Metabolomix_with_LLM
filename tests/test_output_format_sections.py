@@ -4,19 +4,15 @@
   (1) 宣言した全トピックに実体ファイルがあること
   (2) B-2b のトピック集合（`dataset` があり、旧 `arf` `arf2` `pai2` が無い）
   (3) 意味論マーカーが失われていないこと
-  (4) トピック resource が読めて既読管理されること
-  (5) 未読トピックのツール出力にだけ誘導 1 行が付くこと
+  (4) トピック resource が読めること（核を読むと意味論ダイジェストが止まる）
 を固定する。
 """
 import asyncio
-import tempfile
 import unittest
-from pathlib import Path
 
 from metabolomix.core import mcp_core
 from metabolomix.core import session_state
 from metabolomix.tools import resources as tools_resources
-from tests.config_fixtures import config_env
 
 
 B2_TOPICS = {"core", "dataset", "dcl", "eic", "identity", "mztab", "library", "curation",
@@ -121,10 +117,9 @@ class SectionResourceTests(unittest.TestCase):
         uris = {str(t.uriTemplate) for t in templates}
         self.assertIn("lipidmix://docs/output-format/{topic}", uris)
 
-    def test_reading_section_returns_body_and_marks_seen(self):
+    def test_reading_section_returns_body(self):
         text = tools_resources.output_format_section("eic")
         self.assertIn("peak_top", text)
-        self.assertIn("eic", session_state.session.sections_seen)
 
     def test_unknown_topic_lists_valid_topics(self):
         with self.assertRaises(ValueError) as ctx:
@@ -145,46 +140,6 @@ class SectionResourceTests(unittest.TestCase):
     def test_core_resource_still_marks_output_format_seen(self):
         tools_resources.output_format_reference()
         self.assertTrue(session_state.session.output_format_seen)
-        self.assertIn("core", session_state.session.sections_seen)
-
-
-class SectionHintTests(unittest.TestCase):
-    """ツール出力には、そのツールのトピックが未読のときだけ誘導 1 行が付く。"""
-
-    def setUp(self):
-        session_state.session = session_state.AnalysisSession()
-
-    def test_hint_appended_for_unread_topic(self):
-        out = session_state.session.maybe_prepend_caveat("BODY", topic="eic")
-        self.assertIn("BODY", out)
-        self.assertIn("lipidmix://docs/output-format/eic", out)
-
-    def test_hint_suppressed_once_section_read(self):
-        tools_resources.output_format_section("eic")
-        out = session_state.session.maybe_prepend_caveat("BODY", topic="eic")
-        self.assertNotIn("lipidmix://docs/output-format/eic", out)
-
-    def test_hint_is_per_topic(self):
-        tools_resources.output_format_section("eic")
-        out = session_state.session.maybe_prepend_caveat("BODY", topic="dataset")
-        self.assertIn("lipidmix://docs/output-format/dataset", out)
-
-    def test_mode_off_disables_hint(self):
-        with (tempfile.TemporaryDirectory() as tmp,
-              config_env(Path(tmp), {"server.caveat_mode": "off"})):
-            out = session_state.session.maybe_prepend_caveat("BODY", topic="eic")
-        self.assertEqual(out, "BODY")
-
-    def test_hint_mentions_lipid_grammar_only_for_lipid_assay(self):
-        session_state.session.set_assay_kind("lipid")
-        hint = session_state.session.section_hint("dataset")
-        self.assertIn("脂質名文法", hint)
-
-    def test_hint_drops_lipid_grammar_for_metabolite_assay(self):
-        session_state.session.set_assay_kind("metabolite")
-        hint = session_state.session.section_hint("dataset")
-        self.assertIn("lipidmix://docs/output-format/dataset", hint)
-        self.assertNotIn("脂質名文法", hint)
 
 
 if __name__ == "__main__":

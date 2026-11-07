@@ -22,35 +22,32 @@ class TestSemanticsCaveatGuard(unittest.TestCase):
         self.assertFalse(session_state.session.output_format_seen)
         self.assertFalse(session_state.session.caveat_emitted)
 
-    def test_prepends_once_then_stops(self):
+    def test_emits_once_then_stops(self):
         s = session_state.session
-        first = s.maybe_prepend_caveat("BODY-1")
+        first = s.take_caveat()
         self.assertTrue(first.startswith(session_state.SEMANTICS_CAVEAT))
-        self.assertIn("BODY-1", first)
         self.assertTrue(s.caveat_emitted)
-        # 2回目は前置しない（本文そのまま）
-        second = s.maybe_prepend_caveat("BODY-2")
-        self.assertEqual(second, "BODY-2")
+        # 2回目は出さない
+        self.assertIsNone(s.take_caveat())
 
-    def test_resource_read_suppresses_prepend(self):
+    def test_resource_read_suppresses_digest(self):
         s = session_state.session
         s.output_format_seen = True  # output-format を fetch 済み相当
-        out = s.maybe_prepend_caveat("BODY")
-        self.assertEqual(out, "BODY")
+        self.assertIsNone(s.take_caveat())
         self.assertFalse(s.caveat_emitted)
 
     def test_mode_off_disables(self):
         s = session_state.session
         with (tempfile.TemporaryDirectory() as tmp,
               config_env(Path(tmp), {"server.caveat_mode": "off"})):
-            out = s.maybe_prepend_caveat("BODY")
-        self.assertEqual(out, "BODY")
+            out = s.take_caveat()
+        self.assertIsNone(out)
         self.assertFalse(s.caveat_emitted)
 
     def test_mode_default_is_digest(self):
         s = session_state.session
         with tempfile.TemporaryDirectory() as tmp, config_env(Path(tmp), {}):  # キーが無い
-            out = s.maybe_prepend_caveat("BODY")
+            out = s.take_caveat()
         self.assertTrue(out.startswith(session_state.SEMANTICS_CAVEAT))
 
 class TestResourceReadClearsGuard(unittest.TestCase):
@@ -112,27 +109,49 @@ class TestAssayKindDigest(unittest.TestCase):
 
     def test_reemits_once_when_kind_becomes_known(self):
         s = session_state.session
-        first = s.maybe_prepend_caveat("BODY-1")
+        first = s.take_caveat()
         self.assertIn("未確定", first)
         # 種別が確定したら、確定後の規則を1回だけ届ける
         s.set_assay_kind("metabolite")
-        second = s.maybe_prepend_caveat("BODY-2")
+        second = s.take_caveat()
         self.assertIn("アダクト", second)
         # 同じ種別のままなら再注入しない
-        third = s.maybe_prepend_caveat("BODY-3")
-        self.assertEqual(third, "BODY-3")
+        self.assertIsNone(s.take_caveat())
 
     def test_resource_read_suppresses_reemission(self):
         s = session_state.session
-        s.maybe_prepend_caveat("BODY-1")
+        s.take_caveat()
         s.output_format_seen = True
         s.set_assay_kind("lipid")
-        self.assertEqual(s.maybe_prepend_caveat("BODY-2"), "BODY-2")
+        self.assertIsNone(s.take_caveat())
+
+class TestTakeCaveatIsThreadSafe(unittest.TestCase):
+    """`load_dataset` はワーカースレッドで走る。同時に呼ばれてもダイジェストは 1 回だけ出る。"""
+
+    def test_only_one_of_many_threads_gets_the_digest(self):
+        import threading
+
+        for _ in range(20):
+            s = session_state.AnalysisSession()
+            barrier = threading.Barrier(8)
+            got = []
+
+            def worker():
+                barrier.wait()
+                got.append(s.take_caveat())
+
+            threads = [threading.Thread(target=worker) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.assertEqual(sum(1 for g in got if g), 1)
+
 
 class TestDigestTravelsWithLoadDataset(unittest.TestCase):
     """`load_dataset` の戻り値（JSON）の `caveat` に意味論ダイジェストが載る（B-2b Task 10）。
 
-    旧パーサが消えて `maybe_prepend_caveat` を呼ぶ口が無くなったので、入口の `load_dataset` が
+    旧パーサが消えて前置する口が無くなったので、入口の `load_dataset` が
     JSON の最上位の `caveat` 文字列として運ぶ。1 回だけ・種別ごと・`caveat_mode=off` で止まる。
     """
 

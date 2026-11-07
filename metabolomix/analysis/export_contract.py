@@ -5,7 +5,7 @@ massbank-context の load_differential → pathway_activity がこの形を前�
 列の増減・改名・順序変更は CONTRACT_VERSION の引き上げと下流の同時更新なしに
 やってはいけない。
 
-ARF 経路（arf_export_differential）と DatasetState 経路
+旧 ARF 経路と DatasetState 経路
 （dataset_export_differential）の両方がここを参照する。同じ契約の実装が
 2 箇所にあると、片方だけ直った状態で下流が壊れる。
 
@@ -74,7 +74,7 @@ def build_meta(*, group_a, n_a, group_b, n_b,
         9. n_features_total / n_with_inchikey / n_unannotated
        10. msi_note             ← 文面が経路で違う（.arf2 由来 か mzTab-M か）
 
-    この順序は arf_export_differential の現行出力と一致させてある。
+    この順序は `dataset_export_differential` の現行出力と一致させてある。
     変えると既存ファイルとの差分が出るので、CONTRACT_VERSION を上げずに
     順序を触ってはいけない。
     """

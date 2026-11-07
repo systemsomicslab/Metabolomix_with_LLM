@@ -757,7 +757,7 @@ def extract_peak_properties(deserialized_list: list[dict]) -> pd.DataFrame:
 def count_peak_property_rows(deserialized_list: list[dict]) -> int:
     """`extract_peak_properties` が返す行数だけを、DataFrame を組まずに数える。
 
-    `arf_parser` は「抽出された総ピークレコード数」と「平均サンプル数/スポット」
+    旧 ARF 要約ツールは「抽出された総ピークレコード数」と「平均サンプル数/スポット」
     しか使っていないのに、そのために spot × 注入ぶんの dict を作って pandas の
     DataFrame へ積んでいた（393MB の `.arf` で 881 万行）。行の採否条件は
     `extract_peak_properties` と同一に保つ——ずれたら報告値が嘘になる。
@@ -1005,7 +1005,7 @@ def get_pca_loading_features(pca_result: dict, deserialized_list: list[dict],
     返り値: [{"pc": "PC1", "var_ratio": <%>, "positive": [item...], "negative": [item...]}, ...]
       item = {"id", "value", "annotation", "m_z", "rt"}（feature名 "Spot_<id>_<prop>" から id を取得し
       deserialized_list[id] のメタデータを付与）。
-    metabolomix.arf.tools の arf_parser / arf_pca_preprocessed が共通で利用する。
+    旧 ARF のツール（撤去済み）が共通で利用していた。
     """
     loadings = pca_result.get("loadings", [])
     evr = pca_result.get("explained_variance_ratio", [])

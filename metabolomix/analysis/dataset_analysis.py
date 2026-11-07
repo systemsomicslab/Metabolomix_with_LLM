@@ -4,7 +4,7 @@ DatasetState.feature_matrix は (n_features, n_samples)。analysis/ の関数は
 すべて (n_samples, n_features) を期待するため、ここで転置する。
 呼び出し側はこの転置を意識しなくてよい。
 
-処理順は metabolomix/arf/tools.py の arf_preprocess と同一に保つ:
+処理順は旧 ARF 経路の前処理（撤去済み）と同一に保つ:
   blank_filter → normalize → drift_correct → qc_rsd_filter → impute
   → drop_samples_by_role(blank)
 ARF 経路と DatasetState 経路で違う数字が出ないことが、この層の存在意義。
@@ -255,7 +255,7 @@ def run_dataset_preprocess(ds, recipe: dict):
     report.update(detection_report)
 
     # ブランクは blank_filter の参照として使い終えたので解析行列から外す。
-    # 残すと総強度が桁違いに低い行が PCA の PC1 を支配する（arf_preprocess と同じ理由）。
+    # 残すと総強度が桁違いに低い行が PCA の PC1 を支配する（旧 ARF 経路の前処理と同じ理由）。
     # QC は残す——QC クラスタの締まり具合を PCA で見るのは品質確認の定番手段。
     matrix, pp_sample_names, dropped = preprocessing.drop_samples_by_role(
         matrix, sample_names, roles, drop_roles=("blank",),
@@ -268,7 +268,7 @@ def run_dataset_preprocess(ds, recipe: dict):
             "ため残しています。"
         )
 
-    # プールQC が複数バッチに分かれているかの簡易警告（arf_preprocess:327,364 と同じ材料）。
+    # プールQC が複数バッチに分かれているかの簡易警告（旧 ARF 経路と同じ材料）。
     qc_batches = {sample_meta[n]["batch"] for n in sample_names
                   if sample_meta[n]["role"] == "qc"}
     if len(qc_batches) > 1:
@@ -276,7 +276,7 @@ def run_dataset_preprocess(ds, recipe: dict):
             "プールQC が複数バッチ/層に分かれています。全体一律のドリフト補正は近似です。"
         )
 
-    # 層別プール QC の警告（arf_preprocess と同じ材料）
+    # 層別プール QC の警告（旧 ARF 経路と同じ材料）
     qc_strata = preprocessing.detect_qc_strata(sample_names, roles)
     if len(qc_strata) > 1:
         labels = ", ".join(sorted(s for s in qc_strata if s))
@@ -391,7 +391,7 @@ def run_dataset_differential(
     idx_b, names_b = _resolve_group(group_b_samples, available, ds.roles,
                                     group_b_label, caveats)
 
-    # 正規化未適用の警告（arf_differential:846-848 と同じ判定）。DatasetState 側は
+    # 正規化未適用の警告（旧 ARF 経路の差次的解析と同じ判定）。DatasetState 側は
     # run_dataset_preprocess が recipe 自体を ds へ書き戻さないため、呼び出し側が
     # 事前に ds.preprocessing_recipe へ設定しておく契約。未設定/空は "none" 扱い。
     recipe = ds.preprocessing_recipe or {}
@@ -423,15 +423,15 @@ def run_dataset_differential(
     sub_matrix = matrix[keep_idx, :]
     group_labels = [group_a_label] * len(idx_a) + [group_b_label] * len(idx_b)
 
-    # 交絡（群⟂バッチ）判定は arf_differential:872-879 と同じく「実際に比較した2群」
+    # 交絡（群⟂バッチ）判定は 旧 ARF 経路の差次的解析と同じく「実際に比較した2群」
     # （プール後）に対して行う。プール前の細粒度ラベルで判定すると偽の交絡警告が出る
-    # （arf_differential:869-871 のコメントと同じ理由）。
+    # （旧 ARF 経路のコメントと同じ理由）。
     # names_a/names_b は idx_a/idx_b と同じ順で構築されているため、
     # keep_idx（idx_a + idx_b）と対応するバッチ列を同じ並びで組む。
     names_ordered = names_a + names_b
     batch_labels = [(ds.sample_meta.get(n) or {}).get("batch") for n in names_ordered]
     conf = differential.check_confounding(group_labels, batch_labels)
-    # batch_source は比較対象に限らず全サンプルから拾う（arf_differential:858 と同じ）。
+    # batch_source は比較対象に限らず全サンプルから拾う（旧 ARF 経路と同じ）。
     batch_source = next(
         (m.get("batch_source") for m in (ds.sample_meta or {}).values()
          if m.get("batch_source")),

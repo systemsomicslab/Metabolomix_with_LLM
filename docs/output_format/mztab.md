@@ -93,13 +93,13 @@ SMF からこれらを読もうとすると常に `None` になり、「この�
 無い）ときは、対応する SME の個別スコア（`id_confidence_measure[2..8]` の合成
 total score）を代わりに入れる。SML 側の値がある場合はそちらを優先し上書きしない。
 このフォールバックが入ったことで、`dataset_export_differential` /
-`arf_export_differential`（`metabolomix/analysis/feature_export.py`）の同じ列が、
+`dataset_export_differential`（`metabolomix/analysis/feature_export.py`）の同じ列が、
 以前は `null` だった行に SME 由来の値を出すようになった（列定義
 `export_contract.py` 自体は無変更）。
 
 **`confidence_measures` はどこからも読まれていない（Minor 9）**: `feature_annotations[fid]`
 に SME の個別スコア（`id_confidence_measure[2..8]`、`_extract_confidence_measures`）が
-入るが、`dataset_export_differential` / `arf_export_differential`
+入るが、`dataset_export_differential` / `dataset_export_differential`
 （`metabolomix/analysis/{dataset_export,feature_export}.py`）は列定義で明示された
 キーだけを拾うため、この辞書は現状どのツール戻り値にも出ない。参照するには
 `DatasetState.feature_annotations[fid]["confidence_measures"]` を直接読むこと。
@@ -171,7 +171,7 @@ SME 由来という食い違った行ができる。
 - `samples`: 試料の TSV（name・group・role・batch・injection_order・subject_id・excluded）。`excluded` は
   `dataset_exclude` の理由、実験情報シートの `include=false` の試料は「include=false（実験情報シート）」、
   除外していなければ空。`query` は因子トークン（`_` 区切りの AND・順不同、`,` 区切りの複数指定は OR。旧
-  `sample_search` の `specs` と同じ文法）。役割では落とさない。
+  `dataset_status(view="samples")` の `specs` と同じ文法）。役割では落とさない。
 - `tags`: タグごとの特徴 ID（先頭 50 件）。**特徴のタグは MS-DIAL の `_tags.xml` から読んだもの**で、
   アノテーションの確かさそのものではない。
 
@@ -388,9 +388,9 @@ qualified にせず数にも入れない——選んだ残す ID の行が必ず
 極性の宣言と多数決の食い違い・キュレーションのフラグがあるのに反映していないこと（この検索は
 SME / SML の生の同定だけを見るので、`dataset_export_differential` の同定と食い違いうる）が入る。
 
-## `plot_pca_loadings(source="mztab")`
+## `dataset_plot(kind="loadings")`（mzTab-M のデータセット）
 
-`dataset_pca` の結果は `plot_pca_loadings(source="mztab")` で主成分ごとのローディング図に描ける（`source="auto"` でも、候補がこの 1 つだけなら選ばれる）。
+`dataset_pca` の結果は `dataset_plot(kind="loadings")` で主成分ごとのローディング図に描ける（`result_id` を省けば直近の `dataset_pca`）。
 特徴量は前処理後の `pp_feature_names`、表示名は `feature_annotations`（SML 由来）か `feature_metadata`（SME 由来）の名前で、
 無ければ `feature_id`。mzTab-M にはクラス（Ontology）が無いので棒は 1 色になる。r は `dataset_pca` が autoscale で回したときの
-成分 × 特異値 / √n（`n_samples`）で出す。返り値の意味は `arf` トピックの §11.8 と同じ。
+成分 × 特異値 / √n（`n_samples`）で出す。返り値の意味は `dataset` トピックの §11.8 と同じ。

@@ -255,7 +255,7 @@ def _excluded_cell(ds, name: str, row: dict) -> str:
 
 
 def _samples_view(ds, query: str | None) -> str:
-    """試料の TSV。`query` は因子トークン（旧 `sample_search` の `specs` と同じ文法）。"""
+    """試料の TSV。`query` は因子トークン（`msdial/sample_factors.py` の文法。旧 ARF 経路の試料検索と同じ）。"""
     from metabolomix.msdial import sample_factors
 
     names = list(ds.sample_names)
@@ -322,7 +322,7 @@ def _samples_tsv(ds) -> str:
     """サンプル名と役割を TSV で返す（列名 1 回 + 1 行 1 サンプル）。
 
     前処理済みなら ds.roles を、まだなら同じ判定関数（detect_sample_roles）を
-    その場で適用する。ARF 経路（arf_list_sample_roles）と同じ判定を使うので、
+    その場で適用する。旧 ARF 経路の役割判定と同じ判定を使うので、
     どちらの経路でも同じ試料が同じ役割になる。
     """
     from metabolomix.analysis import preprocessing

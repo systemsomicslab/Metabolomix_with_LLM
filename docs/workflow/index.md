@@ -35,17 +35,16 @@
 
 | 文書 | 対象 | ツール数 |
 |---|---|---|
-| [dataset.md](dataset.md) | ファイルの一覧（入口 `load_dataset` は mztab.md） | 1 |
+| [dataset.md](dataset.md) | データセット投入の入口 — ファイルの一覧・読み込み（`load_dataset`）・一覧と閉じる・試料の状態と除外 | 6 |
 | [dcl.md](dcl.md) | `.dcl` — デコンボリューション済み MS/MS | 3 |
 | [plots.md](plots.md) | 図（dataset_plot）と図の保存（save_figure）と payload 契約の比較 | 2 |
-| [mztab.md](mztab.md) | データセットを開く入口（`load_dataset`）と状態（`dataset_status`）・除外（`dataset_exclude`） | 3 |
 | [dataset_analysis.md](dataset_analysis.md) | DatasetState — 前処理・PCA・差次的解析・エクスポート・実験情報訂正・特徴検索 | 7 |
 | [pipeline.md](pipeline.md) | 生データフォルダ起点の統括(pipeline) — 上流検証・前処理・PCA・比較・レポートまでの自動進行 | 5 |
 | [metabolomics.md](metabolomics.md) | LC–MS メタボロミクス v2 — 名指しした解析行列への統計 | 2 |
 | [library.md](library.md) | 参照ライブラリ（`.dbs`/`.msp`）— MS/MS スペクトル照合と対向プロット・ライブラリの検索 | 4 |
 | [curation.md](curation.md) | アラインメントのキュレーション — 注釈の一覧確認・機械判別・フラグ記録・候補付け | 5 |
 | [pathway.md](pathway.md) | パスウェイ投影（MSLipidMapper）— サブクラスのノード集計・2 群比較・図 | 2 |
-| [reanalysis.md](reanalysis.md) | 再解析 — ハンドルの一覧・クローズと spec で呼ぶツール | 10 |
+| [reanalysis.md](reanalysis.md) | 再解析 — spec で呼ぶツール（ハンドルの一覧・クローズは dataset.md） | 8 |
 
 合計 44 ツール。対象外は 12 ツール——レポート記録系 3
 （`record_objective` `write_report` `read_report`）＋
@@ -56,9 +55,9 @@ Console 実行層 8（`console_plan` `console_prepare_input` `console_method_tem
 
 ## 一気通貫の順序
 
-主経路は MS-DIAL GUI で解析済みの出力を `load_dataset` で読むこと（[dataset.md](dataset.md)）。
-生データフォルダから Console・mzTab-M・前処理・PCA・比較・レポートまでを自動で
-進める**補助経路の一気通貫入口**は `pipeline_run`（[pipeline.md](pipeline.md)）で、
+入口は 2 つで、合流点は MS-DIAL の解析フォルダ（2 つは対等）。GUI で解析済みの出力は `list_data_files` →
+`load_dataset` で読む（[dataset.md](dataset.md)）。生データフォルダから Console・mzTab-M・前処理・PCA・比較・
+レポートまでを自動で進める**一気通貫入口**は `pipeline_run`（[pipeline.md](pipeline.md)）で、
 フォルダに MS-DIAL を動かした形跡が無く、ユーザーが Console を回すことに同意したときだけ使う。
 workerが1回分を進める経路（`prepare_input → upstream → validate_outputs →
 load_dataset → resolve_metadata → preprocess → pca → resolve_comparisons →

@@ -98,38 +98,6 @@ def _select_latest_batch(paths: list[str]) -> list[str]:
     return [p for p, k in keyed if k == latest or not k]
 
 
-def _describe_batch_selection(directory: Path) -> str | None:
-    """フォルダ内に複数バッチが混在する場合、最新バッチを自動選択した旨の注記を返す。
-
-    バッチが1つ（または判別不能）なら None を返し、注記を出さない。
-    """
-    try:
-        names = [f.name for f in directory.iterdir() if f.is_file()]
-    except OSError:
-        return None
-    # 解析対象は .arf/.arf2 のみ。プロジェクト/メタ(.mddata/.mdproject/.msp2)や
-    # per-sample(.pai2/.dcl)も AlignmentResult 形式のタイムスタンプを持つため、
-    # 拡張子で解析対象に限定しないと告知バッチが実際に解析する .arf バッチとズレる
-    # （例: POS で .mddata の 2026_06_17 を告知するが解析 .arf は 2024_06_13）。
-    # 正規化キー -> 表示用タイムスタンプ（アンダースコア付きの読みやすい形）
-    display: dict[str, str] = {}
-    for name in names:
-        low = name.lower()
-        if not (low.endswith(".arf") or low.endswith(".arf2")):
-            continue
-        match = _ALIGNMENT_TIMESTAMP_RE.search(name)
-        if match:
-            display[match.group(1).replace("_", "")] = match.group(1)
-    if len(display) <= 1:
-        return None
-    latest_key = max(display)
-    n_old = len(display) - 1
-    return (
-        f"🗂️ フォルダ内に複数バッチ（{len(display)} 件の処理タイムスタンプ）を検出しました。"
-        f"最新バッチ **{display[latest_key]}** を自動選択し、旧バッチ {n_old} 件はスキップします。"
-    )
-
-
 # このサーバのパーサが読める拡張子。MS-DIAL の出力フォルダには測定生データ
 # （.wiff / .wiff.scan / .wiff2 / .timeseries.data / .txt）が同居し、実データでは
 # 495 ファイル中 7 割以上がそれだった。既定でそこまで列挙すると、入口ツールの

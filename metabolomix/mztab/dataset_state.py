@@ -1,6 +1,6 @@
 """DatasetState: mzTab-M を読んだ後の正準モデル。spec §11 参照。
 
-session.arf の ARF 専用構造とは完全に独立している。session.dataset スロットへ格納する。
+解析フォルダで読んだものも mzTab-M で読んだものも同じ形で、ハンドルの登録簿に住む（`session.dataset` は直近のハンドルを読む）。
 """
 from __future__ import annotations
 
@@ -183,8 +183,7 @@ class DatasetState:
 
         # --- 解析状態フィールド（dataset_preprocess / dataset_pca / dataset_differential が設定） ---
         # pp_matrix: 前処理済み行列。shape は (n_samples, n_features) — feature_matrix の転置。
-        # ARF 側の session.arf.feature_matrix / pp_sample_names / pp_feature_names と
-        # 同じ役割で、スロットだけが独立している。
+        # 前処理済みの試料名・特徴名は pp_sample_names / pp_feature_names が持つ。
         self.pp_matrix = None
         self.pp_sample_names: list[str] = []
         self.pp_feature_names: list[str] = []

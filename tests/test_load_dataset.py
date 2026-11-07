@@ -14,35 +14,6 @@ import tempfile
 import server
 
 
-class BatchAnnounceTests(unittest.TestCase):
-    """複数バッチ混在時のバッチ選択の注記（`_describe_batch_selection`）。"""
-
-    def _touch(self, directory: Path, name: str) -> None:
-        (directory / name).write_bytes(b"")
-
-    def test_batch_note_matches_analyzed_arf_not_persample_files(self):
-        # A newer per-sample file (.pai2 with a compact 12-digit timestamp) must
-        # NOT be announced as the selected batch. The note must name the latest
-        # ALIGNMENT (.arf/.arf2) batch that is actually resolved and analyzed.
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            self._touch(directory, "AlignmentResult_2024_06_12_18_21_56_PeakProperties.arf")
-            self._touch(directory, "AlignmentResult_2024_06_12_18_21_56.arf2")
-            self._touch(directory, "AlignmentResult_2024_06_13_09_21_45_PeakProperties.arf")
-            self._touch(directory, "AlignmentResult_2024_06_13_09_21_45.arf2")
-            # newer per-sample processing produced only .pai2 (compact ts), no .arf
-            self._touch(directory, "sample_x_NEG_202606171407.pai2")
-            # project/metadata files carry an AlignmentResult-style timestamp too,
-            # but are not analyzable matrices and must be ignored.
-            self._touch(directory, "Dataset_2026_06_17_00_34_26.mddata")
-            self._touch(directory, "2026_06_17_00_33_16.mdproject")
-            note = server._describe_batch_selection(directory)
-            self.assertIsNotNone(note)
-            self.assertIn("2024_06_13_09_21_45", note)
-            self.assertNotIn("202606171407", note)
-            self.assertNotIn("2026_06_17", note)
-
-
 class SelectLatestBatchTests(unittest.TestCase):
     """複数バッチ（処理タイムスタンプ）混在時に最新バッチだけを採用すること。"""
 

@@ -185,6 +185,11 @@ checks do not apply; identification rests on the candidate set (adducts,
 isomers, rank). Never send filename-derived terms to external services before
 the user confirms them.
 
+RECORDS — `record_objective`, `write_report` and `save_figure` write to `[paths]
+reports_dir` from the settings file when it is set, otherwise to `reports/` under
+the analysis folder of the loaded dataset (never into the repository), so a
+dataset must be loaded first; without one they answer `missing_state`.
+
 MS/MS EVIDENCE — the real spectra live in `.dcl`; the acquisition flags that
 loaded rows carry (has_msms) only record that an MS/MS acquisition reference
 exists. Read the spectrum itself with `dcl_spot_spectrum`, `dcl_diagnostic_ions`

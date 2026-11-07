@@ -33,7 +33,6 @@ drive a full analysis without ever seeing the raw matrices.
 |---|---|
 | `.arf` | Alignment result, per-sample peaks. The main source for cross-sample comparison and PCA. |
 | `.arf2` | Alignment result, spot representatives. Dataset-wide catalog and annotations. |
-| `.pai2` | A single measurement's detected peaks. |
 | `.dcl` | Deconvoluted MS/MS spectra. MS-DIAL's own binary format — not MessagePack. |
 | `.EIC.aef` | Extracted ion chromatograms. |
 | mzTab-M 2.0 | Standard exchange format, produced by the MS-DIAL Console path. |

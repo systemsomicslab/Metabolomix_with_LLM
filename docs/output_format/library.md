@@ -204,7 +204,7 @@ precursor m/z による `.dcl` 検索は通らない——同じ m/z の別ス�
 の比較は `COLLATE NOCASE`。`"positive"`（store の正規化表記）と `"Positive"`
 （PAI2 由来の `IonMode.Positive.name`）はどちらも一致する。以前は SQLite の既定
 BINARY 照合のままで、`ion_mode.name`（大文字始まり）をそのまま渡す呼び出し
-（撤去した旧 `verify_peak_annotation` の統合経路）が常に 0 件になっていた
+（撤去した旧ピーク裏取りツールの統合経路）が常に 0 件になっていた
 ——`no_candidates` はここでは「該当レコードが無い」という実質的な主張なので、
 この不一致は「ライブラリに無い化合物だ」という誤った結論に直結していた。
 
@@ -278,9 +278,9 @@ Log10 / Sqrt を**上下独立**に選ばせる）。**`Absolute` は用意し�
 単位の違う 2 つのスペクトルを上下に並べるので、生の強度で並べても比較にならない
 （上流は片側ずつ別の図として見られるので成立している）。
 
-### 14.8 （撤去）`verify_peak_annotation` への統合
+### 14.8 （撤去）ピーク裏取りツールへの統合
 
-旧 `verify_peak_annotation` の `analytical_checks.msms.spectral_match` ブロック（`best_match` と
+旧ピーク裏取りツールの `analytical_checks.msms.spectral_match` ブロック（`best_match` と
 `status` の 4 値 `unavailable` / `error` / `no_candidates` / `matched`）は、ツールごと撤去した
 （B-2b）。ピークごとの裏取りに MS/MS の実スペクトルとライブラリの照合を重ねたいときは、
 `dcl_spot_spectrum`（スペクトルを読む）と `library_match_feature`（候補ごとの照合）を組み合わせる。

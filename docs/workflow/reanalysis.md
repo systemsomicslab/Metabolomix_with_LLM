@@ -22,32 +22,13 @@ property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` 
 
 ## ハンドルを開く（load_dataset）
 
-`load_dataset` は [mztab.md](mztab.md) の節が連鎖を持つ。再解析のエージェントは、返った
+`load_dataset` は [dataset.md](dataset.md) の節が連鎖を持つ（`dataset_list` / `dataset_close` も同じ文書）。再解析のエージェントは、返った
 `dataset_handle` を各ツールに渡して使い、直近（`current_handle_id`）を当てにしない。
 開いたハンドルはいつも直近になるが、`dataset_handle` を渡した呼び出しは直近を読み書きしない。
 ライブラリはデータセットが覚えた同定のライブラリ（`library_record`）を、sha256 を測り直して
 読み取り専用で開く（極性の設定には落ちない）。スポットの照合に使う `.arf2` / `.dcl` は、
 解析フォルダで読んだならその選択（`AlignmentSelection`）のもの、mzTab-M で読んだなら
 `_alignment_files()` が探す。
-
-## dataset_list
-
-前提: なし。状態変更: なし。`current` は `session.current_handle_id` と同じハンドルか。
-
-1. metabolomix/tools/handle_tools.py  dataset_list()
-2. └─ metabolomix/core/handles.py  HandleRegistry.list()
-
-## dataset_close
-
-前提: そのハンドルが開いていること（無ければ `DATASET_HANDLE_NOT_FOUND`）。
-状態変更: 登録簿から外し、ライブラリの接続を閉じる（そのハンドルのライブラリは、ハンドルと一緒に
-無くなる。対話のセッションの `session.library` が直近のハンドルのライブラリなら、これも無くなる）。直近のハンドルなら、対話のセッションは
-データセットが無い状態になる（次に `session.dataset` を読んだときに `current_handle_id` を
-None に戻す。別のハンドルへは落ちない）。
-
-1. metabolomix/tools/handle_tools.py  dataset_close()
-2. └─ metabolomix/core/handles.py  HandleRegistry.close()
-3.    └─ metabolomix/core/handles.py  DatasetHandle.close()
 
 ## dataset_analysis_run
 
