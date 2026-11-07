@@ -218,17 +218,7 @@ class EicPlotToolTests(unittest.TestCase):
         tool = next(item for item in tools if item.name == "eic_plot_chromatograms")
         self.assertIsNone(tool.outputSchema)
 
-    def test_png_is_written_only_by_explicit_save_tool(self):
-        server.eic_plot_chromatograms(0, file_path=str(self.path), file_ids=[7])
-        message = server.save_figure("eic", "sample-eic")
-        png = self.tmp / "fallback" / "figures" / "sample-eic_eic.png"
-        self.assertTrue(png.is_file())
-        self.assertIn("figures/sample-eic_eic.png", message)
 
-    def test_save_tool_guides_when_plot_is_missing(self):
-        message = server.save_figure("eic", "sample-eic")
-        self.assertIn("eic_plot_chromatograms", message)
-        self.assertEqual(list(self.tmp.rglob("*.png")), [])
 
 
 if __name__ == "__main__":

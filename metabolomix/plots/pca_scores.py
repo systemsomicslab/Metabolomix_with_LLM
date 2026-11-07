@@ -1,4 +1,4 @@
-"""PCA スコア図（MCP 非依存）。分子種 PCA の画像返しと save_figure(kind="pca") が共有する。
+"""PCA スコア図（MCP 非依存）。分子種 PCA の画像返しと `dataset_plot(kind="pca")` / `save_figure(kind="pca")` が共有する。
 
 points の `group` があれば色分けと凡例、`fitted=False`（主成分の計算に使わず投影だけした試料）は
 白抜き。軸の範囲は計算に使った点に合わせ、そこから外れた投影点は枠の端に矢印と座標で示す
@@ -7,6 +7,51 @@ points の `group` があれば色分けと凡例、`fitted=False`（主成分�
 from __future__ import annotations
 
 from metabolomix.plots.group_intensity import GROUP_COLORS
+
+PCA_SCORES_SCHEMA = "lipidmix.pca_scores.v1"
+COLOR_BY = ("group", "batch", "role")
+#: 値の無い試料の色分けラベル（凡例に出る）。
+UNSET_LABEL = "(unset)"
+_DIGITS = 4
+
+
+def build_pca_scores_payload(scores, explained_variance_ratio, colors, *, color_by, result_id,
+                             title=None, caveats=None):
+    """`dataset_pca` の結果（スコア行）から、描画中立の散布図 payload（`lipidmix.pca_scores.v1`）を作る。
+
+    `scores` は {name, PC1, PC2, ...} の行、`colors` は {試料名: 色分けの値}。点の `group` が色分けの
+    値で、何で色分けしたかは `color_by`。PC2 の無い（主成分 1 つの）PCA は散布図にならないので
+    ValueError。描画（`render_pca_scores`）はこの dict をそのまま食う。
+    """
+    if color_by not in COLOR_BY:
+        raise ValueError(f"color_by は {' / '.join(COLOR_BY)} のどれかを指定してください"
+                         f"（受け取った値: {color_by!r}）。")
+    caveats = list(caveats or [])
+    points = []
+    for row in scores or []:
+        x, y = row.get("PC1"), row.get("PC2")
+        if x is None or y is None:
+            continue
+        value = colors.get(row.get("name"))
+        points.append({"label": row.get("name"), "x": round(float(x), _DIGITS),
+                       "y": round(float(y), _DIGITS), "group": UNSET_LABEL if value in (None, "") else str(value)})
+    if not points:
+        raise ValueError("PCA 結果に PC1 と PC2 の両方を持つ試料がありません（主成分が 1 つしか無い）。")
+    if all(p["group"] == UNSET_LABEL for p in points):
+        caveats.append(f"{color_by} の値を持つ試料が無いため、色分けはありません"
+                       "（dataset_set_sample_metadata で与えられます）。")
+    evr = list(explained_variance_ratio or [])
+    return {
+        "plot_schema": PCA_SCORES_SCHEMA,
+        "plot_type": "scatter",
+        "title": title or "PCA",
+        "x_label": f"PC1 ({evr[0] * 100:.2f}%)" if len(evr) > 0 else "PC1",
+        "y_label": f"PC2 ({evr[1] * 100:.2f}%)" if len(evr) > 1 else "PC2",
+        "color_by": color_by,
+        "result_id": result_id,
+        "points": points,
+        "caveats": caveats,
+    }
 
 
 def render_pca_scores(plot: dict, *, title: str | None = None):

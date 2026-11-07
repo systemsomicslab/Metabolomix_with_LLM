@@ -196,11 +196,15 @@ class DatasetState:
         self.preprocessing_recipe: dict = {}
         # last_pca / last_differential: 直近結果の全量。戻り値には要約だけを載せ、
         # 全量はここに置く（CLAUDE.md の戻り値肥大禁止）。
-        # 現時点で読むのは dataset_export_differential のみ。図の保存ツール
-        # （save_figure の pca / volcano）は session.arf 側を見ており、
-        # DatasetState 経路には未対応（次フェーズ）。
+        # 読むのは dataset_export_differential と dataset_plot（pca / loadings / volcano）。
         self.last_pca = None
         self.last_differential = None
+        # figures: dataset_plot の kind -> 最後に作った図の記録
+        # {"kind", "payload", "title", "result_id", "result"（volcano の全点。描画用）, "caption"}。
+        # save_figure(kind=...) がここから描く。**指紋に含めない**（派生物であって入力ではない）。
+        # 結果から作った図（pca / loadings / volcano）は、その結果が古くなったとき
+        # `result_state.invalidate_results` が捨てる。
+        self.figures: dict[str, dict] = {}
 
         # --- 同一性と来歴（metabolomix/analysis/result_state.py が読み書きする） ---
         # dataset_id: この DatasetState 実体の ID。結果の provenance が指す先で、

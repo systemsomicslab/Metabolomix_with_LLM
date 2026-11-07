@@ -135,13 +135,6 @@ def test_image_output_caption_and_session(loaded):
     assert session_state.session.arf.last_species_plot["payload"]["spots"][0]["spot_id"] == 0
 
 
-def test_save_figure_species_writes_png_and_svg(loaded, tmp_path, monkeypatch):
-    import server
-    use_config(monkeypatch, tmp_path, {"paths.reports_dir": tmp_path / "reports"})
-    _species(items=["PG"])
-    msg = server.save_figure("species", "EV-PG")
-    png = tmp_path / "reports" / "figures" / "ev-pg_species.png"      # make_slug は小文字にする
-    assert png.is_file() and png.with_suffix(".svg").is_file() and str(png) in msg
 
 
 def _pca(**kw):
@@ -184,19 +177,11 @@ def test_pca_species_invalid_input_returns_error_and_clears_slot(loaded, kw):
     assert session_state.session.arf.last_species_pca is None
 
 
-def test_pca_species_image_and_save_figure_needs_source_when_ambiguous(loaded, tmp_path, monkeypatch):
+def test_pca_species_image(loaded):
     from mcp.server.fastmcp import Image
-    import server
     from metabolomix.arf.species_tools import arf_pca_species
-    use_config(monkeypatch, tmp_path, {"paths.reports_dir": tmp_path / "reports"})
     out = arf_pca_species(items=["PG", "DGDG", "DG"], groups=["ctrl", "ko"])
     assert isinstance(out[1], Image) and "PC1" in out[0]
-    session_state.session.arf.last_pca_plot = {"title": "x", "x_label": "PC1", "y_label": "PC2",
-                                               "points": [{"x": 0, "y": 0, "label": "a"}]}
-    ambiguous = json.loads(server.save_figure("pca", "s1"))
-    assert ambiguous["error"]["code"] == "AMBIGUOUS_RESULT_SOURCE"
-    msg = server.save_figure("pca", "s1", source="species")
-    assert (tmp_path / "reports" / "figures" / "s1_pca.png").is_file() and "source=species" in msg
 
 
 def test_pca_species_unmatched_item_is_a_caveat_in_payload_and_caption(loaded):

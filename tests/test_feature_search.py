@@ -1053,3 +1053,26 @@ def test_retest_uses_the_handoff_recipe_of_a_pipeline_result():
     for got, want in zip(redone["results"], result["results"]):
         for key in ("log2fc", "p", "q"):
             assert _same(got[key], want[key]), (got["feature"], key)
+
+
+def test_include_false_sample_does_not_feed_n_detected_or_intensity_order():
+    """強度順と n_detected は、除外した試料だけでなく実験情報シートの include=false の試料も使わない
+    （前処理と同じ「解析に残す試料」。`dataset_analysis.included_sample_indices`）。"""
+    from metabolomix.analysis.dataset_analysis import included_sample_indices
+    from metabolomix.analysis.feature_search import _detected_intensity
+
+    ds = DatasetState()
+    ds.sample_names = ["s0", "s1", "s2"]
+    ds.feature_ids = ["f0", "f1"]
+    ds.feature_matrix = np.array([[10.0, 20.0, 9000.0], [500.0, 400.0, 100.0]])
+    ds.detected_mask = np.ones((2, 3), dtype=bool)
+    ds.sample_metadata_rows = [{"sample_id": n, "include": n != "s2"} for n in ds.sample_names]
+    assert included_sample_indices(ds) == [0, 1]
+    best, counts = _detected_intensity(ds)
+    assert best.tolist() == [20.0, 500.0]              # f0 の最大は s2（include=false）の 9000 ではない
+    assert counts.tolist() == [2, 2]                   # 3 ではなく 2
+
+    ds.excluded_samples = {"s0": "outlier"}            # dataset_exclude との和集合
+    assert included_sample_indices(ds) == [1]
+    best, counts = _detected_intensity(ds)
+    assert best.tolist() == [20.0, 400.0] and counts.tolist() == [1, 1]

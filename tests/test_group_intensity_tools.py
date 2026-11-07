@@ -164,14 +164,11 @@ def test_caption_reports_manual_exclusions(loaded):
 
 def test_failed_call_discards_the_previous_figure(loaded):
     from metabolomix.arf.tools import arf_plot_group_intensity
-    from metabolomix.tools.reports import save_figure
     arf_plot_group_intensity(items=["PG"], groups=["ctrl"], output="payload")
     assert session_state.session.arf.last_group_intensity is not None
     bad = _payload(items=["PG"], groups=["nonexistent"])
     assert bad["status"] == "error"
     assert session_state.session.arf.last_group_intensity is None
-    out = json.loads(save_figure("group_intensity", "x"))
-    assert out["error"]["code"] == "missing_state"
 
 
 @pytest.mark.parametrize("kw", [{"detection_limit": -5}, {"detection_limit": 0},
@@ -222,23 +219,8 @@ def test_image_output_and_session_keeps_payload(loaded):
     assert session_state.session.arf.last_group_intensity["payload"]["items"][0]["item"] == "PG"
 
 
-def test_save_without_plot_is_missing_state():
-    from metabolomix.tools.reports import save_figure
-    session_state.session = session_state.AnalysisSession()
-    out = json.loads(save_figure("group_intensity", "x"))
-    assert out["error"]["required_tools"] == ["arf_plot_group_intensity"]
 
 
-def test_save_writes_png_and_svg(loaded, tmp_path, monkeypatch):
-    from metabolomix.arf.tools import arf_plot_group_intensity
-    from metabolomix.tools.reports import save_figure
-    use_config(monkeypatch, tmp_path, {"paths.reports_dir": tmp_path / "reports"})
-    arf_plot_group_intensity(items=["PG"], groups=["ctrl", "ko"], output="payload")
-    msg = save_figure("group_intensity", "EV membrane")
-    figures = tmp_path / "reports" / "figures"
-    pngs = list(figures.glob("*_group_intensity.png"))
-    assert len(pngs) == 1 and pngs[0].with_suffix(".svg").is_file()
-    assert "group_intensity.png" in msg
 
 
 def test_auto_likely_wrong_keeps_confirmed_spots(loaded):

@@ -158,6 +158,18 @@ def preprocess_fingerprint(ds, recipe: dict, metadata_hash: str | None = None) -
     return canonical_hash(payload)
 
 
+#: `dataset_plot` の kind のうち、PCA の結果・差次的結果から作るもの（`ds.figures` のキー）。
+_PCA_FIGURES = ("pca", "loadings")
+_DIFFERENTIAL_FIGURES = ("volcano",)
+
+
+def _drop_figures(ds, kinds: tuple[str, ...]) -> None:
+    figures = getattr(ds, "figures", None)
+    if figures:
+        for kind in kinds:
+            figures.pop(kind, None)
+
+
 def invalidate_results(ds, changed: set[str]) -> None:
     """変更内容に応じて、古くなった状態だけを捨てる。
 
@@ -175,6 +187,8 @@ def invalidate_results(ds, changed: set[str]) -> None:
     「消す」を選ぶのは、古い数字を返し続けるより無いことにするほうが安全だから。
     """
     changed = set(changed)
+    # 結果から作った図（dataset_plot の置き場 ds.figures）も同じ依存で捨てる。残すと save_figure が
+    # 古い結果の図を現在のものとして保存する。
     if changed & _PP_INVALIDATING:
         ds.pp_matrix = None
         ds.pp_sample_names = []
@@ -184,10 +198,13 @@ def invalidate_results(ds, changed: set[str]) -> None:
         ds.preprocess_metadata_hash = None
         ds.last_pca = None
         ds.last_differential = None
+        _drop_figures(ds, _PCA_FIGURES + _DIFFERENTIAL_FIGURES)
     elif changed & _STAT_INVALIDATING:
         ds.last_differential = None
+        _drop_figures(ds, _DIFFERENTIAL_FIGURES)
     elif "pca_settings" in changed:
         ds.last_pca = None
+        _drop_figures(ds, _PCA_FIGURES)
 
 
 def new_provenance(ds, *, kind: str, input_fingerprint: str,

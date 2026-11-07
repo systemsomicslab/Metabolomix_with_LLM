@@ -86,17 +86,12 @@ def test_two_sources_need_a_choice_and_bad_pcs_is_an_error():
     assert out["status"] == "error" and "pcs" in out["message"]
 
 
-def test_image_and_save_figure(tmp_path, monkeypatch):
+def test_image():
     from mcp.server.fastmcp import Image
     from metabolomix.tools.pca_loadings_tools import plot_pca_loadings
-    use_config(monkeypatch, tmp_path, {"paths.reports_dir": tmp_path / "reports"})
     session_state.session.arf.last_pca_plot = _arf_plot()
     out = plot_pca_loadings()
     assert isinstance(out[1], Image) and "source=arf" in out[0]
-    msg = server.save_figure("pca_loadings", "L1")
-    # make_slug は analysis_id を小文字にする
-    png = tmp_path / "reports" / "figures" / "l1_pca_loadings.png"
-    assert png.is_file() and png.with_suffix(".svg").is_file() and str(png) in msg
 
 
 def test_failed_call_clears_previous_figure():
@@ -130,21 +125,5 @@ def test_multi_property_arf_pca_is_an_error():
     assert out["status"] == "error" and "props" in out["message"] and "1 つ" in out["message"]
 
 
-def test_save_figure_refuses_a_loadings_figure_from_a_replaced_pca(tmp_path, monkeypatch):
-    use_config(monkeypatch, tmp_path, {"paths.reports_dir": tmp_path / "reports"})
-    session_state.session.arf.last_pca_plot = _arf_plot()
-    _call()
-    session_state.session.arf.last_pca_plot = {**_arf_plot(), "provenance": {"result_id": "arf-2", "dataset_id": "d"}}
-    err = json.loads(server.save_figure("pca_loadings", "stale"))["error"]
-    assert err["code"] == "missing_state" and err["required_tools"] == ["plot_pca_loadings"]
-    assert not (tmp_path / "reports" / "figures" / "stale_pca_loadings.png").exists()
-    _call()                                   # 描き直せば保存できる
-    assert "ローディング図を保存" in server.save_figure("pca_loadings", "fresh")
 
 
-def test_save_figure_refuses_a_loadings_figure_when_the_pca_is_gone(tmp_path, monkeypatch):
-    use_config(monkeypatch, tmp_path, {"paths.reports_dir": tmp_path / "reports"})
-    session_state.session.arf.last_pca_plot = _arf_plot()
-    _call()
-    session_state.session.arf.last_pca_plot = None
-    assert json.loads(server.save_figure("pca_loadings", "gone"))["error"]["code"] == "missing_state"

@@ -19,7 +19,7 @@ from metabolomix.plots.render import render_files
 from metabolomix.plots.pca_scores import render_pca_scores
 from metabolomix.plots.volcano import render_volcano_plot
 
-__all__ = ["figure_annotations", "save_result_figure", "select_result"]
+__all__ = ["build_annotated", "figure_annotations", "save_result_figure", "select_result"]
 
 #: 図に載せる但し書きの文面。付ける条件は「読み手が数字を誤解しうるとき」だけで、
 #: 常に付けると本当に注意が要る図が埋もれる。
@@ -87,26 +87,32 @@ def figure_annotations(ds, result: dict | None = None) -> list[str]:
     return notes
 
 
+def build_annotated(build, notes, /, *args, **kwargs):
+    """`build(*args, **kwargs)` の Figure に、但し書き（`figure_annotations`）を下端へ添える。
+
+    画像返し（`dataset_plot`）と保存（`save_result_figure`）が同じ図になるよう、ここを共有する。
+    """
+    fig = build(*args, **kwargs)
+    if notes:
+        fig.text(0.5, 0.005, "\n".join(notes), ha="center", va="bottom",
+                 fontsize=8, color="#a33")
+    return fig
+
+
 def save_result_figure(ds, result: dict, path: Path, *, kind: str,
                        title: str | None = None) -> Path:
     """指定された結果から図を描き、確定した PNG として保存する。
 
-    `ds` は但し書きの判断にだけ使う（ARF 経路では None）。
+    `ds` は但し書きの判断にだけ使う（None なら但し書き無し）。
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     notes = figure_annotations(ds, result)
 
-    def build():
-        fig = _render(result, kind=kind, title=title)
-        if notes:
-            fig.text(0.5, 0.005, "\n".join(notes), ha="center", va="bottom",
-                     fontsize=8, color="#a33")
-        return fig
-
     # 描画（生成〜保存〜破棄）は PLOT_LOCK の下。atomic は途中で落ちても既存の図を壊さない。
-    render_files(build, {"png": path}, dpi=120, atomic=True)
+    render_files(build_annotated, {"png": path}, _render, notes, result,
+                 kind=kind, title=title, dpi=120, atomic=True)
     return path
 
 

@@ -36,7 +36,7 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
     "eic.md": (
         "eic_parser", "eic_search", "eic_plot_chromatograms", "eic_plot_compounds",
     ),
-    "plots.md": ("save_figure", "plot_pca_loadings"),
+    "plots.md": ("dataset_plot", "save_figure", "plot_pca_loadings"),
     "mztab.md": ("load_dataset", "dataset_status", "dataset_exclude"),
     "dataset_analysis.md": (
         "dataset_preprocess", "dataset_pca", "dataset_differential",
@@ -190,4 +190,4 @@ class TestScopeBoundary(unittest.TestCase):
             registered,
             "対象範囲の分類と登録済みツールが一致しない",
         )
-        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 69)
+        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 70)

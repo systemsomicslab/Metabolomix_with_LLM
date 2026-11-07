@@ -268,5 +268,5 @@ TSV（`query` は因子トークン。旧 `sample_search` の `specs` と同じ�
 除外の適用（`dataset_preprocess` → `run_dataset_preprocess` の中）:
 1. metabolomix/analysis/dataset_analysis.py run_dataset_preprocess()
 2. └─ metabolomix/analysis/dataset_analysis.py build_dataset_pp_inputs()
-3.    └─ metabolomix/analysis/dataset_analysis.py _included_sample_indices()
+3.    └─ metabolomix/analysis/dataset_analysis.py included_sample_indices()
 4. └─ metabolomix/analysis/dataset_analysis.py _drop_excluded_features()

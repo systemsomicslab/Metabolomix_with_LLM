@@ -27,6 +27,7 @@ import re
 
 import numpy as np
 
+from metabolomix.analysis.dataset_analysis import included_sample_indices
 from metabolomix.analysis.feature_bindings import _normalize_adduct
 from metabolomix.analysis.result_state import is_current
 from metabolomix.analysis.mass_accuracy import offset_for
@@ -769,7 +770,10 @@ def _check_range(low, high, label: str) -> None:
 
 
 def _detected_intensity(ds) -> tuple[np.ndarray, np.ndarray | None]:
-    """特徴ごとの（検出セルの値の最大, 検出セル数）。除外した試料の列は使わない。
+    """特徴ごとの（検出セルの値の最大, 検出セル数）。解析に残さない試料の列は使わない。
+
+    使わない試料は前処理と同じ定義（`included_sample_indices`: 実験情報シートの include=false と
+    `dataset_exclude` の試料の和集合）。
 
     検出セルだけを数える（gap-fill は含めない）。検出セルが 1 つも無い特徴の最大は NaN。
     検出状態（``detected_mask``）が無いデータセットは、gap-fill を見分けられないので
@@ -779,7 +783,11 @@ def _detected_intensity(ds) -> tuple[np.ndarray, np.ndarray | None]:
     mask = ds.detected_mask
     if ds.feature_matrix is None:
         return np.full(n_features, np.nan), None
-    keep = np.array([name not in ds.excluded_samples for name in ds.sample_names], dtype=bool)
+    kept = included_sample_indices(ds)
+    keep = np.ones(len(ds.sample_names), dtype=bool)
+    if kept is not None:
+        keep[:] = False
+        keep[kept] = True
     values = np.asarray(ds.feature_matrix, dtype=float)[:, keep]
     finite = np.isfinite(values)
     if mask is None:

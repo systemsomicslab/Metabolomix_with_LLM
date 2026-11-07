@@ -56,7 +56,7 @@ class PreconditionError(Exception):
         self.state = state
 
 
-def _included_sample_indices(ds) -> list[int] | None:
+def included_sample_indices(ds) -> list[int] | None:
     """解析に残す試料が占める ds.sample_names 上の位置。
 
     外す試料は 2 種類ある: 明示メタデータで include=false の試料と、`dataset_exclude` で
@@ -168,7 +168,7 @@ def build_dataset_pp_inputs(ds):
         # （controller裁定R15・レビュー Finding 1）。
         # roles/sample_meta の写像自体は削らない——除外理由の監査・表示
         # （dataset_status 等）は全件分の役割を必要とするため。
-        keep_idx = _included_sample_indices(ds)
+        keep_idx = included_sample_indices(ds)
         if keep_idx is not None:
             matrix = matrix[keep_idx, :]
             sample_names = [sample_names[i] for i in keep_idx]
@@ -213,7 +213,7 @@ def build_dataset_pp_inputs(ds):
         }
     # `dataset_exclude` で除外した試料は、明示メタデータの経路と同じく行列と名前から外す
     # （roles / sample_meta の写像は全件分のまま）。
-    keep_idx = _included_sample_indices(ds)
+    keep_idx = included_sample_indices(ds)
     if keep_idx is not None:
         matrix = matrix[keep_idx, :]
         sample_names = [sample_names[i] for i in keep_idx]
@@ -234,7 +234,7 @@ def run_dataset_preprocess(ds, recipe: dict):
     # 実測値と区別できなくなり、「何を根拠に残したか」が言えなくなる。
     matrix, feature_names, detection_report = _apply_detection_filter(
         ds, matrix, feature_names, recipe.get("min_detection_rate"),
-        sample_indices=_included_sample_indices(ds))
+        sample_indices=included_sample_indices(ds))
 
     # `dataset_exclude` で除外した特徴は、検出率の足切りの後で外す（検出マスクの行の対応を保つ）。
     matrix, feature_names = _drop_excluded_features(ds, matrix, feature_names)
@@ -514,7 +514,7 @@ def _apply_detection_filter(ds, matrix, feature_names, min_detection_rate, *,
     `matrix` は (サンプル × 特徴)、`ds.detected_mask` は (特徴 × サンプル) の並び。
     足切りは列（特徴）に対して行う。
 
-    `sample_indices`（`_included_sample_indices`）を渡すと、マスクの列も
+    `sample_indices`（`included_sample_indices`）を渡すと、マスクの列も
     その試料だけへ絞ってから検出率を数える。**絞らないと、解析から除外した
     試料（include=false）の未検出が検出率を押し下げる**——`matrix` 側は
     `build_dataset_pp_inputs` が既に include=true だけにしているのに、分母だけ

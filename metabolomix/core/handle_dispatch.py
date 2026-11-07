@@ -47,7 +47,6 @@ ALWAYS_THREADED = frozenset({"load_dataset"})
 SESSION_READERS = frozenset({
     "pathway_project",          # _build_dataset → session.dataset
     "verify_peak_annotation",   # peak_verification.msms_evidence → session.library.store
-    "save_figure",              # reports._pca_candidates / _differential_candidates → session.dataset
     "plot_pca_loadings",        # pca_loadings_tools._candidates → session.dataset
 })
 

@@ -22,7 +22,7 @@ ARF 経路（`docs/workflow/arf.md`）と同じ純関数を共有している。
 gap-fill だけの特徴を実測として数えた行列が黙って下流に流れる）。
 
 検出率の分母は**実際に前処理へ渡す試料だけ**。手順 3 が `include=false` の行を
-行列から落とすのと同じ位置（`_included_sample_indices`）でマスクの列も絞る
+行列から落とすのと同じ位置（`included_sample_indices`）でマスクの列も絞る
 （`_restrict_mask_to_samples`）——絞らないと、解析から除外した試料の未検出が
 分母に残り、`min_detection_rate=1.0` が「残す試料では全件検出されている」正当な
 特徴量を削り落とす。何試料分を数えたかは `report["detection"]["n_samples"]`。

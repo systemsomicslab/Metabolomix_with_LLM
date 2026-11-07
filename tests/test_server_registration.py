@@ -119,6 +119,7 @@ EXPECTED_TOOLS = sorted([
     "sample_search",
     "server_update",
     "save_figure",
+    "dataset_plot",
     "verify_peak_annotation",
     "write_report",
 ])

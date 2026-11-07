@@ -98,6 +98,13 @@ PNGが必要だとユーザーが明示した場合に限り、先に得たプ�
 `save_figure(kind="eic", analysis_id=..., title=None)` で `reports/figures/` へ保存する。
 この保存は対話描画とは別の書き込み操作である。
 
+**データセット（ハンドル）の EIC は `dataset_plot(kind="eic")` で描く**（B-2b）。`.EIC.aef` は
+データセットが覚えているパス（`artifact_paths` の `eic`）から読み、`feature_id` は
+`dataset_feature_search` の特徴 ID（= `.arf2` の MasterAlignmentID。EIC のスポット番号と同じ空間で、
+イオンモビリティでは連番にならない）。描画契約（`lipidmix.eic.v1`）は上記と同じで、図は
+`ds.figures["eic"]` に置かれ `save_figure(kind="eic")` が保存する。`.EIC.aef` の無いデータセット
+（mzTab-M だけから読んだもの）は `COMPANION_ARTIFACT_MISSING`。Task 11 でこの節は `dataset_plot` 中心に書き直す。
+
 ### 8.6 `eic_plot_compounds()` の描画契約
 
 `eic_plot_compounds()` は**複数物質 × 1サンプル**のオーバーレイを返す。**既定
@@ -135,3 +142,5 @@ PNGが必要だとユーザーが明示した場合に限り、先に得たプ�
 
 PNGが必要だとユーザーが明示した場合に限り `save_figure(kind="eic", analysis_id=..., title=None)` で
 保存する。この保存ツールは `lipidmix.eic.v1` と `lipidmix.eic.multi.v1` の両方に対応する。
+データセットの上では `dataset_plot(kind="eic_compounds", file_id=..., names=[...] / ontologies=[...])` が
+同じ契約（物質は `feature_metadata` の名前・クラスから選ぶ）で描き、保存は `save_figure(kind="eic_compounds")`。

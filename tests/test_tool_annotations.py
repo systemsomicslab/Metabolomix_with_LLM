@@ -135,6 +135,7 @@ EXPECTED_ANNOTATIONS = {
     "record_objective": LOCAL_WRITE_APPEND,  # add_subquestions が追記で積み増す
     "write_report": LOCAL_WRITE,
     "save_figure": LOCAL_WRITE,
+    "dataset_plot": READ_ONLY,    # 図は返すだけ（ds.figures はメモリ上の置き場。ファイルは save_figure）
     "arf_export_differential": LOCAL_WRITE,
     # --- サーバ自身の更新（origin へ出て、作業ツリーを早送りする） ---
     "server_update": REMOTE_WRITE,

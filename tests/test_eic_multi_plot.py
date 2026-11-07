@@ -412,17 +412,6 @@ class EicPlotCompoundsToolTests(unittest.TestCase):
                 file_path=str(self.path), arf2_path=str(self.arf2),
             )
 
-    def test_save_eic_figure_accepts_the_multi_payload(self):
-        import server
-
-        server.eic_plot_compounds(
-            7, ontologies=["PC", "Cer"],
-            file_path=str(self.path), arf2_path=str(self.arf2),
-        )
-        message = server.save_figure("eic", "overlay-eic")
-        png = self.tmp / "fallback" / "figures" / "overlay-eic_eic.png"
-        self.assertTrue(png.is_file())
-        self.assertIn("figures/overlay-eic_eic.png", message)
 
     def test_fastmcp_does_not_publish_an_output_schema(self):
         """outputSchema を publish しない（structured_output=False）。

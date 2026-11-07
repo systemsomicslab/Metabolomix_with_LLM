@@ -108,23 +108,21 @@ class MissingStateContractTests(unittest.TestCase):
             "pai2_parser",
         )
 
-    def test_save_figure_pca(self):
+    def test_save_figure_without_dataset(self):
+        # 図の置き場はデータセット（ds.figures）。データセットが無ければ load_dataset を案内する。
         self.assert_missing(
             server.save_figure("pca", analysis_id="x"),
-            "pca_result",
-            # mzTab-M 経路（dataset_pca）も PCA の生産者なのでリプレイ候補に入る
-            ["arf_parser", "arf_pca_preprocessed", "arf_pca_species", "load_dataset", "dataset_pca"],
-            "PCA",
+            "dataset",
+            ["load_dataset"],
+            "load_dataset",
         )
 
-    def test_save_figure_volcano(self):
+    def test_dataset_plot_without_dataset(self):
         self.assert_missing(
-            server.save_figure("volcano", analysis_id="x"),
-            "differential_result",
-            # 図の保存は mzTab-M 経路（dataset_differential）からもできる。
-            # arf_plot_volcano は ARF 専用なので候補は増やさない。
-            ["arf_differential", "dataset_differential"],
-            "arf_differential",
+            server.dataset_plot(kind="volcano"),
+            "dataset",
+            ["load_dataset"],
+            "load_dataset",
         )
 
     def test_arf_plot_group_intensity(self):
@@ -160,22 +158,7 @@ class MissingStateContractTests(unittest.TestCase):
             "PCA",
         )
 
-    def test_save_figure_group_intensity(self):
-        self.assert_missing(
-            server.save_figure("group_intensity", analysis_id="x"),
-            "group_intensity_plot",
-            ["arf_plot_group_intensity"],
-            "arf_plot_group_intensity",
-        )
 
-    def test_save_figure_eic_offers_both_producers(self):
-        """eic_plot は2つのツールのどちらでも作れる（OR の代替候補）。"""
-        self.assert_missing(
-            server.save_figure("eic", analysis_id="x"),
-            "eic_plot",
-            ["eic_plot_chromatograms", "eic_plot_compounds"],
-            "eic_plot_chromatograms",
-        )
 
 
 class SampleSearchIsNotAMissingStateTests(unittest.TestCase):

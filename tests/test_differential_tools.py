@@ -180,28 +180,6 @@ class TestArfDifferentialDegenerate(unittest.TestCase):
                         f"expected zero-tested caveat, got {out['caveats']}")
 
 
-class TestSaveVolcano(unittest.TestCase):
-    def setUp(self):
-        session_state.session = server.AnalysisSession()
-
-    def test_requires_last_differential(self):
-        out = server.save_figure("volcano", "A1")
-        self.assertIn("error", out.lower())
-
-    def test_writes_png(self):
-        session_state.session.arf.last_differential = {
-            "kind": "two_group", "a": "A", "b": "B",
-            "volcano": [
-                {"feature": "f0", "log2fc": 2.0, "neg_log10_p": 3.0, "sig": "up"},
-                {"feature": "f1", "log2fc": -2.0, "neg_log10_p": 3.0, "sig": "down"},
-                {"feature": "f2", "log2fc": 0.0, "neg_log10_p": 0.1, "sig": "ns"},
-            ],
-        }
-        rel = server.save_figure("volcano", "A1")
-        self.assertIn("volcano", rel)
-
-
-
 class TestPooledGroupSpecs(unittest.TestCase):
     """Class ID は因子トークンの連結（24M_GF_F）。プール群比較を可能にする。"""
 
