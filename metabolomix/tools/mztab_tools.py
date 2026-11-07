@@ -100,7 +100,10 @@ def dataset_load(mztab_path: str | None = None, job_path: str | None = None,
         session_state.session.dataset = ds
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
-    handle_id = session_state.session.current_handle_id
+    # ワーカースレッドで並ぶので、直近の ID ではなく今登録した実体から引く（別の読み込みが
+    # 先に直近を切り替えていても、自分のハンドルへ書く）。
+    own = next((h for h in handles.registry.list() if h.dataset is ds), None)
+    handle_id = own.handle_id if own is not None else session_state.session.current_handle_id
     # ハンドルに持たせる `.arf2` / `.dcl`（`dataset_handle_open` と同じ規則）。ID を明示した
     # 呼び出しはこれを使う。ID を省いた呼び出しは `_holder.alignment_paths` とデータフォルダの
     # 探索で決めるので、同じファイルになるとは限らない。

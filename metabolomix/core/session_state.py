@@ -406,7 +406,10 @@ class AnalysisSession:
         # データセットはハンドルの登録簿（core.handles.registry）に住む。ここが持つのは
         # 直近のハンドルの ID だけで、`dataset` / `library` はそれを読む property（下）。
         self.current_handle_id: str | None = None
-        self._current_lock = threading.Lock()
+        # 直近のハンドルの切り替えと、セッション自身のライブラリの移動・書き込みを守る。
+        # 再入できる必要がある（ロックの下で `library` / `_handle` を読み、`_handle` が
+        # 閉じられた直近を外すために同じロックを取り直す）。
+        self._current_lock = threading.RLock()
 
         # --- 参照ライブラリ（MS/MS スペクトル照合。他スロットとは独立） ---
         # 直近のハンドルが無いときに `library` が指すセッション自身の LibraryState。
@@ -485,16 +488,34 @@ class AnalysisSession:
         from metabolomix.mztab.polarity import dataset_polarity
 
         polarity, polarity_source, _notes = dataset_polarity(value)
-        own = self._library
-        move = current is None and _PINNED_HANDLE_ID.get() is None and own.store is not None
-        handle = handles.DatasetHandle(value, polarity=polarity, polarity_source=polarity_source,
-                                       source={"kind": "session"},
-                                       library=own if move else None)
-        handles.registry.add(handle)  # 上限ならここで止まり、ライブラリはセッションに残る
+        # 移すかの決定・ハンドルの登録・入れ替えは 1 つのロックの下で行う。`library_load` が
+        # セッション自身のライブラリへ書く区間（`library_write_lock`）と排他にして、移す決定の
+        # あとに書かれたストアが、見えない側のライブラリに取り残されないようにする。
+        # ロックの順は `_current_lock` → 登録簿のロック（登録簿は session のロックを取らない）。
         with self._current_lock:
+            current = self._handle()
+            if current is not None and current.dataset is value:
+                return
+            own = self._library
+            move = current is None and _PINNED_HANDLE_ID.get() is None and own.store is not None
+            handle = handles.DatasetHandle(value, polarity=polarity,
+                                           polarity_source=polarity_source,
+                                           source={"kind": "session"},
+                                           library=own if move else None)
+            handles.registry.add(handle)  # 上限ならここで止まり、ライブラリはセッションに残る
             if move:
                 self._library = LibraryState()
             self.current_handle_id = handle.handle_id
+
+    @property
+    def library_write_lock(self) -> threading.RLock:
+        """セッション自身のライブラリへ書く区間を守るロック（`dataset` の setter の移動と排他）。
+
+        `library_load` が `dataset_handle` なしでストアを差し替える間、これを保持する。
+        ロックの下で `library` を読み直せば、移動が済んだあとは新しいハンドルのライブラリへ
+        書く。再入できる。
+        """
+        return self._current_lock
 
     @property
     def library(self) -> LibraryState:

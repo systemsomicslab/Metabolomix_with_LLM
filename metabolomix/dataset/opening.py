@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -126,9 +127,30 @@ def open_dataset(*, directory=None, mztab_path=None, job_path=None, pipeline_pat
     cached = handles.registry.cached_base(key)
     if cached is not None and _signature(cached[0]) == cached[1]:
         return _copy(cached[0], reused=True)
-    base = _open(kind, str(raw), str(input_path), adapter, measure, allow_incomplete)
-    handles.registry.put_base(key, base, _signature(base))
+    # 同じ入力の同時の読み込みは 1 回にする: キーのロックを取ってから基のキャッシュを見直し、
+    # 無ければ読む。待っていた側は先に読んだ側の基を使う。別の入力はロックが別なので並ぶ。
+    with _inflight_lock(key):
+        cached = handles.registry.cached_base(key)
+        if cached is not None and _signature(cached[0]) == cached[1]:
+            return _copy(cached[0], reused=True)
+        base = _open(kind, str(raw), str(input_path), adapter, measure, allow_incomplete)
+        handles.registry.put_base(key, base, _signature(base))
     return _copy(base, reused=False)
+
+
+#: 基のキャッシュのキーごとの「読み込み中」ロック。辞書は `_INFLIGHT_GUARD` で守る。
+#: キーは入力のパスと読み方の組なので、増える数は開いた入力の数まで（ロックは軽い）。
+_INFLIGHT: dict[str, threading.Lock] = {}
+_INFLIGHT_GUARD = threading.Lock()
+
+
+def _inflight_lock(key: str) -> threading.Lock:
+    """基のキャッシュのキーごとのロック（同じキーには同じロックを返す）。"""
+    with _INFLIGHT_GUARD:
+        lock = _INFLIGHT.get(key)
+        if lock is None:
+            lock = _INFLIGHT[key] = threading.Lock()
+        return lock
 
 
 def _adapter(kind: str, source: str) -> str:

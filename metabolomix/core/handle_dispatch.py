@@ -35,8 +35,13 @@ from metabolomix.core.mcp_errors import missing_state
 
 __all__ = ["ALWAYS_THREADED", "SESSION_READERS", "install"]
 
-#: ハンドルの有無に依らずスレッドで回すツール（対話のセッションを読み書きしないもの）。
-ALWAYS_THREADED = frozenset({"dataset_handle_open"})
+#: ハンドルの有無に依らずスレッドで回すツール。読み込みは数分かかりうるので、イベントループ
+#: から外す。`dataset_handle_open` は対話のセッションを読み書きしない。`dataset_load` が
+#: セッションへ書くのは成功時の `session.dataset = ds`（`_current_lock` の下）だけ。
+#: 旧 ARF 経路の `load_dataset` は載せない——`session.arf` と `mcp_core.DATA_DIR` を無ロックで
+#: 書くので、イベントループの ARF のツールが同時に読むとちぎれる（B-2b で新しい
+#: `load_dataset` に置き換わり、そちらを載せる）。
+ALWAYS_THREADED = frozenset({"dataset_handle_open", "dataset_load"})
 
 #: `dataset_handle` を持たないが、直近のハンドルの `session.dataset` / `session.library` を
 #: （自身か、ヘルパー経由で）読むツール。直近のハンドルがあれば、そのロックと固定の下で

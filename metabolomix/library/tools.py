@@ -11,6 +11,7 @@ analysis.spectral_match / plots.{mirror,render} / dcl.reader / arf2.reader
 """
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 from mcp.server.fastmcp import Image
@@ -189,19 +190,24 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
             detail = detail.replace(shown, "…")
         return json_payload({"status": "error", "message": f"参照ライブラリの読み込みに失敗しました: {detail}"})
 
-    # 古い store の sqlite3 接続を閉じてから差し替える（Minor 8: 閉じずに上書きすると
-    # library_load を繰り返すたびに接続が漏れる。LibraryStore.close() は最初から
-    # 存在していたが、ここで呼んでいなかった）。
-    old_store = holder.library.store
-    if old_store is not None:
-        old_store.close()
+    # セッション自身のライブラリへ書く区間は、`session.dataset` の setter がそれを新しい
+    # ハンドルへ移す区間と排他にする（ハンドルへ書くときは、そのハンドルのロックが
+    # すでに呼び出しを直列にしている）。ロックの下で `holder.library` を読むので、移動の
+    # 後ならハンドルのライブラリへ書く。
+    with (holder.library_write_lock if dataset_handle is None else contextlib.nullcontext()):
+        # 古い store の sqlite3 接続を閉じてから差し替える（Minor 8: 閉じずに上書きすると
+        # library_load を繰り返すたびに接続が漏れる。LibraryStore.close() は最初から
+        # 存在していたが、ここで呼んでいなかった）。
+        old_store = holder.library.store
+        if old_store is not None:
+            old_store.close()
 
-    # 別ライブラリへの切り替え起こりうるので、古い照合結果を新ライブラリのものと
-    # 取り違えないよう破棄する（ArfState.reset_analysis と同じ考え方）。
-    holder.library.store = store_obj
-    # ハンドルにはファイル名だけを持たせる（研究室のライブラリの置き場所を記録に残さない）。
-    holder.library.source_path = resolved if dataset_handle is None else Path(resolved).name
-    holder.library.last_match = None
+        # 別ライブラリへの切り替え起こりうるので、古い照合結果を新ライブラリのものと
+        # 取り違えないよう破棄する（ArfState.reset_analysis と同じ考え方）。
+        holder.library.store = store_obj
+        # ハンドルにはファイル名だけを持たせる（研究室のライブラリの置き場所を記録に残さない）。
+        holder.library.source_path = resolved if dataset_handle is None else Path(resolved).name
+        holder.library.last_match = None
 
     path = Path(resolved)
     summary = store_obj.summary()
