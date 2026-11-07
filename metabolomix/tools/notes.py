@@ -22,11 +22,15 @@ import time
 
 # --- frontmatter の読み取り ---
 
+_UNESCAPES = {'"': '"', "\\": "\\", "n": "\n", "r": "\r"}
+
+
 def _unquote(value: str) -> str:
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] == '"':
-        # dump_frontmatter が \\ と \" だけをエスケープする。
-        return re.sub(r'\\(["\\])', r"\1", value[1:-1])
+        # dump_frontmatter が \\ \" 改行（\n）CR（\r）をエスケープする。1 回の走査で戻す
+        # （順に置換すると、リテラルの「\」+「n」が改行に化ける）。
+        return re.sub(r'\\(["\\nr])', lambda m: _UNESCAPES[m.group(1)], value[1:-1])
     if len(value) >= 2 and value[0] == value[-1] == "'":
         return value[1:-1]
     return value
@@ -123,9 +127,12 @@ def _dump_scalar(value) -> str:
         or text.strip() != text
         or any(ch in text for ch in ':#[]{}",')
         or "\n" in text
+        or "\r" in text
     )
     if needs_quote:
-        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        escaped = (text.replace("\\", "\\\\").replace('"', '\\"')
+                   .replace("\n", "\\n").replace("\r", "\\r"))
+        return '"' + escaped + '"'
     return text
 
 
@@ -133,10 +140,13 @@ def dump_frontmatter(meta: dict) -> str:
     """dict を ``---`` 囲みの frontmatter 文字列にする（1 段ネストまで対応）。"""
     lines = ["---"]
     for key, value in meta.items():
+        if value is None:  # 「None」という文字列として書かない（欄ごと書かない）
+            continue
         if isinstance(value, dict):
             lines.append(f"{key}:")
             for inner_key, inner_value in value.items():
-                lines.append(f"  {inner_key}: {_dump_scalar(inner_value)}")
+                if inner_value is not None:
+                    lines.append(f"  {inner_key}: {_dump_scalar(inner_value)}")
         else:
             lines.append(f"{key}: {_dump_scalar(value)}")
     lines.append("---")

@@ -82,6 +82,24 @@ class FrontmatterTests(unittest.TestCase):
         self.assertEqual(body, "body")
 
 
+    def test_multiline_and_backslash_values_roundtrip(self):
+        meta = {
+            "multi": "line1\nline2\r\nline3",
+            "literal": "C:\\new\\table and a\\nb",  # 「\」+「n」は改行に化けない
+            "japanese": "1 行目の文脈\n2 行目: RAW 細胞、LPS 処理\n\n4 行目",
+            "list": ["a\nb", "c\\nd"],
+            "nested": {"inner": "x\ny"},
+        }
+        parsed, body = notes.parse_frontmatter(notes.dump_frontmatter(meta) + "\n\nbody")
+        self.assertEqual(parsed, meta)
+        self.assertEqual(body, "body")
+
+    def test_none_is_not_written_as_a_string(self):
+        parsed, _ = notes.parse_frontmatter(
+            notes.dump_frontmatter({"a": None, "b": "x", "n": {"c": None, "d": "y"}}) + "\n\nbody")
+        self.assertEqual(parsed, {"b": "x", "n": {"d": "y"}})
+
+
 class SlugTests(unittest.TestCase):
     def test_make_slug_is_ascii_and_stable(self):
         self.assertEqual(notes.make_slug("Group A vs B"), "group-a-vs-b")

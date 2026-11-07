@@ -69,7 +69,8 @@ def record_objective(
     その analysis_id の目的がまだ無ければ作る（dataset / polarity / groups / comparison /
     sub_questions が要る。sub_questions は Q1..Qn の本文）。あれば**渡した欄だけ**を直す
     （confirmed_objective・biological_context・status・assay_kind など。創発した小問は
-    add_subquestions に渡すと既存 Q の最大+1 で採番して追記する。既存の小問は書き換えない）。
+    add_subquestions に渡すと既存 Q の最大+1 で採番して追記する。既存の小問は書き換えない。
+    既存の目的に sub_questions を渡しても無視される（追記は add_subquestions を使う））。
     データから推測した目的はユーザーに確認してから confirmed_objective に渡す。
     biological_context は対象系（生物種/細胞/処理）。assay_kind は lipid / metabolite /
     unknown で、確定した種別を渡すと以後のツール出力の解釈規則（脂質名文法か候補集合か）が

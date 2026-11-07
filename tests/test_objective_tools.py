@@ -67,6 +67,15 @@ class ObjectiveServerToolTests(unittest.TestCase):
         self.assertEqual([label for label, _ in subqs], ["Q1", "Q2"])
         self.assertIn("創発の問い", dict(subqs)["Q2"])
 
+    def test_update_preserves_multiline_biological_context(self):
+        context = "RAW264.7 細胞\nLPS 100 ng/mL, 24 h\n対照は無処理"
+        self._create("exp-ml", biological_context=context)
+        server.record_objective("exp-ml", status="done", confirmed_objective="確定\n二行目")
+        meta, _subqs, _ = notes.parse_objective(self.reports / "exp-ml.objective.md")
+        self.assertEqual(meta["biological_context"], context)
+        self.assertEqual(meta["confirmed_objective"], "確定\n二行目")
+        self.assertEqual(meta["status"], "done")
+
     def test_update_does_not_rewrite_existing_subquestions(self):
         self._create("exp-3b")
         out = server.record_objective("exp-3b", sub_questions=["別の問い"])
