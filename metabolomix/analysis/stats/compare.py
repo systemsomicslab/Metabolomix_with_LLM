@@ -125,7 +125,11 @@ def _moderated(log2, design: Design, cids, testable, omnibus_ok, want_omnibus):
     idx = np.flatnonzero(np.logical_or.reduce([testable[c] for c in cids]))
     if idx.size == 0:
         return out, None, omnibus
-    fit = lm_fit(log2[:, idx].T, design.matrix, design.columns)
+    try:
+        fit = lm_fit(log2[:, idx].T, design.matrix, design.columns)
+    except ValueError as exc:  # build_design が同じ基準で先に調べるが、念のため素の ValueError を漏らさない
+        raise DomainError("DESIGN_RANK_DEFICIENT", f"線形モデルを当てはめられない: {exc}",
+                          {"columns": list(design.columns)}) from exc
     cmat = np.column_stack([design.contrasts[c] for c in cids])
     try:
         mod = ebayes(contrasts_fit(fit, cmat, list(cids)), ci_level=CI_LEVEL)
@@ -265,13 +269,24 @@ def compare(prepared: PreparedMatrix, *, factors: list[str], comparisons: list[d
 
     # モデルの変数（因子・共変量・ブロック）の値が欠けた個体は解析から外す
     names = factors + [c.get("name") for c in covariates]
-    keep = [i for i, u in enumerate(prepared.units)
-            if all(_model_value(u, n) is not None for n in names)
-            and (block is None or _model_value(u, block, block=True) is not None)]
-    if len(keep) < len(prepared.units):
+    keep, dropped_ids, dropped_vars = [], [], set()
+    for i, u in enumerate(prepared.units):
+        lacking = [n for n in names if _model_value(u, n) is None]
+        if block is not None and _model_value(u, block, block=True) is None:
+            lacking.append(block)
+        if lacking:
+            dropped_ids.append(u.unit_id)
+            dropped_vars.update(lacking)
+        else:
+            keep.append(i)
+    if dropped_ids:
+        variables = sorted(dropped_vars)
+        shown = dropped_ids[:20]
+        more = f" ほか {len(dropped_ids) - len(shown)} 個体" if len(dropped_ids) > len(shown) else ""
         warnings.append({"code": "units_missing_model_values",
-                         "message": f"因子・共変量・ブロックの値が欠けた {len(prepared.units) - len(keep)} "
-                                    "個体を比較から外しました。"})
+                         "message": f"{', '.join(variables)} の値が欠けた {len(dropped_ids)} 個体"
+                                    f"（{', '.join(shown)}{more}）を比較から外しました。",
+                         "variables": variables, "unit_ids": dropped_ids})
     units = [prepared.units[i] for i in keep]
     log2 = np.asarray(prepared.log2, dtype=float)[keep]
     det = None if prepared.detected_units is None else np.asarray(prepared.detected_units, bool)[keep]
@@ -329,6 +344,15 @@ def compare(prepared: PreparedMatrix, *, factors: list[str], comparisons: list[d
     else:
         population = {str(f) for f in reported_feature_ids}
     eq_log2 = math.log2(equivalence_fc)
+    if bh_population == "reported":
+        reported = sorted({str(f) for f in reported_feature_ids})
+        outside = [f for f in reported if f not in set(feature_ids)]
+        if outside:
+            warnings.append({"code": "reported_features_not_in_matrix",
+                             "message": f"reported_feature_ids の {len(outside)} / {len(reported)} 件が"
+                                        "行列に無く、BH の母集団に入りません。",
+                             "n_reported": len(reported), "n_not_in_matrix": len(outside),
+                             "examples": outside[:20]})
 
     rows: list[dict] = []
     bh_n: dict[str, int] = {}
@@ -374,6 +398,16 @@ def compare(prepared: PreparedMatrix, *, factors: list[str], comparisons: list[d
             row["presence_p"], row["presence_q"] = _num(pres_p[j]), _num(pres_q[j])
             row["verdict"], row["verdict_reason"] = _verdict(row, q_threshold, eq_log2)
             rows.append(row)
+
+    if bh_population == "annotated":
+        empty = [cid for cid in cids if bh_n[cid] == 0]
+        if empty:
+            annotated = set(prepared.annotated_features)
+            warnings.append({"code": "bh_population_empty",
+                             "message": "注釈のある特徴のうち検定できたものが無い対比があり、q を出せません"
+                                        f"（{', '.join(empty)}）。",
+                             "contrasts": empty, "n_annotated": len(annotated),
+                             "n_annotated_in_matrix": len(annotated & set(feature_ids))})
 
     omnibus = None
     if want_omnibus:

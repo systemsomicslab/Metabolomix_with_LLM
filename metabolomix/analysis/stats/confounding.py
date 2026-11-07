@@ -114,11 +114,12 @@ def confounding_report(units, groups: list[str]) -> dict:
         table = np.array([[batch_table[g].get(b, 0) for b in batch_names] for g in present_groups], float)
         cramers_v = _cramers_v(table)
         groups_per_batch = (table > 0).sum(axis=0)
-        batches_per_group = (table > 0).sum(axis=1)
-        if (groups_per_batch == 1).all() and (batches_per_group == 1).all():
+        if (groups_per_batch == 1).all():
+            # どのバッチも 1 群だけ（群が複数のバッチにまたがっても）なら、群の差はバッチの差と
+            # 区別できない（spec §9「群とバッチを分けられない」）。バッチは 2 つ以上ここに来る。
             status = "complete"
             warnings.append({"code": "batch_group_complete_confounding",
-                             "message": "どのバッチも 1 群だけで、どの群も 1 バッチだけです。"
+                             "message": "どのバッチも 1 群だけです。"
                                         "群差とバッチ差を区別できません（完全交絡）。"})
         elif (groups_per_batch == 1).any() or (cramers_v is not None and cramers_v >= CRAMERS_V_THRESHOLD):
             status = "partial"

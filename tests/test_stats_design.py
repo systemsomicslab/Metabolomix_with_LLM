@@ -86,7 +86,10 @@ def test_numeric_covariate_and_missing_value():
     units = [u("HC", age="30"), u("HC", age="40"), u("RA", age="35"), u("RA", age="50")]
     d = build_design(units, factors=["group"], comparisons=[],
                      covariates=[{"name": "age", "type": "numeric"}])
-    assert d.columns[-1] == "age" and list(d.matrix[:, -1]) == [30, 40, 35, 50]
+    # 数値の共変量は中心化・尺度化して入る（cell の対比は変わらない）
+    age = np.array([30.0, 40, 35, 50])
+    assert d.columns[-1] == "age"
+    np.testing.assert_allclose(d.matrix[:, -1], (age - age.mean()) / age.std())
     units[0].attributes.pop("age")
     with pytest.raises(DomainError) as e:
         build_design(units, factors=["group"], comparisons=[],
@@ -127,3 +130,34 @@ def test_same_level_comparisons_are_invalid():
             build_design(_two_by_two(), factors=["group", "B"], comparisons=[
                 {"id": "i", "kind": "interaction", "factors": ["group", "B"], "levels": lv}])
         assert e.value.code == "DESIGN_INVALID"
+
+
+def test_constant_numeric_covariate_is_rank_deficient():
+    """全個体で同じ値の数値共変量は cell の列と見分けられない（DESIGN_RANK_DEFICIENT）。"""
+    units = [u("HC", age="30"), u("HC", age="30"), u("RA", age="30"), u("RA", age="30")]
+    with pytest.raises(DomainError) as e:
+        build_design(units, factors=["group"], comparisons=[],
+                     covariates=[{"name": "age", "type": "numeric"}])
+    assert e.value.code == "DESIGN_RANK_DEFICIENT"
+
+
+def test_large_scale_numeric_covariate_passes_lm_fit_rank_check():
+    """値の桁が大きい共変量（5e7 ± 1e6）でも、lm_fit と同じ基準で階数を満たす。"""
+    from metabolomix.analysis.stats.limma import _is_full_rank
+
+    rng = np.random.default_rng(1)
+    cov = rng.normal(5e7, 1e6, 10)
+    units = [u("A" if i < 5 else "B", protein=str(c)) for i, c in enumerate(cov)]
+    d = build_design(units, factors=["group"], comparisons=[],
+                     covariates=[{"name": "protein", "type": "numeric"}])
+    assert _is_full_rank(d.matrix)
+
+
+def test_rank_check_uses_lm_fit_criterion(monkeypatch):
+    """lm_fit が拒む行列（固有値の比が 1e-13 以下）は build_design が先に DESIGN_RANK_DEFICIENT にする。"""
+    from metabolomix.analysis.stats import design as module
+
+    monkeypatch.setattr(module, "_is_full_rank", lambda x: False)
+    with pytest.raises(DomainError) as e:
+        build_design([u("HC"), u("HC"), u("RA"), u("RA")], factors=["group"], comparisons=[])
+    assert e.value.code == "DESIGN_RANK_DEFICIENT"

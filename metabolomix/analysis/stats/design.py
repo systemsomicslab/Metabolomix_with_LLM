@@ -2,7 +2,12 @@
 
 因子の組み合わせごとの cell means（切片なし）に、共変量の列と個体のブロックの
 ダミー列を足した行列を作る。`limma.lm_fit` は階数不足を ValueError で拒むので、
-ここで先に調べて `DomainError("DESIGN_RANK_DEFICIENT")` にする。
+ここで先に同じ基準（`limma._is_full_rank`）で調べて `DomainError("DESIGN_RANK_DEFICIENT")` にする。
+
+数値の共変量は中心化し、母標準偏差（ddof=0）で割って入れる。値の桁が大きい共変量（例: 総タンパク
+5e7）が XᵀX の固有値の比を潰し、lm_fit の階数の判定に落ちるのを防ぐため。cell の対比は共変量の
+平行移動・尺度の変更で変わらない（共変量の係数は標準化した尺度になるが、報告はしない）。
+全個体で同じ値の共変量は cell の列と区別できないので DESIGN_RANK_DEFICIENT。
 
 単位（units）は属性 `group` `batch` `subject_id` `attributes`（dict[str, str]）を
 持つ任意のオブジェクト。因子・共変量の名前が "group" / "batch" ならその属性を、
@@ -16,6 +21,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from metabolomix.analysis.stats.limma import _is_full_rank
 from metabolomix.core.atomic_io import DomainError
 
 
@@ -87,8 +93,14 @@ def build_design(units, *, factors: list[str], comparisons: list[dict],
                 if not math.isfinite(x):
                     raise _invalid(f"共変量 {name} に有限でない値 {text!r}", factor=name)
                 nums.append(x)
+            arr = np.array(nums)
+            sd = float(arr.std())
+            if not (sd > 0 and math.isfinite(sd)):
+                raise DomainError("DESIGN_RANK_DEFICIENT",
+                                  f"数値の共変量 {name} が全個体で同じ値（cell の列と区別できない）",
+                                  {"columns": columns + [name], "covariate": name})
             columns.append(name)
-            cols.append(np.array(nums))
+            cols.append((arr - arr.mean()) / sd)
         elif kind == "categorical":
             lv = sorted(set(raw))
             ref = cov.get("reference", lv[0])
@@ -110,7 +122,7 @@ def build_design(units, *, factors: list[str], comparisons: list[dict],
 
     matrix = np.column_stack(cols)
     p = matrix.shape[1]
-    if np.linalg.matrix_rank(matrix) < p:
+    if not _is_full_rank(matrix) or np.linalg.matrix_rank(matrix) < p:
         raise DomainError("DESIGN_RANK_DEFICIENT",
                           "計画行列が階数不足（個体が群に入れ子など）", {"columns": columns})
 

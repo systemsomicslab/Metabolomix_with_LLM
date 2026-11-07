@@ -83,3 +83,14 @@ def test_injection_order_not_evaluable_cases():
     same = confounding_report(mk([("A", "b1", 1.0)] * 3 + [("B", "b1", 1.0)] * 3), ["A", "B"])
     assert same["injection_order"]["status"] == "not_evaluable"
     assert any(w["code"] == "injection_order_not_evaluable" for w in same["warnings"])
+
+
+def test_complete_confounding_when_one_group_spans_several_batches():
+    """A は b1 だけ、B は b2・b3 にまたがる: どのバッチも 1 群だけなので完全交絡。"""
+    units = mk([("A", "b1", None)] * 3 + [("B", "b2", None)] * 2 + [("B", "b3", None)] * 2)
+    rep = confounding_report(units, ["A", "B"])
+    assert rep["batch_status"] == "complete"
+    assert any(w["code"] == "batch_group_complete_confounding" for w in rep["warnings"])
+    with pytest.raises(DomainError) as e:
+        assert_not_confounded(rep, allow_confounded=False)
+    assert e.value.code == "STATISTIC_CONFOUNDED"

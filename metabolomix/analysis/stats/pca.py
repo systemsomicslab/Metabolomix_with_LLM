@@ -1,8 +1,10 @@
 """前処理後の行列での PCA（統計エンジン spec §10）。
 
 軸は生体の個体だけで決め、QC は同じ軸へ投影する。欠測は PCA のためだけに補う
-（`impute_for_pca`。基準行は生体の個体で、QC も同じ特徴ごとの値で埋める）。
-計算本体は `analysis.pca.run_pca_fit_subset`。
+（`impute_for_pca`）。`half_min` は基準行を生体の個体にし、QC の欠測も生体の個体から決めた
+特徴ごとの値（最小の log2 − 1）で埋める。`knn` は個体と QC を積んだ行列の上で、各行（個体・QC）の
+欠測をその行の近い特徴の値の平均で埋める（近さは全行で測り、基準行は使わない）。
+計算本体は `analysis.pca.run_pca_fit_subset`（決定的にするため `svd_solver="full"`）。
 """
 from __future__ import annotations
 
@@ -61,7 +63,7 @@ def pca(prepared: PreparedMatrix, *, scaling: str = "autoscale",
     fit = np.zeros(stacked.shape[0], dtype=bool)
     fit[:n_units] = True
     try:
-        res = run_pca_fit_subset(stacked, fit, n_components, scaling=scaling)
+        res = run_pca_fit_subset(stacked, fit, n_components, scaling=scaling, svd_solver="full")
     except ValueError as exc:
         raise DomainError("PCA_SPECIFICATION_INVALID", str(exc), {}) from exc
     comp = res["components"]

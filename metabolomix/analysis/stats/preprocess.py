@@ -147,7 +147,7 @@ def _nanmin(block: np.ndarray) -> np.ndarray:
     return np.where(np.isfinite(low), low, np.nan)
 
 
-def _matrix_id(study: StudyData, config: dict) -> str:
+def _matrix_id(study: StudyData, config: dict, normalize_method: str) -> str:
     table = [[s.sample_id, s.role, s.group, s.batch, s.injection_order, s.subject_id,
               bool(s.include), dict(sorted(s.attributes.items()))] for s in study.samples]
     source = study.dataset_hash
@@ -158,8 +158,9 @@ def _matrix_id(study: StudyData, config: dict) -> str:
         source = {"values_sha256": hashlib.sha256(values.tobytes()).hexdigest(),
                   "shape": list(values.shape), "detected_sha256": hashlib.sha256(det).hexdigest(),
                   "feature_ids": list(study.feature_ids)}
+    # normalize=auto は quant_state で方法が決まるので、解決後の方法も指紋に入れる
     return "mx_" + canonical_hash({"dataset_hash": source, "sample_table_hash": canonical_hash(table),
-                                   "config": config})[:16]
+                                   "config": config, "normalize_method": normalize_method})[:16]
 
 
 # --- 1. 選択 -----------------------------------------------------------------
@@ -347,10 +348,12 @@ def _filters(values, samples, detected, cfg, feature_ids) -> tuple[np.ndarray, d
     elif not len(blank):
         skip("blank_ratio", "no_blank")
     else:
-        med_bio = _nanmedian(_positive(values[bio]))
-        med_blank = _nanmedian(_positive(values[blank]))
+        # 平均（spec §4.3・preprocessing.blank_filter と同じ）。0 以下・非有限は欠測として除く。
+        _, mean_bio, _ = _sd_mean(values[bio])
+        _, mean_blank, _ = _sd_mean(values[blank])
         with np.errstate(all="ignore"):
-            record("blank_ratio", ~np.isfinite(med_blank) | (med_bio >= c["min"] * med_blank), min=c["min"])
+            record("blank_ratio", ~np.isfinite(mean_blank) | (mean_bio >= c["min"] * mean_blank),
+                   min=c["min"], statistic="mean")
 
     c = cfg["detection"]
     if c is None:
@@ -444,35 +447,78 @@ def _log2(values: np.ndarray) -> tuple[np.ndarray, dict]:
 
 # --- 6. 反復のまとめ ---------------------------------------------------------
 
-def _unit_of(members, collapse: bool) -> UnitInfo:
+def _unit_of(members, unit_id: str) -> UnitInfo:
+    """まとめる注入（群・属性が一致する技術反復）から単位を作る。バッチが食い違えば矛盾。"""
     first = members[0]
-    if len(members) > 1:
-        for name in ("group", "batch"):
-            seen = sorted({str(getattr(s, name)) for s in members})
-            if len(seen) > 1:
-                raise DomainError("SUBJECT_INCONSISTENT",
-                                  f"同じ個体 {first.subject_id} の注入が別の {name} を持つ: {seen}",
-                                  {"subject_id": first.subject_id, "field": name, "values": seen,
-                                   "samples": [s.sample_id for s in members]})
+    seen = sorted({str(s.batch) for s in members})
+    if len(seen) > 1:
+        raise DomainError("SUBJECT_INCONSISTENT",
+                          f"同じ個体 {first.subject_id} の技術反復（群・属性が同じ注入）が別の batch を持つ: {seen}",
+                          {"subject_id": first.subject_id, "field": "batch", "values": seen,
+                           "samples": [s.sample_id for s in members]})
     orders = [s.injection_order for s in members]
-    attrs = {k: v for k, v in first.attributes.items()
-             if all(s.attributes.get(k) == v for s in members[1:])}
-    return UnitInfo(unit_id=first.subject_id if collapse and first.subject_id else first.sample_id,
-                    group=first.group, batch=first.batch, subject_id=first.subject_id,
+    return UnitInfo(unit_id=unit_id, group=first.group, batch=first.batch,
+                    subject_id=first.subject_id,
                     injection_order=None if any(o is None for o in orders) else float(np.mean(orders)),
                     n_injections=len(members), sample_ids=[s.sample_id for s in members],
-                    attributes=attrs)
+                    attributes=dict(first.attributes))
+
+
+def _unit_ids(keys: list[tuple], firsts: list) -> list[str]:
+    """まとめた単位の ID（決定的）。
+
+    個体の単位が 1 つなら subject_id。同じ個体から複数の単位ができたら `subject_id|group`、
+    それでも重なれば、その個体・群の単位の間で値が違う属性を `|k=v` でキーの順に足す。
+    subject_id の無い注入は試料 ID のまま。
+    """
+    ids: list[str | None] = [None] * len(keys)
+    by_subject: dict[str, list[int]] = {}
+    for k, key in enumerate(keys):
+        if key[0] == "i":
+            ids[k] = key[1]
+        else:
+            by_subject.setdefault(key[1], []).append(k)
+    for subject, idx in by_subject.items():
+        if len(idx) == 1:
+            ids[idx[0]] = subject
+            continue
+        by_group: dict[str, list[int]] = {}
+        for k in idx:
+            by_group.setdefault(str(firsts[k].group), []).append(k)
+        for group, sub in by_group.items():
+            if len(sub) == 1:
+                ids[sub[0]] = f"{subject}|{group}"
+                continue
+            names = sorted({n for k in sub for n in firsts[k].attributes})
+            differing = [n for n in names
+                         if len({firsts[k].attributes.get(n) for k in sub}) > 1]
+            for k in sub:
+                extra = "".join(f"|{n}={firsts[k].attributes.get(n, '')}" for n in differing)
+                ids[k] = f"{subject}|{group}{extra}"
+    return ids
 
 
 def _collapse(log2, det, samples, enabled: bool):
+    """個体 × 群 × 属性が同じ注入を技術反復として log2 の上で平均する（spec §6 の対応のある計画のため、
+    同じ個体でも群か属性が違えば別の単位。単位は subject_id を持ち続ける）。"""
     with_subject = sum(s.subject_id is not None for s in samples)
     source = ("subject_id" if with_subject == len(samples)
               else "injection" if with_subject == 0 else "mixed")
-    groups: dict[str, list[int]] = {}
+    groups: dict[tuple, list[int]] = {}
     for k, s in enumerate(samples):
-        key = ("s", s.subject_id) if enabled and s.subject_id is not None else ("i", s.sample_id)
+        if enabled and s.subject_id is not None:
+            key = ("s", s.subject_id, s.group, tuple(sorted(s.attributes.items())))
+        else:
+            key = ("i", s.sample_id)
         groups.setdefault(key, []).append(k)
-    units = [_unit_of([samples[k] for k in idx], enabled) for idx in groups.values()]
+    keys = list(groups)
+    firsts = [samples[groups[key][0]] for key in keys]
+    unit_ids = _unit_ids(keys, firsts)
+    units = [_unit_of([samples[k] for k in groups[key]], uid) for key, uid in zip(keys, unit_ids)]
+    per_subject: dict[str, int] = {}
+    for key in keys:
+        if key[0] == "s":
+            per_subject[key[1]] = per_subject.get(key[1], 0) + 1
     seen: dict[str, UnitInfo] = {}
     for u in units:
         if u.unit_id in seen:
@@ -490,7 +536,8 @@ def _collapse(log2, det, samples, enabled: bool):
         source = "injection"
     step = {"step": "collapse", "status": "applied" if enabled else "skipped",
             "subject_source": source, "n_injections": len(samples), "n_units": len(units),
-            "collapsed_units": sum(u.n_injections > 1 for u in units)}
+            "collapsed_units": sum(u.n_injections > 1 for u in units),
+            "subjects_with_multiple_units": sum(n > 1 for n in per_subject.values())}
     if not enabled:
         step["reason"] = "disabled"
     return out, det_units, units, source, step
@@ -526,6 +573,7 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix | NeedsInput:
 
     values, step = _normalize_step(values, samples, cfg["normalize"], study.quant)
     steps.append(step)
+    normalize_method = step["method"]
 
     log2, missing = _log2(values)
     bio = [k for k, s in enumerate(samples) if s.role == "sample"]
@@ -546,7 +594,7 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix | NeedsInput:
         notes = replicate_name_warnings([s.sample_id for s in bio_samples])
     kept = set(feature_ids)
     return PreparedMatrix(
-        matrix_id=_matrix_id(study, cfg), log2=unit_log2, units=units, feature_ids=feature_ids,
+        matrix_id=_matrix_id(study, cfg, normalize_method), log2=unit_log2, units=units, feature_ids=feature_ids,
         detected_units=det_units, qc_log2=log2[qc] if qc else np.empty((0, len(cols))),
         qc_ids=[samples[k].sample_id for k in qc], steps=steps, config=cfg, quant=study.quant,
         dataset_hash=study.dataset_hash, subject_source=source, warnings=notes,

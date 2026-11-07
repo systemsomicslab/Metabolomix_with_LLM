@@ -128,3 +128,48 @@ def test_unknown_impute_rejected_with_and_without_missing():
     with pytest.raises(DomainError) as e:
         pca(_prep(x), impute="bogus")
     assert e.value.code == "PCA_SPECIFICATION_INVALID"
+
+
+def _wide(seed=0):
+    """40 個体 × 800 特徴（sklearn の auto が randomized SVD を選ぶ大きさ）、群の構造つき。"""
+    rng = np.random.default_rng(seed)
+    x = rng.normal(0.0, 1.0, (40, 800))
+    x[20:, :200] += 1.5
+    x[::2, 200:300] += 1.0
+    return x + 20.0
+
+
+def test_stats_pca_is_deterministic_on_wide_matrix():
+    """大きな行列でも stats.pca は実行ごとに同じ結果（randomized SVD を使わない）。"""
+    prep = _prep(_wide())
+    np.random.seed(1)
+    a = pca(prep, n_components=5)
+    np.random.seed(2)
+    b = pca(prep, n_components=5)
+    assert a["scores"] == b["scores"]
+    assert a["explained_variance_ratio"] == b["explained_variance_ratio"]
+    assert a["loadings"] == b["loadings"]
+
+
+def test_stats_pca_uses_full_svd():
+    """stats.pca の結果は svd_solver="full" の sklearn PCA と一致する。"""
+    x = _wide()
+    out = pca(_prep(x), n_components=5)
+    sc = (x - x.mean(0)) / x.std(0)
+    ref = PCA(n_components=5, svd_solver="full").fit(sc)
+    np.testing.assert_allclose(out["scores"]["units"], ref.transform(sc), atol=1e-9)
+    np.testing.assert_allclose(out["explained_variance_ratio"], ref.explained_variance_ratio_,
+                               rtol=1e-12)
+
+
+def test_run_pca_fit_subset_svd_solver_default_is_auto():
+    """svd_solver を省いた呼び出しは従来の既定（sklearn の auto）と同じ。"""
+    x = _data()
+    mask = np.ones(len(x), bool)
+    a = run_pca_fit_subset(x, mask, 3)
+    b = run_pca_fit_subset(x, mask, 3, svd_solver="auto")
+    assert a == b
+    sc = (x - x.mean(0)) / x.std(0)
+    assert a["components"] == PCA(n_components=3).fit(sc).transform(sc).tolist()
+    full = run_pca_fit_subset(x, mask, 3, svd_solver="full")
+    np.testing.assert_allclose(full["components"], a["components"], atol=1e-9)

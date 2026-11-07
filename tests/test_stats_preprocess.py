@@ -358,8 +358,8 @@ def test_log2_marks_non_positive_missing_without_pseudocount():
 
 
 def test_replicates_averaged_on_log_scale_by_subject():
-    rows = [("i1", "sample", "G1", "B", 1.0, "S1", True, {"sex": "F", "day": "1"}),
-            ("i2", "sample", "G1", "B", 2.0, "S1", True, {"sex": "F", "day": "2"}),
+    rows = [("i1", "sample", "G1", "B", 1.0, "S1", True, {"sex": "F"}),
+            ("i2", "sample", "G1", "B", 2.0, "S1", True, {"sex": "F"}),
             ("i3", "sample", "G2", "B", 3.0, "S2"), ("i4", "sample", "G2", "B", 4.0, "S3")]
     values = np.array([[4.0, 5.0], [16.0, 0.0], [2.0, 0.0], [2.0, 3.0]])
     det = np.array([[False, True], [True, False], [True, False], [True, True]])
@@ -381,12 +381,13 @@ def test_replicates_averaged_on_log_scale_by_subject():
 
 
 def test_subject_inconsistent_and_mixed_source():
-    rows = [("i1", "sample", "G1", None, None, "S1"), ("i2", "sample", "G2", None, None, "S1"),
+    # 群・属性が同じ注入（技術反復）でバッチが食い違うのは矛盾
+    rows = [("i1", "sample", "G1", "B1", None, "S1"), ("i2", "sample", "G1", "B2", None, "S1"),
             ("i3", "sample", "G2", None, None, None)]
     with pytest.raises(DomainError) as e:
         P.preprocess(_study(np.ones((3, 1)), rows), {"filters": OFF_FILTERS})
-    assert e.value.code == "SUBJECT_INCONSISTENT"
-    rows[1] = ("i2", "sample", "G1", None, None, "S1")
+    assert e.value.code == "SUBJECT_INCONSISTENT" and e.value.details["field"] == "batch"
+    rows[1] = ("i2", "sample", "G1", "B1", None, "S1")
     prep = P.preprocess(_study(np.ones((3, 1)), rows), {"filters": OFF_FILTERS})
     assert prep.subject_source == "mixed" and [u.unit_id for u in prep.units] == ["S1", "i3"]
 
@@ -443,3 +444,72 @@ def test_impute_for_pca_half_min_and_report():
     assert out2[2, 0] == 2.0 and out2[0, 1] == 1.0
     out3, rep3 = P.impute_for_pca(np.array([[1.0, 2.0], [np.nan, 3.0], [1.5, 2.5]]), method="knn")
     assert np.isfinite(out3).all() and rep3 == {"method": "knn", "imputed_cells": 1}
+
+
+
+# --- 対応のある計画（F5）・ブランク比（F6）・matrix_id（F6） ------------------------
+
+def _paired_rows():
+    """同じ 4 個体が群 A と B の両方に出る（各 2 注入）。"""
+    return [(f"{m}_{g}_{r}", "sample", g, "B1", None, m)
+            for m in ("m0", "m1", "m2", "m3") for g in ("A", "B") for r in (0, 1)]
+
+
+def test_paired_design_keeps_one_unit_per_subject_and_group():
+    rows = _paired_rows()
+    rng = np.random.default_rng(3)
+    values = rng.uniform(1e4, 2e4, (len(rows), 3))
+    prep = P.preprocess(_study(values, rows), {"filters": OFF_FILTERS, "normalize": {"method": "none"},
+                                               "drift": {"mode": "off"}})
+    assert [u.unit_id for u in prep.units] == [f"{m}|{g}" for m in ("m0", "m1", "m2", "m3")
+                                               for g in ("A", "B")]
+    assert [u.subject_id for u in prep.units] == [m for m in ("m0", "m1", "m2", "m3") for _ in "AB"]
+    assert [u.group for u in prep.units] == ["A", "B"] * 4
+    assert all(u.n_injections == 2 for u in prep.units)
+    np.testing.assert_allclose(prep.log2, np.log2(values).reshape(8, 2, 3).mean(axis=1))
+    step = _step(prep, "collapse")
+    assert step["n_units"] == 8 and step["subjects_with_multiple_units"] == 4
+
+
+def test_subject_in_two_groups_is_two_units_not_an_error():
+    rows = [("i1", "sample", "G1", None, None, "S1"), ("i2", "sample", "G2", None, None, "S1"),
+            ("i3", "sample", "G2", None, None, None)]
+    prep = P.preprocess(_study(np.ones((3, 1)), rows), {"filters": OFF_FILTERS})
+    assert [u.unit_id for u in prep.units] == ["S1|G1", "S1|G2", "i3"]
+
+
+def test_within_subject_attribute_is_not_averaged():
+    rows = [(f"S1_t{t}_{r}", "sample", "G1", "B1", None, "S1", True, {"time": str(t)})
+            for t in (0, 1) for r in (0, 1)]
+    rows += [("S2_0", "sample", "G1", "B1", None, "S2", True, {"time": "0"}),
+             ("S2_1", "sample", "G1", "B1", None, "S2", True, {"time": "0"})]
+    values = np.array([[2.0], [8.0], [64.0], [256.0], [4.0], [4.0]])
+    prep = P.preprocess(_study(values, rows), {"filters": OFF_FILTERS, "normalize": {"method": "none"},
+                                               "drift": {"mode": "off"}})
+    assert [u.unit_id for u in prep.units] == ["S1|G1|time=0", "S1|G1|time=1", "S2"]
+    assert [u.attributes for u in prep.units] == [{"time": "0"}, {"time": "1"}, {"time": "0"}]
+    assert prep.log2[:, 0].tolist() == pytest.approx([2.0, 7.0, 2.0])
+    assert _step(prep, "collapse")["subjects_with_multiple_units"] == 1
+
+
+def test_blank_ratio_uses_means_ignoring_missing():
+    rows = [(f"s{i}", "sample", "G1" if i < 2 else "G2", None, None, None) for i in range(4)]
+    rows += [(f"k{i}", "blank", None, None, None, None) for i in range(3)]
+    # f0: 生体の平均 257.5 / ブランクの平均 5（NaN を除く）→ 残る（中央値なら 10/5=2 で落ちる）
+    # f1: 生体の平均 100 / ブランクの平均 73.3 → 落ちる（中央値なら 100/10=10 で残る）
+    values = np.array([[10.0, 100.0], [10.0, 100.0], [10.0, 100.0], [1000.0, 100.0],
+                       [5.0, 10.0], [5.0, 10.0], [np.nan, 200.0]])
+    prep = P.preprocess(_study(values, rows),
+                        {"filters": {**OFF_FILTERS, "blank_ratio": {"min": 3.0}},
+                         "normalize": {"method": "none"}, "drift": {"mode": "off"}})
+    assert _step(prep, "filter")["filters"]["blank_ratio"]["dropped_ids"] == ["f1"]
+    assert prep.feature_ids == ["f0"]
+
+
+def test_matrix_id_includes_resolved_normalization():
+    """normalize=auto でも、換算済みかどうかで決まる実際の方法が違えば matrix_id も違う。"""
+    cfg = {"drift": {"mode": "off"}}
+    a = P.preprocess(_simple(quant=QuantState(normalized=True, method="is", unit="pmol")), cfg)
+    b = P.preprocess(_simple(quant=QuantState(normalized=False, method=None, unit=None)), cfg)
+    assert _step(a, "normalize")["method"] == "none" and _step(b, "normalize")["method"] == "pqn"
+    assert a.matrix_id != b.matrix_id

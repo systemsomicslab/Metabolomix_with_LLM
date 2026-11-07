@@ -67,8 +67,11 @@ def test_class_with_zero_total_is_excluded_and_reported():
     x[[1, 7], 6] = np.nan          # Cer は 2 個体で全メンバー欠測
     x[[1, 7], 7] = np.nan
     res = composition(_prep(x, 5), assay_kind="lipid", factors=["group"], comparisons=BVA)
-    assert res["zero_handling"] == {"rule": "exclude_class_with_nonpositive_total",
-                                    "excluded_classes": {"Cer": 2}}
+    assert res["zero_handling"] == {
+        "rule": "exclude_class_with_nonpositive_total", "excluded_classes": {"Cer": 2},
+        "member_missing_rule": "missing_member_counts_as_zero",
+        "missing_member_cells": {"Cer": {"A": 2, "B": 2}, "PC": {"A": 0, "B": 0},
+                                 "TG": {"A": 0, "B": 0}}}
     assert {r["feature_id"] for r in res["clr"]["rows"]} == {"PC", "TG"}
     # 絶対量には残り、欠測個体は n に数えない
     ab = {r["feature_id"]: r for r in res["absolute"]["rows"]}
@@ -82,6 +85,27 @@ def test_partial_missing_members_count_as_zero_in_total():
     res = composition(_prep(x, 5), assay_kind="lipid", factors=["group"], comparisons=BVA)
     assert res["zero_handling"]["excluded_classes"] == {}
     assert {r["feature_id"] for r in res["clr"]["rows"]} == {"Cer", "PC", "TG"}
+    # 欠測のメンバーを 0 と数えたことを開示する（spec §11）
+    zh = res["zero_handling"]
+    assert zh["member_missing_rule"] == "missing_member_counts_as_zero"
+    assert zh["missing_member_cells"]["Cer"] == {"A": 1, "B": 0}
+    assert zh["missing_member_cells"]["PC"] == {"A": 0, "B": 0}
+    warn = [w for w in res["warnings"] if w["code"] == "class_total_includes_missing_members"]
+    assert len(warn) == 1 and warn[0]["classes"] == ["Cer"]
+
+
+def test_no_missing_members_no_disclosure_warning():
+    res = composition(_prep(_data(), 5), assay_kind="lipid", factors=["group"], comparisons=BVA)
+    assert res["zero_handling"]["missing_member_cells"]["Cer"] == {"A": 0, "B": 0}
+    assert not any(w["code"] == "class_total_includes_missing_members" for w in res["warnings"])
+
+
+def test_no_feature_classes_warns_and_returns_nothing():
+    res = composition(_prep(_data(), 5, classes={}), assay_kind="lipid", factors=["group"],
+                      comparisons=BVA)
+    assert res["clr"] is None and res["absolute"] is None
+    assert res["classes"] == {} and res["unclassified_features"] == len(FEATS)
+    assert any(w["code"] == "no_feature_classes" for w in res["warnings"])
 
 
 def test_label_kind_follows_assay_kind():

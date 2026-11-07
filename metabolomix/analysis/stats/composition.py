@@ -6,6 +6,10 @@
 の 2 つを作り、それぞれ既存の `compare` で比べる。総量だけが動く変化は絶対量にだけ出て、
 取り分の変化は CLR に出る。合計が 0 以下の個体が 1 つでもあるクラスは CLR から除き、
 値を補って検定することはしない。
+
+欠測のメンバーは合計に 0 として入る。spec §11 に従い、それを `zero_handling` に
+（`member_missing_rule` と、クラス × 群ごとの欠測のメンバー × 個体のセル数 `missing_member_cells`）
+書き、欠測のメンバーを含むクラスがあれば警告 `class_total_includes_missing_members` を出す。
 """
 from __future__ import annotations
 
@@ -18,6 +22,8 @@ from metabolomix.analysis.stats.preprocess import PreparedMatrix
 
 SCHEMA = "stats-composition.v1"
 ZERO_RULE = "exclude_class_with_nonpositive_total"
+MEMBER_MISSING_RULE = "missing_member_counts_as_zero"
+_NO_GROUP = "(none)"
 
 
 def _class_prepared(prepared: PreparedMatrix, suffix: str, names: list[str],
@@ -53,7 +59,25 @@ def composition(prepared: PreparedMatrix, *, assay_kind: str, factors, compariso
     names = sorted(classes)
     classes = {c: classes[c] for c in names}
 
+    if not names:
+        warnings.append({"code": "no_feature_classes",
+                         "message": "クラスの付いた特徴が無いため、組成（CLR・絶対量）を計算できません。"})
+
     n = log2.shape[0]
+    unit_groups = [u.group if u.group is not None else _NO_GROUP for u in prepared.units]
+    group_levels = sorted(set(unit_groups))
+    missing_cells: dict[str, dict[str, int]] = {}
+    for c in names:
+        miss = (~np.isfinite(log2[:, members[c]])).sum(axis=1)   # 個体ごとの欠測のメンバー数
+        missing_cells[c] = {g: int(sum(m for m, ug in zip(miss, unit_groups) if ug == g))
+                            for g in group_levels}
+    with_missing = [c for c in names if any(missing_cells[c].values())]
+    if with_missing:
+        warnings.append({"code": "class_total_includes_missing_members",
+                         "message": "欠測のメンバーを 0 として合計したクラスがあります"
+                                    f"（{', '.join(with_missing)}）。合計は観測されたメンバーだけの和で、"
+                                    "欠測の多い群では低めに出ます。",
+                         "classes": with_missing})
     totals = np.zeros((n, len(names)))
     for k, c in enumerate(names):
         totals[:, k] = np.nansum(np.exp2(log2[:, members[c]]), axis=1)   # 欠測は 0
@@ -86,7 +110,9 @@ def composition(prepared: PreparedMatrix, *, assay_kind: str, factors, compariso
         "class_label_kind": "lipid_class" if assay_kind == "lipid" else "msdial_ontology",
         "classes": classes,
         "unclassified_features": unclassified,
-        "zero_handling": {"rule": ZERO_RULE, "excluded_classes": excluded},
+        "zero_handling": {"rule": ZERO_RULE, "excluded_classes": excluded,
+                          "member_missing_rule": MEMBER_MISSING_RULE,
+                          "missing_member_cells": missing_cells},
         "clr": clr,
         "absolute": absolute,
         "unit": prepared.quant.unit if prepared.quant is not None else None,

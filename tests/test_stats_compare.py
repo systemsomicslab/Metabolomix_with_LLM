@@ -607,3 +607,113 @@ def test_zero_variance_feature_is_not_tested_not_infinite():
     for r in res["rows"]:
         assert r["status"] == "not_tested" and r["reason"] == "degenerate_variance"
         assert r["statistic"] is None and r["p"] is None
+
+
+# --- 数値の共変量の尺度（F2） -----------------------------------------------------
+
+def _protein_case():
+    rng = np.random.default_rng(1)
+    x = rng.normal(20, 0.3, (10, 20))
+    cov = rng.normal(5e7, 1e6, 10)
+    return x, cov
+
+
+def test_large_scale_numeric_covariate_runs_and_matches_prestandardized():
+    """桁の大きい共変量でも compare が通り、手で標準化した共変量と同じ B−A の log2fc・t になる。"""
+    x, cov = _protein_case()
+    groups = ["A"] * 5 + ["B"] * 5
+    raw = _prepared(x, groups, attributes=[{"protein": repr(float(c))} for c in cov])
+    z = (cov - cov.mean()) / cov.std()
+    std = _prepared(x, groups, attributes=[{"protein": repr(float(c))} for c in z])
+    covs = [{"name": "protein", "type": "numeric"}]
+    a = _rows(compare(raw, factors=["group"], comparisons=BVA, covariates=covs))
+    b = _rows(compare(std, factors=["group"], comparisons=BVA, covariates=covs))
+    assert all(r["status"] == "tested" for r in a.values())
+    for fid in a:
+        assert a[fid]["log2fc"] == approx(b[fid]["log2fc"], rel=1e-9, abs=1e-12)
+        assert a[fid]["statistic"] == approx(b[fid]["statistic"], rel=1e-9, abs=1e-12)
+        assert a[fid]["p"] == approx(b[fid]["p"], rel=1e-9, abs=1e-15)
+
+
+def test_lm_fit_value_error_becomes_design_rank_deficient(monkeypatch):
+    """lm_fit の ValueError（階数の判定）は DESIGN_RANK_DEFICIENT で返す（素の ValueError を漏らさない）。"""
+    from metabolomix.analysis.stats import compare as module
+
+    def broken(y, x, names):
+        raise ValueError("design が列フルランクでない（推定できない係数がある）")
+
+    monkeypatch.setattr(module, "lm_fit", broken)
+    prep, _ = _two_groups(4, 4, 5)
+    with pytest.raises(DomainError) as e:
+        compare(prep, factors=["group"], comparisons=BVA)
+    assert e.value.code == "DESIGN_RANK_DEFICIENT"
+
+
+def test_group_spanning_batches_is_complete_confounding_in_compare():
+    """A は b1 だけ、B は b2・b3: compare は allow_confounded なしで STATISTIC_CONFOUNDED。"""
+    prep, _ = _two_groups(4, 4, 5, batches=["b1"] * 4 + ["b2", "b2", "b3", "b3"])
+    with pytest.raises(DomainError) as e:
+        compare(prep, factors=["group"], comparisons=BVA)
+    assert e.value.code == "STATISTIC_CONFOUNDED"
+    res = compare(prep, factors=["group"], comparisons=BVA, allow_confounded=True)
+    assert res["confounding"]["batch_status"] == "complete"
+
+
+
+# --- 対応のある計画が preprocess を通る（F5）・警告（F5・F6） --------------------------
+
+def test_paired_design_through_preprocess_matches_hand_built_units():
+    """同じ 4 個体 × 群 A・B × 2 注入 → 8 単位。block=subject_id の比較が、手で組んだ行列と一致する。"""
+    from metabolomix.analysis.stats.data import SampleInfo, StudyData
+    from metabolomix.analysis.stats.preprocess import preprocess
+
+    subjects, g = ("m0", "m1", "m2", "m3"), 6
+    samples = [SampleInfo(sample_id=f"{m}_{grp}_{r}", role="sample", group=grp, batch="b1",
+                          injection_order=None, subject_id=m, include=True)
+               for m in subjects for grp in ("A", "B") for r in (0, 1)]
+    rng = np.random.default_rng(7)
+    subj_eff = {m: rng.normal(0, 1.0, g) for m in subjects}
+    log_vals = np.array([20 + subj_eff[s.subject_id] + (0.8 if s.group == "B" else 0.0)
+                         + rng.normal(0, 0.1, g) for s in samples])
+    study = StudyData(values=np.exp2(log_vals), detected=None,
+                      sample_ids=[s.sample_id for s in samples],
+                      feature_ids=[f"f{j:02d}" for j in range(g)], samples=samples)
+    prep = preprocess(study, {"filters": {"blank_ratio": None, "detection": None, "qc_rsd": None,
+                                          "d_ratio": None},
+                              "normalize": {"method": "none"}, "drift": {"mode": "off"}})
+    assert len(prep.units) == 8
+    res = compare(prep, factors=["group"], comparisons=BVA, block="subject_id")
+    hand_log2 = log_vals.reshape(8, 2, g).mean(axis=1)
+    hand = _prepared(hand_log2, ["A", "B"] * 4, subjects=[m for m in subjects for _ in "AB"])
+    ref = compare(hand, factors=["group"], comparisons=BVA, block="subject_id")
+    assert res["design"]["columns"] == ref["design"]["columns"]
+    a, b = _rows(res), _rows(ref)
+    for fid in a:
+        assert a[fid]["status"] == "tested"
+        for key in ("log2fc", "statistic", "p", "ci_low", "ci_high"):
+            assert a[fid][key] == approx(b[fid][key], rel=1e-9, abs=1e-12)
+
+
+def test_units_missing_model_values_names_variables_and_units():
+    prep, _ = _two_groups(3, 3, 4, attributes=[{"age": "30"}, {}, {"age": "40"}, {"age": "35"},
+                                               {"age": "50"}, {"age": "45"}])
+    res = compare(prep, factors=["group"], comparisons=BVA,
+                  covariates=[{"name": "age", "type": "numeric"}])
+    w = next(w for w in res["warnings"] if w["code"] == "units_missing_model_values")
+    assert w["unit_ids"] == ["u01"] and w["variables"] == ["age"]
+    assert "age" in w["message"] and "u01" in w["message"]
+
+
+def test_annotated_population_empty_warns():
+    prep, _ = _two_groups(4, 4, 5, annotated={"not_in_matrix"})
+    res = compare(prep, factors=["group"], comparisons=BVA, bh_population="annotated")
+    w = next(w for w in res["warnings"] if w["code"] == "bh_population_empty")
+    assert w["contrasts"] == ["BvsA"] and w["n_annotated"] == 1 and w["n_annotated_in_matrix"] == 0
+
+
+def test_reported_ids_not_in_matrix_warn():
+    prep, _ = _two_groups(4, 4, 5)
+    res = compare(prep, factors=["group"], comparisons=BVA, bh_population="reported",
+                  reported_feature_ids=["f00", "nope", "zzz"])
+    w = next(w for w in res["warnings"] if w["code"] == "reported_features_not_in_matrix")
+    assert w["n_reported"] == 3 and w["n_not_in_matrix"] == 2 and w["examples"] == ["nope", "zzz"]
