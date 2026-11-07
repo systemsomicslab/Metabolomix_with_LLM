@@ -289,8 +289,8 @@ def test_tools_register_in_subprocess():
         "from metabolomix.core.mcp_core import mcp\n"
         "import metabolomix.quant.tools as t\n"
         "tm = mcp._tool_manager._tools\n"
-        "assert set(t.__all__) == {'dataset_quant_preview','dataset_quant_apply'}\n"
-        "for n in t.__all__:\n"
+        "assert {'dataset_quant_preview','dataset_quant_apply'} <= set(t.__all__)\n"
+        "for n in ('dataset_quant_preview','dataset_quant_apply'):\n"
         "    assert n in tm and tm[n].annotations is not None and tm[n].output_schema is None\n"
         "    assert 'dataset_handle' in tm[n].parameters['properties']\n"
         "print('ok')\n")

@@ -167,7 +167,7 @@ def match_samples(names_by_mode, mapping_rows=None):
         rule = "mapping_csv"
     else:
         ids = {{m: [_strip(n) for n in names] for m, names in names_by_mode.items()}}
-        rows, rule = None, "exact_or_polarity_suffix"
+        rows, rule = None, "polarity_token_removed"
     common = set.intersection(*(set(v) for v in ids.values())) if ids else set()
     return {{"rule": rule,
             "ids_by_mode": {{m: [i for i in v if i in common] for m, v in ids.items()}},

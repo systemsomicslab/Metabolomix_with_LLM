@@ -74,6 +74,8 @@ def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
     new = copy.deepcopy(ds)
     parent_names = list(ds.sample_names)
     idx = _sample_positions(parent_names, sample_names, sample_index)
+    if len(set(idx)) != len(idx):
+        raise ValueError(f"同じ親の試料を 2 回選べない（重複する位置）: {idx}")
     new_names = list(sample_names) if sample_names is not None else [parent_names[i] for i in idx]
     if len(new_names) != len(idx):
         raise ValueError(f"sample_names（{len(new_names)}）と sample_index（{len(idx)}）の長さが違う")
@@ -94,6 +96,10 @@ def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
         values = getattr(ds, attr, None)
         if values is not None and len(values) == n_parent:
             setattr(new, attr, [copy.deepcopy(values[i]) for i in idx])
+    if isinstance(new.msdial_samples, list) and len(new.msdial_samples) == len(new_names):
+        for entry, name in zip(new.msdial_samples, new_names):
+            if isinstance(entry, dict):
+                entry["name"] = name
     for attr in ("roles", "sample_meta"):
         old = getattr(ds, attr) or {}
         setattr(new, attr, {name: copy.deepcopy(old[parent_names[i]])
@@ -145,10 +151,12 @@ def register(holder, ds, *, step: str, parent_handle_ids: list[str]) -> str:
     新しい LibraryState（親の store を 2 か所で閉じないため。必要なら呼び出し側が
     `library_load` し直す）。分光の参照先（.arf2 / .dcl）は親が 1 本のときだけ引き継ぐ。
     """
-    polarity, _source, _notes = dataset_polarity(ds)
-    if polarity is None:
-        polarity = getattr(holder, "polarity", None)
     single = len(parent_handle_ids) == 1
+    polarity = None  # 親が複数（統合）なら極性は決まらない。親のハンドルの極性へ落とさない
+    if single:
+        polarity, _source, _notes = dataset_polarity(ds)
+        if polarity is None:
+            polarity = getattr(holder, "polarity", None)
     handle = handles.DatasetHandle(
         ds, polarity=polarity, polarity_source="quant",
         source={"kind": "quant", "step": step, "parents": list(parent_handle_ids)},

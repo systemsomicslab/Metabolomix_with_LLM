@@ -11,12 +11,12 @@ from metabolomix.core import session_state
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import missing_state
-from metabolomix.quant import normalize
+from metabolomix.quant import merge, normalize
 from metabolomix.quant.inputs import quant_error, reference_input
 from metabolomix.quant.table import resolve_quant_polarity
 from metabolomix.tools._holder import resolve_holder
 
-__all__ = ["dataset_quant_preview", "dataset_quant_apply"]
+__all__ = ["dataset_quant_preview", "dataset_quant_apply", "dataset_merge_polarities"]
 
 
 def _context(dataset_handle, polarity):
@@ -105,3 +105,29 @@ def dataset_quant_apply(reference_path: str | None = None, bindings: dict | None
             return ref
     return normalize.apply_tool(ds, ref, bindings, resolved, holder=holder,
                                 parent_handle_id=parent, skip_step=skip)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                      idempotentHint=False),
+          structured_output=False)
+def dataset_merge_polarities(positive_handle: str, negative_handle: str,
+                             mapping_csv: str | None = None,
+                             record_folder: str | None = None) -> str:
+    """陽イオンと陰イオンのデータセットを 1 つに統合し、新しいハンドルを作る（元は変えない）。
+
+    positive_handle / negative_handle: dataset_handle_open などで開いたハンドル。どちらも
+    dataset_quant_apply を通した（skip=True で飛ばした記録でもよい）もので、normalized と
+    単位が同じでなければ統合しない。特徴 ID は positive:<id> / negative:<id>、行は POS の特徴
+    のあとに NEG の特徴、試料の列は共通 ID（POS の順）。試料は名前（極性の印を除いた名前）で
+    照合し、食い違えば needs_input（only_in に片側にしか無い試料）で止まる。mapping_csv
+    （列: mode, source_sample, sample_id, group, sample_type）で対応づけて再実行する。
+    記録は 2 つの解析フォルダの共通の親の reports/quant/。共通の親が決められなければ
+    needs_input で record_folder（既存のフォルダ）を求める。規則プラグイン（[quant] rules）が要る。
+    """
+    pos = resolve_holder(positive_handle)
+    if isinstance(pos, str):
+        return pos
+    neg = resolve_holder(negative_handle)
+    if isinstance(neg, str):
+        return neg
+    return merge.merge_tool(pos, neg, mapping_csv, record_folder)
