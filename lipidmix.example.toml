@@ -39,3 +39,11 @@ exe = 'C:\MS-DIAL\MSDIALCUI.exe'
 # pathway_plot の PDF 描画に使うヘッドレス Chromium（Chrome / Edge）。任意:
 # 書かなければ Edge / Chrome の標準の置き場所から自動で探す。
 # browser = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+
+[quant]
+# 定量の工程（任意）。環境変数はなく、ここだけで指す。書き方は docs/quant-rules-plugin.md。
+# 規則プラグイン（パッケージ msdial_rules のフォルダ）。書かなければ定量の 4 ツールは
+# quant_rules_unavailable を返す。
+# rules = 'D:\tools\msdial-rules\msdial_rules'
+# 付加体の採用表（CSV）。任意。
+# adducts = 'D:\tables\adduct-selection.csv'

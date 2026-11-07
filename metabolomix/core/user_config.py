@@ -42,6 +42,10 @@ SETTINGS: dict[str, str] = {
     "mslipidmapper.api_token": "MSLIPIDMAPPER_API_TOKEN",
 }
 
+#: 環境変数を持たない設定キー（設定ファイルだけで指す。`SETTINGS` に載せない）。
+#: `[quant] rules` は任意の規則プラグインのフォルダ、`[quant] adducts` は付加体の採用表。
+FILE_ONLY_SETTINGS: frozenset[str] = frozenset({"quant.rules", "quant.adducts"})
+
 #: パスではない設定（URL・トークン）。設定ファイルの値を設定ファイル基準のパスに解かない。
 NON_PATH_SETTINGS: frozenset[str] = frozenset({
     "mslipidmapper.mslipidmapper_api_url",
@@ -154,7 +158,7 @@ def _parse(path: Path) -> _Parsed | None:
             continue
         for name, value in body.items():
             key = f"{section}.{name}"
-            if key not in SETTINGS:
+            if key not in SETTINGS and key not in FILE_ONLY_SETTINGS:
                 unknown.append(key)
                 continue
             if not isinstance(value, str):
@@ -183,8 +187,8 @@ def get_setting(key: str) -> Setting | None:
 
     設定ファイルが読めなければ ConfigInvalidError（環境変数があれば読まないので送出しない）。
     """
-    env_var = SETTINGS[key]
-    from_env = (os.environ.get(env_var) or "").strip()
+    env_var = SETTINGS.get(key, "")  # 設定ファイル専用のキーは環境変数なし
+    from_env = (os.environ.get(env_var) or "").strip() if env_var else ""
     if from_env:
         return Setting(key=key, value=from_env, source="env", env_var=env_var, config_file=None)
     path = config_file_path()
@@ -226,7 +230,8 @@ def missing_hint(key: str, what: str) -> str:
     else:
         head = (f"{EXAMPLE_FILENAME} を {path} として複製し、"
                 f"[{section}] {name} に{what}のパスを書いてください")
-    message = f"{head}（環境変数 {SETTINGS[key]} でも指定できます）。"
+    env_var = SETTINGS.get(key)
+    message = f"{head}（環境変数 {env_var} でも指定できます）。" if env_var else f"{head}。"
     unknown, _ = _unknown_keys_quietly(path)
     if unknown:
         message += f" 認識できないキーがあります: {', '.join(unknown)}。"
@@ -238,7 +243,7 @@ def describe_missing(key: str, setting: Setting | None = None) -> dict:
     path = config_file_path()
     details: dict = {
         "setting": key,
-        "env_var": SETTINGS[key],
+        "env_var": SETTINGS.get(key),
         "source": setting.source if setting else None,
         "config_file": str(path),
         "config_file_exists": path.is_file(),

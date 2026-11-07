@@ -15,6 +15,12 @@ import pytest
 
 from metabolomix.core.user_config import CONFIG_ENV, SETTINGS
 
+def pytest_addoption(parser):
+    """本物の規則プラグインとの同値確認（tests/test_quant_parity.py）だけが読む。"""
+    parser.addoption("--quant-rules", action="store", default=None,
+                     help="規則パッケージ msdial_rules のフォルダ。渡したときだけ同値確認を走らせる")
+
+
 #: 作られることの無いパス。autouse で tmp_path を要求すると全テストに tmp ディレクトリが
 #: できるので、存在しない固定パスで済ませる。
 _NO_CONFIG = Path(__file__).resolve().parent / "_no_such_dir" / "lipidmix.local.toml"
