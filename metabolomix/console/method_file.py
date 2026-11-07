@@ -448,9 +448,12 @@ def resolve_lbm(
         candidate = Path(lbm_setting.value)
         if candidate.is_file():
             return LbmResolution(path=_absolute(candidate), source=SETTING_SOURCE)
+        # `[library] lbm` は研究室の資産。置き場所（ディレクトリ）を戻り値へ出さず、
+        # ファイル名だけを示す（msp_then_lbm 経路と同じ。spec 2026-10-07 §3.3）。
+        label = setting_label(lbm_setting)
         return LbmResolution(
             path=None, source=SETTING_SOURCE, error_code="LBM_NOT_FOUND",
-            message=f"{setting_label(lbm_setting)} が指すファイルがありません: {lbm_setting.value}")
+            message=f"{label} が指すファイル（{candidate.name}）がありません。{label} を確認してください。")
 
     if not exe_path:
         return LbmResolution(

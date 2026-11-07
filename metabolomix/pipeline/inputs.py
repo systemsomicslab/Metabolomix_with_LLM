@@ -497,6 +497,20 @@ def _resolve_msp_pinned(request: dict, polarity: str, source_root: Path, *,
 _LAB_LBM_WHAT = "研究室の脂質ライブラリ（.lbm2）"
 
 
+def is_lab_lbm(inputs: dict) -> bool:
+    """入力計画の LBM が研究室の資産（`[library] lbm` 由来）なら真。
+
+    msp_then_lbm は LBM を必ず `[library] lbm` から読む。auto でも出どころが
+    `config_file`（`method_file.SETTING_SOURCE`）なら同じ資産なので、モードを問わず
+    戻り値・receipt・report・エラー文ではファイル名だけを示す（spec 2026-10-07 §3.3）。
+    保存する計画は絶対パスのまま（resume の `verify_inputs` が要る）。
+    """
+    if inputs.get("library_mode") == "msp_then_lbm":
+        return True
+    lbm = inputs.get("lbm")
+    return isinstance(lbm, dict) and lbm.get("source") == method_file_mod.SETTING_SOURCE
+
+
 def _resolve_lbm_from_library_setting() -> dict:
     """library_mode="msp_then_lbm" の LBM を `[library] lbm` だけから解決し、sha256 で固定する。
 
@@ -681,8 +695,8 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
         dot_product_cutoffs = method_file_mod.resolved_dot_product_cutoffs(method_keys)
     elif lbm_info["path"] and (lbm_info["source"] != "method_file"
                                or method_file_mod.LBM_KEY in overrides):
-        # 相対宣言なら resolve_lbm の解決結果で置き換え、build_tree/env/exe_dir
-        # へフォールバックした場合は（原本に行が無いので）新規追加する。
+        # 相対宣言なら resolve_lbm の解決結果で置き換え、build_tree / config_file
+        # （[library] lbm）/ exe_dir へフォールバックした場合は（原本に行が無いので）新規追加する。
         # 絶対宣言はそのまま（Console がそのまま読める）。
         overrides[method_file_mod.LBM_KEY] = lbm_info["path"]
 
@@ -716,9 +730,12 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
         },
         "alignment_reference": alignment_reference,
         # msp_then_lbm の LBM は研究室の資産なので、receipt と report がファイル名と出どころで
-        # 示せるように `file`・`source` も持つ（ほかのモードの形は変えない）。
+        # 示せるように `file`・`source` も持つ。auto も `source` を持ち、[library] lbm
+        # （config_file）から解いた LBM を戻り値でファイル名だけにできるようにする
+        # （計画の指紋は lbm の sha256 しか読まないので変わらない）。
         "lbm": (dict(lbm_info) if library_mode == "msp_then_lbm"
-                else {"path": lbm_info["path"], "sha256": lbm_info["sha256"]}),
+                else {"path": lbm_info["path"], "sha256": lbm_info["sha256"],
+                      **({"source": lbm_info["source"]} if library_mode == "auto" else {})}),
         "library_mode": library_mode,
         "msp": msp_info,
         "removed_declarations": removed_declarations,
@@ -1018,9 +1035,9 @@ def verify_inputs(snapshot: dict) -> None:
             continue
         path = Path(info[path_key])
         # 研究室 MSP は置き場所を返さない（ファイル名だけ。spec 2026-10-07 §3.3）。
-        # msp_then_lbm の LBM（[library] lbm）も研究室の資産なので同じ扱い（v8）。
-        lab_asset = label == "msp" or (
-            label == "lbm" and snapshot.get("library_mode") == "msp_then_lbm")
+        # [library] lbm から解いた LBM も研究室の資産なので、モードを問わず同じ扱い
+        # （msp_then_lbm は常に、auto は出どころが config_file のとき。v8）。
+        lab_asset = label == "msp" or (label == "lbm" and is_lab_lbm(snapshot))
         shown = path.name if lab_asset else str(path)
         details = ({"which": label, f"{label}_file": path.name} if lab_asset
                    else {"which": label, "path": str(path)})

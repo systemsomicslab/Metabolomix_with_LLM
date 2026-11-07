@@ -125,6 +125,76 @@ def test_console_plan_lbm_file_argument_overrides(tmp_path, monkeypatch):
     assert parsed["lbm"]["source"] == "argument"
 
 
+def test_console_plan_shows_only_the_name_of_a_library_lbm(tmp_path, monkeypatch):
+    """`[library] lbm` だけで解いた LBM は、console_plan の戻り値にディレクトリを出さない
+    （欄 `lbm.path` は残し、中身をファイル名にする。spec 2026-10-07 §3.3）。実効メソッドには
+    絶対パスを書く（Console が読むため）。"""
+    exe = tmp_path / "app" / "MSDIALCUI.exe"   # 実行体のフォルダに LBM は無い
+    exe.parent.mkdir()
+    exe.touch()
+    _plan_ready(tmp_path, monkeypatch, exe)
+    configured = tmp_path / "secret_share" / "lab_lipids.lbm2"
+    configured.parent.mkdir()
+    configured.write_bytes(b"fake-lab-lbm")
+    use_config(monkeypatch, tmp_path, {"library.lbm": configured})
+    method = tmp_path / "params.txt"
+    method.write_text("Ion mode: Negative\n", encoding="ascii")
+    from metabolomix.tools.console_tools import console_plan
+
+    raw = console_plan(dataset_root=str(tmp_path), method_file=str(method),
+                       polarity="negative", measure="peak_height")
+    parsed = _json.loads(raw)
+    assert parsed["status"] == "planned"
+    assert parsed["lbm"] == {"path": "lab_lipids.lbm2", "source": "config_file"}
+    assert "secret_share" not in raw
+    effective = Path(parsed["method_file"]).read_text(encoding="ascii")
+    assert str(configured) in effective
+
+
+def test_console_plan_lbm_not_found_hides_the_configured_directory(tmp_path, monkeypatch):
+    """`[library] lbm` が無いファイルを指すときの LBM_NOT_FOUND もファイル名だけを示す。"""
+    exe = tmp_path / "app" / "MSDIALCUI.exe"
+    exe.parent.mkdir()
+    exe.touch()
+    _plan_ready(tmp_path, monkeypatch, exe)
+    missing = tmp_path / "secret_share" / "lab_lipids.lbm2"
+    use_config(monkeypatch, tmp_path, {"library.lbm": missing})
+    method = tmp_path / "params.txt"
+    method.write_text("Ion mode: Negative\n", encoding="ascii")
+    from metabolomix.tools.console_tools import console_plan
+
+    raw = console_plan(dataset_root=str(tmp_path), method_file=str(method),
+                       polarity="negative", measure="peak_height")
+    parsed = _json.loads(raw)
+    assert parsed["error"]["code"] == "LBM_NOT_FOUND"
+    assert "lab_lipids.lbm2" in parsed["error"]["message"]
+    assert "[library] lbm" in parsed["error"]["message"]
+    assert "secret_share" not in raw
+
+
+def test_console_plan_non_ascii_library_lbm_hides_the_directory(tmp_path, monkeypatch):
+    """ASCII 以外を含む `[library] lbm` の置き場所も、METHOD_ENCODING_UNSUPPORTED の
+    エラー文に出さない（ファイル名だけ。研究室 MSP と同じ）。"""
+    exe = tmp_path / "app" / "MSDIALCUI.exe"
+    exe.parent.mkdir()
+    exe.touch()
+    _plan_ready(tmp_path, monkeypatch, exe)
+    configured = tmp_path / "secret_共有" / "lab_lipids.lbm2"
+    configured.parent.mkdir()
+    configured.write_bytes(b"fake-lab-lbm")
+    use_config(monkeypatch, tmp_path, {"library.lbm": configured})
+    method = tmp_path / "params.txt"
+    method.write_text("Ion mode: Negative\n", encoding="ascii")
+    from metabolomix.tools.console_tools import console_plan
+
+    raw = console_plan(dataset_root=str(tmp_path), method_file=str(method),
+                       polarity="negative", measure="peak_height")
+    parsed = _json.loads(raw)
+    assert parsed["error"]["code"] == "METHOD_ENCODING_UNSUPPORTED"
+    assert "lab_lipids.lbm2" in parsed["error"]["message"]
+    assert "secret_" not in raw
+
+
 def test_console_lbm_reads_library_lbm(tmp_path, monkeypatch):
     """LBM の設定は `[library] lbm` 1 つ（決めたこと 4）。解決の順は変わらない:
     引数 → メソッドの宣言 → ビルド生成物 → 設定 → 実行体のフォルダ。設定は 5 番目の段の
@@ -145,7 +215,8 @@ def test_console_lbm_reads_library_lbm(tmp_path, monkeypatch):
 
     parsed = plan("Ion mode: Negative\nLbm file path: \n")
     assert parsed["status"] == "planned"
-    assert parsed["lbm"] == {"path": str(configured), "source": "config_file"}
+    # [library] lbm は研究室の資産。戻り値は置き場所を出さずファイル名だけ（どの経路でも）。
+    assert parsed["lbm"] == {"path": "configured.lbm2", "source": "config_file"}
 
     declared = tmp_path / "declared.lbm2"
     declared.touch()

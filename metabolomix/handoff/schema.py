@@ -128,8 +128,13 @@ class AnalysisJob:
         return _from_dict(data)
 
 
-def sha256_file(path: Path) -> str:
-    return file_digest.sha256_of(path)
+def sha256_file(path: Path, *, trust: bool = True) -> str:
+    """`path` の sha256。trust=False は覚えた値（size と mtime_ns が鍵）を使わず読み直す。
+
+    完全性の裏取り（ジョブの出所の検証）は trust=False で呼ぶ——同じ大きさ・同じ
+    mtime_ns の書き換えは覚えた値では見分けられないため。
+    """
+    return file_digest.sha256_of(path, trust=trust)
 
 
 # ---------- シリアライズ補助 ----------

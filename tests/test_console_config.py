@@ -186,7 +186,10 @@ def test_template_uses_lbm_from_the_config_file_before_the_exe_folder(tmp_path, 
         out_path=str(out), polarity="positive",
         based_on=str(_neg_param(tmp_path / "neg_param_1.txt"))))
     assert parsed["lbm"]["source"] == "config_file"
-    assert "chosen.lbm2" in out.read_text(encoding="ascii")
+    # 実効メソッドへは絶対パスを書くが、戻り値はファイル名だけ（研究室の資産。spec 2026-10-07 §3.3）。
+    assert str(lib) in out.read_text(encoding="ascii")
+    assert parsed["lbm"]["path"] == "chosen.lbm2"
+    assert "libs" not in json.dumps(parsed["lbm"])
 
 
 def test_template_reports_config_invalid_for_the_old_msdial_lbm_key(tmp_path, cfg):

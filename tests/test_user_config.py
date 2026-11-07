@@ -168,7 +168,7 @@ def test_rewritten_file_takes_effect_without_restart(cfg, tmp_path):
 
 def test_utf8_bom_is_accepted(cfg, tmp_path):
     """メモ帳は BOM を付けることがある。tomllib は BOM を構文エラーにする。"""
-    cfg.write_text(f"﻿[msdial]\nexe = '{tmp_path / 'a.exe'}'\n", encoding="utf-8")
+    cfg.write_text(f"\ufeff[msdial]\nexe = '{tmp_path / 'a.exe'}'\n", encoding="utf-8")
     assert user_config.get_setting("msdial.exe").value == str(tmp_path / "a.exe")
 
 

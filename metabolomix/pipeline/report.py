@@ -394,10 +394,17 @@ def _section_method(record: dict) -> str:
     msp = inputs.get("msp") or {}
     library_mode = inputs.get("library_mode") or "auto"
     # msp_then_lbm の LBM（[library] lbm）も研究室の資産なのでファイル名と出どころだけ（v8）。
+    # auto でも [library] lbm（出どころ config_file）から解いた LBM は同じ資産なので、
+    # 欄は変えずに lbm_path の中身をファイル名にする（spec 2026-10-07 §3.3）。
+    # 判定は `inputs.is_lab_lbm` と同じ（report は inputs を import しない）。
     lab_lbm = library_mode == "msp_then_lbm"
+    auto_lab_lbm = not lab_lbm and lbm.get("source") == "config_file"
+    lbm_path = lbm.get("path")
+    if auto_lab_lbm and lbm_path:
+        lbm_path = Path(lbm_path).name
     lbm_lines = ([f"- lbm_file: {lbm.get('file') or '(unknown)'}",
                   f"- lbm_source: {lbm.get('source') or '(unknown)'}"] if lab_lbm
-                 else [f"- lbm_path: {lbm.get('path') or '(unknown)'}"])
+                 else [f"- lbm_path: {lbm_path or '(unknown)'}"])
     lines = [
         "## Method / LBM / Version", "",
         f"- method_source_path: {method.get('source_path') or '(unknown)'}",

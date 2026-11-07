@@ -1414,11 +1414,23 @@ def _resolve_libraries(method_keys: dict, method_path: Path, *, omics: str, exe:
     if lbm.error_code:
         return console_error(lbm.error_code, lbm.message or "",
                              {"candidates": list(lbm.candidates)} if lbm.candidates else None)
+    # `[library] lbm` から解いた LBM は研究室の資産なので、戻り値・エラー文には
+    # ファイル名だけを出す（どの経路でも。spec 2026-10-07 §3.3）。実効メソッドへは
+    # 絶対パスを書く（Console が読むため）。ほかの出所（宣言・ビルド生成物・exe フォルダ）は
+    # これまでどおり絶対パスを示す。
+    lab_lbm = lbm.source == method_file_mod.SETTING_SOURCE and bool(lbm.path)
+    if lab_lbm and not lbm.path.isascii():
+        return console_error(
+            "METHOD_ENCODING_UNSUPPORTED",
+            f"研究室 LBM（{Path(lbm.path).name}）のパスに ASCII 以外の文字があります。"
+            "MS-DIAL Console はメソッドファイルを ASCII で読むため、このライブラリは"
+            "見つからず黙って同定 0 件になります。ASCII だけのフォルダへ置き直してください。",
+            {"keys": [method_file_mod.LBM_KEY]})
     if lbm.path:
         overrides[method_file_mod.LBM_KEY] = lbm.path
     return overrides, {
         "library_mode": "auto",
-        "lbm": {"path": lbm.path, "source": lbm.source},
+        "lbm": {"path": Path(lbm.path).name if lab_lbm else lbm.path, "source": lbm.source},
         "msp": {"file": None, "source": "not_used"},
         "removed_declarations": [],
     }
