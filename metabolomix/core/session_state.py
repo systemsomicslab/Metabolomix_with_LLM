@@ -496,6 +496,11 @@ class AnalysisSession:
                 self._library = LibraryState()
             self.current_handle_id = handle.handle_id
 
+    def set_current(self, handle_id: str | None) -> None:
+        """直近のハンドルを `handle_id` にする（登録簿への追加は呼び出し側が済ませておく）。"""
+        with self._current_lock:
+            self.current_handle_id = handle_id
+
     @property
     def library(self) -> LibraryState:
         """直近のハンドルがあればその `library`、無ければセッション自身の LibraryState。

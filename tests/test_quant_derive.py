@@ -30,6 +30,19 @@ def _ds() -> DatasetState:
     ds.preprocess_metadata_hash = "h"
     ds.preprocessing_recipe = {"a": 1}
     ds.handoff_report = {"restored": []}
+    ds.roles = {"s1": "sample", "s2": "qc", "s3": "blank"}
+    ds.sample_meta = {"s1": {"batch": 1}, "s2": {"batch": 2}, "s3": {"batch": 3}}
+    ds.sample_ids = ["i1", "i2", "i3"]
+    ds.sample_raw_paths = ["r1", "r2", "r3"]
+    ds.msdial_samples = [{"name": "s1"}, {"name": "s2"}, {"name": "s3"}]
+    ds.per_sample_mz = {"f1": {"s1": 1.0, "s3": 3.0}, "f2": {"s2": 2.0}}
+    ds.feature_candidates = {"f1": [{"a": 1}], "f2": [{"a": 2}]}
+    ds.feature_annotations = {"f1": {"l": 1}, "f2": {"l": 2}}
+    ds.feature_tags = {"f1": ["t"], "f2": ["u"]}
+    ds.sml_rows = [{"x": 1}]
+    ds.sme_rows = [{"x": 1}]
+    ds.inchikey_coverage = {"total_features": 2}
+    ds.feature_qc = {"source": "arf", "n_cells": 6, "n_detected": 6, "gap_filled_rate": 0.0}
     return ds
 
 
@@ -127,3 +140,62 @@ def test_register_respects_limit(monkeypatch):
     assert exc.value.code == "DATASET_HANDLE_LIMIT"
     assert session_state.session.current_handle_id == src_id
     assert handles.registry.peek(src_id) is src
+
+
+def test_derive_realigns_reordered_subset_by_name():
+    ds = _ds()
+    new = qd.derive(ds, matrix=np.ones((2, 2)), detected=np.ones((2, 2), dtype=bool),
+                    sample_names=["s3", "s1"], state=_state())
+    assert new.sample_assay_ids == ["a3", "a1"]
+    assert new.sample_ids == ["i3", "i1"] and new.sample_raw_paths == ["r3", "r1"]
+    assert new.roles == {"s3": "blank", "s1": "sample"}
+    assert new.sample_meta == {"s3": {"batch": 3}, "s1": {"batch": 1}}
+    assert [m["name"] for m in new.msdial_samples] == ["s3", "s1"]
+    assert new.per_sample_mz == {"f1": {"s3": 3.0, "s1": 1.0}, "f2": {}}
+    with pytest.raises(ValueError):
+        qd.derive(ds, matrix=np.ones((2, 1)), detected=np.ones((2, 1), dtype=bool),
+                  sample_names=["nope"], state=_state())
+
+
+def test_derive_realigns_renamed_by_index():
+    ds = _ds()
+    new = qd.derive(ds, matrix=np.ones((2, 2)), detected=np.ones((2, 2), dtype=bool),
+                    sample_names=["M1", "M2"], sample_index=[2, 0], state=_state())
+    assert new.sample_names == ["M1", "M2"]
+    assert new.sample_assay_ids == ["a3", "a1"] and new.sample_raw_paths == ["r3", "r1"]
+    assert new.roles == {"M1": "blank", "M2": "sample"}
+    assert new.per_sample_mz["f1"] == {"M1": 3.0, "M2": 1.0}
+    with pytest.raises(ValueError):
+        qd.derive(ds, matrix=np.ones((2, 2)), detected=np.ones((2, 2), dtype=bool),
+                  sample_index=[0], state=_state())
+
+
+def test_derive_narrowing_prunes_feature_side_data():
+    ds = _ds()
+    new = qd.derive(ds, matrix=np.ones((1, 3)), detected=np.ones((1, 3), dtype=bool),
+                    feature_ids=["f2"], state=_state())
+    assert set(new.feature_metadata) == {"f2"} and set(new.feature_candidates) == {"f2"}
+    assert set(new.feature_annotations) == {"f2"} and set(new.feature_tags) == {"f2"}
+    assert set(new.per_sample_mz) == {"f2"}
+    assert new.sml_rows is None and new.sme_rows is None and new.inchikey_coverage == {}
+    assert new.feature_qc["n_cells"] == 3 and new.feature_qc["source"] == "arf"
+    # 元は触らない
+    assert set(ds.feature_candidates) == {"f1", "f2"}
+
+
+def test_derive_does_not_alias_inputs():
+    ds = _ds()
+    m = np.ones((2, 3))
+    d = np.ones((2, 3), dtype=bool)
+    st = _state()
+    new = qd.derive(ds, matrix=m, detected=d, state=st)
+    assert not np.shares_memory(new.feature_matrix, m)
+    assert not np.shares_memory(new.detected_mask, d)
+    assert new.quant_state is not st and new.quant_state == st
+    assert new.feature_matrix.dtype == float and new.detected_mask.dtype == bool
+
+
+def test_set_current_sets_handle_id():
+    session_state.session.set_current("dh_x")
+    assert session_state.session.current_handle_id == "dh_x"
+    session_state.session.set_current(None)
