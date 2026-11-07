@@ -189,9 +189,10 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料�
   移る（写さない。閉じたあと古いライブラリへ落ちない）。
 - **解釈規則の選択軸は `session.assay_kind`**（`lipid` / `metabolite` / `unknown`、既定
   `unknown`）。脂質名文法は脂質アッセイでしか成り立たないので、ダイジェスト
-  （`assay_digest()`）も `section_hint` もここで分岐する。**`caveat_emitted` の bool だけに
-  戻さない**——`load_dataset` は GATEWAY より先に走るのでダイジェストは必ず `unknown` で
-  1 回出る。`caveat_emitted_kind` があるから、種別が確定したときにもう 1 回だけ届く。
+  （`assay_digest()`）がここで分岐する。**`caveat_emitted` の bool だけに
+  戻さない**——`load_dataset` が（種別の確定より先に）ダイジェストを出すので、まず `unknown` で
+  1 回出る。`record_objective(assay_kind=...)` が確定した種別のダイジェストをもう 1 回だけ届ける
+  （`caveat_emitted_kind` があるのはそのため）。
 - **前提状態が無いときは例外でなく機械可読な封筒を返す**:
   `{"error": {"code": "missing_state", "state": ..., "required_tools": [...], "message": ...}}`
   （`metabolomix/core/mcp_errors.py` の `missing_state`）。クライアントはこれを読んでリプレイする契約。
@@ -292,7 +293,7 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料�
 - **フローが変わったら vault 側の流れ図も同じ作業の中で直す**。反映先は
   `C:\Users\yuu18\Documents\KnowledgeVault\30_Projects\ms-data-parser\ms-data-parser-flow.md`。
   対象は「利用者から見て何がどの順に起きるか」が変わる改修——入口の判定規則
-  （`metabolomix/core/mcp_core.py` の `MCP_INSTRUCTIONS` の ENTRY POINT / GATEWAY）、
+  （`metabolomix/core/mcp_core.py` の `MCP_INSTRUCTIONS` の ENTRY POINT / ASSAY KIND）、
   pipeline の stage 列（`pipeline/engine.py` `build_stages` /
   `pipeline/stage_plan.py` `BASE_V2_STAGE_IDS`）、前提状態の連鎖（どのツールが
   どのツールを `missing_state` で要求するか）、経路の増減（新しい入口・新しい解析枝）、

@@ -94,7 +94,7 @@ implementation lives under `metabolomix/`.
 | Package | Responsibility |
 |---|---|
 | `metabolomix/core/` | FastMCP instance, configuration, session state, path resolution. Depends on nothing else in the tree. |
-| `metabolomix/{arf,arf2,pai2,dcl,eic}/` | One `reader.py` (parser) and `tools.py` (MCP surface) per input format. |
+| `metabolomix/{arf,arf2,pai2,dcl,eic}/` | One `reader.py` (parser) per input format; only `dcl` also has a `tools.py` (MCP surface). |
 | `metabolomix/mztab/` | mzTab-M reader and canonical `DatasetState`. |
 | `metabolomix/console/` | MS-DIAL Console execution: job planning, running, output collection. |
 | `metabolomix/analysis/` | Format-independent numerics: preprocessing/QC, PCA, differential analysis, the export contract. |

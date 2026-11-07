@@ -224,8 +224,7 @@ run ディレクトリの `remote-job.json`。サーバは版を返さないの�
 直近を読み書きしない。`dataset_handle` を渡した呼び出しはサーバの別スレッドで回り、同じハンドルへの呼び出しは
 1 本ずつ、別のハンドルどうしは並行に進む。渡さない呼び出しは対話のセッションの直近のハンドル
 (`load_dataset` で開いたもの)に効き、直近のハンドルがあればそのハンドルへの呼び出しとして
-同じく 1 本ずつに並ぶ(`dataset_handle` を持たない
-`pathway_project` / `save_figure` も)。
+同じく 1 本ずつに並ぶ。
 順番を待つ間に直近のハンドルが閉じられたら、何もせずに `missing_state` を返す。
 `load_dataset` より前に `library_load` で読んだライブラリは、そのデータセットのライブラリが
 決まらなかったとき、`load_dataset` のハンドルへ移る。直近のハンドルを閉じると、渡さない呼び出しはデータセットもライブラリも無い状態
@@ -245,12 +244,10 @@ run ディレクトリの `remote-job.json`。サーバは版を返さないの�
 | `dataset_novel_candidates` | 新しい知見の候補の一覧: SME・m/z 帯ごとの許容幅・q の閾値で絞り、除く対象を外す。統計は 2 群比較の result_id か analysis-spec の解析から。割れたアライメントスポットの組は 1 候補(`merged_from`、同定と質量誤差は SME を持つ方 `sme_feature_id`)に数え、統計はまとめた行列で検定し直した値(`statistics.merge_split`、既定 true)。 spec の `labels`(外部の印の TSV)で行に `labels.<name>` の列と水準ごとの件数を足す(並び・件数・除外・`rule_hash` は変えない)。spec の `ppm_offset`(`{default, bands:[{max_mz, offset}]}`)で質量の窓の中心をずらせる(幅と行の `ppm` 列は変えず、渡したときだけ `rule_hash` に入る)。 |
 | `dataset_alignment_qc` | 1 つの物質が 2 つ以上のアライメントスポットに割れた組を探す(alignment-qc.v1)。同じ付加体・\|Δm/z\| ≤ 15 ppm・0.05 < ΔRT ≤ 1.0 分で、試料ごとの受け持ち(検出状態があれば検出、無ければ値の大きい方)が補い合う組。型は `injection_block`(片方が注入順の連続した塊)・`group_aligned`(受け持ちが群と一致。まとめない)・`interleaved`。`mergeable` は統計の側が試料ごとに大きい方の値で 1 つにまとめてよい組(注釈が両立する `injection_block` と ΔRT ≤ 0.15 分の `interleaved`。まとめるのはそのうち互いに |ΔRT| が最も近い相手どうしの 2 スポットだけ)。注入順は実験情報シート、無ければファイル名の順。全体は `output_path` に JSON、戻り値は要約。 |
 
-次の既存ツールは省略可能な引数 `dataset_handle` を受ける(省略時は対話のセッションの直近のハンドル):
-`dataset_status` `dataset_exclude` `dataset_preprocess` `dataset_pca` `dataset_differential`
-`dataset_export_differential` `dataset_export_evidence_bundle` `dataset_set_sample_metadata`
-`dataset_statistic` `dataset_build_matrix` `dataset_feature_search` `library_load`
-`library_match_feature` `library_plot_mirror`。開いていないハンドルは `DATASET_HANDLE_NOT_FOUND`
-で、対話のセッションへは落ちない。
+データセットを読む（または記録の置き場所をデータセットで決める）ツールはすべて、省略可能な引数 `dataset_handle` を受ける
+（省略時は対話のセッションの直近のハンドル）。`dataset_*`・`curation_*`・`dcl_*`・`library_*`・`pathway_*`・
+`record_objective` / `write_report` / `read_report` / `save_figure` がそうで、実際に持つ一覧は MCP の `tools/list` の
+入力スキーマが正準。開いていないハンドルは `DATASET_HANDLE_NOT_FOUND` で、対話のセッションへは落ちない。
 
 ## 根拠バンドル
 
