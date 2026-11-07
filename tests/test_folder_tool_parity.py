@@ -209,11 +209,11 @@ def test_folder_and_mztab_adapters_give_the_same_tool_output(tmp_path, entry):
     from metabolomix.tools import dataset_analysis_tools as dat
     from metabolomix.tools import mztab_tools
 
-    # mzTab-M のアダプタは mzTab-M のファイル名のバッチ語幹から `.arf2`（フラグの置き場所）を探す。
+    # mzTab-M のファイル名にバッチ語幹が無くても、m/z の照合で `.arf2`（フラグの置き場所）を見つける。
     job = _job(tmp_path, spec=_spec(), with_mddata=False,
-               mztab_name="AlignmentResult_2026_02_01_00_00_00_Height.mzTab")
+               mztab_name="Height_x.mzTab")
     out = job.parent / "msdial"
-    _add_mtd(out / "AlignmentResult_2026_02_01_00_00_00_Height.mzTab", [1, 1, 2, 2, 3, 3], [9, 8, 7, 6, 5, 4])
+    _add_mtd(out / "Height_x.mzTab", [1, 1, 2, 2, 3, 3], [9, 8, 7, 6, 5, 4])
     _flag_wrong(out)
     kwargs = ({"job_path": str(job)} if entry == "job"
               else {"pipeline_path": str(_pipeline(tmp_path, job))})

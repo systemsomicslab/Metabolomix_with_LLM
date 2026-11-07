@@ -292,7 +292,7 @@ def test_curation_flags_are_noted_but_not_applied(tmp_path, monkeypatch):
     from metabolomix.curation import apply as curation_apply
     ds = _load_ds()
     ds.source_files = {str(tmp_path / "align.mzTab"): "sha"}
-    monkeypatch.setattr(curation_apply, "arf2_for_mztab", lambda path: tmp_path / "align.arf2")
+    monkeypatch.setattr(curation_apply, "arf2_for_mztab", lambda path, **kw: tmp_path / "align.arf2")
     monkeypatch.setattr(curation_apply, "flags_for_arf2", lambda path: {"n": 3})
     parsed = _search(min_mz=100.0, max_mz=101.0)
     assert any("キュレーション" in note for note in parsed["notes"])
@@ -303,7 +303,7 @@ def test_unreadable_curation_flags_do_not_fail_the_search(tmp_path, monkeypatch)
     from metabolomix.curation.flags import FlagFileError
     ds = _load_ds()
     ds.source_files = {str(tmp_path / "align.mzTab"): "sha"}
-    monkeypatch.setattr(curation_apply, "arf2_for_mztab", lambda path: tmp_path / "align.arf2")
+    monkeypatch.setattr(curation_apply, "arf2_for_mztab", lambda path, **kw: tmp_path / "align.arf2")
 
     def _broken(path):
         raise FlagFileError(path, 3, "JSON として読めない")

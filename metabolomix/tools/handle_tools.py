@@ -67,7 +67,7 @@ def _alignment_files(ds, arf2_path: str | None, kind: str | None = None,
             if candidate.is_file():
                 arf2 = candidate
     if arf2 is None:
-        arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p)
+        arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p, feature_mz=curation_apply.feature_mz_of(ds))
                                   for p in (getattr(ds, "source_files", None) or {}))), None)
     if arf2 is None and kind == "pipeline_path" and path:
         arf2 = opening.pipeline_arf2(path)

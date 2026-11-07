@@ -297,7 +297,7 @@ def dataset_export_differential(output_path: str,
 
     curation = None
     flag_set = None
-    arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p) for p in ds.source_files)), None)
+    arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p, feature_mz=curation_apply.feature_mz_of(ds)) for p in ds.source_files)), None)
     if arf2 is not None:
         try:
             flag_set = curation_apply.flags_for_arf2(arf2)
@@ -606,7 +606,7 @@ def _curation_note(ds) -> str | None:
     from metabolomix.curation import apply as curation_apply
     from metabolomix.curation.flags import FlagFileError
 
-    arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p)
+    arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p, feature_mz=curation_apply.feature_mz_of(ds))
                               for p in (getattr(ds, "source_files", None) or {}))), None)
     if arf2 is None:
         return None
@@ -952,7 +952,7 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curati
         return _missing('dataset_differential_result','指定した2群結果がありません。先にdataset_differentialを実行してください。')
     try:
         curation = None
-        arf2 = next(filter(None,(curation_apply.arf2_for_mztab(p) for p in ds.source_files)),None)
+        arf2 = next(filter(None,(curation_apply.arf2_for_mztab(p, feature_mz=curation_apply.feature_mz_of(ds)) for p in ds.source_files)),None)
         if arf2 is not None:
             flags = curation_apply.flags_for_arf2(arf2)
             mapped = (getattr(ds,'feature_qc',None) or {}).get('source') == 'arf'
