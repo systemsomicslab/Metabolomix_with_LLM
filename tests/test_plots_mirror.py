@@ -121,9 +121,9 @@ def test_peaks_are_bare_stems_without_tip_markers(monkeypatch):
     from metabolomix.plots import render as plot_render
     real = plot_render.figure_to_png
 
-    def spy(fig):
+    def spy(fig, dpi=100):
         captured["axes"] = fig.axes[0]
-        return real(fig)
+        return real(fig, dpi)
 
     monkeypatch.setattr(plot_render, "figure_to_png", spy)
     mirror.render_mirror(_payload())
@@ -144,9 +144,9 @@ def _labelled(payload, **kwargs):
     from metabolomix.plots import render as plot_render
     real = plot_render.figure_to_png
 
-    def spy(fig):
+    def spy(fig, dpi=100):
         captured["texts"] = [t.get_text() for t in fig.axes[0].texts]
-        return real(fig)
+        return real(fig, dpi)
 
     import pytest as _pytest
     monkeypatch = _pytest.MonkeyPatch()
@@ -241,9 +241,9 @@ def _figure(payload, **kwargs):
     from metabolomix.plots import render as plot_render
     real = plot_render.figure_to_png
 
-    def spy(fig):
+    def spy(fig, dpi=100):
         captured["axes"] = fig.axes[0]
-        return real(fig)
+        return real(fig, dpi)
 
     import pytest as _pytest
     monkeypatch = _pytest.MonkeyPatch()

@@ -1338,7 +1338,7 @@ def arf_plot_volcano(
         ))
 
     counts = _volcano_counts(last)
-    png = plot_render.figure_to_png(volcano_plot.render_volcano_plot(last, title=title))
+    png = plot_render.render_png(volcano_plot.render_volcano_plot, last, title=title)
     caption = (
         f"Volcano: {last.get('a')} (n={last.get('n_a')}) vs {last.get('b')} (n={last.get('n_b')})"
         f" — 全 {counts['total']} 特徴のうち up={counts['up']} / down={counts['down']} /"
@@ -1438,7 +1438,7 @@ def arf_plot_group_intensity(
     if mode == plot_render.PAYLOAD:
         arf_state.last_group_intensity = {"payload": payload, "title": title, "ncols": ncols}
         return json_payload(payload)
-    png = plot_render.figure_to_png(gi.render_group_intensity_plot(payload, title=title, ncols=ncols))
+    png = plot_render.render_png(gi.render_group_intensity_plot, payload, title=title, ncols=ncols)
     arf_state.last_group_intensity = {"payload": payload, "title": title, "ncols": ncols}
     return [_group_intensity_caption(payload), Image(data=png, format="png")]
 

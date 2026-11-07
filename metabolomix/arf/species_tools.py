@@ -126,7 +126,7 @@ def arf_plot_species(
     if mode == plot_render.PAYLOAD:
         arf_state.last_species_plot = {"payload": payload, "title": title, "ncols": ncols}
         return json_payload(payload)
-    png = plot_render.figure_to_png(species_plot.render_species_plot(payload, title=title, ncols=ncols))
+    png = plot_render.render_png(species_plot.render_species_plot, payload, title=title, ncols=ncols)
     arf_state.last_species_plot = {"payload": payload, "title": title, "ncols": ncols}
     return [_species_caption(payload), Image(data=png, format="png")]
 
@@ -268,6 +268,6 @@ def arf_pca_species(
                                                   "dropped_zero_variance", "excluded", "caveats")}
                             | {"pc1_r_top": top, "pc1_r_bottom": bottom,
                                "result_id": plot["provenance"].get("result_id")})
-    png = plot_render.figure_to_png(render_pca_scores(plot, title=plot["title"]))
+    png = plot_render.render_png(render_pca_scores, plot, title=plot["title"])
     arf_state.last_species_pca = plot
     return [caption, Image(data=png, format="png")]

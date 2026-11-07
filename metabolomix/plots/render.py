@@ -11,6 +11,14 @@ from __future__ import annotations
 
 import io
 import os
+import tempfile
+import threading
+from pathlib import Path
+
+import matplotlib
+
+# ヘッドレスで描く。pyplot を読む前に 1 度だけ指定する（描画ごとには指定しない）。
+matplotlib.use("Agg")
 
 # 描画系ツールの戻り値の形。
 IMAGE = "image"
@@ -38,8 +46,14 @@ def resolve_plot_output(requested: str | None) -> str:
 DEFAULT_IMAGE_DPI = 100
 
 
+# matplotlib の pyplot は図の登録簿（gcf）などの大域状態を持ち、スレッドセーフでない。
+# ツールはワーカースレッドから呼ばれるので、図の生成から破棄までを 1 本のロックで直列にする。
+# RLock なのは、描画関数の中から別の描画の部品が入れ子で呼ばれてもデッドロックしないため。
+PLOT_LOCK = threading.RLock()
+
+
 def figure_to_png(fig, dpi: int = DEFAULT_IMAGE_DPI) -> bytes:
-    """Figure を PNG バイト列にして Figure を閉じる。"""
+    """Figure を PNG バイト列にして Figure を閉じる。このモジュールの中だけで使う（外からは `render_png`）。"""
     import matplotlib.pyplot as plt
 
     buffer = io.BytesIO()
@@ -48,3 +62,41 @@ def figure_to_png(fig, dpi: int = DEFAULT_IMAGE_DPI) -> bytes:
     finally:
         plt.close(fig)
     return buffer.getvalue()
+
+
+def render_png(build, /, *args, dpi: int = DEFAULT_IMAGE_DPI, **kwargs) -> bytes:
+    """`build(*args, **kwargs)` が返す Figure を PNG にする。生成から破棄までを `PLOT_LOCK` の下で行う。"""
+    with PLOT_LOCK:
+        fig = build(*args, **kwargs)
+        return figure_to_png(fig, dpi)
+
+
+def render_files(build, paths: dict[str, Path], /, *args, dpi: int = DEFAULT_IMAGE_DPI,
+                 atomic: bool = False, **kwargs) -> None:
+    """`build(*args, **kwargs)` が返す Figure を、形式（"png" / "svg" ...）ごとに `paths` へ保存する。
+
+    `save_figure` と報告書用の図が使う。`atomic=True` は同じ親ディレクトリの一時ファイルへ
+    書いてから置換する（描画の途中で落ちても、既にある図を壊れたファイルで置き換えない）。
+    """
+    import matplotlib.pyplot as plt
+
+    with PLOT_LOCK:
+        fig = build(*args, **kwargs)
+        try:
+            for fmt, path in paths.items():
+                path = Path(path)
+                if not atomic:
+                    fig.savefig(path, format=fmt, dpi=dpi, bbox_inches="tight")
+                    continue
+                fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp",
+                                                dir=str(path.parent))
+                os.close(fd)
+                tmp = Path(tmp_name)
+                try:
+                    fig.savefig(tmp, format=fmt, dpi=dpi, bbox_inches="tight")
+                    os.replace(tmp, path)
+                except BaseException:
+                    tmp.unlink(missing_ok=True)
+                    raise
+        finally:
+            plt.close(fig)

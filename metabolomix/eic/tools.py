@@ -244,7 +244,7 @@ def eic_plot_compounds(
         # dict をそのまま返すと FastMCP が indent=2 で整形する。点列 payload では
         # 空白だけで数千〜数万字になるため、最小形の JSON 文字列で返す。
         return json_payload(payload)
-    png = plot_render.figure_to_png(render_eic_plot(payload, title=title))
+    png = plot_render.render_png(render_eic_plot, payload, title=title)
     return [_multi_plot_caption(payload), Image(data=png, format="png")]
 
 

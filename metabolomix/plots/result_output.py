@@ -11,14 +11,11 @@
 """
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
-
-import matplotlib.pyplot as plt
 
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.tool_helpers import dataset_pca_plot
+from metabolomix.plots.render import render_files
 from metabolomix.plots.pca_scores import render_pca_scores
 from metabolomix.plots.volcano import render_volcano_plot
 
@@ -99,15 +96,17 @@ def save_result_figure(ds, result: dict, path: Path, *, kind: str,
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    fig = _render(result, kind=kind, title=title)
-    try:
-        notes = figure_annotations(ds, result)
+    notes = figure_annotations(ds, result)
+
+    def build():
+        fig = _render(result, kind=kind, title=title)
         if notes:
             fig.text(0.5, 0.005, "\n".join(notes), ha="center", va="bottom",
                      fontsize=8, color="#a33")
-        _atomic_savefig(fig, path)
-    finally:
-        plt.close(fig)
+        return fig
+
+    # 描画（生成〜保存〜破棄）は PLOT_LOCK の下。atomic は途中で落ちても既存の図を壊さない。
+    render_files(build, {"png": path}, dpi=120, atomic=True)
     return path
 
 
@@ -149,20 +148,3 @@ def _render(result: dict, *, kind: str, title: str | None):
         return render_volcano_plot(result, title=title)
     raise DomainError("UNSUPPORTED_FIGURE_KIND",
                       f"未対応の図の種類です: {kind}", {"kind": kind})
-
-
-def _atomic_savefig(fig, path: Path) -> None:
-    """同じ親ディレクトリの一時ファイルへ書いてから置換する。
-
-    描画の途中で落ちても、既にある図を壊れた PNG で置き換えない。
-    """
-    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp",
-                                    dir=str(path.parent))
-    os.close(fd)
-    tmp = Path(tmp_name)
-    try:
-        fig.savefig(tmp, format="png", dpi=120, bbox_inches="tight")
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise

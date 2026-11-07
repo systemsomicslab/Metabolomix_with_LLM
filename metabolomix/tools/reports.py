@@ -5,7 +5,6 @@ write/read/list_reports, save_figure。
 session_state / tool_helpers / knowledge_store / matplotlib。
 tools_* / server は import しない。
 """
-import matplotlib.pyplot as plt
 
 from metabolomix.corpus import knowledge_store
 from metabolomix.core import mcp_errors
@@ -15,6 +14,7 @@ from metabolomix.core.serialization import json_payload
 from metabolomix.core.mcp_core import mcp, _resolve_report_dir, _report_dir_candidates, _build_report_meta
 from metabolomix.core.tool_helpers import _pca_scatter_arrays, dataset_pca_plot
 from metabolomix.plots.eic import render_eic_plot
+from metabolomix.plots.render import render_files
 from metabolomix.plots.volcano import render_volcano_plot
 
 __all__ = [
@@ -287,11 +287,7 @@ def _save_eic(analysis_id: str, title: str | None) -> str:
     figures_dir = reports_dir / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
     out_path = figures_dir / f"{slug}_eic.png"
-    fig = render_eic_plot(plot, title=title)
-    try:
-        fig.savefig(out_path, dpi=120, format="png", bbox_inches="tight")
-    finally:
-        plt.close(fig)
+    render_files(render_eic_plot, {"png": out_path}, plot, dpi=120, title=title)
 
     rel = f"figures/{out_path.name}"
     return f"EIC図を保存: {out_path}\n本文に ![EIC]({rel}) で埋め込めます。"
@@ -307,8 +303,8 @@ def _save_group_intensity(analysis_id: str, title: str | None) -> str:
             "group_intensity_plot", ["arf_plot_group_intensity"],
             "先に arf_plot_group_intensity を実行してください（群別強度の図がありません）。")
     out_path = _figures_dir() / f"{knowledge_store.make_slug(analysis_id)}_group_intensity.png"
-    fig = render_group_intensity_plot(last["payload"], title=title or last.get("title"), ncols=last.get("ncols"))
-    _write_png_and_svg(fig, out_path)
+    _write_png_and_svg(render_group_intensity_plot, out_path, last["payload"],
+                       title=title or last.get("title"), ncols=last.get("ncols"))
     rel = f"figures/{out_path.name}"
     return (f"群別強度の図を保存: {out_path}（同名の .svg も保存）\n"
             f"本文に ![group intensity]({rel}) で埋め込めます。")
@@ -324,8 +320,8 @@ def _save_species(analysis_id: str, title: str | None) -> str:
             "species_plot", ["arf_plot_species"],
             "先に arf_plot_species を実行してください（分子種ごとの図がありません）。")
     out_path = _figures_dir() / f"{knowledge_store.make_slug(analysis_id)}_species.png"
-    fig = render_species_plot(last["payload"], title=title or last.get("title"), ncols=last.get("ncols"))
-    _write_png_and_svg(fig, out_path)
+    _write_png_and_svg(render_species_plot, out_path, last["payload"],
+                       title=title or last.get("title"), ncols=last.get("ncols"))
     return (f"分子種ごとの図を保存: {out_path}（同名の .svg も保存）\n"
             f"本文に ![species](figures/{out_path.name}) で埋め込めます。")
 
@@ -350,7 +346,7 @@ def _save_pca_loadings(analysis_id: str, title: str | None) -> str:
             f"（source={payload['source']} result_id={payload['result_id'] or '(なし)'} は現在の結果にありません）。"
             "plot_pca_loadings をもう一度実行してください。")
     out_path = _figures_dir() / f"{knowledge_store.make_slug(analysis_id)}_pca_loadings.png"
-    _write_png_and_svg(render_loadings_plot(payload, title=title or last.get("title")), out_path)
+    _write_png_and_svg(render_loadings_plot, out_path, payload, title=title or last.get("title"))
     return (f"ローディング図を保存: {out_path}（同名の .svg も保存。source={payload['source']} "
             f"result_id={payload['result_id'] or '(なし)'}）\n"
             f"本文に ![PCA loadings](figures/{out_path.name}) で埋め込めます。")
@@ -362,10 +358,7 @@ def _figures_dir():
     return figures_dir
 
 
-def _write_png_and_svg(fig, out_path) -> None:
-    """報告書用の図を dpi 300 の PNG と同名 SVG で書く（Figure は閉じる）。"""
-    try:
-        fig.savefig(out_path, dpi=300, format="png", bbox_inches="tight")
-        fig.savefig(out_path.with_suffix(".svg"), format="svg", bbox_inches="tight")
-    finally:
-        plt.close(fig)
+def _write_png_and_svg(build, out_path, /, *args, **kwargs) -> None:
+    """報告書用の図を dpi 300 の PNG と同名 SVG で書く（描画は `PLOT_LOCK` の下）。"""
+    render_files(build, {"png": out_path, "svg": out_path.with_suffix(".svg")},
+                 *args, dpi=300, **kwargs)

@@ -183,6 +183,6 @@ def plot_pca_loadings(
     if mode == plot_render.PAYLOAD:
         session.last_loadings_plot = {"payload": payload, "title": title}
         return json_payload(payload)
-    png = plot_render.figure_to_png(loadings_plot.render_loadings_plot(payload, title=title))
+    png = plot_render.render_png(loadings_plot.render_loadings_plot, payload, title=title)
     session.last_loadings_plot = {"payload": payload, "title": title}
     return [_caption(payload), Image(data=png, format="png")]
