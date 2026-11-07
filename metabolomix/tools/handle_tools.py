@@ -241,7 +241,8 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
     library_info = None
     if handle.library.store is not None:
         summary = handle.library.store.summary()
-        library_info = {"file": handle.library.source_path,
+        # `library_load`（ハンドルなし）が先に読んだライブラリは source_path がフルパスなので、名前だけを返す。
+        library_info = {"file": Path(handle.library.source_path).name,
                         "sha256": summary["source_sha256"],
                         "record_count": summary["record_count"]}
     detection = getattr(ds, "detected_mask", None) is not None

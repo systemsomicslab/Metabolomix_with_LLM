@@ -152,6 +152,88 @@ class BatchAnnounceTests(unittest.TestCase):
             self.assertNotIn("2026_06_17", note)
 
 
+class SelectLatestBatchTests(unittest.TestCase):
+    """複数バッチ（処理タイムスタンプ）混在時に最新バッチだけを採用すること。"""
+
+    def test_keeps_only_latest_batch(self):
+        paths = [
+            "/d/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf",
+            "/d/AlignmentResult_2026_05_15_10_13_35.arf2",
+            "/d/AlignmentResult_2026_06_01_09_00_00_PeakProperties.arf",
+            "/d/AlignmentResult_2026_06_01_09_00_00.arf2",
+        ]
+        selected = server._select_latest_batch(paths)
+        self.assertTrue(all("2026_06_01_09_00_00" in p for p in selected))
+        self.assertEqual(len(selected), 2)
+
+    def test_untimestamped_files_are_preserved(self):
+        paths = [
+            "/d/AlignmentResult_2026_05_15_10_13_35.arf2",
+            "/d/AlignmentResult_2026_06_01_09_00_00.arf2",
+            "/d/notes.aef",  # タイムスタンプ無し
+        ]
+        selected = server._select_latest_batch(paths)
+        self.assertIn("/d/notes.aef", selected)
+        self.assertIn("/d/AlignmentResult_2026_06_01_09_00_00.arf2", selected)
+        self.assertNotIn("/d/AlignmentResult_2026_05_15_10_13_35.arf2", selected)
+
+    def test_all_untimestamped_returns_all(self):
+        paths = ["/d/a.aef", "/d/b.aef"]
+        self.assertEqual(set(server._select_latest_batch(paths)), set(paths))
+
+
+class ResolvePai2LatestBatchTests(unittest.TestCase):
+    def setUp(self):
+        self._orig_data_dir = mcp_core.DATA_DIR
+
+    def tearDown(self):
+        mcp_core.DATA_DIR = self._orig_data_dir
+
+    def _touch(self, directory: Path, name: str) -> None:
+        (directory / name).write_bytes(b"")
+
+    def test_resolve_pai2_picks_latest_batch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            self._touch(directory, "AlignmentResult_2026_05_15_10_13_35.pai2")
+            self._touch(directory, "AlignmentResult_2026_06_01_09_00_00.pai2")
+            mcp_core.DATA_DIR = directory
+            resolved = server.resolve_pai2_file_path()
+            self.assertIsNotNone(resolved)
+            self.assertTrue(resolved.endswith("2026_06_01_09_00_00.pai2"))
+
+    def test_resolve_pai2_explicit_path_is_respected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            self._touch(directory, "AlignmentResult_2026_05_15_10_13_35.pai2")
+            explicit = str(directory / "AlignmentResult_2026_05_15_10_13_35.pai2")
+            self.assertEqual(server.resolve_pai2_file_path(explicit), explicit)
+
+
+class ResolveArfCrossBatchTests(unittest.TestCase):
+    """旧バッチの PeakProperties.arf があっても最新バッチの方を選ぶこと。"""
+
+    def setUp(self):
+        self._orig_data_dir = mcp_core.DATA_DIR
+
+    def tearDown(self):
+        mcp_core.DATA_DIR = self._orig_data_dir
+
+    def _touch(self, directory: Path, name: str) -> None:
+        (directory / name).write_bytes(b"")
+
+    def test_arf_picks_peakproperties_from_latest_batch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            self._touch(directory, "AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf")
+            self._touch(directory, "AlignmentResult_2026_05_15_10_13_35_DriftSpots.arf")
+            self._touch(directory, "AlignmentResult_2026_06_01_09_00_00_PeakProperties.arf")
+            self._touch(directory, "AlignmentResult_2026_06_01_09_00_00_DriftSpots.arf")
+            mcp_core.DATA_DIR = directory
+            resolved = server.resolve_arf_file_path()
+            self.assertTrue(resolved.endswith("2026_06_01_09_00_00_PeakProperties.arf"))
+
+
 class ListDataFilesTests(unittest.TestCase):
     """入口ツールの一覧が、解析できないファイルで文脈を埋めないことを縛る。
 
@@ -373,3 +455,39 @@ def test_analysis_dir_for_job_and_pipeline_is_the_chosen_arf_folder(tmp_path, fr
     _load(pipeline_path=str(run))
     assert Path(session_state.session.dataset.analysis_dir).resolve() == (
         job.parent / "msdial").resolve()
+
+
+def test_library_loaded_before_load_dataset_returns_only_the_file_name(tmp_path, fresh_state,
+                                                                      monkeypatch):
+    """`library_load`（ハンドルなし）が先に読んだライブラリがハンドルへ移っても、置き場所は戻り値に出ない。"""
+    from metabolomix.library import tools as library_tools
+
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
+    lab = tmp_path / "lab_secret_dir"
+    lab.mkdir()
+    msp = lab / "pos.msp"
+    msp.write_text("NAME: Choline\nPRECURSORMZ: 104.107\nIONMODE: Positive\nNum Peaks: 2\n"
+                   "60.0808 100\n104.107 50\n", encoding="ascii")
+    assert json.loads(library_tools.library_load(file_path=str(msp)))["status"] == "success"
+    raw = handle_tools.load_dataset(mztab_path=str(write_mztab(tmp_path / "run" / "A-1.mzTab")))
+    out = json.loads(raw)
+    assert out["library"]["file"] == "pos.msp"
+    assert "lab_secret_dir" not in raw  # JSON の中ではバックスラッシュが重ねて書かれるので、区切りに依らない名前で見る
+    assert str(lab) not in raw and str(lab).replace(chr(92), chr(92) * 2) not in raw
+    assert "lab_secret_dir" not in handle_tools.dataset_list()
+
+
+def test_bare_library_load_refuses_when_the_recorded_file_changed(tmp_path, fresh_state,
+                                                                  monkeypatch):
+    """`library="auto"` で開いたあとに記憶のファイルが変わっても、引数なしの library_load は
+    不一致を理由に拒む（開いた store はそのまま残る）。"""
+    from metabolomix.library import tools as library_tools
+
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
+    folder = _folder(tmp_path / "gui")
+    dbs = write_dbs(folder / "Proj_Loaded.msp2.dbs", [("lib", [record(mz=500.0, ion_mode=0)], ["k"])])
+    out = _load(directory=str(folder))
+    assert out["library"]["file"] == "Proj_Loaded.msp2.dbs"
+    write_dbs(dbs, [("lib", [record(mz=501.0, ion_mode=0)], ["k"])])
+    res = json.loads(library_tools.library_load())
+    assert res["status"] == "error" and "不一致" in res["message"]
