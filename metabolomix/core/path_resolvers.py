@@ -104,6 +104,8 @@ def _select_latest_batch(paths: list[str]) -> list[str]:
 # 戻り値だけで 46,977 字（≒1万数千トークン）を占める。
 ANALYSABLE_EXTENSIONS: tuple[str, ...] = (
     ".arf", ".arf2", ".pai2", ".dcl", ".EIC.aef", ".mddata", ".mdproject",
+    # ENTRY POINT が「MS-DIAL を回した形跡」と呼ぶもの（mzTab-M と Console の job 記録）。
+    ".mzTab", "analysis-job.json",
 )
 
 

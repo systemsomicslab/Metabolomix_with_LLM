@@ -801,6 +801,10 @@ def dataset_feature_search(
                 ds, **window, max_results=max_results, sort=sort)
             if feature_ids is not None and not feature_ids:
                 notes.append("feature_ids=[] は「どの ID でもない」条件として扱った（0 件）。")
+            for fid in (feature_ids or []):
+                if fid in ds.excluded_features:
+                    notes.append(f"{fid} は除外済み（理由: {ds.excluded_features[fid]}）なので返さない"
+                                 "（戻すなら dataset_exclude(mode=\"remove\")）。")
             if sort == "intensity" and ds.detected_mask is None:
                 notes.append("このデータセットには検出の印（detected_mask）が無く gap-fill のセルを"
                              "見分けられないので、強度順は全セル（除外した試料を除く）の最大で並べた。")

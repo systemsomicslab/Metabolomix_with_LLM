@@ -109,7 +109,7 @@ EXPECTED_ANNOTATIONS = {
     "record_objective": LOCAL_WRITE_APPEND,  # add_subquestions が追記で積み増す
     "write_report": LOCAL_WRITE,
     "save_figure": LOCAL_WRITE,
-    "dataset_plot": READ_ONLY,    # 図は返すだけ（ds.figures はメモリ上の置き場。ファイルは save_figure）
+    "dataset_plot": LOCAL_WRITE_APPEND,  # ds.figures と species_pca の結果をメモリに登録する（ファイルは save_figure）
     # --- サーバ自身の更新（origin へ出て、作業ツリーを早送りする） ---
     "server_update": REMOTE_WRITE,
     # --- キュレーション。review は呼ぶたびに新しい review-<id>.json/.html を作る（console_plan /

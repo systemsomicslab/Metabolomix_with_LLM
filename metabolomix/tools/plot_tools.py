@@ -439,7 +439,10 @@ def _check_arguments(kind: str, request: _Request) -> None:
                    argument=name, kind=kind, belongs_to=owners)
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(
+    # 図を ds.figures へ、species_pca は結果を ds.results へ登録する（メモリ上。ファイルは save_figure）。
+    readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+    structured_output=False)
 def dataset_plot(
     kind: str,
     dataset_handle: str | None = None,

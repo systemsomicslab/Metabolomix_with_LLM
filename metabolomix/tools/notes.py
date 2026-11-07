@@ -50,7 +50,8 @@ def _split_inline(inner: str) -> list[str]:
         elif quote is not None:
             if ch == quote:
                 quote = None
-        elif ch in "\"'":
+        elif ch in "\"'" and not "".join(current).strip():
+            # 引用符は項目の先頭でだけ開く（Parkinson's の ' は項目の中身）。
             quote = ch
         elif ch == ",":
             items.append("".join(current))
@@ -125,7 +126,7 @@ def _dump_scalar(value) -> str:
     needs_quote = (
         text == ""
         or text.strip() != text
-        or any(ch in text for ch in ':#[]{}",')
+        or any(ch in text for ch in ":#[]{}\",'")
         or "\n" in text
         or "\r" in text
     )

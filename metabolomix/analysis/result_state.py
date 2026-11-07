@@ -296,6 +296,11 @@ def is_current(ds, result: dict, *, dataset_hash: str | None = None) -> bool:
                 and recorded_data == dataset_fingerprint(ds, include_detected=False)):
             # 後者: 検出状態の取り込みが入る前に計算された結果（復元時に印を付けた）。
             return False
+        # 復元時に記録した metadata_revision。除外・試料の情報（役割など）が実際に変わると進む
+        # （session の結果が前処理の無効化で古くなるのと同じ事象を、ID を持たない引き継ぎ結果にも当てる）。
+        recorded_revision = prov.get("metadata_revision")
+        if recorded_revision is not None and recorded_revision != getattr(ds, "metadata_revision", 0):
+            return False
         recorded_groups = prov.get("group_fingerprint")
         return recorded_groups is None or recorded_groups == group_fingerprint(ds)
     if prov.get("dataset_id") != getattr(ds, "dataset_id", None):

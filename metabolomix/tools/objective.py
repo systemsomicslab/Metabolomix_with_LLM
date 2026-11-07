@@ -137,7 +137,8 @@ def record_objective(
                 notes.add_subquestions(path, add_subquestions)
         except (ValueError, OSError) as exc:
             return str(exc)
-        session_state.session.set_assay_kind(assay_kind or "unknown")
+        if assay_kind is not None:   # 渡さない作成は、今のセッションの種別を動かさない
+            session_state.session.set_assay_kind(assay_kind)
         total = len(sub_questions) + len(add_subquestions or [])
         return _with_caveat(f"objective を記録: {path.name}（confirmed={bool(confirmed_objective)}, "
                             f"小問{total}件）。", assay_kind)

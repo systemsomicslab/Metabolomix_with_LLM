@@ -537,7 +537,7 @@ def test_apply_metadata_reapplying_identical_rows_reports_no_change():
     summary = apply_metadata(ds, metadata_rows(ds))
 
     assert summary["changed_fields"] == []
-    assert ds.metadata_revision == 2
+    assert ds.metadata_revision == 1   # 変更が無ければ版は進めない
 
 
 # ---------- dataset_analysis: 明示メタデータを優先する（従来経路は保持） ----------
@@ -725,3 +725,14 @@ def test_subject_id_is_stored_in_sample_meta_and_validated():
     bad[0]["subject_id"] = 5
     with pytest.raises(DomainError, match="SAMPLE_MANIFEST_INVALID"):
         apply_metadata(make_dataset(), bad)
+
+
+def test_apply_metadata_reapplying_identical_rows_does_not_bump_the_revision():
+    ds = make_dataset()
+    apply_metadata(ds, metadata_rows(ds))
+    revision = ds.metadata_revision
+
+    summary = apply_metadata(ds, metadata_rows(ds))
+
+    assert summary["changed_fields"] == []
+    assert ds.metadata_revision == revision == summary["metadata_revision"]

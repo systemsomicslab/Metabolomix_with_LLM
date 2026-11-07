@@ -485,3 +485,40 @@ def _dataset_for_rule_agreement():
     from tests.test_result_state import _dataset_with_groups
 
     return _dataset_with_groups("control", "treated")
+
+
+def _restored_in_session(tmp_path):
+    from metabolomix.tools.handle_tools import load_dataset
+
+    harness, result = _run_with_differential(tmp_path)
+    session_state.session.dataset = None
+    load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab")
+    return session_state.session.dataset, result["provenance"]["result_id"]
+
+
+def test_a_handed_off_result_goes_stale_after_dataset_exclude(tmp_path):
+    from metabolomix.tools.dataset_analysis_tools import dataset_export_differential
+    from metabolomix.tools.plot_tools import dataset_plot
+    from metabolomix.tools.sample_tools import dataset_exclude
+
+    ds, result_id = _restored_in_session(tmp_path)
+    assert result_state.is_current(ds, ds.results[result_id]) is True
+
+    out = json.loads(dataset_exclude(samples=[ds.sample_names[0]], reason="outlier"))
+    assert out["status"] == "success", out
+
+    assert result_state.is_current(ds, ds.results[result_id]) is False
+    exported = json.loads(dataset_export_differential(
+        str(tmp_path / "stale.tsv"), result_id=result_id))
+    plotted = json.loads(dataset_plot(kind="volcano", result_id=result_id))
+    for refused in (exported, plotted):
+        # 古い結果は、再計算を促す封筒（STALE_ANALYSIS_RESULT か、その文面の missing_state）で拒まれる。
+        assert refused["error"]["code"] in ("STALE_ANALYSIS_RESULT", "missing_state"), refused
+        assert "現在のデータセットの状態から出たものではありません" in refused["error"]["message"]
+    assert not (tmp_path / "stale.tsv").exists()
+
+
+def test_a_handed_off_result_goes_stale_after_a_real_metadata_change(tmp_path):
+    ds, result_id = _restored_in_session(tmp_path)
+    ds.metadata_revision += 1   # `apply_metadata` が実際に変更したときの動き
+    assert result_state.is_current(ds, ds.results[result_id]) is False

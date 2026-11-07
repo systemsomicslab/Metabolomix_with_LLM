@@ -216,6 +216,8 @@ def restore_differentials(ds, pipeline_root: Path, record: dict) -> dict:
             "preprocess": _run_preprocess_parameters(
                 pipeline_root, record, provenance.get("parent_ids")),
         }
+        # 戻した時点の試料情報・除外の版。以後に変わったら `is_current` が古い結果として扱う。
+        provenance["metadata_revision"] = getattr(ds, "metadata_revision", 0)
         if result_state.dataset_fingerprint(ds) != provenance.get("dataset_hash"):
             # 検出状態の取り込み前に計算された結果。`is_current` が同じ規則で通せるよう
             # 来歴に印を付ける（結果の数字は変えない。検出率による絞り込みは、その計算では

@@ -633,7 +633,8 @@ def apply_metadata(ds, rows: list[dict]) -> dict:
     invalidate_results(ds, changed)
     ds.sample_metadata_rows = rows
     ds.sample_ids = [row["sample_id"] for row in rows]
-    ds.metadata_revision = getattr(ds, "metadata_revision", 0) + 1
+    if changed:   # 何も変わらない再適用は版を進めない（図・分子種 PCA を無駄に古くしない）
+        ds.metadata_revision = getattr(ds, "metadata_revision", 0) + 1
 
     return {
         "metadata_revision": ds.metadata_revision,

@@ -134,3 +134,25 @@ class ObjectiveServerToolTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ObjectiveListRoundTripTests(ObjectiveServerToolTests):
+    """frontmatter のリスト項目は、引用符・アポストロフィ・カンマ等を含んでも更新で壊れない。"""
+
+    TRICKY = ["Parkinson's-like PE loss", "TG up", 'say "hi", ok', "a, b", "[x]", "k: v",
+              "back\\slash", "two\nlines", "パーキンソン病、脂質", "it's, 'quoted'"]
+
+    def test_list_items_survive_create_then_update(self):
+        self._create("exp-rt", groups=list(self.TRICKY), expected_biology=list(self.TRICKY))
+        server.record_objective("exp-rt", assay_kind="lipid")
+        server.record_objective("exp-rt", status="open")
+        meta, _subqs, _body = notes.parse_objective(self.reports / "exp-rt.objective.md")
+        self.assertEqual(meta["expected_biology"], self.TRICKY)
+        self.assertEqual(meta["groups"], self.TRICKY)
+
+
+class ObjectiveKeepsSessionKindTests(ObjectiveServerToolTests):
+    def test_creating_without_assay_kind_keeps_the_session_kind(self):
+        self._create("exp-k1", assay_kind="metabolite")
+        self._create("exp-k2")                      # assay_kind を渡さない作成
+        self.assertEqual(session_state.session.assay_kind, "metabolite")

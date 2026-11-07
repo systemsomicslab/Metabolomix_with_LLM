@@ -194,3 +194,15 @@ def test_preprocess_fingerprint_separates_exclusion_states():
     assert result_state.preprocess_fingerprint(ds, recipe, None) != plain
     ds.excluded_samples = {}
     assert result_state.preprocess_fingerprint(ds, recipe, None) == plain
+
+
+def test_feature_search_says_when_a_named_feature_is_excluded():
+    from metabolomix.tools.dataset_analysis_tools import dataset_feature_search
+
+    ds = _loaded()
+    _call(features=["F2"], reason="co-eluting artifact")
+
+    out = json.loads(dataset_feature_search(feature_ids=["F2"]))
+
+    notes = " ".join(out.get("notes") or [])
+    assert "F2" in notes and "co-eluting artifact" in notes, out

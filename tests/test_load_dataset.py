@@ -295,3 +295,18 @@ def test_bare_library_load_refuses_when_the_recorded_file_changed(tmp_path, fres
     write_dbs(dbs, [("lib", [record(mz=501.0, ion_mode=0)], ["k"])])
     res = json.loads(library_tools.library_load())
     assert res["status"] == "error" and "不一致" in res["message"]
+
+
+class ListDataFilesEntryTraceTests(unittest.TestCase):
+    """ENTRY POINT が「MS-DIAL を回した形跡」と呼ぶ mzTab-M と analysis-job.json も既定の一覧に出る。"""
+
+    def test_default_listing_shows_mztab_and_job_record(self):
+        from metabolomix.core import path_resolvers
+
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("Height_AlignmentResult_1.mzTab", "analysis-job.json", "s1.wiff"):
+                (Path(tmp) / name).write_bytes(b"")
+            listed = [Path(p).name for p in path_resolvers.list_data_files(directory=tmp)]
+        self.assertIn("Height_AlignmentResult_1.mzTab", listed)
+        self.assertIn("analysis-job.json", listed)
+        self.assertNotIn("s1.wiff", listed)
