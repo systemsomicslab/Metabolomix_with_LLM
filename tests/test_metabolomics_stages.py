@@ -602,8 +602,15 @@ def test_a_v3_job_whose_effective_method_was_altered_is_not_verified(tmp_path):
     """実際に走ったメソッドを裏取りできない出力をverifiedと名乗らせない（spec §6.1）。"""
     from metabolomix.mztab.loading import load_dataset_state
 
+    import os
+
     job_path, effective = _v3_job_with_outputs(tmp_path)
     effective.write_text("Ion mode: Negative\n", encoding="ascii")
+    # 同じ大きさの書き直しは、更新時刻の刻み（Windows で約 15 ms）の内だと
+    # (パス・大きさ・更新時刻) が変わらず、sha256 の記憶（core/file_digest）が前の値を返す。
+    # 書き直しが別の時刻に起きた状況にする。
+    stat = effective.stat()
+    os.utime(effective, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
 
     ds = load_dataset_state(job_path=job_path)
     assert ds.source_verification == "legacy_unverified"

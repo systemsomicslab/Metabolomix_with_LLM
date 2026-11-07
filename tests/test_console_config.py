@@ -52,10 +52,12 @@ def test_config_exe_pointing_at_a_missing_file_names_the_config_file(cfg, tmp_pa
     assert exc.value.details["setting"] == "msdial.exe"
 
 
-def test_env_exe_is_not_checked_for_existence(cfg, monkeypatch):
-    """環境変数の値は PATH 解決される素の名前でありうるので、存在確認しない。"""
+def test_env_exe_is_ignored(cfg, monkeypatch):
+    """spec 2026-11-06 §7.4: 実行体の場所は設定ファイルだけで指す（環境変数は読まない）。"""
     monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
-    assert get_exe_path() == "fake.exe"
+    with pytest.raises(MsdialExeNotFoundError) as exc:
+        get_exe_path()
+    assert exc.value.code == "MSDIAL_EXE_NOT_FOUND"
 
 
 def test_unset_exe_names_the_config_file_and_the_key(cfg):
@@ -165,10 +167,10 @@ def test_pipeline_intake_keeps_the_not_found_code_with_details(cfg):
     assert exc.value.details["setting"] == "msdial.exe"
 
 
-# ---------- LBM（[msdial] lbm） ----------
+# ---------- LBM（[library] lbm） ----------
 
-def test_template_uses_lbm_from_the_config_file_while_exe_comes_from_env(tmp_path, cfg, monkeypatch):
-    """出どころが混ざる構成: exe は環境変数、LBM は設定ファイル。"""
+def test_template_uses_lbm_from_the_config_file_before_the_exe_folder(tmp_path, cfg):
+    """exe と LBM をどちらも設定ファイルに書く構成。LBM の設定は exe フォルダの LBM より先。"""
     from metabolomix.tools.console_tools import console_method_template
     app = tmp_path / "app"
     app.mkdir()
@@ -176,8 +178,9 @@ def test_template_uses_lbm_from_the_config_file_while_exe_comes_from_env(tmp_pat
     lib = tmp_path / "libs" / "chosen.lbm2"
     lib.parent.mkdir()
     lib.touch()
-    monkeypatch.setenv("MSDIAL_EXE", str(app / "MSDIALCUI.exe"))
-    cfg.write_text(f"[msdial]\nlbm = '{lib}'\n", encoding="utf-8")
+    (app / "MSDIALCUI.exe").touch()
+    cfg.write_text(f"[msdial]\nexe = '{app / 'MSDIALCUI.exe'}'\n[library]\nlbm = '{lib}'\n",
+                   encoding="utf-8")
     out = tmp_path / "param_POS.txt"
     parsed = json.loads(console_method_template(
         out_path=str(out), polarity="positive",
@@ -186,13 +189,15 @@ def test_template_uses_lbm_from_the_config_file_while_exe_comes_from_env(tmp_pat
     assert "chosen.lbm2" in out.read_text(encoding="ascii")
 
 
-def test_template_reports_config_invalid_from_the_lbm_lookup(tmp_path, cfg, monkeypatch):
-    """exe を環境変数で渡していても、LBM を引くときに壊れた設定ファイルに当たれば止める。"""
+def test_template_reports_config_invalid_for_the_old_msdial_lbm_key(tmp_path, cfg):
+    """`[msdial] lbm` が残っていれば、exe フォルダの LBM へ黙って落ちずに止める（決めたこと 4）。"""
     from metabolomix.tools.console_tools import console_method_template
     app = tmp_path / "app"
     app.mkdir()
-    monkeypatch.setenv("MSDIAL_EXE", str(app / "MSDIALCUI.exe"))
-    cfg.write_text("[msdial\n", encoding="utf-8")
+    (app / "MSDIALCUI.exe").touch()
+    (app / "bundled.lbm2").touch()
+    cfg.write_text(f"[msdial]\nexe = '{app / 'MSDIALCUI.exe'}'\nlbm = '{tmp_path / 'old.lbm2'}'\n",
+                   encoding="utf-8")
     parsed = json.loads(console_method_template(
         out_path=str(tmp_path / "param_POS.txt"), polarity="positive",
         based_on=str(_neg_param(tmp_path / "neg_param_1.txt"))))
@@ -203,7 +208,7 @@ def test_pipeline_pins_the_lbm_from_the_config_file(tmp_path, cfg):
     from metabolomix.pipeline import inputs
     lib = tmp_path / "chosen.lbm2"
     lib.write_bytes(b"lbm")
-    cfg.write_text(f"[msdial]\nlbm = '{lib}'\n", encoding="utf-8")
+    cfg.write_text(f"[library]\nlbm = '{lib}'\n", encoding="utf-8")
     pinned = inputs._resolve_lbm_pinned({}, tmp_path / "param.txt",
                                         str(tmp_path / "app" / "MSDIALCUI.exe"), {}, tmp_path)
     assert pinned["source"] == "config_file"

@@ -437,7 +437,7 @@ def _resolve_lbm_pinned(method_keys: dict, method_path: Path, exe_path: str,
     if override and not Path(override).is_absolute():
         override = str(source_root / override)
     try:
-        lbm_setting = user_config.get_setting("msdial.lbm")
+        lbm_setting = user_config.get_setting(user_config.LIBRARY_LBM_SETTING_KEY)
     except user_config.ConfigInvalidError as exc:
         raise DomainError(exc.code, exc.message, exc.details()) from exc
     lbm = method_file_mod.resolve_lbm(
@@ -500,8 +500,9 @@ _LAB_LBM_WHAT = "研究室の脂質ライブラリ（.lbm2）"
 def _resolve_lbm_from_library_setting() -> dict:
     """library_mode="msp_then_lbm" の LBM を `[library] lbm` だけから解決し、sha256 で固定する。
 
-    `[msdial] lbm`・メソッドの宣言・実行体のフォルダ・ビルド生成物は見ない（auto の経路と
-    混ざらないように。設計 2026-10-28 §4.2）。エラー文と details に置き場所を載せない
+    メソッドの宣言・実行体のフォルダ・ビルド生成物は見ない（auto の経路の自動補完と
+    混ざらないように。設計 2026-10-28 §4.2。`[library] lbm` は auto の経路の設定の段と
+    同じキー——spec 2026-11-06 §7.4 で 1 つにまとめた）。エラー文と details に置き場所を載せない
     （ファイル名だけ。`_resolve_msp_pinned` と同じ規約）。
     """
     key = user_config.LIBRARY_LBM_SETTING_KEY
@@ -537,7 +538,8 @@ def _resolve_lbm_from_library_setting() -> dict:
             f"{_LAB_LBM_WHAT}（{resolved.name}）を読めません（ネットワークの一時的な切断の可能性）: "
             f"{type(exc).__name__}",
             {"lbm_file": resolved.name}) from exc
-    return {"path": str(resolved), "file": resolved.name, "sha256": digest, "source": setting.source}
+    return {"path": str(resolved), "file": resolved.name, "sha256": digest,
+            "source": method_file_mod.SETTING_SOURCE}
 
 
 def _resolve_exe(exe_path: Path) -> dict:
@@ -554,7 +556,7 @@ def _resolve_exe(exe_path: Path) -> dict:
     if probe != "console":
         raise DomainError(
             "MSDIAL_EXE_NOT_CONSOLE",
-            f"Console の実行体（[msdial] exe / MSDIAL_EXE）が MS-DIAL Console ではありません: {exe_path}",
+            f"Console の実行体（[msdial] exe）が MS-DIAL Console ではありません: {exe_path}",
             {"exe_path": str(exe_path)})
     return {"path": str(exe_path.resolve()), "sha256": _sha256_file(exe_path), "version": None}
 

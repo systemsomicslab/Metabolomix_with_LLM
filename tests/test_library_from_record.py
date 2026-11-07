@@ -12,6 +12,7 @@ from metabolomix.core import handles, mcp_core, session_state
 from metabolomix.library import tools as library_tools
 from metabolomix.tools import handle_tools
 from metabolomix.tools import reanalysis_tools as R
+from tests.config_fixtures import use_config
 from tests.dbs_fixture import record, write_dbs
 from tests.dcl_fixture import build_dcl_bytes
 from tests.msdial_folder_fixtures import write_msdial_folder
@@ -81,7 +82,7 @@ def test_no_record_does_not_use_polarity_setting(tmp_path, monkeypatch):
     msp = lab / "pos.msp"
     msp.write_text("NAME: x\nPRECURSORMZ: 104.107\nIONMODE: Positive\nNum Peaks: 1\n60.08 100\n",
                    encoding="ascii")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(msp))
+    use_config(monkeypatch, tmp_path, {"library.msp_positive": str(msp)})
     mztab = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab")
     out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(mztab)))
     assert out["polarity"] == "positive" and out["library"] is None
@@ -255,7 +256,7 @@ def test_ion_mode_skips_the_record_and_reports_the_difference(tmp_path, monkeypa
     folder = _folder(tmp_path)
     _dbs(folder / "Proj_Loaded.msp2.dbs")
     setting = _msp(tmp_path / "lab" / "Setting_Pos.msp")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(setting))
+    use_config(monkeypatch, tmp_path, {"library.msp_positive": str(setting)})
     h = _open(folder, library="none")["dataset_handle"]
     out = json.loads(library_tools.library_load(ion_mode="positive", dataset_handle=h))
     assert out["status"] == "success" and out["file"] == "Setting_Pos.msp"
@@ -268,7 +269,8 @@ def test_ion_mode_skips_the_record_and_reports_the_difference(tmp_path, monkeypa
 def test_ion_mode_opposite_to_the_handle_polarity_still_mismatches(tmp_path, monkeypatch):
     folder = _folder(tmp_path)
     _dbs(folder / "Proj_Loaded.msp2.dbs")
-    monkeypatch.setenv("MSDIAL_MSP_NEG", str(_msp(tmp_path / "lab" / "Setting_Neg.msp")))
+    setting = _msp(tmp_path / "lab" / "Setting_Neg.msp")
+    use_config(monkeypatch, tmp_path, {"library.msp_negative": str(setting)})
     h = _open(folder, library="none")["dataset_handle"]
     handles.registry.get(h).polarity = "positive"
     out = json.loads(library_tools.library_load(ion_mode="negative", dataset_handle=h))
@@ -310,7 +312,7 @@ def test_session_dataset_without_a_record_falls_back_to_the_settings(tmp_path, m
     from tests.reanalysis_fixtures import write_mztab
 
     setting = _msp(tmp_path / "lab" / "Setting_Pos.msp")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(setting))
+    use_config(monkeypatch, tmp_path, {"library.msp_positive": str(setting)})
     mztab = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab")
     mztab_tools.dataset_load(mztab_path=str(mztab))
     assert session_state.session.dataset.library_record["status"] == "unknown"

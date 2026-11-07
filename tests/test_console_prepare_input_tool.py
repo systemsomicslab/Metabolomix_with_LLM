@@ -9,6 +9,8 @@ from __future__ import annotations
 import json as _json
 from pathlib import Path
 
+from tests.config_fixtures import use_config
+
 
 def _sciex(root: Path, stem: str):
     (root / f"{stem}.wiff").write_text("p", encoding="ascii")
@@ -59,8 +61,8 @@ def _console_env(tmp_path: Path, monkeypatch) -> Path:
     app = tmp_path / "app"
     app.mkdir()
     (app / "x.lbm2").touch()
-    monkeypatch.setenv("MSDIAL_EXE", str(app / "MSDIALCUI.exe"))
-    monkeypatch.delenv("MSDIAL_LBM", raising=False)
+    (app / "MSDIALCUI.exe").touch()
+    use_config(monkeypatch, tmp_path, {"msdial.exe": app / "MSDIALCUI.exe"})
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")

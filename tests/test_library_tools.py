@@ -7,6 +7,7 @@ import pytest
 
 from metabolomix.core import mcp_core, session_state
 from metabolomix.library import tools
+from tests.config_fixtures import use_config
 
 _MSP = textwrap.dedent("""\
     NAME: GABA
@@ -466,12 +467,12 @@ def _lab_libraries(tmp_path, monkeypatch):
     neg = outside / "lab_neg.msp"
     pos.write_text(_MSP, encoding="utf-8")
     neg.write_text(_MSP_NEG_NO_MODE, encoding="utf-8")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(pos))
-    monkeypatch.setenv("MSDIAL_MSP_NEG", str(neg))
+    use_config(monkeypatch, tmp_path, {"library.msp_positive": str(pos),
+                                       "library.msp_negative": str(neg)})
     return pos, neg
 
 
-def test_library_load_picks_the_env_var_for_the_polarity(fresh_session, monkeypatch):
+def test_library_load_picks_the_setting_for_the_polarity(fresh_session, monkeypatch):
     (fresh_session / "lib.msp").unlink()
     _lab_libraries(fresh_session, monkeypatch)
 
@@ -493,8 +494,9 @@ def test_library_load_asks_for_a_polarity_when_both_are_configured(fresh_session
     assert session_state.session.library.store is None
 
 
-def test_library_load_reports_an_env_var_pointing_nowhere(fresh_session, monkeypatch):
-    monkeypatch.setenv("MSDIAL_MSP_NEG", str(fresh_session / "gone.msp"))
+def test_library_load_reports_a_setting_pointing_nowhere(fresh_session, monkeypatch):
+    use_config(monkeypatch, fresh_session,
+               {"library.msp_negative": str(fresh_session / "gone.msp")})
     payload = json.loads(tools.library_load(ion_mode="negative"))
     assert payload["status"] == "error"
     assert payload["code"] == "MSP_ENV_NOT_FOUND"

@@ -528,8 +528,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m metabolomix.library.store",
                                      description="参照ライブラリの照合用 store を事前構築する。")
     parser.add_argument("--ion-mode", choices=("positive", "negative"),
-                        help="どちらの極性の設定（MSDIAL_MSP_POS / MSDIAL_MSP_NEG か "
-                             "lipidmix.local.toml の [library] msp_positive / msp_negative）を使うか")
+                        help="どちらの極性の設定（lipidmix.local.toml の "
+                             "[library] msp_positive / msp_negative）を使うか")
     parser.add_argument("--file", help="ライブラリのパス（極性の設定より優先）")
     parser.add_argument("--rebuild", action="store_true", help="キャッシュを無視して作り直す")
     args = parser.parse_args(argv)

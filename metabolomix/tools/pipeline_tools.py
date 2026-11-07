@@ -60,7 +60,7 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
         msp_positive` / `msp_negative`。メソッドの Text DB・注釈器設定表の宣言は空にする）。
         `library_mode="msp_then_lbm"`（脂質の run 用）は研究室 MSP（priority 2 の注釈器設定表）を
         優先し、`[library] lbm` の LBM で補う（LBM の照合で RT を使わない。LBM は
-        `[msdial] lbm`・メソッドの宣言を見ない。無ければ `LBM_NOT_CONFIGURED`）。
+        メソッドの宣言・実行体のフォルダを見ない。無ければ `LBM_NOT_CONFIGURED`）。
         `lbm_file` との同時指定（msp_only / msp_then_lbm）、`auto` での `msp_file` は
         `PIPELINE_REQUEST_INVALID`。
         `alignment_reference`（既定 `"median_injection"`）は MS-DIAL の

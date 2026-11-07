@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from metabolomix.pathway import bridge, remote, tools
+from tests.config_fixtures import use_config
 
 from tests.test_pathway_jsonld import _graph
 from tests.test_pathway_tools import lipid_arf  # noqa: F401  （fixture）
@@ -71,9 +72,9 @@ def no_wait(monkeypatch):
 
 
 @pytest.fixture
-def serve(monkeypatch, no_wait):
+def serve(monkeypatch, no_wait, tmp_path):
     def install(server):
-        monkeypatch.setenv("MSLIPIDMAPPER_API_URL", URL + "/")
+        use_config(monkeypatch, tmp_path, {"mslipidmapper.mslipidmapper_api_url": URL + "/"})
         monkeypatch.setattr(remote, "_transport", httpx.MockTransport(server))
         return server
     return install
@@ -160,7 +161,7 @@ def test_render_runs_on_the_server(serve, local_calls, tmp_path):
 
 
 def test_token_is_sent_but_not_recorded(serve, local_calls, tmp_path, monkeypatch):
-    monkeypatch.setenv("MSLIPIDMAPPER_API_TOKEN", "s3cret")
+    use_config(monkeypatch, tmp_path, {"mslipidmapper.api_token": "s3cret"})
     server = serve(_measure_server())
     bridge.run_bridge(_measure_request(tmp_path), tmp_path)
     assert all(r.headers["Authorization"] == "Bearer s3cret" for r in server.requests)
@@ -197,7 +198,7 @@ def test_server_failure_falls_back_to_local_r(serve, local_calls, tmp_path, serv
 def test_unreachable_server_falls_back_to_local_r(local_calls, tmp_path, monkeypatch, no_wait):
     def down(request):
         raise httpx.ConnectError("refused", request=request)
-    monkeypatch.setenv("MSLIPIDMAPPER_API_URL", URL)
+    use_config(monkeypatch, tmp_path, {"mslipidmapper.mslipidmapper_api_url": URL})
     monkeypatch.setattr(remote, "_transport", httpx.MockTransport(down))
     res = bridge.run_bridge(_measure_request(tmp_path), tmp_path)
     assert len(local_calls) == 1
@@ -214,7 +215,7 @@ def test_server_timeout_falls_back(serve, local_calls, tmp_path, monkeypatch):
 
 def test_server_down_and_no_local_r_raises_remote_error_with_local_reason(serve, tmp_path):
     serve(FakeServer(health=404))
-    with pytest.raises(bridge.BridgeError) as exc:  # MSLIPIDMAPPER_RSCRIPT は conftest が消している
+    with pytest.raises(bridge.BridgeError) as exc:  # [mslipidmapper] rscript は書いていない
         bridge.run_bridge(_measure_request(tmp_path), tmp_path)
     assert exc.value.code == "MSLM_REMOTE_UNAVAILABLE"
     assert exc.value.details["remote"]["api_url"] == URL

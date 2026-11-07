@@ -66,7 +66,7 @@ def resolve_rscript() -> str:
 
 
 def browser_path() -> str | None:
-    """設定（環境変数 → 設定ファイル）を優先し、無ければ標準の置き場所から探す。
+    """設定（`[mslipidmapper] browser`）を優先し、無ければ標準の置き場所から探す。
 
     どれも無ければ None（上流の自動検出に任せる。見つからなければ描画が
     PATHWAY_RENDER_FAILED になる）。
@@ -120,7 +120,7 @@ _LOCAL_UNAVAILABLE = frozenset({"MSLM_NOT_CONFIGURED", "MSLM_R_PACKAGES_MISSING"
 
 
 def api_url() -> str | None:
-    """[mslipidmapper] mslipidmapper_api_url（環境変数 MSLIPIDMAPPER_API_URL）。未設定なら None。"""
+    """[mslipidmapper] mslipidmapper_api_url。未設定なら None。"""
     setting = user_config.get_setting("mslipidmapper.mslipidmapper_api_url")
     return setting.value.rstrip("/") if setting else None
 

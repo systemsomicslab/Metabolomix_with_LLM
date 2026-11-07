@@ -10,8 +10,8 @@
 直近は動かさない。同じ入力を開き直したときは読み込み済みの基を使い回し、ハンドルには複製を
 渡す（`open_dataset` が持つ）。
 
-ライブラリは極性で設定（`[library] msp_positive` / `msp_negative`。環境変数
-`MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG`）だけから引き（`library_mode=msp_only` と同じ規則）、
+ライブラリは極性で設定（`lipidmix.local.toml` の `[library] msp_positive` /
+`msp_negative`）だけから引き（`library_mode=msp_only` と同じ規則）、
 読み取り専用で開く。戻り値にはファイル名と sha256 だけを出し、パスは出さない。
 """
 from __future__ import annotations

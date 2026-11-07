@@ -24,6 +24,7 @@ from metabolomix.analysis.dataset_analysis import PreconditionError
 from metabolomix.pipeline import engine, service
 from metabolomix.pipeline.request import resolve_request
 from metabolomix.pipeline.store import create_run, load_run, save_run
+from tests.config_fixtures import use_config
 
 
 def _pca_context(pipeline_root: Path) -> dict:
@@ -325,14 +326,14 @@ def test_resume_pipeline_normalizes_the_run_json_path_before_launching(tmp_path,
 def _prepare_source(tmp_path, monkeypatch):
     """`start_pipeline`の実処理(受付冪等性込み)を通すための実生データフォルダ。
 
-    `MSDIAL_EXE`環境変数と`probe_console_exe`だけを差し替え、他はすべて
+    `[msdial] exe`（tmpの設定ファイル）と`probe_console_exe`だけを差し替え、他はすべて
     `inspect_inputs`/`find_or_create_run`本体を実際に通す
     （`tests/test_pipeline_recovery.py::_build_pipeline_with_real_inputs`と
     同じ流儀）。
     """
     from tests.pipeline_fixtures import make_source
     source = make_source(tmp_path / "source")
-    monkeypatch.setenv("MSDIAL_EXE", str(source["exe"]))
+    use_config(monkeypatch, tmp_path, {"msdial.exe": source["exe"]})
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     monkeypatch.setenv("LIPIDMIX_PIPELINE_INDEX_DIR", str(tmp_path / "_pipeline_index_base"))
     return source
@@ -802,7 +803,7 @@ def test_without_library_location_redacts_absolute_annotator_tables():
     assert overrides["MSP annotator settings file path"] == "msp-annotators.tsv"
     assert overrides["MSP search settings file path"] == "inputs/msp-annotators.tsv"  # 相対はそのまま
     assert record["inputs"]["lbm"]["path"] == "//nas/secret_share/lab.lbm2"  # 元は変えない
-    # auto の LBM（[msdial] lbm）は従来どおり path を残す。
+    # auto の LBM は従来どおり path を残す。
     auto = {"inputs": {"library_mode": "auto", "lbm": {"path": "C:/MS-DIAL/x.lbm2"},
                        "msp": {"path": None}, "method": {"overrides": {"Lbm file path": "C:/MS-DIAL/x.lbm2"}}}}
     assert recovery._without_library_location(auto)["inputs"]["lbm"]["path"] == "C:/MS-DIAL/x.lbm2"

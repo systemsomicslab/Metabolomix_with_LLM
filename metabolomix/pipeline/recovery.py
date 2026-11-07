@@ -195,7 +195,8 @@ def _without_library_location(record: dict) -> dict:
 
     研究室 MSP（`msp.path` と `Msp file path` の上書き）、library_mode="msp_then_lbm" の
     LBM（`[library] lbm` 由来の `lbm.path` と `Lbm file path` の上書き。v8）、絶対パスで
-    書かれた MSP 注釈器設定表の上書きが対象。auto の LBM（`[msdial] lbm` 等）は従来どおり残す。
+    書かれた MSP 注釈器設定表の上書きが対象。auto の LBM（メソッドの宣言・ビルド生成物・
+    `[library] lbm`・実行体のフォルダから解決したもの）は従来どおり残す。
     戻り値は LLM の文脈に入る（spec 2026-10-07 §3.3）。保存された record は変えない
     ——resume の再検査（`inputs.verify_inputs`）が絶対パスを要る。
     """

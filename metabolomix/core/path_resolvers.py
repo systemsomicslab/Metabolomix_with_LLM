@@ -248,12 +248,10 @@ def resolve_dcl_file_path(file_path: str | None = None) -> str | None:
     return _resolve_data_file(".dcl", file_path)
 
 
-#: 極性 → 研究室参照ライブラリ（`.msp`）の設定キー。値は環境変数か
+#: 極性 → 研究室参照ライブラリ（`.msp`）の設定キー。値は
 #: `lipidmix.local.toml` の `[library]` で指す（`metabolomix.core.user_config`）。
 #: ライブラリ本体はリポジトリの外（外部流出禁止の資産）に置き、場所だけを教える。
 LIBRARY_SETTING_KEYS = user_config.MSP_SETTING_KEYS
-#: 同じ値を指す環境変数（正準は user_config.SETTINGS。既存の参照のため名前を残す）。
-LIBRARY_ENV_VARS = {mode: user_config.SETTINGS[key] for mode, key in LIBRARY_SETTING_KEYS.items()}
 
 
 class LibraryPathError(Exception):
@@ -261,9 +259,9 @@ class LibraryPathError(Exception):
 
     `code` は機械可読（`LIBRARY_NOT_FOUND` / `MSP_ENV_NOT_FOUND` /
     `MSP_AMBIGUOUS` / `INVALID_ION_MODE` / `CONFIG_INVALID`）。`message` と `details`
-    にはファイル名・設定キー・環境変数名・設定ファイルのパスだけを載せ、ライブラリの
+    にはファイル名・設定キー・設定ファイルのパスだけを載せ、ライブラリの
     置き場所（ディレクトリ）は載せない——戻り値は LLM の文脈に入る。
-    `MSP_ENV_NOT_FOUND` は値が設定ファイルから来た場合も同じコード（互換のため据え置き）。
+    `MSP_ENV_NOT_FOUND` は環境変数を読んでいた頃のコード名（設定ファイルだけになった今も互換のため据え置き）。
     """
 
     def __init__(self, code: str, message: str, details: dict | None = None):
@@ -274,7 +272,7 @@ class LibraryPathError(Exception):
 
 
 def _library_setting(ion_mode: str) -> user_config.Setting | None:
-    """極性の設定（環境変数 → 設定ファイル）。設定ファイルが読めなければ CONFIG_INVALID。"""
+    """極性の設定（設定ファイル）。設定ファイルが読めなければ CONFIG_INVALID。"""
     try:
         return user_config.get_setting(LIBRARY_SETTING_KEYS[ion_mode])
     except user_config.ConfigInvalidError as exc:
@@ -304,12 +302,12 @@ def resolve_library_path(file_path: str | None = None, *, ion_mode: str | None =
 
     1. `file_path` の明示（無いファイルなら `LIBRARY_NOT_FOUND`。以前は data
        ディレクトリの探索へ黙って落ちて別のライブラリを掴んでいた）。
-    2. `ion_mode` を指定したら、その極性の設定（環境変数 `MSDIAL_MSP_POS` /
-       `MSDIAL_MSP_NEG` → `lipidmix.local.toml` の `[library] msp_positive` /
-       `msp_negative`。`LIBRARY_SETTING_KEYS`）。未設定なら 3 以降へ落ちる。
+    2. `ion_mode` を指定したら、その極性の設定（`lipidmix.local.toml` の
+       `[library] msp_positive` / `msp_negative`。`LIBRARY_SETTING_KEYS`）。
+       未設定なら 3 以降へ落ちる。
     3. data ディレクトリの `*_Loaded.msp2.dbs`（その run が実際に使った参照）。
     4. 極性の設定。1 つだけ設定されていればそれ、両方なら `MSP_AMBIGUOUS`
-       （`ion_mode` の指定を求める）。出どころ（環境変数か設定ファイルか）は問わない。
+       （`ion_mode` の指定を求める）。
     5. data ディレクトリの `*.msp`。複数あれば `MSP_AMBIGUOUS`——pos / neg の
        ように並ぶファイルを更新日時で黙って選ぶと、極性違いで照合しても候補が
        少し減るだけで誤りに気づけない。
@@ -322,10 +320,10 @@ def resolve_library_path(file_path: str | None = None, *, ion_mode: str | None =
     """
     if ion_mode is not None:
         normalized = ion_mode.strip().lower()
-        if normalized not in LIBRARY_ENV_VARS:
+        if normalized not in LIBRARY_SETTING_KEYS:
             raise LibraryPathError(
                 "INVALID_ION_MODE",
-                f"ion_mode は {' / '.join(LIBRARY_ENV_VARS)} のどちらかを指定してください"
+                f"ion_mode は {' / '.join(LIBRARY_SETTING_KEYS)} のどちらかを指定してください"
                 f"（受け取った値: {ion_mode!r}）。",
             )
         ion_mode = normalized

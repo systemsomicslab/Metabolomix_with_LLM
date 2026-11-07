@@ -19,6 +19,7 @@ from metabolomix.msdial import alignment_spot
 from metabolomix.tools import handle_tools
 from tests.dcl_fixture import build_dcl_bytes
 from tests.reanalysis_fixtures import write_mztab
+from tests.config_fixtures import use_config
 
 NAN = math.nan
 
@@ -85,8 +86,8 @@ def interactive_folder(tmp_path, monkeypatch):
     for name, mode in (("pos.msp", "Positive"), ("neg.msp", "Negative")):
         (lab / name).write_text(f"NAME: x\nPRECURSORMZ: 104.107\nIONMODE: {mode}\n"
                                 "Num Peaks: 1\n60.08 100\n", encoding="ascii")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(lab / "pos.msp"))
-    monkeypatch.setenv("MSDIAL_MSP_NEG", str(lab / "neg.msp"))
+    use_config(monkeypatch, tmp_path, {"library.msp_positive": str(lab / "pos.msp"),
+                                       "library.msp_negative": str(lab / "neg.msp")})
     monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
     return folder
 
@@ -96,7 +97,7 @@ def _handle(tmp_path, library="auto"):
     out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(path), library=library))
     assert out["arf2"] is None and out["dcl"] is None
     if library == "auto":
-        # mzTab-M の記憶は `unknown` なので、library_load は極性の設定（MSDIAL_MSP_POS）から引く
+        # mzTab-M の記憶は `unknown` なので、library_load は極性の設定（[library] msp_positive）から引く
         # （mzTab-M の本番の経路）。
         library_tools.library_load(dataset_handle=out["dataset_handle"])
     return out["dataset_handle"]

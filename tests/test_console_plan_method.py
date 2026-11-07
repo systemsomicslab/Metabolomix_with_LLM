@@ -7,21 +7,24 @@ from __future__ import annotations
 import json as _json
 from pathlib import Path
 
+from tests.config_fixtures import use_config
+
 
 def _fake_exe_with_lbm(tmp_path, *names):
-    """MSDIAL_EXE と同じフォルダに脂質ライブラリを置く（GUI と同じ配置）。"""
+    """Console の実行体（[msdial] exe）と同じフォルダに脂質ライブラリを置く（GUI と同じ配置）。"""
     d = tmp_path / "msdial_app"
     d.mkdir(exist_ok=True)
     for n in names:
         (d / n).touch()
-    return d / "MSDIALCUI.exe"
+    exe = d / "MSDIALCUI.exe"
+    exe.touch()
+    return exe
 
 
 def _plan_ready(tmp_path, monkeypatch, exe):
     from metabolomix.core import session_state
     session_state.session = session_state.AnalysisSession()
-    monkeypatch.setenv("MSDIAL_EXE", str(exe))
-    monkeypatch.delenv("MSDIAL_LBM", raising=False)
+    use_config(monkeypatch, tmp_path, {"msdial.exe": exe})
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "a.wiff").touch()
 
@@ -51,7 +54,7 @@ def test_console_plan_rejects_lipidomics_without_lbm(tmp_path, monkeypatch):
 
 
 def test_console_plan_resolves_lbm_from_exe_directory(tmp_path, monkeypatch):
-    """GUI と同じく MSDIAL_EXE と同じフォルダの *.lbm2 を 1 件だけ自動採用する。"""
+    """GUI と同じく Console の実行体と同じフォルダの *.lbm2 を 1 件だけ自動採用する。"""
     exe = _fake_exe_with_lbm(tmp_path, "Msp_lipids.lbm2")
     _plan_ready(tmp_path, monkeypatch, exe)
     method = tmp_path / "params.txt"
@@ -120,6 +123,54 @@ def test_console_plan_lbm_file_argument_overrides(tmp_path, monkeypatch):
                                       lbm_file=str(chosen)))
     assert Path(parsed["lbm"]["path"]).name == "chosen.lbm2"
     assert parsed["lbm"]["source"] == "argument"
+
+
+def test_console_lbm_reads_library_lbm(tmp_path, monkeypatch):
+    """LBM の設定は `[library] lbm` 1 つ（決めたこと 4）。解決の順は変わらない:
+    引数 → メソッドの宣言 → ビルド生成物 → 設定 → 実行体のフォルダ。設定は 5 番目の段の
+    実行体のフォルダより先に、引数と宣言より後に効く。"""
+    exe = _fake_exe_with_lbm(tmp_path, "installed.lbm2")  # 実行体のフォルダにも候補がある
+    _plan_ready(tmp_path, monkeypatch, exe)
+    configured = tmp_path / "lab" / "configured.lbm2"
+    configured.parent.mkdir()
+    configured.touch()
+    use_config(monkeypatch, tmp_path, {"library.lbm": configured})
+    from metabolomix.tools.console_tools import console_plan
+
+    def plan(method_text, **kwargs):
+        method = tmp_path / "params.txt"
+        method.write_text(method_text, encoding="ascii")
+        return _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
+                                        polarity="negative", measure="peak_height", **kwargs))
+
+    parsed = plan("Ion mode: Negative\nLbm file path: \n")
+    assert parsed["status"] == "planned"
+    assert parsed["lbm"] == {"path": str(configured), "source": "config_file"}
+
+    declared = tmp_path / "declared.lbm2"
+    declared.touch()
+    assert plan(f"Ion mode: Negative\nLbm file path: {declared}\n")["lbm"]["source"] == "method_file"
+    chosen = tmp_path / "chosen.lbm2"
+    chosen.touch()
+    assert plan("Ion mode: Negative\n", lbm_file=str(chosen))["lbm"]["source"] == "argument"
+
+    use_config(monkeypatch, tmp_path, {"library.lbm": None})
+    assert plan("Ion mode: Negative\n")["lbm"]["source"] == "exe_dir"
+
+
+def test_console_plan_rejects_an_old_msdial_lbm_key(tmp_path, monkeypatch):
+    """`[msdial] lbm` だけが残っていたら黙って実行体のフォルダへ落ちず、CONFIG_INVALID で止まる。"""
+    exe = _fake_exe_with_lbm(tmp_path, "installed.lbm2")
+    _plan_ready(tmp_path, monkeypatch, exe)
+    use_config(monkeypatch, tmp_path, {"msdial.lbm": tmp_path / "old.lbm2"})
+    method = tmp_path / "params.txt"
+    method.write_text("Ion mode: Negative\n", encoding="ascii")
+    from metabolomix.tools.console_tools import console_plan
+    parsed = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
+                                      polarity="negative", measure="peak_height"))
+    assert parsed["error"]["code"] == "CONFIG_INVALID"
+    assert "[library] lbm" in parsed["error"]["message"]
+    assert not (tmp_path / "runs").exists()
 
 
 def test_console_plan_metabolomics_does_not_require_lbm(tmp_path, monkeypatch):
@@ -334,7 +385,6 @@ def test_console_plan_metabolomics_writes_a_declared_lbm_as_an_absolute_path(tmp
 def test_console_method_template_writes_relative_paths_as_absolute(tmp_path, monkeypatch):
     """別フォルダへ書き出すので、相対宣言は原本基準の絶対パスに固定する。"""
     from metabolomix.console import method_file as method_file_mod
-    monkeypatch.delenv("MSDIAL_EXE", raising=False)
     proj = tmp_path / "proj"
     proj.mkdir()
     (proj / "lab.lbm2").touch()
@@ -369,7 +419,6 @@ def test_console_plan_rejects_a_non_ascii_absolute_path_before_creating_the_job(
 
 
 def test_console_method_template_rejects_a_non_ascii_absolute_path(tmp_path, monkeypatch):
-    monkeypatch.delenv("MSDIAL_EXE", raising=False)
     proj = tmp_path / "解析"
     proj.mkdir()
     (proj / "lab.lbm2").touch()
@@ -443,14 +492,15 @@ def test_console_plan_msp_only_for_metabolomics(tmp_path, monkeypatch):
     assert _effective_keys(parsed["method_file"])["lbm file path"] == [""]
 
 
-def test_console_plan_msp_only_env_var_wins_and_is_reported(tmp_path, monkeypatch):
+def test_console_plan_msp_only_ignores_the_old_env_var(tmp_path, monkeypatch):
+    """spec 2026-11-06 §7.4: 資産の場所の環境変数は読まない（以前は設定ファイルに勝った）。"""
     write_lab_msp_config(tmp_path, monkeypatch)
     env_lib = tmp_path / "env_dir" / "env_neg.msp"
     env_lib.parent.mkdir()
     env_lib.write_text("NAME: e\n", encoding="ascii")
     monkeypatch.setenv("MSDIAL_MSP_NEG", str(env_lib))
     parsed = _msp_only_plan(tmp_path, monkeypatch, "Ion mode: Negative\n")
-    assert parsed["msp"] == {"file": "env_neg.msp", "source": "env"}
+    assert parsed["msp"] == {"file": "lab_neg.msp", "source": "config_file"}
 
 
 def test_console_plan_msp_only_argument_wins(tmp_path, monkeypatch):

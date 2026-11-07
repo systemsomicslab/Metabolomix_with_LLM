@@ -5,25 +5,24 @@
 #
 # - Windows のパスは単一引用符で囲む（二重引用符だと \ がエスケープとして読まれる）。
 # - 相対パスは、このファイルのあるフォルダ基準で解く。
-# - 環境変数（MSDIAL_EXE / MSDIAL_LBM / MSDIAL_MSP_POS / MSDIAL_MSP_NEG）が
-#   設定されていれば、そちらが優先される。
+# - 外部資産の場所はこのファイルだけで指す（環境変数では指せない）。
 # - 書き換えは次のツール呼び出しから効く（MCP サーバの再起動は不要）。
 
 [msdial]
 # MS-DIAL Console の実行体。console_* / pipeline_* ツールを使うときだけ必要。
 exe = 'C:\MS-DIAL\MSDIALCUI.exe'
-
-# 脂質ライブラリ（.lbm2）。任意。書かなければメソッドファイルの宣言や、
-# Console の実行体と同じフォルダの .lbm2 から推定する。
-# lbm = 'C:\MS-DIAL\Lipids.lbm2'
+# 脂質ライブラリ（.lbm2）は [library] lbm に書く（以前の [msdial] lbm は CONFIG_INVALID になる）。
 
 [library]
 # library_load(ion_mode=...) が読む参照ライブラリ（.msp）。極性ごとに 1 つ。
 # msp_positive = 'D:\library\pos.msp'
 # msp_negative = 'D:\library\neg.msp'
-# pipeline の library_mode="msp_then_lbm" が研究室 MSP の補いに使う脂質ライブラリ（.lbm2）。
-# このモードはここだけを読む（[msdial] lbm・メソッドの宣言・実行体のフォルダは見ない）。
-# 環境変数 MSDIAL_LIBRARY_LBM が設定されていればそちらが優先される。
+# 脂質ライブラリ（.lbm2）。任意。
+# - Console（console_plan / pipeline の library_mode="auto"）: メソッドファイルの宣言・
+#   MsdialWorkbench のビルド生成物が無いときにここを使い、ここも無ければ Console の
+#   実行体と同じフォルダの .lbm2 から推定する。
+# - pipeline の library_mode="msp_then_lbm": ここだけを読む（メソッドの宣言・実行体の
+#   フォルダは見ない）。
 # lbm = 'D:\library\lipids.lbm2'
 
 [mslipidmapper]
@@ -31,7 +30,7 @@ exe = 'C:\MS-DIAL\MSDIALCUI.exe'
 # 未到達・404・ジョブ失敗などで使えなければ下の rscript（ローカルの R）へ回す。
 # 書かない（または空文字）ならローカルの R だけを使う。中間 mzTab-M はサーバへ送られる。
 # mslipidmapper_api_url = 'http://10.0.0.1:8000'
-# サーバが認証を求めるときだけ（環境変数 MSLIPIDMAPPER_API_TOKEN でもよい）。
+# サーバが認証を求めるときだけ。
 # api_token = '...'
 # pathway_project / pathway_plot が呼ぶ Rscript（R 4.6 系）。パッケージは R 本体ではなく
 # リポジトリの renv 環境 r/ に入る。初回だけ: Rscript r/setup.R

@@ -76,8 +76,8 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     解決順: `file_path` の明示 → 直近のデータセット（または `dataset_handle`）が覚えた、同定に
     使ったライブラリ（`library_record`。実体の sha256 を測り直して通れば開く。**`file_path` も
     `ion_mode` も省いたときだけ**。`ion_mode` を渡せば記憶ではなく設定から引く）→ `ion_mode`（`"positive"` / `"negative"`）に対応する
-    設定（環境変数 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG` → `lipidmix.local.toml` の
-    `[library] msp_positive` / `msp_negative`）→ データディレクトリの
+    設定（`lipidmix.local.toml` の `[library] msp_positive` / `msp_negative`）→
+    データディレクトリの
     `*_Loaded.msp2.dbs` → 設定済みの極性（両方あれば `ion_mode` を求める）→
     データディレクトリの `*.msp`。候補が 1 つに決まらなければ `code` 付きの
     エラー（`MSP_AMBIGUOUS` など）を返し、黙って選ばない。一度に保持する
@@ -182,7 +182,7 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     except Exception as exc:  # noqa: BLE001 - 壊れたライブラリは文言で返す（MCP が扱いやすい）
         # OSError の文言は置き場所（フルパス）を含む。研究室ライブラリの置き場所は
         # 戻り値（LLM の文脈）に出さないので、ディレクトリ部分を伏せる。
-        # OS が返す文言は `\` 区切り・`/` 区切りのどちらでも出うる（環境変数に `/` で
+        # OS が返す文言は `\` 区切り・`/` 区切りのどちらでも出うる（file_path に `/` で
         # 書かれた値はそのまま `/` で残る）ので、両方の表記を伏せる。
         parent = Path(resolved).parent
         detail = f"{type(exc).__name__}: {exc}"

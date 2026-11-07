@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from metabolomix.library import store
+from tests.config_fixtures import use_config
 
 _MSP = textwrap.dedent("""\
     NAME: A
@@ -397,13 +398,13 @@ def test_a_corrupt_digest_index_is_ignored(library, monkeypatch):
         s.close()
 
 
-def test_the_cli_prebuilds_the_store_for_the_env_var_library(tmp_path, monkeypatch, capsys):
+def test_the_cli_prebuilds_the_store_for_the_configured_library(tmp_path, monkeypatch, capsys):
     """MCP クライアントのタイムアウトを避けるため、初回の構築は手元で済ませられる。"""
     monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
     lib = tmp_path / "outside" / "lab_neg.msp"
     lib.parent.mkdir()
     lib.write_text(_MSP, encoding="utf-8")
-    monkeypatch.setenv("MSDIAL_MSP_NEG", str(lib))
+    use_config(monkeypatch, tmp_path, {"library.msp_negative": str(lib)})
 
     assert store.main(["--ion-mode", "negative"]) == 0
 
@@ -415,7 +416,7 @@ def test_the_cli_prebuilds_the_store_for_the_env_var_library(tmp_path, monkeypat
 
 def test_the_cli_reports_resolution_errors_without_a_traceback(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
-    monkeypatch.setenv("MSDIAL_MSP_NEG", str(tmp_path / "gone.msp"))
+    use_config(monkeypatch, tmp_path, {"library.msp_negative": str(tmp_path / "gone.msp")})
     assert store.main(["--ion-mode", "negative"]) == 2
     assert "MSP_ENV_NOT_FOUND" in capsys.readouterr().err
 

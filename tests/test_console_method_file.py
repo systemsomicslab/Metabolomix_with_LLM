@@ -35,10 +35,10 @@ from metabolomix.console.method_file import (
 from metabolomix.core.user_config import Setting
 
 
-def _env_lbm(value) -> Setting:
-    """環境変数 MSDIAL_LBM から来た値（resolve_lbm は出どころごと受け取る）。"""
-    return Setting(key="msdial.lbm", value=str(value), source="env",
-                   env_var="MSDIAL_LBM", config_file=None)
+def _lbm_setting(value) -> Setting:
+    """設定ファイルの `[library] lbm` から来た値（resolve_lbm は出どころごと受け取る）。"""
+    return Setting(key="library.lbm", value=str(value),
+                   config_file="C:/cfg/lipidmix.local.toml")
 
 
 # ---------- read_method_keys ----------
@@ -149,21 +149,21 @@ def test_resolve_lbm_errors_when_declared_path_is_missing(tmp_path):
     assert res.path is None
 
 
-def test_resolve_lbm_falls_back_to_env(tmp_path):
-    lib = tmp_path / "env.lbm2"
+def test_resolve_lbm_falls_back_to_the_setting(tmp_path):
+    lib = tmp_path / "configured.lbm2"
     lib.touch()
     exe = _exe_dir_with(tmp_path)
     res = resolve_lbm({"lbm file path": ""}, tmp_path / "param.txt",
                       omics="lipidomics", exe_path=str(exe),
-                      lbm_setting=_env_lbm(str(lib)))
-    assert res.source == "env"
+                      lbm_setting=_lbm_setting(str(lib)))
+    assert res.source == "config_file"
     assert Path(res.path) == lib
 
 
-def test_resolve_lbm_errors_when_env_path_is_missing(tmp_path):
+def test_resolve_lbm_errors_when_the_setting_path_is_missing(tmp_path):
     exe = _exe_dir_with(tmp_path, "one.lbm2")
     res = resolve_lbm({}, tmp_path / "param.txt", omics="lipidomics",
-                      exe_path=str(exe), lbm_setting=_env_lbm(str(tmp_path / "gone.lbm2")))
+                      exe_path=str(exe), lbm_setting=_lbm_setting(str(tmp_path / "gone.lbm2")))
     assert res.error_code == "LBM_NOT_FOUND"
 
 
@@ -171,8 +171,8 @@ def test_resolve_lbm_takes_the_value_from_the_config_file(tmp_path):
     lib = tmp_path / "conf.lbm2"
     lib.touch()
     exe = _exe_dir_with(tmp_path)
-    setting = Setting(key="msdial.lbm", value=str(lib), source="config_file",
-                      env_var="MSDIAL_LBM", config_file=str(tmp_path / "lipidmix.local.toml"))
+    setting = Setting(key="library.lbm", value=str(lib),
+                      config_file=str(tmp_path / "lipidmix.local.toml"))
     res = resolve_lbm({"lbm file path": ""}, tmp_path / "param.txt",
                       omics="lipidomics", exe_path=str(exe), lbm_setting=setting)
     assert res.source == "config_file"
@@ -181,19 +181,22 @@ def test_resolve_lbm_takes_the_value_from_the_config_file(tmp_path):
 
 def test_resolve_lbm_names_the_config_key_when_its_file_is_missing(tmp_path):
     exe = _exe_dir_with(tmp_path, "one.lbm2")
-    setting = Setting(key="msdial.lbm", value=str(tmp_path / "gone.lbm2"), source="config_file",
-                      env_var="MSDIAL_LBM", config_file=str(tmp_path / "lipidmix.local.toml"))
+    setting = Setting(key="library.lbm", value=str(tmp_path / "gone.lbm2"),
+                      config_file=str(tmp_path / "lipidmix.local.toml"))
     res = resolve_lbm({}, tmp_path / "param.txt", omics="lipidomics",
                       exe_path=str(exe), lbm_setting=setting)
     assert res.error_code == "LBM_NOT_FOUND"
-    assert "lipidmix.local.toml の [msdial] lbm" in res.message
+    assert "lipidmix.local.toml の [library] lbm" in res.message
+    assert "環境変数" not in res.message
 
 
-def test_resolve_lbm_names_the_env_var_when_its_file_is_missing(tmp_path):
-    exe = _exe_dir_with(tmp_path, "one.lbm2")
-    res = resolve_lbm({}, tmp_path / "param.txt", omics="lipidomics",
-                      exe_path=str(exe), lbm_setting=_env_lbm(tmp_path / "gone.lbm2"))
-    assert "環境変数 MSDIAL_LBM" in res.message
+def test_resolve_lbm_not_found_in_the_exe_folder_points_at_library_lbm(tmp_path):
+    """exe フォルダにも無いときの案内は `[library] lbm`（環境変数を勧めない）。"""
+    exe = _exe_dir_with(tmp_path)
+    res = resolve_lbm({}, tmp_path / "param.txt", omics="lipidomics", exe_path=str(exe))
+    assert res.error_code == "LBM_NOT_FOUND"
+    assert "[library] lbm" in res.message
+    assert "環境変数" not in res.message
 
 
 def test_resolve_lbm_uses_exe_directory_when_exactly_one(tmp_path):
@@ -225,7 +228,7 @@ def test_resolve_lbm_not_required_for_metabolomics(tmp_path):
     """宣言が無ければ、metabolomics では GUI 流の自動補完（exe フォルダ等）をしない。"""
     exe = _exe_dir_with(tmp_path, "only.lbm2")
     res = resolve_lbm({}, tmp_path / "param.txt", omics="metabolomics",
-                      exe_path=str(exe), lbm_setting=_env_lbm(str(tmp_path / "x.lbm2")))
+                      exe_path=str(exe), lbm_setting=_lbm_setting(str(tmp_path / "x.lbm2")))
     assert res.error_code is None
     assert res.source == "not_required"
     assert res.path is None
@@ -339,7 +342,7 @@ def test_write_effective_method_file_leaves_source_untouched(tmp_path):
 # （tests/MSDIAL5/MsdialCoreTestApp/bin/Debug/net48/MSDIALCUI.exe）で、
 # その exe フォルダに .lbm2 は無い。ライブラリは GUI アプリ側のビルド出力
 # （src/MSDIAL5/MsdialGuiApp/bin/Debug/**/*.lbm2）にあるため、exe フォルダ
-# 探索だけでは原理的に当たらない。インストール版（MSDIAL_LBM が指す）より
+# 探索だけでは原理的に当たらない。インストール版（[library] lbm が指す）より
 # ビルド生成物を優先する。
 
 def _build_tree(tmp_path, *, msdial5_tfms=("", "net48", "net481"),
@@ -363,14 +366,14 @@ def _build_tree(tmp_path, *, msdial5_tfms=("", "net48", "net481"),
     return repo, exe
 
 
-def test_resolve_lbm_prefers_the_build_tree_over_the_installed_env_path(tmp_path):
+def test_resolve_lbm_prefers_the_build_tree_over_the_installed_configured_path(tmp_path):
     repo, exe = _build_tree(tmp_path)
     installed = tmp_path / "MSDIAL.v5.5-net48" / "Msp20251120132005_NCDK_dev.lbm2"
     installed.parent.mkdir(parents=True)
     installed.touch()
     res = resolve_lbm({"lbm file path": ""}, tmp_path / "param.txt",
                       omics="lipidomics", exe_path=str(exe),
-                      lbm_setting=_env_lbm(str(installed)))
+                      lbm_setting=_lbm_setting(str(installed)))
     assert res.source == "build_tree"
     assert res.error_code is None
     assert Path(res.path).parent == repo / "src/MSDIAL5/MsdialGuiApp/bin/Debug/net48"
@@ -409,8 +412,8 @@ def test_resolve_lbm_build_tree_excludes_msdial4(tmp_path):
     installed.touch()
     res = resolve_lbm({"lbm file path": ""}, tmp_path / "param.txt",
                       omics="lipidomics", exe_path=str(exe),
-                      lbm_setting=_env_lbm(str(installed)))
-    assert res.source == "env"
+                      lbm_setting=_lbm_setting(str(installed)))
+    assert res.source == "config_file"
     assert Path(res.path) == installed
 
 
@@ -777,11 +780,9 @@ from metabolomix.core import path_resolvers as _path_resolvers
 from metabolomix.core import user_config as _user_config
 
 
-def _msp_setting(path, *, source="config_file", key="library.msp_negative"):
-    return _user_config.Setting(
-        key=key, value=str(path), source=source,
-        env_var=_user_config.SETTINGS[key],
-        config_file=None if source == "env" else "C:/cfg/lipidmix.local.toml")
+def _msp_setting(path, *, key="library.msp_negative"):
+    return _user_config.Setting(key=key, value=str(path),
+                                config_file="C:/cfg/lipidmix.local.toml")
 
 
 def test_msp_setting_keys_are_the_single_source_for_library_lookup():
@@ -804,15 +805,14 @@ def test_resolve_msp_uses_the_setting_and_reports_where_it_came_from(tmp_path):
     lib.write_text("NAME: a\n", encoding="ascii")
     from_file = _mf.resolve_msp(None, "negative", _msp_setting(lib))
     assert from_file.path == os.path.abspath(lib) and from_file.source == "config_file"
-    from_env = _mf.resolve_msp(None, "negative", _msp_setting(lib, source="env"))
-    assert from_env.source == "env"
 
 
-def test_resolve_msp_not_configured_names_the_setting_key_and_env_var():
+def test_resolve_msp_not_configured_names_the_setting_key_only():
     res = _mf.resolve_msp(None, "positive", None)
     assert res.error_code == "MSP_NOT_CONFIGURED"
     assert res.path is None and res.source == "not_configured"
-    assert "msp_positive" in res.message and "MSDIAL_MSP_POS" in res.message
+    assert "[library] msp_positive" in res.message
+    assert "環境変数" not in res.message
 
 
 def test_resolve_msp_not_found_shows_only_the_file_name(tmp_path):

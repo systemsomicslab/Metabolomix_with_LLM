@@ -1,8 +1,8 @@
-"""MSDIAL_EXE 未設定は人間にしか直せない。封筒はそれを明示し、手順を渡す。
+"""Console の実行体（`[msdial] exe`）の未設定は人間にしか直せない。封筒はそれを明示し、手順を渡す。
 
-MCP クライアントは環境変数を設定できないし、設定しても**起動中のサーバには
-反映されない**。ここで LLM に「設定してください」とだけ返すと、LLM は設定を
-試みて失敗するか、黙って諦める。誰の作業かを型で示す。
+MCP クライアントは設定ファイル（lipidmix.local.toml）を編集できない。ここで LLM に
+「設定してください」とだけ返すと、LLM は設定を試みて失敗するか、黙って諦める。
+誰の作業かを型で示す。設定ファイルは呼ばれるたびに読むので、再起動は要らない。
 """
 from __future__ import annotations
 
@@ -33,7 +33,6 @@ def test_does_not_descend_indefinitely(tmp_path):
 
 
 def test_console_plan_envelope_says_a_human_must_act(tmp_path, monkeypatch):
-    monkeypatch.delenv("MSDIAL_EXE", raising=False)
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     from metabolomix.tools.console_tools import console_plan
@@ -47,7 +46,6 @@ def test_console_plan_envelope_says_a_human_must_act(tmp_path, monkeypatch):
 
 
 def test_console_plan_envelope_offers_a_copyable_command(tmp_path, monkeypatch):
-    monkeypatch.delenv("MSDIAL_EXE", raising=False)
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
     from metabolomix.tools.console_tools import console_plan

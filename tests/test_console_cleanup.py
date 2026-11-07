@@ -224,14 +224,13 @@ def test_standalone_console_run_refuses_when_owned_by_an_active_pipeline(tmp_pat
 
 
 def test_standalone_console_run_proceeds_when_owning_pipeline_is_terminal(tmp_path, monkeypatch):
-    """所有pipelineが終端状態なら、単体console_runの以降のガード（MSDIAL_EXE等）まで進む。"""
+    """所有pipelineが終端状態なら、単体console_runの以降のガード（[msdial] exe等）まで進む。"""
     from metabolomix.pipeline.store import register_job_owner
     from metabolomix.tools.console_tools import console_run
 
     job_path = _job_with_outputs(tmp_path, record=False)
     pipeline_root = _make_pipeline_root(tmp_path, status="cancelled")
     register_job_owner(job_path, pipeline_root)
-    monkeypatch.delenv("MSDIAL_EXE", raising=False)
 
     parsed = _json.loads(console_run(str(job_path)))
 

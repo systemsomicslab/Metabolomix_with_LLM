@@ -12,6 +12,7 @@ import server
 from metabolomix.core import handle_dispatch, handles, session_state
 from metabolomix.tools import handle_tools
 from tests.reanalysis_fixtures import NEG_FEATURES, write_mztab
+from tests.config_fixtures import use_config
 
 
 @pytest.fixture(autouse=True)
@@ -107,7 +108,7 @@ def test_library_auto_on_mztab_opens_nothing_and_ignores_the_polarity_setting(
         monkeypatch, tmp_path, pos_mztab):
     # mzTab-M は同定に使ったライブラリを持てない（unknown）。極性の設定があっても auto は引かない。
     pos = _write_msp(tmp_path / "lab" / "pos.msp", ion_mode="Positive")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(pos))
+    use_config(monkeypatch, tmp_path, {"library.msp_positive": str(pos)})
     out = _open(pos_mztab, library="auto")
     assert out["status"] == "success" and out["polarity"] == "positive"
     assert out["library"] is None and out["library_record"]["status"] == "unknown"
@@ -127,8 +128,8 @@ def test_library_auto_uses_only_the_remembered_library(monkeypatch, tmp_path):
     write_dbs(folder / "Proj_Loaded.msp2.dbs", [("lib", [record()], ["k"])])
     lib = tmp_path / "lab"
     setting_file = _write_msp(lib / "setting_pos.msp", ion_mode="Positive")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(setting_file))
-    monkeypatch.setenv("MSDIAL_MSP_NEG", str(setting_file))
+    use_config(monkeypatch, tmp_path, {"library.msp_positive": str(setting_file),
+                                       "library.msp_negative": str(setting_file)})
     monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
     out = json.loads(handle_tools.dataset_handle_open(directory=str(folder), library="auto"))
     assert out["library"]["file"] == "Proj_Loaded.msp2.dbs"
@@ -143,7 +144,8 @@ def test_library_auto_uses_only_the_remembered_library(monkeypatch, tmp_path):
 
 def test_library_not_loaded_when_polarity_unknown(monkeypatch, tmp_path):
     path = write_mztab(tmp_path / "x.mzTab", sml_adduct="null")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(_write_msp(tmp_path / "pos.msp", ion_mode="Positive")))
+    pos = _write_msp(tmp_path / "pos.msp", ion_mode="Positive")
+    use_config(monkeypatch, tmp_path, {"library.msp_positive": str(pos)})
     out = _open(path, library="auto")
     assert out["polarity"] is None and out["library"] is None
     assert "極性" in out["library_note"]

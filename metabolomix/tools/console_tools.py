@@ -55,8 +55,8 @@ def console_plan(
     lbm_file:
         脂質ライブラリ（`.lbm2`）のパス。省略時は「メソッドファイルの宣言 →
         ビルド生成物（MsdialWorkbench をソースからビルドしている場合） →
-        `[msdial] lbm`（lipidmix.local.toml）か環境変数 MSDIAL_LBM →
-        Console の実行体（[msdial] exe / MSDIAL_EXE）と同じフォルダ」の順に、MS-DIAL GUI と
+        `[library] lbm`（lipidmix.local.toml）→
+        Console の実行体（[msdial] exe）と同じフォルダ」の順に、MS-DIAL GUI と
         同じ規則で自動解決します。GUI 由来のパラメータは `Lbm file path:` が
         必ず空なので、この自動解決が無いと**警告なしで同定 0 件**になります。
         自動補完（宣言より後ろの 3 つ）は lipidomics だけです。引数と宣言は
@@ -90,8 +90,8 @@ def console_plan(
     library_mode:
         "auto"（既定）か "msp_only"。"msp_only" は LBM を使わず、研究室の参照ライブラリ
         （.msp）だけで同定する: 実効メソッドの `Lbm file path` を空にし、`Msp file path` に
-        `msp_file` か極性の設定（環境変数 MSDIAL_MSP_POS / MSDIAL_MSP_NEG →
-        lipidmix.local.toml の [library] msp_positive / msp_negative）を書き、メソッドが宣言する
+        `msp_file` か極性の設定（lipidmix.local.toml の
+        [library] msp_positive / msp_negative）を書き、メソッドが宣言する
         Text DB と MSP / Text の注釈器設定表を空にする（消したキーは removed_declarations）。
         メソッドの `Msp file path` の宣言は使わない。MSP が決まらなければ MSP_NOT_CONFIGURED /
         MSP_NOT_FOUND で止まり、ジョブを作らない。lbm_file とは同時に指定できない。
@@ -200,7 +200,7 @@ def console_plan(
     if probe != "console":
         return console_error(
             "MSDIAL_EXE_NOT_CONSOLE",
-            f"Console の実行体（[msdial] exe / MSDIAL_EXE）が MS-DIAL Console ではありません: {exe}  "
+            f"Console の実行体（[msdial] exe）が MS-DIAL Console ではありません: {exe}  "
             "--help にサブコマンド `lcms` が現れませんでした。GUI の MSDIAL.exe を"
             "指している可能性があります（GUI はコマンドラインを解釈せずウィンドウを"
             "開いたままになります）。MsdialWorkbench の Console 実行体"
@@ -442,7 +442,7 @@ def console_run(job_path: str | None = None, detach: bool = False) -> str:
     if probe != "console":
         return console_error(
             "MSDIAL_EXE_NOT_CONSOLE",
-            f"Console の実行体（[msdial] exe / MSDIAL_EXE）が MS-DIAL Console ではありません: {exe}  "
+            f"Console の実行体（[msdial] exe）が MS-DIAL Console ではありません: {exe}  "
             "--help にサブコマンド `lcms` が現れませんでした。GUI の MSDIAL.exe を"
             "指している可能性があります（GUI はコマンドラインを解釈せずウィンドウを"
             "開いたままになります）。MsdialWorkbench の Console 実行体"
@@ -777,7 +777,7 @@ def console_method_template(
         exe = console_runner.get_exe_path()
     except EnvironmentError as exc:
         # exe はビルド生成物・exe フォルダからの LBM 推定にだけ使う。未設定でも
-        # メソッドの宣言や [msdial] lbm で解決できれば足りるので、ここでは止めない。
+        # メソッドの宣言や [library] lbm で解決できれば足りるので、ここでは止めない。
         if getattr(exc, "code", "") == "CONFIG_INVALID":
             return _exe_error(exc)
         exe = None
@@ -1328,10 +1328,10 @@ def _exe_error(exc: EnvironmentError) -> str:
 
 
 def _lbm_setting():
-    """`[msdial] lbm` / MSDIAL_LBM の設定。設定ファイルが読めなければ封筒（str）を返す。"""
+    """`[library] lbm` の設定。設定ファイルが読めなければ封筒（str）を返す。"""
     from metabolomix.core import user_config
     try:
-        return user_config.get_setting("msdial.lbm")
+        return user_config.get_setting(user_config.LIBRARY_LBM_SETTING_KEY)
     except user_config.ConfigInvalidError as exc:
         return console_error(exc.code, exc.message, exc.details())
 
@@ -1436,11 +1436,10 @@ def _configured_exe() -> str:
 def _msdial_exe_setup_help() -> dict:
     """Console の実行体が未設定の封筒に、誰が何をすべきかを機械可読で載せる。
 
-    設定ファイル（`lipidmix.local.toml`）の編集も環境変数の設定も MCP クライアント
-    からはできない。LLM に「設定してください」とだけ返すと、設定を試みて失敗するか
-    黙って諦める。人間の作業であることを型で示し、コピペできる手順を渡す。
-    設定ファイルは呼ばれるたびに読まれるので再起動は要らないが、環境変数は
-    起動中のサーバに反映されない。
+    設定ファイル（`lipidmix.local.toml`）の編集は MCP クライアントからはできない。
+    LLM に「設定してください」とだけ返すと、設定を試みて失敗するか黙って諦める。
+    人間の作業であることを型で示し、コピペできる手順を渡す。設定ファイルは
+    呼ばれるたびに読まれるので再起動は要らない。
     """
     from metabolomix.console.runner import msdial_exe_candidates
     from metabolomix.core import user_config
@@ -1459,16 +1458,16 @@ def _msdial_exe_setup_help() -> dict:
                        "（単一引用符で囲む。サーバの再起動は不要）")
     return {
         "human_action_required": True,
-        "why": "設定ファイルの編集も環境変数の設定も MCP クライアントからはできません。",
+        "why": "設定ファイル（lipidmix.local.toml）の編集は MCP クライアントからはできません。",
         "candidates": candidates[:10],
         "how_to_set": [
             config_step,
-            "PowerShell（恒久設定）: [Environment]::SetEnvironmentVariable("
-            "'MSDIAL_EXE','<MSDIALCUI.exe のパス>','User')（設定後に MCP サーバの再起動が必要）",
+            "書き方の例（lipidmix.local.toml）: [msdial] の節に "
+            "exe = 'C:\\MS-DIAL\\MSDIALCUI.exe'（Windows のパスは単一引用符で囲む）",
         ],
         "restart_required": False,
-        "restart_note": "設定ファイルなら次の呼び出しから効きます。環境変数で設定した場合だけ、"
-                        "起動中のプロセスが変更を読み直さないので MCP サーバの再起動が必要です。",
+        "restart_note": "設定ファイルは呼ばれるたびに読み直されるので、書き換えは次の呼び出しから"
+                        "効きます。MCP サーバの再起動は要りません。",
     }
 
 

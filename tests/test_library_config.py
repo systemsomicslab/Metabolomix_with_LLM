@@ -42,16 +42,16 @@ def test_single_configured_polarity_is_used_without_ion_mode(cfg, tmp_path):
     assert resolve_library_path() == str(neg)
 
 
-def test_both_polarities_across_sources_are_ambiguous(cfg, tmp_path, monkeypatch):
-    """片方が環境変数・片方が設定ファイルでも、両方あれば ion_mode を求める。"""
+def test_both_configured_polarities_are_ambiguous(cfg, tmp_path):
+    """両方の極性が設定されていれば、ion_mode を求める（設定のキーを名指しする）。"""
     pos = _msp(tmp_path / "lab" / "pos.msp")
     neg = _msp(tmp_path / "lab" / "neg.msp")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(pos))
-    cfg.write_text(f"[library]\nmsp_negative = '{neg}'\n", encoding="utf-8")
+    cfg.write_text(f"[library]\nmsp_positive = '{pos}'\nmsp_negative = '{neg}'\n",
+                   encoding="utf-8")
     with pytest.raises(LibraryPathError) as exc:
         resolve_library_path()
     assert exc.value.code == "MSP_AMBIGUOUS"
-    assert "環境変数 MSDIAL_MSP_POS" in exc.value.message
+    assert "[library] msp_positive" in exc.value.message
     assert "[library] msp_negative" in exc.value.message
 
 
@@ -100,15 +100,15 @@ def test_library_load_normalises_ion_mode_in_the_not_found_hint(cfg):
     assert payload["status"] == "error"
     assert payload["details"]["setting"] == "library.msp_negative"
     assert "[library] msp_negative" in payload["message"]
-    assert "MSDIAL_MSP_NEG" in payload["message"]
+    assert "MSDIAL_MSP_NEG" not in payload["message"]  # 環境変数は案内しない（spec 2026-11-06 §7.4）
 
 
 def test_library_load_open_failure_does_not_leak_a_forward_slash_directory(cfg, tmp_path, monkeypatch):
-    """環境変数に `/` 区切りで書かれた置き場所は、OSError の文言にも `/` のまま出る。伏せ漏れしない。"""
+    """設定ファイルに `/` 区切りで書かれた置き場所は、OSError の文言にも `/` のまま出うる。伏せ漏れしない。"""
     from metabolomix.library import tools as library_tools
     lab = tmp_path / "secret-lab-share"
     pos = _msp(lab / "pos.msp")
-    monkeypatch.setenv("MSDIAL_MSP_POS", lab.as_posix() + "/pos.msp")
+    cfg.write_text(f"[library]\nmsp_positive = '{lab.as_posix()}/pos.msp'\n", encoding="utf-8")
 
     def boom(path, **_kwargs):
         raise OSError(f"cannot open {lab.as_posix()}/pos.msp.sqlite")

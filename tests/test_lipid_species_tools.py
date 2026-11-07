@@ -19,6 +19,7 @@ from metabolomix.tools import handle_tools
 from metabolomix.tools import reanalysis_tools as R
 from tests.dcl_fixture import build_dcl_bytes
 from tests.reanalysis_fixtures import write_mztab
+from tests.config_fixtures import use_config
 
 PC_FORMULA = "C42H76NO8P"
 PC_MH = round(theoretical_mz(PC_FORMULA, "[M+H]+"), 4)
@@ -82,7 +83,7 @@ def library(tmp_path, monkeypatch, mztab):
     msp = tmp_path / "lab" / "pos.msp"
     msp.parent.mkdir()
     msp.write_text(_MSP, encoding="ascii")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(msp))
+    use_config(monkeypatch, tmp_path, {"library.msp_positive": str(msp)})
     monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
     run = mztab.parent
     (run / "AlignResult-1.arf2").write_bytes(b"placeholder")
@@ -102,7 +103,7 @@ def _open(mztab, **kwargs):
     out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(mztab), **kwargs))
     assert out["status"] == "success", out
     if library == "auto":
-        # mzTab-M の記憶は `unknown` なので、library_load は極性の設定（MSDIAL_MSP_POS）から引く
+        # mzTab-M の記憶は `unknown` なので、library_load は極性の設定（[library] msp_positive）から引く
         # （mzTab-M の本番の経路）。
         library_tools.library_load(dataset_handle=out["dataset_handle"])
     return out["dataset_handle"]

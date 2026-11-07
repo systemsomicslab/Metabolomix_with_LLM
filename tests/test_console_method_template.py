@@ -13,6 +13,8 @@ from __future__ import annotations
 import json as _json
 from pathlib import Path
 
+from tests.config_fixtures import use_config
+
 
 def _neg_param(path: Path):
     path.write_text(
@@ -31,8 +33,8 @@ def _ready(tmp_path, monkeypatch):
     app = tmp_path / "app"
     app.mkdir(exist_ok=True)
     (app / "lib.lbm2").touch()
-    monkeypatch.setenv("MSDIAL_EXE", str(app / "MSDIALCUI.exe"))
-    monkeypatch.delenv("MSDIAL_LBM", raising=False)
+    (app / "MSDIALCUI.exe").touch()
+    use_config(monkeypatch, tmp_path, {"msdial.exe": app / "MSDIALCUI.exe"})
 
 
 def test_template_switches_polarity_and_adducts(tmp_path, monkeypatch):

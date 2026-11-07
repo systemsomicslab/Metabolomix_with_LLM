@@ -79,7 +79,7 @@ def test_keeps_matching_mcp_json(repo):
 def test_reports_but_never_rewrites_a_differing_mcp_json(repo):
     original = json.dumps({"mcpServers": {"ms-data-parser": {
         "command": "C:/Python314/python.exe", "args": ["server.py"],
-        "env": {"MSDIAL_MSP_POS": "x"}}}}).encode()
+        "env": {"LIPIDMIX_PLOT_OUTPUT": "payload"}}}}).encode()
     (repo / ".mcp.json").write_bytes(original)
     state, message = setup_finish.ensure_mcp_json(repo)
     assert state == "differs"

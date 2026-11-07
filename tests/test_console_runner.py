@@ -32,19 +32,39 @@ from metabolomix.console.job_manager import (
     load_job,
     update_status,
 )
+from tests.config_fixtures import use_config
+
+
+def _use_exe(tmp_path, monkeypatch, name: str) -> Path:
+    """`[msdial] exe` に置き場所だけの偽の実行体（`tmp_path/_app/<name>`）を書く。
+
+    設定ファイルの値は実在を確かめる（`get_exe_path`）ので、ファイルは作る。中身は
+    実行できないので、起動まで進むテストは probe か build_msdial_cmd を差し替える。
+    """
+    exe = tmp_path / "_app" / name
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    exe.write_text("fake console executable placeholder", encoding="ascii")
+    use_config(monkeypatch, tmp_path, {"msdial.exe": exe})
+    return exe
 
 
 # ---------- runner ----------
 
 def test_get_exe_path_missing(monkeypatch):
-    monkeypatch.delenv("MSDIAL_EXE", raising=False)
     with pytest.raises(MsdialExeNotFoundError):
         get_exe_path()
 
 
-def test_get_exe_path_set(monkeypatch):
-    monkeypatch.setenv("MSDIAL_EXE", "C:/MsDial/MsdialConsoleApp.exe")
-    assert get_exe_path() == "C:/MsDial/MsdialConsoleApp.exe"
+def test_get_exe_path_set(tmp_path, monkeypatch):
+    exe = _use_exe(tmp_path, monkeypatch, "MsdialConsoleApp.exe")
+    assert get_exe_path() == str(exe)
+
+
+def test_get_exe_path_rejects_a_configured_path_that_does_not_exist(tmp_path, monkeypatch):
+    use_config(monkeypatch, tmp_path, {"msdial.exe": tmp_path / "gone" / "MSDIALCUI.exe"})
+    with pytest.raises(MsdialExeNotFoundError) as exc:
+        get_exe_path()
+    assert "[msdial] exe" in str(exc.value)
 
 
 def test_is_console_exe_accepts_output_with_lcms():
@@ -398,7 +418,7 @@ def _stub_lbm(tmp_path, monkeypatch):
     """
     lbm = tmp_path / "stub.lbm2"
     lbm.touch()
-    monkeypatch.setenv("MSDIAL_LBM", str(lbm))
+    use_config(monkeypatch, tmp_path, {"library.lbm": lbm})
     return lbm
 
 
@@ -427,7 +447,6 @@ def test_console_plan_unsupported_area(tmp_path):
 
 def test_console_plan_missing_exe(tmp_path, monkeypatch):
     import json as _json
-    monkeypatch.delenv("MSDIAL_EXE", raising=False)
     method = tmp_path / "params.msdial"
     method.write_text("Ion mode: Positive\n", encoding="ascii")
     from metabolomix.tools.console_tools import console_plan
@@ -443,7 +462,7 @@ def test_console_plan_missing_exe(tmp_path, monkeypatch):
 
 def test_console_plan_missing_method_file(tmp_path, monkeypatch):
     import json as _json
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     from metabolomix.tools.console_tools import console_plan
     result = console_plan(
@@ -458,7 +477,7 @@ def test_console_plan_missing_method_file(tmp_path, monkeypatch):
 
 def test_console_plan_rejects_non_console_exe(tmp_path, monkeypatch):
     import json as _json
-    monkeypatch.setenv("MSDIAL_EXE", "gui.exe")
+    _use_exe(tmp_path, monkeypatch, "gui.exe")
     _stub_lbm(tmp_path, monkeypatch)
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
@@ -473,7 +492,7 @@ def test_console_plan_rejects_non_console_exe(tmp_path, monkeypatch):
 def test_console_plan_reports_probe_timeout(tmp_path, monkeypatch):
     """--help の時間切れは「Console ではない」ではなく MSDIAL_EXE_PROBE_TIMEOUT で返す。"""
     import json as _json
-    monkeypatch.setenv("MSDIAL_EXE", "slow.exe")
+    _use_exe(tmp_path, monkeypatch, "slow.exe")
     _stub_lbm(tmp_path, monkeypatch)
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
@@ -492,7 +511,7 @@ def test_console_plan_success(tmp_path, monkeypatch):
     import json as _json
     from metabolomix.core import session_state
     session_state.session = session_state.AnalysisSession()
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.msdial"
@@ -514,7 +533,7 @@ def test_console_plan_success(tmp_path, monkeypatch):
 def test_console_plan_rejects_mixed_raw_formats(tmp_path, monkeypatch):
     """.wiff と .wiff2 の併存は MS-DIAL が対話プロンプトを出す条件。"""
     import json as _json
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.txt"
@@ -530,7 +549,7 @@ def test_console_plan_rejects_mixed_raw_formats(tmp_path, monkeypatch):
 
 def test_console_plan_rejects_empty_dataset_root(tmp_path, monkeypatch):
     import json as _json
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.txt"
@@ -546,7 +565,7 @@ def test_console_plan_warns_existing_alignment_results(tmp_path, monkeypatch):
     import json as _json
     from metabolomix.core import session_state
     session_state.session = session_state.AnalysisSession()
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.txt"
@@ -563,7 +582,7 @@ def test_console_plan_warns_existing_alignment_results(tmp_path, monkeypatch):
 def test_console_plan_rejects_binary_method_file(tmp_path, monkeypatch):
     """.mdproject は ZIP。渡すと MS-DIAL は全パラメータ既定値で走ってしまう。"""
     import json as _json
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "a.wiff").touch()
@@ -577,7 +596,7 @@ def test_console_plan_rejects_binary_method_file(tmp_path, monkeypatch):
 
 def test_console_plan_rejects_text_without_key_value(tmp_path, monkeypatch):
     import json as _json
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "a.wiff").touch()
@@ -593,7 +612,7 @@ def test_console_plan_accepts_key_value_method_file(tmp_path, monkeypatch):
     import json as _json
     from metabolomix.core import session_state
     session_state.session = session_state.AnalysisSession()
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "a.wiff").touch()
@@ -617,7 +636,7 @@ def test_console_status_no_job():
 
 def test_console_run_nonplanned_job(tmp_path, monkeypatch):
     import json as _json
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     method = tmp_path / "params.msdial"
     method.touch()
@@ -633,14 +652,14 @@ def test_console_run_nonplanned_job(tmp_path, monkeypatch):
 
 
 def test_console_run_rejects_changed_non_console_exe_before_launch(tmp_path, monkeypatch):
-    """計画後に MSDIAL_EXE が GUI へ変わっても、ジョブを planned のまま止める。"""
+    """計画後に [msdial] exe が GUI へ変わっても、ジョブを planned のまま止める。"""
     import json as _json
     from metabolomix.core import session_state
     from metabolomix.console import runner
     from metabolomix.tools.console_tools import console_plan, console_run
 
     session_state.session = session_state.AnalysisSession()
-    monkeypatch.setenv("MSDIAL_EXE", "console.exe")
+    _use_exe(tmp_path, monkeypatch, "console.exe")
     _stub_lbm(tmp_path, monkeypatch)
     real_probe_console_exe = runner.probe_console_exe
     monkeypatch.setattr(runner, "probe_console_exe", lambda *a, **k: "console")
@@ -652,7 +671,7 @@ def test_console_run_rejects_changed_non_console_exe_before_launch(tmp_path, mon
         polarity="negative", measure="peak_height"))
     job_path = planned["job_path"]
 
-    monkeypatch.setenv("MSDIAL_EXE", "MSDIAL.exe")
+    gui = _use_exe(tmp_path, monkeypatch, "MSDIAL.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr(runner, "probe_console_exe", real_probe_console_exe)
     completed = MagicMock()
@@ -663,7 +682,7 @@ def test_console_run_rejects_changed_non_console_exe_before_launch(tmp_path, mon
     assert result["error"]["code"] == "MSDIAL_EXE_NOT_CONSOLE"
     assert load_job(Path(job_path)).status == "planned"
     mock_run.assert_called_once_with(
-        ["MSDIAL.exe", "--help"],
+        [str(gui), "--help"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
@@ -674,7 +693,10 @@ def test_console_run_rejects_changed_non_console_exe_before_launch(tmp_path, mon
 
 
 def test_console_run_marks_missing_changed_exe_failed(tmp_path, monkeypatch):
-    """計画後に MSDIAL_EXE が消えた場合は従来どおり NOT_FOUND/failed にする。"""
+    """計画後に [msdial] exe が起動できなくなった場合は従来どおり NOT_FOUND/failed にする。
+
+    設定ファイルの値は実在を確かめるので、ファイルは置いたまま --help の起動が
+    OSError になる（消えた・ロックされた）ところを再現する。"""
     import json as _json
     from metabolomix.console.job_manager import create_job
     from metabolomix.tools.console_tools import console_run
@@ -685,7 +707,7 @@ def test_console_run_marks_missing_changed_exe_failed(tmp_path, monkeypatch):
         dataset_root=tmp_path, method_file=method,
         polarity="negative", measure="peak_height",
     )
-    monkeypatch.setenv("MSDIAL_EXE", "removed-console.exe")
+    _use_exe(tmp_path, monkeypatch, "removed-console.exe")
     _stub_lbm(tmp_path, monkeypatch)
     with patch("subprocess.run", side_effect=OSError("exe not found")) as mock_run:
         result = _json.loads(console_run(str(job_path)))
@@ -749,7 +771,7 @@ def test_console_run_reports_no_output(tmp_path, monkeypatch):
     import json as _json
     from metabolomix.console.job_manager import create_job, load_job
     from metabolomix.tools.console_tools import console_run
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.msdial"
@@ -765,7 +787,7 @@ def test_console_run_reports_no_output(tmp_path, monkeypatch):
 
 
 def test_console_run_marks_failed_when_the_executable_cannot_be_started(tmp_path, monkeypatch):
-    """実在しない exe で起動に失敗しても封筒を返し、running に固着させない。
+    """起動できない exe（置き場所だけの偽物）で起動に失敗しても封筒を返し、running に固着させない。
 
     `probe_console_exe` の事前確認をすり抜けた場合（計画後に exe が消える等）の
     最後の砦。起動できなかった事実は終了証跡に termination=launch_failed として残る。
@@ -773,7 +795,7 @@ def test_console_run_marks_failed_when_the_executable_cannot_be_started(tmp_path
     import json as _json
     from metabolomix.console.job_manager import create_job, load_job
     from metabolomix.tools.console_tools import console_run
-    monkeypatch.setenv("MSDIAL_EXE", str(tmp_path / "definitely_not_here.exe"))
+    _use_exe(tmp_path, monkeypatch, "not_launchable.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.msdial"
@@ -801,7 +823,7 @@ def test_console_run_post_run_failure_marks_job_failed_not_running(tmp_path, mon
     import json as _json
     from metabolomix.console.job_manager import create_job, load_job
     from metabolomix.tools.console_tools import console_run
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.msdial"
@@ -880,7 +902,7 @@ def test_console_run_records_declared_polarity_on_mztab_entries(tmp_path, monkey
     """極性トークンを持たない出力名でも、宣言した negative が記録される。"""
     from metabolomix.console.job_manager import create_job, load_job
     from metabolomix.tools.console_tools import console_run
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "S1.abf").write_bytes(b"raw")
@@ -904,7 +926,7 @@ def test_console_run_warns_when_filename_contradicts_declared_polarity(tmp_path,
     """ファイル名の極性が宣言と食い違うなら、黙らずに warning へ残す。"""
     from metabolomix.console.job_manager import create_job, load_job
     from metabolomix.tools.console_tools import console_run
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "S1.abf").write_bytes(b"raw")
@@ -935,7 +957,7 @@ def test_console_run_warns_when_filename_contradicts_declared_polarity(tmp_path,
 def test_console_run_writes_no_sidecar_files(tmp_path, monkeypatch):
     from metabolomix.console.job_manager import create_job, load_job
     from metabolomix.tools.console_tools import console_run
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "S1.abf").write_bytes(b"raw")
@@ -964,7 +986,7 @@ def test_console_run_warns_when_no_per_sample_pai2(tmp_path, monkeypatch):
     """
     from metabolomix.console.job_manager import create_job, load_job
     from metabolomix.tools.console_tools import console_run
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "S1.abf").write_bytes(b"raw")
@@ -987,7 +1009,7 @@ def test_console_run_no_pai2_warning_when_pai2_present(tmp_path, monkeypatch):
     """.pai2 が出ているときに上の警告を出してはいけない（過剰警告の防止）。"""
     from metabolomix.console.job_manager import create_job, load_job
     from metabolomix.tools.console_tools import console_run
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "S1.abf").write_bytes(b"raw")
@@ -1014,7 +1036,7 @@ def _planned_task8_job(tmp_path, monkeypatch, **kwargs):
     from metabolomix.tools.console_tools import console_plan
 
     session_state.session = session_state.AnalysisSession()
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     (tmp_path / "S1.wiff").touch()
@@ -1094,7 +1116,7 @@ def test_console_plan_persists_and_console_run_passes_execution_options(tmp_path
 
     saved = load_job(job_path)
     assert (saved.save_project, saved.timeout_s) == (True, 1234)
-    assert seen["exe"] == "fake.exe"
+    assert seen["exe"] == str(tmp_path / "_app" / "fake.exe")
     assert seen["save_project"] is True
     assert seen["dataset_root"] == str(tmp_path)
     receipt = _json.loads(
@@ -1113,7 +1135,7 @@ def test_console_plan_rejects_invalid_execution_options_before_job_side_effects(
     from metabolomix.tools.console_tools import console_plan
 
     session_state.session = session_state.AnalysisSession()
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    _use_exe(tmp_path, monkeypatch, "fake.exe")
     _stub_lbm(tmp_path, monkeypatch)
     (tmp_path / "S1.wiff").touch()
     method = tmp_path / "params.txt"

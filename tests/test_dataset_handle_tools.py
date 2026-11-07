@@ -23,6 +23,7 @@ from metabolomix.tools import dataset_analysis_tools as T
 from metabolomix.tools import handle_tools, mztab_tools
 from metabolomix.tools import reanalysis_tools as R
 from tests.reanalysis_fixtures import NEG_FEATURES, write_mztab
+from tests.config_fixtures import use_config
 
 GOLDEN = Path(__file__).parent / "fixtures" / "handle_golden_no_handle.json"
 HC, RA = ["HC1", "HC2", "HC3"], ["RA1", "RA2", "RA3"]
@@ -175,7 +176,7 @@ def test_library_load_into_handle_keeps_global_empty(monkeypatch, tmp_path, pos_
     msp.parent.mkdir()
     msp.write_text("NAME: Choline\nPRECURSORMZ: 104.107\nIONMODE: Positive\nNum Peaks: 2\n"
                    "60.0808 100\n104.107 50\n", encoding="ascii")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(msp))
+    use_config(monkeypatch, tmp_path, {"library.msp_positive": str(msp)})
     monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
     a = _open(pos_mztab)
     out = json.loads(library_tools.library_load(ion_mode="positive", dataset_handle=a))
