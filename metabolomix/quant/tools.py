@@ -121,6 +121,9 @@ def dataset_merge_polarities(positive_handle: str, negative_handle: str,
     のあとに NEG の特徴、試料の列は共通 ID（POS の順）。試料は名前（極性の印を除いた名前）で
     照合し、食い違えば needs_input（only_in に片側にしか無い試料）で止まる。mapping_csv
     （列: mode, source_sample, sample_id, group, sample_type）で対応づけて再実行する。
+    normalized・method・unit のどれかが違っても統合しない。mapping_csv の mode 列は
+    positive / negative（pos / neg も可）。group / sample_type 列は規則が検証するだけで
+    適用しない（試料の実験情報は POS のものを使う）。
     記録は 2 つの解析フォルダの共通の親の reports/quant/。共通の親が決められなければ
     needs_input で record_folder（既存のフォルダ）を求める。規則プラグイン（[quant] rules）が要る。
     """

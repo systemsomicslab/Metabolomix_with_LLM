@@ -98,7 +98,8 @@ def test_merge_stops_on_mismatched_samples(tmp_path, monkeypatch):
         _merge(pos, neg, mapping_rows=None)
     assert exc.value.code == "QUANT_MERGE_SAMPLE_MISMATCH"
     only = exc.value.details["only_in"]
-    assert only["pos"] == ["S3"] and only["neg"] == ["S9"]
+    assert only["positive"] == ["S3_pos"] and only["negative"] == ["S9_neg"]
+    assert exc.value.details["only_in_ids"] == {"positive": ["S3"], "negative": ["S9"]}
     assert exc.value.details["rule"] == "polarity_token_removed"
     # 混在（トークンが付く側と付かない側）でも黙って部分集合にしない
     pos, neg = _pair(tmp_path, neg_names=("S1_neg", "S2_neg", "S3"), root="run2")
@@ -120,8 +121,9 @@ def _rows(pairs):
 def test_merge_with_mapping_csv(tmp_path, monkeypatch):
     _point(tmp_path, monkeypatch)
     pos, neg = _pair(tmp_path, neg_names=("zz", "yy", "ww"))
-    rows = _rows([("pos", "S1_pos", "X1"), ("pos", "S2_pos", "X2"), ("pos", "S3_pos", "X3"),
-                  ("neg", "zz", "X2"), ("neg", "yy", "X1"), ("neg", "ww", "X3")])
+    rows = _rows([("positive", "S1_pos", "X1"), ("positive", "S2_pos", "X2"),
+                  ("positive", "S3_pos", "X3"), ("negative", "zz", "X2"),
+                  ("negative", "yy", "X1"), ("negative", "ww", "X3")])
     merged, info = _merge(pos, neg, mapping_rows=rows, mapping_input=("map.csv", "ab" * 32))
     assert info["rule"] == "mapping_csv" and merged.sample_names == ["X1", "X2", "X3"]
     row = merged.feature_ids.index("negative:0")
@@ -136,7 +138,7 @@ def test_read_mapping(tmp_path):
     path.write_text("mode,source_sample,sample_id,group,sample_type\npos,a,S1,g,x\n",
                     encoding="utf-8")
     rows, sha = qm.read_mapping(path)
-    assert rows == [{"mode": "pos", "source_sample": "a", "sample_id": "S1", "group": "g",
+    assert rows == [{"mode": "positive", "source_sample": "a", "sample_id": "S1", "group": "g",
                      "sample_type": "x"}] and len(sha) == 64
     path.write_text("mode,source_sample\npos,a\n", encoding="utf-8")
     with pytest.raises(DomainError) as exc:
@@ -165,6 +167,54 @@ def test_merge_refuses_same_polarity_and_mixed_units(tmp_path, monkeypatch):
         _merge(pos, neg, mapping_rows=None)
     assert exc.value.code == "QUANT_MERGE_STATE_MISMATCH"
     assert not (tmp_path / "run" / "reports").exists()  # 何も書かない
+
+
+def test_mapping_mismatch_names_source_samples(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path, neg_names=("zz", "yy", "ww"))
+    rows = _rows([("positive", "S1_pos", "X1"), ("positive", "S2_pos", "X2"),
+                  ("positive", "S3_pos", "X3"), ("negative", "zz", "X1"),
+                  ("negative", "yy", "X2"), ("negative", "ww", "X9")])
+    with pytest.raises(DomainError) as exc:
+        _merge(pos, neg, mapping_rows=rows)
+    d = exc.value.details
+    assert d["only_in"] == {"positive": ["S3_pos"], "negative": ["ww"]}
+    assert d["only_in_ids"] == {"positive": ["X3"], "negative": ["X9"]}
+
+
+def test_read_mapping_accepts_mode_aliases(tmp_path):
+    path = tmp_path / "map.csv"
+    path.write_text("mode,source_sample,sample_id,group,sample_type\n"
+                    "POS,a,S1,g,x\nNeg,b,S1,g,x\nPositive,c,S2,g,x\nnegative,d,S2,g,x\n",
+                    encoding="utf-8")
+    rows, _ = qm.read_mapping(path)
+    assert [r["mode"] for r in rows] == ["positive", "negative", "positive", "negative"]
+
+
+def test_lock_timeout_is_busy(tmp_path, monkeypatch):
+    import threading
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    hp, hn = _open(pos, "positive"), _open(neg, "negative")
+    monkeypatch.setattr(qm, "LOCK_TIMEOUT", 0.2)
+    held, release = threading.Event(), threading.Event()
+    blocker = handles.registry.get(max(hp, hn))
+
+    def hold():
+        with blocker.lock:
+            held.set()
+            release.wait(5)
+    t = threading.Thread(target=hold)
+    t.start()
+    held.wait(5)
+    try:
+        out = json.loads(_tool()(hp, hn))
+    finally:
+        release.set()
+        t.join()
+    assert out["error"]["code"] == "QUANT_HANDLE_BUSY"
+    ok = json.loads(_tool()(hp, hn))  # 取ったロックは戻っている
+    assert ok["status"] == "merged"
 
 
 def test_merge_requires_quant_state(tmp_path, monkeypatch):
@@ -329,8 +379,8 @@ def test_tool_mismatch_needs_input_and_mapping(tmp_path, monkeypatch):
     out = json.loads(_tool()(hp, hn))
     assert out["status"] == "needs_input" and out["reason"] == "sample_mismatch"
     assert out["rule"] == "polarity_token_removed"
-    assert set(out["only_in"]) == {"pos", "neg"}
-    assert sorted(out["only_in"]["neg"]) == ["ww", "yy", "zz"]
+    assert set(out["only_in"]) == {"positive", "negative"}
+    assert sorted(out["only_in"]["negative"]) == ["ww", "yy", "zz"]
     assert "mode, source_sample, sample_id, group, sample_type" in out["how_to_answer"]
     assert not (tmp_path / "run" / "reports").exists()
     mapping = tmp_path / "map.csv"

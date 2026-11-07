@@ -31,10 +31,15 @@ from metabolomix.quant.table import resolve_quant_polarity
 __all__ = ["MAPPING_COLUMNS", "merge", "merge_tool", "read_mapping"]
 
 MAPPING_COLUMNS = ("mode", "source_sample", "sample_id", "group", "sample_type")
-#: 規則プラグイン（と対応表の `mode` 列）が使うモード名。
-MODES = {"positive": "pos", "negative": "neg"}
+#: 規則プラグイン（msdial-workflow の config.MODES・対応表の `mode` 列）が使うモード名。
+MODES = {"positive": "positive", "negative": "negative"}
+_MODE_ALIASES = {"pos": "positive", "positive": "positive", "neg": "negative",
+                 "negative": "negative"}
+#: ハンドルのロックを待つ秒数（超えたら QUANT_HANDLE_BUSY）。
+LOCK_TIMEOUT = 30.0
 _MAX_LISTED = 20
-_HOW_MAPPING = "mapping_csv（列: mode, source_sample, sample_id, group, sample_type）"
+_HOW_MAPPING = ("mapping_csv（列: mode, source_sample, sample_id, group, sample_type。"
+                "mode は positive / negative）")
 
 
 def read_mapping(path: Path) -> tuple[list[dict], str]:
@@ -57,6 +62,8 @@ def read_mapping(path: Path) -> tuple[list[dict], str]:
                           f"（必要な列: {', '.join(MAPPING_COLUMNS)}）",
                           {"field": "mapping_csv", "missing": missing})
     rows = [{k: (v or "").strip() for k, v in row.items() if k is not None} for row in reader]
+    for row in rows:  # pos / NEG などの別名を、規則が比べる正式名へ
+        row["mode"] = _MODE_ALIASES.get(row["mode"].lower(), row["mode"])
     return rows, hashlib.sha256(data).hexdigest()
 
 
@@ -94,6 +101,29 @@ def _check_states(pos_ds, neg_ds) -> tuple[dict, dict]:
     return pos, neg
 
 
+def _source_names(plugin, names, mismatched, result, mapping_rows) -> dict:
+    """食い違った共通 ID を、利用者が書く元の試料名に戻す（戻せなければ ID のまま）。"""
+    out = {}
+    for mode, bad in mismatched.items():
+        bad_set = set(bad)
+        rows = (result.get("rows_by_mode") or {}).get(mode)
+        found = []
+        for name in names.get(mode, []):
+            if mapping_rows is not None and rows is not None and name in rows:
+                sid = rows[name].get("sample_id")
+            else:
+                try:
+                    single = call(plugin, "match_samples", names_by_mode={mode: [name]})
+                    sid = single["ids_by_mode"][mode][0]
+                except Exception:  # noqa: BLE001 規則が単独の照合を拒むなら ID のまま返す
+                    found = None
+                    break
+            if sid in bad_set:
+                found.append(name)
+        out[mode] = found if found else list(bad)
+    return out
+
+
 def _match(plugin, pos_ds, neg_ds, mapping_rows):
     names = {MODES["positive"]: list(pos_ds.sample_names),
              MODES["negative"]: list(neg_ds.sample_names)}
@@ -102,7 +132,9 @@ def _match(plugin, pos_ds, neg_ds, mapping_rows):
     if mismatched:
         raise DomainError("QUANT_MERGE_SAMPLE_MISMATCH",
                           "試料名が 2 つのデータセットで揃いません。mapping_csv で対応づけてください。",
-                          {"rule": result.get("rule"), "only_in": mismatched})
+                          {"rule": result.get("rule"), "only_in_ids": mismatched,
+                           "only_in": _source_names(plugin, names, mismatched, result,
+                                                    mapping_rows)})
     ids = result["ids_by_mode"]
     pos_ids, neg_ids = list(ids[MODES["positive"]]), list(ids[MODES["negative"]])
     for label, got, src in (("positive", pos_ids, pos_ds), ("negative", neg_ids, neg_ds)):
@@ -169,6 +201,9 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     """統合して記録を書き、派生データセットを返す。`(merged, info)`。
 
     `mapping_input` は (対応表のファイル名, sha256)（記録の入力に `mapping:<名前>` で載る）。
+    正規化の状態（normalized・method・unit）が 2 つで違えば統合しない（method の違いも）。
+    対応表の group / sample_type 列は規則が検証するだけで適用しない（試料の実験情報は POS の
+    ものを使う）。
     `folder` を省くと 2 つの解析フォルダの共通の親（無理なら QUANT_RECORD_LOCATION_REQUIRED）。
     `polarities` は (positive 側, negative 側) の極性（省くとデータセットから決める）。
     記録は検査がすべて通ってから書く（止まるときは何も書かない）。
@@ -281,7 +316,11 @@ def merge_tool(pos_holder, neg_holder, mapping_csv: str | None, record_folder: s
     acquired = []
     try:
         for handle in ordered:
-            handle.lock.acquire()
+            if not handle.lock.acquire(timeout=LOCK_TIMEOUT):
+                return quant_error("QUANT_HANDLE_BUSY",
+                                   "ハンドルが別の処理で使われていて待ちきれませんでした。"
+                                   "少し待ってからやり直してください。",
+                                   {"dataset_handle": handle.handle_id})
             acquired.append(handle)
         pos_ds, neg_ds = pos_holder.dataset, neg_holder.dataset
         try:
