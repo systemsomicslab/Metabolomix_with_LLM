@@ -20,13 +20,16 @@ _MEMO: "OrderedDict[tuple, str]" = OrderedDict()
 _LOCK = threading.Lock()
 
 
-def sha256_of(path: str | Path) -> str:
-    """`path` の sha256（16 進）。読めなければ `OSError`（呼び出し側が従来どおり受ける）。"""
+def sha256_of(path: str | Path, *, trust: bool = True) -> str:
+    """`path` の sha256（16 進）。読めなければ `OSError`（呼び出し側が従来どおり受ける）。
+
+    trust=False は覚えた値を使わず読み直し、覚えた値を新しい値で置き換える。
+    """
     resolved = str(Path(path).resolve())
     stat = os.stat(resolved)
     key = (resolved, stat.st_size, stat.st_mtime_ns)
     with _LOCK:
-        hit = _MEMO.get(key)
+        hit = _MEMO.get(key) if trust else None
         if hit is not None:
             _MEMO.move_to_end(key)
             return hit

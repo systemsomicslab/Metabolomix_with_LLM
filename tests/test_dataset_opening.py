@@ -721,3 +721,57 @@ def test_file_changed_during_load_is_not_cached(tmp_path, monkeypatch):
     assert any("読み込みの間に入力が変わった" in note for note in first.notes)
     monkeypatch.setattr(opening, "_open", real_open)
     assert open_dataset(directory=str(folder)).reused_base is False
+
+
+def _bump_mtime_after_load(monkeypatch, target_glob_root: Path, pattern: str):
+    """本物の読み込みの後に、`pattern` のファイルの更新時刻だけを進める偽の `_open`。"""
+    from metabolomix.dataset import opening
+
+    real_open = opening._open
+
+    def changing_open(*args, **kwargs):
+        base = real_open(*args, **kwargs)
+        target = next(target_glob_root.rglob(pattern))
+        stat = target.stat()
+        os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+        return base
+
+    monkeypatch.setattr(opening, "_open", changing_open)
+    return real_open
+
+
+def test_job_route_change_during_load_is_not_cached(tmp_path, monkeypatch):
+    from metabolomix.dataset import opening
+
+    job = _job(tmp_path)
+    real_open = _bump_mtime_after_load(monkeypatch, job.parent / "msdial", "*.arf2")
+    first = open_dataset(job_path=str(job))
+    assert any("読み込みの間に入力が変わった" in note for note in first.notes)
+    monkeypatch.setattr(opening, "_open", real_open)
+    assert open_dataset(job_path=str(job)).reused_base is False
+
+
+def test_non_canonical_path_change_during_load_is_not_cached(tmp_path, monkeypatch):
+    from metabolomix.dataset import opening
+
+    folder = _folder(tmp_path / "gui")
+    spelled = str(folder).swapcase()  # 大文字小文字違い（Windows ではパスとして同じ）
+    if not Path(spelled).exists():
+        pytest.skip("大文字小文字を区別するファイルシステム")
+    real_open = _bump_mtime_after_load(monkeypatch, folder, "*.arf2")
+    first = open_dataset(directory=spelled)
+    assert any("読み込みの間に入力が変わった" in note for note in first.notes)
+    monkeypatch.setattr(opening, "_open", real_open)
+    assert open_dataset(directory=spelled).reused_base is False
+
+
+def test_pipeline_route_change_during_load_is_not_cached(tmp_path, monkeypatch):
+    from metabolomix.dataset import opening
+
+    job = _job(tmp_path)
+    run = _pipeline(tmp_path, job)
+    real_open = _bump_mtime_after_load(monkeypatch, job.parent / "msdial", "*.arf2")
+    first = open_dataset(pipeline_path=str(run))
+    assert any("読み込みの間に入力が変わった" in note for note in first.notes)
+    monkeypatch.setattr(opening, "_open", real_open)
+    assert open_dataset(pipeline_path=str(run)).reused_base is False

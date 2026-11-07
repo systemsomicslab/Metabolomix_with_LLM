@@ -27,6 +27,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -133,48 +134,23 @@ def open_dataset(*, directory=None, mztab_path=None, job_path=None, pipeline_pat
         cached = handles.registry.cached_base(key)
         if cached is not None and _signature(cached[0]) == cached[1]:
             return _copy(cached[0], reused=True)
-        # 指紋は読む前に取った stat と、読んだ後の stat を比べる。読んでいる間に変わった
-        # ファイルがあれば基は古い中身かもしれないので、キャッシュしない（結果は返す）。
-        before = _stat_paths(_prescan(input_path))
+        # 読み込みの間に更新された依存があれば、基は古い中身かもしれないので覚えない
+        # （結果は返す）。読む前の時刻と、読んだ後の依存の更新時刻だけを比べる——どの経路・
+        # どのパスの綴りでも効く。読む直前に書かれたファイルは覚えられないだけで、安全側。
+        started = time.time_ns()
         base = _open(kind, str(raw), str(input_path), adapter, measure, allow_incomplete)
         signature = _signature(base)
-        if _changed_during_load(before, signature):
-            base.notes.append("読み込みの間に入力が変わった（ファイルの大きさか更新時刻が"
-                              "読む前と違う）ので、この基は覚えない。次の読み込みは読み直す。")
+        if _changed_during_load(started, signature):
+            base.notes.append("読み込みの間に入力が変わった（読み込みの開始後に更新された"
+                              "ファイルがある）ので、この基は覚えない。次の読み込みは読み直す。")
         else:
             handles.registry.put_base(key, base, signature)
     return _copy(base, reused=False)
 
 
-def _prescan(input_path: Path) -> list[str]:
-    """読む前に stat できるファイル: 入力そのものと、そのフォルダ（入力がファイルなら親）の
-    ファイル、`curation/` と `input/` の下のファイル。読んだ後の `_dependencies` のうち
-    これに含まれるものだけが、読む前後の比較に使われる（読む前には分からない依存は比べない）。"""
-    folder = input_path if input_path.is_dir() else input_path.parent
-    out = {str(input_path)}
-    for sub in (folder, folder / "curation", folder / "input"):
-        try:
-            out.update(str(p) for p in sub.iterdir() if p.is_file())
-        except OSError:
-            pass
-    return sorted(out)
-
-
-def _stat_paths(paths) -> dict[str, tuple]:
-    out = {}
-    for path in paths:
-        try:
-            stat = Path(path).stat()
-            out[path] = (stat.st_size, stat.st_mtime_ns)
-        except OSError:
-            out[path] = (None, None)
-    return out
-
-
-def _changed_during_load(before: dict[str, tuple], signature: tuple) -> bool:
-    """読む前に stat できたファイルが、読んだ後の指紋と違うか。"""
-    return any(path in before and before[path] != (size, mtime)
-               for path, size, mtime in signature)
+def _changed_during_load(started_ns: int, signature: tuple) -> bool:
+    """読み込みの開始後に更新された依存があるか（更新時刻が開始時刻より新しい）。"""
+    return any(mtime is not None and mtime > started_ns for _path, _size, mtime in signature)
 
 
 #: 基のキャッシュのキーごとの「読み込み中」ロック。辞書は `_INFLIGHT_GUARD` で守る。

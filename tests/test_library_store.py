@@ -1,5 +1,6 @@
 """参照ライブラリの永続 store。"""
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -343,9 +344,9 @@ def _count_hashing(monkeypatch):
     calls = []
     real = store.source_sha256
 
-    def spy(path):
+    def spy(path, **kwargs):
         calls.append(path)
-        return real(path)
+        return real(path, **kwargs)
 
     monkeypatch.setattr(store, "source_sha256", spy)
     return calls
@@ -592,3 +593,21 @@ def test_two_threads_opening_the_same_destination_build_it_once(library, monkeyp
     assert [s.record_count for s in opened] == [4, 4]
     for s in opened:
         s.close()
+
+
+def test_rebuild_really_rereads_the_source_despite_the_in_memory_memo(library, monkeypatch):
+    """`rebuild=True` は sha256 の記憶（ディスクの索引もメモリの記憶も）を信じず、元ファイルを読み直す。"""
+    import builtins
+
+    real = builtins.open
+    opened = []
+
+    def counting(file, *args, **kwargs):
+        if Path(str(file)).resolve() == Path(library).resolve():
+            opened.append(file)
+        return real(file, *args, **kwargs)
+
+    store.open_store(library).close()
+    monkeypatch.setattr(builtins, "open", counting)
+    store.open_store(library, rebuild=True).close()
+    assert any(True for _ in opened), "rebuild が元ファイルを読み直していない"

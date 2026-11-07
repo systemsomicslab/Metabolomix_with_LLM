@@ -122,9 +122,9 @@ def cache_dir() -> Path:
     return mcp_core.DATA_DIR / ".library-cache"
 
 
-def source_sha256(path: str | Path) -> str:
+def source_sha256(path: str | Path, *, trust: bool = True) -> str:
     """元ファイルの sha256 を、全体をメモリへ載せずに計算する。"""
-    return file_digest.sha256_of(path)
+    return file_digest.sha256_of(path, trust=trust)
 
 
 def _store_path_for_digest(path: str | Path, digest: str, cache_dir: Path | None = None) -> Path:
@@ -441,7 +441,7 @@ def _digest_for(source_path: Path, base: Path, *, trust_index: bool) -> str:
     if (trust_index and isinstance(entry, dict) and isinstance(entry.get("sha256"), str)
             and all(entry.get(k) == v for k, v in fingerprint.items())):
         return entry["sha256"]
-    digest = source_sha256(source_path)
+    digest = source_sha256(source_path, trust=trust_index)
     index[key] = {**fingerprint, "sha256": digest}
     try:
         base.mkdir(parents=True, exist_ok=True)
