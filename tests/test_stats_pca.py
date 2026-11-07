@@ -94,3 +94,26 @@ def test_too_few_units():
         pca(_prep(_data(n=2)))
     assert e.value.code == "STATISTIC_GROUP_TOO_SMALL"
     assert e.value.details["n_fit"] == 2
+
+
+def test_invalid_scaling_and_n_components():
+    for kw in ({"scaling": "bogus"}, {"n_components": 0}, {"n_components": True}, {"n_components": 1.5}):
+        with pytest.raises(DomainError) as e:
+            pca(_prep(_data()), **kw)
+        assert e.value.code == "PCA_SPECIFICATION_INVALID"
+
+
+def test_too_few_varying_features():
+    x = np.ones((6, 4))
+    x[:, 0] = np.arange(6)
+    with pytest.raises(DomainError) as e:
+        pca(_prep(x))
+    assert e.value.code == "PCA_TOO_FEW_FEATURES" and e.value.details["kept"] == 1
+
+
+def test_all_missing_column_after_imputation():
+    x = _data()
+    x[:, 2] = np.nan
+    with pytest.raises(DomainError) as e:
+        pca(_prep(x))
+    assert e.value.code == "PCA_MISSING_VALUES" and e.value.details["columns"] == ["f2"]
