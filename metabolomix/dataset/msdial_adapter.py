@@ -4,15 +4,11 @@
 """
 from __future__ import annotations
 
-import io
 import math
 import xml.etree.ElementTree as ET
 from pathlib import Path, PureWindowsPath
 
-import numpy as np
-
 from metabolomix.analysis import sample_manifest
-from metabolomix.arf import reader as arf_reader
 from metabolomix.arf2.spot_fields import load_spot_fields
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.curation.apply import flags_for_arf2
@@ -30,35 +26,15 @@ MEASURES = {"peak_height": "height", "peak_area_above_zero": "area"}
 _ROLE_BY_FILE_TYPE = {0: "sample", 1: "standard", 2: "qc", 3: "blank"}
 
 
-def _read_groups(arf_path: Path) -> list[dict]:
-    with open(arf_path, "rb") as handle:
-        return arf_reader.deserialize(io.BytesIO(handle.read()))
-
-
-def _cells(group: dict) -> dict[int, dict]:
-    cells: dict[int, dict] = {}
-    for raw in group.get("AlignedPeakProperties") or []:
-        feature = arf_reader.alignment_feature_row(raw)
-        if feature and isinstance(feature.get("file_id"), int):
-            cells[feature["file_id"]] = feature
-    return cells
-
-
-def _number(value) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return math.nan
-    return float(value)
-
-
-def _check_alignment(groups: list[dict], fields: list[dict]) -> None:
-    if len(groups) != len(fields):
+def _check_alignment(scan: evidence.ArfScan, fields: list[dict]) -> None:
+    """`.arf` のスポット（`scan`）と `.arf2` のスポットが同じアラインメントかを確かめる。"""
+    if scan.n_spots != len(fields):
         raise DomainError(
             "ALIGNMENT_MISMATCH",
-            f".arf のスポット数（{len(groups)}）と .arf2 のスポット数（{len(fields)}）が違う。"
+            f".arf のスポット数（{scan.n_spots}）と .arf2 のスポット数（{len(fields)}）が違う。"
             "別のバッチの出力が混ざっている。",
-            {"arf_spots": len(groups), "arf2_spots": len(fields)})
-    ok, detail = evidence.compare_feature_mz(
-        [evidence.group_representative_mz(g) for g in groups], [f["mz"] for f in fields])
+            {"arf_spots": scan.n_spots, "arf2_spots": len(fields)})
+    ok, detail = evidence.compare_feature_mz(scan.spot_mz, [f["mz"] for f in fields])
     if not ok:
         raise DomainError(
             "ALIGNMENT_MISMATCH",
@@ -205,23 +181,39 @@ def _load_curation(ds, selection: AlignmentSelection) -> None:
         ds.load_notes.append(f"キュレーションのフラグを読めなかったので無視した: {exc}")
 
 
-def load_msdial_folder(selection: AlignmentSelection, *, measure: str = "peak_height") -> DatasetState:
+def _usable_scan(scan: evidence.ArfScan | None, selection: AlignmentSelection,
+                  cell_key: str) -> evidence.ArfScan | None:
+    """渡された `ArfScan` が、選んだ `.arf` を要る定量値つきで読んだものなら使う。"""
+    if scan is None or cell_key not in scan.values:
+        return None
+    try:
+        same = Path(scan.path).resolve() == Path(selection.arf).resolve()
+    except OSError:
+        same = False
+    return scan if same else None
+
+
+def load_msdial_folder(selection: AlignmentSelection, *, measure: str = "peak_height",
+                       scan: evidence.ArfScan | None = None) -> DatasetState:
+    """解析フォルダの `.arf` / `.arf2`（と `.mddata` ほか）から `DatasetState` を作る。
+
+    `scan` は `selection.arf` を読んだ `evidence.scan_arf` の結果（job の経路が照合に読んだもの）。
+    渡れば `.arf` を読まない（別のファイルや定量値の欠けたものなら読み直す）。
+    """
     if measure not in MEASURES:
         raise DomainError(
             "DATASET_BAD_REQUEST",
             f"measure は {sorted(MEASURES)} のどちらか: {measure!r}", {"measure": measure})
     cell_key = MEASURES[measure]
 
-    groups = _read_groups(selection.arf)
+    scan = _usable_scan(scan, selection, cell_key)
+    if scan is None:
+        scan = evidence.scan_arf(selection.arf, measures=(cell_key,))
     fields = load_spot_fields(selection.arf2)
-    _check_alignment(groups, fields)
+    _check_alignment(scan, fields)
 
-    cells_by_spot = [_cells(g) for g in groups]
-    file_ids = sorted({fid for cells in cells_by_spot for fid in cells})
-    arf_names: dict[int, str | None] = {}
-    for cells in cells_by_spot:
-        for fid, cell in cells.items():
-            arf_names.setdefault(fid, cell.get("file_name"))
+    file_ids = scan.file_ids
+    arf_names = scan.file_names
 
     ds = DatasetState()
     ds.source_format = "msdial_folder"
@@ -235,28 +227,19 @@ def load_msdial_folder(selection: AlignmentSelection, *, measure: str = "peak_he
     ds.msdial_samples = samples
     ds.ion_mode_majority = _ion_mode_majority(fields)
 
-    n_spots, n_samples = len(groups), len(file_ids)
-    matrix = np.full((n_spots, n_samples), np.nan)
-    detected = np.zeros((n_spots, n_samples), dtype=bool)
+    matrix = scan.values[cell_key]
+    detected = scan.detected
     per_sample_mz: dict[str, dict[str, float]] = {}
     feature_ids, metadata = [], {}
     identity_cache = msdial_identity.IdentityCache()
     # 特徴 ID は .arf2 の MasterID（Key0）。mzTab-M の SMF_ID と同じ番号空間で、
     # イオンモビリティでは連番にならない。
-    for i, (cells, spot) in enumerate(zip(cells_by_spot, fields)):
+    for i, spot in enumerate(fields):
         fid = str(spot["master_id"])
         feature_ids.append(fid)
-        per_sample_mz[fid] = {}
-        for j, file_id in enumerate(file_ids):
-            cell = cells.get(file_id)
-            if cell is None:
-                continue
-            matrix[i, j] = _number(cell.get(cell_key))
-            if not cell.get("is_gap_filled"):
-                detected[i, j] = True
-                mz = _number(cell.get("m_z"))
-                if not math.isnan(mz):
-                    per_sample_mz[fid][names[j]] = mz
+        # 検出されたセルの実測 m/z（数でないものと gap-fill は scan の時点で NaN）。
+        per_sample_mz[fid] = {names[j]: float(mz) for j, mz in enumerate(scan.per_sample_mz[i])
+                              if not math.isnan(mz)}
         istd = spot["internal_standard_id"]
         metadata[fid] = {
             "name": spot["name"], "mz": spot["mz"], "rt": spot["rt"],
@@ -264,7 +247,7 @@ def load_msdial_folder(selection: AlignmentSelection, *, measure: str = "peak_he
             "comment": spot["comment"], "fill_percentage": spot["fill_percentage"],
             # MS-DIAL の -1 は「内部標準なし」。
             "internal_standard_id": None if istd is None or istd < 0 else istd,
-            "msms_assigned": any(c.get("is_msms") for c in cells.values()),
+            "msms_assigned": bool(scan.msms_assigned[i]),
         }
         _fill_identity(ds, fid, spot, metadata[fid], identity_cache)
     ds.feature_ids = feature_ids

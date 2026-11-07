@@ -309,11 +309,10 @@ def test_arf_spot_mz_is_the_highest_detected_cell_not_sample_zero(tmp_path):
     _shift_sample0_mz(paths["arf"], spec)
     # 試料 0 の行の m/z だけ 0.023 ずれたスポットが 4%。`.arf` から作ったスポットの代表 m/z
     # （検出されたセルのうち高さ最大＝試料 3）はずれていない。試料 0 の m/z（400.023）ではない。
-    from metabolomix.dataset import msdial_adapter
     from metabolomix.mztab import evidence
 
-    groups = msdial_adapter._read_groups(paths["arf"])
-    assert evidence.group_representative_mz(groups[10]) == pytest.approx(400.0)
+    scan = evidence.scan_arf(paths["arf"], measures=())
+    assert scan.spot_mz[10] == pytest.approx(400.0)
     assert open_dataset(directory=str(tmp_path / "gui")).dataset.feature_metadata["10"]["mz"] == 400.0
 
 
@@ -775,3 +774,24 @@ def test_pipeline_route_change_during_load_is_not_cached(tmp_path, monkeypatch):
     assert any("読み込みの間に入力が変わった" in note for note in first.notes)
     monkeypatch.setattr(opening, "_open", real_open)
     assert open_dataset(pipeline_path=str(run)).reused_base is False
+
+
+# ---------- `.arf` を 1 回だけ読む（B-2a Task 4） ----------
+
+def test_job_folder_reads_arf_once(tmp_path, monkeypatch):
+    """job の解析フォルダの経路は、mzTab-M との照合に読んだ `.arf` をそのまま使う（読み直さない）。"""
+    from metabolomix.arf import reader as arf_reader
+
+    job = _job(tmp_path)
+    calls: list[int] = []
+    real = arf_reader.iter_groups
+
+    def counting(file_like):
+        calls.append(1)
+        return real(file_like)
+
+    monkeypatch.setattr(arf_reader, "iter_groups", counting)
+    opened = open_dataset(job_path=str(job))
+    assert opened.dataset.source_format == "msdial_folder"
+    assert len(opened.dataset.feature_ids) == 2
+    assert len(calls) == 1

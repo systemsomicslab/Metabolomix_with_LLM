@@ -37,10 +37,10 @@ DatasetState を新しいハンドル（`source.kind="session"`）として登�
 14.            └─ metabolomix/mztab/loading.py read_mztab()
 15.            └─ metabolomix/mztab/evidence.py join_axes()
 16.            └─ metabolomix/mztab/evidence.py matching_arfs()
-17.               └─ metabolomix/mztab/evidence.py load_arf_evidence()
+17.               └─ metabolomix/mztab/evidence.py scan_arf()（最初に通った候補の ArfScan を返す）
 18.            └─ [pipeline で候補が合わないとき] metabolomix/dataset/opening.py pipeline_arf2()
 19.         └─ metabolomix/dataset/alignment_files.py select_alignment()
-20.         └─ metabolomix/dataset/msdial_adapter.py load_msdial_folder()
+20.         └─ metabolomix/dataset/msdial_adapter.py load_msdial_folder()（照合に読んだ ArfScan を使い、`.arf` を読み直さない）
 21.      └─ [pipeline_path を解析フォルダで] metabolomix/dataset/opening.py _folder_via_run()
 22.         └─ metabolomix/pipeline/session_handoff.py run_console_job()
 23.         └─ metabolomix/dataset/opening.py _folder_via_job()
@@ -67,8 +67,9 @@ job / pipeline を解析フォルダで読むときも、ジョブの門（`job_
 `exploratory_only`・`source_verification`・`job_path` を同じ規則で書く。`.arf` は正準
 mzTab-M の evidence と同じ候補（`arf_candidates()`。pipeline はどれも合わなければ run の
 `input/AlignResult-*.arf2` と同じバッチの `.arf` も）のうち、mzTab-M のアダプタが検出状態を
-取り込むときと同じ検証（`matching_arfs()` → `load_arf_evidence()` → `build_evidence()`。
-特徴数・m/z・試料名）を通ったちょうど 1 本。通るものが無ければ `ALIGNMENT_NOT_FOUND`、
+取り込むときと同じ検証（`matching_arfs()` → `scan_arf()` → `scan_evidence()`。`build_evidence()` と
+判定を共有する。特徴数・m/z・試料名）を通ったちょうど 1 本。照合に読んだ `.arf`（`ArfScan`）は
+そのまま `load_msdial_folder()` に渡し、同じ `.arf` を 2 度読まない。通るものが無ければ `ALIGNMENT_NOT_FOUND`、
 2 本以上なら `ALIGNMENT_AMBIGUOUS`（どちらも候補のファイル名を `details.candidates` に載せ、
 `source="mztab"` を案内し、mzTab-M へ黙って切り替えない。`ALIGNMENT_AMBIGUOUS` は、完了した
 ジョブでだけ「ジョブの検査を通らない」注意つきで `directory` も案内する）。ジョブの mzTab-M が
@@ -96,9 +97,9 @@ mztab_path 経路（直接指定）:
 16.      └─ metabolomix/mztab/evidence.py join_axes()
 17.      └─ metabolomix/mztab/evidence.py arf_candidates()
 18.      └─ metabolomix/mztab/evidence.py load_arf_evidence()
-19.         └─ metabolomix/arf/reader.py deserialize()
-20.         └─ metabolomix/mztab/evidence.py normalize_arf_spots()
-21.         └─ metabolomix/mztab/evidence.py build_evidence()
+19.         └─ metabolomix/mztab/evidence.py scan_arf()（`.arf` を 1 回、metabolomix/arf/reader.py iter_groups() でストリーミングに読む）
+20.         └─ metabolomix/mztab/evidence.py scan_evidence()
+21.         └─ metabolomix/mztab/evidence.py _join()（build_evidence() と共有の判定）
 22.      └─ metabolomix/mztab/evidence.py apply_evidence()
 
 job_path 経路（`source="mztab"`。analysis-job.json の宣言 polarity + measure で正準を選ぶ）:

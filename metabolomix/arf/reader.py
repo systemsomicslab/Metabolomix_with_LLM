@@ -5,6 +5,7 @@ import os
 from enum import Enum
 import sys
 import re
+from typing import Iterator
 
 import lz4.block
 import msgpack
@@ -261,14 +262,34 @@ def _is_arf_feature_container_object(item) -> bool:
     return isinstance(item, list) and any(_is_arf_peak_group(e) for e in item)
 
 
-def _iter_lz4_decompressed_blocks(data: bytes):
+def _top_level_stream(source):
+    """トップレベルのオブジェクト（LZ4 ブロック）を順に解く Unpacker。
+
+    source はファイル（バイナリで開いたもの）か bytes。ファイルなら全体を 1 つの bytes に
+    読み込まず、ブロック 1 つ分ずつ読む（圧縮されたブロックの写しは 1 つずつしか持たない）。
+    """
+    if isinstance(source, (bytes, bytearray, memoryview)):
+        return _msgpack_stream(bytes(source))
+    return msgpack.Unpacker(
+        source,
+        raw=False,
+        unicode_errors="ignore",  # _msgpack_stream と同じ規約
+        strict_map_key=False,
+        max_buffer_size=1024 * 1024 * 1024,
+        read_size=1024 * 1024,
+    )
+
+
+def _iter_lz4_decompressed_blocks(source):
     """トップレベルのブロックを展開済みバイト列のまま返す（msgpack は解かない）。
 
     実ファイルは全体が 1 ブロックのことがある（185 MB → 展開 966 MB。issue #4）。
     展開後を `list(...)` で一度に Python オブジェクト化すると全行が同時に生きるので、
-    解くのは呼び出し側がグループ単位で行う。
+    解くのは呼び出し側がグループ単位で行う。LZ4 のブロックは丸ごとでしか伸長できないので、
+    展開後のバイト列はブロック 1 つ分を持つ（それより細かくはできない）。
+    source はファイルか bytes（`_top_level_stream`）。
     """
-    for block_index, obj in enumerate(_msgpack_stream(data)):
+    for block_index, obj in enumerate(_top_level_stream(source)):
         payload = _payload_from_top_level_object(obj)
         obj = None  # 圧縮ペイロードの写しを展開後まで抱えない
         if payload is None:
@@ -330,8 +351,8 @@ def _iter_peak_groups_in_stream(decompressed: bytes):
         return
 
 
-def _iter_arf_peak_groups(data: bytes):
-    for block_index, decompressed in _iter_lz4_decompressed_blocks(data):
+def _iter_arf_peak_groups(source):
+    for block_index, decompressed in _iter_lz4_decompressed_blocks(source):
         local_index = 0
         for group in _iter_peak_groups_in_stream(decompressed):
             yield block_index, local_index, group
@@ -412,15 +433,21 @@ def _slim_row(row, shared_names: dict):
     return slim
 
 
-def deserialize(file_like_object) -> list[dict]:
-    data = file_like_object.read()
-    results = []
-    rows = 0
-    shared_names: dict[str, str] = {}
+def iter_groups(file_like_object) -> Iterator[dict]:
+    """`.arf` のスポットを 1 つずつ返す（`deserialize` の 1 要素と同じ形）。
 
+    `{"MasterAlignmentID", "AlignmentID", "RT", "MassCenter", "IonMode", "Name",
+    "HeightAverage", "AlignedPeakProperties": [細くした行, ...], "SourceBlockIndex",
+    "SourceLocalIndex"}`。ファイルを丸ごと 1 つの bytes に読まず、群は msgpack の
+    Unpacker が 1 つずつ取り出す。全体のリストは作らない（呼び出し側が要るものだけ残す）。
+
+    RAM が尽きたら、そこまでに返したスポット数・行数を `ArfMemoryError` に載せて投げ直す。
+    """
+    spots = rows = 0
+    shared_names: dict[str, str] = {}
     try:
         for group_index, (block_index, local_index, group) in enumerate(
-            _iter_arf_peak_groups(data),
+            _iter_arf_peak_groups(file_like_object),
             start=0,
         ):
             formatted = extract_arf_data(
@@ -429,20 +456,100 @@ def deserialize(file_like_object) -> list[dict]:
                 source_block_index=block_index,
                 source_local_index=local_index,
             )
-            if formatted is not None:
-                formatted["MasterAlignmentID"] = group_index
-                formatted["AlignmentID"] = group_index
-                # spot 単位の値（RT / Name 等）は生の代表行から取り終えている。
-                formatted["AlignedPeakProperties"] = [
-                    _slim_row(row, shared_names) for row in group
-                ]
-                results.append(formatted)
-                rows += len(group)
+            if formatted is None:
+                continue
+            formatted["MasterAlignmentID"] = group_index
+            formatted["AlignmentID"] = group_index
+            # spot 単位の値（RT / Name 等）は生の代表行から取り終えている。
+            formatted["AlignedPeakProperties"] = [
+                _slim_row(row, shared_names) for row in group
+            ]
+            spots += 1
+            rows += len(group)
+            group = None  # 返したあとまで生の行を抱えない
+            yield formatted
     except MemoryError as exc:
         # 規模を運ぶ例外へ詰め替える。ここで確保するのは小さなオブジェクト 1 つで、
         # 失敗した確保（数 GB 単位）とは桁が違う。
-        raise ArfMemoryError(spots=len(results), rows=rows) from exc
-    return results
+        raise ArfMemoryError(spots=spots, rows=rows) from exc
+
+
+def deserialize(file_like_object) -> list[dict]:
+    """`.arf` の全スポットのリスト（`iter_groups` を最後まで回したもの）。"""
+    return list(iter_groups(file_like_object))
+
+
+#: msgpack の ext の型バイト → データ長の読み方（fixext は長さ固定、ext8/16/32 は長さのバイト数）。
+_FIXEXT_LENGTH = {0xD4: 1, 0xD5: 2, 0xD6: 4, 0xD7: 8, 0xD8: 16}
+_EXT_LENGTH_BYTES = {0xC7: 1, 0xC8: 2, 0xC9: 4}
+
+
+def _leading_size(payload: bytes) -> int:
+    """LZ4 ブロックの先頭の整数（伸長後の大きさ）。整数でなければ 0（そのブロックは読まれない）。"""
+    try:
+        size = next(msgpack.Unpacker(io.BytesIO(payload), raw=False, strict_map_key=False))
+    except (StopIteration, msgpack.OutOfData, ValueError):
+        return 0
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        return 0
+    return size
+
+
+def _skip(file_like_object, count: int) -> int:
+    """count バイト読み飛ばし、実際に飛ばせたバイト数を返す（末尾が切れていれば少ない）。"""
+    if count <= 0:
+        return 0
+    seekable = getattr(file_like_object, "seekable", None)
+    if seekable is not None and seekable():
+        here = file_like_object.tell()
+        end = file_like_object.seek(0, io.SEEK_END)
+        target = min(here + count, end)
+        file_like_object.seek(target)
+        return target - here
+    skipped = 0
+    while skipped < count:
+        chunk = file_like_object.read(min(count - skipped, 1024 * 1024))
+        if not chunk:
+            break
+        skipped += len(chunk)
+    return skipped
+
+
+def uncompressed_size(file_like_object) -> int:
+    """`.arf` の LZ4 ブロックの伸長後の大きさの和（バイト）。伸長しない。
+
+    各ブロックの先頭の整数（MessagePack-CSharp の Lz4Block が書く伸長後の長さ）を足す。
+    ext のブロックはヘッダと先頭の整数だけを読み、残りは読み飛ばす。ext でない
+    トップレベル（`[ヘッダ, 本体]` の配列）は msgpack に解かせる（`_payload_from_top_level_object`
+    と同じ見分け方）。末尾が切れたブロックは、reader も読まないので数えない。
+    """
+    total = 0
+    while True:
+        first = file_like_object.read(1)
+        if not first:
+            return total
+        tag = first[0]
+        if tag in _FIXEXT_LENGTH:
+            length = _FIXEXT_LENGTH[tag]
+        elif tag in _EXT_LENGTH_BYTES:
+            width = _EXT_LENGTH_BYTES[tag]
+            raw_length = file_like_object.read(width)
+            if len(raw_length) < width:
+                return total
+            length = int.from_bytes(raw_length, "big")
+        else:
+            file_like_object.seek(-1, io.SEEK_CUR)
+            for obj in _top_level_stream(file_like_object):
+                payload = _payload_from_top_level_object(obj)
+                if payload is not None:
+                    total += _leading_size(payload)
+            return total
+        if not file_like_object.read(1):  # ext の型コード
+            return total
+        head = file_like_object.read(min(length, 9))  # msgpack の整数は最大 9 バイト
+        if _skip(file_like_object, length - len(head)) + len(head) < length:
+            return total
+        total += _leading_size(head)
 
 
 def _is_alignment_peak_row(data) -> bool:
