@@ -40,7 +40,7 @@ def test_load_spot_fields_keeps_file_order(tmp_path):
     assert [f["master_id"] for f in load_spot_fields(path)] == [0, 1, 2]
 
 
-def test_empty_spot_array_is_reported():
+def test_empty_spot_array_is_reported(tmp_path):
     import pytest
 
     from metabolomix.arf2.match_results import spot_annotation
@@ -51,6 +51,14 @@ def test_empty_spot_array_is_reported():
             with pytest.raises(DomainError) as exc:
                 call(raw)
             assert exc.value.code == "ARF2_SPOT_MALFORMED"
+    # ファイルの 3 番目（index 2）が壊れているとき、位置が message と details に載る。
+    from metabolomix.arf2.match_results import load_spot_annotations, load_spot_candidates
+
+    path = write_arf2(tmp_path / "bad.arf2", [arf2_spot_raw(spot_id=0), arf2_spot_raw(spot_id=1), [None] * 60])
+    for load in (load_spot_fields, load_spot_annotations, load_spot_candidates):
+        with pytest.raises(DomainError) as exc:
+            load(path)
+        assert exc.value.details["spot_index"] == 2 and "2 番目" in exc.value.message
 
 
 def test_spot_fields_values():

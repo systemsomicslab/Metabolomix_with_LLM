@@ -121,22 +121,25 @@ def name_prefix(name) -> str | None:
     return _QUALIFIER_LABELS.get(normalized)
 
 
-def spot_master_id(raw_spot) -> int:
-    """スポットの MasterAlignmentID（Key0）。空・短い・数でない配列は `ARF2_SPOT_MALFORMED`。"""
+def spot_master_id(raw_spot, index: int | None = None) -> int:
+    """スポットの MasterAlignmentID（Key0）。空・短い・数でない配列は `ARF2_SPOT_MALFORMED`。
+
+    `index` はファイル内のスポットの位置（0 始まり）で、メッセージと details の `spot_index` に載せる。"""
     from metabolomix.core.atomic_io import DomainError
 
     try:
         return int(raw_spot[0])
     except (TypeError, ValueError, IndexError, KeyError) as exc:
         shape = f"{len(raw_spot)} 要素" if isinstance(raw_spot, (list, tuple)) else type(raw_spot).__name__
+        where = f"{index} 番目の" if index is not None else ""
         raise DomainError(
             "ARF2_SPOT_MALFORMED",
-            f".arf2 のスポットの形が壊れている（{shape}。Key0 の MasterAlignmentID を読めない）。",
-            {"spot_shape": shape}) from exc
+            f".arf2 の{where}スポットの形が壊れている（{shape}。Key0 の MasterAlignmentID を読めない）。",
+            {"spot_shape": shape, "spot_index": index}) from exc
 
 
-def spot_annotation(raw_spot: list) -> dict:
-    master_id = spot_master_id(raw_spot)
+def spot_annotation(raw_spot: list, index: int | None = None) -> dict:
+    master_id = spot_master_id(raw_spot, index)
     container = raw_spot[56] if len(raw_spot) > 56 else None
     return {
         "spot_id": master_id,
@@ -150,10 +153,10 @@ def spot_annotation(raw_spot: list) -> dict:
 def load_spot_annotations(file_path) -> dict[int, dict]:
     """`.arf2` の全スポットについて代表の照合結果を MasterAlignmentID で引ける形にする。"""
     return {entry["spot_id"]: entry
-            for entry in (spot_annotation(raw) for raw in load_raw_spots(file_path))}
+            for entry in (spot_annotation(raw, i) for i, raw in enumerate(load_raw_spots(file_path)))}
 
 
 def load_spot_candidates(file_path) -> dict[int, list[dict]]:
     """MasterAlignmentID → 使える候補の一覧（代表を含む）。"""
-    return {spot_master_id(raw): usable_candidates(raw[56] if len(raw) > 56 else None)
-            for raw in load_raw_spots(file_path)}
+    return {spot_master_id(raw, i): usable_candidates(raw[56] if len(raw) > 56 else None)
+            for i, raw in enumerate(load_raw_spots(file_path))}

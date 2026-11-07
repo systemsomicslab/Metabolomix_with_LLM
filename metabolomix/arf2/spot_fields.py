@@ -41,8 +41,8 @@ def _is_text_db_representative(container, rep: dict | None) -> bool:
     return False
 
 
-def spot_fields(raw_spot: list) -> dict:
-    master_id = spot_master_id(raw_spot)
+def spot_fields(raw_spot: list, index: int | None = None) -> dict:
+    master_id = spot_master_id(raw_spot, index)
     chromx = _get(raw_spot, 4)
     times = _extract_times(chromx) if isinstance(chromx, list) else {}
     container = _get(raw_spot, 56)
@@ -73,4 +73,4 @@ def spot_fields(raw_spot: list) -> dict:
 
 def load_spot_fields(arf2_path) -> list[dict]:
     """`.arf2` の全スポットの欄をファイル順に返す。"""
-    return [spot_fields(raw) for raw in load_raw_spots(arf2_path)]
+    return [spot_fields(raw, i) for i, raw in enumerate(load_raw_spots(arf2_path))]

@@ -23,11 +23,12 @@ class MsdialClassTests(unittest.TestCase):
     def test_decode_and_parse_analysis_file_classes(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "dataset.mddata"
-            storage = [[
+            rows = [
                 analysis_file_row(0, "sample_A", "control"),
                 analysis_file_row(1, "sample_B", "treated"),
-            ], [], [], [], [], None, None, None, None]
-            path.write_bytes(pack_msdial(storage))
+            ]
+            storage = [rows, [], [], [], [], None, None, None, None]
+            write_mddata(path, rows)
 
             self.assertEqual(decode_msdial_messagepack(path.read_bytes()), storage)
             records = parse_analysis_file_classes(path)
@@ -38,7 +39,7 @@ class MsdialClassTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             mddata = directory / "dataset.mddata"
-            mddata.write_bytes(pack_msdial([[], [], [], [], [], None, None, None, None]))
+            write_mddata(mddata, [])
             project_parameter = [None, None, "version", "C:/old/location", "dataset.mddata"]
             project = {"ProjectParameters": [project_parameter]}
             mdproject = directory / "project.mdproject"
@@ -52,8 +53,8 @@ class MsdialClassTests(unittest.TestCase):
             directory = Path(tmp)
             older = directory / "Dataset_2024_06_13_03_04_16.mddata"
             newer = directory / "Dataset_2026_06_17_00_34_26.mddata"
-            older.write_bytes(pack_msdial([[analysis_file_row(0, "sample_A", "old")], [], [], [], [], None, None, None, None]))
-            newer.write_bytes(pack_msdial([[analysis_file_row(0, "sample_A", "new")], [], [], [], [], None, None, None, None]))
+            write_mddata(older, [analysis_file_row(0, "sample_A", "old")])
+            write_mddata(newer, [analysis_file_row(0, "sample_A", "new")])
 
             self.assertEqual(resolve_mddata_path(directory), newer.resolve())
             index = discover_arf_class_index(directory / "result_PeakProperties.arf")
@@ -65,8 +66,8 @@ class MsdialClassTests(unittest.TestCase):
             directory = Path(tmp)
             older = directory / "Dataset_2024_06_13_03_04_16.mddata"
             newer = directory / "Dataset_2026_06_17_00_34_26.mddata"
-            older.write_bytes(pack_msdial([[analysis_file_row(0, "sample_A", "matching")], [], [], [], [], None, None, None, None]))
-            newer.write_bytes(pack_msdial([[analysis_file_row(0, "sample_A", "too_new")], [], [], [], [], None, None, None, None]))
+            write_mddata(older, [analysis_file_row(0, "sample_A", "matching")])
+            write_mddata(newer, [analysis_file_row(0, "sample_A", "too_new")])
             arf_path = directory / "AlignmentResult_2024_06_13_09_21_45_PeakProperties.arf"
             arf_path.touch()
 
@@ -87,8 +88,7 @@ class MsdialClassTests(unittest.TestCase):
                 class_id = "A" if file_id % 2 == 0 else "B"
                 rows.append([file_id, name, 1000 + file_id])
                 analysis_files.append(analysis_file_row(file_id, name, class_id))
-            storage = [analysis_files, [], [], [], [], None, None, None, None]
-            (directory / "dataset.mddata").write_bytes(pack_msdial(storage))
+            write_mddata(directory / "dataset.mddata", analysis_files)
             features = [{"MasterAlignmentID": 1, "AlignedPeakProperties": rows}]
 
             index = discover_arf_class_index(arf_path)
