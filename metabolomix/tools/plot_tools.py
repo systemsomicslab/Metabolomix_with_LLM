@@ -8,8 +8,13 @@
     volcano        lipidmix.volcano.v1        直近の差次的結果（2 群）か `result_id`
     pca            lipidmix.pca_scores.v1     直近の `dataset_pca` か `result_id`。`color_by`
     loadings       lipidmix.pca_loadings.v1   同じ PCA。`pcs` `top_n` `value`
+    group_intensity  lipidmix.group_intensity.v1   項目（クラス・分子種）ごとの群別の試料別強度
+    species        lipidmix.species_intensity.v1 分子種（スポット）ごとの群別の値（割合か強度）
+    species_pca    lipidmix.species_pca.v1    選んだ分子種の PCA のスコア図（結果も登録する）
     eic            lipidmix.eic.v1            `feature_id`（= MasterAlignmentID）の試料別クロマトグラム
     eic_compounds  lipidmix.eic.multi.v1      1 試料に同定済みの物質を重ねる
+
+group_intensity / species / species_pca は `plot_species_kinds.py`（項目の解決・行は `plots/dataset_rows.py`）。
 """
 from __future__ import annotations
 
@@ -29,10 +34,13 @@ from metabolomix.core.serialization import json_payload
 from metabolomix.dataset.artifacts import artifact_path
 from metabolomix.plots import eic as eic_plot
 from metabolomix.plots import pca_loadings as loadings_plot
+from metabolomix.plots import group_intensity as group_intensity_plot
 from metabolomix.plots import pca_scores as scores_plot
 from metabolomix.plots import render as plot_render
+from metabolomix.plots import species as species_plot
 from metabolomix.plots import volcano as volcano_plot
 from metabolomix.plots.result_output import build_annotated, figure_annotations
+from metabolomix.tools import plot_species_kinds
 from metabolomix.tools._holder import resolve_holder
 
 __all__ = ["dataset_plot"]
@@ -40,11 +48,18 @@ __all__ = ["dataset_plot"]
 #: 結果（`ds.last_*` / `ds.results`）から描く kind。`result_id` を受ける。
 RESULT_KINDS = ("volcano", "pca", "loadings")
 
+#: 項目を選んで群ごとに描く kind（`plot_species_kinds`）が共有する引数。
+_ITEM_ARGS = ("items", "groups", "low_reliability_samples", "standard_samples", "apply_curation",
+              "exclude_auto_likely_wrong")
+
 #: kind ごとの引数。ここに無い引数が渡されたら、どの kind の引数かを添えて拒む。
 _KIND_ARGS: dict[str, tuple[str, ...]] = {
     "volcano": (),
     "pca": ("color_by",),
     "loadings": ("pcs", "top_n", "value"),
+    "group_intensity": _ITEM_ARGS + ("detection_limit",),
+    "species": _ITEM_ARGS + ("value", "share_basis", "require_msms"),
+    "species_pca": _ITEM_ARGS + ("require_msms", "normalize", "log_transform", "orient_by"),
     "eic": ("feature_id", "file_ids"),
     "eic_compounds": ("file_id", "names", "ontologies"),
 }
@@ -78,6 +93,18 @@ class _Request:
     file_id: int | None = None
     names: list[str] | None = None
     ontologies: list[str] | None = None
+    items: list[str] | None = None
+    groups: list[str] | None = None
+    low_reliability_samples: list[str] | None = None
+    standard_samples: list[str] | None = None
+    apply_curation: bool | None = None
+    exclude_auto_likely_wrong: bool | None = None
+    detection_limit: float | None = None
+    share_basis: list[str] | None = None
+    require_msms: bool | None = None
+    normalize: str | None = None
+    log_transform: bool | None = None
+    orient_by: str | None = None
     given: set = field(default_factory=set)
 
 
@@ -359,6 +386,9 @@ _KINDS: dict[str, Callable[[object, _Request], dict]] = {
     "volcano": _volcano,
     "pca": _pca,
     "loadings": _loadings,
+    "group_intensity": plot_species_kinds.group_intensity,
+    "species": plot_species_kinds.species,
+    "species_pca": plot_species_kinds.species_pca,
     "eic": _eic,
     "eic_compounds": _eic_compounds,
 }
@@ -384,6 +414,14 @@ def _png(ds, record: dict) -> bytes:
                                       record["payload"], title=title)
     if kind == "loadings":
         return plot_render.render_png(loadings_plot.render_loadings_plot, record["payload"], title=title)
+    if kind == "group_intensity":
+        return plot_render.render_png(group_intensity_plot.render_group_intensity_plot,
+                                      record["payload"], title=title)
+    if kind == "species":
+        return plot_render.render_png(species_plot.render_species_plot, record["payload"], title=title)
+    if kind == "species_pca":
+        return plot_render.render_png(scores_plot.render_pca_scores, record["payload"],
+                                      title=title or record["payload"]["title"])
     return plot_render.render_png(eic_plot.render_eic_plot, record["payload"], title=title)
 
 
@@ -412,6 +450,18 @@ def dataset_plot(
     file_id: int | None = None,
     names: list[str] | None = None,
     ontologies: list[str] | None = None,
+    items: list[str] | None = None,
+    groups: list[str] | None = None,
+    low_reliability_samples: list[str] | None = None,
+    standard_samples: list[str] | None = None,
+    apply_curation: bool | None = None,
+    exclude_auto_likely_wrong: bool | None = None,
+    detection_limit: float | None = None,
+    share_basis: list[str] | None = None,
+    require_msms: bool | None = None,
+    normalize: str | None = None,
+    log_transform: bool | None = None,
+    orient_by: str | None = None,
 ) -> list | str:
     """データセットの図を描く — 既定は PNG 画像と 1 行の説明。ファイルは書かない（保存は `save_figure`）。
 
@@ -426,13 +476,34 @@ def dataset_plot(
       - `eic_compounds`: 1 試料（`file_id`）に、同定済みの物質（`names` は名前の部分一致、`ontologies` は
         クラスの完全一致。どちらかが要る）を重ねる。RT と m/z が特徴表と合わない物質は描かず、理由は
         payload の `selection.dropped`。
+      - `group_intensity`: 項目（`items` = クラス名〔`ontology` に完全一致。配下の全特徴の合計〕・分子種名〔`|` で
+        分けた候補名に完全一致〕・特徴 ID。`"PE+EtherPE"` のように `+` で合算。当たらない項目は N.D.、1〜30 件）
+        ごとに、群（`groups` = 試料名・Class ID・因子のトークン。1 群以上。QC・ブランクは `qc` / `blank` を
+        書いたときだけ入る）の試料別の強度合計を 1 パネルに並べる。縦軸は log10 で全パネル共通、群は log10 の
+        平均 ± SD。検定はしない（`dataset_differential`）。`detection_limit` は検出下限の破線（省略時は
+        param ファイルの Minimum peak height）。
+      - `species`: `items` を分子種（特徴）に展開し、1 分子種 1 パネル（1 回 40 まで）。`value="share"`（既定。
+        試料ごとの 値 ÷ 分母の合計 × 100。棒 = 群平均、ひげ = SD）/ `"intensity"`（log10 の平均 ± SD）。
+        `share_basis` は割合の分母にする項目（省略時は `items`。当たらない部品があると分母が変わるので描かずに
+        エラー）。`require_msms=True` で MS/MS の裏付けの無い分子種も（分母からも）除く。
+      - `species_pca`: 選んだ分子種（`species` と同じ `items` `groups` `require_msms`）の PCA のスコア図。
+        `normalize="none"`（既定）/ `"total"`、`log_transform`（既定 True）、`orient_by`（群名。その群の平均
+        スコアが正になる向きにそろえる）。`low_reliability_samples` は計算に使わず投影だけ。結果は
+        `result_id`（`lipidmix.species_pca.v1`）で登録する。
+      3 つの共通: `low_reliability_samples`（白抜き。平均・SD から外す）、`standard_samples`（その試料にだけ
+        実質的な強度がある分子種をクラスの合計から外す）、`apply_curation`（既定 True。`.arf2` の人の判断
+        〔wrong / redundant 除外・assign の付け替え〕）、`exclude_auto_likely_wrong`（最新の `curation_review` の
+        likely_wrong も除く）。除いたものは payload の `excluded`。内部標準（`(d7)` 等）はクラスの合計に入れない。
+        `dataset_exclude` した試料は描かず、除外した特徴はクラスにも名前指定にも入れない。
+        群・試料の情報は図に焼き込む（試料の情報を更新したあとの図は `save_figure` が古いとして拒む）。
     `.EIC.aef` の無いデータセット（mzTab-M だけ）の `eic` 系は COMPANION_ARTIFACT_MISSING。
 
     結果は**現在のものだけ**描く: 前処理・除外・群の変更で古くなった結果の `result_id` は
     STALE_ANALYSIS_RESULT で拒む。`result_id` を省いて直近の結果が無ければ missing_state（作り直すツールを案内）。
 
     output: `"image"`（既定）= PNG と説明。`"payload"` = 描画中立の点列 JSON（形式名 `lipidmix.volcano.v1`
-      `lipidmix.pca_scores.v1` `lipidmix.pca_loadings.v1` `lipidmix.eic.v1` `lipidmix.eic.multi.v1`。
+      `lipidmix.pca_scores.v1` `lipidmix.pca_loadings.v1` `lipidmix.group_intensity.v1`
+      `lipidmix.species_intensity.v1` `lipidmix.species_pca.v1` `lipidmix.eic.v1` `lipidmix.eic.multi.v1`。
       volcano は有意な点を全件、ns の点を間引いて返す）。環境変数 `LIPIDMIX_PLOT_OUTPUT` で既定を変えられる。
       座標を LLM に渡すより画像のほうが桁違いに安いので、画面に出すだけなら image。
     title: 図の題。dataset_handle: `load_dataset` が返したハンドル（省略時は直近）。
@@ -441,11 +512,21 @@ def dataset_plot(
     """
     request = _Request(
         result_id=result_id, title=title, color_by=color_by, pcs=pcs, top_n=top_n, value=value,
-        feature_id=feature_id, file_ids=file_ids, file_id=file_id, names=names, ontologies=ontologies)
+        feature_id=feature_id, file_ids=file_ids, file_id=file_id, names=names, ontologies=ontologies,
+        items=items, groups=groups, low_reliability_samples=low_reliability_samples,
+        standard_samples=standard_samples, apply_curation=apply_curation,
+        exclude_auto_likely_wrong=exclude_auto_likely_wrong, detection_limit=detection_limit,
+        share_basis=share_basis, require_msms=require_msms, normalize=normalize,
+        log_transform=log_transform, orient_by=orient_by)
     request.given = {name for name, given in (
         ("result_id", result_id), ("color_by", color_by), ("pcs", pcs), ("top_n", top_n),
         ("value", value), ("feature_id", feature_id), ("file_ids", file_ids),
-        ("file_id", file_id), ("names", names), ("ontologies", ontologies)) if given is not None}
+        ("file_id", file_id), ("names", names), ("ontologies", ontologies), ("items", items),
+        ("groups", groups), ("low_reliability_samples", low_reliability_samples),
+        ("standard_samples", standard_samples), ("apply_curation", apply_curation),
+        ("exclude_auto_likely_wrong", exclude_auto_likely_wrong), ("detection_limit", detection_limit),
+        ("share_basis", share_basis), ("require_msms", require_msms), ("normalize", normalize),
+        ("log_transform", log_transform), ("orient_by", orient_by)) if given is not None}
     if kind not in _KINDS:
         return mztab_error("DATASET_BAD_REQUEST",
                            f"kind は {', '.join(_KINDS)} のどれかを指定してください（受け取った値: {kind!r}）。",

@@ -200,6 +200,14 @@ def test_payload_format_names_are_kept(tmp_path):
                     dataset_handle=handle.handle_id)["plot_schema"] == "lipidmix.eic.v1"
     assert _payload(kind="eic_compounds", file_id=0, ontologies=["PC"],
                     dataset_handle=handle.handle_id)["plot_schema"] == "lipidmix.eic.multi.v1"
+    # 項目を選んで群ごとに描く 3 つ（Task 7）。g1 = s0・s1、g2 = s2
+    handle_id = handle.handle_id
+    assert _payload(kind="group_intensity", items=["PC"], groups=["g1", "g2"],
+                    dataset_handle=handle_id)["plot_schema"] == "lipidmix.group_intensity.v1"
+    assert _payload(kind="species", items=["PC"], groups=["g1", "g2"],
+                    dataset_handle=handle_id)["plot_schema"] == "lipidmix.species_intensity.v1"
+    assert _payload(kind="species_pca", items=["PC"], groups=["g1", "g2"],
+                    dataset_handle=handle_id)["plot_schema"] == "lipidmix.species_pca.v1"
 
 
 def test_irrelevant_argument_rejected():

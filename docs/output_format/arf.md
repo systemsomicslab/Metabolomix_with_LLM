@@ -309,6 +309,22 @@ mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`。
 （`.arf2` は MS/MS 取得フラグを持たない）。`arf2_annotate_identities` と同じ
 保守的なクラス上限を使う。
 
+### 11.4.9 データセットの上の同じ図（`dataset_plot`。B-2b Task 7）
+
+`dataset_plot(kind="group_intensity" | "species" | "species_pca")` が、下の §11.5〜11.7 の旧ツール
+（`arf_plot_group_intensity` `arf_plot_species` `arf_pca_species`）と**同じ payload 契約**
+（`lipidmix.group_intensity.v1` `lipidmix.species_intensity.v1`、分子種 PCA は新設の `lipidmix.species_pca.v1`）を
+`DatasetState`（`load_dataset` で開いたハンドル）から作る。引数と除外の意味は旧ツールのまま
+（`items` は特徴 ID も受ける。`value` は `"share"` / `"intensity"` で、`"intensity"` の payload の `value` は
+旧来の `"height"`。`ncols` は無い）。違いは入力の取り方だけ: 値は `feature_matrix`、gap-filled の印は
+`detected_mask`、群と役割は試料の対応表、MS/MS の裏付けは `.arf` のセルの MS/MS の有無（`.arf2` の
+`has_msms` ではない）と `.arf2` の Name の接頭辞、人の判断は `load_dataset` が読んだ `.arf2` のキュレーション、
+除外は `dataset_exclude`（試料は描かず、特徴はクラスにも名前にも入れない）。`species_pca` の payload は
+`points`（`fitted` が False の点は投影だけ）・`explained_variance_ratio`・`pc1_r_top` / `pc1_r_bottom`・`result_id`
+などで、ローディングの全行は `ds.results[result_id]` に持つ。`ds.figures[kind]` に置かれ、
+`save_figure(kind=...)` が dpi 300 の PNG と SVG を書く（試料の情報の更新後は作り直しを求められる）。
+Task 11 でこの節は `dataset` トピックへまとめ直す。
+
 ### 11.5 `arf_plot_group_intensity` の返り値（`lipidmix.group_intensity.v1`）
 
 選んだクラス・分子種が、指定した試料群のそれぞれで**見つかるか・どれくらいあるか**を示す

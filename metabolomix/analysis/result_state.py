@@ -159,7 +159,9 @@ def preprocess_fingerprint(ds, recipe: dict, metadata_hash: str | None = None) -
 
 
 #: `dataset_plot` の kind のうち、PCA の結果・差次的結果から作るもの（`ds.figures` のキー）。
-_PCA_FIGURES = ("pca", "loadings")
+#: `species_pca`（選んだ分子種の PCA）は前処理済み行列を使わないが、除外・前処理の入力の変更で
+#: 行列と同じく古くなるので `pca` と同じ組に入れる。
+_PCA_FIGURES = ("pca", "loadings", "species_pca")
 _DIFFERENTIAL_FIGURES = ("volcano",)
 
 

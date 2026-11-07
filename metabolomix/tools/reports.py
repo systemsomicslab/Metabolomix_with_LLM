@@ -111,10 +111,15 @@ def _list_reports() -> str:
 
 
 #: save_figure が受け付ける図の種類（`dataset_plot` の kind）。
-FIGURE_KINDS = ("pca", "volcano", "loadings", "eic", "eic_compounds")
+FIGURE_KINDS = ("pca", "volcano", "loadings", "group_intensity", "species", "species_pca",
+                "eic", "eic_compounds")
 #: `result_id` で登録された結果から描ける kind（`ds.results`）。
 _RESULT_KINDS = ("pca", "volcano", "loadings")
+#: 結果から作った図（保存の直前に、その結果が今のものか確かめる）。`species_pca` は項目の指定から作る
+#: 結果なので `result_id` では描き直せない（`_RESULT_KINDS` には入れない）。
+_RESULT_DERIVED_KINDS = _RESULT_KINDS + ("species_pca",)
 _LABELS = {"pca": "PCA", "volcano": "volcano", "loadings": "ローディング",
+           "group_intensity": "群別強度", "species": "分子種", "species_pca": "分子種の PCA",
            "eic": "EIC", "eic_compounds": "EIC 重ね描き"}
 
 
@@ -125,10 +130,12 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
                 result_id: str | None = None, dataset_handle: str | None = None) -> str:
     """明示的なユーザー要求時だけ、データセットの図を reports/figures/<analysis_id>_<kind>.png に保存する。
 
-    kind は `dataset_plot` の kind: "pca" / "volcano"（間引き前の全点）/ "loadings"（dpi 300 の PNG と
-    同名 .svg）/ "eic" / "eic_compounds"。`dataset_plot` が最後に作った図（`ds.figures[kind]`）を描く。
+    kind は `dataset_plot` の kind: "pca" / "volcano"（間引き前の全点）/ "loadings" / "group_intensity" /
+    "species" / "species_pca"（いずれも dpi 300 の PNG と同名 .svg）/ "eic" / "eic_compounds"。`dataset_plot` が最後に作った図（`ds.figures[kind]`）を描く。
     まだ図が無ければ missing_state（`dataset_plot` を案内）。結果から作った図（pca / volcano / loadings）は、
     その結果が現在のものでなければ（前処理・除外・群の変更で古くなった）保存しない。
+    group_intensity / species / species_pca は群を図に焼き込むので、試料の情報（群・役割）が更新されたあとは保存しない
+    （species_pca は結果から作った図でもある）。
     eic / eic_compounds は結果から作った図ではないので、描いたとおりに保存する（あとで `dataset_exclude` しても変わらない）。
     result_id: kind が pca / volcano / loadings のときだけ。登録された結果を名指しして描く
       （`dataset_plot` を呼ばなくてよい。古い結果は STALE_ANALYSIS_RESULT）。
@@ -184,7 +191,7 @@ def _stale_figure(ds, record: dict) -> str | None:
         return (f"この図は試料の情報（群・バッチ・役割）を色に焼き込んだものですが、その後に試料の情報が更新されました"
                 f"（実験情報シートの適用・除外など）。dataset_plot(kind=\"{record['kind']}\") で作り直してください。")
     result_id = record.get("result_id")
-    if record["kind"] not in _RESULT_KINDS or result_id is None:
+    if record["kind"] not in _RESULT_DERIVED_KINDS or result_id is None:
         return None
     result = (ds.results or {}).get(result_id)
     if result is None or not is_current(ds, result):
@@ -196,7 +203,10 @@ def _stale_figure(ds, record: dict) -> str | None:
 def _save_record(ds, record: dict, analysis_id: str, title: str | None) -> str:
     """図の記録を `reports/figures/` に保存し、どの結果から描いたかを添えて返す。"""
     from metabolomix.plots import eic as eic_plot
+    from metabolomix.plots import group_intensity as group_intensity_plot
     from metabolomix.plots import pca_loadings as loadings_plot
+    from metabolomix.plots import pca_scores as scores_plot
+    from metabolomix.plots import species as species_plot
     from metabolomix.plots.result_output import save_result_figure
 
     kind = record["kind"]
@@ -209,6 +219,13 @@ def _save_record(ds, record: dict, analysis_id: str, title: str | None) -> str:
         save_result_figure(ds, record["result"], out_path, kind="volcano", title=title)
     elif kind == "loadings":
         _write_png_and_svg(loadings_plot.render_loadings_plot, out_path, record["payload"], title=title)
+        both = "（同名の .svg も保存）"
+    elif kind in ("group_intensity", "species", "species_pca"):
+        build = {"group_intensity": group_intensity_plot.render_group_intensity_plot,
+                 "species": species_plot.render_species_plot,
+                 "species_pca": scores_plot.render_pca_scores}[kind]
+        _write_png_and_svg(build, out_path, record["payload"],
+                           title=title or (record["payload"]["title"] if kind == "species_pca" else None))
         both = "（同名の .svg も保存）"
     else:
         render_files(eic_plot.render_eic_plot, {"png": out_path}, record["payload"], dpi=120, title=title)
