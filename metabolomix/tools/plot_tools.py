@@ -81,10 +81,15 @@ class _Request:
     given: set = field(default_factory=set)
 
 
-def _record(kind: str, payload: dict, *, title, caption: str, result_id=None, result=None) -> dict:
-    """`ds.figures[kind]` に置く図の記録（`save_figure` が読む）。"""
+def _record(kind: str, payload: dict, *, title, caption: str, result_id=None, result=None,
+            metadata_revision: int | None = None) -> dict:
+    """`ds.figures[kind]` に置く図の記録（`save_figure` が読む）。
+
+    `metadata_revision` は、試料の情報（群・バッチ・役割）を色や題に焼き込んだ図だけが持つ。
+    情報が更新されると（結果は現在のままでも）図は古い——`save_figure` が版の違いで拒む。
+    """
     return {"kind": kind, "payload": payload, "title": title, "caption": caption,
-            "result_id": result_id, "result": result}
+            "result_id": result_id, "result": result, "metadata_revision": metadata_revision}
 
 
 # ---------- 結果の選び方（古い結果は描かない） ----------
@@ -164,7 +169,8 @@ def _pca(ds, req: _Request) -> dict:
     evr = result.get("explained_variance_ratio") or []
     caption = (f"PCA スコア（{len(payload['points'])} 試料、色={color_by}、result_id={_result_id(result)}）: "
                + "、".join(f"PC{i + 1} {v * 100:.1f}%" for i, v in enumerate(evr[:2])) + "。")
-    return _record("pca", payload, title=req.title, caption=caption, result_id=_result_id(result))
+    return _record("pca", payload, title=req.title, caption=caption, result_id=_result_id(result),
+                   metadata_revision=getattr(ds, "metadata_revision", 0))
 
 
 def _loadings(ds, req: _Request) -> dict:

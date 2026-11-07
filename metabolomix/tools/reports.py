@@ -129,6 +129,7 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
     同名 .svg）/ "eic" / "eic_compounds"。`dataset_plot` が最後に作った図（`ds.figures[kind]`）を描く。
     まだ図が無ければ missing_state（`dataset_plot` を案内）。結果から作った図（pca / volcano / loadings）は、
     その結果が現在のものでなければ（前処理・除外・群の変更で古くなった）保存しない。
+    eic / eic_compounds は結果から作った図ではないので、描いたとおりに保存する（あとで `dataset_exclude` しても変わらない）。
     result_id: kind が pca / volcano / loadings のときだけ。登録された結果を名指しして描く
       （`dataset_plot` を呼ばなくてよい。古い結果は STALE_ANALYSIS_RESULT）。
     dataset_handle: `load_dataset` が返したハンドル（省略時は直近）。
@@ -178,6 +179,10 @@ def _stale_figure(ds, record: dict) -> str | None:
     再前処理などの取りこぼしを、保存の直前に塞ぐ）。"""
     from metabolomix.analysis.result_state import is_current
 
+    revision = record.get("metadata_revision")
+    if revision is not None and revision != getattr(ds, "metadata_revision", 0):
+        return (f"この図は試料の情報（群・バッチ・役割）を色に焼き込んだものですが、その後に試料の情報が更新されました"
+                f"（実験情報シートの適用・除外など）。dataset_plot(kind=\"{record['kind']}\") で作り直してください。")
     result_id = record.get("result_id")
     if record["kind"] not in _RESULT_KINDS or result_id is None:
         return None

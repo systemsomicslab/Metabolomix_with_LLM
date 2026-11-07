@@ -281,6 +281,59 @@ def test_metadata_change_drops_group_dependent_figure_only():
     assert not ({"pca", "loadings", "volcano"} & set(ds.figures))
 
 
+def test_group_change_makes_the_pca_figure_refuse_to_save(tmp_path):
+    """実験情報シートの適用（`dataset_set_sample_metadata`）の後は、古い色分けの pca 図を保存できない。"""
+    from metabolomix.tools.dataset_analysis_tools import dataset_set_sample_metadata
+
+    ds = _analysed()
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    ds.assay_sources = {}
+    for i, name in enumerate(ds.sample_names):
+        (raw_dir / f"{name}.wiff").write_text("x", encoding="utf-8")
+        ds.assay_sources[f"abundance_assay[{i + 1}]"] = str(raw_dir / f"{name}.wiff")
+    plot_tools.dataset_plot(kind="pca")
+    assert "pca" in ds.figures
+    rows = ds.sample_metadata_rows
+    lines = ["# schema = sample-manifest.v1",
+             "sample_id	source_file	role	group	batch	injection_order	qc_pool	include"]
+    for row in rows:                                  # 群だけを付け替える（前処理の入力は同じ）
+        lines.append("	".join([row["sample_id"], f"{row['sample_id']}.wiff", row["role"], "NEW",
+                                 str(row["batch"]), "" if row["injection_order"] is None else str(row["injection_order"]),
+                                 "", "true"]))
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    assert json.loads(dataset_set_sample_metadata(str(manifest)))["status"] == "success"
+
+    err = json.loads(reports.save_figure("pca", "meta-1"))["error"]
+    assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
+    assert not (tmp_path / "reports" / "figures" / "meta-1_pca.png").exists()
+    dataset_preprocess()
+    dataset_pca(n_components=3)
+    payload = _payload(kind="pca")                    # 解析と図をやり直せば新しい群で保存できる
+    assert {p["group"] for p in payload["points"]} == {"NEW"}
+    assert "meta-1_pca.png" in reports.save_figure("pca", "meta-1")
+
+
+def test_pca_figure_with_baked_metadata_is_stale_when_the_revision_moves(tmp_path):
+    """結果が現在のままでも（群は前処理の入力ではない）、色に焼き込んだ試料の情報が更新されたら古い。"""
+    from metabolomix.analysis.result_state import is_current
+
+    ds = _analysed()
+    plot_tools.dataset_plot(kind="pca")
+    plot_tools.dataset_plot(kind="loadings", top_n=3)
+    for row in ds.sample_metadata_rows:
+        row["group"] = "NEW"
+    ds.metadata_revision += 1                         # 情報の更新（apply_metadata が進める版）
+    assert is_current(ds, ds.last_pca) and "pca" in ds.figures
+    err = json.loads(reports.save_figure("pca", "rev-1"))["error"]
+    assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
+    assert "作り直" in err["message"]
+    assert not (tmp_path / "reports" / "figures" / "rev-1_pca.png").exists()
+    # 試料の情報を焼き込まない図（loadings）は影響を受けない
+    assert "rev-1_loadings.png" in reports.save_figure("loadings", "rev-1")
+
+
 def test_figures_are_not_part_of_the_fingerprint():
     from metabolomix.analysis.result_state import dataset_fingerprint
 
@@ -369,3 +422,64 @@ def test_save_figure_reads_the_chosen_handle(tmp_path):
     assert "x_eic.png" in msg
     missing = json.loads(reports.save_figure("eic", "x", dataset_handle="dh_nope"))
     assert missing["error"]["code"] == "DATASET_HANDLE_NOT_FOUND"
+
+
+# ---------- save_figure の振る舞い ----------
+
+def test_save_figure_title_override_reaches_the_render(monkeypatch):
+    ds = _analysed()
+    plot_tools.dataset_plot(kind="loadings", top_n=3, title="drawn title")
+    seen = []
+    from metabolomix.plots import pca_loadings as loadings_plot
+
+    real = loadings_plot.render_loadings_plot
+    monkeypatch.setattr(loadings_plot, "render_loadings_plot",
+                        lambda payload, title=None: seen.append(title) or real(payload, title=title))
+    reports.save_figure("loadings", "t-1", title="saved title")
+    reports.save_figure("loadings", "t-2")                      # 省けば図を作ったときの題
+    assert seen == ["saved title", "drawn title"]
+    assert ds.figures["loadings"]["title"] == "drawn title"
+
+
+def test_save_figure_path_traversal_stays_in_figures_dir(tmp_path):
+    from metabolomix.tools import notes
+
+    _analysed()
+    plot_tools.dataset_plot(kind="pca")
+    figures = (tmp_path / "reports" / "figures").resolve()
+    for analysis_id in ("A/../x", "..\\x", "../../escape"):
+        msg = reports.save_figure("pca", analysis_id)
+        written = figures / f"{notes.make_slug(analysis_id)}_pca.png"
+        assert written.is_file() and written.parent == figures, analysis_id
+        assert str(tmp_path / "reports" / "figures" / written.name) in msg
+    assert "/" not in notes.make_slug("A/../x") and "\\" not in notes.make_slug("..\\x")
+    assert sorted(p.parent for p in (tmp_path / "reports").rglob("*.png")) == [figures] * 3
+    assert not list(tmp_path.glob("*.png"))
+
+
+def test_save_figure_with_unreadable_config_is_an_envelope(tmp_path, monkeypatch):
+    from metabolomix.core import user_config
+
+    _analysed()
+    plot_tools.dataset_plot(kind="pca")
+    broken = tmp_path / "broken" / "lipidmix.local.toml"
+    broken.parent.mkdir()
+    broken.write_text("[msdial]\nlbm = 'old.lbm2'\n", encoding="utf-8")        # 旧キー → CONFIG_INVALID
+    monkeypatch.setenv(user_config.CONFIG_ENV, str(broken))
+    user_config._cache.clear()
+    err = json.loads(reports.save_figure("pca", "cfg-1"))["error"]
+    assert err["code"] == "CONFIG_INVALID"
+    assert not list(tmp_path.rglob("cfg-1_pca.png"))
+
+
+def test_save_figure_twice_overwrites_and_succeeds(tmp_path):
+    _analysed()
+    figures = tmp_path / "reports" / "figures"
+    plot_tools.dataset_plot(kind="loadings", top_n=3)
+    first = reports.save_figure("loadings", "twice")
+    png, svg = figures / "twice_loadings.png", figures / "twice_loadings.svg"
+    assert str(png) in first and png.is_file() and svg.is_file()
+    png.write_bytes(b"old"), svg.write_bytes(b"old")
+    second = reports.save_figure("loadings", "twice")
+    assert str(png) in second and "保存" in second
+    assert png.read_bytes()[:4] == PNG_MAGIC and svg.read_bytes() != b"old"
