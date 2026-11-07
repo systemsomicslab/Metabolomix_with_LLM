@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import itertools
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -27,6 +27,7 @@ class Design:
     contrasts: dict[str, np.ndarray]   # id -> (p,)
     contrast_info: dict[str, dict]
     omnibus: np.ndarray           # p×m（各 cell − 最初の cell）
+    dropped_cells: list[str] = field(default_factory=list)  # 単位が無かった cell（複数因子では DESIGN_INVALID にするので通常は空）
 
 
 def _invalid(message: str, **details) -> DomainError:
@@ -64,8 +65,12 @@ def build_design(units, *, factors: list[str], comparisons: list[dict],
     levels = {f: sorted(set(values[f])) for f in factors}
     unit_cell = [_cell_name(values[f][i] for f in factors) for i in range(len(units))]
     present = set(unit_cell)
-    cells = [_cell_name(c) for c in itertools.product(*(levels[f] for f in factors))
-             if _cell_name(c) in present]
+    all_cells = [_cell_name(c) for c in itertools.product(*(levels[f] for f in factors))]
+    cells = [c for c in all_cells if c in present]
+    dropped = [c for c in all_cells if c not in present]
+    if dropped and len(factors) >= 2:
+        raise _invalid(f"単位が無い cell がある: {dropped}（cell means の交互作用・omnibus が解釈できない）",
+                       empty_cells=dropped)
     columns = list(cells)
     cols = [np.array([1.0 if c == cell else 0.0 for c in unit_cell]) for cell in cells]
 
@@ -142,6 +147,8 @@ def build_design(units, *, factors: list[str], comparisons: list[dict],
                 (a0, a1), (b0, b1) = lv[a], lv[b]
             except (KeyError, TypeError, ValueError):
                 raise _invalid(f"比較 {cid}: levels は各因子の [基準, 比較]", id=cid) from None
+            if a0 == a1 or b0 == b1:
+                raise _invalid(f"比較 {cid}: 交互作用の基準と比較が同じ水準", id=cid)
             ref_cells, test_cells = [], []
             for la, lb, sign in ((a1, b1, 1.0), (a0, b1, -1.0), (a1, b0, -1.0), (a0, b0, 1.0)):
                 name = cell_of({a: la, b: lb}, cid)
@@ -158,6 +165,8 @@ def build_design(units, *, factors: list[str], comparisons: list[dict],
             others = [o for o in factors if o != f]
             if others and (not isinstance(at, dict) or set(at) != set(others)):
                 raise _invalid(f"比較 {cid}: 複数因子では at に他の因子の水準が必須", id=cid)
+            if comp.get("reference") == comp.get("test"):
+                raise _invalid(f"比較 {cid}: reference と test が同じ水準", id=cid)
             ref_name = cell_of({**(at or {}), f: comp.get("reference")}, cid)
             test_name = cell_of({**(at or {}), f: comp.get("test")}, cid)
             vec[index[test_name]] += 1.0
@@ -174,4 +183,4 @@ def build_design(units, *, factors: list[str], comparisons: list[dict],
     for j in range(1, k):
         omnibus[j, j - 1] = 1.0
         omnibus[0, j - 1] = -1.0
-    return Design(matrix, columns, cells, contrasts, info, omnibus)
+    return Design(matrix, columns, cells, contrasts, info, omnibus, [])

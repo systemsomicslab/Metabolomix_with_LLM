@@ -99,3 +99,31 @@ def test_omnibus_has_cells_minus_one_columns():
     d = build_design(units, factors=["group"], comparisons=[])
     assert d.omnibus.shape == (3, 2)
     assert list(d.omnibus[:, 1]) == [-1, 0, 1]
+
+
+def test_empty_cell_with_two_factors_is_invalid():
+    units = [u("a1", B="b1"), u("a1", B="b2"), u("a2", B="b1")]
+    with pytest.raises(DomainError) as e:
+        build_design(units, factors=["group", "B"], comparisons=[])
+    assert e.value.code == "DESIGN_INVALID"
+    assert e.value.details["empty_cells"] == ["a2:b2"]
+
+
+def test_one_factor_has_no_dropped_cells():
+    d = build_design([u("A"), u("B")], factors=["group"], comparisons=[])
+    assert d.dropped_cells == []
+
+
+def test_same_level_comparisons_are_invalid():
+    for comps in (
+        [{"id": "x", "factor": "group", "reference": "A", "test": "A"}],
+    ):
+        with pytest.raises(DomainError) as e:
+            build_design([u("A"), u("B")], factors=["group"], comparisons=comps)
+        assert e.value.code == "DESIGN_INVALID"
+    for lv in ({"group": ["a1", "a1"], "B": ["b1", "b2"]},
+               {"group": ["a1", "a2"], "B": ["b2", "b2"]}):
+        with pytest.raises(DomainError) as e:
+            build_design(_two_by_two(), factors=["group", "B"], comparisons=[
+                {"id": "i", "kind": "interaction", "factors": ["group", "B"], "levels": lv}])
+        assert e.value.code == "DESIGN_INVALID"
