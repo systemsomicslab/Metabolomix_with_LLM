@@ -4,7 +4,7 @@ import pytest
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.dataset.alignment_files import select_alignment
 from metabolomix.dataset.msdial_adapter import load_msdial_folder
-from metabolomix.quant.table import FeatureRow, apply_curation, dataset_polarity, feature_rows
+from metabolomix.quant.table import FeatureRow, apply_curation, resolve_quant_polarity, feature_rows
 from tests.msdial_folder_fixtures import write_msdial_folder
 
 
@@ -62,7 +62,7 @@ def test_polarity_required_when_unknown(tmp_path):
     ds = _load(tmp_path, [{"name": "a"}])
     ds.ion_mode_majority = None
     with pytest.raises(DomainError) as exc:
-        dataset_polarity(ds, object(), None)
+        resolve_quant_polarity(ds, object(), None)
     assert exc.value.code == "QUANT_POLARITY_REQUIRED"
     assert "positive" in exc.value.message
 
@@ -70,12 +70,21 @@ def test_polarity_required_when_unknown(tmp_path):
 def test_polarity_from_ion_mode(tmp_path):
     ds = _load(tmp_path, [{"name": "a"}])
     ds.ion_mode_majority = "negative"
-    assert dataset_polarity(ds, object(), None) == "negative"
-    assert dataset_polarity(ds, _Holder("Positive"), None) == "positive"
-    assert dataset_polarity(ds, _Holder("pos"), "NEG") == "negative"
-    ds.ion_mode_majority = "mixed"
-    with pytest.raises(DomainError):
-        dataset_polarity(ds, _Holder("garbage"), None)
+    assert resolve_quant_polarity(ds, object(), None) == "negative"
+    assert resolve_quant_polarity(ds, _Holder("Positive"), None) == "positive"
+    assert resolve_quant_polarity(ds, _Holder("pos"), "NEG") == "negative"
+    assert resolve_quant_polarity(ds, _Holder(""), None) == "negative"
+
+
+def test_polarity_invalid_explicit_values(tmp_path):
+    ds = _load(tmp_path, [{"name": "a"}])
+    ds.ion_mode_majority = "negative"
+    with pytest.raises(DomainError) as exc:
+        resolve_quant_polarity(ds, object(), "postive")
+    assert exc.value.code == "QUANT_POLARITY_INVALID" and exc.value.details == {"polarity": "postive"}
+    with pytest.raises(DomainError) as exc:
+        resolve_quant_polarity(ds, _Holder("garbage"), None)
+    assert exc.value.code == "QUANT_POLARITY_INVALID"
 
 
 def _row(fid, name="X", ontology="PC", adduct="[M+H]+"):
@@ -85,18 +94,20 @@ def _row(fid, name="X", ontology="PC", adduct="[M+H]+"):
 def test_curation_wrong_redundant_assign():
     rows = [_row("1"), _row("2"), _row("3"), _row("4"), _row("5")]
     flags = {"wrong": {1}, "suspect": {5}, "redundant": {2},
-             "assign": {3: {"name": "PE 36:2", "ontology": "PE"}, 1: {"name": "ignored"}}}
+             "assign": {3: {"name": "PE 36:2", "ontology": "PE", "adduct": "[M+Na]+"}, 1: {"name": "ignored"},
+                        4: {"ontology": "PS"}}}
     out, audit = apply_curation(rows, flags)
     assert [r.feature_id for r in out] == ["3", "4", "5"]
+    assert (out[1].name, out[1].ontology) == ("Unknown", "PS")  # name blanked -> Unknown
     r3 = out[0]
-    assert (r3.name, r3.ontology, r3.adduct) == ("PE 36:2", "PE", "[M+H]+")  # adduct absent: kept
+    assert (r3.name, r3.ontology, r3.adduct) == ("PE 36:2", "PE", "[M+H]+")  # adduct never changed
     assert out[2] == rows[4]  # suspect untouched
     by_id = {a["feature_id"]: a for a in audit}
     assert by_id["1"] == {"feature_id": "1", "action": "excluded", "reason": "curation_wrong"}
     assert by_id["2"]["reason"] == "curation_redundant"
     assert by_id["3"]["action"] == "replaced" and by_id["3"]["reason"] == "curation_assign"
-    assert by_id["3"]["from"]["name"] == "X" and by_id["3"]["to"]["name"] == "PE 36:2"
-    assert len(audit) == 3  # wrong wins over assign: no replaced audit for 1
+    assert by_id["3"]["from"]["name"] == "X" and by_id["3"]["to"] == {"name": "PE 36:2", "ontology": "PE"}
+    assert len(audit) == 4  # wrong wins over assign: no replaced audit for 1
 
 
 def test_curation_none_flags_is_noop():

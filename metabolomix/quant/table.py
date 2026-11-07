@@ -10,8 +10,9 @@ import math
 from dataclasses import dataclass, replace
 
 from metabolomix.core.atomic_io import DomainError
+from metabolomix.curation.apply import identity_for
 
-__all__ = ["FeatureRow", "dataset_polarity", "feature_rows", "apply_curation"]
+__all__ = ["FeatureRow", "resolve_quant_polarity", "feature_rows", "apply_curation"]
 
 _POLARITY_ALIASES = {"positive": "positive", "pos": "positive",
                      "negative": "negative", "neg": "negative"}
@@ -37,17 +38,26 @@ def _norm_polarity(value) -> str | None:
     return _POLARITY_ALIASES.get(value.strip().lower())
 
 
-def dataset_polarity(ds, holder, polarity: str | None) -> str:
-    """引数 → ハンドルの `polarity` → `ds.ion_mode_majority` の順。
+def resolve_quant_polarity(ds, holder, polarity: str | None) -> str:
+    """引数 → ハンドルの `polarity` → データセット由来（`mztab.polarity.dataset_polarity`）の順。
 
-    解釈できない値は次の候補へ落ちる。決まらなければ QUANT_POLARITY_REQUIRED。
+    明示された値（引数・ハンドル）が解釈できなければ QUANT_POLARITY_INVALID（打ち間違いで
+    別の極性を黙って選ばない）。データセット由来が決まらなければ QUANT_POLARITY_REQUIRED。
     `holder` は `.polarity` を持たない対話のセッションでもよい。
     """
-    for candidate in (polarity, getattr(holder, "polarity", None),
-                      getattr(ds, "ion_mode_majority", None)):
+    for candidate in (polarity, getattr(holder, "polarity", None)):
+        if candidate is None or (isinstance(candidate, str) and not candidate.strip()):
+            continue
         found = _norm_polarity(candidate)
-        if found:
-            return found
+        if found is None:
+            raise DomainError("QUANT_POLARITY_INVALID",
+                              'polarity は "positive" / "negative"（"pos" / "neg" も可）のいずれかです。',
+                              {"polarity": candidate})
+        return found
+    from metabolomix.mztab.polarity import dataset_polarity
+    found = _norm_polarity(dataset_polarity(ds)[0])
+    if found:
+        return found
     raise DomainError("QUANT_POLARITY_REQUIRED",
                       'データセットの極性を決められません。polarity="positive" か '
                       'polarity="negative" を渡してください。')
@@ -93,10 +103,12 @@ def _spot(feature_id: str):
 
 
 def apply_curation(rows: list[FeatureRow], flags: dict | None) -> tuple[list[FeatureRow], list[dict]]:
-    """人の判断を当てる。`wrong` / `redundant` は除外、`assign` は name・ontology・adduct の置換。
+    """人の判断を当てる。`wrong` / `redundant` は除外、`assign` は name・ontology の置換。
 
+    `assign` は今の書き出し（`curation.apply.identity_for`）と同じ意味: 判断に無い欄は空に
+    なる。置換後の名前が空なら MS-DIAL の空名と同じく "Unknown"。adduct は変えない。
     `wrong` と `assign` が同じスポットに当たったら `wrong` が勝つ（除外。置換の audit は書かない）。
-    `assign` の判断の行に無い欄は今の値を残す。`suspect` は当てない。
+    `suspect` は当てない。
     audit は {feature_id, action: excluded|replaced, reason, (replaced なら from / to)}。
     """
     flags = flags or {}
@@ -114,9 +126,9 @@ def apply_curation(rows: list[FeatureRow], flags: dict | None) -> tuple[list[Fea
             audit.append({"feature_id": row.feature_id, "action": "excluded",
                           "reason": "curation_redundant"})
             continue
-        decision = assign.get(spot)
-        if decision is not None:
-            new = {k: decision.get(k) or getattr(row, k) for k in ("name", "ontology", "adduct")}
+        if spot in assign:
+            ident = identity_for(spot, flags)
+            new = {"name": ident["name"].strip() or "Unknown", "ontology": ident["ontology"]}
             old = {k: getattr(row, k) for k in new}
             audit.append({"feature_id": row.feature_id, "action": "replaced",
                           "reason": "curation_assign", "from": old, "to": new})
