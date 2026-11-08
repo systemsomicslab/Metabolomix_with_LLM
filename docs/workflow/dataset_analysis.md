@@ -41,9 +41,22 @@
 
 ## dataset_pca
 
-1. metabolomix/tools/dataset_analysis_tools.py  dataset_pca()
-2. └─ metabolomix/analysis/dataset_analysis.py  run_dataset_pca()
-3.    └─ metabolomix/analysis/pca.py  run_pca()
+統計エンジンの PCA（spec 2026-11-06 §10。stats-pca.v1）。軸は生体の個体で決め、QC は同じ軸へ投影する。
+行列は群の引数と無関係に決める: `matrix_id` を渡せば登録済みの行列（手順 2）、省略すれば既定の前処理で
+行列を作って登録する（手順 3。前処理の記録も 1 件書く）。`group_levels` / `group_factors` は手順 5 が個体ごとの
+色分けの群に解くだけで、PCA の数字（手順 4）には効かない。結果は `ds.results[result_id]` と `ds.last_pca`
+（`kind="stat_pca"`）に置く（手順 6）。`needs_input`（換算済み＋QC）は手順 3 の戻りから封筒にする。
+手順 7 の記録は親を行列の前処理の記録にして `reports/stats/` へ追記する（書けなくても PCA は成功）。
+図（`dataset_plot` の `pca` / `loadings`）は `tool_helpers.stat_pca_rows`（スコア）と
+`plots/pca_loadings.dataset_features`（`kept_features` のローディング）が `stat_pca` の記録を読む。
+
+1. metabolomix/tools/stats_tools.py  dataset_pca()
+2. └─ metabolomix/analysis/stats_results.py  get_matrix()
+3. └─ metabolomix/tools/stats_tools.py  _store_matrix()
+4. └─ metabolomix/analysis/stats/pca.py  pca()
+5. └─ metabolomix/analysis/stats_results.py  unit_group_labels()
+6. └─ metabolomix/analysis/stats_results.py  register_pca()
+7. └─ metabolomix/tools/stats_tools.py  _write_pca_record()
 
 ## dataset_differential
 

@@ -285,7 +285,7 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
 _NEXT_STEPS = (
     "dataset_status() — 試料の群・役割と検出状態を確かめる（差次的解析の群名はここに出る）",
     "curation_review() — 注釈の一覧確認（解析フォルダで読んだデータセットのとき）",
-    "dataset_preprocess() → dataset_pca() — 前処理して主成分分析で全体像を見る",
+    "dataset_preprocess() → dataset_pca(matrix_id=...) — 前処理して（省略すれば既定の前処理で）主成分分析し、全体像を見る（QC は投影）",
 )
 
 

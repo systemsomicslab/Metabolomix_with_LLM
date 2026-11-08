@@ -14,8 +14,8 @@ from metabolomix.analysis import sample_manifest
 from metabolomix.core import handles, session_state
 from metabolomix.mztab.dataset_state import DatasetState
 from metabolomix.tools import plot_tools, reports, sample_tools
-from metabolomix.tools.dataset_analysis_tools import (
-    dataset_differential, dataset_pca)
+from metabolomix.tools.dataset_analysis_tools import dataset_differential
+from metabolomix.tools.stats_tools import dataset_pca
 from tests.config_fixtures import use_config
 from tests.curation_fixtures import write_alignment_set
 from tests.msdial_folder_fixtures import analysis_file_row, write_mddata
@@ -325,7 +325,7 @@ def test_group_change_makes_the_pca_figure_refuse_to_save(tmp_path):
 
 
 def test_pca_figure_with_baked_metadata_is_stale_when_the_revision_moves(tmp_path):
-    """結果が現在のままでも（群は前処理の入力ではない）、色に焼き込んだ試料の情報が更新されたら古い。"""
+    """色に焼き込んだ試料の情報が更新されたら、図は古い（統計エンジンの PCA の結果も版が動けば古い）。"""
     from metabolomix.analysis.result_state import is_current
 
     ds = _analysed()
@@ -334,13 +334,15 @@ def test_pca_figure_with_baked_metadata_is_stale_when_the_revision_moves(tmp_pat
     for row in ds.sample_metadata_rows:
         row["group"] = "NEW"
     ds.metadata_revision += 1                         # 情報の更新（apply_metadata が進める版）
-    assert is_current(ds, ds.last_pca) and "pca" in ds.figures
+    assert not is_current(ds, ds.last_pca) and "pca" in ds.figures   # 統計エンジンの PCA は版が動けば古い
     err = json.loads(reports.save_figure("pca", "rev-1"))["error"]
     assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
     assert "作り直" in err["message"]
     assert not (tmp_path / "reports" / "figures" / "rev-1_pca.png").exists()
-    # 試料の情報を焼き込まない図（loadings）は影響を受けない
-    assert "rev-1_loadings.png" in reports.save_figure("loadings", "rev-1")
+    # 試料の情報を焼き込まない図（loadings）も、元の結果が古ければ保存できない（統計エンジンの PCA は版に縛られる）
+    err = json.loads(reports.save_figure("loadings", "rev-1"))["error"]
+    assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
+    assert not (tmp_path / "reports" / "figures" / "rev-1_loadings.png").exists()
 
 
 def test_figures_are_not_part_of_the_fingerprint():
@@ -352,10 +354,10 @@ def test_figures_are_not_part_of_the_fingerprint():
     assert ds.figures and dataset_fingerprint(ds) == before
 
 
-def test_stale_pca_result_after_reprocessing_is_refused():
+def test_stale_pca_result_after_metadata_change_is_refused():
     ds = _analysed()
     old = ds.last_pca["provenance"]["result_id"]
-    v1_preprocess(normalize="median")           # 前処理をやり直す（PCA は捨てられる）
+    ds.metadata_revision += 1                   # 試料の表が変わった（統計エンジンの PCA は群も設計に含む）
     err = json.loads(plot_tools.dataset_plot(kind="pca", result_id=old))["error"]
     assert err["code"] == "STALE_ANALYSIS_RESULT"
 

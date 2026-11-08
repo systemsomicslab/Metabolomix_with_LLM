@@ -307,7 +307,8 @@ _DRIFT_CORRELATION_WARN = 0.5
 
 
 def run_dataset_pca(ds, n_components: int = 5, log_transform: bool = False) -> dict:
-    """DatasetState の pp_matrix に PCA を実行する。"""
+    """DatasetState の v1 の pp_matrix に PCA を実行する（pipeline の図のためだけ。対話ツールの
+    `dataset_pca` は統計エンジンの PCA で、これを呼ばない。D 段で消える）。"""
     matrix = _require_pp_matrix(ds)
     n_samples, n_features = matrix.shape
     if min(n_samples, n_features) < 2:

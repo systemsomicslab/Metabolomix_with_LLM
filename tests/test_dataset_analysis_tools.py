@@ -39,27 +39,6 @@ def _groups(ds):
             [n for n in ds.pp_sample_names if n.startswith("treat")])
 
 
-# ---------- dataset_pca ----------
-
-def test_dataset_pca_requires_preprocess():
-    _load_ds()
-    from metabolomix.tools.dataset_analysis_tools import dataset_pca
-    parsed = json.loads(dataset_pca())
-    assert parsed["error"]["code"] == MISSING_STATE
-    assert parsed["error"]["required_tools"] == ["dataset_preprocess"]
-
-
-def test_dataset_pca_success_omits_loadings_from_payload():
-    _load_ds()
-    from metabolomix.tools.dataset_analysis_tools import dataset_pca
-    v1_preprocess()
-    parsed = json.loads(dataset_pca(n_components=2))
-    assert len(parsed["explained_variance_ratio"]) == 2
-    assert len(parsed["scores"]) == 8
-    assert "loadings" not in parsed          # 全量は戻り値に載せない
-    assert session_state.session.dataset.last_pca["loadings"]  # セッションには保持
-
-
 # ---------- dataset_differential ----------
 
 def test_dataset_differential_requires_preprocess():
@@ -357,8 +336,8 @@ def test_v1_preprocess_reports_detection_when_available():
 # 出た数字を並べる。ツール層でもその境界が効いていることを確かめる。
 
 def test_tools_report_the_result_id_of_each_computation():
-    from metabolomix.tools.dataset_analysis_tools import (
-        dataset_differential, dataset_pca)
+    from metabolomix.tools.dataset_analysis_tools import dataset_differential
+    from metabolomix.tools.stats_tools import dataset_pca
     ds = _load_ds()
     pp = json.loads(v1_preprocess())
     a, b = _groups(ds)

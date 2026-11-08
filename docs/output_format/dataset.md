@@ -202,7 +202,7 @@ PCAスコアプロット用ブロック（旧パーサの返り値の末尾。**
 5. **欠損補完**（`impute="half_min"|"knn"|"column_mean"|"none"`、既定 `half_min`）: 行列生成後に残るNaNを補完。`half_min`=特徴量最小値の半分（既定）、`knn`=sklearn `KNNImputer`、`column_mean`=列平均（旧実装互換）、`none`=補完しない。
 6. **ブランク行の除外**: 上記1でブランクを背景除去の**参照**として使い終えたあと、`preprocessing.drop_samples_by_role()` がブランクの**行そのもの**を解析行列から外す。除外内訳は `report["excluded_from_matrix"]`（`{role: [sample_name, ...]}`）と caveat に出る。
 
-> **役割別の行の扱い（重要）**: 前処理後行列（データセットの前処理済み行列）の行は **生体試料 + QC** であり、**ブランクは含まれない**。ブランクは生体試料と桁違いに総強度が低く、残すと PCA の PC1 を支配して群分離の解釈が壊れるため外す。一方 **QC は残す**——QC クラスタの締まり具合を PCA で見るのは品質確認の定番手段だからである。したがって `dataset_pca` のスコアプロットには QC 点が含まれる（群ラベルは QC の Class ID）。群平均に QC が混ざると困る `dataset_differential` 側は、別途 QC を比較群から外す（§11.1）。
+> **役割別の行の扱い（重要）**: 前処理後行列（データセットの前処理済み行列）の行は **生体試料 + QC** であり、**ブランクは含まれない**。ブランクは生体試料と桁違いに総強度が低く、残すと PCA の PC1 を支配して群分離の解釈が壊れるため外す。一方 **QC は残す**——QC クラスタの締まり具合を PCA で見るのは品質確認の定番手段だからである。`dataset_pca`（統計エンジン）は QC を軸の計算に使わず投影し、スコアプロットには QC 点が白抜きで含まれる（群ラベルは `QC`）。群平均に QC が混ざると困る `dataset_differential` 側は、別途 QC を比較群から外す（§11.1）。
 
 処理結果は前処理後行列・試料名・特徴名・試料の情報・適用したレシピとして DatasetState に保存され、以降の `dataset_pca` と `dataset_differential` はこの前処理後行列を消費する。適用したレシピそのものが記録され、`dataset_pca` の出力にも「前処理レシピ」として明示される。
 
@@ -219,7 +219,7 @@ QC/ブランク/注入順のいずれかが欠けているためにスキップ�
 
 #### 10.4 `dataset_pca`
 
-前処理後行列が無い場合は `missing_state`（`dataset_preprocess` を案内）を返す。あれば `metabolomix/analysis/pca.py` の `run_pca` でPCAを実行し、結果（スコア・説明分散比・Loadings上位）を返す。図の点列の構造・キー意味は8.1節のスコアプロット用JSONと同一（座標点列を同梱し、散布図はそこからチャットで描く。`save_figure(kind="pca")` はPNGファイルが明示的に求められたときだけ）。生スポットの選択とは別の計算経路であり、選択を変更した場合は `dataset_preprocess` を再実行する必要がある。
+統計エンジンの PCA（`stats-pca.v1`）。`matrix_id`（`dataset_preprocess` の行列。省略時は既定の前処理）の log2 行列で、**軸は生体の個体だけで決め、QC は同じ軸へ投影する**（QC は軸の計算に使わない）。欠測は PCA のためだけに補う（`impute`）。`group_levels` / `group_factors` は色分けの表示と記録にだけ使い、スコア・寄与率は群の指定で変わらない。戻り値は `{status, result_id, matrix_id, scaling, log2: true, imputation, n_fit, n_qc_projected, explained_variance_ratio, groups: {群: 個体数}, record, loadings_note}` の要約で、スコア・ローディングの全量は `result_id`（`ds.last_pca`）に保持する。図は `dataset_plot(kind="pca" / "loadings")`（QC は白抜き、ローディングは軸の計算で値が変わった特徴だけ）。行列が古い（除外・試料の表の変更）・無いときは `missing_state`（`dataset_preprocess` を案内）。
 
 #### 10.5 手動サンプル/ピーク除外（`dataset_exclude`）
 

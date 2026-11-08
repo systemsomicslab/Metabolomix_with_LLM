@@ -25,7 +25,6 @@ from metabolomix.tools._holder import resolve_holder
 from metabolomix.mztab.polarity import dataset_polarity as _dataset_polarity
 
 __all__ = [
-    "dataset_pca",
     "dataset_differential",
     "dataset_export_differential",
     "dataset_export_evidence_bundle",
@@ -50,44 +49,6 @@ _RECOVERY_TOOLS = {
     # 対象feature↔内部標準の対応付け。pipeline の resolve_feature_bindings が作る。
     "feature_bindings": ["pipeline_run", "pipeline_status"],
 }
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_pca(n_components: int = 5, log_transform: bool = False,
-                dataset_handle: str | None = None) -> str:
-    """前処理済み DatasetState に PCA を実行する。
-
-    dataset_preprocess を先に実行しておくこと。
-    n_components: 主成分数（既定 5。サンプル数・特徴量数の小さい方で上限が決まる）。
-    log_transform: 標準化の前に log10 変換を適用する（既定 False）。
-
-    ローディング全量は戻り値に載せず session.dataset.last_pca に保持する。
-
-    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
-    """
-    holder = resolve_holder(dataset_handle)
-    if isinstance(holder, str):
-        return holder
-    ds = holder.dataset
-    if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
-
-    from metabolomix.analysis.dataset_service import pca_dataset
-
-    try:
-        result = pca_dataset(ds, n_components=n_components, log_transform=log_transform)
-    except PreconditionError as exc:
-        return _from_precondition(exc)
-
-    payload = {k: v for k, v in result.items()
-               if k not in ("loadings", "singular_values", "provenance")}
-    payload["status"] = "success"
-    payload["result_id"] = result["provenance"]["result_id"]
-    payload["loadings_note"] = (
-        "ローディング全量（特徴量数 × 主成分数）は本要約に非同梱。"
-        "セッションに保持しており、寄与特徴量が必要になったら別途取得します。")
-    return json_payload(payload)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)

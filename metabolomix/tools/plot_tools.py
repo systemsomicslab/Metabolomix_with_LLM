@@ -25,12 +25,13 @@ import numpy as np
 from mcp.server.fastmcp import Image
 from mcp.types import ToolAnnotations
 
-from metabolomix.analysis import result_state
+from metabolomix.analysis import result_state, stats_results
 from metabolomix.analysis.dataset_analysis import included_sample_indices
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import missing_state, mztab_error
 from metabolomix.core.serialization import json_payload
+from metabolomix.core.tool_helpers import is_stat_pca, stat_pca_rows
 from metabolomix.dataset.artifacts import artifact_path
 from metabolomix.plots import eic as eic_plot
 from metabolomix.plots import pca_loadings as loadings_plot
@@ -143,7 +144,8 @@ def _pick_result(ds, family: str, result_id: str | None, *, also_kinds: tuple = 
     if result is None:
         raise _bad(f"result_id={result_id} の結果がありません。{tool} の戻り値の result_id を渡すか、"
                    "省いて直近の結果を使ってください。", result_id=result_id)
-    if (result.get("provenance") or {}).get("kind") not in (family, *also_kinds):
+    accepted = (family, *also_kinds, *(("stat_pca",) if family == "pca" else ()))
+    if (result.get("provenance") or {}).get("kind") not in accepted:
         raise _bad(f"result_id={result_id} は{'PCA' if family == 'pca' else '差次的解析'}の結果ではありません"
                    f"（{tool} の result_id を渡してください）。", result_id=result_id)
     result_state.assert_current(ds, result)
@@ -174,6 +176,12 @@ def _volcano(ds, req: _Request) -> dict:
                    result_id=_result_id(result), result=result)
 
 
+def _explained(result: dict) -> list:
+    """PCA の記録の寄与率（統計エンジンの結果は `engine` の中）。"""
+    source = result.get("engine") if is_stat_pca(result) else result
+    return list((source or {}).get("explained_variance_ratio") or [])
+
+
 def _pca(ds, req: _Request) -> dict:
     from metabolomix.tools.mztab_tools import _metadata_rows
 
@@ -182,19 +190,34 @@ def _pca(ds, req: _Request) -> dict:
         raise _bad(f"color_by は {' / '.join(scores_plot.COLOR_BY)} のどれかを指定してください"
                    f"（受け取った値: {color_by!r}）。", color_by=color_by)
     result = _pick_result(ds, "pca", req.result_id)
-    scores = result.get("scores") or []
-    if color_by == "role":
-        colors = {row.get("name"): row.get("role") for row in scores}
+    caveats, projected = [], ()
+    if is_stat_pca(result):
+        scores = stat_pca_rows(result)
+        projected = [row["name"] for row in scores if not row["fitted"]]
+        if color_by == "group":
+            colors = {row["name"]: row["group"] for row in scores}
+        elif color_by == "role":
+            colors = {row["name"]: row["role"] for row in scores}
+        else:
+            entry = stats_results.get_matrix(ds, result.get("matrix_id"))
+            batch = {u.unit_id: u.batch for u in entry["prepared"].units} if entry else {}
+            colors = {row["name"]: batch.get(row["name"]) for row in scores}
+        if projected:
+            caveats.append("QC は主成分の軸の計算に使わず、同じ軸へ投影した点（白抜き）。")
     else:
-        colors = {name: row.get(color_by)
-                  for name, row in zip(ds.sample_names, _metadata_rows(ds))}
+        scores = result.get("scores") or []
+        if color_by == "role":
+            colors = {row.get("name"): row.get("role") for row in scores}
+        else:
+            colors = {name: row.get(color_by)
+                      for name, row in zip(ds.sample_names, _metadata_rows(ds))}
     try:
         payload = scores_plot.build_pca_scores_payload(
-            scores, result.get("explained_variance_ratio"), colors, color_by=color_by,
-            result_id=_result_id(result), title=req.title)
+            scores, _explained(result), colors, color_by=color_by,
+            result_id=_result_id(result), title=req.title, caveats=caveats, projected=projected)
     except ValueError as exc:
         raise _bad(str(exc)) from exc
-    evr = result.get("explained_variance_ratio") or []
+    evr = _explained(result)
     caption = (f"PCA スコア（{len(payload['points'])} 試料、色={color_by}、result_id={_result_id(result)}）: "
                + "、".join(f"PC{i + 1} {v * 100:.1f}%" for i, v in enumerate(evr[:2])) + "。")
     return _record("pca", payload, title=req.title, caption=caption, result_id=_result_id(result),
@@ -217,7 +240,7 @@ def _loadings(ds, req: _Request) -> dict:
             features, r_ok = loadings_plot.dataset_features(ds, result)
         payload = loadings_plot.build_loadings_payload(
             features, source="dataset", result_id=_result_id(result),
-            explained_variance_ratio=result.get("explained_variance_ratio") or [], pcs=pcs,
+            explained_variance_ratio=_explained(result), pcs=pcs,
             top_n=top_n, value=value, r_available=r_ok)
     except ValueError as exc:
         raise _bad(str(exc)) from exc

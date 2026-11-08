@@ -17,6 +17,7 @@ from mcp.types import ToolAnnotations
 
 from metabolomix.analysis import stats_records, stats_results
 from metabolomix.analysis.stats import preprocess as stats_preprocess
+from metabolomix.analysis.stats import pca as stats_pca
 from metabolomix.analysis.stats import spec_v2
 from metabolomix.analysis.stats.data import from_dataset
 from metabolomix.core import mcp_core
@@ -26,7 +27,7 @@ from metabolomix.core.mcp_errors import missing_state, mztab_error, needs_input
 from metabolomix.core.serialization import json_payload, json_safe, round_floats, truncate_lists
 from metabolomix.tools._holder import resolve_holder
 
-__all__ = ["dataset_preprocess", "dataset_compare"]
+__all__ = ["dataset_preprocess", "dataset_compare", "dataset_pca"]
 
 #: `argument`（drift_mode）を受けて呼び直せるツール（`needs_input` の retry_tools の意味）。
 #: 受けるのは dataset_preprocess だけ。比較・PCA は返った matrix_id を渡して呼び直す。
@@ -634,4 +635,128 @@ def dataset_compare(
         "record": written,
         "next": ("全行は result_id で保持した（直近の結果として書き出し・図の既定になる）。対比が複数の結果は"
                  "書き出し・図で contrast_id を指定する（交互作用の対比は 2 群の形にならない）"),
+    }))
+
+
+# --- dataset_pca -------------------------------------------------------------------------
+
+def _write_pca_record(holder, entry, record, settings, summary) -> dict:
+    """PCA の記録を書く（親は行列の前処理の記録）。書けないときは `{"written": False, "reason"}`。"""
+    try:
+        reports_dir = mcp_core._resolve_report_dir(holder)
+        parents = [entry["record_id"]] if entry.get("record_id") else []
+        written = stats_records.write_stats_record(
+            reports_dir, "pca",
+            inputs={"dataset_hash": entry["dataset_hash"], "matrix_id": record["matrix_id"],
+                    "result_id": record["result_id"]},
+            parent_ids=parents, settings=settings, summary=summary)
+    except DomainError as exc:
+        return {"written": False, "reason": f"{exc.code}: {exc.message}"}
+    except OSError as exc:
+        return {"written": False, "reason": f"OSError: {exc}"}
+    return {"written": True, "record_id": written["record_id"], "path": written["path"]}
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                      idempotentHint=False),
+          structured_output=False)
+def dataset_pca(
+    matrix_id: str | None = None,
+    scaling: str = "autoscale",
+    n_components: int = 5,
+    impute: str = "half_min",
+    group_levels: list[str] | None = None,
+    group_factors: list[list[str]] | None = None,
+    dataset_handle: str | None = None,
+) -> str:
+    """前処理済みの行列で PCA を行う（統計エンジンの PCA。stats-pca.v1）。
+
+    軸は生体の個体だけで決め、QC は同じ軸へ投影する（軸の計算には使わない）。欠測は PCA のためだけに
+    補う（行列そのものは変えない）。値は log2 のまま（log_transform 引数は無い）。全量（スコア・
+    ローディング）は戻り値に載せず result_id でセッションに保持し、直近の PCA（図の既定）にもなる。
+    `reports/stats/` に記録を 1 件追記する（書けないときは record.written=false。PCA は成功）。
+
+    matrix_id: dataset_preprocess が返した行列 ID。省略時は既定の前処理で行列を作って登録する
+        （QC のある換算済みデータでは drift_mode を尋ねる needs_input。dataset_preprocess で行列を
+        作ってその ID を渡す）。古い・無い ID は missing_state。
+    scaling: "autoscale"（既定。平均 0・SD 1）/ "pareto"（SD の平方根で割る）。
+    n_components: 主成分数（既定 5。個体数・特徴数の小さい方が上限）。
+    impute: 欠測の補い方 "half_min"（既定）/ "knn" / "none"（欠測があれば PCA_MISSING_VALUES）。
+    group_levels / group_factors: **色分けの表示と結果の記録にだけ**使う群（試料名の因子トークン）。
+        PCA の数字・行列の選択には効かない（matrix_id と併用できる）。無ければ行列の個体の群。
+    dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。
+    """
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    ds = holder.dataset
+    if ds is None:
+        return missing_state("dataset", ["load_dataset"],
+                             "DatasetState がありません。先に load_dataset を実行してください。")
+    implicit_matrix = None
+    preprocess_record = None
+    try:
+        if matrix_id is not None:
+            entry = stats_results.get_matrix(ds, matrix_id)
+            if entry is None:
+                return missing_state(
+                    "stat_matrix", ["dataset_preprocess"],
+                    f"行列 {matrix_id!r} がありません（無い・または除外や試料の表の変更で古くなりました）。"
+                    "dataset_preprocess を実行し直して、その matrix_id を渡してください。")
+            prepared = entry["prepared"]
+        else:
+            config = stats_preprocess.normalize_preprocess_config(_config())
+            inputs = stats_results.study_inputs(ds)           # 群は行列を選ばない
+            study = from_dataset(ds, **inputs)
+            prepared = stats_preprocess.preprocess(study, config)
+            if isinstance(prepared, stats_preprocess.NeedsInput):
+                return needs_input(
+                    prepared.field,
+                    f"{prepared.reason} dataset_pca には drift_mode 引数がありません。"
+                    "dataset_preprocess(drift_mode=...) で行列を作り、その matrix_id を "
+                    "dataset_pca に渡して呼び直してください。",
+                    prepared.options, argument=_DRIFT_ARGUMENT, retry_tools=_RETRY_TOOLS)
+            entry = stats_results.get_matrix(ds, prepared.matrix_id)     # 同じ行列があれば再利用
+            if entry is None:
+                entry, _summary, preprocess_record = _store_matrix(
+                    holder, ds, study, prepared, config, inputs)
+            implicit_matrix = prepared.matrix_id
+        label_overrides = stats_results.study_inputs(
+            ds, group_levels=group_levels, group_factors=group_factors)["group_overrides"]
+        result = stats_pca.pca(prepared, scaling=scaling, n_components=n_components, impute=impute)
+        labels = stats_results.unit_group_labels(ds, prepared, label_overrides)
+        record = stats_results.register_pca(ds, result, labels)
+    except DomainError as exc:
+        if implicit_matrix is not None:           # 行列は登録済み。呼び直しにそのまま使える
+            exc = DomainError(exc.code, exc.message, {**(exc.details or {}),
+                                                      "matrix_id": implicit_matrix})
+        return _domain_envelope(exc)
+
+    groups: dict[str, int] = {}
+    for label in labels.values():
+        groups[label] = groups.get(label, 0) + 1
+    summary = truncate_lists(json_safe(round_floats({
+        "result_id": record["result_id"],
+        "matrix_id": record["matrix_id"],
+        "scaling": result["scaling"],
+        "log2": result["log2"],
+        "imputation": result["imputation"],
+        "n_fit": result["n_fit"],
+        "n_qc_projected": len(result["qc_ids"]),
+        "explained_variance_ratio": result["explained_variance_ratio"],
+        "groups": dict(sorted(groups.items())),
+    })), _STEP_LIST_LIMIT)
+    written = _write_pca_record(
+        holder, entry, record,
+        {"scaling": scaling, "n_components": n_components, "impute": impute,
+         "group_labels": label_overrides}, summary)
+    if preprocess_record is not None:
+        written = {**written, "preprocess_record": preprocess_record}
+    return json_payload(json_safe({
+        "status": "success",
+        **summary,
+        "record": written,
+        "loadings_note": ("スコアとローディングの全量（特徴数 × 主成分数）は本要約に非同梱。result_id で"
+                          "セッションに保持しており、図は dataset_plot(kind=\"pca\" / \"loadings\") で出す。"
+                          "QC は軸の計算に使わず投影だけ（n_qc_projected）。"),
     }))

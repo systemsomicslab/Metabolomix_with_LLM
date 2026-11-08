@@ -61,7 +61,7 @@ def _tools(tmp_path):
     return [
         (mztab_tools.dataset_status, {}),
         (stats_tools.dataset_preprocess, {}),
-        (T.dataset_pca, {}),
+        (stats_tools.dataset_pca, {}),
         (T.dataset_differential, {"group_a": HC, "group_b": RA}),
         (T.dataset_export_differential, {"output_path": str(tmp_path / "x.tsv")}),
         (T.dataset_export_evidence_bundle, {"output_dir": str(tmp_path / "b"), "result_id": "r"}),

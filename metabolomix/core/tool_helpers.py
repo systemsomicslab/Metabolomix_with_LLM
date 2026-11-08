@@ -30,23 +30,63 @@ def _pca_scatter_arrays(plot: dict):
     )
 
 
+def is_stat_pca(record: dict | None) -> bool:
+    """統計エンジンの PCA の記録（`stats_results.register_pca` が置く `kind="stat_pca"`）か。"""
+    return (record or {}).get("kind") == "stat_pca"
+
+
+#: 統計エンジンの PCA で、QC の点につける群の名前（凡例に出る）。
+QC_LABEL = "QC"
+
+
+def stat_pca_rows(record: dict) -> list[dict]:
+    """`stat_pca` の記録（stats-pca.v1 を `engine` に持つ）を、スコア図が読む行（個体 → QC の順）にする。
+
+    行は `{name, role, group, fitted, PC1, PC2, ...}`。`name` は個体 ID（QC は QC の ID）、`group` は
+    記録の `groups`（色分けの表示だけに使った群。QC は `QC`）、`fitted` は軸の計算に使った行か
+    （QC は投影だけなので False）。
+    """
+    engine = record.get("engine") or {}
+    groups = record.get("groups") or {}
+    scores = engine.get("scores") or {}
+    rows = []
+    for names, matrix, role in ((engine.get("unit_ids") or [], scores.get("units") or [], "sample"),
+                                (engine.get("qc_ids") or [], scores.get("qc") or [], "qc")):
+        for name, values in zip(names, matrix):
+            row = {"name": name, "role": role, "fitted": role == "sample",
+                   "group": groups.get(name) if role == "sample" else QC_LABEL}
+            row.update({f"PC{k + 1}": float(v) for k, v in enumerate(values)})
+            rows.append(row)
+    return rows
+
+
 def dataset_pca_plot(last_pca: dict, title: str = "PCA (mzTab-M)") -> dict | None:
     """DatasetState の PCA 結果を `_pca_scatter_arrays` が食う散布図 dict に射影する。
 
-    `ds.last_pca["scores"]`（name / role / PC1 / PC2…）を、描画側が読む 1 つの形へ寄せる。
+    v1 の結果は `ds.last_pca["scores"]`（name / role / PC1 / PC2…）、統計エンジンの結果
+    （`kind="stat_pca"`）は `engine` の個体と QC のスコア（QC は `fitted=False`・群 `QC`）を、
+    描画側が読む 1 つの形へ寄せる。v1 の読み取りは pipeline の図のために D 段まで残す。
 
     PC2 が無い（主成分 1 つ）場合は散布図にできないので None を返す。
     """
-    scores = (last_pca or {}).get("scores") or []
+    if is_stat_pca(last_pca):
+        scores = stat_pca_rows(last_pca)
+        evr = (last_pca.get("engine") or {}).get("explained_variance_ratio") or []
+    else:
+        scores = (last_pca or {}).get("scores") or []
+        evr = (last_pca or {}).get("explained_variance_ratio") or []
     points = []
     for row in scores:
         x, y = row.get("PC1"), row.get("PC2")
         if x is None or y is None:
             continue
-        points.append({"x": float(x), "y": float(y), "label": row.get("name")})
+        point = {"x": float(x), "y": float(y), "label": row.get("name")}
+        if is_stat_pca(last_pca):
+            point["group"] = row.get("group") or "(none)"
+            point["fitted"] = bool(row.get("fitted"))
+        points.append(point)
     if not points:
         return None
-    evr = (last_pca or {}).get("explained_variance_ratio") or []
     x_label = f"PC1 ({evr[0] * 100:.2f}%)" if len(evr) > 0 else "PC1"
     y_label = f"PC2 ({evr[1] * 100:.2f}%)" if len(evr) > 1 else "PC2"
     return {"title": title, "x_label": x_label, "y_label": y_label, "points": points}

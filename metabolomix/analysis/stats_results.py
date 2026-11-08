@@ -33,6 +33,7 @@ __all__ = [
     "register_matrix",
     "register_pca",
     "study_inputs",
+    "unit_group_labels",
 ]
 
 
@@ -220,6 +221,28 @@ def register_compare(ds, run_result: dict, *, log2fc_threshold, units) -> dict:
     ds.results[result_id] = record
     ds.last_differential = record
     return record
+
+
+def unit_group_labels(ds, prepared, group_overrides: dict | None = None) -> dict[str, str]:
+    """個体 ID → 色分けの群（PCA の表示だけに使う。数字には効かない）。
+
+    `group_overrides`（試料の表示名 → 群。`study_inputs` が解いたもの）があれば、その個体の試料に
+    当たった群（1 つなら、複数にまたがれば `(mixed)`）、当たる試料が無い個体と上書きの無いときは
+    行列の個体の群（`unit.group`）。どれも無ければ `(none)`。
+    """
+    overrides = group_overrides or {}
+    names = _display_names(ds)
+    out: dict[str, str] = {}
+    for unit in prepared.units:
+        hit = {overrides[names.get(sid, sid)] for sid in unit.sample_ids
+               if names.get(sid, sid) in overrides}
+        if len(hit) == 1:
+            out[unit.unit_id] = next(iter(hit))
+        elif hit:
+            out[unit.unit_id] = "(mixed)"
+        else:
+            out[unit.unit_id] = unit.group if unit.group is not None else "(none)"
+    return out
 
 
 def register_pca(ds, pca_result: dict, groups: dict | None) -> dict:
