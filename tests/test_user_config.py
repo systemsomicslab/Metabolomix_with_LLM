@@ -50,6 +50,8 @@ def test_settings_table_has_a_kind_per_key():
         "paths.library_cache": "path",
         "server.max_dataset_handles": "int",
         "server.caveat_mode": "text",
+        "quant.rules": "path",
+        "quant.adducts": "path",
     }
     assert user_config.MOVED_KEYS == {"msdial.lbm": "library.lbm"}
     assert user_config.NON_PATH_SETTINGS == frozenset(

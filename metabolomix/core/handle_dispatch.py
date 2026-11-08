@@ -38,7 +38,10 @@ __all__ = ["ALWAYS_THREADED", "SESSION_READERS", "install"]
 #: ハンドルの有無に依らずスレッドで回すツール。読み込みは数分かかりうるので、イベントループ
 #: から外す。`load_dataset` がセッションへ書くのは成功時の直近の切り替え
 #: （`session.adopt_handle`。`_current_lock` の下）だけ。
-ALWAYS_THREADED = frozenset({"load_dataset"})
+ALWAYS_THREADED = frozenset({
+    "load_dataset",
+    "dataset_merge_polarities",  # 2 つのハンドルのロックを自分で取る（最大 LOCK_TIMEOUT 待つ）
+})
 
 #: `dataset_handle` を持たないが、直近のハンドルの `session.dataset` / `session.library` を
 #: （自身か、ヘルパー経由で）読むツール。直近のハンドルがあれば、そのロックと固定の下で

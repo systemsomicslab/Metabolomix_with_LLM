@@ -278,6 +278,8 @@ class DatasetState:
         # （`sample_meta` の編集と同じ扱い）。前処理（`dataset_analysis`）が行列から外す。
         self.excluded_samples: dict[str, str] = {}
         self.excluded_features: dict[str, str] = {}
+        # quant_state: 定量の工程（metabolomix/quant）が置く受け渡し。統計側は normalized / method / unit を読む。
+        self.quant_state: dict | None = None
 
 
 def _sha256(path: str | Path) -> str:

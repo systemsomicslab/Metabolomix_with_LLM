@@ -1,0 +1,241 @@
+"""規則プラグインの読み込み（偽のプラグインで）。"""
+from __future__ import annotations
+
+import sys
+
+import pytest
+
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.quant import plugin
+from tests.quant_fake_rules import write_fake_rules
+
+REF = ("TargetClass,StandardName,Coefficient,Unit\nPC,IS-A,2.0,nmol\n"
+       "Any others,IS-B,1.0,nmol\n")
+ADDUCTS = "Class,Adduct,Ion mode,IsSelected\nPC,[M+H]+,Positive,True\n"
+
+
+def _point(tmp_path, monkeypatch, folder):
+    cfg = tmp_path / "lipidmix.local.toml"
+    cfg.write_text(f"[quant]\nrules = '{folder}'\n", encoding="utf-8")
+    monkeypatch.setenv("LIPIDMIX_CONFIG", str(cfg))
+
+
+def _feat(i, name, cls, heights, detected=None):
+    return {"feature_id": i, "name": name, "lipid_class": cls, "mz": 1.0, "rt": 1.0,
+            "adduct": "[M+H]+", "heights": heights, "detected": detected or [True] * len(heights)}
+
+
+def _sel(fid, name, role="target"):
+    return {"feature_id": fid, "name": name, "comment": "", "msms_assigned": "True",
+            "ontology": "PC", "adduct": "[M+H]+", "mode": "positive", "role": role}
+
+
+def test_rules_unconfigured():
+    with pytest.raises(DomainError) as e:
+        plugin.load_rules()
+    assert e.value.code == "quant_rules_unavailable"
+    assert "[quant]" in e.value.message and "rules" in e.value.message
+
+
+def test_rules_folder_missing(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch, tmp_path / "nope")
+    with pytest.raises(DomainError) as e:
+        plugin.load_rules()
+    assert e.value.code == "quant_rules_unavailable"
+
+
+def test_rules_import_failure_leaves_no_modules(tmp_path, monkeypatch):
+    folder = write_fake_rules(tmp_path, extra="\nraise RuntimeError('boom')\n")
+    _point(tmp_path, monkeypatch, folder)
+    before = set(sys.modules)
+    with pytest.raises(DomainError) as e:
+        plugin.load_rules()
+    assert e.value.code == "quant_rules_unavailable" and "boom" in e.value.message
+    assert not [k for k in set(sys.modules) - before if "quant_rules" in k]
+
+
+def test_rules_loaded_from_fake(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch, write_fake_rules(tmp_path))
+    p = plugin.load_rules()
+    assert p.rules_version == "fake-rules-1" and p.label == "msdial_rules"
+    assert "msdial_rules" not in sys.modules
+    assert not any(k.startswith("msdial_rules.") for k in sys.modules)
+    assert plugin.load_rules() is p  # 同じ指紋は使い回す
+    assert plugin.rules_settings(p) == {"rules_version": "fake-rules-1", "digest": p.digest,
+                                        "api_version": 1}
+    assert f"_lipidmix_quant_rules_{p.digest[:8]}" in sys.modules
+
+
+def test_incompatible_api_version(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch, write_fake_rules(tmp_path, api_version=2))
+    with pytest.raises(DomainError) as e:
+        plugin.load_rules()
+    assert e.value.code == "quant_rules_incompatible"
+
+
+def test_digest_changes_with_code_and_reloads(tmp_path, monkeypatch):
+    folder = write_fake_rules(tmp_path)
+    _point(tmp_path, monkeypatch, folder)
+    first = plugin.load_rules()
+    api = folder / "api.py"
+    api.write_text(api.read_text(encoding="utf-8") + "\n#\n", encoding="utf-8")
+    second = plugin.load_rules()
+    assert second.digest != first.digest and second.api is not first.api
+    (folder / "__pycache__").mkdir()
+    (folder / "__pycache__" / "x.py").write_text("junk", encoding="utf-8")
+    assert plugin.load_rules().digest == second.digest
+
+
+def test_rejected_rule_is_wrapped(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch, write_fake_rules(tmp_path))
+    p = plugin.load_rules()
+    with pytest.raises(DomainError) as e:
+        plugin.call(p, "normalize", features=[], n_samples=1, reference_text="bad")
+    assert e.value.code == "QUANT_RULES_REJECTED"
+    assert e.value.details["rule_code"] == "reference_invalid"
+
+
+def test_fake_normalize(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch, write_fake_rules(tmp_path))
+    p = plugin.load_rules()
+    feats = [_feat(1, "IS-A", "PC", [10.0, 0.0]), _feat(2, "IS-B", "PE", [5.0, 5.0]),
+             _feat(3, "PC 34:1", "PC", [20.0, 20.0]), _feat(4, "PE 36:2", "PE", [10.0, None]),
+             _feat(5, "TG 50:0", "TG", [1.0, 1.0])]
+    out = plugin.call(p, "normalize", features=feats, n_samples=2, reference_text=REF)
+    assert out["values"][2] == [4.0, None]
+    assert out["statuses"][2] == ["ok", "standard_invalid_height"]
+    assert out["values"][3] == [2.0, None] and out["statuses"][3][1] == "missing"
+    assert sorted(out["any_others_classes"]) == ["PE", "TG"]
+    assert out["roles"][:2] == ["internal_standard"] * 2
+    out = plugin.call(p, "normalize", features=feats[2:], n_samples=2, reference_text=REF)
+    assert out["assignments"]["PC"]["status"] == "standard_missing"
+    twin = feats + [_feat(6, "IS-A", "PC", [4.0, 4.0])]
+    out = plugin.call(p, "normalize", features=twin, n_samples=2, reference_text=REF)
+    assert out["assignments"]["PC"]["status"] == "standard_ambiguous"
+    out = plugin.call(p, "normalize", features=twin, n_samples=2, reference_text=REF,
+                      bindings={"IS-A": 6})
+    assert out["values"][2] == [10.0, 10.0]
+    std = ("TargetClass\tStandardName\tStandardAdduct\nPC\tIS-A\t[M+H]+\n"
+           "Any others\tIS-B\t[M+H]+\n")
+    text = plugin.call(p, "coefficient_reference_text", reference_text=std,
+                       concentrations={"IS-A": 2.0, "IS-B": 1.0}, solvent_volume=10.0,
+                       cells_millions=4.0)
+    lines = text.splitlines()
+    assert lines[0] == "TargetClass,StandardName,Coefficient,Unit,StandardAdduct"
+    assert lines[1] == "PC,IS-A,5.0,pmol / 10^6 cells,[M+H]+"
+    assert lines[2] == "Any others,IS-B,2.5,pmol / 10^6 cells,[M+H]+"
+    out = plugin.call(p, "normalize", features=feats, n_samples=2, reference_text=text)
+    assert out["values"][2] == [10.0, None]  # 20/10*5; second sample IS height 0
+    assert out["values"][3][0] == 5.0  # 10/5*2.5 via Any others
+    with pytest.raises(DomainError) as e:
+        plugin.call(p, "coefficient_reference_text", reference_text=std,
+                    concentrations={"IS-A": 2.0}, solvent_volume=10.0, cells_millions=4.0)
+    assert e.value.details["rule_code"] == "concentration_missing"
+
+
+def test_fake_match_and_select(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch, write_fake_rules(tmp_path))
+    p = plugin.load_rules()
+    m = plugin.call(p, "match_samples",
+                    names_by_mode={"pos": ["s1_pos", "s2_pos"], "neg": ["s1_neg", "s3"]})
+    assert m["rule"] == "exact_name"  # 除いた名前の集合も違うので名前は変えない
+    assert m["ids_by_mode"] == {"pos": ["s1_pos", "s2_pos"], "neg": ["s1_neg", "s3"]}
+    assert m["mismatched"]["pos"] == ["s1_pos", "s2_pos"]
+    ok = plugin.call(p, "match_samples", names_by_mode={"pos": ["s1_pos", "s2_pos"],
+                                                        "neg": ["s2_neg", "s1_neg"]})
+    assert ok["rule"] == "polarity_token_removed" and ok["mismatched"] == {}
+    assert ok["ids_by_mode"] == {"pos": ["s1", "s2"], "neg": ["s2", "s1"]}
+    sel = plugin.call(p, "select", adduct_text=ADDUCTS,
+                      features=[_sel("a", "PC 34:1"), _sel("b", "Unknown"),
+                                _sel("c", "IS-A", "internal_standard")])
+    assert [s["action"] for s in sel] == ["retained", "excluded", "excluded"]
+
+
+def test_fake_match_samples_with_mapping(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch, write_fake_rules(tmp_path))
+    p = plugin.load_rules()
+    rows = [{"mode": "pos", "source_sample": "a_pos", "sample_id": "S1", "group": "g", "sample_type": "x"},
+            {"mode": "pos", "source_sample": "b_pos", "sample_id": "S2", "group": "g", "sample_type": "x"},
+            {"mode": "neg", "source_sample": "zz", "sample_id": "S1", "group": "g", "sample_type": "x"},
+            {"mode": "neg", "source_sample": "yy", "sample_id": "S3", "group": "g", "sample_type": "x"}]
+    names = {"pos": ["b_pos", "a_pos"], "neg": ["zz", "yy"]}
+    m = plugin.call(p, "match_samples", names_by_mode=names, mapping_rows=rows)
+    assert m["rule"] == "mapping_csv"
+    assert m["ids_by_mode"] == {"pos": ["S2", "S1"], "neg": ["S1", "S3"]}
+    assert m["mismatched"] == {"pos": ["S2"], "neg": ["S3"]}
+    assert m["rows_by_mode"]["pos"]["a_pos"]["sample_id"] == "S1"
+    # the mapping resolves a pair the suffix rule cannot
+    assert plugin.call(p, "match_samples", names_by_mode=names)["ids_by_mode"]["neg"] == ["zz", "yy"]
+    with pytest.raises(DomainError) as e:
+        plugin.call(p, "match_samples", names_by_mode={"pos": ["c_pos"]}, mapping_rows=rows)
+    assert e.value.details["rule_code"] == "mapping_invalid"
+
+
+_RAISING = r'''
+def normalize(*a, **k):
+    raise FakeRuleError(
+        "bad row in C:\\lab\\secret\\ref.csv and /srv/lab/ref.csv: " + "x" * 500, "row_bad",
+        {"rows": [["PC", "IS-A"]], "path": "D:\\lab\\r.csv", "n": 3})
+'''
+
+
+def test_plugin_errors_are_sanitized(tmp_path, monkeypatch):
+    folder = write_fake_rules(tmp_path, extra=_RAISING)
+    _point(tmp_path, monkeypatch, folder)
+    p = plugin.load_rules()
+    with pytest.raises(DomainError) as e:
+        plugin.call(p, "normalize", features=[], n_samples=0, reference_text="")
+    text = e.value.message + repr(e.value.details)
+    assert "lab" not in text and "secret" not in text and "PC" not in text
+    assert "ref.csv" in e.value.message and len(e.value.message) <= 303
+    assert e.value.details == {"rule_code": "row_bad", "path": "r.csv", "n": 3}
+
+
+def test_sanitize_text_keeps_plain_slashes():
+    assert plugin.sanitize_text("(positive / negative)") == "(positive / negative)"
+    assert plugin.sanitize_text(r"at C:\x\y\z.csv") == "at z.csv"
+
+
+
+def test_sanitize_text_keeps_units_after_brackets_and_word_drives():
+    assert plugin.sanitize_text("value in (nmol)/mg") == "value in (nmol)/mg"
+    assert plugin.sanitize_text("[pmol]/10^6 cells") == "[pmol]/10^6 cells"
+    assert plugin.sanitize_text("unitC:/x is odd") == "unitC:/x is odd"
+    assert plugin.sanitize_text("bad row in C:\\lab\\ref.csv") == "bad row in ref.csv"
+    assert plugin.sanitize_text("see (C:/lab/ref.csv)") == "see (ref.csv)"
+    assert plugin.sanitize_text("at /home/u/ref.csv") == "at ref.csv"
+
+
+def test_concurrent_loads_import_once(tmp_path, monkeypatch):
+    """別々のハンドルの POS / NEG を並列に回しても、同じプラグインを 2 回 import しない。"""
+    import threading
+    import time
+
+    _point(tmp_path, monkeypatch, write_fake_rules(tmp_path / "rules"))
+    plugin._cache.clear()
+    real = plugin._import
+    calls = []
+
+    def slow_import(folder, digest):
+        calls.append(digest)
+        time.sleep(0.2)
+        return real(folder, digest)
+
+    monkeypatch.setattr(plugin, "_import", slow_import)
+    barrier = threading.Barrier(2)
+    got, errors = [], []
+
+    def worker():
+        barrier.wait()
+        try:
+            got.append(plugin.load_rules())
+        except BaseException as exc:  # noqa: BLE001 - スレッドの失敗をテストへ持ち帰る
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert errors == [] and len(got) == 2
+    assert len(calls) == 1 and got[0] is got[1]

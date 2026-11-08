@@ -58,3 +58,11 @@ exe = 'C:\MS-DIAL\MSDIALCUI.exe'
 # 解析出力の先頭に付く意味論ダイジェストと出力形式の案内。digest（既定）か off。
 # off はローカルの操作ナビゲータ専用のデプロイ向け。ほかの値は CONFIG_INVALID（解析出力は既定の digest で続き、その旨が 1 行添えられる）。
 # caveat_mode = 'digest'
+
+[quant]
+# 定量の工程（任意）。書き方は docs/quant-rules-plugin.md。
+# 規則プラグイン（パッケージ msdial_rules のフォルダ）。書かなければ定量の 4 ツールは
+# quant_rules_unavailable を返す。
+# rules = 'D:\tools\msdial-rules\msdial_rules'
+# 付加体の採用表（CSV）。任意。
+# adducts = 'D:\tables\adduct-selection.csv'

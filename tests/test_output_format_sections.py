@@ -16,7 +16,7 @@ from metabolomix.tools import resources as tools_resources
 
 
 B2_TOPICS = {"core", "dataset", "dcl", "eic", "identity", "mztab", "library", "curation",
-             "pathway", "reanalysis"}
+             "pathway", "reanalysis", "quant"}  # quant は B-3 の定量
 
 # 分割・統合で絶対に失ってはならない意味論。トピック -> そのトピックに必ず残る語。
 REQUIRED_MARKERS = {

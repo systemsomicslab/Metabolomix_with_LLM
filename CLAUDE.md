@@ -5,7 +5,7 @@
 ## このリポジトリは何か
 
 MS-DIAL（LC-MS リピドミクス／メタボロミクス解析ソフト）の出力を読み、LLM から使える形で
-公開する **MCP サーバ `ms-data-parser`**。ツール 56・リソース 2・リソーステンプレート 1。
+公開する **MCP サーバ `ms-data-parser`**。ツール 60・リソース 2・リソーステンプレート 1。
 GUI の外では読めない圧縮 MessagePack と独自バイナリを解し、解析そのものをサーバ側で回して
 要約だけを返す（生の行列を LLM の文脈に載せない）。
 
@@ -140,6 +140,7 @@ metabolomix/pipeline/  生データフォルダ起点の統括（受付 request/
 metabolomix/handoff/   Console 成果物の受け渡しスキーマ（analysis-job.json）
 metabolomix/curation/  アラインメントのキュレーション（証拠収集・機械判別・フラグ記録・ビューア HTML）
 metabolomix/pathway/   MSLipidMapper 連携（最小 mzTab-M の受け渡し・Rscript ブリッジ・JSON-LD 読み取り・隣接比較）
+metabolomix/quant/     定量（内部標準の正規化・極性の統合・特徴の選別）。規則は任意のプラグイン `[quant] rules`（docs/quant-rules-plugin.md）
 metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料・目的・レポート・リソース）
 ```
 
@@ -246,7 +247,7 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料�
 | 知りたいこと | 見る場所 |
 |---|---|
 | ツールの引数・用途（`tests/test_readme_links.py` が一覧と件数を実登録と突き合わせている） | `USAGE.md` |
-| 出力フィールドの**意味**（行の粒度・脂質名文法・必須注意） | `docs/output_format/core.md` ＋ トピック別（`dataset` `dcl` `eic` `identity` `mztab` `library` `curation` `pathway` `reanalysis`）。MCP リソース `lipidmix://docs/output-format[/{topic}]` としても配信 |
+| 出力フィールドの**意味**（行の粒度・脂質名文法・必須注意） | `docs/output_format/core.md` ＋ トピック別（`dataset` `dcl` `eic` `identity` `mztab` `library` `curation` `pathway` `reanalysis` `quant`）。MCP リソース `lipidmix://docs/output-format[/{topic}]` としても配信 |
 | ツールが**どのファイルのどの関数をどの順に呼ぶか** | `docs/workflow/`（対象範囲の線引きと内訳は `index.md` が正準。`tests/test_workflow_docs.py` が実登録と突き合わせている）。行番号は書かない規約 |
 | **生データ → Console → mzTab-M → 差次的解析 → パスウェイ**の一気通貫の順序と、内部関数の引数・戻り値 | [docs/superpowers/specs/2026-09-03-end-to-end-pipeline-design.md](docs/superpowers/specs/2026-09-03-end-to-end-pipeline-design.md)（**目標状態**の記述。実装状況は同文書 §9。完成後 `docs/workflow/Lipidmix/` へ昇格） |
 | MessagePack の Key 番号 | `docs/schema/*.md` |

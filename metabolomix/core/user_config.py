@@ -51,6 +51,10 @@ SETTINGS: dict[str, str] = {
     # サーバの振る舞い（同じく環境変数から移した）。
     "server.max_dataset_handles": "int",
     "server.caveat_mode": "text",
+    # 定量（B-3）。`rules` は任意の規則プラグイン（パッケージ msdial_rules のフォルダ。
+    # docs/quant-rules-plugin.md）、`adducts` は付加体の採用表（CSV）。
+    "quant.rules": "path",
+    "quant.adducts": "path",
 }
 
 #: 値を選択肢に限る設定 → 選べる値（小文字。大文字小文字は問わず、小文字にそろえて返す）。

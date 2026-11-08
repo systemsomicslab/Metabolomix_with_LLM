@@ -14,10 +14,32 @@
 """
 import itertools
 import sys
+from pathlib import Path
 
 import pytest
 
 from metabolomix.core.user_config import CONFIG_ENV
+
+def pytest_addoption(parser):
+    """本物の規則プラグインとの同値確認（tests/test_quant_parity.py）だけが読む。"""
+    parser.addoption("--quant-rules", action="store", default=None,
+                     help="規則パッケージ msdial_rules のフォルダ。渡したときだけ同値確認を走らせる")
+
+
+_REAL_RULES_SUITES = ("tests.test_quant_normalize", "tests.test_quant_merge",
+                      "tests.test_quant_select", "tests.test_quant_resume")
+
+
+@pytest.fixture(autouse=True)
+def _real_rules_for_quant_suites(request, monkeypatch):
+    """`--quant-rules` 付きなら、定量 3 スイート（と再開）の `write_fake_rules` は本物の規則の
+    フォルダを返す（同じテストを本物の規則でも走らせる）。plugin / parity のテストは対象外。"""
+    folder = request.config.getoption("--quant-rules")
+    if folder and request.module.__name__ in _REAL_RULES_SUITES:
+        from tests import quant_fake_rules
+
+        monkeypatch.setattr(quant_fake_rules, "REAL_RULES_FOLDER", Path(folder))
+
 
 _NO_CONFIG_SEQ = itertools.count()
 

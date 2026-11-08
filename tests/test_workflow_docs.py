@@ -48,6 +48,8 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
                       "dataset_feature_relations", "dataset_claim_evidence",
                       "dataset_mass_accuracy", "dataset_novel_candidates",
                       "dataset_alignment_qc"),
+    "quant.md": ("dataset_quant_preview", "dataset_quant_apply", "dataset_merge_polarities",
+                 "dataset_select_features"),
 }
 
 # 今回の範囲外。文書に混入したら落とす（線引きを固定するため）。
@@ -178,4 +180,4 @@ class TestScopeBoundary(unittest.TestCase):
             registered,
             "対象範囲の分類と登録済みツールが一致しない",
         )
-        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 44)
+        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 48)

@@ -40,6 +40,8 @@ import server
 # B-2b Task 8: 旧 ARF / ARF2 / PAI2 / EIC のツール 26 本を撤去（82→56。計画の決めたこと 1）。
 # B-2b Task 2: 入口を load_dataset 1 本にまとめ（旧 ARF の load_dataset・dataset_load・
 # dataset_handle_open を統合）、dataset_handle_list / close を dataset_list / dataset_close へ改名（82→80）。
+# B-3: 定量の 4 ツール（dataset_quant_preview / dataset_quant_apply / dataset_merge_polarities /
+# dataset_select_features）を追加（統合時 56→60）。
 EXPECTED_TOOLS = sorted([
     "list_data_files",
     "load_dataset",
@@ -48,6 +50,10 @@ EXPECTED_TOOLS = sorted([
     "dataset_status",
     "dataset_set_sample_metadata",
     "dataset_exclude",
+    "dataset_quant_preview",
+    "dataset_quant_apply",
+    "dataset_merge_polarities",
+    "dataset_select_features",
     "curation_review",
     "curation_suggest",
     "curation_submit",

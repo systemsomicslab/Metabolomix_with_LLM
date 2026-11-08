@@ -69,6 +69,11 @@ EXPECTED_ANNOTATIONS = {
     "dataset_claim_evidence": LOCAL_WRITE,
     "dataset_novel_candidates": LOCAL_WRITE,
     "dataset_alignment_qc": LOCAL_WRITE,
+    # 定量: preview は読むだけ。apply / merge / select は呼ぶたびに新しい記録とハンドルを足す（追記）。
+    "dataset_quant_preview": READ_ONLY,
+    "dataset_quant_apply": LOCAL_WRITE_APPEND,
+    "dataset_merge_polarities": LOCAL_WRITE_APPEND,
+    "dataset_select_features": LOCAL_WRITE_APPEND,
     "library_msms_qualify": READ_ONLY,
     "dataset_homolog_check": READ_ONLY,
     "dataset_feature_relations": READ_ONLY,

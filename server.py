@@ -65,6 +65,7 @@ from metabolomix.tools.curation_tools import *  # curation_review, curation_sugg
 from metabolomix.pathway.tools import *  # pathway_project, pathway_plot（MSLipidMapper 連携）
 from metabolomix.tools.handle_tools import *  # load_dataset / dataset_list / dataset_close
 from metabolomix.tools.reanalysis_tools import *  # 再解析の spec で呼ぶツール（dataset_analysis_run ほか）
+from metabolomix.quant.tools import *  # dataset_quant_preview / dataset_quant_apply / dataset_merge_polarities / dataset_select_features（定量）
 
 # 全ツールの登録が済んでから 1 回だけ: dataset_handle を渡した呼び出しをスレッドへ退避する
 # （渡さない呼び出しは今までどおりイベントループ上で同期に動く）。

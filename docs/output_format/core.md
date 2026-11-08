@@ -18,8 +18,9 @@
 | `curation` | `lipidmix://docs/output-format/curation` | — | アラインメントのキュレーション（`curation_review` 等）。判定・理由コードの意味 |
 | `pathway` | `lipidmix://docs/output-format/pathway` | — | パスウェイ投影（`pathway_project` / `pathway_plot`、MSLipidMapper 連携）。ノード表・隣接ペア・図の p 値の意味 |
 | `reanalysis` | `lipidmix://docs/output-format/reanalysis` | — | 再解析のデータセットのハンドル（`load_dataset` / `dataset_list` / `dataset_close`）と、spec で呼ぶ再解析のツール（行列と統計・MS/MS の合否・証拠の束）。spec と結果の JSON の欄の意味 |
+| `quant` | `lipidmix://docs/output-format/quant` | — | 定量（`dataset_quant_preview` / `dataset_quant_apply` / `dataset_merge_polarities` / `dataset_select_features`）。gap-fill の印（`detected_mask`）・単位・`quant_state`・`needs_input` の答え方・記録と audit |
 
-節番号は分割前の通し番号をそのまま保持している（`curation`・`pathway`・`reanalysis` は分割後に追加したトピックなので節番号を持たない）。本文中の `§11.1.1` のような相互参照は、この表からトピックを引いて辿ること。
+節番号は分割前の通し番号をそのまま保持している（`curation`・`pathway`・`reanalysis`・`quant` は分割後に追加したトピックなので節番号を持たない）。本文中の `§11.1.1` のような相互参照は、この表からトピックを引いて辿ること。
 
 MCPツール層（形式ごとの `metabolomix/<形式>/tools.py` と `metabolomix/tools/`。`server.py` はそれらを登録・再エクスポートする薄いファサード）が、パーサーの構造化結果を主に Markdown/JSON 文字列へ整形する。LLM は表示文ではなく、各トピックが定義する意味を基準に解釈する。
 
