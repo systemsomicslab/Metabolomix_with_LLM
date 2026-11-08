@@ -1,6 +1,5 @@
 """dataset_feature_search の with_group_labels（spec 2026-10-22 §4 の 5）。"""
 from __future__ import annotations
-from tests.v1_chain import v1_preprocess
 
 import json
 
@@ -10,6 +9,7 @@ from metabolomix.core import session_state
 from metabolomix.tools import dataset_analysis_tools as T
 from metabolomix.tools import handle_tools, mztab_tools
 from tests.reanalysis_fixtures import write_mztab
+from tests.v1_chain import v1_preprocess
 
 HC, RA = ["HC1", "HC2", "HC3"], ["RA1", "RA2", "RA3"]
 

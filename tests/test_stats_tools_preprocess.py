@@ -195,3 +195,96 @@ def test_preprocess_invalid_injection_columns_is_config_envelope(ds):
 
 def test_stats_tool_module_public_surface():
     assert stats_tools.__all__ == ["dataset_preprocess"]
+
+
+# --- 工程の要約（足切りごとの内訳・群ごとの個体数） -------------------------------------------
+
+def _step(out, name):
+    return next(s for s in out["steps"] if s["step"] == name)
+
+
+def test_filter_step_reports_each_filter(ds):
+    out = _call(**{**FLAT_OFF, "max_qc_rsd": 0.1})
+    flt = _step(out, "filter")
+    assert flt["dropped"] == 7
+    assert flt["filters"]["qc_rsd"]["status"] == "applied"
+    assert flt["filters"]["qc_rsd"]["dropped"] == 7
+    assert flt["filters"]["blank_ratio"] == {"status": "skipped", "reason": "disabled"}
+    assert "dropped_ids" not in flt["filters"]["qc_rsd"]
+
+
+def test_filter_step_reports_detection_skipped_without_mask(ds):
+    ds.detected_mask = None
+    out = _call(**{**FLAT_OFF, "detection_min_rate": 0.5})
+    det = _step(out, "filter")["filters"]["detection"]
+    assert det == {"status": "skipped", "reason": "no_detected_mask"}
+
+
+def test_select_step_reports_per_role_counts(ds):
+    ds.sample_metadata_rows[0]["role"] = "standard"      # QC0 を役割が対象外の試料にする
+    out = _call(**FLAT_OFF)
+    sel = _step(out, "select")
+    assert sel["n_sample"] == 16 and sel["n_qc"] == 3
+    assert sel["excluded_by_role"] == {"standard": 1}
+
+
+def test_payload_has_group_counts_and_single_group_warning(ds):
+    out = _call(**FLAT_OFF)
+    assert out["groups"] == {"C": 4, "T": 4}
+    assert not any(w.get("code") == "single_group" for w in out["warnings"])
+    typo = _call(**FLAT_OFF, group_levels=["nomatch"])
+    assert typo["groups"] == {"other": 8}
+    assert any(w.get("code") == "single_group" and w["group"] == "other" for w in typo["warnings"])
+
+
+# --- 詳細の切り詰め ---------------------------------------------------------------------
+
+def test_error_details_are_truncated_at_every_depth(ds, monkeypatch):
+    from metabolomix.core.atomic_io import DomainError
+
+    def boom(*a, **k):
+        raise DomainError("STUDY_DATA_INVALID", "bad",
+                          {"unknown_samples": [f"s{i}" for i in range(50)],
+                           "excluded_by_role": {"std": [f"x{i}" for i in range(50)], "few": ["a"]}})
+    monkeypatch.setattr(stats_tools, "from_dataset", boom)
+    err = _call(**FLAT_OFF)["error"]["details"]
+    assert len(err["unknown_samples"]) == 20 and err["unknown_samples_n_more"] == 30
+    assert len(err["excluded_by_role"]["std"]) == 20 and err["excluded_by_role"]["std_n_more"] == 30
+    assert err["excluded_by_role"]["few"] == ["a"]
+
+
+# --- 公開面 ----------------------------------------------------------------------------
+
+def test_handle_isolation(tmp_path):
+    a, b = _ds(), _ds()
+    a.analysis_dir = str(tmp_path / "a")
+    b.analysis_dir = str(tmp_path / "b")
+    session_state.session.dataset = a
+    handle_a = session_state.session.current_handle_id
+    session_state.session.dataset = b                  # 直近は B
+    out = _call(**FLAT_OFF, dataset_handle=handle_a)
+    assert out["status"] == "success"
+    assert out["matrix_id"] in a.stat_matrices and not a.pp_matrix
+    assert not b.stat_matrices and session_state.session.dataset is b
+    assert (tmp_path / "a" / "reports" / "stats" / f"{out['record']['record_id']}.json").is_file()
+    assert not (tmp_path / "b").exists()
+
+
+def test_invalid_config_file_does_not_fail_tool(ds, monkeypatch, tmp_path):
+    cfg = tmp_path / "bad.toml"
+    cfg.write_text('[msdial]\nlbm = "x.lbm2"\n', encoding="utf-8")
+    monkeypatch.setenv("LIPIDMIX_CONFIG", str(cfg))
+    out = _call(**FLAT_OFF)
+    assert out["status"] == "success"
+    assert out["record"]["written"] is False and "CONFIG_INVALID" in out["record"]["reason"]
+
+
+def test_default_arguments_are_the_engine_defaults():
+    import inspect
+
+    from metabolomix.analysis.stats.preprocess import PREPROCESS_DEFAULTS, normalize_preprocess_config
+    params = inspect.signature(dataset_preprocess).parameters
+    flat = {name: p.default for name, p in params.items()
+            if name in inspect.signature(stats_tools._config).parameters}
+    assert normalize_preprocess_config(stats_tools._config(**flat)) == normalize_preprocess_config(None)
+    assert normalize_preprocess_config(None) == PREPROCESS_DEFAULTS

@@ -4,7 +4,6 @@
 ツール層の仕事——結果の選び方（古い結果は描かない）・引数の取り違えの拒否・`.EIC.aef` の出所・
 形式名・`save_figure` が `ds.figures` から描くこと——を見る。fixture はテスト自身が作る。
 """
-from tests.v1_chain import v1_preprocess
 import json
 
 import numpy as np
@@ -20,6 +19,7 @@ from metabolomix.tools.dataset_analysis_tools import (
 from tests.config_fixtures import use_config
 from tests.curation_fixtures import write_alignment_set
 from tests.msdial_folder_fixtures import analysis_file_row, write_mddata
+from tests.v1_chain import v1_preprocess
 
 PNG_MAGIC = b"\x89PNG"
 

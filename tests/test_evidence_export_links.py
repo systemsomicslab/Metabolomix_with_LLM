@@ -5,7 +5,6 @@ m/z と RT は結びを検証するためだけに使う。合わないときは
 provenance に状態と理由を書く。
 """
 from __future__ import annotations
-from tests.v1_chain import v1_preprocess
 
 import csv
 import hashlib
@@ -22,6 +21,7 @@ from metabolomix.tools import handle_tools
 from tests.curation_fixtures import arf2_spot_raw, write_arf2
 from tests.dcl_fixture import build_dcl_bytes
 from tests.reanalysis_fixtures import POS_FEATURES, write_mztab
+from tests.v1_chain import v1_preprocess
 
 HC = ["HC1", "HC2", "HC3"]
 RA = ["RA1", "RA2", "RA3"]

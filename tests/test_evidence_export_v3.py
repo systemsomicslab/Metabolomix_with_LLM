@@ -3,7 +3,6 @@
 dataset 経路は常に v3、`samples` と `intensities` を渡さない ARF 経路は v2 のまま。
 """
 from __future__ import annotations
-from tests.v1_chain import v1_preprocess
 
 import csv
 import json
@@ -19,6 +18,7 @@ from metabolomix.mztab import loading
 from metabolomix.tools import dataset_analysis_tools as T
 from metabolomix.tools import handle_tools
 from tests.reanalysis_fixtures import write_mztab
+from tests.v1_chain import v1_preprocess
 
 HC = ["HC1", "HC2", "HC3"]
 RA = ["RA1", "RA2", "RA3"]

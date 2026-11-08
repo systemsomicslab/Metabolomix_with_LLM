@@ -7,13 +7,13 @@
 
 統計エンジンの前処理（spec 2026-11-06 §4）。行列 ID を返し、`ds.stat_matrices[matrix_id]` に置く
 （v1 の `pp_*` には書かない）。除外（`ds.excluded_*`）と群の上書き（`group_levels` / `group_factors`）は
-手順 2 が入力へ写す。`needs_input`（内部標準で換算済み＋QC のドリフト補正）は手順 5 の戻りから封筒にする。
+手順 3 が入力へ写す。`needs_input`（内部標準で換算済み＋QC のドリフト補正）は手順 5 の戻りから封筒にする。
 手順 7 の記録は `reports/stats/` への追記で、書き先が決まらない・書けないときも前処理は成功する。
 
 1. metabolomix/tools/stats_tools.py  dataset_preprocess()
-2. └─ metabolomix/analysis/stats_results.py  study_inputs()
-3. └─ metabolomix/analysis/stats/data.py  from_dataset()
-4. └─ metabolomix/analysis/stats/preprocess.py  normalize_preprocess_config()
+2. └─ metabolomix/analysis/stats/preprocess.py  normalize_preprocess_config()
+3. └─ metabolomix/analysis/stats_results.py  study_inputs()
+4. └─ metabolomix/analysis/stats/data.py  from_dataset()
 5. └─ metabolomix/analysis/stats/preprocess.py  preprocess()
 6. └─ metabolomix/analysis/stats_results.py  register_matrix()
 7. └─ metabolomix/analysis/stats_records.py  write_stats_record()

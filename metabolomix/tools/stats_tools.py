@@ -30,7 +30,7 @@ _RETRY_TOOLS = ["dataset_preprocess", "dataset_compare", "dataset_pca"]
 _DRIFT_ARGUMENT = "drift_mode"
 #: details に載せる一覧の上限（長いものは切る）。
 _DETAIL_LIMIT = 20
-_STEP_LIST_LIMIT = 10
+_STEP_LIST_LIMIT = 20
 
 
 def _config(*, drift_mode="auto", drift_span=0.75, blank_min_ratio=3.0, detection_min_rate=0.5,
@@ -56,38 +56,75 @@ def _config(*, drift_mode="auto", drift_span=0.75, blank_min_ratio=3.0, detectio
     }
 
 
+def _cut(obj):
+    """どの深さでも `_DETAIL_LIMIT` を超える list を先頭で切る（非破壊）。dict の値の list は隣に
+    `<key>_n_more`（切った件数）を置く。"""
+    if isinstance(obj, dict):
+        out = {}
+        for key, value in obj.items():
+            if isinstance(value, (list, tuple)) and len(value) > _DETAIL_LIMIT:
+                out[key] = [_cut(v) for v in list(value)[:_DETAIL_LIMIT]]
+                out[f"{key}_n_more"] = len(value) - _DETAIL_LIMIT
+            else:
+                out[key] = _cut(value)
+        return out
+    if isinstance(obj, (list, tuple)):
+        return [_cut(v) for v in list(obj)[:_DETAIL_LIMIT]]
+    return obj
+
+
 def _truncate_details(details: dict | None) -> dict | None:
-    """エラーの details の長い一覧を切る（件数は `<key>_n_more` に残す）。"""
+    """エラーの details の長い一覧を切る（入れ子の中の一覧も。件数は `<key>_n_more` に残す）。"""
     if not details:
         return None
-    keys = {k for k, v in details.items() if isinstance(v, list)}
-    return json_safe(truncate_lists(details, _DETAIL_LIMIT, keys=keys or ("__none__",)))
+    return json_safe(_cut(details))
 
 
 def _domain_envelope(exc: DomainError) -> str:
     return mztab_error(exc.code, exc.message, _truncate_details(exc.details))
 
 
-def _step_summary(step: dict) -> dict:
-    """工程 1 つの要約: 名前・状態・理由と、件数（スカラー値と、一覧の長さ）。特徴ごとの一覧は載せない。"""
-    out: dict = {"step": step.get("step"), "status": step.get("status")}
-    if step.get("reason") is not None:
-        out["reason"] = step["reason"]
-    for key, value in step.items():
-        if key in ("step", "status", "reason"):
+def _compact(value: dict) -> dict:
+    """工程の dict を小さな要約にする（入れ子も）。スカラーはそのまま、一覧は件数（`n_<key>`）、
+    値がすべて一覧の dict（`excluded_by_role` など）は `{キー: 件数}`、入れ子の dict（`filters` など）は
+    再帰する。特徴 ID の一覧（`dropped_ids`）は件数が `dropped` にあるので載せない。"""
+    if value and all(isinstance(v, (list, tuple, set, frozenset)) for v in value.values()):
+        return {k: len(v) for k, v in value.items()}
+    out: dict = {}
+    for key, item in value.items():
+        if key == "dropped_ids":
             continue
-        if isinstance(value, bool) or value is None or isinstance(value, (int, float, str)):
-            if not isinstance(value, str) or len(value) <= 80:
-                out[key] = value
-        elif isinstance(value, (list, tuple, set, frozenset)):
-            out[f"n_{key}"] = len(value)
-        elif isinstance(value, dict) and all(isinstance(v, (int, float)) for v in value.values()):
-            if len(value) <= 8:
-                out[key] = value                           # 小さな件数の表（欠測セルの数など）はそのまま
+        if isinstance(item, bool) or item is None or isinstance(item, (int, float)):
+            out[key] = item
+        elif isinstance(item, str):
+            if len(item) <= 80:
+                out[key] = item
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            out[f"n_{key}"] = len(item)
+        elif isinstance(item, dict):
+            if len(item) > 8 and all(isinstance(v, (int, float)) for v in item.values()):
+                out[f"n_{key}"] = len(item)
+                out[f"sum_{key}"] = sum(item.values())
             else:
-                out[f"n_{key}"] = len(value)
-                out[f"sum_{key}"] = sum(value.values())
+                out[key] = _compact(item)
     return out
+
+
+def _step_summary(step: dict) -> dict:
+    """工程 1 つの要約: 名前・状態・理由を先に、あとに `_compact` した件数と足切りごとの内訳。"""
+    head = {"step": step.get("step"), "status": step.get("status")}
+    if step.get("reason") is not None:
+        head["reason"] = step["reason"]
+    rest = {k: v for k, v in step.items() if k not in ("step", "status", "reason")}
+    return {**head, **_compact(rest)}
+
+
+def _group_counts(prepared) -> dict:
+    counts: dict[str, int] = {}
+    for unit in prepared.units:
+        label = unit.group if unit.group is not None else "(none)"
+        counts[label] = counts.get(label, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _warning_summary(warnings: list[dict]) -> list[dict]:
@@ -154,7 +191,7 @@ def dataset_preprocess(
     normalize: "auto"（既定。換算済みなら何もしない）/ "none" / "tic" / "median" / "pqn"。
     collapse_replicates: 同じ個体（subject_id）の反復注入を 1 個体にまとめる（既定 True）。
     injection_columns: 個体のまとめの鍵から外す試料の表の列（取得日・注入番号など注入ごとに違う属性）。
-    group_levels / group_factors: 試料名・Class ID の因子トークンで群を解く（group_factors は因子軸の
+    group_levels / group_factors: 試料名（と試料の表の群）の因子トークンで群を解く（group_factors は因子軸の
         リストで優先）。解いた群は行列の設定に記録される。無ければ試料の表の群。
     dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。
     """
@@ -190,6 +227,12 @@ def dataset_preprocess(
         return mztab_error("STUDY_DATA_INVALID", str(exc))
 
     quant = prepared.quant
+    groups = _group_counts(prepared)
+    warnings = list(prepared.warnings)
+    if len(groups) == 1:
+        warnings.append({"code": "single_group", "group": next(iter(groups)),
+                         "message": "すべての個体が 1 つの群に入っている（比較できない）。"
+                                    "group_levels / group_factors の綴りか試料の表の群を確かめてください。"})
     summary = {
         "matrix_id": prepared.matrix_id,
         "n_units": len(prepared.units),
@@ -197,10 +240,11 @@ def dataset_preprocess(
         "n_features_before": len(study.feature_ids),
         "n_features": len(prepared.feature_ids),
         "subject_source": prepared.subject_source,
+        "groups": groups,
         "quant": ({"normalized": quant.normalized, "method": quant.method, "unit": quant.unit}
                   if quant is not None else None),
         "steps": [_step_summary(s) for s in prepared.steps],
-        "warnings": _warning_summary(prepared.warnings),
+        "warnings": _warning_summary(warnings),
     }
     summary = truncate_lists(json_safe(round_floats(summary)), _STEP_LIST_LIMIT)
     record = _write_record(holder, ds, prepared, config, inputs, summary)

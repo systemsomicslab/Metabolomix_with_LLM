@@ -2,7 +2,6 @@
 
 `.arf2` はデータセットのものを使い、`data/` は探さない。fixture は tmp に作る。
 """
-from tests.v1_chain import v1_preprocess
 import inspect
 import json
 import threading
@@ -16,6 +15,7 @@ from metabolomix.tools import curation_tools, handle_tools
 from tests.config_fixtures import use_config
 from tests.curation_fixtures import write_alignment_set, write_suggest_set
 from tests.msdial_folder_fixtures import analysis_file_row, write_mddata
+from tests.v1_chain import v1_preprocess
 
 CURATION_TOOLS = ("curation_review", "curation_suggest", "curation_submit", "curation_flags",
                   "curation_view_data")

@@ -10,7 +10,6 @@ run 側と必ず食い違い、session の前処理も通っていない。こ�
   （上書きされた古い ref の hash を「壊れた」と読まない）。
 """
 from __future__ import annotations
-from tests.v1_chain import v1_preprocess
 
 import copy
 import json
@@ -21,6 +20,7 @@ from metabolomix.core import session_state
 from metabolomix.mztab import loading as mztab_loading
 from metabolomix.pipeline import report, service, session_handoff, store
 from tests.test_pipeline_matrix_handoff import _completed_run
+from tests.v1_chain import v1_preprocess
 
 _COMPARISON = {"comparison_id": "c1", "reference_group": "g1", "test_group": "g2"}
 #: session で後からやり直す、run（conservative-v1 の既定 = pqn）とは別のレシピ。

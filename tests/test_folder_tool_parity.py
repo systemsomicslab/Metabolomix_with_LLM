@@ -5,7 +5,6 @@
 適用・試料のバッチと注入順・実験情報シートの受け付け——を縛る。fixture は tmp に作る。
 """
 from __future__ import annotations
-from tests.v1_chain import v1_preprocess
 
 import json
 from pathlib import Path
@@ -17,6 +16,7 @@ from metabolomix.curation import flags as curation_flags
 from tests.curation_fixtures import match_result
 from tests.msdial_folder_fixtures import analysis_file_row, write_mddata, write_msdial_folder
 from tests.test_dataset_opening import _job, _pipeline
+from tests.v1_chain import v1_preprocess
 
 
 @pytest.fixture(autouse=True)

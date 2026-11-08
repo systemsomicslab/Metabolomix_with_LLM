@@ -5,7 +5,6 @@
 差次的結果の選び方（名指しの古い結果は missing_state）・丸めと TSV・
 注記——を見る。fixture はテスト自身が作る。
 """
-from tests.v1_chain import v1_preprocess
 import asyncio
 import json
 from types import SimpleNamespace
@@ -18,6 +17,7 @@ from metabolomix.analysis.result_state import dataset_fingerprint
 from metabolomix.core import session_state
 from metabolomix.core.mcp_errors import MISSING_STATE
 from metabolomix.mztab.dataset_state import DatasetState
+from tests.v1_chain import v1_preprocess
 
 GABA_KEY = "BTCSSZJGUNDROE-UHFFFAOYSA-N"
 OTHER_KEY = "QNAYBMKLOCPYGJ-REOHCLBHSA-N"

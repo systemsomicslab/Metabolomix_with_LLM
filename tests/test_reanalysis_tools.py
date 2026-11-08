@@ -4,7 +4,6 @@
 同じ JSON になることを確かめる。fixture はすべてテスト自身が作る。
 """
 from __future__ import annotations
-from tests.v1_chain import v1_preprocess
 
 import json
 import textwrap
@@ -21,6 +20,7 @@ from metabolomix.tools import reanalysis_tools as R
 from tests.dcl_fixture import build_dcl_bytes
 from tests.reanalysis_fixtures import SAMPLES, write_mztab
 from tests.config_fixtures import use_config
+from tests.v1_chain import v1_preprocess
 
 GABA_KEY = "BTCSSZJGUNDROE-UHFFFAOYSA-N"
 BASE = [10, 12, 11, 20, 22, 21, 15, 16]

@@ -5,7 +5,6 @@
 - ハンドルを渡さない呼び出しの戻り値は変更前と同じ（変更前のコードで採った値と比べる）。
 """
 from __future__ import annotations
-from tests.v1_chain import v1_preprocess
 
 import asyncio
 import json
@@ -25,6 +24,7 @@ from metabolomix.tools import handle_tools, mztab_tools, stats_tools
 from metabolomix.tools import reanalysis_tools as R
 from tests.reanalysis_fixtures import NEG_FEATURES, write_mztab
 from tests.config_fixtures import use_config
+from tests.v1_chain import v1_preprocess
 
 GOLDEN = Path(__file__).parent / "fixtures" / "handle_golden_no_handle.json"
 HC, RA = ["HC1", "HC2", "HC3"], ["RA1", "RA2", "RA3"]
