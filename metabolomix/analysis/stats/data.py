@@ -137,14 +137,21 @@ def _role(value) -> str | None:
 
 
 def _samples_table(ds, names: list[str]) -> list[SampleInfo]:
-    """試料の表。sample_metadata_rows → msdial_samples → roles / sample_meta の順に欄ごと埋める。"""
+    """試料の表。sample_metadata_rows → msdial_samples → roles / sample_meta の順に欄ごと埋める。
+
+    バッチだけは、試料の表の行（利用者のシート・解析フォルダの行）がそのまま勝ち、無ければ
+    msdial_samples / sample_meta の宣言を「2 種類以上あるとき」だけ採り（定数のラベル、MS-DIAL の既定
+    "1" は情報を持たない）、それも無ければ試料名の 8 桁の日付へ戻す。v1 と解析フォルダの経路と同じ規則で、
+    定義は `sample_manifest.batch_labels_informative` / `filename_date_batch` の 1 つだけ。
+    """
+    from metabolomix.analysis.sample_manifest import batch_labels_informative, filename_date_batch
     rows = list(getattr(ds, "sample_metadata_rows", None) or [])
     msdial = list(getattr(ds, "msdial_samples", None) or [])
     roles = getattr(ds, "roles", None) or {}
     meta = getattr(ds, "sample_meta", None) or {}
     by_name = {s.get("name"): s for s in msdial}
     display = list(getattr(ds, "sample_names", None) or [])
-    out = []
+    plan = []
     for i, name in enumerate(names):
         # 安定 ID を先に、次に表示名（sample_names[i]）で引く。ID ≠ 表示名でも取りこぼさない。
         keys = [name] + ([display[i]] if i < len(display) and display[i] != name else [])
@@ -164,8 +171,7 @@ def _samples_table(ds, names: list[str]) -> list[SampleInfo]:
             role = _role(detect_sample_roles(
                 [label], {label: class_id} if class_id else None).get(label)) or "sample"
         group = _str_or_none(row.get("group")) or _str_or_none(ms.get("group"))
-        batch = (_str_or_none(row.get("batch")) or _str_or_none(ms.get("batch"))
-                 or _str_or_none(sm.get("batch")))
+        declared = _str_or_none(ms.get("batch")) or _str_or_none(sm.get("batch"))
         order = next((o for o in (_float_or_none(row.get("injection_order")),
                                   _float_or_none(ms.get("injection_order")),
                                   _float_or_none(sm.get("run_order"))) if o is not None), None)
@@ -177,9 +183,17 @@ def _samples_table(ds, names: list[str]) -> list[SampleInfo]:
                  if k not in _CORE_KEYS and k not in _BOOKKEEPING_KEYS
                  and not isinstance(v, (dict, list, tuple, set, frozenset))
                  and (s := _str_or_none(v)) is not None}
+        plan.append((name, keys, _str_or_none(row.get("batch")), declared, role, group, order,
+                     subject, _include(row), attrs))
+    use_declared = batch_labels_informative([p[3] for p in plan])
+    out = []
+    for name, keys, row_batch, declared, role, group, order, subject, include, attrs in plan:
+        batch = row_batch or (declared if use_declared else None)
+        if batch is None:
+            batch = next((d for k in reversed(keys) if (d := filename_date_batch(k))), None)
         out.append(SampleInfo(sample_id=name, role=role, group=group, batch=batch,
                               injection_order=order, subject_id=subject,
-                              include=_include(row), attributes=attrs))
+                              include=include, attributes=attrs))
     return out
 
 

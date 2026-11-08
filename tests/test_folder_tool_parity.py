@@ -299,13 +299,36 @@ def test_constant_mtd_batch_falls_back_to_filename_dates_on_both_routes(tmp_path
             "engine_batches": stats_results.sample_batches(ds)}
     assert seen["folder"]["meta"] == seen["mztab"]["meta"]
     assert seen["folder"]["meta"][names[0]] == ("20260101", "filename_date")
-    # エンジンの見るバッチ。解析フォルダ経路は行の来歴どおり日付（推定）。mzTab-M 経路は試料の表の行を
-    # 持たず、エンジンは `sample_meta` のバッチを読まない（日付への戻しは v1 の
-    # `build_dataset_pp_inputs` だけが持つ）ので、バッチは None＝交絡は「評価不能」と言う。
-    # v1（上の `meta`）とは違う、エンジンの文書どおりの意味。
+    # エンジンの見るバッチ。解析フォルダ・mzTab-M の両経路とも v1（上の `meta`）と同じ日付
+    # （定数のラベルは採らず、ファイル名の日付へ戻す。規則は sample_manifest の定義 1 つ）。
     assert seen["folder"]["engine_batches"][names[0]] == "20260101"
     assert seen["folder"]["engine_batches"][names[3]] == "20260102"
-    assert set(seen["mztab"]["engine_batches"].values()) == {None}
+    assert seen["mztab"]["engine_batches"] == seen["folder"]["engine_batches"]
+
+
+def test_group_levels_on_job_dataset_keeps_the_batch_table(tmp_path):
+    """job の mzTab-M 経路で group_levels を使っても、交絡の batch_table は空にならない。"""
+    from metabolomix.tools import stats_tools
+
+    spec = _dated_spec()
+    job = _job(tmp_path, spec=spec, with_mddata=False)
+    _add_mtd(job.parent / "msdial" / "Height_x.mzTab", [1] * 6, [9, 8, 7, 6, 5, 4])
+    for source in ("folder", "mztab"):
+        session_state.session = session_state.AnalysisSession()
+        handles.registry = handles.HandleRegistry()
+        _load(job_path=str(job), source=source)
+        prepared = json.loads(stats_tools.dataset_preprocess(group_levels=["20260101", "20260102"]))
+        assert prepared["status"] == "success", prepared
+        refused = json.loads(stats_tools.dataset_compare(
+            reference_group="20260101", test_group="20260102", matrix_id=prepared["matrix_id"]))
+        assert refused["error"]["code"] == "STATISTIC_CONFOUNDED", source
+        out = json.loads(stats_tools.dataset_compare(
+            reference_group="20260101", test_group="20260102",
+            matrix_id=prepared["matrix_id"], allow_confounded=True))
+        assert out["status"] == "success", out
+        assert out["confounding"]["batch_table"] == {"20260101": {"20260101": 3},
+                                                     "20260102": {"20260102": 3}}, source
+        assert out["confounding"]["batch_status"] == "complete", source
 
 
 def test_constant_mddata_batch_also_falls_back_to_filename_dates(tmp_path):
