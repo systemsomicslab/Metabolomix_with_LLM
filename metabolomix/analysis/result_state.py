@@ -25,6 +25,7 @@ from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 __all__ = [
     "PP_FIELDS",
+    "STATS_KINDS",
     "STAT_FIELDS",
     "array_fingerprint",
     "assert_current",
@@ -32,6 +33,7 @@ __all__ = [
     "group_fingerprint",
     "invalidate_results",
     "is_current",
+    "is_stats_current",
     "metadata_fingerprints",
     "new_provenance",
     "preprocess_fingerprint",
@@ -61,6 +63,16 @@ _STAT_INVALIDATING = STAT_FIELDS | {"comparison"}
 #: 顔をした古い数字で走る。
 _PP_INVALIDATING = PP_FIELDS | {"dataset", "detection", "recipe", "exclusion",
                                 "standard_assays", "bindings", "matrix_recipe"}
+
+#: 統計エンジンの行列（`stat_matrices`）と v2 の解析行列（`analysis_matrices`）を捨てる変更。
+#: 前処理の入力の変更から `recipe`（v1 の前処理のやり直し。`dataset_service._commit_preprocess`）
+#: だけを除く——v1 のレシピはこれらの行列の入力ではなく、v1 をやり直すたびに別系統の行列まで
+#: 消すと、名指しした `matrix_id` が理由なく消える。
+_MATRIX_INVALIDATING = _PP_INVALIDATING - {"recipe"}
+
+#: 統計エンジンの結果の `provenance.kind`（`stats_results` が登録する）。古さは
+#: `is_stats_current`（データの指紋と `metadata_revision`）で見る。
+STATS_KINDS = ("compare", "stat_pca")
 
 
 def array_fingerprint(array) -> str:
@@ -185,10 +197,18 @@ def invalidate_results(ds, changed: set[str]) -> None:
       入力にしていない。
     - 除外（`exclusion`。`dataset_exclude`）も前処理の行列を変えるので、前処理済み行列ごと捨てる。
     - PCA の設定だけなら PCA だけ。
+    - 統計エンジンの行列（`stat_matrices`）と v2 の解析行列（`analysis_matrices`）は、前処理の
+      入力（除外を含む。v1 の `recipe` だけは除く。`_MATRIX_INVALIDATING`）が変われば空にする。
+      `stat_matrices` は `stats_results.get_matrix` も古さを見るが、古い行列を抱え続けない。
+      統計エンジンの結果（`ds.results` の `compare` / `stat_pca`）は消さず、`is_current` が
+      古いと答える（`metadata_revision` とデータの指紋）。
 
     「消す」を選ぶのは、古い数字を返し続けるより無いことにするほうが安全だから。
     """
     changed = set(changed)
+    if changed & _MATRIX_INVALIDATING:
+        ds.stat_matrices = {}
+        ds.analysis_matrices = {}
     # 結果から作った図（dataset_plot の置き場 ds.figures）も同じ依存で捨てる。残すと save_figure が
     # 古い結果の図を現在のものとして保存する。
     if changed & _PP_INVALIDATING:
@@ -241,6 +261,25 @@ def register_result(ds, result: dict) -> dict:
     return result
 
 
+def is_stats_current(ds, record: dict, *, dataset_hash: str | None = None) -> bool:
+    """統計エンジンの結果（`compare` / `stat_pca`）が、今のデータセットから出たものか。
+
+    登録時のデータの指紋（`provenance.dataset_hash`）と `metadata_revision` が今の ds と同じなら
+    True。除外（`dataset_exclude`）と試料の表の変更（群だけの訂正も）は `metadata_revision` を
+    進めるので、どちらでも古くなる。結果は `dataset_id` に縛らない（同じデータなら同じ結果）。
+    来歴・指紋が無ければ確かめられないので False。`dataset_hash` は呼び出し側が計算済みの
+    `dataset_fingerprint(ds)`（任意）。
+    """
+    prov = (record or {}).get("provenance") or {}
+    recorded = prov.get("dataset_hash")
+    if recorded is None:
+        return False
+    if prov.get("metadata_revision") != getattr(ds, "metadata_revision", 0):
+        return False
+    current = dataset_hash if dataset_hash is not None else dataset_fingerprint(ds)
+    return recorded == current
+
+
 def is_current(ds, result: dict, *, dataset_hash: str | None = None) -> bool:
     """その結果が、今のデータセットの状態から出たものとして通用するか。
 
@@ -277,10 +316,15 @@ def is_current(ds, result: dict, *, dataset_hash: str | None = None) -> bool:
     `dataset_hash` は呼び出し側が計算済みの `dataset_fingerprint(ds)`（任意）。指紋は
     行列全体の hash なので、多数の結果を続けて照合する呼び出し側（`feature_search.
     select_results`）は 1 回だけ計算して渡す。渡さなければ必要なときにここで計算する。
+
+    統計エンジンの結果（`provenance.kind` が `STATS_KINDS`）は `is_stats_current` で見る
+    （ID・親の前処理ではなく、データの指紋と `metadata_revision`）。
     """
     if not (result or {}).get("provenance"):
         return True
     prov = result["provenance"]
+    if prov.get("kind") in STATS_KINDS:
+        return is_stats_current(ds, result, dataset_hash=dataset_hash)
     if prov.get("handoff"):
         if prov.get("kind") != "differential":
             # run から戻すのは差次的結果だけ（`session_handoff.restore_differentials`）。
@@ -333,6 +377,16 @@ def assert_current(ds, result: dict) -> None:
     if is_current(ds, result):
         return
     prov = (result or {}).get("provenance") or {}
+    if prov.get("kind") in STATS_KINDS:
+        raise DomainError(
+            "STALE_ANALYSIS_RESULT",
+            "この結果は現在のデータセットの状態から出たものではありません"
+            "（除外・試料の表・データが登録の後に変わった）。再計算してください。",
+            {"result_id": prov.get("result_id"), "kind": prov.get("kind"),
+             "result_dataset_hash": prov.get("dataset_hash"),
+             "dataset_hash": dataset_fingerprint(ds),
+             "result_metadata_revision": prov.get("metadata_revision"),
+             "metadata_revision": getattr(ds, "metadata_revision", 0)})
     raise DomainError(
         "STALE_ANALYSIS_RESULT",
         "この結果は現在のデータセットの状態から出たものではありません"

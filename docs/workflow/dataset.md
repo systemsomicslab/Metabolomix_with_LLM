@@ -294,6 +294,8 @@ TSV（`query` は因子トークン。旧 `dataset_status(view="samples")` の `
 `excluded_features`（名前・特徴 ID -> 理由）。入力の指紋には入れず、変わったときだけ
 `metadata_revision` を進めて前処理済み行列から先の結果を古くする（`apply_metadata` と同じ
 `invalidate_results` の経路）。除外を当てるのは前処理（`run_dataset_preprocess`）。
+同じ経路で統計エンジンの行列（`ds.stat_matrices`）と v2 の解析行列（`ds.analysis_matrices`）も
+空にする（除外の前の行列 ID は使えなくなる）。
 
 1. metabolomix/tools/sample_tools.py dataset_exclude()
 2. └─ metabolomix/analysis/dataset_exclusions.py apply_exclusions()

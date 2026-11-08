@@ -11,6 +11,11 @@ structuredContent を捨てる。さらに FastMCP は戻り値アノテーシ�
 outputSchema を導出するため、`-> str` のツールが失敗時だけ dict を返すこともできない。
 機械可読なエラーはテキストに載せるしかない。
 
+もう 1 つの封筒 `needs_input`（`{"needs_input": {field, reason, options, argument?, retry_tools}}`）は
+**エラーではない**（`error` キーを持たない）。既定を決めずに利用者へ尋ねる問い（例: 内部標準で
+換算済みの値に QC のドリフト補正を重ねるか）で、クライアントは `options` を利用者に示し、選ばれた
+`value` を `argument`（無ければ spec の `field`）に入れて `retry_tools` のどれかを呼び直す。
+
 このモジュールは依存グラフの leaf（stdlib と同じく leaf の
 metabolomix.core.serialization と metabolomix.core.atomic_io のみ）。tools_* / server を import しない。
 """
@@ -50,6 +55,39 @@ def missing_state(state: str, required_tools: list[str], message: str) -> str:
                 "message": message,
             }
         })
+
+
+NEEDS_INPUT = "needs_input"
+
+
+def needs_input(field: str, reason: str, options: list[dict], *, argument: str | None = None,
+                retry_tools: list[str]) -> str:
+    """利用者に尋ねてから呼び直す封筒を返す（エラーではない）。
+
+    引数:
+        field: 答えが入る設定の欄（spec の路。例 "preprocess.drift.mode"）。
+        reason: なぜ尋ねるのか（LLM と人間が読む説明）。
+        options: 選択肢 `[{"value", "label"}, ...]`。`value` を引数に入れて呼び直す。
+        argument: 呼び直すツールの引数名（例 "drift_mode"）。spec で答える経路
+            （`dataset_analysis_run` の v2）では渡さず、封筒にも載せない（`field` が答えの場所）。
+        retry_tools: 答えを入れて呼び直せるツール名の候補（OR）。
+
+    `missing_state` と同じく、復旧の手掛かりが欠けた封筒は出さない（ValueError）。
+    """
+    if not field:
+        raise ValueError("field は必須です（答えが入る設定の欄）。")
+    if not reason:
+        raise ValueError("reason は必須です（尋ねる理由）。")
+    if not options or any(not isinstance(o, dict) or "value" not in o or "label" not in o
+                          for o in options):
+        raise ValueError("options は value と label を持つ選択肢の 1 つ以上のリストです。")
+    if not retry_tools:
+        raise ValueError("retry_tools は必須です（答えを入れて呼び直せるツールの候補）。")
+    body: dict = {"field": field, "reason": reason, "options": [dict(o) for o in options]}
+    if argument:
+        body["argument"] = argument
+    body["retry_tools"] = list(retry_tools)
+    return json_payload({NEEDS_INPUT: body})
 
 
 CONSOLE_ERROR_CODES = frozenset({

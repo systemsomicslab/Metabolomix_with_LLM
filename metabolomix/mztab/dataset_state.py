@@ -280,6 +280,10 @@ class DatasetState:
         self.excluded_features: dict[str, str] = {}
         # quant_state: 定量の工程（metabolomix/quant）が置く受け渡し。統計側は normalized / method / unit を読む。
         self.quant_state: dict | None = None
+        # stat_matrices: matrix_id -> 統計エンジンの前処理済み行列（`PreparedMatrix`）と、その設定・群の上書き・
+        # 除外・指紋・metadata_revision（`analysis/stats_results.register_matrix`）。古さは `get_matrix` が見る。
+        # 前処理の入力の変更（除外を含む）で `result_state.invalidate_results` が空にする。指紋には入れない。
+        self.stat_matrices: dict = {}
 
 
 def _sha256(path: str | Path) -> str:
