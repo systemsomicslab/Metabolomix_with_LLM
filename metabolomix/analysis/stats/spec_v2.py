@@ -199,7 +199,7 @@ def _input(raw) -> dict:
                    or not v.strip() for k, v in over.items())):
         raise _fail("input.group_overrides は 試料 → 群 の辞書（どちらも空でない文字列）",
                     field="input.group_overrides")
-    out["group_overrides"] = dict(sorted(over.items()))
+    out["group_overrides"] = dict(sorted((k.strip(), v.strip()) for k, v in over.items()))
     return out
 
 

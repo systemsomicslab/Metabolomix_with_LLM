@@ -53,6 +53,8 @@ class StudyData:
     dataset_hash: str | None = None
     feature_classes: dict[str, str] = field(default_factory=dict)
     annotated_features: frozenset[str] = frozenset()
+    #: 割れのまとめの記録（組ごとの特徴 ID）。除外との区別（matrix_id）のために持つ。
+    feature_merges: tuple = ()
 
 
 def quant_state_of(ds) -> QuantState | None:
@@ -282,7 +284,7 @@ def merge_feature_columns(study: StudyData, groups: list[list[str]]) -> StudyDat
     seen: set[str] = set()
     plans = []
     for group in groups:
-        present = [str(f) for f in group if str(f) in position]
+        present = list(dict.fromkeys(str(f) for f in group if str(f) in position))
         if seen.intersection(present):
             raise DomainError("STUDY_DATA_INVALID", "割れの組が特徴を共有している",
                               {"shared": sorted(seen.intersection(present))})
@@ -294,6 +296,7 @@ def merge_feature_columns(study: StudyData, groups: list[list[str]]) -> StudyDat
     drop: set[int] = set()
     classes = dict(study.feature_classes)
     annotated = set(study.annotated_features)
+    merges = tuple(study.feature_merges) + tuple(tuple(p) for p in plans)
     for present in plans:
         cols = [position[f] for f in present]
         block = values[:, cols]
@@ -317,4 +320,5 @@ def merge_feature_columns(study: StudyData, groups: list[list[str]]) -> StudyDat
     return replace(study, values=values[:, keep],
                    detected=None if det is None else det[:, keep],
                    feature_ids=[study.feature_ids[i] for i in keep],
-                   feature_classes=classes, annotated_features=frozenset(annotated))
+                   feature_classes=classes, annotated_features=frozenset(annotated),
+                   feature_merges=merges)

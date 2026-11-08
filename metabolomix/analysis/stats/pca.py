@@ -42,16 +42,18 @@ def pca(prepared: PreparedMatrix, *, scaling: str = "autoscale",
                               {"missing_cells": n_nan})
         try:
             stacked, rep = impute_for_pca(stacked, method=impute, reference_rows=np.arange(n_units))
-        except ValueError as exc:
-            raise DomainError("PCA_SPECIFICATION_INVALID", str(exc), {"field": "impute"}) from exc
-        except DomainError as exc:
-            if exc.code != "RECIPE_PRECONDITION":
+        except (ValueError, DomainError) as exc:
+            if isinstance(exc, DomainError) and exc.code != "RECIPE_PRECONDITION":
                 raise
+            message = exc.message if isinstance(exc, DomainError) else str(exc)
+            code = exc.code if isinstance(exc, DomainError) else "ValueError"
             raise DomainError("PCA_IMPUTATION_FAILED",
-                              f"{impute} 補完が失敗した（{exc.message}）。impute=\"half_min\" なら"
+                              f"{impute} 補完が失敗した（{message}）。impute=\"half_min\" なら"
                               "この条件でも補完できる。",
                               {"impute": impute, "missing_cells": n_nan,
-                               "cause": {"code": exc.code, **dict(exc.details or {})}}) from exc
+                               "cause": {"code": code,
+                                         **(dict(exc.details) if isinstance(exc, DomainError) else {})}}
+                              ) from exc
         imputation = {"method": rep["method"], "imputed_cells": rep["imputed_cells"], "used": True}
     else:
         imputation = {"method": impute, "imputed_cells": 0, "used": False}

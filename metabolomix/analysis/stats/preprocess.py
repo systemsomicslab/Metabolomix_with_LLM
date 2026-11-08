@@ -67,7 +67,7 @@ def _merge(default, raw, path: tuple):
         if (not isinstance(raw, list)
                 or any(not isinstance(c, str) or not c.strip() for c in raw)):
             raise _invalid("injection_columns は空でない文字列のリストで指定する", path, raw)
-        return list(raw)
+        return sorted({c.strip() for c in raw})
     if path == ("collapse_replicates",):
         if not isinstance(raw, bool):
             raise _invalid("collapse_replicates は真偽値で指定する", path, raw)
@@ -175,7 +175,8 @@ def _matrix_id(study: StudyData, config: dict, normalize_method: str) -> str:
     # normalize=auto は quant_state で方法が決まるので、解決後の方法も指紋に入れる
     return "mx_" + canonical_hash({"dataset_hash": source, "sample_table_hash": canonical_hash(table),
                                    "config": config, "normalize_method": normalize_method,
-                                   "feature_ids_hash": feature_hash})[:16]
+                                   "feature_ids_hash": feature_hash,
+                                   "feature_merges": [list(g) for g in study.feature_merges]})[:16]
 
 
 # --- 1. 選択 -----------------------------------------------------------------
@@ -462,7 +463,7 @@ def _log2(values: np.ndarray) -> tuple[np.ndarray, dict]:
 
 # --- 6. 反復のまとめ ---------------------------------------------------------
 
-def _unit_of(members, unit_id: str) -> UnitInfo:
+def _unit_of(members, unit_id: str, drop=frozenset()) -> UnitInfo:
     """まとめる注入（群・属性が一致する技術反復）から単位を作る。バッチが食い違えば矛盾。"""
     first = members[0]
     seen = sorted({str(s.batch) for s in members})
@@ -476,10 +477,10 @@ def _unit_of(members, unit_id: str) -> UnitInfo:
                     subject_id=first.subject_id,
                     injection_order=None if any(o is None for o in orders) else float(np.mean(orders)),
                     n_injections=len(members), sample_ids=[s.sample_id for s in members],
-                    attributes=dict(first.attributes))
+                    attributes={k: v for k, v in first.attributes.items() if k not in drop})
 
 
-def _unit_ids(keys: list[tuple], firsts: list) -> list[str]:
+def _unit_ids(keys: list[tuple], firsts: list, ignore=frozenset()) -> list[str]:
     """まとめた単位の ID（決定的）。
 
     個体の単位が 1 つなら subject_id。同じ個体から複数の単位ができたら `subject_id|group`、
@@ -504,7 +505,7 @@ def _unit_ids(keys: list[tuple], firsts: list) -> list[str]:
             if len(sub) == 1:
                 ids[sub[0]] = f"{subject}|{group}"
                 continue
-            names = sorted({n for k in sub for n in firsts[k].attributes})
+            names = sorted({n for k in sub for n in firsts[k].attributes if n not in ignore})
             differing = [n for n in names
                          if len({firsts[k].attributes.get(n) for k in sub}) > 1]
             for k in sub:
@@ -524,7 +525,8 @@ def _split_warning(keys, firsts, injection_columns) -> dict | None:
         return None
     columns: set[str] = set()
     for idx in split.values():
-        names = sorted({n for k in idx for n in firsts[k].attributes})
+        names = sorted({n for k in idx for n in firsts[k].attributes
+                        if n not in injection_columns})
         columns.update(n for n in names if len({firsts[k].attributes.get(n) for k in idx}) > 1)
     subjects = [f"{subj}|{grp}" for subj, grp in split]
     shown = subjects[:20]
@@ -534,7 +536,8 @@ def _split_warning(keys, firsts, injection_columns) -> dict | None:
             "message": f"同じ個体・群なのに試料の表の列（{', '.join(cols)}）の値が違うため、{len(subjects)} 件が"
                        f"複数の単位に分かれました（{', '.join(shown)}{more}）。注入ごとに違う列（取得日・注入番号など）"
                        "なら、前処理の injection_columns にその列名を入れると 1 個体にまとまります。",
-            "attributes": cols, "n_subjects": len(subjects), "subjects": subjects[:20],
+            "attributes": cols, "n_subjects": len(subjects), "subjects": shown,
+            "subjects_n_more": len(subjects) - len(shown),
             "suggestion": {"preprocess.injection_columns": cols}}
 
 
@@ -555,8 +558,10 @@ def _collapse(log2, det, samples, enabled: bool, injection_columns=()):
         groups.setdefault(key, []).append(k)
     keys = list(groups)
     firsts = [samples[groups[key][0]] for key in keys]
-    unit_ids = _unit_ids(keys, firsts)
-    units = [_unit_of([samples[k] for k in groups[key]], uid) for key, uid in zip(keys, unit_ids)]
+    drop = frozenset(injection_columns) if enabled else frozenset()
+    unit_ids = _unit_ids(keys, firsts, drop)
+    units = [_unit_of([samples[k] for k in groups[key]], uid, drop)
+             for key, uid in zip(keys, unit_ids)]
     per_subject: dict[str, int] = {}
     for key in keys:
         if key[0] == "s":

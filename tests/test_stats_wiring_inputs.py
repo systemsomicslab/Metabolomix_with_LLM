@@ -315,3 +315,76 @@ def test_merge_feature_columns_takes_max_and_or_detected():
     assert st.feature_ids == ["f0", "f1", "f2", "f3"] and st.values.shape == (4, 4)  # 元は不変
     assert _code(D.merge_feature_columns, st, [["f0", "f1"], ["f1", "f2"]]).code == "STUDY_DATA_INVALID"
     assert D.merge_feature_columns(st, []).feature_ids == st.feature_ids
+
+
+# --- 修正ラウンド 1 -------------------------------------------------------------
+
+def test_merge_and_exclude_give_different_matrix_ids():
+    ds = _ds()
+    merged = D.merge_feature_columns(D.from_dataset(ds), [["f0", "f1"]])
+    excluded = D.from_dataset(ds, exclude_features=["f1"])
+    assert merged.feature_ids == excluded.feature_ids
+    assert _pre(merged).matrix_id != _pre(excluded).matrix_id
+    again = D.merge_feature_columns(D.from_dataset(ds), [["f0", "f1"]])
+    assert _pre(merged).matrix_id == _pre(again).matrix_id
+
+
+def test_injection_columns_dropped_from_unit_attributes_ids_and_warning():
+    rows = []
+    for s, g in (("S0", "C"), ("S1", "C"), ("S2", "T"), ("S3", "T")):
+        for r in range(2):
+            rows.append((f"{s}_{r}", "sample", g, None, None, s, True,
+                         {"run_day": f"d{r}", "plate": f"p{r}"}))
+    vals = 1000.0 * (1 + 0.1 * np.random.default_rng(1).standard_normal((len(rows), 3)))
+    prep = _pre(_study(vals, rows), injection_columns=["run_day"])
+    assert len(prep.units) == 8  # plate がまだ割る
+    assert all("run_day" not in u.attributes and "plate" in u.attributes for u in prep.units)
+    assert "S0|C|plate=p0" in {u.unit_id for u in prep.units}
+    assert not any("run_day" in u.unit_id for u in prep.units)
+    w = next(w for w in prep.warnings if w["code"] == "units_split_by_attribute")
+    assert w["attributes"] == ["plate"]
+    # 注入の列を因子に使う設計は、最初の注入の値を黙って使わず欠けた値として外れる
+    e = _code(compare, prep, factors=["group"], comparisons=BVA,
+              covariates=[{"name": "run_day", "type": "categorical"}])
+    assert e.code == "DESIGN_INVALID"  # 全単位で値が欠ける: 最初の注入の値を黙って使わない
+
+
+def test_split_warning_reports_count_of_the_rest():
+    rows = []
+    for k in range(25):
+        for r in range(2):
+            rows.append((f"S{k}_{r}", "sample", "C" if k % 2 else "T", None, None, f"S{k}", True,
+                         {"run_day": f"d{r}"}))
+    vals = np.full((len(rows), 2), 100.0) + np.arange(len(rows))[:, None]
+    w = next(w for w in _pre(_study(vals, rows)).warnings if w["code"] == "units_split_by_attribute")
+    assert w["subjects_n_more"] == 5 and len(w["subjects"]) == 20
+
+
+def test_pca_value_error_from_imputation_becomes_imputation_failed(monkeypatch):
+    from metabolomix.analysis.stats import pca as pca_mod
+    rng = np.random.default_rng(1)
+    log2 = rng.normal(10, 1, (6, 5))
+    log2[0, 0] = np.nan
+    prep = _matrix(log2, [_unit(f"u{i}", "C" if i < 3 else "T") for i in range(6)])
+
+    def boom(*a, **k):
+        raise ValueError("boom")
+    monkeypatch.setattr(pca_mod, "impute_for_pca", boom)
+    e = _code(pca, prep, impute="half_min")
+    assert e.code == "PCA_IMPUTATION_FAILED" and "half_min" in e.message
+
+
+def test_merge_dedupes_ids_within_group():
+    rows = [(f"a{i}", "sample", "C", None, None, None) for i in range(3)]
+    st = _study(np.arange(1.0, 10.0).reshape(3, 3), rows)
+    out = D.merge_feature_columns(st, [["f0", "f0"]])
+    assert out.feature_ids == st.feature_ids
+    np.testing.assert_array_equal(out.values, st.values)
+
+
+def test_equivalent_inputs_canonicalize_to_same_hash():
+    assert (P.normalize_preprocess_config({"injection_columns": [" b", "a", "b"]})["injection_columns"]
+            == ["a", "b"])
+    a = _norm(input={"group_overrides": {" C_B1_0 ": " T "}})
+    b = _norm(input={"group_overrides": {"C_B1_0": "T"}})
+    assert a == b and a["input"]["group_overrides"] == {"C_B1_0": "T"}
