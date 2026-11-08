@@ -511,3 +511,24 @@ def test_a_handoff_marker_on_a_non_differential_result_is_not_current():
         result = _handed_off_result(ds)
         result["provenance"]["kind"] = kind
         assert is_current(ds, result) is False, kind
+
+
+def test_handoff_differential_stale_after_exclusion():
+    """引き継いだ差次的結果は、復元後に試料を除外すると古くなる（`metadata_revision` の枝）。"""
+    from metabolomix.analysis.result_state import is_current
+    from metabolomix.tools.sample_tools import dataset_exclude
+    from metabolomix.core import session_state
+
+    ds, _rows = _dataset_with_groups("control", "treated")
+    result = _handed_off_result(ds)
+    result["provenance"]["metadata_revision"] = ds.metadata_revision
+    assert is_current(ds, result) is True
+
+    session_state.session.dataset = ds
+    try:
+        dataset_exclude(samples=[ds.sample_names[0]], reason="bad injection")
+    finally:
+        session_state.session = session_state.AnalysisSession()
+
+    assert ds.excluded_samples
+    assert is_current(ds, result) is False
