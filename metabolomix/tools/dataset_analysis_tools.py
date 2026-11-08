@@ -16,7 +16,6 @@ from pathlib import Path
 from mcp.types import ToolAnnotations
 
 from metabolomix.analysis import export_contract, stats_results
-from metabolomix.analysis.dataset_analysis import PreconditionError
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import missing_state, mztab_error
@@ -26,12 +25,9 @@ from metabolomix.tools._holder import resolve_holder
 from metabolomix.mztab.polarity import dataset_polarity as _dataset_polarity
 
 __all__ = [
-    "dataset_differential",
     "dataset_export_differential",
     "dataset_export_evidence_bundle",
     "dataset_set_sample_metadata",
-    "dataset_statistic",
-    "dataset_build_matrix",
     "dataset_feature_search",
 ]
 
@@ -39,81 +35,8 @@ __all__ = [
 # **自分自身は入れない**（クライアントが同じ呼び出しを繰り返すループになる）。
 _RECOVERY_TOOLS = {
     "dataset": ["load_dataset"],
-    "dataset_preprocessed": ["dataset_preprocess"],
     "dataset_compare_result": ["dataset_compare"],
-    # v2 の解析行列は pipeline（preprocess / qc_processed）が作る。単体ツールの
-    # dataset_build_matrix でも作れるが、そちらは binding と証拠を持たない分
-    # できることが狭い（内部標準比は作れず、検出率filterは評価不能になる）。
-    # 先頭ほど優先＝上流の証拠ごと揃う pipeline を先に案内する。
-    "analysis_matrix": ["pipeline_run", "pipeline_status", "load_dataset",
-                        "dataset_build_matrix"],
-    # 対象feature↔内部標準の対応付け。pipeline の resolve_feature_bindings が作る。
-    "feature_bindings": ["pipeline_run", "pipeline_status"],
 }
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_differential(
-    group_a: list[str],
-    group_b: list[str],
-    q_threshold: float = 0.05,
-    log2fc_threshold: float = 1.0,
-    log_transform: bool = True,
-    group_a_label: str = "group_a",
-    group_b_label: str = "group_b",
-    dataset_handle: str | None = None,
-) -> str:
-    """前処理済み DatasetState で 2 群の差次的解析（Welch t 検定 + BH-FDR）を実行する。
-
-    group_a / group_b: サンプル名のリスト。使える名前と役割は dataset_status の
-        `samples`（name/role の TSV）で確認する。前処理済み行列に無い
-        名前、QC/ブランクは除外し、caveat で名指しする。
-    q_threshold: BH-FDR 補正後の有意水準（既定 0.05）。
-    log2fc_threshold: この絶対値以上の log2FC を有意として数える（既定 1.0）。
-    log_transform: log2(x + 1) 空間で検定する（既定 True。MS 強度は対数正規に近い）。
-
-    **log2FC は正なら group_b が高い（上昇）。** group_a が基準（対照）。
-    全特徴量の結果と volcano 点列は戻り値に載せず session.dataset.last_differential
-    に保持する。エクスポートは dataset_export_differential を使う。
-
-    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
-    """
-    holder = resolve_holder(dataset_handle)
-    if isinstance(holder, str):
-        return holder
-    ds = holder.dataset
-    if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
-
-    from metabolomix.analysis.dataset_service import compare_dataset
-
-
-    try:
-        result = compare_dataset(
-            ds,
-            group_a,
-            group_b,
-            q_threshold=q_threshold,
-            log2fc_threshold=log2fc_threshold,
-            log_transform=log_transform,
-            group_a_label=group_a_label,
-            group_b_label=group_b_label,
-        )
-    except PreconditionError as exc:
-        return _from_precondition(exc)
-    except DomainError as exc:
-        return mztab_error(exc.code, exc.message, exc.details or None)
-
-    payload = {k: v for k, v in result.items()
-               if k not in ("results", "volcano", "provenance")}
-    payload["status"] = "success"
-    payload["result_id"] = result["provenance"]["result_id"]
-    payload["differential_contract_version"] = result["contract_version"]
-    payload["results_note"] = (
-        "全特徴の結果と volcano 点列は本要約に非同梱（セッション保持）。"
-        "InChIKey 付きの全行が必要なら dataset_export_differential を実行してください。")
-    return json_payload(payload)
 
 
 @mcp.tool(annotations=ToolAnnotations(
@@ -246,9 +169,8 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     変われば前処理済み行列ごと・PCA・差次的解析まで無効化する。`group` だけの変更なら
     差次的解析だけを無効化し、PCA は生かしたまま返す（`changed_fields` で確認できる）。
 
-    `dataset_differential` を直接呼ぶ経路（比較する2群のサンプル名を都度自分で
-    組み立てる）とは別に、比較を明示するのは pipeline 側の役割になる——群名だけで
-    対照/処置の向きを決めない・QC/blank/unknown/include=false を混ぜない・完全交絡を
+    `dataset_compare` を群名で直接呼ぶ経路とは別に、比較を明示するのは pipeline 側の
+    役割になる——群名だけで対照/処置の向きを決めない・QC/blank/unknown/include=false を混ぜない・完全交絡を
     止める、という前提検証は `resolve_comparison`/`run_comparison`（内部関数）が持つ。
 
     dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
@@ -275,7 +197,7 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
         "status": "success",
         **summary,
         "next": ("changed_fields に前処理入力が含まれる場合は dataset_preprocess から"
-                 "やり直してください。group のみの変更なら dataset_differential を"
+                 "やり直してください。group のみの変更なら dataset_compare を"
                  "再実行するだけで構いません。"),
     })
 
@@ -284,141 +206,6 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
 
 def _missing(state: str, message: str) -> str:
     return missing_state(state, _RECOVERY_TOOLS[state], message)
-
-
-def _from_precondition(exc: PreconditionError) -> str:
-    """PreconditionError を kind に応じた封筒へ振り分ける。
-
-    missing_state は「先に別のツールを呼べば直る」場合だけに使う。引数エラーを
-    missing_state にすると、契約に従うクライアントが同じ呼び出しを繰り返す。
-    """
-    if exc.kind == "missing_state":
-        return _missing(exc.state, exc.message)
-    return mztab_error("DATASET_BAD_REQUEST", exc.message, exc.details or None)
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_statistic(specification: dict, matrix_result_id: str,
-                      dataset_handle: str | None = None) -> str:
-    """v2 の統計（welch / anova_tukey / pca）を、名指しした解析行列に実行する。
-
-    specification: `analysis_recipe.statistics` の1要素と同じ形
-      （`statistic_id` / `kind` / `transform` / `feature_scope` と、kind別の
-      `reference_group`+`test_group`、`groups`+`alpha`、`scaling`+`n_components`）。
-    matrix_result_id: `analysis-matrix.v1` の ID。pipeline の preprocess /
-      qc_processed が作った行列を名指しする。**直近の前処理を暗黙に使わない**
-      ——recipe 違いの行列が2本ある前提の設計で、どちらの数字かを結果に残す。
-
-    v1 の `dataset_differential` とは別物: 効果量は統計変換前の算術平均比の log2
-    （`effect_size_definition`）、log2 変換に pseudocount を足さない、BH の母集団は
-    検定できた feature だけ。v1 の既定値・数値契約は変更していない。
-
-    全量（feature ごとの結果）は戻り値に載せず session に保持する。
-
-    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
-    """
-    holder = resolve_holder(dataset_handle)
-    if isinstance(holder, str):
-        return holder
-    ds = holder.dataset
-    if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
-    if not getattr(ds, "analysis_matrices", None):
-        return _missing(
-            "analysis_matrix",
-            "解析行列（analysis-matrix.v1）がありません。"
-            "pipeline_run で v2 要求を実行し、preprocess/qc_processed が作った"
-            "matrix_result_id を指定してください。")
-
-    from metabolomix.analysis.dataset_service import statistic_dataset
-
-    try:
-        result = statistic_dataset(ds, specification, matrix_result_id)
-    except DomainError as exc:
-        return json_payload({"error": {"code": exc.code, "message": str(exc.message),
-                                       "details": exc.details}})
-
-    ds.results[f"stat_{result.get('statistic_id')}"] = result
-    payload = {k: v for k, v in result.items() if k != "features"}
-    payload["status"] = "success"
-    payload["n_features"] = len(result.get("features") or [])
-    payload["features_note"] = (
-        "feature ごとの結果全量は本要約に非同梱（セッションに保持）。"
-        "TSV が必要なら pipeline の export 工程を使ってください。")
-    return json_payload(payload)
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_build_matrix(recipe: dict, recipe_id: str = "default",
-                         dataset_handle: str | None = None) -> str:
-    """v2 の解析行列（analysis-matrix.v1）を、セッションの DatasetState から1本作る。
-
-    recipe: profile の `matrix_recipes` の1要素と同じ形
-      （`base` / `normalize` / `drift_correct` / `filter` / `impute` の5キー。
-      過不足はそのまま拒否する）。検証は profile と同じ規則を共有しているので、
-      pipeline 経由より緩い recipe がここから入ることはない。
-    recipe_id: 行列の識別に使う名前。`matrix_id` は recipe 内容と dataset・
-      metadata から決まるので、**同じ dataset に同じ recipe を与えれば同じ ID**
-      になる（pipeline が作った行列と突き合わせられる）。
-
-    揃っていない前提を揃ったことにしない:
-
-    - `base="internal_standard_ratio"` は対象feature↔内部標準の対応付けが要る。
-      この単体ツールは対応付けを作らないので `missing_state` で止める
-      （空の対応付けで「比」を名乗る行列を作らない）。
-    - 検出状態が分からない dataset に `filter.min_detection_rate` を指定しても
-      feature は落ちない。`history` に `not_evaluable` が残る。
-
-    値そのものは戻り値に載せず session に保持する。`dataset_statistic` へは
-    戻り値の `matrix_id` を渡す。
-
-    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
-    """
-    holder = resolve_holder(dataset_handle)
-    if isinstance(holder, str):
-        return holder
-    ds = holder.dataset
-    if ds is None:
-        return _missing("dataset",
-                        "DatasetState がありません。先に load_dataset を実行してください。")
-
-    from metabolomix.analysis.dataset_service import build_analysis_matrix
-    from metabolomix.console.profile_schema import validate_matrix_recipe
-
-    try:
-        normalized = validate_matrix_recipe(recipe, recipe_id)
-    except DomainError as exc:
-        # profile 経由なら PROFILE_INVALID だが、ここでの入力は profile ではなく
-        # 引数そのもの。直す場所を取り違えさせない。
-        return mztab_error("MATRIX_RECIPE_INVALID", exc.message, exc.details or None)
-
-    if normalized["base"] == "internal_standard_ratio":
-        return _missing(
-            "feature_bindings",
-            "内部標準比の行列には対象feature↔内部標準の対応付けが必要です。"
-            "この単体ツールは対応付けを作らないため、pipeline の経路で作成してください。")
-
-    try:
-        matrix = build_analysis_matrix(ds, {**normalized, "recipe_id": recipe_id})
-    except DomainError as exc:
-        return json_payload({"error": {"code": exc.code, "message": str(exc.message),
-                                       "details": exc.details}})
-
-    return json_payload({
-        "status": "success",
-        "matrix_id": matrix["matrix_id"],
-        "recipe_id": recipe_id,
-        "stage": matrix["stage"],
-        "n_assays": len(matrix["assay_ids"]),
-        "n_features": len(matrix["feature_ids"]),
-        "eligible_features": int(sum(bool(x) for x in matrix["eligibility_mask"])),
-        "units": sorted(set(matrix["units"])),
-        "history": matrix["correction_history"],
-        "caveats": matrix["caveats"],
-        "values_note": "値は戻り値に非同梱（セッションに保持）。dataset_statistic に matrix_id を渡す。",
-    })
 
 
 # ---------- dataset_feature_search（spec 2026-10-19） ----------
@@ -899,3 +686,4 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curati
         return mztab_error(exc.code,exc.message,exc.details or None)
     except (ValueError,OSError,FlagFileError) as exc:
         return mztab_error('EVIDENCE_EXPORT_FAILED',str(exc))
+

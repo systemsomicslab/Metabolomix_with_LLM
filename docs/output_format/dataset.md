@@ -35,7 +35,7 @@
 
 ## 旧 `arf` トピック（`.arf` / サンプル別ピーク。§3, §8.1, §10, §11）
 
-`.arf` の読み込み、PCA（`dataset_pca`）、前処理・QC（`dataset_preprocess`）、差次的解析（`dataset_differential`）の出力定義。
+`.arf` の読み込み、PCA（`dataset_pca`）、前処理・QC（`dataset_preprocess`）、差次的解析（`dataset_compare`。pipeline が引き継ぐ v1 の 2 群比較の結果も同じ節で読む）の出力定義。
 
 > 対応する Key 番号表: `docs/schema/AlignmentChromPeakFeature.md`（MS-DIAL の `[Key(N)]` から抽出した一次資料）。
 > リーダーのインデックス定数を変更するときは必ずこちらを先に確認する。
@@ -202,9 +202,9 @@ PCAスコアプロット用ブロック（旧パーサの返り値の末尾。**
 5. **欠損補完**（`impute="half_min"|"knn"|"column_mean"|"none"`、既定 `half_min`）: 行列生成後に残るNaNを補完。`half_min`=特徴量最小値の半分（既定）、`knn`=sklearn `KNNImputer`、`column_mean`=列平均（旧実装互換）、`none`=補完しない。
 6. **ブランク行の除外**: 上記1でブランクを背景除去の**参照**として使い終えたあと、`preprocessing.drop_samples_by_role()` がブランクの**行そのもの**を解析行列から外す。除外内訳は `report["excluded_from_matrix"]`（`{role: [sample_name, ...]}`）と caveat に出る。
 
-> **役割別の行の扱い（重要）**: 前処理後行列（データセットの前処理済み行列）の行は **生体試料 + QC** であり、**ブランクは含まれない**。ブランクは生体試料と桁違いに総強度が低く、残すと PCA の PC1 を支配して群分離の解釈が壊れるため外す。一方 **QC は残す**——QC クラスタの締まり具合を PCA で見るのは品質確認の定番手段だからである。`dataset_pca`（統計エンジン）は QC を軸の計算に使わず投影し、スコアプロットには QC 点が白抜きで含まれる（群ラベルは `QC`）。群平均に QC が混ざると困る `dataset_differential` 側は、別途 QC を比較群から外す（§11.1）。
+> **役割別の行の扱い（重要）**: 前処理後行列（データセットの前処理済み行列）の行は **生体試料 + QC** であり、**ブランクは含まれない**。ブランクは生体試料と桁違いに総強度が低く、残すと PCA の PC1 を支配して群分離の解釈が壊れるため外す。一方 **QC は残す**——QC クラスタの締まり具合を PCA で見るのは品質確認の定番手段だからである。`dataset_pca`（統計エンジン）は QC を軸の計算に使わず投影し、スコアプロットには QC 点が白抜きで含まれる（群ラベルは `QC`）。群平均に QC が混ざると困る 2 群比較側は、別途 QC を比較群から外す（§11.1）。
 
-処理結果は前処理後行列・試料名・特徴名・試料の情報・適用したレシピとして DatasetState に保存され、以降の `dataset_pca` と `dataset_differential` はこの前処理後行列を消費する。適用したレシピそのものが記録され、`dataset_pca` の出力にも「前処理レシピ」として明示される。
+処理結果は前処理後行列・試料名・特徴名・試料の情報・適用したレシピとして DatasetState に保存され、以降の `dataset_pca` と `dataset_compare` はこの前処理後行列（`matrix_id`）を消費する。適用したレシピそのものが記録され、`dataset_pca` の出力にも「前処理レシピ」として明示される。
 
 #### 10.3 caveatの扱い
 
@@ -233,19 +233,19 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 - 現データに存在しない試料名・特徴 ID が 1 つでもあれば全体を拒み、何も変更しない（タイプミスで黙って一部だけ除外されない）。全試料の除外も拒む。
 - 実際に除外が変わったときだけ、前処理済み行列から先の結果（PCA・差次的解析）を古いとする。同じ引数の再実行は何も動かさない（冪等）。
 
-除外集合は DatasetState の `excluded_samples`（試料名 -> 理由）と `excluded_features`（特徴 ID -> 理由）に持つ。変えると `metadata_revision` が進む。**`dataset_preprocess`**（→ `dataset_pca` / `dataset_differential`）・`dataset_plot`・`dataset_feature_search` の強度順がいずれも自動的に除外を反映する。除外が有効なとき、前処理の出力に「ユーザ手動除外」の注記が付く。`dataset_status(view="samples")` は各試料に `excluded` を付して現在の除外状態を示す。
+除外集合は DatasetState の `excluded_samples`（試料名 -> 理由）と `excluded_features`（特徴 ID -> 理由）に持つ。変えると `metadata_revision` が進む。**`dataset_preprocess`**（→ `dataset_pca` / `dataset_compare`）・`dataset_plot`・`dataset_feature_search` の強度順がいずれも自動的に除外を反映する。除外が有効なとき、前処理の出力に「ユーザ手動除外」の注記が付く。`dataset_status(view="samples")` は各試料に `excluded` を付して現在の除外状態を示す。
 
-運用フロー: `dataset_preprocess` → `dataset_pca`（全体PCAで外れ俯瞰）→ `dataset_exclude(samples=[...], reason=...)` → `dataset_preprocess` ＋ `dataset_pca` で除外後PCAを確認 → `dataset_differential`。戻したいときは `mode="remove"` / `mode="clear"`。
+運用フロー: `dataset_preprocess` → `dataset_pca`（全体PCAで外れ俯瞰）→ `dataset_exclude(samples=[...], reason=...)` → `dataset_preprocess` ＋ `dataset_pca` で除外後PCAを確認 → `dataset_compare`。戻したいときは `mode="remove"` / `mode="clear"`。
 
 ### 11. 差次的解析（P2b）
 
-`metabolomix/analysis/differential.py`（MCP非依存の純ロジック層）と、`metabolomix/tools/dataset_analysis_tools.py` の `dataset_differential` / `metabolomix/tools/reports.py` の `save_figure()`（`kind="volcano"`）が、前処理後のサンプル×特徴量行列に対する群間比較を担う。既定挙動・既存ツールは不変で、明示呼び出し時のみ作用する。
+`metabolomix/analysis/differential.py`（MCP非依存の純ロジック層）と、`metabolomix/tools/dataset_analysis_tools.py` の 2 群比較（v1。呼び出し元は pipeline だけ）/ `metabolomix/tools/reports.py` の `save_figure()`（`kind="volcano"`）が、前処理後のサンプル×特徴量行列に対する群間比較を担う。既定挙動・既存ツールは不変で、明示呼び出し時のみ作用する。
 
 #### 11.1 群ラベルの由来
 
-群ラベルは試料の情報の `group`（`dataset_status(view="samples")`。ファイル名由来の factor トークン / Class ID 機構、`metabolomix/msdial/classes.py` の `assign_sample_groups`）から取得する。バッチは試料の情報の `batch`（ファイル名中の8桁日付）。`dataset_differential` は前処理後行列を消費し、無ければ `missing_state` を返す（先に `dataset_preprocess` が必要）。
+群ラベルは試料の情報の `group`（`dataset_status(view="samples")`。ファイル名由来の factor トークン / Class ID 機構、`metabolomix/msdial/classes.py` の `assign_sample_groups`）から取得する。バッチは試料の情報の `batch`（ファイル名中の8桁日付）。2 群比較（`dataset_compare`）は行列（`dataset_preprocess` か既定の前処理）を消費する（`dataset_preprocess` は省略できる）。
 
-試料の `group` は常に**完全な Class ID**（例 `24M_GF_F`）である。一方、旧 ARF 経路の差次的解析の `group_a` / `group_b` は**因子トークンによるプール指定**を受け付けた。いまの `dataset_differential` は試料名のリストを渡し、同じトークン文法で試料名を引くのは `dataset_status(view="samples", query=...)`。**以下は旧 ARF 経路（撤去済み）の例**で、いまトークンを受けるのは `dataset_status(view="samples", query=...)` だけ。`dataset_differential` は試料名のリストを受け、下の注意（QC/ブランクは比較群に入らない・一致ゼロや両群が同じ Class ID は拒む）の意味は保たれる。旧経路の例（`sample_factors.expand_sample_specs`。トークンは Class ID とサンプル名の両方から解決される）:
+試料の `group` は常に**完全な Class ID**（例 `24M_GF_F`）である。一方、旧 ARF 経路の差次的解析の `group_a` / `group_b` は**因子トークンによるプール指定**を受け付けた。いまの `dataset_compare` は群名（`reference_group` / `test_group`）を渡し、同じトークン文法で試料名を引くのは `dataset_status(view="samples", query=...)`。**以下は旧 ARF 経路（撤去済み）の例**で、いまトークンを受けるのは `dataset_status(view="samples", query=...)` だけ。`dataset_compare` は群名を受け、下の注意（QC/ブランクは比較群に入らない・一致ゼロや両群が同じ Class ID は拒む）の意味は保たれる。旧経路の例（`sample_factors.expand_sample_specs`。トークンは Class ID とサンプル名の両方から解決される）:
 
 - `group_a="24M", group_b="9w"` → `24M_*` を全てプールし `9w_*` と比較（多因子デザインで主効果を見る正しい経路）
 - `group_a="24M_GF"` のように複数トークンを `_` で繋ぐと AND 絞り込み（`24M` かつ `GF`）
@@ -276,11 +276,11 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
   - 小n・分散0・全欠損は `p=NaN`。
 - **多群ANOVAは現状非対応**: MS-DIAL メタに「因子（加齢/菌叢等）→水準」の対応が無く、因子を安全に選べない（誤って全 Class ID を水準にした結果を返さないよう封鎖）。3群以上を比べたいときは `group_a`/`group_b` の因子トークン・プール指定で関心のある2群を切り出す。`differential.one_way_anova()` 自体は関数として残るが、MCP からは露出しない。
 - **多重検定補正**: いずれも Benjamini-Hochberg で `p → q`（FDR）を付与（NaN は補正から除外し位置は保持）。p値は scipy があればそれで、無ければ自前の t 分布裾確率（正則化不完全ベータ関数）で計算し、どちらも正確（近似ではない）。
-- **volcano**: 2群比較のみ。各点は `feature` / `log2fc` / `neg_log10_p` / `sig`（`up`=q≤閾値かつlog2fc≥+閾値（群Bで高い＝上昇） / `down`=q≤閾値かつlog2fc≤−閾値（群Aで高い＝低下） / `ns`）。全特徴分の点列は `ds.last_differential` の volcano 点列に保持し、`dataset_plot(kind="volcano")`（構造化点列）と `save_figure(kind="volcano")`（PNG）の両方がここから読む。**`dataset_differential` の応答 payload には全量 volcano を同梱せず**、`summary`（`n_tested`/`n_significant`/`n_up`/`n_down`＋有意上位 `top`）中心の要約と `volcano_note` のみを返す（先頭の結論が巨大配列＋文脈切り詰めで埋没し「全て ns」と誤読される退行を避けるため）。
+- **volcano**: 2群比較のみ。各点は `feature` / `log2fc` / `neg_log10_p` / `sig`（`up`=q≤閾値かつlog2fc≥+閾値（群Bで高い＝上昇） / `down`=q≤閾値かつlog2fc≤−閾値（群Aで高い＝低下） / `ns`）。全特徴分の点列は `ds.last_differential` の volcano 点列に保持し、`dataset_plot(kind="volcano")`（構造化点列）と `save_figure(kind="volcano")`（PNG）の両方がここから読む。**2 群比較の応答 payload には全量 volcano を同梱せず**、`summary`（`n_tested`/`n_significant`/`n_up`/`n_down`＋有意上位 `top`）中心の要約と `volcano_note` のみを返す（先頭の結論が巨大配列＋文脈切り詰めで埋没し「全て ns」と誤読される退行を避けるため）。
 
 #### 11.2.1 `dataset_plot(kind="volcano")` の返り値（`lipidmix.volcano.v1`）
 
-`dataset_differential`（2群）の後に呼ぶ read-only ツール。**既定（`output="image"`）では
+`dataset_compare`（2群）の後に呼ぶ read-only ツール。**既定（`output="image"`）では
 サーバ側で描いた PNG と件数入りの1行キャプションを返す**ので、以下の表は
 `output="payload"`（または env `LIPIDMIX_PLOT_OUTPUT=payload`）でクライアントが自分で
 描くときの契約。ファイルとして PNG を残したいときだけ `save_figure(kind="volcano")` を呼ぶ。
@@ -311,7 +311,7 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 
 #### 11.3 必須caveat
 
-`dataset_differential` の応答 `caveats` には、該当時に以下を前景化する（無言で握りつぶさない）:
+2 群比較（v1。pipeline が引き継ぐ結果も同じ）の応答 `caveats` には、該当時に以下を前景化する（無言で握りつぶさない）:
 
 1. **交絡（群⟂バッチ）**: 各群が単一バッチに偏る場合、「処理効果と測定バッチを分離できない」旨を警告（`check_confounding`）。例: `2_lipidome_lcms/NEG` は control/LPS=20220901・ILG/G_uralensis=20220902 で交絡。**判定は必ずプール解決後の（＝実際に比較した）2群に対して行う**。プール前の Class ID 単位で見ると細粒度ラベルほど各群が単一バッチになりやすく、プールすれば両群ともバッチ混在という健全な設計を交絡と誤報するため。判定に使うのは群ラベルが `None` でない試料のみ（QC/ブランク除外後）。
 2. **正規化状態**: 前処理のレシピに正規化が含まれなければ「未正規化データの log2FC は測定量差を含み得る」と警告。
@@ -322,12 +322,12 @@ LLMはこれらを解釈結果・報告書の注意点として必ず引用す�
 
 #### 11.4 `dataset_export_differential` — 差次的結果のエクスポート契約
 
-`dataset_preprocess` → `dataset_differential`（2群）の後に呼ぶ。同一アラインメントの
+`dataset_preprocess` → `dataset_compare`（2群）の後に呼ぶ。同一アラインメントの
 兄弟 `.arf2` から InChIKey・Ontology・m/z・RT を `MasterAlignmentID` で結合し、
 1 ファイルに書き出す。**兄弟 `.arf2` が無ければ書き出さない**（InChIKey 空欄の行を
 出すと、下流で「パスウェイが無い化合物」と区別が付かなくなるため）。
 直近の差次的結果が現行の `contract_version` / `log2fc_sign` と一致しない場合も、
-向きを偽装せず `dataset_differential` の再実行を要求する。InChIKey 付き行が 0 件なら、
+向きを偽装せず `dataset_compare` の再実行を要求する。InChIKey 付き行が 0 件なら、
 下流が拒否する本文 0 行のファイルを成功扱いで残さない。
 
 `#` 始まりのメタ行に来歴（`contract_version` / `group_a` / `group_b` /
@@ -372,7 +372,7 @@ mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`。
 **エラーと状態**: 入力の誤り（群が 1 試料にも当たらない・`output` の値が不正・`detection_limit` が 0 以下や非有限・`ncols` が 1 未満など）は例外ではなく `{"status": "error", "message": ...}` で返す。呼び出しが（missing_state を含め）失敗したときは、前回の図を `save_figure(kind="group_intensity")` が保存しないようセッションの図を破棄する。画像モードでは描画に成功してから図を保持する。群の指定が `blank` / `qc` の役割で全滅したときは、`blank` / `qc` を書くよう案内を添える。
 
 **検定はしない**。1 パネル = 1 項目、1 点 = 1 試料、群ごとに log10 空間の平均 ± SD を添えるだけで、
-群間の有意差は述べない（検定は `dataset_differential`。小 n の p 値が図に独り歩きするのを避ける）。
+群間の有意差は述べない（検定は `dataset_compare`。小 n の p 値が図に独り歩きするのを避ける）。
 
 | フィールド | 意味 |
 |------------|------|
@@ -671,4 +671,4 @@ PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（
 
 #### 8.3 PAI2 の在庫要約ツール（撤去済み）
 
-撤去前の PAI2 ツールはテキスト1件を返していた（PCA・画像は返さない）。JSONは `summarize_pai2_inventory()` の在庫要約で、`total_peaks` / `annotated_peaks`（`Unknown`・`no MS2:`・`low score:` を除いた確定注釈数）/ `annotated_fraction` / `ion_mode_counts` / `mz_range` / `rt_range` / `height_summary` / `sn_summary` / `top_by_height`（強度上位10ピーク）を含む。PAI2 は単一測定ファイルのピーク一覧なので、サンプル間比較（オミクスPCA）はこの単位では行わない（複数サンプルの多変量比較は、データセットの `dataset_pca` / `dataset_differential`）。ピーク属性PCA依存の旧ツール（`pai2_get_top_metabolites` / `pai2_update_analysis_filter`）と、ピークの詳細を返していたツール（5.4節の辞書）は撤去した。MS/MS は同名 `.dcl`（`dcl_index` がリスト順に対応）を参照する。
+撤去前の PAI2 ツールはテキスト1件を返していた（PCA・画像は返さない）。JSONは `summarize_pai2_inventory()` の在庫要約で、`total_peaks` / `annotated_peaks`（`Unknown`・`no MS2:`・`low score:` を除いた確定注釈数）/ `annotated_fraction` / `ion_mode_counts` / `mz_range` / `rt_range` / `height_summary` / `sn_summary` / `top_by_height`（強度上位10ピーク）を含む。PAI2 は単一測定ファイルのピーク一覧なので、サンプル間比較（オミクスPCA）はこの単位では行わない（複数サンプルの多変量比較は、データセットの `dataset_pca` / `dataset_compare`）。ピーク属性PCA依存の旧ツール（`pai2_get_top_metabolites` / `pai2_update_analysis_filter`）と、ピークの詳細を返していたツール（5.4節の辞書）は撤去した。MS/MS は同名 `.dcl`（`dcl_index` がリスト順に対応）を参照する。

@@ -18,8 +18,7 @@
 6. └─ metabolomix/analysis/stats_results.py  register_matrix()
 7. └─ metabolomix/analysis/stats_records.py  write_stats_record()
 
-（v1 の前処理 `dataset_analysis.run_dataset_preprocess` は、pipeline の前処理工程と旧
-`dataset_differential` / `dataset_pca` がまだ読む `pp_*` を作る。D 段で消える。）
+（v1 の前処理 `dataset_analysis.run_dataset_preprocess` は、pipeline の前処理工程が読む `pp_*` を作る。D 段で消える。）
 
 ## dataset_compare
 
@@ -57,16 +56,6 @@
 5. └─ metabolomix/analysis/stats_results.py  unit_group_labels()
 6. └─ metabolomix/analysis/stats_results.py  register_pca()
 7. └─ metabolomix/tools/stats_tools.py  _write_pca_record()
-
-## dataset_differential
-
-1. metabolomix/tools/dataset_analysis_tools.py  dataset_differential()
-2. └─ metabolomix/analysis/dataset_analysis.py  run_dataset_differential()
-3.    └─ metabolomix/analysis/differential.py  check_confounding()
-4.    └─ metabolomix/analysis/differential.py  two_group_test()
-5.    └─ metabolomix/analysis/differential.py  add_fdr()
-6.    └─ metabolomix/analysis/differential.py  summarize_two_group()
-7.    └─ metabolomix/analysis/differential.py  volcano_data()
 
 ## dataset_export_differential
 
@@ -171,8 +160,8 @@ pipeline が比較を明示するときに使う `resolve_comparison`/`run_compa
 QC/blank/unknown/standard・`include=false` を混ぜない（選択規則は
 `metabolomix/analysis/sample_manifest.py` `select_statistical_samples()` が唯一の定義）・
 完全交絡を `allow_confounded=true` の
-明示なしには通さない、という前提検証を `compare_dataset()` の前に挟む。単体ツール
-`dataset_differential` はこの前提検証を経ない汎用呼び出し（USAGE.md 参照）。
+明示なしには通さない、という前提検証を `compare_dataset()` の前に挟む。対話ツール
+`dataset_compare` を群名で直接呼ぶ経路はこの前提検証を経ない汎用呼び出し（USAGE.md 参照）。
 
 ## dataset_export_evidence_bundle
 

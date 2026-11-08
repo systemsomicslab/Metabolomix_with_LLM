@@ -168,7 +168,7 @@ property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` 
 ## dataset_novel_candidates
 
 前提: データセット（無ければ `missing_state`）。`statistics.result_id` なら今も有効な 2 群比較
-（無ければ `missing_state` が `dataset_differential` を指す）。状態変更: なし。
+（無ければ `missing_state` が `dataset_compare` を指す）。状態変更: なし。
 
 1. metabolomix/tools/reanalysis_tools.py  dataset_novel_candidates()
 2. ├─ metabolomix/analysis/mass_accuracy.py  normalize_novel_spec()

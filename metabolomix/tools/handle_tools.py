@@ -157,7 +157,7 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
           `source="mztab"` のときだけ載せる——その run の mzTab に加えて、解決済みの
           試料対応表・feature binding・解析行列を**同じ run からまとめて**載せる
           （別 run の行列を混ぜると群の対応が黙ってずれるため）。載せた行列は
-          `dataset_statistic` へ `matrix_id` で渡す。run の差次的結果も、データと群の指紋が
+          `dataset_status` に `matrix_id` が並ぶ（読むのは pipeline の統計）。run の差次的結果も、データと群の指紋が
           今のデータセットと一致するものだけを戻す（result_id は run の TSV と同じ。
           直近の結果にはしないので result_id で名指しして使う）。戻せなかったものは理由つきで
           `summary` に並ぶ。
@@ -169,7 +169,7 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         読み込む（既定 False。bool 以外は `DATASET_BAD_REQUEST`——`"false"` という
         文字列を真と読まないため）。中断時点の生成物なので、既定では拒否する
         （`INCOMPLETE_ANALYSIS_JOB`）。True で読んだデータセットは探索専用になり、
-        2 群比較（dataset_differential）と差次的エクスポートは拒否される——欠けた検体を
+        2 群比較（dataset_compare）と差次的エクスポートは拒否される——欠けた検体を
         「その群には無い」と読み違えたまま結論が出てしまうため。
     library: `"auto"`（既定）はデータセットが同定に使ったライブラリの記憶
         （`library_record`）を読み取り専用で開く。実体の sha256 を測り直し、変わっている・

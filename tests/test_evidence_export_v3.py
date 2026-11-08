@@ -18,7 +18,7 @@ from metabolomix.mztab import loading
 from metabolomix.tools import dataset_analysis_tools as T
 from metabolomix.tools import handle_tools
 from tests.reanalysis_fixtures import write_mztab
-from tests.v1_chain import v1_preprocess
+from tests.v1_chain import v1_differential, v1_preprocess
 
 HC = ["HC1", "HC2", "HC3"]
 RA = ["RA1", "RA2", "RA3"]
@@ -53,7 +53,7 @@ def _handle_with_result(tmp_path) -> tuple[str, str]:
     opened = json.loads(handle_tools.load_dataset(mztab_path=str(path), library="none"))
     handle = opened["dataset_handle"]
     v1_preprocess(dataset_handle=handle)
-    result = json.loads(T.dataset_differential(group_a=HC, group_b=RA, dataset_handle=handle))
+    result = json.loads(v1_differential(group_a=HC, group_b=RA, dataset_handle=handle))
     return handle, result["result_id"]
 
 

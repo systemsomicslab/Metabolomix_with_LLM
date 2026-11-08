@@ -32,12 +32,12 @@ class MissingStateEnvelopeTests(unittest.TestCase):
         """required_tools は OR の代替候補。順序が意味を持つ。"""
         payload = json.loads(
             mcp_errors.missing_state(
-                "analysis_matrix", ["dataset_preprocess", "dataset_build_matrix"], "先に"
+                "analysis_matrix", ["dataset_preprocess", "pipeline_run"], "先に"
             )
         )
         self.assertEqual(
             payload["error"]["required_tools"],
-            ["dataset_preprocess", "dataset_build_matrix"],
+            ["dataset_preprocess", "pipeline_run"],
         )
 
     def test_empty_required_tools_is_rejected(self):

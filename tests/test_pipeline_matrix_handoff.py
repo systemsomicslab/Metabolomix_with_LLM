@@ -134,21 +134,23 @@ def test_loading_a_run_restores_the_resolved_binding_targets(tmp_path):
     assert session_state.session.dataset.feature_binding_targets == expected
 
 
-def test_a_restored_matrix_can_be_used_by_dataset_statistic(tmp_path):
-    from metabolomix.tools.dataset_analysis_tools import dataset_statistic
+def test_a_restored_matrix_can_be_used_by_the_v2_statistics(tmp_path):
+    from metabolomix.analysis import statistics_v2
     from metabolomix.tools.handle_tools import load_dataset
 
     harness, _ = _completed_run(tmp_path)
     session_state.session.dataset = None
     load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab")
 
-    matrix_id = sorted(session_state.session.dataset.analysis_matrices)[0]
-    result = _payload(dataset_statistic(
+    ds = session_state.session.dataset
+    matrix_id = sorted(ds.analysis_matrices)[0]
+    result = statistics_v2.run_statistic(
+        ds.analysis_matrices[matrix_id],
         {"statistic_id": "check", "kind": "pca", "matrix_recipe_id": "default",
          "transform": "none", "feature_scope": {"mode": "all_eligible"},
          "scaling": "autoscale", "n_components": 2},
-        matrix_id))
-    assert result.get("status") == "success", result
+        ds.sample_metadata_rows, ds.feature_binding_targets)
+    assert result.get("status") == "completed", result
 
 
 def test_pipeline_path_cannot_be_combined_with_the_other_entry_points(tmp_path):

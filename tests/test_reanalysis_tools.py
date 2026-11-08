@@ -20,7 +20,7 @@ from metabolomix.tools import reanalysis_tools as R
 from tests.dcl_fixture import build_dcl_bytes
 from tests.reanalysis_fixtures import SAMPLES, write_mztab
 from tests.config_fixtures import use_config
-from tests.v1_chain import v1_preprocess
+from tests.v1_chain import v1_differential, v1_preprocess
 
 GABA_KEY = "BTCSSZJGUNDROE-UHFFFAOYSA-N"
 BASE = [10, 12, 11, 20, 22, 21, 15, 16]
@@ -352,7 +352,7 @@ def test_injection_trend_rho_is_none_below_five_samples(match_data):
 def test_novel_candidates_from_result_id_and_from_spec(data):
     handle = _open(data)
     v1_preprocess(dataset_handle=handle)
-    diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
+    diff = json.loads(v1_differential(group_a=["HC1", "HC2", "HC3"],
                                              group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
     spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
     out = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
@@ -698,7 +698,7 @@ def _groups_tsv(tmp_path):
 def test_novel_candidates_count_split_once(tmp_path):
     handle = _split_handle(tmp_path)
     v1_preprocess(dataset_handle=handle)
-    diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
+    diff = json.loads(v1_differential(group_a=["HC1", "HC2", "HC3"],
                                              group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
     spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
     out = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
@@ -754,7 +754,7 @@ def test_novel_candidates_rule_hash_includes_merge_groups(tmp_path):
 
     handle = _split_handle(tmp_path)
     v1_preprocess(dataset_handle=handle)
-    diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
+    diff = json.loads(v1_differential(group_a=["HC1", "HC2", "HC3"],
                                              group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
     spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
     out = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
@@ -830,7 +830,7 @@ def test_claim_evidence_adds_the_partner_outside_the_mass_window(tmp_path):
 def test_novel_candidates_labels_column_and_counts(data, tmp_path):
     handle = _open(data)
     v1_preprocess(dataset_handle=handle)
-    diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
+    diff = json.loads(v1_differential(group_a=["HC1", "HC2", "HC3"],
                                              group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
     spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
     plain = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))

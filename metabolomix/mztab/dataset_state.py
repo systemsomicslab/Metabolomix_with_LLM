@@ -181,7 +181,7 @@ class DatasetState:
         # Console 出力の ARF / DCL / EIC へのルックアップに使う。
         self.artifact_paths: dict[str, list[str]] = {}
 
-        # --- 解析状態フィールド（dataset_preprocess / dataset_pca / dataset_differential が設定） ---
+        # --- 解析状態フィールド（dataset_preprocess / dataset_pca / dataset_compare が設定） ---
         # pp_matrix: 前処理済み行列。shape は (n_samples, n_features) — feature_matrix の転置。
         # 前処理済みの試料名・特徴名は pp_sample_names / pp_feature_names が持つ。
         self.pp_matrix = None
@@ -473,7 +473,7 @@ def build_dataset_state(
     # `assay[N]-<suffix>` 形式（ms_run_ref 等）に加え、素の `assay[N]` 行も拾う。
     # 素の行が MS-DIAL の表示名（例: 20220901_RAW_control_0h_1_NEG）を持つ唯一の場所で、
     # これを取りこぼすと sample_names が abundance_assay[N] という不透明な列識別子の
-    # ままになり、群選択（dataset_differential）と QC/blank ロール検出
+    # ままになり、群選択（dataset_compare）と QC/blank ロール検出
     # （detect_sample_roles はサンプル名のトークンを見る）が機能しなくなる。
     meta = parse_result.get("metadata", {})
     for k, v in meta.items():

@@ -45,7 +45,6 @@ EXPECTED_ANNOTATIONS = {
     "dataset_preprocess": LOCAL_WRITE_APPEND,
     "dataset_compare": LOCAL_WRITE_APPEND,    # 比較の記録を 1 件追記する（dataset_preprocess と同じ）
     "dataset_pca": LOCAL_WRITE_APPEND,       # PCA の記録を 1 件追記する（dataset_compare と同じ）
-    "dataset_differential": READ_ONLY,
     # ファイルを書き、同じ引数なら同じ内容で上書きする → 冪等
     "dataset_export_differential": LOCAL_WRITE,
     # シートを読み検証してからセッション状態を一括反映する。外部副作用はセッション
@@ -57,9 +56,7 @@ EXPECTED_ANNOTATIONS = {
     "dataset_exclude": LOCAL_WRITE,
     # v2統計は名指しした解析行列を読むだけ（行列も session も書き換えない。
     # 結果全量の保持は session.dataset.results への追加で、外界へは書かない）。
-    "dataset_statistic": READ_ONLY,
     # 解析行列を1本作って session へ置くだけ（外界へは書かない）。
-    "dataset_build_matrix": READ_ONLY,
     # 特徴の検索と目標の判定。session も外界も書き換えない。
     "dataset_feature_search": READ_ONLY,
     # --- 再解析のハンドル（サーバのプロセス内の状態だけを変える） ---

@@ -1,26 +1,19 @@
-"""MCP 公開経路（spec §12・plan Task 13）。
+"""pipeline の v2 の入口（spec §12）が使う部品の境界。
 
-MCP 層は数値を持たない。ここで縛るのは「どの前提が欠けているか」を利用者が
-**区別できる形で**返すこと:
-
-- DatasetState が無いのか、解析行列が無いのか（前者は `load_dataset`、後者は
-  pipeline を回す、と次の一手が違う）。
-- 指定した `matrix_result_id` が無いのか（近い行列で代用しない）。
-- 統計が計算できなかったのか（結果は返るが `status=not_evaluable`）。
-
-worker はこのツールを呼ばない——pipeline の handler は Python 関数を直接呼ぶ
-（MCP を自己呼び出ししない、という CLAUDE.md の規約）。
+公開ツール（旧 `dataset_statistic` / `dataset_build_matrix` と、v1 の 2 群比較ツール）は 2026-11 に消えた。
+v2 の解析行列と統計は pipeline の工程だけが作る（工程のテストは `test_metabolomics_end_to_end.py`）。
+ここに残すのは、ツールを経ずに今も効く 2 点——worker の handler が揃っていること、
+行列の identity と「揃っていない前提を揃ったことにしない」規則（`matrix_state.make_matrix`）。
+旧ツール固有だった前提欠落の封筒・サマリの形・未知の kind の拒否は、`test_statistics_v2.py`
+（`run_statistic` の止まり方）と `test_analysis_matrix.py` が持つ。
 """
 from __future__ import annotations
-
-import json
 
 import numpy as np
 
 from metabolomix.core import session_state
 from metabolomix.mztab.dataset_state import DatasetState
 from metabolomix.pipeline.metabolomics_handlers import build_handlers
-from metabolomix.tools.dataset_analysis_tools import dataset_statistic
 
 
 # ---------- brief記載のRED ----------
@@ -32,23 +25,6 @@ def test_worker_handlers_cover_new_stages():
 
 # ---------- fixture ----------
 
-def _matrix(matrix_id="mat_x") -> dict:
-    values = np.array([[10., 5.], [11., 5.], [9., 5.],
-                       [40., 5.], [42., 5.], [38., 5.]])
-    return {
-        "schema": "analysis-matrix.v1", "matrix_id": matrix_id,
-        "parent_id": None, "stage": "finalized", "recipe_id": "default",
-        "assay_ids": [f"assay[{i + 1}]" for i in range(6)],
-        "feature_ids": ["1", "2"],
-        "values": values, "units": ["peak_height", "peak_height"],
-        "eligibility_mask": np.ones(2, dtype=bool), "detected_mask": None,
-        "imputed_mask": np.zeros(values.shape, dtype=bool),
-        "locked_mask": np.zeros(values.shape, dtype=bool),
-        "missing_reasons": {}, "support_feature_ids": [],
-        "correction_history": [], "caveats": [],
-    }
-
-
 def _rows():
     groups = ["control"] * 3 + ["treated"] * 3
     return [{"sample_id": f"s{i}", "source_file": f"S{i}.wiff", "role": "sample",
@@ -56,125 +32,6 @@ def _rows():
              "qc_pool": None, "include": True, "biological_sample_id": f"bio{i}"}
             for i, group in enumerate(groups)]
 
-
-def _session_dataset(with_matrix=True) -> DatasetState:
-    ds = DatasetState()
-    ds.feature_ids = ["1", "2"]
-    ds.sample_assay_ids = [f"assay[{i + 1}]" for i in range(6)]
-    ds.sample_names = [f"S{i}" for i in range(6)]
-    ds.sample_metadata_rows = _rows()
-    if with_matrix:
-        matrix = _matrix()
-        ds.analysis_matrices[matrix["matrix_id"]] = matrix
-    session_state.session.dataset = ds
-    return ds
-
-
-def _spec(**overrides) -> dict:
-    spec = {"statistic_id": "w1", "kind": "welch", "matrix_recipe_id": "default",
-            "transform": "none", "feature_scope": {"mode": "all_eligible"},
-            "reference_group": "control", "test_group": "treated",
-            "q_threshold": 0.05, "log2fc_threshold": 1.0}
-    spec.update(overrides)
-    return spec
-
-
-def _payload(text: str) -> dict:
-    return json.loads(text)
-
-
-# ---------- registration ----------
-
-def test_the_tool_is_registered_and_read_only():
-    import asyncio
-
-    import server
-
-    tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
-    assert "dataset_statistic" in tools
-    assert tools["dataset_statistic"].annotations.readOnlyHint is True
-
-
-# ---------- 欠けている前提の区別 ----------
-
-def test_without_a_dataset_it_says_to_load_one():
-    session_state.session.dataset = None
-    payload = _payload(dataset_statistic(_spec(), "mat_x"))
-    assert payload["error"]["code"] == "missing_state"
-    assert payload["error"]["state"] == "dataset"
-    assert "load_dataset" in payload["error"]["required_tools"]
-
-
-def test_without_a_matrix_it_points_at_the_pipeline_not_at_itself():
-    _session_dataset(with_matrix=False)
-    payload = _payload(dataset_statistic(_spec(), "mat_x"))
-    assert payload["error"]["state"] == "analysis_matrix"
-    assert "pipeline_run" in payload["error"]["required_tools"]
-    assert "dataset_statistic" not in payload["error"]["required_tools"]
-
-
-def test_an_unknown_matrix_id_is_not_silently_substituted():
-    _session_dataset()
-    payload = _payload(dataset_statistic(_spec(), "mat_does_not_exist"))
-    assert payload["error"]["code"] == "ANALYSIS_RESULT_NOT_FOUND"
-    assert payload["error"]["details"]["available_matrix_ids"] == ["mat_x"]
-
-
-# ---------- 正常系 ----------
-
-def test_a_successful_statistic_returns_a_summary_not_every_feature():
-    _session_dataset()
-    payload = _payload(dataset_statistic(_spec(), "mat_x"))
-    assert payload["status"] == "success"
-    assert payload["matrix_id"] == "mat_x"
-    assert payload["effect_size_definition"] == "log2_arithmetic_mean_ratio"
-    assert "features" not in payload
-    assert payload["n_features"] == 2
-    # 全量はセッションに残る（戻り値を肥大させない）。
-    stored = session_state.session.dataset.results["stat_w1"]
-    assert len(stored["features"]) == 2
-
-
-def test_a_group_that_is_too_small_is_reported_as_a_machine_readable_error():
-    ds = _session_dataset()
-    ds.sample_metadata_rows[0]["group"] = "other"
-    ds.sample_metadata_rows[1]["group"] = "other"
-    payload = _payload(dataset_statistic(_spec(), "mat_x"))
-    assert payload["error"]["code"] == "STATISTIC_GROUP_TOO_SMALL"
-
-
-def test_repeated_injections_are_reported_not_averaged():
-    ds = _session_dataset()
-    ds.sample_metadata_rows[0]["biological_sample_id"] = "bio1"
-    payload = _payload(dataset_statistic(_spec(), "mat_x"))
-    assert payload["error"]["code"] == "REPEATED_MEASURES_UNSUPPORTED"
-
-
-def test_an_unknown_kind_is_refused_with_the_supported_list():
-    _session_dataset()
-    payload = _payload(dataset_statistic(_spec(kind="mann_whitney"), "mat_x"))
-    assert payload["error"]["code"] == "STATISTIC_SPECIFICATION_INVALID"
-    assert "welch" in payload["error"]["details"]["supported"]
-
-
-# ---------- v1 の既定値を変えない ----------
-
-def test_v1_dataset_differential_defaults_are_unchanged():
-    import inspect
-
-    from metabolomix.tools.dataset_analysis_tools import dataset_differential
-
-    signature = inspect.signature(dataset_differential)
-    assert signature.parameters["q_threshold"].default == 0.05
-    assert signature.parameters["log2fc_threshold"].default == 1.0
-
-
-# ---------- dataset_build_matrix（pipeline を経ない対話経路） ----------
-#
-# pipeline の公開入口が塞がっている間、v2 の解析行列を作る入口はどこにも無い
-# （`build_analysis_matrix` は呼出元ゼロだった）。ここで縛るのは「行列は作れる
-# が、揃っていない前提を揃ったことにしない」——binding の無い内部標準比を
-# 作らせず、検出状態が不明なまま検出率 filter を適用しない。
 
 def _dataset_for_matrix() -> DatasetState:
     ds = DatasetState()
@@ -196,76 +53,37 @@ def _recipe(**overrides) -> dict:
     return recipe
 
 
-def test_build_matrix_is_registered_like_its_siblings():
-    import asyncio
+def _make(ds, recipe):
+    from metabolomix.analysis.matrix_state import make_matrix
 
-    import server
-
-    tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
-    assert "dataset_build_matrix" in tools
-    assert tools["dataset_build_matrix"].annotations.readOnlyHint is True
+    return make_matrix(ds, recipe, {}, {}, np.ones(len(ds.feature_ids), dtype=bool))
 
 
-def test_building_without_a_dataset_says_to_load_one():
-    from metabolomix.tools.dataset_analysis_tools import dataset_build_matrix
+# ---------- v1 の既定値を変えない ----------
 
-    session_state.session.dataset = None
-    payload = _payload(dataset_build_matrix(_recipe()))
-    assert payload["error"]["code"] == "missing_state"
-    assert payload["error"]["state"] == "dataset"
-    assert "load_dataset" in payload["error"]["required_tools"]
+def test_v1_compare_dataset_defaults_are_unchanged():
+    """pipeline が今も呼ぶ v1 の 2 群比較の既定値（対話ツールは統計エンジンへ移った）。"""
+    import inspect
 
+    from metabolomix.analysis.dataset_service import compare_dataset
 
-def test_an_invalid_recipe_is_rejected_not_reported_as_missing_state():
-    from metabolomix.tools.dataset_analysis_tools import dataset_build_matrix
-
-    _dataset_for_matrix()
-    payload = _payload(dataset_build_matrix(_recipe(normalize="quantile")))
-    assert payload["error"]["code"] == "MATRIX_RECIPE_INVALID"
-    assert "quantile" in json.dumps(payload, ensure_ascii=False)
+    signature = inspect.signature(compare_dataset)
+    assert signature.parameters["q_threshold"].default == 0.05
+    assert signature.parameters["log2fc_threshold"].default == 1.0
 
 
-def test_a_built_matrix_can_be_used_by_dataset_statistic():
-    from metabolomix.tools.dataset_analysis_tools import dataset_build_matrix
-
-    _dataset_for_matrix()
-    built = _payload(dataset_build_matrix(_recipe()))
-    assert built["status"] == "success"
-    assert built["n_assays"] == 6 and built["n_features"] == 2
-    assert "values" not in built
-
-    result = _payload(dataset_statistic(_spec(), built["matrix_id"]))
-    assert result["status"] == "success"
-    assert result["matrix_id"] == built["matrix_id"]
-
+# ---------- 解析行列（pipeline の preprocess 工程が作る形） ----------
 
 def test_the_same_recipe_and_dataset_give_the_same_matrix_id():
-    from metabolomix.tools.dataset_analysis_tools import dataset_build_matrix
-
-    _dataset_for_matrix()
-    first = _payload(dataset_build_matrix(_recipe()))
-    second = _payload(dataset_build_matrix(_recipe()))
-    assert first["matrix_id"] == second["matrix_id"]
+    ds = _dataset_for_matrix()
+    assert _make(ds, _recipe())["matrix_id"] == _make(ds, _recipe())["matrix_id"]
 
 
 def test_detection_filter_is_not_evaluable_when_detection_is_unknown():
-    from metabolomix.tools.dataset_analysis_tools import dataset_build_matrix
-
-    _dataset_for_matrix()
-    payload = _payload(dataset_build_matrix(
-        _recipe(filter={"min_detection_rate": 0.8})))
-    steps = {step["step"]: step for step in payload["history"]}
+    ds = _dataset_for_matrix()
+    matrix = _make(ds, _recipe(filter={"min_detection_rate": 0.8}))
+    steps = {step["step"]: step for step in matrix["correction_history"]}
     assert steps["detection_filter"]["status"] == "not_evaluable"
     # 検出状態が分からないことを理由に feature を落とさない。
-    assert payload["eligible_features"] == 2
-    assert "detection_unknown" in payload["caveats"]
-
-
-def test_internal_standard_ratio_needs_bindings_and_is_not_faked():
-    from metabolomix.tools.dataset_analysis_tools import dataset_build_matrix
-
-    _dataset_for_matrix()
-    payload = _payload(dataset_build_matrix(_recipe(base="internal_standard_ratio")))
-    assert payload["error"]["code"] == "missing_state"
-    assert payload["error"]["state"] == "feature_bindings"
-    assert "pipeline_run" in payload["error"]["required_tools"]
+    assert int(sum(bool(x) for x in matrix["eligibility_mask"])) == 2
+    assert "detection_unknown" in matrix["caveats"]

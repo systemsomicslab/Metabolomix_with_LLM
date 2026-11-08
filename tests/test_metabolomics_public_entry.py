@@ -142,11 +142,12 @@ def test_a_console_that_produces_nothing_does_not_complete_the_run(tmp_path, mon
 def test_a_completed_run_can_be_opened_for_interactive_work(tmp_path, monkeypatch):
     """公開入口で回した run を、そのまま対話セッションへ載せられること。
 
-    S1（dataset_build_matrix）・S2（load_dataset の pipeline_path モード）・
-    S3（この公開入口）が1本に繋がっていることを、この試験だけが示す。
+    S2（load_dataset の pipeline_path モード）・S3（この公開入口）が1本に繋がっていることを、
+    この試験だけが示す。載せた行列に統計（`statistics_v2.run_statistic`。pipeline の統計工程と同じ関数）が
+    走ることまでを見る。
     """
+    from metabolomix.analysis import statistics_v2
     from metabolomix.core import session_state
-    from metabolomix.tools.dataset_analysis_tools import dataset_statistic
     from metabolomix.tools.handle_tools import load_dataset
 
     source_root, request, _sources = _source(tmp_path, monkeypatch)
@@ -164,9 +165,10 @@ def test_a_completed_run_can_be_opened_for_interactive_work(tmp_path, monkeypatc
     assert ds.sample_metadata_rows
 
     matrix_id = sorted(ds.analysis_matrices)[0]
-    result = json.loads(dataset_statistic(
+    result = statistics_v2.run_statistic(
+        ds.analysis_matrices[matrix_id],
         {"statistic_id": "check", "kind": "pca", "matrix_recipe_id": "default",
          "transform": "none", "feature_scope": {"mode": "all_eligible"},
          "scaling": "autoscale", "n_components": 2},
-        matrix_id))
-    assert result.get("status") == "success", result
+        ds.sample_metadata_rows, ds.feature_binding_targets)
+    assert result.get("status") == "completed", result

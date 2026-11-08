@@ -6,7 +6,7 @@ import pytest
 from metabolomix.core import session_state
 from metabolomix.core.mcp_errors import MISSING_STATE
 from metabolomix.mztab.dataset_state import DatasetState
-from tests.v1_chain import v1_preprocess
+from tests.v1_chain import v1_differential, v1_preprocess
 
 
 @pytest.fixture(autouse=True)
@@ -39,24 +39,13 @@ def _groups(ds):
             [n for n in ds.pp_sample_names if n.startswith("treat")])
 
 
-# ---------- dataset_differential ----------
+# ---------- v1 の 2 群比較（pipeline の引き渡しが作る形。tests/v1_chain.py 経由） ----------
 
-def test_dataset_differential_requires_preprocess():
-    _load_ds()
-    from metabolomix.tools.dataset_analysis_tools import dataset_differential
-    parsed = json.loads(dataset_differential(group_a=["ctrl_0"], group_b=["treat_0"]))
-    assert parsed["error"]["code"] == MISSING_STATE
-    assert parsed["error"]["required_tools"] == ["dataset_preprocess"]
-
-
-def test_dataset_differential_success_returns_summary_only():
+def test_v1_comparison_returns_summary_only():
     ds = _load_ds()
-    from metabolomix.tools.dataset_analysis_tools import (
-        dataset_differential,
-    )
     v1_preprocess()
     a, b = _groups(session_state.session.dataset)
-    parsed = json.loads(dataset_differential(group_a=a, group_b=b))
+    parsed = json.loads(v1_differential(group_a=a, group_b=b))
     assert parsed["status"] == "success"
     assert "n_tested" in parsed["summary"]
     assert len(parsed["summary"]["top"]) <= 15
@@ -66,13 +55,10 @@ def test_dataset_differential_success_returns_summary_only():
     assert len(stored["results"]) == 20      # セッションには全量
 
 
-def test_dataset_differential_small_group_is_bad_request():
+def test_v1_comparison_small_group_is_bad_request():
     _load_ds()
-    from metabolomix.tools.dataset_analysis_tools import (
-        dataset_differential,
-    )
     v1_preprocess()
-    parsed = json.loads(dataset_differential(group_a=["ctrl_0"], group_b=["treat_0"]))
+    parsed = json.loads(v1_differential(group_a=["ctrl_0"], group_b=["treat_0"]))
     assert parsed["error"]["code"] != MISSING_STATE
     assert "群サイズ" in parsed["error"]["message"]
 
@@ -91,11 +77,11 @@ def test_dataset_export_writes_contract_format(tmp_path):
     from metabolomix.analysis.export_contract import CONTRACT_VERSION, EXPORT_COLUMNS
     _load_ds()
     from metabolomix.tools.dataset_analysis_tools import (
-        dataset_differential, dataset_export_differential,
+        dataset_export_differential,
     )
     v1_preprocess()
     a, b = _groups(session_state.session.dataset)
-    dataset_differential(group_a=a, group_b=b)
+    v1_differential(group_a=a, group_b=b)
 
     out = tmp_path / "diff.tsv"
     parsed = json.loads(dataset_export_differential(str(out)))
@@ -127,7 +113,7 @@ def test_dataset_export_applies_curation_flags_via_sibling_arf2(tmp_path):
     """
     from metabolomix.curation import flags as curation_flags
     from metabolomix.tools.dataset_analysis_tools import (
-        dataset_differential, dataset_export_differential,
+        dataset_export_differential,
     )
 
     # feature_ids は mzTab の SMF_ID そのもの(数字の連番文字列)を模す。
@@ -154,7 +140,7 @@ def test_dataset_export_applies_curation_flags_via_sibling_arf2(tmp_path):
 
     v1_preprocess()
     a, b = _groups(session_state.session.dataset)
-    dataset_differential(group_a=a, group_b=b)
+    v1_differential(group_a=a, group_b=b)
 
     out = tmp_path / "diff.tsv"
     parsed = json.loads(dataset_export_differential(str(out)))
@@ -171,7 +157,7 @@ def test_dataset_export_applies_curation_flags_via_sibling_arf2(tmp_path):
 def test_dataset_export_applies_assign_and_redundant(tmp_path):
     from metabolomix.curation import flags as curation_flags
     from metabolomix.tools.dataset_analysis_tools import (
-        dataset_differential, dataset_export_differential,
+        dataset_export_differential,
     )
 
     ds = _load_ds()
@@ -196,7 +182,7 @@ def test_dataset_export_applies_assign_and_redundant(tmp_path):
 
     v1_preprocess()
     a, b = _groups(session_state.session.dataset)
-    dataset_differential(group_a=a, group_b=b)
+    v1_differential(group_a=a, group_b=b)
     out = tmp_path / "diff.tsv"
     parsed = json.loads(dataset_export_differential(str(out)))
     assert parsed["status"] == "success"
@@ -213,7 +199,7 @@ def test_dataset_export_drops_an_assign_without_inchikey(tmp_path):
     """R10: 記録した InChIKey が空の assign は、同定なしの行として落ちる（ARF 経路と同じ）。"""
     from metabolomix.curation import flags as curation_flags
     from metabolomix.tools.dataset_analysis_tools import (
-        dataset_differential, dataset_export_differential,
+        dataset_export_differential,
     )
 
     ds = _load_ds()
@@ -237,7 +223,7 @@ def test_dataset_export_drops_an_assign_without_inchikey(tmp_path):
 
     v1_preprocess()
     a, b = _groups(session_state.session.dataset)
-    dataset_differential(group_a=a, group_b=b)
+    v1_differential(group_a=a, group_b=b)
     out = tmp_path / "diff.tsv"
     parsed = json.loads(dataset_export_differential(str(out)))
     assert parsed["status"] == "success"
@@ -251,7 +237,7 @@ def test_dataset_export_reports_a_malformed_flags_file(tmp_path):
     """I6: 壊れた flags.jsonl は wrong を黙って落とさず、ファイルと行を名指しで止める。"""
     from metabolomix.curation import flags as curation_flags
     from metabolomix.tools.dataset_analysis_tools import (
-        dataset_differential, dataset_export_differential,
+        dataset_export_differential,
     )
 
     ds = _load_ds()
@@ -266,7 +252,7 @@ def test_dataset_export_reports_a_malformed_flags_file(tmp_path):
 
     v1_preprocess()
     a, b = _groups(session_state.session.dataset)
-    dataset_differential(group_a=a, group_b=b)
+    v1_differential(group_a=a, group_b=b)
 
     out = tmp_path / "diff.tsv"
     parsed = json.loads(dataset_export_differential(str(out)))
@@ -282,11 +268,11 @@ def test_dataset_export_refuses_without_inchikey(tmp_path):
                                  "inchikey": None, "inchikey_source": "none"}
                            for fid in ds.feature_ids}
     from metabolomix.tools.dataset_analysis_tools import (
-        dataset_differential, dataset_export_differential,
+        dataset_export_differential,
     )
     v1_preprocess()
     a, b = _groups(session_state.session.dataset)
-    dataset_differential(group_a=a, group_b=b)
+    v1_differential(group_a=a, group_b=b)
     out = tmp_path / "diff.tsv"
     parsed = json.loads(dataset_export_differential(str(out)))
     # 機械可読なコードで返す（"status": "error" だけでは分岐できない）。
@@ -336,13 +322,12 @@ def test_v1_preprocess_reports_detection_when_available():
 # 出た数字を並べる。ツール層でもその境界が効いていることを確かめる。
 
 def test_tools_report_the_result_id_of_each_computation():
-    from metabolomix.tools.dataset_analysis_tools import dataset_differential
     from metabolomix.tools.stats_tools import dataset_pca
     ds = _load_ds()
     pp = json.loads(v1_preprocess())
     a, b = _groups(ds)
     pca = json.loads(dataset_pca(n_components=2))
-    diff = json.loads(dataset_differential(a, b))
+    diff = json.loads(v1_differential(a, b))
     assert pp["result_id"].startswith("res_")
     assert len({pp["result_id"], pca["result_id"], diff["result_id"]}) == 3
 
@@ -350,11 +335,11 @@ def test_tools_report_the_result_id_of_each_computation():
 def test_repreprocessing_makes_the_previous_comparison_unavailable(tmp_path):
     """古い結果を「直近の結果」として書き出させない。"""
     from metabolomix.tools.dataset_analysis_tools import (
-        dataset_differential, dataset_export_differential)
+        dataset_export_differential)
     ds = _load_ds()
     v1_preprocess()
     a, b = _groups(ds)
-    dataset_differential(a, b)
+    v1_differential(a, b)
     v1_preprocess(normalize="tic")
 
     parsed = json.loads(dataset_export_differential(str(tmp_path / "out.tsv")))
@@ -432,11 +417,11 @@ def test_dataset_set_sample_metadata_invalid_sheet_does_not_touch_session(tmp_pa
 
 def test_export_records_which_result_it_came_from(tmp_path):
     from metabolomix.tools.dataset_analysis_tools import (
-        dataset_differential, dataset_export_differential)
+        dataset_export_differential)
     ds = _load_ds()
     v1_preprocess()
     a, b = _groups(ds)
-    diff = json.loads(dataset_differential(a, b))
+    diff = json.loads(v1_differential(a, b))
     dataset_export_differential(str(tmp_path / "out.tsv"))
 
     meta = [l for l in (tmp_path / "out.tsv").read_text(encoding="utf-8").splitlines()

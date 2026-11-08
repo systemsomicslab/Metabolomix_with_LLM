@@ -16,7 +16,7 @@ from metabolomix.curation import flags as curation_flags
 from tests.curation_fixtures import match_result
 from tests.msdial_folder_fixtures import analysis_file_row, write_mddata, write_msdial_folder
 from tests.test_dataset_opening import _job, _pipeline
-from tests.v1_chain import v1_preprocess
+from tests.v1_chain import v1_differential, v1_preprocess
 
 
 @pytest.fixture(autouse=True)
@@ -103,7 +103,7 @@ def test_folder_dataset_applies_curation_and_reports_detection(tmp_path):
     assert status["inchikey_coverage"]["total_features"] == 4
 
     v1_preprocess()
-    dat.dataset_differential(group_a=["s0", "s1", "s2"], group_b=["s3", "s4", "s5"])
+    v1_differential(group_a=["s0", "s1", "s2"], group_b=["s3", "s4", "s5"])
     out = tmp_path / "out.tsv"
     payload = json.loads(dat.dataset_export_differential(str(out), apply_curation=True))
     assert payload["curation"]["state"] == "applied"
@@ -228,7 +228,7 @@ def test_folder_and_mztab_adapters_give_the_same_tool_output(tmp_path, entry):
         status = json.loads(mztab_tools.dataset_status())
         meta = dataset_analysis.build_dataset_pp_inputs(ds)[-1]
         v1_preprocess()
-        dat.dataset_differential(group_a=["s0", "s1", "s2"], group_b=["s3", "s4", "s5"])
+        v1_differential(group_a=["s0", "s1", "s2"], group_b=["s3", "s4", "s5"])
         export = json.loads(dat.dataset_export_differential(
             str(tmp_path / f"{source}.tsv"), apply_curation=True))
         applied = json.loads(dat.dataset_set_sample_metadata(str(_sheet(tmp_path, ds, GROUPS))))
@@ -274,7 +274,7 @@ def _differential_caveats(names) -> str:
     from metabolomix.tools import dataset_analysis_tools as dat
 
     v1_preprocess()
-    out = json.loads(dat.dataset_differential(group_a=names[:3], group_b=names[3:]))
+    out = json.loads(v1_differential(group_a=names[:3], group_b=names[3:]))
     return " ".join(out.get("caveats") or [])
 
 

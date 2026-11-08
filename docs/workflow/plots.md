@@ -32,10 +32,10 @@ Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT
 
 ## dataset_plot
 
-前提: `kind` ごと——`volcano` は `dataset_differential`（2 群）、`pca` / `loadings` は `dataset_pca`、
+前提: `kind` ごと——`volcano` は `dataset_compare`（2 群）、`pca` / `loadings` は `dataset_pca`、
 `group_intensity` / `species` / `species_pca` は結果を要らない（`items` と `groups` を渡す。キュレーションの
 判断は `load_dataset` が読んだ `ds.curation_flags`）、`eic` / `eic_compounds` はデータセットの `.EIC.aef`（`artifact_paths` の `eic`）。無ければ
-`missing_state`（`dataset_pca` / `dataset_differential`）か `COMPANION_ARTIFACT_MISSING`（`.EIC.aef` が無い）。
+`missing_state`（`dataset_pca` / `dataset_compare`）か `COMPANION_ARTIFACT_MISSING`（`.EIC.aef` が無い）。
 状態変更: `ds.figures[kind]` を更新（メモリ上。ファイルは書かない）。`species_pca` はさらに結果を
 `ds.results` へ登録する（来歴の kind は `species_pca`。`loadings` の `result_id` には使え、分子種のローディングを描く。
 `pca` の `result_id` には使えない）。この結果は来歴に `metadata_revision` を持ち、試料の情報の更新・`dataset_exclude` で

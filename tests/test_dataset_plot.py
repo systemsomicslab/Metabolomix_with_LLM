@@ -14,12 +14,11 @@ from metabolomix.analysis import sample_manifest
 from metabolomix.core import handles, session_state
 from metabolomix.mztab.dataset_state import DatasetState
 from metabolomix.tools import plot_tools, reports, sample_tools
-from metabolomix.tools.dataset_analysis_tools import dataset_differential
 from metabolomix.tools.stats_tools import dataset_pca
 from tests.config_fixtures import use_config
 from tests.curation_fixtures import write_alignment_set
 from tests.msdial_folder_fixtures import analysis_file_row, write_mddata
-from tests.v1_chain import v1_pca, v1_preprocess
+from tests.v1_chain import v1_differential, v1_pca, v1_preprocess
 
 PNG_MAGIC = b"\x89PNG"
 
@@ -71,7 +70,7 @@ def _analysed(*, with_differential=True) -> DatasetState:
     if with_differential:
         a = [n for n in ds.pp_sample_names if n.startswith("ctrl")]
         b = [n for n in ds.pp_sample_names if n.startswith("treat")]
-        assert json.loads(dataset_differential(group_a=a, group_b=b))["status"] == "success"
+        assert json.loads(v1_differential(group_a=a, group_b=b))["status"] == "success"
     return ds
 
 
@@ -96,7 +95,7 @@ def _folder_handle(tmp_path, n_files=3):
 
 # ---------- volcano / pca / loadings ----------
 
-def test_volcano_from_dataset_differential():
+def test_volcano_from_a_two_group_result():
     _analysed()
     out = plot_tools.dataset_plot(kind="volcano")
     assert isinstance(out, list) and len(out) == 2

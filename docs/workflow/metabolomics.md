@@ -11,17 +11,20 @@ profile が method・依存・実行体・極性の唯一の情報源になる�
 **routine は引き続き `PROFILE_VALIDATION_INVALID` で停止する**（証明書の独立した
 実測hashの受付が未接続）。draft profile + `execution_purpose="validation"` を使う。
 
-統計までの対話経路は pipeline 抜きでも通る:
-`load_dataset` → `dataset_set_sample_metadata` → `dataset_build_matrix` → `dataset_statistic`。
-この経路は binding と注入証拠を持たないぶん、内部標準比を作れず検出率 filter も評価不能になる。
-完了した v2 run がある場合は `load_dataset(pipeline_path=...)` が、その run の dataset・
-試料対応表・binding・解析行列をまとめてセッションへ載せる（[dataset.md](dataset.md)）。
+**この文書にツールの節は無い**（pipeline 専用の文書）。v2 の解析行列（`analysis-matrix.v1`）と統計
+（welch / anova_tukey / pca）は `pipeline_run` が回す工程の中だけで作られ、公開ツールからこの
+行列を作る・統計を回す入口はない（旧 `analysis-matrix` / v2 統計の単体ツールは 2026-11 に消えた）。
+対話で統計を回すなら統計エンジンの `dataset_preprocess` → `dataset_compare` / `dataset_pca`、
+spec で回すなら `dataset_analysis_run`（[dataset_analysis.md](dataset_analysis.md)・
+[reanalysis.md](reanalysis.md)）を使う。完了した v2 run がある場合は
+`load_dataset(pipeline_path=...)` が、その run の dataset・試料対応表・binding・解析行列を
+まとめてセッションへ載せる（[dataset.md](dataset.md)）。
 検証範囲と残タスクは[実装監査](../superpowers/plans/2026-09-16-validated-lcms-metabolomics-audit.md)を参照。
 
-v1（`dataset_differential` ほか、[dataset_analysis.md](dataset_analysis.md)）とは
+pipeline の v2 統計は、v1（pipeline の 2 群比較）や統計エンジン（`dataset_compare`）とは
 **数値契約が違う**。同じ「log2FC」という名前でも、v1 は `log2(x + pseudo_count)` 空間の
 平均差、v2 は統計変換前の算術平均比の log2（`effect_size_definition =
-log2_arithmetic_mean_ratio`）。v1 の既定値・契約は一切変更していない。
+log2_arithmetic_mean_ratio`）。
 
 向きは v1・v2 とも揃えてある: `log2fc`、Welch の `t_statistic`（v1 は結果行の `t`）、
 Tukey の `mean_difference` は、いずれも**正なら test（v1 は group_b）が高い**。
@@ -54,72 +57,9 @@ t は符号が逆）。
   -Name VerifiedAndReputablePolicyState).VerifiedAndReputablePolicyState
 ```
 
-## dataset_build_matrix
-
-セッションの `DatasetState` から解析行列（`analysis-matrix.v1`）を1本作り、
-`ds.analysis_matrices` へ登録する。pipeline を回さずに v2 統計へ進むための入口。
-
-- **前提** — `session.dataset` のみ（`load_dataset`）。群・batch・注入順・include は
-  `dataset_set_sample_metadata` で入れておく（正規化の参照試料とドリフト補正の
-  前提判定がこれを読む）。
-- **recipe の検証** — profile の `matrix_recipes` と**同じ規則**を共有する
-  （`profile_schema.validate_matrix_recipe`）。経路によって通る recipe が変わると、
-  同じ `recipe_id` の行列が別物になる。
-- **揃っていない前提を埋めない** — `base="internal_standard_ratio"` は対象feature↔
-  内部標準の対応付けを要求するので `missing_state`（`feature_bindings`）で止める。
-  検出状態が不明な dataset では `filter.min_detection_rate` は `not_evaluable` として
-  記録され、feature を落とさない。
-- **状態変更** — `ds.analysis_matrices[matrix_id]`。値は戻り値に載せない。
-- **呼び出し連鎖**
-
-```
-1. metabolomix/tools/dataset_analysis_tools.py  dataset_build_matrix()
-2. ├─ metabolomix/console/profile_schema.py  validate_matrix_recipe()
-3. └─ metabolomix/analysis/dataset_service.py  build_analysis_matrix()
-4.    └─ metabolomix/analysis/matrix_state.py  make_matrix()
-5.       └─ metabolomix/analysis/matrix_state.py  _detected_mask()
-6.       └─ metabolomix/analysis/matrix_state.py  _apply_recipe()
-7.       └─ metabolomix/analysis/matrix_state.py  _detection_eligibility()
-8.       └─ metabolomix/analysis/internal_standards.py  apply_internal_standards()
-```
-
-`matrix_id` は値ではなく**入力の identity**（dataset fingerprint・recipe・binding・
-証拠・metadata・eligibility）の hash。同じ入力なら同じ ID になるので、pipeline が
-作った行列と突き合わせられる。
-
-## dataset_statistic
-
-名指しした解析行列（`analysis-matrix.v1`）に対して統計を1件実行する。
-
-- **前提** — `session.dataset`（`load_dataset`）と、`ds.analysis_matrices` に登録済みの
-  解析行列。行列の出どころは3つ: pipeline の `preprocess` / `qc_processed` 工程が作った
-  ものを `load_dataset(pipeline_path=...)` で載せる、`dataset_build_matrix` でこの場で作る、
-  のいずれか。どちらが欠けても `missing_state` 封筒を返す。
-- **状態変更** — `session.dataset.results["stat_<statistic_id>"]` に結果全量を置く。
-  戻り値には要約だけを載せる。
-- **呼び出し連鎖**
-
-```
-1. metabolomix/tools/dataset_analysis_tools.py  dataset_statistic()
-2. └─ metabolomix/analysis/dataset_service.py  statistic_dataset()
-3.    └─ metabolomix/analysis/statistics_v2.py  run_statistic()
-4.       └─ metabolomix/analysis/statistics_v2.py  transform_values()
-5.       └─ metabolomix/analysis/sample_manifest.py  select_statistical_samples()
-6.       └─ metabolomix/analysis/sample_manifest.py  validate_independent_samples()
-7.       └─ metabolomix/analysis/differential.py  welch_t()
-8.       └─ metabolomix/analysis/differential.py  bh_fdr()
-9.       └─ metabolomix/analysis/multigroup.py  test_feature()
-10.      └─ metabolomix/analysis/statistics_v2.py  arithmetic_log2fc()
-11.      └─ metabolomix/analysis/pca.py  run_pca()
-```
-
-`matrix_result_id` が `ds.analysis_matrices` に無ければ `ANALYSIS_RESULT_NOT_FOUND` で
-止まる。**近い行列で代用しない**——recipe 違いの行列が2本ある前提の設計で、
-どちらの数字かを言えない結果を返すくらいなら止めるほうが安全。
-
 ## pipeline の v2 工程（参考）
 
-公開受付接続後にv2 workerが回す予定の順序（handler の実体は
+v2 worker が回す順序（handler の実体は
 `metabolomix/pipeline/metabolomics_handlers.py`）:
 
 ```
@@ -140,6 +80,25 @@ prepare_inputs → execute_console → validate_outputs → load_dataset
   `make_matrix()`）。補完はしない。
 - `qc_processed` — 処理後 QC を評価してから補完する（`finalize_matrix()`）。QC で落ちた
   feature は eligibility にだけ反映し、QC は再集計しない。
+- `statistics:<id>` — 指定統計を**最終行列**（`preprocess` / `qc_processed` が作ったもの）へ
+  1 件ずつ実行する。評価不能でも結果 JSON は残す（近い行列で代用しない）。
+
+```
+1. metabolomix/pipeline/metabolomics_handlers.py  _handle_statistics()
+2. └─ metabolomix/analysis/statistics_v2.py  run_statistic()
+3.    └─ metabolomix/analysis/statistics_v2.py  transform_values()
+4.    └─ metabolomix/analysis/sample_manifest.py  select_statistical_samples()
+5.    └─ metabolomix/analysis/sample_manifest.py  validate_independent_samples()
+6.    └─ metabolomix/analysis/differential.py  welch_t()
+7.    └─ metabolomix/analysis/differential.py  bh_fdr()
+8.    └─ metabolomix/analysis/multigroup.py  test_feature()
+9.    └─ metabolomix/analysis/statistics_v2.py  arithmetic_log2fc()
+10.   └─ metabolomix/analysis/pca.py  run_pca()
+```
+
+  この工程のテストは `tests/test_metabolomics_end_to_end.py`（手計算の ANOVA・内部標準比行列への
+  Welch）。
+
 - `report` — 実行・QC・解析の3軸を分けて書く（`metabolomix/pipeline/report.py`
   `analysis_status()`）。
 

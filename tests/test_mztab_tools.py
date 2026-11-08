@@ -369,7 +369,7 @@ def test_dataset_load_via_job_path_no_entry_with_declared_polarity(tmp_path):
 def test_dataset_status_lists_sample_names_with_roles(mztab_file):
     """群指定に必要なサンプル名を dataset_status が返す。
 
-    dataset_differential は正確なサンプル名のリストを要求するが、旧実装の
+    dataset_compare の群指定には正確な群名が要るが、旧実装の
     dataset_status は n_samples（件数）しか返しておらず、名前を知る手段が
     「わざと群サイズ不足のエラーを起こして details を読む」しか無かった。
     """

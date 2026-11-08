@@ -286,7 +286,7 @@ def test_dataset_load_summary_lists_restored_and_rejected(tmp_path):
     assert (f"c2\t{legacy['provenance']['result_id']}"
             "\tlegacy_result_without_dataset_hash") in summary
     # 指紋を持たない旧 run の結果は、session で作り直す手順を案内する。
-    assert "dataset_differential" in summary
+    assert "dataset_compare" in summary
     ds = session_state.session.dataset
     assert kept["provenance"]["result_id"] in ds.results
 
@@ -448,10 +448,10 @@ def test_every_rejection_reason_tells_the_next_step():
     assert set(notes) == set(reasons)
     # データが違う: session で計算し直す。
     assert "dataset_preprocess" in notes["dataset_mismatch"]
-    assert "dataset_differential" in notes["dataset_mismatch"]
+    assert "dataset_compare" in notes["dataset_mismatch"]
     # 群が違う: シートか session のメタデータを確かめる、または session で計算し直す。
     assert "dataset_set_sample_metadata" in notes["group_mismatch"]
-    assert "dataset_differential" in notes["group_mismatch"]
+    assert "dataset_compare" in notes["group_mismatch"]
 
 
 def _handed_off(ds, **overrides) -> dict:

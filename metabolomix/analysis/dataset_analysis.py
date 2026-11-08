@@ -26,7 +26,7 @@ _NON_SAMPLE_ROLES = ("qc", "blank")
 # ここで結果 dict に刻む版とラベルは、dataset_export_differential が検証する値と
 # 同一でなければならない。ローカルに複製すると、export_contract.CONTRACT_VERSION を
 # 上げた瞬間ここだけ古い値のままになり、エクスポートが「契約非互換」で永久に拒否され
-# 続ける（dataset_differential を再実行しても同じ古い値を刻むだけなので、クライアント
+# 続ける（2 群比較を再実行しても同じ古い値を刻むだけなので、クライアント
 # のリプレイでは直らない）。単一情報源として export_contract を直接参照する。
 
 
@@ -348,7 +348,7 @@ def run_dataset_pca(ds, n_components: int = 5, log_transform: bool = False) -> d
         caveats.append(
             f"{detail} が注入順と強く相関しています。分析ドリフトを写している"
             "可能性があるため、群差として読む前に確認してください。"
-            "QC 試料があれば dataset_preprocess(drift_correct=True) で補正できます。")
+            "QC 試料があれば dataset_preprocess(drift_mode='on') で補正できます。")
 
     return {
         "explained_variance_ratio": [round(float(v), 4)

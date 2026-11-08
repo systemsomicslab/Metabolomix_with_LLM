@@ -216,7 +216,7 @@ DatasetState と照合し、一致したものだけを `ds.results` へ戻す�
 `dataset_mismatch` / `group_mismatch`）つきで残り、要約に並ぶ。`pipeline_resume` には
 差次的工程だけを再計算させる手順が無いため、要約は理由ごとに次の一手を添える:
 指紋を持たない旧 run の結果とデータ違いには session での `dataset_preprocess` →
-`dataset_differential`、群違いには実験情報シート（`dataset_set_sample_metadata` で
+`dataset_compare`、群違いには実験情報シート（`dataset_set_sample_metadata` で
 与えた群）の確認か、今の群のままの再計算。`result_state.is_current` の handoff 分岐は
 `kind == "differential"` の結果にだけ当たり、他の kind が handoff を名乗っていても通さない。
 
@@ -233,7 +233,7 @@ completed は「実行後にファイルが増えた」以上の意味を持た�
 
 完了していない実行（partial / failed / running）の出力は既定で読まない
 （`INCOMPLETE_ANALYSIS_JOB`）。`allow_incomplete=True` で読んだ場合は
-`exploratory_only=True` になり、2 群比較（dataset_differential）と差次的エクスポートは
+`exploratory_only=True` になり、2 群比較（dataset_compare）と差次的エクスポートは
 `EXPLORATORY_ONLY_DATASET` で拒否する。欠けた検体は mzTab 上「その群に無い」ように
 しか見えず、比較はその欠落ごと結論にしてしまう。
 

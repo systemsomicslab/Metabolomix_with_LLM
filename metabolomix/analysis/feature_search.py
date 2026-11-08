@@ -926,7 +926,7 @@ def select_results(ds, result_ids: list[str] | None, *,
       `CONTRAST_REQUIRED`。False なら全対比に展開する。
 
     今も有効でない結果は ``results`` に入れず ``stale`` に名指しした ID を 1 回だけ挙げる。名指しの ID が無い、
-    または 2 群比較でない結果（v2 の ``dataset_statistic`` = ``kind == "welch"`` など）は ``missing``。
+    または 2 群比較でない結果（pipeline の v2 統計の記録 ``kind == "welch"`` など）は ``missing``。
 
     ``dataset_hash`` は計算済みの ``dataset_fingerprint(ds)``（任意）。
     """

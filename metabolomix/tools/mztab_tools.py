@@ -81,14 +81,14 @@ def sample_group_role_counts(ds) -> dict:
 _HANDOFF_REASON_NOTES = {
     "legacy_result_without_dataset_hash":
         "指紋を持たない旧 run の結果。session で dataset_preprocess → "
-        "dataset_differential を実行して計算し直してください。",
+        "dataset_compare を実行して計算し直してください。",
     "dataset_mismatch":
         "run の計算時とデータ（mzTab）が一致しません。今読み込んだデータで使うには、"
-        "session で dataset_preprocess → dataset_differential を実行して計算し直してください。",
+        "session で dataset_preprocess → dataset_compare を実行して計算し直してください。",
     "group_mismatch":
         "run の計算時と群割当が一致しません。実験情報シート（または "
         "dataset_set_sample_metadata で与えた群）を確かめるか、今の群のまま session で "
-        "dataset_preprocess → dataset_differential を実行して計算し直してください。",
+        "dataset_preprocess → dataset_compare を実行して計算し直してください。",
 }
 
 
@@ -125,8 +125,8 @@ def dataset_status(dataset_handle: str | None = None, view: str = "summary",
     """現在の DatasetState の状態を返す。`view` で何を見るかを選ぶ。
 
     view:
-      - `"summary"`（既定）: 概要。`samples` に name/role の TSV が入り、dataset_differential の
-        group_a / group_b はここに出る名前をそのまま使う。群（Class ID）ごとの件数 `groups`・
+      - `"summary"`（既定）: 概要。`samples` に name/role の TSV が入り、dataset_compare の
+        reference_group / test_group はここに出る group の名前をそのまま使う。群（Class ID）ごとの件数 `groups`・
         役割ごとの件数 `roles`・群の無い試料の数 `n_ungrouped`・特徴のタグごとの件数 `tags`・
         除外の件数 `excluded`（`dataset_exclude`）を含む。
       - `"samples"`: 試料の TSV（name・group・role・batch・injection_order・subject_id・excluded。
@@ -185,7 +185,7 @@ def dataset_status(dataset_handle: str | None = None, view: str = "summary",
         "n_samples": len(ds.sample_names),
         "validation": _validation_summary(ds),
         "inchikey_coverage": ds.inchikey_coverage,
-        # 群指定（dataset_differential）に必要なサンプル名。件数だけ返していた頃は、
+        # 群指定（dataset_compare）に必要な試料名と群名。件数だけ返していた頃は、
         # 名前を知る手段が「わざと群サイズ不足のエラーを起こして details を読む」
         # しか無かった。行が並ぶ一覧なので TSV（列名 1 回）で返す。
         "samples": _samples_tsv(ds),

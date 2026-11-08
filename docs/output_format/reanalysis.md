@@ -386,7 +386,7 @@ SML にその列が無い mzTab では**エラーにせず**、`subset_available
  "exclude": {"feature_ids": [], "inchikey_blocks": []}}
 ```
 
-`statistics` は `{"result_id"}`（`dataset_differential` の 2 群比較。`group_a` が基準）か
+`statistics` は `{"result_id"}`（`dataset_compare` の 2 群比較。`reference_group` が基準）か
 `{"analysis_spec", "analysis_id"}`（analysis-spec.v1 とその解析）。SME rank 1 の同定があり、
 |ppm| が帯の許容幅以内（`max_mz` 未満の最初の帯、無ければ `default`）で、q < `q_max` の特徴から
 除外を外した一覧（q の昇順）。行は `feature_id name inchikey adduct mz rt ppm group_ref group_test

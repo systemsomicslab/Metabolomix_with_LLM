@@ -19,6 +19,8 @@ NON_TOOL_IDENTIFIERS = {
     "add_subquestions",  # `record_objective` の引数
     "not_found",  # `dcl_find_msms` の status の値
     "missing_state",  # エラー封筒の code
+    "matrix_id",  # `dataset_preprocess` が返す行列の ID（`dataset_compare` / `dataset_pca` の引数）
+    "retry_tools",  # `needs_input` の封筒の欄
 }
 WILDCARD_RE = re.compile(r"^(dataset|library|curation|dcl|pathway|console|pipeline)_\*$")
 #: バッククォートの中身が「名前」か「名前(...)」か「名前=...」のどれかで、名前に `_` を含むもの。
@@ -32,6 +34,7 @@ REMOVED = (
     "eic_parser", "eic_search", "sample_search", "plot_pca_loadings",
     "verify_peak_annotation", "knowledge_coverage", "paper_search", "log_search",
     "update_objective", "list_reports",
+    "dataset_differential", "dataset_statistic", "dataset_build_matrix",
 )
 
 

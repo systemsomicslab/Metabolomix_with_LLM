@@ -24,7 +24,7 @@ from metabolomix.tools import handle_tools, mztab_tools, stats_tools
 from metabolomix.tools import reanalysis_tools as R
 from tests.reanalysis_fixtures import NEG_FEATURES, write_mztab
 from tests.config_fixtures import use_config
-from tests.v1_chain import v1_preprocess
+from tests.v1_chain import v1_differential, v1_preprocess
 
 GOLDEN = Path(__file__).parent / "fixtures" / "handle_golden_no_handle.json"
 HC, RA = ["HC1", "HC2", "HC3"], ["RA1", "RA2", "RA3"]
@@ -57,17 +57,15 @@ def _open(path) -> str:
 
 
 def _tools(tmp_path):
-    """ハンドルを受けるツール（既存の 13 と dataset_alignment_qc）と最小の引数。"""
+    """ハンドルを受けるツール（既存のものと dataset_alignment_qc）と最小の引数。"""
     return [
         (mztab_tools.dataset_status, {}),
         (stats_tools.dataset_preprocess, {}),
         (stats_tools.dataset_pca, {}),
-        (T.dataset_differential, {"group_a": HC, "group_b": RA}),
+        (stats_tools.dataset_compare, {"reference_group": "HC", "test_group": "RA"}),
         (T.dataset_export_differential, {"output_path": str(tmp_path / "x.tsv")}),
         (T.dataset_export_evidence_bundle, {"output_dir": str(tmp_path / "b"), "result_id": "r"}),
         (T.dataset_set_sample_metadata, {"manifest_path": str(tmp_path / "m.tsv")}),
-        (T.dataset_statistic, {"specification": {}, "matrix_result_id": "m"}),
-        (T.dataset_build_matrix, {"recipe": {}}),
         (T.dataset_feature_search, {"feature_ids": ["1"]}),
         (library_tools.library_load, {}),
         (library_tools.library_match_feature, {"precursor_mz": 104.107}),
@@ -161,7 +159,7 @@ def test_preprocess_on_handle_leaves_global_and_other_handle_untouched(pos_mztab
 def test_differential_and_search_on_handle(pos_mztab):
     a = _open(pos_mztab)
     v1_preprocess(dataset_handle=a)
-    diff = json.loads(T.dataset_differential(group_a=HC, group_b=RA, dataset_handle=a))
+    diff = json.loads(v1_differential(group_a=HC, group_b=RA, dataset_handle=a))
     assert diff["status"] == "success"
     search = json.loads(T.dataset_feature_search(feature_ids=["1"], dataset_handle=a))
     assert search["stats_source"]["result_ids"] == [diff["result_id"]]
@@ -218,7 +216,7 @@ def golden_outputs(directory: Path) -> dict:
         "status": load(mztab_tools.dataset_status(), ["server_version", "update_available"]),
         "search_window": load(T.dataset_feature_search(min_mz=100, max_mz=600)),
         "preprocess": load(v1_preprocess(normalize="pqn")),
-        "differential": load(T.dataset_differential(group_a=HC, group_b=RA)),
+        "differential": load(v1_differential(group_a=HC, group_b=RA)),
         "search_targets": load(T.dataset_feature_search(targets=[{
             "target_id": "t1", "inchikey": "OEYIOHPDSNJKLS-UHFFFAOYSA-N",
             "expected_mz": 104.107, "adduct": "[M]+", "rt_min": 1.2}])),

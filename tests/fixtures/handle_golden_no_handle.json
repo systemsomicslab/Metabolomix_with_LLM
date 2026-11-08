@@ -47,7 +47,7 @@
   "features_removed_total": 0,
   "n_features": 3,
   "n_samples": 8,
-  "next": "dataset_pca または dataset_differential を実行してください",
+  "next": "dataset_pca または dataset_compare を実行してください",
   "recipe_applied": [
    "normalize",
    "impute"

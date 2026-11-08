@@ -337,7 +337,7 @@ def _intensity_recipe(ds, result):
                            or getattr(ds,'pp_matrix',None) is None):
         raise DomainError('EVIDENCE_INTENSITIES_UNAVAILABLE',
                           'この結果を計算した前処理のレシピが分からず、今の前処理の行列もこの結果の親では'
-                          'ないので、試料ごとの値を書けません。dataset_differential で計算し直してください。',
+                          'ないので、試料ごとの値を書けません。dataset_compare で計算し直してください。',
                           {'result_id':(result.get('provenance') or {}).get('result_id'),
                            'parent_ids':parents,'preprocess_id':getattr(ds,'preprocess_id',None)})
     return recipe
@@ -382,7 +382,7 @@ def _intensity_rows(ds, result):
     if not samples:
         raise DomainError('EVIDENCE_INTENSITIES_UNAVAILABLE',
                           'この結果は群の試料（samples_a / samples_b）を持たないので、試料ごとの値を'
-                          '書けません。dataset_differential で計算し直してください。',
+                          '書けません。dataset_compare で計算し直してください。',
                           {'result_id':(result.get('provenance') or {}).get('result_id')})
     position = {name:i for i,name in enumerate(names)}
     mask, reason = _detection_source(ds,samples)
