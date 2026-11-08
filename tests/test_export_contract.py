@@ -1,18 +1,8 @@
 """差次的エクスポート契約（metabolomix.analysis.export_contract）の単体テスト。
 
-ARF 経路（arf_export_differential）と DatasetState 経路
-（dataset_export_differential）の両方がこのモジュールを参照する。契約の列・版・
-メタ行順序はここで固定し、二重定義を作らない（arf/tools.py 側は同一性を確認する）。
+書き出し（dataset_export_differential と pipeline の書き出し）がこのモジュールを参照する。
+契約の列・版・メタ行順序はここで固定し、二重定義を作らない。
 """
-
-
-def test_contract_constants_are_shared_with_arf():
-    """ARF 側が契約モジュールの定数を参照していること（二重定義を作らない）。"""
-    from metabolomix.analysis import export_contract
-    from metabolomix.arf import tools as arf_tools
-    assert arf_tools._EXPORT_COLUMNS is export_contract.EXPORT_COLUMNS
-    assert arf_tools._DIFFERENTIAL_CONTRACT_VERSION == export_contract.CONTRACT_VERSION
-    assert arf_tools._LOG2FC_SIGN == export_contract.LOG2FC_SIGN
 
 
 def test_export_columns_are_frozen():
@@ -136,12 +126,10 @@ def test_is_significant_rejects_missing_and_non_finite():
 
 
 def test_both_export_paths_use_the_contract_significance():
-    """ARF 経路と DatasetState 経路が別実装を持たないこと。
+    """書き出し側が有意判定を別実装として持たないこと（契約モジュールだけが持つ）。
 
-    キー名が `q_value` / `q` で違うだけの同一ロジックが 2 箇所にあると、
-    片方だけ直した状態で下流は同一契約として読む。
+    同一ロジックが 2 箇所にあると、片方だけ直した状態で下流は同一契約として読む
+    （旧 ARF 経路は B-2b で消えた。ここでは残った書き出し側を縛る）。
     """
-    from metabolomix.arf import tools as arf_tools
     from metabolomix.tools import dataset_analysis_tools
-    assert not hasattr(arf_tools, "_is_significant")
     assert not hasattr(dataset_analysis_tools, "_is_significant")

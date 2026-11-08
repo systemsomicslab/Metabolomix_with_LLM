@@ -159,7 +159,7 @@ def resolve_policy(ds, requested: dict, metadata: list[dict]) -> dict:
         )
     if getattr(ds, "feature_matrix", None) is None:
         _prerequisite_missing(
-            "resolve_policy", "DatasetStateに定量行列がありません。dataset_loadを先に実行してください。")
+            "resolve_policy", "DatasetStateに定量行列がありません。load_datasetを先に実行してください。")
 
     # ---------- include=true 対象の集計（constraint: 全集計はinclude=trueのみ） ----------
     included = [(name, row) for name, row in zip(sample_names, metadata)

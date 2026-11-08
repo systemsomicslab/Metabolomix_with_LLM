@@ -83,7 +83,7 @@ receiptは従来どおり最小のまま。
 receipt にはファイル名・sha256・出どころだけを載せ、置き場所は載せない。
 
 `library_mode="msp_then_lbm"`(v8。脂質の run 用)は研究室 MSP を優先し、LBM で補う。MSP は `msp_only` と同じ規則で決め、
-LBM は `[library] lbm`(環境変数 `MSDIAL_LIBRARY_LBM`)**だけ**から決める(`[msdial] lbm`・メソッドの宣言・実行体のフォルダ・
+LBM は `[library] lbm` **だけ**から決める(メソッドの宣言・実行体のフォルダ・
 ビルド生成物は見ない。無ければ `LBM_NOT_CONFIGURED`、指す先が無ければ `LBM_NOT_FOUND`)。実効メソッドは `Msp file path` を空にし、
 `MSP annotator settings file path` に `inputs/msp-annotators.tsv`(`stage_inputs` が書く。列 `annotator_id` / `msp_file_path` /
 `priority`、研究室 MSP を priority 2 で 1 行)、`Lbm file path` に LBM、`Use retention information for LBM-based annotation

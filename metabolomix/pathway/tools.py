@@ -17,6 +17,7 @@ from mcp.server.fastmcp import Image
 from mcp.types import ToolAnnotations
 
 from metabolomix.core import mcp_core, mcp_errors, session_state
+from metabolomix.core.mcp_errors import config_invalid_as_envelope
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.serialization import json_payload
 from metabolomix.pathway import bridge, compare, handoff, jsonld
@@ -96,21 +97,11 @@ def _backend_text(result: dict) -> str:
     return text
 
 
-def _arf2_catalog():
-    """兄弟 .arf2 のスポット一覧。無ければ (None, missing_state 封筒)。"""
-    from metabolomix.arf.tools import _require_arf_with_arf2
-    from metabolomix.arf2.reader import load_catalog
-    found = _require_arf_with_arf2()
-    if isinstance(found, str):
-        return None, found
-    return load_catalog(found), None
+def _run_dir(run_id: str, holder) -> Path:
+    return mcp_core._resolve_report_dir(holder) / "pathway" / run_id
 
 
-def _run_dir(run_id: str) -> Path:
-    return mcp_core._resolve_report_dir() / "pathway" / run_id
-
-
-def _load_manifest(run_id: str | None):
+def _load_manifest(run_id: str | None, holder):
     """run の manifest（dict）か、run が無いときの missing_state 封筒（str）。"""
     run_id = run_id or session_state.session.pathway.last_run_id
     if not run_id:
@@ -120,7 +111,7 @@ def _load_manifest(run_id: str | None):
         return mcp_errors.pathway_error(
             "PATHWAY_BAD_REQUEST",
             f"run_id の形が不正です: {run_id!r}（pathway_project が返す pw_YYYYmmdd_HHMMSS_xxxxxx）。")
-    path = _run_dir(run_id) / "manifest.json"
+    path = _run_dir(run_id, holder) / "manifest.json"
     if not path.is_file():
         return mcp_errors.missing_state("pathway_run", ["pathway_project"],
                                         f"run {run_id} の manifest.json がありません。")
@@ -137,54 +128,16 @@ def _load_manifest(run_id: str | None):
     return manifest
 
 
-def _pick_source(source: str) -> str:
-    s = session_state.session
-    if source != "auto":
-        return source
-    if s.arf.feature_matrix is not None:
-        return "arf"
-    if s.dataset is not None:
-        return "dataset"
-    return "arf"
-
-
 def _recipe_text(recipe: dict) -> str:
     parts = [f"{k}={v}" for k, v in sorted((recipe or {}).items()) if v not in (None, "", [])]
     return "; ".join(parts) or "none"
 
 
-def _build_arf(group_a, group_b):
-    from metabolomix.arf.tools import _pool_group_labels
-    a = session_state.session.arf
-    if a.feature_matrix is None:
-        return None, mcp_errors.missing_state(
-            "preprocessed_matrix", ["arf_preprocess"],
-            "先に arf_preprocess を実行してください（前処理後行列が必要）。")
-    catalog, err = _arf2_catalog()
-    if err:
-        return None, err
-    labels = [None if (a.sample_meta.get(n) or {}).get("role", "sample") != "sample"
-              else (a.sample_meta.get(n) or {}).get("group") for n in a.pp_sample_names]
-    try:
-        _, _, resolved = _pool_group_labels(a.pp_sample_names, labels, group_a, group_b)
-    except ValueError as exc:
-        raise handoff.HandoffError("PATHWAY_BAD_REQUEST", str(exc)) from exc
-    table = handoff.build_from_arf(
-        matrix=a.feature_matrix, sample_names=a.pp_sample_names,
-        feature_names=a.pp_feature_names, sample_meta=a.sample_meta,
-        excluded_samples=a.excluded_samples, excluded_spots=a.excluded_spots,
-        catalog={int(s["MasterAlignmentID"]): s for s in catalog},
-        props=(a.preprocessing_recipe or {}).get("props"),
-        group_a=str(group_a), group_b=str(group_b), compared=resolved)
-    return (table, _recipe_text(a.preprocessing_recipe), a.dataset_id,
-            str(group_a), str(group_b)), None
-
-
-def _build_dataset(group_a, group_b, label_a, label_b):
-    ds = session_state.session.dataset
+def _build_dataset(group_a, group_b, label_a, label_b, holder):
+    ds = holder.dataset
     if ds is None:
-        return None, mcp_errors.missing_state("dataset", ["dataset_load"],
-                                              "先に dataset_load を実行してください。")
+        return None, mcp_errors.missing_state("dataset", ["load_dataset"],
+                                              "先に load_dataset を実行してください。")
     if ds.pp_matrix is None:
         return None, mcp_errors.missing_state("preprocessed_matrix", ["dataset_preprocess"],
                                               "先に dataset_preprocess を実行してください。")
@@ -205,21 +158,21 @@ def _build_dataset(group_a, group_b, label_a, label_b):
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
     structured_output=False)
-def pathway_project(source: str = "auto", group_a: str | list[str] | None = None,
+@config_invalid_as_envelope
+def pathway_project(group_a: str | list[str] | None = None,
                     group_b: str | list[str] | None = None,
                     group_a_label: str = "group_a", group_b_label: str = "group_b",
                     pathways: list[str] | None = None, acyl_chains: list[str] | None = None,
-                    aggregation: str = "sum", q_threshold: float = 0.05) -> str:
+                    aggregation: str = "sum", q_threshold: float = 0.05,
+                    dataset_handle: str | None = None) -> str:
     """前処理済みの脂質データを MSLipidMapper のパスウェイへ投影し、2 群を比べる。
 
     返すのは小さな表だけ（ノード表と、逆向きに動く隣接ペア）。JSON-LD・中間 mzTab-M は
     解析フォルダの reports/pathway/<run_id>/ に残る。図は pathway_plot。
 
-    - source: auto | arf | dataset。arf は arf_preprocess 後、dataset は dataset_preprocess 後。
-      auto は「前処理済み ARF があれば arf、無ければ dataset_load 済みなら dataset、
-      どちらも無ければ arf（→ arf_preprocess を求める missing_state）」の順で選ぶ。
-    - group_a / group_b: arf は Class ID か因子トークン（arf_differential と同じ）、
-      dataset はサンプル名のリスト（group_a_label / group_b_label が群名になる）。
+    - 入力は `load_dataset` で開き `dataset_preprocess` を済ませた直近のデータセット
+      （`dataset_handle` でハンドルを選べる。run の置き場所もそのデータセットの解析フォルダ）。
+    - group_a / group_b: サンプル名のリスト（group_a_label / group_b_label が群名になる）。
     - pathways: remodeling / ceramide / global（既定は 3 つ全部）。
     - acyl_chains: 例 ["18:0","20:4"]。指定すると鎖サブセットのスコープも比べる。
     - aggregation: sum | mean | median（サブクラス内の分子種の集計）。
@@ -228,6 +181,11 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     MSLipidMapper は [mslipidmapper] mslipidmapper_api_url の研究室サーバを先に使い、使えなければローカルの R
     （[mslipidmapper] rscript）で動かす。どちらで動いたかは戻り値の backend。
     """
+    from metabolomix.tools._holder import resolve_holder
+
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
     s = session_state.session
     if s.assay_kind != "lipid":
         return mcp_errors.missing_state(
@@ -242,22 +200,14 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     if aggregation not in ("sum", "mean", "median"):
         return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST",
                                         "aggregation は sum / mean / median のどれかです。")
-    if source not in ("auto", "arf", "dataset"):
-        return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST",
-                                        "source は auto / arf / dataset のどれかです。")
     if group_a is None or group_b is None:
         return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST", "group_a と group_b を指定してください。")
 
-    src = _pick_source(source)
-    as_set = (lambda g: {str(g)} if isinstance(g, str) else {str(x) for x in g})
-    if (as_set(group_a) == as_set(group_b) if src == "arf"
-            else str(group_a_label) == str(group_b_label)):
+    if str(group_a_label) == str(group_b_label):
         return mcp_errors.pathway_error(
-            "PATHWAY_BAD_REQUEST",
-            "group_a と group_b（dataset では group_a_label と group_b_label）が同じです。")
+            "PATHWAY_BAD_REQUEST", "group_a_label と group_b_label が同じです。")
     try:
-        built, err = (_build_arf(group_a, group_b) if src == "arf"
-                      else _build_dataset(group_a, group_b, group_a_label, group_b_label))
+        built, err = _build_dataset(group_a, group_b, group_a_label, group_b_label, holder)
     except handoff.HandoffError as exc:
         return mcp_errors.pathway_error(exc.code, exc.message, exc.details)
     if err:
@@ -267,7 +217,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     label_a, label_b = handoff.clean_text(label_a), handoff.clean_text(label_b)
 
     run_id = f"pw_{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:6]}"
-    run_dir = _run_dir(run_id)
+    run_dir = _run_dir(run_id, holder)
     run_dir.mkdir(parents=True, exist_ok=True)
     mztab_path = run_dir / "input.mztab"
     handoff.write_mztab(table, mztab_path, normalization=normalization)
@@ -323,7 +273,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     groups: dict[str, int] = {}
     for g in map(handoff.clean_text, table.groups):
         groups[g] = groups.get(g, 0) + 1
-    manifest = {"run_id": run_id, "schema_version": jsonld.SCHEMA_VERSION, "source": src,
+    manifest = {"run_id": run_id, "schema_version": jsonld.SCHEMA_VERSION, "source": "dataset",
                 "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "group_a": label_a, "group_b": label_b, "groups": groups,
                 "pathways": pathways, "acyl_chains": list(acyl_chains or []),
@@ -346,7 +296,7 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     s.pathway.last_run_dir = str(run_dir)
 
     return json_payload({
-        "run_id": run_id, "source": src, "run_dir": str(run_dir),
+        "run_id": run_id, "source": "dataset", "run_dir": str(run_dir),
         "groups": groups, "group_a": label_a, "group_b": label_b,
         "normalization": normalization,
         "backend": _backend_text(result),
@@ -365,8 +315,10 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True),
     structured_output=False)
+@config_invalid_as_envelope
 def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
-                 plot_type: str = "dot", inline_image: bool = False):
+                 plot_type: str = "dot", inline_image: bool = False,
+                 dataset_handle: str | None = None):
     """pathway_project の run をパスウェイ図（PDF）に描く。既定は図のファイルの場所と要約だけを返す。
 
     PDF と PNG（<pathway>.png）は run のディレクトリに書く。チャットに図を出したいときは
@@ -375,13 +327,20 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
     - run_id: 省略時は直近の run。
     - pathways: その run に含まれるものから選ぶ（既定は全部）。
     - inline_image: true なら [要約の JSON, 画像…] を返す。既定 false は要約の JSON 文字列だけ。
+    - dataset_handle: run の置き場所（そのデータセットの解析フォルダ配下 reports/pathway）を決めるハンドル
+      （省略時は直近）。
     - plot_type: dot | box | violin（ノード内のグラフ）。横軸の群は group_a, group_b, その他の群の順
       （上流は config の plot.x_order を軸順と配色の両方に使う）。
     [mslipidmapper] mslipidmapper_api_url の研究室サーバを先に使い（サーバは 3 パスウェイ全部を描く）、
     使えなければローカルの R で描く。ローカルではヘッドレス Chromium（[mslipidmapper] browser）と
     unpkg.com への接続が要る。
     """
-    manifest = _load_manifest(run_id)
+    from metabolomix.tools._holder import resolve_holder
+
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    manifest = _load_manifest(run_id, holder)
     if isinstance(manifest, str):
         return manifest
     chosen = list(pathways or manifest["pathways"])
@@ -395,7 +354,7 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
                                         "plot_type は dot / box / violin のどれかです。")
     if not isinstance(inline_image, bool):
         return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST", "inline_image は true / false です。")
-    run_dir = _run_dir(manifest["run_id"])
+    run_dir = _run_dir(manifest["run_id"], holder)
     others = [g for g in manifest["groups"] if g not in (manifest["group_a"], manifest["group_b"])]
     request = {"mode": "render", "mztab": str(run_dir / manifest["files"]["mztab"]),
                "out_dir": str(run_dir), "pathways": chosen,

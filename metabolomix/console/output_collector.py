@@ -125,7 +125,7 @@ def collect_artifacts(
         mztab_entries: 正準候補になれる .mzTab を MztabEntry として返す。
         other_artifacts: それ以外。未対応 measure の .mzTab（Normalized*）も
             role=unsupported_mztab としてここに入る——記録は残すが、
-            dataset_load が正準として選べないようにするため。
+            load_dataset が正準として選べないようにするため。
     """
     mztab_entries: list[MztabEntry] = []
     other_artifacts: list[Artifact] = []
@@ -400,7 +400,7 @@ def unsupported_mztab_warnings(artifacts) -> list[str]:
     """未対応 measure の .mzTab（Normalized*）を拾ったことを伝える。
 
     記録は残すが正準候補にはしない（spec §8.1）。黙って捨てると
-    「出力があるのに dataset_load が読めない」という説明不能な状態になる。
+    「出力があるのに load_dataset が読めない」という説明不能な状態になる。
     """
     paths = [a.path for a in artifacts if a.role == UNSUPPORTED_MZTAB_ROLE]
     if not paths:
@@ -419,7 +419,7 @@ def missing_per_sample_output_warnings(artifacts) -> list[str]:
     MS-DIAL Console は .pai2 を**生データフォルダ側**に書く（-o ではない。
     docs/HISTRY.md 2026-09-03(6) の実走で確認）。collect_artifacts が両ルートを
     見るようになったので、この検査は「本当に出ていない」ときだけ発火する。
-    .pai2 が無いと pai2_parser / dcl_find_msms が読むものが無く、MS/MS 根拠の
+    .pai2 が無いと dcl_find_msms が読むものが無く、MS/MS 根拠の
     経路が丸ごと空になる。アライメント結果だけは出ているので実行は成功扱いの
     まま、「後で MS/MS を辿れない」ことだけ先に知らせる。
     """
@@ -427,5 +427,5 @@ def missing_per_sample_output_warnings(artifacts) -> list[str]:
         return []
     return [
         "サンプル別ファイル（.pai2）が 1 つも生成されていません。"
-        "MS/MS 根拠（pai2_parser / dcl_find_msms）を辿る経路が使えません。"
+        "MS/MS 根拠（dcl_find_msms）を辿る経路が使えません。"
     ]

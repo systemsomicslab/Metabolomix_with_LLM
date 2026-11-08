@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from mcp.server.fastmcp import Image
 
-from metabolomix.core import mcp_core, session_state
+from metabolomix.core import session_state
 from metabolomix.pathway import bridge, tools
 
 from tests.pymupdf_guard import require_pymupdf
@@ -16,25 +16,32 @@ from tests.test_pathway_jsonld import B, _graph  # 小さな JSON-LD 組み立�
 
 @pytest.fixture
 def lipid_arf(monkeypatch, tmp_path):
-    """前処理済み ARF ＋兄弟 .arf2 カタログを持つセッション（ファイル I/O は差し替え）。"""
+    """前処理済みのデータセット（脂質アッセイ）を持つセッション。
+
+    名前は旧 ARF 経路の名残（テストの本数が多いので変えない）。中身は `load_dataset` で
+    開いたデータセットと同じ `DatasetState`。"""
+    from metabolomix.mztab.dataset_state import DatasetState
+
     s = session_state.AnalysisSession()
     monkeypatch.setattr(session_state, "session", s)
-    monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path)
-    monkeypatch.delenv("LIPIDMIX_REPORTS_DIR", raising=False)
     s.assay_kind = "lipid"
-    a = s.arf
-    a.features = [{"MasterAlignmentID": i} for i in (1, 2)]
-    a.current_file_path = str(tmp_path / "AlignResult-1.arf")
-    a.feature_matrix = np.array([[10.0, 1.0], [11.0, 1.1], [30.0, 0.3], [31.0, 0.31]])
-    a.pp_sample_names = ["C_1", "C_2", "P_1", "P_2"]
-    a.pp_feature_names = ["Spot_1_height", "Spot_2_height"]
-    a.sample_meta = {n: {"role": "sample", "group": n.split("_")[0]} for n in a.pp_sample_names}
-    a.preprocessing_recipe = {"normalize": "none", "props": ["height"]}
-    catalog = [{"MasterAlignmentID": 1, "Name": "PC 34:1", "Ontology": "PC"},
-               {"MasterAlignmentID": 2, "Name": "LPC 18:1", "Ontology": "LPC"}]
-    monkeypatch.setattr(tools, "_arf2_catalog", lambda: (catalog, None))
+    ds = DatasetState()
+    ds.analysis_dir = str(tmp_path)   # 記録（run）の置き場所の基準: <tmp>/reports/pathway
+    ds.pp_matrix = np.array([[10.0, 1.0], [11.0, 1.1], [30.0, 0.3], [31.0, 0.31]])
+    ds.pp_sample_names = ["C_1", "C_2", "P_1", "P_2"]
+    ds.pp_feature_names = ["1", "2"]
+    ds.sample_names = list(ds.pp_sample_names)
+    ds.roles = {n: "sample" for n in ds.pp_sample_names}
+    ds.preprocessing_recipe = {"normalize": "none", "props": ["height"]}
+    ds.feature_annotations = {"1": {"name": "PC 34:1", "ontology": "PC"},
+                              "2": {"name": "LPC 18:1", "ontology": "LPC"}}
+    s.dataset = ds
     return s
 
+
+#: 2 群の指定（群はサンプル名のリスト。群名はラベルが決める）
+_GROUPS = {"group_a": ["C_1", "C_2"], "group_b": ["P_1", "P_2"],
+           "group_a_label": "C", "group_b_label": "P"}
 
 #: fake_measure が JSON-LD に足す要素（テストごとに差し替える）
 _EXTRA: list = []
@@ -67,24 +74,41 @@ def fake_measure(monkeypatch):
 
 def test_requires_lipid_assay(lipid_arf, fake_measure):
     lipid_arf.assay_kind = "metabolite"
-    body = json.loads(tools.pathway_project(group_a="C", group_b="P"))
+    body = json.loads(tools.pathway_project(**_GROUPS))
     assert body["error"]["code"] == "missing_state"
     assert body["error"]["required_tools"] == ["record_objective"]
 
 
 def test_requires_preprocessed_matrix(lipid_arf, fake_measure):
-    lipid_arf.arf.feature_matrix = None
-    body = json.loads(tools.pathway_project(group_a="C", group_b="P"))
-    assert body["error"]["required_tools"] == ["arf_preprocess"]
+    lipid_arf.dataset.pp_matrix = None
+    body = json.loads(tools.pathway_project(**_GROUPS))
+    assert body["error"]["required_tools"] == ["dataset_preprocess"]
+
+
+def test_requires_a_dataset(monkeypatch, fake_measure):
+    s = session_state.AnalysisSession()
+    s.assay_kind = "lipid"
+    monkeypatch.setattr(session_state, "session", s)
+    body = json.loads(tools.pathway_project(**_GROUPS))
+    assert body["error"]["required_tools"] == ["load_dataset"]
+
+
+def test_pathway_has_no_arf_source():
+    """旧 ARF 経路（`source="arf"`）は消えた。`pathway_project` はデータセットだけを読む。"""
+    import inspect
+    assert "source" not in inspect.signature(tools.pathway_project).parameters
+    assert not hasattr(tools, "_build_arf")
+    assert not hasattr(tools, "_arf2_catalog")
+    assert not hasattr(tools, "_pick_source")
 
 
 def test_unknown_pathway_is_bad_request(lipid_arf, fake_measure):
-    body = json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["nope"]))
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["nope"]))
     assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
 
 
 def test_project_writes_run_and_returns_tables(lipid_arf, fake_measure, tmp_path):
-    body = json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling"]))
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
     run_id = body["run_id"]
     run_dir = tmp_path / "reports" / "pathway" / run_id
     assert (run_dir / "input.mztab").is_file()
@@ -154,7 +178,7 @@ def test_handoff_note_names_the_new_reasons_and_excluded_spots():
 
 
 def test_project_returns_handoff_counts_at_top_level(lipid_arf, fake_measure):
-    body = json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling"]))
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
     for key in ("kept_by_route", "dropped_unannotated", "dropped_unparsable_name", "dropped_ambiguous_class",
                 "dropped_unmapped_ontology", "dropped_ambiguous_ontology", "dropped_no_formula",
                 "dropped_formula_mismatch", "dropped_isotope_label", "dropped_class_name_conflict", "n_kept"):
@@ -165,7 +189,7 @@ def test_mapped_nodes_counts_nonempty_whole_over_lipid_nodes(lipid_arf, fake_mea
     # PE はノードがあるがデータに無い（空の whole スコープ）。分母は脂質ノード
     # （PC/PE/LPC/DG）だけで、PathwayEntity（PA）と接合ノードは数えない
     monkeypatch.setattr(sys.modules[__name__], "_EXTRA", _empty_scope_items("PE", "whole"))
-    body = json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling"]))
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
     res = body["pathways"]["remodeling"]
     assert res["mapped_nodes"] == "1/4"
     assert {l.split("\t")[0] for l in res["nodes_tsv"].splitlines()[1:]} == {"PC"}   # PE は行にならない
@@ -174,19 +198,17 @@ def test_mapped_nodes_counts_nonempty_whole_over_lipid_nodes(lipid_arf, fake_mea
 def test_requested_chain_absent_everywhere_is_bad_request(lipid_arf, fake_measure, monkeypatch):
     # 22:6 は上流が空スコープとして出すだけ（どのパスウェイにも分子種が無い）
     monkeypatch.setattr(sys.modules[__name__], "_EXTRA", _empty_scope_items("PC", "acyl-22:6"))
-    body = json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling"],
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"],
                                             acyl_chains=["18:0", "22:6"]))
     assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
     assert body["error"]["details"]["missing_chains"] == ["22:6"]
-    ok = json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling"],
+    ok = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"],
                                           acyl_chains=["18:0"]))
     assert "run_id" in ok
 
 
 def test_same_groups_are_bad_request(lipid_arf, fake_measure):
-    body = json.loads(tools.pathway_project(group_a="C", group_b="C"))
-    assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
-    body = json.loads(tools.pathway_project(source="dataset", group_a=["a"], group_b=["b"],
+    body = json.loads(tools.pathway_project(group_a=["a"], group_b=["b"],
                                             group_a_label="X", group_b_label="X"))
     assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
     assert fake_measure == []
@@ -196,7 +218,7 @@ def test_bridge_error_becomes_envelope(lipid_arf, monkeypatch):
     def boom(*a, **k):
         raise bridge.BridgeError("MSLM_NOT_CONFIGURED", "設定して", {"setting": "x"})
     monkeypatch.setattr(bridge, "run_bridge", boom)
-    body = json.loads(tools.pathway_project(group_a="C", group_b="P"))
+    body = json.loads(tools.pathway_project(**_GROUPS))
     assert body["error"]["code"] == "MSLM_NOT_CONFIGURED"
 
 
@@ -228,14 +250,14 @@ def _render_stub(monkeypatch, seen):
 
 
 def test_plot_returns_paths_and_summary_by_default(lipid_arf, fake_measure, monkeypatch):
-    run_id = json.loads(tools.pathway_project(group_a="C", group_b="P",
+    run_id = json.loads(tools.pathway_project(**_GROUPS,
                                               pathways=["remodeling", "ceramide"]))["run_id"]
     seen = []
     _render_stub(monkeypatch, seen)
     out = tools.pathway_plot(pathways=["ceramide"])
     assert isinstance(out, str)
     body = json.loads(out)
-    manifest = json.loads((tools._run_dir(run_id) / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((tools._run_dir(run_id, session_state.session) / "manifest.json").read_text(encoding="utf-8"))
     [figure] = body["figures"]
     assert figure["pathway"] == "ceramide"
     assert figure["pdf"].endswith("ceramide.pdf") and Path(figure["png"]).is_file()
@@ -249,7 +271,7 @@ def test_plot_returns_paths_and_summary_by_default(lipid_arf, fake_measure, monk
 
 
 def test_plot_inline_image_keeps_the_old_payload(lipid_arf, fake_measure, monkeypatch):
-    json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling", "ceramide"]))
+    json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling", "ceramide"]))
     _render_stub(monkeypatch, [])
     out = tools.pathway_plot(pathways=["ceramide"], inline_image=True)
     assert isinstance(out, list) and isinstance(out[0], str) and isinstance(out[1], Image)
@@ -258,19 +280,19 @@ def test_plot_inline_image_keeps_the_old_payload(lipid_arf, fake_measure, monkey
 
 
 def test_plot_inline_image_must_be_bool(lipid_arf, fake_measure):
-    json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling"]))
+    json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
     body = json.loads(tools.pathway_plot(inline_image="yes"))
     assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
 
 
 def test_plot_pathway_not_in_run_is_bad_request(lipid_arf, fake_measure):
-    json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling"]))
+    json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
     body = json.loads(tools.pathway_plot(pathways=["global"]))
     assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
 
 
 def test_render_failure_envelope(lipid_arf, fake_measure, monkeypatch):
-    json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling"]))
+    json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
 
     def fail(*a, **k):
         raise bridge.BridgeError("PATHWAY_RENDER_FAILED", "Chromium がありません")
@@ -281,7 +303,7 @@ def test_render_failure_envelope(lipid_arf, fake_measure, monkeypatch):
 
 def test_unreadable_pdf_becomes_render_failed(lipid_arf, fake_measure, monkeypatch):
     """PDF が壊れている（0 ページ・読めない）なら例外を漏らさず PATHWAY_RENDER_FAILED。"""
-    json.loads(tools.pathway_project(group_a="C", group_b="P", pathways=["remodeling"]))
+    json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
 
     def render(request, run_dir, *, timeout_s=300.0):
         pdf = run_dir / "remodeling.pdf"
@@ -301,8 +323,8 @@ def test_plot_rejects_malformed_run_id(lipid_arf, bad):
 
 
 def test_corrupt_manifest_is_output_invalid(lipid_arf, fake_measure):
-    run_id = json.loads(tools.pathway_project(group_a="C", group_b="P",
+    run_id = json.loads(tools.pathway_project(**_GROUPS,
                                               pathways=["remodeling"]))["run_id"]
-    (tools._run_dir(run_id) / "manifest.json").write_text("{not json", encoding="utf-8")
+    (tools._run_dir(run_id, session_state.session) / "manifest.json").write_text("{not json", encoding="utf-8")
     body = json.loads(tools.pathway_plot(run_id=run_id))
     assert body["error"]["code"] == "MSLM_OUTPUT_INVALID"

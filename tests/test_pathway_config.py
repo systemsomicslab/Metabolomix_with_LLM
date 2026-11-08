@@ -5,25 +5,27 @@ import pytest
 from metabolomix.core import mcp_errors, user_config
 
 
-def test_mslipidmapper_settings_read_env_first(monkeypatch, tmp_path):
+def test_mslipidmapper_settings_read_only_the_config_file(monkeypatch, tmp_path):
+    """spec 2026-11-06 §7.4: 環境変数（以前は設定ファイルに勝った）は読まない。"""
     cfg = tmp_path / "lipidmix.local.toml"
     cfg.write_text("[mslipidmapper]\nrscript = 'R/bin/Rscript.exe'\n", encoding="utf-8")
     monkeypatch.setenv("LIPIDMIX_CONFIG", str(cfg))
     got = user_config.get_setting("mslipidmapper.rscript")
-    assert got.source == "config_file"
+    assert got.config_file == str(cfg)
     assert got.value == str(tmp_path / "R" / "bin" / "Rscript.exe")
     monkeypatch.setenv("MSLIPIDMAPPER_RSCRIPT", "X:/Rscript.exe")
-    assert user_config.get_setting("mslipidmapper.rscript").value == "X:/Rscript.exe"
+    assert user_config.get_setting("mslipidmapper.rscript").value == \
+        str(tmp_path / "R" / "bin" / "Rscript.exe")
 
 
-@pytest.mark.parametrize("key,env", [
-    ("mslipidmapper.rscript", "MSLIPIDMAPPER_RSCRIPT"),
-    ("mslipidmapper.browser", "MSLIPIDMAPPER_BROWSER"),
-    ("mslipidmapper.mslipidmapper_api_url", "MSLIPIDMAPPER_API_URL"),
-    ("mslipidmapper.api_token", "MSLIPIDMAPPER_API_TOKEN"),
+@pytest.mark.parametrize("key,kind", [
+    ("mslipidmapper.rscript", "path"),
+    ("mslipidmapper.browser", "path"),
+    ("mslipidmapper.mslipidmapper_api_url", "text"),
+    ("mslipidmapper.api_token", "text"),
 ])
-def test_mslipidmapper_setting_env_names(key, env):
-    assert user_config.SETTINGS[key] == env
+def test_mslipidmapper_setting_kinds(key, kind):
+    assert user_config.SETTINGS[key] == kind
 
 
 def test_api_url_in_config_file_is_not_resolved_as_a_path(monkeypatch, tmp_path):

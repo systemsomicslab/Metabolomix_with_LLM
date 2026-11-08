@@ -11,18 +11,15 @@
 """
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
-
-import matplotlib.pyplot as plt
 
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.tool_helpers import dataset_pca_plot
+from metabolomix.plots.render import render_files
 from metabolomix.plots.pca_scores import render_pca_scores
 from metabolomix.plots.volcano import render_volcano_plot
 
-__all__ = ["figure_annotations", "save_result_figure", "select_result"]
+__all__ = ["build_annotated", "figure_annotations", "save_result_figure", "select_result"]
 
 #: 図に載せる但し書きの文面。付ける条件は「読み手が数字を誤解しうるとき」だけで、
 #: 常に付けると本当に注意が要る図が埋もれる。
@@ -90,24 +87,32 @@ def figure_annotations(ds, result: dict | None = None) -> list[str]:
     return notes
 
 
+def build_annotated(build, notes, /, *args, **kwargs):
+    """`build(*args, **kwargs)` の Figure に、但し書き（`figure_annotations`）を下端へ添える。
+
+    画像返し（`dataset_plot`）と保存（`save_result_figure`）が同じ図になるよう、ここを共有する。
+    """
+    fig = build(*args, **kwargs)
+    if notes:
+        fig.text(0.5, 0.005, "\n".join(notes), ha="center", va="bottom",
+                 fontsize=8, color="#a33")
+    return fig
+
+
 def save_result_figure(ds, result: dict, path: Path, *, kind: str,
                        title: str | None = None) -> Path:
     """指定された結果から図を描き、確定した PNG として保存する。
 
-    `ds` は但し書きの判断にだけ使う（ARF 経路では None）。
+    `ds` は但し書きの判断にだけ使う（None なら但し書き無し）。
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    fig = _render(result, kind=kind, title=title)
-    try:
-        notes = figure_annotations(ds, result)
-        if notes:
-            fig.text(0.5, 0.005, "\n".join(notes), ha="center", va="bottom",
-                     fontsize=8, color="#a33")
-        _atomic_savefig(fig, path)
-    finally:
-        plt.close(fig)
+    notes = figure_annotations(ds, result)
+
+    # 描画（生成〜保存〜破棄）は PLOT_LOCK の下。atomic は途中で落ちても既存の図を壊さない。
+    render_files(build_annotated, {"png": path}, _render, notes, result,
+                 kind=kind, title=title, dpi=120, atomic=True)
     return path
 
 
@@ -116,8 +121,8 @@ def save_result_figure(ds, result: dict, path: Path, *, kind: str,
 def _pca_plot_payload(result: dict) -> dict:
     """PCA 結果を、描画が食う散布図 dict（`points` を持つ形）へ揃える。
 
-    PCA の結果は経路によって**形が違う**。ARF 経路（`session.arf.last_pca_plot`）は
-    最初から `points` を持つが、DatasetState 経路
+    PCA の結果は経路によって**形が違う**。旧 ARF 経路の PCA は
+    最初から `points` を持っていたが、DatasetState 経路
     （`analysis.dataset_service.pca_dataset` → `dataset_analysis.run_dataset_pca`）は
     `scores`（name / role / PC1..PCn）しか持たない。ここで揃えずに `points` だけを
     読むと、DatasetState 経路では点が 0 件のまま**枠だけの図**が保存され、しかも
@@ -141,28 +146,11 @@ def _pca_plot_payload(result: dict) -> dict:
 
 def _render(result: dict, *, kind: str, title: str | None):
     if kind == "pca":
-        # 描画は arf_pca_species（画像返し）と共有する。群があれば色分けされる。
+        # 描画は `dataset_plot`（画像返し）と共有する。群があれば色分けされる。
         return render_pca_scores(_pca_plot_payload(result), title=title)
     if kind == "volcano":
-        # 描画は arf_plot_volcano（画像返し）と共有する。色や軸がツール間でずれると
+        # 描画は `dataset_plot`（画像返し）と共有する。色や軸がツール間でずれると
         # 「画面で見た図」と「レポートに貼った図」が別物になるため。
         return render_volcano_plot(result, title=title)
     raise DomainError("UNSUPPORTED_FIGURE_KIND",
                       f"未対応の図の種類です: {kind}", {"kind": kind})
-
-
-def _atomic_savefig(fig, path: Path) -> None:
-    """同じ親ディレクトリの一時ファイルへ書いてから置換する。
-
-    描画の途中で落ちても、既にある図を壊れた PNG で置き換えない。
-    """
-    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp",
-                                    dir=str(path.parent))
-    os.close(fd)
-    tmp = Path(tmp_name)
-    try:
-        fig.savefig(tmp, format="png", dpi=120, bbox_inches="tight")
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise

@@ -59,7 +59,7 @@ _STAT_INVALIDATING = STAT_FIELDS | {"comparison"}
 #: `matrix_recipe` を含めるのは、これらが変われば解析行列の値そのものが
 #: 変わるため——行列を作り直さずに結果だけ残すと、次の解析が新しい設定の
 #: 顔をした古い数字で走る。
-_PP_INVALIDATING = PP_FIELDS | {"dataset", "detection", "recipe",
+_PP_INVALIDATING = PP_FIELDS | {"dataset", "detection", "recipe", "exclusion",
                                 "standard_assays", "bindings", "matrix_recipe"}
 
 
@@ -140,12 +140,36 @@ def group_fingerprint(ds) -> str:
 
 
 def preprocess_fingerprint(ds, recipe: dict, metadata_hash: str | None = None) -> str:
-    """前処理の入力（データセット・レシピ・関与するメタデータ）の指紋。"""
-    return canonical_hash({
+    """前処理の入力（データセット・レシピ・関与するメタデータ・除外）の指紋。
+
+    除外（`dataset_exclude`）は前処理の行列を変えるので混ぜる。**除外が無いときは鍵ごと
+    入れない**（除外を使わない既存の結果の指紋を動かさない）。理由の文面は行列に効かないので
+    名前の集合だけを見る。
+    """
+    payload = {
         "dataset": dataset_fingerprint(ds),
         "recipe": recipe,
         "metadata": metadata_hash,
-    })
+    }
+    excluded_samples = sorted(getattr(ds, "excluded_samples", None) or {})
+    excluded_features = sorted(getattr(ds, "excluded_features", None) or {})
+    if excluded_samples or excluded_features:
+        payload["exclusions"] = {"samples": excluded_samples, "features": excluded_features}
+    return canonical_hash(payload)
+
+
+#: `dataset_plot` の kind のうち、PCA の結果・差次的結果から作るもの（`ds.figures` のキー）。
+#: `species_pca`（選んだ分子種の PCA）は前処理済み行列を使わないが、除外・前処理の入力の変更で
+#: 行列と同じく古くなるので `pca` と同じ組に入れる。
+_PCA_FIGURES = ("pca", "loadings", "species_pca")
+_DIFFERENTIAL_FIGURES = ("volcano",)
+
+
+def _drop_figures(ds, kinds: tuple[str, ...]) -> None:
+    figures = getattr(ds, "figures", None)
+    if figures:
+        for kind in kinds:
+            figures.pop(kind, None)
 
 
 def invalidate_results(ds, changed: set[str]) -> None:
@@ -159,11 +183,14 @@ def invalidate_results(ds, changed: set[str]) -> None:
     - 群・比較の指定（`STAT_FIELDS`。どの注入を独立した n と数えるかを決める
       `biological_sample_id` を含む）が変われば差次的解析だけ。PCA は群を
       入力にしていない。
+    - 除外（`exclusion`。`dataset_exclude`）も前処理の行列を変えるので、前処理済み行列ごと捨てる。
     - PCA の設定だけなら PCA だけ。
 
     「消す」を選ぶのは、古い数字を返し続けるより無いことにするほうが安全だから。
     """
     changed = set(changed)
+    # 結果から作った図（dataset_plot の置き場 ds.figures）も同じ依存で捨てる。残すと save_figure が
+    # 古い結果の図を現在のものとして保存する。
     if changed & _PP_INVALIDATING:
         ds.pp_matrix = None
         ds.pp_sample_names = []
@@ -173,10 +200,13 @@ def invalidate_results(ds, changed: set[str]) -> None:
         ds.preprocess_metadata_hash = None
         ds.last_pca = None
         ds.last_differential = None
+        _drop_figures(ds, _PCA_FIGURES + _DIFFERENTIAL_FIGURES)
     elif changed & _STAT_INVALIDATING:
         ds.last_differential = None
+        _drop_figures(ds, _DIFFERENTIAL_FIGURES)
     elif "pca_settings" in changed:
         ds.last_pca = None
+        _drop_figures(ds, _PCA_FIGURES)
 
 
 def new_provenance(ds, *, kind: str, input_fingerprint: str,
@@ -266,6 +296,11 @@ def is_current(ds, result: dict, *, dataset_hash: str | None = None) -> bool:
                 and recorded_data == dataset_fingerprint(ds, include_detected=False)):
             # 後者: 検出状態の取り込みが入る前に計算された結果（復元時に印を付けた）。
             return False
+        # 復元時に記録した metadata_revision。除外・試料の情報（役割など）が実際に変わると進む
+        # （session の結果が前処理の無効化で古くなるのと同じ事象を、ID を持たない引き継ぎ結果にも当てる）。
+        recorded_revision = prov.get("metadata_revision")
+        if recorded_revision is not None and recorded_revision != getattr(ds, "metadata_revision", 0):
+            return False
         recorded_groups = prov.get("group_fingerprint")
         return recorded_groups is None or recorded_groups == group_fingerprint(ds)
     if prov.get("dataset_id") != getattr(ds, "dataset_id", None):
@@ -273,6 +308,13 @@ def is_current(ds, result: dict, *, dataset_hash: str | None = None) -> bool:
     parents = prov.get("parent_ids") or []
     if parents and getattr(ds, "preprocess_id", None) not in parents:
         return False
+    if prov.get("kind") == "species_pca":
+        # 分子種の PCA は前処理済み行列を使わず群・除外を引数と試料の対応表から取るので、親の前処理では
+        # 古さが分からない。試料の情報（群・役割・除外。`metadata_revision`）が動いたら古い。
+        # キュレーションの判断の更新では古くしない（旧 ARF 経路の分子種 PCA と同じ）。
+        recorded = prov.get("metadata_revision")
+        if recorded is not None and recorded != getattr(ds, "metadata_revision", 0):
+            return False
     if prov.get("kind") == "preprocess":
         return prov.get("result_id") == getattr(ds, "preprocess_id", None)
     if prov.get("kind") == "differential":

@@ -1,6 +1,6 @@
 """pipeline が作った差次的結果を、対話セッションへ引き渡す経路（spec 2026-10-19 §11）。
 
-`dataset_load(pipeline_path=...)` は run の dataset を作り直すので、`dataset_id` は
+`load_dataset(pipeline_path=...)` は run の dataset を作り直すので、`dataset_id` は
 run 側と必ず食い違い、session の前処理も通っていない。ここで縛るのは:
 
 - 指紋（データ・群）が一致する差次的結果だけを、**result_id を付け替えずに**
@@ -243,7 +243,7 @@ def test_handoff_uses_only_current_refs_after_reexport(tmp_path):
 
 
 def test_a_tampered_current_differential_is_refused(tmp_path):
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     harness, _ = _run_with_differential(tmp_path)
     ref = [r for r in store.load_run(harness.pipeline_path)["results"]
@@ -252,7 +252,7 @@ def test_a_tampered_current_differential_is_refused(tmp_path):
         json.dumps({"tampered": True}), encoding="utf-8")
 
     session_state.session.dataset = None
-    payload = json.loads(dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab"))
+    payload = json.loads(load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab"))
     assert payload["error"]["code"] == "RESULT_INTEGRITY_MISMATCH"
     assert session_state.session.dataset is None
 
@@ -266,7 +266,7 @@ def test_a_run_without_differentials_reports_nothing(tmp_path):
 
 
 def test_dataset_load_summary_lists_restored_and_rejected(tmp_path):
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     harness, job_path = _completed_run(tmp_path)
     preprocess_ref, kept = _pipeline_preprocess_and_compare(harness, job_path)
@@ -276,7 +276,9 @@ def test_dataset_load_summary_lists_restored_and_rejected(tmp_path):
                  _persist_differential(harness, legacy, "c2"))
 
     session_state.session.dataset = None
-    summary = dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab")
+    # 戻り値の JSON の `summary`（行の配列）を、改行で繋いだ本文として読む。
+    summary = "\n".join(json.loads(
+        load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab"))["summary"])
 
     assert "comparison_id\tresult_id\tgroup_a\tgroup_b" in summary, summary
     assert f"c1\t{kept['provenance']['result_id']}\tg1\tg2" in summary
@@ -299,14 +301,14 @@ def _run_recipe(harness) -> dict:
 
 def test_exporting_a_restored_result_states_the_runs_recipe(tmp_path):
     from metabolomix.tools.dataset_analysis_tools import dataset_preprocess
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     harness, result = _run_with_differential(tmp_path)
     run_recipe = _run_recipe(harness)
     assert run_recipe != _SESSION_RECIPE
 
     session_state.session.dataset = None
-    dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab")
+    load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab")
     # session で別のレシピの前処理をやり直しても、引き継いだ結果の条件は run のもの。
     dataset_preprocess(**_SESSION_RECIPE)
     session_recipe = session_state.session.dataset.preprocessing_recipe
@@ -319,13 +321,13 @@ def test_exporting_a_restored_result_states_the_runs_recipe(tmp_path):
 def test_exporting_a_restored_result_without_the_runs_preprocess_says_unknown(tmp_path):
     from metabolomix.analysis.dataset_export import HANDOFF_PREPROCESS_UNKNOWN
     from metabolomix.tools.dataset_analysis_tools import dataset_preprocess
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     harness, result = _run_with_differential(tmp_path, with_preprocess=False)
     result_id = result["provenance"]["result_id"]
 
     session_state.session.dataset = None
-    dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab")
+    load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab")
     assert result_id in session_state.session.dataset.results
     dataset_preprocess(**_SESSION_RECIPE)
 
@@ -346,11 +348,11 @@ def test_the_runs_preprocess_result_is_not_restored_into_session_results(tmp_pat
         "handoff"]["preprocess"] == _run_recipe(harness)
 
 
-# ---------- 一連の流れ: run → dataset_load → dataset_feature_search ----------
+# ---------- 一連の流れ: run → load_dataset → dataset_feature_search ----------
 
 def test_feature_search_uses_pipeline_statistics_without_recomputing(tmp_path, monkeypatch):
     from metabolomix.tools.dataset_analysis_tools import dataset_feature_search
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     harness, result = _run_with_differential(tmp_path)
     result_id = result["provenance"]["result_id"]
@@ -360,7 +362,7 @@ def test_feature_search_uses_pipeline_statistics_without_recomputing(tmp_path, m
     feature_ids = list(saved)[:3]
 
     session_state.session.dataset = None
-    dataset_load(pipeline_path=str(harness.pipeline_path), source="mztab")
+    load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab")
 
     # 統計は run の結果をそのまま渡す。再計算（差次的解析）が走ったら検知して落とす。
     def _must_not_recompute(*args, **kwargs):
@@ -392,7 +394,7 @@ def test_a_real_v1_run_hands_its_differential_results_to_the_session(tmp_path, m
     「群なし」になり、run の差次的結果が全部 `group_mismatch` で戻らない。
     """
     from metabolomix.tools.dataset_analysis_tools import dataset_feature_search
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
     from tests.pipeline_fixtures import DEFAULT_COMPARISON, PipelineHarness
 
     harness = PipelineHarness(tmp_path, monkeypatch)
@@ -411,7 +413,7 @@ def test_a_real_v1_run_hands_its_differential_results_to_the_session(tmp_path, m
     result_id = run_result["provenance"]["result_id"]
 
     session_state.session.dataset = None
-    summary = dataset_load(pipeline_path=str(pipeline_root), source="mztab")
+    summary = load_dataset(pipeline_path=str(pipeline_root), source="mztab")
 
     ds = session_state.session.dataset
     assert ds is not None, summary
@@ -483,3 +485,40 @@ def _dataset_for_rule_agreement():
     from tests.test_result_state import _dataset_with_groups
 
     return _dataset_with_groups("control", "treated")
+
+
+def _restored_in_session(tmp_path):
+    from metabolomix.tools.handle_tools import load_dataset
+
+    harness, result = _run_with_differential(tmp_path)
+    session_state.session.dataset = None
+    load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab")
+    return session_state.session.dataset, result["provenance"]["result_id"]
+
+
+def test_a_handed_off_result_goes_stale_after_dataset_exclude(tmp_path):
+    from metabolomix.tools.dataset_analysis_tools import dataset_export_differential
+    from metabolomix.tools.plot_tools import dataset_plot
+    from metabolomix.tools.sample_tools import dataset_exclude
+
+    ds, result_id = _restored_in_session(tmp_path)
+    assert result_state.is_current(ds, ds.results[result_id]) is True
+
+    out = json.loads(dataset_exclude(samples=[ds.sample_names[0]], reason="outlier"))
+    assert out["status"] == "success", out
+
+    assert result_state.is_current(ds, ds.results[result_id]) is False
+    exported = json.loads(dataset_export_differential(
+        str(tmp_path / "stale.tsv"), result_id=result_id))
+    plotted = json.loads(dataset_plot(kind="volcano", result_id=result_id))
+    for refused in (exported, plotted):
+        # 古い結果は、再計算を促す封筒（STALE_ANALYSIS_RESULT か、その文面の missing_state）で拒まれる。
+        assert refused["error"]["code"] in ("STALE_ANALYSIS_RESULT", "missing_state"), refused
+        assert "現在のデータセットの状態から出たものではありません" in refused["error"]["message"]
+    assert not (tmp_path / "stale.tsv").exists()
+
+
+def test_a_handed_off_result_goes_stale_after_a_real_metadata_change(tmp_path):
+    ds, result_id = _restored_in_session(tmp_path)
+    ds.metadata_revision += 1   # `apply_metadata` が実際に変更したときの動き
+    assert result_state.is_current(ds, ds.results[result_id]) is False

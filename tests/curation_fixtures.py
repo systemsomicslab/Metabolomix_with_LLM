@@ -345,7 +345,8 @@ def write_suggest_set(folder: Path, *, with_param: bool = True, with_arf: bool =
 
 def build_saved_review(folder: Path) -> dict:
     """`write_alignment_set` → `review.run_review` → `review.save_review` まで済ませる（送信系のテスト用）。
-    `LIBRARY_CACHE_ENV` は呼び出し側が tmp に向けておく。"""
+    ライブラリのキャッシュ（`[paths] library_cache`）は呼び出し側が tmp に向けておく
+    （`tests/config_fixtures.py` の `use_config`）。"""
     from metabolomix.arf2.reader import load_catalog
     from metabolomix.curation import evidence, judge, review
     from metabolomix.library import store as library_store
@@ -361,3 +362,21 @@ def build_saved_review(folder: Path) -> dict:
         store.close()
     review.save_review(result)
     return {"paths": paths, "review": result}
+
+
+def open_curation_dataset(paths: dict, *, library: bool = True):
+    """`write_alignment_set` / `write_suggest_set` の解析フォルダを `load_dataset` で開き（直近になる）、
+    ハンドルを返す。`library=True` ならそのハンドルのライブラリに `paths["msp"]` の store を置く
+    （`library_load` を呼ぶ代わり。閉じるのはハンドルの `close()`）。"""
+    import json
+
+    from metabolomix.core import handles
+    from metabolomix.library import store as library_store
+    from metabolomix.tools import handle_tools
+
+    body = json.loads(handle_tools.load_dataset(directory=str(paths["arf2"].parent)))
+    assert body["status"] == "success", body
+    handle = handles.registry.get(body["dataset_handle"])
+    if library:
+        handle.library.store = library_store.open_store(paths["msp"])
+    return handle

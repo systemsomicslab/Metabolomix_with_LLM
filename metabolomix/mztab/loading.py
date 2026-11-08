@@ -443,7 +443,9 @@ def _verify_source(job, entry, mztab_abs: Path) -> tuple[bool, str]:
     if not recorded:
         return False, "ジョブに mzTab の hash が記録されていない"
     try:
-        if sha256_file(mztab_abs) != recorded:
+        # 裏取りなので覚えた hash を信じず読み直す（同じ大きさ・同じ mtime_ns の
+        # 書き換えを見逃さない）。
+        if sha256_file(mztab_abs, trust=False) != recorded:
             return False, "mzTab の内容がジョブ記録の hash と一致しない"
     except OSError:
         return False, "mzTab の hash を計算できない"
@@ -477,7 +479,8 @@ def _verify_effective_method(job) -> tuple[bool, str]:
         return False, "profile snapshot に実効メソッドの記録が無い"
     effective = (Path(job.run_dir) / relative).resolve()
     try:
-        actual = sha256_file(effective)
+        # 裏取りなので覚えた hash を信じず読み直す（mzTab と同じ）。
+        actual = sha256_file(effective, trust=False)
     except OSError:
         return False, f"実効メソッドを読めない（{relative}）"
     if actual != recorded:

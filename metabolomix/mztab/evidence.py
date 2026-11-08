@@ -33,11 +33,15 @@ TSV は書かない。2026-09-03 に「消費者のいない `feature-qc.tsv`」
 from __future__ import annotations
 
 import math
+import os
+from array import array
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
 from metabolomix.arf import reader as arf_reader
+from metabolomix.core.atomic_io import DomainError
 
 #: m/z 一致の許容。`.arf` から組むスポットの m/z は「検出セルのうち高さ最大のものの m/z」
 #: （`spot_representative_mz`。上流の `MassCenter` の定義）。mzTab-M は同じスポットの値を
@@ -83,27 +87,211 @@ def spot_representative_mz(cells: list[dict], fallback=None):
     best_mz = fallback
     for cell in cells:
         peak_id, height, mz = cell.get("peak_id"), cell.get("height"), cell.get("m_z")
-        if (not isinstance(peak_id, int) or isinstance(peak_id, bool) or peak_id < 0
-                or not _is_number(height) or not _is_number(mz)):
+        if not _representative_candidate(peak_id, height, mz):
             continue
         if best_height is None or height > best_height:
             best_height, best_mz = height, mz
     return best_mz
 
 
-def group_representative_mz(group: dict):
-    """`arf_reader.deserialize()` のスポット 1 つの m/z（`spot_representative_mz`。退避は `MassCenter`）。"""
-    cells = []
-    for raw in group.get("AlignedPeakProperties") or []:
-        feature = arf_reader.alignment_feature_row(raw)
-        if feature:
-            cells.append(feature)
-    return spot_representative_mz(cells, group.get("MassCenter"))
+def _representative_candidate(peak_id, height, mz) -> bool:
+    """スポットの代表に選べるセルか（検出された＝`PeakID >= 0`、高さと m/z が有限の数）。
+
+    `spot_representative_mz`（セルの dict）と `scan_arf`（行から直接）が同じ定義を使う。
+    """
+    return (isinstance(peak_id, int) and not isinstance(peak_id, bool) and peak_id >= 0
+            and _is_number(height) and _is_number(mz))
 
 
 def _is_number(value) -> bool:
     return (isinstance(value, (int, float)) and not isinstance(value, bool)
             and math.isfinite(value))
+
+
+def _number(value) -> float:
+    """数（bool を除く int / float）なら float、それ以外は NaN。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return math.nan
+    return float(value)
+
+
+@dataclass
+class ArfScan:
+    """`.arf` を 1 回なめて取り出した、スポット × 試料（FileID）の値と検出状態。
+
+    行は `.arf` のスポット順（`iter_groups` の順）、列は `file_ids`（昇順）。セルは
+    「行の FileID（Key0）が int の、ピークの行」。同じスポットに同じ FileID が 2 行あれば
+    後の行を使う。セルが無いところは、値と m/z が NaN、検出は False。
+
+    - `spot_mz`: スポットの m/z（`spot_representative_mz` の定義。FileID を問わず、
+      ピークの行すべてから選ぶ。選べなければ `MassCenter`）。
+    - `values`: `scan_arf` の `measures` ごとの値（`arf_reader.peak_field` の名前。数でなければ NaN）。
+    - `per_sample_mz`: 検出されたセルの実測 m/z（数でなければ NaN。gap-fill のセルも NaN）。
+    - `file_names`: FileID → `.arf` の名前（その FileID が最初に現れたスポットの行の名前。
+      名前の無い行なら None）。
+    - `msms_assigned`: スポットごとに、どれかのセルが MS/MS を持つか。
+    """
+
+    path: Path
+    spot_mz: list
+    detected: np.ndarray
+    values: dict[str, np.ndarray]
+    per_sample_mz: np.ndarray
+    file_ids: list[int]
+    file_names: dict[int, str | None]
+    msms_assigned: np.ndarray
+    n_rows: int = field(default=0)
+
+    @property
+    def n_spots(self) -> int:
+        return len(self.spot_mz)
+
+
+#: 伸長後の `.arf` の 1 行（アラインされた 1 試料のピーク）の平均の大きさ（バイト）。
+#: HISTRY 2026-10-15 の実測（966 MB / 1.47M 行 ≒ 660 バイト）。行数の見積もりだけに使う。
+_ARF_UNCOMPRESSED_BYTES_PER_ROW = 660
+
+#: 行 1 本あたりに追加で持つ大きさの見積もり（バイト）。展開が終わったあとの区間で、セルごとの平たい
+#: `array`（最大 37 バイト）と行列へ置くときの複製・添字（合わせて数十バイト）が生きる分。
+_SCAN_BYTES_PER_ROW = 100
+
+#: 見積もりが空きメモリのこの割合を超えたら、読む前に断る。
+_AVAILABLE_FRACTION = 0.8
+
+_TOO_LARGE_REMEDY = (
+    "試料を分けてアラインメントし直す、メモリの多い機械で読む、または mzTab-M のアダプタ"
+    "（source=\"mztab\"）で読む（値は読めるが、検出状態〔gap-fill〕は付かない）。")
+
+
+def estimate_scan_bytes(path: str | Path) -> int:
+    """`scan_arf` が `.arf` を読むときのメモリのピークの見積もり（バイト）。伸長しない。
+
+    ピークは LZ4 ブロックの伸長中にある。python-lz4 の `lz4.block.decompress` は出力の 2 倍を
+    一時的に持ち（出力の大きさの 2 倍）、圧縮ペイロードの写しも同時に生きる（圧縮ファイルの大きさの
+    2 倍: Unpacker のバッファと ExtType の中身）。展開後の大きさは `arf_reader.uncompressed_size`
+    （ブロックごとの大きさを分けて得られないので、全ブロックの和を使う＝最大ブロックだけが倍になる
+    実際より少し多め）。展開後に生きるセルの配列は、行数（展開後の大きさ ÷ 660 バイト）×
+    `_SCAN_BYTES_PER_ROW` を足す。`DatasetState` は展開後のバッファが解放されてから組むので、
+    同時には生きない。
+    """
+    with open(path, "rb") as handle:
+        raw = arf_reader.uncompressed_size(handle)
+    compressed = os.path.getsize(path)
+    rows = raw // _ARF_UNCOMPRESSED_BYTES_PER_ROW
+    return 2 * raw + 2 * compressed + _SCAN_BYTES_PER_ROW * rows
+
+
+def _too_large(path: Path, estimated: int, available: int | None, message: str) -> DomainError:
+    return DomainError(
+        "ARF_TOO_LARGE", message,
+        {"path_name": path.name, "estimated_bytes": estimated, "available_bytes": available,
+         "remedy": _TOO_LARGE_REMEDY})
+
+
+def too_large_error(path: Path, reason: str) -> DomainError:
+    """読んだあとの組み立て中に `MemoryError` が出たときの `ARF_TOO_LARGE`（見積もりは今の値で付ける）。"""
+    from metabolomix.core import handles
+
+    try:
+        estimated = estimate_scan_bytes(path)
+    except OSError:
+        estimated = 0
+    return _too_large(path, estimated, handles.available_memory_bytes(),
+                      f"{path.name}: {reason}（要るメモリの見積もり {estimated / 1024 ** 2:.0f} MB）。")
+
+
+def scan_arf(path: str | Path, *, measures: tuple[str, ...]) -> ArfScan:
+    """`.arf` を 1 回だけストリーミングで読み、`ArfScan` を作る。
+
+    読む前に伸長後の大きさから要るメモリを見積もり（`estimate_scan_bytes`）、空きの物理メモリの
+    80% を超えるなら `ARF_TOO_LARGE`（`DomainError`）で断る。読んでいる途中の `MemoryError`
+    （`ArfMemoryError` を含む）も同じコードにする。空きが分からないとき（None）は断らない。
+    """
+    from metabolomix.core import handles
+
+    path = Path(path)
+    estimated = estimate_scan_bytes(path)
+    available = handles.available_memory_bytes()
+    if available is not None and estimated > _AVAILABLE_FRACTION * available:
+        raise _too_large(
+            path, estimated, available,
+            f"{path.name} は大きすぎて読めません（要るメモリの見積もり {estimated / 1024 ** 2:.0f} MB、"
+            f"空き {available / 1024 ** 2:.0f} MB）。")
+    try:
+        return _scan_arf(path, measures=measures)
+    except MemoryError as exc:
+        raise _too_large(
+            path, estimated, available,
+            f"{path.name} の読み込み中にメモリが尽きました"
+            f"（要るメモリの見積もり {estimated / 1024 ** 2:.0f} MB）。") from exc
+
+
+def _scan_arf(path: Path, *, measures: tuple[str, ...]) -> ArfScan:
+    """`scan_arf` の本体（行から `arf_reader.peak_field` で直接取り、セルごとの dict を作らない）。
+
+    途中は列の数が決まらないので、セルを平たい配列に貯めてから最後に行列へ置く。
+    """
+    field_of = arf_reader.peak_field
+    spot_mz: list = []
+    msms = array("b")
+    cell_spot, cell_file = array("i"), array("q")
+    cell_detected, cell_mz = array("b"), array("d")
+    cell_values = {measure: array("d") for measure in measures}
+    names: dict[int, str | None] = {}
+    n_rows = 0
+    with open(path, "rb") as handle:
+        for spot, group in enumerate(arf_reader.iter_groups(handle)):
+            best_height, best_mz = None, group.get("MassCenter")
+            by_file: dict[int, tuple] = {}
+            for raw in group.get("AlignedPeakProperties") or []:
+                n_rows += 1
+                height = field_of(raw, "height")
+                if height is None:  # ピークの行でない（ピークの行の高さは必ず数）
+                    continue
+                mz = field_of(raw, "m_z")
+                if _representative_candidate(field_of(raw, "peak_id"), height, mz):
+                    if best_height is None or height > best_height:
+                        best_height, best_mz = height, mz
+                file_id = field_of(raw, "file_id")
+                if isinstance(file_id, int):
+                    by_file[file_id] = (raw, height, mz)
+            spot_mz.append(best_mz)
+            has_msms = False
+            for file_id, (raw, height, mz) in by_file.items():
+                if file_id not in names:
+                    names[file_id] = field_of(raw, "file_name")
+                detected = not field_of(raw, "is_gap_filled")
+                cell_spot.append(spot)
+                cell_file.append(file_id)
+                cell_detected.append(detected)
+                cell_mz.append(_number(mz) if detected else math.nan)
+                for measure, column in cell_values.items():
+                    column.append(_number(height if measure == "height" else field_of(raw, measure)))
+                has_msms = has_msms or bool(field_of(raw, "is_msms"))
+            msms.append(has_msms)
+
+    files = np.asarray(cell_file, dtype=np.int64)
+    file_ids = np.unique(files)
+    rows = np.asarray(cell_spot, dtype=np.int64)
+    cols = np.searchsorted(file_ids, files)
+    shape = (len(spot_mz), len(file_ids))
+
+    def place(cells: array, dtype, empty) -> np.ndarray:
+        matrix = np.full(shape, empty, dtype=dtype)
+        matrix[rows, cols] = np.asarray(cells, dtype=dtype)
+        return matrix
+
+    return ArfScan(
+        path=path,
+        spot_mz=spot_mz,
+        detected=place(cell_detected, bool, False),
+        values={measure: place(column, float, np.nan) for measure, column in cell_values.items()},
+        per_sample_mz=place(cell_mz, float, np.nan),
+        file_ids=[int(f) for f in file_ids],
+        file_names=names,
+        msms_assigned=np.asarray(msms, dtype=bool),
+        n_rows=n_rows,
+    )
 
 
 def normalize_arf_spots(spots: list[dict]) -> list[dict]:
@@ -199,13 +387,60 @@ def build_evidence(
 
     例外ではなく封筒で返す。取り込めないことは異常事態ではなく（別アライメントの
     `.arf` が同じフォルダに居るのは普通）、呼び出し側は warning にして解析を続ける。
+
+    `normalize_arf_spots` の形（試料の列は行の位置。名前は先頭のスポットの行から）を受ける。
+    ファイルから読むときは `scan_evidence`（FileID の列）を使う。判定は `_join` を共有する。
+    """
+    arf_names = [cell["name"] for cell in (normalized_spots[0]["samples"]
+                                          if normalized_spots else [])]
+    shape = (len(normalized_spots), len(arf_names))
+    # 先頭のスポットより行が少ないスポットの欠けたセルは「検出」のまま（従来どおり）。
+    detected = np.ones(shape, dtype=bool)
+    measured = np.full(shape, np.nan)
+    for row, spot in enumerate(normalized_spots):
+        for col, cell in enumerate(spot["samples"][:len(arf_names)]):
+            hit = not cell["is_gap_filled"]
+            detected[row, col] = hit
+            if hit:
+                measured[row, col] = _number(cell.get("m_z"))
+    return _join([spot.get("mz") for spot in normalized_spots], arf_names, detected, measured,
+                 feature_mz=feature_mz, sample_names=sample_names, mz_tolerance=mz_tolerance)
+
+
+def scan_evidence(
+    scan: ArfScan,
+    *,
+    feature_mz: list[float | None],
+    sample_names: list[str],
+    mz_tolerance: float = MZ_TOLERANCE,
+) -> dict:
+    """`build_evidence` と同じ判定を `ArfScan`（`.arf` を 1 回なめたもの）に対して行う。
+
+    `.arf` の試料の名前は FileID ごとの名前（無ければ `Sample_<FileID>`）。列は FileID で
+    結ぶので、`build_evidence` と違い、行の欠けたセルは「未検出」になる。
+    """
+    arf_names = [scan.file_names.get(file_id) or f"Sample_{file_id}"
+                 for file_id in scan.file_ids]
+    return _join(scan.spot_mz, arf_names, scan.detected, scan.per_sample_mz,
+                 feature_mz=feature_mz, sample_names=sample_names, mz_tolerance=mz_tolerance)
+
+
+def _join(spot_mz: list, arf_names: list[str], detected: np.ndarray, measured: np.ndarray, *,
+          feature_mz: list[float | None], sample_names: list[str],
+          mz_tolerance: float) -> dict:
+    """スポット数・m/z・試料名で接合を確かめ、mzTab-M の特徴 × assay の検出マスクを組む。
+
+    detected / measured は `.arf` のスポット × `arf_names` の列（measured は検出された
+    セルの実測 m/z。それ以外は NaN）。
     """
     n_features = len(feature_mz)
-    if len(normalized_spots) != n_features:
+    if len(spot_mz) != n_features:
         return {
             "status": "rejected",
             "reason": "feature_count_mismatch",
-            "detail": {"n_arf_spots": len(normalized_spots),
+            "note": "`.arf` のスポット数と mzTab-M の特徴数が違う。同じアラインメントの出力でないか、"
+                    ".arf を読み切れていない。",
+            "detail": {"n_arf_spots": len(spot_mz),
                        "n_mztab_features": n_features},
         }
 
@@ -216,13 +451,10 @@ def build_evidence(
     # ピークや共溶出で稀に許容を超える。
     # 一方、1 つずらした誤接合は Da オーダーに爆発する（実測 87 Da）ので、
     # 少数でも MZ_HARD_LIMIT を超えたら誤接合として棄却する。
-    mz_ok, mz_detail = compare_feature_mz(
-        [spot.get("mz") for spot in normalized_spots], feature_mz, mz_tolerance)
+    mz_ok, mz_detail = compare_feature_mz(spot_mz, feature_mz, mz_tolerance)
     if not mz_ok:
         return {"status": "rejected", "reason": "mz_mismatch", "detail": mz_detail}
 
-    arf_names = [cell["name"] for cell in (normalized_spots[0]["samples"]
-                                          if normalized_spots else [])]
     # 名前は前後の空白を落として比べる。raw ファイル名の末尾の空白（`... P15-AA-25 .wiff`）
     # は `.arf` の FileName に残るが、mzTab の MTD の読み取りは値を strip する
     # （`mztab/reader.py`）ので、そのままでは同じ試料が「ARF に無い」と棄却される。
@@ -238,22 +470,13 @@ def build_evidence(
         }
 
     columns = [position[name.strip()] for name in sample_names]
-    mask = np.ones((n_features, len(sample_names)), dtype=bool)
+    mask = detected[:, columns].copy()
     # 特徴（行）ごとの {試料名: 検出されたセルの実測 m/z}。gap-fill のセルの m/z は
     # 補間値で実測ではないので入れない。質量精度の注入順の傾向の材料（RT は持たない）。
     per_sample_mz: list[dict[str, float]] = []
-    for row, spot in enumerate(normalized_spots):
-        cells = spot["samples"]
-        measured: dict[str, float] = {}
-        for col, source in enumerate(columns):
-            if source < len(cells):
-                detected = not cells[source]["is_gap_filled"]
-                mask[row, col] = detected
-                mz = cells[source].get("m_z")
-                if (detected and isinstance(mz, (int, float)) and not isinstance(mz, bool)
-                        and math.isfinite(mz) and mz > 0):
-                    measured[sample_names[col]] = float(mz)
-        per_sample_mz.append(measured)
+    for row in measured[:, columns]:
+        per_sample_mz.append({sample_names[col]: float(mz) for col, mz in enumerate(row)
+                              if math.isfinite(mz) and mz > 0})
 
     n_cells = int(mask.size)
     n_detected = int(mask.sum())
@@ -305,6 +528,23 @@ def arf_candidates(mztab_path: str | Path,
     return candidates
 
 
+def _scan_and_join(arf_path: str | Path, *, feature_mz: list[float | None],
+                   sample_names: list[str], measures: tuple[str, ...] = (),
+                   mz_tolerance: float = MZ_TOLERANCE) -> tuple[dict, ArfScan | None]:
+    """`.arf` を 1 回読み（`scan_arf`）、接合を確かめる。(封筒, 読めたなら ArfScan)。"""
+    try:
+        scan = scan_arf(arf_path, measures=measures)
+    except DomainError:                           # ARF_TOO_LARGE は「壊れている」ではないので包まない
+        raise
+    except Exception as exc:                      # noqa: BLE001 - 破損/別形式を包む
+        return {"status": "rejected", "reason": "arf_unreadable",
+                "detail": {"path": str(arf_path), "error": str(exc)}}, None
+    result = scan_evidence(scan, feature_mz=feature_mz, sample_names=sample_names,
+                           mz_tolerance=mz_tolerance)
+    result.setdefault("detail", {})["path"] = str(arf_path)
+    return result, scan
+
+
 def load_arf_evidence(
     arf_path: str | Path,
     *,
@@ -313,24 +553,13 @@ def load_arf_evidence(
     mz_tolerance: float = MZ_TOLERANCE,
 ) -> dict:
     """`.arf` を 1 本読んで検出マスクを組む。読めなければ `rejected` を返す。"""
-    try:
-        with open(arf_path, "rb") as handle:
-            spots = arf_reader.deserialize(handle)
-    except Exception as exc:                      # noqa: BLE001 - 破損/別形式を包む
-        return {"status": "rejected", "reason": "arf_unreadable",
-                "detail": {"path": str(arf_path), "error": str(exc)}}
-    result = build_evidence(
-        normalize_arf_spots(spots),
-        feature_mz=feature_mz,
-        sample_names=sample_names,
-        mz_tolerance=mz_tolerance,
-    )
-    result.setdefault("detail", {})["path"] = str(arf_path)
+    result, _scan = _scan_and_join(arf_path, feature_mz=feature_mz, sample_names=sample_names,
+                                   mz_tolerance=mz_tolerance)
     return result
 
 
 def apply_evidence(ds, result: dict | None, tried: list[str] | None = None) -> None:
-    """`build_evidence` の封筒を DatasetState に反映する。
+    """`scan_evidence` / `build_evidence` の封筒を DatasetState に反映する。
 
     取り込めなかった場合に **黙って検出 0 として畳まない**のが要点。検出状態が
     「無い」のと「全部未検出」は解釈が正反対で、前者は検出率を語ってはいけない
@@ -350,7 +579,7 @@ def apply_evidence(ds, result: dict | None, tried: list[str] | None = None) -> N
             f"隣接する .arf から検出状態（gap-fill）を取り込めませんでした"
             f"（理由: {reason}）。この mzTab-M の非ゼロ値には gap-fill による補間値が"
             "含まれる可能性があり、**検出率・欠測率を語れません**。"
-            "検出状態が必要なら ARF 経路（arf_parser / arf_preprocess）を使ってください。")
+            "検出状態が必要なら、解析フォルダ（.arf）を load_dataset の directory で読んでください。")
         return
 
     ds.detected_mask = result["detected_mask"]
@@ -376,22 +605,32 @@ def join_axes(ds) -> tuple[list[float | None], list[str]]:
 
 
 def matching_arfs(candidates: list[Path], *, feature_mz: list[float | None],
-                  sample_names: list[str]) -> tuple[list[Path], dict[str, str]]:
-    """候補の `.arf` を 1 本ずつ `load_arf_evidence`（＝`build_evidence` の検証）にかける。
+                  sample_names: list[str], measures: tuple[str, ...] = (),
+                  ) -> tuple[list[Path], dict[str, str], ArfScan | None]:
+    """候補の `.arf` を 1 本ずつ読み（`scan_arf`）、`load_arf_evidence` と同じ検証にかける。
 
-    戻り値は (検証を通った候補（候補の順）, 落ちた候補のファイル名 → 却下理由)。
+    戻り値は (検証を通った候補（候補の順）, 落ちた候補のファイル名 → 却下理由,
+    最初に通った候補の `ArfScan`（measures の値つき。無ければ None）)。
     mzTab-M のアダプタが検出状態を取り込むときと同じ判定で、解析フォルダのアダプタが
     「ジョブの正準 mzTab-M と同じアラインメント」の `.arf` を選ぶ（名前では決めない）。
+    通った `.arf` を読み直さずに済むよう、最初の合格の読み取り結果だけを持って返す
+    （2 本目が通れば呼び出し側は曖昧として止めるので、2 本目以降は持たない）。
     """
     passed: list[Path] = []
     rejected: dict[str, str] = {}
+    first: ArfScan | None = None
+    scan: ArfScan | None = None
     for candidate in candidates:
-        result = load_arf_evidence(candidate, feature_mz=feature_mz, sample_names=sample_names)
+        result, scan = _scan_and_join(candidate, feature_mz=feature_mz,
+                                      sample_names=sample_names, measures=measures)
         if result.get("status") == "ok":
             passed.append(Path(candidate))
+            if first is None:
+                first = scan
         else:
             rejected[Path(candidate).name] = result.get("reason", "unknown")
-    return passed, rejected
+        scan = None   # 次の候補を読む間、却下した（または 2 本目以降の）読み取り結果を生かさない
+    return passed, rejected, first
 
 
 def attach_to_dataset(ds, mztab_path: str | Path) -> None:
@@ -403,8 +642,16 @@ def attach_to_dataset(ds, mztab_path: str | Path) -> None:
     candidates = arf_candidates(mztab_path, ds.artifact_paths)
     last = None
     for candidate in candidates:
-        last = load_arf_evidence(
-            candidate, feature_mz=feature_mz, sample_names=ds.sample_names)
+        try:
+            last = load_arf_evidence(
+                candidate, feature_mz=feature_mz, sample_names=ds.sample_names)
+        except DomainError as exc:
+            if exc.code != "ARF_TOO_LARGE":
+                raise
+            # 大きすぎて読めない。mzTab-M の値は読めているので、読めない `.arf` の理由と規模を残して進む
+            # （「壊れている」の arf_unreadable とは分ける）。
+            last = {"status": "rejected", "reason": "arf_too_large",
+                    "detail": {"path": str(candidate), **exc.details}}
         if last.get("status") == "ok":
             break
     # どの .arf と照合したかを必ず残す。これが無いと、棄却されたときに

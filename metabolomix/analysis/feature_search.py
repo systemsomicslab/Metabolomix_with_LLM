@@ -27,6 +27,7 @@ import re
 
 import numpy as np
 
+from metabolomix.analysis.dataset_analysis import included_sample_indices
 from metabolomix.analysis.feature_bindings import _normalize_adduct
 from metabolomix.analysis.result_state import is_current
 from metabolomix.analysis.mass_accuracy import offset_for
@@ -711,7 +712,8 @@ def match_target(ds, target: dict, *, max_results: int,
 # ---------- 窓検索と差次的統計の結合（spec §4.2・§6） ----------
 
 #: 窓検索の行の列（この順で TSV にする）。
-WINDOW_COLUMNS = ("feature_id", "mz", "rt", "evidence", "name", "inchikey", "adduct", "n_sme")
+WINDOW_COLUMNS = ("feature_id", "mz", "rt", "evidence", "name", "inchikey", "adduct", "n_sme",
+                  "ontology", "n_detected", "normalized", "msi_level")
 
 #: 特徴ごとの統計の行の列。
 STATS_COLUMNS = ("feature_id", "result_id", "status", "log2fc", "p", "q", "mean_a", "mean_b",
@@ -767,21 +769,66 @@ def _check_range(low, high, label: str) -> None:
             {"field": label, "min": low, "max": high})
 
 
+def _detected_intensity(ds) -> tuple[np.ndarray, np.ndarray | None]:
+    """特徴ごとの（検出セルの値の最大, 検出セル数）。解析に残さない試料の列は使わない。
+
+    使わない試料は前処理と同じ定義（`included_sample_indices`: 実験情報シートの include=false と
+    `dataset_exclude` の試料の和集合）。
+
+    検出セルだけを数える（gap-fill は含めない）。検出セルが 1 つも無い特徴の最大は NaN。
+    検出状態（``detected_mask``）が無いデータセットは、gap-fill を見分けられないので
+    除外していない試料の全セルの最大（NaN は無視）を使い、検出数は None とする。
+    """
+    n_features = len(ds.feature_ids)
+    mask = ds.detected_mask
+    if ds.feature_matrix is None:
+        return np.full(n_features, np.nan), None
+    kept = included_sample_indices(ds)
+    keep = np.ones(len(ds.sample_names), dtype=bool)
+    if kept is not None:
+        keep[:] = False
+        keep[kept] = True
+    values = np.asarray(ds.feature_matrix, dtype=float)[:, keep]
+    finite = np.isfinite(values)
+    if mask is None:
+        # 検出の印が無い: gap-fill を見分けられないので、除外していない試料の全セルの最大
+        # （NaN は無視）。検出数は分からないので None。
+        counts = None
+        detected = finite
+    else:
+        detected = np.asarray(mask, dtype=bool)[:, keep] & finite
+        counts = detected.sum(axis=1)
+    if values.shape[1] == 0:
+        return np.full(n_features, np.nan), counts
+    best = np.where(detected, values, -np.inf).max(axis=1)
+    return np.where(np.isfinite(best), best, np.nan), counts
+
+
 def search_window(ds, *, feature_ids: list[str] | None, min_mz, max_mz, min_rt, max_rt,
-                  max_results: int) -> tuple[list[dict], int]:
+                  max_results: int, sort: str = "mz") -> tuple[list[dict], int]:
     """m/z・RT（分）の窓と特徴 ID の指定で特徴を探す（spec §4.2）。
 
     条件は与えられたものすべての AND で、境界を含む。``feature_ids`` は None のときだけ
     「条件なし」（空リストは「どの ID でもない」＝ 0 件）。条件が 1 つも無ければ
-    ``FEATURE_SEARCH_EMPTY_QUERY``（全特徴の列挙を黙って返さない）、下限 > 上限は
+    ``FEATURE_SEARCH_EMPTY_QUERY``（全特徴の列挙を黙って返さない。``sort="intensity"`` は
+    上位 ``max_results`` 件で打ち切るので条件なしでもよい）、下限 > 上限は
     ``FEATURE_SEARCH_BAD_RANGE``。m/z や RT を持たない特徴は、その軸の条件があれば外れる。
-    行は m/z 昇順（m/z 無しは最後。同値は特徴の並び順）で、``max_results`` 件に打ち切り、
-    切り捨てた件数を返す。統計はここでは付けない（`feature_stats`）。
+    ``ds.excluded_features`` の特徴は結果に出さない。
+
+    ``sort="mz"``（既定）は m/z 昇順（m/z 無しは最後。同値は特徴の並び順）。``sort="intensity"``
+    は検出セルの値の最大（除外した試料を除く）の降順で、検出セルが無い特徴は最後（同値は特徴の
+    並び順）。この強度は**ピークの高さ（データセットの測定値）の最大**で、EIC のクロマトグラムの
+    最大ではない。``max_results`` 件に打ち切り、切り捨てた件数を返す。統計はここでは付けない
+    （`feature_stats`）。
     """
-    if all(v is None for v in (feature_ids, min_mz, max_mz, min_rt, max_rt)):
+    if sort not in ("mz", "intensity"):
+        raise DomainError("FEATURE_SEARCH_BAD_SORT", f"sort は mz か intensity: {sort!r}",
+                          {"field": "sort"})
+    if sort == "mz" and all(v is None for v in (feature_ids, min_mz, max_mz, min_rt, max_rt)):
         raise DomainError(
             "FEATURE_SEARCH_EMPTY_QUERY",
-            "feature_ids・min_mz/max_mz・min_rt/max_rt のどれか 1 つは指定する",
+            "feature_ids・min_mz/max_mz・min_rt/max_rt のどれか 1 つは指定する"
+            "（条件なしで上位を見るなら sort=\"intensity\"）",
             {})
     _check_range(min_mz, max_mz, "mz")
     _check_range(min_rt, max_rt, "rt")
@@ -795,24 +842,38 @@ def search_window(ds, *, feature_ids: list[str] | None, min_mz, max_mz, min_rt, 
         return (low is None or value >= low) and (high is None or value <= high)
 
     hits = []
-    for fid in ds.feature_ids:
+    for index, fid in enumerate(ds.feature_ids):
+        if fid in ds.excluded_features:
+            continue
         if wanted is not None and fid not in wanted:
             continue
         meta = ds.feature_metadata.get(fid) or {}
         mz, rt = meta.get("mz"), meta.get("rt")
         if _inside(mz, min_mz, max_mz) and _inside(rt, min_rt, max_rt):
-            hits.append((fid, mz, rt))
-    hits.sort(key=lambda hit: (not _is_number(hit[1]), hit[1] if _is_number(hit[1]) else 0.0))
+            hits.append((fid, mz, rt, index))
+    best, counts = _detected_intensity(ds)
+    if sort == "intensity":
+        hits.sort(key=lambda hit: (math.isnan(best[hit[3]]),
+                                   0.0 if math.isnan(best[hit[3]]) else -best[hit[3]], hit[3]))
+    else:
+        hits.sort(key=lambda hit: (not _is_number(hit[1]), hit[1] if _is_number(hit[1]) else 0.0))
 
     limit = max(0, int(max_results))
     rows = []
-    for fid, mz, rt in hits[:limit]:
-        identity = _window_identity(ds.feature_candidates.get(fid), ds.feature_annotations.get(fid))
+    for fid, mz, rt, index in hits[:limit]:
+        meta = ds.feature_metadata.get(fid) or {}
+        annotation = ds.feature_annotations.get(fid) or {}
+        # 同定の標準化の列は解析フォルダのデータセットだけが持つ（mzTab-M は None のまま）
+        ident = meta.get("identity") or {}
         rows.append({
             "feature_id": fid,
             "mz": float(mz) if _is_number(mz) else None,
             "rt": float(rt) if _is_number(rt) else None,
-            **identity,
+            **_window_identity(ds.feature_candidates.get(fid), annotation),
+            "ontology": meta.get("ontology") or annotation.get("ontology") or None,
+            "n_detected": None if counts is None else int(counts[index]),
+            "normalized": ident.get("normalized"),
+            "msi_level": ident.get("msi_level"),
         })
     return rows, len(hits) - len(rows)
 

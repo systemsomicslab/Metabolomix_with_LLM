@@ -55,8 +55,8 @@ def console_plan(
     lbm_file:
         脂質ライブラリ（`.lbm2`）のパス。省略時は「メソッドファイルの宣言 →
         ビルド生成物（MsdialWorkbench をソースからビルドしている場合） →
-        `[msdial] lbm`（lipidmix.local.toml）か環境変数 MSDIAL_LBM →
-        Console の実行体（[msdial] exe / MSDIAL_EXE）と同じフォルダ」の順に、MS-DIAL GUI と
+        `[library] lbm`（lipidmix.local.toml）→
+        Console の実行体（[msdial] exe）と同じフォルダ」の順に、MS-DIAL GUI と
         同じ規則で自動解決します。GUI 由来のパラメータは `Lbm file path:` が
         必ず空なので、この自動解決が無いと**警告なしで同定 0 件**になります。
         自動補完（宣言より後ろの 3 つ）は lipidomics だけです。引数と宣言は
@@ -90,8 +90,8 @@ def console_plan(
     library_mode:
         "auto"（既定）か "msp_only"。"msp_only" は LBM を使わず、研究室の参照ライブラリ
         （.msp）だけで同定する: 実効メソッドの `Lbm file path` を空にし、`Msp file path` に
-        `msp_file` か極性の設定（環境変数 MSDIAL_MSP_POS / MSDIAL_MSP_NEG →
-        lipidmix.local.toml の [library] msp_positive / msp_negative）を書き、メソッドが宣言する
+        `msp_file` か極性の設定（lipidmix.local.toml の
+        [library] msp_positive / msp_negative）を書き、メソッドが宣言する
         Text DB と MSP / Text の注釈器設定表を空にする（消したキーは removed_declarations）。
         メソッドの `Msp file path` の宣言は使わない。MSP が決まらなければ MSP_NOT_CONFIGURED /
         MSP_NOT_FOUND で止まり、ジョブを作らない。lbm_file とは同時に指定できない。
@@ -200,7 +200,7 @@ def console_plan(
     if probe != "console":
         return console_error(
             "MSDIAL_EXE_NOT_CONSOLE",
-            f"Console の実行体（[msdial] exe / MSDIAL_EXE）が MS-DIAL Console ではありません: {exe}  "
+            f"Console の実行体（[msdial] exe）が MS-DIAL Console ではありません: {exe}  "
             "--help にサブコマンド `lcms` が現れませんでした。GUI の MSDIAL.exe を"
             "指している可能性があります（GUI はコマンドラインを解釈せずウィンドウを"
             "開いたままになります）。MsdialWorkbench の Console 実行体"
@@ -388,7 +388,7 @@ def console_run(job_path: str | None = None, detach: bool = False) -> str:
     入力が全て assay に対応していなければ completed にはなりません（partial / failed）。
 
     実行完了後、session.current_job_path は同じジョブを指し続けます。
-    結果は console_status または dataset_load で確認してください。
+    結果は console_status または load_dataset で確認してください。
     """
     resolved = _resolve_job_path(job_path)
     if isinstance(resolved, str):
@@ -442,7 +442,7 @@ def console_run(job_path: str | None = None, detach: bool = False) -> str:
     if probe != "console":
         return console_error(
             "MSDIAL_EXE_NOT_CONSOLE",
-            f"Console の実行体（[msdial] exe / MSDIAL_EXE）が MS-DIAL Console ではありません: {exe}  "
+            f"Console の実行体（[msdial] exe）が MS-DIAL Console ではありません: {exe}  "
             "--help にサブコマンド `lcms` が現れませんでした。GUI の MSDIAL.exe を"
             "指している可能性があります（GUI はコマンドラインを解釈せずウィンドウを"
             "開いたままになります）。MsdialWorkbench の Console 実行体"
@@ -777,7 +777,7 @@ def console_method_template(
         exe = console_runner.get_exe_path()
     except EnvironmentError as exc:
         # exe はビルド生成物・exe フォルダからの LBM 推定にだけ使う。未設定でも
-        # メソッドの宣言や [msdial] lbm で解決できれば足りるので、ここでは止めない。
+        # メソッドの宣言や [library] lbm で解決できれば足りるので、ここでは止めない。
         if getattr(exc, "code", "") == "CONFIG_INVALID":
             return _exe_error(exc)
         exe = None
@@ -880,7 +880,7 @@ def console_cleanup(job_path: str | None = None, dry_run: bool = True) -> str:
 
     dry_run: True（既定）なら一覧を返すだけ。False で実際に削除します。
         削除後、ジョブの status は `cleaned` になります（生成物を指したまま
-        completed で残ると、dataset_load が存在しないファイルを読もうとします）。
+        completed で残ると、load_dataset が存在しないファイルを読もうとします）。
     """
     resolved = _resolve_job_path(job_path)
     if isinstance(resolved, str):
@@ -1088,7 +1088,7 @@ def _console_run_result(job_path: Path, receipt: dict) -> str:
             "other_artifacts": len(job.artifacts),
             "run_dir": job.run_dir,
             "warnings": job.warnings,
-            "next": "dataset_load でmzTab-M を読み込み、解析を開始してください",
+            "next": "load_dataset でmzTab-M を読み込み、解析を開始してください",
         })
 
     if receipt["termination"] == "launch_failed":
@@ -1328,10 +1328,10 @@ def _exe_error(exc: EnvironmentError) -> str:
 
 
 def _lbm_setting():
-    """`[msdial] lbm` / MSDIAL_LBM の設定。設定ファイルが読めなければ封筒（str）を返す。"""
+    """`[library] lbm` の設定。設定ファイルが読めなければ封筒（str）を返す。"""
     from metabolomix.core import user_config
     try:
-        return user_config.get_setting("msdial.lbm")
+        return user_config.get_setting(user_config.LIBRARY_LBM_SETTING_KEY)
     except user_config.ConfigInvalidError as exc:
         return console_error(exc.code, exc.message, exc.details())
 
@@ -1414,11 +1414,23 @@ def _resolve_libraries(method_keys: dict, method_path: Path, *, omics: str, exe:
     if lbm.error_code:
         return console_error(lbm.error_code, lbm.message or "",
                              {"candidates": list(lbm.candidates)} if lbm.candidates else None)
+    # `[library] lbm` から解いた LBM は研究室の資産なので、戻り値・エラー文には
+    # ファイル名だけを出す（どの経路でも。spec 2026-10-07 §3.3）。実効メソッドへは
+    # 絶対パスを書く（Console が読むため）。ほかの出所（宣言・ビルド生成物・exe フォルダ）は
+    # これまでどおり絶対パスを示す。
+    lab_lbm = lbm.source == method_file_mod.SETTING_SOURCE and bool(lbm.path)
+    if lab_lbm and not lbm.path.isascii():
+        return console_error(
+            "METHOD_ENCODING_UNSUPPORTED",
+            f"研究室 LBM（{Path(lbm.path).name}）のパスに ASCII 以外の文字があります。"
+            "MS-DIAL Console はメソッドファイルを ASCII で読むため、このライブラリは"
+            "見つからず黙って同定 0 件になります。ASCII だけのフォルダへ置き直してください。",
+            {"keys": [method_file_mod.LBM_KEY]})
     if lbm.path:
         overrides[method_file_mod.LBM_KEY] = lbm.path
     return overrides, {
         "library_mode": "auto",
-        "lbm": {"path": lbm.path, "source": lbm.source},
+        "lbm": {"path": Path(lbm.path).name if lab_lbm else lbm.path, "source": lbm.source},
         "msp": {"file": None, "source": "not_used"},
         "removed_declarations": [],
     }
@@ -1436,11 +1448,10 @@ def _configured_exe() -> str:
 def _msdial_exe_setup_help() -> dict:
     """Console の実行体が未設定の封筒に、誰が何をすべきかを機械可読で載せる。
 
-    設定ファイル（`lipidmix.local.toml`）の編集も環境変数の設定も MCP クライアント
-    からはできない。LLM に「設定してください」とだけ返すと、設定を試みて失敗するか
-    黙って諦める。人間の作業であることを型で示し、コピペできる手順を渡す。
-    設定ファイルは呼ばれるたびに読まれるので再起動は要らないが、環境変数は
-    起動中のサーバに反映されない。
+    設定ファイル（`lipidmix.local.toml`）の編集は MCP クライアントからはできない。
+    LLM に「設定してください」とだけ返すと、設定を試みて失敗するか黙って諦める。
+    人間の作業であることを型で示し、コピペできる手順を渡す。設定ファイルは
+    呼ばれるたびに読まれるので再起動は要らない。
     """
     from metabolomix.console.runner import msdial_exe_candidates
     from metabolomix.core import user_config
@@ -1459,16 +1470,16 @@ def _msdial_exe_setup_help() -> dict:
                        "（単一引用符で囲む。サーバの再起動は不要）")
     return {
         "human_action_required": True,
-        "why": "設定ファイルの編集も環境変数の設定も MCP クライアントからはできません。",
+        "why": "設定ファイル（lipidmix.local.toml）の編集は MCP クライアントからはできません。",
         "candidates": candidates[:10],
         "how_to_set": [
             config_step,
-            "PowerShell（恒久設定）: [Environment]::SetEnvironmentVariable("
-            "'MSDIAL_EXE','<MSDIALCUI.exe のパス>','User')（設定後に MCP サーバの再起動が必要）",
+            "書き方の例（lipidmix.local.toml）: [msdial] の節に "
+            "exe = 'C:\\MS-DIAL\\MSDIALCUI.exe'（Windows のパスは単一引用符で囲む）",
         ],
         "restart_required": False,
-        "restart_note": "設定ファイルなら次の呼び出しから効きます。環境変数で設定した場合だけ、"
-                        "起動中のプロセスが変更を読み直さないので MCP サーバの再起動が必要です。",
+        "restart_note": "設定ファイルは呼ばれるたびに読み直されるので、書き換えは次の呼び出しから"
+                        "効きます。MCP サーバの再起動は要りません。",
     }
 
 

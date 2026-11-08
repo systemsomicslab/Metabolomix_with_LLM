@@ -50,7 +50,7 @@
   サブクラス合計はそのぶん小さくなる。JSON-LD には試料ごとの有効分子種数（`validFeatureCount`）が
   載るが、ノード表の比較には使っていない。欠損の多いサブクラスの sum の差は割り引いて読む。
 - **同位体標識の内部標準**（名前に `(d7)` などを含むもの）も、Ontology が MS-DIAL の脂質クラスなら（経路 `as_is`）
-  そのサブクラスに合算される。合算させたくないときは事前に除外する（例: `arf_exclude`）。Ontology が MS-DIAL の
+  そのサブクラスに合算される。合算させたくないときは事前に除外する（例: `dataset_exclude`）。Ontology が MS-DIAL の
   脂質クラスでない行（研究室 MSP の行）は `dropped_isotope_label` で落ちる。
 
 ## ノード表（nodes_tsv）

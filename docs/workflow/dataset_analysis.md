@@ -1,7 +1,7 @@
 # DatasetState 解析ツール呼び出し連鎖
 
-ARF 経路（`docs/workflow/arf.md`）と同じ純関数を共有している。同じ入力からは
-同じ数字が出る。違いは入口（mzTab-M か .arf か）とセッションスロットだけ。
+解析フォルダ（`.arf` / `.arf2`）も mzTab-M も、`load_dataset` が同じ `DatasetState` にして
+このツール群へ渡す。旧 ARF 経路（`arf_*` ツールとそのセッションスロット）は B-2b Task 8 で消えた。
 
 ## dataset_preprocess
 
@@ -22,7 +22,7 @@ ARF 経路（`docs/workflow/arf.md`）と同じ純関数を共有している。
 gap-fill だけの特徴を実測として数えた行列が黙って下流に流れる）。
 
 検出率の分母は**実際に前処理へ渡す試料だけ**。手順 3 が `include=false` の行を
-行列から落とすのと同じ位置（`_included_sample_indices`）でマスクの列も絞る
+行列から落とすのと同じ位置（`included_sample_indices`）でマスクの列も絞る
 （`_restrict_mask_to_samples`）——絞らないと、解析から除外した試料の未検出が
 分母に残り、`min_detection_rate=1.0` が「残す試料では全件検出されている」正当な
 特徴量を削り落とす。何試料分を数えたかは `report["detection"]["n_samples"]`。
@@ -136,7 +136,7 @@ result_id は計算のたびに発行される UUID なので入れず、統計�
 1. metabolomix/tools/dataset_analysis_tools.py  dataset_set_sample_metadata()
 2. └─ metabolomix/analysis/dataset_service.py  apply_sample_manifest()
 3.    └─ metabolomix/analysis/dataset_service.py  _raw_manifest_layout()
-4.    └─ metabolomix/analysis/sample_manifest.py  parse_manifest()
+4.    └─ metabolomix/analysis/sample_manifest.py  parse_manifest()（任意の列 `subject_id` を読む。`sample_meta` に持つだけで統計には使わない）
 5.    └─ metabolomix/analysis/sample_manifest.py  resolve_metadata()
 6.    └─ metabolomix/analysis/sample_manifest.py  apply_metadata()
 7.       └─ metabolomix/analysis/result_state.py  invalidate_results()
@@ -164,5 +164,5 @@ QC/blank/unknown/standard・`include=false` を混ぜない（選択規則は
 9.       └─ metabolomix/analysis/evidence_export.py  write_evidence_bundle()
 
 spectrum_links は同じアラインメントの `.dcl` に ID（SMF_ID == AlignmentID == `.dcl` の番号）で結び、
-m/z・RT は検証にだけ使う（ARF 経路の `alignment_links()` と `link_alignment_spectra()` を共有）。
+m/z・RT は検証にだけ使う（`link_alignment_spectra()` が結ぶ）。
 結べないときの状態と理由は manifest の provenance（`docs/output_format/reanalysis.md` §10）。

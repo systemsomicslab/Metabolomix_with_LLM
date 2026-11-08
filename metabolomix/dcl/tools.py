@@ -2,84 +2,50 @@
 
 MS/MS は同定確度の最強証拠だが、MS-DIAL は実スペクトルを `.pai2` ではなく同名の
 `.dcl` に置く（`.pai2` の `has_msms` は取得参照の有無を示すだけ）。本モジュールは
-その実体を MCP 面へ出し、`verify_peak_annotation` の判断材料に載せるための入口。
+その実体を MCP 面へ出す入口（`dcl_find_msms` / `dcl_spot_spectrum` / `dcl_diagnostic_ions`）。
 
-deps: mcp_core / session_state / path_resolvers / dcl_reader。tools_* / server は
+deps: mcp_core / session_state / tools._holder / dcl_reader。tools_* / server は
 import しない。
 """
+import os
 from pathlib import Path
 
 from metabolomix.core import session_state
 from mcp.types import ToolAnnotations
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.serialization import json_payload
-from metabolomix.core.path_resolvers import resolve_dcl_file_path
-from metabolomix.dcl.reader import deserialize_dcl, summarize_dcl, get_msms_by_precursor
+from metabolomix.dcl.reader import deserialize_dcl, get_msms_by_precursor
 
-__all__ = ["dcl_parser", "dcl_find_msms", "dcl_spot_spectrum", "dcl_diagnostic_ions"]
+__all__ = ["dcl_find_msms", "dcl_spot_spectrum", "dcl_diagnostic_ions"]
 
 # LLM へ返すスペクトルは主要フラグメントに絞る（全ピークは容易に数百本になる）。
 _DEFAULT_TOP_PEAKS = 10
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dcl_parser(file_path: str | None = None, top_n_peaks: int | None = None,
-               preview: int = 5) -> str:
-    """1つの `.dcl`（MSDecResult）を解析し、MS/MS 在庫の要約と先頭数件を返す。
-
-    `.dcl` は測定ファイル1つにつき1個で、`dcl_index` が同名 `.pai2` のピーク順に
-    対応する。返すのは取得率・ピーク本数分布・precursor m/z / RT 範囲の要約と、
-    先頭 `preview` 件の主要フラグメント。個々のピークの同定確度に効かせるには
-    `pai2_parser`（同名 `.dcl` を自動で付与する）→ `verify_peak_annotation` を使う。
-
-    - `top_n_peaks`: 各スペクトルを強度上位 N 本に間引く（既定 10。全件は 0 を指定）。
-    - `preview`: 要約に添える MSDecResult の件数。
-    """
-    resolved = resolve_dcl_file_path(file_path)
-    if not resolved:
-        return "データディレクトリに .dcl ファイルが見つかりませんでした。"
-
-    limit = _DEFAULT_TOP_PEAKS if top_n_peaks is None else (top_n_peaks or None)
-    try:
-        results = deserialize_dcl(resolved, include_spectrum=True, top_n_peaks=limit)
-    except Exception as exc:  # noqa: BLE001 - 破損ファイルは文言で返す（MCP が扱いやすい）
-        return f"[ERROR] DCL 解析に失敗しました: {exc}"
-
-    payload = {
-        "status": "success",
-        "file": Path(resolved).name,
-        "summary": summarize_dcl(results),
-        "preview": [
-            {
-                "dcl_index": r["dcl_index"],
-                "precursor_mz": round(r["precursor_mz"], 4),
-                "rt": round(r["rt"], 2),
-                "n_msms_peaks": r["n_msms_peaks"],
-                "signal_to_noise": round(r["signal_to_noise"], 2),
-                "top_fragments": [[round(m, 4), i] for m, i in r["msms_spectrum"]],
-            }
-            for r in results[:max(0, preview)]
-        ],
-    }
-    text = (
-        f"### DCL 解析完了: {Path(resolved).name}\n"
-        + json_payload(payload)
-    )
-    return session_state.session.maybe_prepend_caveat(text, topic="dcl")
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def dcl_find_msms(precursor_mz: float, file_path: str | None = None,
                   rt: float | None = None, mz_tol: float = 0.01,
-                  rt_tol: float = 0.2, top_n_peaks: int | None = None) -> str:
+                  rt_tol: float = 0.2, top_n_peaks: int | None = None,
+                  dataset_handle: str | None = None) -> str:
     """precursor m/z（任意で RT）に一致する MS/MS を `.dcl` から引く。
 
     アノテーションの裏取り（期待フラグメントが実際に出ているか）に使う。RT を渡すと
     同一 m/z の別溶出ピークを分離できる。該当なしは `status="not_found"`。
+    file_path: 読む `.dcl`。省けば直近のデータセット（または dataset_handle）の `.dcl`
+        （データフォルダは探さない。データセットが無ければ missing_state）。
     """
-    resolved = resolve_dcl_file_path(file_path)
-    if not resolved:
-        return json_payload({"status": "error", "message": "データディレクトリに .dcl ファイルが見つかりませんでした。"})
+    from metabolomix.tools._holder import alignment_paths, resolve_holder
+
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    if file_path is not None and not os.path.isfile(file_path):
+        return json_payload({"status": "error", "message":
+                             f"指定された .dcl（{os.path.basename(file_path)}）がありません。"})
+    _arf2, resolved, lacking = alignment_paths(holder, dataset_handle, None, file_path,
+                                               need=("dcl",))
+    if lacking:
+        return json_payload(lacking)
     limit = _DEFAULT_TOP_PEAKS if top_n_peaks is None else (top_n_peaks or None)
     try:
         results = deserialize_dcl(resolved, include_spectrum=True, top_n_peaks=limit)
@@ -127,8 +93,8 @@ def dcl_spot_spectrum(spot_id: int, arf2_path: str | None = None, dcl_file: str 
     アラインメント `.dcl` の `dcl[spot_id]` を返す（索引の崩れは `dcl_precursor_mismatch`、
     ID が無ければ `spot_not_found`、MS/MS が無ければ `not_found`）。mzTab-M の SMF_ID は
     スポット ID と同じ。
-    dataset_handle: `dataset_handle_open` が返したハンドル。`arf2_path` / `dcl_file` を省けば
-        ハンドルの `.arf2` / `.dcl` を使う。省略時は現在のデータフォルダから探す。
+    dataset_handle: `load_dataset` が返したハンドル（省略時は直近）。`arf2_path` / `dcl_file` を省けば
+        そのデータセットの `.arf2` / `.dcl` を使う（データフォルダは探さない）。
     """
     from metabolomix.library.tools import spot_msms_query
     from metabolomix.tools._holder import alignment_paths, resolve_holder
@@ -172,7 +138,7 @@ def dcl_diagnostic_ions(spot_ids: list[int], ions: list[dict], arf2_path: str | 
     TSV（`spot_id label kind target_mz found observed_mz relative_intensity status`）。
     `status` が `ok` 以外の行（MS/MS が無い・索引の崩れ）は照会していない（`found` は空）——
     「イオンが無かった」と読まない。
-    dataset_handle: ハンドルの `.arf2` / `.dcl` を使う。省略時は現在のデータフォルダ。
+    dataset_handle: そのハンドルの `.arf2` / `.dcl` を使う。省略時は直近のデータセット。
     """
     from metabolomix.analysis import msms_rules
     from metabolomix.arf2.reader import format_spots_as_table
@@ -204,6 +170,8 @@ def dcl_diagnostic_ions(spot_ids: list[int], ions: list[dict], arf2_path: str | 
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
     arf2_path, dcl_file, lacking = alignment_paths(holder, dataset_handle, arf2_path, dcl_file)
+    if lacking and "error" in lacking:  # データセットが無い（missing_state）。行には並べない
+        return json_payload(lacking)
     rows = []
     for spot_id in spot_ids:
         spot = lacking or spot_msms_query(int(spot_id), arf2_path=arf2_path, dcl_file=dcl_file,

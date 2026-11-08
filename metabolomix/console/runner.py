@@ -1,8 +1,8 @@
 """MS-DIAL Console の実行体解決とコマンド組み立て。
 
 exe_path は引数で注入できる（テスト用 fake の差し込みに使う）。
-既定は `metabolomix.core.user_config` の `msdial.exe`（環境変数 MSDIAL_EXE →
-`lipidmix.local.toml` の `[msdial] exe`）から取得し、決められなければ
+既定は `metabolomix.core.user_config` の `msdial.exe`（`lipidmix.local.toml` の
+`[msdial] exe`）から取得し、決められなければ
 `MsdialExeNotFoundError`（EnvironmentError）を上げる。
 
 **Console を実際に起動して見張るのは `metabolomix.console.execution.supervise`**。
@@ -47,7 +47,7 @@ class MsdialExeNotFoundError(EnvironmentError):
 
 
 def get_exe_path() -> str:
-    """Console の実行体のパス（環境変数 MSDIAL_EXE → 設定ファイルの `[msdial] exe`）。"""
+    """Console の実行体のパス（設定ファイルの `[msdial] exe`）。"""
     try:
         setting = user_config.get_setting("msdial.exe")
     except user_config.ConfigInvalidError as exc:
@@ -57,9 +57,8 @@ def get_exe_path() -> str:
             "MS-DIAL Console の実行体が設定されていません。"
             + user_config.missing_hint("msdial.exe", _EXE_WHAT),
             details=user_config.describe_missing("msdial.exe"))
-    if setting.source == "config_file" and not Path(setting.value).is_file():
+    if not Path(setting.value).is_file():
         # 設定ファイルの値は利用者が書き写したパスなので、typo はここで出どころ付きで返す。
-        # 環境変数の値は PATH 解決される素の名前でありうるので存在確認しない。
         raise MsdialExeNotFoundError(
             f"{user_config.setting_label(setting)} が指すファイルがありません: {setting.value}",
             details=user_config.describe_missing("msdial.exe", setting))
@@ -80,7 +79,7 @@ def probe_console_exe(
     *,
     raise_on_os_error: bool = False,
 ) -> Literal["console", "not_console", "timeout"]:
-    """MSDIAL_EXE が Console 実行体かを --help の出力で判定し、時間切れを区別して返す。
+    """`[msdial] exe` が Console 実行体かを --help の出力で判定し、時間切れを区別して返す。
 
     Console は旧ビルドも master ビルドも --help（旧は引数エラー時の usage）に
     サブコマンド名 `lcms` を含む。GUI の MSDIAL.exe はコンソール出力を持たず、
@@ -138,7 +137,7 @@ def probe_timeout_details() -> dict:
 def probe_timeout_message(exe: str) -> str:
     """`MSDIAL_EXE_PROBE_TIMEOUT` の文面（3 つの呼び出し元で共有する）。"""
     return (
-        f"Console の実行体（[msdial] exe / MSDIAL_EXE）の --help が {PROBE_TIMEOUT_S} 秒を"
+        f"Console の実行体（[msdial] exe）の --help が {PROBE_TIMEOUT_S} 秒を"
         f"{PROBE_RETRIES + 1} 回待っても返りませんでした: {exe}  "
         "Console でないとは判定できていません。初回起動の遅れ（Defender の走査・.NET の"
         "読み込み）なら、もう一度呼び直すと通ります。毎回この表示になるなら GUI の "
@@ -213,7 +212,7 @@ def _default_search_roots() -> list[Path]:
 def msdial_exe_candidates(search_roots=None, max_depth: int = 3) -> list[str]:
     """MS-DIAL Console 実行体の候補を返す（設定はしない）。
 
-    MSDIAL_EXE を設定できるのは人間だけなので、サーバにできるのは「どこに
+    `[msdial] exe` を設定できるのは人間だけなので、サーバにできるのは「どこに
     ありそうか」を示すところまで。深さを制限するのは、ホーム配下を無制限に
     歩くと計画が数十秒止まるため。
     """

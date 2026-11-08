@@ -193,18 +193,23 @@ _MSP_TABLE_KEYS = frozenset(key.lower() for key in method_file_mod.MSP_ANNOTATOR
 def _without_library_location(record: dict) -> dict:
     """戻り値用の record の写しから、研究室ライブラリの置き場所を除く（ファイル名だけ残す）。
 
-    研究室 MSP（`msp.path` と `Msp file path` の上書き）、library_mode="msp_then_lbm" の
-    LBM（`[library] lbm` 由来の `lbm.path` と `Lbm file path` の上書き。v8）、絶対パスで
-    書かれた MSP 注釈器設定表の上書きが対象。auto の LBM（`[msdial] lbm` 等）は従来どおり残す。
+    研究室 MSP（`msp.path` と `Msp file path` の上書き）、`[library] lbm` 由来の LBM
+    （`lbm.path` と `Lbm file path` の上書き。library_mode を問わない——msp_then_lbm は
+    常に、auto は出どころが `config_file` のとき。`inputs.is_lab_lbm`）、絶対パスで
+    書かれた MSP 注釈器設定表の上書きが対象。auto のそれ以外の LBM（メソッドの宣言・
+    ビルド生成物・実行体のフォルダから解決したもの）は従来どおり残す。
     戻り値は LLM の文脈に入る（spec 2026-10-07 §3.3）。保存された record は変えない
     ——resume の再検査（`inputs.verify_inputs`）が絶対パスを要る。
     """
     inputs = record.get("inputs")
-    if not isinstance(inputs, dict) or not isinstance(inputs.get("msp"), dict):
+    if not isinstance(inputs, dict):
+        return record
+    lab_lbm = inputs_mod.is_lab_lbm(inputs)
+    if not isinstance(inputs.get("msp"), dict) and not lab_lbm:
         return record
     redacted = copy.deepcopy(record)
-    lab_lbm = redacted["inputs"].get("library_mode") == "msp_then_lbm"
-    sections = [redacted["inputs"]["msp"]]
+    sections = ([redacted["inputs"]["msp"]] if isinstance(redacted["inputs"].get("msp"), dict)
+                else [])
     if lab_lbm and isinstance(redacted["inputs"].get("lbm"), dict):
         sections.append(redacted["inputs"]["lbm"])
     for section in sections:

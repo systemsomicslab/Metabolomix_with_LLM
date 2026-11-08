@@ -1,6 +1,8 @@
-"""研究室の参照ライブラリを設定ファイルから引く（spec 2026-10-06 §6・§7）。
+"""研究室の参照ライブラリの指定（`library_load` の `file_path`）。
 
-置き場所（ディレクトリ）は戻り値に出さない規則を、設定ファイル経由でも守る。
+B-2b でライブラリの探索（データフォルダの `.msp` / `.dbs`・設定の極性の MSP）は消えた。
+指定先は `file_path` の明示か、データセットが覚えたもの（`tests/test_pathless_tools.py`）。
+置き場所（ディレクトリ）は戻り値に出さない規則を、明示のパスでも守る。
 """
 from __future__ import annotations
 
@@ -12,16 +14,8 @@ from metabolomix.core.path_resolvers import LibraryPathError, resolve_library_pa
 
 
 @pytest.fixture
-def cfg(tmp_path, monkeypatch):
-    path = tmp_path / "conf" / "lipidmix.local.toml"
-    path.parent.mkdir()
-    monkeypatch.setenv("LIPIDMIX_CONFIG", str(path))
-    # data ディレクトリの *.msp / *.dbs を拾わせない
-    from metabolomix.core import mcp_core
-    empty = tmp_path / "data"
-    empty.mkdir()
-    monkeypatch.setattr(mcp_core, "DATA_DIR", empty)
-    return path
+def lab(tmp_path):
+    return tmp_path / "secret-lab-share"
 
 
 def _msp(path):
@@ -30,91 +24,50 @@ def _msp(path):
     return path
 
 
-def test_ion_mode_reads_the_config_file(cfg, tmp_path):
+def test_resolve_library_path_does_not_search(tmp_path, monkeypatch):
+    """パスを省いても、データフォルダ・設定の極性の MSP を探さない（None を返すだけ）。"""
+    from tests.config_fixtures import use_config
+
     pos = _msp(tmp_path / "lab" / "pos.msp")
-    cfg.write_text(f"[library]\nmsp_positive = '{pos}'\n", encoding="utf-8")
-    assert resolve_library_path(ion_mode="positive") == str(pos)
+    use_config(monkeypatch, tmp_path, {"library.msp_positive": str(pos)})
+    monkeypatch.chdir(_msp(tmp_path / "cwd" / "x.msp").parent)
+    assert resolve_library_path() is None
+    assert resolve_library_path(str(pos)) == str(pos)
 
 
-def test_single_configured_polarity_is_used_without_ion_mode(cfg, tmp_path):
-    neg = _msp(tmp_path / "lab" / "neg.msp")
-    cfg.write_text(f"[library]\nmsp_negative = '{neg}'\n", encoding="utf-8")
-    assert resolve_library_path() == str(neg)
-
-
-def test_both_polarities_across_sources_are_ambiguous(cfg, tmp_path, monkeypatch):
-    """片方が環境変数・片方が設定ファイルでも、両方あれば ion_mode を求める。"""
-    pos = _msp(tmp_path / "lab" / "pos.msp")
-    neg = _msp(tmp_path / "lab" / "neg.msp")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(pos))
-    cfg.write_text(f"[library]\nmsp_negative = '{neg}'\n", encoding="utf-8")
+def test_missing_explicit_file_names_the_file_not_the_directory(lab):
     with pytest.raises(LibraryPathError) as exc:
-        resolve_library_path()
-    assert exc.value.code == "MSP_AMBIGUOUS"
-    assert "環境変数 MSDIAL_MSP_POS" in exc.value.message
-    assert "[library] msp_negative" in exc.value.message
-
-
-def test_missing_file_from_the_config_names_the_key_not_the_directory(cfg, tmp_path):
-    gone = tmp_path / "secret-lab-share" / "neg.msp"
-    cfg.write_text(f"[library]\nmsp_negative = '{gone}'\n", encoding="utf-8")
-    with pytest.raises(LibraryPathError) as exc:
-        resolve_library_path(ion_mode="negative")
-    assert exc.value.code == "MSP_ENV_NOT_FOUND"
-    assert "lipidmix.local.toml の [library] msp_negative" in exc.value.message
+        resolve_library_path(str(lab / "neg.msp"))
+    assert exc.value.code == "LIBRARY_NOT_FOUND"
     assert "neg.msp" in exc.value.message
     dumped = exc.value.message + json.dumps(exc.value.details, ensure_ascii=False)
     assert "secret-lab-share" not in dumped
 
 
-def test_broken_config_file_is_config_invalid(cfg):
-    cfg.write_text("[library\n", encoding="utf-8")
-    with pytest.raises(LibraryPathError) as exc:
-        resolve_library_path(ion_mode="positive")
-    assert exc.value.code == "CONFIG_INVALID"
-
-
-def test_library_load_missing_config_msp_does_not_leak_the_directory(cfg, tmp_path):
+def test_library_load_missing_file_does_not_leak_the_directory(lab):
     from metabolomix.library.tools import library_load
-    gone = tmp_path / "secret-lab-share" / "pos.msp"
-    cfg.write_text(f"[library]\nmsp_positive = '{gone}'\n", encoding="utf-8")
-    raw = library_load(ion_mode="positive")
+
+    raw = library_load(file_path=str(lab / "pos.msp"))
     payload = json.loads(raw)
-    assert payload["code"] == "MSP_ENV_NOT_FOUND"
-    assert payload["details"]["setting"] == "library.msp_positive"
+    assert payload["code"] == "LIBRARY_NOT_FOUND"
+    assert "pos.msp" in payload["message"]
     assert "secret-lab-share" not in raw
 
 
-def test_library_load_with_nothing_configured_says_where_to_write(cfg):
-    from metabolomix.library.tools import library_load
-    payload = json.loads(library_load(ion_mode="negative"))
-    assert payload["status"] == "error"
-    assert "[library] msp_negative" in payload["message"]
-    assert payload["details"]["setting"] == "library.msp_negative"
-
-
-def test_library_load_normalises_ion_mode_in_the_not_found_hint(cfg):
-    """大文字・空白の ion_mode でも、案内は同じ極性のキーを指す。"""
-    from metabolomix.library.tools import library_load
-    payload = json.loads(library_load(ion_mode=" Negative "))
-    assert payload["status"] == "error"
-    assert payload["details"]["setting"] == "library.msp_negative"
-    assert "[library] msp_negative" in payload["message"]
-    assert "MSDIAL_MSP_NEG" in payload["message"]
-
-
-def test_library_load_open_failure_does_not_leak_a_forward_slash_directory(cfg, tmp_path, monkeypatch):
-    """環境変数に `/` 区切りで書かれた置き場所は、OSError の文言にも `/` のまま出る。伏せ漏れしない。"""
+def test_library_load_open_failure_does_not_leak_a_forward_slash_directory(
+        tmp_path, lab, monkeypatch):
+    """`/` 区切りで書かれた置き場所は、OSError の文言にも `/` のまま出うる。伏せ漏れしない。"""
     from metabolomix.library import tools as library_tools
-    lab = tmp_path / "secret-lab-share"
+    from tests.config_fixtures import use_config
+
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     pos = _msp(lab / "pos.msp")
-    monkeypatch.setenv("MSDIAL_MSP_POS", lab.as_posix() + "/pos.msp")
 
     def boom(path, **_kwargs):
         raise OSError(f"cannot open {lab.as_posix()}/pos.msp.sqlite")
 
     monkeypatch.setattr(library_tools, "open_store", boom)
-    raw = library_tools.library_load(ion_mode="positive")
+    raw = library_tools.library_load(file_path=f"{lab.as_posix()}/pos.msp")
     assert json.loads(raw)["status"] == "error"
     assert pos.exists()
     assert lab.as_posix() not in raw

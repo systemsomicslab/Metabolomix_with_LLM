@@ -17,6 +17,7 @@ from metabolomix.console import execution, job_manager
 from metabolomix.console import method_file as method_file_mod
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.pipeline import inputs
+from tests.config_fixtures import use_config
 
 
 def _bruker(root):
@@ -115,8 +116,8 @@ def test_console_plan_returns_envelope_for_non_ascii_method(tmp_path, monkeypatc
     app = tmp_path / "msdial_app"
     app.mkdir()
     (app / "Lipids.lbm2").touch()
-    monkeypatch.setenv("MSDIAL_EXE", str(app / "MSDIALCUI.exe"))
-    monkeypatch.delenv("MSDIAL_LBM", raising=False)
+    (app / "MSDIALCUI.exe").touch()
+    use_config(monkeypatch, tmp_path, {"msdial.exe": app / "MSDIALCUI.exe"})
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     root = tmp_path / "data"
     root.mkdir()

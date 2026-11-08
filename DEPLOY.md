@@ -4,8 +4,6 @@ Each member runs the MCP server on their own machine:
 
 - Source code: each member keeps a local clone.
 - MCP server: each member runs the local `server.py` through stdio.
-- Literature search: each local MCP server calls Europe PMC directly.
-- Knowledge: kept locally under the clone (`knowledge/`).
 - Objectives and reports: written to `reports/` inside the analysis folder,
   next to the raw data and MS-DIAL output (never under the clone).
 - The `LIPIDMIX_*_DIR` environment variables only override these locations;
@@ -16,9 +14,8 @@ Each member runs the MCP server on their own machine:
       |
       | reads/writes local notes
       v
-<clone>\knowledge
-      ├─ *.md
-      └─ _inbox\*.md
+<analysis folder>\reports
+      └─ *.md
 ```
 
 ## Member Setup
@@ -36,16 +33,22 @@ Pathway projection (`pathway_project` / `pathway_plot`) uses the lab's MSLipidMa
 server when `[mslipidmapper] mslipidmapper_api_url` is set, and falls back to local R otherwise. Local R
 needs a one-time `Rscript r/setup.R`; see [USAGE.md](USAGE.md) section 16.
 
-Set environment variables in the MCP client configuration, or in a shell when
-testing manually. Only `LIPIDMIX_DATA_DIR` is usually needed; the others are
-optional overrides:
+No environment variable is required. The data location is never configured: pass the MS-DIAL
+output folder to `list_data_files` / `load_dataset`, and the tools that take no path use the
+current dataset's files. Environment variables are optional overrides, set in the MCP client
+configuration or in a shell when testing manually:
 
 ```powershell
-$env:LIPIDMIX_DATA_DIR="C:\path\to\msdial\output"
-# Optional: keep accumulated notes outside the clone.
-# $env:LIPIDMIX_KNOWLEDGE_DIR="C:\path\to\metabolomix\knowledge"
+# Optional: read the settings file from somewhere other than the clone root.
+# $env:LIPIDMIX_CONFIG="C:\path\to\lipidmix.local.toml"
 .venv\Scripts\python.exe server.py
 ```
+
+External assets (MS-DIAL Console, reference libraries, MSLipidMapper), where reports and the
+library cache go (`[paths] reports_dir` / `library_cache`), the open dataset-handle limit
+(`[server] max_dataset_handles`) and the semantics digest (`[server] caveat_mode`) are set in
+`lipidmix.local.toml` (copy `lipidmix.example.toml`), not in environment variables. The library
+cache defaults to `data/.library-cache` next to that settings file.
 
 Do not set `LIPIDMIX_TRANSPORT=streamable-http` for this mode. The default
 transport is `stdio`.
@@ -57,10 +60,7 @@ transport is `stdio`.
   "mcpServers": {
     "ms-data-parser": {
       "command": "C:\\Users\\<name>\\Lipidmix_with_LLM\\.venv\\Scripts\\python.exe",
-      "args": ["C:\\Users\\<name>\\Lipidmix_with_LLM\\server.py"],
-      "env": {
-        "LIPIDMIX_DATA_DIR": "C:\\path\\to\\msdial\\output"
-      }
+      "args": ["C:\\Users\\<name>\\Lipidmix_with_LLM\\server.py"]
     }
   }
 }
@@ -75,9 +75,8 @@ already-imported modules in memory, so swapping code underneath a live process
 leaves it half-old and half-new; applying an update is therefore an explicit
 user action.
 
-When the clone is behind, the notice appears in `load_dataset` (as a line at the
-top of its output) and in the `dataset_status` / `console_status` payloads (as an
-`update_available` key). Up to date, nothing is added.
+When the clone is behind, the notice appears in the `load_dataset`, `dataset_status` and
+`console_status` payloads (as an `update_available` key). Up to date, nothing is added.
 
 To apply an update, ask Claude to run the `server_update` tool (say "update the
 server"). It fast-forwards the clone to `origin/main` and, only when
@@ -132,14 +131,12 @@ keeps working against the global Python.
 
 ## Operational Notes
 
-- `knowledge/` and each analysis folder's `reports/` are each member's own local state.
+- Each analysis folder's `reports/` is each member's own local state.
   Nothing is shared between members by the server.
-- Review `knowledge/_inbox` through `lipidmix://knowledge/inbox`, then promote
-  or reject notes with `ingest_promote` / `ingest_reject`.
-- Note writes, promote, and reject operations serialize through a per-directory
+- Note writes serialize through a per-directory
   lock file (`.metabolomix.lock`), so concurrent tool calls (for example, two MCP
   client sessions on the same machine) do not interleave writes to the same
   directory. If a crashed process leaves a stale `.metabolomix.lock` behind, note
   writes time out; delete the file once no server is running.
-- `pai2_parser` returns the PCA plot through MCP only. It no longer writes
-  `pca_plot_latest.png` into the data directory.
+- Figures are returned through MCP (`dataset_plot`); `save_figure` writes files only under the
+  dataset's `reports/figures/`, never into the data directory.

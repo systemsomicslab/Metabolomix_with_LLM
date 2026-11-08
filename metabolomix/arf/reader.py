@@ -1,10 +1,10 @@
 import argparse
-import glob
 import io
 import os
 from enum import Enum
 import sys
 import re
+from typing import Iterator
 
 import lz4.block
 import msgpack
@@ -15,8 +15,6 @@ matplotlib.use('Agg')  # 非インタラクティブバックエンドを使用
 import matplotlib.pyplot as plt
 import pprint
 
-from metabolomix.analysis.pca import run_pca  # 後方互換の再エクスポート。消すと ARF テストのモックが効かなくなる
-from metabolomix.core.data_config import get_data_dir
 from metabolomix.msdial.classes import get_sample_class_id
 from metabolomix.msdial.tags import get_sample_peak_tag_info
 
@@ -53,30 +51,13 @@ def _decode(value):
     return value.decode('utf-8', errors='ignore') if isinstance(value, bytes) else value
 
 
-def _is_arf_feature_container(datas) -> bool:
-    if not isinstance(datas, list) or len(datas) < 1:
-        return False
-    first = datas[0]
-    if not isinstance(first, list) or len(first) < 10:
-        return False
-    if not isinstance(first[0], int) or not isinstance(first[1], int):
-        return False
-
-    nested_groups = [item for item in first[2:] if isinstance(item, list) and len(item) >= 3 and all(isinstance(sub, list) for sub in item)]
-    if nested_groups:
-        sample_group = nested_groups[0]
-        print(f"[INFO] Detected ARF format: peak groups have {len(sample_group)} elements", file=sys.stderr)
-
-    return len(nested_groups) >= max(10, len(first[2:]) // 2)
-
-
 def _convert_arf_peak_group(
     group: list,
     group_index: int | None = None,
     source_block_index: int | None = None,
     source_local_index: int | None = None,
 ) -> dict | None:
-    if not isinstance(group, list) or len(group) < 3 or not all(isinstance(row, list) for row in group):
+    if not _is_arf_peak_group(group):
         return None
 
     representative = group[0]
@@ -200,8 +181,10 @@ def _decompress_lz4_payload(compressed_data: bytes) -> bytes:
     )
     size = next(unpacker)
     read_size = unpacker.tell()
+    # スライスの写しを作らない（圧縮ペイロードの写しが 1 つ増える。展開後の大きさに比べ小さいが、
+    # 1 ブロックが数百 MB の実ファイルでは無視できない）。
     return lz4.block.decompress(
-        compressed_data[read_size:],
+        memoryview(compressed_data)[read_size:],
         uncompressed_size=size,
     )
 
@@ -239,14 +222,15 @@ def _iter_lz4_msgpack_blocks(data: bytes):
 def _is_arf_peak_group(item) -> bool:
     """item が 1スポット分の「グループ（= サンプル行の並び）」か判定する。
 
-    グループは行(AlignmentChromPeakFeature)のリストなので、非空かつ全要素が
-    リストになる。行そのものは大半がスカラー要素を持つため、この条件では
-    グループと誤認されない。
+    グループは空でないリストで、要素がすべてピークの行（`_is_alignment_peak_row`）。
+    行数では見分けない（1〜2 試料のアラインメントは行が 1〜2 本）。ヘッダの入れ子リスト
+    （ChromXs の形 `[[1.0, 0, 0], ...]` など）は行の形（25 要素超・Key18 が数）を満たさず、
+    群に数えない。
     """
     return (
         isinstance(item, list)
         and len(item) > 0
-        and all(isinstance(row, list) for row in item)
+        and all(_is_alignment_peak_row(row) for row in item)
     )
 
 
@@ -261,14 +245,34 @@ def _is_arf_feature_container_object(item) -> bool:
     return isinstance(item, list) and any(_is_arf_peak_group(e) for e in item)
 
 
-def _iter_lz4_decompressed_blocks(data: bytes):
+def _top_level_stream(source):
+    """トップレベルのオブジェクト（LZ4 ブロック）を順に解く Unpacker。
+
+    source はファイル（バイナリで開いたもの）か bytes。ファイルなら全体を 1 つの bytes に
+    読み込まず、ブロック 1 つ分ずつ読む（圧縮されたブロックの写しは 1 つずつしか持たない）。
+    """
+    if isinstance(source, (bytes, bytearray, memoryview)):
+        return _msgpack_stream(bytes(source))
+    return msgpack.Unpacker(
+        source,
+        raw=False,
+        unicode_errors="ignore",  # _msgpack_stream と同じ規約
+        strict_map_key=False,
+        max_buffer_size=1024 * 1024 * 1024,
+        read_size=1024 * 1024,
+    )
+
+
+def _iter_lz4_decompressed_blocks(source):
     """トップレベルのブロックを展開済みバイト列のまま返す（msgpack は解かない）。
 
     実ファイルは全体が 1 ブロックのことがある（185 MB → 展開 966 MB。issue #4）。
     展開後を `list(...)` で一度に Python オブジェクト化すると全行が同時に生きるので、
-    解くのは呼び出し側がグループ単位で行う。
+    解くのは呼び出し側がグループ単位で行う。LZ4 のブロックは丸ごとでしか伸長できないので、
+    展開後のバイト列はブロック 1 つ分を持つ（それより細かくはできない）。
+    source はファイルか bytes（`_top_level_stream`）。
     """
-    for block_index, obj in enumerate(_msgpack_stream(data)):
+    for block_index, obj in enumerate(_top_level_stream(source)):
         payload = _payload_from_top_level_object(obj)
         obj = None  # 圧縮ペイロードの写しを展開後まで抱えない
         if payload is None:
@@ -330,8 +334,8 @@ def _iter_peak_groups_in_stream(decompressed: bytes):
         return
 
 
-def _iter_arf_peak_groups(data: bytes):
-    for block_index, decompressed in _iter_lz4_decompressed_blocks(data):
+def _iter_arf_peak_groups(source):
+    for block_index, decompressed in _iter_lz4_decompressed_blocks(source):
         local_index = 0
         for group in _iter_peak_groups_in_stream(decompressed):
             yield block_index, local_index, group
@@ -352,7 +356,7 @@ def extract_arf_data(
     source_block_index: int | None = None,
     source_local_index: int | None = None,
 ) -> dict | None:
-    if isinstance(data, list) and len(data) >= 3 and all(isinstance(row, list) for row in data):
+    if _is_arf_peak_group(data):
         return _convert_arf_peak_group(
             data,
             group_index=group_index,
@@ -412,15 +416,21 @@ def _slim_row(row, shared_names: dict):
     return slim
 
 
-def deserialize(file_like_object) -> list[dict]:
-    data = file_like_object.read()
-    results = []
-    rows = 0
-    shared_names: dict[str, str] = {}
+def iter_groups(file_like_object) -> Iterator[dict]:
+    """`.arf` のスポットを 1 つずつ返す（`deserialize` の 1 要素と同じ形）。
 
+    `{"MasterAlignmentID", "AlignmentID", "RT", "MassCenter", "IonMode", "Name",
+    "HeightAverage", "AlignedPeakProperties": [細くした行, ...], "SourceBlockIndex",
+    "SourceLocalIndex"}`。ファイルを丸ごと 1 つの bytes に読まず、群は msgpack の
+    Unpacker が 1 つずつ取り出す。全体のリストは作らない（呼び出し側が要るものだけ残す）。
+
+    RAM が尽きたら、そこまでに返したスポット数・行数を `ArfMemoryError` に載せて投げ直す。
+    """
+    spots = rows = 0
+    shared_names: dict[str, str] = {}
     try:
         for group_index, (block_index, local_index, group) in enumerate(
-            _iter_arf_peak_groups(data),
+            _iter_arf_peak_groups(file_like_object),
             start=0,
         ):
             formatted = extract_arf_data(
@@ -429,20 +439,100 @@ def deserialize(file_like_object) -> list[dict]:
                 source_block_index=block_index,
                 source_local_index=local_index,
             )
-            if formatted is not None:
-                formatted["MasterAlignmentID"] = group_index
-                formatted["AlignmentID"] = group_index
-                # spot 単位の値（RT / Name 等）は生の代表行から取り終えている。
-                formatted["AlignedPeakProperties"] = [
-                    _slim_row(row, shared_names) for row in group
-                ]
-                results.append(formatted)
-                rows += len(group)
+            if formatted is None:
+                continue
+            formatted["MasterAlignmentID"] = group_index
+            formatted["AlignmentID"] = group_index
+            # spot 単位の値（RT / Name 等）は生の代表行から取り終えている。
+            formatted["AlignedPeakProperties"] = [
+                _slim_row(row, shared_names) for row in group
+            ]
+            spots += 1
+            rows += len(group)
+            group = None  # 返したあとまで生の行を抱えない
+            yield formatted
     except MemoryError as exc:
         # 規模を運ぶ例外へ詰め替える。ここで確保するのは小さなオブジェクト 1 つで、
         # 失敗した確保（数 GB 単位）とは桁が違う。
-        raise ArfMemoryError(spots=len(results), rows=rows) from exc
-    return results
+        raise ArfMemoryError(spots=spots, rows=rows) from exc
+
+
+def deserialize(file_like_object) -> list[dict]:
+    """`.arf` の全スポットのリスト（`iter_groups` を最後まで回したもの）。"""
+    return list(iter_groups(file_like_object))
+
+
+#: msgpack の ext の型バイト → データ長の読み方（fixext は長さ固定、ext8/16/32 は長さのバイト数）。
+_FIXEXT_LENGTH = {0xD4: 1, 0xD5: 2, 0xD6: 4, 0xD7: 8, 0xD8: 16}
+_EXT_LENGTH_BYTES = {0xC7: 1, 0xC8: 2, 0xC9: 4}
+
+
+def _leading_size(payload: bytes) -> int:
+    """LZ4 ブロックの先頭の整数（伸長後の大きさ）。整数でなければ 0（そのブロックは読まれない）。"""
+    try:
+        size = next(msgpack.Unpacker(io.BytesIO(payload), raw=False, strict_map_key=False))
+    except (StopIteration, msgpack.OutOfData, ValueError):
+        return 0
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        return 0
+    return size
+
+
+def _skip(file_like_object, count: int) -> int:
+    """count バイト読み飛ばし、実際に飛ばせたバイト数を返す（末尾が切れていれば少ない）。"""
+    if count <= 0:
+        return 0
+    seekable = getattr(file_like_object, "seekable", None)
+    if seekable is not None and seekable():
+        here = file_like_object.tell()
+        end = file_like_object.seek(0, io.SEEK_END)
+        target = min(here + count, end)
+        file_like_object.seek(target)
+        return target - here
+    skipped = 0
+    while skipped < count:
+        chunk = file_like_object.read(min(count - skipped, 1024 * 1024))
+        if not chunk:
+            break
+        skipped += len(chunk)
+    return skipped
+
+
+def uncompressed_size(file_like_object) -> int:
+    """`.arf` の LZ4 ブロックの伸長後の大きさの和（バイト）。伸長しない。
+
+    各ブロックの先頭の整数（MessagePack-CSharp の Lz4Block が書く伸長後の長さ）を足す。
+    ext のブロックはヘッダと先頭の整数だけを読み、残りは読み飛ばす。ext でない
+    トップレベル（`[ヘッダ, 本体]` の配列）は msgpack に解かせる（`_payload_from_top_level_object`
+    と同じ見分け方）。末尾が切れたブロックは、reader も読まないので数えない。
+    """
+    total = 0
+    while True:
+        first = file_like_object.read(1)
+        if not first:
+            return total
+        tag = first[0]
+        if tag in _FIXEXT_LENGTH:
+            length = _FIXEXT_LENGTH[tag]
+        elif tag in _EXT_LENGTH_BYTES:
+            width = _EXT_LENGTH_BYTES[tag]
+            raw_length = file_like_object.read(width)
+            if len(raw_length) < width:
+                return total
+            length = int.from_bytes(raw_length, "big")
+        else:
+            file_like_object.seek(-1, io.SEEK_CUR)
+            for obj in _top_level_stream(file_like_object):
+                payload = _payload_from_top_level_object(obj)
+                if payload is not None:
+                    total += _leading_size(payload)
+            return total
+        if not file_like_object.read(1):  # ext の型コード
+            return total
+        head = file_like_object.read(min(length, 9))  # msgpack の整数は最大 9 バイト
+        if _skip(file_like_object, length - len(head)) + len(head) < length:
+            return total
+        total += _leading_size(head)
 
 
 def _is_alignment_peak_row(data) -> bool:
@@ -451,7 +541,7 @@ def _is_alignment_peak_row(data) -> bool:
     file_name だけ欲しい呼び出し（`exclusions._entry_file_name`）と、dict を組む
     本体とで判定が食い違わないよう、ここ 1 か所に置く。
     """
-    return (isinstance(data, list) and len(data) >= 3
+    return (isinstance(data, list)
             and len(data) > 25 and isinstance(data[18], (int, float)))
 
 
@@ -667,7 +757,7 @@ def extract_peak_properties(deserialized_list: list[dict]) -> pd.DataFrame:
 def count_peak_property_rows(deserialized_list: list[dict]) -> int:
     """`extract_peak_properties` が返す行数だけを、DataFrame を組まずに数える。
 
-    `arf_parser` は「抽出された総ピークレコード数」と「平均サンプル数/スポット」
+    旧 ARF 要約ツールは「抽出された総ピークレコード数」と「平均サンプル数/スポット」
     しか使っていないのに、そのために spot × 注入ぶんの dict を作って pandas の
     DataFrame へ積んでいた（393MB の `.arf` で 881 万行）。行の採否条件は
     `extract_peak_properties` と同一に保つ——ずれたら報告値が嘘になる。
@@ -915,7 +1005,7 @@ def get_pca_loading_features(pca_result: dict, deserialized_list: list[dict],
     返り値: [{"pc": "PC1", "var_ratio": <%>, "positive": [item...], "negative": [item...]}, ...]
       item = {"id", "value", "annotation", "m_z", "rt"}（feature名 "Spot_<id>_<prop>" から id を取得し
       deserialized_list[id] のメタデータを付与）。
-    metabolomix.arf.tools の arf_parser / arf_pca_preprocessed が共通で利用する。
+    旧 ARF のツール（撤去済み）が共通で利用していた。
     """
     loadings = pca_result.get("loadings", [])
     evr = pca_result.get("explained_variance_ratio", [])
@@ -1001,62 +1091,6 @@ def _print_feature_details(feature_pairs: list[tuple], deserialized_list: list[d
         print(f"    ID {spot_id:>4}  loading={loading_value:+.6f}  m/z={mz_s}  RT={rt_s} min  {name}")
 
 
-def find_input_file(file_path: str | None = None, index: int = 0) -> str | None:
-    if file_path and os.path.exists(file_path):
-        return file_path
-
-    # .arf ファイルのみを検索（探索先は data_config 経由で環境変数上書き可）
-    candidates = glob.glob(os.path.join(str(get_data_dir()), "*.arf"))
-    return candidates[index] if candidates else None
-
-
-def _list_arf_files() -> list[str]:
-    """データディレクトリ内の .arf ファイルを名前順で返す。"""
-    return sorted(glob.glob(os.path.join(str(get_data_dir()), "*.arf")))
-
-
-def _select_arf_file(file_path: str | None, index: int | None) -> str | None:
-    """解析対象 .arf を決定する（非対話対応）。
-
-    優先順位: --file > --index > 対話プロンプト(端末時のみ) > 先頭ファイル[0]。
-    """
-    if file_path:
-        if os.path.exists(file_path):
-            return file_path
-        print(f"[WARNING] 指定ファイルが見つかりません: {file_path}", file=sys.stderr)
-        return None
-
-    candidates = _list_arf_files()
-    if not candidates:
-        return None
-
-    if index is not None:
-        if 0 <= index < len(candidates):
-            return candidates[index]
-        print(f"[WARNING] index {index} は範囲外です (0..{len(candidates) - 1})。", file=sys.stderr)
-        return None
-
-    # 番号未指定: 一覧を提示
-    print("解析可能な .arf ファイル:")
-    for i, c in enumerate(candidates):
-        print(f"  [{i}] {os.path.basename(c)}")
-
-    # 対話端末のときだけプロンプト。非対話(パイプ/リダイレクト)時は先頭を既定採用
-    if sys.stdin and sys.stdin.isatty():
-        try:
-            choice = int(input("何番目のファイルを解析しますか？ "))
-        except (ValueError, EOFError):
-            print("[INFO] 無効な入力のため [0] を使用します。", file=sys.stderr)
-            choice = 0
-        if not (0 <= choice < len(candidates)):
-            print("[INFO] 範囲外のため [0] を使用します。", file=sys.stderr)
-            choice = 0
-        return candidates[choice]
-
-    print("[INFO] 非対話モードのため先頭ファイル [0] を使用します。(--file/--index で明示指定可)",
-          file=sys.stderr)
-    return candidates[0]
-
 def summarize_arf_data(deserialized_list):
     """
     ARFデータの統計的要約を生成
@@ -1081,7 +1115,7 @@ def summarize_arf_data(deserialized_list):
 
 def main():
     parser = argparse.ArgumentParser(description="MS-DIAL .arf ファイルを解析します。")
-    parser.add_argument("--file", "-f", help="解析する .arf ファイルのパス")
+    parser.add_argument("--file", "-f", required=True, help="解析する .arf ファイルのパス（必須。データフォルダは探さない）")
     parser.add_argument("--export", "-e", help="CSV に書き出すパス")
     parser.add_argument("--pca", action="store_true", help="PCA を実行する")
     parser.add_argument("--output-pca", help="PCA 結果を JSON で保存するパス")
@@ -1097,17 +1131,15 @@ def main():
                         help="PCAに使用するプロパティ (例: height area). m_zやrtは量ではないため非推奨です。")
     parser.add_argument("--components", type=int, default=None,
                         help="計算する主成分の数 (デフォルト: 計算可能な最大数)")
-    parser.add_argument("--index", "-i", type=int, default=None,
-                        help="data/ 内の .arf 一覧から解析するファイルを番号で指定（非対話）。--file指定時は無視")
     parser.add_argument("--log-transform", action="store_true",
                         help="[任意] PCA前に log10 変換を適用する（強度の歪みを抑え条件分離が向上しやすい）")
     parser.add_argument("--min-detection-rate", type=float, default=0.0,
                         help="[任意] 特徴量(スポット)の実検出率による足切り 0.0-1.0（既定0=無効。例 0.5）")
     args = parser.parse_args()
 
-    file_path = _select_arf_file(args.file, args.index)
-    if not file_path:
-        raise FileNotFoundError(".arf ファイルが見つかりません。")
+    file_path = args.file
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f".arf ファイルが見つかりません: {file_path}")
 
     print(f"[INFO] 解析対象ファイル: {file_path}")
     with open(file_path, "rb") as f:
@@ -1176,6 +1208,7 @@ def main():
         if args.log_transform:
             print("[INFO] log10 変換: 有効")
         try:
+            from metabolomix.analysis.pca import run_pca
             pca_result = run_pca(matrix, n_components=args.components,
                                  log_transform=args.log_transform)
             print(f"[INFO] PCA 実行完了 (計算された主成分数: {len(pca_result['explained_variance_ratio'])})")

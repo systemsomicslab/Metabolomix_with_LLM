@@ -4,7 +4,7 @@
 `.arf2` の ion_mode の多数（`ion_mode_majority`）。どちらのアダプタでもジョブの宣言を優先し、
 測定側の多数は裏取りに使う。
 
-`dataset_feature_search` の目標照合と、再解析のハンドル（`dataset_handle_open`）が
+`dataset_feature_search` の目標照合と、再解析のハンドル（`load_dataset`）が
 同じ規則で極性を決めるための唯一の実装（spec 2026-10-19 §7）。
 """
 from __future__ import annotations

@@ -11,7 +11,7 @@ from metabolomix.analysis import analysis_spec as A
 from metabolomix.analysis.recipe_matrix import knn_impute
 from metabolomix.arf2 import reader as arf2_reader
 from metabolomix.console import method_file as method_file_mod
-from metabolomix.core import handles, mcp_core, session_state
+from metabolomix.core import handles, session_state
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.dcl import tools as dcl_tools
 from metabolomix.library import tools as library_tools
@@ -19,6 +19,7 @@ from metabolomix.msdial import alignment_spot
 from metabolomix.tools import handle_tools
 from tests.dcl_fixture import build_dcl_bytes
 from tests.reanalysis_fixtures import write_mztab
+from tests.config_fixtures import use_config
 
 NAN = math.nan
 
@@ -65,71 +66,58 @@ def test_external_matrix_empty_id_rejected(tmp_path):
     assert info.value.code == "ANALYSIS_INPUT_INVALID"
 
 
-# ---------- I-2: アラインメントのファイルが無いハンドルは対話のフォルダへ落ちない ----------
+# ---------- I-2: アラインメントのファイルが無いハンドルは、別のデータセットのファイルへ落ちない ----------
 
 @pytest.fixture
 def interactive_folder(tmp_path, monkeypatch):
-    """対話のデータフォルダに、別のデータセットの .arf2 / .dcl / ライブラリを置く。"""
-    folder = tmp_path / "interactive"
-    folder.mkdir()
-    (folder / "AlignmentResult_9.arf2").write_bytes(b"placeholder")
-    (folder / "AlignmentResult_9.dcl").write_bytes(build_dcl_bytes([
-        {"precursor_mz": 104.107, "rt": 1.2, "spectrum": [(60.08, 999.0)]},
-        {"precursor_mz": 104.107, "rt": 1.2, "spectrum": [(60.08, 999.0)]},
-    ]))
-    monkeypatch.setattr(mcp_core, "DATA_DIR", folder)
-    monkeypatch.setattr(alignment_spot, "load_catalog", lambda _p: [
-        {"AlignmentID": 1, "MassCenter": 104.107, "RT": 1.2, "IonMode": "Positive"}])
-    lab = tmp_path / "lab"
-    lab.mkdir()
-    for name, mode in (("pos.msp", "Positive"), ("neg.msp", "Negative")):
-        (lab / name).write_text(f"NAME: x\nPRECURSORMZ: 104.107\nIONMODE: {mode}\n"
-                                "Num Peaks: 1\n60.08 100\n", encoding="ascii")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(lab / "pos.msp"))
-    monkeypatch.setenv("MSDIAL_MSP_NEG", str(lab / "neg.msp"))
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
-    return folder
+    """別のデータセット（アラインメントの .arf2 / .dcl とライブラリを持つ解析フォルダ）を 1 つ開いておく。
+
+    ハンドルを渡さない呼び出し・ほかのハンドルの呼び出しが、このデータセットのファイルへ落ちないことを
+    確かめるための「落ちうる先」。ハンドルの ID を `handle` に持つ。"""
+    from tests.curation_fixtures import write_alignment_set
+
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
+    paths = write_alignment_set(tmp_path / "interactive")
+    out = json.loads(handle_tools.load_dataset(directory=str(paths["arf2"].parent), library="none"))
+    assert out["status"] == "success", out
+    return {**paths, "handle": out["dataset_handle"]}
 
 
-def _handle(tmp_path, library="auto"):
+def _handle(tmp_path, interactive_folder):
+    """`.arf2` / `.dcl` を持たない（mzTab-M だけの）ハンドル。ライブラリは `file_path` で開く。
+    直近になる（`load_dataset` はいつも直近にする）。"""
     path = write_mztab(tmp_path / "handle_data" / "AlignResult-1.mzTab")
-    out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(path), library=library))
+    out = json.loads(handle_tools.load_dataset(mztab_path=str(path), library="none"))
     assert out["arf2"] is None and out["dcl"] is None
-    if library == "auto":
-        # mzTab-M の記憶は `unknown` なので、library_load は極性の設定（MSDIAL_MSP_POS）から引く
-        # （mzTab-M の本番の経路）。
-        library_tools.library_load(dataset_handle=out["dataset_handle"])
+    loaded = json.loads(library_tools.library_load(file_path=str(interactive_folder["msp"]),
+                                                   dataset_handle=out["dataset_handle"]))
+    assert loaded["status"] == "success", loaded
     return out["dataset_handle"]
 
 
 def test_spot_spectrum_on_handle_without_alignment_files(tmp_path, interactive_folder):
-    handle = _handle(tmp_path)
-    assert json.loads(dcl_tools.dcl_spot_spectrum(spot_id=1))["status"] == "ok"   # 対話の経路
-    out = json.loads(dcl_tools.dcl_spot_spectrum(spot_id=1, dataset_handle=handle))
+    other = interactive_folder["handle"]
+    assert json.loads(dcl_tools.dcl_spot_spectrum(spot_id=0, dataset_handle=other))["status"] == "ok"
+    handle = _handle(tmp_path, interactive_folder)
+    out = json.loads(dcl_tools.dcl_spot_spectrum(spot_id=0, dataset_handle=handle))
     assert out["status"] == "no_alignment_files"
+    # ハンドルを省いた呼び出し（直近はファイルを持たないハンドル）も、開いている別のハンドルへは落ちない。
+    assert json.loads(dcl_tools.dcl_spot_spectrum(spot_id=0))["status"] == "no_alignment_files"
 
 
 def test_match_on_handle_without_alignment_files(tmp_path, interactive_folder):
-    handle = _handle(tmp_path)
-    by_spot = json.loads(library_tools.library_match_feature(spot_id=1, dataset_handle=handle))
+    handle = _handle(tmp_path, interactive_folder)
+    by_spot = json.loads(library_tools.library_match_feature(spot_id=0, dataset_handle=handle))
     assert by_spot["status"] == "no_alignment_files"
-    by_mz = json.loads(library_tools.library_match_feature(precursor_mz=104.107,
+    by_mz = json.loads(library_tools.library_match_feature(precursor_mz=760.5851,
                                                            dataset_handle=handle))
     assert by_mz["status"] == "no_alignment_files"
 
 
 def test_diagnostic_ions_on_handle_without_alignment_files(tmp_path, interactive_folder):
-    handle = _handle(tmp_path)
-    out = json.loads(dcl_tools.dcl_diagnostic_ions([1], [{"mz": 60.08}], dataset_handle=handle))
-    assert "\tno_alignment_files" in out["ions"]
-
-
-def test_library_load_on_handle_uses_handle_polarity(tmp_path, interactive_folder):
-    handle = _handle(tmp_path, library="none")
-    out = json.loads(library_tools.library_load(dataset_handle=handle))
-    assert out["status"] == "success" and out["file"] == "pos.msp"
-    wrong = json.loads(library_tools.library_load(ion_mode="negative", dataset_handle=handle))
-    assert wrong["code"] == "LIBRARY_POLARITY_MISMATCH"
+    handle = _handle(tmp_path, interactive_folder)
+    out = json.loads(dcl_tools.dcl_diagnostic_ions([0], [{"mz": 184.07}], dataset_handle=handle))
+    assert "	no_alignment_files" in out["ions"]
 
 
 # ---------- I-3: .arf2 のカタログのキャッシュ ----------

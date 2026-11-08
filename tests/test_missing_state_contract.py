@@ -1,4 +1,4 @@
-"""状態不足15箇所が missing_state エンベロープを返すことの契約テスト。
+"""状態不足の箇所が missing_state エンベロープを返すことの契約テスト。
 
 message は既存の日本語文面を保持する（エンベロープを解釈しないクライアントでも
 LLM が読む内容が変わらないこと）。
@@ -37,163 +37,48 @@ class MissingStateContractTests(unittest.TestCase):
         self.assertEqual(error["required_tools"], required_tools)
         self.assertIn(message_contains, error["message"])
 
-    def test_arf_list_tags(self):
-        self.assert_missing(
-            server.arf_list_tags(), "arf_dataset", ["arf_parser", "load_dataset"], "タグファイル"
-        )
+    def assert_no_dataset(self, raw):
+        self.assert_missing(raw, "dataset", ["load_dataset"], "load_dataset")
 
-    def test_arf_list_classes(self):
-        self.assert_missing(
-            server.arf_list_classes(), "arf_dataset", ["arf_parser", "load_dataset"], "ARFデータ"
-        )
+    def test_dataset_status(self):
+        # 旧 arf_list_tags / arf_list_classes / arf_list_sample_roles（B-2b Task 8 で消えた）の後継
+        self.assert_no_dataset(server.dataset_status())
+        self.assert_no_dataset(server.dataset_status(view="samples"))
+        self.assert_no_dataset(server.dataset_status(view="tags"))
 
-    def test_arf_list_sample_roles(self):
-        self.assert_missing(
-            server.arf_list_sample_roles(), "arf_dataset", ["arf_parser", "load_dataset"], "arf_parser"
-        )
+    def test_dataset_exclude(self):
+        self.assert_no_dataset(server.dataset_exclude(samples=["x"]))
 
-    def test_arf_exclude(self):
-        self.assert_missing(
-            server.arf_exclude(exclude_samples=["x"]), "arf_dataset", ["arf_parser", "load_dataset"], "arf_parser"
-        )
+    def test_dataset_preprocess(self):
+        self.assert_no_dataset(server.dataset_preprocess())
 
-    def test_arf_preprocess(self):
-        self.assert_missing(
-            server.arf_preprocess(), "arf_dataset", ["arf_parser", "load_dataset"], "arf_parser"
-        )
+    def test_dataset_pca(self):
+        self.assert_no_dataset(server.dataset_pca())
 
-    def test_arf_pca_preprocessed(self):
-        self.assert_missing(
-            server.arf_pca_preprocessed(),
-            "preprocessed_matrix",
-            ["arf_preprocess"],
-            "前処理後の行列がありません",
-        )
+    def test_dataset_differential(self):
+        self.assert_no_dataset(server.dataset_differential(group_a=["a"], group_b=["b"]))
 
-    def test_arf_differential(self):
-        self.assert_missing(
-            server.arf_differential(group_a="a", group_b="b"),
-            "preprocessed_matrix",
-            ["arf_preprocess"],
-            "arf_preprocess",
-        )
+    def test_dataset_feature_search(self):
+        self.assert_no_dataset(server.dataset_feature_search(sort="intensity"))
 
-    def test_arf_plot_volcano(self):
-        """他の12ツールと同じく、素の戻り値としてエンベロープを返す。
+    def test_save_figure_without_dataset(self):
+        # 図の置き場はデータセット（ds.figures）。データセットが無ければ load_dataset を案内する。
+        self.assert_no_dataset(server.save_figure("pca", analysis_id="x"))
 
-        以前は outputSchema 導出のため戻り値型が構造化に固定されており、失敗時に
-        str を返せず例外の本文にエンベロープを載せていた。structured_output=False に
-        した今はその制約が無いので、例外経由の特例を廃して契約を揃えてある。
-        """
-        self.assert_missing(
-            server.arf_plot_volcano(),
-            "differential_result",
-            ["arf_differential"],
-            "arf_differential",
-        )
-
-    def test_pai2_inspect_peak(self):
-        self.assert_missing(
-            server.pai2_inspect_peak(peak_name="PC 34:1"),
-            "pai2_dataset",
-            ["pai2_parser"],
-            "pai2_parser",
-        )
-
-    def test_verify_peak_annotation(self):
-        self.assert_missing(
-            server.verify_peak_annotation(peak_name="PC 34:1"),
-            "pai2_dataset",
-            ["pai2_parser"],
-            "pai2_parser",
-        )
-
-    def test_save_figure_pca(self):
-        self.assert_missing(
-            server.save_figure("pca", analysis_id="x"),
-            "pca_result",
-            # mzTab-M 経路（dataset_pca）も PCA の生産者なのでリプレイ候補に入る
-            ["arf_parser", "arf_pca_preprocessed", "arf_pca_species", "load_dataset", "dataset_pca"],
-            "PCA",
-        )
-
-    def test_save_figure_volcano(self):
-        self.assert_missing(
-            server.save_figure("volcano", analysis_id="x"),
-            "differential_result",
-            # 図の保存は mzTab-M 経路（dataset_differential）からもできる。
-            # arf_plot_volcano は ARF 専用なので候補は増やさない。
-            ["arf_differential", "dataset_differential"],
-            "arf_differential",
-        )
-
-    def test_arf_plot_group_intensity(self):
-        """ARF 未読み込みの空セッションでは、素の戻り値としてエンベロープを返す。"""
-        self.assert_missing(
-            server.arf_plot_group_intensity(items=["PG"], groups=["x"], output="payload"),
-            "arf_dataset",
-            ["arf_parser", "load_dataset"],
-            "load_dataset",
-        )
-
-    def test_arf_plot_species(self):
-        self.assert_missing(
-            server.arf_plot_species(items=["PG"], groups=["x"], output="payload"),
-            "arf_dataset",
-            ["arf_parser", "load_dataset"],
-            "load_dataset",
-        )
-
-    def test_arf_pca_species(self):
-        self.assert_missing(
-            server.arf_pca_species(items=["PG"], groups=["x"], output="payload"),
-            "arf_dataset",
-            ["arf_parser", "load_dataset"],
-            "load_dataset",
-        )
-
-    def test_plot_pca_loadings(self):
-        self.assert_missing(
-            server.plot_pca_loadings(output="payload"),
-            "pca_result",
-            ["arf_parser", "arf_pca_preprocessed", "arf_pca_species", "dataset_pca"],
-            "PCA",
-        )
-
-    def test_save_figure_group_intensity(self):
-        self.assert_missing(
-            server.save_figure("group_intensity", analysis_id="x"),
-            "group_intensity_plot",
-            ["arf_plot_group_intensity"],
-            "arf_plot_group_intensity",
-        )
-
-    def test_save_figure_eic_offers_both_producers(self):
-        """eic_plot は2つのツールのどちらでも作れる（OR の代替候補）。"""
-        self.assert_missing(
-            server.save_figure("eic", analysis_id="x"),
-            "eic_plot",
-            ["eic_plot_chromatograms", "eic_plot_compounds"],
-            "eic_plot_chromatograms",
-        )
-
-
-class SampleSearchIsNotAMissingStateTests(unittest.TestCase):
-    """sample_search は ARF 未ロードでも動くのが要件。エンベロープ化してはいけない。"""
-
-    def setUp(self):
-        session_state.session = server.AnalysisSession()
-
-    def test_sample_search_failure_is_not_an_envelope(self):
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as empty:
-            raw = server.sample_search(directory=empty)
-        self.assertIsNone(
-            envelope(raw),
-            "sample_search をエンベロープ化すると、ARF を必要としない検索のために "
-            "arf_parser の自動リプレイが走ってしまう",
-        )
+    def test_dataset_plot_without_dataset(self):
+        """どの kind でも、素の戻り値としてエンベロープを返す（旧 arf_plot_* / plot_pca_loadings /
+        eic_plot_* の契約を引き継ぐ）。"""
+        for kind, kwargs in [
+            ("volcano", {}),
+            ("pca", {}),
+            ("loadings", {"output": "payload"}),
+            ("group_intensity", {"items": ["PG"], "groups": ["x"], "output": "payload"}),
+            ("species", {"items": ["PG"], "groups": ["x"], "output": "payload"}),
+            ("species_pca", {"items": ["PG"], "groups": ["x"], "output": "payload"}),
+            ("eic", {"feature_id": "1"}),
+        ]:
+            with self.subTest(kind=kind):
+                self.assert_no_dataset(server.dataset_plot(kind=kind, **kwargs))
 
 
 if __name__ == "__main__":

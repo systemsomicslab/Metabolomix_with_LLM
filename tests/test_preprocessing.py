@@ -324,7 +324,7 @@ class TestDetectFailedQc(unittest.TestCase):
         ])
         rep = pp.detect_failed_qc(matrix, roles, names)
         self.assertEqual(rep["failed"], ["QC_3"])
-        self.assertIn("arf_exclude", rep["caveat"])
+        self.assertIn("dataset_exclude", rep["caveat"])
 
     def test_healthy_qc_is_silent(self):
         matrix, names, roles = self._fixture([

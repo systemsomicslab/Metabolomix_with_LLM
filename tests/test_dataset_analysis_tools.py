@@ -44,7 +44,7 @@ def test_dataset_preprocess_without_dataset_returns_missing_state():
     from metabolomix.tools.dataset_analysis_tools import dataset_preprocess
     parsed = json.loads(dataset_preprocess())
     assert parsed["error"]["code"] == MISSING_STATE
-    assert parsed["error"]["required_tools"] == ["dataset_load"]
+    assert parsed["error"]["required_tools"] == ["load_dataset"]
 
 
 def test_dataset_preprocess_success_sets_pp_matrix():
@@ -125,18 +125,6 @@ def test_dataset_differential_small_group_is_bad_request():
     parsed = json.loads(dataset_differential(group_a=["ctrl_0"], group_b=["treat_0"]))
     assert parsed["error"]["code"] != MISSING_STATE
     assert "群サイズ" in parsed["error"]["message"]
-
-
-def test_dataset_differential_does_not_touch_arf_slot():
-    _load_ds()
-    from metabolomix.tools.dataset_analysis_tools import (
-        dataset_differential, dataset_preprocess,
-    )
-    dataset_preprocess()
-    a, b = _groups(session_state.session.dataset)
-    dataset_differential(group_a=a, group_b=b)
-    assert session_state.session.arf.feature_matrix is None
-    assert getattr(session_state.session.arf, "last_differential", None) is None
 
 
 # ---------- dataset_export_differential ----------
@@ -458,7 +446,7 @@ def test_dataset_set_sample_metadata_without_dataset_returns_missing_state():
     from metabolomix.tools.dataset_analysis_tools import dataset_set_sample_metadata
     parsed = json.loads(dataset_set_sample_metadata("manifest.tsv"))
     assert parsed["error"]["code"] == MISSING_STATE
-    assert parsed["error"]["required_tools"] == ["dataset_load"]
+    assert parsed["error"]["required_tools"] == ["load_dataset"]
 
 
 def test_dataset_set_sample_metadata_success_applies_rows(tmp_path):

@@ -94,13 +94,6 @@ def test_session_has_dataset_slot():
     assert sess.dataset is None
 
 
-def test_session_dataset_does_not_affect_arf_slot():
-    sess = session_state.AnalysisSession()
-    sess.dataset = "dummy"
-    # ARF スロットはそのまま
-    assert sess.arf.features is None
-
-
 def test_dataset_state_has_analysis_fields():
     from metabolomix.mztab.dataset_state import DatasetState
     ds = DatasetState()
@@ -247,7 +240,7 @@ def mztab_qc_named_file(tmp_path):
 
 
 def test_dataset_preprocess_detects_qc_role_via_resolved_display_name(mztab_qc_named_file):
-    """dataset_load 相当（build_dataset_state）→ dataset_preprocess 相当（run_dataset_preprocess）
+    """load_dataset 相当（build_dataset_state）→ dataset_preprocess 相当（run_dataset_preprocess）
     を実際に通し、QC_1 という表示名を持つアッセイが role="qc" に分類されることを確認する。
     直る前は sample_names が abundance_assay[3] のままで、detect_sample_roles が
     "qc" トークンを見つけられず全サンプルが "sample" のままだった。
@@ -351,7 +344,7 @@ def test_dataset_warnings_precede_parser_level_warnings(tmp_path):
     """データセット層の warning（表示名の重複など）を先頭に置く。
 
     パーサ層の良性 warning は実データで数百件になり得る。後ろに append すると、
-    件数を絞って表示する dataset_load の要約に載る余地がなくなる。
+    件数を絞って表示する load_dataset の要約に載る余地がなくなる。
     「見えない warning」は無いのと同じなので、順序で優先度を表す。
     """
     content = textwrap.dedent("""\

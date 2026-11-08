@@ -1,6 +1,6 @@
 # mzTab-M 経路の出力フィールド
 
-`dataset_load` が作る `DatasetState` と、その下流（特徴表・差次的エクスポート）が
+`load_dataset` が作る `DatasetState` と、その下流（特徴表・差次的エクスポート）が
 出す値の意味。
 
 > 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項はそちらで定義され、ここでは繰り返さない。節番号は分割前の通し番号。
@@ -8,7 +8,7 @@
 ツールが**どのファイルのどの関数をどの順に呼ぶか**は `docs/workflow/mztab.md`。
 ここは**値の意味**だけを定義する。
 
-## 13. mzTab-M 経路（`dataset_load` 以降）
+## 13. mzTab-M 経路（`load_dataset` 以降）
 
 mzTab-M 2.0.0-M は MS-DIAL Console が産む標準交換形式で、`DatasetState` の正準入力。
 ARF 経路（`.arf` を直接読む）とは**別の ID 空間・別の粒度**なので、両者の値を
@@ -21,7 +21,7 @@ ARF 経路（`.arf` を直接読む）とは**別の ID 空間・別の粒度**�
 | 同定の出所 | SME 行 / SML 行（§13.1） | `.arf2` の注釈 |
 | MSI レベル | **常に空欄**（§13.5） | ヒューリスティック推定あり（`identity` トピック §12.3） |
 
-`dataset_load` は解析フォルダ（`directory`、または `job_path` / `pipeline_path` の既定）も
+`load_dataset` は解析フォルダ（`directory`、または `job_path` / `pipeline_path` の既定）も
 読む。そのときの要約は行で、読んだアダプタ（`アダプタ: msdial_folder`）・読んだ `.arf` と
 選ばなかった `.arf` の候補・同定に使ったライブラリの記録（`library_record`。ファイル名と
 sha256 だけで置き場所は出さない）を示す。アダプタと `library_record` の行は mzTab-M で
@@ -93,13 +93,13 @@ SMF からこれらを読もうとすると常に `None` になり、「この�
 無い）ときは、対応する SME の個別スコア（`id_confidence_measure[2..8]` の合成
 total score）を代わりに入れる。SML 側の値がある場合はそちらを優先し上書きしない。
 このフォールバックが入ったことで、`dataset_export_differential` /
-`arf_export_differential`（`metabolomix/analysis/feature_export.py`）の同じ列が、
+`dataset_export_differential`（`metabolomix/analysis/feature_export.py`）の同じ列が、
 以前は `null` だった行に SME 由来の値を出すようになった（列定義
 `export_contract.py` 自体は無変更）。
 
 **`confidence_measures` はどこからも読まれていない（Minor 9）**: `feature_annotations[fid]`
 に SME の個別スコア（`id_confidence_measure[2..8]`、`_extract_confidence_measures`）が
-入るが、`dataset_export_differential` / `arf_export_differential`
+入るが、`dataset_export_differential` / `dataset_export_differential`
 （`metabolomix/analysis/{dataset_export,feature_export}.py`）は列定義で明示された
 キーだけを拾うため、この辞書は現状どのツール戻り値にも出ない。参照するには
 `DatasetState.feature_annotations[fid]["confidence_measures"]` を直接読むこと。
@@ -162,9 +162,29 @@ SME 由来という食い違った行ができる。
 （別リポ massbank-context）が InChIKey を結合キーにするため。名前だけの SML 注釈は
 このゲートを越えられない。
 
+### 13.5b `dataset_status` の views と除外
+
+`dataset_status(view=...)`:
+
+- `summary`（既定）: 概要。`groups`（群＝Class ID ごとの件数）・`roles`・`n_ungrouped`（群の宣言が
+  無い試料の数）・`tags`（タグごとの特徴数）・`excluded`（除外の件数）を含む。`samples`（name/role）は従来どおり。
+- `samples`: 試料の TSV（name・group・role・batch・injection_order・subject_id・excluded）。`excluded` は
+  `dataset_exclude` の理由、実験情報シートの `include=false` の試料は「include=false（実験情報シート）」、
+  除外していなければ空。`query` は因子トークン（`_` 区切りの AND・順不同、`,` 区切りの複数指定は OR。旧
+  `dataset_status(view="samples")` の `specs` と同じ文法）。役割では落とさない。
+- `tags`: タグごとの特徴 ID（先頭 50 件）。**特徴のタグは MS-DIAL の `_tags.xml` から読んだもの**で、
+  アノテーションの確かさそのものではない。
+
+**除外（`dataset_exclude`）は入力を変えない。** `excluded_samples` / `excluded_features`（名前・特徴 ID -> 理由）は
+解析の状態で、定量行列・試料名・特徴 ID・データセットの指紋は元のまま。前処理（`dataset_preprocess`）が除外した
+試料・特徴を**前処理済み行列から外す**（検出率の足切りの分母からも外す）。除外を変えると `metadata_revision` が進み、
+前処理済み行列から先の結果（PCA・差次的解析）は古い結果になる——`ds.results` には残るが現在の結果としては
+通らない。`dataset_exclude` を使う前に作った結果の数字を、除外後の結果として読んではいけない。
+任意の列 `subject_id`（実験情報シートの末尾）は `sample_meta` に持つだけで、統計にはまだ使わない。
+
 ### 13.6 `inchikey_coverage`
 
-`dataset_load` の要約と `dataset_status` が読む集計。
+`load_dataset` の要約と `dataset_status` が読む集計。
 
 | キー | 意味 |
 |---|---|
@@ -180,7 +200,7 @@ MSP を RDKit より前に置くのは、RDKit の有無（Windows のアプリ�
 拒否する機械がある）で結果を変えないため。MSP 表はジョブ経由の読み込み（`job_path`）でだけ作られ、
 実効メソッドの MSP の注釈器設定表（`MSP annotator settings file path`。`library_mode="msp_then_lbm"` の run）がMSP を指していればその最初の MSP を、無ければ `Msp file path` を読む（Console と同じ順）。設定表から入った MSP の同定は`MspDB_<n>_<MSP の stem>:<名前>` で出るので、stem がその MSP のものだけを引く。直接読み（`mztab_path`）では `not_applicable`。
 
-`identified_by` は `dataset_load` の要約にも 1 行で出る。
+`identified_by` は `load_dataset` の要約にも 1 行で出る。
 **`sml_only` を `sme` と足して「同定できた件数」にしないこと** — 証拠水準が違う。
 
 ### 13.7 `abundance` は実測か gap-fill かを区別しない
@@ -230,6 +250,16 @@ p / q / 平均は有効 4 桁）。
 正規化した spec（渡したときだけ。渡さなければ欄ごと無い）、`rule.targets[].ppm_offset` に付加体ごとの中心（2 桁。渡したときだけ）が出て、
 `rule_hash` に入る（渡さなければ従来と同じ hash）。窓検索（`targets` なし）で渡すと `DATASET_BAD_REQUEST`
 （`field: ppm_offset`）。形の誤りも `DATASET_BAD_REQUEST`。
+
+**窓検索の `sort` と追加の列**。`sort="mz"`（既定）は m/z 昇順、`sort="intensity"` は強度の降順で、条件が無くても
+上位 `max_results` 件を返す（`sort="mz"` で条件が無ければ `FEATURE_SEARCH_EMPTY_QUERY`。`targets` と併用すると
+`DATASET_BAD_REQUEST`）。**強度は検出セル（gap-fill でない実測。`dataset_exclude` した試料の列を除く）の値の最大**、
+つまりピークの高さ（データセットの測定値）の最大で、**EIC のクロマトグラムの最大ではない**。検出セルが無い特徴
+は最後に並ぶ。**検出の印（`detected_mask`）が無いデータセット**は gap-fill を見分けられないので、除外していない試料の全セル（NaN は無視）の最大で並べ、`notes` に 1 行そう書く（`n_detected` は空のまま）。`dataset_exclude` した特徴は両方の並びで出さない。
+`features` は `evidence` の後ろに `ontology`（MS-DIAL の Ontology。mzTab-M では SML 注釈にあれば）・`n_detected`
+（検出セルの数。除外した試料を数えない。検出状態が無いデータセットでは空で、0 ではない）・`normalized`（GOSLIN で
+標準化した脂質名）・`msi_level`（MSI の同定水準）を持つ。`normalized` と `msi_level` は解析フォルダのデータセット
+（`.arf2` の同定の標準化。意味は `docs/output_format/identity.md`）だけで、mzTab-M のデータセットでは空。
 
 **`evidence`（証拠の水準）** は 2 種類ある。
 
@@ -358,9 +388,9 @@ qualified にせず数にも入れない——選んだ残す ID の行が必ず
 極性の宣言と多数決の食い違い・キュレーションのフラグがあるのに反映していないこと（この検索は
 SME / SML の生の同定だけを見るので、`dataset_export_differential` の同定と食い違いうる）が入る。
 
-## `plot_pca_loadings(source="mztab")`
+## `dataset_plot(kind="loadings")`（mzTab-M のデータセット）
 
-`dataset_pca` の結果は `plot_pca_loadings(source="mztab")` で主成分ごとのローディング図に描ける（`source="auto"` でも、候補がこの 1 つだけなら選ばれる）。
+`dataset_pca` の結果は `dataset_plot(kind="loadings")` で主成分ごとのローディング図に描ける（`result_id` を省けば直近の `dataset_pca`）。
 特徴量は前処理後の `pp_feature_names`、表示名は `feature_annotations`（SML 由来）か `feature_metadata`（SME 由来）の名前で、
 無ければ `feature_id`。mzTab-M にはクラス（Ontology）が無いので棒は 1 色になる。r は `dataset_pca` が autoscale で回したときの
-成分 × 特異値 / √n（`n_samples`）で出す。返り値の意味は `arf` トピックの §11.8 と同じ。
+成分 × 特異値 / √n（`n_samples`）で出す。返り値の意味は `dataset` トピックの §11.8 と同じ。

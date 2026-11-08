@@ -11,7 +11,7 @@ import textwrap
 import pytest
 
 from metabolomix.analysis.feature_search import theoretical_mz
-from metabolomix.core import handles, mcp_core, session_state
+from metabolomix.core import handles, session_state
 from metabolomix.library import tools as library_tools
 from metabolomix.msdial import alignment_spot
 from metabolomix.tools import dataset_analysis_tools as T
@@ -19,6 +19,7 @@ from metabolomix.tools import handle_tools
 from metabolomix.tools import reanalysis_tools as R
 from tests.dcl_fixture import build_dcl_bytes
 from tests.reanalysis_fixtures import write_mztab
+from tests.config_fixtures import use_config
 
 PC_FORMULA = "C42H76NO8P"
 PC_MH = round(theoretical_mz(PC_FORMULA, "[M+H]+"), 4)
@@ -64,7 +65,6 @@ CLAIM = {"claim_id": "C1",
 def fresh_state(tmp_path, monkeypatch):
     session_state.session = session_state.AnalysisSession()
     handles.registry = handles.HandleRegistry()
-    monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path)
     yield
     for handle in handles.registry.list():
         handles.registry.close(handle.handle_id)
@@ -82,8 +82,7 @@ def library(tmp_path, monkeypatch, mztab):
     msp = tmp_path / "lab" / "pos.msp"
     msp.parent.mkdir()
     msp.write_text(_MSP, encoding="ascii")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(msp))
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     run = mztab.parent
     (run / "AlignResult-1.arf2").write_bytes(b"placeholder")
     entries = [{"precursor_mz": 999.0, "rt": 9.0, "spectrum": []} for _ in range(33)]
@@ -96,15 +95,14 @@ def library(tmp_path, monkeypatch, mztab):
     return msp
 
 
-def _open(mztab, **kwargs):
-    kwargs.setdefault("library", "none")
-    library = kwargs["library"]
-    out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(mztab), **kwargs))
+def _open(mztab, msp=None):
+    out = json.loads(handle_tools.load_dataset(mztab_path=str(mztab), library="none"))
     assert out["status"] == "success", out
-    if library == "auto":
-        # mzTab-M の記憶は `unknown` なので、library_load は極性の設定（MSDIAL_MSP_POS）から引く
-        # （mzTab-M の本番の経路）。
-        library_tools.library_load(dataset_handle=out["dataset_handle"])
+    if msp is not None:
+        # mzTab-M の記憶は `unknown` なので、library_load には file_path で明示する（mzTab-M の本番の経路）。
+        loaded = json.loads(library_tools.library_load(file_path=str(msp),
+                                                       dataset_handle=out["dataset_handle"]))
+        assert loaded["status"] == "success", loaded
     return out["dataset_handle"]
 
 
@@ -150,7 +148,7 @@ def test_claim_evidence_for_a_species_claim(mztab):
 
 
 def test_claim_evidence_species_msms_rules(mztab, library):
-    handle = _open(mztab, library="auto")
+    handle = _open(mztab, msp=library)
     claim = {**CLAIM, "msms": {"top_n": 3, "rules": {
         "lipid_class": "PC", "min_fragments_excl_precursor": 2,
         "diagnostic_ions": [{"mz": 184.0733, "label": "phosphocholine"}]}}}
@@ -164,7 +162,7 @@ def test_claim_evidence_species_msms_rules(mztab, library):
 
 
 def test_msms_qualify_tool_takes_a_species_target(mztab, library):
-    handle = _open(mztab, library="auto")
+    handle = _open(mztab, msp=library)
     out = json.loads(R.library_msms_qualify(
         {"target": {"lipid_species": "PC 18:3_16:1"}, "min_fragments_excl_precursor": 2},
         spot_id=30, dataset_handle=handle))

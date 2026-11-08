@@ -1,10 +1,8 @@
 """DatasetState に対する解析 MCP ツール。
 
-dataset_load → dataset_preprocess → dataset_pca / dataset_differential
-→ dataset_export_differential の順に実行する。ARF 経路
-（arf_preprocess → arf_pca_preprocessed → arf_differential →
-arf_export_differential）と同じ純関数を共有しており、同じ入力からは
-同じ数字が出る。dataset_feature_search は読み取り専用で、特徴の検索・目的の物質の
+load_dataset → dataset_preprocess → dataset_pca / dataset_differential
+→ dataset_export_differential の順に実行する。解析フォルダも mzTab-M も
+`load_dataset` が同じ DatasetState にするので、同じ入力からは同じ数字が出る。dataset_feature_search は読み取り専用で、特徴の検索・目的の物質の
 判定に差次的結果の統計を添えて返す（判定の純ロジックは analysis/feature_search.py）。
 
 戻り値には要約だけを載せ、全量（PCA の loadings・差次的の results/volcano）は
@@ -41,14 +39,14 @@ __all__ = [
 # 欠けている状態 → それを作れるツール。missing_state の required_tools になる。
 # **自分自身は入れない**（クライアントが同じ呼び出しを繰り返すループになる）。
 _RECOVERY_TOOLS = {
-    "dataset": ["dataset_load"],
+    "dataset": ["load_dataset"],
     "dataset_preprocessed": ["dataset_preprocess"],
     "dataset_differential_result": ["dataset_differential"],
     # v2 の解析行列は pipeline（preprocess / qc_processed）が作る。単体ツールの
     # dataset_build_matrix でも作れるが、そちらは binding と証拠を持たない分
     # できることが狭い（内部標準比は作れず、検出率filterは評価不能になる）。
     # 先頭ほど優先＝上流の証拠ごと揃う pipeline を先に案内する。
-    "analysis_matrix": ["pipeline_run", "pipeline_status", "dataset_load",
+    "analysis_matrix": ["pipeline_run", "pipeline_status", "load_dataset",
                         "dataset_build_matrix"],
     # 対象feature↔内部標準の対応付け。pipeline の resolve_feature_bindings が作る。
     "feature_bindings": ["pipeline_run", "pipeline_status"],
@@ -67,7 +65,7 @@ def dataset_preprocess(
 ) -> str:
     """DatasetState の定量行列に前処理レシピを適用する。
 
-    引数は arf_preprocess と同一。以降の dataset_pca / dataset_differential は
+    以降の dataset_pca / dataset_differential は
     ここで作った前処理済み行列を消費する。
 
     normalize: "none"（既定）/ "tic"（行総和）/ "median"（行中央値）/ "pqn"。
@@ -86,7 +84,7 @@ def dataset_preprocess(
 
     成功すると session.dataset.pp_matrix に前処理済み行列が設定される。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -94,7 +92,7 @@ def dataset_preprocess(
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
 
     from metabolomix.analysis.dataset_service import preprocess_dataset
 
@@ -144,7 +142,7 @@ def dataset_pca(n_components: int = 5, log_transform: bool = False,
 
     ローディング全量は戻り値に載せず session.dataset.last_pca に保持する。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -152,7 +150,7 @@ def dataset_pca(n_components: int = 5, log_transform: bool = False,
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
 
     from metabolomix.analysis.dataset_service import pca_dataset
 
@@ -195,7 +193,7 @@ def dataset_differential(
     全特徴量の結果と volcano 点列は戻り値に載せず session.dataset.last_differential
     に保持する。エクスポートは dataset_export_differential を使う。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -203,7 +201,7 @@ def dataset_differential(
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
 
     from metabolomix.analysis.dataset_service import compare_dataset
 
@@ -246,14 +244,13 @@ def dataset_export_differential(output_path: str,
     """指定した差次的結果を InChIKey 付きの 1 ファイルへ書き出す。
 
     先に dataset_preprocess → dataset_differential を実行しておくこと。
-    出力は arf_export_differential と**同一の契約**（15 列 + contract_version
-    メタ行）なので、下流のパスウェイ解析にそのまま渡せる。
+    出力は差次的エクスポートの契約（`analysis/export_contract.py`。15 列 + contract_version
+    メタ行）に従うので、下流のパスウェイ解析にそのまま渡せる。
 
     apply_curation（既定 true）: curation_submit で wrong を付けたスポットを
     同定なしとして扱い、出力から外す。フラグがあればメタ行 # curation = ... で
     適用状況を宣言する。フラグが無ければ出力は変わらない。成功 payload の
-    `curation` は `{state, wrong_excluded, suspect, orphaned}`（arf_export_differential と
-    同じ形）。assign（curation_submit の候補付け）は同定を置き換え（name_source /
+    `curation` は `{state, wrong_excluded, suspect, orphaned}`。assign（curation_submit の候補付け）は同定を置き換え（name_source /
     inchikey_source = curation）、redundant は除外する。どちらかがあれば `curation` に
     `assigned` と `redundant_excluded` が足される。
     フラグ記録に読めない行があれば書き出さずに `CURATION_FLAGS_INVALID`。
@@ -270,7 +267,7 @@ def dataset_export_differential(output_path: str,
     書く（空欄を「該当なし」と読み違えさせない）。メタ行には result_id と
     preprocess_id も入るので、あとから「どの計算の出力か」を辿れる。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -278,7 +275,7 @@ def dataset_export_differential(output_path: str,
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
 
     last = ds.last_differential
     if result_id is not None:
@@ -297,7 +294,8 @@ def dataset_export_differential(output_path: str,
 
     curation = None
     flag_set = None
-    arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p) for p in ds.source_files)), None)
+    lookup = curation_apply.arf2_lookup_kwargs(ds)
+    arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p, **lookup) for p in ds.source_files)), None)
     if arf2 is not None:
         try:
             flag_set = curation_apply.flags_for_arf2(arf2)
@@ -348,6 +346,9 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     シートに不備があれば `session.dataset` を一切変更せずエラーを返すので、
     そのまま再送してよい。
 
+    任意の列 `subject_id`（見出しの末尾に足す。反復測定の被験者）も読み、`sample_meta` に持つ
+    （統計にはまだ使わない）。列が無いシートは今までどおり。
+
     前処理入力（role/batch/injection_order/qc_pool/include/sample_id/source_file）が
     変われば前処理済み行列ごと・PCA・差次的解析まで無効化する。`group` だけの変更なら
     差次的解析だけを無効化し、PCA は生かしたまま返す（`changed_fields` で確認できる）。
@@ -357,7 +358,7 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     対照/処置の向きを決めない・QC/blank/unknown/include=false を混ぜない・完全交絡を
     止める、という前提検証は `resolve_comparison`/`run_comparison`（内部関数）が持つ。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -365,7 +366,7 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
 
     from metabolomix.analysis.dataset_service import apply_sample_manifest
     from metabolomix.core.atomic_io import DomainError
@@ -430,7 +431,7 @@ def dataset_statistic(specification: dict, matrix_result_id: str,
 
     全量（feature ごとの結果）は戻り値に載せず session に保持する。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -438,7 +439,7 @@ def dataset_statistic(specification: dict, matrix_result_id: str,
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
     if not getattr(ds, "analysis_matrices", None):
         return _missing(
             "analysis_matrix",
@@ -489,7 +490,7 @@ def dataset_build_matrix(recipe: dict, recipe_id: str = "default",
     値そのものは戻り値に載せず session に保持する。`dataset_statistic` へは
     戻り値の `matrix_id` を渡す。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -498,7 +499,7 @@ def dataset_build_matrix(recipe: dict, recipe_id: str = "default",
     ds = holder.dataset
     if ds is None:
         return _missing("dataset",
-                        "DatasetState がありません。先に dataset_load を実行してください。")
+                        "DatasetState がありません。先に load_dataset を実行してください。")
 
     from metabolomix.analysis.dataset_service import build_analysis_matrix
     from metabolomix.console.profile_schema import validate_matrix_recipe
@@ -606,7 +607,8 @@ def _curation_note(ds) -> str | None:
     from metabolomix.curation import apply as curation_apply
     from metabolomix.curation.flags import FlagFileError
 
-    arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p)
+    lookup = curation_apply.arf2_lookup_kwargs(ds)
+    arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p, **lookup)
                               for p in (getattr(ds, "source_files", None) or {}))), None)
     if arf2 is None:
         return None
@@ -662,6 +664,7 @@ def dataset_feature_search(
     merge_split: bool = True,
     alignment_qc_path: str | None = None,
     ppm_offset: dict | None = None,
+    sort: str = "mz",
     dataset_handle: str | None = None,
 ) -> str:
     """DatasetState の特徴を探し、目的の物質に当たる特徴を規則で判定する（読み取り専用）。
@@ -670,9 +673,16 @@ def dataset_feature_search(
 
     **窓検索**（`targets` なし）: `feature_ids`（SMF_ID の完全一致）・`min_mz`/`max_mz`・
     `min_rt`/`max_rt`（分）の AND。境界を含む。何も指定しなければ `FEATURE_SEARCH_EMPTY_QUERY`
-    （全件を返さない）。`feature_ids=[]` は「どの ID でもない」条件で 0 件。並びは m/z 昇順。
-    戻り値 `features` は TSV（`feature_id mz rt evidence name inchikey adduct n_sme`。
-    `evidence` は `sme`/`sml`/`none`）。注釈の無い特徴にも統計を付ける。
+    （全件を返さない。`sort="intensity"` なら条件なしで上位 `max_results` 件）。`feature_ids=[]` は
+    「どの ID でもない」条件で 0 件。`dataset_exclude` した特徴は出さない。
+    並びは `sort="mz"`（既定）で m/z 昇順、`sort="intensity"` で強度の降順。強度は検出セル
+    （gap-fill でない実測。除外した試料の列を除く）の値の**最大**で、ピークの高さ（データセットの
+    測定値）の最大——EIC のクロマトグラムの最大ではない。検出セルが無い特徴は最後。検出の印が無いデータセットは全セルの最大で並べ、`notes` に書く。
+    戻り値 `features` は TSV（`feature_id mz rt evidence name inchikey adduct n_sme ontology
+    n_detected normalized msi_level`。`evidence` は `sme`/`sml`/`none`、`n_detected` は検出セルの数
+    （除外した試料を除く。検出状態が無ければ空）、`normalized`（GOSLIN で標準化した名前）と
+    `msi_level` は解析フォルダのデータセットだけが持ち、mzTab-M では空。意味は
+    `lipidmix://docs/output-format/identity`）。注釈の無い特徴にも統計を付ける。
 
     **目標照合**（`targets` あり、1 回 50 件まで）: 各要素は `target_id`・`inchikey`（必須。
     先頭 14 文字で照合）と、`formula` か（`expected_mz` と `adduct`）。InChIKey が一意に決まらない
@@ -696,6 +706,8 @@ def dataset_feature_search(
         2 群比較の全部（古いものは使わず `notes` に挙げる）。名指しした ID が無い・古いときは
         `missing_state`。差次的結果が 1 件も無ければ統計なしで返す。
     max_results: 窓検索の行数・目標ごとの候補数の上限（既定 20）。打ち切りは `notes` に書く。
+    sort: 窓検索の並び（`mz` 既定 / `intensity`）。`targets` とは併用できない（`DATASET_BAD_REQUEST`。
+        目標照合は規則の順で並べる）。
 
     `stats` は TSV（`feature_id result_id status log2fc p q mean_a mean_b detected_a detected_b`）。
     `status` は `tested` / `not_in_matrix`（前処理で落ちた）/ `not_testable`（p が無い）で、
@@ -729,7 +741,7 @@ def dataset_feature_search(
         まま。`rule.ppm_offset` と各目標の `ppm_offset`（付加体ごと）に出て `rule_hash` に入る。
         窓検索（`targets` なし）では使えない（`DATASET_BAD_REQUEST`）。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -737,7 +749,7 @@ def dataset_feature_search(
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
     if ppm_offset is not None and targets is None:
         return mztab_error("DATASET_BAD_REQUEST",
                            "ppm_offset は目標照合（targets）のときだけ使える（効かない設定を渡さない）。",
@@ -749,6 +761,14 @@ def dataset_feature_search(
         return mztab_error("DATASET_BAD_REQUEST",
                            "alignment_qc_path は merge_split=true のときだけ使える"
                            "（効かない設定を渡さない）。", {"field": "alignment_qc_path"})
+
+    if sort not in ("mz", "intensity"):
+        return mztab_error("DATASET_BAD_REQUEST", f"sort は mz か intensity: {sort!r}",
+                           {"field": "sort"})
+    if targets is not None and sort != "mz":
+        return mztab_error("DATASET_BAD_REQUEST",
+                           "sort は窓検索（targets なし）のときだけ使える（目標照合は規則の順で"
+                           "並ぶ。効かない設定を渡さない）。", {"field": "sort"})
 
     window = {"feature_ids": feature_ids, "min_mz": min_mz, "max_mz": max_mz,
               "min_rt": min_rt, "max_rt": max_rt}
@@ -778,9 +798,16 @@ def dataset_feature_search(
     try:
         if targets is None:
             rows, truncated = feature_search.search_window(
-                ds, **window, max_results=max_results)
+                ds, **window, max_results=max_results, sort=sort)
             if feature_ids is not None and not feature_ids:
                 notes.append("feature_ids=[] は「どの ID でもない」条件として扱った（0 件）。")
+            for fid in (feature_ids or []):
+                if fid in ds.excluded_features:
+                    notes.append(f"{fid} は除外済み（理由: {ds.excluded_features[fid]}）なので返さない"
+                                 "（戻すなら dataset_exclude(mode=\"remove\")）。")
+            if sort == "intensity" and ds.detected_mask is None:
+                notes.append("このデータセットには検出の印（detected_mask）が無く gap-fill のセルを"
+                             "見分けられないので、強度順は全セル（除外した試料を除く）の最大で並べた。")
             if truncated:
                 notes.append(f"max_results={max_results} で打ち切った（ほか {truncated} 件）。"
                              "窓を狭めるか max_results を増やしてください。")
@@ -933,10 +960,10 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curati
 
     spectrum_links は同じアラインメントの `.dcl` へ ID（SMF_ID == AlignmentID == `.dcl` の番号）で
     結び、m/z・RT は検証にだけ使う。`.arf2` / `.dcl` はハンドルならそのハンドルのもの、対話の
-    セッションなら `dataset_handle_open` と同じ探し方で決める。結べないときは links を空にし、
+    セッションなら `load_dataset` と同じ探し方で決める。結べないときは links を空にし、
     manifest の `provenance.spectrum_links_status` と `spectrum_links_reason` に理由を書く。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     from metabolomix.analysis.evidence_export import export_dataset_evidence
@@ -952,7 +979,8 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curati
         return _missing('dataset_differential_result','指定した2群結果がありません。先にdataset_differentialを実行してください。')
     try:
         curation = None
-        arf2 = next(filter(None,(curation_apply.arf2_for_mztab(p) for p in ds.source_files)),None)
+        lookup = curation_apply.arf2_lookup_kwargs(ds)
+        arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p, **lookup) for p in ds.source_files)), None)
         if arf2 is not None:
             flags = curation_apply.flags_for_arf2(arf2)
             mapped = (getattr(ds,'feature_qc',None) or {}).get('source') == 'arf'

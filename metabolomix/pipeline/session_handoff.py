@@ -1,7 +1,7 @@
 """完了した run の成果物を、対話セッションが使える DatasetState へ戻す層。
 
-`dataset_load(pipeline_path=..., source="mztab")`（と同じ入口 `dataset.opening` を通る
-`dataset_handle_open`）だけが `load_run_dataset` を呼ぶ。解析フォルダのアダプタで run を読む
+`load_dataset(pipeline_path=..., source="mztab")`（と同じ入口 `dataset.opening` を通る
+`load_dataset`）だけが `load_run_dataset` を呼ぶ。解析フォルダのアダプタで run を読む
 ときは `run_console_job` と `run_manifest_rows` だけを借り、行列も差次的結果も戻さない。行列だけを別ツールで
 載せられる形にしないのは、run A の dataset に run B の行列を混ぜられると
 群の対応が黙ってずれるため——dataset・解決済み試料対応表・binding・解析行列は
@@ -216,6 +216,8 @@ def restore_differentials(ds, pipeline_root: Path, record: dict) -> dict:
             "preprocess": _run_preprocess_parameters(
                 pipeline_root, record, provenance.get("parent_ids")),
         }
+        # 戻した時点の試料情報・除外の版。以後に変わったら `is_current` が古い結果として扱う。
+        provenance["metadata_revision"] = getattr(ds, "metadata_revision", 0)
         if result_state.dataset_fingerprint(ds) != provenance.get("dataset_hash"):
             # 検出状態の取り込み前に計算された結果。`is_current` が同じ規則で通せるよう
             # 来歴に印を付ける（結果の数字は変えない。検出率による絞り込みは、その計算では

@@ -446,7 +446,6 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
     extra = ({"msms_not_evaluable_reason": no_library_reason}
              if no_library_reason and normalized["msms"] is not None and store is None else {})
     return {
-        **extra,
         "schema": CLAIM_SCHEMA,
         "claim_id": normalized["claim_id"],
         "rule_hash": rule_hash(normalized, groups_hash),
@@ -460,6 +459,7 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
         "scans": scans,
         "candidates": candidates,
         "truncated": truncated,
+        **extra,
     }
 
 

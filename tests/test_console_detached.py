@@ -25,6 +25,8 @@ from pathlib import Path
 import pytest
 
 from metabolomix.console.job_manager import create_job, load_job
+from metabolomix.console.runner import get_exe_path
+from tests.config_fixtures import use_config
 
 _WINDOWS_ONLY = pytest.mark.skipif(
     os.name != "nt", reason="切り離しワーカーの実プロセス起動は Windows 専用")
@@ -40,8 +42,8 @@ _WORKER_TIMEOUT_S = 120
 
 def _planned(tmp_path, monkeypatch, *, raw_count: int = 2):
     """planned 状態のジョブを 1 件作る（合成 raw と method ファイル付き）。"""
-    monkeypatch.setenv("MSDIAL_EXE", str(tmp_path / "fake-msdialcui.exe"))
     (tmp_path / "fake-msdialcui.exe").write_bytes(b"fake console executable")
+    use_config(monkeypatch, tmp_path, {"msdial.exe": tmp_path / "fake-msdialcui.exe"})
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     source = tmp_path / "source"
     source.mkdir(exist_ok=True)
@@ -86,7 +88,7 @@ def _prime_supervision(job_path: Path) -> None:
     job = load_job(job_path)
     source = Path(job.dataset_root)
     raws = sorted(p.resolve() for p in source.iterdir() if p.suffix == ".abf")
-    exe = Path(os.environ["MSDIAL_EXE"])
+    exe = Path(get_exe_path())
     write_supervision_inputs(Path(job.run_dir), {
         "raw_inventory": [str(p) for p in raws],
         "method_sha256": sha256_file(Path(job.method_file)),

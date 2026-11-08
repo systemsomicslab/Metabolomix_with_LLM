@@ -22,10 +22,12 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 from metabolomix.core.process_control import resolve_python_launch
+from tests.config_fixtures import use_config
 
 #: このcheckoutのルート（`tests/` の1階層上）。子プロセスのcwdをここへ固定する。
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -416,18 +418,27 @@ class PipelineHarness:
         self.counters_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self._configured = False
+        # `start()`を2スレッドから同時に呼ぶテストがある。設定ファイルの書き直し
+        # （use_config）と読み取り（受付のget_setting）を重ねないよう、整備は1回だけにする。
+        self._configure_lock = threading.Lock()
 
     # ---------- 環境 ----------
 
     def _configure(self) -> None:
-        """受付層が要る環境（MSDIAL_EXE・console判定・受付索引）を一度だけ整える。"""
-        if self._configured:
-            return
+        """受付層が要る環境（[msdial] exe・console判定・受付索引）を一度だけ整える。
+
+        設定ファイルは`LIPIDMIX_CONFIG`で指すので、環境を継ぐ別プロセスのworkerも同じものを読む。
+        """
+        with self._configure_lock:
+            if not self._configured:
+                self._configure_once()
+
+    def _configure_once(self) -> None:
         from metabolomix.pipeline import service
 
         exe = self.tmp_path / "fake-msdialcui.exe"
         exe.write_text("fake console executable placeholder", encoding="ascii")
-        self.monkeypatch.setenv("MSDIAL_EXE", str(exe))
+        use_config(self.monkeypatch, self.tmp_path, {"msdial.exe": exe})
         self.monkeypatch.setattr("metabolomix.console.runner.probe_console_exe",
                                  lambda *a, **k: "console")
         # 受付索引はユーザーのLOCALAPPDATAではなくtmpへ。テスト間で共有させない。

@@ -2,29 +2,29 @@ import json
 
 import pytest
 
-from metabolomix.core import mcp_core, session_state
+from metabolomix.core import session_state
 from metabolomix.curation import flags, suggest
 from metabolomix.library import store as library_store
 from metabolomix.tools import curation_tools
-from tests.curation_fixtures import write_alignment_set, write_suggest_set
+from tests.config_fixtures import use_config
+from tests.curation_fixtures import open_curation_dataset, write_alignment_set, write_suggest_set
 
 
 @pytest.fixture()
 def ready(tmp_path, monkeypatch):
-    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     paths = write_alignment_set(tmp_path / "neg")
-    monkeypatch.setattr(mcp_core, "DATA_DIR", paths["arf2"].parent)
     session_state.session.__init__()
-    session_state.session.library.store = library_store.open_store(paths["msp"])
+    paths["handle"] = open_curation_dataset(paths)
     yield paths
-    session_state.session.library.store.close()
+    paths["handle"].close()
     session_state.session.__init__()
 
 
 def test_review_requires_a_loaded_library(tmp_path, monkeypatch):
     paths = write_alignment_set(tmp_path / "neg")
-    monkeypatch.setattr(mcp_core, "DATA_DIR", paths["arf2"].parent)
     session_state.session.__init__()
+    open_curation_dataset(paths, library=False)
     body = json.loads(curation_tools.curation_review())
     assert body["error"]["code"] == "missing_state"
     assert body["error"]["required_tools"] == ["library_load"]
@@ -142,35 +142,21 @@ def test_submit_after_a_restart_uses_the_arf2_path_in_the_text(ready, tmp_path, 
     text = flags.build_submission_text(first["review_id"],
                                        [{"spot_id": 1, "flag": "wrong", "note": ""}],
                                        saved["arf2_path"])
-    library = session_state.session.library.store
-    session_state.session.__init__()                       # サーバ再起動を模す
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    monkeypatch.setattr(mcp_core, "DATA_DIR", elsewhere)
-    try:
-        body = json.loads(curation_tools.curation_submit(submission_text=text))
-    finally:
-        session_state.session.library.store = library
+    session_state.session.__init__()                       # サーバ再起動を模す（データセットは開いていない）
+    body = json.loads(curation_tools.curation_submit(submission_text=text))
     assert body["status"] == "ok", body
     assert body["recorded"] == 1
 
 
-def test_submit_after_a_restart_accepts_file_path(ready, tmp_path, monkeypatch):
+def test_submit_after_a_restart_accepts_the_dataset_handle(ready):
     review_id = json.loads(curation_tools.curation_review())["review_id"]
-    library = session_state.session.library.store
-    session_state.session.__init__()
-    monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path / "nowhere")
-    try:
-        missing = json.loads(curation_tools.curation_submit(
-            review_id=review_id, flags=[{"spot_id": 1, "flag": "wrong"}]))
-        body = json.loads(curation_tools.curation_submit(
-            review_id=review_id, flags=[{"spot_id": 1, "flag": "wrong"}],
-            file_path=str(ready["arf2"])))
-    finally:
-        session_state.session.library.store = library
-    assert missing["status"] == "error"
-    assert "file_path" in missing["message"]
-    assert "curation_review をやり直" not in missing["message"]
+    session_state.session.__init__()                       # サーバ再起動を模す（直近のデータセットが無い）
+    missing = json.loads(curation_tools.curation_submit(
+        review_id=review_id, flags=[{"spot_id": 1, "flag": "wrong"}]))
+    body = json.loads(curation_tools.curation_submit(
+        review_id=review_id, flags=[{"spot_id": 1, "flag": "wrong"}],
+        dataset_handle=ready["handle"].handle_id))
+    assert missing["error"]["code"] == "missing_state" and missing["error"]["state"] == "dataset"
     assert body["status"] == "ok", body
 
 
@@ -323,25 +309,23 @@ def test_submit_is_annotated_as_destructive_because_it_rewrites_the_tags_file():
 
 @pytest.fixture()
 def suggest_env(tmp_path, monkeypatch):
-    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     paths = write_suggest_set(tmp_path / "neg")
-    monkeypatch.setattr(mcp_core, "DATA_DIR", paths["arf2"].parent)
     session_state.session.__init__()
-    s = library_store.open_store(paths["msp"])
-    session_state.session.library.store = s
+    paths["handle"] = open_curation_dataset(paths)
     yield paths
-    s.close()
+    paths["handle"].close()
     session_state.session.__init__()
 
 
 def test_suggest_requires_a_review(suggest_env):
-    out = json.loads(curation_tools.curation_suggest(file_path=str(suggest_env["arf2"])))
+    out = json.loads(curation_tools.curation_suggest())
     assert out["error"]["code"] == "missing_state" and out["error"]["required_tools"] == ["curation_review"]
 
 
 def test_suggest_requires_the_library(suggest_env):
     session_state.session.library.store = None
-    out = json.loads(curation_tools.curation_suggest(file_path=str(suggest_env["arf2"])))
+    out = json.loads(curation_tools.curation_suggest())
     assert out["error"]["required_tools"] == ["library_load"]
 
 
@@ -349,8 +333,8 @@ def test_suggest_reports_the_library_file_name_not_its_directory(suggest_env):
     arf2 = str(suggest_env["arf2"])
     msp = Path(suggest_env["msp"])
     session_state.session.library.source_path = str(msp)     # 対話の library_load はフルパスを持つ
-    json.loads(curation_tools.curation_review(file_path=arf2))
-    out = json.loads(curation_tools.curation_suggest(file_path=arf2))
+    json.loads(curation_tools.curation_review())
+    out = json.loads(curation_tools.curation_suggest())
     assert out["library"]["path"] == msp.name
     dumped = json.dumps(out)
     assert str(msp.parent) not in dumped and msp.parent.as_posix() not in dumped
@@ -358,8 +342,8 @@ def test_suggest_reports_the_library_file_name_not_its_directory(suggest_env):
 
 def test_suggest_then_submit_assign_and_redundant(suggest_env):
     arf2 = str(suggest_env["arf2"])
-    json.loads(curation_tools.curation_review(file_path=arf2))
-    out = json.loads(curation_tools.curation_suggest(file_path=arf2))
+    json.loads(curation_tools.curation_review())
+    out = json.loads(curation_tools.curation_suggest())
     sid = out["suggestion_id"]
     assert out["counts"]["targets"]["unannotated"] == 3
     assert out["table"].splitlines()[0].split("\t") == suggest.TSV_COLUMNS
@@ -373,7 +357,7 @@ def test_suggest_then_submit_assign_and_redundant(suggest_env):
     assert submitted["status"] == "ok" and submitted["recorded"] == 2
     assert submitted["n_assign"] == 1 and submitted["n_redundant"] == 1
     assert submitted["tags_xml"]["added"] == [] and submitted["tags_xml"]["removed"] == []   # _tags.xml は不変
-    table = json.loads(curation_tools.curation_flags(file_path=arf2))["table"].splitlines()
+    table = json.loads(curation_tools.curation_flags())["table"].splitlines()
     assert table[0] == "spot_id\tflag\tname\tof\tnote\tsource\tts"
     assert table[1].split("\t")[:4] == ["2", "assign", "PE 36:2", ""]
     assert table[2].split("\t")[:4] == ["3", "redundant", "", "0"]
@@ -381,9 +365,9 @@ def test_suggest_then_submit_assign_and_redundant(suggest_env):
 
 def test_submit_rejects_a_forged_candidate(suggest_env):
     arf2 = str(suggest_env["arf2"])
-    json.loads(curation_tools.curation_review(file_path=arf2))
-    sid = json.loads(curation_tools.curation_suggest(file_path=arf2))["suggestion_id"]
-    out = json.loads(curation_tools.curation_submit(review_id=sid, file_path=arf2, flags=[
+    json.loads(curation_tools.curation_review())
+    sid = json.loads(curation_tools.curation_suggest())["suggestion_id"]
+    out = json.loads(curation_tools.curation_submit(review_id=sid, flags=[
         {"spot_id": 2, "flag": "assign", "candidate": "L7", "level": "sum"}]))
     assert out["status"] == "error"
     flags_path = suggest_env["arf2"].parent / "curation" / "flags.jsonl"
@@ -392,10 +376,10 @@ def test_submit_rejects_a_forged_candidate(suggest_env):
 
 def test_suggest_survives_a_corrupt_review_file(suggest_env):
     arf2 = str(suggest_env["arf2"])
-    json.loads(curation_tools.curation_review(file_path=arf2))
+    json.loads(curation_tools.curation_review())
     (flags.curation_dir(suggest_env["arf2"]) / "review-cr-99999999-999999-ffff.json").write_text(
         "{not json", encoding="utf-8")
-    out = json.loads(curation_tools.curation_suggest(file_path=arf2))
+    out = json.loads(curation_tools.curation_suggest())
     assert "suggestion_id" in out and "error" not in out
 
 
@@ -474,8 +458,8 @@ def test_review_registers_a_submit_endpoint_and_embeds_it_only_in_the_html(ready
 
 def test_suggest_registers_its_own_token_on_the_shared_endpoint(suggest_env):
     arf2 = str(suggest_env["arf2"])
-    review_ep = _embedded_endpoint(json.loads(curation_tools.curation_review(file_path=arf2))["html_path"])
-    out = json.loads(curation_tools.curation_suggest(file_path=arf2))
+    review_ep = _embedded_endpoint(json.loads(curation_tools.curation_review())["html_path"])
+    out = json.loads(curation_tools.curation_suggest())
     assert out["submit"]["via"] == "viewer"
     suggest_ep = _embedded_endpoint(out["html_path"])
     assert suggest_ep["port"] == review_ep["port"] and suggest_ep["token"] != review_ep["token"]

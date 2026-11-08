@@ -5,19 +5,21 @@
 ## このリポジトリは何か
 
 MS-DIAL（LC-MS リピドミクス／メタボロミクス解析ソフト）の出力を読み、LLM から使える形で
-公開する **MCP サーバ `ms-data-parser`**。ツール 91・リソース 5・リソーステンプレート 3。
+公開する **MCP サーバ `ms-data-parser`**。ツール 56・リソース 2・リソーステンプレート 1。
 GUI の外では読めない圧縮 MessagePack と独自バイナリを解し、解析そのものをサーバ側で回して
 要約だけを返す（生の行列を LLM の文脈に載せない）。
 
-**主経路は MS-DIAL GUI で解析済みの出力を読むこと**（`load_dataset` → ARF / ARF2 / 同定 /
-キュレーション）。生データから MS-DIAL Console を回す経路（`console_*` / `pipeline_*`）は
-**補助**で、保守はするが優先度は低い（ユーザー判断 2026-10-06）。`MCP_INSTRUCTIONS` の
-ENTRY POINT は、まずフォルダに MS-DIAL を動かした形跡（`.arf` 等の出力）があるかを確かめ、
-あれば下流へ進み、無ければユーザーの許可を取ってから Console を回す（ユーザー判断 2026-10-07）。
-新しい機能は主経路から設計する。
+**入口は 2 つで、合流点は「MS-DIAL の解析フォルダ」**（全体設計 `docs/superpowers/specs/2026-11-06-overhaul-overview-design.md`
+§2）。GUI で解析済みのフォルダを読む入口（`list_data_files` → `load_dataset` → 同定 / キュレーション /
+前処理 / 比較）と、生データから MS-DIAL Console を回してそのフォルダを作る入口（`console_*` / `pipeline_*`）を
+**対等に扱う**（2026-10 の「主経路と補助」は改めた）。どちらから来ても、その先は同じ 1 本の鎖を通る。
+`MCP_INSTRUCTIONS` の ENTRY POINT は変えない: まずフォルダに MS-DIAL を動かした形跡（`.arf` 等の出力）が
+あるかを確かめ、あれば下流へ進み、無ければユーザーの許可を取ってから Console を回す（ユーザー判断 2026-10-07）。
+ASSAY KIND（脂質か一般代謝物か）は `load_dataset` の後に `record_objective(assay_kind=...)` で確定する
+（記録は読み込み済みのデータセットが要るため）。意味論の要約は `load_dataset` の戻り値の `caveat`。
 
 **読む形式** — `.arf`（アライン後・サンプル別ピーク。サンプル間比較の主データ源）/
-`.arf2`（スポット代表カタログと注釈）/ `.pai2`（個別測定のピーク）/ `.dcl`（デコンボリュー
+`.arf2`（スポット代表カタログと注釈）/ `.dcl`（デコンボリュー
 ション済み MS/MS。MessagePack ではない独自バイナリ）/ `.EIC.aef`（クロマトグラム）/
 **mzTab-M 2.0**（標準交換形式。Console 経路が産み、`DatasetState` の正準入力になる）。
 サイドカー（`*_tags.xml` `.mddata` `.mdproject`）はタグと試料クラスの取得に読む。
@@ -26,16 +28,15 @@ MSLipidMapper（R）が書く**パスウェイ測定 JSON-LD**も読む（`pathw
 
 **やること** — (a) 前処理/QC（正規化・ブランク減算・QC RSD 足切り・ドリフト補正）・PCA・
 2 群差次的解析（Welch + BH-FDR）、(b) 同定の標準化と裏取り（GOSLIN 正規化・RefMet/LIPID MAPS
-ID・MSI レベル・`.dcl` の実スペクトル照合）、(c) EIC の検索と描画、(d) **生データ起点の統括（補助経路）**
+ID・MSI レベル・`.dcl` の実スペクトル照合）、(c) EIC の描画（`dataset_plot`）、(d) **生データ起点の統括（補助経路）**
 ——MS-DIAL Console を計画・実行し、mzTab-M を経て前処理・PCA・比較・品質レポートまでを
 永続 run として自動で進める（`pipeline_run`。中断・訂正をまたいで冪等）、(e) LC–MS メタボロ
 ミクス v2（内部標準比・feature binding・注入ごとの測定証拠・固定母集団 QC）。**v2 は合成入力と
 fake Console までしか検証されていない**——`docs/workflow/metabolomics.md` を先に読む。
 
 差次的エクスポートの列定義は別リポジトリ（massbank-context）との契約を兼ねる。加えて、
-文献知識と再利用手順の蓄積層を持つ——`knowledge/` `playbook/` は **MCP リソース**として
-索引と本文を配信し（`lipidmix://{knowledge,playbook}/{index,expand/<slug>}`）、
-目的（objective）とレポートはツール経由で**解析フォルダ配下の `reports/`** に読み書きする。
+目的（objective）とレポートはツール経由で**解析フォルダ配下の `reports/`** に読み書きする
+（文献検索と知識の蓄積の層は 2026-11 に消した。種ノートは vault の `archived-knowledge/` へ移した）。
 **システム調整以外のデータ解析の記録は、生データと同じ解析フォルダ側の `reports/` に置く契約**で、
 リポジトリ側には書かない（旧 `analyses/` はバグとして廃止。2026-10-09）。
 
@@ -74,29 +75,39 @@ worktree は自前の `.venv` を持たず main ツリーの `.venv` を共有�
 setup が無ければ作る。追跡されている `.vscode/mcp.json` も `.venv` を指す（VS Code から使うには
 先に setup を済ませておく）。
 
-環境変数（すべて任意・上書き用）: `LIPIDMIX_DATA_DIR`（データ探索先。既定 `<project>/data`）/
-`LIPIDMIX_KNOWLEDGE_DIR` `LIPIDMIX_PLAYBOOK_DIR` `LIPIDMIX_REPORTS_DIR`（蓄積先の上書き用。
-`LIPIDMIX_REPORTS_DIR` は未指定が既定で、そのとき記録は解析フォルダ配下 `reports/` だけに書く）/
-`LIPIDMIX_TRANSPORT` `LIPIDMIX_HOST` `LIPIDMIX_PORT`（HTTP 待受）/ `LIPIDMIX_CAVEAT_MODE` /
-`LIPIDMIX_PLOT_OUTPUT`（描画系ツールの戻り値。既定 `image`。Plotly で自分で描く
-クライアント＝Use-LLLM は `payload` を置く）/
-`LIPIDMIX_LIBRARY_CACHE_DIR`（照合用 SQLite キャッシュの置き場所。既定 `data/.library-cache`）/
+環境変数（すべて任意。起動ごとに変わるものだけを残す。spec 2026-11-06 §7.4）:
 `LIPIDMIX_CONFIG`（下記の設定ファイルの場所の上書き。worktree とテストが使う）/
-`LIPIDMIX_MAX_DATASET_HANDLES`（再解析のデータセットのハンドルの上限）。
+`LIPIDMIX_TRANSPORT` `LIPIDMIX_HOST` `LIPIDMIX_PORT`（HTTP 待受）/
+`LIPIDMIX_PLOT_OUTPUT`（描画系ツールの戻り値。既定 `image`。Plotly で自分で描く
+クライアント＝Use-LLLM は `payload` を置く）。
+置き場所とサーバの振る舞いは環境変数でなく設定ファイルに書く: `[paths] reports_dir`（解析フォルダ
+配下 `reports/` より先に試す記録の書き込み先。未指定が既定で、そのとき記録は直近のデータセットの
+解析フォルダ（`DatasetState.analysis_dir`）配下 `reports/` だけに書く。設定も無く、データセットも
+無ければ `missing_state("dataset", ["load_dataset"])`）`[paths] library_cache`（照合用 SQLite キャッシュの置き場所。既定は
+**設定ファイルのフォルダ**の `data/.library-cache`）
+`[server] max_dataset_handles`（データセットのハンドルの上限。既定 8）`[server] caveat_mode`
+（意味論ダイジェスト。`digest` 既定 / `off`。他の値は `CONFIG_INVALID`）。
+設定ファイルが読めないとき、記録・ハンドル・ライブラリのツールは `CONFIG_INVALID` の封筒を返し
+（`mcp_errors.config_invalid_as_envelope`）、ダイジェストだけは送出せず `digest` で続けて問題を 1 行添える。
 
-**外部資産の場所は設定ファイルか環境変数で指す**（spec 2026-10-06）。リポジトリ直下の
-`lipidmix.local.toml`（追跡外。雛形 `lipidmix.example.toml`）の `[msdial] exe` `lbm` と
-`[library] msp_positive` `msp_negative` `lbm`（`lbm` は pipeline の `library_mode="msp_then_lbm"` だけが読み、
-`[msdial] lbm` とは混ぜない）と `[mslipidmapper] rscript` `browser` `mslipidmapper_api_url` `api_token`、または環境変数
-`MSDIAL_EXE` `MSDIAL_LBM` `MSDIAL_MSP_POS` `MSDIAL_MSP_NEG` `MSDIAL_LIBRARY_LBM` `MSLIPIDMAPPER_RSCRIPT`
-`MSLIPIDMAPPER_BROWSER` `MSLIPIDMAPPER_API_URL` `MSLIPIDMAPPER_API_TOKEN`（環境変数が優先）。
-`mslipidmapper_api_url` / `api_token` だけはパスとして解かない（`user_config.NON_PATH_SETTINGS`）。
+**外部資産の場所は設定ファイルだけで指す**（spec 2026-10-06・2026-11-06 §7.4。資産の場所の
+環境変数は読まない）。リポジトリ直下の `lipidmix.local.toml`（追跡外。雛形 `lipidmix.example.toml`）の
+`[msdial] exe` と `[library] msp_positive` `msp_negative` `lbm` と
+`[mslipidmapper] rscript` `browser` `mslipidmapper_api_url` `api_token`。脂質ライブラリ（`.lbm2`）の
+キーは `[library] lbm` の 1 つで、Console の LBM の自動解決（メソッドの宣言 → MsdialWorkbench の
+ビルド生成物 → この設定 → 実行体のフォルダ）と pipeline の `library_mode="msp_then_lbm"`（ここ**だけ**を
+読む）の両方が読む。旧 `[msdial] lbm` が残っていれば `CONFIG_INVALID`（`[library] lbm` へ移すよう案内する）。
+`[library] lbm` から採った LBM は、どの経路の戻り値・エラー・receipt でもファイル名だけを示す
+（保存する run の記録は絶対パスのまま）。キーと値の種類（`path` / `text` / `int`）の正準は
+`user_config.SETTINGS` で、`text` と `int` はパスとして解かない（`user_config.NON_PATH_SETTINGS`）。
 `pathway_*` は `mslipidmapper_api_url` の研究室サーバを先に使い、使えなければローカルの R へ回す（`pathway/bridge.py` `run_bridge`）。読むのは `metabolomix/core/user_config.py`
 の `get_setting` だけで、各リゾルバは `os.environ` を直に読まない。設定ファイルは呼ばれる
-たびに読むので再起動は要らない。テストは conftest がこれらの環境変数を消し
-`LIPIDMIX_CONFIG` を存在しないパスへ向けている（手元の設定ファイルを掴ませない）。
+たびに読むので再起動は要らない。テストは conftest が `LIPIDMIX_CONFIG` をテストごとの tmp の中の
+存在しないパスへ向けている（手元の設定ファイルを掴ませず、既定のキャッシュをリポジトリに作らない）。
+設定が要るテストは `tests/config_fixtures.py` の `use_config`（`unittest.TestCase` は `config_env`）で
+tmp に書いて指す。
 
-**研究室の参照ライブラリは外部流出禁止**。本体はリポジトリの外に置いて設定ファイルか環境変数で指し、
+**研究室の参照ライブラリは外部流出禁止**。本体はリポジトリの外に置いて設定ファイルで指し、
 パスを追跡対象の文書・テストに書かない。本体とキャッシュの拡張子は `.gitignore` が
 置き場所を問わず無視し、`tests/test_gitignore_library.py` がその網を縛っている。
 照合の上位候補（化合物名・スコア）がツール戻り値に出るのは許容されている。
@@ -116,10 +127,10 @@ metabolomix/core/      FastMCP インスタンス・設定・セッション状�
 metabolomix/msdial/    MS-DIAL 固有サイドカー（*_tags.xml / .mddata）・同定・ピーク検証・サンプル因子
 metabolomix/analysis/  入力形式に依存しない数値処理（前処理/QC・PCA・差次的解析・エクスポート契約）
 metabolomix/plots/     描画 payload の組み立てと matplotlib 描画（volcano / eic / render）
-metabolomix/{arf,arf2,pai2,dcl,eic}/   形式ごとの reader.py（パーサ）と tools.py（MCP ツール）
+metabolomix/{arf,arf2,pai2,dcl,eic}/   形式ごとの reader.py（パーサ）。MCP ツールを持つのは dcl/tools.py だけ
 metabolomix/mztab/     mzTab-M リーダ・DatasetState 構築
 metabolomix/dataset/   MS-DIAL 解析フォルダ（.arf / .arf2 ほか）から DatasetState を作る adapter の部品（まずファイルの選択）。
-                    データセットを開く入口は opening.open_dataset だけ（dataset_load / dataset_handle_open が共有）
+                    データセットを開く入口は opening.open_dataset だけ（load_dataset が呼ぶ）
 metabolomix/library/   参照ライブラリ（.dbs / .msp）の読み取りと永続 store。
                     形式ごとに分けないのは、2 つが同じレコード形と同じ store を
                     共有する 2 つの入口にすぎないため（spec 2026-09-19）
@@ -128,23 +139,29 @@ metabolomix/pipeline/  生データフォルダ起点の統括（受付 request/
                     工程 handler の service・再開/取消の recovery・必須出力判定と品質レポートの report）
 metabolomix/handoff/   Console 成果物の受け渡しスキーマ（analysis-job.json）
 metabolomix/curation/  アラインメントのキュレーション（証拠収集・機械判別・フラグ記録・ビューア HTML）
-metabolomix/corpus/    蓄積ノートの純ロジック（knowledge_store / paper_ingest）
 metabolomix/pathway/   MSLipidMapper 連携（最小 mzTab-M の受け渡し・Rscript ブリッジ・JSON-LD 読み取り・隣接比較）
-metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サンプル検索・目的・レポート・リソース）
+metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料・目的・レポート・リソース）
 ```
 
 - **`server.py` は薄いファサード**。import 副作用で `@mcp.tool` を登録し、`from ... import *`
   （各モジュールの `__all__` ＝そのモジュールのツール名）で公開面を再エクスポートするだけ。
   新しいツールを足すときは、実体を該当モジュールに書き `__all__` に載せる。
 - **`server.py` をルートから動かさない**。`.mcp.json` / `.vscode/mcp.json` が絶対パスで指している。
-- **可変状態の正準は `metabolomix.core.mcp_core`（`DATA_DIR` `KNOWLEDGE_DIR` `ANALYSES_DIR`）と
-  `metabolomix.core.session_state`（`session`）**。`server.<name>` はスナップショット束縛にすぎないので、
-  差し替え・モンキーパッチは必ず正準モジュール側に当てる。参照も `mcp_core.DATA_DIR` の
-  module 修飾で行い、`from ... import DATA_DIR` を書かない。
+- **可変状態の正準は `metabolomix.core.session_state`（`session`）**。`server.<name>` は
+  スナップショット束縛にすぎないので、差し替え・モンキーパッチは必ず正準モジュール側に当てる。
+  **データの探索先（旧 `DATA_DIR`・`LIPIDMIX_DATA_DIR`）は無い**（B-2b で消した。
+  `tests/test_no_asset_env_vars.py` が固定している）: `list_data_files` は `directory` 必須で、
+  パスを省いたツール（`dcl_*`・`library_*`）は直近のデータセット（または `dataset_handle`）が覚えた
+  `.arf2` / `.dcl` を使う（`dataset/artifacts.py` `artifact_path` と `tools/_holder.py` `alignment_paths`）。
+  直近が無い・閉じたなら `missing_state("dataset", ["load_dataset"])`で、`data/` や開いている
+  別のハンドルへは落ちない。記録（objective・レポート・図・パスウェイ）の置き場所は
+  `mcp_core._report_dir_candidates(holder)`（設定の `[paths] reports_dir` → データセットの
+  `analysis_dir` 配下 `reports/`。`holder` は呼び出し側が渡す）。
 - **`metabolomix.core.mcp_core` は leaf**。ここから `metabolomix.<形式>.tools` や `metabolomix.tools.*` を
   import してはならない（循環）。
-- **セッション状態はパーサ別に分離済み**: `session.arf` / `.arf2` / `.pai2` / `.eic`。あるパーサが
-  別スロットを触ってはいけない（`pai2_parser` が ARF の前処理行列を無言破棄した過去のバグの再発防止）。
+- **セッションにパーサ別のスロットは無い**（旧 `session.arf` / `.arf2` / `.pai2` / `.eic` は B-2b で
+  消した。`tests/test_session_namespaces.py` が固定している）。読み込んだものはすべて `DatasetState` として
+  ハンドルの登録簿に住む。共有の無修飾スロットを作らない（別の読み込みが進行中の解析を無言で消すため）。
 - **読み込んだデータセットはすべて `metabolomix/core/handles.py` の登録簿にハンドルとして
   住み、対話のセッションは直近のハンドルを指すだけ**（spec 2026-10-22・2026-11-06 §5）。
   `session.dataset` / `session.library` は `current_handle_id` のハンドルを読む property で、
@@ -168,25 +185,24 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
   途中の行列を掴む。自身のソースで読むものは `tests/test_session_handle_unification.py` が
   捕まえるが、ヘルパー経由の読み取りは捕まらない。スレッドに縛られる資源（sqlite3 の接続
   など）はスレッドをまたいで使える形で持ち、閉じるのと使うのはハンドルのロックで直列にする。
-  `library_load` → `dataset_load` の順なら、セッション自身のライブラリは新しいハンドルへ
+  `library_load` → `load_dataset` の順なら、セッション自身のライブラリは新しいハンドルへ
   移る（写さない。閉じたあと古いライブラリへ落ちない）。
 - **解釈規則の選択軸は `session.assay_kind`**（`lipid` / `metabolite` / `unknown`、既定
   `unknown`）。脂質名文法は脂質アッセイでしか成り立たないので、ダイジェスト
-  （`assay_digest()`）も `section_hint` もここで分岐する。**`caveat_emitted` の bool だけに
-  戻さない**——`load_dataset` は GATEWAY より先に走るのでダイジェストは必ず `unknown` で
-  1 回出る。`caveat_emitted_kind` があるから、種別が確定したときにもう 1 回だけ届く。
+  （`assay_digest()`）がここで分岐する。**`caveat_emitted` の bool だけに
+  戻さない**——`load_dataset` が（種別の確定より先に）ダイジェストを出すので、まず `unknown` で
+  1 回出る。`record_objective(assay_kind=...)` が確定した種別のダイジェストをもう 1 回だけ届ける
+  （`caveat_emitted_kind` があるのはそのため）。
 - **前提状態が無いときは例外でなく機械可読な封筒を返す**:
   `{"error": {"code": "missing_state", "state": ..., "required_tools": [...], "message": ...}}`
   （`metabolomix/core/mcp_errors.py` の `missing_state`）。クライアントはこれを読んでリプレイする契約。
 - **reader の MessagePack Key インデックスの正解表は `docs/schema/*.md`**（MS-DIAL の C# クラス
   `[Key(N)]` から抽出した Key 番号表。上流のコミットと欠番も記載してある）。
   インデックス定数を変える前に必ず参照する。推測で直さない。
-- **`run_pca` の正準は `metabolomix/analysis/pca.py`**。`metabolomix/arf/reader.py` の同名は後方互換の
-  再エクスポートで、ARF テストが `patch.object(server.arf_reader, "run_pca", ...)` で module 属性
-  としてこの束縛を差し替えてモックしている。**消すとモックが効かなくなり、テストは緑のまま
-  実物の scikit-learn PCA が走り出す。**
+- **`run_pca` の正準は `metabolomix/analysis/pca.py`**。`metabolomix/arf/reader.py` は再エクスポートしない
+  （`tests/test_analysis_pca.py` が固定。パーサ単体の CLI だけがここから import する）。
 - **差次的エクスポートの列定義は `metabolomix/analysis/export_contract.py` が唯一の正準**。
-  ARF（`arf_export_differential`）と mzTab-M（`dataset_export_differential`）の両経路がここを
+  `dataset_export_differential`（と、生データ起点の `pipeline` の書き出し）がここを
   共有しており、**別リポジトリ（massbank-context）との契約**でもある。列の追加・改名・並べ替えは
   `CONTRACT_VERSION` の引き上げと下流の同時更新なしにやってはいけない。
 - **ツールの戻り値を肥大させない**。戻り値はそのまま LLM の文脈を占め、結論が埋没する。
@@ -230,7 +246,7 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
 | 知りたいこと | 見る場所 |
 |---|---|
 | ツールの引数・用途（`tests/test_readme_links.py` が一覧と件数を実登録と突き合わせている） | `USAGE.md` |
-| 出力フィールドの**意味**（行の粒度・脂質名文法・必須注意） | `docs/output_format/core.md` ＋ トピック別（`arf` `arf2` `pai2` `dcl` `eic` `identity` `mztab` `library` `curation` `pathway` `reanalysis`）。MCP リソース `lipidmix://docs/output-format[/{topic}]` としても配信 |
+| 出力フィールドの**意味**（行の粒度・脂質名文法・必須注意） | `docs/output_format/core.md` ＋ トピック別（`dataset` `dcl` `eic` `identity` `mztab` `library` `curation` `pathway` `reanalysis`）。MCP リソース `lipidmix://docs/output-format[/{topic}]` としても配信 |
 | ツールが**どのファイルのどの関数をどの順に呼ぶか** | `docs/workflow/`（対象範囲の線引きと内訳は `index.md` が正準。`tests/test_workflow_docs.py` が実登録と突き合わせている）。行番号は書かない規約 |
 | **生データ → Console → mzTab-M → 差次的解析 → パスウェイ**の一気通貫の順序と、内部関数の引数・戻り値 | [docs/superpowers/specs/2026-09-03-end-to-end-pipeline-design.md](docs/superpowers/specs/2026-09-03-end-to-end-pipeline-design.md)（**目標状態**の記述。実装状況は同文書 §9。完成後 `docs/workflow/Lipidmix/` へ昇格） |
 | MessagePack の Key 番号 | `docs/schema/*.md` |
@@ -246,6 +262,11 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
 - 腐敗防止テストが効いている。壊すと落ちる:
   - `tests/test_workflow_docs.py` — `docs/workflow/` が挙げるパス・関数名を AST で実在検証し、
     対象ツール数を実登録数と突き合わせる。
+  - `tests/test_removed_tools_not_mentioned.py` — 消したツールの名前が入口の文書（README / USAGE / DEPLOY /
+    CLAUDE / `docs/workflow` / `docs/output_format` / `docs/cli.md`）と `metabolomix/` の文字列・コメントに
+    単語として残らないことを縛る（`docs/superpowers/**` と `docs/schema/**` は対象外）。ツールを消したら、
+    `REMOVED_TOOLS` に足して文面を直す。
+  - `tests/test_instructions_text.py` — `MCP_INSTRUCTIONS` と意味論の要約が、登録されたツールの名前だけを語る。
   - `tests/test_package_layout.py` — 移動で静かに壊れる `BASE_DIR` 起点の解決と、
     ルート直下の `.py` が `server.py` `check.py` だけであることを縛る。
   - `tests/test_readme_links.py` — 入口文書（`README.md` `USAGE.md` `DEPLOY.md` `CLAUDE.md`）の
@@ -255,8 +276,8 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
     写しだけが腐るため）。README は詳細を他文書へ委譲した要約なので、
     ポインタが切れると案内そのものが壊れる。
 - `tests/test_server_registration.py` がツール/リソースの登録数と `ToolAnnotations` を検証する。
-- **fixture はテスト自身が作る**。解析フォルダの `reports/` や `knowledge/` の実ファイルに依存させない
-  （追跡外なのでユーザ環境依存の不安定テストになる。tmp に作って `mcp_core.DATA_DIR` を差し替える流儀）。
+- **fixture はテスト自身が作る**。解析フォルダの `reports/` の実ファイルに依存させない
+  （追跡外なのでユーザ環境依存の不安定テストになる。tmp に作った解析フォルダを `load_dataset(directory=...)` で開く流儀）。
 
 ## 作業の記録と Git
 
@@ -272,7 +293,7 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・サン�
 - **フローが変わったら vault 側の流れ図も同じ作業の中で直す**。反映先は
   `C:\Users\yuu18\Documents\KnowledgeVault\30_Projects\ms-data-parser\ms-data-parser-flow.md`。
   対象は「利用者から見て何がどの順に起きるか」が変わる改修——入口の判定規則
-  （`metabolomix/core/mcp_core.py` の `MCP_INSTRUCTIONS` の ENTRY POINT / GATEWAY）、
+  （`metabolomix/core/mcp_core.py` の `MCP_INSTRUCTIONS` の ENTRY POINT / ASSAY KIND）、
   pipeline の stage 列（`pipeline/engine.py` `build_stages` /
   `pipeline/stage_plan.py` `BASE_V2_STAGE_IDS`）、前提状態の連鎖（どのツールが
   どのツールを `missing_state` で要求するか）、経路の増減（新しい入口・新しい解析枝）、
@@ -307,10 +328,10 @@ git worktree remove .worktrees/<slug>  # 片付け
   新品の worktree でもテストは全数緑になる（実測で確認済み）。
 - スクリプトが worktree 専用の `.mcp.json` を生成する。`command` は main ツリーの `.venv` の Python。`server.py` は**その worktree の
   もの**を指す（main を指すと、worktree のコードを編集しながら main の実装を試すことに
-  なり、最も気づきにくい形で嘘をつく）。蓄積状態（`LIPIDMIX_DATA_DIR`
-  `LIPIDMIX_KNOWLEDGE_DIR`）は **main ツリー**を向けて分裂させない。`LIPIDMIX_REPORTS_DIR` は
-  置かない（記録は解析フォルダ側に付いて回る）。版管理対象の `playbook/` だけは worktree ローカル
-  （変更対象そのものなので）。
+  なり、最も気づきにくい形で嘘をつく）。設定ファイル（`LIPIDMIX_CONFIG`。main ツリーの
+  `lipidmix.local.toml` を、まだ無くても指す）は **main ツリー**を向けて分裂させない（データの探索先の環境変数は無い）。参照ライブラリのキャッシュは
+  設定ファイルのフォルダに付くので、これで main ツリーのものを共有する。記録の書き込み先は
+  指さない（記録は解析フォルダ側に付いて回る）。
 - **記録は main ツリー側の `docs/HISTRY.md` / `docs/task.md` へ書く**（task.md は並列中なので末尾への追記だけ）。
   worktree には存在しない。
 - `core.hooksPath` は worktree 間で共有され `.githooks/` は追跡対象なので、
@@ -325,8 +346,8 @@ git worktree remove .worktrees/<slug>  # 片付け
   例外は `requirements*.txt`（依存のロック）だけ。
 - `r/renv/library/` は追跡外なので worktree には来ない。worktree で `pathway_*` を実機で試すときは、
   その worktree でも `Rscript r/setup.R` を実行する（renv のグローバルキャッシュから入るので速い）。
-- `docs/HISTRY.md` `docs/task.md` `data/` `analysis/` `archives/` は追跡外。`knowledge/` は
-  種ノートのみ追跡、`playbook/` は版管理対象。クリーンチェックアウトに無い前提で書く。
+- `docs/HISTRY.md` `docs/task.md` `data/` `analysis/` `archives/` は追跡外。
+  クリーンチェックアウトに無い前提で書く。
 - `archives/` は 2026-07 に退避したローカル LLM エージェント・解釈精度評価のコード置き場
   （`local_llm_agent/` `interp_eval/` ほか）。**ライブ側からの参照はゼロ**。動かすには
   ルート＋当該フォルダを `PYTHONPATH` に載せる必要がある参照用の退避物。現行開発では触らない。

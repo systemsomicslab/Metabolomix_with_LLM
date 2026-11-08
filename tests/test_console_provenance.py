@@ -16,6 +16,7 @@ from metabolomix.console.output_collector import (
     read_adduct_polarity,
     read_software_version,
 )
+from tests.config_fixtures import use_config
 
 _MTD = (
     "MTD\tmzTab-version\t2.0.0-M\n"
@@ -84,7 +85,8 @@ def test_console_run_records_software_version_from_mztab(tmp_path, monkeypatch):
     from metabolomix.tools.console_tools import console_run
     from tests.pipeline_fixtures import fake_console_command, use_fake_console
 
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    (tmp_path / "fake.exe").touch()
+    use_config(monkeypatch, tmp_path, {"msdial.exe": tmp_path / "fake.exe"})
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")
@@ -111,7 +113,8 @@ def test_console_run_crosschecks_polarity_without_overwriting_the_source(tmp_pat
     from metabolomix.tools.console_tools import console_run
     from tests.pipeline_fixtures import fake_console_command, use_fake_console
 
-    monkeypatch.setenv("MSDIAL_EXE", "fake.exe")
+    (tmp_path / "fake.exe").touch()
+    use_config(monkeypatch, tmp_path, {"msdial.exe": tmp_path / "fake.exe"})
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     method = tmp_path / "params.txt"
     method.write_text("Ion mode: Negative\n", encoding="ascii")

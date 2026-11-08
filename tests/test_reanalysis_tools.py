@@ -10,7 +10,7 @@ import textwrap
 
 import pytest
 
-from metabolomix.core import handles, mcp_core, session_state
+from metabolomix.core import handles, session_state
 from metabolomix.dcl import tools as dcl_tools
 from metabolomix.library import tools as library_tools
 from metabolomix.msdial import alignment_spot
@@ -19,6 +19,7 @@ from metabolomix.tools import handle_tools, mztab_tools
 from metabolomix.tools import reanalysis_tools as R
 from tests.dcl_fixture import build_dcl_bytes
 from tests.reanalysis_fixtures import SAMPLES, write_mztab
+from tests.config_fixtures import use_config
 
 GABA_KEY = "BTCSSZJGUNDROE-UHFFFAOYSA-N"
 BASE = [10, 12, 11, 20, 22, 21, 15, 16]
@@ -61,7 +62,6 @@ _MSP = textwrap.dedent("""\
 def fresh_state(tmp_path, monkeypatch):
     session_state.session = session_state.AnalysisSession()
     handles.registry = handles.HandleRegistry()
-    monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path)
     yield
     for handle in handles.registry.list():
         handles.registry.close(handle.handle_id)
@@ -85,8 +85,7 @@ def library(tmp_path, monkeypatch, data):
     msp = tmp_path / "lab" / "pos.msp"
     msp.parent.mkdir()
     msp.write_text(_MSP, encoding="ascii")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(msp))
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     run = data["mztab"].parent
     (run / "AlignResult-1.arf2").write_bytes(b"placeholder")
     entries = [{"precursor_mz": 999.0, "rt": 9.0, "spectrum": []} for _ in range(27)]
@@ -100,15 +99,19 @@ def library(tmp_path, monkeypatch, data):
     return msp
 
 
-def _open(data, **kwargs):
-    kwargs.setdefault("library", "none")
-    library = kwargs["library"]
-    out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(data["mztab"]), **kwargs))
+def _open(data, msp=None):
+    kwargs = {"library": "none"}
+    # 旧 `dataset_handle_open` は直近を動かさなかった。この検査は「ハンドルを渡す呼び出しは対話の状態に
+    # 触れない」ことを縛るので、開いたあとで直近を元に戻す（`load_dataset` はいつも直近にする）。
+    previous = session_state.session.current_handle_id
+    out = json.loads(handle_tools.load_dataset(mztab_path=str(data["mztab"]), **kwargs))
     assert out["status"] == "success", out
-    if library == "auto":
-        # mzTab-M の記憶は `unknown` なので、library_load は極性の設定（MSDIAL_MSP_POS）から引く
-        # （mzTab-M の本番の経路）。
-        library_tools.library_load(dataset_handle=out["dataset_handle"])
+    session_state.session.current_handle_id = previous
+    if msp is not None:
+        # mzTab-M の記憶は `unknown` なので、library_load には file_path で明示する（mzTab-M の本番の経路）。
+        loaded = json.loads(library_tools.library_load(file_path=str(msp),
+                                                       dataset_handle=out["dataset_handle"]))
+        assert loaded["status"] == "success", loaded
     return out["dataset_handle"]
 
 
@@ -158,7 +161,7 @@ def test_analysis_run_rows_have_detection_columns(data):
 
 
 def test_analysis_run_on_session_dataset(data):
-    mztab_tools.dataset_load(mztab_path=str(data["mztab"]))
+    handle_tools.load_dataset(mztab_path=str(data["mztab"]))
     out = json.loads(R.dataset_analysis_run(_spec(data)))
     assert out["status"] == "success"
     assert out["input_fingerprint"]["dataset_hash"]
@@ -421,7 +424,7 @@ def test_claim_evidence_is_deterministic(data, tmp_path):
 
 
 def test_claim_evidence_with_library_runs_msms_rules(data, library):
-    handle = _open(data, library="auto")
+    handle = _open(data, msp=library)
     claim = {**CLAIM, "msms": {"top_n": 3, "rules": {"min_fragments_excl_precursor": 2,
                                                      "diagnostic_ions": [{"mz": 87.0441}]}}}
     out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
@@ -452,7 +455,7 @@ def test_claim_evidence_unresolved_is_needs_input(data):
 # ---------- MS/MS の合否・診断イオン・同族列 ----------
 
 def test_msms_qualify_tool_on_handle(data, library):
-    handle = _open(data, library="auto")
+    handle = _open(data, msp=library)
     out = json.loads(R.library_msms_qualify(
         {"target": {"inchikey": GABA_KEY}, "min_fragments_excl_precursor": 2},
         spot_id=20, dataset_handle=handle))
@@ -464,7 +467,7 @@ def test_msms_qualify_tool_on_handle(data, library):
 
 
 def test_diagnostic_ions_tool(data, library):
-    handle = _open(data, library="auto")
+    handle = _open(data, msp=library)
     out = json.loads(dcl_tools.dcl_diagnostic_ions(
         [20, 21], [{"mz": 87.0441, "label": "a"}, {"neutral_loss": 17.0265, "label": "-NH3"}],
         dataset_handle=handle))
@@ -565,7 +568,7 @@ def test_claim_evidence_candidate_has_split(tmp_path, data):
 
 
 def test_counts_qualified_is_msms_verdict(data, library):
-    handle = _open(data, library="auto")
+    handle = _open(data, msp=library)
     target = {"inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": 2.0,
               "adduct_tiers": [["[M+H]+"]]}
 
@@ -596,7 +599,7 @@ def test_spectrum_available_counts_mass_window_even_when_none_rule_qualified(dat
     # 目標の RT を特徴 20（RT 2.0）から外す: 規則で qualified は 0、質量の窓の 20 の代表 MS/MS は数える
     target = {"inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": 9.0, "adduct_tiers": [["[M+H]+"]]}
     claim = {"claim_id": "C1", "target": target, "msms": {"top_n": 3, "rules": {"min_fragments_excl_precursor": 2}}}
-    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=_open(data, library="auto")))
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=_open(data, msp=library)))
     counts = out["default_selection"]["counts"]
     assert counts["rule_qualified"] == 0 and counts["msms_spectrum_available"] == 1
 
@@ -892,3 +895,18 @@ def test_claim_evidence_on_an_lbm_only_dataset_is_not_evaluable_not_no_library(d
     assert all(m["reason"] == "lbm_only" for m in msms.values())
     assert "LBM" in out["msms_not_evaluable_reason"]
     assert msms["20"]["spectrum_available"] is True
+
+
+def test_not_evaluable_reason_is_last_key(data, library):
+    """理由の文は束の先頭に置かず、末尾に置く（読み手が最初に見るのは status / schema）。"""
+    from metabolomix.core import handles
+
+    handle = _open(data)
+    handles.registry.get(handle).dataset.library_record = {
+        "status": "lbm_only", "kind": "lbm", "file": "lab.lbm2", "path": None}
+    claim = {**CLAIM, "msms": {"top_n": 3, "rules": {}}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    keys = list(out)
+    assert "msms_not_evaluable_reason" in keys
+    assert keys[-1] == "msms_not_evaluable_reason" and keys[0] != "msms_not_evaluable_reason"
+    assert "schema" in keys

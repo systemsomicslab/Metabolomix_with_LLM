@@ -24,6 +24,7 @@ from metabolomix.analysis.dataset_analysis import PreconditionError
 from metabolomix.pipeline import engine, service
 from metabolomix.pipeline.request import resolve_request
 from metabolomix.pipeline.store import create_run, load_run, save_run
+from tests.config_fixtures import use_config
 
 
 def _pca_context(pipeline_root: Path) -> dict:
@@ -325,14 +326,14 @@ def test_resume_pipeline_normalizes_the_run_json_path_before_launching(tmp_path,
 def _prepare_source(tmp_path, monkeypatch):
     """`start_pipeline`の実処理(受付冪等性込み)を通すための実生データフォルダ。
 
-    `MSDIAL_EXE`環境変数と`probe_console_exe`だけを差し替え、他はすべて
+    `[msdial] exe`（tmpの設定ファイル）と`probe_console_exe`だけを差し替え、他はすべて
     `inspect_inputs`/`find_or_create_run`本体を実際に通す
     （`tests/test_pipeline_recovery.py::_build_pipeline_with_real_inputs`と
     同じ流儀）。
     """
     from tests.pipeline_fixtures import make_source
     source = make_source(tmp_path / "source")
-    monkeypatch.setenv("MSDIAL_EXE", str(source["exe"]))
+    use_config(monkeypatch, tmp_path, {"msdial.exe": source["exe"]})
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     monkeypatch.setenv("LIPIDMIX_PIPELINE_INDEX_DIR", str(tmp_path / "_pipeline_index_base"))
     return source
@@ -784,6 +785,70 @@ def test_status_details_do_not_reveal_the_lab_lbm_location(tmp_path, monkeypatch
     assert inputs["method"]["overrides"]["Msp file path"] == ""
 
 
+def _auto_source_with_library_lbm(tmp_path, monkeypatch):
+    """auto で LBM が `[library] lbm`（出どころ config_file）から解ける生データフォルダ。"""
+    from tests.lab_msp_fixtures import write_lab_msp_config
+    source = _prepare_source(tmp_path, monkeypatch)
+    # 宣言を空にし、実行体のフォルダの候補（fake.lbm2）より設定が先に効く状況にする。
+    source["method"].write_text(
+        "Ion mode: negative\nTarget omics: Lipidomics\nLbm file path: \n",
+        encoding="ascii", newline="\n")
+    paths = write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share", lbm=True)
+    return source, paths
+
+
+def test_auto_plan_shows_only_the_name_of_a_library_lbm(tmp_path, monkeypatch):
+    """Task 8 fix 1: auto でも [library] lbm から解いた LBM は receipt・status・report で
+    ファイル名だけ（欄は変えない）。保存する record は絶対パスのまま（resume の再検査）。"""
+    from metabolomix.pipeline import recovery, report, store
+    source, paths = _auto_source_with_library_lbm(tmp_path, monkeypatch)
+    receipt = service.plan_pipeline(source["root"], {"library_mode": "auto"})
+    assert "secret_share" not in json.dumps(receipt, ensure_ascii=False)
+    assert receipt["resolved"]["library_mode"] == "auto"
+    assert receipt["resolved"]["lbm"]["path"] == "lab_lipids.lbm2"
+    assert len(receipt["resolved"]["lbm"]["sha256"]) == 64
+
+    pipeline_root = recovery.normalize_pipeline_root(Path(receipt["pipeline_path"]))
+    saved = store.load_run(pipeline_root)
+    assert saved["inputs"]["lbm"]["path"] == str(paths["lbm"].resolve())
+    assert saved["inputs"]["lbm"]["source"] == "config_file"
+    assert "secret_share" in saved["inputs"]["method"]["overrides"]["Lbm file path"]
+
+    status = recovery.read_status(Path(receipt["pipeline_path"]), include_details=True)
+    assert "secret_share" not in json.dumps(status, ensure_ascii=False)
+    inputs = status["record"]["inputs"]
+    assert inputs["lbm"]["path"] == "lab_lipids.lbm2"
+    assert inputs["method"]["overrides"]["Lbm file path"] == "lab_lipids.lbm2"
+
+    section = report._section_method(saved)
+    assert "- lbm_path: lab_lipids.lbm2" in section
+    assert "secret_share" not in section
+
+
+def test_auto_plan_keeps_the_full_path_of_a_declared_lbm(tmp_path, monkeypatch):
+    """[library] lbm 以外の出どころ（メソッドの宣言）は従来どおり絶対パスを示す。"""
+    source = _prepare_source(tmp_path, monkeypatch)
+    receipt = service.plan_pipeline(source["root"], {"library_mode": "auto"})
+    assert receipt["resolved"]["lbm"]["path"] == str(source["lbm"].resolve())
+
+
+def test_verify_inputs_names_only_the_file_of_a_changed_library_lbm(tmp_path, monkeypatch):
+    """resume の再検査（INPUT_CHANGED）も auto の [library] lbm はファイル名だけ。"""
+    from metabolomix.core.atomic_io import DomainError
+    from metabolomix.pipeline import inputs as inputs_mod
+    lib = tmp_path / "secret_share" / "lab_lipids.lbm2"
+    lib.parent.mkdir()
+    lib.write_bytes(b"changed")
+    snapshot = {"source_root": str(tmp_path), "raw_stat": [], "library_mode": "auto",
+                "lbm": {"path": str(lib), "sha256": "0" * 64, "source": "config_file"}}
+    with pytest.raises(DomainError) as exc:
+        inputs_mod.verify_inputs(snapshot)
+    assert exc.value.code == "INPUT_CHANGED"
+    assert "secret_share" not in exc.value.message
+    assert "secret_share" not in json.dumps(exc.value.details, ensure_ascii=False)
+    assert exc.value.details["lbm_file"] == "lab_lipids.lbm2"
+
+
 def test_without_library_location_redacts_absolute_annotator_tables():
     from metabolomix.pipeline import recovery
     record = {"inputs": {
@@ -802,7 +867,7 @@ def test_without_library_location_redacts_absolute_annotator_tables():
     assert overrides["MSP annotator settings file path"] == "msp-annotators.tsv"
     assert overrides["MSP search settings file path"] == "inputs/msp-annotators.tsv"  # 相対はそのまま
     assert record["inputs"]["lbm"]["path"] == "//nas/secret_share/lab.lbm2"  # 元は変えない
-    # auto の LBM（[msdial] lbm）は従来どおり path を残す。
+    # auto の LBM は従来どおり path を残す。
     auto = {"inputs": {"library_mode": "auto", "lbm": {"path": "C:/MS-DIAL/x.lbm2"},
                        "msp": {"path": None}, "method": {"overrides": {"Lbm file path": "C:/MS-DIAL/x.lbm2"}}}}
     assert recovery._without_library_location(auto)["inputs"]["lbm"]["path"] == "C:/MS-DIAL/x.lbm2"

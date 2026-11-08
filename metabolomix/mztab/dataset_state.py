@@ -1,16 +1,16 @@
 """DatasetState: mzTab-M を読んだ後の正準モデル。spec §11 参照。
 
-session.arf の ARF 専用構造とは完全に独立している。session.dataset スロットへ格納する。
+解析フォルダで読んだものも mzTab-M で読んだものも同じ形で、ハンドルの登録簿に住む（`session.dataset` は直近のハンドルを読む）。
 """
 from __future__ import annotations
 
-import hashlib
 import re
 import uuid
 from pathlib import Path
 
 import numpy as np
 
+from metabolomix.core import file_digest
 from metabolomix.mztab import identity as mztab_identity
 from metabolomix.mztab import msp_inchikey
 from metabolomix.mztab.identity import _INCHIKEY_RE, derive_inchikey
@@ -174,7 +174,7 @@ class DatasetState:
         # 取り込めなかった場合は None（空の辞書と混同させない）。
         self.per_sample_mz: dict[str, dict[str, float]] | None = None
 
-        # --- ジョブ由来フィールド（dataset_load(job_path=...) で設定） ---
+        # --- ジョブ由来フィールド（load_dataset(job_path=...) で設定） ---
         # job_path: analysis-job.json の絶対パス。mzTab-M を直接指定した場合は None。
         self.job_path: str | None = None
         # artifact_paths: role -> [絶対パス, ...] のマップ。
@@ -183,8 +183,7 @@ class DatasetState:
 
         # --- 解析状態フィールド（dataset_preprocess / dataset_pca / dataset_differential が設定） ---
         # pp_matrix: 前処理済み行列。shape は (n_samples, n_features) — feature_matrix の転置。
-        # ARF 側の session.arf.feature_matrix / pp_sample_names / pp_feature_names と
-        # 同じ役割で、スロットだけが独立している。
+        # 前処理済みの試料名・特徴名は pp_sample_names / pp_feature_names が持つ。
         self.pp_matrix = None
         self.pp_sample_names: list[str] = []
         self.pp_feature_names: list[str] = []
@@ -196,11 +195,15 @@ class DatasetState:
         self.preprocessing_recipe: dict = {}
         # last_pca / last_differential: 直近結果の全量。戻り値には要約だけを載せ、
         # 全量はここに置く（CLAUDE.md の戻り値肥大禁止）。
-        # 現時点で読むのは dataset_export_differential のみ。図の保存ツール
-        # （save_figure の pca / volcano）は session.arf 側を見ており、
-        # DatasetState 経路には未対応（次フェーズ）。
+        # 読むのは dataset_export_differential と dataset_plot（pca / loadings / volcano）。
         self.last_pca = None
         self.last_differential = None
+        # figures: dataset_plot の kind -> 最後に作った図の記録
+        # {"kind", "payload", "title", "result_id", "result"（volcano の全点。描画用）, "caption"}。
+        # save_figure(kind=...) がここから描く。**指紋に含めない**（派生物であって入力ではない）。
+        # 結果から作った図（pca / loadings / volcano）は、その結果が古くなったとき
+        # `result_state.invalidate_results` が捨てる。
+        self.figures: dict[str, dict] = {}
 
         # --- 同一性と来歴（metabolomix/analysis/result_state.py が読み書きする） ---
         # dataset_id: この DatasetState 実体の ID。結果の provenance が指す先で、
@@ -258,6 +261,11 @@ class DatasetState:
         self.ion_mode_majority: str | None = None
         # artifact_sha256: 読んだ成果物のパス -> sha256。
         self.artifact_sha256: dict[str, str] = {}
+        # analysis_dir: 解析の記録（レポート）の置き場所を決める基準のフォルダ。`dataset.opening` が
+        # 読み込みで入れる——解析フォルダのアダプタは選んだ `.arf` のフォルダ、mzTab-M のアダプタは
+        # mzTab-M のフォルダ。指紋（`result_state.dataset_fingerprint`）には入れない
+        # （入力ではなく置き場所なので、データを動かしても結果が古くならない）。
+        self.analysis_dir: str | None = None
         # library_record: 同定に使った参照ライブラリの記録（Task 6）。
         self.library_record: dict | None = None
         # feature_tags / curation_flags: 特徴ごとのタグとキュレーションのフラグ（Task 5）。
@@ -265,14 +273,15 @@ class DatasetState:
         self.curation_flags: dict | None = None
         # load_notes: 読み込み時に分かった注記（.mddata が無い等）。
         self.load_notes: list[str] = []
+        # excluded_samples / excluded_features: `dataset_exclude` が持つ除外（名前または特徴 ID -> 理由）。
+        # 解析の状態であって入力ではないので指紋（`result_state.dataset_fingerprint`）には入れない
+        # （`sample_meta` の編集と同じ扱い）。前処理（`dataset_analysis`）が行列から外す。
+        self.excluded_samples: dict[str, str] = {}
+        self.excluded_features: dict[str, str] = {}
 
 
 def _sha256(path: str | Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    return file_digest.sha256_of(path)
 
 
 #: `msp_inchikey.lookup` の結果 → `inchikey_coverage["msp_lookup"]` の数のキー。
@@ -506,7 +515,7 @@ def build_dataset_state(
     if name_warnings:
         # **先頭に差す**。パーサ層の良性 warning（末尾空列の除去など）は実データで
         # 数百件になり得るので、後ろに append すると件数を絞って表示する
-        # dataset_load の要約に載る余地がなくなる。表示されない warning は
+        # load_dataset の要約に載る余地がなくなる。表示されない warning は
         # 無いのと同じで、群選択が黙って誤るのを止められない。
         existing = ds.validation_result.setdefault("warnings", [])
         ds.validation_result["warnings"] = [*name_warnings, *existing]

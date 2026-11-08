@@ -231,6 +231,11 @@ def _resolved_settings(record: dict) -> dict:
         resolved_lbm = {"file": lbm.get("file"), "sha256": lbm.get("sha256"),
                         "source": lbm.get("source")}
         resolved_msp["priority"] = msp.get("priority")
+    elif inputs_mod.is_lab_lbm(inputs):
+        # auto でも [library] lbm から解いた LBM は研究室の資産。欄は変えず、
+        # path の中身をファイル名にする（spec 2026-10-07 §3.3）。
+        resolved_lbm = {"path": Path(lbm["path"]).name if lbm.get("path") else None,
+                        "sha256": lbm.get("sha256")}
     else:
         resolved_lbm = {"path": lbm.get("path"), "sha256": lbm.get("sha256")}
     resolved = {

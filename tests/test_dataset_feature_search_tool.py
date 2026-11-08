@@ -85,7 +85,7 @@ def test_without_dataset_returns_missing_state():
     parsed = _search(min_mz=100.0)
     assert parsed["error"]["code"] == MISSING_STATE
     assert parsed["error"]["state"] == "dataset"
-    assert parsed["error"]["required_tools"] == ["dataset_load"]
+    assert parsed["error"]["required_tools"] == ["load_dataset"]
 
 
 def test_window_and_targets_together_is_bad_request():
@@ -292,7 +292,7 @@ def test_curation_flags_are_noted_but_not_applied(tmp_path, monkeypatch):
     from metabolomix.curation import apply as curation_apply
     ds = _load_ds()
     ds.source_files = {str(tmp_path / "align.mzTab"): "sha"}
-    monkeypatch.setattr(curation_apply, "arf2_for_mztab", lambda path: tmp_path / "align.arf2")
+    monkeypatch.setattr(curation_apply, "arf2_for_mztab", lambda path, **kw: tmp_path / "align.arf2")
     monkeypatch.setattr(curation_apply, "flags_for_arf2", lambda path: {"n": 3})
     parsed = _search(min_mz=100.0, max_mz=101.0)
     assert any("キュレーション" in note for note in parsed["notes"])
@@ -303,7 +303,7 @@ def test_unreadable_curation_flags_do_not_fail_the_search(tmp_path, monkeypatch)
     from metabolomix.curation.flags import FlagFileError
     ds = _load_ds()
     ds.source_files = {str(tmp_path / "align.mzTab"): "sha"}
-    monkeypatch.setattr(curation_apply, "arf2_for_mztab", lambda path: tmp_path / "align.arf2")
+    monkeypatch.setattr(curation_apply, "arf2_for_mztab", lambda path, **kw: tmp_path / "align.arf2")
 
     def _broken(path):
         raise FlagFileError(path, 3, "JSON として読めない")
@@ -378,10 +378,10 @@ def _merged_values():
 
 
 def _load_mztab(path, features):
-    from metabolomix.tools import mztab_tools
+    from metabolomix.tools import handle_tools, mztab_tools
     from tests.reanalysis_fixtures import write_mztab
 
-    mztab_tools.dataset_load(mztab_path=str(write_mztab(path, features=features)))
+    handle_tools.load_dataset(mztab_path=str(write_mztab(path, features=features)))
     assert session_state.session.dataset is not None
 
 
@@ -583,3 +583,109 @@ def test_ppm_offset_appears_in_rule():
     assert shifted["rule"]["rule_hash"] != plain["rule"]["rule_hash"]
     bad = _search(targets=[_target()], ppm_offset={"default": "x"})
     assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
+
+
+# ---- sort="intensity"・ontology / n_detected / 同定の標準化の列（B-2b Task 5） ----
+
+def _intensity_ds():
+    """f0..f4。検出セルの最大: f0=10, f1=50, f2=30, f3=検出なし（gap-fill だけ巨大）, f4=20。
+
+    f1 の 50 は試料 s3 のセルなので、s3 を除外すると f1 は 5 になる。"""
+    ds = DatasetState()
+    ds.sample_names = ["s0", "s1", "s2", "s3"]
+    ds.feature_ids = [f"f{i}" for i in range(5)]
+    ds.feature_matrix = np.array([
+        [10.0, 1.0, 1.0, 1.0],
+        [5.0, 5.0, 5.0, 50.0],
+        [30.0, 1.0, 1.0, 1.0],
+        [9999.0, 9999.0, 9999.0, 9999.0],
+        [20.0, 1.0, 1.0, 1.0],
+    ])
+    ds.detected_mask = np.array([
+        [True, True, True, True],
+        [True, True, True, True],
+        [True, True, True, True],
+        [False, False, False, False],
+        [True, True, True, True],
+    ])
+    ds.feature_metadata = {
+        f"f{i}": {"name": f"C{i}", "mz": 100.0 + i, "rt": 1.0, "ontology": "PC" if i < 2 else None}
+        for i in range(5)
+    }
+    ds.feature_metadata["f0"]["identity"] = {"normalized": "PC 34:1", "refmet": None,
+                                             "lipid_maps_category": None, "msi_level": 2}
+    session_state.session.dataset = ds
+    return ds
+
+
+def _ids(parsed):
+    return [r["feature_id"] for r in _tsv(parsed["features"])]
+
+
+def test_sort_by_intensity_uses_detected_max():
+    ds = _intensity_ds()
+    # gap-fill だけが大きい f3 は最後（検出セル無し）。
+    assert _ids(_search(min_mz=100.0, sort="intensity")) == ["f1", "f2", "f4", "f0", "f3"]
+    # 除外した試料の列は順位に効かない（f1 の最大は s3 の 50 だったので 5 へ落ちる）。
+    ds.excluded_samples = {"s3": "テスト"}
+    assert _ids(_search(min_mz=100.0, sort="intensity")) == ["f2", "f4", "f0", "f1", "f3"]
+
+
+def test_intensity_sort_without_conditions_returns_top_n():
+    _intensity_ds()
+    parsed = _search(sort="intensity", max_results=2)
+    assert _ids(parsed) == ["f1", "f2"]
+    assert any("打ち切" in n for n in parsed["notes"])
+
+
+def test_mz_sort_without_conditions_still_refused():
+    _intensity_ds()
+    assert _search()["error"]["code"] == "FEATURE_SEARCH_EMPTY_QUERY"
+    assert _search(sort="mz")["error"]["code"] == "FEATURE_SEARCH_EMPTY_QUERY"
+
+
+def test_rows_carry_ontology_n_detected_identity():
+    ds = _intensity_ds()
+    ds.excluded_samples = {"s3": "テスト"}
+    rows = {r["feature_id"]: r for r in _tsv(_search(min_mz=100.0)["features"])}
+    assert rows["f0"]["ontology"] == "PC"
+    assert rows["f0"]["n_detected"] == "3"          # 除外した試料は数えない
+    assert rows["f3"]["n_detected"] == "0"
+    assert rows["f0"]["normalized"] == "PC 34:1" and rows["f0"]["msi_level"] == "2"
+    # 同定の標準化を持たない特徴（mzTab-M のデータセットも同じ）は空
+    assert rows["f1"]["normalized"] == "" and rows["f1"]["msi_level"] == ""
+    assert rows["f2"]["ontology"] == ""
+    # 検出状態の無いデータセットでは n_detected も空（0 と区別する）
+    ds.detected_mask = None
+    rows = {r["feature_id"]: r for r in _tsv(_search(min_mz=100.0)["features"])}
+    assert rows["f0"]["n_detected"] == ""
+
+
+def test_excluded_features_are_omitted_in_both_sorts():
+    ds = _intensity_ds()
+    ds.excluded_features = {"f1": "テスト"}
+    assert "f1" not in _ids(_search(min_mz=100.0))
+    assert "f1" not in _ids(_search(min_mz=100.0, sort="intensity"))
+    assert "f1" not in _ids(_search(sort="intensity"))
+
+
+def test_sort_with_targets_is_rejected_and_bad_sort_too():
+    _load_ds()
+    parsed = _search(targets=[_target()], sort="intensity")
+    assert parsed["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert _search(min_mz=100.0, sort="bogus")["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert "error" not in _search(targets=[_target()], sort="mz")
+
+
+def test_intensity_sort_without_detected_mask_uses_all_cells_and_notes():
+    ds = _intensity_ds()
+    ds.detected_mask = None
+    ds.feature_matrix[4, 1] = np.nan                  # NaN は無視される
+    ds.excluded_samples = {"s3": "テスト"}            # 除外した試料の列も使わない
+    parsed = _search(min_mz=100.0, sort="intensity")
+    # f3 の gap-fill 値が全セルの最大として先頭になる。f1 は s3 を除いて 5、f0=10, f2=30, f4=20
+    assert _ids(parsed) == ["f3", "f2", "f4", "f0", "f1"]
+    assert all(r["n_detected"] == "" for r in _tsv(parsed["features"]))
+    assert any("detected_mask" in n and "全セル" in n for n in parsed["notes"])
+    # mz 順には注記を足さない
+    assert not any("detected_mask" in n for n in _search(min_mz=100.0)["notes"])

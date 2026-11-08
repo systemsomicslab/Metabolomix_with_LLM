@@ -18,20 +18,20 @@
 ## 1. データセットのハンドル
 
 ハンドル（`dh_` + 12 桁）は、1 つのサーバのプロセスにデータセット（とその極性の
-ライブラリ）を複数並べて持つための ID。`dataset_handle_open` が返し、`dataset_*`・
+ライブラリ）を複数並べて持つための ID。`load_dataset` が返し、`dataset_*`・
 `library_*`・再解析のツールの `dataset_handle` に渡す。
 
-- **対話のセッションは直近のハンドルを指すだけ。** `dataset_load` で読んだデータセットも
-  ハンドル（`dataset_load` の要約の `dataset_handle`、`dataset_handle_list` の `current`）で、
+- **対話のセッションは直近のハンドルを指すだけ。** `load_dataset` が開いたハンドルは**いつも
+  直近になる**（`load_dataset` の戻り値の `dataset_handle`、`dataset_list` の `current`）。
   ハンドルを渡さない呼び出しはこの直近のハンドル（のデータセット・`library_load` の
-  ライブラリ・直近の照合）を使う。`dataset_handle_open` で開いたハンドルは直近にならないので、
-  そのハンドルを渡した呼び出しは対話の状態を読みも書きもしない。閉じた・無いハンドルは
-  `DATASET_HANDLE_NOT_FOUND`（開いているハンドルの一覧つき）で、対話のセッションへ黙って
-  落ちない。直近のハンドルを閉じると、渡さない呼び出しはデータセットもライブラリも無い状態
+  ライブラリ・直近の照合）を使う。再解析のエージェントは、返ったハンドルを渡して呼び、直近を
+  当てにしない——ハンドルを渡した呼び出しは対話の状態を読みも書きもしない。閉じた・無い
+  ハンドルは `DATASET_HANDLE_NOT_FOUND`（開いているハンドルの一覧つき）で、対話のセッションへ
+  黙って落ちない。直近のハンドルを閉じると、渡さない呼び出しはデータセットもライブラリも無い状態
   （`missing_state`）になり、開いている別のハンドルへも、前に読んだライブラリへも落ちない。
   順番を待つ間に直近のハンドルが閉じられた呼び出しも、何もせずに `missing_state` を返す。
-  `dataset_load` より前に `library_load` で読んだライブラリは、最初の `dataset_load` の
-  ハンドルへ移る（写しではない）。
+  `load_dataset` より前に `library_load` で読んだライブラリは、このデータセットのライブラリが
+  決まらなかった（記憶が無い・`library="auto"`）とき、そのハンドルへ移る（写しではない）。
 - **ハンドルどうしも別の状態。** 同じ入力を開き直すと読み込み済みのもの（`reused_base`）を
   使い回すが、ハンドルには複製が渡る。片方の前処理はもう片方に見えない。読み込みが読んだ・
   探したファイル（入力・`.dcl` などの付随ファイル・ライブラリ・ジョブの記録と実効メソッド・
@@ -39,12 +39,12 @@
 - **並行と直列。** ハンドルを渡した呼び出しはサーバの別スレッドで回り、別のハンドルどうしは
   並行に進む。同じハンドルへの呼び出しは 1 本ずつ（到着順は保証しない）。ハンドルを渡さない
   呼び出しも、直近のハンドルがあればそのハンドルの呼び出しとして 1 本ずつに並ぶ（途中で
-  `dataset_load` が直近を切り替えても、始めたときの直近のハンドルで最後まで動く）。
-- **上限。** `LIPIDMIX_MAX_DATASET_HANDLES`（既定 8）。`dataset_load` もハンドルを 1 本使う
+  `load_dataset` が直近を切り替えても、始めたときの直近のハンドルで最後まで動く）。
+- **上限。** `lipidmix.local.toml` の `[server] max_dataset_handles`（既定 8。1 未満は 1）。`load_dataset` がハンドルを 1 本使う
   （前に読んだものは閉じずに残る）。超えると `DATASET_HANDLE_LIMIT` で止め、古いハンドルを
-  黙って閉じない。寿命は明示の `dataset_handle_close` か、サーバの終了まで。
+  黙って閉じない。寿命は明示の `dataset_close` か、サーバの終了まで。
 
-`dataset_handle_open` の戻り値:
+`load_dataset` の戻り値:
 
 | 欄 | 意味 |
 |---|---|
@@ -58,6 +58,9 @@
 | `library_record` | データセットが同定に使ったライブラリの記録（[library.md](library.md) の LibraryRecord。置き場所は出さない） |
 | `arf2` / `dcl` | スポットの照合（spot_id = SMF_ID）に使うファイル名。解析フォルダで読んだならその `.arf2` / `.dcl`。決まらなければ `null` |
 | `reused_base` | 読み込み済みのものを使い回したか |
+| `summary` | 特徴・試料の数、定量種別、検出状態、同定の内訳、出所の裏取り、読み込みの注記（行の配列） |
+| `sample_counts` | `{groups, roles, n_ungrouped}`: 群（Class ID）ごと・役割ごとの試料数と、群の宣言が無い試料の数 |
+| `next` | 次の一手の例（3 行） |
 
 ライブラリは**データセットが同定に使ったものの記憶**（`library_record`。[library.md](library.md)）から
 引く。実体の sha256 を測り直して `known` のままなら読み取り専用で開き、`mismatch`（内容が変わった・
@@ -65,9 +68,8 @@
 理由を書く。**極性の設定（`[library] msp_positive` / `msp_negative`）には落ちない**ので、逆の
 極性のライブラリを掴まない。
 ハンドルへの `library_load`（`file_path` を省く）も、記憶が `known` ならそれを開く。`mismatch` /
-`lbm_only` は設定へ落ちずに理由（`LIBRARY_RECORD_MISMATCH` / `LIBRARY_RECORD_LBM_ONLY`）を返す。
-記憶が `unknown` のときだけ従来どおりハンドルの極性の設定（逆の `ion_mode` は
-`LIBRARY_POLARITY_MISMATCH`、設定が無ければ `LIBRARY_NOT_CONFIGURED`）。`file_path` を明示すれば
+`lbm_only` は理由（`LIBRARY_RECORD_MISMATCH` / `LIBRARY_RECORD_LBM_ONLY`）を返し、記憶が `unknown` なら
+`LIBRARY_NOT_REMEMBERED`（極性の設定には落ちない）。`file_path` を明示すれば
 記憶と違っても開き、戻り値の `differs_from_record` に記憶したファイル名と開いたファイル名を書く。
 
 **ハンドルは対話のデータフォルダを探さない。** スポットの照合（`library_match_feature` の
@@ -527,7 +529,7 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
 ## 10. 根拠バンドル v3（evidence-v3）
 
 `dataset_export_evidence_bundle` が書く。v2 に試料表・試料ごとの値と検出・付加体・極性を足したもの。
-`arf_export_evidence_bundle`（ARF 経路）は試料ごとの値を取り出さないので v2 のまま。契約の正は
+`dataset_export_evidence_bundle`（ARF 経路）は試料ごとの値を取り出さないので v2 のまま。契約の正は
 massbank-context の `docs/contracts/evidence-bundle-v3.md`。TSV は全ファイルとも同じ書き方（タブ区切り・
 UTF-8・改行は CRLF）。
 
@@ -539,7 +541,7 @@ UTF-8・改行は CRLF）。
 | 欄 | 意味 |
 |---|---|
 | `contract_version` / `exporter.version` | `3` / `evidence-v3` |
-| `comparison.polarity` | データセットの極性（`positive` / `negative`）。ハンドルなら `dataset_handle_open` の `polarity`、対話のセッションなら同じ規則で決める。決まらなければ `null` |
+| `comparison.polarity` | データセットの極性（`positive` / `negative`）。ハンドルなら `load_dataset` の `polarity`、対話のセッションなら同じ規則で決める。決まらなければ `null` |
 | `comparison.preprocess` | `value` に当たった前処理のレシピ。pipeline から引き継いだ結果は、その run のレシピ |
 | `intensities_stage` | `pre_imputation`（補完の前）/ `post_imputation`（補完の後） |
 | `population.detection_unavailable_reason` | `detected` が全行空のときの理由。検出状態を使えれば `null` |
@@ -588,14 +590,14 @@ SME の付加体）。無ければ空。
 
 ### `spectrum_links.tsv` と `.dcl` の出どころ
 
-dataset 経路も ARF 経路（`arf_export_evidence_bundle`）と同じ規則で、**同じアラインメントの `.dcl`** の
+dataset 経路も ARF 経路（`dataset_export_evidence_bundle`）と同じ規則で、**同じアラインメントの `.dcl`** の
 代表スペクトルに結ぶ。結ぶのは ID だけ（**SMF_ID == `.arf2` の AlignmentID == `.dcl` の番号**）で、
 m/z・RT は結びの検証にだけ使う（m/z の近さでは結ばない）。結べた特徴は 1 行（`spectrum_file` は `.dcl`
 のファイル名、`spectrum_id` は `<.dcl の語幹>:<番号>`、`mapping_evidence` は
 `same-alignment-stem; SMF_ID == AlignmentID == DCL index; precursor/RT verified`）。結べた行が 1 件でも
 あれば `.dcl` をバンドルへ写し、`files[]` に `role: spectra` で載る。
 
-使う `.arf2` / `.dcl`: ハンドルなら `dataset_handle_open` が決めたもの（§1）。対話のセッションなら
+使う `.arf2` / `.dcl`: ハンドルなら `load_dataset` が決めたもの（§1）。対話のセッションなら
 同じ探し方（検出状態を取り込んだ `.arf` の同じバッチ → mzTab-M の隣）。
 
 検証は 2 段:

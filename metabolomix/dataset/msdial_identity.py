@@ -24,7 +24,9 @@ def _identity_tables():
 
 def _has_name(name) -> bool:
     """上流の SML / SME の名前条件。大文字小文字を区別する（`spot.Name != "Unknown"` と同じ）。"""
-    return name is not None and name not in ("Unknown", "null", "")
+    if name is None:
+        return False
+    return name.strip() not in ("Unknown", "null", "")
 
 
 def _last_segment(name) -> str | None:
@@ -105,7 +107,7 @@ def sml_annotation(fields: dict, *, msms_assigned: bool | None = None) -> dict |
 
 def identity_columns(fields: dict, *, msms_assigned: bool, tables) -> dict:
     name = fields.get("name") or ""
-    feature = {"name": "" if name.strip().lower() == "unknown" else name,
+    feature = {"name": "" if name.strip().casefold() == "unknown" else name,
                "ontology": fields.get("ontology") or "", "has_msms": bool(msms_assigned)}
     block = lipid_identity.build_identity_block(
         feature, tables, mass_error_band="UNKNOWN", adduct_band="UNKNOWN")

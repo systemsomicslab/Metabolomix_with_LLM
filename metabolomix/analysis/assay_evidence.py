@@ -262,7 +262,8 @@ def build_assay_evidence(ds, artifact: Path, adapter: dict) -> dict:
     if len(normalized) != len(feature_ids):
         return fail([_reason(
             "feature_count_mismatch",
-            "`.arf` のスポット数と mzTab の特徴数が一致しません。",
+            "`.arf` のスポット数と mzTab の特徴数が一致しません"
+            "（同じアラインメントの出力でないか、`.arf` を読み切れていません）。",
             n_arf_spots=len(normalized), n_mztab_features=len(feature_ids))])
 
     feature_meta = getattr(ds, "feature_metadata", {}) or {}

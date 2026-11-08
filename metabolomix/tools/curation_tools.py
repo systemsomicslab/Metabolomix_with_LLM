@@ -1,8 +1,13 @@
 """アラインメントのキュレーション: curation_review / curation_suggest / curation_submit /
 curation_flags / curation_view_data と、MCP Apps 用の ui:// ビューア。spec 2026-09-28。
 
-deps: mcp_core / session_state / mcp_errors / serialization / path_resolvers / curation.*。
-metabolomix.tools.* の他モジュールと server は import しない。
+キュレーションは `DatasetState`（ハンドル）の上で動く。`.arf2` はデータセットが覚えているもの
+（`dataset.artifacts.artifact_path(ds, "arf2")`）で、`data/` は探さない。ライブラリは
+データセットのもの（`holder.library`）。`curation_submit` が書いたら、同じ `.arf2` を開いている
+ハンドルすべての `curation_flags` を読み直す（`submission.after_write`）。
+
+deps: mcp_core / session_state / handles / mcp_errors / serialization / dataset.* / curation.*。
+metabolomix.tools.* の `_holder` 以外と server は import しない。
 """
 from __future__ import annotations
 
@@ -11,10 +16,12 @@ from pathlib import Path, PureWindowsPath
 from mcp.types import ToolAnnotations
 
 from metabolomix.arf2.reader import load_catalog
-from metabolomix.core import mcp_errors, session_state
+from metabolomix.core import file_digest, handles, mcp_errors, session_state
 from metabolomix.core.mcp_core import mcp
-from metabolomix.core.path_resolvers import resolve_arf2_file_path
 from metabolomix.core.serialization import json_payload, round_floats
+from metabolomix.dataset.artifacts import artifact_path
+from metabolomix.dataset.msdial_adapter import reload_curation
+from metabolomix.tools._holder import resolve_holder
 # モジュール名を flag_log にするのは、curation_submit の引数 `flags`（公開 API の名前）が
 # モジュールを隠すため。
 from metabolomix.curation import evidence, judge, review, submission, submit_server, suggest, viewer
@@ -30,6 +37,10 @@ _APP_ONLY_META = {"ui": {"resourceUri": VIEWER_URI, "visibility": ["app"]}}
 _LOCAL_WRITE_APPEND = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False)
 # curation_submit は MS-DIAL の _tags.xml を書き換える（clear で Misannotation を外す）ので destructive。
 _SUBMIT_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False)
+
+#: 他のハンドルのロックを待つ上限（秒）。自分のハンドルのロックを持ったまま別のハンドルを待つので、
+#: 無限に待つと 2 つのハンドルから互いに提出したときにロックの順で止まる。
+REFRESH_LOCK_TIMEOUT = 5.0
 
 
 def _file_name(path) -> str | None:
@@ -54,7 +65,7 @@ def _bad_review_id(review_id) -> str | None:
 
 def _candidate_dirs(review_id: str, *arf2_paths) -> list[Path]:
     """レビューを探すフォルダの候補を優先順に: セッションの記録 → 渡された `.arf2`
-    （送信用テキストの `arf2_path`、引数 `file_path` の順）→ 既定の解決。"""
+    （送信用テキストの `arf2_path`、データセットの `.arf2` の順）。`data/` は探さない。"""
     candidates = []
     known = session_state.session.curation.review_dirs.get(review_id)
     if known:
@@ -63,9 +74,6 @@ def _candidate_dirs(review_id: str, *arf2_paths) -> list[Path]:
         if arf2:
             path = Path(arf2)
             candidates.append(path if path.is_dir() else flag_log.curation_dir(path))
-    default = resolve_arf2_file_path(None)
-    if default:
-        candidates.append(flag_log.curation_dir(default))
     unique = []
     for path in candidates:
         if path not in unique:
@@ -91,8 +99,90 @@ def _not_found(review_id: str, searched: list[Path]) -> str:
     where = "、".join(str(p) for p in searched) or "（候補なし: .arf2 を特定できませんでした）"
     return _error(f"review_id={review_id} のレビューが見つかりません。探したフォルダ: {where}。"
                   "ビューアの「送信用テキストをコピー」で作った文をもう一度そのまま貼るか、"
-                  "レビューを作った .arf2 を file_path で指定してください。",
+                  "レビューを作ったデータセットを dataset_handle で指定してください。",
                   searched=[str(p) for p in searched])
+
+
+def _no_arf2(ds) -> str:
+    return _error(
+        "このデータセットには .arf2 が無いので、キュレーションできません（キュレーションは MS-DIAL の "
+        "アラインメントの .arf2 に対して行う）。MS-DIAL の解析フォルダを load_dataset(directory=...) で"
+        "開き直すか、load_dataset の arf2_path で .arf2 を指定してください。",
+        source_format=getattr(ds, "source_format", None))
+
+
+def _dataset_arf2(holder):
+    """データセットの `.arf2`（`load_dataset(arf2_path=...)` の明示 → 記録の `.arf2`。無ければ None）。"""
+    ds = holder.dataset
+    if ds is None:
+        return None
+    return holder.arf2_path or artifact_path(ds, "arf2")
+
+
+def _dataset_context(dataset_handle):
+    """`(holder, arf2_path)`、足りなければ `(封筒, None)`（str）。
+
+    ハンドルが無い・閉じていれば `missing_state("dataset", ["load_dataset"])` か
+    `DATASET_HANDLE_NOT_FOUND`（別のハンドルや `data/` へ落ちない）。`.arf2` を持たない
+    データセット（mzTab-M だけ）は理由つきのエラー。
+    """
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder, None
+    ds = holder.dataset
+    if ds is None:
+        return mcp_errors.missing_state(
+            "dataset", ["load_dataset"],
+            "データセットが開いていません。先に load_dataset で MS-DIAL の解析フォルダを開いてください。"), None
+    arf2 = _dataset_arf2(holder)
+    if not arf2:
+        return _no_arf2(ds), None
+    return holder, Path(arf2)
+
+
+def _library_store(holder):
+    """データセットのライブラリの store か、`library_load` を促す封筒（str）。"""
+    store = holder.library.store
+    if store is None:
+        return None, mcp_errors.missing_state(
+            "library", ["library_load"],
+            "このデータセットに参照ライブラリが読み込まれていません。先に library_load を実行してください"
+            "（アラインメントと同じフォルダの *_Loaded.msp2.dbs を推奨）。")
+    return store, None
+
+
+def _refresh_open_handles(arf2_path) -> dict | None:
+    """`arf2_path` を開いているハンドルすべての `curation_flags` を読み直す（`submission.after_write`）。
+
+    同じ `.arf2` は sha256 で照合する（ハンドルの `.arf2` の記録。`handles.handles_for_arf2`）。
+    ハンドルごとに**そのハンドルのロックの下で**、**1 つずつ**（入れ子にしない）読み直す。
+    呼び出し元の `curation_submit` が自分のハンドルのロックを持っていても、RLock なので
+    そのハンドルは待たずに通る。別のスレッドが持っているハンドルは `REFRESH_LOCK_TIMEOUT` 秒
+    だけ待ち、取れなければ読み直さず `not_refreshed` に挙げる（ロックの順で止まらないため）。
+    """
+    try:
+        sha = file_digest.sha256_of(arf2_path)
+    except OSError:
+        return None
+    targets = handles.registry.handles_for_arf2(sha)
+    if not targets:
+        return None
+    refreshed, skipped = [], []
+    for handle in targets:
+        if not handle.lock.acquire(timeout=REFRESH_LOCK_TIMEOUT):
+            skipped.append(handle.handle_id)
+            continue
+        try:
+            if handles.registry.peek(handle.handle_id) is not handle:
+                continue                                     # 待つ間に閉じられた
+            reload_curation(handle.dataset, handle.arf2_path)
+            refreshed.append(handle.handle_id)
+        finally:
+            handle.lock.release()
+    return {"refreshed": refreshed, "not_refreshed": skipped}
+
+
+submission.after_write = _refresh_open_handles
 
 
 @mcp.resource(VIEWER_URI, name="curation-viewer", mime_type="text/html;profile=mcp-app",
@@ -113,11 +203,15 @@ def _open_submit(kind: str, review_id: str, arf2_path) -> tuple[dict | None, dic
 @mcp.tool(annotations=_LOCAL_WRITE_APPEND, structured_output=False, meta=_UI_META)
 def curation_review(ontology: list[str] | None = None, name_contains: str | None = None,
                     file_ids: list[int] | None = None, max_traces: int = 12,
-                    thresholds: dict | None = None, file_path: str | None = None,
-                    max_rows: int = 100) -> str:
+                    thresholds: dict | None = None, max_rows: int = 100,
+                    dataset_handle: str | None = None) -> str:
     """注釈付きスポットを一覧で確かめるレビューを作る（EIC・対向プロット・Δppm・ΔRT・
-    RT–m/z 傾向と機械判別）。**先に library_load**（アラインメントに使われた
+    RT–m/z 傾向と機械判別）。**先に load_dataset と library_load**（アラインメントに使われた
     `*_Loaded.msp2.dbs` を推奨）。
+
+    対象のデータセットは `dataset_handle`（省けば直近）。`.arf2` と、EIC・`.dcl` はそのデータセットが
+    覚えているものを使い、`data/` は探さない。ライブラリもそのデータセットのもの。`.arf2` の無い
+    データセット（mzTab-M だけ）は理由つきのエラー。
 
     対象: 既定は注釈付き全部。`ontology=["PG"]` でクラス、`name_contains` で名前の部分一致。
     戻り値は suspect 以上(とフラグ済み)のスポットだけの TSV（判定の重い順に先頭 `max_rows`
@@ -139,17 +233,12 @@ def curation_review(ontology: list[str] | None = None, name_contains: str | None
     RT–m/z 傾向（trend_outlier）は補強にしか使わない。UNKNOWN は不一致に数えない。
     `thresholds` で既定のしきい値（ppm_pass=5, ppm_borderline=10, drt_pass=0.5 分 など）を上書きできる。
     """
-    arf2_path = resolve_arf2_file_path(file_path)
-    if not arf2_path:
-        return mcp_errors.missing_state(
-            "arf2_file", ["load_dataset", "arf2_parser"],
-            ".arf2 が見つかりません。先に load_dataset で MS-DIAL の出力フォルダを指定してください。")
-    store = session_state.session.library.store
-    if store is None:
-        return mcp_errors.missing_state(
-            "library", ["library_load"],
-            "参照ライブラリが読み込まれていません。先に library_load を実行してください"
-            "（アラインメントと同じフォルダの *_Loaded.msp2.dbs を推奨）。")
+    holder, arf2_path = _dataset_context(dataset_handle)
+    if arf2_path is None:
+        return holder
+    store, missing = _library_store(holder)
+    if missing:
+        return missing
     try:
         th = judge.resolve_thresholds(thresholds)
     except ValueError as exc:
@@ -169,7 +258,8 @@ def curation_review(ontology: list[str] | None = None, name_contains: str | None
     try:
         result = review.run_review(arf2_path, spots, store=store, ms2_tol=ms2_tol, th=th,
                                    file_ids=file_ids, max_traces=max_traces,
-                                   selection={"ontology": ontology, "name_contains": name_contains})
+                                   selection={"ontology": ontology, "name_contains": name_contains},
+                                   files=evidence.dataset_files(holder.dataset))
     except flag_log.FlagFileError as exc:
         return _flag_file_error(exc)
     except evidence.UnknownFileIdsError as exc:
@@ -204,9 +294,10 @@ def curation_suggest(review_id: str | None = None, wrong: str = "flagged_or_like
                      unannotated: bool = True, include_decided: bool = False, top_n: int = 5,
                      rt_window: float | None = None, relation_mz_tol: float | None = None,
                      relation_min_r: float | None = None, thresholds: dict | None = None,
-                     file_path: str | None = None, max_rows: int = 100) -> str:
+                     max_rows: int = 100, dataset_handle: str | None = None) -> str:
     """キュレーションで「間違い」になったスポットと未注釈スポットに、注釈の候補を並べる
-    （候補付けレビュー）。**先に library_load と curation_review**。
+    （候補付けレビュー）。**先に load_dataset・library_load・curation_review**。
+    対象のデータセットは `dataset_handle`（省けば直近。`curation_review` と同じ規則）。
 
     対象: `wrong="flagged_or_likely"`（既定）= wrong フラグ ＋ 元レビューの likely_wrong、
     `"flagged"` = wrong フラグだけ。`unannotated=True` で未注釈スポットも。判断済み
@@ -224,17 +315,12 @@ def curation_suggest(review_id: str | None = None, wrong: str = "flagged_or_like
     curation_submit(submission_text=...) に渡す。
     **ユーザーの同意なしに curation_submit を呼ばない。**
     """
-    arf2_path = resolve_arf2_file_path(file_path)
-    if not arf2_path:
-        return mcp_errors.missing_state(
-            "arf2_file", ["load_dataset", "arf2_parser"],
-            ".arf2 が見つかりません。先に load_dataset で MS-DIAL の出力フォルダを指定してください。")
-    store = session_state.session.library.store
-    if store is None:
-        return mcp_errors.missing_state(
-            "library", ["library_load"],
-            "参照ライブラリが読み込まれていません。先に library_load を実行してください"
-            "（アラインメントと同じフォルダの *_Loaded.msp2.dbs を推奨）。")
+    holder, arf2_path = _dataset_context(dataset_handle)
+    if arf2_path is None:
+        return holder
+    store, missing = _library_store(holder)
+    if missing:
+        return missing
     try:
         th = judge.resolve_thresholds(thresholds)
     except ValueError as exc:
@@ -256,7 +342,8 @@ def curation_suggest(review_id: str | None = None, wrong: str = "flagged_or_like
                "top_n": top_n, "rt_window": rt_window, "relation_mz_tol": relation_mz_tol,
                "relation_min_r": relation_min_r}
     try:
-        result = suggest.run_suggestion(arf2_path, base_review=base, store=store, th=th, options=options)
+        result = suggest.run_suggestion(arf2_path, base_review=base, store=store, th=th, options=options,
+                                        files=evidence.dataset_files(holder.dataset))
     except flag_log.FlagFileError as exc:
         return _flag_file_error(exc)
     except ValueError as exc:
@@ -271,7 +358,7 @@ def curation_suggest(review_id: str | None = None, wrong: str = "flagged_or_like
         "table": table, "n_table_rows_shown": len(table.splitlines()) - 1,
         "html_path": str(saved["html"]),
         "submit": submit_info,
-        "library": {**result["library"], "path": _file_name(session_state.session.library.source_path)},
+        "library": {**result["library"], "path": _file_name(holder.library.source_path)},
         "analysis_params": {k: result["analysis_params"][k] for k in ("source", "path", "rt_window")},
         "options": result["options"], "thresholds": th}, 4))
 
@@ -279,7 +366,7 @@ def curation_suggest(review_id: str | None = None, wrong: str = "flagged_or_like
 @mcp.tool(annotations=_SUBMIT_WRITE, structured_output=False)
 def curation_submit(submission_text: str | None = None, review_id: str | None = None,
                     flags: list[dict] | None = None, source: str = "user",
-                    file_path: str | None = None) -> str:
+                    dataset_handle: str | None = None) -> str:
     """キュレーションのフラグを記録する（追記。フラグの無いスポットは「間違っていない」で何も書かない）。
 
     ユーザーがビューアの「送信用テキストをコピー」で貼った文をそのまま `submission_text` に渡す
@@ -293,8 +380,12 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
     ものは "llm"。**ユーザーの同意なしに呼ばない。**
     不正な要素が 1 つでもあれば何も書かずにエラーを返す（同じ spot_id を 1 回の送信で
     2 回以上名指しした場合も含む——どちらを採るか決められないため）。
-    レビューはセッションの記録 → 送信用テキストの `arf2_path` → `file_path`（レビューを
-    作った `.arf2`）→ 既定の `.arf2` の順に探すので、サーバ再起動の後でも貼った文で送れる。
+    レビューはセッションの記録 → 送信用テキストの `arf2_path` → データセット（`dataset_handle`、
+    省けば直近）の `.arf2` のフォルダの順に探す（`data/` は探さない）ので、サーバ再起動の後でも、
+    貼った文なら送れる。データセットも貼った文の `arf2_path` も無ければ `missing_state`。
+    書いた後、同じ `.arf2`（sha256 で照合）を開いているハンドルすべての `curation_flags` を読み直す
+    （結果の `open_handles`: `refreshed` と、別の呼び出しがロックを持っていて読み直せなかった
+    `not_refreshed`）。書き出しの `apply_curation` は新しい判断をすぐ使う。
     記録の後、アラインメントの `_tags.xml` に反映する（wrong → Misannotation を付け Confirmed を外す、
     confirmed → Confirmed を付け Misannotation を外す、suspect → Confirmed を外す、clear → 両方外す。
     控えは `curation/tags-backup/`）。結果は `tags_xml`（`added` / `removed` は Misannotation、
@@ -318,7 +409,15 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
     bad = _bad_review_id(review_id)
     if bad:
         return bad
-    saved, searched = _find_review(review_id, text_arf2, file_path)
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    saved, searched = _find_review(review_id, text_arf2, _dataset_arf2(holder))
+    if saved is None and not searched:
+        return mcp_errors.missing_state(
+            "dataset", ["load_dataset"],
+            "レビューのあるデータセットが分かりません。先に load_dataset でレビューを作った解析フォルダを"
+            "開いてください（送信用テキストの arf2_path があればそれも使えます）。")
     if saved is None:
         return _not_found(review_id, searched)
     try:
@@ -329,13 +428,13 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def curation_flags(file_path: str | None = None) -> str:
-    """現在のアラインメントで有効な判断（スポットごとの最新 1 行、clear 済みは除く）を TSV で返す。
+def curation_flags(dataset_handle: str | None = None) -> str:
+    """データセット（`dataset_handle`、省けば直近）の `.arf2` で有効な判断（スポットごとの最新 1 行、
+    clear 済みは除く）を TSV で返す。
     列は spot_id・flag・name（assign の記録名）・of（redundant の相手スポット）・note・source・ts。"""
-    arf2_path = resolve_arf2_file_path(file_path)
-    if not arf2_path:
-        return mcp_errors.missing_state("arf2_file", ["load_dataset", "arf2_parser"],
-                                        ".arf2 が見つかりません。先に load_dataset を実行してください。")
+    holder, arf2_path = _dataset_context(dataset_handle)
+    if arf2_path is None:
+        return holder
     key = flag_log.alignment_key(arf2_path)
     try:
         effective = flag_log.FlagStore(flag_log.curation_dir(arf2_path)).effective(
@@ -354,14 +453,18 @@ def curation_flags(file_path: str | None = None) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False, meta=_APP_ONLY_META)
-def curation_view_data(review_id: str, page: int = 0) -> str:
-    """ビューア（MCP Apps）専用。保存済みレビューのスポットをページ単位で返す。LLM は呼ばない。"""
+def curation_view_data(review_id: str, page: int = 0, dataset_handle: str | None = None) -> str:
+    """ビューア（MCP Apps）専用。保存済みレビューのスポットをページ単位で返す。LLM は呼ばない。
+    レビューはセッションの記録か、データセット（`dataset_handle`、省けば直近）の `.arf2` のフォルダから探す。"""
     if suggest.is_valid_suggestion_id(review_id):
         return _error("curation_view_data はレビュー（cr-…）専用です。")
     bad = _bad_review_id(review_id)
     if bad:
         return bad
-    saved, searched = _find_review(review_id)
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    saved, searched = _find_review(review_id, _dataset_arf2(holder))
     if saved is None:
         return _error(f"review_id={review_id} のレビューが見つかりません。",
                       searched=[str(p) for p in searched])

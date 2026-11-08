@@ -40,13 +40,28 @@ def alignment_stem(path: str | Path) -> Path | None:
     return None
 
 
+def find_by_name(directory: Path, name: str) -> Path | None:
+    """`directory` 直下で、名前が `name` と大文字小文字を除いて等しいファイル（実在する綴りで返す）。
+
+    大文字小文字を区別するファイルシステムでも、`.DCL` / `.EIC.AEF` のような綴りを拾う。
+    名前の完全一致があればそれを先に採る（大文字小文字を区別しない Windows では実在する綴りが返る）。
+    """
+    wanted = name.casefold()
+    try:
+        matches = sorted((p for p in directory.iterdir()
+                          if p.is_file() and p.name.casefold() == wanted),
+                         key=lambda p: (p.name != name, p.name))
+    except OSError:
+        return None
+    return matches[0] if matches else None
+
+
 def alignment_sibling(path: str | Path, suffix: str) -> Path | None:
-    """同じバッチの `<stem><suffix>`。無ければ None（別バッチへは落ちない）。"""
+    """同じバッチの `<stem><suffix>`（名前の大文字小文字は問わない）。無ければ None（別バッチへは落ちない）。"""
     stem = alignment_stem(path)
     if stem is None:
         return None
-    candidate = stem.with_name(stem.name + suffix)
-    return candidate if candidate.is_file() else None
+    return find_by_name(stem.parent, stem.name + suffix)
 
 
 def spot_record(arf2_path: str | Path, spot_id: int) -> dict | None:

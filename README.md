@@ -19,8 +19,8 @@ drive a full analysis without ever seeing the raw matrices.
 - **Keeps results out of the context window** — plots are rendered to PNG on the server
   rather than shipped as coordinate lists, and full result tables stay in session state
   until exported.
-- **Accumulates knowledge** — literature notes and reusable analysis playbooks are served
-  back to the LLM as MCP resources, so findings compound across sessions.
+- **Records the analysis** — objectives and reports are written next to the raw data, in
+  the analysis folder's `reports/`, so a later session can read them back.
 - **Can drive MS-DIAL itself (auxiliary)** — the main workflow reads output MS-DIAL has
   already written (for example after processing in the MS-DIAL GUI). Given a folder, the
   server first checks for such output and goes straight to analysis if it is there. Only
@@ -33,7 +33,6 @@ drive a full analysis without ever seeing the raw matrices.
 |---|---|
 | `.arf` | Alignment result, per-sample peaks. The main source for cross-sample comparison and PCA. |
 | `.arf2` | Alignment result, spot representatives. Dataset-wide catalog and annotations. |
-| `.pai2` | A single measurement's detected peaks. |
 | `.dcl` | Deconvoluted MS/MS spectra. MS-DIAL's own binary format — not MessagePack. |
 | `.EIC.aef` | Extracted ion chromatograms. |
 | mzTab-M 2.0 | Standard exchange format, produced by the MS-DIAL Console path. |
@@ -63,16 +62,14 @@ the example if missing, writes a `.mcp.json` for Claude Code, and prints the sni
 into Claude Desktop's `claude_desktop_config.json`. Existing `.mcp.json` and
 `lipidmix.local.toml` are never overwritten — differences are reported instead.
 
-Point it at your data and ask the client to start:
+Tell the client where your MS-DIAL output is and ask it to start (there is no default data
+directory or environment variable; every path is passed to a tool):
 
-```bash
-export LIPIDMIX_DATA_DIR=/path/to/your/msdial/output
-```
+> Load the dataset in `/path/to/your/msdial/output` and show me its samples and groups.
 
-> Load the dataset in `LIPIDMIX_DATA_DIR` and show me the PCA.
-
-That calls `load_dataset`, the entry point: it picks the latest alignment batch, runs the
-standard overview, and primes the session for everything that follows.
+That calls `load_dataset`, the entry point: it picks the latest alignment batch, opens the
+dataset as the current one, and reports its samples, groups and library for everything that
+follows.
 
 ### MS-DIAL Console and reference libraries (optional)
 
@@ -80,8 +77,10 @@ Running MS-DIAL Console from raw data (`console_*`, `pipeline_*`) or matching ag
 `.msp` library (`library_load`) needs to know where those files live. Copy
 `lipidmix.example.toml` to `lipidmix.local.toml` next to `server.py` and fill in the paths
 (Windows paths in single quotes). The file is not tracked by git and is read on every call, so
-edits take effect without restarting the server. The environment variables `MSDIAL_EXE`,
-`MSDIAL_LBM`, `MSDIAL_MSP_POS` and `MSDIAL_MSP_NEG` still work and take precedence over the file.
+edits take effect without restarting the server. These locations are read from the file only
+(environment variables no longer override it); the lipid library (`.lbm2`) goes under
+`[library] lbm`. The same file also holds where reports and the library cache go (`[paths]`) and
+server behaviour such as the open dataset-handle limit (`[server]`).
 If something is missing, the tool's error names the file and the key to fill in.
 
 To run the parsers without an MCP client, see [docs/cli.md](docs/cli.md).
@@ -95,13 +94,12 @@ implementation lives under `metabolomix/`.
 | Package | Responsibility |
 |---|---|
 | `metabolomix/core/` | FastMCP instance, configuration, session state, path resolution. Depends on nothing else in the tree. |
-| `metabolomix/{arf,arf2,pai2,dcl,eic}/` | One `reader.py` (parser) and `tools.py` (MCP surface) per input format. |
+| `metabolomix/{arf,arf2,pai2,dcl,eic}/` | One `reader.py` (parser) per input format; only `dcl` also has a `tools.py` (MCP surface). |
 | `metabolomix/mztab/` | mzTab-M reader and canonical `DatasetState`. |
 | `metabolomix/console/` | MS-DIAL Console execution: job planning, running, output collection. |
 | `metabolomix/analysis/` | Format-independent numerics: preprocessing/QC, PCA, differential analysis, the export contract. |
 | `metabolomix/plots/` | Renderer-neutral plot payloads and matplotlib rendering. |
 | `metabolomix/msdial/` | MS-DIAL-specific sidecars, identification, peak verification. |
-| `metabolomix/corpus/` | Pure logic for the knowledge and playbook notes. |
 | `metabolomix/tools/` | MCP tools not tied to a single input format. |
 
 ## Documentation

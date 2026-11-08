@@ -40,7 +40,7 @@
  "preprocess": {
   "caveats": [
    "この試料群には QC もブランクも含まれていないため、ブランク背景除去・QC-RSD フィルタ・QC ドリフト補正はいずれも適用できません（要求の有無によらず）。注入順があれば、PCA の run_order_correlation でドリフトの有無だけは確認できます。",
-   "この mzTab-M は注入順（MTD assay[N]-custom[...] の MS:4000089 injection sequence label）を持たないため、QC ドリフト補正は実施できません。注入順に依存する品質評価が必要なら ARF 経路（arf_preprocess）を使ってください。"
+   "この mzTab-M は注入順（MTD assay[N]-custom[...] の MS:4000089 injection sequence label）を持たないため、QC ドリフト補正は実施できません。注入順に依存する品質評価が必要なら、解析フォルダ（.arf）を load_dataset の directory で読んでください。"
   ],
   "excluded_from_matrix": {},
   "features_before": 3,
@@ -174,7 +174,7 @@
   ]
  },
  "search_window": {
-  "features": "feature_id\tmz\trt\tevidence\tname\tinchikey\tadduct\tn_sme\n1\t104.107\t1.2\tsme\tCholine\tOEYIOHPDSNJKLS-UHFFFAOYSA-N\t[M]1+\t1\n2\t184.0733\t1.25\tnone\t\t\t\t0\n3\t500.2\t5.0\tnone\t\t\t\t0",
+  "features": "feature_id\tmz\trt\tevidence\tname\tinchikey\tadduct\tn_sme\tontology\tn_detected\tnormalized\tmsi_level\n1\t104.107\t1.2\tsme\tCholine\tOEYIOHPDSNJKLS-UHFFFAOYSA-N\t[M]1+\t1\t\t\t\t\n2\t184.0733\t1.25\tnone\t\t\t\t0\t\t\t\t\n3\t500.2\t5.0\tnone\t\t\t\t0\t\t\t\t",
   "merge_split": {
    "alignment_qc_sha256": null,
    "bh_population": {},
@@ -202,6 +202,11 @@
    "note": "mzTab-M の非ゼロ値には gap-fill による補間値が含まれ得ます。検出状態が取り込めていないため、検出率・欠測率は語れません。",
    "reason": "no_candidate"
   },
+  "excluded": {
+   "features": 0,
+   "samples": 0
+  },
+  "groups": {},
   "inchikey_coverage": {
    "by_source": {
     "database_identifier": 1,
@@ -228,13 +233,18 @@
   },
   "n_features": 3,
   "n_samples": 8,
+  "n_ungrouped": 8,
   "quantification_confidence": "unknown",
   "quantification_measure": null,
+  "roles": {
+   "sample": 8
+  },
   "samples": "name\trole\nHC1\tsample\nHC2\tsample\nHC3\tsample\nRA1\tsample\nRA2\tsample\nRA3\tsample\nQC1\tsample\nQC2\tsample",
   "source_files": [
    "<TMP>\\AlignResult-1.mzTab"
   ],
   "source_format": "mztab",
+  "tags": {},
   "validation": {
    "n_errors": 0,
    "n_warnings": 0,

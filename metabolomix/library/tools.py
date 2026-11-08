@@ -5,12 +5,14 @@
 `dcl/tools.py` と同じ流儀（`missing_state` 封筒・`json_payload`・TSV 一覧・
 `structured_output=False`）に揃える。
 
-deps: mcp_core / session_state / mcp_errors / path_resolvers / library.{dbs,msp,store} /
+deps: mcp_core / session_state / mcp_errors / path_resolvers（明示パスの確認だけ）/ library.{dbs,msp,store} /
 analysis.spectral_match / plots.{mirror,render} / dcl.reader / arf2.reader
 （`format_spots_as_table` の借用のみ）。server は import しない。
 """
 from __future__ import annotations
 
+import contextlib
+import os
 from pathlib import Path
 
 from mcp.server.fastmcp import Image
@@ -20,13 +22,7 @@ from metabolomix.analysis.spectral_match import fragment_matches_excluding_precu
 from metabolomix.arf2.reader import format_spots_as_table
 from metabolomix.core import mcp_errors, user_config
 from metabolomix.core.mcp_core import mcp
-from metabolomix.core.path_resolvers import (
-    LIBRARY_SETTING_KEYS,
-    LibraryPathError,
-    resolve_arf2_file_path,
-    resolve_dcl_file_path,
-    resolve_library_path,
-)
+from metabolomix.core.path_resolvers import LibraryPathError, resolve_library_path
 from metabolomix.msdial import alignment_spot
 from metabolomix.core.serialization import json_payload, round_floats
 from metabolomix.dcl.reader import deserialize_dcl, get_msms_by_precursor
@@ -65,32 +61,55 @@ _CANDIDATE_TABLE_COLUMNS = [
 _DETAIL_COLUMNS = ["inchikey", "fragment_matches_excl_precursor"]
 
 
+def _not_remembered(record: dict | None) -> dict:
+    """`LIBRARY_NOT_REMEMBERED`: データセットが同定に使ったライブラリを覚えていない。
+
+    候補は**ファイル名だけ**（研究室ライブラリの置き場所は戻り値に出さない）: 記憶が絞り切れなかった
+    候補と、設定の極性ごとの MSP の名前。どれも自動では開かない——選ぶのは利用者で、`file_path` で渡す。
+    """
+    names = list((record or {}).get("candidates") or [])
+    for key in user_config.MSP_SETTING_KEYS.values():
+        try:
+            setting = user_config.get_setting(key)
+        except user_config.ConfigInvalidError:
+            continue
+        if setting is not None and os.path.basename(setting.value) not in names:
+            names.append(os.path.basename(setting.value))
+    payload = {
+        "status": "error", "code": "LIBRARY_NOT_REMEMBERED",
+        "message": ("このデータセットは、同定に使った参照ライブラリを覚えていません"
+                    "（mzTab-M だけから読んだ・ライブラリが 1 つに決まらない）。"
+                    "使うライブラリを `file_path` を渡して指定してください。"
+                    "データフォルダも設定の極性の MSP も、自動では探しません。")}
+    if names:
+        payload["candidates"] = names
+    return payload
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
           structured_output=False)
 def library_load(file_path: str | None = None, rebuild: bool = False,
-                 ion_mode: str | None = None, dataset_handle: str | None = None) -> str:
+                 dataset_handle: str | None = None) -> str:
     """参照ライブラリを読み込み、照合用の SQLite store を構築（または既存キャッシュを
     再利用）する。
 
-    解決順: `file_path` の明示 → 直近のデータセット（または `dataset_handle`）が覚えた、同定に
-    使ったライブラリ（`library_record`。実体の sha256 を測り直して通れば開く。**`file_path` も
-    `ion_mode` も省いたときだけ**。`ion_mode` を渡せば記憶ではなく設定から引く）→ `ion_mode`（`"positive"` / `"negative"`）に対応する
-    設定（環境変数 `MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG` → `lipidmix.local.toml` の
-    `[library] msp_positive` / `msp_negative`）→ データディレクトリの
-    `*_Loaded.msp2.dbs` → 設定済みの極性（両方あれば `ion_mode` を求める）→
-    データディレクトリの `*.msp`。候補が 1 つに決まらなければ `code` 付きの
-    エラー（`MSP_AMBIGUOUS` など）を返し、黙って選ばない。一度に保持する
-    ライブラリは 1 つだけ——測定の極性に合わせて `ion_mode` を指定する。
+    `file_path` を渡せばそのファイル（`.msp` / `.dbs`）。**省けば、直近のデータセット（または
+    `dataset_handle`）が覚えた、同定に使ったライブラリ**（`library_record`。実体の sha256 を
+    測り直して通れば開く）。データフォルダも、設定の極性の MSP（`[library] msp_positive` /
+    `msp_negative`。Console にどれを使わせるかだけに使う）も探さない。覚えていない
+    （同定に使ったライブラリが決まらない）なら `LIBRARY_NOT_REMEMBERED`（候補のファイル名と
+    「`file_path` を渡す」案内）、データセットが無ければ `missing_state`（`load_dataset`）。
+    一度に保持するライブラリは 1 つだけ。
 
     記憶が `mismatch`（内容が変わった・ファイルが無い）や `lbm_only`（LBM だけで MSP を使って
-    いない）のときは、上の設定の順には**落ちず**理由を返す（`file_path` で明示すれば開ける）。
-    `file_path` や `ion_mode` の設定から引いたものが記憶と違うライブラリ（中身の sha256 で比べる）
-    なら、そのまま開き、戻り値の `differs_from_record` に記憶したファイル名と開いたファイル名を書く。
+    いない）のときは理由を返す（`file_path` で明示すれば開ける）。
+    `file_path` で開いたものが記憶と違うライブラリ（中身の sha256 で比べる）なら、そのまま開き、
+    戻り値の `differs_from_record` に記憶したファイル名と開いたファイル名を書く。
     記憶が `lbm_only` なら、開いたライブラリで同定したものではない旨を `note` に書く。記憶から開いたときは `library_source` が
     `"dataset_record"`。
 
     初回の構築は大きな `.msp`（1 GB 級）で数分かかる。MCP のタイムアウトに当たる
-    なら、手元で `python -m metabolomix.library.store --ion-mode <極性>` を 1 度
+    なら、手元で `python -m metabolomix.library.store --file <path>` を 1 度
     走らせておけば、以後はキャッシュを開くだけで済む。
 
     `library_match_feature` の前提。別ライブラリへ切り替えると直近の照合結果
@@ -101,8 +120,8 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     疑いがあるときなど）。通常は不要——store は元ファイルの sha256 をキーに
     キャッシュされるため、内容が変わらない限り再構築しない。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッション。ハンドルのライブラリ・照合結果だけを読み書きする。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は直近のデータセット。ハンドルのライブラリ・照合結果だけを読み書きする。
         ハンドルへは読み取り専用で開く。
     """
     from metabolomix.tools._holder import resolve_holder
@@ -118,70 +137,49 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
         from metabolomix.dataset.library_memory import verify_record
 
         record = verify_record(record)
-        status, remembered = record["status"], record.get("file")
-        if file_path is None and ion_mode is None:  # R23: 記憶が先なのは両方とも省いたときだけ
-            if status == "known":
-                file_path, from_record = record["path"], True
-            elif status == "mismatch":
-                return json_payload({
-                    "status": "error", "code": "LIBRARY_RECORD_MISMATCH",
-                    "message": (f"データセットが覚えたライブラリ（{remembered}）が不一致です"
-                                "（内容が変わったか、ファイルが無い）。設定の順には落ちません。"
-                                "使うライブラリを file_path で明示してください。")})
-            else:  # lbm_only
-                return json_payload({
-                    "status": "error", "code": "LIBRARY_RECORD_LBM_ONLY",
-                    "message": ("このデータセットの同定は LBM（脂質のルールベース）だけで、MS/MS の"
-                                "照合に使う MSP のライブラリがありません。設定の順には落ちません。"
-                                "別のライブラリで照合するなら file_path で明示してください。")})
+    if not file_path:
+        if holder.dataset is None:
+            return mcp_errors.missing_state(
+                "dataset", ["load_dataset"],
+                "ライブラリの既定は直近のデータセットが同定に使ったものです。先に load_dataset を"
+                "実行するか、file_path で参照ライブラリを指定してください。")
+        status = (record or {}).get("status", "unknown")
+        remembered = (record or {}).get("file")
+        if status == "known":
+            file_path, from_record = record["path"], True
+        elif status == "mismatch":
+            return json_payload({
+                "status": "error", "code": "LIBRARY_RECORD_MISMATCH",
+                "message": (f"データセットが覚えたライブラリ（{remembered}）が不一致です"
+                            "（内容が変わったか、ファイルが無い）。使うライブラリを file_path で"
+                            "明示してください。")})
+        elif status == "lbm_only":
+            return json_payload({
+                "status": "error", "code": "LIBRARY_RECORD_LBM_ONLY",
+                "message": ("このデータセットの同定は LBM（脂質のルールベース）だけで、MS/MS の"
+                            "照合に使う MSP のライブラリがありません。別のライブラリで照合するなら "
+                            "file_path で明示してください。")})
         else:
-            record_for_diff = record  # 開いたあと、中身（sha256）で記憶と比べる
-    if dataset_handle is not None and file_path is None:
-        # ハンドルは極性の設定だけから引く（dataset_handle_open と同じ規則）。対話の
-        # データフォルダの .dbs / .msp を探さず、データセットと逆の極性も読まない。
-        mode = (ion_mode or holder.polarity or "").strip().lower() or None
-        if ion_mode and holder.polarity and mode != holder.polarity:
-            return json_payload({
-                "status": "error", "code": "LIBRARY_POLARITY_MISMATCH",
-                "message": (f"このハンドルのデータセットは {holder.polarity} です"
-                            f"（ion_mode={ion_mode!r}）。逆の極性のライブラリは読みません。")})
-        key = user_config.MSP_SETTING_KEYS.get(mode or "")
-        setting = user_config.get_setting(key) if key else None
-        if setting is None:
-            reason = ("データセットの極性が決まらないので ion_mode を指定してください。"
-                      if key is None else f"{key} が設定されていません。")
-            return json_payload({
-                "status": "error", "code": "LIBRARY_NOT_CONFIGURED",
-                "message": ("ハンドルのライブラリは極性の設定（[library] msp_positive / "
-                            "msp_negative）から引きます。" + reason)})
-        file_path = setting.value
+            return json_payload(_not_remembered(record))
+    elif record is not None and record.get("status") != "unknown":
+        record_for_diff = record  # 開いたあと、中身（sha256）で記憶と比べる
     try:
-        resolved = resolve_library_path(file_path, ion_mode=ion_mode)
+        resolved = resolve_library_path(file_path)
     except LibraryPathError as exc:
         payload = {"status": "error", "code": exc.code, "message": exc.message}
         if exc.details:
             payload["details"] = exc.details
         return json_payload(payload)
-    if not resolved:
-        # resolve_library_path は大文字・空白を許して正規化するので、ここでも同じに揃える。
-        mode = (ion_mode or "positive").strip().lower()
-        key = LIBRARY_SETTING_KEYS.get(mode, "library.msp_positive")
-        hint = user_config.missing_hint(key, "研究室の参照ライブラリ（.msp）")
-        if ion_mode is None:
-            hint += " 負イオンは [library] msp_negative です。"
-        return json_payload({
-            "status": "error",
-            "message": "参照ライブラリが見つかりませんでした（データディレクトリにも "
-                       "*_Loaded.msp2.dbs / *.msp がありません）。file_path で指定するか、" + hint,
-            "details": user_config.describe_missing(key),
-        })
 
     try:
         store_obj = open_store(resolved, rebuild=rebuild, read_only=dataset_handle is not None)
+    except user_config.ConfigInvalidError as exc:  # キャッシュの置き場所（[paths] library_cache）が読めない
+        return json_payload({"status": "error", "code": exc.code, "message": exc.message,
+                             "details": exc.details()})
     except Exception as exc:  # noqa: BLE001 - 壊れたライブラリは文言で返す（MCP が扱いやすい）
         # OSError の文言は置き場所（フルパス）を含む。研究室ライブラリの置き場所は
         # 戻り値（LLM の文脈）に出さないので、ディレクトリ部分を伏せる。
-        # OS が返す文言は `\` 区切り・`/` 区切りのどちらでも出うる（環境変数に `/` で
+        # OS が返す文言は `\` 区切り・`/` 区切りのどちらでも出うる（file_path に `/` で
         # 書かれた値はそのまま `/` で残る）ので、両方の表記を伏せる。
         parent = Path(resolved).parent
         detail = f"{type(exc).__name__}: {exc}"
@@ -189,19 +187,24 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
             detail = detail.replace(shown, "…")
         return json_payload({"status": "error", "message": f"参照ライブラリの読み込みに失敗しました: {detail}"})
 
-    # 古い store の sqlite3 接続を閉じてから差し替える（Minor 8: 閉じずに上書きすると
-    # library_load を繰り返すたびに接続が漏れる。LibraryStore.close() は最初から
-    # 存在していたが、ここで呼んでいなかった）。
-    old_store = holder.library.store
-    if old_store is not None:
-        old_store.close()
+    # セッション自身のライブラリへ書く区間は、`session.dataset` の setter がそれを新しい
+    # ハンドルへ移す区間と排他にする（ハンドルへ書くときは、そのハンドルのロックが
+    # すでに呼び出しを直列にしている）。ロックの下で `holder.library` を読むので、移動の
+    # 後ならハンドルのライブラリへ書く。
+    with (holder.library_write_lock if dataset_handle is None else contextlib.nullcontext()):
+        # 古い store の sqlite3 接続を閉じてから差し替える（Minor 8: 閉じずに上書きすると
+        # library_load を繰り返すたびに接続が漏れる。LibraryStore.close() は最初から
+        # 存在していたが、ここで呼んでいなかった）。
+        old_store = holder.library.store
+        if old_store is not None:
+            old_store.close()
 
-    # 別ライブラリへの切り替え起こりうるので、古い照合結果を新ライブラリのものと
-    # 取り違えないよう破棄する（ArfState.reset_analysis と同じ考え方）。
-    holder.library.store = store_obj
-    # ハンドルにはファイル名だけを持たせる（研究室のライブラリの置き場所を記録に残さない）。
-    holder.library.source_path = resolved if dataset_handle is None else Path(resolved).name
-    holder.library.last_match = None
+        # 別ライブラリへの切り替え起こりうるので、古い照合結果を新ライブラリのものと
+        # 取り違えないよう破棄する（ArfState.reset_analysis と同じ考え方）。
+        holder.library.store = store_obj
+        # ハンドルにはファイル名だけを持たせる（研究室のライブラリの置き場所を記録に残さない）。
+        holder.library.source_path = resolved if dataset_handle is None else Path(resolved).name
+        holder.library.last_match = None
 
     path = Path(resolved)
     summary = store_obj.summary()
@@ -288,11 +291,10 @@ def _measured_spectrum(precursor_mz: float, *, rt: float | None = None,
     Important 7: 以前は `hits[0]`——`.dcl` ファイル内の並び順の先頭——を無条件に
     採っており、別のピークの測定スペクトルを黙って採点しうる不具合があった）。
     """
-    resolved = resolve_dcl_file_path(dcl_file)
-    if not resolved:
+    if not dcl_file or not os.path.isfile(dcl_file):
         return None
     try:
-        results = deserialize_dcl(resolved, include_spectrum=True, top_n_peaks=None)
+        results = deserialize_dcl(dcl_file, include_spectrum=True, top_n_peaks=None)
     except Exception:  # noqa: BLE001 - 壊れた .dcl は「見つからない」と同じ扱いにする
         return None
     hits = get_msms_by_precursor(results, precursor_mz, tol=mz_tol, rt=rt, rt_tol=rt_tol)
@@ -318,7 +320,7 @@ def _spot_query(spot_id: int, *, arf2_path: str | None, dcl_file: str | None,
     `not_found` には `reason` が付く: `no_arf2` / `no_dcl`（ファイルが無い＝スペクトルの有無は
     分からない）と `no_spectrum`（照会して無かった）。`status` の値は変えない。
     """
-    arf2 = resolve_arf2_file_path(arf2_path)
+    arf2 = arf2_path if arf2_path and os.path.isfile(arf2_path) else None
     if not arf2:
         return {"status": "not_found", "reason": "no_arf2",
                 "message": "spot_id の解決に要る .arf2 が見つかりませんでした（arf2_path で指定できます）。"}
@@ -411,9 +413,9 @@ def library_match_feature(
     上位候補を返す。
 
     照合の対象は `precursor_mz` か `spot_id` の**どちらか一方**で指定する。
-    `spot_id`（MasterAlignmentID。`eic_search` 等で引ける）を渡すと、precursor m/z・
-    RT・極性を同じバッチの `.arf2`（`arf2_path`、省略時は現在のデータフォルダ）から取り、
-    測定スペクトルはアラインメント `.dcl`（`dcl_file`、省略時は `.arf2` と同じバッチ）の
+    `spot_id`（MasterAlignmentID。`dataset_feature_search` 等で引ける）を渡すと、precursor m/z・
+    RT・極性を `.arf2`（`arf2_path`、省略時は直近のデータセットの `.arf2`）から取り、
+    測定スペクトルはアラインメント `.dcl`（`dcl_file`、省略時はデータセットの `.dcl`）の
     そのスポットの代表 MS/MS を使う。precursor が ARF2 と ±0.01 で合わなければ
     照合せず `status="dcl_precursor_mismatch"`、ID が無ければ `spot_not_found`。
     `rt` / `ion_mode` を明示すれば ARF2 の値より優先する。
@@ -474,9 +476,10 @@ def library_match_feature(
     （`last_match`）を読まずに、戻り値だけで照合の中身を確かめられる。
     **`matched_peaks_count` は前駆体の一致も 1 本に数える**（意味は変えていない）。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッション。ハンドルのライブラリ・照合結果だけを読み書きする。
-        `spot_id` の解決は、`arf2_path` / `dcl_file` を省けばハンドルの `.arf2` / `.dcl` を使う。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
+        省略時は直近のデータセット。ハンドルのライブラリ・照合結果だけを読み書きする。
+        `arf2_path` / `dcl_file` を省けばそのデータセットの `.arf2` / `.dcl` を使う
+        （データフォルダは探さない。データセットが無ければ missing_state）。
     """
     from metabolomix.tools._holder import alignment_paths, resolve_holder
 
@@ -698,7 +701,7 @@ def library_plot_mirror(rank: int = 1, output: str | None = None,
     どちらも上下は別枠で数える（上流は上下で別々の `Annotator` を持つため、
     側をまたぐ衝突は起きない）。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッション。ハンドルのライブラリ・照合結果だけを読み書きする。
     """
     from metabolomix.tools._holder import resolve_holder
@@ -773,7 +776,7 @@ def library_search(name: str | None = None, formula: str | None = None,
     条件は与えたものの AND で、1 つも無ければ `invalid_arguments`。`limit`（既定 50）件まで
     TSV（列名 1 回）で返し、打ち切った件数を `truncated` に書く。スペクトルは返さない
     （ピーク数 `n_peaks` だけ）。
-    dataset_handle: `dataset_handle_open` が返したハンドル（そのハンドルのライブラリを引く）。
+    dataset_handle: `load_dataset` が返したハンドル（そのハンドルのライブラリを引く）。
         省略時は対話のセッションの `library_load` のライブラリ。
     """
     from metabolomix.tools._holder import resolve_holder
@@ -784,9 +787,9 @@ def library_search(name: str | None = None, formula: str | None = None,
     store_obj = holder.library.store
     if store_obj is None:
         return mcp_errors.missing_state(
-            "library_store", ["library_load", "dataset_handle_open"],
+            "library_store", ["library_load", "load_dataset"],
             "参照ライブラリが読み込まれていません（library_load、またはライブラリつきの"
-            "dataset_handle_open）。")
+            "load_dataset で開いたデータセット）。")
     if name is None and formula is None and inchikey is None:
         return json_payload({"status": "invalid_arguments",
                              "message": "name / formula / inchikey のどれか 1 つは指定してください。"})

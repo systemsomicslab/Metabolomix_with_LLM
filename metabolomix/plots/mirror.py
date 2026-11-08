@@ -326,8 +326,20 @@ def _draw_labels(ax, fig, points_by_side: dict, policy: str) -> None:
 
 
 def render_mirror(payload: MirrorPayload, *, scale: str = RELATIVE,
-                  label_policy: str = AUTO):
-    """対向プロットを PNG バイト列にする（`metabolomix.plots.render.figure_to_png` 経由）。
+                  label_policy: str = AUTO) -> bytes:
+    """対向プロットを PNG バイト列にする。
+
+    図の生成から破棄までは `render.render_png`（`PLOT_LOCK` の下）で行う。
+    図の組み立ては `_build_mirror_figure`（引数の意味はそちら）。
+    """
+    from metabolomix.plots.render import render_png
+
+    return render_png(_build_mirror_figure, payload, scale=scale, label_policy=label_policy)
+
+
+def _build_mirror_figure(payload: MirrorPayload, *, scale: str = RELATIVE,
+                         label_policy: str = AUTO):
+    """対向プロットの Figure を組み立てて返す（閉じるのは呼び出し側＝`render_png`）。
 
     上段が測定（上向き）、下段が参照（下向き。正規化強度に `-1` を掛ける）。
     一致した m/z のガイド線は `payload["matched_mz"]`（参照側の窓の中心）に引く。
@@ -355,12 +367,7 @@ def render_mirror(payload: MirrorPayload, *, scale: str = RELATIVE,
     最大値で正規化**してから同じスケールを掛ける。軸ラベルに選んだスケールを
     書く——黙って `sqrt` で描くと、読む側が相対強度の比を誤読する。
     """
-    import matplotlib
-
-    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-
-    from metabolomix.plots.render import figure_to_png
 
     # 未知の scale / label_policy はここで弾く（描き始めてから落ちないように）。
     scale_intensity(1.0, scale)
@@ -434,4 +441,4 @@ def render_mirror(payload: MirrorPayload, *, scale: str = RELATIVE,
     # 採点対象外のピークはラベルの対象にしない（payload 側の `labels` と揃える）。
     _draw_labels(ax, fig, {"measured": scored, "reference": reference}, label_policy)
 
-    return figure_to_png(fig)
+    return fig

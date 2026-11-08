@@ -12,8 +12,11 @@ outputSchema を導出するため、`-> str` のツールが失敗時だけ dic
 機械可読なエラーはテキストに載せるしかない。
 
 このモジュールは依存グラフの leaf（stdlib と同じく leaf の
-metabolomix.core.serialization のみ）。tools_* / server を import しない。
+metabolomix.core.serialization と metabolomix.core.atomic_io のみ）。tools_* / server を import しない。
 """
+import functools
+
+from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.serialization import json_payload
 
 MISSING_STATE = "missing_state"
@@ -62,7 +65,7 @@ CONSOLE_ERROR_CODES = frozenset({
     "METHOD_FILE_NOT_FOUND",
     # MS-DIAL Console が読む ASCII の key/value テキストではない場合。
     "METHOD_FILE_NOT_TEXT",
-    # MSDIAL_EXE が Console ではなく GUI を指している場合。
+    # [msdial] exe が Console ではなく GUI を指している場合。
     "MSDIAL_EXE_NOT_CONSOLE",
     # Console の起動検査（--help）が時間切れを繰り返した場合。Console でないとは
     # 判定できていない（冷間起動の遅れでも起きる）ので NOT_CONSOLE と分ける。
@@ -135,6 +138,9 @@ MZTAB_ERROR_CODES = frozenset({
     "FEATURE_SEARCH_EMPTY_QUERY",
     # 窓の下限が上限より大きい。
     "FEATURE_SEARCH_BAD_RANGE",
+    # `.arf` が大きすぎて読めない（伸長後の大きさの見積もりが空きメモリを超える、または読む途中で
+    # メモリが尽きた）。details に path_name / estimated_bytes / available_bytes / remedy。
+    "ARF_TOO_LARGE",
 })
 
 
@@ -184,3 +190,28 @@ def pathway_error(code: str, message: str, details: dict | None = None) -> str:
     if details is not None:
         payload["details"] = details
     return json_payload({"error": payload})
+
+
+def config_invalid_as_envelope(fn):
+    """記録の置き場所を決めるときの `DomainError` を、ツールの封筒にして返す。
+
+    記録の置き場所（`[paths] reports_dir` と、データセットの解析フォルダ配下 `reports/`）を
+    読むツール（レポート・objective・図の保存・パスウェイ）が対象。
+    - `CONFIG_INVALID`（設定ファイルが読めない）: そのままの封筒。以前は例外のまま落ちていた。
+    - `NO_REPORT_DIR`（設定の置き場所が無く、データセットも無い）: `missing_state("dataset",
+      ["load_dataset"])`。
+    ほかのコードの DomainError はそのまま送出する。`@mcp.tool` の内側に付ける
+    （`functools.wraps` が引数の形と docstring を保つ）。
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except DomainError as exc:
+            if exc.code == "NO_REPORT_DIR":
+                return missing_state("dataset", ["load_dataset"], exc.message)
+            if exc.code != "CONFIG_INVALID":
+                raise
+            return json_payload({"error": {"code": exc.code, "message": exc.message,
+                                           "details": exc.details}})
+    return wrapper

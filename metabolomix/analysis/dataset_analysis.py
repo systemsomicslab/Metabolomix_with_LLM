@@ -4,7 +4,7 @@ DatasetState.feature_matrix は (n_features, n_samples)。analysis/ の関数は
 すべて (n_samples, n_features) を期待するため、ここで転置する。
 呼び出し側はこの転置を意識しなくてよい。
 
-処理順は metabolomix/arf/tools.py の arf_preprocess と同一に保つ:
+処理順は旧 ARF 経路の前処理（撤去済み）と同一に保つ:
   blank_filter → normalize → drift_correct → qc_rsd_filter → impute
   → drop_samples_by_role(blank)
 ARF 経路と DatasetState 経路で違う数字が出ないことが、この層の存在意義。
@@ -14,14 +14,11 @@ ARF 経路と DatasetState 経路で違う数字が出ないことが、この�
 """
 from __future__ import annotations
 
-import re
-
 import numpy as np
 
 from metabolomix.analysis import differential, export_contract, preprocessing, sample_manifest
 from metabolomix.analysis.pca import run_pca
 
-_DATE_RE = re.compile(r"(\d{8})")
 
 # 差次的解析の群に混ぜてはいけないロール。
 _NON_SAMPLE_ROLES = ("qc", "blank")
@@ -59,27 +56,49 @@ class PreconditionError(Exception):
         self.state = state
 
 
-def _included_sample_indices(ds) -> list[int] | None:
-    """明示メタデータで include=true の試料が占める ds.sample_names 上の位置。
+def included_sample_indices(ds) -> list[int] | None:
+    """解析に残す試料が占める ds.sample_names 上の位置。
 
-    None は「絞り込む必要が無い」——明示メタデータが無い、行数が合わない
-    （`build_dataset_pp_inputs` が別途 PreconditionError にする）、あるいは
-    全件 include=true の場合。
+    外す試料は 2 種類ある: 明示メタデータで include=false の試料と、`dataset_exclude` で
+    除外した試料（`ds.excluded_samples`。名前で持つ）。
 
-    include=false の除外は行列（`build_dataset_pp_inputs`）と検出マスク
-    （`_apply_detection_filter`）の**両方**に効かせる必要があるので、位置の
-    計算はここ 1 か所に置く。片方だけに効かせると、除外した試料の未検出が
-    残ったまま検出率が計算され、min_detection_rate=1.0 が正当な特徴量を
+    None は「絞る必要が無い」——どちらも無い、または全件を残す場合。明示メタデータの行数が
+    試料数と合わない場合（`build_dataset_pp_inputs` が別途 PreconditionError にする）は
+    include の側を見ず、除外だけを適用する。
+
+    除外は行列（`build_dataset_pp_inputs`）と検出マスク（`_apply_detection_filter`）の
+    **両方**に効かせる必要があるので、位置の計算はここ 1 か所に置く。片方だけに効かせると、
+    除外した試料の未検出が残ったまま検出率が計算され、min_detection_rate=1.0 が正当な特徴量を
     削り落とす。
     """
-    rows = getattr(ds, "sample_metadata_rows", None)
-    if not rows:
-        return None
     sample_names = list(getattr(ds, "sample_names", []) or [])
-    if len(rows) != len(sample_names):
-        return None
-    keep = [i for i, row in enumerate(rows) if row.get("include", True)]
-    return keep if len(keep) != len(rows) else None
+    rows = getattr(ds, "sample_metadata_rows", None)
+    use_rows = bool(rows) and len(rows) == len(sample_names)
+    excluded = getattr(ds, "excluded_samples", None) or {}
+    keep = [i for i, name in enumerate(sample_names)
+            if name not in excluded and (not use_rows or rows[i].get("include", True))]
+    return keep if len(keep) != len(sample_names) else None
+
+
+def _drop_excluded_features(ds, matrix, feature_names):
+    """`dataset_exclude` で除外した特徴（列）を行列から外す。無ければそのまま返す。
+
+    検出率の足切りの**後**に呼ぶ（検出マスクの行は ds.feature_ids の並びのままなので、先に
+    列を落とすと対応がずれる）。
+    """
+    excluded = getattr(ds, "excluded_features", None) or {}
+    if not excluded:
+        return matrix, feature_names
+    keep = [i for i, name in enumerate(feature_names) if name not in excluded]
+    if len(keep) == len(feature_names):
+        return matrix, feature_names
+    if not keep:
+        raise PreconditionError(
+            "bad_request",
+            "除外した特徴で、前処理に残る特徴が 0 件になります。"
+            "dataset_exclude(mode=\"remove\" または \"clear\") で戻してください。",
+            {"n_excluded_features": len(excluded)})
+    return matrix[:, keep], [feature_names[i] for i in keep]
 
 
 def build_dataset_pp_inputs(ds):
@@ -90,7 +109,8 @@ def build_dataset_pp_inputs(ds):
                         明示メタデータ適用済みなら include=false の行は含まない
                         （spec §8.1「include=falseの試料はこれらの評価前に除外する」。
                         下記 sample_names と同じ行だけを残す）。
-        sample_names  : list[str] — 同上の理由で include=false のサンプル名は
+        sample_names  : list[str] — 同上の理由で include=false のサンプル名と、
+                        `dataset_exclude` で除外した試料（`ds.excluded_samples`）は
                         含まない。
         feature_names : list[str]（SMF_ID）
         roles         : {sample_name: "sample"|"qc"|"blank"} — preprocess の第3引数。
@@ -115,7 +135,7 @@ def build_dataset_pp_inputs(ds):
     if ds.feature_matrix is None or not ds.sample_names or not ds.feature_ids:
         raise PreconditionError(
             "missing_state",
-            "DatasetState に定量行列がありません。dataset_load を先に実行してください。",
+            "DatasetState に定量行列がありません。load_dataset を先に実行してください。",
             state="dataset",
         )
 
@@ -133,7 +153,7 @@ def build_dataset_pp_inputs(ds):
             raise PreconditionError(
                 "bad_request",
                 "適用済みの実験情報シートの行数がサンプル数と一致しません。"
-                "dataset_load をやり直してから metadata を再適用してください。",
+                "load_dataset をやり直してから metadata を再適用してください。",
                 {"rows": len(explicit_rows), "samples": len(sample_names)},
             )
         roles, sample_meta = sample_manifest.pp_inputs_from_rows(sample_names, explicit_rows)
@@ -148,7 +168,7 @@ def build_dataset_pp_inputs(ds):
         # （controller裁定R15・レビュー Finding 1）。
         # roles/sample_meta の写像自体は削らない——除外理由の監査・表示
         # （dataset_status 等）は全件分の役割を必要とするため。
-        keep_idx = _included_sample_indices(ds)
+        keep_idx = included_sample_indices(ds)
         if keep_idx is not None:
             matrix = matrix[keep_idx, :]
             sample_names = [sample_names[i] for i in keep_idx]
@@ -191,6 +211,12 @@ def build_dataset_pp_inputs(ds):
             "run_order": run_order,
             "run_order_source": "mztab_injection_sequence" if run_order is not None else None,
         }
+    # `dataset_exclude` で除外した試料は、明示メタデータの経路と同じく行列と名前から外す
+    # （roles / sample_meta の写像は全件分のまま）。
+    keep_idx = included_sample_indices(ds)
+    if keep_idx is not None:
+        matrix = matrix[keep_idx, :]
+        sample_names = [sample_names[i] for i in keep_idx]
     return matrix, sample_names, feature_names, roles, sample_meta
 
 
@@ -208,7 +234,10 @@ def run_dataset_preprocess(ds, recipe: dict):
     # 実測値と区別できなくなり、「何を根拠に残したか」が言えなくなる。
     matrix, feature_names, detection_report = _apply_detection_filter(
         ds, matrix, feature_names, recipe.get("min_detection_rate"),
-        sample_indices=_included_sample_indices(ds))
+        sample_indices=included_sample_indices(ds))
+
+    # `dataset_exclude` で除外した特徴は、検出率の足切りの後で外す（検出マスクの行の対応を保つ）。
+    matrix, feature_names = _drop_excluded_features(ds, matrix, feature_names)
 
     run_order = {n: sample_meta[n]["run_order"] for n in sample_names}
 
@@ -226,7 +255,7 @@ def run_dataset_preprocess(ds, recipe: dict):
     report.update(detection_report)
 
     # ブランクは blank_filter の参照として使い終えたので解析行列から外す。
-    # 残すと総強度が桁違いに低い行が PCA の PC1 を支配する（arf_preprocess と同じ理由）。
+    # 残すと総強度が桁違いに低い行が PCA の PC1 を支配する（旧 ARF 経路の前処理と同じ理由）。
     # QC は残す——QC クラスタの締まり具合を PCA で見るのは品質確認の定番手段。
     matrix, pp_sample_names, dropped = preprocessing.drop_samples_by_role(
         matrix, sample_names, roles, drop_roles=("blank",),
@@ -239,7 +268,7 @@ def run_dataset_preprocess(ds, recipe: dict):
             "ため残しています。"
         )
 
-    # プールQC が複数バッチに分かれているかの簡易警告（arf_preprocess:327,364 と同じ材料）。
+    # プールQC が複数バッチに分かれているかの簡易警告（旧 ARF 経路と同じ材料）。
     qc_batches = {sample_meta[n]["batch"] for n in sample_names
                   if sample_meta[n]["role"] == "qc"}
     if len(qc_batches) > 1:
@@ -247,7 +276,7 @@ def run_dataset_preprocess(ds, recipe: dict):
             "プールQC が複数バッチ/層に分かれています。全体一律のドリフト補正は近似です。"
         )
 
-    # 層別プール QC の警告（arf_preprocess と同じ材料）
+    # 層別プール QC の警告（旧 ARF 経路と同じ材料）
     qc_strata = preprocessing.detect_qc_strata(sample_names, roles)
     if len(qc_strata) > 1:
         labels = ", ".join(sorted(s for s in qc_strata if s))
@@ -261,8 +290,8 @@ def run_dataset_preprocess(ds, recipe: dict):
         report.setdefault("caveats", []).append(
             "この mzTab-M は注入順（MTD assay[N]-custom[...] の "
             "MS:4000089 injection sequence label）を持たないため、QC ドリフト補正は"
-            "実施できません。注入順に依存する品質評価が必要なら ARF 経路"
-            "（arf_preprocess）を使ってください。")
+            "実施できません。注入順に依存する品質評価が必要なら、解析フォルダ（.arf）を "
+            "load_dataset の directory で読んでください。")
     elif recipe.get("drift_correct"):
         report.setdefault("caveats", []).append(
             "注入順は mzTab-M の injection sequence label から取得しました。"
@@ -362,7 +391,7 @@ def run_dataset_differential(
     idx_b, names_b = _resolve_group(group_b_samples, available, ds.roles,
                                     group_b_label, caveats)
 
-    # 正規化未適用の警告（arf_differential:846-848 と同じ判定）。DatasetState 側は
+    # 正規化未適用の警告（旧 ARF 経路の差次的解析と同じ判定）。DatasetState 側は
     # run_dataset_preprocess が recipe 自体を ds へ書き戻さないため、呼び出し側が
     # 事前に ds.preprocessing_recipe へ設定しておく契約。未設定/空は "none" 扱い。
     recipe = ds.preprocessing_recipe or {}
@@ -394,15 +423,15 @@ def run_dataset_differential(
     sub_matrix = matrix[keep_idx, :]
     group_labels = [group_a_label] * len(idx_a) + [group_b_label] * len(idx_b)
 
-    # 交絡（群⟂バッチ）判定は arf_differential:872-879 と同じく「実際に比較した2群」
+    # 交絡（群⟂バッチ）判定は 旧 ARF 経路の差次的解析と同じく「実際に比較した2群」
     # （プール後）に対して行う。プール前の細粒度ラベルで判定すると偽の交絡警告が出る
-    # （arf_differential:869-871 のコメントと同じ理由）。
+    # （旧 ARF 経路のコメントと同じ理由）。
     # names_a/names_b は idx_a/idx_b と同じ順で構築されているため、
     # keep_idx（idx_a + idx_b）と対応するバッチ列を同じ並びで組む。
     names_ordered = names_a + names_b
     batch_labels = [(ds.sample_meta.get(n) or {}).get("batch") for n in names_ordered]
     conf = differential.check_confounding(group_labels, batch_labels)
-    # batch_source は比較対象に限らず全サンプルから拾う（arf_differential:858 と同じ）。
+    # batch_source は比較対象に限らず全サンプルから拾う（旧 ARF 経路と同じ）。
     batch_source = next(
         (m.get("batch_source") for m in (ds.sample_meta or {}).values()
          if m.get("batch_source")),
@@ -485,7 +514,7 @@ def _apply_detection_filter(ds, matrix, feature_names, min_detection_rate, *,
     `matrix` は (サンプル × 特徴)、`ds.detected_mask` は (特徴 × サンプル) の並び。
     足切りは列（特徴）に対して行う。
 
-    `sample_indices`（`_included_sample_indices`）を渡すと、マスクの列も
+    `sample_indices`（`included_sample_indices`）を渡すと、マスクの列も
     その試料だけへ絞ってから検出率を数える。**絞らないと、解析から除外した
     試料（include=false）の未検出が検出率を押し下げる**——`matrix` 側は
     `build_dataset_pp_inputs` が既に include=true だけにしているのに、分母だけ
@@ -506,7 +535,7 @@ def _apply_detection_filter(ds, matrix, feature_names, min_detection_rate, *,
                 "min_detection_rate を適用できません。mzTab-M の非ゼロ値は実測ピークと "
                 "gap-fill 補間値の区別を持たず、隣接する .arf からも取り込めませんでした"
                 "（理由は dataset_status の detection を参照）。検出率での足切りが必要なら "
-                "ARF 経路（arf_parser / arf_preprocess）を使ってください。",
+                "解析フォルダ（.arf）を load_dataset で読んでください。",
                 {"min_detection_rate": min_detection_rate,
                  "detection": (ds.feature_qc or {}).get("reason")},
             )

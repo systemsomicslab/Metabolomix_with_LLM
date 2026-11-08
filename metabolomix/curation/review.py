@@ -38,7 +38,8 @@ def is_valid_review_id(review_id) -> bool:
     return isinstance(review_id, str) and REVIEW_ID_RE.fullmatch(review_id) is not None
 
 
-def run_review(arf2_path, spots, *, store, ms2_tol, th, file_ids, max_traces, selection) -> dict:
+def run_review(arf2_path, spots, *, store, ms2_tol, th, file_ids, max_traces, selection,
+               files: dict | None = None) -> dict:
     """1 回のレビューを組み立てる。既存フラグは重い証拠収集の**前**に読む——`flags.jsonl`
     が壊れていれば（`flags.FlagFileError`）数分の計算を捨てずに先に止めるため。"""
     arf2_path = Path(arf2_path).resolve()
@@ -49,7 +50,7 @@ def run_review(arf2_path, spots, *, store, ms2_tol, th, file_ids, max_traces, se
     cleared = flags.cleared_spots(flag_rows, alignment["alignment_sha256"])
     confirmed = confirmed_spots(arf2_path, flags.effective_flags(flag_rows, alignment["alignment_sha256"]))
     evs, stats = evidence.collect(arf2_path, spots, store=store, ms2_tol=ms2_tol, th=th,
-                                  file_ids=file_ids, max_traces=max_traces)
+                                  file_ids=file_ids, max_traces=max_traces, files=files)
     points = []
     for ev in evs:
         comp = trend.composition(ev["name"])

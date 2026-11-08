@@ -22,6 +22,7 @@ from metabolomix.mztab.dataset_state import DatasetState
 from metabolomix.tools import handle_tools, mztab_tools
 from tests.msdial_folder_fixtures import write_msdial_folder
 from tests.reanalysis_fixtures import NEG_FEATURES, write_mztab
+from tests.config_fixtures import use_config
 
 
 @pytest.fixture(autouse=True)
@@ -43,8 +44,12 @@ def _folder(path):
 
 
 def _open(**kwargs) -> str:
-    out = json.loads(handle_tools.dataset_handle_open(library="none", **kwargs))
+    # 旧 `dataset_handle_open` は直近を動かさなかった。この検査は「ハンドルを渡す呼び出しは対話の状態に
+    # 触れない」ことを縛るので、開いたあとで直近を元に戻す（`load_dataset` はいつも直近にする）。
+    previous = session_state.session.current_handle_id
+    out = json.loads(handle_tools.load_dataset(library="none", **kwargs))
     assert out["status"] == "success", out
+    session_state.session.current_handle_id = previous
     return out["dataset_handle"]
 
 
@@ -60,7 +65,7 @@ def _msp(path, name="Choline"):
 
 
 def _list_rows() -> list[dict]:
-    table = json.loads(handle_tools.dataset_handle_list())["handles"]
+    table = json.loads(handle_tools.dataset_list())["handles"]
     header, *lines = table.splitlines()
     columns = header.split("\t")
     return [dict(zip(columns, line.split("\t"))) for line in lines]
@@ -72,17 +77,17 @@ def _text(result) -> str:
 
 
 def test_dataset_load_registers_handle_and_sets_current(tmp_path):
-    out = mztab_tools.dataset_load(directory=str(_folder(tmp_path / "a")))
+    out = handle_tools.load_dataset(directory=str(_folder(tmp_path / "a")))
     hid = _current()
     assert hid and hid in out
     assert handles.registry.peek(hid).dataset is session_state.session.dataset
 
 
 def test_closing_current_handle_does_not_fall_back(tmp_path):  # Review Focus 3
-    mztab_tools.dataset_load(directory=str(_folder(tmp_path / "a")))
+    handle_tools.load_dataset(directory=str(_folder(tmp_path / "a")))
     first = _current()
     other = _open(directory=str(_folder(tmp_path / "b")))
-    assert json.loads(handle_tools.dataset_handle_close(first))["status"] == "success"
+    assert json.loads(handle_tools.dataset_close(first))["status"] == "success"
     assert session_state.session.dataset is None
     assert '"missing_state"' in mztab_tools.dataset_status()
     # mcp 経由（包みを通る）でも、開いている別のハンドルへは落ちない。
@@ -96,7 +101,7 @@ def test_library_follows_current_handle(tmp_path):
     sess = session_state.session
     own = sess.library
     assert isinstance(own, session_state.LibraryState)
-    mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "a" / "AlignResult-1.mzTab")))
+    handle_tools.load_dataset(mztab_path=str(write_mztab(tmp_path / "a" / "AlignResult-1.mzTab")))
     handle = handles.registry.peek(_current())
     assert sess.library is handle.library and sess.library is not own
     replacement = session_state.LibraryState()
@@ -110,13 +115,13 @@ def test_library_follows_current_handle(tmp_path):
 
 
 def test_handle_limit_refuses_instead_of_evicting(monkeypatch, tmp_path):
-    monkeypatch.setenv(handles.MAX_HANDLES_ENV, "2")
+    use_config(monkeypatch, tmp_path, {"server.max_dataset_handles": 2})
     paths = [write_mztab(tmp_path / str(i) / "AlignResult-1.mzTab") for i in range(3)]
-    mztab_tools.dataset_load(mztab_path=str(paths[0]))
+    handle_tools.load_dataset(mztab_path=str(paths[0]))
     first = _current()
-    mztab_tools.dataset_load(mztab_path=str(paths[1]))
+    handle_tools.load_dataset(mztab_path=str(paths[1]))
     second = _current()
-    err = json.loads(mztab_tools.dataset_load(mztab_path=str(paths[2])))["error"]
+    err = json.loads(handle_tools.load_dataset(mztab_path=str(paths[2])))["error"]
     assert err["code"] == "DATASET_HANDLE_LIMIT"
     assert {h.handle_id for h in handles.registry.list()} == {first, second}
     # 失敗した読み込みは直近のデータセットを動かさない。
@@ -126,7 +131,7 @@ def test_handle_limit_refuses_instead_of_evicting(monkeypatch, tmp_path):
 
 def test_interactive_call_waits_for_agent_call_on_same_handle(tmp_path):
     """省略の呼び出しと、同じハンドルを明示した呼び出しが重ならない（同じロックを取る）。"""
-    mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
+    handle_tools.load_dataset(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
     hid = _current()
     handle = handles.registry.get(hid)
     real_lock = handle.lock
@@ -159,7 +164,7 @@ def test_interactive_call_waits_for_agent_call_on_same_handle(tmp_path):
 
 
 def test_interactive_call_with_current_handle_runs_off_event_loop(monkeypatch, tmp_path):
-    mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
+    handle_tools.load_dataset(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
     seen = []
     original = mztab_tools.json_payload
 
@@ -180,7 +185,7 @@ def test_interactive_call_with_current_handle_runs_off_event_loop(monkeypatch, t
 def test_interactive_call_keeps_the_handle_it_locked(tmp_path):
     """呼び出しの途中で直近のデータセットが変わっても、ロックを取ったハンドルのデータを読む
     （ロックを取っていない別のハンドルの状態を触らない）。"""
-    mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "a" / "AlignResult-1.mzTab")))
+    handle_tools.load_dataset(mztab_path=str(write_mztab(tmp_path / "a" / "AlignResult-1.mzTab")))
     handle = handles.registry.get(_current())
     other = DatasetState()
     other.source_format = "other"
@@ -202,7 +207,7 @@ def test_interactive_call_keeps_the_handle_it_locked(tmp_path):
     async def main():
         task = asyncio.create_task(server.mcp.call_tool("dataset_status", {}))
         assert await asyncio.to_thread(entered.wait, 5)
-        session_state.session.dataset = other   # dataset_load と同じく、イベントループ上で切り替える
+        session_state.session.dataset = other   # load_dataset と同じく、イベントループ上で切り替える
         release.set()
         return await task
 
@@ -213,11 +218,11 @@ def test_interactive_call_keeps_the_handle_it_locked(tmp_path):
 
 def test_library_loaded_by_interactive_call_is_usable_from_another_thread(tmp_path, monkeypatch):
     """省略の `library_load` はワーカースレッドで開く。その store をイベントループ側の
-    ツール（`curation_*` / `verify_peak_annotation`）や別のワーカーが読めること
+    ツール（`curation_*`）や別のワーカーが読めること
     （sqlite3 の接続は既定では開いたスレッドでしか使えない）。"""
     msp = _msp(tmp_path / "lab" / "pos.msp")
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
-    mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
+    handle_tools.load_dataset(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
     loaded = json.loads(_text(asyncio.run(
         server.mcp.call_tool("library_load", {"file_path": str(msp)}))))
     assert loaded["status"] == "success", loaded
@@ -229,13 +234,13 @@ def test_library_loaded_by_interactive_call_is_usable_from_another_thread(tmp_pa
 
 
 def test_handle_list_marks_current(tmp_path):
-    mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "a" / "AlignResult-1.mzTab")))
+    handle_tools.load_dataset(mztab_path=str(write_mztab(tmp_path / "a" / "AlignResult-1.mzTab")))
     current = _current()
     other = _open(mztab_path=str(write_mztab(tmp_path / "b" / "AlignResult-2.mzTab",
                                              features=NEG_FEATURES, sml_adduct="[M-H]1-")))
     rows = {row["dataset_handle"]: row for row in _list_rows()}
     assert rows[current]["current"] == "True" and rows[other]["current"] == "False"
-    assert rows[current]["source_kind"] == "session"
+    assert rows[current]["source_kind"] == "mztab_path"  # load_dataset が開いたハンドルは入口の種類を持つ（旧 dataset_load は "session"）
 
 
 def test_reassigning_the_current_dataset_does_not_open_a_handle():  # R13
@@ -282,8 +287,7 @@ def test_tools_reading_the_session_dataset_take_the_current_handle_lock():  # R2
     ロックの下で動く）。
 
     見るのはツールの関数**自身の**ソースだけ。ヘルパー経由で読むもの（`pathway_project` の
-    `_build_dataset`、`save_figure` / `plot_pca_loadings` の候補集め、`verify_peak_annotation` の
-    `msms_evidence`）はこの検査では見つからない——推移的な読み取りは範囲外で、
+    `_build_dataset`、`save_figure` の候補集め）はこの検査では見つからない——推移的な読み取りは範囲外で、
     SESSION_READERS に手で載せてある。
     """
     import inspect
@@ -317,8 +321,8 @@ def test_library_load_does_not_close_the_store_under_curation_review(tmp_path, m
     from metabolomix.library import tools as library_tools
     from metabolomix.tools import curation_tools
 
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
-    mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
+    handle_tools.load_dataset(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
     old = json.loads(library_tools.library_load(file_path=str(_msp(tmp_path / "a" / "old.msp"))))
     assert old["status"] == "success", old
     new_msp = _msp(tmp_path / "b" / "new.msp", name="Betaine")
@@ -362,7 +366,7 @@ def test_library_load_does_not_close_the_store_under_curation_review(tmp_path, m
             used.append(("error", repr(exc)))
         raise flag_log.FlagFileError("flags.jsonl", 1, "テストの打ち切り")
 
-    monkeypatch.setattr(curation_tools, "resolve_arf2_file_path", lambda file_path=None: "x.arf2")
+    handle.arf2_path = "x.arf2"        # データセットの .arf2（モックの run_review は読まない）
     monkeypatch.setattr(curation_tools.judge, "resolve_thresholds", thresholds)
     monkeypatch.setattr(curation_tools, "load_catalog", lambda path: [])
     monkeypatch.setattr(curation_tools.evidence, "select_spots", lambda *a, **k: [{"spot": 0}])
@@ -386,11 +390,11 @@ def test_library_load_does_not_close_the_store_under_curation_review(tmp_path, m
 def test_library_loaded_before_dataset_load_moves_into_the_new_handle(tmp_path, monkeypatch):  # R19
     from metabolomix.library import tools as library_tools
 
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     loaded = json.loads(library_tools.library_load(file_path=str(_msp(tmp_path / "lab" / "pos.msp"))))
     assert loaded["status"] == "success", loaded
     store = session_state.session.library.store
-    mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
+    handle_tools.load_dataset(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
     assert session_state.session.library.store is store
     assert handles.registry.peek(_current()).library.store is store
     assert session_state.session._library.store is None   # 写したのではなく移した
@@ -402,8 +406,8 @@ def test_refused_dataset_assignment_keeps_the_library_in_the_session(tmp_path, m
     from metabolomix.core.atomic_io import DomainError
     from metabolomix.library import tools as library_tools
 
-    monkeypatch.setenv(handles.MAX_HANDLES_ENV, "1")
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"server.max_dataset_handles": 1})
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     _open(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))  # 上限を埋める（直近にならない）
     library_tools.library_load(file_path=str(_msp(tmp_path / "lab" / "pos.msp")))
     store = session_state.session.library.store
@@ -418,18 +422,18 @@ def test_closing_the_current_handle_does_not_fall_back_to_an_older_library(tmp_p
                                                                             monkeypatch):  # R19
     from metabolomix.library import tools as library_tools
 
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     library_tools.library_load(file_path=str(_msp(tmp_path / "a" / "old.msp")))
-    mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
+    handle_tools.load_dataset(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
     library_tools.library_load(file_path=str(_msp(tmp_path / "b" / "new.msp", name="Betaine")))
-    handle_tools.dataset_handle_close(_current())
+    handle_tools.dataset_close(_current())
     assert session_state.session.library.store is None
     out = json.loads(library_tools.library_match_feature(precursor_mz=104.107))
     assert out["error"]["code"] == "missing_state"
 
 
 def test_dataset_load_handle_resolves_alignment_files_when_named(tmp_path):  # Minor 1
-    """`dataset_load` の要約に出るハンドル ID を明示しても、省略と同じ `.arf2` / `.dcl` を使う。"""
+    """`load_dataset` の要約に出るハンドル ID を明示しても、省略と同じ `.arf2` / `.dcl` を使う。"""
     from metabolomix.dcl import tools as dcl_tools
     from tests.dcl_fixture import build_dcl_bytes
 
@@ -439,7 +443,7 @@ def test_dataset_load_handle_resolves_alignment_files_when_named(tmp_path):  # M
         {"precursor_mz": 760.5851, "rt": 12.0, "spectrum": [(184.0733, 100.0)]},
         {"precursor_mz": 500.1, "rt": 12.0, "spectrum": [(100.0, 10.0)]},
     ]))
-    mztab_tools.dataset_load(directory=str(folder))
+    handle_tools.load_dataset(directory=str(folder))
     hid = _current()
     handle = handles.registry.peek(hid)
     assert handle.arf2_path == str(folder / f"{stem}.arf2")
@@ -456,10 +460,10 @@ def test_call_pinned_to_a_handle_closed_before_the_lock_does_nothing(tmp_path,
     from metabolomix.core import handle_dispatch
     from metabolomix.library import tools as library_tools
 
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
-    mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "a" / "AlignResult-1.mzTab")))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
+    handle_tools.load_dataset(mztab_path=str(write_mztab(tmp_path / "a" / "AlignResult-1.mzTab")))
     first = handles.registry.peek(_current())
-    mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "b" / "AlignResult-1.mzTab")))
+    handle_tools.load_dataset(mztab_path=str(write_mztab(tmp_path / "b" / "AlignResult-1.mzTab")))
     second = _current()
     handles.registry.close(first.handle_id)
 
@@ -481,8 +485,8 @@ def test_call_pinned_to_a_handle_closed_before_the_lock_does_nothing(tmp_path,
 def test_dataset_load_refuses_at_the_limit_before_loading(monkeypatch, tmp_path):  # Minor 4
     from metabolomix.dataset import opening
 
-    monkeypatch.setenv(handles.MAX_HANDLES_ENV, "1")
-    mztab_tools.dataset_load(mztab_path=str(write_mztab(tmp_path / "a" / "AlignResult-1.mzTab")))
+    use_config(monkeypatch, tmp_path, {"server.max_dataset_handles": 1})
+    handle_tools.load_dataset(mztab_path=str(write_mztab(tmp_path / "a" / "AlignResult-1.mzTab")))
     calls = []
     real = opening.open_dataset
 
@@ -492,8 +496,8 @@ def test_dataset_load_refuses_at_the_limit_before_loading(monkeypatch, tmp_path)
 
     monkeypatch.setattr(opening, "open_dataset", spy)
     path = str(write_mztab(tmp_path / "b" / "AlignResult-1.mzTab"))
-    assert json.loads(mztab_tools.dataset_load(mztab_path=path))["error"]["code"] \
+    assert json.loads(handle_tools.load_dataset(mztab_path=path))["error"]["code"] \
         == "DATASET_HANDLE_LIMIT"
-    out = json.loads(handle_tools.dataset_handle_open(mztab_path=path, library="none"))
+    out = json.loads(handle_tools.load_dataset(mztab_path=path, library="none"))
     assert out["error"]["code"] == "DATASET_HANDLE_LIMIT"
     assert calls == []

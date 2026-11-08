@@ -874,10 +874,7 @@ def _msp_then_lbm_plan(tmp_path, monkeypatch, *, directory_name="lab_library", *
 
 
 def test_msp_then_lbm_plan_pins_msp_and_lbm(tmp_path, monkeypatch):
-    # [msdial] lbm の経路（環境変数 MSDIAL_LBM）とメソッドの宣言（fake.lbm2）は使わない。
-    other = tmp_path / "auto_route.lbm2"
-    other.write_bytes(b"auto-route-lbm")
-    monkeypatch.setenv("MSDIAL_LBM", str(other))
+    # メソッドの宣言（fake.lbm2）は使わない（[library] lbm で置き換える）。
     src, paths, plan = _msp_then_lbm_plan(tmp_path, monkeypatch)
     lib = paths["negative"].resolve()
     lbm = paths["lbm"].resolve()
@@ -984,11 +981,10 @@ def test_msp_then_lbm_verify_detects_a_changed_lbm_without_its_location(tmp_path
 def test_msp_then_lbm_without_lbm_setting_stops(tmp_path, monkeypatch):
     _allow_fake_exe(monkeypatch)
     write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share")
-    # [msdial] lbm の経路があっても代わりに使わない。
-    other = tmp_path / "secret_share" / "auto_route.lbm2"
-    other.write_bytes(b"auto-route-lbm")
-    monkeypatch.setenv("MSDIAL_LBM", str(other))
     src = make_source(tmp_path / "raw")
+    # auto の経路の自動補完（実行体と同じフォルダの .lbm2）があっても代わりに使わない。
+    other = Path(src["exe"]).parent / "auto_route.lbm2"
+    other.write_bytes(b"auto-route-lbm")
     request = resolve_request(src["root"], {"library_mode": "msp_then_lbm"})
     with pytest.raises(DomainError, match="LBM_NOT_CONFIGURED") as info:
         inspect_inputs(src["root"], request, exe_path=src["exe"])

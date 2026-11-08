@@ -12,10 +12,10 @@ profile が method・依存・実行体・極性の唯一の情報源になる�
 実測hashの受付が未接続）。draft profile + `execution_purpose="validation"` を使う。
 
 統計までの対話経路は pipeline 抜きでも通る:
-`dataset_load` → `dataset_set_sample_metadata` → `dataset_build_matrix` → `dataset_statistic`。
+`load_dataset` → `dataset_set_sample_metadata` → `dataset_build_matrix` → `dataset_statistic`。
 この経路は binding と注入証拠を持たないぶん、内部標準比を作れず検出率 filter も評価不能になる。
-完了した v2 run がある場合は `dataset_load(pipeline_path=...)` が、その run の dataset・
-試料対応表・binding・解析行列をまとめてセッションへ載せる（[mztab.md](mztab.md)）。
+完了した v2 run がある場合は `load_dataset(pipeline_path=...)` が、その run の dataset・
+試料対応表・binding・解析行列をまとめてセッションへ載せる（[dataset.md](dataset.md)）。
 検証範囲と残タスクは[実装監査](../superpowers/plans/2026-09-16-validated-lcms-metabolomics-audit.md)を参照。
 
 v1（`dataset_differential` ほか、[dataset_analysis.md](dataset_analysis.md)）とは
@@ -59,7 +59,7 @@ t は符号が逆）。
 セッションの `DatasetState` から解析行列（`analysis-matrix.v1`）を1本作り、
 `ds.analysis_matrices` へ登録する。pipeline を回さずに v2 統計へ進むための入口。
 
-- **前提** — `session.dataset` のみ（`dataset_load`）。群・batch・注入順・include は
+- **前提** — `session.dataset` のみ（`load_dataset`）。群・batch・注入順・include は
   `dataset_set_sample_metadata` で入れておく（正規化の参照試料とドリフト補正の
   前提判定がこれを読む）。
 - **recipe の検証** — profile の `matrix_recipes` と**同じ規則**を共有する
@@ -91,9 +91,9 @@ t は符号が逆）。
 
 名指しした解析行列（`analysis-matrix.v1`）に対して統計を1件実行する。
 
-- **前提** — `session.dataset`（`dataset_load`）と、`ds.analysis_matrices` に登録済みの
+- **前提** — `session.dataset`（`load_dataset`）と、`ds.analysis_matrices` に登録済みの
   解析行列。行列の出どころは3つ: pipeline の `preprocess` / `qc_processed` 工程が作った
-  ものを `dataset_load(pipeline_path=...)` で載せる、`dataset_build_matrix` でこの場で作る、
+  ものを `load_dataset(pipeline_path=...)` で載せる、`dataset_build_matrix` でこの場で作る、
   のいずれか。どちらが欠けても `missing_state` 封筒を返す。
 - **状態変更** — `session.dataset.results["stat_<statistic_id>"]` に結果全量を置く。
   戻り値には要約だけを載せる。

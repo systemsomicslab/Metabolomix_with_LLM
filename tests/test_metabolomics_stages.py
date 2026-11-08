@@ -602,8 +602,44 @@ def test_a_v3_job_whose_effective_method_was_altered_is_not_verified(tmp_path):
     """実際に走ったメソッドを裏取りできない出力をverifiedと名乗らせない（spec §6.1）。"""
     from metabolomix.mztab.loading import load_dataset_state
 
+    import os
+
     job_path, effective = _v3_job_with_outputs(tmp_path)
     effective.write_text("Ion mode: Negative\n", encoding="ascii")
+    # 同じ大きさの書き直しは、更新時刻の刻み（Windows で約 15 ms）の内だと
+    # (パス・大きさ・更新時刻) が変わらず、sha256 の記憶（core/file_digest）が前の値を返す。
+    # 書き直しが別の時刻に起きた状況にする。
+    stat = effective.stat()
+    os.utime(effective, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+
+    ds = load_dataset_state(job_path=job_path)
+    assert ds.source_verification == "legacy_unverified"
+    assert any("実効メソッド" in w for w in ds.validation_result.get("warnings", []))
+
+
+def test_a_same_size_same_mtime_rewrite_of_the_effective_method_is_not_verified(tmp_path):
+    """裏取りは sha256 の記憶（core/file_digest）を信じない。
+
+    大きさも mtime_ns も同じ書き換えは記憶の鍵では見分けられない。記憶が元の値を
+    覚えている状態でも、読み直して verified を名乗らせない。
+    """
+    import os
+
+    from metabolomix.core import file_digest
+    from metabolomix.mztab.loading import load_dataset_state
+
+    job_path, effective = _v3_job_with_outputs(tmp_path)
+    original = effective.read_bytes()
+    stat = effective.stat()
+    file_digest.sha256_of(effective)            # 記憶に元の値を載せる
+    assert load_dataset_state(job_path=job_path).source_verification != "legacy_unverified"
+
+    altered = bytes(b if i else (b ^ 0x20) for i, b in enumerate(original))
+    assert len(altered) == len(original) and altered != original
+    effective.write_bytes(altered)
+    os.utime(effective, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    assert effective.stat().st_size == stat.st_size
+    assert effective.stat().st_mtime_ns == stat.st_mtime_ns
 
     ds = load_dataset_state(job_path=job_path)
     assert ds.source_verification == "legacy_unverified"

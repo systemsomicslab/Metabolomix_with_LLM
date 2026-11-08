@@ -2,7 +2,7 @@
 
 `.arf` は spot × 注入の直積で行が増えるため、1 行あたりの定数倍と「同じ仕事を
 何度やるか」がそのまま所要時間になる（実測: 393MB / 16,596 spot の `.arf` で
-`arf_parser` が 96.6 秒。うち大半が本ファイルで固定する 3 経路）。
+旧 `arf_parser` が 96.6 秒。うち大半が本ファイルで固定する 2 経路）。
 
 ここで固定するのは速度そのものではなく、速度を決めている**構造**:
 
@@ -10,18 +10,14 @@
    （spot × 注入ぶん呼ばれ、異なり値は注入数しかない）。
 2. 行数を知るためだけに pandas の DataFrame を組まないこと
    （`count_peak_property_rows` が `extract_peak_properties` と同じ数を返す）。
-3. `exclusions._entry_file_name` が file_name 1 個のために
-   `_convert_to_alignment_feature` の dict を丸ごと組まないこと。
 
 いずれも「同じ答えを返し続けること」を対で固定してある。速い経路が違う答えを
 返したらテストが落ちる。
 """
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from metabolomix.arf import exclusions
 from metabolomix.arf import reader as arf_reader
 from metabolomix.msdial import tags as msdial_tags
 
@@ -29,7 +25,7 @@ from metabolomix.msdial import tags as msdial_tags
 def _row(file_id, name, height):
     """`AlignmentChromPeakFeature` の生 row（len>25・data[18] が数値）。
 
-    tests/test_exclusions.py の `_row` と同じ形。これでないと
+    `_row` の形。これでないと
     `_convert_to_alignment_feature` が実経路に入らない。
     """
     row = [0] * 26
@@ -224,7 +220,7 @@ class BuildPcaMatrixAvoidsFeatureDictTests(unittest.TestCase):
 def _pca_fixture():
     """`build_pca_matrix` が実際に消費できる 4 サンプル × 3 スポット。
 
-    形は tests/test_exclude_wiring.py の fixture と同じ（生 list 行・data[18] が
+    形は（生 list 行・data[18] が
     height・サンプル間で分散を持つ）。
     """
     spots = []
@@ -240,90 +236,6 @@ def _pca_fixture():
                       "MassCenter": 700.0 + mid, "RT": 5.0 + mid,
                       "AlignedPeakProperties": rows})
     return spots
-
-
-class _FakeArfState:
-    def __init__(self, spots):
-        self.features = spots
-        self.filtered_features = spots
-        self.current_file_path = "dummy.arf"
-        self.current_tag_directory = None
-        self.tag_index = {}
-        self.class_index = None
-        self.excluded_samples = set()
-        self.excluded_spots = set()
-        self.last_pca_plot = None
-
-    def load_data(self, file_path, tag_directory=None):
-        self.current_file_path = file_path
-        return self.features
-
-
-class _FakeSession:
-    def __init__(self, spots):
-        self.arf = _FakeArfState(spots)
-
-    def maybe_prepend_caveat(self, text, topic=None):
-        return text
-
-
-class ArfParserAvoidsThrowawayDataFrameTests(unittest.TestCase):
-    """`arf_parser` は行数しか使わないので DataFrame を組んではいけない。"""
-
-    def _run(self):
-        import server  # ツール登録の副作用を踏む（他テストと同じ入口）
-        from metabolomix.core import session_state as state_mod
-        original = state_mod.session
-        state_mod.session = _FakeSession(_pca_fixture())
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                arf_path = Path(tmp) / "dummy.arf"
-                arf_path.touch()
-                return server.arf_parser(str(arf_path))
-        finally:
-            state_mod.session = original
-
-    def test_reports_the_same_record_count_without_calling_extract(self):
-        expected = len(arf_reader.extract_peak_properties(_pca_fixture()))
-        with patch.object(arf_reader, "extract_peak_properties",
-                          side_effect=AssertionError(
-                              "arf_parser が行数のために DataFrame を組んでいる")):
-            out = self._run()
-        self.assertIn(f"**抽出された総ピークレコード数**: {expected}", out)
-        self.assertIn("**平均サンプル数/スポット**: 4.00", out)
-
-
-class EntryFileNameTests(unittest.TestCase):
-    """除外判定のキー導出は `_convert_to_alignment_feature` と同じ答えのまま、
-    dict を組まずに済ませる。"""
-
-    def test_agrees_with_alignment_feature_row(self):
-        cases = [
-            _row(0, "sA.wiff", 10),
-            _row(3, b"sB.wiff", 20),                 # msgpack の bytes
-            [0] * 26,                                # 文字列が無い（file_name None）
-            [1, "sC"],                               # 短すぎる（feature が {}）
-            "not-a-list",
-        ]
-        for row in cases:
-            with self.subTest(row=row):
-                self.assertEqual(
-                    exclusions._entry_file_name(row),
-                    arf_reader.alignment_feature_row(row).get("file_name")
-                    if isinstance(row, list) else None,
-                )
-
-    def test_does_not_build_the_full_feature_dict(self):
-        row = _row(0, "sA.wiff", 10)
-        with patch.object(arf_reader, "_convert_to_alignment_feature",
-                          side_effect=AssertionError(
-                              "_entry_file_name が feature dict を組んでいる")):
-            self.assertEqual(exclusions._entry_file_name(row), "sA.wiff")
-
-    def test_roster_stays_correct_without_the_feature_dict(self):
-        names, ids = exclusions.roster(_fixture())
-        self.assertEqual(names, {"sA.wiff", "sB.wiff"})
-        self.assertEqual(ids, {1, 2})
 
 
 if __name__ == "__main__":

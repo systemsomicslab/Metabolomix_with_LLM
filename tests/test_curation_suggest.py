@@ -6,6 +6,7 @@ from metabolomix.arf2.reader import load_catalog
 from metabolomix.curation import evidence, flags, judge, review, suggest
 from metabolomix.library import store as library_store
 from tests.curation_fixtures import write_suggest_set
+from tests.config_fixtures import use_config
 
 TH = judge.resolve_thresholds(None)
 OPTIONS = {"wrong": "flagged_or_likely", "unannotated": True, "include_decided": False, "top_n": 5,
@@ -13,7 +14,7 @@ OPTIONS = {"wrong": "flagged_or_likely", "unannotated": True, "include_decided":
 
 
 def _setup(tmp_path, monkeypatch, **kw):
-    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     paths = write_suggest_set(tmp_path / "neg", **kw)
     s = library_store.open_store(paths["msp"])
     spots = evidence.select_spots(load_catalog(paths["arf2"]), ontology=None, name_contains=None)

@@ -10,11 +10,12 @@ from metabolomix.arf2.reader import load_catalog
 from metabolomix.curation import evidence, flags, judge, review, viewer
 from metabolomix.library import store as library_store
 from tests.curation_fixtures import write_alignment_set
+from tests.config_fixtures import use_config
 
 
 @pytest.fixture()
 def built(tmp_path, monkeypatch):
-    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     paths = write_alignment_set(tmp_path / "neg")
     s = library_store.open_store(paths["msp"])
     spots = evidence.select_spots(load_catalog(paths["arf2"]), ontology=None, name_contains=None)
@@ -280,7 +281,7 @@ def _review(paths):
 
 
 def test_class_rule_rejection_is_likely_wrong_when_lipid_rules_ran(tmp_path, monkeypatch):
-    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     # spot 0 は既定のまま（class=True）＝このデータは脂質規則で採点されている。
     paths = write_alignment_set(tmp_path / "neg", match_overrides={1: {19: False, 20: False, 22: False}})
     result = _review(paths)
@@ -292,7 +293,7 @@ def test_class_rule_rejection_is_likely_wrong_when_lipid_rules_ran(tmp_path, mon
 
 def test_rule_flags_are_ignored_when_no_spot_shows_lipid_rules(tmp_path, monkeypatch):
     # メタボロミクス採点器の出力を模す: どのスポットも規則フラグが全部 False。
-    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     off = {19: False, 20: False, 22: False}
     paths = write_alignment_set(tmp_path / "neg", match_overrides={0: off, 1: off})
     result = _review(paths)
@@ -487,7 +488,7 @@ def test_mirror_labels_are_kept_inside_the_plot_area(tmp_path):
 
 
 def test_assign_and_redundant_are_decisions_not_flags(tmp_path, monkeypatch):
-    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     paths = write_alignment_set(tmp_path / "neg")
     first = _review(paths)
     store = flags.FlagStore(flags.curation_dir(paths["arf2"]))

@@ -8,7 +8,6 @@ import os
 import unittest
 from pathlib import Path
 
-from metabolomix.core import data_config
 from metabolomix.core import mcp_core
 from metabolomix.core import tool_helpers
 
@@ -21,7 +20,7 @@ class TestBaseDirResolution(unittest.TestCase):
 
     def test_base_dir_has_repo_markers(self):
         # metabolomix/core/ を指してしまった場合をここで落とす
-        for marker in ("docs", "playbook", "reference"):
+        for marker in ("docs", "reference"):
             with self.subTest(marker=marker):
                 self.assertTrue(
                     (mcp_core.BASE_DIR / marker).is_dir(),
@@ -31,13 +30,6 @@ class TestBaseDirResolution(unittest.TestCase):
 
     def test_output_format_doc_resolves(self):
         self.assertTrue(mcp_core.OUTPUT_FORMAT_DOC.is_file())
-
-    def test_data_config_root_matches_mcp_core(self):
-        # 循環回避のため両者は独立に root を計算する。一致することをここで縛る。
-        self.assertEqual(
-            data_config.DEFAULT_DATA_DIR.resolve(),
-            (mcp_core.BASE_DIR / "data").resolve(),
-        )
 
 
 class TestRootLayout(unittest.TestCase):
@@ -56,19 +48,6 @@ class TestRootLayout(unittest.TestCase):
         )
 
 
-class TestStateDirsOutsidePackage(unittest.TestCase):
-    def test_state_dirs_are_not_inside_lipidmix(self):
-        package_dir = (REPO_ROOT / "metabolomix").resolve()
-        for name in ("KNOWLEDGE_DIR", "PLAYBOOK_DIR"):
-            with self.subTest(name=name):
-                resolved = getattr(mcp_core, name).resolve()
-                self.assertNotIn(
-                    package_dir,
-                    resolved.parents,
-                    f"{name} がパッケージ内を指している: {resolved}",
-                )
-
-
 class TestReferenceTables(unittest.TestCase):
     """`lipid_identity.load_reference_tables` は CWD 相対で reference/ を読む。
 
@@ -85,10 +64,9 @@ class TestReferenceTables(unittest.TestCase):
 class TestStateDirsAreNotCreatedOnImport(unittest.TestCase):
     """`metabolomix.core.mcp_core` の import が置き場ディレクトリを作らないことを縛る。
 
-    KNOWLEDGE_DIR / PLAYBOOK_DIR（と廃止した旧 ANALYSES_DIR）はパス解決の時点で
-    mkdir していたため、`analyses/` を消しても import のたび（＝pytest を回すたび、MCP サーバを
-    起動するたび）に空ディレクトリが復活していた。置き場は書き込み時に作られれば
-    十分で、解決は副作用を持ってはならない。
+    かつて知識の置き場（と旧 ANALYSES_DIR）はパス解決の時点で mkdir していたため、消しても
+    import のたび（＝pytest を回すたび、MCP サーバを起動するたび）に空ディレクトリが復活していた。
+    置き場は書き込み時に作られれば十分で、解決は副作用を持ってはならない。
     """
 
     def test_import_does_not_create_state_dirs(self):
@@ -99,8 +77,7 @@ class TestStateDirsAreNotCreatedOnImport(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             env = dict(os.environ)
-            env["LIPIDMIX_KNOWLEDGE_DIR"] = str(base / "knowledge")
-            env["LIPIDMIX_PLAYBOOK_DIR"] = str(base / "playbook")
+            env["LIPIDMIX_CONFIG"] = str(base / "lipidmix.local.toml")  # 置き場の既定はここの隣
             proc = subprocess.run(
                 [sys.executable, "-c", "import metabolomix.core.mcp_core"],
                 cwd=str(REPO_ROOT), env=env,

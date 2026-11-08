@@ -12,6 +12,7 @@ import server
 from metabolomix.core import handle_dispatch, handles, session_state
 from metabolomix.tools import handle_tools
 from tests.reanalysis_fixtures import NEG_FEATURES, write_mztab
+from tests.config_fixtures import use_config
 
 
 @pytest.fixture(autouse=True)
@@ -38,7 +39,7 @@ def neg_mztab(tmp_path):
 
 def _open(path, **kwargs) -> dict:
     kwargs.setdefault("library", "none")
-    return json.loads(handle_tools.dataset_handle_open(mztab_path=str(path), **kwargs))
+    return json.loads(handle_tools.load_dataset(mztab_path=str(path), **kwargs))
 
 
 def _write_msp(path, *, ion_mode):
@@ -48,14 +49,16 @@ def _write_msp(path, *, ion_mode):
     return path
 
 
-def test_open_two_handles_do_not_touch_global_session(pos_mztab, neg_mztab):
+def test_open_two_handles_each_becomes_current(pos_mztab, neg_mztab):
     a = _open(pos_mztab)
     b = _open(neg_mztab)
     assert a["status"] == b["status"] == "success"
     assert a["dataset_handle"] != b["dataset_handle"]
     assert a["polarity"] == "positive" and b["polarity"] == "negative"
     assert a["n_features"] == 3 and a["n_samples"] == 8
-    assert session_state.session.dataset is None
+    # 開いたハンドルはいつも直近になる（B-2b。旧 `dataset_handle_open` は直近を動かさなかった）。
+    assert session_state.session.current_handle_id == b["dataset_handle"]
+    assert session_state.session.dataset is handles.registry.get(b["dataset_handle"]).dataset
 
 
 def test_same_input_reuses_base_but_not_state(pos_mztab):
@@ -76,8 +79,8 @@ def test_changed_input_is_reloaded(pos_mztab):
     assert _open(pos_mztab)["reused_base"] is False
 
 
-def test_handle_limit(monkeypatch, pos_mztab):
-    monkeypatch.setenv(handles.MAX_HANDLES_ENV, "1")
+def test_handle_limit(monkeypatch, tmp_path, pos_mztab):
+    use_config(monkeypatch, tmp_path, {"server.max_dataset_handles": 1})
     _open(pos_mztab)
     err = _open(pos_mztab)
     assert err["error"]["code"] == "DATASET_HANDLE_LIMIT"
@@ -86,19 +89,19 @@ def test_handle_limit(monkeypatch, pos_mztab):
 
 def test_close_then_list_and_get(pos_mztab):
     handle_id = _open(pos_mztab)["dataset_handle"]
-    listed = json.loads(handle_tools.dataset_handle_list())
+    listed = json.loads(handle_tools.dataset_list())
     assert listed["n_open"] == 1 and handle_id in listed["handles"]
-    closed = json.loads(handle_tools.dataset_handle_close(handle_id))
+    closed = json.loads(handle_tools.dataset_close(handle_id))
     assert closed["status"] == "success"
-    assert json.loads(handle_tools.dataset_handle_list())["n_open"] == 0
-    again = json.loads(handle_tools.dataset_handle_close(handle_id))
+    assert json.loads(handle_tools.dataset_list())["n_open"] == 0
+    again = json.loads(handle_tools.dataset_close(handle_id))
     assert again["error"]["code"] == "DATASET_HANDLE_NOT_FOUND"
 
 
 def test_open_requires_exactly_one_path(pos_mztab):
-    out = json.loads(handle_tools.dataset_handle_open())
+    out = json.loads(handle_tools.load_dataset())
     assert out["error"]["code"] == "DATASET_BAD_REQUEST"
-    out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(pos_mztab),
+    out = json.loads(handle_tools.load_dataset(mztab_path=str(pos_mztab),
                                                       job_path=str(pos_mztab)))
     assert out["error"]["code"] == "DATASET_BAD_REQUEST"
 
@@ -107,7 +110,7 @@ def test_library_auto_on_mztab_opens_nothing_and_ignores_the_polarity_setting(
         monkeypatch, tmp_path, pos_mztab):
     # mzTab-M は同定に使ったライブラリを持てない（unknown）。極性の設定があっても auto は引かない。
     pos = _write_msp(tmp_path / "lab" / "pos.msp", ion_mode="Positive")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(pos))
+    use_config(monkeypatch, tmp_path, {"library.msp_positive": str(pos)})
     out = _open(pos_mztab, library="auto")
     assert out["status"] == "success" and out["polarity"] == "positive"
     assert out["library"] is None and out["library_record"]["status"] == "unknown"
@@ -127,10 +130,10 @@ def test_library_auto_uses_only_the_remembered_library(monkeypatch, tmp_path):
     write_dbs(folder / "Proj_Loaded.msp2.dbs", [("lib", [record()], ["k"])])
     lib = tmp_path / "lab"
     setting_file = _write_msp(lib / "setting_pos.msp", ion_mode="Positive")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(setting_file))
-    monkeypatch.setenv("MSDIAL_MSP_NEG", str(setting_file))
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
-    out = json.loads(handle_tools.dataset_handle_open(directory=str(folder), library="auto"))
+    use_config(monkeypatch, tmp_path, {"library.msp_positive": str(setting_file),
+                                       "library.msp_negative": str(setting_file)})
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
+    out = json.loads(handle_tools.load_dataset(directory=str(folder), library="auto"))
     assert out["library"]["file"] == "Proj_Loaded.msp2.dbs"
     assert len(out["library"]["sha256"]) == 64 and out["library"]["record_count"] == 1
     dumped = json.dumps(out)
@@ -143,7 +146,8 @@ def test_library_auto_uses_only_the_remembered_library(monkeypatch, tmp_path):
 
 def test_library_not_loaded_when_polarity_unknown(monkeypatch, tmp_path):
     path = write_mztab(tmp_path / "x.mzTab", sml_adduct="null")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(_write_msp(tmp_path / "pos.msp", ion_mode="Positive")))
+    pos = _write_msp(tmp_path / "pos.msp", ion_mode="Positive")
+    use_config(monkeypatch, tmp_path, {"library.msp_positive": str(pos)})
     out = _open(path, library="auto")
     assert out["polarity"] is None and out["library"] is None
     assert "極性" in out["library_note"]
@@ -156,9 +160,9 @@ def _call(name, args):
 
 
 def test_install_wraps_handle_tools_only():
-    tool = server.mcp._tool_manager._tools["dataset_handle_open"]
+    tool = server.mcp._tool_manager._tools["load_dataset"]
     assert tool.is_async
-    assert not server.mcp._tool_manager._tools["load_dataset"].is_async
+    assert server.mcp._tool_manager._tools["load_dataset"].is_async
     assert handle_dispatch.install(server.mcp) == []          # 2 回目は何もしない
 
 
@@ -186,8 +190,8 @@ def test_handle_calls_run_off_loop_and_in_parallel(monkeypatch, pos_mztab, neg_m
     async def main():
         loop_thread.append(threading.current_thread())
         return await asyncio.gather(
-            _call("dataset_handle_close", {"dataset_handle": a}),
-            _call("dataset_handle_close", {"dataset_handle": b}))
+            _call("dataset_close", {"dataset_handle": a}),
+            _call("dataset_close", {"dataset_handle": b}))
 
     asyncio.run(main())
     assert threads[a] is not loop_thread[0] and threads[b] is not loop_thread[0]

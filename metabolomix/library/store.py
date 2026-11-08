@@ -6,8 +6,10 @@
 `[m/z, intensity]` だけ）。そこで初回に 1 度だけコンパクトな SQLite へ変換し、
 以後は precursor m/z 窓 × 極性で候補を引く（spec §5.2）。
 
-キャッシュ先は環境変数 `LIPIDMIX_LIBRARY_CACHE_DIR`、無ければ
-`mcp_core.DATA_DIR / ".library-cache"`。ファイル名は `<stem>-<sha256[:16]>.sqlite`
+キャッシュ先は設定ファイルの `[paths] library_cache`、無ければ設定ファイルのフォルダの
+`data/.library-cache`（`user_config.config_file_path().parent`。設定ファイルが無くても同じ式で、
+既定の場所なら `<repo>/data/.library-cache`）。データの探索先は無い（B-2b）——worktree は `LIPIDMIX_CONFIG` で main ツリーの設定ファイルを指すので、
+キャッシュも main ツリーのものを共有する。ファイル名は `<stem>-<sha256[:16]>.sqlite`
 なので、元ファイルが変われば別ファイルになり、無効化の判断が要らない（古い
 キャッシュは孤立するだけで、参照されなくなる）。
 
@@ -16,15 +18,14 @@
 `DIGEST_INDEX_NAME` に覚え、変わっていなければ計算し直さない（研究室の `.msp` は
 1 GB 級で、全読みを `library_load` のたびに払わないため）。
 
-`python -m metabolomix.library.store --ion-mode negative` で MCP の外から事前構築できる
+`python -m metabolomix.library.store --file <path>`（または `--ion-mode negative`）で MCP の外から事前構築できる
 （`main()`。初回構築が MCP クライアントのタイムアウトに当たるとき用）。
 
-deps: record 経由で `.dbs` / `.msp` の iter_records、mcp_core（leaf の DATA_DIR
-解決のみ）。session_state / tools_* は import しない。
+deps: record 経由で `.dbs` / `.msp` の iter_records、user_config（キャッシュの場所）。
+session_state / tools_* は import しない。
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -37,12 +38,10 @@ from typing import Iterable
 
 import msgpack
 
-from metabolomix.core import mcp_core
+from metabolomix.core import file_digest, user_config
 from metabolomix.core.atomic_io import atomic_write_json, read_text_stable
 from metabolomix.library import dbs as dbs_reader
 from metabolomix.library import msp as msp_reader
-
-LIBRARY_CACHE_ENV = "LIPIDMIX_LIBRARY_CACHE_DIR"
 
 #: `record.RECORD_FIELDS` が「store のスキーマであり、採点エンジンの入力契約」
 #: （spec `docs/superpowers/specs/2026-09-19-msms-spectral-matching-design.md`）
@@ -70,7 +69,6 @@ _INDEX = "CREATE INDEX record_mz ON record(precursor_mz);"
 #: sha256 で、この表はその計算を省く近道にすぎない（壊れていたら黙って捨てて計算し直す）。
 DIGEST_INDEX_NAME = ".library-digests.json"
 
-_HASH_CHUNK_SIZE = 1 << 20  # 1 MiB
 
 _RECORD_COLUMNS = (
     "name, precursor_mz, ion_mode, adduct, rt, formula, inchikey, "
@@ -117,23 +115,18 @@ def _row_to_record(row) -> dict:
 
 
 def cache_dir() -> Path:
-    """store の置き場所。環境変数優先、無ければ `mcp_core.DATA_DIR` 配下。"""
-    override = os.getenv(LIBRARY_CACHE_ENV)
-    if override:
-        return Path(override)
-    return mcp_core.DATA_DIR / ".library-cache"
+    """store の置き場所。設定ファイルの `[paths] library_cache`、無ければ設定ファイルのフォルダの
+    `data/.library-cache`。設定ファイルが読めなければ ConfigInvalidError（黙って別の場所に
+    1 GB 級のキャッシュを作らない）。"""
+    setting = user_config.get_setting("paths.library_cache")
+    if setting is not None:
+        return Path(setting.value)
+    return user_config.config_file_path().parent / "data" / ".library-cache"
 
 
-def source_sha256(path: str | Path) -> str:
+def source_sha256(path: str | Path, *, trust: bool = True) -> str:
     """元ファイルの sha256 を、全体をメモリへ載せずに計算する。"""
-    digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        while True:
-            chunk = fh.read(_HASH_CHUNK_SIZE)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
+    return file_digest.sha256_of(path, trust=trust)
 
 
 def _store_path_for_digest(path: str | Path, digest: str, cache_dir: Path | None = None) -> Path:
@@ -356,9 +349,7 @@ class LibraryStore:
             # COLLATE NOCASE: 呼び出し元の大小表記は揃っていない
             # （`.dcl`/pai2 の feature は IonMode Enum の `.name` = "Positive"、
             # store の列は record.ION_MODES = "positive"。Task 11 レビュー
-            # Critical 1 —
-            # `peak_verification._spectral_match_for_feature` がここを大小区別の
-            # BINARY 照合のまま呼び、常に 0 件になっていた。呼び出し側で `lower()`
+            # Critical 1 — 呼び出し側が大小区別の BINARY 照合のまま呼び、常に 0 件になっていた。呼び出し側で `lower()`
             # を撒くのではなくここで正規化する——呼び出し側が増えるたびに同じ穴が
             # 開くのを防ぐため）。
             # `ion_mode IS NULL` は「極性不明」として残す。極性ごとに分かれた
@@ -450,7 +441,7 @@ def _digest_for(source_path: Path, base: Path, *, trust_index: bool) -> str:
     if (trust_index and isinstance(entry, dict) and isinstance(entry.get("sha256"), str)
             and all(entry.get(k) == v for k, v in fingerprint.items())):
         return entry["sha256"]
-    digest = source_sha256(source_path)
+    digest = source_sha256(source_path, trust=trust_index)
     index[key] = {**fingerprint, "sha256": digest}
     try:
         base.mkdir(parents=True, exist_ok=True)
@@ -488,8 +479,8 @@ def open_store(path: str | Path, *, cache_dir: Path | None = None, rebuild: bool
     別のワーカー）が一致しない。`LibraryStore` は開いた後は読むだけ（SELECT）なので、読みどうしは
     スレッドをまたいでも安全。**ただし `close()` は使用と競合してはいけない**——閉じた接続を
     別の呼び出しが使うと `Cannot operate on a closed database` になる。閉じる側
-    （`library_load` の差し替え・`dataset_handle_close`）と使う側（`library_*`・`curation_*`・
-    `verify_peak_annotation` ほか）を直列にするのはハンドルのロックで、`handle_dispatch` が
+    （`library_load` の差し替え・`dataset_close`）と使う側（`library_*`・`curation_*`・
+    旧ピーク裏取りツールほか）を直列にするのはハンドルのロックで、`handle_dispatch` が
     どちらもそのロックの下で回す（`dataset_handle` を持たない読み手は `SESSION_READERS`）。
     """
     source_path = Path(path)
@@ -522,34 +513,50 @@ def main(argv: list[str] | None = None) -> int:
 
     研究室ライブラリ（pos ≈ 1.2 GB）の初回構築は数分かかり、MCP クライアントの
     タイムアウトに当たりうる。手元で 1 度走らせておけば、以後の `library_load` は
-    キャッシュを開くだけで済む。パスの解決規則は `library_load` と同じ
-    （`resolve_library_path`）。出力にはファイル名だけを出し、置き場所は出さない。
+    キャッシュを開くだけで済む。ライブラリは `--file` で明示するか、`--ion-mode` で設定
+    （lipidmix.local.toml の `[library] msp_positive` / `msp_negative`）の極性のものを使う
+    （データフォルダは探さない）。出力にはファイル名だけを出し、置き場所は出さない。
 
         python -m metabolomix.library.store --ion-mode negative
         python -m metabolomix.library.store --file <path> --rebuild
     """
     import argparse
+    import os
     import sys
     import time
 
     from metabolomix.core.path_resolvers import LibraryPathError, resolve_library_path
+    from metabolomix.core import user_config
 
     parser = argparse.ArgumentParser(prog="python -m metabolomix.library.store",
                                      description="参照ライブラリの照合用 store を事前構築する。")
     parser.add_argument("--ion-mode", choices=("positive", "negative"),
-                        help="どちらの極性の設定（MSDIAL_MSP_POS / MSDIAL_MSP_NEG か "
-                             "lipidmix.local.toml の [library] msp_positive / msp_negative）を使うか")
-    parser.add_argument("--file", help="ライブラリのパス（極性の設定より優先）")
+                        help="どちらの極性の設定（lipidmix.local.toml の "
+                             "[library] msp_positive / msp_negative）を使うか")
+    parser.add_argument("--file", help="ライブラリのパス（極性の設定より優先。どちらか一方が要る）")
     parser.add_argument("--rebuild", action="store_true", help="キャッシュを無視して作り直す")
     args = parser.parse_args(argv)
 
     try:
-        resolved = resolve_library_path(args.file, ion_mode=args.ion_mode)
+        resolved = resolve_library_path(args.file)
+        if resolved is None and args.ion_mode:
+            setting = user_config.get_setting(user_config.MSP_SETTING_KEYS[args.ion_mode])
+            if setting is not None:
+                if not os.path.isfile(setting.value):
+                    label = user_config.setting_label(setting)
+                    print(f"MSP_ENV_NOT_FOUND: {label} が指すファイル（{os.path.basename(setting.value)}）"
+                          f"がありません。{label} を確認してください。", file=sys.stderr)
+                    return 2
+                resolved = setting.value
     except LibraryPathError as exc:
         print(f"{exc.code}: {exc.message}", file=sys.stderr)
         return 2
+    except user_config.ConfigInvalidError as exc:
+        print(f"{exc.code}: {exc.message}", file=sys.stderr)
+        return 2
     if not resolved:
-        print("LIBRARY_NOT_FOUND: 参照ライブラリが見つかりませんでした。", file=sys.stderr)
+        print("LIBRARY_NOT_FOUND: 参照ライブラリが決まりません（--file を渡すか、--ion-mode に対応する"
+              "設定を書いてください）。", file=sys.stderr)
         return 2
 
     started = time.perf_counter()

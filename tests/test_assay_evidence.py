@@ -69,9 +69,6 @@ def _dataset(tmp_path, *, n_features=2, raw_names=("S1", "S2", "S3"), mzs=None):
 
     `assay_sources` は job の source→assay 対応（abundance列 → 予定raw の絶対パス）。
     これが assay 軸の唯一の照合材料で、assay 表示名では代用しない。
-
-    注入は3件。`.arf` の既存リーダは「グループ=スポット」を行数3以上で判定する
-    （`arf/reader.py` `extract_arf_data`）ので、2注入のスポットは読めない。
     """
     ds = DatasetState()
     ds.feature_ids = [str(i) for i in range(n_features)]

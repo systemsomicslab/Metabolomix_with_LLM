@@ -8,8 +8,9 @@
 3. .mcp.json が無ければ .venv の Python を指して書く。あれば**触らず**、違いだけを言う。
 4. Claude Desktop 用の貼り付け断片と、次の手順を表示する。
 
-既存の設定ファイルを書き換えないのは、利用者が env（参照ライブラリのパス等）を
-書き込んでいる可能性があり、上書きすると復元できないため。
+既存の設定ファイルを書き換えないのは、利用者が lipidmix.local.toml に参照ライブラリの
+パス等を、.mcp.json に env（LIPIDMIX_PLOT_OUTPUT 等）を書き込んでいる可能性があり、
+上書きすると復元できないため。
 """
 from __future__ import annotations
 

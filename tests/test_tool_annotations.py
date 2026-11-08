@@ -15,16 +15,13 @@ import unittest
 import server
 
 READ_ONLY = {"readOnlyHint": True}
-EXTERNAL = {"readOnlyHint": True, "openWorldHint": True}
 LOCAL_WRITE = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True}
 # ファイルを書き、かつ冪等でない（同じ引数の再実行で結果が積み増される）。
-# ingest_stage は _inbox に新規ノートを増やし、log_search は探索ログに行を追記し、
-# update_objective(add_subquestions=...) は既存 Q の最大+1 で採番して小問を追記する。
+# record_objective(add_subquestions=...) は既存 Q の最大+1 で採番して小問を追記する。
 LOCAL_WRITE_APPEND = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False}
 # ネットワークへ出たうえでローカルを書き換える。二度目は「最新です」で止まる → 冪等。
 REMOTE_WRITE = {"readOnlyHint": False, "destructiveHint": False,
                 "idempotentHint": True, "openWorldHint": True}
-DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True}
 # ファイルを消すが、二度目は何も残っていないので同じ状態に落ち着く → 冪等。
 LOCAL_DELETE = {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True}
 # 追記に加えて外部アプリのファイルを書き換える（curation_submit は flags.jsonl に追記し、
@@ -36,32 +33,13 @@ REMOTE_WRITE_APPEND = {"readOnlyHint": False, "destructiveHint": False,
                        "idempotentHint": False, "openWorldHint": True}
 
 EXPECTED_ANNOTATIONS = {
-    "arf_export_evidence_bundle": LOCAL_WRITE,
     "dataset_export_evidence_bundle": LOCAL_WRITE,
-    # --- ARF（多サンプル解析）。セッション状態は更新するが外部副作用は無い ---
-    "arf_list_tags": READ_ONLY,
-    "arf_list_classes": READ_ONLY,
-    "arf_list_sample_roles": READ_ONLY,
-    "arf_exclude": READ_ONLY,
-    "arf_preprocess": READ_ONLY,
-    "arf_pca_preprocessed": READ_ONLY,
-    "arf_parser": READ_ONLY,
-    "arf_differential": READ_ONLY,
-    "arf_plot_volcano": READ_ONLY,
-    "arf_plot_group_intensity": READ_ONLY,
-    "arf_plot_species": READ_ONLY,
-    "arf_pca_species": READ_ONLY,
-    "plot_pca_loadings": READ_ONLY,
-    "arf2_parser": READ_ONLY,
-    "arf2_annotate_identities": READ_ONLY,
     # --- データセット入口 ---
     "list_data_files": READ_ONLY,
-    "load_dataset": READ_ONLY,
-    "dataset_load": LOCAL_WRITE,
     "dataset_status": READ_ONLY,
     # --- DatasetState 解析層 ---
     # readOnlyHint はファイル/ネットワークへの副作用の有無。セッション状態の
-    # 更新は数えない（このファイル冒頭の規約）。ARF の同一操作も READ_ONLY。
+    # 更新は数えない（このファイル冒頭の規約）。
     "dataset_preprocess": READ_ONLY,
     "dataset_pca": READ_ONLY,
     "dataset_differential": READ_ONLY,
@@ -71,6 +49,9 @@ EXPECTED_ANNOTATIONS = {
     # 状態の更新のみ（ファイル書き込みは無い）が、同じシートの再送は同じ状態に
     # 落ち着く → destructive ではなく idempotent。
     "dataset_set_sample_metadata": LOCAL_WRITE,
+    # 除外の足し引きはセッション状態だけを変える（ファイルは書かない）。同じ引数の再実行は同じ状態に
+    # 落ち着く（add は理由を置き換えるだけ）→ 冪等。除外は可逆なので destructive ではない。
+    "dataset_exclude": LOCAL_WRITE,
     # v2統計は名指しした解析行列を読むだけ（行列も session も書き換えない。
     # 結果全量の保持は session.dataset.results への追加で、外界へは書かない）。
     "dataset_statistic": READ_ONLY,
@@ -80,9 +61,9 @@ EXPECTED_ANNOTATIONS = {
     "dataset_feature_search": READ_ONLY,
     # --- 再解析のハンドル（サーバのプロセス内の状態だけを変える） ---
     # open は呼ぶたびに新しいハンドルを作る → 非冪等。close はハンドルの状態を捨てる。
-    "dataset_handle_open": LOCAL_WRITE_APPEND,
-    "dataset_handle_list": READ_ONLY,
-    "dataset_handle_close": LOCAL_DELETE,
+    "load_dataset": LOCAL_WRITE_APPEND,
+    "dataset_list": READ_ONLY,
+    "dataset_close": LOCAL_DELETE,
     # 再解析の spec のツール。output_path を渡したときだけ JSON を書く（同じ spec なら同じ内容）。
     "dataset_analysis_run": LOCAL_WRITE,
     "dataset_claim_evidence": LOCAL_WRITE,
@@ -112,8 +93,7 @@ EXPECTED_ANNOTATIONS = {
     "pipeline_status": READ_ONLY,
     "pipeline_resume": LOCAL_WRITE,
     "pipeline_cancel": LOCAL_WRITE,
-    # --- DCL / PAI2 / EIC ---
-    "dcl_parser": READ_ONLY,
+    # --- DCL ---
     "dcl_find_msms": READ_ONLY,
     # --- 参照ライブラリ（MS/MS スペクトル照合） ---
     # library_load は SQLite キャッシュを書くので唯一 False。同じ元ファイルなら
@@ -123,36 +103,13 @@ EXPECTED_ANNOTATIONS = {
     "library_plot_mirror": READ_ONLY,
     "library_search": READ_ONLY,
     "dcl_spot_spectrum": READ_ONLY,
-    "pai2_parser": READ_ONLY,
-    "pai2_inspect_peak": READ_ONLY,
-    "verify_peak_annotation": READ_ONLY,
-    "eic_parser": READ_ONLY,
-    "eic_plot_chromatograms": READ_ONLY,
-    "eic_plot_compounds": READ_ONLY,
-    "eic_search": READ_ONLY,
     # --- 読み取り系 ---
-    "knowledge_coverage": READ_ONLY,
     "read_report": READ_ONLY,
-    "list_reports": READ_ONLY,
-    "sample_search": READ_ONLY,
-    "ingest_review_queue": READ_ONLY,
-    # --- 外部ネットワーク ---
-    "paper_search": EXTERNAL,
     # --- ローカル書き出し（同じ引数なら同じパスへ上書き＝idempotent） ---
-    "record_objective": LOCAL_WRITE,
+    "record_objective": LOCAL_WRITE_APPEND,  # add_subquestions が追記で積み増す
     "write_report": LOCAL_WRITE,
     "save_figure": LOCAL_WRITE,
-    "arf_export_differential": LOCAL_WRITE,
-    # --- knowledge の変更 ---
-    "ingest_stage": LOCAL_WRITE_APPEND,
-    "ingest_promote": DESTRUCTIVE,
-    "ingest_reject": DESTRUCTIVE,
-    # --- 追記書き込み（読み取り系ではない: 既存の最大値+1で採番して追記するため冪等でない） ---
-    # update_objective は add_subquestions が既存 Q の最大+1 で採番して追記する。
-    # log_search / ingest_stage と同じ「追記で結果が積み増される」理由でこの3件が
-    # LOCAL_WRITE_APPEND を共有する。
-    "update_objective": LOCAL_WRITE_APPEND,
-    "log_search": LOCAL_WRITE_APPEND,
+    "dataset_plot": LOCAL_WRITE_APPEND,  # ds.figures と species_pca の結果をメモリに登録する（ファイルは save_figure）
     # --- サーバ自身の更新（origin へ出て、作業ツリーを早送りする） ---
     "server_update": REMOTE_WRITE,
     # --- キュレーション。review は呼ぶたびに新しい review-<id>.json/.html を作る（console_plan /
@@ -200,7 +157,7 @@ class ToolAnnotationTests(unittest.TestCase):
     def test_external_network_tools_also_declare_open_world(self):
         """openWorldHint が無いと汎用クライアントがネットワークゲートを迂回する。"""
         actual = actual_annotations()
-        for name in ("paper_search", "server_update", "pathway_project", "pathway_plot"):
+        for name in ("server_update", "pathway_project", "pathway_plot"):
             with self.subTest(tool=name):
                 self.assertIs(actual[name]["openWorldHint"], True)
 

@@ -1,9 +1,11 @@
 """参照ライブラリの永続 store。"""
 import textwrap
+from pathlib import Path
 
 import pytest
 
 from metabolomix.library import store
+from tests.config_fixtures import use_config
 
 _MSP = textwrap.dedent("""\
     NAME: A
@@ -35,7 +37,7 @@ _MSP = textwrap.dedent("""\
 
 @pytest.fixture()
 def library(tmp_path, monkeypatch):
-    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     path = tmp_path / "lib.msp"
     path.write_text(_MSP, encoding="utf-8")
     return path
@@ -161,7 +163,7 @@ _MSP_CLASSES = textwrap.dedent("""\
 
 def test_compound_class_counts_reports_top_classes_descending(tmp_path, monkeypatch):
     """レコードに compound_class 未設定（None）が混ざっても集計から除外される。"""
-    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     path = tmp_path / "classes.msp"
     path.write_text(_MSP_CLASSES, encoding="utf-8")
 
@@ -179,7 +181,7 @@ def test_compound_class_counts_reports_top_classes_descending(tmp_path, monkeypa
 def test_compound_class_counts_does_not_rescan_the_source_on_cache_hit(tmp_path, monkeypatch):
     """`library_load` を 2 回呼んでも、2 回目はキャッシュを開くだけで元ファイルを
     再走査してはいけない（SQLite store を作った目的そのものが壊れるため）。"""
-    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     path = tmp_path / "classes.msp"
     path.write_text(_MSP_CLASSES, encoding="utf-8")
 
@@ -207,7 +209,7 @@ def test_rt_filter_keeps_null_rt_but_drops_rt_outside_tolerance(tmp_path, monkey
     RT を持たないレコードを rt 指定クエリで落としてはいけない
     （`AND (rt IS NULL OR ABS(rt - ?) <= ?)`）。RT が窓の外のレコードは落ちることも
     同じテストで押さえ、`rt IS NULL` だけが特別扱いされることを示す。"""
-    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     path = tmp_path / "rt_lib.msp"
     path.write_text(_MSP_WITH_RT, encoding="utf-8")
 
@@ -239,7 +241,7 @@ def test_a_record_without_precursor_mz_is_skipped_not_fatal(tmp_path, monkeypatc
     （`msp.py` の `_read_record`）。以前は 1 レコードの欠損で
     `IntegrityError: NOT NULL constraint failed: record.precursor_mz` となり
     ライブラリ全体が構築できなかった。欠損レコードだけ読み飛ばし、件数を meta に残す。"""
-    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     path = tmp_path / "missing_precursor.msp"
     path.write_text(_MSP_MISSING_PRECURSOR, encoding="utf-8")
 
@@ -276,8 +278,7 @@ def test_candidates_rejects_an_rt_without_a_tolerance(library):
 
 def test_candidates_ion_mode_comparison_is_case_insensitive(library):
     """Critical 1 の再発防止: store の `ion_mode` 列は小文字（`record.ION_MODES`）
-    だが、呼び出し側（`peak_verification._spectral_match_for_feature`）は
-    PAI2 由来の `IonMode.Positive.name`（`"Positive"`、大文字始まり）をそのまま
+    だが、呼び出し側は PAI2 由来の `IonMode.Positive.name`（`"Positive"`、大文字始まり）をそのまま
     渡す。以前は SQLite の既定 BINARY 照合で一致せず常に 0 件になっていた。"""
     s = store.open_store(library)
     try:
@@ -315,7 +316,7 @@ _MSP_NO_ION_MODE = textwrap.dedent("""\
 def test_records_without_an_ion_mode_survive_the_polarity_filter(tmp_path, monkeypatch):
     """極性ごとに分かれた `.msp` は IONMODE 欄を持たないことがある。NULL を
     `ion_mode = ?` で弾くと候補が黙って 0 件になる。極性不明は候補に残す。"""
-    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     path = tmp_path / "lib.msp"
     path.write_text(_MSP_NO_ION_MODE, encoding="utf-8")
     s = store.open_store(path)
@@ -328,7 +329,7 @@ def test_records_without_an_ion_mode_survive_the_polarity_filter(tmp_path, monke
 
 
 def test_non_utf8_lines_are_recorded_in_the_summary(tmp_path, monkeypatch):
-    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     path = tmp_path / "lib.msp"
     path.write_bytes("NAME: グルタミン酸\nPRECURSORMZ: 148.06\nNum Peaks: 0\n".encode("cp932"))
     s = store.open_store(path)
@@ -343,9 +344,9 @@ def _count_hashing(monkeypatch):
     calls = []
     real = store.source_sha256
 
-    def spy(path):
+    def spy(path, **kwargs):
         calls.append(path)
-        return real(path)
+        return real(path, **kwargs)
 
     monkeypatch.setattr(store, "source_sha256", spy)
     return calls
@@ -396,13 +397,13 @@ def test_a_corrupt_digest_index_is_ignored(library, monkeypatch):
         s.close()
 
 
-def test_the_cli_prebuilds_the_store_for_the_env_var_library(tmp_path, monkeypatch, capsys):
+def test_the_cli_prebuilds_the_store_for_the_configured_library(tmp_path, monkeypatch, capsys):
     """MCP クライアントのタイムアウトを避けるため、初回の構築は手元で済ませられる。"""
-    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     lib = tmp_path / "outside" / "lab_neg.msp"
     lib.parent.mkdir()
     lib.write_text(_MSP, encoding="utf-8")
-    monkeypatch.setenv("MSDIAL_MSP_NEG", str(lib))
+    use_config(monkeypatch, tmp_path, {"library.msp_negative": str(lib)})
 
     assert store.main(["--ion-mode", "negative"]) == 0
 
@@ -413,8 +414,8 @@ def test_the_cli_prebuilds_the_store_for_the_env_var_library(tmp_path, monkeypat
 
 
 def test_the_cli_reports_resolution_errors_without_a_traceback(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
-    monkeypatch.setenv("MSDIAL_MSP_NEG", str(tmp_path / "gone.msp"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
+    use_config(monkeypatch, tmp_path, {"library.msp_negative": str(tmp_path / "gone.msp")})
     assert store.main(["--ion-mode", "negative"]) == 2
     assert "MSP_ENV_NOT_FOUND" in capsys.readouterr().err
 
@@ -470,7 +471,7 @@ def _console_dbs(tmp_path):
 
 
 def test_library_id_for_follows_the_annotator_keys_saved_in_the_dbs(tmp_path, monkeypatch):
-    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     s = store.open_store(_console_dbs(tmp_path))
     try:
         assert s.library_id_for("C:/lib/NCDK_conventional.lbm2") == "LbmDB"
@@ -487,7 +488,7 @@ def test_library_id_for_follows_the_annotator_keys_saved_in_the_dbs(tmp_path, mo
 
 def test_library_id_for_falls_back_to_the_gui_counter_rule(tmp_path, monkeypatch):
     """対応表に無い ID（`.msp`/`.lbm2` を直接読んだ store 等）は従来の規則に戻す。"""
-    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     s = store.open_store(_console_dbs(tmp_path))
     try:
         assert s.library_id_for("Msp20260116160945_NCDK_dev_1") == "Msp20260116160945_NCDK_dev"
@@ -500,7 +501,7 @@ def test_a_cache_built_before_the_annotator_map_reads_it_from_the_source(tmp_pat
     """対応表を持たない古いキャッシュでも、元の `.dbs` が残っていれば作り直さずに引ける
     （研究室の `.dbs` は数百 MB あり、構築し直しは重い）。"""
     import sqlite3
-    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     path = _console_dbs(tmp_path)
     store.open_store(path).close()
     db_path = next((tmp_path / "cache").glob("*.sqlite"))
@@ -518,7 +519,7 @@ def test_a_cache_built_before_the_annotator_map_reads_it_from_the_source(tmp_pat
 
 def test_rt_used_for_reads_the_annotator_switches(tmp_path, monkeypatch):
     from tests.dbs_fixture import PARAMETER, record, write_dbs
-    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     off = list(PARAMETER)
     off[15] = off[16] = False
     s = store.open_store(write_dbs(tmp_path / "off.msp2.dbs",
@@ -547,7 +548,7 @@ def test_rt_used_for_is_unknown_for_a_plain_msp(library):
 
 def test_library_id_fallback_never_returns_a_directory(tmp_path, monkeypatch):
     """Console のデータの AnnotatorID はライブラリのフルパス。置き場所を library_id に残さない。"""
-    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     s = store.open_store(_console_dbs(tmp_path))
     try:
         for raw in ("D:/secret_lab/libs/Made_Up_Lib_3", r"D:\secret_lab\libs\Made_Up_Lib_3"):
@@ -591,4 +592,28 @@ def test_two_threads_opening_the_same_destination_build_it_once(library, monkeyp
     assert len(builds) == 1
     assert [s.record_count for s in opened] == [4, 4]
     for s in opened:
+        s.close()
+
+
+def test_rebuild_really_rereads_the_source_despite_the_in_memory_memo(library):
+    """`rebuild=True` は sha256 の記憶（ディスクの索引もメモリの記憶も）を信じない。
+
+    記憶が当たる状態（同じ大きさ・同じ更新時刻）で中身だけを書き換え、rebuild が新しい中身の
+    sha256 を記録することを見る。記憶を信じる実装なら古い sha256 が返る。
+    """
+    import hashlib
+    import os
+
+    path = Path(library)
+    store.open_store(path).close()  # 記憶を作る
+    stat = path.stat()
+    old = path.read_bytes()
+    new = old.replace(b"NAME: A", b"NAME: B", 1)
+    assert new != old and len(new) == len(old)
+    path.write_bytes(new)
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    s = store.open_store(path, rebuild=True)
+    try:
+        assert s.summary()["source_sha256"] == hashlib.sha256(new).hexdigest()
+    finally:
         s.close()

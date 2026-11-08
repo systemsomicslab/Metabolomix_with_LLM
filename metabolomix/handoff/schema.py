@@ -8,12 +8,12 @@ hash 検証に使う。ファイルはデータフォルダ内のランディレ
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from metabolomix.core import file_digest
 from metabolomix.core.atomic_io import atomic_write_json
 
 # v2: 生成物のルートと実行オプションを明示する。
@@ -128,12 +128,13 @@ class AnalysisJob:
         return _from_dict(data)
 
 
-def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
+def sha256_file(path: Path, *, trust: bool = True) -> str:
+    """`path` の sha256。trust=False は覚えた値（size と mtime_ns が鍵）を使わず読み直す。
+
+    完全性の裏取り（ジョブの出所の検証）は trust=False で呼ぶ——同じ大きさ・同じ
+    mtime_ns の書き換えは覚えた値では見分けられないため。
+    """
+    return file_digest.sha256_of(path, trust=trust)
 
 
 # ---------- シリアライズ補助 ----------

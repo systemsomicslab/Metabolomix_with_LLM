@@ -65,9 +65,9 @@ def _add_mtd(mztab: Path, batches: list, orders: list) -> None:
 
 
 def _load(**kwargs) -> str:
-    from metabolomix.tools import mztab_tools
+    from metabolomix.tools import handle_tools, mztab_tools
 
-    return mztab_tools.dataset_load(**kwargs)
+    return handle_tools.load_dataset(**kwargs)
 
 
 def _sheet(tmp_path: Path, ds, groups: list[str], role: str = "sample") -> Path:
@@ -90,7 +90,7 @@ GROUPS = ["g1", "g1", "g1", "g2", "g2", "g2"]
 
 def test_folder_dataset_applies_curation_and_reports_detection(tmp_path):
     from metabolomix.tools import dataset_analysis_tools as dat
-    from metabolomix.tools import mztab_tools
+    from metabolomix.tools import handle_tools, mztab_tools
 
     folder = tmp_path / "msdial"
     write_msdial_folder(folder, **_spec())
@@ -207,13 +207,13 @@ def test_mddata_declared_batch_wins_over_mztab_mtd(tmp_path):
 def test_folder_and_mztab_adapters_give_the_same_tool_output(tmp_path, entry):
     from metabolomix.analysis import dataset_analysis
     from metabolomix.tools import dataset_analysis_tools as dat
-    from metabolomix.tools import mztab_tools
+    from metabolomix.tools import handle_tools, mztab_tools
 
-    # mzTab-M のアダプタは mzTab-M のファイル名のバッチ語幹から `.arf2`（フラグの置き場所）を探す。
+    # mzTab-M のファイル名にバッチ語幹が無くても、m/z の照合で `.arf2`（フラグの置き場所）を見つける。
     job = _job(tmp_path, spec=_spec(), with_mddata=False,
-               mztab_name="AlignmentResult_2026_02_01_00_00_00_Height.mzTab")
+               mztab_name="Height_x.mzTab")
     out = job.parent / "msdial"
-    _add_mtd(out / "AlignmentResult_2026_02_01_00_00_00_Height.mzTab", [1, 1, 2, 2, 3, 3], [9, 8, 7, 6, 5, 4])
+    _add_mtd(out / "Height_x.mzTab", [1, 1, 2, 2, 3, 3], [9, 8, 7, 6, 5, 4])
     _flag_wrong(out)
     kwargs = ({"job_path": str(job)} if entry == "job"
               else {"pipeline_path": str(_pipeline(tmp_path, job))})
@@ -247,7 +247,7 @@ def test_folder_and_mztab_adapters_give_the_same_tool_output(tmp_path, entry):
 # ---------- 指摘 5: dataset_status の load_notes と validation ----------
 
 def test_dataset_status_shows_load_notes_and_marks_validation_not_applicable(tmp_path):
-    from metabolomix.tools import mztab_tools
+    from metabolomix.tools import handle_tools, mztab_tools
 
     folder = tmp_path / "msdial"
     write_msdial_folder(folder, **_spec(), with_mddata=False)
@@ -325,7 +325,7 @@ def test_constant_mddata_batch_also_falls_back_to_filename_dates(tmp_path):
 # ---------- R42: pipeline の解析フォルダは run の試料対応表の役割を、前処理の前から見せる ----------
 
 def test_pipeline_folder_shows_manifest_roles_in_dataset_status(tmp_path):
-    from metabolomix.tools import mztab_tools
+    from metabolomix.tools import handle_tools, mztab_tools
     from tests.test_dataset_opening import _manifest_row
 
     job = _job(tmp_path, spec=_spec())

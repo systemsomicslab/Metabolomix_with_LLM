@@ -728,11 +728,8 @@ def test_inspect_inputs_ignores_unresolvable_msp_file_path_like_before(tmp_path,
 
     # このテストが見たいのは「exe と同じフォルダの .lbm2 が使われる」経路。
     # `resolve_lbm` の優先順位は 明示引数 → メソッド宣言 → ビルド生成物 →
-    # `MSDIAL_LBM` → exe と同じフォルダ なので、環境変数が設定されていると
-    # 下の `lib.lbm2` へ到達する前に打ち切られる。実機の `MSDIAL_LBM` が
-    # 実在しないファイルを指していると `LBM_NOT_FOUND` で落ちるため、
-    # 周囲の環境から切り離す（同じ手当てが test_console_plan_method.py ほかにある）。
-    monkeypatch.delenv("MSDIAL_LBM", raising=False)
+    # `[library] lbm` → exe と同じフォルダ。conftest が設定ファイルを存在しない
+    # パスへ向けているので、実機の `[library] lbm` には打ち切られない。
 
     dataset_root = tmp_path / "dataset"
     dataset_root.mkdir()

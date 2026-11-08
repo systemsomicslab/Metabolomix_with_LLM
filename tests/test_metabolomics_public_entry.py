@@ -142,12 +142,12 @@ def test_a_console_that_produces_nothing_does_not_complete_the_run(tmp_path, mon
 def test_a_completed_run_can_be_opened_for_interactive_work(tmp_path, monkeypatch):
     """公開入口で回した run を、そのまま対話セッションへ載せられること。
 
-    S1（dataset_build_matrix）・S2（dataset_load の pipeline_path モード）・
+    S1（dataset_build_matrix）・S2（load_dataset の pipeline_path モード）・
     S3（この公開入口）が1本に繋がっていることを、この試験だけが示す。
     """
     from metabolomix.core import session_state
     from metabolomix.tools.dataset_analysis_tools import dataset_statistic
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     source_root, request, _sources = _source(tmp_path, monkeypatch)
     receipt = service.plan_pipeline(source_root, request)
@@ -156,7 +156,7 @@ def test_a_completed_run_can_be_opened_for_interactive_work(tmp_path, monkeypatc
     assert worker.run_worker(pipeline_path)["status"] == "completed"
 
     session_state.session.dataset = None
-    summary = dataset_load(pipeline_path=str(pipeline_path), source="mztab")
+    summary = load_dataset(pipeline_path=str(pipeline_path), source="mztab")
     assert "解析行列" in summary, summary
 
     ds = session_state.session.dataset

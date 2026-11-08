@@ -4,11 +4,12 @@ from metabolomix.arf2.reader import load_catalog
 from metabolomix.curation import evidence, judge
 from metabolomix.library import store as library_store
 from tests.curation_fixtures import write_alignment_set
+from tests.config_fixtures import use_config
 
 
 @pytest.fixture()
 def dataset(tmp_path, monkeypatch):
-    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     paths = write_alignment_set(tmp_path / "neg")
     s = library_store.open_store(paths["msp"])
     yield paths, s
@@ -99,7 +100,7 @@ def test_long_eic_trace_is_cut_to_the_cap_and_keeps_the_apex():
 
 def test_collect_computes_eic_shape_on_the_full_series_but_downsamples_the_payload(
         tmp_path, monkeypatch):
-    monkeypatch.setenv(library_store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     paths = write_alignment_set(tmp_path / "neg", eic_points=61)
     s = library_store.open_store(paths["msp"])
     captured = {}

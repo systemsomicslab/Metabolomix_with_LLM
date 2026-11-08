@@ -72,3 +72,24 @@ def test_subfolders_are_not_searched(tmp_path):
     with pytest.raises(DomainError) as exc:
         select_alignment(tmp_path)
     assert exc.value.code == "ALIGNMENT_NOT_FOUND"
+
+
+def test_timestamped_batch_beats_untimestamped(tmp_path):
+    """時刻の無い `.arf`（PeakProperties）が、時刻を持つ別バッチ（DriftSopts）に勝たない。"""
+    stem = "AlignmentResult_2026_02_01_00_00_00"
+    _touch(tmp_path, "legacy_PeakProperties.arf", "legacy.arf2",
+           f"{stem}_DriftSopts.arf", f"{stem}.arf2")
+    # 時刻の無い側のほうが mtime は新しい。
+    import os
+    old = (tmp_path / f"{stem}_DriftSopts.arf").stat().st_mtime - 1000
+    os.utime(tmp_path / f"{stem}_DriftSopts.arf", (old, old))
+    assert select_alignment(tmp_path).arf.name == f"{stem}_DriftSopts.arf"
+    from metabolomix.core.path_resolvers import _pick_latest
+    assert _pick_latest([str(tmp_path / "legacy_PeakProperties.arf"),
+                         str(tmp_path / f"{stem}_DriftSopts.arf")]).endswith("DriftSopts.arf")
+
+
+def test_arf2_input_prefers_peakproperties(tmp_path):
+    stem = "AlignmentResult_2026_02_01_00_00_00"
+    _touch(tmp_path, f"{stem}_DriftSopts.arf", f"{stem}_PeakProperties.arf", f"{stem}.arf2")
+    assert select_alignment(tmp_path / f"{stem}.arf2").arf.name == f"{stem}_PeakProperties.arf"
