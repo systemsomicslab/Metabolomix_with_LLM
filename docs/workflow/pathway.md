@@ -1,9 +1,9 @@
 # ワークフロー: パスウェイ投影（MSLipidMapper）
 
-前処理済みの脂質データを MSLipidMapper（R パッケージ）に渡し、
+統計エンジンの行列（前処理済みの脂質データ）を MSLipidMapper（R パッケージ）に渡し、
 同梱パスウェイ（remodeling / ceramide / global）へ投影する経路。MSLipidMapper は
 `[mslipidmapper] mslipidmapper_api_url` の研究室サーバ（REST API）を先に使い、使えなければローカルの Rscript へ回す。前提状態の連鎖は
-`record_objective(assay_kind="lipid")` ＋ `load_dataset` → `dataset_preprocess` →
+`record_objective(assay_kind="lipid")` ＋ `load_dataset` →（`dataset_preprocess`。省略時は既定の前処理を自分で回す）→
 `pathway_project` → `pathway_plot`。値の**意味**は
 [pathway.md（output_format）](../output_format/pathway.md) を見ること。
 

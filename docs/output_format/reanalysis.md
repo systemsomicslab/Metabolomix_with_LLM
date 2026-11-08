@@ -78,7 +78,9 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 使い、無ければ `status: "no_alignment_files"` を返す——別のデータセットの同じ spot_id の
 スペクトルを黙って読まないため。
 
-## 2. 統計の spec（analysis-spec.v1）と結果（analysis-result.v1）
+## 2. 統計の spec（analysis-spec.v1 / v2）と結果（analysis-result.v1 / v2）
+
+**この節の前半（表と欄）は v1。** v2（統計エンジン）は §2.1。`dataset_analysis_run` は `spec.schema` で振り分ける。
 
 `dataset_analysis_run(spec, dataset_handle=None, output_path=None)`。論文の方法を spec に写し、
 名前つきの解析（`analyses`）を並べる——感度解析は同じ spec に並べた別の解析。
@@ -175,6 +177,98 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 `rule_hash` は正規化した spec（パスを除く）に、データセットの入力で `merge_split` が真なら使った群の
 hash も入れる——同じ spec でも割れの組が変われば別の規則で、`merge_split` を変えても変わる
 （外部の行列では `merge_split` は hash に入らない）。
+
+### 2.1 統計エンジンの spec（analysis-spec.v2）と結果（analysis-result.v2）
+
+`spec["schema"] == "analysis-spec.v2"` の `dataset_analysis_run` は統計エンジン（`metabolomix/analysis/stats/`）へ回る
+（v1 の上の表・行の欄とは別の系。`analysis-spec.v1` の spec は今までどおり v1 が実行する）。前処理を **1 回**
+回し、`analyses` の順に compare / composition / pca をすべて実行して**全部**を返す（`primary` は報告の主役を
+指すだけ）。どれかの解析が失敗したら全体を失敗にする（一部だけ載せた結果は返さない）。**状態も記録も書かない**
+（対話の `dataset_compare` と違い、`result_id` も `matrix_id` の登録も作らない）。
+
+```json
+{"schema": "analysis-spec.v2",
+ "input": {"source": "dataset", "exclude_samples": [], "exclude_features": [], "group_overrides": {}},
+ "preprocess": {"drift": {"mode": "auto", "span": 0.75, "min_qc_per_batch": 4},
+                "filters": {"blank_ratio": {"min": 3.0}, "detection": {"by": "group", "min_rate": 0.5},
+                            "qc_rsd": {"max": 0.30}, "d_ratio": {"max": 0.5}},
+                "normalize": {"method": "auto"}, "collapse_replicates": true, "injection_columns": []},
+ "design": {"factors": ["group"], "covariates": [], "block": null},
+ "comparisons": [{"id": "RA_vs_HC", "factor": "group", "reference": "HC", "test": "RA"}],
+ "analyses": [{"analysis_id": "main", "kind": "compare", "test": "moderated_t",
+               "effect_size": "log2_mean_difference", "bh_population": "matrix",
+               "verdict": {"q": 0.05, "equivalence_fc": 1.2}, "min_detected_fraction": 0.5,
+               "allow_confounded": false}],
+ "primary": "main"}
+```
+
+| 欄 | 既定 | 意味 |
+|---|---|---|
+| `input` | `{"source": "dataset"}` | `source` はデータセットだけ。`exclude_samples` / `exclude_features`（空でない文字列のリスト。重複は順序を保って落とす）と `group_overrides`（試料 → 群）は**この spec に書いたものだけ**が効く（下の「自己完結」） |
+| `preprocess` | 上の値 | 前処理の設定（`dataset_preprocess` の引数と同じ。`drift.mode` は `auto` / `on` / `off`、足切りは `null` でその足切りを行わない、`normalize.method` は `auto` / `none` / `tic` / `median` / `pqn`）。`injection_columns` は個体のまとめの鍵から外す試料の表の列（取得日・注入番号など注入ごとに違う属性）。不正なら `ANALYSIS_SPEC_INVALID`（`details.field` が `preprocess.` から始まる） |
+| `design` | `{"factors": ["group"], "covariates": [], "block": null}` | `factors`（重複のない文字列。交互作用の対比は 2 因子のモデルだけ）・`covariates`（`{name, type: numeric \| categorical, reference?}`）・`block`（`"subject_id"` など） |
+| `comparisons` | 必須 | 対比のリスト。`{id, factor, reference, test, at?}`（`at` は他の因子の水準で層別）か、交互作用 `{id, kind: "interaction", factors: [2 因子], levels: {因子: [基準, 比較]}}`。`id` は英数字と `_ . -` で重複不可 |
+| `analyses[].kind` | 必須 | `compare` / `composition` / `pca`。`analysis_id` は重複不可 |
+| compare / composition | | `test`（既定 `moderated_t`。`welch` / `student` / `mannwhitney` は 1 因子・共変量なし・ブロックなしだけ）・`effect_size`（`log2_mean_difference` 既定 / `arithmetic_mean_ratio`）・`bh_population`（`matrix` 既定 / `annotated` / `reported`。`reported` は `reported_feature_ids` が要り、そのときだけ書ける）・`verdict.q`（既定 0.05）・`verdict.equivalence_fc`（既定 1.2）・`min_detected_fraction`（既定 0.5）・`allow_confounded`（既定 false。完全交絡は `STATISTIC_CONFOUNDED` で止める） |
+| pca | | `scaling`（`autoscale` 既定 / `pareto`）・`n_components`（既定 5）・`impute`（`half_min` 既定 / `knn` / `none`） |
+| `primary` | compare / composition が 1 つならそれ | 2 つ以上あるときは必須（`ANALYSIS_SPEC_INVALID`） |
+
+**自己完結（再現のための規則）。** v2 は spec だけで同じ数字を出し直せる実行で、`dataset_exclude` の除外は読まない。
+spec の `input` に無い除外がデータセットにあれば、結果の `warnings` に
+`{"code": "dataset_exclusions_not_in_spec", "n_samples", "n_features"}` が載る（効いていない除外の件数）。対話の
+`dataset_compare` が結果の spec に除外を写して持つのとは逆の向き。組成のクラスの名前は、そのセッションの
+`assay_kind`（`record_objective(assay_kind=...)`。spec には載らない）で決まる（`class_label_kind`: `lipid_class` /
+`msdial_ontology`）。同じ spec でも `assay_kind` が違えばクラスの切り方が違うので、組成を再現するときは種別も揃える。
+
+**`needs_input`。** 前処理が利用者への確認を要するとき（内部標準で換算済みの値に QC があり `drift.mode=auto`）は、
+結果の代わりに `{"needs_input": {"field": "preprocess.drift.mode", "reason", "options", "retry_tools": ["dataset_analysis_run"]}}`
+を返す（`core.md` の「利用者に尋ねる封筒」）。この経路は `argument` を持たない——答えは spec の `field` の欄に入れて
+`dataset_analysis_run` を呼び直す。
+
+**戻り値は要約だけ。** `{status, schema: "analysis-result.v2", rule_hash, matrix_id, input_fingerprint: {dataset_hash,
+sample_table_hash}, primary, warnings, analyses}`。`analyses[]` は解析ごとの要約で、compare は `n_rows`・`n_tested`・
+`verdicts: {changed, unchanged, inconclusive}`・`n_q_below`（`q ≤ 閾値`）・`test`・`warnings`、composition はそれに
+`tables`（`clr` / `absolute` ごとの同じ件数）・`class_label_kind`・`n_classes`、pca は `scaling`・`imputation`・`n_fit`・
+`n_units`・`n_qc_projected`・`n_features`・`explained_variance_ratio`。長い一覧は切る。全量（行・CI・事前分布・交絡の
+表・PCA のスコア）は `output_path` の JSON に書く。**行を返すのは、どの解析も行数が 50 以下のときだけ**（v1 と同じ。
+TSV の列は `contrast_id feature_id status reason log2fc ci_low ci_high p q verdict`、composition は先頭に `table` 列）。
+50 を超える解析があって `output_path` が無ければ `ANALYSIS_OUTPUT_REQUIRED`。`rule_hash` は正規化した spec の hash
+（実行のたびに変わる値を含まない）、`matrix_id` は前処理の入力と設定の hash（同じなら同じ ID）。
+
+**`analysis-result.v2` の全量（`output_path` の JSON）。** `{schema, spec（正規化後）, rule_hash, input_fingerprint,
+matrix_id, preprocess: {steps, warnings, subject_source}, primary, analyses: [{analysis_id, kind, result}]}`。`result`
+は kind ごとに次のスキーマ。
+
+- **`stats-compare.v1`**（compare）: `{matrix_id, test（実際に使った検定名）, effect_size_definition: {name, description},
+  ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n_by_contrast,
+  q_interpretation}, presence, prior, design, group_n, subject_source, confounding, warnings, rows, omnibus}`。
+  `q_interpretation` は `discovery_fdr`（`matrix` / `annotated`）か `reproduction_only`（`reported`。報告した特徴だけの
+  補正で、探索の FDR ではない）。`omnibus` は 3 群以上の F 検定（無ければ null）。
+  行（対比 × 特徴）: `feature_id`・`contrast_id`・`reference`・`test`・`status`（`tested` / `not_tested`）・`reason`・
+  `n_reference` / `n_test`（有限値の個体数）・`detected_reference` / `detected_test`（検出された個体数。検出状態が
+  無ければ null）・`quantity_judgeable`（群のどの cell も検出の割合が `min_detected_fraction` 以上か。null は検出状態なし）・
+  `log2fc`（正なら test が高い）・`ci_low` / `ci_high`・`ci_unavailable_reason`・`statistic` / `df` / `p`・`mean_reference` /
+  `mean_test`（個体ごとの前処理後の線形値の算術平均。単純な 2 群の対比だけ、交互作用は null）・`q`・`presence_p` /
+  `presence_q`（検出の有無そのものの検定）・`verdict`・`verdict_reason`。
+- **判定（`verdict`）は 3 値**で、規則は機械的:
+  `changed`＝検定でき、`q ≤ verdict.q`。`unchanged`＝`q` が閾値を超え、95% CI が同等の範囲
+  （`|log2fc| < log2(equivalence_fc)`）に完全に収まる。それ以外はすべて `inconclusive`（`verdict_reason`:
+  `not_tested` / `quantity_not_judgeable` / `outside_bh_population` / `no_ci` / `neither`）。
+  **「有意でない」は「変わっていない」ではない**——`q` が大きいだけでは `unchanged` にならず、差が小さいと言える
+  CI があるときだけ `unchanged`。`inconclusive` は「差があるともないとも言えない」で、n が小さい・ばらつきが大きい
+  ときの大半はここに入る。この判定は spec に書いた規則を当てた結果で、論文を再現したかの判定ではない。
+- **`stats-pca.v1`**（pca）: `{matrix_id, scaling, log2: true, imputation, n_fit, unit_ids, qc_ids, scores: {units, qc},
+  explained_variance_ratio, loadings, kept_features}`。軸は生体の個体だけで決め、QC は同じ軸へ**投影**する（軸の計算に
+  使わない）。欠測は PCA のためだけに補い（`imputation`）、行列そのものは変えない。
+- **`stats-composition.v1`**（composition）: `{class_label_kind, classes, unclassified_features, zero_handling, clr, absolute,
+  unit, warnings}`。`clr` / `absolute` はそれぞれ stats-compare.v1。クラスの合計が 0 以下の個体があるクラスは `clr` から
+  除く（`zero_handling.excluded_classes`）。欠測のメンバーは合計に 0 として入り、その件数と警告
+  `class_total_includes_missing_members` を出す。
+- 中の `warnings[]` は `{code, message, ...}`。長い一覧（`samples` など）は要約で切る。
+
+対話の `dataset_compare` / `dataset_pca` が保持する結果は、同じ stats-compare.v1 / stats-pca.v1 を
+`ds.results[result_id]` の記録（`kind` が `compare` / `stat_pca`）の `engine` に持つ。これらの対話の要約と、記録（`reports/stats/`）の
+形は `dataset.md` の §10・§11。
 
 ## 3. 行列の recipe（matrix-recipe.v2）
 
@@ -543,8 +637,13 @@ UTF-8・改行は CRLF）。
 | `contract_version` / `exporter.version` | `3` / `evidence-v3` |
 | `comparison.polarity` | データセットの極性（`positive` / `negative`）。ハンドルなら `load_dataset` の `polarity`、対話のセッションなら同じ規則で決める。決まらなければ `null` |
 | `comparison.preprocess` | `value` に当たった前処理のレシピ。pipeline から引き継いだ結果は、その run のレシピ |
+| `comparison.method` | 実際に使った検定名。統計エンジンの結果（`dataset_compare`）は `moderated_t` / `welch` / `student` / `mannwhitney`、pipeline から引き継いだ v1 の結果は `Welch` |
+| `comparison.statistics` | エンジンの結果だけ。`{test, ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n, q_interpretation}, subject_source, n_units_a, n_units_b}`。`n` は選んだ対比の BH の母集団の大きさ |
+| `comparison.effect_size_definition` / `mean_definition` | エンジンの結果だけ。効果量の定義（`{name, description}`）と、`mean_a` / `mean_b` が「個体ごとの前処理後の線形値の算術平均」であること |
+| `comparison.matrix_id` / `rule_hash` / `contrast_id` | エンジンの結果だけ。どの行列・どの規則・どの対比を書いたか（`contrast_id` は 2 群の結果なら 1 つの対比の ID） |
 | `intensities_stage` | `pre_imputation`（補完の前）/ `post_imputation`（補完の後） |
 | `population.detection_unavailable_reason` | `detected` が全行空のときの理由。検出状態を使えれば `null` |
+| `population.exclusions` | 除外の来歴。エンジンの結果は、その行列を作ったときの除外（`dataset_exclude` の試料・特徴。名前は 20 件で切り、残りは `n_more`）を、結果が読んだ行列の登録から引く（今の `ds.excluded_*` ではない）。v1 の結果は前処理の報告から |
 | `files[].role` | `samples` と `intensities` が増える |
 
 `samples.tsv`（データセットの全試料）:
@@ -565,12 +664,14 @@ UTF-8・改行は CRLF）。
 | `value` | log 変換の前の値（有効数字 10 桁）。欠測は空。結果の試料が値の行列に無いときも空。実データでは `0` が多い（実測で全セルの 17〜28%、すべて `detected=false`）。補完は NaN だけを触るので `0` は実際の値で、欠測の空とは別。この場合 `pre_imputation` と `post_imputation` の値は同じになりうる。検出の有無は `value` でなく `detected` で読む |
 | `detected` | `true` / `false` / 空。`false` は gap-fill か補完で、実測のピークではない。**空は「不明」で、gap-fill の意味ではない** |
 
-`intensities_stage` の決め方:
+`intensities_stage` の決め方（**エンジンの結果**は下の 1 つだけ）:
 
-- `pre_imputation`: 結果を計算した前処理のレシピが分かるとき（session の結果・pipeline から引き継いだ結果の
+- エンジンの結果（`dataset_compare`）: 常に `pre_imputation`。値は結果が読んだ行列（`ds.stat_matrices[matrix_id]`）の `sample_values`——**正規化の後・log2 の前の線形値**で、欠測は空（エンジンは検定に補完しない）。前処理のレシピを当て直さない。行列が登録に無い（除外・試料の表の変更で古くなった）ときは `missing_state`（`dataset_preprocess` と `dataset_compare` をやり直す）、結果の行と行列の特徴の集合が違えば `EVIDENCE_INTENSITIES_MISMATCH`。
+- v1 の結果（pipeline から引き継いだもの）は次のとおり:
+  - `pre_imputation`: 結果を計算した前処理のレシピが分かるとき（session の結果・pipeline から引き継いだ結果の
   どちらも）。レシピを `impute: none` で当て直す。補完は前処理の最後の段なので、正規化などは比較に入った値と同じ。
-- `post_imputation`: レシピが分からず、今の前処理の行列がその結果の親のとき。その行列の値を書く。
-- どちらでもなければ書かずに `EVIDENCE_INTENSITIES_UNAVAILABLE`（別の前処理の値で埋めない）。結果が群の試料を
+  - `post_imputation`: レシピが分からず、今の前処理の行列がその結果の親のとき。その行列の値を書く。
+  - どちらでもなければ書かずに `EVIDENCE_INTENSITIES_UNAVAILABLE`（別の前処理の値で埋めない）。結果が群の試料を
   持たないとき・前処理を当て直せないときも同じ。当て直した特徴の集合が結果の行と違えば
   `EVIDENCE_INTENSITIES_MISMATCH`。
 

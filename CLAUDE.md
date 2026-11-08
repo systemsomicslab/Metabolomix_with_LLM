@@ -26,13 +26,15 @@ ASSAY KIND（脂質か一般代謝物か）は `load_dataset` の後に `record_
 生の測定ファイル（`.wiff`/`.raw` 等）は自分では解さず、MS-DIAL Console への入力として扱う。
 MSLipidMapper（R）が書く**パスウェイ測定 JSON-LD**も読む（`pathway_project`）。
 
-**やること** — (a) 前処理/QC（正規化・ブランク減算・QC RSD 足切り・ドリフト補正）・PCA・
-2 群差次的解析（Welch + BH-FDR）、(b) 同定の標準化と裏取り（GOSLIN 正規化・RefMet/LIPID MAPS
+**やること** — (a) **統計エンジン**（`metabolomix/analysis/stats/`）による前処理/QC（ブランク・検出率・QC RSD・D-ratio の足切り、
+QC の LOESS ドリフト補正、正規化、反復注入の個体へのまとめ）・PCA（QC は投影）・moderated t（既定。Welch ほかも）による
+2 群・多群・2 因子の比較と、`changed` / `unchanged` / `inconclusive` の判定（「有意でない」は「変わっていない」ではない）・BH-FDR、(b) 同定の標準化と裏取り（GOSLIN 正規化・RefMet/LIPID MAPS
 ID・MSI レベル・`.dcl` の実スペクトル照合）、(c) EIC の描画（`dataset_plot`）、(d) **生データ起点の統括（補助経路）**
 ——MS-DIAL Console を計画・実行し、mzTab-M を経て前処理・PCA・比較・品質レポートまでを
 永続 run として自動で進める（`pipeline_run`。中断・訂正をまたいで冪等）、(e) LC–MS メタボロ
 ミクス v2（内部標準比・feature binding・注入ごとの測定証拠・固定母集団 QC）。**v2 は合成入力と
-fake Console までしか検証されていない**——`docs/workflow/metabolomics.md` を先に読む。
+fake Console までしか検証されていない**——`docs/workflow/metabolomics.md` を先に読む（これは pipeline の v2 工程だけの文書で、
+ツールの節は無い。対話の統計は (a) の統計エンジンが担い、v2 の解析行列と統計の単体ツールは無い）。
 
 差次的エクスポートの列定義は別リポジトリ（massbank-context）との契約を兼ねる。加えて、
 目的（objective）とレポートはツール経由で**解析フォルダ配下の `reports/`** に読み書きする
@@ -125,7 +127,14 @@ tmp に書いて指す。
 ```
 metabolomix/core/      FastMCP インスタンス・設定・セッション状態・パス解決・共通ヘルパ（依存グラフの leaf）
 metabolomix/msdial/    MS-DIAL 固有サイドカー（*_tags.xml / .mddata）・同定・ピーク検証・サンプル因子
-metabolomix/analysis/  入力形式に依存しない数値処理（前処理/QC・PCA・差次的解析・エクスポート契約）
+metabolomix/analysis/  入力形式に依存しない数値処理（前処理/QC・PCA・差次的解析・エクスポート契約）。
+                    統計エンジンの結果の登録と読み替えは stats_results.py（`as_two_group` が compare の記録の 1 対比を
+                    2 群の形にして、書き出し・図・特徴検索に渡す）、記録は stats_records.py、`dataset_analysis_run` v2 の要約は stats_run_summary.py
+metabolomix/analysis/stats/  統計エンジン（MCP にもセッションにも依存しない純計算。data（StudyData）・preprocess・design・
+                    limma（moderated t）・compare・composition・pca・confounding・spec_v2（analysis-spec.v2 の正規化と実行）・external）。
+                    `core.session_state` / `core.mcp_core` / `tools.*` を import しない。MCP の入口は tools/stats_tools.py
+                    （dataset_preprocess / dataset_compare / dataset_pca）。行列の登録と前処理の記録は共有の非ツール部品
+                    tools/_matrix_store.py（pathway_project も同じものを通る）
 metabolomix/plots/     描画 payload の組み立てと matplotlib 描画（volcano / eic / render）
 metabolomix/{arf,arf2,pai2,dcl,eic}/   形式ごとの reader.py（パーサ）。MCP ツールを持つのは dcl/tools.py だけ
 metabolomix/mztab/     mzTab-M リーダ・DatasetState 構築
@@ -201,11 +210,19 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料�
   `[Key(N)]` から抽出した Key 番号表。上流のコミットと欠番も記載してある）。
   インデックス定数を変える前に必ず参照する。推測で直さない。
 - **`run_pca` の正準は `metabolomix/analysis/pca.py`**。`metabolomix/arf/reader.py` は再エクスポートしない
-  （`tests/test_analysis_pca.py` が固定。パーサ単体の CLI だけがここから import する）。
+  （`tests/test_analysis_pca.py` が固定。パーサ単体の CLI と pipeline だけがここから import する）。対話の PCA は
+  統計エンジンの `metabolomix/analysis/stats/pca.py`（`dataset_pca`）。
+- **対話の統計の結果は `ds.stat_matrices`（行列）と `ds.results`（`kind` が `compare` / `stat_pca`）に住む**。消費側
+  （書き出し・根拠バンドル・図・特徴検索）は `compare` の記録を直に読まず、`stats_results.as_two_group` で対比を 1 つ選んだ
+  2 群の形で読む（`contrast_id`、または特徴検索が出す `result_id#contrast_id`）。行列・結果は除外・試料の表の更新・データの
+  入れ替えで古くなる（`dataset_exclude` は行列も捨てる）。`dataset_analysis_run` の v2 は状態を持たず、spec だけで再現する自己完結の実行。
+  利用者に尋ねる問いは `mcp_errors.needs_input`（エラーではない封筒。`retry_tools` は「`argument` を受けて呼び直せるツール」）。
+  v1 の前処理・2 群比較（`dataset_service` / `differential`）は pipeline のためだけに残してあり、D 段で消す。
 - **差次的エクスポートの列定義は `metabolomix/analysis/export_contract.py` が唯一の正準**。
   `dataset_export_differential`（と、生データ起点の `pipeline` の書き出し）がここを
   共有しており、**別リポジトリ（massbank-context）との契約**でもある。列の追加・改名・並べ替えは
-  `CONTRACT_VERSION` の引き上げと下流の同時更新なしにやってはいけない。
+  `CONTRACT_VERSION` の引き上げと下流の同時更新なしにやってはいけない（統計エンジンの結果だけは、列を変えずに
+  `stats_meta_lines` のメタ行を足す。`unit` は `subject` / `injection` / `mixed`）。
 - **ツールの戻り値を肥大させない**。戻り値はそのまま LLM の文脈を占め、結論が埋没する。
   守るべき決まりごと:
   - JSON は `metabolomix.core.serialization.json_payload()` で返す（`json.dumps(..., indent=2)`
