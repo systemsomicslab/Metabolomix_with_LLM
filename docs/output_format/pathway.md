@@ -61,9 +61,16 @@
 | scope | `whole`（サブクラス全体）か、アシル鎖（`18:0` 等。そのノードの鎖サブセット） |
 | n_features | そのスコープに入った分子種の数（常に 1 以上。下記） |
 | mean_a / mean_b | 各群の集計値の平均（生スケール） |
-| log2fc | log2(x+1) 空間の群平均差。**正なら group_b が高い** |
+| log2fc | log2 空間の群平均差（統計エンジンの `log2_mean_difference`）。**正なら group_b が高い** |
 | q | BH-FDR。補正単位は**パスウェイ × スコープ種別**（whole と各鎖は別々） |
-| call | up / down（q < 閾値）、ns、NA（片群の値が足りない等で検定不能） |
+| call | `verdict` が `changed`（q ≤ 閾値）なら符号で up / down、検定できなければ NA、それ以外は ns |
+| p / ci_low / ci_high | moderated t の p と、log2fc の 95% 区間 |
+| verdict | changed / unchanged / inconclusive（エンジンの判定。区間が同等の範囲に入れば unchanged） |
+
+検定は統計エンジンの moderated t。スコープの値（正の有限値）を log2 にして比べ、0 以下・欠測は欠測。
+同じ個体の反復注入は log2 の平均で 1 個体にまとまり（前処理と同じ）、各群 2 個体以上が要る。
+MSLipidMapper へ渡した mzTab-M の値は行列の注入ごとの線形値で、欠測は 0 で書く（MSLipidMapper の約束）。
+mean_a / mean_b は個体の `2**log2` の算術平均（エンジンの定義。旧 v1 の生値の平均とは別物）。
 
 上流はデータに無いサブクラスのノード（対応表経由の PC/PE/PS など）と、指定した各鎖について
 全ノードに**空のスコープ**（分子種 0・値は全部 null）を出す。これは「値の付いたノード」ではないので

@@ -23,7 +23,8 @@ from metabolomix.analysis.stats.data import from_dataset
 from metabolomix.core import mcp_core
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
-from metabolomix.core.mcp_errors import missing_state, mztab_error, needs_input
+from metabolomix.core.mcp_errors import (default_matrix_needs_input, missing_state, mztab_error,
+                                         needs_input)
 from metabolomix.core.serialization import json_payload, json_safe, round_floats, truncate_lists
 from metabolomix.tools._holder import resolve_holder
 
@@ -456,16 +457,19 @@ def _omnibus_summary(engine: dict):
 
 def _prepare_default(study, config, tool: str):
     """既定の前処理（純粋。登録も記録もしない）。利用者への確認が要るときは `needs_input` の封筒（str）、
-    さもなくば `PreparedMatrix`。`tool` は理由に書く呼び直し先（drift_mode の引数を持たないツール）。"""
-    prepared = stats_preprocess.preprocess(study, config)
+    さもなくば `PreparedMatrix`。`tool` は理由に書く呼び直し先（drift_mode の引数を持たないツール）。
+    「matrix_id か既定の行列」の入力側は `stats_results.matrix_inputs` / `prepare_default`（パスウェイと共有）。"""
+    prepared = stats_results.prepare_default(study, config)
     if isinstance(prepared, stats_preprocess.NeedsInput):
-        return needs_input(
-            prepared.field,
-            f"{prepared.reason} {tool} には drift_mode 引数がありません。"
-            f"dataset_preprocess(drift_mode=...) で行列を作り、その matrix_id を "
-            f"{tool} に渡して呼び直してください。",
-            prepared.options, argument=_DRIFT_ARGUMENT, retry_tools=_RETRY_TOOLS)
+        return default_matrix_needs_input(prepared, tool)
     return prepared
+
+
+def _matrix_not_found(matrix_id) -> str:
+    return missing_state(
+        "stat_matrix", ["dataset_preprocess"],
+        f"行列 {matrix_id!r} がありません（無い・または除外や試料の表の変更で古くなりました）。"
+        "dataset_preprocess を実行し直して、その matrix_id を渡してください。")
 
 
 def _register_default(holder, ds, study, prepared, config, inputs):
@@ -571,25 +575,14 @@ def dataset_compare(
         design_factors, spec_comparisons = _design_and_comparisons(
             reference_group, test_group, groups, comparisons, factors)
 
-        entry = None
-        if matrix_id is not None:
-            if group_levels or group_factors:
-                raise _bad_request("matrix_id を渡すと群は行列が決めています。group_levels / "
-                                   "group_factors は dataset_preprocess に渡してください。")
-            entry = stats_results.get_matrix(ds, matrix_id)
-            if entry is None:
-                return missing_state(
-                    "stat_matrix", ["dataset_preprocess"],
-                    f"行列 {matrix_id!r} がありません（無い・または除外や試料の表の変更で古くなりました）。"
-                    "dataset_preprocess を実行し直して、その matrix_id を渡してください。")
-            inputs = {"exclude_samples": list(entry["exclusions"]["samples"]),
-                      "exclude_features": list(entry["exclusions"]["features"]),
-                      "group_overrides": dict(entry["group_overrides"])}
-            preprocess = entry["config"]
-        else:
-            inputs = stats_results.study_inputs(ds, group_levels=group_levels,
-                                                group_factors=group_factors)
-            preprocess = stats_preprocess.normalize_preprocess_config(_config())
+        if matrix_id is not None and (group_levels or group_factors):
+            raise _bad_request("matrix_id を渡すと群は行列が決めています。group_levels / "
+                               "group_factors は dataset_preprocess に渡してください。")
+        try:
+            entry, inputs, preprocess = stats_results.matrix_inputs(
+                ds, matrix_id, group_levels=group_levels, group_factors=group_factors)
+        except stats_results.MatrixNotFound:
+            return _matrix_not_found(matrix_id)
         study = from_dataset(ds, **inputs)
         spec = spec_v2.normalize_spec_v2(_spec_for(
             factors=design_factors, comparisons=spec_comparisons,
@@ -718,17 +711,13 @@ def dataset_pca(
         # 群の指定の検証は行列を登録する前に済ませる（不正な指定が行列・記録を残さない）
         label_overrides = stats_results.study_inputs(
             ds, group_levels=group_levels, group_factors=group_factors)["group_overrides"]
-        if matrix_id is not None:
-            entry = stats_results.get_matrix(ds, matrix_id)
-            if entry is None:
-                return missing_state(
-                    "stat_matrix", ["dataset_preprocess"],
-                    f"行列 {matrix_id!r} がありません（無い・または除外や試料の表の変更で古くなりました）。"
-                    "dataset_preprocess を実行し直して、その matrix_id を渡してください。")
+        try:
+            entry, inputs, config = stats_results.matrix_inputs(ds, matrix_id)   # 群は行列を選ばない
+        except stats_results.MatrixNotFound:
+            return _matrix_not_found(matrix_id)
+        if entry is not None:
             prepared = entry["prepared"]
         else:
-            config = stats_preprocess.normalize_preprocess_config(_config())
-            inputs = stats_results.study_inputs(ds)           # 群は行列を選ばない
             study = from_dataset(ds, **inputs)
             prepared = _prepare_default(study, config, "dataset_pca")
             if isinstance(prepared, str):

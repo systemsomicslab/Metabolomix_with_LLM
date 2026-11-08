@@ -90,6 +90,20 @@ def needs_input(field: str, reason: str, options: list[dict], *, argument: str |
     return json_payload({NEEDS_INPUT: body})
 
 
+def default_matrix_needs_input(needs, tool: str) -> str:
+    """既定の前処理が利用者に尋ねたいとき（`needs` は前処理の `NeedsInput`）の封筒。
+
+    `tool` は drift_mode の引数を持たないツール（比較・PCA・パスウェイ）の名前で、理由に呼び直し先
+    （`dataset_preprocess(drift_mode=...)` で行列を作り、その matrix_id を渡す）を書く。
+    """
+    return needs_input(
+        needs.field,
+        f"{needs.reason} {tool} には drift_mode 引数がありません。"
+        f"dataset_preprocess(drift_mode=...) で行列を作り、その matrix_id を "
+        f"{tool} に渡して呼び直してください。",
+        needs.options, argument="drift_mode", retry_tools=["dataset_preprocess"])
+
+
 CONSOLE_ERROR_CODES = frozenset({
     "MSDIAL_EXE_NOT_FOUND",
     # 設定ファイル（lipidmix.local.toml）が読めない。

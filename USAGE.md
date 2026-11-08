@@ -202,7 +202,7 @@ run ディレクトリの `remote-job.json`。サーバは版を返さないの�
 
 | ツール | 機能 |
 |--------|------|
-| `pathway_project` | 直近のデータセットの `dataset_preprocess` 後の行列から最小 mzTab-M を書き、MSLipidMapper でサブクラス(と任意のアシル鎖サブセット)をノードへ集計する。2 群を log2 空間の Welch＋BH(パスウェイ×スコープ種別ごと)で比べ、ノード表と「逆向きに動く隣接ペア」を TSV で返す。JSON-LD・mzTab・manifest は解析フォルダの `reports/pathway/<run_id>/`。 |
+| `pathway_project` | 直近のデータセットの統計エンジンの行列（`matrix_id`、省略時は既定の前処理）から最小 mzTab-M（欠測は 0）を書き、MSLipidMapper でサブクラス(と任意のアシル鎖サブセット)をノードへ集計する。2 群を moderated t（スコープ値の log2、反復は個体にまとめる）＋BH(パスウェイ×スコープ種別ごと)で比べ、ノード表と「逆向きに動く隣接ペア」を TSV で返す。JSON-LD・mzTab・manifest は解析フォルダの `reports/pathway/<run_id>/`。 |
 | `pathway_plot` | `pathway_project` の run を MSLipidMapper で PDF に描き、1 ページ目を PNG(長辺 1600px)にして、既定では図のファイル(PDF・PNG)の場所と要約だけを返す。チャットに図を出すときは `inline_image=true`(1 枚約 2,400 画像トークン)。ローカルではヘッドレス Chromium と unpkg.com への接続が要る(サーバでは不要)。図中の p 値は MSLipidMapper のもの。 |
 
 ## 12. サーバ自身の更新

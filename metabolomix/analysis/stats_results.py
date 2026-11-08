@@ -21,10 +21,12 @@ import math
 
 from metabolomix.analysis import differential, export_contract
 from metabolomix.analysis.result_state import dataset_fingerprint, is_stats_current
+from metabolomix.analysis.stats import preprocess as stats_preprocess
 from metabolomix.analysis.stats.compare import _model_value
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 __all__ = [
+    "MatrixNotFound",
     "as_two_group",
     "contrast_ids",
     "get_matrix",
@@ -32,6 +34,8 @@ __all__ = [
     "split_result_ref",
     "check_contrast_applies",
     "is_stats_current",
+    "matrix_inputs",
+    "prepare_default",
     "register_compare",
     "register_matrix",
     "register_pca",
@@ -142,6 +146,39 @@ def get_matrix(ds, matrix_id: str) -> dict | None:
     if not _entry_current(entry, dataset_fingerprint(ds), getattr(ds, "metadata_revision", 0)):
         return None
     return entry
+
+
+class MatrixNotFound(LookupError):
+    """名指しされた行列が無い・古い（`get_matrix` が None）。ツールは missing_state にする。"""
+
+    def __init__(self, matrix_id: str):
+        super().__init__(matrix_id)
+        self.matrix_id = matrix_id
+
+
+def matrix_inputs(ds, matrix_id: str | None = None, *, group_levels=None, group_factors=None):
+    """「`matrix_id` か既定の行列」の入力側（純粋。登録も記録もしない）: `(登録 or None, inputs, 前処理の設定)`。
+
+    `matrix_id` があれば登録済みの行列（`entry`）とその除外・群の上書き・設定をそのまま返す
+    （無い・古いなら `MatrixNotFound`）。無ければ `entry=None` で、今の除外と `group_levels` /
+    `group_factors` から `study_inputs` を作り、設定は既定（`PREPROCESS_DEFAULTS` を正規化したもの）。
+    `inputs` は `from_dataset(ds, **inputs)` にそのまま渡せる。
+    """
+    if matrix_id is not None:
+        entry = get_matrix(ds, matrix_id)
+        if entry is None:
+            raise MatrixNotFound(matrix_id)
+        inputs = {"exclude_samples": list(entry["exclusions"]["samples"]),
+                  "exclude_features": list(entry["exclusions"]["features"]),
+                  "group_overrides": dict(entry["group_overrides"])}
+        return entry, inputs, entry["config"]
+    inputs = study_inputs(ds, group_levels=group_levels, group_factors=group_factors)
+    return None, inputs, stats_preprocess.normalize_preprocess_config(None)
+
+
+def prepare_default(study, config):
+    """既定の前処理（純粋。登録も記録もしない）。`PreparedMatrix`、利用者への確認が要るときは `NeedsInput`。"""
+    return stats_preprocess.preprocess(study, config)
 
 
 # --- 結果の登録 -------------------------------------------------------------------

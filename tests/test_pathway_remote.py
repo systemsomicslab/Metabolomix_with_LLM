@@ -13,7 +13,7 @@ from metabolomix.pathway import bridge, remote, tools
 from tests.config_fixtures import use_config
 
 from tests.test_pathway_jsonld import _graph
-from tests.test_pathway_tools import _GROUPS, lipid_arf  # noqa: F401  （fixture と 2 群の指定）
+from tests.test_pathway_tools import _GROUPS, lipid_arf, with_run_samples  # noqa: F401  （fixture と 2 群の指定）
 
 URL = "http://lab.example:8000"
 
@@ -244,11 +244,7 @@ def test_local_failure_after_fallback_keeps_both_reasons(serve, tmp_path, monkey
 
 
 def test_pathway_project_through_the_server(lipid_arf, serve, tmp_path):  # noqa: F811
-    doc = _graph()
-    for x in doc["@graph"]:
-        if x["@type"] == "mslm:Sample":
-            x["sampleGroup"] = "C" if x["identifier"] == "S1" else "P"
-    body = json.dumps(doc).encode()
+    body = json.dumps(with_run_samples(_graph())).encode()
     serve(FakeServer(result={"measurements": {"pathways": {"remodeling": {"measured_nodes": 2}}}},
                      artifacts={f"{p}-measurements.json": body
                                 for p in ("remodeling", "ceramide", "global")}))

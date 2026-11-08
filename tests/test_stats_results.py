@@ -442,3 +442,32 @@ def test_study_inputs_overrides_feed_from_dataset():
 
 def test_study_inputs_non_exclusive_values_are_bad_request():
     assert _code(stats_results.study_inputs, _ds(), group_levels=["c0", "r0"]).code == "DATASET_BAD_REQUEST"
+
+
+# --- 「matrix_id か既定の行列」の入力側（比較・PCA・パスウェイが共有） ----------------------
+
+def test_matrix_inputs_default_and_named_and_missing():
+    from metabolomix.analysis.stats import preprocess as stats_preprocess
+
+    ds = _ds()
+    entry, inputs, config = stats_results.matrix_inputs(ds)
+    assert entry is None and config == stats_preprocess.normalize_preprocess_config(None)
+    assert inputs == {"exclude_samples": [], "exclude_features": [], "group_overrides": {}}
+    prepared = stats_results.prepare_default(stats_data.from_dataset(ds, **inputs), OFF)
+    registered = stats_results.register_matrix(ds, prepared, OFF, {})
+    entry, inputs, config = stats_results.matrix_inputs(ds, prepared.matrix_id)
+    assert entry is registered and config == registered["config"]
+    with pytest.raises(stats_results.MatrixNotFound) as exc:
+        stats_results.matrix_inputs(ds, "nope")
+    assert exc.value.matrix_id == "nope"
+
+
+def test_default_matrix_needs_input_envelope_names_the_tool():
+    from metabolomix.core.mcp_errors import default_matrix_needs_input
+    from metabolomix.analysis.stats.preprocess import NeedsInput
+
+    body = json.loads(default_matrix_needs_input(
+        NeedsInput("preprocess.drift.mode", "尋ねる", [{"value": "on", "label": "on"}]), "pathway_project"))
+    inner = body["needs_input"] if "needs_input" in body else body
+    assert "pathway_project" in inner["reason"] and inner["retry_tools"] == ["dataset_preprocess"]
+    assert inner["argument"] == "drift_mode"
