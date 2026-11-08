@@ -267,7 +267,7 @@ def test_stale_result_not_drawn_as_current():
         assert kind not in ds.figures                 # 古い図は置き場に残らない
     # result_id を省いたときは「直近」を使う。除外で捨てられたので missing_state（作り直しを案内）
     for kind, tool in (("pca", "dataset_pca"), ("loadings", "dataset_pca"),
-                       ("volcano", "dataset_differential")):
+                       ("volcano", "dataset_compare")):
         err = json.loads(plot_tools.dataset_plot(kind=kind))["error"]
         assert err["code"] == "missing_state" and tool in err["required_tools"], kind
     # 古い図は save_figure からも保存できない

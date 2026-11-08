@@ -28,6 +28,7 @@ __all__ = [
     "as_two_group",
     "contrast_ids",
     "get_matrix",
+    "sample_ids_by_name",
     "is_stats_current",
     "register_compare",
     "register_matrix",
@@ -152,6 +153,11 @@ def _display_names(ds) -> dict[str, str]:
     for sample_id, name in zip(ids, names):
         out.setdefault(sample_id, name)
     return out
+
+
+def sample_ids_by_name(ds) -> dict[str, str]:
+    """試料の表示名 → エンジンの試料 ID（`register_compare` が `units[*].samples` に写す向きの逆）。"""
+    return {name: sample_id for sample_id, name in _display_names(ds).items()}
 
 
 def _unit_cell(unit, design: dict) -> str | None:

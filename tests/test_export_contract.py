@@ -133,3 +133,27 @@ def test_both_export_paths_use_the_contract_significance():
     """
     from metabolomix.tools import dataset_analysis_tools
     assert not hasattr(dataset_analysis_tools, "_is_significant")
+
+
+def test_build_meta_appends_stats_lines_after_msi_note():
+    """統計エンジンの行は msi_note の後ろだけ。足さなければ今までの出力と同じ。"""
+    base = _meta()
+    lines = _meta(stats_lines=["# test = moderated_t\tci_level = 0.95", "# unit = subject"])
+    assert lines[-3].startswith("# msi_level") and lines[-2:] == [
+        "# test = moderated_t\tci_level = 0.95", "# unit = subject"]
+    assert [l for l in lines if "exported_at" not in l][:-2] == [l for l in base if "exported_at" not in l]
+
+
+def test_stats_meta_lines_empty_for_v1_result_and_keys_do_not_collide():
+    from metabolomix.analysis.export_contract import stats_meta_lines
+    assert stats_meta_lines({"kind": "two_group", "a": "x"}) == []
+    result = {"effect_size_definition": {"name": "log2_mean_difference"}, "matrix_id": "m", "rule_hash": "h",
+              "statistics": {"test": "welch", "ci_level": 0.95, "subject_source": "injection",
+                             "verdict_rule": {"q_threshold": 0.05, "equivalence_fc": 1.2},
+                             "bh_population": {"name": "matrix", "n": 7, "q_interpretation": "discovery_fdr"},
+                             "n_units_a": 3, "n_units_b": 4}}
+    lines = stats_meta_lines(result)
+    keys = [chunk.split("=")[0].strip() for line in lines for chunk in line.lstrip("#").split("\t")]
+    assert len(keys) == len(set(keys))
+    assert not set(keys) & {l.split(" = ")[0].split("\t")[0].lstrip("# ") for l in _meta()}
+    assert "# unit = injection\tn_units_a = 3\tn_units_b = 4" in lines

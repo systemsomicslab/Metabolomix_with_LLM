@@ -84,7 +84,7 @@ def test_dataset_export_requires_differential(tmp_path):
     from metabolomix.tools.dataset_analysis_tools import dataset_export_differential
     parsed = json.loads(dataset_export_differential(str(tmp_path / "out.tsv")))
     assert parsed["error"]["code"] == MISSING_STATE
-    assert parsed["error"]["required_tools"] == ["dataset_differential"]
+    assert parsed["error"]["required_tools"] == ["dataset_compare"]
 
 
 def test_dataset_export_writes_contract_format(tmp_path):
@@ -360,7 +360,7 @@ def test_repreprocessing_makes_the_previous_comparison_unavailable(tmp_path):
     parsed = json.loads(dataset_export_differential(str(tmp_path / "out.tsv")))
 
     assert parsed["error"]["code"] == MISSING_STATE
-    assert parsed["error"]["required_tools"] == ["dataset_differential"]
+    assert parsed["error"]["required_tools"] == ["dataset_compare"]
     assert not (tmp_path / "out.tsv").exists()
 
 

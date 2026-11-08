@@ -652,7 +652,8 @@ def dataset_compare(
         "top": _top_table(ds, engine["rows"], [c["id"] for c in spec["comparisons"]], top_n),
         "record": written,
         "next": ("全行は result_id で保持した（直近の結果として書き出し・図の既定になる）。対比が複数の結果は"
-                 "書き出し・図で contrast_id を指定する（交互作用の対比は 2 群の形にならない）"),
+                 "dataset_export_differential・dataset_export_evidence_bundle・dataset_plot(kind=volcano)・"
+                 "dataset_feature_search には contrast_id を渡して対比を選ぶ（交互作用の対比は 2 群の形にならない）"),
     }))
 
 

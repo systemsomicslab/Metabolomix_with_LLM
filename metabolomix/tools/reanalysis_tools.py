@@ -591,7 +591,7 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     SME（rank 1）の同定があり、質量誤差が m/z 帯ごとの許容幅（`ppm.default` と
     `ppm.bands: [{max_mz, ppm}]`）に入り、q が `q_max` 未満の特徴から、`exclude`
     （`feature_ids`・`inchikey_blocks`）を除いた一覧。統計は `statistics` が
-    `{"result_id"}`（`dataset_differential` の 2 群比較）か `{"analysis_spec", "analysis_id"}`
+    `{"result_id"}`（`dataset_compare` の 2 群比較。対比が複数の結果は `"result_id#contrast_id"`。v1 の 2 群の結果も可）か `{"analysis_spec", "analysis_id"}`
     （`dataset_analysis_run` と同じ spec のその解析）。q の昇順。`rule_hash` を返す。
     論文の同定リストとの突き合わせはしない（再解析の側）。
     割れたアライメントスポットの組（`dataset_alignment_qc` の `merge_groups`）は 1 候補に数え
@@ -629,7 +629,7 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
             chosen = select_results(ds, [source["result_id"]], dataset_hash=dataset_hash)
             if not chosen["results"]:
                 return missing_state(
-                    "dataset_differential_result", ["dataset_differential"],
+                    "dataset_compare_result", ["dataset_compare"],
                     f"result_id={source['result_id']} の今も有効な 2 群比較がありません"
                     f"（無い: {chosen['missing']} / 古い: {chosen['stale']}）。")
             result = chosen["results"][0]

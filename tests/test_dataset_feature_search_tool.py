@@ -186,8 +186,8 @@ def test_named_stale_result_returns_missing_state():
     _differential(normalize="median")                 # 前処理のやり直しで old は古くなる
     parsed = _search(min_mz=100.0, result_ids=[old])
     assert parsed["error"]["code"] == MISSING_STATE
-    assert parsed["error"]["state"] == "dataset_differential_result"
-    assert parsed["error"]["required_tools"] == ["dataset_differential"]
+    assert parsed["error"]["state"] == "dataset_compare_result"
+    assert parsed["error"]["required_tools"] == ["dataset_compare"]
     assert old in parsed["error"]["message"]
 
     missing = _search(min_mz=100.0, result_ids=["res_nope"])

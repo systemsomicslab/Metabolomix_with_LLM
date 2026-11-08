@@ -23,13 +23,20 @@ from pathlib import Path
 
 from metabolomix.analysis import export_contract
 from metabolomix.analysis.result_state import assert_current
+from metabolomix.analysis.stats_results import as_two_group, get_matrix
 from metabolomix.core.atomic_io import DomainError
 
 __all__ = ["export_dataset_result"]
 
 
-def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = None) -> dict:
+def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = None,
+                          contrast_id: str | None = None) -> dict:
     """差次的結果を InChIKey 付きの契約 TSV として書き出す。
+
+    `result` は v1 の `two_group` か、統計エンジンの `compare` の記録（`as_two_group` で 1 つの対比を
+    読む。対比が複数なら `contrast_id` が要り、無ければ `CONTRAST_REQUIRED`）。エンジンの結果のときだけ
+    メタ行を `msi_note` の後ろへ足す（`export_contract.stats_meta_lines`）。15 列・列の順序・
+    契約の版は同じ。v1 の結果の出力は変わらない。
 
     Returns
     -------
@@ -45,11 +52,9 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
             {"job_path": getattr(ds, "job_path", None),
              "source_verification": getattr(ds, "source_verification", None)})
     assert_current(ds, result)
-
-    if result.get("kind") != "two_group":
-        raise DomainError("ANALYSIS_RESULT_NOT_FOUND",
-                          "2 群比較の結果ではありません。",
-                          {"kind": result.get("kind")})
+    record = result
+    result = as_two_group(record, contrast_id)      # 2 群でない結果・対比の曖昧さはここで DomainError
+    engine_result = record.get("kind") == "compare"
     if (result.get("contract_version") != export_contract.CONTRACT_VERSION
             or result.get("log2fc_sign") != export_contract.LOG2FC_SIGN):
         raise DomainError(
@@ -144,7 +149,8 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
              "n_unannotated": n_unannotated})
 
     lines = [*_meta_lines(ds, result, rows, n_total, n_unannotated,
-                          curation_line=curation_line),
+                          curation_line=curation_line,
+                          preprocess=_engine_preprocess(ds, record) if engine_result else None),
              "\t".join(export_contract.EXPORT_COLUMNS)]
     lines += [export_contract.format_row(r) for r in rows]
     out = _atomic_write_text(Path(path), "\n".join(lines) + "\n")
@@ -153,6 +159,7 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
         "output_path": str(out),
         "contract_version": export_contract.CONTRACT_VERSION,
         "result_id": result["provenance"]["result_id"],
+        **({"contrast_id": result["contrast_id"]} if engine_result else {}),
         "group_a": result["a"],
         "group_b": result["b"],
         "n_features_total": n_total,
@@ -225,11 +232,21 @@ def _effect_size_lines(result: dict) -> list[str]:
     後から言えない。v1 の結果（この欄を持たない）には何も足さない。
     """
     definition = result.get("effect_size_definition")
-    return [] if not definition else [f"# effect_size_definition = {definition}"]
+    if not isinstance(definition, str) or not definition:
+        # 統計エンジンの結果は {name, description} の dict で、`stats_meta_lines` が名前だけを書く
+        # （同じキーを 2 回書かない）。
+        return []
+    return [f"# effect_size_definition = {definition}"]
+
+
+def _engine_preprocess(ds, record: dict) -> dict | str:
+    """エンジンの結果の前処理条件（行列の登録にある前処理の設定）。無ければ不明と明示する。"""
+    entry = get_matrix(ds, record["matrix_id"])
+    return dict(entry["config"]) if entry else f"unknown（行列 {record['matrix_id']} が登録に無い）"
 
 
 def _meta_lines(ds, result, rows, n_total, n_unannotated,
-                *, curation_line=None) -> list[str]:
+                *, curation_line=None, preprocess=None) -> list[str]:
     prov = result["provenance"]
     return export_contract.build_meta(
         group_a=result["a"], n_a=result["n_a"],
@@ -253,7 +270,9 @@ def _meta_lines(ds, result, rows, n_total, n_unannotated,
             *_effect_size_lines(result),
             *([curation_line] if curation_line else []),
         ],
-        preprocess_line=f"# preprocess = {_preprocess_parameters(ds, result)}",
+        preprocess_line=f"# preprocess = "
+                        f"{preprocess if preprocess is not None else _preprocess_parameters(ds, result)}",
+        stats_lines=export_contract.stats_meta_lines(result),
     )
 
 

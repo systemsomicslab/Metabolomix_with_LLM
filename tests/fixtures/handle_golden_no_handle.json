@@ -186,7 +186,7 @@
    "source": null
   },
   "notes": [
-   "差次的結果（2 群比較）が 1 件も無いので統計を付けていない（dataset_differential を実行すると付く）。"
+   "差次的結果（2 群比較）が 1 件も無いので統計を付けていない（dataset_compare を実行すると付く）。"
   ],
   "results": [],
   "stats": "",

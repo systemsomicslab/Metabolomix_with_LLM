@@ -1,6 +1,6 @@
 """DatasetState に対する解析 MCP ツール。
 
-load_dataset → dataset_preprocess → dataset_differential
+load_dataset → dataset_preprocess → dataset_compare
 → dataset_export_differential の順に実行する（PCA の `dataset_pca` は `stats_tools`）。解析フォルダも mzTab-M も
 `load_dataset` が同じ DatasetState にするので、同じ入力からは同じ数字が出る。dataset_feature_search は読み取り専用で、特徴の検索・目的の物質の
 判定に差次的結果の統計を添えて返す（判定の純ロジックは analysis/feature_search.py）。
@@ -39,7 +39,7 @@ __all__ = [
 _RECOVERY_TOOLS = {
     "dataset": ["load_dataset"],
     "dataset_preprocessed": ["dataset_preprocess"],
-    "dataset_differential_result": ["dataset_differential"],
+    "dataset_compare_result": ["dataset_compare"],
     # v2 の解析行列は pipeline（preprocess / qc_processed）が作る。単体ツールの
     # dataset_build_matrix でも作れるが、そちらは binding と証拠を持たない分
     # できることが狭い（内部標準比は作れず、検出率filterは評価不能になる）。
@@ -122,10 +122,11 @@ def dataset_differential(
 def dataset_export_differential(output_path: str,
                                 result_id: str | None = None,
                                 apply_curation: bool = True,
-                                dataset_handle: str | None = None) -> str:
+                                dataset_handle: str | None = None,
+                                contrast_id: str | None = None) -> str:
     """指定した差次的結果を InChIKey 付きの 1 ファイルへ書き出す。
 
-    先に dataset_preprocess → dataset_differential を実行しておくこと。
+    先に dataset_preprocess → dataset_compare を実行しておくこと。
     出力は差次的エクスポートの契約（`analysis/export_contract.py`。15 列 + contract_version
     メタ行）に従うので、下流のパスウェイ解析にそのまま渡せる。
 
@@ -149,6 +150,12 @@ def dataset_export_differential(output_path: str,
     書く（空欄を「該当なし」と読み違えさせない）。メタ行には result_id と
     preprocess_id も入るので、あとから「どの計算の出力か」を辿れる。
 
+    contrast_id: `dataset_compare` の結果が対比を複数持つときに書き出す対比の ID（`T_vs_C` など）。
+        対比が 1 つなら省略できる。複数で省くか未知の ID なら `CONTRAST_REQUIRED`、交互作用の対比は
+        2 群の形にならないので `CONTRAST_NOT_TWO_GROUP`（どちらも details に候補）。
+        統計エンジンの結果には、15 列の後ろ（`msi_note` の後）に検定・判定規則・単位などのメタ行が
+        付く（列と契約の版は同じ。`mean_a` / `mean_b` は前処理後の線形値の算術平均）。
+
     dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
@@ -162,10 +169,10 @@ def dataset_export_differential(output_path: str,
     last = ds.last_differential
     if result_id is not None:
         last = (ds.results or {}).get(result_id)
-    if not last or last.get("kind") != "two_group":
+    if not last or last.get("kind") not in ("two_group", "compare"):
         return _missing(
-            "dataset_differential_result",
-            "先に dataset_preprocess → dataset_differential（2群）を実行してください。"
+            "dataset_compare_result",
+            "先に dataset_preprocess → dataset_compare を実行してください。"
             if result_id is None else
             f"result_id={result_id} の 2 群比較の結果がありません。")
 
@@ -192,11 +199,12 @@ def dataset_export_differential(output_path: str,
             curation = {"state": state, "flag_set": flag_set}
 
     try:
-        info = export_dataset_result(ds, last, Path(output_path), curation=curation)
+        info = export_dataset_result(ds, last, Path(output_path), curation=curation,
+                                     contrast_id=contrast_id)
     except DomainError as exc:
         if exc.code in ("STALE_ANALYSIS_RESULT", "ANALYSIS_RESULT_NOT_FOUND"):
             # 再計算すれば直る。どのツールを呼べばよいかを機械可読に返す。
-            return _missing("dataset_differential_result", exc.message)
+            return _missing("dataset_compare_result", exc.message)
         return mztab_error(exc.code, exc.message, exc.details or None)
 
     curation_stats = info.pop("curation_stats", None)
@@ -540,6 +548,7 @@ def dataset_feature_search(
     ppm_offset: dict | None = None,
     sort: str = "mz",
     dataset_handle: str | None = None,
+    contrast_id: str | None = None,
 ) -> str:
     """DatasetState の特徴を探し、目的の物質に当たる特徴を規則で判定する（読み取り専用）。
 
@@ -576,9 +585,12 @@ def dataset_feature_search(
     4 桁に）より前の値から作るので、返された `rule.targets` から計算し直すことはできない
     ——照合は `rule_hash` の値どうしで行う。
 
-    result_ids: 統計を付ける 2 群比較（`dataset_differential`）の結果。省略時は今も有効な
-        2 群比較の全部（古いものは使わず `notes` に挙げる）。名指しした ID が無い・古いときは
+    result_ids: 統計を付ける 2 群比較（`dataset_compare` の結果の対比、v1 の 2 群の結果）。省略時は
+        今も有効な 2 群比較の全部（古いものは使わず `notes` に挙げる）。`dataset_compare` の結果は対比ごとに
+        1 つの比較として数え、ID は対比が 1 つなら `result_id`、複数なら `result_id#contrast_id`
+        （交互作用の対比は 2 群の形にならないので使わない）。名指しした ID が無い・古いときは
         `missing_state`。差次的結果が 1 件も無ければ統計なしで返す。
+    contrast_id: `dataset_compare` の結果から使う対比を 1 つに絞る（その対比が無い結果は飛ばす）。
     max_results: 窓検索の行数・目標ごとの候補数の上限（既定 20）。打ち切りは `notes` に書く。
     sort: 窓検索の並び（`mz` 既定 / `intensity`）。`targets` とは併用できない（`DATASET_BAD_REQUEST`。
         目標照合は規則の順で並べる）。
@@ -729,24 +741,26 @@ def dataset_feature_search(
 
     if result_ids is not None:
         chosen = feature_search.select_results(ds, list(dict.fromkeys(result_ids)),
-                                               dataset_hash=dataset_hash)
+                                               dataset_hash=dataset_hash,
+                                               contrast_id=contrast_id)
         if chosen["missing"] or chosen["stale"]:
             # 名指しの結果を黙って落とすと、呼び出し側は統計が付いたつもりで読む
             return _missing(
-                "dataset_differential_result",
+                "dataset_compare_result",
                 "result_ids に指定した差次的結果が使えません"
                 f"（無い・2 群比較でない: {chosen['missing']} / 古い: {chosen['stale']}）。"
-                "dataset_differential で計算し直すか、result_ids を省略して今も有効な結果だけを"
+                "dataset_compare で計算し直すか、result_ids を省略して今も有効な結果だけを"
                 "使ってください。")
     else:
-        chosen = feature_search.select_results(ds, None, dataset_hash=dataset_hash)
+        chosen = feature_search.select_results(ds, None, dataset_hash=dataset_hash,
+                                               contrast_id=contrast_id)
         if chosen["stale"]:
             notes.append("古い差次的結果（前処理・群の訂正前）は統計に使っていない: "
                          + ", ".join(chosen["stale"]))
     results = chosen["results"]
     if not results:
         notes.append("差次的結果（2 群比較）が 1 件も無いので統計を付けていない"
-                     "（dataset_differential を実行すると付く）。")
+                     "（dataset_compare を実行すると付く）。")
 
     merge_block: dict = {"enabled": merge_split}
     unmerged = None
@@ -829,8 +843,15 @@ def dataset_feature_search(
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True), structured_output=False)
 def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curation: bool = True,
-                                   dataset_handle: str | None = None) -> str:
+                                   dataset_handle: str | None = None,
+                                   contrast_id: str | None = None) -> str:
     """指定した 2 群結果を根拠バンドル v3（samples・intensities・adduct・comparison.polarity）へ出力する。
+
+    `dataset_compare` の結果（`result_id`）は `contrast_id` で対比を 1 つ選ぶ（対比が 1 つなら省略可。
+    複数で省くか未知の ID なら `CONTRAST_REQUIRED`、交互作用は `CONTRAST_NOT_TWO_GROUP`）。
+    `comparison.method` は実際の検定名（`moderated_t` など。v1 の結果は `Welch`）、`comparison.statistics`
+    に検定・CI 水準・判定規則・BH の母集団・単位。`intensities.tsv` は結果が読んだ行列の線形値
+    （正規化の後・log2 の前、補完なし＝`pre_imputation`）。
 
     spectrum_links は同じアラインメントの `.dcl` へ ID（SMF_ID == AlignmentID == `.dcl` の番号）で
     結び、m/z・RT は検証にだけ使う。`.arf2` / `.dcl` はハンドルならそのハンドルのもの、対話の
@@ -850,7 +871,7 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curati
     ds = holder.dataset
     result = (getattr(ds,'results',None) or {}).get(result_id) if ds is not None else None
     if result is None:
-        return _missing('dataset_differential_result','指定した2群結果がありません。先にdataset_differentialを実行してください。')
+        return _missing('dataset_compare_result','指定した2群結果がありません。先にdataset_compareを実行してください。')
     try:
         curation = None
         lookup = curation_apply.arf2_lookup_kwargs(ds)
@@ -868,8 +889,10 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curati
             arf2_path, dcl_path = _alignment_files(ds, None)
         return json_payload(export_dataset_evidence(ds,result,Path(output_dir),curation=curation,
                                                     polarity=polarity,arf2_path=arf2_path,
-                                                    dcl_path=dcl_path))
+                                                    dcl_path=dcl_path,contrast_id=contrast_id))
     except DomainError as exc:
+        if exc.code == 'STATS_MATRIX_MISSING':
+            return _missing('dataset_compare_result',exc.message+' dataset_compareを実行し直してください。')
         return mztab_error(exc.code,exc.message,exc.details or None)
     except (ValueError,OSError,FlagFileError) as exc:
         return mztab_error('EVIDENCE_EXPORT_FAILED',str(exc))

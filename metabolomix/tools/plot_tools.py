@@ -55,7 +55,7 @@ _ITEM_ARGS = ("items", "groups", "low_reliability_samples", "standard_samples", 
 
 #: kind ごとの引数。ここに無い引数が渡されたら、どの kind の引数かを添えて拒む。
 _KIND_ARGS: dict[str, tuple[str, ...]] = {
-    "volcano": (),
+    "volcano": ("contrast_id",),
     "pca": ("color_by",),
     "loadings": ("pcs", "top_n", "value"),
     "group_intensity": _ITEM_ARGS + ("detection_limit",),
@@ -84,6 +84,7 @@ def _bad(message: str, **details) -> DomainError:
 @dataclass
 class _Request:
     result_id: str | None = None
+    contrast_id: str | None = None
     title: str | None = None
     color_by: str | None = None
     pcs: list[int] | None = None
@@ -130,12 +131,12 @@ def _pick_result(ds, family: str, result_id: str | None, *, also_kinds: tuple = 
     無ければ作り直すツールを案内する。`also_kinds` は `result_id` で名指しされたときに family のほかに
     受ける来歴の kind（loadings が `species_pca` の結果を受ける）。
     """
-    tool = "dataset_pca" if family == "pca" else "dataset_differential"
+    tool = "dataset_pca" if family == "pca" else "dataset_compare"
     if result_id is None:
         last = ds.last_pca if family == "pca" else ds.last_differential
         if not last:
             what = "PCA" if family == "pca" else "2 群の差次的解析"
-            raise _Missing(f"{family}_result", [tool],
+            raise _Missing("pca_result" if family == "pca" else "dataset_compare_result", [tool],
                            f"直近の{what}の結果がありません。先に {tool} を実行してください"
                            "（前処理・除外・群の変更で古くなった結果は捨てられます）。")
         result_state.assert_current(ds, last)
@@ -144,7 +145,7 @@ def _pick_result(ds, family: str, result_id: str | None, *, also_kinds: tuple = 
     if result is None:
         raise _bad(f"result_id={result_id} の結果がありません。{tool} の戻り値の result_id を渡すか、"
                    "省いて直近の結果を使ってください。", result_id=result_id)
-    accepted = (family, *also_kinds, *(("stat_pca",) if family == "pca" else ()))
+    accepted = (family, *also_kinds, *(("stat_pca",) if family == "pca" else ("compare",)))
     if (result.get("provenance") or {}).get("kind") not in accepted:
         raise _bad(f"result_id={result_id} は{'PCA' if family == 'pca' else '差次的解析'}の結果ではありません"
                    f"（{tool} の result_id を渡してください）。", result_id=result_id)
@@ -159,7 +160,13 @@ def _result_id(result: dict) -> str | None:
 # ---------- volcano / pca / loadings ----------
 
 def _volcano(ds, req: _Request) -> dict:
-    result = _pick_result(ds, "differential", req.result_id)
+    record = _pick_result(ds, "differential", req.result_id)
+    # 統計エンジンの結果は対比 1 つを 2 群の形に読む（複数の対比で contrast_id が無ければ CONTRAST_REQUIRED）。
+    result = stats_results.as_two_group(record, req.contrast_id)
+    if req.contrast_id is not None and record.get("kind") != "compare":
+        raise _bad("contrast_id は dataset_compare の結果の対比を選ぶ引数です"
+                   "（この結果は v1 の 2 群の結果で、対比を持ちません）。",
+                   result_id=_result_id(record), contrast_id=req.contrast_id)
     if result.get("kind") != "two_group" or not result.get("volcano"):
         raise _bad("この差次的結果は 2 群比較の volcano 点列を持っていません（volcano は 2 群比較だけ）。",
                    result_id=_result_id(result))
@@ -171,7 +178,7 @@ def _volcano(ds, req: _Request) -> dict:
                f" — 全 {len(result['volcano'])} 特徴のうち up={up} / down={down} / ns={len(points) - up - down}"
                f"（検定不能 {len(result['volcano']) - len(points)} 件は非描画）。"
                f" しきい値 q<{result.get('q_threshold')}, |log2FC|>={result.get('log2fc_threshold')}。"
-               " 個々の特徴量名と統計値は dataset_differential の結果を参照。")
+               " 個々の特徴量名と統計値は dataset_compare の結果を参照。")
     return _record("volcano", payload, title=req.title, caption=caption,
                    result_id=_result_id(result), result=result)
 
@@ -471,6 +478,7 @@ def dataset_plot(
     kind: str,
     dataset_handle: str | None = None,
     result_id: str | None = None,
+    contrast_id: str | None = None,
     output: str | None = None,
     title: str | None = None,
     color_by: str | None = None,
@@ -498,7 +506,8 @@ def dataset_plot(
     """データセットの図を描く — 既定は PNG 画像と 1 行の説明。ファイルは書かない（保存は `save_figure`）。
 
     kind と、その kind だけの引数（別の kind の引数を渡すと DATASET_BAD_REQUEST）:
-      - `volcano`: 直近の 2 群の差次的結果（`dataset_differential`）。`result_id` で名指しもできる。
+      - `volcano`: 直近の 2 群の差次的結果（`dataset_compare`）。`result_id` で名指しもできる。対比が複数の結果は
+        `contrast_id`（`T_vs_C` など）で 1 つ選ぶ（省くと `CONTRAST_REQUIRED`、交互作用は `CONTRAST_NOT_TWO_GROUP`）。
       - `pca`: 直近の `dataset_pca`（`result_id` で名指し）。`color_by="group"`（既定）/ `"batch"` / `"role"`。
       - `loadings`: 同じ PCA のローディング（`result_id` に `species_pca` の結果も渡せる。横棒、色は特徴のクラス＝`ontology`）。`pcs`（既定 [1, 2]、
         1〜3 個）、`top_n`（主成分ごとに正負の上位 N。既定 15、0 は全特徴量で 60 まで）、
@@ -512,7 +521,7 @@ def dataset_plot(
         分けた候補名に完全一致〕・特徴 ID。`"PE+EtherPE"` のように `+` で合算。当たらない項目は N.D.、1〜30 件）
         ごとに、群（`groups` = 試料名・Class ID・因子のトークン。1 群以上。QC・ブランクは `qc` / `blank` を
         書いたときだけ入る）の試料別の強度合計を 1 パネルに並べる。縦軸は log10 で全パネル共通、群は log10 の
-        平均 ± SD。検定はしない（`dataset_differential`）。`detection_limit` は検出下限の破線（省略時は
+        平均 ± SD。検定はしない（`dataset_compare`）。`detection_limit` は検出下限の破線（省略時は
         param ファイルの Minimum peak height）。
       - `species`: `items` を分子種（特徴）に展開し、1 分子種 1 パネル（1 回 40 まで）。`value="share"`（既定。
         試料ごとの 値 ÷ 分母の合計 × 100。棒 = 群平均、ひげ = SD）/ `"intensity"`（log10 の平均 ± SD。payload の `value` は形式を保つため `"height"`）。
@@ -543,7 +552,7 @@ def dataset_plot(
     作った図の記録は `ds.figures[kind]` に置き（kind ごとに最後の 1 つ）、`save_figure(kind=...)` が描く。
     """
     request = _Request(
-        result_id=result_id, title=title, color_by=color_by, pcs=pcs, top_n=top_n, value=value,
+        result_id=result_id, contrast_id=contrast_id, title=title, color_by=color_by, pcs=pcs, top_n=top_n, value=value,
         feature_id=feature_id, file_ids=file_ids, file_id=file_id, names=names, ontologies=ontologies,
         items=items, groups=groups, low_reliability_samples=low_reliability_samples,
         standard_samples=standard_samples, apply_curation=apply_curation,
@@ -551,7 +560,7 @@ def dataset_plot(
         share_basis=share_basis, require_msms=require_msms, normalize=normalize,
         log_transform=log_transform, orient_by=orient_by)
     request.given = {name for name, given in (
-        ("result_id", result_id), ("color_by", color_by), ("pcs", pcs), ("top_n", top_n),
+        ("result_id", result_id), ("contrast_id", contrast_id), ("color_by", color_by), ("pcs", pcs), ("top_n", top_n),
         ("value", value), ("feature_id", feature_id), ("file_ids", file_ids),
         ("file_id", file_id), ("names", names), ("ontologies", ontologies), ("items", items),
         ("groups", groups), ("low_reliability_samples", low_reliability_samples),

@@ -57,7 +57,8 @@ def is_significant(*, q, log2fc, q_threshold, log2fc_threshold) -> bool:
 def build_meta(*, group_a, n_a, group_b, n_b,
                q_threshold, log2fc_threshold, log_transform,
                n_features_total, n_with_inchikey, n_unannotated,
-               msi_note, source_lines=(), preprocess_line=None) -> list[str]:
+               msi_note, source_lines=(), preprocess_line=None,
+               stats_lines=()) -> list[str]:
     """メタ行ブロックを契約の順序で組む。
 
     行の**順序も契約の一部**なので、経路ごとに固有の行（source 系・preprocess）は
@@ -73,6 +74,11 @@ def build_meta(*, group_a, n_a, group_b, n_b,
         8. preprocess_line      ← 経路固有（省略可）
         9. n_features_total / n_with_inchikey / n_unannotated
        10. msi_note             ← 文面が経路で違う（.arf2 由来 か mzTab-M か）
+       11. *stats_lines         ← 統計エンジンの結果のときだけ（`stats_meta_lines`）。**末尾に足す**
+
+    11 は契約の版を上げずに足した行で、`msi_note` の後ろにだけ置く（既存の行の位置は動かさない）。
+    下流（massbank-context の `parse_differential`）はタブ区切りの `# key = value` を全部拾い、
+    知らないキーは読み飛ばす。既存のキーと同じ名前は使わない（`test_export_contract` が固定）。
 
     この順序は `dataset_export_differential` の現行出力と一致させてある。
     変えると既存ファイルとの差分が出るので、CONTRACT_VERSION を上げずに
@@ -95,8 +101,42 @@ def build_meta(*, group_a, n_a, group_b, n_b,
         f"\tn_with_inchikey = {n_with_inchikey}"
         f"\tn_unannotated = {n_unannotated}",
         msi_note,
+        *stats_lines,
     ]
     return lines
+
+
+#: `statistics.subject_source`（`stats/preprocess.py` `_collapse`）→ メタ行の `unit`。
+#: `subject_id`＝全試料が被験者 ID を持ち技術反復を 1 個体にまとめた（比較の単位は被験者）、
+#: `injection`＝被験者 ID が無い・まとめを切った（単位は注入）、`mixed`＝混在（そのまま書く）。
+_UNIT_OF_SUBJECT_SOURCE = {"subject_id": "subject", "injection": "injection", "mixed": "mixed"}
+
+MEAN_DEFINITION = "linear arithmetic mean over units after preprocessing"
+
+
+def stats_meta_lines(result: dict) -> list[str]:
+    """統計エンジンの結果（`as_two_group` の出力）のメタ行。v1 の結果（`statistics` が無い）は [] 。
+
+    `msi_note` の後に足す行（契約の版は据え置き）。キーは既存のメタ行と重ならない
+    （`effect_size_definition` は pipeline v2 の文字列版と同名なので、エンジンの結果ではこちらだけが書く）。
+    `mean_a` / `mean_b` は個体（単位）ごとの前処理後の線形値の算術平均（`mean_definition`）、
+    `n_a` / `n_b` は注入の数のまま、`n_units_a` / `n_units_b` が比較に入った単位の数。
+    """
+    stats = result.get("statistics")
+    if not stats:
+        return []
+    rule = stats["verdict_rule"]
+    bh = stats["bh_population"]
+    unit = _UNIT_OF_SUBJECT_SOURCE.get(stats.get("subject_source"), str(stats.get("subject_source")))
+    return [
+        f"# test = {stats['test']}	effect_size_definition = {result['effect_size_definition']['name']}"
+        f"	ci_level = {stats['ci_level']}",
+        f"# verdict_q_threshold = {rule['q_threshold']}	equivalence_fc = {rule['equivalence_fc']}"
+        f"	bh_population = {bh['name']}	bh_n = {bh['n']}	q_interpretation = {bh['q_interpretation']}",
+        f"# unit = {unit}	n_units_a = {stats['n_units_a']}	n_units_b = {stats['n_units_b']}",
+        f"# mean_definition = {MEAN_DEFINITION}",
+        f"# matrix_id = {result['matrix_id']}	rule_hash = {result['rule_hash']}",
+    ]
 
 
 def format_row(row: dict) -> str:
