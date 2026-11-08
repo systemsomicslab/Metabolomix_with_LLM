@@ -78,7 +78,7 @@ def test_preprocess_needs_input_for_normalized_with_qc(ds):
     assert "error" not in out
     assert body["field"] == "preprocess.drift.mode"
     assert body["argument"] == "drift_mode"
-    assert body["retry_tools"] == ["dataset_preprocess", "dataset_compare", "dataset_pca"]
+    assert body["retry_tools"] == ["dataset_preprocess"]
     assert {o["value"] for o in body["options"]} == {"on", "off"}
     assert not ds.stat_matrices                                   # 行列は作らない
 

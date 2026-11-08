@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from metabolomix.analysis import stats_results
 from metabolomix.analysis.dataset_exclusions import apply_exclusions
+from metabolomix.analysis.stats import spec_v2
 from metabolomix.analysis.stats.spec_v2 import normalize_spec_v2, run_spec_v2
 from metabolomix.core import session_state
 from metabolomix.tools import stats_tools
@@ -246,7 +248,7 @@ def test_compare_needs_input_then_retry(ds):
     assert "error" not in out
     assert body["field"] == "preprocess.drift.mode" and body["argument"] == "drift_mode"
     assert "dataset_preprocess" in body["reason"] and "matrix_id" in body["reason"]
-    assert "dataset_preprocess" in body["retry_tools"]
+    assert body["retry_tools"] == ["dataset_preprocess"]
     assert not ds.stat_matrices
     mx = _pre(drift_mode="off")["matrix_id"]
     ok = _cmp(reference_group="C", test_group="T", matrix_id=mx)
@@ -262,9 +264,7 @@ def test_compare_payload_strict_json(ds):
     assert out["prior"]["df_prior"] == "inf"                          # 分散が揃うと無限大
     assert len(text) < 6000
     # 記録も厳密な JSON
-    path = ds.analysis_dir and (
-        __import__("pathlib").Path(ds.analysis_dir) / "reports" / "stats"
-        / f"{out['record']['record_id']}.json")
+    path = Path(ds.analysis_dir) / "reports" / "stats" / f"{out['record']['record_id']}.json"
     _strict(path.read_text(encoding="utf-8"))
 
 
@@ -358,7 +358,6 @@ def test_compare_writes_record_with_parent_matrix_record(ds):
     out = _cmp(reference_group="C", test_group="T", matrix_id=pre["matrix_id"])
     rec_info = out["record"]
     assert rec_info["written"] is True
-    from pathlib import Path
     path = Path(ds.analysis_dir) / "reports" / "stats" / f"{rec_info['record_id']}.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["step"] == "compare"
@@ -372,7 +371,6 @@ def test_compare_writes_record_with_parent_matrix_record(ds):
 
 def test_compare_implicit_preprocess_chain(ds):
     out = _cmp(reference_group="C", test_group="T")
-    from pathlib import Path
     stats_dir = Path(ds.analysis_dir) / "reports" / "stats"
     cmp_rec = json.loads((stats_dir / f"{out['record']['record_id']}.json").read_text(encoding="utf-8"))
     pre_id = out["record"]["preprocess_record"]["record_id"]
@@ -401,3 +399,83 @@ def test_handle_isolation(tmp_path):
     assert a.last_differential is not None and b.last_differential is None
     assert not b.stat_matrices
 
+
+
+# --- 修正ラウンド 1 ----------------------------------------------------------------------
+
+def test_failed_implicit_call_keeps_matrix_and_reports_its_id(tmp_path):
+    state = _ds()
+    for row in state.sample_metadata_rows:
+        if row["role"] == "sample":
+            row["batch"] = "B1" if row["group"] == "C" else "B2"
+    _install(state, tmp_path)
+    out = _cmp(reference_group="C", test_group="T")
+    assert out["error"]["code"] == "STATISTIC_CONFOUNDED"
+    mx = out["error"]["details"]["matrix_id"]
+    assert mx in state.stat_matrices
+    assert _cmp(reference_group="C", test_group="T", matrix_id=mx,
+                allow_confounded=True)["status"] == "success"
+
+
+def test_n_q_below_counts_q_equal_to_threshold():
+    engine = {"verdict_rule": {"q_threshold": 0.05},
+              "presence": {"detection_available": True, "bh_n_by_contrast": {"c": 3}},
+              "rows": [{"contrast_id": "c", "reference": "a", "test": "b", "verdict": "changed",
+                        "status": "tested", "log2fc": 1.0, "presence_q": q}
+                       for q in (0.05, 0.0501, 0.01)],
+              "omnibus": [{"f_p": 0.1, "f_q": 0.05}, {"f_p": 0.1, "f_q": 0.06}]}
+    spec = {"comparisons": [{"id": "c"}]}
+    assert stats_tools._contrast_summaries(engine, spec, 1.0)[0]["presence"]["n_q_below"] == 2
+    assert stats_tools._omnibus_summary(engine)["n_q_below"] == 1
+
+
+def test_top_n_capped_and_reported_rejected(ds):
+    mx = _pre()["matrix_id"]
+    assert _cmp(reference_group="C", test_group="T", matrix_id=mx, top_n=50)["status"] == "success"
+    big = _cmp(reference_group="C", test_group="T", matrix_id=mx, top_n=51)
+    assert big["error"]["code"] == "DATASET_BAD_REQUEST" and "result_id" in big["error"]["message"]
+    rep = _cmp(reference_group="C", test_group="T", matrix_id=mx, bh_population="reported")
+    assert rep["error"]["code"] == "DATASET_BAD_REQUEST"
+
+
+def test_japanese_group_names_give_unique_stable_ids(tmp_path):
+    state = _ds(groups=("C", "T", "U"))
+    names = {"C": "対照", "T": "高用量", "U": "低用量"}
+    for row in state.sample_metadata_rows:
+        if row["role"] == "sample":
+            row["group"] = names[row["group"]]
+    _install(state, tmp_path)
+    mx = _pre()["matrix_id"]
+    out = _cmp(groups=["対照", "高用量", "低用量"], matrix_id=mx)
+    ids = [c["contrast_id"] for c in out["contrasts"]]
+    assert ids == ["g1_vs_g0", "g2_vs_g0"]
+    assert [c["test"] for c in out["contrasts"]] == ["高用量", "低用量"]
+    assert [c["reference"] for c in out["contrasts"]] == ["対照", "対照"]
+    again = _cmp(groups=["対照", "高用量", "低用量"], matrix_id=mx)
+    assert [c["contrast_id"] for c in again["contrasts"]] == ids
+    two = _cmp(reference_group="対照", test_group="高用量", matrix_id=mx)
+    assert two["contrasts"][0]["contrast_id"] == "g1_vs_g0"
+
+
+def test_matrix_id_path_does_not_rerun_preprocess(ds, monkeypatch):
+    mx = _pre()["matrix_id"]
+
+    def boom(*a, **k):
+        raise AssertionError("preprocess must not run")
+    monkeypatch.setattr(spec_v2, "preprocess", boom)               # spec_v2 が呼ぶ場所
+    monkeypatch.setattr(stats_tools.stats_preprocess, "preprocess", boom)
+    assert _cmp(reference_group="C", test_group="T", matrix_id=mx)["status"] == "success"
+
+
+def test_matrix_id_spec_reproduces_numbers(tmp_path):
+    state = _install(_ds(), tmp_path)
+    apply_exclusions(state, samples=["C0_r0"], features=["f9"], mode="add", reason="bad")
+    mx = _pre(group_levels=["C", "T"], normalize="tic")["matrix_id"]
+    out = _cmp(reference_group="C", test_group="T", matrix_id=mx)
+    rec = state.last_differential
+    rerun = run_spec_v2(normalize_spec_v2(json.loads(json.dumps(rec["spec"]))), state)
+    assert rerun["matrix_id"] == mx == out["matrix_id"] and rerun["rule_hash"] == rec["rule_hash"]
+    old = {(r["feature_id"], r["contrast_id"]): (r["verdict"], r["q"]) for r in rec["engine"]["rows"]}
+    new = {(r["feature_id"], r["contrast_id"]): (r["verdict"], r["q"])
+           for r in rerun["analyses"][0]["result"]["rows"]}
+    assert old == new

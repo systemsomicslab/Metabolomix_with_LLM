@@ -28,8 +28,9 @@ from metabolomix.tools._holder import resolve_holder
 
 __all__ = ["dataset_preprocess", "dataset_compare"]
 
-#: 答えを入れて呼び直せるツール（`preprocess.drift.mode` の問いを受ける）。
-_RETRY_TOOLS = ["dataset_preprocess", "dataset_compare", "dataset_pca"]
+#: `argument`（drift_mode）を受けて呼び直せるツール（`needs_input` の retry_tools の意味）。
+#: 受けるのは dataset_preprocess だけ。比較・PCA は返った matrix_id を渡して呼び直す。
+_RETRY_TOOLS = ["dataset_preprocess"]
 #: 問いの欄 → 呼び直すときの引数名。
 _DRIFT_ARGUMENT = "drift_mode"
 #: details に載せる一覧の上限（長いものは切る）。
@@ -286,6 +287,8 @@ def dataset_preprocess(
 #: 戻り値・記録の警告で、長い一覧を切るキー（エンジンの注意が持つ一覧）。
 _WARNING_LIST_KEYS = ("samples", "sample_ids", "unit_ids", "examples", "subjects")
 _TOP_COLUMNS = ["contrast_id", "feature_id", "name", "log2fc", "ci_low", "ci_high", "q", "verdict"]
+#: top の件数の上限（戻り値を肥大させない）。
+_TOP_N_MAX = 50
 _ID_UNSAFE = re.compile(r"[^A-Za-z0-9_.\-]")
 
 
@@ -293,9 +296,17 @@ def _bad_request(message: str, **details) -> DomainError:
     return DomainError("DATASET_BAD_REQUEST", message, details or None)
 
 
-def _contrast_id(test: str, reference: str, taken: set[str]) -> str:
-    """群名から対比 ID を作る（spec の id は英数字と `_.-` だけ。重なれば番号を足す）。"""
-    base = _ID_UNSAFE.sub("_", f"{test}_vs_{reference}")
+def _id_part(name: str, position: int) -> str:
+    """対比 ID の群の部分。英数字が 1 つも残らない名前（日本語など）は群の並びの位置（`g<n>`）にする。"""
+    part = _ID_UNSAFE.sub("_", name)
+    return part if part.strip("_") else f"g{position}"
+
+
+def _contrast_id(test: str, reference: str, taken: set[str], *, test_pos: int, ref_pos: int) -> str:
+    """群名から対比 ID を作る（spec の id は英数字と `_.-` だけ。重なれば番号を足す）。
+    名前が ID にできない群は並びの位置で呼ぶ（呼び出しをまたいで安定。実名は対比の要約の
+    reference / test に残る）。"""
+    base = f"{_id_part(test, test_pos)}_vs_{_id_part(reference, ref_pos)}"
     cid, n = base, 2
     while cid in taken:
         cid, n = f"{base}_{n}", n + 1
@@ -334,8 +345,8 @@ def _design_and_comparisons(reference_group, test_group, groups, comparisons, fa
     else:
         ref, tests = reference_group, [test_group]
     taken: set[str] = set()
-    return ["group"], [{"id": _contrast_id(t, ref, taken), "factor": "group",
-                        "reference": ref, "test": t} for t in tests]
+    return ["group"], [{"id": _contrast_id(t, ref, taken, test_pos=i, ref_pos=0), "factor": "group",
+                        "reference": ref, "test": t} for i, t in enumerate(tests, start=1)]
 
 
 def _is_number(text: str) -> bool:
@@ -428,7 +439,7 @@ def _contrast_summaries(engine: dict, spec: dict, log2fc_threshold: float) -> li
             "verdicts": verdicts, "large_changes": large,
             "presence": {"available": has_presence,
                          "n_q_below": (sum(1 for r in rows if r["presence_q"] is not None
-                                           and r["presence_q"] < q_thr) if has_presence else None)},
+                                           and r["presence_q"] <= q_thr) if has_presence else None)},
         })
     return out
 
@@ -439,7 +450,7 @@ def _omnibus_summary(engine: dict):
     q_thr = engine["verdict_rule"]["q_threshold"]
     tested = [o for o in engine["omnibus"] if o["f_p"] is not None]
     return {"n_tested": len(tested),
-            "n_q_below": sum(1 for o in tested if o["f_q"] is not None and o["f_q"] < q_thr)}
+            "n_q_below": sum(1 for o in tested if o["f_q"] is not None and o["f_q"] <= q_thr)}
 
 
 def _write_compare_record(holder, entry, record, spec, summary) -> dict:
@@ -501,10 +512,12 @@ def dataset_compare(
         dataset_preprocess で行列を作ってその ID を渡す）。古い・無い ID は missing_state。
         ID と group_levels / group_factors の併用は不可（群は行列が決めている）。
     method: "moderated_t"（既定）など（エンジンの検定）。effect_size: "log2_mean_difference"（既定）/
-        "arithmetic_mean_ratio"。bh_population: "matrix"（既定）/ "annotated" / "reported"。
+        "arithmetic_mean_ratio"。bh_population: "matrix"（既定）/ "annotated"（"reported" は報告した特徴の
+        一覧が要るので dataset_analysis_run の spec v2 だけで使える。ここでは DATASET_BAD_REQUEST）。
     q_threshold / equivalence_fc: 判定の q の閾値（既定 0.05）と同等とみなす倍率（既定 1.2）。
     allow_confounded: 群とバッチが完全交絡でも進める（既定は STATISTIC_CONFOUNDED で止める）。
-    top_n: 対比ごとに changed の上位（q の小さい順）を top に何件載せるか（既定 10）。
+    top_n: 対比ごとに changed の上位（q の小さい順）を top に何件載せるか（既定 10、上限 50。
+        全行は result_id・書き出しで取り出す）。
     dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。
     """
     holder = resolve_holder(dataset_handle)
@@ -514,9 +527,16 @@ def dataset_compare(
     if ds is None:
         return missing_state("dataset", ["load_dataset"],
                              "DatasetState がありません。先に load_dataset を実行してください。")
+    implicit_matrix = None
     try:
-        if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 0:
-            raise _bad_request("top_n は 0 以上の整数です。", top_n=top_n)
+        if isinstance(top_n, bool) or not isinstance(top_n, int) or not 0 <= top_n <= _TOP_N_MAX:
+            raise _bad_request(f"top_n は 0〜{_TOP_N_MAX} の整数です。全行は結果（result_id）に保持して"
+                               "あり、書き出し（dataset_export_differential）で取り出せます。",
+                               top_n=top_n)
+        if bh_population == "reported":
+            raise _bad_request('bh_population="reported" はこのツールでは使えません（報告した特徴の一覧を'
+                               "渡せない）。dataset_analysis_run の spec v2（reported_feature_ids）で"
+                               "指定してください。", bh_population=bh_population)
         if (isinstance(log2fc_threshold, bool) or not isinstance(log2fc_threshold, (int, float))
                 or not math.isfinite(log2fc_threshold) or log2fc_threshold < 0):
             raise _bad_request("log2fc_threshold は 0 以上の有限の数です。",
@@ -568,13 +588,17 @@ def dataset_compare(
             if entry is None:
                 entry, _summary, preprocess_record = _store_matrix(
                     holder, ds, study, prepared, preprocess, inputs)
+            implicit_matrix = prepared.matrix_id
         run = spec_v2.run_spec_v2(spec, study, prepared=prepared)
         try:
             record = stats_results.register_compare(ds, run, log2fc_threshold=log2fc_threshold,
                                                     units=prepared.units)
         except ValueError as exc:
-            raise _bad_request(str(exc)) from exc
+            raise DomainError("STUDY_DATA_INVALID", str(exc)) from exc
     except DomainError as exc:
+        if implicit_matrix is not None:           # 行列は登録済み。呼び直しにそのまま使える
+            exc = DomainError(exc.code, exc.message, {**(exc.details or {}),
+                                                      "matrix_id": implicit_matrix})
         return _domain_envelope(exc)
 
     engine = record["engine"]
