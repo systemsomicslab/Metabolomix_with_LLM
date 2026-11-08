@@ -15,8 +15,9 @@ from pathlib import Path
 
 from mcp.types import ToolAnnotations
 
-from metabolomix.analysis import export_contract
+from metabolomix.analysis import export_contract, stats_results
 from metabolomix.analysis.dataset_analysis import PreconditionError
+from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import missing_state, mztab_error
 from metabolomix.core.serialization import json_payload
@@ -87,7 +88,6 @@ def dataset_differential(
 
     from metabolomix.analysis.dataset_service import compare_dataset
 
-    from metabolomix.core.atomic_io import DomainError
 
     try:
         result = compare_dataset(
@@ -168,6 +168,10 @@ def dataset_export_differential(output_path: str,
 
     last = ds.last_differential
     if result_id is not None:
+        try:
+            result_id, contrast_id = stats_results.split_result_ref(result_id, contrast_id)
+        except DomainError as exc:
+            return mztab_error(exc.code, exc.message, exc.details or None)
         last = (ds.results or {}).get(result_id)
     if not last or last.get("kind") not in ("two_group", "compare"):
         return _missing(
@@ -177,7 +181,6 @@ def dataset_export_differential(output_path: str,
             f"result_id={result_id} の 2 群比較の結果がありません。")
 
     from metabolomix.analysis.dataset_export import export_dataset_result
-    from metabolomix.core.atomic_io import DomainError
     from metabolomix.curation import apply as curation_apply
     from metabolomix.curation.flags import FlagFileError, orphaned_warning
 
@@ -259,7 +262,6 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
         return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
 
     from metabolomix.analysis.dataset_service import apply_sample_manifest
-    from metabolomix.core.atomic_io import DomainError
 
     try:
         summary = apply_sample_manifest(ds, manifest_path)
@@ -330,7 +332,6 @@ def dataset_statistic(specification: dict, matrix_result_id: str,
             "matrix_result_id を指定してください。")
 
     from metabolomix.analysis.dataset_service import statistic_dataset
-    from metabolomix.core.atomic_io import DomainError
 
     try:
         result = statistic_dataset(ds, specification, matrix_result_id)
@@ -385,7 +386,6 @@ def dataset_build_matrix(recipe: dict, recipe_id: str = "default",
 
     from metabolomix.analysis.dataset_service import build_analysis_matrix
     from metabolomix.console.profile_schema import validate_matrix_recipe
-    from metabolomix.core.atomic_io import DomainError
 
     try:
         normalized = validate_matrix_recipe(recipe, recipe_id)
@@ -673,7 +673,6 @@ def dataset_feature_search(
     from metabolomix.analysis import feature_search
     from metabolomix.analysis.mass_accuracy import normalize_ppm_offset
     from metabolomix.analysis.result_state import dataset_fingerprint
-    from metabolomix.core.atomic_io import DomainError
 
     notes: list[str] = []
     payload: dict = {}
@@ -739,10 +738,13 @@ def dataset_feature_search(
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
 
+    try:
+        chosen = feature_search.select_results(
+            ds, None if result_ids is None else list(dict.fromkeys(result_ids)),
+            dataset_hash=dataset_hash, contrast_id=contrast_id)
+    except DomainError as exc:                    # 対比の指定の誤り（CONTRAST_* / DATASET_BAD_REQUEST）
+        return mztab_error(exc.code, exc.message, exc.details or None)
     if result_ids is not None:
-        chosen = feature_search.select_results(ds, list(dict.fromkeys(result_ids)),
-                                               dataset_hash=dataset_hash,
-                                               contrast_id=contrast_id)
         if chosen["missing"] or chosen["stale"]:
             # 名指しの結果を黙って落とすと、呼び出し側は統計が付いたつもりで読む
             return _missing(
@@ -752,8 +754,6 @@ def dataset_feature_search(
                 "dataset_compare で計算し直すか、result_ids を省略して今も有効な結果だけを"
                 "使ってください。")
     else:
-        chosen = feature_search.select_results(ds, None, dataset_hash=dataset_hash,
-                                               contrast_id=contrast_id)
         if chosen["stale"]:
             notes.append("古い差次的結果（前処理・群の訂正前）は統計に使っていない: "
                          + ", ".join(chosen["stale"]))
@@ -864,11 +864,14 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curati
     from metabolomix.analysis.evidence_export import export_dataset_evidence
     from metabolomix.curation import apply as curation_apply
     from metabolomix.curation.flags import FlagFileError
-    from metabolomix.core.atomic_io import DomainError
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
         return holder
     ds = holder.dataset
+    try:
+        result_id, contrast_id = stats_results.split_result_ref(result_id, contrast_id)
+    except DomainError as exc:
+        return mztab_error(exc.code, exc.message, exc.details or None)
     result = (getattr(ds,'results',None) or {}).get(result_id) if ds is not None else None
     if result is None:
         return _missing('dataset_compare_result','指定した2群結果がありません。先にdataset_compareを実行してください。')

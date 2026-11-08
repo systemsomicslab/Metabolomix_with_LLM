@@ -30,7 +30,7 @@ import numpy as np
 from metabolomix.analysis.dataset_analysis import included_sample_indices
 from metabolomix.analysis.feature_bindings import _normalize_adduct
 from metabolomix.analysis.result_state import is_current
-from metabolomix.analysis.stats_results import as_two_group, contrast_ids
+from metabolomix.analysis.stats_results import as_two_group, contrast_ids, split_result_ref
 from metabolomix.analysis.mass_accuracy import offset_for
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 from metabolomix.msdial.adducts import mz_from_neutral, parse_adduct
@@ -889,17 +889,16 @@ _ENGINE_SEPARATOR = "#"
 def _engine_views(record: dict, rid: str, contrast_id: str | None = None) -> list[tuple[str, dict]]:
     """`compare` の記録を 2 群の結果（`as_two_group`）に展開した ``[(id, 結果)]``。
 
-    交互作用の対比は 2 群の形にならないので**除外**する（`select_results` の ``missing`` にも
-    ``results`` にも入らない）。ID は対比が 1 つなら ``result_id``、複数なら ``result_id#contrast_id``。
+    ``contrast_id`` が無ければ交互作用を除く全対比。ID は対比が 1 つなら ``result_id``、複数なら
+    ``result_id#contrast_id``。``contrast_id`` があればその対比だけ（未知は `CONTRAST_REQUIRED`、
+    交互作用は `CONTRAST_NOT_TWO_GROUP`。どちらも `as_two_group` が候補つきで送出）。
     各結果の ``provenance.result_id`` はその ID に置き換える（`feature_stats` や `result_summaries` が
     これで結果を区別する）。元の記録は ``_source`` に ID だけ残す（割れの再検定が記録を引く）。
-    ``contrast_id`` を渡せば、その対比だけ。
     """
     ids = contrast_ids(record)
+    wanted = [contrast_id] if contrast_id is not None else contrast_ids(record, two_group_only=True)
     views = []
-    for cid in contrast_ids(record, two_group_only=True):
-        if contrast_id is not None and cid != contrast_id:
-            continue
+    for cid in wanted:
         view = as_two_group(record, cid)
         view_id = rid if len(ids) == 1 else f"{rid}{_ENGINE_SEPARATOR}{cid}"
         views.append((view_id, {**view, "provenance": {**record["provenance"], "result_id": view_id},
@@ -908,53 +907,80 @@ def _engine_views(record: dict, rid: str, contrast_id: str | None = None) -> lis
 
 
 def select_results(ds, result_ids: list[str] | None, *,
-                   dataset_hash: str | None = None, contrast_id: str | None = None) -> dict:
+                   dataset_hash: str | None = None, contrast_id: str | None = None,
+                   single: bool = False) -> dict:
     """統計を引く 2 群比較の結果を選ぶ。``{"results", "stale", "missing"}``。
 
     省略（None）なら ``ds.results`` のうち 2 群比較のすべて。名指しなら、その ID を引く。2 群比較は
     v1 の ``kind == "two_group"`` と、統計エンジンの ``compare`` の記録（対比ごとに `as_two_group` で
-    展開する。ID は対比が 1 つなら ``result_id``、複数なら ``result_id#contrast_id``。交互作用の対比は
-    除く）。``contrast_id`` を渡せば、``compare`` の記録はその対比だけを使う（その対比が無い記録は
-    飛ばす）。どちらも ``is_current`` でない結果は ``results`` に入れず ``stale`` に ID を挙げる
-    （古い統計を現在のデータの顔で返さない）。名指しの ID が無い、または 2 群比較でない結果
-    （v2 の ``dataset_statistic`` = ``kind == "welch"`` など。対比が複数の記録を ``result_id`` だけで
-    名指ししたとき、交互作用の対比）は ``missing``。
+    展開する。ID は対比が 1 つなら ``result_id``、複数なら ``result_id#contrast_id``。交互作用は除く）。
 
-    ``dataset_hash`` は計算済みの ``dataset_fingerprint(ds)``（任意）。引き継いだ結果ごとに
-    行列全体の hash を計算し直さないよう ``is_current`` へそのまま渡す。
+    対比の選び方:
+
+    - 名指しの ID は ``result_id`` か ``result_id#contrast_id``。``contrast_id`` 引数があれば ``result_id`` に
+      ``#contrast_id`` を付けたのと同じ（食い違えば `DATASET_BAD_REQUEST`）。
+    - 名指しした対比が無い・交互作用なら `CONTRAST_REQUIRED` / `CONTRAST_NOT_TWO_GROUP`（候補つき）。
+    - 省略（None）で ``contrast_id`` があれば、それを持つ ``compare`` の記録だけがその対比になる。どの記録も
+      持たなければ `CONTRAST_REQUIRED`（候補は全記録の対比）。
+    - ``single=True``（単一の対比が要る呼び出し）では、対比が複数の記録を ID だけで名指しすると
+      `CONTRAST_REQUIRED`。False なら全対比に展開する。
+
+    今も有効でない結果は ``results`` に入れず ``stale`` に名指しした ID を 1 回だけ挙げる。名指しの ID が無い、
+    または 2 群比較でない結果（v2 の ``dataset_statistic`` = ``kind == "welch"`` など）は ``missing``。
+
+    ``dataset_hash`` は計算済みの ``dataset_fingerprint(ds)``（任意）。
     """
     selected, stale, missing = [], [], []
-    candidates: list[tuple[str, dict, str | None]] = []       # (名指しの ID, 結果か記録, 展開後の ID)
+    done: set[str] = set()
     if result_ids is None:
+        records = [(rid, r) for rid, r in ds.results.items() if (r or {}).get("kind") == "compare"]
+        if contrast_id is not None and records and not any(
+                contrast_id in contrast_ids(r) for _, r in records):
+            all_ids = sorted({c for _, r in records for c in contrast_ids(r)})
+            raise DomainError("CONTRAST_REQUIRED",
+                              f"どの比較の結果にも対比 {contrast_id!r} がありません。",
+                              {"contrast_id": contrast_id, "contrast_ids": all_ids})
         for rid, result in ds.results.items():
             kind = (result or {}).get("kind")
-            if kind in ("two_group", "compare"):
-                candidates.append((rid, result, None))
-    else:
-        for rid in result_ids:
-            base, _, cid = str(rid).partition(_ENGINE_SEPARATOR)
-            result = ds.results.get(rid)
-            if (result or {}).get("kind") == "two_group":
-                candidates.append((rid, result, None))
+            if kind not in ("two_group", "compare"):
                 continue
-            record = ds.results.get(base)
-            if (record or {}).get("kind") == "compare":
-                views = dict(_engine_views(record, base, cid or contrast_id))
-                if rid in views:
-                    candidates.append((base, record, rid))
-                    continue
-            missing.append(rid)
-    done: set[str] = set()
-    for rid, result, wanted in candidates:
-        if not is_current(ds, result, dataset_hash=dataset_hash):
-            stale.append(rid)
-        elif result.get("kind") == "compare":
-            for view_id, view in _engine_views(result, rid, contrast_id):
-                if (wanted is None or view_id == wanted) and view_id not in done:
-                    done.add(view_id)
+            if kind == "compare" and contrast_id is not None and contrast_id not in contrast_ids(result):
+                continue
+            if not is_current(ds, result, dataset_hash=dataset_hash):
+                stale.append(rid)
+            elif kind == "compare":
+                for view_id, view in _engine_views(result, rid, contrast_id):
                     selected.append(view)
+            else:
+                selected.append(result)
+        return {"results": selected, "stale": stale, "missing": missing}
+    for requested in dict.fromkeys(result_ids):
+        found = ds.results.get(requested)
+        if (found or {}).get("kind") == "two_group":
+            base, cid = requested, None
+            record = found
         else:
-            selected.append(result)
+            base, cid = split_result_ref(requested, contrast_id)
+            record = ds.results.get(base)
+        if (record or {}).get("kind") == "two_group":
+            if is_current(ds, record, dataset_hash=dataset_hash):
+                selected.append(record)
+            else:
+                stale.append(requested)
+            continue
+        if (record or {}).get("kind") != "compare":
+            missing.append(requested)
+            continue
+        if cid is None and single:
+            as_two_group(record)                      # 対比が複数なら CONTRAST_REQUIRED（候補つき）
+        if not is_current(ds, record, dataset_hash=dataset_hash):
+            if requested not in stale:
+                stale.append(requested)
+            continue
+        for view_id, view in _engine_views(record, base, cid):
+            if view_id not in done:
+                done.add(view_id)
+                selected.append(view)
     return {"results": selected, "stale": stale, "missing": missing}
 
 

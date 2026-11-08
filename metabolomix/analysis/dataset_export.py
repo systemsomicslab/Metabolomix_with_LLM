@@ -23,7 +23,7 @@ from pathlib import Path
 
 from metabolomix.analysis import export_contract
 from metabolomix.analysis.result_state import assert_current
-from metabolomix.analysis.stats_results import as_two_group, get_matrix
+from metabolomix.analysis.stats_results import as_two_group, check_contrast_applies, get_matrix
 from metabolomix.core.atomic_io import DomainError
 
 __all__ = ["export_dataset_result"]
@@ -53,6 +53,7 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
              "source_verification": getattr(ds, "source_verification", None)})
     assert_current(ds, result)
     record = result
+    check_contrast_applies(record, contrast_id)
     result = as_two_group(record, contrast_id)      # 2 群でない結果・対比の曖昧さはここで DomainError
     engine_result = record.get("kind") == "compare"
     if (result.get("contract_version") != export_contract.CONTRACT_VERSION
@@ -60,7 +61,7 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
         raise DomainError(
             "ANALYSIS_RESULT_NOT_FOUND",
             "この差次的結果は現行エクスポート契約と互換性がありません。"
-            "dataset_differential を再実行してください。",
+            "dataset_compare を再実行してください。",
             {"result_contract_version": result.get("contract_version"),
              "contract_version": export_contract.CONTRACT_VERSION})
 

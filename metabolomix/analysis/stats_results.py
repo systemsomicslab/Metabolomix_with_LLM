@@ -29,6 +29,8 @@ __all__ = [
     "contrast_ids",
     "get_matrix",
     "sample_ids_by_name",
+    "split_result_ref",
+    "check_contrast_applies",
     "is_stats_current",
     "register_compare",
     "register_matrix",
@@ -306,6 +308,32 @@ def contrast_ids(record: dict, *, two_group_only: bool = False) -> list[str]:
 
 def _cell(assign: dict, factors: list[str]) -> str:
     return ":".join(str(assign.get(f, "")) for f in factors)
+
+
+def split_result_ref(result_id: str, contrast_id: str | None = None) -> tuple[str, str | None]:
+    """`result_id` か `result_id#contrast_id`（特徴検索が出す形）を `(記録の ID, 対比 ID)` に割る。
+
+    `#` の後ろと `contrast_id` が両方あって食い違えば `DATASET_BAD_REQUEST`（名指しの対比と引数が衝突）。
+    どちらか一方なら、その対比。どちらも無ければ対比は None（呼び出し側が `as_two_group` に任せる）。
+    """
+    base, sep, named = str(result_id).partition("#")
+    if not sep:
+        return base, contrast_id
+    if contrast_id is not None and contrast_id != named:
+        raise DomainError("DATASET_BAD_REQUEST",
+                          f"result_id が名指しした対比 {named!r} と contrast_id={contrast_id!r} が食い違っています。",
+                          {"result_id": result_id, "contrast_id": contrast_id})
+    return base, named
+
+
+def check_contrast_applies(record: dict, contrast_id: str | None) -> None:
+    """`contrast_id` は `compare` の記録の対比を選ぶ引数。v1 の 2 群の結果に渡したら `DATASET_BAD_REQUEST`。"""
+    if contrast_id is not None and (record or {}).get("kind") != "compare":
+        raise DomainError("DATASET_BAD_REQUEST",
+                          "contrast_id は dataset_compare の結果の対比を選ぶ引数です"
+                          "（この結果は v1 の 2 群の結果で、対比を持ちません）。",
+                          {"result_id": ((record or {}).get("provenance") or {}).get("result_id"),
+                           "contrast_id": contrast_id})
 
 
 def as_two_group(record: dict, contrast_id: str | None = None) -> dict:

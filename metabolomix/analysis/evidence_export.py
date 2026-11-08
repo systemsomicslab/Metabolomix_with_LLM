@@ -20,7 +20,8 @@ from metabolomix.analysis import alignment_qc, export_contract, feature_search
 from metabolomix.analysis.dataset_analysis import (PreconditionError, build_dataset_pp_inputs,
                                                    run_dataset_preprocess)
 from metabolomix.analysis.result_state import assert_current
-from metabolomix.analysis.stats_results import as_two_group, get_matrix, sample_ids_by_name
+from metabolomix.analysis.stats_results import (as_two_group, check_contrast_applies, get_matrix,
+                                                  sample_ids_by_name)
 from metabolomix.core.atomic_io import DomainError
 
 FEATURE_COLUMNS = ['feature_id','spot_id','mz','rt','log2fc','p_value','q_value','mean_a','mean_b','significant']
@@ -140,14 +141,19 @@ def comparison_of(result, preprocess):
         raise ValueError('現行契約と向きが一致した2群比較が必要です')
     if result.get('contract_version') != export_contract.CONTRACT_VERSION:
         raise ValueError('差次的結果の契約版が不一致です')
-    statistics = result.get('statistics')
+    engine = export_contract.is_engine_result(result)
+    statistics = result.get('statistics') if engine else None
     comparison = dict(group_a=result['a'], group_b=result['b'], n_a=result['n_a'], n_b=result['n_b'],
                       log2fc_sign=export_contract.LOG2FC_SIGN,
                       method=statistics['test'] if statistics else 'Welch',correction='BH',
                       q_threshold=result['q_threshold'],log2fc_threshold=result['log2fc_threshold'],
                       preprocess=clean(preprocess),log_transform=result.get('log_transform'))
-    if statistics:
-        comparison.update(contrast_id=result.get('contrast_id'),statistics=clean(statistics))
+    if engine:
+        # spec §13: 書き出しのメタ行と同じ定義を manifest にも置く（受け手は未知の欄を許す）
+        comparison.update(contrast_id=result.get('contrast_id'),statistics=clean(statistics),
+                          effect_size_definition=clean(result.get('effect_size_definition')),
+                          mean_definition=export_contract.MEAN_DEFINITION,
+                          matrix_id=result.get('matrix_id'),rule_hash=result.get('rule_hash'))
     return comparison
 
 
@@ -433,6 +439,17 @@ def _engine_intensity_rows(ds, record, result):
     return rows, 'pre_imputation', reason
 
 
+def _engine_exclusions(entry):
+    """エンジンの行列の登録にある除外（`dataset_exclude`）。名前は 20 件で切り `n_more` を添える。"""
+    if entry is None:
+        return []
+    out = []
+    for stage,key in (('excluded_samples','samples'),('excluded_features','features')):
+        names = list(entry['exclusions'].get(key) or [])
+        out.append(dict(stage=stage,removed=len(names),names=names[:20],n_more=max(0,len(names)-20)))
+    return out
+
+
 def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=None,
                             arf2_path=None, dcl_path=None, contrast_id=None):
     """dataset 経路の根拠バンドル v3。`arf2_path` / `dcl_path` は同じアラインメントの `.arf2` / `.dcl`
@@ -445,6 +462,7 @@ def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=N
         raise DomainError('EXPLORATORY_ONLY_DATASET','探索専用データセットは比較の根拠として出力できません',{})
     record = result
     engine_result = record.get('kind') == 'compare'
+    check_contrast_applies(record,contrast_id)
     if engine_result:
         assert_current(ds,record)
         result = as_two_group(record,contrast_id)
@@ -453,10 +471,11 @@ def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=N
         _intensity_recipe(ds,result)
         assert_current(ds,result)
     provenance = result.get('provenance') or {}
-    preprocess, report = {}, None
+    preprocess, report, exclusions = {}, None, None
     if engine_result:
         entry = get_matrix(ds,record['matrix_id'])
         preprocess = dict(entry['config']) if entry else {}
+        exclusions = _engine_exclusions(entry)
     else:
         for parent_id in provenance.get('parent_ids', []):
             parent = getattr(ds, 'results', {}).get(parent_id, {})
@@ -510,7 +529,7 @@ def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=N
                                   source_analysis_id=source_id,provenance=dict(result=provenance,
                                       source_files=getattr(ds,'source_files',[]),curation_state=(curation or {}).get('state'),
                                       **link_provenance),preprocessing_report=report,
-                                  exclusions=exclusion_steps(report),samples=samples,
+                                  exclusions=exclusions if exclusions is not None else exclusion_steps(report),samples=samples,
                                   intensities=intensities,intensities_stage=stage,
                                   detection_unavailable_reason=detection_reason)
 

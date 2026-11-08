@@ -32,7 +32,7 @@ V1_META_KEYS = {"contract_version", "exported_at", "source_mztab", "source_job",
                 "n_with_inchikey", "n_unannotated"}
 NEW_META_KEYS = {"test", "effect_size_definition", "ci_level", "verdict_q_threshold", "equivalence_fc",
                  "bh_population", "bh_n", "q_interpretation", "unit", "n_units_a", "n_units_b",
-                 "mean_definition", "matrix_id", "rule_hash"}
+                 "mean_definition", "matrix_id", "rule_hash", "contrast_id"}
 
 
 def _annotate(ds):
@@ -320,7 +320,9 @@ def test_feature_search_stats_from_compare_and_merged_retest_uses_engine(tmp_pat
         ds, [f"{rid}#U_vs_C"])["results"]] == ["U_vs_C"]
     assert [r["contrast_id"] for r in feature_search.select_results(
         ds, None, contrast_id="T_vs_C")["results"]] == ["T_vs_C"]
-    assert feature_search.select_results(ds, [rid])["missing"] == [rid]      # 対比が複数なら ID だけでは曖昧
+    # 対比が複数の記録を ID だけで名指しすれば全対比に展開する（単一の対比が要る呼び出しは single=True で拒む）
+    assert [r["contrast_id"] for r in feature_search.select_results(ds, [rid])["results"]] == [
+        "T_vs_C", "U_vs_C"]
     # 統計の行は as_two_group の値
     rows = feature_search.feature_stats(ds, ["f0", "f5"], chosen["results"], with_labels=True)
     by = {(r["feature_id"], r["result_id"]): r for r in rows}
@@ -358,9 +360,8 @@ def test_feature_search_tool_contrast_and_stale_envelope(tmp_path):
     rid = out["result_id"]
     parsed = json.loads(DAT.dataset_feature_search(feature_ids=["f0"], merge_split=False,
                                                    contrast_id="T_vs_C"))
-    assert [r["result_id"] for r in parsed["results"]] == [rid + "#T_vs_C"] or \
-        [r["result_id"] for r in parsed["results"]] == [rid]
-    assert parsed["stats"].splitlines()[1].split("\t")[1] in (rid + "#T_vs_C", rid)
+    assert [r["result_id"] for r in parsed["results"]] == [rid + "#T_vs_C"]
+    assert parsed["stats"].splitlines()[1].split("\t")[1] == rid + "#T_vs_C"
     both = json.loads(DAT.dataset_feature_search(feature_ids=["f0"], merge_split=False))
     assert [r["result_id"] for r in both["results"]] == [f"{rid}#T_vs_C", f"{rid}#U_vs_C"]
     apply_exclusions(ds, samples=["C0_r0"], features=[], mode="add", reason="outlier")
@@ -407,9 +408,170 @@ def test_novel_candidates_reads_compare_result(tmp_path):
     ambiguous = {"statistics": {"result_id": multi["result_id"], "merge_split": False},
                  "ppm": {"default": 5.0}, "q_max": 0.2}
     err = json.loads(reanalysis_tools.dataset_novel_candidates(ambiguous))["error"]
-    assert err["code"] == "missing_state" and err["required_tools"] == ["dataset_compare"]
+    assert err["code"] == "CONTRAST_REQUIRED"
+    assert err["details"]["two_group_contrast_ids"] == ["T_vs_C", "U_vs_C"]
     named = {"statistics": {"result_id": f"{multi['result_id']}#U_vs_C", "merge_split": False},
              "ppm": {"default": 5.0}, "q_max": 0.2}
     ok = json.loads(reanalysis_tools.dataset_novel_candidates(named))
     assert ok["status"] == "success" and ok["group_test"] == "U"
     assert ds2.last_differential["kind"] == "compare"
+
+
+# --- fix round 1 ---------------------------------------------------------------------------
+
+def _multi(tmp_path):
+    ds = _install(_annotate(_ds(groups=("C", "T", "U"))), tmp_path)
+    return ds, _compare(groups=["C", "T", "U"])["result_id"]
+
+
+def _v1_result(ds):
+    from metabolomix.analysis.dataset_service import compare_dataset
+    v1_preprocess()
+    return compare_dataset(ds, [n for n in ds.sample_names if n.startswith("C")],
+                           [n for n in ds.sample_names if n.startswith("T")])
+
+
+def test_select_results_contrast_id_rules(tmp_path):
+    ds, rid = _multi(tmp_path)
+    # (a) ID だけ + contrast_id は rid#contrast_id と同じ
+    sel = feature_search.select_results(ds, [rid], contrast_id="T_vs_C")
+    assert [r["provenance"]["result_id"] for r in sel["results"]] == [f"{rid}#T_vs_C"]
+    assert sel["missing"] == [] and sel["stale"] == []
+    # (b) 名指しの対比と contrast_id が食い違えば DATASET_BAD_REQUEST（黙って落とさない）
+    with pytest.raises(DomainError) as exc:
+        feature_search.select_results(ds, [f"{rid}#U_vs_C"], contrast_id="T_vs_C")
+    assert exc.value.code == "DATASET_BAD_REQUEST"
+    ok = feature_search.select_results(ds, [f"{rid}#U_vs_C"], contrast_id="U_vs_C")
+    assert [r["contrast_id"] for r in ok["results"]] == ["U_vs_C"]
+    # (c) 未知の contrast_id は、結果を名指ししても省いても CONTRAST_REQUIRED（候補つき）
+    for ids in ([rid], None):
+        with pytest.raises(DomainError) as exc:
+            feature_search.select_results(ds, ids, contrast_id="nope")
+        assert exc.value.code == "CONTRAST_REQUIRED"
+        assert set(exc.value.details["contrast_ids"]) >= {"T_vs_C", "U_vs_C"}
+    # (d) 単一の対比が要る呼び出しは、複数の記録を ID だけで名指しすると CONTRAST_REQUIRED
+    with pytest.raises(DomainError) as exc:
+        feature_search.select_results(ds, [rid], single=True)
+    assert exc.value.code == "CONTRAST_REQUIRED"
+    assert exc.value.details["two_group_contrast_ids"] == ["T_vs_C", "U_vs_C"]
+    assert feature_search.select_results(ds, [f"{rid}#T_vs_C"], single=True)["results"]
+
+
+def test_select_results_stale_lists_named_id_once(tmp_path):
+    ds, rid = _multi(tmp_path)
+    apply_exclusions(ds, samples=["C0_r0"], features=[], mode="add", reason="x")
+    named = f"{rid}#T_vs_C"
+    sel = feature_search.select_results(ds, [named, named], contrast_id="T_vs_C")
+    assert sel["stale"] == [named] and sel["results"] == []
+    assert feature_search.select_results(ds, [rid], contrast_id="T_vs_C")["stale"] == [rid]
+
+
+def test_feature_search_tool_contrast_errors_are_envelopes(tmp_path):
+    ds, rid = _multi(tmp_path)
+    ok = json.loads(DAT.dataset_feature_search(feature_ids=["f0"], merge_split=False,
+                                               result_ids=[rid], contrast_id="T_vs_C"))
+    assert [r["result_id"] for r in ok["results"]] == [f"{rid}#T_vs_C"]
+    err = json.loads(DAT.dataset_feature_search(feature_ids=["f0"], merge_split=False,
+                                                result_ids=[f"{rid}#U_vs_C"], contrast_id="T_vs_C"))["error"]
+    assert err["code"] == "DATASET_BAD_REQUEST"
+    for ids in (None, [rid]):
+        err = json.loads(DAT.dataset_feature_search(feature_ids=["f0"], merge_split=False,
+                                                    result_ids=ids, contrast_id="nope"))["error"]
+        assert err["code"] == "CONTRAST_REQUIRED"
+
+
+def test_rid_hash_cid_accepted_by_export_evidence_and_volcano(tmp_path):
+    ds, rid = _multi(tmp_path)
+    named = f"{rid}#U_vs_C"
+    out = json.loads(DAT.dataset_export_differential(str(tmp_path / "e.tsv"), result_id=named))
+    assert out["status"] == "success" and out["contrast_id"] == "U_vs_C"
+    assert json.loads(DAT.dataset_export_differential(str(tmp_path / "e2.tsv"), result_id=named,
+                                                      contrast_id="U_vs_C"))["status"] == "success"
+    err = json.loads(DAT.dataset_export_differential(str(tmp_path / "e3.tsv"), result_id=named,
+                                                     contrast_id="T_vs_C"))["error"]
+    assert err["code"] == "DATASET_BAD_REQUEST"
+    ev = json.loads(DAT.dataset_export_evidence_bundle(str(tmp_path / "b"), named))
+    assert ev["contract_version"] == 3
+    err = json.loads(DAT.dataset_export_evidence_bundle(str(tmp_path / "b2"), named,
+                                                        contrast_id="T_vs_C"))["error"]
+    assert err["code"] == "DATASET_BAD_REQUEST"
+    payload = json.loads(plot_tools.dataset_plot(kind="volcano", output="payload", result_id=named))
+    assert payload["comparison"]["group_b"] == "U"
+    err = json.loads(plot_tools.dataset_plot(kind="volcano", output="payload", result_id=named,
+                                             contrast_id="T_vs_C"))["error"]
+    assert err["code"] == "DATASET_BAD_REQUEST"
+
+
+def test_contrast_id_on_v1_result_is_rejected_the_same_way(tmp_path):
+    ds = _install(_annotate(_ds()), tmp_path)
+    rid = _v1_result(ds)["provenance"]["result_id"]
+    envelopes = [
+        json.loads(DAT.dataset_export_differential(str(tmp_path / "x.tsv"), result_id=rid,
+                                                   contrast_id="a"))["error"],
+        json.loads(DAT.dataset_export_evidence_bundle(str(tmp_path / "b"), rid, contrast_id="a"))["error"],
+        json.loads(plot_tools.dataset_plot(kind="volcano", output="payload", result_id=rid,
+                                           contrast_id="a"))["error"],
+    ]
+    assert {e["code"] for e in envelopes} == {"DATASET_BAD_REQUEST"}
+    assert len({e["message"] for e in envelopes}) == 1
+
+
+def test_evidence_manifest_carries_definitions_for_engine_only(ds, tmp_path):
+    out = _compare(reference_group="C", test_group="T")
+    record = ds.last_differential
+    evidence_export.export_dataset_evidence(ds, record, tmp_path / "b")
+    comparison = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))["comparison"]
+    assert comparison["effect_size_definition"]["name"] == "log2_mean_difference"
+    assert comparison["mean_definition"] == export_contract.MEAN_DEFINITION
+    assert comparison["matrix_id"] == out["matrix_id"] and comparison["rule_hash"] == out["rule_hash"]
+    assert comparison["contrast_id"] == "T_vs_C"
+    # v1 の bundle には足さない
+    v1 = _v1_result(ds)
+    evidence_export.export_dataset_evidence(ds, v1, tmp_path / "b1")
+    old = json.loads((tmp_path / "b1" / "manifest.json").read_text(encoding="utf-8"))["comparison"]
+    assert not {"effect_size_definition", "mean_definition", "matrix_id", "rule_hash",
+                "contrast_id", "statistics"} & set(old)
+    assert old["method"] == "Welch"
+
+
+def test_evidence_population_exclusions_from_matrix_entry(ds, tmp_path):
+    apply_exclusions(ds, samples=["C0_r0", "C0_r1"], features=["f9"], mode="add", reason="x")
+    _compare(reference_group="C", test_group="T")
+    evidence_export.export_dataset_evidence(ds, ds.last_differential, tmp_path / "b")
+    pop = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))["population"]
+    by = {e["stage"]: e for e in pop["exclusions"]}
+    assert by["excluded_samples"]["removed"] == 2 and by["excluded_samples"]["names"] == ["C0_r0", "C0_r1"]
+    assert by["excluded_features"]["names"] == ["f9"]
+    assert pop["derivation_status"] == "not_available"
+
+
+@pytest.mark.parametrize("source,unit", [("subject_id", "subject"), ("injection", "injection"),
+                                         ("mixed", "mixed"), (None, "injection"), ("weird", "injection")])
+def test_export_unit_meta_values(ds, tmp_path, source, unit):
+    _compare(reference_group="C", test_group="T")
+    ds.last_differential["engine"]["subject_source"] = source
+    path = tmp_path / "u.tsv"
+    export_dataset_result(ds, ds.last_differential, path)
+    meta, _ = _read(path)
+    assert _parse_meta(meta)[0]["unit"] == unit
+    assert "unit = None" not in "\n".join(meta)
+
+
+def test_export_meta_has_contrast_id_on_matrix_line(tmp_path):
+    ds, rid = _multi(tmp_path)
+    path = tmp_path / "m.tsv"
+    export_dataset_result(ds, ds.results[rid], path, contrast_id="U_vs_C")
+    meta, _ = _read(path)
+    line = next(m for m in meta if m.startswith("# matrix_id"))
+    assert [c.split(" = ")[0] for c in line.lstrip("# ").split("\t")] == ["matrix_id", "rule_hash", "contrast_id"]
+    values, keys = _parse_meta(meta)
+    assert values["contrast_id"] == "U_vs_C" and len(keys) == len(set(keys))
+
+
+def test_meta_source_has_no_literal_tab_and_dataset_plot_signature():
+    import inspect
+    from pathlib import Path
+    src = Path(export_contract.__file__).read_text(encoding="utf-8")
+    assert "\t" not in src
+    params = list(inspect.signature(plot_tools.dataset_plot).parameters)
+    assert params[:4] == ["kind", "dataset_handle", "result_id", "output"] and params[-1] == "contrast_id"

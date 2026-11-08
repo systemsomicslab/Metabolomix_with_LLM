@@ -626,7 +626,8 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
         if "result_id" in source:
             # データの指紋は 1 回だけ計算し、結果の照合と割れの照合で使い回す
             dataset_hash = dataset_fingerprint(ds)
-            chosen = select_results(ds, [source["result_id"]], dataset_hash=dataset_hash)
+            chosen = select_results(ds, [source["result_id"]], dataset_hash=dataset_hash,
+                                    single=True)
             if not chosen["results"]:
                 return missing_state(
                     "dataset_compare_result", ["dataset_compare"],

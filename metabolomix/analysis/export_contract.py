@@ -106,7 +106,7 @@ def build_meta(*, group_a, n_a, group_b, n_b,
     return lines
 
 
-#: `statistics.subject_source`（`stats/preprocess.py` `_collapse`）→ メタ行の `unit`。
+#: `statistics.subject_source`（`stats/preprocess.py` `_collapse`）→ メタ行の `unit`（3 値）。
 #: `subject_id`＝全試料が被験者 ID を持ち技術反復を 1 個体にまとめた（比較の単位は被験者）、
 #: `injection`＝被験者 ID が無い・まとめを切った（単位は注入）、`mixed`＝混在（そのまま書く）。
 _UNIT_OF_SUBJECT_SOURCE = {"subject_id": "subject", "injection": "injection", "mixed": "mixed"}
@@ -114,29 +114,43 @@ _UNIT_OF_SUBJECT_SOURCE = {"subject_id": "subject", "injection": "injection", "m
 MEAN_DEFINITION = "linear arithmetic mean over units after preprocessing"
 
 
+def is_engine_result(result: dict) -> bool:
+    """統計エンジンの結果（`as_two_group` の出力）か。来歴の `kind` が `compare` のもの。
+    `statistics` の有無では見ない（v1 の結果が同名の欄を持つ可能性に依存しない）。"""
+    return ((result or {}).get("provenance") or {}).get("kind") == "compare"
+
+
 def stats_meta_lines(result: dict) -> list[str]:
-    """統計エンジンの結果（`as_two_group` の出力）のメタ行。v1 の結果（`statistics` が無い）は [] 。
+    """統計エンジンの結果（`as_two_group` の出力）のメタ行。v1 の結果は [] 。
 
     `msi_note` の後に足す行（契約の版は据え置き）。キーは既存のメタ行と重ならない
     （`effect_size_definition` は pipeline v2 の文字列版と同名なので、エンジンの結果ではこちらだけが書く）。
     `mean_a` / `mean_b` は個体（単位）ごとの前処理後の線形値の算術平均（`mean_definition`）、
     `n_a` / `n_b` は注入の数のまま、`n_units_a` / `n_units_b` が比較に入った単位の数。
+    `contrast_id` は `matrix_id` の行の末尾（どの対比を書いたかを残す）。
     """
-    stats = result.get("statistics")
-    if not stats:
+    if not is_engine_result(result):
         return []
+    stats = result["statistics"]
     rule = stats["verdict_rule"]
     bh = stats["bh_population"]
-    unit = _UNIT_OF_SUBJECT_SOURCE.get(stats.get("subject_source"), str(stats.get("subject_source")))
+    unit = unit_of(stats.get("subject_source"))
     return [
-        f"# test = {stats['test']}	effect_size_definition = {result['effect_size_definition']['name']}"
-        f"	ci_level = {stats['ci_level']}",
-        f"# verdict_q_threshold = {rule['q_threshold']}	equivalence_fc = {rule['equivalence_fc']}"
-        f"	bh_population = {bh['name']}	bh_n = {bh['n']}	q_interpretation = {bh['q_interpretation']}",
-        f"# unit = {unit}	n_units_a = {stats['n_units_a']}	n_units_b = {stats['n_units_b']}",
+        f"# test = {stats['test']}\teffect_size_definition = {result['effect_size_definition']['name']}"
+        f"\tci_level = {stats['ci_level']}",
+        f"# verdict_q_threshold = {rule['q_threshold']}\tequivalence_fc = {rule['equivalence_fc']}"
+        f"\tbh_population = {bh['name']}\tbh_n = {bh['n']}\tq_interpretation = {bh['q_interpretation']}",
+        f"# unit = {unit}\tn_units_a = {stats['n_units_a']}\tn_units_b = {stats['n_units_b']}",
         f"# mean_definition = {MEAN_DEFINITION}",
-        f"# matrix_id = {result['matrix_id']}	rule_hash = {result['rule_hash']}",
+        f"# matrix_id = {result['matrix_id']}\trule_hash = {result['rule_hash']}"
+        f"\tcontrast_id = {result['contrast_id']}",
     ]
+
+
+def unit_of(subject_source) -> str:
+    """`subject_source` → メタ行の `unit`（`subject` / `injection` / `mixed` のどれか）。
+    None・未知の値は `injection`（個体にまとめていない扱い。"None" という文字列は書かない）。"""
+    return _UNIT_OF_SUBJECT_SOURCE.get(subject_source, "injection")
 
 
 def format_row(row: dict) -> str:

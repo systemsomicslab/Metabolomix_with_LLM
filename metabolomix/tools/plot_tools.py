@@ -160,13 +160,13 @@ def _result_id(result: dict) -> str | None:
 # ---------- volcano / pca / loadings ----------
 
 def _volcano(ds, req: _Request) -> dict:
-    record = _pick_result(ds, "differential", req.result_id)
+    result_id, contrast_id = req.result_id, req.contrast_id
+    if result_id is not None:                       # `result_id#contrast_id`（特徴検索が出す形）も受ける
+        result_id, contrast_id = stats_results.split_result_ref(result_id, contrast_id)
+    record = _pick_result(ds, "differential", result_id)
     # 統計エンジンの結果は対比 1 つを 2 群の形に読む（複数の対比で contrast_id が無ければ CONTRAST_REQUIRED）。
-    result = stats_results.as_two_group(record, req.contrast_id)
-    if req.contrast_id is not None and record.get("kind") != "compare":
-        raise _bad("contrast_id は dataset_compare の結果の対比を選ぶ引数です"
-                   "（この結果は v1 の 2 群の結果で、対比を持ちません）。",
-                   result_id=_result_id(record), contrast_id=req.contrast_id)
+    stats_results.check_contrast_applies(record, contrast_id)
+    result = stats_results.as_two_group(record, contrast_id)
     if result.get("kind") != "two_group" or not result.get("volcano"):
         raise _bad("この差次的結果は 2 群比較の volcano 点列を持っていません（volcano は 2 群比較だけ）。",
                    result_id=_result_id(result))
@@ -478,7 +478,6 @@ def dataset_plot(
     kind: str,
     dataset_handle: str | None = None,
     result_id: str | None = None,
-    contrast_id: str | None = None,
     output: str | None = None,
     title: str | None = None,
     color_by: str | None = None,
@@ -502,6 +501,7 @@ def dataset_plot(
     normalize: str | None = None,
     log_transform: bool | None = None,
     orient_by: str | None = None,
+    contrast_id: str | None = None,
 ) -> list | str:
     """データセットの図を描く — 既定は PNG 画像と 1 行の説明。ファイルは書かない（保存は `save_figure`）。
 

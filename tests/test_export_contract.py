@@ -147,7 +147,7 @@ def test_build_meta_appends_stats_lines_after_msi_note():
 def test_stats_meta_lines_empty_for_v1_result_and_keys_do_not_collide():
     from metabolomix.analysis.export_contract import stats_meta_lines
     assert stats_meta_lines({"kind": "two_group", "a": "x"}) == []
-    result = {"effect_size_definition": {"name": "log2_mean_difference"}, "matrix_id": "m", "rule_hash": "h",
+    result = {"effect_size_definition": {"name": "log2_mean_difference"}, "matrix_id": "m", "rule_hash": "h", "contrast_id": "c", "provenance": {"kind": "compare"},
               "statistics": {"test": "welch", "ci_level": 0.95, "subject_source": "injection",
                              "verdict_rule": {"q_threshold": 0.05, "equivalence_fc": 1.2},
                              "bh_population": {"name": "matrix", "n": 7, "q_interpretation": "discovery_fdr"},
