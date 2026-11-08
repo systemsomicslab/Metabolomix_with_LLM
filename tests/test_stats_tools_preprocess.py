@@ -194,7 +194,7 @@ def test_preprocess_invalid_injection_columns_is_config_envelope(ds):
 
 
 def test_stats_tool_module_public_surface():
-    assert stats_tools.__all__ == ["dataset_preprocess"]
+    assert stats_tools.__all__ == ["dataset_preprocess", "dataset_compare"]
 
 
 # --- 工程の要約（足切りごとの内訳・群ごとの個体数） -------------------------------------------

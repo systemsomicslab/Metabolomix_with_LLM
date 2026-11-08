@@ -10,10 +10,14 @@
 """
 from __future__ import annotations
 
+import math
+import re
+
 from mcp.types import ToolAnnotations
 
 from metabolomix.analysis import stats_records, stats_results
 from metabolomix.analysis.stats import preprocess as stats_preprocess
+from metabolomix.analysis.stats import spec_v2
 from metabolomix.analysis.stats.data import from_dataset
 from metabolomix.core import mcp_core
 from metabolomix.core.atomic_io import DomainError
@@ -22,7 +26,7 @@ from metabolomix.core.mcp_errors import missing_state, mztab_error, needs_input
 from metabolomix.core.serialization import json_payload, json_safe, round_floats, truncate_lists
 from metabolomix.tools._holder import resolve_holder
 
-__all__ = ["dataset_preprocess"]
+__all__ = ["dataset_preprocess", "dataset_compare"]
 
 #: 答えを入れて呼び直せるツール（`preprocess.drift.mode` の問いを受ける）。
 _RETRY_TOOLS = ["dataset_preprocess", "dataset_compare", "dataset_pca"]
@@ -155,6 +159,51 @@ def _write_record(holder, ds, prepared, config, inputs, summary) -> dict:
     return {"written": True, "record_id": written["record_id"], "path": written["path"]}
 
 
+def _preprocess_summary(study, prepared) -> dict:
+    """前処理の戻り値の要約（工程・群ごとの個体数・注意。記録の summary にもなる）。"""
+    quant = prepared.quant
+    groups = _group_counts(prepared)
+    warnings = list(prepared.warnings)
+    if len(groups) == 1:
+        warnings.append({"code": "single_group", "group": next(iter(groups)),
+                         "message": "すべての個体が 1 つの群に入っている（比較できない）。"
+                                    "group_levels / group_factors の綴りか試料の表の群を確かめてください。"})
+    summary = {
+        "matrix_id": prepared.matrix_id,
+        "n_units": len(prepared.units),
+        "n_qc": len(prepared.qc_ids),
+        "n_features_before": len(study.feature_ids),
+        "n_features": len(prepared.feature_ids),
+        "subject_source": prepared.subject_source,
+        "groups": groups,
+        "quant": ({"normalized": quant.normalized, "method": quant.method, "unit": quant.unit}
+                  if quant is not None else None),
+        "steps": [_step_summary(s) for s in prepared.steps],
+        "warnings": _warning_summary(warnings),
+    }
+    return truncate_lists(json_safe(round_floats(summary)), _STEP_LIST_LIMIT)
+
+
+def _store_matrix(holder, ds, study, prepared, config, inputs):
+    """行列を登録し、前処理の記録を 1 件書く。`(登録, 要約, record 欄)` を返す。
+
+    記録が書けたときは登録に `record_id` を持たせる（後続の比較の記録がここを親にする）。
+    別のデータから作った行列は DomainError(STUDY_DATA_INVALID)。
+    """
+    try:
+        entry = stats_results.register_matrix(
+            ds, prepared, config, inputs["group_overrides"],
+            exclusions={"samples": inputs["exclude_samples"],
+                        "features": inputs["exclude_features"]})
+    except ValueError as exc:
+        raise DomainError("STUDY_DATA_INVALID", str(exc)) from exc
+    summary = _preprocess_summary(study, prepared)
+    record = _write_record(holder, ds, prepared, config, inputs, summary)
+    if record.get("written"):
+        entry["record_id"] = record["record_id"]
+    return entry, summary, record
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                       idempotentHint=False),
           structured_output=False)
@@ -220,38 +269,345 @@ def dataset_preprocess(
                            argument=_DRIFT_ARGUMENT, retry_tools=_RETRY_TOOLS)
 
     try:
-        stats_results.register_matrix(ds, prepared, config, inputs["group_overrides"],
-                                      exclusions={"samples": inputs["exclude_samples"],
-                                                  "features": inputs["exclude_features"]})
-    except ValueError as exc:
-        return mztab_error("STUDY_DATA_INVALID", str(exc))
-
-    quant = prepared.quant
-    groups = _group_counts(prepared)
-    warnings = list(prepared.warnings)
-    if len(groups) == 1:
-        warnings.append({"code": "single_group", "group": next(iter(groups)),
-                         "message": "すべての個体が 1 つの群に入っている（比較できない）。"
-                                    "group_levels / group_factors の綴りか試料の表の群を確かめてください。"})
-    summary = {
-        "matrix_id": prepared.matrix_id,
-        "n_units": len(prepared.units),
-        "n_qc": len(prepared.qc_ids),
-        "n_features_before": len(study.feature_ids),
-        "n_features": len(prepared.feature_ids),
-        "subject_source": prepared.subject_source,
-        "groups": groups,
-        "quant": ({"normalized": quant.normalized, "method": quant.method, "unit": quant.unit}
-                  if quant is not None else None),
-        "steps": [_step_summary(s) for s in prepared.steps],
-        "warnings": _warning_summary(warnings),
-    }
-    summary = truncate_lists(json_safe(round_floats(summary)), _STEP_LIST_LIMIT)
-    record = _write_record(holder, ds, prepared, config, inputs, summary)
+        _entry, summary, record = _store_matrix(holder, ds, study, prepared, config, inputs)
+    except DomainError as exc:
+        return _domain_envelope(exc)
     return json_payload(json_safe({
         "status": "success",
         **summary,
         "record": record,
         "next": ("dataset_compare（2 群以上の比較）または dataset_pca を、この matrix_id を"
                  "渡して（または省略して既定の前処理で）実行してください"),
+    }))
+
+
+# --- dataset_compare ---------------------------------------------------------------------
+
+#: 戻り値・記録の警告で、長い一覧を切るキー（エンジンの注意が持つ一覧）。
+_WARNING_LIST_KEYS = ("samples", "sample_ids", "unit_ids", "examples", "subjects")
+_TOP_COLUMNS = ["contrast_id", "feature_id", "name", "log2fc", "ci_low", "ci_high", "q", "verdict"]
+_ID_UNSAFE = re.compile(r"[^A-Za-z0-9_.\-]")
+
+
+def _bad_request(message: str, **details) -> DomainError:
+    return DomainError("DATASET_BAD_REQUEST", message, details or None)
+
+
+def _contrast_id(test: str, reference: str, taken: set[str]) -> str:
+    """群名から対比 ID を作る（spec の id は英数字と `_.-` だけ。重なれば番号を足す）。"""
+    base = _ID_UNSAFE.sub("_", f"{test}_vs_{reference}")
+    cid, n = base, 2
+    while cid in taken:
+        cid, n = f"{base}_{n}", n + 1
+    taken.add(cid)
+    return cid
+
+
+def _design_and_comparisons(reference_group, test_group, groups, comparisons, factors):
+    """群の指定（ちょうど 1 つ）を spec v2 の `(design.factors, comparisons)` に写す。
+
+    2 群は `reference_group`+`test_group`、3 群以上は `groups`（先頭が基準で各群 − 基準）、
+    2 因子などは `comparisons`（spec の形そのまま。`factors` が要る）。それ以外は DATASET_BAD_REQUEST。
+    """
+    pair = (reference_group is not None, test_group is not None)
+    if any(pair) and not all(pair):
+        raise _bad_request("reference_group と test_group は対で指定してください。")
+    chosen = [name for name, on in (("reference_group+test_group", all(pair)),
+                                    ("groups", groups is not None),
+                                    ("comparisons", comparisons is not None)) if on]
+    if len(chosen) != 1:
+        raise _bad_request("群の指定はちょうど 1 つです（reference_group+test_group / groups / "
+                           f"comparisons のどれか）。指定された: {chosen or 'なし'}",
+                           specified=chosen)
+    if comparisons is None and factors is not None:
+        raise _bad_request("factors は comparisons（2 因子などの対比）を指定するときだけ使います。")
+    if comparisons is not None:
+        if not factors:
+            raise _bad_request("comparisons を指定するときは factors（モデルの因子）も指定してください。")
+        return list(factors), list(comparisons)
+    if groups is not None:
+        if (not isinstance(groups, list) or len(groups) < 2 or len(set(groups)) != len(groups)
+                or any(not isinstance(g, str) or not g for g in groups)):
+            raise _bad_request("groups は重複のない 2 つ以上の群名のリスト（先頭が基準）です。",
+                               groups=groups)
+        ref, tests = groups[0], groups[1:]
+    else:
+        ref, tests = reference_group, [test_group]
+    taken: set[str] = set()
+    return ["group"], [{"id": _contrast_id(t, ref, taken), "factor": "group",
+                        "reference": ref, "test": t} for t in tests]
+
+
+def _is_number(text: str) -> bool:
+    try:
+        return math.isfinite(float(text))
+    except (TypeError, ValueError):
+        return False
+
+
+def _covariate_specs(study, covariates) -> list[dict]:
+    """共変量の列名 → `{"name", "type"}`。試料の表の列（生体の試料の値）がすべて数値なら numeric、
+    さもなくば categorical。どの試料にも値が無い列は DATASET_BAD_REQUEST（候補の列名を details に）。"""
+    out = []
+    samples = [s for s in study.samples if s.role == "sample" and s.include]
+    for name in covariates or []:
+        if name in ("group", "batch"):
+            values = [getattr(s, name) for s in samples if getattr(s, name)]
+        else:
+            values = [s.attributes[name] for s in samples if name in s.attributes]
+        if not values:
+            available = sorted({k for s in samples for k in s.attributes})
+            raise _bad_request(f"共変量 {name!r} は試料の表に値がありません。",
+                               covariate=name, available=available[:_DETAIL_LIMIT])
+        out.append({"name": name,
+                    "type": "numeric" if all(_is_number(v) for v in values) else "categorical"})
+    return out
+
+
+def _spec_for(*, factors, comparisons, covariates, block, method, effect_size, bh_population,
+              q_threshold, equivalence_fc, allow_confounded, preprocess, inputs) -> dict:
+    """引数から組み立てた spec v2（正規化前）。`analyses` は compare 1 つ。結果の `spec` はこれを
+    `normalize_spec_v2` したもの（`dataset_analysis_run` に渡せば同じ数字を出し直せる）。"""
+    return {
+        "schema": spec_v2.ANALYSIS_SCHEMA_V2,
+        "input": {"source": "dataset", "exclude_samples": list(inputs["exclude_samples"]),
+                  "exclude_features": list(inputs["exclude_features"]),
+                  "group_overrides": dict(inputs["group_overrides"])},
+        "preprocess": preprocess,
+        "design": {"factors": factors, "covariates": covariates, "block": block},
+        "comparisons": comparisons,
+        "analyses": [{"analysis_id": "compare", "kind": "compare", "test": method,
+                      "effect_size": effect_size, "bh_population": bh_population,
+                      "verdict": {"q": q_threshold, "equivalence_fc": equivalence_fc},
+                      "allow_confounded": allow_confounded}],
+        "primary": "compare",
+    }
+
+
+def _fmt(value, spec: str = ".4g") -> str:
+    return "" if value is None else format(value, spec)
+
+
+def _top_table(ds, rows, cids, limit: int) -> str:
+    """対比ごとに changed の上位（q の小さい順）を TSV（列名は 1 回）にする。無ければ空文字。"""
+    lines = []
+    meta = getattr(ds, "feature_metadata", None) or {}
+    for cid in cids:
+        changed = [r for r in rows if r["contrast_id"] == cid and r["verdict"] == "changed"
+                   and r["q"] is not None]
+        changed.sort(key=lambda r: (r["q"], r["feature_id"]))
+        for r in changed[:limit]:
+            name = str((meta.get(r["feature_id"]) or {}).get("name") or "")
+            lines.append("\t".join([cid, str(r["feature_id"]),
+                                    name.replace("\t", " ").replace("\n", " "),
+                                    _fmt(r["log2fc"]), _fmt(r["ci_low"]), _fmt(r["ci_high"]),
+                                    _fmt(r["q"], ".3g"), r["verdict"]]))
+    return "\n".join(["\t".join(_TOP_COLUMNS), *lines]) if lines else ""
+
+
+def _contrast_summaries(engine: dict, spec: dict, log2fc_threshold: float) -> list[dict]:
+    """対比ごとの要約。`large_changes` は判定が changed で |log2fc| が閾値以上の件数。"""
+    q_thr = engine["verdict_rule"]["q_threshold"]
+    presence = engine["presence"]
+    out = []
+    for comp in spec["comparisons"]:
+        cid = comp["id"]
+        rows = [r for r in engine["rows"] if r["contrast_id"] == cid]
+        verdicts = {"changed": 0, "unchanged": 0, "inconclusive": 0}
+        for r in rows:
+            verdicts[r["verdict"]] += 1
+        n_tested = sum(1 for r in rows if r["status"] == "tested")
+        large = sum(1 for r in rows if r["verdict"] == "changed" and r["log2fc"] is not None
+                    and abs(r["log2fc"]) >= log2fc_threshold)
+        has_presence = bool(presence["detection_available"]) and cid in presence["bh_n_by_contrast"]
+        out.append({
+            "contrast_id": cid,
+            "reference": rows[0]["reference"] if rows else None,
+            "test": rows[0]["test"] if rows else None,
+            "n_tested": n_tested, "n_not_tested": len(rows) - n_tested,
+            "verdicts": verdicts, "large_changes": large,
+            "presence": {"available": has_presence,
+                         "n_q_below": (sum(1 for r in rows if r["presence_q"] is not None
+                                           and r["presence_q"] < q_thr) if has_presence else None)},
+        })
+    return out
+
+
+def _omnibus_summary(engine: dict):
+    if engine["omnibus"] is None:
+        return None
+    q_thr = engine["verdict_rule"]["q_threshold"]
+    tested = [o for o in engine["omnibus"] if o["f_p"] is not None]
+    return {"n_tested": len(tested),
+            "n_q_below": sum(1 for o in tested if o["f_q"] is not None and o["f_q"] < q_thr)}
+
+
+def _write_compare_record(holder, entry, record, spec, summary) -> dict:
+    """比較の記録を書く（親は行列の前処理の記録）。書けないときは `{"written": False, "reason"}`。"""
+    try:
+        reports_dir = mcp_core._resolve_report_dir(holder)
+        parents = [entry["record_id"]] if entry.get("record_id") else []
+        written = stats_records.write_stats_record(
+            reports_dir, "compare",
+            inputs={"dataset_hash": entry["dataset_hash"], "matrix_id": record["matrix_id"],
+                    "result_id": record["result_id"]},
+            parent_ids=parents,
+            settings={"spec": spec, "log2fc_threshold": record["log2fc_threshold"]},
+            summary=summary)
+    except DomainError as exc:
+        return {"written": False, "reason": f"{exc.code}: {exc.message}"}
+    except OSError as exc:
+        return {"written": False, "reason": f"OSError: {exc}"}
+    return {"written": True, "record_id": written["record_id"], "path": written["path"]}
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                      idempotentHint=False),
+          structured_output=False)
+def dataset_compare(
+    reference_group: str | None = None,
+    test_group: str | None = None,
+    groups: list[str] | None = None,
+    comparisons: list[dict] | None = None,
+    factors: list[str] | None = None,
+    covariates: list[str] | None = None,
+    block: str | None = None,
+    matrix_id: str | None = None,
+    method: str = "moderated_t",
+    effect_size: str = "log2_mean_difference",
+    bh_population: str = "matrix",
+    q_threshold: float = 0.05,
+    equivalence_fc: float = 1.2,
+    log2fc_threshold: float = 1.0,
+    allow_confounded: bool = False,
+    group_levels: list[str] | None = None,
+    group_factors: list[list[str]] | None = None,
+    top_n: int = 10,
+    dataset_handle: str | None = None,
+) -> str:
+    """2 群・多群・2 因子の比較を統計エンジン（analysis-spec v2）で行い、要約を返す。
+
+    群の指定はちょうど 1 つ: reference_group+test_group（2 群）/ groups（3 群以上。先頭が基準で
+    各群 − 基準の対比と omnibus F）/ comparisons（spec v2 の comparisons の形。2 因子・`at`・
+    交互作用。factors が要る）。判定（changed / unchanged / inconclusive）は q と CI で決まり、
+    log2fc_threshold は判定に使わない（large_changes の数え方・図の色分け・書き出しの significant 列だけ）。
+    全行は result_id でセッションに保持し、直近の結果（図・書き出しの既定）にもなる。
+    `reports/stats/` に記録を 1 件追記する（書けないときは record.written=false。比較は成功）。
+
+    covariates: 試料の表の列名。値がすべて数値なら numeric、さもなくば categorical。
+    block: "subject_id" だけ（同じ個体の反復を対応づける。collapse_replicates=False の行列で意味を持つ）。
+    matrix_id: dataset_preprocess が返した行列 ID（その前処理・群・除外のまま比較する）。省略時は既定の
+        前処理で行列を作って登録する（QC のある換算済みデータでは drift_mode を尋ねる needs_input。
+        dataset_preprocess で行列を作ってその ID を渡す）。古い・無い ID は missing_state。
+        ID と group_levels / group_factors の併用は不可（群は行列が決めている）。
+    method: "moderated_t"（既定）など（エンジンの検定）。effect_size: "log2_mean_difference"（既定）/
+        "arithmetic_mean_ratio"。bh_population: "matrix"（既定）/ "annotated" / "reported"。
+    q_threshold / equivalence_fc: 判定の q の閾値（既定 0.05）と同等とみなす倍率（既定 1.2）。
+    allow_confounded: 群とバッチが完全交絡でも進める（既定は STATISTIC_CONFOUNDED で止める）。
+    top_n: 対比ごとに changed の上位（q の小さい順）を top に何件載せるか（既定 10）。
+    dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。
+    """
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    ds = holder.dataset
+    if ds is None:
+        return missing_state("dataset", ["load_dataset"],
+                             "DatasetState がありません。先に load_dataset を実行してください。")
+    try:
+        if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 0:
+            raise _bad_request("top_n は 0 以上の整数です。", top_n=top_n)
+        if (isinstance(log2fc_threshold, bool) or not isinstance(log2fc_threshold, (int, float))
+                or not math.isfinite(log2fc_threshold) or log2fc_threshold < 0):
+            raise _bad_request("log2fc_threshold は 0 以上の有限の数です。",
+                               log2fc_threshold=log2fc_threshold)
+        if block is not None and block != "subject_id":
+            raise _bad_request('block は "subject_id" だけを受けます。', block=block)
+        design_factors, spec_comparisons = _design_and_comparisons(
+            reference_group, test_group, groups, comparisons, factors)
+
+        entry = None
+        if matrix_id is not None:
+            if group_levels or group_factors:
+                raise _bad_request("matrix_id を渡すと群は行列が決めています。group_levels / "
+                                   "group_factors は dataset_preprocess に渡してください。")
+            entry = stats_results.get_matrix(ds, matrix_id)
+            if entry is None:
+                return missing_state(
+                    "stat_matrix", ["dataset_preprocess"],
+                    f"行列 {matrix_id!r} がありません（無い・または除外や試料の表の変更で古くなりました）。"
+                    "dataset_preprocess を実行し直して、その matrix_id を渡してください。")
+            inputs = {"exclude_samples": list(entry["exclusions"]["samples"]),
+                      "exclude_features": list(entry["exclusions"]["features"]),
+                      "group_overrides": dict(entry["group_overrides"])}
+            preprocess = entry["config"]
+        else:
+            inputs = stats_results.study_inputs(ds, group_levels=group_levels,
+                                                group_factors=group_factors)
+            preprocess = stats_preprocess.normalize_preprocess_config(_config())
+        study = from_dataset(ds, **inputs)
+        spec = spec_v2.normalize_spec_v2(_spec_for(
+            factors=design_factors, comparisons=spec_comparisons,
+            covariates=_covariate_specs(study, covariates), block=block, method=method,
+            effect_size=effect_size, bh_population=bh_population, q_threshold=q_threshold,
+            equivalence_fc=equivalence_fc, allow_confounded=allow_confounded,
+            preprocess=preprocess, inputs=inputs))
+
+        prepared = entry["prepared"] if entry is not None else spec_v2.prepare_spec_v2(spec, study)
+        if isinstance(prepared, stats_preprocess.NeedsInput):
+            return needs_input(
+                prepared.field,
+                f"{prepared.reason} dataset_compare には drift_mode 引数がありません。"
+                "dataset_preprocess(drift_mode=...) で行列を作り、その matrix_id を "
+                "dataset_compare に渡して呼び直してください。",
+                prepared.options, argument=_DRIFT_ARGUMENT, retry_tools=_RETRY_TOOLS)
+
+        preprocess_record = None
+        if entry is None:
+            entry = stats_results.get_matrix(ds, prepared.matrix_id)     # 同じ行列があれば再利用
+            if entry is None:
+                entry, _summary, preprocess_record = _store_matrix(
+                    holder, ds, study, prepared, preprocess, inputs)
+        run = spec_v2.run_spec_v2(spec, study, prepared=prepared)
+        try:
+            record = stats_results.register_compare(ds, run, log2fc_threshold=log2fc_threshold,
+                                                    units=prepared.units)
+        except ValueError as exc:
+            raise _bad_request(str(exc)) from exc
+    except DomainError as exc:
+        return _domain_envelope(exc)
+
+    engine = record["engine"]
+    conf = engine["confounding"]
+    summary = {
+        "result_id": record["result_id"],
+        "matrix_id": record["matrix_id"],
+        "rule_hash": record["rule_hash"],
+        "test": engine["test"],
+        "effect_size_definition": {"name": engine["effect_size_definition"]["name"]},
+        "ci_level": engine["ci_level"],
+        "verdict_rule": engine["verdict_rule"],
+        "bh_population": engine["bh_population"],
+        "subject_source": engine["subject_source"],
+        "group_n": engine["group_n"],
+        "prior": engine["prior"],
+        "contrasts": _contrast_summaries(engine, spec, record["log2fc_threshold"]),
+        "omnibus": _omnibus_summary(engine),
+        "confounding": {"batch_status": conf.get("batch_status"),
+                        "batch_table": conf.get("batch_table"),
+                        "warnings": conf.get("warnings")},
+        "warnings": engine["warnings"],
+    }
+    summary = truncate_lists(json_safe(round_floats(summary)), _STEP_LIST_LIMIT,
+                             keys=_WARNING_LIST_KEYS)
+    written = _write_compare_record(holder, entry, record, spec, summary)
+    if preprocess_record is not None:
+        written = {**written, "preprocess_record": preprocess_record}
+    return json_payload(json_safe({
+        "status": "success",
+        **summary,
+        "top": _top_table(ds, engine["rows"], [c["id"] for c in spec["comparisons"]], top_n),
+        "record": written,
+        "next": ("全行は result_id で保持した（直近の結果として書き出し・図の既定になる）。対比が複数の結果は"
+                 "書き出し・図で contrast_id を指定する（交互作用の対比は 2 群の形にならない）"),
     }))

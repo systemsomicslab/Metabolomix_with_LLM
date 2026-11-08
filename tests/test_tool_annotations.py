@@ -43,6 +43,7 @@ EXPECTED_ANNOTATIONS = {
     # 前処理の記録を reports/stats/ に 1 件追記する（呼ぶたびに新しい記録＝非冪等。書き先が
     # 無ければ書かず、前処理は成功する）。行列は ds.stat_matrices へ置く。
     "dataset_preprocess": LOCAL_WRITE_APPEND,
+    "dataset_compare": LOCAL_WRITE_APPEND,    # 比較の記録を 1 件追記する（dataset_preprocess と同じ）
     "dataset_pca": READ_ONLY,
     "dataset_differential": READ_ONLY,
     # ファイルを書き、同じ引数なら同じ内容で上書きする → 冪等

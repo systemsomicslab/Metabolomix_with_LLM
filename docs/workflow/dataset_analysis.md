@@ -21,6 +21,24 @@
 （v1 の前処理 `dataset_analysis.run_dataset_preprocess` は、pipeline の前処理工程と旧
 `dataset_differential` / `dataset_pca` がまだ読む `pp_*` を作る。D 段で消える。）
 
+## dataset_compare
+
+統計エンジンの比較（spec 2026-11-06 §5〜§9・§12）。群の指定（手順 2）を spec v2 の対比へ写し、`matrix_id` を
+渡せば登録済みの行列（手順 4）の設定・群・除外のまま、省略すれば既定の前処理で行列を作って登録し
+（手順 5・6。前処理の記録も 1 件書く）、`run_spec_v2` で比較する（手順 7）。結果は `ds.results[result_id]` と
+`ds.last_differential` に置く（手順 8）。`needs_input`（換算済み＋QC）は手順 5 の戻りから封筒にする。
+手順 9 の記録は親を行列の前処理の記録にして `reports/stats/` へ追記する（書けなくても比較は成功）。
+
+1. metabolomix/tools/stats_tools.py  dataset_compare()
+2. └─ metabolomix/tools/stats_tools.py  _design_and_comparisons()
+3. └─ metabolomix/tools/stats_tools.py  _covariate_specs()
+4. └─ metabolomix/analysis/stats_results.py  get_matrix()
+5. └─ metabolomix/analysis/stats/spec_v2.py  prepare_spec_v2()
+6. └─ metabolomix/tools/stats_tools.py  _store_matrix()
+7. └─ metabolomix/analysis/stats/spec_v2.py  run_spec_v2()
+8. └─ metabolomix/analysis/stats_results.py  register_compare()
+9. └─ metabolomix/tools/stats_tools.py  _write_compare_record()
+
 ## dataset_pca
 
 1. metabolomix/tools/dataset_analysis_tools.py  dataset_pca()
