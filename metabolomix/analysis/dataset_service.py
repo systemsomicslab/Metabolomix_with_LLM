@@ -94,6 +94,9 @@ def _commit_preprocess(ds, recipe: dict, computed: tuple, *, metadata_hash: str 
 def preprocess_dataset(ds, recipe: dict, *, request_revision: int | None = None) -> dict:
     """前処理を適用し、成功したときだけ状態を差し替える。
 
+    v1 の前処理（`ds.pp_*` を書く）。`dataset_preprocess` ツールは統計エンジンへ移ったので、呼ぶのは
+    テストと pipeline 相当の経路だけで、v1 の他の関数と一緒に D 段で消える。
+
     同値のレシピを同じ入力へ再適用した場合は**計算し直さず**、前回の結果と
     result_id をそのまま返す（派生結果も生かしたまま）。
 

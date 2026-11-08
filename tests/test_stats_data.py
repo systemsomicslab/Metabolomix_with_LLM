@@ -121,3 +121,48 @@ def test_role_inference_uses_msdial_class_id():
              msdial_samples=[{"name": "x1", "group": "QC"}, {"name": "x2", "group": "Blank"},
                              {"name": "x3", "group": "KO"}])
     assert [s.role for s in D.from_dataset(ds).samples] == ["qc", "blank", "sample"]
+
+
+# --- 実際の試料の対応表の行（帳簿の欄は因子にしない） -----------------------------------
+
+def _manifest_ds():
+    """`sample_manifest` の実際の行（注入ごとに違う provenance・conflicts・qc_pool 付き）を持つ DatasetState。"""
+    from tests.test_stats_results import _ds
+    ds = _ds()
+    for i, row in enumerate(ds.sample_metadata_rows):
+        row["provenance"] = {"role": {"value": row["role"], "source": f"file_{i}", "confidence": "inferred"},
+                             "injection_order": {"value": i, "source": "mztab", "confidence": "unverified"}}
+        row["conflicts"] = [{"field": "batch", "value": f"B{i}"}] if i % 3 == 0 else []
+        row["qc_pool"] = f"pool{i}" if row["role"] == "qc" else None
+    return ds
+
+
+def test_bookkeeping_keys_do_not_become_attributes():
+    ds = _manifest_ds()
+    study = D.from_dataset(ds)
+    for sample in study.samples:
+        assert not {"provenance", "conflicts", "qc_pool"} & set(sample.attributes)
+        assert all(isinstance(v, str) for v in sample.attributes.values())
+
+
+def test_non_scalar_row_values_are_not_attributes():
+    ds = _manifest_ds()
+    ds.sample_metadata_rows[4]["tags"] = ["a", "b"]
+    ds.sample_metadata_rows[4]["nested"] = {"x": 1}
+    ds.sample_metadata_rows[4]["sex"] = "F"
+    sample = D.from_dataset(ds).samples[4]
+    assert sample.attributes == {"sex": "F"}
+
+
+def test_replicates_collapse_with_real_manifest_rows():
+    """技術反復（同じ subject_id の 2 注入）は、provenance が注入ごとに違っても 1 個体にまとまる。"""
+    from metabolomix.analysis.stats import preprocess as P
+    ds = _manifest_ds()
+    study = D.from_dataset(ds)
+    off = {"drift": {"mode": "off"},
+           "filters": {"blank_ratio": None, "detection": None, "qc_rsd": None, "d_ratio": None},
+           "normalize": {"method": "none"}}
+    prepared = P.preprocess(study, off)
+    assert len(prepared.units) == 8                    # 8 個体 × 2 注入（以前は 16 に割れた）
+    assert all(u.n_injections == 2 for u in prepared.units)
+    assert not any(w.get("code") == "replicates_split" for w in prepared.warnings)

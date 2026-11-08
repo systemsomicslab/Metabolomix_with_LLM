@@ -404,3 +404,41 @@ def test_json_safe_makes_full_engine_result_strict():
     assert safe["analyses"][0]["result"]["prior"]["df_prior"] == "inf"
     text = json.dumps(safe, allow_nan=False)
     json.loads(text, parse_constant=lambda name: (_ for _ in ()).throw(ValueError(name)))
+
+
+# --- study_inputs（除外と群の上書き） ---------------------------------------------------
+
+def test_study_inputs_empty_without_exclusions_or_groups():
+    assert stats_results.study_inputs(_ds()) == {
+        "exclude_samples": [], "exclude_features": [], "group_overrides": {}}
+
+
+def test_study_inputs_exclusions_sorted():
+    ds = _ds()
+    apply_exclusions(ds, samples=["T1_r0", "C0_r0"], features=["f5", "f2"], mode="add", reason="x")
+    out = stats_results.study_inputs(ds)
+    assert out["exclude_samples"] == ["C0_r0", "T1_r0"]
+    assert out["exclude_features"] == ["f2", "f5"]
+
+
+def test_study_inputs_group_levels_and_factors_priority():
+    ds = _ds()
+    by_levels = stats_results.study_inputs(ds, group_levels=["r0", "r1"])["group_overrides"]
+    assert by_levels["C0_r0"] == "r0" and by_levels["T2_r1"] == "r1"
+    assert not any(name.startswith("QC") for name in by_levels)
+    assert len(by_levels) == 16
+    by_factors = stats_results.study_inputs(
+        ds, group_levels=["r0", "r1"], group_factors=[["c0", "c1"], ["r0", "r1"]])["group_overrides"]
+    assert by_factors["C0_r0"] == "c0|r0" and by_factors["T0_r0"] == "other|r0"
+    assert list(by_factors) == sorted(by_factors)
+
+
+def test_study_inputs_overrides_feed_from_dataset():
+    ds = _ds()
+    inputs = stats_results.study_inputs(ds, group_levels=["r0", "r1"])
+    study = stats_data.from_dataset(ds, **inputs)
+    assert {s.group for s in study.samples if s.role == "sample"} == {"r0", "r1"}
+
+
+def test_study_inputs_non_exclusive_values_are_bad_request():
+    assert _code(stats_results.study_inputs, _ds(), group_levels=["c0", "r0"]).code == "DATASET_BAD_REQUEST"

@@ -2,6 +2,7 @@
 
 `.arf2` はデータセットのものを使い、`data/` は探さない。fixture は tmp に作る。
 """
+from tests.v1_chain import v1_preprocess
 import inspect
 import json
 import threading
@@ -132,7 +133,7 @@ def test_submit_refreshes_flags_on_open_handles(tmp_path):
     assert other.dataset.curation_flags["wrong"] == set()          # 別の .arf2 は触らない
     # 書き出しは出したばかりの判断を使う（同じ .arf2 を持つ別のハンドルでも）
     for handle in (first, second):
-        dat.dataset_preprocess(dataset_handle=handle.handle_id)
+        v1_preprocess(dataset_handle=handle.handle_id)
         dat.dataset_differential(group_a=["s0", "s1"], group_b=["s2", "s3"],
                                  dataset_handle=handle.handle_id)
         out = json.loads(dat.dataset_export_differential(

@@ -57,7 +57,8 @@ from metabolomix.tools.dataset import *  # list_data_files
 from metabolomix.tools.mztab_tools import *  # dataset_status
 from metabolomix.tools.sample_tools import *  # dataset_exclude
 from metabolomix.tools.console_tools import *  # console_plan, console_run, console_status, job_list
-from metabolomix.tools.dataset_analysis_tools import *  # dataset_preprocess, dataset_pca, dataset_differential, dataset_export_differential, dataset_set_sample_metadata, dataset_feature_search
+from metabolomix.tools.dataset_analysis_tools import *  # dataset_pca, dataset_differential, dataset_export_differential, dataset_set_sample_metadata, dataset_feature_search
+from metabolomix.tools.stats_tools import *  # dataset_preprocess（統計エンジンの前処理。dataset_compare・dataset_pca もここへ移る）
 from metabolomix.tools.plot_tools import *  # dataset_plot（dataset 系と reports の後。save_figure が遅延 import する）
 from metabolomix.tools.pipeline_tools import *  # pipeline_plan, pipeline_run, pipeline_status, pipeline_resume, pipeline_cancel
 from metabolomix.tools.maintenance import *  # server_update

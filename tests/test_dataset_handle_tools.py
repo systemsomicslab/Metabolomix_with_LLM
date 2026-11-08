@@ -5,6 +5,7 @@
 - ハンドルを渡さない呼び出しの戻り値は変更前と同じ（変更前のコードで採った値と比べる）。
 """
 from __future__ import annotations
+from tests.v1_chain import v1_preprocess
 
 import asyncio
 import json
@@ -20,7 +21,7 @@ from metabolomix.dataset import opening
 from metabolomix.library import tools as library_tools
 from metabolomix.mztab import identity as mztab_identity
 from metabolomix.tools import dataset_analysis_tools as T
-from metabolomix.tools import handle_tools, mztab_tools
+from metabolomix.tools import handle_tools, mztab_tools, stats_tools
 from metabolomix.tools import reanalysis_tools as R
 from tests.reanalysis_fixtures import NEG_FEATURES, write_mztab
 from tests.config_fixtures import use_config
@@ -59,7 +60,7 @@ def _tools(tmp_path):
     """ハンドルを受けるツール（既存の 13 と dataset_alignment_qc）と最小の引数。"""
     return [
         (mztab_tools.dataset_status, {}),
-        (T.dataset_preprocess, {}),
+        (stats_tools.dataset_preprocess, {}),
         (T.dataset_pca, {}),
         (T.dataset_differential, {"group_a": HC, "group_b": RA}),
         (T.dataset_export_differential, {"output_path": str(tmp_path / "x.tsv")}),
@@ -150,7 +151,7 @@ def test_unknown_handle_is_an_error_not_the_global_session(tmp_path, pos_mztab):
 def test_preprocess_on_handle_leaves_global_and_other_handle_untouched(pos_mztab):
     handle_tools.load_dataset(mztab_path=str(pos_mztab))
     a, b = _open(pos_mztab), _open(pos_mztab)
-    out = json.loads(T.dataset_preprocess(normalize="pqn", dataset_handle=a))
+    out = json.loads(v1_preprocess(normalize="pqn", dataset_handle=a))
     assert out["status"] == "success"
     assert handles.registry.get(a).dataset.pp_matrix is not None
     assert handles.registry.get(b).dataset.pp_matrix is None
@@ -159,7 +160,7 @@ def test_preprocess_on_handle_leaves_global_and_other_handle_untouched(pos_mztab
 
 def test_differential_and_search_on_handle(pos_mztab):
     a = _open(pos_mztab)
-    T.dataset_preprocess(dataset_handle=a)
+    v1_preprocess(dataset_handle=a)
     diff = json.loads(T.dataset_differential(group_a=HC, group_b=RA, dataset_handle=a))
     assert diff["status"] == "success"
     search = json.loads(T.dataset_feature_search(feature_ids=["1"], dataset_handle=a))
@@ -216,7 +217,7 @@ def golden_outputs(directory: Path) -> dict:
     out = {
         "status": load(mztab_tools.dataset_status(), ["server_version", "update_available"]),
         "search_window": load(T.dataset_feature_search(min_mz=100, max_mz=600)),
-        "preprocess": load(T.dataset_preprocess(normalize="pqn")),
+        "preprocess": load(v1_preprocess(normalize="pqn")),
         "differential": load(T.dataset_differential(group_a=HC, group_b=RA)),
         "search_targets": load(T.dataset_feature_search(targets=[{
             "target_id": "t1", "inchikey": "OEYIOHPDSNJKLS-UHFFFAOYSA-N",

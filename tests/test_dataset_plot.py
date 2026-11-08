@@ -4,6 +4,7 @@
 ツール層の仕事——結果の選び方（古い結果は描かない）・引数の取り違えの拒否・`.EIC.aef` の出所・
 形式名・`save_figure` が `ds.figures` から描くこと——を見る。fixture はテスト自身が作る。
 """
+from tests.v1_chain import v1_preprocess
 import json
 
 import numpy as np
@@ -15,7 +16,7 @@ from metabolomix.core import handles, session_state
 from metabolomix.mztab.dataset_state import DatasetState
 from metabolomix.tools import plot_tools, reports, sample_tools
 from metabolomix.tools.dataset_analysis_tools import (
-    dataset_differential, dataset_pca, dataset_preprocess)
+    dataset_differential, dataset_pca)
 from tests.config_fixtures import use_config
 from tests.curation_fixtures import write_alignment_set
 from tests.msdial_folder_fixtures import analysis_file_row, write_mddata
@@ -65,7 +66,7 @@ def _analysed(*, with_differential=True) -> DatasetState:
     ds = _synthetic()
     _set_metadata(ds, group=lambda n: n.split("_")[0],
                   batch=lambda n: "b1" if n.endswith(("0", "1")) else "b2")
-    dataset_preprocess()
+    v1_preprocess()
     assert json.loads(dataset_pca(n_components=3))["status"] == "success"
     if with_differential:
         a = [n for n in ds.pp_sample_names if n.startswith("ctrl")]
@@ -316,7 +317,7 @@ def test_group_change_makes_the_pca_figure_refuse_to_save(tmp_path):
     err = json.loads(reports.save_figure("pca", "meta-1"))["error"]
     assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
     assert not (tmp_path / "reports" / "figures" / "meta-1_pca.png").exists()
-    dataset_preprocess()
+    v1_preprocess()
     dataset_pca(n_components=3)
     payload = _payload(kind="pca")                    # 解析と図をやり直せば新しい群で保存できる
     assert {p["group"] for p in payload["points"]} == {"NEW"}
@@ -354,7 +355,7 @@ def test_figures_are_not_part_of_the_fingerprint():
 def test_stale_pca_result_after_reprocessing_is_refused():
     ds = _analysed()
     old = ds.last_pca["provenance"]["result_id"]
-    dataset_preprocess(normalize="median")           # 前処理をやり直す（PCA は捨てられる）
+    v1_preprocess(normalize="median")           # 前処理をやり直す（PCA は捨てられる）
     err = json.loads(plot_tools.dataset_plot(kind="pca", result_id=old))["error"]
     assert err["code"] == "STALE_ANALYSIS_RESULT"
 

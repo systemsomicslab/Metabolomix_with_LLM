@@ -104,15 +104,30 @@ def _array_bytes(value) -> int:
     return 0
 
 
+#: 統計エンジンの行列（`PreparedMatrix`）が抱える配列の欄。
+_PREPARED_ARRAY_FIELDS = ("log2", "qc_log2", "sample_values", "detected_units", "sample_detected")
+
+
+def _stat_matrix_bytes(ds) -> int:
+    """`ds.stat_matrices`（行列 ID → 登録）の `PreparedMatrix` の配列の `nbytes` の和。"""
+    total = 0
+    for entry in (getattr(ds, "stat_matrices", None) or {}).values():
+        prepared = entry.get("prepared") if isinstance(entry, dict) else None
+        total += sum(_array_bytes(getattr(prepared, name, None)) for name in _PREPARED_ARRAY_FIELDS)
+    return total
+
+
 def estimate_state_bytes(ds) -> int:
     """`DatasetState` が抱える大きさの見積もり（バイト）。
 
-    行列（`feature_matrix` `detected_mask` `pp_matrix` と `analysis_matrices` の配列）の `nbytes` に、
+    行列（`feature_matrix` `detected_mask` `pp_matrix` と `analysis_matrices` の配列、
+    `stat_matrices` の `PreparedMatrix` の配列）の `nbytes` に、
     検出された全セルの m/z（`per_sample_mz` の要素数 × 100）と特徴のメタデータ（件数 × 1500）を足す。
     基のキャッシュの上限の判定だけに使う概算で、他の入れ物（同定の候補など）は数えない。
     """
     total = sum(_array_bytes(getattr(ds, name, None))
                 for name in ("feature_matrix", "detected_mask", "pp_matrix", "analysis_matrices"))
+    total += _stat_matrix_bytes(ds)
     per_sample_mz = getattr(ds, "per_sample_mz", None) or {}
     total += sum(len(cells) for cells in per_sample_mz.values()) * _BYTES_PER_MZ_CELL
     total += len(getattr(ds, "feature_metadata", None) or {}) * _BYTES_PER_FEATURE_META

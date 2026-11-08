@@ -1,5 +1,6 @@
 """dataset_feature_search の with_group_labels（spec 2026-10-22 §4 の 5）。"""
 from __future__ import annotations
+from tests.v1_chain import v1_preprocess
 
 import json
 
@@ -17,7 +18,7 @@ HC, RA = ["HC1", "HC2", "HC3"], ["RA1", "RA2", "RA3"]
 def loaded(tmp_path):
     session_state.session = session_state.AnalysisSession()
     handle_tools.load_dataset(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
-    T.dataset_preprocess()
+    v1_preprocess()
     T.dataset_differential(group_a=HC, group_b=RA, group_a_label="HC", group_b_label="RA")
     yield
     session_state.session = session_state.AnalysisSession()

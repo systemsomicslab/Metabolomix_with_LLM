@@ -5,27 +5,21 @@
 
 ## dataset_preprocess
 
-1. metabolomix/tools/dataset_analysis_tools.py  dataset_preprocess()
-2. └─ metabolomix/analysis/dataset_analysis.py  run_dataset_preprocess()
-3.    └─ metabolomix/analysis/dataset_analysis.py  build_dataset_pp_inputs()
-4.       └─ metabolomix/analysis/preprocessing.py  detect_sample_roles()
-5.    └─ metabolomix/analysis/dataset_analysis.py  _apply_detection_filter()
-6.       └─ metabolomix/analysis/preprocessing.py  detection_rates()
-7.    └─ metabolomix/analysis/preprocessing.py  preprocess()
-8.    └─ metabolomix/analysis/preprocessing.py  drop_samples_by_role()
-9.    └─ metabolomix/analysis/preprocessing.py  detect_qc_strata()
+統計エンジンの前処理（spec 2026-11-06 §4）。行列 ID を返し、`ds.stat_matrices[matrix_id]` に置く
+（v1 の `pp_*` には書かない）。除外（`ds.excluded_*`）と群の上書き（`group_levels` / `group_factors`）は
+手順 2 が入力へ写す。`needs_input`（内部標準で換算済み＋QC のドリフト補正）は手順 5 の戻りから封筒にする。
+手順 7 の記録は `reports/stats/` への追記で、書き先が決まらない・書けないときも前処理は成功する。
 
-手順 5 は前処理（手順 7）より**前**に来る。正規化・補完のあとでは gap-fill セルが
-実測値と区別できなくなり、何を根拠に特徴を残したかが言えなくなるため。
-`min_detection_rate > 0` なのに `ds.detected_mask` が無い場合は `bad_request` で
-拒否する（検出状態が「無い」のと「全部未検出」は解釈が正反対で、0 扱いで通すと
-gap-fill だけの特徴を実測として数えた行列が黙って下流に流れる）。
+1. metabolomix/tools/stats_tools.py  dataset_preprocess()
+2. └─ metabolomix/analysis/stats_results.py  study_inputs()
+3. └─ metabolomix/analysis/stats/data.py  from_dataset()
+4. └─ metabolomix/analysis/stats/preprocess.py  normalize_preprocess_config()
+5. └─ metabolomix/analysis/stats/preprocess.py  preprocess()
+6. └─ metabolomix/analysis/stats_results.py  register_matrix()
+7. └─ metabolomix/analysis/stats_records.py  write_stats_record()
 
-検出率の分母は**実際に前処理へ渡す試料だけ**。手順 3 が `include=false` の行を
-行列から落とすのと同じ位置（`included_sample_indices`）でマスクの列も絞る
-（`_restrict_mask_to_samples`）——絞らないと、解析から除外した試料の未検出が
-分母に残り、`min_detection_rate=1.0` が「残す試料では全件検出されている」正当な
-特徴量を削り落とす。何試料分を数えたかは `report["detection"]["n_samples"]`。
+（v1 の前処理 `dataset_analysis.run_dataset_preprocess` は、pipeline の前処理工程と旧
+`dataset_differential` / `dataset_pca` がまだ読む `pp_*` を作る。D 段で消える。）
 
 ## dataset_pca
 

@@ -10,6 +10,7 @@ run 側と必ず食い違い、session の前処理も通っていない。こ�
   （上書きされた古い ref の hash を「壊れた」と読まない）。
 """
 from __future__ import annotations
+from tests.v1_chain import v1_preprocess
 
 import copy
 import json
@@ -300,7 +301,6 @@ def _run_recipe(harness) -> dict:
 
 
 def test_exporting_a_restored_result_states_the_runs_recipe(tmp_path):
-    from metabolomix.tools.dataset_analysis_tools import dataset_preprocess
     from metabolomix.tools.handle_tools import load_dataset
 
     harness, result = _run_with_differential(tmp_path)
@@ -310,7 +310,7 @@ def test_exporting_a_restored_result_states_the_runs_recipe(tmp_path):
     session_state.session.dataset = None
     load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab")
     # session で別のレシピの前処理をやり直しても、引き継いだ結果の条件は run のもの。
-    dataset_preprocess(**_SESSION_RECIPE)
+    v1_preprocess(**_SESSION_RECIPE)
     session_recipe = session_state.session.dataset.preprocessing_recipe
     assert session_recipe["normalize"] == "none" != run_recipe["normalize"]
 
@@ -320,7 +320,6 @@ def test_exporting_a_restored_result_states_the_runs_recipe(tmp_path):
 
 def test_exporting_a_restored_result_without_the_runs_preprocess_says_unknown(tmp_path):
     from metabolomix.analysis.dataset_export import HANDOFF_PREPROCESS_UNKNOWN
-    from metabolomix.tools.dataset_analysis_tools import dataset_preprocess
     from metabolomix.tools.handle_tools import load_dataset
 
     harness, result = _run_with_differential(tmp_path, with_preprocess=False)
@@ -329,7 +328,7 @@ def test_exporting_a_restored_result_without_the_runs_preprocess_says_unknown(tm
     session_state.session.dataset = None
     load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab")
     assert result_id in session_state.session.dataset.results
-    dataset_preprocess(**_SESSION_RECIPE)
+    v1_preprocess(**_SESSION_RECIPE)
 
     line = _exported_preprocess_line(tmp_path, result_id)
     assert line == f"# preprocess = {HANDOFF_PREPROCESS_UNKNOWN}"

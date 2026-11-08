@@ -5,6 +5,7 @@ m/z と RT は結びを検証するためだけに使う。合わないときは
 provenance に状態と理由を書く。
 """
 from __future__ import annotations
+from tests.v1_chain import v1_preprocess
 
 import csv
 import hashlib
@@ -174,7 +175,7 @@ def test_dcl_shorter_than_ids_is_out_of_range(tmp_path):
 
 
 def _differential(handle=None):
-    T.dataset_preprocess(dataset_handle=handle)
+    v1_preprocess(dataset_handle=handle)
     return json.loads(T.dataset_differential(group_a=HC, group_b=RA, dataset_handle=handle))["result_id"]
 
 

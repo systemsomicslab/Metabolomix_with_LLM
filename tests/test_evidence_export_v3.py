@@ -3,6 +3,7 @@
 dataset 経路は常に v3、`samples` と `intensities` を渡さない ARF 経路は v2 のまま。
 """
 from __future__ import annotations
+from tests.v1_chain import v1_preprocess
 
 import csv
 import json
@@ -51,7 +52,7 @@ def _handle_with_result(tmp_path) -> tuple[str, str]:
     path = write_mztab(tmp_path / "in" / "t.mzTab")
     opened = json.loads(handle_tools.load_dataset(mztab_path=str(path), library="none"))
     handle = opened["dataset_handle"]
-    T.dataset_preprocess(dataset_handle=handle)
+    v1_preprocess(dataset_handle=handle)
     result = json.loads(T.dataset_differential(group_a=HC, group_b=RA, dataset_handle=handle))
     return handle, result["result_id"]
 

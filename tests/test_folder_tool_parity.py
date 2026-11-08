@@ -5,6 +5,7 @@
 適用・試料のバッチと注入順・実験情報シートの受け付け——を縛る。fixture は tmp に作る。
 """
 from __future__ import annotations
+from tests.v1_chain import v1_preprocess
 
 import json
 from pathlib import Path
@@ -101,7 +102,7 @@ def test_folder_dataset_applies_curation_and_reports_detection(tmp_path):
     assert status["detection"]["n_cells"] == 24 and status["detection"]["n_detected"] == 23
     assert status["inchikey_coverage"]["total_features"] == 4
 
-    dat.dataset_preprocess()
+    v1_preprocess()
     dat.dataset_differential(group_a=["s0", "s1", "s2"], group_b=["s3", "s4", "s5"])
     out = tmp_path / "out.tsv"
     payload = json.loads(dat.dataset_export_differential(str(out), apply_curation=True))
@@ -182,7 +183,7 @@ def test_job_folder_carries_mztab_batch_and_injection_order(tmp_path):
     row = ds.sample_metadata_rows[0]
     assert row["provenance"]["injection_order"] == {
         "value": 9, "source": "mztab", "confidence": "unverified"}
-    result = json.loads(dat.dataset_preprocess())
+    result = json.loads(v1_preprocess())
     assert result["status"] == "success"
     assert "注入順（MTD" not in json.dumps(result, ensure_ascii=False)
 
@@ -226,7 +227,7 @@ def test_folder_and_mztab_adapters_give_the_same_tool_output(tmp_path, entry):
         assert ds.source_format == ("msdial_folder" if source == "folder" else "mztab")
         status = json.loads(mztab_tools.dataset_status())
         meta = dataset_analysis.build_dataset_pp_inputs(ds)[-1]
-        dat.dataset_preprocess()
+        v1_preprocess()
         dat.dataset_differential(group_a=["s0", "s1", "s2"], group_b=["s3", "s4", "s5"])
         export = json.loads(dat.dataset_export_differential(
             str(tmp_path / f"{source}.tsv"), apply_curation=True))
@@ -272,7 +273,7 @@ def _dated_spec() -> dict:
 def _differential_caveats(names) -> str:
     from metabolomix.tools import dataset_analysis_tools as dat
 
-    dat.dataset_preprocess()
+    v1_preprocess()
     out = json.loads(dat.dataset_differential(group_a=names[:3], group_b=names[3:]))
     return " ".join(out.get("caveats") or [])
 

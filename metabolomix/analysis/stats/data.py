@@ -18,6 +18,10 @@ DETECTED, GAP_FILLED, MISSING, PRESENT_UNKNOWN = 1, 2, 0, 3
 
 _CORE_KEYS = frozenset({"sample_id", "role", "group", "batch", "injection_order",
                         "include", "subject_id", "biological_sample_id", "source_file"})
+#: 試料の対応表（sample_manifest）の行が持つ、因子ではない帳簿の欄。来歴（provenance）・食い違い
+#: （conflicts）・QC のプール名（qc_pool）は注入ごとに違いうるので、属性にすると同じ個体の反復注入が
+#: 別の個体に割れる。
+_BOOKKEEPING_KEYS = frozenset({"provenance", "conflicts", "qc_pool"})
 
 
 @dataclass(frozen=True)
@@ -168,7 +172,10 @@ def _samples_table(ds, names: list[str]) -> list[SampleInfo]:
         # B-2 の dataset_set_sample_metadata は subject_id を行と sample_meta の両方に置く。
         subject = (_str_or_none(row.get("subject_id")) or _str_or_none(sm.get("subject_id"))
                    or _str_or_none(row.get("biological_sample_id")))
-        attrs = {k: s for k, v in row.items() if k not in _CORE_KEYS
+        # 属性は文字列にできる単一の値だけ（dict / list などの入れ物は因子にならないので落とす）
+        attrs = {k: s for k, v in row.items()
+                 if k not in _CORE_KEYS and k not in _BOOKKEEPING_KEYS
+                 and not isinstance(v, (dict, list, tuple, set, frozenset))
                  and (s := _str_or_none(v)) is not None}
         out.append(SampleInfo(sample_id=name, role=role, group=group, batch=batch,
                               injection_order=order, subject_id=subject,

@@ -4,6 +4,7 @@
 同じ JSON になることを確かめる。fixture はすべてテスト自身が作る。
 """
 from __future__ import annotations
+from tests.v1_chain import v1_preprocess
 
 import json
 import textwrap
@@ -350,7 +351,7 @@ def test_injection_trend_rho_is_none_below_five_samples(match_data):
 
 def test_novel_candidates_from_result_id_and_from_spec(data):
     handle = _open(data)
-    T.dataset_preprocess(dataset_handle=handle)
+    v1_preprocess(dataset_handle=handle)
     diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
                                              group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
     spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
@@ -696,7 +697,7 @@ def _groups_tsv(tmp_path):
 
 def test_novel_candidates_count_split_once(tmp_path):
     handle = _split_handle(tmp_path)
-    T.dataset_preprocess(dataset_handle=handle)
+    v1_preprocess(dataset_handle=handle)
     diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
                                              group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
     spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
@@ -752,7 +753,7 @@ def test_novel_candidates_rule_hash_includes_merge_groups(tmp_path):
     from metabolomix.analysis import mass_accuracy
 
     handle = _split_handle(tmp_path)
-    T.dataset_preprocess(dataset_handle=handle)
+    v1_preprocess(dataset_handle=handle)
     diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
                                              group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
     spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
@@ -828,7 +829,7 @@ def test_claim_evidence_adds_the_partner_outside_the_mass_window(tmp_path):
 
 def test_novel_candidates_labels_column_and_counts(data, tmp_path):
     handle = _open(data)
-    T.dataset_preprocess(dataset_handle=handle)
+    v1_preprocess(dataset_handle=handle)
     diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
                                              group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
     spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}

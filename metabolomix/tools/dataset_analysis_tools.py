@@ -25,7 +25,6 @@ from metabolomix.tools._holder import resolve_holder
 from metabolomix.mztab.polarity import dataset_polarity as _dataset_polarity
 
 __all__ = [
-    "dataset_preprocess",
     "dataset_pca",
     "dataset_differential",
     "dataset_export_differential",
@@ -51,84 +50,6 @@ _RECOVERY_TOOLS = {
     # 対象feature↔内部標準の対応付け。pipeline の resolve_feature_bindings が作る。
     "feature_bindings": ["pipeline_run", "pipeline_status"],
 }
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_preprocess(
-    normalize: str = "none",
-    blank_min_fold: float | None = None,
-    drift_correct: bool = False,
-    max_qc_rsd: float | None = None,
-    impute: str = "half_min",
-    min_detection_rate: float = 0.0,
-    dataset_handle: str | None = None,
-) -> str:
-    """DatasetState の定量行列に前処理レシピを適用する。
-
-    以降の dataset_pca / dataset_differential は
-    ここで作った前処理済み行列を消費する。
-
-    normalize: "none"（既定）/ "tic"（行総和）/ "median"（行中央値）/ "pqn"。
-    blank_min_fold: 生体試料平均がブランク平均のこの倍数未満の特徴量を背景として
-        除去する（例 3.0）。None（既定）でブランク除去なし。
-    drift_correct: QC 注入順ドリフト補正。注入順は mzTab-M の
-        `assay[N]-custom[...]` の injection sequence label（MS:4000089）から読む。
-        それを持たない mzTab-M では実施できず、caveat で報告する。
-    max_qc_rsd: QC 群の RSD がこの値を超える特徴量を除去する（例 0.30）。
-    impute: "half_min"（既定）/ "knn" / "column_mean" / "none"。
-    min_detection_rate: 実検出率（gap-fill を除く）による特徴量の足切り 0.0-1.0
-        （既定 0.0=無効）。**検出状態は mzTab-M 単体には無い**ので、隣接する `.arf`
-        から取り込めた場合にだけ使える。取り込めていない状態で 0 より大きい値を
-        渡すと引数エラーを返す（黙って未検出 0 件として通さない）。
-        取り込み状況は dataset_status の `detection` を見る。
-
-    成功すると session.dataset.pp_matrix に前処理済み行列が設定される。
-
-    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
-    """
-    holder = resolve_holder(dataset_handle)
-    if isinstance(holder, str):
-        return holder
-    ds = holder.dataset
-    if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
-
-    from metabolomix.analysis.dataset_service import preprocess_dataset
-
-    recipe = {
-        "normalize": normalize,
-        "blank_min_fold": blank_min_fold,
-        "drift_correct": drift_correct,
-        "max_qc_rsd": max_qc_rsd,
-        "impute": impute,
-        "min_detection_rate": min_detection_rate,
-    }
-    try:
-        # 状態の差し替え（成功時のみの反映・派生結果の無効化・来歴の付与）は
-        # サービス側が持つ。ツールはそれを呼んで要約を返すだけにする——
-        # ここで直接 ds を書き換えると、pipeline ワーカー経由の実行と規則がずれる。
-        report = preprocess_dataset(ds, recipe)
-    except PreconditionError as exc:
-        return _from_precondition(exc)
-
-    return json_payload({
-        "status": "success",
-        "result_id": report["provenance"]["result_id"],
-        "n_samples": len(ds.pp_sample_names),
-        "n_features": len(ds.pp_feature_names),
-        "features_before": report.get("features_before"),
-        "features_removed_total": report.get("features_removed_total"),
-        "recipe_applied": report.get("recipe_applied", []),
-        "excluded_from_matrix": report.get("excluded_from_matrix", {}),
-        "role_counts": _count_roles(ds.roles, ds.pp_sample_names),
-        "steps": report.get("steps", {}),
-        "caveats": report.get("caveats", []),
-        "next": "dataset_pca または dataset_differential を実行してください",
-        **({"detection": report["detection"]} if "detection" in report else {}),
-        **({"detection_filter": report["detection_filter"]}
-           if "detection_filter" in report else {}),
-    })
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
@@ -403,14 +324,6 @@ def _from_precondition(exc: PreconditionError) -> str:
     if exc.kind == "missing_state":
         return _missing(exc.state, exc.message)
     return mztab_error("DATASET_BAD_REQUEST", exc.message, exc.details or None)
-
-
-def _count_roles(roles: dict, sample_names: list[str]) -> dict:
-    counts: dict[str, int] = {}
-    for name in sample_names:
-        role = roles.get(name, "sample")
-        counts[role] = counts.get(role, 0) + 1
-    return counts
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)

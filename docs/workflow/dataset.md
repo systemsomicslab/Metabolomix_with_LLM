@@ -293,7 +293,7 @@ TSV（`query` は因子トークン。旧 `dataset_status(view="samples")` の `
 試料・特徴を解析から外す（可逆）。状態は `DatasetState.excluded_samples` /
 `excluded_features`（名前・特徴 ID -> 理由）。入力の指紋には入れず、変わったときだけ
 `metadata_revision` を進めて前処理済み行列から先の結果を古くする（`apply_metadata` と同じ
-`invalidate_results` の経路）。除外を当てるのは前処理（`run_dataset_preprocess`）。
+`invalidate_results` の経路）。除外を当てるのは前処理（統計エンジンは `dataset_preprocess` が `study_inputs` で入力へ写す。v1 は `run_dataset_preprocess`）。
 同じ経路で統計エンジンの行列（`ds.stat_matrices`）と v2 の解析行列（`ds.analysis_matrices`）も
 空にする（除外の前の行列 ID は使えなくなる）。
 
@@ -303,7 +303,7 @@ TSV（`query` は因子トークン。旧 `dataset_status(view="samples")` の `
 4.    └─ metabolomix/analysis/dataset_exclusions.py _resolve_features()
 5.    └─ metabolomix/analysis/result_state.py invalidate_results()
 
-除外の適用（`dataset_preprocess` → `run_dataset_preprocess` の中）:
+除外の適用（v1 の前処理 `run_dataset_preprocess` の中。統計エンジンの `dataset_preprocess` は `stats_results.study_inputs` が `ds.excluded_*` を `from_dataset` の入力へ写す）:
 1. metabolomix/analysis/dataset_analysis.py run_dataset_preprocess()
 2. └─ metabolomix/analysis/dataset_analysis.py build_dataset_pp_inputs()
 3.    └─ metabolomix/analysis/dataset_analysis.py included_sample_indices()

@@ -20,9 +20,9 @@ RECORD_SCHEMA = "lipidmix.stats-record.v1"
 STEPS = ("preprocess", "compare", "pca")
 
 
-def record_dir(directory: Path) -> Path:
-    """記録の置き場所。`directory` は記録の置き場所の基準（例 `<解析フォルダ>/reports`）。"""
-    return Path(directory) / "stats"
+def record_dir(reports_dir: Path) -> Path:
+    """記録の置き場所。`reports_dir` は記録の置き場所の基準（例 `<解析フォルダ>/reports`）。"""
+    return Path(reports_dir) / "stats"
 
 
 def _new_record_id() -> str:
@@ -30,10 +30,12 @@ def _new_record_id() -> str:
     return f"s_{stamp}_{uuid.uuid4().hex[:8]}"
 
 
-def write_stats_record(directory: Path, step: str, *, inputs: dict, parent_ids: list[str],
+def write_stats_record(reports_dir: Path, step: str, *, inputs: dict, parent_ids: list[str],
                        settings: dict, summary: dict) -> dict:
-    """記録を 1 件 `<directory>/stats/<record_id>.json` に書き、その内容（と `path`）を返す。
+    """記録を 1 件 `<reports_dir>/stats/<record_id>.json` に書き、その内容（と `path`）を返す。
 
+    `reports_dir` は解析フォルダ配下の `reports/`（解析フォルダそのものではない。
+    `mcp_core._resolve_report_dir(holder)` の戻り値を渡す）。
     `inputs` は入力の識別（データの指紋・行列 ID など）、`parent_ids` は前の工程の記録 ID、
     `settings` は効いた設定、`summary` は要約。`path` は返すだけでファイルには書かない
     （解析フォルダを動かしても記録の中身は変わらない）。
@@ -52,7 +54,7 @@ def write_stats_record(directory: Path, step: str, *, inputs: dict, parent_ids: 
         "settings": settings,
         "summary": summary,
     })
-    path = record_dir(directory) / f"{record_id}.json"
+    path = record_dir(reports_dir) / f"{record_id}.json"
     try:
         write_new_json(path, record)
     except FileExistsError:

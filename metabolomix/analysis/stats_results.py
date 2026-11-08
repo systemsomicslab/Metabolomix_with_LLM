@@ -32,7 +32,54 @@ __all__ = [
     "register_compare",
     "register_matrix",
     "register_pca",
+    "study_inputs",
 ]
+
+
+# --- 入力（除外と群の上書き） ------------------------------------------------------
+
+def _facets(ds) -> dict:
+    """試料の表示名 → 因子トークンの束。役割と群は試料の対応表の行から、無ければ読み込みの既定の行から
+    取る（`plots/dataset_rows._facets` と同じ作り）。"""
+    from metabolomix.analysis import sample_manifest
+    from metabolomix.msdial import sample_factors
+
+    names = list(ds.sample_names)
+    table = getattr(ds, "sample_metadata_rows", None) or sample_manifest.resolve_metadata(ds, None)
+    meta = {name: {"role": (row or {}).get("role"), "group": (row or {}).get("group")}
+            for name, row in zip(names, table)}
+    return sample_factors.build_sample_facets(names, None, meta)
+
+
+def study_inputs(ds, *, group_levels=None, group_factors=None) -> dict:
+    """エンジンの入力に写す 3 つ: `{"exclude_samples", "exclude_features", "group_overrides"}`。
+
+    除外は `ds.excluded_samples` / `ds.excluded_features`（`dataset_exclude` の状態）を名前の昇順で。
+    群の上書きは `group_levels`（1 因子の値）か `group_factors`（因子軸のリスト。優先）を
+    `msdial.sample_factors.assign_factor_groups` で試料の表示名に当てた結果（試料名 → 群）。どちらも
+    無ければ `{}`（試料の表の群をそのまま使う）。役割が sample でない試料（QC・ブランク）は上書きしない。
+    値が相互排他でない（1 つの試料が 1 軸の複数の値に当たる）指定は `DATASET_BAD_REQUEST`。
+    これで作った dict は spec v2 の `input.exclude_samples` / `exclude_features` / `group_overrides`
+    にそのまま入る（spec だけで同じ数字を出し直せる）。
+    """
+    from metabolomix.msdial import sample_factors
+
+    overrides: dict[str, str] = {}
+    if group_levels or group_factors:
+        facets = _facets(ds)
+        try:
+            groups = sample_factors.assign_factor_groups(
+                facets, group_factors=group_factors, group_levels=group_levels)
+        except ValueError as exc:
+            raise DomainError("DATASET_BAD_REQUEST", str(exc),
+                              {"group_levels": group_levels, "group_factors": group_factors}) from exc
+        overrides = {name: label for name, label in groups.items()
+                     if label and facets[name].role == "sample"}
+    return {
+        "exclude_samples": sorted(getattr(ds, "excluded_samples", None) or {}),
+        "exclude_features": sorted(getattr(ds, "excluded_features", None) or {}),
+        "group_overrides": dict(sorted(overrides.items())),
+    }
 
 
 # --- 行列 ---------------------------------------------------------------------

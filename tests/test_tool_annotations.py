@@ -40,7 +40,9 @@ EXPECTED_ANNOTATIONS = {
     # --- DatasetState 解析層 ---
     # readOnlyHint はファイル/ネットワークへの副作用の有無。セッション状態の
     # 更新は数えない（このファイル冒頭の規約）。
-    "dataset_preprocess": READ_ONLY,
+    # 前処理の記録を reports/stats/ に 1 件追記する（呼ぶたびに新しい記録＝非冪等。書き先が
+    # 無ければ書かず、前処理は成功する）。行列は ds.stat_matrices へ置く。
+    "dataset_preprocess": LOCAL_WRITE_APPEND,
     "dataset_pca": READ_ONLY,
     "dataset_differential": READ_ONLY,
     # ファイルを書き、同じ引数なら同じ内容で上書きする → 冪等
