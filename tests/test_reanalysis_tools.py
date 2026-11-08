@@ -911,3 +911,137 @@ def test_not_evaluable_reason_is_last_key(data, library):
     assert "msms_not_evaluable_reason" in keys
     assert keys[-1] == "msms_not_evaluable_reason" and keys[0] != "msms_not_evaluable_reason"
     assert "schema" in keys
+
+
+# ---------- dataset_analysis_run: v1 / v2 の振り分け（C の配線 Task 7） ----------
+
+def _v2_state(tmp_path):
+    from tests.test_stats_results import _ds
+    state = _ds()
+    state.analysis_dir = str(tmp_path / "analysis")
+    session_state.session.dataset = state
+    return state
+
+
+_V2_OFF = {"drift": {"mode": "off"},
+           "filters": {"blank_ratio": None, "detection": None, "qc_rsd": None, "d_ratio": None},
+           "normalize": {"method": "none"}}
+
+
+def _v2_spec(**extra):
+    spec = {"schema": "analysis-spec.v2", "preprocess": _V2_OFF,
+            "comparisons": [{"id": "T_vs_C", "factor": "group", "reference": "C", "test": "T"}],
+            "analyses": [{"analysis_id": "cmp", "kind": "compare"}]}
+    spec.update(extra)
+    return spec
+
+
+def _strict_loads(text):
+    return json.loads(text, parse_constant=lambda c: pytest.fail(f"non-strict constant {c}"))
+
+
+def test_analysis_run_dispatches_v2_by_schema(tmp_path):
+    _v2_state(tmp_path)
+    out = json.loads(R.dataset_analysis_run(_v2_spec(analyses=[
+        {"analysis_id": "cmp", "kind": "compare"}, {"analysis_id": "pc", "kind": "pca"},
+        {"analysis_id": "comp", "kind": "composition"}], primary="cmp")))
+    assert out["status"] == "success" and out["schema"] == "analysis-result.v2"
+    assert {"rule_hash", "matrix_id", "input_fingerprint", "warnings"} <= out.keys()
+    cmp_, pca_, comp = out["analyses"]
+    assert (cmp_["analysis_id"], cmp_["kind"], cmp_["n_rows"], cmp_["n_tested"]) == ("cmp", "compare", 10, 10)
+    assert sum(cmp_["verdicts"].values()) == 10 and cmp_["verdicts"]["changed"] >= 3
+    assert "n_q_below" in cmp_ and cmp_["rows"].splitlines()[0].split("\t")[:2] == ["contrast_id", "feature_id"]
+    assert pca_["kind"] == "pca" and pca_["explained_variance_ratio"] and "rows" not in pca_
+    assert comp["kind"] == "composition" and "n_rows" in comp
+    # v1 の spec（schema なし）は v1 のまま
+    v1 = json.loads(R.dataset_analysis_run({"comparison": {}}))
+    assert v1["error"]["code"] in ("ANALYSIS_SPEC_INVALID", "missing_state")
+
+
+def test_analysis_run_v1_unchanged_golden(data, tmp_path):
+    from metabolomix.analysis import analysis_spec
+    handle = _open(data)
+    out = json.loads(R.dataset_analysis_run(_spec(data), dataset_handle=handle))
+    assert list(out) == ["status", "schema", "rule_hash", "merge_split", "input_fingerprint",
+                         "comparison", "group_ref", "group_test", "analyses", "note"]
+    assert out["schema"] == "analysis-result.v1"
+    assert list(out["analyses"][0]) == [
+        "analysis_id", "n_features_in", "n_features_out", "bh_population_n", "n_rows", "n_tested",
+        "n_meets_thresholds", "detection_available", "n_detection_driven", "rows"]
+    path = tmp_path / "v1.json"
+    R.dataset_analysis_run(_spec(data), dataset_handle=handle, output_path=str(path))
+    ds = handles.registry.get(handle).dataset
+    expected = R.write_result(str(tmp_path / "exp.json"), analysis_spec.run_spec(
+        analysis_spec.normalize_spec(_spec(data)), ds))
+    assert path.read_bytes() == (tmp_path / "exp.json").read_bytes() and expected
+
+
+def test_analysis_run_v2_output_path_strict_json(tmp_path):
+    _v2_state(tmp_path)
+    path = tmp_path / "out" / "r.json"
+    out = json.loads(R.dataset_analysis_run(_v2_spec(), output_path=str(path)))
+    assert out["output_path"] == str(path.resolve()) and "rows" not in out["analyses"][0]
+    saved = _strict_loads(path.read_text(encoding="utf-8"))
+    assert saved["schema"] == "analysis-result.v2" and saved["rule_hash"] == out["rule_hash"]
+    assert len(saved["analyses"][0]["result"]["rows"]) == 10
+    again = tmp_path / "out" / "r2.json"
+    R.dataset_analysis_run(_v2_spec(), output_path=str(again))
+    assert again.read_bytes() == path.read_bytes()
+
+
+def test_analysis_run_v2_inline_row_limit(tmp_path):
+    import numpy as np
+    state = _v2_state(tmp_path)
+    nf = 60
+    rng = np.random.default_rng(1)
+    state.feature_matrix = np.exp2(rng.normal(20, 1, (nf, len(state.sample_names))))
+    state.detected_mask = np.ones_like(state.feature_matrix, dtype=bool)
+    state.feature_ids = [f"f{k}" for k in range(nf)]
+    state.feature_metadata = {f"f{k}": {"name": f"F{k}"} for k in range(nf)}
+    out = json.loads(R.dataset_analysis_run(_v2_spec()))
+    assert out["error"]["code"] == "ANALYSIS_OUTPUT_REQUIRED"
+    assert out["error"]["details"]["analyses"] == ["cmp"]
+    ok = json.loads(R.dataset_analysis_run(_v2_spec(), output_path=str(tmp_path / "o.json")))
+    assert ok["analyses"][0]["n_rows"] == 60
+
+
+def test_analysis_run_v2_needs_input_envelope_names_spec_field(tmp_path):
+    state = _v2_state(tmp_path)
+    state.quant_state = {"normalized": True, "method": "is_ratio", "unit": "ratio",
+                         "record_id": "q_test_1"}
+    spec = _v2_spec(preprocess={"filters": _V2_OFF["filters"], "normalize": {"method": "none"}})
+    out = json.loads(R.dataset_analysis_run(spec))
+    body = out["needs_input"]
+    assert "error" not in out and body["field"] == "preprocess.drift.mode"
+    assert "argument" not in body and body["retry_tools"] == ["dataset_analysis_run"]
+    assert {o["value"] for o in body["options"]} == {"on", "off"}
+
+
+def test_analysis_run_v2_dataset_exclusions_not_in_spec_warn(tmp_path):
+    state = _v2_state(tmp_path)
+    state.excluded_samples = {"C0_r0": "x"}
+    state.excluded_features = {"f1": "y"}
+    out = json.loads(R.dataset_analysis_run(_v2_spec(), output_path=str(tmp_path / "o.json")))
+    warn = [w for w in out["warnings"] if w["code"] == "dataset_exclusions_not_in_spec"]
+    assert warn == [{"code": "dataset_exclusions_not_in_spec", "n_samples": 1, "n_features": 1}]
+    assert out["analyses"][0]["n_rows"] == 10            # ds の除外は使わない
+    listed = json.loads(R.dataset_analysis_run(_v2_spec(input={
+        "exclude_samples": ["C0_r0"], "exclude_features": ["f1"]}), output_path=str(tmp_path / "p.json")))
+    assert not [w for w in listed["warnings"] if w["code"] == "dataset_exclusions_not_in_spec"]
+    assert listed["analyses"][0]["n_rows"] == 9
+
+
+def test_analysis_run_does_not_touch_session_or_reports(tmp_path):
+    import copy
+    state = _v2_state(tmp_path)
+    before = (dict(state.__dict__.get("results", {}) or {}), copy.deepcopy(state.stat_matrices),
+              state.pp_matrix, state.sample_names[:], state.feature_matrix.copy())
+    handle_before = session_state.session.current_handle_id
+    R.dataset_analysis_run(_v2_spec(analyses=[{"analysis_id": "cmp", "kind": "compare"},
+                                              {"analysis_id": "pc", "kind": "pca"}], primary="cmp"))
+    after = (dict(state.__dict__.get("results", {}) or {}), copy.deepcopy(state.stat_matrices),
+             state.pp_matrix, state.sample_names[:], state.feature_matrix)
+    assert after[:4] == before[:4] and (after[4] == before[4]).all()
+    assert session_state.session.dataset is state
+    assert session_state.session.current_handle_id == handle_before
+    assert not (tmp_path / "analysis" / "reports").exists()

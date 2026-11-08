@@ -59,6 +59,17 @@ property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` 
 21. │  └─ metabolomix/analysis/analysis_spec.py  rule_hash()
 22. └─ metabolomix/tools/reanalysis_tools.py  write_result()
 
+`spec["schema"] == "analysis-spec.v2"` のときは、`resolve_holder()` のあと v1 の鎖でなく次へ振り分ける
+（データセットは常に要る。除外は spec の `input` だけを使い、`dataset_exclude` の除外は読まない。
+状態変更・記録は無し）。
+
+1. metabolomix/tools/reanalysis_tools.py  _analysis_run_v2()
+2. ├─ metabolomix/analysis/stats/spec_v2.py  normalize_spec_v2()
+3. ├─ metabolomix/analysis/stats/spec_v2.py  run_spec_v2()
+4. ├─ metabolomix/analysis/stats_run_summary.py  run_summary()
+5. ├─ metabolomix/analysis/stats_run_summary.py  inline_rows()
+6. └─ metabolomix/tools/reanalysis_tools.py  write_result()
+
 割れたスポットのまとめ（`features.merge_split`、既定 true）は recipe の前（行列を読んだ直後。recipe・集約・検定はまとめた行列に当たる）に、
 `alignment_qc` の `merge_groups` だけに行う（`features.alignment_qc` に JSON を渡せばその群、
 無ければその場の `find_split_pairs`。JSON は `dataset_fingerprint` が今のデータセットと合うものだけ）。外部の行列（`input.source=tsv`）では何もしない。

@@ -103,7 +103,18 @@ def _dataset_or_error(holder, needed: bool):
           structured_output=False)
 def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
                          output_path: str | None = None) -> str:
-    """論文の方法を写した spec（analysis-spec.v1）で、行列を作って 2 群を検定する（再解析で使う）。
+    """論文の方法を写した spec で、行列を作って検定する（再解析で使う）。
+
+    `spec["schema"] == "analysis-spec.v2"` なら統計エンジンへ回す（v2 は下の「v2」）。それ以外は v1。
+
+    v2: `lipidmix://docs/output-format/reanalysis` と statistics-engine の spec。spec だけで同じ数字を
+    出し直せる自己完結の実行で、除外は `input.exclude_samples` / `exclude_features` と
+    `group_overrides` に書いたものだけを使う（`dataset_exclude` の除外は読まない。spec に無い除外が
+    あれば注意 `dataset_exclusions_not_in_spec` を返す）。前処理が利用者への確認を要するときは
+    `needs_input` の封筒（`field` の spec の欄に答えて呼び直す）。状態も記録も書かない。
+    戻り値は解析ごとの要約（行は同じ規則: `output_path` に全量の JSON、無ければ 50 行以下だけ TSV）。
+
+    v1（analysis-spec.v1）:
 
     spec の形と欄の意味は `lipidmix://docs/output-format/reanalysis` §2。要点:
     `comparison`（`reference` / `test` の群の名前。比較名は `<test>_vs_<ref>`）、
@@ -130,6 +141,8 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
         return holder
+    if isinstance(spec, dict) and spec.get("schema") == "analysis-spec.v2":
+        return _analysis_run_v2(spec, holder, output_path)
     try:
         normalized = analysis_spec.normalize_spec(spec)
         ds, error = _dataset_or_error(holder, normalized["input"]["source"] == "dataset"
@@ -188,6 +201,61 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
         "analyses": summary,
         "note": "判定（再現したか）は返さない。direction は group_test から見た向き。",
     })
+
+
+def _analysis_run_v2(spec: dict, holder, output_path: str | None) -> str:
+    """analysis-spec.v2 を統計エンジンで実行する（状態を変えず、記録を書かない）。"""
+    from metabolomix.analysis import stats_run_summary as S
+    from metabolomix.analysis.stats.spec_v2 import normalize_spec_v2, run_spec_v2
+    from metabolomix.core.mcp_errors import needs_input
+    from metabolomix.core.serialization import json_safe, truncate_lists
+
+    ds, error = _dataset_or_error(holder, True)
+    if error:
+        return error
+    try:
+        normalized = normalize_spec_v2(spec)
+        result = run_spec_v2(normalized, ds, assay_kind=_assay_kind(holder))
+        if result.get("status") == "needs_input":
+            return needs_input(result["field"], result["reason"], result["options"],
+                               retry_tools=["dataset_analysis_run"])
+        too_many = [e["analysis_id"] for e in result["analyses"] if S.n_rows(e) > MAX_INLINE_ROWS]
+        if output_path is None and too_many:
+            raise DomainError(
+                "ANALYSIS_OUTPUT_REQUIRED",
+                f"報告する行が {MAX_INLINE_ROWS} を超える解析がある（{too_many}）。output_path を"
+                "指定して JSON に書いてください。", {"analyses": too_many})
+        written = write_result(output_path, json_safe(result)) if output_path else None
+    except DomainError as exc:
+        details = truncate_lists(json_safe(exc.details), S.LIST_LIMIT,
+                                 keys=tuple(_DETAIL_LIST_KEYS)) if exc.details else None
+        return mztab_error(exc.code, exc.message, details)
+
+    inp = normalized["input"]
+    n_samples = len(set(ds.excluded_samples) - set(inp["exclude_samples"]))
+    n_features = len(set(ds.excluded_features) - set(inp["exclude_features"]))
+    extra = ([{"code": "dataset_exclusions_not_in_spec", "n_samples": n_samples,
+               "n_features": n_features}] if n_samples or n_features else [])
+    summary = S.run_summary(result, extra_warnings=extra)
+    if written is None:
+        by_id = {e["analysis_id"]: e for e in result["analyses"]}
+        for item in summary["analyses"]:
+            if item["kind"] != "pca":
+                item["rows"] = S.inline_rows(by_id[item["analysis_id"]], rows_table)
+    return json_payload(json_safe(round_floats({
+        "status": "success", **summary, **({"output_path": written} if written else {}),
+        "note": "判定（再現したか）は返さない。状態と記録は変えていない。"})))
+
+
+#: エラーの details で切る一覧のキー（件数は `<key>_n_more` に残す）。
+_DETAIL_LIST_KEYS = ("samples", "sample_ids", "unit_ids", "feature_ids", "candidates", "examples",
+                     "unknown_samples", "unknown_features", "columns")
+
+
+def _assay_kind(holder) -> str:
+    """組成のクラスの種類の決め方に使う、記録済みの脂質／代謝物の別（無ければ unknown）。"""
+    from metabolomix.core.session_state import session
+    return getattr(session, "assay_kind", "unknown") or "unknown"
 
 
 # ---------- 共通 ----------
