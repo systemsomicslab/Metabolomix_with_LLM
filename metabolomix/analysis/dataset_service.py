@@ -167,7 +167,10 @@ def preprocess_auto(ds, requested: dict, metadata: list[dict], *,
 
 def pca_dataset(ds, n_components: int = 5, log_transform: bool = False, *,
                 request_revision: int | None = None) -> dict:
-    """PCA を実行し、成功したときだけ `last_pca` を差し替える。"""
+    """v1 の PCA を実行し、成功したときだけ `last_pca` を差し替える。
+
+    呼び出し元は pipeline（とテスト）だけ。対話ツールの `dataset_pca` は統計エンジンの PCA。D 段で消す。
+    """
     settings = {"n_components": n_components, "log_transform": log_transform}
     result = run_dataset_pca(ds, n_components=n_components,
                              log_transform=log_transform)

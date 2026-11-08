@@ -1,11 +1,11 @@
 """DatasetState に対する解析 MCP ツール。
 
-load_dataset → dataset_preprocess → dataset_pca / dataset_differential
-→ dataset_export_differential の順に実行する。解析フォルダも mzTab-M も
+load_dataset → dataset_preprocess → dataset_differential
+→ dataset_export_differential の順に実行する（PCA の `dataset_pca` は `stats_tools`）。解析フォルダも mzTab-M も
 `load_dataset` が同じ DatasetState にするので、同じ入力からは同じ数字が出る。dataset_feature_search は読み取り専用で、特徴の検索・目的の物質の
 判定に差次的結果の統計を添えて返す（判定の純ロジックは analysis/feature_search.py）。
 
-戻り値には要約だけを載せ、全量（PCA の loadings・差次的の results/volcano）は
+戻り値には要約だけを載せ、全量（差次的の results/volcano）は
 session.dataset に保持する（CLAUDE.md の戻り値肥大禁止）。
 """
 from __future__ import annotations

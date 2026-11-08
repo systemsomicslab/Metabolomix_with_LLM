@@ -19,7 +19,7 @@ from metabolomix.tools.stats_tools import dataset_pca
 from tests.config_fixtures import use_config
 from tests.curation_fixtures import write_alignment_set
 from tests.msdial_folder_fixtures import analysis_file_row, write_mddata
-from tests.v1_chain import v1_preprocess
+from tests.v1_chain import v1_pca, v1_preprocess
 
 PNG_MAGIC = b"\x89PNG"
 
@@ -343,6 +343,38 @@ def test_pca_figure_with_baked_metadata_is_stale_when_the_revision_moves(tmp_pat
     err = json.loads(reports.save_figure("loadings", "rev-1"))["error"]
     assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
     assert not (tmp_path / "reports" / "figures" / "rev-1_loadings.png").exists()
+
+
+def _v1_pca_dataset():
+    ds = _synthetic()
+    _set_metadata(ds, group=lambda n: n.split("_")[0])
+    v1_preprocess()
+    v1_pca(n_components=3)
+    return ds
+
+
+def test_v1_pca_results_still_draw_scores_and_loadings():
+    """pipeline の引き渡しが作る v1 の PCA（scores 行・特異値・`pp_feature_names`）も図にできる。"""
+    ds = _v1_pca_dataset()
+    pay = _payload(kind="pca")
+    assert len(pay["points"]) == 8 and {p["group"] for p in pay["points"]} == {"ctrl", "treat"}
+    assert pay["title"] == "PCA" and not any("fitted" in p for p in pay["points"])
+    load = _payload(kind="loadings", top_n=3)
+    assert load["value"] == "r"                                   # 特異値から相関 r が出せる
+    assert {r["feature_id"] for r in load["panels"][0]["rows"]} <= set(ds.pp_feature_names)
+
+
+def test_v1_loadings_figure_survives_a_group_only_revision(tmp_path):
+    """v1 の PCA は前処理の入力だけに依存する: 群だけの更新では結果も loadings の図も古くならない。"""
+    from metabolomix.analysis.result_state import is_current
+
+    ds = _v1_pca_dataset()
+    plot_tools.dataset_plot(kind="loadings", top_n=3)
+    for row in ds.sample_metadata_rows:
+        row["group"] = "NEW"
+    ds.metadata_revision += 1
+    assert is_current(ds, ds.last_pca) and "loadings" in ds.figures
+    assert "ver-1_loadings.png" in reports.save_figure("loadings", "ver-1")
 
 
 def test_figures_are_not_part_of_the_fingerprint():

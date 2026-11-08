@@ -42,25 +42,27 @@ QC_LABEL = "QC"
 def stat_pca_rows(record: dict) -> list[dict]:
     """`stat_pca` の記録（stats-pca.v1 を `engine` に持つ）を、スコア図が読む行（個体 → QC の順）にする。
 
-    行は `{name, role, group, fitted, PC1, PC2, ...}`。`name` は個体 ID（QC は QC の ID）、`group` は
+    行は `{id, name, role, group, fitted, PC1, PC2, ...}`。`id` はエンジンの個体 ID（QC は QC の試料 ID）、
+    `name` はその表示名（記録の `labels`。無ければ ID）、`group` は
     記録の `groups`（色分けの表示だけに使った群。QC は `QC`）、`fitted` は軸の計算に使った行か
     （QC は投影だけなので False）。
     """
     engine = record.get("engine") or {}
     groups = record.get("groups") or {}
+    labels = record.get("labels") or {}
     scores = engine.get("scores") or {}
     rows = []
     for names, matrix, role in ((engine.get("unit_ids") or [], scores.get("units") or [], "sample"),
                                 (engine.get("qc_ids") or [], scores.get("qc") or [], "qc")):
         for name, values in zip(names, matrix):
-            row = {"name": name, "role": role, "fitted": role == "sample",
+            row = {"id": name, "name": labels.get(name, name), "role": role, "fitted": role == "sample",
                    "group": groups.get(name) if role == "sample" else QC_LABEL}
             row.update({f"PC{k + 1}": float(v) for k, v in enumerate(values)})
             rows.append(row)
     return rows
 
 
-def dataset_pca_plot(last_pca: dict, title: str = "PCA (mzTab-M)") -> dict | None:
+def dataset_pca_plot(last_pca: dict, title: str | None = None) -> dict | None:
     """DatasetState の PCA 結果を `_pca_scatter_arrays` が食う散布図 dict に射影する。
 
     v1 の結果は `ds.last_pca["scores"]`（name / role / PC1 / PC2…）、統計エンジンの結果
@@ -87,6 +89,8 @@ def dataset_pca_plot(last_pca: dict, title: str = "PCA (mzTab-M)") -> dict | Non
         points.append(point)
     if not points:
         return None
+    if title is None:
+        title = "PCA" if is_stat_pca(last_pca) else "PCA (mzTab-M)"
     x_label = f"PC1 ({evr[0] * 100:.2f}%)" if len(evr) > 0 else "PC1"
     y_label = f"PC2 ({evr[1] * 100:.2f}%)" if len(evr) > 1 else "PC2"
     return {"title": title, "x_label": x_label, "y_label": y_label, "points": points}

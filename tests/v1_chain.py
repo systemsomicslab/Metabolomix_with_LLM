@@ -61,3 +61,15 @@ def v1_preprocess(normalize: str = "none", blank_min_fold: float | None = None,
         **({"detection_filter": report["detection_filter"]}
            if "detection_filter" in report else {}),
     })
+
+
+def v1_pca(n_components: int = 5, dataset_handle: str | None = None) -> dict:
+    """v1 の PCA（`ds.last_pca` に scores / loadings / singular_values を置く経路）を回す。
+
+    pipeline の引き渡しが今も作る形。`v1_preprocess` の後に呼ぶ。D 段で v1 を消すときにこのファイルごと消える。
+    """
+    holder = resolve_holder(dataset_handle)
+    ds = holder.dataset
+    from metabolomix.analysis.dataset_service import pca_dataset
+
+    return pca_dataset(ds, n_components=n_components)

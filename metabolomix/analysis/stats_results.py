@@ -32,6 +32,7 @@ __all__ = [
     "register_compare",
     "register_matrix",
     "register_pca",
+    "sample_batches",
     "study_inputs",
     "unit_group_labels",
 ]
@@ -223,6 +224,14 @@ def register_compare(ds, run_result: dict, *, log2fc_threshold, units) -> dict:
     return record
 
 
+def sample_batches(ds) -> dict[str, str | None]:
+    """エンジンの試料 ID → バッチ（個体にまとめる前の注入ごと。QC も含む。`from_dataset` と同じ試料の表から）。"""
+    from metabolomix.analysis.stats.data import from_dataset
+
+    study = from_dataset(ds, exclude_samples=[], exclude_features=[], group_overrides={})
+    return {s.sample_id: s.batch for s in study.samples}
+
+
 def unit_group_labels(ds, prepared, group_overrides: dict | None = None) -> dict[str, str]:
     """個体 ID → 色分けの群（PCA の表示だけに使う。数字には効かない）。
 
@@ -256,6 +265,9 @@ def register_pca(ds, pca_result: dict, groups: dict | None) -> dict:
     n_components = len(pca_result.get("explained_variance_ratio") or [])
     impute = (pca_result.get("imputation") or {}).get("method")
     groups = None if groups is None else dict(groups)
+    names = _display_names(ds)
+    labels = {i: names[i] for i in [*pca_result.get("unit_ids", []), *pca_result.get("qc_ids", [])]
+              if names.get(i) not in (None, i)}              # 図の表示名（ID と違うものだけ）
     result_id = "pca_" + canonical_hash({"matrix_id": matrix_id, "scaling": scaling,
                                          "n_components": n_components, "impute": impute,
                                          "groups": groups})[:12]
@@ -267,6 +279,7 @@ def register_pca(ds, pca_result: dict, groups: dict | None) -> dict:
         "n_components": n_components,
         "impute": impute,
         "groups": groups,
+        "labels": labels,
         "engine": pca_result,
         "provenance": _provenance(ds, result_id, "stat_pca", matrix_id, dataset_fingerprint(ds)),
     }

@@ -200,8 +200,9 @@ def _pca(ds, req: _Request) -> dict:
             colors = {row["name"]: row["role"] for row in scores}
         else:
             entry = stats_results.get_matrix(ds, result.get("matrix_id"))
-            batch = {u.unit_id: u.batch for u in entry["prepared"].units} if entry else {}
-            colors = {row["name"]: batch.get(row["name"]) for row in scores}
+            batch = dict(stats_results.sample_batches(ds))           # QC の注入（試料 ID）
+            batch.update({u.unit_id: u.batch for u in entry["prepared"].units} if entry else {})
+            colors = {row["name"]: batch.get(row["id"]) for row in scores}
         if projected:
             caveats.append("QC は主成分の軸の計算に使わず、同じ軸へ投影した点（白抜き）。")
     else:

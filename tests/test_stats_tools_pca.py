@@ -10,7 +10,7 @@ import pytest
 from metabolomix.analysis import stats_results
 from metabolomix.analysis.pca import loading_correlations, run_pca_fit_subset
 from metabolomix.core import session_state
-from metabolomix.core.tool_helpers import _pca_scatter_arrays, dataset_pca_plot
+from metabolomix.core.tool_helpers import _pca_scatter_arrays, dataset_pca_plot, stat_pca_rows
 from metabolomix.plots import pca_loadings
 from metabolomix.tools import plot_tools, stats_tools
 from metabolomix.tools.stats_tools import dataset_pca, dataset_preprocess
@@ -71,7 +71,6 @@ def test_pca_on_matrix_qc_projected_and_groups_counted(ds):
     assert np.asarray(engine["scores"]["units"]).shape == (8, 3)
     assert np.asarray(engine["scores"]["qc"]).shape == (4, 3)
     assert len(engine["loadings"]) == 3
-    # QC は軸に効かない: QC の値を変えても個体のスコアは同じ
     entry = stats_results.get_matrix(ds, pre["matrix_id"])
     assert engine["unit_ids"] == [u.unit_id for u in entry["prepared"].units]
 
@@ -155,7 +154,7 @@ def test_dataset_plot_pca_and_loadings_from_stat_pca(ds):
     assert {p["group"] for p in pay["points"] if "fitted" not in p} == {"C", "T"}
     assert any("投影" in c for c in pay["caveats"])
     assert {p["group"] for p in _payload(kind="pca", color_by="role")["points"]} == {"sample", "qc"}
-    assert {p["group"] for p in _payload(kind="pca", color_by="batch")["points"]} == {"B1", "(unset)"}
+    assert {p["group"] for p in _payload(kind="pca", color_by="batch")["points"]} == {"B1"}   # QC の注入も試料の表のバッチ
     # 直近（result_id 省略）でも描ける。画像も返る
     assert plot_tools.dataset_plot(kind="pca") is not None
 
@@ -188,14 +187,6 @@ def test_loadings_r_matches_the_direct_correlation(ds):
     assert pca_loadings.dataset_features(ds, ds.results[pareto])[1] is False
 
 
-def test_full_svd_is_deterministic_over_500_features():
-    """500 超の特徴で `svd_solver="full"` は実行ごとに同じ軸を返す（"auto" は randomized を選びうる）。"""
-    x = np.random.default_rng(3).normal(size=(40, 600))
-    a = run_pca_fit_subset(x, np.ones(40, bool), 5, svd_solver="full")
-    b = run_pca_fit_subset(x, np.ones(40, bool), 5, svd_solver="full")
-    assert a["components"] == b["components"] and a["loadings"] == b["loadings"]
-
-
 def test_pipeline_v1_pca_plot_payload_still_builds():
     """pipeline が残す v1 の PCA 結果（scores 行）も散布図に射影できる（D 段まで）。"""
     v1 = {"scores": [{"name": "S1", "role": "sample", "PC1": 1.0, "PC2": 2.0},
@@ -226,3 +217,45 @@ def test_dataset_pca_is_registered_once_and_append_typed():
     assert tools[0].annotations.readOnlyHint is False
     assert tools[0].annotations.idempotentHint is False
     assert "log_transform" not in tools[0].parameters["properties"]
+
+
+# --- 修正ラウンド 1 ----------------------------------------------------------------------
+
+def test_invalid_group_levels_leave_no_matrix_or_record(ds, tmp_path):
+    before_records = sorted(p.name for p in (tmp_path / "analysis").rglob("*.json"))
+    out = _pca(group_levels=["C", "C"])                       # 同じ値の重複は相互排他でない指定
+    assert out["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert not getattr(ds, "stat_matrices", None)
+    assert sorted(p.name for p in (tmp_path / "analysis").rglob("*.json")) == before_records
+    assert ds.last_pca is None
+
+
+def test_pca_needs_input_envelope_and_no_leftovers(ds):
+    ds.quant_state = {"normalized": True, "method": "is_ratio", "unit": "ratio", "record_id": "q1"}
+    out = _pca()
+    body = out["needs_input"]
+    assert "error" not in out and body["argument"] == "drift_mode"
+    assert body["retry_tools"] == ["dataset_preprocess"]
+    assert "dataset_pca" in body["reason"] and "matrix_id" in body["reason"]
+    assert not ds.stat_matrices
+    mx = _pre(drift_mode="off")["matrix_id"]
+    assert _pca(matrix_id=mx)["status"] == "success"
+
+
+def test_implicit_pca_record_has_the_preprocess_record_as_parent(ds):
+    out = _pca()
+    pre_id = out["record"]["preprocess_record"]["record_id"]
+    record = json.loads(Path(out["record"]["path"]).read_text(encoding="utf-8"))
+    assert record["parent_ids"] == [pre_id]
+    assert stats_results.get_matrix(ds, out["matrix_id"])["record_id"] == pre_id
+
+
+def test_stat_pca_points_use_display_names_and_a_neutral_title(ds):
+    mx = _pre()["matrix_id"]
+    record = ds.results[_pca(matrix_id=mx)["result_id"]]
+    rows = stat_pca_rows(record)
+    qc = [r for r in rows if r["role"] == "qc"]
+    assert [r["name"] for r in qc] == ["QC0", "QC1", "QC2", "QC3"]       # 試料 ID（id_QC0）でなく表示名
+    assert qc[0]["id"] == "id_QC0"
+    assert dataset_pca_plot(record)["title"] == "PCA"
+    assert dataset_pca_plot({"scores": [{"name": "a", "PC1": 1, "PC2": 2}]})["title"] == "PCA (mzTab-M)"

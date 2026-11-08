@@ -454,6 +454,30 @@ def _omnibus_summary(engine: dict):
             "n_q_below": sum(1 for o in tested if o["f_q"] is not None and o["f_q"] <= q_thr)}
 
 
+def _prepare_default(study, config, tool: str):
+    """既定の前処理（純粋。登録も記録もしない）。利用者への確認が要るときは `needs_input` の封筒（str）、
+    さもなくば `PreparedMatrix`。`tool` は理由に書く呼び直し先（drift_mode の引数を持たないツール）。"""
+    prepared = stats_preprocess.preprocess(study, config)
+    if isinstance(prepared, stats_preprocess.NeedsInput):
+        return needs_input(
+            prepared.field,
+            f"{prepared.reason} {tool} には drift_mode 引数がありません。"
+            f"dataset_preprocess(drift_mode=...) で行列を作り、その matrix_id を "
+            f"{tool} に渡して呼び直してください。",
+            prepared.options, argument=_DRIFT_ARGUMENT, retry_tools=_RETRY_TOOLS)
+    return prepared
+
+
+def _register_default(holder, ds, study, prepared, config, inputs):
+    """既定の前処理の行列を登録する（書き込みを伴う部分）。同じ行列が登録済みなら再利用する。
+    `(登録, 前処理の記録 or None)` を返す（記録を書いたのは新しく登録したときだけ）。"""
+    entry = stats_results.get_matrix(ds, prepared.matrix_id)
+    if entry is not None:
+        return entry, None
+    entry, _summary, record = _store_matrix(holder, ds, study, prepared, config, inputs)
+    return entry, record
+
+
 def _write_compare_record(holder, entry, record, spec, summary) -> dict:
     """比較の記録を書く（親は行列の前処理の記録）。書けないときは `{"written": False, "reason"}`。"""
     try:
@@ -574,21 +598,15 @@ def dataset_compare(
             equivalence_fc=equivalence_fc, allow_confounded=allow_confounded,
             preprocess=preprocess, inputs=inputs))
 
-        prepared = entry["prepared"] if entry is not None else spec_v2.prepare_spec_v2(spec, study)
-        if isinstance(prepared, stats_preprocess.NeedsInput):
-            return needs_input(
-                prepared.field,
-                f"{prepared.reason} dataset_compare には drift_mode 引数がありません。"
-                "dataset_preprocess(drift_mode=...) で行列を作り、その matrix_id を "
-                "dataset_compare に渡して呼び直してください。",
-                prepared.options, argument=_DRIFT_ARGUMENT, retry_tools=_RETRY_TOOLS)
+        prepared = (entry["prepared"] if entry is not None
+                    else _prepare_default(study, spec["preprocess"], "dataset_compare"))
+        if isinstance(prepared, str):
+            return prepared
 
         preprocess_record = None
         if entry is None:
-            entry = stats_results.get_matrix(ds, prepared.matrix_id)     # 同じ行列があれば再利用
-            if entry is None:
-                entry, _summary, preprocess_record = _store_matrix(
-                    holder, ds, study, prepared, preprocess, inputs)
+            entry, preprocess_record = _register_default(holder, ds, study, prepared,
+                                                         preprocess, inputs)
             implicit_matrix = prepared.matrix_id
         run = spec_v2.run_spec_v2(spec, study, prepared=prepared)
         try:
@@ -696,6 +714,9 @@ def dataset_pca(
     implicit_matrix = None
     preprocess_record = None
     try:
+        # 群の指定の検証は行列を登録する前に済ませる（不正な指定が行列・記録を残さない）
+        label_overrides = stats_results.study_inputs(
+            ds, group_levels=group_levels, group_factors=group_factors)["group_overrides"]
         if matrix_id is not None:
             entry = stats_results.get_matrix(ds, matrix_id)
             if entry is None:
@@ -708,21 +729,11 @@ def dataset_pca(
             config = stats_preprocess.normalize_preprocess_config(_config())
             inputs = stats_results.study_inputs(ds)           # 群は行列を選ばない
             study = from_dataset(ds, **inputs)
-            prepared = stats_preprocess.preprocess(study, config)
-            if isinstance(prepared, stats_preprocess.NeedsInput):
-                return needs_input(
-                    prepared.field,
-                    f"{prepared.reason} dataset_pca には drift_mode 引数がありません。"
-                    "dataset_preprocess(drift_mode=...) で行列を作り、その matrix_id を "
-                    "dataset_pca に渡して呼び直してください。",
-                    prepared.options, argument=_DRIFT_ARGUMENT, retry_tools=_RETRY_TOOLS)
-            entry = stats_results.get_matrix(ds, prepared.matrix_id)     # 同じ行列があれば再利用
-            if entry is None:
-                entry, _summary, preprocess_record = _store_matrix(
-                    holder, ds, study, prepared, config, inputs)
+            prepared = _prepare_default(study, config, "dataset_pca")
+            if isinstance(prepared, str):
+                return prepared
+            entry, preprocess_record = _register_default(holder, ds, study, prepared, config, inputs)
             implicit_matrix = prepared.matrix_id
-        label_overrides = stats_results.study_inputs(
-            ds, group_levels=group_levels, group_factors=group_factors)["group_overrides"]
         result = stats_pca.pca(prepared, scaling=scaling, n_components=n_components, impute=impute)
         labels = stats_results.unit_group_labels(ds, prepared, label_overrides)
         record = stats_results.register_pca(ds, result, labels)
