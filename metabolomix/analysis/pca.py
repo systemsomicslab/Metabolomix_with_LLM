@@ -64,13 +64,21 @@ def run_pca(matrix: np.ndarray, n_components: int | None = None,
     }
 
 
-def run_pca_fit_subset(matrix, fit_mask, n_components: int | None = None) -> dict:
+def run_pca_fit_subset(matrix, fit_mask, n_components: int | None = None,
+                       scaling: str = "autoscale", svd_solver: str = "auto") -> dict:
     """計算に使う試料（fit_mask=True）だけで autoscale と PCA の軸を決め、全試料をその軸へ投影する。
 
     低信頼の試料を主成分の計算から外しつつ、どこに落ちるかは見たいときに使う。autoscale は
     計算に使う試料の平均と**母標準偏差**（ddof=0。StandardScaler と同じ）。計算に使う試料で
     分散が 0 の列は外し、`kept_features` に残した列の番号を返す。
+
+    `scaling="pareto"` は中心化のあと SD の**平方根**で割る（SD・定数列の扱いは autoscale と同じ）。
+
+    `svd_solver` は sklearn の PCA にそのまま渡す。既定の "auto" は大きな行列で乱数を使う
+    randomized SVD を選び、実行ごとに結果が揺れうる。決定的な結果が要る呼び出しは "full" を渡す。
     """
+    if scaling not in ("autoscale", "pareto"):
+        raise ValueError(f"unknown scaling: {scaling!r}")
     matrix = np.asarray(matrix, dtype=float)
     fit = np.asarray(fit_mask, dtype=bool)
     if matrix.ndim != 2 or fit.shape != (matrix.shape[0],):
@@ -92,10 +100,10 @@ def run_pca_fit_subset(matrix, fit_mask, n_components: int | None = None) -> dic
         raise ValueError(f"計算に使う試料で値が変わる特徴量が 2 未満のため PCA を計算できません（現在: {kept.size}）。")
     mean = mean_all[kept]
     sd = sd_all[kept]
-    scaled = (matrix[:, kept] - mean) / sd
+    scaled = (matrix[:, kept] - mean) / (sd if scaling == "autoscale" else np.sqrt(sd))
     max_components = min(n_fit, kept.size)
     target = max_components if n_components is None else min(n_components, max_components)
-    pca = PCA(n_components=target).fit(scaled[fit])
+    pca = PCA(n_components=target, svd_solver=svd_solver).fit(scaled[fit])
     return {
         "components": pca.transform(scaled).tolist(),
         "explained_variance_ratio": pca.explained_variance_ratio_.tolist(),
