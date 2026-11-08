@@ -135,7 +135,8 @@ def _intensity_cell(row):
 
 def comparison_of(result, preprocess):
     """manifest の `comparison`。v1 の結果は `method='Welch'`、エンジンの結果（`as_two_group` の出力。
-    `statistics` を持つ）は実際の検定名と `statistics`（検定・CI 水準・判定規則・BH の母集団・単位）を足す。
+    `statistics` を持つ）は実際の検定名と `statistics`（検定・CI 水準・判定規則・BH の母集団・単位）を足し、
+    `allow_confounded=true` で完全交絡を越えた比較なら `unadjusted_confounded: true` も足す。
     `n_a` / `n_b` は注入の数で、`samples.tsv` の群 a / b の行数と一致する。"""
     if result.get('kind') != 'two_group' or result.get('log2fc_sign') != export_contract.LOG2FC_SIGN:
         raise ValueError('現行契約と向きが一致した2群比較が必要です')
@@ -154,6 +155,10 @@ def comparison_of(result, preprocess):
                           effect_size_definition=clean(result.get('effect_size_definition')),
                           mean_definition=export_contract.MEAN_DEFINITION,
                           matrix_id=result.get('matrix_id'),rule_hash=result.get('rule_hash'))
+        # allow_confounded=true で完全交絡を越えた比較（as_two_group が来歴に足した v1 と同じ印）。
+        # 来歴そのもの（manifest の provenance.result.comparison）にも v1 と同じ形で載る。
+        if ((result.get('provenance') or {}).get('comparison') or {}).get('unadjusted_confounded'):
+            comparison['unadjusted_confounded'] = True
     return comparison
 
 
@@ -500,7 +505,7 @@ def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=N
         fid = str(row['feature'])
         meta = ds.feature_metadata.get(row['feature'], {})
         feature = feature_row(row,meta)
-        feature['significant'] = export_contract.is_significant(q=row.get('q'),log2fc=row.get('log2fc'),
+        feature['significant'] = export_contract.row_significant(row,   # 書き出しの significant 列と同じ（R16）
             q_threshold=result['q_threshold'],log2fc_threshold=result['log2fc_threshold'])
         feature['adduct'] = adducts.get(fid)
         features.append(feature)

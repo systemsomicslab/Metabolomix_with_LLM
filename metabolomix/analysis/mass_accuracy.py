@@ -336,7 +336,9 @@ def _tolerance(mz: float, ppm_spec: dict) -> float:
 
 def novel_candidates(ds, normalized: dict, stats_rows: dict, *, group_ref, group_test,
                      merged_from: dict[str, list[str]] | None = None) -> list[dict]:
-    """`stats_rows` は feature_id → {log2fc_test_over_ref, p, q}（検定できた行）。
+    """`stats_rows` は feature_id → {log2fc_test_over_ref, p, q}（検定できた行）。統計エンジンの結果の行は
+    `verdict` も持ち、q < `q_max` に加えて `verdict == "changed"` の行だけを候補にする（R16: 検出が足りず
+    量を判定できない `inconclusive` の行は q が小さくても通さない）。v1 の行（`verdict` 無し）は q だけ。
 
     `merged_from` は割れたスポットをまとめた群（残す ID → 群。残す ID が先頭）。None（まとめない）
     なら行は v7 と同じ形（`merged_from`・`sme_feature_id` を足さない）。群は 1 候補に
@@ -362,6 +364,8 @@ def novel_candidates(ds, normalized: dict, stats_rows: dict, *, group_ref, group
         stats = stats_rows.get(fid)
         if stats is None or stats.get("q") is None or not stats["q"] < normalized["q_max"]:
             continue
+        if stats.get("verdict", "changed") != "changed":
+            continue                    # 統計エンジンの行は判定が changed のときだけ（R16。v1 の行は判定を持たない）
         center = offset_for(row["theoretical_mz"], normalized.get("ppm_offset"))
         if abs(row["ppm"] - center) > _tolerance(row["theoretical_mz"], normalized["ppm"]):
             continue

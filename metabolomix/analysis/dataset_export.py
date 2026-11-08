@@ -115,9 +115,9 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
             "q_value": row.get("q"),
             "mean_a": row.get("mean_a"),
             "mean_b": row.get("mean_b"),
-            "significant": export_contract.is_significant(
-                q=row.get("q"), log2fc=row.get("log2fc"),
-                q_threshold=q_threshold, log2fc_threshold=log2fc_threshold),
+            # エンジンの行は as_two_group が付けた印（判定が changed のときだけ真。R16）、v1 は q と log2fc
+            "significant": export_contract.row_significant(
+                row, q_threshold=q_threshold, log2fc_threshold=log2fc_threshold),
         })
 
     curation_line = None

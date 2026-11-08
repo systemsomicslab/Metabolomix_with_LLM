@@ -391,6 +391,10 @@ qualified にせず数にも入れない——選んだ残す ID の行が必ず
 `notes` には、打ち切り・使わなかった古い差次的結果・差次的結果が無いこと・検出状態が無いこと・
 極性の宣言と多数決の食い違い・キュレーションのフラグがあるのに反映していないこと（この検索は
 SME / SML の生の同定だけを見るので、`dataset_export_differential` の同定と食い違いうる）が入る。
+`result_ids` を省いたときは、効かなかった指定も `統計に使えなかった指定: …` の 1 行で入る: `contrast_id` を
+渡したが `dataset_compare` の結果が無く v1 の 2 群の結果だけがある（v1 は対比を持たないので効かず、v1 の結果は
+そのまま使う）、`dataset_compare` の結果の対比が交互作用だけ（2 群の形にならず統計は付かない）。`result_ids` で
+交互作用だけの結果を名指しすると `missing_state`（`dataset_compare`）で、メッセージにその理由が入る。
 
 ## `dataset_plot(kind="loadings")`（mzTab-M のデータセット）
 

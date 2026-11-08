@@ -60,7 +60,7 @@
 | node | パスウェイのノード名（＝MS-DIAL Ontology と完全一致したサブクラス） |
 | scope | `whole`（サブクラス全体）か、アシル鎖（`18:0` 等。そのノードの鎖サブセット） |
 | n_features | そのスコープに入った分子種の数（常に 1 以上。下記） |
-| mean_a / mean_b | 各群の集計値の平均（生スケール） |
+| mean_a / mean_b | 各群の個体の `2**log2`（スコープの集計値を log2 にしたもの）の算術平均（エンジンの定義。下記） |
 | log2fc | log2 空間の群平均差（統計エンジンの `log2_mean_difference`）。**正なら group_b が高い** |
 | q | BH-FDR。補正単位は**パスウェイ × スコープ種別**（whole と各鎖は別々） |
 | call | `verdict` が `changed`（q ≤ 閾値）なら符号で up / down、検定できなければ NA、それ以外は ns |

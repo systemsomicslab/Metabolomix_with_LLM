@@ -36,7 +36,8 @@ def format_number(value, format_spec: str) -> str:
 
 
 def is_significant(*, q, log2fc, q_threshold, log2fc_threshold) -> bool:
-    """契約 15 列目 `significant` の唯一の判定。
+    """契約 15 列目 `significant` の q・log2fc の規則（唯一の定義）。結果の行から判定するときは
+    `row_significant` を使う（統計エンジンの行は判定 `verdict` も見る。R16）。
 
     dict ではなく**値**をキーワードで受ける。ARF 経路は結果行に `q_value`、
     DatasetState 経路は `q` というキーで同じ量を持っており、キー名を契約側に
@@ -52,6 +53,29 @@ def is_significant(*, q, log2fc, q_threshold, log2fc_threshold) -> bool:
     if not (math.isfinite(q) and math.isfinite(log2fc)):
         return False
     return q <= q_threshold and abs(log2fc) >= log2fc_threshold
+
+
+#: 統計エンジンの結果の `significant`（R16）をメタ行 `significant_rule` に書く文面（ASCII）。
+SIGNIFICANT_RULE = "q<=q_threshold & |log2fc|>=log2fc_threshold & verdict=changed"
+
+
+def row_significant(row: dict, *, q_threshold, log2fc_threshold) -> bool:
+    """結果の行 1 つの `significant`（書き出しの 15 列目・根拠バンドル・volcano の色・新しい知見の候補）。
+
+    行が `significant` を持てばその値（`stats_results.as_two_group` が記録の閾値で 1 回だけ付けたもの。
+    消費側はそれを読み、閾値から計算し直さない）。持たなければ `is_significant` で、`verdict` を持つ行
+    （統計エンジン）は加えて `verdict == "changed"` のときだけ有意（R16: 検出が足りず量を判定できない
+    `inconclusive` の行は、q が小さく |log2fc| が大きくても有意にしない）。`verdict` の無い v1 の行は
+    `is_significant` のまま。
+    """
+    flag = row.get("significant")
+    if flag is not None:
+        return bool(flag)
+    if not is_significant(q=row.get("q"), log2fc=row.get("log2fc"),
+                          q_threshold=q_threshold, log2fc_threshold=log2fc_threshold):
+        return False
+    verdict = row.get("verdict")
+    return verdict is None or verdict == "changed"
 
 
 def build_meta(*, group_a, n_a, group_b, n_b,
@@ -127,7 +151,8 @@ def stats_meta_lines(result: dict) -> list[str]:
     （`effect_size_definition` は pipeline v2 の文字列版と同名なので、エンジンの結果ではこちらだけが書く）。
     `mean_a` / `mean_b` は個体（単位）ごとの前処理後の線形値の算術平均（`mean_definition`）、
     `n_a` / `n_b` は注入の数のまま、`n_units_a` / `n_units_b` が比較に入った単位の数。
-    `contrast_id` は `matrix_id` の行の末尾（どの対比を書いたかを残す）。
+    `contrast_id` は `matrix_id` の行の末尾（どの対比を書いたかを残す）。`bh_n` は BH の母集団が空
+    （対比の n が無い）なら 0。`significant_rule` は 15 列目 `significant` の規則（R16。`row_significant`）。
     """
     if not is_engine_result(result):
         return []
@@ -135,15 +160,17 @@ def stats_meta_lines(result: dict) -> list[str]:
     rule = stats["verdict_rule"]
     bh = stats["bh_population"]
     unit = unit_of(stats.get("subject_source"))
+    bh_n = bh.get("n") or 0
     return [
         f"# test = {stats['test']}\teffect_size_definition = {result['effect_size_definition']['name']}"
         f"\tci_level = {stats['ci_level']}",
         f"# verdict_q_threshold = {rule['q_threshold']}\tequivalence_fc = {rule['equivalence_fc']}"
-        f"\tbh_population = {bh['name']}\tbh_n = {bh['n']}\tq_interpretation = {bh['q_interpretation']}",
+        f"\tbh_population = {bh['name']}\tbh_n = {bh_n}\tq_interpretation = {bh['q_interpretation']}",
         f"# unit = {unit}\tn_units_a = {stats['n_units_a']}\tn_units_b = {stats['n_units_b']}",
         f"# mean_definition = {MEAN_DEFINITION}",
         f"# matrix_id = {result['matrix_id']}\trule_hash = {result['rule_hash']}"
         f"\tcontrast_id = {result['contrast_id']}",
+        f"# significant_rule = {SIGNIFICANT_RULE}",
     ]
 
 

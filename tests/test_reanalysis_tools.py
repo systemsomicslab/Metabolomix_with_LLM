@@ -1031,6 +1031,22 @@ def test_analysis_run_v2_dataset_exclusions_not_in_spec_warn(tmp_path):
     assert listed["analyses"][0]["n_rows"] == 9
 
 
+def test_analysis_run_v2_exclusions_compare_names_and_ids_on_one_key(tmp_path):
+    """spec は試料を表示名でも試料 ID でも書ける（名前が先）。`dataset_exclude` の除外（表示名）と同じ鍵で
+    比べるので、ID で書いた同じ試料を「spec に無い除外」と数えない。"""
+    state = _v2_state(tmp_path)
+    assert state.sample_ids[state.sample_names.index("C0_r0")] == "id_C0_r0"
+    state.excluded_samples = {"C0_r0": "x", "T1_r1": "y"}
+    by_id = json.loads(R.dataset_analysis_run(_v2_spec(input={"exclude_samples": ["id_C0_r0", "T1_r1"]}),
+                                              output_path=str(tmp_path / "o.json")))
+    assert by_id["status"] == "success"
+    assert not [w for w in by_id["warnings"] if w["code"] == "dataset_exclusions_not_in_spec"]
+    partial = json.loads(R.dataset_analysis_run(_v2_spec(input={"exclude_samples": ["id_C0_r0"]}),
+                                                output_path=str(tmp_path / "p.json")))
+    warn = [w for w in partial["warnings"] if w["code"] == "dataset_exclusions_not_in_spec"]
+    assert warn == [{"code": "dataset_exclusions_not_in_spec", "n_samples": 1, "n_features": 0}]
+
+
 def test_analysis_run_does_not_touch_session_or_reports(tmp_path):
     import copy
     state = _v2_state(tmp_path)

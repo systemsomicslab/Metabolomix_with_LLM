@@ -162,12 +162,20 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     シートに不備があれば `session.dataset` を一切変更せずエラーを返すので、
     そのまま再送してよい。
 
-    任意の列 `subject_id`（見出しの末尾に足す。反復測定の被験者）も読み、`sample_meta` に持つ
-    （統計にはまだ使わない）。列が無いシートは今までどおり。
+    任意の列 `subject_id`（見出しの末尾に足す。反復測定の被験者）も読み、`sample_meta` に持つ。
+    統計エンジンはこれを使う: `dataset_preprocess`（`collapse_replicates=True` が既定）が同じ個体の反復注入を
+    1 個体にまとめる鍵で、`dataset_compare(block="subject_id")` が同じ個体を対応づける鍵。列が無いシートは
+    今までどおり（反復をまとめず、注入が単位）。
 
-    前処理入力（role/batch/injection_order/qc_pool/include/sample_id/source_file）が
-    変われば前処理済み行列ごと・PCA・差次的解析まで無効化する。`group` だけの変更なら
-    差次的解析だけを無効化し、PCA は生かしたまま返す（`changed_fields` で確認できる）。
+    試料の表が変われば（`group` だけの変更・`subject_id` だけの変更でも）、統計エンジンの登録した行列
+    （`matrix_id`）・`dataset_compare` の結果・`dataset_pca` の結果はすべて古くなる（`changed_fields` で
+    何が変わったかを確認できる。古い `matrix_id` を渡すと `missing_state`）。やり直しは
+    `dataset_preprocess` を前と同じ引数で（既定でよいならそれを明示して）呼び直し、返った新しい
+    `matrix_id` を `dataset_compare` / `dataset_pca` に渡す。`matrix_id` を省いて `dataset_compare` だけを
+    呼び直すと既定の前処理で行列を作り直すので、前に選んだ前処理とは別の行列になりうる。
+    pipeline の v1 結果では従来どおり: 前処理入力（role/batch/injection_order/qc_pool/include/
+    sample_id/source_file）が変われば前処理済み行列ごと・PCA・差次的解析まで無効化し、`group` だけの変更なら
+    差次的解析だけを無効化して PCA は生かす。
 
     比較の前提検証は 2 つの比較で同じ向きに守る: pipeline は `resolve_comparison`/`run_comparison`
     （内部関数。v1 の Welch t）、対話の `dataset_compare` は統計エンジン（既定は moderated t）が、
@@ -196,9 +204,13 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     return json_payload({
         "status": "success",
         **summary,
-        "next": ("changed_fields に前処理入力が含まれる場合は dataset_preprocess から"
-                 "やり直してください。group のみの変更なら dataset_compare を"
-                 "再実行するだけで構いません。"),
+        "next": (("試料の表が変わったので（group だけの変更でも）、登録した行列（matrix_id）・dataset_compare と"
+                  "dataset_pca の結果は古くなりました。dataset_preprocess を前と同じ引数で（既定でよいなら"
+                  "既定のまま）呼び直し、返った新しい matrix_id を dataset_compare / dataset_pca に渡して"
+                  "やり直してください（matrix_id を省くと既定の前処理で作り直すので、前に選んだ前処理とは"
+                  "別の行列になりえます）。")
+                 if summary.get("changed_fields") else
+                 "試料の表は変わっていません（登録した行列・結果はそのまま使えます）。"),
     })
 
 
@@ -544,6 +556,8 @@ def dataset_feature_search(
         if chosen["stale"]:
             notes.append("古い差次的結果（前処理・群の訂正前）は統計に使っていない: "
                          + ", ".join(chosen["stale"]))
+        for entry in chosen["missing"]:           # 効かなかった contrast_id・交互作用だけの結果
+            notes.append(f"統計に使えなかった指定: {entry}")
     results = chosen["results"]
     if not results:
         notes.append("差次的結果（2 群比較）が 1 件も無いので統計を付けていない"

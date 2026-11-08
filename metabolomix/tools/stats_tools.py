@@ -405,7 +405,12 @@ def dataset_compare(
     `reports/stats/` に記録を 1 件追記する（書けないときは record.written=false。比較は成功）。
 
     covariates: 試料の表の列名。値がすべて数値なら numeric、さもなくば categorical。
-    block: "subject_id" だけ（同じ個体の反復を対応づける。collapse_replicates=False の行列で意味を持つ）。
+    block: "subject_id" だけ（個体の固定効果。同じ個体が複数の群・cell に出る対応のある計画——前後比較など——で
+        個体差を除く）。既定のまとめた行列（dataset_preprocess の collapse_replicates=True）でもそのまま効く:
+        まとめは個体 × 群 × 属性ごとなので、群をまたぐ同じ個体は別の単位のまま対応づけられる。個体が群に
+        入れ子（どの個体も 1 つの群にしか出ない）なら、まとめた行列でも collapse_replicates=False の行列でも
+        計画行列が階数不足になり DESIGN_RANK_DEFICIENT で止まる（入れ子の技術反復は block ではなく既定の
+        まとめで扱う）。
     matrix_id: dataset_preprocess が返した行列 ID（その前処理・群・除外のまま比較する）。省略時は既定の
         前処理で行列を作って登録する（QC のある換算済みデータでは drift_mode を尋ねる needs_input。
         dataset_preprocess で行列を作ってその ID を渡す）。古い・無い ID は missing_state。

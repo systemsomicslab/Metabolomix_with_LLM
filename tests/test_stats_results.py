@@ -240,7 +240,10 @@ def test_as_two_group_single_contrast_matches_rows():
     assert len(view["results"]) == len(rows) == 10
     for got, row in zip(view["results"], rows):
         assert set(got) == {"feature", "mean_a", "mean_b", "log2fc", "t", "p", "q",
-                            "ci_low", "ci_high", "verdict"}
+                            "ci_low", "ci_high", "verdict", "significant"}
+        assert got["significant"] is (export_contract.is_significant(
+            q=row["q"], log2fc=row["log2fc"], q_threshold=0.05, log2fc_threshold=1.0)
+            and row["verdict"] == "changed")                           # R16
         assert got["feature"] == row["feature_id"]
         assert got["mean_a"] == row["mean_reference"] and got["mean_b"] == row["mean_test"]
         assert got["t"] == row["statistic"]

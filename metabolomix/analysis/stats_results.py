@@ -382,8 +382,12 @@ def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
     `a` は対比の基準（reference）、`b` は比較（test）で、log2fc は正なら b が高い
     （`export_contract.LOG2FC_SIGN`）。`samples_a` / `samples_b` は比較に入った個体に属する注入の
     表示名、`n_a` / `n_b` は注入の数、`n_units_a` / `n_units_b` は個体の数。`results` は対比の全特徴
-    （検定していない行は p・q・log2fc が None）、`volcano` は p が有限の行だけ。`provenance` は元の
-    記録のもの（`kind` は `"compare"`）。v1 の `two_group` の記録はそのまま返す。
+    （検定していない行は p・q・log2fc が None）、`volcano` は p が有限の行だけ。各行の `significant` は
+    `export_contract.row_significant`（記録の閾値に加えて `verdict == "changed"`。R16）で、ここで 1 回だけ
+    付ける（書き出し・根拠バンドル・volcano はこの印を読む）。`provenance` は元の記録のもの（`kind` は
+    `"compare"`）。`allow_confounded=true` で完全交絡を越えた比較だけ、その写しに v1 と同じ
+    `comparison.unadjusted_confounded: true` と説明（`warnings`。`caveats` にも）を足す（記録は変えない）。
+    v1 の `two_group` の記録はそのまま返す。
 
     対比が 1 つでなく `contrast_id` が無い・未知の ID なら `CONTRAST_REQUIRED`、交互作用なら
     `CONTRAST_NOT_TWO_GROUP`（どちらも details に候補）。比較の記録でなければ `ANALYSIS_RESULT_NOT_FOUND`。
@@ -429,8 +433,23 @@ def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
              "log2fc": r["log2fc"], "t": r["statistic"], "p": r["p"], "q": r["q"],
              "ci_low": r["ci_low"], "ci_high": r["ci_high"], "verdict": r["verdict"]}
             for r in engine["rows"] if r["contrast_id"] == contrast_id]
+    for row in rows:
+        # 有意の印はここで 1 回だけ付ける（R16: 閾値に加えて判定が changed）。書き出し・根拠バンドル・
+        # volcano・新しい知見の候補はこの印を読み、閾値から計算し直さない。
+        row["significant"] = export_contract.row_significant(
+            row, q_threshold=q_threshold, log2fc_threshold=log2fc_threshold)
     finite = [r for r in rows if r["p"] is not None and math.isfinite(r["p"])]
     bh = engine["bh_population"]
+    caveats = [w.get("message") or str(w.get("code"))
+               for w in engine.get("warnings") or [] if w.get("message") or w.get("code")]
+    provenance = record["provenance"]
+    trace = _unadjusted_confounded(record, comp, contrast_id)
+    if trace is not None:
+        # v1 の run_comparison と同じ形・同じ説明（書き出しのメタ行・volcano・図の但し書きはここを読む）。
+        # 記録の来歴は書き換えず、読み替えた結果の来歴にだけ足す。
+        provenance = {**provenance, "comparison": trace,
+                      "warnings": [*(provenance.get("warnings") or []), UNADJUSTED_CONFOUNDED_EXPLANATION]}
+        caveats.append(UNADJUSTED_CONFOUNDED_EXPLANATION)
     return {
         "kind": "two_group",
         "result_id": record["result_id"],
@@ -452,8 +471,7 @@ def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
         "log2fc_sign": export_contract.LOG2FC_SIGN,
         "results": rows,
         "volcano": differential.volcano_data(finite, q_threshold, log2fc_threshold),
-        "caveats": [w.get("message") or str(w.get("code"))
-                    for w in engine.get("warnings") or [] if w.get("message") or w.get("code")],
+        "caveats": caveats,
         "effect_size_definition": dict(engine["effect_size_definition"]),
         "statistics": {
             "test": engine["test"],
@@ -465,5 +483,35 @@ def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
             "n_units_a": len(units_a),
             "n_units_b": len(units_b),
         },
-        "provenance": record["provenance"],
+        "provenance": provenance,
     }
+
+
+#: v1 の `dataset_service.run_comparison` が来歴の `warnings` と `caveats` に書く説明と同じ文面
+#: （書き出しの `unadjusted_confounded_note` は来歴の warnings から「未調整」を含む行を拾う）。
+UNADJUSTED_CONFOUNDED_EXPLANATION = (
+    "allow_confounded=true が明示されたため、群とバッチの完全交絡を未調整の"
+    "まま解析を継続しました（図・TSV・レポートにこの旨を残すこと）。")
+
+
+def _unadjusted_confounded(record: dict, comp: dict, contrast_id: str) -> dict | None:
+    """`allow_confounded=true` で完全交絡を越えて走った比較なら、v1 の `provenance.comparison` と同じ形の
+    痕跡（`unadjusted_confounded: true`）。そうでなければ None（何も足さない）。
+
+    完全交絡はエンジンの交絡の表（`engine.confounding.batch_status == "complete"`。比較に入った群すべてで
+    見たもの＝`allow_confounded` が実際に越えさせた判定）で、許可は記録の spec のその比較の解析の
+    `allow_confounded`。部分的な交絡は v1 と同じく印を付けない（警告は `caveats` にある）。
+    """
+    confounding = record["engine"].get("confounding") or {}
+    analysis = next((a for a in record["spec"].get("analyses") or []
+                     if a.get("analysis_id") == record.get("analysis_id")), {})
+    allowed = bool(analysis.get("allow_confounded", False))
+    if not (allowed and confounding.get("batch_status") == "complete"):
+        return None
+    return {"comparison_id": contrast_id,
+            "reference_group": comp["reference"],
+            "test_group": comp["test"],
+            "confounding": {"batch_status": confounding.get("batch_status"),
+                            "batch_table": copy.deepcopy(confounding.get("batch_table"))},
+            "allow_confounded": allowed,
+            "unadjusted_confounded": True}

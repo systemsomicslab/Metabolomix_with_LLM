@@ -182,6 +182,9 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 CI があるときだけで、n が小さい・ばらつきが大きいときの大半は `inconclusive`（データが足りない）。`inconclusive` を
 「差なし」と報告しない。判定の規則・理由（`verdict_reason`）・列の意味は `reanalysis.md` §2.1 と `dataset.md` §11.2。
 `log2fc_threshold`（図の色分け・`large_changes`・書き出しの `significant` 列だけが使う値）は判定には使わない。
+逆に、書き出し・根拠バンドルの `significant` と volcano の `up` / `down` は判定を見る: `q ≤ 閾値` かつ
+`|log2fc| ≥ log2fc_threshold` に加えて `verdict` が `changed` の行だけ（`large_changes` と同じ数え方）。
+`inconclusive` の行（検出が足りず量を判定できない行など）は q が小さくても有意にしない（`dataset.md` §11.4）。
 
 ### annotations の解釈
 

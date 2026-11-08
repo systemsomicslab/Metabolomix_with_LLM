@@ -481,9 +481,12 @@ SML にその列が無い mzTab では**エラーにせず**、`subset_available
 ```
 
 `statistics` は `{"result_id"}`（`dataset_compare` の 2 群比較。`reference_group` が基準）か
-`{"analysis_spec", "analysis_id"}`（analysis-spec.v1 とその解析）。SME rank 1 の同定があり、
+`{"analysis_spec", "analysis_id"}`（**analysis-spec.v1 だけ**とその解析。v2 の spec はここでは通らないので、統計エンジンの
+結果は `dataset_compare` の `result_id` で渡す）。SME rank 1 の同定があり、
 |ppm| が帯の許容幅以内（`max_mz` 未満の最初の帯、無ければ `default`）で、q < `q_max` の特徴から
-除外を外した一覧（q の昇順）。行は `feature_id name inchikey adduct mz rt ppm group_ref group_test
+除外を外した一覧（q の昇順）。`dataset_compare` の結果は、加えて判定 `verdict` が `changed` の行だけ
+（検出が足りず量を判定できない `inconclusive` の行は q が小さくても候補にしない。`q_max` が判定の q の閾値より
+大きくても、判定が `changed` でない行は通らない）。v1 の結果は q だけで選ぶ。行は `feature_id name inchikey adduct mz rt ppm group_ref group_test
 log2fc_test_over_ref p q direction merged_from`（JSON には `sme_feature_id` も）。論文の同定リストとの
 突き合わせはしない（再解析の側）。
 
@@ -641,6 +644,7 @@ UTF-8・改行は CRLF）。
 | `comparison.statistics` | エンジンの結果だけ。`{test, ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n, q_interpretation}, subject_source, n_units_a, n_units_b}`。`n` は選んだ対比の BH の母集団の大きさ |
 | `comparison.effect_size_definition` / `mean_definition` | エンジンの結果だけ。効果量の定義（`{name, description}`）と、`mean_a` / `mean_b` が「個体ごとの前処理後の線形値の算術平均」であること |
 | `comparison.matrix_id` / `rule_hash` / `contrast_id` | エンジンの結果だけ。どの行列・どの規則・どの対比を書いたか（`contrast_id` は 2 群の結果なら 1 つの対比の ID） |
+| `comparison.unadjusted_confounded` | エンジンの結果で、`allow_confounded=true` で完全交絡を越えて走った比較だけ `true`（それ以外は欄が無い）。同じ印は v1 と同じく来歴 `provenance.result.comparison.unadjusted_confounded`（と `provenance.result.warnings` の説明）にも載る |
 | `intensities_stage` | `pre_imputation`（補完の前）/ `post_imputation`（補完の後） |
 | `population.detection_unavailable_reason` | `detected` が全行空のときの理由。検出状態を使えれば `null` |
 | `population.exclusions` | 除外の来歴。エンジンの結果は、その行列を作ったときの除外（`dataset_exclude` の試料・特徴。名前は 20 件で切り、残りは `n_more`）を、結果が読んだ行列の登録から引く（今の `ds.excluded_*` ではない）。v1 の結果は前処理の報告から |
@@ -685,7 +689,9 @@ UTF-8・改行は CRLF）。
 | `sample_axis_mismatch` | 結果の試料が `ds.sample_names` に無い（検出状態の試料軸とずれている） |
 
 `features.tsv` に任意の列 `adduct` が増える。mzTab-M の SML の `adduct_ions`（SML が無い特徴は rank 1 の
-SME の付加体）。無ければ空。
+SME の付加体）。無ければ空。`features.tsv` の `significant` は差次的の書き出しの `significant` 列と同じ印で、
+エンジンの結果は判定 `verdict` が `changed` の行だけ `true` になりうる（`dataset.md` §11.4。判定できない行は q が
+小さくても `false`）。v1 の結果は q と log2fc の閾値だけ。
 
 戻り値には v2 の欄に `n_samples`・`n_intensity_rows`・`intensities_stage` が足される。
 

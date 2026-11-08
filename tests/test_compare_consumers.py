@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import csv
 import json
+import re
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -32,7 +34,7 @@ V1_META_KEYS = {"contract_version", "exported_at", "source_mztab", "source_job",
                 "n_with_inchikey", "n_unannotated"}
 NEW_META_KEYS = {"test", "effect_size_definition", "ci_level", "verdict_q_threshold", "equivalence_fc",
                  "bh_population", "bh_n", "q_interpretation", "unit", "n_units_a", "n_units_b",
-                 "mean_definition", "matrix_id", "rule_hash", "contrast_id"}
+                 "mean_definition", "matrix_id", "rule_hash", "contrast_id", "significant_rule"}
 
 
 def _annotate(ds):
@@ -95,7 +97,7 @@ def test_export_compare_result_keeps_15_columns_and_appends_meta_lines(ds, tmp_p
     assert info["contrast_id"] == "T_vs_C" and info["result_id"] == out["result_id"]
     # 新しい行は msi_note の後ろだけ。既存の行の並びは動かない
     msi = next(i for i, line in enumerate(meta) if line.startswith("# ontology / msi_level"))
-    assert msi == len(meta) - 1 - 5
+    assert msi == len(meta) - 1 - 6
     values, _ = _parse_meta(meta[msi + 1:])
     assert values["test"] == "moderated_t" and values["effect_size_definition"] == "log2_mean_difference"
     assert values["ci_level"] == "0.95" and values["verdict_q_threshold"] == "0.05"
@@ -108,11 +110,13 @@ def test_export_compare_result_keeps_15_columns_and_appends_meta_lines(ds, tmp_p
     head, _ = _parse_meta(meta)
     assert head["n_a"] == "8" and head["n_b"] == "8" and head["contract_version"] == "1"
     assert head["log_transform"] == "true" and head["preprocess_id"] == out["matrix_id"]
-    # significant は契約の規則（q ≤ しきい値 かつ |log2fc| ≥ log2fc_threshold）
+    assert values["significant_rule"] == export_contract.SIGNIFICANT_RULE
+    # significant は契約の規則（q ≤ しきい値 かつ |log2fc| ≥ log2fc_threshold）に、エンジンの判定が changed（R16）
     two = stats_results.as_two_group(ds.last_differential)
     expected = {row["feature"]: export_contract.is_significant(
         q=row["q"], log2fc=row["log2fc"], q_threshold=two["q_threshold"],
-        log2fc_threshold=two["log2fc_threshold"]) for row in two["results"]}
+        log2fc_threshold=two["log2fc_threshold"]) and row["verdict"] == "changed"
+        for row in two["results"]}
     cells = [line.split("\t") for line in body[1:]]
     assert {c[0]: c[14] == "true" for c in cells} == {k: v for k, v in expected.items()}
     assert any(c[14] == "true" for c in cells)
@@ -148,6 +152,28 @@ def test_export_v1_two_group_output_unchanged(tmp_path):
     assert meta[-1].startswith("# ontology / msi_level")                    # msi_note が最後
     assert body[0].split("\t") == export_contract.EXPORT_COLUMNS
     assert stats_results.as_two_group(result) is result                     # v1 の結果はそのまま
+
+
+#: v1 の 2 群の結果の書き出しの正解（最終レビューの修正の前のコードで書いたもの。時刻と uuid の ID は伏せる）
+V1_EXPORT_GOLDEN = Path(__file__).parent / "fixtures" / "v1_export_golden.tsv"
+
+
+def _masked(text: str) -> str:
+    """時刻の行と uuid の結果 ID（`res_<32 桁>`）を伏せる。ほかは 1 バイトも変えない。"""
+    text = re.sub(r"^# exported_at = .*$", "# exported_at = <timestamp>", text, flags=re.M)
+    return re.sub(r"res_[0-9a-f]{32}", "res_<id>", text)
+
+
+def _v1_export_text(tmp_path) -> str:
+    ds = _install(_annotate(_ds()), tmp_path)
+    path = tmp_path / "v1_golden.tsv"
+    export_dataset_result(ds, _v1_result(ds), path)
+    return _masked(path.read_text(encoding="utf-8"))
+
+
+def test_export_v1_two_group_golden_bytes(tmp_path):
+    """v1 の結果の書き出しは、時刻と uuid の ID を除いて正解と 1 バイトも違わない（R16 は v1 を変えない）。"""
+    assert _v1_export_text(tmp_path) == V1_EXPORT_GOLDEN.read_text(encoding="utf-8")
 
 
 def test_export_multi_contrast_requires_contrast_id(tmp_path):
@@ -575,3 +601,194 @@ def test_meta_source_has_no_literal_tab_and_dataset_plot_signature():
     assert "\t" not in src
     params = list(inspect.signature(plot_tools.dataset_plot).parameters)
     assert params[:4] == ["kind", "dataset_handle", "result_id", "output"] and params[-1] == "contrast_id"
+
+
+# --- 最終レビューの修正（R16: 判定できない行を有意にしない / 交絡の許可の痕跡） ---------------------
+
+def _not_judgeable(ds, feature="f0", group="T"):
+    """`feature` を `group` の注入で実検出なし（gap-fill の値だけ）にする。値は残るので量の q は小さいが、
+    検出の割合が足りず判定は inconclusive（quantity_not_judgeable）になる。"""
+    row = ds.feature_ids.index(feature)
+    for j, name in enumerate(ds.sample_names):
+        if name.startswith(group):
+            ds.detected_mask[row, j] = False
+    return ds
+
+
+def _body_cells(path) -> dict[str, list[str]]:
+    _, body = _read(path)
+    return {cells[0]: cells for cells in (line.split("\t") for line in body[1:])}
+
+
+def test_engine_not_judgeable_row_is_not_significant_anywhere(tmp_path):
+    ds = _install(_not_judgeable(_annotate(_ds())), tmp_path)
+    out = _compare(reference_group="C", test_group="T")
+    record = ds.last_differential
+    f0 = next(r for r in record["engine"]["rows"] if r["feature_id"] == "f0")
+    assert (f0["verdict"], f0["verdict_reason"]) == ("inconclusive", "quantity_not_judgeable")
+    assert f0["q"] < 1e-6 and abs(f0["log2fc"]) > 1.5           # q と |log2fc| だけなら有意に見える
+    two = stats_results.as_two_group(record)
+    flags = {r["feature"]: r["significant"] for r in two["results"]}
+    assert flags["f0"] is False and flags["f1"] is True and flags["f2"] is True
+    large = out["contrasts"][0]["large_changes"]
+    assert large == 2 == sum(flags.values())
+    # 書き出し: significant 列は判定と食い違わない。true の数は要約の large_changes と同じ
+    path = tmp_path / "out.tsv"
+    export_dataset_result(ds, record, path)
+    cells = _body_cells(path)
+    assert cells["f0"][14] == "false" and cells["f1"][14] == "true"
+    assert sum(c[14] == "true" for c in cells.values()) == large
+    meta, _ = _read(path)
+    values, keys = _parse_meta(meta)
+    assert values["significant_rule"] == "q<=q_threshold & |log2fc|>=log2fc_threshold & verdict=changed"
+    assert len(keys) == len(set(keys))
+    # volcano: 色の印も同じ（新しい sig の種類は足さない）
+    payload = json.loads(plot_tools.dataset_plot(kind="volcano", output="payload"))
+    sig = {p["feature"]: p["sig"] for p in payload["points"]}
+    assert sig["f0"] == "ns" and sig["f1"] == "up"
+    assert {p["sig"] for p in payload["points"]} <= {"up", "down", "ns"}
+    assert payload["selection"]["significant_total"] == large
+    # 根拠バンドル: features.tsv の significant も同じ
+    evidence_export.export_dataset_evidence(ds, record, tmp_path / "b")
+    features = {r["feature_id"]: r for r in _tsv(tmp_path / "b" / "features.tsv")}
+    assert features["f0"]["significant"] == "false" and features["f1"]["significant"] == "true"
+    assert sum(r["significant"] == "true" for r in features.values()) == large
+
+
+def test_engine_significant_flag_is_produced_once_by_as_two_group(ds):
+    _compare(reference_group="C", test_group="T")
+    two = stats_results.as_two_group(ds.last_differential)
+    for row in two["results"]:
+        expected = (export_contract.is_significant(q=row["q"], log2fc=row["log2fc"],
+                                                   q_threshold=two["q_threshold"],
+                                                   log2fc_threshold=two["log2fc_threshold"])
+                    and row["verdict"] == "changed")
+        assert row["significant"] is expected
+        # 消費側は行の印を読む（閾値を変えても行の印が勝つ）
+        assert export_contract.row_significant(row, q_threshold=1.0, log2fc_threshold=0.0) is expected
+
+
+def test_v1_rows_keep_q_and_log2fc_rule(tmp_path):
+    ds = _install(_annotate(_ds()), tmp_path)
+    v1 = _v1_result(ds)
+    assert all("significant" not in r and "verdict" not in r for r in v1["results"])
+    for row in v1["results"]:
+        assert export_contract.row_significant(
+            row, q_threshold=v1["q_threshold"], log2fc_threshold=v1["log2fc_threshold"]
+        ) is export_contract.is_significant(q=row["q"], log2fc=row["log2fc"],
+                                            q_threshold=v1["q_threshold"],
+                                            log2fc_threshold=v1["log2fc_threshold"])
+    path = tmp_path / "v1.tsv"
+    export_dataset_result(ds, v1, path)
+    assert "significant_rule" not in path.read_text(encoding="utf-8")
+
+
+def test_novel_candidates_skip_engine_rows_that_are_not_changed(tmp_path):
+    ds = _not_judgeable(_novel_ready(tmp_path))
+    out = _compare(reference_group="C", test_group="T")
+    spec = {"statistics": {"result_id": out["result_id"], "merge_split": False},
+            "ppm": {"default": 5.0}, "q_max": 0.2}
+    parsed = json.loads(reanalysis_tools.dataset_novel_candidates(spec))
+    assert parsed.get("status") == "success", parsed
+    header, *lines = parsed["rows"].splitlines()
+    ids = [dict(zip(header.split("\t"), line.split("\t")))["feature_id"] for line in lines]
+    assert "f0" not in ids and {"f1", "f2"} <= set(ids)          # f0 は q が小さいが判定は inconclusive
+    assert ds.last_differential["kind"] == "compare"
+
+
+def _confounded(ds, batches=("B1", "B2")):
+    """C 群の注入を batches[0]、T 群を batches[1] に置く（QC は両方に分ける）。"""
+    from metabolomix.analysis.sample_manifest import apply_metadata
+    rows = []
+    for k, row in enumerate(ds.sample_metadata_rows):
+        r = dict(row)
+        name = ds.sample_names[k]
+        r["batch"] = (batches[0] if name.startswith("C") else batches[1] if name.startswith("T")
+                      else batches[k % 2])
+        rows.append(r)
+    apply_metadata(ds, rows)
+    return ds
+
+
+def test_allow_confounded_trace_reaches_export_volcano_and_evidence(tmp_path):
+    from metabolomix.plots.result_output import _UNADJUSTED_CONFOUNDED_NOTE, figure_annotations
+    ds = _install(_confounded(_annotate(_ds())), tmp_path)
+    pp = json.loads(dataset_preprocess(**FLAT_OFF))
+    err = json.loads(dataset_compare(matrix_id=pp["matrix_id"], reference_group="C", test_group="T"))
+    assert err["error"]["code"] == "STATISTIC_CONFOUNDED"
+    out = json.loads(dataset_compare(matrix_id=pp["matrix_id"], reference_group="C", test_group="T",
+                                     allow_confounded=True))
+    assert out["status"] == "success" and out["confounding"]["batch_status"] == "complete"
+    record = ds.last_differential
+    view = stats_results.as_two_group(record)
+    comparison = view["provenance"]["comparison"]
+    assert comparison["unadjusted_confounded"] is True and comparison["allow_confounded"] is True
+    assert comparison["confounding"]["batch_status"] == "complete"
+    assert "comparison" not in record["provenance"]               # 記録そのものは書き換えない
+    # 書き出しのメタ行
+    path = tmp_path / "out.tsv"
+    export_dataset_result(ds, record, path)
+    meta, _ = _read(path)
+    values, _ = _parse_meta(meta)
+    assert values["unadjusted_confounded"] == "true"
+    assert "未調整" in values["unadjusted_confounded_note"]
+    # volcano の payload と図の但し書き
+    payload = json.loads(plot_tools.dataset_plot(kind="volcano", output="payload"))
+    assert any("allow_confounded=true" in c for c in payload["caveats"])
+    assert _UNADJUSTED_CONFOUNDED_NOTE in figure_annotations(ds, ds.figures["volcano"]["result"])
+    # 根拠バンドルの manifest（comparison と、v1 と同じ来歴の comparison）
+    evidence_export.export_dataset_evidence(ds, record, tmp_path / "b")
+    manifest = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["comparison"]["unadjusted_confounded"] is True
+    assert manifest["provenance"]["result"]["comparison"]["unadjusted_confounded"] is True
+
+
+def test_no_confound_trace_without_complete_confounding(ds, tmp_path):
+    from metabolomix.plots.result_output import figure_annotations
+    out = _compare(reference_group="C", test_group="T", allow_confounded=True)   # 許可しても交絡が無い
+    assert out["confounding"]["batch_status"] != "complete"
+    record = ds.last_differential
+    view = stats_results.as_two_group(record)
+    assert "comparison" not in view["provenance"]
+    path = tmp_path / "out.tsv"
+    export_dataset_result(ds, record, path)
+    assert "unadjusted_confounded" not in path.read_text(encoding="utf-8")
+    payload = json.loads(plot_tools.dataset_plot(kind="volcano", output="payload"))
+    assert not any("allow_confounded=true" in c for c in payload["caveats"])
+    assert figure_annotations(ds, ds.figures["volcano"]["result"]) == []
+    evidence_export.export_dataset_evidence(ds, record, tmp_path / "b")
+    manifest = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))
+    assert "unadjusted_confounded" not in manifest["comparison"]
+    assert "comparison" not in manifest["provenance"]["result"]
+
+
+def test_select_results_contrast_id_with_only_v1_results_is_reported_missing(tmp_path):
+    ds = _install(_annotate(_ds()), tmp_path)
+    rid = _v1_result(ds)["provenance"]["result_id"]
+    sel = feature_search.select_results(ds, None, contrast_id="T_vs_C")
+    assert [r["provenance"]["result_id"] for r in sel["results"]] == [rid]   # v1 は対比を持たないのでそのまま
+    assert len(sel["missing"]) == 1 and sel["missing"][0].startswith("contrast_id=T_vs_C: ")
+    # ツールは注記にして返す（黙って捨てない）
+    parsed = json.loads(DAT.dataset_feature_search(feature_ids=["f0"], merge_split=False,
+                                                   contrast_id="T_vs_C"))
+    assert any("contrast_id=T_vs_C" in note for note in parsed["notes"])
+    # 対比を指定しなければ何も足さない
+    assert feature_search.select_results(ds, None)["missing"] == []
+
+
+def test_select_results_interaction_only_record_is_reported_missing(tmp_path):
+    ds = _install(_annotate(_ds(per_group=6, sex=True)), tmp_path)
+    inter = [{"id": "inter", "kind": "interaction", "factors": ["group", "sex"],
+              "levels": {"group": ["C", "T"], "sex": ["F", "M"]}}]
+    json.loads(dataset_preprocess(**FLAT_OFF))
+    out = json.loads(dataset_compare(comparisons=inter, factors=["group", "sex"]))
+    rid = out["result_id"]
+    for ids in (None, [rid]):
+        sel = feature_search.select_results(ds, ids)
+        assert sel["results"] == [] and len(sel["missing"]) == 1
+        assert sel["missing"][0].startswith(f"{rid}: ") and "inter" in sel["missing"][0]
+    parsed = json.loads(DAT.dataset_feature_search(feature_ids=["f0"], merge_split=False))
+    assert any(rid in note for note in parsed["notes"])
+    err = json.loads(DAT.dataset_feature_search(feature_ids=["f0"], merge_split=False,
+                                                result_ids=[rid]))["error"]
+    assert err["code"] == "missing_state" and "inter" in err["message"]

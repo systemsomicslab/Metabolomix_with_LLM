@@ -379,8 +379,8 @@ contrasts, omnibus, confounding, warnings, top, record, next}`。
 |------------|------|
 | `points[].feature` | 特徴量名（`differential` の `feature`） |
 | `points[].log2fc` | log2 fold change（x軸）。**正=群Bで高い（上昇）** |
-| `points[].neg_log10_p` | `-log10(p)`（y軸）。`q` ではなく **`p`** |
-| `points[].sig` | `up` / `down` / `ns` |
+| `points[].neg_log10_p` | `-log10(p)`（y軸）。`q` ではなく **`p`**。p が 0.0（アンダーフロー。検定はできている）は最小の正の float で `-log10` を取る（約 307.65。検定不能の扱いにしない。結果の p は 0 のまま） |
+| `points[].sig` | `up` / `down` / `ns`。`dataset_compare` の結果は、書き出しの `significant` と同じ規則（§11.4。判定が `changed` で、q と \|log2fc\| が閾値を満たす）の行だけが符号で `up` / `down`、ほかは `ns`——判定できない（`inconclusive`）行は q が小さくても `ns`。v1 の結果は q と log2fc の閾値だけ |
 | `thresholds` | 判定に使った `q` と `log2fc` のしきい値 |
 | `comparison` | `group_a` / `group_b` / `n_a` / `n_b`（プール解決後の実n） |
 | `render_hints.guides.x` | 縦破線の位置（`±log2fc_threshold`） |
@@ -433,8 +433,14 @@ mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`（`CONTRAC
 | `# unit = … n_units_a = … n_units_b = …` | 比較の単位。`subject`（全試料が被験者 ID を持ち技術反復を 1 個体にまとめた）・`injection`（被験者 ID が無い・まとめを切った。単位は注入）・`mixed`（混在）。`n_units_*` は比較に入った単位の数（`n_a` / `n_b` は注入の数のまま） |
 | `# mean_definition = …` | `mean_a` / `mean_b` は「個体ごとの前処理後の線形値の算術平均」 |
 | `# matrix_id = … rule_hash = … contrast_id = …` | どの行列・どの規則・どの対比を書いたか（2 群比較の結果の対比は 1 つ） |
+| `# significant_rule = q<=q_threshold & \|log2fc\|>=log2fc_threshold & verdict=changed` | 15 列目 `significant` の規則（下記）。v1 の結果には書かない |
 
-`p_value` / `q_value` はエンジンの p と BH の q（`q_value` の読みは `q_interpretation`）、`log2fc` は正なら `group_b`（比較）が高い。`significant` は `q ≤ q_threshold` かつ `|log2fc| ≥ log2fc_threshold`（`dataset_compare` の `log2fc_threshold`。判定の `verdict` とは別の規則）。**`verdict` の 3 値そのものは TSV の列には出ない**（契約の列は据え置き）ので、判定は `dataset_compare` の要約・`top` か、根拠バンドル（`reanalysis.md` §10）で読む。
+`p_value` / `q_value` はエンジンの p と BH の q（`q_value` の読みは `q_interpretation`）、`log2fc` は正なら `group_b`（比較）が高い。**エンジンの結果の `significant` は、`q ≤ q_threshold` かつ `|log2fc| ≥ log2fc_threshold`（`dataset_compare` の `log2fc_threshold`）に加えて、判定 `verdict` が `changed` の行だけ `true`**（`significant_rule`）。検出の割合が足りず量を判定できない行（`inconclusive` / `quantity_not_judgeable`）や BH の母集団の外の行は、q が小さく |log2fc| が大きくても `false`——gap-fill の値で動いた量を主張にしない。`true` の行の数は、その対比の `dataset_compare` の `large_changes` と同じ（InChIKey の無い行は書き出さないので、書き出しではその分少ないことがある）。同じ印を根拠バンドルの `features.tsv` の `significant`・volcano の `up` / `down`（§11.2.1）が使う。v1 の結果（pipeline から引き継いだ比較）の `significant` は従来どおり q と log2fc の閾値だけ（判定を持たない）。**`verdict` の 3 値そのものは TSV の列には出ない**（契約の列は据え置き）ので、判定は `dataset_compare` の要約・`top` か、根拠バンドル（`reanalysis.md` §10）で読む。
+
+**交絡を越えた比較の印**: `allow_confounded=true` で完全交絡（`confounding.batch_status = complete`）を越えて走った
+エンジンの比較は、v1（pipeline の `run_comparison`）と同じく `source_verification` の後に `# unadjusted_confounded = true` と
+`# unadjusted_confounded_note = …`（日本語の説明）を書き、volcano の `caveats` と図の下端（ASCII の但し書き）、根拠バンドルの
+`comparison.unadjusted_confounded`（`reanalysis.md` §10）にも同じ印が載る。部分的な交絡・交絡の無い比較には何も足さない。
 
 **有意な行だけでなく、InChIKey が付いた全行を書き出す。** 下流の濃縮解析は
 「検出された化合物」を背景に取る必要があり、有意な行だけでは背景が作れない。

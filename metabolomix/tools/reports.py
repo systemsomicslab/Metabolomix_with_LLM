@@ -150,7 +150,9 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
     （species_pca は結果から作った図でもある）。
     eic / eic_compounds は結果から作った図ではないので、描いたとおりに保存する（あとで `dataset_exclude` しても変わらない）。
     result_id: kind が pca / volcano / loadings のときだけ。登録された結果を名指しして描く
-      （`dataset_plot` を呼ばなくてよい。古い結果は STALE_ANALYSIS_RESULT）。
+      （`dataset_plot` を呼ばなくてよい。古い結果は STALE_ANALYSIS_RESULT）。volcano では
+      `dataset_compare` の結果の対比を `"result_id#contrast_id"`（`dataset_feature_search` が出す形）で選ぶ
+      （このツールに `contrast_id` の引数は無い。対比が複数の結果を `#` 無しで渡すと CONTRAST_REQUIRED）。
     dataset_handle: `load_dataset` が返したハンドル（省略時は直近）。
     通常の対話描画では呼ばない（`dataset_plot` が画像を返す）。返り値の相対パスは write_report の
     本文に `![...](figures/<analysis_id>_<kind>.png)` として埋め込める。

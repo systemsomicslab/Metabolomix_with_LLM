@@ -279,6 +279,19 @@ def test_invalid_config_file_does_not_fail_tool(ds, monkeypatch, tmp_path):
     assert out["record"]["written"] is False and "CONFIG_INVALID" in out["record"]["reason"]
 
 
+def test_compact_truncates_long_strings_with_an_ellipsis():
+    """要約の長い文字列（注意・理由）は黙って落とさず、上限の長さで「…」を付けて切る。"""
+    from metabolomix.tools._matrix_store import _compact
+    long_text = "あ" * 200
+    out = _compact({"reason": long_text, "short": "ok", "edge": "x" * 80, "n": 3})
+    assert out["short"] == "ok" and out["n"] == 3
+    assert out["edge"] == "x" * 80                                # 上限ちょうどは切らない
+    assert len(out["reason"]) == 80 and out["reason"].endswith("…")
+    assert out["reason"][:-1] == long_text[:79]
+    nested = _compact({"filters": {"note": "y" * 81}})
+    assert nested["filters"]["note"] == "y" * 79 + "…"
+
+
 def test_default_arguments_are_the_engine_defaults():
     import inspect
 

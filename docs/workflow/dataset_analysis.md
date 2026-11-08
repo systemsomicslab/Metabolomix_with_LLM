@@ -88,8 +88,8 @@
 1. metabolomix/tools/dataset_analysis_tools.py  dataset_export_differential()
 2. └─ metabolomix/analysis/dataset_export.py  export_dataset_result()
 3. │  └─ metabolomix/analysis/result_state.py  assert_current()
-4. │  └─ metabolomix/analysis/stats_results.py  as_two_group()（`dataset_compare` の結果の対比 1 つを 2 群の形に読み替える）
-5. │  └─ metabolomix/analysis/export_contract.py  is_significant()
+4. │  └─ metabolomix/analysis/stats_results.py  as_two_group()（`dataset_compare` の結果の対比 1 つを 2 群の形に読み替える。各行の `significant`（判定が changed のときだけ）と、`allow_confounded` で完全交絡を越えた比較の `provenance.comparison` をここで付ける）
+5. │  └─ metabolomix/analysis/export_contract.py  row_significant()（行の印を読む。印の無い v1 の行は `is_significant()`）
 6. │  └─ metabolomix/analysis/dataset_export.py  _meta_lines()
 7. │  │  └─ metabolomix/analysis/dataset_export.py  _preprocess_parameters()
 8. │  │  └─ metabolomix/analysis/export_contract.py  stats_meta_lines()（エンジンの結果だけ）

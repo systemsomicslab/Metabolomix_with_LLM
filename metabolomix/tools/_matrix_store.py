@@ -14,12 +14,15 @@ from metabolomix.core.serialization import json_safe, round_floats, truncate_lis
 __all__ = ["store_matrix", "register_default", "preprocess_summary"]
 
 _STEP_LIST_LIMIT = 20
+#: 要約に載せる文字列の長さの上限。超えたら上限の長さで切り、末尾を「…」にする（黙って落とさない）。
+_STR_LIMIT = 80
 
 
 def _compact(value: dict) -> dict:
     """工程の dict を小さな要約にする（入れ子も）。スカラーはそのまま、一覧は件数（`n_<key>`）、
     値がすべて一覧の dict（`excluded_by_role` など）は `{キー: 件数}`、入れ子の dict（`filters` など）は
-    再帰する。特徴 ID の一覧（`dropped_ids`）は件数が `dropped` にあるので載せない。"""
+    再帰する。特徴 ID の一覧（`dropped_ids`）は件数が `dropped` にあるので載せない。文字列は
+    `_STR_LIMIT` 字までで、長いものは `_STR_LIMIT` 字に切って末尾を「…」にする。"""
     if value and all(isinstance(v, (list, tuple, set, frozenset)) for v in value.values()):
         return {k: len(v) for k, v in value.items()}
     out: dict = {}
@@ -29,8 +32,7 @@ def _compact(value: dict) -> dict:
         if isinstance(item, bool) or item is None or isinstance(item, (int, float)):
             out[key] = item
         elif isinstance(item, str):
-            if len(item) <= 80:
-                out[key] = item
+            out[key] = item if len(item) <= _STR_LIMIT else item[:_STR_LIMIT - 1] + "…"
         elif isinstance(item, (list, tuple, set, frozenset)):
             out[f"n_{key}"] = len(item)
         elif isinstance(item, dict):

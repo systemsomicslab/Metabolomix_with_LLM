@@ -901,7 +901,7 @@ def _engine_views(record: dict, rid: str, contrast_id: str | None = None) -> lis
     for cid in wanted:
         view = as_two_group(record, cid)
         view_id = rid if len(ids) == 1 else f"{rid}{_ENGINE_SEPARATOR}{cid}"
-        views.append((view_id, {**view, "provenance": {**record["provenance"], "result_id": view_id},
+        views.append((view_id, {**view, "provenance": {**view["provenance"], "result_id": view_id},
                                 "_source": {"result_id": rid, "contrast_id": cid}}))
     return views
 
@@ -927,6 +927,10 @@ def select_results(ds, result_ids: list[str] | None, *,
 
     今も有効でない結果は ``results`` に入れず ``stale`` に名指しした ID を 1 回だけ挙げる。名指しの ID が無い、
     または 2 群比較でない結果（pipeline の v2 統計の記録 ``kind == "welch"`` など）は ``missing``。
+    指定を黙って捨てないよう、次の 2 つも ``missing`` に ``"<ID>: <理由>"`` の 1 行で挙げる:
+    ``contrast_id`` を渡したが ``compare`` の記録が無く v1 の 2 群の結果だけがある（v1 は対比を持たないので
+    効かない。v1 の結果はそのまま使う。行は ``"contrast_id=<ID>: …"``）、``compare`` の記録の対比が交互作用
+    だけで 2 群の結果に読み替えられない（統計は付かない）。
 
     ``dataset_hash`` は計算済みの ``dataset_fingerprint(ds)``（任意）。
     """
@@ -949,10 +953,16 @@ def select_results(ds, result_ids: list[str] | None, *,
             if not is_current(ds, result, dataset_hash=dataset_hash):
                 stale.append(rid)
             elif kind == "compare":
-                for view_id, view in _engine_views(result, rid, contrast_id):
-                    selected.append(view)
+                views = _engine_views(result, rid, contrast_id)
+                if not views:
+                    missing.append(_interaction_only(rid, result))
+                selected.extend(view for _, view in views)
             else:
                 selected.append(result)
+        if contrast_id is not None and not records and any(
+                (r or {}).get("kind") == "two_group" for r in ds.results.values()):
+            missing.append(f"contrast_id={contrast_id}: dataset_compare の結果が無く、v1 の 2 群の結果は"
+                           "対比を持たないので効かない（v1 の結果はそのまま使った）")
         return {"results": selected, "stale": stale, "missing": missing}
     for requested in dict.fromkeys(result_ids):
         found = ds.results.get(requested)
@@ -977,11 +987,20 @@ def select_results(ds, result_ids: list[str] | None, *,
             if requested not in stale:
                 stale.append(requested)
             continue
-        for view_id, view in _engine_views(record, base, cid):
+        views = _engine_views(record, base, cid)
+        if not views:
+            missing.append(_interaction_only(requested, record))
+        for view_id, view in views:
             if view_id not in done:
                 done.add(view_id)
                 selected.append(view)
     return {"results": selected, "stale": stale, "missing": missing}
+
+
+def _interaction_only(rid: str, record: dict) -> str:
+    """対比が交互作用だけの `compare` の記録の `missing` の行（2 群の結果に読み替えられない）。"""
+    return (f"{rid}: 対比が交互作用だけ（{', '.join(contrast_ids(record))}）で 2 群の結果に"
+            "読み替えられないので統計を付けない")
 
 
 def _detected_counter(ds, result: dict):

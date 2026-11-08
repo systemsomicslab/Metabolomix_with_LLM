@@ -401,6 +401,22 @@ def test_dataset_set_sample_metadata_success_applies_rows(tmp_path):
     assert ds.sample_metadata_rows[0]["group"] == "ctrl"
 
 
+def test_dataset_set_sample_metadata_guidance_matches_the_engine():
+    """docstring と `next` は統計エンジンの古さの規則どおりに案内する（最終レビュー Important #3）:
+    subject_id は使われる・群だけの変更でも行列・比較・PCA は古くなる・前処理から同じ設定でやり直す。"""
+    import inspect
+
+    from metabolomix.tools import dataset_analysis_tools as DAT
+    doc = inspect.getdoc(DAT.dataset_set_sample_metadata)
+    assert "統計にはまだ使わない" not in doc
+    assert 'block="subject_id"' in doc and "collapse_replicates" in doc
+    assert "pipeline の v1 結果では" in doc                   # 旧い文面は v1 の範囲を明示して残す
+    source = inspect.getsource(DAT.dataset_set_sample_metadata)
+    assert "再実行するだけで構いません" not in source
+    for phrase in ("dataset_preprocess", "matrix_id", "dataset_compare", "dataset_pca"):
+        assert phrase in source.split('"next":')[1]
+
+
 def test_dataset_set_sample_metadata_invalid_sheet_does_not_touch_session(tmp_path):
     ds = _load_ds_with_raws(tmp_path)
     manifest = tmp_path / "bad-manifest.tsv"
