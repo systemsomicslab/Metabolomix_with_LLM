@@ -24,6 +24,8 @@ PREPROCESS_DEFAULTS = {
                 "qc_rsd": {"max": 0.30}, "d_ratio": {"max": 0.5}},
     "normalize": {"method": "auto"},
     "collapse_replicates": True,
+    # 個体のまとめの鍵から外す試料の表の列（取得日・注入番号など注入ごとに違う属性）。
+    "injection_columns": [],
 }
 
 _ENUMS = {("drift", "mode"): ("auto", "on", "off"),
@@ -61,6 +63,11 @@ def _merge(default, raw, path: tuple):
         if raw not in _ENUMS[path]:
             raise _invalid(f"{'.'.join(path)} は {list(_ENUMS[path])} のどれか", path, raw)
         return raw
+    if path == ("injection_columns",):
+        if (not isinstance(raw, list)
+                or any(not isinstance(c, str) or not c.strip() for c in raw)):
+            raise _invalid("injection_columns は空でない文字列のリストで指定する", path, raw)
+        return list(raw)
     if path == ("collapse_replicates",):
         if not isinstance(raw, bool):
             raise _invalid("collapse_replicates は真偽値で指定する", path, raw)
@@ -113,6 +120,11 @@ class PreparedMatrix:
     warnings: list[dict]
     feature_classes: dict
     annotated_features: frozenset
+    # 生体（role=sample）の注入 × 残した特徴（feature_ids と同じ順）。正規化の後・log2 の前の線形値
+    # （0 以下はそのまま、欠測は NaN）。注入ごとの値を見る配線層（箱ひげ・外れ値の根拠）が読む。
+    sample_values: np.ndarray | None = None
+    sample_ids: list[str] = field(default_factory=list)
+    sample_detected: np.ndarray | None = None  # 検出の別が無い研究は None
 
 
 @dataclass
@@ -151,6 +163,8 @@ def _matrix_id(study: StudyData, config: dict, normalize_method: str) -> str:
     table = [[s.sample_id, s.role, s.group, s.batch, s.injection_order, s.subject_id,
               bool(s.include), dict(sorted(s.attributes.items()))] for s in study.samples]
     source = study.dataset_hash
+    # 特徴の一覧（除外・割れのまとめで変わる）は dataset_hash が同じでも ID に効かせる
+    feature_hash = canonical_hash(list(study.feature_ids))
     if source is None:
         # 指紋が無いときは値そのものの bytes から（同じ入力なら同じ ID）
         values = np.ascontiguousarray(study.values, dtype=np.float64)
@@ -160,7 +174,8 @@ def _matrix_id(study: StudyData, config: dict, normalize_method: str) -> str:
                   "feature_ids": list(study.feature_ids)}
     # normalize=auto は quant_state で方法が決まるので、解決後の方法も指紋に入れる
     return "mx_" + canonical_hash({"dataset_hash": source, "sample_table_hash": canonical_hash(table),
-                                   "config": config, "normalize_method": normalize_method})[:16]
+                                   "config": config, "normalize_method": normalize_method,
+                                   "feature_ids_hash": feature_hash})[:16]
 
 
 # --- 1. 選択 -----------------------------------------------------------------
@@ -498,7 +513,32 @@ def _unit_ids(keys: list[tuple], firsts: list) -> list[str]:
     return ids
 
 
-def _collapse(log2, det, samples, enabled: bool):
+def _split_warning(keys, firsts, injection_columns) -> dict | None:
+    """同じ (個体, 群) が複数の単位に分かれたとき、分けた属性の列を名指しして注意にする。"""
+    pairs: dict[tuple, list[int]] = {}
+    for k, key in enumerate(keys):
+        if key[0] == "s":
+            pairs.setdefault((key[1], key[2]), []).append(k)
+    split = {pair: idx for pair, idx in pairs.items() if len(idx) > 1}
+    if not split:
+        return None
+    columns: set[str] = set()
+    for idx in split.values():
+        names = sorted({n for k in idx for n in firsts[k].attributes})
+        columns.update(n for n in names if len({firsts[k].attributes.get(n) for k in idx}) > 1)
+    subjects = [f"{subj}|{grp}" for subj, grp in split]
+    shown = subjects[:20]
+    more = f" ほか {len(subjects) - len(shown)} 件" if len(subjects) > len(shown) else ""
+    cols = sorted(columns)
+    return {"code": "units_split_by_attribute",
+            "message": f"同じ個体・群なのに試料の表の列（{', '.join(cols)}）の値が違うため、{len(subjects)} 件が"
+                       f"複数の単位に分かれました（{', '.join(shown)}{more}）。注入ごとに違う列（取得日・注入番号など）"
+                       "なら、前処理の injection_columns にその列名を入れると 1 個体にまとまります。",
+            "attributes": cols, "n_subjects": len(subjects), "subjects": subjects[:20],
+            "suggestion": {"preprocess.injection_columns": cols}}
+
+
+def _collapse(log2, det, samples, enabled: bool, injection_columns=()):
     """個体 × 群 × 属性が同じ注入を技術反復として log2 の上で平均する（spec §6 の対応のある計画のため、
     同じ個体でも群か属性が違えば別の単位。単位は subject_id を持ち続ける）。"""
     with_subject = sum(s.subject_id is not None for s in samples)
@@ -507,7 +547,9 @@ def _collapse(log2, det, samples, enabled: bool):
     groups: dict[tuple, list[int]] = {}
     for k, s in enumerate(samples):
         if enabled and s.subject_id is not None:
-            key = ("s", s.subject_id, s.group, tuple(sorted(s.attributes.items())))
+            key = ("s", s.subject_id, s.group,
+                   tuple(sorted((k, v) for k, v in s.attributes.items()
+                                if k not in injection_columns)))
         else:
             key = ("i", s.sample_id)
         groups.setdefault(key, []).append(k)
@@ -540,7 +582,8 @@ def _collapse(log2, det, samples, enabled: bool):
             "subjects_with_multiple_units": sum(n > 1 for n in per_subject.values())}
     if not enabled:
         step["reason"] = "disabled"
-    return out, det_units, units, source, step
+    warn = _split_warning(keys, firsts, injection_columns) if enabled else None
+    return out, det_units, units, source, step, warn
 
 
 # --- 入口 --------------------------------------------------------------------
@@ -585,13 +628,16 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix | NeedsInput:
 
     bio_samples = [samples[k] for k in bio]
     det_bio = None if detected is None else (cell_states(values[bio], detected[bio]) == DETECTED)
-    unit_log2, det_units, units, source, step = _collapse(
-        log2[bio], det_bio, bio_samples, cfg["collapse_replicates"])
+    unit_log2, det_units, units, source, step, split_warning = _collapse(
+        log2[bio], det_bio, bio_samples, cfg["collapse_replicates"],
+        frozenset(cfg["injection_columns"]))
     steps.append(step)
 
     notes = []
+    if split_warning is not None:
+        notes.append(split_warning)
     if not any(s.subject_id is not None for s in bio_samples):
-        notes = replicate_name_warnings([s.sample_id for s in bio_samples])
+        notes += replicate_name_warnings([s.sample_id for s in bio_samples])
     kept = set(feature_ids)
     return PreparedMatrix(
         matrix_id=_matrix_id(study, cfg, normalize_method), log2=unit_log2, units=units, feature_ids=feature_ids,
@@ -599,7 +645,10 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix | NeedsInput:
         qc_ids=[samples[k].sample_id for k in qc], steps=steps, config=cfg, quant=study.quant,
         dataset_hash=study.dataset_hash, subject_source=source, warnings=notes,
         feature_classes={f: c for f, c in study.feature_classes.items() if f in kept},
-        annotated_features=frozenset(f for f in study.annotated_features if f in kept))
+        annotated_features=frozenset(f for f in study.annotated_features if f in kept),
+        sample_values=np.array(values[bio], copy=True),
+        sample_ids=[samples[k].sample_id for k in bio],
+        sample_detected=None if detected is None else np.array(detected[bio], copy=True))
 
 
 def impute_for_pca(log2: np.ndarray, *, method: str = "half_min",

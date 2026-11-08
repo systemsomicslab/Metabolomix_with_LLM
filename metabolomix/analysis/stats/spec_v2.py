@@ -12,10 +12,10 @@ import re
 
 from metabolomix.analysis.stats.compare import BH_POPULATIONS, EFFECT_SIZES, TESTS, compare
 from metabolomix.analysis.stats.composition import composition
-from metabolomix.analysis.stats.data import from_dataset
+from metabolomix.analysis.stats.data import StudyData, from_dataset
 from metabolomix.analysis.stats.pca import pca
-from metabolomix.analysis.stats.preprocess import (NeedsInput, normalize_preprocess_config,
-                                                   preprocess)
+from metabolomix.analysis.stats.preprocess import (NeedsInput, PreparedMatrix,
+                                                   normalize_preprocess_config, preprocess)
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 ANALYSIS_SCHEMA_V2 = "analysis-spec.v2"
@@ -179,6 +179,30 @@ def _analysis(raw, i: int) -> dict:
     return out
 
 
+def _input(raw) -> dict:
+    """input の既定（source=dataset・除外なし）を埋める。試料・特徴は順序を保って重複を落とす。"""
+    inp = _keys({"source": "dataset"} if raw is None else raw,
+                {"source", "exclude_samples", "exclude_features", "group_overrides"}, set(),
+                "input")
+    if inp.get("source", "dataset") != "dataset":
+        raise _fail("input.source は dataset だけ", field="input.source")
+    out = {"source": "dataset"}
+    for key in ("exclude_samples", "exclude_features"):
+        items = inp.get(key, [])
+        if (not isinstance(items, list)
+                or any(not isinstance(x, str) or not x.strip() for x in items)):
+            raise _fail(f"input.{key} は空でない文字列のリスト", field=f"input.{key}")
+        out[key] = list(dict.fromkeys(items))
+    over = inp.get("group_overrides", {})
+    if (not isinstance(over, dict)
+            or any(not isinstance(k, str) or not k.strip() or not isinstance(v, str)
+                   or not v.strip() for k, v in over.items())):
+        raise _fail("input.group_overrides は 試料 → 群 の辞書（どちらも空でない文字列）",
+                    field="input.group_overrides")
+    out["group_overrides"] = dict(sorted(over.items()))
+    return out
+
+
 def normalize_spec_v2(spec) -> dict:
     """spec を検証して既定を埋めた正準の dict にする。未知のキーは ANALYSIS_SPEC_INVALID。"""
     spec = _keys(spec, {"schema", "input", "preprocess", "design", "comparisons", "analyses",
@@ -186,9 +210,7 @@ def normalize_spec_v2(spec) -> dict:
     if spec["schema"] != ANALYSIS_SCHEMA_V2:
         raise _fail(f"schema は {ANALYSIS_SCHEMA_V2}（v1 は analysis_spec.run_spec の担当）",
                     field="schema", value=repr(spec["schema"]))
-    inp = _keys(spec.get("input", {"source": "dataset"}), {"source"}, set(), "input")
-    if inp.get("source", "dataset") != "dataset":
-        raise _fail("input.source は dataset だけ", field="input.source")
+    inp = _input(spec.get("input"))
     try:
         pre = normalize_preprocess_config(spec.get("preprocess"))
     except DomainError as e:
@@ -219,7 +241,7 @@ def normalize_spec_v2(spec) -> dict:
     elif primary not in stat_ids:
         raise _fail("primary は compare / composition の analysis_id", field="primary",
                     value=repr(primary), candidates=stat_ids)
-    return {"schema": ANALYSIS_SCHEMA_V2, "input": {"source": "dataset"}, "preprocess": pre,
+    return {"schema": ANALYSIS_SCHEMA_V2, "input": inp, "preprocess": pre,
             "design": design, "comparisons": comparisons, "analyses": analyses,
             "primary": primary}
 
@@ -237,17 +259,41 @@ def _sample_table_hash(study) -> str:
     return canonical_hash(rows)
 
 
-def run_spec_v2(normalized: dict, ds, *, assay_kind: str = "unknown") -> dict:
+def _study_of(normalized: dict, source) -> StudyData:
+    """`source` が StudyData ならそのまま使う（spec の input の除外・上書きは**再適用しない**。
+    作った側がすでに反映している前提）。DatasetState 相当なら input の除外・上書きを当てて作る。"""
+    if isinstance(source, StudyData):
+        return source
+    inp = normalized["input"]
+    return from_dataset(source, exclude_samples=inp["exclude_samples"],
+                        exclude_features=inp["exclude_features"],
+                        group_overrides=inp["group_overrides"])
+
+
+def prepare_spec_v2(normalized: dict, source) -> PreparedMatrix | NeedsInput:
+    """StudyData を作り（`source` が DatasetState 相当のとき）、spec の前処理設定で前処理する。
+
+    `source` が StudyData のときはそれをそのまま使い、spec の `input`（除外・群の上書き）は
+    再適用しない。結果は `run_spec_v2(..., prepared=)` へ渡して前処理のやり直しを省ける。
+    """
+    return preprocess(_study_of(normalized, source), normalized["preprocess"])
+
+
+def run_spec_v2(normalized: dict, source, *, assay_kind: str = "unknown",
+                prepared: PreparedMatrix | None = None) -> dict:
     """正規化済み spec を実行する。前処理は 1 回で、全解析が同じ行列を読む。
 
-    前処理が利用者への確認を要するときは `{"status": "needs_input", ...}` を返す。
-    どれかの解析が DomainError を出したら全体を失敗させる（一部だけ載せた analysis-result.v2 は
-    「全解析を報告する」契約を壊すので返さない）。
+    `source` は DatasetState 相当か StudyData（`prepare_spec_v2` と同じ扱い）。`prepared` を渡すと
+    前処理をやり直さずそれを使う（同じ spec・同じ source から `prepare_spec_v2` が返したものを
+    呼び出し側が保証する）。前処理が利用者への確認を要するときは `{"status": "needs_input", ...}`
+    を返す。どれかの解析が DomainError を出したら全体を失敗させる（一部だけ載せた
+    analysis-result.v2 は「全解析を報告する」契約を壊すので返さない）。
     """
     spec = copy.deepcopy(normalized)
     rule_hash = rule_hash_v2(spec)
-    study = from_dataset(ds)
-    prepared = preprocess(study, spec["preprocess"])
+    study = _study_of(spec, source)
+    if prepared is None:
+        prepared = preprocess(study, spec["preprocess"])
     if isinstance(prepared, NeedsInput):
         return {**prepared.to_envelope(), "spec": spec, "rule_hash": rule_hash}
     design = spec["design"]

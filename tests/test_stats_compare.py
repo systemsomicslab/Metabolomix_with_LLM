@@ -568,7 +568,8 @@ def test_result_states_definitions():
     keys = {"feature_id", "contrast_id", "reference", "test", "status", "reason", "n_reference",
             "n_test", "detected_reference", "detected_test", "quantity_judgeable", "log2fc",
             "ci_low", "ci_high", "ci_unavailable_reason", "statistic", "df", "p", "q",
-            "presence_p", "presence_q", "verdict", "verdict_reason"}
+            "presence_p", "presence_q", "verdict", "verdict_reason", "mean_reference",
+            "mean_test"}
     assert all(set(r) == keys for r in res["rows"])
     assert res["rows"][0]["reference"] == "A" and res["rows"][0]["test"] == "B"
 

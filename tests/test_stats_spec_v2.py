@@ -29,7 +29,8 @@ def _code(fn, *a, **k):
 
 def test_defaults_filled_and_unknown_keys_rejected():
     n = normalize_spec_v2(_spec())
-    assert n["schema"] == ANALYSIS_SCHEMA_V2 and n["input"] == {"source": "dataset"}
+    assert n["schema"] == ANALYSIS_SCHEMA_V2 and n["input"] == {
+        "source": "dataset", "exclude_samples": [], "exclude_features": [], "group_overrides": {}}
     assert n["design"] == {"factors": ["group"], "covariates": [], "block": None}
     assert n["preprocess"]["drift"]["mode"] == "auto"
     a = n["analyses"][0]

@@ -20,6 +20,7 @@ MCP・セッションには依存しない。数字は丸めない（非有限�
 from __future__ import annotations
 
 import math
+import warnings as _warnings
 from types import SimpleNamespace
 
 import numpy as np
@@ -114,6 +115,15 @@ def _tested(log2fc, ci_low, ci_high, statistic, df, p, ci_reason=None) -> dict:
 
 # --- 量の検定 -------------------------------------------------------------------
 
+def _variance_tolerance(block: np.ndarray) -> np.ndarray:
+    """退化の分散の許容（列ごと）。値の大きさ × 1e3·eps の 2 乗（moderated t の事後分散と welch/student の
+    群内分散が同じ基準を使う）。"""
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore", RuntimeWarning)
+        scale = np.nanmax(np.abs(block), axis=0)
+    return (1e3 * np.finfo(float).eps * np.maximum(scale, 1.0)) ** 2
+
+
 def _moderated(log2, design: Design, cids, testable, omnibus_ok, want_omnibus):
     """moderated t（対比ごと）と、必要なら moderated F（omnibus）。
 
@@ -141,8 +151,7 @@ def _moderated(log2, design: Design, cids, testable, omnibus_ok, want_omnibus):
         return out, None, omnibus
     # 事後分散が 0 か浮動小数の丸めの大きさ（値の大きさ × 1e3·eps 以下の SD）なら退化とみなす。
     # 群の中で値が完全に同じ特徴は、残差が丸めの誤差だけになり t が 1e14 のような値になるため。
-    scale = np.nanmax(np.abs(log2[:, idx]), axis=0)
-    tol = (1e3 * np.finfo(float).eps * np.maximum(scale, 1.0)) ** 2
+    tol = _variance_tolerance(log2[:, idx])
     with np.errstate(invalid="ignore"):
         ok = np.isfinite(mod.s2_post) & (mod.s2_post > tol)
     for k, cid in enumerate(cids):
@@ -187,6 +196,7 @@ def _two_group_ci(a, b, kind):
 def _two_group_tests(log2, cell_idx, info, cids, testable, kind):
     g = log2.shape[1]
     out = {}
+    tol = _variance_tolerance(log2) if log2.size else np.zeros(g)
     for cid in cids:
         ref_rows = cell_idx[info[cid]["reference_cells"][0]]
         test_rows = cell_idx[info[cid]["test_cells"][0]]
@@ -196,6 +206,12 @@ def _two_group_tests(log2, cell_idx, info, cids, testable, kind):
                 res.append(_not_tested("insufficient_units"))
                 continue
             a, b = log2[ref_rows, j], log2[test_rows, j]
+            fa, fb = a[np.isfinite(a)], b[np.isfinite(b)]
+            if (kind in ("welch", "student") and fa.size > 1 and fb.size > 1
+                    and fa.var(ddof=1) <= tol[j] and fb.var(ddof=1) <= tol[j]):
+                # 両群とも群内で値が（丸めの誤差を除いて）同じ: t が 1e14 級になるので検定しない
+                res.append(_not_tested("degenerate_variance"))
+                continue
             r = spec_statistics.two_group(a, b, kind=kind, transform="none")
             if r["status"] != "tested":
                 res.append(_not_tested(r["reason"]))
@@ -218,6 +234,12 @@ def _log2_arith_mean(x: np.ndarray) -> float | None:
         return None
     m = float(x.max())
     return m + math.log2(float(np.mean(np.exp2(x - m))))
+
+
+def _linear_mean(x: np.ndarray) -> float | None:
+    """個体の `2**log2` の算術平均（有限値だけ。有限値が無ければ None）。"""
+    x = x[np.isfinite(x)]
+    return _num(np.mean(np.exp2(x))) if x.size else None
 
 
 def _apply_arithmetic_ratio(quant, log2, design: Design, cell_idx, cids):
@@ -394,6 +416,11 @@ def compare(prepared: PreparedMatrix, *, factors: list[str], comparisons: list[d
                    "quantity_judgeable": judgeable}
             for key in ("log2fc", "ci_low", "ci_high", "ci_unavailable_reason", "statistic", "df", "p"):
                 row[key] = quant[cid][j][key]
+            if simple:
+                row["mean_reference"] = _linear_mean(log2[ref_rows, j])
+                row["mean_test"] = _linear_mean(log2[test_rows, j])
+            else:
+                row["mean_reference"] = row["mean_test"] = None
             row["q"] = _num(qs[j])
             row["presence_p"], row["presence_q"] = _num(pres_p[j]), _num(pres_q[j])
             row["verdict"], row["verdict_reason"] = _verdict(row, q_threshold, eq_log2)

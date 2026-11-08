@@ -44,6 +44,14 @@ def pca(prepared: PreparedMatrix, *, scaling: str = "autoscale",
             stacked, rep = impute_for_pca(stacked, method=impute, reference_rows=np.arange(n_units))
         except ValueError as exc:
             raise DomainError("PCA_SPECIFICATION_INVALID", str(exc), {"field": "impute"}) from exc
+        except DomainError as exc:
+            if exc.code != "RECIPE_PRECONDITION":
+                raise
+            raise DomainError("PCA_IMPUTATION_FAILED",
+                              f"{impute} 補完が失敗した（{exc.message}）。impute=\"half_min\" なら"
+                              "この条件でも補完できる。",
+                              {"impute": impute, "missing_cells": n_nan,
+                               "cause": {"code": exc.code, **dict(exc.details or {})}}) from exc
         imputation = {"method": rep["method"], "imputed_cells": rep["imputed_cells"], "used": True}
     else:
         imputation = {"method": impute, "imputed_cells": 0, "used": False}
