@@ -50,7 +50,7 @@ def _load_ds(n_features=20, n_samples=8):
     return ds
 
 
-def _differential(normalize="none"):
+def _differential(normalize="none", handoff=True):
     """前処理 → 2 群比較をツール経由で回し、result_id を返す。
 
     同じレシピの前処理は同じ前処理として扱われるので、古い結果を作るときは
@@ -60,7 +60,7 @@ def _differential(normalize="none"):
     ds = session_state.session.dataset
     a = [n for n in ds.pp_sample_names if n.startswith("ctrl")]
     b = [n for n in ds.pp_sample_names if n.startswith("treat")]
-    return json.loads(v1_differential(group_a=a, group_b=b))["result_id"]
+    return json.loads(v1_differential(group_a=a, group_b=b, handoff=handoff))["result_id"]
 
 
 def _target(**extra):
@@ -181,8 +181,8 @@ def test_empty_feature_ids_is_a_condition_with_zero_hits_and_noted():
 
 def test_named_stale_result_returns_missing_state():
     _load_ds()
-    old = _differential()
-    _differential(normalize="median")                 # 前処理のやり直しで old は古くなる
+    old = _differential(handoff=False)                # session で計算した結果（引き継ぎ結果ではない）
+    _differential(normalize="median", handoff=False)  # 前処理のやり直しで old は古くなる
     parsed = _search(min_mz=100.0, result_ids=[old])
     assert parsed["error"]["code"] == MISSING_STATE
     assert parsed["error"]["state"] == "dataset_compare_result"
@@ -195,8 +195,8 @@ def test_named_stale_result_returns_missing_state():
 
 def test_omitted_result_ids_skip_stale_results_and_note_them():
     _load_ds()
-    old = _differential()
-    new = _differential(normalize="median")
+    old = _differential(handoff=False)
+    new = _differential(normalize="median", handoff=False)
     parsed = _search(min_mz=100.0, max_mz=101.0)
     assert parsed["stats_source"]["result_ids"] == [new]
     assert any(old in note for note in parsed["notes"])

@@ -208,7 +208,7 @@ on a spectrum seen in the `.dcl` — never on the acquisition flag alone. A
 NOT that the expected fragments are absent.
 
 DIFFERENTIAL ANALYSIS — `dataset_preprocess` (optional; normalization / QC
-filtering / imputation, and it returns a `matrix_id`) builds the matrix that
+filtering / drift correction, and it returns a `matrix_id`) builds the matrix that
 `dataset_compare` and `dataset_pca` read; without a `matrix_id` they use the
 default preprocessing, so fold changes are not dominated by per-sample loading
 differences. `dataset_exclude` removes samples or features (reversibly) before it.

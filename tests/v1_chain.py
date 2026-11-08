@@ -79,12 +79,16 @@ def v1_pca(n_components: int = 5, dataset_handle: str | None = None) -> dict:
 def v1_differential(group_a: list[str], group_b: list[str], q_threshold: float = 0.05,
                     log2fc_threshold: float = 1.0, log_transform: bool = True,
                     group_a_label: str = "group_a", group_b_label: str = "group_b",
-                    dataset_handle: str | None = None) -> str:
-    """v1 の 2 群比較（`ds.results` に kind="two_group" の記録を置く経路）を回し、要約を JSON 文字列で返す。
+                    dataset_handle: str | None = None, handoff: bool = True) -> str:
+    """pipeline の引き渡し（`session_handoff.restore_differentials`）が session へ戻す v1 の 2 群比較を再現する。
 
-    pipeline の引き渡し（`run_comparison`）が今も作る形で、旧ツールと同じ引数・同じ戻り値。
-    結果の読まれ方（書き出し・根拠バンドル・特徴検索・volcano）を確かめるテストが、ツールを経ずに
-    `dataset_service.compare_dataset` で結果を作るのに使う。D 段で v1 を消すときにこのファイルごと消える。
+    v1 の `two_group` 結果が MCP の呼び出しだけで session に載る道は、この削除のあと無い（対話のツールは
+    統計エンジンの `dataset_compare`）。載るのは pipeline run の引き渡しだけで、その結果は
+    `provenance.handoff`（run の前処理レシピ・比較 ID）と引き継いだ時点の `metadata_revision` を持つ。
+    ここでは `dataset_service.compare_dataset` で結果を作り、同じ印を付けて旧ツールと同じ引数・同じ戻り値
+    （要約の JSON 文字列）で返す。結果の読まれ方（書き出し・根拠バンドル・特徴検索・volcano）を確かめる
+    テスト専用で、MCP から作れる状態を確かめるテストは `dataset_compare` を使うこと。
+    D 段で v1 を消すときにこのファイルごと消える。
     """
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
@@ -106,6 +110,20 @@ def v1_differential(group_a: list[str], group_b: list[str], q_threshold: float =
         return mztab_error("DATASET_BAD_REQUEST", exc.message, exc.details or None)
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
+    provenance = result["provenance"]
+    if not handoff:
+        # 同じ session で計算した v1 の結果（親の前処理が変われば古くなる）。session で前処理を
+        # やり直すと古くなる規則そのものを見るテストだけが使う。
+        return _summary(result)
+    parent = (ds.results or {}).get((provenance.get("parent_ids") or [None])[0]) or {}
+    provenance["handoff"] = {
+        "pipeline_root": "(test)", "comparison_id": "c1",
+        "preprocess": dict((parent.get("provenance") or {}).get("effective_parameters") or {}) or None}
+    provenance["metadata_revision"] = getattr(ds, "metadata_revision", 0)
+    return _summary(result)
+
+
+def _summary(result: dict) -> str:
     payload = {k: v for k, v in result.items()
                if k not in ("results", "volcano", "provenance")}
     payload["status"] = "success"

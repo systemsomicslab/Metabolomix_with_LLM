@@ -138,9 +138,15 @@ def test_dataset_export_applies_curation_flags_via_sibling_arf2(tmp_path):
         [{"spot_id": 0, "flag": "wrong"}],
         alignment=curation_flags.alignment_key(arf2), review_id="r", source="user")
 
-    v1_preprocess()
-    a, b = _groups(session_state.session.dataset)
-    v1_differential(group_a=a, group_b=b)
+    # 統計エンジンの比較（試料名の因子トークンで群を解く）。MCP から作れる結果の上で、
+    # 書き出しがフラグを当てるところまでを見る。
+    from metabolomix.tools.stats_tools import dataset_compare, dataset_preprocess
+
+    prepared = json.loads(dataset_preprocess(group_levels=["ctrl", "treat"]))
+    assert prepared["status"] == "success", prepared
+    compared = json.loads(dataset_compare(reference_group="ctrl", test_group="treat",
+                                          matrix_id=prepared["matrix_id"]))
+    assert compared["status"] == "success", compared
 
     out = tmp_path / "diff.tsv"
     parsed = json.loads(dataset_export_differential(str(out)))
@@ -428,3 +434,25 @@ def test_export_records_which_result_it_came_from(tmp_path):
             if l.startswith("#")]
     assert any(f"result_id = {diff['result_id']}" in l for l in meta)
     assert any(l.startswith("# preprocess_id = res_") for l in meta)
+
+
+def test_factor_tokens_flow_name_tokens_to_group_levels_to_compare_with_matrix_id():
+    """USAGE.md §7 の例そのまま: 試料名のトークン → preprocess の group_levels → matrix_id で比較。
+
+    比較に群の引数を渡すと matrix_id と併用できない（群は行列が決めている）。
+    """
+    from metabolomix.tools.stats_tools import dataset_compare, dataset_preprocess
+
+    _load_ds()
+    prepared = json.loads(dataset_preprocess(group_levels=["ctrl", "treat"]))
+    assert prepared["status"] == "success", prepared
+    assert prepared["groups"] == {"ctrl": 4, "treat": 4}
+    compared = json.loads(dataset_compare(reference_group="ctrl", test_group="treat",
+                                          matrix_id=prepared["matrix_id"]))
+    assert compared["status"] == "success"
+    assert compared["matrix_id"] == prepared["matrix_id"]
+    assert compared["group_n"] == {"ctrl": 4, "treat": 4}
+    refused = json.loads(dataset_compare(reference_group="ctrl", test_group="treat",
+                                         matrix_id=prepared["matrix_id"],
+                                         group_levels=["ctrl", "treat"]))
+    assert "error" in refused

@@ -33,7 +33,7 @@ def load_summary_lines(ds, opened) -> list[str]:
                  + ("（探索専用: 2 群比較と差次的エクスポートは拒否されます）"
                     if ds.exploratory_only else ""))
     if ds.analysis_matrices:
-        lines.append("- 解析行列（analysis-matrix.v1）: "
+        lines.append("- 解析行列（analysis-matrix.v1。表示のみで、dataset_compare の matrix_id ではない）: "
                      + ", ".join(sorted(ds.analysis_matrices)))
     if ds.artifact_paths:
         lines.append("- 付随アーティファクト: "
@@ -125,8 +125,8 @@ def dataset_status(dataset_handle: str | None = None, view: str = "summary",
     """現在の DatasetState の状態を返す。`view` で何を見るかを選ぶ。
 
     view:
-      - `"summary"`（既定）: 概要。`samples` に name/role の TSV が入り、dataset_compare の
-        reference_group / test_group はここに出る group の名前をそのまま使う。群（Class ID）ごとの件数 `groups`・
+      - `"summary"`（既定）: 概要。`samples` に name/role の TSV が入る。群（Class ID）ごとの件数 `groups` に
+        dataset_compare の reference_group / test_group の群名が並ぶ（そのまま使う）・
         役割ごとの件数 `roles`・群の無い試料の数 `n_ungrouped`・特徴のタグごとの件数 `tags`・
         除外の件数 `excluded`（`dataset_exclude`）を含む。
       - `"samples"`: 試料の TSV（name・group・role・batch・injection_order・subject_id・excluded。

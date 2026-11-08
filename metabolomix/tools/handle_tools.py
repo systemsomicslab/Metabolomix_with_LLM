@@ -156,8 +156,10 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
           試料対応表だけ**。run の解析行列・feature binding・差次的結果は
           `source="mztab"` のときだけ載せる——その run の mzTab に加えて、解決済みの
           試料対応表・feature binding・解析行列を**同じ run からまとめて**載せる
-          （別 run の行列を混ぜると群の対応が黙ってずれるため）。載せた行列は
-          `dataset_status` に `matrix_id` が並ぶ（読むのは pipeline の統計）。run の差次的結果も、データと群の指紋が
+          （別 run の行列を混ぜると群の対応が黙ってずれるため）。載せた
+          `analysis_matrices` は**表示専用**（`load_dataset` の summary に ID が並ぶだけ）。統計エンジンの
+          `matrix_id` ではないので `dataset_compare` / `dataset_pca` には渡せない（渡すと
+          `missing_state("stat_matrix")`）。run の差次的結果も、データと群の指紋が
           今のデータセットと一致するものだけを戻す（result_id は run の TSV と同じ。
           直近の結果にはしないので result_id で名指しして使う）。戻せなかったものは理由つきで
           `summary` に並ぶ。

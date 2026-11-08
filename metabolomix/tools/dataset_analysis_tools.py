@@ -169,9 +169,9 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     変われば前処理済み行列ごと・PCA・差次的解析まで無効化する。`group` だけの変更なら
     差次的解析だけを無効化し、PCA は生かしたまま返す（`changed_fields` で確認できる）。
 
-    `dataset_compare` を群名で直接呼ぶ経路とは別に、比較を明示するのは pipeline 側の
-    役割になる——群名だけで対照/処置の向きを決めない・QC/blank/unknown/include=false を混ぜない・完全交絡を
-    止める、という前提検証は `resolve_comparison`/`run_comparison`（内部関数）が持つ。
+    比較の前提検証は 2 つの比較で同じ向きに守る: pipeline は `resolve_comparison`/`run_comparison`
+    （内部関数。v1 の Welch t）、対話の `dataset_compare` は統計エンジン（既定は moderated t）が、
+    群の明示を求め・`include=false` と非 sample の役割を外し・完全交絡を `allow_confounded` なしには止める。
 
     dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
@@ -686,4 +686,3 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curati
         return mztab_error(exc.code,exc.message,exc.details or None)
     except (ValueError,OSError,FlagFileError) as exc:
         return mztab_error('EVIDENCE_EXPORT_FAILED',str(exc))
-

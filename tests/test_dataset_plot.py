@@ -74,6 +74,26 @@ def _analysed(*, with_differential=True) -> DatasetState:
     return ds
 
 
+def _analysed_engine():
+    """統計エンジンの前処理・PCA・2 群比較（`dataset_compare`）で結果を作る。MCP から作れる状態はこちら。
+
+    戻り値は (ds, pca_id, compare_id)。v1 の結果（`_analysed`）は pipeline の引き渡しだけが作る形。
+    """
+    from metabolomix.tools.stats_tools import dataset_compare, dataset_preprocess
+
+    ds = _synthetic()
+    _set_metadata(ds, group=lambda n: n.split("_")[0],
+                  batch=lambda n: "b1" if n.endswith(("0", "1")) else "b2")
+    prepared = json.loads(dataset_preprocess())
+    assert prepared["status"] == "success", prepared
+    pca = json.loads(dataset_pca(n_components=3, matrix_id=prepared["matrix_id"]))
+    assert pca["status"] == "success", pca
+    compared = json.loads(dataset_compare(reference_group="ctrl", test_group="treat",
+                                          matrix_id=prepared["matrix_id"], allow_confounded=True))
+    assert compared["status"] == "success", compared
+    return ds, pca["result_id"], compared["result_id"]
+
+
 def _payload(**kwargs) -> dict:
     out = plot_tools.dataset_plot(output="payload", **kwargs)
     assert isinstance(out, str), out
@@ -250,9 +270,7 @@ def test_dataset_plot_is_registered_with_a_dataset_handle():
 # ---------- 古い結果と図の置き場 ----------
 
 def test_stale_result_not_drawn_as_current():
-    ds = _analysed()
-    pca_id = ds.last_pca["provenance"]["result_id"]
-    diff_id = ds.last_differential["provenance"]["result_id"]
+    ds, pca_id, diff_id = _analysed_engine()
     assert _payload(kind="pca", result_id=pca_id)["plot_schema"] == "lipidmix.pca_scores.v1"
     assert ds.figures["pca"]["result_id"] == pca_id
 
@@ -410,7 +428,7 @@ def test_no_dataset_is_missing_state():
 # ---------- save_figure ----------
 
 def test_save_figure_reads_dataset_figures(tmp_path):
-    ds = _analysed()
+    ds, pca_id, _diff_id = _analysed_engine()
     figures = tmp_path / "reports" / "figures"
     # dataset_plot を呼ぶ前は図が無い
     err = json.loads(reports.save_figure("pca", "a-1"))["error"]
@@ -428,7 +446,6 @@ def test_save_figure_reads_dataset_figures(tmp_path):
 
     # 登録された結果を名指しして描くこともできる（dataset_plot を呼ばなくてよい）
     ds.figures.clear()
-    pca_id = ds.last_pca["provenance"]["result_id"]
     msg = reports.save_figure("pca", "by-id", result_id=pca_id)
     assert (figures / "by-id_pca.png").is_file() and pca_id in msg
 

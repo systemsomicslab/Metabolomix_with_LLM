@@ -161,7 +161,8 @@ QC/blank/unknown/standard・`include=false` を混ぜない（選択規則は
 `metabolomix/analysis/sample_manifest.py` `select_statistical_samples()` が唯一の定義）・
 完全交絡を `allow_confounded=true` の
 明示なしには通さない、という前提検証を `compare_dataset()` の前に挟む。対話ツール
-`dataset_compare` を群名で直接呼ぶ経路はこの前提検証を経ない汎用呼び出し（USAGE.md 参照）。
+`dataset_compare`（統計エンジン）も完全交絡（`allow_confounded` なしには `STATISTIC_CONFOUNDED`）・`include=false`・非 sample の役割・
+群の明示は同じく守る。違うのは検定で、`dataset_compare` は moderated t（既定）、pipeline の差次的は v1 の Welch t（USAGE.md 参照）。
 
 ## dataset_export_evidence_bundle
 

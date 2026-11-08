@@ -16,7 +16,7 @@ from metabolomix.curation import flags as curation_flags
 from tests.curation_fixtures import match_result
 from tests.msdial_folder_fixtures import analysis_file_row, write_mddata, write_msdial_folder
 from tests.test_dataset_opening import _job, _pipeline
-from tests.v1_chain import v1_differential, v1_preprocess
+from tests.v1_chain import v1_preprocess
 
 
 @pytest.fixture(autouse=True)
@@ -91,7 +91,7 @@ GROUPS = ["g1", "g1", "g1", "g2", "g2", "g2"]
 
 def test_folder_dataset_applies_curation_and_reports_detection(tmp_path):
     from metabolomix.tools import dataset_analysis_tools as dat
-    from metabolomix.tools import handle_tools, mztab_tools
+    from metabolomix.tools import handle_tools, mztab_tools, stats_tools
 
     folder = tmp_path / "msdial"
     write_msdial_folder(folder, **_spec())
@@ -102,8 +102,8 @@ def test_folder_dataset_applies_curation_and_reports_detection(tmp_path):
     assert status["detection"]["n_cells"] == 24 and status["detection"]["n_detected"] == 23
     assert status["inchikey_coverage"]["total_features"] == 4
 
-    v1_preprocess()
-    v1_differential(group_a=["s0", "s1", "s2"], group_b=["s3", "s4", "s5"])
+    compared = json.loads(stats_tools.dataset_compare(reference_group="A", test_group="B"))
+    assert compared["status"] == "success", compared
     out = tmp_path / "out.tsv"
     payload = json.loads(dat.dataset_export_differential(str(out), apply_curation=True))
     assert payload["curation"]["state"] == "applied"
@@ -208,7 +208,7 @@ def test_mddata_declared_batch_wins_over_mztab_mtd(tmp_path):
 def test_folder_and_mztab_adapters_give_the_same_tool_output(tmp_path, entry):
     from metabolomix.analysis import dataset_analysis
     from metabolomix.tools import dataset_analysis_tools as dat
-    from metabolomix.tools import handle_tools, mztab_tools
+    from metabolomix.tools import handle_tools, mztab_tools, stats_tools
 
     # mzTab-M のファイル名にバッチ語幹が無くても、m/z の照合で `.arf2`（フラグの置き場所）を見つける。
     job = _job(tmp_path, spec=_spec(), with_mddata=False,
@@ -227,11 +227,14 @@ def test_folder_and_mztab_adapters_give_the_same_tool_output(tmp_path, entry):
         assert ds.source_format == ("msdial_folder" if source == "folder" else "mztab")
         status = json.loads(mztab_tools.dataset_status())
         meta = dataset_analysis.build_dataset_pp_inputs(ds)[-1]
-        v1_preprocess()
-        v1_differential(group_a=["s0", "s1", "s2"], group_b=["s3", "s4", "s5"])
+        # この job の試料名（s0〜s5）は因子トークンを共有せず、Class ID も無いので、群は実験情報シートで与える。
+        # （エンジンの比較は群が要る。旧 v1 は試料名のリストを直に取っていた。）
+        applied = json.loads(dat.dataset_set_sample_metadata(str(_sheet(tmp_path, ds, GROUPS))))
+        compared = json.loads(stats_tools.dataset_compare(reference_group="g1", test_group="g2",
+                                                          allow_confounded=True))
+        assert compared["status"] == "success", compared
         export = json.loads(dat.dataset_export_differential(
             str(tmp_path / f"{source}.tsv"), apply_curation=True))
-        applied = json.loads(dat.dataset_set_sample_metadata(str(_sheet(tmp_path, ds, GROUPS))))
         seen[source] = {
             "detection": {k: status["detection"][k]
                           for k in ("available", "source", "n_cells", "n_detected")},
@@ -270,16 +273,8 @@ def _dated_spec() -> dict:
     return spec
 
 
-def _differential_caveats(names) -> str:
-    from metabolomix.tools import dataset_analysis_tools as dat
-
-    v1_preprocess()
-    out = json.loads(v1_differential(group_a=names[:3], group_b=names[3:]))
-    return " ".join(out.get("caveats") or [])
-
-
 def test_constant_mtd_batch_falls_back_to_filename_dates_on_both_routes(tmp_path):
-    from metabolomix.analysis import dataset_analysis
+    from metabolomix.analysis import dataset_analysis, stats_results
 
     spec = _dated_spec()
     names = [s["name"] for s in spec["samples"]]
@@ -300,18 +295,24 @@ def test_constant_mtd_batch_falls_back_to_filename_dates_on_both_routes(tmp_path
             assert prov["injection_order"]["source"] == "mztab"
         seen[source] = {
             "meta": {n: (m["batch"], m["batch_source"]) for n, m in meta.items()},
-            "caveats": _differential_caveats(names)}
+            # エンジンが群比較の交絡評価に使う試料のバッチ（解析フォルダ・mzTab-M とも同じ日付）。
+            "engine_batches": stats_results.sample_batches(ds)}
     assert seen["folder"]["meta"] == seen["mztab"]["meta"]
     assert seen["folder"]["meta"][names[0]] == ("20260101", "filename_date")
-    for source in ("folder", "mztab"):
-        assert "交絡:" in seen[source]["caveats"] and "20260101" in seen[source]["caveats"]
-        assert "交絡評価不可" not in seen[source]["caveats"]
-    assert seen["folder"]["caveats"] == seen["mztab"]["caveats"]
+    # エンジンの見るバッチ。解析フォルダ経路は行の来歴どおり日付（推定）。mzTab-M 経路は試料の表の行を
+    # 持たず、エンジンは `sample_meta` のバッチを読まない（日付への戻しは v1 の
+    # `build_dataset_pp_inputs` だけが持つ）ので、バッチは None＝交絡は「評価不能」と言う。
+    # v1（上の `meta`）とは違う、エンジンの文書どおりの意味。
+    assert seen["folder"]["engine_batches"][names[0]] == "20260101"
+    assert seen["folder"]["engine_batches"][names[3]] == "20260102"
+    assert set(seen["mztab"]["engine_batches"].values()) == {None}
 
 
 def test_constant_mddata_batch_also_falls_back_to_filename_dates(tmp_path):
     """ARF 経路はバッチを常にファイル名の日付から推定する（MS-DIAL に専用項目が無い）。
     解析フォルダの経路は、定数の `.mddata` のバッチ（GUI の既定の 1）も採らず同じ日付へ戻る。"""
+    from metabolomix.tools import stats_tools
+
     spec = _dated_spec()
     names = [s["name"] for s in spec["samples"]]
     folder = tmp_path / "msdial"
@@ -320,7 +321,10 @@ def test_constant_mddata_batch_also_falls_back_to_filename_dates(tmp_path):
     ds = session_state.session.dataset
     assert ds.sample_meta[names[0]]["batch"] == "20260101"
     assert ds.sample_meta[names[0]]["batch_source"] == "filename_date"
-    assert "交絡:" in _differential_caveats(names)
+    # Class ID（A / B）は日付と 1 対 1 なので、エンジンも完全交絡として日付のバッチ表を返す。
+    out = json.loads(stats_tools.dataset_compare(reference_group="A", test_group="B"))
+    assert out["error"]["code"] == "STATISTIC_CONFOUNDED"
+    assert out["error"]["details"]["batch_table"] == {"A": {"20260101": 3}, "B": {"20260102": 3}}
 
 
 # ---------- R42: pipeline の解析フォルダは run の試料対応表の役割を、前処理の前から見せる ----------
