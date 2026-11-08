@@ -23,18 +23,14 @@ from metabolomix.analysis.stats.data import from_dataset
 from metabolomix.core import mcp_core
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
-from metabolomix.core.mcp_errors import (default_matrix_needs_input, missing_state, mztab_error,
+from metabolomix.core.mcp_errors import (DRIFT_ARGUMENT, DRIFT_RETRY_TOOLS, default_matrix_needs_input, missing_state, mztab_error,
                                          needs_input)
 from metabolomix.core.serialization import json_payload, json_safe, round_floats, truncate_lists
 from metabolomix.tools._holder import resolve_holder
+from metabolomix.tools._matrix_store import register_default, store_matrix
 
 __all__ = ["dataset_preprocess", "dataset_compare", "dataset_pca"]
 
-#: `argument`（drift_mode）を受けて呼び直せるツール（`needs_input` の retry_tools の意味）。
-#: 受けるのは dataset_preprocess だけ。比較・PCA は返った matrix_id を渡して呼び直す。
-_RETRY_TOOLS = ["dataset_preprocess"]
-#: 問いの欄 → 呼び直すときの引数名。
-_DRIFT_ARGUMENT = "drift_mode"
 #: details に載せる一覧の上限（長いものは切る）。
 _DETAIL_LIMIT = 20
 _STEP_LIST_LIMIT = 20
@@ -89,122 +85,6 @@ def _truncate_details(details: dict | None) -> dict | None:
 
 def _domain_envelope(exc: DomainError) -> str:
     return mztab_error(exc.code, exc.message, _truncate_details(exc.details))
-
-
-def _compact(value: dict) -> dict:
-    """工程の dict を小さな要約にする（入れ子も）。スカラーはそのまま、一覧は件数（`n_<key>`）、
-    値がすべて一覧の dict（`excluded_by_role` など）は `{キー: 件数}`、入れ子の dict（`filters` など）は
-    再帰する。特徴 ID の一覧（`dropped_ids`）は件数が `dropped` にあるので載せない。"""
-    if value and all(isinstance(v, (list, tuple, set, frozenset)) for v in value.values()):
-        return {k: len(v) for k, v in value.items()}
-    out: dict = {}
-    for key, item in value.items():
-        if key == "dropped_ids":
-            continue
-        if isinstance(item, bool) or item is None or isinstance(item, (int, float)):
-            out[key] = item
-        elif isinstance(item, str):
-            if len(item) <= 80:
-                out[key] = item
-        elif isinstance(item, (list, tuple, set, frozenset)):
-            out[f"n_{key}"] = len(item)
-        elif isinstance(item, dict):
-            if len(item) > 8 and all(isinstance(v, (int, float)) for v in item.values()):
-                out[f"n_{key}"] = len(item)
-                out[f"sum_{key}"] = sum(item.values())
-            else:
-                out[key] = _compact(item)
-    return out
-
-
-def _step_summary(step: dict) -> dict:
-    """工程 1 つの要約: 名前・状態・理由を先に、あとに `_compact` した件数と足切りごとの内訳。"""
-    head = {"step": step.get("step"), "status": step.get("status")}
-    if step.get("reason") is not None:
-        head["reason"] = step["reason"]
-    rest = {k: v for k, v in step.items() if k not in ("step", "status", "reason")}
-    return {**head, **_compact(rest)}
-
-
-def _group_counts(prepared) -> dict:
-    counts: dict[str, int] = {}
-    for unit in prepared.units:
-        label = unit.group if unit.group is not None else "(none)"
-        counts[label] = counts.get(label, 0) + 1
-    return dict(sorted(counts.items()))
-
-
-def _warning_summary(warnings: list[dict]) -> list[dict]:
-    """注意の要約（コードと、短い欄だけ。試料名の長い一覧は切る）。"""
-    return truncate_lists(json_safe(warnings), _STEP_LIST_LIMIT, keys=("samples", "sample_ids"))
-
-
-def _write_record(holder, ds, prepared, config, inputs, summary) -> dict:
-    """記録を書く。書き先が決まらない・書けないときは `{"written": False, "reason": ...}`。"""
-    try:
-        reports_dir = mcp_core._resolve_report_dir(holder)
-        parents = []
-        record_id = (getattr(ds, "quant_state", None) or {}).get("record_id")
-        if record_id:
-            parents.append(record_id)
-        written = stats_records.write_stats_record(
-            reports_dir, "preprocess",
-            inputs={"dataset_hash": prepared.dataset_hash, "matrix_id": prepared.matrix_id},
-            parent_ids=parents,
-            settings={"config": config, "group_overrides": inputs["group_overrides"],
-                      "exclusions": {"samples": inputs["exclude_samples"],
-                                     "features": inputs["exclude_features"]}},
-            summary=summary)
-    except DomainError as exc:
-        return {"written": False, "reason": f"{exc.code}: {exc.message}"}
-    except OSError as exc:
-        return {"written": False, "reason": f"OSError: {exc}"}
-    return {"written": True, "record_id": written["record_id"], "path": written["path"]}
-
-
-def _preprocess_summary(study, prepared) -> dict:
-    """前処理の戻り値の要約（工程・群ごとの個体数・注意。記録の summary にもなる）。"""
-    quant = prepared.quant
-    groups = _group_counts(prepared)
-    warnings = list(prepared.warnings)
-    if len(groups) == 1:
-        warnings.append({"code": "single_group", "group": next(iter(groups)),
-                         "message": "すべての個体が 1 つの群に入っている（比較できない）。"
-                                    "group_levels / group_factors の綴りか試料の表の群を確かめてください。"})
-    summary = {
-        "matrix_id": prepared.matrix_id,
-        "n_units": len(prepared.units),
-        "n_qc": len(prepared.qc_ids),
-        "n_features_before": len(study.feature_ids),
-        "n_features": len(prepared.feature_ids),
-        "subject_source": prepared.subject_source,
-        "groups": groups,
-        "quant": ({"normalized": quant.normalized, "method": quant.method, "unit": quant.unit}
-                  if quant is not None else None),
-        "steps": [_step_summary(s) for s in prepared.steps],
-        "warnings": _warning_summary(warnings),
-    }
-    return truncate_lists(json_safe(round_floats(summary)), _STEP_LIST_LIMIT)
-
-
-def _store_matrix(holder, ds, study, prepared, config, inputs):
-    """行列を登録し、前処理の記録を 1 件書く。`(登録, 要約, record 欄)` を返す。
-
-    記録が書けたときは登録に `record_id` を持たせる（後続の比較の記録がここを親にする）。
-    別のデータから作った行列は DomainError(STUDY_DATA_INVALID)。
-    """
-    try:
-        entry = stats_results.register_matrix(
-            ds, prepared, config, inputs["group_overrides"],
-            exclusions={"samples": inputs["exclude_samples"],
-                        "features": inputs["exclude_features"]})
-    except ValueError as exc:
-        raise DomainError("STUDY_DATA_INVALID", str(exc)) from exc
-    summary = _preprocess_summary(study, prepared)
-    record = _write_record(holder, ds, prepared, config, inputs, summary)
-    if record.get("written"):
-        entry["record_id"] = record["record_id"]
-    return entry, summary, record
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
@@ -269,10 +149,10 @@ def dataset_preprocess(
 
     if isinstance(prepared, stats_preprocess.NeedsInput):
         return needs_input(prepared.field, prepared.reason, prepared.options,
-                           argument=_DRIFT_ARGUMENT, retry_tools=_RETRY_TOOLS)
+                           argument=DRIFT_ARGUMENT, retry_tools=DRIFT_RETRY_TOOLS)
 
     try:
-        _entry, summary, record = _store_matrix(holder, ds, study, prepared, config, inputs)
+        _entry, summary, record = store_matrix(holder, ds, study, prepared, config, inputs)
     except DomainError as exc:
         return _domain_envelope(exc)
     return json_payload(json_safe({
@@ -472,16 +352,6 @@ def _matrix_not_found(matrix_id) -> str:
         "dataset_preprocess を実行し直して、その matrix_id を渡してください。")
 
 
-def _register_default(holder, ds, study, prepared, config, inputs):
-    """既定の前処理の行列を登録する（書き込みを伴う部分）。同じ行列が登録済みなら再利用する。
-    `(登録, 前処理の記録 or None)` を返す（記録を書いたのは新しく登録したときだけ）。"""
-    entry = stats_results.get_matrix(ds, prepared.matrix_id)
-    if entry is not None:
-        return entry, None
-    entry, _summary, record = _store_matrix(holder, ds, study, prepared, config, inputs)
-    return entry, record
-
-
 def _write_compare_record(holder, entry, record, spec, summary) -> dict:
     """比較の記録を書く（親は行列の前処理の記録）。書けないときは `{"written": False, "reason"}`。"""
     try:
@@ -598,7 +468,7 @@ def dataset_compare(
 
         preprocess_record = None
         if entry is None:
-            entry, preprocess_record = _register_default(holder, ds, study, prepared,
+            entry, preprocess_record = register_default(holder, ds, study, prepared,
                                                          preprocess, inputs)
             implicit_matrix = prepared.matrix_id
         run = spec_v2.run_spec_v2(spec, study, prepared=prepared)
@@ -722,7 +592,7 @@ def dataset_pca(
             prepared = _prepare_default(study, config, "dataset_pca")
             if isinstance(prepared, str):
                 return prepared
-            entry, preprocess_record = _register_default(holder, ds, study, prepared, config, inputs)
+            entry, preprocess_record = register_default(holder, ds, study, prepared, config, inputs)
             implicit_matrix = prepared.matrix_id
         result = stats_pca.pca(prepared, scaling=scaling, n_components=n_components, impute=impute)
         labels = stats_results.unit_group_labels(ds, prepared, label_overrides)

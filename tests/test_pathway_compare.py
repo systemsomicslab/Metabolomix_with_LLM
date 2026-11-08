@@ -181,13 +181,25 @@ def test_replicates_collapsed_by_subject_of():
 
 
 def test_pathway_module_does_not_import_differential():
+    """`metabolomix/pathway/` のどのモジュールも differential を import せず、属性でも名前でも触らない。"""
     import ast
-    import inspect
-    tree = ast.parse(inspect.getsource(compare))
-    names = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            names += [a.name for a in node.names]
-        elif isinstance(node, ast.ImportFrom):
-            names += [node.module or ""] + [f"{node.module}.{a.name}" for a in node.names]
-    assert not [n for n in names if n.endswith("differential")], names
+    from pathlib import Path
+
+    root = Path(compare.__file__).parent
+    offenders = []
+    for path in sorted(root.glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                hit = any(a.name.split(".")[-1] == "differential" for a in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                hit = ((node.module or "").split(".")[-1] == "differential"
+                       or any(a.name == "differential" for a in node.names))
+            elif isinstance(node, ast.Attribute):
+                hit = node.attr == "differential"
+            elif isinstance(node, ast.Name):
+                hit = node.id == "differential"
+            else:
+                hit = False
+            if hit:
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert not offenders, offenders

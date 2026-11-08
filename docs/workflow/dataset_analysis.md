@@ -34,7 +34,7 @@
 3. └─ metabolomix/tools/stats_tools.py  _covariate_specs()
 4. └─ metabolomix/analysis/stats_results.py  get_matrix()
 5. └─ metabolomix/analysis/stats/spec_v2.py  prepare_spec_v2()
-6. └─ metabolomix/tools/stats_tools.py  _store_matrix()
+6. └─ metabolomix/tools/_matrix_store.py  store_matrix()
 7. └─ metabolomix/analysis/stats/spec_v2.py  run_spec_v2()
 8. └─ metabolomix/analysis/stats_results.py  register_compare()
 9. └─ metabolomix/tools/stats_tools.py  _write_compare_record()
@@ -52,7 +52,7 @@
 
 1. metabolomix/tools/stats_tools.py  dataset_pca()
 2. └─ metabolomix/analysis/stats_results.py  get_matrix()
-3. └─ metabolomix/tools/stats_tools.py  _store_matrix()
+3. └─ metabolomix/tools/_matrix_store.py  store_matrix()
 4. └─ metabolomix/analysis/stats/pca.py  pca()
 5. └─ metabolomix/analysis/stats_results.py  unit_group_labels()
 6. └─ metabolomix/analysis/stats_results.py  register_pca()

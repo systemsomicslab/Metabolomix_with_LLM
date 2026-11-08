@@ -69,7 +69,9 @@
 
 検定は統計エンジンの moderated t。スコープの値（正の有限値）を log2 にして比べ、0 以下・欠測は欠測。
 同じ個体の反復注入は log2 の平均で 1 個体にまとまり（前処理と同じ）、各群 2 個体以上が要る。
-MSLipidMapper へ渡した mzTab-M の値は行列の注入ごとの線形値で、欠測は 0 で書く（MSLipidMapper の約束）。
+MSLipidMapper へ渡した mzTab-M の値は行列の注入ごとの線形値で、欠測・0 以下・非有限は 0 で書く（MSLipidMapper の約束。エンジンも 0 以下を欠測と読む）。
+**注意**: 0 は欠測の印だが、上流の集計は 0 を値として扱うので、`aggregation=mean|median` では欠測の 0 がサブクラスの値を引き下げる（`sum` なら足さないのと同じ）。欠測の多いサブクラスのmean / median の差は割り引いて読む。比較側（ノード表）は集計後の 0 以下を欠測として除く。
+既定の行列（`matrix_id` 省略時）は登録され、前処理の記録が `reports/stats/` に 1 件書かれる（manifest の `preprocess_record_id`。同じ行列の 2 回目以降は記録を足さない）。返った `matrix_id` は dataset_compare / dataset_pca にそのまま渡せる。
 mean_a / mean_b は個体の `2**log2` の算術平均（エンジンの定義。旧 v1 の生値の平均とは別物）。
 
 上流はデータに無いサブクラスのノード（対応表経由の PC/PE/PS など）と、指定した各鎖について
@@ -81,7 +83,7 @@ mean_a / mean_b は個体の `2**log2` の算術平均（エンジンの定義�
 
 - **隣接**＝間に接合ノード（PathwayJunction）だけを挟んでつながる 2 つの脂質ノード（`via` が
   direct / junction）。値の付かない化合物ノード（CDP-DAG 等）を挟むものは隣接としない。
-- 掲載は**両端とも q < 閾値かつ向きが逆**の組だけ。片方が ns/NA の組は `undeterminable_pairs` に件数のみ。
+- 掲載は**両端とも q ≤ 閾値（verdict が changed）かつ向きが逆**の組だけ。片方が ns/NA の組は `undeterminable_pairs` に件数のみ。
   片方に値（分子種の入った whole スコープ）が無い組は数えない（判定不能にも入れない）。
 - MSLipidMapper のつながりは描画用テンプレートで、反応の主張ではない（上流文書:
   "not automatically curated reactions"）。**観察の提示**として扱い、基質・生成物の解釈は文献で裏を取る。

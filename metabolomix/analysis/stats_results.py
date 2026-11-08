@@ -107,11 +107,14 @@ def register_matrix(ds, prepared, config, group_overrides, *, exclusions: dict |
     `ds.excluded_samples` / `ds.excluded_features`（`dataset_exclude` の除外）を名前の並びで記録する
     ——行列は今の除外で作る前提で、除外が変われば `metadata_revision` が進んで登録ごと古くなる。
     同じ行列 ID は上書きし、古くなった登録はこのとき捨てる。
-    別のデータから作った行列（`prepared.dataset_hash` が今の指紋と違う）は ValueError。
+    別のデータから作った行列（`prepared.dataset_hash` が今の指紋と違う）と、データの指紋を持たない行列
+    （`stats.external.prepared_from_injections` が作る外部の行列など）は ValueError。
     """
     current = dataset_fingerprint(ds)
     recorded = getattr(prepared, "dataset_hash", None)
-    if recorded is not None and recorded != current:
+    if recorded is None:
+        raise ValueError("行列はデータセットの指紋を持たない（外部の値から作った行列は登録できない）")
+    if recorded != current:
         raise ValueError("行列は今のデータセットとは別のデータから作られている（指紋が違う）")
     revision = getattr(ds, "metadata_revision", 0)
     store = getattr(ds, "stat_matrices", None)

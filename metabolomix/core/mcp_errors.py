@@ -90,6 +90,12 @@ def needs_input(field: str, reason: str, options: list[dict], *, argument: str |
     return json_payload({NEEDS_INPUT: body})
 
 
+#: `argument`（drift_mode）を受けて呼び直せるツール（`needs_input` の retry_tools の意味）と、その引数名。
+#: 受けるのは dataset_preprocess だけ。比較・PCA・パスウェイは返った matrix_id を渡して呼び直す。
+DRIFT_ARGUMENT = "drift_mode"
+DRIFT_RETRY_TOOLS = ["dataset_preprocess"]
+
+
 def default_matrix_needs_input(needs, tool: str) -> str:
     """既定の前処理が利用者に尋ねたいとき（`needs` は前処理の `NeedsInput`）の封筒。
 
@@ -101,7 +107,7 @@ def default_matrix_needs_input(needs, tool: str) -> str:
         f"{needs.reason} {tool} には drift_mode 引数がありません。"
         f"dataset_preprocess(drift_mode=...) で行列を作り、その matrix_id を "
         f"{tool} に渡して呼び直してください。",
-        needs.options, argument="drift_mode", retry_tools=["dataset_preprocess"])
+        needs.options, argument=DRIFT_ARGUMENT, retry_tools=list(DRIFT_RETRY_TOOLS))
 
 
 CONSOLE_ERROR_CODES = frozenset({

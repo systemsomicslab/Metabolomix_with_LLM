@@ -4,7 +4,7 @@
 `pathway/compare.py`）がエンジンの `compare` を使うための入口。注入を個体にまとめる規則は
 前処理の `_collapse` と同じ: 個体（subject）× 群が同じ注入を log2 の上で、有限な値だけの平均に
 する（全注入が欠測なら欠測）。個体の指定が無い注入は、それぞれが 1 個体。
-MCP・セッションには依存しない。
+MCP・セッションには依存しない。作った行列は `dataset_hash=None` で、`register_matrix` は拒む（登録しない）。
 """
 from __future__ import annotations
 
