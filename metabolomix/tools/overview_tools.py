@@ -12,6 +12,7 @@ from __future__ import annotations
 from mcp.types import ToolAnnotations
 
 from metabolomix.analysis import overview, stats_records, stats_results
+from metabolomix.analysis.result_state import dataset_fingerprint
 from metabolomix.analysis.stats import pca as stats_pca
 from metabolomix.analysis.stats import quality, spec_v2
 from metabolomix.analysis.stats.composition import composition
@@ -73,7 +74,7 @@ def _state_line(holder, ds, chain: dict, prepared, assay_kind: str) -> str:
         else "鎖は選別まで済み",
         f"キュレーションの判断 {'不明' if cur is None else cur} 件",
         f"済んだ工程 {', '.join(done) or 'なし'}",
-    ]) + "。" + _recipe(prepared))
+    ]) + "。" + (_recipe(prepared) if prepared is not None else "前処理の行列なし"))
 
 
 def _counts(ds, study, prepared) -> dict:
@@ -119,6 +120,59 @@ def _texts(section: dict) -> dict:
     return out
 
 
+def _error_text(exc: DomainError) -> str:
+    """失敗の理由の 1 行（`details` の内訳も落とさない。長ければ切る）。"""
+    details = json_payload(round_floats(json_safe(exc.details))) if exc.details else ""
+    return f"{exc.code}: {exc.message}" + (f" {details[:400]}" if details else "")
+
+
+def _quality_only(holder, ds, study, exc: DomainError, *, rsd, failed, drift, detection, n_blank,
+                  assay_kind, top_n, embedded) -> dict:
+    """既定の前処理が失敗した（特徴が残らない など）ときの概観: 品質の段だけを出し、他の 3 段は理由つきで省く。
+
+    品質が悪いデータほど前処理で行が落ちるので、ここで品質の段まで失うと「差を語れる状態か」が言えない（§4.1）。
+    交絡は前処理の個体が無いので評価しない（`not_computed`）。
+    """
+    reason = _error_text(exc)
+    conf = {"batch_status": "not_computed", "injection_order": {"status": "not_computed"}}
+    verdict, reasons = quality.quality_verdict(rsd=rsd, failed=failed, drift=drift, confounding=conf,
+                                               replicate_warnings=[])
+    n_qc = sum(1 for s in study.samples if s.include and s.role == "qc")
+    q_sec = overview.quality_facts(rsd=rsd, failed=failed, detection=detection, drift=drift, confounding=conf,
+                                   replicate_warnings=[], verdict=verdict, reasons=reasons, n_qc=n_qc,
+                                   n_blank=n_blank, drift_note=None, pca_id=None)
+    skipped = {"facts": [], "omitted": f"既定の前処理の行列が作れない（{reason}）",
+               "next": "dataset_preprocess() で足切りの段ごとの理由を見る（filters を緩める・"
+                       "dataset_exclude で外れた試料を外す）→ dataset_overview()"}
+    sections = {"quality": q_sec, "global": skipped, "classes": dict(skipped), "species": dict(skipped)}
+    chain = overview.chain_state(ds, curation_judgments=_curation_judgments(holder, ds))
+    oid = overview.overview_id(dataset_hash=dataset_fingerprint(ds),
+                               metadata_revision=getattr(ds, "metadata_revision", 0), matrix_id=None,
+                               compare_id=None, pca_id=None,
+                               extra={"top_n": top_n, "assay_kind": assay_kind, "chain": chain,
+                                      "preprocess_failed": exc.code})
+    settings = {"thresholds": quality.QUALITY_THRESHOLDS, "top_n": top_n, "chain": chain,
+                "assay_kind": assay_kind, "preprocess_error": {"code": exc.code, "details": exc.details}}
+    reg = overview.register_overview(ds, result_id=oid, matrix_id=None, sections=sections, parents=[],
+                                     settings=json_safe(settings))
+    written = _write_record(holder, {}, oid, None, json_safe(settings), json_safe(round_floats(reg["facts"])))
+    payload = {
+        "status": "success",
+        "overview_id": oid,
+        "provisional": chain["provisional"],
+        "state": _state_line(holder, ds, chain, None, assay_kind),
+        **({} if embedded else {"counts": _counts(ds, study, None)}),
+        "quality": _texts(q_sec),
+        "global": _texts(sections["global"]),
+        "classes": _texts(sections["classes"]),
+        "species": _texts(sections["species"]),
+        "result_ids": {},
+        "record": written,
+        "note": _NOTE.format(oid=oid),
+    }
+    return json_safe(payload)
+
+
 def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) -> dict:
     """概観を計算して登録し、戻り値の dict を返す。`DomainError` はそのまま送出する（呼び出し側が封筒にする）。
 
@@ -127,27 +181,35 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
     ds = holder.dataset
     assay_kind = getattr(session_state.session, "assay_kind", "unknown") or "unknown"
 
-    # 1. 既定の前処理（ドリフト補正の既定が未決なら補正なしで計算する。§7）
     _, inputs, config = stats_results.matrix_inputs(ds, None)
     study = from_dataset(ds, **inputs)
-    prepared = stats_results.prepare_default(study, config)
+    # 品質の材料は前処理の前の試料から（前処理が失敗しても品質の段は出す）
+    rsd = quality.qc_rsd_summary(study)
+    failed = quality.failed_qc(study)
+    drift = quality.drift_signs(study)
+    detection = quality.detection_summary(study)
+    n_blank = sum(1 for s in study.samples if s.include and s.role == "blank")
+
+    # 1. 既定の前処理（ドリフト補正の既定が未決なら補正なしで計算する。§7）
     drift_note = None
-    if isinstance(prepared, NeedsInput):
-        config = normalize_preprocess_config({**config, "drift": {**config["drift"], "mode": "off"}})
+    try:
         prepared = stats_results.prepare_default(study, config)
-        drift_note = _DRIFT_NOTE
-    entry, _record = register_default(holder, ds, study, prepared, config, inputs)
+        if isinstance(prepared, NeedsInput):
+            config = normalize_preprocess_config({**config, "drift": {**config["drift"], "mode": "off"}})
+            prepared = stats_results.prepare_default(study, config)
+            drift_note = _DRIFT_NOTE
+        entry, _record = register_default(holder, ds, study, prepared, config, inputs)
+    except DomainError as exc:
+        return _quality_only(holder, ds, study, exc, rsd=rsd, failed=failed, drift=drift,
+                             detection=detection, n_blank=n_blank, assay_kind=assay_kind,
+                             top_n=top_n, embedded=embedded)
 
     # 2. 品質
     plan = overview.group_plan(ds, prepared)
     conf = confounding_report(prepared.units, plan["levels"])
-    rsd = quality.qc_rsd_summary(study)
-    failed = quality.failed_qc(study)
-    drift = quality.drift_signs(study)
     replicates = [w for w in prepared.warnings if w.get("code") == "possible_technical_replicates"]
     verdict, reasons = quality.quality_verdict(rsd=rsd, failed=failed, drift=drift, confounding=conf,
                                                replicate_warnings=replicates)
-    n_blank = sum(1 for s in study.samples if s.include and s.role == "blank")
 
     # 3. 全体（PCA は直近にしない）
     pca_rec, pca_result = None, None
@@ -174,7 +236,7 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
             omitted = f"{exc.code}: {exc.message}"
 
     q_note = None if verdict != "poor" else "品質 Q1 が poor のため参考"
-    q_sec = overview.quality_facts(rsd=rsd, failed=failed, detection=quality.detection_summary(study),
+    q_sec = overview.quality_facts(rsd=rsd, failed=failed, detection=detection,
                                    drift=drift, confounding=conf, replicate_warnings=replicates,
                                    verdict=verdict, reasons=reasons, n_qc=len(prepared.qc_ids),
                                    n_blank=n_blank, drift_note=drift_note,

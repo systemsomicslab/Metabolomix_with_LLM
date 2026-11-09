@@ -849,3 +849,11 @@ def test_reports_written_into_the_folder_do_not_invalidate_the_base(tmp_path, mo
     (folder / "reports" / "stats" / "x.json").write_text("{}", encoding="utf-8")
     load_dataset(directory=str(folder), overview=False)
     assert len(calls) == 1
+
+
+def test_folder_listing_counts_mdproject(tmp_path):
+    """`.mdproject` は `.mddata` が無いときの群の宣言元。後から置かれたら基を使い回さない（指紋に入る）。"""
+    from metabolomix.dataset.opening import _folder_listing
+
+    (tmp_path / "study.mdproject").write_bytes(b"x")
+    assert str(tmp_path / "study.mdproject") in _folder_listing(tmp_path)

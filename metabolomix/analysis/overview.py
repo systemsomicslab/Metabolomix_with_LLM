@@ -169,7 +169,8 @@ def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict]
     conf_text = {"complete": "群とバッチが完全交絡（群差とバッチ差を区別できない。比較は回していない）",
                  "partial": f"群とバッチが部分交絡（Cramér の V={_g(confounding.get('cramers_v'), 2)}）",
                  "none": "群とバッチの交絡なし", "single_batch": "バッチは 1 つ",
-                 "not_evaluable": "群とバッチの交絡は評価できない（バッチが不明な試料がある）"}.get(status, str(status))
+                 "not_evaluable": "群とバッチの交絡は評価できない（バッチが不明な試料がある）",
+                 "not_computed": "群とバッチの交絡は評価していない（前処理の行列が作れない）"}.get(status, str(status))
     f.add(conf_text + ("・注入順が群で偏っている" if inj == "biased" else ""),
           batch_status=status, cramers_v=confounding.get("cramers_v"), injection_order=inj,
           batch_table=confounding.get("batch_table"))

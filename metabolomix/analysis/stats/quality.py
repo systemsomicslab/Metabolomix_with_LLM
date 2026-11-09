@@ -135,10 +135,15 @@ def quality_verdict(*, rsd: dict, failed: dict, drift: list[dict], confounding: 
         caution.append("drift_sign")
     if replicate_warnings:
         caution.append("possible_technical_replicates")
+    qc_missing = rsd.get("status") != "ok"
+    tail = ["qc_not_evaluable"] if qc_missing else []
     if poor:
-        return "poor", poor + caution
+        return "poor", poor + caution + tail
     if caution:
-        return "caution", caution
-    if rsd.get("status") != "ok" and status == "not_evaluable":
+        return "caution", caution + tail
+    if qc_missing and status == "not_evaluable":
         return "not_evaluable", ["no_qc_and_batch_unknown"]
+    if qc_missing:
+        # QC が無い（足りない）ときは ok と言わない（spec §4.1: 評価できないことをそのまま書く）
+        return "not_evaluable", ["qc_not_evaluable"]
     return "ok", []

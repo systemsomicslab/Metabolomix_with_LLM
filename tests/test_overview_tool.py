@@ -199,3 +199,27 @@ def test_overview_does_not_relabel_an_explicit_compare(tmp_path):
     _ov()
     assert ds.results[rid].get("origin") is None
     assert select_results(ds, None)["results"]
+
+
+def _no_features_left(ds):
+    """QC の RSD を大きくして、既定の前処理の足切りで特徴が 1 つも残らないようにする。"""
+    import numpy as np
+
+    rng = np.random.default_rng(1)
+    for j, name in enumerate(ds.sample_names):
+        if name.startswith("QC"):
+            ds.feature_matrix[:, j] *= rng.uniform(0.01, 100, ds.feature_matrix.shape[0])
+    return ds
+
+
+def test_overview_keeps_quality_when_preprocessing_leaves_nothing(tmp_path):
+    """前処理で特徴が残らなくても、品質の段（前処理前の試料から計算する）は出し、他の段は理由つきで省く。"""
+    _install(_no_features_left(_ds()), tmp_path)
+    out = _ov()
+    assert out["status"] == "success", out
+    assert out["quality"]["verdict"] == "poor"
+    assert any("RSD" in f for f in out["quality"]["facts"])
+    for key in ("global", "classes", "species"):
+        assert "PREPROCESS_PRECONDITION" in out[key]["omitted"], out[key]
+    assert "qc_rsd" in out["global"]["omitted"]           # 足切りの内訳（details）を落とさない
+    assert "pca" not in out["result_ids"] and "compare" not in out["result_ids"]

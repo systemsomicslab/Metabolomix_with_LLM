@@ -104,6 +104,11 @@ def test_quality_verdict_rules():
                                          confounding=_conf("not_evaluable", "not_evaluable"),
                                          replicate_warnings=[])
     assert verdict == "not_evaluable"
-    # QC だけが無いときは、他の項目で判定する
+    # QC だけが無いときも ok とは言わない（spec §4.1: 評価できないことをそのまま書く）
     assert quality.quality_verdict(rsd=no_qc, failed={"checked": 0, "failed": []}, drift=[],
-                                   confounding=_conf(), replicate_warnings=[])[0] == "ok"
+                                   confounding=_conf(), replicate_warnings=[]) ==         ("not_evaluable", ["qc_not_evaluable"])
+    # 他の項目で caution / poor なら、その判定に QC を評価できなかった理由を添える
+    verdict, reasons = quality.quality_verdict(rsd=no_qc, failed={"checked": 0, "failed": []},
+                                               drift=[{"flag": True}], confounding=_conf(),
+                                               replicate_warnings=[])
+    assert verdict == "caution" and reasons == ["drift_sign", "qc_not_evaluable"]

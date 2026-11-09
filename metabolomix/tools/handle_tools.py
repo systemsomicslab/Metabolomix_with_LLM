@@ -21,7 +21,7 @@ from metabolomix.core import handles, session_state, user_config
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import mztab_error
-from metabolomix.core.serialization import json_payload
+from metabolomix.core.serialization import json_payload, json_safe
 from metabolomix.dataset import opening
 
 __all__ = ["load_dataset", "dataset_list", "dataset_close"]
@@ -306,6 +306,8 @@ def _first_overview(handle) -> dict:
             return build_overview_payload(handle, embedded=True)
     except DomainError as exc:
         error = {"code": exc.code, "message": exc.message}
+        if exc.details:
+            error["details"] = json_safe(exc.details)
     except Exception as exc:  # noqa: BLE001 - 概観の失敗で読み込みを失敗にしない
         error = {"code": type(exc).__name__, "message": str(exc)[:300]}
     return {"status": "unavailable", "error": error,
