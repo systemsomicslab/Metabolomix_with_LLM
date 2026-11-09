@@ -630,6 +630,40 @@ def matching_arfs(candidates: list[Path], *, feature_mz: list[float | None],
     return passed, rejected, first
 
 
+def first_matching_arfs(mztab_path: str | Path, artifact_paths: dict[str, list[str]] | None,
+                        verify, fallback_arfs=()) -> tuple[list[Path], dict[str, str],
+                                                           ArfScan | None, list[Path]]:
+    """ジョブの正準 mzTab-M と同じアラインメントの `.arf` を探す（解析フォルダを選ぶ規則）。
+
+    1. `arf_candidates`（ジョブの `peak_matrix_source` → mzTab-M の隣）をまとめて `verify` にかける。
+    2. どれも通らなければ `fallback_arfs`（解析フォルダのバッチを**新しい順に**。遅延評価して
+       よい）を 1 本ずつ試し、最初に通ったところで止める。すでに候補にある `.arf`（解決後の
+       パスで比べる）は二重に検証しない。
+
+    名前の順で先頭を取らない・フォルダの全バッチを一度に並べない——同じフォルダに前の
+    実行のバッチが残るのは普通で、それを数えると「同じアラインメントが 2 本」になる。
+    `verify(paths)` は `matching_arfs` と同じ (通った, 却下理由, ArfScan) を返す。
+    戻り値は (通った `.arf`, 却下理由, 最初に通った ArfScan, 試した候補)。曖昧（2 本以上）・
+    不在の扱いは呼び出し側が決める（`dataset/opening` と `pipeline/service` が共有する）。
+    """
+    candidates = arf_candidates(mztab_path, artifact_paths)
+    passed, rejected, scan = verify(candidates) if candidates else ([], {}, None)
+    if not passed:
+        for fallback in fallback_arfs:
+            if fallback is None:
+                continue
+            if Path(fallback).resolve() in {p.resolve() for p in candidates}:
+                continue
+            candidates.append(Path(fallback))
+            more, more_rejected, more_scan = verify([Path(fallback)])
+            passed = list(passed) + list(more)
+            rejected.update(more_rejected)
+            scan = scan or more_scan
+            if passed:
+                break
+    return list(passed), rejected, scan, candidates
+
+
 def attach_to_dataset(ds, mztab_path: str | Path) -> None:
     """候補 `.arf` を順に試し、最初に検証を通ったものを DatasetState に載せる。
 

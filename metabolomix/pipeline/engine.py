@@ -240,15 +240,25 @@ def _save_with_retry(pipeline_path: Path, record: dict, apply_change) -> dict:
         {"pipeline_root": str(pipeline_path)})
 
 
-def mark_stage_running(pipeline_path: Path, record: dict, stage: dict) -> dict:
+class _StaleRequest(Exception):
+    """running にする直前に要求の版が変わっていた（pass をやり直す合図。外へは出ない）。"""
+
+
+def mark_stage_running(pipeline_path: Path, record: dict, stage: dict, *,
+                       identity: tuple | None = None) -> dict:
     """stageを`running`にして原子的に保存し、再読込した最新recordを返す。
 
     状態競合は`_save_with_retry`が読み直して再適用する——`attempt`は毎回
     「そのとき読んだrecordの値+1」なので、再適用しても二重加算にならない。
+    `identity`（pass が実行している要求の版）を渡すと、保存する記録の版がそれと違う
+    とき running にせず `_StaleRequest` を送出する——版の確認と保存の間に届いた訂正を
+    古い要求のまま回し、その結果を以後信頼してしまわないため。
     """
     stage_id = stage["stage_id"]
 
     def _apply(current: dict) -> dict:
+        if identity is not None and _request_identity(current) != identity:
+            raise _StaleRequest()
         target = current["stages"][stage_id]
         now = _now_iso()
         target["status"] = "running"
@@ -473,7 +483,14 @@ def _run_stage_loop(pipeline_path: Path, handlers: dict) -> dict:
             if cancel_requested(pipeline_path):
                 return finish_cancelled(pipeline_path, record)
 
-            record = mark_stage_running(pipeline_path, record, stage)
+            try:
+                record = mark_stage_running(pipeline_path, record, stage, identity=identity)
+            except _StaleRequest:
+                record = store.load_run(pipeline_path)
+                request = _load_request(pipeline_path, record)
+                identity = _request_identity(record)
+                restarted = True
+                break
             stage = record["stages"][stage_id]
             context = make_context(record, stage, entry, request)
             outcome = _invoke_handler(handlers[entry["handler"]], context)

@@ -33,7 +33,9 @@ from pathlib import Path
 
 from metabolomix.core import handles
 from metabolomix.core.atomic_io import DomainError
-from metabolomix.dataset.alignment_files import AlignmentSelection, select_alignment
+from metabolomix.dataset.alignment_files import (
+    AlignmentSelection, arf2_batches_newest_first, select_alignment,
+)
 from metabolomix.mztab.dataset_state import DatasetState
 
 __all__ = ["KINDS", "SOURCES", "OpenedDataset", "open_dataset", "pipeline_arf2",
@@ -470,25 +472,18 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]],
         return evidence.matching_arfs(paths, feature_mz=axes[0], sample_names=axes[1],
                                       measures=tuple(MEASURES.values()))
 
-    candidates = evidence.arf_candidates(gate.mztab_path, artifact_paths)
-    passed, rejected, scan = verify(candidates) if candidates else ([], {}, None)
-    if not passed and pipeline_root is not None:
-        # run の input/ のバッチを新しい順に、合うものが見つかるまで試す。
-        # すでに候補に入っている `.arf`（解決後のパスで比べる）は二重に検証・列挙しない。
+    def fallbacks():
+        # run の input/ のバッチを新しい順に（`first_matching_arfs` が合うまで 1 本ずつ試す）。
+        if pipeline_root is None:
+            return
         for arf2 in pipeline_arf2_candidates(pipeline_root):
             try:
-                fallback = select_alignment(arf2).arf
+                yield select_alignment(arf2).arf
             except DomainError as exc:
                 raise _with_hint(exc) from exc
-            if fallback.resolve() in {p.resolve() for p in candidates}:
-                continue
-            candidates.append(fallback)
-            more, more_rejected, more_scan = verify([fallback])
-            passed += more
-            rejected.update(more_rejected)
-            scan = scan or more_scan
-            if passed:
-                break
+
+    passed, rejected, scan, candidates = evidence.first_matching_arfs(
+        gate.mztab_path, artifact_paths, verify, fallbacks())
 
     details = {"mztab": gate.mztab_path.name, "candidates": [p.name for p in candidates],
                "source_hint": "mztab"}
@@ -561,8 +556,7 @@ def pipeline_arf2_candidates(pipeline_path) -> list[Path]:
     from metabolomix.pipeline.recovery import normalize_pipeline_root
 
     root = normalize_pipeline_root(Path(pipeline_path))
-    return [p for p in sorted((root / "input").glob("AlignResult-*.arf2"),
-                              key=lambda p: p.name, reverse=True) if p.is_file()]
+    return arf2_batches_newest_first(root / "input", "AlignResult-*.arf2")
 
 
 def pipeline_arf2(pipeline_path) -> Path | None:

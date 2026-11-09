@@ -28,6 +28,7 @@ Console を 2 本並べない）。
 from __future__ import annotations
 
 import copy
+import json
 import sys
 import time
 from datetime import datetime, timezone
@@ -243,6 +244,28 @@ def _dispatch_summary(pipeline_path: Path, *, launched: bool, launch: dict | Non
     return summary
 
 
+def _recheck_manifests(pipeline_path: Path) -> tuple[str, DomainError] | None:
+    """保存済みの要求と入力計画で、単位ごとに `_precheck_manifest` をやり直す。
+
+    最初に見つかった不正を `(stage_id, error)` で返す。どれも通れば None。
+    """
+    record = store.load_run(pipeline_path)
+    request = json.loads(
+        (pipeline_path / record["request"]["saved_path"]).read_text(encoding="utf-8"))
+    source_root = Path(record["identity"]["source_root"])
+    for index, unit in enumerate(request["units"]):
+        polarity = unit["polarity"]
+        unit_state = record["units"][polarity]
+        unit_root = pipeline_path / (unit_state.get("unit_root") or polarity)
+        plan = store.absolutize_unit_inputs(unit_state["inputs"], unit_root)
+        error = _precheck_manifest(
+            request_mod.unit_source_root(source_root, unit),
+            request_mod.unit_request(request, index, source_root), plan)
+        if error is not None:
+            return store.unit_stage_id("prepare_input", polarity), error
+    return None
+
+
 def _prepare_run(dataset_root: Path, request: dict | None,
                  request_id: str | None) -> tuple[Path, DomainError | None]:
     """resolve_request→単位ごとの inspect_inputs と事前検査→find_or_create_run。
@@ -335,11 +358,24 @@ def resume_pipeline(path: Path, updates: dict | None = None,
     `pipeline_path`を戻り値・`launch_pipeline_worker`・handshakeの全経路で使い回す。
     """
     pipeline_path = recovery.normalize_pipeline_root(path)
+    prior_status = store.load_run(pipeline_path)["status"]
     result = recovery.prepare_resume(
         pipeline_path, updates=updates, request_id=request_id, rerun_upstream=rerun_upstream)
 
     summary = dict(result)
     summary["pipeline_path"] = str(pipeline_path)
+    if result["status"] == "planned" and prior_status == "needs_input":
+        # 受付の事前検査で止まった run は、起動する前に同じ検査をやり直す（シートが
+        # 直っていないまま worker を起動しない）。
+        found = _recheck_manifests(pipeline_path)
+        if found is not None:
+            stage_id, error = found
+            _mark_needs_input_without_launch(pipeline_path, error, stage_id=stage_id)
+            record = store.load_run(pipeline_path)
+            summary["status"] = record["status"]
+            summary["needs_input"] = record.get("needs_input")
+            summary["launch"] = {"launched": False}
+            return summary
     if result["status"] == "planned":
         baseline_record = store.load_run(pipeline_path)
         launch_info = _launch_and_await(pipeline_path, baseline_record=baseline_record)
@@ -526,29 +562,30 @@ def _matching_alignment(gate, input_dir: Path) -> tuple[dict | None, dict | None
     """解析フォルダ（`<極性>/input/`）の `.arf` のうち、正準 mzTab-M と同じアラインメントだと
     確かめられたものがちょうど 1 本あれば `{"arf", "arf2"}`（名前）を返す。
 
-    照合の規則は `mztab.evidence.matching_arfs`（特徴数・m/z・試料名。
-    `dataset/opening` が解析フォルダを開くときと同じ）。合わなければ (None, 警告)。
+    選び方は `dataset/opening` と同じ（`mztab.evidence.first_matching_arfs`）: まずこの
+    attempt のジョブが集めた `peak_matrix_source`、どれも通らなければ解析フォルダのバッチを
+    新しい順に 1 本ずつ。照合は `matching_arfs`（特徴数・m/z・試料名）。`rerun_upstream` の
+    やり直しで前の attempt のバッチが残っていても、それを 2 本目に数えない。
+    合わなければ (None, 警告)。
     """
-    # arf_candidates は「mzTab-M と同じフォルダ」の `.arf` を優先順に並べる。解析フォルダの
-    # 中を同じ順で並べたいので、そのフォルダの中の（実在しない）名前を渡す。
-    candidates = mztab_evidence.arf_candidates(input_dir / "_.mzTab", None)
-    details: dict = {"analysis_dir": f"{input_dir.parent.name}/{input_dir.name}",
-                     "candidates": [p.name for p in candidates]}
-    if not candidates:
-        return None, {"code": "ANALYSIS_FOLDER_UNMATCHED",
-                      "message": "解析フォルダに MS-DIAL のアラインメント（.arf）がありません。"
-                                 "mzTab-M（source=\"mztab\"）なら読めます。",
-                      "details": details}
-    try:
+    details: dict = {"analysis_dir": f"{input_dir.parent.name}/{input_dir.name}"}
+
+    def verify(paths):
         state, _parsed = mztab_loading.read_mztab_parsed(gate.mztab_path)
         feature_mz, sample_names = mztab_evidence.join_axes(state)
-        passed, rejected, _scan = mztab_evidence.matching_arfs(
-            candidates, feature_mz=feature_mz, sample_names=sample_names)
+        return mztab_evidence.matching_arfs(paths, feature_mz=feature_mz,
+                                            sample_names=sample_names)
+
+    try:
+        passed, rejected, _scan, candidates = mztab_evidence.first_matching_arfs(
+            gate.mztab_path, mztab_loading.job_artifact_paths(gate.job), verify,
+            alignment_files.batch_arfs_newest_first(input_dir))
     except DomainError as exc:
         return None, {"code": "ANALYSIS_FOLDER_UNMATCHED",
                       "message": f"解析フォルダの .arf を mzTab-M と照合できませんでした"
                                  f"（{exc.code}）。mzTab-M（source=\"mztab\"）なら読めます。",
                       "details": {**details, "error_code": exc.code}}
+    details["candidates"] = [p.name for p in candidates]
     if len(passed) == 1:
         # 同じバッチの `.arf2`（`<stem>_PeakProperties.arf` → `<stem>.arf2`。開く側と同じ規則）。
         try:
@@ -556,6 +593,11 @@ def _matching_alignment(gate, input_dir: Path) -> tuple[dict | None, dict | None
         except DomainError:
             arf2 = None
         return {"arf": passed[0].name, "arf2": arf2}, None
+    if not candidates:
+        return None, {"code": "ANALYSIS_FOLDER_UNMATCHED",
+                      "message": "解析フォルダに MS-DIAL のアラインメント（.arf）がありません。"
+                                 "mzTab-M（source=\"mztab\"）なら読めます。",
+                      "details": details}
     reason = ("複数あります: " + ", ".join(p.name for p in passed)) if passed else "ありません"
     return None, {"code": "ANALYSIS_FOLDER_UNMATCHED",
                   "message": f"mzTab-M と同じアラインメントだと確かめられた .arf が{reason}。"

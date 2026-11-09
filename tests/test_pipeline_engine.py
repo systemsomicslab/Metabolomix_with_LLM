@@ -313,6 +313,98 @@ def test_a_rerun_during_the_run_re_executes_the_failed_unit(tmp_path):
     assert result["status"] == "completed"
 
 
+def test_an_update_right_before_a_stage_starts_restarts_the_pass(tmp_path, monkeypatch):
+    """版の確認と `mark_stage_running` の間に届いた訂正で、古い要求のまま工程を回さない。"""
+    from metabolomix.pipeline import engine
+    from metabolomix.pipeline.recovery import prepare_resume
+
+    path, calls = _run(tmp_path)
+    handlers = synthetic_handlers(calls)
+    real_receipt = handlers["receipt"]
+    seen_manifests: list = []
+
+    def receipt(context):
+        seen_manifests.append(context["request"]["units"][0].get("sample_manifest"))
+        return real_receipt(context)
+
+    handlers["receipt"] = receipt
+    real_cancel_requested = engine.cancel_requested
+    count = {"n": 0}
+
+    def cancel_requested_then_update(pipeline_path):
+        count["n"] += 1
+        if count["n"] == 4:  # receipt の直前（版の確認の後、running にする前）
+            prepare_resume(path, updates={"sample_manifest": "other.tsv"})
+        return real_cancel_requested(pipeline_path)
+
+    monkeypatch.setattr(engine, "cancel_requested", cancel_requested_then_update)
+    result = run_engine(path, handlers)
+
+    assert seen_manifests == ["other.tsv"]
+    assert result["request"]["revision"] == 2
+    assert result["status"] == "completed"
+
+
+def _failing_negative_then_resume_inside_positive_upstream(path, calls, resume):
+    """negative の upstream を 1 回失敗させ、positive の upstream の**最中**に `resume()` を呼ぶ。"""
+    handlers = synthetic_handlers(calls)
+    failing = synthetic_handlers(fail_stages={"upstream:negative"})["upstream"]
+    real_upstream = handlers["upstream"]
+    state = {"failed_once": False, "resumed": False}
+
+    def upstream(context):
+        if context["unit"] == "negative" and not state["failed_once"]:
+            state["failed_once"] = True
+            calls.append(context["stage_id"])
+            return failing(context)
+        if context["unit"] == "positive" and not state["resumed"]:
+            state["resumed"] = True
+            resume()
+        return real_upstream(context)
+
+    handlers["upstream"] = upstream
+    return handlers
+
+
+def test_a_rerun_sent_while_a_console_runs_does_not_restart_that_console(tmp_path):
+    """稼働中の worker が回している Console（upstream running）は rerun_upstream でも捨てない。"""
+    from metabolomix.pipeline.recovery import prepare_resume
+
+    path, calls = _run(tmp_path, ("negative", "positive"))
+    accepted = {}
+
+    def resume():
+        accepted.update(prepare_resume(path, rerun_upstream=True))
+
+    result = run_engine(path, _failing_negative_then_resume_inside_positive_upstream(
+        path, calls, resume))
+    assert set(accepted["reset_stage_ids"]) == {
+        "prepare_input:negative", "upstream:negative", "validate_outputs:negative", "receipt"}
+    assert calls.count("upstream:positive") == 1        # 走っていた Console をやり直さない
+    assert calls.count("upstream:negative") == 2
+    assert result["stages"]["upstream:positive"]["attempt"] == 1
+    assert result["status"] == "completed"
+
+
+def test_a_manifest_update_sent_while_a_console_runs_is_accepted(tmp_path):
+    """稼働中の Console があっても、対応表の訂正は UPSTREAM_RERUN_REQUIRED にしない。"""
+    from metabolomix.pipeline.recovery import prepare_resume
+
+    path, calls = _run(tmp_path, ("negative", "positive"))
+    accepted = {}
+
+    def resume():
+        accepted.update(prepare_resume(path, updates={"units": {
+            "positive": {"sample_manifest": "positive/pos.tsv"}}}))
+
+    result = run_engine(path, _failing_negative_then_resume_inside_positive_upstream(
+        path, calls, resume))
+    assert accepted["reset_stage_ids"] == ["receipt"]
+    assert calls.count("upstream:positive") == 1
+    assert result["request"]["revision"] == 2
+    assert result["status"] == "partial"     # negative は明示が無いのでやり直さない
+
+
 def test_endless_request_updates_stop_the_worker_instead_of_spinning(tmp_path):
     from metabolomix.pipeline.engine import _REQUEST_RELOAD_MAX_PASSES
     from metabolomix.pipeline.recovery import prepare_resume

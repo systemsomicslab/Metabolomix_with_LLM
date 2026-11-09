@@ -262,11 +262,17 @@ def _validate_units(data: dict) -> None:
                 _fail(f"units の極性が重なっています: {polarity!r}",
                       polarity=polarity, indexes=[seen_polarity[polarity], index])
             seen_polarity[polarity] = index
-        key = unit["raw_dir"].lower()
-        if key in seen_raw_dir:
-            _fail(f"units の raw_dir が重なっています: {unit['raw_dir']!r}",
-                  raw_dir=unit["raw_dir"], indexes=[seen_raw_dir[key], index])
-        seen_raw_dir[key] = index
+        # 同じフォルダだけでなく、片方がもう片方の中にある（`.` は何でも含む）のも拒む
+        # ——外側の単位の Console が内側の単位の raw まで読み、同じ raw を 2 度数える。
+        parts = tuple(p for p in unit["raw_dir"].lower().split("/") if p not in ("", "."))
+        for other_parts, (other_index, other_raw_dir) in seen_raw_dir.items():
+            shorter = min(len(parts), len(other_parts))
+            if parts[:shorter] == other_parts[:shorter]:
+                _fail(f"units の raw_dir が重なっています（同じか、片方がもう片方の中）: "
+                      f"{other_raw_dir!r} と {unit['raw_dir']!r}",
+                      raw_dir=unit["raw_dir"], other_raw_dir=other_raw_dir,
+                      indexes=[other_index, index])
+        seen_raw_dir[parts] = (index, unit["raw_dir"])
 
 
 def _validate_fields(data: dict) -> None:
@@ -399,6 +405,16 @@ def resolve_request(source_root: Path, explicit: dict | None = None) -> dict:
 
     from_file, warnings = read_request_file(source_root)
     units, unit_sources = _layer_units(explicit, from_file)
+    shadowed = sorted(set(from_file) & _UNIT_KEYS) if "units" in explicit else []
+    if shadowed:
+        warnings.append({
+            "code": "REQUEST_FILE_UNIT_KEYS_IGNORED",
+            "stage_id": None,
+            "message": (f"明示の units が単位を丸ごと決めるので、{REQUEST_FILE_NAME} のトップの"
+                        f"単位のキー {shadowed} は使いませんでした。効かせたいなら units の"
+                        "各単位の中へ書いてください。"),
+            "details": {"ignored_keys": shadowed},
+        })
 
     data: dict = {"schema": SCHEMA}
     value_sources: dict = {}

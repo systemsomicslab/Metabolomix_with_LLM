@@ -80,6 +80,19 @@ def test_two_units_require_distinct_polarity_and_raw_dir(tmp_path):
         {"polarity": "negative", "raw_dir": "raw"},
         {"polarity": "positive", "raw_dir": "raw/"}]}))
     assert same_dir.code == "PIPELINE_REQUEST_INVALID"
+    # 片方のフォルダがもう片方の中にある（`.` は何でも含む）のも重なりとして拒む
+    # ——Console の `-i` 側で、外側の単位が内側の単位の raw まで読んでしまう。
+    for outer, inner in (("raw", "raw/pos"), ("RAW", "raw/pos/deeper"), (".", "pos")):
+        for pair in ((outer, inner), (inner, outer)):
+            nested = _code(lambda: resolve_request(root, {"units": [
+                {"polarity": "negative", "raw_dir": pair[0]},
+                {"polarity": "positive", "raw_dir": pair[1]}]}))
+            assert nested.code == "PIPELINE_REQUEST_INVALID", pair
+    # 名前の前方一致だけでは入れ子でない
+    req = resolve_request(root, {"units": [
+        {"polarity": "negative", "raw_dir": "raw"},
+        {"polarity": "positive", "raw_dir": "raw2"}]})
+    assert [u["raw_dir"] for u in req["units"]] == ["raw", "raw2"]
     for missing in ({"raw_dir": "neg"}, {"polarity": "negative"}):
         err = _code(lambda: resolve_request(root, {"units": [missing]}))
         assert err.code == "PIPELINE_REQUEST_INVALID"
@@ -138,6 +151,30 @@ def test_request_file_downstream_keys_are_ignored_with_warning(tmp_path):
     [warning] = req["intake_warnings"]
     assert warning["code"] == "REQUEST_FILE_DOWNSTREAM_IGNORED"
     assert warning["details"]["ignored_keys"] == ["comparisons", "preprocess", "target"]
+
+
+def test_request_file_unit_keys_are_reported_when_explicit_units_win(tmp_path):
+    """明示の `units` は層ごと勝つ。読み捨てたファイルのトップの単位のキーは黙らずに伝える。"""
+    root = _source_with_request_file(tmp_path, {
+        "polarity": "negative", "method_file": "m.txt", "sample_manifest": "s.tsv",
+        "timeout_s": 60})
+
+    req = resolve_request(root, {"units": [
+        {"polarity": "negative", "raw_dir": "neg"},
+        {"polarity": "positive", "raw_dir": "pos"}]})
+
+    assert [u["method_file"] for u in req["units"]] == [None, None]
+    assert req["timeout_s"] == 60  # 共有のキーは今までどおり効く
+    [warning] = req["intake_warnings"]
+    assert warning["code"] == "REQUEST_FILE_UNIT_KEYS_IGNORED"
+    assert warning["details"]["ignored_keys"] == ["method_file", "polarity", "sample_manifest"]
+
+
+def test_request_file_unit_keys_layered_under_explicit_keys_are_not_reported(tmp_path):
+    root = _source_with_request_file(tmp_path, {"method_file": "m.txt"})
+    req = resolve_request(root, {"polarity": "negative"})
+    assert req["units"][0]["method_file"] == "m.txt"
+    assert req["intake_warnings"] == []
 
 
 def test_no_request_file_has_no_intake_warning(tmp_path):

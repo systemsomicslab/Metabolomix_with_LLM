@@ -21,8 +21,10 @@ from metabolomix.pipeline.recovery import prepare_resume, read_status, request_c
 from metabolomix.pipeline.store import create_run, load_run, save_run
 import metabolomix.pipeline.recovery as recovery_module
 import metabolomix.pipeline.store as store_module
+import metabolomix.pipeline.receipt as receipt_mod
 
-from tests.pipeline_fixtures import create_synthetic_run, make_source
+from tests.pipeline_fixtures import (create_synthetic_run, make_source,
+                                     write_sample_manifest)
 from tests.pipeline_worker_harness import synthetic_handlers
 
 _UNIT_STAGES = ("prepare_input", "upstream", "validate_outputs")
@@ -265,6 +267,51 @@ def test_rerun_upstream_resets_only_failed_units(tmp_path):
     assert calls == [*_unit_stage_ids("negative"), "receipt"]
 
 
+def test_rerun_upstream_leaves_a_unit_running_under_a_live_worker(tmp_path):
+    """worker が生きていて upstream が running の単位は、rerun_upstream でも戻さない。"""
+    path = create_synthetic_run(tmp_path, polarities=("negative", "positive"))
+    record = load_run(path)
+    for sid, status in (("prepare_input:negative", "succeeded"), ("upstream:negative", "failed"),
+                        ("prepare_input:positive", "succeeded"),
+                        ("upstream:positive", "running")):
+        record["stages"][sid]["status"] = status
+        record["stages"][sid]["attempt"] = 1
+    record["status"] = "running"
+    record["worker"] = {"identity": _process_identity_of_self(),
+                        "started_at": "2026-09-05T00:00:00+00:00"}
+    save_run(path, record, expected_revision=record["state_revision"])
+
+    accepted = prepare_resume(path, rerun_upstream=True)
+
+    assert set(accepted["reset_stage_ids"]) == {*_unit_stage_ids("negative"), "receipt"}
+    after = load_run(path)
+    assert after["stages"]["upstream:positive"]["status"] == "running"
+    assert after["stages"]["upstream:positive"]["attempt"] == 1
+    assert after["status"] == "running"
+
+    # 対応表だけの訂正も、稼働中の Console を理由に止めない。
+    manifest = prepare_resume(path, updates={"units": {
+        "positive": {"sample_manifest": "positive/pos.tsv"}}})
+    assert manifest["reset_stage_ids"] == ["receipt"]
+    assert load_run(path)["stages"]["upstream:positive"]["status"] == "running"
+
+
+def test_a_unit_running_under_a_lost_worker_still_requires_rerun(tmp_path, monkeypatch):
+    path = create_synthetic_run(tmp_path, polarities=("negative", "positive"))
+    record = load_run(path)
+    record["stages"]["upstream:positive"]["status"] = "running"
+    record["status"] = "running"
+    record["worker"] = {"identity": _process_identity_of_self(),
+                        "started_at": "2026-09-05T00:00:00+00:00"}
+    save_run(path, record, expected_revision=record["state_revision"])
+    monkeypatch.setattr(recovery_module, "same_process", lambda identity: False)
+
+    with pytest.raises(DomainError, match="UPSTREAM_RERUN_REQUIRED"):
+        prepare_resume(path)
+    accepted = prepare_resume(path, rerun_upstream=True)
+    assert set(_unit_stage_ids("positive")) <= set(accepted["reset_stage_ids"])
+
+
 def test_execution_unresolved_when_console_alive_but_unverified(tmp_path, monkeypatch):
     path = create_synthetic_run(tmp_path)
     run_dir = path / "negative" / "console" / "attempt-0001"
@@ -349,13 +396,25 @@ def test_manifest_update_resets_only_receipt(tmp_path):
 
 def test_manifest_update_for_one_polarity_of_two(tmp_path):
     path = _completed(tmp_path, ("negative", "positive"))
-    source = Path(load_run(path)["identity"]["source_root"])
-    (source / "positive").mkdir(exist_ok=True)
-    (source / "positive" / "pos.tsv").write_text(_manifest_text("x"), encoding="utf-8",
-                                                 newline="\n")
+    record = load_run(path)
+    source = Path(record["identity"]["source_root"])
+    # 受領は Console が読んだ raw（`<unit_root>/input`）でシートを解す。
+    unit_input = path / record["units"]["positive"]["unit_root"] / "input"
+    unit_input.mkdir(parents=True, exist_ok=True)
+    (unit_input / "S0.mzML").write_bytes(b"raw")
+    write_sample_manifest(source / "positive" / "pos.tsv", source_names=["S0.mzML"],
+                          groups=["control"])
 
-    accepted = prepare_resume(path, updates={"units": {"positive": {"sample_manifest": "pos.tsv"}}})
+    # 単位の `sample_manifest` も `dataset_root` 相対（単位の raw_dir 相対ではない）。
+    accepted = prepare_resume(
+        path, updates={"units": {"positive": {"sample_manifest": "positive/pos.tsv"}}})
     assert accepted["reset_stage_ids"] == ["receipt"]
+
+    assert run_engine(path, synthetic_handlers())["status"] == "completed"
+    data = receipt_mod.read_receipt(path, load_run(path))
+    assert data["units"]["positive"]["samples"]["manifest"]["path"] == "positive/pos.tsv"
+    assert data["units"]["negative"]["samples"]["manifest"] is None
+    assert "SAMPLE_MANIFEST_INVALID" not in [w["code"] for w in data["warnings"]]
 
 
 def test_downstream_updates_are_refused_on_resume(tmp_path):

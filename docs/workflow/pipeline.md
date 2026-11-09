@@ -33,7 +33,10 @@ MCP層は薄い(`metabolomix/tools/pipeline_tools.py`)。実体は `metabolomix/
 回し、run(`pipeline-run.v3`)は単位ごとの記録 `record["units"][<極性>]` を持つ。
 下流のキー(`target` / `preprocess` / `comparisons`)は `PIPELINE_DOWNSTREAM_REMOVED`
 (元フォルダの `analysis-request.json` に書かれたものは読み飛ばして警告
-`REQUEST_FILE_DOWNSTREAM_IGNORED`)。
+`REQUEST_FILE_DOWNSTREAM_IGNORED`)。明示の `units` は単位を丸ごと決めるので、
+`analysis-request.json` のトップの単位のキー(`polarity` `method_file` …)は使わず、警告
+`REQUEST_FILE_UNIT_KEYS_IGNORED` で伝える。2 単位の `raw_dir` は同じフォルダも、片方が
+もう片方の中にある(`.` を含む)のも `PIPELINE_REQUEST_INVALID`。
 
 **起動しないもう1つの経路（レビュー指摘1）**: manifestが正常でも、
 `find_or_create_run`(手順8)が既存run——活動中／completed／失敗・取消・部分完了
@@ -138,11 +141,17 @@ v8 の要求を出すと、その run を再利用する(上書きしたメソ�
 2. └─ metabolomix/pipeline/service.py  resume_pipeline()
 3.    ├─ metabolomix/pipeline/recovery.py  prepare_resume()
 4.    │  └─ metabolomix/pipeline/request.py  merge_updates()
-5.    ├─ [status=="planned"のときだけ] metabolomix/pipeline/store.py  load_run()
-6.    └─ [status=="planned"のときだけ] metabolomix/pipeline/service.py  _launch_and_await()
-7.       ├─ metabolomix/pipeline/service.py  launch_pipeline_worker()
-8.       │  └─ metabolomix/core/process_control.py  launch_detached()
-9.       └─ metabolomix/pipeline/service.py  _await_launch_handshake()
+5.    ├─ [直前が needs_input のときだけ] metabolomix/pipeline/service.py  _recheck_manifests()
+6.    │  └─ metabolomix/pipeline/service.py  _precheck_manifest()
+7.    ├─ [status=="planned"のときだけ] metabolomix/pipeline/store.py  load_run()
+8.    └─ [status=="planned"のときだけ] metabolomix/pipeline/service.py  _launch_and_await()
+9.       ├─ metabolomix/pipeline/service.py  launch_pipeline_worker()
+10.      │  └─ metabolomix/core/process_control.py  launch_detached()
+11.      └─ metabolomix/pipeline/service.py  _await_launch_handshake()
+
+受付の事前検査で `needs_input` に止まった run の resume は、起動する前に保存済みの要求と
+入力計画で単位ごとの事前検査(`_precheck_manifest`)をやり直す。直っていなければ
+`needs_input` のまま保存し直し、worker は起動しない(`launch: {"launched": false}`)。
 
 `prepare_resume`は新しいattempt/revisionを用意し、どのstageを`pending`へ戻すかを
 決めて保存するだけで、それ自体はworkerを起動しない(no-op resumeで無駄な起動を
@@ -154,6 +163,10 @@ v8 の要求を出すと、その run を再利用する(上書きしたメソ�
 証拠と誤認しうる)。`rerun_upstream=True`を明示しない限りConsole実行はやり直さない。
 訂正できるのは試料の対応表(`sample_manifest`、2 極性なら `units.<極性>.sample_manifest`)
 だけで、戻すのは受領の工程だけ。`rerun_upstream=True` は失敗した単位の 3 工程と受領を戻す。
+ただし worker が生きていて(`_worker_health` が `ok`)上流が `running` の単位は、その
+Console を捨てない——やり直しの対象にも、`UPSTREAM_RERUN_REQUIRED` の理由にも数えない
+(稼働中の Console の最中に届いたシートの訂正は受け付け、受領だけを戻す)。worker が
+居なくなった run の `running` は、今までどおり `rerun_upstream=true` を求める。
 
 ## pipeline_cancel
 
@@ -186,11 +199,13 @@ v8 の要求を出すと、その run を再利用する(上書きしたメソ�
 9.       ├─ [単位ごと] metabolomix/pipeline/service.py  _handle_validate_outputs()
 10.      │  ├─ metabolomix/mztab/loading.py  job_gate()
 11.      │  └─ metabolomix/pipeline/service.py  _matching_alignment()
-12.      │     └─ metabolomix/mztab/evidence.py  matching_arfs()
-13.      └─ metabolomix/pipeline/service.py  _handle_receipt()
-14.         └─ metabolomix/pipeline/receipt.py  write_receipt()
-15.   └─ metabolomix/pipeline/engine.py  finish_success()
-16.      └─ metabolomix/pipeline/engine.py  final_status()
+12.      │     ├─ metabolomix/mztab/evidence.py  first_matching_arfs()
+13.      │     │  └─ [候補が合わないとき] metabolomix/dataset/alignment_files.py  batch_arfs_newest_first()
+14.      │     └─ metabolomix/mztab/evidence.py  matching_arfs()
+15.      └─ metabolomix/pipeline/service.py  _handle_receipt()
+16.         └─ metabolomix/pipeline/receipt.py  write_receipt()
+17.   └─ metabolomix/pipeline/engine.py  finish_success()
+18.      └─ metabolomix/pipeline/engine.py  final_status()
 
 工程の計画(`engine.build_stages`)は単位ごとの `prepare_input:<極性>` →
 `upstream:<極性>` → `validate_outputs:<極性>` を要求の順に並べ、最後に `receipt` を
@@ -217,8 +232,12 @@ MS-DIAL はここへ `.arf` などを書く——このフォルダがそのま�
 
 `_handle_validate_outputs` は正準 mzTab-M(`job_gate`。ジョブが完了していなければ失敗)を
 確かめ、解析フォルダの `.arf` のうち mzTab-M と同じアラインメントだと確かめられたもの
-(`mztab.evidence.matching_arfs`。`dataset/opening` と同じ規則)がちょうど 1 本なら
-`outputs.alignment` に `{"arf", "arf2"}` を記録する。合わなければ失敗にせず警告
+(`mztab.evidence.matching_arfs`)がちょうど 1 本なら `outputs.alignment` に
+`{"arf", "arf2"}` を記録する。候補の選び方は `dataset/opening._matching_arf` と共有の
+`mztab.evidence.first_matching_arfs`: まずジョブの `peak_matrix_source`(と mzTab-M の隣)、
+どれも通らなければ解析フォルダのバッチを `AlignmentResult_<時刻>` の新しい順に 1 本ずつ試し、
+最初に通ったところで止める——`rerun_upstream=true` の後は前の実行のバッチが同じフォルダに
+残るので、全バッチを並べると「同じアラインメントが 2 本」になる。合わなければ失敗にせず警告
 `ANALYSIS_FOLDER_UNMATCHED`(`source="mztab"` なら読める)で、run は `partial` になる。
 
 `finish_success` の最終判定(`final_status`): 全単位が validated・受領が成功・全単位の

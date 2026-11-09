@@ -59,11 +59,23 @@ from tests.pipeline_fixtures import _FEATURES, write_mztab  # noqa: E402
 #: 持たせ、定量種別が実物と同じ経路（ファイル名信号）で決まるようにする。
 PRIMARY_MZTAB_NAME = "Height_AlignmentResult_fake.mzTab"
 
-#: `-i` 側へ書くアラインメントの名前（MS-DIAL の `AlignmentResult_<時刻>`）。
-ALIGNMENT_STEM = "AlignmentResult_2026_11_09_00_00_00"
+#: `-i` 側へ書くアラインメントの名前の接頭辞（MS-DIAL の `AlignmentResult_<時刻>`）。
+ALIGNMENT_STEM_PREFIX = "AlignmentResult_2026_11_09_00_00_"
 
 
-def _write_alignment(input_dir: Path, sources: list[Path], *, matching: bool = True) -> None:
+def alignment_stem(output_dir: Path) -> str:
+    """このアテンプトのアラインメントの名前。`-o` の親（`attempt-NNNN`）の番号を秒に入れる。
+
+    実の MS-DIAL は実行のたびに新しい時刻のバッチを書く。同じ解析フォルダへ Console を
+    やり直すと前のバッチが残るので、偽物も attempt ごとに別名（新しいほど名前が大きい）にする。
+    """
+    name = Path(output_dir).parent.name
+    number = int(name.rsplit("-", 1)[1]) if name.startswith("attempt-") else 0
+    return f"{ALIGNMENT_STEM_PREFIX}{number:02d}"
+
+
+def _write_alignment(input_dir: Path, sources: list[Path], *, stem: str,
+                     matching: bool = True) -> None:
     """`-i` 側へ、mzTab-M（`write_mztab`）と同じ特徴・試料名の `.arf` / `.arf2` を書く。
 
     mzTab-M の試料名は `S1..Sn`（assay の番号）、特徴は `_FEATURES` の順。`matching=False`
@@ -74,7 +86,7 @@ def _write_alignment(input_dir: Path, sources: list[Path], *, matching: bool = T
     spots = [{"name": name, "mz": mz + (0.0 if matching else 3.3), "rt": rt / 60.0}
              for name, _inchikey, mz, rt in _FEATURES]
     write_msdial_folder(input_dir, spots=spots, samples=samples, with_mddata=False,
-                        stem=ALIGNMENT_STEM)
+                        stem=stem)
 
 
 #: 孫プロセスの生存時間（秒）。テストは必ず Job Object 側で殺すので、
@@ -200,8 +212,14 @@ def main(argv: list[str]) -> int:
     if scenario in ("success", "unmatched_arf"):
         write_mztab(output_dir / PRIMARY_MZTAB_NAME, sources,
                     with_inchikey=not args.no_inchikey)
-        _write_alignment(input_dir, sources, matching=scenario == "success")
+        _write_alignment(input_dir, sources, stem=alignment_stem(output_dir),
+                         matching=scenario == "success")
         return 0
+    if scenario == "arf_then_fail":
+        # 解析フォルダへアラインメントを書いたあとで異常終了する（やり直すと前のバッチが残る）。
+        _write_alignment(input_dir, sources, stem=alignment_stem(output_dir))
+        print("fake_console: failing after writing an alignment", flush=True)
+        return 1
     if scenario == "missing_sample":
         if len(sources) < 2:
             raise SystemExit("fake_console: missing_sample には raw が 2 本以上必要です")

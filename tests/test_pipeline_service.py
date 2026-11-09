@@ -307,6 +307,35 @@ def test_start_pipeline_saves_needs_input_without_launching_on_bad_manifest(tmp_
     assert record["needs_input"]["stage_id"] == "prepare_input:negative"
 
 
+def test_resume_of_a_needs_input_run_rechecks_the_manifest_before_launching(tmp_path, monkeypatch):
+    """受付の事前検査で止まった run は、resume でもシートを検査し直す。直っていなければ起動しない。"""
+    source = _prepare_source(tmp_path, monkeypatch)
+    manifest = source["root"] / "sample-manifest.tsv"
+    manifest.write_text("not-a-valid-manifest-header\n", encoding="utf-8")
+
+    def poison(*a, **kw):
+        raise AssertionError("壊れたシートのまま worker を起動した")
+
+    monkeypatch.setattr(service, "launch_detached", poison)
+    pipeline_path = Path(service.start_pipeline(source["root"])["pipeline_path"])
+
+    still_broken = service.resume_pipeline(pipeline_path)
+
+    assert still_broken["status"] == "needs_input"
+    assert still_broken["launch"] == {"launched": False}
+    assert still_broken["needs_input"]["code"] == "SAMPLE_MANIFEST_INVALID"
+    record = load_run(pipeline_path)
+    assert record["status"] == "needs_input"
+    assert record["needs_input"]["stage_id"] == "prepare_input:negative"
+
+    manifest.unlink()  # シートを外せば検査は通る
+    launch_calls = _counting_launch(monkeypatch)
+    fixed = service.resume_pipeline(pipeline_path)
+    assert fixed["status"] == "planned"
+    assert len(launch_calls) == 1
+    assert load_run(pipeline_path)["needs_input"] is None
+
+
 def test_start_pipeline_handshake_timeout_does_not_relaunch(tmp_path, monkeypatch):
     source = _prepare_source(tmp_path, monkeypatch)
     launch_calls = _counting_launch(monkeypatch, pid_base=700)

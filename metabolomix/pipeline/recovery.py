@@ -483,17 +483,28 @@ def prepare_resume(path: Path, *, updates: dict | None = None,
             p: (record["stages"].get(store.unit_stage_id("upstream", p)) or {}).get("status")
             for p in units}
         unit_states = {p: store.unit_status(record, p) for p in units}
+        # 生きている worker が今まさに回している単位（工程が running）は、監視が生きて
+        # いるので「状態が分からない」ではない。やり直しの対象にも、未解決にも数えない
+        # ——戻すと worker はその Console の結果を捨て、Console をもう 1 回起動する。
+        worker_health = _worker_health(record)
+        live_worker = record["status"] in ("running", "planned") and worker_health == "ok"
+        held = ({p for p in units
+                 if any((record["stages"].get(store.unit_stage_id(h, p)) or {}).get("status")
+                        == "running" for h in store.UNIT_HANDLERS)}
+                if live_worker else set())
         if not rerun_upstream:
-            unresolved = sorted(p for p, s in upstream_status.items() if s == "running")
+            unresolved = sorted(p for p, s in upstream_status.items()
+                                if s == "running" and p not in held)
             if unresolved or all(s == "failed" for s in unit_states.values()):
                 raise DomainError(
                     "UPSTREAM_RERUN_REQUIRED", "上流の再実行を明示してください",
                     {"units": unresolved or sorted(unit_states),
                      "unit_statuses": unit_states})
 
-        # --- d. やり直す単位（upstream が succeeded でない単位だけ） ---
+        # --- d. やり直す単位（upstream が succeeded でない・失敗した単位。稼働中は除く） ---
         rerun_units = (sorted(p for p, s in upstream_status.items()
-                              if s != "succeeded" or unit_states[p] == "failed")
+                              if p not in held
+                              and (s != "succeeded" or unit_states[p] == "failed"))
                        if rerun_upstream else [])
         not_retried = ([] if rerun_upstream
                        else sorted(p for p, s in unit_states.items() if s == "failed"))
@@ -540,7 +551,6 @@ def prepare_resume(path: Path, *, updates: dict | None = None,
         # だけ`planned`へ戻す（no-op resumeでcompletedを崩さない）。`running`のまま
         # 固まったrunは、そのworkerがもう居ないと観測できたときだけ同じ扱いにする。
         made_changes = request_changed or bool(reset_ids) or manifest_changed
-        worker_health = _worker_health(record)
         prior_status = record["status"]
         interrupted = (prior_status in _INTERRUPTED_STATUSES
                        or (prior_status == "running"

@@ -56,6 +56,32 @@ def _choose_arf(candidates: list[Path]) -> Path:
     return Path(_pick_latest(preferred))
 
 
+def arf2_batches_newest_first(folder: str | Path, pattern: str = "*.arf2") -> list[Path]:
+    """フォルダのアラインメント（`.arf2`）を、名前の新しい順に並べる。
+
+    `AlignmentResult_<時刻>` / `AlignResult-<日時>` は名前の順が新しさの順になる（決定的に
+    するため名前の降順）。`mztab.evidence.first_matching_arfs` の後段の候補（解析フォルダの
+    バッチを新しい順に 1 本ずつ）に使う。
+    """
+    folder = Path(folder)
+    if not folder.is_dir():
+        return []
+    return [p for p in sorted(folder.glob(pattern), key=lambda p: p.name, reverse=True)
+            if p.is_file()]
+
+
+def batch_arfs_newest_first(folder: str | Path, pattern: str = "*.arf2"):
+    """`arf2_batches_newest_first` の各バッチの `.arf`（`select_alignment` の規則）を遅延で返す。
+
+    選べないバッチ（同じバッチの `.arf` が無いなど）は飛ばす。
+    """
+    for arf2 in arf2_batches_newest_first(folder, pattern):
+        try:
+            yield select_alignment(arf2).arf
+        except DomainError:
+            continue
+
+
 def select_alignment(path: str | Path) -> AlignmentSelection:
     path = Path(path)
     lowered = path.name.lower()

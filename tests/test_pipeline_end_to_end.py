@@ -213,6 +213,30 @@ def test_rerun_upstream_creates_a_new_attempt_and_keeps_the_old_evidence(pipelin
         == "exited"
 
 
+def test_rerun_after_an_alignment_was_written_picks_the_new_batch(pipeline_harness):
+    """前の attempt のバッチが解析フォルダに残っても、受領は今回のジョブのバッチを選ぶ
+    （`dataset/opening` と同じ規則: ジョブの `peak_matrix_source` が先）。"""
+    from metabolomix.pipeline import service
+
+    run = pipeline_harness.start_scenario("arf_then_fail")
+    pipeline_harness.wait(run, expected="failed")
+    analysis_dir = pipeline_harness.pipeline_root(run) / "negative" / "input"
+    first = _arf_files(analysis_dir)
+    assert len(first) == 1
+
+    pipeline_harness.set_launch_options(run, scenario="success")
+    service.resume_pipeline(pipeline_harness.pipeline_root(run), rerun_upstream=True)
+    record = pipeline_harness.wait(run, expected="completed")
+
+    batches = _arf_files(analysis_dir)
+    assert len(batches) == 2
+    newer = max(batches)
+    assert newer != first[0]
+    assert record["units"]["negative"]["outputs"]["alignment"]["arf"] == newer
+    assert "ANALYSIS_FOLDER_UNMATCHED" not in {w["code"] for w in record["warnings"]}
+    assert pipeline_harness.receipt(run)["units"]["negative"]["alignment"]["arf"] == newer
+
+
 def test_missing_gui_project_is_a_warning_in_the_receipt(pipeline_harness):
     """save_project=true なのに `.mdproject` が無ければ警告 `GUI_PROJECT_UNAVAILABLE`。
     解析フォルダは確かめられているので単位は validated のまま。"""

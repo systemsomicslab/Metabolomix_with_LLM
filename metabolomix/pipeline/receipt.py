@@ -10,8 +10,17 @@ JSON に残す。続きは対話の側で `load_dataset(pipeline_path=…, polar
 - `persist_result`: 書き終えた成果物（または、この場で書く数値結果）を ref にする。
 
 研究室の参照ライブラリ（MSP・`[library] lbm` の LBM）は、ファイル名と sha256 と出どころ
-だけを示す（run の記録の `inputs` は絶対パスのまま）。受領の中のパスは `pipeline_root`
-相対（`next` の `<pipeline_path>` は `pipeline_status` が実際のパスで埋める）。
+だけを示す（run の記録の `inputs` は絶対パスのまま）。
+
+受領の中のパスの基点は欄ごとに違う:
+
+- 解析フォルダ・照合した `.arf` / `.arf2`・mzTab-M など pipeline が作ったものは
+  `pipeline_root` 相対。
+- `units.<極性>.samples.manifest.path`（実験情報シート）は利用者のデータ側にあるので
+  **`dataset_root`（run の `identity.source_root`）相対**。その外にあるシートは絶対パスで書く。
+- `next` は実際のパスを持たず、`<pipeline_path>`（`PIPELINE_PATH_PLACEHOLDER`）という
+  置き場所の印を入れて書く。`pipeline_status`（`recovery._receipt_summary`）が読むときに
+  その run の実際のパスで埋める（受領そのものは書き換えない）。
 
 **sessionを一切importしない**（`tests/test_pipeline_engine.py` の AST の検査）。
 """
