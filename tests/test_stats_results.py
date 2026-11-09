@@ -490,3 +490,39 @@ def test_register_matrix_rejects_external_matrix_without_fingerprint():
     with pytest.raises(ValueError, match="指紋"):
         stats_results.register_matrix(ds, external, {}, {})
     assert not getattr(ds, "stat_matrices", None)
+
+
+# --- 概観のための受け口（A。make_current・compare_spec） ------------------------------------
+
+def test_register_compare_make_current_false_keeps_last():
+    ds = _ds()
+    first, _, _ = _register(ds)
+    n, prepared, rr = _run(ds, [T_VS_C])
+    other = stats_results.register_compare(ds, rr, log2fc_threshold=2.0, units=prepared.units,
+                                           make_current=False)
+    assert ds.last_differential is first
+    assert ds.results[other["result_id"]] is other and other["result_id"] != first["result_id"]
+
+
+def test_register_pca_make_current_false_keeps_last():
+    ds = _ds()
+    _, _, prepared = _register(ds)
+    assert ds.last_pca is None
+    rec = stats_results.register_pca(ds, pca(prepared), None, make_current=False)
+    assert ds.last_pca is None and ds.results[rec["result_id"]] is rec
+    cur = stats_results.register_pca(ds, pca(prepared, n_components=2), None)
+    assert ds.last_pca is cur
+
+
+def test_compare_spec_and_contrast_id_for():
+    taken: set[str] = set()
+    assert stats_results.contrast_id_for("T", "C", taken, test_pos=1, ref_pos=0) == "T_vs_C"
+    assert stats_results.contrast_id_for("T", "C", taken, test_pos=1, ref_pos=0) == "T_vs_C_2"
+    assert stats_results.contrast_id_for("処置", "対照", set(), test_pos=2, ref_pos=0) == "g2_vs_g0"
+    spec = stats_results.compare_spec(
+        factors=["group"], comparisons=[T_VS_C], covariates=[], block=None, method="moderated_t",
+        effect_size="log2_mean_difference", bh_population="matrix", q_threshold=0.05,
+        equivalence_fc=1.2, allow_confounded=False, preprocess=OFF,
+        inputs={"exclude_samples": [], "exclude_features": [], "group_overrides": {}})
+    n = normalize_spec_v2(spec)
+    assert n["analyses"][0]["kind"] == "compare" and n["primary"] == "compare"

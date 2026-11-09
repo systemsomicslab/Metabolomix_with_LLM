@@ -43,7 +43,7 @@
 5.    └─ metabolomix/analysis/stats_results.py  study_inputs()（`matrix_id` なし）
 6. └─ metabolomix/analysis/stats/data.py  from_dataset()
 7. └─ metabolomix/tools/stats_tools.py  _covariate_specs()
-8. └─ metabolomix/tools/stats_tools.py  _spec_for()
+8. └─ metabolomix/analysis/stats_results.py  compare_spec()
 9. └─ metabolomix/analysis/stats/spec_v2.py  normalize_spec_v2()
 10. └─ metabolomix/tools/stats_tools.py  _prepare_default()（`matrix_id` なし）
 11.    └─ metabolomix/analysis/stats_results.py  prepare_default()
