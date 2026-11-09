@@ -13,24 +13,31 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 from mcp.server.fastmcp import Image
 from mcp.types import ToolAnnotations
 
+from metabolomix.analysis import stats_results
+from metabolomix.analysis.stats.data import from_dataset
 from metabolomix.core import mcp_core, mcp_errors, session_state
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.core.mcp_errors import config_invalid_as_envelope
 from metabolomix.core.mcp_core import mcp
-from metabolomix.core.serialization import json_payload
+from metabolomix.core.serialization import json_payload, json_safe, truncate_lists
 from metabolomix.pathway import bridge, compare, handoff, jsonld
 from metabolomix.plots import pdf_raster
+from metabolomix.tools._matrix_store import register_default
 
 __all__ = ["pathway_project", "pathway_plot"]
 
-_NODE_COLUMNS = ["node", "scope", "n_features", "mean_a", "mean_b", "log2fc", "q", "call"]
+_NODE_COLUMNS = ["node", "scope", "n_features", "mean_a", "mean_b", "log2fc", "q", "call",
+                 "p", "ci_low", "ci_high", "verdict"]
 _PAIR_COLUMNS = ["node_1", "call_1", "log2fc_1", "node_2", "call_2", "log2fc_2", "via"]
 _ADJACENCY_NOTE = (
     "隣接は MSLipidMapper のパスウェイ図のつながり（接合ノードだけを挟むもの）で、"
     "上流は反応だとは主張していない（not curated reactions）。逆向きの組は観察の提示であり、"
     "基質・生成物の解釈は文献で裏を取ること。"
-    "掲載条件は両端とも q < 閾値かつ向きが逆。片方が ns/NA の組は件数だけ示す。")
+    "掲載条件は両端とも q ≤ 閾値（verdict が changed）かつ向きが逆。片方が ns/NA の組は件数だけ示す。")
 
 
 _ROUTE_LABELS = {"as_is": "MS-DIAL の名前のまま", "name": "名前から読み直し",
@@ -96,21 +103,11 @@ def _backend_text(result: dict) -> str:
     return text
 
 
-def _arf2_catalog():
-    """兄弟 .arf2 のスポット一覧。無ければ (None, missing_state 封筒)。"""
-    from metabolomix.arf.tools import _require_arf_with_arf2
-    from metabolomix.arf2.reader import load_catalog
-    found = _require_arf_with_arf2()
-    if isinstance(found, str):
-        return None, found
-    return load_catalog(found), None
+def _run_dir(run_id: str, holder) -> Path:
+    return mcp_core._resolve_report_dir(holder) / "pathway" / run_id
 
 
-def _run_dir(run_id: str) -> Path:
-    return mcp_core._resolve_report_dir() / "pathway" / run_id
-
-
-def _load_manifest(run_id: str | None):
+def _load_manifest(run_id: str | None, holder):
     """run の manifest（dict）か、run が無いときの missing_state 封筒（str）。"""
     run_id = run_id or session_state.session.pathway.last_run_id
     if not run_id:
@@ -120,7 +117,7 @@ def _load_manifest(run_id: str | None):
         return mcp_errors.pathway_error(
             "PATHWAY_BAD_REQUEST",
             f"run_id の形が不正です: {run_id!r}（pathway_project が返す pw_YYYYmmdd_HHMMSS_xxxxxx）。")
-    path = _run_dir(run_id) / "manifest.json"
+    path = _run_dir(run_id, holder) / "manifest.json"
     if not path.is_file():
         return mcp_errors.missing_state("pathway_run", ["pathway_project"],
                                         f"run {run_id} の manifest.json がありません。")
@@ -137,67 +134,113 @@ def _load_manifest(run_id: str | None):
     return manifest
 
 
-def _pick_source(source: str) -> str:
-    s = session_state.session
-    if source != "auto":
-        return source
-    if s.arf.feature_matrix is not None:
-        return "arf"
-    if s.dataset is not None:
-        return "dataset"
-    return "arf"
+def _normalization_text(prepared) -> str:
+    """mzTab-M の注記と manifest に書く、行列の前処理の要約（行列 ID・解いた正規化の方法・ドリフト補正の結果）。
+
+    要求（`normalize=auto` など）ではなく、実際に行った工程（`prepared.steps`）を書く。
+    """
+    steps = {st.get("step"): st for st in prepared.steps or []}
+    parts = [f"stats-engine matrix {prepared.matrix_id}"]
+    for name, key in (("normalize", "method"), ("drift", "status")):
+        step = steps.get(name)
+        if step is None:
+            continue
+        text = f"{name}={step.get(key)}"
+        if step.get("status") != "applied":
+            text += f" ({step.get('reason')})"
+        parts.append(text)
+    return "; ".join(parts)
 
 
-def _recipe_text(recipe: dict) -> str:
-    parts = [f"{k}={v}" for k, v in sorted((recipe or {}).items()) if v not in (None, "", [])]
-    return "; ".join(parts) or "none"
-
-
-def _build_arf(group_a, group_b):
-    from metabolomix.arf.tools import _pool_group_labels
-    a = session_state.session.arf
-    if a.feature_matrix is None:
-        return None, mcp_errors.missing_state(
-            "preprocessed_matrix", ["arf_preprocess"],
-            "先に arf_preprocess を実行してください（前処理後行列が必要）。")
-    catalog, err = _arf2_catalog()
-    if err:
-        return None, err
-    labels = [None if (a.sample_meta.get(n) or {}).get("role", "sample") != "sample"
-              else (a.sample_meta.get(n) or {}).get("group") for n in a.pp_sample_names]
+def _with_matrix(envelope: str, matrix_id: str | None) -> str:
+    """暗黙に登録した行列の ID を、エラーの封筒の details に足す（呼び直しにそのまま使える）。"""
+    if matrix_id is None:
+        return envelope
     try:
-        _, _, resolved = _pool_group_labels(a.pp_sample_names, labels, group_a, group_b)
-    except ValueError as exc:
-        raise handoff.HandoffError("PATHWAY_BAD_REQUEST", str(exc)) from exc
-    table = handoff.build_from_arf(
-        matrix=a.feature_matrix, sample_names=a.pp_sample_names,
-        feature_names=a.pp_feature_names, sample_meta=a.sample_meta,
-        excluded_samples=a.excluded_samples, excluded_spots=a.excluded_spots,
-        catalog={int(s["MasterAlignmentID"]): s for s in catalog},
-        props=(a.preprocessing_recipe or {}).get("props"),
-        group_a=str(group_a), group_b=str(group_b), compared=resolved)
-    return (table, _recipe_text(a.preprocessing_recipe), a.dataset_id,
-            str(group_a), str(group_b)), None
+        body = json.loads(envelope)
+    except ValueError:
+        return envelope
+    err = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(err, dict):
+        return envelope
+    err["details"] = {**(err.get("details") or {}), "matrix_id": matrix_id}
+    return json_payload(body)
 
 
-def _build_dataset(group_a, group_b, label_a, label_b):
-    ds = session_state.session.dataset
+def _domain_envelope(exc: DomainError) -> str:
+    details = truncate_lists(json_safe(exc.details), 20) if exc.details else None
+    return mcp_errors.mztab_error(exc.code, exc.message, details)
+
+
+def _build_dataset(group_a, group_b, label_a, label_b, holder, matrix_id=None):
+    """統計エンジンの行列（`matrix_id`、省略時は既定の前処理）から MSLipidMapper へ渡す表を作る。
+
+    値は行列の注入ごとの線形値（生体だけ。QC・ブランク・除外は元から入らない）で、欠測は 0
+    （MSLipidMapper の約束）。ここでは登録しない（要求の検査がすべて済んでから呼び出し側が
+    `register_default` で登録し、前処理の記録を書く）。戻り値は
+    `((表, 正規化の注記, dataset_id, 群名 a, 群名 b, 試料 → 個体, 行列 ID, 文脈), None)` か `(None, 封筒)`。
+    文脈は `{"entry", "study", "config", "inputs", "prepared"}`（名指しの行列なら entry がある）。
+    """
+    ds = holder.dataset
     if ds is None:
-        return None, mcp_errors.missing_state("dataset", ["dataset_load"],
-                                              "先に dataset_load を実行してください。")
-    if ds.pp_matrix is None:
-        return None, mcp_errors.missing_state("preprocessed_matrix", ["dataset_preprocess"],
-                                              "先に dataset_preprocess を実行してください。")
+        return None, mcp_errors.missing_state("dataset", ["load_dataset"],
+                                              "先に load_dataset を実行してください。")
+    try:
+        entry, inputs, config = stats_results.matrix_inputs(ds, matrix_id)
+    except stats_results.MatrixNotFound:
+        return None, mcp_errors.missing_state(
+            "stat_matrix", ["dataset_preprocess"],
+            f"行列 {matrix_id!r} がありません（無い・または除外や試料の表の変更で古くなりました）。"
+            "dataset_preprocess を実行し直して、その matrix_id を渡してください。")
+    study = None
+    try:
+        if entry is not None:
+            prepared = entry["prepared"]
+        else:
+            study = from_dataset(ds, **inputs)
+            prepared = stats_results.prepare_default(study, config)
+            if not hasattr(prepared, "matrix_id"):          # NeedsInput
+                return None, mcp_errors.default_matrix_needs_input(prepared, "pathway_project")
+    except DomainError as exc:
+        return None, _domain_envelope(exc)
+    if prepared.sample_values is None or not prepared.sample_ids:
+        return None, mcp_errors.missing_state(
+            "stat_matrix", ["dataset_preprocess"],
+            f"行列 {prepared.matrix_id} に注入ごとの値がありません。dataset_preprocess で作り直してください。")
+
+    name_of = {sid: name for name, sid in stats_results.sample_ids_by_name(ds).items()}
+    names = [name_of.get(sid, sid) for sid in prepared.sample_ids]
     as_list = (lambda g: [g] if isinstance(g, str) else list(g or []))
+    wanted_a, wanted_b = as_list(group_a), as_list(group_b)
+    absent = sorted({n for n in [*wanted_a, *wanted_b] if n not in set(names)})
+    if absent:
+        return None, mcp_errors.pathway_error(
+            "PATHWAY_BAD_REQUEST",
+            f"行列 {prepared.matrix_id} に無い試料が指定されています（QC・ブランク・除外した試料は行列に入りません）: "
+            f"{', '.join(absent[:20])}",
+            {"absent": absent[:20], **({"absent_n_more": len(absent) - 20} if len(absent) > 20 else {}),
+             "matrix_id": prepared.matrix_id})
+    values = np.asarray(prepared.sample_values, dtype=float)
+    # 欠測は 0（MSLipidMapper の約束）。0 以下・非有限はエンジンも欠測として扱うので同じく 0 で書く
+    values = np.where(np.isfinite(values) & (values > 0), values, 0.0)
     table = handoff.build_from_dataset(
-        pp_matrix=ds.pp_matrix, pp_sample_names=ds.pp_sample_names,
-        pp_feature_names=ds.pp_feature_names, roles=ds.roles,
-        sample_names=ds.sample_names, sample_ids=ds.sample_ids,
+        pp_matrix=values, pp_sample_names=names, pp_feature_names=list(prepared.feature_ids),
+        roles=ds.roles, sample_names=ds.sample_names, sample_ids=ds.sample_ids,
         metadata_rows=ds.sample_metadata_rows, annotations=ds.feature_annotations,
-        group_a=as_list(group_a), group_b=as_list(group_b),
-        group_a_label=label_a, group_b_label=label_b)
-    return (table, _recipe_text(ds.preprocessing_recipe), ds.dataset_id,
-            label_a, label_b), None
+        group_a=wanted_a, group_b=wanted_b, group_a_label=label_a, group_b_label=label_b)
+    subject_of = {handoff.clean_text(name_of.get(sid, sid)): unit.unit_id
+                  for unit in prepared.units for sid in unit.sample_ids}
+    for label in (label_a, label_b):
+        n_units = len({subject_of[handoff.clean_text(n)]
+                       for n, g in zip(table.sample_names, table.groups) if g == label})
+        if n_units < 2:
+            raise handoff.HandoffError(
+                "PATHWAY_BAD_REQUEST",
+                f"群 {label} の個体が 2 未満です（同じ個体の反復注入は 1 個体にまとめて数えます: {n_units}）。",
+                {"group": str(label), "n_units": n_units})
+    context = {"entry": entry, "study": study, "config": config, "inputs": inputs, "prepared": prepared}
+    return (table, _normalization_text(prepared), ds.dataset_id, label_a, label_b, subject_of,
+            prepared.matrix_id, context), None
 
 
 # 呼ぶたびに新しい run（reports/pathway/<run_id>/）を作る → 冪等ではない。
@@ -205,29 +248,41 @@ def _build_dataset(group_a, group_b, label_a, label_b):
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
     structured_output=False)
-def pathway_project(source: str = "auto", group_a: str | list[str] | None = None,
+@config_invalid_as_envelope
+def pathway_project(group_a: str | list[str] | None = None,
                     group_b: str | list[str] | None = None,
                     group_a_label: str = "group_a", group_b_label: str = "group_b",
                     pathways: list[str] | None = None, acyl_chains: list[str] | None = None,
-                    aggregation: str = "sum", q_threshold: float = 0.05) -> str:
+                    aggregation: str = "sum", q_threshold: float = 0.05,
+                    matrix_id: str | None = None,
+                    dataset_handle: str | None = None) -> str:
     """前処理済みの脂質データを MSLipidMapper のパスウェイへ投影し、2 群を比べる。
 
     返すのは小さな表だけ（ノード表と、逆向きに動く隣接ペア）。JSON-LD・中間 mzTab-M は
     解析フォルダの reports/pathway/<run_id>/ に残る。図は pathway_plot。
 
-    - source: auto | arf | dataset。arf は arf_preprocess 後、dataset は dataset_preprocess 後。
-      auto は「前処理済み ARF があれば arf、無ければ dataset_load 済みなら dataset、
-      どちらも無ければ arf（→ arf_preprocess を求める missing_state）」の順で選ぶ。
-    - group_a / group_b: arf は Class ID か因子トークン（arf_differential と同じ）、
-      dataset はサンプル名のリスト（group_a_label / group_b_label が群名になる）。
+    - 入力は `load_dataset` で開いた直近のデータセットの統計エンジンの行列
+      （`dataset_handle` でハンドルを選べる。run の置き場所もそのデータセットの解析フォルダ）。
+    - matrix_id: dataset_preprocess が返した行列 ID。省略時は既定の前処理（dataset_compare と同じ。
+      QC のある換算済みデータでは drift_mode を尋ねる needs_input）。古い・無い ID は missing_state。
+      MSLipidMapper へは行列の注入ごとの値（欠測は 0）を渡す。
+    - group_a / group_b: サンプル名のリスト（group_a_label / group_b_label が群名になる）。
+      行列に無い試料（QC・ブランク・除外）を指すと PATHWAY_BAD_REQUEST。
     - pathways: remodeling / ceramide / global（既定は 3 つ全部）。
     - acyl_chains: 例 ["18:0","20:4"]。指定すると鎖サブセットのスコープも比べる。
     - aggregation: sum | mean | median（サブクラス内の分子種の集計）。
-    検定は log2(x+1) の Welch、BH はパスウェイ×スコープ種別ごと。log2fc は正なら group_b が高い。
+    検定は統計エンジンの moderated t（スコープ値の log2。同じ個体の反復注入は log2 の平均で 1 個体）、
+    BH はパスウェイ×スコープ種別ごと。log2fc は正なら group_b が高い。call は verdict が changed なら
+    up / down、検定できなければ NA、それ以外は ns。
     脂質アッセイ（record_objective の assay_kind=lipid）でだけ使える。
     MSLipidMapper は [mslipidmapper] mslipidmapper_api_url の研究室サーバを先に使い、使えなければローカルの R
     （[mslipidmapper] rscript）で動かす。どちらで動いたかは戻り値の backend。
     """
+    from metabolomix.tools._holder import resolve_holder
+
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
     s = session_state.session
     if s.assay_kind != "lipid":
         return mcp_errors.missing_state(
@@ -242,32 +297,40 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     if aggregation not in ("sum", "mean", "median"):
         return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST",
                                         "aggregation は sum / mean / median のどれかです。")
-    if source not in ("auto", "arf", "dataset"):
+    if (isinstance(q_threshold, bool) or not isinstance(q_threshold, (int, float))
+            or not math.isfinite(q_threshold) or not 0 < q_threshold <= 1):
         return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST",
-                                        "source は auto / arf / dataset のどれかです。")
+                                        "q_threshold は 0 より大きく 1 以下の数です。",
+                                        {"q_threshold": str(q_threshold)})
     if group_a is None or group_b is None:
         return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST", "group_a と group_b を指定してください。")
 
-    src = _pick_source(source)
-    as_set = (lambda g: {str(g)} if isinstance(g, str) else {str(x) for x in g})
-    if (as_set(group_a) == as_set(group_b) if src == "arf"
-            else str(group_a_label) == str(group_b_label)):
+    if str(group_a_label) == str(group_b_label):
         return mcp_errors.pathway_error(
-            "PATHWAY_BAD_REQUEST",
-            "group_a と group_b（dataset では group_a_label と group_b_label）が同じです。")
+            "PATHWAY_BAD_REQUEST", "group_a_label と group_b_label が同じです。")
     try:
-        built, err = (_build_arf(group_a, group_b) if src == "arf"
-                      else _build_dataset(group_a, group_b, group_a_label, group_b_label))
+        built, err = _build_dataset(group_a, group_b, group_a_label, group_b_label, holder, matrix_id)
     except handoff.HandoffError as exc:
         return mcp_errors.pathway_error(exc.code, exc.message, exc.details)
     if err:
         return err
-    table, normalization, dataset_id, label_a, label_b = built
+    table, normalization, dataset_id, label_a, label_b, subject_of, used_matrix_id, ctx = built
+    # 要求の検査がすべて済んだので、既定の行列をここで登録して前処理の記録を 1 件書く（dataset_compare と同じ）。
+    # 以降のエラーには行列の ID を添える（呼び直しにそのまま使える）。
+    implicit_matrix = None
+    entry, preprocess_record = ctx["entry"], None
+    if entry is None:
+        try:
+            entry, preprocess_record = register_default(
+                holder, holder.dataset, ctx["study"], ctx["prepared"], ctx["config"], ctx["inputs"])
+        except DomainError as exc:
+            return _domain_envelope(exc)
+        implicit_matrix = used_matrix_id
     # 群名は mzTab-M に書いた形（# → _）で JSON-LD に戻ってくる
     label_a, label_b = handoff.clean_text(label_a), handoff.clean_text(label_b)
 
     run_id = f"pw_{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:6]}"
-    run_dir = _run_dir(run_id)
+    run_dir = _run_dir(run_id, holder)
     run_dir.mkdir(parents=True, exist_ok=True)
     mztab_path = run_dir / "input.mztab"
     handoff.write_mztab(table, mztab_path, normalization=normalization)
@@ -284,9 +347,9 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
             raise jsonld.JsonldError(f"bridge-result.json に出力が無いパスウェイ: {', '.join(absent)}")
         graphs = {p: jsonld.load_graph(Path(outputs[p])) for p in pathways}
     except bridge.BridgeError as exc:
-        return mcp_errors.pathway_error(exc.code, exc.message, exc.details)
+        return _with_matrix(mcp_errors.pathway_error(exc.code, exc.message, exc.details), implicit_matrix)
     except jsonld.JsonldError as exc:
-        return mcp_errors.pathway_error(exc.code, exc.message)
+        return _with_matrix(mcp_errors.pathway_error(exc.code, exc.message), implicit_matrix)
 
     # 上流は指定鎖ごとに全ノードへ空スコープを出すので、鎖がデータに無くても失敗しない。
     # 分子種の入った鎖スコープがどのパスウェイにも無い鎖は指定の誤りとして返す（spec §5）
@@ -294,14 +357,17 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
                if sc.scope_type != "subclass" and sc.n_features > 0 for c in sc.chains}
     missing_chains = [c for c in (acyl_chains or []) if c not in present]
     if missing_chains:
-        return mcp_errors.pathway_error(
+        return _with_matrix(mcp_errors.pathway_error(
             "PATHWAY_BAD_REQUEST",
             f"指定した鎖がデータ（パスウェイ上のノード）にありません: {', '.join(missing_chains)}",
-            {"missing_chains": missing_chains, "run_dir": str(run_dir)})
+            {"missing_chains": missing_chains, "run_dir": str(run_dir)}), implicit_matrix)
 
     per_pathway, all_rows, pair_rows = {}, [], {}
     for p, graph in graphs.items():
-        rows = compare.compare_scopes(graph, label_a, label_b, q_threshold)
+        try:
+            rows = compare.compare_scopes(graph, label_a, label_b, q_threshold, subject_of=subject_of)
+        except DomainError as exc:
+            return _with_matrix(_domain_envelope(exc), implicit_matrix)
         pairs, undeterminable = compare.opposite_pairs(graph, rows)
         # 値の付いた（分子種の入った whole スコープを持つ）脂質ノード / 脂質ノード。
         # PathwayEntity（CDP-DAG 等の化合物）と接合ノードは分母に入れない
@@ -323,12 +389,14 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     groups: dict[str, int] = {}
     for g in map(handoff.clean_text, table.groups):
         groups[g] = groups.get(g, 0) + 1
-    manifest = {"run_id": run_id, "schema_version": jsonld.SCHEMA_VERSION, "source": src,
+    manifest = {"run_id": run_id, "schema_version": jsonld.SCHEMA_VERSION, "source": "dataset",
                 "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "group_a": label_a, "group_b": label_b, "groups": groups,
                 "pathways": pathways, "acyl_chains": list(acyl_chains or []),
                 "aggregation": aggregation, "q_threshold": q_threshold,
                 "normalization": normalization, "dataset_id": dataset_id,
+                "matrix_id": used_matrix_id, "preprocess_record_id": (entry or {}).get("record_id"),
+                "test": "moderated_t",
                 "backend": result.get("backend"),
                 "remote_fallback": result.get("remote_fallback"),
                 "upstream_commit": result.get("package_sha"),
@@ -346,16 +414,18 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
     s.pathway.last_run_dir = str(run_dir)
 
     return json_payload({
-        "run_id": run_id, "source": src, "run_dir": str(run_dir),
+        "run_id": run_id, "source": "dataset", "run_dir": str(run_dir),
         "groups": groups, "group_a": label_a, "group_b": label_b,
-        "normalization": normalization,
+        "normalization": normalization, "matrix_id": used_matrix_id,
+        **({"preprocess_record": preprocess_record} if preprocess_record is not None else {}),
         "backend": _backend_text(result),
         "handoff": table.report,
         "pathways": per_pathway,
         "notes": {"adjacency": _ADJACENCY_NOTE,
                   **({"handoff": handoff_note} if (handoff_note := _handoff_note(table.report))
                      else {}),
-                  "values": "MSLipidMapper は正規化しない。値はこちらの前処理後行列をサブクラスごとに集計したもの。",
+                  "values": ("MSLipidMapper は正規化しない。値は統計エンジンの行列の注入ごとの値（欠測は 0）を"
+                             "サブクラスごとに集計したもの。比較は moderated t（log2、同じ個体の反復は平均）。"),
                   "figure": "図のファイルは pathway_plot(run_id) で作る（チャットに出すときは inline_image=true）。"},
     })
 
@@ -365,8 +435,10 @@ def pathway_project(source: str = "auto", group_a: str | list[str] | None = None
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True),
     structured_output=False)
+@config_invalid_as_envelope
 def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
-                 plot_type: str = "dot", inline_image: bool = False):
+                 plot_type: str = "dot", inline_image: bool = False,
+                 dataset_handle: str | None = None):
     """pathway_project の run をパスウェイ図（PDF）に描く。既定は図のファイルの場所と要約だけを返す。
 
     PDF と PNG（<pathway>.png）は run のディレクトリに書く。チャットに図を出したいときは
@@ -375,13 +447,20 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
     - run_id: 省略時は直近の run。
     - pathways: その run に含まれるものから選ぶ（既定は全部）。
     - inline_image: true なら [要約の JSON, 画像…] を返す。既定 false は要約の JSON 文字列だけ。
+    - dataset_handle: run の置き場所（そのデータセットの解析フォルダ配下 reports/pathway）を決めるハンドル
+      （省略時は直近）。
     - plot_type: dot | box | violin（ノード内のグラフ）。横軸の群は group_a, group_b, その他の群の順
       （上流は config の plot.x_order を軸順と配色の両方に使う）。
     [mslipidmapper] mslipidmapper_api_url の研究室サーバを先に使い（サーバは 3 パスウェイ全部を描く）、
     使えなければローカルの R で描く。ローカルではヘッドレス Chromium（[mslipidmapper] browser）と
     unpkg.com への接続が要る。
     """
-    manifest = _load_manifest(run_id)
+    from metabolomix.tools._holder import resolve_holder
+
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    manifest = _load_manifest(run_id, holder)
     if isinstance(manifest, str):
         return manifest
     chosen = list(pathways or manifest["pathways"])
@@ -395,7 +474,7 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
                                         "plot_type は dot / box / violin のどれかです。")
     if not isinstance(inline_image, bool):
         return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST", "inline_image は true / false です。")
-    run_dir = _run_dir(manifest["run_id"])
+    run_dir = _run_dir(manifest["run_id"], holder)
     others = [g for g in manifest["groups"] if g not in (manifest["group_a"], manifest["group_b"])]
     request = {"mode": "render", "mztab": str(run_dir / manifest["files"]["mztab"]),
                "out_dir": str(run_dir), "pathways": chosen,

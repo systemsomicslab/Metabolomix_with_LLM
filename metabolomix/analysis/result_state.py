@@ -6,7 +6,7 @@
 どちらも「直近の結果」を名乗る限り読み手には見分けがつかない。結果自身に
 `provenance.result_id` と `input_fingerprint` を持たせ、あとから照合できるようにする。
 
-**入力が変わったとき、どの結果が古くなるのか。** 前処理をやり直せば PCA も差次的解析も
+**入力が変わったとき、どの結果が古くなるのか。** 前処理の入力が変われば PCA も差次的解析も
 無効になる。群の付け替えだけなら PCA は生きている。この依存関係を 1 か所
 （`invalidate_results`）に書き、呼び出し側ごとに違う判断をさせない。
 
@@ -25,16 +25,16 @@ from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 __all__ = [
     "PP_FIELDS",
+    "STATS_KINDS",
     "STAT_FIELDS",
     "array_fingerprint",
     "assert_current",
     "dataset_fingerprint",
-    "group_fingerprint",
     "invalidate_results",
     "is_current",
+    "is_stats_current",
     "metadata_fingerprints",
     "new_provenance",
-    "preprocess_fingerprint",
     "register_result",
 ]
 
@@ -54,13 +54,12 @@ STAT_FIELDS = frozenset({"group", "biological_sample_id"})
 #: 比較指定そのもの（`comparison`）を含む。
 _STAT_INVALIDATING = STAT_FIELDS | {"comparison"}
 
-#: 前処理そのものをやり直す必要がある変更。`standard_assays`（内部標準の
-#: 分母に使う標準品注入）・`bindings`（どのfeatureがその標準か）・
-#: `matrix_recipe` を含めるのは、これらが変われば解析行列の値そのものが
-#: 変わるため——行列を作り直さずに結果だけ残すと、次の解析が新しい設定の
-#: 顔をした古い数字で走る。
-_PP_INVALIDATING = PP_FIELDS | {"dataset", "detection", "recipe",
-                                "standard_assays", "bindings", "matrix_recipe"}
+#: 前処理の入力の変更（統計エンジンの行列 `stat_matrices` を捨てる）。
+_PP_INVALIDATING = PP_FIELDS | {"dataset", "detection", "exclusion"}
+
+#: 統計エンジンの結果の `provenance.kind`（`stats_results` が登録する）。古さは
+#: `is_stats_current`（データの指紋と `metadata_revision`）で見る。
+STATS_KINDS = ("compare", "stat_pca")
 
 
 def array_fingerprint(array) -> str:
@@ -80,19 +79,14 @@ def array_fingerprint(array) -> str:
     return h.hexdigest()
 
 
-def dataset_fingerprint(ds, include_detected: bool = True) -> str:
+def dataset_fingerprint(ds) -> str:
     """解析の入力としてのデータセットの指紋。
 
     含めるのは「入力」だけ——定量行列・特徴 ID・検体の並び・検出マスク・出所。
-    派生結果（pp_matrix / last_pca / last_differential）は含めない。含めると
+    派生結果（stat_matrices / last_pca / last_differential）は含めない。含めると
     結果を 1 つ計算するたびに入力が変わったことになり、無限に再計算が要る。
-
-    `include_detected=False` は検出マスクを**未取り込みの値（None）として**数える。
-    検出状態の取り込みが入る前に計算された結果の指紋と、今の ds を比べるときに使う
-    （`session_handoff` の復元・`is_current` の引き継ぎ分岐）。既定（True）の値は
-    変わらない。
     """
-    mask = getattr(ds, "detected_mask", None) if include_detected else None
+    mask = getattr(ds, "detected_mask", None)
     return canonical_hash({
         "matrix": array_fingerprint(getattr(ds, "feature_matrix", None)),
         "features": list(getattr(ds, "feature_ids", []) or []),
@@ -119,33 +113,18 @@ def metadata_fingerprints(rows: list[dict]) -> dict:
             for field in sorted(fields)}
 
 
-def group_fingerprint(ds) -> str:
-    """比較（差次的解析）の入力になる群割当の指紋。
-
-    前処理の指紋（`preprocess_fingerprint`）には `group` を混ぜない——群を
-    付け替えただけで前処理をやり直す羽目になるから。その代わり、群に依存する
-    結果（差次的解析）が「今の群割当から出たものか」を言えるように、群だけを
-    別の指紋にしてここへ分ける。
-
-    明示メタデータ（実験情報シート）が無いデータセットでは「群という入力が
-    無い」ことの指紋を返す。`sample_id` で整列してから見るので行の並び順には
-    依存しない（`metadata_fingerprints` と同じ規則）。
-    """
-    rows = getattr(ds, "sample_metadata_rows", None)
-    if not rows:
-        return canonical_hash({"group": None, "biological_sample_id": None})
-    fingerprints = metadata_fingerprints(rows)
-    return canonical_hash({field: fingerprints.get(field)
-                           for field in sorted(STAT_FIELDS)})
+#: `dataset_plot` の kind のうち、PCA の結果・差次的結果から作るもの（`ds.figures` のキー）。
+#: `species_pca`（選んだ分子種の PCA）は前処理済み行列を使わないが、除外・前処理の入力の変更で
+#: 行列と同じく古くなるので `pca` と同じ組に入れる。
+_PCA_FIGURES = ("pca", "loadings", "species_pca")
+_DIFFERENTIAL_FIGURES = ("volcano",)
 
 
-def preprocess_fingerprint(ds, recipe: dict, metadata_hash: str | None = None) -> str:
-    """前処理の入力（データセット・レシピ・関与するメタデータ）の指紋。"""
-    return canonical_hash({
-        "dataset": dataset_fingerprint(ds),
-        "recipe": recipe,
-        "metadata": metadata_hash,
-    })
+def _drop_figures(ds, kinds: tuple[str, ...]) -> None:
+    figures = getattr(ds, "figures", None)
+    if figures:
+        for kind in kinds:
+            figures.pop(kind, None)
 
 
 def invalidate_results(ds, changed: set[str]) -> None:
@@ -153,30 +132,33 @@ def invalidate_results(ds, changed: set[str]) -> None:
 
     捨てる範囲は変更の性質で決まる:
 
-    - 前処理の入力（`PP_FIELDS` ・`dataset` ・`detection` ・`recipe`）が変われば、
-      前処理済み行列ごと捨てる。行列を残して結果だけ消すと、次の PCA が古い行列で
-      走り、しかもそれが新しい設定の結果として記録される。
+    - 前処理の入力（`PP_FIELDS` ・`dataset` ・`detection`）と除外（`exclusion`。`dataset_exclude`）が
+      変われば、統計エンジンの行列（`stat_matrices`）を空にし、直近の PCA・差次的結果とそれらの図を捨てる。
+      `stat_matrices` は `stats_results.get_matrix` も古さを見るが、古い行列を抱え続けない。
     - 群・比較の指定（`STAT_FIELDS`。どの注入を独立した n と数えるかを決める
       `biological_sample_id` を含む）が変われば差次的解析だけ。PCA は群を
       入力にしていない。
     - PCA の設定だけなら PCA だけ。
 
+    統計エンジンの結果（`ds.results` の `compare` / `stat_pca`）は消さず、`is_current` が
+    古いと答える（`metadata_revision` とデータの指紋）。
+
     「消す」を選ぶのは、古い数字を返し続けるより無いことにするほうが安全だから。
     """
     changed = set(changed)
+    # 結果から作った図（dataset_plot の置き場 ds.figures）も同じ依存で捨てる。残すと save_figure が
+    # 古い結果の図を現在のものとして保存する。
     if changed & _PP_INVALIDATING:
-        ds.pp_matrix = None
-        ds.pp_sample_names = []
-        ds.pp_feature_names = []
-        ds.preprocessing_recipe = {}
-        ds.preprocess_id = None
-        ds.preprocess_metadata_hash = None
+        ds.stat_matrices = {}
         ds.last_pca = None
         ds.last_differential = None
+        _drop_figures(ds, _PCA_FIGURES + _DIFFERENTIAL_FIGURES)
     elif changed & _STAT_INVALIDATING:
         ds.last_differential = None
+        _drop_figures(ds, _DIFFERENTIAL_FIGURES)
     elif "pca_settings" in changed:
         ds.last_pca = None
+        _drop_figures(ds, _PCA_FIGURES)
 
 
 def new_provenance(ds, *, kind: str, input_fingerprint: str,
@@ -211,73 +193,52 @@ def register_result(ds, result: dict) -> dict:
     return result
 
 
+def is_stats_current(ds, record: dict, *, dataset_hash: str | None = None) -> bool:
+    """統計エンジンの結果（`compare` / `stat_pca`）が、今のデータセットから出たものか。
+
+    登録時のデータの指紋（`provenance.dataset_hash`）と `metadata_revision` が今の ds と同じなら
+    True。除外（`dataset_exclude`）と試料の表の変更（群だけの訂正も）は `metadata_revision` を
+    進めるので、どちらでも古くなる。結果は `dataset_id` に縛らない（同じデータなら同じ結果）。
+    来歴・指紋が無ければ確かめられないので False。`dataset_hash` は呼び出し側が計算済みの
+    `dataset_fingerprint(ds)`（任意）。
+    """
+    prov = (record or {}).get("provenance") or {}
+    recorded = prov.get("dataset_hash")
+    if recorded is None:
+        return False
+    if prov.get("metadata_revision") != getattr(ds, "metadata_revision", 0):
+        return False
+    current = dataset_hash if dataset_hash is not None else dataset_fingerprint(ds)
+    return recorded == current
+
+
 def is_current(ds, result: dict, *, dataset_hash: str | None = None) -> bool:
     """その結果が、今のデータセットの状態から出たものとして通用するか。
 
     **来歴を持たない結果は True**（古いと判定しない）。来歴が無いのは「古い」の
     証拠ではなく「調べる材料が無い」ということで、そこを False にすると、来歴を
-    付ける前から動いていた経路（ARF の旧結果・手で組んだ結果）の図が一律に
-    描けなくなる。来歴があるなら厳密に照合する。
+    付ける前から動いていた経路（手で組んだ結果）の図が一律に描けなくなる。
+    来歴があるなら厳密に照合する。
 
-    照合は「その結果が何に依存しているか」で変わる。前処理・データセットの
-    一致だけを見ると、**群依存**の結果を取りこぼす: 群だけを訂正した場合、
-    前処理は正しく生き残る（`invalidate_results` が `last_differential` だけを
-    捨てる）ので、古い差次的結果は親の preprocess_id も dataset_id も
-    一致したままになる。`ds.results` に残っているそれを result_id で名指しすれば
-    「現在の結果」として通ってしまい、旧群の数字が現在の前処理条件のラベル付きで
-    書き出される——`dataset_export_differential` が拒否すると約束している当の
-    ケースがこれ。そこで差次的結果は群の指紋（`group_fingerprint`）まで見る。
+    統計エンジンの結果（`provenance.kind` が `STATS_KINDS`）は `is_stats_current` で見る
+    （データの指紋と `metadata_revision`）。`dataset_hash` は呼び出し側が計算済みの
+    `dataset_fingerprint(ds)`（任意）。指紋は行列全体の hash なので、多数の結果を続けて照合する
+    呼び出し側（`feature_search.select_results`）は 1 回だけ計算して渡す。
 
-    群の指紋を持たない差次的結果（この検査より前に作られたもの・手で組んだ
-    もの）は、来歴無しと同じく「調べる材料が無い」として通す。
-
-    **`provenance["handoff"]` を持つ結果**（pipeline run が作った差次的結果を
-    session の DatasetState へ読み込んだもの）は別の規則で見る。その ds は読み込みの
-    たびに新しく作られるので `dataset_id` は run 側のものと必ず食い違い、session の
-    前処理も通っていない（`preprocess_id` は None）。だから ID と親の前処理は見ず、
-    **データの指紋**（`dataset_hash == dataset_fingerprint(ds)`）と、持っていれば
-    **群の指紋**で、同じデータ・同じ群割当から出た結果かを照合する。データの指紋が
-    無い引き継ぎ結果は、同じデータから出たことを確かめられないので通さない
-    （来歴無しの「材料不足は通す」とは逆）。群の指紋だけが無い場合は、
-    上の差次的結果と同じく通す。handoff の分岐は `kind == "differential"` にだけ
-    当てる（それ以外の kind が handoff を持っていたら通さない）。
-    `evidence_attached_after` の印がある結果（検出状態の取り込みが入る前に計算されたもの）は、
-    データの指紋を**検出マスクを除いて**計算した今の値とも照合する。
-
-    `dataset_hash` は呼び出し側が計算済みの `dataset_fingerprint(ds)`（任意）。指紋は
-    行列全体の hash なので、多数の結果を続けて照合する呼び出し側（`feature_search.
-    select_results`）は 1 回だけ計算して渡す。渡さなければ必要なときにここで計算する。
+    それ以外（分子種の PCA `species_pca`）は別のデータセットの結果なら古い。分子種の PCA は
+    前処理済み行列を使わず群・除外を引数と試料の対応表から取るので、試料の情報
+    （群・役割・除外。`metadata_revision`）が動いたら古い。キュレーションの判断の更新では古くしない。
     """
     if not (result or {}).get("provenance"):
         return True
     prov = result["provenance"]
-    if prov.get("handoff"):
-        if prov.get("kind") != "differential":
-            # run から戻すのは差次的結果だけ（`session_handoff.restore_differentials`）。
-            # 他の kind が handoff を名乗っていたら、ID も親も見ないこの分岐で
-            # 「今の結果」にしない（run の前処理が今の前処理の顔をする）。
-            return False
-        recorded_data = prov.get("dataset_hash")
-        if recorded_data is None:
-            return False
-        current = dataset_hash if dataset_hash is not None else dataset_fingerprint(ds)
-        if recorded_data != current and not (
-                prov.get("evidence_attached_after")
-                and recorded_data == dataset_fingerprint(ds, include_detected=False)):
-            # 後者: 検出状態の取り込みが入る前に計算された結果（復元時に印を付けた）。
-            return False
-        recorded_groups = prov.get("group_fingerprint")
-        return recorded_groups is None or recorded_groups == group_fingerprint(ds)
+    if prov.get("kind") in STATS_KINDS:
+        return is_stats_current(ds, result, dataset_hash=dataset_hash)
     if prov.get("dataset_id") != getattr(ds, "dataset_id", None):
         return False
-    parents = prov.get("parent_ids") or []
-    if parents and getattr(ds, "preprocess_id", None) not in parents:
-        return False
-    if prov.get("kind") == "preprocess":
-        return prov.get("result_id") == getattr(ds, "preprocess_id", None)
-    if prov.get("kind") == "differential":
-        recorded_groups = prov.get("group_fingerprint")
-        if recorded_groups is not None and recorded_groups != group_fingerprint(ds):
+    if prov.get("kind") == "species_pca":
+        recorded = prov.get("metadata_revision")
+        if recorded is not None and recorded != getattr(ds, "metadata_revision", 0):
             return False
     return True
 
@@ -291,14 +252,22 @@ def assert_current(ds, result: dict) -> None:
     if is_current(ds, result):
         return
     prov = (result or {}).get("provenance") or {}
+    if prov.get("kind") in STATS_KINDS:
+        raise DomainError(
+            "STALE_ANALYSIS_RESULT",
+            "この結果は現在のデータセットの状態から出たものではありません"
+            "（除外・試料の表・データが登録の後に変わった）。再計算してください。",
+            {"result_id": prov.get("result_id"), "kind": prov.get("kind"),
+             "result_dataset_hash": prov.get("dataset_hash"),
+             "dataset_hash": dataset_fingerprint(ds),
+             "result_metadata_revision": prov.get("metadata_revision"),
+             "metadata_revision": getattr(ds, "metadata_revision", 0)})
     raise DomainError(
         "STALE_ANALYSIS_RESULT",
         "この結果は現在のデータセットの状態から出たものではありません"
-        "（前処理のやり直し・別データセットの結果）。再計算してください。",
-        {"result_id": prov.get("result_id"),
+        "（試料の情報の変更・別データセットの結果）。再計算してください。",
+        {"result_id": prov.get("result_id"), "kind": prov.get("kind"),
          "result_dataset_id": prov.get("dataset_id"),
          "dataset_id": getattr(ds, "dataset_id", None),
-         "result_parent_ids": prov.get("parent_ids"),
-         "preprocess_id": getattr(ds, "preprocess_id", None),
-         "result_group_fingerprint": prov.get("group_fingerprint"),
-         "group_fingerprint": group_fingerprint(ds)})
+         "result_metadata_revision": prov.get("metadata_revision"),
+         "metadata_revision": getattr(ds, "metadata_revision", 0)})

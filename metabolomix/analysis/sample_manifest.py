@@ -42,13 +42,9 @@
     求め、`invalidate_results` を一度だけ呼んでから ``ds`` へ一括代入する。
     検証で1件でも落ちれば ``ds`` には一切触れない（半端な適用を作らない）。
 
-``select_statistical_samples`` / ``validate_independent_samples`` / ``validate_standard_assays``
-    v2 が足す2点——``role=standard``（標準品注入は生物試料ではない）と
-    ``biological_sample_id``（反復注入を束ねる生物単位）——を、検定の**直前**に
-    効かせる。台帳としてのシートは反復注入も標準品も書けてよく、止めるのは
-    「その集合をnと数えてよいか」を問う場所だけ。選択規則を1か所に集めるのは、
-    統計・QC・標準注入解決が各々書き直すと片方だけ ``include=false`` を
-    見落とすため。
+検定の母集団（``include`` が真・``role=sample``・群が決まった行）は、統計エンジンの
+前処理（``metabolomix.analysis.stats.preprocess``）が選ぶ。ここは台帳としてのシートを
+読んで検証するだけで、反復注入も標準品も書けてよい。
 """
 from __future__ import annotations
 
@@ -64,13 +60,12 @@ from metabolomix.core.atomic_io import DomainError
 __all__ = [
     "FIELDS",
     "FIELDS_V2",
+    "OPTIONAL_FIELDS",
     "apply_metadata",
+    "apply_sample_manifest",
     "parse_injection_order",
     "parse_manifest",
     "resolve_metadata",
-    "select_statistical_samples",
-    "validate_independent_samples",
-    "validate_standard_assays",
 ]
 
 #: sample-manifest.v1 が持つ8列（この順で並ぶことを要求する）。
@@ -81,6 +76,10 @@ FIELDS = ("sample_id", "source_file", "role", "group", "batch",
 #: （spec §7）。列を挿入せず末尾に足すのは、v1の読み書きをする既存経路と
 #: 見出し行の突き合わせが位置で壊れないようにするため。
 FIELDS_V2 = FIELDS + ("biological_sample_id",)
+
+#: 任意の末尾の列。シートが持つなら読んで行に載せる（`sample_meta` へ運ぶだけ。B では統計に使わない）。
+#: 持たないシートの行には鍵を足さない。見出しの完全一致は、この 1 列の有無だけを許す。
+OPTIONAL_FIELDS = ("subject_id",)
 
 _SCHEMA_HEADERS = {
     "# schema = sample-manifest.v1": FIELDS,
@@ -156,11 +155,14 @@ def parse_manifest(path: Path, *, source_root: Path,
     reader = csv.DictReader(lines[1:], delimiter="\t",
                             restkey=_EXTRA_KEY, restval=None)
     fieldnames = list(reader.fieldnames or [])
-    if fieldnames != list(fields):
+    # 任意の末尾の列（`subject_id`）だけは有っても無くてもよい。それ以外の過不足・順序違いは拒む。
+    if fieldnames == list(fields) + list(OPTIONAL_FIELDS):
+        fields = fields + OPTIONAL_FIELDS
+    elif fieldnames != list(fields):
         raise DomainError(
             "SAMPLE_MANIFEST_INVALID",
             "列見出しが仕様と一致しません（過不足または順序違い）。",
-            {"expected": list(fields), "found": fieldnames},
+            {"expected": list(fields), "optional": list(OPTIONAL_FIELDS), "found": fieldnames},
         )
 
     # 予定raw（相対パス）を正規化して索引化。全件へ1行ずつ来ることを後で照合する。
@@ -267,9 +269,11 @@ def parse_manifest(path: Path, *, source_root: Path,
             "group": group, "batch": batch, "injection_order": injection_order,
             "qc_pool": qc_pool, "include": include,
         }
-        if fields is FIELDS_V2:
+        if "subject_id" in fields:
+            values["subject_id"] = raw_row["subject_id"] or None
+        if "biological_sample_id" in fields:
             # 空欄は「生物学的独立性が未確認」（spec §7）。ここでは欠落として
-            # 通し、検定の直前 `validate_independent_samples` で止める——
+            # 通す——
             # シートは標準品・blankのように生物単位を持たない行も載せるため。
             values["biological_sample_id"] = raw_row["biological_sample_id"] or None
         provenance: dict[str, dict] = {}
@@ -542,6 +546,7 @@ _TYPE_CHECKS: dict[str, tuple[type, ...]] = {
     "batch": (str, type(None)), "injection_order": (int, type(None)),
     "qc_pool": (str, type(None)), "include": (bool,),
     "biological_sample_id": (str, type(None)),
+    "subject_id": (str, type(None)),
 }
 
 
@@ -606,7 +611,7 @@ def apply_metadata(ds, rows: list[dict]) -> dict:
     old_rows = getattr(ds, "sample_metadata_rows", None) or []
     if not old_rows:
         # 初回適用は「全列が確定した」ことそのものが前処理入力の変化にあたる。
-        changed = {field for field in FIELDS_V2
+        changed = {field for field in FIELDS_V2 + OPTIONAL_FIELDS
                    if field in FIELDS or any(field in row for row in rows)}
     else:
         before = metadata_fingerprints(old_rows)
@@ -615,14 +620,15 @@ def apply_metadata(ds, rows: list[dict]) -> dict:
         # `biological_sample_id` の付け替えが「何も変わっていない」と読まれ、
         # 旧IDのnで出した検定結果が生き残る（列がv1行に無い場合は新旧とも
         # 欠落＝同値なので、v1経路の changed_fields は従来どおり）。
-        changed = {field for field in FIELDS_V2
+        changed = {field for field in FIELDS_V2 + OPTIONAL_FIELDS
                    if before.get(field) != after.get(field)}
 
     # ここまでの検証が全部通ってから、まとめて反映する（半端な適用を作らない）。
     invalidate_results(ds, changed)
     ds.sample_metadata_rows = rows
     ds.sample_ids = [row["sample_id"] for row in rows]
-    ds.metadata_revision = getattr(ds, "metadata_revision", 0) + 1
+    if changed:   # 何も変わらない再適用は版を進めない（図・分子種 PCA を無駄に古くしない）
+        ds.metadata_revision = getattr(ds, "metadata_revision", 0) + 1
 
     return {
         "metadata_revision": ds.metadata_revision,
@@ -632,7 +638,7 @@ def apply_metadata(ds, rows: list[dict]) -> dict:
 
 
 def pp_inputs_from_rows(sample_names: list[str], rows: list[dict]) -> tuple[dict, dict]:
-    """Task 9 で適用済みの実験情報シートを、前処理入力（roles/sample_meta）へ変換する。
+    """適用済みの実験情報シートを、役割と試料の付帯情報（roles/sample_meta）へ変換する。
 
     `ds.sample_metadata_rows` は `sample_manifest.resolve_metadata` が
     `ds.sample_names` と同じ順に揃えてから `apply_metadata` が書き込むので、
@@ -651,15 +657,9 @@ def pp_inputs_from_rows(sample_names: list[str], rows: list[dict]) -> tuple[dict
     for name, row in zip(sample_names, rows):
         # role はここでは "sample"/"qc"/"blank" へ絞り込まず、シートの値を
         # そのまま渡す（空欄だけ "sample" を既定にする）。明示 role="unknown"
-        # （sample_manifest が正当な列挙値として保持する）はそのまま
-        # preprocessing.preprocess() へ渡り、"blank" のように弾かれることも
-        # "qc"/"sample" として扱われることもない——preprocessing.py は
-        # role を `== "qc"` / `== "sample"` の完全一致と `drop_roles=("blank",)`
-        # でしか見ないため、"unknown" は前処理を素通りして解析行列に残る。
-        # role="unknown" を比較（compare_dataset）から除外するルールは Task 12
-        # （resolve_comparison の比較ガード、spec §7.4）が持つ。ここで先回りして
-        # 弾くと、その判定基準を2箇所に複製することになる。
-        # 一方 include=false は「数値評価（前処理）からの除外」（spec §8.1）
+        # （sample_manifest が正当な列挙値として保持する）を比較から外すのは
+        # 統計エンジンの試料の選択で、ここで先回りして弾くと判定基準を 2 か所に複製する。
+        # 一方 include=false は「数値評価からの除外」（spec §8.1）
         # ——role とは別の軸なので、ここでは弾かず、呼び出し側
         # （build_dataset_pp_inputs）が matrix/sample_names を絞る。
         role = row.get("role") or "sample"
@@ -674,6 +674,9 @@ def pp_inputs_from_rows(sample_names: list[str], rows: list[dict]) -> tuple[dict
             "run_order": row.get("injection_order"),
             "run_order_source": order_prov.get("source"),
         }
+        # 任意の列。シートが持ち、値があるときだけ載せる（B では持つだけで統計には使わない）。
+        if row.get("subject_id") is not None:
+            sample_meta[name]["subject_id"] = row["subject_id"]
     return roles, sample_meta
 
 
@@ -688,99 +691,52 @@ def apply_defaults_and_inputs(ds, rows: list[dict]) -> None:
     ds.roles, ds.sample_meta = pp_inputs_from_rows(list(ds.sample_names), rows)
 
 
-# ---------- 統計母集団の選択（spec §7・§9） ----------
+def apply_sample_manifest(ds, manifest_path: str) -> dict:
+    """実験情報シート(sample-manifest.v1)を読み込み、検証してから一括適用する（spec §7.3）。
 
-def select_statistical_samples(rows: list[dict], groups: list[str]) -> list[dict]:
-    """検定の対象になる行だけを、`rows`の順のまま返す。
+    ``parse_manifest`` → ``resolve_metadata`` → ``apply_metadata`` を
+    この順に呼ぶだけの薄い合成——検証で1件でも落ちれば ``apply_metadata`` 自身の
+    契約により ``ds`` には一切触れない（対話的なDatasetState経路にも同じ検証・出所・
+    無効化規則を適用する、spec §7.3）。
 
-    条件は3つのANDで、ここが**唯一の定義**（spec §9「全検定はincluded
-    role=sampleのみを対象とし」）:
-
-    - ``include`` が真——除外した注入はQCからも統計からも消える（raw対応一覧
-      からは消さない。それは`parse_manifest`が持つ台帳の役目）。
-    - ``role`` が ``"sample"``——``standard``（標準品注入）・``qc``・``blank``・
-      ``unknown`` は生物試料ではない。standardを群へ自動投入しない、が §7 の要求。
-    - ``group`` が引数 ``groups`` に在る——空欄の行は群未確定であって「その他群」
-      ではないので、どの比較にも入れない。
-
-    同じ3条件を統計・QC・標準注入解決が各々書き直すと、片方だけ
-    ``include=false`` を見落として母集団が食い違う。呼び出し側はこの関数を通す。
+    ``DatasetState`` は ``source_root`` 自体を保持しないため、実行時に予定した raw の
+    絶対パス（``ds.assay_sources``）から逆算する。
     """
-    wanted = set(groups)
-    return [row for row in rows
-            if row.get("include", True)
-            and row.get("role") == "sample"
-            and row.get("group") in wanted]
+    source_root, expected_sources = _raw_manifest_layout(ds)
+    rows = parse_manifest(Path(manifest_path), source_root=source_root,
+                          expected_sources=expected_sources)
+    resolved = resolve_metadata(ds, rows)
+    return apply_metadata(ds, resolved)
 
 
-def validate_independent_samples(rows: list[dict], groups: list[str]) -> None:
-    """検定対象の各注入が、独立した生物試料であることを確認する。
+def _raw_manifest_layout(ds) -> tuple[Path, list[str]]:
+    """sample-manifest.v1 検証に使う ``source_root``/相対パス一覧を、予定した raw の絶対パスから逆算する。
 
-    注入数をそのままnと読むと、同一個体の2注入が「n=2」に化けて群内分散を
-    過小評価する。初期版は自動平均も混合モデルも持たないので、対応できない
-    ことを ``REPEATED_MEASURES_UNSUPPORTED`` で明示して止める（spec §7）。
-
-    ``biological_sample_id`` の空欄・列自体が無いv1行は「独立性が未確認」で
-    あって「独立」ではない。ここで推測して通すと、同じ個体の反復注入が
-    区別されないまま n に化ける——止めて、シートで宣言させる。
-
-    重複を見るのは**検定対象だけ**。除外行・standard・対象外群のIDが重なって
-    いても検定のnには入らないので止めない。
+    mzTab-M のアダプタのデータセットは ``ds.assay_sources``（abundance_assay[N] -> raw）を持つ。
+    解析フォルダのアダプタのデータセットは持たないので、試料ごとに
+    ``_raw_path_for_sample``（job の mzTab-M の場所 → ``.mddata`` の
+    ``file_path`` → assay id の優先順。resolve_metadata がシートの行を試料へ結ぶのと同じ関数）を使う。
     """
-    selected = select_statistical_samples(rows, groups)
+    paths = [Path(p) for p in (getattr(ds, "assay_sources", None) or {}).values() if p]
+    if not paths:
+        paths = [Path(p) for p in (
+            _raw_path_for_sample(ds, i)
+            for i in range(len(getattr(ds, "sample_names", []) or []))) if p]
+    if not paths:
+        if getattr(ds, "source_format", None) == "msdial_folder" and getattr(ds, "job_path", None):
+            reason = ("この job の mzTab-M の ms_run の場所にも .mddata の file_path にも、試料の raw の"
+                      "パスが無いため、シートの source_file を試料に結べません"
+                      "（読み直しても変わらない。raw のパスを持つ .mddata か mzTab-M が要る）")
+        elif getattr(ds, "source_format", None) == "msdial_folder":
+            reason = ("この解析フォルダのデータセットは、試料の raw のパスを持っていません"
+                      "（.mddata が無いか、.mddata に FileID ごとの file_path が無く、job の"
+                      " mzTab-M の場所も使っていない）。.mddata のある解析フォルダ、または"
+                      " job_path / pipeline_path から読み込み直してください")
+        else:
+            reason = ("raw参照(assay_sources)が無いため実験情報シートを検証できません"
+                      "（pipeline経由のjob_pathからload_datasetしたデータセットが必要です）")
+        raise DomainError("SAMPLE_MANIFEST_INVALID", f"{reason}。", {})
+    root = paths[0].parent if len(paths) == 1 else Path(os.path.commonpath([str(p) for p in paths]))
+    expected = [str(p.relative_to(root)) for p in paths]
+    return root, expected
 
-    missing = [row["sample_id"] for row in selected
-               if not row.get("biological_sample_id")]
-    if missing:
-        raise DomainError(
-            "BIOLOGICAL_SAMPLE_ID_REQUIRED",
-            f"検定対象 {len(missing)} 件に biological_sample_id がありません"
-            f"（sample-manifest.v2 で明示してください）: {', '.join(missing)}",
-            {"sample_ids": missing, "groups": list(groups)},
-        )
-
-    by_id: dict[str, list[str]] = {}
-    for row in selected:
-        by_id.setdefault(row["biological_sample_id"], []).append(row["sample_id"])
-    repeated = {bio_id: ids for bio_id, ids in by_id.items() if len(ids) > 1}
-    if repeated:
-        raise DomainError(
-            "REPEATED_MEASURES_UNSUPPORTED",
-            "同一 biological_sample_id の注入が検定対象に複数あります"
-            "（反復測定モデル・自動平均は初期版の対象外です）: "
-            + ", ".join(f"{bio_id}={'/'.join(ids)}"
-                        for bio_id, ids in sorted(repeated.items())),
-            {"repeated": {k: sorted(v) for k, v in sorted(repeated.items())},
-             "groups": list(groups)},
-        )
-
-
-def validate_standard_assays(rows: list[dict],
-                             standard_assays: dict[str, list[str]]) -> None:
-    """``standard_assays`` の各sample_idが、実在する採用済み標準注入か確認する。
-
-    要求側（`pipeline/request_v2.py`）が見られるのは「target_idが在るか」「形が
-    正しいか」までで、sample_idが本当に標準品注入かはシートと突き合わせないと
-    分からない（spec §6.2「role=standardかつinclude=trueであることをmanifestと
-    照合する」）。ここを緩めると、生物試料を内部標準の分母に使った比が
-    ``internal_standard_ratio`` の名前で出て行く。
-    """
-    by_id = {row["sample_id"]: row for row in rows}
-    bad: dict[str, str] = {}
-    for target_id, sample_ids in (standard_assays or {}).items():
-        for sample_id in sample_ids:
-            row = by_id.get(sample_id)
-            if row is None:
-                bad[f"{target_id}:{sample_id}"] = "not_in_manifest"
-            elif row.get("role") != "standard":
-                bad[f"{target_id}:{sample_id}"] = f"role={row.get('role')!r}"
-            elif not row.get("include", True):
-                bad[f"{target_id}:{sample_id}"] = "include=false"
-    if bad:
-        raise DomainError(
-            "STANDARD_ASSAY_INVALID",
-            "standard_assays が標準品注入（role=standard・include=true）を"
-            "指していません: "
-            + ", ".join(f"{key}（{reason}）" for key, reason in sorted(bad.items())),
-            {"invalid": dict(sorted(bad.items()))},
-        )

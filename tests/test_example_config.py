@@ -19,6 +19,25 @@ def test_example_is_a_valid_config_with_only_known_keys(tmp_path, monkeypatch):
     assert user_config.get_setting("msdial.exe").value.endswith("MSDIALCUI.exe")
 
 
+def test_example_mentions_every_key():
+    """雛形は全部のキーを（値かコメントで）案内する。キーを足して雛形を忘れるとここで落ちる。"""
+    text = (user_config.REPO_ROOT / user_config.EXAMPLE_FILENAME).read_text(encoding="utf-8")
+    sections: dict[str, str] = {}
+    current = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            current = stripped[1:-1]
+            continue
+        body = stripped.lstrip("#").strip()
+        if current and "=" in body:
+            sections.setdefault(current, "")
+            sections[current] += body.split("=", 1)[0].strip() + " "
+    for key in user_config.SETTINGS:
+        section, name = key.split(".", 1)
+        assert name in sections.get(section, "").split(), f"{key} が雛形に無い"
+
+
 def test_env_example_is_gone():
     """誰にも読まれず LIPIDMIX_DATA_DIR を勧めていた .env.example は雛形に置き換えた。"""
     assert not (user_config.REPO_ROOT / ".env.example").exists()

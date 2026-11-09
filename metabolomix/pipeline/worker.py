@@ -2,8 +2,8 @@
 
 **sessionを一切importしない。** `metabolomix.core.session_state` / `metabolomix.core.mcp_core` /
 `metabolomix.tools.*` はここからimportしてはいけない（`tests/test_pipeline_engine.py` が
-ASTで検査する）。解析の進行はすべて `pipeline-run.json`（`metabolomix.pipeline.store`）と
-このプロセスだけが持つ `runtime` に住み、MCPサーバの共有sessionへは一切触れない。
+ASTで検査する）。解析の進行はすべて `pipeline-run.json`（`metabolomix.pipeline.store`）に
+住み、MCPサーバの共有sessionへは一切触れない。
 
 実際の工程handler一式（`build_handlers`）はTask18の `metabolomix.pipeline.service` が
 実装する。ここでは意図的に**遅延import**にする——モジュール読込時点（`python -m` の
@@ -18,8 +18,7 @@ CLI:
 試験専用の注入口は持たない。任意のimport名・コマンド・環境変数を受け付ける
 入力経路は一切作らない——それ自体がコード実行の入口になる（brief拘束）。
 engineを注入handlerで検証する試験は、この production worker とは別の
-`tests/pipeline_worker_harness.py` を使う（`metabolomix.console.worker` の
-`--console-arg` と同じく、MCPからは到達できない試験専用の経路）。
+`tests/pipeline_worker_harness.py` を使う（MCPからは到達できない試験専用の経路）。
 """
 from __future__ import annotations
 

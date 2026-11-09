@@ -1,5 +1,5 @@
 # metabolomix/pathway/handoff.py
-"""ARF / DatasetState → 上流 write_mztab_m と同形の最小 mzTab-M（純ロジック）。
+"""DatasetState → 上流 write_mztab_m と同形の最小 mzTab-M（純ロジック）。
 
 群・除外・前処理の決定権はこちらに置く（spec §2）。上流は mzTab-M の
 `study_variable` を群に、`opt_global_Ontology` をサブクラスに読む。
@@ -19,7 +19,6 @@ from metabolomix.pathway import msp_lipid
 from metabolomix.pathway.msdial_lipid_classes import MSDIAL_LIPID_CLASSES
 
 _UNANNOTATED = {"", "unknown", "others", "null"}
-_SPOT_RE = re.compile(r"^Spot_(\d+)_(.+)$")
 _MIN_GROUP = 2
 _MIN_FEATURES = 2
 
@@ -152,53 +151,6 @@ def _finish(sample_names, groups, names, ontologies, rows, report) -> HandoffTab
                         names=[names[i] for i in keep],
                         ontologies=[ontologies[i] for i in keep],
                         matrix=matrix, report=report)
-
-
-def build_from_arf(*, matrix, sample_names, feature_names, sample_meta,
-                   excluded_samples, excluded_spots, catalog, props,
-                   group_a: str, group_b: str, compared: dict) -> HandoffTable:
-    matrix = np.asarray(matrix, dtype=float)          # (n_samples, n_features)
-    prop_list = [props] if isinstance(props, str) else list(props or [])
-    prop = prop_list[0] if prop_list else None
-    a_set, b_set = set(compared["group_a"]), set(compared["group_b"])
-
-    col_idx, sample_out, groups = [], [], []
-    for i, name in enumerate(sample_names):
-        entry = sample_meta.get(name) or {}
-        if entry.get("role", "sample") != "sample" or name in excluded_samples:
-            continue
-        if name in a_set:
-            label = group_a
-        elif name in b_set:
-            label = group_b
-        else:
-            label = entry.get("group")
-            # 比較外の試料の群名が比較の指定名と同じなら書かない（比較群に紛れ込む）
-            if not label or str(label) in (group_a, group_b):
-                continue
-        col_idx.append(i)
-        sample_out.append(name)
-        groups.append(str(label))
-    _check_group_sizes(groups, group_a, group_b)
-
-    names, ontologies, rows = [], [], []
-    report = {**_new_report("arf"), "prop": prop, "dropped_excluded_spots": 0}
-    for j, feat in enumerate(feature_names):
-        m = _SPOT_RE.match(str(feat))
-        if not m or (prop is not None and m.group(2) != prop):
-            continue
-        spot_id = int(m.group(1))
-        if spot_id in excluded_spots:
-            report["dropped_excluded_spots"] += 1
-            continue
-        spot = catalog.get(spot_id) or {}
-        res = resolve_row(spot.get("Name"), spot.get("Ontology"), spot.get("Formula"))
-        if not _count(report, res):
-            continue
-        names.append(res.name)
-        ontologies.append(res.ontology)
-        rows.append(matrix[col_idx, j])
-    return _finish(sample_out, groups, names, ontologies, rows, report)
 
 
 def build_from_dataset(*, pp_matrix, pp_sample_names, pp_feature_names, roles,

@@ -77,7 +77,7 @@ def test_renamed_sample_joined_by_file_id(tmp_path):         # Review Focus 2
     write_msdial_folder(tmp_path, spots=[{"name": "a"}], samples=[
         {"file_id": 0, "name": "s0", "class_id": "A"},
         {"file_id": 1, "name": "s1", "class_id": "B", "arf_name": "old_b"},
-        {"file_id": 2, "name": "s2", "class_id": "B"}])   # .arf の群は 3 行未満だと読まれない
+        {"file_id": 2, "name": "s2", "class_id": "B"}])
     ds = load_msdial_folder(select_alignment(tmp_path))
     assert ds.sample_names[1] == "s1"
     assert ds.msdial_samples[1]["arf_file_name"] == "old_b"
@@ -178,7 +178,8 @@ def test_annotator_id_keeps_only_the_file_name(tmp_path):
     ds = load_msdial_folder(select_alignment(tmp_path))
     ids = [ds.feature_metadata[f]["annotator_id"] for f in ds.feature_ids]
     assert ids == ["some.lbm2", "lab.msp", "LabMsp"]
-    assert is_lbm_annotator(ids[0]) is True and is_lbm_annotator(ids[1]) is None
+    assert is_lbm_annotator(ids[0]) is True and is_lbm_annotator(ids[1]) is False
+    assert is_lbm_annotator(ids[2]) is None
 
 
 def test_gap_filled_rate_is_rounded_and_none_without_cells(tmp_path):
@@ -191,3 +192,24 @@ def test_gap_filled_rate_is_rounded_and_none_without_cells(tmp_path):
     empty = type(ds)()
     _fill_summaries(empty, select_alignment(tmp_path), np.zeros((0, 0), dtype=bool), {})
     assert empty.feature_qc["gap_filled_rate"] is None
+
+
+def test_per_sample_mz_skips_nonpositive(tmp_path):
+    """m/z が 0 以下のセルは持たず、検出セルが 1 つも無い特徴はキーごと省く。"""
+    write_msdial_folder(tmp_path, spots=[
+        {"name": "a", "mz": 500.0},
+        {"name": "b", "mz": 600.0, "gap_filled": [True, True, True]},   # 検出セル無し
+        {"name": "c", "mz": 0.0}], samples=_samples())                 # 非正の m/z
+    ds = load_msdial_folder(select_alignment(tmp_path))
+    assert set(ds.per_sample_mz) == {"0"}
+    assert set(ds.per_sample_mz["0"]) == {"s0", "s1", "s2"}
+
+
+def test_rename_note_ignores_whitespace(tmp_path):
+    """FileID の改名の注記は、空白だけの違いでは出さない。"""
+    write_msdial_folder(tmp_path, spots=[{"name": "a"}], samples=[
+        {"file_id": 0, "name": "s0", "class_id": "A"},
+        {"file_id": 1, "name": "s1", "class_id": "B", "arf_name": "s1 "},
+        {"file_id": 2, "name": "s2", "class_id": "B"}])
+    ds = load_msdial_folder(select_alignment(tmp_path))
+    assert not any("FileID 1" in n for n in ds.load_notes)

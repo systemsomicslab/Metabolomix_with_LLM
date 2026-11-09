@@ -1,0 +1,788 @@
+# データセット（MS-DIAL 解析フォルダから読んだ `DatasetState`）
+
+`load_dataset(directory=...)` で MS-DIAL の解析フォルダ（`.arf` / `.arf2` / `.mddata`）を読んだデータセットの
+出力定義。旧 `arf` `arf2` `pai2` トピックをここにまとめた（B-2b）。
+
+> 先に `lipidmix://docs/output-format`（共通核）を読むこと。**脂質名の文法（§2.1。脂質アッセイのときだけ当てる）**、
+> 必須注意事項（§9）はそちらで定義され、ここでは繰り返さない。
+
+## 概要
+
+- **行の粒度は 特徴×試料**。特徴＝アラインメントスポット（`MasterAlignmentID`、特徴 ID は `.arf2` の `SMF_ID` と同じ軸）。
+  1 つの特徴の名前・m/z・RT・同定は**特徴ごとに 1 つ**（全試料で共通の代表値）で、試料ごとの値は
+  強度の行列（`feature_matrix`。値は `measure` で選んだ `.arf` の欄）だけが持つ。
+- **gap-fill と検出の印**。`detected_mask`（特徴 × 試料の bool 行列）が `False` のセルは、検出された
+  ピークではなく MS-DIAL が埋めた補間値（`.arf` の `IsGapFilled` / 負の `MasterPeakID`）。検出数・存在判定・
+  検出率には `detected_mask` を使い、非ゼロかどうかで数えない。解析フォルダのデータセットでは検出の印は
+  読んだ `.arf` そのものが持つので、常に付く。
+- **`.arf2` は特徴の代表**（スポット代表カタログ）。`Name` `Ontology` `Formula` `InChIKey` `AdductType` と、
+  試料間の統計（`HeightAverage` `FillPercentage` `SignalToNoise*` など）を持つが、試料別の強度は持たない。
+  `.arf` の `Name` と食い違うことがあり、代表の注釈は `.arf2` を優先する（`feature_metadata`）。
+- **同定の標準化の列**。`.arf2` の注釈は GOSLIN で正規化され、`feature_metadata["identity"]` に
+  `normalized`（標準化した脂質名）・`msi_level`（MSI の同定水準。**`.arf2` 由来のヒューリスティックで、
+  MS/MS の有無ではない**）が入る。`dataset_feature_search` の行にも出る。意味は `identity` トピック。
+  脂質アッセイでないデータセットでは当たらない。
+- **試料の役割と群**。試料は `sample` / `qc` / `blank` の役割と群（Class ID）・バッチ・注入順を持つ
+  （`dataset_status` の `samples`）。ブランクは前処理で行列から外れ、QC は残る。QC・ブランクは 2 群比較に入らない。
+  `dataset_exclude` で除いた試料・特徴は前処理と図と強度順の検索が除く（可逆）。
+- **MS/MS の実スペクトルは `.dcl`**（`dcl` トピック）。`.arf` のセルの MS/MS の有無は取得の参照があることだけを示す。
+- **最初の概観**。`load_dataset` の `overview` と `dataset_overview` は品質 → 全体 → クラス → 分子種の 4 段の事実（ID つき）。
+  2 群の向きは仮、クラスの段は付加体の選別の後だけ。意味は §11.9。
+- **EIC**。クロマトグラムは `.EIC.aef` から `dataset_plot(kind="eic" | "eic_compounds")` が描く（`eic` トピック）。
+  `peak_top` は強度でなく頂点の座標。
+
+以下は旧 `arf` `arf2` `pai2` トピックの本文を、いまのツール面（`dataset_*` / `dataset_plot` / `save_figure`）の名前に
+書き直して移した節。行の粒度・gap-fill・必須の注意・caveat の意味は旧トピックのまま保っている。旧パーサ用のツールは
+撤去済みで、その返り値を述べた箇所は「旧」と断ってある。
+
+## 旧 `arf` トピック（`.arf` / サンプル別ピーク。§3, §8.1, §10, §11）
+
+`.arf` の読み込み、PCA（`dataset_pca`）、前処理・QC（`dataset_preprocess`）、差次的解析（`dataset_compare`）の出力定義。
+
+> 対応する Key 番号表: `docs/schema/AlignmentChromPeakFeature.md`（MS-DIAL の `[Key(N)]` から抽出した一次資料）。
+> リーダーのインデックス定数を変更するときは必ずこちらを先に確認する。
+
+### 3. ARF (`metabolomix/arf/reader.py`)
+
+#### 3.1 `deserialize()` のスポット出力
+
+型は `list[dict]`。**1要素は1アラインメントスポット**であり、全サンプルのピークを `AlignedPeakProperties` に保持する。
+
+| キー | 型 | 意味 |
+|---|---|---|
+| `MasterAlignmentID` | int | パーサーがスポット順に付与する 0 始まりのマスターID |
+| `AlignmentID` | int | 現実装では `MasterAlignmentID` と同じ連番 |
+| `RT` | float/null | 代表サンプルから取得したスポット代表RT（min） |
+| `MassCenter` | float/null | 代表サンプルから取得したスポット代表 m/z |
+| `IonMode` | str | `Positive`、`Negative`、`Both`、`Unknown` のいずれか |
+| `Name` | str/null | 代表アノテーション名。空文字の場合は未注釈 |
+| `HeightAverage` | float/null | 現実装ではグループ先頭サンプルの `height` を格納する。名前に反して全サンプル平均を再計算していない |
+| `AlignedPeakProperties` | list[list] | そのスポットに属する全サンプルの MessagePack 配列（`AlignmentChromPeakFeature`）。長さと Key 位置は生のままだが、**読み込み時に解析で使う Key 以外は `null` に落としてある**（Key0〜10・18・20〜22 は生の値、Key15 は RT だけ、Key37 は先頭 2 要素。大規模 `.arf` のメモリ対策）。LLM 解析では通常、次節の表形式を使う |
+| `TagIds` / `Tags` | list | アラインメント結果の `*_tags.xml` から `MasterAlignmentID` で結合したタグ |
+| `SamplePeakTags` | dict | サンプル別 `*_tags.xml` から `FileName` と `MasterPeakID` で結合した、タグ付きピークのみの辞書 |
+| `SampleClasses` | dict | `.mddata` の `AnalysisFileBean` と `FileID`/`FileName` で結合したサンプルClass IDメタデータ |
+
+#### 3.2 `extract_peak_properties()` の表/CSV
+
+型は `pandas.DataFrame`。**1行は「1アラインメントスポット × 1サンプル」の1ピーク**である。同じ `MasterAlignmentID` がサンプル数だけ繰り返される。
+
+| 列 | 型 | 意味 |
+|---|---|---|
+| `MasterAlignmentID` | int | 行が属するアラインメントスポットID |
+| `AlignmentID` | int | 現実装では `MasterAlignmentID` と同じ値 |
+| `SpotRT` | float/null | アラインメントスポット全体の代表RT（min） |
+| `SpotMassCenter` | float/null | アラインメントスポット全体の代表 m/z |
+| `IonMode` | str | スポットのイオンモード |
+| `CompoundName` | str/null | スポットの候補化合物名。空文字は未注釈 |
+| `AlignmentTags` | list[str] | アラインメントスポットに付与されたMS-DIALタグ |
+| `SampleIndex` | int | `AlignedPeakProperties` 内での 0 始まり位置。サンプル順序を示す |
+| `FileName` | str | 測定ファイル名。取得できない場合は `Sample_<SampleIndex>` |
+| `ClassID` | str/null | MS-DIALのFile property settingで指定した `AnalysisFileClass` |
+| `PeakID` | int/null | 測定ファイル内のピークID。ギャップフィルでは負値になり得る |
+| `FileID` | int/null | データセット内の測定ファイルID |
+| `MasterPeakID` | int/null | 元ピークのマスターID。負値は未検出を補間したギャップフィルを示す |
+| `PeakHeight` | float/null | 当該サンプルのピーク頂点強度 |
+| `PeakArea` | float/null | 当該サンプルのピーク面積 |
+| `PeakAreaAboveBaseline` | float/null | ベースラインより上のピーク面積 |
+| `PeakMZ` | float/null | 当該サンプルで観測されたピーク m/z |
+| `PeakRT` | float/null | 当該サンプルで観測されたピークRT（min） |
+| `SignalToNoise` | float/null | `PeakShape[1]` 由来の S/N |
+| `IsMsms` | bool | MS2 raw spectrum ID-to-collision-energy map が非空か。MS/MS取得情報があることを示すが、スペクトル本体は含まない |
+| `IsGapFilled` | bool | `MasterPeakID < 0` か。`true` は実検出ではなくギャップフィルされた値 |
+| `PeakTags` | list[str] | 当該サンプルピークの `MasterPeakID` に付与されたMS-DIALタグ |
+
+#### 3.3–3.4 `.arf` からの PCA 行列と `run_pca()`（撤去済み）
+
+**`build_pca_matrix()` と `run_pca()` は撤去済みで、コード上に存在しない**（2026-11 の D 段。最後の
+利用者だった pipeline の PCA 工程とパーサ単体の CLI の `--pca` が消えた）。以前は `.arf` のスポット ×
+プロパティを列にした行列（`Spot_<MasterAlignmentID>_<property>`。欠損は列平均で補完）を作り、
+標準化して PCA を回していた。いまの PCA は統計エンジンの `dataset_pca`（§10.4。前処理後の log2 行列で、
+軸は生体の個体だけで決め QC は投影する）。
+
+#### 3.5 ARF要約
+
+`summarize_arf_data()` は次の辞書を返す。
+
+| キー | 意味 |
+|---|---|
+| `total_peaks` | スポット数。名前は peaks だがサンプル別行数ではない |
+| `rt_range` | スポット代表RTの `(min, max)` |
+| `mass_range` | スポット代表 m/z の `(min, max)` |
+| `height_average_mean` | `HeightAverage` の算術平均 |
+| `height_average_max` | `HeightAverage` の最大値 |
+| `ion_modes` | イオンモード別スポット数 |
+| `named_compounds` | `Name` が null でない件数。**空文字も数えるため、真の注釈済み件数とは限らない** |
+
+#### 3.6 MS-DIALタグ
+
+`metabolomix/msdial/tags.py` はARFと同じディレクトリの `*_tags.xml`（互換用に拡張子なしの `*_tags` も可）を読む。サンプル別ファイルは処理時刻の12桁接尾辞を除いた名前でARFの `FileName` と対応させ、XMLの `Peak/@Id` をARF行の `MasterPeakID` と結合する。アラインメント結果用ファイルは `Peak/@Id` を `MasterAlignmentID` と結合する。
+
+タグ条件は `any`、`all`、`none`、`not_all` を使用できる。`sample_peak` スコープでは条件に一致しないサンプル別行をスポット内から除外し、`alignment_spot` スコープではスポット全体を除外する。タグ未付与ピークは `any`/`all` には一致せず、`none`/`not_all` には一致する。
+
+サンプル名は完全一致を優先し、MS-DIAL処理時刻の12桁接尾辞を除く補助照合は一意に決まる場合だけ使用する。重複・曖昧照合はエラーとなる。タグファイル未対応サンプルは既定でエラーにし、`missing_sample_policy=exclude` で除外、`untagged` で明示的にタグなし扱いへ変更できる。サンプル数は固定せず、ARFから検出した件数を使用する。
+
+#### 3.7 Class ID
+
+`metabolomix/msdial/classes.py` は `.mddata` の `MsdialDataStorageBase.Key0 AnalysisFiles` を読み、各 `AnalysisFileBean` の `AnalysisFileId`、`AnalysisFileName`、`AnalysisFileClass` を抽出する。`.mddata` は明示パス、`.mdproject` 内の参照、またはARFと同じディレクトリから解決する。
+
+ARFサンプルとの結合は `FileID` を優先し、欠損時は正規化した `FileName` を使用する。両方が異なるサンプルへ解決された場合はエラーとする。`filter_arf_by_class_ids()` は選択Class ID以外のサンプル行を各スポットから除外する。
+
+#### 8.1 PCA の返り値と、生スポットの選択（旧 `.arf` パーサ）
+
+旧 `.arf` パーサ（撤去済み。いまの PCA は `dataset_pca`）の返り値はMarkdownテキスト1件（`str`）だった。総スポット数、適用フィルタ/手動除外の注記、Class ID分布、タグファイル対応数、タグ別件数、総サンプル別レコード数、平均サンプル数/スポット、PCA行列形状、PC1/PC2説明分散比、Loading上位、PCAスコアプロット用ブロック（群別サンプル数・描画指示・サンプル別座標の json 点列）を含む。`class_ids` を指定すると、選択したClass IDに属するサンプル行だけを残してPCAを実行する。複数Class IDはOR条件で、照合は大文字小文字を区別しない。`min_intensity`（スポット平均強度の下限）と `annotation_keyword`（脂質クラス/化合物名の部分一致）で生スポットを絞ってPCAをやり直せる（**フィルタ条件を変えたPCAは再計算でやり直す**）。手動除外（`dataset_exclude`）も行列構築前に反映される。正規化・QC・欠損補完を経た「前処理後」行列でのPCAは `dataset_preprocess` → `dataset_pca`。Class ID別サンプル数・役割別件数・タグの件数は `dataset_status`（`view="summary"`）が、タグごとの特徴 ID は `view="tags"` が返す。
+
+脂質選択では、`annotation_keyword` の名前は同一バッチのARF2を優先し、ARF2がない／未注釈ならARF名へ戻る。`spot_ids=[10, 20]` はMasterAlignmentIDの完全一致、`ontologies=["PC"]` は脂質クラスの完全一致（大小文字を区別しない）で、各引数はAND条件。空リスト・負のIDなど不正な指定はエラーにする。`annotation_keyword="PC"` は従来どおりLPCにも部分一致するため、PCクラスだけを選ぶには `ontologies` を使う。
+
+採用スポット数、注釈の出所、同一バッチARF2のパス、ARF/ARF2の名前不一致数とID先頭10件を表示する。選択用コピーには `arf_name`、`arf2_name`、`annotation_source`、`annotation_conflict` を保持する。元ARFの注釈・ピーク値は変更しない。
+
+これは生スポットの選択であり、選択を指定／変更した場合は古い前処理行列・差次解析結果を無効化する。後続の解析には `dataset_preprocess` が必要（`dataset_exclude` の除外も同じく、変えると前処理済み行列から先の結果が古くなる）。部分集合をTIC正規化すれば分母が変わり、部分集合でBH補正すれば検定対象数が変わる。全体の正規化・FDRを維持した候補確認には、全体で解析・エクスポートした結果を参照し、部分集合で再計算した値と混同しない。
+
+脂質選択を指定した場合、分散・検出率フィルタ後にPCAの必要次元数が足りなくても、サンプルが存在すれば生スポット選択は保存する。PCAをスキップした理由と行列形状を返し、PCA図・結果は生成しない。1脂質や定数の脂質もこの経路で後続の前処理へ渡せる。
+
+PCAスコアプロット用ブロック（旧パーサの返り値の末尾。**サンプル別の座標点列を同梱する**）。
+いまは `dataset_plot(kind="pca")` が同じ内容を作る（既定は PNG。`output="payload"` で座標点列）。
+散布図は**この点列からクライアント側（チャット）で描く**。`save_figure(kind="pca")` は PNG
+ファイルを reports/figures/ へ書き込む操作であり、ユーザーがファイルとしての図を明示的に
+求めたときだけ使う——対話の中で図を見せる目的では呼ばない。同じ点列は
+`ds.figures["pca"]` にも保持され、`save_figure(kind="pca")` はそこから描く。
+
+| キー/行 | 意味 |
+|---|---|
+| タイトル行 | 図タイトル |
+| `PC1 (x%) × PC2 (y%)` | PC1/PC2 説明分散率 |
+| 群別サンプル数 | 群ラベルがあれば `群=件数` を列挙、無ければ総サンプル数 |
+| 描画指示 | 上記座標から散布図を描く（group があれば群ごとに色分け・凡例付き）。PNG が必要なときのみ `save_figure(kind="pca")` |
+| json 点列 | `x_label` / `y_label`（説明分散率つき軸名）と `points`。各点は `pc1` / `pc2` / `sample`、群分け時は `group` |
+
+### 10. 前処理・QC（P2a）
+
+対話の前処理・QC・PCA は統計エンジン（`metabolomix/analysis/stats/`。MCP 非依存）が担い、`metabolomix/tools/stats_tools.py` の `dataset_preprocess` / `dataset_compare` / `dataset_pca` がそれを呼ぶ（行列の登録と前処理の記録の共有部品は `metabolomix/tools/_matrix_store.py`）。読み込んだデータセットは**そのままでは何も適用されない**——`dataset_preprocess` を呼ぶか、`dataset_compare` / `dataset_pca` が既定の設定で自分で回す。旧来の v1 の前処理・2 群比較（pipeline の工程が使っていたもの）は 2026-11 の D 段で消えた。
+
+#### 10.1 役割検出（sample/qc/blank）
+
+`preprocessing.detect_sample_roles()` が、ファイル名と Class ID を `_` 区切りでトークン化し、大小無視で `qc`/`blank` トークンと照合してサンプルを `sample`/`qc`/`blank` に分類する（`blank` を `qc` より優先評価）。`dataset_status` はこの分類結果と役割別件数を、前処理適用前の確認用にJSONで返す。
+
+#### 10.2 前処理（`dataset_preprocess`。統計エンジン）
+
+`dataset_preprocess` は前処理を回して、前処理済みの行列を `ds.stat_matrices[matrix_id]` に登録し、`matrix_id` を返す。
+**同じデータ・除外・群・設定は同じ `matrix_id`**。工程の順は
+**選択 → ドリフト補正 → 品質の足切り → 正規化 → log2 → 反復のまとめ**（個体ごとの行列）。0 以下・非有限は欠測で、
+pseudocount も clip も使わない。補完は PCA のためだけに `dataset_pca` が行う（行列そのものは補完しない）。
+
+| 引数 | 既定 | 意味 |
+|---|---|---|
+| `drift_mode` / `drift_span` | `auto` / 0.75 | QC の LOESS ドリフト補正。`auto` は条件が揃えば行う（`on` / `off`）。内部標準などで換算済みの値に QC がある場合は `auto` では**尋ねる**（`needs_input`。`core.md`）。答えを `drift_mode` に入れて呼び直す |
+| `blank_min_ratio` | 3.0 | 生体試料の平均がブランク平均のこの倍数未満の特徴を除く |
+| `detection_min_rate` / `detection_by` | 0.5 / `group` | gap-fill を除いた検出率の下限（`group` は群ごと、`all` は全体）。検出状態が無いデータでは評価できない旨が steps に出る |
+| `max_qc_rsd` / `max_d_ratio` | 0.30 / 0.5 | QC の RSD の上限・D-ratio の上限 |
+| `normalize` | `auto` | `auto`（換算済みなら何もしない）/ `none` / `tic` / `median` / `pqn` |
+| `collapse_replicates` | true | 同じ個体（`subject_id`）の反復注入を 1 個体にまとめる |
+| `injection_columns` | `[]` | 個体のまとめの鍵から外す試料の表の列（取得日・注入番号など、注入ごとに違う属性。技術反復が別の個体に割れるのを防ぐ） |
+| `group_levels` / `group_factors` | なし | 試料名（と試料の表の群）の因子トークンで群を解く。解いた群は行列の設定に記録される |
+
+足切り 4 つは `None` でその足切りを行わない。`dataset_exclude` の除外は自動で反映される（除外した試料・特徴は行列に入らない。
+検出率の分母からも外れる）。
+
+戻り値（要約だけ。全量は `ds.stat_matrices`）: `{status, matrix_id, n_units, n_qc, n_features_before, n_features,
+subject_source, groups: {群: 個体数}, quant, steps, warnings, record, next}`。
+
+- `steps[]` は工程ごとに `{step, status: applied|skipped, reason?, ...}`。足切りの `filter` は**足切りごとの内訳**
+  （`filters.<blank_ratio|detection|qc_rsd|d_ratio>` それぞれの `status` と落とした数）と全体の `dropped`・`n_features_in`。
+  足切りごとの落とした数は独立のマスクで**重なり得る**ので足し算しない（全体は `dropped`）。`collapse` は
+  `subject_source`（`subject_id` / `injection` / `mixed`）・`n_injections`・`n_units`・`collapsed_units`。
+- `groups` の群が 1 つだけなら警告 `single_group`（`group_levels` / `group_factors` の綴りか試料の表の群を確かめる）。
+- `quant` は定量で作ったデータセット（内部標準で換算済み）のときだけ `{normalized, method, unit}`、それ以外は null。
+- `record` は `reports/stats/` への記録 1 件（`{written: true, record_id, path}`）。書けないときは `{written: false, reason}`
+  で、前処理自体は成功している。記録は追記専用（`lipidmix.stats-record.v1`: `step` は `preprocess` / `compare` / `pca`、
+  `inputs`・`parent_ids`・`settings`・`summary`）で、比較・PCA の記録は前処理の記録を `parent_ids` に持つ。
+- **古くなる**: `dataset_exclude`・試料の表の更新（`dataset_set_sample_metadata`。`group` だけの変更も）・データの
+  入れ替えで、登録した行列は古くなり（`matrix_id` を渡すと `missing_state`、`dataset_preprocess` からやり直す）、
+  その行列から出した比較・PCA の結果も現在のものとして通らない。
+
+> **役割別の行の扱い（重要）**: 前処理後行列の個体は**生体試料**で、QC は行列に残るが軸の計算には使わない。
+> **ブランクは比較にも PCA にも入らない**（ブランクの足切り `blank_min_ratio` の参照にだけ使う）。ブランクは生体試料と
+> 桁違いに総強度が低く、残すと PCA の PC1 を支配して群分離の解釈が壊れるため。一方 QC は `dataset_pca` が同じ軸へ投影し、
+> スコアプロットに白抜きで含まれる（群ラベルは `QC`）——QC クラスタの締まり具合を見るのは品質確認の定番手段だからである。
+> 2 群比較は QC を比較群から外す（§11.1）。
+
+#### 10.3 caveatの扱い
+
+統計エンジンの前処理では、スキップした工程と理由は `steps[]`（`status: skipped` と `reason`）に、注意は `warnings[]`（`{code, message, ...}`）に残る（QC・ブランク・注入順が欠けて行えなかった工程も、無言で飛ばさずここに出る）。LLM はこれらを解釈結果・報告書の注意点として引用する。
+
+**失敗した QC 注入**（総量が QC の中央値の 0.2 倍未満）は最初の概観の品質の段（§11.9）が名指しする。失敗注入を残したまま `max_qc_rsd` を掛けると QC の RSD が全特徴で跳ね上がり、ほぼ全特徴が除去される（実測: kidney aging NEG で 1345 → 51）。**「閾値が厳しすぎる」ように見える現象の真因は QC 側にあることが多い**ので、`dataset_exclude` で除外してから前処理し直す。
+
+なお `load_dataset` の複数バッチ告知は、解析対象である **`.arf`/`.arf2` のバッチ**にのみ基づく（`.mddata`/`.mdproject`/`.msp2`/`.pai2` 等も `AlignmentResult` 形式のタイムスタンプを持つため、拡張子で限定しないと告知バッチが実際に解析する `.arf` とズレる）。
+
+#### 10.4 `dataset_pca`
+
+統計エンジンの PCA（`stats-pca.v1`）。`matrix_id`（`dataset_preprocess` の行列。省略時は既定の前処理）の log2 行列で、**軸は生体の個体だけで決め、QC は同じ軸へ投影する**（QC は軸の計算に使わない）。欠測は PCA のためだけに補う（`impute`）。`group_levels` / `group_factors` は色分けの表示と記録にだけ使い、スコア・寄与率は群の指定で変わらない。戻り値は `{status, result_id, matrix_id, scaling, log2: true, imputation, n_fit, n_qc_projected, explained_variance_ratio, groups: {群: 個体数}, record, loadings_note}` の要約で、スコア・ローディングの全量は `result_id`（`ds.last_pca`）に保持する。図は `dataset_plot(kind="pca" / "loadings")`（QC は白抜き、ローディングは軸の計算で値が変わった特徴だけ）。`matrix_id` を渡して、その行列が古い（除外・試料の表の変更）・無いときは `missing_state`（`dataset_preprocess` を案内）。`matrix_id` を省いて既定の前処理が利用者への確認を要する（QC のある換算済みデータ）ときは `needs_input`（`core.md`。`dataset_preprocess(drift_mode=...)` で行列を作り、その `matrix_id` を渡す）。既定の前処理で行列を作ったときは、その行列を登録して前処理の記録も書く（エラーのときも `details.matrix_id` に残る）。結果（`stat_pca`）は、除外・試料の表の**どんな**更新（`group` だけの変更も）でも古くなる（`group_levels` / `group_factors` の色分けが焼き込まれているため）。
+
+#### 10.5 手動サンプル/ピーク除外（`dataset_exclude`）
+
+PCAスコアプロットで明らかに外れた1サンプルや、特定のピーク（スポット）を**名前/IDで手動除外**するためのツール。`metabolomix/analysis/dataset_exclusions.py`（MCP非依存の純ロジック層）と `metabolomix/tools/sample_tools.py` の `dataset_exclude` が担う。除外は**可逆・非破壊**で、読み込んだ入力（定量行列・特徴 ID・試料名）自体は変更しない。
+
+`dataset_exclude(samples=None, features=None, mode="add", reason=None)` は結果の件数を返す。
+
+- **`samples`**: 除外するサンプル名（`dataset_status(view="samples")` の name、完全一致）のリスト。
+- **`features`**: 除外する特徴の ID（`dataset_feature_search` の feature_id。`MasterAlignmentID` に当たる）のリスト。
+- **`mode`**: `add`（既定・追加。`reason` が要る）/ `remove`（再包含）/ `clear`（全消去）。現状の表示は `dataset_status(view="samples")` の `excluded` 列。
+- 現データに存在しない試料名・特徴 ID が 1 つでもあれば全体を拒み、何も変更しない（タイプミスで黙って一部だけ除外されない）。全試料の除外も拒む。
+- 実際に除外が変わったときだけ、登録した行列（`stat_matrices`）を空にし、比較・PCA の結果を古いとする（`dataset_preprocess` からやり直す）。同じ引数の再実行は何も動かさない（冪等）。
+
+除外集合は DatasetState の `excluded_samples`（試料名 -> 理由）と `excluded_features`（特徴 ID -> 理由）に持つ。変えると `metadata_revision` が進む。**`dataset_preprocess`**（→ `dataset_pca` / `dataset_compare`）・`dataset_plot`・`dataset_feature_search` の強度順がいずれも自動的に除外を反映する。除外が有効なとき、前処理の出力に「ユーザ手動除外」の注記が付く。`dataset_status(view="samples")` は各試料に `excluded` を付して現在の除外状態を示す。
+
+運用フロー: `dataset_preprocess` → `dataset_pca`（全体PCAで外れ俯瞰）→ `dataset_exclude(samples=[...], reason=...)` → `dataset_preprocess` ＋ `dataset_pca` で除外後PCAを確認 → `dataset_compare`。戻したいときは `mode="remove"` / `mode="clear"`。
+
+### 11. 差次的解析（P2b）
+
+対話の比較は統計エンジンの `compare`（`metabolomix/analysis/stats/compare.py`。MCP 非依存）で、`metabolomix/tools/stats_tools.py` の `dataset_compare` が呼ぶ。図は `dataset_plot(kind="volcano")` / `metabolomix/tools/reports.py` の `save_figure()`（`kind="volcano"`）が、書き出しは `dataset_export_differential` / `dataset_export_evidence_bundle` が、`dataset_compare` の結果（対比を 1 つ選んだ 2 群の形。`stats_results.as_two_group`）から作る。v1 の 2 群比較（Welch の t 検定。pipeline の差次的解析工程と、`load_dataset` が pipeline の run から戻した比較が使っていた）は 2026-11 の D 段で消えた（`metabolomix/analysis/differential.py` に残るのは volcano の点列 `volcano_data()` だけ）。
+
+#### 11.1 群ラベルの由来
+
+群ラベルは試料の情報の `group`（`dataset_status(view="samples")`。ファイル名由来の factor トークン / Class ID 機構、`metabolomix/msdial/classes.py` の `assign_sample_groups`）から取得する。バッチは試料の情報の `batch`（ファイル名中の8桁日付）。比較（`dataset_compare`）は行列（`dataset_preprocess` の `matrix_id`、省略時は既定の前処理）を消費する。
+
+試料の `group` は常に**完全な Class ID**（例 `24M_GF_F`）である。一方、旧 ARF 経路の差次的解析の `group_a` / `group_b` は**因子トークンによるプール指定**を受け付けた。いまの `dataset_compare` は群名（`reference_group` / `test_group`）を渡し、同じトークン文法で試料名を引くのは `dataset_status(view="samples", query=...)`。**以下は旧 ARF 経路（撤去済み）の例**で、いまトークンを受けるのは `dataset_status(view="samples", query=...)` だけ。`dataset_compare` は群名を受け、下の注意（QC/ブランクは比較群に入らない・一致ゼロや両群が同じ Class ID は拒む）の意味は保たれる。旧経路の例（`sample_factors.expand_sample_specs`。トークンは Class ID とサンプル名の両方から解決される）:
+
+- `group_a="24M", group_b="9w"` → `24M_*` を全てプールし `9w_*` と比較（多因子デザインで主効果を見る正しい経路）
+- `group_a="24M_GF"` のように複数トークンを `_` で繋ぐと AND 絞り込み（`24M` かつ `GF`）
+- 完全な Class ID を渡せば従来どおりその1水準のみ
+- `group_a="ILG_6h", group_b="ILG_0h"` のように、**Class ID が同一でサンプル名の因子（時点等）だけが違う2群**も切り出せる
+- 応答の `resolved_samples` が**群の定義そのもの**（実際に比較したサンプル名）、`n_a` / `n_b` が実 n。プールに2件以上のサンプルが入れば「プール群として解決」caveat を付す
+- 応答の `resolved_class_ids` は**選択されたサンプルが持つ Class ID**であって群の定義ではない。両群で同じ Class ID になり得る（上の `ILG_6h` vs `ILG_0h`）ため、縮退比較と誤読しないこと。その場合は「Class ID では区別されず」caveat が付く
+
+**一致ゼロ・両群が同じ Class ID を掴む指定は `status="error"` で落とす**（成功扱いで n=0 を返すと「有意0件＝群間差なし」と誤読されるため）。`24M` と `GF` は `24M_GF_*` を共有するので排他ではなくエラーになる。なお交互作用検定は依然として提供しない。
+
+**QC・ブランクは比較群に入らない**。試料の `role` が `qc` / `blank` の試料は群ラベルを `None` にしてから展開するため、どちらのプールにも寄らない。QC の Class ID が指定トークンを含む場合（例 `QC_24M` と `group_a="24M"`）に黙って群平均へ混ざるのを防ぐための明示的な封鎖であり、除外内訳は caveat「比較対象から除外（生体試料でないため）」に出る。`n_a` / `n_b` は除外後の実 n。
+
+#### 11.1.1 上位ヒットの命名（ARF/ARF2 橋渡し）
+
+`summary.top` の各行には `spot_id` / `name` / `name_source` が付く。`name_source="arf"` は ARF スポットの `Name`、`"arf2"` は ARF が `Unknown` のときに **同一アラインメントの兄弟 `.arf2`** から補った注釈（`ontology` も併記）。
+
+**ARF と ARF2 は同じ `MasterAlignmentID` を指しながら代表 `Name` が食い違うことがある。** 実例（kidney aging, NEG）: Spot 474 は ARF 側 `Unknown`、ARF2 側 `SL 33:0;O|SL 17:0;O/16:0`（Ontology=`SL`）。ARF だけを見ると最大効果量の特徴が無名のまま残り、生物学的解釈に到達できない。
+
+補完元はGUIの `AlignmentResult_<timestamp>` またはConsoleの `AlignResult-<digits>` の語幹が完全一致する隣接 `.arf2` に限定する（`MasterAlignmentID` はアラインメント実行ごとに振り直されるため、別バッチの `.arf2` を引くと ID 対応が黙って崩れる）。兄弟が無ければ補完せず `name=null` のままにする。
+
+#### 11.2 統計（`dataset_compare`。統計エンジン）
+
+`dataset_compare` は 2 群・多群（3 群以上。先頭が基準で各群 − 基準の対比と omnibus F）・2 因子（`comparisons` の `at`・交互作用）を
+同じ道具で比べる。群の指定は **reference_group+test_group / groups / comparisons のちょうど 1 つ**。既定の検定は
+**moderated t**（経験ベイズで分散を縮める線形モデル。`welch` / `student` / `mannwhitney` は 1 因子・共変量なし・ブロックなしだけ）。
+`covariates`（試料の表の列名。値がすべて数値なら numeric、さもなくば categorical）・`block`（`"subject_id"` だけ）を受ける。
+`bh_population="reported"` はここでは使えない（報告した特徴の一覧を渡せない。`dataset_analysis_run` の spec v2 だけ）。
+
+**判定（`verdict`）は 3 値**で、規則は機械的（`q_threshold` 既定 0.05、`equivalence_fc` 既定 1.2、CI は 95%）:
+
+| 値 | 条件 |
+|---|---|
+| `changed` | 検定でき、BH の `q ≤ q_threshold` |
+| `unchanged` | `q` は閾値を超え、**95% CI が同等の範囲 `±log2(equivalence_fc)` に完全に収まる** |
+| `inconclusive` | それ以外（検定できない・検出の割合が足りず量を判定できない・`q` が出ない・CI が出ない・CI が同等の範囲を超える）。`verdict_reason` に `not_tested` / `quantity_not_judgeable` / `outside_bh_population` / `no_ci` / `neither` |
+
+**「有意でない」は「変わっていない」ではない。** `q` が大きいだけでは `unchanged` にならず、「差は小さい」と言える CI があるときだけ
+`unchanged`。n が小さい・ばらつきが大きいと大半が `inconclusive` に入る——これは「差がある・ない」のどちらでもなく、
+**データが足りない**という意味。`log2fc_threshold`（既定 1.0）は判定に使わない（`large_changes` の数え方・図の色分け・
+書き出しの `significant` 列だけ）。
+
+戻り値（要約だけ。全行は `result_id` でセッションに保持し、直近の結果＝図・書き出しの既定になる）:
+`{status, result_id, matrix_id, rule_hash, test, effect_size_definition: {name}, ci_level, verdict_rule: {q_threshold,
+equivalence_fc, equivalence_log2}, bh_population: {name, n_by_contrast, q_interpretation}, subject_source, group_n, prior,
+contrasts, omnibus, confounding, warnings, top, record, next}`。
+
+- `contrasts[]`: `{contrast_id, reference, test, n_tested, n_not_tested, verdicts: {changed, unchanged, inconclusive},
+  large_changes, presence: {available, n_q_below}}`。`presence` は検出の有無そのものの検定（gap-fill を除く検出状態がある
+  ときだけ `available`）。`omnibus` は 3 群以上のときの F 検定の `{n_tested, n_q_below}`（無ければ null）。
+- `top`: 対比ごとに `changed` の上位（q の小さい順。`top_n` 既定 10・上限 50）の TSV
+  （`contrast_id feature_id name log2fc ci_low ci_high q verdict`）。無ければ空文字。**全行は `top` ではなく
+  `result_id` から書き出しで取る**。
+- `confounding`: `{batch_status, batch_table, warnings}`。完全交絡（群が単一バッチに偏り、群とバッチを分離できない）は
+  `allow_confounded=true` の明示なしには `STATISTIC_CONFOUNDED` で止める。バッチ情報が無ければ「評価不可」で、
+  「交絡あり」ではない。部分的な交絡は警告に出る。
+- `bh_population.q_interpretation`: `discovery_fdr`（`matrix` / `annotated`）か `reproduction_only`（`reported`）。
+- `effect_size`（`log2_mean_difference` 既定 / `arithmetic_mean_ratio`）の定義は `effect_size_definition`（`name` と、
+  全量の記録の `description`）。`log2fc` は**正なら test が高い**。`mean_*` は個体ごとの前処理後の線形値の算術平均。
+- エラー: 群の指定が合わない・`top_n` / `log2fc_threshold` が範囲外・`bh_population=reported` は `DATASET_BAD_REQUEST`。
+  `matrix_id` が古い・無いは `missing_state`（`stat_matrix`）。`matrix_id` と `group_levels` / `group_factors` の併用は
+  `DATASET_BAD_REQUEST`（群は行列が決めている）。`EXPLORATORY_ONLY_DATASET`（途中で止まった実行のデータセット）。
+  既定の前処理が確認を要するときは `needs_input`（`core.md`）。
+  既定の前処理で行列を作ったあとにエラーになったとき、`details.matrix_id` にその行列の ID が残る（呼び直しに使える）。
+- `record`: `{written, record_id, path}`（比較の記録。親は行列の前処理の記録）。既定の前処理で行列を作ったときは
+  `preprocess_record` に前処理の記録も付く。
+
+#### 11.2.1 `dataset_plot(kind="volcano")` の返り値（`lipidmix.volcano.v1`）
+
+`dataset_compare`（2群）の後に呼ぶ read-only ツール。**既定（`output="image"`）では
+サーバ側で描いた PNG と件数入りの1行キャプションを返す**ので、以下の表は
+`output="payload"`（または env `LIPIDMIX_PLOT_OUTPUT=payload`）でクライアントが自分で
+描くときの契約。ファイルとして PNG を残したいときだけ `save_figure(kind="volcano")` を呼ぶ。
+
+画像モードでは間引きをせず全特徴を描く。**有意件数はキャプションの
+`up=` / `down=` / `ns=` を読むこと**（図の点を数えない）。
+
+| フィールド | 意味 |
+|------------|------|
+| `points[].feature` | 特徴量名（`differential` の `feature`） |
+| `points[].log2fc` | log2 fold change（x軸）。**正=群Bで高い（上昇）** |
+| `points[].neg_log10_p` | `-log10(p)`（y軸）。`q` ではなく **`p`**。p が 0.0（アンダーフロー。検定はできている）は最小の正の float で `-log10` を取る（約 307.65。検定不能の扱いにしない。結果の p は 0 のまま） |
+| `points[].sig` | `up` / `down` / `ns`。`dataset_compare` の結果は、書き出しの `significant` と同じ規則（§11.4。判定が `changed` で、q と \|log2fc\| が閾値を満たす）の行だけが符号で `up` / `down`、ほかは `ns`——判定できない（`inconclusive`）行は q が小さくても `ns` |
+| `thresholds` | 判定に使った `q` と `log2fc` のしきい値 |
+| `comparison` | `group_a` / `group_b` / `n_a` / `n_b`（プール解決後の実n） |
+| `render_hints.guides.x` | 縦破線の位置（`±log2fc_threshold`） |
+| `render_hints.guides.y` | 横破線の位置（`-log10(q_threshold)`）。y軸は `-log10(p)` なので**目安**であり有意判定と厳密には一致しない |
+| `selection.total` | 元の点数（＝検定対象の特徴量数） |
+| `selection.plotted` | 実際に返した点数 |
+| `selection.significant_total` / `significant_plotted` | 有意点の総数と返した数。**常に一致する**（有意点は間引かない） |
+| `selection.ns_total` / `ns_plotted` | `ns` 点の総数と返した数。間引きが起きるとここが乖離する |
+| `selection.max_points` | 要求した上限点数（既定800。`up`/`down` は上限に関わらず全件残る） |
+| `selection.dropped_nonfinite` | `log2fc` か `p` が有限でなく描画対象外にした件数。**「有意でない」という意味ではない**（分散0・欠損・片群のみ検出などで検定不能だったもの） |
+
+`selection.plotted < selection.total` のとき、図は全点ではない。有意件数の判断は必ず
+`selection.significant_total` を見ること（画面や `points` の点を数えてはいけない）。
+間引きは `ns` 点に対する等間隔サンプリングで決定的（同じ入力なら同じ点集合）。
+
+#### 11.3 必須caveat
+
+`dataset_compare` は次を無言で握りつぶさず、戻り値に前景化する:
+
+1. **交絡（群⟂バッチ）**: `confounding`（`batch_status` / `batch_table` / `warnings`。§11.2）。完全交絡（群が単一バッチに偏り、処理効果と測定バッチを分離できない）は `allow_confounded=true` の明示なしには `STATISTIC_CONFOUNDED` で止める。判定は実際に比較した群に対して行う（QC・ブランクは比較群に入らない）。バッチ情報が無ければ「評価不可」で、「交絡なし」ではない。
+2. **小 n・検定不能**: `warnings` と、判定 `inconclusive`（理由は `verdict_reason`）。**「有意でない」は「変わっていない」ではない**——`inconclusive` を `unchanged` と読まない。
+3. **正規化の状態**: 前処理の `steps[]`（§10.2・§10.3）。正規化を行わなかった行列の log2FC は測定量の差を含みうる。
+
+LLMはこれらを解釈結果・報告書の注意点として必ず引用すること。統計値は「事実」だが、交絡・小nの下での因果的解釈は保留し、人間の判断に委ねる（既存の分業に整合）。
+
+#### 11.4 `dataset_export_differential` — 差次的結果のエクスポート契約
+
+`dataset_compare` の後に呼ぶ（`result_id` は省略すると直近の結果。対比が複数の結果は `contrast_id` が要る。`result_id#contrast_id` の形も受ける）。同一アラインメントの
+兄弟 `.arf2` から InChIKey・Ontology・m/z・RT を `MasterAlignmentID` で結合し、
+1 ファイルに書き出す。**兄弟 `.arf2` が無ければ書き出さない**（InChIKey 空欄の行を
+出すと、下流で「パスウェイが無い化合物」と区別が付かなくなるため）。InChIKey 付き行が 0 件なら、
+下流が拒否する本文 0 行のファイルを成功扱いで残さない。
+
+`#` 始まりのメタ行に来歴（`contract_version` / `group_a` / `group_b` /
+`log2fc_sign` / 閾値 / `n_features_total` / `n_with_inchikey` / `n_unannotated`）を置き、
+続けて TSV 本体を置く。列は
+`spot_id / name / name_source / ontology / inchikey / inchikey_source / msi_level /
+mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`（`CONTRACT_VERSION` は据え置き）。
+
+統計エンジンの結果（`dataset_compare`）は、`msi_note` の後にメタ行を足す（キーは既存のメタ行と重ならない。
+受け手は未知のキーを許す）:
+
+| メタ行 | 意味 |
+|---|---|
+| `# test = … effect_size_definition = … ci_level = …` | 実際の検定名（`moderated_t` など）・効果量の定義の名前・CI の水準 |
+| `# verdict_q_threshold = … equivalence_fc = … bh_population = … bh_n = … q_interpretation = …` | 判定の規則と BH の母集団（`bh_n` は選んだ対比の大きさ。`q_interpretation` は `discovery_fdr` / `reproduction_only`） |
+| `# unit = … n_units_a = … n_units_b = …` | 比較の単位。`subject`（全試料が被験者 ID を持ち技術反復を 1 個体にまとめた）・`injection`（被験者 ID が無い・まとめを切った。単位は注入）・`mixed`（混在）。`n_units_*` は比較に入った単位の数（`n_a` / `n_b` は注入の数のまま） |
+| `# mean_definition = …` | `mean_a` / `mean_b` は「個体ごとの前処理後の線形値の算術平均」 |
+| `# matrix_id = … rule_hash = … contrast_id = …` | どの行列・どの規則・どの対比を書いたか（2 群比較の結果の対比は 1 つ） |
+| `# significant_rule = q<=q_threshold & \|log2fc\|>=log2fc_threshold & verdict=changed` | 15 列目 `significant` の規則（下記） |
+
+`p_value` / `q_value` はエンジンの p と BH の q（`q_value` の読みは `q_interpretation`）、`log2fc` は正なら `group_b`（比較）が高い。**エンジンの結果の `significant` は、`q ≤ q_threshold` かつ `|log2fc| ≥ log2fc_threshold`（`dataset_compare` の `log2fc_threshold`）に加えて、判定 `verdict` が `changed` の行だけ `true`**（`significant_rule`）。検出の割合が足りず量を判定できない行（`inconclusive` / `quantity_not_judgeable`）や BH の母集団の外の行は、q が小さく |log2fc| が大きくても `false`——gap-fill の値で動いた量を主張にしない。`true` の行の数は、その対比の `dataset_compare` の `large_changes` と同じ（InChIKey の無い行は書き出さないので、書き出しではその分少ないことがある）。同じ印を根拠バンドルの `features.tsv` の `significant`・volcano の `up` / `down`（§11.2.1）が使う。**`verdict` の 3 値そのものは TSV の列には出ない**（契約の列は据え置き）ので、判定は `dataset_compare` の要約・`top` か、根拠バンドル（`reanalysis.md` §10）で読む。
+
+**交絡を越えた比較の印**: `allow_confounded=true` で完全交絡（`confounding.batch_status = complete`）を越えて走った
+エンジンの比較は、`source_verification` の後に `# unadjusted_confounded = true` と
+`# unadjusted_confounded_note = …`（日本語の説明）を書き、volcano の `caveats` と図の下端（ASCII の但し書き）、根拠バンドルの
+`comparison.unadjusted_confounded`（`reanalysis.md` §10）にも同じ印が載る。部分的な交絡・交絡の無い比較には何も足さない。
+
+**有意な行だけでなく、InChIKey が付いた全行を書き出す。** 下流の濃縮解析は
+「検出された化合物」を背景に取る必要があり、有意な行だけでは背景が作れない。
+
+`msi_level` は `.arf2` 由来の注釈確度であり、**MS/MS の有無ではない**
+（`.arf2` は MS/MS 取得フラグを持たない）。`dataset_feature_search` と同じ
+保守的なクラス上限を使う。
+
+#### 11.4.9 データセットの上の同じ図（`dataset_plot`。B-2b Task 7）
+
+`dataset_plot(kind="group_intensity" | "species" | "species_pca")` が、下の §11.5〜11.7 の図
+と**同じ payload 契約**
+（`lipidmix.group_intensity.v1` `lipidmix.species_intensity.v1`、分子種 PCA は新設の `lipidmix.species_pca.v1`）を
+`DatasetState`（`load_dataset` で開いたハンドル）から作る。引数と除外の意味は旧ツールのまま
+（`items` は特徴 ID も受ける。`value` は `"share"` / `"intensity"` で、`"intensity"` の payload の `value` は
+旧来の `"height"`。`ncols` は無い）。違いは入力の取り方だけ: 値は `feature_matrix`、gap-filled の印は
+`detected_mask`、群と役割は試料の対応表、MS/MS の裏付けは `.arf` のセルの MS/MS の有無（`.arf2` の
+`has_msms` ではない）と `.arf2` の Name の接頭辞、人の判断は `load_dataset` が読んだ `.arf2` のキュレーション、
+除外は `dataset_exclude`（試料は描かず、特徴はクラスにも名前にも入れない）。`species_pca` の payload は
+`points`（`fitted` が False の点は投影だけ）・`explained_variance_ratio`・`pc1_r_top` / `pc1_r_bottom`・`result_id`
+などで、ローディングの全行は `ds.results[result_id]` に持つ。`ds.figures[kind]` に置かれ、
+`save_figure(kind=...)` が dpi 300 の PNG と SVG を書く（試料の情報の更新後は作り直しを求められる）。
+
+#### 11.5 `dataset_plot(kind="group_intensity")` の返り値（`lipidmix.group_intensity.v1`）
+
+選んだクラス・分子種が、指定した試料群のそれぞれで**見つかるか・どれくらいあるか**を示す
+解析フォルダで読んだデータセットが対象（読み込み済み `.arf` と、同じアラインメントの兄弟 `.arf2` が要る）。
+**既定（`output="image"`）はサーバ側で描いた PNG と 1 行のキャプション**。キャプションには
+項目ごとのスポット数（MS/MS の件数が分かるときは括弧内にその数。0 も出す）、群ごとの試料数、除外の 5 種類の
+件数（手動除外・内部標準・判断・自動判定・標準液）、N.D. の項目名、`caveats` が入る。以下の表は `output="payload"`（または env
+`LIPIDMIX_PLOT_OUTPUT=payload`）の契約。ファイルとして PNG が要るときは
+`save_figure(kind="group_intensity")`（`reports/figures/<analysis_id>_group_intensity.png` を dpi 300 で、
+同名の `.svg` と一緒に書く。直前の `dataset_plot(kind="group_intensity")` が無ければ `missing_state`）。
+
+**エラーと状態**: 入力の誤り（群が 1 試料にも当たらない・`output` の値が不正・`detection_limit` が 0 以下や非有限・`ncols` が 1 未満など）は例外ではなく `{"status": "error", "message": ...}` で返す。呼び出しが（missing_state を含め）失敗したときは、前回の図を `save_figure(kind="group_intensity")` が保存しないようセッションの図を破棄する。画像モードでは描画に成功してから図を保持する。群の指定が `blank` / `qc` の役割で全滅したときは、`blank` / `qc` を書くよう案内を添える。
+
+**検定はしない**。1 パネル = 1 項目、1 点 = 1 試料、群ごとに log10 空間の平均 ± SD を添えるだけで、
+群間の有意差は述べない（検定は `dataset_compare`。小 n の p 値が図に独り歩きするのを避ける）。
+
+| フィールド | 意味 |
+|------------|------|
+| `plot_schema` | `lipidmix.group_intensity.v1` |
+| `value` | 点の値の定義: `sum of PeakHeight (log10 on the plot)`。1 点 = その試料での、項目に当たったスポットの **PeakHeight の合計**（`.arf` の試料別行。gap-fill の値も含める） |
+| `detection_limit` | 検出下限（図の破線）。無ければ null |
+| `detection_limit_source` | `argument`（`detection_limit` 引数）/ `param_file`（`.arf2` と同じフォルダの param ファイルの `Minimum peak height`）/ null（下限なし）。引数が優先 |
+| `groups[]` | `label`（指定した群の文字列）と `samples`（解決した試料名）。指定順。`dataset_exclude` した試料は含まない |
+| `low_reliability_samples` | 白抜きで描き、平均 ± SD から外した試料（抽出量が少なかった等）。解決後の試料名 |
+| `items[].item` | 指定した項目の文字列（指定順。1〜30 件） |
+| `items[].parts[]` | `+` で分けた各部分。`part`・`kind`（`class` = `.arf2` の Ontology に完全一致、`name` = 分子種名に完全一致、`none` = 当たらず。名前が当たっても全スポットが除外で消えたときも `none`。そのスポットは `excluded` に載る）・`n_spots` |
+| `items[].spots[]` | 当たったスポット `spot_id` / `name` / `ontology`（キュレーションの `assign` は付け替え後の値） |
+| `items[].n_spots` | 当たったスポット数（アダクト違い・重複スポットは合計に入る） |
+| `items[].n_spots_msms` | 当たったスポットのうち MS/MS の裏付けがある数。**スポットが 1 つ以上あって 0 のパネルだけ図で灰色になり「MS1-only (unconfirmed)」と書かれる**（MS1 の一致だけで、MS/MS では確かめていない同定。スポットが 0 の N.D. パネルは灰色にしない） |
+| `items[].detected` | どこかの試料で値が 0 より大きいか |
+| `items[].groups[].samples[]` | `sample` / `value`（PeakHeight 合計） / `gap_filled_fraction`（合計のうち gap-fill の値の割合。値 0 なら null） / `low_reliability` |
+| `items[].groups[].log10_mean` / `log10_sd` / `n_in_stats` | log10 空間の平均・SD と、その計算に使った試料数（値 > 0 かつ低信頼でない試料）。n = 1 なら SD は null、0 なら平均も null |
+| `excluded` | 除いたスポットの `#<spot_id> <name>`。理由ごとに 5 種類（`manual` / `internal_standard` / `curation` / `auto_likely_wrong` / `standard_only`。下記） |
+| `caveats` | 試料が複数の群に当たった（群の組ごとに 1 件。重なった試料数と最大 3 試料名）、同じ群を重複指定した、孤立した判断記録がある、レビューが無く自動判定を除けなかった、等 |
+
+**N.D. には 2 種類ある**。(a) 項目に当たるスポットが無い（`items[].n_spots` = 0。名前が当たらなければ `parts[].kind` は `none`。
+クラスに当たっても除外で全スポットが消えた場合は `class` のまま 0 になる）。(b) スポットは当たったが、描いた試料のどれでも値が 0（`n_spots` > 0 で
+`detected` が false）。どちらも N.D. パネルとして残し、エラーにしない（「どの群にも無い」ことも結果）。
+(b) は「その分子種が存在しない」ではなく、**この群の試料では検出されなかった**という意味。
+
+**点の読み方**: 縦軸は log10(PeakHeight) で**全パネル共通**（パネルごとに拡大すると、強度 10 前後の
+ノイズが信号に見えて「見つかるか」の判断を誤らせる）。値 0 の点は軸の底に ▽ で置く。
+`gap_filled_fraction` が **0.5 を超える点は ◆**（合計の過半が gap-fill、つまり検出ピークではなく
+後から埋めた値）。◆ は検出の証拠として弱いので、群の「見つかった」を読むときに割り引く。
+
+**`excluded` の 5 種類**（キーと条件）:
+
+| キー | 除くもの |
+|------|----------|
+| `manual` | `dataset_exclude` でスポットとして除いたもの（セッションの `excluded_spots`）。クラスにも名前指定の部分にも効く |
+| `internal_standard` | 名前に `(d<数字>)`（`PC 33:1(d7)` 等）を持つ標識内部標準。**クラスとして当たった分だけ**除く。名前で直接指定した部分は描く |
+| `curation` | `apply_curation=True`（既定）のとき、人の判断が `wrong` / `redundant` のスポット（`clear` 済みは無効）。`assign` は記録した名前・クラスで扱う。`suspect` は描く。名前指定の部分にも効く |
+| `auto_likely_wrong` | `exclude_auto_likely_wrong=True` のとき、このアラインメント（`.arf2` の sha256 一致）の最新 `curation_review` で `likely_wrong` のスポット。名前指定の部分にも効く。レビューが無ければ除かず `caveats` に出す |
+| `standard_only` | `standard_samples` を指定したとき、その試料での最大高さが、描く群の試料での最大高さの 10 倍以上のスポット（クラスとして当たった分だけ）。システムチェック標準液の奇数鎖標準物質が試料のクラス合計に混ざるのを防ぐ。判定には `dataset_exclude` 済みの試料の行も使う |
+
+除外は**解析の前提を変える**ので、図を報告に載せるときは `excluded` の件数と理由を併記すること。
+
+#### 11.6 `dataset_plot(kind="species")` の返り値（`lipidmix.species_intensity.v1`）
+
+選んだクラスを**分子種（アラインメントスポット）に展開**し、1 分子種 1 パネルで、群ごとの試料別の値
+（割合 % または PeakHeight）を並べる 解析フォルダで読んだデータセットが対象（読み込み済み `.arf` と兄弟 `.arf2` が要る）。
+`dataset_plot(kind="group_intensity")`（クラス合計）と違い、**スポットごとに**描く。同じ名前でも付加イオンが違えば別パネル。
+**既定（`output="image"`）はサーバ側で描いた PNG と 1 行のキャプション**（パネル数・群の試料数・除外の 6 種類の件数・
+分母が 0 で描かなかった試料・`caveats`）。以下は `output="payload"`（または env `LIPIDMIX_PLOT_OUTPUT=payload`）の契約。
+ファイルは `save_figure(kind="species")`（`reports/figures/<analysis_id>_species.png` を dpi 300 で、同名の `.svg` と
+一緒に書く）。入力の誤り・パネルが 40 枚を超える・判断の記録ファイルが読めないときは
+`{"status": "error", "message": ...}`。失敗した呼び出しの後は前回の図を破棄する。**検定はしない**。
+
+| フィールド | 意味 |
+|------------|------|
+| `plot_schema` | `lipidmix.species_intensity.v1` |
+| `value` | `share`（試料ごとに 高さ ÷ 分母の合計 × 100）または `height`（PeakHeight） |
+| `stat` | 平均と SD の定義: `mean ± SD of share (%)` / `mean ± SD of log10(peak height)`。`groups[].mean` / `sd` はこれに従う |
+| `share_basis` | `value="share"` のときだけ。`items`（指定した分母の項目。省略時は null で、描く項目が分母）と `spot_ids`（分母にしたスポット）。`height` では null |
+| `groups[]` | `label` と `samples`（解決した試料名。指定順。`dataset_exclude` した試料は含まない） |
+| `low_reliability_samples` | 白抜きで描き、平均・SD から外した試料 |
+| `zero_denominator_samples` | 分母（分母スポットの高さの合計）が 0 で割合を計算できなかった試料。その試料の `share` は null で描かない |
+| `spots[]` | パネルごとに `spot_id` / `name` / `label`（表示名）/ `ontology` / `item`（展開元の項目）/ `adduct` / `mz` / `rt` / `msms`（MS/MS の裏付けの有無）と `groups[]` |
+| `spots[].groups[].samples[]` | `sample` / `height`（PeakHeight。行が無ければ 0）/ `share`（分母に対する %。`height` 指定時と分母 0 の試料は null）/ `gap_filled` / `low_reliability` |
+| `spots[].groups[].mean` / `sd` / `n_in_stats` | `stat` の定義での平均・SD と、その計算に使った試料数（低信頼でなく、`share` なら計算できた試料、`height` なら高さ > 0 の試料）。n = 1 なら SD は null、0 なら平均も null |
+| `excluded` | 除いたスポットの `#<spot_id> <name>`。理由ごとに `internal_standard` / `manual` / `curation` / `auto_likely_wrong` / `standard_only`（`dataset_plot(kind="group_intensity")` と同じ。§11.5）と、`require_msms=True` で MS/MS の裏付けがないために除いた `no_msms` |
+| `caveats` | `dataset_plot(kind="group_intensity")` と同じ種類に加え、`share_basis` が描く分子種を含まないとき（分母に含まれない分子種があり、割合が 100 % を超えうる）、`items` に当たらなかった（またはすべて除外された）部品があるとき、`value="height"` なのに `share_basis` を渡したとき（無視される） |
+
+**割合の読み方**: `share` は**分母にしたスポットの高さの合計に対する %** で、試料の総量に対する割合ではない。
+分母は `share_basis`（省略時は `items`）を同じ除外規則で解決したスポットで、`require_msms=True` なら分母にも効く。
+分子種の割合は分母の選び方で変わるので、図を報告に載せるときは `share_basis` を併記すること。
+`share_basis` の部品が 1 つでも当たらない（名前の綴り違いなど）と分母が変わるため、図は描かずに `{"status": "error"}`
+（当たらなかった部品名入り）を返す。`items` の当たらない部品は図を描いたうえで `caveats` と説明文に書く。
+
+#### 11.7 `dataset_plot(kind="species_pca")` の返り値
+
+選んだ分子種（`dataset_plot(kind="species")` と同じ項目指定・除外）の PeakHeight 行列（試料 × 分子種）で PCA を回す read-only ツール。
+解析フォルダで読んだデータセットが対象（読み込み済み `.arf` と兄弟 `.arf2` が要る）。既定（`output="image"`）はサーバ側で描いたスコア図の PNG と
+説明（寄与率・`pc1_r_top` / `pc1_r_bottom`）。以下は `output="payload"` の契約。ファイルは
+`save_figure(kind="species_pca")`。ローディング全量（`loadings_rows`）は戻り値に載せずセッションに残す。
+入力の誤り（計算に使う試料が 3 未満・合計 0 の試料・未知の `orient_by` / `normalize` など）は
+`{"status": "error", "message": ...}`。失敗した呼び出しの後は前回の結果を破棄する。
+
+| フィールド | 意味 |
+|------------|------|
+| `points[]` | 試料ごとに `x`（PC1）/ `y`（PC2）/ `label`（試料名）/ `group`（群。2 群に入る試料は最初の群）/ `fitted`。`fitted=false` は低信頼の試料で、**主成分の計算に使わず投影しただけ**（スコアは計算に使った試料が決めた軸への射影） |
+| `explained_variance_ratio` | 主成分ごとの寄与率（計算に使った試料での値。最大 5 成分） |
+| `x_label` / `y_label` | 軸名（寄与率入り） |
+| `n_fit` / `n_species` | 計算に使った試料数 / PCA に使った分子種数 |
+| `dropped_zero_variance` | 計算に使う試料で値が変わらず外した分子種の数 |
+| `excluded` / `caveats` | `dataset_plot(kind="species")` と同じ（§11.6）。画像の説明文にも除外の件数と caveat を載せる |
+| `pc1_r_top` / `pc1_r_bottom` | PC1 との相関 r が正の上位・負の上位の分子種（表示名と r。各最大 5 件。正が無ければ `top` は空）。r は**計算に使った試料**での分子種と主成分スコアの相関で −1〜1 |
+| `result_id` | この結果の ID（`save_figure` の `result_id` に使える） |
+
+**読み方**: 値は `normalize`（`none` / `total`）→ log10(x + 1)（`log_transform`）→ 計算に使う試料の平均と母標準偏差で
+autoscale の順。主成分の**符号は本来任意**で、`orient_by` を指定したときだけ、その群の平均スコアが正になるようにそろえる。
+`normalize="total"` は試料量の差を除いて組成を比べるときの選択で、合計が 0 の試料があると計算しない。
+
+#### 11.8 `dataset_plot(kind="loadings")` の返り値（`lipidmix.pca_loadings.v1`）
+
+保存済みの PCA（`dataset_pca` と `dataset_plot(kind="species_pca")`）のローディングを、主成分ごとの
+横棒で描く read-only ツール。既定（`output="image"`）はサーバ側で描いた PNG と説明、以下は `output="payload"` の契約。
+ファイルは `save_figure(kind="loadings")`（PNG と同名 `.svg`）。入力元は `result_id`（省けば直近の `dataset_pca`。`species_pca` の結果も渡せる）で、
+候補（結果の出どころ）が 2 つ以上あってどれも優先できないときは `AMBIGUOUS_RESULT_SOURCE` で止まる。ローディングを持たない古い
+PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（`pcs` が 1〜3 個でない・その PCA にない主成分・未知の `value`・
+全件表示が 60 特徴量を超える、など）は `{"status": "error", "message": ...}`。失敗した呼び出しの後は前回の図を破棄する。
+
+| フィールド | 意味 |
+|------------|------|
+| `result_id` | どの PCA 結果から描いたか（`save_figure` の `result_id` と同じ名指し） |
+| `value` | **実際に描いた値の種類**（`r` / `coefficient`）。`value_requested` と違うときは `caveats` に理由がある |
+| `value_requested` | 呼び出しで求めた値の種類 |
+| `top_n` | 主成分ごとに取った正・負それぞれの上位件数。`null` は全件 |
+| `aligned` | `true` は全件表示で、全パネルの行が最初の主成分の順にそろっている（同じ行が全パネルで同じ位置）。`false` は主成分ごとに上位を独立に選んだ |
+| `panels[]` | 主成分ごとに `pc`（`PC1` …）/ `explained_pct`（寄与率 %）/ `rows[]` |
+| `rows[]` | `feature_id` / `label`（表示名）/ `ontology` / `adduct` / `mz` / `rt` / `coefficient`（固有ベクトルの成分）/ `r` / `value`（描いた値） |
+| `caveats` | 値を `coefficient` に落とした理由など |
+
+**読み方**: `r` は特徴量とその主成分スコアの相関（−1〜1）で、成分 × 特異値 / √n で出す。autoscale した PCA でだけ意味があり、
+そうでない PCA では出せないので `coefficient` で描く。主成分の**符号は本来任意**なので、正負そのものに意味はなく、
+同じ主成分の中での向きの違いだけを読む。ARF のローディングは、その PCA に使った特徴量行列の全スポット
+（`dataset_pca` が使った前処理後の行列）のうち**上位だけ**を描く（`top_n` で絞る）。
+ローディング図は**単一の props の PCA** だけに対応する（スポットあたり複数の列を並べた PCA だと、どの列を描くか
+決まらないので `{"status": "error"}`。props を 1 つにして PCA をやり直す）。
+棒の色は `.arf2` の Ontology（クラス）。
+
+#### 11.9 最初の概観（`dataset_overview` と `load_dataset` の `overview`。構成見直し A）
+
+読み込んだ直後に「群の間で何が変わり、何が変わらなかったか」を **品質 → 全体 → クラス → 分子種** の 4 段で粗く示す。
+`load_dataset` は既定でこれを `overview` 欄に入れて返し（`overview=False` で切れる。失敗しても読み込みは成功し
+`{"status": "unavailable", "error": {...}, "next": ...}`）、`dataset_overview(top_n=5, dataset_handle=None)` は同じものを
+出し直す（除外・試料の表の訂正・キュレーション・定量の鎖の後）。
+
+**戻り値の形**（`load_dataset` の中では `counts` を省く。`summary` と重なるため）:
+
+| キー | 意味 |
+|---|---|
+| `overview_id` | `ovw_<12 桁>`。データの指紋・試料の表の版・行列・比較と PCA の結果・設定から決まる（同じ入力なら同じ ID） |
+| `provisional` | 定量の鎖（付加体の選別 `dataset_select_features`）を通る前なら `true`。分子種の数え方に同じ分子種の複数の付加体・内部標準の行が混ざりうる |
+| `state` | 1 行の状態（キュレーション・正規化・統合・選別の有無、前処理のレシピ、`assay_kind`）。ドリフト補正を飛ばしたら `drift skipped` |
+| `counts` | 役割ごとの試料数・特徴数・同定の水準（`msms` / `ms1` / `none`）の内訳（`dataset_overview` だけ） |
+| `quality` / `global` / `classes` / `species` | 各段。`facts`（事実の 1 行ずつ。先頭が ID）・`next`（掘る一手。引数は JSON）・省いた段は `omitted`（理由）。品質は `verdict` も |
+| `result_ids` | 概観が登録した `compare` / `pca` の結果 ID（回したものだけ） |
+| `record` | `reports/stats/` への記録（`written` と `record_id`・`path`、書けなければ `reason`） |
+
+**事実の ID**: 段ごとに `Q1, Q2, …` / `G1, …` / `C1, …` / `S1, …`。外から引くときは `<overview_id>#Q1`。
+解釈は事実と混ぜず別の節に書き、根拠の ID を挙げる。
+
+**品質（Q）** — Q1 が判定。
+
+| 判定 | 条件（閾値は記録の `settings.thresholds`） |
+|---|---|
+| `poor` | 群とバッチの完全交絡、失敗した QC 注入（総量が QC の中央値の 0.2 倍未満。QC 3 本以上のときだけ見る）がある、QC の RSD の中央値が 0.30 を超える |
+| `caution` | 部分的な交絡、注入順の偏り、QC の総量（log2）と注入順の Spearman の強い相関（|ρ| ≥ 0.6 かつ p < 0.05、QC 5 本以上のバッチ）、技術反復の疑い |
+| `not_evaluable` | QC が無い・足りず RSD を評価できない（理由 `qc_not_evaluable`。バッチの交絡も評価できなければ `no_qc_and_batch_unknown`）。**QC が無いときは `ok` と言わない**。`caution` / `poor` の判定にも `qc_not_evaluable` を添える |
+| `ok` | 上のどれでもない |
+
+`poor` でも差は出すが、各段の事実に「品質 Q1 が poor のため参考」と付く（完全交絡のときだけ比較そのものを回さない）。
+QC のある換算済みデータでドリフト補正の既定が未決（`dataset_preprocess` なら `needs_input`）のときは、概観は止まらず
+補正なしで計算し、そのことを事実と `next`（`dataset_preprocess(drift_mode=…)`）に出す。
+既定の前処理が失敗する（足切りで特徴が 1 つも残らない など）ときも概観は失敗しない: 品質の段（前処理の前の試料から
+計算する）だけを出し、全体・クラス・分子種の段は `omitted` に失敗の理由（足切りの内訳 `details` を含む）を書いて省く。
+交絡はこのとき評価しない。
+
+**全体（G）** — 既定の前処理の行列で PCA（軸は生体の個体、QC は投影）。各軸の寄与率と、群が各軸のばらつきを
+どれだけ説明するか（η²）、群の重心。比較を回したら判定の数（2 群）か moderated F で差のある特徴の数（多群）。
+
+**クラス（C）** — 組成（クラスの総量と CLR）。**付加体の選別の後だけ**出す。選別の前は同じ分子種の複数の付加体や
+内部標準の行がクラスの合計に入り、見せかけの `unchanged` が出るので省く（`omitted` と、鎖を進める `next`）。
+mzTab-M など解析フォルダ以外から開いたデータは定量の鎖が使えないので、`dataset_analysis_run` の
+`kind="composition"` を案内する。2 群は `class n_species log2fc_total ci_low ci_high verdict_total clr_log2fc verdict_clr` の
+TSV（`changed` と `unchanged` を最大 5 つずつ）、多群は moderated F の q（`class n_species f_q_total`）。
+
+**分子種（S）** — `changed` / `unchanged` / `inconclusive` の数（`changed` は上昇・下降の内訳つき）。
+**`inconclusive` は「変わっていない」ではない**（同等性の幅に収まった `unchanged` だけが変わっていない）。
+出方（検出の有無）だけに差があり強度の判定は `inconclusive` の特徴の数も別に出す（検出の情報が無いデータでは `null`）。
+2 群は上位の TSV（`contrast_id feature_id name id_level log2fc ci_low ci_high q`）、多群は F で差のある特徴の中での
+対ごとの数（`pair n_changed n_up n_down`）と上位（`feature_id name id_level f_q`）。
+
+**群と向き**:
+- 群が 1 つ以下・探索専用のデータセット（`allow_incomplete=True` で開いた未完了の実行）・群とバッチの完全交絡では
+  比較を回さない（`omitted` に理由）。
+- 2 群の向きは**仮**: 試料の表で先に出た群を対照にする（事実に「仮の向き」と付く）。向きを決めるのは
+  `dataset_compare(reference_group=…, test_group=…)`。
+- 3〜6 群は全対、7 群以上は対照との対だけ（と moderated F）。
+- 判定は moderated t、q ≤ 0.05、同等性の幅 1.2 倍（`dataset_compare` の既定と同じ）。
+
+**結果の置き場所**: 概観の PCA と比較は `ds.results` に入るが、直近の結果（`dataset_plot` / 書き出しの既定）には**しない**。
+概観の比較の記録には `origin: "overview"` が付き、`dataset_feature_search` の既定（`result_ids` 省略）の選択からは外れる
+（`result_ids=["<result_id>#<contrast_id>"]` と名指しすれば引ける）。利用者が同じ比較を先に `dataset_compare` で
+回していれば、その記録に印は付けない。概観そのものは `ds.results[overview_id]`（`kind: "overview"`）。
+記録は解析フォルダの `reports/stats/` に、既定の前処理と概観の 2 件（概観の記録は前処理の記録を親に持つ）。
+書き先が無ければ書かずに成功する。
+
+## 旧 `arf2` トピック（`.arf2` / スポット代表。§4, §8.2）
+
+`.arf2`（スポット代表カタログ）のパーサ出力の定義。`load_dataset` が `feature_metadata` に取り込み、`dataset_feature_search` が行として返す。
+
+> 対応する Key 番号表: `docs/schema/AlignmentSpotProperty.md`（MS-DIAL の `[Key(N)]` から抽出した一次資料）。
+> リーダーのインデックス定数を変更するときは必ずこちらを先に確認する。
+
+### 4. ARF2 (`metabolomix/arf2/reader.py`)
+
+#### 4.1 `deserialize()` / `extract_arf2_data()`
+
+型は `list[dict]`。**1行/1要素は1アラインメントスポットのカタログ情報**で、サンプル別強度は含まない。
+
+| 列/キー | 型 | 意味 |
+|---|---|---|
+| `MasterAlignmentID` | int | MS-DIAL のマスターアラインメントID |
+| `AlignmentID` | int | アラインメントID |
+| `RT` | float | スポット中心RT（min） |
+| `MassCenter` | float | スポット中心 m/z |
+| `IonMode` | str | `Positive`、`Negative`、`Both`、`Unknown` |
+| `Name` | str | 候補化合物名。欠落時は `Unknown`。`no MS2:` や `low score:` は注釈の確度に関する接頭辞 |
+| `HeightAverage` | float | アラインメントスポットのサンプル間平均ピーク高さ |
+| `Formula` | str | 分子式。例: `C5H10O2` |
+| `Ontology` | str | 化学/脂質クラス。例: `FA`, `PC`, `Cer_NS` |
+| `SMILES` | str | 分子構造の SMILES 表現 |
+| `InChIKey` | str | 構造同定子 InChIKey |
+| `AdductType` | str | 観測イオンの付加体。例: `[M-H]-` |
+| `HeightMin` | float | サンプル間ピーク高さの最小値 |
+| `HeightMax` | float | サンプル間ピーク高さの最大値 |
+| `PeakWidthAverage` | float | サンプル間の平均ピーク幅。LC の場合は通常 min |
+| `SignalToNoiseAve` | float | サンプル間 S/N の平均 |
+| `SignalToNoiseMax` | float | サンプル間 S/N の最大値 |
+| `SignalToNoiseMin` | float | サンプル間 S/N の最小値 |
+| `MassMin` | float | サンプル間観測 m/z の最小値 |
+| `MassMax` | float | サンプル間観測 m/z の最大値 |
+| `FillPercentage` | float | 当該スポットが値を持つサンプルの割合。**0..1 の比率**で、百分率表示には100倍する |
+| `MonoIsotopicPercentage` | float | 単同位体ピークとして扱われる割合。**0..1 の比率** |
+
+#### 4.2 `summarize_arf2_data()`
+
+| キー | 意味 |
+|---|---|
+| `total_spots` | スポット総数 |
+| `height_average_median` | 0より大きい `HeightAverage` の中央値 |
+| `height_average_max` | 0より大きい `HeightAverage` の最大値 |
+| `rt_range` | RT の `(min, max)` |
+| `mass_range` | m/z の `(min, max)` |
+| `ion_modes` | イオンモード別件数 |
+| `annotated_count` | `Name` が空、null、`Unknown` ではない件数。注釈確度は考慮しない |
+| `annotation_rate` | `annotated_count / total_spots * 100` |
+| `ontology_top` | 空でない `Ontology` の件数上位10クラス。文字列 `Unknown` も集計対象 |
+| `sn_median` | 0より大きい `SignalToNoiseAve` の中央値 |
+| `error` | データが空のときのエラーメッセージ |
+
+#### 4.3 `format_spots_as_table()`
+
+1行目が列名、2行目以降が1スポットの TSV/CSV 文字列。既定列順は上記22列の順である。浮動小数は最大4桁程度に丸め、区切り文字・改行・引用符を含むセルは二重引用符で囲む。空値は空セルになる。この丸め済み表はLLM受け渡し用であり、精密な再計算には元の辞書値を使う。
+
+#### 8.2 `.arf2` の要約（旧 `.arf2` 要約ツール）
+
+旧 `.arf2` 要約ツール（撤去済み）の返り値はMarkdownテキスト1件（`str`）だった。`total_spots`, `annotated_count`, `annotation_rate`, RT/m/z範囲、強度中央値、イオンモード、S/N中央値、Ontology上位を自然言語で表示する。個々の22列は返さず、内部に保持していた。いまは `load_dataset` の `summary` が件数・注釈の内訳を、`dataset_feature_search` が列を返す。
+
+## 旧 `pai2` トピック（`.pai2` / 単一測定ファイルのピーク。§5, §8.3）
+
+`.pai2`（単一測定ファイルのピーク）のパーサ出力の定義。PAI2 を読む MCP ツールは無い（B-2b で撤去。パーサは `metabolomix/pai2/reader.py` に残る）。
+
+> 対応する Key 番号表: `docs/schema/ChromatogramPeakFeature.md`（MS-DIAL の `[Key(N)]` から抽出した一次資料）。
+> リーダーのインデックス定数を変更するときは必ずこちらを先に確認する。
+
+### 5. PAI2 (`metabolomix/pai2/reader.py`)
+
+#### 5.1 `deserialize()` のピーク出力
+
+型は `list[dict]`。**1要素は1測定ファイル内の1検出ピーク**である。
+
+| キー | 型 | 意味 |
+|---|---|---|
+| `time` | dict | ピーク頂点の座標。通常 `{"rt": value}` |
+| `time_left` | dict | ピーク左端の座標 |
+| `time_right` | dict | ピーク右端の座標 |
+| `peak_height` | float | ピーク頂点強度 |
+| `peak_height_left` | float | 左端の強度 |
+| `peak_height_right` | float | 右端の強度 |
+| `peak_area` | float | ピーク面積 |
+| `peak_area_above_baseline` | float | ベースラインより上のピーク面積 |
+| `m/z` | float | ピーク m/z |
+| `S/N` | float | `PeakShape[1]` 由来の S/N |
+| `id` | int | 当該 PAI2 ファイル内のピークID |
+| `ion_mode` | `IonMode` Enum | `IonMode.Positive`（値0）、`IonMode.Negative`（値1）、`IonMode.Both`（値2）。JSON化時は文字列/数値への変換が必要 |
+| `name` | str | 候補化合物名。空文字は未注釈 |
+| `formula` | str | 分子式 |
+| `ontology` | str | 化学/脂質クラス |
+| `smiles` | str | SMILES |
+| `inchikey` | str | InChIKey |
+| `adduct` | str | 付加体。例: `[M-H]-` |
+| `collision_cross_section` | float | CCS。イオンモビリティ未使用時は 0 のことがある |
+| `comment` | str | MS-DIAL由来の注釈コメント |
+| `has_msms` | bool | MS2 raw ID が非負、または collision-energy map が非空か。MS/MS取得情報の有無 |
+| `ms2_raw_id` | int | 元データの MS2 raw spectrum ID。未設定は `-1` |
+| `collision_energies` | list[float] | MS/MS取得時の衝突エネルギー一覧。負イオンモードでは `-42.0` など負値もある |
+| `msms_peak_count` | int | PAI2 内 `msms_spectrum` の要素数。通常はスペクトル本体がDCL側にあるため0 |
+| `msms_spectrum` | list[list] | PAI2自体に格納された `[fragment_mz, intensity]`。通常は空で、本体はDCL側にある |
+
+`time` 系辞書には、入力に存在する非負値だけが入る。
+
+| サブキー | 意味 |
+|---|---|
+| `rt` | retention time |
+| `ri` | retention index |
+| `m/z` | 座標表現内の m/z |
+| `dt` | drift time |
+
+#### 5.2 フィルタ
+
+`filter_features_by_params()` は元と同じピーク辞書を保持したリストを返す。
+
+| パラメータ | 意味 |
+|---|---|
+| `min_intensity` / `min_height` | `peak_height` の下限 |
+| `min_sn` | `S/N` の下限。S/Nが取得できないピークも除外 |
+
+#### 5.3 ピーク属性PCA（撤去済み）
+
+**`perform_pca_summary()` は撤去済みで、コード上に存在しない。** 以前この関数は
+`[RT, m/z, Height]` の3変数PCAと、その散布図のPNGバイト列を返していた。撤去理由:
+
+- **行がサンプルではなくピーク**だった。PAI2 は単一測定ファイルなのでサンプル間比較
+  （オミクスPCA）は原理的にできず、この3変数PCAは生物学的仮説を検定しない
+  （RT×m/z散布図の言い換えに近い）。サンプル間の多変量比較は ARF/ARF2 を使う。
+- 図をPNGとして返す設計自体も現方針（構造化データを返しクライアントが描画、PNGは
+  ユーザーの明示要求時のみ）に反していた。
+
+撤去前の PAI2 ツールが返していたのは `summarize_pai2_inventory()` による在庫要約（5.5節）のみ。
+
+#### 5.4 `inspect_peak_details()`
+
+成功時は `{"status":"success", "matches":[...], "note":...}` を返す。`peak_name` は大文字小文字を無視した部分一致で、複数件返り得る。
+
+| `matches[]` キー | 意味 |
+|---|---|
+| `id` | PAI2ピークID |
+| `name` | 候補化合物名 |
+| `m/z` | ピーク m/z |
+| `rt` | ピーク頂点RT |
+| `height` | ピーク高さ |
+| `area` | ピーク面積 |
+| `signal_to_noise` | S/N |
+| `has_msms_like_fields` | キー名に `msms`、`fragment`、`spectrum` のいずれかを含むフィールドが存在するか。**実スペクトルが非空かは判定しない** |
+| `formula` | 分子式 |
+| `adduct` | 付加体 |
+| `comment` | コメント |
+
+検索条件なしは `status=error`、該当なしは `status=not_found` となる。
+
+#### 5.5 `summarize_pai2_inventory()`
+
+撤去前の PAI2 ツールが返していた在庫要約。PCA を介さず、単一測定ファイルのピーク分布を素直にまとめる。
+
+| キー | 意味 |
+|---|---|
+| `total_peaks` | フィルタ後のピーク総数 |
+| `annotated_peaks` | 確定注釈とみなせるピーク数（空文字・`Unknown`・`no MS2:`・`low score:` は除外） |
+| `annotated_fraction` | `annotated_peaks / total_peaks` |
+| `ion_mode_counts` | イオンモード別件数 |
+| `mz_range` / `rt_range` | m/z・RT の `{min, max}` |
+| `height_summary` | ピーク高さの `{min, median, max}` |
+| `sn_summary` | S/N の取得割合と `{min, median, max}` |
+| `top_by_height` | 強度上位10ピーク（`id`/`name`/`m/z`/`rt`/`height`/`signal_to_noise`） |
+| `note` | PAI2は単一サンプルでオミクスPCA不能・MS/MSは`.dcl`参照、の断り書き |
+
+#### 8.3 PAI2 の在庫要約ツール（撤去済み）
+
+撤去前の PAI2 ツールはテキスト1件を返していた（PCA・画像は返さない）。JSONは `summarize_pai2_inventory()` の在庫要約で、`total_peaks` / `annotated_peaks`（`Unknown`・`no MS2:`・`low score:` を除いた確定注釈数）/ `annotated_fraction` / `ion_mode_counts` / `mz_range` / `rt_range` / `height_summary` / `sn_summary` / `top_by_height`（強度上位10ピーク）を含む。PAI2 は単一測定ファイルのピーク一覧なので、サンプル間比較（オミクスPCA）はこの単位では行わない（複数サンプルの多変量比較は、データセットの `dataset_pca` / `dataset_compare`）。ピーク属性PCA依存の旧ツール（`pai2_get_top_metabolites` / `pai2_update_analysis_filter`）と、ピークの詳細を返していたツール（5.4節の辞書）は撤去した。MS/MS は同名 `.dcl`（`dcl_index` がリスト順に対応）を参照する。

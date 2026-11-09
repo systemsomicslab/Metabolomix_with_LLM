@@ -21,13 +21,11 @@ MS-DIAL が出力する .dcl ファイルは、デコンボリューション済
 """
 
 import argparse
-import glob
 import os
 import struct
 import sys
 from pathlib import Path
 
-from metabolomix.core.data_config import get_data_dir
 
 DCL_MAGIC = b"DC"
 
@@ -194,42 +192,19 @@ def attach_msms_to_features(features: list[dict], dcl_results: list[dict],
     return attached
 
 
-def _select_dcl_file(file_path: str | None, index: int | None) -> str | None:
-    """解析対象 .dcl を決定する（非対話対応）。--file > --index > 先頭[0]。"""
-    if file_path:
-        if os.path.exists(file_path):
-            return file_path
-        print(f"[WARNING] 指定ファイルが見つかりません: {file_path}", file=sys.stderr)
-        return None
-    candidates = sorted(glob.glob(os.path.join(str(get_data_dir()), "*.dcl")))
-    if not candidates:
-        return None
-    if index is not None:
-        if 0 <= index < len(candidates):
-            return candidates[index]
-        print(f"[WARNING] index {index} は範囲外です (0..{len(candidates) - 1})。", file=sys.stderr)
-        return None
-    print("解析可能な .dcl ファイル:")
-    for i, c in enumerate(candidates):
-        print(f"  [{i}] {os.path.basename(c)}")
-    print("[INFO] 番号未指定のため先頭[0]を使用します。(--file/--index で指定可)", file=sys.stderr)
-    return candidates[0]
-
-
 def main():
     parser = argparse.ArgumentParser(description="MS-DIAL .dcl (MSDecResult/MS-MS) ファイルを解析します。")
-    parser.add_argument("--file", "-f", help="解析する .dcl ファイルのパス")
-    parser.add_argument("--index", "-i", type=int, default=None,
-                        help="データディレクトリ内の .dcl 一覧から番号で指定（非対話）")
+    parser.add_argument("--file", "-f", required=True,
+                        help="解析する .dcl ファイルのパス（必須。データフォルダは探さない）")
     parser.add_argument("--top-peaks", type=int, default=None,
                         help="各 MS/MS を強度上位 N 本に間引く（既定: 全件）")
     parser.add_argument("--show", type=int, default=10,
                         help="先頭から表示する MSDecResult 件数（既定: 10）")
     args = parser.parse_args()
 
-    file_path = _select_dcl_file(args.file, args.index)
-    if not file_path:
-        raise FileNotFoundError(".dcl ファイルが見つかりません。")
+    file_path = args.file
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f".dcl ファイルが見つかりません: {file_path}")
 
     print(f"[INFO] 解析対象ファイル: {file_path}")
     results = deserialize_dcl(file_path, include_spectrum=True, top_n_peaks=args.top_peaks)

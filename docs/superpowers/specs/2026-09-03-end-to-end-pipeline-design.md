@@ -2,7 +2,7 @@
 
 作成日: 2026-09-03
 状態: **目標状態の記述**。本文は `docs/task.md`「Console 適合の是正」ほか 13 項目が入った後の姿で書いてある。2026-09-04 時点で 13 項目はすべて着地し、本文と実装は一致している（`.qa.tsv` の解釈だけが保留）。実装状況のスナップショットは §9。
-昇格先: 実装完了後に `docs/workflow/Lipidmix/` へ移す
+昇格先: ~~実装完了後に `docs/workflow/Lipidmix/` へ移す~~ **昇格しない（2026-11-09）**。上流は構成見直しの D 段（pipeline を Console → 解析フォルダ → 受領に狭めた）、下流は B/C/A 段で置き換えたので、本文は過去の設計記録として残す。現行の順序は `docs/workflow/pipeline.md`・`dataset.md`・`dataset_analysis.md`（§9 の状態の欄）。
 
 ---
 
@@ -944,6 +944,21 @@ Console を経由せず、MS-DIAL GUI が既に出したフォルダを渡す経
 
 ## §9 実装状況のスナップショットと、この文書が露出させた穴
 
+### 状態（2026-11-09）
+
+**上流は D、下流は B/C/A で置き換えた。この文書は `docs/workflow/` へ昇格させない。**
+
+- 上流（生データ → Console → mzTab-M）: 本文の `console_plan` / `console_run` / `console_status` / `console_prepare_input` /
+  `console_cleanup` / `job_list` は D 段で消え、`pipeline_plan` / `pipeline_run` / `pipeline_status` に吸収した。pipeline は
+  raw を run の中へ配置して極性ごとに Console を回し、解析フォルダを mzTab-M と照合して受領（`results/receipt.json`）を書くところで
+  止まる（`docs/workflow/pipeline.md`）。メソッドファイルを選ぶ・作る `console_method_candidates` / `console_method_template` は残り、
+  同じ `pipeline.md` に節がある。
+- 下流（`dataset_load` → 前処理 → PCA → 差次的解析 → 書き出し）: 本文の `dataset_load` / `dataset_differential` は消え、入口は
+  `load_dataset`（`pipeline_path` と `polarity` で受領の解析フォルダを開く）、統計は統計エンジン（`dataset_preprocess` /
+  `dataset_compare` / `dataset_pca`）になった。pipeline の前処理・PCA・比較・品質レポートの工程と、v1 の統計の鎖（`dataset_service` /
+  `differential.two_group_test` / pipeline からの引き継ぎ）は D 段で消えた。
+- 下の §9-6（Console ツールの範囲外扱い）は、残った 2 ツールを `pipeline.md` の範囲へ入れて閉じた。
+
 ### 状況（2026-09-04 更新・`feat/dataset-analysis-layer` ブランチ）
 
 本文は目標状態で書いてある。この表は撮った瞬間の写しにすぎない。最新は `git log` と `docs/task.md` で確認する。
@@ -980,6 +995,7 @@ Console を経由せず、MS-DIAL GUI が既に出したフォルダを渡す経
 5. **【解消 2026-09-04】昇格時の検証範囲**。`tests/test_workflow_docs.py` を `rglob("*.md")` に変えたので、`docs/workflow/Lipidmix/` 配下も腐敗防止テストに掛かる。検証は実際に効くことを確認済み（サブディレクトリに存在しないパスを書いた文書を置くと、パス解決と文書集合の両方が落ちる）。昇格時は文書を置けばそのまま検証対象になる。
 
 6. **Console 4 ツールの範囲外扱い（未着手・昇格時の作業）**。`docs/workflow/` の `IN_SCOPE` は 35 ツールで、Console 4 ツールは `OUT_OF_SCOPE` に明記されている（合計 39 が全登録ツール 51 の一部）。本文書を昇格させるときは `IN_SCOPE` への移動、リテラル `35` の更新、`index.md` の目次と件数、`CLAUDE.md` の文書地図を同時に直す。`tests/test_workflow_docs.py` の `test_scope_totals_match_registered_tool_count` が実登録数と突き合わせているので、片方だけでは落ちる。
+   **【2026-11-09・閉じた】** 消えなかった Console の 2 ツール（`console_method_candidates` / `console_method_template`）を `docs/workflow/pipeline.md` の範囲（`IN_SCOPE`）へ入れた。残りの Console ツールは D 段で消えた。
    **【2026-09-07更新・Task20文書整合】本項目の `35` / `39` / `51` は 2026-09-04 時点の数字で、以降に登録ツールが増えたため既に古い。正確な現在値は `docs/workflow/index.md` と `USAGE.md`（`tests/test_readme_links.py` が実登録と突き合わせる）にのみ置き、ここでは繰り返さない（写しの腐敗を避ける、`CLAUDE.md` と同じ方針）。Console 4 ツール（`console_plan` / `console_run` / `console_status` / `job_list`。加えて `console_prepare_input` / `console_method_template` / `console_method_candidates` / `console_cleanup` の計 8 が現行の `OUT_OF_SCOPE`）は**依然として範囲外のまま**——本項目は未解消。
 
 7. **【追加 2026-09-07・別planによる一気通貫自動化】**。本文書が記述する「手動で1ツールずつ順に呼ぶ」経路（`console_plan → console_run → dataset_load → … → dataset_export_differential`）に加えて、生データフォルダを渡すだけで同じ工程を自動進行する `pipeline_plan` / `pipeline_run` / `pipeline_status` / `pipeline_resume` / `pipeline_cancel` の5ツールが実装された（別plan「生データフォルダ起点の解析統括・結果整合性・実験情報入力」、承認済み設計は

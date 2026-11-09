@@ -18,20 +18,20 @@
 ## 1. データセットのハンドル
 
 ハンドル（`dh_` + 12 桁）は、1 つのサーバのプロセスにデータセット（とその極性の
-ライブラリ）を複数並べて持つための ID。`dataset_handle_open` が返し、`dataset_*`・
+ライブラリ）を複数並べて持つための ID。`load_dataset` が返し、`dataset_*`・
 `library_*`・再解析のツールの `dataset_handle` に渡す。
 
-- **対話のセッションは直近のハンドルを指すだけ。** `dataset_load` で読んだデータセットも
-  ハンドル（`dataset_load` の要約の `dataset_handle`、`dataset_handle_list` の `current`）で、
+- **対話のセッションは直近のハンドルを指すだけ。** `load_dataset` が開いたハンドルは**いつも
+  直近になる**（`load_dataset` の戻り値の `dataset_handle`、`dataset_list` の `current`）。
   ハンドルを渡さない呼び出しはこの直近のハンドル（のデータセット・`library_load` の
-  ライブラリ・直近の照合）を使う。`dataset_handle_open` で開いたハンドルは直近にならないので、
-  そのハンドルを渡した呼び出しは対話の状態を読みも書きもしない。閉じた・無いハンドルは
-  `DATASET_HANDLE_NOT_FOUND`（開いているハンドルの一覧つき）で、対話のセッションへ黙って
-  落ちない。直近のハンドルを閉じると、渡さない呼び出しはデータセットもライブラリも無い状態
+  ライブラリ・直近の照合）を使う。再解析のエージェントは、返ったハンドルを渡して呼び、直近を
+  当てにしない——ハンドルを渡した呼び出しは対話の状態を読みも書きもしない。閉じた・無い
+  ハンドルは `DATASET_HANDLE_NOT_FOUND`（開いているハンドルの一覧つき）で、対話のセッションへ
+  黙って落ちない。直近のハンドルを閉じると、渡さない呼び出しはデータセットもライブラリも無い状態
   （`missing_state`）になり、開いている別のハンドルへも、前に読んだライブラリへも落ちない。
   順番を待つ間に直近のハンドルが閉じられた呼び出しも、何もせずに `missing_state` を返す。
-  `dataset_load` より前に `library_load` で読んだライブラリは、最初の `dataset_load` の
-  ハンドルへ移る（写しではない）。
+  `load_dataset` より前に `library_load` で読んだライブラリは、このデータセットのライブラリが
+  決まらなかった（記憶が無い・`library="auto"`）とき、そのハンドルへ移る（写しではない）。
 - **ハンドルどうしも別の状態。** 同じ入力を開き直すと読み込み済みのもの（`reused_base`）を
   使い回すが、ハンドルには複製が渡る。片方の前処理はもう片方に見えない。読み込みが読んだ・
   探したファイル（入力・`.dcl` などの付随ファイル・ライブラリ・ジョブの記録と実効メソッド・
@@ -39,12 +39,12 @@
 - **並行と直列。** ハンドルを渡した呼び出しはサーバの別スレッドで回り、別のハンドルどうしは
   並行に進む。同じハンドルへの呼び出しは 1 本ずつ（到着順は保証しない）。ハンドルを渡さない
   呼び出しも、直近のハンドルがあればそのハンドルの呼び出しとして 1 本ずつに並ぶ（途中で
-  `dataset_load` が直近を切り替えても、始めたときの直近のハンドルで最後まで動く）。
-- **上限。** `LIPIDMIX_MAX_DATASET_HANDLES`（既定 8）。`dataset_load` もハンドルを 1 本使う
+  `load_dataset` が直近を切り替えても、始めたときの直近のハンドルで最後まで動く）。
+- **上限。** `lipidmix.local.toml` の `[server] max_dataset_handles`（既定 8。1 未満は 1）。`load_dataset` がハンドルを 1 本使う
   （前に読んだものは閉じずに残る）。超えると `DATASET_HANDLE_LIMIT` で止め、古いハンドルを
-  黙って閉じない。寿命は明示の `dataset_handle_close` か、サーバの終了まで。
+  黙って閉じない。寿命は明示の `dataset_close` か、サーバの終了まで。
 
-`dataset_handle_open` の戻り値:
+`load_dataset` の戻り値:
 
 | 欄 | 意味 |
 |---|---|
@@ -58,6 +58,9 @@
 | `library_record` | データセットが同定に使ったライブラリの記録（[library.md](library.md) の LibraryRecord。置き場所は出さない） |
 | `arf2` / `dcl` | スポットの照合（spot_id = SMF_ID）に使うファイル名。解析フォルダで読んだならその `.arf2` / `.dcl`。決まらなければ `null` |
 | `reused_base` | 読み込み済みのものを使い回したか |
+| `summary` | 特徴・試料の数、定量種別、検出状態、同定の内訳、出所の裏取り、読み込みの注記（行の配列） |
+| `sample_counts` | `{groups, roles, n_ungrouped}`: 群（Class ID）ごと・役割ごとの試料数と、群の宣言が無い試料の数 |
+| `next` | 次の一手の例（3 行） |
 
 ライブラリは**データセットが同定に使ったものの記憶**（`library_record`。[library.md](library.md)）から
 引く。実体の sha256 を測り直して `known` のままなら読み取り専用で開き、`mismatch`（内容が変わった・
@@ -65,9 +68,8 @@
 理由を書く。**極性の設定（`[library] msp_positive` / `msp_negative`）には落ちない**ので、逆の
 極性のライブラリを掴まない。
 ハンドルへの `library_load`（`file_path` を省く）も、記憶が `known` ならそれを開く。`mismatch` /
-`lbm_only` は設定へ落ちずに理由（`LIBRARY_RECORD_MISMATCH` / `LIBRARY_RECORD_LBM_ONLY`）を返す。
-記憶が `unknown` のときだけ従来どおりハンドルの極性の設定（逆の `ion_mode` は
-`LIBRARY_POLARITY_MISMATCH`、設定が無ければ `LIBRARY_NOT_CONFIGURED`）。`file_path` を明示すれば
+`lbm_only` は理由（`LIBRARY_RECORD_MISMATCH` / `LIBRARY_RECORD_LBM_ONLY`）を返し、記憶が `unknown` なら
+`LIBRARY_NOT_REMEMBERED`（極性の設定には落ちない）。`file_path` を明示すれば
 記憶と違っても開き、戻り値の `differs_from_record` に記憶したファイル名と開いたファイル名を書く。
 
 **ハンドルは対話のデータフォルダを探さない。** スポットの照合（`library_match_feature` の
@@ -76,7 +78,9 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 使い、無ければ `status: "no_alignment_files"` を返す——別のデータセットの同じ spot_id の
 スペクトルを黙って読まないため。
 
-## 2. 統計の spec（analysis-spec.v1）と結果（analysis-result.v1）
+## 2. 統計の spec（analysis-spec.v1 / v2）と結果（analysis-result.v1 / v2）
+
+**この節の前半（表と欄）は v1。** v2（統計エンジン）は §2.1。`dataset_analysis_run` は `spec.schema` で振り分ける。
 
 `dataset_analysis_run(spec, dataset_handle=None, output_path=None)`。論文の方法を spec に写し、
 名前つきの解析（`analyses`）を並べる——感度解析は同じ spec に並べた別の解析。
@@ -173,6 +177,98 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 `rule_hash` は正規化した spec（パスを除く）に、データセットの入力で `merge_split` が真なら使った群の
 hash も入れる——同じ spec でも割れの組が変われば別の規則で、`merge_split` を変えても変わる
 （外部の行列では `merge_split` は hash に入らない）。
+
+### 2.1 統計エンジンの spec（analysis-spec.v2）と結果（analysis-result.v2）
+
+`spec["schema"] == "analysis-spec.v2"` の `dataset_analysis_run` は統計エンジン（`metabolomix/analysis/stats/`）へ回る
+（v1 の上の表・行の欄とは別の系。`analysis-spec.v1` の spec は今までどおり v1 が実行する）。前処理を **1 回**
+回し、`analyses` の順に compare / composition / pca をすべて実行して**全部**を返す（`primary` は報告の主役を
+指すだけ）。どれかの解析が失敗したら全体を失敗にする（一部だけ載せた結果は返さない）。**状態も記録も書かない**
+（対話の `dataset_compare` と違い、`result_id` も `matrix_id` の登録も作らない）。
+
+```json
+{"schema": "analysis-spec.v2",
+ "input": {"source": "dataset", "exclude_samples": [], "exclude_features": [], "group_overrides": {}},
+ "preprocess": {"drift": {"mode": "auto", "span": 0.75, "min_qc_per_batch": 4},
+                "filters": {"blank_ratio": {"min": 3.0}, "detection": {"by": "group", "min_rate": 0.5},
+                            "qc_rsd": {"max": 0.30}, "d_ratio": {"max": 0.5}},
+                "normalize": {"method": "auto"}, "collapse_replicates": true, "injection_columns": []},
+ "design": {"factors": ["group"], "covariates": [], "block": null},
+ "comparisons": [{"id": "RA_vs_HC", "factor": "group", "reference": "HC", "test": "RA"}],
+ "analyses": [{"analysis_id": "main", "kind": "compare", "test": "moderated_t",
+               "effect_size": "log2_mean_difference", "bh_population": "matrix",
+               "verdict": {"q": 0.05, "equivalence_fc": 1.2}, "min_detected_fraction": 0.5,
+               "allow_confounded": false}],
+ "primary": "main"}
+```
+
+| 欄 | 既定 | 意味 |
+|---|---|---|
+| `input` | `{"source": "dataset"}` | `source` はデータセットだけ。`exclude_samples` / `exclude_features`（空でない文字列のリスト。重複は順序を保って落とす）と `group_overrides`（試料 → 群）は**この spec に書いたものだけ**が効く（下の「自己完結」） |
+| `preprocess` | 上の値 | 前処理の設定（`dataset_preprocess` の引数と同じ。`drift.mode` は `auto` / `on` / `off`、足切りは `null` でその足切りを行わない、`normalize.method` は `auto` / `none` / `tic` / `median` / `pqn`）。`injection_columns` は個体のまとめの鍵から外す試料の表の列（取得日・注入番号など注入ごとに違う属性）。不正なら `ANALYSIS_SPEC_INVALID`（`details.field` が `preprocess.` から始まる） |
+| `design` | `{"factors": ["group"], "covariates": [], "block": null}` | `factors`（重複のない文字列。交互作用の対比は 2 因子のモデルだけ）・`covariates`（`{name, type: numeric \| categorical, reference?}`）・`block`（`"subject_id"` など） |
+| `comparisons` | 必須 | 対比のリスト。`{id, factor, reference, test, at?}`（`at` は他の因子の水準で層別）か、交互作用 `{id, kind: "interaction", factors: [2 因子], levels: {因子: [基準, 比較]}}`。`id` は英数字と `_ . -` で重複不可 |
+| `analyses[].kind` | 必須 | `compare` / `composition` / `pca`。`analysis_id` は重複不可 |
+| compare / composition | | `test`（既定 `moderated_t`。`welch` / `student` / `mannwhitney` は 1 因子・共変量なし・ブロックなしだけ）・`effect_size`（`log2_mean_difference` 既定 / `arithmetic_mean_ratio`）・`bh_population`（`matrix` 既定 / `annotated` / `reported`。`reported` は `reported_feature_ids` が要り、そのときだけ書ける）・`verdict.q`（既定 0.05）・`verdict.equivalence_fc`（既定 1.2）・`min_detected_fraction`（既定 0.5）・`allow_confounded`（既定 false。完全交絡は `STATISTIC_CONFOUNDED` で止める） |
+| pca | | `scaling`（`autoscale` 既定 / `pareto`）・`n_components`（既定 5）・`impute`（`half_min` 既定 / `knn` / `none`） |
+| `primary` | compare / composition が 1 つならそれ | 2 つ以上あるときは必須（`ANALYSIS_SPEC_INVALID`） |
+
+**自己完結（再現のための規則）。** v2 は spec だけで同じ数字を出し直せる実行で、`dataset_exclude` の除外は読まない。
+spec の `input` に無い除外がデータセットにあれば、結果の `warnings` に
+`{"code": "dataset_exclusions_not_in_spec", "n_samples", "n_features"}` が載る（効いていない除外の件数）。対話の
+`dataset_compare` が結果の spec に除外を写して持つのとは逆の向き。組成のクラスの名前は、そのセッションの
+`assay_kind`（`record_objective(assay_kind=...)`。spec には載らない）で決まる（`class_label_kind`: `lipid_class` /
+`msdial_ontology`）。同じ spec でも `assay_kind` が違えばクラスの切り方が違うので、組成を再現するときは種別も揃える。
+
+**`needs_input`。** 前処理が利用者への確認を要するとき（内部標準で換算済みの値に QC があり `drift.mode=auto`）は、
+結果の代わりに `{"needs_input": {"field": "preprocess.drift.mode", "reason", "options", "retry_tools": ["dataset_analysis_run"]}}`
+を返す（`core.md` の「利用者に尋ねる封筒」）。この経路は `argument` を持たない——答えは spec の `field` の欄に入れて
+`dataset_analysis_run` を呼び直す。
+
+**戻り値は要約だけ。** `{status, schema: "analysis-result.v2", rule_hash, matrix_id, input_fingerprint: {dataset_hash,
+sample_table_hash}, primary, warnings, analyses}`。`analyses[]` は解析ごとの要約で、compare は `n_rows`・`n_tested`・
+`verdicts: {changed, unchanged, inconclusive}`・`n_q_below`（`q ≤ 閾値`）・`test`・`warnings`、composition はそれに
+`tables`（`clr` / `absolute` ごとの同じ件数）・`class_label_kind`・`n_classes`、pca は `scaling`・`imputation`・`n_fit`・
+`n_units`・`n_qc_projected`・`n_features`・`explained_variance_ratio`。長い一覧は切る。全量（行・CI・事前分布・交絡の
+表・PCA のスコア）は `output_path` の JSON に書く。**行を返すのは、どの解析も行数が 50 以下のときだけ**（v1 と同じ。
+TSV の列は `contrast_id feature_id status reason log2fc ci_low ci_high p q verdict`、composition は先頭に `table` 列）。
+50 を超える解析があって `output_path` が無ければ `ANALYSIS_OUTPUT_REQUIRED`。`rule_hash` は正規化した spec の hash
+（実行のたびに変わる値を含まない）、`matrix_id` は前処理の入力と設定の hash（同じなら同じ ID）。
+
+**`analysis-result.v2` の全量（`output_path` の JSON）。** `{schema, spec（正規化後）, rule_hash, input_fingerprint,
+matrix_id, preprocess: {steps, warnings, subject_source}, primary, analyses: [{analysis_id, kind, result}]}`。`result`
+は kind ごとに次のスキーマ。
+
+- **`stats-compare.v1`**（compare）: `{matrix_id, test（実際に使った検定名）, effect_size_definition: {name, description},
+  ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n_by_contrast,
+  q_interpretation}, presence, prior, design, group_n, subject_source, confounding, warnings, rows, omnibus}`。
+  `q_interpretation` は `discovery_fdr`（`matrix` / `annotated`）か `reproduction_only`（`reported`。報告した特徴だけの
+  補正で、探索の FDR ではない）。`omnibus` は 3 群以上の F 検定（無ければ null）。
+  行（対比 × 特徴）: `feature_id`・`contrast_id`・`reference`・`test`・`status`（`tested` / `not_tested`）・`reason`・
+  `n_reference` / `n_test`（有限値の個体数）・`detected_reference` / `detected_test`（検出された個体数。検出状態が
+  無ければ null）・`quantity_judgeable`（群のどの cell も検出の割合が `min_detected_fraction` 以上か。null は検出状態なし）・
+  `log2fc`（正なら test が高い）・`ci_low` / `ci_high`・`ci_unavailable_reason`・`statistic` / `df` / `p`・`mean_reference` /
+  `mean_test`（個体ごとの前処理後の線形値の算術平均。単純な 2 群の対比だけ、交互作用は null）・`q`・`presence_p` /
+  `presence_q`（検出の有無そのものの検定）・`verdict`・`verdict_reason`。
+- **判定（`verdict`）は 3 値**で、規則は機械的:
+  `changed`＝検定でき、`q ≤ verdict.q`。`unchanged`＝`q` が閾値を超え、95% CI が同等の範囲
+  （`|log2fc| < log2(equivalence_fc)`）に完全に収まる。それ以外はすべて `inconclusive`（`verdict_reason`:
+  `not_tested` / `quantity_not_judgeable` / `outside_bh_population` / `no_ci` / `neither`）。
+  **「有意でない」は「変わっていない」ではない**——`q` が大きいだけでは `unchanged` にならず、差が小さいと言える
+  CI があるときだけ `unchanged`。`inconclusive` は「差があるともないとも言えない」で、n が小さい・ばらつきが大きい
+  ときの大半はここに入る。この判定は spec に書いた規則を当てた結果で、論文を再現したかの判定ではない。
+- **`stats-pca.v1`**（pca）: `{matrix_id, scaling, log2: true, imputation, n_fit, unit_ids, qc_ids, scores: {units, qc},
+  explained_variance_ratio, loadings, kept_features}`。軸は生体の個体だけで決め、QC は同じ軸へ**投影**する（軸の計算に
+  使わない）。欠測は PCA のためだけに補い（`imputation`）、行列そのものは変えない。
+- **`stats-composition.v1`**（composition）: `{class_label_kind, classes, unclassified_features, zero_handling, clr, absolute,
+  unit, warnings}`。`clr` / `absolute` はそれぞれ stats-compare.v1。クラスの合計が 0 以下の個体があるクラスは `clr` から
+  除く（`zero_handling.excluded_classes`）。欠測のメンバーは合計に 0 として入り、その件数と警告
+  `class_total_includes_missing_members` を出す。
+- 中の `warnings[]` は `{code, message, ...}`。長い一覧（`samples` など）は要約で切る。
+
+対話の `dataset_compare` / `dataset_pca` が保持する結果は、同じ stats-compare.v1 / stats-pca.v1 を
+`ds.results[result_id]` の記録（`kind` が `compare` / `stat_pca`）の `engine` に持つ。これらの対話の要約と、記録（`reports/stats/`）の
+形は `dataset.md` の §10・§11。
 
 ## 3. 行列の recipe（matrix-recipe.v2）
 
@@ -384,10 +480,13 @@ SML にその列が無い mzTab では**エラーにせず**、`subset_available
  "exclude": {"feature_ids": [], "inchikey_blocks": []}}
 ```
 
-`statistics` は `{"result_id"}`（`dataset_differential` の 2 群比較。`group_a` が基準）か
-`{"analysis_spec", "analysis_id"}`（analysis-spec.v1 とその解析）。SME rank 1 の同定があり、
+`statistics` は `{"result_id"}`（`dataset_compare` の 2 群比較。`reference_group` が基準）か
+`{"analysis_spec", "analysis_id"}`（**analysis-spec.v1 だけ**とその解析。v2 の spec はここでは通らないので、統計エンジンの
+結果は `dataset_compare` の `result_id` で渡す）。SME rank 1 の同定があり、
 |ppm| が帯の許容幅以内（`max_mz` 未満の最初の帯、無ければ `default`）で、q < `q_max` の特徴から
-除外を外した一覧（q の昇順）。行は `feature_id name inchikey adduct mz rt ppm group_ref group_test
+除外を外した一覧（q の昇順）。`dataset_compare` の結果は、加えて判定 `verdict` が `changed` の行だけ
+（検出が足りず量を判定できない `inconclusive` の行は q が小さくても候補にしない。`q_max` が判定の q の閾値より
+大きくても、判定が `changed` でない行は通らない）。analysis-spec.v1 の結果（判定を持たない）は q だけで選ぶ。行は `feature_id name inchikey adduct mz rt ppm group_ref group_test
 log2fc_test_over_ref p q direction merged_from`（JSON には `sme_feature_id` も）。論文の同定リストとの
 突き合わせはしない（再解析の側）。
 
@@ -527,7 +626,7 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
 ## 10. 根拠バンドル v3（evidence-v3）
 
 `dataset_export_evidence_bundle` が書く。v2 に試料表・試料ごとの値と検出・付加体・極性を足したもの。
-`arf_export_evidence_bundle`（ARF 経路）は試料ごとの値を取り出さないので v2 のまま。契約の正は
+`dataset_export_evidence_bundle`（ARF 経路）は試料ごとの値を取り出さないので v2 のまま。契約の正は
 massbank-context の `docs/contracts/evidence-bundle-v3.md`。TSV は全ファイルとも同じ書き方（タブ区切り・
 UTF-8・改行は CRLF）。
 
@@ -539,10 +638,16 @@ UTF-8・改行は CRLF）。
 | 欄 | 意味 |
 |---|---|
 | `contract_version` / `exporter.version` | `3` / `evidence-v3` |
-| `comparison.polarity` | データセットの極性（`positive` / `negative`）。ハンドルなら `dataset_handle_open` の `polarity`、対話のセッションなら同じ規則で決める。決まらなければ `null` |
-| `comparison.preprocess` | `value` に当たった前処理のレシピ。pipeline から引き継いだ結果は、その run のレシピ |
+| `comparison.polarity` | データセットの極性（`positive` / `negative`）。ハンドルなら `load_dataset` の `polarity`、対話のセッションなら同じ規則で決める。決まらなければ `null` |
+| `comparison.preprocess` | `value` に当たった前処理の設定（結果が読んだ行列の前処理の設定） |
+| `comparison.method` | 実際に使った検定名（`moderated_t` / `welch` / `student` / `mannwhitney`） |
+| `comparison.statistics` | `{test, ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n, q_interpretation}, subject_source, n_units_a, n_units_b}`。`n` は選んだ対比の BH の母集団の大きさ |
+| `comparison.effect_size_definition` / `mean_definition` | 効果量の定義（`{name, description}`）と、`mean_a` / `mean_b` が「個体ごとの前処理後の線形値の算術平均」であること |
+| `comparison.matrix_id` / `rule_hash` / `contrast_id` | どの行列・どの規則・どの対比を書いたか（`contrast_id` は 2 群の結果なら 1 つの対比の ID） |
+| `comparison.unadjusted_confounded` | `allow_confounded=true` で完全交絡を越えて走った比較だけ `true`（それ以外は欄が無い）。同じ印は来歴 `provenance.result.comparison.unadjusted_confounded`（と `provenance.result.warnings` の説明）にも載る |
 | `intensities_stage` | `pre_imputation`（補完の前）/ `post_imputation`（補完の後） |
 | `population.detection_unavailable_reason` | `detected` が全行空のときの理由。検出状態を使えれば `null` |
+| `population.exclusions` | 除外の来歴。エンジンの結果は、その行列を作ったときの除外（`dataset_exclude` の試料・特徴。名前は 20 件で切り、残りは `n_more`）を、結果が読んだ行列の登録から引く（今の `ds.excluded_*` ではない） |
 | `files[].role` | `samples` と `intensities` が増える |
 
 `samples.tsv`（データセットの全試料）:
@@ -565,12 +670,7 @@ UTF-8・改行は CRLF）。
 
 `intensities_stage` の決め方:
 
-- `pre_imputation`: 結果を計算した前処理のレシピが分かるとき（session の結果・pipeline から引き継いだ結果の
-  どちらも）。レシピを `impute: none` で当て直す。補完は前処理の最後の段なので、正規化などは比較に入った値と同じ。
-- `post_imputation`: レシピが分からず、今の前処理の行列がその結果の親のとき。その行列の値を書く。
-- どちらでもなければ書かずに `EVIDENCE_INTENSITIES_UNAVAILABLE`（別の前処理の値で埋めない）。結果が群の試料を
-  持たないとき・前処理を当て直せないときも同じ。当て直した特徴の集合が結果の行と違えば
-  `EVIDENCE_INTENSITIES_MISMATCH`。
+- エンジンの結果（`dataset_compare`）: 常に `pre_imputation`。値は結果が読んだ行列（`ds.stat_matrices[matrix_id]`）の `sample_values`——**正規化の後・log2 の前の線形値**で、欠測は空（エンジンは検定に補完しない）。前処理のレシピを当て直さない。行列が登録に無い（除外・試料の表の変更で古くなった）ときは `missing_state`（`dataset_preprocess` と `dataset_compare` をやり直す）、結果の行と行列の特徴の集合が違えば `EVIDENCE_INTENSITIES_MISMATCH`。
 
 `detection_unavailable_reason` の値:
 
@@ -582,20 +682,22 @@ UTF-8・改行は CRLF）。
 | `sample_axis_mismatch` | 結果の試料が `ds.sample_names` に無い（検出状態の試料軸とずれている） |
 
 `features.tsv` に任意の列 `adduct` が増える。mzTab-M の SML の `adduct_ions`（SML が無い特徴は rank 1 の
-SME の付加体）。無ければ空。
+SME の付加体）。無ければ空。`features.tsv` の `significant` は差次的の書き出しの `significant` 列と同じ印で、
+エンジンの結果は判定 `verdict` が `changed` の行だけ `true` になりうる（`dataset.md` §11.4。判定できない行は q が
+小さくても `false`）。
 
 戻り値には v2 の欄に `n_samples`・`n_intensity_rows`・`intensities_stage` が足される。
 
 ### `spectrum_links.tsv` と `.dcl` の出どころ
 
-dataset 経路も ARF 経路（`arf_export_evidence_bundle`）と同じ規則で、**同じアラインメントの `.dcl`** の
+dataset 経路も ARF 経路（`dataset_export_evidence_bundle`）と同じ規則で、**同じアラインメントの `.dcl`** の
 代表スペクトルに結ぶ。結ぶのは ID だけ（**SMF_ID == `.arf2` の AlignmentID == `.dcl` の番号**）で、
 m/z・RT は結びの検証にだけ使う（m/z の近さでは結ばない）。結べた特徴は 1 行（`spectrum_file` は `.dcl`
 のファイル名、`spectrum_id` は `<.dcl の語幹>:<番号>`、`mapping_evidence` は
 `same-alignment-stem; SMF_ID == AlignmentID == DCL index; precursor/RT verified`）。結べた行が 1 件でも
 あれば `.dcl` をバンドルへ写し、`files[]` に `role: spectra` で載る。
 
-使う `.arf2` / `.dcl`: ハンドルなら `dataset_handle_open` が決めたもの（§1）。対話のセッションなら
+使う `.arf2` / `.dcl`: ハンドルなら `load_dataset` が決めたもの（§1）。対話のセッションなら
 同じ探し方（検出状態を取り込んだ `.arf` の同じバッチ → mzTab-M の隣）。
 
 検証は 2 段:

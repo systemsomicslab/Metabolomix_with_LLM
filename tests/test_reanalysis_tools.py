@@ -10,7 +10,7 @@ import textwrap
 
 import pytest
 
-from metabolomix.core import handles, mcp_core, session_state
+from metabolomix.core import handles, session_state
 from metabolomix.dcl import tools as dcl_tools
 from metabolomix.library import tools as library_tools
 from metabolomix.msdial import alignment_spot
@@ -19,6 +19,8 @@ from metabolomix.tools import handle_tools, mztab_tools
 from metabolomix.tools import reanalysis_tools as R
 from tests.dcl_fixture import build_dcl_bytes
 from tests.reanalysis_fixtures import SAMPLES, write_mztab
+from tests.config_fixtures import use_config
+from tests.engine_chain import declare_groups, engine_compare, hc_ra
 
 GABA_KEY = "BTCSSZJGUNDROE-UHFFFAOYSA-N"
 BASE = [10, 12, 11, 20, 22, 21, 15, 16]
@@ -61,7 +63,6 @@ _MSP = textwrap.dedent("""\
 def fresh_state(tmp_path, monkeypatch):
     session_state.session = session_state.AnalysisSession()
     handles.registry = handles.HandleRegistry()
-    monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path)
     yield
     for handle in handles.registry.list():
         handles.registry.close(handle.handle_id)
@@ -85,8 +86,7 @@ def library(tmp_path, monkeypatch, data):
     msp = tmp_path / "lab" / "pos.msp"
     msp.parent.mkdir()
     msp.write_text(_MSP, encoding="ascii")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(msp))
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     run = data["mztab"].parent
     (run / "AlignResult-1.arf2").write_bytes(b"placeholder")
     entries = [{"precursor_mz": 999.0, "rt": 9.0, "spectrum": []} for _ in range(27)]
@@ -100,15 +100,19 @@ def library(tmp_path, monkeypatch, data):
     return msp
 
 
-def _open(data, **kwargs):
-    kwargs.setdefault("library", "none")
-    library = kwargs["library"]
-    out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(data["mztab"]), **kwargs))
+def _open(data, msp=None):
+    kwargs = {"library": "none"}
+    # 旧 `dataset_handle_open` は直近を動かさなかった。この検査は「ハンドルを渡す呼び出しは対話の状態に
+    # 触れない」ことを縛るので、開いたあとで直近を元に戻す（`load_dataset` はいつも直近にする）。
+    previous = session_state.session.current_handle_id
+    out = json.loads(handle_tools.load_dataset(mztab_path=str(data["mztab"]), **kwargs))
     assert out["status"] == "success", out
-    if library == "auto":
-        # mzTab-M の記憶は `unknown` なので、library_load は極性の設定（MSDIAL_MSP_POS）から引く
-        # （mzTab-M の本番の経路）。
-        library_tools.library_load(dataset_handle=out["dataset_handle"])
+    session_state.session.current_handle_id = previous
+    if msp is not None:
+        # mzTab-M の記憶は `unknown` なので、library_load には file_path で明示する（mzTab-M の本番の経路）。
+        loaded = json.loads(library_tools.library_load(file_path=str(msp),
+                                                       dataset_handle=out["dataset_handle"]))
+        assert loaded["status"] == "success", loaded
     return out["dataset_handle"]
 
 
@@ -124,15 +128,27 @@ def _spec(data, **extra):
 
 # ---------- dataset_analysis_run ----------
 
+def _compare_on(handle) -> dict:
+    """ハンドルのデータセットで HC 対 RA を統計エンジンで比較する（群は MS-DIAL の試料の宣言で与える）。"""
+    declare_groups(handles.registry.get(handle).dataset, hc_ra)
+    return engine_compare("HC", "RA", dataset_handle=handle)
+
+
+def _analysis_state(handle):
+    ds = handles.registry.get(handle).dataset
+    return set(ds.results), set(ds.stat_matrices)
+
+
 def test_analysis_run_on_handle_returns_rows_and_leaves_states(data):
     handle = _open(data)
+    before = _analysis_state(handle)
     out = json.loads(R.dataset_analysis_run(_spec(data), dataset_handle=handle))
     assert out["status"] == "success" and out["comparison"] == "RA_vs_HC"
     rows = out["analyses"][0]["rows"].splitlines()
     assert rows[0].startswith("feature_id\tstatus\treason\tgroup_ref\tgroup_test")
     assert rows[1].split("\t")[:5] == ["20", "tested", "", "HC", "RA"]
     assert session_state.session.dataset is None
-    assert handles.registry.get(handle).dataset.pp_matrix is None
+    assert _analysis_state(handle) == before
 
 
 def test_analysis_run_reports_merge_split_state_and_merged_from_column(data):
@@ -158,7 +174,7 @@ def test_analysis_run_rows_have_detection_columns(data):
 
 
 def test_analysis_run_on_session_dataset(data):
-    mztab_tools.dataset_load(mztab_path=str(data["mztab"]))
+    handle_tools.load_dataset(mztab_path=str(data["mztab"]))
     out = json.loads(R.dataset_analysis_run(_spec(data)))
     assert out["status"] == "success"
     assert out["input_fingerprint"]["dataset_hash"]
@@ -347,13 +363,11 @@ def test_injection_trend_rho_is_none_below_five_samples(match_data):
 
 def test_novel_candidates_from_result_id_and_from_spec(data):
     handle = _open(data)
-    T.dataset_preprocess(dataset_handle=handle)
-    diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
-                                             group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
+    diff = _compare_on(handle)
     spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
     out = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
     assert out["status"] == "success" and out["n_rows"] == 2
-    assert out["group_ref"] == "group_a"
+    assert out["group_ref"] == "HC"
     excluded = json.loads(R.dataset_novel_candidates(
         {**spec, "exclude": {"inchikey_blocks": [GABA_KEY]}}, dataset_handle=handle))
     assert excluded["n_rows"] == 1
@@ -421,7 +435,7 @@ def test_claim_evidence_is_deterministic(data, tmp_path):
 
 
 def test_claim_evidence_with_library_runs_msms_rules(data, library):
-    handle = _open(data, library="auto")
+    handle = _open(data, msp=library)
     claim = {**CLAIM, "msms": {"top_n": 3, "rules": {"min_fragments_excl_precursor": 2,
                                                      "diagnostic_ions": [{"mz": 87.0441}]}}}
     out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
@@ -452,7 +466,7 @@ def test_claim_evidence_unresolved_is_needs_input(data):
 # ---------- MS/MS の合否・診断イオン・同族列 ----------
 
 def test_msms_qualify_tool_on_handle(data, library):
-    handle = _open(data, library="auto")
+    handle = _open(data, msp=library)
     out = json.loads(R.library_msms_qualify(
         {"target": {"inchikey": GABA_KEY}, "min_fragments_excl_precursor": 2},
         spot_id=20, dataset_handle=handle))
@@ -464,7 +478,7 @@ def test_msms_qualify_tool_on_handle(data, library):
 
 
 def test_diagnostic_ions_tool(data, library):
-    handle = _open(data, library="auto")
+    handle = _open(data, msp=library)
     out = json.loads(dcl_tools.dcl_diagnostic_ions(
         [20, 21], [{"mz": 87.0441, "label": "a"}, {"neutral_loss": 17.0265, "label": "-NH3"}],
         dataset_handle=handle))
@@ -504,6 +518,7 @@ SPLIT_FEATURES = (
 def test_tool_writes_output_and_returns_summary(tmp_path):
     mztab = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab", features=SPLIT_FEATURES)
     handle = _open({"mztab": mztab})
+    before = _analysis_state(handle)
     target = tmp_path / "results" / "alignment_qc_pos.json"
     out = json.loads(R.dataset_alignment_qc(output_path=str(target), dataset_handle=handle))
     assert out["status"] == "success", out
@@ -527,7 +542,7 @@ def test_tool_writes_output_and_returns_summary(tmp_path):
     assert again.read_bytes() == target.read_bytes()
     inline = json.loads(R.dataset_alignment_qc(dataset_handle=handle))
     assert inline["status"] == "success" and "output_path" not in inline
-    assert handles.registry.get(handle).dataset.pp_matrix is None
+    assert _analysis_state(handle) == before
     bad = json.loads(R.dataset_alignment_qc(ppm=-1, dataset_handle=handle))
     assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
 
@@ -565,7 +580,7 @@ def test_claim_evidence_candidate_has_split(tmp_path, data):
 
 
 def test_counts_qualified_is_msms_verdict(data, library):
-    handle = _open(data, library="auto")
+    handle = _open(data, msp=library)
     target = {"inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": 2.0,
               "adduct_tiers": [["[M+H]+"]]}
 
@@ -596,7 +611,7 @@ def test_spectrum_available_counts_mass_window_even_when_none_rule_qualified(dat
     # 目標の RT を特徴 20（RT 2.0）から外す: 規則で qualified は 0、質量の窓の 20 の代表 MS/MS は数える
     target = {"inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": 9.0, "adduct_tiers": [["[M+H]+"]]}
     claim = {"claim_id": "C1", "target": target, "msms": {"top_n": 3, "rules": {"min_fragments_excl_precursor": 2}}}
-    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=_open(data, library="auto")))
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=_open(data, msp=library)))
     counts = out["default_selection"]["counts"]
     assert counts["rule_qualified"] == 0 and counts["msms_spectrum_available"] == 1
 
@@ -691,11 +706,18 @@ def _groups_tsv(tmp_path):
     return groups
 
 
+#: SPLIT_FEATURES と同じ割れ方（最初の 2 注入だけが 31 に割れる）で、まとめた値が HC で低く RA で高い
+#: （統計エンジンの判定が changed になり、新しい知見の候補に載る）。
+SPLIT_CHANGED = (
+    {**SPLIT_FEATURES[0], "values": [20, 21, 100, 1010, 1020, 1030, 500, 505]},
+    {**SPLIT_FEATURES[1], "values": [105, 98, 22, 20, 21, 23, 20, 22]},
+    SPLIT_FEATURES[2],
+)
+
+
 def test_novel_candidates_count_split_once(tmp_path):
-    handle = _split_handle(tmp_path)
-    T.dataset_preprocess(dataset_handle=handle)
-    diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
-                                             group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
+    handle = _split_handle(tmp_path, SPLIT_CHANGED)
+    diff = _compare_on(handle)
     spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
     out = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
     assert out["status"] == "success", out
@@ -749,9 +771,7 @@ def test_novel_candidates_rule_hash_includes_merge_groups(tmp_path):
     from metabolomix.analysis import mass_accuracy
 
     handle = _split_handle(tmp_path)
-    T.dataset_preprocess(dataset_handle=handle)
-    diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
-                                             group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
+    diff = _compare_on(handle)
     spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
     out = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
     groups_hash = out["merge_split"]["groups_hash"]
@@ -825,9 +845,7 @@ def test_claim_evidence_adds_the_partner_outside_the_mass_window(tmp_path):
 
 def test_novel_candidates_labels_column_and_counts(data, tmp_path):
     handle = _open(data)
-    T.dataset_preprocess(dataset_handle=handle)
-    diff = json.loads(T.dataset_differential(group_a=["HC1", "HC2", "HC3"],
-                                             group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
+    diff = _compare_on(handle)
     spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
     plain = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
     labels = tmp_path / "labels.tsv"
@@ -892,3 +910,168 @@ def test_claim_evidence_on_an_lbm_only_dataset_is_not_evaluable_not_no_library(d
     assert all(m["reason"] == "lbm_only" for m in msms.values())
     assert "LBM" in out["msms_not_evaluable_reason"]
     assert msms["20"]["spectrum_available"] is True
+
+
+def test_not_evaluable_reason_is_last_key(data, library):
+    """理由の文は束の先頭に置かず、末尾に置く（読み手が最初に見るのは status / schema）。"""
+    from metabolomix.core import handles
+
+    handle = _open(data)
+    handles.registry.get(handle).dataset.library_record = {
+        "status": "lbm_only", "kind": "lbm", "file": "lab.lbm2", "path": None}
+    claim = {**CLAIM, "msms": {"top_n": 3, "rules": {}}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    keys = list(out)
+    assert "msms_not_evaluable_reason" in keys
+    assert keys[-1] == "msms_not_evaluable_reason" and keys[0] != "msms_not_evaluable_reason"
+    assert "schema" in keys
+
+
+# ---------- dataset_analysis_run: v1 / v2 の振り分け（C の配線 Task 7） ----------
+
+def _v2_state(tmp_path):
+    from tests.test_stats_results import _ds
+    state = _ds()
+    state.analysis_dir = str(tmp_path / "analysis")
+    session_state.session.dataset = state
+    return state
+
+
+_V2_OFF = {"drift": {"mode": "off"},
+           "filters": {"blank_ratio": None, "detection": None, "qc_rsd": None, "d_ratio": None},
+           "normalize": {"method": "none"}}
+
+
+def _v2_spec(**extra):
+    spec = {"schema": "analysis-spec.v2", "preprocess": _V2_OFF,
+            "comparisons": [{"id": "T_vs_C", "factor": "group", "reference": "C", "test": "T"}],
+            "analyses": [{"analysis_id": "cmp", "kind": "compare"}]}
+    spec.update(extra)
+    return spec
+
+
+def _strict_loads(text):
+    return json.loads(text, parse_constant=lambda c: pytest.fail(f"non-strict constant {c}"))
+
+
+def test_analysis_run_dispatches_v2_by_schema(tmp_path):
+    _v2_state(tmp_path)
+    out = json.loads(R.dataset_analysis_run(_v2_spec(analyses=[
+        {"analysis_id": "cmp", "kind": "compare"}, {"analysis_id": "pc", "kind": "pca"},
+        {"analysis_id": "comp", "kind": "composition"}], primary="cmp")))
+    assert out["status"] == "success" and out["schema"] == "analysis-result.v2"
+    assert {"rule_hash", "matrix_id", "input_fingerprint", "warnings"} <= out.keys()
+    cmp_, pca_, comp = out["analyses"]
+    assert (cmp_["analysis_id"], cmp_["kind"], cmp_["n_rows"], cmp_["n_tested"]) == ("cmp", "compare", 10, 10)
+    assert sum(cmp_["verdicts"].values()) == 10 and cmp_["verdicts"]["changed"] >= 3
+    assert "n_q_below" in cmp_ and cmp_["rows"].splitlines()[0].split("\t")[:2] == ["contrast_id", "feature_id"]
+    assert pca_["kind"] == "pca" and pca_["explained_variance_ratio"] and "rows" not in pca_
+    assert comp["kind"] == "composition" and "n_rows" in comp
+    # v1 の spec（schema なし）は v1 のまま
+    v1 = json.loads(R.dataset_analysis_run({"comparison": {}}))
+    assert v1["error"]["code"] in ("ANALYSIS_SPEC_INVALID", "missing_state")
+
+
+def test_analysis_run_v1_unchanged_golden(data, tmp_path):
+    from metabolomix.analysis import analysis_spec
+    handle = _open(data)
+    out = json.loads(R.dataset_analysis_run(_spec(data), dataset_handle=handle))
+    assert list(out) == ["status", "schema", "rule_hash", "merge_split", "input_fingerprint",
+                         "comparison", "group_ref", "group_test", "analyses", "note"]
+    assert out["schema"] == "analysis-result.v1"
+    assert list(out["analyses"][0]) == [
+        "analysis_id", "n_features_in", "n_features_out", "bh_population_n", "n_rows", "n_tested",
+        "n_meets_thresholds", "detection_available", "n_detection_driven", "rows"]
+    path = tmp_path / "v1.json"
+    R.dataset_analysis_run(_spec(data), dataset_handle=handle, output_path=str(path))
+    ds = handles.registry.get(handle).dataset
+    expected = R.write_result(str(tmp_path / "exp.json"), analysis_spec.run_spec(
+        analysis_spec.normalize_spec(_spec(data)), ds))
+    assert path.read_bytes() == (tmp_path / "exp.json").read_bytes() and expected
+
+
+def test_analysis_run_v2_output_path_strict_json(tmp_path):
+    _v2_state(tmp_path)
+    path = tmp_path / "out" / "r.json"
+    out = json.loads(R.dataset_analysis_run(_v2_spec(), output_path=str(path)))
+    assert out["output_path"] == str(path.resolve()) and "rows" not in out["analyses"][0]
+    saved = _strict_loads(path.read_text(encoding="utf-8"))
+    assert saved["schema"] == "analysis-result.v2" and saved["rule_hash"] == out["rule_hash"]
+    assert len(saved["analyses"][0]["result"]["rows"]) == 10
+    again = tmp_path / "out" / "r2.json"
+    R.dataset_analysis_run(_v2_spec(), output_path=str(again))
+    assert again.read_bytes() == path.read_bytes()
+
+
+def test_analysis_run_v2_inline_row_limit(tmp_path):
+    import numpy as np
+    state = _v2_state(tmp_path)
+    nf = 60
+    rng = np.random.default_rng(1)
+    state.feature_matrix = np.exp2(rng.normal(20, 1, (nf, len(state.sample_names))))
+    state.detected_mask = np.ones_like(state.feature_matrix, dtype=bool)
+    state.feature_ids = [f"f{k}" for k in range(nf)]
+    state.feature_metadata = {f"f{k}": {"name": f"F{k}"} for k in range(nf)}
+    out = json.loads(R.dataset_analysis_run(_v2_spec()))
+    assert out["error"]["code"] == "ANALYSIS_OUTPUT_REQUIRED"
+    assert out["error"]["details"]["analyses"] == ["cmp"]
+    ok = json.loads(R.dataset_analysis_run(_v2_spec(), output_path=str(tmp_path / "o.json")))
+    assert ok["analyses"][0]["n_rows"] == 60
+
+
+def test_analysis_run_v2_needs_input_envelope_names_spec_field(tmp_path):
+    state = _v2_state(tmp_path)
+    state.quant_state = {"normalized": True, "method": "is_ratio", "unit": "ratio",
+                         "record_id": "q_test_1"}
+    spec = _v2_spec(preprocess={"filters": _V2_OFF["filters"], "normalize": {"method": "none"}})
+    out = json.loads(R.dataset_analysis_run(spec))
+    body = out["needs_input"]
+    assert "error" not in out and body["field"] == "preprocess.drift.mode"
+    assert "argument" not in body and body["retry_tools"] == ["dataset_analysis_run"]
+    assert {o["value"] for o in body["options"]} == {"on", "off"}
+
+
+def test_analysis_run_v2_dataset_exclusions_not_in_spec_warn(tmp_path):
+    state = _v2_state(tmp_path)
+    state.excluded_samples = {"C0_r0": "x"}
+    state.excluded_features = {"f1": "y"}
+    out = json.loads(R.dataset_analysis_run(_v2_spec(), output_path=str(tmp_path / "o.json")))
+    warn = [w for w in out["warnings"] if w["code"] == "dataset_exclusions_not_in_spec"]
+    assert warn == [{"code": "dataset_exclusions_not_in_spec", "n_samples": 1, "n_features": 1}]
+    assert out["analyses"][0]["n_rows"] == 10            # ds の除外は使わない
+    listed = json.loads(R.dataset_analysis_run(_v2_spec(input={
+        "exclude_samples": ["C0_r0"], "exclude_features": ["f1"]}), output_path=str(tmp_path / "p.json")))
+    assert not [w for w in listed["warnings"] if w["code"] == "dataset_exclusions_not_in_spec"]
+    assert listed["analyses"][0]["n_rows"] == 9
+
+
+def test_analysis_run_v2_exclusions_compare_names_and_ids_on_one_key(tmp_path):
+    """spec は試料を表示名でも試料 ID でも書ける（名前が先）。`dataset_exclude` の除外（表示名）と同じ鍵で
+    比べるので、ID で書いた同じ試料を「spec に無い除外」と数えない。"""
+    state = _v2_state(tmp_path)
+    assert state.sample_ids[state.sample_names.index("C0_r0")] == "id_C0_r0"
+    state.excluded_samples = {"C0_r0": "x", "T1_r1": "y"}
+    by_id = json.loads(R.dataset_analysis_run(_v2_spec(input={"exclude_samples": ["id_C0_r0", "T1_r1"]}),
+                                              output_path=str(tmp_path / "o.json")))
+    assert by_id["status"] == "success"
+    assert not [w for w in by_id["warnings"] if w["code"] == "dataset_exclusions_not_in_spec"]
+    partial = json.loads(R.dataset_analysis_run(_v2_spec(input={"exclude_samples": ["id_C0_r0"]}),
+                                                output_path=str(tmp_path / "p.json")))
+    warn = [w for w in partial["warnings"] if w["code"] == "dataset_exclusions_not_in_spec"]
+    assert warn == [{"code": "dataset_exclusions_not_in_spec", "n_samples": 1, "n_features": 0}]
+
+
+def test_analysis_run_does_not_touch_session_or_reports(tmp_path):
+    import copy
+    state = _v2_state(tmp_path)
+    before = (dict(state.__dict__.get("results", {}) or {}), copy.deepcopy(state.stat_matrices),
+              state.sample_names[:], state.feature_matrix.copy())
+    handle_before = session_state.session.current_handle_id
+    R.dataset_analysis_run(_v2_spec(analyses=[{"analysis_id": "cmp", "kind": "compare"},
+                                              {"analysis_id": "pc", "kind": "pca"}], primary="cmp"))
+    after = (dict(state.__dict__.get("results", {}) or {}), copy.deepcopy(state.stat_matrices),
+             state.sample_names[:], state.feature_matrix)
+    assert after[:3] == before[:3] and (after[3] == before[3]).all()
+    assert session_state.session.dataset is state
+    assert session_state.session.current_handle_id == handle_before
+    assert not (tmp_path / "analysis" / "reports").exists()

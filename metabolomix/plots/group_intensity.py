@@ -1,7 +1,7 @@
 """群別強度プロット: 選んだクラス・分子種ごとに、試料群の試料別強度を並べる（MCP 非依存）。
 
 1 パネル = 1 項目、1 点 = 1 試料（項目に当たったスポットの PeakHeight の合計）、群ごとに
-log10 の平均 ± SD。検定はしない（`arf_differential` の役割）。spec:
+log10 の平均 ± SD。検定はしない（`dataset_compare` の役割）。spec:
 docs/superpowers/specs/2026-10-06-group-intensity-plot-design.md。
 """
 from __future__ import annotations
@@ -31,7 +31,7 @@ def _candidate_names(name: str) -> set[str]:
 def resolve_items(items, catalog, *, curation=None, standard_only=frozenset(), manual=frozenset()):
     """項目（クラス・名前、`+` で合算）をスポット集合に解決する。spec §3.1 / §5。
 
-    manual: `arf_exclude` で手動除外したスポット ID。クラスにも名前指定にも効く。
+    manual: `dataset_exclude` で手動除外したスポット ID。クラスにも名前指定にも効く。
     """
     items = [str(item) for item in (items or [])]
     if not 1 <= len(items) <= MAX_ITEMS:

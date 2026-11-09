@@ -46,13 +46,18 @@ flowchart TD
 
 ## curation_review
 
-前提: `.arf2` が解決できること（無ければ `missing_state("arf2_file", ["load_dataset", "arf2_parser"])`）、
-`session.library.store` があること（無ければ `missing_state("library", ["library_load"])`）。
+前提: データセットがあること（`dataset_handle`、省けば直近。無い・閉じていれば
+`missing_state("dataset", ["load_dataset"])` か `DATASET_HANDLE_NOT_FOUND`。`data/` や別のハンドルへは落ちない）、
+そのデータセットが `.arf2` を持つこと（mzTab-M だけなら理由つきのエラー）、データセットのライブラリ
+（`holder.library.store`）があること（無ければ `missing_state("library", ["library_load"])`）。
 状態変更: `session.curation.last_review_id` と `review_dirs[review_id]`。ディスクに
 `<arf2 のフォルダ>/curation/review-<id>.json` と `.html` を書く。受け口の登録表にトークンを足す（プロセス内）。
 
-1. metabolomix/core/path_resolvers.py  resolve_arf2_file_path()
-2. metabolomix/curation/judge.py  resolve_thresholds()
+1. metabolomix/tools/curation_tools.py  _dataset_context()
+2. └─ metabolomix/dataset/artifacts.py  artifact_path()（`.arf2` はハンドルの `arf2_path`、無ければデータセットの記録）
+3. metabolomix/tools/curation_tools.py  _library_store()
+4. metabolomix/curation/judge.py  resolve_thresholds()
+5. metabolomix/curation/evidence.py  dataset_files()（`.dcl` / `.EIC.aef` / `.arf` はデータセットの記録から引く。`.arf2` の隣は探さない）
 3. metabolomix/arf2/reader.py  load_catalog()
 4. metabolomix/curation/evidence.py  select_spots()（load_catalog() が返したカタログを渡す）
 5. metabolomix/curation/review.py  run_review()
@@ -100,14 +105,15 @@ flowchart TD
 
 ## curation_suggest
 
-前提: `.arf2` が解決できること、`session.library.store` があること（無ければ
-`missing_state("library", ["library_load"])`）、このアラインメントのレビューがあること（無ければ
+前提: `curation_review` と同じ（データセットとその `.arf2`、データセットのライブラリ）に加えて、
+このアラインメントのレビューがあること（無ければ
 `missing_state("curation_review", ["curation_review"])`）。状態変更: `session.curation.review_dirs[suggestion_id]`。
 ディスクに `<arf2 のフォルダ>/curation/suggest-<id>.json` と `.html` を書く。受け口の登録表にトークンを足す（プロセス内）。
 
-1. metabolomix/core/path_resolvers.py  resolve_arf2_file_path()
-2. metabolomix/curation/judge.py  resolve_thresholds()
-3. metabolomix/curation/flags.py  alignment_key()
+1. metabolomix/tools/curation_tools.py  _dataset_context()
+2. metabolomix/tools/curation_tools.py  _library_store()
+3. metabolomix/curation/judge.py  resolve_thresholds()
+4. metabolomix/curation/flags.py  alignment_key()
 4. metabolomix/curation/suggest.py  latest_review()（同じ sha256 のアラインメントに対する最新のレビュー。`review_id` を渡せば `_find_review()` でそれ）
 5. metabolomix/curation/suggest.py  run_suggestion()
 6. │  └─ metabolomix/curation/flags.py  FlagStore.effective()（有効な判断。読めない行は `FlagFileError` → エラー payload）
@@ -132,7 +138,11 @@ flowchart TD
 前提: `review_id` のレビューがディスクにあること。状態変更: `flags.jsonl` へ追記し、
 アラインメントの `_tags.xml` の Misannotation と Confirmed を書き換える（書く前に `curation/tags-backup/` へ控え）。
 レビューの探し先は、セッションの `review_dirs` → 送信用テキストの `arf2_path` →
-引数 `file_path` → 既定の `.arf2` の順（サーバ再起動の後でも貼った文で送れる）。
+データセット（`dataset_handle`、省けば直近）の `.arf2` のフォルダの順（`data/` は探さない。
+サーバ再起動の後でも、貼った文なら送れる）。どれも無ければ `missing_state("dataset", ["load_dataset"])`。
+書いた後、同じ `.arf2` を持つ開いているハンドルすべての `curation_flags` を読み直す
+（`submission.after_write` → `curation_tools._refresh_open_handles`。ハンドルごとにそのハンドルのロックの下で
+1 つずつ、`REFRESH_LOCK_TIMEOUT` 秒だけ待つ。取れなければ `open_handles.not_refreshed`）。
 
 1. metabolomix/curation/flags.py  parse_submission_text()（`submission_text` のとき）
 2. metabolomix/curation/review.py  is_valid_review_id()（形が違えばパスに使う前にエラー。`cs-…` は metabolomix/curation/suggest.py  is_valid_suggestion_id() も許す）
@@ -151,6 +161,11 @@ flowchart TD
 15.    └─ metabolomix/curation/msdial_writeback.py  sync_tags()（失敗しても記録は残し `tags_xml.error`。assign / redundant は触らない）
 16.       └─ metabolomix/msdial/tags.py  update_alignment_tags()（Misannotation と Confirmed を 1 回で書く）
 17.          └─ metabolomix/core/atomic_io.py  atomic_write_bytes()
+18. metabolomix/curation/submission.py  after_write（`_WRITE_LOCK` の外で。HTTP の受け口の送信でも同じ）
+19. └─ metabolomix/tools/curation_tools.py  _refresh_open_handles()
+20.    ├─ metabolomix/core/file_digest.py  sha256_of()（書いた `.arf2` の sha256）
+21.    ├─ metabolomix/core/handles.py  HandleRegistry.handles_for_arf2()（同じ `.arf2` を持つ開いているハンドル）
+22.    └─ metabolomix/dataset/msdial_adapter.py  reload_curation()（ハンドルのロックの下で `ds.curation_flags` を読み直す）
 
 ### ビューアからの直接送信（HTTP。MCP ツールではない）
 
@@ -166,12 +181,13 @@ flowchart TD
 
 ## curation_flags
 
-1. metabolomix/curation/flags.py  alignment_key()
-2. metabolomix/curation/flags.py  FlagStore.effective()
+1. metabolomix/tools/curation_tools.py  _dataset_context()（`dataset_handle`、省けば直近。`.arf2` の無いデータセットは理由つきのエラー）
+2. metabolomix/curation/flags.py  alignment_key()
+3. metabolomix/curation/flags.py  FlagStore.effective()
 
 ## curation_view_data
 
 1. metabolomix/curation/review.py  is_valid_review_id()
-2. metabolomix/tools/curation_tools.py  _find_review()
+2. metabolomix/tools/curation_tools.py  _find_review()（セッションの記録 → データセットの `.arf2` のフォルダ）
 3. └─ metabolomix/curation/review.py  load_review()
 4. metabolomix/curation/review.py  page()

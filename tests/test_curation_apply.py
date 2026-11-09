@@ -53,12 +53,10 @@ def test_arf2_for_mztab_matches_the_batch_stem(tmp_path):
 # ---------- export_dataset_result への反映（Step 5） ----------
 
 def _prepared_dataset():
-    from metabolomix.analysis.dataset_service import compare_dataset, preprocess_dataset
+    from tests.engine_chain import compare_halves
     from tests.pipeline_fixtures import make_dataset
     ds = make_dataset()
-    preprocess_dataset(ds, {"normalize": "none", "impute": "half_min"})
-    result = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
-    return ds, result
+    return ds, compare_halves(ds)
 
 
 def test_export_dataset_result_with_no_curation_has_no_meta_line(tmp_path):
@@ -193,3 +191,50 @@ def test_filter_rows_excludes_wrong_and_redundant_and_counts_assigned():
     kept, stats = curation_apply.filter_rows(rows, fs, key=lambda r: r["spot_id"])
     assert [r["spot_id"] for r in kept] == [2, 3, 4]
     assert stats == {"wrong_excluded": 1, "redundant_excluded": 1, "suspect": 1, "assigned": 1}
+
+
+# ---------- 語幹が無い mzTab-M の名前でも m/z の照合で `.arf2` を見つける ----------
+
+def _arf2_with_mz(path, mzs):
+    from tests.curation_fixtures import arf2_spot_raw, write_arf2
+    return write_arf2(path, [arf2_spot_raw(spot_id=i, mz=mz) for i, mz in enumerate(mzs)])
+
+
+def test_arf2_found_without_batch_stem(tmp_path):
+    arf2 = _arf2_with_mz(tmp_path / "AlignmentResult_2026_01_01.arf2", [500.1, 600.2, 700.3])
+    mztab = tmp_path / "Height_x.mzTab"
+    mztab.write_text("", encoding="utf-8")
+    assert apply.arf2_for_mztab(mztab) is None  # m/z を渡さなければ推測しない
+    assert apply.arf2_for_mztab(mztab, feature_mz=[500.1, 600.2, 700.3]) == arf2
+    state = apply.flags_for_arf2(apply.arf2_for_mztab(mztab, feature_mz=[500.1, 600.2, 700.3]))
+    assert state["n"] == 0
+
+
+def test_arf2_not_guessed_when_mz_differs(tmp_path):
+    _arf2_with_mz(tmp_path / "AlignmentResult_2026_01_01.arf2", [500.1, 600.2, 700.3])
+    mztab = tmp_path / "Height_x.mzTab"
+    mztab.write_text("", encoding="utf-8")
+    assert apply.arf2_for_mztab(mztab, feature_mz=[510.1, 620.2, 730.3]) is None
+    assert apply.arf2_for_mztab(mztab, feature_mz=[500.1, 600.2]) is None  # 数が違う
+
+
+def test_spot_catalog_in_another_folder_is_found_via_extra_candidates(tmp_path):
+    out, elsewhere = tmp_path / "msdial", tmp_path / "other"
+    out.mkdir(); elsewhere.mkdir()
+    arf2 = _arf2_with_mz(elsewhere / "AlignmentResult_2026_01_01.arf2", [500.1, 600.2, 700.3])
+    mztab = out / "Height_x.mzTab"
+    mztab.write_text("", encoding="utf-8")
+    mz = [500.1, 600.2, 700.3]
+    assert apply.arf2_for_mztab(mztab, feature_mz=mz) is None
+    assert apply.arf2_for_mztab(mztab, feature_mz=mz, extra_candidates=[arf2]) == arf2
+    # 語幹が名前にあれば、m/z が無くても extra の候補を語幹で見つける
+    stem_mztab = out / "Height_AlignmentResult_2026_01_01_x.mzTab"
+    assert apply.arf2_for_mztab(stem_mztab, extra_candidates=[arf2]) == arf2
+
+
+def test_malformed_arf2_is_skipped_without_crashing(tmp_path):
+    (tmp_path / "broken.arf2").write_bytes(b"not an arf2 at all")
+    good = _arf2_with_mz(tmp_path / "AlignmentResult_2026_01_01.arf2", [500.1, 600.2, 700.3])
+    mztab = tmp_path / "Height_x.mzTab"
+    mztab.write_text("", encoding="utf-8")
+    assert apply.arf2_for_mztab(mztab, feature_mz=[500.1, 600.2, 700.3]) == good

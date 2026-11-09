@@ -92,3 +92,19 @@ class DclEntryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_sidecar_found_case_insensitively(tmp_path):
+    """兄弟ファイルは名前の大文字小文字を問わず探し、実在する綴りのまま返す。"""
+    from types import SimpleNamespace
+
+    from metabolomix.dataset.opening import _folder_sidecars
+
+    arf2 = tmp_path / "AlignmentResult_1.arf2"
+    arf2.write_bytes(b"x")
+    (tmp_path / "AlignmentResult_1.DCL").write_bytes(b"x")
+    (tmp_path / "AlignmentResult_1.eic.AEF").write_bytes(b"x")
+    assert alignment_spot.alignment_sibling(arf2, ".dcl").name == "AlignmentResult_1.DCL"
+    assert alignment_spot.alignment_sibling(arf2, ".EIC.aef").name == "AlignmentResult_1.eic.AEF"
+    names = {Path(p).name for p in _folder_sidecars(SimpleNamespace(source_files={str(arf2): 1}))}
+    assert {"AlignmentResult_1.DCL", "AlignmentResult_1.eic.AEF"} <= names

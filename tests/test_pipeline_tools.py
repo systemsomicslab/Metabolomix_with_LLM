@@ -6,7 +6,7 @@ metabolomix.pipeline.recovery）。
 (4) 戻り値が行列・スコア・loadings・volcano点列を一切含まないcompactな
 発送receiptであることだけを検証する。service/recovery自体の振る舞い
 （受付冪等性・handler配線・resume判定等）はtest_pipeline_engine.py /
-test_pipeline_recovery.py / test_pipeline_report.py 等が別に検証する。
+test_pipeline_recovery.py / test_pipeline_receipt.py 等が別に検証する。
 """
 from __future__ import annotations
 

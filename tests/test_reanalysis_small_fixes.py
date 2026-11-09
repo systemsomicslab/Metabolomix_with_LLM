@@ -17,6 +17,7 @@ from metabolomix.console import execution, job_manager
 from metabolomix.console import method_file as method_file_mod
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.pipeline import inputs
+from tests.config_fixtures import use_config
 
 
 def _bruker(root):
@@ -55,15 +56,6 @@ def test_execution_fingerprint_unchanged_for_plain_files(tmp_path):
     from metabolomix.core.atomic_io import canonical_hash
     assert execution.raw_fingerprint([str(raw)]) == canonical_hash(
         [{"path": str(raw), "size": st.st_size, "mtime_ns": st.st_mtime_ns}])
-
-
-def test_raw_inventory_excludes_cache(tmp_path):
-    d = _bruker(tmp_path)
-    _touch_cache(d)
-    _ext, raw_stat = inputs.resolve_raw_inventory(tmp_path, "d")
-    paths = [s["relative_path"] for s in raw_stat]
-    assert "S1.d/analysis.baf" in paths
-    assert not any(p.endswith("analysis.sqlite") for p in paths)
 
 
 def test_verify_inputs_ignores_cache_in_old_snapshots(tmp_path):
@@ -105,26 +97,6 @@ def test_write_effective_method_file_refuses_non_ascii_without_crashing(tmp_path
         method_file_mod.write_effective_method_file(src, tmp_path / "out.txt",
                                                     {"Ion mode": "Negative"})
     assert info.value.code == "METHOD_FILE_NOT_ASCII"
-
-
-def test_console_plan_returns_envelope_for_non_ascii_method(tmp_path, monkeypatch):
-    from metabolomix.core import session_state
-    from metabolomix.tools import console_tools
-
-    session_state.session = session_state.AnalysisSession()
-    app = tmp_path / "msdial_app"
-    app.mkdir()
-    (app / "Lipids.lbm2").touch()
-    monkeypatch.setenv("MSDIAL_EXE", str(app / "MSDIALCUI.exe"))
-    monkeypatch.delenv("MSDIAL_LBM", raising=False)
-    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
-    root = tmp_path / "data"
-    root.mkdir()
-    (root / "a.wiff").touch()
-    method = _method(tmp_path, "Ion mode: Positive\nMemo: メモ\n")
-    out = json.loads(console_tools.console_plan(str(root), method_file=str(method)))
-    assert out["error"]["code"] == "METHOD_FILE_NOT_ASCII"
-    assert out["error"]["details"]["line"] == 2
 
 
 def test_non_ascii_in_an_overridden_line_is_fine(tmp_path):

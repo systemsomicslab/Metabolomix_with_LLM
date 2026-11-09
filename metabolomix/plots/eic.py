@@ -10,6 +10,10 @@ from metabolomix.eic.identity_map import IdentityCandidate, verify_spot_match
 from metabolomix.msdial.classes import parse_analysis_file_classes, resolve_mddata_path
 
 
+#: `dataset_plot(kind="eic_compounds")` が 1 枚に重ねる物質数の既定。24 は凡例で埋まって判読できず、
+#: payload も実測 119,768 字まで膨らんだ。
+DEFAULT_COMPOUND_TOP_N = 8
+
 # 座標の丸め桁数。RT は分単位で 4 桁（0.0001 分 = 6 ms）あれば図も解釈も足り、
 # m/z も 4 桁が慣例。float の既定 repr は 17 桁まで出すため、1 トレース 200 点
 # × 60 サンプルでは桁の大半が無意味な尾数になる（実測 -36%）。
@@ -341,7 +345,7 @@ def build_multi_compound_plot_payload(
     *,
     file_id: int,
     file_path: str | Path,
-    arf2_path: str | Path,
+    arf2_path: str | Path | None,
     normalize: str = "none",
     top_n: int = 24,
     title: str | None = None,
@@ -367,7 +371,7 @@ def build_multi_compound_plot_payload(
         raise ValueError("top_n must be a positive integer")
 
     path = Path(file_path).resolve()
-    arf2 = Path(arf2_path).resolve()
+    arf2 = Path(arf2_path).resolve() if arf2_path else None
     metadata, meta_caveats = _sample_metadata(path)
     notes = list(caveats or []) + meta_caveats
     dropped: list[DroppedCompound] = []
@@ -467,7 +471,8 @@ def build_multi_compound_plot_payload(
         "plot_type": "line",
         "title": plot_title,
         "source": {
-            "file": str(path), "file_name": path.name, "arf2_file": str(arf2),
+            "file": str(path), "file_name": path.name,
+            "arf2_file": str(arf2) if arf2 else "",
         },
         "axes": {
             "x": {"label": x_label, "unit": x_unit, "scale": "linear"},

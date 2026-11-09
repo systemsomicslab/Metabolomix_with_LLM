@@ -170,15 +170,14 @@ def test_export_writes_msp_library_rows_with_the_contract_columns(tmp_path):
     """エクスポートは inchikey_source を通すだけ。列は契約のまま（CONTRACT_VERSION 不変）。"""
     from metabolomix.analysis import export_contract
     from metabolomix.analysis.dataset_export import export_dataset_result
-    from metabolomix.analysis.dataset_service import compare_dataset, preprocess_dataset
+    from tests.engine_chain import compare_halves
     from tests.pipeline_fixtures import make_dataset
 
     ds = make_dataset()
     fid = ds.feature_ids[0]
     ds.feature_metadata.setdefault(fid, {}).update(
         {"name": "Citrulline", "inchikey": CIT, "inchikey_source": "msp_library"})
-    preprocess_dataset(ds, {"normalize": "none", "impute": "half_min"})
-    result = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
+    result = compare_halves(ds)
 
     export_dataset_result(ds, result, tmp_path / "out.tsv", curation=None)
 

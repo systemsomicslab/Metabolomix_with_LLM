@@ -3,12 +3,15 @@
 条件付きガードの4条件（未読時のみ / 1回のみ / リソース読了で解除 / MODE=off で無効）
 と、フラグがデータ切替（reset_analysis_state / load_data）で消えないことを検証する。
 """
-import os
+import json
+import tempfile
 import unittest
-from unittest import mock
+from pathlib import Path
 
-from metabolomix.arf import reader as arf_reader
-from metabolomix.core import session_state
+from metabolomix.core import handles, session_state
+from metabolomix.tools import handle_tools, objective
+from tests.config_fixtures import config_env
+from tests.reanalysis_fixtures import write_mztab
 
 
 class TestSemanticsCaveatGuard(unittest.TestCase):
@@ -19,60 +22,33 @@ class TestSemanticsCaveatGuard(unittest.TestCase):
         self.assertFalse(session_state.session.output_format_seen)
         self.assertFalse(session_state.session.caveat_emitted)
 
-    def test_prepends_once_then_stops(self):
+    def test_emits_once_then_stops(self):
         s = session_state.session
-        first = s.maybe_prepend_caveat("BODY-1")
+        first = s.take_caveat()
         self.assertTrue(first.startswith(session_state.SEMANTICS_CAVEAT))
-        self.assertIn("BODY-1", first)
         self.assertTrue(s.caveat_emitted)
-        # 2回目は前置しない（本文そのまま）
-        second = s.maybe_prepend_caveat("BODY-2")
-        self.assertEqual(second, "BODY-2")
+        # 2回目は出さない
+        self.assertIsNone(s.take_caveat())
 
-    def test_resource_read_suppresses_prepend(self):
+    def test_resource_read_suppresses_digest(self):
         s = session_state.session
         s.output_format_seen = True  # output-format を fetch 済み相当
-        out = s.maybe_prepend_caveat("BODY")
-        self.assertEqual(out, "BODY")
+        self.assertIsNone(s.take_caveat())
         self.assertFalse(s.caveat_emitted)
 
     def test_mode_off_disables(self):
         s = session_state.session
-        with mock.patch.dict(os.environ, {"LIPIDMIX_CAVEAT_MODE": "off"}):
-            out = s.maybe_prepend_caveat("BODY")
-        self.assertEqual(out, "BODY")
+        with (tempfile.TemporaryDirectory() as tmp,
+              config_env(Path(tmp), {"server.caveat_mode": "off"})):
+            out = s.take_caveat()
+        self.assertIsNone(out)
         self.assertFalse(s.caveat_emitted)
 
     def test_mode_default_is_digest(self):
         s = session_state.session
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("LIPIDMIX_CAVEAT_MODE", None)
-            out = s.maybe_prepend_caveat("BODY")
+        with tempfile.TemporaryDirectory() as tmp, config_env(Path(tmp), {}):  # キーが無い
+            out = s.take_caveat()
         self.assertTrue(out.startswith(session_state.SEMANTICS_CAVEAT))
-
-    def test_flags_survive_arf_reset_analysis(self):
-        s = session_state.session
-        s.maybe_prepend_caveat("BODY")  # caveat_emitted -> True
-        s.output_format_seen = True
-        s.arf.reset_analysis()
-        # データ切替のたびに再注入しないため、両フラグは保持される
-        self.assertTrue(s.caveat_emitted)
-        self.assertTrue(s.output_format_seen)
-
-    def test_flags_survive_new_file_load(self):
-        s = session_state.session
-        s.caveat_emitted = True
-        s.output_format_seen = True
-        orig = arf_reader.deserialize
-        arf_reader.deserialize = lambda buf: []
-        self.addCleanup(setattr, arf_reader, "deserialize", orig)
-        try:
-            s.load_data("dummy_path.arf")
-        except Exception:
-            pass  # discover 系がファイル不在で落ちても、フラグは触られない
-        self.assertTrue(s.caveat_emitted)
-        self.assertTrue(s.output_format_seen)
-
 
 class TestResourceReadClearsGuard(unittest.TestCase):
     """output_format_reference() を実際に呼ぶと output_format_seen が立つこと。"""
@@ -133,28 +109,95 @@ class TestAssayKindDigest(unittest.TestCase):
 
     def test_reemits_once_when_kind_becomes_known(self):
         s = session_state.session
-        first = s.maybe_prepend_caveat("BODY-1")
+        first = s.take_caveat()
         self.assertIn("未確定", first)
         # 種別が確定したら、確定後の規則を1回だけ届ける
         s.set_assay_kind("metabolite")
-        second = s.maybe_prepend_caveat("BODY-2")
+        second = s.take_caveat()
         self.assertIn("アダクト", second)
         # 同じ種別のままなら再注入しない
-        third = s.maybe_prepend_caveat("BODY-3")
-        self.assertEqual(third, "BODY-3")
+        self.assertIsNone(s.take_caveat())
 
     def test_resource_read_suppresses_reemission(self):
         s = session_state.session
-        s.maybe_prepend_caveat("BODY-1")
+        s.take_caveat()
         s.output_format_seen = True
         s.set_assay_kind("lipid")
-        self.assertEqual(s.maybe_prepend_caveat("BODY-2"), "BODY-2")
+        self.assertIsNone(s.take_caveat())
 
-    def test_kind_survives_reset_analysis(self):
-        s = session_state.session
-        s.set_assay_kind("metabolite")
-        s.arf.reset_analysis()
-        self.assertEqual(s.assay_kind, "metabolite")
+class TestTakeCaveatIsThreadSafe(unittest.TestCase):
+    """`load_dataset` はワーカースレッドで走る。同時に呼ばれてもダイジェストは 1 回だけ出る。"""
+
+    def test_only_one_of_many_threads_gets_the_digest(self):
+        import threading
+
+        for _ in range(20):
+            s = session_state.AnalysisSession()
+            barrier = threading.Barrier(8)
+            got = []
+
+            def worker():
+                barrier.wait()
+                got.append(s.take_caveat())
+
+            threads = [threading.Thread(target=worker) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.assertEqual(sum(1 for g in got if g), 1)
+
+
+class TestDigestTravelsWithLoadDataset(unittest.TestCase):
+    """`load_dataset` の戻り値（JSON）の `caveat` に意味論ダイジェストが載る（B-2b Task 10）。
+
+    旧パーサが消えて前置する口が無くなったので、入口の `load_dataset` が
+    JSON の最上位の `caveat` 文字列として運ぶ。1 回だけ・種別ごと・`caveat_mode=off` で止まる。
+    """
+
+    def setUp(self):
+        session_state.session = session_state.AnalysisSession()
+        handles.registry = handles.HandleRegistry()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.mztab = write_mztab(Path(self._tmp.name) / "AlignResult-1.mzTab")
+
+    def _load(self) -> dict:
+        return json.loads(handle_tools.load_dataset(mztab_path=str(self.mztab), library="none"))
+
+    def test_first_call_carries_the_digest_and_the_second_does_not(self):
+        first = self._load()
+        self.assertTrue(first["caveat"].startswith(session_state.SEMANTICS_CAVEAT))
+        self.assertIn("未確定", first["caveat"])        # 種別はまだ unknown
+        self.assertNotIn("caveat", self._load())
+
+    def test_mode_off_withholds_the_digest(self):
+        with config_env(Path(self._tmp.name), {"server.caveat_mode": "off"}):
+            self.assertNotIn("caveat", self._load())
+
+    def test_output_format_resource_read_withholds_the_digest(self):
+        session_state.session.output_format_seen = True
+        self.assertNotIn("caveat", self._load())
+
+    def test_settling_the_kind_emits_the_digest_once_more(self):
+        self._load()                                    # unknown 用が出る
+        out = objective.record_objective(
+            "exp-1", dataset="POS", polarity="positive", groups=["HC", "RA"],
+            comparison="HC vs RA", sub_questions=["問い"], assay_kind="lipid")
+        self.assertTrue(out.startswith(session_state.SEMANTICS_CAVEAT))
+        self.assertIn("16:0/18:1", out)                 # 脂質の規則が届く
+        self.assertIn("objective を記録", out)
+        # 同じ種別のままなら、続く入口にも更新にも付かない。
+        self.assertNotIn("caveat", self._load())
+        again = objective.record_objective("exp-1", status="active", assay_kind="lipid")
+        self.assertFalse(again.startswith(session_state.SEMANTICS_CAVEAT))
+
+    def test_record_objective_without_assay_kind_adds_no_digest(self):
+        self._load()
+        out = objective.record_objective(
+            "exp-2", dataset="POS", polarity="positive", groups=["HC", "RA"],
+            comparison="HC vs RA", sub_questions=["問い"])
+        self.assertFalse(out.startswith(session_state.SEMANTICS_CAVEAT))
 
 
 if __name__ == "__main__":

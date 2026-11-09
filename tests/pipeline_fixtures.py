@@ -22,10 +22,12 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 from metabolomix.core.process_control import resolve_python_launch
+from tests.config_fixtures import use_config
 
 #: このcheckoutのルート（`tests/` の1階層上）。子プロセスのcwdをここへ固定する。
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -74,6 +76,55 @@ def make_source(root: Path, *, extension: str = ".wiff", kind: str = "file") -> 
     exe.write_text("fake console executable placeholder", encoding="ascii")
 
     return {"root": root, "method": method, "lbm": lbm, "exe": exe}
+
+
+def make_two_polarity_source(root: Path) -> dict:
+    """2 極性の生データフォルダ（`<root>/neg` は負、`<root>/pos` は正のメソッドを持つ）。
+
+    それぞれの中身は `make_source` と同じ（8 本の raw・メソッド・LBM・実行体）。
+    戻り値は `{"root", "negative": make_source の戻り値, "positive": 同}`。
+    """
+    root = Path(root)
+    neg = make_source(root / "neg")
+    pos = make_source(root / "pos")
+    pos["method"].write_text(
+        "Ion mode: positive\n"
+        "Target omics: Lipidomics\n"
+        "Lbm file path: fake.lbm2\n",
+        encoding="ascii", newline="\n")
+    return {"root": root, "negative": neg, "positive": pos}
+
+
+def two_polarity_request(**shared) -> dict:
+    """`make_two_polarity_source` のフォルダを指す 2 極性の要求。"""
+    return {"units": [{"polarity": "negative", "raw_dir": "neg"},
+                      {"polarity": "positive", "raw_dir": "pos"}], **shared}
+
+
+def create_synthetic_run(tmp_path: Path, *, polarities=("negative",), name: str = "source",
+                         explicit: dict | None = None) -> Path:
+    """engine・recovery の単体テスト用に、入力計画を最小にした v3 の run を作る。
+
+    極性ごとの単位（1 つなら 1 極性の形、2 つなら `units` の形）を持ち、入力計画は
+    `source_root` と極性だけ（配置の再検証は対象を持たないので飛ぶ）。
+    """
+    from metabolomix.pipeline.request import resolve_request
+    from metabolomix.pipeline.store import create_run
+
+    source = Path(tmp_path) / name
+    source.mkdir(parents=True, exist_ok=True)
+    polarities = list(polarities)
+    if len(polarities) == 1:
+        request_args = {"polarity": polarities[0]}
+    else:
+        request_args = {"units": [{"polarity": p, "raw_dir": p} for p in polarities]}
+    request_args.update({"save_project": False, **(explicit or {})})
+    request = resolve_request(source, request_args)
+    inputs = {"fingerprint": "f" * 64,
+              "units": {p: {"source_root": str(source),
+                            "polarity": {"value": p, "source": "request_explicit"}}
+                        for p in polarities}}
+    return create_run(source, request, inputs)
 
 
 def execution_record(**overrides):
@@ -301,8 +352,7 @@ def metadata_rows(ds, *, n_qc=4, confirmed=True):
 # ---------- Task 19: 実子プロセスworkerで一気通貫を回すharness ----------
 #
 # 偽物にするのは**workerが起動するConsoleのコマンドだけ**。受付（plan/start/
-# resume）・engine・loading・metadata・preprocessing・differential・export・
-# renderはすべて本物を通す。差し替え点は2つに限定してある。
+# resume）・engine・配置・mzTab-M と解析フォルダの検証・受領はすべて本物を通す。差し替え点は2つに限定してある。
 #
 # 1. `service.launch_pipeline_worker` — 起動する実行ファイルだけを
 #    `tests/pipeline_worker_harness.py` へ替える。`start_pipeline`/`resume_pipeline`
@@ -328,15 +378,6 @@ _MANIFEST_FIELDS = ("sample_id", "source_file", "role", "group", "batch",
 #: （後半4検体）が必ず高い＝log2FCが正になる——「向き」を実数値でassertできる
 #: ようにするための意図的な設計。
 DEFAULT_GROUPS = ("control",) * 4 + ("treated",) * 4
-
-#: 既定の比較（reference=control, test=treated）。正のlog2FCはtest群が高い方向
-#: （Global Constraints / `export_contract.LOG2FC_SIGN`）。
-DEFAULT_COMPARISON = {
-    "comparison_id": "treated_vs_control",
-    "reference_group": "control",
-    "test_group": "treated",
-}
-
 
 def write_sample_manifest(path: Path, *, source_names, groups=DEFAULT_GROUPS,
                           roles=None) -> Path:
@@ -416,18 +457,27 @@ class PipelineHarness:
         self.counters_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self._configured = False
+        # `start()`を2スレッドから同時に呼ぶテストがある。設定ファイルの書き直し
+        # （use_config）と読み取り（受付のget_setting）を重ねないよう、整備は1回だけにする。
+        self._configure_lock = threading.Lock()
 
     # ---------- 環境 ----------
 
     def _configure(self) -> None:
-        """受付層が要る環境（MSDIAL_EXE・console判定・受付索引）を一度だけ整える。"""
-        if self._configured:
-            return
+        """受付層が要る環境（[msdial] exe・console判定・受付索引）を一度だけ整える。
+
+        設定ファイルは`LIPIDMIX_CONFIG`で指すので、環境を継ぐ別プロセスのworkerも同じものを読む。
+        """
+        with self._configure_lock:
+            if not self._configured:
+                self._configure_once()
+
+    def _configure_once(self) -> None:
         from metabolomix.pipeline import service
 
         exe = self.tmp_path / "fake-msdialcui.exe"
         exe.write_text("fake console executable placeholder", encoding="ascii")
-        self.monkeypatch.setenv("MSDIAL_EXE", str(exe))
+        use_config(self.monkeypatch, self.tmp_path, {"msdial.exe": exe})
         self.monkeypatch.setattr("metabolomix.console.runner.probe_console_exe",
                                  lambda *a, **k: "console")
         # 受付索引はユーザーのLOCALAPPDATAではなくtmpへ。テスト間で共有させない。
@@ -519,21 +569,28 @@ class PipelineHarness:
         name = self.pipeline_root(run).name
         return [proc for key, proc, _log in self._workers if key == name]
 
-    def start(self, *, target="exploratory", comparisons=None, scenario="success",
-              save_project=False, source_name="source", request_id=None,
-              launch=True, extra_request=None, timeout_s=600, **launch_options):
+    def start(self, *, scenario="success", save_project=False, source_name="source",
+              request_id=None, launch=True, extra_request=None, timeout_s=600,
+              two_polarity=False, **launch_options):
         """`service.start_pipeline`（`launch=False`なら`plan_pipeline`）を本物どおり
         呼び、`pipeline-run.json`のPathを返す。
 
         `timeout_s`はConsoleの実行上限（要求フィールド）。`hang`シナリオの
-        timeout検証で短くする。
+        timeout検証で短くする。`two_polarity=True` は `make_two_polarity_source` の
+        フォルダへ 2 極性の要求を出す。
         """
         self._configure()
         from metabolomix.pipeline import service
 
-        source = self.source(source_name)
-        request = {"target": target, "save_project": save_project,
-                   "comparisons": list(comparisons or []), "timeout_s": timeout_s}
+        if two_polarity:
+            if source_name not in self._sources:
+                self._sources[source_name] = make_two_polarity_source(
+                    self.tmp_path / source_name)
+            source = self._sources[source_name]
+            request = two_polarity_request(save_project=save_project, timeout_s=timeout_s)
+        else:
+            source = self.source(source_name)
+            request = {"save_project": save_project, "timeout_s": timeout_s}
         request.update(extra_request or {})
         self._pending_options = {"scenario": scenario, **launch_options}
         entry = service.start_pipeline if launch else service.plan_pipeline
@@ -669,7 +726,8 @@ class PipelineHarness:
         return [ln.split("\t") for ln in path.read_text(encoding="utf-8").splitlines()
                 if ln.strip()]
 
-    def console_run_dir(self, run, *, attempt: int | None = None) -> Path:
+    def console_run_dir(self, run, *, attempt: int | None = None,
+                        polarity: str = "negative") -> Path:
         """pipelineが所有するConsole job のrun_dir（`_CONSOLE_RUN_SUBDIR`規約）。
 
         Console実行はattemptごとに別ディレクトリ（`console/attempt-NNNN/`）を
@@ -677,21 +735,26 @@ class PipelineHarness:
         ショットを上書きしないため。`attempt`を省略すると**最新のattempt**を
         返す（`console/`直下しか無い古い形も一応受ける）。
         """
-        base = self.pipeline_root(run) / "console"
+        base = self.pipeline_root(run) / polarity / "console"
         if attempt is not None:
             return base / f"attempt-{attempt:04d}"
         attempts = sorted(p for p in base.glob("attempt-*") if p.is_dir())
         return attempts[-1] if attempts else base
 
-    def console_receipt(self, run) -> dict:
+    def console_receipt(self, run, *, polarity: str = "negative") -> dict:
         """ディスク上の終了証跡（console-execution.v1）をそのまま読む。"""
-        path = self.console_run_dir(run) / "execution-result.json"
+        path = self.console_run_dir(run, polarity=polarity) / "execution-result.json"
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def console_job(self, run):
+    def console_job(self, run, *, polarity: str = "negative"):
         """ディスク上のanalysis-job（収集された成果物一覧を読むため）。"""
         from metabolomix.console.job_manager import JOB_FILENAME, load_job
-        return load_job(self.console_run_dir(run) / JOB_FILENAME)
+        return load_job(self.console_run_dir(run, polarity=polarity) / JOB_FILENAME)
+
+    def receipt(self, run) -> dict:
+        """ディスク上の受領（`results/receipt.json`）をそのまま読む。"""
+        path = self.pipeline_root(run) / "results" / "receipt.json"
+        return json.loads(path.read_text(encoding="utf-8"))
 
     def output_ref(self, record: dict, kind: str) -> dict:
         """`output_name == kind`の最新ref（`results`はappend-only）。"""
@@ -707,12 +770,6 @@ class PipelineHarness:
         root = Path(record["identity"]["pipeline_root"])
         return str(root / self.output_ref(record, kind)["relative_path"])
 
-    def result_data(self, record: dict, kind: str) -> dict:
-        """data形式で永続化された結果（PCA・差次的解析）の中身を読み戻す。"""
-        payload = json.loads(
-            Path(self.output_path(record, kind)).read_text(encoding="utf-8"))
-        return payload["data"]
-
     # ---------- 訂正・再開 ----------
 
     def write_manifest(self, *, source_name="source", groups=DEFAULT_GROUPS,
@@ -724,23 +781,14 @@ class PipelineHarness:
                            if p.name[0] == "S" and p.name[1:2].isdigit())
         return write_sample_manifest(root / name, source_names=raw_names, groups=groups)
 
-    def resume_with_groups(self, run, *, comparisons=None, source_name="source",
-                           groups=DEFAULT_GROUPS, **launch_options):
-        """8検体control4/treated4の完全なシートと向き付き比較を与えて再開する。
-
-        `service.resume_pipeline`を本物どおり呼ぶ（起動されるworkerだけharness版）。
-        """
+    def resume(self, run, *, updates=None, rerun_upstream=False, **launch_options):
+        """`service.resume_pipeline`を本物どおり呼ぶ（起動されるworkerだけharness版）。"""
         from metabolomix.pipeline import service
 
         pipeline_root = self.pipeline_root(run)
-        manifest = self.write_manifest(source_name=source_name, groups=groups)
         self._options_for(pipeline_root, launch_options)
-        updates = {
-            "sample_manifest": manifest.name,
-            "comparisons": list(comparisons if comparisons is not None
-                                else [DEFAULT_COMPARISON]),
-        }
-        return service.resume_pipeline(pipeline_root, updates=updates)
+        return service.resume_pipeline(pipeline_root, updates=updates,
+                                       rerun_upstream=rerun_upstream)
 
     # ---------- 後始末 ----------
 

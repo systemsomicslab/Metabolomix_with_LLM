@@ -1,11 +1,12 @@
 """入口 `open_dataset`（解析フォルダ・mzTab-M・job・pipeline を 1 つの入口で開く）と、
-既存の入口ツール 2 つ（`dataset_load` / `dataset_handle_open`）への配線（B-1 Task 8）。
+既存の入口ツール 2 つ（`load_dataset` / `load_dataset`）への配線（B-1 Task 8）。
 
 fixture はすべてこのテストが tmp に作る（研究室のライブラリ・研究データに依存しない）。
 """
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -252,7 +253,6 @@ def test_pipeline_folder_reads_run_manifest_but_not_matrices(tmp_path):
     ds = opened.dataset
     assert opened.adapter == "msdial_folder" and opened.kind == "pipeline_path"
     assert [r["group"] for r in ds.sample_metadata_rows] == ["ctrl", "ctrl", "case", "case"]
-    assert ds.analysis_matrices == {} and ds.handoff_report is None
     assert any('source="mztab"' in note for note in opened.notes)
 
 
@@ -308,11 +308,10 @@ def test_arf_spot_mz_is_the_highest_detected_cell_not_sample_zero(tmp_path):
     _shift_sample0_mz(paths["arf"], spec)
     # 試料 0 の行の m/z だけ 0.023 ずれたスポットが 4%。`.arf` から作ったスポットの代表 m/z
     # （検出されたセルのうち高さ最大＝試料 3）はずれていない。試料 0 の m/z（400.023）ではない。
-    from metabolomix.dataset import msdial_adapter
     from metabolomix.mztab import evidence
 
-    groups = msdial_adapter._read_groups(paths["arf"])
-    assert evidence.group_representative_mz(groups[10]) == pytest.approx(400.0)
+    scan = evidence.scan_arf(paths["arf"], measures=())
+    assert scan.spot_mz[10] == pytest.approx(400.0)
     assert open_dataset(directory=str(tmp_path / "gui")).dataset.feature_metadata["10"]["mz"] == 400.0
 
 
@@ -389,10 +388,10 @@ def test_library_record_per_entry(tmp_path):
 # ---------- ツール ----------
 
 def test_dataset_load_tool_accepts_directory(tmp_path):
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     folder = _folder(tmp_path / "gui")
-    text = dataset_load(directory=str(folder))
+    text = load_dataset(directory=str(folder))
     assert "msdial_folder" in text
     assert f"{_STEM}_PeakProperties.arf" in text
     assert session_state.session.dataset.source_format == "msdial_folder"
@@ -400,19 +399,19 @@ def test_dataset_load_tool_accepts_directory(tmp_path):
 
 
 def test_dataset_load_tool_reports_library_without_path(tmp_path):
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     folder = _folder(tmp_path / "gui")
     write_dbs(folder / "Proj_Loaded.msp2.dbs", [("lib", [record()], ["k"])])
-    text = dataset_load(directory=str(folder))
+    text = load_dataset(directory=str(folder))
     assert "Proj_Loaded.msp2.dbs" in text and str(folder) not in text
 
 
 def test_dataset_load_tool_job_error_names_mztab_source(tmp_path):
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     job = _job(tmp_path, with_folder=False)
-    err = json.loads(dataset_load(job_path=str(job)))["error"]
+    err = json.loads(load_dataset(job_path=str(job)))["error"]
     assert err["code"] == "ALIGNMENT_NOT_FOUND" and 'source="mztab"' in err["message"]
     assert session_state.session.dataset is None
 
@@ -423,7 +422,7 @@ def test_dataset_handle_open_directory_uses_selection_files(tmp_path):
     folder = _folder(tmp_path / "gui")
     (folder / f"{_STEM}.dcl").write_bytes(b"")
     write_dbs(folder / "Proj_Loaded.msp2.dbs", [("lib", [record()], ["k"])])
-    out = json.loads(handle_tools.dataset_handle_open(directory=str(folder), library="none"))
+    out = json.loads(handle_tools.load_dataset(directory=str(folder), library="none"))
     assert out["status"] == "success", out
     assert out["adapter"] == "msdial_folder"
     assert out["arf"] == f"{_STEM}_PeakProperties.arf" and out["not_chosen"] == []
@@ -439,9 +438,9 @@ def test_dataset_handle_open_directory_uses_selection_files(tmp_path):
 # ---------- 決めたこと（R15）を縛る ----------
 
 def test_dataset_load_reuses_the_base_and_gives_a_fresh_dataset(tmp_path, monkeypatch):
-    """`dataset_load` も基を使い回すが、セッションに置くのは毎回別の実体（別の dataset_id）。"""
+    """`load_dataset` も基を使い回すが、セッションに置くのは毎回別の実体（別の dataset_id）。"""
     from metabolomix.dataset import msdial_adapter
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     folder = _folder(tmp_path / "gui")
     calls = []
@@ -452,10 +451,10 @@ def test_dataset_load_reuses_the_base_and_gives_a_fresh_dataset(tmp_path, monkey
         return real(*args, **kwargs)
 
     monkeypatch.setattr(msdial_adapter, "load_msdial_folder", spy)
-    dataset_load(directory=str(folder))
+    load_dataset(directory=str(folder))
     first = session_state.session.dataset
     first.feature_matrix[0, 0] = -1.0
-    dataset_load(directory=str(folder))
+    load_dataset(directory=str(folder))
     second = session_state.session.dataset
     assert len(calls) == 1
     assert second is not first and second.dataset_id != first.dataset_id
@@ -466,15 +465,15 @@ def test_dataset_load_reuses_the_base_and_gives_a_fresh_dataset(tmp_path, monkey
 def test_mztab_adapter_rejects_a_non_default_measure_in_both_tools(tmp_path, entry):
     """mzTab-M の定量種別はファイル（ジョブの宣言）に従う。measure は解析フォルダだけに効く。"""
     from metabolomix.tools import handle_tools
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     job = _job(tmp_path)
     path = str(job.parent / "msdial" / "Height_x.mzTab") if entry == "mztab_path" else str(job)
     kwargs = {entry: path, "measure": "peak_area_above_zero"}
     if entry == "job_path":
         kwargs["source"] = "mztab"
-    assert json.loads(dataset_load(**kwargs))["error"]["code"] == "DATASET_BAD_REQUEST"
-    out = json.loads(handle_tools.dataset_handle_open(**kwargs, library="none"))
+    assert json.loads(load_dataset(**kwargs))["error"]["code"] == "DATASET_BAD_REQUEST"
+    out = json.loads(handle_tools.load_dataset(**kwargs, library="none"))
     assert out["error"]["code"] == "DATASET_BAD_REQUEST"
     # 解析フォルダのアダプタでは面積を選べる。
     folder = open_dataset(job_path=str(job), measure="peak_area_above_zero")
@@ -484,13 +483,13 @@ def test_mztab_adapter_rejects_a_non_default_measure_in_both_tools(tmp_path, ent
 def test_both_tools_reject_a_non_bool_allow_incomplete(tmp_path):
     """"false" という文字列を真偽として読まない（以前のハンドルは bool() で True にしていた）。"""
     from metabolomix.tools import handle_tools
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     folder = _folder(tmp_path / "gui")
-    load = json.loads(dataset_load(directory=str(folder), allow_incomplete="false"))
+    load = json.loads(load_dataset(directory=str(folder), allow_incomplete="false"))
     assert load["error"]["code"] == "DATASET_BAD_REQUEST"
     assert session_state.session.dataset is None
-    out = json.loads(handle_tools.dataset_handle_open(directory=str(folder), library="none",
+    out = json.loads(handle_tools.load_dataset(directory=str(folder), library="none",
                                                       allow_incomplete="false"))
     assert out["error"]["code"] == "DATASET_BAD_REQUEST"
     assert handles.registry.list() == []
@@ -618,7 +617,7 @@ def test_folder_polarity_cross_checks_arf2_ion_mode(tmp_path):
 
 def test_job_folder_carries_the_job_artifacts(tmp_path):
     """ジョブ経由で読んだ解析フォルダにも、ジョブが記録した付随アーティファクトを載せる。"""
-    from metabolomix.tools.mztab_tools import dataset_load
+    from metabolomix.tools.handle_tools import load_dataset
 
     job = _job(tmp_path)
     data = json.loads(job.read_text(encoding="utf-8"))
@@ -627,7 +626,7 @@ def test_job_folder_carries_the_job_artifacts(tmp_path):
     job.write_text(json.dumps(data), encoding="utf-8")
     ds = open_dataset(job_path=str(job)).dataset
     assert ds.artifact_paths["console_log"] == [str(job.parent / "msdial" / "msdial.log")]
-    assert "console_log" in dataset_load(job_path=str(job))
+    assert "console_log" in load_dataset(job_path=str(job))
 
 
 @pytest.mark.parametrize("entry", ["job_path", "pipeline_path"])
@@ -636,7 +635,7 @@ def test_dataset_handle_open_defaults_to_the_folder_for_job_and_pipeline(tmp_pat
 
     job = _job(tmp_path)
     path = job if entry == "job_path" else _pipeline(tmp_path, job)
-    out = json.loads(handle_tools.dataset_handle_open(**{entry: str(path)}, library="none"))
+    out = json.loads(handle_tools.load_dataset(**{entry: str(path)}, library="none"))
     assert out["status"] == "success", out
     assert out["adapter"] == "msdial_folder"
     assert out["arf"] == f"{_STEM}_PeakProperties.arf"
@@ -696,3 +695,387 @@ def test_broken_mztab_on_the_folder_route_explains_the_way_out(tmp_path):
     err = _code(lambda: open_dataset(job_path=str(job)))
     assert err.code == "MZTAB_STRUCTURE_INVALID"
     assert "directory" in err.message and "msdial" in err.message
+
+
+def test_file_changed_during_load_is_not_cached(tmp_path, monkeypatch):
+    """読み込みの途中でファイルが変わったら、基をキャッシュしない（次は読み直す）。"""
+    from metabolomix.dataset import opening
+
+    folder = _folder(tmp_path / "gui")
+    key = f"directory:msdial_folder:peak_height:False:{folder.resolve()}"
+    real_open = opening._open
+
+    def changing_open(*args, **kwargs):
+        base = real_open(*args, **kwargs)
+        # 中身は壊さず、更新時刻だけ進める（読み込み後の読み直しが成り立つように）。
+        target = next(folder.glob("*.arf2"))
+        stat = target.stat()
+        os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+        return base
+
+    monkeypatch.setattr(opening, "_open", changing_open)
+    first = open_dataset(directory=str(folder))
+    assert handles.registry.cached_base(key) is None
+    assert any("読み込みの間に入力が変わった" in note for note in first.notes)
+    monkeypatch.setattr(opening, "_open", real_open)
+    assert open_dataset(directory=str(folder)).reused_base is False
+
+
+def _bump_mtime_after_load(monkeypatch, target_glob_root: Path, pattern: str):
+    """本物の読み込みの後に、`pattern` のファイルの更新時刻だけを進める偽の `_open`。"""
+    from metabolomix.dataset import opening
+
+    real_open = opening._open
+
+    def changing_open(*args, **kwargs):
+        base = real_open(*args, **kwargs)
+        target = next(target_glob_root.rglob(pattern))
+        stat = target.stat()
+        os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+        return base
+
+    monkeypatch.setattr(opening, "_open", changing_open)
+    return real_open
+
+
+def test_job_route_change_during_load_is_not_cached(tmp_path, monkeypatch):
+    from metabolomix.dataset import opening
+
+    job = _job(tmp_path)
+    real_open = _bump_mtime_after_load(monkeypatch, job.parent / "msdial", "*.arf2")
+    first = open_dataset(job_path=str(job))
+    assert any("読み込みの間に入力が変わった" in note for note in first.notes)
+    monkeypatch.setattr(opening, "_open", real_open)
+    assert open_dataset(job_path=str(job)).reused_base is False
+
+
+def test_non_canonical_path_change_during_load_is_not_cached(tmp_path, monkeypatch):
+    from metabolomix.dataset import opening
+
+    folder = _folder(tmp_path / "gui")
+    spelled = str(folder).swapcase()  # 大文字小文字違い（Windows ではパスとして同じ）
+    if not Path(spelled).exists():
+        pytest.skip("大文字小文字を区別するファイルシステム")
+    real_open = _bump_mtime_after_load(monkeypatch, folder, "*.arf2")
+    first = open_dataset(directory=spelled)
+    assert any("読み込みの間に入力が変わった" in note for note in first.notes)
+    monkeypatch.setattr(opening, "_open", real_open)
+    assert open_dataset(directory=spelled).reused_base is False
+
+
+def test_pipeline_route_change_during_load_is_not_cached(tmp_path, monkeypatch):
+    from metabolomix.dataset import opening
+
+    job = _job(tmp_path)
+    run = _pipeline(tmp_path, job)
+    real_open = _bump_mtime_after_load(monkeypatch, job.parent / "msdial", "*.arf2")
+    first = open_dataset(pipeline_path=str(run))
+    assert any("読み込みの間に入力が変わった" in note for note in first.notes)
+    monkeypatch.setattr(opening, "_open", real_open)
+    assert open_dataset(pipeline_path=str(run)).reused_base is False
+
+
+# ---------- `.arf` を 1 回だけ読む（B-2a Task 4） ----------
+
+def test_job_folder_reads_arf_once(tmp_path, monkeypatch):
+    """job の解析フォルダの経路は、mzTab-M との照合に読んだ `.arf` をそのまま使う（読み直さない）。"""
+    from metabolomix.arf import reader as arf_reader
+
+    job = _job(tmp_path)
+    calls: list[int] = []
+    real = arf_reader.iter_groups
+
+    def counting(file_like):
+        calls.append(1)
+        return real(file_like)
+
+    monkeypatch.setattr(arf_reader, "iter_groups", counting)
+    opened = open_dataset(job_path=str(job))
+    assert opened.dataset.source_format == "msdial_folder"
+    assert len(opened.dataset.feature_ids) == 2
+    assert len(calls) == 1
+
+
+def test_pipeline_falls_back_to_older_input_batch(tmp_path):
+    """run の input/ に複数のバッチがあるとき、最新が合わなくても古いバッチで合えば読む。"""
+    job = _job(tmp_path, with_folder=False)
+    run = _pipeline(tmp_path, job)
+    write_msdial_folder(run / "input", **_other_spec(), stem="AlignResult-2")   # 新しい・合わない
+    write_msdial_folder(run / "input", **_spec(), stem="AlignResult-1")         # 古い・合う
+    opened = open_dataset(pipeline_path=str(run), source="folder")
+    assert opened.selection.arf.name == "AlignResult-1_PeakProperties.arf"
+    assert opened.dataset.feature_metadata["0"]["mz"] == pytest.approx(760.5851)
+
+
+def test_pipeline_arf2_candidates_newest_first(tmp_path):
+    from metabolomix.dataset import opening
+
+    job = _job(tmp_path, with_folder=False)
+    run = _pipeline(tmp_path, job)
+    for stem in ("AlignResult-1", "AlignResult-3", "AlignResult-2"):
+        write_msdial_folder(run / "input", **_spec(), stem=stem)
+    names = [p.name for p in opening.pipeline_arf2_candidates(run)]
+    assert names == ["AlignResult-3.arf2", "AlignResult-2.arf2", "AlignResult-1.arf2"]
+    assert opening.pipeline_arf2(run).name == "AlignResult-3.arf2"
+
+
+def test_broken_mztab_hint_names_reason(tmp_path):
+    job = _job(tmp_path)
+    (job.parent / "msdial" / "Height_x.mzTab").write_text(
+        "MTD\tmzTab-version\t2.0.0-M\n", encoding="utf-8")
+    err = _code(lambda: open_dataset(job_path=str(job)))
+    assert "読めなかった理由" in err.message and err.code in err.message
+    assert 'source="mztab"' in err.message and "でも読めない" in err.message
+
+
+def test_reports_written_into_the_folder_do_not_invalidate_the_base(tmp_path, monkeypatch):
+    """解析フォルダの中に記録（reports/）ができても基を使い回す（フォルダの更新時刻は指紋に入れない）。
+    読み込みの最初の概観は記録を reports/stats/ に書くので、これが効かないと 2 回目の読み込みが毎回読み直す。"""
+    from metabolomix.dataset import msdial_adapter
+    from metabolomix.tools.handle_tools import load_dataset
+
+    folder = _folder(tmp_path / "gui")
+    calls = []
+    real = msdial_adapter.load_msdial_folder
+
+    def spy(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(msdial_adapter, "load_msdial_folder", spy)
+    load_dataset(directory=str(folder), overview=False)
+    (folder / "reports" / "stats").mkdir(parents=True)
+    (folder / "reports" / "stats" / "x.json").write_text("{}", encoding="utf-8")
+    load_dataset(directory=str(folder), overview=False)
+    assert len(calls) == 1
+
+
+def test_folder_listing_counts_mdproject(tmp_path):
+    """`.mdproject` は `.mddata` が無いときの群の宣言元。後から置かれたら基を使い回さない（指紋に入る）。"""
+    from metabolomix.dataset.opening import _folder_listing
+
+    (tmp_path / "study.mdproject").write_bytes(b"x")
+    assert str(tmp_path / "study.mdproject") in _folder_listing(tmp_path)
+
+
+# ---------- pipeline v3（極性の単位と受領） ----------
+
+def _v3_run(tmp_path: Path, polarities=("negative",), *, rows=None, failed=(),
+            with_receipt: bool = True, stem: str = "AlignResult-1",
+            spec: dict | None = None, alignment: dict | None = None) -> Path:
+    """v3 の run: 極性ごとに `<極性>/input/` の解析フォルダと Console のジョブ、受領を持つ。
+
+    `rows` は受領の `samples.rows`（全単位に同じ）。`failed` の単位は upstream が失敗したまま。
+    `spec` は解析フォルダに書くアラインメント（既定は mzTab-M と合う `_spec()`）、`alignment` は
+    受領の `units.<極性>.alignment`（既定は記録どおり＝この合成の run では null）。"""
+    from metabolomix.core.atomic_io import atomic_write_json
+    from metabolomix.pipeline import receipt as receipt_mod
+    from metabolomix.pipeline import store
+    from tests.pipeline_fixtures import create_synthetic_run
+
+    run = create_synthetic_run(tmp_path, polarities=polarities)
+    record = store.load_run(run)
+    for polarity in polarities:
+        job = _job(run / polarity, with_folder=False)
+        write_msdial_folder(run / polarity / "input", **(spec or _spec()), stem=stem,
+                            with_mddata=False)
+        record["units"][polarity]["upstream"] = {
+            "console_job_path": str(job.relative_to(run)).replace("\\", "/")}
+        for handler in store.UNIT_HANDLERS:
+            stage = record["stages"].setdefault(f"{handler}:{polarity}", {})
+            stage["status"] = ("failed" if polarity in failed and handler == "upstream"
+                               else "succeeded")
+    store.save_run(run, record, expected_revision=record["state_revision"])
+    if with_receipt:
+        record = store.load_run(run)
+        receipt = receipt_mod.build_receipt(record, run)
+        for polarity in polarities:
+            receipt["units"][polarity]["samples"]["rows"] = rows
+            if alignment is not None:
+                receipt["units"][polarity]["alignment"] = alignment
+        path = run / receipt_mod.RECEIPT_RELATIVE_PATH
+        atomic_write_json(path, receipt)
+        ref = receipt_mod.persist_result(run, {
+            "output_name": receipt_mod.RECEIPT_OUTPUT_NAME, "kind": "receipt",
+            "result_id": "res_receipt_t", "path": str(path)})
+        record["results"] = [*record.get("results", []), ref]
+        store.save_run(run, record, expected_revision=record["state_revision"])
+    return run
+
+
+def test_v3_run_opens_the_receipt_analysis_folder_with_manifest_rows(tmp_path):
+    rows = [_manifest_row(f"s{i}", "ctrl" if i < 2 else "case") for i in range(4)]
+    run = _v3_run(tmp_path, rows=rows)
+    opened = open_dataset(pipeline_path=str(run))
+    assert opened.adapter == "msdial_folder" and opened.polarity == "negative"
+    assert opened.dataset.analysis_dir.replace("\\", "/").endswith("negative/input")
+    assert [r["group"] for r in opened.dataset.sample_metadata_rows] \
+        == ["ctrl", "ctrl", "case", "case"]
+
+
+def test_v3_receipt_relative_source_file_is_made_absolute(tmp_path):
+    from metabolomix.pipeline import session_handoff
+
+    row = {**_manifest_row("s0", "ctrl"), "source_file": "negative/input/s0.wiff"}
+    run = _v3_run(tmp_path, rows=[row])
+    unit = session_handoff.resolve_unit(run)
+    assert Path(unit.manifest_rows[0]["source_file"]) == run / "negative" / "input" / "s0.wiff"
+
+
+def test_two_polarity_run_without_polarity_needs_input(tmp_path):
+    from metabolomix.tools.handle_tools import load_dataset
+
+    run = _v3_run(tmp_path, ("negative", "positive"))
+    assert _code(lambda: open_dataset(pipeline_path=str(run))).code == "PIPELINE_POLARITY_REQUIRED"
+    out = json.loads(load_dataset(pipeline_path=str(run)))
+    body = out["needs_input"]
+    assert body["field"] == "polarity" and body["argument"] == "polarity"
+    assert body["retry_tools"] == ["load_dataset"]
+    assert [o["value"] for o in body["options"]] == ["negative", "positive"]
+    assert handles.registry.list() == []
+
+
+def test_two_polarity_run_opens_each_unit_by_polarity(tmp_path):
+    from metabolomix.tools.handle_tools import load_dataset
+
+    run = _v3_run(tmp_path, ("negative", "positive"))
+    first = json.loads(load_dataset(pipeline_path=str(run), polarity="negative", overview=False))
+    second = json.loads(load_dataset(pipeline_path=str(run), polarity="positive", overview=False))
+    assert first["status"] == second["status"] == "success"
+    assert first["dataset_handle"] != second["dataset_handle"]
+    assert handles.registry.get(second["dataset_handle"]).source["polarity"] == "positive"
+    assert first["reused_base"] is False and second["reused_base"] is False
+
+
+def test_unit_not_validated_is_refused(tmp_path):
+    run = _v3_run(tmp_path, ("negative", "positive"), failed=("negative",))
+    err = _code(lambda: open_dataset(pipeline_path=str(run), polarity="negative"))
+    assert err.code == "PIPELINE_UNIT_NOT_VALIDATED"
+    assert err.details["validated"] == ["positive"]
+    # もう片方の単位は開ける。省いたときの選択肢は検証を通った単位だけ。
+    assert open_dataset(pipeline_path=str(run), polarity="positive").polarity == "positive"
+    ask = _code(lambda: open_dataset(pipeline_path=str(run)))
+    assert ask.code == "PIPELINE_POLARITY_REQUIRED"
+    assert [o["value"] for o in ask.details["options"]] == ["positive"]
+
+
+def test_unknown_polarity_is_refused(tmp_path):
+    run = _v3_run(tmp_path)
+    err = _code(lambda: open_dataset(pipeline_path=str(run), polarity="positive"))
+    assert err.code == "PIPELINE_POLARITY_NOT_FOUND" and err.details["available"] == ["negative"]
+
+
+@pytest.mark.parametrize("entry", ["directory", "mztab_path", "job_path"])
+def test_polarity_with_other_entries_is_refused(tmp_path, entry):
+    folder = _folder(tmp_path / "gui")
+    job = _job(tmp_path / "j")
+    mztab = write_matching_mztab(tmp_path / "direct" / "x.mzTab", _spec())
+    args = {"directory": str(folder), "mztab_path": str(mztab), "job_path": str(job)}[entry]
+    err = _code(lambda: open_dataset(**{entry: args}, polarity="negative"))
+    assert err.code == "PIPELINE_POLARITY_NOT_APPLICABLE"
+
+
+def test_legacy_v1_run_still_opens_with_its_manifest(tmp_path):
+    rows = [_manifest_row(f"s{i}", "ctrl" if i < 2 else "case") for i in range(4)]
+    run = _pipeline(tmp_path, _job(tmp_path), rows=rows)
+    opened = open_dataset(pipeline_path=str(run))
+    assert [r["group"] for r in opened.dataset.sample_metadata_rows] \
+        == ["ctrl", "ctrl", "case", "case"]
+    assert opened.polarity == "unknown"
+    # run が計算した差次的結果は戻さず、そのことを注記で言う。
+    assert not opened.dataset.results
+    assert any("旧 v1 の run" in note for note in opened.notes)
+    # 旧 v1 の run は単位が 1 つ（極性 unknown）。極性の名指しも通る。
+    assert open_dataset(pipeline_path=str(run), polarity="unknown").reused_base is False
+    # mzTab-M のアダプタでも同じ（対応表は載り、結果は戻さず、注記がある）。
+    via_mztab = open_dataset(pipeline_path=str(run), source="mztab")
+    assert via_mztab.adapter == "mztab"
+    assert [r["group"] for r in via_mztab.dataset.sample_metadata_rows] \
+        == ["ctrl", "ctrl", "case", "case"]
+    assert not via_mztab.dataset.results
+    assert any("旧 v1 の run" in note for note in via_mztab.notes)
+
+
+def test_v3_run_mztab_source_has_no_restored_results(tmp_path):
+    rows = [_manifest_row(f"s{i}", "ctrl" if i < 2 else "case") for i in range(4)]
+    run = _v3_run(tmp_path, ("negative", "positive"), rows=rows)
+    opened = open_dataset(pipeline_path=str(run), polarity="positive", source="mztab")
+    assert opened.adapter == "mztab" and opened.polarity == "positive"
+    assert not opened.dataset.results
+    assert [r["group"] for r in opened.dataset.sample_metadata_rows] \
+        == ["ctrl", "ctrl", "case", "case"]
+
+
+def test_v3_run_without_a_readable_receipt_reads_the_unit_record(tmp_path):
+    run = _v3_run(tmp_path, with_receipt=False)
+    opened = open_dataset(pipeline_path=str(run))
+    note = next(note for note in opened.notes if "受領" in note)
+    # 戻し方（対応表を載せ直す・受領を確かめる）まで言う。
+    assert "dataset_set_sample_metadata" in note and "pipeline_status" in note
+
+
+def test_v3_base_cache_reloads_when_the_receipt_changes(tmp_path):
+    run = _v3_run(tmp_path)
+    assert open_dataset(pipeline_path=str(run)).reused_base is False
+    assert open_dataset(pipeline_path=str(run)).reused_base is True
+    with open(run / "results" / "receipt.json", "a", encoding="utf-8") as handle:
+        handle.write(" ")
+    assert open_dataset(pipeline_path=str(run)).reused_base is False
+
+
+def test_v3_cache_is_per_polarity(tmp_path):
+    run = _v3_run(tmp_path, ("negative", "positive"))
+    assert open_dataset(pipeline_path=str(run), polarity="negative").reused_base is False
+    assert open_dataset(pipeline_path=str(run), polarity="positive").reused_base is False
+    assert open_dataset(pipeline_path=str(run), polarity="positive").reused_base is True
+
+
+def test_pipeline_input_batches_are_found_by_the_shared_arf2_pattern(tmp_path):
+    """解析フォルダのバッチは名前を問わず `*.arf2`（service の検証と同じ共有の規則）で探す。"""
+    from metabolomix.dataset import opening
+
+    run = _v3_run(tmp_path, stem="Batch_2026_01")
+    names = [p.name for p in opening.pipeline_arf2_candidates(run, "negative")]
+    assert names == ["Batch_2026_01.arf2"]
+    assert opening.pipeline_arf2(run, "negative").name == "Batch_2026_01.arf2"
+    assert opening.pipeline_arf2_candidates(run, "positive") == []
+
+
+def test_unmatched_analysis_folder_opens_only_through_the_mztab(tmp_path):
+    """検証は通ったが解析フォルダが mzTab-M と合わなかった単位（受領の `alignment: null`）。
+    既定（解析フォルダ）は `source="mztab"` の案内つきで止まり、`source="mztab"` なら対応表つきで開く。"""
+    rows = [_manifest_row(f"s{i}", "ctrl" if i < 2 else "case") for i in range(4)]
+    run = _v3_run(tmp_path, rows=rows, spec=_other_spec())
+    err = _code(lambda: open_dataset(pipeline_path=str(run), polarity="negative"))
+    assert err.code in ("ALIGNMENT_NOT_FOUND", "ALIGNMENT_AMBIGUOUS")
+    assert err.details["source_hint"] == "mztab"
+
+    opened = open_dataset(pipeline_path=str(run), polarity="negative", source="mztab")
+    assert opened.adapter == "mztab"
+    assert [r["group"] for r in opened.dataset.sample_metadata_rows] \
+        == ["ctrl", "ctrl", "case", "case"]
+
+
+def test_mztab_source_matches_spots_on_the_batch_the_receipt_verified(tmp_path):
+    """`source="mztab"` のスポットの照合は、受領が照合したバッチ（`alignment.arf2`）を使う。
+    `rerun_upstream` の後は前のバッチも同じフォルダに残り、名前の順では決まらない。"""
+    from metabolomix.dataset import opening
+    from metabolomix.tools.handle_tools import load_dataset
+
+    run = _v3_run(tmp_path, stem="AlignResult-1",
+                  alignment={"arf": "AlignResult-1_PeakProperties.arf",
+                             "arf2": "AlignResult-1.arf2"})
+    write_msdial_folder(run / "negative" / "input", **_other_spec(), stem="AlignResult-2",
+                        with_mddata=False)
+    assert opening.pipeline_arf2(run, "negative").name == "AlignResult-1.arf2"
+    out = json.loads(load_dataset(pipeline_path=str(run), source="mztab", overview=False))
+    assert out["arf2"] == "AlignResult-1.arf2"
+
+
+def test_mztab_source_without_a_verified_batch_falls_back_to_the_newest_name(tmp_path):
+    from metabolomix.dataset import opening
+
+    run = _v3_run(tmp_path, stem="AlignResult-1")   # 受領の alignment は null
+    write_msdial_folder(run / "negative" / "input", **_other_spec(), stem="AlignResult-2",
+                        with_mddata=False)
+    assert opening.pipeline_arf2(run, "negative").name == "AlignResult-2.arf2"

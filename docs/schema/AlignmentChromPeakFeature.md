@@ -5,7 +5,7 @@
 （→ [AlignmentSpotProperty.md](AlignmentSpotProperty.md)）。
 
 **リーダのインデックスを変える前にこの表を見る。推測で直さない。**
-関連: [../output_format/arf.md](../output_format/arf.md)（フィールドの意味・ギャップフィルの扱い）
+関連: [../output_format/dataset.md](../output_format/dataset.md)（フィールドの意味・ギャップフィルの扱い）
 
 ## 出典
 

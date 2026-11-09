@@ -1,13 +1,11 @@
 """DatasetState に対する解析 MCP ツール。
 
-dataset_load → dataset_preprocess → dataset_pca / dataset_differential
-→ dataset_export_differential の順に実行する。ARF 経路
-（arf_preprocess → arf_pca_preprocessed → arf_differential →
-arf_export_differential）と同じ純関数を共有しており、同じ入力からは
-同じ数字が出る。dataset_feature_search は読み取り専用で、特徴の検索・目的の物質の
+load_dataset → dataset_preprocess → dataset_compare
+→ dataset_export_differential の順に実行する（PCA の `dataset_pca` は `stats_tools`）。解析フォルダも mzTab-M も
+`load_dataset` が同じ DatasetState にするので、同じ入力からは同じ数字が出る。dataset_feature_search は読み取り専用で、特徴の検索・目的の物質の
 判定に差次的結果の統計を添えて返す（判定の純ロジックは analysis/feature_search.py）。
 
-戻り値には要約だけを載せ、全量（PCA の loadings・差次的の results/volcano）は
+戻り値には要約だけを載せ、全量（差次的の results/volcano）は
 session.dataset に保持する（CLAUDE.md の戻り値肥大禁止）。
 """
 from __future__ import annotations
@@ -17,8 +15,8 @@ from pathlib import Path
 
 from mcp.types import ToolAnnotations
 
-from metabolomix.analysis import export_contract
-from metabolomix.analysis.dataset_analysis import PreconditionError
+from metabolomix.analysis import export_contract, stats_results
+from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import missing_state, mztab_error
 from metabolomix.core.serialization import json_payload
@@ -27,213 +25,18 @@ from metabolomix.tools._holder import resolve_holder
 from metabolomix.mztab.polarity import dataset_polarity as _dataset_polarity
 
 __all__ = [
-    "dataset_preprocess",
-    "dataset_pca",
-    "dataset_differential",
     "dataset_export_differential",
     "dataset_export_evidence_bundle",
     "dataset_set_sample_metadata",
-    "dataset_statistic",
-    "dataset_build_matrix",
     "dataset_feature_search",
 ]
 
 # 欠けている状態 → それを作れるツール。missing_state の required_tools になる。
 # **自分自身は入れない**（クライアントが同じ呼び出しを繰り返すループになる）。
 _RECOVERY_TOOLS = {
-    "dataset": ["dataset_load"],
-    "dataset_preprocessed": ["dataset_preprocess"],
-    "dataset_differential_result": ["dataset_differential"],
-    # v2 の解析行列は pipeline（preprocess / qc_processed）が作る。単体ツールの
-    # dataset_build_matrix でも作れるが、そちらは binding と証拠を持たない分
-    # できることが狭い（内部標準比は作れず、検出率filterは評価不能になる）。
-    # 先頭ほど優先＝上流の証拠ごと揃う pipeline を先に案内する。
-    "analysis_matrix": ["pipeline_run", "pipeline_status", "dataset_load",
-                        "dataset_build_matrix"],
-    # 対象feature↔内部標準の対応付け。pipeline の resolve_feature_bindings が作る。
-    "feature_bindings": ["pipeline_run", "pipeline_status"],
+    "dataset": ["load_dataset"],
+    "dataset_compare_result": ["dataset_compare"],
 }
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_preprocess(
-    normalize: str = "none",
-    blank_min_fold: float | None = None,
-    drift_correct: bool = False,
-    max_qc_rsd: float | None = None,
-    impute: str = "half_min",
-    min_detection_rate: float = 0.0,
-    dataset_handle: str | None = None,
-) -> str:
-    """DatasetState の定量行列に前処理レシピを適用する。
-
-    引数は arf_preprocess と同一。以降の dataset_pca / dataset_differential は
-    ここで作った前処理済み行列を消費する。
-
-    normalize: "none"（既定）/ "tic"（行総和）/ "median"（行中央値）/ "pqn"。
-    blank_min_fold: 生体試料平均がブランク平均のこの倍数未満の特徴量を背景として
-        除去する（例 3.0）。None（既定）でブランク除去なし。
-    drift_correct: QC 注入順ドリフト補正。注入順は mzTab-M の
-        `assay[N]-custom[...]` の injection sequence label（MS:4000089）から読む。
-        それを持たない mzTab-M では実施できず、caveat で報告する。
-    max_qc_rsd: QC 群の RSD がこの値を超える特徴量を除去する（例 0.30）。
-    impute: "half_min"（既定）/ "knn" / "column_mean" / "none"。
-    min_detection_rate: 実検出率（gap-fill を除く）による特徴量の足切り 0.0-1.0
-        （既定 0.0=無効）。**検出状態は mzTab-M 単体には無い**ので、隣接する `.arf`
-        から取り込めた場合にだけ使える。取り込めていない状態で 0 より大きい値を
-        渡すと引数エラーを返す（黙って未検出 0 件として通さない）。
-        取り込み状況は dataset_status の `detection` を見る。
-
-    成功すると session.dataset.pp_matrix に前処理済み行列が設定される。
-
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
-    """
-    holder = resolve_holder(dataset_handle)
-    if isinstance(holder, str):
-        return holder
-    ds = holder.dataset
-    if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
-
-    from metabolomix.analysis.dataset_service import preprocess_dataset
-
-    recipe = {
-        "normalize": normalize,
-        "blank_min_fold": blank_min_fold,
-        "drift_correct": drift_correct,
-        "max_qc_rsd": max_qc_rsd,
-        "impute": impute,
-        "min_detection_rate": min_detection_rate,
-    }
-    try:
-        # 状態の差し替え（成功時のみの反映・派生結果の無効化・来歴の付与）は
-        # サービス側が持つ。ツールはそれを呼んで要約を返すだけにする——
-        # ここで直接 ds を書き換えると、pipeline ワーカー経由の実行と規則がずれる。
-        report = preprocess_dataset(ds, recipe)
-    except PreconditionError as exc:
-        return _from_precondition(exc)
-
-    return json_payload({
-        "status": "success",
-        "result_id": report["provenance"]["result_id"],
-        "n_samples": len(ds.pp_sample_names),
-        "n_features": len(ds.pp_feature_names),
-        "features_before": report.get("features_before"),
-        "features_removed_total": report.get("features_removed_total"),
-        "recipe_applied": report.get("recipe_applied", []),
-        "excluded_from_matrix": report.get("excluded_from_matrix", {}),
-        "role_counts": _count_roles(ds.roles, ds.pp_sample_names),
-        "steps": report.get("steps", {}),
-        "caveats": report.get("caveats", []),
-        "next": "dataset_pca または dataset_differential を実行してください",
-        **({"detection": report["detection"]} if "detection" in report else {}),
-        **({"detection_filter": report["detection_filter"]}
-           if "detection_filter" in report else {}),
-    })
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_pca(n_components: int = 5, log_transform: bool = False,
-                dataset_handle: str | None = None) -> str:
-    """前処理済み DatasetState に PCA を実行する。
-
-    dataset_preprocess を先に実行しておくこと。
-    n_components: 主成分数（既定 5。サンプル数・特徴量数の小さい方で上限が決まる）。
-    log_transform: 標準化の前に log10 変換を適用する（既定 False）。
-
-    ローディング全量は戻り値に載せず session.dataset.last_pca に保持する。
-
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
-    """
-    holder = resolve_holder(dataset_handle)
-    if isinstance(holder, str):
-        return holder
-    ds = holder.dataset
-    if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
-
-    from metabolomix.analysis.dataset_service import pca_dataset
-
-    try:
-        result = pca_dataset(ds, n_components=n_components, log_transform=log_transform)
-    except PreconditionError as exc:
-        return _from_precondition(exc)
-
-    payload = {k: v for k, v in result.items()
-               if k not in ("loadings", "singular_values", "provenance")}
-    payload["status"] = "success"
-    payload["result_id"] = result["provenance"]["result_id"]
-    payload["loadings_note"] = (
-        "ローディング全量（特徴量数 × 主成分数）は本要約に非同梱。"
-        "セッションに保持しており、寄与特徴量が必要になったら別途取得します。")
-    return json_payload(payload)
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_differential(
-    group_a: list[str],
-    group_b: list[str],
-    q_threshold: float = 0.05,
-    log2fc_threshold: float = 1.0,
-    log_transform: bool = True,
-    group_a_label: str = "group_a",
-    group_b_label: str = "group_b",
-    dataset_handle: str | None = None,
-) -> str:
-    """前処理済み DatasetState で 2 群の差次的解析（Welch t 検定 + BH-FDR）を実行する。
-
-    group_a / group_b: サンプル名のリスト。使える名前と役割は dataset_status の
-        `samples`（name/role の TSV）で確認する。前処理済み行列に無い
-        名前、QC/ブランクは除外し、caveat で名指しする。
-    q_threshold: BH-FDR 補正後の有意水準（既定 0.05）。
-    log2fc_threshold: この絶対値以上の log2FC を有意として数える（既定 1.0）。
-    log_transform: log2(x + 1) 空間で検定する（既定 True。MS 強度は対数正規に近い）。
-
-    **log2FC は正なら group_b が高い（上昇）。** group_a が基準（対照）。
-    全特徴量の結果と volcano 点列は戻り値に載せず session.dataset.last_differential
-    に保持する。エクスポートは dataset_export_differential を使う。
-
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
-    """
-    holder = resolve_holder(dataset_handle)
-    if isinstance(holder, str):
-        return holder
-    ds = holder.dataset
-    if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
-
-    from metabolomix.analysis.dataset_service import compare_dataset
-
-    from metabolomix.core.atomic_io import DomainError
-
-    try:
-        result = compare_dataset(
-            ds,
-            group_a,
-            group_b,
-            q_threshold=q_threshold,
-            log2fc_threshold=log2fc_threshold,
-            log_transform=log_transform,
-            group_a_label=group_a_label,
-            group_b_label=group_b_label,
-        )
-    except PreconditionError as exc:
-        return _from_precondition(exc)
-    except DomainError as exc:
-        return mztab_error(exc.code, exc.message, exc.details or None)
-
-    payload = {k: v for k, v in result.items()
-               if k not in ("results", "volcano", "provenance")}
-    payload["status"] = "success"
-    payload["result_id"] = result["provenance"]["result_id"]
-    payload["differential_contract_version"] = result["contract_version"]
-    payload["results_note"] = (
-        "全特徴の結果と volcano 点列は本要約に非同梱（セッション保持）。"
-        "InChIKey 付きの全行が必要なら dataset_export_differential を実行してください。")
-    return json_payload(payload)
 
 
 @mcp.tool(annotations=ToolAnnotations(
@@ -242,25 +45,25 @@ def dataset_differential(
 def dataset_export_differential(output_path: str,
                                 result_id: str | None = None,
                                 apply_curation: bool = True,
-                                dataset_handle: str | None = None) -> str:
+                                dataset_handle: str | None = None,
+                                contrast_id: str | None = None) -> str:
     """指定した差次的結果を InChIKey 付きの 1 ファイルへ書き出す。
 
-    先に dataset_preprocess → dataset_differential を実行しておくこと。
-    出力は arf_export_differential と**同一の契約**（15 列 + contract_version
-    メタ行）なので、下流のパスウェイ解析にそのまま渡せる。
+    先に dataset_preprocess → dataset_compare を実行しておくこと。
+    出力は差次的エクスポートの契約（`analysis/export_contract.py`。15 列 + contract_version
+    メタ行）に従うので、下流のパスウェイ解析にそのまま渡せる。
 
     apply_curation（既定 true）: curation_submit で wrong を付けたスポットを
     同定なしとして扱い、出力から外す。フラグがあればメタ行 # curation = ... で
     適用状況を宣言する。フラグが無ければ出力は変わらない。成功 payload の
-    `curation` は `{state, wrong_excluded, suspect, orphaned}`（arf_export_differential と
-    同じ形）。assign（curation_submit の候補付け）は同定を置き換え（name_source /
+    `curation` は `{state, wrong_excluded, suspect, orphaned}`。assign（curation_submit の候補付け）は同定を置き換え（name_source /
     inchikey_source = curation）、redundant は除外する。どちらかがあれば `curation` に
     `assigned` と `redundant_excluded` が足される。
     フラグ記録に読めない行があれば書き出さずに `CURATION_FLAGS_INVALID`。
 
     result_id: 書き出す結果を名指しする（省略時は直近の差次的結果）。
-        **前処理をやり直した後の古い結果は書き出しません**（`STALE_ANALYSIS_RESULT`）。
-        古い数字に現在の前処理条件のラベルが付いた TSV は、どちらも正しく見えて
+        **除外・試料の表の変更で古くなった結果は書き出しません**（`STALE_ANALYSIS_RESULT`）。
+        古い数字に現在の条件のラベルが付いた TSV は、どちらも正しく見えて
         ずれが分からなくなります。
 
     InChIKey は DatasetState.feature_metadata から取る（mzTab-M の
@@ -268,9 +71,15 @@ def dataset_export_differential(output_path: str,
     濃縮解析の背景を保つため、有意な行だけでなく InChIKey が付いた全行を出す。
     ontology と msi_level は mzTab-M に対応物が無いため空欄で、その旨をメタ行に
     書く（空欄を「該当なし」と読み違えさせない）。メタ行には result_id と
-    preprocess_id も入るので、あとから「どの計算の出力か」を辿れる。
+    preprocess_id（その結果が読んだ行列の `matrix_id`）も入るので、あとから「どの計算の出力か」を辿れる。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    contrast_id: `dataset_compare` の結果が対比を複数持つときに書き出す対比の ID（`T_vs_C` など）。
+        対比が 1 つなら省略できる。複数で省くか未知の ID なら `CONTRAST_REQUIRED`、交互作用の対比は
+        2 群の形にならないので `CONTRAST_NOT_TWO_GROUP`（どちらも details に候補）。
+        15 列の後ろ（`msi_note` の後）に検定・判定規則・単位などのメタ行が付く（列と契約の版は同じ。
+        `mean_a` / `mean_b` は前処理後の線形値の算術平均）。
+
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -278,26 +87,30 @@ def dataset_export_differential(output_path: str,
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
 
     last = ds.last_differential
     if result_id is not None:
+        try:
+            result_id, contrast_id = stats_results.split_result_ref(result_id, contrast_id)
+        except DomainError as exc:
+            return mztab_error(exc.code, exc.message, exc.details or None)
         last = (ds.results or {}).get(result_id)
-    if not last or last.get("kind") != "two_group":
+    if not last or last.get("kind") != "compare":
         return _missing(
-            "dataset_differential_result",
-            "先に dataset_preprocess → dataset_differential（2群）を実行してください。"
+            "dataset_compare_result",
+            "先に dataset_preprocess → dataset_compare を実行してください。"
             if result_id is None else
             f"result_id={result_id} の 2 群比較の結果がありません。")
 
     from metabolomix.analysis.dataset_export import export_dataset_result
-    from metabolomix.core.atomic_io import DomainError
     from metabolomix.curation import apply as curation_apply
     from metabolomix.curation.flags import FlagFileError, orphaned_warning
 
     curation = None
     flag_set = None
-    arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p) for p in ds.source_files)), None)
+    lookup = curation_apply.arf2_lookup_kwargs(ds)
+    arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p, **lookup) for p in ds.source_files)), None)
     if arf2 is not None:
         try:
             flag_set = curation_apply.flags_for_arf2(arf2)
@@ -312,11 +125,12 @@ def dataset_export_differential(output_path: str,
             curation = {"state": state, "flag_set": flag_set}
 
     try:
-        info = export_dataset_result(ds, last, Path(output_path), curation=curation)
+        info = export_dataset_result(ds, last, Path(output_path), curation=curation,
+                                     contrast_id=contrast_id)
     except DomainError as exc:
         if exc.code in ("STALE_ANALYSIS_RESULT", "ANALYSIS_RESULT_NOT_FOUND"):
             # 再計算すれば直る。どのツールを呼べばよいかを機械可読に返す。
-            return _missing("dataset_differential_result", exc.message)
+            return _missing("dataset_compare_result", exc.message)
         return mztab_error(exc.code, exc.message, exc.details or None)
 
     curation_stats = info.pop("curation_stats", None)
@@ -348,16 +162,21 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     シートに不備があれば `session.dataset` を一切変更せずエラーを返すので、
     そのまま再送してよい。
 
-    前処理入力（role/batch/injection_order/qc_pool/include/sample_id/source_file）が
-    変われば前処理済み行列ごと・PCA・差次的解析まで無効化する。`group` だけの変更なら
-    差次的解析だけを無効化し、PCA は生かしたまま返す（`changed_fields` で確認できる）。
+    任意の列 `subject_id`（見出しの末尾に足す。反復測定の被験者）も読み、`sample_meta` に持つ。
+    統計エンジンはこれを使う: `dataset_preprocess`（`collapse_replicates=True` が既定）が同じ個体の反復注入を
+    1 個体にまとめる鍵で、`dataset_compare(block="subject_id")` が同じ個体を対応づける鍵。列が無いシートは
+    今までどおり（反復をまとめず、注入が単位）。
 
-    `dataset_differential` を直接呼ぶ経路（比較する2群のサンプル名を都度自分で
-    組み立てる）とは別に、比較を明示するのは pipeline 側の役割になる——群名だけで
-    対照/処置の向きを決めない・QC/blank/unknown/include=false を混ぜない・完全交絡を
-    止める、という前提検証は `resolve_comparison`/`run_comparison`（内部関数）が持つ。
+    試料の表が変われば（`group` だけの変更・`subject_id` だけの変更でも）、統計エンジンの登録した行列
+    （`matrix_id`）・`dataset_compare` の結果・`dataset_pca` の結果はすべて古くなる（`changed_fields` で
+    何が変わったかを確認できる。古い `matrix_id` を渡すと `missing_state`）。やり直しは
+    `dataset_preprocess` を前と同じ引数で（既定でよいならそれを明示して）呼び直し、返った新しい
+    `matrix_id` を `dataset_compare` / `dataset_pca` に渡す。`matrix_id` を省いて `dataset_compare` だけを
+    呼び直すと既定の前処理で行列を作り直すので、前に選んだ前処理とは別の行列になりうる。
+    比較の前提検証は `dataset_compare`（統計エンジン。既定は moderated t）が守る: 群の明示を求め・
+    `include=false` と非 sample の役割を外し・完全交絡を `allow_confounded` なしには止める。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -365,10 +184,9 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
 
-    from metabolomix.analysis.dataset_service import apply_sample_manifest
-    from metabolomix.core.atomic_io import DomainError
+    from metabolomix.analysis.sample_manifest import apply_sample_manifest
 
     try:
         summary = apply_sample_manifest(ds, manifest_path)
@@ -381,9 +199,13 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     return json_payload({
         "status": "success",
         **summary,
-        "next": ("changed_fields に前処理入力が含まれる場合は dataset_preprocess から"
-                 "やり直してください。group のみの変更なら dataset_differential を"
-                 "再実行するだけで構いません。"),
+        "next": (("試料の表が変わったので（group だけの変更でも）、登録した行列（matrix_id）・dataset_compare と"
+                  "dataset_pca の結果は古くなりました。dataset_preprocess を前と同じ引数で（既定でよいなら"
+                  "既定のまま）呼び直し、返った新しい matrix_id を dataset_compare / dataset_pca に渡して"
+                  "やり直してください（matrix_id を省くと既定の前処理で作り直すので、前に選んだ前処理とは"
+                  "別の行列になりえます）。")
+                 if summary.get("changed_fields") else
+                 "試料の表は変わっていません（登録した行列・結果はそのまま使えます）。"),
     })
 
 
@@ -391,151 +213,6 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
 
 def _missing(state: str, message: str) -> str:
     return missing_state(state, _RECOVERY_TOOLS[state], message)
-
-
-def _from_precondition(exc: PreconditionError) -> str:
-    """PreconditionError を kind に応じた封筒へ振り分ける。
-
-    missing_state は「先に別のツールを呼べば直る」場合だけに使う。引数エラーを
-    missing_state にすると、契約に従うクライアントが同じ呼び出しを繰り返す。
-    """
-    if exc.kind == "missing_state":
-        return _missing(exc.state, exc.message)
-    return mztab_error("DATASET_BAD_REQUEST", exc.message, exc.details or None)
-
-
-def _count_roles(roles: dict, sample_names: list[str]) -> dict:
-    counts: dict[str, int] = {}
-    for name in sample_names:
-        role = roles.get(name, "sample")
-        counts[role] = counts.get(role, 0) + 1
-    return counts
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_statistic(specification: dict, matrix_result_id: str,
-                      dataset_handle: str | None = None) -> str:
-    """v2 の統計（welch / anova_tukey / pca）を、名指しした解析行列に実行する。
-
-    specification: `analysis_recipe.statistics` の1要素と同じ形
-      （`statistic_id` / `kind` / `transform` / `feature_scope` と、kind別の
-      `reference_group`+`test_group`、`groups`+`alpha`、`scaling`+`n_components`）。
-    matrix_result_id: `analysis-matrix.v1` の ID。pipeline の preprocess /
-      qc_processed が作った行列を名指しする。**直近の前処理を暗黙に使わない**
-      ——recipe 違いの行列が2本ある前提の設計で、どちらの数字かを結果に残す。
-
-    v1 の `dataset_differential` とは別物: 効果量は統計変換前の算術平均比の log2
-    （`effect_size_definition`）、log2 変換に pseudocount を足さない、BH の母集団は
-    検定できた feature だけ。v1 の既定値・数値契約は変更していない。
-
-    全量（feature ごとの結果）は戻り値に載せず session に保持する。
-
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
-    """
-    holder = resolve_holder(dataset_handle)
-    if isinstance(holder, str):
-        return holder
-    ds = holder.dataset
-    if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
-    if not getattr(ds, "analysis_matrices", None):
-        return _missing(
-            "analysis_matrix",
-            "解析行列（analysis-matrix.v1）がありません。"
-            "pipeline_run で v2 要求を実行し、preprocess/qc_processed が作った"
-            "matrix_result_id を指定してください。")
-
-    from metabolomix.analysis.dataset_service import statistic_dataset
-    from metabolomix.core.atomic_io import DomainError
-
-    try:
-        result = statistic_dataset(ds, specification, matrix_result_id)
-    except DomainError as exc:
-        return json_payload({"error": {"code": exc.code, "message": str(exc.message),
-                                       "details": exc.details}})
-
-    ds.results[f"stat_{result.get('statistic_id')}"] = result
-    payload = {k: v for k, v in result.items() if k != "features"}
-    payload["status"] = "success"
-    payload["n_features"] = len(result.get("features") or [])
-    payload["features_note"] = (
-        "feature ごとの結果全量は本要約に非同梱（セッションに保持）。"
-        "TSV が必要なら pipeline の export 工程を使ってください。")
-    return json_payload(payload)
-
-
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_build_matrix(recipe: dict, recipe_id: str = "default",
-                         dataset_handle: str | None = None) -> str:
-    """v2 の解析行列（analysis-matrix.v1）を、セッションの DatasetState から1本作る。
-
-    recipe: profile の `matrix_recipes` の1要素と同じ形
-      （`base` / `normalize` / `drift_correct` / `filter` / `impute` の5キー。
-      過不足はそのまま拒否する）。検証は profile と同じ規則を共有しているので、
-      pipeline 経由より緩い recipe がここから入ることはない。
-    recipe_id: 行列の識別に使う名前。`matrix_id` は recipe 内容と dataset・
-      metadata から決まるので、**同じ dataset に同じ recipe を与えれば同じ ID**
-      になる（pipeline が作った行列と突き合わせられる）。
-
-    揃っていない前提を揃ったことにしない:
-
-    - `base="internal_standard_ratio"` は対象feature↔内部標準の対応付けが要る。
-      この単体ツールは対応付けを作らないので `missing_state` で止める
-      （空の対応付けで「比」を名乗る行列を作らない）。
-    - 検出状態が分からない dataset に `filter.min_detection_rate` を指定しても
-      feature は落ちない。`history` に `not_evaluable` が残る。
-
-    値そのものは戻り値に載せず session に保持する。`dataset_statistic` へは
-    戻り値の `matrix_id` を渡す。
-
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
-    """
-    holder = resolve_holder(dataset_handle)
-    if isinstance(holder, str):
-        return holder
-    ds = holder.dataset
-    if ds is None:
-        return _missing("dataset",
-                        "DatasetState がありません。先に dataset_load を実行してください。")
-
-    from metabolomix.analysis.dataset_service import build_analysis_matrix
-    from metabolomix.console.profile_schema import validate_matrix_recipe
-    from metabolomix.core.atomic_io import DomainError
-
-    try:
-        normalized = validate_matrix_recipe(recipe, recipe_id)
-    except DomainError as exc:
-        # profile 経由なら PROFILE_INVALID だが、ここでの入力は profile ではなく
-        # 引数そのもの。直す場所を取り違えさせない。
-        return mztab_error("MATRIX_RECIPE_INVALID", exc.message, exc.details or None)
-
-    if normalized["base"] == "internal_standard_ratio":
-        return _missing(
-            "feature_bindings",
-            "内部標準比の行列には対象feature↔内部標準の対応付けが必要です。"
-            "この単体ツールは対応付けを作らないため、pipeline の経路で作成してください。")
-
-    try:
-        matrix = build_analysis_matrix(ds, {**normalized, "recipe_id": recipe_id})
-    except DomainError as exc:
-        return json_payload({"error": {"code": exc.code, "message": str(exc.message),
-                                       "details": exc.details}})
-
-    return json_payload({
-        "status": "success",
-        "matrix_id": matrix["matrix_id"],
-        "recipe_id": recipe_id,
-        "stage": matrix["stage"],
-        "n_assays": len(matrix["assay_ids"]),
-        "n_features": len(matrix["feature_ids"]),
-        "eligible_features": int(sum(bool(x) for x in matrix["eligibility_mask"])),
-        "units": sorted(set(matrix["units"])),
-        "history": matrix["correction_history"],
-        "caveats": matrix["caveats"],
-        "values_note": "値は戻り値に非同梱（セッションに保持）。dataset_statistic に matrix_id を渡す。",
-    })
 
 
 # ---------- dataset_feature_search（spec 2026-10-19） ----------
@@ -606,7 +283,8 @@ def _curation_note(ds) -> str | None:
     from metabolomix.curation import apply as curation_apply
     from metabolomix.curation.flags import FlagFileError
 
-    arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p)
+    lookup = curation_apply.arf2_lookup_kwargs(ds)
+    arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p, **lookup)
                               for p in (getattr(ds, "source_files", None) or {}))), None)
     if arf2 is None:
         return None
@@ -662,7 +340,9 @@ def dataset_feature_search(
     merge_split: bool = True,
     alignment_qc_path: str | None = None,
     ppm_offset: dict | None = None,
+    sort: str = "mz",
     dataset_handle: str | None = None,
+    contrast_id: str | None = None,
 ) -> str:
     """DatasetState の特徴を探し、目的の物質に当たる特徴を規則で判定する（読み取り専用）。
 
@@ -670,9 +350,16 @@ def dataset_feature_search(
 
     **窓検索**（`targets` なし）: `feature_ids`（SMF_ID の完全一致）・`min_mz`/`max_mz`・
     `min_rt`/`max_rt`（分）の AND。境界を含む。何も指定しなければ `FEATURE_SEARCH_EMPTY_QUERY`
-    （全件を返さない）。`feature_ids=[]` は「どの ID でもない」条件で 0 件。並びは m/z 昇順。
-    戻り値 `features` は TSV（`feature_id mz rt evidence name inchikey adduct n_sme`。
-    `evidence` は `sme`/`sml`/`none`）。注釈の無い特徴にも統計を付ける。
+    （全件を返さない。`sort="intensity"` なら条件なしで上位 `max_results` 件）。`feature_ids=[]` は
+    「どの ID でもない」条件で 0 件。`dataset_exclude` した特徴は出さない。
+    並びは `sort="mz"`（既定）で m/z 昇順、`sort="intensity"` で強度の降順。強度は検出セル
+    （gap-fill でない実測。除外した試料の列を除く）の値の**最大**で、ピークの高さ（データセットの
+    測定値）の最大——EIC のクロマトグラムの最大ではない。検出セルが無い特徴は最後。検出の印が無いデータセットは全セルの最大で並べ、`notes` に書く。
+    戻り値 `features` は TSV（`feature_id mz rt evidence name inchikey adduct n_sme ontology
+    n_detected normalized msi_level`。`evidence` は `sme`/`sml`/`none`、`n_detected` は検出セルの数
+    （除外した試料を除く。検出状態が無ければ空）、`normalized`（GOSLIN で標準化した名前）と
+    `msi_level` は解析フォルダのデータセットだけが持ち、mzTab-M では空。意味は
+    `lipidmix://docs/output-format/identity`）。注釈の無い特徴にも統計を付ける。
 
     **目標照合**（`targets` あり、1 回 50 件まで）: 各要素は `target_id`・`inchikey`（必須。
     先頭 14 文字で照合）と、`formula` か（`expected_mz` と `adduct`）。InChIKey が一意に決まらない
@@ -692,10 +379,15 @@ def dataset_feature_search(
     4 桁に）より前の値から作るので、返された `rule.targets` から計算し直すことはできない
     ——照合は `rule_hash` の値どうしで行う。
 
-    result_ids: 統計を付ける 2 群比較（`dataset_differential`）の結果。省略時は今も有効な
-        2 群比較の全部（古いものは使わず `notes` に挙げる）。名指しした ID が無い・古いときは
+    result_ids: 統計を付ける 2 群比較（`dataset_compare` の結果の対比）。省略時は
+        今も有効な 2 群比較の全部（古いものは使わず `notes` に挙げる）。`dataset_compare` の結果は対比ごとに
+        1 つの比較として数え、ID は対比が 1 つなら `result_id`、複数なら `result_id#contrast_id`
+        （交互作用の対比は 2 群の形にならないので使わない）。名指しした ID が無い・古いときは
         `missing_state`。差次的結果が 1 件も無ければ統計なしで返す。
+    contrast_id: `dataset_compare` の結果から使う対比を 1 つに絞る（その対比が無い結果は飛ばす）。
     max_results: 窓検索の行数・目標ごとの候補数の上限（既定 20）。打ち切りは `notes` に書く。
+    sort: 窓検索の並び（`mz` 既定 / `intensity`）。`targets` とは併用できない（`DATASET_BAD_REQUEST`。
+        目標照合は規則の順で並べる）。
 
     `stats` は TSV（`feature_id result_id status log2fc p q mean_a mean_b detected_a detected_b`）。
     `status` は `tested` / `not_in_matrix`（前処理で落ちた）/ `not_testable`（p が無い）で、
@@ -705,14 +397,14 @@ def dataset_feature_search(
     欄の意味は `lipidmix://docs/output-format/mztab`。
 
     with_group_labels: True（opt-in。再解析で使う）なら `stats` の末尾に `comparison`
-        （pipeline の比較なら comparison_id、そうでなければ `<group_b>_vs_<group_a>`）・
+        （`<group_b>_vs_<group_a>`）・
         `group_a`・`group_b`・`log2fc_test_over_ref`（`log2fc` と同じ値を、比較名と同じ向きの
         名前で）を足す。既定 False では列は変わらない。
 
     merge_split: True（既定）なら、1 つの物質が 2 つに割れたアライメントスポット
         （`dataset_alignment_qc` の `merge_groups`。互いに最も近い mergeable な 2 スポット）を
         試料ごとの大きい方の値で 1 列にまとめた行列で、差次的結果と同じ前処理のレシピ・同じ検定
-        （log 変換の Welch 等）・**まとめた後の全特徴**での BH をやり直した値を `stats` に出す。
+        （`dataset_compare` の記録した spec を当て直す）・**まとめた後の全特徴**での BH をやり直した値を `stats` に出す。
         まとめる組がデータセットに 1 つでもあれば**すべての行**をやり直した値にする（1 つの表の q は
         1 つの BH の母集団から）。組が無ければやり直さず従来の値。目標照合でも組の 2 スポットを
         1 つの候補（残す ID。`targets[].merged_from`・`candidates` の末尾の `merged_from`）と数える。
@@ -729,7 +421,7 @@ def dataset_feature_search(
         まま。`rule.ppm_offset` と各目標の `ppm_offset`（付加体ごと）に出て `rule_hash` に入る。
         窓検索（`targets` なし）では使えない（`DATASET_BAD_REQUEST`）。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
@@ -737,7 +429,7 @@ def dataset_feature_search(
         return holder
     ds = holder.dataset
     if ds is None:
-        return _missing("dataset", "DatasetState がありません。先に dataset_load を実行してください。")
+        return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
     if ppm_offset is not None and targets is None:
         return mztab_error("DATASET_BAD_REQUEST",
                            "ppm_offset は目標照合（targets）のときだけ使える（効かない設定を渡さない）。",
@@ -749,6 +441,14 @@ def dataset_feature_search(
         return mztab_error("DATASET_BAD_REQUEST",
                            "alignment_qc_path は merge_split=true のときだけ使える"
                            "（効かない設定を渡さない）。", {"field": "alignment_qc_path"})
+
+    if sort not in ("mz", "intensity"):
+        return mztab_error("DATASET_BAD_REQUEST", f"sort は mz か intensity: {sort!r}",
+                           {"field": "sort"})
+    if targets is not None and sort != "mz":
+        return mztab_error("DATASET_BAD_REQUEST",
+                           "sort は窓検索（targets なし）のときだけ使える（目標照合は規則の順で"
+                           "並ぶ。効かない設定を渡さない）。", {"field": "sort"})
 
     window = {"feature_ids": feature_ids, "min_mz": min_mz, "max_mz": max_mz,
               "min_rt": min_rt, "max_rt": max_rt}
@@ -767,20 +467,26 @@ def dataset_feature_search(
     from metabolomix.analysis import feature_search
     from metabolomix.analysis.mass_accuracy import normalize_ppm_offset
     from metabolomix.analysis.result_state import dataset_fingerprint
-    from metabolomix.core.atomic_io import DomainError
 
     notes: list[str] = []
     payload: dict = {}
-    # データの指紋（行列全体の hash）は 1 回だけ計算し、割れの照合・引き継いだ結果の照合・
-    # stats_source のすべてで使う。
+    # データの指紋（行列全体の hash）は 1 回だけ計算し、割れの照合・結果の選択（古い結果を
+    # 選ばない照合）・stats_source のすべてで使う。
     dataset_hash = dataset_fingerprint(ds)
     plan = None
     try:
         if targets is None:
             rows, truncated = feature_search.search_window(
-                ds, **window, max_results=max_results)
+                ds, **window, max_results=max_results, sort=sort)
             if feature_ids is not None and not feature_ids:
                 notes.append("feature_ids=[] は「どの ID でもない」条件として扱った（0 件）。")
+            for fid in (feature_ids or []):
+                if fid in ds.excluded_features:
+                    notes.append(f"{fid} は除外済み（理由: {ds.excluded_features[fid]}）なので返さない"
+                                 "（戻すなら dataset_exclude(mode=\"remove\")）。")
+            if sort == "intensity" and ds.detected_mask is None:
+                notes.append("このデータセットには検出の印（detected_mask）が無く gap-fill のセルを"
+                             "見分けられないので、強度順は全セル（除外した試料を除く）の最大で並べた。")
             if truncated:
                 notes.append(f"max_results={max_results} で打ち切った（ほか {truncated} 件）。"
                              "窓を狭めるか max_results を増やしてください。")
@@ -826,26 +532,31 @@ def dataset_feature_search(
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
 
+    try:
+        chosen = feature_search.select_results(
+            ds, None if result_ids is None else list(dict.fromkeys(result_ids)),
+            dataset_hash=dataset_hash, contrast_id=contrast_id)
+    except DomainError as exc:                    # 対比の指定の誤り（CONTRAST_* / DATASET_BAD_REQUEST）
+        return mztab_error(exc.code, exc.message, exc.details or None)
     if result_ids is not None:
-        chosen = feature_search.select_results(ds, list(dict.fromkeys(result_ids)),
-                                               dataset_hash=dataset_hash)
         if chosen["missing"] or chosen["stale"]:
             # 名指しの結果を黙って落とすと、呼び出し側は統計が付いたつもりで読む
             return _missing(
-                "dataset_differential_result",
+                "dataset_compare_result",
                 "result_ids に指定した差次的結果が使えません"
                 f"（無い・2 群比較でない: {chosen['missing']} / 古い: {chosen['stale']}）。"
-                "dataset_differential で計算し直すか、result_ids を省略して今も有効な結果だけを"
+                "dataset_compare で計算し直すか、result_ids を省略して今も有効な結果だけを"
                 "使ってください。")
     else:
-        chosen = feature_search.select_results(ds, None, dataset_hash=dataset_hash)
         if chosen["stale"]:
             notes.append("古い差次的結果（前処理・群の訂正前）は統計に使っていない: "
                          + ", ".join(chosen["stale"]))
+        for entry in chosen["missing"]:           # 効かなかった contrast_id・交互作用だけの結果
+            notes.append(f"統計に使えなかった指定: {entry}")
     results = chosen["results"]
     if not results:
         notes.append("差次的結果（2 群比較）が 1 件も無いので統計を付けていない"
-                     "（dataset_differential を実行すると付く）。")
+                     "（dataset_compare を実行すると付く）。")
 
     merge_block: dict = {"enabled": merge_split}
     unmerged = None
@@ -928,31 +639,42 @@ def dataset_feature_search(
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True), structured_output=False)
 def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curation: bool = True,
-                                   dataset_handle: str | None = None) -> str:
+                                   dataset_handle: str | None = None,
+                                   contrast_id: str | None = None) -> str:
     """指定した 2 群結果を根拠バンドル v3（samples・intensities・adduct・comparison.polarity）へ出力する。
+
+    `dataset_compare` の結果（`result_id`）は `contrast_id` で対比を 1 つ選ぶ（対比が 1 つなら省略可。
+    複数で省くか未知の ID なら `CONTRAST_REQUIRED`、交互作用は `CONTRAST_NOT_TWO_GROUP`）。
+    `comparison.method` は実際の検定名（`moderated_t` など）、`comparison.statistics`
+    に検定・CI 水準・判定規則・BH の母集団・単位。`intensities.tsv` は結果が読んだ行列の線形値
+    （正規化の後・log2 の前、補完なし＝`pre_imputation`）。
 
     spectrum_links は同じアラインメントの `.dcl` へ ID（SMF_ID == AlignmentID == `.dcl` の番号）で
     結び、m/z・RT は検証にだけ使う。`.arf2` / `.dcl` はハンドルならそのハンドルのもの、対話の
-    セッションなら `dataset_handle_open` と同じ探し方で決める。結べないときは links を空にし、
+    セッションなら `load_dataset` と同じ探し方で決める。結べないときは links を空にし、
     manifest の `provenance.spectrum_links_status` と `spectrum_links_reason` に理由を書く。
 
-    dataset_handle: `dataset_handle_open` が返したハンドル（再解析の並行のエージェント向け）。
+    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     from metabolomix.analysis.evidence_export import export_dataset_evidence
     from metabolomix.curation import apply as curation_apply
     from metabolomix.curation.flags import FlagFileError
-    from metabolomix.core.atomic_io import DomainError
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
         return holder
     ds = holder.dataset
+    try:
+        result_id, contrast_id = stats_results.split_result_ref(result_id, contrast_id)
+    except DomainError as exc:
+        return mztab_error(exc.code, exc.message, exc.details or None)
     result = (getattr(ds,'results',None) or {}).get(result_id) if ds is not None else None
     if result is None:
-        return _missing('dataset_differential_result','指定した2群結果がありません。先にdataset_differentialを実行してください。')
+        return _missing('dataset_compare_result','指定した2群結果がありません。先にdataset_compareを実行してください。')
     try:
         curation = None
-        arf2 = next(filter(None,(curation_apply.arf2_for_mztab(p) for p in ds.source_files)),None)
+        lookup = curation_apply.arf2_lookup_kwargs(ds)
+        arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p, **lookup) for p in ds.source_files)), None)
         if arf2 is not None:
             flags = curation_apply.flags_for_arf2(arf2)
             mapped = (getattr(ds,'feature_qc',None) or {}).get('source') == 'arf'
@@ -966,8 +688,10 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curati
             arf2_path, dcl_path = _alignment_files(ds, None)
         return json_payload(export_dataset_evidence(ds,result,Path(output_dir),curation=curation,
                                                     polarity=polarity,arf2_path=arf2_path,
-                                                    dcl_path=dcl_path))
+                                                    dcl_path=dcl_path,contrast_id=contrast_id))
     except DomainError as exc:
+        if exc.code == 'STATS_MATRIX_MISSING':
+            return _missing('dataset_compare_result',exc.message+' dataset_compareを実行し直してください。')
         return mztab_error(exc.code,exc.message,exc.details or None)
     except (ValueError,OSError,FlagFileError) as exc:
         return mztab_error('EVIDENCE_EXPORT_FAILED',str(exc))

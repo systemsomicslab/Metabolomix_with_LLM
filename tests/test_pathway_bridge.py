@@ -7,6 +7,7 @@ import textwrap
 import pytest
 
 from metabolomix.pathway import bridge
+from tests.config_fixtures import use_config
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="start_owned_process は Windows 専用")
 
@@ -25,7 +26,7 @@ def _fake(tmp_path, body: str):
 
 @pytest.fixture
 def configured(monkeypatch, tmp_path):
-    monkeypatch.setenv("MSLIPIDMAPPER_RSCRIPT", sys.executable)
+    use_config(monkeypatch, tmp_path, {"mslipidmapper.rscript": sys.executable})
     renv = tmp_path / "r"
     (renv / "renv").mkdir(parents=True)
     (renv / "renv" / "activate.R").write_text("# fake", encoding="utf-8")
@@ -78,7 +79,7 @@ def test_browser_setting_wins(monkeypatch, tmp_path):
     exe.write_text("", encoding="utf-8")
     other = tmp_path / "msedge.exe"
     other.write_text("", encoding="utf-8")
-    monkeypatch.setenv("MSLIPIDMAPPER_BROWSER", str(exe))
+    use_config(monkeypatch, tmp_path, {"mslipidmapper.browser": exe})
     monkeypatch.setattr(bridge, "BROWSER_CANDIDATES", (str(other),))
     assert bridge.browser_path() == str(exe)
 
@@ -88,14 +89,12 @@ def test_browser_is_detected_from_standard_locations(monkeypatch, tmp_path):
     edge = tmp_path / "x86" / "msedge.exe"
     edge.parent.mkdir()
     edge.write_text("", encoding="utf-8")
-    monkeypatch.delenv("MSLIPIDMAPPER_BROWSER", raising=False)
     monkeypatch.setattr(bridge, "BROWSER_CANDIDATES",
                         (str(tmp_path / "missing" / "chrome.exe"), str(edge)))
     assert bridge.browser_path() == str(edge)
 
 
 def test_no_browser_found_leaves_detection_to_upstream(monkeypatch, tmp_path):
-    monkeypatch.delenv("MSLIPIDMAPPER_BROWSER", raising=False)
     monkeypatch.setattr(bridge, "BROWSER_CANDIDATES", (str(tmp_path / "nope.exe"),))
     assert bridge.browser_path() is None
 
@@ -149,14 +148,13 @@ def test_spawn_failure_is_run_failed(configured, monkeypatch):
 
 
 def test_not_configured(monkeypatch):
-    monkeypatch.delenv("MSLIPIDMAPPER_RSCRIPT", raising=False)
     with pytest.raises(bridge.BridgeError) as exc:
         bridge.resolve_rscript()
     assert exc.value.code == "MSLM_NOT_CONFIGURED"
 
 
 def test_configured_but_missing_file(monkeypatch, tmp_path):
-    monkeypatch.setenv("MSLIPIDMAPPER_RSCRIPT", str(tmp_path / "nope.exe"))
+    use_config(monkeypatch, tmp_path, {"mslipidmapper.rscript": tmp_path / "nope.exe"})
     with pytest.raises(bridge.BridgeError) as exc:
         bridge.resolve_rscript()
     assert exc.value.code == "MSLM_NOT_CONFIGURED"

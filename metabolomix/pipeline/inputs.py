@@ -48,7 +48,7 @@ from metabolomix.core import user_config
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 __all__ = ["DEFAULT_MANIFEST_NAME", "inspect_inputs", "manifest_source_record",
-           "resolve_manifest_path", "resolve_raw_inventory", "select_method",
+           "resolve_manifest_path", "select_method",
            "stage_inputs", "verify_inputs"]
 
 #: request.sample_manifest省略時に探す既定シート名（spec §7.1「元フォルダ直下の
@@ -311,30 +311,6 @@ def _build_entries_and_stat(
     return entries, raw_stat
 
 
-def resolve_raw_inventory(
-    source_root: Path, requested_extension: str | None = None,
-) -> tuple[str, list[dict]]:
-    """1フォルダ直下の計測ファイル（主+随伴）を列挙する（新規・純粋関数）。
-
-    既存の形式選択（`_resolve_raw_format`）とsidecar列挙
-    （`_collect_primaries_and_companions` / `_build_entries_and_stat`）を
-    そのまま再利用する——lipidomics v1（`inspect_inputs`）と別の選択規則を
-    metabolomics側だけに新設しない。`inspect_inputs`自身は呼ばない・呼ばれない
-    （既存関数は一切変更しない、純粋な追加）。
-
-    戻り値は`(選択した拡張子, raw_stat一覧)`。raw_stat各要素は
-    `{"relative_path", "size", "mtime_ns", "role"}`——内容hashはここでは
-    計算しない（呼び出し側の責務。`metabolomix.console.profiles.hash_files`が担う。
-    rawファイルは巨大なことがあるため、全量hashを要求する側だけがそのコストを
-    負う設計にする）。
-    """
-    source_root = Path(source_root)
-    ext, _formats = _resolve_raw_format(source_root, requested_extension)
-    primaries, companions_map = _collect_primaries_and_companions(source_root, ext)
-    _entries, raw_stat = _build_entries_and_stat(source_root, primaries, companions_map)
-    return ext, raw_stat
-
-
 # ---------- メソッド選択 ----------
 
 def _method_candidate_dict(path: Path, ion_mode: str | None, mtime: float) -> dict:
@@ -437,7 +413,7 @@ def _resolve_lbm_pinned(method_keys: dict, method_path: Path, exe_path: str,
     if override and not Path(override).is_absolute():
         override = str(source_root / override)
     try:
-        lbm_setting = user_config.get_setting("msdial.lbm")
+        lbm_setting = user_config.get_setting(user_config.LIBRARY_LBM_SETTING_KEY)
     except user_config.ConfigInvalidError as exc:
         raise DomainError(exc.code, exc.message, exc.details()) from exc
     lbm = method_file_mod.resolve_lbm(
@@ -497,11 +473,26 @@ def _resolve_msp_pinned(request: dict, polarity: str, source_root: Path, *,
 _LAB_LBM_WHAT = "研究室の脂質ライブラリ（.lbm2）"
 
 
+def is_lab_lbm(inputs: dict) -> bool:
+    """入力計画の LBM が研究室の資産（`[library] lbm` 由来）なら真。
+
+    msp_then_lbm は LBM を必ず `[library] lbm` から読む。auto でも出どころが
+    `config_file`（`method_file.SETTING_SOURCE`）なら同じ資産なので、モードを問わず
+    戻り値・receipt・report・エラー文ではファイル名だけを示す（spec 2026-10-07 §3.3）。
+    保存する計画は絶対パスのまま（resume の `verify_inputs` が要る）。
+    """
+    if inputs.get("library_mode") == "msp_then_lbm":
+        return True
+    lbm = inputs.get("lbm")
+    return isinstance(lbm, dict) and lbm.get("source") == method_file_mod.SETTING_SOURCE
+
+
 def _resolve_lbm_from_library_setting() -> dict:
     """library_mode="msp_then_lbm" の LBM を `[library] lbm` だけから解決し、sha256 で固定する。
 
-    `[msdial] lbm`・メソッドの宣言・実行体のフォルダ・ビルド生成物は見ない（auto の経路と
-    混ざらないように。設計 2026-10-28 §4.2）。エラー文と details に置き場所を載せない
+    メソッドの宣言・実行体のフォルダ・ビルド生成物は見ない（auto の経路の自動補完と
+    混ざらないように。設計 2026-10-28 §4.2。`[library] lbm` は auto の経路の設定の段と
+    同じキー——spec 2026-11-06 §7.4 で 1 つにまとめた）。エラー文と details に置き場所を載せない
     （ファイル名だけ。`_resolve_msp_pinned` と同じ規約）。
     """
     key = user_config.LIBRARY_LBM_SETTING_KEY
@@ -537,7 +528,8 @@ def _resolve_lbm_from_library_setting() -> dict:
             f"{_LAB_LBM_WHAT}（{resolved.name}）を読めません（ネットワークの一時的な切断の可能性）: "
             f"{type(exc).__name__}",
             {"lbm_file": resolved.name}) from exc
-    return {"path": str(resolved), "file": resolved.name, "sha256": digest, "source": setting.source}
+    return {"path": str(resolved), "file": resolved.name, "sha256": digest,
+            "source": method_file_mod.SETTING_SOURCE}
 
 
 def _resolve_exe(exe_path: Path) -> dict:
@@ -554,7 +546,7 @@ def _resolve_exe(exe_path: Path) -> dict:
     if probe != "console":
         raise DomainError(
             "MSDIAL_EXE_NOT_CONSOLE",
-            f"Console の実行体（[msdial] exe / MSDIAL_EXE）が MS-DIAL Console ではありません: {exe_path}",
+            f"Console の実行体（[msdial] exe）が MS-DIAL Console ではありません: {exe_path}",
             {"exe_path": str(exe_path)})
     return {"path": str(exe_path.resolve()), "sha256": _sha256_file(exe_path), "version": None}
 
@@ -679,8 +671,8 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
         dot_product_cutoffs = method_file_mod.resolved_dot_product_cutoffs(method_keys)
     elif lbm_info["path"] and (lbm_info["source"] != "method_file"
                                or method_file_mod.LBM_KEY in overrides):
-        # 相対宣言なら resolve_lbm の解決結果で置き換え、build_tree/env/exe_dir
-        # へフォールバックした場合は（原本に行が無いので）新規追加する。
+        # 相対宣言なら resolve_lbm の解決結果で置き換え、build_tree / config_file
+        # （[library] lbm）/ exe_dir へフォールバックした場合は（原本に行が無いので）新規追加する。
         # 絶対宣言はそのまま（Console がそのまま読める）。
         overrides[method_file_mod.LBM_KEY] = lbm_info["path"]
 
@@ -714,9 +706,12 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
         },
         "alignment_reference": alignment_reference,
         # msp_then_lbm の LBM は研究室の資産なので、receipt と report がファイル名と出どころで
-        # 示せるように `file`・`source` も持つ（ほかのモードの形は変えない）。
+        # 示せるように `file`・`source` も持つ。auto も `source` を持ち、[library] lbm
+        # （config_file）から解いた LBM を戻り値でファイル名だけにできるようにする
+        # （計画の指紋は lbm の sha256 しか読まないので変わらない）。
         "lbm": (dict(lbm_info) if library_mode == "msp_then_lbm"
-                else {"path": lbm_info["path"], "sha256": lbm_info["sha256"]}),
+                else {"path": lbm_info["path"], "sha256": lbm_info["sha256"],
+                      **({"source": lbm_info["source"]} if library_mode == "auto" else {})}),
         "library_mode": library_mode,
         "msp": msp_info,
         "removed_declarations": removed_declarations,
@@ -724,83 +719,6 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
         "exe": exe_info,
         "polarity": polarity,
         "unverified": unverified,
-    }
-
-
-def plan_from_profile(source_root: Path, request: dict, profile: dict) -> dict:
-    """profileだけを情報源に入力配置計画を作る（v2）。
-
-    `inspect_inputs`と**同じ形**のplanを返すので、`stage_inputs`・
-    `_plan_fingerprint`・`_handle_prepare_inputs_v2`はそのまま共有できる。
-    違うのは決め方だけ——methodをフォルダから推定せず、LBMを必須にせず、
-    環境設定の実行体へフォールバックしない（profileが唯一の情報源）。
-
-    解決とhash照合はやり直さない。`resolve_profile_inputs`が既にmethod・依存・
-    実行体・rawの実在とhash一致を検証しているので、ここはその結果を形へ移すだけ。
-    """
-    # profilesはmodule先頭でこのモジュールをimportしている。関数内で読む
-    # （module先頭に書くと循環import）。
-    from metabolomix.console import profiles as profiles_mod
-
-    source_root = Path(source_root).expanduser()
-    if not source_root.is_dir():
-        raise DomainError("DATASET_ROOT_NOT_FOUND", f"source_rootが存在しません: {source_root}",
-                          {"source_root": str(source_root)})
-
-    profile_path = Path(request["profile_file"])
-    resolved = profiles_mod.resolve_profile_inputs(
-        profile, profile_path.parent, raw_root=source_root)
-
-    # raw形式はprofileが宣言しない（データ由来であってmethod由来ではない）。
-    ext, _formats = _resolve_raw_format(source_root, request.get("keep_extension"))
-    primaries, companions_map = _collect_primaries_and_companions(source_root, ext)
-    entries, raw_stat = _build_entries_and_stat(source_root, primaries, companions_map)
-    companions = {p.name: [c.name for c in cs]
-                  for p, cs in companions_map.items() if cs}
-
-    environment = resolved["execution_environment"]
-    exe_path = Path(environment["executable_path"])
-    probe = console_runner.probe_console_exe(str(exe_path))
-    if probe == "timeout":
-        raise DomainError(
-            "MSDIAL_EXE_PROBE_TIMEOUT", console_runner.probe_timeout_message(str(exe_path)),
-            {"exe_path": str(exe_path), **console_runner.probe_timeout_details()})
-    if probe != "console":
-        # profileがGUIのMSDIAL.exeを固定していても、hashは一致してしまう。
-        raise DomainError(
-            "MSDIAL_EXE_NOT_CONSOLE",
-            f"profileが宣言した実行体がMS-DIAL Consoleではありません: {exe_path}",
-            {"exe_path": str(exe_path)})
-
-    # v1がLBM1件に使っていた任意キーdictを、全依存へそのまま一般化し、
-    # profile外で原本が相対宣言したパスキーも絶対化する（記録用の
-    # `snapshot_profile`と同じ関数を通し、実行と記録をずらさない）。
-    overrides = profiles_mod.effective_method_overrides(resolved)
-    lbm = next((dep for dep in resolved["dependencies"]
-                if dep["method_key"] == method_file_mod.LBM_KEY), None)
-
-    _assert_project_save_possible(request, exe_path)
-
-    return {
-        "source_root": str(source_root.resolve()),
-        "selected_format": ext,
-        "entries": entries,
-        "raw_stat": raw_stat,
-        "companions": companions,
-        "method": {
-            "source_path": resolved["method"]["source_path"],
-            "sha256": resolved["method"]["sha256"],
-            "effective_relative_path": None,
-            "effective_sha256": None,
-            "overrides": overrides,
-        },
-        "lbm": ({"path": lbm["source_path"], "sha256": lbm["sha256"]} if lbm
-                else {"path": None, "sha256": None}),
-        "exe": {"path": str(exe_path), "sha256": environment["executable_sha256"],
-                "version": environment["msdial_version"]},
-        "polarity": {"value": resolved["polarity"], "source": "profile"},
-        # 極性をrawから検証していない点はv1と同じ。黙って確定扱いにしない。
-        "unverified": ["polarity_from_profile_not_verified_from_raw"],
     }
 
 
@@ -1016,9 +934,9 @@ def verify_inputs(snapshot: dict) -> None:
             continue
         path = Path(info[path_key])
         # 研究室 MSP は置き場所を返さない（ファイル名だけ。spec 2026-10-07 §3.3）。
-        # msp_then_lbm の LBM（[library] lbm）も研究室の資産なので同じ扱い（v8）。
-        lab_asset = label == "msp" or (
-            label == "lbm" and snapshot.get("library_mode") == "msp_then_lbm")
+        # [library] lbm から解いた LBM も研究室の資産なので、モードを問わず同じ扱い
+        # （msp_then_lbm は常に、auto は出どころが config_file のとき。v8）。
+        lab_asset = label == "msp" or (label == "lbm" and is_lab_lbm(snapshot))
         shown = path.name if lab_asset else str(path)
         details = ({"which": label, f"{label}_file": path.name} if lab_asset
                    else {"which": label, "path": str(path)})

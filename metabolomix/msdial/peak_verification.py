@@ -1,31 +1,14 @@
 """ピークアノテーションの生化学的検証（純ロジック層、MCP 非依存）。
 
 分子式→質量、アダクト→m/z、精密質量誤差、アダクト-極性整合、脂質クラストークン
-抽出を提供する。``server.py`` の ``verify_peak_annotation`` ツールがこれを使う。
-``metabolomix.corpus.knowledge_store`` と同じく MCP に依存しない純関数群で、単体テスト可能。
+抽出を提供する（キュレーション・特徴検索・脂質の同定の標準化が使う）。
+MCP に依存しない純関数群で、単体テスト可能。
 """
 
 from __future__ import annotations
 
 import re
 
-from metabolomix.core import session_state
-from metabolomix.library.defaults import DEFAULT_MS2_TOL as _LIBRARY_MS2_TOL
-from metabolomix.library.defaults import DEFAULT_MZ_TOL as _LIBRARY_MZ_TOL
-from metabolomix.library.defaults import DEFAULT_RT_TOL as _LIBRARY_RT_TOL
-from metabolomix.library.defaults import pick_tol as _pick_tol
-
-# session_state は leaf 側（arf/arf2/eic/pai2 の reader・msdial.classes/tags・
-# analysis.preprocessing のみに依存）で、そのどれも peak_verification を import
-# しないため循環しない。実際に `python -c "from metabolomix.core import
-# session_state; ...sys.modules..."` で peak_verification が読み込まれない
-# ことを確認済み（Task 11 レポート参照）。
-#
-# `metabolomix.library.defaults` は stdlib のみの leaf（Task 11 レビュー
-# Important 1 で新設）。`metabolomix.library.tools`（MCP 面）と同じ既定許容幅を
-# ここから読む——`library.tools` 自体は import しない（`@mcp.tool` の登録副作用と
-# mcp_core / session_state 経由の上位層を引き込むため。peak_verification は
-# 下位レイヤに留める）。
 
 # --- 定数（モノアイソトピック質量） ---
 PROTON_MASS = 1.00727646
@@ -222,9 +205,6 @@ def adduct_consistency(adduct, ion_mode, ontology=None) -> dict:
     }
 
 
-_ETHER_RE = re.compile(r"\b[POpo]-")
-
-
 def extract_class_token(name: str | None, ontology: str | None) -> str | None:
     """脂質クラストークン（小文字）を返す。ontology 優先、無ければ name 先頭語。"""
     for source in (ontology, name):
@@ -233,176 +213,3 @@ def extract_class_token(name: str | None, ontology: str | None) -> str | None:
             if head:
                 return head
     return None
-
-
-def ether_caveats(name: str | None, ontology: str | None) -> list[str]:
-    """エーテル脂質（P-/O- 表記）に該当する場合、注意ノートへのリンクを返す。"""
-    text = f"{name or ''} {ontology or ''}"
-    if _ETHER_RE.search(text):
-        return [
-            "エーテル脂質の P-/O- 表記混同に注意（[[pe-p-vs-pe-o-annotation]]）。"
-            "P- は酸化ストレス仮説 [[plasmalogen-oxidation]] に関与するが O- は別物。"
-        ]
-    return []
-
-
-def _spectral_match_for_feature(feature: dict, spectrum: list, store) -> dict:
-    """band=PASS の実スペクトルを、読み込み済みの参照ライブラリと照合する。
-
-    `library_match_feature` MCP ツール（`metabolomix/library/tools.py`）と同じ土俵
-    （`store.candidates()` によるアラインメント検索 + `spectral_match.match_spectrum`
-    採点 + `spectral_match.total_score` による順位付け）を使うが、ここは検証ドシエの
-    一材料でしかないので、戻り値は最良候補のスコアだけに絞る。候補一覧が要る場合は
-    `library_match_feature` を使うこと。**「最良」の基準は両者で必ず一致させること**
-    ——食い違うと、同じ feature について 2 つのツールが別の候補を名指しする。
-
-    どの段階で失敗しても（precursor m/z が無い・ライブラリ照会が失敗する等）
-    例外は投げない——照合は msms_evidence の主目的である band 判定を止めてはいけない。
-    """
-    from metabolomix.analysis.spectral_match import match_spectrum, total_score
-
-    precursor_mz = feature.get("m/z")
-    if precursor_mz is None:
-        return {"status": "unavailable", "reason": "precursor m/z が無いため照合できません。"}
-
-    ion_mode = feature.get("ion_mode")
-    # store.candidates() の ion_mode 比較は COLLATE NOCASE（Critical 1 修正後）なので
-    # ここで小文字へ揃える必要は無い——PAI2 由来の Enum の `.name`（"Positive"）を
-    # そのまま渡してよい。
-    ion_mode_name = ion_mode.name if hasattr(ion_mode, "name") else (
-        str(ion_mode) if ion_mode is not None else None)
-    rt = (feature.get("time") or {}).get("rt")
-
-    try:
-        search_params = store.summary().get("search_params") or {}
-    except Exception:  # noqa: BLE001 - ここも下の2箇所と同じ意図: 照合の失敗で
-        search_params = {}  # msms_evidence 本来の band 判定を止めない（既定値へ）
-    # `or` ではなく共有の `pick_tol`（`is None` 判定）を使う——`search_params` の
-    # `0.0`（"足切りなし"のような正当な値）を偽値扱いで既定値に差し替えないため
-    # （最終レビュー Important 5: ここが独自の `or` 判定を持っていて、
-    # `metabolomix.library.tools._pick_tol` とロジックがずれていた）。
-    mz_tol = _pick_tol(None, search_params, "ms1_tolerance", _LIBRARY_MZ_TOL)
-    ms2_tol = _pick_tol(None, search_params, "ms2_tolerance", _LIBRARY_MS2_TOL)
-    rt_tol = _pick_tol(None, search_params, "rt_tolerance", _LIBRARY_RT_TOL)
-    # 採点前処理（`normalize_measured`）のパラメータも search_params から採る
-    # （最終レビュー Important 2: 検証 CLI と同じ集合を使わないと、足切りを変えた
-    # run の `.dbs` を読ませたときだけ `library_match_feature` と違う土俵で
-    # 採点することになる）。
-    mass_begin = _pick_tol(None, search_params, "mass_range_begin", 0.0)
-    mass_end = _pick_tol(None, search_params, "mass_range_end", 2000.0)
-    relative_amp_cutoff = _pick_tol(None, search_params, "relative_amp_cutoff", 0.0)
-    absolute_amp_cutoff = _pick_tol(None, search_params, "absolute_amp_cutoff", 0.0)
-
-    try:
-        candidates = store.candidates(
-            precursor_mz, mz_tol=mz_tol, ion_mode=ion_mode_name, rt=rt, rt_tol=rt_tol)
-    except Exception as exc:  # noqa: BLE001 - ライブラリ照合の失敗は band 判定を止めない
-        return {"status": "error", "reason": str(exc)}
-
-    if not candidates:
-        return {"status": "no_candidates", "n_candidates": 0}
-
-    # 並び順は `library_match_feature` と**同じ**総合スコア（`GetTotalScore`）。
-    # 揃えないと、同じ feature について検証ドシエと候補一覧が違う「最良候補」を
-    # 名指しすることになる。RT 項の可否も同じく store の
-    # `IsUseTimeForAnnotationScoring`（`.msp` 由来なら上流既定の False）に従う。
-    use_rt_scoring = bool(search_params.get("use_time_for_annotation_scoring", False))
-
-    scored = []
-    for record in candidates:
-        result = match_spectrum(
-            spectrum, record["spectrum"], ms2_tol=ms2_tol,
-            mass_begin=mass_begin, mass_end=mass_end,
-            relative_amp_cutoff=relative_amp_cutoff, absolute_amp_cutoff=absolute_amp_cutoff,
-        )
-        # store のレコードは precursor m/z / RT を欠きうる（`.msp` 由来など）。
-        # `total_score` は欠測を番兵で落とすので、ここで弾く必要はない。
-        result.update(total_score(
-            result,
-            precursor_mz=precursor_mz, reference_precursor_mz=record.get("precursor_mz"),
-            ms1_tol=mz_tol,
-            rt=rt, reference_rt=record.get("rt"),
-            rt_tol=rt_tol, use_rt=use_rt_scoring,
-        ))
-        scored.append((record, result))
-    scored.sort(key=lambda item: item[1]["total_score"], reverse=True)
-    best_record, best_result = scored[0]
-
-    return {
-        "status": "matched",
-        "n_candidates": len(candidates),
-        "best_match": {
-            "name": best_record.get("name"),
-            "ontology": best_record.get("ontology"),
-            "adduct": best_record.get("adduct"),
-            "total_score": round(best_result["total_score"], 6),
-            "weighted_dot_product": round(best_result["weighted_dot_product"], 6),
-            "simple_dot_product": round(best_result["simple_dot_product"], 6),
-            "reverse_dot_product": round(best_result["reverse_dot_product"], 6),
-            "matched_peaks_percentage": round(best_result["matched_peaks_percentage"], 6),
-            "matched_peaks_count": best_result["matched_peaks_count"],
-        },
-    }
-
-
-def msms_evidence(feature: dict, top_n: int = 5) -> dict:
-    """MS/MS 証拠の band と主要フラグメントを返す（決定的判定）。
-
-    MSI Level 2 は「MS/MS がある」ことを根拠にするが、PAI2 の ``has_msms`` は
-    **取得参照があること**を示すだけで実スペクトルの有無を保証しない
-    （output-format core §9-8）。実体を持つのは同名 ``.dcl``（MSDecResult）であり、
-    ``dcl_reader.attach_msms_to_features`` が索引対応で ``msms_spectrum`` を書き込む。
-    ここではその2状態を明示的に分ける:
-
-    - ``PASS``      : 実スペクトルあり（source=``spectrum``）。確度主張の根拠に使える。
-    - ``FLAG_ONLY`` : 取得フラグのみでスペクトル本体が無い（source=``flag``）。.dcl 未添付か
-                      本当に空か区別できないため caveat を付す。
-    - ``ABSENT``    : フラグもスペクトルも無い。
-
-    この3状態の契約は変えない。``spectral_match`` はその内側に足すだけの追加情報:
-    ``band == "PASS"`` かつ参照ライブラリが読み込み済み（``session.library.store``
-    がある）ときだけ、実スペクトルをライブラリと照合した最良候補のスコアを載せる。
-    ライブラリ未読み込みなら ``spectral_match`` キー自体を持たない
-    （``dict.get("spectral_match")`` は ``None``）。
-
-    ``top_fragments`` は強度降順の上位 ``top_n`` 本（``[[mz, intensity], ...]``）。
-    ``n_peaks`` は間引き前の元本数を保つ。
-    """
-    spectrum = feature.get("msms_spectrum") or []
-    declared = feature.get("n_msms_peaks")
-    n_peaks = int(declared) if isinstance(declared, (int, float)) else len(spectrum)
-
-    if spectrum:
-        top = sorted(spectrum, key=lambda p: p[1], reverse=True)[:top_n]
-        result = {
-            "band": "PASS",
-            "source": "spectrum",
-            "n_peaks": n_peaks,
-            "top_fragments": [[p[0], p[1]] for p in top],
-            "caveat": None,
-        }
-        store = getattr(getattr(session_state.session, "library", None), "store", None)
-        if store is not None:
-            result["spectral_match"] = _spectral_match_for_feature(feature, spectrum, store)
-        return result
-    if feature.get("has_msms"):
-        return {
-            "band": "FLAG_ONLY",
-            "source": "flag",
-            "n_peaks": n_peaks,
-            "top_fragments": [],
-            "caveat": (
-                "MS/MS 取得フラグ（has_msms）は立っているが、実スペクトルが添付されていない。"
-                "PAI2 の has_msms は取得参照の有無を示すだけなので、これだけを根拠に同定確度を"
-                "主張しないこと。実体は同名 .dcl にあり、dcl_parser で読み込むと付与される。"
-            ),
-        }
-    return {"band": "ABSENT", "source": None, "n_peaks": n_peaks or 0,
-            "top_fragments": [], "caveat": None}
-
-
-def vocab_hits(class_token: str | None, vocab: dict[str, list[str]]) -> list[str]:
-    """クラストークンに対応する語彙同義語を返す（無ければ空）。"""
-    if not class_token:
-        return []
-    return list(vocab.get(class_token, []))

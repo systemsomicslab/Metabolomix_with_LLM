@@ -11,43 +11,32 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = REPO_ROOT / "docs" / "workflow"
 
-# 呼び出し連鎖行の書式:  `1. └─ metabolomix/arf/reader.py  run_pca()`
+# 呼び出し連鎖行の書式:  `1. └─ metabolomix/analysis/pca.py  run_pca()`
 # 分岐（排他的な if/else 経路）は `├─` / `│  └─` で表し、経路の説明を角括弧で
-# 添えてよい: `4. ├─ [specs 省略時] metabolomix/tools/samples.py  _apply_role_filter()`
+# 添えてよい: `4. ├─ [source=mztab] metabolomix/pathway/tools.py  _build_dataset()`
 CHAIN_RE = re.compile(
     r"^\s*\d+\.\s*(?:[└├│─]\s*)*(?:\[[^\]]*\]\s*)?"
     r"(?P<path>[\w/]+\.py)\s+(?P<func>[\w.]+)\(\)"
 )
-# 節見出し: `## arf_parser`
+# 節見出し: `## dcl_find_msms`
 HEADING_RE = re.compile(r"^##\s+(?P<tool>[a-z][a-z0-9_]*)\s*$", re.MULTILINE)
 
 # 設計書 §4 の対象範囲表と一対一で対応する。増減させる場合は設計書も直すこと。
 IN_SCOPE: dict[str, tuple[str, ...]] = {
-    "dataset.md": ("list_data_files", "load_dataset", "sample_search"),
-    "arf.md": (
-        "arf_parser", "arf_list_classes", "arf_list_tags", "arf_list_sample_roles",
-        "arf_exclude", "arf_preprocess", "arf_pca_preprocessed", "arf_differential",
-        "arf_export_differential", "arf_export_evidence_bundle", "arf_plot_volcano", "arf_plot_group_intensity", "arf_plot_species",
-        "arf_pca_species",
-    ),
-    "arf2.md": ("arf2_parser", "arf2_annotate_identities"),
-    "pai2.md": ("pai2_parser", "pai2_inspect_peak", "verify_peak_annotation"),
-    "dcl.md": ("dcl_parser", "dcl_find_msms", "dcl_spot_spectrum", "dcl_diagnostic_ions"),
-    "eic.md": (
-        "eic_parser", "eic_search", "eic_plot_chromatograms", "eic_plot_compounds",
-    ),
-    "plots.md": ("save_figure", "plot_pca_loadings"),
-    "mztab.md": ("dataset_load", "dataset_status"),
+    "dataset.md": ("list_data_files", "load_dataset", "dataset_list", "dataset_close",
+                   "dataset_status", "dataset_exclude"),
+    "dcl.md": ("dcl_find_msms", "dcl_spot_spectrum", "dcl_diagnostic_ions"),
+    "plots.md": ("dataset_plot", "save_figure"),
     "dataset_analysis.md": (
-        "dataset_preprocess", "dataset_pca", "dataset_differential",
+        "dataset_preprocess", "dataset_compare", "dataset_pca", "dataset_overview",
         "dataset_export_differential", "dataset_export_evidence_bundle", "dataset_set_sample_metadata",
         "dataset_feature_search",
     ),
     "pipeline.md": (
         "pipeline_plan", "pipeline_run", "pipeline_status",
         "pipeline_resume", "pipeline_cancel",
+        "console_method_candidates", "console_method_template",
     ),
-    "metabolomics.md": ("dataset_statistic", "dataset_build_matrix"),
     "library.md": ("library_load", "library_match_feature", "library_plot_mirror",
                    "library_search"),
     "curation.md": (
@@ -55,22 +44,17 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
         "curation_view_data",
     ),
     "pathway.md": ("pathway_project", "pathway_plot"),
-    "reanalysis.md": ("dataset_handle_open", "dataset_handle_list", "dataset_handle_close",
-                      "dataset_analysis_run", "library_msms_qualify", "dataset_homolog_check",
+    "reanalysis.md": ("dataset_analysis_run", "library_msms_qualify", "dataset_homolog_check",
                       "dataset_feature_relations", "dataset_claim_evidence",
                       "dataset_mass_accuracy", "dataset_novel_candidates",
                       "dataset_alignment_qc"),
+    "quant.md": ("dataset_quant_preview", "dataset_quant_apply", "dataset_merge_polarities",
+                 "dataset_select_features"),
 }
 
 # 今回の範囲外。文書に混入したら落とす（線引きを固定するため）。
 OUT_OF_SCOPE: tuple[str, ...] = (
-    "record_objective", "update_objective", "log_search", "knowledge_coverage",
-    "paper_search", "ingest_stage", "ingest_review_queue", "ingest_promote",
-    "ingest_reject", "write_report", "read_report", "list_reports",
-    # Console 実行層（Phase 2 追加・ワークフロー文書は Phase 2 完了後に追加）
-    "console_plan", "console_prepare_input", "console_method_template",
-    "console_method_candidates",
-    "console_run", "console_status", "console_cleanup", "job_list",
+    "record_objective", "write_report", "read_report",
     # サーバ自身の保守（解析の流れには現れない）
     "server_update",
 )
@@ -177,7 +161,7 @@ class TestScopeBoundary(unittest.TestCase):
     def test_scope_totals_match_registered_tool_count(self):
         """対象範囲の分割が、実際に登録されているツール数と一致することを縛る。
 
-        46 / 20 という分割は設計上の線引きだが、その合計は「全ツールを漏れなく
+        49 / 4 という分割は設計上の線引きだが、その合計は「全ツールを漏れなく
         分類した」という主張でもある。リテラルどうしの比較では自分自身を検証して
         しまうので、実際の登録数を引いて突き合わせる。
         """
@@ -192,4 +176,4 @@ class TestScopeBoundary(unittest.TestCase):
             registered,
             "対象範囲の分類と登録済みツールが一致しない",
         )
-        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 70)
+        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 49)

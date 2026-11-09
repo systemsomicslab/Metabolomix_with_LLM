@@ -11,9 +11,17 @@ structuredContent を捨てる。さらに FastMCP は戻り値アノテーシ�
 outputSchema を導出するため、`-> str` のツールが失敗時だけ dict を返すこともできない。
 機械可読なエラーはテキストに載せるしかない。
 
+もう 1 つの封筒 `needs_input`（`{"needs_input": {field, reason, options, argument?, retry_tools}}`）は
+**エラーではない**（`error` キーを持たない）。既定を決めずに利用者へ尋ねる問い（例: 内部標準で
+換算済みの値に QC のドリフト補正を重ねるか）で、クライアントは `options` を利用者に示し、選ばれた
+`value` を `argument`（無ければ spec の `field`）に入れて `retry_tools` のどれかを呼び直す。
+
 このモジュールは依存グラフの leaf（stdlib と同じく leaf の
-metabolomix.core.serialization のみ）。tools_* / server を import しない。
+metabolomix.core.serialization と metabolomix.core.atomic_io のみ）。tools_* / server を import しない。
 """
+import functools
+
+from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.serialization import json_payload
 
 MISSING_STATE = "missing_state"
@@ -49,6 +57,59 @@ def missing_state(state: str, required_tools: list[str], message: str) -> str:
         })
 
 
+NEEDS_INPUT = "needs_input"
+
+
+def needs_input(field: str, reason: str, options: list[dict], *, argument: str | None = None,
+                retry_tools: list[str]) -> str:
+    """利用者に尋ねてから呼び直す封筒を返す（エラーではない）。
+
+    引数:
+        field: 答えが入る設定の欄（spec の路。例 "preprocess.drift.mode"）。
+        reason: なぜ尋ねるのか（LLM と人間が読む説明）。
+        options: 選択肢 `[{"value", "label"}, ...]`。`value` を引数に入れて呼び直す。
+        argument: 呼び直すツールの引数名（例 "drift_mode"）。spec で答える経路
+            （`dataset_analysis_run` の v2）では渡さず、封筒にも載せない（`field` が答えの場所）。
+        retry_tools: 答えを入れて呼び直せるツール名の候補（OR）。
+
+    `missing_state` と同じく、復旧の手掛かりが欠けた封筒は出さない（ValueError）。
+    """
+    if not field:
+        raise ValueError("field は必須です（答えが入る設定の欄）。")
+    if not reason:
+        raise ValueError("reason は必須です（尋ねる理由）。")
+    if not options or any(not isinstance(o, dict) or "value" not in o or "label" not in o
+                          for o in options):
+        raise ValueError("options は value と label を持つ選択肢の 1 つ以上のリストです。")
+    if not retry_tools:
+        raise ValueError("retry_tools は必須です（答えを入れて呼び直せるツールの候補）。")
+    body: dict = {"field": field, "reason": reason, "options": [dict(o) for o in options]}
+    if argument:
+        body["argument"] = argument
+    body["retry_tools"] = list(retry_tools)
+    return json_payload({NEEDS_INPUT: body})
+
+
+#: `argument`（drift_mode）を受けて呼び直せるツール（`needs_input` の retry_tools の意味）と、その引数名。
+#: 受けるのは dataset_preprocess だけ。比較・PCA・パスウェイは返った matrix_id を渡して呼び直す。
+DRIFT_ARGUMENT = "drift_mode"
+DRIFT_RETRY_TOOLS = ["dataset_preprocess"]
+
+
+def default_matrix_needs_input(needs, tool: str) -> str:
+    """既定の前処理が利用者に尋ねたいとき（`needs` は前処理の `NeedsInput`）の封筒。
+
+    `tool` は drift_mode の引数を持たないツール（比較・PCA・パスウェイ）の名前で、理由に呼び直し先
+    （`dataset_preprocess(drift_mode=...)` で行列を作り、その matrix_id を渡す）を書く。
+    """
+    return needs_input(
+        needs.field,
+        f"{needs.reason} {tool} には drift_mode 引数がありません。"
+        f"dataset_preprocess(drift_mode=...) で行列を作り、その matrix_id を "
+        f"{tool} に渡して呼び直してください。",
+        needs.options, argument=DRIFT_ARGUMENT, retry_tools=list(DRIFT_RETRY_TOOLS))
+
+
 CONSOLE_ERROR_CODES = frozenset({
     "MSDIAL_EXE_NOT_FOUND",
     # 設定ファイル（lipidmix.local.toml）が読めない。
@@ -62,7 +123,7 @@ CONSOLE_ERROR_CODES = frozenset({
     "METHOD_FILE_NOT_FOUND",
     # MS-DIAL Console が読む ASCII の key/value テキストではない場合。
     "METHOD_FILE_NOT_TEXT",
-    # MSDIAL_EXE が Console ではなく GUI を指している場合。
+    # [msdial] exe が Console ではなく GUI を指している場合。
     "MSDIAL_EXE_NOT_CONSOLE",
     # Console の起動検査（--help）が時間切れを繰り返した場合。Console でないとは
     # 判定できていない（冷間起動の遅れでも起きる）ので NOT_CONSOLE と分ける。
@@ -79,7 +140,7 @@ CONSOLE_ERROR_CODES = frozenset({
     "LBM_AMBIGUOUS",
     # pipeline の library_mode="msp_then_lbm" で `[library] lbm` が未設定の場合（v8）。
     "LBM_NOT_CONFIGURED",
-    # console_prepare_input が単一フォーマットの入力フォルダを作れなかった場合。
+    # 単一フォーマットの入力フォルダを作れなかった場合。
     "INPUT_PREP_FAILED",
     # MS-DIAL 実行自体は成功したが、その後の生成物収集・ハッシュ計算・
     # analysis-job.json への保存で失敗した場合。NO_JOB_OUTPUT（生成物が
@@ -135,6 +196,9 @@ MZTAB_ERROR_CODES = frozenset({
     "FEATURE_SEARCH_EMPTY_QUERY",
     # 窓の下限が上限より大きい。
     "FEATURE_SEARCH_BAD_RANGE",
+    # `.arf` が大きすぎて読めない（伸長後の大きさの見積もりが空きメモリを超える、または読む途中で
+    # メモリが尽きた）。details に path_name / estimated_bytes / available_bytes / remedy。
+    "ARF_TOO_LARGE",
 })
 
 
@@ -184,3 +248,28 @@ def pathway_error(code: str, message: str, details: dict | None = None) -> str:
     if details is not None:
         payload["details"] = details
     return json_payload({"error": payload})
+
+
+def config_invalid_as_envelope(fn):
+    """記録の置き場所を決めるときの `DomainError` を、ツールの封筒にして返す。
+
+    記録の置き場所（`[paths] reports_dir` と、データセットの解析フォルダ配下 `reports/`）を
+    読むツール（レポート・objective・図の保存・パスウェイ）が対象。
+    - `CONFIG_INVALID`（設定ファイルが読めない）: そのままの封筒。以前は例外のまま落ちていた。
+    - `NO_REPORT_DIR`（設定の置き場所が無く、データセットも無い）: `missing_state("dataset",
+      ["load_dataset"])`。
+    ほかのコードの DomainError はそのまま送出する。`@mcp.tool` の内側に付ける
+    （`functools.wraps` が引数の形と docstring を保つ）。
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except DomainError as exc:
+            if exc.code == "NO_REPORT_DIR":
+                return missing_state("dataset", ["load_dataset"], exc.message)
+            if exc.code != "CONFIG_INVALID":
+                raise
+            return json_payload({"error": {"code": exc.code, "message": exc.message,
+                                           "details": exc.details}})
+    return wrapper

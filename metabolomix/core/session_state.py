@@ -6,56 +6,31 @@
 `from session_state import session` のようなスナップショット束縛を作ると
 差し替えが見えなくなる。
 
-**状態はパーサ単位に分離されている**（`session.arf` / `session.arf2` /
-`session.pai2` / `session.eic`）。以前は `features` / `filtered_features` /
-`current_file_path` を全パーサが共有していたため、単一サンプルの `pai2_parser` を
-1回呼ぶだけで進行中の ARF 解析（前処理行列・差次的結果・手動除外）が無言で消え、
-後続の `arf_pca_preprocessed` が「前処理後の行列がありません」で落ちていた。
-LLM には破棄の事実が伝わらないため「手動除外が過度」という誤原因が報告される。
-粒度の違う成果物（1スポット×1サンプル / 全サンプル統合 / 単一測定ファイル）は
-互いに代入不能なので、スロットも分ける。新しいパーサを足すときも専用スロットを
-作ること。無修飾の共有スロットへは絶対に書かない。
+**パーサ別のスロット（旧 `session.arf` / `arf2` / `pai2` / `eic`）は無い**（B-2b で消した）。
+読み込んだものはすべて `DatasetState` としてハンドルの登録簿に住む。粒度の違う成果物を
+共有の無修飾スロットへ書くと、別の読み込みが進行中の解析を無言で消す——新しい入口を足すときも
+共有スロットを作らない（`tests/test_session_namespaces.py` が固定している）。
 
 **データセットとライブラリはハンドルの登録簿に住む**（spec 2026-11-06 §5）。
 `session.dataset` / `session.library` は直近のハンドル（`current_handle_id`）を指す property で、
 `session.dataset = ds` は `ds` を新しいハンドルとして登録簿に入れて直近にする。閉じた直近の
 ハンドルは `None`（`missing_state`）になり、開いている別のハンドルへ黙って落ちない。
 
-依存: 各種 reader / preprocessing（いずれも leaf）のみ。tools_* / server は
-import しない（循環回避）。`core.handles` は property の中で遅延 import する（handles が
-この module を import するため）。`arf_reader` は module オブジェクトのまま参照するので、
-テストの `patch.object(server.arf_reader, ...)` が共有 module 経由でここにも効く。
+依存: `user_config`（stdlib だけの leaf）のみ。tools_* / server は import しない（循環回避）。
+`core.handles` は property の中で遅延 import する（handles がこの module を import するため）。
 """
 import contextlib
 import contextvars
-import io
 import threading
-import uuid
-import os
-import re
 
-from metabolomix.arf import reader as arf_reader
-from metabolomix.analysis import preprocessing
-from metabolomix.arf2.reader import deserialize
-from metabolomix.eic.reader import parse_eic_aef_css1
-from metabolomix.pai2.reader import filter_features_by_params
-from metabolomix.msdial.classes import (
-    assign_sample_groups,
-    attach_class_ids_to_spots,
-    discover_arf_class_index,
-)
-from metabolomix.msdial.tags import (
-    attach_tags_to_spots,
-    discover_arf_tag_index,
-    normalize_sample_name,
-)
+from metabolomix.core import user_config
 
-_BATCH_DATE_RE = re.compile(r"(\d{8})")
-
-# output-format リソースを LLM が pull していないときに、解釈直結のパーサー出力の
-# 先頭へ最大1回だけ前置する意味論ダイジェスト（自己完結・~7行）。round-trip 不要で
-# ローカルLLM でも意味が届く。全文定義は docs/output_format/（共通核 core.md ＋
-# パーサ別トピック）/ lipidmix://docs/output-format[/{topic}]。§2.1 は脂質名文法。
+# output-format リソースを LLM が pull していないときに、解釈の材料になる出力へ最大 1 回
+# （種別が確定したらもう 1 回）届ける意味論ダイジェスト（自己完結・~6 行）。入口の
+# `load_dataset` が JSON の `caveat` として運び、`record_objective(assay_kind=...)` が確定後の
+# 1 回を前置する。round-trip 不要でローカル LLM でも意味が届く。全文定義は docs/output_format/
+# （共通核 core.md ＋ トピック別）/ lipidmix://docs/output-format[/{topic}]。§2.1 は脂質名文法。
+# 行は `DatasetState` の形（特徴×試料）で語る——旧パーサ別の粒度（ARF / ARF2 / PAI2）は無い。
 #
 # **共通部（ここ）とアッセイ種別行（_ASSAY_CAVEAT_LINE）を分ける。** 脂質名文法は
 # 脂質アッセイでしか成り立たない規則で、一般代謝物の出力に当てると「PC 34:1 形式で
@@ -64,15 +39,27 @@ _BATCH_DATE_RE = re.compile(r"(\d{8})")
 # （同じ .arf / .mzTab に両方が出る）ので、確定するまではどちらの規則も当てない。
 SEMANTICS_CAVEAT = (
     "[意味論] 解釈前に lipidmix://docs/output-format を参照。要点:\n"
-    "- 粒度: ARF行=1スポット×1サンプル / ARF2行=全サンプル統合スポット。\n"
-    "- IsGapFilled=true は補間値（実測でない）。\n"
+    "- 粒度: データセットの 1 行 = 特徴×試料（特徴＝アラインメントスポット）。"
+    "名前・m/z・RT は特徴ごとに 1 つで、試料別の値ではない。\n"
+    "- detected_mask が False のセルは gap-fill（補間値）で、実測のピークではない。"
+    "検出数・存在判定には使わない。\n"
     "- Nameの存在≠確定同定。空/Unknown/no MS2:/low score: を区別。\n"
-    "- EIC peak_top は横軸座標(RT)で強度でない。強度はmax_intensity。\n"
-    "- PAI2は単一サンプル→PCA不能。多変量比較はARF/ARF2。"
+    "- MS/MS の実スペクトルは .dcl にある。has_msms 系の印は取得の参照があるだけで、"
+    "スペクトルの裏付けではない。\n"
+    "- EIC peak_top は横軸座標(RT)で強度でない。強度は max_intensity。"
 )
 
 #: アッセイ種別。`unknown` は「まだ確定していない」であって「脂質」ではない。
 ASSAY_KINDS = ("lipid", "metabolite", "unknown")
+
+
+def normalize_assay_kind(assay_kind: str) -> str:
+    """アッセイ種別を正規化する（状態は変えない）。未知の値は ValueError。"""
+    normalized = str(assay_kind).strip().lower()
+    if normalized not in ASSAY_KINDS:
+        raise ValueError(
+            f"assay_kind は {'/'.join(ASSAY_KINDS)} のいずれかです: {assay_kind!r}")
+    return normalized
 
 #: 種別ごとの追加1行。行数は種別によらず1行（前置の総量を種別で変えない）。
 _ASSAY_CAVEAT_LINE = {
@@ -89,7 +76,7 @@ def assay_digest(assay_kind: str) -> str:
 
 #: `dataset_handle` を省いた呼び出しが、ロックを取ったハンドルの ID（`core.handle_dispatch` が
 #: ワーカースレッドの中で置く）。置かれている間、`session.dataset` / `session.library` は
-#: 直近のハンドルでなくこのハンドルを読む——呼び出しの途中で `dataset_load` が直近を
+#: 直近のハンドルでなくこのハンドルを読む——呼び出しの途中で `load_dataset` が直近を
 #: 切り替えても、ロックを取っていない別のハンドルの状態を触らないため。
 _PINNED_HANDLE_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "pinned_handle_id", default=None)
@@ -108,227 +95,9 @@ def pinned_handle(handle_id: str):
         _PINNED_HANDLE_ID.reset(token)
 
 
-def _build_sample_meta(sample_names, class_index):
-    """サンプル名から role/group/run_order/batch を組み立てる。"""
-    class_ids = {}
-    orders = {}
-    if class_index:
-        by_name = {}
-        for rec in class_index.get("records", []):
-            key = normalize_sample_name(rec.get("file_name"), strip_processing_timestamp=False)
-            if key:
-                by_name[key] = rec
-        for name in sample_names:
-            rec = by_name.get(normalize_sample_name(name, strip_processing_timestamp=False))
-            if rec:
-                class_ids[name] = rec.get("class_id") or ""
-                orders[name] = rec.get("analytical_order")
-    roles = preprocessing.detect_sample_roles(sample_names, class_ids)
-    groups = assign_sample_groups(sample_names, class_index, None)
-    meta = {}
-    for name in sample_names:
-        m = _BATCH_DATE_RE.search(name)
-        # バッチは MS-DIAL メタに専用項目が無いため、ファイル名中の8桁日付から推定する。
-        # 出所を batch_source に明示し、交絡判定の脆さ（名前依存）を下流で開示できるようにする。
-        meta[name] = {
-            "role": roles.get(name, "sample"),
-            "group": groups.get(name),
-            "run_order": orders.get(name),
-            "batch": m.group(1) if m else None,
-            "batch_source": "filename_date" if m else None,
-        }
-    return meta
-
-
-def _new_dataset_id() -> str:
-    """ARF データセットの同一性 ID を発行する。"""
-    return f"arf_{uuid.uuid4().hex}"
-
-
-class ArfState:
-    """ARF（1スポット×1サンプル）解析の状態。多変量解析の基盤はここだけが持つ。
-
-    ここに載る派生状態（feature_matrix / last_differential / excluded_*）は
-    ARF の行構造に強く紐づくので、他パーサのデータで置き換えることはできない。
-    """
-
-    def __init__(self):
-        self.features = None            # デシリアライズ済みの全スポット
-        self.filtered_features = None   # arf_parser の絞り込み後
-        self.current_file_path = None
-        self.current_tag_directory = None
-        self.tag_index = None
-        self.class_index = None
-        self.pca_result = None          # 直近のPCA計算結果
-
-        # --- P2a 前処理用の正準行列とサンプルメタ ---
-        self.feature_matrix = None       # 前処理後のサンプル×特徴量行列
-        self.pp_sample_names = None
-        self.pp_feature_names = None
-        self.sample_meta = {}            # {sample_name: {role, group, run_order, batch}}
-        self.preprocessing_recipe = {}   # 直近適用した前処理レシピ（空=未適用）
-        self.preprocessing_report = None  # 母集団形成とQC警告をv2根拠へ渡す
-
-        # --- 直近解析の描画用データ ---
-        self.last_pca_plot = None        # save_figure が参照
-        self.last_differential = None    # arf_plot_volcano / save_figure が参照
-        self.last_group_intensity = None  # arf_plot_group_intensity / save_figure が参照
-        self.last_species_plot = None  # arf_plot_species / save_figure(kind="species") が参照
-        self.last_species_pca = None  # arf_pca_species / save_figure(kind="pca", source="species") / plot_pca_loadings が参照
-
-        # --- 手動除外集合（PCA 外れサンプル / 特定ピークの可逆・非破壊除外） ---
-        self.excluded_samples = set()   # 除外する file_name（サンプル）
-        self.excluded_spots = set()     # 除外する MasterAlignmentID（スポット）
-
-        # --- 同一性（図・出力が「どの結果か」を名指しできるようにする） ---
-        # dataset_id: 今読んでいる ARF データセットの ID。ファイルを切り替えるたびに
-        # 発行し直す（reset_analysis）。DatasetState 側の dataset_id と同じ役割で、
-        # 「前のデータの結果を今のデータの図として保存する」取り違えを機械的に防ぐ。
-        self.dataset_id = _new_dataset_id()
-
-    def reset_analysis(self):
-        """別 ARF データセットへ切り替える際に、前データ由来の解析成果を一括で破棄する。
-
-        新ファイルの load 開始時に必ず呼ぶ。前回の feature_matrix / sample_meta /
-        preprocessing_recipe / 差次的解析・PCA プロットなどが残ると、データ切替後に
-        前回データの図や結果を「今のデータのもの」として保存・解釈してしまう。
-        本メソッドは解析成果（派生状態）だけを消し、これから load される features や
-        current_file_path は触らない。他パーサのスロットにも触れない（別データセットへの
-        切替は ARF の話であって、PAI2 の在庫要約や EIC のクロマトグラムを消す理由はない）。
-        """
-        self.pca_result = None
-        self.filtered_features = None
-        self.last_pca_plot = None
-        self.last_differential = None
-        self.last_group_intensity = None
-        self.last_species_plot = None
-        self.last_species_pca = None
-        # 前処理由来の正準行列とサンプルメタ
-        self.feature_matrix = None
-        self.pp_sample_names = None
-        self.pp_feature_names = None
-        self.sample_meta = {}
-        self.preprocessing_recipe = {}
-        self.preprocessing_report = None
-        # 手動除外（別データに持ち越さない）
-        self.excluded_samples = set()
-        self.excluded_spots = set()
-        # 別データセットになったので同一性も作り直す。ID を据え置くと、前データの
-        # 結果 ID を指定した図の保存が「有効」に見えてしまう。
-        self.dataset_id = _new_dataset_id()
-
-    def load_data(self, file_path: str, tag_directory: str | None = None):
-        """ファイルパスが前回と異なる場合のみデシリアライズを実行する"""
-        if (
-            self.current_file_path == file_path
-            and self.features is not None
-            and self.current_tag_directory == tag_directory
-        ):
-            if str(file_path).lower().endswith('.arf'):
-                self.tag_index = discover_arf_tag_index(
-                    file_path, self.features, tag_directory=tag_directory,
-                )
-                attach_tags_to_spots(self.features, self.tag_index)
-                self.class_index = discover_arf_class_index(file_path)
-                attach_class_ids_to_spots(self.features, self.class_index)
-            return self.features
-
-        # 別データセットへ切り替えるので、前データ由来の解析成果（差次・PCA・前処理行列・
-        # 手動除外等）を open 前に一括破棄する。前回の結果を新データのものとして
-        # 保存・解釈する取り違えを防ぐ。
-        self.reset_analysis()
-
-        with open(file_path, 'rb') as f:
-            # 【修正点】ファイルの拡張子を見て正しいパーサーを呼び分ける
-            file_ext = str(file_path).lower()
-            if file_ext.endswith('.arf'):
-                self.features = arf_reader.deserialize(io.BytesIO(f.read()))
-                self.tag_index = discover_arf_tag_index(
-                    file_path, self.features, tag_directory=tag_directory,
-                )
-                attach_tags_to_spots(self.features, self.tag_index)
-                self.class_index = discover_arf_class_index(file_path)
-                attach_class_ids_to_spots(self.features, self.class_index)
-            else:
-                self.features = deserialize(io.BytesIO(f.read())) # 元からインポートされている arf2_reader 用
-                self.tag_index = None
-                self.class_index = None
-
-            self.current_file_path = file_path
-            self.current_tag_directory = tag_directory
-
-        return self.features
-
-
-class Arf2State:
-    """ARF2（全サンプル統合カタログ）の状態。
-
-    サンプル別強度を持たないため多変量解析には使えない。ARF の解析基盤とは
-    粒度が違うので、同じスロットに置かない。
-    """
-
-    def __init__(self):
-        self.features = None
-        self.current_file_path = None
-
-    def load(self, file_path: str, features: list):
-        self.features = features
-        self.current_file_path = file_path
-        return self.features
-
-
-class Pai2State:
-    """PAI2（単一測定ファイルのピーク一覧）の状態。
-
-    単一サンプルなのでサンプル間比較（PCA・差次的解析）は原理的にできない。
-    ARF の解析基盤とは独立で、ピーク検証のために往復しても ARF 側は壊れない。
-    """
-
-    def __init__(self):
-        self.features = None
-        self.filtered_features = None
-        self.filter_params = {}
-        self.current_file_path = None
-
-    def load(self, file_path: str, features: list, filter_params: dict | None = None):
-        self.features = features
-        self.current_file_path = file_path
-        self.apply_filter(filter_params)
-        return self.features
-
-    def apply_filter(self, filter_params: dict | None = None):
-        """現データに対して動的にフィルタを適用する。"""
-        if filter_params is None:
-            filter_params = {}
-        self.filter_params = filter_params
-        if self.features is None:
-            self.filtered_features = None
-            return None
-
-        self.filtered_features = filter_features_by_params(self.features, filter_params)
-        return self.filtered_features
-
-
-class EicState:
-    """EIC/AEF（クロマトグラム）の状態。パスで自己検証するので再読込は安全。"""
-
-    def __init__(self):
-        self.features = None
-        self.current_file_path = None
-        self.last_plot = None  # 直近EICプロット情報（明示的なPNG保存時のみ参照）
-        # features の欠損 m/z を ARF2 で補ったときの注記。None は「未処理」
-        # （eic.tools が読み込み直後に 1 度だけ補い、ここへ残す）。
-        self.mz_caveats = None
-
-    def load_data(self, file_path: str):
-        """ファイルパスが前回と異なる場合のみEICデータを解析する"""
-        if self.current_file_path == file_path and self.features is not None:
-            return self.features
-
-        self.features = parse_eic_aef_css1(file_path, include_chromatogram=False)
-        self.current_file_path = file_path
-        self.mz_caveats = None
-        return self.features
+def pinned_handle_id() -> str | None:
+    """この文脈で `pinned_handle` が固定しているハンドルの ID（固定していなければ None）。"""
+    return _PINNED_HANDLE_ID.get()
 
 
 class LibraryState:
@@ -375,14 +144,6 @@ class AnalysisSession:
     """
 
     def __init__(self):
-        self.arf = ArfState()
-        self.arf2 = Arf2State()
-        self.pai2 = Pai2State()
-        self.eic = EicState()
-
-        # --- パーサ横断の図（どの経路の PCA でも 1 か所。ArfState の reset では消さない） ---
-        self.last_loadings_plot = None  # plot_pca_loadings / save_figure(kind="pca_loadings") が参照（どの経路の PCA でも 1 か所）
-
         # --- 意味論 caveat ガード（output-format 未 pull 時に1回だけ前置） ---
         # プロセス内で真に1回だけ発火させる。output-format リソースが読まれたら
         # output_format_seen=True になり以後は前置しない。データ切替では
@@ -393,20 +154,23 @@ class AnalysisSession:
         # 1回だけ再注入するために持つ。これが無いと、load_dataset 時点の unknown で
         # 1回出て終わり、後から種別が確定しても解釈規則が二度と届かない。
         self.caveat_emitted_kind: str | None = None
-        # 既読の output-format トピック（core/arf/eic/…）。トピック別リソースが
-        # 読まれるたびに増える。未読トピックのツール出力にだけ誘導1行を足す。
-        self.sections_seen: set[str] = set()
+        # `load_dataset` はワーカースレッドで走り、同時に呼ばれうる。出したかの判定と記録を
+        # 1 つの区間にして、ダイジェストが 2 回出ないようにする。
+        self._caveat_lock = threading.Lock()
 
         # --- アッセイ種別（解釈規則の選択軸。データ切替では消さない） ---
-        # 確定は利用者との合意事項（record_objective / update_objective）で、
+        # 確定は利用者との合意事項（record_objective）で、
         # パーサ出力からは決まらない。既定の unknown は「脂質」ではない。
         self.assay_kind = "unknown"
 
-        # --- mzTab-M / DatasetState（session.arf とは独立） ---
+        # --- DatasetState（ハンドルの登録簿が持つ。session はその直近を指す） ---
         # データセットはハンドルの登録簿（core.handles.registry）に住む。ここが持つのは
         # 直近のハンドルの ID だけで、`dataset` / `library` はそれを読む property（下）。
         self.current_handle_id: str | None = None
-        self._current_lock = threading.Lock()
+        # 直近のハンドルの切り替えと、セッション自身のライブラリの移動・書き込みを守る。
+        # 再入できる必要がある（ロックの下で `library` / `_handle` を読み、`_handle` が
+        # 閉じられた直近を外すために同じロックを取り直す）。
+        self._current_lock = threading.RLock()
 
         # --- 参照ライブラリ（MS/MS スペクトル照合。他スロットとは独立） ---
         # 直近のハンドルが無いときに `library` が指すセッション自身の LibraryState。
@@ -417,11 +181,6 @@ class AnalysisSession:
 
         # --- パスウェイ投影スロット（MSLipidMapper。他スロットとは独立） ---
         self.pathway = PathwayState()
-
-        # --- Console ジョブスロット ---
-        # ジョブ状態の正準はディスク上の analysis-job.json。ここはそのパスへのポインタ。
-        # MCP ツールが job_path 省略で呼ばれたときのフォールバックにのみ使う。
-        self.current_job_path: str | None = None
 
     # ---------- データセットとライブラリ（直近のハンドルを指す） ----------
 
@@ -454,6 +213,18 @@ class AnalysisSession:
         return handle
 
     @property
+    def arf2_path(self):
+        """直近のハンドルの `.arf2`（`DatasetHandle.arf2_path`。無い・ハンドルが無ければ None）。"""
+        handle = self._handle()
+        return handle.arf2_path if handle is not None else None
+
+    @property
+    def dcl_path(self):
+        """直近のハンドルの `.dcl`（`DatasetHandle.dcl_path`。無い・ハンドルが無ければ None）。"""
+        handle = self._handle()
+        return handle.dcl_path if handle is not None else None
+
+    @property
     def dataset(self):
         """直近のハンドルの DatasetState（無い・閉じられていれば None）。"""
         handle = self._handle()
@@ -470,7 +241,7 @@ class AnalysisSession:
         別のデータを読むため。
 
         直近のハンドルが無いあいだにセッションが持っていたライブラリ（store つき。
-        `library_load` → `dataset_load` の順）は、新しいハンドルへ**移す**（写さない——2 か所が
+        `library_load` → `load_dataset` の順）は、新しいハンドルへ**移す**（写さない——2 か所が
         同じ store を閉じないため）。セッション自身には空の LibraryState が残るので、後で
         このハンドルを閉じても古いライブラリへ黙って落ちない。
         """
@@ -485,16 +256,67 @@ class AnalysisSession:
         from metabolomix.mztab.polarity import dataset_polarity
 
         polarity, polarity_source, _notes = dataset_polarity(value)
-        own = self._library
-        move = current is None and _PINNED_HANDLE_ID.get() is None and own.store is not None
-        handle = handles.DatasetHandle(value, polarity=polarity, polarity_source=polarity_source,
-                                       source={"kind": "session"},
-                                       library=own if move else None)
-        handles.registry.add(handle)  # 上限ならここで止まり、ライブラリはセッションに残る
+        # 移すかの決定・ハンドルの登録・入れ替えは 1 つのロックの下で行う。`library_load` が
+        # セッション自身のライブラリへ書く区間（`library_write_lock`）と排他にして、移す決定の
+        # あとに書かれたストアが、見えない側のライブラリに取り残されないようにする。
+        # ロックの順は `_current_lock` → 登録簿のロック（登録簿は session のロックを取らない）。
         with self._current_lock:
+            current = self._handle()
+            if current is not None and current.dataset is value:
+                return
+            own = self._library
+            move = current is None and _PINNED_HANDLE_ID.get() is None and own.store is not None
+            handle = handles.DatasetHandle(value, polarity=polarity,
+                                           polarity_source=polarity_source,
+                                           source={"kind": "session"},
+                                           library=own if move else None)
+            handles.registry.add(handle)  # 上限ならここで止まり、ライブラリはセッションに残る
             if move:
                 self._library = LibraryState()
             self.current_handle_id = handle.handle_id
+
+    def adopt_handle(self, handle, *, move_library: bool = False) -> None:
+        """出来上がったハンドルを登録簿に入れ、**直近にする**（`load_dataset` が使う）。
+
+        上限なら `DATASET_HANDLE_LIMIT`（DomainError）を投げ、直近もライブラリも動かさない。
+        `move_library` が真で、ハンドルが自分のライブラリ（store）を持たず、直近のハンドルが
+        無いあいだにセッションが store つきのライブラリを持っていたなら（`library_load` →
+        `load_dataset` の順）、そのライブラリを新しいハンドルへ**移す**（`dataset` の setter と
+        同じ規則）。登録・移動・直近の切り替えは 1 つのロックの下で行う。
+        """
+        from metabolomix.core import handles
+
+        with self._current_lock:
+            own = self._library
+            move = (move_library and handle.library.store is None
+                    and self._current_handle() is None
+                    and _PINNED_HANDLE_ID.get() is None and own.store is not None)
+            if move:
+                handle.library = own
+            try:
+                handles.registry.add(handle)  # 上限ならここで止まり、ライブラリはセッションに残る
+            except Exception:
+                if move:
+                    handle.library = LibraryState()
+                raise
+            if move:
+                self._library = LibraryState()
+            self.current_handle_id = handle.handle_id
+
+    @property
+    def library_write_lock(self) -> threading.RLock:
+        """セッション自身のライブラリへ書く区間を守るロック（`dataset` の setter の移動と排他）。
+
+        `library_load` が `dataset_handle` なしでストアを差し替える間、これを保持する。
+        ロックの下で `library` を読み直せば、移動が済んだあとは新しいハンドルのライブラリへ
+        書く。再入できる。
+        """
+        return self._current_lock
+
+    def set_current(self, handle_id: str | None) -> None:
+        """直近のハンドルを `handle_id` にする（登録簿への追加は呼び出し側が済ませておく）。"""
+        with self._current_lock:
+            self.current_handle_id = handle_id
 
     @property
     def library(self) -> LibraryState:
@@ -519,62 +341,54 @@ class AnalysisSession:
             self._library = value
         # 固定先が閉じられていれば置き先が無い（セッション自身へは書かない）。
 
-    def section_hint(self, topic: str) -> str | None:
-        """未読トピックなら、該当セクションを引くよう促す1行を返す。既読なら None。
-
-        core を読んでも各パーサの節を読んだことにはならないのでトピック単位で持つ。
-        全文（約700行）を毎回前置する代わりに、1行の誘導＋LLM 側の pull で済ませる。
-        """
-        if topic in self.sections_seen:
-            return None
-        # 脂質名文法は脂質アッセイでしか成り立たないので、種別が脂質のときだけ挙げる。
-        shared = "共通の粒度・脂質名文法" if self.assay_kind == "lipid" else "共通の粒度"
-        return (
-            f"[意味論] この出力の定義は `lipidmix://docs/output-format/{topic}` にある。"
-            f"解釈前に参照すること（{shared}は `lipidmix://docs/output-format`）。"
-        )
-
     def set_assay_kind(self, assay_kind: str) -> str:
         """アッセイ種別を確定する。正規化した値を返し、未知の値は拒否する。
 
         黙って `unknown` へ落とさない——落とすと、利用者が種別を伝えたつもりのまま
         サーバは未確定として振る舞い、どちらの規則も当たらない状態が続く。
         """
-        normalized = str(assay_kind).strip().lower()
-        if normalized not in ASSAY_KINDS:
-            raise ValueError(
-                f"assay_kind は {'/'.join(ASSAY_KINDS)} のいずれかです: {assay_kind!r}")
+        normalized = normalize_assay_kind(assay_kind)
         self.assay_kind = normalized
         return normalized
 
-    def maybe_prepend_caveat(self, text: str, topic: str | None = None) -> str:
-        """解釈直結パーサー出力へ意味論ダイジェスト（最大1回）と誘導1行を付す。
+    def take_caveat(self) -> str | None:
+        """いま届けるべき意味論ダイジェストを返す（無ければ None）。出したことを記録する。
 
-        - 意味論ダイジェスト: output-format リソースが未 fetch（output_format_seen=False）
-          のとき、その時点の `assay_kind` で1回だけ先頭へ前置する。種別が確定して
-          変わったときだけもう1回出す（合計で最大2回。unknown のまま解析が進むと
-          種別固有の規則が一度も届かないため）。
-        - topic 誘導: そのトピックが未読のあいだ、毎回末尾に1行だけ付す（安いので
-          既読になるまで出し続ける。これがオンデマンド参照の起点になる）。
-
-        環境変数 LIPIDMIX_CAVEAT_MODE=off で両方とも無効化（ローカルの操作ナビゲータ
-        専用デプロイ向け。既定 digest）。エラー文字列など解釈材料でない出力には呼ばない。
+        規則: `[server] caveat_mode = 'off'` で止める・output-format の核が読まれていれば止める・
+        同じ種別では 1 回だけ・種別が変わったらもう 1 回（unknown のまま解析が進むと種別固有の
+        規則が一度も届かないため）。JSON を返す入口（`load_dataset`）が最上位の `caveat` として載せ、
+        `record_objective(assay_kind=...)` が確定後の 1 回を戻り値の先頭へ前置する。設定ファイルが
+        読めない（`caveat_mode` の値が digest / off 以外、旧 `[msdial] lbm` が残っている、TOML の
+        構文など）ときは**送出しない**: 既定の digest で続け、問題を 1 行だけ添える
+        （状態を変えたあとで落ちないため。黙って既定に落とすのでもない）。
         """
-        mode = os.getenv("LIPIDMIX_CAVEAT_MODE", "digest").strip().lower()
-        if mode == "off":
-            return text
-        out = text
-        if topic:
-            hint = self.section_hint(topic)
-            if hint:
-                out = f"{out}\n\n{hint}"
-        if self.output_format_seen:
-            return out
-        if self.caveat_emitted and self.caveat_emitted_kind == self.assay_kind:
-            return out
-        self.caveat_emitted = True
-        self.caveat_emitted_kind = self.assay_kind
-        return f"{assay_digest(self.assay_kind)}\n\n{out}"
+        try:
+            setting = user_config.get_setting("server.caveat_mode")
+        except user_config.ConfigInvalidError as exc:
+            digest = self._take_digest()
+            note = _config_problem_note(exc)
+            return f"{digest}\n\n{note}" if digest else note
+        if setting is not None and setting.value == "off":
+            return None
+        return self._take_digest()
+
+    def _take_digest(self) -> str | None:
+        """ダイジェスト本体。出す条件を満たせば記録して返し、満たさなければ None。"""
+        with self._caveat_lock:
+            if self.output_format_seen:
+                return None
+            if self.caveat_emitted and self.caveat_emitted_kind == self.assay_kind:
+                return None
+            self.caveat_emitted = True
+            self.caveat_emitted_kind = self.assay_kind
+            return assay_digest(self.assay_kind)
+
+
+def _config_problem_note(exc: "user_config.ConfigInvalidError") -> str:
+    """設定ファイルが読めないことを出力の末尾に添える 1 行。"""
+    name = exc.config_file.replace("\\", "/").rsplit("/", 1)[-1]
+    return (f"⚠ 設定ファイル {name} が読めないので [server] caveat_mode を既定の digest として"
+            f"扱った（CONFIG_INVALID: {exc.message}）。")
 
 
 # インスタンスを1つ作成（サーバー起動中に保持される）

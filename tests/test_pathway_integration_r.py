@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from metabolomix.pathway import bridge, compare, handoff, jsonld
+from tests.config_fixtures import use_config
 
 pytestmark = [
     pytest.mark.skipif(os.environ.get("LIPIDMIX_TEST_MSLM") != "1",
@@ -21,11 +22,11 @@ pytestmark = [
 
 
 @pytest.fixture
-def rscript(monkeypatch):
+def rscript(monkeypatch, tmp_path):
     path = os.environ.get("LIPIDMIX_TEST_RSCRIPT")
     if not path:
         pytest.skip("LIPIDMIX_TEST_RSCRIPT（Rscript のパス）が未設定")
-    monkeypatch.setenv("MSLIPIDMAPPER_RSCRIPT", path)
+    use_config(monkeypatch, tmp_path, {"mslipidmapper.rscript": path})
     return path
 
 

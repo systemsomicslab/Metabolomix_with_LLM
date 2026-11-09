@@ -11,7 +11,7 @@
 2. **Key49 は過去に別メンバへ振られていた番号の再利用**で、Key50 は Key49 の private
    バックフィールドに付いた Key（同じ内容が二重に載る）。
 
-関連: [../output_format/pai2.md](../output_format/pai2.md)（フィールドの意味）、
+関連: [../output_format/dataset.md](../output_format/dataset.md)（フィールドの意味）、
 MS/MS 本体は同名の `.dcl`（[../output_format/dcl.md](../output_format/dcl.md)）
 
 ## 出典

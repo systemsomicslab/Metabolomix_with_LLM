@@ -22,7 +22,13 @@ from metabolomix.console import method_file as method_file_mod
 from metabolomix.core import app_control
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.pipeline.inputs import inspect_inputs, select_method, stage_inputs, verify_inputs
-from metabolomix.pipeline.request import resolve_request
+from metabolomix.pipeline import request as request_mod
+
+
+def resolve_request(root, explicit=None):
+    """1 極性の要求を解き、入力計画（`inspect_inputs`）が読む平らな形にする。"""
+    root = Path(root)
+    return request_mod.unit_request(request_mod.resolve_request(root, explicit), 0, root)
 from tests.pipeline_fixtures import make_source
 
 
@@ -874,10 +880,7 @@ def _msp_then_lbm_plan(tmp_path, monkeypatch, *, directory_name="lab_library", *
 
 
 def test_msp_then_lbm_plan_pins_msp_and_lbm(tmp_path, monkeypatch):
-    # [msdial] lbm の経路（環境変数 MSDIAL_LBM）とメソッドの宣言（fake.lbm2）は使わない。
-    other = tmp_path / "auto_route.lbm2"
-    other.write_bytes(b"auto-route-lbm")
-    monkeypatch.setenv("MSDIAL_LBM", str(other))
+    # メソッドの宣言（fake.lbm2）は使わない（[library] lbm で置き換える）。
     src, paths, plan = _msp_then_lbm_plan(tmp_path, monkeypatch)
     lib = paths["negative"].resolve()
     lbm = paths["lbm"].resolve()
@@ -959,16 +962,19 @@ def test_msp_then_lbm_resume_detects_a_changed_annotator_table(tmp_path, monkeyp
     assert snapshot["msp"]["annotator_table_relative_path"] == "inputs/msp-annotators.tsv"
     assert snapshot["msp"]["annotator_table_sha256"] == hashlib.sha256(table.read_bytes()).hexdigest()
 
-    record = {"identity": {"pipeline_root": str(run_root)}, "inputs": snapshot}
-    recovery._verify_staged_inputs(record)            # 変わっていなければ通る
+    from metabolomix.pipeline import store
+    record = {"schema": store.SCHEMA, "identity": {"pipeline_root": str(run_root)},
+              "units": {"negative": {"unit_root": ".",
+                                     "inputs": store.relativize_unit_inputs(snapshot, run_root)}}}
+    recovery._verify_staged_inputs(record, "negative")  # 変わっていなければ通る
 
     table.write_text("annotator_id\tmsp_file_path\tpriority\nLabMsp\tC:/other.msp\t1\n", encoding="ascii")
     with pytest.raises(DomainError, match="STAGED_INPUT_MISMATCH") as changed:
-        recovery._verify_staged_inputs(record)
+        recovery._verify_staged_inputs(record, "negative")
     assert changed.value.details == {"path": "inputs/msp-annotators.tsv"}
     table.unlink()
     with pytest.raises(DomainError, match="STAGED_INPUT_MISMATCH"):
-        recovery._verify_staged_inputs(record)
+        recovery._verify_staged_inputs(record, "negative")
 
 
 def test_msp_then_lbm_verify_detects_a_changed_lbm_without_its_location(tmp_path, monkeypatch):
@@ -984,11 +990,10 @@ def test_msp_then_lbm_verify_detects_a_changed_lbm_without_its_location(tmp_path
 def test_msp_then_lbm_without_lbm_setting_stops(tmp_path, monkeypatch):
     _allow_fake_exe(monkeypatch)
     write_lab_msp_config(tmp_path, monkeypatch, directory_name="secret_share")
-    # [msdial] lbm の経路があっても代わりに使わない。
-    other = tmp_path / "secret_share" / "auto_route.lbm2"
-    other.write_bytes(b"auto-route-lbm")
-    monkeypatch.setenv("MSDIAL_LBM", str(other))
     src = make_source(tmp_path / "raw")
+    # auto の経路の自動補完（実行体と同じフォルダの .lbm2）があっても代わりに使わない。
+    other = Path(src["exe"]).parent / "auto_route.lbm2"
+    other.write_bytes(b"auto-route-lbm")
     request = resolve_request(src["root"], {"library_mode": "msp_then_lbm"})
     with pytest.raises(DomainError, match="LBM_NOT_CONFIGURED") as info:
         inspect_inputs(src["root"], request, exe_path=src["exe"])

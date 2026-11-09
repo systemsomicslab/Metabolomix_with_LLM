@@ -8,28 +8,20 @@ hash 検証に使う。ファイルはデータフォルダ内のランディレ
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from metabolomix.core import file_digest
 from metabolomix.core.atomic_io import atomic_write_json
 
 # v2: 生成物のルートと実行オプションを明示する。
 SCHEMA_VERSION = "analysis-job.v2"
 
-# v3: 検証済みプロファイルで実行したジョブ（spec §6, §6.1）。profile snapshot
-# ——プロファイル同一性・method 原本と実効コピーの hash・依存ファイル一覧・
-# 実行環境 manifest——を丸ごと持つ。
-#
-# 書き出す版は**ジョブの内容で決める**。profile snapshot を持つジョブだけが v3 で、
-# 持たないジョブは今までどおり v2 で書く（v1 経路の出力は 1 バイトも変わらない）。
-SCHEMA_VERSION_V3 = "analysis-job.v3"
-
 # 読み込みは旧版も受け続ける（spec §6「readerは旧版を継続して受ける」）。
 SUPPORTED_SCHEMA_VERSIONS = frozenset(
-    {"analysis-job.v1", SCHEMA_VERSION, SCHEMA_VERSION_V3})
+    {"analysis-job.v1", SCHEMA_VERSION})
 
 ArtifactRoot = Literal["run_dir", "dataset_root"]
 
@@ -89,27 +81,8 @@ class AnalysisJob:
     error: str | None = None
     save_project: bool = False
     timeout_s: int = 3600
-    #: v3 のみ。metabolomix.console.profiles.snapshot_profile() の戻り値そのまま
-    #: （profile 同一性・method・依存一覧・実行環境 manifest・実効メソッドの hash）。
-    #: None なら v1/v2 のジョブで、書き出しも従来どおり v2。
-    profile_snapshot: dict | None = None
-
-    @property
-    def dependencies(self) -> list[dict]:
-        """依存ファイル manifest（method_key / kind / path / sha256）。
-
-        snapshot の中の 1 箇所だけを正準にする——同じ一覧をジョブ側にも複製すると、
-        どちらかだけ更新された記録が生まれて「hash は合うのに中身が違う」になる。
-        """
-        return list((self.profile_snapshot or {}).get("dependencies") or [])
-
-    @property
-    def environment(self) -> dict:
-        """実行環境 manifest（adapter 版・実行体 hash 等）。出所は同じく snapshot。"""
-        return dict((self.profile_snapshot or {}).get("execution_environment") or {})
-
     def save(self, path: Path) -> None:
-        """analysis-job.json を原子的に保存する（内容に応じて v2 / v3）。
+        """analysis-job.json を原子的に保存する（v2）。
 
         書込途中でプロセスが落ちても、既存ファイルは壊れた内容に置き換わらない
         （metabolomix.core.atomic_io.atomic_write_json）。
@@ -128,28 +101,20 @@ class AnalysisJob:
         return _from_dict(data)
 
 
-def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
+def sha256_file(path: Path, *, trust: bool = True) -> str:
+    """`path` の sha256。trust=False は覚えた値（size と mtime_ns が鍵）を使わず読み直す。
+
+    完全性の裏取り（ジョブの出所の検証）は trust=False で呼ぶ——同じ大きさ・同じ
+    mtime_ns の書き換えは覚えた値では見分けられないため。
+    """
+    return file_digest.sha256_of(path, trust=trust)
 
 
 # ---------- シリアライズ補助 ----------
 
-def _schema_version_for(job: AnalysisJob) -> str:
-    """書き出す schema を**ジョブの内容から**決める（writer 側の schema dispatch）。
-
-    profile snapshot を持つジョブだけが v3。持たないジョブは v2 のまま——読み込んだ
-    v1 のジョブを保存し直すと v2 になる従来の挙動も、そのまま変わらない。
-    """
-    return SCHEMA_VERSION_V3 if job.profile_snapshot is not None else SCHEMA_VERSION
-
-
 def _to_dict(job: AnalysisJob) -> dict:
-    data = {
-        "schema": _schema_version_for(job),
+    return {
+        "schema": SCHEMA_VERSION,
         "job_id": job.job_id,
         "status": job.status,
         "created_at": job.created_at,
@@ -202,9 +167,6 @@ def _to_dict(job: AnalysisJob) -> dict:
             "timeout_s": job.timeout_s,
         },
     }
-    if job.profile_snapshot is not None:
-        data["profile"] = job.profile_snapshot
-    return data
 
 
 def _from_dict(d: dict) -> AnalysisJob:
@@ -262,5 +224,4 @@ def _from_dict(d: dict) -> AnalysisJob:
         error=d.get("error"),
         save_project=execution.get("save_project", False),
         timeout_s=execution.get("timeout_s", 3600),
-        profile_snapshot=d.get("profile"),
     )

@@ -7,6 +7,8 @@ spec: docs/superpowers/specs/2026-10-08-species-plot-and-pca-loadings-design.md 
 """
 from __future__ import annotations
 
+import math
+
 LOADINGS_SCHEMA = "lipidmix.pca_loadings.v1"
 MAX_ALL_FEATURES = 60
 MAX_PCS = 3
@@ -30,6 +32,41 @@ def _row(feature, k, use_r):
             "adduct": feature.get("adduct") or "", "mz": feature.get("mz"), "rt": feature.get("rt"),
             "coefficient": round(coef, 4), "r": round(r, 4) if r is not None else None,
             "value": round(r if use_r else coef, 4)}
+
+
+def dataset_features(ds, result) -> tuple[list[dict], bool]:
+    """統計エンジンの PCA の記録（`kind="stat_pca"`。`ds.last_pca` か `ds.results` の PCA）を、
+    ローディング図の特徴量の一覧にする。
+
+    特徴は軸の計算で値が変わった特徴（`engine.kept_features`）で、棒の色は `feature_metadata["ontology"]`
+    （解析フォルダの `.arf2` の Ontology。mzTab-M だけのデータセットには無いので色は灰色）。
+    戻り値の 2 つ目は相関 r を出せるか。特異値は持たないので autoscale のときだけ
+    r = 係数 × √(寄与率 × 特徴数) で出す（母標準偏差で autoscale すると特異値² = 寄与率 × 特徴数 × n になる）。
+    """
+    engine = result.get("engine") or {}
+    loadings, names = engine.get("loadings"), list(engine.get("kept_features") or [])
+    evr = engine.get("explained_variance_ratio") or []
+    factors = ([math.sqrt(float(v) * len(names)) for v in evr]
+               if engine.get("scaling") == "autoscale" else None)
+    if not loadings:
+        raise ValueError("この PCA 結果はローディングを持っていません。dataset_pca をやり直してください。")
+    if len(names) != len(loadings[0]):
+        raise ValueError("PCA のローディングと前処理済み行列の特徴量が合いません。"
+                         "前処理から PCA をやり直してください。")
+    annotations = getattr(ds, "feature_annotations", {}) or {}
+    metadata = getattr(ds, "feature_metadata", {}) or {}
+    features = []
+    for j, fid in enumerate(names):
+        coef = [float(loadings[k][j]) for k in range(len(loadings))]
+        ann = annotations.get(fid) or {}
+        meta = metadata.get(fid) or {}
+        features.append({
+            "feature_id": str(fid), "label": ann.get("name") or meta.get("name") or str(fid),
+            "ontology": (str(meta.get("ontology") or "").strip() or None),
+            "adduct": meta.get("adduct") or "", "mz": meta.get("mz"), "rt": meta.get("rt"),
+            "coefficient": coef,
+            "r": [c * factors[k] for k, c in enumerate(coef)] if factors else None})
+    return features, bool(factors)
 
 
 def build_loadings_payload(features, *, source, result_id, explained_variance_ratio, pcs, top_n, value,

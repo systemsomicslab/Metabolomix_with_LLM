@@ -1,18 +1,14 @@
-"""データセットのハンドルを開閉する MCP ツール（spec 2026-10-22 §4 の 1）。
+"""データセットの入口 `load_dataset` と、開いているハンドルの一覧・クローズ。
 
-**再解析で使う**（並行のエージェントが、別々のデータセット・極性を互いに干渉せずに扱う）。
-対話の使い方（`dataset_load` → `dataset_*`）は変わらない——ハンドルを渡さない呼び出しは
-対話のセッションの直近のハンドル（`dataset_load` で読んだもの）に効く。
+読み込んだデータセットはすべてハンドルの登録簿（`core.handles.registry`）に住み、`load_dataset`
+は新しいハンドルを足して**いつも直近にする**（spec 2026-11-06 §5・B-2b 決めたこと 2）。
+`dataset_handle` を省いたツールの呼び出しは直近のハンドルに効く。再解析のエージェントは、返った
+`dataset_handle` をツールに渡して使い、直近を当てにしない。同じ入力を開き直したときは読み込み
+済みの基を使い回し、ハンドルには複製を渡す（`dataset.opening.open_dataset` が持つ）。
 
-読み込んだデータセットはすべてハンドルの登録簿（`core.handles.registry`）に住む
-（spec 2026-11-06 §5）。`dataset_load` も同じ登録簿にハンドルを足して直近にする。
-`dataset_handle_open` は `dataset_load` と同じ入口（`dataset.opening.open_dataset`）を呼ぶが、
-直近は動かさない。同じ入力を開き直したときは読み込み済みの基を使い回し、ハンドルには複製を
-渡す（`open_dataset` が持つ）。
-
-ライブラリは極性で設定（`[library] msp_positive` / `msp_negative`。環境変数
-`MSDIAL_MSP_POS` / `MSDIAL_MSP_NEG`）だけから引き（`library_mode=msp_only` と同じ規則）、
-読み取り専用で開く。戻り値にはファイル名と sha256 だけを出し、パスは出さない。
+ライブラリはデータセットが同定に使ったものの記憶（`library_record`）から、読み取り専用で開く。
+極性の設定（`[library] msp_positive` / `msp_negative`）には落ちない。戻り値にはファイル名と
+sha256 だけを出し、パスは出さない。
 """
 from __future__ import annotations
 
@@ -21,14 +17,14 @@ from pathlib import Path
 
 from mcp.types import ToolAnnotations
 
-from metabolomix.core import handles, session_state
+from metabolomix.core import handles, session_state, user_config
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
-from metabolomix.core.mcp_errors import mztab_error
-from metabolomix.core.serialization import json_payload
+from metabolomix.core.mcp_errors import mztab_error, needs_input
+from metabolomix.core.serialization import json_payload, json_safe
 from metabolomix.dataset import opening
 
-__all__ = ["dataset_handle_open", "dataset_handle_list", "dataset_handle_close"]
+__all__ = ["load_dataset", "dataset_list", "dataset_close"]
 
 _LIBRARY_MODES = ("auto", "none")
 _ARF_SUFFIX_RE = re.compile(r"_(?:PeakProperties|DriftSopts|DriftSpots)\.arf$", re.IGNORECASE)
@@ -37,24 +33,26 @@ _ARF_SUFFIX_RE = re.compile(r"_(?:PeakProperties|DriftSopts|DriftSpots)\.arf$", 
 def alignment_files_for(opened, arf2_path: str | None = None) -> tuple[str | None, str | None]:
     """`open_dataset` が開いたデータセットのスポットの照合に使う `.arf2` と `.dcl`。
 
-    `dataset_handle_open` と `dataset_load`（直近のハンドル）が同じ規則で決め、ハンドルに
-    `arf2_path` / `dcl_path` として持たせる。ハンドル ID を明示した呼び出しはこの値を使う。
-    **ID を省いた呼び出しは `_holder.alignment_paths` とデータフォルダの探索で決めるので、
-    同じファイルになるとは限らない**（データフォルダに別のバッチがあれば食い違いうる）。
+    `load_dataset` が決め、ハンドルに `arf2_path` / `dcl_path` として持たせる。ハンドル ID を
+    明示した呼び出しはこの値を使う。
+    ID を省いた呼び出しも、直近のハンドルのこの値を使う（`_holder.alignment_paths`。
+    データフォルダは探さない）。
     解析フォルダで読んだなら（明示が無ければ）その選択、そうでなければ `_alignment_files` が探す。
     """
     selection = opened.selection
     if selection is not None and not arf2_path:
         return str(selection.arf2), (str(selection.dcl) if selection.dcl else None)
-    return _alignment_files(opened.dataset, arf2_path, opened.kind, opened.path)
+    return _alignment_files(opened.dataset, arf2_path, opened.kind, opened.path, opened.polarity)
 
 
 def _alignment_files(ds, arf2_path: str | None, kind: str | None = None,
-                     path: str | None = None) -> tuple[str | None, str | None]:
+                     path: str | None = None,
+                     polarity: str | None = None) -> tuple[str | None, str | None]:
     """スポットの照合に使う `.arf2` と `.dcl`。決まらなければ None。
 
     探す順: 明示の `arf2_path` → 検出状態を取り込んだ `.arf` の同じバッチ → mzTab の隣
-    → （`kind == "pipeline_path"` のとき）run の `input/AlignResult-*.arf2`。
+    → （`kind == "pipeline_path"` のとき）受領が照合した単位のバッチ、無ければ単位の
+    `input/*.arf2` の名前が最も新しいもの（`opening.pipeline_arf2`）。
     """
     from metabolomix.curation import apply as curation_apply
     from metabolomix.msdial import alignment_spot
@@ -67,10 +65,11 @@ def _alignment_files(ds, arf2_path: str | None, kind: str | None = None,
             if candidate.is_file():
                 arf2 = candidate
     if arf2 is None:
-        arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p)
+        lookup = curation_apply.arf2_lookup_kwargs(ds)
+        arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p, **lookup)
                                   for p in (getattr(ds, "source_files", None) or {}))), None)
     if arf2 is None and kind == "pipeline_path" and path:
-        arf2 = opening.pipeline_arf2(path)
+        arf2 = opening.pipeline_arf2(path, polarity)
     if arf2 is None or not arf2.is_file():
         return None, None
     dcl = alignment_spot.alignment_sibling(arf2, ".dcl")
@@ -101,11 +100,14 @@ def _open_library_for(ds) -> tuple[object | None, str | None]:
         candidates = record.get("candidates") or []
         hint = f"（候補: {', '.join(candidates)}）" if candidates else ""
         return None, ("データセットが同定に使ったライブラリを特定できないので、読んでいない"
-                      f"{hint}。極性の設定からは引かない（`library_load(dataset_handle=…)` を `file_path` なしで"
-                      "呼ぶと、記憶が無いときだけ極性の設定から引く）。`file_path` で明示もできる。")
+                      f"{hint}。極性の設定からは引かない（`library_load` も `file_path` なしでは"
+                      "開けない）。`file_path` で明示できる。")
     path = Path(record["path"])
     try:
         store = open_store(path, read_only=True)  # 同じ構築先の同時構築は open_store が直列にする
+    except user_config.ConfigInvalidError as exc:  # キャッシュの置き場所（[paths] library_cache）が読めない
+        return None, (f"設定ファイルが読めないので、ライブラリ（{path.name}）を開いていない"
+                      f"（CONFIG_INVALID: {exc.message}）。")
     except Exception as exc:  # noqa: BLE001 - 壊れたライブラリでもハンドルは開く
         # 例外の文言は置き場所（フルパス）を含みうるので、種類だけを返す。
         return None, (f"ライブラリ（{path.name}）を開けなかったので、読んでいない"
@@ -114,28 +116,67 @@ def _open_library_for(ds) -> tuple[object | None, str | None]:
     return store, None
 
 
+def _max_handles_or_none() -> int | None:
+    """要約に載せる上限。開いた直後に設定ファイルが壊れていたら None（開いたハンドルは返す）。"""
+    try:
+        return handles.max_handles()
+    except DomainError:
+        return None
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                       idempotentHint=False),
           structured_output=False)
-def dataset_handle_open(mztab_path: str | None = None, job_path: str | None = None,
-                        pipeline_path: str | None = None, allow_incomplete: bool = False,
-                        library: str = "auto", arf2_path: str | None = None,
-                        directory: str | None = None, source: str = "auto",
-                        measure: str = "peak_height") -> str:
-    """データセットを**ハンドル**として開く（再解析で使う。対話のセッションは変えない）。
+def load_dataset(directory: str | None = None, mztab_path: str | None = None,
+                 job_path: str | None = None, pipeline_path: str | None = None,
+                 polarity: str | None = None,
+                 allow_incomplete: bool = False, source: str = "auto",
+                 measure: str = "peak_height", arf2_path: str | None = None,
+                 library: str = "auto", overview: bool = True) -> str:
+    """データセットを読み込み、新しいハンドル（`dh_…`）として開いて**直近にする**。入口はこの 1 本。
 
-    入口と `source`・`measure`・`allow_incomplete` の意味は `dataset_load` と同じ
-    （`directory` / `mztab_path` / `job_path` / `pipeline_path` のどれか 1 つ。`job_path` /
-    `pipeline_path` の既定は解析フォルダで、mzTab-M で読むなら `source="mztab"`。pipeline の
-    run を解析フォルダで読むと、run から引き継ぐのは解決済みの試料対応表だけで、解析行列・
-    差次的結果は `source="mztab"` のときだけ載る）。`measure` が効くのは解析フォルダの
-    アダプタだけで、mzTab-M のアダプタでは定量種別がファイル（job / pipeline ならジョブの
-    宣言）で決まるので、既定値以外は `DATASET_BAD_REQUEST`。`allow_incomplete` も bool
-    以外は `DATASET_BAD_REQUEST`。返った `dataset_handle` を
-    `dataset_*`・`library_*`・再解析のツールの `dataset_handle` に渡すと、そのハンドルの
-    データセットとライブラリで動く。ハンドルを渡した呼び出しはサーバの別スレッドで回り、
-    同じハンドルへの呼び出しは 1 本ずつ、別のハンドルどうしは並行に進む。
+    入口（**どれか 1 つ**。全省略・2 つ以上の指定はエラー）:
+      - directory: MS-DIAL の解析フォルダ（`.arf` / `.arf2` / `.mddata`）。フォルダの中の
+        特定の `.arf` / `.arf2` を渡してもよい。同じフォルダに `DriftSpots.arf` と
+        `PeakProperties.arf` があれば `PeakProperties.arf`、複数のバッチがあれば最新を選び、
+        選ばなかった `.arf` を戻り値に並べる。
+      - mztab_path: .mzTab ファイルへの絶対パス。
+      - job_path: analysis-job.json へのパス。ジョブの宣言（polarity・measure）で正準
+        mzTab-M を一意に選ぶ。
+      - pipeline_path: `pipeline_run` が返した pipeline-run.json（またはその親ディレクトリ）。
+        run の受領（`results/receipt.json`）が指す、極性ごとの解析フォルダを開く。
 
+    polarity: `pipeline_path` のときだけ使う。開く極性の単位（`"negative"` / `"positive"`）。
+        単位が 1 つの run では省ける。2 極性の run で省くと `needs_input`（選べる極性つき。
+        検証を通った単位だけ）。検証を通っていない単位は `PIPELINE_UNIT_NOT_VALIDATED`
+        （`allow_incomplete=True` なら探索用に読む）。他の入口で渡すと
+        `PIPELINE_POLARITY_NOT_APPLICABLE`。2 極性の run はハンドルが 2 つになる。
+
+    source: どのアダプタで読むか。`"auto"`（既定）/ `"folder"` / `"mztab"`。
+        - `directory` は解析フォルダ（`"mztab"` はエラー）、`mztab_path` は mzTab-M
+          （`"folder"` はエラー）。
+        - `job_path` / `pipeline_path` は既定（`"auto"` / `"folder"`）で、そのジョブの正準
+          mzTab-M と同じアラインメントの**解析フォルダ**を読む。候補（mzTab-M の隣の `.arf`。
+          pipeline はどれも合わなければ単位の解析フォルダ `<極性>/input/*.arf2` のバッチを
+          新しい順に 1 本ずつ）を mzTab-M と特徴数・m/z・試料名で照合し、合うものがちょうど
+          1 本ならそれを読む。無ければ `ALIGNMENT_NOT_FOUND`、2 本以上なら
+          `ALIGNMENT_AMBIGUOUS`（どちらも候補のファイル名を `details.candidates` に載せる）で
+          止まり、mzTab-M へ黙って切り替えない。`"mztab"` を渡すと mzTab-M を読む。
+        - **pipeline の run から引き継ぐのは試料の対応表だけ**（v3 の run は受領
+          `results/receipt.json` の `units.<極性>.samples.rows`、旧 v1 の run は記録の
+          `inputs.manifest`。どちらのアダプタでも同じ）。run が計算した差次的結果は戻さない
+          （比較は読み込んだあと `dataset_compare` で回す）。受領が無い・照合できない v3 の
+          run は記録の単位から解析フォルダを開き、対応表は載らない旨を注記する。
+    measure: 解析フォルダのアダプタが値に使う `.arf` の欄（`"peak_height"`（既定）/
+        `"peak_area_above_zero"`）。**この引数が効くのは解析フォルダのアダプタだけ**。
+        mzTab-M のアダプタでは定量種別がファイル（job / pipeline ならジョブの宣言）で
+        決まるので、既定値以外を渡すと `DATASET_BAD_REQUEST`。
+    allow_incomplete: **完了していない実行**（partial / failed / running）の出力を
+        読み込む（既定 False。bool 以外は `DATASET_BAD_REQUEST`——`"false"` という
+        文字列を真と読まないため）。中断時点の生成物なので、既定では拒否する
+        （`INCOMPLETE_ANALYSIS_JOB`）。True で読んだデータセットは探索専用になり、
+        2 群比較（dataset_compare）と差次的エクスポートは拒否される——欠けた検体を
+        「その群には無い」と読み違えたまま結論が出てしまうため。
     library: `"auto"`（既定）はデータセットが同定に使ったライブラリの記憶
         （`library_record`）を読み取り専用で開く。実体の sha256 を測り直し、変わっている・
         無いとき（`mismatch`）、記憶が決められないとき（`unknown`）、LBM だけのとき
@@ -144,14 +185,34 @@ def dataset_handle_open(mztab_path: str | None = None, job_path: str | None = No
         `library_load` の `file_path` で明示する。`"none"` は読まない。
     arf2_path: スポットの照合（spot_id = SMF_ID）に使う `.arf2`。省略時、解析フォルダで
         読んだならその `.arf2` と `.dcl`。mzTab-M で読んだなら検出状態を取り込んだ `.arf` の
-        同じバッチ、無ければ mzTab-M の隣、`pipeline_path` なら run の
-        `input/AlignResult-*.arf2`（複数あれば名前の新しいもの）を探す。
+        同じバッチ、無ければ mzTab-M の隣、`pipeline_path` なら受領が照合した単位の
+        `<極性>/input/` の `.arf2`、受領に無ければ単位の `<極性>/input/*.arf2`（複数あれば
+        名前の新しいもの）を探す。
 
-    同じ入力（読み込みが読んだ・探したファイルの size・更新時刻が同じ）を開き直すと
-    読み込み済みのものを使い回す
-    （`reused_base`）。それでもハンドルどうしの状態は別々。開けるのは
-    `LIPIDMIX_MAX_DATASET_HANDLES`（既定 8）本まで。使い終えたら `dataset_handle_close`。
+    overview: 読み込みの最後に最初の概観（`dataset_overview` と同じ。品質 → 全体 → クラス → 分子種）を
+        計算して戻り値の `overview` 欄に載せる（既定 True）。False で計算しない（多数のハンドルを開く
+        再解析のエージェント向け。後から `dataset_overview` で出せる）。bool 以外は `DATASET_BAD_REQUEST`。
+        概観が失敗しても読み込みは成功し、`overview` に `status:"unavailable"` と理由が載る。
+
+    成功すると、いつも**新しいハンドルを直近にする**。`dataset_handle` を省いた `dataset_*` /
+    `library_*` はこの直近のハンドルに効く。再解析のエージェントは返った `dataset_handle` を
+    各ツールに渡して使い、直近を当てにしない（渡した呼び出しはサーバの別スレッドで回り、同じ
+    ハンドルへの呼び出しは 1 本ずつ、別のハンドルどうしは並行に進む）。前のハンドルは閉じずに
+    残る（`dataset_list` / `dataset_close`）。開いているハンドルが上限（`lipidmix.local.toml` の
+    `[server] max_dataset_handles`、既定 8）なら `DATASET_HANDLE_LIMIT` で止め、古いハンドルを
+    黙って閉じない（直近も動かさない）。同じ入力（読み込みが読んだ・探したファイルの size・
+    更新時刻が同じ）を開き直すと読み込み済みのものを使い回す（`reused_base`）。それでも
+    ハンドルどうしの状態は別々。
+
+    戻り値: `dataset_handle`・読んだアダプタ・選んだ `.arf`・ライブラリの記録（ファイル名と
+    sha256。置き場所は出さない）に、`caveat`（意味論の要約。未読で、その種別にまだ出していないときだけ
+    先頭に載る。`assay_kind` が確定したあとの最初の 1 回は `record_objective` の戻り値が運ぶ）、`summary`（特徴・試料の数、検出状態、同定の内訳、読み込みの
+    注記）、`sample_counts`（群と役割ごとの試料数）、`overview`（最初の概観。`overview=True` のとき）、
+    `next`（次の一手の例）。概観の比較と PCA は `result_id` で掘れるが直近の結果にはしない。
     """
+    if not isinstance(overview, bool):
+        return mztab_error("DATASET_BAD_REQUEST", f"overview は true / false です: {overview!r}",
+                           {"field": "overview"})
     if library not in _LIBRARY_MODES:
         return mztab_error("DATASET_BAD_REQUEST",
                            f"library は {' / '.join(_LIBRARY_MODES)} のどちらかです: {library!r}",
@@ -159,12 +220,14 @@ def dataset_handle_open(mztab_path: str | None = None, job_path: str | None = No
 
     from metabolomix.dataset.library_memory import public_view
     from metabolomix.mztab.polarity import dataset_polarity
+    from metabolomix.core import version
+    from metabolomix.tools import mztab_tools
 
     try:
-        handles.registry.check_capacity()  # 長い読み込みの前に断る（add でもう一度確かめる）
+        handles.registry.check_capacity()  # 長い読み込みの前に断る（adopt_handle でもう一度確かめる）
         opened = opening.open_dataset(directory=directory, mztab_path=mztab_path,
                                       job_path=job_path, pipeline_path=pipeline_path,
-                                      source=source, measure=measure,
+                                      polarity=polarity, source=source, measure=measure,
                                       allow_incomplete=allow_incomplete)
         ds = opened.dataset
         polarity, polarity_source, polarity_notes = dataset_polarity(ds)
@@ -173,33 +236,46 @@ def dataset_handle_open(mztab_path: str | None = None, job_path: str | None = No
         handle = handles.DatasetHandle(
             ds, polarity=polarity, polarity_source=polarity_source,
             source={"kind": opened.kind, "path": opened.path,
+                    **({"polarity": opened.polarity} if opened.polarity else {}),
                     "allow_incomplete": bool(allow_incomplete),
                     "adapter": opened.adapter, "measure": measure},
             arf2_path=arf2, dcl_path=dcl)
         store, note = (None, "library=\"none\" なので読んでいない。") if library == "none" \
             else _open_library_for(ds)
         handle.library.store = store
-        # 対話のセッションの source_path はフルパスだが、ハンドルはファイル名だけを持つ
-        # （研究室のライブラリの置き場所を戻り値・記録に出さない）。
+        # ライブラリはファイル名だけを持つ（研究室のライブラリの置き場所を戻り値・記録に出さない）。
         handle.library.source_path = store.library_file_name if store is not None else None
         try:
-            handles.registry.add(handle)
+            # 直近にする。`library_load` を先に呼んでいて、このデータセットのライブラリが
+            # 決まらなかった（`"auto"`）ときは、セッションのライブラリをこのハンドルへ移す。
+            session_state.session.adopt_handle(handle, move_library=(library == "auto"))
         except DomainError:
             handle.close()
             raise
     except DomainError as exc:
+        if exc.code == "PIPELINE_POLARITY_REQUIRED":
+            return needs_input("polarity", exc.message, (exc.details or {})["options"],
+                               argument="polarity", retry_tools=["load_dataset"])
         return mztab_error(exc.code, exc.message, exc.details or None)
 
     library_info = None
-    if store is not None:
-        summary = store.summary()
-        library_info = {"file": handle.library.source_path,
+    if handle.library.store is not None:
+        summary = handle.library.store.summary()
+        # `library_load`（ハンドルなし）が先に読んだライブラリは source_path がフルパスなので、名前だけを返す。
+        library_info = {"file": Path(handle.library.source_path).name,
                         "sha256": summary["source_sha256"],
                         "record_count": summary["record_count"]}
     detection = getattr(ds, "detected_mask", None) is not None
     notes = [*polarity_notes, *opened.notes]
+    # 意味論ダイジェスト（未読・種別ごとに 1 回・`caveat_mode=off` で止まる）。最上位の文字列として
+    # 先頭に置く——結論より前に解釈の前提が目に入るように。無ければ鍵ごと出さない。
+    caveat = session_state.session.take_caveat()
+    first_overview = _first_overview(handle) if overview else None
     return json_payload({
         "status": "success",
+        **({"caveat": caveat} if caveat else {}),
+        # 配布先のクローンが origin/main より遅れているときだけ載せる（最新なら鍵ごと出さない）。
+        **({"update_available": update} if (update := version.update_status()) else {}),
         "dataset_handle": handle.handle_id,
         "adapter": opened.adapter,
         "polarity": polarity,
@@ -217,17 +293,52 @@ def dataset_handle_open(mztab_path: str | None = None, job_path: str | None = No
         "dcl": Path(dcl).name if dcl else None,
         "reused_base": opened.reused_base,
         "open_handles": len(handles.registry.list()),
-        "max_handles": handles.max_handles(),
+        "max_handles": _max_handles_or_none(),
+        "summary": mztab_tools.load_summary_lines(ds, opened),
+        "sample_counts": mztab_tools.sample_group_role_counts(ds),
+        **({"overview": first_overview} if first_overview is not None else {}),
         **({"notes": notes} if notes else {}),
+        "next": list(_NEXT_STEPS),
     })
 
 
+def _first_overview(handle) -> dict:
+    """最初の概観（`dataset_overview` と同じ組み立て。`counts` は summary と重なるので省く）。
+
+    `load_dataset` は `handle_dispatch` のロックの外で動くので、新しいハンドルのロックの下で計算する
+    （直後の別の呼び出しと重ならない）。どんな失敗でも読み込みは止めず、理由を返す。
+    """
+    from metabolomix.tools.overview_tools import build_overview_payload
+
+    try:
+        with handle.lock:
+            return build_overview_payload(handle, embedded=True)
+    except DomainError as exc:
+        error = {"code": exc.code, "message": exc.message}
+        if exc.details:
+            error["details"] = json_safe(exc.details)
+    except Exception as exc:  # noqa: BLE001 - 概観の失敗で読み込みを失敗にしない
+        error = {"code": type(exc).__name__, "message": str(exc)[:300]}
+    return {"status": "unavailable", "error": error,
+            "next": "dataset_overview() を呼び直す／dataset_preprocess() で前処理の段の理由を見る"}
+
+
+#: 読み込みの後の次の一手の例（ツール名は公開面のもの）。
+_NEXT_STEPS = (
+    "dataset_status() — 試料の群・役割と検出状態を確かめる（差次的解析の群名はここに出る）",
+    "curation_review() — 注釈の一覧確認（解析フォルダで読んだデータセットのとき）",
+    "最初の概観（overview。overview=False で開いたなら dataset_overview()）の各段の next から掘る（鎖を進めた後は "
+    "dataset_overview() で出し直す。2 群の向きは仮なので "
+    "dataset_compare(reference_group=..., test_group=...) で決める）",
+)
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_handle_list() -> str:
+def dataset_list() -> str:
     """開いているハンドルの一覧（TSV: `dataset_handle current polarity source_kind source
     n_features n_samples library_sha256`）。古く開いた順。`current` は対話のセッションの直近の
-    ハンドル（`dataset_handle` を省いた呼び出しが使うもの。`dataset_load` で読んだものは
-    `source_kind` が `session`）。"""
+    ハンドル（`dataset_handle` を省いた呼び出しが使うもの。`load_dataset` が開いたものが直近）。"""
+
     from metabolomix.arf2.reader import format_spots_as_table
 
     current = session_state.session.current_handle_id
@@ -246,9 +357,13 @@ def dataset_handle_list() -> str:
         })
     columns = ["dataset_handle", "current", "polarity", "source_kind", "source", "n_features",
                "n_samples", "library_sha256"]
+    try:
+        limit = handles.max_handles()
+    except DomainError as exc:  # 設定ファイルが読めない（CONFIG_INVALID）
+        return mztab_error(exc.code, exc.message, exc.details or None)
     return json_payload({
         "n_open": len(rows),
-        "max_handles": handles.max_handles(),
+        "max_handles": limit,
         "handles": format_spots_as_table(rows, columns=columns) if rows else "",
     })
 
@@ -256,12 +371,12 @@ def dataset_handle_list() -> str:
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,
                                       idempotentHint=True),
           structured_output=False)
-def dataset_handle_close(dataset_handle: str) -> str:
+def dataset_close(dataset_handle: str) -> str:
     """ハンドルを閉じる（データセットの複製とライブラリの接続を手放す）。
 
-    対話のセッションの直近のハンドル（`dataset_handle_list` の `current`）を閉じると、
+    対話のセッションの直近のハンドル（`dataset_list` の `current`）を閉じると、
     `dataset_handle` を省いた呼び出しはデータセットが無い状態（`missing_state`）になる。
-    開いている別のハンドルへは落ちない（もう一度 `dataset_load` で読む）。
+    開いている別のハンドルへは落ちない（もう一度 `load_dataset` で読む）。
     """
     try:
         handles.registry.close(dataset_handle)

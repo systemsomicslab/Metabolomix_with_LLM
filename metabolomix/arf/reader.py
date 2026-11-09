@@ -1,10 +1,10 @@
 import argparse
-import glob
 import io
 import os
 from enum import Enum
 import sys
 import re
+from typing import Iterator
 
 import lz4.block
 import msgpack
@@ -15,8 +15,6 @@ matplotlib.use('Agg')  # 非インタラクティブバックエンドを使用
 import matplotlib.pyplot as plt
 import pprint
 
-from metabolomix.analysis.pca import run_pca  # 後方互換の再エクスポート。消すと ARF テストのモックが効かなくなる
-from metabolomix.core.data_config import get_data_dir
 from metabolomix.msdial.classes import get_sample_class_id
 from metabolomix.msdial.tags import get_sample_peak_tag_info
 
@@ -53,30 +51,13 @@ def _decode(value):
     return value.decode('utf-8', errors='ignore') if isinstance(value, bytes) else value
 
 
-def _is_arf_feature_container(datas) -> bool:
-    if not isinstance(datas, list) or len(datas) < 1:
-        return False
-    first = datas[0]
-    if not isinstance(first, list) or len(first) < 10:
-        return False
-    if not isinstance(first[0], int) or not isinstance(first[1], int):
-        return False
-
-    nested_groups = [item for item in first[2:] if isinstance(item, list) and len(item) >= 3 and all(isinstance(sub, list) for sub in item)]
-    if nested_groups:
-        sample_group = nested_groups[0]
-        print(f"[INFO] Detected ARF format: peak groups have {len(sample_group)} elements", file=sys.stderr)
-
-    return len(nested_groups) >= max(10, len(first[2:]) // 2)
-
-
 def _convert_arf_peak_group(
     group: list,
     group_index: int | None = None,
     source_block_index: int | None = None,
     source_local_index: int | None = None,
 ) -> dict | None:
-    if not isinstance(group, list) or len(group) < 3 or not all(isinstance(row, list) for row in group):
+    if not _is_arf_peak_group(group):
         return None
 
     representative = group[0]
@@ -94,86 +75,6 @@ def _convert_arf_peak_group(
         "SourceBlockIndex": source_block_index,
         "SourceLocalIndex": source_local_index,
     }
-
-def make_loading_details(pca_result: dict, deserialized_list: list[dict], feature_names: list[str]) -> str:
-    """
-    PCAのloadings情報を詳細化して、書き出し用のJSON文字列を返す。
-
-    戻り値: JSON文字列（基本部分はindent=2で整形、loadingsは各アイテムを1行で保持）
-    """
-    import json
-
-    detailed_loadings = []
-    for pc_idx, pc_loadings in enumerate(pca_result.get("loadings", [])):
-        pc_loadings_list = []
-        for feat_idx, loading_value in enumerate(pc_loadings):
-            feat_name = feature_names[feat_idx]
-            parts = feat_name.split("_")
-            if len(parts) >= 3:
-                try:
-                    master_id = int(parts[1])
-                except Exception:
-                    master_id = None
-
-                if master_id is not None and master_id < len(deserialized_list):
-                    spot = deserialized_list[master_id]
-                    annotation = spot.get("Name", "")
-                    m_z = spot.get("MassCenter")
-                    rt = spot.get("RT")
-                else:
-                    annotation = ""
-                    m_z = None
-                    rt = None
-
-                pc_loadings_list.append({
-                    "id": master_id,
-                    "value": loading_value,
-                    "annotation": annotation,
-                    "m_z": m_z,
-                    "rt": rt,
-                })
-            else:
-                pc_loadings_list.append({
-                    "id": None,
-                    "value": loading_value,
-                    "annotation": "",
-                    "m_z": None,
-                    "rt": None,
-                })
-
-        pc_loadings_list.sort(key=lambda x: x["value"], reverse=True)
-        detailed_loadings.append(pc_loadings_list)
-
-    # base JSON (loadings を除いたもの) を生成
-    pca_copy = pca_result.copy()
-    if "loadings" in pca_copy:
-        pca_copy.pop("loadings")
-
-    base_json = json.dumps(pca_copy, ensure_ascii=False, indent=2)
-
-    # loadings 部分を独自フォーマットで構築
-    loadings_json_lines = []
-    loadings_json_lines.append('  "loadings": [')
-    for i, pc_loadings_list in enumerate(detailed_loadings):
-        loadings_json_lines.append('    [')
-        for j, item in enumerate(pc_loadings_list):
-            id_val = json.dumps(item["id"], ensure_ascii=False)
-            val_val = json.dumps(item["value"], ensure_ascii=False)
-            ann_val = json.dumps(item["annotation"], ensure_ascii=False)
-            mz_val = json.dumps(item["m_z"], ensure_ascii=False)
-            rt_val = json.dumps(item["rt"], ensure_ascii=False)
-
-            item_str = f'{{ "id": {id_val}, "value": {val_val}, "m_z": {mz_val}, "rt": {rt_val}, "annotation": {ann_val} }}'
-            comma = ',' if j < len(pc_loadings_list) - 1 else ''
-            loadings_json_lines.append(f'      {item_str}{comma}')
-
-        comma = ',' if i < len(detailed_loadings) - 1 else ''
-        loadings_json_lines.append(f'    ]{comma}')
-    loadings_json_lines.append('  ]')
-
-    final_json = base_json[:-2] + ',\n' + '\n'.join(loadings_json_lines) + '\n}'
-    return final_json
-
 
 def _msgpack_stream(data: bytes):
     return msgpack.Unpacker(
@@ -200,8 +101,10 @@ def _decompress_lz4_payload(compressed_data: bytes) -> bytes:
     )
     size = next(unpacker)
     read_size = unpacker.tell()
+    # スライスの写しを作らない（圧縮ペイロードの写しが 1 つ増える。展開後の大きさに比べ小さいが、
+    # 1 ブロックが数百 MB の実ファイルでは無視できない）。
     return lz4.block.decompress(
-        compressed_data[read_size:],
+        memoryview(compressed_data)[read_size:],
         uncompressed_size=size,
     )
 
@@ -239,14 +142,15 @@ def _iter_lz4_msgpack_blocks(data: bytes):
 def _is_arf_peak_group(item) -> bool:
     """item が 1スポット分の「グループ（= サンプル行の並び）」か判定する。
 
-    グループは行(AlignmentChromPeakFeature)のリストなので、非空かつ全要素が
-    リストになる。行そのものは大半がスカラー要素を持つため、この条件では
-    グループと誤認されない。
+    グループは空でないリストで、要素がすべてピークの行（`_is_alignment_peak_row`）。
+    行数では見分けない（1〜2 試料のアラインメントは行が 1〜2 本）。ヘッダの入れ子リスト
+    （ChromXs の形 `[[1.0, 0, 0], ...]` など）は行の形（25 要素超・Key18 が数）を満たさず、
+    群に数えない。
     """
     return (
         isinstance(item, list)
         and len(item) > 0
-        and all(isinstance(row, list) for row in item)
+        and all(_is_alignment_peak_row(row) for row in item)
     )
 
 
@@ -261,14 +165,34 @@ def _is_arf_feature_container_object(item) -> bool:
     return isinstance(item, list) and any(_is_arf_peak_group(e) for e in item)
 
 
-def _iter_lz4_decompressed_blocks(data: bytes):
+def _top_level_stream(source):
+    """トップレベルのオブジェクト（LZ4 ブロック）を順に解く Unpacker。
+
+    source はファイル（バイナリで開いたもの）か bytes。ファイルなら全体を 1 つの bytes に
+    読み込まず、ブロック 1 つ分ずつ読む（圧縮されたブロックの写しは 1 つずつしか持たない）。
+    """
+    if isinstance(source, (bytes, bytearray, memoryview)):
+        return _msgpack_stream(bytes(source))
+    return msgpack.Unpacker(
+        source,
+        raw=False,
+        unicode_errors="ignore",  # _msgpack_stream と同じ規約
+        strict_map_key=False,
+        max_buffer_size=1024 * 1024 * 1024,
+        read_size=1024 * 1024,
+    )
+
+
+def _iter_lz4_decompressed_blocks(source):
     """トップレベルのブロックを展開済みバイト列のまま返す（msgpack は解かない）。
 
     実ファイルは全体が 1 ブロックのことがある（185 MB → 展開 966 MB。issue #4）。
     展開後を `list(...)` で一度に Python オブジェクト化すると全行が同時に生きるので、
-    解くのは呼び出し側がグループ単位で行う。
+    解くのは呼び出し側がグループ単位で行う。LZ4 のブロックは丸ごとでしか伸長できないので、
+    展開後のバイト列はブロック 1 つ分を持つ（それより細かくはできない）。
+    source はファイルか bytes（`_top_level_stream`）。
     """
-    for block_index, obj in enumerate(_msgpack_stream(data)):
+    for block_index, obj in enumerate(_top_level_stream(source)):
         payload = _payload_from_top_level_object(obj)
         obj = None  # 圧縮ペイロードの写しを展開後まで抱えない
         if payload is None:
@@ -330,8 +254,8 @@ def _iter_peak_groups_in_stream(decompressed: bytes):
         return
 
 
-def _iter_arf_peak_groups(data: bytes):
-    for block_index, decompressed in _iter_lz4_decompressed_blocks(data):
+def _iter_arf_peak_groups(source):
+    for block_index, decompressed in _iter_lz4_decompressed_blocks(source):
         local_index = 0
         for group in _iter_peak_groups_in_stream(decompressed):
             yield block_index, local_index, group
@@ -352,7 +276,7 @@ def extract_arf_data(
     source_block_index: int | None = None,
     source_local_index: int | None = None,
 ) -> dict | None:
-    if isinstance(data, list) and len(data) >= 3 and all(isinstance(row, list) for row in data):
+    if _is_arf_peak_group(data):
         return _convert_arf_peak_group(
             data,
             group_index=group_index,
@@ -412,15 +336,21 @@ def _slim_row(row, shared_names: dict):
     return slim
 
 
-def deserialize(file_like_object) -> list[dict]:
-    data = file_like_object.read()
-    results = []
-    rows = 0
-    shared_names: dict[str, str] = {}
+def iter_groups(file_like_object) -> Iterator[dict]:
+    """`.arf` のスポットを 1 つずつ返す（`deserialize` の 1 要素と同じ形）。
 
+    `{"MasterAlignmentID", "AlignmentID", "RT", "MassCenter", "IonMode", "Name",
+    "HeightAverage", "AlignedPeakProperties": [細くした行, ...], "SourceBlockIndex",
+    "SourceLocalIndex"}`。ファイルを丸ごと 1 つの bytes に読まず、群は msgpack の
+    Unpacker が 1 つずつ取り出す。全体のリストは作らない（呼び出し側が要るものだけ残す）。
+
+    RAM が尽きたら、そこまでに返したスポット数・行数を `ArfMemoryError` に載せて投げ直す。
+    """
+    spots = rows = 0
+    shared_names: dict[str, str] = {}
     try:
         for group_index, (block_index, local_index, group) in enumerate(
-            _iter_arf_peak_groups(data),
+            _iter_arf_peak_groups(file_like_object),
             start=0,
         ):
             formatted = extract_arf_data(
@@ -429,20 +359,100 @@ def deserialize(file_like_object) -> list[dict]:
                 source_block_index=block_index,
                 source_local_index=local_index,
             )
-            if formatted is not None:
-                formatted["MasterAlignmentID"] = group_index
-                formatted["AlignmentID"] = group_index
-                # spot 単位の値（RT / Name 等）は生の代表行から取り終えている。
-                formatted["AlignedPeakProperties"] = [
-                    _slim_row(row, shared_names) for row in group
-                ]
-                results.append(formatted)
-                rows += len(group)
+            if formatted is None:
+                continue
+            formatted["MasterAlignmentID"] = group_index
+            formatted["AlignmentID"] = group_index
+            # spot 単位の値（RT / Name 等）は生の代表行から取り終えている。
+            formatted["AlignedPeakProperties"] = [
+                _slim_row(row, shared_names) for row in group
+            ]
+            spots += 1
+            rows += len(group)
+            group = None  # 返したあとまで生の行を抱えない
+            yield formatted
     except MemoryError as exc:
         # 規模を運ぶ例外へ詰め替える。ここで確保するのは小さなオブジェクト 1 つで、
         # 失敗した確保（数 GB 単位）とは桁が違う。
-        raise ArfMemoryError(spots=len(results), rows=rows) from exc
-    return results
+        raise ArfMemoryError(spots=spots, rows=rows) from exc
+
+
+def deserialize(file_like_object) -> list[dict]:
+    """`.arf` の全スポットのリスト（`iter_groups` を最後まで回したもの）。"""
+    return list(iter_groups(file_like_object))
+
+
+#: msgpack の ext の型バイト → データ長の読み方（fixext は長さ固定、ext8/16/32 は長さのバイト数）。
+_FIXEXT_LENGTH = {0xD4: 1, 0xD5: 2, 0xD6: 4, 0xD7: 8, 0xD8: 16}
+_EXT_LENGTH_BYTES = {0xC7: 1, 0xC8: 2, 0xC9: 4}
+
+
+def _leading_size(payload: bytes) -> int:
+    """LZ4 ブロックの先頭の整数（伸長後の大きさ）。整数でなければ 0（そのブロックは読まれない）。"""
+    try:
+        size = next(msgpack.Unpacker(io.BytesIO(payload), raw=False, strict_map_key=False))
+    except (StopIteration, msgpack.OutOfData, ValueError):
+        return 0
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        return 0
+    return size
+
+
+def _skip(file_like_object, count: int) -> int:
+    """count バイト読み飛ばし、実際に飛ばせたバイト数を返す（末尾が切れていれば少ない）。"""
+    if count <= 0:
+        return 0
+    seekable = getattr(file_like_object, "seekable", None)
+    if seekable is not None and seekable():
+        here = file_like_object.tell()
+        end = file_like_object.seek(0, io.SEEK_END)
+        target = min(here + count, end)
+        file_like_object.seek(target)
+        return target - here
+    skipped = 0
+    while skipped < count:
+        chunk = file_like_object.read(min(count - skipped, 1024 * 1024))
+        if not chunk:
+            break
+        skipped += len(chunk)
+    return skipped
+
+
+def uncompressed_size(file_like_object) -> int:
+    """`.arf` の LZ4 ブロックの伸長後の大きさの和（バイト）。伸長しない。
+
+    各ブロックの先頭の整数（MessagePack-CSharp の Lz4Block が書く伸長後の長さ）を足す。
+    ext のブロックはヘッダと先頭の整数だけを読み、残りは読み飛ばす。ext でない
+    トップレベル（`[ヘッダ, 本体]` の配列）は msgpack に解かせる（`_payload_from_top_level_object`
+    と同じ見分け方）。末尾が切れたブロックは、reader も読まないので数えない。
+    """
+    total = 0
+    while True:
+        first = file_like_object.read(1)
+        if not first:
+            return total
+        tag = first[0]
+        if tag in _FIXEXT_LENGTH:
+            length = _FIXEXT_LENGTH[tag]
+        elif tag in _EXT_LENGTH_BYTES:
+            width = _EXT_LENGTH_BYTES[tag]
+            raw_length = file_like_object.read(width)
+            if len(raw_length) < width:
+                return total
+            length = int.from_bytes(raw_length, "big")
+        else:
+            file_like_object.seek(-1, io.SEEK_CUR)
+            for obj in _top_level_stream(file_like_object):
+                payload = _payload_from_top_level_object(obj)
+                if payload is not None:
+                    total += _leading_size(payload)
+            return total
+        if not file_like_object.read(1):  # ext の型コード
+            return total
+        head = file_like_object.read(min(length, 9))  # msgpack の整数は最大 9 バイト
+        if _skip(file_like_object, length - len(head)) + len(head) < length:
+            return total
+        total += _leading_size(head)
 
 
 def _is_alignment_peak_row(data) -> bool:
@@ -451,7 +461,7 @@ def _is_alignment_peak_row(data) -> bool:
     file_name だけ欲しい呼び出し（`exclusions._entry_file_name`）と、dict を組む
     本体とで判定が食い違わないよう、ここ 1 か所に置く。
     """
-    return (isinstance(data, list) and len(data) >= 3
+    return (isinstance(data, list)
             and len(data) > 25 and isinstance(data[18], (int, float)))
 
 
@@ -467,19 +477,6 @@ def _file_name_from_row(data: list) -> str | None:
             if len(decoded) > 0:
                 return decoded
     return None
-
-
-def file_name_of(data: list) -> str | None:
-    """`AlignedPeakProperties` の 1 行から file_name だけを取り出す公開境界。
-
-    `_convert_to_alignment_feature(data).get("file_name")` と必ず同じ答えを返す
-    （両者が同じ導出を共有している）。除外判定・roster は file_name しか要らない
-    のに、以前は 1 行ごとに feature dict を丸ごと組んでいた——spot × 注入ぶん
-    呼ばれるので、393MB の `.arf` では 294 万回の無駄な dict 生成になっていた。
-    """
-    if not _is_alignment_peak_row(data):
-        return None
-    return _file_name_from_row(data)
 
 
 #: `_convert_to_alignment_feature` がそのまま添字を引くだけのフィールド。
@@ -502,9 +499,9 @@ _CONSTANT_FIELDS = {"is_msms_matched": False, "is_matched": False}
 def peak_field(data: list, name: str):
     """`_convert_to_alignment_feature(data).get(name)` と同じ値を dict 無しで返す。
 
-    `build_pca_matrix` は file_name / is_gap_filled / 要求された props しか読まない
-    のに、1 行ごとに 16 キーの dict を組んでいた（393MB の `.arf` で 294 万回。
-    既定の `props=["height"]` では `rt` のための `_convert_to_times` まで毎行走る）。
+    `.arf` を走査する呼び出し（`mztab.evidence.scan_arf`）は数個の欄しか読まないのに、
+    1 行ごとに 16 キーの dict を組むと spot × 注入ぶんの無駄になる（393MB の `.arf` で
+    294 万回。`rt` のための `_convert_to_times` まで毎行走る）。
 
     **同値性は `tests/test_arf_hot_paths.py` が全キー × 行の種類で固定している。**
     フィールドを増やすときは両方に足すこと。
@@ -587,24 +584,12 @@ def _convert_to_alignment_feature(data: list) -> dict:
     return {}
 
 
-def readable_block_count(file_like_object) -> int:
-    """`.arf` として解釈できたトップレベルブロックの数を返す（公開境界）。
-
-    `deserialize()` は壊れたファイルでも例外を出さず空リストを返す（別形式の
-    トップレベルオブジェクトは warning で読み飛ばす仕様）。呼び出し側が
-    「読めなかった」と「読めたがスポットが無い」を区別できるように、
-    ブロック数だけを数える経路をここに置く。0 なら `.arf` として読めていない。
-    """
-    return sum(1 for _ in _iter_lz4_msgpack_blocks(file_like_object.read()))
-
-
 def alignment_feature_row(data: list) -> dict:
     """`AlignedPeakProperties` の1行（注入1件分）を辞書へ落とす公開境界。
 
     `.arf` の msgpack Key 番号を知っているのはこのモジュールだけ、という約束を
     層をまたいで保つための入口（`docs/schema/AlignmentChromPeakFeature.md` が
-    Key 番号の正準）。`metabolomix/mztab/evidence.py` と
-    `metabolomix/analysis/assay_evidence.py` は private 名を掴まず、ここを呼ぶ。
+    Key 番号の正準）。`metabolomix/mztab/evidence.py` は private 名を掴まず、ここを呼ぶ。
 
     読めない行（別形式・短すぎる配列）では空 dict を返す——例外にしないのは、
     `.arf` に非ピーク行が混ざるのが常態だから。呼び出し側は空を「この行からは
@@ -667,7 +652,7 @@ def extract_peak_properties(deserialized_list: list[dict]) -> pd.DataFrame:
 def count_peak_property_rows(deserialized_list: list[dict]) -> int:
     """`extract_peak_properties` が返す行数だけを、DataFrame を組まずに数える。
 
-    `arf_parser` は「抽出された総ピークレコード数」と「平均サンプル数/スポット」
+    旧 ARF 要約ツールは「抽出された総ピークレコード数」と「平均サンプル数/スポット」
     しか使っていないのに、そのために spot × 注入ぶんの dict を作って pandas の
     DataFrame へ積んでいた（393MB の `.arf` で 881 万行）。行の採否条件は
     `extract_peak_properties` と同一に保つ——ずれたら報告値が嘘になる。
@@ -682,157 +667,6 @@ def count_peak_property_rows(deserialized_list: list[dict]) -> int:
                 continue
             total += 1
     return total
-
-
-def build_pca_matrix(deserialized_list: list[dict], use_properties: list[str] = None,
-                     min_detection_rate: float = 0.0) -> tuple[np.ndarray, list[str], list[str]]:
-    """
-    指定された複数プロパティから多変量PCA用行列を構築
-
-    引数:
-      min_detection_rate: 特徴量(スポット)の検出率による足切り。0.0〜1.0。
-        各スポットを「実検出(非ギャップフィル)できたサンプルの割合」で評価し、
-        この閾値未満のスポットを行列から除外する。既定 0.0 = フィルタ無効（従来動作）。
-        例: 0.5 を指定すると「半数以上のサンプルで実検出されたスポット」のみ使用。
-    """
-    # デフォルトではHeightとAreaを使用（m_zやrtも追加可能）
-    if use_properties is None:
-        use_properties = ["height"]
-
-    sample_data_dict = {}
-    detection_count: dict[str, int] = {}  # col_name -> 実検出(非ギャップフィル)サンプル数
-
-    for spot in deserialized_list:
-        aligned = spot.get("AlignedPeakProperties")
-        if not isinstance(aligned, list) or not aligned:
-            continue
-
-        master_id = spot.get("MasterAlignmentID")
-
-        for sample_index, sample in enumerate(aligned):
-            if not isinstance(sample, list):
-                continue
-
-            # feature dict は組まない——読むのは file_name / is_gap_filled /
-            # 要求された props だけで、16 キーを作るのは spot × 注入ぶんの無駄。
-            # peak_field は dict 版と同じ値を返す（同値性はテストが固定している）。
-
-            # 【追加】行列のキーとしてファイル名を使用
-            file_name = file_name_of(sample)
-            sample_key = file_name if file_name else f"Sample_{sample_index}"
-
-            if sample_key not in sample_data_dict:
-                sample_data_dict[sample_key] = {}
-
-            is_detected = not peak_field(sample, "is_gap_filled")
-            # 指定された複数のプロパティを列として追加
-            for prop in use_properties:
-                val = peak_field(sample, prop)
-                col_name = f"Spot_{master_id}_{prop}"
-                # 値が None（フィールド欠落・読めない値）のセルは 0.0 にする。
-                # gap-fill のセルは通常 MS-DIAL の補間値を持つので、値として残る。
-                sample_data_dict[sample_key][col_name] = float(val) if val is not None else 0.0
-                if is_detected:
-                    detection_count[col_name] = detection_count.get(col_name, 0) + 1
-
-    if not sample_data_dict:
-        return np.empty((0, 0)), [], []
-
-    # 行がサンプル、列が「スポット×プロパティ」のデータフレームを作成
-    df = pd.DataFrame.from_dict(sample_data_dict, orient='index')
-
-    # ある試料の行がそのスポットに無かったセル（上の None→0.0 とは別）は NaN になる。
-    # それだけを「その列（特徴量）の平均値」で埋める（Mean Imputation）。
-    df = df.fillna(df.mean())
-    # ※全サンプルで欠損だった列は NaN のまま残るので、その場合のみ 0.0 で埋める
-    df = df.fillna(0.0)
-
-    # 任意: 検出率(非ギャップフィル)による特徴量の足切り（既定0.0=無効）
-    if min_detection_rate > 0.0:
-        n_samples = len(df.index)
-        keep_cols = [
-            c for c in df.columns
-            if detection_count.get(c, 0) / n_samples >= min_detection_rate
-        ]
-        df = df[keep_cols]
-
-    # 改善点3: 分散が0（全サンプルで同一の値）の列を事前に行列から除外する
-    df = df.loc[:, df.var(numeric_only=True) > 0]
-
-    return df.to_numpy(dtype=float), list(df.index), list(df.columns)
-
-
-def plot_pca(pca_result: dict, sample_names: list[str], props: list[str], file_path: str, output_file: str = "pca_plot.png"):
-    """
-    PCAスコアプロットを画像ファイルとして保存
-    """
-    components = np.array(pca_result["components"])
-    
-    if components.shape[1] < 2:
-        f"[WARNING] PCA成分が2つ未満のため、プロットできません。"
-        return
-    
-    plt.figure(figsize=(10, 8))
-    plt.scatter(components[:, 0], components[:, 1], alpha=0.7)
-    
-    # サンプル名をラベルとして表示
-    for i, name in enumerate(sample_names):
-        plt.annotate(name, (components[i, 0], components[i, 1]), fontsize=8, alpha=0.8)
-    
-    plt.xlabel(f"PC1 ({pca_result['explained_variance_ratio'][0]*100:.1f}%)")
-    plt.ylabel(f"PC2 ({pca_result['explained_variance_ratio'][1]*100:.1f}%)")
-    file_name = os.path.basename(file_path)
-    plt.title(f"PCA Score Plot - {file_name} (Properties: {', '.join(props)})")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
-    plt.close()
-    f"[INFO] PCAプロットを保存しました: {output_file}"
-
-
-def plot_pca_scores_by_sample(pca_result: dict, sample_names: list[str], output_file: str = "pca_sample_scores.png"):
-    """
-    PC1とPC2について、横軸にサンプル名、縦軸にスコア(強度)をとったプロットを作成して保存します。
-    """
-    components = np.array(pca_result.get("components", []))
-    
-    if components.size == 0 or components.shape[1] < 2:
-        print("[WARNING] PCA成分が2つ未満のため、サンプル別スコアをプロットできません。", file=sys.stderr)
-        return
-        
-    pc1_scores = components[:, 0]
-    pc2_scores = components[:, 1]
-    
-    # 2段のサブプロットを作成（x軸を共有）
-    fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-    
-    # -------------------------
-    # PC1のプロット (上段)
-    # -------------------------
-    axes[0].bar(sample_names, pc1_scores, color='#4C72B0', edgecolor='black', alpha=0.8)
-    axes[0].set_title(f"PC1 Scores by Sample ({pca_result['explained_variance_ratio'][0]*100:.1f}%)")
-    axes[0].set_ylabel("PC1 Score")
-    axes[0].axhline(0, color='black', linewidth=1.0, linestyle='-') # 基準線（0）
-    axes[0].grid(axis='y', linestyle='--', alpha=0.7)
-    
-    # -------------------------
-    # PC2のプロット (下段)
-    # -------------------------
-    axes[1].bar(sample_names, pc2_scores, color='#55A868', edgecolor='black', alpha=0.8)
-    axes[1].set_title(f"PC2 Scores by Sample ({pca_result['explained_variance_ratio'][1]*100:.1f}%)")
-    axes[1].set_ylabel("PC2 Score")
-    axes[1].axhline(0, color='black', linewidth=1.0, linestyle='-') # 基準線（0）
-    axes[1].grid(axis='y', linestyle='--', alpha=0.7)
-    
-    # X軸のサンプル名が長い場合に備えて斜めに傾ける
-    plt.xticks(rotation=45, ha="right")
-    
-    # レイアウトを整えて保存
-    plt.tight_layout()
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
-    plt.close()
-    
-    print(f"[INFO] サンプル別PCAスコアプロットを保存しました: {output_file}", file=sys.stderr)
 
 
 def plot_peak_height_distribution(peak_df: pd.DataFrame, filter_keyword: str = None, group_regex: str = None, output_file: str = "peak_height_dist.png"):
@@ -907,156 +741,6 @@ def plot_peak_height_distribution(peak_df: pd.DataFrame, filter_keyword: str = N
     print(f"[INFO] 脂質分布プロットを保存しました: {output_file} (データ件数: {len(df_filtered)}, グループ数: {len(groups)})", file=sys.stderr)
 
 
-def get_pca_loading_features(pca_result: dict, deserialized_list: list[dict],
-                             feature_names: list[str], top_n: int = 10,
-                             n_pcs: int = 2) -> list[dict]:
-    """各主成分について Loading 値の正負トップを構造化して返す（表示・整形は呼び出し側）。
-
-    返り値: [{"pc": "PC1", "var_ratio": <%>, "positive": [item...], "negative": [item...]}, ...]
-      item = {"id", "value", "annotation", "m_z", "rt"}（feature名 "Spot_<id>_<prop>" から id を取得し
-      deserialized_list[id] のメタデータを付与）。
-    metabolomix.arf.tools の arf_parser / arf_pca_preprocessed が共通で利用する。
-    """
-    loadings = pca_result.get("loadings", [])
-    evr = pca_result.get("explained_variance_ratio", [])
-    results = []
-    for pc_idx in range(min(n_pcs, len(loadings))):
-        pc_loadings = loadings[pc_idx]
-        feats = []
-        for feat_idx, loading_value in enumerate(pc_loadings):
-            parts = feature_names[feat_idx].split("_")
-            if len(parts) < 3:
-                continue
-            try:
-                master_id = int(parts[1])
-            except ValueError:
-                continue
-            if not (0 <= master_id < len(deserialized_list)):
-                continue
-            spot = deserialized_list[master_id]
-            feats.append({
-                "id": master_id,
-                "value": loading_value,
-                "annotation": spot.get("Name", ""),
-                "m_z": spot.get("MassCenter"),
-                "rt": spot.get("RT"),
-            })
-        feats.sort(key=lambda x: x["value"], reverse=True)
-        results.append({
-            "pc": f"PC{pc_idx + 1}",
-            "var_ratio": evr[pc_idx] * 100 if pc_idx < len(evr) else 0.0,
-            "positive": feats[:top_n],
-            "negative": feats[-top_n:][::-1],
-        })
-    return results
-
-
-def extract_top_loading_features(pca_result: dict, deserialized_list: list[dict], feature_names: list[str], n: int = 1):
-    """
-    PCAのLoadingsからPC1とPC2それぞれについて、
-    正に寄与している上位n件と、負に寄与している上位n件を抽出し、対応するピーク情報を出力
-    """
-    loadings = np.array(pca_result["loadings"])
-    
-    if loadings.size == 0:
-        f"[WARNING] Loadingsが空です。"
-        return
-    
-    # 少なくともPC1とPC2（または存在する分だけ）を処理
-    for pc_idx in range(min(2, len(loadings))):
-        pc_loadings = loadings[pc_idx]
-        pc_name = f"PC{pc_idx + 1}"
-        var_ratio = pca_result["explained_variance_ratio"][pc_idx] * 100
-
-        # スポット名とロード値のペアを実値で降順ソート
-        sorted_by_value = sorted(
-            zip(feature_names, pc_loadings), key=lambda x: x[1], reverse=True
-        )
-        positive_top_n = sorted_by_value[:n]                 # 正の寄与 上位
-        negative_top_n = sorted_by_value[-n:][::-1]          # 負の寄与 上位
-
-        print(f"\n--- {pc_name} (説明分散比 {var_ratio:.2f}%) ---")
-        print(f"  [正の寄与 上位{n}件]")
-        _print_feature_details(positive_top_n, deserialized_list)
-        print(f"  [負の寄与 上位{n}件]")
-        _print_feature_details(negative_top_n, deserialized_list)
-
-
-def _print_feature_details(feature_pairs: list[tuple], deserialized_list: list[dict]):
-    """各ピークの詳細情報を1行で出力する。"""
-    for spot_name, loading_value in feature_pairs:
-        try:
-            spot_id = int(spot_name.split("_")[1])
-        except (IndexError, ValueError):
-            continue
-        if spot_id >= len(deserialized_list):
-            continue
-
-        spot = deserialized_list[spot_id]
-        name = spot.get("Name") or "Unknown"
-        mz = spot.get("MassCenter")
-        rt = spot.get("RT")
-        mz_s = f"{mz:.4f}" if isinstance(mz, (int, float)) else "N/A"
-        rt_s = f"{rt:.2f}" if isinstance(rt, (int, float)) else "N/A"
-        print(f"    ID {spot_id:>4}  loading={loading_value:+.6f}  m/z={mz_s}  RT={rt_s} min  {name}")
-
-
-def find_input_file(file_path: str | None = None, index: int = 0) -> str | None:
-    if file_path and os.path.exists(file_path):
-        return file_path
-
-    # .arf ファイルのみを検索（探索先は data_config 経由で環境変数上書き可）
-    candidates = glob.glob(os.path.join(str(get_data_dir()), "*.arf"))
-    return candidates[index] if candidates else None
-
-
-def _list_arf_files() -> list[str]:
-    """データディレクトリ内の .arf ファイルを名前順で返す。"""
-    return sorted(glob.glob(os.path.join(str(get_data_dir()), "*.arf")))
-
-
-def _select_arf_file(file_path: str | None, index: int | None) -> str | None:
-    """解析対象 .arf を決定する（非対話対応）。
-
-    優先順位: --file > --index > 対話プロンプト(端末時のみ) > 先頭ファイル[0]。
-    """
-    if file_path:
-        if os.path.exists(file_path):
-            return file_path
-        print(f"[WARNING] 指定ファイルが見つかりません: {file_path}", file=sys.stderr)
-        return None
-
-    candidates = _list_arf_files()
-    if not candidates:
-        return None
-
-    if index is not None:
-        if 0 <= index < len(candidates):
-            return candidates[index]
-        print(f"[WARNING] index {index} は範囲外です (0..{len(candidates) - 1})。", file=sys.stderr)
-        return None
-
-    # 番号未指定: 一覧を提示
-    print("解析可能な .arf ファイル:")
-    for i, c in enumerate(candidates):
-        print(f"  [{i}] {os.path.basename(c)}")
-
-    # 対話端末のときだけプロンプト。非対話(パイプ/リダイレクト)時は先頭を既定採用
-    if sys.stdin and sys.stdin.isatty():
-        try:
-            choice = int(input("何番目のファイルを解析しますか？ "))
-        except (ValueError, EOFError):
-            print("[INFO] 無効な入力のため [0] を使用します。", file=sys.stderr)
-            choice = 0
-        if not (0 <= choice < len(candidates)):
-            print("[INFO] 範囲外のため [0] を使用します。", file=sys.stderr)
-            choice = 0
-        return candidates[choice]
-
-    print("[INFO] 非対話モードのため先頭ファイル [0] を使用します。(--file/--index で明示指定可)",
-          file=sys.stderr)
-    return candidates[0]
-
 def summarize_arf_data(deserialized_list):
     """
     ARFデータの統計的要約を生成
@@ -1081,33 +765,18 @@ def summarize_arf_data(deserialized_list):
 
 def main():
     parser = argparse.ArgumentParser(description="MS-DIAL .arf ファイルを解析します。")
-    parser.add_argument("--file", "-f", help="解析する .arf ファイルのパス")
+    parser.add_argument("--file", "-f", required=True, help="解析する .arf ファイルのパス（必須。データフォルダは探さない）")
     parser.add_argument("--export", "-e", help="CSV に書き出すパス")
-    parser.add_argument("--pca", action="store_true", help="PCA を実行する")
-    parser.add_argument("--output-pca", help="PCA 結果を JSON で保存するパス")
-    parser.add_argument("--output-plot", default=None, help="PCA プロットを PNG 保存するパス。未指定なら PNG を生成しない")
-    parser.add_argument("--output-sample-scores", help="サンプル別PCAスコアプロットを画像ファイルとして保存するパス")
     parser.add_argument("--group-replicates", action="store_true", help="ファイル名からレプリケート番号（_1, _2など）を自動で除外してグループ化する")
     parser.add_argument("--group-regex", type=str, help="特殊なファイル名の場合に、削除したい文字列の正規表現を直接指定")
     parser.add_argument("--plot-distribution", action="store_true", help="脂質クラスごとのPeakHeight分布プロットを作成する")
     parser.add_argument("--filter-name", type=str, help="分布プロットで抽出する脂質名やクラスのキーワード (例: 'EtherPE_P', 'TG')")
     parser.add_argument("--output-dist-plot", type=str, default=None, help="分布プロットの PNG 保存先。未指定なら PNG を生成しない")
-    parser.add_argument("--top-features", "-t", type=int, default=0, help="PCA Loadingから抽出する上位・下位ピーク件数")
-    parser.add_argument("--props", nargs="+", default=["height"], 
-                        help="PCAに使用するプロパティ (例: height area). m_zやrtは量ではないため非推奨です。")
-    parser.add_argument("--components", type=int, default=None,
-                        help="計算する主成分の数 (デフォルト: 計算可能な最大数)")
-    parser.add_argument("--index", "-i", type=int, default=None,
-                        help="data/ 内の .arf 一覧から解析するファイルを番号で指定（非対話）。--file指定時は無視")
-    parser.add_argument("--log-transform", action="store_true",
-                        help="[任意] PCA前に log10 変換を適用する（強度の歪みを抑え条件分離が向上しやすい）")
-    parser.add_argument("--min-detection-rate", type=float, default=0.0,
-                        help="[任意] 特徴量(スポット)の実検出率による足切り 0.0-1.0（既定0=無効。例 0.5）")
     args = parser.parse_args()
 
-    file_path = _select_arf_file(args.file, args.index)
-    if not file_path:
-        raise FileNotFoundError(".arf ファイルが見つかりません。")
+    file_path = args.file
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f".arf ファイルが見つかりません: {file_path}")
 
     print(f"[INFO] 解析対象ファイル: {file_path}")
     with open(file_path, "rb") as f:
@@ -1158,66 +827,6 @@ def main():
         else:
             print("[WARNING] 抽出されたPeak Propertyレコードが存在しないため、分布プロットをスキップします。", file=sys.stderr)
     
-
-    if args.pca:
-        matrix, sample_names, feature_names = build_pca_matrix(
-            deserialized, use_properties=args.props,
-            min_detection_rate=args.min_detection_rate,
-        )
-
-        if matrix.size == 0:
-            print("PCA 用データを構築できませんでした。")
-            return
-
-        print(f"[INFO] PCA入力行列の形状: {matrix.shape} (サンプル数 x 特徴量数)")
-        print(f"[INFO] 使用プロパティ: {args.props}")
-        if args.min_detection_rate > 0.0:
-            print(f"[INFO] 検出率フィルタ: >= {args.min_detection_rate} (特徴量 {len(feature_names)} 件に絞り込み)")
-        if args.log_transform:
-            print("[INFO] log10 変換: 有効")
-        try:
-            pca_result = run_pca(matrix, n_components=args.components,
-                                 log_transform=args.log_transform)
-            print(f"[INFO] PCA 実行完了 (計算された主成分数: {len(pca_result['explained_variance_ratio'])})")
-
-            # ===== PCA結果をCLI表示 =====
-            evr = pca_result["explained_variance_ratio"]
-            print("\n===== PCA 説明分散比 =====")
-            for i, r in enumerate(evr[: min(5, len(evr))], 1):
-                print(f"  PC{i}: {r * 100:.2f}%")
-            if len(evr) > 0:
-                print(f"  (PC1-PC2 累積: {sum(evr[:2]) * 100:.2f}%)")
-
-            comps = pca_result.get("components", [])
-            if comps and len(comps[0]) >= 2:
-                print("\n===== サンプル別 PCA スコア (PC1, PC2) =====")
-                for name, c in zip(sample_names, comps):
-                    print(f"  {name:<42} PC1={c[0]:+9.3f}  PC2={c[1]:+9.3f}")
-
-            # 寄与上位ピーク（--top-features 未指定でも上位5件を表示）
-            n_show = args.top_features if args.top_features else 5
-            print(f"\n===== PCA Loadings 寄与上位/下位 {n_show}件 =====")
-            extract_top_loading_features(pca_result, deserialized, feature_names, n=n_show)
-
-            # PNG は明示要求時のみ。CLI が黙って画像ファイルを作らないようにする。
-            if args.output_plot:
-                plot_pca(pca_result, sample_names, args.props, file_path, args.output_plot)
-            else:
-                print("[INFO] --output-plot 未指定のため PCA プロット PNG は生成しません")
-            
-            if args.output_sample_scores:
-                plot_pca_scores_by_sample(pca_result, sample_names, output_file=args.output_sample_scores)
-
-            if args.output_pca:
-                # pca_result にサンプル名を保存しているため、そのまま渡す
-                pca_result["samples"] = sample_names
-                final_json = make_loading_details(pca_result, deserialized, feature_names)
-                with open(args.output_pca, "w", encoding="utf-8") as f:
-                    f.write(final_json)
-                print(f"[INFO] PCA 結果を保存しました: {args.output_pca}")
-                
-        except ValueError as e:
-            print(f"[ERROR] {e}")
 
     summary = summarize_arf_data(deserialized)
     pprint.pprint(summary)

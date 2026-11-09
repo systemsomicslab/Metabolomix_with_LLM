@@ -6,7 +6,8 @@ deps: arf2.reader / arf2.match_results のみ。
 """
 from __future__ import annotations
 
-from metabolomix.arf2.match_results import _candidates, decode_match_result, representative
+from metabolomix.arf2.match_results import (
+    _candidates, decode_match_result, representative, spot_master_id)
 from metabolomix.arf2.reader import IonMode, _decode, _extract_times, _nested_at, load_raw_spots
 
 SOURCE_TEXT_DB = 16  # MsScanMatchResult Key26 の TextDB ビット
@@ -40,7 +41,8 @@ def _is_text_db_representative(container, rep: dict | None) -> bool:
     return False
 
 
-def spot_fields(raw_spot: list) -> dict:
+def spot_fields(raw_spot: list, index: int | None = None) -> dict:
+    master_id = spot_master_id(raw_spot, index)
     chromx = _get(raw_spot, 4)
     times = _extract_times(chromx) if isinstance(chromx, list) else {}
     container = _get(raw_spot, 56)
@@ -48,7 +50,7 @@ def spot_fields(raw_spot: list) -> dict:
     comment = _get(raw_spot, 25)
     istd = _get(raw_spot, 7)
     return {
-        "master_id": int(raw_spot[0]),
+        "master_id": master_id,
         "name": _text(_get(raw_spot, 12)),
         "formula": _text(_nested_at(_get(raw_spot, 13), 0)),
         "ontology": _text(_get(raw_spot, 14)),
@@ -71,4 +73,4 @@ def spot_fields(raw_spot: list) -> dict:
 
 def load_spot_fields(arf2_path) -> list[dict]:
     """`.arf2` の全スポットの欄をファイル順に返す。"""
-    return [spot_fields(raw) for raw in load_raw_spots(arf2_path)]
+    return [spot_fields(raw, i) for i, raw in enumerate(load_raw_spots(arf2_path))]

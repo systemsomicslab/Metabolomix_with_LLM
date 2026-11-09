@@ -1,17 +1,17 @@
 """MS-DIAL Console の実行体解決とコマンド組み立て。
 
 exe_path は引数で注入できる（テスト用 fake の差し込みに使う）。
-既定は `metabolomix.core.user_config` の `msdial.exe`（環境変数 MSDIAL_EXE →
-`lipidmix.local.toml` の `[msdial] exe`）から取得し、決められなければ
+既定は `metabolomix.core.user_config` の `msdial.exe`（`lipidmix.local.toml` の
+`[msdial] exe`）から取得し、決められなければ
 `MsdialExeNotFoundError`（EnvironmentError）を上げる。
 
 **Console を実際に起動して見張るのは `metabolomix.console.execution.supervise`**。
-同期呼出しも切り離しワーカー（`metabolomix.console.worker`）も pipeline の上流工程も
+pipeline の上流工程は
 そこを通り、成功・非ゼロ・timeout・取消・起動不能のどの終了経路でも終了証跡と
 成果物を残す。
 
 かつてここにあった `run_msdial` / `run_msdial_detached` は削除した。前者は非ゼロ
-終了で例外を送出し、呼び出し側（`console_run` の同期分岐）がそこで即 return して
+終了で例外を送出し、当時の呼び出し側がそこで即 return して
 生成物の収集を丸ごと飛ばしていた——**失敗した実行が何の証拠も残さない**という、
 `supervise` が解いた欠陥そのもの。後者は誰も監視しないまま Console を放流し、
 終了コードも終了理由も回収できなかった。どちらも代わりを増やさずに消す。
@@ -47,7 +47,7 @@ class MsdialExeNotFoundError(EnvironmentError):
 
 
 def get_exe_path() -> str:
-    """Console の実行体のパス（環境変数 MSDIAL_EXE → 設定ファイルの `[msdial] exe`）。"""
+    """Console の実行体のパス（設定ファイルの `[msdial] exe`）。"""
     try:
         setting = user_config.get_setting("msdial.exe")
     except user_config.ConfigInvalidError as exc:
@@ -57,9 +57,8 @@ def get_exe_path() -> str:
             "MS-DIAL Console の実行体が設定されていません。"
             + user_config.missing_hint("msdial.exe", _EXE_WHAT),
             details=user_config.describe_missing("msdial.exe"))
-    if setting.source == "config_file" and not Path(setting.value).is_file():
+    if not Path(setting.value).is_file():
         # 設定ファイルの値は利用者が書き写したパスなので、typo はここで出どころ付きで返す。
-        # 環境変数の値は PATH 解決される素の名前でありうるので存在確認しない。
         raise MsdialExeNotFoundError(
             f"{user_config.setting_label(setting)} が指すファイルがありません: {setting.value}",
             details=user_config.describe_missing("msdial.exe", setting))
@@ -80,7 +79,7 @@ def probe_console_exe(
     *,
     raise_on_os_error: bool = False,
 ) -> Literal["console", "not_console", "timeout"]:
-    """MSDIAL_EXE が Console 実行体かを --help の出力で判定し、時間切れを区別して返す。
+    """`[msdial] exe` が Console 実行体かを --help の出力で判定し、時間切れを区別して返す。
 
     Console は旧ビルドも master ビルドも --help（旧は引数エラー時の usage）に
     サブコマンド名 `lcms` を含む。GUI の MSDIAL.exe はコンソール出力を持たず、
@@ -116,20 +115,6 @@ def probe_console_exe(
     return "timeout"
 
 
-def is_console_exe(
-    exe_path: str,
-    timeout_s: int = PROBE_TIMEOUT_S,
-    *,
-    raise_on_os_error: bool = False,
-) -> bool:
-    """`probe_console_exe` が `"console"` を返したかだけを返す（時間切れは False）。
-
-    時間切れと「Console でない」を分けたい呼び出し元は `probe_console_exe` を使う。
-    """
-    return probe_console_exe(
-        exe_path, timeout_s, raise_on_os_error=raise_on_os_error) == "console"
-
-
 def probe_timeout_details() -> dict:
     """`MSDIAL_EXE_PROBE_TIMEOUT` の details（待った秒数と試行回数）。"""
     return {"timeout_s": PROBE_TIMEOUT_S, "attempts": PROBE_RETRIES + 1}
@@ -138,7 +123,7 @@ def probe_timeout_details() -> dict:
 def probe_timeout_message(exe: str) -> str:
     """`MSDIAL_EXE_PROBE_TIMEOUT` の文面（3 つの呼び出し元で共有する）。"""
     return (
-        f"Console の実行体（[msdial] exe / MSDIAL_EXE）の --help が {PROBE_TIMEOUT_S} 秒を"
+        f"Console の実行体（[msdial] exe）の --help が {PROBE_TIMEOUT_S} 秒を"
         f"{PROBE_RETRIES + 1} 回待っても返りませんでした: {exe}  "
         "Console でないとは判定できていません。初回起動の遅れ（Defender の走査・.NET の"
         "読み込み）なら、もう一度呼び直すと通ります。毎回この表示になるなら GUI の "
@@ -166,37 +151,6 @@ def build_msdial_cmd(
     return cmd
 
 
-def is_process_running(pid: int) -> bool:
-    """pid が生きているかを返す（判定できないときは False ＝安全側）。
-
-    **旧 `.detached-state.json` を持つジョブを判定するためだけに残している
-    互換 wrapper**。新しい経路は `metabolomix.core.process_control.same_process` を
-    使う——pid だけでは pid 再利用を見分けられず、別のプロセスを「同じ実行が
-    まだ生きている」と誤読するため。旧 state には creation_time が無いので、
-    そこだけはこの弱い判定しか使えない。
-    """
-    if not pid or pid < 0:
-        return False
-    if os.name == "nt":
-        import subprocess as _sp
-        try:
-            out = _sp.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"],
-                          stdout=_sp.PIPE, stderr=_sp.DEVNULL, stdin=_sp.DEVNULL,
-                          timeout=15, text=True, errors="replace")
-        except (OSError, _sp.TimeoutExpired):
-            return False
-        return str(int(pid)) in (out.stdout or "")
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True  # 自分のものではないが存在はする
-    except OSError:
-        return False
-    return True
-
-
 #: Console 実行体の名前。GUI（MSDIAL.exe）は候補にしない —— 引数を解釈せず
 #: ウィンドウを開いたまま返らないので、設定されると実行時に固まる。
 _CONSOLE_EXE_NAMES = ("msdialcui.exe", "msdialconsoleapp.exe")
@@ -213,7 +167,7 @@ def _default_search_roots() -> list[Path]:
 def msdial_exe_candidates(search_roots=None, max_depth: int = 3) -> list[str]:
     """MS-DIAL Console 実行体の候補を返す（設定はしない）。
 
-    MSDIAL_EXE を設定できるのは人間だけなので、サーバにできるのは「どこに
+    `[msdial] exe` を設定できるのは人間だけなので、サーバにできるのは「どこに
     ありそうか」を示すところまで。深さを制限するのは、ホーム配下を無制限に
     歩くと計画が数十秒止まるため。
     """
@@ -232,3 +186,40 @@ def msdial_exe_candidates(search_roots=None, max_depth: int = 3) -> list[str]:
                 if name.lower() in _CONSOLE_EXE_NAMES:
                     found.append(str(Path(dirpath) / name))
     return found
+
+
+def msdial_exe_setup_help() -> dict:
+    """Console の実行体が未設定の封筒に、誰が何をすべきかを機械可読で載せる。
+
+    設定ファイル（`lipidmix.local.toml`）の編集は MCP クライアントからはできない。
+    LLM に「設定してください」とだけ返すと、設定を試みて失敗するか黙って諦める。
+    人間の作業であることを型で示し、コピペできる手順を渡す。設定ファイルは
+    呼ばれるたびに読まれるので再起動は要らない。
+    """
+    from metabolomix.core import user_config
+
+    try:
+        candidates = msdial_exe_candidates()
+    except OSError:
+        candidates = []
+    config = user_config.config_file_path()
+    if config.is_file():
+        config_step = (f"{config} の [msdial] に exe = '<MSDIALCUI.exe のパス>' と書く"
+                       "（単一引用符で囲む。サーバの再起動は不要）")
+    else:
+        config_step = (f"{user_config.EXAMPLE_FILENAME} を {config} として複製し、"
+                       "[msdial] exe = '<MSDIALCUI.exe のパス>' と書く"
+                       "（単一引用符で囲む。サーバの再起動は不要）")
+    return {
+        "human_action_required": True,
+        "why": "設定ファイル（lipidmix.local.toml）の編集は MCP クライアントからはできません。",
+        "candidates": candidates[:10],
+        "how_to_set": [
+            config_step,
+            "書き方の例（lipidmix.local.toml）: [msdial] の節に "
+            "exe = 'C:\\MS-DIAL\\MSDIALCUI.exe'（Windows のパスは単一引用符で囲む）",
+        ],
+        "restart_required": False,
+        "restart_note": "設定ファイルは呼ばれるたびに読み直されるので、書き換えは次の呼び出しから"
+                        "効きます。MCP サーバの再起動は要りません。",
+    }

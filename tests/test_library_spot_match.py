@@ -8,10 +8,11 @@ import textwrap
 
 import pytest
 
-from metabolomix.core import mcp_core, session_state
+from metabolomix.core import session_state
 from metabolomix.library import tools
 from metabolomix.msdial import alignment_spot
 from tests.dcl_fixture import build_dcl_bytes
+from tests.config_fixtures import use_config
 
 _MSP = textwrap.dedent("""\
     NAME: GABA
@@ -35,8 +36,7 @@ _RECORDS = [
 @pytest.fixture(autouse=True)
 def workspace(tmp_path, monkeypatch):
     monkeypatch.setattr(session_state, "session", session_state.AnalysisSession())
-    monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path)
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     (tmp_path / "lib.msp").write_text(_MSP, encoding="utf-8")
     (tmp_path / "AlignmentResult_1.arf2").write_bytes(b"placeholder")
     (tmp_path / "AlignmentResult_1.dcl").write_bytes(build_dcl_bytes([
@@ -47,11 +47,19 @@ def workspace(tmp_path, monkeypatch):
         {"precursor_mz": 999.0, "rt": 2.0, "spectrum": [(100.0, 10.0)]},
     ]))
     monkeypatch.setattr(alignment_spot, "load_catalog", lambda _path: _RECORDS)
-    tools.library_load()
+    assert json.loads(tools.library_load(file_path=str(tmp_path / "lib.msp")))["status"] == "success"
+    _FILES.update(arf2_path=str(tmp_path / "AlignmentResult_1.arf2"),
+                  dcl_file=str(tmp_path / "AlignmentResult_1.dcl"))
     return tmp_path
 
 
+#: workspace が書いた `.arf2` / `.dcl`（データセットを開かずに、明示のパスで照合する）。
+_FILES: dict = {}
+
+
 def _match(**kwargs):
+    for key, value in _FILES.items():
+        kwargs.setdefault(key, value)
     return json.loads(tools.library_match_feature(**kwargs))
 
 

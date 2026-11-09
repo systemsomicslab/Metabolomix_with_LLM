@@ -430,9 +430,11 @@ class TestArfBlockDecode(unittest.TestCase):
         blob = msgpack.packb("メタデータ", use_bin_type=True) + good
         self.assertEqual(len(arf_reader.deserialize(io.BytesIO(blob))), 1)
 
-    def test_groups_shorter_than_three_rows_are_dropped(self):
+    def test_groups_of_one_or_two_rows_are_kept(self):
+        # 1〜2 試料のアラインメントは行が 1〜2 本。群は行数でなく行の形で見分ける。
         blob = lz4_container(msgpack_stream([[arf_row(), arf_row()]]))
-        self.assertEqual(arf_reader.deserialize(io.BytesIO(blob)), [])
+        spots = arf_reader.deserialize(io.BytesIO(blob))
+        self.assertEqual([len(s["AlignedPeakProperties"]) for s in spots], [2])
 
     def test_representative_row_supplies_the_spot_fields(self):
         blob = lz4_container(msgpack_stream([arf_group()]))
@@ -694,113 +696,13 @@ class TestNeverExecutedToolsSmoke(unittest.TestCase):
 
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        # セッションはパーサ別スロットを持つ可変グローバル。試験間で持ち越さない。
+        # セッションは可変グローバル。試験間で持ち越さない。
         state.session = state.AnalysisSession()
 
     def write(self, name: str, payload: bytes) -> str:
         path = Path(self.tmp.name) / name
         path.write_bytes(payload)
         return str(path)
-
-    def eic_file(self) -> str:
-        spots = [
-            eic_spot(0, rt=1.5, mz=100.25, samples=[
-                {"file_id": 0, "top": 1.5, "left": 1.4, "right": 1.6,
-                 "points": [(1.5, 50.0)]},
-            ]),
-            eic_spot(1, rt=12.5, mz=760.5, samples=[
-                {"file_id": 1, "top": 12.5, "left": 12.4, "right": 12.6,
-                 "points": [(12.5, 8000.0)]},
-            ]),
-        ]
-        return self.write("synthetic.EIC.aef", css1_bytes(spots))
-
-    def test_eic_parser_reports_the_summary(self):
-        from metabolomix.eic.tools import eic_parser
-
-        result = eic_parser(file_path=self.eic_file())
-        self.assertIn("EIC解析完了", result)
-        self.assertIn("total_spots", result)
-
-    def test_eic_search_by_intensity_puts_the_strong_spot_first(self):
-        from metabolomix.eic.tools import eic_search
-
-        result = eic_search(file_path=self.eic_file(), sort="max_intensity", max_results=2)
-        lines = result.splitlines()
-        header = next(i for i, line in enumerate(lines) if line.startswith("spot_id\t"))
-        self.assertIn("760", lines[header + 1])
-
-    def test_eic_search_filters_by_mz_range(self):
-        from metabolomix.eic.tools import eic_search
-
-        result = eic_search(file_path=self.eic_file(), min_mz=700.0, max_mz=800.0)
-        self.assertIn("一致件数: 1", result)
-
-    def test_eic_search_filters_by_rt_range(self):
-        from metabolomix.eic.tools import eic_search
-
-        result = eic_search(file_path=self.eic_file(), min_rt=0.0, max_rt=5.0)
-        self.assertIn("一致件数: 1", result)
-
-    def test_arf2_annotate_identities_returns_a_table(self):
-        from metabolomix.arf2.tools import arf2_annotate_identities
-
-        path = self.write("synthetic.arf2", lz4_container(msgpack_stream([arf2_spot()])))
-        result = arf2_annotate_identities(file_path=path, max_rows=10)
-        self.assertIn("PC 34:1", result)
-
-    def test_arf2_annotate_identities_shows_the_curation_flag(self):
-        """Task 9: wrong フラグが付いたスポットは curation_flag 列に出る。"""
-        from metabolomix.arf2.tools import arf2_annotate_identities
-        from metabolomix.curation import flags as curation_flags
-
-        path = Path(self.write(
-            "synthetic.arf2", lz4_container(msgpack_stream([arf2_spot()]))))
-        curation_flags.FlagStore(curation_flags.curation_dir(path)).append(
-            [{"spot_id": 7, "flag": "wrong"}],
-            alignment=curation_flags.alignment_key(path),
-            review_id="r", source="user")
-
-        result = arf2_annotate_identities(file_path=str(path), max_rows=10)
-
-        header, *body = result.splitlines()[-2:]
-        self.assertIn("curation_flag", header)
-        self.assertIn("wrong", body[0])
-
-    def test_arf2_annotate_identities_shows_assign(self):
-        from metabolomix.arf2.tools import arf2_annotate_identities
-        from metabolomix.curation import flags as curation_flags
-
-        path = Path(self.write(
-            "synthetic.arf2", lz4_container(msgpack_stream([arf2_spot()]))))
-        curation_flags.FlagStore(curation_flags.curation_dir(path)).append(
-            [{"spot_id": 7, "flag": "assign", "name": "PC 34:2", "level": "sum"}],
-            alignment=curation_flags.alignment_key(path), review_id="cs-x", source="user")
-
-        result = arf2_annotate_identities(file_path=str(path), max_rows=10)
-
-        header, *body = result.splitlines()[-2:]
-        column = header.split("\t").index("curation_flag")
-        self.assertEqual(body[0].split("\t")[column], "assign:PC 34:2")
-
-    def test_arf2_annotate_identities_survives_a_malformed_flags_file(self):
-        """I6: 壊れた flags.jsonl でも一覧は返し、curation_flag を空にして 1 行で知らせる。"""
-        from metabolomix.arf2.tools import arf2_annotate_identities
-        from metabolomix.curation import flags as curation_flags
-
-        path = Path(self.write(
-            "synthetic.arf2", lz4_container(msgpack_stream([arf2_spot()]))))
-        flags_path = curation_flags.FlagStore(curation_flags.curation_dir(path)).path
-        flags_path.parent.mkdir(parents=True, exist_ok=True)
-        flags_path.write_text('{"spot_id": 7, "fl\n', encoding="utf-8")
-
-        result = arf2_annotate_identities(file_path=str(path), max_rows=10)
-
-        self.assertIn("PC 34:1", result)
-        notes = [l for l in result.splitlines() if l.startswith("#") and "flags.jsonl" in l]
-        self.assertEqual(len(notes), 1)
-        header, *body = result.splitlines()[-2:]
-        self.assertEqual(body[0].split("\t")[header.split("\t").index("curation_flag")], "")
 
     def test_dcl_find_msms_returns_the_matching_spectrum(self):
         from metabolomix.dcl.tools import dcl_find_msms

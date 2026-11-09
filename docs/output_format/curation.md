@@ -104,7 +104,7 @@ Wrong を初期選択しない。メモが自動の判定根拠のままなら�
 Correct（無印か confirmed）/ Confirmed / Suspect / Wrong / Flagged（Suspect か Wrong）。
 注釈を確かめたスポット（`curation/apply.py` `confirmed_spots`: 記録の `confirmed` ∪ `_tags.xml` の Confirmed −
 最新の記録が `wrong` / `suspect`）には自動判定の likely_wrong を当てない: 初期選択・`exclude_auto_likely_wrong`
-（`arf_plot_species` / `arf_pca_species` / `arf_plot_group_intensity`）・`curation_suggest` の likely_wrong 対象。
+（`dataset_plot(kind="species")` / `dataset_plot(kind="species_pca")` / `dataset_plot(kind="group_intensity")`）・`curation_suggest` の likely_wrong 対象。
 ミラープロットは縦軸に相対強度（上下とも各側の最大値を 100）の目盛り 0/50/100 を付け、
 ピークに m/z（小数 4 桁）のラベルを `library_plot_mirror` と同じ規則（強度降順の貪欲法・
 縦横とも重なるものを飛ばす・片側 25 本まで・側ごとに独立）で付ける。
@@ -220,7 +220,7 @@ neg 154 件中 9 件・pos 469 件中 27 件に立った。
 ### `curation_suggest` の戻り値
 
 間違いになったスポットと未注釈スポットに、注釈の候補（①②）と別スポットのイオンとしての説明（④）を並べる。
-**先に `library_load` と `curation_review`**（どちらも無ければ `missing_state`）。
+**先に `library_load` と `curation_review`**（どちらも無ければ `missing_state`）。対象のデータセットは `dataset_handle`（省けば直近）。
 
 | キー | 意味 |
 |---|---|
@@ -356,10 +356,18 @@ EIC（`partner_eic`）を持つ。
 - 候補付けビューアの「元の注釈に戻す」は `clear` を送る。`clear` はそのスポットの**有効な判断を丸ごと**（`wrong` でも `assign` でも）消し、
   `_tags.xml` の Misannotation も外す。
 - `curation_flags` の TSV は 7 列: `spot_id`・`flag`・`name`（`assign` の記録名）・`of`（`redundant` の相手）・`note`・`source`・`ts`。
-- `arf2_annotate_identities` の `curation_flag` 列は有効な判断: `wrong` / `suspect` / `assign:<記録名>` / `redundant`（無ければ空）。
+- `dataset_feature_search` の `curation_flag` 列は有効な判断: `wrong` / `suspect` / `assign:<記録名>` / `redundant`（無ければ空）。
 - `curation_review` のスポットの `flag` / `flag_note` は `wrong` / `suspect` / `confirmed` だけ。`assign` / `redundant` は別項目 `decision`
   （`{flag, name}` または `{flag, of}`）に出る。
 - エクスポートでの扱い（下の「エクスポートのメタ行」以降）: `assign` は同定を置き換え、`redundant` は除外する。
+
+### `curation_submit` の戻り値の `open_handles`（開いているデータセットへの反映）
+
+記録の後、同じ `.arf2`（sha256 で照合）を開いているハンドルすべての `curation_flags`（データセットが持つ
+有効な判断の写し）を読み直す。書き出しの `apply_curation` は出したばかりの `wrong` / `redundant` をすぐ使う。
+`refreshed` は読み直したハンドル ID、`not_refreshed` は別の呼び出しがそのハンドルのロックを持っていて待ち切れず
+（数秒）読み直さなかったもの。後者は、そのハンドルの呼び出しが終わった後で
+`dataset_close` → `load_dataset` で開き直すと新しい判断を読む。同じ `.arf2` を開いているハンドルが無ければこのキーは出ない。
 
 ### `curation_submit` の戻り値の `tags_xml`（MS-DIAL への反映）
 
@@ -411,7 +419,7 @@ MS-DIAL はアラインメントを保存するたびにメモリ上のタグで
 
 ### エクスポートのメタ行（`# curation = ...`）
 
-`arf_export_differential` / `dataset_export_differential` は既定（`apply_curation=True`）で
+`dataset_export_differential` / `dataset_export_differential` は既定（`apply_curation=True`）で
 有効な判断（`curation_flags` と同じ、スポットごとの最新 1 行・`clear` 済みは除く。`wrong` / `suspect` /
 `assign` / `redundant`）を読み、差次的エクスポートの契約 15 列（`export_contract.EXPORT_COLUMNS`）自体は変えずに、
 メタ行ブロックの `source_lines` スロットの**末尾**（`# source_arf`/`# source_mztab` 等、
@@ -440,7 +448,7 @@ MS-DIAL はアラインメントを保存するたびにメモリ上のタグで
 
 | `state` | 経路 | 条件 |
 |---|---|---|
-| `applied` | ARF 経路（`arf_export_differential`）は `apply_curation=True`（既定）なら常にこれ。mzTab 経路（`dataset_export_differential`）は `apply_curation=True` かつ、隣接する `.arf` との対応が検証済み（`DatasetState.feature_qc["source"] == "arf"`、SMF_ID が `MasterAlignmentID` と同じ空間だと確認できている） | `wrong` と `redundant` のスポットを実際に出力から除外し、`assign` のスポットの同定を置き換え、`curation_wrong_excluded`/`curation_suspect`（と `assign` / `redundant` があれば `curation_assigned`/`curation_redundant_excluded`）を出す |
+| `applied` | ARF 経路（`dataset_export_differential`）は `apply_curation=True`（既定）なら常にこれ。mzTab 経路（`dataset_export_differential`）は `apply_curation=True` かつ、隣接する `.arf` との対応が検証済み（`DatasetState.feature_qc["source"] == "arf"`、SMF_ID が `MasterAlignmentID` と同じ空間だと確認できている） | `wrong` と `redundant` のスポットを実際に出力から除外し、`assign` のスポットの同定を置き換え、`curation_wrong_excluded`/`curation_suspect`（と `assign` / `redundant` があれば `curation_assigned`/`curation_redundant_excluded`）を出す |
 | `not_applied` | 両経路 | `apply_curation=False` を明示した。判断はあっても意図的に無視——行は 1 つも落とさず、同定も置き換えない |
 | `unmapped` | mzTab 経路のみ | `apply_curation=True` だが SMF_ID と `MasterAlignmentID` の対応が未検証（`feature_qc["source"] != "arf"`）。**判断が 1 件でもあっても行は 1 つも落とさず、`assign` も当てない**——対応が確認できないまま除外・置き換えすると、mzTab の別 feature を `.arf2` のスポット番号と取り違えて黙って消す（または別の同定を付ける）しかねないため |
 
@@ -469,9 +477,9 @@ MS-DIAL はアラインメントを保存するたびにメモリ上のタグで
 | `assigned` / `redundant_excluded` | 有効な `assign` / `redundant` があるときだけ出るキー。`state == "applied"` のときだけ数字（メタ行の `curation_assigned` / `curation_redundant_excluded` と同じ値）、それ以外は `null` |
 | `orphaned` | 同じファイル名で sha256 が違う（以前の版の）`.arf2` に付いた有効フラグの件数。当てないので行は落とさない。1 件以上なら payload の `warnings` にも同じ内容が出る。**メタ行には出さない** |
 
-**パイプライン（`pipeline_run`）が書く差次的エクスポートはフラグを当てない。** キュレーションは
-pipeline に入れていない（worker は session もフラグ記録も読まない）ので、フラグを反映した
-ファイルが要るときは `dataset_export_differential` / `arf_export_differential` で書き出し直す。
+**パイプライン（`pipeline_run`）は差次的エクスポートを書かない**（2026-11 の D 段から、pipeline は Console と
+解析フォルダの受領までで止まる）。フラグを反映したファイルは、`load_dataset(pipeline_path=…)` で開いてから
+`dataset_compare` → `dataset_export_differential` で書く。
 
 ### フラグ記録が壊れているとき
 
@@ -482,9 +490,9 @@ pipeline に入れていない（worker は session もフラグ記録も読ま�
 | ツール | 振る舞い |
 |---|---|
 | `curation_review` / `curation_submit` / `curation_flags` | `{"status": "error", "message", "flags_file", "line"}`。`curation_submit` は壊れた記録に追記しない |
-| `arf_export_differential` | 同上の形でエラー。ファイルは書かない |
+| `dataset_export_differential` | 同上の形でエラー。ファイルは書かない |
 | `dataset_export_differential` | `{"error": {"code": "CURATION_FLAGS_INVALID", "message", "details": {"flags_file", "line"}}}`。ファイルは書かない |
-| `arf2_annotate_identities` | 一覧は返す。`curation_flag` 列を空にし、ヘッダに壊れた記録を名指しする注記を 1 行足す |
+| `dataset_feature_search` | 一覧は返す。`curation_flag` 列を空にし、ヘッダに壊れた記録を名指しする注記を 1 行足す |
 
 `line` は 1 始まりの行番号。その行を直すか消してから、もう一度実行する。
 

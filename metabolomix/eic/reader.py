@@ -1,7 +1,6 @@
 import io
 import msgpack
 import os
-import glob
 import struct
 
 
@@ -389,9 +388,12 @@ def top_eic_spots_by_max_intensity(results, top_n=20):
 
 # --- 実行 ---
 if __name__ == "__main__":
-    from metabolomix.core.data_config import get_data_dir
-    aef_files = glob.glob(os.path.join(str(get_data_dir()), "*.aef"))  # 探索先は環境変数で上書き可
-    path = aef_files[0] if aef_files else None
+    import argparse
+
+    parser = argparse.ArgumentParser(description="MS-DIAL .EIC.aef ファイルを解析します。")
+    parser.add_argument("--file", "-f", required=True,
+                        help="解析する .EIC.aef ファイルのパス（必須。データフォルダは探さない）")
+    path = parser.parse_args().file
 
     if os.path.exists(path):
         results = parse_eic_aef_css1(path)

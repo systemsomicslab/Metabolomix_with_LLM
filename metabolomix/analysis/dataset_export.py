@@ -12,8 +12,7 @@
 - 探索専用のデータセットでないか。中断された実行の出力では、欠けた検体が
   「その群には無い」ようにしか見えない。
 
-メタ行の前処理条件は `ds.preprocessing_recipe`（今の状態）ではなく、その結果が
-親に持つ前処理の `provenance.effective_parameters` から取る。
+メタ行の前処理条件は、その結果が使った行列の登録（`ds.stat_matrices` の前処理の設定）から取る。
 """
 from __future__ import annotations
 
@@ -23,13 +22,19 @@ from pathlib import Path
 
 from metabolomix.analysis import export_contract
 from metabolomix.analysis.result_state import assert_current
+from metabolomix.analysis.stats_results import as_two_group, get_matrix
 from metabolomix.core.atomic_io import DomainError
 
 __all__ = ["export_dataset_result"]
 
 
-def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = None) -> dict:
+def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = None,
+                          contrast_id: str | None = None) -> dict:
     """差次的結果を InChIKey 付きの契約 TSV として書き出す。
+
+    `result` は統計エンジンの `compare` の記録（`as_two_group` で 1 つの対比を読む。対比が複数なら
+    `contrast_id` が要り、無ければ `CONTRAST_REQUIRED`）。エンジンのメタ行を `msi_note` の後ろへ足す
+    （`export_contract.stats_meta_lines`）。15 列・列の順序・契約の版は変えない。
 
     Returns
     -------
@@ -45,19 +50,8 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
             {"job_path": getattr(ds, "job_path", None),
              "source_verification": getattr(ds, "source_verification", None)})
     assert_current(ds, result)
-
-    if result.get("kind") != "two_group":
-        raise DomainError("ANALYSIS_RESULT_NOT_FOUND",
-                          "2 群比較の結果ではありません。",
-                          {"kind": result.get("kind")})
-    if (result.get("contract_version") != export_contract.CONTRACT_VERSION
-            or result.get("log2fc_sign") != export_contract.LOG2FC_SIGN):
-        raise DomainError(
-            "ANALYSIS_RESULT_NOT_FOUND",
-            "この差次的結果は現行エクスポート契約と互換性がありません。"
-            "dataset_differential を再実行してください。",
-            {"result_contract_version": result.get("contract_version"),
-             "contract_version": export_contract.CONTRACT_VERSION})
+    record = result
+    result = as_two_group(record, contrast_id)      # 比較でない結果・対比の曖昧さはここで DomainError
 
     q_threshold = result["q_threshold"]
     log2fc_threshold = result["log2fc_threshold"]
@@ -109,9 +103,9 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
             "q_value": row.get("q"),
             "mean_a": row.get("mean_a"),
             "mean_b": row.get("mean_b"),
-            "significant": export_contract.is_significant(
-                q=row.get("q"), log2fc=row.get("log2fc"),
-                q_threshold=q_threshold, log2fc_threshold=log2fc_threshold),
+            # as_two_group が付けた印（判定が changed のときだけ真。R16）
+            "significant": export_contract.row_significant(
+                row, q_threshold=q_threshold, log2fc_threshold=log2fc_threshold),
         })
 
     curation_line = None
@@ -144,7 +138,8 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
              "n_unannotated": n_unannotated})
 
     lines = [*_meta_lines(ds, result, rows, n_total, n_unannotated,
-                          curation_line=curation_line),
+                          curation_line=curation_line,
+                          preprocess=_engine_preprocess(ds, record)),
              "\t".join(export_contract.EXPORT_COLUMNS)]
     lines += [export_contract.format_row(r) for r in rows]
     out = _atomic_write_text(Path(path), "\n".join(lines) + "\n")
@@ -153,6 +148,7 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
         "output_path": str(out),
         "contract_version": export_contract.CONTRACT_VERSION,
         "result_id": result["provenance"]["result_id"],
+        "contrast_id": result["contrast_id"],
         "group_a": result["a"],
         "group_b": result["b"],
         "n_features_total": n_total,
@@ -174,35 +170,11 @@ def _as_spot_id(fid):
         return fid
 
 
-#: pipeline run から引き継いだ結果で、run の前処理レシピを読めなかったときの値。
-HANDOFF_PREPROCESS_UNKNOWN = "unknown（pipeline run の前処理結果を読めませんでした）"
-
-
-def _preprocess_parameters(ds, result: dict) -> dict | str:
-    """その結果が実際に使った前処理条件を返す（今の状態ではなく来歴から）。
-
-    pipeline run から引き継いだ結果（来歴に `handoff`）は、session の状態へ
-    **決して**フォールバックしない。親の前処理は run 側にあって `ds.results` には
-    無く、`ds.preprocessing_recipe` は空か、session で後からやり直した別の
-    レシピ——どちらを書いても正しい数字に違う条件のラベルが付く。引き継ぎ時に
-    写したレシピを使い、無ければ不明と明示する。
-    """
-    handoff = result["provenance"].get("handoff")
-    if handoff:
-        recipe = handoff.get("preprocess")
-        return dict(recipe) if recipe else HANDOFF_PREPROCESS_UNKNOWN
-    for parent_id in result["provenance"].get("parent_ids") or []:
-        parent = (ds.results or {}).get(parent_id)
-        if parent:
-            return parent["provenance"].get("effective_parameters", {})
-    return dict(getattr(ds, "preprocessing_recipe", {}) or {})
-
-
 def _unadjusted_confounded_lines(prov: dict) -> list[str]:
     """spec §7.4(R16): allow_confounded=true で継続した比較は、TSV付随メタにも
     その旨を残す。図（ASCII 但し書き）・レポートと合わせて3つの経路の1つ。
 
-    真偽値の行（機械可読）と、`run_comparison` が来歴へ残した日本語の説明
+    真偽値の行（機械可読）と、`as_two_group` が来歴へ足した日本語の説明
     （`result["provenance"]["warnings"]`）の両方を書く。未調整でなければ何も
     足さない——常に行があると、本当に注意が要る比較が埋もれる。
     """
@@ -216,20 +188,14 @@ def _unadjusted_confounded_lines(prov: dict) -> list[str]:
     return lines
 
 
-def _effect_size_lines(result: dict) -> list[str]:
-    """v2の効果量定義を付随メタへ継承する（spec §10）。
-
-    15列そのものは変えない（別リポジトリとの契約）。v1 の log2FC は
-    `log2(x + pseudo_count)` 空間の平均差、v2 は統計変換前の算術平均比で、
-    **同じ列名のまま定義だけが違う**。定義を書かずに出すと、どちらの数字かを
-    後から言えない。v1 の結果（この欄を持たない）には何も足さない。
-    """
-    definition = result.get("effect_size_definition")
-    return [] if not definition else [f"# effect_size_definition = {definition}"]
+def _engine_preprocess(ds, record: dict) -> dict | str:
+    """エンジンの結果の前処理条件（行列の登録にある前処理の設定）。無ければ不明と明示する。"""
+    entry = get_matrix(ds, record["matrix_id"])
+    return dict(entry["config"]) if entry else f"unknown（行列 {record['matrix_id']} が登録に無い）"
 
 
 def _meta_lines(ds, result, rows, n_total, n_unannotated,
-                *, curation_line=None) -> list[str]:
+                *, curation_line, preprocess) -> list[str]:
     prov = result["provenance"]
     return export_contract.build_meta(
         group_a=result["a"], n_a=result["n_a"],
@@ -250,10 +216,10 @@ def _meta_lines(ds, result, rows, n_total, n_unannotated,
             f"# preprocess_id = {'; '.join(prov.get('parent_ids') or [])}",
             f"# source_verification = {getattr(ds, 'source_verification', '')}",
             *_unadjusted_confounded_lines(prov),
-            *_effect_size_lines(result),
             *([curation_line] if curation_line else []),
         ],
-        preprocess_line=f"# preprocess = {_preprocess_parameters(ds, result)}",
+        preprocess_line=f"# preprocess = {preprocess}",
+        stats_lines=export_contract.stats_meta_lines(result),
     )
 
 

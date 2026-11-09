@@ -20,12 +20,13 @@ from metabolomix.dataset import opening
 from metabolomix.library import tools as library_tools
 from metabolomix.mztab import identity as mztab_identity
 from metabolomix.tools import dataset_analysis_tools as T
-from metabolomix.tools import handle_tools, mztab_tools
+from metabolomix.tools import handle_tools, mztab_tools, stats_tools
 from metabolomix.tools import reanalysis_tools as R
 from tests.reanalysis_fixtures import NEG_FEATURES, write_mztab
+from tests.config_fixtures import use_config
+from tests.engine_chain import FLAT, engine_compare, engine_preprocess
 
 GOLDEN = Path(__file__).parent / "fixtures" / "handle_golden_no_handle.json"
-HC, RA = ["HC1", "HC2", "HC3"], ["RA1", "RA2", "RA3"]
 UNKNOWN = "dh_000000000000"
 
 
@@ -46,24 +47,26 @@ def pos_mztab(tmp_path):
 
 
 def _open(path) -> str:
-    out = json.loads(handle_tools.dataset_handle_open(mztab_path=str(path), library="none"))
+    # 旧 `dataset_handle_open` は直近を動かさなかった。この検査は「ハンドルを渡す呼び出しは対話の状態に
+    # 触れない」ことを縛るので、開いたあとで直近を元に戻す（`load_dataset` はいつも直近にする）。
+    previous = session_state.session.current_handle_id
+    out = json.loads(handle_tools.load_dataset(mztab_path=str(path), library="none"))
+    session_state.session.current_handle_id = previous
     return out["dataset_handle"]
 
 
 def _tools(tmp_path):
-    """ハンドルを受けるツール（既存の 13 と dataset_alignment_qc）と最小の引数。"""
+    """ハンドルを受けるツール（既存のものと dataset_alignment_qc）と最小の引数。"""
     return [
         (mztab_tools.dataset_status, {}),
-        (T.dataset_preprocess, {}),
-        (T.dataset_pca, {}),
-        (T.dataset_differential, {"group_a": HC, "group_b": RA}),
+        (stats_tools.dataset_preprocess, {}),
+        (stats_tools.dataset_pca, {}),
+        (stats_tools.dataset_compare, {"reference_group": "HC", "test_group": "RA"}),
         (T.dataset_export_differential, {"output_path": str(tmp_path / "x.tsv")}),
         (T.dataset_export_evidence_bundle, {"output_dir": str(tmp_path / "b"), "result_id": "r"}),
         (T.dataset_set_sample_metadata, {"manifest_path": str(tmp_path / "m.tsv")}),
-        (T.dataset_statistic, {"specification": {}, "matrix_result_id": "m"}),
-        (T.dataset_build_matrix, {"recipe": {}}),
         (T.dataset_feature_search, {"feature_ids": ["1"]}),
-        (library_tools.library_load, {"ion_mode": "positive"}),
+        (library_tools.library_load, {}),
         (library_tools.library_match_feature, {"precursor_mz": 104.107}),
         (library_tools.library_plot_mirror, {}),
         (R.dataset_alignment_qc, {}),
@@ -84,7 +87,7 @@ def _fake_pipeline_run(tmp_path, *names: str) -> Path:
     """
     run = tmp_path / "pipeline_x"
     (run / "input").mkdir(parents=True)
-    (run / "pipeline-run.json").write_text('{"schema": "pipeline-run.v1"}', encoding="utf-8")
+    (run / "pipeline-run.json").write_text('{"schema": "pipeline-run.v1", "upstream": {"console_job_path": "job/analysis-job.json"}}', encoding="utf-8")
     for name in names:
         (run / "input" / name).write_bytes(b"")
     return run
@@ -96,9 +99,9 @@ def test_handle_open_finds_pipeline_arf2(tmp_path, monkeypatch, pos_mztab):
 
     run = _fake_pipeline_run(tmp_path, "AlignResult-1.arf2", "AlignResult-1.dcl")
     monkeypatch.setattr(opening, "_load",
-                        lambda kind, path, allow: load_dataset_state(mztab_path=pos_mztab))
+                        lambda *_args: load_dataset_state(mztab_path=pos_mztab))
 
-    out = json.loads(handle_tools.dataset_handle_open(pipeline_path=str(run), library="none",
+    out = json.loads(handle_tools.load_dataset(pipeline_path=str(run), library="none",
                                                       source="mztab"))
 
     assert out["status"] == "success", out
@@ -112,9 +115,9 @@ def test_handle_open_picks_newest_arf2_name_in_pipeline_input(tmp_path, monkeypa
     run = _fake_pipeline_run(tmp_path, "AlignResult-1.arf2", "AlignResult-2.arf2",
                              "AlignResult-2.dcl")
     monkeypatch.setattr(opening, "_load",
-                        lambda kind, path, allow: load_dataset_state(mztab_path=pos_mztab))
+                        lambda *_args: load_dataset_state(mztab_path=pos_mztab))
 
-    out = json.loads(handle_tools.dataset_handle_open(pipeline_path=str(run), library="none",
+    out = json.loads(handle_tools.load_dataset(pipeline_path=str(run), library="none",
                                                       source="mztab"))
 
     assert out["arf2"] == "AlignResult-2.arf2"
@@ -126,37 +129,46 @@ def test_handle_open_without_pipeline_arf2_stays_null(tmp_path, monkeypatch, pos
 
     run = _fake_pipeline_run(tmp_path)
     monkeypatch.setattr(opening, "_load",
-                        lambda kind, path, allow: load_dataset_state(mztab_path=pos_mztab))
+                        lambda *_args: load_dataset_state(mztab_path=pos_mztab))
 
-    out = json.loads(handle_tools.dataset_handle_open(pipeline_path=str(run), library="none",
+    out = json.loads(handle_tools.load_dataset(pipeline_path=str(run), library="none",
                                                       source="mztab"))
 
     assert out["arf2"] is None and out["dcl"] is None
 
 
 def test_unknown_handle_is_an_error_not_the_global_session(tmp_path, pos_mztab):
-    mztab_tools.dataset_load(mztab_path=str(pos_mztab))       # 対話のセッションにはデータがある
+    handle_tools.load_dataset(mztab_path=str(pos_mztab))       # 対話のセッションにはデータがある
     for tool, kwargs in _tools(tmp_path):
         out = json.loads(tool(**kwargs, dataset_handle=UNKNOWN))
         assert out["error"]["code"] == "DATASET_HANDLE_NOT_FOUND", tool.__name__
         assert out["error"]["details"]["dataset_handle"] == UNKNOWN
 
 
+def _declare_groups(ds):
+    """試料名（HC1 …）はトークンに割れないので、群を MS-DIAL の試料の宣言として与える（QC は比較に入らない）。"""
+    ds.msdial_samples = [{"name": name, "group": name[:2] if name[:2] in ("HC", "RA") else None,
+                          "role": "qc" if name.startswith("QC") else "sample"}
+                         for name in ds.sample_names]
+    return ds
+
+
 def test_preprocess_on_handle_leaves_global_and_other_handle_untouched(pos_mztab):
-    mztab_tools.dataset_load(mztab_path=str(pos_mztab))
+    handle_tools.load_dataset(mztab_path=str(pos_mztab))
     a, b = _open(pos_mztab), _open(pos_mztab)
-    out = json.loads(T.dataset_preprocess(normalize="pqn", dataset_handle=a))
-    assert out["status"] == "success"
-    assert handles.registry.get(a).dataset.pp_matrix is not None
-    assert handles.registry.get(b).dataset.pp_matrix is None
-    assert session_state.session.dataset.pp_matrix is None
+    other = set(handles.registry.get(b).dataset.stat_matrices)
+    interactive = set(session_state.session.dataset.stat_matrices)
+    out = engine_preprocess(normalize="pqn", dataset_handle=a)
+    assert out["matrix_id"] in handles.registry.get(a).dataset.stat_matrices
+    assert set(handles.registry.get(b).dataset.stat_matrices) == other
+    assert set(session_state.session.dataset.stat_matrices) == interactive
+    assert out["matrix_id"] not in other | interactive
 
 
 def test_differential_and_search_on_handle(pos_mztab):
     a = _open(pos_mztab)
-    T.dataset_preprocess(dataset_handle=a)
-    diff = json.loads(T.dataset_differential(group_a=HC, group_b=RA, dataset_handle=a))
-    assert diff["status"] == "success"
+    _declare_groups(handles.registry.get(a).dataset)
+    diff = engine_compare("HC", "RA", dataset_handle=a)
     search = json.loads(T.dataset_feature_search(feature_ids=["1"], dataset_handle=a))
     assert search["stats_source"]["result_ids"] == [diff["result_id"]]
     status = json.loads(mztab_tools.dataset_status(dataset_handle=a))
@@ -175,10 +187,9 @@ def test_library_load_into_handle_keeps_global_empty(monkeypatch, tmp_path, pos_
     msp.parent.mkdir()
     msp.write_text("NAME: Choline\nPRECURSORMZ: 104.107\nIONMODE: Positive\nNum Peaks: 2\n"
                    "60.0808 100\n104.107 50\n", encoding="ascii")
-    monkeypatch.setenv("MSDIAL_MSP_POS", str(msp))
-    monkeypatch.setenv("LIPIDMIX_LIBRARY_CACHE_DIR", str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     a = _open(pos_mztab)
-    out = json.loads(library_tools.library_load(ion_mode="positive", dataset_handle=a))
+    out = json.loads(library_tools.library_load(file_path=str(msp), dataset_handle=a))
     assert out["status"] == "success"
     assert str(msp.parent) not in json.dumps(out)
     assert handles.registry.get(a).library.store is not None
@@ -186,22 +197,29 @@ def test_library_load_into_handle_keeps_global_empty(monkeypatch, tmp_path, pos_
 
 
 def _scrub(value, tmp: str):
-    """乱数の ID・一時ディレクトリ・パスを含む指紋を伏せる（それ以外は 1 文字も変えずに比べる）。"""
+    """乱数・時刻の ID・一時ディレクトリ・パスを含む指紋を伏せる（それ以外は 1 文字も変えずに比べる）。"""
     import re
     text = json.dumps(value, ensure_ascii=False, sort_keys=True)
     text = re.sub(r"res_[0-9a-f]{32}", "res_X", text)
-    # データセットの指紋は読んだファイルのパスを含む（置き場所で変わる）
+    # データセットの指紋は読んだファイルのパスを含む（置き場所で変わる）。行列・比較の ID はその指紋から作る
     text = re.sub(r'"dataset_hash": "[0-9a-f]{64}"', '"dataset_hash": "X"', text)
+    text = re.sub(r"mx_[0-9a-f]{16}", "mx_X", text)
+    text = re.sub(r"cmp_[0-9a-f]{12}", "cmp_X", text)
+    # 統計の記録の ID は時刻を含む
+    text = re.sub(r"s_\d{8}T\d{6}Z_[0-9a-f]{8}", "s_X", text)
     for form in (tmp, tmp.replace("\\", "/"), json.dumps(tmp)[1:-1]):
         text = text.replace(form, "<TMP>")
     return json.loads(text)
 
 
 def golden_outputs(directory: Path) -> dict:
-    """ハンドルを渡さない呼び出しの戻り値（変更前のコードでも同じ関数で採る）。"""
+    """ハンドルを渡さない呼び出しの戻り値（変更前のコードでも同じ関数で採る）。
+
+    前処理と比較は統計エンジンのツール（D 段で v1 の鎖を消したときに golden の該当部分を採り直した）。
+    """
     path = write_mztab(directory / "AlignResult-1.mzTab")
     session_state.session = session_state.AnalysisSession()
-    mztab_tools.dataset_load(mztab_path=str(path))
+    handle_tools.load_dataset(mztab_path=str(path))
 
     def load(text, drop=()):
         data = json.loads(text)
@@ -212,12 +230,14 @@ def golden_outputs(directory: Path) -> dict:
     out = {
         "status": load(mztab_tools.dataset_status(), ["server_version", "update_available"]),
         "search_window": load(T.dataset_feature_search(min_mz=100, max_mz=600)),
-        "preprocess": load(T.dataset_preprocess(normalize="pqn")),
-        "differential": load(T.dataset_differential(group_a=HC, group_b=RA)),
-        "search_targets": load(T.dataset_feature_search(targets=[{
-            "target_id": "t1", "inchikey": "OEYIOHPDSNJKLS-UHFFFAOYSA-N",
-            "expected_mz": 104.107, "adduct": "[M]+", "rt_min": 1.2}])),
     }
+    _declare_groups(session_state.session.dataset)
+    out["preprocess"] = load(stats_tools.dataset_preprocess(**{**FLAT, "normalize": "pqn"}), ["record"])
+    out["differential"] = load(stats_tools.dataset_compare(
+        reference_group="HC", test_group="RA", matrix_id=out["preprocess"]["matrix_id"]), ["record"])
+    out["search_targets"] = load(T.dataset_feature_search(targets=[{
+        "target_id": "t1", "inchikey": "OEYIOHPDSNJKLS-UHFFFAOYSA-N",
+        "expected_mz": 104.107, "adduct": "[M]+", "rt_min": 1.2}]))
     return _scrub(out, str(directory))
 
 

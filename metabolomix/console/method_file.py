@@ -56,7 +56,7 @@ LBM_KEY = "Lbm file path"
 #:   `case "text db file path": param.TextDBFilePath = value;`。同じく
 #:   `CommonProcess.cs`が`LibraryHandler.ReadMsLibrary(param.TextDBFilePath, ...)`
 #:   で読み、`DataBaseSource.Text` として同定に使う（msp/lbmと並ぶテキスト形式の
-#:   同定用データベース——`lcms-profile.v1`の`kind="text_identification"`に対応）。
+#:   同定用データベース）。
 #: - `RT_REFERENCE_KEY`: `ParameterBase.CompoundListForRtCorrectionPath` /
 #:   `ConfigParser.cs`の`case "compounds library file path for rt correction"`。
 #:   `RetentionTimeCorrectionProcess.cs`が「RT correction anchor library」として
@@ -174,13 +174,16 @@ STANDARD_ADDUCTS = {
 # 落ちないよう上限を置く（_looks_like_method_text が先に弾くが、単体でも安全に）。
 _MAX_METHOD_BYTES = 1 << 20
 
+#: 設定（lipidmix.local.toml）から来た値の出どころ（戻り値の `source`）。
+SETTING_SOURCE = "config_file"
+
 
 @dataclass(frozen=True)
 class LbmResolution:
     """LBM の解決結果。`error_code` が非 None なら呼び出し側は停止する。"""
 
     path: str | None
-    source: str  # argument | method_file | build_tree | env | config_file | exe_dir | not_required
+    source: str  # argument | method_file | build_tree | config_file | exe_dir | not_required
     error_code: str | None = None
     message: str | None = None
     candidates: tuple[str, ...] = ()
@@ -195,7 +198,7 @@ class MspResolution:
     """
 
     path: str | None
-    source: str  # argument | env | config_file | not_configured
+    source: str  # argument | config_file | not_configured
     error_code: str | None = None
     message: str | None = None
 
@@ -384,9 +387,9 @@ def resolve_lbm(
     """脂質ライブラリのパスを GUI と同じ規則で解決する。
 
     順に: 明示引数 → メソッドファイルの宣言 → **ビルド生成物** → `lbm_setting`
-    （環境変数 MSDIAL_LBM → 設定ファイルの `[msdial] lbm`。呼び出し側が
-    `user_config.get_setting("msdial.lbm")` で引いて渡す）→ Console の実行体と同じ
-    フォルダ。ビルド生成物を `lbm_setting` より上に置くのは、
+    （設定ファイルの `[library] lbm`。呼び出し側が
+    `user_config.get_setting(user_config.LIBRARY_LBM_SETTING_KEY)` で引いて渡す）→
+    Console の実行体と同じフォルダ。ビルド生成物を `lbm_setting` より上に置くのは、
     この環境の Console がソースからのビルドで、ライブラリもそのツリー内の
     新しいものを使うため（インストール版より優先する）。
     返すパスは常に絶対パス。呼び出し側はそれを実効メソッドへ書き戻す
@@ -396,7 +399,7 @@ def resolve_lbm(
     に関わらず `Lbm file path` を読み（`CommonProcess.ParseLibraries`）、LBM
     annotator を `TargetOmics.Lipidomics` 固定で組んで脂質を同定する
     （`LcmsProcess`）。宣言されたのに見つからなければ止める（Console は黙って
-    飛ばすので）。GUI 流の自動補完（ビルド生成物 → `lbm_setting`（`[msdial] lbm` / `MSDIAL_LBM`）→ exe フォルダ）
+    飛ばすので）。GUI 流の自動補完（ビルド生成物 → `lbm_setting`（`[library] lbm`）→ exe フォルダ）
     だけを lipidomics に限る。metabolomics で宣言も引数も無ければ
     `not_required`（LBM を足さない）。
     """
@@ -444,15 +447,18 @@ def resolve_lbm(
     if lbm_setting is not None:
         candidate = Path(lbm_setting.value)
         if candidate.is_file():
-            return LbmResolution(path=_absolute(candidate), source=lbm_setting.source)
+            return LbmResolution(path=_absolute(candidate), source=SETTING_SOURCE)
+        # `[library] lbm` は研究室の資産。置き場所（ディレクトリ）を戻り値へ出さず、
+        # ファイル名だけを示す（msp_then_lbm 経路と同じ。spec 2026-10-07 §3.3）。
+        label = setting_label(lbm_setting)
         return LbmResolution(
-            path=None, source=lbm_setting.source, error_code="LBM_NOT_FOUND",
-            message=f"{setting_label(lbm_setting)} が指すファイルがありません: {lbm_setting.value}")
+            path=None, source=SETTING_SOURCE, error_code="LBM_NOT_FOUND",
+            message=f"{label} が指すファイル（{candidate.name}）がありません。{label} を確認してください。")
 
     if not exe_path:
         return LbmResolution(
             path=None, source="exe_dir", error_code="LBM_NOT_FOUND",
-            message="脂質ライブラリ（.lbm2）を解決できません。Console の実行体（[msdial] exe / MSDIAL_EXE）が未設定です。")
+            message="脂質ライブラリ（.lbm2）を解決できません。Console の実行体（[msdial] exe）が未設定です。")
 
     exe_dir = Path(exe_path).expanduser().parent
     found = find_lbm_files(exe_dir)
@@ -469,8 +475,8 @@ def resolve_lbm(
                 "**警告なしで同定 0 件**になります。"
                 f"探した場所: {exe_dir}  "
                 "MS-DIAL のインストールフォルダにある .lbm2 のパスを設定ファイル"
-                "（lipidmix.local.toml）の [msdial] lbm か環境変数 MSDIAL_LBM に"
-                "設定するか、lbm_file 引数で渡してください。"))
+                "（lipidmix.local.toml）の [library] lbm に書くか、"
+                "lbm_file 引数で渡してください。"))
     return LbmResolution(
         path=None, source="exe_dir", error_code="LBM_AMBIGUOUS",
         message=(
@@ -488,7 +494,7 @@ def resolve_msp(override: str | None, polarity: str, msp_setting: Setting | None
     """library_mode="msp_only" / "msp_then_lbm" の MSP を決める。順に: 明示引数 → 極性の設定。
 
     極性の設定は呼び出し側が `user_config.get_setting(MSP_SETTING_KEYS[polarity])` で引いて
-    渡す（環境変数 MSDIAL_MSP_POS / MSDIAL_MSP_NEG → lipidmix.local.toml）。メソッドファイルの
+    渡す（lipidmix.local.toml の `[library] msp_positive` / `msp_negative`）。メソッドファイルの
     `Msp file path` の宣言は使わない——研究室 MSP 以外を宣言した GUI パラメータを流用しても
     契約から外れないようにする（spec 2026-10-07 §3.2）。返すパスは絶対パス。
     `library_mode` は未設定のときの文面に出すだけ。
@@ -508,10 +514,10 @@ def resolve_msp(override: str | None, polarity: str, msp_setting: Setting | None
                      + missing_hint(key, _MSP_WHAT)))
     candidate = Path(msp_setting.value).expanduser()
     if candidate.is_file():
-        return MspResolution(path=_absolute(candidate), source=msp_setting.source)
+        return MspResolution(path=_absolute(candidate), source=SETTING_SOURCE)
     label = setting_label(msp_setting)
     return MspResolution(
-        path=None, source=msp_setting.source, error_code="MSP_NOT_FOUND",
+        path=None, source=SETTING_SOURCE, error_code="MSP_NOT_FOUND",
         message=f"{label} が指すファイル（{candidate.name}）がありません。{label} を確認してください。")
 
 
@@ -923,25 +929,9 @@ def discover_method_candidates(
 #: LBM自体は既存の resolve_lbm（build_tree/env/exe_dir へのフォールバックを持つ）
 #: が別途解決するが、「宣言されているのに解決できない」場合の検出はここが担う。
 #:
-#: **既存lipidomics v1経路（`pipeline/inputs.py`の`inspect_inputs`）が使う既定値は
-#: 変えない**（controller裁定 fix round 2 finding 3, A01「既存lipidomics実行が
-#: 変わらない」）。metabolomics向けの3キーを黙って混ぜると、GUIが書き出した
-#: lipidomicsのメソッドファイルが偶然（無関係の理由で）`Msp file path`等に
-#: 古い/無効な値を持っているだけで、これまで無視されていたものが突然
-#: `METHOD_REFERENCE_UNRESOLVED`で落ちるようになる——既存lipidomics実行への
-#: 無言の副作用であり、避ける。metabolomics側で広い集合を使いたい呼び出し元は
-#: `METABOLOMICS_REFERENCE_KEYS`を明示的に渡す（`metabolomix/console/profiles.py`の
-#: `resolve_profile_inputs`参照）。
+#: 既定の参照キーはLBMだけ。他のキー（`MSP_KEY`など）の値を黙ってパスとして解決すると、
+#: これまで無視されていた古い値が突然`METHOD_REFERENCE_UNRESOLVED`で落ちる。
 REFERENCE_KEYS: frozenset[str] = frozenset({LBM_KEY.lower()})
-
-#: metabolomicsプロファイル（spec §5.1）が使う既知参照キーの広い集合。
-#: `resolve_method_references`/`method_reference_fingerprint`へ明示的に
-#: `reference_keys=METABOLOMICS_REFERENCE_KEYS`として渡したときだけ有効になる
-#: ——`REFERENCE_KEYS`（既定値・lipidomics v1が暗黙に使う）とは別の集合に
-#: しておくことで、v1呼び出し側のコードを一切変更せずに済む。
-METABOLOMICS_REFERENCE_KEYS: frozenset[str] = frozenset({
-    LBM_KEY.lower(), MSP_KEY.lower(), TEXT_DB_KEY.lower(), RT_REFERENCE_KEY.lower(),
-})
 
 
 def method_reference_fingerprint(

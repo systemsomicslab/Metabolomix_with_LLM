@@ -94,22 +94,12 @@ def test_session_has_dataset_slot():
     assert sess.dataset is None
 
 
-def test_session_dataset_does_not_affect_arf_slot():
-    sess = session_state.AnalysisSession()
-    sess.dataset = "dummy"
-    # ARF スロットはそのまま
-    assert sess.arf.features is None
-
-
 def test_dataset_state_has_analysis_fields():
     from metabolomix.mztab.dataset_state import DatasetState
     ds = DatasetState()
-    assert ds.pp_matrix is None
-    assert ds.pp_sample_names == []
-    assert ds.pp_feature_names == []
+    assert ds.stat_matrices == {}
     assert ds.roles == {}
     assert ds.sample_meta == {}
-    assert ds.preprocessing_recipe == {}
     assert ds.last_pca is None
     assert ds.last_differential is None
 
@@ -217,7 +207,7 @@ def test_dataset_state_duplicate_display_name_warns_but_does_not_raise(mztab_dup
 # ---------- end-to-end: 表示名解決が QC/blank ロール検出を機能させる ----------
 # detect_sample_roles はサンプル名のトークンで QC/blank を判定するため、
 # sample_names が abundance_assay[N] のままだと QC-RSD フィルタ・ブランク除去が
-# 常に不発になる（バグの結論2）。build_dataset_state → run_dataset_preprocess の
+# 常に不発になる（バグの結論2）。build_dataset_state → 統計エンジンの試料の表（from_dataset）の
 # 実経路を通して初めて「直った」と言える。
 
 _MZTAB_WITH_QC_NAME = textwrap.dedent("""\
@@ -247,18 +237,18 @@ def mztab_qc_named_file(tmp_path):
 
 
 def test_dataset_preprocess_detects_qc_role_via_resolved_display_name(mztab_qc_named_file):
-    """dataset_load 相当（build_dataset_state）→ dataset_preprocess 相当（run_dataset_preprocess）
+    """load_dataset 相当（build_dataset_state）→ dataset_preprocess の入力（`stats.data.from_dataset`）
     を実際に通し、QC_1 という表示名を持つアッセイが role="qc" に分類されることを確認する。
     直る前は sample_names が abundance_assay[3] のままで、detect_sample_roles が
     "qc" トークンを見つけられず全サンプルが "sample" のままだった。
     """
-    from metabolomix.analysis.dataset_analysis import run_dataset_preprocess
+    from metabolomix.analysis.stats.data import from_dataset
 
     pr = parse_mztab(mztab_qc_named_file)
     ds = build_dataset_state(pr, mztab_qc_named_file.name, str(mztab_qc_named_file))
     assert ds.sample_names == ["control_1", "treat_1", "QC_1"]
 
-    _, _, _, roles, _, _ = run_dataset_preprocess(ds, {})
+    roles = {s.sample_id: s.role for s in from_dataset(ds).samples}
 
     assert roles["QC_1"] == "qc"
     assert roles["control_1"] == "sample"
@@ -351,7 +341,7 @@ def test_dataset_warnings_precede_parser_level_warnings(tmp_path):
     """データセット層の warning（表示名の重複など）を先頭に置く。
 
     パーサ層の良性 warning は実データで数百件になり得る。後ろに append すると、
-    件数を絞って表示する dataset_load の要約に載る余地がなくなる。
+    件数を絞って表示する load_dataset の要約に載る余地がなくなる。
     「見えない warning」は無いのと同じなので、順序で優先度を表す。
     """
     content = textwrap.dedent("""\

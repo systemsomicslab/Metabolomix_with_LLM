@@ -16,6 +16,7 @@ from metabolomix.core import mcp_core
 import server
 from metabolomix.core import session_state
 from metabolomix.eic.reader import read_eic_spot_css1, read_eic_spots_css1
+from tests.config_fixtures import config_env
 
 
 def _write_css1(path: Path, spots: list[dict]) -> None:
@@ -169,70 +170,6 @@ class EicBatchReadTests(unittest.TestCase):
             read_eic_spots_css1(
                 self.path, [0, 2], file_ids=[1], max_total_points=3,
             )
-
-
-class EicPlotToolTests(unittest.TestCase):
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self.tmp = Path(self._tmp.name)
-        self.path = self.tmp / "alignment.EIC.aef"
-        _write_css1(self.path, [{
-            "rt": 3.25, "mz": 512.3456, "samples": [{
-                "file_id": 7, "peak_top": 3.25, "peak_left": 3.1,
-                "peak_right": 3.4,
-                "points": [(3.1, 5.0), (3.25, 10.0), (3.4, 2.0)],
-            }],
-        }])
-        self._saved_data_dir = mcp_core.DATA_DIR
-        self._saved_reports = os.environ.get("LIPIDMIX_REPORTS_DIR")
-        self._saved_plot = session_state.session.eic.last_plot
-        mcp_core.DATA_DIR = self.tmp
-        os.environ["LIPIDMIX_REPORTS_DIR"] = str(self.tmp / "fallback")
-        session_state.session.eic.last_plot = None
-
-    def tearDown(self):
-        mcp_core.DATA_DIR = self._saved_data_dir
-        session_state.session.eic.last_plot = self._saved_plot
-        if self._saved_reports is None:
-            os.environ.pop("LIPIDMIX_REPORTS_DIR", None)
-        else:
-            os.environ["LIPIDMIX_REPORTS_DIR"] = self._saved_reports
-        self._tmp.cleanup()
-
-    def test_returns_structured_plot_data_without_writing_png(self):
-        payload = json.loads(server.eic_plot_chromatograms(
-            0, file_path=str(self.path), file_ids=[7], normalize="per_trace_max",
-        ))
-        self.assertEqual(payload["plot_schema"], "lipidmix.eic.v1")
-        self.assertEqual(payload["plot_type"], "line")
-        self.assertEqual(payload["axes"]["x"]["unit"], "min")
-        for actual, expected in zip(payload["series"][0]["x"], [3.1, 3.25, 3.4]):
-            self.assertAlmostEqual(actual, expected, places=5)
-        self.assertEqual(payload["series"][0]["y"], [0.5, 1.0, 0.2])
-        self.assertEqual(session_state.session.eic.last_plot, payload)
-        self.assertEqual(list(self.tmp.rglob("*.png")), [])
-
-    def test_fastmcp_does_not_publish_an_output_schema(self):
-        """outputSchema を publish しない（structured_output=False）。
-
-        publish すると payload が content と structuredContent へ二重に載る。
-        クライアントは content のテキストから `plot_schema` を読む契約。
-        """
-        tools = asyncio.run(server.mcp.list_tools())
-        tool = next(item for item in tools if item.name == "eic_plot_chromatograms")
-        self.assertIsNone(tool.outputSchema)
-
-    def test_png_is_written_only_by_explicit_save_tool(self):
-        server.eic_plot_chromatograms(0, file_path=str(self.path), file_ids=[7])
-        message = server.save_figure("eic", "sample-eic")
-        png = self.tmp / "fallback" / "figures" / "sample-eic_eic.png"
-        self.assertTrue(png.is_file())
-        self.assertIn("figures/sample-eic_eic.png", message)
-
-    def test_save_tool_guides_when_plot_is_missing(self):
-        message = server.save_figure("eic", "sample-eic")
-        self.assertIn("eic_plot_chromatograms", message)
-        self.assertEqual(list(self.tmp.rglob("*.png")), [])
 
 
 if __name__ == "__main__":

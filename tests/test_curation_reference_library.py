@@ -7,11 +7,12 @@ Console の照合結果の AnnotatorID は `.dbs` のライブラリ名と一致
 from __future__ import annotations
 
 from metabolomix.library import store
+from tests.config_fixtures import use_config
 
 
 def _console_store(tmp_path, monkeypatch):
     from tests.dbs_fixture import record, write_dbs
-    monkeypatch.setenv(store.LIBRARY_CACHE_ENV, str(tmp_path / "cache"))
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     path = write_dbs(tmp_path / "Project_Loaded.msp2.dbs", [
         ("LbmDB", [record(name="PC 34:1", mz=760.585, inchikey="")],
          ["C:/lib/NCDK_conventional.lbm2"]),

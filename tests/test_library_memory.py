@@ -189,6 +189,39 @@ def test_auto_run_without_any_library_is_unknown(tmp_path):
     assert rec["status"] == "unknown"
 
 
+def test_v3_relative_library_path_resolves_against_the_unit_root(tmp_path):
+    """v3 の単位の inputs の相対パスは単位の根（`<pipeline_root>/<極性>/`）相対
+    （`store.relativize_unit_inputs`）。pipeline_root 相対に解くと 1 段上を指して `mismatch`。"""
+    root = tmp_path / "pipeline_x"
+    unit_dir = root / "negative" / "input"
+    unit_dir.mkdir(parents=True)
+    msp = unit_dir / "lab.msp"
+    msp.write_text("NAME: x\n", encoding="ascii")
+    unit = {"raw_dir": ".", "unit_root": "negative",
+            "inputs": {"library_mode": "msp_only",
+                       "msp": {"path": "input/lab.msp", "file": "lab.msp",
+                               "sha256": _sha(msp), "source": "config_file"}}}
+    (root / "pipeline-run.json").write_text(
+        json.dumps({"schema": "pipeline-run.v3", "units": {"negative": unit}}), encoding="utf-8")
+    rec = remember_from_run(root, "negative")
+    assert rec["status"] == "known" and rec["file"] == "lab.msp"
+    assert Path(rec["path"]) == msp.resolve()
+
+
+def test_legacy_v1_relative_library_path_resolves_against_the_pipeline_root(tmp_path):
+    root = tmp_path / "pipeline_x"
+    root.mkdir()
+    msp = root / "lab.msp"
+    msp.write_text("NAME: x\n", encoding="ascii")
+    (root / "pipeline-run.json").write_text(json.dumps({
+        "schema": "pipeline-run.v1",
+        "inputs": {"library_mode": "msp_only",
+                   "msp": {"path": "lab.msp", "file": "lab.msp", "sha256": _sha(msp),
+                           "source": "config_file"}}}), encoding="utf-8")
+    rec = remember_from_run(root)
+    assert rec["status"] == "known" and Path(rec["path"]) == msp.resolve()
+
+
 # ---------- 共通 ----------
 
 def test_mztab_direct_is_unknown():
@@ -301,40 +334,20 @@ def test_is_lbm_annotator_works_on_the_file_name_part():
     assert is_lbm_annotator("some.lbm2") is True
 
 
-# ---------- v3 のジョブが記録した sha256（R36） ----------
+# ---------- ジョブの実効メソッドが宣言する MSP ----------
 
-def _job_with_pinned_msp(tmp_path, msp: Path, pinned: str | None) -> Path:
-    path = _job(tmp_path, f"Msp file path: {msp}\n")
-    if pinned is not None:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        data["schema"] = "analysis-job.v3"
-        data["profile"] = {"dependencies": [
-            {"dependency_id": "msp", "kind": "msp", "method_key": "Msp file path",
-             "path": str(msp), "sha256": pinned}]}
-        path.write_text(json.dumps(data), encoding="utf-8")
-    return path
-
-
-def test_job_pinned_sha_that_matches_the_file_is_known(tmp_path):
+def test_job_msp_is_known_with_the_measured_sha(tmp_path):
     msp = tmp_path / "lab.msp"
     msp.write_text("NAME: x\n", encoding="ascii")
-    rec = remember_from_job(_job_with_pinned_msp(tmp_path, msp, _sha(msp)))
+    rec = remember_from_job(_job(tmp_path, f"Msp file path: {msp}\n"))
     assert rec["status"] == "known" and rec["sha256"] == _sha(msp)
 
 
-def test_job_pinned_sha_that_differs_from_the_file_is_mismatch(tmp_path):
-    msp = tmp_path / "lab.msp"
-    msp.write_text("NAME: x\n", encoding="ascii")
-    pinned = _sha(msp)
-    msp.write_text("NAME: replaced in place\n", encoding="ascii")
-    rec = remember_from_job(_job_with_pinned_msp(tmp_path, msp, pinned))
-    assert rec["status"] == "mismatch"
-    assert rec["sha256"] == pinned  # 記録した値を持つので、あとで verify_record しても mismatch のまま
-    assert verify_record(rec)["status"] == "mismatch"
-
-
-def test_job_without_a_recorded_sha_uses_the_measured_one(tmp_path):
-    msp = tmp_path / "lab.msp"
-    msp.write_text("NAME: x\n", encoding="ascii")
-    rec = remember_from_job(_job_with_pinned_msp(tmp_path, msp, None))
-    assert rec["status"] == "known" and rec["sha256"] == _sha(msp)
+def test_is_lbm_annotator_false_for_msp():
+    """末尾が `.msp` + 数字（大文字小文字を問わない）の注釈器キーは LBM でない。"""
+    assert is_lbm_annotator("D:/x/lib.msp") is False
+    assert is_lbm_annotator("D:/x/lib.MSP2") is False
+    assert is_lbm_annotator("lib.msp12") is False
+    assert is_lbm_annotator("D:/x/some.lbm2") is True
+    assert is_lbm_annotator("LabMsp") is None
+    assert is_lbm_annotator("lib.msp.bak") is None

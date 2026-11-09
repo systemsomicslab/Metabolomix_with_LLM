@@ -1,38 +1,29 @@
 """結果 ID・来歴・派生結果の無効化（spec §6）。
 
-前処理をやり直したのに古い PCA / 差次的結果がセッションに残っていると、図と TSV が
-**別々の前処理から出た数字**を並べる。しかもどちらも「直近の結果」を名乗るので、
+入力が変わったのに古い PCA / 差次的結果がセッションに残っていると、図と TSV が
+**別々の入力から出た数字**を並べる。しかもどちらも「直近の結果」を名乗るので、
 読み手には見分けがつかない。ここで縛るのは 2 つ:
 
-1. **どの入力から出た結果かを結果自身が持つ**（`provenance.result_id` と
-   `input_fingerprint`）。あとから「この図はどの行列から出たのか」を answer できる。
-2. **入力が変わったら派生結果を消す**。残す（＝古い数字を返し続ける）くらいなら、
+1. **どの入力から出た結果かを結果自身が持つ**（来歴の `dataset_hash` と `metadata_revision`）。
+2. **入力が変わったら派生状態を消す**。残す（＝古い数字を返し続ける）くらいなら、
    無いことにして計算し直させるほうが安全。
-
-前処理は途中で失敗しうるので、**成功してからまとめて反映する**（トランザクション）。
-失敗した前処理が行列だけ差し替えてレシピは古いまま、という半端な状態を作らない。
 """
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from metabolomix.analysis.dataset_service import (
-    compare_dataset,
-    pca_dataset,
-    preprocess_dataset,
-)
 from metabolomix.analysis.result_state import (
     array_fingerprint,
     assert_current,
     dataset_fingerprint,
     invalidate_results,
+    is_current,
     metadata_fingerprints,
 )
 from metabolomix.core.atomic_io import DomainError
+from tests.engine_chain import register_two_group
 from tests.pipeline_fixtures import make_dataset
-
-_BASE_RECIPE = {"normalize": "none", "impute": "half_min"}
 
 
 # ---------- fingerprint ----------
@@ -105,7 +96,7 @@ def test_metadata_fingerprints_are_per_field():
 
 def _with_results(ds):
     ds.last_pca = {"scores": []}
-    ds.last_differential = {"kind": "two_group"}
+    ds.last_differential = {"kind": "compare"}
     return ds
 
 
@@ -138,186 +129,47 @@ def test_unrelated_change_invalidates_nothing():
     assert ds.last_differential is not None
 
 
-def test_preprocess_relevant_change_also_drops_the_preprocessed_matrix():
+def test_preprocess_relevant_change_also_drops_the_registered_matrices():
     """行列を残したまま結果だけ消すと、次の PCA が古い行列で走る。"""
     ds = make_dataset()
-    preprocess_dataset(ds, _BASE_RECIPE)
+    ds.stat_matrices = {"mx_0": {}}
     invalidate_results(ds, {"batch"})
-    assert ds.pp_matrix is None
-    assert ds.preprocessing_recipe == {}
+    assert ds.stat_matrices == {}
 
 
-# ---------- 来歴 ----------
-
-def test_preprocess_result_carries_provenance():
-    ds = make_dataset()
-    result = preprocess_dataset(ds, _BASE_RECIPE)
-    prov = result["provenance"]
-    assert prov["result_id"]
-    assert prov["kind"] == "preprocess"
-    assert prov["dataset_id"] == ds.dataset_id
-    assert prov["input_fingerprint"]
-    assert prov["effective_parameters"]["normalize"] == "none"
-    assert prov["code_version"]
+def test_changing_only_the_group_membership_keeps_the_matrices():
+    """群は前処理の入力ではない。付け替えのたびに行列を作り直させない。"""
+    ds = _with_results(make_dataset())
+    ds.stat_matrices = {"mx_0": {}}
+    invalidate_results(ds, {"group"})
+    assert ds.stat_matrices == {"mx_0": {}}
+    assert ds.last_pca is not None
 
 
-def test_derived_results_point_at_the_preprocessing_they_used():
-    ds = make_dataset()
-    pp = preprocess_dataset(ds, _BASE_RECIPE)
-    pca = pca_dataset(ds)
-    diff = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
-    assert pca["provenance"]["parent_ids"] == [pp["provenance"]["result_id"]]
-    assert diff["provenance"]["parent_ids"] == [pp["provenance"]["result_id"]]
-
-
-def test_result_ids_are_unique_per_computation():
-    ds = make_dataset()
-    preprocess_dataset(ds, _BASE_RECIPE)
-    first = pca_dataset(ds)["provenance"]["result_id"]
-    second = pca_dataset(ds)["provenance"]["result_id"]
-    assert first != second
-
-
-def test_results_are_registered_by_id():
-    ds = make_dataset()
-    preprocess_dataset(ds, _BASE_RECIPE)
-    result = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
-    rid = result["provenance"]["result_id"]
-    assert ds.results[rid]["provenance"]["result_id"] == rid
-
-
-def test_existing_result_keys_are_not_renamed():
-    """provenance を足すだけ。既存の消費者（export・図）が読むキーは動かさない。"""
-    ds = make_dataset()
-    preprocess_dataset(ds, _BASE_RECIPE)
-    diff = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
-    for key in ("kind", "results", "volcano", "contract_version", "a", "b",
-                "n_a", "n_b", "q_threshold", "log2fc_threshold", "summary"):
-        assert key in diff
-    assert "scores" in pca_dataset(ds)
+def test_detection_mask_change_invalidates_the_matrices():
+    ds = _with_results(make_dataset())
+    ds.stat_matrices = {"mx_0": {}}
+    invalidate_results(ds, {"detection"})
+    assert ds.stat_matrices == {}
+    assert ds.last_pca is None
 
 
 # ---------- 有効性の検査 ----------
 
-def test_assert_current_passes_for_a_fresh_result():
-    ds = make_dataset()
-    preprocess_dataset(ds, _BASE_RECIPE)
-    assert_current(ds, pca_dataset(ds))  # 例外が出ないこと
-
-
-def test_assert_current_rejects_a_result_from_a_superseded_preprocessing():
-    """新しい前処理のあとで古い結果を使うと、図と表の前処理がずれる。"""
-    ds = make_dataset()
-    preprocess_dataset(ds, _BASE_RECIPE)
-    stale = pca_dataset(ds)
-    preprocess_dataset(ds, {"normalize": "tic", "impute": "half_min"})
-    with pytest.raises(DomainError) as exc:
-        assert_current(ds, stale)
-    assert exc.value.code == "STALE_ANALYSIS_RESULT"
-
-
-def test_assert_current_rejects_a_result_from_another_dataset():
-    ds = make_dataset()
-    other = make_dataset()
-    preprocess_dataset(ds, _BASE_RECIPE)
-    preprocess_dataset(other, _BASE_RECIPE)
-    foreign = pca_dataset(other)
-    with pytest.raises(DomainError):
-        assert_current(ds, foreign)
-
-
-# ---------- トランザクション ----------
-
-def test_new_preprocess_invalidates_existing_comparison():
-    ds = make_dataset()
-    preprocess_dataset(ds, _BASE_RECIPE)
-    result = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
-    assert result["provenance"]["result_id"]
-    preprocess_dataset(ds, {"normalize": "tic", "impute": "half_min"})
-    assert ds.last_differential is None
-    assert ds.last_pca is None
-
-
-def test_failed_preprocess_leaves_the_previous_state_untouched(monkeypatch):
-    """途中で落ちた前処理が、行列だけ新しくレシピは古いという状態を作らない。"""
-    ds = make_dataset()
-    preprocess_dataset(ds, _BASE_RECIPE)
-    diff = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
-    before_matrix = ds.pp_matrix.copy()
-    before_recipe = dict(ds.preprocessing_recipe)
-    before_preprocess_id = ds.preprocess_id
-
-    with pytest.raises(Exception):
-        preprocess_dataset(ds, {"normalize": "no_such_method", "impute": "half_min"})
-
-    assert np.array_equal(ds.pp_matrix, before_matrix)
-    assert ds.preprocessing_recipe == before_recipe
-    assert ds.preprocess_id == before_preprocess_id
-    assert ds.last_differential["provenance"]["result_id"] == diff["provenance"]["result_id"]
-
-
-def test_reapplying_the_same_recipe_keeps_the_derived_results():
-    """同値のレシピを再適用しただけで結果を捨てると、無駄な再計算を強いる。"""
-    ds = make_dataset()
-    preprocess_dataset(ds, _BASE_RECIPE)
-    diff = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
-    preprocess_id = ds.preprocess_id
-
-    preprocess_dataset(ds, dict(_BASE_RECIPE))
-
-    assert ds.preprocess_id == preprocess_id
-    assert ds.last_differential["provenance"]["result_id"] == diff["provenance"]["result_id"]
-
-
-def test_reapplying_the_same_recipe_does_not_mint_a_new_result_id():
-    """同じ計算に別の ID を付けると、来歴が「別の実行」に見える。"""
-    ds = make_dataset()
-    first = preprocess_dataset(ds, _BASE_RECIPE)
-    second = preprocess_dataset(ds, dict(_BASE_RECIPE))
-    assert second["provenance"]["result_id"] == first["provenance"]["result_id"]
-
-
-def test_changing_only_the_group_membership_keeps_the_preprocessing():
-    """群は前処理の入力ではない。付け替えのたびに再前処理させない。"""
-    ds = make_dataset()
-    preprocess_dataset(ds, _BASE_RECIPE)
-    preprocess_id = ds.preprocess_id
-    pca = pca_dataset(ds)
-
-    invalidate_results(ds, {"group"})
-
-    assert ds.preprocess_id == preprocess_id
-    assert ds.last_pca["provenance"]["result_id"] == pca["provenance"]["result_id"]
-
-
-def test_detection_mask_change_invalidates_the_preprocessing():
-    ds = make_dataset()
-    preprocess_dataset(ds, _BASE_RECIPE)
-    pca_dataset(ds)
-
-    invalidate_results(ds, {"detection"})
-
-    assert ds.pp_matrix is None
-    assert ds.last_pca is None
-
-
-def test_compare_dataset_updates_the_state_only_on_success():
-    ds = make_dataset()
-    preprocess_dataset(ds, _BASE_RECIPE)
-    good = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
-
-    with pytest.raises(Exception):
-        compare_dataset(ds, ["missing_a"], ["missing_b"])
-
-    assert ds.last_differential["provenance"]["result_id"] == good["provenance"]["result_id"]
-
-
 def test_a_result_without_provenance_is_not_called_stale():
-    """来歴が無いのは「古い」の証拠ではない。旧経路の結果を一律に殺さない。"""
-    from metabolomix.analysis.result_state import is_current
+    """来歴が無いのは「古い」の証拠ではない。手で組んだ結果を一律に殺さない。"""
     ds = make_dataset()
     assert is_current(ds, {"scores": []}) is True
     assert_current(ds, {"scores": []})
+
+
+def test_a_species_pca_from_another_dataset_is_not_current():
+    ds = make_dataset()
+    foreign = {"provenance": {"result_id": "res_x", "kind": "species_pca", "dataset_id": "ds_other"}}
+    assert is_current(ds, foreign) is False
+    with pytest.raises(DomainError) as exc:
+        assert_current(ds, foreign)
+    assert exc.value.code == "STALE_ANALYSIS_RESULT"
 
 
 # ---------- 群の訂正で差次的結果が古くなる（レビュー指摘3） ----------
@@ -345,24 +197,22 @@ def _regroup(ds, rows, groups: list[str]):
     return updated
 
 
+def test_a_fresh_comparison_is_current_and_records_the_dataset_fingerprint():
+    ds, _rows = _dataset_with_groups("control", "treated")
+    record = register_two_group(ds, "control", "treated")
+    assert ds.results[record["result_id"]] is record
+    assert record["provenance"]["dataset_hash"] == dataset_fingerprint(ds)
+    assert_current(ds, record)                      # 例外が出ないこと
+
+
 def test_a_differential_result_goes_stale_when_the_groups_are_corrected():
-    """群だけを直しても前処理は生きる。だからこそ、旧群の結果は自分で古くなる。
-
-    前処理・データセットの一致しか見ないと、群の訂正後も旧結果の
-    parent_ids/dataset_id は一致したままで「現在の結果」として通ってしまう。
-    """
-    from metabolomix.analysis.result_state import is_current
-
+    """群だけを直しても行列の入力は変わらない。だからこそ、旧群の結果は自分で古くなる。"""
     ds, rows = _dataset_with_groups("control", "treated")
-    preprocess_dataset(ds, _BASE_RECIPE)
-    stale = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:],
-                            group_a_label="control", group_b_label="treated")
-    preprocess_id = ds.preprocess_id
+    stale = register_two_group(ds, "control", "treated")
 
-    # 群だけの訂正（1 検体の割当を直す）。前処理はそのまま生きる。
+    # 群だけの訂正（1 検体の割当を直す）。
     _regroup(ds, rows, ["control"] * 3 + ["treated"] * 5)
 
-    assert ds.preprocess_id == preprocess_id      # 前処理は無効化されていない
     assert is_current(ds, stale) is False
     with pytest.raises(DomainError) as excinfo:
         assert_current(ds, stale)
@@ -374,9 +224,7 @@ def test_exporting_a_result_from_the_old_groups_is_refused(tmp_path):
     from metabolomix.analysis.dataset_export import export_dataset_result
 
     ds, rows = _dataset_with_groups("control", "treated")
-    preprocess_dataset(ds, _BASE_RECIPE)
-    stale = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:],
-                            group_a_label="control", group_b_label="treated")
+    stale = register_two_group(ds, "control", "treated")
     _regroup(ds, rows, ["control"] * 3 + ["treated"] * 5)
 
     out = tmp_path / "differential.tsv"
@@ -388,126 +236,9 @@ def test_exporting_a_result_from_the_old_groups_is_refused(tmp_path):
 
 def test_a_freshly_recomputed_comparison_is_current_again():
     """訂正後に計算し直した結果は当然通る（拒否が広すぎないことの確認）。"""
-    from metabolomix.analysis.result_state import is_current
-
     ds, rows = _dataset_with_groups("control", "treated")
-    preprocess_dataset(ds, _BASE_RECIPE)
-    compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:],
-                    group_a_label="control", group_b_label="treated")
+    register_two_group(ds, "control", "treated")
     _regroup(ds, rows, ["control"] * 3 + ["treated"] * 5)
 
-    fresh = compare_dataset(ds, ds.sample_names[:3], ds.sample_names[3:],
-                            group_a_label="control", group_b_label="treated")
+    fresh = register_two_group(ds, "control", "treated")
     assert is_current(ds, fresh) is True
-
-
-def test_a_differential_result_without_group_fingerprint_is_not_called_stale():
-    """群の指紋を持たない結果（この検査より前の結果）は材料不足として通す。"""
-    from metabolomix.analysis.result_state import is_current
-
-    ds, rows = _dataset_with_groups("control", "treated")
-    preprocess_dataset(ds, _BASE_RECIPE)
-    legacy = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
-    legacy["provenance"].pop("group_fingerprint", None)
-    _regroup(ds, rows, ["control"] * 3 + ["treated"] * 5)
-
-    assert is_current(ds, legacy) is True
-
-
-# ---------- 差次的結果の来歴にデータの指紋を刻む ----------
-
-def test_differential_provenance_records_the_dataset_fingerprint():
-    """pipeline が返した結果を session が受け取るとき、同じデータで計算されたかを
-    照合できるよう、来歴にデータセットの指紋を刻む（実効パラメータには混ぜない）。"""
-    ds = make_dataset()
-    preprocess_dataset(ds, _BASE_RECIPE)
-    result = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
-    assert result["provenance"]["dataset_hash"] == dataset_fingerprint(ds)
-    assert "dataset_hash" not in result["provenance"]["effective_parameters"]
-
-
-# ---------- run から引き継いだ差次的結果の有効性 ----------
-
-def _handed_off_result(ds) -> dict:
-    """pipeline run から読み込んだ差次的結果の来歴。dataset_id・親の前処理 ID は
-    別の ds（run 側）のもので、今の session の ds とは一致しない。"""
-    from metabolomix.analysis.result_state import group_fingerprint
-
-    return {"rows": [], "provenance": {
-        "result_id": "res_handed_off",
-        "kind": "differential",
-        "dataset_id": "ds_other",
-        "parent_ids": ["pp_other"],
-        "dataset_hash": dataset_fingerprint(ds),
-        "group_fingerprint": group_fingerprint(ds),
-        "handoff": {"pipeline_root": "x", "comparison_id": "c1"},
-    }}
-
-
-def test_handed_off_result_is_current_without_session_preprocess():
-    from metabolomix.analysis.result_state import is_current
-
-    ds, _rows = _dataset_with_groups("control", "treated")
-    result = _handed_off_result(ds)
-    assert ds.preprocess_id is None
-    assert is_current(ds, result) is True
-
-
-def test_handed_off_result_goes_stale_when_groups_change():
-    from metabolomix.analysis.result_state import is_current
-
-    ds, rows = _dataset_with_groups("control", "treated")
-    result = _handed_off_result(ds)
-    _regroup(ds, rows, ["control"] * 3 + ["treated"] * 5)
-    assert is_current(ds, result) is False
-
-
-def test_handed_off_result_with_other_data_is_not_current():
-    from metabolomix.analysis.result_state import is_current
-
-    ds, _rows = _dataset_with_groups("control", "treated")
-    result = _handed_off_result(ds)
-    result["provenance"]["dataset_hash"] = "0" * 64
-    assert is_current(ds, result) is False
-
-
-def test_handed_off_result_without_dataset_hash_is_not_current():
-    """データを照合できない引き継ぎ結果は通さない（来歴無しの「材料不足は通す」とは逆）。"""
-    from metabolomix.analysis.result_state import is_current
-
-    ds, _rows = _dataset_with_groups("control", "treated")
-    result = _handed_off_result(ds)
-    result["provenance"].pop("dataset_hash")
-    assert is_current(ds, result) is False
-
-
-def test_handed_off_result_without_group_fingerprint_is_current():
-    """群の指紋を持たない結果は、データが一致すれば通す（既存の差次的結果と同じ規則）。"""
-    from metabolomix.analysis.result_state import is_current
-
-    ds, _rows = _dataset_with_groups("control", "treated")
-    result = _handed_off_result(ds)
-    result["provenance"].pop("group_fingerprint")
-    assert is_current(ds, result) is True
-
-
-def test_session_result_rules_are_unchanged():
-    """handoff の無い結果は dataset_id が違えば、データの指紋が一致していても今まで通り False。"""
-    from metabolomix.analysis.result_state import is_current
-
-    ds, _rows = _dataset_with_groups("control", "treated")
-    result = _handed_off_result(ds)
-    result["provenance"].pop("handoff")
-    assert is_current(ds, result) is False
-
-
-def test_a_handoff_marker_on_a_non_differential_result_is_not_current():
-    """run から戻すのは差次的結果だけ。他の kind に handoff が付いていたら通さない
-    （run の前処理結果が「今の前処理」の顔をするのを防ぐ）。"""
-    from metabolomix.analysis.result_state import is_current
-
-    ds, _rows = _dataset_with_groups("control", "treated")
-    for kind in ("preprocess", "pca", None):
-        result = _handed_off_result(ds)
-        result["provenance"]["kind"] = kind
-        assert is_current(ds, result) is False, kind

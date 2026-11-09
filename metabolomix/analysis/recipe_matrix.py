@@ -1,7 +1,7 @@
 """行列の recipe v2（spec 2026-10-22 §4 の 4）: 論文の方法どおりの順序で前処理する。
 
 数値・ドメイン層の純ロジックで、MCP にもセッションにも依存しない。既存の前処理
-（`preprocessing.preprocess` の固定順・`matrix_state` の analysis-matrix.v1）は
+（`preprocessing.preprocess` の固定順）は
 変えない——ここは再解析の spec から呼ぶ別の入口で、既定もここだけのもの。
 
 **段の順序は recipe が決める**（`steps`）。論文によって「補完 → 正規化 → ドリフト補正」

@@ -32,117 +32,82 @@ import server
 # EIC 検索の統合: eic_search_by_mz_range / eic_search_by_rt_range /
 # eic_rank_by_max_intensity を spot ID 検索も持つ eic_search に統合(76→74)。
 # DatasetState の特徴検索と目的の物質の判定: dataset_feature_search を追加(74→75)。
-# 再解析のデータセットのハンドル: dataset_handle_open / list / close を追加(77→80)。
+# 再解析のデータセットのハンドル: load_dataset / list / close を追加(77→80)。
 # 照合の詳細: library_search / dcl_spot_spectrum を追加(80→82)。
 # 再解析の統計の spec: dataset_analysis_run を追加(82→83)。
 # 再解析の合否・同族列・関係・証拠の束・質量精度・新しい知見の候補と診断イオン(83→90)。
 # 割れたアライメントスポットの検出: dataset_alignment_qc を追加(90→91)。
+# B-2b Task 8: 旧 ARF / ARF2 / PAI2 / EIC のツール 26 本を撤去（82→56。計画の決めたこと 1）。
+# B-2b Task 2: 入口を load_dataset 1 本にまとめ（旧 ARF の load_dataset・dataset_load・
+# dataset_handle_open を統合）、dataset_handle_list / close を dataset_list / dataset_close へ改名（82→80）。
+# B-3: 定量の 4 ツール（dataset_quant_preview / dataset_quant_apply / dataset_merge_polarities /
+# dataset_select_features）を追加（統合時 56→60）。
+# C 配線 Task 4: 統計エンジンの比較 dataset_compare を追加（60→61）。Task 9: 旧 v1 の 3 ツール（2 群比較・v2 統計・解析行列）を撤去（61→58）。
+# D: 旧 Console 6 ツール（旧 Console 計画ほか）を pipeline へ吸収（59→53）。
+# A: 最初の概観 dataset_overview を追加（58→59）。
 EXPECTED_TOOLS = sorted([
-    "dataset_handle_open",
-    "dataset_handle_list",
-    "dataset_handle_close",
-    "library_search",
-    "dcl_spot_spectrum",
-    "dataset_analysis_run",
-    "library_msms_qualify",
-    "dataset_homolog_check",
-    "dataset_feature_relations",
-    "dataset_claim_evidence",
-    "dataset_mass_accuracy",
-    "dataset_novel_candidates",
-    "dataset_alignment_qc",
-    "dcl_diagnostic_ions",
-    "arf_export_evidence_bundle",
-    "dataset_export_evidence_bundle",
-    "pathway_project",
-    "pathway_plot",
-    "library_load",
-    "library_match_feature",
-    "library_plot_mirror",
+    "list_data_files",
+    "load_dataset",
+    "dataset_list",
+    "dataset_close",
+    "dataset_status",
+    "dataset_set_sample_metadata",
+    "dataset_exclude",
+    "dataset_quant_preview",
+    "dataset_quant_apply",
+    "dataset_merge_polarities",
+    "dataset_select_features",
     "curation_review",
+    "curation_suggest",
     "curation_submit",
     "curation_flags",
     "curation_view_data",
-    "curation_suggest",
-    "arf2_annotate_identities",
-    "arf2_parser",
-    "arf_differential",
-    "arf_exclude",
-    "arf_export_differential",
-    "arf_list_classes",
-    "arf_list_sample_roles",
-    "arf_list_tags",
-    "arf_parser",
-    "arf_pca_preprocessed",
-    "arf_plot_volcano",
-    "arf_plot_group_intensity",
-    "arf_plot_species",
-    "arf_pca_species",
-    "plot_pca_loadings",
-    "arf_preprocess",
-    "eic_parser",
-    "eic_plot_chromatograms",
-    "eic_plot_compounds",
-    "eic_search",
-    "ingest_promote",
-    "ingest_reject",
-    "ingest_review_queue",
-    "ingest_stage",
-    "knowledge_coverage",
-    "list_data_files",
-    "list_reports",
-    "load_dataset",
-    "log_search",
-    "pai2_inspect_peak",
-    "pipeline_cancel",
+    "dataset_preprocess",
+    "dataset_compare",
+    "dataset_pca",
+    "dataset_overview",
+    "dataset_analysis_run",
+    "dataset_export_differential",
+    "dataset_export_evidence_bundle",
+    "dataset_feature_search",
+    "dataset_feature_relations",
+    "dataset_claim_evidence",
+    "dataset_alignment_qc",
+    "dataset_mass_accuracy",
+    "dataset_homolog_check",
+    "dataset_novel_candidates",
+    "dcl_spot_spectrum",
+    "dcl_diagnostic_ions",
+    "dcl_find_msms",
+    "library_load",
+    "library_match_feature",
+    "library_msms_qualify",
+    "library_plot_mirror",
+    "library_search",
+    "dataset_plot",
+    "save_figure",
+    "pathway_project",
+    "pathway_plot",
+    "record_objective",
+    "write_report",
+    "read_report",
     "pipeline_plan",
-    "pipeline_resume",
     "pipeline_run",
     "pipeline_status",
-    "console_cleanup",
+    "pipeline_resume",
+    "pipeline_cancel",
     "console_method_candidates",
     "console_method_template",
-    "console_plan",
-    "console_prepare_input",
-    "console_run",
-    "console_status",
-    "dataset_load",
-    "dataset_status",
-    "job_list",
-    "dataset_differential",
-    "dataset_export_differential",
-    "dataset_pca",
-    "dataset_preprocess",
-    "dataset_set_sample_metadata",
-    "dataset_build_matrix",
-    "dataset_statistic",
-    "dataset_feature_search",
-    "dcl_find_msms",
-    "dcl_parser",
-    "pai2_parser",
-    "paper_search",
-    "read_report",
-    "record_objective",
-    "sample_search",
     "server_update",
-    "save_figure",
-    "update_objective",
-    "verify_peak_annotation",
-    "write_report",
 ])
 
 EXPECTED_RESOURCES = sorted([
     "lipidmix://docs/output-format",
-    "lipidmix://knowledge/index",
-    "lipidmix://playbook/index",
-    "lipidmix://knowledge/inbox",
     "ui://ms-data-parser/curation-viewer",
 ])
 
 EXPECTED_TEMPLATES = sorted([
     "lipidmix://docs/output-format/{topic}",
-    "lipidmix://knowledge/expand/{slug}",
-    "lipidmix://playbook/expand/{slug}",
 ])
 
 
@@ -154,7 +119,7 @@ def test_tool_count_is_stable():
     assert len(tools) == len(EXPECTED_TOOLS)
 
 
-def test_tool_names_snapshot():
+def test_registered_tool_set_is_b2_surface():
     tools = asyncio.run(server.mcp.list_tools())
     assert sorted(t.name for t in tools) == EXPECTED_TOOLS
 

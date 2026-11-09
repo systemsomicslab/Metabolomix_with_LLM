@@ -12,6 +12,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import lz4.block
+import msgpack
+
 from metabolomix.msdial import tags as msdial_tags
 from metabolomix.curation.flags import (
     FlagStore, alignment_key, curation_dir, effective_flags, flags_digest, orphaned_count,
@@ -80,13 +83,56 @@ def override_identity(catalog: dict, flag_set) -> dict:
     return out
 
 
-def arf2_for_mztab(mztab_path) -> Path | None:
-    """mzTab-M のファイル名にバッチ語幹（`.arf2` の拡張子を除いた名前）を含む `.arf2`。
-    語幹の直後に数字が続くものは別バッチ（`_2_3` と `_2_30`）なので数えない。"""
+def arf2_for_mztab(mztab_path, *, feature_mz: list | None = None,
+                   extra_candidates: list | None = None) -> Path | None:
+    """mzTab-M に当たる `.arf2`。
+
+    候補は mzTab-M と同じフォルダの `.arf2` と `extra_candidates`（job の `spot_catalog`。
+    mzTab-M と別のフォルダに記録されうる）を、解決したパスで重複を除いたもの。
+    まず mzTab-M のファイル名にバッチ語幹（`.arf2` の拡張子を除いた名前）を含む候補が 1 本ならそれ
+    （語幹の直後に数字が続くものは別バッチ〔`_2_3` と `_2_30`〕なので数えない）。
+    語幹で決まらず `feature_mz`（`ds.feature_ids` 順の m/z）が渡されたときだけ、スポット数が
+    特徴の数と同じで `compare_feature_mz` が通る候補がちょうど 1 本ならそれ。
+    それ以外は None。`.arf2` を読むのは語幹で決まらなかったときの候補だけ。"""
     mztab_path = Path(mztab_path)
-    matches = [p for p in mztab_path.parent.glob("*.arf2")
+    candidates: list[Path] = []
+    seen: set = set()
+    for p in [*mztab_path.parent.glob("*.arf2"), *(Path(x) for x in (extra_candidates or []))]:
+        if p.suffix != ".arf2" or not p.is_file():
+            continue
+        key = p.resolve()
+        if key not in seen:
+            seen.add(key)
+            candidates.append(p)
+    matches = [p for p in candidates
                if re.search(re.escape(p.name[: -len(".arf2")]) + r"(?!\d)", mztab_path.name)]
-    return matches[0] if len(matches) == 1 else None
+    if len(matches) == 1:
+        return matches[0]
+    if matches or not feature_mz or not candidates:
+        return None
+    from metabolomix.arf2.spot_fields import load_spot_fields
+    from metabolomix.core.atomic_io import DomainError
+    from metabolomix.mztab.evidence import compare_feature_mz
+
+    agreeing = []
+    for candidate in candidates:
+        try:
+            spot_mz = [spot["mz"] for spot in load_spot_fields(candidate)]
+        except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError,
+                DomainError, lz4.block.LZ4BlockError, msgpack.exceptions.UnpackException):
+            continue  # 読めない・壊れた `.arf2` は候補にしない
+        if len(spot_mz) == len(feature_mz) and compare_feature_mz(spot_mz, feature_mz)[0]:
+            agreeing.append(candidate)
+    return agreeing[0] if len(agreeing) == 1 else None
+
+
+def arf2_lookup_kwargs(ds) -> dict:
+    """`arf2_for_mztab` に渡す `feature_mz`（`ds.feature_ids` 順の m/z）と
+    `extra_candidates`（job の `spot_catalog`）。"""
+    metadata = getattr(ds, "feature_metadata", None) or {}
+    return {"feature_mz": [(metadata.get(fid) or {}).get("mz")
+                           for fid in (getattr(ds, "feature_ids", None) or [])],
+            "extra_candidates": list((getattr(ds, "artifact_paths", None) or {}).get("spot_catalog") or [])}
 
 
 def payload_summary(state: str | None, flag_set: dict | None, stats: dict | None) -> dict:

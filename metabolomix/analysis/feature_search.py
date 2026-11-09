@@ -27,8 +27,9 @@ import re
 
 import numpy as np
 
-from metabolomix.analysis.feature_bindings import _normalize_adduct
+from metabolomix.analysis.dataset_analysis import included_sample_indices
 from metabolomix.analysis.result_state import is_current
+from metabolomix.analysis.stats_results import as_two_group, contrast_ids, split_result_ref
 from metabolomix.analysis.mass_accuracy import offset_for
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 from metabolomix.msdial.adducts import mz_from_neutral, parse_adduct
@@ -87,6 +88,19 @@ _POLARITIES = ("positive", "negative")
 _SIGN_OF = {"positive": "+", "negative": "-"}
 _POLARITY_OF_SIGN = {sign: polarity for polarity, sign in _SIGN_OF.items()}
 _INCHIKEY_BLOCK_RE = re.compile(r"[A-Z]{14}")
+
+#: `[M+H]1+`（mzTab-M）と `[M+H]+`（利用者の記法）を同じ adduct として扱うための
+#: 末尾電荷表記。`1+` / `1-` だけを落とす——`2+` を `+` に潰すと価数が消える。
+_ADDUCT_UNIT_CHARGE_RE = re.compile(r"\]1([+-])$")
+
+
+def _normalize_adduct(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().replace(" ", "")
+    return _ADDUCT_UNIT_CHARGE_RE.sub(r"]\1", text).casefold()
+
+
 # parse_formula は読めない部分を黙って捨てるので（"Ca(OH)2" が Ca+O+H2 になる等）、
 # 文字列全体が「元素記号+個数」の連なりであることを先に確かめる。
 _FORMULA_RE = re.compile(r"(?:[A-Z][a-z]?\d*)+")
@@ -405,7 +419,7 @@ def _identity(candidates, annotation, *, inchikey_block: str | None = None,
 
     SME 候補は**その候補自身の** ``inchikey`` だけを見る。特徴の rank1 の InChIKey
     （``feature_metadata[fid]["inchikey"]``）を混ぜると、別物質の rank2 候補が rank1 の
-    識別子を借りて一致してしまう（``feature_bindings._identifier_values`` の癖。spec §2）。
+    識別子を借りて一致してしまう（spec §2）。
 
     ``lipid_species`` を渡すと（種の目標）、識別子は InChIKey の先頭ブロックではなく
     候補自身の ``chemical_name``（SML なら ``name``）を種のレベルに読んだもの。読めない
@@ -613,7 +627,7 @@ def match_target(ds, target: dict, *, max_results: int,
         if partner or evidence == "contradicted":
             qualified = False
         elif evidence == "unannotated" and rt_min is None:
-            # 質量だけでは同定と言わない（feature_bindings の mass_rt が RT を必須にするのと同じ）
+            # 質量だけでは同定と言わない
             reasons.append("mass_only_not_identified")
             qualified = False
         else:
@@ -711,7 +725,8 @@ def match_target(ds, target: dict, *, max_results: int,
 # ---------- 窓検索と差次的統計の結合（spec §4.2・§6） ----------
 
 #: 窓検索の行の列（この順で TSV にする）。
-WINDOW_COLUMNS = ("feature_id", "mz", "rt", "evidence", "name", "inchikey", "adduct", "n_sme")
+WINDOW_COLUMNS = ("feature_id", "mz", "rt", "evidence", "name", "inchikey", "adduct", "n_sme",
+                  "ontology", "n_detected", "normalized", "msi_level")
 
 #: 特徴ごとの統計の行の列。
 STATS_COLUMNS = ("feature_id", "result_id", "status", "log2fc", "p", "q", "mean_a", "mean_b",
@@ -723,10 +738,10 @@ STATS_COLUMNS_LABELED = STATS_COLUMNS + ("comparison", "group_a", "group_b",
 
 
 def comparison_name(result: dict) -> str:
-    """比較名。pipeline の比較なら `comparison_id`、そうでなければ `<group_b>_vs_<group_a>`
-    （v1 の log2fc は正なら group_b が高いので、group_b が「比較」・group_a が「基準」）。"""
-    declared = ((result.get("provenance") or {}).get("comparison") or {}).get("comparison_id")
-    return declared or f"{result.get('b')}_vs_{result.get('a')}"
+    """比較名 `<group_b>_vs_<group_a>`（log2fc は正なら group_b が高いので、group_b が「比較」・
+    group_a が「基準」）。来歴の `comparison_id`（完全交絡を越えた比較にだけ付く対比の ID）は使わない
+    ——交絡の有無で同じ対比の名前が変わらないように。"""
+    return f"{result.get('b')}_vs_{result.get('a')}"
 
 
 def _rank_key(candidate: dict):
@@ -767,21 +782,66 @@ def _check_range(low, high, label: str) -> None:
             {"field": label, "min": low, "max": high})
 
 
+def _detected_intensity(ds) -> tuple[np.ndarray, np.ndarray | None]:
+    """特徴ごとの（検出セルの値の最大, 検出セル数）。解析に残さない試料の列は使わない。
+
+    使わない試料は前処理と同じ定義（`included_sample_indices`: 実験情報シートの include=false と
+    `dataset_exclude` の試料の和集合）。
+
+    検出セルだけを数える（gap-fill は含めない）。検出セルが 1 つも無い特徴の最大は NaN。
+    検出状態（``detected_mask``）が無いデータセットは、gap-fill を見分けられないので
+    除外していない試料の全セルの最大（NaN は無視）を使い、検出数は None とする。
+    """
+    n_features = len(ds.feature_ids)
+    mask = ds.detected_mask
+    if ds.feature_matrix is None:
+        return np.full(n_features, np.nan), None
+    kept = included_sample_indices(ds)
+    keep = np.ones(len(ds.sample_names), dtype=bool)
+    if kept is not None:
+        keep[:] = False
+        keep[kept] = True
+    values = np.asarray(ds.feature_matrix, dtype=float)[:, keep]
+    finite = np.isfinite(values)
+    if mask is None:
+        # 検出の印が無い: gap-fill を見分けられないので、除外していない試料の全セルの最大
+        # （NaN は無視）。検出数は分からないので None。
+        counts = None
+        detected = finite
+    else:
+        detected = np.asarray(mask, dtype=bool)[:, keep] & finite
+        counts = detected.sum(axis=1)
+    if values.shape[1] == 0:
+        return np.full(n_features, np.nan), counts
+    best = np.where(detected, values, -np.inf).max(axis=1)
+    return np.where(np.isfinite(best), best, np.nan), counts
+
+
 def search_window(ds, *, feature_ids: list[str] | None, min_mz, max_mz, min_rt, max_rt,
-                  max_results: int) -> tuple[list[dict], int]:
+                  max_results: int, sort: str = "mz") -> tuple[list[dict], int]:
     """m/z・RT（分）の窓と特徴 ID の指定で特徴を探す（spec §4.2）。
 
     条件は与えられたものすべての AND で、境界を含む。``feature_ids`` は None のときだけ
     「条件なし」（空リストは「どの ID でもない」＝ 0 件）。条件が 1 つも無ければ
-    ``FEATURE_SEARCH_EMPTY_QUERY``（全特徴の列挙を黙って返さない）、下限 > 上限は
+    ``FEATURE_SEARCH_EMPTY_QUERY``（全特徴の列挙を黙って返さない。``sort="intensity"`` は
+    上位 ``max_results`` 件で打ち切るので条件なしでもよい）、下限 > 上限は
     ``FEATURE_SEARCH_BAD_RANGE``。m/z や RT を持たない特徴は、その軸の条件があれば外れる。
-    行は m/z 昇順（m/z 無しは最後。同値は特徴の並び順）で、``max_results`` 件に打ち切り、
-    切り捨てた件数を返す。統計はここでは付けない（`feature_stats`）。
+    ``ds.excluded_features`` の特徴は結果に出さない。
+
+    ``sort="mz"``（既定）は m/z 昇順（m/z 無しは最後。同値は特徴の並び順）。``sort="intensity"``
+    は検出セルの値の最大（除外した試料を除く）の降順で、検出セルが無い特徴は最後（同値は特徴の
+    並び順）。この強度は**ピークの高さ（データセットの測定値）の最大**で、EIC のクロマトグラムの
+    最大ではない。``max_results`` 件に打ち切り、切り捨てた件数を返す。統計はここでは付けない
+    （`feature_stats`）。
     """
-    if all(v is None for v in (feature_ids, min_mz, max_mz, min_rt, max_rt)):
+    if sort not in ("mz", "intensity"):
+        raise DomainError("FEATURE_SEARCH_BAD_SORT", f"sort は mz か intensity: {sort!r}",
+                          {"field": "sort"})
+    if sort == "mz" and all(v is None for v in (feature_ids, min_mz, max_mz, min_rt, max_rt)):
         raise DomainError(
             "FEATURE_SEARCH_EMPTY_QUERY",
-            "feature_ids・min_mz/max_mz・min_rt/max_rt のどれか 1 つは指定する",
+            "feature_ids・min_mz/max_mz・min_rt/max_rt のどれか 1 つは指定する"
+            "（条件なしで上位を見るなら sort=\"intensity\"）",
             {})
     _check_range(min_mz, max_mz, "mz")
     _check_range(min_rt, max_rt, "rt")
@@ -795,24 +855,38 @@ def search_window(ds, *, feature_ids: list[str] | None, min_mz, max_mz, min_rt, 
         return (low is None or value >= low) and (high is None or value <= high)
 
     hits = []
-    for fid in ds.feature_ids:
+    for index, fid in enumerate(ds.feature_ids):
+        if fid in ds.excluded_features:
+            continue
         if wanted is not None and fid not in wanted:
             continue
         meta = ds.feature_metadata.get(fid) or {}
         mz, rt = meta.get("mz"), meta.get("rt")
         if _inside(mz, min_mz, max_mz) and _inside(rt, min_rt, max_rt):
-            hits.append((fid, mz, rt))
-    hits.sort(key=lambda hit: (not _is_number(hit[1]), hit[1] if _is_number(hit[1]) else 0.0))
+            hits.append((fid, mz, rt, index))
+    best, counts = _detected_intensity(ds)
+    if sort == "intensity":
+        hits.sort(key=lambda hit: (math.isnan(best[hit[3]]),
+                                   0.0 if math.isnan(best[hit[3]]) else -best[hit[3]], hit[3]))
+    else:
+        hits.sort(key=lambda hit: (not _is_number(hit[1]), hit[1] if _is_number(hit[1]) else 0.0))
 
     limit = max(0, int(max_results))
     rows = []
-    for fid, mz, rt in hits[:limit]:
-        identity = _window_identity(ds.feature_candidates.get(fid), ds.feature_annotations.get(fid))
+    for fid, mz, rt, index in hits[:limit]:
+        meta = ds.feature_metadata.get(fid) or {}
+        annotation = ds.feature_annotations.get(fid) or {}
+        # 同定の標準化の列は解析フォルダのデータセットだけが持つ（mzTab-M は None のまま）
+        ident = meta.get("identity") or {}
         rows.append({
             "feature_id": fid,
             "mz": float(mz) if _is_number(mz) else None,
             "rt": float(rt) if _is_number(rt) else None,
-            **identity,
+            **_window_identity(ds.feature_candidates.get(fid), annotation),
+            "ontology": meta.get("ontology") or annotation.get("ontology") or None,
+            "n_detected": None if counts is None else int(counts[index]),
+            "normalized": ident.get("normalized"),
+            "msi_level": ident.get("msi_level"),
         })
     return rows, len(hits) - len(rows)
 
@@ -821,35 +895,105 @@ def _result_id(result: dict):
     return (result.get("provenance") or {}).get("result_id")
 
 
+_ENGINE_SEPARATOR = "#"
+
+
+def _engine_views(record: dict, rid: str, contrast_id: str | None = None) -> list[tuple[str, dict]]:
+    """`compare` の記録を 2 群の結果（`as_two_group`）に展開した ``[(id, 結果)]``。
+
+    ``contrast_id`` が無ければ交互作用を除く全対比。ID は対比が 1 つなら ``result_id``、複数なら
+    ``result_id#contrast_id``。``contrast_id`` があればその対比だけ（未知は `CONTRAST_REQUIRED`、
+    交互作用は `CONTRAST_NOT_TWO_GROUP`。どちらも `as_two_group` が候補つきで送出）。
+    各結果の ``provenance.result_id`` はその ID に置き換える（`feature_stats` や `result_summaries` が
+    これで結果を区別する）。元の記録は ``_source`` に ID だけ残す（割れの再検定が記録を引く）。
+    """
+    ids = contrast_ids(record)
+    wanted = [contrast_id] if contrast_id is not None else contrast_ids(record, two_group_only=True)
+    views = []
+    for cid in wanted:
+        view = as_two_group(record, cid)
+        view_id = rid if len(ids) == 1 else f"{rid}{_ENGINE_SEPARATOR}{cid}"
+        views.append((view_id, {**view, "provenance": {**view["provenance"], "result_id": view_id},
+                                "_source": {"result_id": rid, "contrast_id": cid}}))
+    return views
+
+
 def select_results(ds, result_ids: list[str] | None, *,
-                   dataset_hash: str | None = None) -> dict:
+                   dataset_hash: str | None = None, contrast_id: str | None = None,
+                   single: bool = False) -> dict:
     """統計を引く 2 群比較の結果を選ぶ。``{"results", "stale", "missing"}``。
 
-    省略（None）なら ``ds.results`` のうち ``kind == "two_group"`` のすべて。名指しなら、その
-    ID を引く。どちらも ``is_current`` でない結果は ``results`` に入れず ``stale`` に ID を
-    挙げる（古い統計を現在のデータの顔で返さない）。名指しの ID が無い、または 2 群比較で
-    ない結果（v2 の ``dataset_statistic`` = ``kind == "welch"`` など）は ``missing``。
+    省略（None）なら ``ds.results`` のうち比較の結果のすべて。名指しなら、その ID を引く。比較の結果は
+    統計エンジンの ``compare`` の記録で、対比ごとに `as_two_group` で 2 群の形に展開する（ID は対比が
+    1 つなら ``result_id``、複数なら ``result_id#contrast_id``。交互作用は除く）。
 
-    ``dataset_hash`` は計算済みの ``dataset_fingerprint(ds)``（任意）。引き継いだ結果ごとに
-    行列全体の hash を計算し直さないよう ``is_current`` へそのまま渡す。
+    対比の選び方:
+
+    - 名指しの ID は ``result_id`` か ``result_id#contrast_id``。``contrast_id`` 引数があれば ``result_id`` に
+      ``#contrast_id`` を付けたのと同じ（食い違えば `DATASET_BAD_REQUEST`）。
+    - 名指しした対比が無い・交互作用なら `CONTRAST_REQUIRED` / `CONTRAST_NOT_TWO_GROUP`（候補つき）。
+    - 省略（None）は、最初の概観が回した仮の比較（記録の ``origin == "overview"``）を含めない
+      （名指しすれば引ける）。
+    - 省略（None）で ``contrast_id`` があれば、それを持つ ``compare`` の記録だけがその対比になる。どの記録も
+      持たなければ `CONTRAST_REQUIRED`（候補は全記録の対比）。
+    - ``single=True``（単一の対比が要る呼び出し）では、対比が複数の記録を ID だけで名指しすると
+      `CONTRAST_REQUIRED`。False なら全対比に展開する。
+
+    今も有効でない結果は ``results`` に入れず ``stale`` に名指しした ID を 1 回だけ挙げる。名指しの ID が無い、
+    または比較でない結果（``stat_pca`` など）は ``missing``。指定を黙って捨てないよう、``compare`` の記録の
+    対比が交互作用だけで 2 群の結果に読み替えられない（統計は付かない）ときも ``missing`` に
+    ``"<ID>: <理由>"`` の 1 行で挙げる。
+
+    ``dataset_hash`` は計算済みの ``dataset_fingerprint(ds)``（任意）。
     """
     selected, stale, missing = [], [], []
+    done: set[str] = set()
     if result_ids is None:
-        pairs = [(rid, r) for rid, r in ds.results.items() if (r or {}).get("kind") == "two_group"]
-    else:
-        pairs = []
-        for rid in result_ids:
-            result = ds.results.get(rid)
-            if (result or {}).get("kind") == "two_group":
-                pairs.append((rid, result))
-            else:
-                missing.append(rid)
-    for rid, result in pairs:
-        if is_current(ds, result, dataset_hash=dataset_hash):
-            selected.append(result)
-        else:
-            stale.append(rid)
+        candidates = {rid: r for rid, r in ds.results.items() if (r or {}).get("origin") != "overview"}
+        records = [(rid, r) for rid, r in candidates.items() if (r or {}).get("kind") == "compare"]
+        if contrast_id is not None and records and not any(
+                contrast_id in contrast_ids(r) for _, r in records):
+            all_ids = sorted({c for _, r in records for c in contrast_ids(r)})
+            raise DomainError("CONTRAST_REQUIRED",
+                              f"どの比較の結果にも対比 {contrast_id!r} がありません。",
+                              {"contrast_id": contrast_id, "contrast_ids": all_ids})
+        for rid, result in records:
+            if contrast_id is not None and contrast_id not in contrast_ids(result):
+                continue
+            if not is_current(ds, result, dataset_hash=dataset_hash):
+                stale.append(rid)
+                continue
+            views = _engine_views(result, rid, contrast_id)
+            if not views:
+                missing.append(_interaction_only(rid, result))
+            selected.extend(view for _, view in views)
+        return {"results": selected, "stale": stale, "missing": missing}
+    for requested in dict.fromkeys(result_ids):
+        base, cid = split_result_ref(requested, contrast_id)
+        record = ds.results.get(base)
+        if (record or {}).get("kind") != "compare":
+            missing.append(requested)
+            continue
+        if cid is None and single:
+            as_two_group(record)                      # 対比が複数なら CONTRAST_REQUIRED（候補つき）
+        if not is_current(ds, record, dataset_hash=dataset_hash):
+            if requested not in stale:
+                stale.append(requested)
+            continue
+        views = _engine_views(record, base, cid)
+        if not views:
+            missing.append(_interaction_only(requested, record))
+        for view_id, view in views:
+            if view_id not in done:
+                done.add(view_id)
+                selected.append(view)
     return {"results": selected, "stale": stale, "missing": missing}
+
+
+def _interaction_only(rid: str, record: dict) -> str:
+    """対比が交互作用だけの `compare` の記録の `missing` の行（2 群の結果に読み替えられない）。"""
+    return (f"{rid}: 対比が交互作用だけ（{', '.join(contrast_ids(record))}）で 2 群の結果に"
+            "読み替えられないので統計を付けない")
 
 
 def _detected_counter(ds, result: dict):
@@ -899,7 +1043,7 @@ def feature_stats(ds, feature_ids: list[str], results: list[dict], *,
     None（呼び出し側が注記する）。取れるときは status に関わらず付ける。
 
     ``with_labels=True`` のときだけ ``comparison``・``group_a``・``group_b``・
-    ``log2fc_test_over_ref``（v1 の ``log2fc`` と同じ値。group_b / group_a）を足す。
+    ``log2fc_test_over_ref``（``log2fc`` と同じ値。group_b / group_a）を足す。
     """
     prepared = []
     for result in results:
@@ -1015,69 +1159,47 @@ def merged_dataset(ds, groups) -> tuple[object, dict[str, list[str]]]:
     return view, merged.merged_from
 
 
-def _result_recipe(ds, result: dict) -> dict | None:
-    """その 2 群比較を計算した前処理のレシピ（分からなければ None）。
+def retest_merged(ds, result: dict, *, groups=()) -> dict:
+    """比較の結果（`select_results` が `compare` の記録から展開したもの）を、割れをまとめた列で検定し直す。
 
-    pipeline の run から引き継いだ結果は来歴の ``handoff.preprocess``
-    （`session_handoff._run_preprocess_parameters` が写した run の ``resolved_recipe``）、
-    session で計算した結果は親（前処理の結果）の ``effective_parameters``。
+    記録の spec（入力の除外・群の上書き・前処理・設計・対比・検定の設定）をそのまま使い、
+    `from_dataset` で作った StudyData の割れた特徴の列を `merge_feature_columns` でまとめてから
+    `run_spec_v2` に渡す（StudyData の source には spec の `input` が再適用されないので、ここで当てる）。
+    BH の母集団はまとめた後の全特徴。個体・注入の対応は記録の `units` のまま（まとめても変わらない）。
+    戻り値は ``result`` の写しで、``results`` ``volcano`` ``statistics`` だけがやり直した値。元の記録が無い・
+    まとめた行列で比較をやり直せないときは ``FEATURE_MERGE_UNAVAILABLE``（まとめる前の数字をまとめた後の
+    顔で返さない）。
     """
-    provenance = result.get("provenance") or {}
-    handoff = provenance.get("handoff")
-    if isinstance(handoff, dict):
-        recipe = handoff.get("preprocess")
-        return dict(recipe) if isinstance(recipe, dict) else None
-    for parent in provenance.get("parent_ids") or []:
-        params = (((getattr(ds, "results", None) or {}).get(parent) or {}).get("provenance")
-                  or {}).get("effective_parameters")
-        if isinstance(params, dict):
-            return dict(params)
-    return None
+    from metabolomix.analysis.stats.data import from_dataset, merge_feature_columns
+    from metabolomix.analysis.stats.spec_v2 import run_spec_v2
 
-
-def retest_merged(ds, view, result: dict) -> dict:
-    """まとめた行列（``view``）で、``result`` と同じ前処理・同じ 2 群検定をやり直す。
-
-    前処理は ``result`` を計算したレシピ（`_result_recipe`）を `run_dataset_preprocess` で
-    当て直し、検定は `differential.two_group_test`（``result`` の ``log_transform``。pipeline の
-    既定は log 変換の Welch）と `add_fdr`（**まとめた後の全特徴**で BH）。群は ``result`` の
-    ``samples_a`` / ``samples_b``（`dataset_service.compare_dataset` が検定に使った試料）。
-    検定と補正の種類は変えないので、判定の規則の意味は同じ。戻り値は ``result`` の写しで、
-    ``results`` だけがやり直した行。レシピが分からない・前処理を当て直せない・群の試料が
-    前処理の後に無いときは ``FEATURE_MERGE_UNAVAILABLE``（まとめる前の数字をまとめた後の顔で
-    返さない）。
-    """
-    from metabolomix.analysis import differential
-    from metabolomix.analysis.dataset_analysis import PreconditionError, run_dataset_preprocess
-
+    source = result["_source"]
+    record = ds.results.get(source["result_id"])
     result_id = _result_id(result)
-    recipe = _result_recipe(ds, result)
-    if recipe is None:
+    if record is None or record.get("kind") != "compare":
         raise DomainError("FEATURE_MERGE_UNAVAILABLE",
-                          f"差次的結果 {result_id} を計算した前処理のレシピが分からないので、割れた"
-                          "スポットをまとめて検定し直せない。merge_split=false で呼ぶか、"
-                          "dataset_differential で計算し直す。", {"result_id": result_id})
+                          f"差次的結果 {result_id} の元の記録が無いので、割れたスポットをまとめて"
+                          "検定し直せない。", {"result_id": result_id})
+    spec = record["spec"]
+    inputs = spec["input"]
     try:
-        matrix, names, features, *_ = run_dataset_preprocess(view, recipe)
-    except PreconditionError as exc:
+        study = from_dataset(ds, exclude_samples=inputs["exclude_samples"],
+                             exclude_features=inputs["exclude_features"],
+                             group_overrides=inputs["group_overrides"])
+        run = run_spec_v2(spec, merge_feature_columns(study, [list(g) for g in groups]))
+        analysis = next((a for a in run.get("analyses") or []
+                         if a["analysis_id"] == record["analysis_id"]), None)
+    except DomainError as exc:
         raise DomainError("FEATURE_MERGE_UNAVAILABLE",
-                          f"まとめた行列に {result_id} の前処理を当て直せない: {exc.message}",
-                          {"result_id": result_id, "recipe": recipe}) from exc
-    position = {name: i for i, name in enumerate(names)}
-    samples_a = list(result.get("samples_a") or [])
-    samples_b = list(result.get("samples_b") or [])
-    absent = [name for name in samples_a + samples_b if name not in position]
-    if absent or not samples_a or not samples_b:
+                          f"まとめた行列で {result_id} の比較をやり直せない: {exc.message}",
+                          {"result_id": result_id, "cause": exc.code}) from exc
+    if analysis is None:
         raise DomainError("FEATURE_MERGE_UNAVAILABLE",
-                          f"差次的結果 {result_id} の群の試料が、前処理を当て直した行列に無い"
-                          f"（{absent or 'samples_a / samples_b が空'}）。",
-                          {"result_id": result_id, "absent_samples": absent})
-    group_a, group_b = result.get("a"), result.get("b")
-    labels = [group_a] * len(samples_a) + [group_b] * len(samples_b)
-    rows = differential.two_group_test(
-        matrix[[position[name] for name in samples_a + samples_b], :], features, labels,
-        group_a, group_b, log_transform=bool(result.get("log_transform", True)))
-    return {**result, "results": differential.add_fdr(rows)}
+                          f"まとめた行列に {result_id} の前処理を当て直せない"
+                          "（利用者への確認が要る前処理）。", {"result_id": result_id})
+    redone = as_two_group({**record, "engine": analysis["result"]}, source["contrast_id"])
+    return {**result, "results": redone["results"], "volcano": redone["volcano"],
+            "statistics": redone["statistics"]}
 
 
 def merge_map(groups) -> dict[str, list[str]]:
@@ -1099,7 +1221,7 @@ def merged_results(ds, results: list[dict], groups, feature_ids) -> dict:
     view, merged_from = merged_dataset(ds, groups)
     wanted = {str(f) for f in feature_ids}
     touched = {kept: group for kept, group in merged_from.items() if wanted.intersection(group)}
-    redone = {_result_id(result): retest_merged(ds, view, result) for result in results}
+    redone = {_result_id(result): retest_merged(ds, result, groups=groups) for result in results}
     return {"view": view, "merged_from": merged_from, "touched": touched, "results": redone}
 
 

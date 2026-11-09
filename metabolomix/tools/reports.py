@@ -1,149 +1,63 @@
 """解析・解釈レポートと図の保存ツール群。
 
-write/read/list_reports, save_figure。
-レポート先の解決は mcp_core（DATA_DIR を動的参照）に委ねる。deps: mcp_core /
-session_state / tool_helpers / knowledge_store / matplotlib。
-tools_* / server は import しない。
+write_report / read_report（ID を省くと一覧）/ save_figure。
+レポート先は `[paths] reports_dir`（あれば先）→ データセットの解析フォルダ配下 `reports/`（mcp_core）。
+各ツールは `dataset_handle` で読み書きするハンドルを選ぶ（省略時は直近）。save_figure は `dataset_plot` が置いた
+`ds.figures` から描く。deps: mcp_core / plot_tools（遅延 import）/ notes / matplotlib。
+server は import しない。
 """
-import matplotlib.pyplot as plt
 
-from metabolomix.corpus import knowledge_store
+from metabolomix.tools import notes
 from metabolomix.core import mcp_errors
-from metabolomix.core import session_state
+from metabolomix.core.mcp_errors import config_invalid_as_envelope
 from mcp.types import ToolAnnotations
 from metabolomix.core.serialization import json_payload
 from metabolomix.core.mcp_core import mcp, _resolve_report_dir, _report_dir_candidates, _build_report_meta
-from metabolomix.core.tool_helpers import _pca_scatter_arrays, dataset_pca_plot
-from metabolomix.plots.eic import render_eic_plot
-from metabolomix.plots.volcano import render_volcano_plot
+from metabolomix.plots.render import render_files
+from metabolomix.tools._holder import resolve_holder as _resolve_holder
 
 __all__ = [
     "write_report",
     "read_report",
-    "list_reports",
     "save_figure",
 ]
-
-
-# --- 図の入力元の選択（ARF 経路 / 分子種 PCA 経路 / mzTab-M 経路） ---
-#
-# 図の描画は 3 つのセッションスロットから来る。ARF 経路は session.arf.last_pca_plot（volcano は
-# last_differential）に、分子種 PCA（arf_pca_species。kind="pca" だけ）は session.arf.last_species_pca に、
-# mzTab-M 経路は session.dataset（DatasetState）に結果を置く。
-#
-# **どちらかを優先しない**。旧実装は両方あるとき黙って ARF を採っていたので、
-# 新しく読み込んだ mzTab の解析をしているつもりでも前のデータの図が保存され得た。
-# 候補を並べて select_result に決めさせ、決まらなければ描かずに止める。
-
-def _pca_candidates() -> list[dict]:
-    from metabolomix.analysis.result_state import is_current
-
-    candidates: list[dict] = []
-    plot = getattr(session_state.session.arf, "last_pca_plot", None)
-    if plot and plot.get("points"):
-        prov = plot.get("provenance") or {}
-        candidates.append({
-            "source": "arf", "result_id": prov.get("result_id"),
-            "dataset_id": prov.get("dataset_id"), "valid": True,
-            "result": plot, "ds": None})
-    species = getattr(session_state.session.arf, "last_species_pca", None)
-    if species and species.get("points"):
-        prov = species.get("provenance") or {}
-        candidates.append({
-            "source": "species", "result_id": prov.get("result_id"),
-            "dataset_id": prov.get("dataset_id"), "valid": True,
-            "result": species, "ds": None})
-    ds = getattr(session_state.session, "dataset", None)
-    ds_pca = getattr(ds, "last_pca", None) if ds is not None else None
-    if ds_pca:
-        projected = dataset_pca_plot(ds_pca)
-        if projected:
-            prov = ds_pca.get("provenance") or {}
-            candidates.append({
-                "source": "mztab", "result_id": prov.get("result_id"),
-                "dataset_id": prov.get("dataset_id"),
-                "valid": is_current(ds, ds_pca), "result": projected, "ds": ds})
-    return candidates
-
-
-def _differential_candidates() -> list[dict]:
-    from metabolomix.analysis.result_state import is_current
-
-    candidates: list[dict] = []
-    last = getattr(session_state.session.arf, "last_differential", None)
-    if last and last.get("volcano"):
-        prov = last.get("provenance") or {}
-        candidates.append({
-            "source": "arf", "result_id": prov.get("result_id"),
-            "dataset_id": prov.get("dataset_id"), "valid": True,
-            "result": last, "ds": None})
-    ds = getattr(session_state.session, "dataset", None)
-    ds_diff = getattr(ds, "last_differential", None) if ds is not None else None
-    if ds_diff and ds_diff.get("volcano"):
-        prov = ds_diff.get("provenance") or {}
-        candidates.append({
-            "source": "mztab", "result_id": prov.get("result_id"),
-            "dataset_id": prov.get("dataset_id"),
-            "valid": is_current(ds, ds_diff), "result": ds_diff, "ds": ds})
-    return candidates
-
-
-def _figure_missing_state(kind: str) -> str:
-    if kind == "pca":
-        return mcp_errors.missing_state(
-            "pca_result",
-            ["arf_parser", "arf_pca_preprocessed", "arf_pca_species", "load_dataset", "dataset_pca"],
-            "先に arf_parser / arf_pca_preprocessed / arf_pca_species / load_dataset 等でPCAを実行してください"
-            "（PCA結果がありません）。")
-    return mcp_errors.missing_state(
-        "differential_result", ["arf_differential", "dataset_differential"],
-        "[error] 直近の差次的解析（volcano データ）がありません。"
-        "先に arf_differential または dataset_differential を実行してください。")
-
-
-def _choose_figure_result(kind: str, source: str, result_id: str | None):
-    """候補から 1 件選ぶ。選べないときはエラーエンベロープ文字列を返す。"""
-    from metabolomix.core.atomic_io import DomainError
-    from metabolomix.plots.result_output import select_result
-
-    candidates = (_pca_candidates() if kind == "pca" else _differential_candidates())
-    if not candidates:
-        return _figure_missing_state(kind)
-    try:
-        return select_result(candidates, source=source, result_id=result_id)
-    except DomainError as exc:
-        return mcp_errors.mztab_error(exc.code, exc.message, exc.details or None)
 
 
 # --- 解析・解釈レポート（reports/<analysis_id>.md） ---
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=True), structured_output=False)
+@config_invalid_as_envelope
 def write_report(
     analysis_id: str,
     dataset: str,
     body: str,
     status: str = "draft",
-    knowledge_refs: list[str] | None = None,
+    dataset_handle: str | None = None,
 ) -> str:
     """解析・解釈レポートを reports/<analysis_id>.md に上書き保存する（成果物＋記録）。
 
     body は frontmatter を含まない Markdown 本文。推奨セクション見出し:
     `## 目的` / `## 実施した解析` / `## 主要な所見` / `## 解釈` /
     `## 注意点・コンフリクト` / `## 結論`。所見が増えたら本文を作り直して再度呼ぶ
-    （ファイルは毎回上書き）。引用した knowledge/playbook の slug を knowledge_refs に渡す。
-    LIPIDMIX_REPORTS_DIRの明示先を優先し、書込不可なら解析フォルダ配下reports/。
+    （ファイルは毎回上書き）。
+    lipidmix.local.toml の [paths] reports_dir の明示先を優先し、書込不可なら解析フォルダ配下reports/。
     未指定時は解析フォルダ配下reports/だけを使う（リポジトリ側へは退避しない）。
+    解析フォルダは直近のデータセット（または dataset_handle）のもの。設定の置き場所も
+    データセットも無いときは missing_state（load_dataset）。
 
     analysis_id はファイル名 slug の元になるため ASCII で一意に。別IDが同一slugに潰れて既存
     レポートを上書きしそうな場合は保存を中止して通知する（objectiveレコードと同じIDを推奨）。
     """
-    slug = knowledge_store.make_slug(analysis_id)
+    holder = _resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    slug = notes.make_slug(analysis_id)
     # slug衝突ガード: 別の analysis_id が同一ファイル名に潰れる場合は、既存レポートを
     # 黙って上書きせず中止する（同一IDの上書きは意図どおり許可）。非ASCII/記号違いのIDで起きうる。
-    for directory in _report_dir_candidates():
+    for directory in _report_dir_candidates(holder):
         existing = directory / f"{slug}.md"
         if existing.is_file():
-            ex_meta, _ = knowledge_store.parse_frontmatter(existing.read_text(encoding="utf-8"))
+            ex_meta, _ = notes.parse_frontmatter(existing.read_text(encoding="utf-8"))
             ex_id = str(ex_meta.get("analysis_id", ""))
             if ex_id and ex_id != analysis_id:
                 return (
@@ -152,21 +66,31 @@ def write_report(
                     "上書きを避けました。ASCIIで一意な analysis_id を指定してください。"
                 )
             break  # 同一ID → 上書きしてよい
-    reports_dir = _resolve_report_dir()
-    meta = _build_report_meta(analysis_id, dataset, status, knowledge_refs)
-    path = knowledge_store.write_note(reports_dir, slug, meta, body)
+    reports_dir = _resolve_report_dir(holder)
+    meta = _build_report_meta(analysis_id, dataset, status)
+    path = notes.write_note(reports_dir, slug, meta, body)
     return f"レポートを保存: {path}（status={status}）。read_report('{analysis_id}') で読み戻せます。"
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def read_report(analysis_id: str) -> str:
-    """過去レポートを読み戻す（候補ディレクトリ横断で最新更新のものを返す）。セッション継続用。
+@config_invalid_as_envelope
+def read_report(analysis_id: str | None = None, dataset_handle: str | None = None) -> str:
+    """過去レポートを読み戻す。analysis_id を省くと既存レポートの 1 行索引を返す。
 
+    dataset_handle: 解析フォルダを決めるハンドル（省略時は直近）。
+    analysis_id を渡すと、候補ディレクトリ横断で最新更新のものの本文を返す（セッション継続用）。
     解析フォルダ配下と退避先の両方に同名レポートが残る場合（書き込み可否が途中で変化した等）、
     古い方を返さないよう mtime が最新のファイルを採用する。
+    省いた場合の索引は 1 行ずつ `analysis_id / date / status`。候補ディレクトリ横断で同一
+    analysis_id が重複するときは mtime が最新の 1 件を採用する。
     """
-    slug = knowledge_store.make_slug(analysis_id)
-    matches = [d / f"{slug}.md" for d in _report_dir_candidates()]
+    holder = _resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    if analysis_id is None:
+        return _list_reports(holder)
+    slug = notes.make_slug(analysis_id)
+    matches = [d / f"{slug}.md" for d in _report_dir_candidates(holder)]
     matches = [p for p in matches if p.is_file()]
     if not matches:
         return f"レポートが見つかりません: {analysis_id}（write_report で作成してください）"
@@ -174,19 +98,15 @@ def read_report(analysis_id: str) -> str:
     return newest.read_text(encoding="utf-8")
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def list_reports() -> str:
-    """既存レポートの1行索引（analysis_id / date / status）を返す。
-
-    候補ディレクトリ横断で同一 analysis_id が重複する場合は mtime が最新の1件を採用する。
-    """
+def _list_reports(holder) -> str:
+    """既存レポートの 1 行索引（analysis_id / date / status）。"""
     # analysis_id -> (mtime, 表示行)。最新更新の行を残す。
     best: dict[str, tuple[float, str]] = {}
-    for directory in _report_dir_candidates():
+    for directory in _report_dir_candidates(holder):
         if not directory.is_dir():
             continue
         for path in sorted(directory.glob("*.md")):
-            meta, _body = knowledge_store.parse_frontmatter(path.read_text(encoding="utf-8"))
+            meta, _body = notes.parse_frontmatter(path.read_text(encoding="utf-8"))
             if meta.get("type") != "report":
                 continue
             aid = str(meta.get("analysis_id", path.stem))
@@ -202,170 +122,140 @@ def list_reports() -> str:
     return "\n".join(lines)
 
 
-#: save_figure が受け付ける図の種類。
-FIGURE_KINDS = ("pca", "volcano", "eic", "group_intensity", "species", "pca_loadings")
-#: ARF と mzTab のどちらの結果を描くかを選ぶ必要がある種類（source / result_id を使う）。
-_SOURCE_KINDS = ("pca", "volcano")
+#: save_figure が受け付ける図の種類（`dataset_plot` の kind）。
+FIGURE_KINDS = ("pca", "volcano", "loadings", "group_intensity", "species", "species_pca",
+                "eic", "eic_compounds")
+#: `result_id` で登録された結果から描ける kind（`ds.results`）。
+_RESULT_KINDS = ("pca", "volcano", "loadings")
+#: 結果から作った図（保存の直前に、その結果が今のものか確かめる）。`species_pca` は項目の指定から作る
+#: 結果なので `result_id` では描き直せない（`_RESULT_KINDS` には入れない）。
+_RESULT_DERIVED_KINDS = _RESULT_KINDS + ("species_pca",)
+_LABELS = {"pca": "PCA", "volcano": "volcano", "loadings": "ローディング",
+           "group_intensity": "群別強度", "species": "分子種", "species_pca": "分子種の PCA",
+           "eic": "EIC", "eic_compounds": "EIC 重ね描き"}
 
 
 @mcp.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=True), structured_output=False)
+@config_invalid_as_envelope
 def save_figure(kind: str, analysis_id: str, title: str | None = None,
-                source: str = "auto", result_id: str | None = None) -> str:
-    """明示的なユーザー要求時だけ、直近の図を reports/figures/<analysis_id>_<kind>.png に保存する。
+                result_id: str | None = None, dataset_handle: str | None = None) -> str:
+    """明示的なユーザー要求時だけ、データセットの図を reports/figures/<analysis_id>_<kind>.png に保存する。
 
-    kind: "pca"（arf_parser / arf_pca_preprocessed / arf_pca_species / dataset_pca のスコア。
-      arf_pca_species の結果は source="species"）/ "volcano"
-      （arf_differential / dataset_differential。間引き前の全点）/ "eic"（eic_plot_chromatograms /
-      eic_plot_compounds）/ "group_intensity"（arf_plot_group_intensity。dpi 300 の PNG と同名 .svg）/
-      "species"（arf_plot_species。dpi 300 の PNG と同名 .svg）/
-      "pca_loadings"（plot_pca_loadings。dpi 300 の PNG と同名 .svg）。
-    source / result_id: kind が pca / volcano のときだけ使う。"auto"（既定）はどちらも優先せず、
-      有効な結果が 2 つ以上あると AMBIGUOUS_RESULT_SOURCE で止まる（"arf" / "mztab"、kind="pca" のときだけ
-      "species"（arf_pca_species）でも指定できる）。
-    通常の対話描画では呼ばない（各描画ツールが画像を返す）。返り値の相対パスは write_report の
+    kind は `dataset_plot` の kind: "pca" / "volcano"（間引き前の全点）/ "loadings" / "group_intensity" /
+    "species" / "species_pca"（いずれも dpi 300 の PNG と同名 .svg）/ "eic" / "eic_compounds"。`dataset_plot` が最後に作った図（`ds.figures[kind]`）を描く。
+    まだ図が無ければ missing_state（`dataset_plot` を案内）。結果から作った図（pca / volcano / loadings）は、
+    その結果が現在のものでなければ（前処理・除外・群の変更で古くなった）保存しない。
+    group_intensity / species / species_pca は群を図に焼き込むので、試料の情報（群・役割）が更新されたあとは保存しない
+    （species_pca は結果から作った図でもある）。
+    eic / eic_compounds は結果から作った図ではないので、描いたとおりに保存する（あとで `dataset_exclude` しても変わらない）。
+    result_id: kind が pca / volcano / loadings のときだけ。登録された結果を名指しして描く
+      （`dataset_plot` を呼ばなくてよい。古い結果は STALE_ANALYSIS_RESULT）。volcano では
+      `dataset_compare` の結果の対比を `"result_id#contrast_id"`（`dataset_feature_search` が出す形）で選ぶ
+      （このツールに `contrast_id` の引数は無い。対比が複数の結果を `#` 無しで渡すと CONTRAST_REQUIRED）。
+    dataset_handle: `load_dataset` が返したハンドル（省略時は直近）。
+    通常の対話描画では呼ばない（`dataset_plot` が画像を返す）。返り値の相対パスは write_report の
     本文に `![...](figures/<analysis_id>_<kind>.png)` として埋め込める。
     """
+    from metabolomix.core.atomic_io import DomainError
+    from metabolomix.tools import plot_tools
+    from metabolomix.tools._holder import resolve_holder
+
     if kind not in FIGURE_KINDS:
         return json_payload({"status": "error", "message":
                              f"kind は {', '.join(FIGURE_KINDS)} のどれかを指定してください（受け取った値: {kind!r}）。"})
-    if kind not in _SOURCE_KINDS and (source != "auto" or result_id is not None):
+    if result_id is not None and kind not in _RESULT_KINDS:
         return json_payload({"status": "error", "message":
-                             f"source / result_id は kind が {' / '.join(_SOURCE_KINDS)} のときだけ指定できます"
+                             f"result_id は kind が {' / '.join(_RESULT_KINDS)} のときだけ指定できます"
                              f"（kind={kind!r}）。"})
-    if kind == "pca":
-        chosen = _choose_figure_result("pca", source, result_id)
-        if isinstance(chosen, str):
-            return chosen
-        return _save_figure(chosen, analysis_id, title, kind="pca", label="PCA")
-    if kind == "volcano":
-        chosen = _choose_figure_result("differential", source, result_id)
-        if isinstance(chosen, str):
-            return chosen
-        return _save_figure(chosen, analysis_id, title, kind="volcano", label="volcano")
-    if kind == "eic":
-        return _save_eic(analysis_id, title)
-    if kind == "group_intensity":
-        return _save_group_intensity(analysis_id, title)
-    if kind == "species":
-        return _save_species(analysis_id, title)
-    if kind == "pca_loadings":
-        return _save_pca_loadings(analysis_id, title)
-    raise AssertionError(f"unhandled figure kind: {kind!r}")  # FIGURE_KINDS に足したら分岐も足す
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    ds = holder.dataset
+    if ds is None:
+        return mcp_errors.missing_state("dataset", ["load_dataset"],
+                                        "DatasetState がありません。先に load_dataset を実行してください。")
+    try:
+        if result_id is not None:
+            record = plot_tools.build_figure(ds, kind, result_id=result_id)
+        else:
+            record = ds.figures.get(kind)
+            if record is None:
+                return mcp_errors.missing_state(
+                    f"{kind}_figure", ["dataset_plot"],
+                    f"先に dataset_plot(kind=\"{kind}\") で図を作ってください（このデータセットに {kind} の図がありません。"
+                    "前処理・除外・群の変更で古くなった結果の図は捨てられます）。")
+            stale = _stale_figure(ds, record)
+            if stale:
+                return mcp_errors.missing_state(f"{kind}_figure", ["dataset_plot"], stale)
+        return _save_record(ds, record, analysis_id, title, holder)
+    except plot_tools._Missing as exc:
+        return mcp_errors.missing_state(exc.state, exc.required_tools, exc.message)
+    except DomainError as exc:
+        return mcp_errors.mztab_error(exc.code, exc.message, exc.details or None)
 
 
-def _save_figure(chosen: dict, analysis_id: str, title: str | None, *,
-                 kind: str, label: str) -> str:
-    """選ばれた結果を PNG にして、どの結果から描いたかを添えて返す。"""
+def _stale_figure(ds, record: dict) -> str | None:
+    """結果から作った図が、今の結果から出たものでなければ理由を返す（`invalidate_results` が拾えない
+    再前処理などの取りこぼしを、保存の直前に塞ぐ）。"""
+    from metabolomix.analysis.result_state import is_current
+
+    revision = record.get("metadata_revision")
+    if revision is not None and revision != getattr(ds, "metadata_revision", 0):
+        return (f"この図は試料の情報（群・バッチ・役割）を色に焼き込んだものですが、その後に試料の情報が更新されました"
+                f"（実験情報シートの適用・除外など）。dataset_plot(kind=\"{record['kind']}\") で作り直してください。")
+    result_id = record.get("result_id")
+    if record["kind"] not in _RESULT_DERIVED_KINDS or result_id is None:
+        return None
+    result = (ds.results or {}).get(result_id)
+    if result is None or not is_current(ds, result):
+        return (f"この図は結果 {result_id} から作ったものですが、その結果はいまのデータセットの状態から出たものでは"
+                f"ありません。dataset_plot(kind=\"{record['kind']}\") で作り直してください。")
+    return None
+
+
+def _save_record(ds, record: dict, analysis_id: str, title: str | None, holder) -> str:
+    """図の記録を `reports/figures/` に保存し、どの結果から描いたかを添えて返す。"""
+    from metabolomix.plots import eic as eic_plot
+    from metabolomix.plots import group_intensity as group_intensity_plot
+    from metabolomix.plots import pca_loadings as loadings_plot
+    from metabolomix.plots import pca_scores as scores_plot
+    from metabolomix.plots import species as species_plot
     from metabolomix.plots.result_output import save_result_figure
 
-    slug = knowledge_store.make_slug(analysis_id)
-    figures_dir = _resolve_report_dir() / "figures"
-    out_path = save_result_figure(
-        chosen.get("ds"), chosen["result"],
-        figures_dir / f"{slug}_{kind}.png",
-        kind=kind, title=title)
-
-    rel = f"figures/{out_path.name}"
-    result_id = chosen.get("result_id") or "(なし)"
-    return (f"{label}図を保存: {out_path}"
-            f"（source={chosen['source']} result_id={result_id}）\n"
-            f"本文に ![{label}]({rel}) で埋め込めます。")
-
-
-def _save_eic(analysis_id: str, title: str | None) -> str:
-    """直近EICプロット情報（eic_plot_chromatograms / eic_plot_compounds）をPNGとして保存する。"""
-    plot = getattr(session_state.session.eic, "last_plot", None)
-    if not plot or not plot.get("series"):
-        return mcp_errors.missing_state(
-            "eic_plot", ["eic_plot_chromatograms", "eic_plot_compounds"],
-            "先に eic_plot_chromatograms または eic_plot_compounds を実行してください"
-            "（EICプロット情報がありません）。")
-
-    slug = knowledge_store.make_slug(analysis_id)
-    reports_dir = _resolve_report_dir()
-    figures_dir = reports_dir / "figures"
-    figures_dir.mkdir(parents=True, exist_ok=True)
-    out_path = figures_dir / f"{slug}_eic.png"
-    fig = render_eic_plot(plot, title=title)
-    try:
-        fig.savefig(out_path, dpi=120, format="png", bbox_inches="tight")
-    finally:
-        plt.close(fig)
-
-    rel = f"figures/{out_path.name}"
-    return f"EIC図を保存: {out_path}\n本文に ![EIC]({rel}) で埋め込めます。"
+    kind = record["kind"]
+    out_path = _figures_dir(holder) / f"{notes.make_slug(analysis_id)}_{kind}.png"
+    title = title or record.get("title")
+    both = ""
+    if kind == "pca":
+        save_result_figure(ds, record["payload"], out_path, kind="pca", title=title)
+    elif kind == "volcano":
+        save_result_figure(ds, record["result"], out_path, kind="volcano", title=title)
+    elif kind == "loadings":
+        _write_png_and_svg(loadings_plot.render_loadings_plot, out_path, record["payload"], title=title)
+        both = "（同名の .svg も保存）"
+    elif kind in ("group_intensity", "species", "species_pca"):
+        build = {"group_intensity": group_intensity_plot.render_group_intensity_plot,
+                 "species": species_plot.render_species_plot,
+                 "species_pca": scores_plot.render_pca_scores}[kind]
+        _write_png_and_svg(build, out_path, record["payload"],
+                           title=title or (record["payload"]["title"] if kind == "species_pca" else None))
+        both = "（同名の .svg も保存）"
+    else:
+        render_files(eic_plot.render_eic_plot, {"png": out_path}, record["payload"], dpi=120, title=title)
+    label = _LABELS[kind]
+    origin = f" result_id={record['result_id']}" if record.get("result_id") else ""
+    return (f"{label}図を保存: {out_path}{both}{origin}\n"
+            f"本文に ![{label}](figures/{out_path.name}) で埋め込めます。")
 
 
-def _save_group_intensity(analysis_id: str, title: str | None) -> str:
-    """直前の arf_plot_group_intensity の図を PNG（dpi 300）と同名 .svg に保存する。"""
-    from metabolomix.plots.group_intensity import render_group_intensity_plot
-
-    last = getattr(session_state.session.arf, "last_group_intensity", None)
-    if not last or not last.get("payload"):
-        return mcp_errors.missing_state(
-            "group_intensity_plot", ["arf_plot_group_intensity"],
-            "先に arf_plot_group_intensity を実行してください（群別強度の図がありません）。")
-    out_path = _figures_dir() / f"{knowledge_store.make_slug(analysis_id)}_group_intensity.png"
-    fig = render_group_intensity_plot(last["payload"], title=title or last.get("title"), ncols=last.get("ncols"))
-    _write_png_and_svg(fig, out_path)
-    rel = f"figures/{out_path.name}"
-    return (f"群別強度の図を保存: {out_path}（同名の .svg も保存）\n"
-            f"本文に ![group intensity]({rel}) で埋め込めます。")
-
-
-def _save_species(analysis_id: str, title: str | None) -> str:
-    """直前の arf_plot_species の図を PNG（dpi 300）と同名 .svg に保存する。"""
-    from metabolomix.plots.species import render_species_plot
-
-    last = getattr(session_state.session.arf, "last_species_plot", None)
-    if not last or not last.get("payload"):
-        return mcp_errors.missing_state(
-            "species_plot", ["arf_plot_species"],
-            "先に arf_plot_species を実行してください（分子種ごとの図がありません）。")
-    out_path = _figures_dir() / f"{knowledge_store.make_slug(analysis_id)}_species.png"
-    fig = render_species_plot(last["payload"], title=title or last.get("title"), ncols=last.get("ncols"))
-    _write_png_and_svg(fig, out_path)
-    return (f"分子種ごとの図を保存: {out_path}（同名の .svg も保存）\n"
-            f"本文に ![species](figures/{out_path.name}) で埋め込めます。")
-
-
-def _save_pca_loadings(analysis_id: str, title: str | None) -> str:
-    """直前の plot_pca_loadings の図を PNG（dpi 300）と同名 .svg に保存する。"""
-    from metabolomix.plots.pca_loadings import render_loadings_plot
-
-    last = getattr(session_state.session, "last_loadings_plot", None)
-    if not last or not last.get("payload"):
-        return mcp_errors.missing_state(
-            "pca_loadings_plot", ["plot_pca_loadings"],
-            "先に plot_pca_loadings を実行してください（ローディング図がありません）。")
-    payload = last["payload"]
-    # 描いた後に PCA が入れ替わった（データセット切替・再実行・前処理の無効化）図は保存しない。
-    from metabolomix.tools.pca_loadings_tools import _candidates
-    if not any(c["valid"] and c["source"] == payload["source"] and c["result_id"] == payload["result_id"]
-               for c in _candidates()):
-        return mcp_errors.missing_state(
-            "pca_loadings_plot", ["plot_pca_loadings"],
-            "直前のローディング図は、いまの PCA 結果から描いたものではありません"
-            f"（source={payload['source']} result_id={payload['result_id'] or '(なし)'} は現在の結果にありません）。"
-            "plot_pca_loadings をもう一度実行してください。")
-    out_path = _figures_dir() / f"{knowledge_store.make_slug(analysis_id)}_pca_loadings.png"
-    _write_png_and_svg(render_loadings_plot(payload, title=title or last.get("title")), out_path)
-    return (f"ローディング図を保存: {out_path}（同名の .svg も保存。source={payload['source']} "
-            f"result_id={payload['result_id'] or '(なし)'}）\n"
-            f"本文に ![PCA loadings](figures/{out_path.name}) で埋め込めます。")
-
-
-def _figures_dir():
-    figures_dir = _resolve_report_dir() / "figures"
+def _figures_dir(holder):
+    figures_dir = _resolve_report_dir(holder) / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
     return figures_dir
 
 
-def _write_png_and_svg(fig, out_path) -> None:
-    """報告書用の図を dpi 300 の PNG と同名 SVG で書く（Figure は閉じる）。"""
-    try:
-        fig.savefig(out_path, dpi=300, format="png", bbox_inches="tight")
-        fig.savefig(out_path.with_suffix(".svg"), format="svg", bbox_inches="tight")
-    finally:
-        plt.close(fig)
+def _write_png_and_svg(build, out_path, /, *args, **kwargs) -> None:
+    """報告書用の図を dpi 300 の PNG と同名 SVG で書く（描画は `PLOT_LOCK` の下）。"""
+    render_files(build, {"png": out_path, "svg": out_path.with_suffix(".svg")},
+                 *args, dpi=300, **kwargs)

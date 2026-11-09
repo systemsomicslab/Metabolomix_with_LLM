@@ -1,7 +1,6 @@
 # 参照ライブラリ照合（MS/MS スペクトル照合）の出力フィールド
 
-`library_load` / `library_match_feature` / `library_plot_mirror` が返す値の意味と、
-`verify_peak_annotation`（`analytical_checks.msms.spectral_match`）に載る同じ形の値。
+`library_load` / `library_match_feature` / `library_plot_mirror` が返す値の意味。
 
 > 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項はそちらで定義され、ここでは繰り返さない。節番号は分割前の通し番号。
 
@@ -20,8 +19,7 @@
 
 ### 14.1 各スコアの意味
 
-`library_match_feature` の候補一覧・`library_plot_mirror` の材料・
-`verify_peak_annotation` の `spectral_match.best_match` はすべて同じ 5 指標を使う。
+`library_match_feature` の候補一覧・`library_plot_mirror` の材料はすべて同じ 5 指標を使う。
 
 | キー | MS-DIAL 対応 | 意味 |
 |---|---|---|
@@ -134,11 +132,12 @@
 
 **記憶から開く（`file_path` を省いたとき）**: 直近のデータセット（`dataset_handle` を渡せばそのハンドル）が
 同定に使ったライブラリの記憶（下の「データセットが覚えているライブラリ（LibraryRecord）」）が `known` で、sha256 を測り直して通れば、
-その実体を開く（戻り値に `library_source: "dataset_record"`）。記憶が `unknown` か無いときだけ、
-下の解決順（`ion_mode` の設定など）へ進む。`mismatch` と `lbm_only` は落ちずに
+その実体を開く（戻り値に `library_source: "dataset_record"`）。**記憶以外には落ちない**（データフォルダの
+探索も、設定の極性の MSP も、`ion_mode` 引数も無い。B-2b）: 記憶が `unknown` か無ければ
+`code="LIBRARY_NOT_REMEMBERED"`（候補のファイル名と「`file_path` を渡す」の案内。置き場所は出さない）、データセットが
+無ければ `missing_state`（`load_dataset`）。`mismatch` と `lbm_only` は
 `code="LIBRARY_RECORD_MISMATCH"` / `"LIBRARY_RECORD_LBM_ONLY"` と理由を返す（`file_path` で
-明示すれば開ける）。`file_path` も `ion_mode` も省いたときだけ記憶が先で、`ion_mode` を渡せば従来どおり設定から引く
-（逆の極性は `LIBRARY_POLARITY_MISMATCH`）。`file_path` や設定から引いたものが記憶と違う
+明示すれば開ける）。`file_path` で開いたものが記憶と違う
 ライブラリ（中身の sha256 で比べる。同じ内容のコピーは違わない）なら、そのまま開いて
 `differs_from_record: {"remembered": <記憶のファイル名>, "opened": <開いたファイル名>}` を足す。
 `library_match_feature` / `library_msms_qualify` は、ライブラリが開かれておらず記憶が `lbm_only` のとき
@@ -151,15 +150,10 @@
 ものではない旨が `note` に付く。
 
 **エラー戻り値**: ライブラリを 1 つに決められないときは `{"status": "error", "code": ..., "message": ..., "details": ...}`
-を返し、store は差し替えない。`code` は `MSP_AMBIGUOUS`（候補が複数。`ion_mode` か
-`file_path` を指定する）/ `MSP_ENV_NOT_FOUND`（極性の設定——環境変数 `MSDIAL_MSP_POS` /
-`MSDIAL_MSP_NEG` か `lipidmix.local.toml` の `[library] msp_positive` / `msp_negative`——の
-指す先が無い。設定ファイル由来でも同じコード）/ `LIBRARY_NOT_FOUND`（明示した `file_path` が無い）/
-`INVALID_ION_MODE` / `CONFIG_INVALID`（設定ファイルが読めない。`details` に `config_file`
-`line` `column`）。`details` は `MSP_ENV_NOT_FOUND` と、何も見つからなかったときに付き、
-`setting`（設定キー）`env_var` `source`（`env` / `config_file` / null）`config_file`
-`config_file_exists` `example`、あれば `unknown_keys`（打ち間違いの疑い）と `config_invalid`（設定ファイルが読めないときの理由）を持つ。
-`message` と `details` にはファイル名・設定キー・環境変数名・設定ファイルのパスだけが入り、
+を返し、store は差し替えない。`code` は `LIBRARY_NOT_REMEMBERED`（`file_path` を省いたが、データセットが同定に使ったライブラリを
+覚えていない）/ `LIBRARY_RECORD_MISMATCH` / `LIBRARY_RECORD_LBM_ONLY` / `LIBRARY_NOT_FOUND`（明示した
+`file_path` が無い）/ `CONFIG_INVALID`（設定ファイルが読めない。`details` に `config_file` `line`
+`column`）。`message` と `details` にはファイル名・設定キー・設定ファイルのパスだけが入り、
 ライブラリの置き場所は入らない。
 
 **`records_without_ion_mode`**: 研究室ライブラリのように極性ごとにファイルが分かれて
@@ -209,8 +203,8 @@ precursor m/z による `.dcl` 検索は通らない——同じ m/z の別ス�
 **`ion_mode` の大小は問わない（最終レビュー Critical 1）**: `store.candidates()`
 の比較は `COLLATE NOCASE`。`"positive"`（store の正規化表記）と `"Positive"`
 （PAI2 由来の `IonMode.Positive.name`）はどちらも一致する。以前は SQLite の既定
-BINARY 照合のままで、`verify_peak_annotation` の統合経路（§14.8）が
-`ion_mode.name`（大文字始まり）をそのまま渡すため常に 0 件になっていた
+BINARY 照合のままで、`ion_mode.name`（大文字始まり）をそのまま渡す呼び出し
+（撤去した旧ピーク裏取りツールの統合経路）が常に 0 件になっていた
 ——`no_candidates` はここでは「該当レコードが無い」という実質的な主張なので、
 この不一致は「ライブラリに無い化合物だ」という誤った結論に直結していた。
 
@@ -284,33 +278,14 @@ Log10 / Sqrt を**上下独立**に選ばせる）。**`Absolute` は用意し�
 単位の違う 2 つのスペクトルを上下に並べるので、生の強度で並べても比較にならない
 （上流は片側ずつ別の図として見られるので成立している）。
 
-### 14.8 `verify_peak_annotation` への統合（`analytical_checks.msms.spectral_match`）
+### 14.8 （撤去）ピーク裏取りツールへの統合
 
-`peak_verification.msms_evidence()` の 3 状態契約（`PASS`/`FLAG_ONLY`/`ABSENT`、
-`identity` トピック §12.4）は変えない。`band == "PASS"` かつ参照ライブラリが
-読み込み済み（`session.library.store` あり）のときだけ、`spectral_match` ブロックが
-追加で載る。ライブラリ未読み込みなら `spectral_match` キー自体を持たない。
-
-**`status` の語彙は暫定である。** `library_match_feature` とは独立に実装されており
-（`_spectral_match_for_feature`、`metabolomix/msdial/peak_verification.py`）、
-実際の `verify_peak_annotation` の使われ方を見る前に固まらないよう、
-現時点では次の 4 値を使う（将来 `library_match_feature` 側の語彙
-`not_found`/`no_candidates`/`success` と統一する可能性がある）:
-
-| `status` | 意味 |
-|---|---|
-| `unavailable` | precursor m/z が feature に無く照合できない |
-| `error` | ライブラリ照会自体が例外を投げた（`store.candidates()` の失敗など） |
-| `no_candidates` | 候補が 0 件 |
-| `matched` | 最良候補（`total_score` 最大。`library_match_feature` と**同じ基準**）のスコアを `best_match` に載せた |
-
-どの段階で失敗しても例外は投げない——`spectral_match` は msms_evidence 本来の目的
-（`band` 判定）を止めてはいけないため、失敗は `status` の値として開示するだけに留める。
-
-`best_match` は候補一覧を持たない（候補比較が要るときは `library_match_feature` を
-直接使うこと）。`weighted_dot_product` 等は §14.1 と同じ丸め済みの平方根側の値で、
-`total_score` も載る。**「最良」の選び方は `library_match_feature` と必ず一致させる**
-——食い違わせると、同じ feature について 2 つのツールが別の候補を名指しすることになる。
+旧ピーク裏取りツールの `analytical_checks.msms.spectral_match` ブロック（`best_match` と
+`status` の 4 値 `unavailable` / `error` / `no_candidates` / `matched`）は、ツールごと撤去した
+（B-2b）。ピークごとの裏取りに MS/MS の実スペクトルとライブラリの照合を重ねたいときは、
+`dcl_spot_spectrum`（スペクトルを読む）と `library_match_feature`（候補ごとの照合）を組み合わせる。
+**「最良」の候補の選び方（`total_score` 最大）は `library_match_feature` の基準のまま**で、
+候補の比較が要るときは `library_match_feature` の候補一覧を読む。
 
 ### 14.9 候補の並び順（`total_score`）と、その限界
 
@@ -441,7 +416,7 @@ TSV の末尾へ 2 列を足し、payload に 3 つの欄を足す。`detail` �
 解析フォルダで読んだとき、記憶はそのフォルダの**今の** `*_Loaded.*.dbs`（MS-DIAL 自身が保存した写し）に
 従う。読み込みのたびに測り直すので、フォルダの dbs が書き換わっていれば、読み直した記憶は新しい
 中身に付け直される（`mismatch` になるのは、読み込み済みのデータセットの記憶と今のファイルが
-食い違うとき、またはジョブ・pipeline の run が固定した sha256 と今のファイルが違うとき）。
+食い違うとき、pipeline の run が固定した sha256 と今のファイルが違うとき、またはジョブの実効メソッドが宣言するファイルが無い・読めないとき）。
 
 | 欄 | 意味 |
 |---|---|
@@ -455,10 +430,10 @@ TSV の末尾へ 2 列を足し、payload に 3 つの欄を足す。`detail` �
 - LBM の dbs だけが 2 本以上あるときは `lbm_only` で `file` / `path` は無し、`candidates` に LBM のファイル名。
 - ジョブの実効メソッドが宣言するファイルが無い・読めないときは `mismatch`。
 - mzTab-M を直接読んだときは常に `unknown`（mzTab-M は使ったライブラリを持たない）。
-- 入口ごとの出どころ（`dataset_load` / `dataset_handle_open`）: `directory` はフォルダの
+- 入口ごとの出どころ（`load_dataset`）: `directory` はフォルダの
   `*_Loaded.*.dbs`、`job_path` はジョブの実効メソッド、`pipeline_path` は run が固定した入力
-  （どちらのアダプタで読んでも同じ）、`mztab_path` は `unknown`。`dataset_load` の要約と
-  `dataset_handle_open` の `library_record` がこの記録を（`path` を外して）返す。
+  （どちらのアダプタで読んでも同じ）、`mztab_path` は `unknown`。`load_dataset` の
+  `library_record` がこの記録を（`path` を外して）返す。
 
 #### LBM が代表になった特徴の印（`is_lbm_annotator`）
 

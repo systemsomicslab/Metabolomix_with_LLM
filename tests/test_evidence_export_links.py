@@ -12,18 +12,16 @@ import json
 
 import pytest
 
-from metabolomix.analysis import dataset_service
 from metabolomix.analysis.evidence_export import export_dataset_evidence
-from metabolomix.core import handles, mcp_core, session_state
+from metabolomix.core import handles, session_state
 from metabolomix.mztab import loading
 from metabolomix.tools import dataset_analysis_tools as T
 from metabolomix.tools import handle_tools
 from tests.curation_fixtures import arf2_spot_raw, write_arf2
 from tests.dcl_fixture import build_dcl_bytes
+from tests.engine_chain import declare_groups, engine_compare, hc_ra, register_two_group
 from tests.reanalysis_fixtures import POS_FEATURES, write_mztab
 
-HC = ["HC1", "HC2", "HC3"]
-RA = ["RA1", "RA2", "RA3"]
 EVIDENCE = "same-alignment-stem; SMF_ID == AlignmentID == DCL index; precursor/RT verified"
 SPECTRUM = [(60.08, 999.0), (45.03, 120.0)]
 
@@ -67,9 +65,8 @@ def _alignment(run, *, arf2_spots=None, dcl_entries=None):
 
 def _inputs(tmp_path):
     ds = loading.load_dataset_state(mztab_path=write_mztab(tmp_path / "run" / "AlignResult-1.mzTab"))
-    dataset_service.preprocess_dataset(ds, {"normalize": "none"})
-    result = dataset_service.compare_dataset(ds, HC, RA, group_a_label="HC", group_b_label="RA")
-    return ds, result
+    declare_groups(ds, hc_ra)
+    return ds, register_two_group(ds, "HC", "RA")
 
 
 def _manifest(out):
@@ -174,14 +171,15 @@ def test_dcl_shorter_than_ids_is_out_of_range(tmp_path):
 
 
 def _differential(handle=None):
-    T.dataset_preprocess(dataset_handle=handle)
-    return json.loads(T.dataset_differential(group_a=HC, group_b=RA, dataset_handle=handle))["result_id"]
+    ds = (handles.registry.get(handle) if handle else session_state.session).dataset
+    declare_groups(ds, hc_ra)
+    return engine_compare("HC", "RA", dataset_handle=handle)["result_id"]
 
 
 def test_tool_on_handle_uses_the_handles_alignment_files(tmp_path):
     path = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab")
     _alignment(tmp_path / "run")
-    opened = json.loads(handle_tools.dataset_handle_open(mztab_path=str(path), library="none"))
+    opened = json.loads(handle_tools.load_dataset(mztab_path=str(path), library="none"))
     handle = opened["dataset_handle"]
     result_id = _differential(handle)
     out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b"), result_id,
@@ -191,12 +189,11 @@ def test_tool_on_handle_uses_the_handles_alignment_files(tmp_path):
     assert _manifest(tmp_path / "b")["provenance"]["spectrum_links_status"] == "verified_alignment"
 
 
-def test_tool_on_session_finds_the_alignment_files(tmp_path, monkeypatch):
-    monkeypatch.setattr(mcp_core, "DATA_DIR", tmp_path)
+def test_tool_on_session_finds_the_alignment_files(tmp_path):
     path = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab")
     _alignment(tmp_path / "run")
     from metabolomix.tools import mztab_tools
-    mztab_tools.dataset_load(mztab_path=str(path))
+    handle_tools.load_dataset(mztab_path=str(path))
     result_id = _differential()
     out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b"), result_id))
     assert out["status"] == "success", out

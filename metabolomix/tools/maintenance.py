@@ -26,7 +26,7 @@ __all__ = ["server_update"]
 def server_update() -> str:
     """このMCPサーバ自身を origin/main へ更新する（git 早送り＋必要なら依存の再導入）。
 
-    更新通知（`load_dataset` の冒頭行、`dataset_status` / `console_status` の
+    更新通知（`load_dataset` / `dataset_status` の
     `update_available`）が出たときに呼ぶ。プロセスは触らないので、**適用後は
     利用者が Claude Desktop を再起動する必要がある**——戻り値の `message` を
     そのまま利用者へ伝えること。

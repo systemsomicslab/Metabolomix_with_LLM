@@ -17,6 +17,7 @@ from metabolomix.analysis.result_state import dataset_fingerprint
 from metabolomix.core import session_state
 from metabolomix.core.mcp_errors import MISSING_STATE
 from metabolomix.mztab.dataset_state import DatasetState
+from tests.engine_chain import engine_compare
 
 GABA_KEY = "BTCSSZJGUNDROE-UHFFFAOYSA-N"
 OTHER_KEY = "QNAYBMKLOCPYGJ-REOHCLBHSA-N"
@@ -49,18 +50,20 @@ def _load_ds(n_features=20, n_samples=8):
     return ds
 
 
-def _differential(normalize="none"):
-    """前処理 → 2 群比較をツール経由で回し、result_id を返す。
+def _differential():
+    """前処理 → 2 群比較を統計エンジンのツールで回し、result_id を返す（群は試料名の ctrl / treat）。"""
+    return engine_compare("ctrl", "treat",
+                          preprocess={"group_levels": ["ctrl", "treat"]})["result_id"]
 
-    同じレシピの前処理は同じ前処理として扱われるので、古い結果を作るときは
-    `normalize` を変えて前処理をやり直す。
-    """
-    from metabolomix.tools.dataset_analysis_tools import dataset_differential, dataset_preprocess
-    dataset_preprocess(normalize=normalize)
-    ds = session_state.session.dataset
-    a = [n for n in ds.pp_sample_names if n.startswith("ctrl")]
-    b = [n for n in ds.pp_sample_names if n.startswith("treat")]
-    return json.loads(dataset_differential(group_a=a, group_b=b))["result_id"]
+
+def _stale_then_current():
+    """古い結果と今の結果の result_id を返す。除外（`dataset_exclude`）で古い結果を古くしてから計算し直す。"""
+    from metabolomix.analysis.dataset_exclusions import apply_exclusions
+
+    old = _differential()
+    apply_exclusions(session_state.session.dataset, samples=["ctrl_0"], features=[],
+                     mode="add", reason="テスト")
+    return old, _differential()
 
 
 def _target(**extra):
@@ -85,7 +88,7 @@ def test_without_dataset_returns_missing_state():
     parsed = _search(min_mz=100.0)
     assert parsed["error"]["code"] == MISSING_STATE
     assert parsed["error"]["state"] == "dataset"
-    assert parsed["error"]["required_tools"] == ["dataset_load"]
+    assert parsed["error"]["required_tools"] == ["load_dataset"]
 
 
 def test_window_and_targets_together_is_bad_request():
@@ -181,12 +184,11 @@ def test_empty_feature_ids_is_a_condition_with_zero_hits_and_noted():
 
 def test_named_stale_result_returns_missing_state():
     _load_ds()
-    old = _differential()
-    _differential(normalize="median")                 # 前処理のやり直しで old は古くなる
+    old, _ = _stale_then_current()
     parsed = _search(min_mz=100.0, result_ids=[old])
     assert parsed["error"]["code"] == MISSING_STATE
-    assert parsed["error"]["state"] == "dataset_differential_result"
-    assert parsed["error"]["required_tools"] == ["dataset_differential"]
+    assert parsed["error"]["state"] == "dataset_compare_result"
+    assert parsed["error"]["required_tools"] == ["dataset_compare"]
     assert old in parsed["error"]["message"]
 
     missing = _search(min_mz=100.0, result_ids=["res_nope"])
@@ -195,8 +197,7 @@ def test_named_stale_result_returns_missing_state():
 
 def test_omitted_result_ids_skip_stale_results_and_note_them():
     _load_ds()
-    old = _differential()
-    new = _differential(normalize="median")
+    old, new = _stale_then_current()
     parsed = _search(min_mz=100.0, max_mz=101.0)
     assert parsed["stats_source"]["result_ids"] == [new]
     assert any(old in note for note in parsed["notes"])
@@ -292,7 +293,7 @@ def test_curation_flags_are_noted_but_not_applied(tmp_path, monkeypatch):
     from metabolomix.curation import apply as curation_apply
     ds = _load_ds()
     ds.source_files = {str(tmp_path / "align.mzTab"): "sha"}
-    monkeypatch.setattr(curation_apply, "arf2_for_mztab", lambda path: tmp_path / "align.arf2")
+    monkeypatch.setattr(curation_apply, "arf2_for_mztab", lambda path, **kw: tmp_path / "align.arf2")
     monkeypatch.setattr(curation_apply, "flags_for_arf2", lambda path: {"n": 3})
     parsed = _search(min_mz=100.0, max_mz=101.0)
     assert any("キュレーション" in note for note in parsed["notes"])
@@ -303,7 +304,7 @@ def test_unreadable_curation_flags_do_not_fail_the_search(tmp_path, monkeypatch)
     from metabolomix.curation.flags import FlagFileError
     ds = _load_ds()
     ds.source_files = {str(tmp_path / "align.mzTab"): "sha"}
-    monkeypatch.setattr(curation_apply, "arf2_for_mztab", lambda path: tmp_path / "align.arf2")
+    monkeypatch.setattr(curation_apply, "arf2_for_mztab", lambda path, **kw: tmp_path / "align.arf2")
 
     def _broken(path):
         raise FlagFileError(path, 3, "JSON として読めない")
@@ -322,7 +323,7 @@ def test_payload_has_no_structured_duplicate():
 
 
 def test_dataset_fingerprint_is_computed_once_per_call(monkeypatch):
-    """データの指紋は行列全体の hash。引き継いだ結果ごとに計算し直さず、1 回で使い回す。"""
+    """データの指紋は行列全体の hash。結果ごとに計算し直さず、1 回で使い回す。"""
     import copy
 
     from metabolomix.analysis import result_state
@@ -333,9 +334,9 @@ def test_dataset_fingerprint_is_computed_once_per_call(monkeypatch):
     handed = []
     for i in range(3):
         result = copy.deepcopy(ds.results[session_rid])
-        rid = f"res_handed_{i}"
-        result["provenance"].update(result_id=rid, dataset_id="ds_run",
-                                    handoff={"pipeline_root": "x", "comparison_id": f"c{i}"})
+        rid = f"res_copy_{i}"
+        result["result_id"] = rid
+        result["provenance"].update(result_id=rid)
         ds.results[rid] = result
         handed.append(rid)
 
@@ -378,19 +379,21 @@ def _merged_values():
 
 
 def _load_mztab(path, features):
-    from metabolomix.tools import mztab_tools
+    from metabolomix.tools import handle_tools, mztab_tools
     from tests.reanalysis_fixtures import write_mztab
 
-    mztab_tools.dataset_load(mztab_path=str(write_mztab(path, features=features)))
+    handle_tools.load_dataset(mztab_path=str(write_mztab(path, features=features)))
     assert session_state.session.dataset is not None
 
 
 def _differential_on_session():
-    from metabolomix.tools.dataset_analysis_tools import dataset_differential, dataset_preprocess
-    dataset_preprocess()
-    out = json.loads(dataset_differential(group_a=["HC1", "HC2", "HC3"],
-                                          group_b=["RA1", "RA2", "RA3"]))
-    return out["result_id"]
+    """HC 群と RA 群を統計エンジンで比較する。試料名（HC1 …）はトークンに割れないので、群は
+    MS-DIAL の試料の宣言（`msdial_samples` の group）として与える。QC は比較に入らない。"""
+    ds = session_state.session.dataset
+    ds.msdial_samples = [{"name": name, "group": name[:2] if name[:2] in ("HC", "RA") else None,
+                          "role": "qc" if name.startswith("QC") else "sample"}
+                         for name in ds.sample_names]
+    return engine_compare("HC", "RA")["result_id"]
 
 
 def _oracle_rows(tmp_path):
@@ -583,3 +586,109 @@ def test_ppm_offset_appears_in_rule():
     assert shifted["rule"]["rule_hash"] != plain["rule"]["rule_hash"]
     bad = _search(targets=[_target()], ppm_offset={"default": "x"})
     assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
+
+
+# ---- sort="intensity"・ontology / n_detected / 同定の標準化の列（B-2b Task 5） ----
+
+def _intensity_ds():
+    """f0..f4。検出セルの最大: f0=10, f1=50, f2=30, f3=検出なし（gap-fill だけ巨大）, f4=20。
+
+    f1 の 50 は試料 s3 のセルなので、s3 を除外すると f1 は 5 になる。"""
+    ds = DatasetState()
+    ds.sample_names = ["s0", "s1", "s2", "s3"]
+    ds.feature_ids = [f"f{i}" for i in range(5)]
+    ds.feature_matrix = np.array([
+        [10.0, 1.0, 1.0, 1.0],
+        [5.0, 5.0, 5.0, 50.0],
+        [30.0, 1.0, 1.0, 1.0],
+        [9999.0, 9999.0, 9999.0, 9999.0],
+        [20.0, 1.0, 1.0, 1.0],
+    ])
+    ds.detected_mask = np.array([
+        [True, True, True, True],
+        [True, True, True, True],
+        [True, True, True, True],
+        [False, False, False, False],
+        [True, True, True, True],
+    ])
+    ds.feature_metadata = {
+        f"f{i}": {"name": f"C{i}", "mz": 100.0 + i, "rt": 1.0, "ontology": "PC" if i < 2 else None}
+        for i in range(5)
+    }
+    ds.feature_metadata["f0"]["identity"] = {"normalized": "PC 34:1", "refmet": None,
+                                             "lipid_maps_category": None, "msi_level": 2}
+    session_state.session.dataset = ds
+    return ds
+
+
+def _ids(parsed):
+    return [r["feature_id"] for r in _tsv(parsed["features"])]
+
+
+def test_sort_by_intensity_uses_detected_max():
+    ds = _intensity_ds()
+    # gap-fill だけが大きい f3 は最後（検出セル無し）。
+    assert _ids(_search(min_mz=100.0, sort="intensity")) == ["f1", "f2", "f4", "f0", "f3"]
+    # 除外した試料の列は順位に効かない（f1 の最大は s3 の 50 だったので 5 へ落ちる）。
+    ds.excluded_samples = {"s3": "テスト"}
+    assert _ids(_search(min_mz=100.0, sort="intensity")) == ["f2", "f4", "f0", "f1", "f3"]
+
+
+def test_intensity_sort_without_conditions_returns_top_n():
+    _intensity_ds()
+    parsed = _search(sort="intensity", max_results=2)
+    assert _ids(parsed) == ["f1", "f2"]
+    assert any("打ち切" in n for n in parsed["notes"])
+
+
+def test_mz_sort_without_conditions_still_refused():
+    _intensity_ds()
+    assert _search()["error"]["code"] == "FEATURE_SEARCH_EMPTY_QUERY"
+    assert _search(sort="mz")["error"]["code"] == "FEATURE_SEARCH_EMPTY_QUERY"
+
+
+def test_rows_carry_ontology_n_detected_identity():
+    ds = _intensity_ds()
+    ds.excluded_samples = {"s3": "テスト"}
+    rows = {r["feature_id"]: r for r in _tsv(_search(min_mz=100.0)["features"])}
+    assert rows["f0"]["ontology"] == "PC"
+    assert rows["f0"]["n_detected"] == "3"          # 除外した試料は数えない
+    assert rows["f3"]["n_detected"] == "0"
+    assert rows["f0"]["normalized"] == "PC 34:1" and rows["f0"]["msi_level"] == "2"
+    # 同定の標準化を持たない特徴（mzTab-M のデータセットも同じ）は空
+    assert rows["f1"]["normalized"] == "" and rows["f1"]["msi_level"] == ""
+    assert rows["f2"]["ontology"] == ""
+    # 検出状態の無いデータセットでは n_detected も空（0 と区別する）
+    ds.detected_mask = None
+    rows = {r["feature_id"]: r for r in _tsv(_search(min_mz=100.0)["features"])}
+    assert rows["f0"]["n_detected"] == ""
+
+
+def test_excluded_features_are_omitted_in_both_sorts():
+    ds = _intensity_ds()
+    ds.excluded_features = {"f1": "テスト"}
+    assert "f1" not in _ids(_search(min_mz=100.0))
+    assert "f1" not in _ids(_search(min_mz=100.0, sort="intensity"))
+    assert "f1" not in _ids(_search(sort="intensity"))
+
+
+def test_sort_with_targets_is_rejected_and_bad_sort_too():
+    _load_ds()
+    parsed = _search(targets=[_target()], sort="intensity")
+    assert parsed["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert _search(min_mz=100.0, sort="bogus")["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert "error" not in _search(targets=[_target()], sort="mz")
+
+
+def test_intensity_sort_without_detected_mask_uses_all_cells_and_notes():
+    ds = _intensity_ds()
+    ds.detected_mask = None
+    ds.feature_matrix[4, 1] = np.nan                  # NaN は無視される
+    ds.excluded_samples = {"s3": "テスト"}            # 除外した試料の列も使わない
+    parsed = _search(min_mz=100.0, sort="intensity")
+    # f3 の gap-fill 値が全セルの最大として先頭になる。f1 は s3 を除いて 5、f0=10, f2=30, f4=20
+    assert _ids(parsed) == ["f3", "f2", "f4", "f0", "f1"]
+    assert all(r["n_detected"] == "" for r in _tsv(parsed["features"]))
+    assert any("detected_mask" in n and "全セル" in n for n in parsed["notes"])
+    # mz 順には注記を足さない
+    assert not any("detected_mask" in n for n in _search(min_mz=100.0)["notes"])

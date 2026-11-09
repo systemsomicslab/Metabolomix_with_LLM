@@ -1,7 +1,7 @@
 """console_method_template — その極性で一度も GUI 実行が無いときの最後の手段。
 
 主経路は「GUI が実行のたびに自動保存した `*_param_<ts>.txt` を探す」
-（console_plan の method_file 省略）。ここはそれが無いときだけ使う fallback で、
+（pipeline_plan の method_file 省略）。ここはそれが無いときだけ使う fallback で、
 実データの POS がまさにそれだった（NEG は GUI 処理済み、POS は生データのみ）。
 
 やることは、別極性のパラメータから `Ion mode` と `Searched adduct ions` を
@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json as _json
 from pathlib import Path
+
+from tests.config_fixtures import use_config
 
 
 def _neg_param(path: Path):
@@ -31,8 +33,8 @@ def _ready(tmp_path, monkeypatch):
     app = tmp_path / "app"
     app.mkdir(exist_ok=True)
     (app / "lib.lbm2").touch()
-    monkeypatch.setenv("MSDIAL_EXE", str(app / "MSDIALCUI.exe"))
-    monkeypatch.delenv("MSDIAL_LBM", raising=False)
+    (app / "MSDIALCUI.exe").touch()
+    use_config(monkeypatch, tmp_path, {"msdial.exe": app / "MSDIALCUI.exe"})
 
 
 def test_template_switches_polarity_and_adducts(tmp_path, monkeypatch):
@@ -106,24 +108,6 @@ def test_template_rejects_binary_source(tmp_path, monkeypatch):
     parsed = _json.loads(console_method_template(
         out_path=str(tmp_path / "o.txt"), polarity="positive", based_on=str(src)))
     assert parsed["error"]["code"] == "METHOD_FILE_NOT_TEXT"
-
-
-def test_template_output_then_plans_cleanly(tmp_path, monkeypatch):
-    """作ったテンプレートが console_plan をそのまま通ること。"""
-    from metabolomix.core import session_state
-    session_state.session = session_state.AnalysisSession()
-    from metabolomix.tools.console_tools import console_method_template, console_plan
-    _ready(tmp_path, monkeypatch)
-    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
-    src = _neg_param(tmp_path / "neg_param_1.txt")
-    data = tmp_path / "data"
-    data.mkdir()
-    (data / "a.wiff").touch()
-    out = tmp_path / "param_POS.txt"
-    console_method_template(out_path=str(out), polarity="positive", based_on=str(src))
-    parsed = _json.loads(console_plan(dataset_root=str(data), method_file=str(out),
-                                      polarity="positive", measure="peak_height"))
-    assert parsed["status"] == "planned"
 
 
 def test_template_finds_a_sibling_folder_when_based_on_is_omitted(tmp_path, monkeypatch):

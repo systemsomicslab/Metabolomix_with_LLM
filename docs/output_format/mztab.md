@@ -1,14 +1,14 @@
 # mzTab-M 経路の出力フィールド
 
-`dataset_load` が作る `DatasetState` と、その下流（特徴表・差次的エクスポート）が
+`load_dataset` が作る `DatasetState` と、その下流（特徴表・差次的エクスポート）が
 出す値の意味。
 
 > 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項はそちらで定義され、ここでは繰り返さない。節番号は分割前の通し番号。
 
-ツールが**どのファイルのどの関数をどの順に呼ぶか**は `docs/workflow/mztab.md`。
+ツールが**どのファイルのどの関数をどの順に呼ぶか**は `docs/workflow/dataset.md`。
 ここは**値の意味**だけを定義する。
 
-## 13. mzTab-M 経路（`dataset_load` 以降）
+## 13. mzTab-M 経路（`load_dataset` 以降）
 
 mzTab-M 2.0.0-M は MS-DIAL Console が産む標準交換形式で、`DatasetState` の正準入力。
 ARF 経路（`.arf` を直接読む）とは**別の ID 空間・別の粒度**なので、両者の値を
@@ -21,7 +21,7 @@ ARF 経路（`.arf` を直接読む）とは**別の ID 空間・別の粒度**�
 | 同定の出所 | SME 行 / SML 行（§13.1） | `.arf2` の注釈 |
 | MSI レベル | **常に空欄**（§13.5） | ヒューリスティック推定あり（`identity` トピック §12.3） |
 
-`dataset_load` は解析フォルダ（`directory`、または `job_path` / `pipeline_path` の既定）も
+`load_dataset` は解析フォルダ（`directory`、または `job_path` / `pipeline_path` の既定）も
 読む。そのときの要約は行で、読んだアダプタ（`アダプタ: msdial_folder`）・読んだ `.arf` と
 選ばなかった `.arf` の候補・同定に使ったライブラリの記録（`library_record`。ファイル名と
 sha256 だけで置き場所は出さない）を示す。アダプタと `library_record` の行は mzTab-M で
@@ -63,8 +63,7 @@ SMF からこれらを読もうとすると常に `None` になり、「この�
 ### 13.3 `feature_annotations`（SML 由来＝ラベル。証拠ではない）
 
 `feature_id`（= `SMF_ID`）→ 注釈の辞書。**証拠スロットではない**
-（`feature_bindings` はこれを読まない。読ませると MS1 注釈だけで
-`authentic_standard_match` が通ってしまう）。曖昧でない注釈は次のキーを持つ。
+（読ませると MS1 注釈だけで同定の証拠があるように読まれる）。曖昧でない注釈は次のキーを持つ。
 
 | キー | 由来（SML 列） | 備考 |
 |---|---|---|
@@ -92,15 +91,15 @@ SMF からこれらを読もうとすると常に `None` になり、「この�
 を持たない（実 mzTab で稀ではない: Text DB 経由でない同定はスコアが SME 側にしか
 無い）ときは、対応する SME の個別スコア（`id_confidence_measure[2..8]` の合成
 total score）を代わりに入れる。SML 側の値がある場合はそちらを優先し上書きしない。
-このフォールバックが入ったことで、`dataset_export_differential` /
-`arf_export_differential`（`metabolomix/analysis/feature_export.py`）の同じ列が、
+このフォールバックが入ったことで、`dataset_export_differential`
+（`metabolomix/analysis/dataset_export.py`）の同じ列が、
 以前は `null` だった行に SME 由来の値を出すようになった（列定義
 `export_contract.py` 自体は無変更）。
 
 **`confidence_measures` はどこからも読まれていない（Minor 9）**: `feature_annotations[fid]`
 に SME の個別スコア（`id_confidence_measure[2..8]`、`_extract_confidence_measures`）が
-入るが、`dataset_export_differential` / `arf_export_differential`
-（`metabolomix/analysis/{dataset_export,feature_export}.py`）は列定義で明示された
+入るが、`dataset_export_differential`
+（`metabolomix/analysis/dataset_export.py`）は列定義で明示された
 キーだけを拾うため、この辞書は現状どのツール戻り値にも出ない。参照するには
 `DatasetState.feature_annotations[fid]["confidence_measures"]` を直接読むこと。
 
@@ -162,9 +161,29 @@ SME 由来という食い違った行ができる。
 （別リポ massbank-context）が InChIKey を結合キーにするため。名前だけの SML 注釈は
 このゲートを越えられない。
 
+### 13.5b `dataset_status` の views と除外
+
+`dataset_status(view=...)`:
+
+- `summary`（既定）: 概要。`groups`（群＝Class ID ごとの件数）・`roles`・`n_ungrouped`（群の宣言が
+  無い試料の数）・`tags`（タグごとの特徴数）・`excluded`（除外の件数）を含む。`samples`（name/role）は従来どおり。
+- `samples`: 試料の TSV（name・group・role・batch・injection_order・subject_id・excluded）。`excluded` は
+  `dataset_exclude` の理由、実験情報シートの `include=false` の試料は「include=false（実験情報シート）」、
+  除外していなければ空。`query` は因子トークン（`_` 区切りの AND・順不同、`,` 区切りの複数指定は OR。旧
+  `dataset_status(view="samples")` の `specs` と同じ文法）。役割では落とさない。
+- `tags`: タグごとの特徴 ID（先頭 50 件）。**特徴のタグは MS-DIAL の `_tags.xml` から読んだもの**で、
+  アノテーションの確かさそのものではない。
+
+**除外（`dataset_exclude`）は入力を変えない。** `excluded_samples` / `excluded_features`（名前・特徴 ID -> 理由）は
+解析の状態で、定量行列・試料名・特徴 ID・データセットの指紋は元のまま。前処理（`dataset_preprocess`）が除外した
+試料・特徴を**前処理済み行列から外す**（検出率の足切りの分母からも外す）。除外を変えると `metadata_revision` が進み、
+前処理済み行列から先の結果（PCA・差次的解析）は古い結果になる——`ds.results` には残るが現在の結果としては
+通らない。`dataset_exclude` を使う前に作った結果の数字を、除外後の結果として読んではいけない。
+任意の列 `subject_id`（実験情報シートの末尾）は `sample_meta` に持ち、統計エンジンの前処理が**同じ個体の反復注入を 1 個体にまとめる**鍵に使う（`dataset_preprocess` の `collapse_replicates`、`injection_columns` で注入ごとに違う列を鍵から外す。`subject_source` は `subject_id` / `injection` / `mixed`）。`subject_id` が無い試料は注入が 1 個体になる。
+
 ### 13.6 `inchikey_coverage`
 
-`dataset_load` の要約と `dataset_status` が読む集計。
+`load_dataset` の要約と `dataset_status` が読む集計。
 
 | キー | 意味 |
 |---|---|
@@ -180,7 +199,7 @@ MSP を RDKit より前に置くのは、RDKit の有無（Windows のアプリ�
 拒否する機械がある）で結果を変えないため。MSP 表はジョブ経由の読み込み（`job_path`）でだけ作られ、
 実効メソッドの MSP の注釈器設定表（`MSP annotator settings file path`。`library_mode="msp_then_lbm"` の run）がMSP を指していればその最初の MSP を、無ければ `Msp file path` を読む（Console と同じ順）。設定表から入った MSP の同定は`MspDB_<n>_<MSP の stem>:<名前>` で出るので、stem がその MSP のものだけを引く。直接読み（`mztab_path`）では `not_applicable`。
 
-`identified_by` は `dataset_load` の要約にも 1 行で出る。
+`identified_by` は `load_dataset` の要約にも 1 行で出る。
 **`sml_only` を `sme` と足して「同定できた件数」にしないこと** — 証拠水準が違う。
 
 ### 13.7 `abundance` は実測か gap-fill かを区別しない
@@ -231,6 +250,16 @@ p / q / 平均は有効 4 桁）。
 `rule_hash` に入る（渡さなければ従来と同じ hash）。窓検索（`targets` なし）で渡すと `DATASET_BAD_REQUEST`
 （`field: ppm_offset`）。形の誤りも `DATASET_BAD_REQUEST`。
 
+**窓検索の `sort` と追加の列**。`sort="mz"`（既定）は m/z 昇順、`sort="intensity"` は強度の降順で、条件が無くても
+上位 `max_results` 件を返す（`sort="mz"` で条件が無ければ `FEATURE_SEARCH_EMPTY_QUERY`。`targets` と併用すると
+`DATASET_BAD_REQUEST`）。**強度は検出セル（gap-fill でない実測。`dataset_exclude` した試料の列を除く）の値の最大**、
+つまりピークの高さ（データセットの測定値）の最大で、**EIC のクロマトグラムの最大ではない**。検出セルが無い特徴
+は最後に並ぶ。**検出の印（`detected_mask`）が無いデータセット**は gap-fill を見分けられないので、除外していない試料の全セル（NaN は無視）の最大で並べ、`notes` に 1 行そう書く（`n_detected` は空のまま）。`dataset_exclude` した特徴は両方の並びで出さない。
+`features` は `evidence` の後ろに `ontology`（MS-DIAL の Ontology。mzTab-M では SML 注釈にあれば）・`n_detected`
+（検出セルの数。除外した試料を数えない。検出状態が無いデータセットでは空で、0 ではない）・`normalized`（GOSLIN で
+標準化した脂質名）・`msi_level`（MSI の同定水準）を持つ。`normalized` と `msi_level` は解析フォルダのデータセット
+（`.arf2` の同定の標準化。意味は `docs/output_format/identity.md`）だけで、mzTab-M のデータセットでは空。
+
 **`evidence`（証拠の水準）** は 2 種類ある。
 
 | 欄 | 値 | 意味 |
@@ -279,7 +308,7 @@ p / q / 平均は有効 4 桁）。
 | `log2fc` | 正なら `group_b` が高い（`results[*].log2fc_sign`） |
 | `q` | その結果に付いた BH の q をそのまま（窓で絞った件数で掛け直していない） |
 | `detected_a` / `detected_b` | 群ごとの**実検出の例数**（§13.7 の検出状態から数える）。**gap-fill の値は検出に数えない**。検出状態が無い・試料の対応を保証できないときは空で、`notes` に理由。非ゼロの平均があっても検出 0 例はありうる（埋め値の平均） |
-| `comparison` / `group_a` / `group_b` / `log2fc_test_over_ref` | `with_group_labels=true`（opt-in）のときだけ末尾に付く。`comparison` は pipeline の比較なら `comparison_id`、そうでなければ `<group_b>_vs_<group_a>`。`log2fc_test_over_ref` は `log2fc` と同じ値（正なら `group_b` が高い）を比較名と同じ向きの名前で書いたもの——`RA_vs_HC` の比較で `group_a=HC` と読み違えないための欄 |
+| `comparison` / `group_a` / `group_b` / `log2fc_test_over_ref` | `with_group_labels=true`（opt-in）のときだけ末尾に付く。`comparison` は `<group_b>_vs_<group_a>`。`log2fc_test_over_ref` は `log2fc` と同じ値（正なら `group_b` が高い）を比較名と同じ向きの名前で書いたもの——`RA_vs_HC` の比較で `group_a=HC` と読み違えないための欄 |
 
 `results[*]` は統計を付けた結果ごとの `{result_id, group_a, group_b, n_a, n_b, log2fc_sign,
 bh_population, caveats}`。`bh_population = {n_features_total, n_in_matrix, n_tested}` はデータセットの
@@ -292,7 +321,7 @@ bh_population, caveats}`。`bh_population = {n_features_total, n_in_matrix, n_te
 `dataset_alignment_qc` の `merge_groups`（互いに最も近い mergeable な 2 スポット。`reanalysis` §9）が
 データセットに 1 つでもあれば、すべての組の 2 スポットを**試料ごとの大きい方の値**で 1 列にまとめた行列
 （前処理の前の生の値。検出状態は「どちらかで検出」）に、差次的結果を計算したのと同じ前処理のレシピを
-当て直し、同じ検定（`log_transform` も同じ。pipeline の既定は log 変換の Welch）と**まとめた後の全特徴**での
+当て直し（`dataset_compare` の記録した spec を当て直す。下記）、同じ検定と**まとめた後の全特徴**での
 BH をやり直して、`stats` の**すべての行**をそこから出す（統計を付ける特徴が組に入るかどうかによらない。
 組が無ければやり直さない）。
 
@@ -302,9 +331,12 @@ BH をやり直して、`stats` の**すべての行**をそこから出す（�
 | `stats_unmerged` | まとめる前の従来の `stats`（頼んだ ID のまま・同じ列。`merged_from` は無い） |
 | `merge_split` | `{enabled, source, alignment_qc_sha256, n_groups, groups, renamed, recomputed, bh_population}`。`source` は `find_split_pairs`（その場で既定の閾値）か `alignment_qc`（`alignment_qc_path` の JSON）、`n_groups` はデータセットでまとめる組の数、`groups` はそのうち統計を付けた特徴に関わる組、`recomputed` は検定し直した result_id（組が無ければ空で、検定はやり直さない）、`bh_population` は検定し直した結果ごとの母集団（`n_features_total` はまとめた後の特徴数） |
 
-差次的結果を計算したレシピは、pipeline の run から引き継いだ結果なら来歴の `handoff.preprocess`、session で
-計算した結果なら親の前処理の `effective_parameters` から取る。分からないとき（古い run の引き継ぎなど）は
-`FEATURE_MERGE_UNAVAILABLE`（まとめる前の数字をまとめた後の顔で返さない。`merge_split=false` で呼び直す）。
+`dataset_compare` の結果（統計エンジン）は、記録した spec（`input` の除外・群の上書きを含む）を、まとめた行列（`merge_feature_columns`。
+ゼロと NaN を「無い」として試料ごとに大きい方）で `run_spec_v2` に当て直し、`as_two_group` で同じ対比を取り直す
+（対比が複数の結果は `result_id#contrast_id` の形で名指す。`contrast_id` 引数で絞ってもよい。交互作用の対比は対象外）。
+元の記録が無い・まとめた行列で比較をやり直せない・利用者への確認が要る前処理になるときは `FEATURE_MERGE_UNAVAILABLE`。
+
+まとめる前の数字をまとめた後の顔では返さない（`FEATURE_MERGE_UNAVAILABLE` のときは `merge_split=false` で呼び直す）。
 `merge_split=false` なら従来どおりで、`stats_unmerged` も `merged_from` 列も無く `merge_split` は
 `{"enabled": false}`。`alignment_qc_path` は `dataset_alignment_qc` が今のデータセットで書いた JSON だけを
 受け（`dataset_fingerprint` が違えば `ANALYSIS_INPUT_INVALID`）、`merge_split=false` とは併用できない。
@@ -357,10 +389,14 @@ qualified にせず数にも入れない——選んだ残す ID の行が必ず
 `notes` には、打ち切り・使わなかった古い差次的結果・差次的結果が無いこと・検出状態が無いこと・
 極性の宣言と多数決の食い違い・キュレーションのフラグがあるのに反映していないこと（この検索は
 SME / SML の生の同定だけを見るので、`dataset_export_differential` の同定と食い違いうる）が入る。
+`result_ids` を省いたときは、統計に使えなかった結果も `統計に使えなかった指定: …` の 1 行で入る
+（`dataset_compare` の結果の対比が交互作用だけで、2 群の形にならず統計は付かない）。`result_ids` を省いて
+`contrast_id` を渡し、その対比を持つ結果が 1 つも無ければ `CONTRAST_REQUIRED`（候補は全結果の対比）。`result_ids` で
+交互作用だけの結果を名指しすると `missing_state`（`dataset_compare`）で、メッセージにその理由が入る。
 
-## `plot_pca_loadings(source="mztab")`
+## `dataset_plot(kind="loadings")`（mzTab-M のデータセット）
 
-`dataset_pca` の結果は `plot_pca_loadings(source="mztab")` で主成分ごとのローディング図に描ける（`source="auto"` でも、候補がこの 1 つだけなら選ばれる）。
-特徴量は前処理後の `pp_feature_names`、表示名は `feature_annotations`（SML 由来）か `feature_metadata`（SME 由来）の名前で、
+`dataset_pca` の結果は `dataset_plot(kind="loadings")` で主成分ごとのローディング図に描ける（`result_id` を省けば直近の `dataset_pca`）。
+特徴量は PCA の軸に入った特徴（`stats-pca.v1` の `kept_features`。値が変わらない特徴は入らない）、表示名は `feature_annotations`（SML 由来）か `feature_metadata`（SME 由来）の名前で、
 無ければ `feature_id`。mzTab-M にはクラス（Ontology）が無いので棒は 1 色になる。r は `dataset_pca` が autoscale で回したときの
-成分 × 特異値 / √n（`n_samples`）で出す。返り値の意味は `arf` トピックの §11.8 と同じ。
+成分 × 特異値 / √n（`n_fit` = 軸を決めた個体数。QC は軸の計算に入らない）で出す。返り値の意味は `dataset` トピックの §11.8 と同じ。
