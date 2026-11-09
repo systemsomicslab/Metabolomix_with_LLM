@@ -110,18 +110,6 @@ def bh_fdr(pvalues):
     return q.tolist()
 
 
-def welch_t(a, b):
-    """Welch t 統計量と両側 p 値（純粋な数値部品）。`a` が基準、`b` が比較で、
-    t は `b − a` の向き（`_welch_t` 参照）。
-
-    v1 の `two_group_test` と v2 の `statistics_v2` が**同じ実装**を使うための
-    公開名。v1 側の変換・効果量の定義（pseudo_count と log 空間の平均差）は
-    v2 とは別物なので共有しない——共有するのはここ（検定統計量）と
-    `bh_fdr` だけで、v1 の数値契約は変えない。
-    """
-    return _welch_t(a, b)
-
-
 def _welch_t(a, b):
     """Welch t 統計量と両側 p 値。
 

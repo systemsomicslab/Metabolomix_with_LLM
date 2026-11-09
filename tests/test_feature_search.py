@@ -224,7 +224,7 @@ def test_unknown_polarity_without_explicit_adducts_is_refused():
 
 # ---------- 目標照合の判定（spec §5） ----------
 #
-# ds は tests/test_feature_bindings.py の _dataset / _candidate に倣った最小の合成。
+# ds は最小の合成。
 # SME 候補には Task 4 の「候補自身の」inchikey を入れる。
 
 OTHER_KEY = "QWERTYUIOPASDF-UHFFFAOYSA-N"

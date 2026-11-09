@@ -32,9 +32,6 @@ def load_summary_lines(ds, opened) -> list[str]:
     lines.append(f"- 出所の裏取り: {ds.source_verification}"
                  + ("（探索専用: 2 群比較と差次的エクスポートは拒否されます）"
                     if ds.exploratory_only else ""))
-    if ds.analysis_matrices:
-        lines.append("- 解析行列（analysis-matrix.v1。表示のみで、dataset_compare の matrix_id ではない）: "
-                     + ", ".join(sorted(ds.analysis_matrices)))
     if ds.artifact_paths:
         lines.append("- 付随アーティファクト: "
                      + str({role: len(paths)

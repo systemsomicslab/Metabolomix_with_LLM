@@ -152,9 +152,7 @@ class DatasetState:
         # `IsTextDbBasedRepresentative` を除外する）ので、Text DB 運用では
         # SML が唯一の同定情報源になる。
         # feature_metadata / feature_candidates とは**別スロット**に隔離する——
-        # feature_bindings._check_identity は候補ゼロのとき
-        # feature_metadata["inchikey"] を見て matched を返すため、ここへ混ぜると
-        # MS1 注釈だけで authentic_standard_match が通ってしまう。
+        # ここへ混ぜると、MS1 注釈だけで同定の証拠があるように読まれる。
         self.feature_annotations: dict = {}
         self.sml_rows: list[dict] | None = None
         self.sme_rows: list[dict] | None = None
@@ -226,11 +224,6 @@ class DatasetState:
         # results: result_id -> 結果全量。図・エクスポートが「どの結果か」を
         # 名指しで選べるようにする（last_* は現在の既定を指すだけの別名）。
         self.results: dict = {}
-        # analysis_matrices: matrix_id -> analysis-matrix.v1（Task 8）。
-        # v2 は recipe ごとに行列を持つので、`pp_matrix` のような単一スロットへは
-        # 置けない——2本目の recipe が1本目を黙って上書きする。統計は
-        # matrix_id で名指しして参照する。
-        self.analysis_matrices: dict = {}
         # handoff_report: pipeline run から読み込んだとき（session_handoff.load_run_dataset）
         # だけ設定する。{"restored": [{comparison_id, result_id, group_a, group_b}],
         # "rejected": [{comparison_id, result_id, reason}]}。run の差次的結果のうち

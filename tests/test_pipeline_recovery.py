@@ -758,35 +758,9 @@ def test_make_context_carries_full_request_and_upstream_identity(tmp_path):
     assert context["request_meta"]["revision"] == 1
 
 
-# ---------- v2 の上流stage ID（既存バグの再現） ----------
+# ---------- 上流stageの検証状態 ----------
 
-def test_v2_upstream_verified_state_uses_the_v2_stage_id(tmp_path):
-    """v2 record の上流stageは`execute_console`で、`upstream`ではない。
-
-    `verified`を`stages["upstream"]`から読むと、v2では常にFalseになる。その状態で
-    終了証跡が読めないと、`execute_console`が succeeded として永続化されていても
-    `EXECUTION_UNRESOLVED`を投げ、`prepare_resume`が止まる——同モジュールの
-    `prepare_resume`は既に`_upstream_stage_id`を使っており、ここだけが
-    取り残されていた。
-    """
-    from metabolomix.pipeline import recovery
-
-    job_path = tmp_path / "console" / "attempt-0001" / "analysis-job.json"
-    job_path.parent.mkdir(parents=True)
-    job_path.write_text("{}", encoding="utf-8")
-    record = {
-        "schema": "pipeline-run.v2",
-        "stages": {"execute_console": {"status": "succeeded"}},
-        "upstream": {"console_job_path": str(job_path)},
-    }
-
-    # 終了証跡は置かない。verifiedを読み違えるとここで例外になる。
-    identity, verified = recovery._console_supervision_state(record)
-    assert verified is True
-    assert identity is None
-
-
-def test_v1_upstream_verified_state_is_unchanged(tmp_path):
+def test_upstream_verified_state_reads_the_upstream_stage(tmp_path):
     from metabolomix.pipeline import recovery
 
     job_path = tmp_path / "console" / "attempt-0001" / "analysis-job.json"
@@ -800,3 +774,20 @@ def test_v1_upstream_verified_state_is_unchanged(tmp_path):
     identity, verified = recovery._console_supervision_state(record)
     assert verified is True
     assert identity is None
+
+
+def test_recovery_reset_for_a_changed_comparison_is_unchanged(tmp_path):
+    """比較の訂正が戻すstageの区分（golden）。"""
+    root = tmp_path / "source"
+    root.mkdir()
+    comparisons = [{"comparison_id": "c1", "reference_group": "a", "test_group": "b"}]
+    current = resolve_request(root, {"target": "differential", "comparisons": comparisons})
+    merged = resolve_request(root, {
+        "target": "differential",
+        "comparisons": [{**comparisons[0], "q_threshold": 0.01}]})
+    stage_ids = set(store_module.stage_ids_for(merged))
+
+    reset = recovery_module._stages_to_reset(
+        current, merged, rerun_upstream=False, stage_ids=stage_ids)
+
+    assert reset == {"resolve_comparisons", "differential:c1", "export:c1", "report"}

@@ -63,7 +63,6 @@ from metabolomix.core.process_control import same_process
 from metabolomix.pipeline import engine
 from metabolomix.pipeline import inputs as inputs_mod
 from metabolomix.pipeline import request as request_mod
-from metabolomix.pipeline import stage_plan
 from metabolomix.pipeline import store
 
 __all__ = ["normalize_pipeline_root", "prepare_resume", "read_status", "request_cancel"]
@@ -296,9 +295,6 @@ def _console_supervision_state(record: dict) -> tuple[dict | None, bool]:
     （`verified`が既にTrueなら、record自体が既にsucceededと確定させている
     ので、受信できない終了証跡があっても実害は無く例外にしない）。
     """
-    # 上流stageはv1が`upstream`、v2が`execute_console`。ここを直書きにすると
-    # v2では常にverified=Falseになり、succeededと永続化済みの実行まで
-    # EXECUTION_UNRESOLVEDで止まる（prepare_resumeは既に_upstream_stage_idを使う）。
     verified = record.get("stages", {}).get(
         _upstream_stage_id(record), {}).get("status") == "succeeded"
     job_path = (record.get("upstream") or {}).get("console_job_path")
@@ -461,68 +457,6 @@ def _manifest_content_changed(record: dict, request: dict) -> bool:
     return current.get("sha256") != previous
 
 
-def _diff_statistics(old: list, new: list) -> set:
-    """変更・追加・**削除**されたstatistic_idの`statistics:<id>`token集合を返す。
-
-    削除も含めるのがcomparisonとの違い（spec §6.2「統計の追加・削除でもstage集合を
-    再構築し、削除済み統計の成果物を必須出力に残さない」）——削除された統計の
-    stageはrecordには残り続けるので、そこをpendingへ戻してcurrentから外す。
-    """
-    old_by_id = {item["statistic_id"]: item for item in (old or [])}
-    new_by_id = {item["statistic_id"]: item for item in (new or [])}
-    changed = {sid for sid, item in new_by_id.items() if old_by_id.get(sid) != item}
-    changed |= set(old_by_id) - set(new_by_id)
-    return {f"statistics:{sid}" for sid in changed}
-
-
-def _profile_arguments(request: dict) -> dict:
-    """v2要求のときだけ、profileを読んで`merge_updates`へ渡す引数を作る。
-
-    v2の更新検証（統計の形・target参照・routineの上書き範囲）はprofileが無いと
-    成立しない。読み込みはここ（再開の受付）の責務で、`merge_updates`自身は
-    検証済みのdictしか受け取らない——`service._profile_arguments`と同じ規約を
-    再開経路でも守る（片方だけがprofileを見ると、初回とresumeで検証の厳しさが
-    食い違う）。
-    """
-    if not stage_plan.is_v2_request(request):
-        return {}
-    from metabolomix.console import profiles as profiles_mod
-
-    profile_file = request.get("profile_file")
-    if not profile_file:
-        raise DomainError(
-            "PIPELINE_REQUEST_INVALID",
-            "v2要求にprofile_fileがありません（再開時の検証にprofileが要ります）。",
-            {"schema": request.get("schema")})
-    purpose = request.get("execution_purpose", "routine")
-    profile = profiles_mod.load_profile(Path(profile_file), purpose)
-    routine_overrides = (
-        profiles_mod.certificate_routine_overrides(profile, Path(profile_file))
-        if purpose == "routine" else None)
-    return {"profile": profile, "routine_overrides": routine_overrides}
-
-
-def _changed_aspects_v2(current_request: dict, merged_request: dict, *,
-                        manifest_content_changed: bool) -> set:
-    """v2要求の差分を`stage_plan.invalidated_v2`が読むtoken集合へ畳む。
-
-    `qc_raw_scope`（元データQCの評価集合を動かすrecipe変更）はここでは立てない
-    ——要求の差分だけでは「そのrecipe変更がQC対象集合を動かすか」を判定できない。
-    判定できるのは実際に集合を組む工程側（Task 12のhandler）で、そこが必要なら
-    同じtokenを渡す。
-    """
-    changed: set = set()
-    if manifest_content_changed:
-        changed.add("metadata")
-    for key in ("sample_manifest", "preprocess", "standard_assays",
-                "feature_bindings", "target"):
-        if current_request.get(key) != merged_request.get(key):
-            changed.add(key)
-    changed |= _diff_statistics(current_request.get("statistics"),
-                                merged_request.get("statistics"))
-    return changed
-
-
 def _stages_to_reset(current_request: dict, merged_request: dict, *,
                      rerun_upstream: bool, stage_ids: set,
                      manifest_content_changed: bool = False) -> set:
@@ -536,24 +470,10 @@ def _stages_to_reset(current_request: dict, merged_request: dict, *,
     （`_manifest_content_changed`）。要求の値としては何も変わっていないが、
     群・バッチ・include が変わりうる以上、`sample_manifest`を差し替えたときと
     同じ範囲を差し戻す。
-
-    `pipeline-request.v2`（メタボロミクス）の依存区分はspec §6.2が定めており、
-    その表は`metabolomix.pipeline.stage_plan.invalidated_v2`が唯一の正準
-    （store/engineが使うstage builderと同じモジュール）。ここでは要求の差分を
-    そのtoken集合へ畳んで渡すだけで、区分そのものを持たない。
     """
     if rerun_upstream:
         # 上流のやり直しは下流すべてに波及する（Consoleの出力自体が変わりうる）。
         return set(stage_ids)
-
-    if stage_plan.is_v2_request(merged_request):
-        # v2は依存表も`stage_plan`が正準（store/engineと同じモジュール）。
-        # 戻り値はrecordが実際に持つstageへ絞る——削除済み統計のstage IDのように
-        # 新しい計画には無いがrecordには残っているものを含みうるため。
-        changed = _changed_aspects_v2(
-            current_request, merged_request,
-            manifest_content_changed=manifest_content_changed)
-        return stage_plan.invalidated_v2(changed, merged_request) & set(stage_ids)
 
     reset: set = set()
     metadata_or_preprocess_changed = (
@@ -580,13 +500,7 @@ def _stages_to_reset(current_request: dict, merged_request: dict, *,
 
 
 def _upstream_stage_id(record: dict) -> str:
-    """このrunでConsoleを起動するstageのID（v1 `upstream` / v2 `execute_console`）。
-
-    recordのschemaで決める——`prepare_resume`が上流の状態を見るのは要求本体を
-    読み込む前で、そこで使える版情報はrecord側にしかない。
-    """
-    if record.get("schema") == store.SCHEMA_V2:
-        return stage_plan.UPSTREAM_V2_STAGE_ID
+    """このrunでConsoleを起動するstageのID。"""
     return "upstream"
 
 
@@ -694,8 +608,7 @@ def prepare_resume(path: Path, *, updates: dict | None = None,
         # --- d. updatesの検証・統合 ---
         current_request = _load_full_request(pipeline_root, record)
         merged_request = (
-            request_mod.merge_updates(current_request, updates,
-                                      **_profile_arguments(current_request))
+            request_mod.merge_updates(current_request, updates)
             if updates else current_request)
         new_content_hash = request_mod.request_fingerprint(merged_request)
         request_changed = new_content_hash != record["request"]["content_hash"]

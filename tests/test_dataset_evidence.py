@@ -163,11 +163,6 @@ def test_build_evidence_matches_names_with_trailing_space():
     assert result["detected_mask"].tolist() == [[True, True], [True, False]]
 
 
-def test_normalize_stem_ignores_surrounding_spaces():
-    from metabolomix.analysis.assay_evidence import _normalize_stem
-    assert _normalize_stem("D:/raw/P15-AA-25 .wiff") == _normalize_stem("P15-AA-25.wiff")
-
-
 def test_detection_rates_are_per_feature():
     """率の定義は形式非依存なので analysis 側が正準（evidence から再輸出しない）。"""
     from metabolomix.analysis.preprocessing import detection_rates

@@ -203,3 +203,32 @@ def test_loaded_v1_job_is_saved_as_v2(tmp_path):
     loaded = AnalysisJob.load(p)
     loaded.save(p)
     assert json.loads(p.read_text(encoding="utf-8"))["schema"] == "analysis-job.v2"
+
+
+def test_a_job_is_written_as_analysis_job_v2(tmp_path):
+    job = _make_job()
+    path = tmp_path / "analysis-job.json"
+    job.save(path)
+
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["schema"] == "analysis-job.v2"
+    assert "profile" not in written
+
+
+def test_job_load_rejects_an_unknown_schema(tmp_path):
+    path = tmp_path / "analysis-job.json"
+    path.write_text(json.dumps({"schema": "analysis-job.v9", "job_id": "j",
+                                "status": "planned", "created_at": "t", "updated_at": "t",
+                                "run_dir": str(tmp_path)}), encoding="utf-8")
+    with pytest.raises(ValueError):
+        AnalysisJob.load(path)
+
+
+def test_analysis_job_v3_is_no_longer_read(tmp_path):
+    """profile snapshot を持つ v3 は消した。読めないものを v2 として読み替えない。"""
+    path = tmp_path / "analysis-job.json"
+    path.write_text(json.dumps({"schema": "analysis-job.v3", "job_id": "j",
+                                "status": "planned", "created_at": "t", "updated_at": "t",
+                                "run_dir": str(tmp_path)}), encoding="utf-8")
+    with pytest.raises(ValueError):
+        AnalysisJob.load(path)

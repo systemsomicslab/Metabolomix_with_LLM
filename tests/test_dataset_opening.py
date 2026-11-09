@@ -253,7 +253,7 @@ def test_pipeline_folder_reads_run_manifest_but_not_matrices(tmp_path):
     ds = opened.dataset
     assert opened.adapter == "msdial_folder" and opened.kind == "pipeline_path"
     assert [r["group"] for r in ds.sample_metadata_rows] == ["ctrl", "ctrl", "case", "case"]
-    assert ds.analysis_matrices == {} and ds.handoff_report is None
+    assert ds.handoff_report is None
     assert any('source="mztab"' in note for note in opened.notes)
 
 

@@ -677,24 +677,12 @@ def _convert_to_alignment_feature(data: list) -> dict:
     return {}
 
 
-def readable_block_count(file_like_object) -> int:
-    """`.arf` として解釈できたトップレベルブロックの数を返す（公開境界）。
-
-    `deserialize()` は壊れたファイルでも例外を出さず空リストを返す（別形式の
-    トップレベルオブジェクトは warning で読み飛ばす仕様）。呼び出し側が
-    「読めなかった」と「読めたがスポットが無い」を区別できるように、
-    ブロック数だけを数える経路をここに置く。0 なら `.arf` として読めていない。
-    """
-    return sum(1 for _ in _iter_lz4_msgpack_blocks(file_like_object.read()))
-
-
 def alignment_feature_row(data: list) -> dict:
     """`AlignedPeakProperties` の1行（注入1件分）を辞書へ落とす公開境界。
 
     `.arf` の msgpack Key 番号を知っているのはこのモジュールだけ、という約束を
     層をまたいで保つための入口（`docs/schema/AlignmentChromPeakFeature.md` が
-    Key 番号の正準）。`metabolomix/mztab/evidence.py` と
-    `metabolomix/analysis/assay_evidence.py` は private 名を掴まず、ここを呼ぶ。
+    Key 番号の正準）。`metabolomix/mztab/evidence.py` は private 名を掴まず、ここを呼ぶ。
 
     読めない行（別形式・短すぎる配列）では空 dict を返す——例外にしないのは、
     `.arf` に非ピーク行が混ざるのが常態だから。呼び出し側は空を「この行からは

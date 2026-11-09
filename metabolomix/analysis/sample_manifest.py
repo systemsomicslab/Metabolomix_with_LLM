@@ -42,13 +42,11 @@
     求め、`invalidate_results` を一度だけ呼んでから ``ds`` へ一括代入する。
     検証で1件でも落ちれば ``ds`` には一切触れない（半端な適用を作らない）。
 
-``select_statistical_samples`` / ``validate_independent_samples`` / ``validate_standard_assays``
+``select_statistical_samples``
     v2 が足す2点——``role=standard``（標準品注入は生物試料ではない）と
     ``biological_sample_id``（反復注入を束ねる生物単位）——を、検定の**直前**に
-    効かせる。台帳としてのシートは反復注入も標準品も書けてよく、止めるのは
-    「その集合をnと数えてよいか」を問う場所だけ。選択規則を1か所に集めるのは、
-    統計・QC・標準注入解決が各々書き直すと片方だけ ``include=false`` を
-    見落とすため。
+    効かせる。台帳としてのシートは反復注入も標準品も書けてよく、選択規則を1か所に
+    集めるのは、各々が書き直すと片方だけ ``include=false`` を見落とすため。
 """
 from __future__ import annotations
 
@@ -70,8 +68,6 @@ __all__ = [
     "parse_manifest",
     "resolve_metadata",
     "select_statistical_samples",
-    "validate_independent_samples",
-    "validate_standard_assays",
 ]
 
 #: sample-manifest.v1 が持つ8列（この順で並ぶことを要求する）。
@@ -279,7 +275,7 @@ def parse_manifest(path: Path, *, source_root: Path,
             values["subject_id"] = raw_row["subject_id"] or None
         if "biological_sample_id" in fields:
             # 空欄は「生物学的独立性が未確認」（spec §7）。ここでは欠落として
-            # 通し、検定の直前 `validate_independent_samples` で止める——
+            # 通す——
             # シートは標準品・blankのように生物単位を持たない行も載せるため。
             values["biological_sample_id"] = raw_row["biological_sample_id"] or None
         provenance: dict[str, dict] = {}
@@ -726,76 +722,3 @@ def select_statistical_samples(rows: list[dict], groups: list[str]) -> list[dict
             if row.get("include", True)
             and row.get("role") == "sample"
             and row.get("group") in wanted]
-
-
-def validate_independent_samples(rows: list[dict], groups: list[str]) -> None:
-    """検定対象の各注入が、独立した生物試料であることを確認する。
-
-    注入数をそのままnと読むと、同一個体の2注入が「n=2」に化けて群内分散を
-    過小評価する。初期版は自動平均も混合モデルも持たないので、対応できない
-    ことを ``REPEATED_MEASURES_UNSUPPORTED`` で明示して止める（spec §7）。
-
-    ``biological_sample_id`` の空欄・列自体が無いv1行は「独立性が未確認」で
-    あって「独立」ではない。ここで推測して通すと、同じ個体の反復注入が
-    区別されないまま n に化ける——止めて、シートで宣言させる。
-
-    重複を見るのは**検定対象だけ**。除外行・standard・対象外群のIDが重なって
-    いても検定のnには入らないので止めない。
-    """
-    selected = select_statistical_samples(rows, groups)
-
-    missing = [row["sample_id"] for row in selected
-               if not row.get("biological_sample_id")]
-    if missing:
-        raise DomainError(
-            "BIOLOGICAL_SAMPLE_ID_REQUIRED",
-            f"検定対象 {len(missing)} 件に biological_sample_id がありません"
-            f"（sample-manifest.v2 で明示してください）: {', '.join(missing)}",
-            {"sample_ids": missing, "groups": list(groups)},
-        )
-
-    by_id: dict[str, list[str]] = {}
-    for row in selected:
-        by_id.setdefault(row["biological_sample_id"], []).append(row["sample_id"])
-    repeated = {bio_id: ids for bio_id, ids in by_id.items() if len(ids) > 1}
-    if repeated:
-        raise DomainError(
-            "REPEATED_MEASURES_UNSUPPORTED",
-            "同一 biological_sample_id の注入が検定対象に複数あります"
-            "（反復測定モデル・自動平均は初期版の対象外です）: "
-            + ", ".join(f"{bio_id}={'/'.join(ids)}"
-                        for bio_id, ids in sorted(repeated.items())),
-            {"repeated": {k: sorted(v) for k, v in sorted(repeated.items())},
-             "groups": list(groups)},
-        )
-
-
-def validate_standard_assays(rows: list[dict],
-                             standard_assays: dict[str, list[str]]) -> None:
-    """``standard_assays`` の各sample_idが、実在する採用済み標準注入か確認する。
-
-    要求側（`pipeline/request_v2.py`）が見られるのは「target_idが在るか」「形が
-    正しいか」までで、sample_idが本当に標準品注入かはシートと突き合わせないと
-    分からない（spec §6.2「role=standardかつinclude=trueであることをmanifestと
-    照合する」）。ここを緩めると、生物試料を内部標準の分母に使った比が
-    ``internal_standard_ratio`` の名前で出て行く。
-    """
-    by_id = {row["sample_id"]: row for row in rows}
-    bad: dict[str, str] = {}
-    for target_id, sample_ids in (standard_assays or {}).items():
-        for sample_id in sample_ids:
-            row = by_id.get(sample_id)
-            if row is None:
-                bad[f"{target_id}:{sample_id}"] = "not_in_manifest"
-            elif row.get("role") != "standard":
-                bad[f"{target_id}:{sample_id}"] = f"role={row.get('role')!r}"
-            elif not row.get("include", True):
-                bad[f"{target_id}:{sample_id}"] = "include=false"
-    if bad:
-        raise DomainError(
-            "STANDARD_ASSAY_INVALID",
-            "standard_assays が標準品注入（role=standard・include=true）を"
-            "指していません: "
-            + ", ".join(f"{key}（{reason}）" for key, reason in sorted(bad.items())),
-            {"invalid": dict(sorted(bad.items()))},
-        )

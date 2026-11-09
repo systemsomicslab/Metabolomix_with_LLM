@@ -58,15 +58,6 @@ def test_execution_fingerprint_unchanged_for_plain_files(tmp_path):
         [{"path": str(raw), "size": st.st_size, "mtime_ns": st.st_mtime_ns}])
 
 
-def test_raw_inventory_excludes_cache(tmp_path):
-    d = _bruker(tmp_path)
-    _touch_cache(d)
-    _ext, raw_stat = inputs.resolve_raw_inventory(tmp_path, "d")
-    paths = [s["relative_path"] for s in raw_stat]
-    assert "S1.d/analysis.baf" in paths
-    assert not any(p.endswith("analysis.sqlite") for p in paths)
-
-
 def test_verify_inputs_ignores_cache_in_old_snapshots(tmp_path):
     d = _bruker(tmp_path)
     _touch_cache(d)

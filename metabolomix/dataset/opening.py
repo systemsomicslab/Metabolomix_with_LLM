@@ -303,9 +303,6 @@ def _job_files(job_path: Path) -> list[str]:
     method = (getattr(job, "method_file", "") or "").strip()
     if method:
         out.append(method)
-    relative = (getattr(job, "profile_snapshot", None) or {}).get("effective_method_relative_path")
-    if relative:
-        out.append(str(Path(job.run_dir) / relative))
     msp = loading.effective_method_msp(job)
     if msp is not None:
         out.append(str(msp))

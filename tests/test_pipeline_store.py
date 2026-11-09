@@ -844,3 +844,54 @@ def test_a_broken_current_result_is_still_reported_as_corruption(tmp_path):
 
     with pytest.raises(DomainError, match="RESULT_INTEGRITY_MISMATCH"):
         find_or_create_run(root, req, inputs, request_id="req-broken")
+
+
+# ---------- 既存の契約（v2 を消した後も変わらないもの） ----------
+
+def test_the_fixed_stage_ids_are_unchanged():
+    from metabolomix.pipeline import store as store_mod
+
+    assert store_mod.STAGE_IDS == (
+        "prepare_input", "upstream", "validate_outputs", "load_dataset",
+        "resolve_metadata", "preprocess", "pca", "resolve_comparisons", "report")
+
+
+def test_a_request_creates_a_pipeline_run_v1(tmp_path):
+    from metabolomix.pipeline import store as store_mod
+
+    root = tmp_path / "source"
+    root.mkdir()
+    pipeline_root = store_mod.create_run(root, resolve_request(root), _minimal_inputs(root))
+
+    record = store_mod.load_run(pipeline_root)
+    assert record["schema"] == store_mod.SCHEMA == "pipeline-run.v1"
+    assert set(record["stages"]) == {
+        "prepare_input", "upstream", "validate_outputs", "load_dataset",
+        "resolve_metadata", "preprocess", "pca", "resolve_comparisons", "report"}
+
+
+def test_load_run_rejects_an_unknown_schema(tmp_path):
+    from metabolomix.pipeline import store as store_mod
+
+    root = tmp_path / "source"
+    root.mkdir()
+    pipeline_root = store_mod.create_run(root, resolve_request(root), _minimal_inputs(root))
+    run_path = pipeline_root / store_mod.RUN_FILENAME
+    raw = json.loads(run_path.read_text(encoding="utf-8"))
+    raw["schema"] = "pipeline-run.v9"
+    run_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(DomainError) as caught:
+        store_mod.load_run(pipeline_root)
+    assert caught.value.code == "PIPELINE_RUN_INVALID"
+
+
+def test_create_run_rejects_an_unknown_request_schema(tmp_path):
+    from metabolomix.pipeline import store as store_mod
+
+    root = tmp_path / "source"
+    root.mkdir()
+    request = {"schema": "pipeline-request.v9", "target": "auto"}
+    with pytest.raises(DomainError) as caught:
+        store_mod.create_run(root, request, _minimal_inputs(root))
+    assert caught.value.code == "PIPELINE_REQUEST_INVALID"

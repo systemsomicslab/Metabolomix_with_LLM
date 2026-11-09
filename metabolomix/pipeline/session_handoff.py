@@ -2,10 +2,9 @@
 
 `load_dataset(pipeline_path=..., source="mztab")`（と同じ入口 `dataset.opening` を通る
 `load_dataset`）だけが `load_run_dataset` を呼ぶ。解析フォルダのアダプタで run を読む
-ときは `run_console_job` と `run_manifest_rows` だけを借り、行列も差次的結果も戻さない。行列だけを別ツールで
-載せられる形にしないのは、run A の dataset に run B の行列を混ぜられると
-群の対応が黙ってずれるため——dataset・解決済み試料対応表・binding・解析行列は
-同じ run から**まとめて**載せる。
+ときは `run_console_job` と `run_manifest_rows` だけを借り、差次的結果は戻さない。
+dataset・解決済み試料対応表・差次的結果は同じ run から**まとめて**載せる
+（別の run の結果が混ざると群の対応が黙ってずれるため）。
 
 グローバル session は import しない（この層は DatasetState を作って返すだけで、
 どこへ置くかは呼び出し側＝MCP 公開層が決める）。
@@ -14,15 +13,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from metabolomix.analysis import feature_bindings, matrix_state, result_state
+from metabolomix.analysis import result_state
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.mztab import loading as mztab_loading
 from metabolomix.pipeline import recovery, store
 
 __all__ = ["load_run_dataset", "run_console_job", "run_manifest_rows"]
-
-#: `metabolomics_handlers._MATRIX_SUBDIR` と同じ置き場（保存側と読み側の対）。
-_MATRIX_SUBDIR = ("results", "matrices")
 
 #: `service._persist_differential` が差次的結果に付ける output_name の接頭辞。
 _DIFFERENTIAL_PREFIX = "differential:"
@@ -35,35 +31,18 @@ def load_run_dataset(pipeline_path, *, allow_incomplete: bool = False):
     """run の成果物から DatasetState を組み立てて返す（保存も session 更新もしない）。
 
     `pipeline_path` は `pipeline-run.json` でもその親ディレクトリでもよい
-    （`pipeline_status` と同じ規約）。行列は `save_matrix` が残した参照から
-    読むので、meta・配列のどちらが書き換わっても `load_matrix` が拒否する。
-    差次的結果は指紋（データ・群）が一致するものだけを `ds.results` へ戻し、
-    戻したもの・戻さなかったものを `ds.handoff_report` に残す
+    （`pipeline_status` と同じ規約）。差次的結果は指紋（データ・群）が一致するものだけを
+    `ds.results` へ戻し、戻したもの・戻さなかったものを `ds.handoff_report` に残す
     （`restore_differentials`）。
     """
     pipeline_root, record, job_path = run_console_job(pipeline_path)
     ds = mztab_loading.load_dataset_state(job_path=job_path,
                                           allow_incomplete=allow_incomplete)
-    results = record.get("results") or []
 
-    # 群・batch・注入順が無ければ、載せた行列で統計を組めない。
+    # 群が無ければ、載せた差次的結果の群の指紋を照合できない。
     rows = run_manifest_rows(pipeline_root, record)
     if rows is not None:
         ds.sample_metadata_rows = rows
-
-    bindings = store.read_result_data(pipeline_root, results, "feature_bindings")
-    if bindings:
-        ds.feature_binding_targets = feature_bindings.resolved_targets(bindings[-1])
-
-    directory = pipeline_root.joinpath(*_MATRIX_SUBDIR)
-    for data in store.read_result_data(pipeline_root, results, "matrix"):
-        storage = (data or {}).get("storage")
-        if not storage:
-            # 値を保存していない古い run。要約しか無いので復元しない
-            # （空の行列を置くと、統計が「行列はある」と誤読する）。
-            continue
-        matrix = matrix_state.load_matrix(storage, directory)
-        ds.analysis_matrices[matrix["matrix_id"]] = matrix
 
     # 群の指紋は試料対応表を戻した後でなければ run と同じ規則で計算できない。
     ds.handoff_report = restore_differentials(ds, pipeline_root, record)
@@ -93,18 +72,12 @@ def run_console_job(pipeline_path) -> tuple[Path, dict, Path]:
 def run_manifest_rows(pipeline_root: Path, record: dict) -> list[dict] | None:
     """run が解決した試料対応表の行を返す。どこにも無ければ None。
 
-    v2 は `sample_manifest` を hash 付きの result ref として残すので、そちらを先に読む。
-    v1 はそれを作らず、`resolve_metadata` が `record["inputs"]["manifest"]` にだけ
-    書く（`metabolomics_handlers.sample_manifest_outcome`）——どちらも
-    `resolve_sample_metadata` の同じ行なので、無ければそこへフォールバックする。
-    フォールバックしないと群の指紋が「群なし」になり、v1 の差次的結果が全部
+    `resolve_metadata` が `record["inputs"]["manifest"]` にだけ書く行
+    （`resolve_sample_metadata` の行）を返す。
+    これを戻さないと群の指紋が「群なし」になり、差次的結果が全部
     `group_mismatch` で戻らない。`source_file` の絶対/相対の違いは群の指紋
     （`group` と `biological_sample_id` だけを見る）に効かない。
     """
-    manifests = store.read_result_data(pipeline_root, record.get("results") or [],
-                                       "sample_manifest")
-    if manifests:
-        return list((manifests[-1] or {}).get("rows") or [])
     rows = (record.get("inputs") or {}).get("manifest")
     if isinstance(rows, list) and rows:
         return [dict(row) for row in rows if isinstance(row, dict)]

@@ -1,13 +1,11 @@
-"""pipeline-run（v1 / v2）の永続化・受付冪等性・Console jobの所有権（spec §9, §6）。
+"""pipeline-run（v1）の永続化・受付冪等性・Console jobの所有権（spec §9, §6）。
 
 このモジュールが解く問題は4つある。
 
-1. **schema dispatch**: 要求が`pipeline-request.v2`（メタボロミクス）なら
-   `pipeline-run.v2`を、v1（schema省略を含む）なら`pipeline-run.v1`を書く。
-   readerは両方を受け、**読んだrecordのschemaのまま返す**。未知のschemaは
-   推測せず拒否し、既存recordのschemaを書き換える保存も拒否する
-   （過去の記録をインプレース変換しない、spec §6）。v2のstage列は
-   `metabolomix.pipeline.stage_plan`が唯一の正準で、`engine`と同じbuilderを呼ぶ。
+1. **schema**: v1の要求（schema省略を含む）は`pipeline-run.v1`を書く。
+   readerは既知のschemaだけを受け、**読んだrecordのschemaのまま返す**。未知の
+   schemaは推測せず拒否し、既存recordのschemaを書き換える保存も拒否する
+   （過去の記録をインプレース変換しない、spec §6）。
 2. **永続化**: `pipeline-run.json` を原子的に保存・読込する。`state_revision` は
    楽観的並行制御用のカウンタで、要求（`pipeline-request.v1`）自身が持つ
    `revision`（Task 10 `resolve_request`/`merge_updates` が扱う、下流の
@@ -50,13 +48,11 @@ from metabolomix.core.atomic_io import (
 )
 from metabolomix.core.process_control import file_lock, process_identity
 from metabolomix.pipeline import request as request_mod
-from metabolomix.pipeline import stage_plan
 from metabolomix.pipeline.request import request_fingerprint
 
 __all__ = [
     "ACTIVE_STATUSES",
     "SCHEMA",
-    "SCHEMA_V2",
     "SUPPORTED_SCHEMAS",
     "RUN_FILENAME",
     "read_result_data",
@@ -78,15 +74,10 @@ __all__ = [
 
 SCHEMA = "pipeline-run.v1"
 
-#: メタボロミクス（`pipeline-request.v2`）のrunが書くschema（spec §6）。v1のrunは
-#: v1のまま作り、v1のまま保存する——**過去の記録をインプレース変換しない**ので、
-#: 「新しいほうへ揃える」書き換えは`save_run`が拒否する。
-SCHEMA_V2 = "pipeline-run.v2"
-
 #: readerが受ける版（spec §6「readerは旧版を継続して受ける」）。ここに無いschemaは
 #: 推測せず拒否する——未知の版を「たぶんv1だろう」と読むと、知らないフィールドを
 #: 落としたまま保存し直して記録を壊す。
-SUPPORTED_SCHEMAS = frozenset({SCHEMA, SCHEMA_V2})
+SUPPORTED_SCHEMAS = frozenset({SCHEMA})
 
 RUN_FILENAME = "pipeline-run.json"
 REQUESTS_SUBDIR = "requests"
@@ -160,35 +151,26 @@ def _sha256_file(path: Path) -> str:
 def run_schema_for(request: dict) -> str:
     """要求のschemaから、このrunが書くpipeline-runのschemaを決める（spec §6）。
 
-    v2要求は`pipeline-run.v2`、v1要求（schema省略を含む——「schema省略は従来どおり
-    v1」）は`pipeline-run.v1`。**それ以外は推測せず拒否する**——未知の要求版を
-    既知のどちらかとして走らせると、この版が想定する工程を一つも実行しないまま
-    completedになりうる。
+    v1要求（schema省略を含む——「schema省略は従来どおりv1」）は`pipeline-run.v1`。
+    **それ以外は推測せず拒否する**——未知の要求版を既知のものとして走らせると、
+    この版が想定する工程を一つも実行しないままcompletedになりうる。
     """
-    if stage_plan.is_v2_request(request):
-        return SCHEMA_V2
     schema = request.get("schema") if isinstance(request, dict) else None
     if schema is None or schema == request_mod.SCHEMA:
         return SCHEMA
     raise DomainError(
         "PIPELINE_REQUEST_INVALID",
-        f"未知の要求schemaです: {schema!r}"
-        f"（既知: {request_mod.SCHEMA!r} / {stage_plan.REQUEST_SCHEMA_V2!r}）",
+        f"未知の要求schemaです: {schema!r}（既知: {request_mod.SCHEMA!r}）",
         {"schema": schema})
 
 
 def _stage_ids_for(request: dict) -> list[str]:
-    """spec §9.1 / §6.2のstage ID列を、要求の内容から動的に組み立てる。
+    """spec §9.1のstage ID列を、要求の内容から動的に組み立てる。
 
-    v2要求は`metabolomix.pipeline.stage_plan`が唯一の正準（`engine.build_stages`と
-    **同じbuilder**を呼ぶ——順序の写しを2つ持たない）。
-
-    v1は従来どおり。`differential:<comparison_id>` / `export:<comparison_id>` は
+    `differential:<comparison_id>` / `export:<comparison_id>` は
     comparisonごとに1組ずつ増える。comparisonsが空（探索解析、または
     target=differentialでも群未指定でneeds_inputへ回る場合）はこの2種を持たない。
     """
-    if stage_plan.is_v2_request(request):
-        return stage_plan.stage_ids_v2(request)
     ids = list(_BASE_STAGE_IDS)
     for comparison in request.get("comparisons") or []:
         cid = comparison["comparison_id"]
@@ -392,8 +374,7 @@ def load_run(path: Path) -> dict:
     except ValueError as exc:
         raise DomainError("PIPELINE_RUN_INVALID", f"pipeline-run.jsonが不正なJSONです: {exc}",
                           {"pipeline_root": str(pipeline_root)}) from exc
-    # readerは旧版を継続して受ける（spec §6）。v1のrecordはv1のまま返す
-    # ——ここでv2へ読み替えると、v1のstage列を持つrunがv2の工程で再開されうる。
+    # readerは既知の版だけを受け、読んだrecordのschemaのまま返す（spec §6）。
     if data.get("schema") not in SUPPORTED_SCHEMAS:
         raise DomainError("PIPELINE_RUN_INVALID",
                           f"schemaが不正です（既知 {sorted(SUPPORTED_SCHEMAS)}）: "
@@ -407,7 +388,7 @@ def _assert_schema_unchanged(current_schema: object, new_schema: object,
                              pipeline_root: Path) -> None:
     """既存recordのschemaを書き換える保存を拒む（writer側のschema dispatch）。
 
-    「v1のrunをv2へ読み替えて保存し直す」はspec §6が明示的に禁じる
+    「runを別のschemaへ読み替えて保存し直す」はspec §6が明示的に禁じる
     （「v1 pipelineは旧契約・旧schemaで新規作成・再開する。過去の記録を
     インプレース変換しない」）。そのrunのstage列・結果IDの意味はv1の契約で
     確定しており、器だけ新しい版に付け替えても中身は付いてこない。
@@ -548,7 +529,7 @@ def _write_index_entry(index_dir: Path, *, pipeline_root: Path,
 def read_result_data(pipeline_root: Path, results: list, output_name: str) -> list[dict]:
     """`output_name`の成果物を、参照hashを照合してから古い順に読む。
 
-    worker（`metabolomics_handlers._restore_output`）と、run を対話セッションへ
+    worker の工程 handler と、run を対話セッションへ
     引き渡す経路（`metabolomix.pipeline.session_handoff`）が共有する。record の
     `results` がどう並び、data がどのキーに入るかを知る場所を1つに保つ。
     """

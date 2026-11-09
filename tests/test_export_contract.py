@@ -206,3 +206,18 @@ def test_row_significant_honours_verdict_and_row_flag():
         assert not row_significant({"q": 0.01, "log2fc": 2.0, "verdict": verdict}, **thr)
     assert not row_significant({"q": 0.01, "log2fc": 2.0, "significant": False}, **thr)
     assert row_significant({"q": 0.9, "log2fc": 0.0, "significant": True}, **thr)   # 行の印が勝つ
+
+
+def test_the_effect_size_line_is_absent_without_a_definition():
+    """定義が無い結果へ行を足さない。"""
+    from metabolomix.analysis.dataset_export import _effect_size_lines
+
+    assert _effect_size_lines({"provenance": {}}) == []
+
+
+def test_the_effect_size_definition_is_inherited_into_the_meta():
+    from metabolomix.analysis.dataset_export import _effect_size_lines
+
+    lines = _effect_size_lines(
+        {"effect_size_definition": "log2_arithmetic_mean_ratio"})
+    assert lines == ["# effect_size_definition = log2_arithmetic_mean_ratio"]

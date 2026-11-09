@@ -24,7 +24,6 @@ def _ds() -> DatasetState:
     ds.pp_sample_names = ["s1"]
     ds.pp_feature_names = ["f1"]
     ds.results = {"r": {"v": 1}}
-    ds.analysis_matrices = {"m": {}}
     ds.last_pca = {"p": 1}
     ds.last_differential = {"d": 1}
     ds.preprocess_id = "pp"
@@ -66,7 +65,7 @@ def test_derive_resets_results_and_ids():
                     state=_state())
     assert new is not ds and new.dataset_id != ds.dataset_id
     assert new.dataset_id.startswith("ds_")
-    assert new.results == {} and new.analysis_matrices == {}
+    assert new.results == {}
     assert new.pp_matrix is None and new.pp_sample_names == [] and new.pp_feature_names == []
     assert new.last_pca is None and new.last_differential is None
     assert new.preprocess_id is None and new.preprocess_metadata_hash is None

@@ -1,7 +1,7 @@
 """再解析の spec が呼ぶ検定・効果量・補正（spec 2026-10-22 §4 の 3）。
 
 数値・ドメイン層の純ロジックで、MCP にもセッションにも依存しない。v1 の
-`differential.two_group_test`（log2(x+1) の Welch）と v2 の `statistics_v2`（Welch・ANOVA）は
+`differential.two_group_test`（log2(x+1) の Welch）は
 変えない——ここは論文の方法を写すための別の入口で、定義は呼び出しごとに名前で選ぶ:
 
 - `student`: 等分散の t（`scipy.stats.ttest_ind(equal_var=True)`）、両側。
@@ -10,7 +10,7 @@
 - `ols`: `transform(y) ~ 1 + group(test=1) + 共変量` の最小二乗。群の係数の t の両側 p。
 
 `transform="log2"` は有限の正値だけに当て、ほかは欠測にする（clip も pseudocount も
-入れない。statistics_v2 と同じ規則）。
+入れない）。
 """
 from __future__ import annotations
 

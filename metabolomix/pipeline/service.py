@@ -54,10 +54,7 @@ from metabolomix.pipeline import engine
 from metabolomix.pipeline import inputs as inputs_mod
 from metabolomix.pipeline import recovery
 from metabolomix.pipeline import report as report_mod
-from metabolomix.console import profiles as profiles_mod
 from metabolomix.pipeline import request as request_mod
-from metabolomix.pipeline import request_v2 as request_v2_mod
-from metabolomix.pipeline import stage_plan
 from metabolomix.pipeline import store
 from metabolomix.plots import result_output
 
@@ -220,7 +217,7 @@ def _resolved_settings(record: dict) -> dict:
     lbm = inputs.get("lbm") or {}
     polarity = inputs.get("polarity") or {}
     msp = inputs.get("msp") or {}
-    # v2 の計画と、v8 より前に保存された計画には無い。
+    # v8 より前に保存された計画には無い。
     alignment_reference = inputs.get("alignment_reference")
     library_mode = inputs.get("library_mode", "auto")
     resolved_msp = {"file": msp.get("file"), "sha256": msp.get("sha256"),
@@ -280,48 +277,6 @@ def _dispatch_receipt(pipeline_path: Path, *, launched: bool, launch: dict | Non
     return receipt
 
 
-def _profile_arguments(source_root: Path, request: dict | None) -> dict:
-    """v2要求のときだけ、`profile_file`を読んで`resolve_request`へ渡す引数を作る。
-
-    profileの**読み込み**はここ（受付層）の責務で、`resolve_request`は検証済みの
-    dictしか受け取らない（request.pyのdocstringの契約）。v1要求では何も返さない
-    ——v1にprofileの概念は無く、空のprofileを渡すと「未指定」と「指定したが空」が
-    区別できなくなる。
-
-    `execution_purpose="routine"`のときは証明書の`routine_overrides`も渡す
-    ——省略すると fail-closed（何も上書きできない）になり、profileが明示的に
-    許した範囲の上書きまで拒否されてしまう。
-    """
-    explicit = request if isinstance(request, dict) else {}
-    schema = (explicit.get("schema")
-              if "schema" in explicit
-              else request_mod._peek_schema_declared_by_request_file(source_root))
-    if schema != stage_plan.REQUEST_SCHEMA_V2:
-        return {}
-
-    from_file = request_v2_mod.read_request_file(source_root)
-    profile_file = explicit.get("profile_file", from_file.get("profile_file"))
-    if not isinstance(profile_file, str) or not profile_file:
-        raise DomainError(
-            "PIPELINE_REQUEST_INVALID",
-            "v2要求にはprofile_fileが必要です（検証済みprofileへのパス）。",
-            {"schema": schema})
-
-    profile_path = Path(profile_file).expanduser()
-    if not profile_path.is_absolute():
-        profile_path = source_root / profile_path
-    purpose = explicit.get("execution_purpose", from_file.get("execution_purpose", "routine"))
-    if not isinstance(purpose, str) or purpose not in {"routine", "validation"}:
-        raise DomainError("PIPELINE_REQUEST_INVALID", "execution_purposeが不正です。",
-                          {"execution_purpose": purpose})
-    profile = profiles_mod.load_profile(profile_path, purpose)
-    routine_overrides = None
-    if purpose == "routine":
-        routine_overrides = profiles_mod.certificate_routine_overrides(
-            profile, profile_path)
-    return {"profile": profile, "routine_overrides": routine_overrides}
-
-
 def _prepare_run(dataset_root: Path, request: dict | None,
                  request_id: str | None) -> tuple[Path, DomainError | None]:
     """resolve_request→inspect_inputs→manifest事前検査→find_or_create_run。
@@ -331,24 +286,12 @@ def _prepare_run(dataset_root: Path, request: dict | None,
     workerを起動してはいけない。
     """
     source_root = Path(dataset_root).expanduser()
-    request_resolved = request_mod.resolve_request(
-        source_root, request, **_profile_arguments(source_root, request))
-    if stage_plan.is_v2_request(request_resolved):
-        # v1受付へ落とすとprofile以外のmethod/LBM/実行体を採用してしまう。
-        # v2はprofileが唯一の情報源なので、計画を作る経路そのものを分ける。
-        profile = _profile_arguments(source_root, request).get("profile")
-        if not profile:
-            raise DomainError(
-                "PIPELINE_REQUEST_INVALID",
-                "v2要求にはprofileが必要です（profile_fileが解決できませんでした）。",
-                {"schema": request_resolved["schema"]})
-        plan = inputs_mod.plan_from_profile(source_root, request_resolved, profile)
-    else:
-        exe_path = _resolve_exe_path()
-        # アライメントの参照ファイルを注入順の中央にするため、シートを先に解して渡す。
-        plan = inputs_mod.inspect_inputs(
-            source_root, request_resolved, exe_path=exe_path,
-            manifest_rows=_manifest_rows_for_planning(source_root, request_resolved))
+    request_resolved = request_mod.resolve_request(source_root, request)
+    exe_path = _resolve_exe_path()
+    # アライメントの参照ファイルを注入順の中央にするため、シートを先に解して渡す。
+    plan = inputs_mod.inspect_inputs(
+        source_root, request_resolved, exe_path=exe_path,
+        manifest_rows=_manifest_rows_for_planning(source_root, request_resolved))
     plan["fingerprint"] = _plan_fingerprint(plan)
 
     manifest_error = _precheck_manifest(source_root, request_resolved, plan)
@@ -540,39 +483,6 @@ def _as_needs_input(handler):
     return wrapped
 
 
-def _handle_prepare_inputs_v2(context: dict) -> dict:
-    """v2の`prepare_inputs`: profile/実行環境の固定（＋rawの実配置）。
-
-    v2の入力を決めるのは**profile**（method・依存・実行体・rawの選択と hash）で、
-    v1のようにフォルダを読んでmethodとLBMを推定しない——v1のLBM必須アクセスは
-    profile adapterの`dependency_keys`へ移した（plan Task 12）。
-
-    rawの実配置は、受付層がv1形式の配置計画（`inputs.inspect_inputs`の出力）を
-    作っていたときだけ行う。v2の受付が profile 由来の配置計画を作る経路は
-    実Console接続（Task 15）で入れる——それまでは、profile plan の `raw`
-    （実測hash付き）が「どのrawを固定したか」の記録になる。
-    """
-    from metabolomix.pipeline import metabolomics_handlers
-
-    outcome = {"status": "succeeded", "result_refs": [], "warnings": [],
-               "error": None}
-    if "raw_stat" in (context.get("inputs") or {}):
-        outcome = _handle_prepare_input(context)
-        if outcome["status"] != "succeeded":
-            return outcome
-    return metabolomics_handlers.snapshot_profile_outcome(context, outcome)
-
-
-def _handle_resolve_metadata_v2(context: dict) -> dict:
-    """v2の`resolve_metadata`: v1と同じ解決に、試料対応表の成果物固定を足す。"""
-    from metabolomix.pipeline import metabolomics_handlers
-
-    outcome = _handle_resolve_metadata(context)
-    if outcome["status"] != "succeeded":
-        return outcome
-    return metabolomics_handlers.sample_manifest_outcome(context, outcome)
-
-
 def build_handlers() -> dict:
     """`metabolomix.pipeline.engine.run_engine`へ渡すhandler一式を組み立てる。
 
@@ -583,37 +493,18 @@ def build_handlers() -> dict:
     （`DomainError`ではない）を、engineの汎用例外分岐へ落とさずneeds_inputへ
     変換するため。
     """
-    from metabolomix.pipeline import metabolomics_handlers
-
-    v2 = metabolomics_handlers.build_handlers()
     handlers = {
-        # v1 の stage 名
         "prepare_input": _handle_prepare_input,
         "upstream": _handle_upstream,
         "pca": _handle_pca,
         "resolve_comparisons": _handle_resolve_comparisons,
         "differential": _handle_differential,
-        # v1/v2 で同じ計算をする工程（v2 の stage 名も同じ）
         "validate_outputs": _handle_validate_outputs,
         "load_dataset": _handle_load_dataset,
-        "resolve_metadata": metabolomics_handlers.by_schema(
-            _handle_resolve_metadata, _handle_resolve_metadata_v2),
-        # v2 だけの stage 名（v1 の計画には現れない）
-        "prepare_inputs": _handle_prepare_inputs_v2,
-        "execute_console": _handle_upstream,
-        "load_assay_evidence": v2["load_assay_evidence"],
-        "resolve_feature_bindings": v2["resolve_feature_bindings"],
-        "qc_raw": v2["qc_raw"],
-        "qc_processed": v2["qc_processed"],
-        "statistics": v2["statistics"],
-        # 名前は同じだが計算が違う工程。要求の schema で選ぶ——後勝ちで1つに
-        # すると、片方の pipeline がもう片方の計算を黙って走らせる。
-        "preprocess": metabolomics_handlers.by_schema(
-            _handle_preprocess, v2["preprocess"]),
-        "export": metabolomics_handlers.by_schema(
-            _handle_export, v2["export"]),
-        "report": metabolomics_handlers.by_schema(
-            _handle_report, v2["report"]),
+        "resolve_metadata": _handle_resolve_metadata,
+        "preprocess": _handle_preprocess,
+        "export": _handle_export,
+        "report": _handle_report,
     }
     return {key: _as_needs_input(handler) for key, handler in handlers.items()}
 
@@ -668,25 +559,6 @@ def _handle_upstream(context: dict) -> dict:
     job_path = run_dir / job_manager.JOB_FILENAME
     dataset_root = pipeline_root / _INPUT_SUBDIR
 
-    # schemaで分ける値は3つだけ。supervise・attemptディレクトリ・
-    # write_supervision_inputsの規約は v1/v2 で共通のまま。
-    omics, measure, profile_snapshot = "lipidomics", request.get("measure"), None
-    if stage_plan.is_v2_request(request):
-        # snapshotはruntimeではなく保存済み成果物から読む——再開でprepare_inputsが
-        # skipされるとruntimeは空で、そのとき書くjobだけがsnapshotを失う。
-        saved = store.read_result_data(
-            Path(pipeline_root), context.get("results") or [], "profile")
-        if not saved:
-            return {"status": "needs_input", "result_refs": [], "warnings": [],
-                    "error": {"code": "PROFILE_SNAPSHOT_MISSING",
-                              "message": "profile成果物がまだ固定されていません"
-                                         "（prepare_inputsを先に通してください）。",
-                              "details": {"pipeline_root": str(pipeline_root)}},
-                    "record_updates": {}}
-        omics = request["omics"]
-        measure = saved[-1]["profile"]["processing"]["measure"]
-        profile_snapshot = saved[-1]["snapshot"]
-
     if not job_path.is_file():
         method_rel = inputs_snapshot["method"].get("effective_relative_path")
         method_abs = ((pipeline_root / method_rel) if method_rel
@@ -698,12 +570,10 @@ def _handle_upstream(context: dict) -> dict:
             dataset_root=str(dataset_root),
             input_count=job_manager.count_raw_inputs(dataset_root),
             software_name="MS-DIAL", software_version="", execution_mode="console",
-            method_file=str(method_abs), omics=omics,
-            polarity=inputs_snapshot["polarity"]["value"], measure=measure,
+            method_file=str(method_abs), omics="lipidomics",
+            polarity=inputs_snapshot["polarity"]["value"], measure=request.get("measure"),
             run_dir=str(run_dir), save_project=request["save_project"],
             timeout_s=request["timeout_s"],
-            # snapshotを持つjobだけがv3として書かれる（handoff/schema.py）。
-            profile_snapshot=profile_snapshot,
         )
         job.save(job_path)
         store.register_job_owner(job_path, pipeline_root)

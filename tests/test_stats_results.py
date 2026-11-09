@@ -353,33 +353,30 @@ def test_compare_record_stale_after_exclusion_and_manifest_change():
     assert not stats_results.is_stats_current(ds, {"kind": "compare"})   # 来歴が無ければ確かめられない
 
 
-def test_invalidate_on_exclusion_clears_stat_and_analysis_matrices():
+def test_invalidate_on_exclusion_clears_stat_matrices():
     def fresh():
         ds = DatasetState()
         ds.stat_matrices = {"mx_a": {"matrix_id": "mx_a"}}
-        ds.analysis_matrices = {"m": {}}
         return ds
 
-    for changed in ({"exclusion"}, {"role"}, {"batch"}, {"detection"}, {"dataset"},
-                    {"matrix_recipe"}):
+    for changed in ({"exclusion"}, {"role"}, {"batch"}, {"detection"}, {"dataset"}):
         ds = fresh()
         invalidate_results(ds, changed)
-        assert ds.stat_matrices == {} and ds.analysis_matrices == {}, changed
+        assert ds.stat_matrices == {}, changed
     # 群・比較・PCA の設定・v1 の前処理のやり直し（recipe）は行列の入力ではない
     for changed in ({"group"}, {"comparison"}, {"pca_settings"}, {"recipe"}, {"note"}):
         ds = fresh()
         invalidate_results(ds, changed)
-        assert ds.stat_matrices and ds.analysis_matrices, changed
+        assert ds.stat_matrices, changed
     # 実際の除外の経路
     ds = _ds()
     n = normalize_spec_v2({"schema": "analysis-spec.v2", "preprocess": OFF,
                            "comparisons": [T_VS_C],
                            "analyses": [{"analysis_id": "cmp", "kind": "compare"}]})
     stats_results.register_matrix(ds, prepare_spec_v2(n, ds), n["preprocess"], {})
-    ds.analysis_matrices = {"m": {}}
     assert ds.stat_matrices
     apply_exclusions(ds, samples=None, features=["f1"], mode="add", reason="割れ")
-    assert ds.stat_matrices == {} and ds.analysis_matrices == {}
+    assert ds.stat_matrices == {}
 
 
 def test_derive_resets_stat_matrices():

@@ -116,7 +116,7 @@ mzTab-M の evidence と同じ候補（`arf_candidates()`。pipeline はどれ�
 壊れていれば code はそのまま（`MZTAB_STRUCTURE_INVALID`）で、`directory` で開く道を案内する。ジョブが記録した付随
 アーティファクト（`job_artifact_paths()`）は mzTab-M のアダプタと同じく `artifact_paths` に載せる。
 pipeline の run を解析フォルダで読むときに run から引き継ぐのは解決済みの試料対応表だけで、
-解析行列・feature binding・差次的結果は `source="mztab"`（下の pipeline_path 経路）だけが載せる。
+差次的結果は `source="mztab"`（下の pipeline_path 経路）だけが載せる。
 
 mztab_path 経路（直接指定）:
 1. metabolomix/dataset/opening.py _load()
@@ -176,26 +176,18 @@ pipeline_path 経路（`source="mztab"`。完了した run の成果物をまと
 5.       └─ metabolomix/pipeline/store.py load_run()
 6.    └─ metabolomix/mztab/loading.py load_dataset_state()
 7.    └─ metabolomix/pipeline/session_handoff.py run_manifest_rows()
-8.       └─ metabolomix/pipeline/store.py read_result_data()
-9.    └─ metabolomix/pipeline/store.py read_result_data()
-10.      └─ metabolomix/pipeline/store.py verify_result_refs()
-11.   └─ metabolomix/analysis/feature_bindings.py resolved_targets()
-12.   └─ metabolomix/analysis/matrix_state.py load_matrix()
-13.   └─ metabolomix/pipeline/session_handoff.py restore_differentials()
-14.      └─ metabolomix/pipeline/store.py current_result_refs()
-15.      └─ metabolomix/pipeline/store.py read_result_data()
-16.      └─ metabolomix/pipeline/session_handoff.py _handoff_rejection()
-17.         └─ metabolomix/analysis/result_state.py dataset_fingerprint()
-18.         └─ metabolomix/analysis/result_state.py group_fingerprint()
-19.      └─ metabolomix/pipeline/session_handoff.py _run_preprocess_parameters()
-20.         └─ metabolomix/pipeline/store.py read_result_data()
-21. └─ metabolomix/tools/mztab_tools.py _handoff_lines()
+8.    └─ metabolomix/pipeline/session_handoff.py restore_differentials()
+9.       └─ metabolomix/pipeline/store.py current_result_refs()
+10.      └─ metabolomix/pipeline/store.py read_result_data()
+11.      └─ metabolomix/pipeline/session_handoff.py _handoff_rejection()
+12.         └─ metabolomix/analysis/result_state.py dataset_fingerprint()
+13.         └─ metabolomix/analysis/result_state.py group_fingerprint()
+14.      └─ metabolomix/pipeline/session_handoff.py _run_preprocess_parameters()
+15.         └─ metabolomix/pipeline/store.py read_result_data()
+16. └─ metabolomix/tools/mztab_tools.py _handoff_lines()
 
-dataset・解決済み試料対応表・binding・解析行列を**同じ run から**載せる。
-行列だけを別ツールで載せる入口は置いていない——run A の dataset に run B の
-行列を混ぜられると、群の対応が黙ってずれた統計が出る。行列の値は
-`save_matrix` が残した npz から読み、meta・配列のどちらが書き換わっても
-`load_matrix` が拒否する。
+dataset・解決済み試料対応表・差次的結果を**同じ run から**載せる。
+別の run の結果を混ぜられると、群の対応が黙ってずれた統計が出るため。
 
 run の差次的結果（`differential:<comparison_id>`）は、試料対応表を戻した**後**に
 データの指紋（`provenance.dataset_hash`）と群の指紋（`group_fingerprint`）を今の
@@ -220,9 +212,8 @@ DatasetState と照合し、一致したものだけを `ds.results` へ戻す�
 与えた群）の確認か、今の群のままの再計算。`result_state.is_current` の handoff 分岐は
 `kind == "differential"` の結果にだけ当たり、他の kind が handoff を名乗っていても通さない。
 
-試料対応表は v2 なら hash 付きの `sample_manifest` 成果物から、v1（それを作らない）なら
-`record["inputs"]["manifest"]`（`resolve_metadata` が書く同じ行）から戻す
-（`run_manifest_rows`）。どちらも無いと群の指紋が「群なし」になり、run の差次的結果は
+試料対応表は `record["inputs"]["manifest"]`（`resolve_metadata` が書く行）から戻す
+（`run_manifest_rows`）。無いと群の指紋が「群なし」になり、run の差次的結果は
 すべて `group_mismatch` になる。
 
 読み込みは「読めたか」だけでなく「どれだけ信用してよいか」も返す。
@@ -294,7 +285,7 @@ TSV（`query` は因子トークン。旧 `dataset_status(view="samples")` の `
 `excluded_features`（名前・特徴 ID -> 理由）。入力の指紋には入れず、変わったときだけ
 `metadata_revision` を進めて前処理済み行列から先の結果を古くする（`apply_metadata` と同じ
 `invalidate_results` の経路）。除外を当てるのは前処理（統計エンジンは `dataset_preprocess` が `study_inputs` で入力へ写す。v1 は `run_dataset_preprocess`）。
-同じ経路で統計エンジンの行列（`ds.stat_matrices`）と v2 の解析行列（`ds.analysis_matrices`）も
+同じ経路で統計エンジンの行列（`ds.stat_matrices`）も
 空にする（除外の前の行列 ID は使えなくなる）。
 
 1. metabolomix/tools/sample_tools.py dataset_exclude()

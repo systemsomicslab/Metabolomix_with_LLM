@@ -599,3 +599,13 @@ def test_worker_harness_runs_pipeline_as_real_subprocess(tmp_path):
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(completed.stdout.strip().splitlines()[-1])
     assert payload["status"] == "completed"
+
+
+def test_handler_keys_cover_every_planned_stage():
+    from metabolomix.pipeline.service import build_handlers
+
+    handlers = build_handlers()
+    for key in ("prepare_input", "upstream", "validate_outputs", "load_dataset",
+                "resolve_metadata", "preprocess", "pca", "resolve_comparisons",
+                "differential", "export", "report"):
+        assert key in handlers

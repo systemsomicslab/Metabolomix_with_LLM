@@ -893,3 +893,14 @@ def test_plan_receipt_shows_alignment_reference(tmp_path, monkeypatch):
 
     method_receipt = service.plan_pipeline(source["root"], {"alignment_reference": "method"})
     assert method_receipt["resolved"]["alignment_reference"]["file_id"] is None
+
+
+def test_compare_dataset_defaults_are_unchanged():
+    """pipeline が今も呼ぶ 2 群比較の既定値（対話ツールは統計エンジンへ移った）。"""
+    import inspect
+
+    from metabolomix.analysis.dataset_service import compare_dataset
+
+    signature = inspect.signature(compare_dataset)
+    assert signature.parameters["q_threshold"].default == 0.05
+    assert signature.parameters["log2fc_threshold"].default == 1.0

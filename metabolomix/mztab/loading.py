@@ -449,42 +449,6 @@ def _verify_source(job, entry, mztab_abs: Path) -> tuple[bool, str]:
             return False, "mzTab の内容がジョブ記録の hash と一致しない"
     except OSError:
         return False, "mzTab の hash を計算できない"
-    return _verify_effective_method(job)
-
-
-def _verify_effective_method(job) -> tuple[bool, str]:
-    """analysis-job.v3（検証済みプロファイル実行）の実効メソッドを裏取りする。
-
-    spec §6.1 は上流指紋の確認を「計画時、実行直前、**完了検証時**」の 3 点で
-    求める。ここがその完了検証時にあたる——実際に Console へ渡ったメソッド
-    （依存の絶対パスで書き換えた実効コピー）が消えている・書き換わっている出力を
-    `verified` と名乗らせない。原本ではなく実効コピーを見るのは、走ったのが
-    そちらだから（spec §5.1「原本hash、書換え後hash、差分を記録する」）。
-
-    profile snapshot を持たないジョブ（v1 / v2）はこの検査の対象外で、判定は
-    従来どおり——既存経路の結果は変わらない。
-
-    依存ファイル本体（LBM 等）はここで hash し直さない。数百 MB になりうるものを
-    読み込みのたびに読み直すのは重く、その検証はパイプラインの `validate_outputs`
-    工程（実行直前・完了検証）の持ち場である。
-    """
-    from metabolomix.handoff.schema import sha256_file
-
-    snapshot = getattr(job, "profile_snapshot", None)
-    if not snapshot:
-        return True, ""
-    relative = snapshot.get("effective_method_relative_path")
-    recorded = (snapshot.get("effective_method_sha256") or "").strip()
-    if not relative or not recorded:
-        return False, "profile snapshot に実効メソッドの記録が無い"
-    effective = (Path(job.run_dir) / relative).resolve()
-    try:
-        # 裏取りなので覚えた hash を信じず読み直す（mzTab と同じ）。
-        actual = sha256_file(effective, trust=False)
-    except OSError:
-        return False, f"実効メソッドを読めない（{relative}）"
-    if actual != recorded:
-        return False, f"実効メソッドの内容が profile snapshot の hash と一致しない（{relative}）"
     return True, ""
 
 

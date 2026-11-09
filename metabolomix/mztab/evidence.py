@@ -333,10 +333,7 @@ def compare_feature_mz(spot_mz: list, feature_mz: list,
     """スポット代表 m/z と mzTab 側 m/z の一致を、外れの**割合**で判定する。
 
     「MZ_HARD_LIMIT は1件でも棄却する。許容超えの割合が多くても、外れがすべて
-    MZ_OUTLIER_SMALL_DELTA 未満なら合格にする」という判定を `build_evidence` と
-    `analysis/assay_evidence` で共有するための唯一の実装。
-    片方だけ緩めると、gap-fill マスクは棄却した接合から per-injection 証拠だけが
-    採用される（逆も同じ）ことになる。
+    MZ_OUTLIER_SMALL_DELTA 未満なら合格にする」という判定。
     """
     worst = 0.0
     worst_index = None

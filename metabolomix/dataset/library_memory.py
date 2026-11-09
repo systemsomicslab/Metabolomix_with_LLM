@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path, PureWindowsPath
 
-from metabolomix.console.method_file import LBM_KEY, MSP_KEY
+from metabolomix.console.method_file import LBM_KEY
 from metabolomix.core import file_digest
 
 # 解析フォルダの `*_Loaded.<kind>.dbs` のうち LBM のもの（`.lbm2.dbs` など）。
@@ -64,9 +64,7 @@ def remember_from_folder(selection) -> dict:
 def remember_from_job(job_path: Path) -> dict:
     """ジョブの実効メソッドが宣言するライブラリから覚える。
 
-    v3 のジョブが MSP / LBM の sha256 を `profile_snapshot.dependencies` に記録していれば、それを
-    記録の sha256 とし、今のファイルと違えば `mismatch`（その場所で差し替えられたファイルを
-    `known` に再固定しない）。記録が無い（v1 / v2 のジョブ・依存に載っていない）ときだけ今測った値を使う。
+    記録の sha256 は今測った値。
     宣言のファイルが無い・読めないなら `mismatch`（同じ読み込みで MSP 表は `unavailable` になる）。
     """
     from metabolomix.handoff.schema import AnalysisJob
@@ -85,20 +83,10 @@ def remember_from_job(job_path: Path) -> dict:
     else:
         return _record()
     measured = _measure(Path(rec["path"]))
-    pinned = _pinned_sha256(job, MSP_KEY if rec["kind"] == "msp" else LBM_KEY)
-    rec["sha256"] = pinned if (pinned and measured is not None) else measured
-    if measured is None or (pinned and measured != pinned):
+    rec["sha256"] = measured
+    if measured is None:
         rec["status"] = "mismatch"
     return rec
-
-
-def _pinned_sha256(job, method_key: str) -> str | None:
-    """ジョブの依存一覧（v3）が、メソッドのこのキーに対して記録した sha256。無ければ None。"""
-    for dep in job.dependencies:
-        if str(dep.get("method_key") or "").strip().lower() == method_key.lower() \
-                and dep.get("sha256"):
-            return str(dep["sha256"])
-    return None
 
 
 def _declared_lbm(loaded) -> Path | None:

@@ -28,8 +28,7 @@ import numpy as np
 from metabolomix.analysis import preprocessing
 from metabolomix.core.atomic_io import DomainError
 
-__all__ = ["EXPLICIT_POLICY_VERSION", "POLICY_VERSION", "check_applied_policy",
-           "explicit_policy", "resolve_policy"]
+__all__ = ["POLICY_VERSION", "check_applied_policy", "resolve_policy"]
 
 #: 数値閾値を変えるときはここを上げる（spec §8.1: 「数値閾値の変更はpolicy版を上げる」）。
 POLICY_VERSION = "conservative-v1"
@@ -58,38 +57,6 @@ _MIN_QC_FOR_NORMALIZE = 3
 _MIN_QC_FOR_DRIFT = 4
 _MIN_QC_FOR_RSD = 3
 _MAX_QC_RSD_DEFAULT = 0.30
-
-
-#: v2（LC–MSメタボロミクス profile）が使う policy 名。conservative-v1 とは
-#: 別の名前にする——v2 では profile が全ステップを明示するので、ここが
-#: 「自動で決めた」判断を1つも持たないことを名前で言い切る。
-EXPLICIT_POLICY_VERSION = "profile-explicit-v2"
-
-
-def explicit_policy(recipe: dict) -> dict:
-    """profile の `matrix_recipes` 1件を、そのまま plan の形にして返す。
-
-    conservative-v1 は「証拠が無ければ自動で無効化する」層で、未確認の
-    batch/injection_order/qc_pool を見て勝手にステップを落とす。v2 の profile は
-    normalize・drift_correct・filter・impute を**明示**しており、そこへ自動判断を
-    重ねると「profile にそう書いてあるのに実行されていない」状態が黙って生まれる
-    （前提不足は `matrix_state` が `QC_PREREQUISITE_MISSING` で止める役目）。
-
-    だから v2 はこの関数を通す。推測は1つも足さず、`skipped_steps` は常に空で、
-    plan の形だけを conservative-v1 と揃える（`check_applied_policy` を共用する
-    ため）。
-    """
-    resolved = dict(recipe)
-    resolved["policy"] = EXPLICIT_POLICY_VERSION
-    return {
-        "requested_recipe": dict(recipe),
-        "resolved_recipe": resolved,
-        "applied_steps": [],
-        "skipped_steps": [],
-        "reasons": {},
-        "policy_version": EXPLICIT_POLICY_VERSION,
-        "assumptions": [],
-    }
 
 
 def _prerequisite_missing(step: str, message: str, **details) -> None:

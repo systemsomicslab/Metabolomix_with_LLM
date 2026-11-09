@@ -31,10 +31,8 @@ QC の LOESS ドリフト補正、正規化、反復注入の個体へのまと�
 2 群・多群・2 因子の比較と、`changed` / `unchanged` / `inconclusive` の判定（「有意でない」は「変わっていない」ではない）・BH-FDR、(b) 同定の標準化と裏取り（GOSLIN 正規化・RefMet/LIPID MAPS
 ID・MSI レベル・`.dcl` の実スペクトル照合）、(c) EIC の描画（`dataset_plot`）、(d) **生データ起点の統括（補助経路）**
 ——MS-DIAL Console を計画・実行し、mzTab-M を経て前処理・PCA・比較・品質レポートまでを
-永続 run として自動で進める（`pipeline_run`。中断・訂正をまたいで冪等）、(e) LC–MS メタボロ
-ミクス v2（内部標準比・feature binding・注入ごとの測定証拠・固定母集団 QC）。**v2 は合成入力と
-fake Console までしか検証されていない**——`docs/workflow/metabolomics.md` を先に読む（これは pipeline の v2 工程だけの文書で、
-ツールの節は無い。対話の統計は (a) の統計エンジンが担い、v2 の解析行列と統計の単体ツールは無い）。
+永続 run として自動で進める（`pipeline_run`。中断・訂正をまたいで冪等）。合成入力と fake Console
+までしか検証されていなかった LC–MS メタボロミクス v2 の工程は消した（2026-11）。
 
 差次的エクスポートの列定義は別リポジトリ（massbank-context）との契約を兼ねる。加えて、
 目的（objective）とレポートはツール経由で**解析フォルダ配下の `reports/`** に読み書きする
@@ -313,8 +311,7 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料�
   `C:\Users\yuu18\Documents\KnowledgeVault\30_Projects\ms-data-parser\ms-data-parser-flow.md`。
   対象は「利用者から見て何がどの順に起きるか」が変わる改修——入口の判定規則
   （`metabolomix/core/mcp_core.py` の `MCP_INSTRUCTIONS` の ENTRY POINT / ASSAY KIND）、
-  pipeline の stage 列（`pipeline/engine.py` `build_stages` /
-  `pipeline/stage_plan.py` `BASE_V2_STAGE_IDS`）、前提状態の連鎖（どのツールが
+  pipeline の stage 列（`pipeline/engine.py` `build_stages`）、前提状態の連鎖（どのツールが
   どのツールを `missing_state` で要求するか）、経路の増減（新しい入口・新しい解析枝）、
   既定値の変更。**ツールの引数だけの変更は対象外**（正準は `USAGE.md`）。
   直したら末尾の出典行の日付も書き直す。

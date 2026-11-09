@@ -48,7 +48,7 @@ from metabolomix.core import user_config
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 __all__ = ["DEFAULT_MANIFEST_NAME", "inspect_inputs", "manifest_source_record",
-           "resolve_manifest_path", "resolve_raw_inventory", "select_method",
+           "resolve_manifest_path", "select_method",
            "stage_inputs", "verify_inputs"]
 
 #: request.sample_manifest省略時に探す既定シート名（spec §7.1「元フォルダ直下の
@@ -309,30 +309,6 @@ def _build_entries_and_stat(
                             "primary": primary.name})
             raw_stat.append(_stat_entry(companion, companion.name, "companion"))
     return entries, raw_stat
-
-
-def resolve_raw_inventory(
-    source_root: Path, requested_extension: str | None = None,
-) -> tuple[str, list[dict]]:
-    """1フォルダ直下の計測ファイル（主+随伴）を列挙する（新規・純粋関数）。
-
-    既存の形式選択（`_resolve_raw_format`）とsidecar列挙
-    （`_collect_primaries_and_companions` / `_build_entries_and_stat`）を
-    そのまま再利用する——lipidomics v1（`inspect_inputs`）と別の選択規則を
-    metabolomics側だけに新設しない。`inspect_inputs`自身は呼ばない・呼ばれない
-    （既存関数は一切変更しない、純粋な追加）。
-
-    戻り値は`(選択した拡張子, raw_stat一覧)`。raw_stat各要素は
-    `{"relative_path", "size", "mtime_ns", "role"}`——内容hashはここでは
-    計算しない（呼び出し側の責務。`metabolomix.console.profiles.hash_files`が担う。
-    rawファイルは巨大なことがあるため、全量hashを要求する側だけがそのコストを
-    負う設計にする）。
-    """
-    source_root = Path(source_root)
-    ext, _formats = _resolve_raw_format(source_root, requested_extension)
-    primaries, companions_map = _collect_primaries_and_companions(source_root, ext)
-    _entries, raw_stat = _build_entries_and_stat(source_root, primaries, companions_map)
-    return ext, raw_stat
 
 
 # ---------- メソッド選択 ----------
@@ -743,83 +719,6 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
         "exe": exe_info,
         "polarity": polarity,
         "unverified": unverified,
-    }
-
-
-def plan_from_profile(source_root: Path, request: dict, profile: dict) -> dict:
-    """profileだけを情報源に入力配置計画を作る（v2）。
-
-    `inspect_inputs`と**同じ形**のplanを返すので、`stage_inputs`・
-    `_plan_fingerprint`・`_handle_prepare_inputs_v2`はそのまま共有できる。
-    違うのは決め方だけ——methodをフォルダから推定せず、LBMを必須にせず、
-    環境設定の実行体へフォールバックしない（profileが唯一の情報源）。
-
-    解決とhash照合はやり直さない。`resolve_profile_inputs`が既にmethod・依存・
-    実行体・rawの実在とhash一致を検証しているので、ここはその結果を形へ移すだけ。
-    """
-    # profilesはmodule先頭でこのモジュールをimportしている。関数内で読む
-    # （module先頭に書くと循環import）。
-    from metabolomix.console import profiles as profiles_mod
-
-    source_root = Path(source_root).expanduser()
-    if not source_root.is_dir():
-        raise DomainError("DATASET_ROOT_NOT_FOUND", f"source_rootが存在しません: {source_root}",
-                          {"source_root": str(source_root)})
-
-    profile_path = Path(request["profile_file"])
-    resolved = profiles_mod.resolve_profile_inputs(
-        profile, profile_path.parent, raw_root=source_root)
-
-    # raw形式はprofileが宣言しない（データ由来であってmethod由来ではない）。
-    ext, _formats = _resolve_raw_format(source_root, request.get("keep_extension"))
-    primaries, companions_map = _collect_primaries_and_companions(source_root, ext)
-    entries, raw_stat = _build_entries_and_stat(source_root, primaries, companions_map)
-    companions = {p.name: [c.name for c in cs]
-                  for p, cs in companions_map.items() if cs}
-
-    environment = resolved["execution_environment"]
-    exe_path = Path(environment["executable_path"])
-    probe = console_runner.probe_console_exe(str(exe_path))
-    if probe == "timeout":
-        raise DomainError(
-            "MSDIAL_EXE_PROBE_TIMEOUT", console_runner.probe_timeout_message(str(exe_path)),
-            {"exe_path": str(exe_path), **console_runner.probe_timeout_details()})
-    if probe != "console":
-        # profileがGUIのMSDIAL.exeを固定していても、hashは一致してしまう。
-        raise DomainError(
-            "MSDIAL_EXE_NOT_CONSOLE",
-            f"profileが宣言した実行体がMS-DIAL Consoleではありません: {exe_path}",
-            {"exe_path": str(exe_path)})
-
-    # v1がLBM1件に使っていた任意キーdictを、全依存へそのまま一般化し、
-    # profile外で原本が相対宣言したパスキーも絶対化する（記録用の
-    # `snapshot_profile`と同じ関数を通し、実行と記録をずらさない）。
-    overrides = profiles_mod.effective_method_overrides(resolved)
-    lbm = next((dep for dep in resolved["dependencies"]
-                if dep["method_key"] == method_file_mod.LBM_KEY), None)
-
-    _assert_project_save_possible(request, exe_path)
-
-    return {
-        "source_root": str(source_root.resolve()),
-        "selected_format": ext,
-        "entries": entries,
-        "raw_stat": raw_stat,
-        "companions": companions,
-        "method": {
-            "source_path": resolved["method"]["source_path"],
-            "sha256": resolved["method"]["sha256"],
-            "effective_relative_path": None,
-            "effective_sha256": None,
-            "overrides": overrides,
-        },
-        "lbm": ({"path": lbm["source_path"], "sha256": lbm["sha256"]} if lbm
-                else {"path": None, "sha256": None}),
-        "exe": {"path": str(exe_path), "sha256": environment["executable_sha256"],
-                "version": environment["msdial_version"]},
-        "polarity": {"value": resolved["polarity"], "source": "profile"},
-        # 極性をrawから検証していない点はv1と同じ。黙って確定扱いにしない。
-        "unverified": ["polarity_from_profile_not_verified_from_raw"],
     }
 
 

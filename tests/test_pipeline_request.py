@@ -731,13 +731,6 @@ def test_msp_then_lbm_rejects_lbm_file(tmp_path):
     assert "[library] lbm" in str(info.value)
 
 
-def test_v2_rejects_library_mode_with_a_migration_hint(tmp_path):
-    from metabolomix.pipeline import request_v2
-    with pytest.raises(DomainError, match="PIPELINE_REQUEST_INVALID") as info:
-        request_v2._check_known_keys({"library_mode": "msp_only"})
-    assert "library_mode" in str(info.value)
-
-
 def test_resume_of_a_request_saved_before_library_mode_still_validates(tmp_path):
     """最終レビュー #1: 変更前に保存された要求（library_mode / msp_file キー無し）でも
     resume の updates が通り、内容 hash も変わらない。"""
@@ -789,3 +782,30 @@ def test_default_alignment_reference_does_not_change_the_request_fingerprint(tmp
     # 変更前に保存された要求（キー無し）の hash も同じ。
     legacy = {k: v for k, v in req.items() if k != "alignment_reference"}
     assert request_fingerprint(legacy) == request_fingerprint(req)
+
+
+# ---------- 要求の同一性（v1 の golden） ----------
+
+#: v1要求の内容hashの実測値。対象キー集合・正規化を1文字でも動かすとここが落ちる
+#: ——受付冪等性（`find_or_create_run`）と再開時の`request_changed`判定は
+#: どちらもこの値に乗っているため、runの同一性が静かに変わってはいけない。
+_V1_DEFAULT_FINGERPRINT = "ea87c236da35811be6148b234f7fe3987e833376d97ac886991706bbff1c7385"
+_V1_DIFFERENTIAL_FINGERPRINT = (
+    "0c15056a9c6f79577ad4c9e285eb2d86eee96a2fe75c7e658dbf924a3d2fa2bb")
+
+
+def test_request_fingerprint_is_unchanged(tmp_path):
+    root = tmp_path / "source"
+    root.mkdir()
+    assert request_fingerprint(resolve_request(root)) == _V1_DEFAULT_FINGERPRINT
+    differential = resolve_request(root, {
+        "target": "differential",
+        "comparisons": [{"comparison_id": "c1", "reference_group": "a",
+                         "test_group": "b"}]})
+    assert request_fingerprint(differential) == _V1_DIFFERENTIAL_FINGERPRINT
+
+
+def test_schema_omission_defaults_to_v1(tmp_path):
+    root = tmp_path / "source"
+    root.mkdir()
+    assert resolve_request(root, {})["schema"] == "pipeline-request.v1"

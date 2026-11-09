@@ -56,15 +56,10 @@ STAT_FIELDS = frozenset({"group", "biological_sample_id"})
 #: 比較指定そのもの（`comparison`）を含む。
 _STAT_INVALIDATING = STAT_FIELDS | {"comparison"}
 
-#: 前処理そのものをやり直す必要がある変更。`standard_assays`（内部標準の
-#: 分母に使う標準品注入）・`bindings`（どのfeatureがその標準か）・
-#: `matrix_recipe` を含めるのは、これらが変われば解析行列の値そのものが
-#: 変わるため——行列を作り直さずに結果だけ残すと、次の解析が新しい設定の
-#: 顔をした古い数字で走る。
-_PP_INVALIDATING = PP_FIELDS | {"dataset", "detection", "recipe", "exclusion",
-                                "standard_assays", "bindings", "matrix_recipe"}
+#: 前処理そのものをやり直す必要がある変更。
+_PP_INVALIDATING = PP_FIELDS | {"dataset", "detection", "recipe", "exclusion"}
 
-#: 統計エンジンの行列（`stat_matrices`）と v2 の解析行列（`analysis_matrices`）を捨てる変更。
+#: 統計エンジンの行列（`stat_matrices`）を捨てる変更。
 #: 前処理の入力の変更から `recipe`（v1 の前処理のやり直し。`dataset_service._commit_preprocess`）
 #: だけを除く——v1 のレシピはこれらの行列の入力ではなく、v1 をやり直すたびに別系統の行列まで
 #: 消すと、名指しした `matrix_id` が理由なく消える。
@@ -197,7 +192,7 @@ def invalidate_results(ds, changed: set[str]) -> None:
       入力にしていない。
     - 除外（`exclusion`。`dataset_exclude`）も前処理の行列を変えるので、前処理済み行列ごと捨てる。
     - PCA の設定だけなら PCA だけ。
-    - 統計エンジンの行列（`stat_matrices`）と v2 の解析行列（`analysis_matrices`）は、前処理の
+    - 統計エンジンの行列（`stat_matrices`）は、前処理の
       入力（除外を含む。v1 の `recipe` だけは除く。`_MATRIX_INVALIDATING`）が変われば空にする。
       `stat_matrices` は `stats_results.get_matrix` も古さを見るが、古い行列を抱え続けない。
       統計エンジンの結果（`ds.results` の `compare` / `stat_pca`）は消さず、`is_current` が
@@ -208,7 +203,6 @@ def invalidate_results(ds, changed: set[str]) -> None:
     changed = set(changed)
     if changed & _MATRIX_INVALIDATING:
         ds.stat_matrices = {}
-        ds.analysis_matrices = {}
     # 結果から作った図（dataset_plot の置き場 ds.figures）も同じ依存で捨てる。残すと save_figure が
     # 古い結果の図を現在のものとして保存する。
     if changed & _PP_INVALIDATING:

@@ -36,7 +36,6 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
         "pipeline_plan", "pipeline_run", "pipeline_status",
         "pipeline_resume", "pipeline_cancel",
     ),
-    "metabolomics.md": (),   # pipeline の v2 工程だけを書く文書（ツールの節は無い）
     "library.md": ("library_load", "library_match_feature", "library_plot_mirror",
                    "library_search"),
     "curation.md": (

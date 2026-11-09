@@ -28,7 +28,6 @@ import re
 import numpy as np
 
 from metabolomix.analysis.dataset_analysis import included_sample_indices
-from metabolomix.analysis.feature_bindings import _normalize_adduct
 from metabolomix.analysis.result_state import is_current
 from metabolomix.analysis.stats_results import as_two_group, contrast_ids, split_result_ref
 from metabolomix.analysis.mass_accuracy import offset_for
@@ -89,6 +88,19 @@ _POLARITIES = ("positive", "negative")
 _SIGN_OF = {"positive": "+", "negative": "-"}
 _POLARITY_OF_SIGN = {sign: polarity for polarity, sign in _SIGN_OF.items()}
 _INCHIKEY_BLOCK_RE = re.compile(r"[A-Z]{14}")
+
+#: `[M+H]1+`（mzTab-M）と `[M+H]+`（利用者の記法）を同じ adduct として扱うための
+#: 末尾電荷表記。`1+` / `1-` だけを落とす——`2+` を `+` に潰すと価数が消える。
+_ADDUCT_UNIT_CHARGE_RE = re.compile(r"\]1([+-])$")
+
+
+def _normalize_adduct(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().replace(" ", "")
+    return _ADDUCT_UNIT_CHARGE_RE.sub(r"]\1", text).casefold()
+
+
 # parse_formula は読めない部分を黙って捨てるので（"Ca(OH)2" が Ca+O+H2 になる等）、
 # 文字列全体が「元素記号+個数」の連なりであることを先に確かめる。
 _FORMULA_RE = re.compile(r"(?:[A-Z][a-z]?\d*)+")
@@ -407,7 +419,7 @@ def _identity(candidates, annotation, *, inchikey_block: str | None = None,
 
     SME 候補は**その候補自身の** ``inchikey`` だけを見る。特徴の rank1 の InChIKey
     （``feature_metadata[fid]["inchikey"]``）を混ぜると、別物質の rank2 候補が rank1 の
-    識別子を借りて一致してしまう（``feature_bindings._identifier_values`` の癖。spec §2）。
+    識別子を借りて一致してしまう（spec §2）。
 
     ``lipid_species`` を渡すと（種の目標）、識別子は InChIKey の先頭ブロックではなく
     候補自身の ``chemical_name``（SML なら ``name``）を種のレベルに読んだもの。読めない
@@ -615,7 +627,7 @@ def match_target(ds, target: dict, *, max_results: int,
         if partner or evidence == "contradicted":
             qualified = False
         elif evidence == "unannotated" and rt_min is None:
-            # 質量だけでは同定と言わない（feature_bindings の mass_rt が RT を必須にするのと同じ）
+            # 質量だけでは同定と言わない
             reasons.append("mass_only_not_identified")
             qualified = False
         else:

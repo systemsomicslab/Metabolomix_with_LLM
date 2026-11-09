@@ -32,11 +32,9 @@ from metabolomix.pipeline import store
 REPORT_SCHEMA = "pipeline-quality-report.v1"
 
 __all__ = [
-    "analysis_status",
     "evaluate_target",
     "persist_result",
     "required_outputs",
-    "required_outputs_v2",
     "write_pipeline_report",
 ]
 
@@ -89,51 +87,6 @@ def required_outputs(request: dict) -> list[str]:
             cid = comparison["comparison_id"]
             names.extend([f"differential:{cid}", f"volcano:{cid}", f"tsv:{cid}"])
     return names
-
-
-#: v2（LC–MSメタボロミクス）の必須成果物（spec §11）。統計ごとの成果物は
-#: 要求の`statistics`から機械的に足す。pathway 15列TSVは**任意**で、対象ゼロの
-#: `NO_ANNOTATED_FEATURES`だけでpipelineを未完了にしない。
-_V2_REQUIRED_OUTPUTS = (
-    "profile",              # 解決済みprofile
-    "execution_manifest",   # 実行条件/依存manifest
-    "sample_manifest",      # 試料対応表
-    "assay_evidence",       # 注入単位証拠表（取得不能なら理由JSON）
-    "feature_bindings",     # binding結果（内部標準未使用ならnot_applicableを記録）
-    "matrix",               # 前処理matrixと履歴
-    "qc_population",        # QC評価集合
-    "qc",                   # QC JSON
-    "feature_table",        # 全feature定量表
-    "quality_report",       # 最終Markdownレポート
-)
-
-
-def required_outputs_v2(request: dict) -> list[str]:
-    """v2要求の必須成果物を列挙する（spec §11）。
-
-    v1の`required_outputs`とは別関数にする——v1は「目標(target)」で分岐する
-    契約で、v2は「指定した統計の集合」で決まる。1つの関数に両方を詰めると、
-    片方の分岐を触ったときにもう片方が黙って変わる。
-
-    統計は`statistic:<statistic_id>`として1件ずつ必須にする。評価不能でも
-    「評価不能である」という結果JSONは成果物なので、欠けていれば未完了。
-    """
-    names = list(_V2_REQUIRED_OUTPUTS)
-    for statistic in (request.get("statistics") or []):
-        names.append(f"statistic:{statistic['statistic_id']}")
-    return names
-
-
-def analysis_status(results: list[dict]) -> str:
-    """指定した統計がどこまで計算できたか（spec §11）。
-
-    execution（回りきったか）とも qc（品質）とも独立の軸。全部計算できれば
-    `ready`、一部だけなら `limited`、1つも計算できなければ `not_evaluable`。
-    1つでも欠けた状態を `ready` と呼ばない——「解析できた」と読まれる。
-    """
-    ready = sum(r.get("status") == "ready" for r in results)
-    return ("ready" if results and ready == len(results)
-            else "limited" if ready else "not_evaluable")
 
 
 def _load_full_request(record: dict) -> dict:
@@ -196,15 +149,12 @@ def evaluate_target(record: dict) -> dict:
     （"completed"）でなければ「達成」と認めない——`evaluate_target`は単体で
     呼べる関数であり、engineのstage順序が上流成功を保証してくれるとは限らない。
     """
-    from metabolomix.pipeline import stage_plan
-
     request = _load_full_request(record)
     pipeline_root = Path(record["identity"]["pipeline_root"])
-    is_v2 = stage_plan.is_v2_request(request)
     target = request.get("effective_target")
     comparisons = request.get("comparisons") or []
 
-    if not is_v2 and target == "differential" and not comparisons:
+    if target == "differential" and not comparisons:
         return {
             "status": "needs_input",
             "reason_codes": ["COMPARISON_REQUIRED"],
@@ -214,11 +164,7 @@ def evaluate_target(record: dict) -> dict:
             "output_failures": {},
         }
 
-    # v2は「目標(target)」ではなく「指定した統計の集合」で必須成果物が決まる。
-    # v1の分岐はそのまま残す（1つの関数に両方を詰めると、片方を触ったときに
-    # もう片方が黙って変わる）。
-    required = (required_outputs_v2(request) if is_v2
-                else required_outputs(request))
+    required = required_outputs(request)
     output_failures = dict(record.get("output_failures") or {})
     upstream_verified = _upstream_verified(record)
 
