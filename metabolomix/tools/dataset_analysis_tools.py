@@ -470,8 +470,8 @@ def dataset_feature_search(
 
     notes: list[str] = []
     payload: dict = {}
-    # データの指紋（行列全体の hash）は 1 回だけ計算し、割れの照合・引き継いだ結果の照合・
-    # stats_source のすべてで使う。
+    # データの指紋（行列全体の hash）は 1 回だけ計算し、割れの照合・結果の選択（古い結果を
+    # 選ばない照合）・stats_source のすべてで使う。
     dataset_hash = dataset_fingerprint(ds)
     plan = None
     try:

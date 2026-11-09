@@ -90,7 +90,9 @@ def resolve_unit(pipeline_path, polarity: str | None = None, *,
     notes: list[str] = []
     if not legacy and unit_receipt is None:
         notes.append("run の受領（results/receipt.json）が無い・照合できないので、run の記録の"
-                     "単位から解析フォルダを引いた（試料の対応表は載らない）。")
+                     "単位から解析フォルダを引いた（試料の対応表は載らない）。群を使うなら"
+                     "dataset_set_sample_metadata で実験情報シートを載せ直すか、pipeline_status で"
+                     "受領を確かめてから開き直す。")
 
     unit_root = root / (unit.get("unit_root") or ".")
     job_rel = ((unit_receipt or {}).get("console_job")

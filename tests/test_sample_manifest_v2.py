@@ -25,7 +25,6 @@ from metabolomix.analysis.sample_manifest import (
     FIELDS_V2,
     apply_metadata,
     parse_manifest,
-    select_statistical_samples,
 )
 from metabolomix.core.atomic_io import DomainError
 from tests.pipeline_fixtures import make_dataset
@@ -152,27 +151,6 @@ def test_standard_role_is_rejected_in_v1(tmp_path):
     with pytest.raises(DomainError) as caught:
         parse_manifest(sheet, source_root=root, expected_sources=["S0.wiff"])
     assert caught.value.code == "SAMPLE_MANIFEST_INVALID"
-
-
-def test_standard_is_not_a_statistical_sample():
-    rows = _rows({}, {"role": "standard", "biological_sample_id": None},
-                 {"role": "qc", "biological_sample_id": None})
-    selected = select_statistical_samples(rows, ["A"])
-    assert [r["sample_id"] for r in selected] == ["s0"]
-
-
-# ---------- include / group の選択 ----------
-
-def test_excluded_rows_leave_the_statistical_population():
-    rows = _rows({}, {"include": False}, {"group": "B"})
-    assert [r["sample_id"] for r in select_statistical_samples(rows, ["A"])] == ["s0"]
-    assert [r["sample_id"] for r in select_statistical_samples(rows, ["A", "B"])] \
-        == ["s0", "s2"]
-
-
-def test_rows_without_group_are_not_silently_grouped():
-    rows = _rows({"group": None})
-    assert select_statistical_samples(rows, ["A"]) == []
 
 
 # ---------- rawとの対応（v2でもv1と同じ厳しさ） ----------

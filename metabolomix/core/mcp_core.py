@@ -172,7 +172,8 @@ instrument files.
    Poll with `pipeline_status(pipeline_path)`. When it reports `completed` or
    `partial`, join route 1 with `load_dataset(pipeline_path=...,
    polarity=...)` (one handle per polarity; the receipt in the status names
-   the polarities whose analysis folder passed, and the exact call to make)
+   the polarities whose analysis folder passed, and the exact call to make —
+   with `source="mztab"` for a polarity whose folder did not match its mzTab-M)
    and go on with `dataset_preprocess` /
    `dataset_compare` / `dataset_pca`. When it reports `needs_input`, fix ONLY
    the sample sheet with `pipeline_resume` (never re-ask about items already

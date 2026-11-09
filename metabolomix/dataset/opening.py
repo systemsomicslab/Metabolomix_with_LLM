@@ -606,5 +606,39 @@ def pipeline_arf2_candidates(pipeline_path, polarity: str | None = None) -> list
 
 
 def pipeline_arf2(pipeline_path, polarity: str | None = None) -> Path | None:
-    """pipeline の run の極性の単位の `input/*.arf2` のうち名前が最も新しいもの。無ければ None。"""
+    """pipeline の run の極性の単位でスポットの照合に使う `.arf2`。無ければ None。
+
+    受領が照合したバッチ（`units.<極性>.alignment.arf2`）があればそれ——`rerun_upstream` の
+    後は前の実行のバッチも同じフォルダに残り、名前の順では照合したバッチを指せない。受領に
+    無い（照合できなかった・受領が無い・旧 v1 の run）ときだけ、`input/*.arf2` のうち名前が
+    最も新しいもの。
+    """
+    verified = _receipt_arf2(pipeline_path, polarity)
+    if verified is not None:
+        return verified
     return next(iter(pipeline_arf2_candidates(pipeline_path, polarity)), None)
+
+
+def _receipt_arf2(pipeline_path, polarity: str | None) -> Path | None:
+    """受領が照合した `.arf2`（単位の解析フォルダに実在するときだけ）。"""
+    from metabolomix.pipeline import receipt as receipt_mod
+    from metabolomix.pipeline import store
+    from metabolomix.pipeline.recovery import normalize_pipeline_root
+
+    try:
+        root = normalize_pipeline_root(Path(pipeline_path))
+        record = store.load_run(root)
+        if store.is_legacy(record):
+            return None
+        units = (receipt_mod.read_receipt(root, record) or {}).get("units") or {}
+    except (DomainError, OSError, ValueError):
+        return None
+    unit = units.get(polarity) if polarity else (
+        next(iter(units.values())) if len(units) == 1 else None)
+    if not isinstance(unit, dict):
+        return None
+    name = (unit.get("alignment") or {}).get("arf2")
+    if not name or not unit.get("analysis_dir"):
+        return None
+    candidate = root / unit["analysis_dir"] / name
+    return candidate if candidate.is_file() else None

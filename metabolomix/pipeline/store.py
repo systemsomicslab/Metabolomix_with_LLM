@@ -47,7 +47,6 @@ __all__ = [
     "SCHEMA",
     "SUPPORTED_SCHEMAS",
     "RUN_FILENAME",
-    "read_result_data",
     "REQUESTS_SUBDIR",
     "TERMINAL_STATUSES",
     "UNIT_HANDLERS",
@@ -613,29 +612,6 @@ def _write_index_entry(index_dir: Path, *, pipeline_root: Path,
         "created_at": _now_iso(),
     })
     _write_index(index_dir, {"entries": entries})
-
-
-def read_result_data(pipeline_root: Path, results: list, output_name: str) -> list[dict]:
-    """`output_name`の成果物を、参照hashを照合してから古い順に読む。
-
-    worker の工程 handler と、run を対話セッションへ
-    引き渡す経路（`metabolomix.pipeline.session_handoff`）が共有する。record の
-    `results` がどう並び、data がどのキーに入るかを知る場所を1つに保つ。
-    """
-    pipeline_root = Path(pipeline_root)
-    matches = [r for r in (results or [])
-               if isinstance(r, dict) and r.get("output_name") == output_name]
-    failures = verify_result_refs(pipeline_root, matches)
-    if failures:
-        raise DomainError(
-            "RESULT_INTEGRITY_MISMATCH",
-            f"保存済みの成果物が変更されています: {output_name}",
-            {"output_name": output_name, "failures": failures})
-    payloads = []
-    for ref in matches:
-        raw = (pipeline_root / ref["relative_path"]).read_text(encoding="utf-8")
-        payloads.append(json.loads(raw).get("data"))
-    return payloads
 
 
 def verify_result_refs(pipeline_root: Path, result_refs: list) -> list[dict]:

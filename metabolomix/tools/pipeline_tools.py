@@ -87,7 +87,9 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
     `value_sources`（`explicit` / `request_file` / `default`）で確認できる。置いてある
     ファイルが壊れている・未知キーを持つ場合は黙って無視せず `PIPELINE_REQUEST_INVALID`
     にする。ただしファイルの下流の項目（`target` / `preprocess` / `comparisons`）は
-    読み飛ばして警告 `REQUEST_FILE_DOWNSTREAM_IGNORED` を返す（Console は回す）。
+    読み飛ばして警告 `REQUEST_FILE_DOWNSTREAM_IGNORED` を返す（Console は回す）。明示の
+    `units` に負けて使わなかったファイルのトップの単位のキーも警告
+    `REQUEST_FILE_UNIT_KEYS_IGNORED` で返す。
 
     戻り値の `resolved.units.<極性>` に、単位ごとの解決済みの実行条件——`method`（`source_path` /
     `sha256`）・`lbm`（msp_then_lbm ではファイル名・sha256・出どころだけ）・`polarity`
@@ -192,7 +194,8 @@ def pipeline_resume(pipeline_path: str, updates: dict | None = None,
         冪等性キー。同一内容の再送は新しいrevisionを作らず直前の結果を返す。
     rerun_upstream:
         True を明示しない限り、Console実行はやり直さない（自動再試行はしない）。
-        True は upstream が成功していない極性だけをやり直す（新しい attempt）。
+        True は upstream が成功していない極性だけをやり直す（新しい attempt）。生きている
+        worker が回している極性の Console は捨てず、戻り値の `held_units` に並べる。
         省くと、失敗した極性はそのままにして他の極性を進める（`not_retried_units`）。
         監視を失ったまま稼働中のConsoleがある場合は `EXECUTION_UNRESOLVED` で
         待つ（終了を確認できないものを勝手に完了扱いしない）。

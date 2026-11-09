@@ -119,7 +119,7 @@ class CountPeakPropertyRowsTests(unittest.TestCase):
 
 
 def _row_battery():
-    """`peak_field` / `file_name_of` の同値性を試す行の一式。
+    """`peak_field` の同値性を試す行の一式。
 
     実経路に入る行と、入らない行（短い・list でない・数値でない data[18]）と、
     欠けた行（data[37] が無い・文字列が 1 つも無い）を混ぜる。

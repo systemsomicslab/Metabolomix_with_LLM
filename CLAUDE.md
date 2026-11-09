@@ -13,7 +13,7 @@ GUI の外では読めない圧縮 MessagePack と独自バイナリを解し、
 §2）。GUI で解析済みのフォルダを読む入口（`list_data_files` → `load_dataset` → 同定 / キュレーション /
 前処理 / 比較）と、生データから MS-DIAL Console を回してそのフォルダを作る入口（`pipeline_*`。メソッドファイルの
 用意は `console_method_*`）を**対等に扱う**（2026-10 の「主経路と補助」は改めた）。どちらから来ても、その先は同じ 1 本の鎖を通る。
-`MCP_INSTRUCTIONS` の ENTRY POINT は変えない: まずフォルダに MS-DIAL を動かした形跡（`.arf` 等の出力）が
+`MCP_INSTRUCTIONS` の ENTRY POINT の判定は変えない: まずフォルダに MS-DIAL を動かした形跡（`.arf` 等の出力）が
 あるかを確かめ、あれば下流へ進み、無ければユーザーの許可を取ってから Console を回す（ユーザー判断 2026-10-07）。
 Console の入口が作るのは極性ごとの解析フォルダと受領で、`pipeline_status` が `completed` / `partial` になったら
 `load_dataset(pipeline_path=…, polarity=…)` で GUI の入口と同じ鎖へ合流する（D 段 2026-11-09）。
@@ -242,11 +242,12 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料�
   - **`pipeline/{engine,worker,service,recovery,store,receipt}.py` はグローバル session を import しない**
     （`metabolomix.core.session_state` / `metabolomix.core.mcp_core` / `metabolomix.tools.*`。
     `tests/test_pipeline_engine.py` の AST テストが固定している）。進行状況は
-    `pipeline-run.json` と、そのプロセスだけが持つ `runtime` dict に住む。
+    `pipeline-run.json` だけに住む。
   - **`core/atomic_io.py` と `core/process_control.py` と `core/user_config.py` は stdlib だけの leaf**。
     別プロセスの worker が最初に import するので、重い依存を持ち込まない。
   - **run record の `results` は追記専用**（`store._assert_results_append_only` が
-    既存要素の書換えを拒否する）。永続化する pipeline 内のパスは `pipeline_root` 相対。
+    既存要素の書換えを拒否する）。永続化する pipeline 内のパスは `pipeline_root` 相対
+    （ただし単位の `inputs` は単位の根 `unit_root` 相対。`store.relativize_unit_inputs`）。
   - **`pipeline_status` は読取専用**。生存確認 probe の失敗を「死んでいる」と読まない。
   - **Console の自動再試行は行わない**。やり直しは `rerun_upstream=true` の明示が要り、
     そのときは新しい attempt ディレクトリを作る（前回の終了証跡・ログを上書きしない）。

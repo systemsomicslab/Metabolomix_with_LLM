@@ -354,9 +354,7 @@ LLMはこれらを解釈結果・報告書の注意点として必ず引用す�
 `dataset_compare` の後に呼ぶ（`result_id` は省略すると直近の結果。対比が複数の結果は `contrast_id` が要る。`result_id#contrast_id` の形も受ける）。同一アラインメントの
 兄弟 `.arf2` から InChIKey・Ontology・m/z・RT を `MasterAlignmentID` で結合し、
 1 ファイルに書き出す。**兄弟 `.arf2` が無ければ書き出さない**（InChIKey 空欄の行を
-出すと、下流で「パスウェイが無い化合物」と区別が付かなくなるため）。
-直近の差次的結果が現行の `contract_version` / `log2fc_sign` と一致しない場合も、
-向きを偽装せず `dataset_compare` の再実行を要求する。InChIKey 付き行が 0 件なら、
+出すと、下流で「パスウェイが無い化合物」と区別が付かなくなるため）。InChIKey 付き行が 0 件なら、
 下流が拒否する本文 0 行のファイルを成功扱いで残さない。
 
 `#` 始まりのメタ行に来歴（`contract_version` / `group_a` / `group_b` /

@@ -189,6 +189,39 @@ def test_auto_run_without_any_library_is_unknown(tmp_path):
     assert rec["status"] == "unknown"
 
 
+def test_v3_relative_library_path_resolves_against_the_unit_root(tmp_path):
+    """v3 の単位の inputs の相対パスは単位の根（`<pipeline_root>/<極性>/`）相対
+    （`store.relativize_unit_inputs`）。pipeline_root 相対に解くと 1 段上を指して `mismatch`。"""
+    root = tmp_path / "pipeline_x"
+    unit_dir = root / "negative" / "input"
+    unit_dir.mkdir(parents=True)
+    msp = unit_dir / "lab.msp"
+    msp.write_text("NAME: x\n", encoding="ascii")
+    unit = {"raw_dir": ".", "unit_root": "negative",
+            "inputs": {"library_mode": "msp_only",
+                       "msp": {"path": "input/lab.msp", "file": "lab.msp",
+                               "sha256": _sha(msp), "source": "config_file"}}}
+    (root / "pipeline-run.json").write_text(
+        json.dumps({"schema": "pipeline-run.v3", "units": {"negative": unit}}), encoding="utf-8")
+    rec = remember_from_run(root, "negative")
+    assert rec["status"] == "known" and rec["file"] == "lab.msp"
+    assert Path(rec["path"]) == msp.resolve()
+
+
+def test_legacy_v1_relative_library_path_resolves_against_the_pipeline_root(tmp_path):
+    root = tmp_path / "pipeline_x"
+    root.mkdir()
+    msp = root / "lab.msp"
+    msp.write_text("NAME: x\n", encoding="ascii")
+    (root / "pipeline-run.json").write_text(json.dumps({
+        "schema": "pipeline-run.v1",
+        "inputs": {"library_mode": "msp_only",
+                   "msp": {"path": "lab.msp", "file": "lab.msp", "sha256": _sha(msp),
+                           "source": "config_file"}}}), encoding="utf-8")
+    rec = remember_from_run(root)
+    assert rec["status"] == "known" and Path(rec["path"]) == msp.resolve()
+
+
 # ---------- 共通 ----------
 
 def test_mztab_direct_is_unknown():

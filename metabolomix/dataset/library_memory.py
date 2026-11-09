@@ -100,9 +100,11 @@ def _declared_lbm(loaded) -> Path | None:
     return lbm if lbm.is_absolute() else method.parent / lbm
 
 
-def _abs_in_run(value, pipeline_root: Path) -> Path:
+def _abs_in_run(value, unit_root: Path) -> Path:
+    """単位の inputs のパスを絶対にする。相対なら単位の根（`store.relativize_unit_inputs`
+    の基点。v3 は `<pipeline_root>/<極性>/`、旧 v1 は pipeline_root）相対。"""
     path = Path(value)
-    return (path if path.is_absolute() else pipeline_root / path).resolve()
+    return (path if path.is_absolute() else unit_root / path).resolve()
 
 
 def remember_from_run(pipeline_root: Path, polarity: str | None = None) -> dict:
@@ -126,13 +128,14 @@ def remember_from_run(pipeline_root: Path, polarity: str | None = None) -> dict:
     msp = inputs.get("msp") if isinstance(inputs.get("msp"), dict) else {}
     lbm = inputs.get("lbm") if isinstance(inputs.get("lbm"), dict) else {}
     mode = inputs.get("library_mode")
+    unit_root = pipeline_root / (unit.get("unit_root") or ".")
     if msp.get("source") != "not_used" and msp.get("path"):
-        path = _abs_in_run(msp["path"], pipeline_root)
+        path = _abs_in_run(msp["path"], unit_root)
         rec = _record(status="known", kind="msp", file=msp.get("file") or path.name,
                       path=str(path), sha256=msp.get("sha256"), origin="run_inputs",
                       lbm_also=mode == "msp_then_lbm")
     elif lbm.get("path"):
-        path = _abs_in_run(lbm["path"], pipeline_root)
+        path = _abs_in_run(lbm["path"], unit_root)
         rec = _record(status="lbm_only", kind="lbm", file=lbm.get("file") or path.name,
                       path=str(path), sha256=lbm.get("sha256"), origin="run_inputs")
     else:

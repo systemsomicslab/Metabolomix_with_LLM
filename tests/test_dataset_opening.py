@@ -861,10 +861,13 @@ def test_folder_listing_counts_mdproject(tmp_path):
 # ---------- pipeline v3（極性の単位と受領） ----------
 
 def _v3_run(tmp_path: Path, polarities=("negative",), *, rows=None, failed=(),
-            with_receipt: bool = True, stem: str = "AlignResult-1") -> Path:
+            with_receipt: bool = True, stem: str = "AlignResult-1",
+            spec: dict | None = None, alignment: dict | None = None) -> Path:
     """v3 の run: 極性ごとに `<極性>/input/` の解析フォルダと Console のジョブ、受領を持つ。
 
-    `rows` は受領の `samples.rows`（全単位に同じ）。`failed` の単位は upstream が失敗したまま。"""
+    `rows` は受領の `samples.rows`（全単位に同じ）。`failed` の単位は upstream が失敗したまま。
+    `spec` は解析フォルダに書くアラインメント（既定は mzTab-M と合う `_spec()`）、`alignment` は
+    受領の `units.<極性>.alignment`（既定は記録どおり＝この合成の run では null）。"""
     from metabolomix.core.atomic_io import atomic_write_json
     from metabolomix.pipeline import receipt as receipt_mod
     from metabolomix.pipeline import store
@@ -874,7 +877,8 @@ def _v3_run(tmp_path: Path, polarities=("negative",), *, rows=None, failed=(),
     record = store.load_run(run)
     for polarity in polarities:
         job = _job(run / polarity, with_folder=False)
-        write_msdial_folder(run / polarity / "input", **_spec(), stem=stem, with_mddata=False)
+        write_msdial_folder(run / polarity / "input", **(spec or _spec()), stem=stem,
+                            with_mddata=False)
         record["units"][polarity]["upstream"] = {
             "console_job_path": str(job.relative_to(run)).replace("\\", "/")}
         for handler in store.UNIT_HANDLERS:
@@ -887,6 +891,8 @@ def _v3_run(tmp_path: Path, polarities=("negative",), *, rows=None, failed=(),
         receipt = receipt_mod.build_receipt(record, run)
         for polarity in polarities:
             receipt["units"][polarity]["samples"]["rows"] = rows
+            if alignment is not None:
+                receipt["units"][polarity]["alignment"] = alignment
         path = run / receipt_mod.RECEIPT_RELATIVE_PATH
         atomic_write_json(path, receipt)
         ref = receipt_mod.persist_result(run, {
@@ -976,8 +982,18 @@ def test_legacy_v1_run_still_opens_with_its_manifest(tmp_path):
     assert [r["group"] for r in opened.dataset.sample_metadata_rows] \
         == ["ctrl", "ctrl", "case", "case"]
     assert opened.polarity == "unknown"
+    # run が計算した差次的結果は戻さず、そのことを注記で言う。
+    assert not opened.dataset.results
+    assert any("旧 v1 の run" in note for note in opened.notes)
     # 旧 v1 の run は単位が 1 つ（極性 unknown）。極性の名指しも通る。
     assert open_dataset(pipeline_path=str(run), polarity="unknown").reused_base is False
+    # mzTab-M のアダプタでも同じ（対応表は載り、結果は戻さず、注記がある）。
+    via_mztab = open_dataset(pipeline_path=str(run), source="mztab")
+    assert via_mztab.adapter == "mztab"
+    assert [r["group"] for r in via_mztab.dataset.sample_metadata_rows] \
+        == ["ctrl", "ctrl", "case", "case"]
+    assert not via_mztab.dataset.results
+    assert any("旧 v1 の run" in note for note in via_mztab.notes)
 
 
 def test_v3_run_mztab_source_has_no_restored_results(tmp_path):
@@ -993,7 +1009,9 @@ def test_v3_run_mztab_source_has_no_restored_results(tmp_path):
 def test_v3_run_without_a_readable_receipt_reads_the_unit_record(tmp_path):
     run = _v3_run(tmp_path, with_receipt=False)
     opened = open_dataset(pipeline_path=str(run))
-    assert any("受領" in note for note in opened.notes)
+    note = next(note for note in opened.notes if "受領" in note)
+    # 戻し方（対応表を載せ直す・受領を確かめる）まで言う。
+    assert "dataset_set_sample_metadata" in note and "pipeline_status" in note
 
 
 def test_v3_base_cache_reloads_when_the_receipt_changes(tmp_path):
@@ -1021,3 +1039,43 @@ def test_pipeline_input_batches_are_found_by_the_shared_arf2_pattern(tmp_path):
     assert names == ["Batch_2026_01.arf2"]
     assert opening.pipeline_arf2(run, "negative").name == "Batch_2026_01.arf2"
     assert opening.pipeline_arf2_candidates(run, "positive") == []
+
+
+def test_unmatched_analysis_folder_opens_only_through_the_mztab(tmp_path):
+    """検証は通ったが解析フォルダが mzTab-M と合わなかった単位（受領の `alignment: null`）。
+    既定（解析フォルダ）は `source="mztab"` の案内つきで止まり、`source="mztab"` なら対応表つきで開く。"""
+    rows = [_manifest_row(f"s{i}", "ctrl" if i < 2 else "case") for i in range(4)]
+    run = _v3_run(tmp_path, rows=rows, spec=_other_spec())
+    err = _code(lambda: open_dataset(pipeline_path=str(run), polarity="negative"))
+    assert err.code in ("ALIGNMENT_NOT_FOUND", "ALIGNMENT_AMBIGUOUS")
+    assert err.details["source_hint"] == "mztab"
+
+    opened = open_dataset(pipeline_path=str(run), polarity="negative", source="mztab")
+    assert opened.adapter == "mztab"
+    assert [r["group"] for r in opened.dataset.sample_metadata_rows] \
+        == ["ctrl", "ctrl", "case", "case"]
+
+
+def test_mztab_source_matches_spots_on_the_batch_the_receipt_verified(tmp_path):
+    """`source="mztab"` のスポットの照合は、受領が照合したバッチ（`alignment.arf2`）を使う。
+    `rerun_upstream` の後は前のバッチも同じフォルダに残り、名前の順では決まらない。"""
+    from metabolomix.dataset import opening
+    from metabolomix.tools.handle_tools import load_dataset
+
+    run = _v3_run(tmp_path, stem="AlignResult-1",
+                  alignment={"arf": "AlignResult-1_PeakProperties.arf",
+                             "arf2": "AlignResult-1.arf2"})
+    write_msdial_folder(run / "negative" / "input", **_other_spec(), stem="AlignResult-2",
+                        with_mddata=False)
+    assert opening.pipeline_arf2(run, "negative").name == "AlignResult-1.arf2"
+    out = json.loads(load_dataset(pipeline_path=str(run), source="mztab", overview=False))
+    assert out["arf2"] == "AlignResult-1.arf2"
+
+
+def test_mztab_source_without_a_verified_batch_falls_back_to_the_newest_name(tmp_path):
+    from metabolomix.dataset import opening
+
+    run = _v3_run(tmp_path, stem="AlignResult-1")   # 受領の alignment は null
+    write_msdial_folder(run / "negative" / "input", **_other_spec(), stem="AlignResult-2",
+                        with_mddata=False)
+    assert opening.pipeline_arf2(run, "negative").name == "AlignResult-2.arf2"

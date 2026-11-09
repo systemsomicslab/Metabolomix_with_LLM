@@ -287,6 +287,20 @@ def test_request_file_downstream_keys_appear_as_a_warning_in_the_plan(tmp_path, 
     assert [w["code"] for w in receipt["warnings"]] == ["REQUEST_FILE_DOWNSTREAM_IGNORED"]
 
 
+def test_request_file_unit_keys_ignored_appear_as_a_warning_in_the_plan(tmp_path, monkeypatch):
+    """明示の `units` に負けて読み捨てた要求ファイルの単位のキーも、受付の時点で見せる。"""
+    source = make_two_polarity_source(tmp_path / "source")
+    use_config(monkeypatch, tmp_path, {"msdial.exe": source["negative"]["exe"]})
+    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
+    (source["root"] / "analysis-request.json").write_text(
+        json.dumps({"polarity": "negative", "timeout_s": 60}), encoding="utf-8")
+
+    receipt = service.plan_pipeline(source["root"], {"units": [
+        {"polarity": "negative", "raw_dir": "neg"}, {"polarity": "positive", "raw_dir": "pos"}]})
+
+    assert [w["code"] for w in receipt["warnings"]] == ["REQUEST_FILE_UNIT_KEYS_IGNORED"]
+
+
 def test_start_pipeline_saves_needs_input_without_launching_on_bad_manifest(tmp_path, monkeypatch):
     source = _prepare_source(tmp_path, monkeypatch)
     (source["root"] / "sample-manifest.tsv").write_text(
@@ -581,3 +595,35 @@ def test_plan_receipt_shows_alignment_reference(tmp_path, monkeypatch):
     method_receipt = service.plan_pipeline(source["root"], {"alignment_reference": "method"})
     assert method_receipt["resolved"]["units"]["negative"]["alignment_reference"][
         "file_id"] is None
+
+
+def test_matching_alignment_reads_the_mztab_once_across_fallback_batches(tmp_path, monkeypatch):
+    """解析フォルダの照合は、フォールバックのバッチが何本あっても mzTab-M を 1 回だけ読む。"""
+    from types import SimpleNamespace
+
+    from metabolomix.mztab import evidence, loading
+
+    reads: list[int] = []
+    monkeypatch.setattr(loading, "read_mztab_parsed",
+                        lambda path: (reads.append(1), (SimpleNamespace(), None))[1])
+    monkeypatch.setattr(loading, "job_artifact_paths", lambda job: {})
+    monkeypatch.setattr(evidence, "join_axes", lambda state: ([1.0], ["s0"]))
+    monkeypatch.setattr(evidence, "matching_arfs",
+                        lambda paths, **kw: ([], {p.name: "x" for p in paths}, None))
+    batches = [tmp_path / f"AlignResult-{i}_PeakProperties.arf" for i in range(3)]
+
+    def first_matching(mztab_path, artifact_paths, verify, fallbacks):
+        rejected: dict = {}
+        for path in list(fallbacks):
+            _passed, more, _scan = verify([path])
+            rejected.update(more)
+        return [], rejected, None, list(batches)
+
+    monkeypatch.setattr(evidence, "first_matching_arfs", first_matching)
+    monkeypatch.setattr(service.alignment_files, "batch_arfs_newest_first", lambda d: batches)
+    gate = SimpleNamespace(mztab_path=tmp_path / "x.mzTab", job=None)
+
+    alignment, warning = service._matching_alignment(gate, tmp_path / "negative" / "input")
+
+    assert alignment is None and warning["code"] == "ANALYSIS_FOLDER_UNMATCHED"
+    assert len(reads) == 1

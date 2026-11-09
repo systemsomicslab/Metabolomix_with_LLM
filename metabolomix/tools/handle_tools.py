@@ -51,7 +51,8 @@ def _alignment_files(ds, arf2_path: str | None, kind: str | None = None,
     """スポットの照合に使う `.arf2` と `.dcl`。決まらなければ None。
 
     探す順: 明示の `arf2_path` → 検出状態を取り込んだ `.arf` の同じバッチ → mzTab の隣
-    → （`kind == "pipeline_path"` のとき）run の極性の単位の `input/*.arf2`。
+    → （`kind == "pipeline_path"` のとき）受領が照合した単位のバッチ、無ければ単位の
+    `input/*.arf2` の名前が最も新しいもの（`opening.pipeline_arf2`）。
     """
     from metabolomix.curation import apply as curation_apply
     from metabolomix.msdial import alignment_spot
@@ -156,19 +157,16 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
           （`"folder"` はエラー）。
         - `job_path` / `pipeline_path` は既定（`"auto"` / `"folder"`）で、そのジョブの正準
           mzTab-M と同じアラインメントの**解析フォルダ**を読む。候補（mzTab-M の隣の `.arf`。
-          pipeline はどれも合わなければ run の `input/AlignResult-*.arf2` と同じバッチも）を
-          mzTab-M と特徴数・m/z・試料名で照合し、合うものがちょうど 1 本ならそれを読む。
-          無ければ `ALIGNMENT_NOT_FOUND`、2 本以上なら `ALIGNMENT_AMBIGUOUS`（どちらも
-          候補のファイル名を `details.candidates` に載せる）で止まり、mzTab-M へ黙って
-          切り替えない。`"mztab"` を渡すと mzTab-M を読む。
-        - **pipeline の run を解析フォルダで読んだときに run から引き継ぐのは、解決済みの
-          試料対応表だけ**。run の差次的結果は
-          `source="mztab"` のときだけ載せる——その run の mzTab に加えて、解決済みの
-          試料対応表・差次的結果を**同じ run からまとめて**載せる
-          （別 run の結果を混ぜると群の対応が黙ってずれるため）。差次的結果は、データと群の指紋が
-          今のデータセットと一致するものだけを戻す（result_id は run の TSV と同じ。
-          直近の結果にはしないので result_id で名指しして使う）。戻せなかったものは理由つきで
-          `summary` に並ぶ。
+          pipeline はどれも合わなければ単位の解析フォルダ `<極性>/input/*.arf2` のバッチを
+          新しい順に 1 本ずつ）を mzTab-M と特徴数・m/z・試料名で照合し、合うものがちょうど
+          1 本ならそれを読む。無ければ `ALIGNMENT_NOT_FOUND`、2 本以上なら
+          `ALIGNMENT_AMBIGUOUS`（どちらも候補のファイル名を `details.candidates` に載せる）で
+          止まり、mzTab-M へ黙って切り替えない。`"mztab"` を渡すと mzTab-M を読む。
+        - **pipeline の run から引き継ぐのは試料の対応表だけ**（v3 の run は受領
+          `results/receipt.json` の `units.<極性>.samples.rows`、旧 v1 の run は記録の
+          `inputs.manifest`。どちらのアダプタでも同じ）。run が計算した差次的結果は戻さない
+          （比較は読み込んだあと `dataset_compare` で回す）。受領が無い・照合できない v3 の
+          run は記録の単位から解析フォルダを開き、対応表は載らない旨を注記する。
     measure: 解析フォルダのアダプタが値に使う `.arf` の欄（`"peak_height"`（既定）/
         `"peak_area_above_zero"`）。**この引数が効くのは解析フォルダのアダプタだけ**。
         mzTab-M のアダプタでは定量種別がファイル（job / pipeline ならジョブの宣言）で
@@ -187,8 +185,9 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         `library_load` の `file_path` で明示する。`"none"` は読まない。
     arf2_path: スポットの照合（spot_id = SMF_ID）に使う `.arf2`。省略時、解析フォルダで
         読んだならその `.arf2` と `.dcl`。mzTab-M で読んだなら検出状態を取り込んだ `.arf` の
-        同じバッチ、無ければ mzTab-M の隣、`pipeline_path` なら run の
-        `input/AlignResult-*.arf2`（複数あれば名前の新しいもの）を探す。
+        同じバッチ、無ければ mzTab-M の隣、`pipeline_path` なら受領が照合した単位の
+        `<極性>/input/` の `.arf2`、受領に無ければ単位の `<極性>/input/*.arf2`（複数あれば
+        名前の新しいもの）を探す。
 
     overview: 読み込みの最後に最初の概観（`dataset_overview` と同じ。品質 → 全体 → クラス → 分子種）を
         計算して戻り値の `overview` 欄に載せる（既定 True）。False で計算しない（多数のハンドルを開く

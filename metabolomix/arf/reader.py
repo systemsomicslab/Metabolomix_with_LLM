@@ -479,19 +479,6 @@ def _file_name_from_row(data: list) -> str | None:
     return None
 
 
-def file_name_of(data: list) -> str | None:
-    """`AlignedPeakProperties` の 1 行から file_name だけを取り出す公開境界。
-
-    `_convert_to_alignment_feature(data).get("file_name")` と必ず同じ答えを返す
-    （両者が同じ導出を共有している）。除外判定・roster は file_name しか要らない
-    のに、以前は 1 行ごとに feature dict を丸ごと組んでいた——spot × 注入ぶん
-    呼ばれるので、393MB の `.arf` では 294 万回の無駄な dict 生成になっていた。
-    """
-    if not _is_alignment_peak_row(data):
-        return None
-    return _file_name_from_row(data)
-
-
 #: `_convert_to_alignment_feature` がそのまま添字を引くだけのフィールド。
 #: 実経路の行は len(data) > 25 が保証されているので、範囲判定は要らない。
 _DIRECT_FIELD_INDEX = {
@@ -752,25 +739,6 @@ def plot_peak_height_distribution(peak_df: pd.DataFrame, filter_keyword: str = N
     plt.close()
     
     print(f"[INFO] 脂質分布プロットを保存しました: {output_file} (データ件数: {len(df_filtered)}, グループ数: {len(groups)})", file=sys.stderr)
-
-
-def _print_feature_details(feature_pairs: list[tuple], deserialized_list: list[dict]):
-    """各ピークの詳細情報を1行で出力する。"""
-    for spot_name, loading_value in feature_pairs:
-        try:
-            spot_id = int(spot_name.split("_")[1])
-        except (IndexError, ValueError):
-            continue
-        if spot_id >= len(deserialized_list):
-            continue
-
-        spot = deserialized_list[spot_id]
-        name = spot.get("Name") or "Unknown"
-        mz = spot.get("MassCenter")
-        rt = spot.get("RT")
-        mz_s = f"{mz:.4f}" if isinstance(mz, (int, float)) else "N/A"
-        rt_s = f"{rt:.2f}" if isinstance(rt, (int, float)) else "N/A"
-        print(f"    ID {spot_id:>4}  loading={loading_value:+.6f}  m/z={mz_s}  RT={rt_s} min  {name}")
 
 
 def summarize_arf_data(deserialized_list):

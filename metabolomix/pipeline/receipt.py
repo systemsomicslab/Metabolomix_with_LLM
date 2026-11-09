@@ -228,15 +228,6 @@ def _library(inputs: dict) -> dict:
     return {"mode": inputs.get("library_mode", "auto"), "msp": msp_out, "lbm": lbm_out}
 
 
-def _job_or_none(job_path: Path | None):
-    if job_path is None or not job_path.is_file():
-        return None
-    try:
-        return job_manager.load_job(job_path)
-    except Exception:  # noqa: BLE001 - 受領は読める範囲で書く（壊れたジョブで受領を止めない）
-        return None
-
-
 def _samples(pipeline_root: Path, record: dict, request: dict | None, polarity: str,
              unit_root: Path, warnings: list[dict]) -> dict:
     """試料の欄。今の実験情報シートを、Console が読んだ raw の一覧で解して載せる。"""
@@ -290,7 +281,6 @@ def _unit_receipt(pipeline_root: Path, record: dict, request: dict | None,
     method = inputs.get("method") or {}
     exe = inputs.get("exe") or {}
     job_rel = upstream.get("console_job_path")
-    job = _job_or_none(pipeline_root / job_rel if job_rel else None)
     verification = upstream.get("verification") or {}
 
     stages = record.get("stages") or {}
@@ -317,8 +307,9 @@ def _unit_receipt(pipeline_root: Path, record: dict, request: dict | None,
                    "sha256": method.get("sha256"),
                    "effective_sha256": method.get("effective_sha256")},
         "library": _library(inputs),
-        "console": {"exe_file": _file_name(exe.get("path")), "exe_sha256": exe.get("sha256"),
-                    "software_version": (getattr(job, "software_version", None) or None)},
+        # Console の版は欄に置かない: ジョブ（analysis-job.json）は版を記録しないので、
+        # 置けばいつも null になる。実行体は名前と sha256 で特定する。
+        "console": {"exe_file": _file_name(exe.get("path")), "exe_sha256": exe.get("sha256")},
         "alignment_reference": inputs.get("alignment_reference"),
         "samples": _samples(pipeline_root, record, request, polarity, unit_root, warnings),
         "validation": {"job_status": verification.get("status"),
@@ -330,11 +321,24 @@ def _unit_receipt(pipeline_root: Path, record: dict, request: dict | None,
     }
 
 
-def _next_call(validated: list[str]) -> str | None:
-    if not validated:
-        return None
-    choice = " または ".join(f'"{p}"' for p in validated)
-    return f'load_dataset(pipeline_path="{PIPELINE_PATH_PLACEHOLDER}", polarity={choice})'
+def _next_call(units: dict[str, dict]) -> str | None:
+    """検証を通った単位を開く、そのまま動く呼び出し（無ければ None）。
+
+    解析フォルダが mzTab-M と合わなかった単位（`alignment: null`。警告
+    `ANALYSIS_FOLDER_UNMATCHED`）は、既定の `source`（解析フォルダ）では
+    `ALIGNMENT_NOT_FOUND` / `ALIGNMENT_AMBIGUOUS` で止まるので、`source="mztab"` の呼び出しを
+    別に示す。2 つの呼び出しは ` / ` で並べる。
+    """
+    folder = [p for p, u in units.items() if u["status"] == "validated" and u.get("alignment")]
+    mztab = [p for p, u in units.items()
+             if u["status"] == "validated" and not u.get("alignment")]
+    calls = []
+    for polarities, extra in ((folder, ""), (mztab, ', source="mztab"')):
+        if polarities:
+            choice = " または ".join(f'"{p}"' for p in polarities)
+            calls.append(f'load_dataset(pipeline_path="{PIPELINE_PATH_PLACEHOLDER}", '
+                         f'polarity={choice}{extra})')
+    return " / ".join(calls) or None
 
 
 def build_receipt(record: dict, pipeline_root) -> dict:
@@ -348,7 +352,6 @@ def build_receipt(record: dict, pipeline_root) -> dict:
     warnings: list[dict] = []
     units = {polarity: _unit_receipt(pipeline_root, record, request, polarity, unit, warnings)
              for polarity, unit in store.run_units(record).items()}
-    validated = [p for p, u in units.items() if u["status"] == "validated"]
     return {
         "schema": RECEIPT_SCHEMA,
         "pipeline_id": (record.get("identity") or {}).get("pipeline_id"),
@@ -356,7 +359,7 @@ def build_receipt(record: dict, pipeline_root) -> dict:
         "request_revision": (record.get("request") or {}).get("revision"),
         "units": units,
         "warnings": warnings,
-        "next": _next_call(validated),
+        "next": _next_call(units),
     }
 
 

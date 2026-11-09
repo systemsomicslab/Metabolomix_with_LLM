@@ -124,6 +124,33 @@ def test_receipt_lists_a_failed_unit_with_its_error_and_leaves_it_out_of_next(tm
     assert 'polarity="positive"' in receipt["next"]
 
 
+def test_next_reads_the_mztab_for_a_unit_whose_analysis_folder_did_not_match(tmp_path):
+    """検証を通ったが解析フォルダが mzTab-M と合わなかった単位（`alignment: null`）の
+    `next` は、そのまま動く `source="mztab"` の呼び出しを示す（既定の解析フォルダでは止まる）。"""
+    path = create_synthetic_run(tmp_path, polarities=("negative", "positive"))
+    assert run_engine(path, synthetic_handlers())["status"] == "completed"
+    record = load_run(path)
+    record["units"]["negative"]["outputs"]["alignment"] = None
+
+    receipt = build_receipt(record, path)
+    assert receipt["next"] == (
+        'load_dataset(pipeline_path="<pipeline_path>", polarity="positive") / '
+        'load_dataset(pipeline_path="<pipeline_path>", polarity="negative", source="mztab")')
+
+    record["units"]["positive"]["outputs"]["alignment"] = None
+    assert build_receipt(record, path)["next"] == (
+        'load_dataset(pipeline_path="<pipeline_path>", polarity="negative" または "positive", '
+        'source="mztab")')
+
+
+def test_the_receipt_does_not_carry_a_console_version_it_cannot_know(tmp_path):
+    """Console のジョブは版を記録しないので、受領にも版の欄を置かない（いつも null の欄を残さない）。"""
+    path = create_synthetic_run(tmp_path)
+    run_engine(path, synthetic_handlers())
+    receipt = read_receipt(path, load_run(path))
+    assert "software_version" not in receipt["units"]["negative"]["console"]
+
+
 def test_a_tampered_receipt_is_not_read(tmp_path):
     path = create_synthetic_run(tmp_path)
     run_engine(path, synthetic_handlers())

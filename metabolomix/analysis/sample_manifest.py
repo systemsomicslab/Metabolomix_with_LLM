@@ -42,11 +42,9 @@
     求め、`invalidate_results` を一度だけ呼んでから ``ds`` へ一括代入する。
     検証で1件でも落ちれば ``ds`` には一切触れない（半端な適用を作らない）。
 
-``select_statistical_samples``
-    v2 が足す2点——``role=standard``（標準品注入は生物試料ではない）と
-    ``biological_sample_id``（反復注入を束ねる生物単位）——を、検定の**直前**に
-    効かせる。台帳としてのシートは反復注入も標準品も書けてよく、選択規則を1か所に
-    集めるのは、各々が書き直すと片方だけ ``include=false`` を見落とすため。
+検定の母集団（``include`` が真・``role=sample``・群が決まった行）は、統計エンジンの
+前処理（``metabolomix.analysis.stats.preprocess``）が選ぶ。ここは台帳としてのシートを
+読んで検証するだけで、反復注入も標準品も書けてよい。
 """
 from __future__ import annotations
 
@@ -68,7 +66,6 @@ __all__ = [
     "parse_injection_order",
     "parse_manifest",
     "resolve_metadata",
-    "select_statistical_samples",
 ]
 
 #: sample-manifest.v1 が持つ8列（この順で並ぶことを要求する）。
@@ -692,31 +689,6 @@ def apply_defaults_and_inputs(ds, rows: list[dict]) -> None:
     """
     apply_metadata(ds, rows)
     ds.roles, ds.sample_meta = pp_inputs_from_rows(list(ds.sample_names), rows)
-
-
-# ---------- 統計母集団の選択（spec §7・§9） ----------
-
-def select_statistical_samples(rows: list[dict], groups: list[str]) -> list[dict]:
-    """検定の対象になる行だけを、`rows`の順のまま返す。
-
-    条件は3つのANDで、ここが**唯一の定義**（spec §9「全検定はincluded
-    role=sampleのみを対象とし」）:
-
-    - ``include`` が真——除外した注入はQCからも統計からも消える（raw対応一覧
-      からは消さない。それは`parse_manifest`が持つ台帳の役目）。
-    - ``role`` が ``"sample"``——``standard``（標準品注入）・``qc``・``blank``・
-      ``unknown`` は生物試料ではない。standardを群へ自動投入しない、が §7 の要求。
-    - ``group`` が引数 ``groups`` に在る——空欄の行は群未確定であって「その他群」
-      ではないので、どの比較にも入れない。
-
-    同じ3条件を統計・QC・標準注入解決が各々書き直すと、片方だけ
-    ``include=false`` を見落として母集団が食い違う。呼び出し側はこの関数を通す。
-    """
-    wanted = set(groups)
-    return [row for row in rows
-            if row.get("include", True)
-            and row.get("role") == "sample"
-            and row.get("group") in wanted]
 
 
 def apply_sample_manifest(ds, manifest_path: str) -> dict:

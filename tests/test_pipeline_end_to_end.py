@@ -114,6 +114,12 @@ def test_unmatched_arf_is_partial_with_warning(pipeline_harness):
     assert receipt["units"]["negative"]["alignment"] is None
     assert "ANALYSIS_FOLDER_UNMATCHED" in {
         w["code"] for w in receipt["units"]["negative"]["validation"]["warnings"]}
+    # 「そのままの呼び出し」は既定（解析フォルダ）では止まるので、mzTab-M を読む呼び出しを示す。
+    assert receipt["next"] == \
+        'load_dataset(pipeline_path="<pipeline_path>", polarity="negative", source="mztab")'
+    root = pipeline_harness.pipeline_root(run)
+    next_call = recovery.read_status(root)["receipt"]["next"]
+    assert next_call.endswith('polarity="negative", source="mztab")')
 
 
 def test_receipt_names_library_files_only(pipeline_harness, tmp_path, monkeypatch):

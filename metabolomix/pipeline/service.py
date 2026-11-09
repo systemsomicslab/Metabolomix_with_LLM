@@ -65,6 +65,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 #: 単位の根（`<pipeline_root>/<極性>`）の下の書込み先。
 _CONSOLE_RUN_SUBDIR = "console"
 _INPUT_SUBDIR = "input"  # metabolomix.pipeline.inputs._INPUT_SUBDIRと同じ値
+#: `pipeline_plan` / `pipeline_run` の戻り値に出す受付の警告（`request.resolve_request` が出す）。
+_INTAKE_WARNING_CODES = frozenset({"REQUEST_FILE_DOWNSTREAM_IGNORED",
+                                   "REQUEST_FILE_UNIT_KEYS_IGNORED"})
 
 #: 起動受理を待つ上限（秒）。「短い上限」——超えても失敗と決め付けず、
 #: pipeline_pathと（未確認の）launch状態を返す。
@@ -235,8 +238,9 @@ def _dispatch_summary(pipeline_path: Path, *, launched: bool, launch: dict | Non
                                          for p, u in units.items()}}
     if record.get("needs_input"):
         summary["needs_input"] = record["needs_input"]
+    # 受付の警告（要求ファイルから読み飛ばしたもの）。読み飛ばした値こそ受付の時点で見せる。
     intake = [w for w in record.get("warnings") or []
-              if w.get("code") == "REQUEST_FILE_DOWNSTREAM_IGNORED"]
+              if w.get("code") in _INTAKE_WARNING_CODES]
     if intake:
         summary["warnings"] = intake
     if launch is not None:
@@ -570,11 +574,15 @@ def _matching_alignment(gate, input_dir: Path) -> tuple[dict | None, dict | None
     """
     details: dict = {"analysis_dir": f"{input_dir.parent.name}/{input_dir.name}"}
 
+    axes: list = []
+
     def verify(paths):
-        state, _parsed = mztab_loading.read_mztab_parsed(gate.mztab_path)
-        feature_mz, sample_names = mztab_evidence.join_axes(state)
-        return mztab_evidence.matching_arfs(paths, feature_mz=feature_mz,
-                                            sample_names=sample_names)
+        # 照合の軸（特徴の m/z・試料名）は mzTab-M を 1 回だけ読んで使い回す（フォールバックの
+        # バッチごとに呼ばれるので、毎回読むとバッチの数だけ同じ mzTab-M を解析する）。
+        if not axes:
+            state, _parsed = mztab_loading.read_mztab_parsed(gate.mztab_path)
+            axes.extend(mztab_evidence.join_axes(state))
+        return mztab_evidence.matching_arfs(paths, feature_mz=axes[0], sample_names=axes[1])
 
     try:
         passed, rejected, _scan, candidates = mztab_evidence.first_matching_arfs(

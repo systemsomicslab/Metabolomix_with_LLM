@@ -422,7 +422,8 @@ def _clear_cancel_request(pipeline_root: Path, *, prior_status: str,
 
 
 def _resume_receipt(record: dict, *, reused: bool, reset_stage_ids: list | None = None,
-                    not_retried_units: list | None = None) -> dict:
+                    not_retried_units: list | None = None,
+                    held_units: list | None = None) -> dict:
     out = {
         "pipeline_id": record["identity"]["pipeline_id"],
         "status": record["status"],
@@ -434,6 +435,14 @@ def _resume_receipt(record: dict, *, reused: bool, reset_stage_ids: list | None 
         out["not_retried_units"] = sorted(not_retried_units)
         out["hint"] = ("失敗した極性の Console は自動ではやり直しません。"
                        "やり直すなら rerun_upstream=true で再開してください。")
+    if held_units:
+        # rerun_upstream=true でも、生きている worker が回している単位は戻さない。黙って
+        # reset_stage_ids から消えるだけだと「やり直しが効かなかった」と読まれる。
+        out["held_units"] = sorted(held_units)
+        out["hint"] = (f"極性 {', '.join(sorted(held_units))} は Console が稼働中なので"
+                       "やり直していません（worker がそのまま最後まで進めます）。"
+                       "pipeline_status で結果を見てから、なお必要なら rerun_upstream=true で"
+                       "再開してください。")
     return out
 
 
@@ -580,7 +589,8 @@ def prepare_resume(path: Path, *, updates: dict | None = None,
                                   worker_health=worker_health)
         saved = store.load_run(pipeline_root)
         return _resume_receipt(saved, reused=False, reset_stage_ids=sorted(reset_ids),
-                               not_retried_units=not_retried)
+                               not_retried_units=not_retried,
+                               held_units=sorted(held) if rerun_upstream else None)
 
     raise DomainError(
         "STATE_REVISION_CONFLICT",

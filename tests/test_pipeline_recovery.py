@@ -284,6 +284,9 @@ def test_rerun_upstream_leaves_a_unit_running_under_a_live_worker(tmp_path):
     accepted = prepare_resume(path, rerun_upstream=True)
 
     assert set(accepted["reset_stage_ids"]) == {*_unit_stage_ids("negative"), "receipt"}
+    # 外した単位は戻り値で言う（黙って消えると「やり直しが効かなかった」と読まれる）。
+    assert accepted["held_units"] == ["positive"]
+    assert "positive" in accepted["hint"] and "稼働中" in accepted["hint"]
     after = load_run(path)
     assert after["stages"]["upstream:positive"]["status"] == "running"
     assert after["stages"]["upstream:positive"]["attempt"] == 1
@@ -293,6 +296,7 @@ def test_rerun_upstream_leaves_a_unit_running_under_a_live_worker(tmp_path):
     manifest = prepare_resume(path, updates={"units": {
         "positive": {"sample_manifest": "positive/pos.tsv"}}})
     assert manifest["reset_stage_ids"] == ["receipt"]
+    assert "held_units" not in manifest   # やり直しを求めていないので、外したものも無い
     assert load_run(path)["stages"]["upstream:positive"]["status"] == "running"
 
 

@@ -43,7 +43,8 @@ MCP層は薄い(`metabolomix/tools/pipeline_tools.py` と `metabolomix/tools/con
 (元フォルダの `analysis-request.json` に書かれたものは読み飛ばして警告
 `REQUEST_FILE_DOWNSTREAM_IGNORED`)。明示の `units` は単位を丸ごと決めるので、
 `analysis-request.json` のトップの単位のキー(`polarity` `method_file` …)は使わず、警告
-`REQUEST_FILE_UNIT_KEYS_IGNORED` で伝える。2 単位の `raw_dir` は同じフォルダも、片方が
+`REQUEST_FILE_UNIT_KEYS_IGNORED` で伝える(どちらの警告も `pipeline_plan` / `pipeline_run` の
+戻り値の `warnings` に出る)。2 単位の `raw_dir` は同じフォルダも、片方が
 もう片方の中にある(`.` を含む)のも `PIPELINE_REQUEST_INVALID`。
 
 **起動しないもう1つの経路（レビュー指摘1）**: manifestが正常でも、
@@ -173,6 +174,7 @@ v8 の要求を出すと、その run を再利用する(上書きしたメソ�
 だけで、戻すのは受領の工程だけ。`rerun_upstream=True` は失敗した単位の 3 工程と受領を戻す。
 ただし worker が生きていて(`_worker_health` が `ok`)上流が `running` の単位は、その
 Console を捨てない——やり直しの対象にも、`UPSTREAM_RERUN_REQUIRED` の理由にも数えない
+(`rerun_upstream=True` で外した単位は戻り値の `held_units` と `hint` で言う)
 (稼働中の Console の最中に届いたシートの訂正は受け付け、受領だけを戻す)。worker が
 居なくなった run の `running` は、今までどおり `rerun_upstream=true` を求める。
 
@@ -318,3 +320,6 @@ validated が 0 → `failed`。worker の中の `needs_input` は無い(受付�
 受領(`results/receipt.json`、`lipidmix.pipeline-receipt.v1`)は単位ごとの解析フォルダ・
 照合した `.arf`・メソッドとライブラリ(研究室の資産はファイル名と sha256 だけ)・試料の
 対応表・検証の結果と、次の呼び出し(`load_dataset(pipeline_path=…, polarity=…)`)を載せる。
+Console の実行体はファイル名と sha256 で示す(ジョブは Console の版を記録しないので、版の欄は無い)。
+解析フォルダが照合できなかった単位(`alignment: null`)の次の呼び出しには `source="mztab"` を付ける
+(既定の解析フォルダでは `ALIGNMENT_NOT_FOUND` / `ALIGNMENT_AMBIGUOUS` で止まるため)。
