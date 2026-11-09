@@ -15,10 +15,6 @@
    排他は`source_root`単位（正規化した絶対パスのhash）に限定し、`output_root`の
    違いでは分けない——output_rootが違うだけの同時受付でも、索引ファイルへの
    書込みは同じロックの下で直列化されなければならない。
-4. **Console jobの所有権**: pipelineが起動したConsole job（analysis-job.json）を、
-   単体`console_run`/`console_cleanup`が横から触らないようにする。所有pipelineが
-   活動中、または状態を確認できない場合は拒否する（判定不能を「安全」側＝拒否に
-   倒す）。
 
 依存グラフ上は`metabolomix.pipeline.inputs`と同じ層（`metabolomix.console.job_manager`・
 `metabolomix.core.atomic_io`・`metabolomix.core.process_control`のみを引く）。
@@ -64,8 +60,6 @@ __all__ = [
     "find_or_create_run",
     "initial_stage",
     "load_run",
-    "pipeline_owner_block_reason",
-    "register_job_owner",
     "run_schema_for",
     "save_run",
     "stage_ids_for",
@@ -786,45 +780,3 @@ def find_or_create_run(source_root: Path, request: dict, inputs: dict, *,
         _write_index_entry(index_dir, pipeline_root=pipeline_path, request_id=request_id,
                            request_hash=request_hash, input_hash=input_hash)
         return pipeline_path
-
-
-# ---------- Console jobの所有権 ----------
-
-def register_job_owner(job_path: Path, pipeline_path: Path) -> None:
-    """Console job（analysis-job.json）をpipelineが所有していることを記録する。
-
-    Console起動前に呼ぶ契約（brief）。書くのは`job_path`と同じrun_dir内の
-    小さなsidecar（`pipeline-owner.json`。`metabolomix/console/output_collector.py`の
-    `_OPERATIONAL_FILES`へ追加済みなので生成物としては収集されない）。
-    「所有」を消す＝解除ではない（`file_lock`と同じ注意）。ここでの判定は常に
-    `pipeline_path`が指すpipeline-run.jsonの現在の状態を動的に見て決める
-    （sidecar自体は「誰が所有主張しているか」の参照だけを持つ）。
-    """
-    run_dir = Path(job_path).parent
-    payload = {"pipeline_path": str(Path(pipeline_path).resolve())}
-    atomic_write_json(job_manager.pipeline_owner_path(run_dir), payload)
-
-
-def pipeline_owner_block_reason(run_dir: Path) -> dict | None:
-    """このConsole run_dirを所有するpipelineが活動中／判定不能なら拒否理由を返す。
-
-    戻り値がNoneなら単体`console_run`/`console_cleanup`を続行してよい
-    （所有記録が無い、または所有pipelineが終端状態に達している）。
-    判定不能（sidecarはあるがpipeline-run.jsonが読めない等）は安全側に倒し、
-    「活動中」と同じく拒否理由を返す——brief「所有pipelineが活動中か判定不能なら
-    削除を許可しない」。
-    """
-    owner = job_manager.read_pipeline_owner(run_dir)
-    if owner is None:
-        return None
-    pipeline_path = owner.get("pipeline_path")
-    if not pipeline_path:
-        return {"pipeline_path": None, "reason": "owner_record_invalid", "status": None}
-    try:
-        record = load_run(Path(pipeline_path))
-    except DomainError:
-        return {"pipeline_path": pipeline_path, "reason": "undeterminable", "status": None}
-    status = record.get("status")
-    if status in TERMINAL_STATUSES:
-        return None
-    return {"pipeline_path": pipeline_path, "reason": "active", "status": status}

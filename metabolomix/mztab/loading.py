@@ -47,7 +47,7 @@ _INCOMPLETE_WARNING = (
     "このジョブは status={status} です（completed ではありません）。"
     "MS-DIAL Console の実行は最後まで到達しておらず、読み込んだ mzTab-M は"
     "中断時点の生成物です。特徴量・サンプルが欠けている可能性があるため、"
-    "console_status の error と msdial.log を確認してください。")
+    "pipeline_status の error と msdial.log を確認してください。")
 
 
 def artifact_abs_path(job, root: str, rel: str) -> Path:
@@ -118,13 +118,13 @@ def load_dataset_state(*, mztab_path: Path | None = None,
             "DATASET_BAD_REQUEST",
             "mztab_path と job_path を同時に指定できません。どちらか一方だけを"
             "使ってください（mztab_path: .mzTab への直接パス。job_path:"
-            " analysis-job.json のパス。console_run 完了後は job_path を推奨）。")
+            " analysis-job.json のパス。pipeline の完了後は pipeline_path を推奨）。")
     if not mztab_path and not job_path:
         raise DomainError(
             "DATASET_BAD_REQUEST",
             "mztab_path または job_path のどちらか一方を指定してください"
             "（mztab_path: .mzTab への直接パス。job_path: analysis-job.json の"
-            "パス。console_run 完了後は job_path を推奨）。")
+            "パス。pipeline の完了後は pipeline_path を推奨）。")
 
     if job_path:
         return _load_from_job(Path(job_path).expanduser(),
@@ -245,7 +245,7 @@ def job_gate(job_path: Path, *, allow_incomplete: bool) -> JobGate:
         raise DomainError(
             "MZTAB_NOT_FOUND",
             f"ジョブ {job.job_id} に primary_mztab_files がありません。"
-            "console_run を先に実行してください。",
+            "MS-DIAL Console の実行（pipeline_run）を先に完了させてください。",
             {"job_id": job.job_id, "status": job.status})
 
     entry = select_primary_entry(job)

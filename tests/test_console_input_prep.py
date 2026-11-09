@@ -78,7 +78,7 @@ def test_leaves_the_source_folder_untouched(tmp_path):
 
 
 def test_output_folder_has_exactly_one_raw_format(tmp_path):
-    """作った先が console_plan の raw_input_summary を 1 種類で通ること。"""
+    """作った先が raw_input_summary を 1 種類で通ること。"""
     from metabolomix.console.job_manager import raw_input_summary
     src = tmp_path / "raw"
     src.mkdir()

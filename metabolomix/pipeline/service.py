@@ -21,7 +21,6 @@
    `tests/test_pipeline_engine.py`のASTテストと同じ制約を本モジュールにも課す）。
 
 **Console用workerを二重起動しない**: `upstream` handlerは
-`metabolomix.console.worker.run_job`/`launch_console_worker`を一切呼ばず、
 共通監視経路`metabolomix.console.execution.supervise`を直接呼ぶ——pipeline用
 workerが既に「起動して見張る」役を担っているため。
 
@@ -535,7 +534,7 @@ def _handle_upstream(context: dict) -> dict:
 
     `console_job_path`は`analysis-job.json`そのものへのパスとして記録する
     （`run_dir = Path(job_path).parent`という、コードベース全体の規約——
-    `metabolomix.pipeline.store.register_job_owner`・`metabolomix.console.job_manager`と
+    `metabolomix.console.job_manager`と
     同じ。`metabolomix.pipeline.recovery._console_supervision_state`もこの規約を
     前提にしている）。
 
@@ -576,7 +575,6 @@ def _handle_upstream(context: dict) -> dict:
             timeout_s=request["timeout_s"],
         )
         job.save(job_path)
-        store.register_job_owner(job_path, pipeline_root)
         raw_inventory = [str(p.resolve()) for p in job_manager.list_raw_inputs(dataset_root)]
         console_execution.write_supervision_inputs(run_dir, {
             "raw_inventory": raw_inventory,

@@ -6,12 +6,12 @@ exe_path は引数で注入できる（テスト用 fake の差し込みに使�
 `MsdialExeNotFoundError`（EnvironmentError）を上げる。
 
 **Console を実際に起動して見張るのは `metabolomix.console.execution.supervise`**。
-同期呼出しも切り離しワーカー（`metabolomix.console.worker`）も pipeline の上流工程も
+pipeline の上流工程は
 そこを通り、成功・非ゼロ・timeout・取消・起動不能のどの終了経路でも終了証跡と
 成果物を残す。
 
 かつてここにあった `run_msdial` / `run_msdial_detached` は削除した。前者は非ゼロ
-終了で例外を送出し、呼び出し側（`console_run` の同期分岐）がそこで即 return して
+終了で例外を送出し、当時の呼び出し側がそこで即 return して
 生成物の収集を丸ごと飛ばしていた——**失敗した実行が何の証拠も残さない**という、
 `supervise` が解いた欠陥そのもの。後者は誰も監視しないまま Console を放流し、
 終了コードも終了理由も回収できなかった。どちらも代わりを増やさずに消す。

@@ -370,7 +370,7 @@ def test_execution_unresolved_when_console_alive_but_unverified(tmp_path, monkey
     }
     (job_dir / "execution-result.json").write_text(json.dumps(receipt), encoding="utf-8")
     # console_job_pathはanalysis-job.jsonそのものへのパス(run_dirはその親)という
-    # コードベース全体の流儀(store.register_job_owner等)に合わせる。
+    # コードベース全体の流儀(job_manager.load_job等)に合わせる。
     job_json_path = job_dir / "analysis-job.json"
     job_json_path.write_text("{}", encoding="utf-8")
 

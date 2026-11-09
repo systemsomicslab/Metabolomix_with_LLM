@@ -6,8 +6,7 @@ engine自体（stage順序・owner lock・冪等性）を検証しており、`b
 そのうち、carry-forwardルーリングとして明示された振る舞いに絞って検証する。
 
 - R18: PCA不成立(`PreconditionError`)がhandler境界で`needs_input`へ変換されること。
-- Console用workerを二重起動しないこと（`upstream` handlerが `console.worker` を
-  一切呼ばず `console.execution.supervise` だけを呼ぶこと）。
+- `upstream` handlerが `console.execution.supervise` を直接呼ぶこと。
 - `launch_pipeline_worker` が `sys.executable` を使い、cwdをこのcheckout自身へ
   固定すること（Task2: 利用者のcwdや別checkoutを暗黙に使わない）。
 """
@@ -71,18 +70,8 @@ def test_pca_success_persists_data_and_figure_refs(tmp_path, monkeypatch):
     assert names == {"pca", "pca_figure"}
 
 
-def test_upstream_handler_never_calls_console_worker_module(tmp_path, monkeypatch):
-    """Console用workerを二重起動しない: `metabolomix.console.worker`を一切呼ばない。"""
-    import metabolomix.console.worker as console_worker_mod
-
-    def _forbidden(*a, **kw):
-        raise AssertionError("upstream handlerがmetabolomix.console.workerを呼び出した"
-                            "（Console用workerの二重起動）")
-
-    for name in ("run_job", "launch_console_worker"):
-        if hasattr(console_worker_mod, name):
-            monkeypatch.setattr(console_worker_mod, name, _forbidden)
-
+def test_upstream_handler_calls_supervise_directly(tmp_path, monkeypatch):
+    """`upstream` handlerは共通監視経路 `execution.supervise` を直接呼ぶ。"""
     supervise_calls = []
 
     def fake_supervise(job_path, *, cancel_path):
@@ -98,7 +87,6 @@ def test_upstream_handler_never_calls_console_worker_module(tmp_path, monkeypatc
     monkeypatch.setattr(service.job_manager, "load_job", lambda job_path: _FakeJob())
     monkeypatch.setattr(service.job_manager, "count_raw_inputs", lambda root: 1)
     monkeypatch.setattr(service.job_manager, "list_raw_inputs", lambda root: [])
-    monkeypatch.setattr(service.store, "register_job_owner", lambda job_path, root: None)
     monkeypatch.setattr(service.console_execution, "write_supervision_inputs",
                         lambda run_dir, payload: None)
 

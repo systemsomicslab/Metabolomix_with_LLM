@@ -99,26 +99,6 @@ def test_write_effective_method_file_refuses_non_ascii_without_crashing(tmp_path
     assert info.value.code == "METHOD_FILE_NOT_ASCII"
 
 
-def test_console_plan_returns_envelope_for_non_ascii_method(tmp_path, monkeypatch):
-    from metabolomix.core import session_state
-    from metabolomix.tools import console_tools
-
-    session_state.session = session_state.AnalysisSession()
-    app = tmp_path / "msdial_app"
-    app.mkdir()
-    (app / "Lipids.lbm2").touch()
-    (app / "MSDIALCUI.exe").touch()
-    use_config(monkeypatch, tmp_path, {"msdial.exe": app / "MSDIALCUI.exe"})
-    monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
-    root = tmp_path / "data"
-    root.mkdir()
-    (root / "a.wiff").touch()
-    method = _method(tmp_path, "Ion mode: Positive\nMemo: メモ\n")
-    out = json.loads(console_tools.console_plan(str(root), method_file=str(method)))
-    assert out["error"]["code"] == "METHOD_FILE_NOT_ASCII"
-    assert out["error"]["details"]["line"] == 2
-
-
 def test_non_ascii_in_an_overridden_line_is_fine(tmp_path):
     """上書きで置き換わる行の ASCII 以外は効かない（以前も通っていた。挙動を変えない）。"""
     src = _method(tmp_path, "Ion mode: ポジティブ\nMS1 tolerance: 0.01\n")

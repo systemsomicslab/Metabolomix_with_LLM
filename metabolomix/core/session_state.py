@@ -182,11 +182,6 @@ class AnalysisSession:
         # --- パスウェイ投影スロット（MSLipidMapper。他スロットとは独立） ---
         self.pathway = PathwayState()
 
-        # --- Console ジョブスロット ---
-        # ジョブ状態の正準はディスク上の analysis-job.json。ここはそのパスへのポインタ。
-        # MCP ツールが job_path 省略で呼ばれたときのフォールバックにのみ使う。
-        self.current_job_path: str | None = None
-
     # ---------- データセットとライブラリ（直近のハンドルを指す） ----------
 
     def _handle(self):

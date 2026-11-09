@@ -43,6 +43,7 @@ import server
 # B-3: 定量の 4 ツール（dataset_quant_preview / dataset_quant_apply / dataset_merge_polarities /
 # dataset_select_features）を追加（統合時 56→60）。
 # C 配線 Task 4: 統計エンジンの比較 dataset_compare を追加（60→61）。Task 9: 旧 v1 の 3 ツール（2 群比較・v2 統計・解析行列）を撤去（61→58）。
+# D: 旧 Console 6 ツール（旧 Console 計画ほか）を pipeline へ吸収（59→53）。
 # A: 最初の概観 dataset_overview を追加（58→59）。
 EXPECTED_TOOLS = sorted([
     "list_data_files",
@@ -97,12 +98,6 @@ EXPECTED_TOOLS = sorted([
     "pipeline_cancel",
     "console_method_candidates",
     "console_method_template",
-    "console_plan",
-    "console_run",
-    "console_status",
-    "console_prepare_input",
-    "console_cleanup",
-    "job_list",
     "server_update",
 ])
 

@@ -1,6 +1,6 @@
 """候補提示ツール。失敗する前に候補を列挙できることが要点。
 
-手動実行 WebUI の「メソッドを選ぶ」画面はこれを叩く。console_plan の封筒を
+手動実行 WebUI の「メソッドを選ぶ」画面はこれを叩く。pipeline_plan の封筒を
 待たないと候補が分からない設計では、画面を先に描けない。
 """
 from __future__ import annotations

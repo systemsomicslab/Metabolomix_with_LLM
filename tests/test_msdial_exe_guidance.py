@@ -32,23 +32,19 @@ def test_does_not_descend_indefinitely(tmp_path):
     assert msdial_exe_candidates([tmp_path], max_depth=2) == []
 
 
-def test_console_plan_envelope_says_a_human_must_act(tmp_path, monkeypatch):
-    method = tmp_path / "params.txt"
-    method.write_text("Ion mode: Negative\n", encoding="ascii")
-    from metabolomix.tools.console_tools import console_plan
-    parsed = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
-                                      polarity="negative", measure="peak_height"))
-    err = parsed["error"]
+def _unresolved_exe_envelope() -> dict:
+    """実行体を解けないときに Console を使うツールが返す封筒（`_exe_error`）。"""
+    from metabolomix.console.runner import MsdialExeNotFoundError
+    from metabolomix.tools.console_tools import _exe_error
+    return _json.loads(_exe_error(MsdialExeNotFoundError("Console の実行体が未設定です")))
+
+
+def test_exe_envelope_says_a_human_must_act():
+    err = _unresolved_exe_envelope()["error"]
     assert err["code"] == "MSDIAL_EXE_NOT_FOUND"
     assert err["details"]["human_action_required"] is True
-    assert "restart" in _json.dumps(err["details"]).lower() or \
-           "再起動" in _json.dumps(err["details"], ensure_ascii=False)
+    assert "restart" in _json.dumps(err["details"]).lower() or            "再起動" in _json.dumps(err["details"], ensure_ascii=False)
 
 
-def test_console_plan_envelope_offers_a_copyable_command(tmp_path, monkeypatch):
-    method = tmp_path / "params.txt"
-    method.write_text("Ion mode: Negative\n", encoding="ascii")
-    from metabolomix.tools.console_tools import console_plan
-    parsed = _json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(method),
-                                      polarity="negative", measure="peak_height"))
-    assert parsed["error"]["details"]["how_to_set"]
+def test_exe_envelope_offers_a_copyable_command():
+    assert _unresolved_exe_envelope()["error"]["details"]["how_to_set"]

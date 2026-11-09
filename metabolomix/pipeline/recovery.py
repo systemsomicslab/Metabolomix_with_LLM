@@ -271,8 +271,7 @@ def _console_supervision_state(record: dict) -> tuple[dict | None, bool]:
     Console jobを起動していない（`console_job_path`が無い）ならidentityは
     Noneで返す——これは「そもそも確認すべき対象が無い」正当な状態。
 
-    `console_job_path`は本コードベース全体の流儀（`metabolomix.pipeline.store.
-    register_job_owner`・`metabolomix.console.job_manager.load_job`等）に合わせ、
+    `console_job_path`は本コードベース全体の流儀（`metabolomix.console.job_manager.load_job`等）に合わせ、
     analysis-job.jsonそのものへのパスとして扱う——終了証跡
     （`execution-result.json`）はその親（run_dir）に置かれる。**ただしTask18
     （build_handlers）はまだ無く、この規約は本タスクの推測にすぎない

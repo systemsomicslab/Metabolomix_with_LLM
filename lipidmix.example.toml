@@ -15,13 +15,13 @@ exe = 'C:\MS-DIAL\MSDIALCUI.exe'
 # 脂質ライブラリ（.lbm2）は [library] lbm に書く（以前の [msdial] lbm は CONFIG_INVALID になる）。
 
 [library]
-# 参照ライブラリ（.msp）。極性ごとに 1 つ。MS-DIAL Console にどれを使わせるか（console_plan・pipeline）と、
+# 参照ライブラリ（.msp）。極性ごとに 1 つ。MS-DIAL Console にどれを使わせるか（pipeline）と、
 # `python -m metabolomix.library.store --ion-mode` の事前構築が読む。library_load は読まない
 # （library_load は file_path か、データセットが同定に使ったライブラリを使う）。
 # msp_positive = 'D:\library\pos.msp'
 # msp_negative = 'D:\library\neg.msp'
 # 脂質ライブラリ（.lbm2）。任意。
-# - Console（console_plan / pipeline の library_mode="auto"）: メソッドファイルの宣言・
+# - Console（pipeline の library_mode="auto"）: メソッドファイルの宣言・
 #   MsdialWorkbench のビルド生成物が無いときにここを使い、ここも無ければ Console の
 #   実行体と同じフォルダの .lbm2 から推定する。
 # - pipeline の library_mode="msp_then_lbm": ここだけを読む（メソッドの宣言・実行体の

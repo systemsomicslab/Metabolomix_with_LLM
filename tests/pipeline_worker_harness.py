@@ -4,7 +4,7 @@ production worker（`metabolomix/pipeline/worker.py`）は`--pipeline`しか受�
 ——試験用の環境変数も任意import名も持たせない（それ自体がコード実行の入口に
 なる）。したがって「実プロセスとして起動されて初めて確認できる」振る舞いを
 確かめるには、本番からは決して呼ばれない別のエントリが要る。それがこのファイル
-（`metabolomix.console.worker` の `--console-arg` と同じ位置付け）。
+（MCPからは到達できない試験専用の経路）。
 **importせずスクリプトパスとして`python tests/pipeline_worker_harness.py`で起動する**
 （`tests/fixtures/fake_console.py` と同じ流儀）。
 

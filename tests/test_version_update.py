@@ -156,24 +156,6 @@ def test_dataset_status_carries_notice(monkeypatch):
     assert parsed["update_available"]["behind"] == 4
 
 
-def test_console_status_carries_notice(tmp_path, monkeypatch):
-    from metabolomix.console.job_manager import create_job
-    from metabolomix.tools.console_tools import console_status
-
-    method = tmp_path / "params.txt"
-    method.write_text("Ion mode: Negative\n", encoding="ascii")
-    _, job_path = create_job(dataset_root=tmp_path, method_file=method,
-                             polarity="negative", measure="peak_height")
-
-    monkeypatch.setattr(version, "update_status", lambda: None)
-    assert "update_available" not in _json.loads(console_status(str(job_path)))
-
-    monkeypatch.setattr(version, "update_status",
-                        lambda: {"behind": 1, "message": "更新があります"})
-    parsed = _json.loads(console_status(str(job_path)))
-    assert parsed["update_available"]["behind"] == 1
-
-
 def test_load_dataset_shows_notice(tmp_path, monkeypatch):
     """入口ツールは `update_available` の鍵で更新を知らせる（最新なら鍵ごと出さない）。"""
     import json as _json

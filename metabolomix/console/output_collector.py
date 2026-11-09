@@ -5,7 +5,7 @@
 
 mzTab エントリの polarity / measure は 2 つの独立な証拠から決める:
   1. ファイル名の信号（MS-DIAL GUI の `Height_` / `Area_` prefix、`Neg` / `Pos` トークン）
-  2. ジョブが宣言した値（console_plan でユーザーが指定したもの）
+  2. ジョブが宣言した値（pipeline の要求でユーザーが指定したもの）
 ファイル名は**実物の性質**を語り、宣言は**意図**でしかないので、両方あって食い違う
 ときはファイル名を採り、食い違い自体を validation に記録する。ファイル名が黙って
 いるときだけ宣言値で埋める。どちらも無いときにだけ既定へ落とす。
@@ -13,7 +13,7 @@ mzTab エントリの polarity / measure は 2 つの独立な証拠から決め
 **信号なしを既定値と混ぜてはいけない**——旧実装は極性トークンを持たない
 `Height_AlignmentResult_<timestamp>.mzTab`（MS-DIAL のアライメント出力名の実物）を
 無条件に positive としていたため、negative で計画したジョブの全エントリが positive
-と記録され、analysis-job.json と console_status が嘘を表示し続けた。
+と記録され、analysis-job.json と状態の表示が嘘を述べ続けた。
 """
 from __future__ import annotations
 
@@ -30,10 +30,9 @@ from metabolomix.handoff.schema import Artifact, MztabEntry, sha256_file
 # （`metabolomix.console.execution` の RECEIPT_FILENAME / SUPERVISION_FILENAME）。
 # control.json はここに**置かない**——実際に書く側がどこにも居ない予約名は、
 # 将来 MS-DIAL がその名前で出力を書いたときに黙って捨てる罠になる
-# （worker.json は実在するので残す）。worker.log は切り離しワーカー自身の出力、
+# （worker.json は実在するので残す）。worker.log はワーカー自身の出力、
 # job.lock は job 単位の排他ロックの実体ファイル。pipeline-owner.json は
-# Task 14（pipeline/store.py）が Console 起動前に書く所有権 sidecar
-# （このジョブをどの pipeline が所有しているかの参照だけを持つ）。
+# 旧版の pipeline が書いた所有権 sidecar（既存の run に残っていても収集しない）。
 # いずれも MS-DIAL の生成物ではないので、除外しないと「実行の結果できたファイル」
 # として誤収集され、生成物ゼロの実行が partial に化ける。
 _OPERATIONAL_FILES = frozenset({
@@ -116,7 +115,7 @@ def collect_artifacts(
     """複数ルートを before スナップショットと比較し、新規・変化ファイルを収集する。
 
     declared_polarity / declared_measure は analysis-job.json の project 値
-    （console_plan でユーザーが宣言したもの）。ファイル名が黙っている軸を埋め、
+    （要求でユーザーが宣言したもの）。ファイル名が黙っている軸を埋め、
     食い違う軸を記録するために使う。省略時は従来どおり推定と既定値だけで決める。
 
     Returns
@@ -329,9 +328,8 @@ def read_adduct_polarity(mztab_path) -> dict:
 
 # ---------- 実行後の所見（証跡だけでは読めないもの）----------
 # ここに置くのは、収集した成果物そのものを読まないと分からないことだけ。
-# 同期実行も切り離しワーカーも metabolomix.console.worker.annotate_job 経由で
-# 通るので、実行方式によって所見が変わることはない。ワーカーは MCP ツール層を
-# import しないため、この層に置く必要がある。
+# pipeline の worker も同じ `execution.supervise` を通るので、実行方式によって所見が
+# 変わることはない。ワーカーは MCP ツール層を import しないため、この層に置く必要がある。
 
 def artifact_abs_path(job, root: str, rel: str) -> Path:
     """analysis-job.v2 の root に応じて生成物の絶対パスを解決する。"""
@@ -373,7 +371,7 @@ def polarity_crosscheck_warnings(mztab_entries) -> list[str]:
                 f"ジョブの宣言は {entry.polarity} です"
                 f"（陽性 {check['n_positive']} / 陰性 {check['n_negative']} 行）。"
                 "Console 出力のファイル名に極性が入らないため宣言をそのまま記録して"
-                "いますが、console_plan の polarity かメソッドファイルの Ion mode を"
+                "いますが、要求の polarity かメソッドファイルの Ion mode を"
                 "確認してください。")
     return warnings
 
@@ -383,7 +381,7 @@ def meta_conflict_warnings(mztab_entries) -> list[str]:
 
     collect_artifacts はファイル名側を採用する（実物の性質を語るのはファイル）。
     採用の事実だけを validation に残して黙っていると、ユーザーは自分が
-    console_plan で宣言した値と違うものを解析していることに気付けない。
+    要求で宣言した値と違うものを解析していることに気付けない。
     """
     warnings: list[str] = []
     for entry in mztab_entries:

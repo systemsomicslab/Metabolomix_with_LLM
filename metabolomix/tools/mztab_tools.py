@@ -10,7 +10,7 @@ from metabolomix.core.serialization import json_payload
 from metabolomix.mztab.reader import parse_mztab
 from metabolomix.mztab import evidence as mztab_evidence
 from metabolomix.mztab.dataset_state import build_dataset_state
-# 生成物パスの解決は loading.py が正準。console_cleanup など既存の呼び出しが
+# 生成物パスの解決は loading.py が正準。既存の呼び出しが
 # ここを参照しているため、名前だけ再エクスポートする（実装は 1 か所）。
 from metabolomix.mztab.loading import artifact_abs_path as _artifact_abs_path
 
@@ -152,7 +152,7 @@ def dataset_status(dataset_handle: str | None = None, view: str = "summary",
             "dataset",
             ["load_dataset"],
             "DatasetState がありません。先に load_dataset を実行してください。"
-            "console_run 完了後は load_dataset(job_path=<analysis-job.json へのパス>) を推奨します。",
+            "pipeline の完了後は load_dataset(pipeline_path=...) を推奨します。",
         )
     if view not in VIEWS:
         return mztab_error("DATASET_BAD_REQUEST",

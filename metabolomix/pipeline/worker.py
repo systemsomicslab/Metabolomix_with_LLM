@@ -18,8 +18,7 @@ CLI:
 試験専用の注入口は持たない。任意のimport名・コマンド・環境変数を受け付ける
 入力経路は一切作らない——それ自体がコード実行の入口になる（brief拘束）。
 engineを注入handlerで検証する試験は、この production worker とは別の
-`tests/pipeline_worker_harness.py` を使う（`metabolomix.console.worker` の
-`--console-arg` と同じく、MCPからは到達できない試験専用の経路）。
+`tests/pipeline_worker_harness.py` を使う（MCPからは到達できない試験専用の経路）。
 """
 from __future__ import annotations
 

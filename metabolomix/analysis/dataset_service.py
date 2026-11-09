@@ -440,7 +440,7 @@ def _raw_manifest_layout(ds) -> tuple[Path, list[str]]:
                       " job_path / pipeline_path から読み込み直してください")
         else:
             reason = ("raw参照(assay_sources)が無いため実験情報シートを検証できません"
-                      "（console_run経由のjob_pathからload_datasetしたデータセットが必要です）")
+                      "（pipeline経由のjob_pathからload_datasetしたデータセットが必要です）")
         raise DomainError("SAMPLE_MANIFEST_INVALID", f"{reason}。", {})
     root = paths[0].parent if len(paths) == 1 else Path(os.path.commonpath([str(p) for p in paths]))
     expected = [str(p.relative_to(root)) for p in paths]

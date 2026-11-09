@@ -164,7 +164,7 @@ def test_set_sample_metadata_without_any_raw_path_says_why(tmp_path):
     sheet.write_text("# schema = sample-manifest.v1\n", encoding="utf-8")
     error = json.loads(dat.dataset_set_sample_metadata(str(sheet)))["error"]
     assert error["code"] == "SAMPLE_MANIFEST_INVALID"
-    assert ".mddata" in error["message"] and "console_run" not in error["message"]
+    assert ".mddata" in error["message"]
 
 
 # ---------- R34 / 重要 C: MTD のバッチと注入順 ----------

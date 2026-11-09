@@ -54,10 +54,8 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
 # 今回の範囲外。文書に混入したら落とす（線引きを固定するため）。
 OUT_OF_SCOPE: tuple[str, ...] = (
     "record_objective", "write_report", "read_report",
-    # Console 実行層（Phase 2 追加・ワークフロー文書は Phase 2 完了後に追加）
-    "console_plan", "console_prepare_input", "console_method_template",
-    "console_method_candidates",
-    "console_run", "console_status", "console_cleanup", "job_list",
+    # Console のメソッドファイル（Task 6 で pipeline.md へ移す）
+    "console_method_template", "console_method_candidates",
     # サーバ自身の保守（解析の流れには現れない）
     "server_update",
 )
@@ -164,7 +162,7 @@ class TestScopeBoundary(unittest.TestCase):
     def test_scope_totals_match_registered_tool_count(self):
         """対象範囲の分割が、実際に登録されているツール数と一致することを縛る。
 
-        46 / 12 という分割は設計上の線引きだが、その合計は「全ツールを漏れなく
+        47 / 6 という分割は設計上の線引きだが、その合計は「全ツールを漏れなく
         分類した」という主張でもある。リテラルどうしの比較では自分自身を検証して
         しまうので、実際の登録数を引いて突き合わせる。
         """

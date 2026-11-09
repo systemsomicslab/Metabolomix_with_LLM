@@ -46,12 +46,11 @@
 | [reanalysis.md](reanalysis.md) | 再解析 — spec で呼ぶツール（ハンドルの一覧・クローズは dataset.md） | 8 |
 | [quant.md](quant.md) | 定量 — 内部標準の正規化・極性の統合・特徴の選別（規則プラグインが要る） | 4 |
 
-合計 46 ツール。対象外は 12 ツール——レポート記録系 3
+合計 47 ツール。対象外は 6 ツール——レポート記録系 3
 （`record_objective` `write_report` `read_report`）＋
-Console 実行層 8（`console_plan` `console_prepare_input` `console_method_template`
-`console_method_candidates` `console_run` `console_status` `console_cleanup` `job_list`）＋
+Console のメソッドファイル 2（`console_method_template` `console_method_candidates`）＋
 サーバ自身の保守 1（`server_update`。解析の流れに現れず、配布先クローンの更新だけを行う）。
-登録ツール総数は 58（46 + 12）。
+登録ツール総数は 53（47 + 6）。
 
 ## 一気通貫の順序
 
@@ -63,7 +62,7 @@ workerが1回分を進める経路（`prepare_input → upstream → validate_ou
 load_dataset → resolve_metadata → preprocess → pca → resolve_comparisons →
 differential → export → report`）が、まさにその「どの順に何を行うか」を記録する。
 
-各関数の引数・戻り値のシグネチャ表（`console_plan`/`console_run` など個々のツールを
+各関数の引数・戻り値のシグネチャ表（個々のツールを
 手動で順に呼ぶ経路の設計根拠）は
 [../superpowers/specs/2026-09-03-end-to-end-pipeline-design.md](../superpowers/specs/2026-09-03-end-to-end-pipeline-design.md)
 にある。同文書は目標状態の設計記録として残すが、**現行の一気通貫の順序そのものの
