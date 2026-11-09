@@ -9,7 +9,11 @@
 シナリオ（`--scenario`）:
 
 ``success``
-    Task 3 の合成 mzTab-M（`-i` 直下の全 raw に対応する assay）を `-o` へ書いて 0 で終了。
+    合成 mzTab-M（`-i` 直下の全 raw に対応する assay）を `-o` へ書き、実 MS-DIAL と同じく
+    `-i` 側へ、その mzTab-M と照合の通るアラインメント（`.arf` / `.arf2`）を書いて 0 で終了。
+``unmatched_arf``
+    `success` と同じ mzTab-M を書くが、`-i` 側の `.arf` は m/z が合わない（解析フォルダが
+    mzTab-M と照合できない形）。
 ``nonzero``
     中間ファイルだけを `-o` へ残して 1 で終了。**終了コードが非ゼロでも成果物は残る**
     という現実を再現するためのもので、収集を飛ばさないことの検証に使う。
@@ -48,11 +52,30 @@ if str(_REPO_ROOT) not in sys.path:
 
 from metabolomix.console.job_manager import list_raw_inputs  # noqa: E402
 from metabolomix.core.process_control import resolve_python_launch  # noqa: E402
-from tests.pipeline_fixtures import write_mztab  # noqa: E402
+from tests.msdial_folder_fixtures import write_msdial_folder  # noqa: E402
+from tests.pipeline_fixtures import _FEATURES, write_mztab  # noqa: E402
 
 #: `success` が書く主 mzTab のファイル名。MS-DIAL GUI の `Height_` prefix を
 #: 持たせ、定量種別が実物と同じ経路（ファイル名信号）で決まるようにする。
 PRIMARY_MZTAB_NAME = "Height_AlignmentResult_fake.mzTab"
+
+#: `-i` 側へ書くアラインメントの名前（MS-DIAL の `AlignmentResult_<時刻>`）。
+ALIGNMENT_STEM = "AlignmentResult_2026_11_09_00_00_00"
+
+
+def _write_alignment(input_dir: Path, sources: list[Path], *, matching: bool = True) -> None:
+    """`-i` 側へ、mzTab-M（`write_mztab`）と同じ特徴・試料名の `.arf` / `.arf2` を書く。
+
+    mzTab-M の試料名は `S1..Sn`（assay の番号）、特徴は `_FEATURES` の順。`matching=False`
+    は m/z をずらして照合に落ちる形にする。
+    """
+    samples = [{"file_id": i, "name": f"S{i + 1}", "class_id": "A"}
+               for i in range(len(sources))]
+    spots = [{"name": name, "mz": mz + (0.0 if matching else 3.3), "rt": rt / 60.0}
+             for name, _inchikey, mz, rt in _FEATURES]
+    write_msdial_folder(input_dir, spots=spots, samples=samples, with_mddata=False,
+                        stem=ALIGNMENT_STEM)
+
 
 #: 孫プロセスの生存時間（秒）。テストは必ず Job Object 側で殺すので、
 #: 取りこぼしたときに気付けるよう十分長くしておく。
@@ -174,9 +197,10 @@ def main(argv: list[str]) -> int:
     _append_counter(args.counter, scenario, None)
 
     sources = _raw_sources(input_dir)
-    if scenario == "success":
+    if scenario in ("success", "unmatched_arf"):
         write_mztab(output_dir / PRIMARY_MZTAB_NAME, sources,
                     with_inchikey=not args.no_inchikey)
+        _write_alignment(input_dir, sources, matching=scenario == "success")
         return 0
     if scenario == "missing_sample":
         if len(sources) < 2:

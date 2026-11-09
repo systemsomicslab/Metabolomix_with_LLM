@@ -12,25 +12,28 @@ MCP層は薄い(`metabolomix/tools/pipeline_tools.py`)。実体は `metabolomix/
 2. └─ metabolomix/pipeline/service.py  start_pipeline()
 3.    ├─ metabolomix/pipeline/service.py  _prepare_run()
 4.    │  ├─ metabolomix/pipeline/request.py  resolve_request()
-5.    │  ├─ metabolomix/pipeline/inputs.py  inspect_inputs()
-6.    │  ├─ metabolomix/pipeline/service.py  _precheck_manifest()
+5.    │  ├─ [単位（極性）ごと] metabolomix/pipeline/inputs.py  inspect_inputs()
+6.    │  ├─ [単位（極性）ごと] metabolomix/pipeline/service.py  _precheck_manifest()
 7.    │  │  └─ metabolomix/analysis/sample_manifest.py  parse_manifest()
 8.    │  ├─ metabolomix/pipeline/store.py  find_or_create_run()
 9.    │  └─ [manifest不正を検出した場合] metabolomix/pipeline/service.py  _mark_needs_input_without_launch()
 10.   ├─ [manifest不正が無かった場合のみ] metabolomix/pipeline/store.py  load_run()
-11.   ├─ [manifest不正あり、または既存run(活動中/completed/失敗/取消/部分完了)を再利用した場合] metabolomix/pipeline/service.py  _dispatch_receipt()
+11.   ├─ [manifest不正あり、または既存run(活動中/completed/失敗/取消/部分完了)を再利用した場合] metabolomix/pipeline/service.py  _dispatch_summary()
 12.   ├─ [新規作成直後の`planned` runのときだけ] metabolomix/pipeline/service.py  _launch_and_await()
 13.   │  ├─ metabolomix/pipeline/service.py  launch_pipeline_worker()
 14.   │  │  └─ metabolomix/core/process_control.py  launch_detached()
 15.   │  └─ metabolomix/pipeline/service.py  _await_launch_handshake()
-16.   └─ metabolomix/pipeline/service.py  _dispatch_receipt()
+16.   └─ metabolomix/pipeline/service.py  _dispatch_summary()
 
 事前検査(手順6-7)で壊れた実験情報シート等の既知の不正入力を検出した場合、
 `find_or_create_run` でrunは作るがworkerは起動しない(手順9で`needs_input`のまま
 保存し、手順10のstatus読み直し自体を行わず手順11の発送receiptへ直行する)。
-差次的解析で `comparisons` を指定し忘れた場合はここでは検出しない——それは唯一、
-実際にworkerを起動したうえで下流の `resolve_comparisons` 工程が検出する
-(brief「下流の群不足だけはworkerを起動できる」)。
+要求は `pipeline-request.v3`(`request.resolve_request`)で、1 極性の形も 2 極性の
+`units` の形も単位の並びに正規化する。入力計画(`inspect_inputs`)と事前検査は単位ごとに
+回し、run(`pipeline-run.v3`)は単位ごとの記録 `record["units"][<極性>]` を持つ。
+下流のキー(`target` / `preprocess` / `comparisons`)は `PIPELINE_DOWNSTREAM_REMOVED`
+(元フォルダの `analysis-request.json` に書かれたものは読み飛ばして警告
+`REQUEST_FILE_DOWNSTREAM_IGNORED`)。
 
 **起動しないもう1つの経路（レビュー指摘1）**: manifestが正常でも、
 `find_or_create_run`(手順8)が既存run——活動中／completed／失敗・取消・部分完了
@@ -58,14 +61,14 @@ MCP層は薄い(`metabolomix/tools/pipeline_tools.py`)。実体は `metabolomix/
 1. metabolomix/tools/pipeline_tools.py  pipeline_plan()
 2. └─ metabolomix/pipeline/service.py  plan_pipeline()
 3.    ├─ metabolomix/pipeline/service.py  _prepare_run()
-4.    └─ metabolomix/pipeline/service.py  _dispatch_receipt()
+4.    └─ metabolomix/pipeline/service.py  _dispatch_summary()
 5.       └─ metabolomix/pipeline/service.py  _resolved_settings()
 
 `pipeline_run` と事前検査までは完全に同じ経路(`_prepare_run`)を共有するが、
 `launch_pipeline_worker` を一切呼ばない——検査・計画・不足情報の保存だけで終える。
 
 手順5の `_resolved_settings` は `plan_pipeline` の発送receiptにだけ足される
-(`_dispatch_receipt(include_resolved=True)`)。載せるのは解決済みの
+(`_dispatch_summary(include_resolved=True)`)。載せるのは解決済みの
 method(`source_path`/`sha256`)・LBM・polarity(`value`/`source`)・`library_mode`・
 MSP(ファイル名・sha256・出どころ。置き場所は載せない)・`alignment_reference` だけで、
 `raw_stat`・`entries`・`overrides` のような大きな中間データは `record["inputs"]`
@@ -120,10 +123,14 @@ v8 の要求を出すと、その run を再利用する(上書きしたメソ�
 2. └─ metabolomix/pipeline/recovery.py  read_status()
 3.    └─ metabolomix/pipeline/store.py  load_run()
 4.    └─ metabolomix/core/process_control.py  same_process()
+5.    └─ metabolomix/pipeline/receipt.py  read_receipt()
 
 `load_run` は読取専用で、このツール自身は `pipeline-run.json` を一切書き換えない。
 `status="running"`のときだけ`same_process`でworker identityの生存を確認するが、
 確認できなくても`status`フィールドは変えず`observed_health`という別軸で返す。
+単位ごとの状態(`units`)と、受領があればその要約(解析フォルダの場所・照合した `.arf`・
+次の呼び出し `load_dataset(pipeline_path=…, polarity=…)`)も返す。旧 v1 の run は
+`legacy: true` で読めるだけ(再開・取消は `PIPELINE_RUN_LEGACY`)。
 
 ## pipeline_resume
 
@@ -145,6 +152,8 @@ v8 の要求を出すと、その run を再利用する(上書きしたメソ�
 (`launch_pipeline_worker`と`_await_launch_handshake`を1つにまとめた中間関数。
 基準を「launch直前」に揃えないと、前回workerの残骸identityを新規launchの
 証拠と誤認しうる)。`rerun_upstream=True`を明示しない限りConsole実行はやり直さない。
+訂正できるのは試料の対応表(`sample_manifest`、2 極性なら `units.<極性>.sample_manifest`)
+だけで、戻すのは受領の工程だけ。`rerun_upstream=True` は失敗した単位の 3 工程と受領を戻す。
 
 ## pipeline_cancel
 
@@ -170,88 +179,52 @@ v8 の要求を出すと、その run を再利用する(上書きしたメソ�
 2. └─ metabolomix/pipeline/engine.py  run_engine()
 3.    └─ metabolomix/pipeline/service.py  build_handlers()
 4.    └─ metabolomix/pipeline/engine.py  _run_stage_loop()
-5.       ├─ metabolomix/pipeline/service.py  _handle_prepare_input()
-6.       ├─ metabolomix/pipeline/service.py  _handle_upstream()
-7.       │  └─ metabolomix/console/execution.py  supervise()
-8.       ├─ metabolomix/pipeline/service.py  _handle_validate_outputs()
-9.       ├─ metabolomix/pipeline/service.py  _handle_load_dataset()
-10.      │  └─ metabolomix/mztab/loading.py  load_dataset_state()
-11.      ├─ metabolomix/pipeline/service.py  _handle_resolve_metadata()
-12.      ├─ metabolomix/pipeline/service.py  _handle_preprocess()
-13.      │  └─ metabolomix/analysis/dataset_service.py  preprocess_auto()
-14.      ├─ metabolomix/pipeline/service.py  _handle_pca()
-15.      │  └─ metabolomix/analysis/dataset_service.py  pca_dataset()
-16.      ├─ metabolomix/pipeline/service.py  _handle_resolve_comparisons()
-17.      ├─ [comparisonごと] metabolomix/pipeline/service.py  _handle_differential()
-18.      │  └─ metabolomix/analysis/dataset_service.py  run_comparison()
-19.      ├─ [comparisonごと] metabolomix/pipeline/service.py  _handle_export()
-20.      │  └─ metabolomix/analysis/dataset_export.py  export_dataset_result()
-21.      └─ metabolomix/pipeline/service.py  _handle_report()
-22.         └─ metabolomix/pipeline/report.py  write_pipeline_report()
-23.    └─ metabolomix/pipeline/engine.py  finish_success()
-24.       └─ metabolomix/pipeline/report.py  evaluate_target()
+5.       ├─ [単位（極性）ごと、要求の順] metabolomix/pipeline/service.py  _handle_prepare_input()
+6.       │  └─ metabolomix/pipeline/inputs.py  stage_inputs()
+7.       ├─ [単位ごと] metabolomix/pipeline/service.py  _handle_upstream()
+8.       │  └─ metabolomix/console/execution.py  supervise()
+9.       ├─ [単位ごと] metabolomix/pipeline/service.py  _handle_validate_outputs()
+10.      │  ├─ metabolomix/mztab/loading.py  job_gate()
+11.      │  └─ metabolomix/pipeline/service.py  _matching_alignment()
+12.      │     └─ metabolomix/mztab/evidence.py  matching_arfs()
+13.      └─ metabolomix/pipeline/service.py  _handle_receipt()
+14.         └─ metabolomix/pipeline/receipt.py  write_receipt()
+15.   └─ metabolomix/pipeline/engine.py  finish_success()
+16.      └─ metabolomix/pipeline/engine.py  final_status()
 
-手順4の `_run_stage_loop` は **`build_stages` の計画順**で回す
-(`_stage_order`)。`record["stages"]` の挿入順ではない——`prepare_resume` は
-resume時に「recordに無いstage_id」を末尾へ追記するので、比較を後から足したrunでは
-`differential:*`/`export:*` が `report` の後ろに並ぶ。その順で回すと手順21のreportが
-比較を1件も実行していない時点で書かれる。計画に無いstage_id(exploratory目標の
-`resolve_comparisons`)だけが計画順のあとに回り、`_mark_out_of_scope` が畳む。
+工程の計画(`engine.build_stages`)は単位ごとの `prepare_input:<極性>` →
+`upstream:<極性>` → `validate_outputs:<極性>` を要求の順に並べ、最後に `receipt` を
+1 つ置く。手順4の `_run_stage_loop` はこの計画順で回す(`record["stages"]` の挿入順では
+ない)。ある単位が失敗したら、その単位の残りの工程は飛ばしてもう片方の単位へ進む
+(Console を同時に 2 本走らせない)。validated の単位が 1 つも無ければ受領は書かない。
 
 `_run_stage_loop`は**各stageの直前に最新のrun recordを読み直す**。要求版
 (`_request_identity`＝revision/content_hash/saved_path)が変わっているか、
 このpassで既に通過したstageが外から`pending`へ戻されている
-(`_resume_reset_seen`)場合は、その場でstage計画を組み直してpassをやり直し、
-`runtime`(DatasetStateと比較結果のキャッシュ)を捨てる。走っている最中に届いた
+(`_resume_reset_seen`)場合は、その場でpassをやり直す。走っている最中に届いた
 `pipeline_resume`は——`prepare_resume`が稼働中workerのstatusを動かさないため
-`resume_pipeline`が新しいworkerを起こさない——このworkerが取り込むしかなく、
-取り込まなければ旧revisionの条件で計算した結果が新revisionの結果として
-completedになる。組み直しは有限回(`_REQUEST_RELOAD_MAX_PASSES`)までで、
-超えたら`REQUEST_REVISION_CHURN`で止める。
+`resume_pipeline`が新しいworkerを起こさない——このworkerが取り込むしかない。
+組み直しは有限回(`_REQUEST_RELOAD_MAX_PASSES`)までで、超えたら
+`REQUEST_REVISION_CHURN`で止める。
 
-`_handle_upstream`は`metabolomix.console.worker`（単体Console用の監視ワーカー）を
-一切呼ばない——`execution.supervise`を直接呼ぶことで、pipeline用worker自身が
-「起動して見張る」役を兼ねる(Console用workerの二重起動を避ける)。
-`console_job_path`は`analysis-job.json`そのものへのパス(`run_dir = Path(job_path)
-.parent`という、コードベース全体の規約)として記録する。run_dirは
-**attemptごとに分ける**(`<pipeline_root>/console/attempt-NNNN/`。NNNNは
-`upstream` stageの`attempt`)——固定パスにすると`rerun_upstream=true`の再実行が
-前回の終了証跡(`execution-result.json`)を上書きし、`msdial.log`を切り詰め
-(`process_control`は`_CREATE_ALWAYS`で開く)、`worker.json`の`recovery.befores`
-(再収集に要る実行前スナップショット)を置き換えてしまう。規約そのもの
-(`console_job_path`＝job.json、`run_dir`＝その親)は変わらない。
+`_handle_upstream`は`execution.supervise`を直接呼ぶ(Console用workerを二重起動しない)。
+`console_job_path`は`analysis-job.json`そのものへの、pipeline_root 相対のパス
+(`run_dir = Path(job_path).parent`)として単位の `upstream` に記録する。run_dirは
+**単位とattemptごとに分ける**(`<pipeline_root>/<極性>/console/attempt-NNNN/`)——固定パス
+にすると`rerun_upstream=true`の再実行が前回の終了証跡・ログ・実行前スナップショットを
+上書きしてしまう。Console の `-i` は `<pipeline_root>/<極性>/input/`(配置した raw)で、
+MS-DIAL はここへ `.arf` などを書く——このフォルダがそのまま解析フォルダになる。
 
-`_handle_resolve_metadata`は解決した行(role/group/batch/injection_order/qc_pool)を
-`record_updates`で`record["inputs"]["manifest"]`へ、読んだシート自体の内容hashを
-`record["inputs"]["manifest_source"]`(`inputs.manifest_source_record`)へ残す。
-後者は`recovery.prepare_resume`が「同じパスのシートを書き直した訂正」を
-検出するための基準で、これが無いと要求の`sample_manifest`(パス文字列)は
-同じままなので、書き直しは変更として現れず旧群割当のまま`completed`が保たれる。ここが唯一の書き手で、
-読み手は品質レポートのサンプル来歴セクション(`report._section_sample_provenance`)・
-再開時の絶対化(`recovery._absolutize_inputs_paths`、既に絶対ならno-op)の2つ。
-明示シートでも自動生成でも同じ形の行を書く。
-**`store._relativize_inputs_paths`はこの`manifest`には効かない**——
-`create_run`(このstageより前)でしか呼ばれず、以降の`save_run`は`record`を
-deepcopyしてそのまま書くだけなので、ここで書く`source_file`は保存後も
-絶対パスのまま残る(既知の制限。
-`docs/superpowers/notes/2026-09-05-raw-folder-pipeline-validation.md`参照)。
+`_handle_validate_outputs` は正準 mzTab-M(`job_gate`。ジョブが完了していなければ失敗)を
+確かめ、解析フォルダの `.arf` のうち mzTab-M と同じアラインメントだと確かめられたもの
+(`mztab.evidence.matching_arfs`。`dataset/opening` と同じ規則)がちょうど 1 本なら
+`outputs.alignment` に `{"arf", "arf2"}` を記録する。合わなければ失敗にせず警告
+`ANALYSIS_FOLDER_UNMATCHED`(`source="mztab"` なら読める)で、run は `partial` になる。
 
-`_handle_pca`はPCA不成立を検出した`PreconditionError`（`metabolomix.analysis.
-dataset_analysis.run_dataset_pca`が送出。`DomainError`の派生ではないため
-`engine._invoke_handler`の`_NEEDS_INPUT_CODES`whitelistでは検出できない）を
-handler自身が捕らえ、`needs_input`のStageResultへ直接変換する。これにより
-`_invoke_handler`の汎用`except Exception`分岐（`failed`扱い）を経由させない。
+`finish_success` の最終判定(`final_status`): 全単位が validated・受領が成功・全単位の
+解析フォルダが照合できた → `completed`。validated が 1 つ以上で欠けがある → `partial`。
+validated が 0 → `failed`。worker の中の `needs_input` は無い(受付の事前検査だけが保存する)。
 
-同じ穴を他のhandlerが開け直さないよう、`build_handlers`は全handlerを
-`_as_needs_input`で包む——handlerから漏れた`PreconditionError`は
-`ANALYSIS_PRECONDITION_MISSING`(kind=missing_state)/
-`ANALYSIS_PRECONDITION_INVALID`(kind=bad_request)の`needs_input`になる。
-包まないと`error.code`がPythonのクラス名(`PreconditionError`)のまま`failed`に
-なり、入力を直せば再開できる停止が「回復不能な失敗」に見える(例:
-検出状態を持たないmzTab-Mへ`min_detection_rate>0`を指定した場合)。
-
-`finish_success`は全stageがsucceeded/skippedで止まらずに終えた時点で
-`report.evaluate_target(record)`を呼び、その判定(`completed`/`partial`/
-`failed`/`needs_input`)をそのまま`record["status"]`へ採用する。差次的解析で
-`comparisons`が空のまま(通常は`resolve_comparisons`が先に検出して
-到達しない)は防御的な分岐として残る。
+受領(`results/receipt.json`、`lipidmix.pipeline-receipt.v1`)は単位ごとの解析フォルダ・
+照合した `.arf`・メソッドとライブラリ(研究室の資産はファイル名と sha256 だけ)・試料の
+対応表・検証の結果と、次の呼び出し(`load_dataset(pipeline_path=…, polarity=…)`)を載せる。

@@ -1,8 +1,7 @@
-"""工程エンジン（`metabolomix.pipeline.engine`）とsessionを持たないworkerのテスト（Task15）。
+"""工程エンジン（`metabolomix.pipeline.engine`）とsessionを持たないworkerのテスト。
 
-engineは注入handlerだけで検証する（本番handler一式`build_handlers`はTask18）。
-fixtureは合成dictビルダーとして本ファイル内に閉じる（Controller裁定: 共有
-`tests.pipeline_fixtures` は既存helperの契約を壊さない範囲でしか触らない）。
+engineは注入handler（`tests.pipeline_worker_harness.synthetic_handlers`）だけで検証する。
+run は `tests.pipeline_fixtures.create_synthetic_run`（入力計画を最小にした v3 の run）。
 """
 from __future__ import annotations
 
@@ -16,349 +15,324 @@ import pytest
 
 import metabolomix.pipeline.store as store_module
 from metabolomix.core.atomic_io import DomainError, atomic_write_json
-from metabolomix.pipeline.engine import cancel_request_path, run_engine
-from metabolomix.pipeline.request import resolve_request
-from metabolomix.pipeline.store import create_run, load_run
+from metabolomix.pipeline.engine import build_stages, cancel_request_path, run_engine
+from metabolomix.pipeline.store import load_run
+from tests.pipeline_fixtures import create_synthetic_run
+from tests.pipeline_worker_harness import synthetic_handlers
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-# ---------- 合成fixture ----------
-
-def _minimal_inputs(root: Path) -> dict:
-    return {"source_root": str(root), "fingerprint": "f" * 64, "raw_inventory": []}
-
-
-def _persist(pipeline_root, name: str):
-    """`metabolomix.pipeline.report.persist_result`を使い、`output_name=name`の
-    実ファイル付きrefを作る（Task18: `evaluate_target`はhash照合まで行うため、
-    文字列のダミーrefでは`achieved_outputs`に数えられない）。データ内容は
-    固定なので、`_ALWAYS_RECONSTRUCT_STAGE_IDS`（preprocess/pca）が再実行時にも
-    同じhashのrefを返し、`commit_stage_outcome`の重複追記防止が効く。
-    """
-    from metabolomix.pipeline import report as report_mod
-    return report_mod.persist_result(pipeline_root, {
-        "output_name": name, "kind": "synthetic",
-        "result_id": f"{name.replace(':', '_')}-result",
-        "data": {"synthetic": True, "name": name},
-    })
-
-
-def _recorder(calls: list[str], *, status: str = "succeeded",
-              output_names: list[str] | None = None, error: dict | None = None):
-    def handler(context: dict) -> dict:
-        calls.append(context["stage_id"])
-        refs = [_persist(context["pipeline_root"], name) for name in (output_names or [])]
-        return {"status": status, "result_refs": refs, "warnings": [], "error": error}
-    return handler
-
-
-def _upstream_recorder(calls: list[str]):
-    """`record["upstream"]["verification"]`をcompletedへ書く合成upstream。
-
-    `evaluate_target`は`record["upstream"]["verification"]["status"]`が
-    `"completed"`でない限りどのoutputも`achieved`と認めないため、これが無いと
-    合成pipelineは（result_refsを積んでいても）常にfailed/partialになる。
-    """
-    def handler(context: dict) -> dict:
-        calls.append(context["stage_id"])
-        return {"status": "succeeded", "result_refs": [], "warnings": [], "error": None,
-                "record_updates": {"upstream": {
-                    "console_job_path": None, "execution_id": "exec-fake",
-                    "verification": {"status": "completed"}}}}
-    return handler
-
-
-def _differential_recorder(calls: list[str]):
-    def handler(context: dict) -> dict:
-        calls.append(context["stage_id"])
-        cid = context["comparison_id"]
-        ref = _persist(context["pipeline_root"], f"differential:{cid}")
-        return {"status": "succeeded", "result_refs": [ref], "warnings": [], "error": None}
-    return handler
-
-
-def _export_recorder(calls: list[str]):
-    def handler(context: dict) -> dict:
-        calls.append(context["stage_id"])
-        cid = context["comparison_id"]
-        refs = [_persist(context["pipeline_root"], f"volcano:{cid}"),
-                _persist(context["pipeline_root"], f"tsv:{cid}")]
-        return {"status": "succeeded", "result_refs": refs, "warnings": [], "error": None}
-    return handler
-
-
-_HANDLER_KEYS = (
-    "prepare_input", "upstream", "validate_outputs", "load_dataset",
-    "resolve_metadata", "preprocess", "pca", "resolve_comparisons",
-    "differential", "export", "report",
-)
-
-
-def _build_pipeline(tmp_path: Path, *, target: str, comparisons: list | None = None):
-    """target/comparisonsからpipelineを1本作り、全stage成功のfake handlersを返す。
-
-    `save_project=False`を明示する——既定Trueのままだと`evaluate_target`が
-    `gui_project`refも必須にするが、この合成fixtureはvalidate_outputsで
-    GUI projectを作らない（Task18: `build_handlers`のvalidate_outputs handlerが
-    実際に登録する対象で、ここでは検証しない）。
-    """
-    source_root = tmp_path / "source"
-    source_root.mkdir()
-    request = resolve_request(source_root, {"target": target, "comparisons": comparisons or [],
-                                            "save_project": False})
-    inputs = _minimal_inputs(source_root)
-    pipeline_path = create_run(source_root, request, inputs)
-
+def _run(tmp_path, polarities=("negative",)):
+    path = create_synthetic_run(tmp_path, polarities=polarities)
     calls: list[str] = []
-    handlers = {key: _recorder(calls) for key in _HANDLER_KEYS}
-    handlers["upstream"] = _upstream_recorder(calls)
-    handlers["preprocess"] = _recorder(calls, output_names=["preprocess"])
-    # PCAは常にpca/pca_figureのrefsを残す合成版にする（partial/failed判定の材料）。
-    handlers["pca"] = _recorder(calls, output_names=["pca", "pca_figure"])
-    handlers["differential"] = _differential_recorder(calls)
-    handlers["export"] = _export_recorder(calls)
-    handlers["report"] = _recorder(calls, output_names=["quality_report"])
-    return pipeline_path, handlers, calls
+    return path, calls
 
 
-@pytest.fixture
-def differential_run(tmp_path):
-    """target=differential、comparisons=[]のrun。brief記載のRED用fixture。
+# ---------- 工程の計画 ----------
 
-    pcaまでは成功、resolve_comparisonsはCOMPARISON_REQUIREDのneeds_inputを返す
-    ——空の比較配列でも差次的目標には比較準備ゲートがあり、それがneeds_inputで
-    止めることを確認するのがこのfixtureの役目。
-    """
-    path, handlers, calls = _build_pipeline(tmp_path, target="differential", comparisons=[])
-    handlers["resolve_comparisons"] = _recorder(
-        calls, status="needs_input",
-        error={"code": "COMPARISON_REQUIRED", "message": "比較を指定してください。", "details": {}})
-    return path, handlers, calls
-
-
-# ---------- brief記載のRED（そのまま） ----------
-
-def test_missing_comparison_keeps_exploration_and_stops(differential_run):
-    path, handlers, calls = differential_run
-    result = run_engine(path, handlers)
-    assert result["status"] == "needs_input"
-    assert "upstream" in calls and "pca" in calls
-    assert not any(name.startswith("export:") for name in calls)
-    assert result["request"]["effective_target"] == "differential"
-    assert result["needs_input"]["code"] == "COMPARISON_REQUIRED"
-    assert result["needs_input"]["stage_id"] == "resolve_comparisons"
+def test_stage_plan_is_per_unit_then_receipt():
+    request = {"units": [{"polarity": "negative"}, {"polarity": "positive"}]}
+    plan = build_stages(request)
+    assert [s["stage_id"] for s in plan] == [
+        "prepare_input:negative", "upstream:negative", "validate_outputs:negative",
+        "prepare_input:positive", "upstream:positive", "validate_outputs:positive",
+        "receipt"]
+    assert plan[1] == {"stage_id": "upstream:negative", "handler": "upstream",
+                       "unit": "negative"}
+    assert plan[-1] == {"stage_id": "receipt", "handler": "receipt", "unit": None}
 
 
-# ---------- target別必須工程・比較準備ゲート ----------
+def test_record_stages_follow_the_plan(tmp_path):
+    path, _calls = _run(tmp_path, ("negative", "positive"))
+    record = load_run(path)
+    assert list(record["stages"]) == [
+        "prepare_input:negative", "upstream:negative", "validate_outputs:negative",
+        "prepare_input:positive", "upstream:positive", "validate_outputs:positive",
+        "receipt"]
+    assert record["schema"] == "pipeline-run.v3"
+    assert set(record["units"]) == {"negative", "positive"}
 
-def test_exploratory_target_marks_comparison_stage_out_of_scope(tmp_path):
-    path, handlers, calls = _build_pipeline(tmp_path, target="exploratory")
-    result = run_engine(path, handlers)
+
+# ---------- 単位の成否と最終の status ----------
+
+def test_all_units_validated_is_completed_and_receipt_runs_last(tmp_path):
+    path, calls = _run(tmp_path, ("negative", "positive"))
+    result = run_engine(path, synthetic_handlers(calls))
     assert result["status"] == "completed"
-    assert "resolve_comparisons" not in calls
-    assert result["stages"]["resolve_comparisons"]["status"] == "skipped"
-    assert not any(name.startswith(("differential:", "export:")) for name in calls)
-    # exploratoryでは必須の上流・PCA・reportまでは必ず呼ばれる。
-    for expected in ("prepare_input", "upstream", "validate_outputs", "load_dataset",
-                     "resolve_metadata", "preprocess", "pca", "report"):
-        assert expected in calls
+    assert calls[-1] == "receipt"
+    assert result["units"]["negative"]["outputs"]["alignment"]["arf"]
+    assert result["units"]["positive"]["upstream"]["execution_id"] == "exec-fake-positive"
+    assert (path / "results" / "receipt.json").is_file()
 
 
-def test_differential_target_with_two_comparisons_runs_all_stages_in_order(tmp_path):
-    comparisons = [
-        {"comparison_id": "cmp1", "reference_group": "control", "test_group": "treated"},
-        {"comparison_id": "cmp2", "reference_group": "control", "test_group": "other"},
-    ]
-    path, handlers, calls = _build_pipeline(tmp_path, target="differential", comparisons=comparisons)
-    result = run_engine(path, handlers)
-    assert result["status"] == "completed"
-    assert calls == [
-        "prepare_input", "upstream", "validate_outputs", "load_dataset",
-        "resolve_metadata", "preprocess", "pca", "resolve_comparisons",
-        "differential:cmp1", "export:cmp1", "differential:cmp2", "export:cmp2",
-        "report",
-    ]
-
-
-def test_one_of_two_comparisons_failing_yields_partial_and_stops(tmp_path):
-    comparisons = [
-        {"comparison_id": "cmp1", "reference_group": "control", "test_group": "treated"},
-        {"comparison_id": "cmp2", "reference_group": "control", "test_group": "other"},
-    ]
-    path, handlers, calls = _build_pipeline(tmp_path, target="differential", comparisons=comparisons)
-
-    def failing_differential(context: dict) -> dict:
-        calls.append(context["stage_id"])
-        if context["comparison_id"] == "cmp1":
-            raise RuntimeError("boom")
-        return {"status": "succeeded", "result_refs": [], "warnings": [], "error": None}
-
-    handlers["differential"] = failing_differential
-
-    result = run_engine(path, handlers)
-    assert result["status"] == "partial"  # pcaが有効な出力を残しているのでfailedへは落ちない
-    assert "differential:cmp1" in calls
-    assert "differential:cmp2" not in calls
-    assert "export:cmp1" not in calls
-    stage = result["stages"]["differential:cmp1"]
-    assert stage["status"] == "failed"
-    assert stage["error"]["code"] == "RuntimeError"
-
-
-def test_a_recorded_export_background_empty_warning_downgrades_completed_to_partial(tmp_path):
-    """spec §9.2/§11: InChIKey 0件でTSVを作れない場合はEXPORT_BACKGROUND_EMPTYを
-    記録し、有効な出力を残したpartialとする——全stageがsucceededでも「completed」
-    を名乗らせない（brief「quality_report作成前の必須判定と最終確定は分け…
-    最終completedはreport保存後のstate更新で確定する」の実体）。
-    """
-    comparisons = [{"comparison_id": "cmp1", "reference_group": "control", "test_group": "treated"}]
-    path, handlers, calls = _build_pipeline(tmp_path, target="differential", comparisons=comparisons)
-
-    def export_with_empty_background(context: dict) -> dict:
-        calls.append(context["stage_id"])
-        return {"status": "succeeded", "result_refs": [], "warnings": [
-            {"code": "EXPORT_BACKGROUND_EMPTY",
-             "message": "InChIKeyが0件のためTSVを作成しませんでした。"}],
-            "error": None}
-
-    handlers["export"] = export_with_empty_background
-
-    result = run_engine(path, handlers)
+def test_failed_unit_does_not_stop_the_other_unit(tmp_path):
+    path, calls = _run(tmp_path, ("negative", "positive"))
+    result = run_engine(path, synthetic_handlers(calls, fail_stages={"upstream:negative"}))
 
     assert result["status"] == "partial"
-    assert any(w["code"] == "EXPORT_BACKGROUND_EMPTY" for w in result["warnings"])
-    assert "export:cmp1" in calls  # stage自体は成功として最後まで進む
+    # 失敗した単位の残りの工程は呼ばれず pending のまま。
+    assert "validate_outputs:negative" not in calls
+    assert result["stages"]["upstream:negative"]["status"] == "failed"
+    assert result["stages"]["validate_outputs:negative"]["status"] == "pending"
+    # もう片方は最後まで通り、受領も走る。
+    assert calls[-4:] == ["prepare_input:positive", "upstream:positive",
+                          "validate_outputs:positive", "receipt"]
+    receipt = json.loads((path / "results" / "receipt.json").read_text(encoding="utf-8"))
+    assert receipt["units"]["negative"]["status"] == "failed"
+    assert receipt["units"]["negative"]["error"]["code"] == "SYNTHETIC_FAILURE"
+    assert receipt["units"]["positive"]["status"] == "validated"
+    assert 'polarity="positive"' in receipt["next"]
 
 
-def test_missing_explicit_preprocess_prerequisite_becomes_needs_input(tmp_path):
-    path, handlers, calls = _build_pipeline(tmp_path, target="exploratory")
-
-    def preprocess_handler(context: dict) -> dict:
-        calls.append(context["stage_id"])
-        raise DomainError("PREPROCESS_PREREQUISITE_MISSING",
-                         "QC不足のため明示要求のdrift_correctを実施できません。",
-                         {"field": "drift_correct"})
-
-    handlers["preprocess"] = preprocess_handler
-
+def test_all_units_failed_is_failed_without_receipt(tmp_path):
+    path, calls = _run(tmp_path, ("negative", "positive"))
+    handlers = synthetic_handlers(calls, fail_stages={"upstream:negative", "upstream:positive"})
     result = run_engine(path, handlers)
-    assert result["status"] == "needs_input"
-    assert result["needs_input"]["code"] == "PREPROCESS_PREREQUISITE_MISSING"
-    assert result["needs_input"]["stage_id"] == "preprocess"
-    assert "pca" not in calls  # preprocessで止まりPCAへ進まない
+    assert result["status"] == "failed"
+    assert "receipt" not in calls
+    assert result["stages"]["receipt"]["status"] == "pending"
+    assert not (path / "results" / "receipt.json").exists()
 
 
-# ---------- cancel境界 ----------
+def test_unmatched_analysis_folder_is_partial(tmp_path):
+    path, calls = _run(tmp_path)
+    result = run_engine(path, synthetic_handlers(calls, unmatched_units={"negative"}))
+    assert result["status"] == "partial"
+    assert result["stages"]["receipt"]["status"] == "succeeded"
+
+
+def test_a_failed_unit_is_not_retried_by_a_second_engine_pass(tmp_path):
+    """失敗した工程を engine が自分で選び直さない（Console の自動再試行はしない）。"""
+    path, calls = _run(tmp_path, ("negative", "positive"))
+    run_engine(path, synthetic_handlers(calls, fail_stages={"upstream:negative"}))
+    calls.clear()
+    result = run_engine(path, synthetic_handlers(calls))
+    assert "upstream:negative" not in calls
+    assert result["stages"]["upstream:negative"]["status"] == "failed"
+    assert result["status"] == "partial"
+
+
+def test_a_succeeded_receipt_whose_file_vanished_is_rewritten(tmp_path):
+    path, calls = _run(tmp_path)
+    run_engine(path, synthetic_handlers(calls))
+    (path / "results" / "receipt.json").unlink()
+    calls.clear()
+    result = run_engine(path, synthetic_handlers(calls))
+    assert calls == ["receipt"]          # 上流は信頼して飛ばし、受領だけ書き直す
+    assert result["status"] == "completed"
+
+
+def test_engine_refuses_a_legacy_v1_run(tmp_path):
+    path, _calls = _run(tmp_path)
+    record = json.loads((path / "pipeline-run.json").read_text(encoding="utf-8"))
+    record["schema"] = "pipeline-run.v1"
+    atomic_write_json(path / "pipeline-run.json", record)
+    with pytest.raises(DomainError) as excinfo:
+        run_engine(path, synthetic_handlers())
+    assert excinfo.value.code == "PIPELINE_RUN_LEGACY"
+
+
+def test_an_exception_in_a_handler_fails_only_that_unit(tmp_path):
+    path, calls = _run(tmp_path, ("negative", "positive"))
+    handlers = synthetic_handlers(calls)
+
+    def boom(context):
+        if context["unit"] == "negative":
+            raise DomainError("STAGED_INPUT_MISMATCH", "壊れた")
+        return synthetic_handlers()["prepare_input"](context)
+
+    handlers["prepare_input"] = boom
+    result = run_engine(path, handlers)
+    assert result["stages"]["prepare_input:negative"]["error"]["code"] == "STAGED_INPUT_MISMATCH"
+    assert result["status"] == "partial"
+
+
+def test_context_carries_the_unit(tmp_path):
+    path, _calls = _run(tmp_path, ("negative", "positive"))
+    seen = []
+    handlers = synthetic_handlers()
+    real = handlers["upstream"]
+
+    def capture(context):
+        seen.append((context["unit"], context["unit_index"], context["unit_root"].name,
+                     context["unit_request"]["polarity"], context["unit_request"]["raw_dir"]))
+        return real(context)
+
+    handlers["upstream"] = capture
+    run_engine(path, handlers)
+    assert seen == [("negative", 0, "negative", "negative", "negative"),
+                    ("positive", 1, "positive", "positive", "positive")]
+
+
+# ---------- 取消 ----------
 
 def test_cancel_requested_stops_before_next_stage(tmp_path):
-    path, handlers, calls = _build_pipeline(tmp_path, target="differential", comparisons=[])
-    original_pca = handlers["pca"]
+    path, calls = _run(tmp_path, ("negative", "positive"))
+    handlers = synthetic_handlers(calls)
+    real = handlers["validate_outputs"]
 
-    def pca_then_request_cancel(context: dict) -> dict:
-        outcome = original_pca(context)
+    def then_cancel(context):
+        outcome = real(context)
         atomic_write_json(cancel_request_path(path), {"cancel_requested": True})
         return outcome
 
-    handlers["pca"] = pca_then_request_cancel
-
+    handlers["validate_outputs"] = then_cancel
     result = run_engine(path, handlers)
     assert result["status"] == "cancelled"
-    assert "pca" in calls
-    assert "resolve_comparisons" not in calls  # 次のstageへ進む前に取消を検知して止まる
+    assert "prepare_input:positive" not in calls
 
 
 def test_a_stage_failing_under_cancellation_settles_as_cancelled(tmp_path):
-    """工程の最中に取り消された run は `cancelled` に確定する。
+    """工程の最中（Console）に取り消された run は `cancelled` に確定する。"""
+    path, calls = _run(tmp_path, ("negative", "positive"))
+    handlers = synthetic_handlers(calls)
 
-    `cancel_requested` の判定は工程の境界でしか走らない。13 分かかる Console の
-    ように長い工程の最中に取り消すと、監視経路が Console を殺して handler が
-    failed を返し、`finish_interrupted` の「results があれば partial」に落ちて
-    いた。`pipeline_cancel` は「`cancelled` への確定を `pipeline_status` で
-    確認する」と契約しているので、それでは待っているクライアントが永久に
-    確認できない。
-    """
-    path, handlers, calls = _build_pipeline(tmp_path, target="differential", comparisons=[])
-    original_pca = handlers["pca"]
-
-    def pca_cancelled_mid_stage(context: dict) -> dict:
-        original_pca(context)                       # 成果物は既に出ている
+    def cancelled_mid_stage(context):
         atomic_write_json(cancel_request_path(path), {"cancel_requested": True})
         return {"status": "failed", "result_refs": [], "warnings": [],
                 "error": {"code": "MSDIAL_EXECUTION_FAILED",
-                          "message": "termination=cancelled exit_code=1",
-                          "details": {"termination": "cancelled"}},
-                "record_updates": {}}
+                          "message": "termination=cancelled", "details": {}}}
 
-    handlers["pca"] = pca_cancelled_mid_stage
-
+    handlers["upstream"] = cancelled_mid_stage
     result = run_engine(path, handlers)
     assert result["status"] == "cancelled"
-    # 停止理由の記録は失われないこと。
-    assert result["stages"]["pca"]["status"] == "failed"
-    assert result["stages"]["pca"]["error"]["code"] == "MSDIAL_EXECUTION_FAILED"
+    assert result["stages"]["upstream:negative"]["error"]["code"] == "MSDIAL_EXECUTION_FAILED"
+    assert "prepare_input:positive" not in calls
 
 
-def test_a_stage_failing_without_cancellation_still_settles_as_partial(tmp_path):
-    """取消が無ければ従来どおり partial（取消の判定が失敗一般に漏れないこと）。"""
-    path, handlers, calls = _build_pipeline(tmp_path, target="differential", comparisons=[])
-    original_pca = handlers["pca"]
-
-    def pca_fails(context: dict) -> dict:
-        original_pca(context)
-        return {"status": "failed", "result_refs": [], "warnings": [],
-                "error": {"code": "MSDIAL_EXECUTION_FAILED", "message": "exit_code=1",
-                          "details": {}},
-                "record_updates": {}}
-
-    handlers["pca"] = pca_fails
-
-    result = run_engine(path, handlers)
-    assert result["status"] == "partial"
-
-
-# ---------- state保存失敗 ----------
+# ---------- state保存 ----------
 
 def test_state_save_failure_propagates_and_keeps_prior_results(tmp_path, monkeypatch):
-    path, handlers, calls = _build_pipeline(tmp_path, target="exploratory")
+    path, calls = _run(tmp_path)
     real_save_run = store_module.save_run
 
     def flaky_save_run(pipeline_path, record, *, expected_revision):
-        if record["stages"]["pca"]["status"] == "running":
+        if record["stages"]["upstream:negative"]["status"] == "running":
             raise OSError("simulated disk failure")
         return real_save_run(pipeline_path, record, expected_revision=expected_revision)
 
     monkeypatch.setattr(store_module, "save_run", flaky_save_run)
-
     with pytest.raises(OSError, match="simulated disk failure"):
-        run_engine(path, handlers)
+        run_engine(path, synthetic_handlers(calls))
 
     record = load_run(path)
-    assert record["stages"]["preprocess"]["status"] == "succeeded"
-    assert record["stages"]["pca"]["status"] == "pending"
-    assert "pca" not in calls  # handlerはまだ一度も呼ばれていない
+    assert record["stages"]["prepare_input:negative"]["status"] == "succeeded"
+    assert record["stages"]["upstream:negative"]["status"] == "pending"
+    assert "upstream:negative" not in calls
 
 
-# ---------- 同時engine起動拒否 ----------
+def test_a_concurrent_state_revision_bump_does_not_kill_the_worker(tmp_path):
+    """他アクターが`state_revision`を進めても、engineはworkerを落とさない。"""
+    path, calls = _run(tmp_path)
+    handlers = synthetic_handlers(calls)
+    real = handlers["upstream"]
+
+    def with_bump(context):
+        outcome = real(context)
+        latest = load_run(path)
+        store_module.save_run(path, latest, expected_revision=latest["state_revision"])
+        return outcome
+
+    handlers["upstream"] = with_bump
+    result = run_engine(path, handlers)
+    assert result["status"] == "completed"
+    assert result["units"]["negative"]["upstream"]["execution_id"] == "exec-fake-negative"
+
 
 def test_second_engine_start_is_refused(tmp_path):
-    path, handlers, calls = _build_pipeline(tmp_path, target="exploratory")
+    path, calls = _run(tmp_path)
+    handlers = synthetic_handlers(calls)
+    real = handlers["upstream"]
 
-    def upstream_with_reentrant_attempt(context: dict) -> dict:
-        calls.append(context["stage_id"])
+    def reentrant(context):
         with pytest.raises(DomainError) as excinfo:
             run_engine(path, handlers)
         assert excinfo.value.code == "PIPELINE_ALREADY_RUNNING"
-        return {"status": "succeeded", "result_refs": [], "warnings": [], "error": None,
-                "record_updates": {"upstream": {
-                    "console_job_path": None, "execution_id": "exec-fake",
-                    "verification": {"status": "completed"}}}}
+        return real(context)
 
-    handlers["upstream"] = upstream_with_reentrant_attempt
+    handlers["upstream"] = reentrant
+    assert run_engine(path, handlers)["status"] == "completed"
 
+
+# ---------- 稼働中workerが訂正・差し戻しを取り込む ----------
+
+def test_a_manifest_update_during_the_run_rewrites_the_receipt(tmp_path):
+    from metabolomix.pipeline.recovery import prepare_resume
+
+    path, calls = _run(tmp_path)
+    handlers = synthetic_handlers(calls)
+    real = handlers["receipt"]
+    done = {"count": 0}
+
+    def receipt_then_update(context):
+        outcome = real(context)
+        if done["count"] == 0:
+            done["count"] += 1
+            prepare_resume(path, updates={"sample_manifest": "other.tsv"})
+        return outcome
+
+    handlers["receipt"] = receipt_then_update
     result = run_engine(path, handlers)
+    assert calls.count("receipt") == 2
+    assert result["request"]["revision"] == 2
     assert result["status"] == "completed"
-    assert "upstream" in calls
+
+
+def test_a_rerun_during_the_run_re_executes_the_failed_unit(tmp_path):
+    """稼働中に `rerun_upstream=True` が失敗した単位を戻したら、このworkerがやり直す。"""
+    from metabolomix.pipeline.recovery import prepare_resume
+
+    path, calls = _run(tmp_path, ("negative", "positive"))
+    handlers = synthetic_handlers(calls)
+    failing = synthetic_handlers(fail_stages={"upstream:negative"})["upstream"]
+    real_upstream = handlers["upstream"]
+    state = {"failed_once": False, "reset": False}
+
+    def upstream(context):
+        if context["unit"] == "negative" and not state["failed_once"]:
+            state["failed_once"] = True
+            calls.append(context["stage_id"])
+            return failing(context)
+        return real_upstream(context)
+
+    real_validate = handlers["validate_outputs"]
+
+    def validate(context):
+        outcome = real_validate(context)
+        if context["unit"] == "positive" and not state["reset"]:
+            state["reset"] = True
+            prepare_resume(path, rerun_upstream=True)
+        return outcome
+
+    handlers["upstream"] = upstream
+    handlers["validate_outputs"] = validate
+    result = run_engine(path, handlers)
+    assert calls.count("upstream:negative") == 2
+    assert calls.count("upstream:positive") == 1        # 成功した単位はやり直さない
+    assert result["status"] == "completed"
+
+
+def test_endless_request_updates_stop_the_worker_instead_of_spinning(tmp_path):
+    from metabolomix.pipeline.engine import _REQUEST_RELOAD_MAX_PASSES
+    from metabolomix.pipeline.recovery import prepare_resume
+
+    path, calls = _run(tmp_path)
+    handlers = synthetic_handlers(calls)
+    real = handlers["receipt"]
+    bumps = {"count": 0}
+
+    def receipt_then_always_correct(context):
+        outcome = real(context)
+        bumps["count"] += 1
+        prepare_resume(path, updates={"sample_manifest": f"s{bumps['count']}.tsv"})
+        return outcome
+
+    handlers["receipt"] = receipt_then_always_correct
+    with pytest.raises(DomainError) as excinfo:
+        run_engine(path, handlers)
+    assert excinfo.value.code == "REQUEST_REVISION_CHURN"
+    assert bumps["count"] <= _REQUEST_RELOAD_MAX_PASSES
 
 
 # ---------- AST: 禁止import ----------
@@ -382,13 +356,17 @@ def _imported_module_names(source: str) -> set[str]:
     return names
 
 
-def test_engine_and_worker_do_not_import_global_session():
-    for relative in ("metabolomix/pipeline/engine.py", "metabolomix/pipeline/worker.py"):
-        source = (REPO_ROOT / relative).read_text(encoding="utf-8")
-        for name in _imported_module_names(source):
-            forbidden = any(name == prefix or name.startswith(prefix + ".")
-                           for prefix in _FORBIDDEN_IMPORT_PREFIXES)
-            assert not forbidden, f"{relative} が禁止importを含む: {name}"
+@pytest.mark.parametrize("relative", [
+    "metabolomix/pipeline/engine.py", "metabolomix/pipeline/worker.py",
+    "metabolomix/pipeline/service.py", "metabolomix/pipeline/recovery.py",
+    "metabolomix/pipeline/store.py", "metabolomix/pipeline/receipt.py",
+])
+def test_pipeline_modules_do_not_import_global_session(relative):
+    source = (REPO_ROOT / relative).read_text(encoding="utf-8")
+    for name in _imported_module_names(source):
+        forbidden = any(name == prefix or name.startswith(prefix + ".")
+                        for prefix in _FORBIDDEN_IMPORT_PREFIXES)
+        assert not forbidden, f"{relative} が禁止importを含む: {name}"
 
 
 # ---------- worker.py のCLI配線 ----------
@@ -409,189 +387,8 @@ def test_worker_main_invokes_run_worker_with_parsed_path(monkeypatch, tmp_path, 
     assert "status=completed" in capsys.readouterr().out
 
 
-# ---------- 最終レビュー指摘1: resumeで足した比較stageとreportの順序 ----------
-
-def test_comparisons_added_by_resume_run_before_report(tmp_path):
-    """resumeで比較を足したとき、`report`は比較stageより**後**に呼ばれる。
-
-    `recovery.prepare_resume`は`record["stages"]`へ後から`differential:*`/
-    `export:*`を**追記**する——永続dictの挿入順では`report`より後ろに並ぶ。
-    engineが永続順のまま回すと、比較を1件も実行していない時点でレポートを
-    書き、そのレポート自身が「必須出力が無い（REQUIRED_OUTPUT_MISSING）」と
-    告げているのにrunはcompletedになる。`docs/workflow/pipeline.md`の手順21は
-    差次的解析・exportの**後**にreportを置いており、これは意図ではなく欠陥。
-
-    永続順が実際に崩れていること自体を先に確かめてから呼出し順を見る
-    ——「たまたま順序が合っていたから通った」テストにしないため。
-    """
-    from metabolomix.pipeline.recovery import prepare_resume
-
-    comparison = {"comparison_id": "cmp1", "reference_group": "control",
-                  "test_group": "treated"}
-    path, handlers, calls = _build_pipeline(tmp_path, target="differential", comparisons=[])
-    first = run_engine(path, handlers)
-    assert first["status"] == "needs_input"  # 比較が無いので必須出力を満たせない
-
-    prepare_resume(path, updates={"comparisons": [comparison]})
-
-    persisted_order = list(load_run(path)["stages"].keys())
-    assert persisted_order.index("report") < persisted_order.index("differential:cmp1"), \
-        "前提が崩れています（永続順で既にreportが比較stageより後ろにある）"
-
-    calls.clear()
-    second = run_engine(path, handlers)
-
-    assert "differential:cmp1" in calls and "export:cmp1" in calls
-    assert calls.index("report") > calls.index("export:cmp1"), \
-        f"reportが比較stageより先に呼ばれています: {calls}"
-    assert calls[-1] == "report"
-    assert second["status"] == "completed"
-    assert not [w for w in second.get("warnings") or []
-                if w.get("code") == "REPORT_INCOMPLETE_AT_WRITE_TIME"]
-
-
-# ---------- 最終レビュー指摘4: engineの保存も状態競合を吸収する ----------
-
-def test_a_concurrent_state_revision_bump_does_not_kill_the_worker(tmp_path):
-    """他アクターが`state_revision`を進めても、engineはworkerを落とさない。
-
-    `pipeline_resume`が長時間のstage（実運用ではupstream）の最中に届くと、
-    `prepare_resume`はstatusを動かさなくても`state_revision`を1つ進める。
-    その直後にengineが「stage開始時に読んだrecord」で保存すると
-    `STATE_REVISION_CONFLICT`が`_invoke_handler`のtryの**外**で送出され、
-    `run_engine`を貫いてworkerが死ぬ——ディスク上は`stages.upstream.status ==
-    "running"`のまま残り、次のresumeは`UPSTREAM_RERUN_REQUIRED`を返し、
-    既に成功していたConsole実行を捨てて再実行させることになる。
-
-    他の状態書込み側（`store._patch_request_id_with_retry`・
-    `recovery.prepare_resume`）は同じ競合を有限回の読み直しで吸収している。
-    """
-    path, handlers, calls = _build_pipeline(tmp_path, target="exploratory")
-    real_pca = handlers["pca"]
-    bumped = {"count": 0}
-
-    def pca_with_concurrent_bump(context: dict) -> dict:
-        outcome = real_pca(context)
-        # handler実行中に別アクターが状態を1つ進める（内容は変えない）。
-        latest = load_run(path)
-        store_module.save_run(path, latest, expected_revision=latest["state_revision"])
-        bumped["count"] += 1
-        return outcome
-
-    handlers["pca"] = pca_with_concurrent_bump
-
-    result = run_engine(path, handlers)
-
-    assert bumped["count"] == 1
-    assert result["status"] == "completed"
-    assert result["stages"]["pca"]["status"] == "succeeded"
-    # 競合で取りこぼさず、後続stageも走り切っている。
-    assert calls[-1] == "report"
-    # 割り込んだ側の保存も残っている（読み直して再適用した＝上書きしていない）。
-    assert result["state_revision"] > 0
-
-
-
-# ---------- 稼働中workerが要求の訂正を取り違えない（レビュー指摘1） ----------
-
-def test_a_resume_during_the_run_is_picked_up_by_the_running_worker(tmp_path):
-    """stage実行中に届いた要求の訂正を、走っているworkerが取り込んでから終える。
-
-    `prepare_resume`は稼働中workerがいる間statusを動かさない（`running`のまま）ので、
-    `resume_pipeline`は新しいworkerを起こさない——訂正を反映できるのは、今まさに
-    走っているこのworkerだけ。stage計画を1回しか組まないと、旧revisionの条件で
-    計算した結果が新revisionの結果としてcompletedになる。
-    """
-    from metabolomix.pipeline.recovery import prepare_resume
-
-    path, handlers, calls = _build_pipeline(tmp_path, target="exploratory")
-    real_pca = handlers["pca"]
-    resumed = {"count": 0}
-
-    def pca_then_correct_the_request(context: dict) -> dict:
-        outcome = real_pca(context)
-        if resumed["count"] == 0:
-            resumed["count"] += 1
-            # 走っている最中に「やはり2群比較がしたい」という訂正が届く。
-            prepare_resume(path, updates={
-                "target": "differential",
-                "comparisons": [{"comparison_id": "cmp1", "reference_group": "control",
-                                 "test_group": "treated"}]})
-        return outcome
-
-    handlers["pca"] = pca_then_correct_the_request
-
-    result = run_engine(path, handlers)
-
-    assert resumed["count"] == 1
-    # 新しい要求の工程が、このworkerの中で実際に走っている。
-    assert "differential:cmp1" in calls
-    assert "export:cmp1" in calls
-    # 訂正後の必須出力が揃ったうえでのcompleted（旧計画のままなら差次的出力が
-    # 欠けたままpartialになる）。
-    assert result["status"] == "completed"
-    assert result["request"]["revision"] == 2
-    assert result["stages"]["differential:cmp1"]["status"] == "succeeded"
-    # レポートは必ず最後（訂正後の比較結果を含んだうえで書き直す）。
-    assert calls[-1] == "report"
-
-
-def test_a_stage_reset_during_the_run_is_re_executed_before_finishing(tmp_path):
-    """要求内容が変わらない差し戻し（rerun_upstream）も、走行中に取り込む。
-
-    `rerun_upstream=True`のresumeは要求の内容を1文字も変えずに全stageを
-    `pending`へ戻す。要求版の変化だけを見ていると、既に通過したstageの
-    差し戻しに気付かないままcompletedを書いてしまう。
-    """
-    from metabolomix.pipeline.recovery import prepare_resume
-
-    path, handlers, calls = _build_pipeline(tmp_path, target="exploratory")
-    real_report = handlers["report"]
-    reset = {"count": 0}
-
-    def report_then_request_rerun(context: dict) -> dict:
-        if reset["count"] == 0:
-            reset["count"] += 1
-            prepare_resume(path, rerun_upstream=True)
-        return real_report(context)
-
-    handlers["report"] = report_then_request_rerun
-
-    result = run_engine(path, handlers)
-
-    assert reset["count"] == 1
-    assert calls.count("upstream") == 2  # 差し戻された上流をやり直している
-    assert result["status"] == "completed"
-    assert result["request"]["revision"] == 1  # 要求そのものは変わっていない
-
-
-def test_endless_request_updates_stop_the_worker_instead_of_spinning(tmp_path):
-    """要求の更新が途切れず届き続ける場合は、有限回で止めて知らせる。"""
-    from metabolomix.pipeline.engine import _REQUEST_RELOAD_MAX_PASSES
-    from metabolomix.pipeline.recovery import prepare_resume
-
-    path, handlers, _calls = _build_pipeline(tmp_path, target="exploratory")
-    real_pca = handlers["pca"]
-    bumps = {"count": 0}
-
-    def pca_then_always_correct(context: dict) -> dict:
-        outcome = real_pca(context)
-        bumps["count"] += 1
-        prepare_resume(path, updates={"preprocess": {"min_detection_rate": bumps["count"] / 100}})
-        return outcome
-
-    handlers["pca"] = pca_then_always_correct
-
-    with pytest.raises(DomainError) as excinfo:
-        run_engine(path, handlers)
-    assert excinfo.value.code == "REQUEST_REVISION_CHURN"
-    assert bumps["count"] <= _REQUEST_RELOAD_MAX_PASSES
-
-
-# ---------- 試験harness: 実プロセスとしてrun_engineを起動する ----------
-
 def test_worker_harness_runs_pipeline_as_real_subprocess(tmp_path):
-    path, _handlers, _calls = _build_pipeline(tmp_path, target="exploratory")
+    path, _calls = _run(tmp_path)
     harness = REPO_ROOT / "tests" / "pipeline_worker_harness.py"
     completed = subprocess.run(
         [sys.executable, str(harness), "--pipeline", str(path)],
@@ -605,7 +402,6 @@ def test_handler_keys_cover_every_planned_stage():
     from metabolomix.pipeline.service import build_handlers
 
     handlers = build_handlers()
-    for key in ("prepare_input", "upstream", "validate_outputs", "load_dataset",
-                "resolve_metadata", "preprocess", "pca", "resolve_comparisons",
-                "differential", "export", "report"):
-        assert key in handlers
+    for entry in build_stages({"units": [{"polarity": "negative"}]}):
+        assert entry["handler"] in handlers
+    assert set(handlers) == {"prepare_input", "upstream", "validate_outputs", "receipt"}

@@ -13,6 +13,7 @@ R22（Task16からの持ち越し）の実証もここで行う。「所有者�
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import signal
 import subprocess
@@ -23,7 +24,10 @@ import pytest
 
 from metabolomix.core.process_control import process_identity, resolve_python_launch, same_process
 from metabolomix.pipeline import engine, recovery
-from tests.pipeline_fixtures import DEFAULT_COMPARISON, PipelineHarness, read_contract_tsv
+from tests.pipeline_fixtures import PipelineHarness
+
+#: 実 handler の run で、受領の手前に待ち合わせの窓を作る工程。
+_LAST_STAGE = "receipt"
 
 pytestmark = pytest.mark.skipif(
     os.name != "nt",
@@ -94,16 +98,12 @@ def _kill_process_tree(proc) -> None:
 
 def test_run_completes_after_the_launcher_process_exits_without_any_status_call(
         pipeline_harness):
-    """spec A05/D06: 起動役が消えたあとも、workerが終了・成果物確定・下流進行を行う。
+    """spec A05/D06: 起動役が消えたあとも、workerが終了・検証・受領まで進む。
 
     `pipeline_status`/`read_status`はこのテストの中で一度も呼ばない
     （harnessの`wait`も状態ツールを通さず、workerの生死だけを見て最後に1回読む）。
     """
-    pipeline_harness.write_manifest()
-    run = pipeline_harness.start(
-        target="differential", comparisons=[DEFAULT_COMPARISON],
-        extra_request={"sample_manifest": "sample-manifest.tsv"},
-        launch=False)  # plan止め。起動は切り離し起動役に任せる。
+    run = pipeline_harness.start(launch=False)  # plan止め。起動は切り離し起動役に任せる。
     info = pipeline_harness.launch_detached(run)
 
     # 起動役はもう居ない（`launch_detached`は起動役プロセスの終了を待ってから返る）。
@@ -113,11 +113,8 @@ def test_run_completes_after_the_launcher_process_exits_without_any_status_call(
     record = pipeline_harness.wait(run, expected="completed")
 
     assert pipeline_harness.console_start_count(run) == 1
-    names = {ref["output_name"] for ref in record["results"]}
-    assert {"preprocess", "pca", "pca_figure", "differential:treated_vs_control",
-            "volcano:treated_vs_control", "tsv:treated_vs_control",
-            "quality_report"} <= names
-    assert Path(pipeline_harness.output_path(record, "tsv:treated_vs_control")).is_file()
+    assert record["units"]["negative"]["outputs"]["alignment"]
+    assert pipeline_harness.receipt(run)["units"]["negative"]["status"] == "validated"
 
 
 # ---------- A04: timeoutで一族が止まる ----------
@@ -138,7 +135,7 @@ def test_timeout_stops_the_whole_console_family_and_leaves_a_receipt(pipeline_ha
     assert receipt["termination"] == "timeout"
     assert receipt["timeout_s"] == 3
     assert receipt["exit_code"] != 0
-    assert record["upstream"]["verification"]["termination"] == "timeout"
+    assert record["units"]["negative"]["upstream"]["verification"]["termination"] == "timeout"
 
 
 # ---------- D09/R22: 取消 ----------
@@ -174,7 +171,7 @@ def test_cancel_during_upstream_stops_only_the_owned_console_tree(
         and process_identity(grandchild_pid) is None,
         timeout=30, what="偽Consoleと孫プロセスの終了")
     assert pipeline_harness.console_receipt(run)["termination"] == "cancelled"
-    assert record["stages"]["upstream"]["error"]["code"] == "MSDIAL_EXECUTION_FAILED"
+    assert record["stages"]["upstream:negative"]["error"]["code"] == "MSDIAL_EXECUTION_FAILED"
     # 無関係なプロセスには触れていない。
     assert bystander.alive(), "取消が無関係なプロセスを巻き込みました"
     # 再実行を捏造しない（Consoleは1回しか起動していない）。
@@ -182,42 +179,36 @@ def test_cancel_during_upstream_stops_only_the_owned_console_tree(
 
 
 def test_cancel_at_a_stage_boundary_keeps_earlier_results(pipeline_harness):
-    """spec D09: 下流は工程境界で止まり、そこまでの有効な成果物は残る。"""
-    run = pipeline_harness.start(target="exploratory",
-                                 sleep_stage="pca", sleep_seconds=5)
-    pipeline_harness.wait_for_stage(run, "pca")
+    """spec D09: 工程の境界で止まり、そこまでの検証済みの成果（解析フォルダ）は残る。"""
+    run = pipeline_harness.start(sleep_stage="validate_outputs:negative", sleep_seconds=5)
+    pipeline_harness.wait_for_stage(run, "validate_outputs:negative")
 
     recovery.request_cancel(pipeline_harness.pipeline_root(run))
     record = pipeline_harness.wait(run, expected="cancelled")
 
-    assert record["status"] == "cancelled"
-    names = {ref["output_name"] for ref in record["results"]}
-    assert {"preprocess", "pca", "pca_figure"} <= names
-    assert record["stages"]["report"]["status"] == "pending"
+    assert record["stages"]["upstream:negative"]["status"] == "succeeded"
+    assert record["stages"]["validate_outputs:negative"]["status"] == "succeeded"
+    assert record["units"]["negative"]["outputs"]["alignment"]
+    assert record["stages"]["receipt"]["status"] == "pending"
     # 取消要求は受理された事実として残る（受理と停止完了は別状態）。
     assert engine.cancel_requested(pipeline_harness.pipeline_root(run)) is True
 
 
 def test_cancelled_run_can_be_resumed(pipeline_harness):
-    """spec D09: 取消後のresumeは、過去attemptを保持したまま続きから進められること。
+    """spec D09: 取消後の resume は、Console をやり直さずに続き（受領）から進める。"""
+    from metabolomix.pipeline import service
 
-    resumeで渡すのはシートだけで、比較は足さない（`comparisons=[]`）
-    ——このrunは`target="exploratory"`であり、探索目標へ比較を足す要求は
-    矛盾として受付で拒否されるようになった（最終レビュー指摘5）。
-    このテストが見るのは取消後の再開そのものなので、比較の有無は本題では
-    ない。assertは一切緩めていない。
-    """
-    run = pipeline_harness.start(target="exploratory",
-                                 sleep_stage="pca", sleep_seconds=5)
-    pipeline_harness.wait_for_stage(run, "pca")
+    run = pipeline_harness.start(sleep_stage="validate_outputs:negative", sleep_seconds=5)
+    pipeline_harness.wait_for_stage(run, "validate_outputs:negative")
     recovery.request_cancel(pipeline_harness.pipeline_root(run))
     cancelled = pipeline_harness.wait(run, expected="cancelled")
-    before_attempt = cancelled["stages"]["pca"]["attempt"]
+    assert cancelled["stages"]["receipt"]["status"] == "pending"
 
-    pipeline_harness.resume_with_groups(run, comparisons=[], sleep_seconds=0.0)
+    pipeline_harness.set_launch_options(run, sleep_stage=None)
+    service.resume_pipeline(pipeline_harness.pipeline_root(run))
     resumed = pipeline_harness.wait(run, expected="completed")
 
-    assert resumed["stages"]["pca"]["attempt"] > before_attempt
+    assert resumed["stages"]["receipt"]["status"] == "succeeded"
     assert pipeline_harness.console_start_count(run) == 1  # 上流は再実行しない
 
 
@@ -240,7 +231,7 @@ def test_cancel_with_unknown_owner_never_touches_another_process(
     """
     from metabolomix.pipeline import store
 
-    run = pipeline_harness.start(target="exploratory", launch=False)
+    run = pipeline_harness.start(launch=False)
     pipeline_root = pipeline_harness.pipeline_root(run)
 
     record = store.load_run(pipeline_root)
@@ -266,10 +257,9 @@ def test_cancel_with_unknown_owner_never_touches_another_process(
 # ---------- A06: workerを失う ----------
 
 def _lose_the_worker(pipeline_harness):
-    """pca工程の途中でworkerを強制終了し、(pipeline_root, run)を返す。"""
-    run = pipeline_harness.start(target="exploratory",
-                                 sleep_stage="pca", sleep_seconds=60)
-    pipeline_harness.wait_for_stage(run, "pca")
+    """受領の工程の途中でworkerを強制終了し、(pipeline_root, run)を返す。"""
+    run = pipeline_harness.start(sleep_stage=_LAST_STAGE, sleep_seconds=60)
+    pipeline_harness.wait_for_stage(run, _LAST_STAGE)
     worker = pipeline_harness.worker_processes(run)[0]
     worker_identity = process_identity(worker.pid)
     assert worker_identity is not None
@@ -288,13 +278,13 @@ def test_lost_worker_is_reported_and_never_fabricated(pipeline_harness):
     assert status["status"] == "running"          # 永続状態は書き換えない
     assert status["observed_health"] == "worker_missing"
     assert status["recovery_hint"]["code"] == "PIPELINE_INTERRUPTED"
+    assert "receipt" not in status
     record = pipeline_harness.record(run)
-    assert record["stages"]["pca"]["status"] == "running"   # 成功を捏造しない
+    assert record["stages"][_LAST_STAGE]["status"] == "running"   # 成功を捏造しない
     assert record["status"] == "running"
-    assert record["stages"]["report"]["status"] == "pending"
     # 勝手に再起動していない（Consoleは最初の1回だけ）。
     assert pipeline_harness.console_start_count(run) == 1
-    assert "quality_report" not in {ref["output_name"] for ref in record["results"]}
+    assert not (pipeline_root / "results" / "receipt.json").exists()
 
 
 def test_lost_run_can_be_resumed_as_read_status_advertises(pipeline_harness):
@@ -309,54 +299,14 @@ def test_lost_run_can_be_resumed_as_read_status_advertises(pipeline_harness):
     resumed = pipeline_harness.wait(run, expected="completed")
 
     assert pipeline_harness.console_start_count(run) == 1  # 上流は再実行しない
-    assert {"preprocess", "pca", "pca_figure", "quality_report"} <= \
-        {ref["output_name"] for ref in resumed["results"]}
-
-
-def test_resumed_export_alone_still_names_a_recorded_differential_result(pipeline_harness):
-    """spec §6.1/§9.1: `export`だけが動く再開passでも、出所の連結が切れないこと。
-
-    `export`の途中でworkerを失うと、`differential:<cid>`はsucceededのまま残る。
-    再開したworkerはそれをskipするので、`export`は差次的結果を持たないまま
-    走り出す——ここで結果を計算し直すだけで永続化を忘れると、TSVの
-    `# result_id`とvolcanoの`parent_ids`が`record["results"]`に存在しない
-    結果を指す（Task19が見つけた欠陥の、再開経路側の顔）。
-    """
-    from metabolomix.pipeline import service
-
-    cid = DEFAULT_COMPARISON["comparison_id"]
-    pipeline_harness.write_manifest()
-    run = pipeline_harness.start(
-        target="differential", comparisons=[DEFAULT_COMPARISON],
-        extra_request={"sample_manifest": "sample-manifest.tsv"},
-        sleep_stage=f"export:{cid}", sleep_seconds=60)
-    pipeline_harness.wait_for_stage(run, f"export:{cid}")
-    worker = pipeline_harness.worker_processes(run)[0]
-    _kill_process_tree(worker)
-    interrupted = pipeline_harness.record(run)
-    assert interrupted["stages"][f"differential:{cid}"]["status"] == "succeeded"
-
-    pipeline_harness.set_launch_options(run, sleep_stage=None)
-    service.resume_pipeline(pipeline_harness.pipeline_root(run))
-    resumed = pipeline_harness.wait(run, expected="completed")
-
-    # differentialは再実行されず（skip）、exportだけがこのpassで動いた。
-    assert pipeline_harness.console_start_count(run) == 1
-    known_ids = {ref["result_id"] for ref in resumed["results"]}
-    dangling = {ref["output_name"]: [pid for pid in ref.get("parent_ids") or []
-                                     if pid not in known_ids]
-                for ref in resumed["results"]}
-    assert {name: ids for name, ids in dangling.items() if ids} == {}
-    meta, _rows, _fields = read_contract_tsv(
-        pipeline_harness.output_path(resumed, f"tsv:{cid}"))
-    assert meta["result_id"] in known_ids
+    assert resumed["stages"][_LAST_STAGE]["status"] == "succeeded"
+    assert pipeline_harness.receipt(run)["units"]["negative"]["status"] == "validated"
 
 
 def test_second_worker_on_the_same_run_refuses_instead_of_running_twice(pipeline_harness):
     """owner lock: 同じrunに2つ目のworkerが来ても、二重に進めずに拒否する。"""
-    run = pipeline_harness.start(target="exploratory",
-                                 sleep_stage="pca", sleep_seconds=5)
-    pipeline_harness.wait_for_stage(run, "pca")
+    run = pipeline_harness.start(sleep_stage=_LAST_STAGE, sleep_seconds=5)
+    pipeline_harness.wait_for_stage(run, _LAST_STAGE)
 
     pipeline_harness.relaunch(run)
     record = pipeline_harness.wait(run, expected="completed")
@@ -373,28 +323,26 @@ def test_second_worker_on_the_same_run_refuses_instead_of_running_twice(pipeline
 
 # ---------- D06: 2つの異なるpipelineの並行実行 ----------
 
-def test_two_concurrent_runs_do_not_mix_samples_matrices_or_figures(pipeline_harness):
-    """spec D06: 群割当を逆にした2つのrunを同時に走らせても混ざらない。"""
+def test_two_concurrent_runs_do_not_mix_inputs_or_analysis_folders(pipeline_harness):
+    """spec D06: 2つのrunを同時に走らせても、入力・解析フォルダ・受領が混ざらない。"""
     reversed_groups = ("treated",) * 4 + ("control",) * 4
-    pipeline_harness.write_manifest(source_name="alpha")
-    pipeline_harness.write_manifest(source_name="beta", groups=reversed_groups)
+    alpha_sheet = pipeline_harness.write_manifest(source_name="alpha")
+    beta_sheet = pipeline_harness.write_manifest(source_name="beta", groups=reversed_groups)
 
-    # pca工程で待たせることで、「両方が同時に走っている瞬間」を作って観測する
-    # （先に終わった片方を後から見る、という順次実行では並行の検証にならない）。
+    # 受領の工程で待たせることで、「両方が同時に走っている瞬間」を作って観測する。
     def _start(source_name):
         return pipeline_harness.start(
-            target="differential", comparisons=[DEFAULT_COMPARISON],
             source_name=source_name,
             extra_request={"sample_manifest": "sample-manifest.tsv"},
-            sleep_stage="pca", sleep_seconds=4)
+            sleep_stage=_LAST_STAGE, sleep_seconds=4)
 
     alpha, beta = _start("alpha"), _start("beta")
     alpha_worker = pipeline_harness.worker_processes(alpha)[0]
     beta_worker = pipeline_harness.worker_processes(beta)[0]
     assert alpha_worker.pid != beta_worker.pid
 
-    pipeline_harness.wait_for_stage(alpha, "pca")
-    pipeline_harness.wait_for_stage(beta, "pca")
+    pipeline_harness.wait_for_stage(alpha, _LAST_STAGE)
+    pipeline_harness.wait_for_stage(beta, _LAST_STAGE)
     assert alpha_worker.poll() is None and beta_worker.poll() is None, \
         "2つのrunが同時に走っていません（並行実行の検証になっていない）"
 
@@ -406,23 +354,20 @@ def test_two_concurrent_runs_do_not_mix_samples_matrices_or_figures(pipeline_har
     assert pipeline_harness.console_start_count(alpha) == 1
     assert pipeline_harness.console_start_count(beta) == 1
 
-    alpha_meta, alpha_rows, _ = read_contract_tsv(
-        pipeline_harness.output_path(alpha_record, "tsv:treated_vs_control"))
-    beta_meta, beta_rows, _ = read_contract_tsv(
-        pipeline_harness.output_path(beta_record, "tsv:treated_vs_control"))
-
-    # 検体・行列・比較が混ざっていない: 群割当が逆なので log2FC の符号も逆になる。
-    assert all(float(row["log2fc"]) > 0 for row in alpha_rows)
-    assert all(float(row["log2fc"]) < 0 for row in beta_rows)
-    assert alpha_meta["result_id"] != beta_meta["result_id"]
-    # 成果物refはすべて自分のpipeline_root配下の実ファイルを指している。
-    for record in (alpha_record, beta_record):
+    digests = []
+    for run, record, sheet in ((alpha, alpha_record, alpha_sheet),
+                               (beta, beta_record, beta_sheet)):
         root = Path(record["identity"]["pipeline_root"])
-        for ref in record["results"]:
-            assert (root / ref["relative_path"]).is_file()
-    # 各runのmzTabは自分のinput配下だけを見ている。
-    assert str(Path(alpha_record["identity"]["pipeline_root"])) in alpha_meta["source_mztab"]
-    assert str(Path(beta_record["identity"]["pipeline_root"])) in beta_meta["source_mztab"]
+        unit = record["units"]["negative"]
+        # Console の入力・解析フォルダ・mzTab-M はすべて自分の pipeline_root 配下。
+        assert (root / unit["upstream"]["console_job_path"]).is_file()
+        assert (root / unit["outputs"]["mztab"]).is_file()
+        assert (root / "negative" / "input" / unit["outputs"]["alignment"]["arf"]).is_file()
+        # 受領は自分の元フォルダのシートを読んでいる（群割当が逆なので内容 hash も違う）。
+        manifest = pipeline_harness.receipt(run)["units"]["negative"]["samples"]["manifest"]
+        assert manifest["sha256"] == hashlib.sha256(sheet.read_bytes()).hexdigest()
+        digests.append(manifest["sha256"])
+    assert digests[0] != digests[1]
 
 
 # ---------- 後始末 ----------

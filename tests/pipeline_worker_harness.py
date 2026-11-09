@@ -10,22 +10,22 @@ production worker（`metabolomix/pipeline/worker.py`）は`--pipeline`しか受�
 
 2つのモードがある。
 
-``--scenario`` 無し（Task 15）
-    すべてのhandlerを「呼ばれたら成功する」合成版に差し替えて`run_engine`を回す。
-    engine自体（stage順序・owner lock・冪等性）だけを見るためのモード。
+``--scenario`` 無し
+    すべてのhandlerを「呼ばれたら成功する」合成版（`synthetic_handlers`）に差し替えて
+    `run_engine`を回す。engine自体（stage順序・owner lock・冪等性）だけを見るためのモード。
 
 ``--scenario <name>``（Task 19）
     **本番の`metabolomix.pipeline.service.build_handlers()`をそのまま使う。**
     差し替えるのは`metabolomix.console.runner.build_msdial_cmd`だけ——起動する
     Consoleのコマンドラインを`tests/fixtures/fake_console.py`へ向ける。
-    loading・metadata・preprocessing・PCA・differential・export・renderは
-    すべて本物が走る。`supervise`（起動・監視・停止・収集・完了判定）も本物。
+    配置・mzTab-M と解析フォルダの検証・受領はすべて本物が走る。`supervise`
+    （起動・監視・停止・収集・完了判定）も本物。
 
 使い方::
 
     python tests/pipeline_worker_harness.py --pipeline <pipeline_root>
         [--sleep-stage <stage_id> --sleep-seconds <n>]
-        [--scenario success|nonzero|hang|invalid|missing_sample [--no-inchikey]]
+        [--scenario success|nonzero|hang|invalid|missing_sample|unmatched_arf [--no-inchikey]]
         [--counter <path>]
         [--launch-detached --launch-info <path>]
 
@@ -59,58 +59,61 @@ from metabolomix.pipeline.engine import run_engine  # noqa: E402
 _FAKE_CONSOLE = Path(__file__).resolve().parent / "fixtures" / "fake_console.py"
 
 #: build_stagesが組み立てうるhandlerキーの全量（stage_idではなくhandlerキー単位）。
-_HANDLER_KEYS = (
-    "prepare_input", "upstream", "validate_outputs", "load_dataset",
-    "resolve_metadata", "preprocess", "pca", "resolve_comparisons",
-    "differential", "export", "report",
-)
-
-#: handlerキー → 登録するoutput_name一覧（Task18: `metabolomix.pipeline.report.
-#: evaluate_target`がhash照合込みで`output_name`付きrefだけを「達成」と数える
-#: ため、文字列ダミーのrefでは`finish_success`が常にfailed/partialへ落ちる。
-#: 本harnessが検証する対象はengine自体（stage順序・owner lock）で、Task18の
-#: 実handler契約と揃えるためだけにこの最小限のマッピングを持つ）。
-_OUTPUT_NAMES = {
-    "preprocess": ("preprocess",),
-    "pca": ("pca", "pca_figure"),
-    "report": ("quality_report",),
-}
+HANDLER_KEYS = ("prepare_input", "upstream", "validate_outputs", "receipt")
 
 
-def _persist(pipeline_root, name: str) -> dict:
-    from metabolomix.pipeline.report import persist_result
-    return persist_result(pipeline_root, {
-        "output_name": name, "kind": "synthetic",
-        "result_id": f"{name.replace(':', '_')}-result",
-        "data": {"synthetic": True, "name": name},
-    })
+def synthetic_handlers(calls: list | None = None, *, fail_stages=(), unmatched_units=(),
+                       sleep_stage: str | None = None, sleep_seconds: float = 0.0) -> dict:
+    """呼ばれたら成功する合成handler一式（engine自体＝工程順・owner lock・単位の扱いを見る）。
+
+    `fail_stages` に挙げた stage_id は failed を返す。`unmatched_units` の極性は
+    validate_outputs が解析フォルダの照合に失敗した形（`alignment: None`）を返す。
+    `receipt` は本物の `receipt.write_receipt` で受領を書く。
+    """
+    fail_stages = set(fail_stages)
+    unmatched_units = set(unmatched_units)
+
+    def make(name):
+        def handler(context: dict) -> dict:
+            stage_id = context["stage_id"]
+            if calls is not None:
+                calls.append(stage_id)
+            if sleep_stage is not None and stage_id == sleep_stage and sleep_seconds > 0:
+                marker = stage_marker_path(context["pipeline_root"], sleep_stage)
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_text("entered", encoding="ascii")
+                time.sleep(sleep_seconds)
+            if stage_id in fail_stages:
+                return {"status": "failed", "result_refs": [], "warnings": [],
+                        "error": {"code": "SYNTHETIC_FAILURE", "message": stage_id,
+                                  "details": {}}}
+            unit = context.get("unit")
+            if name == "upstream":
+                return {"status": "succeeded", "result_refs": [], "warnings": [], "error": None,
+                        "unit_updates": {"upstream": {
+                            "console_job_path": None, "execution_id": f"exec-fake-{unit}",
+                            "verification": {"status": "completed"}}}}
+            if name == "validate_outputs":
+                alignment = (None if unit in unmatched_units
+                             else {"arf": f"{unit}_PeakProperties.arf", "arf2": f"{unit}.arf2"})
+                return {"status": "succeeded", "result_refs": [], "warnings": [], "error": None,
+                        "unit_updates": {"outputs": {"mztab": None, "alignment": alignment,
+                                                     "gui_project": None}}}
+            if name == "receipt":
+                from metabolomix.pipeline import receipt as receipt_mod
+                from metabolomix.pipeline import store
+                record = store.load_run(context["pipeline_root"])
+                _receipt, ref = receipt_mod.write_receipt(record, context["pipeline_root"])
+                return {"status": "succeeded", "result_refs": [ref], "warnings": [],
+                        "error": None}
+            return {"status": "succeeded", "result_refs": [], "warnings": [], "error": None}
+        return handler
+
+    return {key: make(key) for key in HANDLER_KEYS}
 
 
 def _build_handlers(sleep_stage: str | None, sleep_seconds: float) -> dict:
-    def make(name):
-        def handler(context: dict) -> dict:
-            if sleep_stage is not None and context["stage_id"] == sleep_stage and sleep_seconds > 0:
-                time.sleep(sleep_seconds)
-            if name == "upstream":
-                return {"status": "succeeded", "result_refs": [], "warnings": [], "error": None,
-                        "record_updates": {"upstream": {
-                            "console_job_path": None, "execution_id": "exec-fake",
-                            "verification": {"status": "completed"}}}}
-            if name == "differential":
-                cid = context["comparison_id"]
-                ref = _persist(context["pipeline_root"], f"differential:{cid}")
-                return {"status": "succeeded", "result_refs": [ref], "warnings": [], "error": None}
-            if name == "export":
-                cid = context["comparison_id"]
-                refs = [_persist(context["pipeline_root"], f"volcano:{cid}"),
-                        _persist(context["pipeline_root"], f"tsv:{cid}")]
-                return {"status": "succeeded", "result_refs": refs, "warnings": [], "error": None}
-            names = _OUTPUT_NAMES.get(name, ())
-            refs = [_persist(context["pipeline_root"], out_name) for out_name in names]
-            return {"status": "succeeded", "result_refs": refs, "warnings": [], "error": None}
-        return handler
-
-    return {key: make(key) for key in _HANDLER_KEYS}
+    return synthetic_handlers(sleep_stage=sleep_stage, sleep_seconds=sleep_seconds)
 
 
 # ---------- Task 19: 実handler ＋ 偽Consoleコマンド ----------

@@ -1,28 +1,24 @@
-"""pipeline-run（v1）の永続化・受付冪等性・Console jobの所有権（spec §9, §6）。
+"""pipeline-run（v3。旧 v1 は読むだけ）の永続化と受付冪等性（spec §9, §6・plan 2026-11-09）。
 
 このモジュールが解く問題は4つある。
 
-1. **schema**: v1の要求（schema省略を含む）は`pipeline-run.v1`を書く。
-   readerは既知のschemaだけを受け、**読んだrecordのschemaのまま返す**。未知の
-   schemaは推測せず拒否し、既存recordのschemaを書き換える保存も拒否する
-   （過去の記録をインプレース変換しない、spec §6）。
+1. **schema**: 新しい run は `pipeline-run.v3`（極性ごとの単位 `units` を持つ）を書く。
+   旧 `pipeline-run.v1`（下流の工程まで回した平らな形）は**読むだけ**で、保存は
+   `PIPELINE_RUN_LEGACY` で拒む（読むなら `load_dataset(pipeline_path=…)`、Console を
+   やり直すなら新しい `pipeline_run`）。未知の schema（実物の無い v2 を含む）は
+   推測せず拒否し、既存 record の schema を書き換える保存も拒否する。
 2. **永続化**: `pipeline-run.json` を原子的に保存・読込する。`state_revision` は
-   楽観的並行制御用のカウンタで、要求（`pipeline-request.v1`）自身が持つ
-   `revision`（Task 10 `resolve_request`/`merge_updates` が扱う、下流の
-   訂正ごとに増える別カウンタ）とは意味も増分タイミングも異なる。
-3. **受付冪等性**: 同一source_rootへ複数プロセス・複数output_rootから同時に
-   `find_or_create_run`が呼ばれても、同じ入力・同じ要求なら二重にrunを作らない。
-   排他は`source_root`単位（正規化した絶対パスのhash）に限定し、`output_root`の
-   違いでは分けない——output_rootが違うだけの同時受付でも、索引ファイルへの
-   書込みは同じロックの下で直列化されなければならない。
+   楽観的並行制御用のカウンタで、要求自身が持つ `revision`（訂正ごとに増える別の
+   カウンタ）とは意味も増分タイミングも異なる。
+3. **受付冪等性**: 同一 source_root へ複数プロセス・複数 output_root から同時に
+   `find_or_create_run` が呼ばれても、同じ入力・同じ要求なら二重に run を作らない。
+   排他は `source_root` 単位（正規化した絶対パスの hash）に限定する。
+4. **単位の読み替え**: 読む側（status・受領・データセットの入口）は `run_units` を通して
+   極性ごとの `inputs` / `upstream` を読む。v1 の平らな record も 1 単位として読める。
 
-依存グラフ上は`metabolomix.pipeline.inputs`と同じ層（`metabolomix.console.job_manager`・
-`metabolomix.core.atomic_io`・`metabolomix.core.process_control`のみを引く）。
-`metabolomix.core.mcp_core`はimportしない——importするだけで状態ディレクトリの前提が
-生まれ、「読取専用の`pipeline_status`はimportだけで索引dirを作らない」という
-契約（brief）を壊しかねない。索引の置き場所（既定`%LOCALAPPDATA%`)も、
-テストが`LIPIDMIX_PIPELINE_INDEX_DIR`環境変数で挿し替えられる素朴な
-`os.environ.get`で解決し、mcp_core経由のデータディレクトリ解決を持ち込まない。
+依存グラフ上は `metabolomix.pipeline.inputs` と同じ層。`metabolomix.core.mcp_core` は
+import しない（読取専用の `pipeline_status` が import だけで状態ディレクトリを作らない）。
+索引の置き場所（既定 `%LOCALAPPDATA%`）はテストが `LIPIDMIX_PIPELINE_INDEX_DIR` で挿し替える。
 """
 from __future__ import annotations
 
@@ -35,7 +31,6 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from metabolomix.console import job_manager
 from metabolomix.core.atomic_io import (
     DomainError,
     atomic_write_json,
@@ -48,77 +43,78 @@ from metabolomix.pipeline.request import request_fingerprint
 
 __all__ = [
     "ACTIVE_STATUSES",
+    "LEGACY_SCHEMA",
     "SCHEMA",
     "SUPPORTED_SCHEMAS",
     "RUN_FILENAME",
     "read_result_data",
     "REQUESTS_SUBDIR",
-    "STAGE_IDS",
     "TERMINAL_STATUSES",
+    "UNIT_HANDLERS",
+    "absolutize_unit_inputs",
+    "relativize_unit_inputs",
     "create_run",
     "current_result_refs",
     "find_or_create_run",
     "initial_stage",
+    "is_legacy",
+    "legacy_refusal",
     "load_run",
     "run_schema_for",
+    "run_units",
     "save_run",
     "stage_ids_for",
+    "unit_stage_id",
+    "unit_status",
     "verify_result_refs",
 ]
 
-SCHEMA = "pipeline-run.v1"
+SCHEMA = "pipeline-run.v3"
+LEGACY_SCHEMA = "pipeline-run.v1"
 
-#: readerが受ける版（spec §6「readerは旧版を継続して受ける」）。ここに無いschemaは
-#: 推測せず拒否する——未知の版を「たぶんv1だろう」と読むと、知らないフィールドを
-#: 落としたまま保存し直して記録を壊す。
-SUPPORTED_SCHEMAS = frozenset({SCHEMA})
+#: reader が受ける版。ここに無い schema は推測せず拒否する——未知の版を既知のものとして
+#: 読むと、知らないフィールドを落としたまま保存し直して記録を壊す。v2 は実物が無いので読まない。
+SUPPORTED_SCHEMAS = frozenset({LEGACY_SCHEMA, SCHEMA})
 
 RUN_FILENAME = "pipeline-run.json"
 REQUESTS_SUBDIR = "requests"
 CONTROL_SUBDIR = "control"
 RUNS_PARENT_SUBDIR = "runs"  # <source_root>/runs/pipeline_<UUID>/ （spec §4.3）
 
-#: pipeline_root配下に配置しない要求（request_id等）を書けるよう、find_or_create_run
-#: が受付索引を置く場所を上書きするための環境変数。テストはここへtmpを注入する。
 _INDEX_BASE_ENV = "LIPIDMIX_PIPELINE_INDEX_DIR"
 _INDEX_DIRNAME = "pipeline-index"
 _INDEX_FILENAME = "index.json"
 _INDEX_LOCK_FILENAME = "index.lock"
 
-#: spec §9.1: stage状態の遷移先。activeはrunning側からしか動けない中間状態。
+#: spec §9.1: run の状態。active は running 側からしか動けない中間状態。
 ACTIVE_STATUSES = frozenset({"planned", "running", "needs_input"})
 TERMINAL_STATUSES = frozenset({"completed", "partial", "failed", "cancelled"})
 
-#: common-context.md「タスク間の共通契約」に列挙された固定stage ID（比較依存の
-#: 2つを除く）。comparison依存分は`_stage_ids_for`が要求から動的に追加する。
-_BASE_STAGE_IDS = (
-    "prepare_input", "upstream", "validate_outputs", "load_dataset",
-    "resolve_metadata", "preprocess", "pca", "resolve_comparisons",
-)
-_FINAL_STAGE_ID = "report"
+#: 単位ごとに回る工程（この順）。最後に単位を持たない `receipt` が 1 つ付く
+#: （計画の正準は `engine.build_stages`）。
+UNIT_HANDLERS = ("prepare_input", "upstream", "validate_outputs")
 
-#: create_run/save_runがpipeline_root配下に絶対パスのまま保存してよいのは、
-#: 実際にpipeline_root外を指す場合だけ（Task13の申し送り通り、原本メソッド・
-#: LBM・実行体は通常pipeline_root外にある）。実際にpipeline_root配下を指す
-#: ときだけ相対化する対象の一覧。
+#: run の記録に絶対パスのまま保存してよいのは、実際に単位のフォルダの外を指す場合だけ
+#: （原本メソッド・LBM・実行体は通常その外にある）。中を指すときだけ相対化する対象。
 _RELATIVIZABLE_INPUT_PATHS = (("method", "source_path"), ("lbm", "path"), ("exe", "path"))
 
 _VANISHED = object()  # 索引entryはあるがpipeline_root/pipeline-run.jsonが読めない標識
 
-#: find_or_create_runがrequest_idを既存runへ書き足す際、他アクター（Consoleワーカー
-#: のstage更新save_run等）による状態競合(STATE_REVISION_CONFLICT)を有限回まで
-#: 読み直して吸収する上限（レビュー finding 1）。
+#: find_or_create_runがrequest_idを既存runへ書き足す際、他アクターによる状態競合
+#: (STATE_REVISION_CONFLICT)を有限回まで読み直して吸収する上限。
 _REQUEST_ID_PATCH_MAX_ATTEMPTS = 5
+
+#: 旧 v1 の run の代わりの道（`PIPELINE_RUN_LEGACY` の details）。
+_LEGACY_REPLACEMENTS = {
+    "read": "load_dataset(pipeline_path=…)",
+    "rerun_console": "pipeline_run（新しい run）",
+}
 
 
 class _CorruptedReuse:
-    """明示request_id無し（explicit_request_id=False）で見つかった、成果物hashの
-    検証に失敗したcompleted run（レビュー finding 2 / controller ruling R17）。
+    """明示request_id無しで見つかった、成果物hashの検証に失敗したcompleted run。
 
-    spec §9.3は「成果物hashの一致する同一要求のcompleted runも再利用する」と
-    書くが、明示的な同一性の主張（request_id）が無い状態で壊れたrunを見つけた
-    場合にエラーで止めるのは、呼び出し側に手動クリーンアップ以外の道を残さない。
-    そこで新runは作るが、この情報を新runのwarningsへ記録して破損を可視化する。
+    新runは作るが、この情報を新runのwarningsへ記録して破損を可視化する。
     """
 
     __slots__ = ("pipeline_root", "failures")
@@ -140,17 +136,81 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+# ---------- 旧 v1 の扱い・単位の読み替え ----------
+
+def is_legacy(record: dict) -> bool:
+    """旧 `pipeline-run.v1`（読むだけの記録）か。"""
+    return isinstance(record, dict) and record.get("schema") == LEGACY_SCHEMA
+
+
+def legacy_refusal(pipeline_root: Path | str, action: str) -> DomainError:
+    """旧 v1 の run を書き換える操作を断る `PIPELINE_RUN_LEGACY`（代わりの道つき）。"""
+    return DomainError(
+        "PIPELINE_RUN_LEGACY",
+        f"旧形式（{LEGACY_SCHEMA}）の run は読むだけです（{action} はできません）。"
+        "読むなら load_dataset(pipeline_path=…)、Console をやり直すなら新しい pipeline_run を使ってください。",
+        {"pipeline_root": str(pipeline_root), "schema": LEGACY_SCHEMA, "action": action,
+         "replacements": dict(_LEGACY_REPLACEMENTS)})
+
+
+def _legacy_polarity(record: dict) -> str:
+    polarity = ((record.get("inputs") or {}).get("polarity") or {})
+    value = polarity.get("value") if isinstance(polarity, dict) else polarity
+    return value if isinstance(value, str) and value else "unknown"
+
+
+def run_units(record: dict) -> dict[str, dict]:
+    """極性ごとの単位（`raw_dir` `unit_root` `inputs` `upstream` …）を返す。
+
+    v3 は `record["units"]` そのもの。v1 は平らな `inputs` / `upstream` を、run の
+    フォルダ直下を単位の根（`unit_root="."`）とする 1 単位として読み替える。
+    読む側（status・受領・データセットの入口）はすべてここを通す。
+    """
+    if is_legacy(record):
+        return {_legacy_polarity(record): {
+            "raw_dir": ".", "unit_root": ".",
+            "inputs": record.get("inputs") or {},
+            "upstream": record.get("upstream") or {}}}
+    return dict(record.get("units") or {})
+
+
+def unit_stage_id(handler: str, polarity: str | None) -> str:
+    """単位の工程の stage_id（`<handler>:<極性>`。単位を持たない工程は handler のまま）。"""
+    return handler if polarity is None else f"{handler}:{polarity}"
+
+
+def unit_status(record: dict, polarity: str) -> str:
+    """単位の状態: `validated` / `failed` / `running` / `pending`。
+
+    3 工程のどれかが failed・cancelled なら failed、全部 succeeded（か skipped）なら
+    validated、どれかが running なら running、それ以外は pending。旧 v1 は接尾辞の無い
+    stage_id を読む。
+    """
+    stages = record.get("stages") or {}
+    legacy = is_legacy(record)
+    statuses = []
+    for handler in UNIT_HANDLERS:
+        sid = handler if legacy else unit_stage_id(handler, polarity)
+        statuses.append((stages.get(sid) or {}).get("status", "pending"))
+    if any(s in ("failed", "cancelled") for s in statuses):
+        return "failed"
+    if all(s in ("succeeded", "skipped") for s in statuses):
+        return "validated"
+    if any(s == "running" for s in statuses):
+        return "running"
+    return "pending"
+
+
 # ---------- stage初期化 ----------
 
 def run_schema_for(request: dict) -> str:
-    """要求のschemaから、このrunが書くpipeline-runのschemaを決める（spec §6）。
+    """要求のschemaから、このrunが書くpipeline-runのschemaを決める。
 
-    v1要求（schema省略を含む——「schema省略は従来どおりv1」）は`pipeline-run.v1`。
-    **それ以外は推測せず拒否する**——未知の要求版を既知のものとして走らせると、
-    この版が想定する工程を一つも実行しないままcompletedになりうる。
+    新しい run は v3 の正規形の要求（`resolve_request` の戻り値）からしか作らない。
+    それ以外は推測せず拒否する。
     """
     schema = request.get("schema") if isinstance(request, dict) else None
-    if schema is None or schema == request_mod.SCHEMA:
+    if schema == request_mod.SCHEMA:
         return SCHEMA
     raise DomainError(
         "PIPELINE_REQUEST_INVALID",
@@ -158,20 +218,11 @@ def run_schema_for(request: dict) -> str:
         {"schema": schema})
 
 
-def _stage_ids_for(request: dict) -> list[str]:
-    """spec §9.1のstage ID列を、要求の内容から動的に組み立てる。
-
-    `differential:<comparison_id>` / `export:<comparison_id>` は
-    comparisonごとに1組ずつ増える。comparisonsが空（探索解析、または
-    target=differentialでも群未指定でneeds_inputへ回る場合）はこの2種を持たない。
-    """
-    ids = list(_BASE_STAGE_IDS)
-    for comparison in request.get("comparisons") or []:
-        cid = comparison["comparison_id"]
-        ids.append(f"differential:{cid}")
-        ids.append(f"export:{cid}")
-    ids.append(_FINAL_STAGE_ID)
-    return ids
+def stage_ids_for(request: dict) -> list[str]:
+    """要求から record の stage ID 列を作る（計画の正準 `engine.build_stages` の stage_id）。"""
+    # engine は store を import するので、ここは呼び出し時に引く（循環を避ける）。
+    from metabolomix.pipeline import engine
+    return [stage["stage_id"] for stage in engine.build_stages(request)]
 
 
 def _initial_stage(stage_id: str) -> dict:
@@ -190,19 +241,8 @@ def _initial_stage(stage_id: str) -> dict:
     }
 
 
-#: モジュール公開のstage ID一覧（comparison非依存の固定部分だけ）。common-context.md
-#: の一覧をそのまま参照可能にする（他タスクが照合に使えるように）。
-STAGE_IDS = _BASE_STAGE_IDS + (_FINAL_STAGE_ID,)
-
-
-def stage_ids_for(request: dict) -> list[str]:
-    """`_stage_ids_for`の公開版（Task16 `metabolomix.pipeline.recovery`が再開時に
-    要求内容からstage集合を再計算し、新規comparisonのstage初期化に使う）。"""
-    return _stage_ids_for(request)
-
-
 def initial_stage(stage_id: str) -> dict:
-    """`_initial_stage`の公開版（Task16が再開時に新規stage_idを初期化するのに使う）。"""
+    """`_initial_stage`の公開版（再開時に stage を初期値へ戻すのに使う）。"""
     return _initial_stage(stage_id)
 
 
@@ -252,6 +292,38 @@ def _relativize_inputs_paths(inputs: dict, pipeline_root: Path) -> dict:
     return result
 
 
+def relativize_unit_inputs(inputs: dict, unit_root: Path) -> dict:
+    """入力計画（配置後の snapshot を含む）の、単位の根の下を指すパスを相対にした写し。"""
+    return _relativize_inputs_paths(inputs, unit_root)
+
+
+def absolutize_unit_inputs(inputs: dict, unit_root: Path) -> dict:
+    """`_relativize_inputs_paths` の逆。単位の根の相対に固定したパスを絶対パスへ戻す。
+
+    `inputs.verify_inputs` などはこれらを絶対パスとして扱う。戻り値の
+    `pipeline_root` は単位の根（`stage_inputs` に渡した場所）。
+    """
+    unit_root = Path(unit_root).resolve()
+
+    def _fix(value: str) -> str:
+        if isinstance(value, str) and not Path(value).is_absolute():
+            return str((unit_root / value).resolve())
+        return value
+
+    result = copy.deepcopy(inputs)
+    for top, sub in _RELATIVIZABLE_INPUT_PATHS:
+        section = result.get(top)
+        if isinstance(section, dict) and isinstance(section.get(sub), str):
+            section[sub] = _fix(section[sub])
+    manifest_rows = result.get("manifest")
+    if isinstance(manifest_rows, list):
+        for row in manifest_rows:
+            if isinstance(row, dict) and isinstance(row.get("source_file"), str):
+                row["source_file"] = _fix(row["source_file"])
+    result["pipeline_root"] = str(unit_root)
+    return result
+
+
 # ---------- create_run / load_run / save_run ----------
 
 def create_run(source_root: Path, request: dict, inputs: dict, *,
@@ -264,10 +336,13 @@ def create_run(source_root: Path, request: dict, inputs: dict, *,
     ディレクトリ作成が衝突した場合（極めて起こりにくいが同一秒UUIDの理論上の
     再採番要求に備える）は新しいUUIDで採番し直す。
 
-    `warnings`はbrief記載の5関数のシグネチャに無いキーワード専用の追加引数
-    （既定Noneで後方互換）。`find_or_create_run`が、破損したcompleted runを
-    黙って上書きした事実を新runへ最初から記録するために使う
-    （レビュー finding 2 / controller ruling R17）。
+    `inputs` は `{"fingerprint": <受付の指紋>, "units": {<極性>: <入力計画>}}`。
+    単位の順は要求の `units` の順で、各単位の根は `<pipeline_root>/<極性>`
+    （入力計画の中の、その下を指す絶対パスは単位の根の相対にする）。
+
+    `warnings` は、`find_or_create_run` が破損した completed run を黙って上書きした
+    事実と、受付の警告（`request["intake_warnings"]`。読み飛ばした下流のキーなど）を
+    新 run へ最初から記録するために使う。
     """
     source_root = Path(source_root).expanduser()
     if not source_root.is_dir():
@@ -282,6 +357,14 @@ def create_run(source_root: Path, request: dict, inputs: dict, *,
     # 未知の要求schemaはここで止める。ディレクトリを掘る前に判定するので、
     # 拒否した要求が空のpipeline_rootを残さない。
     run_schema = run_schema_for(request)
+    unit_plans = inputs.get("units") or {}
+    polarities = [unit.get("polarity") for unit in request.get("units") or []]
+    if not polarities or any(not p for p in polarities) or set(polarities) != set(unit_plans):
+        raise DomainError(
+            "PIPELINE_INPUTS_INVALID",
+            "要求の単位（極性の確定したもの）と入力計画の単位が一致しません。",
+            {"request_units": polarities, "planned_units": sorted(unit_plans)})
+    stage_ids = stage_ids_for(request)
 
     output_root = request.get("output_root")
     base_dir = Path(output_root).expanduser() if output_root else source_root / RUNS_PARENT_SUBDIR
@@ -307,7 +390,17 @@ def create_run(source_root: Path, request: dict, inputs: dict, *,
     # 追加する（Task 16の責務）。ここで書くのは最初の1件だけ。
     atomic_write_json(pipeline_root / request_rel, request)
 
-    relativized_inputs = _relativize_inputs_paths(inputs, pipeline_root)
+    units = {}
+    for unit in request["units"]:
+        polarity = unit["polarity"]
+        units[polarity] = {
+            "raw_dir": unit.get("raw_dir") or ".",
+            "unit_root": polarity,
+            "inputs": _relativize_inputs_paths(unit_plans[polarity], pipeline_root / polarity),
+            "upstream": {"console_job_path": None, "execution_id": None, "verification": None},
+            "outputs": None,
+        }
+    seeded = list(warnings or []) + [dict(w) for w in request.get("intake_warnings") or []]
 
     record = {
         "schema": run_schema,
@@ -323,20 +416,19 @@ def create_run(source_root: Path, request: dict, inputs: dict, *,
             "request_id": None,  # find_or_create_runが必要なら後で埋める
             "content_hash": request_fingerprint(request),
             "saved_path": request_rel,
-            "effective_target": request.get("effective_target"),
         },
         "status": "planned",
         "state_revision": 0,
-        "stages": {sid: _initial_stage(sid) for sid in _stage_ids_for(request)},
-        "upstream": {"console_job_path": None, "execution_id": None, "verification": None},
-        "inputs": relativized_inputs,
+        "stages": {sid: _initial_stage(sid) for sid in stage_ids},
+        "units": units,
+        "inputs": {"fingerprint": inputs["fingerprint"]},
         "results": [],
         "needs_input": None,
-        "warnings": list(warnings) if warnings else [],
-        # spec §9.3「ロックにはowner identityを記録し」の実体。run_engine（Task15/16）が
-        # owner lock取得直後にここへ自分のprocess identityを刻む。pidだけでは再利用を
-        # 見分けられないため、Task16のread_status/prepare_resumeはcreation_timeと
-        # 組みで`same_process`により生死を判定する（PIDだけを根拠にしない）。
+        "warnings": seeded,
+        # spec §9.3「ロックにはowner identityを記録し」の実体。run_engine が owner lock
+        # 取得直後にここへ自分のprocess identityを刻む。pidだけでは再利用を見分けられない
+        # ため、read_status/prepare_resumeはcreation_timeと組みで`same_process`により
+        # 生死を判定する（PIDだけを根拠にしない）。
         "worker": {"identity": None, "started_at": None},
     }
     atomic_write_json(pipeline_root / RUN_FILENAME, record)
@@ -428,6 +520,9 @@ def save_run(path: Path, record: dict, *, expected_revision: int) -> None:
     lock_path = pipeline_root / CONTROL_SUBDIR / "pipeline.lock"
     with file_lock(lock_path):
         current = load_run(pipeline_root)
+        # 旧 v1 の記録は読むだけ（engine が 2 つの形を持ち続けないため）。
+        if is_legacy(current):
+            raise legacy_refusal(pipeline_root, "保存")
         if current.get("state_revision") != expected_revision:
             raise DomainError(
                 "STATE_REVISION_CONFLICT",
@@ -577,8 +672,8 @@ def current_result_refs(record: dict) -> list[dict]:
     書き出し先パスはoutput_nameごとに固定なので、再計算は同じファイルを
     上書きする——**古いrefのhashはもうどのファイルとも一致しない**。
 
-    ここでの選び方は`report._achieved_ref`（同じoutput_nameの最後の1件を
-    「現在の成果物」とする）と同じでなければならない。片方が最後の1件だけを見て、
+    ここでの選び方（同じoutput_nameの最後の1件を「現在の成果物」とする）は、
+    成果物を読む側と同じでなければならない。片方が最後の1件だけを見て、
     もう片方が履歴を全件検証すると、正当な訂正のあとで
     `RESULT_INTEGRITY_MISMATCH`——実際には壊れていないのに壊れたという報告——
     が出る（`find_or_create_run`の同一request_id再送がこれを踏んだ）。
@@ -632,6 +727,8 @@ def _resolve_reusable(pipeline_root_str: str, *, explicit_request_id: bool):
         record = load_run(pipeline_root)
     except DomainError:
         return _VANISHED
+    if is_legacy(record):
+        return _VANISHED  # 旧 v1 の run は新しい受付で再利用しない（指紋も別）
     status = record.get("status")
     if status == "completed":
         failures = _artifacts_verify(record, pipeline_root)
