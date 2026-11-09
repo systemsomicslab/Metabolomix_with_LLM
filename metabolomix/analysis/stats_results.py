@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import copy
 import math
+import re
 
 from metabolomix.analysis import differential, export_contract
 from metabolomix.analysis.result_state import dataset_fingerprint, is_stats_current
@@ -33,6 +34,8 @@ __all__ = [
     "sample_ids_by_name",
     "split_result_ref",
     "check_contrast_applies",
+    "compare_spec",
+    "contrast_id_for",
     "is_stats_current",
     "matrix_inputs",
     "prepare_default",
@@ -223,13 +226,18 @@ def _provenance(ds, result_id: str, kind: str, matrix_id: str, dataset_hash: str
             "metadata_revision": getattr(ds, "metadata_revision", 0), "parent_ids": [matrix_id]}
 
 
-def register_compare(ds, run_result: dict, *, log2fc_threshold, units) -> dict:
+def register_compare(ds, run_result: dict, *, log2fc_threshold, units,
+                     make_current: bool = True, origin: str | None = None) -> dict:
     """`run_spec_v2` の結果（compare の解析がちょうど 1 つ）を登録し、その記録を返す。
 
     `units` は同じ行列の `PreparedMatrix.units`。記録の `units` は 個体 ID → {group, subject_id,
     cell（比較に入らない個体は None）, samples（注入の表示名）}。`log2fc_threshold` は判定に効かない
     （図の色分け・書き出しの significant 列だけ）が、ID には含める（同じ結果でも閾値違いは別の記録）。
     compare が 1 つでない・別のデータから出た結果は ValueError。
+    `make_current=False` は `ds.last_differential`（図・書き出しの既定）を動かさない（最初の概観が使う。
+    利用者が明示に回した比較を中立の概観で上書きしない）。
+    `origin`（例 ``"overview"``）は記録の ``origin`` に残し、特徴検索の既定の選択（`result_ids` 省略）から外す
+    印になる。同じ ID の記録が印なしで既にあれば（利用者が同じ比較を先に回した）、印を付けない。
     """
     analyses = [a for a in (run_result or {}).get("analyses") or [] if a.get("kind") == "compare"]
     if len(analyses) != 1:
@@ -267,8 +275,12 @@ def register_compare(ds, run_result: dict, *, log2fc_threshold, units) -> dict:
         "log2fc_threshold": threshold,
         "provenance": _provenance(ds, result_id, "compare", matrix_id, current),
     }
+    existing = ds.results.get(result_id)
+    if origin is not None and not (existing is not None and existing.get("origin") is None):
+        record["origin"] = origin
     ds.results[result_id] = record
-    ds.last_differential = record
+    if make_current:
+        ds.last_differential = record
     return record
 
 
@@ -302,11 +314,12 @@ def unit_group_labels(ds, prepared, group_overrides: dict | None = None) -> dict
     return out
 
 
-def register_pca(ds, pca_result: dict, groups: dict | None) -> dict:
+def register_pca(ds, pca_result: dict, groups: dict | None, *, make_current: bool = True) -> dict:
     """`stats.pca.pca` の結果（stats-pca.v1）を登録し、その記録を返す。
 
     `groups` は 個体 ID → 色分けの群（無ければ None）。PCA の数字には効かないが ID には含める。
     ID の `n_components` と `impute` は結果から読む（成分の数・補完の方法）。
+    `make_current=False` は `ds.last_pca` を動かさない（最初の概観が使う）。
     """
     matrix_id = pca_result["matrix_id"]
     scaling = pca_result["scaling"]
@@ -332,8 +345,54 @@ def register_pca(ds, pca_result: dict, groups: dict | None) -> dict:
         "provenance": _provenance(ds, result_id, "stat_pca", matrix_id, dataset_fingerprint(ds)),
     }
     ds.results[result_id] = record
-    ds.last_pca = record
+    if make_current:
+        ds.last_pca = record
     return record
+
+
+# --- 比較の spec の組み立て（dataset_compare と最初の概観が共有する） --------------------------
+
+_ID_UNSAFE = re.compile(r"[^A-Za-z0-9_.\-]")
+
+
+def _id_part(name: str, position: int) -> str:
+    """対比 ID の群の部分。英数字が 1 つも残らない名前（日本語など）は群の並びの位置（`g<n>`）にする。"""
+    part = _ID_UNSAFE.sub("_", name)
+    return part if part.strip("_") else f"g{position}"
+
+
+def contrast_id_for(test: str, reference: str, taken: set[str], *, test_pos: int, ref_pos: int) -> str:
+    """群名から対比 ID を作る（spec の id は英数字と `_.-` だけ。重なれば番号を足す）。
+    名前が ID にできない群は並びの位置で呼ぶ（呼び出しをまたいで安定。実名は対比の要約の
+    reference / test に残る）。"""
+    base = f"{_id_part(test, test_pos)}_vs_{_id_part(reference, ref_pos)}"
+    cid, n = base, 2
+    while cid in taken:
+        cid, n = f"{base}_{n}", n + 1
+    taken.add(cid)
+    return cid
+
+
+def compare_spec(*, factors, comparisons, covariates, block, method, effect_size, bh_population,
+                 q_threshold, equivalence_fc, allow_confounded, preprocess, inputs) -> dict:
+    """引数から組み立てた spec v2（正規化前）。`analyses` は compare 1 つ。結果の `spec` はこれを
+    `normalize_spec_v2` したもの（`dataset_analysis_run` に渡せば同じ数字を出し直せる）。"""
+    from metabolomix.analysis.stats import spec_v2
+
+    return {
+        "schema": spec_v2.ANALYSIS_SCHEMA_V2,
+        "input": {"source": "dataset", "exclude_samples": list(inputs["exclude_samples"]),
+                  "exclude_features": list(inputs["exclude_features"]),
+                  "group_overrides": dict(inputs["group_overrides"])},
+        "preprocess": preprocess,
+        "design": {"factors": factors, "covariates": covariates, "block": block},
+        "comparisons": comparisons,
+        "analyses": [{"analysis_id": "compare", "kind": "compare", "test": method,
+                      "effect_size": effect_size, "bh_population": bh_population,
+                      "verdict": {"q": q_threshold, "equivalence_fc": equivalence_fc},
+                      "allow_confounded": allow_confounded}],
+        "primary": "compare",
+    }
 
 
 # --- 2 群への読み替え ---------------------------------------------------------------

@@ -17,7 +17,7 @@ from metabolomix.core.serialization import json_safe
 __all__ = ["RECORD_SCHEMA", "STEPS", "record_dir", "write_stats_record"]
 
 RECORD_SCHEMA = "lipidmix.stats-record.v1"
-STEPS = ("preprocess", "compare", "pca")
+STEPS = ("preprocess", "compare", "pca", "overview")
 
 
 def record_dir(reports_dir: Path) -> Path:

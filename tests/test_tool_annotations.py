@@ -45,6 +45,8 @@ EXPECTED_ANNOTATIONS = {
     "dataset_preprocess": LOCAL_WRITE_APPEND,
     "dataset_compare": LOCAL_WRITE_APPEND,    # 比較の記録を 1 件追記する（dataset_preprocess と同じ）
     "dataset_pca": LOCAL_WRITE_APPEND,       # PCA の記録を 1 件追記する（dataset_compare と同じ）
+    # 最初の概観。前処理と概観の記録を reports/stats/ に追記する（呼ぶたびに新しい記録＝非冪等）。
+    "dataset_overview": LOCAL_WRITE_APPEND,
     # ファイルを書き、同じ引数なら同じ内容で上書きする → 冪等
     "dataset_export_differential": LOCAL_WRITE,
     # シートを読み検証してからセッション状態を一括反映する。外部副作用はセッション

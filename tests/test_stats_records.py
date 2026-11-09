@@ -101,3 +101,8 @@ def test_quant_records_still_refuse_overwrite(tmp_path, monkeypatch):
     assert json.loads(path.read_text(encoding="utf-8"))["record_id"] == "q_fixed"
     # 記録の書き込みは atomic_io の 1 か所（quant に独自の排他作成を残さない）
     assert not hasattr(quant_records, "_create_exclusive_direct")
+
+
+def test_write_stats_record_accepts_overview_step(tmp_path):
+    assert "overview" in stats_records.STEPS
+    assert _write(tmp_path, "overview")["record_id"]

@@ -139,8 +139,9 @@ required; nothing is searched on its own) lists MS-DIAL output in the folder, an
    `load_dataset(directory=...)` (or `mztab_path=` / `job_path=` /
    `pipeline_path=`). It opens the dataset as a new handle that EVERY time
    becomes the current one (auto-selecting PeakProperties.arf over
-   DriftSpots.arf) and returns the counts, the group and role breakdown and the
-   library record — no overview or PCA is run for you. Tools called without
+   DriftSpots.arf) and returns the counts, the group and role breakdown, the
+   library record and a FIRST OVERVIEW (`overview`, see below; skip it with
+   `overview=False`). Tools called without
    `dataset_handle` act on that current dataset and use its files; a tool that
    needs a file the dataset does not have says so instead of searching a data
    folder. Look at `dataset_status` (`view=summary|samples|tags`) for the groups,
@@ -219,6 +220,18 @@ with the answer in `argument` (for `dataset_analysis_run` the answer goes into
 the spec `field`). Always surface the tool's caveats — group/batch confounding,
 small n (few replicates), and normalization status — as first-class findings,
 never bury them.
+
+FIRST OVERVIEW — `load_dataset` returns, and `dataset_overview` re-issues after
+curation, quantification, selection, exclusions or sample-sheet changes, a coarse
+map in four stages: quality -> global -> classes -> species. Present the quality
+stage first; when its verdict is `poor`, say so before any difference. The
+two-group direction is PROVISIONAL (the group seen first in the sample table is
+the reference) — never present it as the user's control; settle it with
+`dataset_compare(reference_group=..., test_group=...)`. The classes stage stays
+omitted until adducts are selected. Each fact carries an ID (`Q1`, `G1`, `C1`,
+`S1`; from outside `<overview_id>#Q1`). The server writes facts only: write any
+interpretation in a separate section from the facts, citing the fact IDs it rests
+on. Drill down with each stage's `next`.
 
 PARALLEL REANALYSIS — when several agents share this server (a reanalysis team),
 do not rely on the current dataset: `load_dataset` always makes the handle it

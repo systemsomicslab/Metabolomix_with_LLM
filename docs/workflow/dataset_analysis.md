@@ -43,7 +43,7 @@
 5.    └─ metabolomix/analysis/stats_results.py  study_inputs()（`matrix_id` なし）
 6. └─ metabolomix/analysis/stats/data.py  from_dataset()
 7. └─ metabolomix/tools/stats_tools.py  _covariate_specs()
-8. └─ metabolomix/tools/stats_tools.py  _spec_for()
+8. └─ metabolomix/analysis/stats_results.py  compare_spec()
 9. └─ metabolomix/analysis/stats/spec_v2.py  normalize_spec_v2()
 10. └─ metabolomix/tools/stats_tools.py  _prepare_default()（`matrix_id` なし）
 11.    └─ metabolomix/analysis/stats_results.py  prepare_default()
@@ -71,6 +71,42 @@
 5. └─ metabolomix/analysis/stats_results.py  unit_group_labels()
 6. └─ metabolomix/analysis/stats_results.py  register_pca()
 7. └─ metabolomix/tools/stats_tools.py  _write_pca_record()
+
+## dataset_overview
+
+最初の概観（spec 2026-11-06-dataset-overview-design）。`load_dataset` も読み込みの最後に同じ `build_overview_payload()` を呼ぶ
+（`embedded=True`、`dataset.md` の `load_dataset`）。統計は C のエンジンだけを通す: 既定の前処理（手順 3〜5。ドリフト補正の既定が
+未決〔`NeedsInput`〕なら drift を off にして作り直し、そう書く）→ 品質の純計算（手順 7〜10。前処理前の値）→ PCA（手順 12〜13）→
+spec v2 の比較（手順 15〜18。群が 1 つ・探索専用・完全交絡なら回さない）→ 選別の後だけ組成（手順 20）。比較と PCA は `make_current=False` で
+`ds.results` に置き、直近（`last_differential` / `last_pca`）は動かさない。事実の組み立ては `analysis/overview.py`（手順 6・11・19・21〜24）で、
+概観は `ds.results[ovw_…]`（`kind="overview"`、手順 25）と `reports/stats/`（step=overview、親は前処理の記録、手順 26）に残す。
+
+1. metabolomix/tools/overview_tools.py  dataset_overview()
+2. └─ metabolomix/tools/overview_tools.py  build_overview_payload()
+3.    └─ metabolomix/analysis/stats_results.py  matrix_inputs()
+4.    └─ metabolomix/analysis/stats_results.py  prepare_default()
+5.    └─ metabolomix/tools/_matrix_store.py  register_default()
+6.    └─ metabolomix/analysis/overview.py  group_plan()
+7.    └─ metabolomix/analysis/stats/confounding.py  confounding_report()
+8.    └─ metabolomix/analysis/stats/quality.py  qc_rsd_summary()
+9.    └─ metabolomix/analysis/stats/quality.py  failed_qc()
+10.   └─ metabolomix/analysis/stats/quality.py  quality_verdict()
+11.   └─ metabolomix/analysis/overview.py  group_comparisons()
+12.   └─ metabolomix/analysis/stats/pca.py  pca()
+13.   └─ metabolomix/analysis/stats_results.py  register_pca()
+14.   └─ metabolomix/tools/overview_tools.py  _compare()
+15.      └─ metabolomix/analysis/stats_results.py  compare_spec()
+16.      └─ metabolomix/analysis/stats/spec_v2.py  normalize_spec_v2()
+17.      └─ metabolomix/analysis/stats/spec_v2.py  run_spec_v2()
+18.      └─ metabolomix/analysis/stats_results.py  register_compare()
+19.   └─ metabolomix/analysis/overview.py  chain_state()
+20.   └─ metabolomix/analysis/stats/composition.py  composition()
+21.   └─ metabolomix/analysis/overview.py  quality_facts()
+22.   └─ metabolomix/analysis/overview.py  global_facts()
+23.   └─ metabolomix/analysis/overview.py  class_facts()
+24.   └─ metabolomix/analysis/overview.py  species_facts()
+25.   └─ metabolomix/analysis/overview.py  register_overview()
+26.   └─ metabolomix/tools/overview_tools.py  _write_record()
 
 ## dataset_export_differential
 

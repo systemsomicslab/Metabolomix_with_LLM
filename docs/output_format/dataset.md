@@ -26,6 +26,8 @@
   （`dataset_status` の `samples`）。ブランクは前処理で行列から外れ、QC は残る。QC・ブランクは 2 群比較に入らない。
   `dataset_exclude` で除いた試料・特徴は前処理と図と強度順の検索が除く（可逆）。
 - **MS/MS の実スペクトルは `.dcl`**（`dcl` トピック）。`.arf` のセルの MS/MS の有無は取得の参照があることだけを示す。
+- **最初の概観**。`load_dataset` の `overview` と `dataset_overview` は品質 → 全体 → クラス → 分子種の 4 段の事実（ID つき）。
+  2 群の向きは仮、クラスの段は付加体の選別の後だけ。意味は §11.9。
 - **EIC**。クロマトグラムは `.EIC.aef` から `dataset_plot(kind="eic" | "eic_compounds")` が描く（`eic` トピック）。
   `peak_top` は強度でなく頂点の座標。
 
@@ -604,6 +606,74 @@ PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（
 ローディング図は**単一の props の PCA** だけに対応する（スポットあたり複数の列を並べた PCA だと、どの列を描くか
 決まらないので `{"status": "error"}`。props を 1 つにして PCA をやり直す）。
 棒の色は `.arf2` の Ontology（クラス）。
+
+#### 11.9 最初の概観（`dataset_overview` と `load_dataset` の `overview`。構成見直し A）
+
+読み込んだ直後に「群の間で何が変わり、何が変わらなかったか」を **品質 → 全体 → クラス → 分子種** の 4 段で粗く示す。
+`load_dataset` は既定でこれを `overview` 欄に入れて返し（`overview=False` で切れる。失敗しても読み込みは成功し
+`{"status": "unavailable", "error": {...}, "next": ...}`）、`dataset_overview(top_n=5, dataset_handle=None)` は同じものを
+出し直す（除外・試料の表の訂正・キュレーション・定量の鎖の後）。
+
+**戻り値の形**（`load_dataset` の中では `counts` を省く。`summary` と重なるため）:
+
+| キー | 意味 |
+|---|---|
+| `overview_id` | `ovw_<12 桁>`。データの指紋・試料の表の版・行列・比較と PCA の結果・設定から決まる（同じ入力なら同じ ID） |
+| `provisional` | 定量の鎖（付加体の選別 `dataset_select_features`）を通る前なら `true`。分子種の数え方に同じ分子種の複数の付加体・内部標準の行が混ざりうる |
+| `state` | 1 行の状態（キュレーション・正規化・統合・選別の有無、前処理のレシピ、`assay_kind`）。ドリフト補正を飛ばしたら `drift skipped` |
+| `counts` | 役割ごとの試料数・特徴数・同定の水準（`msms` / `ms1` / `none`）の内訳（`dataset_overview` だけ） |
+| `quality` / `global` / `classes` / `species` | 各段。`facts`（事実の 1 行ずつ。先頭が ID）・`next`（掘る一手。引数は JSON）・省いた段は `omitted`（理由）。品質は `verdict` も |
+| `result_ids` | 概観が登録した `compare` / `pca` の結果 ID（回したものだけ） |
+| `record` | `reports/stats/` への記録（`written` と `record_id`・`path`、書けなければ `reason`） |
+
+**事実の ID**: 段ごとに `Q1, Q2, …` / `G1, …` / `C1, …` / `S1, …`。外から引くときは `<overview_id>#Q1`。
+解釈は事実と混ぜず別の節に書き、根拠の ID を挙げる。
+
+**品質（Q）** — Q1 が判定。
+
+| 判定 | 条件（閾値は記録の `settings.thresholds`） |
+|---|---|
+| `poor` | 群とバッチの完全交絡、失敗した QC 注入（総量が QC の中央値の 0.2 倍未満。QC 3 本以上のときだけ見る）がある、QC の RSD の中央値が 0.30 を超える |
+| `caution` | 部分的な交絡、注入順の偏り、QC の総量（log2）と注入順の Spearman の強い相関（|ρ| ≥ 0.6 かつ p < 0.05、QC 5 本以上のバッチ）、技術反復の疑い |
+| `not_evaluable` | QC が無い・足りず RSD を評価できない（理由 `qc_not_evaluable`。バッチの交絡も評価できなければ `no_qc_and_batch_unknown`）。**QC が無いときは `ok` と言わない**。`caution` / `poor` の判定にも `qc_not_evaluable` を添える |
+| `ok` | 上のどれでもない |
+
+`poor` でも差は出すが、各段の事実に「品質 Q1 が poor のため参考」と付く（完全交絡のときだけ比較そのものを回さない）。
+QC のある換算済みデータでドリフト補正の既定が未決（`dataset_preprocess` なら `needs_input`）のときは、概観は止まらず
+補正なしで計算し、そのことを事実と `next`（`dataset_preprocess(drift_mode=…)`）に出す。
+既定の前処理が失敗する（足切りで特徴が 1 つも残らない など）ときも概観は失敗しない: 品質の段（前処理の前の試料から
+計算する）だけを出し、全体・クラス・分子種の段は `omitted` に失敗の理由（足切りの内訳 `details` を含む）を書いて省く。
+交絡はこのとき評価しない。
+
+**全体（G）** — 既定の前処理の行列で PCA（軸は生体の個体、QC は投影）。各軸の寄与率と、群が各軸のばらつきを
+どれだけ説明するか（η²）、群の重心。比較を回したら判定の数（2 群）か moderated F で差のある特徴の数（多群）。
+
+**クラス（C）** — 組成（クラスの総量と CLR）。**付加体の選別の後だけ**出す。選別の前は同じ分子種の複数の付加体や
+内部標準の行がクラスの合計に入り、見せかけの `unchanged` が出るので省く（`omitted` と、鎖を進める `next`）。
+mzTab-M など解析フォルダ以外から開いたデータは定量の鎖が使えないので、`dataset_analysis_run` の
+`kind="composition"` を案内する。2 群は `class n_species log2fc_total ci_low ci_high verdict_total clr_log2fc verdict_clr` の
+TSV（`changed` と `unchanged` を最大 5 つずつ）、多群は moderated F の q（`class n_species f_q_total`）。
+
+**分子種（S）** — `changed` / `unchanged` / `inconclusive` の数（`changed` は上昇・下降の内訳つき）。
+**`inconclusive` は「変わっていない」ではない**（同等性の幅に収まった `unchanged` だけが変わっていない）。
+出方（検出の有無）だけに差があり強度の判定は `inconclusive` の特徴の数も別に出す（検出の情報が無いデータでは `null`）。
+2 群は上位の TSV（`contrast_id feature_id name id_level log2fc ci_low ci_high q`）、多群は F で差のある特徴の中での
+対ごとの数（`pair n_changed n_up n_down`）と上位（`feature_id name id_level f_q`）。
+
+**群と向き**:
+- 群が 1 つ以下・探索専用のデータセット（`allow_incomplete=True` で開いた未完了の実行）・群とバッチの完全交絡では
+  比較を回さない（`omitted` に理由）。
+- 2 群の向きは**仮**: 試料の表で先に出た群を対照にする（事実に「仮の向き」と付く）。向きを決めるのは
+  `dataset_compare(reference_group=…, test_group=…)`。
+- 3〜6 群は全対、7 群以上は対照との対だけ（と moderated F）。
+- 判定は moderated t、q ≤ 0.05、同等性の幅 1.2 倍（`dataset_compare` の既定と同じ）。
+
+**結果の置き場所**: 概観の PCA と比較は `ds.results` に入るが、直近の結果（`dataset_plot` / 書き出しの既定）には**しない**。
+概観の比較の記録には `origin: "overview"` が付き、`dataset_feature_search` の既定（`result_ids` 省略）の選択からは外れる
+（`result_ids=["<result_id>#<contrast_id>"]` と名指しすれば引ける）。利用者が同じ比較を先に `dataset_compare` で
+回していれば、その記録に印は付けない。概観そのものは `ds.results[overview_id]`（`kind: "overview"`）。
+記録は解析フォルダの `reports/stats/` に、既定の前処理と概観の 2 件（概観の記録は前処理の記録を親に持つ）。
+書き先が無ければ書かずに成功する。
 
 ## 旧 `arf2` トピック（`.arf2` / スポット代表。§4, §8.2）
 

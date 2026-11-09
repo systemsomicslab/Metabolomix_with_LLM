@@ -920,6 +920,8 @@ def select_results(ds, result_ids: list[str] | None, *,
     - 名指しの ID は ``result_id`` か ``result_id#contrast_id``。``contrast_id`` 引数があれば ``result_id`` に
       ``#contrast_id`` を付けたのと同じ（食い違えば `DATASET_BAD_REQUEST`）。
     - 名指しした対比が無い・交互作用なら `CONTRAST_REQUIRED` / `CONTRAST_NOT_TWO_GROUP`（候補つき）。
+    - 省略（None）は、最初の概観が回した仮の比較（記録の ``origin == "overview"``）を含めない
+      （名指しすれば引ける）。
     - 省略（None）で ``contrast_id`` があれば、それを持つ ``compare`` の記録だけがその対比になる。どの記録も
       持たなければ `CONTRAST_REQUIRED`（候補は全記録の対比）。
     - ``single=True``（単一の対比が要る呼び出し）では、対比が複数の記録を ID だけで名指しすると
@@ -937,14 +939,15 @@ def select_results(ds, result_ids: list[str] | None, *,
     selected, stale, missing = [], [], []
     done: set[str] = set()
     if result_ids is None:
-        records = [(rid, r) for rid, r in ds.results.items() if (r or {}).get("kind") == "compare"]
+        candidates = {rid: r for rid, r in ds.results.items() if (r or {}).get("origin") != "overview"}
+        records = [(rid, r) for rid, r in candidates.items() if (r or {}).get("kind") == "compare"]
         if contrast_id is not None and records and not any(
                 contrast_id in contrast_ids(r) for _, r in records):
             all_ids = sorted({c for _, r in records for c in contrast_ids(r)})
             raise DomainError("CONTRAST_REQUIRED",
                               f"どの比較の結果にも対比 {contrast_id!r} がありません。",
                               {"contrast_id": contrast_id, "contrast_ids": all_ids})
-        for rid, result in ds.results.items():
+        for rid, result in candidates.items():
             kind = (result or {}).get("kind")
             if kind not in ("two_group", "compare"):
                 continue

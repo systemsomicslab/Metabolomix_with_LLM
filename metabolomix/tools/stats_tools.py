@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import math
-import re
 
 from mcp.types import ToolAnnotations
 
@@ -171,29 +170,10 @@ _WARNING_LIST_KEYS = ("samples", "sample_ids", "unit_ids", "examples", "subjects
 _TOP_COLUMNS = ["contrast_id", "feature_id", "name", "log2fc", "ci_low", "ci_high", "q", "verdict"]
 #: top の件数の上限（戻り値を肥大させない）。
 _TOP_N_MAX = 50
-_ID_UNSAFE = re.compile(r"[^A-Za-z0-9_.\-]")
 
 
 def _bad_request(message: str, **details) -> DomainError:
     return DomainError("DATASET_BAD_REQUEST", message, details or None)
-
-
-def _id_part(name: str, position: int) -> str:
-    """対比 ID の群の部分。英数字が 1 つも残らない名前（日本語など）は群の並びの位置（`g<n>`）にする。"""
-    part = _ID_UNSAFE.sub("_", name)
-    return part if part.strip("_") else f"g{position}"
-
-
-def _contrast_id(test: str, reference: str, taken: set[str], *, test_pos: int, ref_pos: int) -> str:
-    """群名から対比 ID を作る（spec の id は英数字と `_.-` だけ。重なれば番号を足す）。
-    名前が ID にできない群は並びの位置で呼ぶ（呼び出しをまたいで安定。実名は対比の要約の
-    reference / test に残る）。"""
-    base = f"{_id_part(test, test_pos)}_vs_{_id_part(reference, ref_pos)}"
-    cid, n = base, 2
-    while cid in taken:
-        cid, n = f"{base}_{n}", n + 1
-    taken.add(cid)
-    return cid
 
 
 def _design_and_comparisons(reference_group, test_group, groups, comparisons, factors):
@@ -227,7 +207,7 @@ def _design_and_comparisons(reference_group, test_group, groups, comparisons, fa
     else:
         ref, tests = reference_group, [test_group]
     taken: set[str] = set()
-    return ["group"], [{"id": _contrast_id(t, ref, taken, test_pos=i, ref_pos=0), "factor": "group",
+    return ["group"], [{"id": stats_results.contrast_id_for(t, ref, taken, test_pos=i, ref_pos=0), "factor": "group",
                         "reference": ref, "test": t} for i, t in enumerate(tests, start=1)]
 
 
@@ -255,26 +235,6 @@ def _covariate_specs(study, covariates) -> list[dict]:
         out.append({"name": name,
                     "type": "numeric" if all(_is_number(v) for v in values) else "categorical"})
     return out
-
-
-def _spec_for(*, factors, comparisons, covariates, block, method, effect_size, bh_population,
-              q_threshold, equivalence_fc, allow_confounded, preprocess, inputs) -> dict:
-    """引数から組み立てた spec v2（正規化前）。`analyses` は compare 1 つ。結果の `spec` はこれを
-    `normalize_spec_v2` したもの（`dataset_analysis_run` に渡せば同じ数字を出し直せる）。"""
-    return {
-        "schema": spec_v2.ANALYSIS_SCHEMA_V2,
-        "input": {"source": "dataset", "exclude_samples": list(inputs["exclude_samples"]),
-                  "exclude_features": list(inputs["exclude_features"]),
-                  "group_overrides": dict(inputs["group_overrides"])},
-        "preprocess": preprocess,
-        "design": {"factors": factors, "covariates": covariates, "block": block},
-        "comparisons": comparisons,
-        "analyses": [{"analysis_id": "compare", "kind": "compare", "test": method,
-                      "effect_size": effect_size, "bh_population": bh_population,
-                      "verdict": {"q": q_threshold, "equivalence_fc": equivalence_fc},
-                      "allow_confounded": allow_confounded}],
-        "primary": "compare",
-    }
 
 
 def _fmt(value, spec: str = ".4g") -> str:
@@ -459,7 +419,7 @@ def dataset_compare(
         except stats_results.MatrixNotFound:
             return _matrix_not_found(matrix_id)
         study = from_dataset(ds, **inputs)
-        spec = spec_v2.normalize_spec_v2(_spec_for(
+        spec = spec_v2.normalize_spec_v2(stats_results.compare_spec(
             factors=design_factors, comparisons=spec_comparisons,
             covariates=_covariate_specs(study, covariates), block=block, method=method,
             effect_size=effect_size, bh_population=bh_population, q_threshold=q_threshold,

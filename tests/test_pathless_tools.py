@@ -38,9 +38,9 @@ def _folder(root, name="neg"):
     return paths
 
 
-def _open(paths, *, library="auto"):
+def _open(paths, *, library="auto", overview=True):
     body = json.loads(handle_tools.load_dataset(directory=str(paths["arf2"].parent),
-                                                library=library))
+                                                library=library, overview=overview))
     assert body["status"] == "success", body
     return handles.registry.get(body["dataset_handle"])
 
@@ -80,7 +80,9 @@ def test_pathless_tools_do_not_fall_back_after_close(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     # もう 1 本、別のハンドルを開いておく（それも直近の代わりにしない）。
     other = _folder(tmp_path, "other")
-    other_handle = _open(other)
+    # 読み込み時の最初の概観は自分の解析フォルダの reports/ に記録を書く（設計どおり）。ここで縛るのは
+    # パスを省いたツールが閉じた後に書かないことなので、概観は切って開く。
+    other_handle = _open(other, overview=False)
     handles.registry.close(handle.handle_id)
     session_state.session.current_handle_id = handle.handle_id  # 閉じた直近を指したまま
 
