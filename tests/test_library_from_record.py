@@ -295,3 +295,30 @@ def test_session_dataset_without_a_record_asks_for_file_path(tmp_path, monkeypat
     assert out["candidates"] == ["Setting_Pos.msp"] and "file_path" in out["message"]
     assert session_state.session.library.store is None
     assert str(setting.parent) not in json.dumps(out, ensure_ascii=False)
+
+
+def test_v3_library_record_comes_from_unit_inputs(tmp_path):
+    """v3 の run のライブラリの記憶は、選んだ極性の単位の inputs から（極性ごとに別）。"""
+    import hashlib
+
+    from metabolomix.pipeline import store
+    from tests.test_dataset_opening import _v3_run
+
+    neg = _msp(tmp_path / "libs" / "Neg_Lab.msp", "n")
+    pos = _msp(tmp_path / "libs" / "Pos_Lab.msp", "p")
+    run = _v3_run(tmp_path / "r", ("negative", "positive"))
+    record = store.load_run(run)
+    for polarity, lib in (("negative", neg), ("positive", pos)):
+        record["units"][polarity]["inputs"].update({"library_mode": "msp_only", "msp": {
+            "path": str(lib), "file": lib.name, "source": "config_file",
+            "sha256": hashlib.sha256(lib.read_bytes()).hexdigest()}})
+    store.save_run(run, record, expected_revision=record["state_revision"])
+
+    for polarity, lib in (("negative", neg), ("positive", pos)):
+        out = json.loads(handle_tools.load_dataset(pipeline_path=str(run), polarity=polarity,
+                                                   library="none", overview=False))
+        assert out["status"] == "success", out
+        assert out["library_record"]["file"] == lib.name
+        assert out["library_record"]["status"] == "known"
+        assert out["library_record"]["origin"] == "run_inputs"
+        assert str(lib.parent) not in json.dumps(out, ensure_ascii=False)

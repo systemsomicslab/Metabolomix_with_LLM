@@ -76,11 +76,11 @@ mzTab-M は mzTab-M のフォルダ。指紋には入れない）を決める。
 16.            └─ metabolomix/mztab/evidence.py join_axes()
 17.            └─ metabolomix/mztab/evidence.py matching_arfs()
 18.               └─ metabolomix/mztab/evidence.py scan_arf()（最初に通った候補の ArfScan を返す）
-19.            └─ [pipeline で候補が合わないとき、input/ のバッチを新しい順に] metabolomix/dataset/opening.py pipeline_arf2_candidates()
+19.            └─ [pipeline で候補が合わないとき、単位の解析フォルダのバッチを新しい順に] metabolomix/dataset/alignment_files.py arf2_batches_newest_first()
 20.         └─ metabolomix/dataset/alignment_files.py select_alignment()
 21.         └─ metabolomix/dataset/msdial_adapter.py load_msdial_folder()（照合に読んだ ArfScan を使い、`.arf` を読み直さない）
 22.      └─ [pipeline_path を解析フォルダで] metabolomix/dataset/opening.py _folder_via_run()
-23.         └─ metabolomix/pipeline/session_handoff.py run_console_job()
+23.         └─ metabolomix/pipeline/session_handoff.py resolve_unit()
 24.         └─ metabolomix/dataset/opening.py _folder_via_job()
 25.         └─ metabolomix/pipeline/session_handoff.py run_manifest_rows()
 26.         └─ metabolomix/analysis/sample_manifest.py resolve_metadata()
@@ -172,7 +172,7 @@ job_path 経路（`source="mztab"`。analysis-job.json の宣言 polarity + meas
 pipeline_path 経路（`source="mztab"`。完了した run の成果物をまとめて載せる）:
 1. metabolomix/dataset/opening.py _load()
 2. └─ metabolomix/pipeline/session_handoff.py load_run_dataset()
-3.    └─ metabolomix/pipeline/session_handoff.py run_console_job()
+3.    └─ metabolomix/pipeline/session_handoff.py resolve_unit()
 4.       └─ metabolomix/pipeline/recovery.py normalize_pipeline_root()
 5.       └─ metabolomix/pipeline/store.py load_run()
 6.    └─ metabolomix/mztab/loading.py load_dataset_state()

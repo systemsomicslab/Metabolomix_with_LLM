@@ -857,3 +857,170 @@ def test_folder_listing_counts_mdproject(tmp_path):
 
     (tmp_path / "study.mdproject").write_bytes(b"x")
     assert str(tmp_path / "study.mdproject") in _folder_listing(tmp_path)
+
+
+# ---------- pipeline v3（極性の単位と受領） ----------
+
+def _v3_run(tmp_path: Path, polarities=("negative",), *, rows=None, failed=(),
+            with_receipt: bool = True, stem: str = "AlignResult-1") -> Path:
+    """v3 の run: 極性ごとに `<極性>/input/` の解析フォルダと Console のジョブ、受領を持つ。
+
+    `rows` は受領の `samples.rows`（全単位に同じ）。`failed` の単位は upstream が失敗したまま。"""
+    from metabolomix.core.atomic_io import atomic_write_json
+    from metabolomix.pipeline import receipt as receipt_mod
+    from metabolomix.pipeline import store
+    from tests.pipeline_fixtures import create_synthetic_run
+
+    run = create_synthetic_run(tmp_path, polarities=polarities)
+    record = store.load_run(run)
+    for polarity in polarities:
+        job = _job(run / polarity, with_folder=False)
+        write_msdial_folder(run / polarity / "input", **_spec(), stem=stem, with_mddata=False)
+        record["units"][polarity]["upstream"] = {
+            "console_job_path": str(job.relative_to(run)).replace("\\", "/")}
+        for handler in store.UNIT_HANDLERS:
+            stage = record["stages"].setdefault(f"{handler}:{polarity}", {})
+            stage["status"] = ("failed" if polarity in failed and handler == "upstream"
+                               else "succeeded")
+    store.save_run(run, record, expected_revision=record["state_revision"])
+    if with_receipt:
+        record = store.load_run(run)
+        receipt = receipt_mod.build_receipt(record, run)
+        for polarity in polarities:
+            receipt["units"][polarity]["samples"]["rows"] = rows
+        path = run / receipt_mod.RECEIPT_RELATIVE_PATH
+        atomic_write_json(path, receipt)
+        ref = receipt_mod.persist_result(run, {
+            "output_name": receipt_mod.RECEIPT_OUTPUT_NAME, "kind": "receipt",
+            "result_id": "res_receipt_t", "path": str(path)})
+        record["results"] = [*record.get("results", []), ref]
+        store.save_run(run, record, expected_revision=record["state_revision"])
+    return run
+
+
+def test_v3_run_opens_the_receipt_analysis_folder_with_manifest_rows(tmp_path):
+    rows = [_manifest_row(f"s{i}", "ctrl" if i < 2 else "case") for i in range(4)]
+    run = _v3_run(tmp_path, rows=rows)
+    opened = open_dataset(pipeline_path=str(run))
+    assert opened.adapter == "msdial_folder" and opened.polarity == "negative"
+    assert opened.dataset.analysis_dir.replace("\\", "/").endswith("negative/input")
+    assert [r["group"] for r in opened.dataset.sample_metadata_rows] \
+        == ["ctrl", "ctrl", "case", "case"]
+    assert opened.dataset.handoff_report is None
+
+
+def test_v3_receipt_relative_source_file_is_made_absolute(tmp_path):
+    from metabolomix.pipeline import session_handoff
+
+    row = {**_manifest_row("s0", "ctrl"), "source_file": "negative/input/s0.wiff"}
+    run = _v3_run(tmp_path, rows=[row])
+    unit = session_handoff.resolve_unit(run)
+    assert Path(unit.manifest_rows[0]["source_file"]) == run / "negative" / "input" / "s0.wiff"
+
+
+def test_two_polarity_run_without_polarity_needs_input(tmp_path):
+    from metabolomix.tools.handle_tools import load_dataset
+
+    run = _v3_run(tmp_path, ("negative", "positive"))
+    assert _code(lambda: open_dataset(pipeline_path=str(run))).code == "PIPELINE_POLARITY_REQUIRED"
+    out = json.loads(load_dataset(pipeline_path=str(run)))
+    body = out["needs_input"]
+    assert body["field"] == "polarity" and body["argument"] == "polarity"
+    assert body["retry_tools"] == ["load_dataset"]
+    assert [o["value"] for o in body["options"]] == ["negative", "positive"]
+    assert handles.registry.list() == []
+
+
+def test_two_polarity_run_opens_each_unit_by_polarity(tmp_path):
+    from metabolomix.tools.handle_tools import load_dataset
+
+    run = _v3_run(tmp_path, ("negative", "positive"))
+    first = json.loads(load_dataset(pipeline_path=str(run), polarity="negative", overview=False))
+    second = json.loads(load_dataset(pipeline_path=str(run), polarity="positive", overview=False))
+    assert first["status"] == second["status"] == "success"
+    assert first["dataset_handle"] != second["dataset_handle"]
+    assert handles.registry.get(second["dataset_handle"]).source["polarity"] == "positive"
+    assert first["reused_base"] is False and second["reused_base"] is False
+
+
+def test_unit_not_validated_is_refused(tmp_path):
+    run = _v3_run(tmp_path, ("negative", "positive"), failed=("negative",))
+    err = _code(lambda: open_dataset(pipeline_path=str(run), polarity="negative"))
+    assert err.code == "PIPELINE_UNIT_NOT_VALIDATED"
+    assert err.details["validated"] == ["positive"]
+    # もう片方の単位は開ける。省いたときの選択肢は検証を通った単位だけ。
+    assert open_dataset(pipeline_path=str(run), polarity="positive").polarity == "positive"
+    ask = _code(lambda: open_dataset(pipeline_path=str(run)))
+    assert ask.code == "PIPELINE_POLARITY_REQUIRED"
+    assert [o["value"] for o in ask.details["options"]] == ["positive"]
+
+
+def test_unknown_polarity_is_refused(tmp_path):
+    run = _v3_run(tmp_path)
+    err = _code(lambda: open_dataset(pipeline_path=str(run), polarity="positive"))
+    assert err.code == "PIPELINE_POLARITY_NOT_FOUND" and err.details["available"] == ["negative"]
+
+
+@pytest.mark.parametrize("entry", ["directory", "mztab_path", "job_path"])
+def test_polarity_with_other_entries_is_refused(tmp_path, entry):
+    folder = _folder(tmp_path / "gui")
+    job = _job(tmp_path / "j")
+    mztab = write_matching_mztab(tmp_path / "direct" / "x.mzTab", _spec())
+    args = {"directory": str(folder), "mztab_path": str(mztab), "job_path": str(job)}[entry]
+    err = _code(lambda: open_dataset(**{entry: args}, polarity="negative"))
+    assert err.code == "PIPELINE_POLARITY_NOT_APPLICABLE"
+
+
+def test_legacy_v1_run_still_opens_with_its_manifest(tmp_path):
+    rows = [_manifest_row(f"s{i}", "ctrl" if i < 2 else "case") for i in range(4)]
+    run = _pipeline(tmp_path, _job(tmp_path), rows=rows)
+    opened = open_dataset(pipeline_path=str(run))
+    assert [r["group"] for r in opened.dataset.sample_metadata_rows] \
+        == ["ctrl", "ctrl", "case", "case"]
+    assert opened.polarity == "unknown"
+    # 旧 v1 の run は単位が 1 つ（極性 unknown）。極性の名指しも通る。
+    assert open_dataset(pipeline_path=str(run), polarity="unknown").reused_base is False
+
+
+def test_v3_run_mztab_source_has_no_restored_results(tmp_path):
+    rows = [_manifest_row(f"s{i}", "ctrl" if i < 2 else "case") for i in range(4)]
+    run = _v3_run(tmp_path, ("negative", "positive"), rows=rows)
+    opened = open_dataset(pipeline_path=str(run), polarity="positive", source="mztab")
+    assert opened.adapter == "mztab" and opened.polarity == "positive"
+    assert opened.dataset.handoff_report is None
+    assert not opened.dataset.results
+    assert [r["group"] for r in opened.dataset.sample_metadata_rows] \
+        == ["ctrl", "ctrl", "case", "case"]
+
+
+def test_v3_run_without_a_readable_receipt_reads_the_unit_record(tmp_path):
+    run = _v3_run(tmp_path, with_receipt=False)
+    opened = open_dataset(pipeline_path=str(run))
+    assert any("受領" in note for note in opened.notes)
+
+
+def test_v3_base_cache_reloads_when_the_receipt_changes(tmp_path):
+    run = _v3_run(tmp_path)
+    assert open_dataset(pipeline_path=str(run)).reused_base is False
+    assert open_dataset(pipeline_path=str(run)).reused_base is True
+    with open(run / "results" / "receipt.json", "a", encoding="utf-8") as handle:
+        handle.write(" ")
+    assert open_dataset(pipeline_path=str(run)).reused_base is False
+
+
+def test_v3_cache_is_per_polarity(tmp_path):
+    run = _v3_run(tmp_path, ("negative", "positive"))
+    assert open_dataset(pipeline_path=str(run), polarity="negative").reused_base is False
+    assert open_dataset(pipeline_path=str(run), polarity="positive").reused_base is False
+    assert open_dataset(pipeline_path=str(run), polarity="positive").reused_base is True
+
+
+def test_pipeline_input_batches_are_found_by_the_shared_arf2_pattern(tmp_path):
+    """解析フォルダのバッチは名前を問わず `*.arf2`（service の検証と同じ共有の規則）で探す。"""
+    from metabolomix.dataset import opening
+
+    run = _v3_run(tmp_path, stem="Batch_2026_01")
+    names = [p.name for p in opening.pipeline_arf2_candidates(run, "negative")]
+    assert names == ["Batch_2026_01.arf2"]
+    assert opening.pipeline_arf2(run, "negative").name == "Batch_2026_01.arf2"
+    assert opening.pipeline_arf2_candidates(run, "positive") == []

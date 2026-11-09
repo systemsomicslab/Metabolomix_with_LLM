@@ -88,7 +88,7 @@ def _fake_pipeline_run(tmp_path, *names: str) -> Path:
     """
     run = tmp_path / "pipeline_x"
     (run / "input").mkdir(parents=True)
-    (run / "pipeline-run.json").write_text('{"schema": "pipeline-run.v1"}', encoding="utf-8")
+    (run / "pipeline-run.json").write_text('{"schema": "pipeline-run.v1", "upstream": {"console_job_path": "job/analysis-job.json"}}', encoding="utf-8")
     for name in names:
         (run / "input" / name).write_bytes(b"")
     return run
@@ -100,7 +100,7 @@ def test_handle_open_finds_pipeline_arf2(tmp_path, monkeypatch, pos_mztab):
 
     run = _fake_pipeline_run(tmp_path, "AlignResult-1.arf2", "AlignResult-1.dcl")
     monkeypatch.setattr(opening, "_load",
-                        lambda kind, path, allow: load_dataset_state(mztab_path=pos_mztab))
+                        lambda *_args: load_dataset_state(mztab_path=pos_mztab))
 
     out = json.loads(handle_tools.load_dataset(pipeline_path=str(run), library="none",
                                                       source="mztab"))
@@ -116,7 +116,7 @@ def test_handle_open_picks_newest_arf2_name_in_pipeline_input(tmp_path, monkeypa
     run = _fake_pipeline_run(tmp_path, "AlignResult-1.arf2", "AlignResult-2.arf2",
                              "AlignResult-2.dcl")
     monkeypatch.setattr(opening, "_load",
-                        lambda kind, path, allow: load_dataset_state(mztab_path=pos_mztab))
+                        lambda *_args: load_dataset_state(mztab_path=pos_mztab))
 
     out = json.loads(handle_tools.load_dataset(pipeline_path=str(run), library="none",
                                                       source="mztab"))
@@ -130,7 +130,7 @@ def test_handle_open_without_pipeline_arf2_stays_null(tmp_path, monkeypatch, pos
 
     run = _fake_pipeline_run(tmp_path)
     monkeypatch.setattr(opening, "_load",
-                        lambda kind, path, allow: load_dataset_state(mztab_path=pos_mztab))
+                        lambda *_args: load_dataset_state(mztab_path=pos_mztab))
 
     out = json.loads(handle_tools.load_dataset(pipeline_path=str(run), library="none",
                                                       source="mztab"))

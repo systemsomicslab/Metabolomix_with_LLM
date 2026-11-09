@@ -20,7 +20,7 @@ from mcp.types import ToolAnnotations
 from metabolomix.core import handles, session_state, user_config
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
-from metabolomix.core.mcp_errors import mztab_error
+from metabolomix.core.mcp_errors import mztab_error, needs_input
 from metabolomix.core.serialization import json_payload, json_safe
 from metabolomix.dataset import opening
 
@@ -42,15 +42,16 @@ def alignment_files_for(opened, arf2_path: str | None = None) -> tuple[str | Non
     selection = opened.selection
     if selection is not None and not arf2_path:
         return str(selection.arf2), (str(selection.dcl) if selection.dcl else None)
-    return _alignment_files(opened.dataset, arf2_path, opened.kind, opened.path)
+    return _alignment_files(opened.dataset, arf2_path, opened.kind, opened.path, opened.polarity)
 
 
 def _alignment_files(ds, arf2_path: str | None, kind: str | None = None,
-                     path: str | None = None) -> tuple[str | None, str | None]:
+                     path: str | None = None,
+                     polarity: str | None = None) -> tuple[str | None, str | None]:
     """スポットの照合に使う `.arf2` と `.dcl`。決まらなければ None。
 
     探す順: 明示の `arf2_path` → 検出状態を取り込んだ `.arf` の同じバッチ → mzTab の隣
-    → （`kind == "pipeline_path"` のとき）run の `input/AlignResult-*.arf2`。
+    → （`kind == "pipeline_path"` のとき）run の極性の単位の `input/*.arf2`。
     """
     from metabolomix.curation import apply as curation_apply
     from metabolomix.msdial import alignment_spot
@@ -67,7 +68,7 @@ def _alignment_files(ds, arf2_path: str | None, kind: str | None = None,
         arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p, **lookup)
                                   for p in (getattr(ds, "source_files", None) or {}))), None)
     if arf2 is None and kind == "pipeline_path" and path:
-        arf2 = opening.pipeline_arf2(path)
+        arf2 = opening.pipeline_arf2(path, polarity)
     if arf2 is None or not arf2.is_file():
         return None, None
     dcl = alignment_spot.alignment_sibling(arf2, ".dcl")
@@ -127,6 +128,7 @@ def _max_handles_or_none() -> int | None:
           structured_output=False)
 def load_dataset(directory: str | None = None, mztab_path: str | None = None,
                  job_path: str | None = None, pipeline_path: str | None = None,
+                 polarity: str | None = None,
                  allow_incomplete: bool = False, source: str = "auto",
                  measure: str = "peak_height", arf2_path: str | None = None,
                  library: str = "auto", overview: bool = True) -> str:
@@ -141,6 +143,13 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
       - job_path: analysis-job.json へのパス。ジョブの宣言（polarity・measure）で正準
         mzTab-M を一意に選ぶ。
       - pipeline_path: `pipeline_run` が返した pipeline-run.json（またはその親ディレクトリ）。
+        run の受領（`results/receipt.json`）が指す、極性ごとの解析フォルダを開く。
+
+    polarity: `pipeline_path` のときだけ使う。開く極性の単位（`"negative"` / `"positive"`）。
+        単位が 1 つの run では省ける。2 極性の run で省くと `needs_input`（選べる極性つき。
+        検証を通った単位だけ）。検証を通っていない単位は `PIPELINE_UNIT_NOT_VALIDATED`
+        （`allow_incomplete=True` なら探索用に読む）。他の入口で渡すと
+        `PIPELINE_POLARITY_NOT_APPLICABLE`。2 極性の run はハンドルが 2 つになる。
 
     source: どのアダプタで読むか。`"auto"`（既定）/ `"folder"` / `"mztab"`。
         - `directory` は解析フォルダ（`"mztab"` はエラー）、`mztab_path` は mzTab-M
@@ -219,7 +228,7 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         handles.registry.check_capacity()  # 長い読み込みの前に断る（adopt_handle でもう一度確かめる）
         opened = opening.open_dataset(directory=directory, mztab_path=mztab_path,
                                       job_path=job_path, pipeline_path=pipeline_path,
-                                      source=source, measure=measure,
+                                      polarity=polarity, source=source, measure=measure,
                                       allow_incomplete=allow_incomplete)
         ds = opened.dataset
         polarity, polarity_source, polarity_notes = dataset_polarity(ds)
@@ -228,6 +237,7 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         handle = handles.DatasetHandle(
             ds, polarity=polarity, polarity_source=polarity_source,
             source={"kind": opened.kind, "path": opened.path,
+                    **({"polarity": opened.polarity} if opened.polarity else {}),
                     "allow_incomplete": bool(allow_incomplete),
                     "adapter": opened.adapter, "measure": measure},
             arf2_path=arf2, dcl_path=dcl)
@@ -244,6 +254,9 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
             handle.close()
             raise
     except DomainError as exc:
+        if exc.code == "PIPELINE_POLARITY_REQUIRED":
+            return needs_input("polarity", exc.message, (exc.details or {})["options"],
+                               argument="polarity", retry_tools=["load_dataset"])
         return mztab_error(exc.code, exc.message, exc.details or None)
 
     library_info = None

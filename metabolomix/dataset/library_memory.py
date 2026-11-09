@@ -105,15 +105,23 @@ def _abs_in_run(value, pipeline_root: Path) -> Path:
     return (path if path.is_absolute() else pipeline_root / path).resolve()
 
 
-def remember_from_run(pipeline_root: Path) -> dict:
-    """パイプラインの run が固定した入力（`inputs.msp` / `inputs.lbm`）から覚える。
+def remember_from_run(pipeline_root: Path, polarity: str | None = None) -> dict:
+    """パイプラインの run の極性の単位が固定した入力（`inputs.msp` / `inputs.lbm`）から覚える。
 
-    run が固定した sha256 と今のファイルを突き合わせ、違う・無いなら `mismatch`。
+    単位は `store.run_units` から引く（旧 v1 の run は 1 単位）。`polarity` を省いて単位が 1 つなら
+    それ、複数なら決められないので `unknown`。run が固定した sha256 と今のファイルを突き合わせ、
+    違う・無いなら `mismatch`。
     """
-    from metabolomix.pipeline.store import load_run
+    from metabolomix.pipeline import store
 
     pipeline_root = Path(pipeline_root)
-    inputs = load_run(pipeline_root).get("inputs")
+    units = store.run_units(store.load_run(pipeline_root))
+    if polarity is None and len(units) == 1:
+        polarity = next(iter(units))
+    unit = units.get(polarity) if polarity is not None else None
+    if unit is None:
+        return _record()
+    inputs = unit.get("inputs")
     inputs = inputs if isinstance(inputs, dict) else {}
     msp = inputs.get("msp") if isinstance(inputs.get("msp"), dict) else {}
     lbm = inputs.get("lbm") if isinstance(inputs.get("lbm"), dict) else {}

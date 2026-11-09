@@ -1,24 +1,27 @@
 """完了した run の成果物を、対話セッションが使える DatasetState へ戻す層。
 
-`load_dataset(pipeline_path=..., source="mztab")`（と同じ入口 `dataset.opening` を通る
-`load_dataset`）だけが `load_run_dataset` を呼ぶ。解析フォルダのアダプタで run を読む
-ときは `run_console_job` と `run_manifest_rows` だけを借り、差次的結果は戻さない。
-dataset・解決済み試料対応表・差次的結果は同じ run から**まとめて**載せる
-（別の run の結果が混ざると群の対応が黙ってずれるため）。
+`load_dataset(pipeline_path=..., polarity=...)`（`dataset.opening`）が `resolve_unit` で
+極性の単位を 1 つ選び、その単位の解析フォルダ・Console のジョブ・試料の対応表を引く。
+v3 の run は最後の工程が書いた受領（`receipt.read_receipt`）から読み、受領が無い・照合できない
+ときだけ run の記録の単位から読む。旧 v1 の run は読むだけの記録（`store.is_legacy`）で、
+1 単位として今までどおり開く。`source="mztab"` で読むとき（`load_run_dataset`）、差次的結果を
+戻すのは旧 v1 の run だけ。
 
 グローバル session は import しない（この層は DatasetState を作って返すだけで、
 どこへ置くかは呼び出し側＝MCP 公開層が決める）。
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from metabolomix.analysis import result_state
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.mztab import loading as mztab_loading
+from metabolomix.pipeline import receipt as receipt_mod
 from metabolomix.pipeline import recovery, store
 
-__all__ = ["load_run_dataset", "run_console_job", "run_manifest_rows"]
+__all__ = ["UnitRun", "load_run_dataset", "resolve_unit", "run_manifest_rows"]
 
 #: `service._persist_differential` が差次的結果に付ける output_name の接頭辞。
 _DIFFERENTIAL_PREFIX = "differential:"
@@ -26,47 +29,150 @@ _DIFFERENTIAL_PREFIX = "differential:"
 #: `service._handle_preprocess` が前処理の成果物に付ける output_name。
 _PREPROCESS_OUTPUT = "preprocess"
 
+_INPUT_SUBDIR = "input"
 
-def load_run_dataset(pipeline_path, *, allow_incomplete: bool = False):
-    """run の成果物から DatasetState を組み立てて返す（保存も session 更新もしない）。
 
-    `pipeline_path` は `pipeline-run.json` でもその親ディレクトリでもよい
-    （`pipeline_status` と同じ規約）。差次的結果は指紋（データ・群）が一致するものだけを
-    `ds.results` へ戻し、戻したもの・戻さなかったものを `ds.handoff_report` に残す
-    （`restore_differentials`）。
+@dataclass(frozen=True)
+class UnitRun:
+    """run の極性の単位 1 つを開くのに要るもの（パスはすべて絶対）。"""
+
+    pipeline_root: Path
+    record: dict
+    polarity: str
+    legacy: bool
+    unit_root: Path
+    #: MS-DIAL が `.arf` 等を書いた解析フォルダ（受領の `analysis_dir`。無ければ `<単位>/input`）。
+    analysis_dir: Path
+    job_path: Path
+    #: 受領の時点で解いた試料の対応表の行（無ければ None）。
+    manifest_rows: list[dict] | None
+    notes: list[str] = field(default_factory=list)
+
+
+def _polarity_options(record: dict, units: dict) -> list[dict]:
+    return [{"value": p, "label": f"{p}（{store.unit_status(record, p)}）"}
+            for p in units if store.unit_status(record, p) == "validated"]
+
+
+def resolve_unit(pipeline_path, polarity: str | None = None, *,
+                 allow_incomplete: bool = False) -> UnitRun:
+    """run の極性の単位を 1 つ選び、その解析フォルダ・ジョブ・試料の対応表を返す。
+
+    `pipeline_path` は `pipeline-run.json` でもその親ディレクトリでもよい。`polarity` を省いて
+    単位が 1 つならそれ、2 つ以上なら `PIPELINE_POLARITY_REQUIRED`（`details.options` が選べる
+    極性）。v3 の単位は検証を通ったもの（`validated`）だけ開き、それ以外は
+    `PIPELINE_UNIT_NOT_VALIDATED`（`allow_incomplete` なら探索用に読む）。
     """
-    pipeline_root, record, job_path = run_console_job(pipeline_path)
-    ds = mztab_loading.load_dataset_state(job_path=job_path,
-                                          allow_incomplete=allow_incomplete)
+    root = recovery.normalize_pipeline_root(Path(pipeline_path).expanduser())
+    record = store.load_run(root)
+    legacy = store.is_legacy(record)
+    units = store.run_units(record)
+    if not units:
+        raise DomainError(
+            "PIPELINE_UPSTREAM_INCOMPLETE",
+            "この run はまだ上流（Console）の成果物を持っていません。"
+            "pipeline_status で状態を確認してください。", {"pipeline_root": str(root)})
 
-    # 群が無ければ、載せた差次的結果の群の指紋を照合できない。
-    rows = run_manifest_rows(pipeline_root, record)
-    if rows is not None:
-        ds.sample_metadata_rows = rows
+    if polarity is None:
+        if len(units) > 1:
+            options = _polarity_options(record, units)
+            if not options and not allow_incomplete:
+                raise _not_validated(root, record, units, None)
+            raise DomainError(
+                "PIPELINE_POLARITY_REQUIRED",
+                "この run には極性の単位が複数あります。どれを開くか polarity で選んでください。",
+                {"options": options or [{"value": p, "label": p} for p in units]})
+        polarity = next(iter(units))
+    elif polarity not in units:
+        raise DomainError(
+            "PIPELINE_POLARITY_NOT_FOUND",
+            f"この run に極性 {polarity!r} の単位はありません（{', '.join(units)}）。",
+            {"polarity": polarity, "available": list(units)})
 
-    # 群の指紋は試料対応表を戻した後でなければ run と同じ規則で計算できない。
-    ds.handoff_report = restore_differentials(ds, pipeline_root, record)
-    return ds
+    if not legacy and store.unit_status(record, polarity) != "validated" and not allow_incomplete:
+        raise _not_validated(root, record, units, polarity)
 
+    unit = units[polarity]
+    receipt = None if legacy else receipt_mod.read_receipt(root, record)
+    unit_receipt = ((receipt or {}).get("units") or {}).get(polarity)
+    notes: list[str] = []
+    if not legacy and unit_receipt is None:
+        notes.append("run の受領（results/receipt.json）が無い・照合できないので、run の記録の"
+                     "単位から解析フォルダを引いた（試料の対応表は載らない）。")
 
-def run_console_job(pipeline_path) -> tuple[Path, dict, Path]:
-    """run の (pipeline_root, record, 上流の Console の analysis-job.json のパス)。
-
-    `pipeline_path` は `pipeline-run.json` でもその親ディレクトリでもよい。上流がまだ
-    成果物を持っていなければ `PIPELINE_UPSTREAM_INCOMPLETE`。mzTab-M・解析フォルダの
-    どちらのアダプタで run を読むときも、ここで同じジョブを引く。
-    """
-    pipeline_root = recovery.normalize_pipeline_root(Path(pipeline_path).expanduser())
-    record = store.load_run(pipeline_root)
-
-    job_path = (record.get("upstream") or {}).get("console_job_path")
-    if not job_path:
+    unit_root = root / (unit.get("unit_root") or ".")
+    job_rel = ((unit_receipt or {}).get("console_job")
+               or (unit.get("upstream") or {}).get("console_job_path"))
+    if not job_rel:
         raise DomainError(
             "PIPELINE_UPSTREAM_INCOMPLETE",
             "この run はまだ上流（Console）の成果物を持っていません。"
             "pipeline_status で状態を確認してください。",
-            {"pipeline_root": str(pipeline_root)})
-    return pipeline_root, record, Path(job_path)
+            {"pipeline_root": str(root), "polarity": polarity})
+    if unit_receipt is not None and unit_receipt.get("analysis_dir"):
+        analysis_dir = root / unit_receipt["analysis_dir"]
+    else:
+        analysis_dir = unit_root / _INPUT_SUBDIR
+
+    if legacy:
+        rows = run_manifest_rows(root, record)
+    else:
+        rows = _receipt_rows(root, unit_receipt)
+    return UnitRun(pipeline_root=root, record=record, polarity=polarity, legacy=legacy,
+                   unit_root=unit_root, analysis_dir=analysis_dir, job_path=root / job_rel,
+                   manifest_rows=rows, notes=notes)
+
+
+def _not_validated(root: Path, record: dict, units: dict, polarity: str | None) -> DomainError:
+    statuses = {p: store.unit_status(record, p) for p in units}
+    which = f"極性 {polarity!r} の単位は" if polarity else "どの単位も"
+    return DomainError(
+        "PIPELINE_UNIT_NOT_VALIDATED",
+        f"{which}検証を通っていません（{statuses}）。pipeline_status で確かめてください。"
+        "中断・失敗した実行の出力を探索で読むなら allow_incomplete=True。",
+        {"pipeline_root": str(root), "polarity": polarity, "units": statuses,
+         "validated": [p for p, s in statuses.items() if s == "validated"]})
+
+
+def _receipt_rows(root: Path, unit_receipt: dict | None) -> list[dict] | None:
+    """受領の単位の試料の対応表の行。`source_file` は pipeline_root 相対なので絶対にして返す。"""
+    rows = ((unit_receipt or {}).get("samples") or {}).get("rows")
+    if not isinstance(rows, list) or not rows:
+        return None
+    out = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row = dict(row)
+        source = row.get("source_file")
+        if isinstance(source, str) and source and not Path(source).is_absolute():
+            row["source_file"] = str(root / source)
+        out.append(row)
+    return out or None
+
+
+def load_run_dataset(pipeline_path, *, polarity: str | None = None,
+                     allow_incomplete: bool = False):
+    """run の成果物から DatasetState を組み立てて返す（保存も session 更新もしない）。
+
+    `pipeline_path` は `pipeline-run.json` でもその親ディレクトリでもよい
+    （`pipeline_status` と同じ規約）。v3 の run は選んだ単位のジョブと受領の試料の対応表だけを
+    載せる（差次的結果は無い）。旧 v1 の run だけ、差次的結果を指紋（データ・群）が一致する
+    ものに限って `ds.results` へ戻し、戻したもの・戻さなかったものを `ds.handoff_report` に残す
+    （`restore_differentials`）。
+    """
+    unit = resolve_unit(pipeline_path, polarity, allow_incomplete=allow_incomplete)
+    ds = mztab_loading.load_dataset_state(job_path=unit.job_path,
+                                          allow_incomplete=allow_incomplete)
+
+    # 群が無ければ、載せた差次的結果の群の指紋を照合できない。
+    if unit.manifest_rows is not None:
+        ds.sample_metadata_rows = unit.manifest_rows
+
+    if unit.legacy:
+        # 群の指紋は試料対応表を戻した後でなければ run と同じ規則で計算できない。
+        ds.handoff_report = restore_differentials(ds, unit.pipeline_root, unit.record)
+    return ds
 
 
 def run_manifest_rows(pipeline_root: Path, record: dict) -> list[dict] | None:
