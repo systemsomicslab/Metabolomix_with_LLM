@@ -477,9 +477,9 @@ MS-DIAL はアラインメントを保存するたびにメモリ上のタグで
 | `assigned` / `redundant_excluded` | 有効な `assign` / `redundant` があるときだけ出るキー。`state == "applied"` のときだけ数字（メタ行の `curation_assigned` / `curation_redundant_excluded` と同じ値）、それ以外は `null` |
 | `orphaned` | 同じファイル名で sha256 が違う（以前の版の）`.arf2` に付いた有効フラグの件数。当てないので行は落とさない。1 件以上なら payload の `warnings` にも同じ内容が出る。**メタ行には出さない** |
 
-**パイプライン（`pipeline_run`）が書く差次的エクスポートはフラグを当てない。** キュレーションは
-pipeline に入れていない（worker は session もフラグ記録も読まない）ので、フラグを反映した
-ファイルが要るときは `dataset_export_differential` / `dataset_export_differential` で書き出し直す。
+**パイプライン（`pipeline_run`）は差次的エクスポートを書かない**（2026-11 の D 段から、pipeline は Console と
+解析フォルダの受領までで止まる）。フラグを反映したファイルは、`load_dataset(pipeline_path=…)` で開いてから
+`dataset_compare` → `dataset_export_differential` で書く。
 
 ### フラグ記録が壊れているとき
 

@@ -512,9 +512,9 @@ _CONSTANT_FIELDS = {"is_msms_matched": False, "is_matched": False}
 def peak_field(data: list, name: str):
     """`_convert_to_alignment_feature(data).get(name)` と同じ値を dict 無しで返す。
 
-    `build_pca_matrix` は file_name / is_gap_filled / 要求された props しか読まない
-    のに、1 行ごとに 16 キーの dict を組んでいた（393MB の `.arf` で 294 万回。
-    既定の `props=["height"]` では `rt` のための `_convert_to_times` まで毎行走る）。
+    `.arf` を走査する呼び出し（`mztab.evidence.scan_arf`）は数個の欄しか読まないのに、
+    1 行ごとに 16 キーの dict を組むと spot × 注入ぶんの無駄になる（393MB の `.arf` で
+    294 万回。`rt` のための `_convert_to_times` まで毎行走る）。
 
     **同値性は `tests/test_arf_hot_paths.py` が全キー × 行の種類で固定している。**
     フィールドを増やすときは両方に足すこと。
@@ -680,84 +680,6 @@ def count_peak_property_rows(deserialized_list: list[dict]) -> int:
                 continue
             total += 1
     return total
-
-
-def build_pca_matrix(deserialized_list: list[dict], use_properties: list[str] = None,
-                     min_detection_rate: float = 0.0) -> tuple[np.ndarray, list[str], list[str]]:
-    """
-    指定された複数プロパティから多変量PCA用行列を構築
-
-    引数:
-      min_detection_rate: 特徴量(スポット)の検出率による足切り。0.0〜1.0。
-        各スポットを「実検出(非ギャップフィル)できたサンプルの割合」で評価し、
-        この閾値未満のスポットを行列から除外する。既定 0.0 = フィルタ無効（従来動作）。
-        例: 0.5 を指定すると「半数以上のサンプルで実検出されたスポット」のみ使用。
-    """
-    # デフォルトではHeightとAreaを使用（m_zやrtも追加可能）
-    if use_properties is None:
-        use_properties = ["height"]
-
-    sample_data_dict = {}
-    detection_count: dict[str, int] = {}  # col_name -> 実検出(非ギャップフィル)サンプル数
-
-    for spot in deserialized_list:
-        aligned = spot.get("AlignedPeakProperties")
-        if not isinstance(aligned, list) or not aligned:
-            continue
-
-        master_id = spot.get("MasterAlignmentID")
-
-        for sample_index, sample in enumerate(aligned):
-            if not isinstance(sample, list):
-                continue
-
-            # feature dict は組まない——読むのは file_name / is_gap_filled /
-            # 要求された props だけで、16 キーを作るのは spot × 注入ぶんの無駄。
-            # peak_field は dict 版と同じ値を返す（同値性はテストが固定している）。
-
-            # 【追加】行列のキーとしてファイル名を使用
-            file_name = file_name_of(sample)
-            sample_key = file_name if file_name else f"Sample_{sample_index}"
-
-            if sample_key not in sample_data_dict:
-                sample_data_dict[sample_key] = {}
-
-            is_detected = not peak_field(sample, "is_gap_filled")
-            # 指定された複数のプロパティを列として追加
-            for prop in use_properties:
-                val = peak_field(sample, prop)
-                col_name = f"Spot_{master_id}_{prop}"
-                # 値が None（フィールド欠落・読めない値）のセルは 0.0 にする。
-                # gap-fill のセルは通常 MS-DIAL の補間値を持つので、値として残る。
-                sample_data_dict[sample_key][col_name] = float(val) if val is not None else 0.0
-                if is_detected:
-                    detection_count[col_name] = detection_count.get(col_name, 0) + 1
-
-    if not sample_data_dict:
-        return np.empty((0, 0)), [], []
-
-    # 行がサンプル、列が「スポット×プロパティ」のデータフレームを作成
-    df = pd.DataFrame.from_dict(sample_data_dict, orient='index')
-
-    # ある試料の行がそのスポットに無かったセル（上の None→0.0 とは別）は NaN になる。
-    # それだけを「その列（特徴量）の平均値」で埋める（Mean Imputation）。
-    df = df.fillna(df.mean())
-    # ※全サンプルで欠損だった列は NaN のまま残るので、その場合のみ 0.0 で埋める
-    df = df.fillna(0.0)
-
-    # 任意: 検出率(非ギャップフィル)による特徴量の足切り（既定0.0=無効）
-    if min_detection_rate > 0.0:
-        n_samples = len(df.index)
-        keep_cols = [
-            c for c in df.columns
-            if detection_count.get(c, 0) / n_samples >= min_detection_rate
-        ]
-        df = df[keep_cols]
-
-    # 改善点3: 分散が0（全サンプルで同一の値）の列を事前に行列から除外する
-    df = df.loc[:, df.var(numeric_only=True) > 0]
-
-    return df.to_numpy(dtype=float), list(df.index), list(df.columns)
 
 
 def plot_peak_height_distribution(peak_df: pd.DataFrame, filter_keyword: str = None, group_regex: str = None, output_file: str = "peak_height_dist.png"):

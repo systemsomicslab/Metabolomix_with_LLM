@@ -1,6 +1,14 @@
 # 生データフォルダpipeline呼び出し連鎖
 
-MCP層は薄い(`metabolomix/tools/pipeline_tools.py`)。実体は `metabolomix/pipeline/service.py`
+pipeline は生データから MS-DIAL の解析フォルダを作る入口で、GUI で解析済みのフォルダを読む入口
+(`list_data_files` → `load_dataset`。[dataset.md](dataset.md))と対等に並ぶ。走らせるのは上流だけ——
+raw を run の中へ配置し、極性ごとに MS-DIAL Console を回し、解析フォルダを mzTab-M と照合して受領
+(`results/receipt.json`)を書く。統計は計算しない。続きは `load_dataset(pipeline_path=…, polarity=…)` で
+GUI の入口と同じ鎖へ合流する(前処理・比較・PCA は `dataset_preprocess` / `dataset_compare` /
+`dataset_pca`。[dataset_analysis.md](dataset_analysis.md))。Console に渡すメソッドファイルを選ぶ・作る
+2 ツール(`console_method_candidates` / `console_method_template`)もここに置く。
+
+MCP層は薄い(`metabolomix/tools/pipeline_tools.py` と `metabolomix/tools/console_tools.py`)。実体は `metabolomix/pipeline/service.py`
 （受付・工程handler一式）と `metabolomix/pipeline/recovery.py`（読取専用status・取消・
 再開判定）にある。工程本体は独立したworkerプロセス（`metabolomix/pipeline/worker.py`）が
 `metabolomix/pipeline/engine.py::run_engine()` を通じて進めるため、MCP呼び出し自身の
@@ -177,11 +185,74 @@ Console を捨てない——やり直しの対象にも、`UPSTREAM_RERUN_REQUI
 
 保存するのは協調的な取消フラグ(小さなJSON)だけで、ここでは一切のプロセスを
 直接終了させない。**rawデータは削除しない。** 上流Consoleの停止は既存の
-`execution.supervise`の`cancel_path`監視に、下流の停止はengineのstage境界
-チェックに委ねる。受理(このツールが成功したこと)と実際の停止確定
+`execution.supervise`の`cancel_path`監視に、工程の停止はengineのstage境界
+チェックに委ねる。旧 v1 の run(`pipeline-run.v1`。読むだけの記録)は `PIPELINE_RUN_LEGACY` で
+断る(再開も同じ)。受理(このツールが成功したこと)と実際の停止確定
 (`cancelled`)は別状態で、後者は`pipeline_status`で確認する。
 
-## workerが1回分を進める経路(別プロセス。上記5ツールとは別に進行する)
+## console_method_candidates
+
+前提: なし。状態変更: なし(読取専用)。
+
+1. metabolomix/tools/console_tools.py  console_method_candidates()
+2. └─ metabolomix/console/method_file.py  discover_method_candidates()
+3.    └─ metabolomix/console/method_file.py  method_search_dirs()
+4.    └─ metabolomix/console/method_file.py  scan_dir_for_method_files()
+5.    └─ metabolomix/console/method_file.py  past_run_method_files()
+6.       └─ metabolomix/console/method_file.py  read_method_keys()
+7.    └─ metabolomix/console/method_file.py  extract_key_params()
+8. └─ metabolomix/tools/console_tools.py  _capped_candidates()
+9.    └─ metabolomix/tools/console_tools.py  _candidate_payload()
+10. └─ metabolomix/tools/console_tools.py  _candidates_next_hint()
+
+MS-DIAL GUI が解析のたびに保存する `<project>_param_<終了時刻>.txt` を、`dataset_root` 直下 →
+兄弟フォルダ直下 → `search_dirs`(`method_search_dirs`)の順に探す。**再帰はしない**(深く掘ると無関係な
+プロジェクトのパラメータが混ざる)。加えて `dataset_root/runs/*/analysis-job.json` の `software.method_file`
+(`past_run_method_files`。旧 Console 単独実行のジョブが実際に使ったメソッド)も候補にする——pipeline の run の
+ジョブ(`runs/pipeline_*/<極性>/console/attempt-*/analysis-job.json`)は 1 段深いので、今は拾わない。
+極性で候補を落とさない: `polarity` を渡すと各候補に `usable`(`direct` / `needs_polarity_conversion`)が付き、
+別極性は `console_method_template` を通させる(黙って別の解析にしない)。候補が
+`KEY_PARAMS_MAX_CANDIDATES` を超えると `key_params` を付けず、`MAX_REPORTED_CANDIDATES` で切って
+`truncated: true` を立てる(並びは `direct` 優先・新しい順なので、先頭が最も使える候補)。`next` は
+`pipeline_plan` の `request.method_file` へ渡す道を言う。
+
+## console_method_template
+
+前提: なし。状態変更: `out_path` にメソッドファイルを書く(セッションは変えない)。
+
+1. metabolomix/tools/console_tools.py  console_method_template()
+2. └─ metabolomix/tools/console_tools.py  _library_mode_error()
+3. └─ [based_on を省いたとき] metabolomix/console/method_file.py  discover_method_candidates()
+4. └─ metabolomix/tools/console_tools.py  _looks_like_method_text()
+5. └─ metabolomix/console/method_file.py  read_method_keys()
+6. └─ metabolomix/console/runner.py  get_exe_path()
+7. └─ metabolomix/tools/console_tools.py  _resolve_libraries()
+8.    └─ metabolomix/console/method_file.py  relative_path_overrides()
+9.    ├─ [library_mode="msp_only"] metabolomix/tools/console_tools.py  _msp_setting()
+10.   ├─ [library_mode="msp_only"] metabolomix/console/method_file.py  resolve_msp()
+11.   ├─ [library_mode="msp_only"] metabolomix/console/method_file.py  msp_only_overrides()
+12.   ├─ [library_mode="auto"] metabolomix/tools/console_tools.py  _lbm_setting()
+13.   └─ [library_mode="auto"] metabolomix/console/method_file.py  resolve_lbm()
+14. └─ metabolomix/tools/console_tools.py  _non_ascii_override_error()
+15. └─ metabolomix/console/method_file.py  write_effective_method_file()
+
+既存のパラメータから別極性のメソッドファイルを作る最後の手段。まず `pipeline_plan` の要求で `method_file` を
+省いて試す(その極性で GUI 実行が一度でもあれば作る必要は無い)。`based_on` を省くと
+`discover_method_candidates` を**極性で絞らずに**呼び(別極性から作るのが用途)、候補が 1 件ならそれ、
+複数なら `METHOD_FILE_CHOICE_REQUIRED`(土台の選択は解析条件そのものなので最新を黙って採らない)。
+差し替えるのは `Ion mode` と `Searched adduct ions`(`STANDARD_ADDUCTS`)だけで、検出・アライメント条件は
+元のまま。`.mdproject` / `.mddata` のような ASCII テキストでない土台は `_looks_like_method_text` が
+先頭 8192 バイトだけを見て `METHOD_FILE_NOT_TEXT` で断る(GB 級の ZIP を全部読まない)。
+実行体(`get_exe_path`)はビルド生成物・実行体のフォルダからの LBM の推定にだけ使い、未設定でも止めない
+(設定ファイルが読めない `CONFIG_INVALID` だけは止める)。`_resolve_libraries` は相対で宣言されたパスを
+原本基準の絶対パスへ直し(別フォルダへ書き出すため)、`auto` では空の `Lbm file path` を pipeline と同じ
+解決順で埋め、`msp_only` では LBM を空にして作りたい極性の研究室 MSP を書き、Text DB と注釈器設定表の
+宣言を空にする。研究室の LBM・MSP は戻り値・エラーにファイル名だけを出す。実効メソッドへ書く値に ASCII で
+表せない文字があれば `METHOD_ENCODING_UNSUPPORTED`(Console はメソッドを ASCII で読み、黙って同定 0 件に
+なる)。戻り値の `next` は `pipeline_plan(dataset_root=..., request={'method_file': ..., 'polarity': ...})`
+(`msp_only` ならそのモードも引き継ぐ)。
+
+## workerが1回分を進める経路(別プロセス。pipeline の5ツールとは別に進行する)
 
 `pipeline_run`/`pipeline_resume`が起動したworkerプロセス自身の経路。MCP接続や
 グローバルsessionには一切触れない(`metabolomix.core.session_state` /

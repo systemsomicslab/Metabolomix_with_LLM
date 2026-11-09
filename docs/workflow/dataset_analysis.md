@@ -5,8 +5,7 @@
 
 ## dataset_preprocess
 
-統計エンジンの前処理（spec 2026-11-06 §4）。行列 ID を返し、`ds.stat_matrices[matrix_id]` に置く
-（v1 の `pp_*` には書かない）。除外（`ds.excluded_*`）と群の上書き（`group_levels` / `group_factors`）は
+統計エンジンの前処理（spec 2026-11-06 §4）。行列 ID を返し、`ds.stat_matrices[matrix_id]` に置く。除外（`ds.excluded_*`）と群の上書き（`group_levels` / `group_factors`）は
 手順 3 が入力へ写す。`needs_input`（内部標準で換算済み＋QC のドリフト補正）は手順 5 の戻りから封筒にする。
 手順 9 の記録は `reports/stats/` への追記で、書き先が決まらない・書けないときも前処理は成功する。
 

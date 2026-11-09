@@ -37,7 +37,7 @@
 
 ## 旧 `arf` トピック（`.arf` / サンプル別ピーク。§3, §8.1, §10, §11）
 
-`.arf` の読み込み、PCA（`dataset_pca`）、前処理・QC（`dataset_preprocess`）、差次的解析（`dataset_compare`。pipeline が引き継ぐ v1 の 2 群比較の結果も同じ節で読む）の出力定義。
+`.arf` の読み込み、PCA（`dataset_pca`）、前処理・QC（`dataset_preprocess`）、差次的解析（`dataset_compare`）の出力定義。
 
 > 対応する Key 番号表: `docs/schema/AlignmentChromPeakFeature.md`（MS-DIAL の `[Key(N)]` から抽出した一次資料）。
 > リーダーのインデックス定数を変更するときは必ずこちらを先に確認する。
@@ -91,44 +91,13 @@
 | `IsGapFilled` | bool | `MasterPeakID < 0` か。`true` は実検出ではなくギャップフィルされた値 |
 | `PeakTags` | list[str] | 当該サンプルピークの `MasterPeakID` に付与されたMS-DIALタグ |
 
-#### 3.3 `build_pca_matrix()` の行列
+#### 3.3–3.4 `.arf` からの PCA 行列と `run_pca()`（撤去済み）
 
-返り値は `(matrix, sample_names, feature_names)`。
-
-| 出力 | 行・列の意味 |
-|---|---|
-| `matrix` | 2次元 `numpy.ndarray`。**行=サンプル、列=スポット×選択プロパティ** |
-| `sample_names` | 行ラベル。通常は `FileName` |
-| `feature_names` | 列ラベル。`Spot_<MasterAlignmentID>_<property>` 形式。例: `Spot_0_height` |
-
-`property` は `_convert_to_alignment_feature()` の `height`, `area`, `area_above_baseline`, `m_z`, `rt`, `signal_to_noise` などを指定できる。欠けた値の扱いは 2 通りある。行はあるが指定プロパティの値が `None`（フィールド欠落・読めない値）のセルは **0.0** になる。ある試料の行がそのスポットに無いセルだけが欠損（NaN）になり、列平均で補完され、全試料で欠損の列は 0 となる。gap-fill（`IsGapFilled=true`）のセルは MS-DIAL の補間値をそのまま値として持つ。分散 0 の列は除外される。`min_detection_rate > 0` の場合は、非ギャップフィルサンプル率が閾値未満の列も除外される。
-
-#### 3.4 `run_pca()` と Loading 出力
-
-PCA 前に各列を `StandardScaler` で標準化する。`log_transform=true` の場合は値を 1 以上にクリップして `log10` 変換してから標準化する。
-
-| JSONキー | 形状 | 意味 |
-|---|---|---|
-| `components` | `[sample][PC]` | 各サンプルの主成分スコア。行順は `sample_names` と同じ |
-| `explained_variance_ratio` | `[PC]` | 各主成分が説明する分散の比率。0..1 |
-| `singular_values` | `[PC]` | 各主成分に対応する特異値 |
-| `loadings` | `[PC][feature]` | 各主成分に対する各入力列の係数。列順は `feature_names` と同じ |
-
-主成分の符号は数学的に反転可能なので、正負そのものよりサンプルと特徴量の相対関係を解釈する。
-
-`get_pca_loading_features()` の各要素:
-
-| キー | 意味 |
-|---|---|
-| `pc` | `PC1` などの主成分名 |
-| `var_ratio` | 説明分散比を百分率にした値 |
-| `positive` | Loading 値が大きい側の上位特徴量リスト |
-| `negative` | Loading 値が小さい側の上位特徴量リスト |
-| `positive/negative[].id` | `MasterAlignmentID` |
-| `positive/negative[].value` | Loading 係数 |
-| `positive/negative[].annotation` | スポットの `Name` |
-| `positive/negative[].m_z` | スポット代表 m/z |
-| `positive/negative[].rt` | スポット代表RT（min） |
+**`build_pca_matrix()` と `run_pca()` は撤去済みで、コード上に存在しない**（2026-11 の D 段。最後の
+利用者だった pipeline の PCA 工程とパーサ単体の CLI の `--pca` が消えた）。以前は `.arf` のスポット ×
+プロパティを列にした行列（`Spot_<MasterAlignmentID>_<property>`。欠損は列平均で補完）を作り、
+標準化して PCA を回していた。いまの PCA は統計エンジンの `dataset_pca`（§10.4。前処理後の log2 行列で、
+軸は生体の個体だけで決め QC は投影する）。
 
 #### 3.5 ARF要約
 
@@ -156,7 +125,7 @@ PCA 前に各列を `StandardScaler` で標準化する。`log_transform=true` �
 
 `metabolomix/msdial/classes.py` は `.mddata` の `MsdialDataStorageBase.Key0 AnalysisFiles` を読み、各 `AnalysisFileBean` の `AnalysisFileId`、`AnalysisFileName`、`AnalysisFileClass` を抽出する。`.mddata` は明示パス、`.mdproject` 内の参照、またはARFと同じディレクトリから解決する。
 
-ARFサンプルとの結合は `FileID` を優先し、欠損時は正規化した `FileName` を使用する。両方が異なるサンプルへ解決された場合はエラーとする。`filter_arf_by_class_ids()` は選択Class ID以外のサンプル行を各スポットから除外し、その結果を `build_pca_matrix()` に渡すことでPCAの行をClass IDで選別できる。
+ARFサンプルとの結合は `FileID` を優先し、欠損時は正規化した `FileName` を使用する。両方が異なるサンプルへ解決された場合はエラーとする。`filter_arf_by_class_ids()` は選択Class ID以外のサンプル行を各スポットから除外する。
 
 #### 8.1 PCA の返り値と、生スポットの選択（旧 `.arf` パーサ）
 
@@ -187,7 +156,7 @@ PCAスコアプロット用ブロック（旧パーサの返り値の末尾。**
 
 ### 10. 前処理・QC（P2a）
 
-対話の前処理・QC・PCA は統計エンジン（`metabolomix/analysis/stats/`。MCP 非依存）が担い、`metabolomix/tools/stats_tools.py` の `dataset_preprocess` / `dataset_compare` / `dataset_pca` がそれを呼ぶ（行列の登録と前処理の記録の共有部品は `metabolomix/tools/_matrix_store.py`）。読み込んだデータセットは**そのままでは何も適用されない**——`dataset_preprocess` を呼ぶか、`dataset_compare` / `dataset_pca` が既定の設定で自分で回す。旧来の前処理（`metabolomix/analysis/preprocessing.py` の v1。§10.2.1）は pipeline の内部だけが使い、対話のツールは読まない。
+対話の前処理・QC・PCA は統計エンジン（`metabolomix/analysis/stats/`。MCP 非依存）が担い、`metabolomix/tools/stats_tools.py` の `dataset_preprocess` / `dataset_compare` / `dataset_pca` がそれを呼ぶ（行列の登録と前処理の記録の共有部品は `metabolomix/tools/_matrix_store.py`）。読み込んだデータセットは**そのままでは何も適用されない**——`dataset_preprocess` を呼ぶか、`dataset_compare` / `dataset_pca` が既定の設定で自分で回す。旧来の v1 の前処理・2 群比較（pipeline の工程が使っていたもの）は 2026-11 の D 段で消えた。
 
 #### 10.1 役割検出（sample/qc/blank）
 
@@ -195,8 +164,8 @@ PCAスコアプロット用ブロック（旧パーサの返り値の末尾。**
 
 #### 10.2 前処理（`dataset_preprocess`。統計エンジン）
 
-`dataset_preprocess` は前処理を回して、前処理済みの行列を `ds.stat_matrices[matrix_id]` に登録し、`matrix_id` を返す
-（v1 の `pp_*` スロットには書かない）。**同じデータ・除外・群・設定は同じ `matrix_id`**。工程の順は
+`dataset_preprocess` は前処理を回して、前処理済みの行列を `ds.stat_matrices[matrix_id]` に登録し、`matrix_id` を返す。
+**同じデータ・除外・群・設定は同じ `matrix_id`**。工程の順は
 **選択 → ドリフト補正 → 品質の足切り → 正規化 → log2 → 反復のまとめ**（個体ごとの行列）。0 以下・非有限は欠測で、
 pseudocount も clip も使わない。補完は PCA のためだけに `dataset_pca` が行う（行列そのものは補完しない）。
 
@@ -230,31 +199,17 @@ subject_source, groups: {群: 個体数}, quant, steps, warnings, record, next}`
   入れ替えで、登録した行列は古くなり（`matrix_id` を渡すと `missing_state`、`dataset_preprocess` からやり直す）、
   その行列から出した比較・PCA の結果も現在のものとして通らない。
 
-#### 10.2.1 v1 の前処理レシピ（pipeline の内部だけ。対話のツールは使わない）
-
-旧来の `preprocessing.preprocess()`（`dataset_service.preprocess_dataset`。pipeline の前処理工程と、pipeline から引き継いだ結果の来歴だけが使う。D で消える）は以下の順で適用する。
-
-1. **ブランク除去**（`blank_min_fold` 指定時）: 生体試料平均 が `blank_min_fold` × ブランク平均 未満の特徴量を背景として除去。ブランク/生体試料のどちらかが無ければ未実施（caveat）。
-2. **正規化**（`normalize="tic"|"median"|"pqn"|"none"`）: 行（サンプル）ごとのスケーリング。`tic`=行総和、`median`=行中央値、`pqn`=Probabilistic Quotient Normalization（参照はQC中央値、QCが無ければ全サンプル中央値）。**正規化係数が0または非有限のサンプル（未検出=0が過半で行中央値=0 になる疎な試料など）は、行全体をNaN化して破棄せず未正規化のまま残置し、`report["unscaled_samples"]` と caveat で明示する**（`median`/`pqn` で起こりやすい。`tic`=行総和は総和>0のため安全）。旧実装は該当行をNaNで全消去し、疎データで多数の試料を無言で失っていた。
-3. **QC ドリフト補正**（QC-RLSC 相当の移動中央値版。`drift_correct=True` 指定時）: QCを注入順（`analytical_order`、`.mddata` 由来）に並べ、QC 値の移動中央値（窓 5、QC 4 本以上）で系統ドリフトを推定し、`np.interp` で全注入へ区分線形に補間して `median(QC) / trend` を掛ける。特徴量ごとに全サンプルを 1 系列として補正し、バッチ別には補正しない。LOESS（局所重み付き回帰）は使わない。**注入順が全サンプルで取得できない、またはQCが最小数未満なら未実施**（caveat）。加えて **QC が試料列に挿入されていない設計でも未実施**（`status="skipped"`）: QC-RLSC は QC が試料の前後に散在することを前提とし、QC を全試料の後にまとめて流した設計（実例: 試料 1–48 → Blank 49 → QC 50–56）では `np.interp` が端値で頭打ちになり、補正した外見だけが残る。判定は `report["qc_interspersion"]`（`covered`＝QC注入順区間に入る試料数 / `qc_range` / `sample_range`）。`covered` が試料の半数未満なら適用はするが「外挿補正」caveat を付す。
-4. **QC RSDフィルタ**（`max_qc_rsd` 指定時）: QC群での相対標準偏差（SD/mean）が閾値を超える特徴量を除去。QCが無い/不足なら未実施（caveat）。
-5. **欠損補完**（`impute="half_min"|"knn"|"column_mean"|"none"`、既定 `half_min`）: 行列生成後に残るNaNを補完。`half_min`=特徴量最小値の半分（既定）、`knn`=sklearn `KNNImputer`、`column_mean`=列平均（旧実装互換）、`none`=補完しない。
-6. **ブランク行の除外**: 上記1でブランクを背景除去の**参照**として使い終えたあと、`preprocessing.drop_samples_by_role()` がブランクの**行そのもの**を解析行列から外す。除外内訳は `report["excluded_from_matrix"]`（`{role: [sample_name, ...]}`）と caveat に出る。
-
-> **役割別の行の扱い（重要）**: 前処理後行列（データセットの前処理済み行列）の行は **生体試料 + QC** であり、**ブランクは含まれない**。ブランクは生体試料と桁違いに総強度が低く、残すと PCA の PC1 を支配して群分離の解釈が壊れるため外す。一方 **QC は残す**——QC クラスタの締まり具合を PCA で見るのは品質確認の定番手段だからである。`dataset_pca`（統計エンジン）は QC を軸の計算に使わず投影し、スコアプロットには QC 点が白抜きで含まれる（群ラベルは `QC`）。群平均に QC が混ざると困る 2 群比較側は、別途 QC を比較群から外す（§11.1）。
-
-v1 の処理結果は前処理後行列・試料名・特徴名・試料の情報・適用したレシピとして pipeline 内部の `pp_*` スロットに保存される。対話の `dataset_pca` / `dataset_compare` はこれを読まない（統計エンジンの `matrix_id` の行列を使う）。
+> **役割別の行の扱い（重要）**: 前処理後行列の個体は**生体試料**で、QC は行列に残るが軸の計算には使わない。
+> **ブランクは比較にも PCA にも入らない**（ブランクの足切り `blank_min_ratio` の参照にだけ使う）。ブランクは生体試料と
+> 桁違いに総強度が低く、残すと PCA の PC1 を支配して群分離の解釈が壊れるため。一方 QC は `dataset_pca` が同じ軸へ投影し、
+> スコアプロットに白抜きで含まれる（群ラベルは `QC`）——QC クラスタの締まり具合を見るのは品質確認の定番手段だからである。
+> 2 群比較は QC を比較群から外す（§11.1）。
 
 #### 10.3 caveatの扱い
 
-**統計エンジンの前処理**では、スキップした工程と理由は `steps[]`（`status: skipped` と `reason`）に、注意は `warnings[]`（`{code, message, ...}`）に残る。LLM はこれらを解釈結果・報告書の注意点として引用する。以下の caveat は **v1 の前処理**（`report["caveats"]`）の説明。
+統計エンジンの前処理では、スキップした工程と理由は `steps[]`（`status: skipped` と `reason`）に、注意は `warnings[]`（`{code, message, ...}`）に残る（QC・ブランク・注入順が欠けて行えなかった工程も、無言で飛ばさずここに出る）。LLM はこれらを解釈結果・報告書の注意点として引用する。
 
-QC/ブランク/注入順のいずれかが欠けているためにスキップされたステップは、無言で無視されるのではなく `report["caveats"]`（v1 の前処理の報告）に文言として残る（例:「注入順が欠落、または QC が不足のためドリフト補正は未実施。」）。LLMはこれらのcaveatを解釈結果や報告書の注意点として引用すべきである。追加で前景化される caveat:
-
-- **失敗 QC 注入**: 前処理の最初（正規化でスケールが動く前の生強度）に `preprocessing.detect_failed_qc()` が、総強度が QC 中央値の 20% 未満の QC を名指しする（`steps["qc_health"]`）。失敗注入を残したまま `max_qc_rsd` を掛けると QC の RSD が全特徴で跳ね上がり、ほぼ全特徴が除去される（実測: kidney aging NEG で 1345 → 51）。**「閾値が厳しすぎる」ように見える現象の真因は QC 側にあることが多い**ので、`dataset_exclude` で除外してから前処理し直す。
-- **プールQC の層別**: QC が複数バッチ（日付）に分かれる場合に加え、**QC 試料名の層別**（部位別 QC 等。`preprocessing.detect_qc_strata` が `20240311_QC_Cerebellum_ICR_NEG_1` → `cerebellum_icr` のように日付/`qc`/極性/数字を除いた残りで判定）も検出し、「全 QC を1系列扱いするドリフト補正/RSD は近似」と警告する。
-- **正規化での試料脱落**: `normalize` の `unscaled_samples`（係数0/非有限で未正規化残置した試料数）に対応する caveat（§10.2）。
-- **過度な特徴量除去**: フィルタ後に残存0件なら「全特徴が除去（閾値が厳しすぎる可能性、解析不能）」、特徴量の90%超が除去なら残存割合を注記する。除去総数は `report["features_removed_total"]`（= before − after）で参照する。**各 `steps[*]["removed"]` はフィルタごとの独立マスク件数で重複し得るため加算しないこと**（blank と qc_rsd の removed 合計が総数を超えることがある）。
+**失敗した QC 注入**（総量が QC の中央値の 0.2 倍未満）は最初の概観の品質の段（§11.9）が名指しする。失敗注入を残したまま `max_qc_rsd` を掛けると QC の RSD が全特徴で跳ね上がり、ほぼ全特徴が除去される（実測: kidney aging NEG で 1345 → 51）。**「閾値が厳しすぎる」ように見える現象の真因は QC 側にあることが多い**ので、`dataset_exclude` で除外してから前処理し直す。
 
 なお `load_dataset` の複数バッチ告知は、解析対象である **`.arf`/`.arf2` のバッチ**にのみ基づく（`.mddata`/`.mdproject`/`.msp2`/`.pai2` 等も `AlignmentResult` 形式のタイムスタンプを持つため、拡張子で限定しないと告知バッチが実際に解析する `.arf` とズレる）。
 
@@ -280,7 +235,7 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 
 ### 11. 差次的解析（P2b）
 
-対話の比較は統計エンジンの `compare`（`metabolomix/analysis/stats/compare.py`。MCP 非依存）で、`metabolomix/tools/stats_tools.py` の `dataset_compare` が呼ぶ。図は `dataset_plot(kind="volcano")` / `metabolomix/tools/reports.py` の `save_figure()`（`kind="volcano"`）が、書き出しは `dataset_export_differential` / `dataset_export_evidence_bundle` が、`dataset_compare` の結果（対比を 1 つ選んだ 2 群の形。`stats_results.as_two_group`）から作る。`metabolomix/analysis/differential.py` の v1 の 2 群比較は pipeline だけが使う（§11.2.2）。
+対話の比較は統計エンジンの `compare`（`metabolomix/analysis/stats/compare.py`。MCP 非依存）で、`metabolomix/tools/stats_tools.py` の `dataset_compare` が呼ぶ。図は `dataset_plot(kind="volcano")` / `metabolomix/tools/reports.py` の `save_figure()`（`kind="volcano"`）が、書き出しは `dataset_export_differential` / `dataset_export_evidence_bundle` が、`dataset_compare` の結果（対比を 1 つ選んだ 2 群の形。`stats_results.as_two_group`）から作る。v1 の 2 群比較（Welch の t 検定。pipeline の差次的解析工程と、`load_dataset` が pipeline の run から戻した比較が使っていた）は 2026-11 の D 段で消えた（`metabolomix/analysis/differential.py` に残るのは volcano の点列 `volcano_data()` だけ）。
 
 #### 11.1 群ラベルの由来
 
@@ -353,20 +308,6 @@ contrasts, omnibus, confounding, warnings, top, record, next}`。
 - `record`: `{written, record_id, path}`（比較の記録。親は行列の前処理の記録）。既定の前処理で行列を作ったときは
   `preprocess_record` に前処理の記録も付く。
 
-#### 11.2.2 統計（v1。pipeline の 2 群比較と、pipeline から引き継いだ結果）
-
-以下は v1 の説明（pipeline の差次的解析工程と、`load_dataset(source="mztab")` が pipeline から戻す比較が使う）。
-
-- **2群比較**（`group_a` と `group_b` を指定）: 特徴量ごとに Welch t 検定（等分散を仮定しない）と log2 fold change を計算する。**正=群Bで高い（上昇）**。group_a が基準（対照）、group_b が比較対象。2026-08-31 に慣習（log2FC=log2(比較対象/基準)）へ合わせて符号を反転した——それ以前の出力とは符号が逆。擬似カウントは既定 1.0。定義は `log_transform` で 2 通りある:
-  - `log_transform=true`（**既定**）: 各値を `log2(max(x, 0) + 擬似カウント)` に変換して Welch 検定し、`log2fc = mean(log2 値_B) − mean(log2 値_A)`（＝ x+1 の幾何平均比の log2）。
-  - `log_transform=false`: 生値で Welch 検定し、`log2fc = log2((mean_b + 擬似カウント) / (mean_a + 擬似カウント))`（算術平均比）。
-  - `mean_a` / `mean_b` はどちらの場合も生値の算術平均。
-  - 結果行の `t` は `(平均_B − 平均_A) / SE` で、**log2fc と同じ向き**（正 = 群Bで高い。2026-09-27 に向きを揃えた——それ以前の `t` は符号が逆）。
-  - 小n・分散0・全欠損は `p=NaN`。
-- **多群ANOVAは現状非対応**: MS-DIAL メタに「因子（加齢/菌叢等）→水準」の対応が無く、因子を安全に選べない（誤って全 Class ID を水準にした結果を返さないよう封鎖）。3群以上を比べたいときは `group_a`/`group_b` の因子トークン・プール指定で関心のある2群を切り出す。`differential.one_way_anova()` 自体は関数として残るが、MCP からは露出しない。
-- **多重検定補正**: いずれも Benjamini-Hochberg で `p → q`（FDR）を付与（NaN は補正から除外し位置は保持）。p値は scipy があればそれで、無ければ自前の t 分布裾確率（正則化不完全ベータ関数）で計算し、どちらも正確（近似ではない）。
-- **volcano**: 2群比較のみ。各点は `feature` / `log2fc` / `neg_log10_p` / `sig`（`up`=q≤閾値かつlog2fc≥+閾値（群Bで高い＝上昇） / `down`=q≤閾値かつlog2fc≤−閾値（群Aで高い＝低下） / `ns`）。全特徴分の点列は `ds.last_differential` の volcano 点列に保持し、`dataset_plot(kind="volcano")`（構造化点列）と `save_figure(kind="volcano")`（PNG）の両方がここから読む。**2 群比較の応答 payload には全量 volcano を同梱せず**、`summary`（`n_tested`/`n_significant`/`n_up`/`n_down`＋有意上位 `top`）中心の要約と `volcano_note` のみを返す（先頭の結論が巨大配列＋文脈切り詰めで埋没し「全て ns」と誤読される退行を避けるため）。
-
 #### 11.2.1 `dataset_plot(kind="volcano")` の返り値（`lipidmix.volcano.v1`）
 
 `dataset_compare`（2群）の後に呼ぶ read-only ツール。**既定（`output="image"`）では
@@ -382,7 +323,7 @@ contrasts, omnibus, confounding, warnings, top, record, next}`。
 | `points[].feature` | 特徴量名（`differential` の `feature`） |
 | `points[].log2fc` | log2 fold change（x軸）。**正=群Bで高い（上昇）** |
 | `points[].neg_log10_p` | `-log10(p)`（y軸）。`q` ではなく **`p`**。p が 0.0（アンダーフロー。検定はできている）は最小の正の float で `-log10` を取る（約 307.65。検定不能の扱いにしない。結果の p は 0 のまま） |
-| `points[].sig` | `up` / `down` / `ns`。`dataset_compare` の結果は、書き出しの `significant` と同じ規則（§11.4。判定が `changed` で、q と \|log2fc\| が閾値を満たす）の行だけが符号で `up` / `down`、ほかは `ns`——判定できない（`inconclusive`）行は q が小さくても `ns`。v1 の結果は q と log2fc の閾値だけ |
+| `points[].sig` | `up` / `down` / `ns`。`dataset_compare` の結果は、書き出しの `significant` と同じ規則（§11.4。判定が `changed` で、q と \|log2fc\| が閾値を満たす）の行だけが符号で `up` / `down`、ほかは `ns`——判定できない（`inconclusive`）行は q が小さくても `ns` |
 | `thresholds` | 判定に使った `q` と `log2fc` のしきい値 |
 | `comparison` | `group_a` / `group_b` / `n_a` / `n_b`（プール解決後の実n） |
 | `render_hints.guides.x` | 縦破線の位置（`±log2fc_threshold`） |
@@ -400,12 +341,11 @@ contrasts, omnibus, confounding, warnings, top, record, next}`。
 
 #### 11.3 必須caveat
 
-v1 の 2 群比較（pipeline が引き継ぐ結果も同じ）の応答 `caveats` には、該当時に以下を前景化する（無言で握りつぶさない）。統計エンジンの `dataset_compare` では、交絡は `confounding`、小 n・検定不能は `warnings` と判定の `inconclusive`（`verdict_reason`）が担う:
+`dataset_compare` は次を無言で握りつぶさず、戻り値に前景化する:
 
-1. **交絡（群⟂バッチ）**: 各群が単一バッチに偏る場合、「処理効果と測定バッチを分離できない」旨を警告（`check_confounding`）。例: `2_lipidome_lcms/NEG` は control/LPS=20220901・ILG/G_uralensis=20220902 で交絡。**判定は必ずプール解決後の（＝実際に比較した）2群に対して行う**。プール前の Class ID 単位で見ると細粒度ラベルほど各群が単一バッチになりやすく、プールすれば両群ともバッチ混在という健全な設計を交絡と誤報するため。判定に使うのは群ラベルが `None` でない試料のみ（QC/ブランク除外後）。
-2. **正規化状態**: 前処理のレシピに正規化が含まれなければ「未正規化データの log2FC は測定量差を含み得る」と警告。
-3. **群サイズ不足**: いずれかの群が n<2 なら「各群 n>=2 が必要（群名の誤り／前処理での試料脱落の可能性）」と警告。n>=2 かつ n<4 なら小n（検出力の限界）を注記。
-4. **退化（検定不能）**: 検定できた特徴が0件なら「全特徴で p=NaN。群が空・分散0・正規化での試料NaN化の可能性。『有意0件』を『群間差なし』と解釈しない」と警告。0件でなくても特徴数の20%未満しか検定できなければ注記する。これにより「本当に有意差が無い（n_tested 健全）」と「そもそも検定できていない（n_tested≈0）」を区別できる。
+1. **交絡（群⟂バッチ）**: `confounding`（`batch_status` / `batch_table` / `warnings`。§11.2）。完全交絡（群が単一バッチに偏り、処理効果と測定バッチを分離できない）は `allow_confounded=true` の明示なしには `STATISTIC_CONFOUNDED` で止める。判定は実際に比較した群に対して行う（QC・ブランクは比較群に入らない）。バッチ情報が無ければ「評価不可」で、「交絡なし」ではない。
+2. **小 n・検定不能**: `warnings` と、判定 `inconclusive`（理由は `verdict_reason`）。**「有意でない」は「変わっていない」ではない**——`inconclusive` を `unchanged` と読まない。
+3. **正規化の状態**: 前処理の `steps[]`（§10.2・§10.3）。正規化を行わなかった行列の log2FC は測定量の差を含みうる。
 
 LLMはこれらを解釈結果・報告書の注意点として必ず引用すること。統計値は「事実」だが、交絡・小nの下での因果的解釈は保留し、人間の判断に委ねる（既存の分業に整合）。
 
@@ -425,7 +365,7 @@ LLMはこれらを解釈結果・報告書の注意点として必ず引用す�
 `spot_id / name / name_source / ontology / inchikey / inchikey_source / msi_level /
 mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`（`CONTRACT_VERSION` は据え置き）。
 
-**統計エンジンの結果（`dataset_compare`）だけ**、`msi_note` の後にメタ行が足される（キーは既存のメタ行と重ならない。
+統計エンジンの結果（`dataset_compare`）は、`msi_note` の後にメタ行を足す（キーは既存のメタ行と重ならない。
 受け手は未知のキーを許す）:
 
 | メタ行 | 意味 |
@@ -435,12 +375,12 @@ mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`（`CONTRAC
 | `# unit = … n_units_a = … n_units_b = …` | 比較の単位。`subject`（全試料が被験者 ID を持ち技術反復を 1 個体にまとめた）・`injection`（被験者 ID が無い・まとめを切った。単位は注入）・`mixed`（混在）。`n_units_*` は比較に入った単位の数（`n_a` / `n_b` は注入の数のまま） |
 | `# mean_definition = …` | `mean_a` / `mean_b` は「個体ごとの前処理後の線形値の算術平均」 |
 | `# matrix_id = … rule_hash = … contrast_id = …` | どの行列・どの規則・どの対比を書いたか（2 群比較の結果の対比は 1 つ） |
-| `# significant_rule = q<=q_threshold & \|log2fc\|>=log2fc_threshold & verdict=changed` | 15 列目 `significant` の規則（下記）。v1 の結果には書かない |
+| `# significant_rule = q<=q_threshold & \|log2fc\|>=log2fc_threshold & verdict=changed` | 15 列目 `significant` の規則（下記） |
 
-`p_value` / `q_value` はエンジンの p と BH の q（`q_value` の読みは `q_interpretation`）、`log2fc` は正なら `group_b`（比較）が高い。**エンジンの結果の `significant` は、`q ≤ q_threshold` かつ `|log2fc| ≥ log2fc_threshold`（`dataset_compare` の `log2fc_threshold`）に加えて、判定 `verdict` が `changed` の行だけ `true`**（`significant_rule`）。検出の割合が足りず量を判定できない行（`inconclusive` / `quantity_not_judgeable`）や BH の母集団の外の行は、q が小さく |log2fc| が大きくても `false`——gap-fill の値で動いた量を主張にしない。`true` の行の数は、その対比の `dataset_compare` の `large_changes` と同じ（InChIKey の無い行は書き出さないので、書き出しではその分少ないことがある）。同じ印を根拠バンドルの `features.tsv` の `significant`・volcano の `up` / `down`（§11.2.1）が使う。v1 の結果（pipeline から引き継いだ比較）の `significant` は従来どおり q と log2fc の閾値だけ（判定を持たない）。**`verdict` の 3 値そのものは TSV の列には出ない**（契約の列は据え置き）ので、判定は `dataset_compare` の要約・`top` か、根拠バンドル（`reanalysis.md` §10）で読む。
+`p_value` / `q_value` はエンジンの p と BH の q（`q_value` の読みは `q_interpretation`）、`log2fc` は正なら `group_b`（比較）が高い。**エンジンの結果の `significant` は、`q ≤ q_threshold` かつ `|log2fc| ≥ log2fc_threshold`（`dataset_compare` の `log2fc_threshold`）に加えて、判定 `verdict` が `changed` の行だけ `true`**（`significant_rule`）。検出の割合が足りず量を判定できない行（`inconclusive` / `quantity_not_judgeable`）や BH の母集団の外の行は、q が小さく |log2fc| が大きくても `false`——gap-fill の値で動いた量を主張にしない。`true` の行の数は、その対比の `dataset_compare` の `large_changes` と同じ（InChIKey の無い行は書き出さないので、書き出しではその分少ないことがある）。同じ印を根拠バンドルの `features.tsv` の `significant`・volcano の `up` / `down`（§11.2.1）が使う。**`verdict` の 3 値そのものは TSV の列には出ない**（契約の列は据え置き）ので、判定は `dataset_compare` の要約・`top` か、根拠バンドル（`reanalysis.md` §10）で読む。
 
 **交絡を越えた比較の印**: `allow_confounded=true` で完全交絡（`confounding.batch_status = complete`）を越えて走った
-エンジンの比較は、v1（pipeline の `run_comparison`）と同じく `source_verification` の後に `# unadjusted_confounded = true` と
+エンジンの比較は、`source_verification` の後に `# unadjusted_confounded = true` と
 `# unadjusted_confounded_note = …`（日本語の説明）を書き、volcano の `caveats` と図の下端（ASCII の但し書き）、根拠バンドルの
 `comparison.unadjusted_confounded`（`reanalysis.md` §10）にも同じ印が載る。部分的な交絡・交絡の無い比較には何も足さない。
 

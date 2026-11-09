@@ -738,10 +738,10 @@ STATS_COLUMNS_LABELED = STATS_COLUMNS + ("comparison", "group_a", "group_b",
 
 
 def comparison_name(result: dict) -> str:
-    """比較名。来歴に `comparison_id` があればそれ、無ければ `<group_b>_vs_<group_a>`
-    （log2fc は正なら group_b が高いので、group_b が「比較」・group_a が「基準」）。"""
-    declared = ((result.get("provenance") or {}).get("comparison") or {}).get("comparison_id")
-    return declared or f"{result.get('b')}_vs_{result.get('a')}"
+    """比較名 `<group_b>_vs_<group_a>`（log2fc は正なら group_b が高いので、group_b が「比較」・
+    group_a が「基準」）。来歴の `comparison_id`（完全交絡を越えた比較にだけ付く対比の ID）は使わない
+    ——交絡の有無で同じ対比の名前が変わらないように。"""
+    return f"{result.get('b')}_vs_{result.get('a')}"
 
 
 def _rank_key(candidate: dict):

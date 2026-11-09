@@ -126,16 +126,19 @@ merge and feature selection: `dataset_quant_*`, `dataset_merge_polarities`,
 `caveat` field until you have fetched the core; fetch the topic before
 interpreting the matching tool's output.
 
-ENTRY POINT — first check whether MS-DIAL has already been run on the user's
-folder, then go downstream if it has, or ask before running it if it has not.
-Look before picking a tool: `list_data_files(directory)` (the directory is
-required; nothing is searched on its own) lists MS-DIAL output in the folder, and
-`all_files=True` also shows raw instrument files.
+ENTRY POINT — there are two equal entries, and they meet at a MS-DIAL analysis
+folder: read a folder MS-DIAL has already processed (1), or build one from raw
+data with MS-DIAL Console (2) and then read it as in 1. First check whether
+MS-DIAL has already been run on the user's folder, then go downstream if it has,
+or ask before running it if it has not. Look before picking a tool:
+`list_data_files(directory)` (the directory is required; nothing is searched on
+its own) lists MS-DIAL output in the folder, and `all_files=True` also shows raw
+instrument files.
 
 1. MS-DIAL HAS BEEN RUN (the folder contains MS-DIAL output: .arf/.arf2/
    .dcl/.EIC.aef, an mzTab-M file, a completed analysis-job.json, or a
-   completed pipeline run). Go downstream — this is the main path, and it
-   applies even when raw files sit in the same folder. Call
+   completed pipeline run). Go downstream — this applies even when raw files
+   sit in the same folder. Call
    `load_dataset(directory=...)` (or `mztab_path=` / `job_path=` /
    `pipeline_path=`). It opens the dataset as a new handle that EVERY time
    becomes the current one (auto-selecting PeakProperties.arf over
@@ -151,19 +154,30 @@ required; nothing is searched on its own) lists MS-DIAL output in the folder, an
    MS-DIAL itself reads qualifies: .abf .ibf .cdf .mzml .wiff .raw .d .wiff2
    .qgd .lcd .lrp .imzml. For Agilent/Bruker .d and Waters .raw, one
    measurement is a FOLDER, not a file — a directory listing showing only
-   sub-folders with those extensions IS raw data, not an empty folder. Running
-   MS-DIAL Console is an auxiliary path that takes tens of minutes and writes
-   outputs next to the raw data, so ASK THE USER FOR PERMISSION before
-   launching it, and launch nothing until they agree. Once they agree, call
-   `pipeline_run(dataset_root)`. If they want to see the resolved settings
-   (method file, LBM, polarity) first, call `pipeline_plan` before asking.
-   `pipeline_run` starts an independent worker that carries the run through
-   upstream execution, metadata resolution, preprocessing, PCA, and (if
-   comparisons are given or confirmed) differential analysis and reporting,
-   returning a compact dispatch receipt (`pipeline_id`/`pipeline_path`) — not
-   the results themselves. Poll with `pipeline_status(pipeline_path)` and,
-   once it reports `needs_input`, resolve ONLY the missing items with
-   `pipeline_resume` (never re-ask about items already confirmed).
+   sub-folders with those extensions IS raw data, not an empty folder. The
+   Console route is an equal entry, not a fallback: what it makes is an
+   analysis folder per polarity, which you then read exactly as in 1. Running
+   MS-DIAL Console takes tens of minutes per polarity and writes a run folder
+   (under `runs/` in the raw-data folder by default), so
+   ASK THE USER FOR PERMISSION before launching it, and launch nothing until
+   they agree. Once they agree, call `pipeline_run(dataset_root)` (both
+   polarities in one run go in `request.units`). If they want to see the
+   resolved settings (method file, LBM, polarity) first, call `pipeline_plan`
+   before asking; to choose or make a method file, use
+   `console_method_candidates` / `console_method_template`.
+   `pipeline_run` starts an independent worker that places the raw files in the
+   run, runs Console one polarity at a time, checks each analysis folder
+   against its mzTab-M and writes a receipt — it computes no statistics — and
+   returns a compact dispatch receipt (`pipeline_id`/`pipeline_path`) at once.
+   Poll with `pipeline_status(pipeline_path)`. When it reports `completed` or
+   `partial`, join route 1 with `load_dataset(pipeline_path=...,
+   polarity=...)` (one handle per polarity; the receipt in the status names
+   the polarities whose analysis folder passed, and the exact call to make)
+   and go on with `dataset_preprocess` /
+   `dataset_compare` / `dataset_pca`. When it reports `needs_input`, fix ONLY
+   the sample sheet with `pipeline_resume` (never re-ask about items already
+   confirmed). Console is never re-run on its own: re-running a failed
+   polarity needs `rerun_upstream=true`, which also needs the user's consent.
 
 MIXED-DATE FOLDERS ARE FINE — a folder may contain files from several MS-DIAL
 processing runs (multiple dates/batches). This is NOT a blocker and must not be

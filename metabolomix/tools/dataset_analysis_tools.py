@@ -397,14 +397,14 @@ def dataset_feature_search(
     欄の意味は `lipidmix://docs/output-format/mztab`。
 
     with_group_labels: True（opt-in。再解析で使う）なら `stats` の末尾に `comparison`
-        （pipeline の比較なら comparison_id、そうでなければ `<group_b>_vs_<group_a>`）・
+        （`<group_b>_vs_<group_a>`）・
         `group_a`・`group_b`・`log2fc_test_over_ref`（`log2fc` と同じ値を、比較名と同じ向きの
         名前で）を足す。既定 False では列は変わらない。
 
     merge_split: True（既定）なら、1 つの物質が 2 つに割れたアライメントスポット
         （`dataset_alignment_qc` の `merge_groups`。互いに最も近い mergeable な 2 スポット）を
         試料ごとの大きい方の値で 1 列にまとめた行列で、差次的結果と同じ前処理のレシピ・同じ検定
-        （log 変換の Welch 等）・**まとめた後の全特徴**での BH をやり直した値を `stats` に出す。
+        （`dataset_compare` の記録した spec を当て直す）・**まとめた後の全特徴**での BH をやり直した値を `stats` に出す。
         まとめる組がデータセットに 1 つでもあれば**すべての行**をやり直した値にする（1 つの表の q は
         1 つの BH の母集団から）。組が無ければやり直さず従来の値。目標照合でも組の 2 スポットを
         1 つの候補（残す ID。`targets[].merged_from`・`candidates` の末尾の `merged_from`）と数える。

@@ -5,7 +5,7 @@
 
 > 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項はそちらで定義され、ここでは繰り返さない。節番号は分割前の通し番号。
 
-ツールが**どのファイルのどの関数をどの順に呼ぶか**は `docs/workflow/mztab.md`。
+ツールが**どのファイルのどの関数をどの順に呼ぶか**は `docs/workflow/dataset.md`。
 ここは**値の意味**だけを定義する。
 
 ## 13. mzTab-M 経路（`load_dataset` 以降）
@@ -91,15 +91,15 @@ SMF からこれらを読もうとすると常に `None` になり、「この�
 を持たない（実 mzTab で稀ではない: Text DB 経由でない同定はスコアが SME 側にしか
 無い）ときは、対応する SME の個別スコア（`id_confidence_measure[2..8]` の合成
 total score）を代わりに入れる。SML 側の値がある場合はそちらを優先し上書きしない。
-このフォールバックが入ったことで、`dataset_export_differential` /
-`dataset_export_differential`（`metabolomix/analysis/feature_export.py`）の同じ列が、
+このフォールバックが入ったことで、`dataset_export_differential`
+（`metabolomix/analysis/dataset_export.py`）の同じ列が、
 以前は `null` だった行に SME 由来の値を出すようになった（列定義
 `export_contract.py` 自体は無変更）。
 
 **`confidence_measures` はどこからも読まれていない（Minor 9）**: `feature_annotations[fid]`
 に SME の個別スコア（`id_confidence_measure[2..8]`、`_extract_confidence_measures`）が
-入るが、`dataset_export_differential` / `dataset_export_differential`
-（`metabolomix/analysis/{dataset_export,feature_export}.py`）は列定義で明示された
+入るが、`dataset_export_differential`
+（`metabolomix/analysis/dataset_export.py`）は列定義で明示された
 キーだけを拾うため、この辞書は現状どのツール戻り値にも出ない。参照するには
 `DatasetState.feature_annotations[fid]["confidence_measures"]` を直接読むこと。
 
@@ -308,7 +308,7 @@ p / q / 平均は有効 4 桁）。
 | `log2fc` | 正なら `group_b` が高い（`results[*].log2fc_sign`） |
 | `q` | その結果に付いた BH の q をそのまま（窓で絞った件数で掛け直していない） |
 | `detected_a` / `detected_b` | 群ごとの**実検出の例数**（§13.7 の検出状態から数える）。**gap-fill の値は検出に数えない**。検出状態が無い・試料の対応を保証できないときは空で、`notes` に理由。非ゼロの平均があっても検出 0 例はありうる（埋め値の平均） |
-| `comparison` / `group_a` / `group_b` / `log2fc_test_over_ref` | `with_group_labels=true`（opt-in）のときだけ末尾に付く。`comparison` は pipeline の比較なら `comparison_id`、そうでなければ `<group_b>_vs_<group_a>`。`log2fc_test_over_ref` は `log2fc` と同じ値（正なら `group_b` が高い）を比較名と同じ向きの名前で書いたもの——`RA_vs_HC` の比較で `group_a=HC` と読み違えないための欄 |
+| `comparison` / `group_a` / `group_b` / `log2fc_test_over_ref` | `with_group_labels=true`（opt-in）のときだけ末尾に付く。`comparison` は `<group_b>_vs_<group_a>`。`log2fc_test_over_ref` は `log2fc` と同じ値（正なら `group_b` が高い）を比較名と同じ向きの名前で書いたもの——`RA_vs_HC` の比較で `group_a=HC` と読み違えないための欄 |
 
 `results[*]` は統計を付けた結果ごとの `{result_id, group_a, group_b, n_a, n_b, log2fc_sign,
 bh_population, caveats}`。`bh_population = {n_features_total, n_in_matrix, n_tested}` はデータセットの
@@ -321,7 +321,7 @@ bh_population, caveats}`。`bh_population = {n_features_total, n_in_matrix, n_te
 `dataset_alignment_qc` の `merge_groups`（互いに最も近い mergeable な 2 スポット。`reanalysis` §9）が
 データセットに 1 つでもあれば、すべての組の 2 スポットを**試料ごとの大きい方の値**で 1 列にまとめた行列
 （前処理の前の生の値。検出状態は「どちらかで検出」）に、差次的結果を計算したのと同じ前処理のレシピを
-当て直し（v1 の結果。`dataset_compare` の結果は同じ spec を当て直す。下記）、同じ検定（`log_transform` も同じ。pipeline の既定は log 変換の Welch）と**まとめた後の全特徴**での
+当て直し（`dataset_compare` の記録した spec を当て直す。下記）、同じ検定と**まとめた後の全特徴**での
 BH をやり直して、`stats` の**すべての行**をそこから出す（統計を付ける特徴が組に入るかどうかによらない。
 組が無ければやり直さない）。
 
@@ -336,8 +336,7 @@ BH をやり直して、`stats` の**すべての行**をそこから出す（�
 （対比が複数の結果は `result_id#contrast_id` の形で名指す。`contrast_id` 引数で絞ってもよい。交互作用の対比は対象外）。
 元の記録が無い・まとめた行列で比較をやり直せない・利用者への確認が要る前処理になるときは `FEATURE_MERGE_UNAVAILABLE`。
 
-v1 の結果（pipeline から引き継いだ比較）を計算したレシピは、来歴の `handoff.preprocess`、session で計算した結果なら親の前処理の `effective_parameters` から取る。分からないとき（古い run の引き継ぎなど）は
-`FEATURE_MERGE_UNAVAILABLE`（まとめる前の数字をまとめた後の顔で返さない。`merge_split=false` で呼び直す）。
+まとめる前の数字をまとめた後の顔では返さない（`FEATURE_MERGE_UNAVAILABLE` のときは `merge_split=false` で呼び直す）。
 `merge_split=false` なら従来どおりで、`stats_unmerged` も `merged_from` 列も無く `merge_split` は
 `{"enabled": false}`。`alignment_qc_path` は `dataset_alignment_qc` が今のデータセットで書いた JSON だけを
 受け（`dataset_fingerprint` が違えば `ANALYSIS_INPUT_INVALID`）、`merge_split=false` とは併用できない。
@@ -390,9 +389,9 @@ qualified にせず数にも入れない——選んだ残す ID の行が必ず
 `notes` には、打ち切り・使わなかった古い差次的結果・差次的結果が無いこと・検出状態が無いこと・
 極性の宣言と多数決の食い違い・キュレーションのフラグがあるのに反映していないこと（この検索は
 SME / SML の生の同定だけを見るので、`dataset_export_differential` の同定と食い違いうる）が入る。
-`result_ids` を省いたときは、効かなかった指定も `統計に使えなかった指定: …` の 1 行で入る: `contrast_id` を
-渡したが `dataset_compare` の結果が無く v1 の 2 群の結果だけがある（v1 は対比を持たないので効かず、v1 の結果は
-そのまま使う）、`dataset_compare` の結果の対比が交互作用だけ（2 群の形にならず統計は付かない）。`result_ids` で
+`result_ids` を省いたときは、統計に使えなかった結果も `統計に使えなかった指定: …` の 1 行で入る
+（`dataset_compare` の結果の対比が交互作用だけで、2 群の形にならず統計は付かない）。`result_ids` を省いて
+`contrast_id` を渡し、その対比を持つ結果が 1 つも無ければ `CONTRAST_REQUIRED`（候補は全結果の対比）。`result_ids` で
 交互作用だけの結果を名指しすると `missing_state`（`dataset_compare`）で、メッセージにその理由が入る。
 
 ## `dataset_plot(kind="loadings")`（mzTab-M のデータセット）
