@@ -35,8 +35,8 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
     "pipeline.md": (
         "pipeline_plan", "pipeline_run", "pipeline_status",
         "pipeline_resume", "pipeline_cancel",
+        "console_method_candidates", "console_method_template",
     ),
-    "metabolomics.md": (),   # pipeline の v2 工程だけを書く文書（ツールの節は無い）
     "library.md": ("library_load", "library_match_feature", "library_plot_mirror",
                    "library_search"),
     "curation.md": (
@@ -55,10 +55,6 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
 # 今回の範囲外。文書に混入したら落とす（線引きを固定するため）。
 OUT_OF_SCOPE: tuple[str, ...] = (
     "record_objective", "write_report", "read_report",
-    # Console 実行層（Phase 2 追加・ワークフロー文書は Phase 2 完了後に追加）
-    "console_plan", "console_prepare_input", "console_method_template",
-    "console_method_candidates",
-    "console_run", "console_status", "console_cleanup", "job_list",
     # サーバ自身の保守（解析の流れには現れない）
     "server_update",
 )
@@ -165,7 +161,7 @@ class TestScopeBoundary(unittest.TestCase):
     def test_scope_totals_match_registered_tool_count(self):
         """対象範囲の分割が、実際に登録されているツール数と一致することを縛る。
 
-        46 / 12 という分割は設計上の線引きだが、その合計は「全ツールを漏れなく
+        49 / 4 という分割は設計上の線引きだが、その合計は「全ツールを漏れなく
         分類した」という主張でもある。リテラルどうしの比較では自分自身を検証して
         しまうので、実際の登録数を引いて突き合わせる。
         """
@@ -180,4 +176,4 @@ class TestScopeBoundary(unittest.TestCase):
             registered,
             "対象範囲の分類と登録済みツールが一致しない",
         )
-        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 47)
+        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 49)

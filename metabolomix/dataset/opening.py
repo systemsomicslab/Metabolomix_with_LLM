@@ -33,7 +33,9 @@ from pathlib import Path
 
 from metabolomix.core import handles
 from metabolomix.core.atomic_io import DomainError
-from metabolomix.dataset.alignment_files import AlignmentSelection, select_alignment
+from metabolomix.dataset.alignment_files import (
+    AlignmentSelection, arf2_batches_newest_first, select_alignment,
+)
 from metabolomix.mztab.dataset_state import DatasetState
 
 __all__ = ["KINDS", "SOURCES", "OpenedDataset", "open_dataset", "pipeline_arf2",
@@ -66,6 +68,8 @@ class OpenedDataset:
     reused_base: 読み込み済みの基を使い回したか
     mztab_path: `.arf` と照合した正準 mzTab-M（mzTab-M のアダプタと、job / pipeline を
         解析フォルダで読んだとき。基の指紋が今の `.arf` の候補を数えるのに使う）
+    polarity: `pipeline_path` で開いた run の極性の単位（`polarity` を省いて 1 単位に決まったときも）。
+        他の入口は None
     """
 
     dataset: DatasetState
@@ -76,19 +80,24 @@ class OpenedDataset:
     notes: list[str] = field(default_factory=list)
     reused_base: bool = False
     mztab_path: str | None = None
+    polarity: str | None = None
 
 
 def open_dataset(*, directory=None, mztab_path=None, job_path=None, pipeline_path=None,
-                 source: str = "auto", measure: str = "peak_height",
+                 polarity: str | None = None, source: str = "auto",
+                 measure: str = "peak_height",
                  allow_incomplete: bool = False) -> OpenedDataset:
     """4 つの入口のちょうど 1 つを、`source` で決まるアダプタで開く（モジュールの説明の表）。
 
     measure: 解析フォルダのアダプタが値に使う `.arf` の欄（`peak_height` / `peak_area_above_zero`）。
         mzTab-M のアダプタは既定の `peak_height` だけを受ける（定量種別はファイルで決まる）。
     allow_incomplete: 完了していないジョブ・run の出力を探索専用として読む（どちらのアダプタでも）。
+    polarity: `pipeline_path` のときだけ。run の極性の単位を選ぶ（単位が 1 つなら省ける。2 つ以上で
+        省くと `PIPELINE_POLARITY_REQUIRED`）。ほかの入口で渡すと `PIPELINE_POLARITY_NOT_APPLICABLE`。
 
     エラーは `DomainError`（`DATASET_BAD_REQUEST` / `ALIGNMENT_NOT_FOUND` / `ALIGNMENT_INCOMPLETE` /
-    `INCOMPLETE_ANALYSIS_JOB` / `MZTAB_NOT_FOUND` など）。
+    `INCOMPLETE_ANALYSIS_JOB` / `MZTAB_NOT_FOUND` / `PIPELINE_POLARITY_REQUIRED` /
+    `PIPELINE_POLARITY_NOT_FOUND` / `PIPELINE_UNIT_NOT_VALIDATED` など）。
     """
     from metabolomix.dataset.msdial_adapter import MEASURES
 
@@ -111,6 +120,14 @@ def open_dataset(*, directory=None, mztab_path=None, job_path=None, pipeline_pat
             "job_path: analysis-job.json。pipeline_path: pipeline-run.json かその親）。",
             {"given": sorted(given)})
     kind, raw = next(iter(given.items()))
+    if polarity == "":
+        polarity = None
+    if polarity is not None and kind != "pipeline_path":
+        raise DomainError(
+            "PIPELINE_POLARITY_NOT_APPLICABLE",
+            f"polarity は pipeline_path のときだけ使えます（{kind} で渡されました）。"
+            "ジョブ・解析フォルダ・mzTab-M の極性は、そのファイルの宣言から決まります。",
+            {"field": "polarity", "kind": kind})
     adapter = _adapter(kind, source)
     if measure not in MEASURES:
         raise DomainError("DATASET_BAD_REQUEST",
@@ -124,7 +141,7 @@ def open_dataset(*, directory=None, mztab_path=None, job_path=None, pipeline_pat
             {"field": "measure", "adapter": adapter})
 
     input_path = Path(str(raw)).expanduser().resolve()
-    key = f"{kind}:{adapter}:{measure}:{allow_incomplete}:{input_path}"
+    key = f"{kind}:{adapter}:{measure}:{allow_incomplete}:{polarity or ''}:{input_path}"
     cached = handles.registry.cached_base(key)
     if cached is not None and _signature(cached[0]) == cached[1]:
         return _copy(cached[0], reused=True)
@@ -138,7 +155,8 @@ def open_dataset(*, directory=None, mztab_path=None, job_path=None, pipeline_pat
         # （結果は返す）。読む前の時刻と、読んだ後の依存の更新時刻だけを比べる——どの経路・
         # どのパスの綴りでも効く。読む直前に書かれたファイルは覚えられないだけで、安全側。
         started = time.time_ns()
-        base = _open(kind, str(raw), str(input_path), adapter, measure, allow_incomplete)
+        base = _open(kind, str(raw), str(input_path), adapter, measure, allow_incomplete,
+                     polarity)
         signature = _signature(base)
         if _changed_during_load(started, signature):
             base.notes.append("読み込みの間に入力が変わった（読み込みの開始後に更新された"
@@ -242,11 +260,14 @@ def _dependencies(base: OpenedDataset) -> set[str]:
     if getattr(ds, "job_path", None):
         paths.update(_job_files(Path(ds.job_path)))
     if base.kind == "pipeline_path":
+        from metabolomix.pipeline.receipt import RECEIPT_RELATIVE_PATH
         from metabolomix.pipeline.recovery import normalize_pipeline_root
 
         root = normalize_pipeline_root(Path(base.path))
         paths.add(str(root / "pipeline-run.json"))
-        paths.update(str(p) for p in (root / "input").glob("AlignResult-*.arf2"))
+        paths.add(str(root / RECEIPT_RELATIVE_PATH))
+        paths.update(str(p) for p in arf2_batches_newest_first(
+            _unit_input_dir(root, base.polarity)))
     return paths
 
 
@@ -303,9 +324,6 @@ def _job_files(job_path: Path) -> list[str]:
     method = (getattr(job, "method_file", "") or "").strip()
     if method:
         out.append(method)
-    relative = (getattr(job, "profile_snapshot", None) or {}).get("effective_method_relative_path")
-    if relative:
-        out.append(str(Path(job.run_dir) / relative))
     msp = loading.effective_method_msp(job)
     if msp is not None:
         out.append(str(msp))
@@ -316,14 +334,20 @@ def _job_files(job_path: Path) -> list[str]:
 # ---------- 読み込み ----------
 
 def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
-          allow_incomplete: bool) -> OpenedDataset:
+          allow_incomplete: bool, polarity: str | None = None) -> OpenedDataset:
     from metabolomix.dataset import library_memory
 
     selection = None
     notes: list[str] = []
     mztab_path = None
+    unit = None
+    if kind == "pipeline_path":
+        from metabolomix.pipeline import session_handoff
+
+        unit = session_handoff.resolve_unit(raw, polarity, allow_incomplete=allow_incomplete)
+        polarity = unit.polarity
     if adapter == "mztab":
-        ds = _load(kind, raw, allow_incomplete)
+        ds = _load(kind, raw, allow_incomplete, polarity)
         # 直接指定なら入力そのもの（mzTab-M の読み取りは拡張子を問わない）。job / pipeline は
         # 読み込んだ mzTab-M（この経路の source_files は mzTab-M だけ）。
         mztab_path = path if kind == "mztab_path" else next(
@@ -340,7 +364,7 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
         notes.append(_folder_note(gate, "ジョブ"))
         mztab_path = str(gate.mztab_path)
     else:
-        ds, selection, gate, notes = _folder_via_run(raw, measure=measure,
+        ds, selection, gate, notes = _folder_via_run(unit, measure=measure,
                                                      allow_incomplete=allow_incomplete)
         mztab_path = str(gate.mztab_path)
 
@@ -349,9 +373,7 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
     elif kind == "job_path":
         record = library_memory.remember_from_job(Path(raw).expanduser())
     elif kind == "pipeline_path":
-        from metabolomix.pipeline.recovery import normalize_pipeline_root
-
-        record = library_memory.remember_from_run(normalize_pipeline_root(Path(raw).expanduser()))
+        record = library_memory.remember_from_run(unit.pipeline_root, unit.polarity)
     else:
         record = library_memory.unknown_record()
     ds.library_record = record
@@ -361,15 +383,21 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
         ds.analysis_dir = str(Path(selection.arf).parent)
     elif mztab_path:
         ds.analysis_dir = str(Path(mztab_path).parent)
+    if unit is not None and adapter == "mztab":
+        notes.extend(unit.notes)
+    if unit is not None and unit.legacy:
+        notes.append("旧 v1 の run なので、run が計算した差次的結果は戻していない（比較は dataset_compare でやり直す）。")
     return OpenedDataset(dataset=ds, kind=kind, path=path, adapter=adapter,
-                         selection=selection, notes=notes, mztab_path=mztab_path)
+                         selection=selection, notes=notes, mztab_path=mztab_path,
+                         polarity=polarity)
 
 
-def _load(kind: str, path: str, allow_incomplete: bool):
+def _load(kind: str, path: str, allow_incomplete: bool, polarity: str | None = None):
     """mzTab-M のアダプタ（今までの読み込みそのまま）。"""
     if kind == "pipeline_path":
         from metabolomix.pipeline import session_handoff
-        return session_handoff.load_run_dataset(path, allow_incomplete=allow_incomplete)
+        return session_handoff.load_run_dataset(path, polarity=polarity,
+                                                allow_incomplete=allow_incomplete)
     from metabolomix.mztab.loading import load_dataset_state
     return load_dataset_state(
         mztab_path=Path(path) if kind == "mztab_path" else None,
@@ -378,7 +406,7 @@ def _load(kind: str, path: str, allow_incomplete: bool):
 
 
 def _folder_via_job(job_path: Path, *, measure: str, allow_incomplete: bool,
-                    pipeline_root: Path | None = None):
+                    analysis_dir: Path | None = None):
     """ジョブの門を通し、正準 mzTab-M と同じアラインメントの解析フォルダを読む。(ds, selection, gate)。
 
     読む `.arf` は `_matching_arf` が mzTab-M との照合で選ぶ。ジョブが記録した付随
@@ -390,7 +418,7 @@ def _folder_via_job(job_path: Path, *, measure: str, allow_incomplete: bool,
 
     gate = loading.job_gate(job_path, allow_incomplete=allow_incomplete)
     artifact_paths = loading.job_artifact_paths(gate.job)
-    target, raw_by_name, meta_by_name, scan = _matching_arf(gate, artifact_paths, pipeline_root)
+    target, raw_by_name, meta_by_name, scan = _matching_arf(gate, artifact_paths, analysis_dir)
     try:
         selection = select_alignment(target)
     except DomainError as exc:
@@ -427,7 +455,7 @@ def _folder_via_job(job_path: Path, *, measure: str, allow_incomplete: bool,
 
 
 def _matching_arf(gate, artifact_paths: dict[str, list[str]],
-                  pipeline_root: Path | None):
+                  analysis_dir: Path | None):
     """正準 mzTab-M と同じアラインメントの `.arf` をちょうど 1 本選ぶ。
 
     戻り値は (その `.arf`, 試料名（strip 済み） -> raw のパス, 試料名 -> {batch, run_order},
@@ -438,8 +466,8 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]],
 
     候補は mzTab-M のアダプタの evidence と同じ順（`arf_candidates`。handoff の
     `peak_matrix_source` → 隣の `*PeakProperties.arf` → 隣のその他）。どれも検証
-    （`matching_arfs`。特徴数・m/z・試料名）を通らず pipeline の run なら、`input/` の
-    `AlignResult-*.arf2`（`pipeline_arf2`）と同じバッチの `.arf` も同じ検証にかける。
+    （`matching_arfs`。特徴数・m/z・試料名）を通らず pipeline の run なら、その単位の解析フォルダ
+    （`<単位>/input/`。`analysis_dir`）の `.arf2` と同じバッチの `.arf` も同じ検証にかける。
     名前の順で先頭を取らない——同じフォルダに別のバッチが居るのは普通で、名前の古い
     バッチを「同じアラインメント」と呼んでしまう。
     """
@@ -473,25 +501,18 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]],
         return evidence.matching_arfs(paths, feature_mz=axes[0], sample_names=axes[1],
                                       measures=tuple(MEASURES.values()))
 
-    candidates = evidence.arf_candidates(gate.mztab_path, artifact_paths)
-    passed, rejected, scan = verify(candidates) if candidates else ([], {}, None)
-    if not passed and pipeline_root is not None:
-        # run の input/ のバッチを新しい順に、合うものが見つかるまで試す。
-        # すでに候補に入っている `.arf`（解決後のパスで比べる）は二重に検証・列挙しない。
-        for arf2 in pipeline_arf2_candidates(pipeline_root):
+    def fallbacks():
+        # 解析フォルダのバッチを新しい順に（`first_matching_arfs` が合うまで 1 本ずつ試す）。
+        if analysis_dir is None:
+            return
+        for arf2 in arf2_batches_newest_first(analysis_dir):
             try:
-                fallback = select_alignment(arf2).arf
+                yield select_alignment(arf2).arf
             except DomainError as exc:
                 raise _with_hint(exc) from exc
-            if fallback.resolve() in {p.resolve() for p in candidates}:
-                continue
-            candidates.append(fallback)
-            more, more_rejected, more_scan = verify([fallback])
-            passed += more
-            rejected.update(more_rejected)
-            scan = scan or more_scan
-            if passed:
-                break
+
+    passed, rejected, scan, candidates = evidence.first_matching_arfs(
+        gate.mztab_path, artifact_paths, verify, fallbacks())
 
     details = {"mztab": gate.mztab_path.name, "candidates": [p.name for p in candidates],
                "source_hint": "mztab"}
@@ -510,7 +531,7 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]],
             {**details, "matching": [p.name for p in passed]})
     if not candidates:
         where = (f"ジョブの mzTab-M（{gate.mztab_path.name}）の隣"
-                 + ("にも run の input/ にも" if pipeline_root is not None else "に"))
+                 + ("にも run の解析フォルダ（input/）にも" if analysis_dir is not None else "に"))
         raise DomainError(
             "ALIGNMENT_NOT_FOUND",
             f"{where} MS-DIAL のアラインメント（.arf）が見つかりません。{_MZTAB_HINT}", details)
@@ -529,22 +550,21 @@ def _with_hint(exc: DomainError) -> DomainError:
                        {**(exc.details or {}), "source_hint": "mztab"})
 
 
-def _folder_via_run(pipeline_path: str, *, measure: str, allow_incomplete: bool):
-    """pipeline の run を解析フォルダで読む。run から引き継ぐのは解決済みの試料対応表だけ。"""
+def _folder_via_run(unit, *, measure: str, allow_incomplete: bool):
+    """pipeline の run の極性の単位（`session_handoff.UnitRun`）を解析フォルダで読む。
+    run から引き継ぐのは解決済みの試料対応表だけ。"""
     from metabolomix.analysis import sample_manifest
-    from metabolomix.pipeline import session_handoff
 
-    root, record, job_path = session_handoff.run_console_job(pipeline_path)
-    ds, selection, gate = _folder_via_job(job_path, measure=measure,
-                                          allow_incomplete=allow_incomplete, pipeline_root=root)
-    rows = session_handoff.run_manifest_rows(root, record)
+    ds, selection, gate = _folder_via_job(unit.job_path, measure=measure,
+                                          allow_incomplete=allow_incomplete,
+                                          analysis_dir=unit.analysis_dir)
+    rows = unit.manifest_rows
     if rows is not None:
         # roles / sample_meta も組み直す（run の試料対応表の役割を、前処理の前から見せる）。
         sample_manifest.apply_defaults_and_inputs(ds, sample_manifest.resolve_metadata(ds, rows))
-    notes = [_folder_note(gate, "run"),
-             "run の解析行列・feature binding・差次的結果は読んでいない（解析フォルダの"
-             "アダプタが run から引き継ぐのは解決済みの試料対応表だけ）。それらも載せるなら"
-             " source=\"mztab\" で読む。"]
+    notes = [*unit.notes, _folder_note(gate, "run"),
+             "run の解析行列は読んでいない（解析フォルダのアダプタが run から引き継ぐのは"
+             "解決済みの試料対応表だけ）。"]
     return ds, selection, gate, notes
 
 
@@ -553,21 +573,72 @@ def _folder_note(gate, where: str) -> str:
             "読んだ。mzTab-M を読むなら source=\"mztab\"。")
 
 
-def pipeline_arf2_candidates(pipeline_path) -> list[Path]:
-    """pipeline の run の `input/AlignResult-*.arf2` を、名前の新しい順に並べる。
+def _unit_input_dir(root: Path, polarity: str | None) -> Path:
+    """run の極性の単位の解析フォルダ（`<単位>/input/`。旧 v1 の run は run 直下の `input/`）。
+
+    記録が読めない・単位が決まらない（極性を省いて 2 単位以上）ときは run 直下の `input/`。
+    """
+    from metabolomix.pipeline import store
+
+    try:
+        units = store.run_units(store.load_run(root))
+    except (DomainError, OSError, ValueError):
+        units = {}
+    unit = units.get(polarity) if polarity else (
+        next(iter(units.values())) if len(units) == 1 else None)
+    return root / ((unit or {}).get("unit_root") or ".") / "input"
+
+
+def pipeline_arf2_candidates(pipeline_path, polarity: str | None = None) -> list[Path]:
+    """pipeline の run の極性の単位の `input/*.arf2` を、名前の新しい順に並べる。
 
     run では mzTab が `console/attempt-*/msdial/` の下、`.arf`・`.arf2`・`.dcl` が
-    `input/` にあるので、mzTab の隣を探す既定の経路では見つからない。バッチが複数あるときは
+    `<極性>/input/` にあるので、mzTab の隣を探す既定の経路では見つからない。バッチが複数あるときは
     名前の降順（決定的にするため。`AlignResult-<日時など>` は名前の順が新しさの順になる）。
-    `pipeline_path` は `pipeline-run.json` でもその親でもよい。
+    探すパターンは `pipeline.service` の検証と同じ共有の規則（`arf2_batches_newest_first`）。
+    `pipeline_path` は `pipeline-run.json` でもその親でもよい。`polarity` を省いて単位が複数なら
+    決められないので空。
     """
     from metabolomix.pipeline.recovery import normalize_pipeline_root
 
     root = normalize_pipeline_root(Path(pipeline_path))
-    return [p for p in sorted((root / "input").glob("AlignResult-*.arf2"),
-                              key=lambda p: p.name, reverse=True) if p.is_file()]
+    return arf2_batches_newest_first(_unit_input_dir(root, polarity))
 
 
-def pipeline_arf2(pipeline_path) -> Path | None:
-    """pipeline の run の `input/AlignResult-*.arf2` のうち名前が最も新しいもの。無ければ None。"""
-    return next(iter(pipeline_arf2_candidates(pipeline_path)), None)
+def pipeline_arf2(pipeline_path, polarity: str | None = None) -> Path | None:
+    """pipeline の run の極性の単位でスポットの照合に使う `.arf2`。無ければ None。
+
+    受領が照合したバッチ（`units.<極性>.alignment.arf2`）があればそれ——`rerun_upstream` の
+    後は前の実行のバッチも同じフォルダに残り、名前の順では照合したバッチを指せない。受領に
+    無い（照合できなかった・受領が無い・旧 v1 の run）ときだけ、`input/*.arf2` のうち名前が
+    最も新しいもの。
+    """
+    verified = _receipt_arf2(pipeline_path, polarity)
+    if verified is not None:
+        return verified
+    return next(iter(pipeline_arf2_candidates(pipeline_path, polarity)), None)
+
+
+def _receipt_arf2(pipeline_path, polarity: str | None) -> Path | None:
+    """受領が照合した `.arf2`（単位の解析フォルダに実在するときだけ）。"""
+    from metabolomix.pipeline import receipt as receipt_mod
+    from metabolomix.pipeline import store
+    from metabolomix.pipeline.recovery import normalize_pipeline_root
+
+    try:
+        root = normalize_pipeline_root(Path(pipeline_path))
+        record = store.load_run(root)
+        if store.is_legacy(record):
+            return None
+        units = (receipt_mod.read_receipt(root, record) or {}).get("units") or {}
+    except (DomainError, OSError, ValueError):
+        return None
+    unit = units.get(polarity) if polarity else (
+        next(iter(units.values())) if len(units) == 1 else None)
+    if not isinstance(unit, dict):
+        return None
+    name = (unit.get("alignment") or {}).get("arf2")
+    if not name or not unit.get("analysis_dir"):
+        return None
+    candidate = root / unit["analysis_dir"] / name
+    return candidate if candidate.is_file() else None

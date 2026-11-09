@@ -306,11 +306,8 @@ def test_as_two_group_rejects_interaction():
     assert _code(stats_results.as_two_group, rec2).code == "CONTRAST_NOT_TWO_GROUP"
 
 
-def test_as_two_group_passes_v1_two_group_through():
-    v1 = {"kind": "two_group", "a": "C", "b": "T", "results": [], "volcano": [],
-          "provenance": {"result_id": "res_x", "kind": "differential"}}
-    assert stats_results.as_two_group(v1) is v1
-    assert stats_results.contrast_ids(v1) == []
+def test_as_two_group_reads_only_compare_records():
+    assert stats_results.contrast_ids({"kind": "stat_pca"}) == []
     assert _code(stats_results.as_two_group, {"kind": "stat_pca"}).code == "ANALYSIS_RESULT_NOT_FOUND"
 
 
@@ -353,33 +350,30 @@ def test_compare_record_stale_after_exclusion_and_manifest_change():
     assert not stats_results.is_stats_current(ds, {"kind": "compare"})   # 来歴が無ければ確かめられない
 
 
-def test_invalidate_on_exclusion_clears_stat_and_analysis_matrices():
+def test_invalidate_on_exclusion_clears_stat_matrices():
     def fresh():
         ds = DatasetState()
         ds.stat_matrices = {"mx_a": {"matrix_id": "mx_a"}}
-        ds.analysis_matrices = {"m": {}}
         return ds
 
-    for changed in ({"exclusion"}, {"role"}, {"batch"}, {"detection"}, {"dataset"},
-                    {"matrix_recipe"}):
+    for changed in ({"exclusion"}, {"role"}, {"batch"}, {"detection"}, {"dataset"}):
         ds = fresh()
         invalidate_results(ds, changed)
-        assert ds.stat_matrices == {} and ds.analysis_matrices == {}, changed
+        assert ds.stat_matrices == {}, changed
     # 群・比較・PCA の設定・v1 の前処理のやり直し（recipe）は行列の入力ではない
     for changed in ({"group"}, {"comparison"}, {"pca_settings"}, {"recipe"}, {"note"}):
         ds = fresh()
         invalidate_results(ds, changed)
-        assert ds.stat_matrices and ds.analysis_matrices, changed
+        assert ds.stat_matrices, changed
     # 実際の除外の経路
     ds = _ds()
     n = normalize_spec_v2({"schema": "analysis-spec.v2", "preprocess": OFF,
                            "comparisons": [T_VS_C],
                            "analyses": [{"analysis_id": "cmp", "kind": "compare"}]})
     stats_results.register_matrix(ds, prepare_spec_v2(n, ds), n["preprocess"], {})
-    ds.analysis_matrices = {"m": {}}
     assert ds.stat_matrices
     apply_exclusions(ds, samples=None, features=["f1"], mode="add", reason="割れ")
-    assert ds.stat_matrices == {} and ds.analysis_matrices == {}
+    assert ds.stat_matrices == {}
 
 
 def test_derive_resets_stat_matrices():

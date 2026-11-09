@@ -193,7 +193,7 @@ def _two_group_ci(a, b, kind):
     return d, d - half, d + half, df
 
 
-def _two_group_tests(log2, cell_idx, info, cids, testable, kind):
+def _pairwise_tests(log2, cell_idx, info, cids, testable, kind):
     g = log2.shape[1]
     out = {}
     tol = _variance_tolerance(log2) if log2.size else np.zeros(g)
@@ -353,7 +353,7 @@ def compare(prepared: PreparedMatrix, *, factors: list[str], comparisons: list[d
         quant, prior, omnibus_raw = _moderated(log2, design, cids, testable, omnibus_ok,
                                                want_omnibus)
     else:
-        quant = _two_group_tests(log2, cell_idx, info, cids, testable, test)
+        quant = _pairwise_tests(log2, cell_idx, info, cids, testable, test)
         prior, omnibus_raw = None, None
     if effect_size == "arithmetic_mean_ratio":
         _apply_arithmetic_ratio(quant, log2, design, cell_idx, cids)

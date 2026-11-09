@@ -61,43 +61,34 @@ def test_build_meta_omits_preprocess_when_absent():
     assert not any("preprocess" in l for l in _meta())
 
 
-def test_run_dataset_differential_tracks_contract_module(monkeypatch):
-    """dataset_analysis.py がバージョン/符号ラベルをローカル複製せず、
+def test_two_group_view_tracks_contract_module(monkeypatch):
+    """2 群の形への読み替え（`stats_results.as_two_group`）が版・符号ラベルをローカル複製せず、
     export_contract を都度参照していることを行動で確認する。
 
-    値の一致（==）だけを見るテストは、dataset_analysis.py 側に値の等しい
-    ローカル定数（旧 _CONTRACT_VERSION/_LOG2FC_SIGN）が残っていても偶然パスして
-    しまう。ここでは export_contract 側だけを書き換え、その変更が
-    run_dataset_differential の戻り値へ伝播することを見て、参照がコピーでなく
-    リンクであることを確認する（コントローラ裁定: これを直さないと、
-    CONTRACT_VERSION を上げた瞬間 dataset_export_differential が永久に
-    「契約非互換」で拒否し続ける無限ループになる）。
+    値の一致（==）だけを見るテストは、値の等しいローカル定数が残っていても偶然パスしてしまう。
+    ここでは export_contract 側だけを書き換え、その変更が読み替えの戻り値へ伝播することを見て、
+    参照がコピーでなくリンクであることを確認する（CONTRACT_VERSION を上げた瞬間に書き出しが
+    古い版を名乗り続けないように）。
     """
     import numpy as np
 
     from metabolomix.analysis import export_contract
-    from metabolomix.analysis.dataset_analysis import (
-        run_dataset_differential, run_dataset_preprocess,
-    )
+    from metabolomix.analysis.stats_results import as_two_group
     from metabolomix.mztab.dataset_state import DatasetState
-
-    monkeypatch.setattr(export_contract, "CONTRACT_VERSION", 999)
-    monkeypatch.setattr(export_contract, "LOG2FC_SIGN", "patched sign for linkage test")
+    from tests.engine_chain import declare_groups, register_two_group
 
     rng = np.random.default_rng(0)
     ds = DatasetState()
-    ds.feature_matrix = rng.random((20, 8)) * 1000.0
+    ds.feature_matrix = rng.random((20, 8)) * 1000.0 + 100.0
     ds.sample_names = ([f"ctrl_{i}" for i in range(4)]
                        + [f"treat_{i}" for i in range(4)])
     ds.feature_ids = [f"f{i}" for i in range(20)]
-    (ds.pp_matrix, ds.pp_sample_names, ds.pp_feature_names,
-     ds.roles, ds.sample_meta, _) = run_dataset_preprocess(ds, {})
+    declare_groups(ds, lambda name: name.split("_")[0])
+    record = register_two_group(ds, "ctrl", "treat")
 
-    result = run_dataset_differential(
-        ds,
-        group_a_samples=[n for n in ds.pp_sample_names if n.startswith("ctrl")],
-        group_b_samples=[n for n in ds.pp_sample_names if n.startswith("treat")],
-    )
+    monkeypatch.setattr(export_contract, "CONTRACT_VERSION", 999)
+    monkeypatch.setattr(export_contract, "LOG2FC_SIGN", "patched sign for linkage test")
+    result = as_two_group(record)
 
     assert result["contract_version"] == 999
     assert result["log2fc_sign"] == "patched sign for linkage test"
@@ -144,9 +135,8 @@ def test_build_meta_appends_stats_lines_after_msi_note():
     assert [l for l in lines if "exported_at" not in l][:-2] == [l for l in base if "exported_at" not in l]
 
 
-def test_stats_meta_lines_empty_for_v1_result_and_keys_do_not_collide():
+def test_stats_meta_lines_keys_do_not_collide():
     from metabolomix.analysis.export_contract import stats_meta_lines
-    assert stats_meta_lines({"kind": "two_group", "a": "x"}) == []
     result = {"effect_size_definition": {"name": "log2_mean_difference"}, "matrix_id": "m", "rule_hash": "h", "contrast_id": "c", "provenance": {"kind": "compare"},
               "statistics": {"test": "welch", "ci_level": 0.95, "subject_source": "injection",
                              "verdict_rule": {"q_threshold": 0.05, "equivalence_fc": 1.2},
@@ -199,7 +189,7 @@ def test_stats_meta_lines_write_zero_for_an_empty_bh_population():
 def test_row_significant_honours_verdict_and_row_flag():
     from metabolomix.analysis.export_contract import row_significant
     thr = dict(q_threshold=0.05, log2fc_threshold=1.0)
-    assert row_significant({"q": 0.01, "log2fc": 2.0}, **thr)                       # v1 の行
+    assert not row_significant({"q": 0.01, "log2fc": 2.0}, **thr)                   # 判定の無い行
     assert not row_significant({"q": 0.01, "log2fc": 0.5}, **thr)
     assert row_significant({"q": 0.01, "log2fc": 2.0, "verdict": "changed"}, **thr)
     for verdict in ("inconclusive", "unchanged"):

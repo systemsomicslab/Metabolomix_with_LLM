@@ -62,8 +62,8 @@ def dataset_export_differential(output_path: str,
     フラグ記録に読めない行があれば書き出さずに `CURATION_FLAGS_INVALID`。
 
     result_id: 書き出す結果を名指しする（省略時は直近の差次的結果）。
-        **前処理をやり直した後の古い結果は書き出しません**（`STALE_ANALYSIS_RESULT`）。
-        古い数字に現在の前処理条件のラベルが付いた TSV は、どちらも正しく見えて
+        **除外・試料の表の変更で古くなった結果は書き出しません**（`STALE_ANALYSIS_RESULT`）。
+        古い数字に現在の条件のラベルが付いた TSV は、どちらも正しく見えて
         ずれが分からなくなります。
 
     InChIKey は DatasetState.feature_metadata から取る（mzTab-M の
@@ -71,13 +71,13 @@ def dataset_export_differential(output_path: str,
     濃縮解析の背景を保つため、有意な行だけでなく InChIKey が付いた全行を出す。
     ontology と msi_level は mzTab-M に対応物が無いため空欄で、その旨をメタ行に
     書く（空欄を「該当なし」と読み違えさせない）。メタ行には result_id と
-    preprocess_id も入るので、あとから「どの計算の出力か」を辿れる。
+    preprocess_id（その結果が読んだ行列の `matrix_id`）も入るので、あとから「どの計算の出力か」を辿れる。
 
     contrast_id: `dataset_compare` の結果が対比を複数持つときに書き出す対比の ID（`T_vs_C` など）。
         対比が 1 つなら省略できる。複数で省くか未知の ID なら `CONTRAST_REQUIRED`、交互作用の対比は
         2 群の形にならないので `CONTRAST_NOT_TWO_GROUP`（どちらも details に候補）。
-        統計エンジンの結果には、15 列の後ろ（`msi_note` の後）に検定・判定規則・単位などのメタ行が
-        付く（列と契約の版は同じ。`mean_a` / `mean_b` は前処理後の線形値の算術平均）。
+        15 列の後ろ（`msi_note` の後）に検定・判定規則・単位などのメタ行が付く（列と契約の版は同じ。
+        `mean_a` / `mean_b` は前処理後の線形値の算術平均）。
 
     dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
@@ -96,7 +96,7 @@ def dataset_export_differential(output_path: str,
         except DomainError as exc:
             return mztab_error(exc.code, exc.message, exc.details or None)
         last = (ds.results or {}).get(result_id)
-    if not last or last.get("kind") not in ("two_group", "compare"):
+    if not last or last.get("kind") != "compare":
         return _missing(
             "dataset_compare_result",
             "先に dataset_preprocess → dataset_compare を実行してください。"
@@ -173,13 +173,8 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     `dataset_preprocess` を前と同じ引数で（既定でよいならそれを明示して）呼び直し、返った新しい
     `matrix_id` を `dataset_compare` / `dataset_pca` に渡す。`matrix_id` を省いて `dataset_compare` だけを
     呼び直すと既定の前処理で行列を作り直すので、前に選んだ前処理とは別の行列になりうる。
-    pipeline の v1 結果では従来どおり: 前処理入力（role/batch/injection_order/qc_pool/include/
-    sample_id/source_file）が変われば前処理済み行列ごと・PCA・差次的解析まで無効化し、`group` だけの変更なら
-    差次的解析だけを無効化して PCA は生かす。
-
-    比較の前提検証は 2 つの比較で同じ向きに守る: pipeline は `resolve_comparison`/`run_comparison`
-    （内部関数。v1 の Welch t）、対話の `dataset_compare` は統計エンジン（既定は moderated t）が、
-    群の明示を求め・`include=false` と非 sample の役割を外し・完全交絡を `allow_confounded` なしには止める。
+    比較の前提検証は `dataset_compare`（統計エンジン。既定は moderated t）が守る: 群の明示を求め・
+    `include=false` と非 sample の役割を外し・完全交絡を `allow_confounded` なしには止める。
 
     dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
@@ -191,7 +186,7 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     if ds is None:
         return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
 
-    from metabolomix.analysis.dataset_service import apply_sample_manifest
+    from metabolomix.analysis.sample_manifest import apply_sample_manifest
 
     try:
         summary = apply_sample_manifest(ds, manifest_path)
@@ -384,7 +379,7 @@ def dataset_feature_search(
     4 桁に）より前の値から作るので、返された `rule.targets` から計算し直すことはできない
     ——照合は `rule_hash` の値どうしで行う。
 
-    result_ids: 統計を付ける 2 群比較（`dataset_compare` の結果の対比、v1 の 2 群の結果）。省略時は
+    result_ids: 統計を付ける 2 群比較（`dataset_compare` の結果の対比）。省略時は
         今も有効な 2 群比較の全部（古いものは使わず `notes` に挙げる）。`dataset_compare` の結果は対比ごとに
         1 つの比較として数え、ID は対比が 1 つなら `result_id`、複数なら `result_id#contrast_id`
         （交互作用の対比は 2 群の形にならないので使わない）。名指しした ID が無い・古いときは
@@ -402,14 +397,14 @@ def dataset_feature_search(
     欄の意味は `lipidmix://docs/output-format/mztab`。
 
     with_group_labels: True（opt-in。再解析で使う）なら `stats` の末尾に `comparison`
-        （pipeline の比較なら comparison_id、そうでなければ `<group_b>_vs_<group_a>`）・
+        （`<group_b>_vs_<group_a>`）・
         `group_a`・`group_b`・`log2fc_test_over_ref`（`log2fc` と同じ値を、比較名と同じ向きの
         名前で）を足す。既定 False では列は変わらない。
 
     merge_split: True（既定）なら、1 つの物質が 2 つに割れたアライメントスポット
         （`dataset_alignment_qc` の `merge_groups`。互いに最も近い mergeable な 2 スポット）を
         試料ごとの大きい方の値で 1 列にまとめた行列で、差次的結果と同じ前処理のレシピ・同じ検定
-        （log 変換の Welch 等）・**まとめた後の全特徴**での BH をやり直した値を `stats` に出す。
+        （`dataset_compare` の記録した spec を当て直す）・**まとめた後の全特徴**での BH をやり直した値を `stats` に出す。
         まとめる組がデータセットに 1 つでもあれば**すべての行**をやり直した値にする（1 つの表の q は
         1 つの BH の母集団から）。組が無ければやり直さず従来の値。目標照合でも組の 2 スポットを
         1 つの候補（残す ID。`targets[].merged_from`・`candidates` の末尾の `merged_from`）と数える。
@@ -475,8 +470,8 @@ def dataset_feature_search(
 
     notes: list[str] = []
     payload: dict = {}
-    # データの指紋（行列全体の hash）は 1 回だけ計算し、割れの照合・引き継いだ結果の照合・
-    # stats_source のすべてで使う。
+    # データの指紋（行列全体の hash）は 1 回だけ計算し、割れの照合・結果の選択（古い結果を
+    # 選ばない照合）・stats_source のすべてで使う。
     dataset_hash = dataset_fingerprint(ds)
     plan = None
     try:
@@ -650,7 +645,7 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str, apply_curati
 
     `dataset_compare` の結果（`result_id`）は `contrast_id` で対比を 1 つ選ぶ（対比が 1 つなら省略可。
     複数で省くか未知の ID なら `CONTRAST_REQUIRED`、交互作用は `CONTRAST_NOT_TWO_GROUP`）。
-    `comparison.method` は実際の検定名（`moderated_t` など。v1 の結果は `Welch`）、`comparison.statistics`
+    `comparison.method` は実際の検定名（`moderated_t` など）、`comparison.statistics`
     に検定・CI 水準・判定規則・BH の母集団・単位。`intensities.tsv` は結果が読んだ行列の線形値
     （正規化の後・log2 の前、補完なし＝`pre_imputation`）。
 

@@ -17,7 +17,7 @@ from metabolomix.analysis.result_state import dataset_fingerprint
 from metabolomix.core import session_state
 from metabolomix.core.mcp_errors import MISSING_STATE
 from metabolomix.mztab.dataset_state import DatasetState
-from tests.v1_chain import v1_differential, v1_preprocess
+from tests.engine_chain import engine_compare
 
 GABA_KEY = "BTCSSZJGUNDROE-UHFFFAOYSA-N"
 OTHER_KEY = "QNAYBMKLOCPYGJ-REOHCLBHSA-N"
@@ -50,17 +50,20 @@ def _load_ds(n_features=20, n_samples=8):
     return ds
 
 
-def _differential(normalize="none", handoff=True):
-    """前処理 → 2 群比較をツール経由で回し、result_id を返す。
+def _differential():
+    """前処理 → 2 群比較を統計エンジンのツールで回し、result_id を返す（群は試料名の ctrl / treat）。"""
+    return engine_compare("ctrl", "treat",
+                          preprocess={"group_levels": ["ctrl", "treat"]})["result_id"]
 
-    同じレシピの前処理は同じ前処理として扱われるので、古い結果を作るときは
-    `normalize` を変えて前処理をやり直す。
-    """
-    v1_preprocess(normalize=normalize)
-    ds = session_state.session.dataset
-    a = [n for n in ds.pp_sample_names if n.startswith("ctrl")]
-    b = [n for n in ds.pp_sample_names if n.startswith("treat")]
-    return json.loads(v1_differential(group_a=a, group_b=b, handoff=handoff))["result_id"]
+
+def _stale_then_current():
+    """古い結果と今の結果の result_id を返す。除外（`dataset_exclude`）で古い結果を古くしてから計算し直す。"""
+    from metabolomix.analysis.dataset_exclusions import apply_exclusions
+
+    old = _differential()
+    apply_exclusions(session_state.session.dataset, samples=["ctrl_0"], features=[],
+                     mode="add", reason="テスト")
+    return old, _differential()
 
 
 def _target(**extra):
@@ -181,8 +184,7 @@ def test_empty_feature_ids_is_a_condition_with_zero_hits_and_noted():
 
 def test_named_stale_result_returns_missing_state():
     _load_ds()
-    old = _differential(handoff=False)                # session で計算した結果（引き継ぎ結果ではない）
-    _differential(normalize="median", handoff=False)  # 前処理のやり直しで old は古くなる
+    old, _ = _stale_then_current()
     parsed = _search(min_mz=100.0, result_ids=[old])
     assert parsed["error"]["code"] == MISSING_STATE
     assert parsed["error"]["state"] == "dataset_compare_result"
@@ -195,8 +197,7 @@ def test_named_stale_result_returns_missing_state():
 
 def test_omitted_result_ids_skip_stale_results_and_note_them():
     _load_ds()
-    old = _differential(handoff=False)
-    new = _differential(normalize="median", handoff=False)
+    old, new = _stale_then_current()
     parsed = _search(min_mz=100.0, max_mz=101.0)
     assert parsed["stats_source"]["result_ids"] == [new]
     assert any(old in note for note in parsed["notes"])
@@ -322,7 +323,7 @@ def test_payload_has_no_structured_duplicate():
 
 
 def test_dataset_fingerprint_is_computed_once_per_call(monkeypatch):
-    """データの指紋は行列全体の hash。引き継いだ結果ごとに計算し直さず、1 回で使い回す。"""
+    """データの指紋は行列全体の hash。結果ごとに計算し直さず、1 回で使い回す。"""
     import copy
 
     from metabolomix.analysis import result_state
@@ -333,9 +334,9 @@ def test_dataset_fingerprint_is_computed_once_per_call(monkeypatch):
     handed = []
     for i in range(3):
         result = copy.deepcopy(ds.results[session_rid])
-        rid = f"res_handed_{i}"
-        result["provenance"].update(result_id=rid, dataset_id="ds_run",
-                                    handoff={"pipeline_root": "x", "comparison_id": f"c{i}"})
+        rid = f"res_copy_{i}"
+        result["result_id"] = rid
+        result["provenance"].update(result_id=rid)
         ds.results[rid] = result
         handed.append(rid)
 
@@ -386,10 +387,13 @@ def _load_mztab(path, features):
 
 
 def _differential_on_session():
-    v1_preprocess()
-    out = json.loads(v1_differential(group_a=["HC1", "HC2", "HC3"],
-                                          group_b=["RA1", "RA2", "RA3"]))
-    return out["result_id"]
+    """HC 群と RA 群を統計エンジンで比較する。試料名（HC1 …）はトークンに割れないので、群は
+    MS-DIAL の試料の宣言（`msdial_samples` の group）として与える。QC は比較に入らない。"""
+    ds = session_state.session.dataset
+    ds.msdial_samples = [{"name": name, "group": name[:2] if name[:2] in ("HC", "RA") else None,
+                          "role": "qc" if name.startswith("QC") else "sample"}
+                         for name in ds.sample_names]
+    return engine_compare("HC", "RA")["result_id"]
 
 
 def _oracle_rows(tmp_path):

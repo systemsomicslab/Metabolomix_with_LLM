@@ -145,7 +145,7 @@ def _pick_result(ds, family: str, result_id: str | None, *, also_kinds: tuple = 
     if result is None:
         raise _bad(f"result_id={result_id} の結果がありません。{tool} の戻り値の result_id を渡すか、"
                    "省いて直近の結果を使ってください。", result_id=result_id)
-    accepted = (family, *also_kinds, *(("stat_pca",) if family == "pca" else ("compare",)))
+    accepted = (*also_kinds, "stat_pca" if family == "pca" else "compare")
     if (result.get("provenance") or {}).get("kind") not in accepted:
         raise _bad(f"result_id={result_id} は{'PCA' if family == 'pca' else '差次的解析'}の結果ではありません"
                    f"（{tool} の result_id を渡してください）。", result_id=result_id)
@@ -164,10 +164,9 @@ def _volcano(ds, req: _Request) -> dict:
     if result_id is not None:                       # `result_id#contrast_id`（特徴検索が出す形）も受ける
         result_id, contrast_id = stats_results.split_result_ref(result_id, contrast_id)
     record = _pick_result(ds, "differential", result_id)
-    # 統計エンジンの結果は対比 1 つを 2 群の形に読む（複数の対比で contrast_id が無ければ CONTRAST_REQUIRED）。
-    stats_results.check_contrast_applies(record, contrast_id)
+    # 対比 1 つを 2 群の形に読む（複数の対比で contrast_id が無ければ CONTRAST_REQUIRED）。
     result = stats_results.as_two_group(record, contrast_id)
-    if result.get("kind") != "two_group" or not result.get("volcano"):
+    if not result.get("volcano"):
         raise _bad("この差次的結果は 2 群比較の volcano 点列を持っていません（volcano は 2 群比較だけ）。",
                    result_id=_result_id(result))
     payload = volcano_plot.build_volcano_plot_payload(result, title=req.title)
@@ -184,41 +183,31 @@ def _volcano(ds, req: _Request) -> dict:
 
 
 def _explained(result: dict) -> list:
-    """PCA の記録の寄与率（統計エンジンの結果は `engine` の中）。"""
+    """PCA の記録の寄与率（統計エンジンの結果は `engine` の中、分子種 PCA は記録の直下）。"""
     source = result.get("engine") if is_stat_pca(result) else result
     return list((source or {}).get("explained_variance_ratio") or [])
 
 
 def _pca(ds, req: _Request) -> dict:
-    from metabolomix.tools.mztab_tools import _metadata_rows
-
     color_by = req.color_by or "group"
     if color_by not in scores_plot.COLOR_BY:
         raise _bad(f"color_by は {' / '.join(scores_plot.COLOR_BY)} のどれかを指定してください"
                    f"（受け取った値: {color_by!r}）。", color_by=color_by)
     result = _pick_result(ds, "pca", req.result_id)
-    caveats, projected = [], ()
-    if is_stat_pca(result):
-        scores = stat_pca_rows(result)
-        projected = [row["name"] for row in scores if not row["fitted"]]
-        if color_by == "group":
-            colors = {row["name"]: row["group"] for row in scores}
-        elif color_by == "role":
-            colors = {row["name"]: row["role"] for row in scores}
-        else:
-            entry = stats_results.get_matrix(ds, result.get("matrix_id"))
-            batch = dict(stats_results.sample_batches(ds))           # QC の注入（試料 ID）
-            batch.update({u.unit_id: u.batch for u in entry["prepared"].units} if entry else {})
-            colors = {row["name"]: batch.get(row["id"]) for row in scores}
-        if projected:
-            caveats.append("QC は主成分の軸の計算に使わず、同じ軸へ投影した点（白抜き）。")
+    caveats = []
+    scores = stat_pca_rows(result)
+    projected = [row["name"] for row in scores if not row["fitted"]]
+    if color_by == "group":
+        colors = {row["name"]: row["group"] for row in scores}
+    elif color_by == "role":
+        colors = {row["name"]: row["role"] for row in scores}
     else:
-        scores = result.get("scores") or []
-        if color_by == "role":
-            colors = {row.get("name"): row.get("role") for row in scores}
-        else:
-            colors = {name: row.get(color_by)
-                      for name, row in zip(ds.sample_names, _metadata_rows(ds))}
+        entry = stats_results.get_matrix(ds, result.get("matrix_id"))
+        batch = dict(stats_results.sample_batches(ds))           # QC の注入（試料 ID）
+        batch.update({u.unit_id: u.batch for u in entry["prepared"].units} if entry else {})
+        colors = {row["name"]: batch.get(row["id"]) for row in scores}
+    if projected:
+        caveats.append("QC は主成分の軸の計算に使わず、同じ軸へ投影した点（白抜き）。")
     try:
         payload = scores_plot.build_pca_scores_payload(
             scores, _explained(result), colors, color_by=color_by,

@@ -5,16 +5,18 @@
 ## このリポジトリは何か
 
 MS-DIAL（LC-MS リピドミクス／メタボロミクス解析ソフト）の出力を読み、LLM から使える形で
-公開する **MCP サーバ `ms-data-parser`**。ツール 59・リソース 2・リソーステンプレート 1。
+公開する **MCP サーバ `ms-data-parser`**。ツール 53・リソース 2・リソーステンプレート 1。
 GUI の外では読めない圧縮 MessagePack と独自バイナリを解し、解析そのものをサーバ側で回して
 要約だけを返す（生の行列を LLM の文脈に載せない）。
 
 **入口は 2 つで、合流点は「MS-DIAL の解析フォルダ」**（全体設計 `docs/superpowers/specs/2026-11-06-overhaul-overview-design.md`
 §2）。GUI で解析済みのフォルダを読む入口（`list_data_files` → `load_dataset` → 同定 / キュレーション /
-前処理 / 比較）と、生データから MS-DIAL Console を回してそのフォルダを作る入口（`console_*` / `pipeline_*`）を
-**対等に扱う**（2026-10 の「主経路と補助」は改めた）。どちらから来ても、その先は同じ 1 本の鎖を通る。
-`MCP_INSTRUCTIONS` の ENTRY POINT は変えない: まずフォルダに MS-DIAL を動かした形跡（`.arf` 等の出力）が
+前処理 / 比較）と、生データから MS-DIAL Console を回してそのフォルダを作る入口（`pipeline_*`。メソッドファイルの
+用意は `console_method_*`）を**対等に扱う**（2026-10 の「主経路と補助」は改めた）。どちらから来ても、その先は同じ 1 本の鎖を通る。
+`MCP_INSTRUCTIONS` の ENTRY POINT の判定は変えない: まずフォルダに MS-DIAL を動かした形跡（`.arf` 等の出力）が
 あるかを確かめ、あれば下流へ進み、無ければユーザーの許可を取ってから Console を回す（ユーザー判断 2026-10-07）。
+Console の入口が作るのは極性ごとの解析フォルダと受領で、`pipeline_status` が `completed` / `partial` になったら
+`load_dataset(pipeline_path=…, polarity=…)` で GUI の入口と同じ鎖へ合流する（D 段 2026-11-09）。
 ASSAY KIND（脂質か一般代謝物か）は `load_dataset` の後に `record_objective(assay_kind=...)` で確定する
 （記録は読み込み済みのデータセットが要るため）。意味論の要約は `load_dataset` の戻り値の `caveat`。
 
@@ -29,12 +31,10 @@ MSLipidMapper（R）が書く**パスウェイ測定 JSON-LD**も読む（`pathw
 **やること** — (a) **統計エンジン**（`metabolomix/analysis/stats/`）による前処理/QC（ブランク・検出率・QC RSD・D-ratio の足切り、
 QC の LOESS ドリフト補正、正規化、反復注入の個体へのまとめ）・PCA（QC は投影）・moderated t（既定。Welch ほかも）による
 2 群・多群・2 因子の比較と、`changed` / `unchanged` / `inconclusive` の判定（「有意でない」は「変わっていない」ではない）・BH-FDR、(b) 同定の標準化と裏取り（GOSLIN 正規化・RefMet/LIPID MAPS
-ID・MSI レベル・`.dcl` の実スペクトル照合）、(c) EIC の描画（`dataset_plot`）、(d) **生データ起点の統括（補助経路）**
-——MS-DIAL Console を計画・実行し、mzTab-M を経て前処理・PCA・比較・品質レポートまでを
-永続 run として自動で進める（`pipeline_run`。中断・訂正をまたいで冪等）、(e) LC–MS メタボロ
-ミクス v2（内部標準比・feature binding・注入ごとの測定証拠・固定母集団 QC）。**v2 は合成入力と
-fake Console までしか検証されていない**——`docs/workflow/metabolomics.md` を先に読む（これは pipeline の v2 工程だけの文書で、
-ツールの節は無い。対話の統計は (a) の統計エンジンが担い、v2 の解析行列と統計の単体ツールは無い）。
+ID・MSI レベル・`.dcl` の実スペクトル照合）、(c) EIC の描画（`dataset_plot`）、(d) **生データ起点の統括（対等なもう一方の入口）**
+——raw を run の中へ配置して極性ごとに MS-DIAL Console を回し、解析フォルダを mzTab-M と照合して受領
+（`results/receipt.json`）を書くまでを永続 run として自動で進める（`pipeline_run`。中断・訂正をまたいで冪等）。
+pipeline は統計を計算しない（前処理・PCA・比較・品質レポートの工程と v1 の統計の鎖は D 段で消した。2026-11）。
 
 差次的エクスポートの列定義は別リポジトリ（massbank-context）との契約を兼ねる。加えて、
 目的（objective）とレポートはツール経由で**解析フォルダ配下の `reports/`** に読み書きする
@@ -56,7 +56,7 @@ fake Console までしか検証されていない**——`docs/workflow/metabolo
   pytest 関数形式で書かれたファイルは `unittest.TestCase` を継承しないため拾えない）。
   **テストの数はここに書かない**。pytest の出力が正準（写しだけが腐るため）。
 - MCP サーバ起動: `.venv/Scripts/python.exe server.py`（既定 stdio）。
-- パーサ単体の CLI: `python -m metabolomix.arf.reader --file <path> --pca` など（README「Command-line examples」）。
+- パーサ単体の CLI: `python -m metabolomix.arf.reader --file <path> --export <csv>` など（`docs/cli.md`）。
 - パスウェイ投影（`pathway_*`）を使うときだけ、初回に `Rscript r/setup.R`（renv の仮想環境 `r/` を
   `r/renv.lock` から復元。R 本体のライブラリには入れない）。上流 MSLipidMapper の版を上げるときは
   `r/` で `renv::install("systemsomicslab/MSLipidMapper@<commit>")` → `renv::snapshot()` し、
@@ -144,9 +144,10 @@ metabolomix/dataset/   MS-DIAL 解析フォルダ（.arf / .arf2 ほか）から
 metabolomix/library/   参照ライブラリ（.dbs / .msp）の読み取りと永続 store。
                     形式ごとに分けないのは、2 つが同じレコード形と同じ store を
                     共有する 2 つの入口にすぎないため（spec 2026-09-19）
-metabolomix/console/   MS-DIAL Console 実行層（job_manager / runner / output_collector）
+metabolomix/console/   MS-DIAL Console 実行層（job_manager / runner / execution / method_file / output_collector）。
+                    MCP の入口は pipeline と tools/console_tools.py（メソッドファイルの候補と雛形）
 metabolomix/pipeline/  生データフォルダ起点の統括（受付 request/inputs/store・独立 worker が回す engine・
-                    工程 handler の service・再開/取消の recovery・必須出力判定と品質レポートの report）
+                    工程 handler の service・再開/取消の recovery・受領の receipt・load_dataset へ渡す session_handoff）
 metabolomix/handoff/   Console 成果物の受け渡しスキーマ（analysis-job.json）
 metabolomix/curation/  アラインメントのキュレーション（証拠収集・機械判別・フラグ記録・ビューア HTML）
 metabolomix/pathway/   MSLipidMapper 連携（最小 mzTab-M の受け渡し・Rscript ブリッジ・JSON-LD 読み取り・隣接比較）
@@ -210,18 +211,18 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料�
 - **reader の MessagePack Key インデックスの正解表は `docs/schema/*.md`**（MS-DIAL の C# クラス
   `[Key(N)]` から抽出した Key 番号表。上流のコミットと欠番も記載してある）。
   インデックス定数を変える前に必ず参照する。推測で直さない。
-- **`run_pca` の正準は `metabolomix/analysis/pca.py`**。`metabolomix/arf/reader.py` は再エクスポートしない
-  （`tests/test_analysis_pca.py` が固定。パーサ単体の CLI と pipeline だけがここから import する）。対話の PCA は
-  統計エンジンの `metabolomix/analysis/stats/pca.py`（`dataset_pca`）。
+- **PCA の正準は統計エンジンの `metabolomix/analysis/stats/pca.py`（`dataset_pca`）**。計算本体は
+  `metabolomix/analysis/pca.py` の `run_pca_fit_subset`（`dataset_plot(kind="species_pca")` も使う）。v1 の `run_pca` と
+  `.arf` から行列を組む `build_pca_matrix` は D 段で消えた（`tests/test_analysis_pca.py` が `arf/reader.py` に束縛を残さないことを固定）。
 - **対話の統計の結果は `ds.stat_matrices`（行列）と `ds.results`（`kind` が `compare` / `stat_pca`）に住む**。消費側
   （書き出し・根拠バンドル・図・特徴検索）は `compare` の記録を直に読まず、`stats_results.as_two_group` で対比を 1 つ選んだ
   2 群の形で読む（`contrast_id`、または特徴検索が出す `result_id#contrast_id`）。行列・結果は除外・試料の表の更新・データの
   入れ替えで古くなる（`dataset_exclude` は行列も捨てる）。`dataset_analysis_run` の v2 は状態を持たず、spec だけで再現する自己完結の実行。
   利用者に尋ねる問いは `mcp_errors.needs_input`（エラーではない封筒。`retry_tools` は「`argument` を受けて呼び直せるツール」）。
-  v1 の前処理・2 群比較（`dataset_service` / `differential`）は pipeline のためだけに残してあり、D 段で消す。
+  v1 の前処理・2 群比較（`dataset_service` / `differential.two_group_test`）と pipeline からの結果の引き継ぎは D 段で消した
+  （`differential.py` に残るのは volcano の点列だけ）。
 - **差次的エクスポートの列定義は `metabolomix/analysis/export_contract.py` が唯一の正準**。
-  `dataset_export_differential`（と、生データ起点の `pipeline` の書き出し）がここを
-  共有しており、**別リポジトリ（massbank-context）との契約**でもある。列の追加・改名・並べ替えは
+  `dataset_export_differential` がここを使い、**別リポジトリ（massbank-context）との契約**でもある。列の追加・改名・並べ替えは
   `CONTRACT_VERSION` の引き上げと下流の同時更新なしにやってはいけない（統計エンジンの結果だけは、列を変えずに
   `stats_meta_lines` のメタ行を足す。`unit` は `subject` / `injection` / `mixed`）。
 - **ツールの戻り値を肥大させない**。戻り値はそのまま LLM の文脈を占め、結論が埋没する。
@@ -238,19 +239,24 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料�
     （volcano 実測: 点列 183,578 字 ≒数万トークン → PNG 327 画像トークン）。
     画像トークンは `幅×高さ/750` なので dpi は上げない（`plots/render.py`）。
 - **`metabolomix/pipeline/` は独立 worker プロセスが回す層**。守るべき決まりごと:
-  - **`pipeline/{engine,worker,service,recovery,store}.py` はグローバル session を import しない**
+  - **`pipeline/{engine,worker,service,recovery,store,receipt}.py` はグローバル session を import しない**
     （`metabolomix.core.session_state` / `metabolomix.core.mcp_core` / `metabolomix.tools.*`。
     `tests/test_pipeline_engine.py` の AST テストが固定している）。進行状況は
-    `pipeline-run.json` と、そのプロセスだけが持つ `runtime` dict に住む。
+    `pipeline-run.json` だけに住む。
   - **`core/atomic_io.py` と `core/process_control.py` と `core/user_config.py` は stdlib だけの leaf**。
     別プロセスの worker が最初に import するので、重い依存を持ち込まない。
   - **run record の `results` は追記専用**（`store._assert_results_append_only` が
-    既存要素の書換えを拒否する）。永続化する pipeline 内のパスは `pipeline_root` 相対。
+    既存要素の書換えを拒否する）。永続化する pipeline 内のパスは `pipeline_root` 相対
+    （ただし単位の `inputs` は単位の根 `unit_root` 相対。`store.relativize_unit_inputs`）。
   - **`pipeline_status` は読取専用**。生存確認 probe の失敗を「死んでいる」と読まない。
   - **Console の自動再試行は行わない**。やり直しは `rerun_upstream=true` の明示が要り、
     そのときは新しい attempt ディレクトリを作る（前回の終了証跡・ログを上書きしない）。
   - 工程の実行順の正準は `engine.build_stages` の計画順（`record["stages"]` の挿入順ではない）。
-    report は必ず最後。
+    単位（極性）ごとの `prepare_input:<p>` → `upstream:<p>` → `validate_outputs:<p>` を要求の順に並べ、
+    受領 `receipt` は必ず最後。ある単位の失敗は他の単位を止めない（run は `partial`）。
+  - **旧 v1 の run（`pipeline-run.v1`）は読むだけ**。`pipeline_status` と `load_dataset` は読め、`pipeline_resume` /
+    `pipeline_cancel` は `PIPELINE_RUN_LEGACY` で断る（engine に旧形式の分岐を持たせない）。
+  - **受領・戻り値・エラーで研究室の参照ライブラリはファイル名と sha256 だけ**（run の記録の `inputs` は絶対パスのまま）。
   - `store`（`_patch_request_id_with_retry`）と `recovery`（`prepare_resume`）は
     それぞれ自分の保存経路を `STATE_REVISION_CONFLICT` の有限回リトライで覆う。
     `engine` は長い区間を跨ぐ保存（`mark_stage_running` /
@@ -267,7 +273,7 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料�
 | ツールの引数・用途（`tests/test_readme_links.py` が一覧と件数を実登録と突き合わせている） | `USAGE.md` |
 | 出力フィールドの**意味**（行の粒度・脂質名文法・必須注意） | `docs/output_format/core.md` ＋ トピック別（`dataset` `dcl` `eic` `identity` `mztab` `library` `curation` `pathway` `reanalysis` `quant`）。MCP リソース `lipidmix://docs/output-format[/{topic}]` としても配信 |
 | ツールが**どのファイルのどの関数をどの順に呼ぶか** | `docs/workflow/`（対象範囲の線引きと内訳は `index.md` が正準。`tests/test_workflow_docs.py` が実登録と突き合わせている）。行番号は書かない規約 |
-| **生データ → Console → mzTab-M → 差次的解析 → パスウェイ**の一気通貫の順序と、内部関数の引数・戻り値 | [docs/superpowers/specs/2026-09-03-end-to-end-pipeline-design.md](docs/superpowers/specs/2026-09-03-end-to-end-pipeline-design.md)（**目標状態**の記述。実装状況は同文書 §9。完成後 `docs/workflow/Lipidmix/` へ昇格） |
+| **生データ → Console → 解析フォルダ → 前処理・比較**の一気通貫の順序 | `docs/workflow/pipeline.md`（上流と受領）→ `docs/workflow/dataset.md`（`load_dataset(pipeline_path=…, polarity=…)`）→ `docs/workflow/dataset_analysis.md`。旧設計の [docs/superpowers/specs/2026-09-03-end-to-end-pipeline-design.md](docs/superpowers/specs/2026-09-03-end-to-end-pipeline-design.md) は昇格させない過去の記録（上流は D、下流は B/C/A で置き換えた。同文書 §9） |
 | MessagePack の Key 番号 | `docs/schema/*.md` |
 | パーサ単体の CLI（フラグ一覧と実行例） | `docs/cli.md` |
 | 文献由来の設計候補（採択済み） | [docs/research-backlog.md](docs/research-backlog.md)（正準は vault 側。仕組みは spec 2026-09-14） |
@@ -313,8 +319,7 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料�
   `C:\Users\yuu18\Documents\KnowledgeVault\30_Projects\ms-data-parser\ms-data-parser-flow.md`。
   対象は「利用者から見て何がどの順に起きるか」が変わる改修——入口の判定規則
   （`metabolomix/core/mcp_core.py` の `MCP_INSTRUCTIONS` の ENTRY POINT / ASSAY KIND）、
-  pipeline の stage 列（`pipeline/engine.py` `build_stages` /
-  `pipeline/stage_plan.py` `BASE_V2_STAGE_IDS`）、前提状態の連鎖（どのツールが
+  pipeline の stage 列（`pipeline/engine.py` `build_stages`）、前提状態の連鎖（どのツールが
   どのツールを `missing_state` で要求するか）、経路の増減（新しい入口・新しい解析枝）、
   既定値の変更。**ツールの引数だけの変更は対象外**（正準は `USAGE.md`）。
   直したら末尾の出典行の日付も書き直す。

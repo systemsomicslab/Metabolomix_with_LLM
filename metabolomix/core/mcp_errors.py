@@ -140,7 +140,7 @@ CONSOLE_ERROR_CODES = frozenset({
     "LBM_AMBIGUOUS",
     # pipeline の library_mode="msp_then_lbm" で `[library] lbm` が未設定の場合（v8）。
     "LBM_NOT_CONFIGURED",
-    # console_prepare_input が単一フォーマットの入力フォルダを作れなかった場合。
+    # 単一フォーマットの入力フォルダを作れなかった場合。
     "INPUT_PREP_FAILED",
     # MS-DIAL 実行自体は成功したが、その後の生成物収集・ハッシュ計算・
     # analysis-job.json への保存で失敗した場合。NO_JOB_OUTPUT（生成物が

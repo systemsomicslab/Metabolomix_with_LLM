@@ -20,7 +20,7 @@ from metabolomix.tools import reanalysis_tools as R
 from tests.dcl_fixture import build_dcl_bytes
 from tests.reanalysis_fixtures import SAMPLES, write_mztab
 from tests.config_fixtures import use_config
-from tests.v1_chain import v1_differential, v1_preprocess
+from tests.engine_chain import declare_groups, engine_compare, hc_ra
 
 GABA_KEY = "BTCSSZJGUNDROE-UHFFFAOYSA-N"
 BASE = [10, 12, 11, 20, 22, 21, 15, 16]
@@ -128,15 +128,27 @@ def _spec(data, **extra):
 
 # ---------- dataset_analysis_run ----------
 
+def _compare_on(handle) -> dict:
+    """ハンドルのデータセットで HC 対 RA を統計エンジンで比較する（群は MS-DIAL の試料の宣言で与える）。"""
+    declare_groups(handles.registry.get(handle).dataset, hc_ra)
+    return engine_compare("HC", "RA", dataset_handle=handle)
+
+
+def _analysis_state(handle):
+    ds = handles.registry.get(handle).dataset
+    return set(ds.results), set(ds.stat_matrices)
+
+
 def test_analysis_run_on_handle_returns_rows_and_leaves_states(data):
     handle = _open(data)
+    before = _analysis_state(handle)
     out = json.loads(R.dataset_analysis_run(_spec(data), dataset_handle=handle))
     assert out["status"] == "success" and out["comparison"] == "RA_vs_HC"
     rows = out["analyses"][0]["rows"].splitlines()
     assert rows[0].startswith("feature_id\tstatus\treason\tgroup_ref\tgroup_test")
     assert rows[1].split("\t")[:5] == ["20", "tested", "", "HC", "RA"]
     assert session_state.session.dataset is None
-    assert handles.registry.get(handle).dataset.pp_matrix is None
+    assert _analysis_state(handle) == before
 
 
 def test_analysis_run_reports_merge_split_state_and_merged_from_column(data):
@@ -351,13 +363,11 @@ def test_injection_trend_rho_is_none_below_five_samples(match_data):
 
 def test_novel_candidates_from_result_id_and_from_spec(data):
     handle = _open(data)
-    v1_preprocess(dataset_handle=handle)
-    diff = json.loads(v1_differential(group_a=["HC1", "HC2", "HC3"],
-                                             group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
+    diff = _compare_on(handle)
     spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
     out = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
     assert out["status"] == "success" and out["n_rows"] == 2
-    assert out["group_ref"] == "group_a"
+    assert out["group_ref"] == "HC"
     excluded = json.loads(R.dataset_novel_candidates(
         {**spec, "exclude": {"inchikey_blocks": [GABA_KEY]}}, dataset_handle=handle))
     assert excluded["n_rows"] == 1
@@ -508,6 +518,7 @@ SPLIT_FEATURES = (
 def test_tool_writes_output_and_returns_summary(tmp_path):
     mztab = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab", features=SPLIT_FEATURES)
     handle = _open({"mztab": mztab})
+    before = _analysis_state(handle)
     target = tmp_path / "results" / "alignment_qc_pos.json"
     out = json.loads(R.dataset_alignment_qc(output_path=str(target), dataset_handle=handle))
     assert out["status"] == "success", out
@@ -531,7 +542,7 @@ def test_tool_writes_output_and_returns_summary(tmp_path):
     assert again.read_bytes() == target.read_bytes()
     inline = json.loads(R.dataset_alignment_qc(dataset_handle=handle))
     assert inline["status"] == "success" and "output_path" not in inline
-    assert handles.registry.get(handle).dataset.pp_matrix is None
+    assert _analysis_state(handle) == before
     bad = json.loads(R.dataset_alignment_qc(ppm=-1, dataset_handle=handle))
     assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
 
@@ -695,11 +706,18 @@ def _groups_tsv(tmp_path):
     return groups
 
 
+#: SPLIT_FEATURES と同じ割れ方（最初の 2 注入だけが 31 に割れる）で、まとめた値が HC で低く RA で高い
+#: （統計エンジンの判定が changed になり、新しい知見の候補に載る）。
+SPLIT_CHANGED = (
+    {**SPLIT_FEATURES[0], "values": [20, 21, 100, 1010, 1020, 1030, 500, 505]},
+    {**SPLIT_FEATURES[1], "values": [105, 98, 22, 20, 21, 23, 20, 22]},
+    SPLIT_FEATURES[2],
+)
+
+
 def test_novel_candidates_count_split_once(tmp_path):
-    handle = _split_handle(tmp_path)
-    v1_preprocess(dataset_handle=handle)
-    diff = json.loads(v1_differential(group_a=["HC1", "HC2", "HC3"],
-                                             group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
+    handle = _split_handle(tmp_path, SPLIT_CHANGED)
+    diff = _compare_on(handle)
     spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
     out = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
     assert out["status"] == "success", out
@@ -753,9 +771,7 @@ def test_novel_candidates_rule_hash_includes_merge_groups(tmp_path):
     from metabolomix.analysis import mass_accuracy
 
     handle = _split_handle(tmp_path)
-    v1_preprocess(dataset_handle=handle)
-    diff = json.loads(v1_differential(group_a=["HC1", "HC2", "HC3"],
-                                             group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
+    diff = _compare_on(handle)
     spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
     out = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
     groups_hash = out["merge_split"]["groups_hash"]
@@ -829,9 +845,7 @@ def test_claim_evidence_adds_the_partner_outside_the_mass_window(tmp_path):
 
 def test_novel_candidates_labels_column_and_counts(data, tmp_path):
     handle = _open(data)
-    v1_preprocess(dataset_handle=handle)
-    diff = json.loads(v1_differential(group_a=["HC1", "HC2", "HC3"],
-                                             group_b=["RA1", "RA2", "RA3"], dataset_handle=handle))
+    diff = _compare_on(handle)
     spec = {"statistics": {"result_id": diff["result_id"]}, "q_max": 1.0}
     plain = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
     labels = tmp_path / "labels.tsv"
@@ -1051,13 +1065,13 @@ def test_analysis_run_does_not_touch_session_or_reports(tmp_path):
     import copy
     state = _v2_state(tmp_path)
     before = (dict(state.__dict__.get("results", {}) or {}), copy.deepcopy(state.stat_matrices),
-              state.pp_matrix, state.sample_names[:], state.feature_matrix.copy())
+              state.sample_names[:], state.feature_matrix.copy())
     handle_before = session_state.session.current_handle_id
     R.dataset_analysis_run(_v2_spec(analyses=[{"analysis_id": "cmp", "kind": "compare"},
                                               {"analysis_id": "pc", "kind": "pca"}], primary="cmp"))
     after = (dict(state.__dict__.get("results", {}) or {}), copy.deepcopy(state.stat_matrices),
-             state.pp_matrix, state.sample_names[:], state.feature_matrix)
-    assert after[:4] == before[:4] and (after[4] == before[4]).all()
+             state.sample_names[:], state.feature_matrix)
+    assert after[:3] == before[:3] and (after[3] == before[3]).all()
     assert session_state.session.dataset is state
     assert session_state.session.current_handle_id == handle_before
     assert not (tmp_path / "analysis" / "reports").exists()

@@ -333,10 +333,7 @@ def compare_feature_mz(spot_mz: list, feature_mz: list,
     """スポット代表 m/z と mzTab 側 m/z の一致を、外れの**割合**で判定する。
 
     「MZ_HARD_LIMIT は1件でも棄却する。許容超えの割合が多くても、外れがすべて
-    MZ_OUTLIER_SMALL_DELTA 未満なら合格にする」という判定を `build_evidence` と
-    `analysis/assay_evidence` で共有するための唯一の実装。
-    片方だけ緩めると、gap-fill マスクは棄却した接合から per-injection 証拠だけが
-    採用される（逆も同じ）ことになる。
+    MZ_OUTLIER_SMALL_DELTA 未満なら合格にする」という判定。
     """
     worst = 0.0
     worst_index = None
@@ -631,6 +628,40 @@ def matching_arfs(candidates: list[Path], *, feature_mz: list[float | None],
             rejected[Path(candidate).name] = result.get("reason", "unknown")
         scan = None   # 次の候補を読む間、却下した（または 2 本目以降の）読み取り結果を生かさない
     return passed, rejected, first
+
+
+def first_matching_arfs(mztab_path: str | Path, artifact_paths: dict[str, list[str]] | None,
+                        verify, fallback_arfs=()) -> tuple[list[Path], dict[str, str],
+                                                           ArfScan | None, list[Path]]:
+    """ジョブの正準 mzTab-M と同じアラインメントの `.arf` を探す（解析フォルダを選ぶ規則）。
+
+    1. `arf_candidates`（ジョブの `peak_matrix_source` → mzTab-M の隣）をまとめて `verify` にかける。
+    2. どれも通らなければ `fallback_arfs`（解析フォルダのバッチを**新しい順に**。遅延評価して
+       よい）を 1 本ずつ試し、最初に通ったところで止める。すでに候補にある `.arf`（解決後の
+       パスで比べる）は二重に検証しない。
+
+    名前の順で先頭を取らない・フォルダの全バッチを一度に並べない——同じフォルダに前の
+    実行のバッチが残るのは普通で、それを数えると「同じアラインメントが 2 本」になる。
+    `verify(paths)` は `matching_arfs` と同じ (通った, 却下理由, ArfScan) を返す。
+    戻り値は (通った `.arf`, 却下理由, 最初に通った ArfScan, 試した候補)。曖昧（2 本以上）・
+    不在の扱いは呼び出し側が決める（`dataset/opening` と `pipeline/service` が共有する）。
+    """
+    candidates = arf_candidates(mztab_path, artifact_paths)
+    passed, rejected, scan = verify(candidates) if candidates else ([], {}, None)
+    if not passed:
+        for fallback in fallback_arfs:
+            if fallback is None:
+                continue
+            if Path(fallback).resolve() in {p.resolve() for p in candidates}:
+                continue
+            candidates.append(Path(fallback))
+            more, more_rejected, more_scan = verify([Path(fallback)])
+            passed = list(passed) + list(more)
+            rejected.update(more_rejected)
+            scan = scan or more_scan
+            if passed:
+                break
+    return list(passed), rejected, scan, candidates
 
 
 def attach_to_dataset(ds, mztab_path: str | Path) -> None:

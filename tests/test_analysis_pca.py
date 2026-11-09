@@ -2,27 +2,11 @@ import numpy as np
 import pytest
 
 
-def test_run_pca_importable_from_analysis():
-    from metabolomix.analysis.pca import run_pca
-    rng = np.random.default_rng(0)
-    result = run_pca(rng.random((6, 10)), n_components=2)
-    assert set(result) == {"components", "explained_variance_ratio",
-                           "singular_values", "loadings"}
-    assert len(result["components"]) == 6
-    assert len(result["explained_variance_ratio"]) == 2
-
-
 def test_arf_reader_does_not_reexport_run_pca():
-    """`run_pca` の正準は analysis/pca.py だけ。arf/reader.py に後方互換の束縛を残さない
+    """v1 の `run_pca` は D 段で消えた。arf/reader.py に後方互換の束縛を残さない
     （ARF のツールとそのモックは B-2b で消えた）。"""
     from metabolomix.arf import reader
     assert not hasattr(reader, "run_pca")
-
-
-def test_run_pca_rejects_degenerate_matrix():
-    from metabolomix.analysis.pca import run_pca
-    with pytest.raises(ValueError):
-        run_pca(np.array([[1.0, 2.0, 3.0]]))  # n_samples=1
 
 
 def test_run_pca_fit_subset_projects_unfitted_rows_and_drops_constant_columns():

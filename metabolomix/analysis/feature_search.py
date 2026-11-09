@@ -28,7 +28,6 @@ import re
 import numpy as np
 
 from metabolomix.analysis.dataset_analysis import included_sample_indices
-from metabolomix.analysis.feature_bindings import _normalize_adduct
 from metabolomix.analysis.result_state import is_current
 from metabolomix.analysis.stats_results import as_two_group, contrast_ids, split_result_ref
 from metabolomix.analysis.mass_accuracy import offset_for
@@ -89,6 +88,19 @@ _POLARITIES = ("positive", "negative")
 _SIGN_OF = {"positive": "+", "negative": "-"}
 _POLARITY_OF_SIGN = {sign: polarity for polarity, sign in _SIGN_OF.items()}
 _INCHIKEY_BLOCK_RE = re.compile(r"[A-Z]{14}")
+
+#: `[M+H]1+`（mzTab-M）と `[M+H]+`（利用者の記法）を同じ adduct として扱うための
+#: 末尾電荷表記。`1+` / `1-` だけを落とす——`2+` を `+` に潰すと価数が消える。
+_ADDUCT_UNIT_CHARGE_RE = re.compile(r"\]1([+-])$")
+
+
+def _normalize_adduct(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().replace(" ", "")
+    return _ADDUCT_UNIT_CHARGE_RE.sub(r"]\1", text).casefold()
+
+
 # parse_formula は読めない部分を黙って捨てるので（"Ca(OH)2" が Ca+O+H2 になる等）、
 # 文字列全体が「元素記号+個数」の連なりであることを先に確かめる。
 _FORMULA_RE = re.compile(r"(?:[A-Z][a-z]?\d*)+")
@@ -407,7 +419,7 @@ def _identity(candidates, annotation, *, inchikey_block: str | None = None,
 
     SME 候補は**その候補自身の** ``inchikey`` だけを見る。特徴の rank1 の InChIKey
     （``feature_metadata[fid]["inchikey"]``）を混ぜると、別物質の rank2 候補が rank1 の
-    識別子を借りて一致してしまう（``feature_bindings._identifier_values`` の癖。spec §2）。
+    識別子を借りて一致してしまう（spec §2）。
 
     ``lipid_species`` を渡すと（種の目標）、識別子は InChIKey の先頭ブロックではなく
     候補自身の ``chemical_name``（SML なら ``name``）を種のレベルに読んだもの。読めない
@@ -615,7 +627,7 @@ def match_target(ds, target: dict, *, max_results: int,
         if partner or evidence == "contradicted":
             qualified = False
         elif evidence == "unannotated" and rt_min is None:
-            # 質量だけでは同定と言わない（feature_bindings の mass_rt が RT を必須にするのと同じ）
+            # 質量だけでは同定と言わない
             reasons.append("mass_only_not_identified")
             qualified = False
         else:
@@ -726,10 +738,10 @@ STATS_COLUMNS_LABELED = STATS_COLUMNS + ("comparison", "group_a", "group_b",
 
 
 def comparison_name(result: dict) -> str:
-    """比較名。pipeline の比較なら `comparison_id`、そうでなければ `<group_b>_vs_<group_a>`
-    （v1 の log2fc は正なら group_b が高いので、group_b が「比較」・group_a が「基準」）。"""
-    declared = ((result.get("provenance") or {}).get("comparison") or {}).get("comparison_id")
-    return declared or f"{result.get('b')}_vs_{result.get('a')}"
+    """比較名 `<group_b>_vs_<group_a>`（log2fc は正なら group_b が高いので、group_b が「比較」・
+    group_a が「基準」）。来歴の `comparison_id`（完全交絡を越えた比較にだけ付く対比の ID）は使わない
+    ——交絡の有無で同じ対比の名前が変わらないように。"""
+    return f"{result.get('b')}_vs_{result.get('a')}"
 
 
 def _rank_key(candidate: dict):
@@ -911,9 +923,9 @@ def select_results(ds, result_ids: list[str] | None, *,
                    single: bool = False) -> dict:
     """統計を引く 2 群比較の結果を選ぶ。``{"results", "stale", "missing"}``。
 
-    省略（None）なら ``ds.results`` のうち 2 群比較のすべて。名指しなら、その ID を引く。2 群比較は
-    v1 の ``kind == "two_group"`` と、統計エンジンの ``compare`` の記録（対比ごとに `as_two_group` で
-    展開する。ID は対比が 1 つなら ``result_id``、複数なら ``result_id#contrast_id``。交互作用は除く）。
+    省略（None）なら ``ds.results`` のうち比較の結果のすべて。名指しなら、その ID を引く。比較の結果は
+    統計エンジンの ``compare`` の記録で、対比ごとに `as_two_group` で 2 群の形に展開する（ID は対比が
+    1 つなら ``result_id``、複数なら ``result_id#contrast_id``。交互作用は除く）。
 
     対比の選び方:
 
@@ -928,11 +940,9 @@ def select_results(ds, result_ids: list[str] | None, *,
       `CONTRAST_REQUIRED`。False なら全対比に展開する。
 
     今も有効でない結果は ``results`` に入れず ``stale`` に名指しした ID を 1 回だけ挙げる。名指しの ID が無い、
-    または 2 群比較でない結果（pipeline の v2 統計の記録 ``kind == "welch"`` など）は ``missing``。
-    指定を黙って捨てないよう、次の 2 つも ``missing`` に ``"<ID>: <理由>"`` の 1 行で挙げる:
-    ``contrast_id`` を渡したが ``compare`` の記録が無く v1 の 2 群の結果だけがある（v1 は対比を持たないので
-    効かない。v1 の結果はそのまま使う。行は ``"contrast_id=<ID>: …"``）、``compare`` の記録の対比が交互作用
-    だけで 2 群の結果に読み替えられない（統計は付かない）。
+    または比較でない結果（``stat_pca`` など）は ``missing``。指定を黙って捨てないよう、``compare`` の記録の
+    対比が交互作用だけで 2 群の結果に読み替えられない（統計は付かない）ときも ``missing`` に
+    ``"<ID>: <理由>"`` の 1 行で挙げる。
 
     ``dataset_hash`` は計算済みの ``dataset_fingerprint(ds)``（任意）。
     """
@@ -947,40 +957,20 @@ def select_results(ds, result_ids: list[str] | None, *,
             raise DomainError("CONTRAST_REQUIRED",
                               f"どの比較の結果にも対比 {contrast_id!r} がありません。",
                               {"contrast_id": contrast_id, "contrast_ids": all_ids})
-        for rid, result in candidates.items():
-            kind = (result or {}).get("kind")
-            if kind not in ("two_group", "compare"):
-                continue
-            if kind == "compare" and contrast_id is not None and contrast_id not in contrast_ids(result):
+        for rid, result in records:
+            if contrast_id is not None and contrast_id not in contrast_ids(result):
                 continue
             if not is_current(ds, result, dataset_hash=dataset_hash):
                 stale.append(rid)
-            elif kind == "compare":
-                views = _engine_views(result, rid, contrast_id)
-                if not views:
-                    missing.append(_interaction_only(rid, result))
-                selected.extend(view for _, view in views)
-            else:
-                selected.append(result)
-        if contrast_id is not None and not records and any(
-                (r or {}).get("kind") == "two_group" for r in ds.results.values()):
-            missing.append(f"contrast_id={contrast_id}: dataset_compare の結果が無く、v1 の 2 群の結果は"
-                           "対比を持たないので効かない（v1 の結果はそのまま使った）")
+                continue
+            views = _engine_views(result, rid, contrast_id)
+            if not views:
+                missing.append(_interaction_only(rid, result))
+            selected.extend(view for _, view in views)
         return {"results": selected, "stale": stale, "missing": missing}
     for requested in dict.fromkeys(result_ids):
-        found = ds.results.get(requested)
-        if (found or {}).get("kind") == "two_group":
-            base, cid = requested, None
-            record = found
-        else:
-            base, cid = split_result_ref(requested, contrast_id)
-            record = ds.results.get(base)
-        if (record or {}).get("kind") == "two_group":
-            if is_current(ds, record, dataset_hash=dataset_hash):
-                selected.append(record)
-            else:
-                stale.append(requested)
-            continue
+        base, cid = split_result_ref(requested, contrast_id)
+        record = ds.results.get(base)
         if (record or {}).get("kind") != "compare":
             missing.append(requested)
             continue
@@ -1053,7 +1043,7 @@ def feature_stats(ds, feature_ids: list[str], results: list[dict], *,
     None（呼び出し側が注記する）。取れるときは status に関わらず付ける。
 
     ``with_labels=True`` のときだけ ``comparison``・``group_a``・``group_b``・
-    ``log2fc_test_over_ref``（v1 の ``log2fc`` と同じ値。group_b / group_a）を足す。
+    ``log2fc_test_over_ref``（``log2fc`` と同じ値。group_b / group_a）を足す。
     """
     prepared = []
     for result in results:
@@ -1169,33 +1159,16 @@ def merged_dataset(ds, groups) -> tuple[object, dict[str, list[str]]]:
     return view, merged.merged_from
 
 
-def _result_recipe(ds, result: dict) -> dict | None:
-    """その 2 群比較を計算した前処理のレシピ（分からなければ None）。
-
-    pipeline の run から引き継いだ結果は来歴の ``handoff.preprocess``
-    （`session_handoff._run_preprocess_parameters` が写した run の ``resolved_recipe``）、
-    session で計算した結果は親（前処理の結果）の ``effective_parameters``。
-    """
-    provenance = result.get("provenance") or {}
-    handoff = provenance.get("handoff")
-    if isinstance(handoff, dict):
-        recipe = handoff.get("preprocess")
-        return dict(recipe) if isinstance(recipe, dict) else None
-    for parent in provenance.get("parent_ids") or []:
-        params = (((getattr(ds, "results", None) or {}).get(parent) or {}).get("provenance")
-                  or {}).get("effective_parameters")
-        if isinstance(params, dict):
-            return dict(params)
-    return None
-
-
-def _retest_merged_engine(ds, result: dict, groups) -> dict:
-    """統計エンジンの結果（`select_results` が展開したもの）を、割れをまとめた列で検定し直す。
+def retest_merged(ds, result: dict, *, groups=()) -> dict:
+    """比較の結果（`select_results` が `compare` の記録から展開したもの）を、割れをまとめた列で検定し直す。
 
     記録の spec（入力の除外・群の上書き・前処理・設計・対比・検定の設定）をそのまま使い、
     `from_dataset` で作った StudyData の割れた特徴の列を `merge_feature_columns` でまとめてから
     `run_spec_v2` に渡す（StudyData の source には spec の `input` が再適用されないので、ここで当てる）。
     BH の母集団はまとめた後の全特徴。個体・注入の対応は記録の `units` のまま（まとめても変わらない）。
+    戻り値は ``result`` の写しで、``results`` ``volcano`` ``statistics`` だけがやり直した値。元の記録が無い・
+    まとめた行列で比較をやり直せないときは ``FEATURE_MERGE_UNAVAILABLE``（まとめる前の数字をまとめた後の
+    顔で返さない）。
     """
     from metabolomix.analysis.stats.data import from_dataset, merge_feature_columns
     from metabolomix.analysis.stats.spec_v2 import run_spec_v2
@@ -1229,57 +1202,6 @@ def _retest_merged_engine(ds, result: dict, groups) -> dict:
             "statistics": redone["statistics"]}
 
 
-def retest_merged(ds, view, result: dict, *, groups=()) -> dict:
-    """まとめた行列（``view``）で、``result`` と同じ前処理・同じ 2 群検定をやり直す。
-
-    統計エンジンの結果（`select_results` が `compare` の記録から展開したもの）は、``groups`` を
-    `merge_feature_columns` で当てて記録の spec のまま `run_spec_v2`（`_retest_merged_engine`）。
-    以下は v1 の結果の規則:
-
-    前処理は ``result`` を計算したレシピ（`_result_recipe`）を `run_dataset_preprocess` で
-    当て直し、検定は `differential.two_group_test`（``result`` の ``log_transform``。pipeline の
-    既定は log 変換の Welch）と `add_fdr`（**まとめた後の全特徴**で BH）。群は ``result`` の
-    ``samples_a`` / ``samples_b``（`dataset_service.compare_dataset` が検定に使った試料）。
-    検定と補正の種類は変えないので、判定の規則の意味は同じ。戻り値は ``result`` の写しで、
-    ``results`` だけがやり直した行。レシピが分からない・前処理を当て直せない・群の試料が
-    前処理の後に無いときは ``FEATURE_MERGE_UNAVAILABLE``（まとめる前の数字をまとめた後の顔で
-    返さない）。
-    """
-    from metabolomix.analysis import differential
-    from metabolomix.analysis.dataset_analysis import PreconditionError, run_dataset_preprocess
-
-    if result.get("_source"):
-        return _retest_merged_engine(ds, result, groups)
-    result_id = _result_id(result)
-    recipe = _result_recipe(ds, result)
-    if recipe is None:
-        raise DomainError("FEATURE_MERGE_UNAVAILABLE",
-                          f"差次的結果 {result_id} を計算した前処理のレシピが分からないので、割れた"
-                          "スポットをまとめて検定し直せない。merge_split=false で呼ぶか、"
-                          "dataset_compare で計算し直す。", {"result_id": result_id})
-    try:
-        matrix, names, features, *_ = run_dataset_preprocess(view, recipe)
-    except PreconditionError as exc:
-        raise DomainError("FEATURE_MERGE_UNAVAILABLE",
-                          f"まとめた行列に {result_id} の前処理を当て直せない: {exc.message}",
-                          {"result_id": result_id, "recipe": recipe}) from exc
-    position = {name: i for i, name in enumerate(names)}
-    samples_a = list(result.get("samples_a") or [])
-    samples_b = list(result.get("samples_b") or [])
-    absent = [name for name in samples_a + samples_b if name not in position]
-    if absent or not samples_a or not samples_b:
-        raise DomainError("FEATURE_MERGE_UNAVAILABLE",
-                          f"差次的結果 {result_id} の群の試料が、前処理を当て直した行列に無い"
-                          f"（{absent or 'samples_a / samples_b が空'}）。",
-                          {"result_id": result_id, "absent_samples": absent})
-    group_a, group_b = result.get("a"), result.get("b")
-    labels = [group_a] * len(samples_a) + [group_b] * len(samples_b)
-    rows = differential.two_group_test(
-        matrix[[position[name] for name in samples_a + samples_b], :], features, labels,
-        group_a, group_b, log_transform=bool(result.get("log_transform", True)))
-    return {**result, "results": differential.add_fdr(rows)}
-
-
 def merge_map(groups) -> dict[str, list[str]]:
     """割れの群 → ``{残す ID: 群}``（残す ID は群の先頭。`merge_matrix_columns` と同じ）。"""
     return {group[0]: list(group) for group in groups if len(group) >= 2}
@@ -1299,7 +1221,7 @@ def merged_results(ds, results: list[dict], groups, feature_ids) -> dict:
     view, merged_from = merged_dataset(ds, groups)
     wanted = {str(f) for f in feature_ids}
     touched = {kept: group for kept, group in merged_from.items() if wanted.intersection(group)}
-    redone = {_result_id(result): retest_merged(ds, view, result, groups=groups) for result in results}
+    redone = {_result_id(result): retest_merged(ds, result, groups=groups) for result in results}
     return {"view": view, "merged_from": merged_from, "touched": touched, "results": redone}
 
 

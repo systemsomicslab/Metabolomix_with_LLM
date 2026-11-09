@@ -120,13 +120,13 @@ def _stat_matrix_bytes(ds) -> int:
 def estimate_state_bytes(ds) -> int:
     """`DatasetState` が抱える大きさの見積もり（バイト）。
 
-    行列（`feature_matrix` `detected_mask` `pp_matrix` と `analysis_matrices` の配列、
+    行列（`feature_matrix` `detected_mask` の配列、
     `stat_matrices` の `PreparedMatrix` の配列）の `nbytes` に、
     検出された全セルの m/z（`per_sample_mz` の要素数 × 100）と特徴のメタデータ（件数 × 1500）を足す。
     基のキャッシュの上限の判定だけに使う概算で、他の入れ物（同定の候補など）は数えない。
     """
     total = sum(_array_bytes(getattr(ds, name, None))
-                for name in ("feature_matrix", "detected_mask", "pp_matrix", "analysis_matrices"))
+                for name in ("feature_matrix", "detected_mask"))
     total += _stat_matrix_bytes(ds)
     per_sample_mz = getattr(ds, "per_sample_mz", None) or {}
     total += sum(len(cells) for cells in per_sample_mz.values()) * _BYTES_PER_MZ_CELL

@@ -22,8 +22,8 @@ B2_TOPICS = {"core", "dataset", "dcl", "eic", "identity", "mztab", "library", "c
 REQUIRED_MARKERS = {
     "core": ["IsGapFilled", "34:1", "Unknown"],
     # 旧 arf / arf2 / pai2 の行の粒度・gap-fill・必須の注意（output-format-mapping.md が対応表）。
-    "dataset": ["MasterAlignmentID", "IsGapFilled", "MasterPeakID", "build_pca_matrix",
-                "Welch", "extract_arf2_data", "ChromatogramPeakFeature", "単一サンプル",
+    "dataset": ["MasterAlignmentID", "IsGapFilled", "MasterPeakID", "extract_peak_properties",
+                "moderated t", "extract_arf2_data", "ChromatogramPeakFeature", "単一サンプル",
                 "detected_mask", "feature_metadata"],
     "dcl": ["MSDec"],
     "eic": ["peak_top", "lipidmix.eic.v1", "lipidmix.eic.multi.v1"],

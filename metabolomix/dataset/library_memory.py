@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path, PureWindowsPath
 
-from metabolomix.console.method_file import LBM_KEY, MSP_KEY
+from metabolomix.console.method_file import LBM_KEY
 from metabolomix.core import file_digest
 
 # 解析フォルダの `*_Loaded.<kind>.dbs` のうち LBM のもの（`.lbm2.dbs` など）。
@@ -64,9 +64,7 @@ def remember_from_folder(selection) -> dict:
 def remember_from_job(job_path: Path) -> dict:
     """ジョブの実効メソッドが宣言するライブラリから覚える。
 
-    v3 のジョブが MSP / LBM の sha256 を `profile_snapshot.dependencies` に記録していれば、それを
-    記録の sha256 とし、今のファイルと違えば `mismatch`（その場所で差し替えられたファイルを
-    `known` に再固定しない）。記録が無い（v1 / v2 のジョブ・依存に載っていない）ときだけ今測った値を使う。
+    記録の sha256 は今測った値。
     宣言のファイルが無い・読めないなら `mismatch`（同じ読み込みで MSP 表は `unavailable` になる）。
     """
     from metabolomix.handoff.schema import AnalysisJob
@@ -85,20 +83,10 @@ def remember_from_job(job_path: Path) -> dict:
     else:
         return _record()
     measured = _measure(Path(rec["path"]))
-    pinned = _pinned_sha256(job, MSP_KEY if rec["kind"] == "msp" else LBM_KEY)
-    rec["sha256"] = pinned if (pinned and measured is not None) else measured
-    if measured is None or (pinned and measured != pinned):
+    rec["sha256"] = measured
+    if measured is None:
         rec["status"] = "mismatch"
     return rec
-
-
-def _pinned_sha256(job, method_key: str) -> str | None:
-    """ジョブの依存一覧（v3）が、メソッドのこのキーに対して記録した sha256。無ければ None。"""
-    for dep in job.dependencies:
-        if str(dep.get("method_key") or "").strip().lower() == method_key.lower() \
-                and dep.get("sha256"):
-            return str(dep["sha256"])
-    return None
 
 
 def _declared_lbm(loaded) -> Path | None:
@@ -112,31 +100,42 @@ def _declared_lbm(loaded) -> Path | None:
     return lbm if lbm.is_absolute() else method.parent / lbm
 
 
-def _abs_in_run(value, pipeline_root: Path) -> Path:
+def _abs_in_run(value, unit_root: Path) -> Path:
+    """単位の inputs のパスを絶対にする。相対なら単位の根（`store.relativize_unit_inputs`
+    の基点。v3 は `<pipeline_root>/<極性>/`、旧 v1 は pipeline_root）相対。"""
     path = Path(value)
-    return (path if path.is_absolute() else pipeline_root / path).resolve()
+    return (path if path.is_absolute() else unit_root / path).resolve()
 
 
-def remember_from_run(pipeline_root: Path) -> dict:
-    """パイプラインの run が固定した入力（`inputs.msp` / `inputs.lbm`）から覚える。
+def remember_from_run(pipeline_root: Path, polarity: str | None = None) -> dict:
+    """パイプラインの run の極性の単位が固定した入力（`inputs.msp` / `inputs.lbm`）から覚える。
 
-    run が固定した sha256 と今のファイルを突き合わせ、違う・無いなら `mismatch`。
+    単位は `store.run_units` から引く（旧 v1 の run は 1 単位）。`polarity` を省いて単位が 1 つなら
+    それ、複数なら決められないので `unknown`。run が固定した sha256 と今のファイルを突き合わせ、
+    違う・無いなら `mismatch`。
     """
-    from metabolomix.pipeline.store import load_run
+    from metabolomix.pipeline import store
 
     pipeline_root = Path(pipeline_root)
-    inputs = load_run(pipeline_root).get("inputs")
+    units = store.run_units(store.load_run(pipeline_root))
+    if polarity is None and len(units) == 1:
+        polarity = next(iter(units))
+    unit = units.get(polarity) if polarity is not None else None
+    if unit is None:
+        return _record()
+    inputs = unit.get("inputs")
     inputs = inputs if isinstance(inputs, dict) else {}
     msp = inputs.get("msp") if isinstance(inputs.get("msp"), dict) else {}
     lbm = inputs.get("lbm") if isinstance(inputs.get("lbm"), dict) else {}
     mode = inputs.get("library_mode")
+    unit_root = pipeline_root / (unit.get("unit_root") or ".")
     if msp.get("source") != "not_used" and msp.get("path"):
-        path = _abs_in_run(msp["path"], pipeline_root)
+        path = _abs_in_run(msp["path"], unit_root)
         rec = _record(status="known", kind="msp", file=msp.get("file") or path.name,
                       path=str(path), sha256=msp.get("sha256"), origin="run_inputs",
                       lbm_also=mode == "msp_then_lbm")
     elif lbm.get("path"):
-        path = _abs_in_run(lbm["path"], pipeline_root)
+        path = _abs_in_run(lbm["path"], unit_root)
         rec = _record(status="lbm_only", kind="lbm", file=lbm.get("file") or path.name,
                       path=str(path), sha256=lbm.get("sha256"), origin="run_inputs")
     else:

@@ -21,6 +21,7 @@ NON_TOOL_IDENTIFIERS = {
     "missing_state",  # エラー封筒の code
     "matrix_id",  # `dataset_preprocess` が返す行列の ID（`dataset_compare` / `dataset_pca` の引数）
     "retry_tools",  # `needs_input` の封筒の欄
+    "rerun_upstream",  # `pipeline_resume` の引数
 }
 WILDCARD_RE = re.compile(r"^(dataset|library|curation|dcl|pathway|console|pipeline)_\*$")
 #: バッククォートの中身が「名前」か「名前(...)」か「名前=...」のどれかで、名前に `_` を含むもの。

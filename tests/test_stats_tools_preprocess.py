@@ -162,10 +162,8 @@ def test_preprocess_group_levels_not_exclusive_is_bad_request(ds):
     assert out["error"]["code"] == "DATASET_BAD_REQUEST"
 
 
-def test_preprocess_does_not_write_v1_pp_slot(ds):
+def test_preprocess_does_not_set_the_latest_results(ds):
     _call(**FLAT_OFF)
-    assert ds.pp_matrix is None
-    assert not getattr(ds, "pp_sample_names", None)
     assert ds.last_pca is None and ds.last_differential is None
 
 
@@ -264,7 +262,7 @@ def test_handle_isolation(tmp_path):
     session_state.session.dataset = b                  # 直近は B
     out = _call(**FLAT_OFF, dataset_handle=handle_a)
     assert out["status"] == "success"
-    assert out["matrix_id"] in a.stat_matrices and not a.pp_matrix
+    assert out["matrix_id"] in a.stat_matrices
     assert not b.stat_matrices and session_state.session.dataset is b
     assert (tmp_path / "a" / "reports" / "stats" / f"{out['record']['record_id']}.json").is_file()
     assert not (tmp_path / "b").exists()

@@ -13,21 +13,12 @@ MCP サーバを起動せずに、各 reader を直接叩いて `.arf` / `.arf2`
 
 ## `metabolomix.arf.reader` — `.arf`
 
-引数を取る本格的な CLI。`--file` は必須。
+引数を取る本格的な CLI。`--file` は必須。PCA のフラグは無い（D 段で消した。PCA は MCP の `dataset_pca`）。
 
 | フラグ | 用途 |
 |---|---|
 | `--file` / `-f` | 解析する `.arf` のパス（必須） |
 | `--export` / `-e` | ピークプロパティを CSV に書き出すパス |
-| `--pca` | PCA を実行する |
-| `--components` | 主成分数 |
-| `--log-transform` | 標準化の前に log 変換する |
-| `--min-detection-rate` | 検出率がこの値未満の特徴量を落とす |
-| `--output-pca` | PCA 結果を JSON 保存するパス |
-| `--output-plot` | PCA プロットの PNG 保存先（**未指定なら PNG を作らない**） |
-| `--output-sample-scores` | サンプル別スコアプロットの保存先 |
-| `--top-features` / `-t` | PCA Loading の上位・下位を何件表示するか |
-| `--props` | 対象プロパティ（既定 `height`） |
 | `--group-replicates` | ファイル名の複製番号（`_1`, `_2` …）を畳んで群にする |
 | `--group-regex` | 畳む文字列を正規表現で直接指定する |
 | `--plot-distribution` | 脂質クラス別の PeakHeight 分布プロットを作る |
@@ -38,18 +29,6 @@ MCP サーバを起動せずに、各 reader を直接叩いて `.arf` / `.arf2`
 
 ```bash
 .venv/Scripts/python.exe -m metabolomix.arf.reader --file "data/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf" --export output_peaks.csv
-```
-
-PCA を実行して結果と図を保存する:
-
-```bash
-.venv/Scripts/python.exe -m metabolomix.arf.reader --file "data/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf" --pca --output-pca pca_result.json --output-plot pca_plot.png --output-sample-scores sample_scores.png
-```
-
-PCA Loading の上位特徴量を見る:
-
-```bash
-.venv/Scripts/python.exe -m metabolomix.arf.reader --file "data/AlignmentResult_2026_05_15_10_13_35_PeakProperties.arf" --pca --top-features 10 --props height
 ```
 
 ## `metabolomix.arf2.reader` / `metabolomix.dcl.reader` / `metabolomix.eic.reader`

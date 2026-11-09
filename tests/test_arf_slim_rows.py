@@ -6,8 +6,7 @@
 
 固定するのは 2 つ:
 
-1. `deserialize` が返す行は、公開境界（`alignment_feature_row` / `peak_field` /
-   `file_name_of`）と、行を添字で読む msdial 側の識別ヘルパにとって、生の行と
+1. `deserialize` が返す行は、公開境界（`alignment_feature_row` / `peak_field`）と、行を添字で読む msdial 側の識別ヘルパにとって、生の行と
    **同じ答え**を返すこと。答えが変わらない範囲でだけ捨てている。
 2. 誰も読まない重いフィールドが実際に捨てられていること、そしてブロック全体を
    1 個の list として展開しないこと（行を細くしても、展開の時点で全行が同時に
@@ -95,7 +94,6 @@ def test_kept_rows_answer_every_reader_like_the_raw_rows(rt_in_key16):
             assert arf_reader.alignment_feature_row(kept) == arf_reader.alignment_feature_row(raw)
             for name in _PEAK_FIELD_NAMES:
                 assert arf_reader.peak_field(kept, name) == arf_reader.peak_field(raw, name), name
-            assert arf_reader.file_name_of(kept) == arf_reader.file_name_of(raw)
             assert msdial_tags._sample_row_identity(kept) == msdial_tags._sample_row_identity(raw)
             assert msdial_classes._arf_sample_identity(kept) == msdial_classes._arf_sample_identity(raw)
 

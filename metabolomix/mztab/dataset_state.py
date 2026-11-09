@@ -141,10 +141,10 @@ class DatasetState:
         self.assay_metadata: dict = {}                  # assay_id -> MTD 情報
         self.feature_metadata: dict = {}                # smf_id -> {name, mz, rt, inchikey, ...}
         # feature_candidates: smf_id -> [SME候補, ...]（rank昇順）。
-        # feature_metadata が持つのは rank 最上位の1件だけで、Task 7 の
-        # feature binding は adduct / charge / ライブラリ識別子 / スコアで
-        # 候補を選び直す必要がある——最上位だけを残すと、profile が要求する
-        # adduct と違う候補が付いた特徴を「同定なし」としか言えなくなる。
+        # feature_metadata が持つのは rank 最上位の1件だけ。dataset_feature_search の
+        # 目標照合と同定の確かめは rank 1 以外の候補（別の adduct・別の化合物）も
+        # 照らすので、候補を捨てずに持つ——最上位だけを残すと、狙った adduct と違う
+        # 候補が最上位に付いた特徴を「同定なし」としか言えなくなる。
         self.feature_candidates: dict = {}
         # feature_annotations: smf_id -> SML 由来のラベル。
         # **証拠ではない。** MS-DIAL は Text DB 由来の同定を SME に書かない
@@ -152,9 +152,7 @@ class DatasetState:
         # `IsTextDbBasedRepresentative` を除外する）ので、Text DB 運用では
         # SML が唯一の同定情報源になる。
         # feature_metadata / feature_candidates とは**別スロット**に隔離する——
-        # feature_bindings._check_identity は候補ゼロのとき
-        # feature_metadata["inchikey"] を見て matched を返すため、ここへ混ぜると
-        # MS1 注釈だけで authentic_standard_match が通ってしまう。
+        # ここへ混ぜると、MS1 注釈だけで同定の証拠があるように読まれる。
         self.feature_annotations: dict = {}
         self.sml_rows: list[dict] | None = None
         self.sme_rows: list[dict] | None = None
@@ -182,17 +180,12 @@ class DatasetState:
         self.artifact_paths: dict[str, list[str]] = {}
 
         # --- 解析状態フィールド（dataset_preprocess / dataset_pca / dataset_compare が設定） ---
-        # pp_matrix: 前処理済み行列。shape は (n_samples, n_features) — feature_matrix の転置。
-        # 前処理済みの試料名・特徴名は pp_sample_names / pp_feature_names が持つ。
-        self.pp_matrix = None
-        self.pp_sample_names: list[str] = []
-        self.pp_feature_names: list[str] = []
-        # roles: {sample_name: "sample"|"qc"|"blank"}。preprocess() と差次的解析の群構成で使う。
+        # 統計エンジンの行列と結果は stat_matrices と results に住む。
+        # roles: {sample_name: "sample"|"qc"|"blank"}。試料の表と根拠バンドルの役割。
         self.roles: dict[str, str] = {}
         # sample_meta: {sample_name: {role, batch, batch_source, run_order}}。
-        # 交絡判定（群⟂バッチ）とドリフト補正の材料。
+        # 根拠バンドルの試料表（注入順）と試料の表示の材料。
         self.sample_meta: dict = {}
-        self.preprocessing_recipe: dict = {}
         # last_pca / last_differential: 直近結果の全量。戻り値には要約だけを載せ、
         # 全量はここに置く（CLAUDE.md の戻り値肥大禁止）。
         # 読むのは dataset_export_differential と dataset_plot（pca / loadings / volcano）。
@@ -219,23 +212,9 @@ class DatasetState:
         # 上書きしない——比較定義・出力はsample_idsを、表示・群選択の見た目は
         # 引き続きsample_namesを使い分けられるようにするための別スロット。
         self.sample_ids: list[str] = []
-        # preprocess_id / preprocess_metadata_hash: 現在の前処理済み行列がどの計算から
-        # 出たか。派生結果（PCA・差次的解析）はこの ID を parent_ids に持つ。
-        self.preprocess_id: str | None = None
-        self.preprocess_metadata_hash: str | None = None
         # results: result_id -> 結果全量。図・エクスポートが「どの結果か」を
         # 名指しで選べるようにする（last_* は現在の既定を指すだけの別名）。
         self.results: dict = {}
-        # analysis_matrices: matrix_id -> analysis-matrix.v1（Task 8）。
-        # v2 は recipe ごとに行列を持つので、`pp_matrix` のような単一スロットへは
-        # 置けない——2本目の recipe が1本目を黙って上書きする。統計は
-        # matrix_id で名指しして参照する。
-        self.analysis_matrices: dict = {}
-        # handoff_report: pipeline run から読み込んだとき（session_handoff.load_run_dataset）
-        # だけ設定する。{"restored": [{comparison_id, result_id, group_a, group_b}],
-        # "rejected": [{comparison_id, result_id, reason}]}。run の差次的結果のうち
-        # 指紋（データ・群）が一致して `results` へ戻したものと、戻さなかったもの。
-        self.handoff_report: dict | None = None
 
         # --- 出所の信用度（metabolomix/mztab/loading.py が設定する） ---
         # source_verification: verified（終了証跡と hash で裏取り済み）/
@@ -621,9 +600,9 @@ _SME_TEXT_FIELDS = {
 def _all_candidates(refs, sme_by_id: dict, *, msp_table=None) -> list[dict]:
     """SME_ID_REFS が指す全候補を rank 昇順で返す（同定が無ければ空リスト）。
 
-    `_best_evidence` は最上位1件しか返さない。binding（Task 7）は profile が
-    要求する adduct / charge / ライブラリ識別子 / スコア閾値で選び直すので、
-    候補を捨てずに持つ。順序は rank 昇順（`_sme_rank` と同じ規則）で、
+    `_best_evidence` は最上位1件しか返さない。dataset_feature_search の目標照合と
+    同定の確かめは rank 1 以外の候補も照らすので、候補を捨てずに持つ。
+    順序は rank 昇順（`_sme_rank` と同じ規則）で、
     rank が無い候補は末尾に回す。
 
     候補ごとに自分の InChIKey（`inchikey` / `inchikey_source`）も解決して持つ。

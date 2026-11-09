@@ -21,11 +21,13 @@ drive a full analysis without ever seeing the raw matrices.
   until exported.
 - **Records the analysis** — objectives and reports are written next to the raw data, in
   the analysis folder's `reports/`, so a later session can read them back.
-- **Can drive MS-DIAL itself (auxiliary)** — the main workflow reads output MS-DIAL has
-  already written (for example after processing in the MS-DIAL GUI). Given a folder, the
-  server first checks for such output and goes straight to analysis if it is there. Only
-  when the folder holds raw acquisition files alone does it ask for your permission, then
-  plan and run MS-DIAL Console and load the resulting mzTab-M.
+- **Can drive MS-DIAL itself** — there are two equal ways in, and they meet at an MS-DIAL
+  analysis folder: read one MS-DIAL has already written (for example after processing in the
+  MS-DIAL GUI), or build one from raw data with MS-DIAL Console. Given a folder, the server
+  first checks for such output and goes straight to analysis if it is there. Only when the
+  folder holds raw acquisition files alone does it ask for your permission, then run MS-DIAL
+  Console per polarity (`pipeline_run`), check each analysis folder against its mzTab-M, and
+  open the result with `load_dataset(pipeline_path=..., polarity=...)` for the same analysis.
 
 ## Supported inputs
 
@@ -73,7 +75,8 @@ follows.
 
 ### MS-DIAL Console and reference libraries (optional)
 
-Running MS-DIAL Console from raw data (`console_*`, `pipeline_*`) or matching against your own
+Running MS-DIAL Console from raw data (`pipeline_*`, with `console_method_*` to pick or make
+a method file) or matching against your own
 `.msp` library (`library_load`) needs to know where those files live. Copy
 `lipidmix.example.toml` to `lipidmix.local.toml` next to `server.py` and fill in the paths
 (Windows paths in single quotes). The file is not tracked by git and is read on every call, so

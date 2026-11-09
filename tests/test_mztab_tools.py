@@ -298,7 +298,7 @@ def test_dataset_status_shows_job_path(tmp_path):
 # ---------- 正準 mzTab の選択（job の宣言値で選ぶ） ----------
 # 背景: 旧実装は primary_mztab_files[0] を無条件で採用していた。エントリは
 # 相対パスの辞書順で並ぶため、実データ（Area_ / Height_ / NormalizedX_ が同居）
-# では Area_ が [0] に来る。console_plan が peak_area_above_zero を
+# では Area_ が [0] に来る。旧 Console 計画が peak_area_above_zero を
 # UNSUPPORTED_AREA_CONSOLE で拒否しているのに、load_dataset はまさにその
 # Area ファイルを黙って読んでいた。spec §7 は「暗黙の単数選択の廃止」を要求する。
 

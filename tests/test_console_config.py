@@ -26,9 +26,13 @@ def _method(tmp_path: Path) -> Path:
 
 
 def _plan(tmp_path: Path) -> dict:
-    from metabolomix.tools.console_tools import console_plan
-    return json.loads(console_plan(dataset_root=str(tmp_path), method_file=str(_method(tmp_path)),
-                                   polarity="negative", measure="peak_height"))
+    """pipeline の受付が実行体を解けないときのエラー（pipeline_plan / pipeline_run が返す内容）。"""
+    from metabolomix.core.atomic_io import DomainError
+    from metabolomix.pipeline import service
+    with pytest.raises(DomainError) as caught:
+        service._resolve_exe_path()
+    exc = caught.value
+    return {"error": {"code": exc.code, "message": exc.message, "details": exc.details}}
 
 
 # ---------- get_exe_path ----------
@@ -78,9 +82,9 @@ def test_broken_config_file_is_config_invalid(cfg):
     assert exc.value.details["config_file"] == str(cfg)
 
 
-# ---------- console_plan の封筒 ----------
+# ---------- 実行体を解けないときの封筒 ----------
 
-def test_console_plan_envelope_carries_the_config_details(tmp_path, cfg):
+def test_exe_envelope_carries_the_config_details(tmp_path, cfg):
     err = _plan(tmp_path)["error"]
     assert err["code"] == "MSDIAL_EXE_NOT_FOUND"
     assert err["details"]["human_action_required"] is True
@@ -89,7 +93,7 @@ def test_console_plan_envelope_carries_the_config_details(tmp_path, cfg):
     assert any("[msdial] exe" in step for step in err["details"]["how_to_set"])
 
 
-def test_console_plan_with_a_missing_config_exe_is_not_found_not_not_console(tmp_path, cfg):
+def test_exe_with_a_missing_config_exe_is_not_found_not_not_console(tmp_path, cfg):
     exe = tmp_path / "no_such" / "MSDIALCUI.exe"
     cfg.write_text(f"[msdial]\nexe = '{exe}'\n", encoding="utf-8")
     err = _plan(tmp_path)["error"]
@@ -99,7 +103,7 @@ def test_console_plan_with_a_missing_config_exe_is_not_found_not_not_console(tmp
     assert err["details"]["human_action_required"] is True
 
 
-def test_console_plan_reports_config_invalid_with_the_quote_hint(tmp_path, cfg):
+def test_exe_reports_config_invalid_with_the_quote_hint(tmp_path, cfg):
     cfg.write_text('[msdial]\nexe = "C:' + BS + 'MS-DIAL' + BS + 'x.exe"\n', encoding="utf-8")
     err = _plan(tmp_path)["error"]
     assert err["code"] == "CONFIG_INVALID"

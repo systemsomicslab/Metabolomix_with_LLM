@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,13 +18,6 @@ from metabolomix.handoff.schema import (
 
 JOB_FILENAME = "analysis-job.json"
 RUNS_SUBDIR = "runs"
-
-#: pipelineがConsole jobを所有していることを記す小さなsidecar（Task 14）。
-#: `metabolomix/console/output_collector.py`の`_OPERATIONAL_FILES`に登録済みなので
-#: 生成物としては収集されない。中身は`{"pipeline_path": "<絶対str>"}`のみ
-#: （所有の可否は毎回そのpipeline-run.jsonの現在状態を動的に見て判定するため、
-# sidecar自体には状態を持たせない）。
-PIPELINE_OWNER_FILENAME = "pipeline-owner.json"
 
 # MS-DIAL の SupportMsRawDataExtension と同じ集合
 # （src/MSDIAL5/MsdialCore/Enum/SupportFormat.cs）。
@@ -153,19 +145,6 @@ def save_job(job: AnalysisJob, job_path: Path) -> None:
     job.save(job_path)
 
 
-def list_jobs(dataset_root: Path) -> list[Path]:
-    """dataset_root/runs/ 以下の analysis-job.json を新しい順に返す。"""
-    runs_dir = dataset_root / RUNS_SUBDIR
-    if not runs_dir.is_dir():
-        return []
-    found = sorted(
-        runs_dir.rglob(JOB_FILENAME),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    return found
-
-
 def list_raw_inputs(dataset_root: Path) -> list[Path]:
     """データフォルダ直下の計測ファイルを安定順で返す。
 
@@ -217,35 +196,6 @@ def _assert_not_in_repo(path: Path) -> None:
         f"dataset_root はリポジトリ外か、データディレクトリ ({data_dir}) 配下を"
         f"指定してください: {path}"
     )
-
-
-def pipeline_owner_path(run_dir: Path) -> Path:
-    """このrun_dir（Console jobのランディレクトリ）向けの所有権sidecarのパス。"""
-    return Path(run_dir) / PIPELINE_OWNER_FILENAME
-
-
-def read_pipeline_owner(run_dir: Path) -> dict | None:
-    """所有権sidecarを読む。
-
-    「ファイルが無い」（＝一度も所有登録されていない）と「ファイルはあるが
-    読めない／壊れている」（＝判定不能）を区別する。前者は None（呼び出し側は
-    「所有記録なし」として続行してよい）。後者は空dict（`pipeline_path`を
-    持たない）を返し、呼び出し側（`pipeline_owner_block_reason`）に
-    「判定不能なので拒否」を選ばせる——記録が消えた／壊れただけで単体
-    console_run/console_cleanup の保護が抜けるのは安全側の設計として誤り。
-    """
-    path = pipeline_owner_path(run_dir)
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return None
-    except OSError:
-        return {}
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        return {}
-    return data if isinstance(data, dict) else {}
 
 
 def _is_relative_to(child: Path, parent: Path) -> bool:

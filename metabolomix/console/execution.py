@@ -4,8 +4,7 @@
 消費者へ渡すための唯一の入口で、妥当性を確認しないまま `pipeline_status` 等へ
 流用してはいけない。
 
-後半の `supervise()` が **Console実行の唯一の監視経路**。同期呼出し（console_run）も
-切り離しワーカー（Task 5 の `metabolomix.console.worker`）も、pipelineの上流工程も
+後半の `supervise()` が **Console実行の唯一の監視経路**。pipelineの上流工程は
 ここを通る。旧経路は非ゼロ終了で即returnして収集を飛ばしていたため、失敗した実行が
 何の証拠も残さなかった。`supervise`は成功・非ゼロ・timeout・取消・起動不能の
 **どの終了経路でも証跡を保存する**。
@@ -366,7 +365,7 @@ def supervise(job_path: Path, *, command: list[str] | None = None,
               cancel_path: Path | None = None) -> dict:
     """Consoleを起動して終わりまで見張り、全終了経路で証跡と成果物を残す。
 
-    同期呼出しも切り離しワーカーもこの関数を通る。段階の順序は
+    pipeline の worker がこの関数を通る。段階の順序は
     **証跡の確定 → 収集 → 出力検証 → jobの保存**で固定で、各段階の成否を証跡へ
     書き足していく。逆順にすると収集や保存が落ちたときに終了の事実まで失われる。
     どの段階の例外も成功結果には変換しない。

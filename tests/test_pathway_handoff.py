@@ -168,7 +168,7 @@ def test_handoff_keeps_classyfire_rows_with_a_readable_name():
     assert not any(_dropped(t.report).values())
 
 
-def test_handoff_report_counts_the_kept_features():
+def test_handoff_counts_the_kept_features():
     """落とした行の件数と並べて、残った特徴の数（n_kept。重複名の整理の後）を返す。"""
     t = handoff.build_from_dataset(**_ds_with(
         _KEEP + [{"name": "Dibutyl phthalate", "ontology": "Benzoic acid esters"},

@@ -15,7 +15,7 @@ from metabolomix.tools import curation_tools, handle_tools
 from tests.config_fixtures import use_config
 from tests.curation_fixtures import write_alignment_set, write_suggest_set
 from tests.msdial_folder_fixtures import analysis_file_row, write_mddata
-from tests.v1_chain import v1_differential, v1_preprocess
+from tests.engine_chain import engine_compare
 
 CURATION_TOOLS = ("curation_review", "curation_suggest", "curation_submit", "curation_flags",
                   "curation_view_data")
@@ -133,9 +133,7 @@ def test_submit_refreshes_flags_on_open_handles(tmp_path):
     assert other.dataset.curation_flags["wrong"] == set()          # 別の .arf2 は触らない
     # 書き出しは出したばかりの判断を使う（同じ .arf2 を持つ別のハンドルでも）
     for handle in (first, second):
-        v1_preprocess(dataset_handle=handle.handle_id)
-        v1_differential(group_a=["s0", "s1"], group_b=["s2", "s3"],
-                                 dataset_handle=handle.handle_id)
+        engine_compare("g1", "g2", dataset_handle=handle.handle_id)
         out = json.loads(dat.dataset_export_differential(
             str(tmp_path / f"{handle.handle_id}.tsv"), apply_curation=True,
             dataset_handle=handle.handle_id))

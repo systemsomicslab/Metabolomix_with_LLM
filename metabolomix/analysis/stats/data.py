@@ -141,7 +141,7 @@ def _samples_table(ds, names: list[str]) -> list[SampleInfo]:
 
     バッチだけは、試料の表の行（利用者のシート・解析フォルダの行）がそのまま勝ち、無ければ
     msdial_samples / sample_meta の宣言を「2 種類以上あるとき」だけ採り（定数のラベル、MS-DIAL の既定
-    "1" は情報を持たない）、それも無ければ試料名の 8 桁の日付へ戻す。v1 と解析フォルダの経路と同じ規則で、
+    "1" は情報を持たない）、それも無ければ試料名の 8 桁の日付へ戻す。根拠バンドルの試料表（`build_dataset_pp_inputs`）と同じ規則で、
     定義は `sample_manifest.batch_labels_informative` / `filename_date_batch` の 1 つだけ。
     """
     from metabolomix.analysis.sample_manifest import batch_labels_informative, filename_date_batch

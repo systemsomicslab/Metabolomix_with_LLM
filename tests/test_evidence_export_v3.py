@@ -4,24 +4,24 @@ dataset 経路は常に v3、`samples` と `intensities` を渡さない ARF 経
 """
 from __future__ import annotations
 
+import copy
 import csv
 import json
 
 import numpy as np
 import pytest
 
-from metabolomix.analysis import dataset_service, feature_search, result_state
+from metabolomix.analysis import result_state
+from metabolomix.analysis.stats_results import as_two_group
 from metabolomix.analysis.evidence_export import export_dataset_evidence, write_evidence_bundle
 from metabolomix.core import handles
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.mztab import loading
 from metabolomix.tools import dataset_analysis_tools as T
 from metabolomix.tools import handle_tools
+from tests.engine_chain import declare_groups, engine_compare, hc_ra, register_two_group
 from tests.reanalysis_fixtures import write_mztab
-from tests.v1_chain import v1_differential, v1_preprocess
 
-HC = ["HC1", "HC2", "HC3"]
-RA = ["RA1", "RA2", "RA3"]
 _COMPARISON = dict(group_a="A", group_b="B", n_a=3, n_b=3,
                    log2fc_sign="positive means group_b is higher", method="Welch",
                    correction="BH", q_threshold=.05, log2fc_threshold=1, preprocess={})
@@ -35,16 +35,22 @@ def _tsv(path):
 
 
 def _bundle_inputs(tmp_path, *, detected: bool):
-    """合成の mzTab-M から前処理（正規化なし）と HC 対 RA の比較まで進めた (ds, result)。"""
+    """合成の mzTab-M から統計エンジンの前処理（正規化なし）と HC 対 RA の比較まで進めた (ds, 比較の記録)。
+
+    群は MS-DIAL の試料の宣言で与える（試料の表の行は作らない。注入順は mzTab-M の assay から読む）。
+    """
     ds = loading.load_dataset_state(mztab_path=write_mztab(tmp_path / "in" / "t.mzTab"))
     if detected:
         mask = np.ones((len(ds.feature_ids), len(ds.sample_names)), dtype=bool)
         mask[ds.feature_ids.index("1"), ds.sample_names.index("RA1")] = False
         ds.detected_mask = mask
         ds.feature_matrix[ds.feature_ids.index("2"), ds.sample_names.index("HC1")] = np.nan
-    dataset_service.preprocess_dataset(ds, {"normalize": "none"})
-    result = dataset_service.compare_dataset(ds, HC, RA, group_a_label="HC", group_b_label="RA")
-    return ds, result
+    declare_groups(ds, hc_ra)
+    return ds, register_two_group(ds, "HC", "RA")
+
+
+def _n_rows(record) -> int:
+    return len(as_two_group(record)["results"])
 
 
 def _handle_with_result(tmp_path) -> tuple[str, str]:
@@ -52,9 +58,8 @@ def _handle_with_result(tmp_path) -> tuple[str, str]:
     path = write_mztab(tmp_path / "in" / "t.mzTab")
     opened = json.loads(handle_tools.load_dataset(mztab_path=str(path), library="none"))
     handle = opened["dataset_handle"]
-    v1_preprocess(dataset_handle=handle)
-    result = json.loads(v1_differential(group_a=HC, group_b=RA, dataset_handle=handle))
-    return handle, result["result_id"]
+    declare_groups(handles.registry.get(handle).dataset, hc_ra)
+    return handle, engine_compare("HC", "RA", dataset_handle=handle)["result_id"]
 
 
 def test_v3_manifest_and_roles(tmp_path):
@@ -69,7 +74,7 @@ def test_v3_manifest_and_roles(tmp_path):
                                                       "samples", "intensities"}
     assert manifest["population"]["detection_unavailable_reason"] is None
     assert out["n_samples"] == len(ds.sample_names)
-    assert out["n_intensity_rows"] == len(result["results"]) * 6
+    assert out["n_intensity_rows"] == _n_rows(result) * 6
     assert out["intensities_stage"] == "pre_imputation"
 
 
@@ -99,20 +104,19 @@ def test_intensities_long_format_detected_and_pre_imputation_value(tmp_path):
     ds, result = _bundle_inputs(tmp_path, detected=True)
     export_dataset_evidence(ds, result, tmp_path / "b")
     rows = _tsv(tmp_path / "b" / "intensities.tsv")
-    assert len(rows) == len(result["results"]) * 6          # 全特徴 × 比較の試料（QC を含まない）
+    assert len(rows) == _n_rows(result) * 6                 # 全特徴 × 比較の試料（QC を含まない）
     cell = {(r["feature_id"], r["sample_id"]): r for r in rows}
     assert cell[("1", "RA1")]["detected"] == "false" and cell[("1", "HC1")]["detected"] == "true"
     assert cell[("1", "HC1")]["value"] == "10"               # normalize none・補完の前
     assert cell[("2", "HC1")]["value"] == ""                 # NaN は補完せず空
 
 
-def test_reapplying_recipe_does_not_change_dataset_state(tmp_path):
+def test_export_does_not_change_dataset_state(tmp_path):
     ds, result = _bundle_inputs(tmp_path, detected=True)
 
     def state():
-        return (result_state.array_fingerprint(ds.pp_matrix), ds.preprocess_id,
-                result_state.dataset_fingerprint(ds), dict(ds.preprocessing_recipe),
-                set(ds.results), list(ds.pp_sample_names), list(ds.pp_feature_names))
+        return (result_state.dataset_fingerprint(ds), set(ds.results), set(ds.stat_matrices),
+                ds.last_differential["result_id"], ds.metadata_revision)
 
     before = state()
     export_dataset_evidence(ds, result, tmp_path / "b")
@@ -127,18 +131,21 @@ def test_without_detection_state_detected_is_empty_and_reason_recorded(tmp_path)
     assert manifest["population"]["detection_unavailable_reason"]   # 空でない文字列
 
 
-def test_mask_of_another_shape_leaves_detected_empty(tmp_path):
-    ds, result = _bundle_inputs(tmp_path, detected=True)
+def test_mask_of_another_shape_is_not_used(tmp_path):
+    """形の合わない検出マスクは使わない（理由は mask_shape_mismatch）。マスクはデータの指紋に入るので、
+    登録の後に差し替えると結果ごと古くなる——ここでは検出の表の選び方だけを見る。"""
+    from metabolomix.analysis.evidence_export import _detection_source
+
+    ds, _ = _bundle_inputs(tmp_path, detected=True)
     ds.detected_mask = ds.detected_mask[:, :-1]
-    export_dataset_evidence(ds, result, tmp_path / "b")
-    manifest = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["population"]["detection_unavailable_reason"] == "mask_shape_mismatch"
-    assert {r["detected"] for r in _tsv(tmp_path / "b" / "intensities.tsv")} == {""}
+    assert _detection_source(ds, ["HC1", "RA1"]) == (None, "mask_shape_mismatch")
 
 
 def test_result_samples_outside_mask_axis_leave_detected_empty(tmp_path):
     ds, result = _bundle_inputs(tmp_path, detected=True)
-    result = {**result, "samples_a": ["HC1", "HC2", "ZZ"]}  # 試料軸のずれ
+    result = copy.deepcopy(result)
+    unit = next(u for u in result["units"].values() if "HC1" in u["samples"])
+    unit["samples"].append("ZZ")                             # 試料軸のずれ
     export_dataset_evidence(ds, result, tmp_path / "b")
     manifest = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["population"]["detection_unavailable_reason"] == "sample_axis_mismatch"
@@ -154,50 +161,9 @@ def test_features_have_adduct_column(tmp_path):
     assert features["1"]["adduct"] == "[M+H]1+"              # SML の adduct_ions
 
 
-def test_post_imputation_when_recipe_unknown(tmp_path, monkeypatch):
+def test_stale_result_is_refused(tmp_path):
     ds, result = _bundle_inputs(tmp_path, detected=True)
-    monkeypatch.setattr(feature_search, "_result_recipe", lambda ds, result: None)
-    export_dataset_evidence(ds, result, tmp_path / "b")
-    manifest = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["intensities_stage"] == "post_imputation"
-    cell = {(r["feature_id"], r["sample_id"]): r for r in _tsv(tmp_path / "b" / "intensities.tsv")}
-    assert cell[("2", "HC1")]["value"] != ""                 # 親の行列は補完の後
-
-
-def test_refuses_when_neither_recipe_nor_parent_matrix(tmp_path, monkeypatch):
-    ds, result = _bundle_inputs(tmp_path, detected=True)
-    monkeypatch.setattr(feature_search, "_result_recipe", lambda ds, result: None)
-    ds.preprocess_id = "other"
-    with pytest.raises(DomainError) as info:
-        export_dataset_evidence(ds, result, tmp_path / "b")
-    assert info.value.code == "EVIDENCE_INTENSITIES_UNAVAILABLE"
-    assert not (tmp_path / "b").exists()
-
-
-def test_refuses_handoff_result_without_recipe_on_another_preprocess(tmp_path):
-    """`assert_current` を通る形（引き継ぎの結果は親の前処理を照合しない）でも止まる。"""
-    ds, result = _bundle_inputs(tmp_path, detected=True)
-    provenance = {**result["provenance"], "handoff": {"preprocess": None}, "parent_ids": ["run"],
-                  "dataset_hash": result_state.dataset_fingerprint(ds)}
-    with pytest.raises(DomainError) as info:
-        export_dataset_evidence(ds, {**result, "provenance": provenance}, tmp_path / "b")
-    assert info.value.code == "EVIDENCE_INTENSITIES_UNAVAILABLE"
-    assert not (tmp_path / "b").exists()
-
-
-def test_handoff_result_writes_recipe_to_comparison(tmp_path):
-    ds, result = _bundle_inputs(tmp_path, detected=True)
-    provenance = {**result["provenance"], "handoff": {"preprocess": {"normalize": "none"}},
-                  "parent_ids": ["run"], "dataset_hash": result_state.dataset_fingerprint(ds)}
-    export_dataset_evidence(ds, {**result, "provenance": provenance}, tmp_path / "b")
-    manifest = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["intensities_stage"] == "pre_imputation"
-    assert manifest["comparison"]["preprocess"] == {"normalize": "none"}
-
-
-def test_stale_result_with_known_recipe_stays_stale(tmp_path):
-    ds, result = _bundle_inputs(tmp_path, detected=True)
-    ds.preprocess_id = "other"
+    ds.metadata_revision += 1                                # 試料の表・除外が登録の後に変わった
     with pytest.raises(DomainError) as info:
         export_dataset_evidence(ds, result, tmp_path / "b")
     assert info.value.code == "STALE_ANALYSIS_RESULT"
@@ -205,7 +171,9 @@ def test_stale_result_with_known_recipe_stays_stale(tmp_path):
 
 def test_refuses_when_reapplied_features_differ_from_result(tmp_path):
     ds, result = _bundle_inputs(tmp_path, detected=True)
-    result = {**result, "results": [*result["results"], {**result["results"][0], "feature": "9"}]}
+    result = copy.deepcopy(result)
+    rows = result["engine"]["rows"]
+    rows.append({**rows[0], "feature_id": "9"})
     with pytest.raises(DomainError) as info:
         export_dataset_evidence(ds, result, tmp_path / "b")
     assert info.value.code == "EVIDENCE_INTENSITIES_MISMATCH"

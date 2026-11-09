@@ -486,7 +486,7 @@ SML にその列が無い mzTab では**エラーにせず**、`subset_available
 |ppm| が帯の許容幅以内（`max_mz` 未満の最初の帯、無ければ `default`）で、q < `q_max` の特徴から
 除外を外した一覧（q の昇順）。`dataset_compare` の結果は、加えて判定 `verdict` が `changed` の行だけ
 （検出が足りず量を判定できない `inconclusive` の行は q が小さくても候補にしない。`q_max` が判定の q の閾値より
-大きくても、判定が `changed` でない行は通らない）。v1 の結果は q だけで選ぶ。行は `feature_id name inchikey adduct mz rt ppm group_ref group_test
+大きくても、判定が `changed` でない行は通らない）。analysis-spec.v1 の結果（判定を持たない）は q だけで選ぶ。行は `feature_id name inchikey adduct mz rt ppm group_ref group_test
 log2fc_test_over_ref p q direction merged_from`（JSON には `sme_feature_id` も）。論文の同定リストとの
 突き合わせはしない（再解析の側）。
 
@@ -639,15 +639,15 @@ UTF-8・改行は CRLF）。
 |---|---|
 | `contract_version` / `exporter.version` | `3` / `evidence-v3` |
 | `comparison.polarity` | データセットの極性（`positive` / `negative`）。ハンドルなら `load_dataset` の `polarity`、対話のセッションなら同じ規則で決める。決まらなければ `null` |
-| `comparison.preprocess` | `value` に当たった前処理のレシピ。pipeline から引き継いだ結果は、その run のレシピ |
-| `comparison.method` | 実際に使った検定名。統計エンジンの結果（`dataset_compare`）は `moderated_t` / `welch` / `student` / `mannwhitney`、pipeline から引き継いだ v1 の結果は `Welch` |
-| `comparison.statistics` | エンジンの結果だけ。`{test, ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n, q_interpretation}, subject_source, n_units_a, n_units_b}`。`n` は選んだ対比の BH の母集団の大きさ |
-| `comparison.effect_size_definition` / `mean_definition` | エンジンの結果だけ。効果量の定義（`{name, description}`）と、`mean_a` / `mean_b` が「個体ごとの前処理後の線形値の算術平均」であること |
-| `comparison.matrix_id` / `rule_hash` / `contrast_id` | エンジンの結果だけ。どの行列・どの規則・どの対比を書いたか（`contrast_id` は 2 群の結果なら 1 つの対比の ID） |
-| `comparison.unadjusted_confounded` | エンジンの結果で、`allow_confounded=true` で完全交絡を越えて走った比較だけ `true`（それ以外は欄が無い）。同じ印は v1 と同じく来歴 `provenance.result.comparison.unadjusted_confounded`（と `provenance.result.warnings` の説明）にも載る |
+| `comparison.preprocess` | `value` に当たった前処理の設定（結果が読んだ行列の前処理の設定） |
+| `comparison.method` | 実際に使った検定名（`moderated_t` / `welch` / `student` / `mannwhitney`） |
+| `comparison.statistics` | `{test, ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n, q_interpretation}, subject_source, n_units_a, n_units_b}`。`n` は選んだ対比の BH の母集団の大きさ |
+| `comparison.effect_size_definition` / `mean_definition` | 効果量の定義（`{name, description}`）と、`mean_a` / `mean_b` が「個体ごとの前処理後の線形値の算術平均」であること |
+| `comparison.matrix_id` / `rule_hash` / `contrast_id` | どの行列・どの規則・どの対比を書いたか（`contrast_id` は 2 群の結果なら 1 つの対比の ID） |
+| `comparison.unadjusted_confounded` | `allow_confounded=true` で完全交絡を越えて走った比較だけ `true`（それ以外は欄が無い）。同じ印は来歴 `provenance.result.comparison.unadjusted_confounded`（と `provenance.result.warnings` の説明）にも載る |
 | `intensities_stage` | `pre_imputation`（補完の前）/ `post_imputation`（補完の後） |
 | `population.detection_unavailable_reason` | `detected` が全行空のときの理由。検出状態を使えれば `null` |
-| `population.exclusions` | 除外の来歴。エンジンの結果は、その行列を作ったときの除外（`dataset_exclude` の試料・特徴。名前は 20 件で切り、残りは `n_more`）を、結果が読んだ行列の登録から引く（今の `ds.excluded_*` ではない）。v1 の結果は前処理の報告から |
+| `population.exclusions` | 除外の来歴。エンジンの結果は、その行列を作ったときの除外（`dataset_exclude` の試料・特徴。名前は 20 件で切り、残りは `n_more`）を、結果が読んだ行列の登録から引く（今の `ds.excluded_*` ではない） |
 | `files[].role` | `samples` と `intensities` が増える |
 
 `samples.tsv`（データセットの全試料）:
@@ -668,16 +668,9 @@ UTF-8・改行は CRLF）。
 | `value` | log 変換の前の値（有効数字 10 桁）。欠測は空。結果の試料が値の行列に無いときも空。実データでは `0` が多い（実測で全セルの 17〜28%、すべて `detected=false`）。補完は NaN だけを触るので `0` は実際の値で、欠測の空とは別。この場合 `pre_imputation` と `post_imputation` の値は同じになりうる。検出の有無は `value` でなく `detected` で読む |
 | `detected` | `true` / `false` / 空。`false` は gap-fill か補完で、実測のピークではない。**空は「不明」で、gap-fill の意味ではない** |
 
-`intensities_stage` の決め方（**エンジンの結果**は下の 1 つだけ）:
+`intensities_stage` の決め方:
 
 - エンジンの結果（`dataset_compare`）: 常に `pre_imputation`。値は結果が読んだ行列（`ds.stat_matrices[matrix_id]`）の `sample_values`——**正規化の後・log2 の前の線形値**で、欠測は空（エンジンは検定に補完しない）。前処理のレシピを当て直さない。行列が登録に無い（除外・試料の表の変更で古くなった）ときは `missing_state`（`dataset_preprocess` と `dataset_compare` をやり直す）、結果の行と行列の特徴の集合が違えば `EVIDENCE_INTENSITIES_MISMATCH`。
-- v1 の結果（pipeline から引き継いだもの）は次のとおり:
-  - `pre_imputation`: 結果を計算した前処理のレシピが分かるとき（session の結果・pipeline から引き継いだ結果の
-  どちらも）。レシピを `impute: none` で当て直す。補完は前処理の最後の段なので、正規化などは比較に入った値と同じ。
-  - `post_imputation`: レシピが分からず、今の前処理の行列がその結果の親のとき。その行列の値を書く。
-  - どちらでもなければ書かずに `EVIDENCE_INTENSITIES_UNAVAILABLE`（別の前処理の値で埋めない）。結果が群の試料を
-  持たないとき・前処理を当て直せないときも同じ。当て直した特徴の集合が結果の行と違えば
-  `EVIDENCE_INTENSITIES_MISMATCH`。
 
 `detection_unavailable_reason` の値:
 
@@ -691,7 +684,7 @@ UTF-8・改行は CRLF）。
 `features.tsv` に任意の列 `adduct` が増える。mzTab-M の SML の `adduct_ions`（SML が無い特徴は rank 1 の
 SME の付加体）。無ければ空。`features.tsv` の `significant` は差次的の書き出しの `significant` 列と同じ印で、
 エンジンの結果は判定 `verdict` が `changed` の行だけ `true` になりうる（`dataset.md` §11.4。判定できない行は q が
-小さくても `false`）。v1 の結果は q と log2fc の閾値だけ。
+小さくても `false`）。
 
 戻り値には v2 の欄に `n_samples`・`n_intensity_rows`・`intensities_stage` が足される。
 

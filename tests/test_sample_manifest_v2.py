@@ -20,18 +20,14 @@ from pathlib import Path
 
 import pytest
 
-from metabolomix.analysis.result_state import invalidate_results
 from metabolomix.analysis.sample_manifest import (
     FIELDS,
     FIELDS_V2,
     apply_metadata,
     parse_manifest,
-    select_statistical_samples,
-    validate_independent_samples,
-    validate_standard_assays,
 )
 from metabolomix.core.atomic_io import DomainError
-from tests.pipeline_fixtures import make_dataset, metadata_rows
+from tests.pipeline_fixtures import make_dataset
 
 _HEADER_V1 = "\t".join(FIELDS)
 _HEADER_V2 = "\t".join(FIELDS_V2)
@@ -157,100 +153,6 @@ def test_standard_role_is_rejected_in_v1(tmp_path):
     assert caught.value.code == "SAMPLE_MANIFEST_INVALID"
 
 
-def test_standard_is_not_a_statistical_sample():
-    rows = _rows({}, {"role": "standard", "biological_sample_id": None},
-                 {"role": "qc", "biological_sample_id": None})
-    selected = select_statistical_samples(rows, ["A"])
-    assert [r["sample_id"] for r in selected] == ["s0"]
-
-
-# ---------- include / group の選択 ----------
-
-def test_excluded_rows_leave_the_statistical_population():
-    rows = _rows({}, {"include": False}, {"group": "B"})
-    assert [r["sample_id"] for r in select_statistical_samples(rows, ["A"])] == ["s0"]
-    assert [r["sample_id"] for r in select_statistical_samples(rows, ["A", "B"])] \
-        == ["s0", "s2"]
-
-
-def test_rows_without_group_are_not_silently_grouped():
-    rows = _rows({"group": None})
-    assert select_statistical_samples(rows, ["A"]) == []
-
-
-# ---------- 生物試料ID ----------
-
-def test_duplicate_biological_id_is_not_independent_n():
-    rows = [{"sample_id": x, "biological_sample_id": "bio1", "group": "A",
-             "role": "sample", "include": True} for x in ("inj1", "inj2")]
-    with pytest.raises(DomainError) as caught:
-        validate_independent_samples(rows, ["A"])
-    assert caught.value.code == "REPEATED_MEASURES_UNSUPPORTED"
-
-
-def test_duplicate_biological_id_across_groups_is_also_repeated_measures():
-    rows = _rows({"biological_sample_id": "bio1"},
-                 {"group": "B", "biological_sample_id": "bio1"})
-    with pytest.raises(DomainError) as caught:
-        validate_independent_samples(rows, ["A", "B"])
-    assert caught.value.code == "REPEATED_MEASURES_UNSUPPORTED"
-
-
-def test_duplicate_biological_id_outside_the_population_is_allowed():
-    """除外行・standard・対象外群の重複は統計のnに入らないので止めない。"""
-    rows = _rows({"biological_sample_id": "bio1"},
-                 {"include": False, "biological_sample_id": "bio1"},
-                 {"role": "standard", "biological_sample_id": "bio1"},
-                 {"group": "Z", "biological_sample_id": "bio1"})
-    validate_independent_samples(rows, ["A"])
-
-
-def test_missing_biological_id_blocks_the_test():
-    rows = _rows({"biological_sample_id": None}, {})
-    with pytest.raises(DomainError) as caught:
-        validate_independent_samples(rows, ["A"])
-    assert caught.value.code == "BIOLOGICAL_SAMPLE_ID_REQUIRED"
-    assert caught.value.details["sample_ids"] == ["s0"]
-
-
-def test_v1_rows_without_the_column_block_the_test():
-    """v1シートは列自体が無い。無い＝空欄と同じく「独立性未確認」で止める。"""
-    ds = make_dataset()
-    rows = metadata_rows(ds, n_qc=0)
-    for row in rows:
-        row["group"] = "A"
-    with pytest.raises(DomainError) as caught:
-        validate_independent_samples(rows, ["A"])
-    assert caught.value.code == "BIOLOGICAL_SAMPLE_ID_REQUIRED"
-
-
-# ---------- standard_assays ----------
-
-def test_standard_assays_must_point_at_standard_rows():
-    rows = _rows({}, {"role": "standard", "sample_id": "std-1",
-                      "biological_sample_id": None})
-    validate_standard_assays(rows, {"IS1": ["std-1"]})
-    with pytest.raises(DomainError) as caught:
-        validate_standard_assays(rows, {"IS1": ["s0"]})
-    assert caught.value.code == "STANDARD_ASSAY_INVALID"
-
-
-def test_standard_assays_reject_excluded_injections():
-    rows = _rows({"role": "standard", "sample_id": "std-1", "include": False,
-                  "biological_sample_id": None})
-    with pytest.raises(DomainError) as caught:
-        validate_standard_assays(rows, {"IS1": ["std-1"]})
-    assert caught.value.code == "STANDARD_ASSAY_INVALID"
-
-
-def test_standard_assays_reject_unknown_sample_id():
-    rows = _rows({"role": "standard", "sample_id": "std-1",
-                  "biological_sample_id": None})
-    with pytest.raises(DomainError) as caught:
-        validate_standard_assays(rows, {"IS1": ["std-9"]})
-    assert caught.value.code == "STANDARD_ASSAY_INVALID"
-
-
 # ---------- rawとの対応（v2でもv1と同じ厳しさ） ----------
 
 def test_missing_source_row_is_rejected_in_v2(tmp_path):
@@ -297,7 +199,7 @@ def test_biological_id_change_is_detected_and_keeps_preprocessing():
                     "injection_order": i + 1, "biological_sample_id": f"bio{i}"}
                    for i, n in enumerate(ds.sample_names)])
     apply_metadata(ds, rows)
-    ds.pp_matrix = object()
+    ds.stat_matrices = {"mx": {}}
     ds.last_differential = {"x": 1}
 
     changed = _rows(*[{"sample_id": n, "source_file": f"{n}.wiff",
@@ -308,13 +210,4 @@ def test_biological_id_change_is_detected_and_keeps_preprocessing():
 
     assert "biological_sample_id" in report["changed_fields"]
     assert ds.last_differential is None
-    assert ds.pp_matrix is not None
-
-
-def test_standard_assay_change_invalidates_the_preprocessed_matrix():
-    ds = make_dataset()
-    ds.pp_matrix = object()
-    ds.last_pca = {"x": 1}
-    invalidate_results(ds, {"standard_assays"})
-    assert ds.pp_matrix is None
-    assert ds.last_pca is None
+    assert ds.stat_matrices == {"mx": {}}

@@ -20,7 +20,7 @@ from mcp.types import ToolAnnotations
 from metabolomix.core import handles, session_state, user_config
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
-from metabolomix.core.mcp_errors import mztab_error
+from metabolomix.core.mcp_errors import mztab_error, needs_input
 from metabolomix.core.serialization import json_payload, json_safe
 from metabolomix.dataset import opening
 
@@ -42,15 +42,17 @@ def alignment_files_for(opened, arf2_path: str | None = None) -> tuple[str | Non
     selection = opened.selection
     if selection is not None and not arf2_path:
         return str(selection.arf2), (str(selection.dcl) if selection.dcl else None)
-    return _alignment_files(opened.dataset, arf2_path, opened.kind, opened.path)
+    return _alignment_files(opened.dataset, arf2_path, opened.kind, opened.path, opened.polarity)
 
 
 def _alignment_files(ds, arf2_path: str | None, kind: str | None = None,
-                     path: str | None = None) -> tuple[str | None, str | None]:
+                     path: str | None = None,
+                     polarity: str | None = None) -> tuple[str | None, str | None]:
     """スポットの照合に使う `.arf2` と `.dcl`。決まらなければ None。
 
     探す順: 明示の `arf2_path` → 検出状態を取り込んだ `.arf` の同じバッチ → mzTab の隣
-    → （`kind == "pipeline_path"` のとき）run の `input/AlignResult-*.arf2`。
+    → （`kind == "pipeline_path"` のとき）受領が照合した単位のバッチ、無ければ単位の
+    `input/*.arf2` の名前が最も新しいもの（`opening.pipeline_arf2`）。
     """
     from metabolomix.curation import apply as curation_apply
     from metabolomix.msdial import alignment_spot
@@ -67,7 +69,7 @@ def _alignment_files(ds, arf2_path: str | None, kind: str | None = None,
         arf2 = next(filter(None, (curation_apply.arf2_for_mztab(p, **lookup)
                                   for p in (getattr(ds, "source_files", None) or {}))), None)
     if arf2 is None and kind == "pipeline_path" and path:
-        arf2 = opening.pipeline_arf2(path)
+        arf2 = opening.pipeline_arf2(path, polarity)
     if arf2 is None or not arf2.is_file():
         return None, None
     dcl = alignment_spot.alignment_sibling(arf2, ".dcl")
@@ -127,6 +129,7 @@ def _max_handles_or_none() -> int | None:
           structured_output=False)
 def load_dataset(directory: str | None = None, mztab_path: str | None = None,
                  job_path: str | None = None, pipeline_path: str | None = None,
+                 polarity: str | None = None,
                  allow_incomplete: bool = False, source: str = "auto",
                  measure: str = "peak_height", arf2_path: str | None = None,
                  library: str = "auto", overview: bool = True) -> str:
@@ -141,28 +144,29 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
       - job_path: analysis-job.json へのパス。ジョブの宣言（polarity・measure）で正準
         mzTab-M を一意に選ぶ。
       - pipeline_path: `pipeline_run` が返した pipeline-run.json（またはその親ディレクトリ）。
+        run の受領（`results/receipt.json`）が指す、極性ごとの解析フォルダを開く。
+
+    polarity: `pipeline_path` のときだけ使う。開く極性の単位（`"negative"` / `"positive"`）。
+        単位が 1 つの run では省ける。2 極性の run で省くと `needs_input`（選べる極性つき。
+        検証を通った単位だけ）。検証を通っていない単位は `PIPELINE_UNIT_NOT_VALIDATED`
+        （`allow_incomplete=True` なら探索用に読む）。他の入口で渡すと
+        `PIPELINE_POLARITY_NOT_APPLICABLE`。2 極性の run はハンドルが 2 つになる。
 
     source: どのアダプタで読むか。`"auto"`（既定）/ `"folder"` / `"mztab"`。
         - `directory` は解析フォルダ（`"mztab"` はエラー）、`mztab_path` は mzTab-M
           （`"folder"` はエラー）。
         - `job_path` / `pipeline_path` は既定（`"auto"` / `"folder"`）で、そのジョブの正準
           mzTab-M と同じアラインメントの**解析フォルダ**を読む。候補（mzTab-M の隣の `.arf`。
-          pipeline はどれも合わなければ run の `input/AlignResult-*.arf2` と同じバッチも）を
-          mzTab-M と特徴数・m/z・試料名で照合し、合うものがちょうど 1 本ならそれを読む。
-          無ければ `ALIGNMENT_NOT_FOUND`、2 本以上なら `ALIGNMENT_AMBIGUOUS`（どちらも
-          候補のファイル名を `details.candidates` に載せる）で止まり、mzTab-M へ黙って
-          切り替えない。`"mztab"` を渡すと mzTab-M を読む。
-        - **pipeline の run を解析フォルダで読んだときに run から引き継ぐのは、解決済みの
-          試料対応表だけ**。run の解析行列・feature binding・差次的結果は
-          `source="mztab"` のときだけ載せる——その run の mzTab に加えて、解決済みの
-          試料対応表・feature binding・解析行列を**同じ run からまとめて**載せる
-          （別 run の行列を混ぜると群の対応が黙ってずれるため）。載せた
-          `analysis_matrices` は**表示専用**（`load_dataset` の summary に ID が並ぶだけ）。統計エンジンの
-          `matrix_id` ではないので `dataset_compare` / `dataset_pca` には渡せない（渡すと
-          `missing_state("stat_matrix")`）。run の差次的結果も、データと群の指紋が
-          今のデータセットと一致するものだけを戻す（result_id は run の TSV と同じ。
-          直近の結果にはしないので result_id で名指しして使う）。戻せなかったものは理由つきで
-          `summary` に並ぶ。
+          pipeline はどれも合わなければ単位の解析フォルダ `<極性>/input/*.arf2` のバッチを
+          新しい順に 1 本ずつ）を mzTab-M と特徴数・m/z・試料名で照合し、合うものがちょうど
+          1 本ならそれを読む。無ければ `ALIGNMENT_NOT_FOUND`、2 本以上なら
+          `ALIGNMENT_AMBIGUOUS`（どちらも候補のファイル名を `details.candidates` に載せる）で
+          止まり、mzTab-M へ黙って切り替えない。`"mztab"` を渡すと mzTab-M を読む。
+        - **pipeline の run から引き継ぐのは試料の対応表だけ**（v3 の run は受領
+          `results/receipt.json` の `units.<極性>.samples.rows`、旧 v1 の run は記録の
+          `inputs.manifest`。どちらのアダプタでも同じ）。run が計算した差次的結果は戻さない
+          （比較は読み込んだあと `dataset_compare` で回す）。受領が無い・照合できない v3 の
+          run は記録の単位から解析フォルダを開き、対応表は載らない旨を注記する。
     measure: 解析フォルダのアダプタが値に使う `.arf` の欄（`"peak_height"`（既定）/
         `"peak_area_above_zero"`）。**この引数が効くのは解析フォルダのアダプタだけ**。
         mzTab-M のアダプタでは定量種別がファイル（job / pipeline ならジョブの宣言）で
@@ -181,8 +185,9 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         `library_load` の `file_path` で明示する。`"none"` は読まない。
     arf2_path: スポットの照合（spot_id = SMF_ID）に使う `.arf2`。省略時、解析フォルダで
         読んだならその `.arf2` と `.dcl`。mzTab-M で読んだなら検出状態を取り込んだ `.arf` の
-        同じバッチ、無ければ mzTab-M の隣、`pipeline_path` なら run の
-        `input/AlignResult-*.arf2`（複数あれば名前の新しいもの）を探す。
+        同じバッチ、無ければ mzTab-M の隣、`pipeline_path` なら受領が照合した単位の
+        `<極性>/input/` の `.arf2`、受領に無ければ単位の `<極性>/input/*.arf2`（複数あれば
+        名前の新しいもの）を探す。
 
     overview: 読み込みの最後に最初の概観（`dataset_overview` と同じ。品質 → 全体 → クラス → 分子種）を
         計算して戻り値の `overview` 欄に載せる（既定 True）。False で計算しない（多数のハンドルを開く
@@ -222,7 +227,7 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         handles.registry.check_capacity()  # 長い読み込みの前に断る（adopt_handle でもう一度確かめる）
         opened = opening.open_dataset(directory=directory, mztab_path=mztab_path,
                                       job_path=job_path, pipeline_path=pipeline_path,
-                                      source=source, measure=measure,
+                                      polarity=polarity, source=source, measure=measure,
                                       allow_incomplete=allow_incomplete)
         ds = opened.dataset
         polarity, polarity_source, polarity_notes = dataset_polarity(ds)
@@ -231,6 +236,7 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         handle = handles.DatasetHandle(
             ds, polarity=polarity, polarity_source=polarity_source,
             source={"kind": opened.kind, "path": opened.path,
+                    **({"polarity": opened.polarity} if opened.polarity else {}),
                     "allow_incomplete": bool(allow_incomplete),
                     "adapter": opened.adapter, "measure": measure},
             arf2_path=arf2, dcl_path=dcl)
@@ -247,6 +253,9 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
             handle.close()
             raise
     except DomainError as exc:
+        if exc.code == "PIPELINE_POLARITY_REQUIRED":
+            return needs_input("polarity", exc.message, (exc.details or {})["options"],
+                               argument="polarity", retry_tools=["load_dataset"])
         return mztab_error(exc.code, exc.message, exc.details or None)
 
     library_info = None

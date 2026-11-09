@@ -56,7 +56,7 @@ LBM_KEY = "Lbm file path"
 #:   `case "text db file path": param.TextDBFilePath = value;`。同じく
 #:   `CommonProcess.cs`が`LibraryHandler.ReadMsLibrary(param.TextDBFilePath, ...)`
 #:   で読み、`DataBaseSource.Text` として同定に使う（msp/lbmと並ぶテキスト形式の
-#:   同定用データベース——`lcms-profile.v1`の`kind="text_identification"`に対応）。
+#:   同定用データベース）。
 #: - `RT_REFERENCE_KEY`: `ParameterBase.CompoundListForRtCorrectionPath` /
 #:   `ConfigParser.cs`の`case "compounds library file path for rt correction"`。
 #:   `RetentionTimeCorrectionProcess.cs`が「RT correction anchor library」として
@@ -929,25 +929,9 @@ def discover_method_candidates(
 #: LBM自体は既存の resolve_lbm（build_tree/env/exe_dir へのフォールバックを持つ）
 #: が別途解決するが、「宣言されているのに解決できない」場合の検出はここが担う。
 #:
-#: **既存lipidomics v1経路（`pipeline/inputs.py`の`inspect_inputs`）が使う既定値は
-#: 変えない**（controller裁定 fix round 2 finding 3, A01「既存lipidomics実行が
-#: 変わらない」）。metabolomics向けの3キーを黙って混ぜると、GUIが書き出した
-#: lipidomicsのメソッドファイルが偶然（無関係の理由で）`Msp file path`等に
-#: 古い/無効な値を持っているだけで、これまで無視されていたものが突然
-#: `METHOD_REFERENCE_UNRESOLVED`で落ちるようになる——既存lipidomics実行への
-#: 無言の副作用であり、避ける。metabolomics側で広い集合を使いたい呼び出し元は
-#: `METABOLOMICS_REFERENCE_KEYS`を明示的に渡す（`metabolomix/console/profiles.py`の
-#: `resolve_profile_inputs`参照）。
+#: 既定の参照キーはLBMだけ。他のキー（`MSP_KEY`など）の値を黙ってパスとして解決すると、
+#: これまで無視されていた古い値が突然`METHOD_REFERENCE_UNRESOLVED`で落ちる。
 REFERENCE_KEYS: frozenset[str] = frozenset({LBM_KEY.lower()})
-
-#: metabolomicsプロファイル（spec §5.1）が使う既知参照キーの広い集合。
-#: `resolve_method_references`/`method_reference_fingerprint`へ明示的に
-#: `reference_keys=METABOLOMICS_REFERENCE_KEYS`として渡したときだけ有効になる
-#: ——`REFERENCE_KEYS`（既定値・lipidomics v1が暗黙に使う）とは別の集合に
-#: しておくことで、v1呼び出し側のコードを一切変更せずに済む。
-METABOLOMICS_REFERENCE_KEYS: frozenset[str] = frozenset({
-    LBM_KEY.lower(), MSP_KEY.lower(), TEXT_DB_KEY.lower(), RT_REFERENCE_KEY.lower(),
-})
 
 
 def method_reference_fingerprint(

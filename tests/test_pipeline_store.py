@@ -1,4 +1,4 @@
-"""pipeline-run.v1 の永続化・受付冪等性・Console job所有権のテスト（Task 14）。
+"""pipeline-run.v3 の永続化・受付冪等性・旧 v1 の読み取りのテスト。
 
 `find_or_create_run` はsource_root単位の索引で受付を直列化する。索引baseは
 `LIPIDMIX_PIPELINE_INDEX_DIR` 環境変数でtmpへ差し替える（本番既定は
@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from metabolomix.core.atomic_io import DomainError
-from metabolomix.pipeline.request import resolve_request
+from metabolomix.pipeline import request as request_mod
 from metabolomix.pipeline.store import find_or_create_run
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -31,8 +31,14 @@ def _index_base(tmp_path, monkeypatch):
     return index_base
 
 
+def resolve_request(root: Path, explicit: dict | None = None) -> dict:
+    """1 極性（negative）の v3 の要求。極性は受付が計画から確定させる値の代わり。"""
+    return request_mod.resolve_request(root, {"polarity": "negative", **(explicit or {})})
+
+
 def _minimal_inputs(root: Path, *, fingerprint: str = "a" * 64) -> dict:
-    return {"source_root": str(root), "fingerprint": fingerprint, "raw_inventory": []}
+    return {"fingerprint": fingerprint,
+            "units": {"negative": {"source_root": str(root), "raw_inventory": []}}}
 
 
 # ---------- brief記載のRED（そのまま） ----------
@@ -41,10 +47,10 @@ def test_same_request_id_is_content_addressed(tmp_path):
     root = tmp_path / "source"
     root.mkdir()
     req = resolve_request(root)
-    inputs = {"source_root": str(root), "fingerprint": "a" * 64, "raw_inventory": []}
+    inputs = _minimal_inputs(root)
     first = find_or_create_run(root, req, inputs, request_id="request-1")
     assert find_or_create_run(root, req, inputs, request_id="request-1") == first
-    changed = {**req, "target": "differential", "effective_target": "differential"}
+    changed = {**req, "timeout_s": 60}
     with pytest.raises(DomainError, match="IDEMPOTENCY_CONFLICT"):
         find_or_create_run(root, changed, inputs, request_id="request-1")
 
@@ -73,11 +79,14 @@ def test_create_run_writes_expected_shape(tmp_path):
     assert record["request"]["revision"] == 1
     assert record["request"]["request_id"] is None
     assert record["request"]["saved_path"] == "requests/revision-0001.json"
-    assert record["request"]["effective_target"] == "exploratory"
-    assert set(record["stages"]) == {
-        "prepare_input", "upstream", "validate_outputs", "load_dataset",
-        "resolve_metadata", "preprocess", "pca", "resolve_comparisons", "report",
-    }
+    assert "effective_target" not in record["request"]
+    assert list(record["stages"]) == [
+        "prepare_input:negative", "upstream:negative", "validate_outputs:negative", "receipt"]
+    assert record["units"]["negative"]["raw_dir"] == "."
+    assert record["units"]["negative"]["unit_root"] == "negative"
+    assert record["units"]["negative"]["upstream"] == {
+        "console_job_path": None, "execution_id": None, "verification": None}
+    assert record["inputs"] == {"fingerprint": "a" * 64}
     for stage in record["stages"].values():
         assert stage["status"] == "pending"
     assert record["results"] == []
@@ -85,19 +94,35 @@ def test_create_run_writes_expected_shape(tmp_path):
     assert record["warnings"] == []
 
 
-def test_create_run_stage_ids_include_comparisons(tmp_path):
+def test_create_run_has_one_unit_per_polarity(tmp_path):
     from metabolomix.pipeline.store import create_run, load_run
 
     root = tmp_path / "source"
     root.mkdir()
-    req = resolve_request(root, {
-        "target": "differential",
-        "comparisons": [{"comparison_id": "ko_vs_wt", "reference_group": "wt", "test_group": "ko"}],
-    })
-    pipeline_root = create_run(root, req, _minimal_inputs(root))
-    record = load_run(pipeline_root)
-    assert "differential:ko_vs_wt" in record["stages"]
-    assert "export:ko_vs_wt" in record["stages"]
+    req = request_mod.resolve_request(root, {"units": [
+        {"polarity": "negative", "raw_dir": "neg"}, {"polarity": "positive", "raw_dir": "pos"}]})
+    inputs = {"fingerprint": "a" * 64,
+              "units": {"negative": {"source_root": str(root / "neg")},
+                        "positive": {"source_root": str(root / "pos")}}}
+    record = load_run(create_run(root, req, inputs))
+    assert list(record["units"]) == ["negative", "positive"]
+    assert record["units"]["positive"]["raw_dir"] == "pos"
+    assert list(record["stages"])[-1] == "receipt"
+    # 計画の単位と要求の単位が合わなければ作らない。
+    with pytest.raises(DomainError, match="PIPELINE_INPUTS_INVALID"):
+        create_run(root, req, {"fingerprint": "a" * 64,
+                               "units": {"negative": {"source_root": str(root)}}})
+
+
+def test_create_run_records_intake_warnings(tmp_path):
+    from metabolomix.pipeline.store import create_run, load_run
+
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "analysis-request.json").write_text(json.dumps({"target": "differential"}),
+                                                encoding="utf-8")
+    record = load_run(create_run(root, resolve_request(root), _minimal_inputs(root)))
+    assert [w["code"] for w in record["warnings"]] == ["REQUEST_FILE_DOWNSTREAM_IGNORED"]
 
 
 def test_create_run_uses_output_root_when_given(tmp_path):
@@ -318,28 +343,32 @@ def test_create_run_relativizes_paths_actually_under_pipeline_root(tmp_path):
     # 「配下にある体」の絶対パスを後から差し込んで検証する
     # （実運用ではTask13のstage_inputsがpipeline_root決定後に実配置して返す）。
     inputs = _minimal_inputs(root)
-    inputs["lbm"] = {"path": str(outside_lbm), "sha256": "x"}
-    inputs["exe"] = {"path": str(outside_lbm)}  # ダミー（存在チェックはstore側で行わない）
-    inputs["method"] = {"source_path": str(outside_lbm)}
+    plan = inputs["units"]["negative"]
+    plan["lbm"] = {"path": str(outside_lbm), "sha256": "x"}
+    plan["exe"] = {"path": str(outside_lbm)}  # ダミー（存在チェックはstore側で行わない）
+    plan["method"] = {"source_path": str(outside_lbm)}
 
     pipeline_root = create_run(root, req, inputs)
     record = load_run(pipeline_root)
     # source_root外を指すので絶対のまま。
-    assert record["inputs"]["lbm"]["path"] == str(outside_lbm)
-    assert record["inputs"]["method"]["source_path"] == str(outside_lbm)
+    assert record["units"]["negative"]["inputs"]["lbm"]["path"] == str(outside_lbm)
+    assert record["units"]["negative"]["inputs"]["method"]["source_path"] == str(outside_lbm)
 
     # 今度はpipeline_root配下を指す絶対パスを与え、相対化されることを確認する。
-    inputs2 = _minimal_inputs(root, fingerprint="b" * 64)
-    staged = pipeline_root / "input" / "effective-method.txt"
+    inputs2 = {}
+    staged = pipeline_root / "negative" / "input" / "effective-method.txt"
     staged.parent.mkdir(parents=True, exist_ok=True)
     staged.write_text("m", encoding="utf-8")
     inputs2["method"] = {"source_path": str(staged)}
     inputs2["manifest"] = [{"sample_id": "S1", "source_file": str(staged)}]
 
-    from metabolomix.pipeline.store import _relativize_inputs_paths
-    relativized = _relativize_inputs_paths(inputs2, pipeline_root)
+    from metabolomix.pipeline.store import absolutize_unit_inputs, relativize_unit_inputs
+    unit_root = pipeline_root / "negative"
+    relativized = relativize_unit_inputs(inputs2, unit_root)
     assert relativized["method"]["source_path"] == "input/effective-method.txt"
     assert relativized["manifest"][0]["source_file"] == "input/effective-method.txt"
+    back = absolutize_unit_inputs(relativized, unit_root)
+    assert Path(back["method"]["source_path"]) == staged.resolve()
 
 
 # ---------- 受付冪等性: 索引の詳細ケース ----------
@@ -561,86 +590,6 @@ def test_load_run_does_not_create_index_dir(tmp_path, _index_base):
     assert not _index_base.exists()
 
 
-# ---------- register_job_owner / pipeline_owner_block_reason ----------
-
-def test_pipeline_owner_block_reason_none_when_unowned(tmp_path):
-    from metabolomix.pipeline.store import pipeline_owner_block_reason
-
-    run_dir = tmp_path / "run_dir"
-    run_dir.mkdir()
-    assert pipeline_owner_block_reason(run_dir) is None
-
-
-def test_pipeline_owner_block_reason_blocks_when_pipeline_active(tmp_path):
-    from metabolomix.pipeline.store import create_run, register_job_owner, pipeline_owner_block_reason
-
-    root = tmp_path / "source"
-    root.mkdir()
-    req = resolve_request(root)
-    pipeline_root = create_run(root, req, _minimal_inputs(root))  # status=planned(活動中)
-
-    run_dir = tmp_path / "console_run_dir"
-    run_dir.mkdir()
-    job_path = run_dir / "analysis-job.json"
-    job_path.write_text("{}", encoding="utf-8")
-    register_job_owner(job_path, pipeline_root)
-
-    block = pipeline_owner_block_reason(run_dir)
-    assert block is not None
-    assert block["reason"] == "active"
-    assert block["pipeline_path"] == str(pipeline_root.resolve())
-
-
-def test_pipeline_owner_block_reason_allows_when_pipeline_terminal(tmp_path):
-    from metabolomix.pipeline.store import (
-        create_run, load_run, save_run, register_job_owner, pipeline_owner_block_reason,
-    )
-
-    root = tmp_path / "source"
-    root.mkdir()
-    req = resolve_request(root)
-    pipeline_root = create_run(root, req, _minimal_inputs(root))
-    record = load_run(pipeline_root)
-    record["status"] = "cancelled"
-    save_run(pipeline_root, record, expected_revision=0)
-
-    run_dir = tmp_path / "console_run_dir"
-    run_dir.mkdir()
-    job_path = run_dir / "analysis-job.json"
-    job_path.write_text("{}", encoding="utf-8")
-    register_job_owner(job_path, pipeline_root)
-
-    assert pipeline_owner_block_reason(run_dir) is None
-
-
-def test_pipeline_owner_block_reason_undeterminable_when_pipeline_unreadable(tmp_path):
-    from metabolomix.pipeline.store import register_job_owner, pipeline_owner_block_reason
-
-    run_dir = tmp_path / "console_run_dir"
-    run_dir.mkdir()
-    job_path = run_dir / "analysis-job.json"
-    job_path.write_text("{}", encoding="utf-8")
-    vanished_pipeline_root = tmp_path / "vanished_pipeline"
-    register_job_owner(job_path, vanished_pipeline_root)  # pipeline-run.jsonが存在しない
-
-    block = pipeline_owner_block_reason(run_dir)
-    assert block is not None
-    assert block["reason"] == "undeterminable"
-
-
-def test_pipeline_owner_block_reason_undeterminable_when_sidecar_corrupt(tmp_path):
-    from metabolomix.pipeline.store import pipeline_owner_block_reason
-    from metabolomix.console.job_manager import pipeline_owner_path
-
-    run_dir = tmp_path / "console_run_dir"
-    run_dir.mkdir()
-    pipeline_owner_path(run_dir).write_text("{not valid json", encoding="utf-8")
-
-    block = pipeline_owner_block_reason(run_dir)
-    assert block is not None
-    assert block["reason"] == "owner_record_invalid"
-
-
 # ---------- 実子プロセスで競合させる受付テスト ----------
 
 _RACE_WORKER_SCRIPT = r"""
@@ -844,3 +793,122 @@ def test_a_broken_current_result_is_still_reported_as_corruption(tmp_path):
 
     with pytest.raises(DomainError, match="RESULT_INTEGRITY_MISMATCH"):
         find_or_create_run(root, req, inputs, request_id="req-broken")
+
+
+# ---------- 既存の契約（v2 を消した後も変わらないもの） ----------
+
+def test_a_request_creates_a_pipeline_run_v3(tmp_path):
+    from metabolomix.pipeline import store as store_mod
+
+    root = tmp_path / "source"
+    root.mkdir()
+    pipeline_root = store_mod.create_run(root, resolve_request(root), _minimal_inputs(root))
+    record = store_mod.load_run(pipeline_root)
+    assert record["schema"] == store_mod.SCHEMA == "pipeline-run.v3"
+    assert store_mod.stage_ids_for(resolve_request(root)) == list(record["stages"])
+
+
+# ---------- 旧 v1 の記録（読むだけ） ----------
+
+def _legacy_v1_record(root: Path) -> Path:
+    """下流まで回した旧 v1 の run の記録（平らな inputs / upstream）を書く。"""
+    pipeline_root = root / "runs" / "pipeline_legacy"
+    pipeline_root.mkdir(parents=True)
+    record = {
+        "schema": "pipeline-run.v1",
+        "identity": {"pipeline_id": "legacy", "source_root": str(root),
+                     "pipeline_root": str(pipeline_root)},
+        "request": {"revision": 1, "request_id": None, "content_hash": "h",
+                    "saved_path": "requests/revision-0001.json",
+                    "effective_target": "differential"},
+        "status": "completed", "state_revision": 7,
+        "stages": {sid: {"stage_id": sid, "status": "succeeded"} for sid in (
+            "prepare_input", "upstream", "validate_outputs", "load_dataset",
+            "resolve_metadata", "preprocess", "pca", "resolve_comparisons", "report")},
+        "upstream": {"console_job_path": str(pipeline_root / "console" / "analysis-job.json"),
+                     "execution_id": "e", "verification": {"status": "completed"}},
+        "inputs": {"polarity": {"value": "negative", "source": "request_explicit"},
+                   "library_mode": "auto", "manifest": []},
+        "results": [], "needs_input": None, "warnings": [], "worker": {},
+    }
+    (pipeline_root / "pipeline-run.json").write_text(json.dumps(record), encoding="utf-8")
+    return pipeline_root
+
+
+def test_legacy_v1_record_is_read_but_not_saved(tmp_path):
+    from metabolomix.pipeline import store as store_mod
+
+    pipeline_root = _legacy_v1_record(tmp_path)
+    before = (pipeline_root / "pipeline-run.json").read_bytes()
+    record = store_mod.load_run(pipeline_root)
+    assert record["schema"] == "pipeline-run.v1"
+    assert store_mod.is_legacy(record)
+    with pytest.raises(DomainError) as caught:
+        store_mod.save_run(pipeline_root, record, expected_revision=record["state_revision"])
+    assert caught.value.code == "PIPELINE_RUN_LEGACY"
+    assert "load_dataset" in caught.value.details["replacements"]["read"]
+    assert (pipeline_root / "pipeline-run.json").read_bytes() == before
+
+
+def test_run_units_reads_legacy_flat_record(tmp_path):
+    from metabolomix.pipeline import store as store_mod
+
+    record = store_mod.load_run(_legacy_v1_record(tmp_path))
+    units = store_mod.run_units(record)
+    assert list(units) == ["negative"]
+    unit = units["negative"]
+    assert unit["raw_dir"] == "." and unit["unit_root"] == "."
+    assert unit["inputs"] is record["inputs"] or unit["inputs"] == record["inputs"]
+    assert unit["upstream"]["console_job_path"].endswith("analysis-job.json")
+    assert store_mod.unit_status(record, "negative") == "validated"
+
+
+def test_run_units_reads_v3_units(tmp_path):
+    from metabolomix.pipeline import store as store_mod
+
+    root = tmp_path / "source"
+    root.mkdir()
+    record = store_mod.load_run(
+        store_mod.create_run(root, resolve_request(root), _minimal_inputs(root)))
+    assert not store_mod.is_legacy(record)
+    assert store_mod.run_units(record) == record["units"]
+    assert store_mod.unit_status(record, "negative") == "pending"
+
+
+def test_v2_run_records_are_not_read(tmp_path):
+    from metabolomix.pipeline import store as store_mod
+
+    pipeline_root = _legacy_v1_record(tmp_path)
+    raw = json.loads((pipeline_root / "pipeline-run.json").read_text(encoding="utf-8"))
+    raw["schema"] = "pipeline-run.v2"
+    (pipeline_root / "pipeline-run.json").write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(DomainError) as caught:
+        store_mod.load_run(pipeline_root)
+    assert caught.value.code == "PIPELINE_RUN_INVALID"
+
+
+def test_load_run_rejects_an_unknown_schema(tmp_path):
+    from metabolomix.pipeline import store as store_mod
+
+    root = tmp_path / "source"
+    root.mkdir()
+    pipeline_root = store_mod.create_run(root, resolve_request(root), _minimal_inputs(root))
+    run_path = pipeline_root / store_mod.RUN_FILENAME
+    raw = json.loads(run_path.read_text(encoding="utf-8"))
+    raw["schema"] = "pipeline-run.v9"
+    run_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(DomainError) as caught:
+        store_mod.load_run(pipeline_root)
+    assert caught.value.code == "PIPELINE_RUN_INVALID"
+
+
+def test_create_run_rejects_an_unknown_request_schema(tmp_path):
+    from metabolomix.pipeline import store as store_mod
+
+    root = tmp_path / "source"
+    root.mkdir()
+    request = {"schema": "pipeline-request.v1", "units": []}
+    with pytest.raises(DomainError) as caught:
+        store_mod.create_run(root, request, _minimal_inputs(root))
+    assert caught.value.code == "PIPELINE_REQUEST_INVALID"

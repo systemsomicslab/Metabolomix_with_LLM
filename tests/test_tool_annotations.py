@@ -78,18 +78,11 @@ EXPECTED_ANNOTATIONS = {
     "dataset_feature_relations": READ_ONLY,
     "dataset_mass_accuracy": READ_ONLY,
     "dcl_diagnostic_ions": READ_ONLY,
-    # --- Console 実行層（console_plan/run はジョブ状態・ファイルを生成する） ---
-    "console_plan": LOCAL_WRITE_APPEND,
-    "console_run": LOCAL_WRITE_APPEND,
-    "console_status": READ_ONLY,
-    # 入力フォルダとメソッドファイルを作る。同じ引数なら同じ結果 → 冪等
-    "console_prepare_input": LOCAL_WRITE,
+    # --- Console のメソッドファイル（計画・実行・状態は pipeline 系） ---
+    # メソッドファイルを作る。同じ引数なら同じ結果 → 冪等
     "console_method_template": LOCAL_WRITE,
     # 読み取り専用だが、同じ入力なら結果は変わらない（idempotent）ことも明示している。
     "console_method_candidates": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
-    # ジョブが記録した生成物を消す。破壊的だが、二度目は何も残っていない → 冪等
-    "console_cleanup": LOCAL_DELETE,
-    "job_list": READ_ONLY,
     # --- pipeline系（生データフォルダ起点、Task18）。statusだけ読取専用。
     # 他4件は同一request_idの再送・二重cancelが同じ結果に落ち着くためidempotent。
     "pipeline_plan": LOCAL_WRITE,
@@ -116,8 +109,7 @@ EXPECTED_ANNOTATIONS = {
     "dataset_plot": LOCAL_WRITE_APPEND,  # ds.figures と species_pca の結果をメモリに登録する（ファイルは save_figure）
     # --- サーバ自身の更新（origin へ出て、作業ツリーを早送りする） ---
     "server_update": REMOTE_WRITE,
-    # --- キュレーション。review は呼ぶたびに新しい review-<id>.json/.html を作る（console_plan /
-    # console_run と同じ「毎回新しい成果物を生む」性質なので idempotent ではない）。
+    # --- キュレーション。review は呼ぶたびに新しい review-<id>.json/.html を作る（pipeline_run と同じ「毎回新しい成果物を生む」性質なので idempotent ではない）。
     # submit は flags.jsonl に追記する。 ---
     "curation_review": LOCAL_WRITE_APPEND,
     "curation_submit": APPEND_AND_REWRITE,

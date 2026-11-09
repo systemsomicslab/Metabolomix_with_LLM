@@ -10,7 +10,7 @@ from metabolomix.core.serialization import json_payload
 from metabolomix.mztab.reader import parse_mztab
 from metabolomix.mztab import evidence as mztab_evidence
 from metabolomix.mztab.dataset_state import build_dataset_state
-# 生成物パスの解決は loading.py が正準。console_cleanup など既存の呼び出しが
+# 生成物パスの解決は loading.py が正準。既存の呼び出しが
 # ここを参照しているため、名前だけ再エクスポートする（実装は 1 か所）。
 from metabolomix.mztab.loading import artifact_abs_path as _artifact_abs_path
 
@@ -21,7 +21,7 @@ def load_summary_lines(ds, opened) -> list[str]:
     """`load_dataset` の戻り値の `summary`（特徴・試料の数、定量、同定の内訳、検出状態、読み込みの注記）。
 
     解析フォルダのアダプタと mzTab-M のアダプタで書き分ける。出所の裏取り・探索専用の印・
-    解析行列・付随アーティファクト・pipeline の run から引き継いだ差次的結果もここに載る。
+    付随アーティファクトもここに載る。
     """
     if opened.selection is not None:
         lines = _folder_summary_text(ds, opened.selection.arf.name).splitlines()
@@ -32,14 +32,10 @@ def load_summary_lines(ds, opened) -> list[str]:
     lines.append(f"- 出所の裏取り: {ds.source_verification}"
                  + ("（探索専用: 2 群比較と差次的エクスポートは拒否されます）"
                     if ds.exploratory_only else ""))
-    if ds.analysis_matrices:
-        lines.append("- 解析行列（analysis-matrix.v1。表示のみで、dataset_compare の matrix_id ではない）: "
-                     + ", ".join(sorted(ds.analysis_matrices)))
     if ds.artifact_paths:
         lines.append("- 付随アーティファクト: "
                      + str({role: len(paths)
                             for role, paths in ds.artifact_paths.items()}))
-    lines.extend(_handoff_lines(ds.handoff_report))
     return lines
 
 
@@ -72,51 +68,6 @@ def sample_group_role_counts(ds) -> dict:
         role = row.get("role") or "sample"
         roles[role] = roles.get(role, 0) + 1
     return {"groups": groups, "roles": roles, "n_ungrouped": n_ungrouped}
-
-
-#: 戻せなかった理由ごとの案内（`session_handoff.restore_differentials` の reason）。
-#: `pipeline_resume` には完了済みの差次的工程だけを再計算させる手順が無い
-#: （要求の変更か `rerun_upstream=true` でしか差し戻らない）ので、旧 run は
-#: session で計算し直すよう案内する。
-_HANDOFF_REASON_NOTES = {
-    "legacy_result_without_dataset_hash":
-        "指紋を持たない旧 run の結果。session で dataset_preprocess → "
-        "dataset_compare を実行して計算し直してください。",
-    "dataset_mismatch":
-        "run の計算時とデータ（mzTab）が一致しません。今読み込んだデータで使うには、"
-        "session で dataset_preprocess → dataset_compare を実行して計算し直してください。",
-    "group_mismatch":
-        "run の計算時と群割当が一致しません。実験情報シート（または "
-        "dataset_set_sample_metadata で与えた群）を確かめるか、今の群のまま session で "
-        "dataset_preprocess → dataset_compare を実行して計算し直してください。",
-}
-
-
-def _handoff_lines(report: dict | None) -> list[str]:
-    """pipeline run から引き継いだ差次的結果の要約（TSV は列名 1 回）。"""
-    if not report:
-        return []
-    lines: list[str] = []
-    restored = report.get("restored") or []
-    rejected = report.get("rejected") or []
-    if restored:
-        lines.append("- 引き継いだ差次的結果（result_id で名指しして使う。"
-                     "直近の結果 last_differential にはしない）:")
-        lines.append("comparison_id\tresult_id\tgroup_a\tgroup_b")
-        lines.extend(f"{r['comparison_id']}\t{r['result_id']}\t{r['group_a']}\t{r['group_b']}"
-                     for r in restored)
-        if any(r.get("evidence_attached_after") for r in restored):
-            lines.append("  - evidence_attached_after: run の計算は検出状態（.arf の gap-fill）を"
-                         "取り込む前のもの（結果に evidence_attached_after: true）。"
-                         "検出率による絞り込みは、その計算では掛かっていない。")
-    if rejected:
-        lines.append("- 引き継がなかった差次的結果:")
-        lines.append("comparison_id\tresult_id\treason")
-        lines.extend(f"{r['comparison_id']}\t{r['result_id']}\t{r['reason']}"
-                     for r in rejected)
-        for reason in sorted({r["reason"] for r in rejected}):
-            lines.append(f"  - {reason}: {_HANDOFF_REASON_NOTES.get(reason, '')}")
-    return lines
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
@@ -155,7 +106,7 @@ def dataset_status(dataset_handle: str | None = None, view: str = "summary",
             "dataset",
             ["load_dataset"],
             "DatasetState がありません。先に load_dataset を実行してください。"
-            "console_run 完了後は load_dataset(job_path=<analysis-job.json へのパス>) を推奨します。",
+            "pipeline の完了後は load_dataset(pipeline_path=...) を推奨します。",
         )
     if view not in VIEWS:
         return mztab_error("DATASET_BAD_REQUEST",

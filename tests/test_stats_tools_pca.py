@@ -10,7 +10,7 @@ import pytest
 from metabolomix.analysis import stats_results
 from metabolomix.analysis.pca import loading_correlations, run_pca_fit_subset
 from metabolomix.core import session_state
-from metabolomix.core.tool_helpers import _pca_scatter_arrays, dataset_pca_plot, stat_pca_rows
+from metabolomix.core.tool_helpers import dataset_pca_plot, stat_pca_rows
 from metabolomix.plots import pca_loadings
 from metabolomix.tools import plot_tools, stats_tools
 from metabolomix.tools.stats_tools import dataset_pca, dataset_preprocess
@@ -187,17 +187,11 @@ def test_loadings_r_matches_the_direct_correlation(ds):
     assert pca_loadings.dataset_features(ds, ds.results[pareto])[1] is False
 
 
-def test_pipeline_v1_pca_plot_payload_still_builds():
-    """pipeline が残す v1 の PCA 結果（scores 行）も散布図に射影できる（D 段まで）。"""
-    v1 = {"scores": [{"name": "S1", "role": "sample", "PC1": 1.0, "PC2": 2.0},
-                     {"name": "S2", "role": "sample", "PC1": -1.0, "PC2": 0.5},
-                     {"name": "S3", "role": "qc", "PC1": 0.0, "PC2": 0.0}],
-          "explained_variance_ratio": [0.6, 0.3]}
-    xs, ys, labels, x_label, y_label, _t = _pca_scatter_arrays(dataset_pca_plot(v1))
-    assert xs == [1.0, -1.0, 0.0] and ys == [2.0, 0.5, 0.0] and labels == ["S1", "S2", "S3"]
-    assert x_label == "PC1 (60.00%)" and y_label == "PC2 (30.00%)"
-    assert "group" not in dataset_pca_plot(v1)["points"][0]
-    assert dataset_pca_plot({"scores": [{"name": "a", "PC1": 1.0}]}) is None
+def test_only_stat_pca_records_project_to_the_scatter_dict():
+    """統計エンジンの PCA の記録でないもの（v1 の `scores` 行の形など）は散布図にしない（D 段で v1 は消えた）。"""
+    assert dataset_pca_plot({"scores": [{"name": "S1", "PC1": 1.0, "PC2": 2.0}],
+                             "explained_variance_ratio": [0.6, 0.3]}) is None
+    assert dataset_pca_plot(None) is None
 
 
 def test_stat_pca_record_projects_to_the_scatter_dict(ds):
@@ -258,4 +252,3 @@ def test_stat_pca_points_use_display_names_and_a_neutral_title(ds):
     assert [r["name"] for r in qc] == ["QC0", "QC1", "QC2", "QC3"]       # 試料 ID（id_QC0）でなく表示名
     assert qc[0]["id"] == "id_QC0"
     assert dataset_pca_plot(record)["title"] == "PCA"
-    assert dataset_pca_plot({"scores": [{"name": "a", "PC1": 1, "PC2": 2}]})["title"] == "PCA (mzTab-M)"

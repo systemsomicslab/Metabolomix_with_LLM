@@ -63,34 +63,26 @@ def stat_pca_rows(record: dict) -> list[dict]:
 
 
 def dataset_pca_plot(last_pca: dict, title: str | None = None) -> dict | None:
-    """DatasetState の PCA 結果を `_pca_scatter_arrays` が食う散布図 dict に射影する。
+    """統計エンジンの PCA の記録（`kind="stat_pca"`）を `_pca_scatter_arrays` が食う散布図 dict に射影する。
 
-    v1 の結果は `ds.last_pca["scores"]`（name / role / PC1 / PC2…）、統計エンジンの結果
-    （`kind="stat_pca"`）は `engine` の個体と QC のスコア（QC は `fitted=False`・群 `QC`）を、
-    描画側が読む 1 つの形へ寄せる。v1 の読み取りは pipeline の図のために D 段まで残す。
-
-    PC2 が無い（主成分 1 つ）場合は散布図にできないので None を返す。
+    `engine` の個体と QC のスコア（QC は `fitted=False`・群 `QC`）を、描画側が読む 1 つの形へ寄せる。
+    PCA の記録でない・PC2 が無い（主成分 1 つ）場合は散布図にできないので None を返す。
     """
-    if is_stat_pca(last_pca):
-        scores = stat_pca_rows(last_pca)
-        evr = (last_pca.get("engine") or {}).get("explained_variance_ratio") or []
-    else:
-        scores = (last_pca or {}).get("scores") or []
-        evr = (last_pca or {}).get("explained_variance_ratio") or []
+    if not is_stat_pca(last_pca):
+        return None
+    scores = stat_pca_rows(last_pca)
+    evr = (last_pca.get("engine") or {}).get("explained_variance_ratio") or []
     points = []
     for row in scores:
         x, y = row.get("PC1"), row.get("PC2")
         if x is None or y is None:
             continue
-        point = {"x": float(x), "y": float(y), "label": row.get("name")}
-        if is_stat_pca(last_pca):
-            point["group"] = row.get("group") or "(none)"
-            point["fitted"] = bool(row.get("fitted"))
-        points.append(point)
+        points.append({"x": float(x), "y": float(y), "label": row.get("name"),
+                       "group": row.get("group") or "(none)", "fitted": bool(row.get("fitted"))})
     if not points:
         return None
     if title is None:
-        title = "PCA" if is_stat_pca(last_pca) else "PCA (mzTab-M)"
+        title = "PCA"
     x_label = f"PC1 ({evr[0] * 100:.2f}%)" if len(evr) > 0 else "PC1"
     y_label = f"PC2 ({evr[1] * 100:.2f}%)" if len(evr) > 1 else "PC2"
     return {"title": title, "x_label": x_label, "y_label": y_label, "points": points}

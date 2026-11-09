@@ -4,8 +4,8 @@ StudyData（前処理の前の値）だけを読み、QC の RSD の分布・失
 gap-fill の割合・ドリフトの兆候を数え、交絡の報告（`confounding.confounding_report`）と合わせて
 品質の判定（ok / caution / poor / not_evaluable）を出す。値は変えない（検出だけ）。
 
-セッションにも MCP にも依存しない（`metabolomix/analysis/stats/` の規則）。v1 の
-`analysis.preprocessing.detect_failed_qc` は D で消えるので、同じ規則をここに持つ。
+セッションにも MCP にも依存しない（`metabolomix/analysis/stats/` の規則）。失敗した QC 注入の
+規則（旧 `analysis.preprocessing.detect_failed_qc` と同じもの）はここだけが持つ。
 """
 from __future__ import annotations
 

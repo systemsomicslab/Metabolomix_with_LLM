@@ -119,7 +119,7 @@ class CountPeakPropertyRowsTests(unittest.TestCase):
 
 
 def _row_battery():
-    """`peak_field` / `file_name_of` の同値性を試す行の一式。
+    """`peak_field` の同値性を試す行の一式。
 
     実経路に入る行と、入らない行（短い・list でない・数値でない data[18]）と、
     欠けた行（data[37] が無い・文字列が 1 つも無い）を混ぜる。
@@ -177,65 +177,6 @@ class PeakFieldTests(unittest.TestCase):
             self.assertEqual(arf_reader.peak_field(row, "height"), 1234.5)
             self.assertEqual(arf_reader.peak_field(row, "file_name"), "sA.wiff")
             self.assertIs(arf_reader.peak_field(row, "is_gap_filled"), True)
-
-
-class BuildPcaMatrixAvoidsFeatureDictTests(unittest.TestCase):
-    """行列組み立ては file_name / is_gap_filled / props しか読まない。"""
-
-    def test_matrix_is_unchanged_without_the_feature_dict(self):
-        spots = _pca_fixture()
-        expected = arf_reader.build_pca_matrix(spots, use_properties=["height"])
-        with patch.object(arf_reader, "_convert_to_alignment_feature",
-                          side_effect=AssertionError(
-                              "build_pca_matrix が feature dict を組んでいる")):
-            got = arf_reader.build_pca_matrix(spots, use_properties=["height"])
-        self.assertEqual(got[1], expected[1])
-        self.assertEqual(got[2], expected[2])
-        self.assertTrue((got[0] == expected[0]).all())
-
-    def test_detection_rate_filter_still_counts_gap_filled_rows(self):
-        """`min_detection_rate` は is_gap_filled を数える。速い経路でも同じ。"""
-        spots = _pca_fixture()
-        for row in spots[0]["AlignedPeakProperties"]:
-            row[2] = -2  # spot 0 の全注入をギャップフィルにする
-        expected = arf_reader.build_pca_matrix(
-            spots, use_properties=["height"], min_detection_rate=0.5)
-        with patch.object(arf_reader, "_convert_to_alignment_feature",
-                          side_effect=AssertionError("feature dict を組んでいる")):
-            got = arf_reader.build_pca_matrix(
-                spots, use_properties=["height"], min_detection_rate=0.5)
-        self.assertEqual(got[2], expected[2])
-        self.assertNotIn("Spot_0_height", got[2])  # 検出率 0 で落ちている
-
-    def test_non_default_property_takes_the_same_path(self):
-        spots = _pca_fixture()
-        expected = arf_reader.build_pca_matrix(spots, use_properties=["m_z"])
-        with patch.object(arf_reader, "_convert_to_alignment_feature",
-                          side_effect=AssertionError("feature dict を組んでいる")):
-            got = arf_reader.build_pca_matrix(spots, use_properties=["m_z"])
-        self.assertEqual(got[1], expected[1])
-        self.assertEqual(got[2], expected[2])
-
-
-def _pca_fixture():
-    """`build_pca_matrix` が実際に消費できる 4 サンプル × 3 スポット。
-
-    形は（生 list 行・data[18] が
-    height・サンプル間で分散を持つ）。
-    """
-    spots = []
-    for mid in (0, 1, 2):
-        rows = []
-        for i, name in enumerate(["sA", "sB", "sC", "sD"]):
-            row = [i] * 40
-            row[1] = name
-            row[2] = 100 + mid
-            row[18] = float(10 * (mid + 1) + i)
-            rows.append(row)
-        spots.append({"MasterAlignmentID": mid, "Name": f"Lipid_{mid}",
-                      "MassCenter": 700.0 + mid, "RT": 5.0 + mid,
-                      "AlignedPeakProperties": rows})
-    return spots
 
 
 if __name__ == "__main__":

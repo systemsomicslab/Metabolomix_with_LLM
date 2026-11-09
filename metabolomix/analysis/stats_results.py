@@ -9,7 +9,7 @@
   `ds.last_pca` に置く。`result_id` は決定的（同じ計算は同じ鍵を上書きする）。
   来歴は `{result_id, kind: "compare"|"stat_pca", dataset_hash, metadata_revision, parent_ids: [matrix_id]}`
   で、古さは `is_stats_current`（`result_state.is_current` もここへ回す）。
-- 読み替え: `as_two_group` が `compare` の記録の 1 つの対比を、v1 の 2 群の結果と同じ欄に写す。
+- 読み替え: `as_two_group` が `compare` の記録の 1 つの対比を、利用者が読む 2 群の形（`kind="two_group"`）に写す。
 
 試料は**表示名**（`ds.sample_names`）で持つ。エンジンの試料 ID（試料の表があれば `ds.sample_ids`）は
 位置で表示名へ結ぶ（既存の利用者はすべて表示名で試料を引く）。
@@ -33,7 +33,6 @@ __all__ = [
     "get_matrix",
     "sample_ids_by_name",
     "split_result_ref",
-    "check_contrast_applies",
     "compare_spec",
     "contrast_id_for",
     "is_stats_current",
@@ -425,18 +424,8 @@ def split_result_ref(result_id: str, contrast_id: str | None = None) -> tuple[st
     return base, named
 
 
-def check_contrast_applies(record: dict, contrast_id: str | None) -> None:
-    """`contrast_id` は `compare` の記録の対比を選ぶ引数。v1 の 2 群の結果に渡したら `DATASET_BAD_REQUEST`。"""
-    if contrast_id is not None and (record or {}).get("kind") != "compare":
-        raise DomainError("DATASET_BAD_REQUEST",
-                          "contrast_id は dataset_compare の結果の対比を選ぶ引数です"
-                          "（この結果は v1 の 2 群の結果で、対比を持ちません）。",
-                          {"result_id": ((record or {}).get("provenance") or {}).get("result_id"),
-                           "contrast_id": contrast_id})
-
-
 def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
-    """`compare` の記録の 1 つの対比を、v1 の 2 群の結果（`kind="two_group"`）と同じ欄に写す。
+    """`compare` の記録の 1 つの対比を、利用者が読む 2 群の形（`kind="two_group"`）に写す。
 
     `a` は対比の基準（reference）、`b` は比較（test）で、log2fc は正なら b が高い
     （`export_contract.LOG2FC_SIGN`）。`samples_a` / `samples_b` は比較に入った個体に属する注入の
@@ -444,16 +433,13 @@ def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
     （検定していない行は p・q・log2fc が None）、`volcano` は p が有限の行だけ。各行の `significant` は
     `export_contract.row_significant`（記録の閾値に加えて `verdict == "changed"`。R16）で、ここで 1 回だけ
     付ける（書き出し・根拠バンドル・volcano はこの印を読む）。`provenance` は元の記録のもの（`kind` は
-    `"compare"`）。`allow_confounded=true` で完全交絡を越えた比較だけ、その写しに v1 と同じ
+    `"compare"`）。`allow_confounded=true` で完全交絡を越えた比較だけ、その写しに
     `comparison.unadjusted_confounded: true` と説明（`warnings`。`caveats` にも）を足す（記録は変えない）。
-    v1 の `two_group` の記録はそのまま返す。
 
     対比が 1 つでなく `contrast_id` が無い・未知の ID なら `CONTRAST_REQUIRED`、交互作用なら
     `CONTRAST_NOT_TWO_GROUP`（どちらも details に候補）。比較の記録でなければ `ANALYSIS_RESULT_NOT_FOUND`。
     """
     kind = (record or {}).get("kind")
-    if kind == "two_group":
-        return record
     if kind != "compare":
         raise DomainError("ANALYSIS_RESULT_NOT_FOUND",
                           "2 群の結果に読み替えられる比較の結果ではありません。", {"kind": kind})
@@ -504,7 +490,7 @@ def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
     provenance = record["provenance"]
     trace = _unadjusted_confounded(record, comp, contrast_id)
     if trace is not None:
-        # v1 の run_comparison と同じ形・同じ説明（書き出しのメタ行・volcano・図の但し書きはここを読む）。
+        # 書き出しのメタ行・volcano・図の但し書きはここを読む。
         # 記録の来歴は書き換えず、読み替えた結果の来歴にだけ足す。
         provenance = {**provenance, "comparison": trace,
                       "warnings": [*(provenance.get("warnings") or []), UNADJUSTED_CONFOUNDED_EXPLANATION]}
@@ -546,7 +532,7 @@ def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
     }
 
 
-#: v1 の `dataset_service.run_comparison` が来歴の `warnings` と `caveats` に書く説明と同じ文面
+#: 完全交絡を未調整のまま越えた比較の来歴の `warnings` と `caveats` に書く説明
 #: （書き出しの `unadjusted_confounded_note` は来歴の warnings から「未調整」を含む行を拾う）。
 UNADJUSTED_CONFOUNDED_EXPLANATION = (
     "allow_confounded=true が明示されたため、群とバッチの完全交絡を未調整の"
@@ -554,12 +540,12 @@ UNADJUSTED_CONFOUNDED_EXPLANATION = (
 
 
 def _unadjusted_confounded(record: dict, comp: dict, contrast_id: str) -> dict | None:
-    """`allow_confounded=true` で完全交絡を越えて走った比較なら、v1 の `provenance.comparison` と同じ形の
+    """`allow_confounded=true` で完全交絡を越えて走った比較なら、来歴の `comparison` に足す
     痕跡（`unadjusted_confounded: true`）。そうでなければ None（何も足さない）。
 
     完全交絡はエンジンの交絡の表（`engine.confounding.batch_status == "complete"`。比較に入った群すべてで
     見たもの＝`allow_confounded` が実際に越えさせた判定）で、許可は記録の spec のその比較の解析の
-    `allow_confounded`。部分的な交絡は v1 と同じく印を付けない（警告は `caveats` にある）。
+    `allow_confounded`。部分的な交絡には印を付けない（警告は `caveats` にある）。
     """
     confounding = record["engine"].get("confounding") or {}
     analysis = next((a for a in record["spec"].get("analyses") or []

@@ -76,86 +76,6 @@ def _convert_arf_peak_group(
         "SourceLocalIndex": source_local_index,
     }
 
-def make_loading_details(pca_result: dict, deserialized_list: list[dict], feature_names: list[str]) -> str:
-    """
-    PCAのloadings情報を詳細化して、書き出し用のJSON文字列を返す。
-
-    戻り値: JSON文字列（基本部分はindent=2で整形、loadingsは各アイテムを1行で保持）
-    """
-    import json
-
-    detailed_loadings = []
-    for pc_idx, pc_loadings in enumerate(pca_result.get("loadings", [])):
-        pc_loadings_list = []
-        for feat_idx, loading_value in enumerate(pc_loadings):
-            feat_name = feature_names[feat_idx]
-            parts = feat_name.split("_")
-            if len(parts) >= 3:
-                try:
-                    master_id = int(parts[1])
-                except Exception:
-                    master_id = None
-
-                if master_id is not None and master_id < len(deserialized_list):
-                    spot = deserialized_list[master_id]
-                    annotation = spot.get("Name", "")
-                    m_z = spot.get("MassCenter")
-                    rt = spot.get("RT")
-                else:
-                    annotation = ""
-                    m_z = None
-                    rt = None
-
-                pc_loadings_list.append({
-                    "id": master_id,
-                    "value": loading_value,
-                    "annotation": annotation,
-                    "m_z": m_z,
-                    "rt": rt,
-                })
-            else:
-                pc_loadings_list.append({
-                    "id": None,
-                    "value": loading_value,
-                    "annotation": "",
-                    "m_z": None,
-                    "rt": None,
-                })
-
-        pc_loadings_list.sort(key=lambda x: x["value"], reverse=True)
-        detailed_loadings.append(pc_loadings_list)
-
-    # base JSON (loadings を除いたもの) を生成
-    pca_copy = pca_result.copy()
-    if "loadings" in pca_copy:
-        pca_copy.pop("loadings")
-
-    base_json = json.dumps(pca_copy, ensure_ascii=False, indent=2)
-
-    # loadings 部分を独自フォーマットで構築
-    loadings_json_lines = []
-    loadings_json_lines.append('  "loadings": [')
-    for i, pc_loadings_list in enumerate(detailed_loadings):
-        loadings_json_lines.append('    [')
-        for j, item in enumerate(pc_loadings_list):
-            id_val = json.dumps(item["id"], ensure_ascii=False)
-            val_val = json.dumps(item["value"], ensure_ascii=False)
-            ann_val = json.dumps(item["annotation"], ensure_ascii=False)
-            mz_val = json.dumps(item["m_z"], ensure_ascii=False)
-            rt_val = json.dumps(item["rt"], ensure_ascii=False)
-
-            item_str = f'{{ "id": {id_val}, "value": {val_val}, "m_z": {mz_val}, "rt": {rt_val}, "annotation": {ann_val} }}'
-            comma = ',' if j < len(pc_loadings_list) - 1 else ''
-            loadings_json_lines.append(f'      {item_str}{comma}')
-
-        comma = ',' if i < len(detailed_loadings) - 1 else ''
-        loadings_json_lines.append(f'    ]{comma}')
-    loadings_json_lines.append('  ]')
-
-    final_json = base_json[:-2] + ',\n' + '\n'.join(loadings_json_lines) + '\n}'
-    return final_json
-
-
 def _msgpack_stream(data: bytes):
     return msgpack.Unpacker(
         io.BytesIO(data),
@@ -559,19 +479,6 @@ def _file_name_from_row(data: list) -> str | None:
     return None
 
 
-def file_name_of(data: list) -> str | None:
-    """`AlignedPeakProperties` の 1 行から file_name だけを取り出す公開境界。
-
-    `_convert_to_alignment_feature(data).get("file_name")` と必ず同じ答えを返す
-    （両者が同じ導出を共有している）。除外判定・roster は file_name しか要らない
-    のに、以前は 1 行ごとに feature dict を丸ごと組んでいた——spot × 注入ぶん
-    呼ばれるので、393MB の `.arf` では 294 万回の無駄な dict 生成になっていた。
-    """
-    if not _is_alignment_peak_row(data):
-        return None
-    return _file_name_from_row(data)
-
-
 #: `_convert_to_alignment_feature` がそのまま添字を引くだけのフィールド。
 #: 実経路の行は len(data) > 25 が保証されているので、範囲判定は要らない。
 _DIRECT_FIELD_INDEX = {
@@ -592,9 +499,9 @@ _CONSTANT_FIELDS = {"is_msms_matched": False, "is_matched": False}
 def peak_field(data: list, name: str):
     """`_convert_to_alignment_feature(data).get(name)` と同じ値を dict 無しで返す。
 
-    `build_pca_matrix` は file_name / is_gap_filled / 要求された props しか読まない
-    のに、1 行ごとに 16 キーの dict を組んでいた（393MB の `.arf` で 294 万回。
-    既定の `props=["height"]` では `rt` のための `_convert_to_times` まで毎行走る）。
+    `.arf` を走査する呼び出し（`mztab.evidence.scan_arf`）は数個の欄しか読まないのに、
+    1 行ごとに 16 キーの dict を組むと spot × 注入ぶんの無駄になる（393MB の `.arf` で
+    294 万回。`rt` のための `_convert_to_times` まで毎行走る）。
 
     **同値性は `tests/test_arf_hot_paths.py` が全キー × 行の種類で固定している。**
     フィールドを増やすときは両方に足すこと。
@@ -677,24 +584,12 @@ def _convert_to_alignment_feature(data: list) -> dict:
     return {}
 
 
-def readable_block_count(file_like_object) -> int:
-    """`.arf` として解釈できたトップレベルブロックの数を返す（公開境界）。
-
-    `deserialize()` は壊れたファイルでも例外を出さず空リストを返す（別形式の
-    トップレベルオブジェクトは warning で読み飛ばす仕様）。呼び出し側が
-    「読めなかった」と「読めたがスポットが無い」を区別できるように、
-    ブロック数だけを数える経路をここに置く。0 なら `.arf` として読めていない。
-    """
-    return sum(1 for _ in _iter_lz4_msgpack_blocks(file_like_object.read()))
-
-
 def alignment_feature_row(data: list) -> dict:
     """`AlignedPeakProperties` の1行（注入1件分）を辞書へ落とす公開境界。
 
     `.arf` の msgpack Key 番号を知っているのはこのモジュールだけ、という約束を
     層をまたいで保つための入口（`docs/schema/AlignmentChromPeakFeature.md` が
-    Key 番号の正準）。`metabolomix/mztab/evidence.py` と
-    `metabolomix/analysis/assay_evidence.py` は private 名を掴まず、ここを呼ぶ。
+    Key 番号の正準）。`metabolomix/mztab/evidence.py` は private 名を掴まず、ここを呼ぶ。
 
     読めない行（別形式・短すぎる配列）では空 dict を返す——例外にしないのは、
     `.arf` に非ピーク行が混ざるのが常態だから。呼び出し側は空を「この行からは
@@ -774,157 +669,6 @@ def count_peak_property_rows(deserialized_list: list[dict]) -> int:
     return total
 
 
-def build_pca_matrix(deserialized_list: list[dict], use_properties: list[str] = None,
-                     min_detection_rate: float = 0.0) -> tuple[np.ndarray, list[str], list[str]]:
-    """
-    指定された複数プロパティから多変量PCA用行列を構築
-
-    引数:
-      min_detection_rate: 特徴量(スポット)の検出率による足切り。0.0〜1.0。
-        各スポットを「実検出(非ギャップフィル)できたサンプルの割合」で評価し、
-        この閾値未満のスポットを行列から除外する。既定 0.0 = フィルタ無効（従来動作）。
-        例: 0.5 を指定すると「半数以上のサンプルで実検出されたスポット」のみ使用。
-    """
-    # デフォルトではHeightとAreaを使用（m_zやrtも追加可能）
-    if use_properties is None:
-        use_properties = ["height"]
-
-    sample_data_dict = {}
-    detection_count: dict[str, int] = {}  # col_name -> 実検出(非ギャップフィル)サンプル数
-
-    for spot in deserialized_list:
-        aligned = spot.get("AlignedPeakProperties")
-        if not isinstance(aligned, list) or not aligned:
-            continue
-
-        master_id = spot.get("MasterAlignmentID")
-
-        for sample_index, sample in enumerate(aligned):
-            if not isinstance(sample, list):
-                continue
-
-            # feature dict は組まない——読むのは file_name / is_gap_filled /
-            # 要求された props だけで、16 キーを作るのは spot × 注入ぶんの無駄。
-            # peak_field は dict 版と同じ値を返す（同値性はテストが固定している）。
-
-            # 【追加】行列のキーとしてファイル名を使用
-            file_name = file_name_of(sample)
-            sample_key = file_name if file_name else f"Sample_{sample_index}"
-
-            if sample_key not in sample_data_dict:
-                sample_data_dict[sample_key] = {}
-
-            is_detected = not peak_field(sample, "is_gap_filled")
-            # 指定された複数のプロパティを列として追加
-            for prop in use_properties:
-                val = peak_field(sample, prop)
-                col_name = f"Spot_{master_id}_{prop}"
-                # 値が None（フィールド欠落・読めない値）のセルは 0.0 にする。
-                # gap-fill のセルは通常 MS-DIAL の補間値を持つので、値として残る。
-                sample_data_dict[sample_key][col_name] = float(val) if val is not None else 0.0
-                if is_detected:
-                    detection_count[col_name] = detection_count.get(col_name, 0) + 1
-
-    if not sample_data_dict:
-        return np.empty((0, 0)), [], []
-
-    # 行がサンプル、列が「スポット×プロパティ」のデータフレームを作成
-    df = pd.DataFrame.from_dict(sample_data_dict, orient='index')
-
-    # ある試料の行がそのスポットに無かったセル（上の None→0.0 とは別）は NaN になる。
-    # それだけを「その列（特徴量）の平均値」で埋める（Mean Imputation）。
-    df = df.fillna(df.mean())
-    # ※全サンプルで欠損だった列は NaN のまま残るので、その場合のみ 0.0 で埋める
-    df = df.fillna(0.0)
-
-    # 任意: 検出率(非ギャップフィル)による特徴量の足切り（既定0.0=無効）
-    if min_detection_rate > 0.0:
-        n_samples = len(df.index)
-        keep_cols = [
-            c for c in df.columns
-            if detection_count.get(c, 0) / n_samples >= min_detection_rate
-        ]
-        df = df[keep_cols]
-
-    # 改善点3: 分散が0（全サンプルで同一の値）の列を事前に行列から除外する
-    df = df.loc[:, df.var(numeric_only=True) > 0]
-
-    return df.to_numpy(dtype=float), list(df.index), list(df.columns)
-
-
-def plot_pca(pca_result: dict, sample_names: list[str], props: list[str], file_path: str, output_file: str = "pca_plot.png"):
-    """
-    PCAスコアプロットを画像ファイルとして保存
-    """
-    components = np.array(pca_result["components"])
-    
-    if components.shape[1] < 2:
-        f"[WARNING] PCA成分が2つ未満のため、プロットできません。"
-        return
-    
-    plt.figure(figsize=(10, 8))
-    plt.scatter(components[:, 0], components[:, 1], alpha=0.7)
-    
-    # サンプル名をラベルとして表示
-    for i, name in enumerate(sample_names):
-        plt.annotate(name, (components[i, 0], components[i, 1]), fontsize=8, alpha=0.8)
-    
-    plt.xlabel(f"PC1 ({pca_result['explained_variance_ratio'][0]*100:.1f}%)")
-    plt.ylabel(f"PC2 ({pca_result['explained_variance_ratio'][1]*100:.1f}%)")
-    file_name = os.path.basename(file_path)
-    plt.title(f"PCA Score Plot - {file_name} (Properties: {', '.join(props)})")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
-    plt.close()
-    f"[INFO] PCAプロットを保存しました: {output_file}"
-
-
-def plot_pca_scores_by_sample(pca_result: dict, sample_names: list[str], output_file: str = "pca_sample_scores.png"):
-    """
-    PC1とPC2について、横軸にサンプル名、縦軸にスコア(強度)をとったプロットを作成して保存します。
-    """
-    components = np.array(pca_result.get("components", []))
-    
-    if components.size == 0 or components.shape[1] < 2:
-        print("[WARNING] PCA成分が2つ未満のため、サンプル別スコアをプロットできません。", file=sys.stderr)
-        return
-        
-    pc1_scores = components[:, 0]
-    pc2_scores = components[:, 1]
-    
-    # 2段のサブプロットを作成（x軸を共有）
-    fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-    
-    # -------------------------
-    # PC1のプロット (上段)
-    # -------------------------
-    axes[0].bar(sample_names, pc1_scores, color='#4C72B0', edgecolor='black', alpha=0.8)
-    axes[0].set_title(f"PC1 Scores by Sample ({pca_result['explained_variance_ratio'][0]*100:.1f}%)")
-    axes[0].set_ylabel("PC1 Score")
-    axes[0].axhline(0, color='black', linewidth=1.0, linestyle='-') # 基準線（0）
-    axes[0].grid(axis='y', linestyle='--', alpha=0.7)
-    
-    # -------------------------
-    # PC2のプロット (下段)
-    # -------------------------
-    axes[1].bar(sample_names, pc2_scores, color='#55A868', edgecolor='black', alpha=0.8)
-    axes[1].set_title(f"PC2 Scores by Sample ({pca_result['explained_variance_ratio'][1]*100:.1f}%)")
-    axes[1].set_ylabel("PC2 Score")
-    axes[1].axhline(0, color='black', linewidth=1.0, linestyle='-') # 基準線（0）
-    axes[1].grid(axis='y', linestyle='--', alpha=0.7)
-    
-    # X軸のサンプル名が長い場合に備えて斜めに傾ける
-    plt.xticks(rotation=45, ha="right")
-    
-    # レイアウトを整えて保存
-    plt.tight_layout()
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
-    plt.close()
-    
-    print(f"[INFO] サンプル別PCAスコアプロットを保存しました: {output_file}", file=sys.stderr)
-
-
 def plot_peak_height_distribution(peak_df: pd.DataFrame, filter_keyword: str = None, group_regex: str = None, output_file: str = "peak_height_dist.png"):
     """
     指定したキーワード（脂質クラス等）でフィルタリングし、
@@ -997,100 +741,6 @@ def plot_peak_height_distribution(peak_df: pd.DataFrame, filter_keyword: str = N
     print(f"[INFO] 脂質分布プロットを保存しました: {output_file} (データ件数: {len(df_filtered)}, グループ数: {len(groups)})", file=sys.stderr)
 
 
-def get_pca_loading_features(pca_result: dict, deserialized_list: list[dict],
-                             feature_names: list[str], top_n: int = 10,
-                             n_pcs: int = 2) -> list[dict]:
-    """各主成分について Loading 値の正負トップを構造化して返す（表示・整形は呼び出し側）。
-
-    返り値: [{"pc": "PC1", "var_ratio": <%>, "positive": [item...], "negative": [item...]}, ...]
-      item = {"id", "value", "annotation", "m_z", "rt"}（feature名 "Spot_<id>_<prop>" から id を取得し
-      deserialized_list[id] のメタデータを付与）。
-    旧 ARF のツール（撤去済み）が共通で利用していた。
-    """
-    loadings = pca_result.get("loadings", [])
-    evr = pca_result.get("explained_variance_ratio", [])
-    results = []
-    for pc_idx in range(min(n_pcs, len(loadings))):
-        pc_loadings = loadings[pc_idx]
-        feats = []
-        for feat_idx, loading_value in enumerate(pc_loadings):
-            parts = feature_names[feat_idx].split("_")
-            if len(parts) < 3:
-                continue
-            try:
-                master_id = int(parts[1])
-            except ValueError:
-                continue
-            if not (0 <= master_id < len(deserialized_list)):
-                continue
-            spot = deserialized_list[master_id]
-            feats.append({
-                "id": master_id,
-                "value": loading_value,
-                "annotation": spot.get("Name", ""),
-                "m_z": spot.get("MassCenter"),
-                "rt": spot.get("RT"),
-            })
-        feats.sort(key=lambda x: x["value"], reverse=True)
-        results.append({
-            "pc": f"PC{pc_idx + 1}",
-            "var_ratio": evr[pc_idx] * 100 if pc_idx < len(evr) else 0.0,
-            "positive": feats[:top_n],
-            "negative": feats[-top_n:][::-1],
-        })
-    return results
-
-
-def extract_top_loading_features(pca_result: dict, deserialized_list: list[dict], feature_names: list[str], n: int = 1):
-    """
-    PCAのLoadingsからPC1とPC2それぞれについて、
-    正に寄与している上位n件と、負に寄与している上位n件を抽出し、対応するピーク情報を出力
-    """
-    loadings = np.array(pca_result["loadings"])
-    
-    if loadings.size == 0:
-        f"[WARNING] Loadingsが空です。"
-        return
-    
-    # 少なくともPC1とPC2（または存在する分だけ）を処理
-    for pc_idx in range(min(2, len(loadings))):
-        pc_loadings = loadings[pc_idx]
-        pc_name = f"PC{pc_idx + 1}"
-        var_ratio = pca_result["explained_variance_ratio"][pc_idx] * 100
-
-        # スポット名とロード値のペアを実値で降順ソート
-        sorted_by_value = sorted(
-            zip(feature_names, pc_loadings), key=lambda x: x[1], reverse=True
-        )
-        positive_top_n = sorted_by_value[:n]                 # 正の寄与 上位
-        negative_top_n = sorted_by_value[-n:][::-1]          # 負の寄与 上位
-
-        print(f"\n--- {pc_name} (説明分散比 {var_ratio:.2f}%) ---")
-        print(f"  [正の寄与 上位{n}件]")
-        _print_feature_details(positive_top_n, deserialized_list)
-        print(f"  [負の寄与 上位{n}件]")
-        _print_feature_details(negative_top_n, deserialized_list)
-
-
-def _print_feature_details(feature_pairs: list[tuple], deserialized_list: list[dict]):
-    """各ピークの詳細情報を1行で出力する。"""
-    for spot_name, loading_value in feature_pairs:
-        try:
-            spot_id = int(spot_name.split("_")[1])
-        except (IndexError, ValueError):
-            continue
-        if spot_id >= len(deserialized_list):
-            continue
-
-        spot = deserialized_list[spot_id]
-        name = spot.get("Name") or "Unknown"
-        mz = spot.get("MassCenter")
-        rt = spot.get("RT")
-        mz_s = f"{mz:.4f}" if isinstance(mz, (int, float)) else "N/A"
-        rt_s = f"{rt:.2f}" if isinstance(rt, (int, float)) else "N/A"
-        print(f"    ID {spot_id:>4}  loading={loading_value:+.6f}  m/z={mz_s}  RT={rt_s} min  {name}")
-
-
 def summarize_arf_data(deserialized_list):
     """
     ARFデータの統計的要約を生成
@@ -1117,24 +767,11 @@ def main():
     parser = argparse.ArgumentParser(description="MS-DIAL .arf ファイルを解析します。")
     parser.add_argument("--file", "-f", required=True, help="解析する .arf ファイルのパス（必須。データフォルダは探さない）")
     parser.add_argument("--export", "-e", help="CSV に書き出すパス")
-    parser.add_argument("--pca", action="store_true", help="PCA を実行する")
-    parser.add_argument("--output-pca", help="PCA 結果を JSON で保存するパス")
-    parser.add_argument("--output-plot", default=None, help="PCA プロットを PNG 保存するパス。未指定なら PNG を生成しない")
-    parser.add_argument("--output-sample-scores", help="サンプル別PCAスコアプロットを画像ファイルとして保存するパス")
     parser.add_argument("--group-replicates", action="store_true", help="ファイル名からレプリケート番号（_1, _2など）を自動で除外してグループ化する")
     parser.add_argument("--group-regex", type=str, help="特殊なファイル名の場合に、削除したい文字列の正規表現を直接指定")
     parser.add_argument("--plot-distribution", action="store_true", help="脂質クラスごとのPeakHeight分布プロットを作成する")
     parser.add_argument("--filter-name", type=str, help="分布プロットで抽出する脂質名やクラスのキーワード (例: 'EtherPE_P', 'TG')")
     parser.add_argument("--output-dist-plot", type=str, default=None, help="分布プロットの PNG 保存先。未指定なら PNG を生成しない")
-    parser.add_argument("--top-features", "-t", type=int, default=0, help="PCA Loadingから抽出する上位・下位ピーク件数")
-    parser.add_argument("--props", nargs="+", default=["height"], 
-                        help="PCAに使用するプロパティ (例: height area). m_zやrtは量ではないため非推奨です。")
-    parser.add_argument("--components", type=int, default=None,
-                        help="計算する主成分の数 (デフォルト: 計算可能な最大数)")
-    parser.add_argument("--log-transform", action="store_true",
-                        help="[任意] PCA前に log10 変換を適用する（強度の歪みを抑え条件分離が向上しやすい）")
-    parser.add_argument("--min-detection-rate", type=float, default=0.0,
-                        help="[任意] 特徴量(スポット)の実検出率による足切り 0.0-1.0（既定0=無効。例 0.5）")
     args = parser.parse_args()
 
     file_path = args.file
@@ -1190,67 +827,6 @@ def main():
         else:
             print("[WARNING] 抽出されたPeak Propertyレコードが存在しないため、分布プロットをスキップします。", file=sys.stderr)
     
-
-    if args.pca:
-        matrix, sample_names, feature_names = build_pca_matrix(
-            deserialized, use_properties=args.props,
-            min_detection_rate=args.min_detection_rate,
-        )
-
-        if matrix.size == 0:
-            print("PCA 用データを構築できませんでした。")
-            return
-
-        print(f"[INFO] PCA入力行列の形状: {matrix.shape} (サンプル数 x 特徴量数)")
-        print(f"[INFO] 使用プロパティ: {args.props}")
-        if args.min_detection_rate > 0.0:
-            print(f"[INFO] 検出率フィルタ: >= {args.min_detection_rate} (特徴量 {len(feature_names)} 件に絞り込み)")
-        if args.log_transform:
-            print("[INFO] log10 変換: 有効")
-        try:
-            from metabolomix.analysis.pca import run_pca
-            pca_result = run_pca(matrix, n_components=args.components,
-                                 log_transform=args.log_transform)
-            print(f"[INFO] PCA 実行完了 (計算された主成分数: {len(pca_result['explained_variance_ratio'])})")
-
-            # ===== PCA結果をCLI表示 =====
-            evr = pca_result["explained_variance_ratio"]
-            print("\n===== PCA 説明分散比 =====")
-            for i, r in enumerate(evr[: min(5, len(evr))], 1):
-                print(f"  PC{i}: {r * 100:.2f}%")
-            if len(evr) > 0:
-                print(f"  (PC1-PC2 累積: {sum(evr[:2]) * 100:.2f}%)")
-
-            comps = pca_result.get("components", [])
-            if comps and len(comps[0]) >= 2:
-                print("\n===== サンプル別 PCA スコア (PC1, PC2) =====")
-                for name, c in zip(sample_names, comps):
-                    print(f"  {name:<42} PC1={c[0]:+9.3f}  PC2={c[1]:+9.3f}")
-
-            # 寄与上位ピーク（--top-features 未指定でも上位5件を表示）
-            n_show = args.top_features if args.top_features else 5
-            print(f"\n===== PCA Loadings 寄与上位/下位 {n_show}件 =====")
-            extract_top_loading_features(pca_result, deserialized, feature_names, n=n_show)
-
-            # PNG は明示要求時のみ。CLI が黙って画像ファイルを作らないようにする。
-            if args.output_plot:
-                plot_pca(pca_result, sample_names, args.props, file_path, args.output_plot)
-            else:
-                print("[INFO] --output-plot 未指定のため PCA プロット PNG は生成しません")
-            
-            if args.output_sample_scores:
-                plot_pca_scores_by_sample(pca_result, sample_names, output_file=args.output_sample_scores)
-
-            if args.output_pca:
-                # pca_result にサンプル名を保存しているため、そのまま渡す
-                pca_result["samples"] = sample_names
-                final_json = make_loading_details(pca_result, deserialized, feature_names)
-                with open(args.output_pca, "w", encoding="utf-8") as f:
-                    f.write(final_json)
-                print(f"[INFO] PCA 結果を保存しました: {args.output_pca}")
-                
-        except ValueError as e:
-            print(f"[ERROR] {e}")
 
     summary = summarize_arf_data(deserialized)
     pprint.pprint(summary)

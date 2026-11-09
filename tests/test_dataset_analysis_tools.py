@@ -6,7 +6,7 @@ import pytest
 from metabolomix.core import session_state
 from metabolomix.core.mcp_errors import MISSING_STATE
 from metabolomix.mztab.dataset_state import DatasetState
-from tests.v1_chain import v1_differential, v1_preprocess
+from tests.engine_chain import engine_compare, engine_preprocess
 
 
 @pytest.fixture(autouse=True)
@@ -34,33 +34,9 @@ def _load_ds(n_features=20, n_samples=8):
     return ds
 
 
-def _groups(ds):
-    return ([n for n in ds.pp_sample_names if n.startswith("ctrl")],
-            [n for n in ds.pp_sample_names if n.startswith("treat")])
-
-
-# ---------- v1 の 2 群比較（pipeline の引き渡しが作る形。tests/v1_chain.py 経由） ----------
-
-def test_v1_comparison_returns_summary_only():
-    ds = _load_ds()
-    v1_preprocess()
-    a, b = _groups(session_state.session.dataset)
-    parsed = json.loads(v1_differential(group_a=a, group_b=b))
-    assert parsed["status"] == "success"
-    assert "n_tested" in parsed["summary"]
-    assert len(parsed["summary"]["top"]) <= 15
-    assert "results" not in parsed           # 全量は戻り値に載せない
-    assert "volcano" not in parsed
-    stored = session_state.session.dataset.last_differential
-    assert len(stored["results"]) == 20      # セッションには全量
-
-
-def test_v1_comparison_small_group_is_bad_request():
-    _load_ds()
-    v1_preprocess()
-    parsed = json.loads(v1_differential(group_a=["ctrl_0"], group_b=["treat_0"]))
-    assert parsed["error"]["code"] != MISSING_STATE
-    assert "群サイズ" in parsed["error"]["message"]
+def _compare() -> dict:
+    """試料名のトークン（ctrl / treat）を群にして、統計エンジンで 2 群比較する。"""
+    return engine_compare("ctrl", "treat", preprocess={"group_levels": ["ctrl", "treat"]})
 
 
 # ---------- dataset_export_differential ----------
@@ -79,9 +55,7 @@ def test_dataset_export_writes_contract_format(tmp_path):
     from metabolomix.tools.dataset_analysis_tools import (
         dataset_export_differential,
     )
-    v1_preprocess()
-    a, b = _groups(session_state.session.dataset)
-    v1_differential(group_a=a, group_b=b)
+    _compare()
 
     out = tmp_path / "diff.tsv"
     parsed = json.loads(dataset_export_differential(str(out)))
@@ -186,9 +160,7 @@ def test_dataset_export_applies_assign_and_redundant(tmp_path):
          {"spot_id": 4, "flag": "redundant", "of": 3, "relation": "isotope_M+1"}],
         alignment=curation_flags.alignment_key(arf2), review_id="cs-x", source="user")
 
-    v1_preprocess()
-    a, b = _groups(session_state.session.dataset)
-    v1_differential(group_a=a, group_b=b)
+    _compare()
     out = tmp_path / "diff.tsv"
     parsed = json.loads(dataset_export_differential(str(out)))
     assert parsed["status"] == "success"
@@ -227,9 +199,7 @@ def test_dataset_export_drops_an_assign_without_inchikey(tmp_path):
           "inchikey": ""}],
         alignment=curation_flags.alignment_key(arf2), review_id="cs-x", source="user")
 
-    v1_preprocess()
-    a, b = _groups(session_state.session.dataset)
-    v1_differential(group_a=a, group_b=b)
+    _compare()
     out = tmp_path / "diff.tsv"
     parsed = json.loads(dataset_export_differential(str(out)))
     assert parsed["status"] == "success"
@@ -256,9 +226,7 @@ def test_dataset_export_reports_a_malformed_flags_file(tmp_path):
     store.path.parent.mkdir(parents=True)
     store.path.write_text('{"spot_id": 0, "flag": "wr\n', encoding="utf-8")
 
-    v1_preprocess()
-    a, b = _groups(session_state.session.dataset)
-    v1_differential(group_a=a, group_b=b)
+    _compare()
 
     out = tmp_path / "diff.tsv"
     parsed = json.loads(dataset_export_differential(str(out)))
@@ -276,9 +244,7 @@ def test_dataset_export_refuses_without_inchikey(tmp_path):
     from metabolomix.tools.dataset_analysis_tools import (
         dataset_export_differential,
     )
-    v1_preprocess()
-    a, b = _groups(session_state.session.dataset)
-    v1_differential(group_a=a, group_b=b)
+    _compare()
     out = tmp_path / "diff.tsv"
     parsed = json.loads(dataset_export_differential(str(out)))
     # 機械可読なコードで返す（"status": "error" だけでは分岐できない）。
@@ -289,70 +255,19 @@ def test_dataset_export_refuses_without_inchikey(tmp_path):
 
 # --- min_detection_rate（evidence sidecar 由来）---
 
-def test_v1_preprocess_accepts_min_detection_rate():
-    ds = _load_ds(n_features=4, n_samples=4)
-    ds.detected_mask = np.array([
-        [True, True, True, True],
-        [True, True, False, False],
-        [True, False, False, False],
-        [False, False, False, False],
-    ])
-    ds.feature_qc = {"source": "arf"}
-
-    payload = json.loads(v1_preprocess(impute="none", min_detection_rate=0.5))
-    assert payload["status"] == "success"
-    assert payload["n_features"] == 2
-    assert payload["detection_filter"]["features_removed"] == 2
-    assert ds.preprocessing_recipe["min_detection_rate"] == 0.5
-
-
-def test_v1_preprocess_min_detection_rate_without_state_is_bad_request():
-    _load_ds(n_features=4, n_samples=4)
-    payload = json.loads(v1_preprocess(min_detection_rate=0.5))
-    # missing_state ではない——別ツールを呼んでも直らない引数由来のエラー
-    assert payload["error"]["code"] != MISSING_STATE
-    assert "min_detection_rate" in json.dumps(payload, ensure_ascii=False)
-
-
-def test_v1_preprocess_reports_detection_when_available():
-    ds = _load_ds(n_features=2, n_samples=4)
-    ds.detected_mask = np.array([[True, True, True, True],
-                                 [True, False, False, False]])
-    ds.feature_qc = {"source": "arf"}
-    payload = json.loads(v1_preprocess(impute="none"))
-    assert payload["detection"]["gap_filled_rate"] == 0.375
-
-
 # ---------- 結果 ID と無効化（Task 6） ----------
 # 前処理をやり直したのに古い差次的結果が残っていると、TSV と図が別々の前処理から
 # 出た数字を並べる。ツール層でもその境界が効いていることを確かめる。
 
-def test_tools_report_the_result_id_of_each_computation():
-    from metabolomix.tools.stats_tools import dataset_pca
-    ds = _load_ds()
-    pp = json.loads(v1_preprocess())
-    a, b = _groups(ds)
-    pca = json.loads(dataset_pca(n_components=2))
-    diff = json.loads(v1_differential(a, b))
-    assert pp["result_id"].startswith("res_")
-    assert len({pp["result_id"], pca["result_id"], diff["result_id"]}) == 3
-
-
-def test_repreprocessing_makes_the_previous_comparison_unavailable(tmp_path):
-    """古い結果を「直近の結果」として書き出させない。"""
-    from metabolomix.tools.dataset_analysis_tools import (
-        dataset_export_differential)
-    ds = _load_ds()
-    v1_preprocess()
-    a, b = _groups(ds)
-    v1_differential(a, b)
-    v1_preprocess(normalize="tic")
-
-    parsed = json.loads(dataset_export_differential(str(tmp_path / "out.tsv")))
-
-    assert parsed["error"]["code"] == MISSING_STATE
-    assert parsed["error"]["required_tools"] == ["dataset_compare"]
-    assert not (tmp_path / "out.tsv").exists()
+def test_tools_report_the_id_of_each_computation():
+    from metabolomix.tools.stats_tools import dataset_compare, dataset_pca
+    _load_ds()
+    pp = engine_preprocess(group_levels=["ctrl", "treat"])
+    pca = json.loads(dataset_pca(matrix_id=pp["matrix_id"], n_components=2))
+    diff = json.loads(dataset_compare(reference_group="ctrl", test_group="treat",
+                                      matrix_id=pp["matrix_id"]))
+    assert pca["matrix_id"] == diff["matrix_id"] == pp["matrix_id"]
+    assert len({pp["matrix_id"], pca["result_id"], diff["result_id"]}) == 3
 
 
 # ---------- dataset_set_sample_metadata（Task 9のparse/resolve/applyをMCPへ接続） ----------
@@ -410,7 +325,7 @@ def test_dataset_set_sample_metadata_guidance_matches_the_engine():
     doc = inspect.getdoc(DAT.dataset_set_sample_metadata)
     assert "統計にはまだ使わない" not in doc
     assert 'block="subject_id"' in doc and "collapse_replicates" in doc
-    assert "pipeline の v1 結果では" in doc                   # 旧い文面は v1 の範囲を明示して残す
+    assert "v1 結果" not in doc and "run_comparison" not in doc   # 消えた v1 の鎖を案内しない
     source = inspect.getsource(DAT.dataset_set_sample_metadata)
     assert "再実行するだけで構いません" not in source
     for phrase in ("dataset_preprocess", "matrix_id", "dataset_compare", "dataset_pca"):
@@ -440,16 +355,14 @@ def test_dataset_set_sample_metadata_invalid_sheet_does_not_touch_session(tmp_pa
 def test_export_records_which_result_it_came_from(tmp_path):
     from metabolomix.tools.dataset_analysis_tools import (
         dataset_export_differential)
-    ds = _load_ds()
-    v1_preprocess()
-    a, b = _groups(ds)
-    diff = json.loads(v1_differential(a, b))
+    _load_ds()
+    diff = _compare()
     dataset_export_differential(str(tmp_path / "out.tsv"))
 
     meta = [l for l in (tmp_path / "out.tsv").read_text(encoding="utf-8").splitlines()
             if l.startswith("#")]
     assert any(f"result_id = {diff['result_id']}" in l for l in meta)
-    assert any(l.startswith("# preprocess_id = res_") for l in meta)
+    assert f"# preprocess_id = {diff['matrix_id']}" in meta
 
 
 def test_factor_tokens_flow_name_tokens_to_group_levels_to_compare_with_matrix_id():

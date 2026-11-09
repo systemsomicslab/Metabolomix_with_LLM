@@ -56,7 +56,7 @@ from metabolomix.library.tools import *  # library_load, library_match_feature, 
 from metabolomix.tools.dataset import *  # list_data_files
 from metabolomix.tools.mztab_tools import *  # dataset_status
 from metabolomix.tools.sample_tools import *  # dataset_exclude
-from metabolomix.tools.console_tools import *  # console_plan, console_run, console_status, job_list
+from metabolomix.tools.console_tools import *  # console_method_template, console_method_candidates
 from metabolomix.tools.dataset_analysis_tools import *  # dataset_export_differential, dataset_set_sample_metadata, dataset_feature_search
 from metabolomix.tools.stats_tools import *  # dataset_preprocess, dataset_compare, dataset_pca（統計エンジン）
 from metabolomix.tools.overview_tools import *  # dataset_overview（最初の概観）

@@ -224,7 +224,7 @@ def test_unknown_polarity_without_explicit_adducts_is_refused():
 
 # ---------- 目標照合の判定（spec §5） ----------
 #
-# ds は tests/test_feature_bindings.py の _dataset / _candidate に倣った最小の合成。
+# ds は最小の合成。
 # SME 候補には Task 4 の「候補自身の」inchikey を入れる。
 
 OTHER_KEY = "QWERTYUIOPASDF-UHFFFAOYSA-N"
@@ -824,29 +824,34 @@ def test_bh_population_counts():
     assert result["caveats"] == ["小n"]                         # 元の結果を汚さない
 
 
-def test_default_selection_skips_stale_and_non_two_group():
-    ds = _stats_dataset()
-    good = _two_group(ds, [_row_of("1")], result_id="diff_ok")
-    _two_group(ds, [_row_of("1")], result_id="diff_old")
-    ds.results["diff_old"]["provenance"]["dataset_id"] = "other"      # 古い
-    ds.results["stat_1"] = {"kind": "welch", "results": [], "provenance": {
-        "result_id": "stat_1", "kind": "statistic", "dataset_id": "ds1", "parent_ids": []}}
+def _engine_records():
+    """比較の記録 2 つ（`cmp_ok` は今のもの、`cmp_old` はデータの指紋が古い写し）と、比較でない記録 1 つ。"""
+    import copy
+
+    ds, _view = _computed_ds()
+    rid = ds.last_differential["result_id"]
+    old = copy.deepcopy(ds.results[rid])
+    old["provenance"]["dataset_hash"] = "0" * 64                       # 古い
+    ds.results["cmp_old"] = old
+    ds.results["stat_1"] = {"kind": "stat_pca", "provenance": {
+        "result_id": "stat_1", "kind": "stat_pca", "dataset_hash": None}}
+    return ds, rid
+
+
+def test_default_selection_skips_stale_and_non_compare():
+    ds, rid = _engine_records()
     selected = select_results(ds, None)
-    assert selected["results"] == [good]
-    assert selected["stale"] == ["diff_old"] and selected["missing"] == []
+    assert [r["provenance"]["result_id"] for r in selected["results"]] == [rid]
+    assert selected["stale"] == ["cmp_old"] and selected["missing"] == []
     assert select_results(_stats_dataset(), None) == {"results": [], "stale": [], "missing": []}
 
 
 def test_named_stale_result_is_reported():
-    ds = _stats_dataset()
-    good = _two_group(ds, [_row_of("1")], result_id="diff_ok")
-    _two_group(ds, [_row_of("1")], result_id="diff_old")
-    ds.results["diff_old"]["provenance"]["dataset_id"] = "other"
-    ds.results["stat_1"] = {"kind": "welch", "results": []}
-    selected = select_results(ds, ["diff_ok", "diff_old", "nope", "stat_1"])
-    assert selected["results"] == [good]
-    assert selected["stale"] == ["diff_old"]
-    # 存在しない ID と、2 群比較でない結果（v2 の統計）は missing（2 群比較としては引けない）
+    ds, rid = _engine_records()
+    selected = select_results(ds, [rid, "cmp_old", "nope", "stat_1"])
+    assert [r["provenance"]["result_id"] for r in selected["results"]] == [rid]
+    assert selected["stale"] == ["cmp_old"]
+    # 存在しない ID と、比較でない結果（PCA）は missing（2 群比較としては引けない）
     assert selected["missing"] == ["nope", "stat_1"]
 
 
@@ -944,8 +949,9 @@ def test_rule_hash_does_not_mutate_the_targets():
 # ---------- 割れたスポットのまとめと検定のやり直し（spec 2026-10-28 §4.3 (c)） ----------
 
 def _computed_ds():
-    """前処理（正規化あり）→ 2 群比較まで session と同じ経路で回した DatasetState。"""
-    from metabolomix.analysis import dataset_service
+    """統計エンジンの 2 群比較を登録した DatasetState と、`select_results` が展開した 2 群の形。"""
+    from metabolomix.analysis.feature_search import select_results
+    from tests.engine_chain import declare_groups, register_two_group
 
     rng = np.random.default_rng(7)
     ds = DatasetState()
@@ -954,9 +960,9 @@ def _computed_ds():
     ds.feature_ids = [str(i) for i in range(12)]
     ds.feature_metadata = {str(i): {"mz": 100.0 + i, "rt": 1.0 + i} for i in range(12)}
     ds.validation_result = {"ok": True, "errors": [], "warnings": []}
-    dataset_service.preprocess_dataset(ds, {"normalize": "median", "impute": "half_min"})
-    result = dataset_service.compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:],
-                                             group_a_label="ctrl", group_b_label="treat")
+    declare_groups(ds, lambda name: name.split("_")[0])
+    register_two_group(ds, "ctrl", "treat")
+    (result,) = select_results(ds, None)["results"]
     return ds, result
 
 
@@ -970,7 +976,7 @@ def test_retest_without_groups_reproduces_the_stored_result_exactly():
     ds, result = _computed_ds()
     view, merged_from = merged_dataset(ds, [])
     assert merged_from == {} and view.feature_ids == ds.feature_ids
-    redone = retest_merged(ds, view, result)
+    redone = retest_merged(ds, result, groups=[])
     assert [r["feature"] for r in redone["results"]] == [r["feature"] for r in result["results"]]
     for got, want in zip(redone["results"], result["results"]):
         for key in ("log2fc", "p", "q", "mean_a", "mean_b"):
@@ -992,22 +998,21 @@ def test_retest_with_a_group_tests_the_merged_column_over_all_features():
     fresh = {r["feature"]: r for r in redone["results"]}
     for fid in ("3", "5"):
         assert rows[fid]["q"] == fresh[fid]["q"] and rows[fid]["p"] == fresh[fid]["p"]
-    # 5 の列は割れていないが、正規化（median）と BH（11 特徴）はまとめた行列で回り直す
+    # 5 の列は割れていないが、BH（11 特徴）はまとめた行列で回り直す
     assert rows["5"]["q"] != unmerged["5"]["q"]
     assert rows["3"]["q"] != unmerged["3"]["q"]
     # ds は変えない
     assert len(ds.feature_ids) == 12 and ds.feature_matrix.shape == (12, 8)
 
 
-def test_retest_without_a_known_recipe_refuses():
-    from metabolomix.analysis.feature_search import merged_dataset, retest_merged
+def test_retest_without_the_source_record_refuses():
+    """元の比較の記録が無ければ、まとめる前の数字をまとめた後の顔で返さない。"""
+    from metabolomix.analysis.feature_search import retest_merged
 
     ds, result = _computed_ds()
-    handed = {**result, "provenance": {**result["provenance"],
-                                       "handoff": {"pipeline_root": "x", "preprocess": None}}}
-    view, _ = merged_dataset(ds, [["3", "4"]])
+    orphan = {**result, "_source": {"result_id": "cmp_gone", "contrast_id": result["contrast_id"]}}
     with pytest.raises(DomainError) as excinfo:
-        retest_merged(ds, view, handed)
+        retest_merged(ds, orphan, groups=[["3", "4"]])
     assert excinfo.value.code == "FEATURE_MERGE_UNAVAILABLE"
 
 
@@ -1035,24 +1040,6 @@ def test_match_target_counts_a_merged_pair_as_one_candidate():
     # 別の組の群を渡しても、この 2 スポットは 1 つにならない
     other = match_target(ds, target, max_results=20, merged_from=merge_map([["7", "8"]]))
     assert other["status"] == "needs_input"
-
-
-def test_retest_uses_the_handoff_recipe_of_a_pipeline_result():
-    """pipeline の run から引き継いだ結果（来歴の handoff.preprocess）でも、同じレシピで再現する。"""
-    from metabolomix.analysis.feature_search import _result_recipe, merged_dataset, retest_merged
-
-    ds, result = _computed_ds()
-    recipe = ds.results[result["provenance"]["parent_ids"][0]]["provenance"]["effective_parameters"]
-    handed = {**result, "provenance": {**result["provenance"], "parent_ids": [],
-                                       "handoff": {"pipeline_root": "x", "comparison_id": "c1",
-                                                   "preprocess": {"policy": "conservative-v1",
-                                                                  **recipe}}}}
-    assert _result_recipe(ds, handed) == {"policy": "conservative-v1", **recipe}
-    view, _ = merged_dataset(ds, [])
-    redone = retest_merged(ds, view, handed)
-    for got, want in zip(redone["results"], result["results"]):
-        for key in ("log2fc", "p", "q"):
-            assert _same(got[key], want[key]), (got["feature"], key)
 
 
 def test_include_false_sample_does_not_feed_n_detected_or_intensity_order():
