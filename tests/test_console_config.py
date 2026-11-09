@@ -26,11 +26,13 @@ def _method(tmp_path: Path) -> Path:
 
 
 def _plan(tmp_path: Path) -> dict:
-    """実行体を解けないときの封筒（Console を使うツールが共有する `_exe_error`）。"""
-    from metabolomix.tools.console_tools import _exe_error
-    with pytest.raises(EnvironmentError) as caught:
-        get_exe_path()
-    return json.loads(_exe_error(caught.value))
+    """pipeline の受付が実行体を解けないときのエラー（pipeline_plan / pipeline_run が返す内容）。"""
+    from metabolomix.core.atomic_io import DomainError
+    from metabolomix.pipeline import service
+    with pytest.raises(DomainError) as caught:
+        service._resolve_exe_path()
+    exc = caught.value
+    return {"error": {"code": exc.code, "message": exc.message, "details": exc.details}}
 
 
 # ---------- get_exe_path ----------

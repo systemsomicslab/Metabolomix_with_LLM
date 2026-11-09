@@ -33,10 +33,14 @@ def test_does_not_descend_indefinitely(tmp_path):
 
 
 def _unresolved_exe_envelope() -> dict:
-    """実行体を解けないときに Console を使うツールが返す封筒（`_exe_error`）。"""
-    from metabolomix.console.runner import MsdialExeNotFoundError
-    from metabolomix.tools.console_tools import _exe_error
-    return _json.loads(_exe_error(MsdialExeNotFoundError("Console の実行体が未設定です")))
+    """実行体が未設定のとき、pipeline の受付（pipeline_plan / pipeline_run）が返すエラー。"""
+    from metabolomix.core.atomic_io import DomainError
+    from metabolomix.pipeline import service
+    try:
+        service._resolve_exe_path()
+    except DomainError as exc:
+        return {"error": {"code": exc.code, "message": exc.message, "details": exc.details}}
+    raise AssertionError("実行体が解けてしまった（テスト環境に設定がある）")
 
 
 def test_exe_envelope_says_a_human_must_act():

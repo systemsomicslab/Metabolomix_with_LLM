@@ -27,7 +27,6 @@ from metabolomix.console.output_collector import (
 from metabolomix.console.job_manager import (
     create_job,
     count_raw_inputs,
-    list_jobs,
     load_job,
     update_status,
 )
@@ -64,27 +63,6 @@ def test_get_exe_path_rejects_a_configured_path_that_does_not_exist(tmp_path, mo
     with pytest.raises(MsdialExeNotFoundError) as exc:
         get_exe_path()
     assert "[msdial] exe" in str(exc.value)
-
-
-def test_is_console_exe_accepts_output_with_lcms():
-    from metabolomix.console.runner import is_console_exe
-    completed = MagicMock()
-    completed.stdout = "MSDIAL Console Application 5.5\n  lcms   Run LC-MS data processing\n"
-    with patch("subprocess.run", return_value=completed):
-        assert is_console_exe("fake.exe") is True
-
-
-def test_is_console_exe_rejects_gui():
-    """GUI はコンソール出力を持たず、--help でウィンドウを開いて返らない。"""
-    from metabolomix.console.runner import is_console_exe
-    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("x", 15)):
-        assert is_console_exe("gui.exe") is False
-
-
-def test_is_console_exe_rejects_missing_file():
-    from metabolomix.console.runner import is_console_exe
-    with patch("subprocess.run", side_effect=OSError("not found")):
-        assert is_console_exe("nope.exe") is False
 
 
 def test_probe_returns_timeout_after_retry():
@@ -329,22 +307,6 @@ def test_update_status_with_error(tmp_path):
     job = update_status(job_path, "failed", error="timeout")
     assert job.error == "timeout"
     assert load_job(job_path).error == "timeout"
-
-
-def test_list_jobs_empty(tmp_path):
-    assert list_jobs(tmp_path) == []
-
-
-def test_list_jobs_finds_jobs(tmp_path):
-    method = tmp_path / "params.msdial"
-    method.touch()
-    _, p1 = create_job(dataset_root=tmp_path, method_file=method,
-                       polarity="positive", measure="peak_height")
-    _, p2 = create_job(dataset_root=tmp_path, method_file=method,
-                       polarity="negative", measure="peak_height")
-    found = list_jobs(tmp_path)
-    assert len(found) == 2
-    assert p1 in found or p2 in found
 
 
 def test_raw_input_summary_counts_by_extension(tmp_path):

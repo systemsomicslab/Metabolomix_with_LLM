@@ -145,19 +145,6 @@ def save_job(job: AnalysisJob, job_path: Path) -> None:
     job.save(job_path)
 
 
-def list_jobs(dataset_root: Path) -> list[Path]:
-    """dataset_root/runs/ 以下の analysis-job.json を新しい順に返す。"""
-    runs_dir = dataset_root / RUNS_SUBDIR
-    if not runs_dir.is_dir():
-        return []
-    found = sorted(
-        runs_dir.rglob(JOB_FILENAME),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    return found
-
-
 def list_raw_inputs(dataset_root: Path) -> list[Path]:
     """データフォルダ直下の計測ファイルを安定順で返す。
 

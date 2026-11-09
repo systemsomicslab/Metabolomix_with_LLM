@@ -102,8 +102,13 @@ def _resolve_exe_path() -> Path:
     except EnvironmentError as exc:
         # 未設定は MSDIAL_EXE_NOT_FOUND、設定ファイルが読めなければ CONFIG_INVALID。
         # どちらも利用者が直す手掛かり（設定ファイルの場所・キー・行）を details に持つ。
-        raise DomainError(getattr(exc, "code", "MSDIAL_EXE_NOT_FOUND"), str(exc),
-                          dict(getattr(exc, "details", {}) or {})) from exc
+        code = getattr(exc, "code", "MSDIAL_EXE_NOT_FOUND")
+        details = dict(getattr(exc, "details", {}) or {})
+        if code == "MSDIAL_EXE_NOT_FOUND":
+            # 設定ファイルの編集は MCP クライアントからはできない。人間の作業であることと
+            # コピペできる手順を機械可読で添える。
+            details = {**console_runner.msdial_exe_setup_help(), **details}
+        raise DomainError(code, str(exc), details) from exc
     return Path(exe)
 
 

@@ -606,3 +606,43 @@ def test_validate_outputs_fails_when_the_entry_polarity_differs_from_the_job(tmp
 
     assert result["ok"] is False
     assert "POLARITY_MISMATCH" in result["errors"]
+
+
+# ---------- アダクトによる極性の多数決（console/validation と mztab/polarity が使う） ----------
+
+def _adduct_mztab(tmp_path, body):
+    p = tmp_path / "AlignResult-1.mzTab"
+    p.write_text("MTD\tmzTab-version\t2.0.0-M\n" + body, encoding="utf-8")
+    return p
+
+
+def _sml_rows(adducts):
+    head = "SMH\tSML_ID\tSMF_ID_REFS\tdatabase_identifier\tadduct_ions\n"
+    return head + "".join(f"SML\t{i}\t{i}\tnull\t{a}\n" for i, a in enumerate(adducts))
+
+
+def test_adduct_majority_reads_positive(tmp_path):
+    from metabolomix.console.output_collector import read_adduct_polarity
+    p = _adduct_mztab(tmp_path, _sml_rows(["[M+H]1+", "[M+NH4]1+", "[M-H]1-"]))
+    result = read_adduct_polarity(p)
+    assert result["adduct_majority"] == "positive"
+    assert result["n_positive"] == 2
+    assert result["n_negative"] == 1
+
+
+def test_adduct_majority_reads_negative(tmp_path):
+    from metabolomix.console.output_collector import read_adduct_polarity
+    p = _adduct_mztab(tmp_path, _sml_rows(["[M-H]1-", "[M+CH3COO]1-", "[M+H]1+"]))
+    assert read_adduct_polarity(p)["adduct_majority"] == "negative"
+
+
+def test_adduct_majority_is_none_without_usable_rows(tmp_path):
+    from metabolomix.console.output_collector import read_adduct_polarity
+    p = _adduct_mztab(tmp_path, _sml_rows(["null", "null"]))
+    assert read_adduct_polarity(p)["adduct_majority"] is None
+
+
+def test_adduct_majority_handles_missing_column(tmp_path):
+    from metabolomix.console.output_collector import read_adduct_polarity
+    p = _adduct_mztab(tmp_path, "SMH\tSML_ID\tdatabase_identifier\nSML\t0\tnull\n")
+    assert read_adduct_polarity(p)["adduct_majority"] is None
