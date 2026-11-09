@@ -827,3 +827,25 @@ def test_broken_mztab_hint_names_reason(tmp_path):
     err = _code(lambda: open_dataset(job_path=str(job)))
     assert "読めなかった理由" in err.message and err.code in err.message
     assert 'source="mztab"' in err.message and "でも読めない" in err.message
+
+
+def test_reports_written_into_the_folder_do_not_invalidate_the_base(tmp_path, monkeypatch):
+    """解析フォルダの中に記録（reports/）ができても基を使い回す（フォルダの更新時刻は指紋に入れない）。
+    読み込みの最初の概観は記録を reports/stats/ に書くので、これが効かないと 2 回目の読み込みが毎回読み直す。"""
+    from metabolomix.dataset import msdial_adapter
+    from metabolomix.tools.handle_tools import load_dataset
+
+    folder = _folder(tmp_path / "gui")
+    calls = []
+    real = msdial_adapter.load_msdial_folder
+
+    def spy(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(msdial_adapter, "load_msdial_folder", spy)
+    load_dataset(directory=str(folder), overview=False)
+    (folder / "reports" / "stats").mkdir(parents=True)
+    (folder / "reports" / "stats" / "x.json").write_text("{}", encoding="utf-8")
+    load_dataset(directory=str(folder), overview=False)
+    assert len(calls) == 1

@@ -1,7 +1,8 @@
 """入口ツール `load_dataset`（B-2b Task 2）と、ファイル解決・一覧の検証。
 
 `load_dataset` は新しいハンドルを**いつも直近にする**。戻り値は読んだ中身の要約・群と役割の
-件数・次の一手で、`.arf2` の概観も前処理前の PCA も返さない。解析の記録の置き場所の基準
+件数・最初の概観（`overview`。A。前処理後の PCA を含むが直近の結果にはしない）・次の一手で、
+`.arf2` の概観も前処理前の PCA も返さない（概観の中身は tests/test_load_dataset_overview.py）。解析の記録の置き場所の基準
 `DatasetState.analysis_dir` はここで決まる。fixture はすべてテスト自身が tmp に作る。
 """
 
@@ -197,13 +198,16 @@ def test_load_dataset_returns_group_and_role_counts(tmp_path, fresh_state):
 
 
 def test_load_dataset_has_no_initial_pca(tmp_path, fresh_state):
-    """読み込みの後の概観（`.arf2` の要約・前処理前の PCA）は返さず、PCA の状態も作らない。"""
+    """前処理前の PCA・`.arf2` の要約は返さない。最初の概観（A）の PCA は前処理後のもので、直近の PCA
+    （図の既定）にも v1 の `pp_*` にもしない。`overview=False` なら PCA の欄は一切出ない。"""
     out = _load(directory=str(_folder(tmp_path / "a")))
-    text = json.dumps(out, ensure_ascii=False)
-    assert "PCA" not in text.replace("dataset_pca", "")
-    assert "概観" not in text
+    assert "前処理後" in out["overview"]["global"]["facts"][0]
     ds = session_state.session.dataset
     assert ds.last_pca is None and ds.pp_matrix is None
+    out = _load(directory=str(_folder(tmp_path / "b")), overview=False)
+    text = json.dumps(out, ensure_ascii=False)
+    assert "PCA" not in text.replace("dataset_pca", "")
+    assert "overview" not in out
 
 
 def test_load_dataset_is_always_threaded(tmp_path, fresh_state):

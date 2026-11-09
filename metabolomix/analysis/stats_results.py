@@ -227,7 +227,7 @@ def _provenance(ds, result_id: str, kind: str, matrix_id: str, dataset_hash: str
 
 
 def register_compare(ds, run_result: dict, *, log2fc_threshold, units,
-                     make_current: bool = True) -> dict:
+                     make_current: bool = True, origin: str | None = None) -> dict:
     """`run_spec_v2` の結果（compare の解析がちょうど 1 つ）を登録し、その記録を返す。
 
     `units` は同じ行列の `PreparedMatrix.units`。記録の `units` は 個体 ID → {group, subject_id,
@@ -236,6 +236,8 @@ def register_compare(ds, run_result: dict, *, log2fc_threshold, units,
     compare が 1 つでない・別のデータから出た結果は ValueError。
     `make_current=False` は `ds.last_differential`（図・書き出しの既定）を動かさない（最初の概観が使う。
     利用者が明示に回した比較を中立の概観で上書きしない）。
+    `origin`（例 ``"overview"``）は記録の ``origin`` に残し、特徴検索の既定の選択（`result_ids` 省略）から外す
+    印になる。同じ ID の記録が印なしで既にあれば（利用者が同じ比較を先に回した）、印を付けない。
     """
     analyses = [a for a in (run_result or {}).get("analyses") or [] if a.get("kind") == "compare"]
     if len(analyses) != 1:
@@ -273,6 +275,9 @@ def register_compare(ds, run_result: dict, *, log2fc_threshold, units,
         "log2fc_threshold": threshold,
         "provenance": _provenance(ds, result_id, "compare", matrix_id, current),
     }
+    existing = ds.results.get(result_id)
+    if origin is not None and not (existing is not None and existing.get("origin") is None):
+        record["origin"] = origin
     ds.results[result_id] = record
     if make_current:
         ds.last_differential = record

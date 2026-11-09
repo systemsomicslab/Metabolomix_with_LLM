@@ -200,11 +200,18 @@ def _signature(base: OpenedDataset) -> tuple:
     読み直す（mzTab-M の隣に後から置かれた `.arf` は検出状態を変え、解析フォルダに後から
     置かれた `.dcl` やライブラリはハンドルの照合を変える）。探したファイルの一覧（`.arf` の
     候補など）は呼ばれるたびに今のフォルダから数え直す。
+
+    フォルダ（解析フォルダ・pipeline の run）は在るか無いかだけを数え、更新時刻は入れない。中で効く
+    ファイルは上の一覧と付随ファイルが個別に数えており、フォルダの更新時刻は記録（`reports/`）が
+    できただけでも変わる（読み込みの最初の概観がそこへ書く）ので、基を無駄に捨てる。
     """
     out = []
     for path in sorted(_dependencies(base)):
         try:
             stat = Path(path).stat()
+            if Path(path).is_dir():
+                out.append((path, 0, 0))
+                continue
             out.append((path, stat.st_size, stat.st_mtime_ns))
         except OSError:
             out.append((path, None, None))

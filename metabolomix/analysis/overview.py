@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import json
 import math
 
 from metabolomix.analysis.result_state import dataset_fingerprint
@@ -39,6 +40,11 @@ def _g(x, digits: int = 3) -> str:
 
 def _pct(x) -> str:
     return "NA" if x is None else f"{100 * float(x):.0f}%"
+
+
+def _j(value) -> str:
+    """次の一手の引数の書き方（JSON。日本語の群名もそのまま）。"""
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _cell(text) -> str:
@@ -174,7 +180,7 @@ def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict]
         f.add(drift_note, drift="off_undecided")
     nxt = [f'dataset_plot(kind="pca", result_id="{pca_id}", color_by="batch")'] if pca_id else []
     if failed.get("failed"):
-        nxt.append(f"dataset_exclude(samples={failed['failed'][:5]!r})")
+        nxt.append(f"dataset_exclude(samples={_j(failed['failed'][:5])})")
     if drift_note:
         nxt.append('dataset_preprocess(drift_mode="on" か "off")')
     if replicate_warnings:
@@ -254,7 +260,7 @@ def global_facts(*, pca_result: dict | None, labels: dict, record: dict | None, 
         nxt = (f'dataset_compare(reference_group="{plan["levels"][0]}", test_group="{plan["levels"][1]}")'
                "（向きを決めて比べ直す。逆なら入れ替える）")
     elif plan["mode"] == "multi":
-        nxt = f"dataset_compare(groups={plan['levels']!r})（先頭が基準。対照を決めて並べ替える）"
+        nxt = f"dataset_compare(groups={_j(plan['levels'])})（先頭が基準。対照を決めて並べ替える）"
     else:
         nxt = "dataset_set_sample_metadata（群＝Class ID を入れる）→ dataset_overview()"
     return {"facts": f.items, "next": nxt}
@@ -314,7 +320,7 @@ def class_facts(*, composition_result: dict | None, gate: str | None, gate_next:
         if w.get("code") == "class_total_includes_missing_members":
             f.add("欠測のメンバーを 0 として合計したクラスがある（欠測の多い群で低めに出る）",
                   classes=w.get("classes", [])[:20])
-    nxt = f'dataset_plot(kind="group_intensity", items={items!r})' if items else gate_next
+    nxt = f'dataset_plot(kind="group_intensity", items={_j(items)})' if items else gate_next
     return {"facts": f.items, "table": table, "next": nxt}
 
 
@@ -353,7 +359,7 @@ def species_facts(ds, *, record: dict | None, plan: dict, top_n: int, pairs_omit
                        _g(r["log2fc"]), _g(r["ci_low"]), _g(r["ci_high"]), _g(r["q"])] for r in top])
         ids = [r["feature_id"] for r in top]
         nxt = (f'dataset_plot(kind="volcano", result_id="{rid}", contrast_id="{cid}")'
-               + (f' / dataset_feature_search(result_ids=["{rid}#{cid}"], feature_ids={ids[:5]!r})' if ids else ""))
+               + (f' / dataset_feature_search(result_ids=["{rid}#{cid}"], feature_ids={_j(ids[:5])})' if ids else ""))
         return {"facts": f.items, "top": table, "next": nxt}
 
     n_tested, n_sig = _omnibus_counts(record)
@@ -378,8 +384,8 @@ def species_facts(ds, *, record: dict | None, plan: dict, top_n: int, pairs_omit
                  [[o["feature_id"], _name(ds, o["feature_id"]), id_level(ds, o["feature_id"]), _g(o["f_q"])]
                   for o in top])
     ids = [o["feature_id"] for o in top]
-    nxt = (f'dataset_feature_search(result_ids=["{rid}"], feature_ids={ids[:5]!r})' if ids
-           else f"dataset_compare(groups={plan['levels']!r})")
+    nxt = (f'dataset_feature_search(result_ids=["{rid}"], feature_ids={_j(ids[:5])})' if ids
+           else f"dataset_compare(groups={_j(plan['levels'])})")
     return {"facts": f.items, "top": table, "pairs": pairs, "next": nxt}
 
 

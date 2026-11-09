@@ -129,7 +129,7 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
                  job_path: str | None = None, pipeline_path: str | None = None,
                  allow_incomplete: bool = False, source: str = "auto",
                  measure: str = "peak_height", arf2_path: str | None = None,
-                 library: str = "auto") -> str:
+                 library: str = "auto", overview: bool = True) -> str:
     """データセットを読み込み、新しいハンドル（`dh_…`）として開いて**直近にする**。入口はこの 1 本。
 
     入口（**どれか 1 つ**。全省略・2 つ以上の指定はエラー）:
@@ -184,6 +184,11 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         同じバッチ、無ければ mzTab-M の隣、`pipeline_path` なら run の
         `input/AlignResult-*.arf2`（複数あれば名前の新しいもの）を探す。
 
+    overview: 読み込みの最後に最初の概観（`dataset_overview` と同じ。品質 → 全体 → クラス → 分子種）を
+        計算して戻り値の `overview` 欄に載せる（既定 True）。False で計算しない（多数のハンドルを開く
+        再解析のエージェント向け。後から `dataset_overview` で出せる）。bool 以外は `DATASET_BAD_REQUEST`。
+        概観が失敗しても読み込みは成功し、`overview` に `status:"unavailable"` と理由が載る。
+
     成功すると、いつも**新しいハンドルを直近にする**。`dataset_handle` を省いた `dataset_*` /
     `library_*` はこの直近のハンドルに効く。再解析のエージェントは返った `dataset_handle` を
     各ツールに渡して使い、直近を当てにしない（渡した呼び出しはサーバの別スレッドで回り、同じ
@@ -197,9 +202,12 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
     戻り値: `dataset_handle`・読んだアダプタ・選んだ `.arf`・ライブラリの記録（ファイル名と
     sha256。置き場所は出さない）に、`caveat`（意味論の要約。未読で、その種別にまだ出していないときだけ
     先頭に載る。`assay_kind` が確定したあとの最初の 1 回は `record_objective` の戻り値が運ぶ）、`summary`（特徴・試料の数、検出状態、同定の内訳、読み込みの
-    注記）、`sample_counts`（群と役割ごとの試料数）、`next`（次の一手の例）。`.arf2` の概観や
-    前処理前の PCA は返さない。
+    注記）、`sample_counts`（群と役割ごとの試料数）、`overview`（最初の概観。`overview=True` のとき）、
+    `next`（次の一手の例）。概観の比較と PCA は `result_id` で掘れるが直近の結果にはしない。
     """
+    if not isinstance(overview, bool):
+        return mztab_error("DATASET_BAD_REQUEST", f"overview は true / false です: {overview!r}",
+                           {"field": "overview"})
     if library not in _LIBRARY_MODES:
         return mztab_error("DATASET_BAD_REQUEST",
                            f"library は {' / '.join(_LIBRARY_MODES)} のどちらかです: {library!r}",
@@ -253,6 +261,7 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
     # 意味論ダイジェスト（未読・種別ごとに 1 回・`caveat_mode=off` で止まる）。最上位の文字列として
     # 先頭に置く——結論より前に解釈の前提が目に入るように。無ければ鍵ごと出さない。
     caveat = session_state.session.take_caveat()
+    first_overview = _first_overview(handle) if overview else None
     return json_payload({
         "status": "success",
         **({"caveat": caveat} if caveat else {}),
@@ -278,16 +287,38 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         "max_handles": _max_handles_or_none(),
         "summary": mztab_tools.load_summary_lines(ds, opened),
         "sample_counts": mztab_tools.sample_group_role_counts(ds),
+        **({"overview": first_overview} if first_overview is not None else {}),
         **({"notes": notes} if notes else {}),
         "next": list(_NEXT_STEPS),
     })
+
+
+def _first_overview(handle) -> dict:
+    """最初の概観（`dataset_overview` と同じ組み立て。`counts` は summary と重なるので省く）。
+
+    `load_dataset` は `handle_dispatch` のロックの外で動くので、新しいハンドルのロックの下で計算する
+    （直後の別の呼び出しと重ならない）。どんな失敗でも読み込みは止めず、理由を返す。
+    """
+    from metabolomix.tools.overview_tools import build_overview_payload
+
+    try:
+        with handle.lock:
+            return build_overview_payload(handle, embedded=True)
+    except DomainError as exc:
+        error = {"code": exc.code, "message": exc.message}
+    except Exception as exc:  # noqa: BLE001 - 概観の失敗で読み込みを失敗にしない
+        error = {"code": type(exc).__name__, "message": str(exc)[:300]}
+    return {"status": "unavailable", "error": error,
+            "next": "dataset_overview() を呼び直す／dataset_preprocess() で前処理の段の理由を見る"}
 
 
 #: 読み込みの後の次の一手の例（ツール名は公開面のもの）。
 _NEXT_STEPS = (
     "dataset_status() — 試料の群・役割と検出状態を確かめる（差次的解析の群名はここに出る）",
     "curation_review() — 注釈の一覧確認（解析フォルダで読んだデータセットのとき）",
-    "dataset_preprocess() → dataset_pca(matrix_id=...) — 前処理して（省略すれば既定の前処理で）主成分分析し、全体像を見る（QC は投影）",
+    "最初の概観（overview。overview=False で開いたなら dataset_overview()）の各段の next から掘る（鎖を進めた後は "
+    "dataset_overview() で出し直す。2 群の向きは仮なので "
+    "dataset_compare(reference_group=..., test_group=...) で決める）",
 )
 
 

@@ -28,7 +28,7 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
     "dcl.md": ("dcl_find_msms", "dcl_spot_spectrum", "dcl_diagnostic_ions"),
     "plots.md": ("dataset_plot", "save_figure"),
     "dataset_analysis.md": (
-        "dataset_preprocess", "dataset_compare", "dataset_pca",
+        "dataset_preprocess", "dataset_compare", "dataset_pca", "dataset_overview",
         "dataset_export_differential", "dataset_export_evidence_bundle", "dataset_set_sample_metadata",
         "dataset_feature_search",
     ),
@@ -180,4 +180,4 @@ class TestScopeBoundary(unittest.TestCase):
             registered,
             "対象範囲の分類と登録済みツールが一致しない",
         )
-        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 46)
+        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 47)
