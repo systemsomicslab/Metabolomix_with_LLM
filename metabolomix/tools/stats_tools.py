@@ -1,8 +1,7 @@
 """統計エンジン（`metabolomix.analysis.stats`）の対話ツール。
 
 `dataset_preprocess` が前処理（spec §4）を回して行列を作り、`matrix_id` を返す。行列は
-`ds.stat_matrices[matrix_id]` に設定・群の上書き・除外・データの指紋と一緒に置く（v1 の `pp_*` には
-書かない）。同じ入力と設定は同じ `matrix_id`。後続の比較・PCA はこの ID を名指しできる。
+`ds.stat_matrices[matrix_id]` に設定・群の上書き・除外・データの指紋と一緒に置く。同じ入力と設定は同じ `matrix_id`。後続の比較・PCA はこの ID を名指しできる。
 
 戻り値は要約だけ（工程ごとの名前・状態・件数）。全量は `ds.stat_matrices` に保持する。
 1 回の呼び出しは `reports/stats/` に記録を 1 件追記する（書けないときも前処理は成功し、

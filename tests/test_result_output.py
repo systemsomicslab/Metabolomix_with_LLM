@@ -94,17 +94,18 @@ def test_save_result_figure_writes_a_pca_png(tmp_path):
 
 
 def test_save_result_figure_accepts_the_dataset_state_pca_shape(tmp_path):
-    """DatasetState 経路の PCA 結果（`points` ではなく `scores`）でも点を描く。
+    """統計エンジンの PCA の記録（`points` ではなく `engine` のスコア）でも点を描く。
 
-    ここを揃えないと、pipeline が必須出力として保存する `results/pca.png` が
-    枠だけの空の散布図になる（ファイルは生成され hash も通るので気付けない）。
+    ここを揃えないと、記録を渡された図が枠だけの空の散布図になる
+    （ファイルは生成され hash も通るので気付けない）。
     """
     import matplotlib.image as mpimg
 
     dataset_pca = {
-        "scores": [{"name": "s1", "role": "sample", "PC1": 1.0, "PC2": 2.0},
-                   {"name": "s2", "role": "sample", "PC1": -1.0, "PC2": 0.5}],
-        "explained_variance_ratio": [0.31, 0.22],
+        "kind": "stat_pca", "groups": {"s1": "A", "s2": "A"},
+        "engine": {"unit_ids": ["s1", "s2"], "qc_ids": [],
+                   "scores": {"units": [[1.0, 2.0], [-1.0, 0.5]], "qc": []},
+                   "explained_variance_ratio": [0.31, 0.22]},
     }
 
     out = save_result_figure(None, dataset_pca, tmp_path / "scores.png", kind="pca")
@@ -201,12 +202,10 @@ def test_adjusted_comparisons_get_no_confounding_disclaimer():
 # ---------- TSV ----------
 
 def _prepared_dataset():
-    from metabolomix.analysis.dataset_service import compare_dataset, preprocess_dataset
+    from tests.engine_chain import compare_halves
     from tests.pipeline_fixtures import make_dataset
     ds = make_dataset()
-    preprocess_dataset(ds, {"normalize": "none", "impute": "half_min"})
-    result = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
-    return ds, result
+    return ds, compare_halves(ds)
 
 
 def test_export_writes_the_contract_columns(tmp_path):
@@ -232,7 +231,7 @@ def test_export_records_the_preprocessing_that_the_result_actually_used(tmp_path
             _exported_lines(export_dataset_result, ds, result, tmp_path / "o.tsv")
             if l.startswith("#")]
 
-    assert any("'normalize': 'none'" in l for l in meta if "preprocess" in l)
+    assert any("'normalize': {'method': 'none'}" in l for l in meta if l.startswith("# preprocess ="))
     assert any(f"result_id = {result['provenance']['result_id']}" in l for l in meta)
 
 
@@ -266,11 +265,10 @@ def test_export_omits_the_unadjusted_confounded_line_when_not_confounded(tmp_pat
     assert not any("unadjusted_confounded" in l for l in meta)
 
 
-def test_export_refuses_a_result_from_a_superseded_preprocessing(tmp_path):
+def test_export_refuses_a_stale_result(tmp_path):
     from metabolomix.analysis.dataset_export import export_dataset_result
-    from metabolomix.analysis.dataset_service import preprocess_dataset
     ds, result = _prepared_dataset()
-    preprocess_dataset(ds, {"normalize": "tic", "impute": "half_min"})
+    ds.metadata_revision += 1                     # 試料の表・除外が登録の後に変わった
 
     with pytest.raises(DomainError) as exc:
         export_dataset_result(ds, result, tmp_path / "stale.tsv")

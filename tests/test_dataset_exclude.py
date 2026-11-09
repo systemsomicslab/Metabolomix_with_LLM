@@ -7,11 +7,12 @@ import json
 
 import pytest
 
-from metabolomix.analysis import dataset_service, result_state
+from metabolomix.analysis import result_state
 from metabolomix.analysis.sample_manifest import apply_metadata
 from metabolomix.core import session_state
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.tools.sample_tools import dataset_exclude
+from tests.engine_chain import engine_pca, engine_preprocess
 from tests.pipeline_fixtures import make_dataset, metadata_rows
 
 
@@ -106,29 +107,32 @@ def test_exclude_without_dataset_is_missing_state():
     assert "load_dataset" in out["error"]["required_tools"]
 
 
+def _prepared(ds, matrix_id):
+    return ds.stat_matrices[matrix_id]["prepared"]
+
+
 def test_exclude_add_is_idempotent_and_does_not_invalidate_when_nothing_changes():
     ds = _loaded()
     _call(samples=["S0"], reason="r")
-    dataset_service.preprocess_dataset(ds, {"impute": "half_min"})
+    matrix_id = engine_preprocess()["matrix_id"]
     revision = ds.metadata_revision
-    preprocess_id = ds.preprocess_id
 
     again = _call(samples=["S0"], reason="r")
 
     assert again["changed"] is False
     assert ds.metadata_revision == revision
-    assert ds.preprocess_id == preprocess_id and ds.pp_matrix is not None
+    assert matrix_id in ds.stat_matrices
 
 
 def test_exclude_applied_by_preprocess():
     ds = _loaded()
     _call(samples=["S0", "S5"], features=["F2"], reason="r")
 
-    dataset_service.preprocess_dataset(ds, {"impute": "half_min"})
+    prepared = _prepared(ds, engine_preprocess()["matrix_id"])
 
-    assert ds.pp_matrix.shape == (6, 5)
-    assert "S0" not in ds.pp_sample_names and "S5" not in ds.pp_sample_names
-    assert "F2" not in ds.pp_feature_names
+    assert len(prepared.sample_ids) == 6
+    assert "S0" not in prepared.sample_ids and "S5" not in prepared.sample_ids
+    assert "F2" not in prepared.feature_ids and len(prepared.feature_ids) == 5
     assert ds.sample_names[0] == "S0"  # 入力そのものは変えない
     assert len(ds.feature_ids) == 6
 
@@ -143,37 +147,34 @@ def test_exclude_applied_by_preprocess_with_explicit_metadata_and_detection_mask
     ds.feature_qc = {"source": "arf"}
     _call(samples=["S7"], features=["F4"], reason="r")
 
-    dataset_service.preprocess_dataset(
-        ds, {"impute": "none", "min_detection_rate": 1.0})
+    prepared = _prepared(ds, engine_preprocess(detection_min_rate=1.0)["matrix_id"])
 
-    assert "S7" not in ds.pp_sample_names
-    assert "F0" in ds.pp_feature_names  # 除外した試料の未検出は分母に入らない
-    assert "F4" not in ds.pp_feature_names
+    names = dict(zip(ds.sample_ids, ds.sample_names))
+    assert "S7" not in [names.get(s, s) for s in prepared.sample_ids]
+    assert "F0" in prepared.feature_ids  # 除外した試料の未検出は分母に入らない
+    assert "F4" not in prepared.feature_ids
 
 
 def test_exclude_marks_downstream_results_stale():
     """除外の後に、除外前の結果を「現在の結果」として通さない（Review Focus 3）。"""
     ds = _loaded()
-    pre = dataset_service.preprocess_dataset(ds, {"impute": "half_min"})
-    pca = dataset_service.pca_dataset(ds, 2)
-    old_pca_id = pca["provenance"]["result_id"]
+    pca = engine_pca()
+    old_pca_id = pca["result_id"]
     assert result_state.is_current(ds, ds.results[old_pca_id])
-    assert ds.last_pca is not None
+    assert ds.last_pca is not None and ds.stat_matrices
     revision = ds.metadata_revision
 
     out = _call(samples=["S0"], reason="r")
 
     assert out["changed"] is True
     assert ds.metadata_revision == revision + 1
-    assert ds.pp_matrix is None and ds.last_pca is None and ds.last_differential is None
-    assert ds.preprocess_id is None
+    assert not ds.stat_matrices and ds.last_pca is None and ds.last_differential is None
     # ds.results には残るが、古い結果として拒む
     assert old_pca_id in ds.results
     assert not result_state.is_current(ds, ds.results[old_pca_id])
     with pytest.raises(DomainError) as info:
         result_state.assert_current(ds, ds.results[old_pca_id])
     assert info.value.code == "STALE_ANALYSIS_RESULT"
-    assert not result_state.is_current(ds, ds.results[pre["provenance"]["result_id"]])
     assert "dataset_preprocess" in out["next"]
 
 
@@ -184,16 +185,6 @@ def test_exclusions_do_not_change_the_input_fingerprint():
     _call(samples=["S0"], features=["F1"], reason="r")
 
     assert result_state.dataset_fingerprint(ds) == before
-
-
-def test_preprocess_fingerprint_separates_exclusion_states():
-    ds = _loaded()
-    recipe = {"impute": "half_min"}
-    plain = result_state.preprocess_fingerprint(ds, recipe, None)
-    ds.excluded_samples = {"S0": "r"}
-    assert result_state.preprocess_fingerprint(ds, recipe, None) != plain
-    ds.excluded_samples = {}
-    assert result_state.preprocess_fingerprint(ds, recipe, None) == plain
 
 
 def test_feature_search_says_when_a_named_feature_is_excluded():

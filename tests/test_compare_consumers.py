@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import csv
 import json
-import re
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -22,12 +20,11 @@ from metabolomix.tools import dataset_analysis_tools as DAT
 from metabolomix.tools import plot_tools, reanalysis_tools
 from metabolomix.tools.stats_tools import dataset_compare, dataset_preprocess
 from tests.test_stats_results import _ds
-from tests.v1_chain import v1_preprocess
 
 FLAT_OFF = dict(drift_mode="off", blank_min_ratio=None, detection_min_rate=None,
                 max_qc_rsd=None, max_d_ratio=None, normalize="none")
 
-#: v1 の書き出しがもともと持つメタ行のキー（これ以外を足さない）
+#: 書き出しが契約としてもともと持つメタ行のキー（これ以外を足さない）
 V1_META_KEYS = {"contract_version", "exported_at", "source_mztab", "source_job", "id_space", "result_id",
                 "preprocess_id", "source_verification", "group_a", "n_a", "group_b", "n_b", "log2fc_sign",
                 "q_threshold", "log2fc_threshold", "log_transform", "preprocess", "n_features_total",
@@ -134,46 +131,6 @@ def test_export_meta_parses_with_massbank_rules(ds, tmp_path):
     assert not (NEW_META_KEYS & V1_META_KEYS)
     # 新しい行は「# key = value」の形で、値にタブ・改行を含まない
     assert all(line.startswith("# ") for line in meta)
-
-
-def test_export_v1_two_group_output_unchanged(tmp_path):
-    from metabolomix.analysis.dataset_service import compare_dataset
-    ds = _annotate(_ds())
-    _install(ds, tmp_path)
-    v1_preprocess()
-    result = compare_dataset(ds, [n for n in ds.sample_names if n.startswith("C")],
-                             [n for n in ds.sample_names if n.startswith("T")])
-    assert result["kind"] == "two_group" and "statistics" not in result
-    path = tmp_path / "v1.tsv"
-    export_dataset_result(ds, result, path)
-    meta, body = _read(path)
-    values, keys = _parse_meta(meta)
-    assert set(values) == V1_META_KEYS and len(keys) == len(set(keys))      # 新しい行は足さない
-    assert meta[-1].startswith("# ontology / msi_level")                    # msi_note が最後
-    assert body[0].split("\t") == export_contract.EXPORT_COLUMNS
-    assert stats_results.as_two_group(result) is result                     # v1 の結果はそのまま
-
-
-#: v1 の 2 群の結果の書き出しの正解（最終レビューの修正の前のコードで書いたもの。時刻と uuid の ID は伏せる）
-V1_EXPORT_GOLDEN = Path(__file__).parent / "fixtures" / "v1_export_golden.tsv"
-
-
-def _masked(text: str) -> str:
-    """時刻の行と uuid の結果 ID（`res_<32 桁>`）を伏せる。ほかは 1 バイトも変えない。"""
-    text = re.sub(r"^# exported_at = .*$", "# exported_at = <timestamp>", text, flags=re.M)
-    return re.sub(r"res_[0-9a-f]{32}", "res_<id>", text)
-
-
-def _v1_export_text(tmp_path) -> str:
-    ds = _install(_annotate(_ds()), tmp_path)
-    path = tmp_path / "v1_golden.tsv"
-    export_dataset_result(ds, _v1_result(ds), path)
-    return _masked(path.read_text(encoding="utf-8"))
-
-
-def test_export_v1_two_group_golden_bytes(tmp_path):
-    """v1 の結果の書き出しは、時刻と uuid の ID を除いて正解と 1 バイトも違わない（R16 は v1 を変えない）。"""
-    assert _v1_export_text(tmp_path) == V1_EXPORT_GOLDEN.read_text(encoding="utf-8")
 
 
 def test_export_multi_contrast_requires_contrast_id(tmp_path):
@@ -450,13 +407,6 @@ def _multi(tmp_path):
     return ds, _compare(groups=["C", "T", "U"])["result_id"]
 
 
-def _v1_result(ds):
-    from metabolomix.analysis.dataset_service import compare_dataset
-    v1_preprocess()
-    return compare_dataset(ds, [n for n in ds.sample_names if n.startswith("C")],
-                           [n for n in ds.sample_names if n.startswith("T")])
-
-
 def test_select_results_contrast_id_rules(tmp_path):
     ds, rid = _multi(tmp_path)
     # (a) ID だけ + contrast_id は rid#contrast_id と同じ
@@ -528,21 +478,7 @@ def test_rid_hash_cid_accepted_by_export_evidence_and_volcano(tmp_path):
     assert err["code"] == "DATASET_BAD_REQUEST"
 
 
-def test_contrast_id_on_v1_result_is_rejected_the_same_way(tmp_path):
-    ds = _install(_annotate(_ds()), tmp_path)
-    rid = _v1_result(ds)["provenance"]["result_id"]
-    envelopes = [
-        json.loads(DAT.dataset_export_differential(str(tmp_path / "x.tsv"), result_id=rid,
-                                                   contrast_id="a"))["error"],
-        json.loads(DAT.dataset_export_evidence_bundle(str(tmp_path / "b"), rid, contrast_id="a"))["error"],
-        json.loads(plot_tools.dataset_plot(kind="volcano", output="payload", result_id=rid,
-                                           contrast_id="a"))["error"],
-    ]
-    assert {e["code"] for e in envelopes} == {"DATASET_BAD_REQUEST"}
-    assert len({e["message"] for e in envelopes}) == 1
-
-
-def test_evidence_manifest_carries_definitions_for_engine_only(ds, tmp_path):
+def test_evidence_manifest_carries_engine_definitions(ds, tmp_path):
     out = _compare(reference_group="C", test_group="T")
     record = ds.last_differential
     evidence_export.export_dataset_evidence(ds, record, tmp_path / "b")
@@ -551,13 +487,6 @@ def test_evidence_manifest_carries_definitions_for_engine_only(ds, tmp_path):
     assert comparison["mean_definition"] == export_contract.MEAN_DEFINITION
     assert comparison["matrix_id"] == out["matrix_id"] and comparison["rule_hash"] == out["rule_hash"]
     assert comparison["contrast_id"] == "T_vs_C"
-    # v1 の bundle には足さない
-    v1 = _v1_result(ds)
-    evidence_export.export_dataset_evidence(ds, v1, tmp_path / "b1")
-    old = json.loads((tmp_path / "b1" / "manifest.json").read_text(encoding="utf-8"))["comparison"]
-    assert not {"effect_size_definition", "mean_definition", "matrix_id", "rule_hash",
-                "contrast_id", "statistics"} & set(old)
-    assert old["method"] == "Welch"
 
 
 def test_evidence_population_exclusions_from_matrix_entry(ds, tmp_path):
@@ -668,21 +597,6 @@ def test_engine_significant_flag_is_produced_once_by_as_two_group(ds):
         assert export_contract.row_significant(row, q_threshold=1.0, log2fc_threshold=0.0) is expected
 
 
-def test_v1_rows_keep_q_and_log2fc_rule(tmp_path):
-    ds = _install(_annotate(_ds()), tmp_path)
-    v1 = _v1_result(ds)
-    assert all("significant" not in r and "verdict" not in r for r in v1["results"])
-    for row in v1["results"]:
-        assert export_contract.row_significant(
-            row, q_threshold=v1["q_threshold"], log2fc_threshold=v1["log2fc_threshold"]
-        ) is export_contract.is_significant(q=row["q"], log2fc=row["log2fc"],
-                                            q_threshold=v1["q_threshold"],
-                                            log2fc_threshold=v1["log2fc_threshold"])
-    path = tmp_path / "v1.tsv"
-    export_dataset_result(ds, v1, path)
-    assert "significant_rule" not in path.read_text(encoding="utf-8")
-
-
 def test_novel_candidates_skip_engine_rows_that_are_not_changed(tmp_path):
     ds = _not_judgeable(_novel_ready(tmp_path))
     out = _compare(reference_group="C", test_group="T")
@@ -760,20 +674,6 @@ def test_no_confound_trace_without_complete_confounding(ds, tmp_path):
     manifest = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))
     assert "unadjusted_confounded" not in manifest["comparison"]
     assert "comparison" not in manifest["provenance"]["result"]
-
-
-def test_select_results_contrast_id_with_only_v1_results_is_reported_missing(tmp_path):
-    ds = _install(_annotate(_ds()), tmp_path)
-    rid = _v1_result(ds)["provenance"]["result_id"]
-    sel = feature_search.select_results(ds, None, contrast_id="T_vs_C")
-    assert [r["provenance"]["result_id"] for r in sel["results"]] == [rid]   # v1 は対比を持たないのでそのまま
-    assert len(sel["missing"]) == 1 and sel["missing"][0].startswith("contrast_id=T_vs_C: ")
-    # ツールは注記にして返す（黙って捨てない）
-    parsed = json.loads(DAT.dataset_feature_search(feature_ids=["f0"], merge_split=False,
-                                                   contrast_id="T_vs_C"))
-    assert any("contrast_id=T_vs_C" in note for note in parsed["notes"])
-    # 対比を指定しなければ何も足さない
-    assert feature_search.select_results(ds, None)["missing"] == []
 
 
 def test_select_results_interaction_only_record_is_reported_missing(tmp_path):

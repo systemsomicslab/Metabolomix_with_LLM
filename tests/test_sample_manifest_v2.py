@@ -221,7 +221,7 @@ def test_biological_id_change_is_detected_and_keeps_preprocessing():
                     "injection_order": i + 1, "biological_sample_id": f"bio{i}"}
                    for i, n in enumerate(ds.sample_names)])
     apply_metadata(ds, rows)
-    ds.pp_matrix = object()
+    ds.stat_matrices = {"mx": {}}
     ds.last_differential = {"x": 1}
 
     changed = _rows(*[{"sample_id": n, "source_file": f"{n}.wiff",
@@ -232,4 +232,4 @@ def test_biological_id_change_is_detected_and_keeps_preprocessing():
 
     assert "biological_sample_id" in report["changed_fields"]
     assert ds.last_differential is None
-    assert ds.pp_matrix is not None
+    assert ds.stat_matrices == {"mx": {}}

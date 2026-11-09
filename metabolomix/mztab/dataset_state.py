@@ -180,17 +180,12 @@ class DatasetState:
         self.artifact_paths: dict[str, list[str]] = {}
 
         # --- 解析状態フィールド（dataset_preprocess / dataset_pca / dataset_compare が設定） ---
-        # pp_matrix: 前処理済み行列。shape は (n_samples, n_features) — feature_matrix の転置。
-        # 前処理済みの試料名・特徴名は pp_sample_names / pp_feature_names が持つ。
-        self.pp_matrix = None
-        self.pp_sample_names: list[str] = []
-        self.pp_feature_names: list[str] = []
-        # roles: {sample_name: "sample"|"qc"|"blank"}。preprocess() と差次的解析の群構成で使う。
+        # 統計エンジンの行列と結果は stat_matrices と results に住む。
+        # roles: {sample_name: "sample"|"qc"|"blank"}。試料の表と根拠バンドルの役割。
         self.roles: dict[str, str] = {}
         # sample_meta: {sample_name: {role, batch, batch_source, run_order}}。
-        # 交絡判定（群⟂バッチ）とドリフト補正の材料。
+        # 根拠バンドルの試料表（注入順）と試料の表示の材料。
         self.sample_meta: dict = {}
-        self.preprocessing_recipe: dict = {}
         # last_pca / last_differential: 直近結果の全量。戻り値には要約だけを載せ、
         # 全量はここに置く（CLAUDE.md の戻り値肥大禁止）。
         # 読むのは dataset_export_differential と dataset_plot（pca / loadings / volcano）。
@@ -217,18 +212,9 @@ class DatasetState:
         # 上書きしない——比較定義・出力はsample_idsを、表示・群選択の見た目は
         # 引き続きsample_namesを使い分けられるようにするための別スロット。
         self.sample_ids: list[str] = []
-        # preprocess_id / preprocess_metadata_hash: 現在の前処理済み行列がどの計算から
-        # 出たか。派生結果（PCA・差次的解析）はこの ID を parent_ids に持つ。
-        self.preprocess_id: str | None = None
-        self.preprocess_metadata_hash: str | None = None
         # results: result_id -> 結果全量。図・エクスポートが「どの結果か」を
         # 名指しで選べるようにする（last_* は現在の既定を指すだけの別名）。
         self.results: dict = {}
-        # handoff_report: pipeline run から読み込んだとき（session_handoff.load_run_dataset）
-        # だけ設定する。{"restored": [{comparison_id, result_id, group_a, group_b}],
-        # "rejected": [{comparison_id, result_id, reason}]}。run の差次的結果のうち
-        # 指紋（データ・群）が一致して `results` へ戻したものと、戻さなかったもの。
-        self.handoff_report: dict | None = None
 
         # --- 出所の信用度（metabolomix/mztab/loading.py が設定する） ---
         # source_verification: verified（終了証跡と hash で裏取り済み）/

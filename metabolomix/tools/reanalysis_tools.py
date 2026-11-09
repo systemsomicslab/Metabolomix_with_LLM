@@ -636,7 +636,7 @@ def _novel_result_stats(ds, result: dict, source: dict, *,
     from metabolomix.analysis import feature_search
 
     def _rows(found):
-        # 統計エンジンの行は判定も渡す（新しい知見の候補は changed の行だけ。R16）。v1 の行は判定を持たない
+        # 統計エンジンの行は判定も渡す（新しい知見の候補は changed の行だけ。R16）。analysis-spec.v1 の行は判定を持たない
         return {row["feature"]: {"log2fc_test_over_ref": row.get("log2fc"),
                                  "p": row.get("p"), "q": row.get("q"),
                                  **({"verdict": row["verdict"]} if "verdict" in row else {})}
@@ -666,7 +666,7 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     SME（rank 1）の同定があり、質量誤差が m/z 帯ごとの許容幅（`ppm.default` と
     `ppm.bands: [{max_mz, ppm}]`）に入り、q が `q_max` 未満の特徴から、`exclude`
     （`feature_ids`・`inchikey_blocks`）を除いた一覧。統計は `statistics` が
-    `{"result_id"}`（`dataset_compare` の 2 群比較。対比が複数の結果は `"result_id#contrast_id"`。v1 の 2 群の結果も可。
+    `{"result_id"}`（`dataset_compare` の 2 群比較。対比が複数の結果は `"result_id#contrast_id"`。
     `dataset_compare` の結果は q に加えて判定が `changed` の行だけ）か `{"analysis_spec", "analysis_id"}`
     （**analysis-spec.v1 だけ**: `dataset_analysis_run` の v1 の spec のその解析。analysis-spec.v2 はここでは
     通らない——統計エンジンの結果は `dataset_compare` を回してその `result_id` を渡す）。q の昇順。`rule_hash` を返す。

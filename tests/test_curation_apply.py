@@ -53,12 +53,10 @@ def test_arf2_for_mztab_matches_the_batch_stem(tmp_path):
 # ---------- export_dataset_result への反映（Step 5） ----------
 
 def _prepared_dataset():
-    from metabolomix.analysis.dataset_service import compare_dataset, preprocess_dataset
+    from tests.engine_chain import compare_halves
     from tests.pipeline_fixtures import make_dataset
     ds = make_dataset()
-    preprocess_dataset(ds, {"normalize": "none", "impute": "half_min"})
-    result = compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
-    return ds, result
+    return ds, compare_halves(ds)
 
 
 def test_export_dataset_result_with_no_curation_has_no_meta_line(tmp_path):

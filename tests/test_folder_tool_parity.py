@@ -15,8 +15,8 @@ from metabolomix.core import handles, session_state
 from metabolomix.curation import flags as curation_flags
 from tests.curation_fixtures import match_result
 from tests.msdial_folder_fixtures import analysis_file_row, write_mddata, write_msdial_folder
+from tests.engine_chain import engine_preprocess
 from tests.test_dataset_opening import _job, _pipeline
-from tests.v1_chain import v1_preprocess
 
 
 @pytest.fixture(autouse=True)
@@ -183,9 +183,10 @@ def test_job_folder_carries_mztab_batch_and_injection_order(tmp_path):
     row = ds.sample_metadata_rows[0]
     assert row["provenance"]["injection_order"] == {
         "value": 9, "source": "mztab", "confidence": "unverified"}
-    result = json.loads(v1_preprocess())
-    assert result["status"] == "success"
-    assert "注入順（MTD" not in json.dumps(result, ensure_ascii=False)
+    # 統計エンジンも同じ注入順を読む（ドリフト補正の材料）
+    from metabolomix.analysis.stats.data import from_dataset
+    assert [s.injection_order for s in from_dataset(ds).samples] == [9, 8, 7, 6, 5, 4]
+    engine_preprocess()
 
 
 def test_mddata_declared_batch_wins_over_mztab_mtd(tmp_path):

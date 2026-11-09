@@ -64,6 +64,7 @@ __all__ = [
     "FIELDS_V2",
     "OPTIONAL_FIELDS",
     "apply_metadata",
+    "apply_sample_manifest",
     "parse_injection_order",
     "parse_manifest",
     "resolve_metadata",
@@ -640,7 +641,7 @@ def apply_metadata(ds, rows: list[dict]) -> dict:
 
 
 def pp_inputs_from_rows(sample_names: list[str], rows: list[dict]) -> tuple[dict, dict]:
-    """Task 9 で適用済みの実験情報シートを、前処理入力（roles/sample_meta）へ変換する。
+    """適用済みの実験情報シートを、役割と試料の付帯情報（roles/sample_meta）へ変換する。
 
     `ds.sample_metadata_rows` は `sample_manifest.resolve_metadata` が
     `ds.sample_names` と同じ順に揃えてから `apply_metadata` が書き込むので、
@@ -659,15 +660,9 @@ def pp_inputs_from_rows(sample_names: list[str], rows: list[dict]) -> tuple[dict
     for name, row in zip(sample_names, rows):
         # role はここでは "sample"/"qc"/"blank" へ絞り込まず、シートの値を
         # そのまま渡す（空欄だけ "sample" を既定にする）。明示 role="unknown"
-        # （sample_manifest が正当な列挙値として保持する）はそのまま
-        # preprocessing.preprocess() へ渡り、"blank" のように弾かれることも
-        # "qc"/"sample" として扱われることもない——preprocessing.py は
-        # role を `== "qc"` / `== "sample"` の完全一致と `drop_roles=("blank",)`
-        # でしか見ないため、"unknown" は前処理を素通りして解析行列に残る。
-        # role="unknown" を比較（compare_dataset）から除外するルールは Task 12
-        # （resolve_comparison の比較ガード、spec §7.4）が持つ。ここで先回りして
-        # 弾くと、その判定基準を2箇所に複製することになる。
-        # 一方 include=false は「数値評価（前処理）からの除外」（spec §8.1）
+        # （sample_manifest が正当な列挙値として保持する）を比較から外すのは
+        # 統計エンジンの試料の選択で、ここで先回りして弾くと判定基準を 2 か所に複製する。
+        # 一方 include=false は「数値評価からの除外」（spec §8.1）
         # ——role とは別の軸なので、ここでは弾かず、呼び出し側
         # （build_dataset_pp_inputs）が matrix/sample_names を絞る。
         role = row.get("role") or "sample"
@@ -722,3 +717,54 @@ def select_statistical_samples(rows: list[dict], groups: list[str]) -> list[dict
             if row.get("include", True)
             and row.get("role") == "sample"
             and row.get("group") in wanted]
+
+
+def apply_sample_manifest(ds, manifest_path: str) -> dict:
+    """実験情報シート(sample-manifest.v1)を読み込み、検証してから一括適用する（spec §7.3）。
+
+    ``parse_manifest`` → ``resolve_metadata`` → ``apply_metadata`` を
+    この順に呼ぶだけの薄い合成——検証で1件でも落ちれば ``apply_metadata`` 自身の
+    契約により ``ds`` には一切触れない（対話的なDatasetState経路にも同じ検証・出所・
+    無効化規則を適用する、spec §7.3）。
+
+    ``DatasetState`` は ``source_root`` 自体を保持しないため、実行時に予定した raw の
+    絶対パス（``ds.assay_sources``）から逆算する。
+    """
+    source_root, expected_sources = _raw_manifest_layout(ds)
+    rows = parse_manifest(Path(manifest_path), source_root=source_root,
+                          expected_sources=expected_sources)
+    resolved = resolve_metadata(ds, rows)
+    return apply_metadata(ds, resolved)
+
+
+def _raw_manifest_layout(ds) -> tuple[Path, list[str]]:
+    """sample-manifest.v1 検証に使う ``source_root``/相対パス一覧を、予定した raw の絶対パスから逆算する。
+
+    mzTab-M のアダプタのデータセットは ``ds.assay_sources``（abundance_assay[N] -> raw）を持つ。
+    解析フォルダのアダプタのデータセットは持たないので、試料ごとに
+    ``_raw_path_for_sample``（job の mzTab-M の場所 → ``.mddata`` の
+    ``file_path`` → assay id の優先順。resolve_metadata がシートの行を試料へ結ぶのと同じ関数）を使う。
+    """
+    paths = [Path(p) for p in (getattr(ds, "assay_sources", None) or {}).values() if p]
+    if not paths:
+        paths = [Path(p) for p in (
+            _raw_path_for_sample(ds, i)
+            for i in range(len(getattr(ds, "sample_names", []) or []))) if p]
+    if not paths:
+        if getattr(ds, "source_format", None) == "msdial_folder" and getattr(ds, "job_path", None):
+            reason = ("この job の mzTab-M の ms_run の場所にも .mddata の file_path にも、試料の raw の"
+                      "パスが無いため、シートの source_file を試料に結べません"
+                      "（読み直しても変わらない。raw のパスを持つ .mddata か mzTab-M が要る）")
+        elif getattr(ds, "source_format", None) == "msdial_folder":
+            reason = ("この解析フォルダのデータセットは、試料の raw のパスを持っていません"
+                      "（.mddata が無いか、.mddata に FileID ごとの file_path が無く、job の"
+                      " mzTab-M の場所も使っていない）。.mddata のある解析フォルダ、または"
+                      " job_path / pipeline_path から読み込み直してください")
+        else:
+            reason = ("raw参照(assay_sources)が無いため実験情報シートを検証できません"
+                      "（pipeline経由のjob_pathからload_datasetしたデータセットが必要です）")
+        raise DomainError("SAMPLE_MANIFEST_INVALID", f"{reason}。", {})
+    root = paths[0].parent if len(paths) == 1 else Path(os.path.commonpath([str(p) for p in paths]))
+    expected = [str(p.relative_to(root)) for p in paths]
+    return root, expected
+

@@ -63,19 +63,16 @@ def row_significant(row: dict, *, q_threshold, log2fc_threshold) -> bool:
     """結果の行 1 つの `significant`（書き出しの 15 列目・根拠バンドル・volcano の色・新しい知見の候補）。
 
     行が `significant` を持てばその値（`stats_results.as_two_group` が記録の閾値で 1 回だけ付けたもの。
-    消費側はそれを読み、閾値から計算し直さない）。持たなければ `is_significant` で、`verdict` を持つ行
-    （統計エンジン）は加えて `verdict == "changed"` のときだけ有意（R16: 検出が足りず量を判定できない
-    `inconclusive` の行は、q が小さく |log2fc| が大きくても有意にしない）。`verdict` の無い v1 の行は
-    `is_significant` のまま。
+    消費側はそれを読み、閾値から計算し直さない）。持たなければ `is_significant` に加えて
+    `verdict == "changed"` のときだけ有意（R16: 検出が足りず量を判定できない `inconclusive` の行は、
+    q が小さく |log2fc| が大きくても有意にしない。判定 `verdict` を持たない行は有意にしない）。
     """
     flag = row.get("significant")
     if flag is not None:
         return bool(flag)
-    if not is_significant(q=row.get("q"), log2fc=row.get("log2fc"),
-                          q_threshold=q_threshold, log2fc_threshold=log2fc_threshold):
-        return False
-    verdict = row.get("verdict")
-    return verdict is None or verdict == "changed"
+    return (is_significant(q=row.get("q"), log2fc=row.get("log2fc"),
+                           q_threshold=q_threshold, log2fc_threshold=log2fc_threshold)
+            and row.get("verdict") == "changed")
 
 
 def build_meta(*, group_a, n_a, group_b, n_b,
@@ -138,24 +135,16 @@ _UNIT_OF_SUBJECT_SOURCE = {"subject_id": "subject", "injection": "injection", "m
 MEAN_DEFINITION = "linear arithmetic mean over units after preprocessing"
 
 
-def is_engine_result(result: dict) -> bool:
-    """統計エンジンの結果（`as_two_group` の出力）か。来歴の `kind` が `compare` のもの。
-    `statistics` の有無では見ない（v1 の結果が同名の欄を持つ可能性に依存しない）。"""
-    return ((result or {}).get("provenance") or {}).get("kind") == "compare"
-
-
 def stats_meta_lines(result: dict) -> list[str]:
-    """統計エンジンの結果（`as_two_group` の出力）のメタ行。v1 の結果は [] 。
+    """統計エンジンの結果（`as_two_group` の出力）のメタ行。
 
     `msi_note` の後に足す行（契約の版は据え置き）。キーは既存のメタ行と重ならない
-    （`effect_size_definition` は pipeline v2 の文字列版と同名なので、エンジンの結果ではこちらだけが書く）。
+    （`effect_size_definition` はこの行だけが書く）。
     `mean_a` / `mean_b` は個体（単位）ごとの前処理後の線形値の算術平均（`mean_definition`）、
     `n_a` / `n_b` は注入の数のまま、`n_units_a` / `n_units_b` が比較に入った単位の数。
     `contrast_id` は `matrix_id` の行の末尾（どの対比を書いたかを残す）。`bh_n` は BH の母集団が空
     （対比の n が無い）なら 0。`significant_rule` は 15 列目 `significant` の規則（R16。`row_significant`）。
     """
-    if not is_engine_result(result):
-        return []
     stats = result["statistics"]
     rule = stats["verdict_rule"]
     bh = stats["bh_population"]

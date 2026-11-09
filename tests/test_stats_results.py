@@ -306,11 +306,8 @@ def test_as_two_group_rejects_interaction():
     assert _code(stats_results.as_two_group, rec2).code == "CONTRAST_NOT_TWO_GROUP"
 
 
-def test_as_two_group_passes_v1_two_group_through():
-    v1 = {"kind": "two_group", "a": "C", "b": "T", "results": [], "volcano": [],
-          "provenance": {"result_id": "res_x", "kind": "differential"}}
-    assert stats_results.as_two_group(v1) is v1
-    assert stats_results.contrast_ids(v1) == []
+def test_as_two_group_reads_only_compare_records():
+    assert stats_results.contrast_ids({"kind": "stat_pca"}) == []
     assert _code(stats_results.as_two_group, {"kind": "stat_pca"}).code == "ANALYSIS_RESULT_NOT_FOUND"
 
 

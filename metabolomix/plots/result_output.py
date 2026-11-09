@@ -31,7 +31,7 @@ _EXPLORATORY_NOTE = ("NOTE: exploratory only - drawn from an incomplete analysis
                      "run; samples/features may be missing.")
 
 #: spec §7.4(R16): allow_confounded=true で継続した比較は、図の中にもその旨が要る。
-#: 同じくASCII——`run_comparison`が`result["provenance"]["warnings"]`へ残す日本語の
+#: 同じくASCII——`as_two_group`が`result["provenance"]["warnings"]`へ足す日本語の
 #: 注記は図には使えない（豆腐になる）ので、ここだけ別文面で書く。
 _UNADJUSTED_CONFOUNDED_NOTE = (
     "NOTE: allow_confounded=true - group and batch are fully confounded; "
@@ -121,13 +121,10 @@ def save_result_figure(ds, result: dict, path: Path, *, kind: str,
 def _pca_plot_payload(result: dict) -> dict:
     """PCA 結果を、描画が食う散布図 dict（`points` を持つ形）へ揃える。
 
-    PCA の結果は経路によって**形が違う**。旧 ARF 経路の PCA は
-    最初から `points` を持っていたが、DatasetState 経路
-    （`analysis.dataset_service.pca_dataset` → `dataset_analysis.run_dataset_pca`）は
-    `scores`（name / role / PC1..PCn）しか持たない。ここで揃えずに `points` だけを
-    読むと、DatasetState 経路では点が 0 件のまま**枠だけの図**が保存され、しかも
-    ファイルは生成されて hash も通るので「必須出力は達成」と数えられてしまう
-    （pipeline の `results/pca.png` が実際にそうなっていた）。
+    `dataset_plot` の図の記録（`points` を持つ形）はそのまま、統計エンジンの PCA の記録
+    （`kind="stat_pca"`）は `dataset_pca_plot` で `points` へ射影する。`points` だけを読むと、
+    記録を渡された図は点が 0 件のまま**枠だけの図**が保存され、しかもファイルは生成されて
+    hash も通るので「必須出力は達成」と数えられてしまう。
 
     どちらの形でも点が取れなければ描かずに止める。空の散布図は「点が無いデータ」
     ではなく「入力の形が想定と違う」の症状で、図として出せば必ず誤読される。
@@ -138,7 +135,7 @@ def _pca_plot_payload(result: dict) -> dict:
     if projected is None:
         raise DomainError(
             "PCA_FIGURE_EMPTY",
-            "PCA 図に描ける点がありません（points も PC1/PC2 を持つ scores も"
+            "PCA 図に描ける点がありません（points も PC1/PC2 を持つ PCA の記録も"
             "見つかりません）。空の散布図は保存しません。",
             {"keys": sorted(result or {})})
     return projected

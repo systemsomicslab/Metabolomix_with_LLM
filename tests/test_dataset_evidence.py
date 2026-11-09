@@ -163,13 +163,6 @@ def test_build_evidence_matches_names_with_trailing_space():
     assert result["detected_mask"].tolist() == [[True, True], [True, False]]
 
 
-def test_detection_rates_are_per_feature():
-    """率の定義は形式非依存なので analysis 側が正準（evidence から再輸出しない）。"""
-    from metabolomix.analysis.preprocessing import detection_rates
-    mask = np.array([[True, True], [True, False]])
-    assert detection_rates(mask).tolist() == [1.0, 0.5]
-
-
 # --- DatasetState への適用 ---
 
 def _ds_with_features(n_features=2, sample_names=("s1", "s2")):

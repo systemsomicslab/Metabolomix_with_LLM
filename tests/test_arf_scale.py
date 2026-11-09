@@ -233,10 +233,9 @@ def _state(n_features: int, n_samples: int = 10) -> DatasetState:
 def test_estimate_state_bytes_counts_arrays_and_dicts():
     ds = _state(100, 10)  # 8000
     ds.detected_mask = np.zeros((100, 10), dtype=bool)  # 1000
-    ds.pp_matrix = np.zeros((10, 100))  # 8000
     ds.per_sample_mz = {"0": {"s0": 1.0, "s1": 2.0}, "1": {"s0": 1.0}}  # 3 要素
     ds.feature_metadata = {"0": {}, "1": {}}  # 2 件
-    assert handles.estimate_state_bytes(ds) == 8000 + 1000 + 8000 + 3 * 100 + 2 * 1500
+    assert handles.estimate_state_bytes(ds) == 8000 + 1000 + 3 * 100 + 2 * 1500
     assert handles.estimate_state_bytes(DatasetState()) == 0
 
 

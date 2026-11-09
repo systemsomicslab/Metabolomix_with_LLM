@@ -24,10 +24,9 @@ from metabolomix.tools import handle_tools, mztab_tools, stats_tools
 from metabolomix.tools import reanalysis_tools as R
 from tests.reanalysis_fixtures import NEG_FEATURES, write_mztab
 from tests.config_fixtures import use_config
-from tests.v1_chain import v1_differential, v1_preprocess
+from tests.engine_chain import FLAT, engine_compare, engine_preprocess
 
 GOLDEN = Path(__file__).parent / "fixtures" / "handle_golden_no_handle.json"
-HC, RA = ["HC1", "HC2", "HC3"], ["RA1", "RA2", "RA3"]
 UNKNOWN = "dh_000000000000"
 
 
@@ -146,21 +145,30 @@ def test_unknown_handle_is_an_error_not_the_global_session(tmp_path, pos_mztab):
         assert out["error"]["details"]["dataset_handle"] == UNKNOWN
 
 
+def _declare_groups(ds):
+    """試料名（HC1 …）はトークンに割れないので、群を MS-DIAL の試料の宣言として与える（QC は比較に入らない）。"""
+    ds.msdial_samples = [{"name": name, "group": name[:2] if name[:2] in ("HC", "RA") else None,
+                          "role": "qc" if name.startswith("QC") else "sample"}
+                         for name in ds.sample_names]
+    return ds
+
+
 def test_preprocess_on_handle_leaves_global_and_other_handle_untouched(pos_mztab):
     handle_tools.load_dataset(mztab_path=str(pos_mztab))
     a, b = _open(pos_mztab), _open(pos_mztab)
-    out = json.loads(v1_preprocess(normalize="pqn", dataset_handle=a))
-    assert out["status"] == "success"
-    assert handles.registry.get(a).dataset.pp_matrix is not None
-    assert handles.registry.get(b).dataset.pp_matrix is None
-    assert session_state.session.dataset.pp_matrix is None
+    other = set(handles.registry.get(b).dataset.stat_matrices)
+    interactive = set(session_state.session.dataset.stat_matrices)
+    out = engine_preprocess(normalize="pqn", dataset_handle=a)
+    assert out["matrix_id"] in handles.registry.get(a).dataset.stat_matrices
+    assert set(handles.registry.get(b).dataset.stat_matrices) == other
+    assert set(session_state.session.dataset.stat_matrices) == interactive
+    assert out["matrix_id"] not in other | interactive
 
 
 def test_differential_and_search_on_handle(pos_mztab):
     a = _open(pos_mztab)
-    v1_preprocess(dataset_handle=a)
-    diff = json.loads(v1_differential(group_a=HC, group_b=RA, dataset_handle=a))
-    assert diff["status"] == "success"
+    _declare_groups(handles.registry.get(a).dataset)
+    diff = engine_compare("HC", "RA", dataset_handle=a)
     search = json.loads(T.dataset_feature_search(feature_ids=["1"], dataset_handle=a))
     assert search["stats_source"]["result_ids"] == [diff["result_id"]]
     status = json.loads(mztab_tools.dataset_status(dataset_handle=a))
@@ -189,19 +197,26 @@ def test_library_load_into_handle_keeps_global_empty(monkeypatch, tmp_path, pos_
 
 
 def _scrub(value, tmp: str):
-    """乱数の ID・一時ディレクトリ・パスを含む指紋を伏せる（それ以外は 1 文字も変えずに比べる）。"""
+    """乱数・時刻の ID・一時ディレクトリ・パスを含む指紋を伏せる（それ以外は 1 文字も変えずに比べる）。"""
     import re
     text = json.dumps(value, ensure_ascii=False, sort_keys=True)
     text = re.sub(r"res_[0-9a-f]{32}", "res_X", text)
-    # データセットの指紋は読んだファイルのパスを含む（置き場所で変わる）
+    # データセットの指紋は読んだファイルのパスを含む（置き場所で変わる）。行列・比較の ID はその指紋から作る
     text = re.sub(r'"dataset_hash": "[0-9a-f]{64}"', '"dataset_hash": "X"', text)
+    text = re.sub(r"mx_[0-9a-f]{16}", "mx_X", text)
+    text = re.sub(r"cmp_[0-9a-f]{12}", "cmp_X", text)
+    # 統計の記録の ID は時刻を含む
+    text = re.sub(r"s_\d{8}T\d{6}Z_[0-9a-f]{8}", "s_X", text)
     for form in (tmp, tmp.replace("\\", "/"), json.dumps(tmp)[1:-1]):
         text = text.replace(form, "<TMP>")
     return json.loads(text)
 
 
 def golden_outputs(directory: Path) -> dict:
-    """ハンドルを渡さない呼び出しの戻り値（変更前のコードでも同じ関数で採る）。"""
+    """ハンドルを渡さない呼び出しの戻り値（変更前のコードでも同じ関数で採る）。
+
+    前処理と比較は統計エンジンのツール（D 段で v1 の鎖を消したときに golden の該当部分を採り直した）。
+    """
     path = write_mztab(directory / "AlignResult-1.mzTab")
     session_state.session = session_state.AnalysisSession()
     handle_tools.load_dataset(mztab_path=str(path))
@@ -215,12 +230,14 @@ def golden_outputs(directory: Path) -> dict:
     out = {
         "status": load(mztab_tools.dataset_status(), ["server_version", "update_available"]),
         "search_window": load(T.dataset_feature_search(min_mz=100, max_mz=600)),
-        "preprocess": load(v1_preprocess(normalize="pqn")),
-        "differential": load(v1_differential(group_a=HC, group_b=RA)),
-        "search_targets": load(T.dataset_feature_search(targets=[{
-            "target_id": "t1", "inchikey": "OEYIOHPDSNJKLS-UHFFFAOYSA-N",
-            "expected_mz": 104.107, "adduct": "[M]+", "rt_min": 1.2}])),
     }
+    _declare_groups(session_state.session.dataset)
+    out["preprocess"] = load(stats_tools.dataset_preprocess(**{**FLAT, "normalize": "pqn"}), ["record"])
+    out["differential"] = load(stats_tools.dataset_compare(
+        reference_group="HC", test_group="RA", matrix_id=out["preprocess"]["matrix_id"]), ["record"])
+    out["search_targets"] = load(T.dataset_feature_search(targets=[{
+        "target_id": "t1", "inchikey": "OEYIOHPDSNJKLS-UHFFFAOYSA-N",
+        "expected_mz": 104.107, "adduct": "[M]+", "rt_min": 1.2}]))
     return _scrub(out, str(directory))
 
 

@@ -253,7 +253,6 @@ def test_pipeline_folder_reads_run_manifest_but_not_matrices(tmp_path):
     ds = opened.dataset
     assert opened.adapter == "msdial_folder" and opened.kind == "pipeline_path"
     assert [r["group"] for r in ds.sample_metadata_rows] == ["ctrl", "ctrl", "case", "case"]
-    assert ds.handoff_report is None
     assert any('source="mztab"' in note for note in opened.notes)
 
 
@@ -906,7 +905,6 @@ def test_v3_run_opens_the_receipt_analysis_folder_with_manifest_rows(tmp_path):
     assert opened.dataset.analysis_dir.replace("\\", "/").endswith("negative/input")
     assert [r["group"] for r in opened.dataset.sample_metadata_rows] \
         == ["ctrl", "ctrl", "case", "case"]
-    assert opened.dataset.handoff_report is None
 
 
 def test_v3_receipt_relative_source_file_is_made_absolute(tmp_path):
@@ -987,7 +985,6 @@ def test_v3_run_mztab_source_has_no_restored_results(tmp_path):
     run = _v3_run(tmp_path, ("negative", "positive"), rows=rows)
     opened = open_dataset(pipeline_path=str(run), polarity="positive", source="mztab")
     assert opened.adapter == "mztab" and opened.polarity == "positive"
-    assert opened.dataset.handoff_report is None
     assert not opened.dataset.results
     assert [r["group"] for r in opened.dataset.sample_metadata_rows] \
         == ["ctrl", "ctrl", "case", "case"]

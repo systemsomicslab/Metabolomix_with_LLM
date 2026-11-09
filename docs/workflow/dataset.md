@@ -117,7 +117,7 @@ mzTab-M の evidence と同じ候補（`arf_candidates()`。pipeline はどれ�
 壊れていれば code はそのまま（`MZTAB_STRUCTURE_INVALID`）で、`directory` で開く道を案内する。ジョブが記録した付随
 アーティファクト（`job_artifact_paths()`）は mzTab-M のアダプタと同じく `artifact_paths` に載せる。
 pipeline の run を解析フォルダで読むときに run から引き継ぐのは解決済みの試料対応表だけで、
-差次的結果は `source="mztab"`（下の pipeline_path 経路）だけが載せる。
+run が計算した差次的結果はどちらの経路でも載せない（比較は dataset_compare でやり直す）。
 
 mztab_path 経路（直接指定）:
 1. metabolomix/dataset/opening.py _load()
@@ -177,45 +177,14 @@ pipeline_path 経路（`source="mztab"`。完了した run の成果物をまと
 5.       └─ metabolomix/pipeline/store.py load_run()
 6.    └─ metabolomix/mztab/loading.py load_dataset_state()
 7.    └─ metabolomix/pipeline/session_handoff.py run_manifest_rows()
-8.    └─ metabolomix/pipeline/session_handoff.py restore_differentials()
-9.       └─ metabolomix/pipeline/store.py current_result_refs()
-10.      └─ metabolomix/pipeline/store.py read_result_data()
-11.      └─ metabolomix/pipeline/session_handoff.py _handoff_rejection()
-12.         └─ metabolomix/analysis/result_state.py dataset_fingerprint()
-13.         └─ metabolomix/analysis/result_state.py group_fingerprint()
-14.      └─ metabolomix/pipeline/session_handoff.py _run_preprocess_parameters()
-15.         └─ metabolomix/pipeline/store.py read_result_data()
-16. └─ metabolomix/tools/mztab_tools.py _handoff_lines()
 
-dataset・解決済み試料対応表・差次的結果を**同じ run から**載せる。
-別の run の結果を混ぜられると、群の対応が黙ってずれた統計が出るため。
-
-run の差次的結果（`differential:<comparison_id>`）は、試料対応表を戻した**後**に
-データの指紋（`provenance.dataset_hash`）と群の指紋（`group_fingerprint`）を今の
-DatasetState と照合し、一致したものだけを `ds.results` へ戻す。result_id は付け替えない
-（pipeline の TSV のメタ行と同じ ID）。来歴に `handoff`（pipeline_root・comparison_id）を
-足すので、`result_state.is_current` は ID と前処理ではなく指紋で有効性を見る。
-`ds.last_differential` は設定しない（戻した結果は result_id で名指しして使う）。
-親の前処理（run の `preprocess` 成果物）は `ds.results` へ戻さず、そのレシピ
-（`resolved_recipe`）だけを `provenance.handoff.preprocess` へ写す。差次的結果の親は
-最後の前処理とは限らない（resume で前処理は作り直されるが、差次的工程は skip されうる）
-ので、ここだけは履歴を result_id で引いて hash を照合する。読めなければ None で、
-書き出しのメタ行 `# preprocess = ...` は session の前処理へフォールバックせず
-`unknown（…）` と書く（`dataset_export._preprocess_parameters`）。
-読むのは `current_result_refs()` が選ぶ今の ref だけ（export が同じ比較を再永続化すると
-履歴に古い ref が残るため）で、今の ref の成果物が改変されていれば
-`RESULT_INTEGRITY_MISMATCH` で読み込みごと止める。戻さなかったものは
-`ds.handoff_report["rejected"]` に理由（`legacy_result_without_dataset_hash` /
-`dataset_mismatch` / `group_mismatch`）つきで残り、要約に並ぶ。`pipeline_resume` には
-差次的工程だけを再計算させる手順が無いため、要約は理由ごとに次の一手を添える:
-指紋を持たない旧 run の結果とデータ違いには session での `dataset_preprocess` →
-`dataset_compare`、群違いには実験情報シート（`dataset_set_sample_metadata` で
-与えた群）の確認か、今の群のままの再計算。`result_state.is_current` の handoff 分岐は
-`kind == "differential"` の結果にだけ当たり、他の kind が handoff を名乗っていても通さない。
+dataset と解決済み試料対応表を**同じ run から**載せる。
+別の run の試料対応表を混ぜられると、群の対応が黙ってずれた統計が出るため。
+run が計算した差次的結果は戻さない（旧 v1 の run を開いたときは opening の注記がその旨を言う）。
+比較は `dataset_preprocess` → `dataset_compare` でやり直す。
 
 試料対応表は `record["inputs"]["manifest"]`（`resolve_metadata` が書く行）から戻す
-（`run_manifest_rows`）。無いと群の指紋が「群なし」になり、run の差次的結果は
-すべて `group_mismatch` になる。
+（`run_manifest_rows`）。
 
 読み込みは「読めたか」だけでなく「どれだけ信用してよいか」も返す。
 `source_verification` は終了証跡（exit code・identity）とファイル hash が揃って初めて
@@ -285,7 +254,7 @@ TSV（`query` は因子トークン。旧 `dataset_status(view="samples")` の `
 試料・特徴を解析から外す（可逆）。状態は `DatasetState.excluded_samples` /
 `excluded_features`（名前・特徴 ID -> 理由）。入力の指紋には入れず、変わったときだけ
 `metadata_revision` を進めて前処理済み行列から先の結果を古くする（`apply_metadata` と同じ
-`invalidate_results` の経路）。除外を当てるのは前処理（統計エンジンは `dataset_preprocess` が `study_inputs` で入力へ写す。v1 は `run_dataset_preprocess`）。
+`invalidate_results` の経路）。除外を当てるのは前処理（統計エンジンの `dataset_preprocess` が `study_inputs` で入力へ写す）。
 同じ経路で統計エンジンの行列（`ds.stat_matrices`）も
 空にする（除外の前の行列 ID は使えなくなる）。
 
@@ -295,11 +264,10 @@ TSV（`query` は因子トークン。旧 `dataset_status(view="samples")` の `
 4.    └─ metabolomix/analysis/dataset_exclusions.py _resolve_features()
 5.    └─ metabolomix/analysis/result_state.py invalidate_results()
 
-除外の適用（v1 の前処理 `run_dataset_preprocess` の中。統計エンジンの `dataset_preprocess` は `stats_results.study_inputs` が `ds.excluded_*` を `from_dataset` の入力へ写す）:
-1. metabolomix/analysis/dataset_analysis.py run_dataset_preprocess()
-2. └─ metabolomix/analysis/dataset_analysis.py build_dataset_pp_inputs()
-3.    └─ metabolomix/analysis/dataset_analysis.py included_sample_indices()
-4. └─ metabolomix/analysis/dataset_analysis.py _drop_excluded_features()
+除外の適用（統計エンジンの `dataset_preprocess` の中。`stats_results.study_inputs` が `ds.excluded_*` を `from_dataset` の入力へ写す）:
+1. metabolomix/tools/stats_tools.py dataset_preprocess()
+2. └─ metabolomix/analysis/stats_results.py study_inputs()
+3. └─ metabolomix/analysis/stats/data.py from_dataset()
 
 ## dataset_list
 

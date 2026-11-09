@@ -24,8 +24,6 @@
 `pathway_project` の既定の前処理も同じ `register_default` → `store_matrix` を通る）。`injection_columns` は手順 2 が設定に写し、
 個体のまとめ（手順 5 の `preprocess()` の中の `collapse`）の鍵から外す。
 
-（v1 の前処理 `dataset_analysis.run_dataset_preprocess` は、pipeline の前処理工程が読む `pp_*` を作る。D 段で消える。）
-
 ## dataset_compare
 
 統計エンジンの比較（spec 2026-11-06 §5〜§9・§12）。群の指定（手順 2）を spec v2 の対比へ写す。入力側は手順 3 の
@@ -114,21 +112,17 @@ spec v2 の比較（手順 15〜18。群が 1 つ・探索専用・完全交絡�
 やり直した後の古い結果を書くと、TSV の数字と現在の前処理条件が並んだファイルができ、
 どちらも正しく見えてずれが分からない）と、**探索専用のデータセットでないか**
 （中断された実行の出力では、欠けた検体が「その群には無い」ようにしか見えない）。
-`dataset_compare` の結果（統計エンジン）は、対比を 1 つ選んで（複数あるときは `contrast_id` か `result_id#contrast_id`。`stats_results.split_result_ref`）手順 4 の `as_two_group` で 2 群の形に読み替えてから書き、メタ行に `stats_meta_lines`（検定・判定規則・BH の母集団・単位・`matrix_id` など）が足される。前処理条件は登録した行列の設定から取る。以降は v1 の結果の説明: メタ行の前処理条件は `ds.preprocessing_recipe`（今の状態）ではなく、その結果が親に
-持つ前処理の `provenance.effective_parameters` から取る。pipeline run から引き継いだ結果
-（来歴に `handoff`）は親の前処理が `ds.results` に無いので、引き継ぎ時に写した
-`provenance.handoff.preprocess` を使い、無ければ `unknown（…）` と書く——session の
-`preprocessing_recipe` へは決してフォールバックしない。出力は一時ファイルへ書いてから
+`dataset_compare` の結果（統計エンジン）は、対比を 1 つ選んで（複数あるときは `contrast_id` か `result_id#contrast_id`。`stats_results.split_result_ref`）手順 4 の `as_two_group` で 2 群の形に読み替えてから書き、メタ行に `stats_meta_lines`（検定・判定規則・BH の母集団・単位・`matrix_id` など）が足される。前処理条件は登録した行列の設定から取る。出力は一時ファイルへ書いてから
 置換するので、途中で落ちた出力が「新しい完成品」として残らない。
 
 1. metabolomix/tools/dataset_analysis_tools.py  dataset_export_differential()
 2. └─ metabolomix/analysis/dataset_export.py  export_dataset_result()
 3. │  └─ metabolomix/analysis/result_state.py  assert_current()
 4. │  └─ metabolomix/analysis/stats_results.py  as_two_group()（`dataset_compare` の結果の対比 1 つを 2 群の形に読み替える。各行の `significant`（判定が changed のときだけ）と、`allow_confounded` で完全交絡を越えた比較の `provenance.comparison` をここで付ける）
-5. │  └─ metabolomix/analysis/export_contract.py  row_significant()（行の印を読む。印の無い v1 の行は `is_significant()`）
+5. │  └─ metabolomix/analysis/export_contract.py  row_significant()（行の印を読む。印の無い行は `is_significant()` かつ判定が changed）
 6. │  └─ metabolomix/analysis/dataset_export.py  _meta_lines()
-7. │  │  └─ metabolomix/analysis/dataset_export.py  _preprocess_parameters()
-8. │  │  └─ metabolomix/analysis/export_contract.py  stats_meta_lines()（エンジンの結果だけ）
+7. │  │  └─ metabolomix/analysis/dataset_export.py  _engine_preprocess()
+8. │  │  └─ metabolomix/analysis/export_contract.py  stats_meta_lines()
 9. │  │  └─ metabolomix/analysis/export_contract.py  build_meta()
 10. │  └─ metabolomix/analysis/export_contract.py  format_row()
 11. │  └─ metabolomix/analysis/dataset_export.py  _atomic_write_text()
@@ -168,22 +162,21 @@ MCP も import しない。ツール層の仕事は、極性の出所を決め�
 23. │     ├─ metabolomix/analysis/feature_search.py  merged_dataset()
 24. │     │  └─ metabolomix/analysis/alignment_qc.py  merge_matrix_columns()
 25. │     └─ metabolomix/analysis/feature_search.py  retest_merged()
-26. │        ├─ metabolomix/analysis/feature_search.py  _result_recipe()
-27. │        ├─ metabolomix/analysis/dataset_analysis.py  run_dataset_preprocess()
-28. │        ├─ metabolomix/analysis/differential.py  two_group_test()
-29. │        └─ metabolomix/analysis/differential.py  add_fdr()
+26. │        ├─ metabolomix/analysis/stats/data.py  from_dataset()
+27. │        ├─ metabolomix/analysis/stats/data.py  merge_feature_columns()
+28. │        ├─ metabolomix/analysis/stats/spec_v2.py  run_spec_v2()
+29. │        └─ metabolomix/analysis/stats_results.py  as_two_group()
 30. ├─ metabolomix/analysis/feature_search.py  result_summaries()
 31. ├─ metabolomix/analysis/result_state.py  dataset_fingerprint()
 32. └─ metabolomix/tools/dataset_analysis_tools.py  _curation_note()
 33.    ├─ metabolomix/curation/apply.py  arf2_for_mztab()
 34.    └─ metabolomix/curation/apply.py  flags_for_arf2()
 
-`dataset_compare` の結果（`compare` の記録）は `select_results` が対比ごとに 2 群の形に広げる（対比が複数なら ID は `result_id#contrast_id`、交互作用は除く）。`merge_split` の検定のやり直しは、その結果の spec で `stats/data.py` `from_dataset()` → `merge_feature_columns()` → `spec_v2.run_spec_v2()` → `as_two_group()` を通す（`retest_merged` のエンジン経路）。以降は v1 の結果の説明。
+`dataset_compare` の結果（`compare` の記録）は `select_results` が対比ごとに 2 群の形に広げる（対比が複数なら ID は `result_id#contrast_id`、交互作用は除く）。`merge_split` の検定のやり直しは、その結果の spec で `stats/data.py` `from_dataset()` → `merge_feature_columns()` → `spec_v2.run_spec_v2()` → `as_two_group()` を通す（`retest_merged`）。
 
 `merge_split`（既定 true）は、割れの組（`alignment_qc` の `merge_groups`）がデータセットに 1 つでもあれば、
 組を試料ごとの大きい方の値で 1 列にまとめた行列（前処理の**前**の生の値・検出状態は OR）に、差次的結果を
-計算したレシピ（pipeline の run から引き継いだ結果は来歴の `handoff.preprocess`、session の結果は親の前処理の
-`effective_parameters`）を当て直し、同じ 2 群検定と**まとめた後の全特徴**での BH をやり直して、`stats` の
+計算した spec を当て直し、同じ検定と**まとめた後の全特徴**での BH をやり直して、`stats` の
 **すべての行**をそこから出す（1 つの表に 2 つの BH の母集団を混ぜない）。組が無ければ検定はやり直さない。
 目標照合では `merge_plan` を照合の前に作り、`match_target(merged_from=merge_map(...))` が組を 1 つの候補
 （残す ID）として数える。
@@ -203,21 +196,14 @@ result_id は計算のたびに発行される UUID なので入れず、統計�
 `apply_metadata` の契約により `session.dataset` は一切変更しない。
 
 1. metabolomix/tools/dataset_analysis_tools.py  dataset_set_sample_metadata()
-2. └─ metabolomix/analysis/dataset_service.py  apply_sample_manifest()
-3.    └─ metabolomix/analysis/dataset_service.py  _raw_manifest_layout()
+2. └─ metabolomix/analysis/sample_manifest.py  apply_sample_manifest()
+3.    └─ metabolomix/analysis/sample_manifest.py  _raw_manifest_layout()
 4.    └─ metabolomix/analysis/sample_manifest.py  parse_manifest()（任意の列 `subject_id` を読む。`sample_meta` に持ち、統計エンジンの前処理が反復注入を 1 個体にまとめる鍵に使う）
 5.    └─ metabolomix/analysis/sample_manifest.py  resolve_metadata()
 6.    └─ metabolomix/analysis/sample_manifest.py  apply_metadata()
 7.       └─ metabolomix/analysis/result_state.py  invalidate_results()
 
-pipeline が比較を明示するときに使う `resolve_comparison`/`run_comparison`
-（`metabolomix/analysis/dataset_service.py`）は、群名だけで対照/処置の向きを決めない・
-QC/blank/unknown/standard・`include=false` を混ぜない（選択規則は
-`metabolomix/analysis/sample_manifest.py` `select_statistical_samples()` が唯一の定義）・
-完全交絡を `allow_confounded=true` の
-明示なしには通さない、という前提検証を `compare_dataset()` の前に挟む。対話ツール
-`dataset_compare`（統計エンジン）も完全交絡（`allow_confounded` なしには `STATISTIC_CONFOUNDED`）・`include=false`・非 sample の役割・
-群の明示は同じく守る。違うのは検定で、`dataset_compare` は moderated t（既定）、pipeline の差次的は v1 の Welch t（USAGE.md 参照）。
+対話ツール `dataset_compare`（統計エンジン）は、群名だけで対照/処置の向きを決めない・QC/blank/unknown/standard・`include=false` を混ぜない・完全交絡を `allow_confounded=true` の明示なしには通さない（`STATISTIC_CONFOUNDED`）。
 
 ## dataset_export_evidence_bundle
 
@@ -227,7 +213,7 @@ QC/blank/unknown/standard・`include=false` を混ぜない（選択規則は
 2.    └─ metabolomix/tools/handle_tools.py  _alignment_files()（対話のセッションのとき。ハンドルはその `.arf2` / `.dcl`）
 3.    └─ metabolomix/analysis/evidence_export.py  export_dataset_evidence()
 4.       └─ metabolomix/analysis/evidence_export.py  _samples_table()
-5.       └─ metabolomix/analysis/evidence_export.py  _intensity_rows()
+5.       └─ metabolomix/analysis/evidence_export.py  _engine_intensity_rows()
 6.       └─ metabolomix/analysis/evidence_export.py  dataset_spectrum_links()
 7.          └─ metabolomix/analysis/evidence_export.py  _id_space_check()
 8.          └─ metabolomix/analysis/evidence_export.py  link_alignment_spectra()

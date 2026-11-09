@@ -1,78 +1,165 @@
 {
  "differential": {
-  "a": "group_a",
-  "b": "group_b",
-  "caveats": [
-   "交絡評価不可: バッチ情報が無いため交絡判定不可。",
-   "小n（group_a=3, group_b=3）につき検出力が限られます。",
-   "log2FC の向き: 正なら group_b が高い（上昇）、負なら group_a が高い（低下）。"
+  "bh_population": {
+   "n_by_contrast": {
+    "RA_vs_HC": 3
+   },
+   "name": "matrix",
+   "q_interpretation": "discovery_fdr"
+  },
+  "ci_level": 0.95,
+  "confounding": {
+   "batch_status": "not_evaluable",
+   "batch_table": {
+    "HC": {},
+    "RA": {}
+   },
+   "warnings": [
+    {
+     "code": "batch_not_evaluable",
+     "message": "バッチが不明な生体試料があるため、群とバッチの交絡は評価できません（交絡なしとは言えません）。"
+    }
+   ]
+  },
+  "contrasts": [
+   {
+    "contrast_id": "RA_vs_HC",
+    "large_changes": 0,
+    "n_not_tested": 0,
+    "n_tested": 3,
+    "presence": {
+     "available": false,
+     "n_q_below": null
+    },
+    "reference": "HC",
+    "test": "RA",
+    "verdicts": {
+     "changed": 1,
+     "inconclusive": 0,
+     "unchanged": 2
+    }
+   }
   ],
-  "contract_version": 1,
-  "differential_contract_version": 1,
-  "kind": "two_group",
-  "log2fc_sign": "positive means group_b is higher",
-  "log2fc_threshold": 1.0,
-  "log_transform": true,
-  "n_a": 3,
-  "n_b": 3,
-  "q_threshold": 0.05,
-  "result_id": "res_X",
-  "results_note": "全特徴の結果と volcano 点列は本要約に非同梱（セッション保持）。InChIKey 付きの全行が必要なら dataset_export_differential を実行してください。",
-  "samples_a": [
-   "HC1",
-   "HC2",
-   "HC3"
-  ],
-  "samples_b": [
-   "RA1",
-   "RA2",
-   "RA3"
-  ],
+  "effect_size_definition": {
+   "name": "log2_mean_difference"
+  },
+  "group_n": {
+   "HC": 3,
+   "RA": 3
+  },
+  "matrix_id": "mx_X",
+  "next": "全行は result_id で保持した（直近の結果として書き出し・図の既定になる）。対比が複数の結果はdataset_export_differential・dataset_export_evidence_bundle・dataset_plot(kind=volcano)・dataset_feature_search には contrast_id を渡して対比を選ぶ（交互作用の対比は 2 群の形にならない）",
+  "omnibus": null,
+  "prior": {
+   "df_prior": 219.289196,
+   "s2_prior": 0.008115
+  },
+  "result_id": "cmp_X",
+  "rule_hash": "024b67ea0001ae69ba78acbc6e88c1ee2c318ec46fec1833f9bdaabca3ad912a",
   "status": "success",
-  "summary": {
-   "n_down": 0,
-   "n_significant": 0,
-   "n_tested": 3,
-   "n_up": 0,
-   "top": []
-  }
+  "subject_source": "injection",
+  "test": "moderated_t",
+  "top": "contrast_id\tfeature_id\tname\tlog2fc\tci_low\tci_high\tq\tverdict\nRA_vs_HC\t1\tCholine\t0.8361\t0.6745\t0.9976\t2.89e-07\tchanged",
+  "verdict_rule": {
+   "equivalence_fc": 1.2,
+   "equivalence_log2": 0.263034,
+   "q_threshold": 0.05
+  },
+  "warnings": [
+   {
+    "code": "batch_not_evaluable",
+    "message": "バッチが不明な生体試料があるため、群とバッチの交絡は評価できません（交絡なしとは言えません）。"
+   }
+  ]
  },
  "preprocess": {
-  "caveats": [
-   "この試料群には QC もブランクも含まれていないため、ブランク背景除去・QC-RSD フィルタ・QC ドリフト補正はいずれも適用できません（要求の有無によらず）。注入順があれば、PCA の run_order_correlation でドリフトの有無だけは確認できます。",
-   "この mzTab-M は注入順（MTD assay[N]-custom[...] の MS:4000089 injection sequence label）を持たないため、QC ドリフト補正は実施できません。注入順に依存する品質評価が必要なら、解析フォルダ（.arf）を load_dataset の directory で読んでください。"
-  ],
-  "excluded_from_matrix": {},
-  "features_before": 3,
-  "features_removed_total": 0,
-  "n_features": 3,
-  "n_samples": 8,
-  "next": "dataset_pca または dataset_compare を実行してください",
-  "recipe_applied": [
-   "normalize",
-   "impute"
-  ],
-  "result_id": "res_X",
-  "role_counts": {
-   "sample": 8
+  "groups": {
+   "HC": 3,
+   "RA": 3
   },
+  "matrix_id": "mx_X",
+  "n_features": 3,
+  "n_features_before": 3,
+  "n_qc": 2,
+  "n_units": 6,
+  "next": "dataset_compare（2 群以上の比較）または dataset_pca を、この matrix_id を渡して（または省略して既定の前処理で）実行してください",
+  "quant": null,
   "status": "success",
-  "steps": {
-   "impute": {
-    "method": "half_min",
-    "missing": 0
+  "steps": [
+   {
+    "excluded_by_role": {},
+    "n_blank": 0,
+    "n_excluded_by_include": 0,
+    "n_qc": 2,
+    "n_sample": 6,
+    "status": "applied",
+    "step": "select"
    },
-   "normalize": {
-    "factors_finite": 8,
+   {
+    "reason": "mode_off",
+    "status": "skipped",
+    "step": "drift"
+   },
+   {
+    "dropped": 0,
+    "filters": {
+     "blank_ratio": {
+      "reason": "disabled",
+      "status": "skipped"
+     },
+     "d_ratio": {
+      "reason": "disabled",
+      "status": "skipped"
+     },
+     "detection": {
+      "reason": "disabled",
+      "status": "skipped"
+     },
+     "qc_rsd": {
+      "reason": "disabled",
+      "status": "skipped"
+     }
+    },
+    "n_features_in": 3,
+    "reason": "all_filters_skipped",
+    "status": "skipped",
+    "step": "filter"
+   },
+   {
+    "factors_set_to_one": 0,
     "method": "pqn",
-    "n_samples": 8,
-    "pqn_reference": "all_sample_median"
+    "n_factor_samples": 8,
+    "n_factors": 8,
+    "n_unscaled_samples": 0,
+    "reference": "qc",
+    "requested": "pqn",
+    "status": "applied",
+    "step": "normalize"
    },
-   "qc_health": {
-    "checked": 0,
-    "failed": []
+   {
+    "missing_cells": {
+     "non_finite": 0,
+     "non_positive": 0
+    },
+    "qc_missing_cells": {
+     "non_finite": 0,
+     "non_positive": 0
+    },
+    "status": "applied",
+    "step": "log2"
+   },
+   {
+    "collapsed_units": 0,
+    "n_injections": 6,
+    "n_units": 6,
+    "status": "applied",
+    "step": "collapse",
+    "subject_source": "injection",
+    "subjects_with_multiple_units": 0
    }
-  }
+  ],
+  "subject_source": "injection",
+  "warnings": []
  },
  "search_targets": {
   "candidates": "target_id\tfeature_id\tadduct\tadduct_tier\ttheoretical_mz\tmz\tppm\trt\tdelta_rt\tevidence\tsme_rank\tannotated_name\tannotated_inchikey\tqualified\treasons\tmerged_from\nt1\t1\t[M]+\t1\t104.107\t104.107\t0.0\t1.2\t0.0\tsme_match\t1\tCholine\tOEYIOHPDSNJKLS-UHFFFAOYSA-N\ttrue\t\t",
@@ -97,16 +184,14 @@
      "n_tested": 3
     },
     "caveats": [
-     "交絡評価不可: バッチ情報が無いため交絡判定不可。",
-     "小n（group_a=3, group_b=3）につき検出力が限られます。",
-     "log2FC の向き: 正なら group_b が高い（上昇）、負なら group_a が高い（低下）。"
+     "バッチが不明な生体試料があるため、群とバッチの交絡は評価できません（交絡なしとは言えません）。"
     ],
-    "group_a": "group_a",
-    "group_b": "group_b",
+    "group_a": "HC",
+    "group_b": "RA",
     "log2fc_sign": "positive means group_b is higher",
     "n_a": 3,
     "n_b": 3,
-    "result_id": "res_X"
+    "result_id": "cmp_X"
    }
   ],
   "rule": {
@@ -138,14 +223,14 @@
     }
    ]
   },
-  "stats": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\tmerged_from\n1\tres_X\ttested\t0.7888\t0.001732\t0.005195\t11.04\t19.78\t\t\t",
+  "stats": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\tmerged_from\n1\tcmp_X\ttested\t0.8361\t9.643e-08\t2.893e-07\t11.1\t19.78\t\t\t",
   "stats_source": {
    "dataset_hash": "X",
    "result_ids": [
-    "res_X"
+    "cmp_X"
    ]
   },
-  "stats_unmerged": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\n1\tres_X\ttested\t0.7888\t0.001732\t0.005195\t11.04\t19.78\t\t",
+  "stats_unmerged": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\n1\tcmp_X\ttested\t0.8361\t9.643e-08\t2.893e-07\t11.1\t19.78\t\t",
   "targets": [
    {
     "adduct_tier_used": 1,

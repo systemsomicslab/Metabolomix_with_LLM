@@ -20,16 +20,10 @@ def _ds() -> DatasetState:
     ds.feature_matrix = np.arange(6, dtype=float).reshape(2, 3)
     ds.detected_mask = np.ones((2, 3), dtype=bool)
     ds.feature_metadata = {"f1": {"name": "x"}, "f2": {"name": "y"}}
-    ds.pp_matrix = np.zeros((3, 2))
-    ds.pp_sample_names = ["s1"]
-    ds.pp_feature_names = ["f1"]
+    ds.stat_matrices = {"mx": {}}
     ds.results = {"r": {"v": 1}}
     ds.last_pca = {"p": 1}
     ds.last_differential = {"d": 1}
-    ds.preprocess_id = "pp"
-    ds.preprocess_metadata_hash = "h"
-    ds.preprocessing_recipe = {"a": 1}
-    ds.handoff_report = {"restored": []}
     ds.roles = {"s1": "sample", "s2": "qc", "s3": "blank"}
     ds.sample_meta = {"s1": {"batch": 1}, "s2": {"batch": 2}, "s3": {"batch": 3}}
     ds.sample_ids = ["i1", "i2", "i3"]
@@ -65,11 +59,8 @@ def test_derive_resets_results_and_ids():
                     state=_state())
     assert new is not ds and new.dataset_id != ds.dataset_id
     assert new.dataset_id.startswith("ds_")
-    assert new.results == {}
-    assert new.pp_matrix is None and new.pp_sample_names == [] and new.pp_feature_names == []
+    assert new.results == {} and new.stat_matrices == {}
     assert new.last_pca is None and new.last_differential is None
-    assert new.preprocess_id is None and new.preprocess_metadata_hash is None
-    assert new.preprocessing_recipe == {} and new.handoff_report is None
     assert new.source_format == "msdial_folder"
     assert new.quant_state["normalized"] is True
     assert float(new.feature_matrix[1, 2]) == 10.0

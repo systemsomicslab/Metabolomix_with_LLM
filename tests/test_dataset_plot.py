@@ -18,7 +18,6 @@ from metabolomix.tools.stats_tools import dataset_pca
 from tests.config_fixtures import use_config
 from tests.curation_fixtures import write_alignment_set
 from tests.msdial_folder_fixtures import analysis_file_row, write_mddata
-from tests.v1_chain import v1_differential, v1_pca, v1_preprocess
 
 PNG_MAGIC = b"\x89PNG"
 
@@ -61,23 +60,15 @@ def _set_metadata(ds, *, group=None, batch=None):
     sample_manifest.apply_defaults_and_inputs(ds, rows)
 
 
-def _analysed(*, with_differential=True) -> DatasetState:
-    ds = _synthetic()
-    _set_metadata(ds, group=lambda n: n.split("_")[0],
-                  batch=lambda n: "b1" if n.endswith(("0", "1")) else "b2")
-    v1_preprocess()
-    assert json.loads(dataset_pca(n_components=3))["status"] == "success"
-    if with_differential:
-        a = [n for n in ds.pp_sample_names if n.startswith("ctrl")]
-        b = [n for n in ds.pp_sample_names if n.startswith("treat")]
-        assert json.loads(v1_differential(group_a=a, group_b=b))["status"] == "success"
-    return ds
+def _analysed() -> DatasetState:
+    """統計エンジンの前処理・PCA・2 群比較を済ませたデータセット（`_analysed_engine` の ds）。"""
+    return _analysed_engine()[0]
 
 
 def _analysed_engine():
     """統計エンジンの前処理・PCA・2 群比較（`dataset_compare`）で結果を作る。MCP から作れる状態はこちら。
 
-    戻り値は (ds, pca_id, compare_id)。v1 の結果（`_analysed`）は pipeline の引き渡しだけが作る形。
+    戻り値は (ds, pca_id, compare_id)。
     """
     from metabolomix.tools.stats_tools import dataset_compare, dataset_preprocess
 
@@ -120,11 +111,11 @@ def test_volcano_from_a_two_group_result():
     out = plot_tools.dataset_plot(kind="volcano")
     assert isinstance(out, list) and len(out) == 2
     caption, image = out
-    assert isinstance(caption, str) and "group_a" in caption and "n=4" in caption
+    assert isinstance(caption, str) and "ctrl" in caption and "n=4" in caption
     assert isinstance(image, Image) and image.data[:4] == PNG_MAGIC
     payload = _payload(kind="volcano")
     assert payload["plot_schema"] == "lipidmix.volcano.v1"
-    assert payload["comparison"]["group_a"] == "group_a"
+    assert payload["comparison"]["group_a"] == "ctrl"
 
 
 def test_pca_color_by_batch():
@@ -334,7 +325,6 @@ def test_group_change_makes_the_pca_figure_refuse_to_save(tmp_path):
     err = json.loads(reports.save_figure("pca", "meta-1"))["error"]
     assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
     assert not (tmp_path / "reports" / "figures" / "meta-1_pca.png").exists()
-    v1_preprocess()
     dataset_pca(n_components=3)
     payload = _payload(kind="pca")                    # 解析と図をやり直せば新しい群で保存できる
     assert {p["group"] for p in payload["points"]} == {"NEW"}
@@ -360,38 +350,6 @@ def test_pca_figure_with_baked_metadata_is_stale_when_the_revision_moves(tmp_pat
     err = json.loads(reports.save_figure("loadings", "rev-1"))["error"]
     assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
     assert not (tmp_path / "reports" / "figures" / "rev-1_loadings.png").exists()
-
-
-def _v1_pca_dataset():
-    ds = _synthetic()
-    _set_metadata(ds, group=lambda n: n.split("_")[0])
-    v1_preprocess()
-    v1_pca(n_components=3)
-    return ds
-
-
-def test_v1_pca_results_still_draw_scores_and_loadings():
-    """pipeline の引き渡しが作る v1 の PCA（scores 行・特異値・`pp_feature_names`）も図にできる。"""
-    ds = _v1_pca_dataset()
-    pay = _payload(kind="pca")
-    assert len(pay["points"]) == 8 and {p["group"] for p in pay["points"]} == {"ctrl", "treat"}
-    assert pay["title"] == "PCA" and not any("fitted" in p for p in pay["points"])
-    load = _payload(kind="loadings", top_n=3)
-    assert load["value"] == "r"                                   # 特異値から相関 r が出せる
-    assert {r["feature_id"] for r in load["panels"][0]["rows"]} <= set(ds.pp_feature_names)
-
-
-def test_v1_loadings_figure_survives_a_group_only_revision(tmp_path):
-    """v1 の PCA は前処理の入力だけに依存する: 群だけの更新では結果も loadings の図も古くならない。"""
-    from metabolomix.analysis.result_state import is_current
-
-    ds = _v1_pca_dataset()
-    plot_tools.dataset_plot(kind="loadings", top_n=3)
-    for row in ds.sample_metadata_rows:
-        row["group"] = "NEW"
-    ds.metadata_revision += 1
-    assert is_current(ds, ds.last_pca) and "loadings" in ds.figures
-    assert "ver-1_loadings.png" in reports.save_figure("loadings", "ver-1")
 
 
 def test_figures_are_not_part_of_the_fingerprint():

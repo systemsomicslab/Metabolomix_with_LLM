@@ -385,6 +385,8 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
         ds.analysis_dir = str(Path(mztab_path).parent)
     if unit is not None and adapter == "mztab":
         notes.extend(unit.notes)
+    if unit is not None and unit.legacy:
+        notes.append("旧 v1 の run なので、run が計算した差次的結果は戻していない（比較は dataset_compare でやり直す）。")
     return OpenedDataset(dataset=ds, kind=kind, path=path, adapter=adapter,
                          selection=selection, notes=notes, mztab_path=mztab_path,
                          polarity=polarity)
@@ -561,9 +563,8 @@ def _folder_via_run(unit, *, measure: str, allow_incomplete: bool):
         # roles / sample_meta も組み直す（run の試料対応表の役割を、前処理の前から見せる）。
         sample_manifest.apply_defaults_and_inputs(ds, sample_manifest.resolve_metadata(ds, rows))
     notes = [*unit.notes, _folder_note(gate, "run"),
-             "run の解析行列・feature binding・差次的結果は読んでいない（解析フォルダの"
-             "アダプタが run から引き継ぐのは解決済みの試料対応表だけ）。それらも載せるなら"
-             " source=\"mztab\" で読む。"]
+             "run の解析行列は読んでいない（解析フォルダのアダプタが run から引き継ぐのは"
+             "解決済みの試料対応表だけ）。"]
     return ds, selection, gate, notes
 
 

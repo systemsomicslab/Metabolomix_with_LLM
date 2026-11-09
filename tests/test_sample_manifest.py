@@ -489,14 +489,11 @@ def test_apply_metadata_rejects_bad_role_value_and_leaves_dataset_untouched():
 
 def test_apply_metadata_group_only_change_invalidates_only_the_comparison():
     """B04: groupだけの訂正はPCAを残し、差次的解析だけを無効化する。"""
-    from metabolomix.analysis.dataset_service import compare_dataset, pca_dataset, preprocess_dataset
-
     ds = make_dataset()
     apply_metadata(ds, metadata_rows(ds, n_qc=0))
-    preprocess_dataset(ds, {"normalize": "none", "impute": "half_min"})
-    pca_dataset(ds)
-    compare_dataset(ds, ds.sample_names[:4], ds.sample_names[4:])
-    pp_matrix_before = ds.pp_matrix
+    matrices = ds.stat_matrices = {"mx_0": {}}
+    ds.last_pca = {"kind": "stat_pca"}
+    ds.last_differential = {"kind": "compare"}
 
     new_rows = metadata_rows(ds, n_qc=0)
     new_rows[4]["group"] = "changed"
@@ -505,19 +502,17 @@ def test_apply_metadata_group_only_change_invalidates_only_the_comparison():
     summary = apply_metadata(ds, new_rows)
 
     assert summary["changed_fields"] == ["group"]
-    assert ds.pp_matrix is pp_matrix_before
+    assert ds.stat_matrices is matrices
     assert ds.last_pca is not None
     assert ds.last_differential is None
 
 
 def test_apply_metadata_batch_change_invalidates_preprocessing():
-    """B02系: 前処理に効く列が変わればpp_matrix以下を丸ごと無効化する。"""
-    from metabolomix.analysis.dataset_service import pca_dataset, preprocess_dataset
-
+    """B02系: 前処理に効く列が変われば登録した行列以下を丸ごと無効化する。"""
     ds = make_dataset()
     apply_metadata(ds, metadata_rows(ds))
-    preprocess_dataset(ds, {"normalize": "none", "impute": "half_min"})
-    pca_dataset(ds)
+    ds.stat_matrices = {"mx_0": {}}
+    ds.last_pca = {"kind": "stat_pca"}
 
     new_rows = metadata_rows(ds)
     new_rows[0]["batch"] = "B2"
@@ -525,7 +520,7 @@ def test_apply_metadata_batch_change_invalidates_preprocessing():
         "value": "B2", "source": "user_manifest", "confidence": "confirmed"}
     apply_metadata(ds, new_rows)
 
-    assert ds.pp_matrix is None
+    assert ds.stat_matrices == {}
     assert ds.last_pca is None
 
 
@@ -612,54 +607,17 @@ def test_build_dataset_pp_inputs_passes_unknown_role_through_but_excludes_includ
     assert roles[excluded_name] == "sample"
 
 
-def test_run_dataset_preprocess_ignores_excluded_qc_when_deciding_no_qc_blank_caveat():
-    """include=falseで除外されたQCのstale roleが、注意書きの判定に漏れ出さない。
-
-    round1の修正で build_dataset_pp_inputs は include=false の行を matrix/
-    sample_names から正しく落とすが、roles/sample_meta 辞書は監査・表示用に
-    全件分（除外分込み）のまま維持する設計にした（上のテストが固定）。
-    ところが preprocessing.preprocess() 内の present_roles は
-    `set(roles.values())` で辞書の全件を見ていたため、実際に評価される7検体
-    には QC が1件も無いのに、除外されたはずのQC(role="qc")のstale値を
-    拾って「QCがある」と誤認していた。その結果「この試料群には QC も
-    ブランクも含まれていない」という安全側の注意書きが出なくなる
-    （controller裁定 round2 で指摘されたregression）。
-    """
-    from metabolomix.analysis.dataset_analysis import run_dataset_preprocess
-
-    ds = make_dataset()
-    rows = metadata_rows(ds, n_qc=1)
-    excluded_name = ds.sample_names[0]
-    assert rows[0]["sample_id"] == excluded_name and rows[0]["role"] == "qc"
-    rows[0]["include"] = False
-    rows[0]["provenance"]["include"] = {
-        "value": False, "source": "user_manifest", "confidence": "confirmed"}
-    apply_metadata(ds, rows)
-
-    _, pp_sample_names, _, roles, _, report = run_dataset_preprocess(ds, {})
-
-    # 除外されたQCはroles辞書には残る（意図的な設計）が、実際に評価される
-    # 試料には含まれず、残り7件は全て role="sample"。
-    assert excluded_name not in pp_sample_names
-    assert roles[excluded_name] == "qc"
-    assert len(pp_sample_names) == 7
-    assert all(roles[name] == "sample" for name in pp_sample_names)
-    # 実評価対象にQCもブランクも無いのだから、注意書きは出るべき。
-    assert any("QC もブランクも含まれていない" in c for c in report["caveats"]), \
-        report["caveats"]
-
-
 def test_detection_rate_ignores_samples_excluded_by_include_false():
     """include=falseの試料の未検出が、検出率フィルタの分母に残らない。
 
-    `build_dataset_pp_inputs`はinclude=falseの行を行列から落とすのに、
-    検出マスク（`ds.detected_mask`）は全試料のままだった——除外した試料でだけ
-    未検出だった特徴量が、min_detection_rate=1.0で削られる。解析に残す試料では
+    検出マスク（`ds.detected_mask`）は全試料のまま持つので、除外した試料でだけ
+    未検出だった特徴量が検出率 1.0 の足切りで削られうる。解析に残す試料では
     全件検出されている、正当な特徴量が黙って消える。
     """
     import numpy as np
 
-    from metabolomix.analysis.dataset_analysis import run_dataset_preprocess
+    from metabolomix.analysis.stats.spec_v2 import normalize_spec_v2, prepare_spec_v2
+    from tests.engine_chain import FLAT_SPEC
 
     ds = make_dataset()
     rows = metadata_rows(ds, n_qc=0)
@@ -676,14 +634,19 @@ def test_detection_rate_ignores_samples_excluded_by_include_false():
     ds.detected_mask = mask
     ds.feature_qc = {"source": "arf"}
 
-    _, pp_sample_names, feature_names, _, _, report = run_dataset_preprocess(
-        ds, {"impute": "none", "min_detection_rate": 1.0})
+    for i, row in enumerate(ds.sample_metadata_rows):
+        row["group"] = "A" if i < 4 else "B"
+    spec = normalize_spec_v2({
+        "schema": "analysis-spec.v2", "design": {"factors": ["group"]},
+        "preprocess": {**FLAT_SPEC, "filters": {**FLAT_SPEC["filters"],
+                                                "detection": {"by": "all", "min_rate": 1.0}}},
+        "comparisons": [{"id": "B_vs_A", "factor": "group", "reference": "A", "test": "B"}],
+        "analyses": [{"analysis_id": "compare", "kind": "compare"}]})
+    prepared = prepare_spec_v2(spec, ds)
 
-    assert len(pp_sample_names) == 7
-    assert "F0" in feature_names          # 残す7検体では全件検出されている
-    assert "F1" not in feature_names      # 残す検体で未検出のものは従来どおり落ちる
-    assert report["detection"]["n_samples"] == 7
-    assert report["detection"]["n_cells"] == 6 * 7
+    assert len(prepared.sample_ids) == 7
+    assert "F0" in prepared.feature_ids          # 残す7検体では全件検出されている
+    assert "F1" not in prepared.feature_ids      # 残す検体で未検出のものは従来どおり落ちる
 
 
 # ---------- subject_id（B-2b Task 3。任意の列。B では持つだけで統計に使わない） ----------
