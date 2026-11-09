@@ -180,7 +180,7 @@ SME 由来という食い違った行ができる。
 試料・特徴を**前処理済み行列から外す**（検出率の足切りの分母からも外す）。除外を変えると `metadata_revision` が進み、
 前処理済み行列から先の結果（PCA・差次的解析）は古い結果になる——`ds.results` には残るが現在の結果としては
 通らない。`dataset_exclude` を使う前に作った結果の数字を、除外後の結果として読んではいけない。
-任意の列 `subject_id`（実験情報シートの末尾）は `sample_meta` に持つだけで、統計にはまだ使わない。
+任意の列 `subject_id`（実験情報シートの末尾）は `sample_meta` に持ち、統計エンジンの前処理が**同じ個体の反復注入を 1 個体にまとめる**鍵に使う（`dataset_preprocess` の `collapse_replicates`、`injection_columns` で注入ごとに違う列を鍵から外す。`subject_source` は `subject_id` / `injection` / `mixed`）。`subject_id` が無い試料は注入が 1 個体になる。
 
 ### 13.6 `inchikey_coverage`
 
@@ -322,7 +322,7 @@ bh_population, caveats}`。`bh_population = {n_features_total, n_in_matrix, n_te
 `dataset_alignment_qc` の `merge_groups`（互いに最も近い mergeable な 2 スポット。`reanalysis` §9）が
 データセットに 1 つでもあれば、すべての組の 2 スポットを**試料ごとの大きい方の値**で 1 列にまとめた行列
 （前処理の前の生の値。検出状態は「どちらかで検出」）に、差次的結果を計算したのと同じ前処理のレシピを
-当て直し、同じ検定（`log_transform` も同じ。pipeline の既定は log 変換の Welch）と**まとめた後の全特徴**での
+当て直し（v1 の結果。`dataset_compare` の結果は同じ spec を当て直す。下記）、同じ検定（`log_transform` も同じ。pipeline の既定は log 変換の Welch）と**まとめた後の全特徴**での
 BH をやり直して、`stats` の**すべての行**をそこから出す（統計を付ける特徴が組に入るかどうかによらない。
 組が無ければやり直さない）。
 
@@ -332,8 +332,12 @@ BH をやり直して、`stats` の**すべての行**をそこから出す（�
 | `stats_unmerged` | まとめる前の従来の `stats`（頼んだ ID のまま・同じ列。`merged_from` は無い） |
 | `merge_split` | `{enabled, source, alignment_qc_sha256, n_groups, groups, renamed, recomputed, bh_population}`。`source` は `find_split_pairs`（その場で既定の閾値）か `alignment_qc`（`alignment_qc_path` の JSON）、`n_groups` はデータセットでまとめる組の数、`groups` はそのうち統計を付けた特徴に関わる組、`recomputed` は検定し直した result_id（組が無ければ空で、検定はやり直さない）、`bh_population` は検定し直した結果ごとの母集団（`n_features_total` はまとめた後の特徴数） |
 
-差次的結果を計算したレシピは、pipeline の run から引き継いだ結果なら来歴の `handoff.preprocess`、session で
-計算した結果なら親の前処理の `effective_parameters` から取る。分からないとき（古い run の引き継ぎなど）は
+`dataset_compare` の結果（統計エンジン）は、記録した spec（`input` の除外・群の上書きを含む）を、まとめた行列（`merge_feature_columns`。
+ゼロと NaN を「無い」として試料ごとに大きい方）で `run_spec_v2` に当て直し、`as_two_group` で同じ対比を取り直す
+（対比が複数の結果は `result_id#contrast_id` の形で名指す。`contrast_id` 引数で絞ってもよい。交互作用の対比は対象外）。
+元の記録が無い・まとめた行列で比較をやり直せない・利用者への確認が要る前処理になるときは `FEATURE_MERGE_UNAVAILABLE`。
+
+v1 の結果（pipeline から引き継いだ比較）を計算したレシピは、来歴の `handoff.preprocess`、session で計算した結果なら親の前処理の `effective_parameters` から取る。分からないとき（古い run の引き継ぎなど）は
 `FEATURE_MERGE_UNAVAILABLE`（まとめる前の数字をまとめた後の顔で返さない。`merge_split=false` で呼び直す）。
 `merge_split=false` なら従来どおりで、`stats_unmerged` も `merged_from` 列も無く `merge_split` は
 `{"enabled": false}`。`alignment_qc_path` は `dataset_alignment_qc` が今のデータセットで書いた JSON だけを
@@ -387,10 +391,14 @@ qualified にせず数にも入れない——選んだ残す ID の行が必ず
 `notes` には、打ち切り・使わなかった古い差次的結果・差次的結果が無いこと・検出状態が無いこと・
 極性の宣言と多数決の食い違い・キュレーションのフラグがあるのに反映していないこと（この検索は
 SME / SML の生の同定だけを見るので、`dataset_export_differential` の同定と食い違いうる）が入る。
+`result_ids` を省いたときは、効かなかった指定も `統計に使えなかった指定: …` の 1 行で入る: `contrast_id` を
+渡したが `dataset_compare` の結果が無く v1 の 2 群の結果だけがある（v1 は対比を持たないので効かず、v1 の結果は
+そのまま使う）、`dataset_compare` の結果の対比が交互作用だけ（2 群の形にならず統計は付かない）。`result_ids` で
+交互作用だけの結果を名指しすると `missing_state`（`dataset_compare`）で、メッセージにその理由が入る。
 
 ## `dataset_plot(kind="loadings")`（mzTab-M のデータセット）
 
 `dataset_pca` の結果は `dataset_plot(kind="loadings")` で主成分ごとのローディング図に描ける（`result_id` を省けば直近の `dataset_pca`）。
-特徴量は前処理後の `pp_feature_names`、表示名は `feature_annotations`（SML 由来）か `feature_metadata`（SME 由来）の名前で、
+特徴量は PCA の軸に入った特徴（`stats-pca.v1` の `kept_features`。値が変わらない特徴は入らない）、表示名は `feature_annotations`（SML 由来）か `feature_metadata`（SME 由来）の名前で、
 無ければ `feature_id`。mzTab-M にはクラス（Ontology）が無いので棒は 1 色になる。r は `dataset_pca` が autoscale で回したときの
-成分 × 特異値 / √n（`n_samples`）で出す。返り値の意味は `dataset` トピックの §11.8 と同じ。
+成分 × 特異値 / √n（`n_fit` = 軸を決めた個体数。QC は軸の計算に入らない）で出す。返り値の意味は `dataset` トピックの §11.8 と同じ。

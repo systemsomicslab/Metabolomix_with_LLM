@@ -21,6 +21,7 @@ arf_preprocess dataset_handle_close dataset_handle_list dataset_handle_open data
 eic_parser eic_plot_chromatograms eic_plot_compounds eic_search ingest_promote ingest_reject
 ingest_review_queue ingest_stage knowledge_coverage list_reports log_search pai2_inspect_peak
 pai2_parser paper_search plot_pca_loadings sample_search update_objective verify_peak_annotation
+dataset_differential dataset_statistic dataset_build_matrix
 """.split()
 
 WORD = re.compile(r"(?<![A-Za-z0-9_])(" + "|".join(map(re.escape, REMOVED_TOOLS)) + r")(?![A-Za-z0-9_])")

@@ -41,15 +41,25 @@ def dataset_features(ds, result) -> tuple[list[dict], bool]:
     （解析フォルダの `.arf2` の Ontology。mzTab-M だけのデータセットには無いので色は灰色）。
     戻り値の 2 つ目は相関 r を出せるか（特異値と試料数がある）。
     """
-    loadings = result.get("loadings")
+    if result.get("kind") == "stat_pca":
+        # 統計エンジンの PCA: 特徴は軸の計算で値が変わった特徴（`kept_features`）。特異値は持たないので
+        # autoscale のときだけ r = 係数 × √(寄与率 × 特徴数) で出す（母標準偏差で autoscale すると
+        # 特異値² = 寄与率 × 特徴数 × n になる）。
+        engine = result.get("engine") or {}
+        loadings, names = engine.get("loadings"), list(engine.get("kept_features") or [])
+        evr = engine.get("explained_variance_ratio") or []
+        factors = ([math.sqrt(float(v) * len(names)) for v in evr]
+                   if engine.get("scaling") == "autoscale" else None)
+    else:
+        loadings = result.get("loadings")
+        names = list(getattr(ds, "pp_feature_names", None) or [])
+        s, n = result.get("singular_values"), result.get("n_samples")
+        factors = [float(v) / math.sqrt(n) for v in s] if s and n else None
     if not loadings:
         raise ValueError("この PCA 結果はローディングを持っていません。dataset_pca をやり直してください。")
-    names = list(getattr(ds, "pp_feature_names", None) or [])
     if len(names) != len(loadings[0]):
         raise ValueError("PCA のローディングと前処理済み行列の特徴量が合いません。"
                          "前処理から PCA をやり直してください。")
-    s, n = result.get("singular_values"), result.get("n_samples")
-    factors = [float(v) / math.sqrt(n) for v in s] if s and n else None
     annotations = getattr(ds, "feature_annotations", {}) or {}
     metadata = getattr(ds, "feature_metadata", {}) or {}
     features = []

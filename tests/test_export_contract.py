@@ -133,3 +133,76 @@ def test_both_export_paths_use_the_contract_significance():
     """
     from metabolomix.tools import dataset_analysis_tools
     assert not hasattr(dataset_analysis_tools, "_is_significant")
+
+
+def test_build_meta_appends_stats_lines_after_msi_note():
+    """統計エンジンの行は msi_note の後ろだけ。足さなければ今までの出力と同じ。"""
+    base = _meta()
+    lines = _meta(stats_lines=["# test = moderated_t\tci_level = 0.95", "# unit = subject"])
+    assert lines[-3].startswith("# msi_level") and lines[-2:] == [
+        "# test = moderated_t\tci_level = 0.95", "# unit = subject"]
+    assert [l for l in lines if "exported_at" not in l][:-2] == [l for l in base if "exported_at" not in l]
+
+
+def test_stats_meta_lines_empty_for_v1_result_and_keys_do_not_collide():
+    from metabolomix.analysis.export_contract import stats_meta_lines
+    assert stats_meta_lines({"kind": "two_group", "a": "x"}) == []
+    result = {"effect_size_definition": {"name": "log2_mean_difference"}, "matrix_id": "m", "rule_hash": "h", "contrast_id": "c", "provenance": {"kind": "compare"},
+              "statistics": {"test": "welch", "ci_level": 0.95, "subject_source": "injection",
+                             "verdict_rule": {"q_threshold": 0.05, "equivalence_fc": 1.2},
+                             "bh_population": {"name": "matrix", "n": 7, "q_interpretation": "discovery_fdr"},
+                             "n_units_a": 3, "n_units_b": 4}}
+    lines = stats_meta_lines(result)
+    keys = _meta_keys(lines)
+    assert len(keys) == len(set(keys))
+    # 既存のメタ行は**タブで割ったすべての** `key = value` を見る（1 行に複数のキーがある。下流の
+    # parse_differential はそれを全部拾い、同じキーは後勝ちで消える）
+    existing = _meta_keys(_meta(source_lines=_DATASET_SOURCE_LINES,
+                                preprocess_line="# preprocess = {}"))
+    assert {"n_a", "n_b", "log2fc_threshold", "log_transform", "n_with_inchikey", "n_unannotated",
+            "curation_flags", "unadjusted_confounded_note"} <= set(existing)   # 先頭以外のキーも拾えている
+    assert not set(keys) & set(existing)
+    assert "# unit = injection\tn_units_a = 3\tn_units_b = 4" in lines
+    assert "significant_rule" in keys
+
+
+#: dataset_export が source_lines に差す行（キーの形だけ。値は問わない）
+_DATASET_SOURCE_LINES = [
+    "# source_mztab = a.mzTab", "# source_job = j", "# id_space = mztab_smf_id", "# result_id = r",
+    "# preprocess_id = p", "# source_verification = v", "# unadjusted_confounded = true",
+    "# unadjusted_confounded_note = x",
+    "# curation = applied\tcuration_flags = 1\tcuration_wrong_excluded = 0\tcuration_suspect = 0"
+    "\tcuration_assigned = 0\tcuration_redundant_excluded = 0\tcuration_flags_sha256 = d",
+]
+
+
+def _meta_keys(lines) -> list[str]:
+    """massbank-context の parse_differential と同じ読み方で、各行のタブ区切りの全キーを並べる。"""
+    return [chunk.partition("=")[0].strip() for line in lines
+            for chunk in line.lstrip("#").split("\t") if "=" in chunk]
+
+
+def test_stats_meta_lines_write_zero_for_an_empty_bh_population():
+    """BH の母集団が空（対比の n が無い）なら `bh_n = 0`。"None" という文字列は書かない。"""
+    from metabolomix.analysis.export_contract import stats_meta_lines
+    result = {"effect_size_definition": {"name": "log2_mean_difference"}, "matrix_id": "m",
+              "rule_hash": "h", "contrast_id": "c", "provenance": {"kind": "compare"},
+              "statistics": {"test": "moderated_t", "ci_level": 0.95, "subject_source": "subject_id",
+                             "verdict_rule": {"q_threshold": 0.05, "equivalence_fc": 1.2},
+                             "bh_population": {"name": "annotated", "n": None,
+                                               "q_interpretation": "discovery_fdr"},
+                             "n_units_a": 3, "n_units_b": 4}}
+    text = "\n".join(stats_meta_lines(result))
+    assert "\tbh_n = 0\t" in text and "None" not in text
+
+
+def test_row_significant_honours_verdict_and_row_flag():
+    from metabolomix.analysis.export_contract import row_significant
+    thr = dict(q_threshold=0.05, log2fc_threshold=1.0)
+    assert row_significant({"q": 0.01, "log2fc": 2.0}, **thr)                       # v1 の行
+    assert not row_significant({"q": 0.01, "log2fc": 0.5}, **thr)
+    assert row_significant({"q": 0.01, "log2fc": 2.0, "verdict": "changed"}, **thr)
+    for verdict in ("inconclusive", "unchanged"):
+        assert not row_significant({"q": 0.01, "log2fc": 2.0, "verdict": verdict}, **thr)
+    assert not row_significant({"q": 0.01, "log2fc": 2.0, "significant": False}, **thr)
+    assert row_significant({"q": 0.9, "log2fc": 0.0, "significant": True}, **thr)   # 行の印が勝つ

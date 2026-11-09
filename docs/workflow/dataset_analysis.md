@@ -5,43 +5,72 @@
 
 ## dataset_preprocess
 
-1. metabolomix/tools/dataset_analysis_tools.py  dataset_preprocess()
-2. └─ metabolomix/analysis/dataset_analysis.py  run_dataset_preprocess()
-3.    └─ metabolomix/analysis/dataset_analysis.py  build_dataset_pp_inputs()
-4.       └─ metabolomix/analysis/preprocessing.py  detect_sample_roles()
-5.    └─ metabolomix/analysis/dataset_analysis.py  _apply_detection_filter()
-6.       └─ metabolomix/analysis/preprocessing.py  detection_rates()
-7.    └─ metabolomix/analysis/preprocessing.py  preprocess()
-8.    └─ metabolomix/analysis/preprocessing.py  drop_samples_by_role()
-9.    └─ metabolomix/analysis/preprocessing.py  detect_qc_strata()
+統計エンジンの前処理（spec 2026-11-06 §4）。行列 ID を返し、`ds.stat_matrices[matrix_id]` に置く
+（v1 の `pp_*` には書かない）。除外（`ds.excluded_*`）と群の上書き（`group_levels` / `group_factors`）は
+手順 3 が入力へ写す。`needs_input`（内部標準で換算済み＋QC のドリフト補正）は手順 5 の戻りから封筒にする。
+手順 9 の記録は `reports/stats/` への追記で、書き先が決まらない・書けないときも前処理は成功する。
 
-手順 5 は前処理（手順 7）より**前**に来る。正規化・補完のあとでは gap-fill セルが
-実測値と区別できなくなり、何を根拠に特徴を残したかが言えなくなるため。
-`min_detection_rate > 0` なのに `ds.detected_mask` が無い場合は `bad_request` で
-拒否する（検出状態が「無い」のと「全部未検出」は解釈が正反対で、0 扱いで通すと
-gap-fill だけの特徴を実測として数えた行列が黙って下流に流れる）。
+1. metabolomix/tools/stats_tools.py  dataset_preprocess()
+2. └─ metabolomix/analysis/stats/preprocess.py  normalize_preprocess_config()
+3. └─ metabolomix/analysis/stats_results.py  study_inputs()
+4. └─ metabolomix/analysis/stats/data.py  from_dataset()
+5. └─ metabolomix/analysis/stats/preprocess.py  preprocess()
+6. └─ metabolomix/tools/_matrix_store.py  store_matrix()
+7.    └─ metabolomix/analysis/stats_results.py  register_matrix()
+8.    └─ metabolomix/tools/_matrix_store.py  preprocess_summary()
+9.    └─ metabolomix/analysis/stats_records.py  write_stats_record()
 
-検出率の分母は**実際に前処理へ渡す試料だけ**。手順 3 が `include=false` の行を
-行列から落とすのと同じ位置（`included_sample_indices`）でマスクの列も絞る
-（`_restrict_mask_to_samples`）——絞らないと、解析から除外した試料の未検出が
-分母に残り、`min_detection_rate=1.0` が「残す試料では全件検出されている」正当な
-特徴量を削り落とす。何試料分を数えたかは `report["detection"]["n_samples"]`。
+行列の登録・要約・前処理の記録は `tools/_matrix_store.py`（ツールではない共有部品。`dataset_compare` / `dataset_pca` /
+`pathway_project` の既定の前処理も同じ `register_default` → `store_matrix` を通る）。`injection_columns` は手順 2 が設定に写し、
+個体のまとめ（手順 5 の `preprocess()` の中の `collapse`）の鍵から外す。
+
+（v1 の前処理 `dataset_analysis.run_dataset_preprocess` は、pipeline の前処理工程が読む `pp_*` を作る。D 段で消える。）
+
+## dataset_compare
+
+統計エンジンの比較（spec 2026-11-06 §5〜§9・§12）。群の指定（手順 2）を spec v2 の対比へ写す。入力側は手順 3 の
+`matrix_inputs` が決める: `matrix_id` を渡せば登録済みの行列（手順 4）の設定・群・除外のまま、省略すれば今の除外と
+群の引数から（手順 5）既定の設定で作る。spec は引数から組み立てて（手順 8）正規化する（手順 9）ので、結果の `spec` を
+`dataset_analysis_run` に渡せば同じ数字を出し直せる。`matrix_id` が無いときは既定の前処理を回し（手順 10・11。`needs_input`
+＝換算済み＋QC はここの戻りから封筒にする）、行列を登録して前処理の記録も 1 件書く（手順 12）。`run_spec_v2` が登録済みの
+行列を再利用して比較し（手順 13）、結果は `ds.results[result_id]` と `ds.last_differential` に置く（手順 14）。
+手順 15・16 の記録は親を行列の前処理の記録にして `reports/stats/` へ追記する（書けなくても比較は成功）。
+
+1. metabolomix/tools/stats_tools.py  dataset_compare()
+2. └─ metabolomix/tools/stats_tools.py  _design_and_comparisons()
+3. └─ metabolomix/analysis/stats_results.py  matrix_inputs()
+4.    └─ metabolomix/analysis/stats_results.py  get_matrix()（`matrix_id` あり）
+5.    └─ metabolomix/analysis/stats_results.py  study_inputs()（`matrix_id` なし）
+6. └─ metabolomix/analysis/stats/data.py  from_dataset()
+7. └─ metabolomix/tools/stats_tools.py  _covariate_specs()
+8. └─ metabolomix/tools/stats_tools.py  _spec_for()
+9. └─ metabolomix/analysis/stats/spec_v2.py  normalize_spec_v2()
+10. └─ metabolomix/tools/stats_tools.py  _prepare_default()（`matrix_id` なし）
+11.    └─ metabolomix/analysis/stats_results.py  prepare_default()
+12. └─ metabolomix/tools/_matrix_store.py  register_default()
+13. └─ metabolomix/analysis/stats/spec_v2.py  run_spec_v2()
+14. └─ metabolomix/analysis/stats_results.py  register_compare()
+15. └─ metabolomix/tools/stats_tools.py  _write_compare_record()
+16.    └─ metabolomix/analysis/stats_records.py  write_stats_record()
 
 ## dataset_pca
 
-1. metabolomix/tools/dataset_analysis_tools.py  dataset_pca()
-2. └─ metabolomix/analysis/dataset_analysis.py  run_dataset_pca()
-3.    └─ metabolomix/analysis/pca.py  run_pca()
+統計エンジンの PCA（spec 2026-11-06 §10。stats-pca.v1）。軸は生体の個体で決め、QC は同じ軸へ投影する。
+行列は群の引数と無関係に決める: `matrix_id` を渡せば登録済みの行列（手順 2）、省略すれば既定の前処理で
+行列を作って登録する（手順 3。前処理の記録も 1 件書く）。`group_levels` / `group_factors` は手順 5 が個体ごとの
+色分けの群に解くだけで、PCA の数字（手順 4）には効かない。結果は `ds.results[result_id]` と `ds.last_pca`
+（`kind="stat_pca"`）に置く（手順 6）。`needs_input`（換算済み＋QC）は手順 3 の戻りから封筒にする。
+手順 7 の記録は親を行列の前処理の記録にして `reports/stats/` へ追記する（書けなくても PCA は成功）。
+図（`dataset_plot` の `pca` / `loadings`）は `tool_helpers.stat_pca_rows`（スコア）と
+`plots/pca_loadings.dataset_features`（`kept_features` のローディング）が `stat_pca` の記録を読む。
 
-## dataset_differential
-
-1. metabolomix/tools/dataset_analysis_tools.py  dataset_differential()
-2. └─ metabolomix/analysis/dataset_analysis.py  run_dataset_differential()
-3.    └─ metabolomix/analysis/differential.py  check_confounding()
-4.    └─ metabolomix/analysis/differential.py  two_group_test()
-5.    └─ metabolomix/analysis/differential.py  add_fdr()
-6.    └─ metabolomix/analysis/differential.py  summarize_two_group()
-7.    └─ metabolomix/analysis/differential.py  volcano_data()
+1. metabolomix/tools/stats_tools.py  dataset_pca()
+2. └─ metabolomix/analysis/stats_results.py  get_matrix()
+3. └─ metabolomix/tools/_matrix_store.py  register_default()
+4. └─ metabolomix/analysis/stats/pca.py  pca()
+5. └─ metabolomix/analysis/stats_results.py  unit_group_labels()
+6. └─ metabolomix/analysis/stats_results.py  register_pca()
+7. └─ metabolomix/tools/stats_tools.py  _write_pca_record()
 
 ## dataset_export_differential
 
@@ -49,7 +78,7 @@ gap-fill だけの特徴を実測として数えた行列が黙って下流に�
 やり直した後の古い結果を書くと、TSV の数字と現在の前処理条件が並んだファイルができ、
 どちらも正しく見えてずれが分からない）と、**探索専用のデータセットでないか**
 （中断された実行の出力では、欠けた検体が「その群には無い」ようにしか見えない）。
-メタ行の前処理条件は `ds.preprocessing_recipe`（今の状態）ではなく、その結果が親に
+`dataset_compare` の結果（統計エンジン）は、対比を 1 つ選んで（複数あるときは `contrast_id` か `result_id#contrast_id`。`stats_results.split_result_ref`）手順 4 の `as_two_group` で 2 群の形に読み替えてから書き、メタ行に `stats_meta_lines`（検定・判定規則・BH の母集団・単位・`matrix_id` など）が足される。前処理条件は登録した行列の設定から取る。以降は v1 の結果の説明: メタ行の前処理条件は `ds.preprocessing_recipe`（今の状態）ではなく、その結果が親に
 持つ前処理の `provenance.effective_parameters` から取る。pipeline run から引き継いだ結果
 （来歴に `handoff`）は親の前処理が `ds.results` に無いので、引き継ぎ時に写した
 `provenance.handoff.preprocess` を使い、無ければ `unknown（…）` と書く——session の
@@ -59,12 +88,14 @@ gap-fill だけの特徴を実測として数えた行列が黙って下流に�
 1. metabolomix/tools/dataset_analysis_tools.py  dataset_export_differential()
 2. └─ metabolomix/analysis/dataset_export.py  export_dataset_result()
 3. │  └─ metabolomix/analysis/result_state.py  assert_current()
-4. │  └─ metabolomix/analysis/export_contract.py  is_significant()
-5. │  └─ metabolomix/analysis/dataset_export.py  _meta_lines()
-6. │  │  └─ metabolomix/analysis/dataset_export.py  _preprocess_parameters()
-7. │  │  └─ metabolomix/analysis/export_contract.py  build_meta()
-8. │  └─ metabolomix/analysis/export_contract.py  format_row()
-9. │  └─ metabolomix/analysis/dataset_export.py  _atomic_write_text()
+4. │  └─ metabolomix/analysis/stats_results.py  as_two_group()（`dataset_compare` の結果の対比 1 つを 2 群の形に読み替える。各行の `significant`（判定が changed のときだけ）と、`allow_confounded` で完全交絡を越えた比較の `provenance.comparison` をここで付ける）
+5. │  └─ metabolomix/analysis/export_contract.py  row_significant()（行の印を読む。印の無い v1 の行は `is_significant()`）
+6. │  └─ metabolomix/analysis/dataset_export.py  _meta_lines()
+7. │  │  └─ metabolomix/analysis/dataset_export.py  _preprocess_parameters()
+8. │  │  └─ metabolomix/analysis/export_contract.py  stats_meta_lines()（エンジンの結果だけ）
+9. │  │  └─ metabolomix/analysis/export_contract.py  build_meta()
+10. │  └─ metabolomix/analysis/export_contract.py  format_row()
+11. │  └─ metabolomix/analysis/dataset_export.py  _atomic_write_text()
 
 ## dataset_feature_search
 
@@ -111,6 +142,8 @@ MCP も import しない。ツール層の仕事は、極性の出所を決め�
 33.    ├─ metabolomix/curation/apply.py  arf2_for_mztab()
 34.    └─ metabolomix/curation/apply.py  flags_for_arf2()
 
+`dataset_compare` の結果（`compare` の記録）は `select_results` が対比ごとに 2 群の形に広げる（対比が複数なら ID は `result_id#contrast_id`、交互作用は除く）。`merge_split` の検定のやり直しは、その結果の spec で `stats/data.py` `from_dataset()` → `merge_feature_columns()` → `spec_v2.run_spec_v2()` → `as_two_group()` を通す（`retest_merged` のエンジン経路）。以降は v1 の結果の説明。
+
 `merge_split`（既定 true）は、割れの組（`alignment_qc` の `merge_groups`）がデータセットに 1 つでもあれば、
 組を試料ごとの大きい方の値で 1 列にまとめた行列（前処理の**前**の生の値・検出状態は OR）に、差次的結果を
 計算したレシピ（pipeline の run から引き継いだ結果は来歴の `handoff.preprocess`、session の結果は親の前処理の
@@ -136,7 +169,7 @@ result_id は計算のたびに発行される UUID なので入れず、統計�
 1. metabolomix/tools/dataset_analysis_tools.py  dataset_set_sample_metadata()
 2. └─ metabolomix/analysis/dataset_service.py  apply_sample_manifest()
 3.    └─ metabolomix/analysis/dataset_service.py  _raw_manifest_layout()
-4.    └─ metabolomix/analysis/sample_manifest.py  parse_manifest()（任意の列 `subject_id` を読む。`sample_meta` に持つだけで統計には使わない）
+4.    └─ metabolomix/analysis/sample_manifest.py  parse_manifest()（任意の列 `subject_id` を読む。`sample_meta` に持ち、統計エンジンの前処理が反復注入を 1 個体にまとめる鍵に使う）
 5.    └─ metabolomix/analysis/sample_manifest.py  resolve_metadata()
 6.    └─ metabolomix/analysis/sample_manifest.py  apply_metadata()
 7.       └─ metabolomix/analysis/result_state.py  invalidate_results()
@@ -146,8 +179,9 @@ pipeline が比較を明示するときに使う `resolve_comparison`/`run_compa
 QC/blank/unknown/standard・`include=false` を混ぜない（選択規則は
 `metabolomix/analysis/sample_manifest.py` `select_statistical_samples()` が唯一の定義）・
 完全交絡を `allow_confounded=true` の
-明示なしには通さない、という前提検証を `compare_dataset()` の前に挟む。単体ツール
-`dataset_differential` はこの前提検証を経ない汎用呼び出し（USAGE.md 参照）。
+明示なしには通さない、という前提検証を `compare_dataset()` の前に挟む。対話ツール
+`dataset_compare`（統計エンジン）も完全交絡（`allow_confounded` なしには `STATISTIC_CONFOUNDED`）・`include=false`・非 sample の役割・
+群の明示は同じく守る。違うのは検定で、`dataset_compare` は moderated t（既定）、pipeline の差次的は v1 の Welch t（USAGE.md 参照）。
 
 ## dataset_export_evidence_bundle
 

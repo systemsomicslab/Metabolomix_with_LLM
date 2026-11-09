@@ -32,10 +32,11 @@ Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT
 
 ## dataset_plot
 
-前提: `kind` ごと——`volcano` は `dataset_differential`（2 群）、`pca` / `loadings` は `dataset_pca`、
+前提: `kind` ごと——`volcano` は `dataset_compare`（対比を 2 群の形に読み替えて描く。対比が複数の結果は `contrast_id` か `result_id#contrast_id` が要り、
+交互作用の対比は描けない）、`pca` / `loadings` は `dataset_pca`、
 `group_intensity` / `species` / `species_pca` は結果を要らない（`items` と `groups` を渡す。キュレーションの
 判断は `load_dataset` が読んだ `ds.curation_flags`）、`eic` / `eic_compounds` はデータセットの `.EIC.aef`（`artifact_paths` の `eic`）。無ければ
-`missing_state`（`dataset_pca` / `dataset_differential`）か `COMPANION_ARTIFACT_MISSING`（`.EIC.aef` が無い）。
+`missing_state`（`dataset_pca` / `dataset_compare`）か `COMPANION_ARTIFACT_MISSING`（`.EIC.aef` が無い）。
 状態変更: `ds.figures[kind]` を更新（メモリ上。ファイルは書かない）。`species_pca` はさらに結果を
 `ds.results` へ登録する（来歴の kind は `species_pca`。`loadings` の `result_id` には使え、分子種のローディングを描く。
 `pca` の `result_id` には使えない）。この結果は来歴に `metadata_revision` を持ち、試料の情報の更新・`dataset_exclude` で
@@ -67,38 +68,40 @@ EIC は特徴 ID（= `.arf2` の MasterAlignmentID）をそのまま `.EIC.aef` 
 2. ├─ metabolomix/tools/_holder.py  resolve_holder()
 3. ├─ metabolomix/tools/plot_tools.py  _check_arguments()
 4. ├─ [kind=volcano] metabolomix/tools/plot_tools.py  _volcano()
-5. │  ├─ metabolomix/tools/plot_tools.py  _pick_result()
-6. │  └─ metabolomix/plots/volcano.py  build_volcano_plot_payload()
-7. ├─ [kind=pca] metabolomix/tools/plot_tools.py  _pca()
-8. │  └─ metabolomix/plots/pca_scores.py  build_pca_scores_payload()
-9. ├─ [kind=loadings] metabolomix/tools/plot_tools.py  _loadings()
-10.│  ├─ metabolomix/plots/pca_loadings.py  dataset_features()
-11.│  └─ metabolomix/plots/pca_loadings.py  build_loadings_payload()
-12.├─ [kind=group_intensity] metabolomix/tools/plot_species_kinds.py  group_intensity()
-13.│  ├─ metabolomix/tools/plot_species_kinds.py  _common()
-14.│  │  ├─ metabolomix/plots/dataset_rows.py  resolve_samples()
-15.│  │  ├─ metabolomix/plots/dataset_rows.py  standard_only_spots()
-16.│  │  └─ metabolomix/plots/dataset_rows.py  resolve_selection()
-17.│  ├─ metabolomix/plots/dataset_rows.py  rows_by_spot()
-18.│  └─ metabolomix/plots/group_intensity.py  build_group_intensity_payload()
-19.├─ [kind=species] metabolomix/tools/plot_species_kinds.py  species()
-20.│  ├─ metabolomix/plots/dataset_rows.py  expand_spots()
-21.│  └─ metabolomix/plots/species.py  build_species_payload()
-22.├─ [kind=species_pca] metabolomix/tools/plot_species_kinds.py  species_pca()
-23.│  ├─ metabolomix/plots/dataset_rows.py  expand_spots()
-24.│  ├─ metabolomix/analysis/pca.py  run_pca_fit_subset()
-25.│  └─ metabolomix/analysis/result_state.py  register_result()
-26.├─ [kind=eic] metabolomix/tools/plot_tools.py  _eic()
-27.│  ├─ metabolomix/dataset/artifacts.py  artifact_path()
-28.│  ├─ metabolomix/eic/reader.py  read_eic_spot_css1()
-29.│  └─ metabolomix/plots/eic.py  build_eic_plot_payload()
-30.├─ [kind=eic_compounds] metabolomix/tools/plot_tools.py  _eic_compounds()
-31.│  ├─ metabolomix/eic/identity_map.py  select_identity_candidates()
-32.│  ├─ metabolomix/eic/reader.py  read_eic_spots_css1()
-33.│  └─ metabolomix/plots/eic.py  build_multi_compound_plot_payload()
-34.├─ [output=payload] metabolomix/core/serialization.py  json_payload()
-35.└─ [output=image] metabolomix/tools/plot_tools.py  _png()
-36.   └─ metabolomix/plots/render.py  render_png()
+5. │  ├─ metabolomix/analysis/stats_results.py  split_result_ref()
+6. │  ├─ metabolomix/tools/plot_tools.py  _pick_result()
+7. │  ├─ metabolomix/analysis/stats_results.py  as_two_group()
+8. │  └─ metabolomix/plots/volcano.py  build_volcano_plot_payload()
+9. ├─ [kind=pca] metabolomix/tools/plot_tools.py  _pca()
+10.│  └─ metabolomix/plots/pca_scores.py  build_pca_scores_payload()
+11.├─ [kind=loadings] metabolomix/tools/plot_tools.py  _loadings()
+12.│  ├─ metabolomix/plots/pca_loadings.py  dataset_features()
+13.│  └─ metabolomix/plots/pca_loadings.py  build_loadings_payload()
+14.├─ [kind=group_intensity] metabolomix/tools/plot_species_kinds.py  group_intensity()
+15.│  ├─ metabolomix/tools/plot_species_kinds.py  _common()
+16.│  │  ├─ metabolomix/plots/dataset_rows.py  resolve_samples()
+17.│  │  ├─ metabolomix/plots/dataset_rows.py  standard_only_spots()
+18.│  │  └─ metabolomix/plots/dataset_rows.py  resolve_selection()
+19.│  ├─ metabolomix/plots/dataset_rows.py  rows_by_spot()
+20.│  └─ metabolomix/plots/group_intensity.py  build_group_intensity_payload()
+21.├─ [kind=species] metabolomix/tools/plot_species_kinds.py  species()
+22.│  ├─ metabolomix/plots/dataset_rows.py  expand_spots()
+23.│  └─ metabolomix/plots/species.py  build_species_payload()
+24.├─ [kind=species_pca] metabolomix/tools/plot_species_kinds.py  species_pca()
+25.│  ├─ metabolomix/plots/dataset_rows.py  expand_spots()
+26.│  ├─ metabolomix/analysis/pca.py  run_pca_fit_subset()
+27.│  └─ metabolomix/analysis/result_state.py  register_result()
+28.├─ [kind=eic] metabolomix/tools/plot_tools.py  _eic()
+29.│  ├─ metabolomix/dataset/artifacts.py  artifact_path()
+30.│  ├─ metabolomix/eic/reader.py  read_eic_spot_css1()
+31.│  └─ metabolomix/plots/eic.py  build_eic_plot_payload()
+32.├─ [kind=eic_compounds] metabolomix/tools/plot_tools.py  _eic_compounds()
+33.│  ├─ metabolomix/eic/identity_map.py  select_identity_candidates()
+34.│  ├─ metabolomix/eic/reader.py  read_eic_spots_css1()
+35.│  └─ metabolomix/plots/eic.py  build_multi_compound_plot_payload()
+36.├─ [output=payload] metabolomix/core/serialization.py  json_payload()
+37.└─ [output=image] metabolomix/tools/plot_tools.py  _png()
+38.   └─ metabolomix/plots/render.py  render_png()
 
 ## save_figure
 

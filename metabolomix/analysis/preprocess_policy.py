@@ -162,8 +162,11 @@ def resolve_policy(ds, requested: dict, metadata: list[dict]) -> dict:
             "resolve_policy", "DatasetStateに定量行列がありません。load_datasetを先に実行してください。")
 
     # ---------- include=true 対象の集計（constraint: 全集計はinclude=trueのみ） ----------
+    # `dataset_exclude` で外した試料（`ds.excluded_samples`。名前で持つ）も include=false と
+    # 同じに扱う。数えたままだと、外した QC・ブランクを根拠に補正が有効化される。
+    excluded = getattr(ds, "excluded_samples", None) or {}
     included = [(name, row) for name, row in zip(sample_names, metadata)
-                if row.get("include", True)]
+                if row.get("include", True) and name not in excluded]
     n_qc = sum(1 for _, row in included if row.get("role") == "qc")
     n_blank = sum(1 for _, row in included if row.get("role") == "blank")
     n_sample = sum(1 for _, row in included if row.get("role") == "sample")

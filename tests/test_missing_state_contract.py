@@ -55,8 +55,8 @@ class MissingStateContractTests(unittest.TestCase):
     def test_dataset_pca(self):
         self.assert_no_dataset(server.dataset_pca())
 
-    def test_dataset_differential(self):
-        self.assert_no_dataset(server.dataset_differential(group_a=["a"], group_b=["b"]))
+    def test_dataset_compare(self):
+        self.assert_no_dataset(server.dataset_compare(reference_group="a", test_group="b"))
 
     def test_dataset_feature_search(self):
         self.assert_no_dataset(server.dataset_feature_search(sort="intensity"))

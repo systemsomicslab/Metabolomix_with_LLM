@@ -3,7 +3,6 @@ import json
 import sys
 from pathlib import Path
 
-import numpy as np
 import pytest
 from mcp.server.fastmcp import Image
 
@@ -16,32 +15,42 @@ from tests.test_pathway_jsonld import B, _graph  # 小さな JSON-LD 組み立�
 
 @pytest.fixture
 def lipid_arf(monkeypatch, tmp_path):
-    """前処理済みのデータセット（脂質アッセイ）を持つセッション。
+    """統計エンジンの行列を作れるデータセット（脂質アッセイ）を持つセッション。
 
     名前は旧 ARF 経路の名残（テストの本数が多いので変えない）。中身は `load_dataset` で
-    開いたデータセットと同じ `DatasetState`。"""
-    from metabolomix.mztab.dataset_state import DatasetState
+    開いたデータセットと同じ `DatasetState`（C0_r0 C1_r0 / P0_r0 P1_r0 の 2 群 × 2 個体。f0・f1 だけが脂質注釈）。"""
+    from tests.test_stats_results import _ds
 
     s = session_state.AnalysisSession()
     monkeypatch.setattr(session_state, "session", s)
     s.assay_kind = "lipid"
-    ds = DatasetState()
+    ds = _ds(groups=("C", "P"), per_group=2, reps=1, n_qc=0)
     ds.analysis_dir = str(tmp_path)   # 記録（run）の置き場所の基準: <tmp>/reports/pathway
-    ds.pp_matrix = np.array([[10.0, 1.0], [11.0, 1.1], [30.0, 0.3], [31.0, 0.31]])
-    ds.pp_sample_names = ["C_1", "C_2", "P_1", "P_2"]
-    ds.pp_feature_names = ["1", "2"]
-    ds.sample_names = list(ds.pp_sample_names)
-    ds.roles = {n: "sample" for n in ds.pp_sample_names}
-    ds.preprocessing_recipe = {"normalize": "none", "props": ["height"]}
-    ds.feature_annotations = {"1": {"name": "PC 34:1", "ontology": "PC"},
-                              "2": {"name": "LPC 18:1", "ontology": "LPC"}}
+    ds.feature_annotations = {"f0": {"name": "PC 34:1", "ontology": "PC"},
+                              "f1": {"name": "LPC 18:1", "ontology": "LPC"}}
     s.dataset = ds
     return s
 
 
 #: 2 群の指定（群はサンプル名のリスト。群名はラベルが決める）
-_GROUPS = {"group_a": ["C_1", "C_2"], "group_b": ["P_1", "P_2"],
+_GROUPS = {"group_a": ["C0_r0", "C1_r0"], "group_b": ["P0_r0", "P1_r0"],
            "group_a_label": "C", "group_b_label": "P"}
+_RUN_SAMPLES = {"C0_r0": "C", "C1_r0": "C", "P0_r0": "P", "P1_r0": "P"}
+
+
+def with_run_samples(doc, values=(10.0, 12.0, 30.0, 33.0)):
+    """`_graph` の JSON-LD の試料を、pathway_project が書く mzTab-M の試料名（4 注入）に差し替える。
+    PC の whole スコープと 18:0 の鎖スコープに値を付ける（鎖は群に差が無い値）。"""
+    items = [x for x in doc["@graph"]
+             if not (x["@type"] == "mslm:Sample" or x["@type"] == "mslm:SampleMeasurement")]
+    for i, (name, group) in enumerate(_RUN_SAMPLES.items(), start=1):
+        items.append({"@id": f"{B}rs/{i}", "@type": "mslm:Sample", "identifier": name, "sampleGroup": group})
+        for scope, v in (("n/PC/scope/whole", values[i - 1]), ("n/PC/scope/acyl-18%3A0", 5.0 + i % 2)):
+            items.append({"@id": f"{B}rm/{scope}/{i}", "@type": "mslm:SampleMeasurement",
+                          "measuredEntity": {"@id": B + scope}, "inSample": {"@id": f"{B}rs/{i}"},
+                          "value": v})
+    return {**doc, "@graph": items}
+
 
 #: fake_measure が JSON-LD に足す要素（テストごとに差し替える）
 _EXTRA: list = []
@@ -58,11 +67,7 @@ def fake_measure(monkeypatch):
         out = {}
         for p in request["pathways"]:
             path = run_dir / f"{p}-measurements.json"
-            doc = _graph(extra=_EXTRA)
-            # 群名を実際の比較に合わせる
-            for x in doc["@graph"]:
-                if x["@type"] == "mslm:Sample":
-                    x["sampleGroup"] = "C" if x["identifier"] == "S1" else "P"
+            doc = with_run_samples(_graph(extra=_EXTRA))
             path.write_text(json.dumps(doc), encoding="utf-8")
             out[p] = str(path)
         return {"status": "ok", "outputs": out, "mapped_nodes": {},
@@ -79,10 +84,12 @@ def test_requires_lipid_assay(lipid_arf, fake_measure):
     assert body["error"]["required_tools"] == ["record_objective"]
 
 
-def test_requires_preprocessed_matrix(lipid_arf, fake_measure):
-    lipid_arf.dataset.pp_matrix = None
-    body = json.loads(tools.pathway_project(**_GROUPS))
+def test_unknown_matrix_id_is_missing_state_stat_matrix(lipid_arf, fake_measure):
+    body = json.loads(tools.pathway_project(**_GROUPS, matrix_id="nope"))
+    assert body["error"]["code"] == "missing_state"
+    assert body["error"]["state"] == "stat_matrix"
     assert body["error"]["required_tools"] == ["dataset_preprocess"]
+    assert fake_measure == []
 
 
 def test_requires_a_dataset(monkeypatch, fake_measure):
@@ -328,3 +335,233 @@ def test_corrupt_manifest_is_output_invalid(lipid_arf, fake_measure):
     (tools._run_dir(run_id, session_state.session) / "manifest.json").write_text("{not json", encoding="utf-8")
     body = json.loads(tools.pathway_plot(run_id=run_id))
     assert body["error"]["code"] == "MSLM_OUTPUT_INVALID"
+
+
+# --- 統計エンジンの行列から作る（Task 8） ---------------------------------------------------
+
+def _sml_row(run_dir, name):
+    for line in (run_dir / "input.mztab").read_text(encoding="utf-8").splitlines():
+        cols = line.split("\t")
+        if cols[0] == "SML" and cols[7] == name:
+            return cols
+    raise AssertionError(f"{name} の SML 行がありません")
+
+
+def test_pathway_project_default_matrix_and_missing_as_zero_in_mztab(lipid_arf, fake_measure, tmp_path):
+    import numpy as np
+    ds = lipid_arf.dataset
+    ds.feature_matrix[0, ds.sample_names.index("C0_r0")] = np.nan      # f0（PC 34:1）の欠測
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    assert "error" not in body, body
+    run_dir = tmp_path / "reports" / "pathway" / body["run_id"]
+    row = _sml_row(run_dir, "PC 34:1")
+    assert row[14] == "0.0"                      # 欠測は 0（MSLipidMapper の約束）。null ではない
+    assert float(row[15]) > 0 and "null" not in row[14:18]
+    # 既定の行列は登録され、前処理の記録が 1 件書かれて manifest がその ID を持つ
+    from metabolomix.analysis import stats_results
+    assert stats_results.get_matrix(ds, body["matrix_id"]) is not None
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["matrix_id"] == body["matrix_id"] and manifest["test"] == "moderated_t"
+    assert body["preprocess_record"]["written"] is True
+    assert manifest["preprocess_record_id"] == body["preprocess_record"]["record_id"]
+    assert manifest["normalization"].startswith(f"stats-engine matrix {body['matrix_id']}")
+    # ノード表に新しい欄
+    header = body["pathways"]["remodeling"]["nodes_tsv"].splitlines()[0].split("\t")
+    assert header[-4:] == ["p", "ci_low", "ci_high", "verdict"]
+
+
+def test_pathway_project_uses_registered_matrix_id(lipid_arf, fake_measure):
+    from metabolomix.tools.stats_tools import dataset_preprocess
+    pre = json.loads(dataset_preprocess(blank_min_ratio=None, detection_min_rate=None,
+                                        max_qc_rsd=None, max_d_ratio=None))
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"], matrix_id=pre["matrix_id"]))
+    assert "error" not in body, body
+    assert body["matrix_id"] == pre["matrix_id"]
+
+
+def _qc_session(monkeypatch, tmp_path, **kw):
+    """QC 4 本つきのデータセット（脂質アッセイ）。"""
+    from tests.test_stats_results import _ds
+    s = session_state.AnalysisSession()
+    monkeypatch.setattr(session_state, "session", s)
+    s.assay_kind = "lipid"
+    ds = _ds(groups=("C", "P"), per_group=2, reps=1, n_qc=4, **kw)
+    ds.analysis_dir = str(tmp_path)
+    ds.feature_annotations = {"f0": {"name": "PC 34:1", "ontology": "PC"},
+                              "f1": {"name": "LPC 18:1", "ontology": "LPC"}}
+    s.dataset = ds
+    return ds
+
+
+def _stats_records(tmp_path):
+    d = tmp_path / "reports" / "stats"
+    return sorted(d.glob("*")) if d.is_dir() else []
+
+
+def test_samples_outside_the_matrix_are_rejected(monkeypatch, tmp_path, fake_measure):
+    ds = _qc_session(monkeypatch, tmp_path)
+    body = json.loads(tools.pathway_project(group_a=["C0_r0", "QC0"], group_b=["P0_r0", "P1_r0"],
+                                            group_a_label="C", group_b_label="P"))
+    assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
+    assert body["error"]["details"]["absent"] == ["QC0"]
+    assert fake_measure == []
+    assert not getattr(ds, "stat_matrices", None) and _stats_records(tmp_path) == []   # 行列も記録も残さない
+
+
+def test_pathway_project_registers_default_matrix_once_and_reuses_it(lipid_arf, fake_measure, tmp_path):
+    from metabolomix.analysis import stats_results
+    first = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    ds = lipid_arf.dataset
+    assert stats_results.get_matrix(ds, first["matrix_id"]) is not None
+    records = _stats_records(tmp_path)
+    assert len(records) == 1
+    second = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    assert second["matrix_id"] == first["matrix_id"] and "preprocess_record" not in second
+    assert _stats_records(tmp_path) == records                       # 新しい前処理の記録は無い
+    manifest = json.loads((tmp_path / "reports" / "pathway" / second["run_id"] / "manifest.json")
+                          .read_text(encoding="utf-8"))
+    assert manifest["preprocess_record_id"] == first["preprocess_record"]["record_id"]
+    # 返った ID はそのまま渡せる
+    third = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"], matrix_id=first["matrix_id"]))
+    assert "error" not in third and third["matrix_id"] == first["matrix_id"]
+
+
+@pytest.mark.parametrize("kwargs", [{"aggregation": "max"}, {"q_threshold": 0.0}, {"q_threshold": 1.5},
+                                    {"q_threshold": float("nan")}, {"q_threshold": True},
+                                    {"pathways": ["nope"]}])
+def test_bad_request_leaves_no_matrix_no_record_no_run(lipid_arf, fake_measure, tmp_path, kwargs):
+    body = json.loads(tools.pathway_project(**_GROUPS, **kwargs))
+    assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
+    assert fake_measure == [] and not getattr(lipid_arf.dataset, "stat_matrices", None)
+    assert _stats_records(tmp_path) == [] and not (tmp_path / "reports" / "pathway").exists()
+
+
+def test_too_few_units_leaves_no_matrix_no_record(monkeypatch, tmp_path, fake_measure):
+    from tests.test_stats_results import _ds
+    s = session_state.AnalysisSession()
+    monkeypatch.setattr(session_state, "session", s)
+    s.assay_kind = "lipid"
+    ds = _ds(groups=("C", "P"), per_group=1, reps=2, n_qc=0)
+    ds.analysis_dir = str(tmp_path)
+    ds.feature_annotations = {"f0": {"name": "PC 34:1", "ontology": "PC"},
+                              "f1": {"name": "LPC 18:1", "ontology": "LPC"}}
+    s.dataset = ds
+    body = json.loads(tools.pathway_project(group_a=["C0_r0", "C0_r1"], group_b=["P0_r0", "P0_r1"],
+                                            group_a_label="C", group_b_label="P"))
+    assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
+    assert not getattr(ds, "stat_matrices", None) and _stats_records(tmp_path) == []
+
+
+def test_error_after_implicit_matrix_carries_matrix_id(lipid_arf, fake_measure, tmp_path):
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"], acyl_chains=["99:9"]))
+    assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
+    from metabolomix.analysis import stats_results
+    assert stats_results.get_matrix(lipid_arf.dataset, body["error"]["details"]["matrix_id"]) is not None
+
+
+def test_bridge_error_after_implicit_matrix_carries_matrix_id(lipid_arf, monkeypatch):
+    def boom(*a, **k):
+        raise bridge.BridgeError("MSLM_NOT_CONFIGURED", "設定して", {"setting": "x"})
+    monkeypatch.setattr(bridge, "run_bridge", boom)
+    body = json.loads(tools.pathway_project(**_GROUPS))
+    assert body["error"]["code"] == "MSLM_NOT_CONFIGURED" and body["error"]["details"]["setting"] == "x"
+    assert body["error"]["details"]["matrix_id"]
+
+
+def test_absent_samples_details_are_cut_with_a_count(monkeypatch, tmp_path, fake_measure):
+    _qc_session(monkeypatch, tmp_path)
+    many = [f"ghost{i:02d}" for i in range(25)]
+    body = json.loads(tools.pathway_project(group_a=many, group_b=["P0_r0", "P1_r0"],
+                                            group_a_label="C", group_b_label="P"))
+    assert len(body["error"]["details"]["absent"]) == 20 and body["error"]["details"]["absent_n_more"] == 5
+
+
+def test_needs_input_for_normalized_data_with_qc(monkeypatch, tmp_path, fake_measure):
+    ds = _qc_session(monkeypatch, tmp_path)
+    ds.quant_state = {"normalized": True, "method": "is_ratio", "unit": "ratio", "record_id": "q1"}
+    body = json.loads(tools.pathway_project(**_GROUPS))
+    inner = body["needs_input"]
+    assert inner["field"] == "preprocess.drift.mode" and inner["argument"] == "drift_mode"
+    assert "pathway_project" in inner["reason"] and inner["retry_tools"] == ["dataset_preprocess"]
+    assert fake_measure == [] and not getattr(ds, "stat_matrices", None)
+    from metabolomix.tools.stats_tools import dataset_preprocess
+    pre = json.loads(dataset_preprocess(drift_mode="off", blank_min_ratio=None, detection_min_rate=None,
+                                        max_qc_rsd=None, max_d_ratio=None))
+    ok = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"], matrix_id=pre["matrix_id"]))
+    assert "error" not in ok, ok
+
+
+def test_normalization_text_reports_resolved_method_and_drift(monkeypatch, tmp_path, fake_measure):
+    ds = _qc_session(monkeypatch, tmp_path)
+    from metabolomix.tools.stats_tools import dataset_preprocess
+    pre = json.loads(dataset_preprocess(drift_mode="off", blank_min_ratio=None, detection_min_rate=None,
+                                        max_qc_rsd=None, max_d_ratio=None, normalize="auto"))
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"], matrix_id=pre["matrix_id"]))
+    text = body["normalization"]
+    assert "normalize=pqn" in text and "normalize=auto" not in text      # 解いた方法（QC があれば pqn）
+    assert "drift=skipped (mode_off)" in text
+    assert (tmp_path / "reports" / "pathway" / body["run_id"] / "input.mztab").read_text(
+        encoding="utf-8").count("normalize=pqn") == 1
+
+
+def test_nonpositive_values_are_written_as_zero_in_mztab(lipid_arf, fake_measure, tmp_path):
+    ds = lipid_arf.dataset
+    ds.feature_matrix[0, ds.sample_names.index("C0_r0")] = -5.0      # 0 以下は欠測（エンジンの定義）
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    assert "error" not in body, body
+    assert _sml_row(tmp_path / "reports" / "pathway" / body["run_id"], "PC 34:1")[14] == "0.0"
+
+
+def test_tool_subject_of_collapses_replicates_in_compare_scopes(monkeypatch, tmp_path, fake_measure):
+    """反復注入（1 個体 × 2 反復）が個体にまとまる: tool が compare_scopes へ渡す subject_of を捕まえる。"""
+    from tests.test_stats_results import _ds
+    s = session_state.AnalysisSession()
+    monkeypatch.setattr(session_state, "session", s)
+    s.assay_kind = "lipid"
+    ds = _ds(groups=("C", "P"), per_group=3, reps=2, n_qc=0)
+    ds.analysis_dir = str(tmp_path)
+    ds.feature_annotations = {"f0": {"name": "PC 34:1", "ontology": "PC"},
+                              "f1": {"name": "LPC 18:1", "ontology": "LPC"}}
+    s.dataset = ds
+    seen = []
+    real = tools.compare.compare_scopes
+    monkeypatch.setattr(tools.compare, "compare_scopes",
+                        lambda *a, **k: (seen.append(k.get("subject_of")), real(*a, **k))[1])
+    groups = {"group_a": ["C0_r0", "C0_r1", "C1_r0", "C1_r1", "C2_r0", "C2_r1"],
+              "group_b": ["P0_r0", "P0_r1", "P1_r0", "P1_r1", "P2_r0", "P2_r1"],
+              "group_a_label": "C", "group_b_label": "P"}
+    body = json.loads(tools.pathway_project(**groups, pathways=["remodeling"]))
+    assert "error" not in body, body
+    mapping = seen[0]
+    assert mapping["C0_r0"] == mapping["C0_r1"] != mapping["C1_r0"]
+    assert len({v for k, v in mapping.items() if k.startswith("C")}) == 3
+
+
+def test_qc_injections_never_reach_the_mztab(monkeypatch, tmp_path, fake_measure):
+    _qc_session(monkeypatch, tmp_path)
+    from metabolomix.tools.stats_tools import dataset_preprocess
+    pre = json.loads(dataset_preprocess(drift_mode="off", blank_min_ratio=None, detection_min_rate=None,
+                                        max_qc_rsd=None, max_d_ratio=None, normalize="none"))
+    assert pre["n_qc"] == 4
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"], matrix_id=pre["matrix_id"]))
+    assert "error" not in body, body
+    text = (tmp_path / "reports" / "pathway" / body["run_id"] / "input.mztab").read_text(encoding="utf-8")
+    assert "QC" not in text
+    assert text.count("assay[") >= 4
+
+
+def test_group_with_too_few_units_after_collapse_is_bad_request(monkeypatch, tmp_path, fake_measure):
+    from tests.test_stats_results import _ds
+    s = session_state.AnalysisSession()
+    monkeypatch.setattr(session_state, "session", s)
+    s.assay_kind = "lipid"
+    ds = _ds(groups=("C", "P"), per_group=1, reps=2, n_qc=0)     # 各群 1 個体 × 2 反復
+    ds.analysis_dir = str(tmp_path)
+    ds.feature_annotations = {"f0": {"name": "PC 34:1", "ontology": "PC"},
+                              "f1": {"name": "LPC 18:1", "ontology": "LPC"}}
+    s.dataset = ds
+    body = json.loads(tools.pathway_project(group_a=["C0_r0", "C0_r1"], group_b=["P0_r0", "P0_r1"],
+                                            group_a_label="C", group_b_label="P"))
+    assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
+    assert body["error"]["details"]["n_units"] == 1
+    assert fake_measure == []

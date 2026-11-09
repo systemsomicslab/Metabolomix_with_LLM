@@ -53,7 +53,7 @@ def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
            state: dict):
     """`ds` の複製に値・マスク・欄を差し替えた派生データセット（`ds` は動かさない）。
 
-    古い行列から出た結果（results / analysis_matrices / pp_* / last_* / preprocess_* /
+    古い行列から出た結果（results / analysis_matrices / stat_matrices / pp_* / last_* / preprocess_* /
     preprocessing_recipe / handoff_report）は空に戻す。指紋は保存せず都度計算する
     （`result_state.dataset_fingerprint`）ので、古い指紋が残ることはない。
 
@@ -131,6 +131,7 @@ def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
     new.dataset_id = f"ds_{uuid.uuid4().hex}"
     new.results = {}
     new.analysis_matrices = {}
+    new.stat_matrices = {}
     new.pp_matrix = None
     new.pp_sample_names = []
     new.pp_feature_names = []

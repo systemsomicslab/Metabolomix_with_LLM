@@ -21,6 +21,7 @@ from metabolomix.tools import handle_tools
 from tests.curation_fixtures import arf2_spot_raw, write_arf2
 from tests.dcl_fixture import build_dcl_bytes
 from tests.reanalysis_fixtures import POS_FEATURES, write_mztab
+from tests.v1_chain import v1_differential, v1_preprocess
 
 HC = ["HC1", "HC2", "HC3"]
 RA = ["RA1", "RA2", "RA3"]
@@ -174,8 +175,8 @@ def test_dcl_shorter_than_ids_is_out_of_range(tmp_path):
 
 
 def _differential(handle=None):
-    T.dataset_preprocess(dataset_handle=handle)
-    return json.loads(T.dataset_differential(group_a=HC, group_b=RA, dataset_handle=handle))["result_id"]
+    v1_preprocess(dataset_handle=handle)
+    return json.loads(v1_differential(group_a=HC, group_b=RA, dataset_handle=handle))["result_id"]
 
 
 def test_tool_on_handle_uses_the_handles_alignment_files(tmp_path):

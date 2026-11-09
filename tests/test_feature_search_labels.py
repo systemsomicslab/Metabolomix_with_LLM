@@ -9,6 +9,7 @@ from metabolomix.core import session_state
 from metabolomix.tools import dataset_analysis_tools as T
 from metabolomix.tools import handle_tools, mztab_tools
 from tests.reanalysis_fixtures import write_mztab
+from tests.v1_chain import v1_differential, v1_preprocess
 
 HC, RA = ["HC1", "HC2", "HC3"], ["RA1", "RA2", "RA3"]
 
@@ -17,8 +18,8 @@ HC, RA = ["HC1", "HC2", "HC3"], ["RA1", "RA2", "RA3"]
 def loaded(tmp_path):
     session_state.session = session_state.AnalysisSession()
     handle_tools.load_dataset(mztab_path=str(write_mztab(tmp_path / "AlignResult-1.mzTab")))
-    T.dataset_preprocess()
-    T.dataset_differential(group_a=HC, group_b=RA, group_a_label="HC", group_b_label="RA")
+    v1_preprocess()
+    v1_differential(group_a=HC, group_b=RA, group_a_label="HC", group_b_label="RA")
     yield
     session_state.session = session_state.AnalysisSession()
 

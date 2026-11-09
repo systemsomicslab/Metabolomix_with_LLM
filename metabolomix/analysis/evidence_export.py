@@ -20,6 +20,8 @@ from metabolomix.analysis import alignment_qc, export_contract, feature_search
 from metabolomix.analysis.dataset_analysis import (PreconditionError, build_dataset_pp_inputs,
                                                    run_dataset_preprocess)
 from metabolomix.analysis.result_state import assert_current
+from metabolomix.analysis.stats_results import (as_two_group, check_contrast_applies, get_matrix,
+                                                  sample_ids_by_name)
 from metabolomix.core.atomic_io import DomainError
 
 FEATURE_COLUMNS = ['feature_id','spot_id','mz','rt','log2fc','p_value','q_value','mean_a','mean_b','significant']
@@ -132,14 +134,32 @@ def _intensity_cell(row):
 
 
 def comparison_of(result, preprocess):
+    """manifest の `comparison`。v1 の結果は `method='Welch'`、エンジンの結果（`as_two_group` の出力。
+    `statistics` を持つ）は実際の検定名と `statistics`（検定・CI 水準・判定規則・BH の母集団・単位）を足し、
+    `allow_confounded=true` で完全交絡を越えた比較なら `unadjusted_confounded: true` も足す。
+    `n_a` / `n_b` は注入の数で、`samples.tsv` の群 a / b の行数と一致する。"""
     if result.get('kind') != 'two_group' or result.get('log2fc_sign') != export_contract.LOG2FC_SIGN:
         raise ValueError('現行契約と向きが一致した2群比較が必要です')
     if result.get('contract_version') != export_contract.CONTRACT_VERSION:
         raise ValueError('差次的結果の契約版が不一致です')
-    return dict(group_a=result['a'], group_b=result['b'], n_a=result['n_a'], n_b=result['n_b'],
-                log2fc_sign=export_contract.LOG2FC_SIGN, method='Welch',correction='BH',
-                q_threshold=result['q_threshold'],log2fc_threshold=result['log2fc_threshold'],
-                preprocess=clean(preprocess),log_transform=result.get('log_transform'))
+    engine = export_contract.is_engine_result(result)
+    statistics = result.get('statistics') if engine else None
+    comparison = dict(group_a=result['a'], group_b=result['b'], n_a=result['n_a'], n_b=result['n_b'],
+                      log2fc_sign=export_contract.LOG2FC_SIGN,
+                      method=statistics['test'] if statistics else 'Welch',correction='BH',
+                      q_threshold=result['q_threshold'],log2fc_threshold=result['log2fc_threshold'],
+                      preprocess=clean(preprocess),log_transform=result.get('log_transform'))
+    if engine:
+        # spec §13: 書き出しのメタ行と同じ定義を manifest にも置く（受け手は未知の欄を許す）
+        comparison.update(contrast_id=result.get('contrast_id'),statistics=clean(statistics),
+                          effect_size_definition=clean(result.get('effect_size_definition')),
+                          mean_definition=export_contract.MEAN_DEFINITION,
+                          matrix_id=result.get('matrix_id'),rule_hash=result.get('rule_hash'))
+        # allow_confounded=true で完全交絡を越えた比較（as_two_group が来歴に足した v1 と同じ印）。
+        # 来歴そのもの（manifest の provenance.result.comparison）にも v1 と同じ形で載る。
+        if ((result.get('provenance') or {}).get('comparison') or {}).get('unadjusted_confounded'):
+            comparison['unadjusted_confounded'] = True
+    return comparison
 
 
 def feature_row(row, meta, spot_id=None):
@@ -322,7 +342,7 @@ def _intensity_recipe(ds, result):
                            or getattr(ds,'pp_matrix',None) is None):
         raise DomainError('EVIDENCE_INTENSITIES_UNAVAILABLE',
                           'この結果を計算した前処理のレシピが分からず、今の前処理の行列もこの結果の親では'
-                          'ないので、試料ごとの値を書けません。dataset_differential で計算し直してください。',
+                          'ないので、試料ごとの値を書けません。dataset_compare で計算し直してください。',
                           {'result_id':(result.get('provenance') or {}).get('result_id'),
                            'parent_ids':parents,'preprocess_id':getattr(ds,'preprocess_id',None)})
     return recipe
@@ -367,7 +387,7 @@ def _intensity_rows(ds, result):
     if not samples:
         raise DomainError('EVIDENCE_INTENSITIES_UNAVAILABLE',
                           'この結果は群の試料（samples_a / samples_b）を持たないので、試料ごとの値を'
-                          '書けません。dataset_differential で計算し直してください。',
+                          '書けません。dataset_compare で計算し直してください。',
                           {'result_id':(result.get('provenance') or {}).get('result_id')})
     position = {name:i for i,name in enumerate(names)}
     mask, reason = _detection_source(ds,samples)
@@ -384,29 +404,98 @@ def _intensity_rows(ds, result):
     return rows, stage, reason
 
 
+def _engine_intensity_rows(ds, record, result):
+    """統計エンジンの結果の `intensities.tsv` の行と段・検出が無い理由。
+
+    値は結果が読んだ行列（`ds.stat_matrices[matrix_id]`）の `sample_values`——正規化の後・log2 の前の
+    線形値で、欠測は NaN（エンジンは検定に補完しないので段は常に `pre_imputation`）。v1 が書いていた
+    値（前処理のレシピを当て直した線形値）と同じ尺度。試料は `samples_a` / `samples_b` の表示名を
+    エンジンの試料 ID へ結んで引く。行列が登録に無い（除外・試料の表の変更で古くなった）ときは
+    `STATS_MATRIX_MISSING`（ツールが `missing_state` にする）。
+    """
+    entry = get_matrix(ds,record['matrix_id'])
+    if entry is None or entry['prepared'].sample_values is None:
+        raise DomainError('STATS_MATRIX_MISSING',
+                          f"結果が読んだ行列 {record['matrix_id']} が登録に無いので、試料ごとの値を書けません。",
+                          {'matrix_id':record['matrix_id']})
+    prepared = entry['prepared']
+    column = {str(fid):j for j,fid in enumerate(prepared.feature_ids)}
+    wanted = [str(row['feature']) for row in result['results']]
+    if set(wanted) != set(column):
+        raise DomainError('EVIDENCE_INTENSITIES_MISMATCH',
+                          '結果が読んだ行列の特徴の集合が、結果の行と一致しません。',
+                          {'only_in_result':sorted(set(wanted)-set(column))[:20],
+                           'only_in_matrix':sorted(set(column)-set(wanted))[:20]})
+    samples = [*result['samples_a'],*result['samples_b']]
+    to_id = sample_ids_by_name(ds)
+    position = {sample_id:i for i,sample_id in enumerate(prepared.sample_ids)}
+    mask, reason = _detection_source(ds,samples)
+    mask_row = {str(fid):i for i,fid in enumerate(ds.feature_ids)}
+    mask_column = {name:i for i,name in enumerate(ds.sample_names)}
+    values = np.asarray(prepared.sample_values,dtype=float)
+    rows = []
+    for fid in wanted:
+        for name in samples:
+            row = position.get(to_id.get(name,name))
+            rows.append(dict(feature_id=fid,sample_id=name,
+                             value=None if row is None else values[row,column[fid]],
+                             detected=None if mask is None
+                             else bool(mask[mask_row[fid],mask_column[name]])))
+    return rows, 'pre_imputation', reason
+
+
+def _engine_exclusions(entry):
+    """エンジンの行列の登録にある除外（`dataset_exclude`）。名前は 20 件で切り `n_more` を添える。"""
+    if entry is None:
+        return []
+    out = []
+    for stage,key in (('excluded_samples','samples'),('excluded_features','features')):
+        names = list(entry['exclusions'].get(key) or [])
+        out.append(dict(stage=stage,removed=len(names),names=names[:20],n_more=max(0,len(names)-20)))
+    return out
+
+
 def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=None,
-                            arf2_path=None, dcl_path=None):
+                            arf2_path=None, dcl_path=None, contrast_id=None):
     """dataset 経路の根拠バンドル v3。`arf2_path` / `dcl_path` は同じアラインメントの `.arf2` / `.dcl`
-    （spectrum_links を結ぶのに使う。`dataset_spectrum_links`）。"""
+    （spectrum_links を結ぶのに使う。`dataset_spectrum_links`）。
+
+    `result` は v1 の `two_group` か、統計エンジンの `compare` の記録（`as_two_group` で 1 つの対比を読む。
+    対比が複数なら `contrast_id` が要る）。エンジンの結果は `comparison.method` が実際の検定名、
+    `comparison.statistics` を足し、`intensities.tsv` は行列の `sample_values`（`pre_imputation`）。"""
     if getattr(ds,'exploratory_only',False):
         raise DomainError('EXPLORATORY_ONLY_DATASET','探索専用データセットは比較の根拠として出力できません',{})
-    # 値の出所が無い結果は、古いかどうかより先に止める（出所の無さは計算し直す以外に直らない）。
-    _intensity_recipe(ds,result)
-    assert_current(ds,result)
+    record = result
+    engine_result = record.get('kind') == 'compare'
+    check_contrast_applies(record,contrast_id)
+    if engine_result:
+        assert_current(ds,record)
+        result = as_two_group(record,contrast_id)
+    else:
+        # 値の出所が無い結果は、古いかどうかより先に止める（出所の無さは計算し直す以外に直らない）。
+        _intensity_recipe(ds,result)
+        assert_current(ds,result)
     provenance = result.get('provenance') or {}
-    preprocess, report = {}, None
-    for parent_id in provenance.get('parent_ids', []):
-        parent = getattr(ds, 'results', {}).get(parent_id, {})
-        if parent.get('kind') == 'preprocess' or parent.get('provenance', {}).get('kind') == 'preprocess':
-            preprocess = parent.get('provenance', {}).get('effective_parameters', {})
-            report = parent.get('report') or {k:v for k,v in parent.items() if k != 'provenance'}
-            break
+    preprocess, report, exclusions = {}, None, None
+    if engine_result:
+        entry = get_matrix(ds,record['matrix_id'])
+        preprocess = dict(entry['config']) if entry else {}
+        exclusions = _engine_exclusions(entry)
+    else:
+        for parent_id in provenance.get('parent_ids', []):
+            parent = getattr(ds, 'results', {}).get(parent_id, {})
+            if parent.get('kind') == 'preprocess' or parent.get('provenance', {}).get('kind') == 'preprocess':
+                preprocess = parent.get('provenance', {}).get('effective_parameters', {})
+                report = parent.get('report') or {k:v for k,v in parent.items() if k != 'provenance'}
+                break
     # 引き継いだ結果の親は ds.results に無いので、値の段はレシピから書く。
-    comparison = comparison_of(result,preprocess or feature_search._result_recipe(ds,result) or {})
+    comparison = comparison_of(result,preprocess or (None if engine_result
+                                                     else feature_search._result_recipe(ds,result)) or {})
     comparison['polarity'] = polarity
     try:
         samples = _samples_table(ds,result)
-        intensities, stage, detection_reason = _intensity_rows(ds,result)
+        intensities, stage, detection_reason = (_engine_intensity_rows(ds,record,result) if engine_result
+                                                else _intensity_rows(ds,result))
     except PreconditionError as exc:
         raise DomainError('EVIDENCE_INTENSITIES_UNAVAILABLE',
                           f'試料ごとの値を取り出せません: {exc.message}',exc.details) from exc
@@ -416,7 +505,7 @@ def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=N
         fid = str(row['feature'])
         meta = ds.feature_metadata.get(row['feature'], {})
         feature = feature_row(row,meta)
-        feature['significant'] = export_contract.is_significant(q=row.get('q'),log2fc=row.get('log2fc'),
+        feature['significant'] = export_contract.row_significant(row,   # 書き出しの significant 列と同じ（R16）
             q_threshold=result['q_threshold'],log2fc_threshold=result['log2fc_threshold'])
         feature['adduct'] = adducts.get(fid)
         features.append(feature)
@@ -445,7 +534,7 @@ def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=N
                                   source_analysis_id=source_id,provenance=dict(result=provenance,
                                       source_files=getattr(ds,'source_files',[]),curation_state=(curation or {}).get('state'),
                                       **link_provenance),preprocessing_report=report,
-                                  exclusions=exclusion_steps(report),samples=samples,
+                                  exclusions=exclusions if exclusions is not None else exclusion_steps(report),samples=samples,
                                   intensities=intensities,intensities_stage=stage,
                                   detection_unavailable_reason=detection_reason)
 

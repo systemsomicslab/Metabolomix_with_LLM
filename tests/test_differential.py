@@ -103,6 +103,30 @@ class TestVolcanoAndConfound(unittest.TestCase):
         self.assertEqual(flags["f1"], "down")
         self.assertEqual(flags["f2"], "ns")
 
+    def test_volcano_p_underflow_to_zero_is_drawn_at_the_float_floor(self):
+        """p が 0.0 に潰れた（アンダーフロー）検定済みの行は NaN（検定不能）にせず、最小の正の float で
+        -log10 を取る（R17）。保存した p は変えない。v1 と統計エンジンの行で同じ。"""
+        import sys
+        rows = [{"feature": "v1", "log2fc": 3.0, "p": 0.0, "q": 0.0},
+                {"feature": "engine", "log2fc": -3.0, "p": 0.0, "q": 0.0, "significant": True},
+                {"feature": "neg", "log2fc": 3.0, "p": -1.0, "q": 0.0}]
+        pts = {p["feature"]: p for p in diff.volcano_data(rows, q_thr=0.05, log2fc_thr=1.0)}
+        floor = -math.log10(sys.float_info.min)
+        self.assertAlmostEqual(floor, 307.6526555685888, places=9)
+        self.assertEqual(pts["v1"]["neg_log10_p"], floor)
+        self.assertEqual(pts["v1"]["sig"], "up")
+        self.assertEqual(pts["engine"]["neg_log10_p"], floor)
+        self.assertEqual(pts["engine"]["sig"], "down")
+        self.assertTrue(math.isnan(pts["neg"]["neg_log10_p"]))          # 負の p は値として扱わない
+        self.assertEqual(rows[0]["p"], 0.0)                              # 保存した p はそのまま
+
+    def test_volcano_row_flag_wins_over_q_and_log2fc(self):
+        """行が `significant` を持てば（統計エンジンの行。R16）、色はその印だけで決まる。"""
+        rows = [{"feature": "judged_out", "log2fc": 4.0, "p": 1e-20, "q": 1e-18, "significant": False},
+                {"feature": "kept", "log2fc": -4.0, "p": 1e-20, "q": 1e-18, "significant": True}]
+        flags = {p["feature"]: p["sig"] for p in diff.volcano_data(rows, q_thr=0.05, log2fc_thr=1.0)}
+        self.assertEqual(flags, {"judged_out": "ns", "kept": "down"})
+
     def test_confounding_detected(self):
         groups = ["ctrl", "ctrl", "trt", "trt"]
         batches = ["d1", "d1", "d2", "d2"]  # group perfectly aligns with batch

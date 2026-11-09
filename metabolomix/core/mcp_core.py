@@ -207,13 +207,18 @@ on a spectrum seen in the `.dcl` — never on the acquisition flag alone. A
 `not_found` from `dcl_find_msms` means no MS/MS was acquired for that precursor,
 NOT that the expected fragments are absent.
 
-DIFFERENTIAL ANALYSIS — before running `dataset_differential`, run
-`dataset_preprocess` (normalization / QC filtering / imputation) so fold changes
-are not dominated by per-sample loading differences; `dataset_exclude` removes
-samples or features (reversibly) before it. Always surface the tool's caveats —
-group/batch confounding, small n (few replicates), and normalization status — as
-first-class findings, never bury them. `dataset_differential` runs on the
-preprocessed matrix and errors clearly if `dataset_preprocess` was not run.
+DIFFERENTIAL ANALYSIS — `dataset_preprocess` (optional; normalization / QC
+filtering / drift correction, and it returns a `matrix_id`) builds the matrix that
+`dataset_compare` and `dataset_pca` read; without a `matrix_id` they use the
+default preprocessing, so fold changes are not dominated by per-sample loading
+differences. `dataset_exclude` removes samples or features (reversibly) before it.
+Read each feature's verdict — changed / unchanged / inconclusive — which rests on
+q and the confidence interval, never on |log2fc| alone. When a tool answers
+`needs_input` (not an error), ask the user, then call a tool in `retry_tools`
+with the answer in `argument` (for `dataset_analysis_run` the answer goes into
+the spec `field`). Always surface the tool's caveats — group/batch confounding,
+small n (few replicates), and normalization status — as first-class findings,
+never bury them.
 
 PARALLEL REANALYSIS — when several agents share this server (a reanalysis team),
 do not rely on the current dataset: `load_dataset` always makes the handle it

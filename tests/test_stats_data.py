@@ -34,7 +34,8 @@ def test_from_dataset_falls_back_to_msdial_samples_then_roles():
     sd = D.from_dataset(_ds(msdial_samples=ms))
     assert sd.samples[0].role == "qc" and sd.samples[0].injection_order == 7.0
     assert sd.samples[1].group == "G2"
-    sd2 = D.from_dataset(_ds(roles={"a": "blank"}, sample_meta={"b": {"run_order": 5, "batch": "Z"}}))
+    sd2 = D.from_dataset(_ds(roles={"a": "blank"}, sample_meta={"a": {"batch": "Y"},
+                                                    "b": {"run_order": 5, "batch": "Z"}}))
     assert sd2.samples[0].role == "blank" and sd2.samples[1].injection_order == 5.0
     assert sd2.samples[1].batch == "Z" and sd2.samples[2].role == "sample"
 
@@ -97,7 +98,8 @@ def test_detected_mask_shape_mismatch_raises():
 def test_fallbacks_found_by_display_name_when_ids_differ():
     ds = _ds(sample_ids=["id1", "id2", "id3"], sample_names=["a", "b", "c"],
              sample_metadata_rows=[{}, {}, {}],
-             roles={"a": "QC"}, sample_meta={"b": {"role": "blank", "batch": "Z", "run_order": 4}},
+             roles={"a": "QC"}, sample_meta={"a": {"batch": "Y"},
+                                  "b": {"role": "blank", "batch": "Z", "run_order": 4}},
              msdial_samples=[{"name": "a"}, {"name": "b"}, {"name": "c", "group": "G9"}])
     s = D.from_dataset(ds).samples
     assert s[0].sample_id == "id1" and s[0].role == "qc"
@@ -121,3 +123,76 @@ def test_role_inference_uses_msdial_class_id():
              msdial_samples=[{"name": "x1", "group": "QC"}, {"name": "x2", "group": "Blank"},
                              {"name": "x3", "group": "KO"}])
     assert [s.role for s in D.from_dataset(ds).samples] == ["qc", "blank", "sample"]
+
+
+# --- 実際の試料の対応表の行（帳簿の欄は因子にしない） -----------------------------------
+
+def _manifest_ds():
+    """`sample_manifest` の実際の行（注入ごとに違う provenance・conflicts・qc_pool 付き）を持つ DatasetState。"""
+    from tests.test_stats_results import _ds
+    ds = _ds()
+    for i, row in enumerate(ds.sample_metadata_rows):
+        row["provenance"] = {"role": {"value": row["role"], "source": f"file_{i}", "confidence": "inferred"},
+                             "injection_order": {"value": i, "source": "mztab", "confidence": "unverified"}}
+        row["conflicts"] = [{"field": "batch", "value": f"B{i}"}] if i % 3 == 0 else []
+        row["qc_pool"] = f"pool{i}" if row["role"] == "qc" else None
+    return ds
+
+
+def test_bookkeeping_keys_do_not_become_attributes():
+    ds = _manifest_ds()
+    study = D.from_dataset(ds)
+    for sample in study.samples:
+        assert not {"provenance", "conflicts", "qc_pool"} & set(sample.attributes)
+        assert all(isinstance(v, str) for v in sample.attributes.values())
+
+
+def test_non_scalar_row_values_are_not_attributes():
+    ds = _manifest_ds()
+    ds.sample_metadata_rows[4]["tags"] = ["a", "b"]
+    ds.sample_metadata_rows[4]["nested"] = {"x": 1}
+    ds.sample_metadata_rows[4]["sex"] = "F"
+    sample = D.from_dataset(ds).samples[4]
+    assert sample.attributes == {"sex": "F"}
+
+
+def test_replicates_collapse_with_real_manifest_rows():
+    """技術反復（同じ subject_id の 2 注入）は、provenance が注入ごとに違っても 1 個体にまとまる。"""
+    from metabolomix.analysis.stats import preprocess as P
+    ds = _manifest_ds()
+    study = D.from_dataset(ds)
+    off = {"drift": {"mode": "off"},
+           "filters": {"blank_ratio": None, "detection": None, "qc_rsd": None, "d_ratio": None},
+           "normalize": {"method": "none"}}
+    prepared = P.preprocess(study, off)
+    assert len(prepared.units) == 8                    # 8 個体 × 2 注入（以前は 16 に割れた）
+    assert all(u.n_injections == 2 for u in prepared.units)
+    assert not any(w.get("code") == "replicates_split" for w in prepared.warnings)
+
+
+# --- バッチの読み方（v1・解析フォルダ経路と同じ規則。定義は sample_manifest の 1 つ） ---
+
+def _batches(**kw):
+    return [x.batch for x in D.from_dataset(_ds(**kw)).samples]
+
+
+def test_constant_declared_batch_is_ignored_and_falls_back_to_filename_dates():
+    names = ["smp_20260101_a", "smp_20260101_b", "smp_20260102_c"]
+    ms = [{"name": n, "batch": "1"} for n in names]
+    assert _batches(sample_names=names, msdial_samples=ms) == ["20260101", "20260101", "20260102"]
+    meta = {n: {"batch": "1"} for n in names}
+    assert _batches(sample_names=names, sample_meta=meta) == ["20260101", "20260101", "20260102"]
+
+
+def test_informative_declared_batches_win_over_dates():
+    names = ["smp_20260101_a", "smp_20260101_b", "smp_20260102_c"]
+    ms = [{"name": n, "batch": b} for n, b in zip(names, ["X", "Y", "Y"])]
+    assert _batches(sample_names=names, msdial_samples=ms) == ["X", "Y", "Y"]
+
+
+def test_no_declared_batch_and_no_date_stays_unknown_and_row_batch_wins():
+    assert _batches() == [None, None, None]
+    names = ["smp_20260101_a", "b", "c"]
+    rows = [{"sample_id": n, "batch": "B7" if n == "b" else None} for n in names]
+    assert _batches(sample_names=names, sample_ids=names, sample_metadata_rows=rows) == [
+        "20260101", "B7", None]

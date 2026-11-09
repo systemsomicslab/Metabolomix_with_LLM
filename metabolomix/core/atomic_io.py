@@ -118,6 +118,64 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
         raise
 
 
+def _create_exclusive_direct(path: Path, data: bytes) -> None:
+    """`O_CREAT | O_EXCL` で本名を直接作って書く（既存なら上書きせず FileExistsError）。
+
+    ハードリンクを持たないファイルシステム（exFAT / FAT の外付けドライブなど）向けの代わり。
+    書き途中で失敗したら、自分で作った本名ファイルだけを消す。
+    """
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+    fd = os.open(path, flags, 0o644)   # 既存なら FileExistsError のまま送出する
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+
+
+def write_new_json(path: Path, payload: dict) -> None:
+    """JSON を**新しいファイルとして**書く（既存があれば上書きせず `FileExistsError`）。
+
+    追記専用の記録（定量・統計の工程の記録）のための書き込み。既存のときにどの
+    `DomainError` にするかは呼び出し側が決める（定量は `QUANT_RECORD_EXISTS`）。
+
+    一時ファイルへ書いて fsync してから `os.link` で本名にする。`os.replace` は上書きして
+    しまうので使えない。`os.link` は宛先が在れば FileExistsError になり、書き途中の本名
+    ファイルが読まれることも無い。ハードリンクを作れないファイルシステム（`os.link` が
+    FileExistsError 以外の OSError）では `O_CREAT | O_EXCL` の直接作成に落とす（やはり
+    上書きしない）。UTF-8・`allow_nan=False` で直列化し（NaN は ValueError。何も作らない）、
+    親フォルダは作る。一時ファイルは成否にかかわらず片付ける。
+    """
+    path = Path(path)
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"),
+                      allow_nan=False).encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(data)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        try:
+            os.link(tmp_path, path)
+        except FileExistsError:
+            raise
+        except OSError:
+            _create_exclusive_direct(path, data)
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            os.unlink(tmp_path)
+
+
 def atomic_write_json(path: Path, data: dict) -> None:
     """JSONを原子的に保存する。
 

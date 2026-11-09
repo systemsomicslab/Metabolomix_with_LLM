@@ -40,9 +40,11 @@ EXPECTED_ANNOTATIONS = {
     # --- DatasetState 解析層 ---
     # readOnlyHint はファイル/ネットワークへの副作用の有無。セッション状態の
     # 更新は数えない（このファイル冒頭の規約）。
-    "dataset_preprocess": READ_ONLY,
-    "dataset_pca": READ_ONLY,
-    "dataset_differential": READ_ONLY,
+    # 前処理の記録を reports/stats/ に 1 件追記する（呼ぶたびに新しい記録＝非冪等。書き先が
+    # 無ければ書かず、前処理は成功する）。行列は ds.stat_matrices へ置く。
+    "dataset_preprocess": LOCAL_WRITE_APPEND,
+    "dataset_compare": LOCAL_WRITE_APPEND,    # 比較の記録を 1 件追記する（dataset_preprocess と同じ）
+    "dataset_pca": LOCAL_WRITE_APPEND,       # PCA の記録を 1 件追記する（dataset_compare と同じ）
     # ファイルを書き、同じ引数なら同じ内容で上書きする → 冪等
     "dataset_export_differential": LOCAL_WRITE,
     # シートを読み検証してからセッション状態を一括反映する。外部副作用はセッション
@@ -52,11 +54,6 @@ EXPECTED_ANNOTATIONS = {
     # 除外の足し引きはセッション状態だけを変える（ファイルは書かない）。同じ引数の再実行は同じ状態に
     # 落ち着く（add は理由を置き換えるだけ）→ 冪等。除外は可逆なので destructive ではない。
     "dataset_exclude": LOCAL_WRITE,
-    # v2統計は名指しした解析行列を読むだけ（行列も session も書き換えない。
-    # 結果全量の保持は session.dataset.results への追加で、外界へは書かない）。
-    "dataset_statistic": READ_ONLY,
-    # 解析行列を1本作って session へ置くだけ（外界へは書かない）。
-    "dataset_build_matrix": READ_ONLY,
     # 特徴の検索と目標の判定。session も外界も書き換えない。
     "dataset_feature_search": READ_ONLY,
     # --- 再解析のハンドル（サーバのプロセス内の状態だけを変える） ---

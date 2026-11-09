@@ -20,6 +20,7 @@ from metabolomix.core import session_state
 from metabolomix.mztab import loading as mztab_loading
 from metabolomix.pipeline import report, service, session_handoff, store
 from tests.test_pipeline_matrix_handoff import _completed_run
+from tests.v1_chain import v1_preprocess
 
 _COMPARISON = {"comparison_id": "c1", "reference_group": "g1", "test_group": "g2"}
 #: session で後からやり直す、run（conservative-v1 の既定 = pqn）とは別のレシピ。
@@ -285,7 +286,7 @@ def test_dataset_load_summary_lists_restored_and_rejected(tmp_path):
     assert (f"c2\t{legacy['provenance']['result_id']}"
             "\tlegacy_result_without_dataset_hash") in summary
     # 指紋を持たない旧 run の結果は、session で作り直す手順を案内する。
-    assert "dataset_differential" in summary
+    assert "dataset_compare" in summary
     ds = session_state.session.dataset
     assert kept["provenance"]["result_id"] in ds.results
 
@@ -300,7 +301,6 @@ def _run_recipe(harness) -> dict:
 
 
 def test_exporting_a_restored_result_states_the_runs_recipe(tmp_path):
-    from metabolomix.tools.dataset_analysis_tools import dataset_preprocess
     from metabolomix.tools.handle_tools import load_dataset
 
     harness, result = _run_with_differential(tmp_path)
@@ -310,7 +310,7 @@ def test_exporting_a_restored_result_states_the_runs_recipe(tmp_path):
     session_state.session.dataset = None
     load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab")
     # session で別のレシピの前処理をやり直しても、引き継いだ結果の条件は run のもの。
-    dataset_preprocess(**_SESSION_RECIPE)
+    v1_preprocess(**_SESSION_RECIPE)
     session_recipe = session_state.session.dataset.preprocessing_recipe
     assert session_recipe["normalize"] == "none" != run_recipe["normalize"]
 
@@ -320,7 +320,6 @@ def test_exporting_a_restored_result_states_the_runs_recipe(tmp_path):
 
 def test_exporting_a_restored_result_without_the_runs_preprocess_says_unknown(tmp_path):
     from metabolomix.analysis.dataset_export import HANDOFF_PREPROCESS_UNKNOWN
-    from metabolomix.tools.dataset_analysis_tools import dataset_preprocess
     from metabolomix.tools.handle_tools import load_dataset
 
     harness, result = _run_with_differential(tmp_path, with_preprocess=False)
@@ -329,7 +328,7 @@ def test_exporting_a_restored_result_without_the_runs_preprocess_says_unknown(tm
     session_state.session.dataset = None
     load_dataset(pipeline_path=str(harness.pipeline_path), source="mztab")
     assert result_id in session_state.session.dataset.results
-    dataset_preprocess(**_SESSION_RECIPE)
+    v1_preprocess(**_SESSION_RECIPE)
 
     line = _exported_preprocess_line(tmp_path, result_id)
     assert line == f"# preprocess = {HANDOFF_PREPROCESS_UNKNOWN}"
@@ -449,10 +448,10 @@ def test_every_rejection_reason_tells_the_next_step():
     assert set(notes) == set(reasons)
     # データが違う: session で計算し直す。
     assert "dataset_preprocess" in notes["dataset_mismatch"]
-    assert "dataset_differential" in notes["dataset_mismatch"]
+    assert "dataset_compare" in notes["dataset_mismatch"]
     # 群が違う: シートか session のメタデータを確かめる、または session で計算し直す。
     assert "dataset_set_sample_metadata" in notes["group_mismatch"]
-    assert "dataset_differential" in notes["group_mismatch"]
+    assert "dataset_compare" in notes["group_mismatch"]
 
 
 def _handed_off(ds, **overrides) -> dict:

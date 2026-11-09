@@ -14,11 +14,11 @@ from metabolomix.analysis import sample_manifest
 from metabolomix.core import handles, session_state
 from metabolomix.mztab.dataset_state import DatasetState
 from metabolomix.tools import plot_tools, reports, sample_tools
-from metabolomix.tools.dataset_analysis_tools import (
-    dataset_differential, dataset_pca, dataset_preprocess)
+from metabolomix.tools.stats_tools import dataset_pca
 from tests.config_fixtures import use_config
 from tests.curation_fixtures import write_alignment_set
 from tests.msdial_folder_fixtures import analysis_file_row, write_mddata
+from tests.v1_chain import v1_differential, v1_pca, v1_preprocess
 
 PNG_MAGIC = b"\x89PNG"
 
@@ -65,13 +65,33 @@ def _analysed(*, with_differential=True) -> DatasetState:
     ds = _synthetic()
     _set_metadata(ds, group=lambda n: n.split("_")[0],
                   batch=lambda n: "b1" if n.endswith(("0", "1")) else "b2")
-    dataset_preprocess()
+    v1_preprocess()
     assert json.loads(dataset_pca(n_components=3))["status"] == "success"
     if with_differential:
         a = [n for n in ds.pp_sample_names if n.startswith("ctrl")]
         b = [n for n in ds.pp_sample_names if n.startswith("treat")]
-        assert json.loads(dataset_differential(group_a=a, group_b=b))["status"] == "success"
+        assert json.loads(v1_differential(group_a=a, group_b=b))["status"] == "success"
     return ds
+
+
+def _analysed_engine():
+    """統計エンジンの前処理・PCA・2 群比較（`dataset_compare`）で結果を作る。MCP から作れる状態はこちら。
+
+    戻り値は (ds, pca_id, compare_id)。v1 の結果（`_analysed`）は pipeline の引き渡しだけが作る形。
+    """
+    from metabolomix.tools.stats_tools import dataset_compare, dataset_preprocess
+
+    ds = _synthetic()
+    _set_metadata(ds, group=lambda n: n.split("_")[0],
+                  batch=lambda n: "b1" if n.endswith(("0", "1")) else "b2")
+    prepared = json.loads(dataset_preprocess())
+    assert prepared["status"] == "success", prepared
+    pca = json.loads(dataset_pca(n_components=3, matrix_id=prepared["matrix_id"]))
+    assert pca["status"] == "success", pca
+    compared = json.loads(dataset_compare(reference_group="ctrl", test_group="treat",
+                                          matrix_id=prepared["matrix_id"], allow_confounded=True))
+    assert compared["status"] == "success", compared
+    return ds, pca["result_id"], compared["result_id"]
 
 
 def _payload(**kwargs) -> dict:
@@ -95,7 +115,7 @@ def _folder_handle(tmp_path, n_files=3):
 
 # ---------- volcano / pca / loadings ----------
 
-def test_volcano_from_dataset_differential():
+def test_volcano_from_a_two_group_result():
     _analysed()
     out = plot_tools.dataset_plot(kind="volcano")
     assert isinstance(out, list) and len(out) == 2
@@ -250,9 +270,7 @@ def test_dataset_plot_is_registered_with_a_dataset_handle():
 # ---------- 古い結果と図の置き場 ----------
 
 def test_stale_result_not_drawn_as_current():
-    ds = _analysed()
-    pca_id = ds.last_pca["provenance"]["result_id"]
-    diff_id = ds.last_differential["provenance"]["result_id"]
+    ds, pca_id, diff_id = _analysed_engine()
     assert _payload(kind="pca", result_id=pca_id)["plot_schema"] == "lipidmix.pca_scores.v1"
     assert ds.figures["pca"]["result_id"] == pca_id
 
@@ -266,7 +284,7 @@ def test_stale_result_not_drawn_as_current():
         assert kind not in ds.figures                 # 古い図は置き場に残らない
     # result_id を省いたときは「直近」を使う。除外で捨てられたので missing_state（作り直しを案内）
     for kind, tool in (("pca", "dataset_pca"), ("loadings", "dataset_pca"),
-                       ("volcano", "dataset_differential")):
+                       ("volcano", "dataset_compare")):
         err = json.loads(plot_tools.dataset_plot(kind=kind))["error"]
         assert err["code"] == "missing_state" and tool in err["required_tools"], kind
     # 古い図は save_figure からも保存できない
@@ -316,7 +334,7 @@ def test_group_change_makes_the_pca_figure_refuse_to_save(tmp_path):
     err = json.loads(reports.save_figure("pca", "meta-1"))["error"]
     assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
     assert not (tmp_path / "reports" / "figures" / "meta-1_pca.png").exists()
-    dataset_preprocess()
+    v1_preprocess()
     dataset_pca(n_components=3)
     payload = _payload(kind="pca")                    # 解析と図をやり直せば新しい群で保存できる
     assert {p["group"] for p in payload["points"]} == {"NEW"}
@@ -324,7 +342,7 @@ def test_group_change_makes_the_pca_figure_refuse_to_save(tmp_path):
 
 
 def test_pca_figure_with_baked_metadata_is_stale_when_the_revision_moves(tmp_path):
-    """結果が現在のままでも（群は前処理の入力ではない）、色に焼き込んだ試料の情報が更新されたら古い。"""
+    """色に焼き込んだ試料の情報が更新されたら、図は古い（統計エンジンの PCA の結果も版が動けば古い）。"""
     from metabolomix.analysis.result_state import is_current
 
     ds = _analysed()
@@ -333,13 +351,47 @@ def test_pca_figure_with_baked_metadata_is_stale_when_the_revision_moves(tmp_pat
     for row in ds.sample_metadata_rows:
         row["group"] = "NEW"
     ds.metadata_revision += 1                         # 情報の更新（apply_metadata が進める版）
-    assert is_current(ds, ds.last_pca) and "pca" in ds.figures
+    assert not is_current(ds, ds.last_pca) and "pca" in ds.figures   # 統計エンジンの PCA は版が動けば古い
     err = json.loads(reports.save_figure("pca", "rev-1"))["error"]
     assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
     assert "作り直" in err["message"]
     assert not (tmp_path / "reports" / "figures" / "rev-1_pca.png").exists()
-    # 試料の情報を焼き込まない図（loadings）は影響を受けない
-    assert "rev-1_loadings.png" in reports.save_figure("loadings", "rev-1")
+    # 試料の情報を焼き込まない図（loadings）も、元の結果が古ければ保存できない（統計エンジンの PCA は版に縛られる）
+    err = json.loads(reports.save_figure("loadings", "rev-1"))["error"]
+    assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
+    assert not (tmp_path / "reports" / "figures" / "rev-1_loadings.png").exists()
+
+
+def _v1_pca_dataset():
+    ds = _synthetic()
+    _set_metadata(ds, group=lambda n: n.split("_")[0])
+    v1_preprocess()
+    v1_pca(n_components=3)
+    return ds
+
+
+def test_v1_pca_results_still_draw_scores_and_loadings():
+    """pipeline の引き渡しが作る v1 の PCA（scores 行・特異値・`pp_feature_names`）も図にできる。"""
+    ds = _v1_pca_dataset()
+    pay = _payload(kind="pca")
+    assert len(pay["points"]) == 8 and {p["group"] for p in pay["points"]} == {"ctrl", "treat"}
+    assert pay["title"] == "PCA" and not any("fitted" in p for p in pay["points"])
+    load = _payload(kind="loadings", top_n=3)
+    assert load["value"] == "r"                                   # 特異値から相関 r が出せる
+    assert {r["feature_id"] for r in load["panels"][0]["rows"]} <= set(ds.pp_feature_names)
+
+
+def test_v1_loadings_figure_survives_a_group_only_revision(tmp_path):
+    """v1 の PCA は前処理の入力だけに依存する: 群だけの更新では結果も loadings の図も古くならない。"""
+    from metabolomix.analysis.result_state import is_current
+
+    ds = _v1_pca_dataset()
+    plot_tools.dataset_plot(kind="loadings", top_n=3)
+    for row in ds.sample_metadata_rows:
+        row["group"] = "NEW"
+    ds.metadata_revision += 1
+    assert is_current(ds, ds.last_pca) and "loadings" in ds.figures
+    assert "ver-1_loadings.png" in reports.save_figure("loadings", "ver-1")
 
 
 def test_figures_are_not_part_of_the_fingerprint():
@@ -351,10 +403,10 @@ def test_figures_are_not_part_of_the_fingerprint():
     assert ds.figures and dataset_fingerprint(ds) == before
 
 
-def test_stale_pca_result_after_reprocessing_is_refused():
+def test_stale_pca_result_after_metadata_change_is_refused():
     ds = _analysed()
     old = ds.last_pca["provenance"]["result_id"]
-    dataset_preprocess(normalize="median")           # 前処理をやり直す（PCA は捨てられる）
+    ds.metadata_revision += 1                   # 試料の表が変わった（統計エンジンの PCA は群も設計に含む）
     err = json.loads(plot_tools.dataset_plot(kind="pca", result_id=old))["error"]
     assert err["code"] == "STALE_ANALYSIS_RESULT"
 
@@ -376,7 +428,7 @@ def test_no_dataset_is_missing_state():
 # ---------- save_figure ----------
 
 def test_save_figure_reads_dataset_figures(tmp_path):
-    ds = _analysed()
+    ds, pca_id, _diff_id = _analysed_engine()
     figures = tmp_path / "reports" / "figures"
     # dataset_plot を呼ぶ前は図が無い
     err = json.loads(reports.save_figure("pca", "a-1"))["error"]
@@ -394,7 +446,6 @@ def test_save_figure_reads_dataset_figures(tmp_path):
 
     # 登録された結果を名指しして描くこともできる（dataset_plot を呼ばなくてよい）
     ds.figures.clear()
-    pca_id = ds.last_pca["provenance"]["result_id"]
     msg = reports.save_figure("pca", "by-id", result_id=pca_id)
     assert (figures / "by-id_pca.png").is_file() and pca_id in msg
 

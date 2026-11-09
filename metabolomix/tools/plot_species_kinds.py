@@ -238,7 +238,7 @@ def species_pca(ds, req) -> dict:
         raise _bad("orient_by の群に主成分の計算に使った試料がありません"
                    f"（{req.orient_by}。低信頼の試料は計算に使わず投影だけします）。")
     try:
-        result = run_pca_fit_subset(X, fit, n_components=_PCA_COMPONENTS)
+        result = run_pca_fit_subset(X, fit, n_components=_PCA_COMPONENTS, svd_solver="full")
     except ValueError as exc:
         raise _bad(str(exc)) from exc
 

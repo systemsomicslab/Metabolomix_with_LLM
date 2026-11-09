@@ -129,7 +129,7 @@ _DEFAULT_PREPROCESS = {
 }
 
 #: 個別comparisonの未指定時デフォルト(comparison_id/reference_group/test_groupは
-#: 必須で既定を持たない)。既存dataset_analysis_tools.dataset_differentialの
+#: 必須で既定を持たない)。既存の2群比較（`dataset_service.compare_dataset`）の
 #: 既定(q_threshold=0.05, log2fc_threshold=1.0, log_transform=True)と揃える。
 _COMPARISON_DEFAULTS = {
     "q_threshold": 0.05, "log2fc_threshold": 1.0,

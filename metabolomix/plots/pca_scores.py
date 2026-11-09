@@ -16,7 +16,7 @@ _DIGITS = 4
 
 
 def build_pca_scores_payload(scores, explained_variance_ratio, colors, *, color_by, result_id,
-                             title=None, caveats=None):
+                             title=None, caveats=None, projected=None):
     """`dataset_pca` の結果（スコア行）から、描画中立の散布図 payload（`lipidmix.pca_scores.v1`）を作る。
 
     `scores` は {name, PC1, PC2, ...} の行、`colors` は {試料名: 色分けの値}。点の `group` が色分けの
@@ -27,6 +27,7 @@ def build_pca_scores_payload(scores, explained_variance_ratio, colors, *, color_
         raise ValueError(f"color_by は {' / '.join(COLOR_BY)} のどれかを指定してください"
                          f"（受け取った値: {color_by!r}）。")
     caveats = list(caveats or [])
+    projected = set(projected or ())
     points = []
     for row in scores or []:
         x, y = row.get("PC1"), row.get("PC2")
@@ -35,6 +36,8 @@ def build_pca_scores_payload(scores, explained_variance_ratio, colors, *, color_
         value = colors.get(row.get("name"))
         points.append({"label": row.get("name"), "x": round(float(x), _DIGITS),
                        "y": round(float(y), _DIGITS), "group": UNSET_LABEL if value in (None, "") else str(value)})
+        if row.get("name") in projected:
+            points[-1]["fitted"] = False          # 軸の計算に使わず投影だけした点（白抜き）
     if not points:
         raise ValueError("PCA 結果に PC1 と PC2 の両方を持つ試料がありません（主成分が 1 つしか無い）。")
     if all(p["group"] == UNSET_LABEL for p in points):

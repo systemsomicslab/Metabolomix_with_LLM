@@ -241,6 +241,17 @@ def test_estimate_state_bytes_counts_arrays_and_dicts():
     assert handles.estimate_state_bytes(DatasetState()) == 0
 
 
+def test_estimate_state_bytes_counts_stat_matrices():
+    import numpy as np
+    from types import SimpleNamespace
+    prepared = SimpleNamespace(log2=np.zeros((4, 5)), qc_log2=np.zeros((2, 5)),
+                               sample_values=np.zeros((6, 5)), detected_units=np.zeros((4, 5), dtype=bool),
+                               sample_detected=None)
+    ds = DatasetState()
+    ds.stat_matrices = {"mx_1": {"prepared": prepared, "matrix_id": "mx_1"}}
+    assert handles.estimate_state_bytes(ds) == 160 + 80 + 240 + 20
+
+
 def test_base_cache_size_cap(monkeypatch):
     registry = handles.HandleRegistry()
     monkeypatch.setattr(handles, "MAX_BASE_BYTES", 20_000)

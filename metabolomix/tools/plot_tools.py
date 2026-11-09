@@ -25,12 +25,13 @@ import numpy as np
 from mcp.server.fastmcp import Image
 from mcp.types import ToolAnnotations
 
-from metabolomix.analysis import result_state
+from metabolomix.analysis import result_state, stats_results
 from metabolomix.analysis.dataset_analysis import included_sample_indices
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import missing_state, mztab_error
 from metabolomix.core.serialization import json_payload
+from metabolomix.core.tool_helpers import is_stat_pca, stat_pca_rows
 from metabolomix.dataset.artifacts import artifact_path
 from metabolomix.plots import eic as eic_plot
 from metabolomix.plots import pca_loadings as loadings_plot
@@ -54,7 +55,7 @@ _ITEM_ARGS = ("items", "groups", "low_reliability_samples", "standard_samples", 
 
 #: kind ごとの引数。ここに無い引数が渡されたら、どの kind の引数かを添えて拒む。
 _KIND_ARGS: dict[str, tuple[str, ...]] = {
-    "volcano": (),
+    "volcano": ("contrast_id",),
     "pca": ("color_by",),
     "loadings": ("pcs", "top_n", "value"),
     "group_intensity": _ITEM_ARGS + ("detection_limit",),
@@ -83,6 +84,7 @@ def _bad(message: str, **details) -> DomainError:
 @dataclass
 class _Request:
     result_id: str | None = None
+    contrast_id: str | None = None
     title: str | None = None
     color_by: str | None = None
     pcs: list[int] | None = None
@@ -129,12 +131,12 @@ def _pick_result(ds, family: str, result_id: str | None, *, also_kinds: tuple = 
     無ければ作り直すツールを案内する。`also_kinds` は `result_id` で名指しされたときに family のほかに
     受ける来歴の kind（loadings が `species_pca` の結果を受ける）。
     """
-    tool = "dataset_pca" if family == "pca" else "dataset_differential"
+    tool = "dataset_pca" if family == "pca" else "dataset_compare"
     if result_id is None:
         last = ds.last_pca if family == "pca" else ds.last_differential
         if not last:
             what = "PCA" if family == "pca" else "2 群の差次的解析"
-            raise _Missing(f"{family}_result", [tool],
+            raise _Missing("pca_result" if family == "pca" else "dataset_compare_result", [tool],
                            f"直近の{what}の結果がありません。先に {tool} を実行してください"
                            "（前処理・除外・群の変更で古くなった結果は捨てられます）。")
         result_state.assert_current(ds, last)
@@ -143,7 +145,8 @@ def _pick_result(ds, family: str, result_id: str | None, *, also_kinds: tuple = 
     if result is None:
         raise _bad(f"result_id={result_id} の結果がありません。{tool} の戻り値の result_id を渡すか、"
                    "省いて直近の結果を使ってください。", result_id=result_id)
-    if (result.get("provenance") or {}).get("kind") not in (family, *also_kinds):
+    accepted = (family, *also_kinds, *(("stat_pca",) if family == "pca" else ("compare",)))
+    if (result.get("provenance") or {}).get("kind") not in accepted:
         raise _bad(f"result_id={result_id} は{'PCA' if family == 'pca' else '差次的解析'}の結果ではありません"
                    f"（{tool} の result_id を渡してください）。", result_id=result_id)
     result_state.assert_current(ds, result)
@@ -157,7 +160,13 @@ def _result_id(result: dict) -> str | None:
 # ---------- volcano / pca / loadings ----------
 
 def _volcano(ds, req: _Request) -> dict:
-    result = _pick_result(ds, "differential", req.result_id)
+    result_id, contrast_id = req.result_id, req.contrast_id
+    if result_id is not None:                       # `result_id#contrast_id`（特徴検索が出す形）も受ける
+        result_id, contrast_id = stats_results.split_result_ref(result_id, contrast_id)
+    record = _pick_result(ds, "differential", result_id)
+    # 統計エンジンの結果は対比 1 つを 2 群の形に読む（複数の対比で contrast_id が無ければ CONTRAST_REQUIRED）。
+    stats_results.check_contrast_applies(record, contrast_id)
+    result = stats_results.as_two_group(record, contrast_id)
     if result.get("kind") != "two_group" or not result.get("volcano"):
         raise _bad("この差次的結果は 2 群比較の volcano 点列を持っていません（volcano は 2 群比較だけ）。",
                    result_id=_result_id(result))
@@ -169,9 +178,15 @@ def _volcano(ds, req: _Request) -> dict:
                f" — 全 {len(result['volcano'])} 特徴のうち up={up} / down={down} / ns={len(points) - up - down}"
                f"（検定不能 {len(result['volcano']) - len(points)} 件は非描画）。"
                f" しきい値 q<{result.get('q_threshold')}, |log2FC|>={result.get('log2fc_threshold')}。"
-               " 個々の特徴量名と統計値は dataset_differential の結果を参照。")
+               " 個々の特徴量名と統計値は dataset_compare の結果を参照。")
     return _record("volcano", payload, title=req.title, caption=caption,
                    result_id=_result_id(result), result=result)
+
+
+def _explained(result: dict) -> list:
+    """PCA の記録の寄与率（統計エンジンの結果は `engine` の中）。"""
+    source = result.get("engine") if is_stat_pca(result) else result
+    return list((source or {}).get("explained_variance_ratio") or [])
 
 
 def _pca(ds, req: _Request) -> dict:
@@ -182,19 +197,35 @@ def _pca(ds, req: _Request) -> dict:
         raise _bad(f"color_by は {' / '.join(scores_plot.COLOR_BY)} のどれかを指定してください"
                    f"（受け取った値: {color_by!r}）。", color_by=color_by)
     result = _pick_result(ds, "pca", req.result_id)
-    scores = result.get("scores") or []
-    if color_by == "role":
-        colors = {row.get("name"): row.get("role") for row in scores}
+    caveats, projected = [], ()
+    if is_stat_pca(result):
+        scores = stat_pca_rows(result)
+        projected = [row["name"] for row in scores if not row["fitted"]]
+        if color_by == "group":
+            colors = {row["name"]: row["group"] for row in scores}
+        elif color_by == "role":
+            colors = {row["name"]: row["role"] for row in scores}
+        else:
+            entry = stats_results.get_matrix(ds, result.get("matrix_id"))
+            batch = dict(stats_results.sample_batches(ds))           # QC の注入（試料 ID）
+            batch.update({u.unit_id: u.batch for u in entry["prepared"].units} if entry else {})
+            colors = {row["name"]: batch.get(row["id"]) for row in scores}
+        if projected:
+            caveats.append("QC は主成分の軸の計算に使わず、同じ軸へ投影した点（白抜き）。")
     else:
-        colors = {name: row.get(color_by)
-                  for name, row in zip(ds.sample_names, _metadata_rows(ds))}
+        scores = result.get("scores") or []
+        if color_by == "role":
+            colors = {row.get("name"): row.get("role") for row in scores}
+        else:
+            colors = {name: row.get(color_by)
+                      for name, row in zip(ds.sample_names, _metadata_rows(ds))}
     try:
         payload = scores_plot.build_pca_scores_payload(
-            scores, result.get("explained_variance_ratio"), colors, color_by=color_by,
-            result_id=_result_id(result), title=req.title)
+            scores, _explained(result), colors, color_by=color_by,
+            result_id=_result_id(result), title=req.title, caveats=caveats, projected=projected)
     except ValueError as exc:
         raise _bad(str(exc)) from exc
-    evr = result.get("explained_variance_ratio") or []
+    evr = _explained(result)
     caption = (f"PCA スコア（{len(payload['points'])} 試料、色={color_by}、result_id={_result_id(result)}）: "
                + "、".join(f"PC{i + 1} {v * 100:.1f}%" for i, v in enumerate(evr[:2])) + "。")
     return _record("pca", payload, title=req.title, caption=caption, result_id=_result_id(result),
@@ -217,7 +248,7 @@ def _loadings(ds, req: _Request) -> dict:
             features, r_ok = loadings_plot.dataset_features(ds, result)
         payload = loadings_plot.build_loadings_payload(
             features, source="dataset", result_id=_result_id(result),
-            explained_variance_ratio=result.get("explained_variance_ratio") or [], pcs=pcs,
+            explained_variance_ratio=_explained(result), pcs=pcs,
             top_n=top_n, value=value, r_available=r_ok)
     except ValueError as exc:
         raise _bad(str(exc)) from exc
@@ -470,11 +501,13 @@ def dataset_plot(
     normalize: str | None = None,
     log_transform: bool | None = None,
     orient_by: str | None = None,
+    contrast_id: str | None = None,
 ) -> list | str:
     """データセットの図を描く — 既定は PNG 画像と 1 行の説明。ファイルは書かない（保存は `save_figure`）。
 
     kind と、その kind だけの引数（別の kind の引数を渡すと DATASET_BAD_REQUEST）:
-      - `volcano`: 直近の 2 群の差次的結果（`dataset_differential`）。`result_id` で名指しもできる。
+      - `volcano`: 直近の 2 群の差次的結果（`dataset_compare`）。`result_id` で名指しもできる。対比が複数の結果は
+        `contrast_id`（`T_vs_C` など）で 1 つ選ぶ（省くと `CONTRAST_REQUIRED`、交互作用は `CONTRAST_NOT_TWO_GROUP`）。
       - `pca`: 直近の `dataset_pca`（`result_id` で名指し）。`color_by="group"`（既定）/ `"batch"` / `"role"`。
       - `loadings`: 同じ PCA のローディング（`result_id` に `species_pca` の結果も渡せる。横棒、色は特徴のクラス＝`ontology`）。`pcs`（既定 [1, 2]、
         1〜3 個）、`top_n`（主成分ごとに正負の上位 N。既定 15、0 は全特徴量で 60 まで）、
@@ -488,7 +521,7 @@ def dataset_plot(
         分けた候補名に完全一致〕・特徴 ID。`"PE+EtherPE"` のように `+` で合算。当たらない項目は N.D.、1〜30 件）
         ごとに、群（`groups` = 試料名・Class ID・因子のトークン。1 群以上。QC・ブランクは `qc` / `blank` を
         書いたときだけ入る）の試料別の強度合計を 1 パネルに並べる。縦軸は log10 で全パネル共通、群は log10 の
-        平均 ± SD。検定はしない（`dataset_differential`）。`detection_limit` は検出下限の破線（省略時は
+        平均 ± SD。検定はしない（`dataset_compare`）。`detection_limit` は検出下限の破線（省略時は
         param ファイルの Minimum peak height）。
       - `species`: `items` を分子種（特徴）に展開し、1 分子種 1 パネル（1 回 40 まで）。`value="share"`（既定。
         試料ごとの 値 ÷ 分母の合計 × 100。棒 = 群平均、ひげ = SD）/ `"intensity"`（log10 の平均 ± SD。payload の `value` は形式を保つため `"height"`）。
@@ -519,7 +552,7 @@ def dataset_plot(
     作った図の記録は `ds.figures[kind]` に置き（kind ごとに最後の 1 つ）、`save_figure(kind=...)` が描く。
     """
     request = _Request(
-        result_id=result_id, title=title, color_by=color_by, pcs=pcs, top_n=top_n, value=value,
+        result_id=result_id, contrast_id=contrast_id, title=title, color_by=color_by, pcs=pcs, top_n=top_n, value=value,
         feature_id=feature_id, file_ids=file_ids, file_id=file_id, names=names, ontologies=ontologies,
         items=items, groups=groups, low_reliability_samples=low_reliability_samples,
         standard_samples=standard_samples, apply_curation=apply_curation,
@@ -527,7 +560,7 @@ def dataset_plot(
         share_basis=share_basis, require_msms=require_msms, normalize=normalize,
         log_transform=log_transform, orient_by=orient_by)
     request.given = {name for name, given in (
-        ("result_id", result_id), ("color_by", color_by), ("pcs", pcs), ("top_n", top_n),
+        ("result_id", result_id), ("contrast_id", contrast_id), ("color_by", color_by), ("pcs", pcs), ("top_n", top_n),
         ("value", value), ("feature_id", feature_id), ("file_ids", file_ids),
         ("file_id", file_id), ("names", names), ("ontologies", ontologies), ("items", items),
         ("groups", groups), ("low_reliability_samples", low_reliability_samples),

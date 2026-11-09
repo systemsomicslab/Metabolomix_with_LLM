@@ -457,3 +457,29 @@ def test_dataset_preprocess_default_arguments_are_unchanged():
     sig = inspect.signature(preprocess_dataset)
     assert list(sig.parameters) == ["ds", "recipe", "request_revision"]
     assert sig.parameters["request_revision"].default is None
+
+
+def test_resolve_policy_ignores_excluded_qc_and_blank():
+    """`dataset_exclude` で外した QC・ブランクは、n_qc / n_blank に数えない。"""
+    ds = make_dataset()
+    rows = metadata_rows(ds)
+    rows = _with_overrides(rows, {7: {"role": "blank"}})
+    names = list(ds.sample_names)
+    qc_names = [n for n, r in zip(names, rows) if r["role"] == "qc"]
+    assert len(qc_names) >= 3
+
+    before = resolve_policy(ds, {}, rows)
+    assert before["resolved_recipe"]["normalize"] == "pqn"
+    assert before["resolved_recipe"]["blank_min_fold"] == 3.0
+
+    # ブランクを外す: ブランクフィルタは見送りになる。
+    ds.excluded_samples = {names[7]: "x"}
+    plan = resolve_policy(ds, {}, rows)
+    assert plan["resolved_recipe"]["blank_min_fold"] is None
+    assert "blank_filter" in plan["skipped_steps"]
+
+    # QC を全部外す: QC 前提の auto は見送りになる。
+    ds.excluded_samples = {n: "x" for n in qc_names}
+    plan = resolve_policy(ds, {}, rows)
+    assert plan["resolved_recipe"]["normalize"] == "none"
+    assert "normalize" in plan["skipped_steps"]

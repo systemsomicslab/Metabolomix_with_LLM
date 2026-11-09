@@ -7,12 +7,11 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from metabolomix.core.atomic_io import DomainError, read_text_stable
+from metabolomix.core.atomic_io import DomainError, read_text_stable, write_new_json
 
 RECORD_SCHEMA = "lipidmix.quant-record.v1"
 STEPS = ("normalize", "merge", "select")
@@ -32,58 +31,12 @@ def _exists_error(path: Path) -> DomainError:
     return DomainError("QUANT_RECORD_EXISTS", f"同名の記録が既にある（上書きしない）: {path.name}")
 
 
-def _create_exclusive_direct(path: Path, data: bytes) -> None:
-    """`O_CREAT | O_EXCL` で本名を直接作って書く（既存なら上書きせず失敗）。
-
-    ハードリンクを持たないファイルシステム（exFAT / FAT の外付けドライブなど）向けの代わり。
-    書き途中で失敗したら、自分で作った本名ファイルだけを消す。
-    """
-    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+def _create_exclusive(path: Path, payload: dict) -> None:
+    """上書きしない書き込み（`atomic_io.write_new_json`）。既存なら `QUANT_RECORD_EXISTS`。"""
     try:
-        fd = os.open(path, flags, 0o644)
+        write_new_json(path, payload)
     except FileExistsError:
         raise _exists_error(path) from None
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-    except BaseException:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
-        raise
-
-
-def _create_exclusive(path: Path, payload: dict) -> None:
-    """一時ファイルへ書いてから `os.link` で本名にする（既存があれば上書きせず失敗）。
-
-    `os.replace` は上書きしてしまうので使えない。`os.link` は宛先が在れば
-    FileExistsError になり、書き途中の本名ファイルが読まれることも無い。
-    ハードリンクを作れないファイルシステム（exFAT / FAT など。`os.link` が FileExistsError
-    以外の OSError）では、`O_CREAT | O_EXCL` の直接作成に落とす（やはり上書きしない）。
-    """
-    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"),
-                      allow_nan=False).encode("utf-8")
-    tmp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False,
-        ) as tmp:
-            tmp_path = Path(tmp.name)
-            tmp.write(data)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-        try:
-            os.link(tmp_path, path)
-        except FileExistsError:
-            raise _exists_error(path) from None
-        except OSError:
-            _create_exclusive_direct(path, data)
-    finally:
-        if tmp_path is not None and tmp_path.exists():
-            os.unlink(tmp_path)
 
 
 def write_record(

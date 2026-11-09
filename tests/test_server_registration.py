@@ -42,6 +42,7 @@ import server
 # dataset_handle_open を統合）、dataset_handle_list / close を dataset_list / dataset_close へ改名（82→80）。
 # B-3: 定量の 4 ツール（dataset_quant_preview / dataset_quant_apply / dataset_merge_polarities /
 # dataset_select_features）を追加（統合時 56→60）。
+# C 配線 Task 4: 統計エンジンの比較 dataset_compare を追加（60→61）。Task 9: 旧 v1 の 3 ツール（2 群比較・v2 統計・解析行列）を撤去（61→58）。
 EXPECTED_TOOLS = sorted([
     "list_data_files",
     "load_dataset",
@@ -60,11 +61,9 @@ EXPECTED_TOOLS = sorted([
     "curation_flags",
     "curation_view_data",
     "dataset_preprocess",
+    "dataset_compare",
     "dataset_pca",
     "dataset_analysis_run",
-    "dataset_differential",
-    "dataset_statistic",
-    "dataset_build_matrix",
     "dataset_export_differential",
     "dataset_export_evidence_bundle",
     "dataset_feature_search",

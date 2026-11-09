@@ -439,6 +439,22 @@ def test_species_pca_projects_low_reliability_and_orients(loaded):
     assert result["provenance"]["kind"] == "species_pca"
 
 
+def test_species_pca_requests_the_full_svd_solver(loaded, monkeypatch):
+    """分子種 PCA は大きな行列で randomized SVD（実行ごとに揺れる）に落ちないよう `svd_solver="full"` を渡す。"""
+    from metabolomix.tools import plot_species_kinds
+
+    seen = []
+    real = plot_species_kinds.run_pca_fit_subset
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("svd_solver"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(plot_species_kinds, "run_pca_fit_subset", spy)
+    _pca(items=["PG", "DGDG", "DG"])
+    assert seen == ["full"]
+
+
 def test_species_pca_registers_a_result_and_a_figure(loaded):
     ds = loaded["ds"]
     p = _pca(items=["PG", "DGDG", "DG"], standard_samples=["std"])

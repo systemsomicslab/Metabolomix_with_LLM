@@ -127,16 +127,17 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 ## 状態不足の伝え方（MCP クライアント向けの契約）
 
 多くのツールは、先行するツールが作ったセッション状態に依存する。
-`dataset_pca` は `dataset_preprocess` の行列を、`dataset_plot(kind="volcano")` は
-`dataset_differential` の結果を必要とする。
+`dataset_plot(kind="pca")` は `dataset_pca` の結果を、`dataset_plot(kind="volcano")` は
+`dataset_compare` の結果を必要とする。`dataset_compare` と `dataset_pca` は前処理済みの行列（`dataset_preprocess` の
+`matrix_id`）を受けるが、省くと既定の前処理で自分で行列を作る。
 
 その状態が無いとき、ツールは本文に次の JSON を返す。
 
 ```json
 {"error": {"code":           "missing_state",
-           "state":          "preprocessed_matrix",
+           "state":          "stat_matrix",
            "required_tools": ["dataset_preprocess"],
-           "message":        "前処理後の行列がありません。先に dataset_preprocess を実行してください。"}}
+           "message":        "行列 'mx_…' がありません（無い・または除外や試料の表の変更で古くなりました）。dataset_preprocess を実行し直して、その matrix_id を渡してください。"}}
 ```
 
 - `state` は欠けている状態の識別子。クライアントは**不透明な文字列として扱う**。
@@ -148,6 +149,42 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 **セッション履歴に記録済みの引数のまま**再実行して状態を復元できる。LLM に
 再実行させると前処理の引数が変わって解析条件が黙って変わりうるため、
 引数の同一性はクライアント側で担保することが望ましい。
+
+### 利用者に尋ねる封筒（`needs_input`）
+
+`missing_state` と並ぶ、もう 1 つの機械可読な封筒。**エラーではない**（`error` キーを持たない）——既定を決めずに
+利用者へ尋ねる問いで、**クライアントは答えを推測して呼び直してはならない**（利用者に `options` を見せて選んでもらう）。
+
+```json
+{"needs_input": {"field":       "preprocess.drift.mode",
+                 "reason":      "内部標準で換算済みの値に QC があります。QC のドリフト補正を重ねるか…",
+                 "options":     [{"value": "on", "label": "…"}, {"value": "off", "label": "…"}],
+                 "argument":    "drift_mode",
+                 "retry_tools": ["dataset_preprocess"]}}
+```
+
+- `field` は答えが入る設定の欄（spec の路）。`reason` は尋ねる理由、`options` は `{value, label}` の選択肢。
+- `argument` は答え（選ばれた `value`）を入れて呼び直すツールの**引数名**。無いこともある（下の spec の経路）。
+- `retry_tools` は「`argument` を受けて呼び直せるツール」の候補（OR）。`dataset_preprocess`・`dataset_compare`・
+  `dataset_pca`・`pathway_project` が既定の前処理を自分で回して尋ねたときは、`drift_mode` 引数を持つのが
+  `dataset_preprocess` だけなので、いつも `["dataset_preprocess"]`（`reason` に、そのツールの `drift_mode` で行列を作り、
+  返った `matrix_id` を元のツールに渡して呼び直すと書く）。
+- `dataset_analysis_run` の spec v2 の経路は `argument` を持たず、`retry_tools` は `["dataset_analysis_run"]`、答えは
+  spec の `field`（`preprocess.drift.mode`）に入れて呼び直す（`reanalysis.md` §2.1）。
+- 定量の `dataset_quant_preview` / `dataset_quant_apply` / `dataset_merge_polarities` / `dataset_select_features` も、
+  別の問いで `status="needs_input"` の応答を返す（`quant.md`）。こちらは上の封筒ではなく、各ツールの戻り値の形。
+
+### 判定 3 値と「有意でない ≠ 変わっていない」
+
+統計エンジンの比較（`dataset_compare`・`dataset_analysis_run` の spec v2）は、行ごとに `verdict` を返す:
+`changed`（検定でき `q ≤ 閾値`）/ `unchanged`（`q` が閾値を超え、95% CI が同等の範囲 `±log2(equivalence_fc)` に収まる）/
+`inconclusive`（それ以外すべて）。**「有意でない」を「変わっていない」と読まない**——`unchanged` は差が小さいと言える
+CI があるときだけで、n が小さい・ばらつきが大きいときの大半は `inconclusive`（データが足りない）。`inconclusive` を
+「差なし」と報告しない。判定の規則・理由（`verdict_reason`）・列の意味は `reanalysis.md` §2.1 と `dataset.md` §11.2。
+`log2fc_threshold`（図の色分け・`large_changes`・書き出しの `significant` 列だけが使う値）は判定には使わない。
+逆に、書き出し・根拠バンドルの `significant` と volcano の `up` / `down` は判定を見る: `q ≤ 閾値` かつ
+`|log2fc| ≥ log2fc_threshold` に加えて `verdict` が `changed` の行だけ（`large_changes` と同じ数え方）。
+`inconclusive` の行（検出が足りず量を判定できない行など）は q が小さくても有意にしない（`dataset.md` §11.4）。
 
 ### annotations の解釈
 

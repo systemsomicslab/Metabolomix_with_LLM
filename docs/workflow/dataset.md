@@ -216,7 +216,7 @@ DatasetState と照合し、一致したものだけを `ds.results` へ戻す�
 `dataset_mismatch` / `group_mismatch`）つきで残り、要約に並ぶ。`pipeline_resume` には
 差次的工程だけを再計算させる手順が無いため、要約は理由ごとに次の一手を添える:
 指紋を持たない旧 run の結果とデータ違いには session での `dataset_preprocess` →
-`dataset_differential`、群違いには実験情報シート（`dataset_set_sample_metadata` で
+`dataset_compare`、群違いには実験情報シート（`dataset_set_sample_metadata` で
 与えた群）の確認か、今の群のままの再計算。`result_state.is_current` の handoff 分岐は
 `kind == "differential"` の結果にだけ当たり、他の kind が handoff を名乗っていても通さない。
 
@@ -233,7 +233,7 @@ completed は「実行後にファイルが増えた」以上の意味を持た�
 
 完了していない実行（partial / failed / running）の出力は既定で読まない
 （`INCOMPLETE_ANALYSIS_JOB`）。`allow_incomplete=True` で読んだ場合は
-`exploratory_only=True` になり、2 群比較（dataset_differential）と差次的エクスポートは
+`exploratory_only=True` になり、2 群比較（dataset_compare）と差次的エクスポートは
 `EXPLORATORY_ONLY_DATASET` で拒否する。欠けた検体は mzTab 上「その群に無い」ように
 しか見えず、比較はその欠落ごと結論にしてしまう。
 
@@ -293,7 +293,9 @@ TSV（`query` は因子トークン。旧 `dataset_status(view="samples")` の `
 試料・特徴を解析から外す（可逆）。状態は `DatasetState.excluded_samples` /
 `excluded_features`（名前・特徴 ID -> 理由）。入力の指紋には入れず、変わったときだけ
 `metadata_revision` を進めて前処理済み行列から先の結果を古くする（`apply_metadata` と同じ
-`invalidate_results` の経路）。除外を当てるのは前処理（`run_dataset_preprocess`）。
+`invalidate_results` の経路）。除外を当てるのは前処理（統計エンジンは `dataset_preprocess` が `study_inputs` で入力へ写す。v1 は `run_dataset_preprocess`）。
+同じ経路で統計エンジンの行列（`ds.stat_matrices`）と v2 の解析行列（`ds.analysis_matrices`）も
+空にする（除外の前の行列 ID は使えなくなる）。
 
 1. metabolomix/tools/sample_tools.py dataset_exclude()
 2. └─ metabolomix/analysis/dataset_exclusions.py apply_exclusions()
@@ -301,7 +303,7 @@ TSV（`query` は因子トークン。旧 `dataset_status(view="samples")` の `
 4.    └─ metabolomix/analysis/dataset_exclusions.py _resolve_features()
 5.    └─ metabolomix/analysis/result_state.py invalidate_results()
 
-除外の適用（`dataset_preprocess` → `run_dataset_preprocess` の中）:
+除外の適用（v1 の前処理 `run_dataset_preprocess` の中。統計エンジンの `dataset_preprocess` は `stats_results.study_inputs` が `ds.excluded_*` を `from_dataset` の入力へ写す）:
 1. metabolomix/analysis/dataset_analysis.py run_dataset_preprocess()
 2. └─ metabolomix/analysis/dataset_analysis.py build_dataset_pp_inputs()
 3.    └─ metabolomix/analysis/dataset_analysis.py included_sample_indices()

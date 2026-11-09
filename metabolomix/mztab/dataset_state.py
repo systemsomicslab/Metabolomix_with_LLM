@@ -181,7 +181,7 @@ class DatasetState:
         # Console 出力の ARF / DCL / EIC へのルックアップに使う。
         self.artifact_paths: dict[str, list[str]] = {}
 
-        # --- 解析状態フィールド（dataset_preprocess / dataset_pca / dataset_differential が設定） ---
+        # --- 解析状態フィールド（dataset_preprocess / dataset_pca / dataset_compare が設定） ---
         # pp_matrix: 前処理済み行列。shape は (n_samples, n_features) — feature_matrix の転置。
         # 前処理済みの試料名・特徴名は pp_sample_names / pp_feature_names が持つ。
         self.pp_matrix = None
@@ -280,6 +280,10 @@ class DatasetState:
         self.excluded_features: dict[str, str] = {}
         # quant_state: 定量の工程（metabolomix/quant）が置く受け渡し。統計側は normalized / method / unit を読む。
         self.quant_state: dict | None = None
+        # stat_matrices: matrix_id -> 統計エンジンの前処理済み行列（`PreparedMatrix`）と、その設定・群の上書き・
+        # 除外・指紋・metadata_revision（`analysis/stats_results.register_matrix`）。古さは `get_matrix` が見る。
+        # 前処理の入力の変更（除外を含む）で `result_state.invalidate_results` が空にする。指紋には入れない。
+        self.stat_matrices: dict = {}
 
 
 def _sha256(path: str | Path) -> str:
@@ -469,7 +473,7 @@ def build_dataset_state(
     # `assay[N]-<suffix>` 形式（ms_run_ref 等）に加え、素の `assay[N]` 行も拾う。
     # 素の行が MS-DIAL の表示名（例: 20220901_RAW_control_0h_1_NEG）を持つ唯一の場所で、
     # これを取りこぼすと sample_names が abundance_assay[N] という不透明な列識別子の
-    # ままになり、群選択（dataset_differential）と QC/blank ロール検出
+    # ままになり、群選択（dataset_compare）と QC/blank ロール検出
     # （detect_sample_roles はサンプル名のトークンを見る）が機能しなくなる。
     meta = parse_result.get("metadata", {})
     for k, v in meta.items():

@@ -36,14 +36,12 @@ from metabolomix.core.atomic_io import DomainError
 
 __all__ = [
     "apply_sample_manifest",
-    "build_analysis_matrix",
     "compare_dataset",
     "pca_dataset",
     "preprocess_auto",
     "preprocess_dataset",
     "resolve_comparison",
     "run_comparison",
-    "statistic_dataset",
 ]
 
 
@@ -93,6 +91,8 @@ def _commit_preprocess(ds, recipe: dict, computed: tuple, *, metadata_hash: str 
 
 def preprocess_dataset(ds, recipe: dict, *, request_revision: int | None = None) -> dict:
     """前処理を適用し、成功したときだけ状態を差し替える。
+
+    v1 の前処理（`ds.pp_*` を書く）。`dataset_preprocess` ツールは統計エンジンへ移り、本番の呼び出し元は無い。呼ぶのはテスト（`tests/v1_chain.py` 経由）だけで、v1 の他の関数と一緒に D 段で消える。
 
     同値のレシピを同じ入力へ再適用した場合は**計算し直さず**、前回の結果と
     result_id をそのまま返す（派生結果も生かしたまま）。
@@ -165,7 +165,10 @@ def preprocess_auto(ds, requested: dict, metadata: list[dict], *,
 
 def pca_dataset(ds, n_components: int = 5, log_transform: bool = False, *,
                 request_revision: int | None = None) -> dict:
-    """PCA を実行し、成功したときだけ `last_pca` を差し替える。"""
+    """v1 の PCA を実行し、成功したときだけ `last_pca` を差し替える。
+
+    呼び出し元は pipeline（とテスト）だけ。対話ツールの `dataset_pca` は統計エンジンの PCA。D 段で消す。
+    """
     settings = {"n_components": n_components, "log_transform": log_transform}
     result = run_dataset_pca(ds, n_components=n_components,
                              log_transform=log_transform)
@@ -190,6 +193,8 @@ def compare_dataset(ds, group_a: list[str], group_b: list[str], *,
 
     探索専用のデータセット（中断された実行の出力）では拒否する。欠けた検体は
     mzTab 上「その群に無い」ようにしか見えず、比較はその欠落ごと結論にする。
+
+    呼び出し元は pipeline（とテスト）だけ。対話ツールの `dataset_compare` は統計エンジン。D で消す。
     """
     _refuse_exploratory(ds, "2 群比較")
     settings = {
@@ -486,55 +491,3 @@ def _derived_fingerprint(ds, settings: dict) -> str:
         "features": list(ds.pp_feature_names),
         "settings": settings,
     })
-
-
-# ---------- v2: 解析行列と統計（spec §8.2・§10） ----------
-
-def build_analysis_matrix(ds, recipe: dict, bindings: dict | None = None,
-                          evidence: dict | None = None,
-                          eligibility=None) -> dict:
-    """`analysis-matrix.v1` を1本作り、`ds.analysis_matrices` へ登録する。
-
-    `ds.pp_matrix`（v1 の単一スロット）へは**書かない**。v2 は recipe ごとに
-    行列を持つので、単一スロットに置くと2本目が1本目を黙って上書きする
-    ——統計が「どの行列の数字か」を言えなくなる。
-    """
-    import numpy as np
-
-    from metabolomix.analysis import matrix_state
-
-    if eligibility is None:
-        eligibility = np.ones(len(getattr(ds, "feature_ids", []) or []), dtype=bool)
-    matrix = matrix_state.make_matrix(ds, recipe, bindings or {}, evidence or {},
-                                      eligibility)
-    ds.analysis_matrices[matrix["matrix_id"]] = matrix
-    return matrix
-
-
-def statistic_dataset(ds, specification: dict, matrix_result_id: str) -> dict:
-    """指定した解析行列に対して v2 統計を1件実行する（spec §10）。
-
-    行列は `matrix_result_id` で**名指し**する。「直近の前処理」を暗黙に使うと、
-    recipe 違いの行列が2本あるときにどちらの数字か言えなくなる。該当IDが
-    無ければ `ANALYSIS_RESULT_NOT_FOUND` で止める（近い行列で代用しない）。
-
-    数値の実装はここには無い——`analysis/statistics_v2.py` が唯一の実装で、
-    この層は「どの行列・どのメタデータで呼ぶか」を解決するだけ。
-    """
-    from metabolomix.analysis import statistics_v2
-
-    matrices = getattr(ds, "analysis_matrices", None) or {}
-    matrix = matrices.get(matrix_result_id)
-    if matrix is None:
-        raise DomainError(
-            "ANALYSIS_RESULT_NOT_FOUND",
-            f"指定されたmatrix_result_idの解析行列がありません: {matrix_result_id!r}"
-            "（pipelineのpreprocess/qc_processedが作る行列IDを指定してください。"
-            "近い行列で代用はしません）。",
-            {"matrix_result_id": matrix_result_id,
-             "available_matrix_ids": sorted(matrices)})
-
-    metadata = getattr(ds, "sample_metadata_rows", None) or []
-    target_features = getattr(ds, "feature_binding_targets", None) or {}
-    return statistics_v2.run_statistic(matrix, specification, metadata,
-                                       target_features)

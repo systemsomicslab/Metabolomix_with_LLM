@@ -28,7 +28,7 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
     "dcl.md": ("dcl_find_msms", "dcl_spot_spectrum", "dcl_diagnostic_ions"),
     "plots.md": ("dataset_plot", "save_figure"),
     "dataset_analysis.md": (
-        "dataset_preprocess", "dataset_pca", "dataset_differential",
+        "dataset_preprocess", "dataset_compare", "dataset_pca",
         "dataset_export_differential", "dataset_export_evidence_bundle", "dataset_set_sample_metadata",
         "dataset_feature_search",
     ),
@@ -36,7 +36,7 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
         "pipeline_plan", "pipeline_run", "pipeline_status",
         "pipeline_resume", "pipeline_cancel",
     ),
-    "metabolomics.md": ("dataset_statistic", "dataset_build_matrix"),
+    "metabolomics.md": (),   # pipeline の v2 工程だけを書く文書（ツールの節は無い）
     "library.md": ("library_load", "library_match_feature", "library_plot_mirror",
                    "library_search"),
     "curation.md": (
@@ -165,7 +165,7 @@ class TestScopeBoundary(unittest.TestCase):
     def test_scope_totals_match_registered_tool_count(self):
         """対象範囲の分割が、実際に登録されているツール数と一致することを縛る。
 
-        44 / 12 という分割は設計上の線引きだが、その合計は「全ツールを漏れなく
+        46 / 12 という分割は設計上の線引きだが、その合計は「全ツールを漏れなく
         分類した」という主張でもある。リテラルどうしの比較では自分自身を検証して
         しまうので、実際の登録数を引いて突き合わせる。
         """
@@ -180,4 +180,4 @@ class TestScopeBoundary(unittest.TestCase):
             registered,
             "対象範囲の分類と登録済みツールが一致しない",
         )
-        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 48)
+        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 46)
