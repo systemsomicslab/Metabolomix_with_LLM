@@ -364,7 +364,7 @@ def _filters(values, samples, detected, cfg, feature_ids) -> tuple[np.ndarray, d
     elif not len(blank):
         skip("blank_ratio", "no_blank")
     else:
-        # 平均（spec §4.3・preprocessing.blank_filter と同じ）。0 以下・非有限は欠測として除く。
+        # 平均（spec §4.3）。0 以下・非有限は欠測として除く。
         _, mean_bio, _ = _sd_mean(values[bio])
         _, mean_blank, _ = _sd_mean(values[blank])
         with np.errstate(all="ignore"):

@@ -71,19 +71,16 @@ ARF2 が無い・RT が合わないスポットは `-1` のまま残る。この
 
 旧 `top_eic_spots_by_peak_top` / `eicaef_top_peak_tops` は `peak_top`（ピーク頂点の横軸=RT座標。強度ではない）で並べており、実質「遅いRTのスポット一覧」で強度上位ではなかったため置き換えた。強度で並べるには `max_intensity` を使う。
 
-### 8.4 `dataset_feature_search` と `dataset_feature_search(sort=...)`
+### 8.4 EIC を検索するツールは無い（特徴の検索は `dataset_feature_search`）
 
-`dataset_feature_search` は7.3節の要約をJSON文字列として返す。
+EIC（`.EIC.aef`）を m/z・RT の窓や強度で検索するツールは無い（7.4 節の `search_eic_spots()` /
+`top_eic_spots_by_max_intensity()` は reader の関数で、MCP ツールからは呼ばれない）。データセットの特徴を
+窓で探すのは `dataset_feature_search`（`feature_ids`・`min_mz`/`max_mz`・`min_rt`/`max_rt` の AND）で、並びは
+`sort="mz"`（既定、m/z 昇順）か `sort="intensity"`（強度の降順）だけ。**この強度は特徴行列の検出セル
+（gap-fill でない実測）の最大で、EIC のクロマトグラムの最大（7.4 節の `max_intensity`）ではない。**
+戻り値の欄の意味は `lipidmix://docs/output-format/mztab`。見つけた特徴のクロマトグラムは 8.5 節の
+`dataset_plot(kind="eic")` で描く（特徴 ID は EIC のスポット番号と同じ空間）。
 
-`dataset_feature_search(sort=...)` は旧 `eic_search_by_mz_range` / `eic_search_by_rt_range` / `eic_rank_by_max_intensity` を統合したもので、条件の行・`一致件数: N`・TSV 表（列名 1 回）・注記（`== 注意 ==`）の順に返す。`sort="max_intensity"` で `max_intensity` 降順の**強度上位ランキング**になる（既定は spot_id 昇順）。表は先頭 `max_results` 行だけで、超えると `(表示上限: …)` 行が付く。
-
-| 列 | 意味 |
-|---|---|
-| `spot_id` `rt` `mz` `max_intensity` `num_samples` | 7.4節。`rt` は 3 桁、`mz` は 4 桁、`max_intensity` は整数に丸める |
-| `name` `ontology` `adduct` | 同じバッチ（同じ `AlignmentResult_<timestamp>`）の `.arf2` の `Name` / `Ontology` / `AdductType`。`Unknown` と空文字は区別したまま出す（core §9-1/§9-2）。`.arf2` が無ければ空で、注記に出る |
-| `n_msms` | アラインメント `.dcl` の `dcl[spot_id]`（代表試料の MS/MS）のピーク数。**`-` は「MS/MS 未取得」「precursor・RT がスポットと ±0.05 Da・±0.2 分で合わない（索引対応の崩れ）」「`.dcl` が無い」のいずれかで、0 本という意味ではない** |
-
-`spot_ids` の範囲外 ID は注記に列挙する。未注釈（`name` が空か `Unknown`）で `n_msms` が数値の行は、`library_match_feature(spot_id=…)` → `library_plot_mirror` で参照ライブラリと照合・目視できる（`lipidmix://docs/output-format/library`）。
 
 ### 8.5 `dataset_plot(kind="eic")` の描画契約
 
@@ -103,7 +100,7 @@ PNGが必要だとユーザーが明示した場合に限り、先に得たプ�
 `dataset_feature_search` の特徴 ID（= `.arf2` の MasterAlignmentID。EIC のスポット番号と同じ空間で、
 イオンモビリティでは連番にならない）。描画契約（`lipidmix.eic.v1`）は上記と同じで、図は
 `ds.figures["eic"]` に置かれ `save_figure(kind="eic")` が保存する。`.EIC.aef` の無いデータセット
-（mzTab-M だけから読んだもの）は `COMPANION_ARTIFACT_MISSING`。Task 11 でこの節は `dataset_plot` 中心に書き直す。
+（mzTab-M だけから読んだもの）は `COMPANION_ARTIFACT_MISSING`。
 
 ### 8.6 `dataset_plot(kind="eic_compounds")` の描画契約
 

@@ -97,7 +97,8 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 ## 6. 記録・audit・古さ
 
 - 1 工程 1 記録: 解析フォルダ（統合後は 2 つの解析フォルダの共通の親、または `record_folder`）の
-  `reports/quant/<record_id>.json`（schema `lipidmix.quant-record.v1`）。入力の指紋（元ファイルの
+  `reports/quant/<record_id>.json`（schema `lipidmix.quant-record.v1`）。設定の `[paths] reports_dir` は見ない
+  （再開がデータと一緒に読み直す記録なので、いつも解析フォルダ側）。入力の指紋（元ファイルの
   sha256・参照表 `reference:<名前>`・採用表 `adducts:<名前>`）・前の工程の記録 ID（`parent_ids`）・
   設定（`settings.rules` に規則の版と digest）・結果の要約・時刻。**上書きも削除もしない**。
   やり直しは新しい記録。リポジトリ側には書かない。

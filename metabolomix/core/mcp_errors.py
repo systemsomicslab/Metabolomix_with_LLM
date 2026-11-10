@@ -114,12 +114,7 @@ CONSOLE_ERROR_CODES = frozenset({
     "MSDIAL_EXE_NOT_FOUND",
     # 設定ファイル（lipidmix.local.toml）が読めない。
     "CONFIG_INVALID",
-    "MSDIAL_TIMEOUT",
-    "MSDIAL_NONZERO_EXIT",
-    "NO_JOB_OUTPUT",
-    "JOB_NOT_FOUND",
     "JOB_NOT_PLANNED",
-    "DATASET_ROOT_IN_REPO",
     "METHOD_FILE_NOT_FOUND",
     # MS-DIAL Console が読む ASCII の key/value テキストではない場合。
     "METHOD_FILE_NOT_TEXT",
@@ -132,20 +127,12 @@ CONSOLE_ERROR_CODES = frozenset({
     "MIXED_RAW_FORMATS",
     # method_file 省略時に、使えるパラメータファイルが見つからなかった場合。
     "METHOD_FILE_NOT_GIVEN",
-    # メソッドファイルの Ion mode と宣言 polarity が食い違う場合。
-    "METHOD_FILE_POLARITY_MISMATCH",
     # 脂質ライブラリ（.lbm2）を解決できない／候補が 1 件に絞れない場合。
     # 空のまま実行すると MS-DIAL は警告なしで同定 0 件のまま完走する。
     "LBM_NOT_FOUND",
     "LBM_AMBIGUOUS",
     # pipeline の library_mode="msp_then_lbm" で `[library] lbm` が未設定の場合（v8）。
     "LBM_NOT_CONFIGURED",
-    # 単一フォーマットの入力フォルダを作れなかった場合。
-    "INPUT_PREP_FAILED",
-    # MS-DIAL 実行自体は成功したが、その後の生成物収集・ハッシュ計算・
-    # analysis-job.json への保存で失敗した場合。NO_JOB_OUTPUT（生成物が
-    # そもそも無い）とは別のエラー: こちらは生成物はあるが確定処理に失敗した状態。
-    "JOB_POST_RUN_FAILED",
 })
 
 
@@ -173,10 +160,7 @@ MZTAB_ERROR_CODES = frozenset({
     "MZTAB_STRUCTURE_INVALID",
     "QUANTIFICATION_CONFLICT",
     "AMBIGUOUS_PRIMARY_MZTAB",
-    "UNSUPPORTED_AREA_CONSOLE",
-    "SAMPLE_DESIGN_MISSING",
     "COMPANION_ARTIFACT_MISSING",
-    "ARTIFACT_HASH_MISMATCH",
     "POLARITY_MISMATCH",
     # DatasetState 解析層の引数エラー。missing_state と違い、別のツールを先に
     # 呼んでも直らない（引数を直して呼び直すしかない）。

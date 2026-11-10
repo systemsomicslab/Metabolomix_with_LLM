@@ -143,7 +143,8 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
     """明示的なユーザー要求時だけ、データセットの図を reports/figures/<analysis_id>_<kind>.png に保存する。
 
     kind は `dataset_plot` の kind: "pca" / "volcano"（間引き前の全点）/ "loadings" / "group_intensity" /
-    "species" / "species_pca"（いずれも dpi 300 の PNG と同名 .svg）/ "eic" / "eic_compounds"。`dataset_plot` が最後に作った図（`ds.figures[kind]`）を描く。
+    "species" / "species_pca" / "eic" / "eic_compounds"。loadings / group_intensity / species / species_pca は
+    dpi 300 の PNG と同名 .svg、pca / volcano / eic / eic_compounds は dpi 120 の PNG だけ。`dataset_plot` が最後に作った図（`ds.figures[kind]`）を描く。
     まだ図が無ければ missing_state（`dataset_plot` を案内）。結果から作った図（pca / volcano / loadings）は、
     その結果が現在のものでなければ（前処理・除外・群の変更で古くなった）保存しない。
     group_intensity / species / species_pca は群を図に焼き込むので、試料の情報（群・役割）が更新されたあとは保存しない
