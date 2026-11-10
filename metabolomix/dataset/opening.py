@@ -418,7 +418,8 @@ def _folder_via_job(job_path: Path, *, measure: str, allow_incomplete: bool,
 
     gate = loading.job_gate(job_path, allow_incomplete=allow_incomplete)
     artifact_paths = loading.job_artifact_paths(gate.job)
-    target, raw_by_name, meta_by_name, scan = _matching_arf(gate, artifact_paths, analysis_dir)
+    target, raw_by_name, meta_by_name, scan, theo_by_fid = _matching_arf(gate, artifact_paths,
+                                                                         analysis_dir)
     try:
         selection = select_alignment(target)
     except DomainError as exc:
@@ -426,6 +427,7 @@ def _folder_via_job(job_path: Path, *, measure: str, allow_incomplete: bool,
 
     # 照合に読んだ `.arf` をそのまま使う（同じファイルを 2 度なめない）。
     ds = load_msdial_folder(selection, measure=measure, scan=scan)
+    _fill_theoretical_mz(ds, theo_by_fid)
     # 試料ごとの raw のパスは正準 mzTab-M（`ms_run[N]-location`）から。`.mddata` が無い
     # Console の出力でも、run の試料対応表と結べる。
     raws = [raw_by_name.get((name or "").strip()) for name in ds.sample_names]
@@ -454,13 +456,31 @@ def _folder_via_job(job_path: Path, *, measure: str, allow_incomplete: bool,
     return ds, selection, gate
 
 
+def _fill_theoretical_mz(ds, theo_by_fid: dict[str, float]) -> None:
+    """解析フォルダの SME（rank 1）に、正準 mzTab-M の同じスポット ID の理論 m/z を写す。
+
+    `.arf2` は上流の Reference m/z（照合した参照のプリカーサー m/z。mzTab-M の SME の
+    `theoretical_mass_to_charge`）を持たないので、アダプタの SME は None になる。それでは質量精度
+    （`dataset_mass_accuracy`）と新しい知見の候補が 0 件になる。job / pipeline の入口は同じ
+    アラインメントだと照合した mzTab-M を読んでいるので、その値を使う（SMF_ID == スポット ID）。
+    mzTab-M に無い・0 以下の値は写さない（上流は参照が無いと "0" を書く）。
+    """
+    for fid, candidates in (ds.feature_candidates or {}).items():
+        theo = theo_by_fid.get(str(fid))
+        if theo is None:
+            continue
+        for candidate in candidates or []:
+            if candidate.get("rank") == 1 and candidate.get("theoretical_mass_to_charge") is None:
+                candidate["theoretical_mass_to_charge"] = theo
+
+
 def _matching_arf(gate, artifact_paths: dict[str, list[str]],
                   analysis_dir: Path | None):
     """正準 mzTab-M と同じアラインメントの `.arf` をちょうど 1 本選ぶ。
 
     戻り値は (その `.arf`, 試料名（strip 済み） -> raw のパス, 試料名 -> {batch, run_order},
     その `.arf` を照合に読んだ `ArfScan`（解析フォルダのアダプタが読み直さずに使う。
-    定量値は `MEASURES` の両方を持つ）)。
+    定量値は `MEASURES` の両方を持つ）, SMF_ID -> SME（rank 1）の理論 m/z（正の値だけ）)。
     raw のパスは照合に読んだ mzTab-M の `ms_run[N]-location`、バッチと注入順は同じ mzTab-M の
     MTD（`MS:4000088` / `MS:4000089`。どちらも読み直さずに使う）。
 
@@ -477,6 +497,7 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]],
     axes: list = []
     raw_by_name: dict[str, str] = {}
     meta_by_name: dict[str, dict] = {}
+    theo_by_fid: dict[str, float] = {}
 
     def verify(paths: list[Path]):
         if not axes:
@@ -489,6 +510,13 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]],
                 raise DomainError(exc.code, f"{message}{reason}{_BROKEN_MZTAB_HINT}",
                                   exc.details) from exc
             axes.extend(evidence.join_axes(state))
+            for fid, candidates in (state.feature_candidates or {}).items():
+                for candidate in candidates or []:
+                    theo = candidate.get("theoretical_mass_to_charge")
+                    if (candidate.get("rank") == 1 and isinstance(theo, (int, float))
+                            and not isinstance(theo, bool) and theo > 0):
+                        theo_by_fid[str(fid)] = float(theo)
+                        break
             raw_by_name.update(
                 (name.strip(), raw) for name, raw in zip(
                     state.sample_names, loading.sample_raw_paths(gate.job, state, parsed))
@@ -517,7 +545,7 @@ def _matching_arf(gate, artifact_paths: dict[str, list[str]],
     details = {"mztab": gate.mztab_path.name, "candidates": [p.name for p in candidates],
                "source_hint": "mztab"}
     if len(passed) == 1:
-        return passed[0], raw_by_name, meta_by_name, scan
+        return passed[0], raw_by_name, meta_by_name, scan, theo_by_fid
     if passed:
         # directory で開くとジョブの門を通らない。未完了のジョブでそれを勧めると、探索専用の
         # 印が外れたまま比較まで進めてしまうので、そのときは mzTab-M だけを案内する。
