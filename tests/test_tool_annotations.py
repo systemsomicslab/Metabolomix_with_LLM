@@ -4,10 +4,13 @@
 annotations の無いツールはクライアント側で UNKNOWN 扱いになり、毎回承認待ちで
 止まる。新しいツールを足したらここにも足すこと。
 
-readOnlyHint の解釈: 「サーバの外に副作用が無い」＝ファイルとネットワークを
-変更しない。サーバ自身の解析セッション状態の更新は副作用に数えない
-（セッション状態の依存は missing_state エンベロープで伝えるため、
-annotations で二重に表現しない）。
+readOnlyHint の解釈: True は「何も変えない」＝ファイル・ネットワークを変更せず、
+後の呼び出しの結果を変えるセッション状態（データセットのハンドルの開閉・除外・試料の表・
+登録する行列・結果・図）も変えない。どれかを変えるツールは False にして、クライアントが
+承認を求められるようにする（Use-LLLM は `load_dataset` などの承認をこの値で決めている）。
+読んだ結果の控え（`library_match_feature` が `library.last_match` に置く直近の照合など、
+次の読み取りの既定になるだけのもの）は変更に数えない。
+状態の**前提**（何を先に呼ぶか）は missing_state の封筒で伝え、annotations では表さない。
 """
 import asyncio
 import unittest
@@ -38,8 +41,8 @@ EXPECTED_ANNOTATIONS = {
     "list_data_files": READ_ONLY,
     "dataset_status": READ_ONLY,
     # --- DatasetState 解析層 ---
-    # readOnlyHint はファイル/ネットワークへの副作用の有無。セッション状態の
-    # 更新は数えない（このファイル冒頭の規約）。
+    # readOnlyHint はファイル・ネットワーク・後の呼び出しを変えるセッション状態の変更の有無
+    # （このファイル冒頭の規約）。
     # 前処理の記録を reports/stats/ に 1 件追記する（呼ぶたびに新しい記録＝非冪等。書き先が
     # 無ければ書かず、前処理は成功する）。行列は ds.stat_matrices へ置く。
     "dataset_preprocess": LOCAL_WRITE_APPEND,

@@ -229,7 +229,7 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 - 現データに存在しない試料名・特徴 ID が 1 つでもあれば全体を拒み、何も変更しない（タイプミスで黙って一部だけ除外されない）。全試料の除外も拒む。
 - 実際に除外が変わったときだけ、登録した行列（`stat_matrices`）を空にし、比較・PCA の結果を古いとする（`dataset_preprocess` からやり直す）。同じ引数の再実行は何も動かさない（冪等）。
 
-除外集合は DatasetState の `excluded_samples`（試料名 -> 理由）と `excluded_features`（特徴 ID -> 理由）に持つ。変えると `metadata_revision` が進む。**`dataset_preprocess`**（→ `dataset_pca` / `dataset_compare`）・`dataset_plot`・`dataset_feature_search` の強度順がいずれも自動的に除外を反映する。除外が有効なとき、前処理の出力に「ユーザ手動除外」の注記が付く。`dataset_status(view="samples")` は各試料に `excluded` を付して現在の除外状態を示す。
+除外集合は DatasetState の `excluded_samples`（試料名 -> 理由）と `excluded_features`（特徴 ID -> 理由）に持つ。変えると `metadata_revision` が進む。**`dataset_preprocess`**（→ `dataset_pca` / `dataset_compare`）・`dataset_plot`・`dataset_feature_search` の強度順がいずれも自動的に除外を反映する。除外は前処理の記録に残る（試料の除外は select の工程の `excluded_by_include` の件数、記録の `settings.exclusions`）。前処理の出力に除外を知らせる専用の注記は付かない。`dataset_status(view="samples")` は各試料に `excluded` を付して現在の除外状態を示す。
 
 運用フロー: `dataset_preprocess` → `dataset_pca`（全体PCAで外れ俯瞰）→ `dataset_exclude(samples=[...], reason=...)` → `dataset_preprocess` ＋ `dataset_pca` で除外後PCAを確認 → `dataset_compare`。戻したいときは `mode="remove"` / `mode="clear"`。
 
@@ -351,11 +351,13 @@ LLMはこれらを解釈結果・報告書の注意点として必ず引用す�
 
 #### 11.4 `dataset_export_differential` — 差次的結果のエクスポート契約
 
-`dataset_compare` の後に呼ぶ（`result_id` は省略すると直近の結果。対比が複数の結果は `contrast_id` が要る。`result_id#contrast_id` の形も受ける）。同一アラインメントの
-兄弟 `.arf2` から InChIKey・Ontology・m/z・RT を `MasterAlignmentID` で結合し、
-1 ファイルに書き出す。**兄弟 `.arf2` が無ければ書き出さない**（InChIKey 空欄の行を
-出すと、下流で「パスウェイが無い化合物」と区別が付かなくなるため）。InChIKey 付き行が 0 件なら、
-下流が拒否する本文 0 行のファイルを成功扱いで残さない。
+`dataset_compare` の後に呼ぶ（`result_id` は省略すると直近の結果。対比が複数の結果は `contrast_id` が要る。`result_id#contrast_id` の形も受ける）。
+データセットの特徴ごとの同定（`feature_metadata` の名前・InChIKey・m/z・RT）を、比較の結果と特徴 ID で結んで
+1 ファイルに書き出す。読み込みの経路（解析フォルダ・mzTab-M）を問わず同じ規則で、行の出所は InChIKey を
+供給した側で 1 つに決める: SME 行の InChIKey があれば `name_source = mztab_sme`、無くて SML の候補が一意なら
+`mztab_sml`（MS1 照合のみ）、キュレーションの `assign` が当たれば `curation`。**InChIKey の無い特徴は書き出さない**
+（空欄の行を出すと、下流で「パスウェイが無い化合物」と区別が付かなくなるため。数はメタ行 `n_unannotated`）。
+InChIKey 付き行が 0 件なら `NO_ANNOTATED_FEATURES` で止まり、下流が拒否する本文 0 行のファイルを成功扱いで残さない。
 
 `#` 始まりのメタ行に来歴（`contract_version` / `group_a` / `group_b` /
 `log2fc_sign` / 閾値 / `n_features_total` / `n_with_inchikey` / `n_unannotated`）を置き、
@@ -385,9 +387,11 @@ mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`（`CONTRAC
 **有意な行だけでなく、InChIKey が付いた全行を書き出す。** 下流の濃縮解析は
 「検出された化合物」を背景に取る必要があり、有意な行だけでは背景が作れない。
 
-`msi_level` は `.arf2` 由来の注釈確度であり、**MS/MS の有無ではない**
-（`.arf2` は MS/MS 取得フラグを持たない）。`dataset_feature_search` と同じ
-保守的なクラス上限を使う。
+**`ontology` と `msi_level` はいつも空欄**（キュレーションの `assign` が当たった行の `ontology` だけは記録した値）。
+メタ行 `msi_note` がそれを宣言し、空欄は「該当なし」ではなく「この書き出しでは取得していない」を意味する。
+解析フォルダのデータセットは `dataset_feature_search` に `msi_level`（`.arf2` 由来の保守的なクラス上限。MS/MS の
+有無ではない）を出すが、書き出しには載せない。`spot_id` は特徴 ID で、メタ行は `# id_space = mztab_smf_id`、
+`# source_mztab`（読んだファイル）を書く（キーの名前は経路によらず同じ）。
 
 #### 11.4.9 データセットの上の同じ図（`dataset_plot`。B-2b Task 7）
 

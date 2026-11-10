@@ -172,8 +172,8 @@ def build_volcano_plot_payload(
     )
 
     # spec §7.4(R16): allow_confounded=true で継続した比較は、その旨をこの図にも
-    # 残す。run_comparison が `provenance.comparison.unadjusted_confounded` へ
-    # 記録する事実を読むだけで、ここで独自に交絡を判定はしない。
+    # 残す。`stats_results.as_two_group` が `provenance.comparison.unadjusted_confounded`
+    # へ足す事実を読むだけで、ここで独自に交絡を判定はしない。
     comparison_prov = ((last_differential.get("provenance") or {}).get("comparison") or {})
     if comparison_prov.get("unadjusted_confounded"):
         caveats.append(

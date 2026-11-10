@@ -443,8 +443,9 @@ TSV の末尾へ 2 列を足し、payload に 3 つの欄を足す。`detail` �
 （pipeline の既定は `LabMsp`）。実データ（`msp_then_lbm` の run）では、MSP 由来の代表は名前の ID、
 LBM 由来の代表はパスの ID だった。
 
-- 末尾（ファイル名の部分）が `.lbm` + 数字なら **True**（LBM 由来）。それ以外は **None**（判定できない）で、
-  False は返さない。GUI の注釈器 ID は自由名なので、規則に合わないことは MSP 由来の証拠にならない。
+- 末尾（ファイル名の部分）が `.lbm` + 数字なら **True**（LBM 由来）、`.msp` + 数字（`msp_only` の MSP のパス）なら
+  **False**（MSP 由来）。それ以外は **None**（判定できない）。GUI の注釈器 ID は自由名なので、どの規則にも合わない
+  ことは MSP 由来の証拠にならない（`msp_then_lbm` の設定表の名前も None）。
 - **注釈器 ID は、どちらのライブラリのフルパスも含みうる**（`msp_only` の MSP、LBM は常に）。
   ツールの戻り値に `annotator_id` の生の値を出さない。出してよいのは導出した真偽かファイル名だけ。
   データセットの `feature_metadata[].annotator_id` はファイル名の部分だけを持つ。

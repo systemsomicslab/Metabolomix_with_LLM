@@ -168,7 +168,8 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料�
   直近が無い・閉じたなら `missing_state("dataset", ["load_dataset"])`で、`data/` や開いている
   別のハンドルへは落ちない。記録（objective・レポート・図・パスウェイ）の置き場所は
   `mcp_core._report_dir_candidates(holder)`（設定の `[paths] reports_dir` → データセットの
-  `analysis_dir` 配下 `reports/`。`holder` は呼び出し側が渡す）。
+  `analysis_dir` 配下 `reports/`。`holder` は呼び出し側が渡す）。例外は定量の記録（`reports/quant/`）で、
+  再開（`quant/resume.py`）が読み直す鎖なので、設定によらずいつも解析フォルダ側に書く。
 - **`metabolomix.core.mcp_core` は leaf**。ここから `metabolomix.<形式>.tools` や `metabolomix.tools.*` を
   import してはならない（循環）。
 - **セッションにパーサ別のスロットは無い**（旧 `session.arf` / `.arf2` / `.pai2` / `.eic` は B-2b で
