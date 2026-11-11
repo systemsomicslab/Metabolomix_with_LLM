@@ -43,19 +43,10 @@
 - **上限。** `lipidmix.local.toml` の `[server] max_dataset_handles`（既定 8。1 未満は 1）。`load_dataset` がハンドルを 1 本使う
   （前に読んだものは閉じずに残る）。超えると `DATASET_HANDLE_LIMIT` で止め、古いハンドルを
   黙って閉じない。寿命は明示の `dataset_close` か、サーバの終了まで。
-- **受付番号と待ち方。** デスクトップアプリの中継は呼び出しを約 80 秒で打ち切るので、
-  `load_dataset` は最長 `wait_seconds`（既定 20 秒。0 以上の有限の数でなければ
-  `DATASET_BAD_REQUEST`）だけ待つ。その中で終われば下の戻り値をそのまま返す。終わらなければ
-  読み込みを続けたまま `{"status": "loading", "load_id": "ld_…", "next": "dataset_load_status(load_id=…)"}`
-  を返す。`dataset_load_status(load_id)` は待たずに答え、読み込み中は
-  `{"status": "loading", "load_id", "elapsed_s"}`、終われば `load_dataset` の戻り値そのもの（成功か
-  誤りの封筒）を返す。`status: "loading"` の間は間を置いて呼び直す。ハンドルの登録と直近の切り替えは
-  読み込みが終わったときに 1 回だけ起き、引いても状態は変わらない。受け付けた後に失敗したら
-  （`ALIGNMENT_NOT_FOUND`・同時の読み込みで上限に達した `DATASET_HANDLE_LIMIT` など）、
-  `load_dataset` と同じ封筒が返り、ハンドルは登録されない。`DomainError` 以外の失敗は
-  `DATASET_LOAD_FAILED`（`details.exception` に例外の種類だけ）。引数の誤りと上限は受け付ける前に
-  返す。終わった受付は 1 時間覚えて同じ文字列を返し、64 件を超えると終わったものを古い順に捨てる
-  （知らない番号は `DATASET_LOAD_NOT_FOUND`。64 件すべてが読み込み中なら `DATASET_LOAD_LIMIT`）。
+- **受付番号。** `load_dataset` は最長 `wait_seconds`（既定 20。0〜60 秒）待ち、終わらなければ読み込みを
+  続けたまま `{"status": "loading", "load_id": "ld_…"}` を返す。`dataset_load_status(load_id)` は読み込み中なら
+  `status: "loading"`、終われば `load_dataset` の戻り値そのもの（1 時間覚える）。受付番号を返した後に別の
+  ハンドルが直近になっていたら直近にせず、`current: false` が付く。上限は読み込み中の受付も 1 本と数える。
 
 `load_dataset` の戻り値:
 

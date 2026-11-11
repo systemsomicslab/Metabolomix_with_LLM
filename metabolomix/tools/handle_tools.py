@@ -19,6 +19,7 @@ from __future__ import annotations
 import functools
 import math
 import re
+import threading
 from pathlib import Path
 
 from mcp.types import ToolAnnotations
@@ -201,14 +202,17 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         再解析のエージェント向け。後から `dataset_overview` で出せる）。bool 以外は `DATASET_BAD_REQUEST`。
         概観が失敗しても読み込みは成功し、`overview` に `status:"unavailable"` と理由が載る。
 
-    wait_seconds: 読み込みを待つ秒数（既定 20。0 以上の有限の数。それ以外は `DATASET_BAD_REQUEST`）。
+    wait_seconds: 読み込みを待つ秒数（既定 20。0 以上 60 以下。それ以外は `DATASET_BAD_REQUEST`）。
         この中で終われば下の戻り値をそのまま返す。終わらなければ読み込みは続け、受付番号を
         `{"status": "loading", "load_id": "ld_…", "next": "dataset_load_status(load_id=…)"}` で返す。
         `dataset_load_status(load_id)` を呼ぶと、読み込み中は `status: "loading"`、終われば
         この関数の戻り値そのもの（成功か誤りの封筒）が返る。ハンドルの登録と直近の切り替えは
         読み込みが終わったときに 1 回だけ起き、受付の後に失敗したらハンドルは登録しない。
-        0 は「既に終わっていなければすぐ受付番号を返す」。引数の誤りと上限
-        （`DATASET_HANDLE_LIMIT`）は受け付ける前に返す。
+        受付番号を返した後に別のハンドルが直近になっていたら、終わった読み込みはハンドルを
+        登録するだけで直近にせず（ライブラリも移さない）、戻り値に `current: false` と `note` が
+        付く（そのハンドルは `dataset_handle` を渡して使う）。0 は「既に終わっていなければすぐ
+        受付番号を返す」。引数の誤りと上限（`DATASET_HANDLE_LIMIT`。読み込み中の受付も 1 本と
+        数える）は受け付ける前に返す。
 
     成功すると、いつも**新しいハンドルを直近にする**。`dataset_handle` を省いた `dataset_*` /
     `library_*` はこの直近のハンドルに効く。再解析のエージェントは返った `dataset_handle` を
@@ -231,20 +235,69 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         return bad
     try:
         wait = _wait_seconds(wait_seconds)
-        handles.registry.check_capacity()  # 上限なら受け付けない（読み込みの中でもう一度確かめる）
-        load_id = pending_loads.registry.submit(functools.partial(
-            _load_now, directory=directory, mztab_path=mztab_path, job_path=job_path,
-            pipeline_path=pipeline_path, polarity=polarity, allow_incomplete=allow_incomplete,
-            source=source, measure=measure, arf2_path=arf2_path, library=library,
-            overview=overview))
-        payload = pending_loads.registry.wait(load_id, wait)
+        # 上限なら受け付けない。読み込み中の受付も 1 本と数える（登録で必ず断られる読み込みを
+        # 何本も回さない）。登録（adopt_handle）でもう一度確かめる。
+        reservation = handles.registry.reserve()
+        ticket = _CurrentTicket(session_state.session.current_generation)
+        try:
+            pending = pending_loads.registry.submit(functools.partial(
+                _load_reserved, reservation, ticket, directory=directory, mztab_path=mztab_path,
+                job_path=job_path, pipeline_path=pipeline_path, polarity=polarity,
+                allow_incomplete=allow_incomplete, source=source, measure=measure,
+                arf2_path=arf2_path, library=library, overview=overview))
+        except BaseException:
+            reservation.release()
+            raise
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
+    # 受付そのものを待つ（受付簿から捨てられても結果を失わない）。
+    payload = pending.wait(wait)
     if payload is not None:
-        pending_loads.registry.discard(load_id)  # 受付番号を誰にも渡していないので覚えない
+        pending_loads.registry.discard(pending.load_id)  # 受付番号を誰にも渡していないので覚えない
         return payload
-    return json_payload({"status": "loading", "load_id": load_id,
-                         "next": f'dataset_load_status(load_id="{load_id}")'})
+    ticket.detach()  # ここから後に終わる読み込みは、受け付けた後の直近の動きを見る
+    return json_payload({"status": "loading", "load_id": pending.load_id,
+                         "next": f'dataset_load_status(load_id="{pending.load_id}")'})
+
+
+#: `wait_seconds` の上限（秒）。デスクトップアプリの中継が呼び出しを打ち切る約 80 秒より短く。
+MAX_WAIT_SECONDS = 60.0
+
+#: 受け付けた後に別のハンドルが直近になったため、直近にしなかったときの `note`。
+_NOT_CURRENT_NOTE = ("受け付けた後に別のハンドルが直近になったので、このハンドルは直近にしていない。"
+                     "dataset_handle を渡して使う。")
+
+
+class _CurrentTicket:
+    """受け付けた読み込みが、終わったときに直近になってよいか。
+
+    受け付けたときの直近の世代（`session.current_generation`）を覚える。`load_dataset` が受付番号を
+    返した（`detach`）後に終わった読み込みは、その間に別のハンドルが直近になっていれば（世代が
+    進んでいれば）直近にしない。`detach` の前に登録まで済んだ読み込み（期限の中で終わったもの）は
+    今までどおり直近にする。判定（`adopt_handle` が `_current_lock` の下で呼ぶ）と `detach` は
+    このロックで順序を決める。
+    """
+
+    def __init__(self, generation: int):
+        self._lock = threading.Lock()
+        self._generation = generation
+        self._detached = False
+
+    def detach(self) -> None:
+        with self._lock:
+            self._detached = True
+
+    def may_become_current(self, generation: int) -> bool:
+        with self._lock:
+            return not self._detached or generation == self._generation
+
+
+def _load_reserved(reservation, ticket, **kwargs) -> str:
+    """受付のスレッドで本体を回す。登録で使わなかった枠（失敗したとき）は必ず返す。"""
+    try:
+        return _load_now(ticket=ticket, reservation=reservation, **kwargs)
+    finally:
+        reservation.release()  # 登録で使った枠なら何もしない
 
 
 def _argument_error(overview, library) -> str | None:
@@ -260,11 +313,11 @@ def _argument_error(overview, library) -> str | None:
 
 
 def _wait_seconds(value) -> float:
-    """`wait_seconds` を確かめる（0 以上の有限の数。bool は数に数えない）。"""
+    """`wait_seconds` を確かめる（0 以上 `MAX_WAIT_SECONDS` 以下の数。bool は数に数えない）。"""
     if (isinstance(value, bool) or not isinstance(value, (int, float))
-            or not math.isfinite(value) or value < 0):
+            or not math.isfinite(value) or not 0 <= value <= MAX_WAIT_SECONDS):
         raise DomainError("DATASET_BAD_REQUEST",
-                          f"wait_seconds は 0 以上の有限の秒数です: {value!r}",
+                          f"wait_seconds は 0 以上 {MAX_WAIT_SECONDS:g} 以下の秒数です: {value!r}",
                           {"field": "wait_seconds"})
     return float(value)
 
@@ -274,9 +327,13 @@ def _load_now(*, directory: str | None = None, mztab_path: str | None = None,
               polarity: str | None = None, allow_incomplete: bool = False,
               source: str = "auto", measure: str = "peak_height",
               arf2_path: str | None = None, library: str = "auto",
-              overview: bool = True) -> str:
+              overview: bool = True, ticket: _CurrentTicket | None = None,
+              reservation: handles.Reservation | None = None) -> str:
     """`load_dataset` の本体（受付のスレッドで回る）。戻り値は `load_dataset` の JSON の文字列
-    （成功・誤りの封筒・`needs_input`）。成功ならハンドルを登録して直近にする（ここで 1 回だけ）。"""
+    （成功・誤りの封筒・`needs_input`）。成功ならハンドルを登録して直近にする（ここで 1 回だけ）。
+
+    `ticket` があれば直近にするかはその判定に従い、直近にしなかったら戻り値に `current: false` と
+    `note` を足す（ほかの欄は変えない）。`reservation` は受付で取った枠で、登録と同時に消える。"""
     bad = _argument_error(overview, library)
     if bad is not None:
         return bad
@@ -311,7 +368,10 @@ def _load_now(*, directory: str | None = None, mztab_path: str | None = None,
         try:
             # 直近にする。`library_load` を先に呼んでいて、このデータセットのライブラリが
             # 決まらなかった（`"auto"`）ときは、セッションのライブラリをこのハンドルへ移す。
-            session_state.session.adopt_handle(handle, move_library=(library == "auto"))
+            # 受け付けた後に別のハンドルが直近になっていたら（`ticket`）、登録だけして移さない。
+            made_current = session_state.session.adopt_handle(
+                handle, move_library=(library == "auto"), reservation=reservation,
+                may_become_current=ticket.may_become_current if ticket is not None else None)
         except DomainError:
             handle.close()
             raise
@@ -340,6 +400,7 @@ def _load_now(*, directory: str | None = None, mztab_path: str | None = None,
         # 配布先のクローンが origin/main より遅れているときだけ載せる（最新なら鍵ごと出さない）。
         **({"update_available": update} if (update := version.update_status()) else {}),
         "dataset_handle": handle.handle_id,
+        **({} if made_current else {"current": False, "note": _NOT_CURRENT_NOTE}),
         "adapter": opened.adapter,
         "polarity": polarity,
         "polarity_source": polarity_source,
@@ -402,7 +463,8 @@ def dataset_load_status(load_id: str) -> str:
 
     読み込み中は `{"status": "loading", "load_id", "elapsed_s"}`（`elapsed_s` は受け付けてからの秒）。
     終われば `load_dataset` の戻り値そのもの: 成功なら `dataset_handle` つきの要約（そのハンドルが
-    直近になっている）、失敗なら `load_dataset` と同じ誤りの封筒（ハンドルは登録されず、直近も
+    直近になっている。受け付けた後に別のハンドルが直近になっていたら直近にせず、`current: false` と
+    `note` が付く）、失敗なら `load_dataset` と同じ誤りの封筒（ハンドルは登録されず、直近も
     動かない）。引いても状態は変わらない——ハンドルの登録と直近の切り替えは、読み込みが終わった
     ときに 1 回だけ起きている。終わった受付は 1 時間覚えていて、何度引いても同じ文字列を返す。
     知らない受付番号（終わってから 1 時間を過ぎた・サーバが再起動した）は `DATASET_LOAD_NOT_FOUND`。

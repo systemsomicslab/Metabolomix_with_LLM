@@ -61,20 +61,25 @@ mzTab-M は mzTab-M のフォルダ。指紋には入れない）を決める。
 `PIPELINE_POLARITY_REQUIRED` で、`load_dataset` はそれを `needs_input`（`field=polarity`・
 `retry_tools=["load_dataset"]`）にして返す。ほかの入口で `polarity` を渡すと `PIPELINE_POLARITY_NOT_APPLICABLE`）。
 
-受付: `load_dataset` は引数（`overview`・`library`・`wait_seconds`）と上限を確かめてから、本体
-`_load_now()` を受付（`core/pending_loads.py`）の daemon スレッドで始め、最長 `wait_seconds`（既定 20 秒）
-待つ。終われば本体の戻り値をそのまま返し、受付は忘れる。終わらなければ受付番号（`ld_…`）を返し、
-読み込みは続く（デスクトップアプリの中継が約 80 秒で呼び出しを打ち切るため）。ハンドルの登録と直近の
-切り替え（`adopt_handle()`）は本体が終わるときに 1 回だけ起きる。本体が例外を出しても受付は誤りの
-封筒で終わる（`DomainError` は `mztab_error()`、それ以外は `DATASET_LOAD_FAILED`）。
+受付: `load_dataset` は引数（`overview`・`library`・`wait_seconds` は 0〜60 秒）を確かめ、上限の枠を
+1 本取ってから（`reserve()`。開いているハンドルと読み込み中の受付の和で数える）、本体 `_load_now()` を
+受付（`core/pending_loads.py`）の daemon スレッドで始め、受付そのもの（`PendingLoad`）を最長 `wait_seconds`
+（既定 20 秒）待つ。終われば本体の戻り値をそのまま返し、受付は忘れる。終わらなければ受付番号（`ld_…`）を
+返し、読み込みは続く（デスクトップアプリの中継が約 80 秒で呼び出しを打ち切るため）。ハンドルの登録と直近の
+切り替え（`adopt_handle()`）は本体が終わるときに 1 回だけ起きる。受付番号を返した後に別のハンドルが直近に
+なっていたら（`session.current_generation` が受け付けたときから進んでいたら）、登録だけして直近にせず、
+ライブラリも移さず、戻り値に `current: false` と `note` を足す。枠は登録で消え、失敗なら返す。本体が
+どう終わっても受付は誤りの封筒で終わる（`DomainError` は `mztab_error()`、それ以外は `DATASET_LOAD_FAILED`）。
 1. metabolomix/tools/handle_tools.py load_dataset()
 2. └─ metabolomix/tools/handle_tools.py _argument_error()
 3. └─ metabolomix/tools/handle_tools.py _wait_seconds()
-4. └─ metabolomix/core/handles.py HandleRegistry.check_capacity()（上限なら受け付けない）
-5. └─ metabolomix/core/pending_loads.py PendingLoads.submit()（`_load_now()` を daemon スレッドで回す。中身は下の入口とアダプタの選び方）
+4. └─ metabolomix/core/handles.py HandleRegistry.reserve()（上限なら受け付けない）
+5. └─ metabolomix/core/pending_loads.py PendingLoads.submit()（`_load_reserved()` を daemon スレッドで回す）
 6.    └─ metabolomix/core/pending_loads.py PendingLoads._run()
-7. └─ metabolomix/core/pending_loads.py PendingLoads.wait()
-8. └─ [期限の中で終わったとき] metabolomix/core/pending_loads.py PendingLoads.discard()
+7.       └─ metabolomix/tools/handle_tools.py _load_reserved()（本体。中身は下の入口とアダプタの選び方。終われば枠を返す）
+8. └─ metabolomix/core/pending_loads.py PendingLoad.wait()
+9. └─ [期限の中で終わったとき] metabolomix/core/pending_loads.py PendingLoads.discard()
+10. └─ [終わらなかったとき] metabolomix/tools/handle_tools.py _CurrentTicket.detach()
 
 入口とアダプタの選び方（本体。受付のスレッドで回る）:
 1. metabolomix/tools/handle_tools.py _load_now()
@@ -112,7 +117,7 @@ mzTab-M は mzTab-M のフォルダ。指紋には入れない）を決める。
 33. └─ metabolomix/mztab/polarity.py dataset_polarity()
 34. └─ metabolomix/tools/handle_tools.py alignment_files_for()
 35. └─ metabolomix/tools/handle_tools.py _open_library_for()
-36. └─ metabolomix/core/session_state.py AnalysisSession.adopt_handle()（直近にする）
+36. └─ metabolomix/core/session_state.py AnalysisSession.adopt_handle()（直近にする。受け付けた読み込みは `_CurrentTicket.may_become_current()` に従う）
 37.    └─ metabolomix/core/handles.py HandleRegistry.add()
 38. └─ metabolomix/tools/mztab_tools.py load_summary_lines()
 39.    └─ [解析フォルダ] metabolomix/tools/mztab_tools.py _folder_summary_text()

@@ -1,13 +1,15 @@
 """`load_dataset` の受付番号（`ld_…`）と `dataset_load_status`（枠組みの見直し 第 1 部 Task A1）。
 
 Claude のデスクトップアプリの中継は MCP の呼び出しを約 80 秒で打ち切る。`load_dataset` は
-`wait_seconds` の中で終われば今までの戻り値をそのまま返し、終わらなければ受付番号を返す。
-クライアントは `dataset_load_status(load_id)` で結果を引く。
+`wait_seconds`（0〜60 秒）の中で終われば今までの戻り値をそのまま返し、終わらなければ受付番号を
+返す。クライアントは `dataset_load_status(load_id)` で結果を引く。受付番号を返した後に別の
+ハンドルが直近になっていたら、終わった読み込みは直近にならない（`current: false`）。上限は
+読み込み中の受付も 1 本と数える。
 
-読み込みを止めるテストは `opening.open_dataset` を `threading.Event` で止める（`gate`）。
-`gate` は後片付けで必ず Event を放し、`fresh_state` は残った読み込みが終わるのを待ってから
-ハンドルを閉じる（落ちたテストが全体を止めない・次のテストへ読み込みを持ち越さない）。
-待つところにはすべて期限を付ける。
+読み込みを止めるテストは `opening.open_dataset` を `threading.Event` で止める（`gate`。`only` に
+入れたフォルダだけを止められる）。`gate` は後片付けで必ず Event を放し、`fresh_state` は残った
+読み込みが終わるのを待ってから（終わらなければ落とす）ハンドルを閉じる——落ちたテストが全体を
+止めない・次のテストへ読み込みを持ち越さない。待つところにはすべて期限を付ける。
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ import asyncio
 import json
 import math
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -44,8 +47,8 @@ def fresh_state(monkeypatch):
     monkeypatch.setattr(pending_loads, "registry", loads)
     yield loads
     # 残った読み込みが終わるまで待つ（終わる前に片付けると、次のテストの登録簿へ入りうる）。
-    for load_id in list(loads._entries):
-        loads.wait(load_id, _TIMEOUT)
+    for entry in list(loads._entries.values()):
+        assert entry.wait(_TIMEOUT) is not None, f"読み込みが終わらない: {entry.load_id}"
     for handle in handles.registry.list():
         handles.registry.close(handle.handle_id)
     session_state.session = session_state.AnalysisSession()
@@ -53,13 +56,20 @@ def fresh_state(monkeypatch):
 
 @pytest.fixture
 def gate(monkeypatch):
-    """`opening.open_dataset` を Event で止める。`release` を放すまで読み込みは進まない。"""
+    """`opening.open_dataset` を Event で止める。`release` を放すまで読み込みは進まない。
+
+    `state.only` にフォルダ（文字列）の集合を入れると、そのフォルダの読み込みだけを止める。
+    """
     release = threading.Event()
+    entered = threading.Event()
     real = opening.open_dataset
-    state = SimpleNamespace(calls=0, error=None)
+    state = SimpleNamespace(calls=0, error=None, only=None)
 
     def blocked(**kwargs):
+        if state.only is not None and kwargs.get("directory") not in state.only:
+            return real(**kwargs)
         state.calls += 1
+        entered.set()
         assert release.wait(_TIMEOUT), "テストが Event を放さなかった"
         if state.error is not None:
             raise state.error
@@ -67,7 +77,7 @@ def gate(monkeypatch):
 
     monkeypatch.setattr(opening, "open_dataset", blocked)
     try:
-        yield SimpleNamespace(release=release, state=state)
+        yield SimpleNamespace(release=release, entered=entered, state=state)
     finally:
         release.set()
 
@@ -86,10 +96,27 @@ def _accept(**kwargs) -> dict:
     return out
 
 
+def _load(**kwargs) -> dict:
+    kwargs.setdefault("overview", False)
+    out = json.loads(handle_tools.load_dataset(**kwargs))
+    assert out["status"] == "success", out
+    return out
+
+
 def _status_when_done(load_id: str) -> str:
     """読み込みが終わるのを（期限つきで）待ってから `dataset_load_status` を引く。"""
     assert pending_loads.registry.wait(load_id, _TIMEOUT) is not None, "読み込みが終わらない"
     return handle_tools.dataset_load_status(load_id)
+
+
+class _FakeStore:
+    """セッション自身のライブラリに置く偽の store（移されたかを見るだけ）。"""
+
+    def close(self):
+        pass
+
+    def summary(self):
+        return {"source_sha256": "0" * 64, "record_count": 1}
 
 
 # ---------- 計画の 6 本 ----------
@@ -100,7 +127,7 @@ def test_fast_load_returns_payload_unchanged(tmp_path, fresh_state):
     out = json.loads(handle_tools.load_dataset(directory=str(folder), overview=False,
                                                wait_seconds=20))
     assert out["status"] == "success"
-    assert "load_id" not in out
+    assert "load_id" not in out and "current" not in out and "note" not in out
     assert handles.registry.peek(out["dataset_handle"]) is not None
     assert session_state.session.current_handle_id == out["dataset_handle"]
     # 戻り値の形は本体（`_load_now`）をそのまま呼んだときと同じ。
@@ -128,6 +155,8 @@ def test_slow_load_returns_load_id_then_payload(tmp_path, fresh_state, gate):
     gate.release.set()
     done = json.loads(_status_when_done(load_id))
     assert done["status"] == "success"
+    # ほかに直近になったハンドルが無いので、受け付けた読み込みが直近になる（`current` の鍵は無い）。
+    assert "current" not in done and "note" not in done
     assert session_state.session.current_handle_id == done["dataset_handle"]
     assert [h.handle_id for h in handles.registry.list()] == [done["dataset_handle"]]
 
@@ -140,9 +169,7 @@ def test_status_is_repeatable(tmp_path, fresh_state, gate):
     assert handle_tools.dataset_load_status(load_id) == first
 
     # 引いても直近は動かない: 別のハンドルを開いた後に引き直しても、直近はその別のハンドルのまま。
-    other = json.loads(handle_tools.load_dataset(directory=str(_folder(tmp_path / "b")),
-                                                 overview=False))
-    assert other["status"] == "success"
+    other = _load(directory=str(_folder(tmp_path / "b")))
     assert handle_tools.dataset_load_status(load_id) == first
     assert session_state.session.current_handle_id == other["dataset_handle"]
     assert len(handles.registry.list()) == 2
@@ -175,9 +202,7 @@ def test_unknown_load_id(fresh_state):
 
 def test_capacity_checked_before_accept(tmp_path, fresh_state, monkeypatch):
     use_config(monkeypatch, tmp_path, {"server.max_dataset_handles": 1})
-    first = json.loads(handle_tools.load_dataset(directory=str(_folder(tmp_path / "a")),
-                                                 overview=False))
-    assert first["status"] == "success"
+    first = _load(directory=str(_folder(tmp_path / "a")))
 
     def must_not_accept(fn):
         raise AssertionError("上限なのに受け付けた")
@@ -187,20 +212,144 @@ def test_capacity_checked_before_accept(tmp_path, fresh_state, monkeypatch):
                                                overview=False, wait_seconds=0.05))
     assert "load_id" not in out
     assert out["error"]["code"] == "DATASET_HANDLE_LIMIT"
+    assert "loading" not in out["error"]["details"]  # 読み込み中の受付は無い
     assert session_state.session.current_handle_id == first["dataset_handle"]
 
 
-# ---------- 引数・失敗・同時の受付 ----------
+# ---------- 直近の切り替え（受け付けた後に別のハンドルが直近になったら） ----------
 
 
-@pytest.mark.parametrize("value", [-1, -0.001, math.nan, math.inf, -math.inf, True, "20", None])
+def test_slow_load_does_not_steal_current_from_a_newer_load(tmp_path, fresh_state, gate):
+    folder_a, folder_b = str(_folder(tmp_path / "a")), str(_folder(tmp_path / "b"))
+    gate.state.only = {folder_a}
+    load_id = _accept(directory=folder_a)["load_id"]
+    b = _load(directory=folder_b)  # 止めていないので期限の中で終わり、直近になる
+    assert session_state.session.current_handle_id == b["dataset_handle"]
+
+    gate.release.set()
+    raw = _status_when_done(load_id)
+    a = json.loads(raw)
+    assert a["status"] == "success"
+    assert a["current"] is False and a["note"]
+    assert session_state.session.current_handle_id == b["dataset_handle"]  # B のまま
+    assert {h.handle_id for h in handles.registry.list()} == {a["dataset_handle"],
+                                                                b["dataset_handle"]}
+    # 足したのは `current` と `note` の 2 つだけ（ほかの欄は期限の中で終わったときと同じ）。
+    assert set(a) - {"caveat", "current", "note"} == set(b) - {"caveat"}
+    assert handle_tools.dataset_load_status(load_id) == raw
+
+
+def test_not_current_load_does_not_move_the_session_library(tmp_path, fresh_state, gate):
+    """直近にしない読み込みは、セッション自身のライブラリを移さない（直近が空いていても）。"""
+    folder_a, folder_b = str(_folder(tmp_path / "a")), str(_folder(tmp_path / "b"))
+    gate.state.only = {folder_a}
+    load_id = _accept(directory=folder_a)["load_id"]
+    b = _load(directory=folder_b)
+    handles.registry.close(b["dataset_handle"])  # 直近が空く（世代は戻らない）
+    store = _FakeStore()
+    session_state.session._library.store = store  # `library_load`（ハンドルなし）が読んだ形
+
+    gate.release.set()
+    a = json.loads(_status_when_done(load_id))
+    assert a["status"] == "success" and a["current"] is False
+    assert session_state.session._library.store is store
+    assert handles.registry.peek(a["dataset_handle"]).library.store is None
+    assert session_state.session.current_handle_id != a["dataset_handle"]
+    assert session_state.session.dataset is None  # 閉じた B の後、直近は空のまま
+
+
+def test_fast_load_still_becomes_current_even_if_another_did_meanwhile(tmp_path, fresh_state,
+                                                                      gate):
+    """期限の中で終わった読み込みは今までどおり（終わった方が直近になる）。"""
+    folder_a, folder_b = str(_folder(tmp_path / "a")), str(_folder(tmp_path / "b"))
+    gate.state.only = {folder_a}
+    results = []
+    thread = threading.Thread(target=lambda: results.append(json.loads(
+        handle_tools.load_dataset(directory=folder_a, overview=False, wait_seconds=30))))
+    thread.start()
+    try:
+        assert gate.entered.wait(_TIMEOUT)
+        b = _load(directory=folder_b)
+        assert session_state.session.current_handle_id == b["dataset_handle"]
+    finally:
+        gate.release.set()
+        thread.join(_TIMEOUT)
+    assert not thread.is_alive()
+    a = results[0]
+    assert a["status"] == "success" and "current" not in a and "load_id" not in a
+    assert session_state.session.current_handle_id == a["dataset_handle"]
+
+
+# ---------- 上限（読み込み中の受付も数える） ----------
+
+
+def test_in_flight_load_fills_the_last_slot(tmp_path, fresh_state, gate, monkeypatch):
+    """上限 1 で 1 本を受け付けると、読み込み中のそれが最後の枠を取り、次は受け付けずに断る。"""
+    use_config(monkeypatch, tmp_path, {"server.max_dataset_handles": 1})
+    a = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
+    out = json.loads(handle_tools.load_dataset(directory=str(_folder(tmp_path / "b")),
+                                               overview=False, wait_seconds=0.05))
+    assert "load_id" not in out
+    assert out["error"]["code"] == "DATASET_HANDLE_LIMIT"
+    assert out["error"]["details"]["loading"] == 1
+    assert out["error"]["details"]["open_handles"] == []
+    assert gate.state.calls == 1  # 2 本目は読み込みを始めていない
+
+    gate.release.set()
+    done = json.loads(_status_when_done(a))
+    assert done["status"] == "success"
+    assert session_state.session.current_handle_id == done["dataset_handle"]
+    # 終わった後は開いたハンドルが枠を使う（予約は登録で消えている。数え直さない）。
+    assert handles.registry._reserved == 0
+    again = json.loads(handle_tools.load_dataset(directory=str(_folder(tmp_path / "c")),
+                                                 overview=False))
+    assert again["error"]["code"] == "DATASET_HANDLE_LIMIT" and "loading" not in again["error"]["details"]
+
+
+def test_failed_load_returns_its_slot(tmp_path, fresh_state, gate, monkeypatch):
+    use_config(monkeypatch, tmp_path, {"server.max_dataset_handles": 1})
+    gate.state.error = DomainError("ALIGNMENT_NOT_FOUND", "合う .arf がありません")
+    a = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
+    gate.release.set()
+    assert json.loads(_status_when_done(a))["error"]["code"] == "ALIGNMENT_NOT_FOUND"
+    assert handles.registry._reserved == 0
+    gate.state.error = None
+    _load(directory=str(_folder(tmp_path / "b")))  # 枠が返っているので開ける
+
+
+def test_adopt_recheck_is_a_backstop(tmp_path, fresh_state, gate, monkeypatch):
+    """受付の後に（予約を通らない道で）枠が埋まったら、登録の検査が `DATASET_HANDLE_LIMIT` の封筒で
+    止め、ハンドルを登録せず直近も動かさない。"""
+    use_config(monkeypatch, tmp_path, {"server.max_dataset_handles": 1})
+    a = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
+    assert gate.entered.wait(_TIMEOUT)  # 本体の前置きの検査は通り過ぎている
+    other = handles.DatasetHandle(object(), polarity=None, polarity_source=None, source={})
+    handles.registry.add(other)
+    gate.release.set()
+    out = json.loads(_status_when_done(a))
+    assert out["error"]["code"] == "DATASET_HANDLE_LIMIT"
+    assert [h.handle_id for h in handles.registry.list()] == [other.handle_id]
+    assert session_state.session.current_handle_id is None
+    assert handles.registry._reserved == 0
+
+
+# ---------- 引数・失敗・受付簿 ----------
+
+
+@pytest.mark.parametrize("value", [-1, -0.001, 60.0001, 61, math.nan, math.inf, -math.inf,
+                                   True, "20", None])
 def test_invalid_wait_seconds_is_bad_request(tmp_path, fresh_state, value):
     out = json.loads(handle_tools.load_dataset(directory=str(_folder(tmp_path / "a")),
                                                overview=False, wait_seconds=value))
     assert out["error"]["code"] == "DATASET_BAD_REQUEST"
     assert out["error"]["details"] == {"field": "wait_seconds"}
     assert handles.registry.list() == []
+    assert handles.registry._reserved == 0
     assert fresh_state._entries == {}
+
+
+def test_wait_seconds_60_is_accepted(tmp_path, fresh_state):
+    assert _load(directory=str(_folder(tmp_path / "a")), wait_seconds=60)["status"] == "success"
 
 
 def test_wait_zero_accepts_at_once(tmp_path, fresh_state, gate):
@@ -236,20 +385,50 @@ def test_unexpected_exception_after_accept_returns_envelope(tmp_path, fresh_stat
     assert handle_tools.dataset_load_status(load_id) == raw
 
 
-def test_capacity_race_after_accept_returns_envelope(tmp_path, fresh_state, gate, monkeypatch):
-    """上限 1 で 2 本を同時に受け付けると、先に終わった方だけがハンドルになり、もう片方は
-    `DATASET_HANDLE_LIMIT` の封筒で終わる（ハンドルは登録しない・直近も動かさない）。"""
-    use_config(monkeypatch, tmp_path, {"server.max_dataset_handles": 1})
+def test_domain_error_with_unserializable_details_after_accept(tmp_path, fresh_state, gate):
+    """`details` に JSON にならない値（`Path`）を持つ DomainError でも、受付は誤りの封筒で終わる。"""
+    gate.state.error = DomainError("ALIGNMENT_NOT_FOUND", "合う .arf がありません",
+                                   {"path": Path(tmp_path)})
+    load_id = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
+    gate.release.set()
+    out = json.loads(_status_when_done(load_id))
+    assert "error" in out and out.get("status") != "loading"
+    assert handles.registry.list() == []
+    assert handles.registry._reserved == 0
+
+
+def test_result_survives_eviction_between_submit_and_wait(tmp_path, fresh_state, monkeypatch):
+    """終わった受付が、`load_dataset` が待つ前に受付簿から追い出されても、結果は失われない。"""
+    loads = pending_loads.PendingLoads(max_entries=1)
+    monkeypatch.setattr(pending_loads, "registry", loads)
+    real_submit = loads.submit
+
+    def submit_then_evict(fn):
+        pending = real_submit(fn)
+        assert pending.wait(_TIMEOUT) is not None
+        real_submit(lambda: "other")  # 終わった最初の受付を追い出す
+        with pytest.raises(DomainError) as info:
+            loads.status(pending.load_id)
+        assert info.value.code == "DATASET_LOAD_NOT_FOUND"
+        return pending
+
+    monkeypatch.setattr(loads, "submit", submit_then_evict)
+    out = _load(directory=str(_folder(tmp_path / "a")))
+    assert session_state.session.current_handle_id == out["dataset_handle"]
+
+
+def test_capacity_with_concurrent_accepts(tmp_path, fresh_state, gate, monkeypatch):
+    """上限 2 で 2 本を受け付けると 3 本目は断り、2 本とも終われば両方がハンドルになる。"""
+    use_config(monkeypatch, tmp_path, {"server.max_dataset_handles": 2})
     a = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
     b = _accept(directory=str(_folder(tmp_path / "b")))["load_id"]
+    out = json.loads(handle_tools.load_dataset(directory=str(_folder(tmp_path / "c")),
+                                               overview=False, wait_seconds=0.05))
+    assert out["error"]["code"] == "DATASET_HANDLE_LIMIT" and out["error"]["details"]["loading"] == 2
     gate.release.set()
-    outs = [json.loads(_status_when_done(load_id)) for load_id in (a, b)]
-    successes = [o for o in outs if o.get("status") == "success"]
-    errors = [o for o in outs if "error" in o]
-    assert len(successes) == 1 and len(errors) == 1
-    assert errors[0]["error"]["code"] == "DATASET_HANDLE_LIMIT"
-    assert [h.handle_id for h in handles.registry.list()] == [successes[0]["dataset_handle"]]
-    assert session_state.session.current_handle_id == successes[0]["dataset_handle"]
+    outs = [json.loads(_status_when_done(x)) for x in (a, b)]
+    assert all(o["status"] == "success" for o in outs)
+    assert len(handles.registry.list()) == 2
 
 
 # ---------- 受付の控え（PendingLoads） ----------
@@ -270,21 +449,28 @@ def _blocked(release: threading.Event, value: str):
     return fn
 
 
-def test_submit_returns_ld_ids_and_wait_returns_the_payload():
+def _not_found(loads, load_id):
+    with pytest.raises(DomainError) as info:
+        loads.status(load_id)
+    assert info.value.code == "DATASET_LOAD_NOT_FOUND"
+
+
+def test_submit_returns_the_entry_and_wait_returns_the_payload():
     loads = pending_loads.PendingLoads()
-    load_id = loads.submit(lambda: "x")
-    assert load_id.startswith("ld_")
-    assert loads.wait(load_id, _TIMEOUT) == "x"
+    pending = loads.submit(lambda: "x")
+    assert pending.load_id.startswith("ld_")
+    assert pending.wait(_TIMEOUT) == "x"
+    assert loads.wait(pending.load_id, _TIMEOUT) == "x"
     # 終わった後は 0 秒でも返す（「既に終わっていれば返す」）。
-    assert loads.wait(load_id, 0) == "x"
-    assert loads.status(load_id) == ("done", "x")
+    assert loads.wait(pending.load_id, 0) == "x"
+    assert loads.status(pending.load_id) == ("done", "x")
 
 
 def test_wait_returns_none_while_loading():
     loads = pending_loads.PendingLoads()
     release = threading.Event()
     try:
-        load_id = loads.submit(_blocked(release, "x"))
+        load_id = loads.submit(_blocked(release, "x")).load_id
         assert loads.wait(load_id, 0) is None
         assert loads.wait(load_id, 0.05) is None
         assert loads.status(load_id) == ("loading", None)
@@ -296,14 +482,12 @@ def test_wait_returns_none_while_loading():
 def test_finished_entries_expire_after_an_hour():
     clock = _Clock()
     loads = pending_loads.PendingLoads(clock=clock)
-    load_id = loads.submit(lambda: "x")
+    load_id = loads.submit(lambda: "x").load_id
     assert loads.wait(load_id, _TIMEOUT) == "x"
     clock.now = pending_loads.TTL_SECONDS - 0.5
     assert loads.status(load_id) == ("done", "x")
     clock.now = pending_loads.TTL_SECONDS
-    with pytest.raises(DomainError) as info:
-        loads.status(load_id)
-    assert info.value.code == "DATASET_LOAD_NOT_FOUND"
+    _not_found(loads, load_id)
 
 
 def test_loading_entries_never_expire():
@@ -311,7 +495,7 @@ def test_loading_entries_never_expire():
     loads = pending_loads.PendingLoads(clock=clock)
     release = threading.Event()
     try:
-        load_id = loads.submit(_blocked(release, "x"))
+        load_id = loads.submit(_blocked(release, "x")).load_id
         clock.now = 10 * pending_loads.TTL_SECONDS
         assert loads.status(load_id) == ("loading", None)
     finally:
@@ -328,23 +512,21 @@ def test_cap_evicts_oldest_finished_first_and_never_a_loading_one():
     release_a, release_c, release_d, release_e = releases
     try:
         # a は先に受け付けたが後で終わる。b は後に受け付けて先に終わる。
-        a = loads.submit(_blocked(release_a, "a"))
+        a = loads.submit(_blocked(release_a, "a")).load_id
         clock.now = 1.0
-        b = loads.submit(lambda: "b")
+        b = loads.submit(lambda: "b").load_id
         assert loads.wait(b, _TIMEOUT) == "b"
         clock.now = 2.0
         release_a.set()
         assert loads.wait(a, _TIMEOUT) == "a"
-        c = loads.submit(_blocked(release_c, "c"))  # 3 件目（まだ空きがある）
+        c = loads.submit(_blocked(release_c, "c")).load_id  # 3 件目（まだ空きがある）
         # 4 件目: 終わったものから、終わったのが古い b を捨てる（受け付けた順の a ではない）。
-        d = loads.submit(_blocked(release_d, "d"))
-        with pytest.raises(DomainError):
-            loads.status(b)
+        d = loads.submit(_blocked(release_d, "d")).load_id
+        _not_found(loads, b)
         assert loads.status(a) == ("done", "a")
         # 5 件目: 終わったものは a だけ。a を捨てる。
-        e = loads.submit(_blocked(release_e, "e"))
-        with pytest.raises(DomainError):
-            loads.status(a)
+        e = loads.submit(_blocked(release_e, "e")).load_id
+        _not_found(loads, a)
         # c・d・e がすべて読み込み中なら、受け付けずに断る（読み込み中のものは捨てない）。
         with pytest.raises(DomainError) as info:
             loads.submit(lambda: "f")
@@ -356,7 +538,7 @@ def test_cap_evicts_oldest_finished_first_and_never_a_loading_one():
     for x, value in ((c, "c"), (d, "d"), (e, "e")):
         assert loads.wait(x, _TIMEOUT) == value
     # 1 つ終われば受け付ける。
-    assert loads.wait(loads.submit(lambda: "g"), _TIMEOUT) == "g"
+    assert loads.submit(lambda: "g").wait(_TIMEOUT) == "g"
 
 
 def test_worker_exception_finishes_the_entry_with_an_envelope():
@@ -365,32 +547,60 @@ def test_worker_exception_finishes_the_entry_with_an_envelope():
     def boom():
         raise ValueError("C:/lab_secret_dir/x")
 
-    load_id = loads.submit(boom)
-    raw = loads.wait(load_id, _TIMEOUT)
+    raw = loads.submit(boom).wait(_TIMEOUT)
     assert json.loads(raw)["error"]["code"] == "DATASET_LOAD_FAILED"
     assert "lab_secret_dir" not in raw
 
     def domain():
         raise DomainError("CONFIG_INVALID", "設定ファイルが読めません", {"key": "x"})
 
-    load_id = loads.submit(domain)
-    assert loads.wait(load_id, _TIMEOUT) == mztab_error("CONFIG_INVALID", "設定ファイルが読めません",
-                                                        {"key": "x"})
+    assert loads.submit(domain).wait(_TIMEOUT) == mztab_error(
+        "CONFIG_INVALID", "設定ファイルが読めません", {"key": "x"})
 
     # 文字列でない戻り値も封筒にする（`wait` の None＝終わっていない、と取り違えない）。
-    load_id = loads.submit(lambda: None)
-    raw = loads.wait(load_id, _TIMEOUT)
+    raw = loads.submit(lambda: None).wait(_TIMEOUT)
     assert json.loads(raw)["error"]["details"] == {"exception": "TypeError"}
+
+
+@pytest.mark.parametrize("error", [
+    DomainError("ALIGNMENT_NOT_FOUND", "合う .arf がありません", {"path": Path("x")}),  # JSON にならない
+    DomainError("", ""),  # mztab_error が ValueError を出す
+])
+def test_unconvertible_domain_error_still_finishes_and_can_be_evicted(error):
+    """封筒づくり（`mztab_error`）が落ちても受付は終わり、終わったものとして追い出せる。"""
+    loads = pending_loads.PendingLoads(max_entries=1)
+
+    def raise_it():
+        raise error
+
+    pending = loads.submit(raise_it)
+    raw = pending.wait(_TIMEOUT)
+    assert raw is not None and "error" in json.loads(raw)
+    assert loads.status(pending.load_id) == ("done", raw)
+    # 終わっているので、次の受付が追い出せる（読み込み中のまま残っていれば DATASET_LOAD_LIMIT）。
+    assert loads.submit(lambda: "next").wait(_TIMEOUT) == "next"
+    _not_found(loads, pending.load_id)
+
+
+def test_details_are_dropped_but_code_kept_when_not_serializable():
+    loads = pending_loads.PendingLoads()
+
+    def raise_it():
+        raise DomainError("ALIGNMENT_NOT_FOUND", "合う .arf がありません", {"path": Path("x")})
+
+    out = json.loads(loads.submit(raise_it).wait(_TIMEOUT))
+    assert out["error"]["code"] == "ALIGNMENT_NOT_FOUND"
+    assert out["error"]["details"] == {"details_dropped": True}
 
 
 def test_discard_forgets_the_entry():
     loads = pending_loads.PendingLoads()
-    load_id = loads.submit(lambda: "x")
-    assert loads.wait(load_id, _TIMEOUT) == "x"
-    loads.discard(load_id)
-    loads.discard(load_id)  # 2 回目も誤りにしない
-    with pytest.raises(DomainError):
-        loads.status(load_id)
+    pending = loads.submit(lambda: "x")
+    assert pending.wait(_TIMEOUT) == "x"
+    loads.discard(pending.load_id)
+    loads.discard(pending.load_id)  # 2 回目も誤りにしない
+    _not_found(loads, pending.load_id)
+    assert pending.wait(0) == "x"  # 受付そのものは結果を持ち続ける
 
 
 # ---------- 公開面 ----------
