@@ -36,10 +36,14 @@ from metabolomix.core.mcp_errors import missing_state
 __all__ = ["ALWAYS_THREADED", "SESSION_READERS", "install"]
 
 #: ハンドルの有無に依らずスレッドで回すツール。読み込みは数分かかりうるので、イベントループ
-#: から外す。`load_dataset` がセッションへ書くのは成功時の直近の切り替え
-#: （`session.adopt_handle`。`_current_lock` の下）だけ。
+#: から外す。`load_dataset` は読み込みを受付（`core.pending_loads`）のスレッドで始め、
+#: ワーカースレッドで最長 `wait_seconds` 待つ。セッションへ書くのは、読み込みが成功して
+#: 終わるときの直近の切り替え（受付のスレッドの `session.adopt_handle`。`_current_lock` の下）
+#: だけ。`dataset_load_status` は受付簿のロックを取って読み、最長 `wait_seconds`（60 秒まで）
+#: 読み込みの終わりを待つので、イベントループを止めないようにこちらへ載せる。
 ALWAYS_THREADED = frozenset({
     "load_dataset",
+    "dataset_load_status",
     "dataset_merge_polarities",  # 2 つのハンドルのロックを自分で取る（最大 LOCK_TIMEOUT 待つ）
 })
 

@@ -45,9 +45,11 @@ import server
 # C 配線 Task 4: 統計エンジンの比較 dataset_compare を追加（60→61）。Task 9: 旧 v1 の 3 ツール（2 群比較・v2 統計・解析行列）を撤去（61→58）。
 # D: 旧 Console 6 ツール（旧 Console 計画ほか）を pipeline へ吸収（59→53）。
 # A: 最初の概観 dataset_overview を追加（58→59）。
+# 枠組みの見直し A1: 長い読み込みの受付番号を引く dataset_load_status を追加（53→54）。
 EXPECTED_TOOLS = sorted([
     "list_data_files",
     "load_dataset",
+    "dataset_load_status",
     "dataset_list",
     "dataset_close",
     "dataset_status",

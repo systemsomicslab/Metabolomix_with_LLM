@@ -38,6 +38,7 @@ __all__ = [
     "available_memory_bytes",
     "estimate_state_bytes",
     "DatasetHandle",
+    "Reservation",
     "HandleRegistry",
     "holder_for",
     "registry",
@@ -174,12 +175,28 @@ class DatasetHandle:
         self.library.last_match = None
 
 
+class Reservation:
+    """`HandleRegistry.reserve` が取った 1 本の枠。読み込みの間だけ持ち、登録（`add`）か
+    `release` で返す（どちらも 1 回だけ効く）。"""
+
+    __slots__ = ("_registry", "active")
+
+    def __init__(self, registry: "HandleRegistry"):
+        self._registry = registry
+        self.active = True
+
+    def release(self) -> None:
+        """使わなかった枠を返す（登録で使った・返した後なら何もしない）。"""
+        self._registry._release(self)
+
+
 class HandleRegistry:
     """ハンドルの登録簿。登録・参照・解放はプロセス内の 1 本のロックで守る。"""
 
     def __init__(self):
         self._lock = threading.Lock()
         self._handles: dict[str, DatasetHandle] = {}
+        self._reserved = 0  # 受け付けてまだ登録していない読み込み（`reserve` の枠）の数
         self._bases: OrderedDict = OrderedDict()
         self._base_sizes: dict[str, int] = {}  # key -> `estimate_state_bytes`（置いた時点）
         self._seq = itertools.count(1)
@@ -187,30 +204,65 @@ class HandleRegistry:
     def _open_ids(self) -> list[str]:
         return sorted(self._handles)
 
-    def _refuse_if_full(self) -> None:
-        """上限なら `DATASET_HANDLE_LIMIT`。`self._lock` を持って呼ぶ。"""
+    def _refuse_if_full(self, *, loading: int = 0) -> None:
+        """開いているハンドルと `loading`（読み込み中の枠）の和が上限なら `DATASET_HANDLE_LIMIT`。
+        `self._lock` を持って呼ぶ。"""
         limit = max_handles()
-        if len(self._handles) >= limit:
+        if len(self._handles) + loading >= limit:
+            if loading:
+                counted = (f"開いているハンドル（{len(self._handles)}）と読み込み中の受付（{loading}）の和")
+                remedy = "dataset_close で閉じるか、読み込みが終わるのを待ってください"
+            else:
+                counted, remedy = "開いているハンドル", "dataset_close で閉じてください"
             raise DomainError(
                 "DATASET_HANDLE_LIMIT",
-                f"開いているハンドルが上限（{limit}）に達しています。使い終えたハンドルを "
-                "dataset_close で閉じてください（上限は "
+                f"{counted}が上限（{limit}）に達しています。使い終えたハンドルを {remedy}（上限は "
                 f"{user_config.config_file_path().name} の {user_config.config_key(MAX_HANDLES_SETTING)} "
                 "で変えられます）。",
-                {"open_handles": self._open_ids(), "max_handles": limit})
+                {"open_handles": self._open_ids(), "max_handles": limit,
+                 **({"loading": loading} if loading else {})})
 
     def check_capacity(self) -> None:
         """もう 1 本足せるかを読み込みの**前に**確かめる（上限なら `DATASET_HANDLE_LIMIT`）。
 
         長い読み込みを済ませてから断らないための前置き。読み込みの間に別の呼び出しが
-        足しうるので、`add` も同じ検査をもう一度する。
+        足しうるので、`add` も同じ検査をもう一度する。数えるのは開いているハンドルだけ
+        （`load_dataset` の受付は `reserve` で読み込み中の枠も数える）。
         """
         with self._lock:
             self._refuse_if_full()
 
-    def add(self, handle: DatasetHandle) -> None:
+    def reserve(self) -> Reservation:
+        """`load_dataset` の受付で 1 本の枠を取る。
+
+        開いているハンドルと、受け付けてまだ登録していない読み込みの枠の和が上限なら
+        `DATASET_HANDLE_LIMIT`（登録で必ず断られる読み込みを何本も回さないため）。取った枠は
+        `add(handle, reservation=…)` が登録と同時に消すか、`Reservation.release` で返す。
+        """
+        with self._lock:
+            self._refuse_if_full(loading=self._reserved)
+            self._reserved += 1
+            return Reservation(self)
+
+    def _release(self, reservation: Reservation) -> None:
+        with self._lock:
+            self._consume(reservation)
+
+    def _consume(self, reservation: Reservation | None) -> None:
+        """枠を 1 回だけ返す。`self._lock` を持って呼ぶ。"""
+        if reservation is not None and reservation.active and reservation._registry is self:
+            reservation.active = False
+            self._reserved -= 1
+
+    def add(self, handle: DatasetHandle, reservation: Reservation | None = None) -> None:
+        """登録する。上限の検査（開いているハンドルの数）をもう一度する（受付の後の最後の砦）。
+
+        `reservation` を渡すと、登録と同じロックの下でその枠を消す（断られたら枠は残り、
+        呼び出し側が `release` する）。
+        """
         with self._lock:
             self._refuse_if_full()
+            self._consume(reservation)
             seq = next(self._seq)
             handle.created_seq = handle.last_used_seq = seq
             self._handles[handle.handle_id] = handle

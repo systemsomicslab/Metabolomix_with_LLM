@@ -167,6 +167,9 @@ class AnalysisSession:
         # データセットはハンドルの登録簿（core.handles.registry）に住む。ここが持つのは
         # 直近のハンドルの ID だけで、`dataset` / `library` はそれを読む property（下）。
         self.current_handle_id: str | None = None
+        # ハンドルが直近になった回数（`_make_current` が数える。外す・閉じるでは増えない）。
+        # 受け付けた `load_dataset` が、終わったときに直近になってよいかの判定に使う。
+        self._current_generation = 0
         # 直近のハンドルの切り替えと、セッション自身のライブラリの移動・書き込みを守る。
         # 再入できる必要がある（ロックの下で `library` / `_handle` を読み、`_handle` が
         # 閉じられた直近を外すために同じロックを取り直す）。
@@ -273,35 +276,57 @@ class AnalysisSession:
             handles.registry.add(handle)  # 上限ならここで止まり、ライブラリはセッションに残る
             if move:
                 self._library = LibraryState()
-            self.current_handle_id = handle.handle_id
+            self._make_current(handle.handle_id)
 
-    def adopt_handle(self, handle, *, move_library: bool = False) -> None:
-        """出来上がったハンドルを登録簿に入れ、**直近にする**（`load_dataset` が使う）。
+    def adopt_handle(self, handle, *, move_library: bool = False, reservation=None,
+                     may_become_current=None) -> bool:
+        """出来上がったハンドルを登録簿に入れ、**直近にする**（`load_dataset` が使う）。直近にしたかを返す。
 
         上限なら `DATASET_HANDLE_LIMIT`（DomainError）を投げ、直近もライブラリも動かさない。
         `move_library` が真で、ハンドルが自分のライブラリ（store）を持たず、直近のハンドルが
         無いあいだにセッションが store つきのライブラリを持っていたなら（`library_load` →
         `load_dataset` の順）、そのライブラリを新しいハンドルへ**移す**（`dataset` の setter と
         同じ規則）。登録・移動・直近の切り替えは 1 つのロックの下で行う。
+
+        `reservation` は受付で取った枠（`HandleRegistry.reserve`）で、登録と同時に消える。
+        `may_become_current(generation)` は、今の直近の世代（`current_generation`）を受けて
+        直近にしてよいかを答える（受け付けた `load_dataset` の判定。このロックの下で呼ぶ）。偽なら
+        ハンドルを登録するだけで、直近もライブラリも動かさず False を返す。
         """
         from metabolomix.core import handles
 
         with self._current_lock:
+            current = may_become_current is None or bool(
+                may_become_current(self._current_generation))
             own = self._library
-            move = (move_library and handle.library.store is None
+            move = (current and move_library and handle.library.store is None
                     and self._current_handle() is None
                     and _PINNED_HANDLE_ID.get() is None and own.store is not None)
             if move:
                 handle.library = own
             try:
-                handles.registry.add(handle)  # 上限ならここで止まり、ライブラリはセッションに残る
+                # 上限ならここで止まり、ライブラリはセッションに残る
+                handles.registry.add(handle, reservation=reservation)
             except Exception:
                 if move:
                     handle.library = LibraryState()
                 raise
             if move:
                 self._library = LibraryState()
-            self.current_handle_id = handle.handle_id
+            if current:
+                self._make_current(handle.handle_id)
+            return current
+
+    @property
+    def current_generation(self) -> int:
+        """ハンドルが直近になった回数（直近を外す・閉じるでは増えない）。"""
+        with self._current_lock:
+            return self._current_generation
+
+    def _make_current(self, handle_id: str) -> None:
+        """`handle_id` を直近にして世代を進める。`_current_lock` を持って呼ぶ。"""
+        self.current_handle_id = handle_id
+        self._current_generation += 1
 
     @property
     def library_write_lock(self) -> threading.RLock:
@@ -314,9 +339,13 @@ class AnalysisSession:
         return self._current_lock
 
     def set_current(self, handle_id: str | None) -> None:
-        """直近のハンドルを `handle_id` にする（登録簿への追加は呼び出し側が済ませておく）。"""
+        """直近のハンドルを `handle_id` にする（登録簿への追加は呼び出し側が済ませておく）。
+        None は直近を外すだけで、世代は進めない。"""
         with self._current_lock:
-            self.current_handle_id = handle_id
+            if handle_id is None:
+                self.current_handle_id = None
+            else:
+                self._make_current(handle_id)
 
     @property
     def library(self) -> LibraryState:

@@ -211,8 +211,10 @@ def test_load_dataset_has_no_initial_pca(tmp_path, fresh_state):
 
 
 def test_load_dataset_is_always_threaded(tmp_path, fresh_state):
-    assert handle_dispatch.ALWAYS_THREADED == frozenset({"load_dataset", "dataset_merge_polarities"})
+    assert handle_dispatch.ALWAYS_THREADED == frozenset({"load_dataset", "dataset_load_status",
+                                                         "dataset_merge_polarities"})
     assert server.mcp._tool_manager._tools["load_dataset"].is_async
+    assert server.mcp._tool_manager._tools["dataset_load_status"].is_async
 
 
 def test_old_entry_names_are_gone():
