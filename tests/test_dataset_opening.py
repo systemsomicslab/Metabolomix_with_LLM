@@ -156,6 +156,41 @@ def test_job_defaults_to_folder_and_mztab_on_request(tmp_path):
     assert folder.selection.arf.parent == job.parent / "msdial"
 
 
+def _theo_spec() -> dict:
+    spec = _spec()
+    spec["spots"][0]["theoretical_mz"] = 760.5851 - 760.5851 * 3e-6     # 実測 − 理論 = +3 ppm
+    return spec
+
+
+def test_job_folder_sme_takes_theoretical_mz_from_canonical_mztab(tmp_path):
+    """解析フォルダの SME は `.arf2` に理論 m/z（上流の Reference m/z）を持たない。job / pipeline では
+    照合した正準 mzTab-M の SME の theoretical_mass_to_charge を同じスポット ID に写す
+    （写さないと質量精度・新しい知見の候補が 0 件になる。ST003841-v10）。"""
+    from metabolomix.tools import reanalysis_tools as R
+
+    spec = _theo_spec()
+    job = _job(tmp_path, spec=spec)
+    folder = open_dataset(job_path=str(job)).dataset
+    mztab = open_dataset(job_path=str(job), source="mztab").dataset
+    theo = mztab.feature_candidates["0"][0]["theoretical_mass_to_charge"]
+    assert folder.feature_candidates["0"][0]["theoretical_mass_to_charge"] == pytest.approx(theo)
+    run = _pipeline(tmp_path, job)
+    via_run = open_dataset(pipeline_path=str(run)).dataset
+    assert via_run.feature_candidates["0"][0]["theoretical_mass_to_charge"] == pytest.approx(theo)
+
+    session_state.session.dataset = folder
+    out = json.loads(R.dataset_mass_accuracy(band_edges=[], subset="rank1"))
+    assert out["overall"]["n"] == 1
+    assert out["bands"][0]["n"] == 1
+
+
+def test_directory_folder_sme_has_no_theoretical_mz(tmp_path):
+    """directory の入口には正準 mzTab-M が無いので理論 m/z は空のまま（推測で埋めない）。"""
+    folder = _folder(tmp_path / "gui")
+    ds = open_dataset(directory=str(folder)).dataset
+    assert ds.feature_candidates["0"][0]["theoretical_mass_to_charge"] is None
+
+
 def test_incomplete_job_gate_shared(tmp_path):
     job = _job(tmp_path, status="partial")
     for source in ("auto", "mztab"):

@@ -81,7 +81,7 @@ def test_digest_changes_with_code_and_reloads(tmp_path, monkeypatch):
     api.write_text(api.read_text(encoding="utf-8") + "\n#\n", encoding="utf-8")
     second = plugin.load_rules()
     assert second.digest != first.digest and second.api is not first.api
-    (folder / "__pycache__").mkdir()
+    (folder / "__pycache__").mkdir(exist_ok=True)       # 読み込みで Python が作っていることがある
     (folder / "__pycache__" / "x.py").write_text("junk", encoding="utf-8")
     assert plugin.load_rules().digest == second.digest
 
