@@ -17,6 +17,7 @@ import asyncio
 import json
 import math
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -198,6 +199,71 @@ def test_unknown_load_id(fresh_state):
     out = json.loads(handle_tools.dataset_load_status("ld_nope"))
     assert out["error"]["code"] == "DATASET_LOAD_NOT_FOUND"
     assert out["error"]["details"] == {"load_id": "ld_nope"}
+    # 待つ秒を渡しても同じ封筒（待たずに返す）。
+    waited = json.loads(handle_tools.dataset_load_status("ld_nope", wait_seconds=5))
+    assert waited["error"]["code"] == "DATASET_LOAD_NOT_FOUND"
+
+
+# ---------- dataset_load_status の wait_seconds（Ruling 29） ----------
+
+
+def test_status_wait_returns_payload_when_load_finishes_within_wait(tmp_path, fresh_state, gate):
+    load_id = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
+    # 待っている間に読み込みを終わらせる: 1 回の呼び出しで中身が返る。
+    timer = threading.Timer(0.2, gate.release.set)
+    timer.start()
+    try:
+        raw = handle_tools.dataset_load_status(load_id, wait_seconds=_TIMEOUT)
+    finally:
+        timer.cancel()
+    out = json.loads(raw)
+    assert out["status"] == "success", out
+    assert session_state.session.current_handle_id == out["dataset_handle"]
+    # 待たずに引き直しても同じ文字列（受付の結果は 1 つ）。
+    assert handle_tools.dataset_load_status(load_id) == raw
+
+
+def test_status_wait_returns_loading_after_about_the_wait(tmp_path, fresh_state, gate):
+    load_id = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
+    start = time.monotonic()
+    out = json.loads(handle_tools.dataset_load_status(load_id, wait_seconds=0.3))
+    took = time.monotonic() - start
+    assert out["status"] == "loading" and out["load_id"] == load_id
+    assert set(out) == {"status", "load_id", "elapsed_s"}
+    assert took >= 0.25, took  # 待った
+    assert took < _TIMEOUT
+    assert handles.registry.list() == []
+    gate.release.set()
+    assert json.loads(_status_when_done(load_id))["status"] == "success"
+
+
+def test_status_wait_zero_does_not_wait(tmp_path, fresh_state, gate):
+    load_id = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
+    start = time.monotonic()
+    out = json.loads(handle_tools.dataset_load_status(load_id, wait_seconds=0))
+    assert out["status"] == "loading"
+    assert time.monotonic() - start < 0.25
+    gate.release.set()
+    assert json.loads(_status_when_done(load_id))["status"] == "success"
+
+
+@pytest.mark.parametrize("bad", [-1, -0.001, 60.0001, 61, math.nan, math.inf, -math.inf,
+                                 True, False, "20", None])
+def test_status_wait_rejects_bad_values(tmp_path, fresh_state, gate, bad):
+    load_id = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
+    out = json.loads(handle_tools.dataset_load_status(load_id, wait_seconds=bad))
+    assert out["error"]["code"] == "DATASET_BAD_REQUEST", out
+    assert out["error"]["details"] == {"field": "wait_seconds"}
+    gate.release.set()
+    assert json.loads(_status_when_done(load_id))["status"] == "success"
+
+
+def test_status_wait_accepts_the_limit(tmp_path, fresh_state, gate):
+    load_id = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
+    gate.release.set()
+    assert pending_loads.registry.wait(load_id, _TIMEOUT) is not None
+    out = json.loads(handle_tools.dataset_load_status(load_id, wait_seconds=60))
+    assert out["status"] == "success"
 
 
 def test_capacity_checked_before_accept(tmp_path, fresh_state, monkeypatch):

@@ -146,7 +146,9 @@ instrument files.
    library record and a FIRST OVERVIEW (`overview`, see below; skip it with
    `overview=False`). A load still running after `wait_seconds` (default 20 s)
    returns `status: "loading"` with a `load_id` instead and keeps loading: call
-   `dataset_load_status(load_id=...)` until it returns the load's own result
+   `dataset_load_status(load_id=..., wait_seconds=...)` (it waits up to
+   `wait_seconds`, at most 60 s, for the load to finish; the default 0 returns
+   at once) until it returns the load's own result
    (the handle becomes current only when the load finishes). Tools called without
    `dataset_handle` act on that current dataset and use its files; a tool that
    needs a file the dataset does not have says so instead of searching a data

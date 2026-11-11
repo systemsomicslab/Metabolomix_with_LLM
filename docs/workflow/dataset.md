@@ -4,7 +4,7 @@
 SME と SML の区別・`identification_status`・`name_source`・`inchikey_coverage`）は
 `docs/output_format/dataset.md`（解析フォルダ）と `docs/output_format/mztab.md`（mzTab-M）。
 入口は `list_data_files`（フォルダの中身を確かめる）→ `load_dataset`（解析フォルダも mzTab-M も同じ入口）。
-期限（`wait_seconds`）の中で読み終わらなければ、`load_dataset` は受付番号を返し、`dataset_load_status` で結果を引く。
+期限（`wait_seconds`）の中で読み終わらなければ、`load_dataset` は受付番号を返し、`dataset_load_status` で結果を引く（こちらも `wait_seconds` で最長 60 秒まで終わりを待てる）。
 読み込んだデータセットは `dataset_list` / `dataset_close` で管理し、`dataset_status` で試料を確かめ、
 `dataset_exclude` で外す。
 
@@ -304,11 +304,18 @@ TSV（`query` は因子トークン。旧 `dataset_status(view="samples")` の `
 終わった受付は終わってから 1 時間覚え（同じ文字列を返す）、64 件を超えると終わったものを終わった順に
 古いものから捨てる。読み込み中のものは捨てず、64 件すべてが読み込み中なら `load_dataset` が
 `DATASET_LOAD_LIMIT` で受け付けない。
+`wait_seconds`（既定 0。0 以上 60 以下で、`load_dataset` と同じ `_wait_seconds()` で確かめる。外れた値は
+`DATASET_BAD_REQUEST`）が 0 より大きければ、受付そのものを最長その秒数だけ待ち、その中で終われば戻り値を
+そのまま返す。終わらなければ待たないときと同じく今の状態を返す。待っても状態は変わらない。
 
 1. metabolomix/tools/handle_tools.py  dataset_load_status()
-2. └─ metabolomix/core/pending_loads.py  PendingLoads.snapshot()
-3.    └─ metabolomix/core/pending_loads.py  PendingLoads._prune()
-4.    └─ metabolomix/core/pending_loads.py  PendingLoads._lookup()
+2. └─ metabolomix/tools/handle_tools.py  _wait_seconds()
+3. ├─ [wait_seconds > 0] metabolomix/core/pending_loads.py  PendingLoads.wait()
+4. │  ├─ metabolomix/core/pending_loads.py  PendingLoads._lookup()
+5. │  └─ metabolomix/core/pending_loads.py  PendingLoad.wait()
+6. └─ [待たない・待っても終わらない] metabolomix/core/pending_loads.py  PendingLoads.snapshot()
+7.    ├─ metabolomix/core/pending_loads.py  PendingLoads._prune()
+8.    └─ metabolomix/core/pending_loads.py  PendingLoads._lookup()
 
 ## dataset_list
 

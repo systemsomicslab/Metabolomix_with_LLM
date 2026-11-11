@@ -45,7 +45,8 @@
   黙って閉じない。寿命は明示の `dataset_close` か、サーバの終了まで。
 - **受付番号。** `load_dataset` は最長 `wait_seconds`（既定 20。0〜60 秒）待ち、終わらなければ読み込みを
   続けたまま `{"status": "loading", "load_id": "ld_…"}` を返す。`dataset_load_status(load_id)` は読み込み中なら
-  `status: "loading"`、終われば `load_dataset` の戻り値そのもの（1 時間覚える）。受付番号を返した後に別の
+  `status: "loading"`、終われば `load_dataset` の戻り値そのもの（1 時間覚える）。`wait_seconds`（既定 0）を
+  渡すと最長 60 秒まで終わりを待ってから返す。受付番号を返した後に別の
   ハンドルが直近になっていたら直近にせず、`current: false` が付く。上限は読み込み中の受付も 1 本と数える。
 
 `load_dataset` の戻り値:

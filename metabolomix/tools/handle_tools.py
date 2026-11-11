@@ -206,7 +206,8 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         この中で終われば下の戻り値をそのまま返す。終わらなければ読み込みは続け、受付番号を
         `{"status": "loading", "load_id": "ld_…", "next": "dataset_load_status(load_id=…)"}` で返す。
         `dataset_load_status(load_id)` を呼ぶと、読み込み中は `status: "loading"`、終われば
-        この関数の戻り値そのもの（成功か誤りの封筒）が返る。ハンドルの登録と直近の切り替えは
+        この関数の戻り値そのもの（成功か誤りの封筒）が返る（その `wait_seconds` を渡すと、最長
+        60 秒まで終わりを待ってから返す）。ハンドルの登録と直近の切り替えは
         読み込みが終わったときに 1 回だけ起き、受付の後に失敗したらハンドルは登録しない。
         受付番号を返した後に別のハンドルが直近になっていたら、終わった読み込みはハンドルを
         登録するだけで直近にせず（ライブラリも移さない）、戻り値に `current: false` と `note` が
@@ -458,18 +459,28 @@ _NEXT_STEPS = (
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_load_status(load_id: str) -> str:
-    """`load_dataset` が返した受付番号（`ld_…`）の読み込みを引く（待たずにすぐ返す）。
+def dataset_load_status(load_id: str, wait_seconds: float = 0.0) -> str:
+    """`load_dataset` が返した受付番号（`ld_…`）の読み込みを引く（最長 `wait_seconds` 秒待つ）。
+
+    wait_seconds: 読み込みが終わるのを待つ秒数（既定 0 は待たずにすぐ返す。0 以上 60 以下。
+        `load_dataset` の `wait_seconds` と同じ決まりで、それ以外（bool・NaN・無限を含む）は
+        `DATASET_BAD_REQUEST`）。その中で終われば、すぐ下の戻り値を返す。呼び直しの回数を減らす。
 
     読み込み中は `{"status": "loading", "load_id", "elapsed_s"}`（`elapsed_s` は受け付けてからの秒）。
     終われば `load_dataset` の戻り値そのもの: 成功なら `dataset_handle` つきの要約（そのハンドルが
     直近になっている。受け付けた後に別のハンドルが直近になっていたら直近にせず、`current: false` と
     `note` が付く）、失敗なら `load_dataset` と同じ誤りの封筒（ハンドルは登録されず、直近も
-    動かない）。引いても状態は変わらない——ハンドルの登録と直近の切り替えは、読み込みが終わった
-    ときに 1 回だけ起きている。終わった受付は 1 時間覚えていて、何度引いても同じ文字列を返す。
+    動かない）。引いても待っても状態は変わらない——ハンドルの登録と直近の切り替えは、読み込みが
+    終わったときに 1 回だけ起きている。終わった受付は 1 時間覚えていて、何度引いても同じ文字列を返す。
     知らない受付番号（終わってから 1 時間を過ぎた・サーバが再起動した）は `DATASET_LOAD_NOT_FOUND`。
     """
     try:
+        wait = _wait_seconds(wait_seconds)
+        if wait > 0:
+            # 受付そのものを待つ（`PendingLoads.wait`）。終わればその戻り値をそのまま返す。
+            done = pending_loads.registry.wait(load_id, wait)
+            if done is not None:
+                return done
         state, payload, elapsed = pending_loads.registry.snapshot(load_id)
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)

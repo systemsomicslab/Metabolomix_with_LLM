@@ -39,8 +39,8 @@ __all__ = ["ALWAYS_THREADED", "SESSION_READERS", "install"]
 #: から外す。`load_dataset` は読み込みを受付（`core.pending_loads`）のスレッドで始め、
 #: ワーカースレッドで最長 `wait_seconds` 待つ。セッションへ書くのは、読み込みが成功して
 #: 終わるときの直近の切り替え（受付のスレッドの `session.adopt_handle`。`_current_lock` の下）
-#: だけ。`dataset_load_status` は受付簿のロックを取って読むだけだが、イベントループを
-#: 決して止めないようにこちらへ載せる。
+#: だけ。`dataset_load_status` は受付簿のロックを取って読み、最長 `wait_seconds`（60 秒まで）
+#: 読み込みの終わりを待つので、イベントループを止めないようにこちらへ載せる。
 ALWAYS_THREADED = frozenset({
     "load_dataset",
     "dataset_load_status",
