@@ -64,6 +64,8 @@ EXPECTED_ANNOTATIONS = {
     # --- 再解析のハンドル（サーバのプロセス内の状態だけを変える） ---
     # open は呼ぶたびに新しいハンドルを作る → 非冪等。close はハンドルの状態を捨てる。
     "load_dataset": LOCAL_WRITE_APPEND,
+    # 受付番号の読み込みを引くだけ（ハンドルの登録と直近の切り替えは読み込みが終わるときに済んでいる）。
+    "dataset_load_status": READ_ONLY,
     "dataset_list": READ_ONLY,
     "dataset_close": LOCAL_DELETE,
     # 再解析の spec のツール。output_path を渡したときだけ JSON を書く（同じ spec なら同じ内容）。

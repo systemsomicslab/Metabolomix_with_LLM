@@ -65,7 +65,7 @@ from metabolomix.tools.pipeline_tools import *  # pipeline_plan, pipeline_run, p
 from metabolomix.tools.maintenance import *  # server_update
 from metabolomix.tools.curation_tools import *  # curation_review, curation_suggest, curation_submit, curation_flags, curation_view_data
 from metabolomix.pathway.tools import *  # pathway_project, pathway_plot（MSLipidMapper 連携）
-from metabolomix.tools.handle_tools import *  # load_dataset / dataset_list / dataset_close
+from metabolomix.tools.handle_tools import *  # load_dataset / dataset_load_status / dataset_list / dataset_close
 from metabolomix.tools.reanalysis_tools import *  # 再解析の spec で呼ぶツール（dataset_analysis_run ほか）
 from metabolomix.quant.tools import *  # dataset_quant_preview / dataset_quant_apply / dataset_merge_polarities / dataset_select_features（定量）
 

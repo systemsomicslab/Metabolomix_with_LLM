@@ -22,6 +22,8 @@ NON_TOOL_IDENTIFIERS = {
     "matrix_id",  # `dataset_preprocess` が返す行列の ID（`dataset_compare` / `dataset_pca` の引数）
     "retry_tools",  # `needs_input` の封筒の欄
     "rerun_upstream",  # `pipeline_resume` の引数
+    "wait_seconds",  # `load_dataset` の引数
+    "load_id",  # `load_dataset` が返す受付番号（`dataset_load_status` の引数）
 }
 WILDCARD_RE = re.compile(r"^(dataset|library|curation|dcl|pathway|console|pipeline)_\*$")
 #: バッククォートの中身が「名前」か「名前(...)」か「名前=...」のどれかで、名前に `_` を含むもの。

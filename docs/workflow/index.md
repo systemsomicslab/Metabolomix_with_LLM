@@ -35,7 +35,7 @@
 
 | 文書 | 対象 | ツール数 |
 |---|---|---|
-| [dataset.md](dataset.md) | データセット投入の入口 — ファイルの一覧・読み込み（`load_dataset`）・一覧と閉じる・試料の状態と除外 | 6 |
+| [dataset.md](dataset.md) | データセット投入の入口 — ファイルの一覧・読み込み（`load_dataset`）と受付番号（`dataset_load_status`）・一覧と閉じる・試料の状態と除外 | 7 |
 | [dcl.md](dcl.md) | `.dcl` — デコンボリューション済み MS/MS | 3 |
 | [plots.md](plots.md) | 図（dataset_plot）と図の保存（save_figure）と payload 契約の比較 | 2 |
 | [dataset_analysis.md](dataset_analysis.md) | DatasetState — 前処理・PCA・差次的解析・エクスポート・実験情報訂正・特徴検索 | 7 |
@@ -46,10 +46,10 @@
 | [reanalysis.md](reanalysis.md) | 再解析 — spec で呼ぶツール（ハンドルの一覧・クローズは dataset.md） | 8 |
 | [quant.md](quant.md) | 定量 — 内部標準の正規化・極性の統合・特徴の選別（規則プラグインが要る） | 4 |
 
-合計 49 ツール。対象外は 4 ツール——レポート記録系 3
+合計 50 ツール。対象外は 4 ツール——レポート記録系 3
 （`record_objective` `write_report` `read_report`）＋
 サーバ自身の保守 1（`server_update`。解析の流れに現れず、配布先クローンの更新だけを行う）。
-登録ツール総数は 53（49 + 4）。
+登録ツール総数は 54（50 + 4）。
 
 ## 一気通貫の順序
 

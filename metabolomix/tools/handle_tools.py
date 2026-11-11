@@ -9,22 +9,28 @@
 ライブラリはデータセットが同定に使ったものの記憶（`library_record`）から、読み取り専用で開く。
 極性の設定（`[library] msp_positive` / `msp_negative`）には落ちない。戻り値にはファイル名と
 sha256 だけを出し、パスは出さない。
+
+読み込みは受付（`core.pending_loads`）のスレッドで回す。`wait_seconds` の中で終われば戻り値を
+そのまま返し、終わらなければ受付番号（`ld_…`）を返して `dataset_load_status` で引かせる
+（デスクトップアプリの中継が約 80 秒で呼び出しを打ち切るため）。本体は `_load_now`。
 """
 from __future__ import annotations
 
+import functools
+import math
 import re
 from pathlib import Path
 
 from mcp.types import ToolAnnotations
 
-from metabolomix.core import handles, session_state, user_config
+from metabolomix.core import handles, pending_loads, session_state, user_config
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import mztab_error, needs_input
 from metabolomix.core.serialization import json_payload, json_safe
 from metabolomix.dataset import opening
 
-__all__ = ["load_dataset", "dataset_list", "dataset_close"]
+__all__ = ["load_dataset", "dataset_load_status", "dataset_list", "dataset_close"]
 
 _LIBRARY_MODES = ("auto", "none")
 _ARF_SUFFIX_RE = re.compile(r"_(?:PeakProperties|DriftSopts|DriftSpots)\.arf$", re.IGNORECASE)
@@ -132,7 +138,8 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
                  polarity: str | None = None,
                  allow_incomplete: bool = False, source: str = "auto",
                  measure: str = "peak_height", arf2_path: str | None = None,
-                 library: str = "auto", overview: bool = True) -> str:
+                 library: str = "auto", overview: bool = True,
+                 wait_seconds: float = 20.0) -> str:
     """データセットを読み込み、新しいハンドル（`dh_…`）として開いて**直近にする**。入口はこの 1 本。
 
     入口（**どれか 1 つ**。全省略・2 つ以上の指定はエラー）:
@@ -194,6 +201,15 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         再解析のエージェント向け。後から `dataset_overview` で出せる）。bool 以外は `DATASET_BAD_REQUEST`。
         概観が失敗しても読み込みは成功し、`overview` に `status:"unavailable"` と理由が載る。
 
+    wait_seconds: 読み込みを待つ秒数（既定 20。0 以上の有限の数。それ以外は `DATASET_BAD_REQUEST`）。
+        この中で終われば下の戻り値をそのまま返す。終わらなければ読み込みは続け、受付番号を
+        `{"status": "loading", "load_id": "ld_…", "next": "dataset_load_status(load_id=…)"}` で返す。
+        `dataset_load_status(load_id)` を呼ぶと、読み込み中は `status: "loading"`、終われば
+        この関数の戻り値そのもの（成功か誤りの封筒）が返る。ハンドルの登録と直近の切り替えは
+        読み込みが終わったときに 1 回だけ起き、受付の後に失敗したらハンドルは登録しない。
+        0 は「既に終わっていなければすぐ受付番号を返す」。引数の誤りと上限
+        （`DATASET_HANDLE_LIMIT`）は受け付ける前に返す。
+
     成功すると、いつも**新しいハンドルを直近にする**。`dataset_handle` を省いた `dataset_*` /
     `library_*` はこの直近のハンドルに効く。再解析のエージェントは返った `dataset_handle` を
     各ツールに渡して使い、直近を当てにしない（渡した呼び出しはサーバの別スレッドで回り、同じ
@@ -210,6 +226,29 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
     注記）、`sample_counts`（群と役割ごとの試料数）、`overview`（最初の概観。`overview=True` のとき）、
     `next`（次の一手の例）。概観の比較と PCA は `result_id` で掘れるが直近の結果にはしない。
     """
+    bad = _argument_error(overview, library)
+    if bad is not None:
+        return bad
+    try:
+        wait = _wait_seconds(wait_seconds)
+        handles.registry.check_capacity()  # 上限なら受け付けない（読み込みの中でもう一度確かめる）
+        load_id = pending_loads.registry.submit(functools.partial(
+            _load_now, directory=directory, mztab_path=mztab_path, job_path=job_path,
+            pipeline_path=pipeline_path, polarity=polarity, allow_incomplete=allow_incomplete,
+            source=source, measure=measure, arf2_path=arf2_path, library=library,
+            overview=overview))
+        payload = pending_loads.registry.wait(load_id, wait)
+    except DomainError as exc:
+        return mztab_error(exc.code, exc.message, exc.details or None)
+    if payload is not None:
+        pending_loads.registry.discard(load_id)  # 受付番号を誰にも渡していないので覚えない
+        return payload
+    return json_payload({"status": "loading", "load_id": load_id,
+                         "next": f'dataset_load_status(load_id="{load_id}")'})
+
+
+def _argument_error(overview, library) -> str | None:
+    """すぐに分かる引数の誤り（受け付ける前に返す）。無ければ None。"""
     if not isinstance(overview, bool):
         return mztab_error("DATASET_BAD_REQUEST", f"overview は true / false です: {overview!r}",
                            {"field": "overview"})
@@ -217,6 +256,30 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         return mztab_error("DATASET_BAD_REQUEST",
                            f"library は {' / '.join(_LIBRARY_MODES)} のどちらかです: {library!r}",
                            {"field": "library"})
+    return None
+
+
+def _wait_seconds(value) -> float:
+    """`wait_seconds` を確かめる（0 以上の有限の数。bool は数に数えない）。"""
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or value < 0):
+        raise DomainError("DATASET_BAD_REQUEST",
+                          f"wait_seconds は 0 以上の有限の秒数です: {value!r}",
+                          {"field": "wait_seconds"})
+    return float(value)
+
+
+def _load_now(*, directory: str | None = None, mztab_path: str | None = None,
+              job_path: str | None = None, pipeline_path: str | None = None,
+              polarity: str | None = None, allow_incomplete: bool = False,
+              source: str = "auto", measure: str = "peak_height",
+              arf2_path: str | None = None, library: str = "auto",
+              overview: bool = True) -> str:
+    """`load_dataset` の本体（受付のスレッドで回る）。戻り値は `load_dataset` の JSON の文字列
+    （成功・誤りの封筒・`needs_input`）。成功ならハンドルを登録して直近にする（ここで 1 回だけ）。"""
+    bad = _argument_error(overview, library)
+    if bad is not None:
+        return bad
 
     from metabolomix.dataset.library_memory import public_view
     from metabolomix.mztab.polarity import dataset_polarity
@@ -331,6 +394,27 @@ _NEXT_STEPS = (
     "dataset_overview() で出し直す。2 群の向きは仮なので "
     "dataset_compare(reference_group=..., test_group=...) で決める）",
 )
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+def dataset_load_status(load_id: str) -> str:
+    """`load_dataset` が返した受付番号（`ld_…`）の読み込みを引く（待たずにすぐ返す）。
+
+    読み込み中は `{"status": "loading", "load_id", "elapsed_s"}`（`elapsed_s` は受け付けてからの秒）。
+    終われば `load_dataset` の戻り値そのもの: 成功なら `dataset_handle` つきの要約（そのハンドルが
+    直近になっている）、失敗なら `load_dataset` と同じ誤りの封筒（ハンドルは登録されず、直近も
+    動かない）。引いても状態は変わらない——ハンドルの登録と直近の切り替えは、読み込みが終わった
+    ときに 1 回だけ起きている。終わった受付は 1 時間覚えていて、何度引いても同じ文字列を返す。
+    知らない受付番号（終わってから 1 時間を過ぎた・サーバが再起動した）は `DATASET_LOAD_NOT_FOUND`。
+    """
+    try:
+        state, payload, elapsed = pending_loads.registry.snapshot(load_id)
+    except DomainError as exc:
+        return mztab_error(exc.code, exc.message, exc.details or None)
+    if state == "done":
+        return payload
+    return json_payload({"status": "loading", "load_id": load_id,
+                         "elapsed_s": round(elapsed, 1)})
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
