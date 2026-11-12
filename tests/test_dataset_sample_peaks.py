@@ -83,7 +83,16 @@ def test_more_than_200_features_is_an_error(tmp_path):
     out = json.loads(R.dataset_sample_peaks([str(i) for i in range(201)]))
     assert out["error"]["code"] == "DATASET_BAD_REQUEST"
     assert "200" in out["error"]["message"]
-    assert len(_rows(R.dataset_sample_peaks(["0"] * 1))) == 3
+
+
+def test_exactly_200_features_succeeds(tmp_path):
+    ds = _open_folder(tmp_path)
+    ds.feature_ids = [str(i) for i in range(200)]
+    ds.feature_matrix = np.tile(ds.feature_matrix[:1], (200, 1))
+    ds.detected_mask = np.tile(ds.detected_mask[:1], (200, 1))
+    ds.per_sample_rt = np.tile(ds.per_sample_rt[:1], (200, 1))
+    rows = _rows(R.dataset_sample_peaks([str(i) for i in range(200)]))
+    assert len(rows) == 200 * 3
 
 
 def test_empty_list_is_an_error(tmp_path):
@@ -102,7 +111,7 @@ def test_mztab_dataset_reports_per_sample_rt_unavailable(tmp_path):
 
 def test_no_dataset_is_a_missing_state_envelope():
     out = json.loads(R.dataset_sample_peaks(["0"]))
-    assert "error" in out or "missing_state" in json.dumps(out)
+    assert out["error"]["code"] == "missing_state"
 
 
 def test_rt_array_is_compact_and_follows_derive(tmp_path):
@@ -117,3 +126,29 @@ def test_rt_array_is_compact_and_follows_derive(tmp_path):
     rows = _rows(R.dataset_sample_peaks(["1"]))
     assert [(r["sample"], r["rt"]) for r in rows] == [("s2", pytest.approx(3.35)),
                                                        ("s0", pytest.approx(3.30))]
+
+
+def _assert_rt_unavailable(ds, feature_id):
+    session_state.session.dataset = ds
+    out = json.loads(R.dataset_sample_peaks([feature_id]))
+    assert out["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert "per_sample_rt" in out["error"]["message"]
+
+
+def test_derive_with_new_feature_ids_drops_rt(tmp_path):
+    ds = _open_folder(tmp_path)
+    new = derive(ds, matrix=ds.feature_matrix[:1], detected=ds.detected_mask[:1],
+                 feature_ids=["positive:0"], state={})
+    assert new.per_sample_rt is None
+    _assert_rt_unavailable(new, "positive:0")
+
+
+def test_merged_view_drops_rt(tmp_path):
+    from metabolomix.analysis import feature_search
+
+    ds = _open_folder(tmp_path)
+    view, merged_from = feature_search.merged_dataset(ds, [["0", "1"]])
+    assert merged_from and view.feature_ids == ["0"]
+    assert ds.per_sample_rt is not None   # 元は動かさない
+    assert view.per_sample_rt is None
+    _assert_rt_unavailable(view, "0")
