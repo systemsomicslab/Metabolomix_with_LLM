@@ -181,6 +181,8 @@ SME 由来という食い違った行ができる。
 通らない。`dataset_exclude` を使う前に作った結果の数字を、除外後の結果として読んではいけない。
 任意の列 `subject_id`（実験情報シートの末尾）は `sample_meta` に持ち、統計エンジンの前処理が**同じ個体の反復注入を 1 個体にまとめる**鍵に使う（`dataset_preprocess` の `collapse_replicates`、`injection_columns` で注入ごとに違う列を鍵から外す。`subject_source` は `subject_id` / `injection` / `mixed`）。`subject_id` が無い試料は注入が 1 個体になる。
 
+v2 の実験情報シートは、既知の列（と任意の `subject_id`）の後ろに**因子の列**（`Genotype`・`Treatment` など）を足せる。列名は空でなく、既知の列・足した列どうしと重ならないこと（重なれば `SAMPLE_MANIFEST_INVALID`）。値（空は欠落）は行にそのまま載り、受領の `samples.rows`・`dataset_set_sample_metadata`・データセットの試料の表を通って、analysis-spec v2 の `design.factors` / `covariates` が列名で引く。因子の列の値だけの変更も `changed_fields` に列名で出て、差次的解析の結果を古くする。
+
 ### 13.6 `inchikey_coverage`
 
 `load_dataset` の要約と `dataset_status` が読む集計。

@@ -163,6 +163,9 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     そのまま再送してよい。
 
     任意の列 `subject_id`（見出しの末尾に足す。反復測定の被験者）も読み、`sample_meta` に持つ。
+    v2 のシートは、既知の列（と任意の `subject_id`）の後ろに因子の列（`Genotype`・`Treatment` など）を足せる。
+    列名は空でなく、既知の列・足した列どうしと重ならないこと（重なれば `SAMPLE_MANIFEST_INVALID`）。値はそのまま
+    試料の表に載り、analysis-spec v2 の `design.factors`・`covariates` が列名で引く。
     統計エンジンはこれを使う: `dataset_preprocess`（`collapse_replicates=True` が既定）が同じ個体の反復注入を
     1 個体にまとめる鍵で、`dataset_compare(block="subject_id")` が同じ個体を対応づける鍵。列が無いシートは
     今までどおり（反復をまとめず、注入が単位）。

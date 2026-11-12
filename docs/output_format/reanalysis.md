@@ -211,7 +211,7 @@ hash も入れる——同じ spec でも割れの組が変われば別の規則
 |---|---|---|
 | `input` | `{"source": "dataset"}` | `source` はデータセットだけ。`exclude_samples` / `exclude_features`（空でない文字列のリスト。重複は順序を保って落とす）と `group_overrides`（試料 → 群）は**この spec に書いたものだけ**が効く（下の「自己完結」） |
 | `preprocess` | 上の値 | 前処理の設定（`dataset_preprocess` の引数と同じ。`drift.mode` は `auto` / `on` / `off`、足切りは `null` でその足切りを行わない、`normalize.method` は `auto` / `none` / `tic` / `median` / `pqn`）。`injection_columns` は個体のまとめの鍵から外す試料の表の列（取得日・注入番号など注入ごとに違う属性）。不正なら `ANALYSIS_SPEC_INVALID`（`details.field` が `preprocess.` から始まる） |
-| `design` | `{"factors": ["group"], "covariates": [], "block": null}` | `factors`（重複のない文字列。交互作用の対比は 2 因子のモデルだけ）・`covariates`（`{name, type: numeric \| categorical, reference?}`）・`block`（`"subject_id"` など） |
+| `design` | `{"factors": ["group"], "covariates": [], "block": null}` | `factors`（重複のない文字列。`group`・`batch` か、試料の表の列名。sample-manifest v2 の後ろに足した因子の列も使える。交互作用の対比は 2 因子のモデルだけ）・`covariates`（`{name, type: numeric \| categorical, reference?}`）・`block`（`"subject_id"` など） |
 | `comparisons` | 必須 | 対比のリスト。`{id, factor, reference, test, at?}`（`at` は他の因子の水準で層別）か、交互作用 `{id, kind: "interaction", factors: [2 因子], levels: {因子: [基準, 比較]}}`。`id` は英数字と `_ . -` で重複不可 |
 | `analyses[].kind` | 必須 | `compare` / `composition` / `pca`。`analysis_id` は重複不可 |
 | compare / composition | | `test`（既定 `moderated_t`。`welch` / `student` / `mannwhitney` は 1 因子・共変量なし・ブロックなしだけ）・`effect_size`（`log2_mean_difference` 既定 / `arithmetic_mean_ratio`）・`bh_population`（`matrix` 既定 / `annotated` / `reported`。`reported` は `reported_feature_ids` が要り、そのときだけ書ける）・`verdict.q`（既定 0.05）・`verdict.equivalence_fc`（既定 1.2）・`min_detected_fraction`（既定 0.5）・`allow_confounded`（既定 false。完全交絡は `STATISTIC_CONFOUNDED` で止める） |
