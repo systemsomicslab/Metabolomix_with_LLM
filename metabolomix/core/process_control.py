@@ -25,10 +25,15 @@
 使ってはいけない。実測（Windows 11 / Python 3.14）では、終了済みプロセスでも
 そのプロセスハンドルがどこかで開かれている限り`OpenProcess`は成功する。
 そのため必ず`WaitForSingleObject(h, 0)`で signaled（＝終了済み）を除外する。
+
+`launch_detached`はワーカーを直接起こさず、すぐ終わる中継のプロセス
+（`metabolomix.core.detach_relay`）に起こさせる。ワーカーの親が残らないので、
+起こした側（MCPサーバ）がプロセスの木ごと消されても（`taskkill /T`）ワーカーは残る。
 """
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import subprocess
 import sys
@@ -69,6 +74,16 @@ _PYVENV_LAUNCHER_ENV = "__PYVENV_LAUNCHER__"
 JOB_TERMINATION_EXIT_CODE = 1
 
 _IS_WINDOWS = os.name == "nt"
+
+#: `launch_detached`が起こす中継のモジュール（`python -m`で起こす）。
+_RELAY_MODULE = "metabolomix.core.detach_relay"
+
+#: 中継の作業ディレクトリ。`metabolomix`パッケージを含むディレクトリで、`-m`はここから
+#: このチェックアウトのコードを読む（pipelineのworkerを`_REPO_ROOT`から起こすのと同じ）。
+_PACKAGE_ROOT = Path(__file__).resolve().parents[2]
+
+#: 中継がワーカーを起こし、結果を書いて終わるまでを待つ上限（秒）。普段は1秒もかからない。
+_RELAY_TIMEOUT_S = 20.0
 
 
 def _unsupported_platform(operation: str) -> DomainError:
@@ -168,6 +183,12 @@ if _IS_WINDOWS:  # pragma: no branch - Windows専用の宣言ブロック
             ("hStdError", _wt.HANDLE),
         ]
 
+    class _STARTUPINFOEXW(ctypes.Structure):
+        _fields_ = [
+            ("StartupInfo", _STARTUPINFOW),
+            ("lpAttributeList", ctypes.c_void_p),
+        ]
+
     class _PROCESS_INFORMATION(ctypes.Structure):
         _fields_ = [
             ("hProcess", _wt.HANDLE),
@@ -237,6 +258,23 @@ if _IS_WINDOWS:  # pragma: no branch - Windows専用の宣言ブロック
     _STARTF_USESTDHANDLES = 0x00000100
     _PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000
     _SYNCHRONIZE = 0x00100000
+    _EXTENDED_STARTUPINFO_PRESENT = 0x00080000
+    _PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
+
+    _InitializeProcThreadAttributeList = _kernel32.InitializeProcThreadAttributeList
+    _InitializeProcThreadAttributeList.argtypes = [ctypes.c_void_p, _wt.DWORD, _wt.DWORD,
+                                                   ctypes.POINTER(ctypes.c_size_t)]
+    _InitializeProcThreadAttributeList.restype = _wt.BOOL
+
+    _UpdateProcThreadAttribute = _kernel32.UpdateProcThreadAttribute
+    _UpdateProcThreadAttribute.argtypes = [ctypes.c_void_p, _wt.DWORD, ctypes.c_size_t,
+                                           ctypes.c_void_p, ctypes.c_size_t,
+                                           ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+    _UpdateProcThreadAttribute.restype = _wt.BOOL
+
+    _DeleteProcThreadAttributeList = _kernel32.DeleteProcThreadAttributeList
+    _DeleteProcThreadAttributeList.argtypes = [ctypes.c_void_p]
+    _DeleteProcThreadAttributeList.restype = None
 
     _CreateJobObjectW = _kernel32.CreateJobObjectW
     _CreateJobObjectW.argtypes = [ctypes.POINTER(_SECURITY_ATTRIBUTES), _wt.LPCWSTR]
@@ -442,6 +480,11 @@ def _create_process(command: list[str], cwd: Path, log_path: Path,
 
     `env`がNoneなら親の環境を継承する。dictならその環境全体で起動する
     （`resolve_python_launch`がvenvを再現するために使う）。
+
+    **子へ渡すハンドルはログとNULの2つだけ**（`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`）。
+    `bInheritHandles=TRUE`だけだと、親の継承可能なハンドルが全部渡る。MCPサーバの
+    標準入出力はアプリとつながるパイプで継承可能なので、それが中継・worker・Consoleへ
+    渡り、サーバが終わってもアプリの側にパイプの終わりが届かなくなる。
     """
     environment = None
     if env is not None:
@@ -449,20 +492,51 @@ def _create_process(command: list[str], cwd: Path, log_path: Path,
         creation_flags |= CREATE_UNICODE_ENVIRONMENT
     log_handle, null_handle = _open_child_stdio(log_path)
     try:
-        si = _startup_info(log_handle, null_handle)
+        siex = _STARTUPINFOEXW()
+        siex.StartupInfo = _startup_info(log_handle, null_handle)
+        siex.StartupInfo.cb = ctypes.sizeof(_STARTUPINFOEXW)
+        inherited = (_wt.HANDLE * 2)(log_handle, null_handle)
         pi = _PROCESS_INFORMATION()
         cmdline = ctypes.create_unicode_buffer(subprocess.list2cmdline(command))
-        created = _CreateProcessW(None, cmdline, None, None, True,
-                                  creation_flags, environment, str(cwd),
-                                  ctypes.byref(si), ctypes.byref(pi))
-        if not created:
-            raise _win_error("PROCESS_LAUNCH_FAILED",
-                             "CreateProcessWに失敗した",
-                             {"command": command, "cwd": str(cwd)})
+        with _handle_list_attribute(inherited) as attribute_list:
+            siex.lpAttributeList = attribute_list
+            created = _CreateProcessW(None, cmdline, None, None, True,
+                                      creation_flags | _EXTENDED_STARTUPINFO_PRESENT,
+                                      environment, str(cwd),
+                                      ctypes.byref(siex.StartupInfo), ctypes.byref(pi))
+            if not created:
+                raise _win_error("PROCESS_LAUNCH_FAILED",
+                                 "CreateProcessWに失敗した",
+                                 {"command": command, "cwd": str(cwd)})
         return pi
     finally:
         _CloseHandle(log_handle)
         _CloseHandle(null_handle)
+
+
+@contextlib.contextmanager
+def _handle_list_attribute(handles):
+    """`handles`だけを子へ渡す属性リストを作り、そのアドレスを渡す（抜けるときに消す）。
+
+    `handles`（HANDLEの配列）は継承可能でなければならず、CreateProcessWが終わるまで
+    呼び出し側が保持する。
+    """
+    size = ctypes.c_size_t(0)
+    # 1回目は必要な大きさを聞くだけ（ERROR_INSUFFICIENT_BUFFERで失敗するのが正常）。
+    _InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(size))
+    buffer = ctypes.create_string_buffer(size.value)
+    if not _InitializeProcThreadAttributeList(buffer, 1, 0, ctypes.byref(size)):
+        raise _win_error("PROCESS_ATTRIBUTE_FAILED",
+                         "InitializeProcThreadAttributeListに失敗した")
+    try:
+        if not _UpdateProcThreadAttribute(buffer, 0, _PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                          ctypes.byref(handles), ctypes.sizeof(handles),
+                                          None, None):
+            raise _win_error("PROCESS_ATTRIBUTE_FAILED",
+                             "UpdateProcThreadAttributeに失敗した")
+        yield ctypes.addressof(buffer)
+    finally:
+        _DeleteProcThreadAttributeList(buffer)
 
 
 def process_identity(pid: int) -> dict | None:
@@ -730,31 +804,35 @@ def detach_breakaway_mode() -> str:
     return _breakaway_mode(True, int(info.BasicLimitInformation.LimitFlags))
 
 
-def launch_detached(command: list[str], *, cwd: Path, log_path: Path) -> dict:
-    """親から切り離してワーカーを起動し、pidとidentityを返す（待たない）。
+def _detach_flags(mode: str, command: list[str]) -> int:
+    """切り離し起動のCreateProcessWフラグを返す（`mode`は`detach_breakaway_mode`の値）。
 
-    切り離しの目的は「MCPの1呼び出しが消えても解析が続く」こと。親Jobから
-    抜けられず、かつそのJobが閉じたら殺される環境では目的を果たせないので、
-    起動せずに`DETACH_UNSUPPORTED`を送出する。黙って起動すると、親の終了と
-    同時に消えるワーカーを「起動できた」と記録してしまう。
+    `launch_detached`の2段（呼び出し側→中継、中継→ワーカー）で同じ規則を使う。
+    breakawayのフラグは`breakaway_ok`のときだけ付ける（`silent_breakaway`は付けなくても
+    Jobから外れる）。`unsupported`なら起こさずに`DETACH_UNSUPPORTED`を送出する。
     """
-    if not _IS_WINDOWS:
-        raise _unsupported_platform("launch_detached")
-    command, cwd = _validate_launch_args(command, cwd)
-    command, env = resolve_python_launch(command)
-
-    mode = detach_breakaway_mode()
     if mode == "unsupported":
         raise DomainError(
             "DETACH_UNSUPPORTED",
             "親Job ObjectがKILL_ON_JOB_CLOSE付きでbreakawayも許可していないため、"
             "親の終了後もワーカーが生き残ることを保証できない",
             {"command": command, "breakaway": mode})
-
     flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
     if mode == "breakaway_ok":
         flags |= CREATE_BREAKAWAY_FROM_JOB
+    return flags
 
+
+def _spawn_detached(command: list[str], cwd: Path, log_path: Path,
+                    env: dict | None) -> dict:
+    """現在のプロセスから1段だけ切り離して起こし、pid・identity・breakawayを返す（待たない）。
+
+    中継（`metabolomix.core.detach_relay`）がワーカーを起こすときの本体。`command`は
+    `resolve_python_launch`を通した後のもの。identityは子のプロセスハンドルを開いている
+    間に取る（ハンドルを持つ間はpidが再利用されないので、pidと生成時刻が同じ子を指す）。
+    """
+    mode = detach_breakaway_mode()
+    flags = _detach_flags(mode, command)
     pi = _create_process(command, cwd, log_path, flags, env)
     try:
         identity = {"pid": int(pi.dwProcessId),
@@ -762,8 +840,140 @@ def launch_detached(command: list[str], *, cwd: Path, log_path: Path) -> dict:
     finally:
         _CloseHandle(pi.hThread)
         _CloseHandle(pi.hProcess)
-    return {"pid": int(pi.dwProcessId), "identity": identity,
-            "breakaway": mode, "log_path": str(Path(log_path))}
+    return {"pid": int(pi.dwProcessId), "identity": identity, "breakaway": mode}
+
+
+def launch_detached(command: list[str], *, cwd: Path, log_path: Path) -> dict:
+    """親から切り離してワーカーを起動し、pidとidentityを返す（ワーカーは待たない）。
+
+    切り離しの目的は「MCPの1呼び出しが消えても解析が続く」こと。親Jobから
+    抜けられず、かつそのJobが閉じたら殺される環境では目的を果たせないので、
+    起動せずに`DETACH_UNSUPPORTED`を送出する。黙って起動すると、親の終了と
+    同時に消えるワーカーを「起動できた」と記録してしまう。
+
+    **ワーカーは中継のプロセスから起こす**。デスクトップアプリは呼び出しを打ち切ると
+    MCPサーバを作り直す。試し走りの観察から、そのときサーバのプロセスの木ごと消して
+    いると見ている（実測はしていない）。木ごとの終了は親子の記録をたどるので、サーバが
+    直接起こしたワーカーは切り離しのフラグを付けていても巻き込まれる。
+    そこで、このプロセスは中継（`python -m metabolomix.core.detach_relay`）を起こし、
+    中継がワーカーを起こしてそのpidとidentityを書き、すぐ終わる。ワーカーの親（中継）は
+    もう居ないので、木をたどってもワーカーに届かない。2段とも同じフラグの規則
+    （`_detach_flags`。breakawayは許されるときだけ）で起こす。
+
+    戻り値の形は変わらない: `{"pid", "identity", "breakaway", "log_path"}`。pidとidentityは
+    **ワーカーのもの**（中継のものではない）。`breakaway`はこのプロセスから見た値。
+    ワーカーの起動の誤り（`PROCESS_LAUNCH_FAILED`など）は中継から同じcodeで返す。
+
+    限界: Jobがbreakawayを許さない環境（`inherited_job`。KILL_ON_JOB_CLOSEは無い）では
+    中継もワーカーもそのJobに残る。木ごとの終了には残るが、Jobごとの終了
+    （`TerminateJobObject`や、後からKILL_ON_JOB_CLOSEを付けて閉じること）には巻き込まれる。
+    """
+    if not _IS_WINDOWS:
+        raise _unsupported_platform("launch_detached")
+    command, cwd = _validate_launch_args(command, cwd)
+    command, env = resolve_python_launch(command)
+    log_path = Path(log_path)
+
+    mode = detach_breakaway_mode()
+    flags = _detach_flags(mode, command)
+    launched = _launch_via_relay(command, cwd, log_path, env, flags)
+    return {"pid": launched["pid"], "identity": launched["identity"],
+            "breakaway": mode, "log_path": str(log_path)}
+
+
+def _launch_via_relay(command: list[str], cwd: Path, log_path: Path,
+                      env: dict | None, flags: int) -> dict:
+    """中継を`flags`で起こし、終わるのを待って、中継が書いたワーカーの起動結果を返す。
+
+    中継へ渡すのはワーカーの起動コマンド・cwd・ログ・venvの印（`__PYVENV_LAUNCHER__`の値）と
+    結果を書く先だけで、環境変数そのものは渡さない。中継はこのプロセスの環境を受け継ぎ、
+    解釈系は起動時に`__PYVENV_LAUNCHER__`を自分の環境から消すので、中継がそれを足し直す
+    （`env`は`resolve_python_launch`が作る「このプロセスの環境＋その印」に限られる）。
+
+    中継のstdout/stderrは`<ログ名>.relay<拡張子>`へ結ぶ。どの経路でも空なら消し（中継を
+    起こせなかった・止めたときも）、中身があって起動結果が無ければ残して
+    `DETACH_RELAY_FAILED`の`details`に末尾を載せる。
+    上限（`_RELAY_TIMEOUT_S`）までに終わらなければ中継を止めて`DETACH_RELAY_TIMEOUT`
+    （ワーカーは起きているかもしれない。pipelineならworker自身がidentityを記録する）。
+    """
+    token = os.urandom(6).hex()
+    result_path = log_path.with_name(f"{log_path.stem}.relay-{token}.json")
+    relay_log = log_path.with_name(f"{log_path.stem}.relay{log_path.suffix}")
+    request = {"command": command, "cwd": str(cwd), "log_path": str(log_path),
+               "launcher": (env or {}).get(_PYVENV_LAUNCHER_ENV),
+               "result_path": str(result_path)}
+    relay_command, relay_env = resolve_python_launch(
+        [sys.executable, "-m", _RELAY_MODULE, json.dumps(request)])
+    details = {"command": command, "relay_log": str(relay_log)}
+    try:
+        pi = _create_process(relay_command, _PACKAGE_ROOT, relay_log, flags, relay_env)
+        _CloseHandle(pi.hThread)
+        try:
+            details["relay_pid"] = int(pi.dwProcessId)
+            status = _WaitForSingleObject(pi.hProcess, int(_RELAY_TIMEOUT_S * 1000))
+            if status != _WAIT_OBJECT_0:
+                error = (DomainError("DETACH_RELAY_TIMEOUT",
+                                     f"中継が{_RELAY_TIMEOUT_S:g}秒以内に終わらなかった"
+                                     "（ワーカーは起きているかもしれない）", details)
+                         if status == _WAIT_TIMEOUT else
+                         _win_error("PROCESS_WAIT_FAILED", "中継の終わりを待てなかった",
+                                    details))
+                _TerminateProcess(pi.hProcess, JOB_TERMINATION_EXIT_CODE)
+                raise error
+            exit_code = _exit_code(pi.hProcess)
+        finally:
+            _CloseHandle(pi.hProcess)
+        result = _read_relay_result(result_path)
+    finally:
+        with contextlib.suppress(OSError):
+            result_path.unlink(missing_ok=True)
+        _discard_if_empty(relay_log)
+
+    error = result.get("error") if isinstance(result, dict) else None
+    if isinstance(error, dict):
+        raise DomainError(str(error.get("code") or "DETACH_RELAY_FAILED"),
+                          str(error.get("message") or "中継がワーカーを起こせなかった"),
+                          dict(error.get("details") or {}))
+    if exit_code != 0 or not _is_launch_result(result):
+        details.update(exit_code=exit_code, relay_log_tail=_tail(relay_log))
+        raise DomainError("DETACH_RELAY_FAILED",
+                          f"中継がワーカーの起動結果を返さなかった（終了コード {exit_code}）",
+                          details)
+    return result
+
+
+def _discard_if_empty(path: Path) -> None:
+    """空のファイルを消す（無い・消せないなら何もしない）。"""
+    with contextlib.suppress(OSError):
+        if path.stat().st_size == 0:
+            path.unlink()
+
+
+def _read_relay_result(path: Path):
+    """中継が書いた結果のJSONを読む。無い・壊れているならNone。"""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _is_launch_result(result) -> bool:
+    """中継の結果が、ワーカーのpidとidentity（同じpidと生成時刻）の組か。"""
+    if not isinstance(result, dict):
+        return False
+    pid = result.get("pid")
+    identity = result.get("identity")
+    return (isinstance(pid, int) and not isinstance(pid, bool) and pid > 0
+            and isinstance(identity, dict) and identity.get("pid") == pid
+            and isinstance(identity.get("creation_time"), int))
+
+
+def _tail(path: Path, limit: int = 2000) -> str:
+    """ログの末尾（読めなければ空）。"""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[-limit:]
+    except OSError:
+        return ""
 
 
 def _try_lock(fd: int) -> bool:

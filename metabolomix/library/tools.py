@@ -12,6 +12,7 @@ analysis.spectral_match / plots.{mirror,render} / dcl.reader / arf2.reader
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 from pathlib import Path
 
@@ -51,7 +52,7 @@ _RANK_KEY = "total_score"
 # 候補一覧 TSV の列（先頭に列名を 1 回だけ出す）。スペクトル座標・alignment は
 # 意図的に含めない（座標は session.library.last_match にだけ持つ）。
 _CANDIDATE_TABLE_COLUMNS = [
-    "rank", "name", "precursor_mz", "ion_mode", "adduct", "rt", "formula",
+    "rank", "name", "precursor_mz", "delta_mz", "delta_ppm", "ion_mode", "adduct", "rt", "formula",
     "ontology", "compound_class", "total_score",
     "simple_dot_product", "weighted_dot_product",
     "reverse_dot_product", "matched_peaks_percentage", "matched_peaks_count",
@@ -59,6 +60,13 @@ _CANDIDATE_TABLE_COLUMNS = [
 ]
 #: `detail=True` のときだけ末尾に足す列（既存の列の並びは変えない）。
 _DETAIL_COLUMNS = ["inchikey", "fragment_matches_excl_precursor"]
+
+
+def _delta_cells(query_mz: float, ref_mz: float) -> tuple[str, str]:
+    """候補の行の `delta_mz`（Da）と `delta_ppm`。参照が 0 のとき ppm は空（割れない）。"""
+    delta = query_mz - ref_mz
+    ppm = f"{delta / ref_mz * 1e6:+.2f}" if ref_mz else ""
+    return f"{delta:+.6f}", ppm
 
 
 def _not_remembered(record: dict | None) -> dict:
@@ -89,7 +97,7 @@ def _not_remembered(record: dict | None) -> dict:
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
           structured_output=False)
 def library_load(file_path: str | None = None, rebuild: bool = False,
-                 dataset_handle: str | None = None) -> str:
+                 dataset_handle: str | None = None, library_names: bool = True) -> str:
     """参照ライブラリを読み込み、照合用の SQLite store を構築（または既存キャッシュを
     再利用）する。
 
@@ -123,7 +131,54 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は直近のデータセット。ハンドルのライブラリ・照合結果だけを読み書きする。
         ハンドルへは読み取り専用で開く。
+    library_names: 既定 True（今までどおり、戻り値にライブラリのファイル名を出す）。False なら
+        戻り値の JSON のどこにもライブラリのファイル名（`file`・候補・`differs_from_record`・
+        注記・誤りの文言に混じる名前）を出さず、sha256・`record_count` などだけを返す。
+        **戻り値を run の記録（追跡する場所）へ保存するときは False にする**。bool 以外は
+        `LIBRARY_BAD_REQUEST`。
     """
+    if not isinstance(library_names, bool):
+        return json_payload({"status": "error", "code": "LIBRARY_BAD_REQUEST",
+                             "message": f"library_names は true / false です: {library_names!r}"})
+    out = _library_load(file_path, rebuild, dataset_handle)
+    if library_names:
+        return out
+    return _hide_library_names(out, file_path, dataset_handle)
+
+
+def _hide_library_names(out: str, file_path: str | None, dataset_handle: str | None) -> str:
+    """`library_load` の戻り値の JSON から、ライブラリのファイル名を除く（`library_names=False`）。"""
+    import json
+
+    from metabolomix.dataset.library_memory import library_names_in, redact_library_names
+    from metabolomix.tools._holder import resolve_holder
+
+    try:
+        payload = json.loads(out)
+    except ValueError:
+        return out  # 封筒でない文字列（ハンドルの誤りなど）は名前を含まない
+    holder = resolve_holder(dataset_handle)
+    record = (getattr(holder.dataset, "library_record", None)
+              if not isinstance(holder, str) else None)
+    extra = [file_path, payload.get("file") if isinstance(payload, dict) else None]
+    for key in user_config.MSP_SETTING_KEYS.values():  # LIBRARY_NOT_REMEMBERED の候補
+        try:
+            setting = user_config.get_setting(key)
+        except user_config.ConfigInvalidError:
+            continue
+        if setting is not None:
+            extra.append(setting.value)
+    names = library_names_in(record, *extra)
+    if isinstance(payload, dict):
+        payload.pop("file", None)
+        payload.pop("candidates", None)
+        differs = payload.get("differs_from_record")
+        if isinstance(differs, dict):
+            payload["differs_from_record"] = {"differs": True}
+    return json_payload(redact_library_names(payload, names))
+
+
+def _library_load(file_path, rebuild, dataset_handle) -> str:
     from metabolomix.tools._holder import resolve_holder
 
     holder = resolve_holder(dataset_handle)
@@ -408,6 +463,7 @@ def library_match_feature(
     detail: bool = False,
     precursor_exclusion_tol: float | None = None,
     dataset_handle: str | None = None,
+    mz_tol_ppm: float | None = None,
 ) -> str:
     """測定 MS/MS（`.dcl`）を参照ライブラリ（`library_load` 済みの store）と照合し、
     上位候補を返す。
@@ -434,6 +490,12 @@ def library_match_feature(
     （最終レビュー Important 7: `.dbs` の `RtTolerance` 既定 100.0 のような
     ライブラリ用の値を `.dcl` 側の RT 窓に流用すると、同じ precursor m/z の
     別ピークの測定スペクトルを黙って拾ってしまうため、2 つの窓を分離した）。
+    `mz_tol_ppm`（任意）は上の Da の窓に**重ねる追加の絞り込み**で、窓を広げない:
+    参照との差が ±`mz_tol_ppm` ppm を超える候補を落とす（`mz_tol_ppm=10` なら +44 ppm の候補は
+    落ちる）。省略時は絞らない。既定の窓 0.01 Da は MS-DIAL に合わせたもので、低い m/z では
+    数十 ppm に当たる——候補の行の `delta_ppm` を見て受け入れること。候補の行には
+    `delta_mz = 測定 - 参照`（Da）と `delta_ppm = (測定 - 参照) / 参照 * 1e6` が付く
+    （測定が参照より高いと正）。`precursor_mz` 列（参照の前駆体）は 6 桁で出す。
     足切り（`relative_amp_cutoff` / `absolute_amp_cutoff`）と質量範囲
     （`mass_range_begin` / `mass_range_end`）も同じ `search_params` から採って
     採点（`match_spectrum`）に渡す——検証 CLI（`scripts/verify_spectral_match.py`）
@@ -495,6 +557,13 @@ def library_match_feature(
             "library_store", ["library_load"],
             "先に library_load を実行してください（参照ライブラリが読み込まれていません）。",
         )
+    if mz_tol_ppm is not None and (
+            isinstance(mz_tol_ppm, bool) or not isinstance(mz_tol_ppm, (int, float))
+            or not math.isfinite(mz_tol_ppm) or mz_tol_ppm <= 0):
+        return json_payload({
+            "status": "invalid_arguments",
+            "message": "mz_tol_ppm は 0 より大きい有限の数で指定してください（省略可）。",
+        })
     if (precursor_mz is None) == (spot_id is None):
         return json_payload({
             "status": "invalid_arguments",
@@ -542,7 +611,8 @@ def library_match_feature(
     # （既存のテストがここの match_spectrum を差し替えて順位付けを確かめている）。
     matched = matching.score_candidates(
         store_obj, precursor_mz=precursor_mz, rt=rt, ion_mode=ion_mode, measured=measured,
-        mz_tol=mz_tol, ms2_tol=ms2_tol, rt_tol=rt_tol, match_fn=match_spectrum)
+        mz_tol=mz_tol, ms2_tol=ms2_tol, rt_tol=rt_tol, mz_tol_ppm=mz_tol_ppm,
+        match_fn=match_spectrum)
     resolved_mz_tol = matched["query"]["mz_tol"]
     resolved_ms2_tol = matched["query"]["ms2_tol"]
     if matched["status"] == "no_candidates":
@@ -555,6 +625,7 @@ def library_match_feature(
                 # **文字列へ焼いた数値には届かない**（成功時の query.mz_tol は
                 # 構造の中の float なので丸まる——だからここだけ素の値が出ていた）。
                 f"precursor m/z={precursor_mz}±{resolved_mz_tol:.4g}"
+                + (f"（かつ ±{mz_tol_ppm:g} ppm）" if mz_tol_ppm is not None else "")
                 + (f", ion_mode={ion_mode}" if ion_mode else "")
                 + " に該当する参照レコードが見つかりませんでした。"
             ),
@@ -601,7 +672,9 @@ def library_match_feature(
         {
             "rank": i + 1,
             "name": record["name"],
-            "precursor_mz": record["precursor_mz"],
+            "precursor_mz": f"{record['precursor_mz']:.6f}",
+            "delta_mz": _delta_cells(precursor_mz, record["precursor_mz"])[0],
+            "delta_ppm": _delta_cells(precursor_mz, record["precursor_mz"])[1],
             "ion_mode": record["ion_mode"],
             "adduct": record["adduct"],
             "rt": record["rt"],

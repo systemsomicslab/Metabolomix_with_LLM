@@ -492,3 +492,92 @@ def test_pick_tol_keeps_an_explicit_zero():
     assert pick_tol(None, {"k": 0.0}, "k", 5.0) == 0.0
     assert pick_tol(None, {}, "k", 5.0) == 5.0
     assert pick_tol(1.0, {"k": 0.0}, "k", 5.0) == 1.0
+
+
+# --------------------------------------------------------------------------
+# 候補ごとの質量誤差（A6・A8）。既定の窓（0.01 Da）は MS-DIAL に合わせて変えない。
+# --------------------------------------------------------------------------
+_OFF_44_PPM = 104.0752  # 参照 104.0706 より約 +44 ppm（0.0046 Da）高い
+
+
+def _match_off_by_44_ppm(monkeypatch, **kwargs):
+    tools.library_load(**_LIB)
+    monkeypatch.setattr(tools, "_measured_spectrum",
+                        lambda *a, **k: [[87.0441, 999.0], [69.0335, 500.0]])
+    return json.loads(tools.library_match_feature(
+        _OFF_44_PPM, dcl_file=_DCL, ion_mode="positive", **kwargs))
+
+
+def _table_rows(payload):
+    lines = payload["candidates_table"].splitlines()
+    header = lines[0].split("\t")
+    return [dict(zip(header, line.split("\t"))) for line in lines[1:]]
+
+
+def test_candidates_carry_delta_ppm(fresh_session, monkeypatch):
+    row = _table_rows(_match_off_by_44_ppm(monkeypatch))[0]
+    ref = 104.0706
+    assert float(row["delta_mz"]) == pytest.approx(_OFF_44_PPM - ref, abs=1e-6)
+    assert float(row["delta_ppm"]) == pytest.approx((_OFF_44_PPM - ref) / ref * 1e6, abs=0.01)
+    assert float(row["delta_ppm"]) > 0  # 測定が参照より高いと正
+
+
+def test_reference_precursor_has_six_decimals(fresh_session, monkeypatch):
+    (fresh_session / "lib.msp").write_text(
+        _MSP.replace("104.0706", "104.070612"), encoding="utf-8")
+    row = _table_rows(_match_off_by_44_ppm(monkeypatch))[0]
+    assert row["precursor_mz"] == "104.070612"
+
+
+def test_mz_tol_ppm_narrows_window(fresh_session, monkeypatch):
+    assert len(_table_rows(_match_off_by_44_ppm(monkeypatch))) == 1
+    payload = _match_off_by_44_ppm(monkeypatch, mz_tol_ppm=10)
+    assert payload["status"] == "no_candidates"
+    assert "ppm" in payload["message"]
+    kept = _match_off_by_44_ppm(monkeypatch, mz_tol_ppm=50)
+    assert len(_table_rows(kept)) == 1
+    assert kept["query"]["mz_tol_ppm"] == 50
+
+
+def test_default_window_unchanged(fresh_session, monkeypatch):
+    payload = _match_off_by_44_ppm(monkeypatch)
+    assert payload["query"]["mz_tol"] == pytest.approx(0.01)
+    assert payload["query"]["mz_tol_ppm"] is None
+
+
+@pytest.mark.parametrize("bad", [0, -5, float("nan"), float("inf"), True, "10"])
+def test_invalid_mz_tol_ppm_is_a_bad_request(fresh_session, monkeypatch, bad):
+    payload = _match_off_by_44_ppm(monkeypatch, mz_tol_ppm=bad)
+    assert payload["status"] == "invalid_arguments"
+    assert "mz_tol_ppm" in payload["message"]
+
+
+def test_query_below_reference_has_negative_signs(fresh_session, monkeypatch):
+    tools.library_load(**_LIB)
+    monkeypatch.setattr(tools, "_measured_spectrum",
+                        lambda *a, **k: [[87.0441, 999.0], [69.0335, 500.0]])
+    payload = json.loads(tools.library_match_feature(
+        104.0660, dcl_file=_DCL, ion_mode="positive"))
+    row = _table_rows(payload)[0]
+    assert row["delta_mz"] == "-0.004600"
+    assert row["delta_ppm"] == "-44.20"
+
+
+def test_zero_reference_precursor_gives_empty_ppm_and_is_not_filtered():
+    assert tools._delta_cells(104.0, 0.0) == ("+104.000000", "")
+    from metabolomix.library import matching
+
+    class _Store:
+        def summary(self):
+            return {}
+
+        def candidates(self, *a, **k):
+            return [{"precursor_mz": 0.0, "spectrum": []}]
+
+    result = matching.score_candidates(
+        _Store(), precursor_mz=104.0, rt=None, ion_mode=None, measured=[],
+        mz_tol_ppm=10, match_fn=lambda *a, **k: {
+            "total_score": 0.0, "alignment": [], "simple_dot_product": 0.0,
+            "weighted_dot_product": 0.0, "reverse_dot_product": 0.0,
+            "matched_peaks_percentage": 0.0, "matched_peaks_count": 0})
+    assert result["n_candidates"] == 1

@@ -122,7 +122,8 @@ agents, the spec-driven matrix/statistics tools, MS/MS pass/fail rules and the
 claim evidence bundle), or `quant` (internal-standard normalization, polarity
 merge and feature selection: `dataset_quant_*`, `dataset_merge_polarities`,
 `dataset_select_features` - the gap-fill mark in `detected_mask`, units,
-`needs_input` envelopes, records). `load_dataset` carries a short semantics digest in its
+`needs_input` envelopes, records). A client that cannot read MCP resources calls
+`docs_read(topic=...)` instead (no topic = the core; same text). `load_dataset` carries a short semantics digest in its
 `caveat` field until you have fetched the core; fetch the topic before
 interpreting the matching tool's output.
 
@@ -147,7 +148,7 @@ instrument files.
    `overview=False`). A load still running after `wait_seconds` (default 20 s)
    returns `status: "loading"` with a `load_id` instead and keeps loading: call
    `dataset_load_status(load_id=..., wait_seconds=...)` (it waits up to
-   `wait_seconds`, at most 60 s, for the load to finish; the default 0 returns
+   `wait_seconds`, at most 30 s, for the load to finish; the default 0 returns
    at once) until it returns the load's own result
    (the handle becomes current only when the load finishes). Tools called without
    `dataset_handle` act on that current dataset and use its files; a tool that
@@ -170,8 +171,10 @@ instrument files.
    resolved settings (method file, LBM, polarity) first, call `pipeline_plan`
    before asking; to choose or make a method file, use
    `console_method_candidates` / `console_method_template`.
-   `pipeline_run` starts an independent worker that places the raw files in the
-   run, runs Console one polarity at a time, checks each analysis folder
+   `pipeline_run` starts an independent worker (through a short-lived relay
+   process, so the worker is not in this server's process tree) that places
+   the raw files in the run, runs Console one polarity at a time, checks each
+   analysis folder
    against its mzTab-M and writes a receipt — it computes no statistics — and
    returns a compact dispatch receipt (`pipeline_id`/`pipeline_path`) at once.
    Poll with `pipeline_status(pipeline_path)`. When it reports `completed` or
@@ -267,6 +270,11 @@ give identical JSON for an identical spec — see
 `lipidmix://docs/output-format/reanalysis`. They return numbers, never verdicts.
 `dataset_alignment_qc` finds one compound split over two alignment spots (e.g. the
 first injections drifted in RT); run it before reading results.
+`dataset_sample_peaks` (read-only; datasets loaded from a MS-DIAL analysis folder
+only) returns one row per feature x sample (a TSV, header once; at most 1000
+rows inline; more rows need an output file path argument) with `rt`, `mz`, `height` and
+`detected` (false = gap-filled) - use it to judge whether two spots are one
+compound split in two, or whether RT drifts across injections.
 """.strip()
 
 mcp = FastMCP(

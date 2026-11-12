@@ -41,6 +41,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import statistics
 from pathlib import Path
 from typing import NamedTuple
@@ -50,7 +51,7 @@ import numpy as np
 from metabolomix.core.atomic_io import DomainError
 
 __all__ = ["SCHEMA", "TYPES", "MergedMatrix", "find_split_pairs", "merge_matrix_columns",
-           "id_order", "names_compatible", "order_label", "read_qc_file",
+           "id_order", "inchikey_match", "names_compatible", "order_label", "read_qc_file",
            "sample_injection_order", "split_partners", "usable_merge_groups"]
 
 SCHEMA = "alignment-qc.v1"
@@ -224,6 +225,27 @@ def names_compatible(a, b) -> bool:
     return species_a is not None and species_a == species_b
 
 
+#: InChIKey の形（14-10-1 の大文字）。これに合わないものは照合に使わない（ゴミの文字列どうしを一致とみなさない）。
+_INCHIKEY_RE = re.compile(r"[A-Z]{14}-[A-Z]{10}-[A-Z]")
+
+
+def inchikey_match(a, b) -> str:
+    """2 スポットの InChIKey の一致: `full`（全体）・`first_block`（先頭の塊 = 骨格だけ）・`none`。
+
+    どちらかが無い・空・14 文字の塊として読めないときは `none`（名前の判定に任せる）。
+    大文字小文字は無視する。
+    """
+    a, b = _clean_name(a), _clean_name(b)
+    if a is None or b is None:
+        return "none"
+    a, b = a.strip().upper(), b.strip().upper()
+    if not _INCHIKEY_RE.fullmatch(a) or not _INCHIKEY_RE.fullmatch(b):
+        return "none"
+    if a == b:
+        return "full"
+    return "first_block" if a.split("-")[0] == b.split("-")[0] else "none"
+
+
 # ---------- 割れの判定と型 ----------
 
 def _owners(va, vb, da, db, max_both: float):
@@ -383,9 +405,11 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
                                params["max_both_detected"])
             if assessed is None:
                 continue
+            detected = None if mask is None else mask[index_a] | mask[index_b]
             pairs.append(_pair(ds, (index_a, fid_a, mz_a, rt_a), (index_b, fid_b, mz_b, rt_b),
                                assessed, ranked, order, groups, names, adducts,
-                               params["max_interleaved_rt_gap"], params["min_block_size"]))
+                               params["max_interleaved_rt_gap"], params["min_block_size"],
+                               detected))
     pairs.sort(key=lambda p: (p["mz"][0], p["features"]))
     for n, pair in enumerate(pairs, start=1):
         pair["pair_id"] = f"P{n}"
@@ -443,7 +467,7 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
 
 
 def _pair(ds, a, b, assessed, ranked, order, groups, names, adducts,
-          max_interleaved_rt_gap: float, min_block_size: int) -> dict:
+          max_interleaved_rt_gap: float, min_block_size: int, detected=None) -> dict:
     owner, fraction = assessed
     block = _block(owner, ranked, min_block_size)
     if block is not None:
@@ -459,7 +483,13 @@ def _pair(ds, a, b, assessed, ranked, order, groups, names, adducts,
             owner = np.where(owner >= 0, 1 - owner, owner)
     fids = [a[1], b[1]]
     pair_names = [_feature_name(ds, a[1]), _feature_name(ds, b[1])]
-    compatible = names_compatible(*pair_names)
+    metadata = getattr(ds, "feature_metadata", None) or {}
+    key_match = inchikey_match(*[(metadata.get(f) or {}).get("inchikey") for f in fids])
+    compatible = key_match != "none" or names_compatible(*pair_names)
+    if detected is None:
+        owned_detected = None
+    else:
+        owned_detected = [int(((owner == 0) & detected).sum()), int(((owner == 1) & detected).sum())]
     block_out = None
     if block is not None:
         members = block[1]
@@ -476,9 +506,11 @@ def _pair(ds, a, b, assessed, ranked, order, groups, names, adducts,
         "adduct": adducts.get(a[1]),
         "names": pair_names,
         "names_compatible": compatible,
+        "inchikey_match": key_match,
         "type": kind,
         "owner": {name: (fids[int(s)] if s >= 0 else None) for name, s in zip(names, owner)},
         "n_owned": [int((owner == 0).sum()), int((owner == 1).sum())],
+        "n_owned_detected": owned_detected,
         "both_detected_fraction": fraction,
         "block": block_out,
         "mergeable": compatible and (

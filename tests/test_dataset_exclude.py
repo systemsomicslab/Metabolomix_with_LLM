@@ -197,3 +197,19 @@ def test_feature_search_says_when_a_named_feature_is_excluded():
 
     notes = " ".join(out.get("notes") or [])
     assert "F2" in notes and "co-eluting artifact" in notes, out
+
+
+def test_integer_feature_id_passes_through_fastmcp():
+    """数字だけの特徴 ID は、整数のまま送られても文字列として当たる（FastMCP の検証を通す）。"""
+    import asyncio
+
+    import server
+
+    ds = _loaded()
+    ds.feature_ids = ["3885", *ds.feature_ids[1:]]
+    result = asyncio.run(server.mcp.call_tool(
+        "dataset_exclude", {"features": [3885], "reason": "x"}))
+    content = result[0] if isinstance(result, tuple) else result
+    body = json.loads("".join(c.text for c in content if getattr(c, "type", "") == "text"))
+    assert body["status"] == "success", body
+    assert ds.excluded_features == {"3885": "x"}

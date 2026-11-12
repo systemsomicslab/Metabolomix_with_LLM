@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -25,7 +26,7 @@ from metabolomix.tools._holder import resolve_holder
 
 __all__ = ["dataset_alignment_qc", "dataset_analysis_run", "dataset_claim_evidence",
            "dataset_feature_relations", "dataset_homolog_check", "dataset_mass_accuracy",
-           "dataset_novel_candidates", "library_msms_qualify"]
+           "dataset_novel_candidates", "dataset_sample_peaks", "library_msms_qualify"]
 
 #: output_path なしで行を返す上限（解析ごと）。超えれば output_path を求める。
 MAX_INLINE_ROWS = 50
@@ -447,7 +448,7 @@ def dataset_homolog_check(spec: dict, dataset_handle: str | None = None) -> str:
 # ---------- 特徴どうしの関係 ----------
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_feature_relations(feature_id: str, rt_window: float = 0.05, mz_tol: float = 0.01,
+def dataset_feature_relations(feature_id: str | int, rt_window: float = 0.05, mz_tol: float = 0.01,
                               min_r: float = 0.7, adducts: list[str] | None = None,
                               dataset_handle: str | None = None) -> str:
     """mzTab-M の特徴 1 つについて、同時溶出の特徴と付加体・同位体・源内断片の関係を返す
@@ -490,6 +491,115 @@ def dataset_feature_relations(feature_id: str, rt_window: float = 0.05, mz_tol: 
         "as_ion_of": rows_table(out["as_ion_of"], relation_columns),
         "ions_of_this": rows_table(out["ions_of_this"], ion_columns),
     }, digits=4))
+
+
+# ---------- 試料ごとのピーク ----------
+
+#: `dataset_sample_peaks` が 1 回で受ける特徴の数の上限（これを超えたら呼び分ける）。
+MAX_SAMPLE_PEAK_FEATURES = 200
+#: `dataset_sample_peaks` が戻り値に載せる行（特徴 × 試料）の上限。超えれば `output_path` を求める。
+MAX_SAMPLE_PEAK_INLINE_ROWS = 1000
+SAMPLE_PEAK_COLUMNS = ("feature_id", "sample", "rt", "mz", "height", "detected")
+
+
+def _peak_cell(value) -> str | None:
+    """`dataset_sample_peaks` の数値のセル（小数 6 桁。非有限・None は空欄）。"""
+    if value is None:
+        return None
+    value = float(value)
+    return str(round(value, 6)) if math.isfinite(value) else None
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+def dataset_sample_peaks(feature_ids: list[str | int], dataset_handle: str | None = None,
+                         output_path: str | None = None) -> str:
+    """特徴 × 試料ごとのピークの `rt`・`mz`・`height`・`detected` を返す（再解析で使う）。
+
+    割れた 2 スポットが 1 つの物質か、RT がずれていくか（ドリフト）を試料ごとに見るための読み取り。
+    feature_ids: 特徴 ID（int でも str でもよい。`str()` に直す）。1 回 200 件まで（超えたら
+    `DATASET_BAD_REQUEST`）。知らない ID も `DATASET_BAD_REQUEST`（details の `unknown`）。
+    行（列 `feature_id, sample, rt, mz, height, detected`）を、依頼の特徴の順 × データセットの試料の順に、
+    TSV（列名 1 回。`rows` の文字列）で返す。空欄は null（gap-fill の `mz`）、`detected` は true / false。
+    戻り値に載せる行（特徴 × 試料）は 1,000 行まで。超えるとき `output_path` が無ければ
+    `DATASET_BAD_REQUEST`（details の `n_samples`・`max_rows`・`max_features_per_call`）。
+    `rt` は分（gap-fill のセルも `.arf` の値）、`mz` は検出されたセルの実測 m/z（gap-fill は null）、
+    `height` はデータセットの強度の行列の値（`measure` で選んだ `.arf` の欄。定量で変えたデータセットは
+    その値）、`detected` は `detected_mask`（gap-fill なら false）。
+    解析フォルダ（`.arf`）から読んだデータセットだけ。mzTab-M で読んだデータセットは
+    `per_sample_rt` が無いので `DATASET_BAD_REQUEST`（`directory` / `job_path` / `pipeline_path` で
+    解析フォルダを読む）。
+    dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
+    output_path: 全量の TSV をここへ書き、要約（`n_rows`・`n_features`・`n_samples`・`output_path`・
+        `sha256`）だけを返す（ほかの再解析のツールと同じ規則）。1,000 行を超えるときは必須。
+    """
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    ds, error = _dataset_or_error(holder, True)
+    if error:
+        return error
+    if not isinstance(feature_ids, list) or not feature_ids:
+        return mztab_error("DATASET_BAD_REQUEST", "feature_ids は 1 件以上の特徴 ID のリスト",
+                           {"field": "feature_ids"})
+    if len(feature_ids) > MAX_SAMPLE_PEAK_FEATURES:
+        return mztab_error(
+            "DATASET_BAD_REQUEST",
+            f"feature_ids は 1 回 {MAX_SAMPLE_PEAK_FEATURES} 件まで（{len(feature_ids)} 件）。"
+            "分けて呼んでください。",
+            {"field": "feature_ids", "max": MAX_SAMPLE_PEAK_FEATURES, "n": len(feature_ids)})
+    rt_matrix = getattr(ds, "per_sample_rt", None)
+    if rt_matrix is None:
+        return mztab_error(
+            "DATASET_BAD_REQUEST",
+            "このデータセットには per_sample_rt が無い（mzTab-M から読んだか、統合などで作り直した）。"
+            "解析フォルダ（.arf）から読んだデータセットだけ使える。",
+            {"field": "per_sample_rt", "source_format": getattr(ds, "source_format", None)})
+    row_of = {fid: i for i, fid in enumerate(ds.feature_ids)}
+    wanted = list(dict.fromkeys(str(f) for f in feature_ids))
+    unknown = [f for f in wanted if f not in row_of]
+    if unknown:
+        return mztab_error("DATASET_BAD_REQUEST", f"データセットに無い特徴 ID: {unknown[:10]}",
+                           {"field": "feature_ids", "unknown": unknown[:50]})
+    matrix = ds.feature_matrix
+    mask = getattr(ds, "detected_mask", None)
+    mz_cells = getattr(ds, "per_sample_mz", None) or {}
+    n_samples = len(ds.sample_names)
+    n_rows = len(wanted) * n_samples
+    if output_path is None and n_rows > MAX_SAMPLE_PEAK_INLINE_ROWS:
+        per_call = max(1, MAX_SAMPLE_PEAK_INLINE_ROWS // max(1, n_samples))
+        return mztab_error(
+            "DATASET_BAD_REQUEST",
+            f"行（特徴 × 試料）が {MAX_SAMPLE_PEAK_INLINE_ROWS} を超える（{len(wanted)} 特徴 × "
+            f"{n_samples} 試料 = {n_rows} 行）。output_path を指定して全量をファイルへ書くか、"
+            f"特徴を {per_call} 件以下に分けて呼んでください（今の試料の数での 1 回の上限）。",
+            {"field": "feature_ids", "n_samples": n_samples,
+             "max_rows": MAX_SAMPLE_PEAK_INLINE_ROWS, "n_rows": n_rows,
+             "max_features_per_call": per_call})
+    rows = []
+    for fid in wanted:
+        i = row_of[fid]
+        cells = mz_cells.get(fid, {})
+        for j, sample in enumerate(ds.sample_names):
+            mz = cells.get(sample)
+            detected = bool(mask[i, j]) if mask is not None else mz is not None
+            rows.append({"feature_id": fid, "sample": sample,
+                         "rt": _peak_cell(rt_matrix[i, j]), "mz": _peak_cell(mz),
+                         "height": _peak_cell(matrix[i, j]),
+                         "detected": "true" if detected else "false"})
+    from metabolomix.arf2.reader import format_spots_as_table
+
+    table = format_spots_as_table(rows, columns=list(SAMPLE_PEAK_COLUMNS))
+    summary = {"status": "success", "n_features": len(wanted), "n_samples": n_samples,
+               "n_rows": len(rows)}
+    if output_path is None:
+        return json_payload({**summary, "rows": table})
+    try:
+        data = table.encode("utf-8")
+        atomic_write_bytes(Path(output_path), data)
+    except DomainError as exc:
+        return mztab_error(exc.code, exc.message, exc.details or None)
+    return json_payload({**summary, "output_path": str(Path(output_path).resolve()),
+                         "sha256": hashlib.sha256(data).hexdigest()})
 
 
 # ---------- 証拠の束 ----------

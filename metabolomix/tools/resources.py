@@ -1,10 +1,13 @@
 """MCP リソース（@mcp.resource ×2。静的 1・テンプレート 1）: output-format 参照
-（共通核とトピック別）。
+（共通核とトピック別）。同じ本文を読むツール `docs_read` も、リソースを読めないクライアント向けに置く。
 
 このモジュールを import すると副作用でリソースが mcp に登録される。server は
 `from metabolomix.tools import resources as tools_resources` するだけでよい。tools_* / server は import しない。
 """
+from mcp.types import ToolAnnotations
+
 from metabolomix.core import mcp_core
+from metabolomix.core.mcp_errors import mztab_error
 from metabolomix.core import session_state
 from metabolomix.core.mcp_core import mcp, OUTPUT_FORMAT_DOC
 
@@ -62,3 +65,26 @@ def output_format_section(topic: str) -> str:
     if topic == "core":
         session_state.session.output_format_seen = True
     return text
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+def docs_read(topic: str | None = None) -> str:
+    """output-format の文書（出力の意味の定義）を Markdown で返す。読み取り専用。
+
+    MCP のリソース `lipidmix://docs/output-format`（topic なし＝共通核）と
+    `lipidmix://docs/output-format/{topic}` のツール版。リソースを読めないクライアント
+    （Workflow の役など）は、こちらで同じ本文を読む。リソースと同じ文字列を返す。
+
+    topic: 省略すると共通核（行の粒度・脂質名の文法・必須の注意）。有効な topic は
+    `core`・`dataset`・`dcl`・`eic`・`identity`・`mztab`・`library`・`curation`・`pathway`・
+    `reanalysis`・`quant`。解釈する出力に合う topic を読む。知らない topic は
+    `DATASET_BAD_REQUEST` の誤りで、有効な topic の一覧を返す。
+    """
+    if topic is None:
+        return output_format_reference()
+    try:
+        mcp_core.output_format_section_path(topic)
+    except ValueError as exc:
+        return mztab_error("DATASET_BAD_REQUEST", str(exc),
+                           {"field": "topic", "valid": list(mcp_core.OUTPUT_FORMAT_SECTIONS)})
+    return output_format_section(topic)

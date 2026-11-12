@@ -54,7 +54,7 @@ import re
 from pathlib import Path
 
 from metabolomix.analysis import preprocessing
-from metabolomix.analysis.result_state import invalidate_results, metadata_fingerprints
+from metabolomix.analysis.result_state import STAT_FIELDS, invalidate_results, metadata_fingerprints
 from metabolomix.core.atomic_io import DomainError
 
 __all__ = [
@@ -122,6 +122,27 @@ def _normalize_path(value: str) -> str:
     return os.path.normcase(os.path.normpath(value))
 
 
+#: 行が帳簿として持つ鍵。因子の列名にすると行の中身と衝突して値が黙って消えるので予約する。
+_BOOKKEEPING_COLUMNS = frozenset({"provenance", "conflicts"})
+
+
+def _check_factor_columns(columns: list[str]) -> None:
+    """足した因子の列名は、空でなく、既知の列と重ならず、互いに重ならない。"""
+    known = set(FIELDS_V2) | set(OPTIONAL_FIELDS) | _BOOKKEEPING_COLUMNS
+    seen: set[str] = set()
+    for name in columns:
+        reason = ("空の列名です" if not name.strip()
+                  else "既知の列と重なります" if name in known
+                  else "列名が重複しています" if name in seen else None)
+        if reason:
+            raise DomainError(
+                "SAMPLE_MANIFEST_INVALID",
+                f"v2 の後ろに足した列 {name!r} が不正です（{reason}）。",
+                {"column": name, "known": sorted(known)},
+            )
+        seen.add(name)
+
+
 def parse_manifest(path: Path, *, source_root: Path,
                     expected_sources: list[str]) -> list[dict]:
     """sample-manifest を厳密に読み、列+provenance+conflictsの行リストを返す。
@@ -155,15 +176,21 @@ def parse_manifest(path: Path, *, source_root: Path,
     reader = csv.DictReader(lines[1:], delimiter="\t",
                             restkey=_EXTRA_KEY, restval=None)
     fieldnames = list(reader.fieldnames or [])
-    # 任意の末尾の列（`subject_id`）だけは有っても無くてもよい。それ以外の過不足・順序違いは拒む。
-    if fieldnames == list(fields) + list(OPTIONAL_FIELDS):
-        fields = fields + OPTIONAL_FIELDS
-    elif fieldnames != list(fields):
+    # 見出しは「既知の列（＋任意の `subject_id`）」で始まることを求め、その後ろだけを因子の列として受ける
+    # （v2 のみ。v1 は従来どおり過不足を拒む）。
+    known = list(fields)
+    optional_present = fieldnames[len(known):len(known) + 1] == list(OPTIONAL_FIELDS)
+    if optional_present:
+        known += list(OPTIONAL_FIELDS)
+    factor_columns = fieldnames[len(known):]
+    if fieldnames[:len(known)] != known or (factor_columns and fields is not FIELDS_V2):
         raise DomainError(
             "SAMPLE_MANIFEST_INVALID",
             "列見出しが仕様と一致しません（過不足または順序違い）。",
             {"expected": list(fields), "optional": list(OPTIONAL_FIELDS), "found": fieldnames},
         )
+    _check_factor_columns(factor_columns)
+    fields = tuple(known) + tuple(factor_columns)
 
     # 予定raw（相対パス）を正規化して索引化。全件へ1行ずつ来ることを後で照合する。
     expected_by_norm: dict[str, str] = {}
@@ -271,6 +298,8 @@ def parse_manifest(path: Path, *, source_root: Path,
         }
         if "subject_id" in fields:
             values["subject_id"] = raw_row["subject_id"] or None
+        for column in factor_columns:
+            values[column] = raw_row[column] or None   # 因子の列はそのまま（空は欠落）
         if "biological_sample_id" in fields:
             # 空欄は「生物学的独立性が未確認」（spec §7）。ここでは欠落として
             # 通す——
@@ -596,6 +625,12 @@ def _validate_rows(rows: list[dict], sample_names: list[str]) -> None:
         seen_ids.add(sample_id)
 
 
+def _factor_columns_of(rows: list[dict]) -> set[str]:
+    """行が持つ、v2 の既知の列でも帳簿の欄でもない列（足した因子の列）。"""
+    known = set(FIELDS_V2) | set(OPTIONAL_FIELDS) | _BOOKKEEPING_COLUMNS
+    return {k for row in rows for k in row if isinstance(k, str) and k not in known}
+
+
 def apply_metadata(ds, rows: list[dict]) -> dict:
     """厳密検証してから一括反映する（部分適用なし）。
 
@@ -613,6 +648,7 @@ def apply_metadata(ds, rows: list[dict]) -> dict:
         # 初回適用は「全列が確定した」ことそのものが前処理入力の変化にあたる。
         changed = {field for field in FIELDS_V2 + OPTIONAL_FIELDS
                    if field in FIELDS or any(field in row for row in rows)}
+        changed |= _factor_columns_of(rows)
     else:
         before = metadata_fingerprints(old_rows)
         after = metadata_fingerprints(rows)
@@ -622,9 +658,14 @@ def apply_metadata(ds, rows: list[dict]) -> dict:
         # 欠落＝同値なので、v1経路の changed_fields は従来どおり）。
         changed = {field for field in FIELDS_V2 + OPTIONAL_FIELDS
                    if before.get(field) != after.get(field)}
+        # 足した因子の列も指紋で比べる（design.factors が読むので、値の変更は変化に数える）。
+        changed |= {field for field in _factor_columns_of(old_rows + rows)
+                    if before.get(field) != after.get(field)}
 
     # ここまでの検証が全部通ってから、まとめて反映する（半端な適用を作らない）。
-    invalidate_results(ds, changed)
+    # 因子の列は設計（design.factors）の入力なので、群と同じく差次的解析を古くする。
+    invalidate_results(ds, changed | (STAT_FIELDS if changed & _factor_columns_of(rows + old_rows)
+                                      else set()))
     ds.sample_metadata_rows = rows
     ds.sample_ids = [row["sample_id"] for row in rows]
     if changed:   # 何も変わらない再適用は版を進めない（図・分子種 PCA を無駄に古くしない）

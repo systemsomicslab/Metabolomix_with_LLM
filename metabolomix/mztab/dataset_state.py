@@ -171,6 +171,11 @@ class DatasetState:
         # （検出マスクと違い入力ではなく付随の証拠。`result_state.dataset_fingerprint`）。
         # 取り込めなかった場合は None（空の辞書と混同させない）。
         self.per_sample_mz: dict[str, dict[str, float]] | None = None
+        # per_sample_rt: 試料ごとのピークの RT（分）の (n_features, n_samples) float 行列
+        # （feature_matrix と同じ並び。gap-fill のセルも .arf の値。セルが無ければ NaN）。
+        # 解析フォルダ（.arf）から読んだデータセットだけが持つ。`dataset_sample_peaks` の材料。
+        # 指紋には入れない。mzTab-M の経路は None（値が無い。0 行列と混同させない）。
+        self.per_sample_rt: np.ndarray | None = None
 
         # --- ジョブ由来フィールド（load_dataset(job_path=...) で設定） ---
         # job_path: analysis-job.json の絶対パス。mzTab-M を直接指定した場合は None。

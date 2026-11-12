@@ -38,7 +38,7 @@ from metabolomix.core import user_config
 # 順位）が同定の実体になる。種別は MS-DIAL のファイル形式からは決まらない
 # （同じ .arf / .mzTab に両方が出る）ので、確定するまではどちらの規則も当てない。
 SEMANTICS_CAVEAT = (
-    "[意味論] 解釈前に lipidmix://docs/output-format を参照。要点:\n"
+    "[意味論] 解釈前に lipidmix://docs/output-format（リソースを読めなければ docs_read()）を参照。要点:\n"
     "- 粒度: データセットの 1 行 = 特徴×試料（特徴＝アラインメントスポット）。"
     "名前・m/z・RT は特徴ごとに 1 つで、試料別の値ではない。\n"
     "- detected_mask が False のセルは gap-fill（補間値）で、実測のピークではない。"

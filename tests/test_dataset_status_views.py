@@ -151,3 +151,36 @@ def test_unknown_view_is_refused_and_missing_state_still_wins():
     bad = _status(view="nope")
     assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
     assert _status(view="summary", query="x")["error"]["code"] == "DATASET_BAD_REQUEST"
+
+
+def test_samples_view_appends_factor_columns_in_name_order():
+    ds = _dataset({SAMPLES[0]: "control"})
+    rows = sample_manifest.resolve_metadata(ds, None)
+    for i, row in enumerate(rows):
+        row["Treatment"] = "ILG" if i % 2 else "ctrl"
+        if i != 3:   # 一部の行は因子の値を持たない（空欄）
+            row["Genotype"] = "WT" if i < 2 else "KO"
+    sample_manifest.apply_metadata(ds, rows)
+    session_state.session.dataset = ds
+
+    status = _status(view="samples")
+
+    lines = status["samples"].splitlines()
+    assert lines[0] == ("name\tgroup\trole\tbatch\tinjection_order\tsubject_id\texcluded"
+                        "\tGenotype\tTreatment")
+    by_name = {line.split("\t")[0]: line.split("\t") for line in lines[1:]}
+    assert by_name[SAMPLES[0]][7:] == ["WT", "ctrl"]
+    assert by_name[SAMPLES[2]][7:] == ["KO", "ctrl"]
+    assert by_name[SAMPLES[3]][7:] == ["", "ILG"]
+    assert all(len(cells) == 9 for cells in by_name.values())
+
+
+def test_samples_view_without_factor_columns_is_unchanged():
+    ds = _dataset({SAMPLES[0]: "control"})
+    rows = sample_manifest.resolve_metadata(ds, None)
+    sample_manifest.apply_metadata(ds, rows)
+    session_state.session.dataset = ds
+
+    lines = _status(view="samples")["samples"].splitlines()
+    assert lines[0] == "name\tgroup\trole\tbatch\tinjection_order\tsubject_id\texcluded"
+    assert all(len(line.split("\t")) == 7 for line in lines)

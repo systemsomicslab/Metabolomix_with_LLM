@@ -47,7 +47,7 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
     "reanalysis.md": ("dataset_analysis_run", "library_msms_qualify", "dataset_homolog_check",
                       "dataset_feature_relations", "dataset_claim_evidence",
                       "dataset_mass_accuracy", "dataset_novel_candidates",
-                      "dataset_alignment_qc"),
+                      "dataset_alignment_qc", "dataset_sample_peaks"),
     "quant.md": ("dataset_quant_preview", "dataset_quant_apply", "dataset_merge_polarities",
                  "dataset_select_features"),
 }
@@ -57,6 +57,8 @@ OUT_OF_SCOPE: tuple[str, ...] = (
     "record_objective", "write_report", "read_report",
     # サーバ自身の保守（解析の流れには現れない）
     "server_update",
+    # output-format の文書をツールで読む（リソースと同じ本文。解析のツールではない）
+    "docs_read",
 )
 
 
@@ -176,4 +178,4 @@ class TestScopeBoundary(unittest.TestCase):
             registered,
             "対象範囲の分類と登録済みツールが一致しない",
         )
-        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 50)
+        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 51)

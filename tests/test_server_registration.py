@@ -78,6 +78,7 @@ EXPECTED_TOOLS = sorted([
     "dataset_mass_accuracy",
     "dataset_homolog_check",
     "dataset_novel_candidates",
+    "dataset_sample_peaks",
     "dcl_spot_spectrum",
     "dcl_diagnostic_ions",
     "dcl_find_msms",
@@ -101,6 +102,7 @@ EXPECTED_TOOLS = sorted([
     "console_method_candidates",
     "console_method_template",
     "server_update",
+    "docs_read",
 ])
 
 EXPECTED_RESOURCES = sorted([

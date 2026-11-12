@@ -207,6 +207,7 @@ def _excluded_cell(ds, name: str, row: dict) -> str:
 
 def _samples_view(ds, query: str | None) -> str:
     """試料の TSV。`query` は因子トークン（`msdial/sample_factors.py` の文法。旧 ARF 経路の試料検索と同じ）。"""
+    from metabolomix.analysis import sample_manifest
     from metabolomix.msdial import sample_factors
 
     names = list(ds.sample_names)
@@ -230,14 +231,18 @@ def _samples_view(ds, query: str | None) -> str:
         hit = {name for found in matches.values() for name in found}
         selected = [name for name in names if name in hit]
 
-    lines = ["name\tgroup\trole\tbatch\tinjection_order\tsubject_id\texcluded"]
+    # 足した因子の列（sample_manifest の因子の列。名前の順）を後ろに並べる。無ければ列を足さない。
+    factor_columns = sorted(sample_manifest._factor_columns_of(rows))
+    lines = ["\t".join(["name", "group", "role", "batch", "injection_order", "subject_id",
+                       "excluded", *map(_tsv_cell, factor_columns)])]
     for name in selected:
         row = by_name[name]
         subject = (ds.sample_meta.get(name) or {}).get("subject_id", row.get("subject_id"))
         lines.append("\t".join([
             _tsv_cell(name), _tsv_cell(row.get("group")), _tsv_cell(row.get("role")),
             _tsv_cell(row.get("batch")), _tsv_cell(row.get("injection_order")),
-            _tsv_cell(subject), _excluded_cell(ds, name, row)]))
+            _tsv_cell(subject), _excluded_cell(ds, name, row),
+            *(_tsv_cell(row.get(column)) for column in factor_columns)]))
     return json_payload({"view": "samples", "query": query, "n_total": len(names),
                          "n_matched": len(selected), "samples": "\n".join(lines)})
 

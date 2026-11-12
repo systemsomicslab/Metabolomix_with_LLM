@@ -316,3 +316,41 @@ class ListDataFilesEntryTraceTests(unittest.TestCase):
         self.assertIn("Height_AlignmentResult_1.mzTab", listed)
         self.assertIn("analysis-job.json", listed)
         self.assertNotIn("s1.wiff", listed)
+
+
+# ---------- library_names=False（ライブラリのファイル名を戻り値に出さない） ----------
+
+_LIB_NAME = "Zebra_SecretLab_Loaded.msp2.dbs"
+
+
+def _folder_with_library(path):
+    folder = _folder(path)
+    write_dbs(folder / _LIB_NAME, [("lib", [record(mz=500.0, ion_mode=0)], ["k"])])
+    return folder
+
+
+def test_default_still_shows_names(tmp_path, fresh_state, monkeypatch):
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
+    out = _load(directory=str(_folder_with_library(tmp_path / "gui")))
+    assert out["library"]["file"] == _LIB_NAME
+    assert out["library_record"]["file"] == _LIB_NAME
+    assert _LIB_NAME in json.dumps(out, ensure_ascii=False)
+
+
+def test_load_dataset_hides_library_file_names(tmp_path, fresh_state, monkeypatch):
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
+    raw = handle_tools.load_dataset(directory=str(_folder_with_library(tmp_path / "gui")),
+                                    library_names=False)
+    out = json.loads(raw)
+    assert out["status"] == "success"
+    assert _LIB_NAME not in raw and "Zebra" not in raw and "SecretLab" not in raw
+    assert out["library"]["sha256"] and out["library"]["record_count"] == 1
+    assert "file" not in out["library"] and "file" not in out["library_record"]
+    assert out["library_record"]["sha256"] and out["library_record"]["status"] == "known"
+    assert out["library_record"]["kind"] == "dbs"
+
+
+def test_load_dataset_rejects_non_bool_library_names(tmp_path, fresh_state):
+    out = json.loads(handle_tools.load_dataset(directory=str(_folder(tmp_path / "a")),
+                                               library_names="no"))
+    assert out["error"]["code"] == "DATASET_BAD_REQUEST"

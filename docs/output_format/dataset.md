@@ -15,6 +15,9 @@
   ピークではなく MS-DIAL が埋めた補間値（`.arf` の `IsGapFilled` / 負の `MasterPeakID`）。検出数・存在判定・
   検出率には `detected_mask` を使い、非ゼロかどうかで数えない。解析フォルダのデータセットでは検出の印は
   読んだ `.arf` そのものが持つので、常に付く。
+- **試料ごとのピークの RT**。解析フォルダのデータセットは、特徴 × 試料の RT（`per_sample_rt`）も持つ。
+  `dataset_sample_peaks(feature_ids)` が `rt` `mz` `height` `detected` を行にして返す（gap-fill の `rt` は
+  検出の位置ではない）。mzTab-M で読んだデータセットには無い。意味は `reanalysis` トピック §6.1。
 - **`.arf2` は特徴の代表**（スポット代表カタログ）。`Name` `Ontology` `Formula` `InChIKey` `AdductType` と、
   試料間の統計（`HeightAverage` `FillPercentage` `SignalToNoise*` など）を持つが、試料別の強度は持たない。
   `.arf` の `Name` と食い違うことがあり、代表の注釈は `.arf2` を優先する（`feature_metadata`）。
@@ -25,6 +28,9 @@
 - **試料の役割と群**。試料は `sample` / `qc` / `blank` の役割と群（Class ID）・バッチ・注入順を持つ
   （`dataset_status` の `samples`）。ブランクは前処理で行列から外れ、QC は残る。QC・ブランクは 2 群比較に入らない。
   `dataset_exclude` で除いた試料・特徴は前処理と図と強度順の検索が除く（可逆）。
+  実験情報シートに足した因子の列（`Genotype` など）があれば、`dataset_status(view="samples")` の TSV は
+  固定の列（`name group role batch injection_order subject_id excluded`）の後ろに、その列を名前の順に並べる
+  （値を持たない試料は空欄。因子の列が無いデータセットでは列は増えない）。
 - **MS/MS の実スペクトルは `.dcl`**（`dcl` トピック）。`.arf` のセルの MS/MS の有無は取得の参照があることだけを示す。
 - **最初の概観**。`load_dataset` の `overview` と `dataset_overview` は品質 → 全体 → クラス → 分子種の 4 段の事実（ID つき）。
   2 群の向きは仮、クラスの段は付加体の選別の後だけ。意味は §11.9。

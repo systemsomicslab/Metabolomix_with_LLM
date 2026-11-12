@@ -399,6 +399,10 @@ def launch_pipeline_worker(path: Path) -> dict:
     `sys.executable`で起動し、cwdは`_REPO_ROOT`へ固定する。本番workerは試験専用の
     環境変数・任意import名を一切受け付けない（引数は`--pipeline`のみ）。
     stdout/stderrは`launch_detached`がログファイルへ結ぶ。
+
+    `launch_detached`はworkerをすぐ終わる中継のプロセスから起こす。workerの親が残らない
+    ので、MCPサーバがプロセスの木ごと消されてもworkerとConsoleは残る（Jobがbreakawayを
+    許さない環境では、Jobごとの終了には巻き込まれる）。戻り値のpid・identityはworkerのもの。
     """
     pipeline_path = Path(path)
     command = [sys.executable, "-m", "metabolomix.pipeline.worker",

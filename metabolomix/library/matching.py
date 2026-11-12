@@ -17,12 +17,17 @@ RANK_KEY = "total_score"
 
 def score_candidates(store, *, precursor_mz: float, rt: float | None, ion_mode: str | None,
                      measured: list, mz_tol: float | None = None, ms2_tol: float | None = None,
-                     rt_tol: float | None = None, match_fn=None) -> dict:
+                     rt_tol: float | None = None, mz_tol_ppm: float | None = None,
+                     match_fn=None) -> dict:
     """候補を引いて採点し、総合スコアの降順（同点は候補順）に並べる。
 
     戻り値: `status`（`success` / `no_candidates`）、`query`（解決した許容幅と採点の前処理）、
     `scoring`（総合スコアの組み立て）、`scored`（`(record, result)` の list。全候補）、
     `unscored_mz`（足切りで採点から外れた測定ピーク）、`n_candidates`。
+
+    `mz_tol_ppm`（任意）は Da の窓（`mz_tol`）の**上に重ねる追加の絞り込み**で、窓を広げない:
+    参照との差が ±`mz_tol_ppm` ppm（`(測定 - 参照) / 参照 * 1e6`）を超える候補を落とす。
+    省略時は何も絞らない（既定の Da の窓は MS-DIAL に合わせてあり、変えない）。
 
     `match_fn` は採点の関数（既定 `spectral_match.match_spectrum`）。`library_match_feature` は
     自分の module の名前を渡す（既存のテストがそこを差し替えて順位付けを確かめている）。
@@ -39,7 +44,8 @@ def score_candidates(store, *, precursor_mz: float, rt: float | None, ion_mode: 
     use_rt_scoring = bool(search_params.get("use_time_for_annotation_scoring", False))
     query = {
         "precursor_mz": precursor_mz, "rt": rt, "ion_mode": ion_mode,
-        "mz_tol": resolved_mz_tol, "ms2_tol": resolved_ms2_tol, "rt_tol": resolved_rt_tol,
+        "mz_tol": resolved_mz_tol, "mz_tol_ppm": mz_tol_ppm,
+        "ms2_tol": resolved_ms2_tol, "rt_tol": resolved_rt_tol,
         "mass_begin": mass_begin, "mass_end": mass_end,
         "relative_amp_cutoff": relative_amp_cutoff, "absolute_amp_cutoff": absolute_amp_cutoff,
     }
@@ -52,6 +58,12 @@ def score_candidates(store, *, precursor_mz: float, rt: float | None, ion_mode: 
     }
     candidates = store.candidates(precursor_mz, mz_tol=resolved_mz_tol, ion_mode=ion_mode,
                                   rt=rt, rt_tol=resolved_rt_tol)
+    if mz_tol_ppm is not None:
+        # 参照の前駆体が 0 の候補は ppm を出せないので絞り込みの対象外（残す）。
+        candidates = [r for r in candidates
+                      if not r["precursor_mz"]
+                      or abs(precursor_mz - r["precursor_mz"]) / r["precursor_mz"] * 1e6
+                      <= mz_tol_ppm]
     out = {"query": query, "scoring": scoring, "scored": [], "unscored_mz": [],
            "n_candidates": len(candidates)}
     if not candidates:

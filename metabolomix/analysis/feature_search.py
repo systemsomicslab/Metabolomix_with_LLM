@@ -1156,6 +1156,7 @@ def merged_dataset(ds, groups) -> tuple[object, dict[str, list[str]]]:
     view.feature_matrix = merged.matrix.T
     view.feature_ids = list(merged.feature_ids)
     view.detected_mask = None if merged.detected is None else merged.detected.T
+    view.per_sample_rt = None  # 列の数が変わるので、試料ごとの RT の行列は持ち越さない
     return view, merged.merged_from
 
 

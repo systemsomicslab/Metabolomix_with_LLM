@@ -473,7 +473,7 @@ def dataset_plot(
     pcs: list[int] | None = None,
     top_n: int | None = None,
     value: str | None = None,
-    feature_id: str | None = None,
+    feature_id: str | int | None = None,
     file_ids: list[int] | None = None,
     file_id: int | None = None,
     names: list[str] | None = None,
@@ -540,6 +540,8 @@ def dataset_plot(
 
     作った図の記録は `ds.figures[kind]` に置き（kind ごとに最後の 1 つ）、`save_figure(kind=...)` が描く。
     """
+    if feature_id is not None:
+        feature_id = str(feature_id)  # MCP クライアントは数字だけの ID を整数で送ることがある
     request = _Request(
         result_id=result_id, contrast_id=contrast_id, title=title, color_by=color_by, pcs=pcs, top_n=top_n, value=value,
         feature_id=feature_id, file_ids=file_ids, file_id=file_id, names=names, ontologies=ontologies,

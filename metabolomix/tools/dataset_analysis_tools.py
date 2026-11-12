@@ -163,6 +163,9 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     そのまま再送してよい。
 
     任意の列 `subject_id`（見出しの末尾に足す。反復測定の被験者）も読み、`sample_meta` に持つ。
+    v2 のシートは、既知の列（と任意の `subject_id`）の後ろに因子の列（`Genotype`・`Treatment` など）を足せる。
+    列名は空でなく、既知の列・足した列どうしと重ならないこと（重なれば `SAMPLE_MANIFEST_INVALID`）。値はそのまま
+    試料の表に載り、analysis-spec v2 の `design.factors`・`covariates` が列名で引く。
     統計エンジンはこれを使う: `dataset_preprocess`（`collapse_replicates=True` が既定）が同じ個体の反復注入を
     1 個体にまとめる鍵で、`dataset_compare(block="subject_id")` が同じ個体を対応づける鍵。列が無いシートは
     今までどおり（反復をまとめず、注入が単位）。
@@ -328,7 +331,7 @@ def _rule_targets(normalized: list[dict]) -> list[dict]:
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def dataset_feature_search(
-    feature_ids: list[str] | None = None,
+    feature_ids: list[str | int] | None = None,
     min_mz: float | None = None,
     max_mz: float | None = None,
     min_rt: float | None = None,
@@ -450,6 +453,8 @@ def dataset_feature_search(
                            "sort は窓検索（targets なし）のときだけ使える（目標照合は規則の順で"
                            "並ぶ。効かない設定を渡さない）。", {"field": "sort"})
 
+    if feature_ids is not None:
+        feature_ids = [str(f) for f in feature_ids]  # 整数で来ても文字列にそろえる
     window = {"feature_ids": feature_ids, "min_mz": min_mz, "max_mz": max_mz,
               "min_rt": min_rt, "max_rt": max_rt}
     given_window = [name for name, value in window.items() if value is not None]

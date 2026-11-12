@@ -149,6 +149,12 @@
 `lbm_also` でも印は付かない（付かないことは「LBM 由来でない」の証拠ではない）。記憶が `lbm_only` のまま別のライブラリを明示して開いたときは、同定に使った
 ものではない旨が `note` に付く。
 
+**`library_names=False` のとき**: 戻り値の JSON にライブラリのファイル名が出ない。最上位の `file` と
+`candidates` の欄が無く、`differs_from_record` は `{"differs": true}`（`remembered` / `opened` の名前は出ず、
+違うという事実だけ）、注記・誤りの文言に混じっていた名前は `(ライブラリ名は伏せた)` に置き換わる。sha256・
+`record_count`・`status`・`code` は変わらない。`library_names` は `load_dataset` の戻り値の `library` /
+`library_record` でも同じ意味（[reanalysis.md](reanalysis.md) §1 の `load_dataset` の表）。
+
 **エラー戻り値**: ライブラリを 1 つに決められないときは `{"status": "error", "code": ..., "message": ..., "details": ...}`
 を返し、store は差し替えない。`code` は `LIBRARY_NOT_REMEMBERED`（`file_path` を省いたが、データセットが同定に使ったライブラリを
 覚えていない）/ `LIBRARY_RECORD_MISMATCH` / `LIBRARY_RECORD_LBM_ONLY` / `LIBRARY_NOT_FOUND`（明示した
@@ -170,6 +176,15 @@ store のスキーマは `precursor_mz REAL NOT NULL`。公開 `.msp`（MassBank
 しない）。0 件より多いときは `library_load` の `note` にも件数が出る。
 
 ### 14.6 `library_match_feature`
+
+**候補ごとの質量誤差と ppm の窓（A6・A8）**: `candidates_table` の各行に
+`delta_mz`（= 測定 − 参照、Da、符号付き）と `delta_ppm`（= `(測定 − 参照) / 参照 * 1e6`、
+測定が参照より高いと正）が付く。`precursor_mz` 列は**参照**レコードの前駆体で、6 桁で出す
+（arf2 の表の既定は 4 桁だが、候補の表では使わない）。既定の窓 0.01 Da は MS-DIAL に合わせた
+もので変えていない——低い m/z では数十 ppm に当たり、+44 ppm の候補も残るので、受け入れる前に
+`delta_ppm` を見ること。`mz_tol_ppm`（任意）は Da の窓に**重ねる追加の絞り込み**で、窓を広げない:
+`|delta_ppm|` がこれを超える候補を落とす（`mz_tol_ppm=10` で +44 ppm の候補は落ちる）。
+`query.mz_tol_ppm` に指定値（省略時 `null`）が残る。
 
 照合対象は `precursor_mz` か `spot_id` のどちらか一方で指定する。
 

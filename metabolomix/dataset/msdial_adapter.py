@@ -285,6 +285,8 @@ def _build_dataset(selection: AlignmentSelection, scan: evidence.ArfScan, measur
     ds.feature_matrix = matrix
     ds.detected_mask = detected
     ds.per_sample_mz = per_sample_mz
+    # 試料ごとのピークの RT（特徴 × 試料の float 行列。セル 8 バイト）。dict にしない。
+    ds.per_sample_rt = scan.per_sample_rt
     ds.feature_metadata = metadata
     _fill_summaries(ds, selection, detected, metadata)
     _load_tags(ds, selection, fields)

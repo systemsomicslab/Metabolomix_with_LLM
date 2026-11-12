@@ -500,3 +500,41 @@ def test_save_figure_twice_overwrites_and_succeeds(tmp_path):
     second = reports.save_figure("loadings", "twice")
     assert str(png) in second and "保存" in second
     assert png.read_bytes()[:4] == PNG_MAGIC and svg.read_bytes() != b"old"
+
+
+# ---------- feature_id の型（整数でも文字列でも同じ特徴に当たる） ----------
+
+def _call_through_server(name: str, arguments: dict):
+    """FastMCP の層（pydantic の引数検証）を通してツールを呼ぶ。"""
+    import asyncio
+
+    import server
+
+    return asyncio.run(server.mcp.call_tool(name, arguments))
+
+
+def _content_text(result) -> str:
+    content = result[0] if isinstance(result, tuple) else result
+    return "".join(c.text for c in content if getattr(c, "type", "") == "text")
+
+
+def test_numeric_feature_id_is_accepted_as_int_or_str_through_fastmcp(tmp_path):
+    handle = _folder_handle(tmp_path)
+    got = {}
+    for label, fid in (("int", 1), ("str", "1")):
+        out = _call_through_server("dataset_plot", {
+            "kind": "eic", "feature_id": fid, "output": "payload",
+            "dataset_handle": handle.handle_id})
+        got[label] = json.loads(_content_text(out))
+    assert got["int"]["spot"]["spot_id"] == 1
+    assert got["int"] == got["str"]
+
+
+def test_feature_search_accepts_int_ids_through_fastmcp(tmp_path):
+    handle = _folder_handle(tmp_path)
+    by_type = {}
+    for label, ids in (("int", [1]), ("str", ["1"])):
+        out = _call_through_server("dataset_feature_search", {
+            "feature_ids": ids, "dataset_handle": handle.handle_id})
+        by_type[label] = json.loads(_content_text(out))
+    assert by_type["int"]["features"] == by_type["str"]["features"]

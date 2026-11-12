@@ -43,10 +43,10 @@
 - **上限。** `lipidmix.local.toml` の `[server] max_dataset_handles`（既定 8。1 未満は 1）。`load_dataset` がハンドルを 1 本使う
   （前に読んだものは閉じずに残る）。超えると `DATASET_HANDLE_LIMIT` で止め、古いハンドルを
   黙って閉じない。寿命は明示の `dataset_close` か、サーバの終了まで。
-- **受付番号。** `load_dataset` は最長 `wait_seconds`（既定 20。0〜60 秒）待ち、終わらなければ読み込みを
+- **受付番号。** `load_dataset` は最長 `wait_seconds`（既定 20。0〜30 秒）待ち、終わらなければ読み込みを
   続けたまま `{"status": "loading", "load_id": "ld_…"}` を返す。`dataset_load_status(load_id)` は読み込み中なら
   `status: "loading"`、終われば `load_dataset` の戻り値そのもの（1 時間覚える）。`wait_seconds`（既定 0）を
-  渡すと最長 60 秒まで終わりを待ってから返す。受付番号を返した後に別の
+  渡すと最長 30 秒まで終わりを待ってから返す。受付番号を返した後に別の
   ハンドルが直近になっていたら直近にせず、`current: false` が付く。上限は読み込み中の受付も 1 本と数える。
 
 `load_dataset` の戻り値:
@@ -66,6 +66,13 @@
 | `summary` | 特徴・試料の数、定量種別、検出状態、同定の内訳、出所の裏取り、読み込みの注記（行の配列） |
 | `sample_counts` | `{groups, roles, n_ungrouped}`: 群（Class ID）ごと・役割ごとの試料数と、群の宣言が無い試料の数 |
 | `next` | 次の一手の例（3 行） |
+
+**`library_names=False` のとき**（戻り値を run の記録へ保存する側が付ける）: ライブラリのファイル名が戻り値のどこにも
+出ない。`library` は `{sha256, record_count}` だけ（`file` の欄が**無い**。欠けではなく伏せた結果）、
+`library_record` は `file`・`candidates` の欄が無い（`sha256`・`status`・`kind` などは残る）、注記・概観・誤りの文言に
+混じっていたファイル名は `(ライブラリ名は伏せた)` に置き換わる。sha256・`record_count`・`status`・`kind` は
+`library_names=True` と同じ。受付番号を返す遅い読み込みでは、この選択が `dataset_load_status` の最終の戻り値に
+引き継がれる。
 
 ライブラリは**データセットが同定に使ったものの記憶**（`library_record`。[library.md](library.md)）から
 引く。実体の sha256 を測り直して `known` のままなら読み取り専用で開き、`mismatch`（内容が変わった・
@@ -211,7 +218,7 @@ hash も入れる——同じ spec でも割れの組が変われば別の規則
 |---|---|---|
 | `input` | `{"source": "dataset"}` | `source` はデータセットだけ。`exclude_samples` / `exclude_features`（空でない文字列のリスト。重複は順序を保って落とす）と `group_overrides`（試料 → 群）は**この spec に書いたものだけ**が効く（下の「自己完結」） |
 | `preprocess` | 上の値 | 前処理の設定（`dataset_preprocess` の引数と同じ。`drift.mode` は `auto` / `on` / `off`、足切りは `null` でその足切りを行わない、`normalize.method` は `auto` / `none` / `tic` / `median` / `pqn`）。`injection_columns` は個体のまとめの鍵から外す試料の表の列（取得日・注入番号など注入ごとに違う属性）。不正なら `ANALYSIS_SPEC_INVALID`（`details.field` が `preprocess.` から始まる） |
-| `design` | `{"factors": ["group"], "covariates": [], "block": null}` | `factors`（重複のない文字列。交互作用の対比は 2 因子のモデルだけ）・`covariates`（`{name, type: numeric \| categorical, reference?}`）・`block`（`"subject_id"` など） |
+| `design` | `{"factors": ["group"], "covariates": [], "block": null}` | `factors`（重複のない文字列。`group`・`batch` か、試料の表の列名。sample-manifest v2 の後ろに足した因子の列も使える。交互作用の対比は 2 因子のモデルだけ）・`covariates`（`{name, type: numeric \| categorical, reference?}`）・`block`（`"subject_id"` など） |
 | `comparisons` | 必須 | 対比のリスト。`{id, factor, reference, test, at?}`（`at` は他の因子の水準で層別）か、交互作用 `{id, kind: "interaction", factors: [2 因子], levels: {因子: [基準, 比較]}}`。`id` は英数字と `_ . -` で重複不可 |
 | `analyses[].kind` | 必須 | `compare` / `composition` / `pca`。`analysis_id` は重複不可 |
 | compare / composition | | `test`（既定 `moderated_t`。`welch` / `student` / `mannwhitney` は 1 因子・共変量なし・ブロックなしだけ）・`effect_size`（`log2_mean_difference` 既定 / `arithmetic_mean_ratio`）・`bh_population`（`matrix` 既定 / `annotated` / `reported`。`reported` は `reported_feature_ids` が要り、そのときだけ書ける）・`verdict.q`（既定 0.05）・`verdict.equivalence_fc`（既定 1.2）・`min_detected_fraction`（既定 0.5）・`allow_confounded`（既定 false。完全交絡は `STATISTIC_CONFOUNDED` で止める） |
@@ -376,6 +383,29 @@ InChIKey が一意に決まらない脂質の種は `{"lipid_species": "PC 18:3_
 - 相手の付加体は SME rank 1 の付加体。**同定の無い相手には付加体の関係は出ない**（同位体・
   源内断片だけ）。MS-DIAL のリンク（`.arf2`）は使わないので、裏付け（`strong`）は相関
   `r ≥ min_r` と同位体の強度比だけで決まる。
+
+### 6.1 試料ごとのピーク（`dataset_sample_peaks`）
+
+`dataset_sample_peaks(feature_ids, dataset_handle=None, output_path=None)`: 割れた 2 スポットが 1 つの物質か、
+RT が注入ごとにずれていくかを、試料ごとの値で見るための読み取り。行は列 `feature_id, sample, rt, mz, height,
+detected` の **TSV**（列名 1 回、`rows` の文字列。依頼の特徴の順 × データセットの試料の順）。戻り値は
+`{status, n_features, n_samples, n_rows, rows}`。数値は小数 6 桁まで、空欄が null（gap-fill の `mz`）、
+`detected` は `true` / `false`。
+
+- `rt`: その試料のピークの RT（分）。gap-fill のセルも `.arf` が持つ値（補間の位置）を返すので、
+  **`detected: false` の `rt` は検出された位置ではない**。ドリフトは `detected: true` の行だけで見る。
+- `mz`: 検出されたセルの実測 m/z。gap-fill は空欄（null）。
+- `height`: データセットの強度の行列（`feature_matrix`）の値。`measure` で選んだ `.arf` の欄で、定量
+  （`dataset_quant_apply` ほか）で値を変えたデータセットではその値。
+- `detected`: `detected_mask`（gap-fill なら false）。
+- 1 回 200 特徴まで。超過・知らない特徴 ID・空のリストは `DATASET_BAD_REQUEST`。ID は int でも str でもよい。
+- 戻り値に載せる行（特徴 × 試料）は **1,000 行まで**。超えるとき `output_path` が無ければ `DATASET_BAD_REQUEST`
+  （details: `n_samples`・`max_rows`（1000）・`n_rows`・`max_features_per_call` = floor(1000 / 試料の数)、少なくとも 1）。
+  `output_path` があれば全量の TSV（同じ列・列名 1 回）をそのファイルへ原子的に書き、戻り値は要約
+  `{status, n_features, n_samples, n_rows, output_path, sha256}`（`rows` は付かない。ほかの再解析のツールの
+  `output_path` と同じ扱い。1,000 行以下でも `output_path` を渡せば同じく要約）。
+- 解析フォルダ（`.arf`）から読んだデータセットだけ。mzTab-M で読んだデータセットは `per_sample_rt`
+  が無いので `DATASET_BAD_REQUEST`（`field: per_sample_rt`）。
 
 ## 7. 証拠の束（claim-evidence.v1）
 
@@ -557,6 +587,14 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
   - `interleaved` — ほか（試料ごとに入れ替わる）。
 - **注釈の両立**（`names_compatible`）: 同じ名前（大文字小文字を無視）、GOSLIN の種のレベルで同じ
   和組成（`PC 16:0_18:1` と `PC 34:1`）、または片方が注釈なし。名前は SME の rank 1、無ければ SML。
+  加えて、組の出力の `inchikey_match`（`feature_metadata[fid]["inchikey"]` どうしの照合）が `full`
+  （InChIKey が全体で一致）か `first_block`（先頭の 14 文字の塊 = 骨格だけが一致。立体異性体の可能性）
+  なら、名前が違っても両立とみなす（組の `names_compatible` はこの合算の真偽）。どちらかが無い・空・
+  一致しないときは `none` で、名前だけで判定する。
+- **受け持ちの数**: `n_owned` は `[a の数, b の数]` で、**gap-fill で値を補った試料の受け持ちを含む**
+  （意味は変えない）。`n_owned_detected` は、そのうちどちらかのスポットで**検出された試料**
+  だけで数えた同じ並びの数（検出状態が無い run では null）。`n_owned` が釣り合って見えても
+  `n_owned_detected` が片側 0 なら、その側は gap-fill だけで支えられている。
 - **`mergeable`** = `names_compatible` で、型が `injection_block`、または ΔRT ≤ `max_interleaved_rt_gap`
   （既定 0.15 分 = MS-DIAL のアライメントの RT 許容 0.1 分の 1.5 倍。アライメントの窓で割れたもので、
   別の異性体ではない。MTBLS6965 の陰イオンの FA 20:3 の異性体 401/402 は 0.20 分離れており、
@@ -586,7 +624,7 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
  "pairs": [{"pair_id": "P1", "features": ["1265", "1266"], "mz": [..], "rt": [..],
             "delta_rt": 0.61, "delta_ppm": 7.7, "adduct": "[M+NH4]1+",
             "names": ["CE 18:2", null], "names_compatible": true, "type": "injection_block",
-            "owner": {"<試料名>": "1265"}, "n_owned": [40, 2], "both_detected_fraction": 0.0,
+            "owner": {"<試料名>": "1265"}, "n_owned": [40, 2], "n_owned_detected": [40, 1], "inchikey_match": "none", "both_detected_fraction": 0.0,
             "block": {"spot": "1266", "injections": [1, 2]}, "mergeable": true,
             "merged": true, "merge_reason": null}],
  "groups": [{"group_id": "G1", "features": ["1265", "1266"], "pair_ids": ["P1"],

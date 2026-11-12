@@ -127,7 +127,7 @@ def estimate_state_bytes(ds) -> int:
     基のキャッシュの上限の判定だけに使う概算で、他の入れ物（同定の候補など）は数えない。
     """
     total = sum(_array_bytes(getattr(ds, name, None))
-                for name in ("feature_matrix", "detected_mask"))
+                for name in ("feature_matrix", "detected_mask", "per_sample_rt"))
     total += _stat_matrix_bytes(ds)
     per_sample_mz = getattr(ds, "per_sample_mz", None) or {}
     total += sum(len(cells) for cells in per_sample_mz.values()) * _BYTES_PER_MZ_CELL
