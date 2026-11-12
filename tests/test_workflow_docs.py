@@ -57,6 +57,8 @@ OUT_OF_SCOPE: tuple[str, ...] = (
     "record_objective", "write_report", "read_report",
     # サーバ自身の保守（解析の流れには現れない）
     "server_update",
+    # output-format の文書をツールで読む（リソースと同じ本文。解析のツールではない）
+    "docs_read",
 )
 
 

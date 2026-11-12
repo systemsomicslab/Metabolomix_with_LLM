@@ -122,7 +122,8 @@ agents, the spec-driven matrix/statistics tools, MS/MS pass/fail rules and the
 claim evidence bundle), or `quant` (internal-standard normalization, polarity
 merge and feature selection: `dataset_quant_*`, `dataset_merge_polarities`,
 `dataset_select_features` - the gap-fill mark in `detected_mask`, units,
-`needs_input` envelopes, records). `load_dataset` carries a short semantics digest in its
+`needs_input` envelopes, records). A client that cannot read MCP resources calls
+`docs_read(topic=...)` instead (no topic = the core; same text). `load_dataset` carries a short semantics digest in its
 `caveat` field until you have fetched the core; fetch the topic before
 interpreting the matching tool's output.
 

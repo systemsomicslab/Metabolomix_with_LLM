@@ -102,6 +102,7 @@ EXPECTED_TOOLS = sorted([
     "console_method_candidates",
     "console_method_template",
     "server_update",
+    "docs_read",
 ])
 
 EXPECTED_RESOURCES = sorted([
