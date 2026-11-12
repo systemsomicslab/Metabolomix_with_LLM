@@ -12,6 +12,7 @@ analysis.spectral_match / plots.{mirror,render} / dcl.reader / arf2.reader
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 from pathlib import Path
 
@@ -59,6 +60,13 @@ _CANDIDATE_TABLE_COLUMNS = [
 ]
 #: `detail=True` のときだけ末尾に足す列（既存の列の並びは変えない）。
 _DETAIL_COLUMNS = ["inchikey", "fragment_matches_excl_precursor"]
+
+
+def _delta_cells(query_mz: float, ref_mz: float) -> tuple[str, str]:
+    """候補の行の `delta_mz`（Da）と `delta_ppm`。参照が 0 のとき ppm は空（割れない）。"""
+    delta = query_mz - ref_mz
+    ppm = f"{delta / ref_mz * 1e6:+.2f}" if ref_mz else ""
+    return f"{delta:+.6f}", ppm
 
 
 def _not_remembered(record: dict | None) -> dict:
@@ -549,6 +557,13 @@ def library_match_feature(
             "library_store", ["library_load"],
             "先に library_load を実行してください（参照ライブラリが読み込まれていません）。",
         )
+    if mz_tol_ppm is not None and (
+            isinstance(mz_tol_ppm, bool) or not isinstance(mz_tol_ppm, (int, float))
+            or not math.isfinite(mz_tol_ppm) or mz_tol_ppm <= 0):
+        return json_payload({
+            "status": "invalid_arguments",
+            "message": "mz_tol_ppm は 0 より大きい有限の数で指定してください（省略可）。",
+        })
     if (precursor_mz is None) == (spot_id is None):
         return json_payload({
             "status": "invalid_arguments",
@@ -658,8 +673,8 @@ def library_match_feature(
             "rank": i + 1,
             "name": record["name"],
             "precursor_mz": f"{record['precursor_mz']:.6f}",
-            "delta_mz": f"{precursor_mz - record['precursor_mz']:+.6f}",
-            "delta_ppm": f"{(precursor_mz - record['precursor_mz']) / record['precursor_mz'] * 1e6:+.2f}",
+            "delta_mz": _delta_cells(precursor_mz, record["precursor_mz"])[0],
+            "delta_ppm": _delta_cells(precursor_mz, record["precursor_mz"])[1],
             "ion_mode": record["ion_mode"],
             "adduct": record["adduct"],
             "rt": record["rt"],

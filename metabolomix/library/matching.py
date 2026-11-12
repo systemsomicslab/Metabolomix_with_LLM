@@ -44,7 +44,8 @@ def score_candidates(store, *, precursor_mz: float, rt: float | None, ion_mode: 
     use_rt_scoring = bool(search_params.get("use_time_for_annotation_scoring", False))
     query = {
         "precursor_mz": precursor_mz, "rt": rt, "ion_mode": ion_mode,
-        "mz_tol": resolved_mz_tol, "mz_tol_ppm": mz_tol_ppm, "ms2_tol": resolved_ms2_tol, "rt_tol": resolved_rt_tol,
+        "mz_tol": resolved_mz_tol, "mz_tol_ppm": mz_tol_ppm,
+        "ms2_tol": resolved_ms2_tol, "rt_tol": resolved_rt_tol,
         "mass_begin": mass_begin, "mass_end": mass_end,
         "relative_amp_cutoff": relative_amp_cutoff, "absolute_amp_cutoff": absolute_amp_cutoff,
     }
@@ -58,8 +59,10 @@ def score_candidates(store, *, precursor_mz: float, rt: float | None, ion_mode: 
     candidates = store.candidates(precursor_mz, mz_tol=resolved_mz_tol, ion_mode=ion_mode,
                                   rt=rt, rt_tol=resolved_rt_tol)
     if mz_tol_ppm is not None:
+        # 参照の前駆体が 0 の候補は ppm を出せないので絞り込みの対象外（残す）。
         candidates = [r for r in candidates
-                      if abs(precursor_mz - r["precursor_mz"]) / r["precursor_mz"] * 1e6
+                      if not r["precursor_mz"]
+                      or abs(precursor_mz - r["precursor_mz"]) / r["precursor_mz"] * 1e6
                       <= mz_tol_ppm]
     out = {"query": query, "scoring": scoring, "scored": [], "unscored_mz": [],
            "n_candidates": len(candidates)}

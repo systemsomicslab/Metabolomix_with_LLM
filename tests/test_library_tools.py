@@ -543,3 +543,41 @@ def test_default_window_unchanged(fresh_session, monkeypatch):
     payload = _match_off_by_44_ppm(monkeypatch)
     assert payload["query"]["mz_tol"] == pytest.approx(0.01)
     assert payload["query"]["mz_tol_ppm"] is None
+
+
+@pytest.mark.parametrize("bad", [0, -5, float("nan"), float("inf"), True, "10"])
+def test_invalid_mz_tol_ppm_is_a_bad_request(fresh_session, monkeypatch, bad):
+    payload = _match_off_by_44_ppm(monkeypatch, mz_tol_ppm=bad)
+    assert payload["status"] == "invalid_arguments"
+    assert "mz_tol_ppm" in payload["message"]
+
+
+def test_query_below_reference_has_negative_signs(fresh_session, monkeypatch):
+    tools.library_load(**_LIB)
+    monkeypatch.setattr(tools, "_measured_spectrum",
+                        lambda *a, **k: [[87.0441, 999.0], [69.0335, 500.0]])
+    payload = json.loads(tools.library_match_feature(
+        104.0660, dcl_file=_DCL, ion_mode="positive"))
+    row = _table_rows(payload)[0]
+    assert row["delta_mz"] == "-0.004600"
+    assert row["delta_ppm"] == "-44.20"
+
+
+def test_zero_reference_precursor_gives_empty_ppm_and_is_not_filtered():
+    assert tools._delta_cells(104.0, 0.0) == ("+104.000000", "")
+    from metabolomix.library import matching
+
+    class _Store:
+        def summary(self):
+            return {}
+
+        def candidates(self, *a, **k):
+            return [{"precursor_mz": 0.0, "spectrum": []}]
+
+    result = matching.score_candidates(
+        _Store(), precursor_mz=104.0, rt=None, ion_mode=None, measured=[],
+        mz_tol_ppm=10, match_fn=lambda *a, **k: {
+            "total_score": 0.0, "alignment": [], "simple_dot_product": 0.0,
+            "weighted_dot_product": 0.0, "reverse_dot_product": 0.0,
+            "matched_peaks_percentage": 0.0, "matched_peaks_count": 0})
+    assert result["n_candidates"] == 1
