@@ -12,7 +12,7 @@ sha256 だけを出し、パスは出さない。
 
 読み込みは受付（`core.pending_loads`）のスレッドで回す。`wait_seconds` の中で終われば戻り値を
 そのまま返し、終わらなければ受付番号（`ld_…`）を返して `dataset_load_status` で引かせる
-（デスクトップアプリの中継が約 80 秒で呼び出しを打ち切るため）。本体は `_load_now`。
+（デスクトップアプリの中継が 36〜60 秒ほどで呼び出しを打ち切るため）。本体は `_load_now`。
 """
 from __future__ import annotations
 
@@ -202,12 +202,12 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         再解析のエージェント向け。後から `dataset_overview` で出せる）。bool 以外は `DATASET_BAD_REQUEST`。
         概観が失敗しても読み込みは成功し、`overview` に `status:"unavailable"` と理由が載る。
 
-    wait_seconds: 読み込みを待つ秒数（既定 20。0 以上 60 以下。それ以外は `DATASET_BAD_REQUEST`）。
+    wait_seconds: 読み込みを待つ秒数（既定 20。0 以上 30 以下。それ以外は `DATASET_BAD_REQUEST`）。
         この中で終われば下の戻り値をそのまま返す。終わらなければ読み込みは続け、受付番号を
         `{"status": "loading", "load_id": "ld_…", "next": "dataset_load_status(load_id=…)"}` で返す。
         `dataset_load_status(load_id)` を呼ぶと、読み込み中は `status: "loading"`、終われば
         この関数の戻り値そのもの（成功か誤りの封筒）が返る（その `wait_seconds` を渡すと、最長
-        60 秒まで終わりを待ってから返す）。ハンドルの登録と直近の切り替えは
+        30 秒まで終わりを待ってから返す）。ハンドルの登録と直近の切り替えは
         読み込みが終わったときに 1 回だけ起き、受付の後に失敗したらハンドルは登録しない。
         受付番号を返した後に別のハンドルが直近になっていたら、終わった読み込みはハンドルを
         登録するだけで直近にせず（ライブラリも移さない）、戻り値に `current: false` と `note` が
@@ -269,8 +269,9 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
                          "next": f'dataset_load_status(load_id="{pending.load_id}")'})
 
 
-#: `wait_seconds` の上限（秒）。デスクトップアプリの中継が呼び出しを打ち切る約 80 秒より短く。
-MAX_WAIT_SECONDS = 60.0
+#: `wait_seconds` の上限（秒）。デスクトップアプリの中継が呼び出しを打ち切る 36〜60 秒ほどより短く
+#: （試し走りで 36 秒の呼び出しが打ち切られた）。
+MAX_WAIT_SECONDS = 30.0
 
 #: 受け付けた後に別のハンドルが直近になったため、直近にしなかったときの `note`。
 _NOT_CURRENT_NOTE = ("受け付けた後に別のハンドルが直近になったので、このハンドルは直近にしていない。"
@@ -486,7 +487,7 @@ _NEXT_STEPS = (
 def dataset_load_status(load_id: str, wait_seconds: float = 0.0) -> str:
     """`load_dataset` が返した受付番号（`ld_…`）の読み込みを引く（最長 `wait_seconds` 秒待つ）。
 
-    wait_seconds: 読み込みが終わるのを待つ秒数（既定 0 は待たずにすぐ返す。0 以上 60 以下。
+    wait_seconds: 読み込みが終わるのを待つ秒数（既定 0 は待たずにすぐ返す。0 以上 30 以下。
         `load_dataset` の `wait_seconds` と同じ決まりで、それ以外（bool・NaN・無限を含む）は
         `DATASET_BAD_REQUEST`）。その中で終われば、すぐ下の戻り値を返す。呼び直しの回数を減らす。
 

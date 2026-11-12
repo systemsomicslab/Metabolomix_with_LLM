@@ -4,7 +4,7 @@
 SME と SML の区別・`identification_status`・`name_source`・`inchikey_coverage`）は
 `docs/output_format/dataset.md`（解析フォルダ）と `docs/output_format/mztab.md`（mzTab-M）。
 入口は `list_data_files`（フォルダの中身を確かめる）→ `load_dataset`（解析フォルダも mzTab-M も同じ入口）。
-期限（`wait_seconds`）の中で読み終わらなければ、`load_dataset` は受付番号を返し、`dataset_load_status` で結果を引く（こちらも `wait_seconds` で最長 60 秒まで終わりを待てる）。
+期限（`wait_seconds`）の中で読み終わらなければ、`load_dataset` は受付番号を返し、`dataset_load_status` で結果を引く（こちらも `wait_seconds` で最長 30 秒まで終わりを待てる）。
 読み込んだデータセットは `dataset_list` / `dataset_close` で管理し、`dataset_status` で試料を確かめ、
 `dataset_exclude` で外す。
 
@@ -61,11 +61,11 @@ mzTab-M は mzTab-M のフォルダ。指紋には入れない）を決める。
 `PIPELINE_POLARITY_REQUIRED` で、`load_dataset` はそれを `needs_input`（`field=polarity`・
 `retry_tools=["load_dataset"]`）にして返す。ほかの入口で `polarity` を渡すと `PIPELINE_POLARITY_NOT_APPLICABLE`）。
 
-受付: `load_dataset` は引数（`overview`・`library`・`wait_seconds` は 0〜60 秒）を確かめ、上限の枠を
+受付: `load_dataset` は引数（`overview`・`library`・`wait_seconds` は 0〜30 秒）を確かめ、上限の枠を
 1 本取ってから（`reserve()`。開いているハンドルと読み込み中の受付の和で数える）、本体 `_load_now()` を
 受付（`core/pending_loads.py`）の daemon スレッドで始め、受付そのもの（`PendingLoad`）を最長 `wait_seconds`
 （既定 20 秒）待つ。終われば本体の戻り値をそのまま返し、受付は忘れる。終わらなければ受付番号（`ld_…`）を
-返し、読み込みは続く（デスクトップアプリの中継が約 80 秒で呼び出しを打ち切るため）。ハンドルの登録と直近の
+返し、読み込みは続く（デスクトップアプリの中継が 36〜60 秒ほどで呼び出しを打ち切るため）。ハンドルの登録と直近の
 切り替え（`adopt_handle()`）は本体が終わるときに 1 回だけ起きる。受付番号を返した後に別のハンドルが直近に
 なっていたら（`session.current_generation` が受け付けたときから進んでいたら）、登録だけして直近にせず、
 ライブラリも移さず、戻り値に `current: false` と `note` を足す。枠は登録で消え、失敗なら返す。本体が
@@ -304,7 +304,7 @@ TSV（`query` は因子トークン。旧 `dataset_status(view="samples")` の `
 終わった受付は終わってから 1 時間覚え（同じ文字列を返す）、64 件を超えると終わったものを終わった順に
 古いものから捨てる。読み込み中のものは捨てず、64 件すべてが読み込み中なら `load_dataset` が
 `DATASET_LOAD_LIMIT` で受け付けない。
-`wait_seconds`（既定 0。0 以上 60 以下で、`load_dataset` と同じ `_wait_seconds()` で確かめる。外れた値は
+`wait_seconds`（既定 0。0 以上 30 以下で、`load_dataset` と同じ `_wait_seconds()` で確かめる。外れた値は
 `DATASET_BAD_REQUEST`）が 0 より大きければ、受付そのものを最長その秒数だけ待ち、その中で終われば戻り値を
 そのまま返す。終わらなければ待たないときと同じく今の状態を返す。待っても状態は変わらない。
 

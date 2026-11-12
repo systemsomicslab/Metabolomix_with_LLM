@@ -1,7 +1,7 @@
 """`load_dataset` の受付番号（`ld_…`）と `dataset_load_status`（枠組みの見直し 第 1 部 Task A1）。
 
-Claude のデスクトップアプリの中継は MCP の呼び出しを約 80 秒で打ち切る。`load_dataset` は
-`wait_seconds`（0〜60 秒）の中で終われば今までの戻り値をそのまま返し、終わらなければ受付番号を
+Claude のデスクトップアプリの中継は MCP の呼び出しを 36〜60 秒ほどで打ち切る。`load_dataset` は
+`wait_seconds`（0〜30 秒）の中で終われば今までの戻り値をそのまま返し、終わらなければ受付番号を
 返す。クライアントは `dataset_load_status(load_id)` で結果を引く。受付番号を返した後に別の
 ハンドルが直近になっていたら、終わった読み込みは直近にならない（`current: false`）。上限は
 読み込み中の受付も 1 本と数える。
@@ -247,7 +247,7 @@ def test_status_wait_zero_does_not_wait(tmp_path, fresh_state, gate):
     assert json.loads(_status_when_done(load_id))["status"] == "success"
 
 
-@pytest.mark.parametrize("bad", [-1, -0.001, 60.0001, 61, math.nan, math.inf, -math.inf,
+@pytest.mark.parametrize("bad", [-1, -0.001, 30.0001, 31, 60, math.nan, math.inf, -math.inf,
                                  True, False, "20", None])
 def test_status_wait_rejects_bad_values(tmp_path, fresh_state, gate, bad):
     load_id = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
@@ -262,7 +262,7 @@ def test_status_wait_accepts_the_limit(tmp_path, fresh_state, gate):
     load_id = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
     gate.release.set()
     assert pending_loads.registry.wait(load_id, _TIMEOUT) is not None
-    out = json.loads(handle_tools.dataset_load_status(load_id, wait_seconds=60))
+    out = json.loads(handle_tools.dataset_load_status(load_id, wait_seconds=30))
     assert out["status"] == "success"
 
 
@@ -402,7 +402,7 @@ def test_adopt_recheck_is_a_backstop(tmp_path, fresh_state, gate, monkeypatch):
 # ---------- 引数・失敗・受付簿 ----------
 
 
-@pytest.mark.parametrize("value", [-1, -0.001, 60.0001, 61, math.nan, math.inf, -math.inf,
+@pytest.mark.parametrize("value", [-1, -0.001, 30.0001, 31, 60, math.nan, math.inf, -math.inf,
                                    True, "20", None])
 def test_invalid_wait_seconds_is_bad_request(tmp_path, fresh_state, value):
     out = json.loads(handle_tools.load_dataset(directory=str(_folder(tmp_path / "a")),
@@ -414,8 +414,8 @@ def test_invalid_wait_seconds_is_bad_request(tmp_path, fresh_state, value):
     assert fresh_state._entries == {}
 
 
-def test_wait_seconds_60_is_accepted(tmp_path, fresh_state):
-    assert _load(directory=str(_folder(tmp_path / "a")), wait_seconds=60)["status"] == "success"
+def test_wait_seconds_30_is_accepted(tmp_path, fresh_state):
+    assert _load(directory=str(_folder(tmp_path / "a")), wait_seconds=30)["status"] == "success"
 
 
 def test_wait_zero_accepts_at_once(tmp_path, fresh_state, gate):
