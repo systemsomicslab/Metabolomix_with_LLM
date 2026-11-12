@@ -501,3 +501,17 @@ def test_missing_inchikey_falls_back_to_names():
     ds = _key_ds("ABCDEFGHIJKLMN-OPQRSTUVWX-N", None)
     (pair,) = Q.find_split_pairs(ds)["pairs"]
     assert pair["inchikey_match"] == "none" and pair["names_compatible"] is False
+
+
+def test_placeholder_or_malformed_inchikey_never_matches():
+    assert Q.inchikey_match("N/A", "N/A") == "none"
+    assert Q.inchikey_match("ABCDEFGHIJKLMN", "ABCDEFGHIJKLMN") == "none"      # 塊が 1 つだけ
+    assert Q.inchikey_match("ABCDEFGHIJKLM1-OPQRSTUVWX-N", "ABCDEFGHIJKLM1-OPQRSTUVWX-N") == "none"
+    assert Q.inchikey_match("abcdefghijklmn-opqrstuvwx-n", "ABCDEFGHIJKLMN-OPQRSTUVWX-N") == "full"
+
+
+def test_feature_metadata_entry_none_is_tolerated():
+    ds = _key_ds("ABCDEFGHIJKLMN-OPQRSTUVWX-N", "ABCDEFGHIJKLMN-OPQRSTUVWX-N")
+    ds.feature_metadata["1"] = None             # 落ちずに返る（組ができるなら InChIKey は使わない）
+    pairs = Q.find_split_pairs(ds)["pairs"]
+    assert all(p["inchikey_match"] == "none" for p in pairs)

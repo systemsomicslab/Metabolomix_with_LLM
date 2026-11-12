@@ -41,6 +41,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import statistics
 from pathlib import Path
 from typing import NamedTuple
@@ -224,6 +225,10 @@ def names_compatible(a, b) -> bool:
     return species_a is not None and species_a == species_b
 
 
+#: InChIKey の形（14-10-1 の大文字）。これに合わないものは照合に使わない（ゴミの文字列どうしを一致とみなさない）。
+_INCHIKEY_RE = re.compile(r"[A-Z]{14}-[A-Z]{10}-[A-Z]")
+
+
 def inchikey_match(a, b) -> str:
     """2 スポットの InChIKey の一致: `full`（全体）・`first_block`（先頭の塊 = 骨格だけ）・`none`。
 
@@ -234,7 +239,7 @@ def inchikey_match(a, b) -> str:
     if a is None or b is None:
         return "none"
     a, b = a.strip().upper(), b.strip().upper()
-    if len(a.split("-")[0]) != 14 or len(b.split("-")[0]) != 14:
+    if not _INCHIKEY_RE.fullmatch(a) or not _INCHIKEY_RE.fullmatch(b):
         return "none"
     if a == b:
         return "full"
@@ -478,8 +483,8 @@ def _pair(ds, a, b, assessed, ranked, order, groups, names, adducts,
             owner = np.where(owner >= 0, 1 - owner, owner)
     fids = [a[1], b[1]]
     pair_names = [_feature_name(ds, a[1]), _feature_name(ds, b[1])]
-    key_match = inchikey_match(*[(getattr(ds, "feature_metadata", None) or {}).get(f, {}).get("inchikey")
-                                 for f in fids])
+    metadata = getattr(ds, "feature_metadata", None) or {}
+    key_match = inchikey_match(*[(metadata.get(f) or {}).get("inchikey") for f in fids])
     compatible = key_match != "none" or names_compatible(*pair_names)
     if detected is None:
         owned_detected = None
