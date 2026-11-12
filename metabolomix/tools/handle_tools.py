@@ -140,7 +140,7 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
                  allow_incomplete: bool = False, source: str = "auto",
                  measure: str = "peak_height", arf2_path: str | None = None,
                  library: str = "auto", overview: bool = True,
-                 wait_seconds: float = 20.0) -> str:
+                 wait_seconds: float = 20.0, library_names: bool = True) -> str:
     """データセットを読み込み、新しいハンドル（`dh_…`）として開いて**直近にする**。入口はこの 1 本。
 
     入口（**どれか 1 つ**。全省略・2 つ以上の指定はエラー）:
@@ -215,6 +215,13 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         受付番号を返す」。引数の誤りと上限（`DATASET_HANDLE_LIMIT`。読み込み中の受付も 1 本と
         数える）は受け付ける前に返す。
 
+    library_names: 既定 True（今までどおり、戻り値にライブラリのファイル名を出す）。False なら
+        戻り値の JSON のどこにもライブラリのファイル名を出さない（`library.file`・
+        `library_record.file`・候補の名前を除き、注記・概観に混じる名前は伏せ字にする）。sha256・
+        `record_count`・`status`・`kind` は残る。**戻り値を run の記録（追跡する場所）へ保存するときは
+        False にする**。受付番号を返す遅い読み込みでは、この選択が `dataset_load_status` の最終の戻り値に
+        引き継がれる。bool 以外は `DATASET_BAD_REQUEST`。
+
     成功すると、いつも**新しいハンドルを直近にする**。`dataset_handle` を省いた `dataset_*` /
     `library_*` はこの直近のハンドルに効く。再解析のエージェントは返った `dataset_handle` を
     各ツールに渡して使い、直近を当てにしない（渡した呼び出しはサーバの別スレッドで回り、同じ
@@ -231,7 +238,7 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
     注記）、`sample_counts`（群と役割ごとの試料数）、`overview`（最初の概観。`overview=True` のとき）、
     `next`（次の一手の例）。概観の比較と PCA は `result_id` で掘れるが直近の結果にはしない。
     """
-    bad = _argument_error(overview, library)
+    bad = _argument_error(overview, library, library_names)
     if bad is not None:
         return bad
     try:
@@ -245,7 +252,8 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
                 _load_reserved, reservation, ticket, directory=directory, mztab_path=mztab_path,
                 job_path=job_path, pipeline_path=pipeline_path, polarity=polarity,
                 allow_incomplete=allow_incomplete, source=source, measure=measure,
-                arf2_path=arf2_path, library=library, overview=overview))
+                arf2_path=arf2_path, library=library, overview=overview,
+                library_names=library_names))
         except BaseException:
             reservation.release()
             raise
@@ -301,11 +309,15 @@ def _load_reserved(reservation, ticket, **kwargs) -> str:
         reservation.release()  # 登録で使った枠なら何もしない
 
 
-def _argument_error(overview, library) -> str | None:
+def _argument_error(overview, library, library_names=True) -> str | None:
     """すぐに分かる引数の誤り（受け付ける前に返す）。無ければ None。"""
     if not isinstance(overview, bool):
         return mztab_error("DATASET_BAD_REQUEST", f"overview は true / false です: {overview!r}",
                            {"field": "overview"})
+    if not isinstance(library_names, bool):
+        return mztab_error("DATASET_BAD_REQUEST",
+                           f"library_names は true / false です: {library_names!r}",
+                           {"field": "library_names"})
     if library not in _LIBRARY_MODES:
         return mztab_error("DATASET_BAD_REQUEST",
                            f"library は {' / '.join(_LIBRARY_MODES)} のどちらかです: {library!r}",
@@ -328,18 +340,20 @@ def _load_now(*, directory: str | None = None, mztab_path: str | None = None,
               polarity: str | None = None, allow_incomplete: bool = False,
               source: str = "auto", measure: str = "peak_height",
               arf2_path: str | None = None, library: str = "auto",
-              overview: bool = True, ticket: _CurrentTicket | None = None,
+              overview: bool = True, library_names: bool = True,
+              ticket: _CurrentTicket | None = None,
               reservation: handles.Reservation | None = None) -> str:
     """`load_dataset` の本体（受付のスレッドで回る）。戻り値は `load_dataset` の JSON の文字列
     （成功・誤りの封筒・`needs_input`）。成功ならハンドルを登録して直近にする（ここで 1 回だけ）。
 
     `ticket` があれば直近にするかはその判定に従い、直近にしなかったら戻り値に `current: false` と
     `note` を足す（ほかの欄は変えない）。`reservation` は受付で取った枠で、登録と同時に消える。"""
-    bad = _argument_error(overview, library)
+    bad = _argument_error(overview, library, library_names)
     if bad is not None:
         return bad
 
-    from metabolomix.dataset.library_memory import public_view
+    from metabolomix.dataset.library_memory import (
+        library_names_in, public_view, redact_library_names)
     from metabolomix.mztab.polarity import dataset_polarity
     from metabolomix.core import version
     from metabolomix.tools import mztab_tools
@@ -395,7 +409,7 @@ def _load_now(*, directory: str | None = None, mztab_path: str | None = None,
     # 先頭に置く——結論より前に解釈の前提が目に入るように。無ければ鍵ごと出さない。
     caveat = session_state.session.take_caveat()
     first_overview = _first_overview(handle) if overview else None
-    return json_payload({
+    payload = {
         "status": "success",
         **({"caveat": caveat} if caveat else {}),
         # 配布先のクローンが origin/main より遅れているときだけ載せる（最新なら鍵ごと出さない）。
@@ -424,7 +438,17 @@ def _load_now(*, directory: str | None = None, mztab_path: str | None = None,
         **({"overview": first_overview} if first_overview is not None else {}),
         **({"notes": notes} if notes else {}),
         "next": list(_NEXT_STEPS),
-    })
+    }
+    if not library_names:
+        # ライブラリのファイル名は出さない（sha256 だけ）。名前の欄を除き、残りの文字列に混じる名前も伏せる。
+        names = library_names_in(ds.library_record, handle.library.source_path,
+                                 getattr(store, "library_file_name", None))
+        for key in ("library", "library_record"):
+            if isinstance(payload.get(key), dict):
+                payload[key] = {k: v for k, v in payload[key].items()
+                                if k not in ("file", "candidates")}
+        payload = redact_library_names(payload, names)
+    return json_payload(payload)
 
 
 def _first_overview(handle) -> dict:
@@ -473,6 +497,10 @@ def dataset_load_status(load_id: str, wait_seconds: float = 0.0) -> str:
     動かない）。引いても待っても状態は変わらない——ハンドルの登録と直近の切り替えは、読み込みが
     終わったときに 1 回だけ起きている。終わった受付は 1 時間覚えていて、何度引いても同じ文字列を返す。
     知らない受付番号（終わってから 1 時間を過ぎた・サーバが再起動した）は `DATASET_LOAD_NOT_FOUND`。
+
+    ライブラリのファイル名を出すかどうかは、受け付けた `load_dataset` の `library_names` で決まる
+    （この呼び出しに引数は無い）。`library_names=False` で受け付けた読み込みの最終の戻り値には、
+    ライブラリのファイル名がどこにも出ない（sha256 だけ）。
     """
     try:
         wait = _wait_seconds(wait_seconds)

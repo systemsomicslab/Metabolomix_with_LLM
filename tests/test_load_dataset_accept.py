@@ -695,3 +695,19 @@ def test_accept_through_the_mcp_layer(tmp_path, fresh_state, gate):
     done = call("dataset_load_status", {"load_id": out["load_id"]})
     assert done["status"] == "success"
     assert session_state.session.current_handle_id == done["dataset_handle"]
+
+
+def test_load_status_keeps_library_names_choice(tmp_path, fresh_state, gate, monkeypatch):
+    """遅い読み込み（受付番号）でも、`library_names=False` の選択が最終の戻り値に引き継がれる。"""
+    from tests.dbs_fixture import record, write_dbs
+
+    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
+    name = "Zebra_SecretLab_Loaded.msp2.dbs"
+    folder = _folder(tmp_path / "a")
+    write_dbs(folder / name, [("lib", [record(mz=500.0, ion_mode=0)], ["k"])])
+    load_id = _accept(directory=str(folder), library_names=False)["load_id"]
+    gate.release.set()
+    raw = _status_when_done(load_id)
+    done = json.loads(raw)
+    assert done["status"] == "success" and done["library"]["sha256"]
+    assert name not in raw and "Zebra" not in raw
