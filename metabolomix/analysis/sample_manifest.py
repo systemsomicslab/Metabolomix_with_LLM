@@ -122,9 +122,13 @@ def _normalize_path(value: str) -> str:
     return os.path.normcase(os.path.normpath(value))
 
 
+#: 行が帳簿として持つ鍵。因子の列名にすると行の中身と衝突して値が黙って消えるので予約する。
+_BOOKKEEPING_COLUMNS = frozenset({"provenance", "conflicts"})
+
+
 def _check_factor_columns(columns: list[str]) -> None:
     """足した因子の列名は、空でなく、既知の列と重ならず、互いに重ならない。"""
-    known = set(FIELDS_V2) | set(OPTIONAL_FIELDS)
+    known = set(FIELDS_V2) | set(OPTIONAL_FIELDS) | _BOOKKEEPING_COLUMNS
     seen: set[str] = set()
     for name in columns:
         reason = ("空の列名です" if not name.strip()
@@ -623,7 +627,7 @@ def _validate_rows(rows: list[dict], sample_names: list[str]) -> None:
 
 def _factor_columns_of(rows: list[dict]) -> set[str]:
     """行が持つ、v2 の既知の列でも帳簿の欄でもない列（足した因子の列）。"""
-    known = set(FIELDS_V2) | set(OPTIONAL_FIELDS) | {"provenance", "conflicts"}
+    known = set(FIELDS_V2) | set(OPTIONAL_FIELDS) | _BOOKKEEPING_COLUMNS
     return {k for row in rows for k in row if isinstance(k, str) and k not in known}
 
 

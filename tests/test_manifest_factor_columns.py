@@ -58,12 +58,25 @@ def test_manifest_accepts_subject_id_then_factor_columns(tmp_path):
     assert rows[0]["subject_id"] == "m1" and rows[1]["Genotype"] == "KO"
 
 
-@pytest.mark.parametrize("extra", ["group", "biological_sample_id", "", "Geno\ttype".split("\t")[0] + "\tGeno"])
+@pytest.mark.parametrize("extra", ["group", "biological_sample_id", "provenance", "conflicts", "", "   ", "Geno\tGeno"])
 def test_manifest_rejects_factor_column_clashing_with_known_column(tmp_path, extra):
     # 既知の列と重なる・空の列名・足した列名どうしの重複は拒む。
     header = _V2 + "\t" + extra
     with pytest.raises(DomainError) as exc:
         _parse(tmp_path, header, [_line(0, "x"), _line(1, "y")])
+    assert exc.value.code == "SAMPLE_MANIFEST_INVALID"
+
+
+def test_v1_sheet_with_trailing_extra_column_is_still_rejected(tmp_path):
+    from metabolomix.analysis.sample_manifest import FIELDS
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "S0.wiff").write_bytes(b"fake")
+    sheet = tmp_path / "v1.tsv"
+    sheet.write_text("# schema = sample-manifest.v1\n" + "\t".join(FIELDS) + "\tGenotype\n"
+                     "s0\tS0.wiff\tsample\tA\tB1\t1\t\ttrue\tWT\n", encoding="utf-8")
+    with pytest.raises(DomainError) as exc:
+        parse_manifest(sheet, source_root=root, expected_sources=["S0.wiff"])
     assert exc.value.code == "SAMPLE_MANIFEST_INVALID"
 
 
@@ -128,9 +141,12 @@ def test_design_factors_resolve_from_manifest_factor_columns(tmp_path):
             "analyses": [{"analysis_id": "a1", "kind": "compare"}]}
     result = run_spec_v2(normalize_spec_v2(spec), ds, assay_kind="lipid")
     res = result["analyses"][0]["result"]
-    text = repr(res)
-    assert "drug_in_ko" in text and "gxt" in text
-    assert "DESIGN_INVALID" not in text
+    for contrast in ("drug_in_ko", "gxt"):
+        mine = [r for r in res["rows"] if r["contrast_id"] == contrast]
+        assert len(mine) == 8
+        assert all(r["status"] == "tested" for r in mine)
+    assert res["design"]["factors"] == ["Genotype", "Treatment"]
+    assert res["omnibus"]
 
 
 def test_factor_column_change_invalidates_results():
