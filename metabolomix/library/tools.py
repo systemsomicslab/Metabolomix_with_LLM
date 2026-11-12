@@ -51,7 +51,7 @@ _RANK_KEY = "total_score"
 # 候補一覧 TSV の列（先頭に列名を 1 回だけ出す）。スペクトル座標・alignment は
 # 意図的に含めない（座標は session.library.last_match にだけ持つ）。
 _CANDIDATE_TABLE_COLUMNS = [
-    "rank", "name", "precursor_mz", "ion_mode", "adduct", "rt", "formula",
+    "rank", "name", "precursor_mz", "delta_mz", "delta_ppm", "ion_mode", "adduct", "rt", "formula",
     "ontology", "compound_class", "total_score",
     "simple_dot_product", "weighted_dot_product",
     "reverse_dot_product", "matched_peaks_percentage", "matched_peaks_count",
@@ -455,6 +455,7 @@ def library_match_feature(
     detail: bool = False,
     precursor_exclusion_tol: float | None = None,
     dataset_handle: str | None = None,
+    mz_tol_ppm: float | None = None,
 ) -> str:
     """測定 MS/MS（`.dcl`）を参照ライブラリ（`library_load` 済みの store）と照合し、
     上位候補を返す。
@@ -481,6 +482,12 @@ def library_match_feature(
     （最終レビュー Important 7: `.dbs` の `RtTolerance` 既定 100.0 のような
     ライブラリ用の値を `.dcl` 側の RT 窓に流用すると、同じ precursor m/z の
     別ピークの測定スペクトルを黙って拾ってしまうため、2 つの窓を分離した）。
+    `mz_tol_ppm`（任意）は上の Da の窓に**重ねる追加の絞り込み**で、窓を広げない:
+    参照との差が ±`mz_tol_ppm` ppm を超える候補を落とす（`mz_tol_ppm=10` なら +44 ppm の候補は
+    落ちる）。省略時は絞らない。既定の窓 0.01 Da は MS-DIAL に合わせたもので、低い m/z では
+    数十 ppm に当たる——候補の行の `delta_ppm` を見て受け入れること。候補の行には
+    `delta_mz = 測定 - 参照`（Da）と `delta_ppm = (測定 - 参照) / 参照 * 1e6` が付く
+    （測定が参照より高いと正）。`precursor_mz` 列（参照の前駆体）は 6 桁で出す。
     足切り（`relative_amp_cutoff` / `absolute_amp_cutoff`）と質量範囲
     （`mass_range_begin` / `mass_range_end`）も同じ `search_params` から採って
     採点（`match_spectrum`）に渡す——検証 CLI（`scripts/verify_spectral_match.py`）
@@ -589,7 +596,8 @@ def library_match_feature(
     # （既存のテストがここの match_spectrum を差し替えて順位付けを確かめている）。
     matched = matching.score_candidates(
         store_obj, precursor_mz=precursor_mz, rt=rt, ion_mode=ion_mode, measured=measured,
-        mz_tol=mz_tol, ms2_tol=ms2_tol, rt_tol=rt_tol, match_fn=match_spectrum)
+        mz_tol=mz_tol, ms2_tol=ms2_tol, rt_tol=rt_tol, mz_tol_ppm=mz_tol_ppm,
+        match_fn=match_spectrum)
     resolved_mz_tol = matched["query"]["mz_tol"]
     resolved_ms2_tol = matched["query"]["ms2_tol"]
     if matched["status"] == "no_candidates":
@@ -602,6 +610,7 @@ def library_match_feature(
                 # **文字列へ焼いた数値には届かない**（成功時の query.mz_tol は
                 # 構造の中の float なので丸まる——だからここだけ素の値が出ていた）。
                 f"precursor m/z={precursor_mz}±{resolved_mz_tol:.4g}"
+                + (f"（かつ ±{mz_tol_ppm:g} ppm）" if mz_tol_ppm is not None else "")
                 + (f", ion_mode={ion_mode}" if ion_mode else "")
                 + " に該当する参照レコードが見つかりませんでした。"
             ),
@@ -648,7 +657,9 @@ def library_match_feature(
         {
             "rank": i + 1,
             "name": record["name"],
-            "precursor_mz": record["precursor_mz"],
+            "precursor_mz": f"{record['precursor_mz']:.6f}",
+            "delta_mz": f"{precursor_mz - record['precursor_mz']:+.6f}",
+            "delta_ppm": f"{(precursor_mz - record['precursor_mz']) / record['precursor_mz'] * 1e6:+.2f}",
             "ion_mode": record["ion_mode"],
             "adduct": record["adduct"],
             "rt": record["rt"],

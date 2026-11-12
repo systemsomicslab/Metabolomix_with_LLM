@@ -171,6 +171,15 @@ store のスキーマは `precursor_mz REAL NOT NULL`。公開 `.msp`（MassBank
 
 ### 14.6 `library_match_feature`
 
+**候補ごとの質量誤差と ppm の窓（A6・A8）**: `candidates_table` の各行に
+`delta_mz`（= 測定 − 参照、Da、符号付き）と `delta_ppm`（= `(測定 − 参照) / 参照 * 1e6`、
+測定が参照より高いと正）が付く。`precursor_mz` 列は**参照**レコードの前駆体で、6 桁で出す
+（arf2 の表の既定は 4 桁だが、候補の表では使わない）。既定の窓 0.01 Da は MS-DIAL に合わせた
+もので変えていない——低い m/z では数十 ppm に当たり、+44 ppm の候補も残るので、受け入れる前に
+`delta_ppm` を見ること。`mz_tol_ppm`（任意）は Da の窓に**重ねる追加の絞り込み**で、窓を広げない:
+`|delta_ppm|` がこれを超える候補を落とす（`mz_tol_ppm=10` で +44 ppm の候補は落ちる）。
+`query.mz_tol_ppm` に指定値（省略時 `null`）が残る。
+
 照合対象は `precursor_mz` か `spot_id` のどちらか一方で指定する。
 
 | `status` | 意味 |
