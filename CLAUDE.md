@@ -246,6 +246,8 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料�
     `pipeline-run.json` だけに住む。
   - **`core/atomic_io.py` と `core/process_control.py` と `core/user_config.py` は stdlib だけの leaf**。
     別プロセスの worker が最初に import するので、重い依存を持ち込まない。
+    `core/detach_relay.py`（`launch_detached` が起こす中継。worker を起こしてすぐ終わる）も
+    この leaf だけを import する。
   - **run record の `results` は追記専用**（`store._assert_results_append_only` が
     既存要素の書換えを拒否する）。永続化する pipeline 内のパスは `pipeline_root` 相対
     （ただし単位の `inputs` は単位の根 `unit_root` 相対。`store.relativize_unit_inputs`）。

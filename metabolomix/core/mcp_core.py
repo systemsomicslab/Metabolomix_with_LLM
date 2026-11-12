@@ -170,8 +170,10 @@ instrument files.
    resolved settings (method file, LBM, polarity) first, call `pipeline_plan`
    before asking; to choose or make a method file, use
    `console_method_candidates` / `console_method_template`.
-   `pipeline_run` starts an independent worker that places the raw files in the
-   run, runs Console one polarity at a time, checks each analysis folder
+   `pipeline_run` starts an independent worker (through a short-lived relay
+   process, so the worker is not in this server's process tree) that places
+   the raw files in the run, runs Console one polarity at a time, checks each
+   analysis folder
    against its mzTab-M and writes a receipt — it computes no statistics — and
    returns a compact dispatch receipt (`pipeline_id`/`pipeline_path`) at once.
    Poll with `pipeline_status(pipeline_path)`. When it reports `completed` or

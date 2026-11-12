@@ -746,6 +746,103 @@ def test_detach_from_kill_on_close_job_is_unsupported(tmp_path):
     assert info == {"error": "DETACH_UNSUPPORTED"}
 
 
+# ---------- 起こした側の木ごと消されても worker は残る（A10） ----------
+#
+# デスクトップアプリは呼び出しを打ち切ると MCP サーバを作り直す。そのときサーバの
+# プロセスの木ごと（`taskkill /T` と同じく、親子の記録をたどって）消すので、サーバが
+# 直接起こした worker は、切り離しのフラグを付けていても巻き込まれる。
+
+_TREE_PARENT_SRC = """\
+import json
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from metabolomix.core.process_control import launch_detached
+
+out_path = Path(sys.argv[2])
+info = launch_detached([sys.executable, sys.argv[5]], cwd=Path(sys.argv[3]),
+                       log_path=Path(sys.argv[4]))
+partial = out_path.with_name(out_path.name + ".partial")
+partial.write_text(json.dumps(info), encoding="utf-8")
+partial.replace(out_path)
+# 木ごと消されるまで親として居続ける（先に終わると `taskkill /T` でたどる木が無い）。
+time.sleep(120)
+"""
+
+#: 後片付けに失敗しても 120 秒で自分から終わる worker。
+_TREE_WORKER_SRC = "import time\ntime.sleep(120)\n"
+
+
+def _taskkill_tree(pid: int) -> subprocess.CompletedProcess:
+    return subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
+                          stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+
+
+@windows_only
+def test_worker_survives_parent_tree_kill(tmp_path):
+    """`launch_detached` で起こした worker は、起こした側を `taskkill /T /F` しても残る。
+
+    親（`launch_detached` を呼ぶプロセス）が生きているうちに、その木ごと強制終了する。
+    worker が親の子として起こされていれば、`taskkill /T` は親子の記録をたどって worker も
+    消す（＝このテストは赤くなる）。中継のプロセスから起こし、中継がすぐ終わっていれば、
+    worker の親はもう居ないので木をたどっても届かない。
+    """
+    parent_script = _write_script(tmp_path, "tree_parent.py", _TREE_PARENT_SRC)
+    worker_script = _write_script(tmp_path, "tree_worker.py", _TREE_WORKER_SRC)
+    out_path = tmp_path / "launched.json"
+    parent = subprocess.Popen(
+        [sys.executable, str(parent_script), _REPO_ROOT, str(out_path), str(tmp_path),
+         str(tmp_path / "worker.log"), str(worker_script)],
+        cwd=str(tmp_path), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL)
+    identity = None
+    try:
+        info = json.loads(_wait_for_file(out_path, timeout=60))
+        identity = info["identity"]
+        assert info["pid"] == identity["pid"]
+        assert same_process(identity), "worker が起きていない"
+        assert parent.poll() is None, "親が先に終わった（木ごと消す検証にならない）"
+
+        killed = _taskkill_tree(parent.pid)
+        assert killed.returncode == 0, killed.stdout + killed.stderr
+        parent.wait(timeout=30)
+
+        assert _stays_alive(identity), "親の木ごと消したら worker も消えた"
+    finally:
+        if parent.poll() is None:
+            _taskkill_tree(parent.pid)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                parent.wait(timeout=30)
+        _kill_pid_if_same(identity)
+    assert _wait_until_gone(identity)
+
+
+@windows_only
+def test_launch_detached_reports_the_launch_failure_code(tmp_path):
+    """起こせない実行ファイルは、今までどおり `PROCESS_LAUNCH_FAILED` で止まる。"""
+    with pytest.raises(DomainError) as excinfo:
+        launch_detached([str(tmp_path / "missing.exe")], cwd=tmp_path,
+                        log_path=tmp_path / "missing.log")
+    assert excinfo.value.code == "PROCESS_LAUNCH_FAILED"
+    # 中継の結果のファイルも、空の中継のログも残さない。
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["missing.log"]
+
+
+@windows_only
+def test_launch_detached_reports_a_relay_that_wrote_no_result(tmp_path, monkeypatch):
+    """中継が結果を書かずに終わったら `DETACH_RELAY_FAILED`。中継のログを残して末尾を載せる。"""
+    monkeypatch.setattr(pc, "_RELAY_MODULE", "metabolomix.core.no_such_relay")
+    with pytest.raises(DomainError) as excinfo:
+        launch_detached([sys.executable, "-c", "pass"], cwd=tmp_path,
+                        log_path=tmp_path / "w.log")
+    assert excinfo.value.code == "DETACH_RELAY_FAILED"
+    assert excinfo.value.details["exit_code"] != 0
+    assert "no_such_relay" in excinfo.value.details["relay_log_tail"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["w.relay.log"]
+
+
 @windows_only
 def test_detach_breakaway_mode_is_a_known_value():
     assert detach_breakaway_mode() in {

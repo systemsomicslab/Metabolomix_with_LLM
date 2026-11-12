@@ -64,7 +64,22 @@ MCP層は薄い(`metabolomix/tools/pipeline_tools.py` と `metabolomix/tools/con
 を起動し、cwdは呼び出し元のcwdや別checkoutではなくこのcheckout自身(`_REPO_ROOT`)へ
 固定する。起動プロセスのstdout/stderrは `launch_detached` がログファイルへ結ぶため、
 起動元プロセスがworkerのstdoutパイプを継承して待ち続ける経路(`bInheritHandles=TRUE`
-かつハンドル未指定)は無い。`_await_launch_handshake` は短い上限だけ待ち、超えても
+かつハンドル未指定)は無い。
+
+`launch_detached` は worker を直接起こさず、すぐ終わる中継のプロセス
+(`python -m metabolomix.core.detach_relay`。`process_control._launch_via_relay` が起こして
+終わりを待つ)に起こさせる。中継は worker を起こし、その pid と identity(pid と生成時刻)を
+書いてすぐ終わる。worker の親(中継)が残らないので、デスクトップアプリが呼び出しを打ち切って
+MCP サーバをプロセスの木ごと消しても(`taskkill /T` と同じく親子の記録をたどる)、worker と
+その Console(worker が自分の Job で所有する)は残る。2 段(サーバ→中継・中継→worker)とも
+同じ規則で切り離す(breakaway のフラグは Job が許すときだけ)。戻り値の pid・identity は
+worker のもので、handshake(worker 自身が `pipeline-run.json` に書く identity)と
+`pipeline_status` / `pipeline_cancel` / `pipeline_resume` の追跡は今までどおり。
+限界: Job が breakaway を許さない環境(`inherited_job`。KILL_ON_JOB_CLOSE は無い)では中継も
+worker もその Job に残るので、木ごとの終了には残るが、Job ごとの終了(`TerminateJobObject`
+や、後から KILL_ON_JOB_CLOSE を付けて閉じること)には巻き込まれる。
+
+`_await_launch_handshake` は短い上限だけ待ち、超えても
 起動失敗と決め付けず再起動もしない(`launch.handshake="not_confirmed"`のまま
 `pipeline_path`を返す。確認は`pipeline_status`に委ねる)。
 
