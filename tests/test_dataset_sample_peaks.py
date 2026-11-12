@@ -4,6 +4,7 @@ fixture はこのテストが tmp に作る。RT は試料ごとに違う値を 
 """
 from __future__ import annotations
 
+import hashlib
 import json
 
 import numpy as np
@@ -46,10 +47,39 @@ def _open_folder(tmp_path):
     return ds
 
 
+COLUMNS = ["feature_id", "sample", "rt", "mz", "height", "detected"]
+
+
 def _rows(out: str) -> list[dict]:
+    """戻り値の `rows`（TSV、列名 1 回）を行の辞書にする。空欄は None、detected は真偽。"""
     payload = json.loads(out)
     assert "error" not in payload, payload
-    return payload["rows"]
+    return _parse_tsv(payload["rows"])
+
+
+def _parse_tsv(text: str) -> list[dict]:
+    lines = text.split("\n")
+    assert lines[0].split("\t") == COLUMNS
+    rows = []
+    for line in lines[1:]:
+        cells = line.split("\t")
+        assert len(cells) == len(COLUMNS)
+        row = dict(zip(COLUMNS, cells))
+        rows.append({"feature_id": row["feature_id"], "sample": row["sample"],
+                     "rt": float(row["rt"]),
+                     "mz": float(row["mz"]) if row["mz"] != "" else None,
+                     "height": float(row["height"]),
+                     "detected": {"true": True, "false": False}[row["detected"]]})
+    return rows
+
+
+def _widen(ds, n_features: int, n_samples: int):
+    """特徴を n_features、試料を n_samples に増やした（先頭のセルを並べ直した）データセットにする。"""
+    ds.feature_ids = [str(i) for i in range(n_features)]
+    ds.sample_names = [f"s{j}" for j in range(n_samples)]
+    ds.feature_matrix = np.tile(ds.feature_matrix[:1, :1], (n_features, n_samples))
+    ds.detected_mask = np.tile(ds.detected_mask[:1, :1], (n_features, n_samples))
+    ds.per_sample_rt = np.tile(ds.per_sample_rt[:1, :1], (n_features, n_samples))
 
 
 def test_rt_matches_arf_and_gap_fill_is_not_detected(tmp_path):
@@ -93,6 +123,77 @@ def test_exactly_200_features_succeeds(tmp_path):
     ds.per_sample_rt = np.tile(ds.per_sample_rt[:1], (200, 1))
     rows = _rows(R.dataset_sample_peaks([str(i) for i in range(200)]))
     assert len(rows) == 200 * 3
+
+
+def test_rows_are_a_tsv_with_one_header(tmp_path):
+    _open_folder(tmp_path)
+    out = json.loads(R.dataset_sample_peaks(["0", "1"]))
+    lines = out["rows"].split("\n")
+    assert lines[0] == "\t".join(COLUMNS)
+    assert len(lines) == 1 + 6
+    assert "feature_id" not in "\n".join(lines[1:])
+    assert not out["rows"].lstrip().startswith(("{", "["))
+    assert (out["n_features"], out["n_samples"], out["n_rows"]) == (2, 3, 6)
+    # gap-fill の m/z は空欄、detected は true / false
+    assert lines[2].split("\t")[3] == "" and lines[2].split("\t")[5] == "false"
+    assert lines[1].split("\t")[3] == "760.5851"
+
+
+def test_inline_row_limit_is_1000():
+    assert R.MAX_SAMPLE_PEAK_INLINE_ROWS == 1000
+
+
+def test_exactly_1000_rows_is_returned_inline(tmp_path):
+    ds = _open_folder(tmp_path)
+    _widen(ds, 200, 5)
+    out = json.loads(R.dataset_sample_peaks([str(i) for i in range(200)]))
+    assert out["n_rows"] == 1000 and "output_path" not in out
+    assert len(_parse_tsv(out["rows"])) == 1000
+
+
+def test_over_1000_rows_without_output_path_is_an_error_with_numbers(tmp_path):
+    ds = _open_folder(tmp_path)
+    _widen(ds, 200, 6)   # 200 x 6 = 1200 行
+    out = json.loads(R.dataset_sample_peaks([str(i) for i in range(200)]))
+    assert out["error"]["code"] == "DATASET_BAD_REQUEST"
+    details = out["error"]["details"]
+    assert details["n_samples"] == 6 and details["max_rows"] == 1000
+    assert details["max_features_per_call"] == 166   # floor(1000 / 6)
+    assert details["n_rows"] == 1200
+    assert "166" in out["error"]["message"] and "1000" in out["error"]["message"]
+    assert "output_path" in out["error"]["message"]
+
+
+def test_1001_rows_is_an_error_and_per_call_features_is_at_least_1(tmp_path):
+    ds = _open_folder(tmp_path)
+    _widen(ds, 1, 1001)
+    err = json.loads(R.dataset_sample_peaks(["0"]))
+    assert err["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert err["error"]["details"]["max_features_per_call"] == 1
+
+
+def test_over_limit_with_output_path_writes_full_tsv(tmp_path):
+    ds = _open_folder(tmp_path)
+    _widen(ds, 200, 6)
+    target = tmp_path / "out" / "peaks.tsv"
+    out = json.loads(R.dataset_sample_peaks([str(i) for i in range(200)],
+                                            output_path=str(target)))
+    assert out["status"] == "success" and "rows" not in out
+    assert (out["n_rows"], out["n_features"], out["n_samples"]) == (1200, 200, 6)
+    assert out["output_path"] == str(target.resolve())
+    data = target.read_bytes()
+    assert out["sha256"] == hashlib.sha256(data).hexdigest()
+    text = data.decode("utf-8")
+    assert text.split("\n")[0] == "\t".join(COLUMNS)
+    assert len(_parse_tsv(text)) == 1200
+
+
+def test_output_path_with_few_rows_writes_file_and_returns_summary(tmp_path):
+    _open_folder(tmp_path)
+    target = tmp_path / "peaks.tsv"
+    out = json.loads(R.dataset_sample_peaks(["0"], output_path=str(target)))
+    assert out["n_rows"] == 3 and "rows" not in out
+    assert len(_parse_tsv(target.read_text(encoding="utf-8"))) == 3
 
 
 def test_empty_list_is_an_error(tmp_path):

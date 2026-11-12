@@ -26,7 +26,7 @@ _LIST_CAP = 50
     structured_output=False)
 def dataset_exclude(
     samples: list[str] | None = None,
-    features: list[str] | None = None,
+    features: list[str | int] | None = None,
     mode: str = "add",
     reason: str | None = None,
     dataset_handle: str | None = None,
@@ -34,7 +34,7 @@ def dataset_exclude(
     """試料・特徴を解析から外す（可逆）。`dataset_preprocess` が行列から外して適用する。
 
     samples: 試料名（`dataset_status(view="samples")` の name）または実験情報シートの sample_id。
-    features: 特徴 ID（`dataset_feature_search` の feature_id）。
+    features: 特徴 ID（`dataset_feature_search` の feature_id。int でも str でもよい。`str()` に直す）。
     mode: `"add"`（既定。除外に足す。**`reason` が要る**。除外済みは理由を置き換える）/
         `"remove"`（除外から戻す）/ `"clear"`（`samples` / `features` のうち渡した種類を空にする。
         どちらも渡さなければ両方）。
@@ -51,6 +51,8 @@ def dataset_exclude(
     dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
+    if features is not None:
+        features = [str(f) for f in features]
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
         return holder
