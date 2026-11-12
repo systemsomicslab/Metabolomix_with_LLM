@@ -28,6 +28,9 @@
 - **試料の役割と群**。試料は `sample` / `qc` / `blank` の役割と群（Class ID）・バッチ・注入順を持つ
   （`dataset_status` の `samples`）。ブランクは前処理で行列から外れ、QC は残る。QC・ブランクは 2 群比較に入らない。
   `dataset_exclude` で除いた試料・特徴は前処理と図と強度順の検索が除く（可逆）。
+  実験情報シートに足した因子の列（`Genotype` など）があれば、`dataset_status(view="samples")` の TSV は
+  固定の列（`name group role batch injection_order subject_id excluded`）の後ろに、その列を名前の順に並べる
+  （値を持たない試料は空欄。因子の列が無いデータセットでは列は増えない）。
 - **MS/MS の実スペクトルは `.dcl`**（`dcl` トピック）。`.arf` のセルの MS/MS の有無は取得の参照があることだけを示す。
 - **最初の概観**。`load_dataset` の `overview` と `dataset_overview` は品質 → 全体 → クラス → 分子種の 4 段の事実（ID つき）。
   2 群の向きは仮、クラスの段は付加体の選別の後だけ。意味は §11.9。

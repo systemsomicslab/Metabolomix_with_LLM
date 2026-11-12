@@ -67,6 +67,13 @@
 | `sample_counts` | `{groups, roles, n_ungrouped}`: 群（Class ID）ごと・役割ごとの試料数と、群の宣言が無い試料の数 |
 | `next` | 次の一手の例（3 行） |
 
+**`library_names=False` のとき**（戻り値を run の記録へ保存する側が付ける）: ライブラリのファイル名が戻り値のどこにも
+出ない。`library` は `{sha256, record_count}` だけ（`file` の欄が**無い**。欠けではなく伏せた結果）、
+`library_record` は `file`・`candidates` の欄が無い（`sha256`・`status`・`kind` などは残る）、注記・概観・誤りの文言に
+混じっていたファイル名は `(ライブラリ名は伏せた)` に置き換わる。sha256・`record_count`・`status`・`kind` は
+`library_names=True` と同じ。受付番号を返す遅い読み込みでは、この選択が `dataset_load_status` の最終の戻り値に
+引き継がれる。
+
 ライブラリは**データセットが同定に使ったものの記憶**（`library_record`。[library.md](library.md)）から
 引く。実体の sha256 を測り直して `known` のままなら読み取り専用で開き、`mismatch`（内容が変わった・
 ファイルが無い）・`unknown`（決められない）・`lbm_only`（LBM だけ）は開かずに `library_note` に
@@ -379,17 +386,24 @@ InChIKey が一意に決まらない脂質の種は `{"lipid_species": "PC 18:3_
 
 ### 6.1 試料ごとのピーク（`dataset_sample_peaks`）
 
-`dataset_sample_peaks(feature_ids, dataset_handle=None)`: 割れた 2 スポットが 1 つの物質か、RT が注入ごとに
-ずれていくかを、試料ごとの値で見るための読み取り。行は `{feature_id, sample, rt, mz, height, detected}`
-（依頼の特徴の順 × データセットの試料の順）。
+`dataset_sample_peaks(feature_ids, dataset_handle=None, output_path=None)`: 割れた 2 スポットが 1 つの物質か、
+RT が注入ごとにずれていくかを、試料ごとの値で見るための読み取り。行は列 `feature_id, sample, rt, mz, height,
+detected` の **TSV**（列名 1 回、`rows` の文字列。依頼の特徴の順 × データセットの試料の順）。戻り値は
+`{status, n_features, n_samples, n_rows, rows}`。数値は小数 6 桁まで、空欄が null（gap-fill の `mz`）、
+`detected` は `true` / `false`。
 
 - `rt`: その試料のピークの RT（分）。gap-fill のセルも `.arf` が持つ値（補間の位置）を返すので、
   **`detected: false` の `rt` は検出された位置ではない**。ドリフトは `detected: true` の行だけで見る。
-- `mz`: 検出されたセルの実測 m/z。gap-fill は `null`。
+- `mz`: 検出されたセルの実測 m/z。gap-fill は空欄（null）。
 - `height`: データセットの強度の行列（`feature_matrix`）の値。`measure` で選んだ `.arf` の欄で、定量
   （`dataset_quant_apply` ほか）で値を変えたデータセットではその値。
 - `detected`: `detected_mask`（gap-fill なら false）。
 - 1 回 200 特徴まで。超過・知らない特徴 ID・空のリストは `DATASET_BAD_REQUEST`。ID は int でも str でもよい。
+- 戻り値に載せる行（特徴 × 試料）は **1,000 行まで**。超えるとき `output_path` が無ければ `DATASET_BAD_REQUEST`
+  （details: `n_samples`・`max_rows`（1000）・`n_rows`・`max_features_per_call` = floor(1000 / 試料の数)、少なくとも 1）。
+  `output_path` があれば全量の TSV（同じ列・列名 1 回）をそのファイルへ原子的に書き、戻り値は要約
+  `{status, n_features, n_samples, n_rows, output_path, sha256}`（`rows` は付かない。ほかの再解析のツールの
+  `output_path` と同じ扱い。1,000 行以下でも `output_path` を渡せば同じく要約）。
 - 解析フォルダ（`.arf`）から読んだデータセットだけ。mzTab-M で読んだデータセットは `per_sample_rt`
   が無いので `DATASET_BAD_REQUEST`（`field: per_sample_rt`）。
 

@@ -149,6 +149,12 @@
 `lbm_also` でも印は付かない（付かないことは「LBM 由来でない」の証拠ではない）。記憶が `lbm_only` のまま別のライブラリを明示して開いたときは、同定に使った
 ものではない旨が `note` に付く。
 
+**`library_names=False` のとき**: 戻り値の JSON にライブラリのファイル名が出ない。最上位の `file` と
+`candidates` の欄が無く、`differs_from_record` は `{"differs": true}`（`remembered` / `opened` の名前は出ず、
+違うという事実だけ）、注記・誤りの文言に混じっていた名前は `(ライブラリ名は伏せた)` に置き換わる。sha256・
+`record_count`・`status`・`code` は変わらない。`library_names` は `load_dataset` の戻り値の `library` /
+`library_record` でも同じ意味（[reanalysis.md](reanalysis.md) §1 の `load_dataset` の表）。
+
 **エラー戻り値**: ライブラリを 1 つに決められないときは `{"status": "error", "code": ..., "message": ..., "details": ...}`
 を返し、store は差し替えない。`code` は `LIBRARY_NOT_REMEMBERED`（`file_path` を省いたが、データセットが同定に使ったライブラリを
 覚えていない）/ `LIBRARY_RECORD_MISMATCH` / `LIBRARY_RECORD_LBM_ONLY` / `LIBRARY_NOT_FOUND`（明示した
