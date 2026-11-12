@@ -78,6 +78,7 @@ EXPECTED_TOOLS = sorted([
     "dataset_mass_accuracy",
     "dataset_homolog_check",
     "dataset_novel_candidates",
+    "dataset_sample_peaks",
     "dcl_spot_spectrum",
     "dcl_diagnostic_ions",
     "dcl_find_msms",

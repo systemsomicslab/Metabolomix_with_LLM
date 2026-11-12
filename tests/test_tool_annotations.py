@@ -82,6 +82,7 @@ EXPECTED_ANNOTATIONS = {
     "dataset_homolog_check": READ_ONLY,
     "dataset_feature_relations": READ_ONLY,
     "dataset_mass_accuracy": READ_ONLY,
+    "dataset_sample_peaks": READ_ONLY,
     "dcl_diagnostic_ions": READ_ONLY,
     # --- Console のメソッドファイル（計画・実行・状態は pipeline 系） ---
     # メソッドファイルを作る。同じ引数なら同じ結果 → 冪等

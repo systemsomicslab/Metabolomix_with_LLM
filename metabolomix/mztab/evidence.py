@@ -127,6 +127,8 @@ class ArfScan:
       ピークの行すべてから選ぶ。選べなければ `MassCenter`）。
     - `values`: `scan_arf` の `measures` ごとの値（`arf_reader.peak_field` の名前。数でなければ NaN）。
     - `per_sample_mz`: 検出されたセルの実測 m/z（数でなければ NaN。gap-fill のセルも NaN）。
+    - `per_sample_rt`: セルのピークの RT（分。gap-fill のセルも .arf の値。数でなければ NaN、
+      セルが無ければ NaN）。`dataset_sample_peaks` の材料。
     - `file_names`: FileID → `.arf` の名前（その FileID が最初に現れたスポットの行の名前。
       名前の無い行なら None）。
     - `msms_assigned`: スポットごとに、どれかのセルが MS/MS を持つか。
@@ -141,6 +143,7 @@ class ArfScan:
     file_names: dict[int, str | None]
     msms_assigned: np.ndarray
     n_rows: int = field(default=0)
+    per_sample_rt: np.ndarray | None = None
 
     @property
     def n_spots(self) -> int:
@@ -235,7 +238,7 @@ def _scan_arf(path: Path, *, measures: tuple[str, ...]) -> ArfScan:
     spot_mz: list = []
     msms = array("b")
     cell_spot, cell_file = array("i"), array("q")
-    cell_detected, cell_mz = array("b"), array("d")
+    cell_detected, cell_mz, cell_rt = array("b"), array("d"), array("d")
     cell_values = {measure: array("d") for measure in measures}
     names: dict[int, str | None] = {}
     n_rows = 0
@@ -265,6 +268,7 @@ def _scan_arf(path: Path, *, measures: tuple[str, ...]) -> ArfScan:
                 cell_file.append(file_id)
                 cell_detected.append(detected)
                 cell_mz.append(_number(mz) if detected else math.nan)
+                cell_rt.append(_number(field_of(raw, "rt")))
                 for measure, column in cell_values.items():
                     column.append(_number(height if measure == "height" else field_of(raw, measure)))
                 has_msms = has_msms or bool(field_of(raw, "is_msms"))
@@ -291,6 +295,7 @@ def _scan_arf(path: Path, *, measures: tuple[str, ...]) -> ArfScan:
         file_names=names,
         msms_assigned=np.asarray(msms, dtype=bool),
         n_rows=n_rows,
+        per_sample_rt=place(cell_rt, float, np.nan),
     )
 
 

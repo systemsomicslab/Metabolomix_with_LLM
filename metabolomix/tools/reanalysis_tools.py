@@ -25,7 +25,7 @@ from metabolomix.tools._holder import resolve_holder
 
 __all__ = ["dataset_alignment_qc", "dataset_analysis_run", "dataset_claim_evidence",
            "dataset_feature_relations", "dataset_homolog_check", "dataset_mass_accuracy",
-           "dataset_novel_candidates", "library_msms_qualify"]
+           "dataset_novel_candidates", "dataset_sample_peaks", "library_msms_qualify"]
 
 #: output_path なしで行を返す上限（解析ごと）。超えれば output_path を求める。
 MAX_INLINE_ROWS = 50
@@ -490,6 +490,74 @@ def dataset_feature_relations(feature_id: str | int, rt_window: float = 0.05, mz
         "as_ion_of": rows_table(out["as_ion_of"], relation_columns),
         "ions_of_this": rows_table(out["ions_of_this"], ion_columns),
     }, digits=4))
+
+
+# ---------- 試料ごとのピーク ----------
+
+#: `dataset_sample_peaks` が 1 回で受ける特徴の数の上限（これを超えたら呼び分ける）。
+MAX_SAMPLE_PEAK_FEATURES = 200
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+def dataset_sample_peaks(feature_ids: list[str | int], dataset_handle: str | None = None) -> str:
+    """特徴 × 試料ごとのピークの `rt`・`mz`・`height`・`detected` を返す（再解析で使う）。
+
+    割れた 2 スポットが 1 つの物質か、RT がずれていくか（ドリフト）を試料ごとに見るための読み取り。
+    feature_ids: 特徴 ID（int でも str でもよい。`str()` に直す）。1 回 200 件まで（超えたら
+    `DATASET_BAD_REQUEST`）。知らない ID も `DATASET_BAD_REQUEST`（details の `unknown`）。
+    行 `{feature_id, sample, rt, mz, height, detected}` を、依頼の特徴の順 × データセットの試料の順で返す。
+    `rt` は分（gap-fill のセルも `.arf` の値）、`mz` は検出されたセルの実測 m/z（gap-fill は null）、
+    `height` はデータセットの強度の行列の値（`measure` で選んだ `.arf` の欄。定量で変えたデータセットは
+    その値）、`detected` は `detected_mask`（gap-fill なら false）。
+    解析フォルダ（`.arf`）から読んだデータセットだけ。mzTab-M で読んだデータセットは
+    `per_sample_rt` が無いので `DATASET_BAD_REQUEST`（`directory` / `job_path` / `pipeline_path` で
+    解析フォルダを読む）。
+    dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
+    """
+    holder = resolve_holder(dataset_handle)
+    if isinstance(holder, str):
+        return holder
+    ds, error = _dataset_or_error(holder, True)
+    if error:
+        return error
+    if not isinstance(feature_ids, list) or not feature_ids:
+        return mztab_error("DATASET_BAD_REQUEST", "feature_ids は 1 件以上の特徴 ID のリスト",
+                           {"field": "feature_ids"})
+    if len(feature_ids) > MAX_SAMPLE_PEAK_FEATURES:
+        return mztab_error(
+            "DATASET_BAD_REQUEST",
+            f"feature_ids は 1 回 {MAX_SAMPLE_PEAK_FEATURES} 件まで（{len(feature_ids)} 件）。"
+            "分けて呼んでください。",
+            {"field": "feature_ids", "max": MAX_SAMPLE_PEAK_FEATURES, "n": len(feature_ids)})
+    rt_matrix = getattr(ds, "per_sample_rt", None)
+    if rt_matrix is None:
+        return mztab_error(
+            "DATASET_BAD_REQUEST",
+            "このデータセットには per_sample_rt が無い（mzTab-M から読んだか、統合などで作り直した）。"
+            "解析フォルダ（.arf）から読んだデータセットだけ使える。",
+            {"field": "per_sample_rt", "source_format": getattr(ds, "source_format", None)})
+    row_of = {fid: i for i, fid in enumerate(ds.feature_ids)}
+    wanted = list(dict.fromkeys(str(f) for f in feature_ids))
+    unknown = [f for f in wanted if f not in row_of]
+    if unknown:
+        return mztab_error("DATASET_BAD_REQUEST", f"データセットに無い特徴 ID: {unknown[:10]}",
+                           {"field": "feature_ids", "unknown": unknown[:50]})
+    matrix = ds.feature_matrix
+    mask = getattr(ds, "detected_mask", None)
+    mz_cells = getattr(ds, "per_sample_mz", None) or {}
+    rows = []
+    for fid in wanted:
+        i = row_of[fid]
+        cells = mz_cells.get(fid, {})
+        for j, sample in enumerate(ds.sample_names):
+            mz = cells.get(sample)
+            detected = bool(mask[i, j]) if mask is not None else mz is not None
+            rows.append({"feature_id": fid, "sample": sample,
+                         "rt": float(rt_matrix[i, j]), "mz": mz,
+                         "height": float(matrix[i, j]), "detected": detected})
+    return json_payload(round_floats(_finite({"status": "success", "n_features": len(wanted),
+                                              "n_samples": len(ds.sample_names), "rows": rows}),
+                                     digits=6))
 
 
 # ---------- 証拠の束 ----------

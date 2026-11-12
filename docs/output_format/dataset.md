@@ -15,6 +15,9 @@
   ピークではなく MS-DIAL が埋めた補間値（`.arf` の `IsGapFilled` / 負の `MasterPeakID`）。検出数・存在判定・
   検出率には `detected_mask` を使い、非ゼロかどうかで数えない。解析フォルダのデータセットでは検出の印は
   読んだ `.arf` そのものが持つので、常に付く。
+- **試料ごとのピークの RT**。解析フォルダのデータセットは、特徴 × 試料の RT（`per_sample_rt`）も持つ。
+  `dataset_sample_peaks(feature_ids)` が `rt` `mz` `height` `detected` を行にして返す（gap-fill の `rt` は
+  検出の位置ではない）。mzTab-M で読んだデータセットには無い。意味は `reanalysis` トピック §6.1。
 - **`.arf2` は特徴の代表**（スポット代表カタログ）。`Name` `Ontology` `Formula` `InChIKey` `AdductType` と、
   試料間の統計（`HeightAverage` `FillPercentage` `SignalToNoise*` など）を持つが、試料別の強度は持たない。
   `.arf` の `Name` と食い違うことがあり、代表の注釈は `.arf2` を優先する（`feature_metadata`）。

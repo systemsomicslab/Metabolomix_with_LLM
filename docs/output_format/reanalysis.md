@@ -377,6 +377,22 @@ InChIKey が一意に決まらない脂質の種は `{"lipid_species": "PC 18:3_
   源内断片だけ）。MS-DIAL のリンク（`.arf2`）は使わないので、裏付け（`strong`）は相関
   `r ≥ min_r` と同位体の強度比だけで決まる。
 
+### 6.1 試料ごとのピーク（`dataset_sample_peaks`）
+
+`dataset_sample_peaks(feature_ids, dataset_handle=None)`: 割れた 2 スポットが 1 つの物質か、RT が注入ごとに
+ずれていくかを、試料ごとの値で見るための読み取り。行は `{feature_id, sample, rt, mz, height, detected}`
+（依頼の特徴の順 × データセットの試料の順）。
+
+- `rt`: その試料のピークの RT（分）。gap-fill のセルも `.arf` が持つ値（補間の位置）を返すので、
+  **`detected: false` の `rt` は検出された位置ではない**。ドリフトは `detected: true` の行だけで見る。
+- `mz`: 検出されたセルの実測 m/z。gap-fill は `null`。
+- `height`: データセットの強度の行列（`feature_matrix`）の値。`measure` で選んだ `.arf` の欄で、定量
+  （`dataset_quant_apply` ほか）で値を変えたデータセットではその値。
+- `detected`: `detected_mask`（gap-fill なら false）。
+- 1 回 200 特徴まで。超過・知らない特徴 ID・空のリストは `DATASET_BAD_REQUEST`。ID は int でも str でもよい。
+- 解析フォルダ（`.arf`）から読んだデータセットだけ。mzTab-M で読んだデータセットは `per_sample_rt`
+  が無いので `DATASET_BAD_REQUEST`（`field: per_sample_rt`）。
+
 ## 7. 証拠の束（claim-evidence.v1）
 
 `dataset_claim_evidence(spec, dataset_handle, output_path)`。1 主張について、オブザーバーの

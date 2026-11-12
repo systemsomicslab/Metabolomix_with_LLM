@@ -267,6 +267,10 @@ give identical JSON for an identical spec — see
 `lipidmix://docs/output-format/reanalysis`. They return numbers, never verdicts.
 `dataset_alignment_qc` finds one compound split over two alignment spots (e.g. the
 first injections drifted in RT); run it before reading results.
+`dataset_sample_peaks` (read-only; datasets loaded from a MS-DIAL analysis folder
+only) returns one row per feature x sample with `rt`, `mz`, `height` and
+`detected` (false = gap-filled) - use it to judge whether two spots are one
+compound split in two, or whether RT drifts across injections.
 """.strip()
 
 mcp = FastMCP(

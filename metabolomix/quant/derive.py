@@ -47,6 +47,21 @@ def _sample_positions(parent_names: list[str], sample_names, sample_index) -> li
     return [position[n] for n in sample_names]
 
 
+def _derived_rt(ds, new_feature_ids: list[str], sample_idx: list[int]):
+    """親の `per_sample_rt` を、新しい特徴（ID）と試料（親での位置）に合わせて切り出す。
+
+    親に無い ID（統合後の新しい ID）があれば、RT は決められないので None。
+    """
+    parent = getattr(ds, "per_sample_rt", None)
+    if parent is None:
+        return None
+    row_of = {fid: i for i, fid in enumerate(ds.feature_ids)}
+    if any(fid not in row_of for fid in new_feature_ids):
+        return None
+    rows = [row_of[fid] for fid in new_feature_ids]
+    return np.array(parent[np.ix_(rows, sample_idx)], dtype=float)
+
+
 def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
            feature_ids: list[str] | None = None, feature_metadata: dict | None = None,
            sample_names: list[str] | None = None, sample_index: list[int] | None = None,
@@ -108,6 +123,8 @@ def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
             fid: {name: inner[parent_names[i]] for name, i in zip(new_names, idx)
                   if parent_names[i] in inner}
             for fid, inner in ds.per_sample_mz.items()}
+
+    new.per_sample_rt = _derived_rt(ds, new.feature_ids, idx)
 
     if feature_ids is not None:
         keep = set(new.feature_ids)

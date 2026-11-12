@@ -165,6 +165,13 @@ property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` 
 `spearman_rho` を出さない（`null`。理由は `rho_unavailable_reason: "filename_order"`）。`per_injection` と
 `n_samples` は残す。
 
+## dataset_sample_peaks
+
+前提: データセット（無ければ `missing_state`）。状態変更: なし。解析フォルダ（`.arf`）から読んだ
+データセットだけ（`per_sample_rt` が無ければ `DATASET_BAD_REQUEST`）。
+
+1. metabolomix/tools/reanalysis_tools.py  dataset_sample_peaks()
+
 ## dataset_novel_candidates
 
 前提: データセット（無ければ `missing_state`）。`statistics.result_id` なら今も有効な 2 群比較

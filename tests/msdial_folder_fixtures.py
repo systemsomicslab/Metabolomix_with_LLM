@@ -54,7 +54,7 @@ def write_msdial_folder(
 ) -> dict:
     """`.arf` / `.arf2`（と `.mddata`）を 1 組、フォルダへ書く。
 
-    spots[i]: name, mz, rt, ontology, adduct, heights, gap_filled, msms, matches, ion_mode,
+    spots[i]: name, mz, rt, rts（試料ごとの RT。既定は全試料 rt）, ontology, adduct, heights, gap_filled, msms, matches, ion_mode,
     blank_filtered（`.arf2` Key58。すべて任意）。
     samples[j]: file_id, name, class_id（必須）と file_type / order / batch、
     `.arf` に書く名前 arf_name（既定は name。改名後の `.mddata` との突き合わせ用）。
@@ -70,9 +70,11 @@ def write_msdial_folder(
         heights = spot.get("heights") or [100.0] * len(samples)
         gap = spot.get("gap_filled") or [False] * len(samples)
         msms = spot.get("msms") or [False] * len(samples)
+        rts = spot.get("rts") or [rt] * len(samples)
         rows = []
-        for sample, height, gap_filled, has_msms in zip(samples, heights, gap, msms):
-            row = arf_row(file_id=sample["file_id"], mz=mz, rt=rt, height=height,
+        for sample, height, gap_filled, has_msms, sample_rt in zip(
+                samples, heights, gap, msms, rts):
+            row = arf_row(file_id=sample["file_id"], mz=mz, rt=sample_rt, height=height,
                           gap_filled=gap_filled)
             row[1] = sample.get("arf_name", sample["name"])
             if has_msms:
