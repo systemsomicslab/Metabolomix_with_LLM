@@ -331,7 +331,7 @@ def _rule_targets(normalized: list[dict]) -> list[dict]:
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def dataset_feature_search(
-    feature_ids: list[str] | None = None,
+    feature_ids: list[str | int] | None = None,
     min_mz: float | None = None,
     max_mz: float | None = None,
     min_rt: float | None = None,
@@ -453,6 +453,8 @@ def dataset_feature_search(
                            "sort は窓検索（targets なし）のときだけ使える（目標照合は規則の順で"
                            "並ぶ。効かない設定を渡さない）。", {"field": "sort"})
 
+    if feature_ids is not None:
+        feature_ids = [str(f) for f in feature_ids]  # 整数で来ても文字列にそろえる
     window = {"feature_ids": feature_ids, "min_mz": min_mz, "max_mz": max_mz,
               "min_rt": min_rt, "max_rt": max_rt}
     given_window = [name for name, value in window.items() if value is not None]

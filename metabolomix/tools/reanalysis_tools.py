@@ -447,7 +447,7 @@ def dataset_homolog_check(spec: dict, dataset_handle: str | None = None) -> str:
 # ---------- 特徴どうしの関係 ----------
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_feature_relations(feature_id: str, rt_window: float = 0.05, mz_tol: float = 0.01,
+def dataset_feature_relations(feature_id: str | int, rt_window: float = 0.05, mz_tol: float = 0.01,
                               min_r: float = 0.7, adducts: list[str] | None = None,
                               dataset_handle: str | None = None) -> str:
     """mzTab-M の特徴 1 つについて、同時溶出の特徴と付加体・同位体・源内断片の関係を返す
