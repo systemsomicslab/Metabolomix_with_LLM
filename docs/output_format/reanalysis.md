@@ -557,6 +557,14 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
   - `interleaved` — ほか（試料ごとに入れ替わる）。
 - **注釈の両立**（`names_compatible`）: 同じ名前（大文字小文字を無視）、GOSLIN の種のレベルで同じ
   和組成（`PC 16:0_18:1` と `PC 34:1`）、または片方が注釈なし。名前は SME の rank 1、無ければ SML。
+  加えて、組の出力の `inchikey_match`（`feature_metadata[fid]["inchikey"]` どうしの照合）が `full`
+  （InChIKey が全体で一致）か `first_block`（先頭の 14 文字の塊 = 骨格だけが一致。立体異性体の可能性）
+  なら、名前が違っても両立とみなす（組の `names_compatible` はこの合算の真偽）。どちらかが無い・空・
+  一致しないときは `none` で、名前だけで判定する。
+- **受け持ちの数**: `n_owned` は `[a の数, b の数]` で、**gap-fill で値を補った試料の受け持ちを含む**
+  （意味は変えない）。`n_owned_detected` は、そのうちどちらかのスポットで**検出された試料**
+  だけで数えた同じ並びの数（検出状態が無い run では null）。`n_owned` が釣り合って見えても
+  `n_owned_detected` が片側 0 なら、その側は gap-fill だけで支えられている。
 - **`mergeable`** = `names_compatible` で、型が `injection_block`、または ΔRT ≤ `max_interleaved_rt_gap`
   （既定 0.15 分 = MS-DIAL のアライメントの RT 許容 0.1 分の 1.5 倍。アライメントの窓で割れたもので、
   別の異性体ではない。MTBLS6965 の陰イオンの FA 20:3 の異性体 401/402 は 0.20 分離れており、
@@ -586,7 +594,7 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
  "pairs": [{"pair_id": "P1", "features": ["1265", "1266"], "mz": [..], "rt": [..],
             "delta_rt": 0.61, "delta_ppm": 7.7, "adduct": "[M+NH4]1+",
             "names": ["CE 18:2", null], "names_compatible": true, "type": "injection_block",
-            "owner": {"<試料名>": "1265"}, "n_owned": [40, 2], "both_detected_fraction": 0.0,
+            "owner": {"<試料名>": "1265"}, "n_owned": [40, 2], "n_owned_detected": [40, 1], "inchikey_match": "none", "both_detected_fraction": 0.0,
             "block": {"spot": "1266", "injections": [1, 2]}, "mergeable": true,
             "merged": true, "merge_reason": null}],
  "groups": [{"group_id": "G1", "features": ["1265", "1266"], "pair_ids": ["P1"],

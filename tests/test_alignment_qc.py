@@ -447,3 +447,57 @@ def test_merge_matrix_columns_takes_per_sample_max():
     assert same.detected is None
     with pytest.raises(ValueError):
         Q.merge_matrix_columns(matrix, ["a", "b", "c", "d"], [["a", "b"], ["b", "c"]])
+
+
+def _key_ds(key_a, key_b, name_a="CE 18:2", name_b="CE 20:4"):
+    ds = _make_ds([("1", 650.6000, 20.0, ALL - FIRST_TWO, name_a, ADDUCT),
+                   ("2", 650.6050, 20.6, FIRST_TWO, name_b, ADDUCT)])
+    ds.feature_metadata["1"]["inchikey"] = key_a
+    ds.feature_metadata["2"]["inchikey"] = key_b
+    return ds
+
+
+def test_n_owned_detected_excludes_gap_filled():
+    ds = _make_ds([("1", 650.6000, 20.0, ALL - FIRST_TWO, None, ADDUCT),
+                   ("2", 650.6050, 20.6, FIRST_TWO, None, ADDUCT)], detected=True)
+    ds.detected_mask[1, :] = False          # 2 側は全試料が gap-fill（値だけで受け持ちが決まる）
+    (pair,) = Q.find_split_pairs(ds)["pairs"]
+    assert pair["n_owned"] == [40, 2]
+    assert pair["n_owned_detected"] == [40, 0]
+
+
+def test_n_owned_detected_is_none_without_detection_state():
+    ds = _make_ds([("1", 650.6000, 20.0, ALL - FIRST_TWO, None, ADDUCT),
+                   ("2", 650.6050, 20.6, FIRST_TWO, None, ADDUCT)])
+    (pair,) = Q.find_split_pairs(ds)["pairs"]
+    assert pair["n_owned_detected"] is None
+
+
+def test_same_inchikey_is_name_compatible():
+    ds = _key_ds("ABCDEFGHIJKLMN-OPQRSTUVWX-N", "ABCDEFGHIJKLMN-OPQRSTUVWX-N")
+    (pair,) = Q.find_split_pairs(ds)["pairs"]
+    assert pair["inchikey_match"] == "full"
+    assert pair["names_compatible"] is True and pair["mergeable"] is True
+
+
+def test_first_block_inchikey_marked():
+    ds = _key_ds("ABCDEFGHIJKLMN-OPQRSTUVWX-N", "abcdefghijklmn-ZZZZZZZZZZ-N")
+    (pair,) = Q.find_split_pairs(ds)["pairs"]
+    assert pair["inchikey_match"] == "first_block"
+    assert pair["names_compatible"] is True and pair["mergeable"] is True
+
+
+def test_different_inchikey_keeps_name_verdict():
+    ds = _key_ds("ABCDEFGHIJKLMN-OPQRSTUVWX-N", "ZZZZZZZZZZZZZZ-OPQRSTUVWX-N")
+    (pair,) = Q.find_split_pairs(ds)["pairs"]
+    assert pair["inchikey_match"] == "none"
+    assert pair["names_compatible"] is False and pair["mergeable"] is False
+
+
+def test_missing_inchikey_falls_back_to_names():
+    ds = _key_ds(None, "", name_a="CE 18:2", name_b="CE 18:2")
+    (pair,) = Q.find_split_pairs(ds)["pairs"]
+    assert pair["inchikey_match"] == "none" and pair["names_compatible"] is True
+    ds = _key_ds("ABCDEFGHIJKLMN-OPQRSTUVWX-N", None)
+    (pair,) = Q.find_split_pairs(ds)["pairs"]
+    assert pair["inchikey_match"] == "none" and pair["names_compatible"] is False
