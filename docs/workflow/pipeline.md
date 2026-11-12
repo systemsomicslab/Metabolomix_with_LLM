@@ -64,13 +64,17 @@ MCP層は薄い(`metabolomix/tools/pipeline_tools.py` と `metabolomix/tools/con
 を起動し、cwdは呼び出し元のcwdや別checkoutではなくこのcheckout自身(`_REPO_ROOT`)へ
 固定する。起動プロセスのstdout/stderrは `launch_detached` がログファイルへ結ぶため、
 起動元プロセスがworkerのstdoutパイプを継承して待ち続ける経路(`bInheritHandles=TRUE`
-かつハンドル未指定)は無い。
+かつハンドル未指定)は無い。子へ渡すハンドルはログと NUL の 2 つだけに絞る
+(`process_control._create_process` が `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` で渡す)ので、
+MCP サーバの標準入出力のパイプなど、ほかの継承可能なハンドルは中継にも worker にも
+Console にも渡らない(渡ると、サーバが終わってもアプリの側にパイプの終わりが届かない)。
 
 `launch_detached` は worker を直接起こさず、すぐ終わる中継のプロセス
 (`python -m metabolomix.core.detach_relay`。`process_control._launch_via_relay` が起こして
 終わりを待つ)に起こさせる。中継は worker を起こし、その pid と identity(pid と生成時刻)を
-書いてすぐ終わる。worker の親(中継)が残らないので、デスクトップアプリが呼び出しを打ち切って
-MCP サーバをプロセスの木ごと消しても(`taskkill /T` と同じく親子の記録をたどる)、worker と
+書いてすぐ終わる。デスクトップアプリは呼び出しを打ち切ると MCP サーバを作り直す。試し走りの
+観察から、そのときサーバをプロセスの木ごと消していると見ている(実測はしていない)。worker の
+親(中継)が残らないので、木ごとの終了(`taskkill /T` と同じく親子の記録をたどる)でも worker と
 その Console(worker が自分の Job で所有する)は残る。2 段(サーバ→中継・中継→worker)とも
 同じ規則で切り離す(breakaway のフラグは Job が許すときだけ)。戻り値の pid・identity は
 worker のもので、handshake(worker 自身が `pipeline-run.json` に書く identity)と

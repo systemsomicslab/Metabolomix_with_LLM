@@ -13,6 +13,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -748,9 +749,10 @@ def test_detach_from_kill_on_close_job_is_unsupported(tmp_path):
 
 # ---------- 起こした側の木ごと消されても worker は残る（A10） ----------
 #
-# デスクトップアプリは呼び出しを打ち切ると MCP サーバを作り直す。そのときサーバの
-# プロセスの木ごと（`taskkill /T` と同じく、親子の記録をたどって）消すので、サーバが
-# 直接起こした worker は、切り離しのフラグを付けていても巻き込まれる。
+# デスクトップアプリは呼び出しを打ち切ると MCP サーバを作り直す。試し走りの観察から、
+# そのときサーバのプロセスの木ごと（`taskkill /T` と同じく、親子の記録をたどって）消して
+# いると見ている（実測はしていない）。そうなら、サーバが直接起こした worker は、切り離しの
+# フラグを付けていても巻き込まれる。
 
 _TREE_PARENT_SRC = """\
 import json
@@ -841,6 +843,117 @@ def test_launch_detached_reports_a_relay_that_wrote_no_result(tmp_path, monkeypa
     assert excinfo.value.details["exit_code"] != 0
     assert "no_such_relay" in excinfo.value.details["relay_log_tail"]
     assert sorted(p.name for p in tmp_path.iterdir()) == ["w.relay.log"]
+
+
+def _wait_until_pid_gone(pid: int, timeout: float = 10.0) -> bool:
+    """pid のプロセスが居なくなるまで待つ。居なくなったら True。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process_identity(pid) is None:
+            return True
+        time.sleep(0.02)
+    return process_identity(pid) is None
+
+
+@windows_only
+@pytest.mark.parametrize("failure, code", [("timeout", "DETACH_RELAY_TIMEOUT"),
+                                           ("wait_failed", "PROCESS_WAIT_FAILED")])
+def test_launch_detached_stops_a_relay_that_does_not_finish(tmp_path, monkeypatch,
+                                                             failure, code):
+    """中継が上限までに終わらない・終わりを待てないときは、中継を止めて誤りを返す。
+
+    中継の代わりに眠るだけのモジュール（`tests/detach_relay_sleeper.py`）を起こす。
+    空の中継のログも残さない。
+    """
+    monkeypatch.setattr(pc, "_RELAY_MODULE", "tests.detach_relay_sleeper")
+    monkeypatch.setattr(pc, "_RELAY_TIMEOUT_S", 1.0)
+    if failure == "wait_failed":
+        monkeypatch.setattr(pc, "_WaitForSingleObject", lambda handle, millis: 0xFFFFFFFF)
+    logs = tmp_path / "logs"
+    with pytest.raises(DomainError) as excinfo:
+        launch_detached([sys.executable, "-c", "pass"], cwd=tmp_path,
+                        log_path=logs / "w.log")
+    monkeypatch.undo()
+    assert excinfo.value.code == code
+    assert _wait_until_pid_gone(excinfo.value.details["relay_pid"]), "中継が止められていない"
+    assert list(logs.iterdir()) == []
+
+
+@windows_only
+def test_launch_detached_removes_the_empty_relay_log_when_the_relay_cannot_start(
+        tmp_path, monkeypatch):
+    """中継そのものを起こせないときも、空の中継のログを残さない。"""
+    monkeypatch.setattr(pc, "_PACKAGE_ROOT", tmp_path / "missing")
+    logs = tmp_path / "logs"
+    with pytest.raises(DomainError) as excinfo:
+        launch_detached([sys.executable, "-c", "pass"], cwd=tmp_path,
+                        log_path=logs / "w.log")
+    assert excinfo.value.code == "PROCESS_LAUNCH_FAILED"
+    assert list(logs.iterdir()) == []
+
+
+_PIPE_PARENT_SRC = """\
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from metabolomix.core.process_control import launch_detached
+
+out_path = Path(sys.argv[2])
+info = launch_detached([sys.executable, sys.argv[5]], cwd=Path(sys.argv[3]),
+                       log_path=Path(sys.argv[4]))
+partial = out_path.with_name(out_path.name + ".partial")
+partial.write_text(json.dumps(info), encoding="utf-8")
+partial.replace(out_path)
+"""
+
+#: ログへ 1 行書いて眠る worker（ログのハンドルは渡ることを見る）。
+_PIPE_WORKER_SRC = "import time\nprint('worker-started', flush=True)\ntime.sleep(120)\n"
+
+
+@windows_only
+def test_worker_does_not_hold_the_launchers_stdio_pipe(tmp_path):
+    """worker に渡るハンドルはログと NUL だけ。起こした側の標準出力のパイプは渡らない。
+
+    MCP サーバはアプリと標準入出力のパイプでつながっていて、そのハンドルは継承可能である。
+    継承可能なハンドルを全部渡すと、worker がパイプの複製を持ち続け、サーバが終わっても
+    アプリの側にパイプの終わり（EOF）が届かない。ここではパイプにつないだ親が worker を
+    起こして終わった後、パイプが閉じきる（EOF が届く）ことと、worker のログには書けることを見る。
+    """
+    parent_script = _write_script(tmp_path, "pipe_parent.py", _PIPE_PARENT_SRC)
+    worker_script = _write_script(tmp_path, "pipe_worker.py", _PIPE_WORKER_SRC)
+    out_path = tmp_path / "launched.json"
+    log_path = tmp_path / "worker.log"
+    parent = subprocess.Popen(
+        [sys.executable, str(parent_script), _REPO_ROOT, str(out_path), str(tmp_path),
+         str(log_path), str(worker_script)],
+        cwd=str(tmp_path), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL)
+    eof = threading.Event()
+
+    def drain():
+        parent.stdout.read()
+        eof.set()
+
+    reader = threading.Thread(target=drain, daemon=True)
+    reader.start()
+    identity = None
+    try:
+        info = json.loads(_wait_for_file(out_path, timeout=60))
+        identity = info["identity"]
+        assert parent.wait(timeout=60) == 0
+        assert same_process(identity), "worker が起きていない"
+        assert "worker-started" in _wait_for_file(log_path, timeout=30)
+        assert eof.wait(timeout=15), \
+            "起こした側が終わっても標準出力のパイプが閉じない（worker が持っている）"
+    finally:
+        if parent.poll() is None:
+            _taskkill_tree(parent.pid)
+        _kill_pid_if_same(identity)
+        reader.join(timeout=30)
+    parent.stdout.close()
+    assert _wait_until_gone(identity)
 
 
 @windows_only

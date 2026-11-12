@@ -183,6 +183,12 @@ if _IS_WINDOWS:  # pragma: no branch - Windows専用の宣言ブロック
             ("hStdError", _wt.HANDLE),
         ]
 
+    class _STARTUPINFOEXW(ctypes.Structure):
+        _fields_ = [
+            ("StartupInfo", _STARTUPINFOW),
+            ("lpAttributeList", ctypes.c_void_p),
+        ]
+
     class _PROCESS_INFORMATION(ctypes.Structure):
         _fields_ = [
             ("hProcess", _wt.HANDLE),
@@ -252,6 +258,23 @@ if _IS_WINDOWS:  # pragma: no branch - Windows専用の宣言ブロック
     _STARTF_USESTDHANDLES = 0x00000100
     _PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000
     _SYNCHRONIZE = 0x00100000
+    _EXTENDED_STARTUPINFO_PRESENT = 0x00080000
+    _PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
+
+    _InitializeProcThreadAttributeList = _kernel32.InitializeProcThreadAttributeList
+    _InitializeProcThreadAttributeList.argtypes = [ctypes.c_void_p, _wt.DWORD, _wt.DWORD,
+                                                   ctypes.POINTER(ctypes.c_size_t)]
+    _InitializeProcThreadAttributeList.restype = _wt.BOOL
+
+    _UpdateProcThreadAttribute = _kernel32.UpdateProcThreadAttribute
+    _UpdateProcThreadAttribute.argtypes = [ctypes.c_void_p, _wt.DWORD, ctypes.c_size_t,
+                                           ctypes.c_void_p, ctypes.c_size_t,
+                                           ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+    _UpdateProcThreadAttribute.restype = _wt.BOOL
+
+    _DeleteProcThreadAttributeList = _kernel32.DeleteProcThreadAttributeList
+    _DeleteProcThreadAttributeList.argtypes = [ctypes.c_void_p]
+    _DeleteProcThreadAttributeList.restype = None
 
     _CreateJobObjectW = _kernel32.CreateJobObjectW
     _CreateJobObjectW.argtypes = [ctypes.POINTER(_SECURITY_ATTRIBUTES), _wt.LPCWSTR]
@@ -457,6 +480,11 @@ def _create_process(command: list[str], cwd: Path, log_path: Path,
 
     `env`がNoneなら親の環境を継承する。dictならその環境全体で起動する
     （`resolve_python_launch`がvenvを再現するために使う）。
+
+    **子へ渡すハンドルはログとNULの2つだけ**（`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`）。
+    `bInheritHandles=TRUE`だけだと、親の継承可能なハンドルが全部渡る。MCPサーバの
+    標準入出力はアプリとつながるパイプで継承可能なので、それが中継・worker・Consoleへ
+    渡り、サーバが終わってもアプリの側にパイプの終わりが届かなくなる。
     """
     environment = None
     if env is not None:
@@ -464,20 +492,51 @@ def _create_process(command: list[str], cwd: Path, log_path: Path,
         creation_flags |= CREATE_UNICODE_ENVIRONMENT
     log_handle, null_handle = _open_child_stdio(log_path)
     try:
-        si = _startup_info(log_handle, null_handle)
+        siex = _STARTUPINFOEXW()
+        siex.StartupInfo = _startup_info(log_handle, null_handle)
+        siex.StartupInfo.cb = ctypes.sizeof(_STARTUPINFOEXW)
+        inherited = (_wt.HANDLE * 2)(log_handle, null_handle)
         pi = _PROCESS_INFORMATION()
         cmdline = ctypes.create_unicode_buffer(subprocess.list2cmdline(command))
-        created = _CreateProcessW(None, cmdline, None, None, True,
-                                  creation_flags, environment, str(cwd),
-                                  ctypes.byref(si), ctypes.byref(pi))
-        if not created:
-            raise _win_error("PROCESS_LAUNCH_FAILED",
-                             "CreateProcessWに失敗した",
-                             {"command": command, "cwd": str(cwd)})
+        with _handle_list_attribute(inherited) as attribute_list:
+            siex.lpAttributeList = attribute_list
+            created = _CreateProcessW(None, cmdline, None, None, True,
+                                      creation_flags | _EXTENDED_STARTUPINFO_PRESENT,
+                                      environment, str(cwd),
+                                      ctypes.byref(siex.StartupInfo), ctypes.byref(pi))
+            if not created:
+                raise _win_error("PROCESS_LAUNCH_FAILED",
+                                 "CreateProcessWに失敗した",
+                                 {"command": command, "cwd": str(cwd)})
         return pi
     finally:
         _CloseHandle(log_handle)
         _CloseHandle(null_handle)
+
+
+@contextlib.contextmanager
+def _handle_list_attribute(handles):
+    """`handles`だけを子へ渡す属性リストを作り、そのアドレスを渡す（抜けるときに消す）。
+
+    `handles`（HANDLEの配列）は継承可能でなければならず、CreateProcessWが終わるまで
+    呼び出し側が保持する。
+    """
+    size = ctypes.c_size_t(0)
+    # 1回目は必要な大きさを聞くだけ（ERROR_INSUFFICIENT_BUFFERで失敗するのが正常）。
+    _InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(size))
+    buffer = ctypes.create_string_buffer(size.value)
+    if not _InitializeProcThreadAttributeList(buffer, 1, 0, ctypes.byref(size)):
+        raise _win_error("PROCESS_ATTRIBUTE_FAILED",
+                         "InitializeProcThreadAttributeListに失敗した")
+    try:
+        if not _UpdateProcThreadAttribute(buffer, 0, _PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                          ctypes.byref(handles), ctypes.sizeof(handles),
+                                          None, None):
+            raise _win_error("PROCESS_ATTRIBUTE_FAILED",
+                             "UpdateProcThreadAttributeに失敗した")
+        yield ctypes.addressof(buffer)
+    finally:
+        _DeleteProcThreadAttributeList(buffer)
 
 
 def process_identity(pid: int) -> dict | None:
@@ -793,8 +852,9 @@ def launch_detached(command: list[str], *, cwd: Path, log_path: Path) -> dict:
     同時に消えるワーカーを「起動できた」と記録してしまう。
 
     **ワーカーは中継のプロセスから起こす**。デスクトップアプリは呼び出しを打ち切ると
-    MCPサーバを作り直し、そのときサーバのプロセスの木ごと消す。木は親子の記録を
-    たどるので、サーバが直接起こしたワーカーは切り離しのフラグを付けていても巻き込まれる。
+    MCPサーバを作り直す。試し走りの観察から、そのときサーバのプロセスの木ごと消して
+    いると見ている（実測はしていない）。木ごとの終了は親子の記録をたどるので、サーバが
+    直接起こしたワーカーは切り離しのフラグを付けていても巻き込まれる。
     そこで、このプロセスは中継（`python -m metabolomix.core.detach_relay`）を起こし、
     中継がワーカーを起こしてそのpidとidentityを書き、すぐ終わる。ワーカーの親（中継）は
     もう居ないので、木をたどってもワーカーに届かない。2段とも同じフラグの規則
@@ -830,8 +890,9 @@ def _launch_via_relay(command: list[str], cwd: Path, log_path: Path,
     解釈系は起動時に`__PYVENV_LAUNCHER__`を自分の環境から消すので、中継がそれを足し直す
     （`env`は`resolve_python_launch`が作る「このプロセスの環境＋その印」に限られる）。
 
-    中継のstdout/stderrは`<ログ名>.relay<拡張子>`へ結ぶ。中継が誤りなく終われば空なので消し、
-    起動結果を返さなかったときは残して`DETACH_RELAY_FAILED`の`details`に末尾を載せる。
+    中継のstdout/stderrは`<ログ名>.relay<拡張子>`へ結ぶ。どの経路でも空なら消し（中継を
+    起こせなかった・止めたときも）、中身があって起動結果が無ければ残して
+    `DETACH_RELAY_FAILED`の`details`に末尾を載せる。
     上限（`_RELAY_TIMEOUT_S`）までに終わらなければ中継を止めて`DETACH_RELAY_TIMEOUT`
     （ワーカーは起きているかもしれない。pipelineならworker自身がidentityを記録する）。
     """
@@ -866,9 +927,7 @@ def _launch_via_relay(command: list[str], cwd: Path, log_path: Path,
     finally:
         with contextlib.suppress(OSError):
             result_path.unlink(missing_ok=True)
-    with contextlib.suppress(OSError):
-        if relay_log.stat().st_size == 0:
-            relay_log.unlink()
+        _discard_if_empty(relay_log)
 
     error = result.get("error") if isinstance(result, dict) else None
     if isinstance(error, dict):
@@ -881,6 +940,13 @@ def _launch_via_relay(command: list[str], cwd: Path, log_path: Path,
                           f"中継がワーカーの起動結果を返さなかった（終了コード {exit_code}）",
                           details)
     return result
+
+
+def _discard_if_empty(path: Path) -> None:
+    """空のファイルを消す（無い・消せないなら何もしない）。"""
+    with contextlib.suppress(OSError):
+        if path.stat().st_size == 0:
+            path.unlink()
 
 
 def _read_relay_result(path: Path):

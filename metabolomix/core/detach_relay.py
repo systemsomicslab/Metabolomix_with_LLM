@@ -1,10 +1,12 @@
 """切り離し起動の中継（`process_control.launch_detached`だけが起こす）。
 
-MCPサーバが直接ワーカーを起こすと、ワーカーの親はサーバになる。デスクトップアプリが
-呼び出しを打ち切ってサーバをプロセスの木ごと消すと（`taskkill /T`と同じく親子の記録を
-たどる）、切り離しのフラグを付けていてもワーカーが巻き込まれる。そこでサーバはこの中継を
+MCPサーバが直接ワーカーを起こすと、ワーカーの親はサーバになる。デスクトップアプリは
+呼び出しを打ち切るとサーバを作り直す。試し走りの観察から、そのときサーバをプロセスの木ごと
+消していると見ている（実測はしていない）。木ごとの終了（`taskkill /T`と同じく親子の記録を
+たどる）では、切り離しのフラグを付けていてもワーカーが巻き込まれる。そこでサーバはこの中継を
 起こし、中継がワーカーを起こしてそのpidとidentityを書き、すぐ終わる。ワーカーの親（中継）は
-もう居ないので、サーバの木をたどってもワーカーに届かない。
+もう居ないので、サーバの木をたどってもワーカーに届かない。ワーカーへ渡るハンドルはログと
+NULだけ（`process_control._create_process`が絞る）。
 
     python -m metabolomix.core.detach_relay <要求のJSON>
 
@@ -56,12 +58,6 @@ def main(argv: list[str]) -> int:
     if len(argv) != 1:
         print("usage: python -m metabolomix.core.detach_relay <要求のJSON>", file=sys.stderr)
         return 2
-    # 中継自身のstdout/stderr（中継のログ）をワーカーへ受け継がせない。
-    for fd in (0, 1, 2):
-        try:
-            os.set_inheritable(fd, False)
-        except OSError:
-            pass
     request = json.loads(argv[0])
     result_path = Path(request["result_path"])
     try:
