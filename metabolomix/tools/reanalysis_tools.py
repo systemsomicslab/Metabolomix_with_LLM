@@ -694,8 +694,9 @@ def dataset_mass_accuracy(band_edges: list[float] | None = None, rank: int = 1,
     `injection_trend`: 試料ごとの実測 m/z（隣接 `.arf` の検出されたセル）があれば、試料ごとの
     誤差の中央値 `per_injection`（`sample` `injection_order` `median_ppm` `n`）と注入順との
     `spearman_rho`（5 試料未満、または注入順の出所が `filename`＝採取時刻が読めないときは null。
-    理由は `rho_unavailable_reason`）・`n_samples`・`injection_order_source`。無ければ
-    `{"status": "unavailable"}`。
+    理由は `rho_unavailable_reason`）・`n_samples`・`injection_order_source`・`warnings`（注入順が
+    MS-DIAL の振った値でファイル名の順と一致するときだけ `injection_order_may_be_file_order`。ρ は出すが、
+    MS-DIAL の既定＝ファイルの順かもしれない）。無ければ `{"status": "unavailable"}`。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     """
     from metabolomix.analysis import mass_accuracy

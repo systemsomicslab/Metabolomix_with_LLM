@@ -81,7 +81,8 @@ def dataset_status(dataset_handle: str | None = None, view: str = "summary",
         役割ごとの件数 `roles`・群の無い試料の数 `n_ungrouped`・特徴のタグごとの件数 `tags`・
         除外の件数 `excluded`（`dataset_exclude`）を含む。
       - `"samples"`: 試料の TSV（name・group・role・batch・batch_source・injection_order・
-        injection_order_source・subject_id・excluded。`*_source` は値の出所 sheet / mddata / mzTab
+        injection_order_source・subject_id・excluded。`*_source` は値の出所 sheet / mddata / mzTab /
+        raw_acquisition_time / filename（後の 2 つはシートの宣言 `# injection_order_source = ...`）
         （シートの空欄を .mddata・mzTab-M で埋めた値もその出所で示す）。バッチが空で試料名に 8 桁があれば
         batch_source は `candidate:<8 桁>`（候補。統計には当てない）。`excluded` は除外の理由、
         除外していなければ空）。`query` で絞れる。
@@ -209,14 +210,15 @@ def _excluded_cell(ds, name: str, row: dict) -> str:
 
 
 def _source_cell(row: dict, field: str) -> str:
-    """値の出所（sheet / mddata / mzTab）。値が無いバッチは試料名の 8 桁の候補（`candidate:<値>`）。"""
+    """値の出所（sheet / mddata / mzTab / raw_acquisition_time / filename）。値が無いバッチは試料名の 8 桁の候補
+    （`candidate:<値>`）。"""
     from metabolomix.analysis import sample_manifest
 
     prov = (row.get("provenance") or {}).get(field) or {}
     if row.get(field) is None:
         candidate = prov.get("candidate") or {}
         return _tsv_cell(f"candidate:{candidate['value']}") if candidate.get("value") else ""
-    return _tsv_cell(sample_manifest.injection_order_source_label(prov.get("source")))
+    return _tsv_cell(sample_manifest.order_provenance_label(prov))
 
 
 def _samples_view(ds, query: str | None) -> str:

@@ -501,6 +501,7 @@ SML にその列が無い mzTab では**エラーにせず**、`subset_available
 | `rho_unavailable_reason` | `spearman_rho` を出さない理由（`filename_order` / `too_few_samples`）。ρ が出ているとき、片方が定数で `null` のときは無い |
 | `n_samples` | `per_injection` の件数 |
 | `injection_order_source` | 注入順の出所（`manifest` / `metadata` / `filename`。§9 の `alignment_qc` と同じ規則）。`filename` のとき `per_injection` はファイル名の順で、ρ は無い |
+| `warnings` | 注入順の注意（無ければ鍵ごと無い）。`injection_order_may_be_file_order`（`n_samples`・`message`）: 注入順が MS-DIAL の振った値（`.mddata` / mzTab-M の MS:4000089）で、ファイル名の順と一致する。MS-DIAL は利用者が入れない限りファイルの順で振るので、実際の測定順とは限らない。**ρ はそのまま出す**（ρ はファイル名の並びとの相関かもしれない）。`injection_order_source` が `filename` のときは出さない |
 
 試料ごとの m/z が無い（`.arf` を取り込めていない）ときは `{"status": "unavailable"}` だけ。
 ρ が 0 に近いことは「ずれが無い」ではない——ずれが注入順に単調でないだけのこともある

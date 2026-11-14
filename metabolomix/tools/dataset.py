@@ -16,31 +16,36 @@ __all__ = ["list_data_files"]
 _PAIR_LIMIT = 30
 
 
-def _sheet_groups(directory: Path) -> tuple[dict[str, str], str | None]:
+def _sheet_groups(directory: Path) -> tuple[dict[str, str], str | None, int]:
     """raw のフォルダの実験情報シート（`sample-manifest.tsv`）の `source_file` → 群（生体試料の行だけ）。
 
-    pipeline の受付と違って厳密には検証しない（群を読むだけ）。無い・読めないときは空と理由。
+    pipeline の受付と違って厳密には検証しない（群を読むだけ）。無い・読めないときは空と理由。群
+    `unassigned`（`pipeline_sample_sheet` が因子の値が空・試料の表に行の無い試料に付ける。群ではない）の行は
+    判定に入れず、その数を 3 つ目に返す。
     """
     from metabolomix.pipeline.inputs import DEFAULT_MANIFEST_NAME
+    from metabolomix.rawmeta.sample_table import UNASSIGNED
 
     path = directory / DEFAULT_MANIFEST_NAME
     if not path.is_file():
-        return {}, None
+        return {}, None, 0
     try:
         lines = [line for line in path.read_text(encoding="utf-8-sig").splitlines()
                  if not line.startswith("#")]
     except (OSError, UnicodeDecodeError) as exc:
-        return {}, f"{DEFAULT_MANIFEST_NAME} を読めない（{type(exc).__name__}）"
+        return {}, f"{DEFAULT_MANIFEST_NAME} を読めない（{type(exc).__name__}）", 0
     reader = csv.DictReader(lines, delimiter="\t")
     if not {"source_file", "group"} <= set(reader.fieldnames or []):
-        return {}, f"{DEFAULT_MANIFEST_NAME} に source_file・group の列が無い"
-    out = {}
+        return {}, f"{DEFAULT_MANIFEST_NAME} に source_file・group の列が無い", 0
+    out, unassigned = {}, 0
     for row in reader:
         role = (row.get("role") or "").strip().lower()
         group = (row.get("group") or "").strip()
-        if group and role in ("", "sample"):
+        if group == UNASSIGNED:
+            unassigned += 1
+        elif group and role in ("", "sample"):
             out[Path((row.get("source_file") or "").strip()).name] = group
-    return out, None
+    return out, None, unassigned
 
 
 def _acquisition_lines(directory: Path, paths: list[str]) -> list[str]:
@@ -61,7 +66,7 @@ def _acquisition_lines(directory: Path, paths: list[str]) -> list[str]:
         source = r["source"] if r["rank"] is not None else f"unreadable（{r.get('error') or '理由不明'}）"
         lines.append("\t".join([r["file"], r["start_utc"] or "",
                                 "" if r["rank"] is None else str(r["rank"]), source]))
-    groups, problem = _sheet_groups(directory)
+    groups, problem, n_unassigned = _sheet_groups(directory)
     if problem:
         lines.append(f"群と取得順の重なり: 判定しない（{problem}）")
     elif groups:
@@ -69,6 +74,8 @@ def _acquisition_lines(directory: Path, paths: list[str]) -> list[str]:
         lines.append(f"\n## 群と取得順の重なり（sample-manifest.tsv の群）: {judged['overlap']}")
         lines.append("complete = 取得順の範囲が重ならない（群と測定順が完全に交絡）/ independent = 重なり、"
                      "どの取得日（UTC）にも両群がいる / partial = それ以外 / unknown = 群のある raw に読めない時刻がある")
+        if n_unassigned:
+            lines.append(f"群 unassigned（因子の値が空・試料の表に行が無い）の {n_unassigned} 行は判定に入れない")
         lines.append("group_a\tgroup_b\toverlap")
         shown = judged["comparisons"][:_PAIR_LIMIT]
         lines.extend(f"{c['groups'][0]}\t{c['groups'][1]}\t{c['overlap']}" for c in shown)
@@ -101,7 +108,7 @@ def list_data_files(
     raw ごとの取得時刻（メタデータだけを読む: .wiff の OLE・Thermo .raw のファイルヘッダ・Bruker .d の
     tdf/sqlite・mzML の startTimeStamp。スペクトルは解さない）と、そこからの順・40 分を超える間隔の数を
     足す。フォルダに実験情報シート `sample-manifest.tsv` があれば、その群と取得順の重なり（群の組ごとに
-    complete / independent / partial / unknown）も返す。
+    complete / independent / partial / unknown。群 `unassigned` の行は入れない）も返す。
 
     返すのは絶対パスで、`dcl_find_msms(file_path=...)` 等へそのまま渡せる。
     フォルダ全体をまず解析するなら `load_dataset(directory=...)` が入口。

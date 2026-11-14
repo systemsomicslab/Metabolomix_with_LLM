@@ -34,6 +34,12 @@ def test_writes_a_manifest_the_pipeline_reader_accepts(tmp_path):
     assert by_file["r03.mzML"]["injection_order"] == 1 and by_file["qc1.mzML"]["role"] == "qc"
     assert by_file["r01.mzML"]["group"] == "WT_chow" and by_file["r01.mzML"]["Genotype"] == "WT"
     assert any("batch" in note for note in out["notes"])
+    # 注入順が取得時刻から来たことは読み直しても残る（出所の名前は raw_acquisition_time。値の出所はシート）
+    prov = by_file["r03.mzML"]["provenance"]["injection_order"]
+    assert prov["source"] == "user_manifest" and prov["derived_from"] == "raw_acquisition_time"
+    assert sample_manifest.order_provenance_label(prov) == "raw_acquisition_time"
+    _roles, meta = sample_manifest.pp_inputs_from_rows([r["sample_id"] for r in rows], rows)
+    assert {m["run_order_source"] for m in meta.values()} == {"raw_acquisition_time"}
 
 
 def test_existing_sheet_is_not_overwritten_unless_asked(tmp_path):
@@ -61,6 +67,7 @@ def test_unreadable_raw_leaves_order_empty_and_says_so(tmp_path):
     rows = sample_manifest.parse_manifest(raw / "sample-manifest.tsv", source_root=raw,
                                           expected_sources=list_primary_names(raw, {}))
     assert all(r["injection_order"] is None for r in rows)
+    assert all("derived_from" not in r["provenance"]["injection_order"] for r in rows)
 
 
 def test_bad_inputs_are_envelopes(tmp_path):
@@ -70,6 +77,16 @@ def test_bad_inputs_are_envelopes(tmp_path):
     reserved = _call(raw_dir=str(raw), sample_table=str(s_table), factor_columns=["batch"],
                      assay_table=str(a_table))
     assert reserved["error"]["code"] == "SAMPLE_TABLE_INVALID"
+    assert not (raw / "sample-manifest.tsv").exists()
+
+
+def test_sample_table_that_is_not_utf8_is_an_envelope(tmp_path):
+    """latin-1 の ISA の表（µ を含む）は素の例外でなく SAMPLE_TABLE_INVALID の封筒。"""
+    raw, _s_table, a_table = _isa(tmp_path)
+    latin = tmp_path / "s_latin.txt"
+    latin.write_bytes("Sample Name\tFactor Value[Dose]\nS1\t5 \u00b5g\n".encode("latin-1"))
+    out = _call(raw_dir=str(raw), sample_table=str(latin), factor_columns=["Dose"], assay_table=str(a_table))
+    assert out["error"]["code"] == "SAMPLE_TABLE_INVALID" and "UTF-8" in out["error"]["message"]
     assert not (raw / "sample-manifest.tsv").exists()
 
 
@@ -102,6 +119,10 @@ def test_list_data_files_reports_group_overlap_from_the_sheet(tmp_path):
     # 取得順: r03(WT) qc1 r01(WT) r02(KO) r04(unassigned) → WT は 1–3、KO は 4
     assert "KO\tWT\tcomplete" in pairs
     assert "群ごとの取得順の範囲" in text and "QC" not in text.split("群ごとの取得順の範囲", 1)[1]
+    # 群 unassigned（因子の値が空の r04）は群として判定しない（組にも範囲にも出ない）
+    assert not any("unassigned" in line for line in pairs if "\t" in line)
+    assert "unassigned" not in text.split("群ごとの取得順の範囲", 1)[1]
+    assert "群 unassigned（因子の値が空・試料の表に行が無い）の 1 行は判定に入れない" in text
 
 
 def test_list_data_files_marks_unreadable_raws(tmp_path):

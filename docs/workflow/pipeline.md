@@ -236,7 +236,10 @@ raw の一覧は受付(`pipeline_plan` / `pipeline_run`)と同じ `list_primary_
 行へ(ISA は assay 表の Raw Spectral Data File、mwTab は SUBJECT_SAMPLE_FACTORS の RAW_FILE_NAME、どちらも無ければ
 試料名と raw の語幹で)対応づける。群は選んだ因子の値の組(`factor_group`)、注入順は raw の取得時刻の順
 (`acquisition_order`。スペクトルは読まず、ファイルの見出しのメタデータだけ)で、1 つでも読めない raw が
-あれば注入順を空にして、読めなかったファイル名を返す(一部だけの順位を注入順と呼ばない)。書く前に
+あれば注入順を空にして、読めなかったファイル名を返す(一部だけの順位を注入順と呼ばない)。全部読めたときは
+schema の行の直後に宣言の行 `# injection_order_source = raw_acquisition_time` を書き、`parse_manifest` が注入順の
+出所の記録に `derived_from` を足す(試料の表と統計の出所が `raw_acquisition_time` になる)。試料の表が UTF-8 で
+読めなければ `SAMPLE_TABLE_INVALID`。書く前に
 受付と同じ厳密な読み手(`parse_manifest`)へ一時ファイルで通し、通ったものだけを原子的に書く。既にあれば
 `overwrite=True` が無い限り `SAMPLE_SHEET_EXISTS` で止まる。
 

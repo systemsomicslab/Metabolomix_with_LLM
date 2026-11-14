@@ -53,7 +53,9 @@ def pipeline_sample_sheet(
     群は `factor_columns`（試料の表の因子の列。`Factor Value[名]`・`Characteristics[名]` の名前でも引ける）の
     値の組（値を `_` でつなぐ）。値が空・表に行の無い試料の群は `unassigned`。因子の列はシートの後ろに足す
     （`dataset_compare(factors=...)` がその列で計画を組める）。注入順は raw の取得時刻（メタデータだけを読む）の順で、
-    1 つでも読めなければ空にする（`injection_order_source: "none"` と読めなかったファイルを返す）。バッチは空。
+    シートの schema の行の直後に `# injection_order_source = raw_acquisition_time` を書く（読み込んだ試料の表・統計の
+    注入順の出所が `raw_acquisition_time` になる）。1 つでも読めなければ空にする（宣言も書かず、
+    `injection_order_source: "none"` と読めなかったファイルを返す）。バッチは空。試料の表は UTF-8（BOM 可）。
     1 行は raw のフォルダの主ファイル 1 つ（pipeline の受付と同じ一覧。形式が混ざるときは `keep_extension`）。
 
     raw_dir: 生データのフォルダ（pipeline の `raw_dir`）。sample_table: ISA の `s_*.txt` か mwTab の

@@ -145,11 +145,10 @@ def _role(value) -> str | None:
 
 def _order_and_source(row: dict, ms: dict, sm: dict, mz_order=None) -> tuple[float | None, str | None]:
     """注入順と出所の名前。試料の表の行 → .mddata（msdial_samples）→ sample_meta → mzTab-M の MTD の順。"""
-    from metabolomix.analysis.sample_manifest import injection_order_source_label
+    from metabolomix.analysis.sample_manifest import injection_order_source_label, order_provenance_label
     value = _float_or_none(row.get("injection_order"))
     if value is not None:
-        prov = (row.get("provenance") or {}).get("injection_order") or {}
-        return value, injection_order_source_label(prov.get("source"))
+        return value, order_provenance_label((row.get("provenance") or {}).get("injection_order"))
     value = _float_or_none(ms.get("injection_order"))
     if value is not None:
         return value, "mddata"

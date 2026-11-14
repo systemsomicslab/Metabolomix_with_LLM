@@ -102,18 +102,34 @@ def _optional_value(path: tuple, raw):
         if isinstance(raw, bool) or raw not in (1, 2):
             raise _invalid("drift.loess_degree は 1（局所線形。既定）か 2（局所 2 次）", path, raw)
         return int(raw)
-    # normalize.features / exclude_features: 特徴 ID のリスト（空・None は指定なし）
+    # normalize.features / exclude_features: 特徴 ID のリスト（None は指定なし）。空のリストは、features なら
+    # 係数を計算する特徴が 1 つも無いので不正、exclude_features なら何も外さない（指定なしと同じ）。
     if raw is None:
         return None
     if (not isinstance(raw, list)
             or any(not isinstance(f, str) or not f.strip() for f in raw)):
         raise _invalid(f"{'.'.join(path)} は空でない文字列（特徴 ID）のリストで指定する", path, raw)
+    if not raw and path == ("normalize", "features"):
+        raise _invalid("normalize.features が空のリスト（係数を計算する特徴が 1 つも無い）。"
+                       "絞らないなら渡さない", path, raw)
     return sorted({f.strip() for f in raw}) or None
 
 
 def normalize_preprocess_config(raw: dict | None) -> dict:
-    """既定を埋めた前処理設定を返す。未知のキー・不正な値は PREPROCESS_CONFIG_INVALID。"""
-    return _merge(PREPROCESS_DEFAULTS, {} if raw is None else raw, ())
+    """既定を埋めた前処理設定を返す。未知のキー・不正な値は PREPROCESS_CONFIG_INVALID。
+
+    `normalize.method="none"` に係数の特徴（`features` / `exclude_features`）を添えるのは矛盾なので不正
+    （`auto` が換算済みのデータで `none` に決まったときは、前処理が `factor_features_ignored` を残す）。
+    """
+    cfg = _merge(PREPROCESS_DEFAULTS, {} if raw is None else raw, ())
+    norm = cfg["normalize"]
+    if norm["method"] == "none":
+        for key in ("features", "exclude_features"):
+            if key in norm:
+                raise _invalid(f"normalize.method=none では正規化の係数を計算しないので normalize.{key} は"
+                               "使えない（係数の特徴を絞るなら method を auto / tic / median / pqn にする）",
+                               ("normalize", key), norm[key])
+    return cfg
 
 
 @dataclass
@@ -393,8 +409,8 @@ def _drift(values: np.ndarray, samples, cfg: dict) -> dict:
 _AUTO_HOLD_MESSAGES = {
     "quant_normalized": "内部標準などで換算済み（quant_state.normalized）。内部標準の比はドリフトの一部を"
                         "すでに打ち消しているので、QC の LOESS を重ねると換算済みの値の尺度を動かしうる",
-    "injection_order_may_be_file_order": "注入順が MS-DIAL の既定（ファイルの順）かもしれない。"
-                                         "実際の測定順でなければ、LOESS は誤った順でドリフトを当てはめる",
+    "injection_order_may_be_file_order": "注入順が MS-DIAL の既定（ファイルの順）かもしれない（またはシートの宣言で"
+                                         "ファイル名の順）。実際の測定順でなければ、LOESS は誤った順でドリフトを当てはめる",
 }
 
 
@@ -593,9 +609,12 @@ def _normalize_step(values, samples, cfg, quant, factor_values=None,
     if requested == "auto":
         method = "none" if (quant is not None and quant.normalized) else "pqn"
     if method == "none":
-        return values, {"step": "normalize", "status": "skipped", "requested": requested,
-                        "method": "none",
-                        "reason": "quant_normalized" if requested == "auto" else "method_none"}
+        step = {"step": "normalize", "status": "skipped", "requested": requested, "method": "none",
+                "reason": "quant_normalized" if requested == "auto" else "method_none"}
+        if factor_record:
+            # auto が換算済みのデータで none に決まった: 係数の特徴の指定は効かない（行列も ID も指定なしと同じ）
+            step["factor_features_ignored"] = True
+        return values, step
     ids = [s.sample_id for s in samples]
     roles = {s.sample_id: s.role for s in samples}
     reference = "qc" if any(s.role == "qc" for s in samples) else "sample"
@@ -831,6 +850,14 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix:
     pqn_note = _pqn_reference_warning(step)
     if pqn_note is not None:
         notes.append(pqn_note)
+    id_cfg = cfg
+    if step.get("factor_features_ignored"):
+        notes.append({"code": "normalization_features_ignored",
+                      "message": "normalize=auto は換算済みのデータ（quant_normalized）で正規化しないので、"
+                                 "normalization_features / normalization_exclude_features は効いていない"
+                                 "（行列は指定なしと同じ）。"})
+        # 効かなかった指定で matrix_id を変えない（同じ行列は同じ ID）
+        id_cfg = {**cfg, "normalize": {"method": cfg["normalize"]["method"]}}
 
     log2, missing = _log2(values)
     bio = [k for k, s in enumerate(samples) if s.role == "sample"]
@@ -856,7 +883,7 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix:
         notes.append(batch_note)
     kept = set(feature_ids)
     return PreparedMatrix(
-        matrix_id=_matrix_id(study, cfg, normalize_method, extras), log2=unit_log2, units=units,
+        matrix_id=_matrix_id(study, id_cfg, normalize_method, extras), log2=unit_log2, units=units,
         feature_ids=feature_ids,
         detected_units=det_units, qc_log2=log2[qc] if qc else np.empty((0, len(cols))),
         qc_ids=[samples[k].sample_id for k in qc], steps=steps, config=cfg, quant=study.quant,

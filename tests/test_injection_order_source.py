@@ -1,14 +1,22 @@
 """注入順の出所と「MS-DIAL の既定（ファイルの順）かもしれない」印（A6）、シートの空欄の .mddata での補い。
 
-対象: `sample_manifest` の出所の部品と `_merge_row`、交絡の判定（`confounding_report`）、
-質量精度の注入順の傾向（`mass_accuracy.injection_trend`）。fixture はテスト自身が作る。
+対象: `sample_manifest` の出所の部品と `_merge_row`・シートの宣言の行、交絡の判定（`confounding_report` と、
+`dataset_compare` / analysis-spec v2 の比較が組む交絡の判定）、質量精度の注入順の傾向（`mass_accuracy.injection_trend`）。
+fixture はテスト自身が作る。
 """
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
+import pytest
+
 from metabolomix.analysis import mass_accuracy, sample_manifest
+from metabolomix.analysis.stats import data as stats_data
+from metabolomix.analysis.stats import preprocess as P
 from metabolomix.analysis.stats.confounding import confounding_report
+from metabolomix.core import session_state
+from metabolomix.core.atomic_io import DomainError
 
 
 def test_matches_file_order_rules():
@@ -17,6 +25,15 @@ def test_matches_file_order_rules():
     assert not sample_manifest.matches_file_order([1, 3, 2], ["a", "b", "c"])
     assert not sample_manifest.matches_file_order([1, 2], ["a", "b"])                  # 3 試料未満は判定しない
     assert sample_manifest.matches_file_order([1, None, 2, 3], ["a", "z", "b", "c"])   # 値の無い試料は数えない
+
+
+def test_matches_file_order_rejects_degenerate_orders():
+    """すべて同じ・同順位を含む注入順は MS-DIAL の既定（1, 2, …）ではない。同順位をファイル名で割って
+    「一致」にしない（drift=auto を保留し、補正できない drift_mode="on" を勧めてしまう）。"""
+    assert not sample_manifest.matches_file_order([1, 1, 1], ["c", "a", "b"])
+    assert not sample_manifest.matches_file_order([5, 5, 5, 5], ["d", "b", "a", "c"])
+    assert not sample_manifest.matches_file_order([1, 1, 2, 3], ["a", "b", "c", "d"])
+    assert sample_manifest.matches_file_order([10, 20, 30], ["a", "b", "c"])           # 間が空いても狭義に増えればよい
 
 
 def test_source_labels():
@@ -93,6 +110,127 @@ def test_confounding_report_flags_file_order():
     rep = confounding_report(plain, ["A", "B"])
     assert "may_be_file_order" not in rep["injection_order"]
     assert not any(w["code"] == "injection_order_may_be_file_order" for w in rep["warnings"])
+
+
+# ---------- 比較（dataset_compare・analysis-spec v2）の交絡の判定 ----------
+
+def _file_order_ds(tmp_path):
+    """試料の表の注入順が .mddata 由来（MS-DIAL の宣言）で、試料名（ファイルの幹）の順と一致する DatasetState。"""
+    from tests.test_stats_results import _ds
+
+    ds = _ds()
+    rank = {n: i for i, n in enumerate(sorted(ds.sample_names), start=1)}
+    for name, row in zip(ds.sample_names, ds.sample_metadata_rows):
+        row["injection_order"] = rank[name]
+        row["provenance"] = {"injection_order": {"value": rank[name], "source": "msdial_mddata",
+                                                 "confidence": "declared"}}
+    ds.analysis_dir = str(tmp_path / "analysis")
+    return ds
+
+
+def test_dataset_compare_confounding_carries_the_file_order_warning(tmp_path):
+    """A6: 比較の交絡の判定にも「注入順は MS-DIAL の既定（ファイルの順）かもしれない」が届く。"""
+    from metabolomix.tools.stats_tools import dataset_compare, dataset_preprocess
+
+    ds = _file_order_ds(tmp_path)
+    assert all(s.injection_order_may_be_file_order for s in stats_data.from_dataset(ds).samples)
+    session_state.session.dataset = ds
+    pre = json.loads(dataset_preprocess(drift_mode="off", blank_min_ratio=None, detection_min_rate=None,
+                                        max_qc_rsd=None, max_d_ratio=None, normalize="none"))
+    assert pre["status"] == "success", pre
+    out = json.loads(dataset_compare(reference_group="C", test_group="T", matrix_id=pre["matrix_id"]))
+    assert out["status"] == "success", out
+    conf = [w for w in out["confounding"]["warnings"] if w["code"] == "injection_order_may_be_file_order"]
+    assert len(conf) == 1 and conf[0]["n_units"] == 8
+    # 前処理の注意（n_samples）は上の warnings に 1 つだけ（交絡の判定の写しを重ねない）
+    top = [w for w in out["warnings"] if w["code"] == "injection_order_may_be_file_order"]
+    assert len(top) == 1 and "n_samples" in top[0]
+    engine = ds.results[out["result_id"]]["engine"]
+    assert engine["confounding"]["injection_order"]["may_be_file_order"] is True
+
+
+def test_spec_v2_compare_confounding_carries_the_file_order_flag(tmp_path):
+    from tests.test_stats_results import T_VS_C, _run
+
+    _n, _prepared, result = _run(_file_order_ds(tmp_path), [T_VS_C])
+    conf = result["analyses"][0]["result"]["confounding"]
+    assert conf["injection_order"]["may_be_file_order"] is True
+    assert any(w["code"] == "injection_order_may_be_file_order" for w in conf["warnings"])
+
+
+# ---------- シートの宣言の行（注入順を何から作ったか） ----------
+
+_V2_HEADER = "sample_id\tsource_file\trole\tgroup\tbatch\tinjection_order\tqc_pool\tinclude\tbiological_sample_id"
+
+
+def _declared_sheet(tmp_path, declarations: list[str], orders=("2", "1", "3")):
+    root = tmp_path / "raw"
+    root.mkdir(exist_ok=True)
+    names = ["r1.mzML", "r2.mzML", "r3.mzML"]
+    for name in names:
+        (root / name).write_bytes(b"x")
+    body = [f"s{i}\t{n}\tsample\tG\t\t{o}\t\ttrue\t" for i, (n, o) in enumerate(zip(names, orders))]
+    sheet = root / "sample-manifest.tsv"
+    sheet.write_text("\n".join(["# schema = sample-manifest.v2", *declarations, _V2_HEADER, *body]) + "\n",
+                     encoding="utf-8")
+    return sheet, root, names
+
+
+@pytest.mark.parametrize("declared", ["raw_acquisition_time", "filename"])
+def test_declared_order_source_is_kept_as_derived_from(tmp_path, declared):
+    sheet, root, names = _declared_sheet(tmp_path, [f"# injection_order_source = {declared}"])
+    rows = sample_manifest.parse_manifest(sheet, source_root=root, expected_sources=names)
+    prov = rows[0]["provenance"]["injection_order"]
+    assert prov == {"value": 2, "source": "user_manifest", "confidence": "confirmed", "derived_from": declared}
+    assert sample_manifest.order_provenance_label(prov) == declared
+    _roles, meta = sample_manifest.pp_inputs_from_rows([r["sample_id"] for r in rows], rows)
+    assert {m["run_order_source"] for m in meta.values()} == {declared}
+    # 統計エンジンの試料の出所・試料の表の出所の欄も宣言の名前
+    ds = SimpleNamespace(feature_matrix=[[1.0, 2.0, 3.0]], detected_mask=None, feature_ids=["f1"],
+                         sample_names=[r["sample_id"] for r in rows], sample_metadata_rows=rows)
+    assert [s.injection_order_source for s in stats_data.from_dataset(ds).samples] == [declared] * 3
+    from metabolomix.tools.mztab_tools import _source_cell
+    assert _source_cell(rows[0], "injection_order") == declared
+
+
+def test_sheet_declaration_and_blank_orders(tmp_path):
+    """`sheet` の宣言は宣言しないのと同じ。値の無い欄には derived_from を足さない。"""
+    sheet, root, names = _declared_sheet(tmp_path, ["# injection_order_source = sheet"])
+    rows = sample_manifest.parse_manifest(sheet, source_root=root, expected_sources=names)
+    assert all("derived_from" not in r["provenance"]["injection_order"] for r in rows)
+    assert sample_manifest.order_provenance_label(rows[0]["provenance"]["injection_order"]) == "sheet"
+    sheet, root, names = _declared_sheet(tmp_path, ["# injection_order_source = raw_acquisition_time"],
+                                         orders=("", "", ""))
+    rows = sample_manifest.parse_manifest(sheet, source_root=root, expected_sources=names)
+    assert all(r["provenance"]["injection_order"] == {"value": None, "source": None, "confidence": None}
+               for r in rows)
+
+
+@pytest.mark.parametrize("lines", [["# injection_order_source = mddata"], ["# note = x"], ["# free comment"],
+                                   ["# injection_order_source = filename",
+                                    "# injection_order_source = filename"]])
+def test_unknown_or_duplicated_declarations_are_rejected(tmp_path, lines):
+    sheet, root, names = _declared_sheet(tmp_path, lines)
+    with pytest.raises(DomainError) as e:
+        sample_manifest.parse_manifest(sheet, source_root=root, expected_sources=names)
+    assert e.value.code == "SAMPLE_MANIFEST_INVALID"
+
+
+def test_filename_declared_order_holds_auto_drift():
+    """シートの宣言でファイル名の順の注入順は確かでない: drift=auto は補正しない（on なら補正する）。"""
+    from dataclasses import replace
+
+    from tests.test_stats_preprocess import _drift_study
+
+    study = _drift_study()
+    study.samples = [replace(s, injection_order_source="filename") for s in study.samples]
+    cfg = {"filters": {"blank_ratio": None, "detection": None, "qc_rsd": None, "d_ratio": None},
+           "normalize": {"method": "none"}}
+    prep = P.preprocess(study, cfg)
+    drift = next(s for s in prep.steps if s["step"] == "drift")
+    assert drift["status"] == "skipped" and drift["reasons"] == ["injection_order_may_be_file_order"]
+    on = P.preprocess(study, {**cfg, "drift": {"mode": "on"}})
+    assert next(s for s in on.steps if s["step"] == "drift")["status"] == "applied"
 
 
 def test_mass_accuracy_rho_carries_the_file_order_warning():

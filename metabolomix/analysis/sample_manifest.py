@@ -143,6 +143,41 @@ def _check_factor_columns(columns: list[str]) -> None:
         seen.add(name)
 
 
+#: schema の行と見出しの間に置ける宣言の行（`# <鍵> = <値>`）の鍵: シートの `injection_order` が何から
+#: 作られたか。`raw_acquisition_time`（raw の取得時刻の順。`pipeline_sample_sheet` が書く）/ `filename`
+#: （ファイル名の順。実際の測定順とは限らない）/ `sheet`（既定。宣言しないのと同じ）。
+ORDER_SOURCE_DECLARATION = "injection_order_source"
+ORDER_SOURCE_DECLARED_VALUES = ("sheet", "raw_acquisition_time", "filename")
+_DECLARATION_RE = re.compile(r"# ([A-Za-z_]+) = (\S+)")
+
+
+def _read_declarations(lines: list[str], path: Path) -> tuple[dict[str, str], int]:
+    """schema の行の後ろの宣言の行を読む。戻り値は（鍵 → 値（`sheet` は落とす）, 見出しの行の位置）。
+
+    `#` で始まる行は宣言の形・既知の鍵・既知の値でなければ SAMPLE_MANIFEST_INVALID（黙って読み飛ばさない）。
+    """
+    declared: dict[str, str] = {}
+    index = 1
+    while index < len(lines) and lines[index].startswith("#"):
+        line = lines[index].rstrip()
+        match = _DECLARATION_RE.fullmatch(line)
+        key, value = (match.group(1), match.group(2)) if match else (None, None)
+        if key != ORDER_SOURCE_DECLARATION or value not in ORDER_SOURCE_DECLARED_VALUES:
+            raise DomainError(
+                "SAMPLE_MANIFEST_INVALID",
+                f"{index + 1}行目の宣言が読めません: {line!r}（書けるのは "
+                f"`# {ORDER_SOURCE_DECLARATION} = <{' | '.join(ORDER_SOURCE_DECLARED_VALUES)}>` だけ）。",
+                {"path": str(path), "line": index + 1,
+                 "allowed": {ORDER_SOURCE_DECLARATION: list(ORDER_SOURCE_DECLARED_VALUES)}},
+            )
+        if key in declared:
+            raise DomainError("SAMPLE_MANIFEST_INVALID", f"宣言 {key} が重複しています。",
+                              {"path": str(path), "line": index + 1})
+        declared[key] = value
+        index += 1
+    return {k: v for k, v in declared.items() if v != "sheet"}, index
+
+
 def parse_manifest(path: Path, *, source_root: Path,
                     expected_sources: list[str]) -> list[dict]:
     """sample-manifest を厳密に読み、列+provenance+conflictsの行リストを返す。
@@ -155,6 +190,10 @@ def parse_manifest(path: Path, *, source_root: Path,
     raw測定単位）。全件に1行ずつ対応することを要求し、未知のsource_file・
     行欠落・重複を許さない。1件でも不正なら例外にし、部分的な行リストを
     返さない。
+
+    schema の行と見出しの間には宣言の行 `# injection_order_source = <raw_acquisition_time | filename |
+    sheet>` を置ける（`ORDER_SOURCE_DECLARATION`）。`sheet` 以外なら、値のある注入順の出所の記録に
+    `derived_from` を足す（`source` は `user_manifest` のまま。出所の名前は `order_provenance_label`）。
     """
     path = Path(path)
     source_root = Path(source_root).resolve()
@@ -172,8 +211,10 @@ def parse_manifest(path: Path, *, source_root: Path,
              "supported": sorted(_SCHEMA_HEADERS)},
         )
     role_values = _ROLE_VALUES_V2 if fields is FIELDS_V2 else _ROLE_VALUES
+    declarations, body_start = _read_declarations(lines, path)
+    order_origin = declarations.get(ORDER_SOURCE_DECLARATION)
 
-    reader = csv.DictReader(lines[1:], delimiter="\t",
+    reader = csv.DictReader(lines[body_start:], delimiter="\t",
                             restkey=_EXTRA_KEY, restval=None)
     fieldnames = list(reader.fieldnames or [])
     # 見出しは「既知の列（＋任意の `subject_id`）」で始まることを求め、その後ろだけを因子の列として受ける
@@ -202,7 +243,8 @@ def parse_manifest(path: Path, *, source_root: Path,
     seen_ids: set[str] = set()
     seen_raw_norm: dict[str, str] = {}
 
-    for line_no, raw_row in enumerate(reader, start=3):  # 1行目schema, 2行目見出し
+    # 1 行目 schema、続く宣言の行、その次が見出し
+    for line_no, raw_row in enumerate(reader, start=body_start + 2):
         if raw_row.get(_EXTRA_KEY) is not None:
             raise DomainError(
                 "SAMPLE_MANIFEST_INVALID",
@@ -319,6 +361,9 @@ def parse_manifest(path: Path, *, source_root: Path,
                 {"value": None, "source": None, "confidence": None} if value is None else
                 {"value": value, "source": "user_manifest", "confidence": "confirmed"}
             )
+        if order_origin is not None and values["injection_order"] is not None:
+            # シートの注入順が何から作られたかの宣言（raw の取得時刻・ファイル名）。値の出所はシートのまま
+            provenance["injection_order"]["derived_from"] = order_origin
 
         row = dict(values)
         row["provenance"] = provenance
@@ -439,15 +484,29 @@ def injection_order_source_label(source) -> str:
     return INJECTION_ORDER_SOURCES.get(str(source), str(source))
 
 
+def order_provenance_label(prov) -> str:
+    """試料の表の 1 欄の出所の記録（`{value, source, confidence[, derived_from]}`）を出所の名前に。
+
+    シートが宣言で値の作り方を書いていれば（`derived_from`: `raw_acquisition_time` / `filename`）その名前、
+    さもなくば `source` の名前（`injection_order_source_label`）。
+    """
+    prov = prov or {}
+    return injection_order_source_label(prov.get("derived_from") or prov.get("source"))
+
+
 def matches_file_order(orders, keys) -> bool:
-    """注入順で並べた試料の並びが、ファイル名（`keys`）の昇順と一致するか（大文字小文字を区別しても
-    しなくても、どちらかで一致すれば真）。値の無い試料は数えず、3 試料未満は判定しない（偽）。"""
+    """ファイル名（`keys`）の昇順に並べた試料の注入順が**狭義に増える**か（大文字小文字を区別しても
+    しなくても、どちらかで増えれば真）。値の無い試料は数えず、3 試料未満は判定しない（偽）。
+
+    同じ注入順の試料があれば偽（すべて同じ・同順位の多い値は MS-DIAL の既定の 1, 2, … ではなく、同順位を
+    ファイル名で割ると何でも「一致」に見えてしまう。そのときは通常の条件で判定させる）。
+    """
     pairs = [(float(o), str(k)) for o, k in zip(orders, keys) if o is not None and k]
     if len(pairs) < 3:
         return False
     for fold in (str, str.casefold):
-        ranked = [fold(k) for _o, k in sorted(pairs, key=lambda p: (p[0], fold(p[1])))]
-        if all(a <= b for a, b in zip(ranked, ranked[1:])):
+        ranked = [o for o, _k in sorted(pairs, key=lambda p: (fold(p[1]), p[0]))]
+        if all(a < b for a, b in zip(ranked, ranked[1:])):
             return True
     return False
 
@@ -482,7 +541,7 @@ def injection_order_file_order_warning(ds) -> dict | None:
         prov = ((row or {}).get("provenance") or {}).get("injection_order") or {}
         if (row or {}).get("injection_order") is None:
             continue
-        if injection_order_source_label(prov.get("source")) in MSDIAL_ORDER_SOURCES:
+        if order_provenance_label(prov) in MSDIAL_ORDER_SOURCES:
             orders.append(row["injection_order"])
             chosen.append(key)
     return file_order_warning(len(orders)) if matches_file_order(orders, chosen) else None
@@ -804,7 +863,8 @@ def pp_inputs_from_rows(sample_names: list[str], rows: list[dict]) -> tuple[dict
             "batch": row.get("batch"),
             "batch_source": batch_prov.get("source"),
             "run_order": row.get("injection_order"),
-            "run_order_source": order_prov.get("source"),
+            # シートが宣言で作り方を書いた注入順（raw の取得時刻・ファイル名）はその名前を出所にする
+            "run_order_source": order_prov.get("derived_from") or order_prov.get("source"),
         }
         # 任意の列。シートが持ち、値があるときだけ載せる（B では持つだけで統計には使わない）。
         if row.get("subject_id") is not None:

@@ -217,7 +217,8 @@ def test_build_sheet_from_isa_groups_factors_and_acquisition_order(tmp_path):
     assert all(r["batch"] == "" for r in built["rows"])
     assert built["files_not_in_assay"] == ["qc1.mzML"] and built["unassigned_samples"] == ["S4"]
     assert built["factor_columns"] == ["Factor Value[Genotype]", "Factor Value[Diet]"]
-    assert built["text"].startswith("# schema = sample-manifest.v2\n")
+    # schema の行の直後に、注入順を取得時刻から作った宣言（読み手が出所 raw_acquisition_time にする）
+    assert built["text"].startswith("# schema = sample-manifest.v2\n" + T.ORDER_SOURCE_LINE + "\n")
 
 
 def test_build_sheet_leaves_order_empty_when_a_raw_is_unreadable(tmp_path):
@@ -228,6 +229,34 @@ def test_build_sheet_leaves_order_empty_when_a_raw_is_unreadable(tmp_path):
     assert built["injection_order_source"] == "none" and built["unreadable"] == ["r02.mzML"]
     assert all(r["injection_order"] == "" for r in built["rows"])
     assert [r["source_file"] for r in built["rows"]] == sorted(names)
+    assert T.ORDER_SOURCE_LINE not in built["text"]              # 注入順が無ければ宣言も書かない
+
+
+def test_order_source_line_is_a_declaration_the_manifest_reader_knows():
+    """rawmeta は sample_manifest を import しないので、宣言の行の形と値を突き合わせる。"""
+    key, value = T.ORDER_SOURCE_LINE.removeprefix("# ").split(" = ")
+    assert key == sample_manifest.ORDER_SOURCE_DECLARATION
+    assert value in sample_manifest.ORDER_SOURCE_DECLARED_VALUES
+
+
+def test_tables_that_are_not_utf8_are_sample_table_invalid(tmp_path):
+    """UTF-8 でない試料の表・assay の表・mwTab は素の UnicodeDecodeError でなく SAMPLE_TABLE_INVALID。"""
+    raw, s_table, a_table = _isa(tmp_path)
+    names = sorted(p.name for p in raw.iterdir())
+    latin = tmp_path / "s_latin.txt"
+    latin.write_bytes("Sample Name\tFactor Value[Dose]\nS1\t5 \u00b5g\n".encode("latin-1"))
+    for table, assay, factors in ((latin, None, ["Dose"]), (s_table, latin, ["Genotype"])):
+        with pytest.raises(DomainError) as e:
+            T.build_sample_sheet(raw, names, table, factors, assay_table=assay)
+        assert e.value.code == "SAMPLE_TABLE_INVALID" and "UTF-8" in e.value.message
+        assert e.value.details["path"] == str(latin)
+    mwtab = tmp_path / "ST_latin.txt"
+    mwtab.write_bytes("#METABOLOMICS WORKBENCH\nSUBJECT_SAMPLE_FACTORS\tP1\tS1\tDose:5 \u00b5g\t\n"
+                      .encode("latin-1"))
+    for fmt in ("auto", "mwtab"):
+        with pytest.raises(DomainError) as e:
+            T.build_sample_sheet(raw, names, mwtab, ["Dose"], sample_table_format=fmt)
+        assert e.value.code == "SAMPLE_TABLE_INVALID"
 
 
 def test_build_sheet_from_mwtab_raw_file_names(tmp_path):

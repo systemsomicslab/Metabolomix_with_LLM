@@ -7,7 +7,8 @@
   `auto` は 1 行目が `#METABOLOMICS WORKBENCH` なら mwTab。
 - ファイルと試料の対応は ISA の assay の表（`a_*.txt`）の `Sample Name` と `Raw Spectral Data File`、mwTab なら
   `RAW_FILE_NAME`。どちらも無ければファイルの幹を試料名とみなす。
-- 注入順は raw の取得時刻の順（`acquisition.read_acquisition_times`）。1 つでも読めなければ注入順を空にする
+- 注入順は raw の取得時刻の順（`acquisition.read_acquisition_times`）で、schema の行の直後に宣言の行
+  `# injection_order_source = raw_acquisition_time` を書く。1 つでも読めなければ注入順を空にし、宣言も書かない
   （ファイル名の順は注入順とは限らない）。バッチは分からないので空のまま。
 
 reanalysis-study の `reanalysis/inputs.py`（blind-inputs）から移した。ハードリンクで極性ごとの入力フォルダを
@@ -34,6 +35,10 @@ BLANK_GROUP = "blank"
 #: sample-manifest.v2 の列（`sample_manifest.FIELDS_V2` と同じ順。テストが突き合わせる）。
 MANIFEST_COLUMNS = ("sample_id", "source_file", "role", "group", "batch", "injection_order",
                     "qc_pool", "include", "biological_sample_id")
+#: 注入順を取得時刻から作ったシートの宣言の行（`sample_manifest.ORDER_SOURCE_DECLARATION`。schema の行の直後）。
+#: 読み手（`parse_manifest`）は注入順の出所に `derived_from: raw_acquisition_time` を足し、試料の表・統計は
+#: 出所を `raw_acquisition_time` と示す。この層は sample_manifest を import しない（テストが突き合わせる）。
+ORDER_SOURCE_LINE = "# injection_order_source = raw_acquisition_time"
 #: 因子の列の名前に使えない名前（v2 の列・任意の subject_id・行の帳簿の欄）。
 _RESERVED = frozenset([*MANIFEST_COLUMNS, "subject_id", "provenance", "conflicts"])
 
@@ -46,23 +51,39 @@ def _norm(value: object) -> str:
     return str(value).strip()
 
 
+def _unreadable(path: Path, exc: Exception) -> DomainError:
+    """文字コード（UTF-8 でない）・TSV の形（csv.Error）で読めない表の SAMPLE_TABLE_INVALID。"""
+    if isinstance(exc, UnicodeDecodeError):
+        return _err(f"{path.name} は UTF-8 として読めない（{exc.reason}。UTF-8 で保存し直す）",
+                    path=str(path), encoding="utf-8")
+    return _err(f"{path.name} を TSV として読めない（{exc}）", path=str(path))
+
+
 def read_table(path: Path) -> tuple[list[str], list[list[str]]]:
-    """ISA の TSV を（見出し, 行）にする。行は見出しの列数に足りなければ空文字で埋める。"""
+    """ISA の TSV を（見出し, 行）にする。行は見出しの列数に足りなければ空文字で埋める。
+
+    UTF-8（BOM 可）でない・TSV として読めない表は SAMPLE_TABLE_INVALID。"""
     path = Path(path)
     if not path.is_file():
         raise _err(f"試料の表が無い: {path.name}", path=str(path))
-    with path.open(encoding="utf-8-sig", newline="") as fh:
-        rd = csv.reader(fh, delimiter="\t")
-        header = next(rd, None)
-        if header is None:
-            raise _err(f"試料の表が空: {path.name}", path=str(path))
-        rows = [r + [""] * (len(header) - len(r)) for r in rd if any(c.strip() for c in r)]
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as fh:
+            rd = csv.reader(fh, delimiter="\t")
+            header = next(rd, None)
+            if header is None:
+                raise _err(f"試料の表が空: {path.name}", path=str(path))
+            rows = [r + [""] * (len(header) - len(r)) for r in rd if any(c.strip() for c in r)]
+    except (UnicodeDecodeError, csv.Error) as exc:
+        raise _unreadable(path, exc) from exc
     return [_norm(h) for h in header], rows
 
 
 def _is_mwtab(path: Path) -> bool:
-    with Path(path).open(encoding="utf-8-sig", newline="") as fh:
-        return fh.readline().startswith(MWTAB_MAGIC)
+    try:
+        with Path(path).open(encoding="utf-8-sig", newline="") as fh:
+            return fh.readline().startswith(MWTAB_MAGIC)
+    except UnicodeDecodeError as exc:
+        raise _unreadable(Path(path), exc) from exc
 
 
 def read_mwtab_samples(path: Path) -> tuple[list[str], list[list[str]], dict[str, str]]:
@@ -74,7 +95,11 @@ def read_mwtab_samples(path: Path) -> tuple[list[str], list[list[str]], dict[str
     """
     path = Path(path)
     parsed = []
-    for line in path.read_text(encoding="utf-8-sig").splitlines():
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise _unreadable(path, exc) from exc
+    for line in text.splitlines():
         if line.startswith("#") or not line.startswith("SUBJECT_SAMPLE_FACTORS"):
             continue
         cells = line.split("\t")
@@ -319,7 +344,11 @@ def build_sample_sheet(raw_dir: Path, raw_names: list[str], sample_table: Path, 
             row[fname] = value
         rows.append(row)
     columns = [*MANIFEST_COLUMNS, *factor_names]
-    lines = ["# schema = sample-manifest.v2", "\t".join(columns)]
+    lines = ["# schema = sample-manifest.v2"]
+    if source == "raw_acquisition_time":
+        # 注入順が raw の取得時刻の順であることをシートに残す（読み手が試料の表の出所に出す）
+        lines.append(ORDER_SOURCE_LINE)
+    lines.append("\t".join(columns))
     lines += ["\t".join(row[c] for c in columns) for row in rows]
     groups: dict[str, int] = {}
     for row in rows:

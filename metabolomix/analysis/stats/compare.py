@@ -27,7 +27,8 @@ import numpy as np
 from scipy import stats
 
 from metabolomix.analysis import spec_statistics
-from metabolomix.analysis.stats.confounding import assert_not_confounded, confounding_report
+from metabolomix.analysis.stats.confounding import (FILE_ORDER_WARNING, assert_not_confounded,
+                                                    confounding_report)
 from metabolomix.analysis.stats.design import Design, build_design
 from metabolomix.analysis.stats.limma import contrasts_fit, ebayes, lm_fit
 from metabolomix.analysis.stats.preprocess import PreparedMatrix
@@ -330,11 +331,17 @@ def compare(prepared: PreparedMatrix, *, factors: list[str], comparisons: list[d
                           f"対比に出る群の個体数が {_MIN_UNITS} 未満（反復注入は個体でまとめた後で数える）",
                           {"cell_n": cell_n})
 
-    proxies = [SimpleNamespace(group=unit_cell[i], batch=u.batch, injection_order=u.injection_order)
+    proxies = [SimpleNamespace(group=unit_cell[i], batch=u.batch, injection_order=u.injection_order,
+                               injection_order_may_be_file_order=getattr(
+                                   u, "injection_order_may_be_file_order", False))
                for i, u in enumerate(units)]
     confounding = confounding_report(proxies, used_cells)
     assert_not_confounded(confounding, allow_confounded=allow_confounded)
-    warnings.extend(dict(w) for w in confounding["warnings"])
+    # 注入順がファイルの順かもしれない注意は前処理の warnings にもう載っているので、上の欄では繰り返さない
+    # （交絡の判定の warnings には残る）
+    seen = {w.get("code") for w in warnings}
+    warnings.extend(dict(w) for w in confounding["warnings"]
+                    if not (w.get("code") == FILE_ORDER_WARNING and FILE_ORDER_WARNING in seen))
 
     design = (build_design(units, factors=factors, comparisons=comparisons,
                            covariates=covariates, block=block)

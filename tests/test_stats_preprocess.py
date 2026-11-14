@@ -467,8 +467,40 @@ def test_normalization_subset_rejects_unknown_or_empty():
     for bad in ("f0", [""], [1]):
         with pytest.raises(DomainError):
             P.normalize_preprocess_config({"normalize": {"features": bad}})
-    # 指定なし・空は設定に載らない（既定の行列の ID は変わらない）
-    assert P.normalize_preprocess_config({"normalize": {"features": []}})["normalize"] == {"method": "auto"}
+    # features=[] は係数を計算する特徴が空なので不正。exclude_features=[] は何も外さない（指定なしと同じで設定に載らない）
+    with pytest.raises(DomainError) as e:
+        P.normalize_preprocess_config({"normalize": {"features": []}})
+    assert e.value.code == "PREPROCESS_CONFIG_INVALID" and e.value.details["field"] == "normalize.features"
+    assert P.normalize_preprocess_config({"normalize": {"exclude_features": []}})["normalize"] == {"method": "auto"}
+
+
+def test_normalization_subset_with_method_none_is_rejected():
+    """method=none は係数を計算しないので、係数の特徴の指定は矛盾（黙って捨てない）。"""
+    for key in ("features", "exclude_features"):
+        with pytest.raises(DomainError) as e:
+            P.normalize_preprocess_config({"normalize": {"method": "none", key: ["f0"]}})
+        assert e.value.code == "PREPROCESS_CONFIG_INVALID"
+        assert e.value.details["field"] == f"normalize.{key}"
+
+
+def test_normalization_subset_ignored_when_auto_resolves_to_none_says_so_and_keeps_the_id():
+    """換算済みのデータでは auto が正規化しない: 指定は効かず、その旨を段と warnings に残し、ID は指定なしと同じ。"""
+    quant = QuantState(normalized=True, method="internal_standard", unit="pmol")
+    cfg = {"filters": OFF_FILTERS, "drift": {"mode": "off"}}
+    plain = P.preprocess(_simple(n_feat=4, quant=quant), cfg)
+    sub = P.preprocess(_simple(n_feat=4, quant=quant),
+                       {**cfg, "normalize": {"method": "auto", "features": ["f0", "f1"]}})
+    step = _step(sub, "normalize")
+    assert step["status"] == "skipped" and step["reason"] == "quant_normalized"
+    assert step["factor_features_ignored"] is True
+    assert _warning(sub, "normalization_features_ignored") is not None
+    assert "factor_features_ignored" not in _step(plain, "normalize")
+    assert _warning(plain, "normalization_features_ignored") is None
+    assert sub.matrix_id == plain.matrix_id
+    np.testing.assert_allclose(sub.log2, plain.log2)
+    # 無い ID は、効かない場面でも誤り
+    with pytest.raises(DomainError):
+        P.preprocess(_simple(n_feat=4, quant=quant), {**cfg, "normalize": {"features": ["zz"]}})
 
 
 # --- バッチの候補（A7-V65） -------------------------------------------------------
