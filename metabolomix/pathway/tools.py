@@ -277,11 +277,15 @@ def _build_dataset(group_a, group_b, label_a, label_b, holder, matrix_id=None):
     values = np.asarray(prepared.sample_values, dtype=float)
     # 欠測は 0（MSLipidMapper の約束）。0 以下・非有限はエンジンも欠測として扱うので同じく 0 で書く
     values = np.where(np.isfinite(values) & (values > 0), values, 0.0)
-    table = handoff.build_from_dataset(
-        pp_matrix=values, pp_sample_names=names, pp_feature_names=list(prepared.feature_ids),
-        roles=ds.roles, sample_names=ds.sample_names, sample_ids=ds.sample_ids,
-        metadata_rows=ds.sample_metadata_rows, annotations=ds.feature_annotations,
-        group_a=wanted_a, group_b=wanted_b, group_a_label=label_a, group_b_label=label_b)
+    try:
+        # 群の大きさ・サブクラス注釈の付いた特徴の数は、使った行列（足切り・除外）で決まる
+        table = handoff.build_from_dataset(
+            pp_matrix=values, pp_sample_names=names, pp_feature_names=list(prepared.feature_ids),
+            roles=ds.roles, sample_names=ds.sample_names, sample_ids=ds.sample_ids,
+            metadata_rows=ds.sample_metadata_rows, annotations=ds.feature_annotations,
+            group_a=wanted_a, group_b=wanted_b, group_a_label=label_a, group_b_label=label_b)
+    except handoff.HandoffError as exc:
+        return None, _with_matrix(mcp_errors.pathway_error(exc.code, exc.message, exc.details), chosen)
     subject_of = {handoff.clean_text(name_of.get(sid, sid)): unit.unit_id
                   for unit in prepared.units for sid in unit.sample_ids}
     unit_counts = {}
@@ -289,7 +293,7 @@ def _build_dataset(group_a, group_b, label_a, label_b, holder, matrix_id=None):
         n_units = len({subject_of[handoff.clean_text(n)]
                        for n, g in zip(table.sample_names, table.groups) if g == label})
         if n_units < 2:
-            raise handoff.HandoffError(
+            return None, mcp_errors.pathway_error(
                 "PATHWAY_BAD_REQUEST",
                 f"群 {label} の単位が 2 未満です（単位は行列 {prepared.matrix_id} の units: 反復をまとめた"
                 f"行列なら個体、まとめない行列なら注入。{n_units}）。",
@@ -325,7 +329,9 @@ def pathway_project(group_a: str | list[str] | None = None,
       （`dataset_handle` でハンドルを選べる。run の置き場所もそのデータセットの解析フォルダ）。
     - matrix_id: dataset_preprocess が返した行列 ID。省略時は dataset_compare / dataset_pca と同じく、この
       ハンドルで dataset_preprocess が最後に作った行列、無ければ既定の前処理で行列を作って登録する（drift=auto
-      が補正を当てないときは当てずに計算する）。使った行列は戻り値と manifest の matrix_id と matrix_source
+      が補正を当てなかった行列なら、戻り値と manifest の warnings に drift_not_applied_by_default（理由と
+      呼び直し方。dataset_pca と同じ。補正するなら dataset_preprocess(drift_mode="on") の matrix_id を渡す））。
+      使った行列は戻り値と manifest の matrix_id と matrix_source
       （"matrix_id" / "latest_preprocess" / "default"。省いた呼び出しのエラーにも details.matrix_id /
       matrix_source）。古い・無い ID は missing_state。
       MSLipidMapper へは行列の注入ごとの値（欠測は 0）を渡す。比べる単位は行列の units に従う:
@@ -379,10 +385,7 @@ def pathway_project(group_a: str | list[str] | None = None,
     if str(group_a_label) == str(group_b_label):
         return mcp_errors.pathway_error(
             "PATHWAY_BAD_REQUEST", "group_a_label と group_b_label が同じです。")
-    try:
-        built, err = _build_dataset(group_a, group_b, group_a_label, group_b_label, holder, matrix_id)
-    except handoff.HandoffError as exc:
-        return mcp_errors.pathway_error(exc.code, exc.message, exc.details)
+    built, err = _build_dataset(group_a, group_b, group_a_label, group_b_label, holder, matrix_id)
     if err:
         return err
     table, normalization, dataset_id, label_a, label_b, subject_of, used_matrix_id, ctx = built
@@ -397,6 +400,10 @@ def pathway_project(group_a: str | list[str] | None = None,
         except DomainError as exc:
             return _domain_envelope(exc)
     implicit_matrix = _matrix_details(used_matrix_id, matrix_source)
+    # drift=auto が補正を当てなかった行列なら、その理由と呼び直し方を戻り値と manifest に添える
+    # （dataset_pca と同じ。数字は補正なしで出ている。normalization の drift=skipped だけでは呼び直し方が分からない）
+    held = [dict(w) for w in ctx["prepared"].warnings or []
+            if w.get("code") == "drift_not_applied_by_default"]
     # 群名は mzTab-M に書いた形（# → _）で JSON-LD に戻ってくる
     label_a, label_b = handoff.clean_text(label_a), handoff.clean_text(label_b)
 
@@ -476,6 +483,7 @@ def pathway_project(group_a: str | list[str] | None = None,
                 "normalization": normalization, "dataset_id": dataset_id,
                 "matrix_id": used_matrix_id, "matrix_source": matrix_source,
                 "preprocess_record_id": (entry or {}).get("record_id"),
+                **({"warnings": held} if held else {}),
                 "test": method,
                 "backend": result.get("backend"),
                 "remote_fallback": result.get("remote_fallback"),
@@ -498,6 +506,7 @@ def pathway_project(group_a: str | list[str] | None = None,
         "groups": groups, "n_units": ctx["n_units"], "group_a": label_a, "group_b": label_b,
         "normalization": normalization, "matrix_id": used_matrix_id, "matrix_source": matrix_source,
         "method": method,
+        **({"warnings": held} if held else {}),
         **({"preprocess_record": preprocess_record} if preprocess_record is not None else {}),
         "backend": _backend_text(result),
         "handoff": table.report,

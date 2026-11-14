@@ -512,6 +512,61 @@ def test_error_after_latest_preprocess_names_the_matrix_and_its_source(lipid_arf
     assert "matrix_source" not in named["error"]["details"]         # 名指しの行列は呼び手が知っている
 
 
+def test_handoff_error_after_latest_preprocess_names_the_matrix(lipid_arf, fake_measure):
+    """受け渡しの検査（サブクラス注釈の付いた特徴の数）も使った行列の足切りで決まるので、直近の前処理の
+    行列を黙って使ったなら、その行列と出所をエラーに添える。"""
+    from metabolomix.tools.stats_tools import dataset_preprocess
+    ds = lipid_arf.dataset
+    ds.detected_mask[1, :] = False                     # f1（LPC 18:1）はどの注入でも検出されない
+    pre = json.loads(dataset_preprocess(blank_min_ratio=None, detection_min_rate=0.5,
+                                        max_qc_rsd=None, max_d_ratio=None))
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    err = body["error"]
+    assert err["code"] == "PATHWAY_BAD_REQUEST" and "1 件" in err["message"]
+    assert err["details"]["matrix_id"] == pre["matrix_id"]
+    assert err["details"]["matrix_source"] == "latest_preprocess" and "matrix_note" in err["details"]
+    assert fake_measure == []
+
+
+def test_drift_held_by_default_is_reported_in_return_and_manifest(monkeypatch, tmp_path, fake_measure):
+    """drift=auto が補正を当てなかった行列（換算済み）なら、dataset_pca と同じく warnings に
+    drift_not_applied_by_default（理由と呼び直し方）を戻り値と manifest に添える（行列は matrix_id を省いて
+    使った直近の前処理。足切りは外す——乱数のデータでは QC の D-ratio がすべての特徴を落とす）。"""
+    from metabolomix.tools.stats_tools import dataset_preprocess
+    from tests.test_stats_results import _ds
+    from tests.test_stats_tools_preprocess import _interspersed_qc
+    s = session_state.AnalysisSession()
+    monkeypatch.setattr(session_state, "session", s)
+    ds = _ds(groups=("C", "P"), per_group=2, reps=1, n_qc=6)
+    ds.assay_kind = "lipid"
+    ds.analysis_dir = str(tmp_path)
+    ds.feature_annotations = {"f0": {"name": "PC 34:1", "ontology": "PC"},
+                              "f1": {"name": "LPC 18:1", "ontology": "LPC"}}
+    _interspersed_qc(ds)
+    ds.quant_state = {"normalized": True, "method": "is_ratio", "unit": "ratio", "record_id": "q1"}
+    s.dataset = ds
+    pre = json.loads(dataset_preprocess(drift_mode="auto", blank_min_ratio=None, detection_min_rate=None,
+                                        max_qc_rsd=None, max_d_ratio=None))
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    assert "error" not in body, body
+    assert body["matrix_id"] == pre["matrix_id"] and body["matrix_source"] == "latest_preprocess"
+    (held,) = body["warnings"]
+    assert held["code"] == "drift_not_applied_by_default" and held["reasons"] == ["quant_normalized"]
+    assert held["suggestion"] == {"preprocess.drift.mode": "on"}
+    manifest = json.loads((tmp_path / "reports" / "pathway" / body["run_id"] / "manifest.json")
+                          .read_text(encoding="utf-8"))
+    assert manifest["warnings"] == body["warnings"]
+
+
+def test_no_drift_warning_when_nothing_was_held(lipid_arf, fake_measure, tmp_path):
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    assert "error" not in body, body
+    assert "warnings" not in body
+    manifest = json.loads((tmp_path / "reports" / "pathway" / body["run_id"] / "manifest.json")
+                          .read_text(encoding="utf-8"))
+    assert "warnings" not in manifest
+
+
 def _qc_session(monkeypatch, tmp_path, **kw):
     """QC 4 本つきのデータセット（脂質アッセイ）。"""
     from tests.test_stats_results import _ds

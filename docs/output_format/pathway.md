@@ -87,7 +87,11 @@ MSLipidMapper へ渡した mzTab-M の値は行列の注入ごとの線形値で
 （除外・足切り・設定はその前処理のもの）、それも無ければ既定の前処理で行列を作る。どれを使ったかは戻り値と manifest の
 `matrix_id` と `matrix_source`（`matrix_id`＝名指し / `latest_preprocess`＝直近の `dataset_preprocess` / `default`＝既定の前処理）。
 `matrix_id` を省いた呼び出しが行列を決めたあとにエラーになったときは `details.matrix_id` と `matrix_source` に残る
-（`latest_preprocess` なら `details.matrix_note` も）。
+（`latest_preprocess` なら `details.matrix_note` も。受け渡しの検査——サブクラス注釈の付いた特徴が 2 未満・群の大きさ——も
+使った行列の足切りで決まるので同じく添える。既定の行列は登録の後のエラーだけ）。
+使った行列が drift=auto でドリフト補正を当てなかったもの（換算済み・注入順がファイルの順かもしれない）なら、戻り値と
+manifest の `warnings` に `drift_not_applied_by_default`（`reasons` と `suggestion: {"preprocess.drift.mode": "on"}`。
+`dataset_pca` と同じ）。補正するなら `dataset_preprocess(drift_mode="on")` の `matrix_id` を渡す（当てなかった行列でなければ `warnings` は無い）。
 既定の行列は登録され、前処理の記録が `reports/stats/` に 1 件書かれる（manifest の `preprocess_record_id`。同じ行列の 2 回目以降は記録を足さない。
 直近の `dataset_preprocess` の行列ならその前処理の記録）。返った `matrix_id` は dataset_compare / dataset_pca にそのまま渡せる。
 mean_a / mean_b は個体の `2**log2` の算術平均（エンジンの定義。旧 v1 の生値の平均とは別物）。
@@ -115,6 +119,7 @@ mean_a / mean_b は個体の `2**log2` の算術平均（エンジンの定義�
   `values`（値の意味。クラスの総量ではない旨）・`assay_kind`（下記。lipid なら null）。戻り値の `notes` も同じ
   （null のものは載せず、`figure` を足す）。
 - `test`（使った検定）と `n_units`（群ごとの単位の数）。`matrix_id` と `matrix_source`（行列の出所。上記）。
+  ドリフト補正を当てなかった行列なら `warnings`（戻り値と同じ `drift_not_applied_by_default`。上記）。
 - `opposite_pairs`: パスウェイ名 → `{"rows": [...], "undeterminable": 件数}`。`rows` は
   `opposite_pairs_tsv` と同じ欄（`node_1` `call_1` `log2fc_1` `node_2` `call_2` `log2fc_2` `via`）の辞書。
 - 非有限の数値（NaN・inf）は null で書く。

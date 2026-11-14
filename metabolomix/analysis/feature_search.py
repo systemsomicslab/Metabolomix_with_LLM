@@ -1354,9 +1354,13 @@ def retest_merged(ds, result: dict, *, groups=()) -> dict:
                           f"まとめた行列で {result_id} の比較をやり直せない: {exc.message}",
                           {"result_id": result_id, "cause": exc.code}) from exc
     if analysis is None:
+        # 記録の spec をそのまま当て直すので、記録の analysis_id は必ずやり直しにある。無ければ記録の
+        # analysis_id と spec の analyses が食い違っている（内部の不整合。まとめる前の数字では埋めない）
         raise DomainError("FEATURE_MERGE_UNAVAILABLE",
-                          f"まとめた行列に {result_id} の前処理を当て直せない"
-                          "（利用者への確認が要る前処理）。", {"result_id": result_id})
+                          f"まとめた行列でやり直した結果に {result_id} の解析 "
+                          f"{record.get('analysis_id')!r} が無い（記録の analysis_id と spec の analyses が"
+                          "食い違う）。", {"result_id": result_id,
+                                         "analysis_id": record.get("analysis_id")})
     redone = as_two_group({**record, "engine": analysis["result"]}, source["contrast_id"])
     return {**result, "results": redone["results"], "volcano": redone["volcano"],
             "statistics": redone["statistics"]}

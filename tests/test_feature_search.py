@@ -1034,6 +1034,20 @@ def test_retest_without_the_source_record_refuses():
     assert excinfo.value.code == "FEATURE_MERGE_UNAVAILABLE"
 
 
+def test_retest_with_an_analysis_id_missing_from_the_rerun_names_the_mismatch():
+    """記録の analysis_id がやり直しに無いのは記録と spec の食い違い（利用者に尋ねる前処理ではない）。"""
+    from metabolomix.analysis.feature_search import retest_merged
+
+    ds, result = _computed_ds()
+    rid = result["_source"]["result_id"]
+    ds.results[rid] = {**ds.results[rid], "analysis_id": "gone"}
+    with pytest.raises(DomainError) as excinfo:
+        retest_merged(ds, result, groups=[["3", "4"]])
+    assert excinfo.value.code == "FEATURE_MERGE_UNAVAILABLE"
+    assert excinfo.value.details["analysis_id"] == "gone"
+    assert "食い違う" in excinfo.value.message and "利用者" not in excinfo.value.message
+
+
 def test_match_target_counts_a_merged_pair_as_one_candidate():
     """組の 2 スポットが同じ箱にあれば残す ID で resolved、無関係の 2 スポットは needs_input のまま。"""
     from metabolomix.analysis.feature_search import merge_map

@@ -37,9 +37,9 @@ message に R の本文を入れる。
 入力は直近のデータセットの統計エンジンの行列。行列は `dataset_compare` / `dataset_pca` と同じ決め方（手順 3 の
 `matrix_inputs(prefer_latest=True)`）: `matrix_id` を渡せば登録済みのその行列、省けばこのハンドルで `dataset_preprocess` が
 最後に作った行列（手順 4）、それも無ければ既定の前処理（手順 5。drift=auto は換算済み・注入順がファイルの順かもしれないとき
-ドリフト補正を当てずに計算する）。どれを使ったかは戻り値と manifest の `matrix_source`（`matrix_id` / `latest_preprocess` / `default`）。
+ドリフト補正を当てずに計算する。使った行列がそうなら戻り値と manifest の `warnings` に `drift_not_applied_by_default`）。どれを使ったかは戻り値と manifest の `matrix_source`（`matrix_id` / `latest_preprocess` / `default`）。
 データセットが無ければ `missing_state` → `load_dataset`、名指しの行列が無い・古いなら `missing_state("stat_matrix")` →
-`dataset_preprocess`。既定の行列は、要求の検査（試料・単位の数・aggregation・q_threshold・method）がすべて済んでから登録し、前処理の記録を書く（手順 8 の `register_default`）。`matrix_id` を省いた呼び出しのエラーには、使った行列の `details.matrix_id` と `matrix_source` を添える（既定の行列は登録の後のエラーだけ。`latest_preprocess` なら `details.matrix_note` も）。
+`dataset_preprocess`。既定の行列は、要求の検査（試料・単位の数・aggregation・q_threshold・method）がすべて済んでから登録し、前処理の記録を書く（手順 8 の `register_default`）。`matrix_id` を省いた呼び出しのエラーには、使った行列の `details.matrix_id` と `matrix_source` を添える（手順 6 の受け渡しの検査——サブクラス注釈の付いた特徴の数・群の大きさ——も含む。既定の行列は登録の後のエラーだけ。`latest_preprocess` なら `details.matrix_note` も）。
 旧 ARF 経路（`source="arf"`）は B-2b Task 8 で消えた。MSLipidMapper へは行列の注入ごとの値（生体のみ・欠測は 0）を渡す。
 状態変更: `session.pathway.last_run_id` / `last_run_dir`。
 R の仮想環境は起動前に確かめる（`_check_environment()`）: `r/renv/library` に MSLipidMapper が無ければ
