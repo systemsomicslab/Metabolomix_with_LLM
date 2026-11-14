@@ -274,6 +274,18 @@ def test_class_name_conflict_drops_the_row():
     assert (res.route, res.name, res.ontology) == ("class_formula", "low score: PE P-40:6", "EtherPE")
 
 
+def test_resolve_row_does_not_read_a_hydroxy_or_epoxy_acyl_as_the_plain_class():
+    """注記の前の `;(2OH)` を落として Cer AS の行を Cer_NS にしない。PC の `;Ep` も PC として経路 `name` で
+    読まず、経路 `class_formula` に回す（組成式の O が PC の形と合わず落ちる。レビュー V1）。"""
+    for name in ("Cer 18:1;O2/16:0;(2OH)", "Cer 18:1;O2/16:0;(2OH) (Cer AS)"):
+        assert handoff.resolve_row(name, "Ceramides", "C34H67NO4").reason == "ambiguous_class", name
+    # PC 16:0_20:4;Ep: PC 36:4（C44H80NO8P）の二重結合 1 つ分の H2 が環になり O が 1 つ増える
+    for name in ("PC 16:0_20:4;Ep", "PC 16:0_20:4;Ep (x)"):
+        assert handoff.resolve_row(name, "Phosphatidylcholines", "C44H78NO9P").reason == "formula_mismatch", name
+    res = handoff.resolve_row("PC 16:0_20:4; ExampleDB ID-0000", "Phosphatidylcholines", "C44H80NO8P")
+    assert (res.route, res.name, res.ontology) == ("name", "PC 16:0_20:4", "PC")
+
+
 def test_every_reason_resolve_row_can_return_is_a_report_key():
     """`resolve_row` が返しうる理由の文字列はすべて report のキーにある（新しい理由で KeyError にしない）。"""
     import ast

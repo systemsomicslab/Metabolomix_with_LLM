@@ -199,11 +199,13 @@ _ENGLISH_NAME = re.compile(
     rf"^({'|'.join(_ENGLISH_HEADS)})(?:\s+(lyso|alkyl|alkenyl))?\s+(\d.*)$", re.IGNORECASE)
 _ENGLISH_MODIFIER = {"alkyl": "O-", "alkenyl": "P-"}
 
-# `;` の後ろが空白を含む注記（`LPC 16:0; ExampleDB ID-0000`）のときだけ切る。`;O2` の修飾は残す。
+# 注記を切る候補: `;` の後ろ（次の `;` まで）に空白がある最初の `;`（`LPC 16:0; ExampleDB ID-0000`・
+# `PE 36:2;O (oxPE)`）。どこで切るかは `_cut_annotation` が決める。
 _ANNOTATION = re.compile(r";(?=[^;]*\s)")
-# 酸化の修飾 `;O` / `;O2` …。Cer / HexCer / SM（長鎖塩基の ;O2 / ;O3）以外では経路 1 で読まない。
-_OXIDIZED = re.compile(r";O(?![a-z])")
-_WHITESPACE = re.compile(r"\s")
+# 酸素を足す修飾（酸化・水酸基・エポキシ・オキソ）: `;O` `;O2` `;O3` `;OH` `;OOH` `;2OH` `;(2OH)` `;(3OH)` `;(OH)`
+# `;9OH,13OH` `;Ep` `;(Ep)` `;oxo` `;O(FA 18:2)` …（`;Oxidized` のような語は当たらない）。
+# Cer / HexCer / SM（長鎖塩基の ;O2 / ;O3）以外の頭部では経路 1 で読まない。
+_OXIDIZED = re.compile(r";\(?[\d,]*(?:O(?![a-z])|Ep(?![a-z])|oxo(?![a-z]))")
 _SPHINGO_HEADS = ("Cer", "HexCer", "SM")
 
 # 頭部 → LbmClass（同名のもの）。PC / PE の `O-` / `P-` は EtherPC / EtherPE。
@@ -251,16 +253,29 @@ _ADDUCT_SUFFIX = re.compile(r"\s*[\[(]\s*\d*M(?:[+-][A-Za-z0-9]+)*\s*[\])]\s*\d*
 
 
 def _cut_annotation(text: str) -> str:
-    """空白を含む `;` の後の注記を切る。`;` が酸化の修飾（`;O` `;O2` `;O3` `;OH` …）の始まりなら、
-    修飾の語（次の空白まで。`;O2/16:0` の鎖も）を残してその後ろの注記だけを切る
-    （`PE 36:2;O (oxPE)` → `PE 36:2;O`、`Cer 18:1;O2/16:0 (x)` → `Cer 18:1;O2/16:0`）。"""
+    """空白を含む `;` の後の注記を切る。
+
+    切る候補は `_ANNOTATION` の `;` から後ろで、括弧（`()` `[]`）の外の最初の `; `（`;` の直後が空白）か
+    空白。`;` の直後が空白なら、そこからが注記（`LPC 16:0; ExampleDB ID-0000` → `LPC 16:0`）。直後が空白で
+    なければ `;` は名前の修飾（`;O` `;O2/16:0` `;OH` `;2OH` `;(2OH)` `;Ep` `;O(FA 18:2)` …）の始まりで、
+    修飾の語を残してその後ろの注記だけを切る（`PE 36:2;O (oxPE)` → `PE 36:2;O`、
+    `Cer 18:1;O2/16:0;(2OH) (x)` → `Cer 18:1;O2/16:0;(2OH)`。括弧の中の空白は語の内:
+    `TG 16:0_18:1_18:2;O(FA 16:0)` はそのまま）。修飾として知らない語も残す——切ると修飾を落とした
+    別の種に読み違えるが、残せば GOSLIN が読めないだけ（種に読まない）で済むため。
+    """
     m = _ANNOTATION.search(text)
     if m is None:
         return text
-    if _OXIDIZED.match(text, m.start()):
-        space = _WHITESPACE.search(text, m.start())
-        return text[:space.start()].strip()
-    return text[:m.start()].strip()
+    depth = 0
+    for i, ch in enumerate(text):
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth = max(depth - 1, 0)
+        elif i >= m.start() and depth == 0:
+            if ch.isspace() or (ch == ";" and text[i + 1:i + 2].isspace()):
+                return text[:i].strip()
+    return text
 
 
 def shorthand(name: str | None) -> str | None:
@@ -268,9 +283,10 @@ def shorthand(name: str | None) -> str | None:
 
     `|` の後・空白を含む `;` の後の注記（`; ExampleDB ID-0000`）・末尾の付加体の表記を切り、古い
     MS-DIAL の書式（`Cer[NS] d30:1`）・英語のクラス名（`Phosphatidylcholine 16:0-18:1`）を略記に直す。
-    酸化の修飾（`;O` `;O2` `;O3` …）は注記が続いても残す（`PE 36:2;O (oxPE)` → `PE 36:2;O`）。
-    GOSLIN で読めるかは確かめない（読むのは呼び出し側）。クラスの決定・酸化の修飾の扱いは
-    `from_name` の役目で、ここではしない。
+    `;` の直後に空白の無い修飾（`;O` `;O2` `;OH` `;2OH` `;(2OH)` `;(3OH)` `;Ep` `;O(FA 18:2)` …）は注記が
+    続いても残す（`PE 36:2;O (oxPE)` → `PE 36:2;O`。`_cut_annotation`）。注記を足しても名前の読みは変わらない。
+    GOSLIN で読めるかは確かめない（読むのは呼び出し側。`;(2OH)` は GOSLIN が読めない）。クラスの決定・
+    酸化の修飾の扱いは `from_name` の役目で、ここではしない。
     """
     if not name or not name.strip():
         return None
@@ -296,14 +312,16 @@ def from_name(name: str | None) -> tuple[str, str] | str | None:
     クラスが一意でなければ `"ambiguous_class"`、読めなければ None（経路 2 に回す）。
     返す名前は直した文字列であり、GOSLIN の正規化形ではない。Cer / HexCer のクラスの曖昧さは
     GOSLIN の可否より先に決める（水酸基付きの脂肪酸など、GOSLIN が読めない形でも曖昧と分かる）。
-    Cer / HexCer / SM 以外の頭部で `;O…` の修飾がある名前（`FA 18:1;O (9-HODE)` も。注記を切る前に見る）も None。
-    注記を切っても酸化の修飾は残す（`SM 18:1;O2/16:0 (x)` → `SM 18:1;O2/16:0`）。
+    Cer / HexCer / SM 以外の頭部で酸素を足す修飾（`;O` `;OH` `;2OH` `;(2OH)` `;Ep` `;oxo` …。`_OXIDIZED`）が
+    ある名前（`FA 18:1;O (9-HODE)` も）も None。注記は `shorthand` と同じく切り、修飾は残す
+    （`SM 18:1;O2/16:0 (x)` → `SM 18:1;O2/16:0`、`Cer 18:1;O2/16:0;(2OH) (x)` は注記の無い名前と同じく
+    `ambiguous_class`）。修飾の有無は注記を切った名前で見る。
     """
     if not name or not name.strip():
         return None
-    text = name.split("|", 1)[0].strip()
+    text = _cut_annotation(name.split("|", 1)[0].strip())
     oxidized = _OXIDIZED.search(text) is not None
-    text, bracket = _to_msdial5(_cut_annotation(text))
+    text, bracket = _to_msdial5(text)
     head_match = _HEAD.match(text)
     if head_match is None:
         return None
