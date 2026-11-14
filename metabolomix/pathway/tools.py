@@ -18,6 +18,7 @@ from mcp.server.fastmcp import Image
 from mcp.types import ToolAnnotations
 
 from metabolomix.analysis import stats_results
+from metabolomix.analysis.stats.compare import TESTS
 from metabolomix.analysis.stats.data import from_dataset
 from metabolomix.core import mcp_core, mcp_errors, session_state
 from metabolomix.core.atomic_io import DomainError
@@ -47,7 +48,8 @@ _DROP_LABELS = {"unannotated": "名前か Ontology が空", "unparsable_name": "
                 "ambiguous_ontology": "Ontology が複数のクラスにまたがる",
                 "unmapped_ontology": "Ontology が脂質クラスの表に無い",
                 "class_name_conflict": "名前の頭部の語が Ontology のクラスと食い違う",
-                "no_formula": "組成式が無い", "formula_mismatch": "組成式がクラスの形に合わない"}
+                "no_formula": "組成式が無い", "formula_mismatch": "組成式がクラスの形に合わない",
+                "name_head": "名前の頭を MSLipidMapper がクラスとして読めない（`(` 始まりなど）"}
 
 
 def _finite(value):
@@ -62,15 +64,15 @@ def _finite(value):
 
 
 def _handoff_note(report: dict) -> str | None:
-    """行を落としたときの注意（`handoff` の件数を読む手がかり）。落とした行も除外スポットも無ければ None。
+    """行を落としたときの注意（`handoff` の件数を読む手がかり）。落とした行も重複名も無ければ None。
 
     研究室 MSP の行（慣用名・ID・ClassyFire の Ontology）は名前かクラスと組成式から MS-DIAL の
     クラスと略記の名前に直して入れる。残した行は経路ごとに、落とした行は理由ごとに数える。
-    ARF の手動除外スポット（`dropped_excluded_spots`）は脂質の理由とは別に述べる。
+    同名の重複で落とした行数（`dropped_duplicate_names`。同名ごとに 1 行を残す）は脂質の理由とは別に述べる。
     """
     dropped = {k: report.get(f"dropped_{k}") or 0 for k in _DROP_LABELS}
-    excluded = report.get("dropped_excluded_spots") or 0
-    if not any(dropped.values()) and not excluded:
+    duplicates = report.get("dropped_duplicate_names") or 0
+    if not any(dropped.values()) and not duplicates:
         return None
     kept = report.get("kept_by_route") or {}
     kept_text = "、".join(f"{label} {kept.get(k, 0)}" for k, label in _ROUTE_LABELS.items())
@@ -78,8 +80,8 @@ def _handoff_note(report: dict) -> str | None:
     if any(dropped.values()):
         dropped_text = "、".join(f"{_DROP_LABELS[k]} {n}" for k, n in dropped.items() if n)
         text += f"脂質として入れられない行を計 {sum(dropped.values())} 件除いた（{dropped_text}）。"
-    if excluded:
-        text += f"手動除外のスポット {excluded} 件は載せていない。"
+    if duplicates:
+        text += f"同名の重複で {duplicates} 行を落とした（同名ごとに平均強度が最大の 1 行を残す）。"
     return text + f"残した行の経路は {kept_text}（重複名の整理後に {report.get('n_kept')} 件）。"
 
 
@@ -87,6 +89,9 @@ def _handoff_note(report: dict) -> str | None:
 _RUN_ID_RE = re.compile(r"pw_\d{8}_\d{6}_[0-9a-f]{6}")
 _FIGURE_NOTE = ("図のノード内の p 値ラベルは MSLipidMapper（Shiny と同じ計算）のもので、"
                 "pathway_project の q 値とは別物。")
+#: ノードの値の読み方（B11-T46）。和をクラスの総量として読ませない。
+_NOT_CLASS_TOTAL = ("ノードの値（とその和）はクラスの総量ではない: 前処理の足切りを通った特徴のうち、"
+                    "脂質として受け渡せた行だけ（落とした行は handoff の dropped_*。同名は 1 行）を集計したもの。")
 
 
 def _backend_text(result: dict) -> str:
@@ -98,9 +103,19 @@ def _backend_text(result: dict) -> str:
         text = "ローカルの R"
     fallback = result.get("remote_fallback")
     if fallback:
-        text += (f"（サーバ {fallback.get('api_url')} が使えずローカルへ回した: "
+        job = f" job {fallback['job_id']}" if fallback.get("job_id") else ""
+        text += (f"（サーバ {fallback.get('api_url')}{job} が使えずローカルへ回した: "
                  f"{fallback.get('code')} {fallback.get('message')}）")
     return text
+
+
+def _assay_note(assay_kind) -> str | None:
+    """assay_kind が lipid でないときの注意（C1）。lipid なら None。"""
+    if assay_kind == "lipid":
+        return None
+    return (f"assay_kind が lipid ではありません（{assay_kind}）。MSLipidMapper はクラス（Ontology）と"
+            "脂質の略記の名前（名前の文法）を前提にします。脂質として読めない行は落として handoff の "
+            "dropped_* に数えています。種別は record_objective(assay_kind=...) で記録できます。")
 
 
 def _run_dir(run_id: str, holder) -> Path:
@@ -152,9 +167,10 @@ def _normalization_text(prepared) -> str:
     return "; ".join(parts)
 
 
-def _with_matrix(envelope: str, matrix_id: str | None) -> str:
-    """暗黙に登録した行列の ID を、エラーの封筒の details に足す（呼び直しにそのまま使える）。"""
-    if matrix_id is None:
+def _with_details(envelope: str, **extra) -> str:
+    """エラーの封筒の details に値を足す（None の値は足さない）。"""
+    extra = {k: v for k, v in extra.items() if v is not None}
+    if not extra:
         return envelope
     try:
         body = json.loads(envelope)
@@ -163,8 +179,19 @@ def _with_matrix(envelope: str, matrix_id: str | None) -> str:
     err = body.get("error") if isinstance(body, dict) else None
     if not isinstance(err, dict):
         return envelope
-    err["details"] = {**(err.get("details") or {}), "matrix_id": matrix_id}
+    err["details"] = {**(err.get("details") or {}), **extra}
     return json_payload(body)
+
+
+def _with_matrix(envelope: str, matrix_id: str | None) -> str:
+    """暗黙に登録した行列の ID を、エラーの封筒の details に足す（呼び直しにそのまま使える）。"""
+    return _with_details(envelope, matrix_id=matrix_id)
+
+
+def _bridge_envelope(exc, run_dir: Path, matrix_id: str | None = None) -> str:
+    """ブリッジの失敗の封筒。run のディレクトリ（`remote-job-<mode>.json`・`bridge.log` の置き場）を添える（B11-T44）。"""
+    return _with_details(mcp_errors.pathway_error(exc.code, exc.message, exc.details),
+                         run_dir=str(run_dir), matrix_id=matrix_id)
 
 
 def _domain_envelope(exc: DomainError) -> str:
@@ -178,8 +205,10 @@ def _build_dataset(group_a, group_b, label_a, label_b, holder, matrix_id=None):
     値は行列の注入ごとの線形値（生体だけ。QC・ブランク・除外は元から入らない）で、欠測は 0
     （MSLipidMapper の約束）。ここでは登録しない（要求の検査がすべて済んでから呼び出し側が
     `register_default` で登録し、前処理の記録を書く）。戻り値は
-    `((表, 正規化の注記, dataset_id, 群名 a, 群名 b, 試料 → 個体, 行列 ID, 文脈), None)` か `(None, 封筒)`。
-    文脈は `{"entry", "study", "config", "inputs", "prepared"}`（名指しの行列なら entry がある）。
+    `((表, 正規化の注記, dataset_id, 群名 a, 群名 b, 試料 → 単位, 行列 ID, 文脈), None)` か `(None, 封筒)`。
+    試料 → 単位は行列の units（collapse_replicates=True の行列で subject_id のある注入は個体にまとまり、
+    それ以外は注入ごと）。文脈は `{"entry", "study", "config", "inputs", "prepared", "n_units"}`
+    （名指しの行列なら entry がある。n_units は比べる 2 群それぞれの単位の数）。
     """
     ds = holder.dataset
     if ds is None:
@@ -230,15 +259,19 @@ def _build_dataset(group_a, group_b, label_a, label_b, holder, matrix_id=None):
         group_a=wanted_a, group_b=wanted_b, group_a_label=label_a, group_b_label=label_b)
     subject_of = {handoff.clean_text(name_of.get(sid, sid)): unit.unit_id
                   for unit in prepared.units for sid in unit.sample_ids}
+    unit_counts = {}
     for label in (label_a, label_b):
         n_units = len({subject_of[handoff.clean_text(n)]
                        for n, g in zip(table.sample_names, table.groups) if g == label})
         if n_units < 2:
             raise handoff.HandoffError(
                 "PATHWAY_BAD_REQUEST",
-                f"群 {label} の個体が 2 未満です（同じ個体の反復注入は 1 個体にまとめて数えます: {n_units}）。",
+                f"群 {label} の単位が 2 未満です（単位は行列 {prepared.matrix_id} の units: 反復をまとめた"
+                f"行列なら個体、まとめない行列なら注入。{n_units}）。",
                 {"group": str(label), "n_units": n_units})
-    context = {"entry": entry, "study": study, "config": config, "inputs": inputs, "prepared": prepared}
+        unit_counts[handoff.clean_text(label)] = n_units
+    context = {"entry": entry, "study": study, "config": config, "inputs": inputs, "prepared": prepared,
+               "n_units": unit_counts}
     return (table, _normalization_text(prepared), ds.dataset_id, label_a, label_b, subject_of,
             prepared.matrix_id, context), None
 
@@ -254,6 +287,7 @@ def pathway_project(group_a: str | list[str] | None = None,
                     group_a_label: str = "group_a", group_b_label: str = "group_b",
                     pathways: list[str] | None = None, acyl_chains: list[str] | None = None,
                     aggregation: str = "sum", q_threshold: float = 0.05,
+                    method: str = "moderated_t",
                     matrix_id: str | None = None,
                     dataset_handle: str | None = None,
                     wait_seconds: float = 20.0) -> str:
@@ -267,16 +301,22 @@ def pathway_project(group_a: str | list[str] | None = None,
     - matrix_id: dataset_preprocess が返した行列 ID。省略時は既定の前処理（dataset_compare / dataset_pca と
       違い、直近の dataset_preprocess の行列は選ばない。drift=auto が補正を当てないときは当てずに計算する）。
       古い・無い ID は missing_state。
-      MSLipidMapper へは行列の注入ごとの値（欠測は 0）を渡す。
+      MSLipidMapper へは行列の注入ごとの値（欠測は 0）を渡す。比べる単位は行列の units に従う:
+      collapse_replicates=True（既定）の行列で、試料の表に subject_id がある注入だけが log2 の平均で
+      1 個体にまとまる。collapse_replicates=False の行列（dataset_compare に渡したのと同じ matrix_id）
+      なら注入ごと。戻り値の n_units が群ごとの単位の数。
     - group_a / group_b: サンプル名のリスト（group_a_label / group_b_label が群名になる）。
       行列に無い試料（QC・ブランク・除外）を指すと PATHWAY_BAD_REQUEST。
     - pathways: remodeling / ceramide / global（既定は 3 つ全部）。
     - acyl_chains: 例 ["18:0","20:4"]。指定すると鎖サブセットのスコープも比べる。
     - aggregation: sum | mean | median（サブクラス内の分子種の集計）。
-    検定は統計エンジンの moderated t（スコープ値の log2。同じ個体の反復注入は log2 の平均で 1 個体）、
-    BH はパスウェイ×スコープ種別ごと。log2fc は正なら group_b が高い。call は verdict が changed なら
-    up / down、検定できなければ NA、それ以外は ns。
-    脂質アッセイ（record_objective の assay_kind=lipid）でだけ使える。
+    - method: スコープの比較の検定。dataset_compare の method と同じ値（moderated_t 既定 / welch /
+      student / mannwhitney）。主の比較と同じ検定にするなら同じ値を渡す。
+    検定はスコープ値の log2 で、BH はパスウェイ×スコープ種別ごと。log2fc は正なら group_b が高い。
+    call は verdict が changed なら up / down、検定できなければ NA、それ以外は ns。
+    ノードの値（とその和）はクラスの総量ではない（足切り後の特徴のうち、脂質として受け渡せた行だけ）。
+    MSLipidMapper はクラス（Ontology）と脂質の略記の名前を前提にする。assay_kind が lipid でなくても
+    動き、そのときは notes.assay_kind にその前提を書く（読めない行は handoff の dropped_* に数える）。
     MSLipidMapper は [mslipidmapper] mslipidmapper_api_url の研究室サーバを先に使い、使えなければローカルの R
     （[mslipidmapper] rscript）で動かす。どちらで動いたかは戻り値の backend。
     wait_seconds: 待つ秒数（既定 20。0〜30 秒）。超えたら仕事を続けたまま `status: "running"` と `job_id` を
@@ -288,11 +328,6 @@ def pathway_project(group_a: str | list[str] | None = None,
     if isinstance(holder, str):
         return holder
     s = session_state.session
-    # 種別はハンドルごと: 渡したハンドルの種別を見る（直近のハンドルの種別ではない）。
-    if getattr(holder, "assay_kind", "unknown") != "lipid":
-        return mcp_errors.missing_state(
-            "assay_kind", ["record_objective"],
-            "MSLipidMapper は脂質専用です。record_objective(assay_kind='lipid') で種別を確定してください。")
     pathways = list(pathways or bridge.PATHWAY_NETWORKS)
     unknown = [p for p in pathways if p not in bridge.PATHWAY_NETWORKS]
     if unknown:
@@ -307,6 +342,10 @@ def pathway_project(group_a: str | list[str] | None = None,
         return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST",
                                         "q_threshold は 0 より大きく 1 以下の数です。",
                                         {"q_threshold": str(q_threshold)})
+    if method not in TESTS:
+        return mcp_errors.pathway_error(
+            "PATHWAY_BAD_REQUEST", f"method は {' / '.join(TESTS)} のどれかです（dataset_compare と同じ）。",
+            {"method": str(method), "valid": list(TESTS)})
     if group_a is None or group_b is None:
         return mcp_errors.pathway_error("PATHWAY_BAD_REQUEST", "group_a と group_b を指定してください。")
 
@@ -352,9 +391,10 @@ def pathway_project(group_a: str | list[str] | None = None,
             raise jsonld.JsonldError(f"bridge-result.json に出力が無いパスウェイ: {', '.join(absent)}")
         graphs = {p: jsonld.load_graph(Path(outputs[p])) for p in pathways}
     except bridge.BridgeError as exc:
-        return _with_matrix(mcp_errors.pathway_error(exc.code, exc.message, exc.details), implicit_matrix)
+        return _bridge_envelope(exc, run_dir, implicit_matrix)
     except jsonld.JsonldError as exc:
-        return _with_matrix(mcp_errors.pathway_error(exc.code, exc.message), implicit_matrix)
+        return _with_details(mcp_errors.pathway_error(exc.code, exc.message),
+                             run_dir=str(run_dir), matrix_id=implicit_matrix)
 
     # 上流は指定鎖ごとに全ノードへ空スコープを出すので、鎖がデータに無くても失敗しない。
     # 分子種の入った鎖スコープがどのパスウェイにも無い鎖は指定の誤りとして返す（spec §5）
@@ -370,7 +410,8 @@ def pathway_project(group_a: str | list[str] | None = None,
     per_pathway, all_rows, pair_rows = {}, [], {}
     for p, graph in graphs.items():
         try:
-            rows = compare.compare_scopes(graph, label_a, label_b, q_threshold, subject_of=subject_of)
+            rows = compare.compare_scopes(graph, label_a, label_b, q_threshold, subject_of=subject_of,
+                                          test=method)
         except DomainError as exc:
             return _with_matrix(_domain_envelope(exc), implicit_matrix)
         pairs, undeterminable = compare.opposite_pairs(graph, rows)
@@ -394,21 +435,27 @@ def pathway_project(group_a: str | list[str] | None = None,
     groups: dict[str, int] = {}
     for g in map(handoff.clean_text, table.groups):
         groups[g] = groups.get(g, 0) + 1
+    notes = {"adjacency": _ADJACENCY_NOTE, "handoff": _handoff_note(table.report),
+             "values": ("MSLipidMapper は正規化しない。値は統計エンジンの行列の注入ごとの値（欠測は 0）を"
+                        f"サブクラスごとに集計したもの。比較は {method}（log2。単位は行列の units: "
+                        "反復をまとめた行列なら個体、まとめない行列なら注入。群ごとの数は n_units）。"
+                        + _NOT_CLASS_TOTAL),
+             "assay_kind": _assay_note(getattr(holder, "assay_kind", "unknown"))}
     manifest = {"run_id": run_id, "schema_version": jsonld.SCHEMA_VERSION, "source": "dataset",
                 "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "group_a": label_a, "group_b": label_b, "groups": groups,
+                "group_a": label_a, "group_b": label_b, "groups": groups, "n_units": ctx["n_units"],
                 "pathways": pathways, "acyl_chains": list(acyl_chains or []),
                 "aggregation": aggregation, "q_threshold": q_threshold,
                 "normalization": normalization, "dataset_id": dataset_id,
                 "matrix_id": used_matrix_id, "preprocess_record_id": (entry or {}).get("record_id"),
-                "test": "moderated_t",
+                "test": method,
                 "backend": result.get("backend"),
                 "remote_fallback": result.get("remote_fallback"),
                 "upstream_commit": result.get("package_sha"),
                 "package_version": result.get("package_version"),
                 "report": table.report,
                 # MCP の時間切れで戻り値が失われても、注意と隣接ペアは run に残す
-                "notes": {"adjacency": _ADJACENCY_NOTE, "handoff": _handoff_note(table.report)},
+                "notes": notes,
                 "opposite_pairs": pair_rows,
                 "mapped_nodes": {p: v["mapped_nodes"] for p, v in per_pathway.items()},
                 "files": {"mztab": "input.mztab", "nodes": "nodes.tsv",
@@ -420,17 +467,13 @@ def pathway_project(group_a: str | list[str] | None = None,
 
     return json_payload({
         "run_id": run_id, "source": "dataset", "run_dir": str(run_dir),
-        "groups": groups, "group_a": label_a, "group_b": label_b,
-        "normalization": normalization, "matrix_id": used_matrix_id,
+        "groups": groups, "n_units": ctx["n_units"], "group_a": label_a, "group_b": label_b,
+        "normalization": normalization, "matrix_id": used_matrix_id, "method": method,
         **({"preprocess_record": preprocess_record} if preprocess_record is not None else {}),
         "backend": _backend_text(result),
         "handoff": table.report,
         "pathways": per_pathway,
-        "notes": {"adjacency": _ADJACENCY_NOTE,
-                  **({"handoff": handoff_note} if (handoff_note := _handoff_note(table.report))
-                     else {}),
-                  "values": ("MSLipidMapper は正規化しない。値は統計エンジンの行列の注入ごとの値（欠測は 0）を"
-                             "サブクラスごとに集計したもの。比較は moderated t（log2、同じ個体の反復は平均）。"),
+        "notes": {**{k: v for k, v in notes.items() if v is not None},
                   "figure": "図のファイルは pathway_plot(run_id) で作る（チャットに出すときは inline_image=true）。"},
     })
 
@@ -491,7 +534,7 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
     try:
         result = bridge.run_bridge(request, run_dir, timeout_s=120.0 * len(chosen))
     except bridge.BridgeError as exc:
-        return mcp_errors.pathway_error(exc.code, exc.message, exc.details)
+        return _bridge_envelope(exc, run_dir)
 
     outputs = result.get("outputs") or {}
     images, figures = [], []
@@ -499,14 +542,14 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
         if not outputs.get(p):
             return mcp_errors.pathway_error(
                 "PATHWAY_RENDER_FAILED", f"{p} の PDF が出力されませんでした。",
-                {"pathway": p, "log": str(run_dir / "bridge.log")})
+                {"pathway": p, "log": str(run_dir / "bridge.log"), "run_dir": str(run_dir)})
         pdf = Path(outputs[p])
         try:
             png, w, h = pdf_raster.pdf_first_page_png(pdf)
         except Exception as exc:  # 0 ページ・壊れた PDF など。PyMuPDF の例外型は版で揺れる
             return mcp_errors.pathway_error(
                 "PATHWAY_RENDER_FAILED", f"{p} の PDF を画像にできません: {exc}",
-                {"pathway": p, "pdf": str(pdf)})
+                {"pathway": p, "pdf": str(pdf), "run_dir": str(run_dir)})
         png_path = run_dir / f"{p}.png"
         png_path.write_bytes(png)
         images.append(Image(data=png, format="png"))

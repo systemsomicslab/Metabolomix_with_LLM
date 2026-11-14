@@ -279,6 +279,20 @@ def test_latest_review_skips_an_unreadable_review_file(built):
     assert found["review_id"] == base["review_id"]
 
 
+def test_latest_review_breaks_a_same_second_tie_by_created_at(built):
+    """ID の時刻は秒まで。同じ秒の 2 件は末尾の乱数ではなく created_at の新しいほうを採る。"""
+    paths, _, base, _ = built
+    directory = flags.curation_dir(paths["arf2"])
+    sha = base["alignment"]["alignment_sha256"]
+    older = {**base, "review_id": "cr-29990101-000000-ffff", "created_at": "2999-01-01T00:00:00.100000+00:00"}
+    newer = {**base, "review_id": "cr-29990101-000000-0000", "created_at": "2999-01-01T00:00:00.900000+00:00"}
+    other = {**base, "review_id": "cr-29990101-000000-8888", "created_at": "2999-01-01T00:00:00.950000+00:00",
+             "alignment": {**base["alignment"], "alignment_sha256": "x" * 64}}   # 別のアラインメント
+    for saved in (older, newer, other):
+        (directory / f"review-{saved['review_id']}.json").write_text(json.dumps(saved), encoding="utf-8")
+    assert suggest.latest_review(paths["arf2"], sha)["review_id"] == newer["review_id"]
+
+
 def test_confirmed_spots_are_not_likely_wrong_targets():
     catalog = [{"MasterAlignmentID": 5}, {"MasterAlignmentID": 6}]
     annotations = {5: {"representative": {"name": "PC 34:1"}}, 6: {"representative": {"name": "PC 36:1"}}}

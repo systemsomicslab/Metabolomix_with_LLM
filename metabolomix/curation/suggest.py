@@ -44,19 +44,30 @@ def is_valid_suggestion_id(value) -> bool:
 
 
 def latest_review(arf2_path, alignment_sha256: str) -> dict | None:
-    """そのアラインメント（sha256 一致）の最新のレビュー。ID の時刻順に新しいものから読む。"""
+    """そのアラインメント（sha256 一致）の最新のレビュー。ID の時刻順に新しいものから読む。
+
+    ID の時刻は秒までで、同じ秒の ID の並びは末尾の乱数で決まる。同じ秒に複数あれば `created_at`
+    （マイクロ秒まで）の新しいほうを採る。
+    """
     directory = flags.curation_dir(arf2_path)
+    best, best_stamp = None, None
     for path in sorted(directory.glob("review-cr-*.json"), key=lambda p: p.name, reverse=True):
         review_id = path.stem[len("review-"):]
         if not review.is_valid_review_id(review_id):
             continue
+        stamp = review_id.rsplit("-", 1)[0]         # cr-YYYYMMDD-HHMMSS
+        if best is not None and stamp != best_stamp:
+            break                                   # 見つけた秒より古い ID しか残っていない
         try:
             saved = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue    # 壊れた・読めないレビュー 1 件で候補付け全体を止めない
-        if isinstance(saved, dict) and (saved.get("alignment") or {}).get("alignment_sha256") == alignment_sha256:
-            return saved
-    return None
+        if not (isinstance(saved, dict)
+                and (saved.get("alignment") or {}).get("alignment_sha256") == alignment_sha256):
+            continue
+        if best is None or str(saved.get("created_at") or "") > str(best.get("created_at") or ""):
+            best, best_stamp = saved, stamp
+    return best
 
 
 def select_targets(catalog, annotations, base_review, effective, *, wrong, unannotated, include_decided,

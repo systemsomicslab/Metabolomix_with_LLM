@@ -329,13 +329,16 @@ def test_suggest_requires_the_library(suggest_env):
     assert out["error"]["required_tools"] == ["library_load"]
 
 
-def test_suggest_reports_the_library_file_name_not_its_directory(suggest_env):
+def test_suggest_reports_the_library_file_name_and_sha256_not_its_directory(suggest_env):
+    """`library` はファイル名と sha256 だけ（C5-M08。置き場所は出さない）。"""
     arf2 = str(suggest_env["arf2"])
     msp = Path(suggest_env["msp"])
     session_state.session.library.source_path = str(msp)     # 対話の library_load はフルパスを持つ
     json.loads(curation_tools.curation_review())
     out = json.loads(curation_tools.curation_suggest())
-    assert out["library"]["path"] == msp.name
+    assert set(out["library"]) == {"file", "sha256"}
+    assert out["library"]["file"] == msp.name
+    assert out["library"]["sha256"] == session_state.session.library.store.summary().get("source_sha256")
     dumped = json.dumps(out)
     assert str(msp.parent) not in dumped and msp.parent.as_posix() not in dumped
 
@@ -349,7 +352,7 @@ def test_suggest_then_submit_assign_and_redundant(suggest_env):
     assert out["table"].splitlines()[0].split("\t") == suggest.TSV_COLUMNS
     assert out["html_path"].endswith(f"suggest-{sid}.html")
     assert "spots" not in out                                     # 座標・EIC は戻り値に入れない
-    assert "path" in out["library"]                               # ライブラリの出所（sha256 だけでは分からない）
+    assert "file" in out["library"] and "sha256" in out["library"]  # ライブラリの出所（ファイル名と sha256）
     text = 'CURATION_SUBMIT ' + json.dumps({"review_id": sid, "arf2_path": arf2, "flags": [
         {"spot_id": 2, "flag": "assign", "candidate": "L1", "level": "sum", "note": ""},
         {"spot_id": 3, "flag": "redundant", "candidate": "R1", "note": ""}]})
@@ -472,3 +475,58 @@ def test_review_falls_back_to_copy_when_the_endpoint_cannot_start(ready, monkeyp
     body = json.loads(curation_tools.curation_review())
     assert body["submit"]["via"] == "copy" and "no port" in body["submit"]["reason"]
     assert "const SUBMIT_ENDPOINT = null;" in Path(body["html_path"]).read_text(encoding="utf-8")
+
+
+def test_submit_without_review_id_uses_the_latest_review(ready):
+    """review_id を省くと、このアラインメントの最新のレビューを使い、返り値で示す（C15-M16）。"""
+    json.loads(curation_tools.curation_review())
+    latest = json.loads(curation_tools.curation_review())["review_id"]
+    body = json.loads(curation_tools.curation_submit(flags=[{"spot_id": 1, "flag": "wrong", "note": ""}]))
+    assert body["status"] == "ok" and body["recorded"] == 1
+    assert body["review_id"] == latest and body["review_id_source"] == "latest"
+    rows = flags.FlagStore(flags.curation_dir(ready["arf2"])).rows()
+    assert rows[-1]["review_id"] == latest
+
+
+def test_submit_without_review_id_names_the_latest_review_when_it_refuses(ready):
+    """最新のレビューが絞り込みで対象外のスポットを断ったとき、どのレビューを使ったかをエラーで示す。"""
+    broad = json.loads(curation_tools.curation_review())["review_id"]
+    narrow = json.loads(curation_tools.curation_review(name_contains="34:1"))["review_id"]
+    body = json.loads(curation_tools.curation_submit(flags=[{"spot_id": 1, "flag": "wrong"}]))
+    assert body["status"] == "error" and "対象外" in body["message"]
+    assert body["review_id"] == narrow != broad and body["review_id_source"] == "latest"
+    assert narrow in body["message"] and "review_id を渡して" in body["message"]
+    assert json.loads(curation_tools.curation_flags())["n_flags"] == 0
+    # review_id を渡したときのエラーには付けない
+    body = json.loads(curation_tools.curation_submit(review_id=narrow, flags=[{"spot_id": 1, "flag": "wrong"}]))
+    assert body["status"] == "error" and "review_id_source" not in body
+    # 広いほうを名指しすれば送れる
+    body = json.loads(curation_tools.curation_submit(review_id=broad, flags=[{"spot_id": 1, "flag": "wrong"}]))
+    assert body["status"] == "ok" and "review_id_source" not in body
+
+
+def test_submit_with_review_id_does_not_say_latest(ready):
+    review_id = json.loads(curation_tools.curation_review())["review_id"]
+    body = json.loads(curation_tools.curation_submit(review_id=review_id,
+                                                     flags=[{"spot_id": 1, "flag": "wrong"}]))
+    assert body["status"] == "ok" and "review_id_source" not in body
+
+
+def test_submit_without_review_id_and_without_a_review_is_missing_state(ready):
+    body = json.loads(curation_tools.curation_submit(flags=[{"spot_id": 1, "flag": "wrong"}]))
+    assert body["error"]["code"] == "missing_state" and body["error"]["required_tools"] == ["curation_review"]
+    assert json.loads(curation_tools.curation_flags())["n_flags"] == 0
+
+
+def test_submit_without_review_id_refuses_suggestion_flags(ready):
+    json.loads(curation_tools.curation_review())
+    body = json.loads(curation_tools.curation_submit(
+        flags=[{"spot_id": 1, "flag": "assign", "candidate": "L1"}]))
+    assert body["status"] == "error" and "cs-" in body["message"]
+
+
+def test_submit_docstrings_define_source_without_a_consent_rule():
+    """同意の作法は道具に書かない（C22-M34）。source=llm は「LLM が出した判断」。"""
+    for tool in (curation_tools.curation_submit, curation_tools.curation_suggest):
+        assert "同意" not in (tool.__doc__ or "")
+    assert "LLM が出した" in curation_tools.curation_submit.__doc__

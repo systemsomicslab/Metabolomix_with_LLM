@@ -19,6 +19,10 @@ from metabolomix.pathway import msp_lipid
 from metabolomix.pathway.msdial_lipid_classes import MSDIAL_LIPID_CLASSES
 
 _UNANNOTATED = {"", "unknown", "others", "null"}
+#: 上流 MSLipidMapper が名前の頭からクラスを読む正規表現（R/lipid_chain_parser_se.R の
+#: `.parse_lipid_chain_metadata`: `str_extract(str_trim(name), "^[A-Za-z0-9\-\+;_]+")`）。
+#: 頭がこれに合わない名前（`(9Z)-octadecenoic acid` など）は class_raw が NA になり、上流が落ちる。
+_UPSTREAM_HEAD = re.compile(r"[A-Za-z0-9\-+;_]")
 _MIN_GROUP = 2
 _MIN_FEATURES = 2
 
@@ -76,7 +80,21 @@ def resolve_row(name, ontology, formula=None) -> RowResolution:
     `ambiguous_class`）→ 経路 2 `class_formula`（ClassyFire の Ontology と組成式。作れなければ
     `ambiguous_ontology` / `unmapped_ontology` / `class_name_conflict` / `no_formula` / `formula_mismatch`）。
     経路 1・2 の名前は限定子（`low score: ` 等）を先頭に残す。
+    どの経路でも、残す名前（mzTab-M に書く形）の頭が上流の読み取りに合わなければ `name_head`。
     """
+    res = _resolve_route(name, ontology, formula)
+    if res.route is not None and not upstream_head_ok(res.name):
+        return RowResolution(reason="name_head")
+    return res
+
+
+def upstream_head_ok(name) -> bool:
+    """mzTab-M に書く名前（`clean_text` 後・前後の空白を除く）の頭が、上流のクラスの読み取りに合うか。"""
+    return _UPSTREAM_HEAD.match(clean_text(name).strip()) is not None
+
+
+def _resolve_route(name, ontology, formula=None) -> RowResolution:
+    """`resolve_row` の経路の判定（名前の頭の検査の前）。"""
     if not _annotated(name, ontology):
         return RowResolution(reason="unannotated")
     text, onto = str(name).strip(), str(ontology).strip()
@@ -100,7 +118,7 @@ def resolve_row(name, ontology, formula=None) -> RowResolution:
 
 
 _DROP_REASONS = ("unannotated", "unparsable_name", "isotope_label", "ambiguous_class", "ambiguous_ontology",
-                 "unmapped_ontology", "class_name_conflict", "no_formula", "formula_mismatch")
+                 "unmapped_ontology", "class_name_conflict", "no_formula", "formula_mismatch", "name_head")
 
 
 def _new_report(source: str) -> dict:

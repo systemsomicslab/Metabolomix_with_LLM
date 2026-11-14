@@ -156,8 +156,8 @@ raw を run の中(`<run>/<極性>/input/`)へ配置し、極性ごとに MS-DIA
 | ツール | 機能 |
 |--------|------|
 | `curation_review` | 対象(既定は注釈付き全部。`ontology` でクラス、`name_contains` で名前の部分一致)を選び、証拠収集・機械判別・HTML ビューア生成を 1 回で行う。戻り値は suspect 以上とフラグ済みのスポットだけの TSV(判定の重い順の先頭 `max_rows` 行、既定 100。総数 `n_table_rows_total`・表示数 `n_table_rows_shown`。全件は HTML ビューア)・判定の件数・クラス別の傾向要約(点数・R²・外れ数)・`html_path`・`submit`(`via: viewer` ならビューアの Submit で送れる。`via: copy` なら貼り付け)。EIC 系列とスペクトルは返さない。`file_ids` に `.arf` の行に無い試料 ID があればエラー。判定は `likely_wrong`(polarity_mismatch / precursor_unmatched / dmz_out ＝\|Δm/z\| ≥ 10 mDa / class_rule_rejected ＝MS-DIAL の脂質クラス規則による棄却。脂質規則が走ったデータに限る / adduct_isomer_of:<spot> ＝同時溶出する証拠の強い別物質スポットの別アダクトで m/z が説明できる)/ `suspect`(ppm_out / low_score / drt_out / eic_poor / adduct_isomer_minor_of:<spot> ＝同じ段階で強度 3 倍以上の相手、または弱い兆候の重なり)/ `ok`。RT–m/z 傾向は補強にしか使わない。`thresholds` で既定値を上書きできる。1 回の上限は 3000 スポット。 |
-| `curation_suggest` | キュレーションで間違いになったスポット(既定は wrong フラグ＋元レビューの likely_wrong、`wrong="flagged"` でフラグだけ)と未注釈スポット(`unannotated`)に注釈の候補を並べる。**先に `library_load` と `curation_review`**(元レビューは `review_id`、省略時は最新)。候補は MS-DIAL の下位候補・閾値を緩めた再検索・別スポットの同位体／アダクト／インソース断片としての説明。スペクトル類似度で並べ、極性矛盾と \|Δm/z\| ≥ 10 mDa は削る。脂質規則は評価しないので既定は和組成で記録。戻り値は 1 スポット 1 行の TSV・件数・`html_path`・`submit`(`via: viewer` ならビューアの Submit で送れる。`via: copy` なら貼り付け)。ビューアで選んで **送信**(受け口が無ければ送信用テキストを貼る → `curation_submit`)。 |
-| `curation_submit` | フラグを追記する。ビューアの送信用テキストを `submission_text` にそのまま渡すか、`review_id` + `flags=[{spot_id, flag: wrong\|suspect\|confirmed\|clear, note}]`。不正な要素が 1 つでもあれば何も書かない。`source` は `user`(ユーザー自身の判断)/ `llm`(LLM の提案にユーザーが同意したもの)。送信用テキストは `.arf2` の絶対パスを運ぶので、サーバ再起動の後でもそのまま貼れば送れる。記録の後、アラインメントの `_tags.xml` に反映する(wrong → Misannotation を付け Confirmed を外す、confirmed → Confirmed を付け Misannotation を外す、suspect → Confirmed を外す、clear → 両方外す。控えは `curation/tags-backup/`。結果は `tags_xml`。MS-DIAL でプロジェクトを開いたままだと GUI の保存で上書きされる)。レビューはセッションの記録 → 送信用テキストの `arf2_path` → データセット(`dataset_handle`、省けば直近)の `.arf2` のフォルダの順に探す(`data/` は探さない。データセットも `arf2_path` も無ければ `missing_state`)。書いた後、同じ `.arf2` を開いているハンドルすべての `curation_flags` を読み直す(結果の `open_handles`。書き出しの `apply_curation` は新しい判断をすぐ使う)。候補付け(`cs-…`)の送信は `flags=[{spot_id, flag: assign\|redundant\|clear, candidate, level, note}]`。中身は保存済みの候補から展開する。assign / redundant は `_tags.xml` を変えない。 |
+| `curation_suggest` | キュレーションで間違いになったスポット(既定は wrong フラグ＋元レビューの likely_wrong、`wrong="flagged"` でフラグだけ)と未注釈スポット(`unannotated`)に注釈の候補を並べる。**先に `library_load` と `curation_review`**(元レビューは `review_id`、省略時は最新)。候補は MS-DIAL の下位候補・閾値を緩めた再検索・別スポットの同位体／アダクト／インソース断片としての説明。スペクトル類似度で並べ、極性矛盾と \|Δm/z\| ≥ 10 mDa は削る。脂質規則は評価しないので既定は和組成で記録。戻り値は 1 スポット 1 行の TSV・件数・`html_path`・`library`(ファイル名 `file` と `sha256`)・`submit`(`via: viewer` ならビューアの Submit で送れる。`via: copy` なら貼り付け)。ビューアで選んで **送信**(受け口が無ければ送信用テキストを貼る → `curation_submit`)。 |
+| `curation_submit` | フラグを追記する。ビューアの送信用テキストを `submission_text` にそのまま渡すか、`review_id` + `flags=[{spot_id, flag: wrong\|suspect\|confirmed\|clear, note}]`(`review_id` を省くとそのアラインメントの最新のレビューに記録し、戻り値の `review_id` と `review_id_source: "latest"` で示す。そのレビューに断られたエラー(対象外のスポットなど)にも同じ 2 つが付く。候補付けの送信は省けない)。不正な要素が 1 つでもあれば何も書かない。`source` は判断の出どころで `user`(ユーザーが出した判断。既定)/ `llm`(LLM が出した判断)。送信用テキストは `.arf2` の絶対パスを運ぶので、サーバ再起動の後でもそのまま貼れば送れる。記録の後、アラインメントの `_tags.xml` に反映する(wrong → Misannotation を付け Confirmed を外す、confirmed → Confirmed を付け Misannotation を外す、suspect → Confirmed を外す、clear → 両方外す。控えは `curation/tags-backup/`。結果は `tags_xml`。MS-DIAL でプロジェクトを開いたままだと GUI の保存で上書きされる)。レビューはセッションの記録 → 送信用テキストの `arf2_path` → データセット(`dataset_handle`、省けば直近)の `.arf2` のフォルダの順に探す(`data/` は探さない。データセットも `arf2_path` も無ければ `missing_state`)。書いた後、同じ `.arf2` を開いているハンドルすべての `curation_flags` を読み直す(結果の `open_handles`。書き出しの `apply_curation` は新しい判断をすぐ使う)。候補付け(`cs-…`)の送信は `flags=[{spot_id, flag: assign\|redundant\|clear, candidate, level, note}]`。中身は保存済みの候補から展開する。assign / redundant は `_tags.xml` を変えない。 |
 | `curation_flags` | データセット(`dataset_handle`、省けば直近)の `.arf2` で有効な判断を TSV で返す(列は spot_id・flag・name(assign の記録名)・of(redundant の相手)・note・source・ts)。 |
 | `curation_view_data` | ビューア(MCP Apps)専用。LLM は呼ばない。`dataset_handle` を持つ。 |
 
@@ -172,23 +172,25 @@ stdio サーバでは 2026-09 時点で未検証(ブラウザで `html_path` を
 前処理済みの脂質データを MSLipidMapper で remodeling / ceramide / global の
 パスウェイへ投影する。MSLipidMapper は研究室サーバの REST API(`[mslipidmapper] mslipidmapper_api_url`)を先に使い、
 未設定・未到達・404・ジョブ失敗などで使えなければローカルの Rscript(`[mslipidmapper] rscript`)へ回す。
-どちらで動いたかは戻り値の `backend`(サーバから回ったときはその理由も)と manifest に残る。
-脂質アッセイ(`record_objective(assay_kind="lipid")`)でだけ使える。
+どちらで動いたかは戻り値の `backend`(サーバから回ったときはその理由とサーバのジョブ ID も)と manifest に残る。
+`assay_kind` は問わない(lipid でなければ、名前の文法が前提であることを `notes.assay_kind` に書く)。
 
 **研究室サーバを使う**(R のセットアップは要らない): `lipidmix.local.toml` の `[mslipidmapper]` に
 `mslipidmapper_api_url`(例 `'http://<サーバ>:8000'`)を書く(環境変数では指せない)。
 サーバが認証を求めるときだけ `api_token`。中間 mzTab-M
 (試料名・群名・脂質名・強度)はサーバへ送られる。サーバ側のジョブ ID と送った config は
-run ディレクトリの `remote-job.json`。サーバは版を返さないので manifest の `upstream_commit` /
-`package_version` は空になる。どちらも使えないときは `MSLM_REMOTE_UNAVAILABLE`
-(`details.local` にローカルが使えない理由)。
+run ディレクトリの `remote-job-measure.json`(描画のジョブは `remote-job-render.json`)。サーバは版を返さないので manifest の `upstream_commit` /
+`package_version` は空になる。サーバのジョブが失敗しても理由は固定文しか返らない(本文はサーバの worker.log)。
+`remote_fallback` と失敗の封筒に `job_id`・`record`(そのジョブの記録の場所)、封筒に `details.run_dir` が残る。
+どちらも使えないときはサーバ側のコード(`MSLM_REMOTE_UNAVAILABLE` など。`details.local` にローカルが使えない理由)。
 
 **ローカルの R を使う**ときの初回のセットアップ(サーバだけで足りるなら要らない):
 
 1. R の 4.6 系を入れる。
 2. リポジトリ直下で `Rscript r/setup.R` を 1 度だけ実行する。MSLipidMapper と依存パッケージを
    CRAN / Bioconductor / GitHub から取得し、renv の仮想環境 `r/` にだけ入れる(R 本体のライブラリは
-   触らない)。未実行のまま呼ぶと `MSLM_R_PACKAGES_MISSING` が返る。更新(`server_update`)で
+   触らない)。未実行のまま呼ぶと `MSLM_R_PACKAGES_MISSING` が返る。入っているのに R が読み込めないときは
+   `MSLM_R_PACKAGE_LOAD_FAILED`(message に R の本文)。更新(`server_update`)で
    `r/renv.lock` が変わったときも再実行する(`server_update` が案内し、再実行するまでは同じ封筒で止まる)。
 3. `lipidmix.example.toml` を `lipidmix.local.toml` に写し、`[mslipidmapper]` の `rscript`
    (`Rscript.exe` のパス)を書く。`browser`(Edge / Chrome の実行ファイル)は標準の場所に
@@ -200,7 +202,7 @@ run ディレクトリの `remote-job.json`。サーバは版を返さないの�
 
 | ツール | 機能 |
 |--------|------|
-| `pathway_project` | 直近のデータセットの統計エンジンの行列（`matrix_id`、省略時は既定の前処理）から最小 mzTab-M（欠測は 0）を書き、MSLipidMapper でサブクラス(と任意のアシル鎖サブセット)をノードへ集計する。2 群を moderated t（スコープ値の log2、反復は個体にまとめる）＋BH(パスウェイ×スコープ種別ごと)で比べ、ノード表と「逆向きに動く隣接ペア」を TSV で返す。JSON-LD・mzTab・manifest は解析フォルダの `reports/pathway/<run_id>/`。`wait_seconds`(既定 20 秒。0〜30 秒)の中で終わらなければ仕事を続けたまま `status: "running"` と `job_id` を返す(結果は `job_status`)。 |
+| `pathway_project` | 直近のデータセットの統計エンジンの行列（`matrix_id`、省略時は既定の前処理）から最小 mzTab-M（欠測は 0）を書き、MSLipidMapper でサブクラス(と任意のアシル鎖サブセット)をノードへ集計する。2 群を `method`(`dataset_compare` と同じ値。既定 moderated t。スコープ値の log2、単位は `matrix_id` の行列の units で、反復をまとめない行列なら注入ごと。群ごとの数は `n_units`)＋BH(パスウェイ×スコープ種別ごと)で比べ、ノード表と「逆向きに動く隣接ペア」を TSV で返す(ノードの値の和はクラスの総量ではない)。受け渡しで落とした行は理由別に `handoff`(上流が名前の頭からクラスを読めない `(` 始まりの名前は `dropped_name_head`)。JSON-LD・mzTab・manifest は解析フォルダの `reports/pathway/<run_id>/`。`wait_seconds`(既定 20 秒。0〜30 秒)の中で終わらなければ仕事を続けたまま `status: "running"` と `job_id` を返す(結果は `job_status`)。 |
 | `pathway_plot` | `pathway_project` の run を MSLipidMapper で PDF に描き、1 ページ目を PNG(長辺 1600px)にして、既定では図のファイル(PDF・PNG)の場所と要約だけを返す。チャットに図を出すときは `inline_image=true`(1 枚約 2,400 画像トークン)。ローカルではヘッドレス Chromium と unpkg.com への接続が要る(サーバでは不要)。図中の p 値は MSLipidMapper のもの。 |
 
 ## 12. サーバ自身の更新
@@ -246,7 +248,7 @@ run ディレクトリの `remote-job.json`。サーバは版を返さないの�
 | `dataset_alignment_qc` | 1 つの物質が 2 つ以上のアライメントスポットに割れた組を探す(alignment-qc.v1)。同じ付加体・\|Δm/z\| ≤ 15 ppm・0.05 < ΔRT ≤ 1.0 分で、試料ごとの受け持ち(検出状態があれば検出、無ければ値の大きい方)が補い合う組。型は `injection_block`(片方が注入順の連続した塊)・`group_aligned`(受け持ちが群と一致。まとめない)・`interleaved`。`mergeable` は統計の側が試料ごとに大きい方の値で 1 つにまとめてよい組(注釈が両立する `injection_block` と ΔRT ≤ 0.15 分の `interleaved`。まとめるのはそのうち互いに |ΔRT| が最も近い相手どうしの 2 スポットだけ)。注入順は実験情報シート、無ければファイル名の順。全体は `output_path` に JSON(長いリストは要素ごとに改行)、戻り値は要約と `group_aligned` の組(先頭 50 組。`n_group_aligned` が全件)。結果はハンドルに最後の 1 つとして持ち(`kept_on_handle`)、`dataset_feature_search` / `dataset_novel_candidates` が JSON のパスを省いたときに使う(データ・試料の表・除外が変われば使わない。`dataset_analysis_run` は使わない)。 |
 | `dataset_quant_preview` | 定量(1/4)。内部標準の参照表 CSV(`reference_path`。毎回指定)で、データセットに現れたクラスをどの内部標準・係数で割るかを確かめる(値は作らない・読み取り専用)。内部標準の候補が複数・無いものは `unresolved` に並べ `status="needs_input"`、`bindings`(`{内部標準名: 特徴 ID}`)で選んで再実行。濃度から係数を作るなら `concentrations`・`solvent_volume`・`cells_millions`(`method`・`unit`)。極性が決まらないデータセットは `polarity` 必須。入力は MS-DIAL の解析フォルダから読んだデータセットだけ(ほかは `QUANT_SOURCE_UNSUPPORTED`)。戻り値は参照表の sha256・単位・ファイル名の末尾だけ。**規則プラグイン(`[quant] rules`)が要る**(未設定は `quant_rules_unavailable`。[docs/quant-rules-plugin.md](docs/quant-rules-plugin.md))。欄の意味は `lipidmix://docs/output-format/quant`。 |
 | `dataset_quant_apply` | 定量(2/4)。preview と同じ引数で内部標準により正規化し、**新しいハンドル**の派生データセットを作る(元は変えない)。未解決なら何もせず preview と同じ `needs_input`。成功なら解析フォルダの `reports/quant/` に記録を書き、`dataset_handle`・`status_counts`・`unit`・`record_id` を返す。gap-fill のセルも値を計算し `detected_mask` で印を引き継ぐ。内部標準が 0・負・欠測の試料は欠測にして理由を数える。正規化済みには掛けない。`skip=True` は値を変えず「飛ばした」記録と派生を作る(`reference_path` 不要)。 |
-| `dataset_merge_polarities` | 定量(3/4)。陽・陰イオンのハンドル(`positive_handle` / `negative_handle`。どちらも `dataset_quant_apply` 済みで normalized・method・unit が同じ)を 1 つに統合し新しいハンドルを作る。特徴 ID は `positive:<id>` / `negative:<id>`。試料は名前で照合し、食い違えば `needs_input`(`only_in`)で止まり、`mapping_csv`(列: mode, source_sample, sample_id, group, sample_type)で対応づけて再実行。記録の置き場が決まらなければ `record_folder` を求める。 |
+| `dataset_merge_polarities` | 定量(3/4)。陽・陰イオンのハンドル(`positive_handle` / `negative_handle`。normalized・method・unit が同じもの。`dataset_quant_apply` を通していない側は未正規化として扱うので、両方とも未正規化なら skip を挟まずに統合する。違えば `QUANT_MERGE_STATE_MISMATCH`)を 1 つに統合し新しいハンドルを作る。戻り値と記録の `normalize` に各側の通り方(`applied` / `skipped` / `not_run`)。特徴 ID は `positive:<id>` / `negative:<id>`。試料は名前で照合し、食い違えば `needs_input`(`only_in`)で止まり、`mapping_csv`(列: mode, source_sample, sample_id, group, sample_type)で対応づけて再実行。記録の置き場が決まらなければ `record_folder` を求める。 |
 | `dataset_select_features` | 定量(4/4)。キュレーション(`apply_curation`)→内部標準→名前・コメント・MS/MS の除外→付加体の採用表(`[quant] adducts`)の順で特徴を選別し、残る行だけの新しいハンドルを作る。採用表が未設定なら `needs_input`(設定するか `skip_adduct_filter=True`)。全判断は `reports/quant/<record_id>.audit.json`、戻り値は理由ごとの件数と例 5 件・`record_id`・採用表の sha256 とファイル名だけ。統合前後どちらにも使える(極性が決まらなければ `polarity`)。 |
 
 データセットを読む（または記録の置き場所をデータセットで決める）ツールはすべて、省略可能な引数 `dataset_handle` を受ける

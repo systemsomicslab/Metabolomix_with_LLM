@@ -216,7 +216,8 @@ def test_carried_kind_stays_on_the_session_when_the_handle_limit_stops_the_load(
     assert session.current_handle_id is None
 
 
-# ---------- pathway_project の脂質の関門は、渡したハンドルの種別を見る（レビュー指摘） ----------
+# ---------- pathway_project は渡したハンドルの種別を見る（レビュー指摘。脂質の関門は担当 9 で外し、
+# 種別は notes.assay_kind の注意だけに効く。注意の読み先は tests/test_pathway_tools.py が縛る） ----------
 
 
 def test_pathway_gate_reads_the_passed_handle(fresh_state, monkeypatch):

@@ -77,11 +77,45 @@ def fake_measure(monkeypatch):
     return calls
 
 
-def test_requires_lipid_assay(lipid_arf, fake_measure):
-    lipid_arf.assay_kind = "metabolite"
-    body = json.loads(tools.pathway_project(**_GROUPS))
-    assert body["error"]["code"] == "missing_state"
-    assert body["error"]["required_tools"] == ["record_objective"]
+@pytest.mark.parametrize("kind", ["metabolite", "unknown"])
+def test_runs_without_a_lipid_assay_and_says_what_it_assumes(lipid_arf, fake_measure, tmp_path, kind):
+    """assay_kind が lipid でなくても止めない（C1）。名前の文法が前提であることを notes で返す。"""
+    lipid_arf.assay_kind = kind
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    assert "error" not in body, body
+    note = body["notes"]["assay_kind"]
+    assert kind in note and "名前" in note and "dropped_" in note
+    manifest = json.loads((tmp_path / "reports" / "pathway" / body["run_id"] / "manifest.json")
+                          .read_text(encoding="utf-8"))
+    assert manifest["notes"]["assay_kind"] == note
+
+
+def test_lipid_assay_has_no_assay_note(lipid_arf, fake_measure):
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    assert "assay_kind" not in body["notes"]
+
+
+def test_assay_note_reads_the_passed_handle_not_the_current_one(lipid_arf, fake_measure, tmp_path):
+    """注意（notes.assay_kind）は渡したハンドルの種別で決まる（直近のハンドルの種別ではない）。"""
+    from tests.test_stats_results import _ds
+
+    handle_lipid = lipid_arf.current_handle_id
+    other = _ds(groups=("C", "P"), per_group=2, reps=1, n_qc=0)
+    other.assay_kind = "metabolite"
+    other.analysis_dir = str(tmp_path)
+    other.feature_annotations = {"f0": {"name": "PC 34:1", "ontology": "PC"},
+                                 "f1": {"name": "LPC 18:1", "ontology": "LPC"}}
+    lipid_arf.dataset = other                       # 直近は metabolite のハンドル
+    handle_other = lipid_arf.current_handle_id
+    assert handle_other != handle_lipid and lipid_arf.assay_kind == "metabolite"
+
+    passed = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"],
+                                              dataset_handle=handle_lipid))
+    assert "error" not in passed, passed
+    assert "assay_kind" not in passed["notes"]
+    current = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    assert "error" not in current, current
+    assert "metabolite" in current["notes"]["assay_kind"]
 
 
 def test_unknown_matrix_id_is_missing_state_stat_matrix(lipid_arf, fake_measure):
@@ -171,17 +205,22 @@ def test_handoff_note_counts_dropped_rows_by_reason_and_kept_rows_by_route():
     assert tools._handoff_note({}) is None
 
 
-def test_handoff_note_names_the_new_reasons_and_excluded_spots():
+def test_handoff_note_names_the_new_reasons_and_duplicate_names():
     from metabolomix.pathway import handoff
     assert {f"dropped_{k}" for k in tools._DROP_LABELS} == {
-        k for k in handoff._new_report("arf") if k.startswith("dropped_")}
+        k for k in handoff._new_report("dataset") if k.startswith("dropped_")}
     note = tools._handoff_note({"dropped_isotope_label": 3, "dropped_class_name_conflict": 2,
+                                "dropped_name_head": 1,
                                 "kept_by_route": {"as_is": 10, "name": 0, "class_formula": 0}, "n_kept": 10})
-    assert "計 5 件" in note and "同位体の標識 3" in note and "頭部" in note and "除外" not in note
-    # ARF の手動除外スポットは脂質の理由とは別に述べる（それだけでも注意を出す）
-    note = tools._handoff_note({"dropped_excluded_spots": 4,
-                                "kept_by_route": {"as_is": 10, "name": 0, "class_formula": 0}, "n_kept": 10})
-    assert "手動除外のスポット 4 件" in note and "計" not in note
+    assert "計 6 件" in note and "同位体の標識 3" in note and "頭部" in note and "`(` 始まり" in note
+    assert "同名" not in note
+    # 同名の行を絞っただけでも注意を出す（脂質の理由とは別に述べる）。件数は落とした行の数
+    note = tools._handoff_note({"dropped_duplicate_names": 4,
+                                "kept_by_route": {"as_is": 10, "name": 0, "class_formula": 0}, "n_kept": 6})
+    assert "同名の重複で 4 行を落とした" in note and "計" not in note
+    # 2 行が 1 行になったとき「1 件を 1 行に絞った」と読ませない
+    note = tools._handoff_note({"dropped_duplicate_names": 1, "kept_by_route": {"as_is": 2}, "n_kept": 1})
+    assert "同名の重複で 1 行を落とした" in note and "1 行を残す" in note
 
 
 def test_project_returns_handoff_counts_at_top_level(lipid_arf, fake_measure):
@@ -221,12 +260,46 @@ def test_same_groups_are_bad_request(lipid_arf, fake_measure):
     assert fake_measure == []
 
 
-def test_bridge_error_becomes_envelope(lipid_arf, monkeypatch):
+def test_bridge_error_becomes_envelope(lipid_arf, monkeypatch, tmp_path):
     def boom(*a, **k):
         raise bridge.BridgeError("MSLM_NOT_CONFIGURED", "設定して", {"setting": "x"})
     monkeypatch.setattr(bridge, "run_bridge", boom)
     body = json.loads(tools.pathway_project(**_GROUPS))
     assert body["error"]["code"] == "MSLM_NOT_CONFIGURED"
+    # 失敗しても run のディレクトリ（remote-job-<mode>.json・bridge.log の置き場）を辿れる（B11-T44）
+    run_dir = Path(body["error"]["details"]["run_dir"])
+    assert run_dir.parent == tmp_path / "reports" / "pathway" and (run_dir / "input.mztab").is_file()
+
+
+def test_project_notes_say_node_values_are_not_class_totals(lipid_arf, fake_measure, tmp_path):
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    assert "クラスの総量ではない" in body["notes"]["values"]
+    manifest = json.loads((tmp_path / "reports" / "pathway" / body["run_id"] / "manifest.json")
+                          .read_text(encoding="utf-8"))
+    assert manifest["notes"]["values"] == body["notes"]["values"]
+
+
+def test_project_takes_the_same_tests_as_dataset_compare(lipid_arf, fake_measure, monkeypatch, tmp_path):
+    """検定は dataset_compare の method と同じ値を受ける（A8-V72）。"""
+    seen = []
+    real = tools.compare.compare_scopes
+    monkeypatch.setattr(tools.compare, "compare_scopes",
+                        lambda *a, **k: (seen.append(k.get("test")), real(*a, **k))[1])
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"], method="welch"))
+    assert "error" not in body, body
+    assert seen == ["welch"] and body["method"] == "welch" and "welch" in body["notes"]["values"]
+    manifest = json.loads((tmp_path / "reports" / "pathway" / body["run_id"] / "manifest.json")
+                          .read_text(encoding="utf-8"))
+    assert manifest["test"] == "welch"
+    default = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    assert seen[-1] == "moderated_t" and default["method"] == "moderated_t"
+
+
+def test_backend_text_names_the_failed_server_job():
+    text = tools._backend_text({"backend": {"kind": "local_r"},
+                                "remote_fallback": {"api_url": "http://lab", "code": "MSLM_RUN_FAILED",
+                                                    "message": "落ちた", "job_id": "job_9"}})
+    assert "job job_9" in text and "MSLM_RUN_FAILED" in text
 
 
 # --- pathway_plot ---
@@ -306,11 +379,22 @@ def test_render_failure_envelope(lipid_arf, fake_measure, monkeypatch):
     monkeypatch.setattr(bridge, "run_bridge", fail)
     body = json.loads(tools.pathway_plot())
     assert body["error"]["code"] == "PATHWAY_RENDER_FAILED"
+    assert Path(body["error"]["details"]["run_dir"]).name == session_state.session.pathway.last_run_id
+
+
+def test_missing_pdf_becomes_render_failed_with_run_dir(lipid_arf, fake_measure, monkeypatch):
+    """ブリッジが成功を返しても PDF が無ければ PATHWAY_RENDER_FAILED で、run のディレクトリを添える。"""
+    run_id = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))["run_id"]
+    monkeypatch.setattr(bridge, "run_bridge", lambda request, run_dir, *, timeout_s=300.0:
+                        {"status": "ok", "outputs": {}})
+    err = json.loads(tools.pathway_plot())["error"]
+    assert err["code"] == "PATHWAY_RENDER_FAILED" and err["details"]["pathway"] == "remodeling"
+    assert err["details"]["run_dir"] == str(tools._run_dir(run_id, session_state.session))
 
 
 def test_unreadable_pdf_becomes_render_failed(lipid_arf, fake_measure, monkeypatch):
     """PDF が壊れている（0 ページ・読めない）なら例外を漏らさず PATHWAY_RENDER_FAILED。"""
-    json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    run_id = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))["run_id"]
 
     def render(request, run_dir, *, timeout_s=300.0):
         pdf = run_dir / "remodeling.pdf"
@@ -321,6 +405,7 @@ def test_unreadable_pdf_becomes_render_failed(lipid_arf, fake_measure, monkeypat
     body = json.loads(tools.pathway_plot())
     assert body["error"]["code"] == "PATHWAY_RENDER_FAILED"
     assert "remodeling" in body["error"]["message"]
+    assert body["error"]["details"]["run_dir"] == str(tools._run_dir(run_id, session_state.session))
 
 
 @pytest.mark.parametrize("bad", ["../..", r"..\..", "pw_x", "pw_20261014_120000_abcdef/../x"])
@@ -428,7 +513,7 @@ def test_pathway_project_registers_default_matrix_once_and_reuses_it(lipid_arf, 
 
 @pytest.mark.parametrize("kwargs", [{"aggregation": "max"}, {"q_threshold": 0.0}, {"q_threshold": 1.5},
                                     {"q_threshold": float("nan")}, {"q_threshold": True},
-                                    {"pathways": ["nope"]}])
+                                    {"pathways": ["nope"]}, {"method": "anova"}])
 def test_bad_request_leaves_no_matrix_no_record_no_run(lipid_arf, fake_measure, tmp_path, kwargs):
     body = json.loads(tools.pathway_project(**_GROUPS, **kwargs))
     assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
@@ -566,3 +651,37 @@ def test_group_with_too_few_units_after_collapse_is_bad_request(monkeypatch, tmp
     assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
     assert body["error"]["details"]["n_units"] == 1
     assert fake_measure == []
+
+
+def _replicate_session(monkeypatch, tmp_path):
+    from tests.test_stats_results import _ds
+    s = session_state.AnalysisSession()
+    monkeypatch.setattr(session_state, "session", s)
+    s.assay_kind = "lipid"
+    ds = _ds(groups=("C", "P"), per_group=3, reps=2, n_qc=0)
+    ds.analysis_dir = str(tmp_path)
+    ds.feature_annotations = {"f0": {"name": "PC 34:1", "ontology": "PC"},
+                              "f1": {"name": "LPC 18:1", "ontology": "LPC"}}
+    s.dataset = ds
+    return {"group_a": ["C0_r0", "C0_r1", "C1_r0", "C1_r1", "C2_r0", "C2_r1"],
+            "group_b": ["P0_r0", "P0_r1", "P1_r0", "P1_r1", "P2_r0", "P2_r1"],
+            "group_a_label": "C", "group_b_label": "P"}
+
+
+def test_units_follow_the_matrix_not_a_fixed_collapse(monkeypatch, tmp_path, fake_measure):
+    """反復のまとめは行列の units に従う: collapse_replicates=False の行列なら注入ごと（A8-V60）。"""
+    groups = _replicate_session(monkeypatch, tmp_path)
+    seen = []
+    real = tools.compare.compare_scopes
+    monkeypatch.setattr(tools.compare, "compare_scopes",
+                        lambda *a, **k: (seen.append(k.get("subject_of")), real(*a, **k))[1])
+    from metabolomix.tools.stats_tools import dataset_preprocess
+    pre = json.loads(dataset_preprocess(collapse_replicates=False, blank_min_ratio=None,
+                                        detection_min_rate=None, max_qc_rsd=None, max_d_ratio=None))
+    body = json.loads(tools.pathway_project(**groups, pathways=["remodeling"], matrix_id=pre["matrix_id"]))
+    assert "error" not in body, body
+    assert body["n_units"] == {"C": 6, "P": 6} and body["groups"] == {"C": 6, "P": 6}
+    assert seen[-1]["C0_r0"] != seen[-1]["C0_r1"]
+    collapsed = json.loads(tools.pathway_project(**groups, pathways=["remodeling"]))
+    assert collapsed["n_units"] == {"C": 3, "P": 3}
+    assert seen[-1]["C0_r0"] == seen[-1]["C0_r1"]
