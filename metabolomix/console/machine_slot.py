@@ -8,9 +8,13 @@ Windows のエラー 1450（`ERROR_NO_SYSTEM_RESOURCES`）で落ちうる（rean
 - **排他**は OS のファイルロック（`process_control.wait_for_lock`）。持っている worker が
   死ねば OS が外す（その worker の Console も Job ごと止まる）ので、取り残しの掃除は要らない。
   置き場所は設定ファイルのフォルダの `data/.msdial-console.lock`（参照ライブラリのキャッシュの
-  既定と同じ規則）。この機械のサーバ・worktree・worker は同じ設定ファイル（main ツリーの
-  `lipidmix.local.toml`）を指すので、同じロックを取り合う。テストは設定ファイルをテストごとの
-  tmp へ向けるので、本物の run と取り合わない。
+  既定と同じ規則）。**排他が効くのは同じ設定ファイルを読むサーバと worker の間だけ**: main ツリーの
+  サーバと worktree（`LIPIDMIX_CONFIG` で main ツリーの `lipidmix.local.toml` を指す）は同じロックを
+  取り合うが、別のクローンが自分の設定ファイルを読むと別のロックになり、Console が 2 本並びうる
+  （そのクローンも `LIPIDMIX_CONFIG` で同じ設定ファイルを指せば 1 本になる。USAGE.md・DEPLOY.md）。
+  機械で 1 つの固定の場所（`%LOCALAPPDATA%` など）にしないのは、テストが設定ファイルをテストごとの
+  tmp へ向けることで本物の run と取り合わずに済んでいるため（固定の場所だと、走っている本物の
+  Console の後ろでテストが待ち続けうる）。
 - **commit の空き**は止めずに測るだけ。下限（設定 `[msdial] min_free_commit_gb`、既定 8。
   0 で測らない）を下回れば警告を返す。
 
@@ -76,13 +80,15 @@ def read_owner() -> dict | None:
 
 @contextlib.contextmanager
 def console_slot(*, owner: dict, on_wait=None, should_abort=None,
-                 poll_interval: float = POLL_INTERVAL_S):
+                 poll_interval: float | None = None):
     """機械全体で 1 つの Console の順番を取る（取れるまで待つ）。yield するのは待った秒数。
 
     `on_wait()` は順番待ちが始まったときに 1 回だけ呼ぶ。`should_abort()` が真になったら
     `LOCK_WAIT_ABORTED`（`process_control.wait_for_lock`）。取れたら `owner`（run と単位）を
-    申告ファイルに書く。
+    申告ファイルに書く。`poll_interval` を省くと、呼んだ時点の `POLL_INTERVAL_S`。
     """
+    if poll_interval is None:
+        poll_interval = POLL_INTERVAL_S
     with process_control.wait_for_lock(console_lock_path(), poll_interval=poll_interval,
                                        on_wait=on_wait, should_abort=should_abort) as waited:
         with contextlib.suppress(OSError):

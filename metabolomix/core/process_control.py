@@ -45,6 +45,7 @@ from metabolomix.core.atomic_io import DomainError
 __all__ = [
     "OwnedProcess",
     "commit_memory_status",
+    "current_job_state",
     "current_process_in_job",
     "detach_breakaway_mode",
     "file_lock",
@@ -848,6 +849,25 @@ def current_process_in_job() -> bool | None:
         return _in_any_job(_GetCurrentProcess())
     except DomainError:
         return None
+
+
+def current_job_state() -> dict:
+    """現在のプロセスのJobの状態: `{"in_job": bool | None, "nearest_job": str | None}`。
+
+    `in_job`は`current_process_in_job`（何段目でも）。`nearest_job`はJobに入っているときの
+    直近のJobの`_breakaway_mode`の値（`detach_breakaway_mode`）で、`inherited_job`なら直近の
+    Jobは閉じても止めない（KILL_ON_JOB_CLOSEが無い）と分かる。それより外側の段は見えない。
+    Jobの外・Windows以外・問い合わせ失敗の`nearest_job`はNone。pipelineのworkerが起動直後に
+    自分を確かめるのに使う。
+    """
+    in_job = current_process_in_job()
+    nearest_job = None
+    if in_job:
+        try:
+            nearest_job = detach_breakaway_mode()
+        except DomainError:
+            nearest_job = None
+    return {"in_job": in_job, "nearest_job": nearest_job}
 
 
 def commit_memory_status() -> dict | None:

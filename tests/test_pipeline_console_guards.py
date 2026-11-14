@@ -4,7 +4,9 @@
   Console が完了しなかったら見立て（`details.diagnosis`）を返す。
 - B8-T66: 機械全体で Console は 1 本（待つ間は工程の `waiting`）、起こす前の commit の空きの
   警告（`LOW_COMMIT_MEMORY`）、終了コード 1450 を資源不足（`details.cause`）と読む。
-- E2-T02: worker がまだ Windows の Job に入っていれば run の記録と戻り値に `WORKER_IN_JOB`。
+- E2-T02: worker が、閉じたら止めるかの分からない Windows の Job に残っていれば run の記録と戻り値に
+  `WORKER_IN_JOB`（直近の Job が閉じても止めない `inherited_job` なら警告しない）。
+- 見立ては `pipeline_status` の既定の戻り値（`errors`）と受領の単位の `error` にも出る。
 
 計測ファイル・Console・worker の起動はすべて合成（偽の supervise と起動）。
 """
@@ -200,6 +202,89 @@ def test_failed_console_names_the_file_from_its_log(tmp_path, monkeypatch):
         {"name": "S7.mzML", "reason": "named_in_error"}]
 
 
+def _failing_upstream(handlers: dict, error: dict, *, unit: str = "negative") -> dict:
+    upstream = handlers["upstream"]
+
+    def failing(context):
+        if context["unit"] == unit:
+            return {"status": "failed", "result_refs": [], "warnings": [], "error": error}
+        return upstream(context)
+
+    handlers["upstream"] = failing
+    return handlers
+
+
+_CONSOLE_FAILURE = {
+    "code": "MSDIAL_EXECUTION_FAILED",
+    "message": "termination=exited exit_code=1 途中で切れた計測ファイルがある（suspect_files）。",
+    "details": {"termination": "exited", "exit_code": 1, "unit": "negative",
+                "cause": "broken_input",
+                "diagnosis": {"cause": "broken_input", "message": "…",
+                              "suspect_files": [{"name": "S1.mzML", "reason": "truncated"}],
+                              "log_lines": ["Exception: S1.mzML"]}},
+}
+
+
+def test_status_returns_the_console_diagnosis_without_details(tmp_path):
+    """1 極性の run が Console で落ちても（受領は無い）、既定の pipeline_status で原因が読める。"""
+    path = create_synthetic_run(tmp_path)
+    handlers = _failing_upstream(synthetic_handlers(), _CONSOLE_FAILURE)
+    assert engine.run_engine(path, handlers)["status"] == "failed"
+
+    status = recovery.read_status(path)
+
+    assert "record" not in status and "receipt" not in status
+    assert status["errors"] == {"upstream:negative": {
+        "code": "MSDIAL_EXECUTION_FAILED", "message": _CONSOLE_FAILURE["message"],
+        "cause": "broken_input", "suspect_files": [{"name": "S1.mzML", "reason": "truncated"}]}}
+
+
+def test_status_names_the_files_prepare_input_refused(tmp_path):
+    path = create_synthetic_run(tmp_path)
+    handlers = synthetic_handlers()
+    files = [{"name": f"S{i}.mzML", "size": 10, "reason": "truncated"} for i in range(12)]
+
+    def refusing(context):
+        raise DomainError("PIPELINE_INPUT_INVALID", "計測ファイルが途中で切れている",
+                          {"files": files, "n_files": 25, "min_bytes": 32768})
+
+    handlers["prepare_input"] = refusing
+    engine.run_engine(path, handlers)
+
+    error = recovery.read_status(path)["errors"]["prepare_input:negative"]
+    assert error["code"] == "PIPELINE_INPUT_INVALID"
+    assert error["suspect_files"] == [{"name": f"S{i}.mzML", "reason": "truncated"}
+                                      for i in range(10)]
+    assert error["n_suspect_files"] == 25
+
+
+def test_status_has_no_errors_when_nothing_failed(tmp_path):
+    path = create_synthetic_run(tmp_path)
+    assert engine.run_engine(path, synthetic_handlers())["status"] == "completed"
+    assert "errors" not in recovery.read_status(path)
+
+
+def test_receipt_unit_error_carries_the_diagnosis(tmp_path):
+    from metabolomix.pipeline import receipt as receipt_mod
+
+    path = create_synthetic_run(tmp_path, polarities=("negative", "positive"))
+    handlers = _failing_upstream(synthetic_handlers(), _CONSOLE_FAILURE)
+    assert engine.run_engine(path, handlers)["status"] == "partial"
+
+    error = receipt_mod.read_receipt(path, load_run(path))["units"]["negative"]["error"]
+    assert error["cause"] == "broken_input"
+    assert error["suspect_files"] == [{"name": "S1.mzML", "reason": "truncated"}]
+    assert error["stage_id"] == "upstream:negative"
+    assert "log_lines" not in error
+
+
+def test_error_summary_clips_a_long_message():
+    from metabolomix.pipeline import receipt as receipt_mod
+
+    summary = receipt_mod.stage_error_summary({"code": "X", "message": "あ" * 2000, "details": {}})
+    assert summary == {"code": "X", "message": "あ" * 600 + "…"}
+
+
 def test_cancelled_console_carries_no_diagnosis(tmp_path, monkeypatch):
     _fake_console(monkeypatch, job=_FakeJob("failed", error="cancelled"),
                   supervised={"execution_id": "exec-1", "termination": "cancelled",
@@ -301,18 +386,38 @@ def test_waiting_is_not_written_on_a_stage_that_is_not_running(tmp_path):
 
 def test_worker_in_a_job_is_warned_once_on_the_run(tmp_path):
     path = create_synthetic_run(tmp_path)
-    engine._record_worker_identity(path, True)
-    engine._record_worker_identity(path, True)
+    job = {"in_job": True, "nearest_job": None}
+    engine._record_worker_identity(path, job)
+    engine._record_worker_identity(path, job)
     record = load_run(path)
     assert record["worker"]["in_job"] is True
     jobs = [w for w in record["warnings"] if w["code"] == "WORKER_IN_JOB"]
     assert len(jobs) == 1 and jobs[0]["stage_id"] is None
+    assert jobs[0]["details"] == {"nearest_job": None}
     assert "pipeline_resume" in jobs[0]["message"]
+
+
+@pytest.mark.parametrize("nearest_job", [None, "unsupported", "silent_breakaway"])
+def test_worker_in_a_job_that_may_kill_it_is_warned(tmp_path, nearest_job):
+    path = create_synthetic_run(tmp_path)
+    engine._record_worker_identity(path, {"in_job": True, "nearest_job": nearest_job})
+    [warning] = [w for w in load_run(path)["warnings"] if w["code"] == "WORKER_IN_JOB"]
+    assert warning["details"] == {"nearest_job": nearest_job}
+
+
+def test_worker_in_a_job_known_not_to_kill_on_close_is_not_warned(tmp_path):
+    """直近の Job が閉じても止めない（`inherited_job`。Windows 11 のシェルの配下でいつもこうなる）。"""
+    path = create_synthetic_run(tmp_path)
+    engine._record_worker_identity(path, {"in_job": True, "nearest_job": "inherited_job"})
+    record = load_run(path)
+    assert record["worker"]["in_job"] is True
+    assert record["worker"]["nearest_job"] == "inherited_job"
+    assert "WORKER_IN_JOB" not in [w["code"] for w in record.get("warnings") or []]
 
 
 def test_worker_outside_any_job_is_not_warned(tmp_path):
     path = create_synthetic_run(tmp_path)
-    engine._record_worker_identity(path, False)
+    engine._record_worker_identity(path, {"in_job": False, "nearest_job": None})
     record = load_run(path)
     assert record["worker"]["in_job"] is False
     assert "WORKER_IN_JOB" not in [w["code"] for w in record.get("warnings") or []]
@@ -331,12 +436,13 @@ def test_production_worker_passes_its_own_job_check(tmp_path, monkeypatch):
     from metabolomix.pipeline import worker
 
     captured = {}
-    monkeypatch.setattr(process_control, "current_process_in_job", lambda: True)
+    state = {"in_job": True, "nearest_job": "inherited_job"}
+    monkeypatch.setattr(process_control, "current_job_state", lambda: dict(state))
     monkeypatch.setattr(engine, "run_engine",
-                        lambda path, handlers, *, worker_in_job=None:
-                        captured.update(worker_in_job=worker_in_job) or {"status": "completed"})
+                        lambda path, handlers, *, worker_job=None:
+                        captured.update(worker_job=worker_job) or {"status": "completed"})
     worker.run_worker(tmp_path)
-    assert captured == {"worker_in_job": True}
+    assert captured == {"worker_job": state}
 
 
 # ---------- 起動の戻り値: WORKER_IN_JOB ----------
@@ -347,23 +453,34 @@ def _upstream_done(pipeline_root: Path) -> None:
     save_run(pipeline_root, record, expected_revision=record["state_revision"])
 
 
-@pytest.mark.parametrize("in_job, expected", [(True, ["WORKER_IN_JOB"]), (False, []),
-                                              (None, [])])
-def test_resume_returns_a_warning_when_the_worker_stays_in_a_job(tmp_path, monkeypatch,
-                                                                 in_job, expected):
+@pytest.mark.parametrize("in_job, relay_breakaway, expected", [
+    # 中継は直近の Job を抜けさせたのに worker が Job にいる＝見えない外側の段（閉じたら止めるか分からない）。
+    (True, "silent_breakaway", ["WORKER_IN_JOB"]),
+    (True, "breakaway_ok", ["WORKER_IN_JOB"]),
+    (True, None, ["WORKER_IN_JOB"]),
+    # 中継の直近の Job が閉じても止めない Job（抜けられないので worker もそこにいる）。毎回の雑音にしない。
+    (True, "inherited_job", []),
+    (False, "silent_breakaway", []),
+    (None, "silent_breakaway", []),
+])
+def test_resume_returns_a_warning_when_the_worker_stays_in_a_job(tmp_path, monkeypatch, in_job,
+                                                                 relay_breakaway, expected):
     pipeline_root = create_synthetic_run(tmp_path)
     _upstream_done(pipeline_root)
     monkeypatch.setattr(service, "launch_detached", lambda command, *, cwd, log_path: {
-        "pid": 999, "identity": {"pid": 999, "creation_time": 1}, "breakaway": "inherited_job",
-        "relay_breakaway": "inherited_job", "worker_in_job": in_job, "log_path": str(log_path)})
+        "pid": 999, "identity": {"pid": 999, "creation_time": 1}, "breakaway": "silent_breakaway",
+        "relay_breakaway": relay_breakaway, "worker_in_job": in_job, "log_path": str(log_path)})
     monkeypatch.setattr(service, "_HANDSHAKE_TIMEOUT_S", 0.05)
     monkeypatch.setattr(service, "_HANDSHAKE_POLL_S", 0.01)
 
     summary = service.resume_pipeline(pipeline_root)
 
     assert summary["launch"]["worker_in_job"] is in_job
-    assert [w["code"] for w in summary.get("warnings") or []
-            if w["code"] == "WORKER_IN_JOB"] == expected
+    warnings = [w for w in summary.get("warnings") or [] if w["code"] == "WORKER_IN_JOB"]
+    assert [w["code"] for w in warnings] == expected
+    for warning in warnings:
+        assert warning["details"] == {"breakaway": "silent_breakaway",
+                                      "relay_breakaway": relay_breakaway}
 
 
 def test_start_returns_a_warning_when_the_worker_stays_in_a_job(tmp_path, monkeypatch):
@@ -373,8 +490,8 @@ def test_start_returns_a_warning_when_the_worker_stays_in_a_job(tmp_path, monkey
     use_config(monkeypatch, tmp_path, {"msdial.exe": source["exe"]})
     monkeypatch.setattr("metabolomix.console.runner.probe_console_exe", lambda *a, **k: "console")
     monkeypatch.setattr(service, "launch_detached", lambda command, *, cwd, log_path: {
-        "pid": 999, "identity": {"pid": 999, "creation_time": 1}, "breakaway": "inherited_job",
-        "relay_breakaway": "inherited_job", "worker_in_job": True, "log_path": str(log_path)})
+        "pid": 999, "identity": {"pid": 999, "creation_time": 1}, "breakaway": "silent_breakaway",
+        "relay_breakaway": "silent_breakaway", "worker_in_job": True, "log_path": str(log_path)})
     monkeypatch.setattr(service, "_HANDSHAKE_TIMEOUT_S", 0.05)
     monkeypatch.setattr(service, "_HANDSHAKE_POLL_S", 0.01)
 

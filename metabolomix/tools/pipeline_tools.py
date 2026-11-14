@@ -105,9 +105,10 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
     spec §9.2「既知の不正入力はConsole起動前に拒否する」）。条件だけ確認したい
     利用者はこちらを使い、実際に進めたいときは `pipeline_run` を使う。
 
-    開いた形式（mzML・imzML・mzXML）の計測ファイルの末尾が閉じタグで終わらない・32 KiB 未満なら、
-    run を作る前に `PIPELINE_INPUT_INVALID`（`details.files` に `{"name", "size", "reason"}`）で
-    名指しして断る（Console は切れた mzML を読むところで落ち、どのファイルかを言わない）。
+    開いた形式（mzML・imzML・mzXML）の計測ファイルの末尾が閉じタグで終わらない・32 KiB 未満
+    （imzML は閉じタグだけ。スペクトルは隣の .ibd にある）なら、run を作る前に
+    `PIPELINE_INPUT_INVALID`（`details.files` に `{"name", "size", "reason"}`）で名指しして断る
+    （Console は切れた mzML を読むところで落ち、どのファイルかを言わない）。
     """
     from metabolomix.pipeline.service import plan_pipeline
     try:
@@ -141,15 +142,18 @@ def pipeline_run(dataset_root: str, request: dict | None = None,
     `launched=false` のみを返し、`launch` キー自体を持たない（起動していない
     以上、handshake結果も存在しない）。既存runを本当に進めたい場合は
     `pipeline_resume` を使う。`launch.worker_in_job` が true なら worker が Windows の Job に
-    残っている（何段目の Job でも）。その Job が閉じると worker と Console も止まりうるので、
-    警告 `WORKER_IN_JOB` を `warnings` に返す（止まったら `pipeline_status` → `pipeline_resume`）。
+    残っている（何段目の Job でも）。その Job が閉じたら止める設定か分からないとき（中継が自分の
+    直近の Job を抜けさせたのに worker がまだ Job にいる）は、Job が閉じると worker と Console も
+    止まりうるので警告 `WORKER_IN_JOB`（`details.breakaway` / `relay_breakaway`）を `warnings` に
+    返す（止まったら `pipeline_status` → `pipeline_resume`）。中継の直近の Job が閉じても止めない
+    もの（`launch.relay_breakaway: "inherited_job"`）なら警告しない。
 
-    Console はこの機械で同時に 1 本だけ回す（run を跨いで。待つ間は `pipeline_status` の
-    `waiting`）。起こす前の commit の空きが `[msdial] min_free_commit_gb`（既定 8 GB）を
+    Console は同じ設定ファイルを読むサーバ・worker の間で同時に 1 本だけ回す（run を跨いで。待つ間は
+    `pipeline_status` の `waiting`）。起こす前の commit の空きが `[msdial] min_free_commit_gb`（既定 8 GB）を
     下回れば警告 `LOW_COMMIT_MEMORY` を残す（止めない）。Console が完了しなければ工程の誤り
     `MSDIAL_EXECUTION_FAILED` に `details.cause`（`system_resources`: 終了コード 1450 などの
     資源不足 / `broken_input` / `input_suspected`）と `details.diagnosis`（疑わしいファイル・
-    ログのエラーの行）が付く。
+    ログのエラーの行）が付く。原因と疑わしいファイルは `pipeline_status` の `errors` で読める。
     """
     from metabolomix.pipeline.service import start_pipeline
     try:
@@ -169,7 +173,7 @@ def pipeline_status(pipeline_path: str, include_details: bool = False) -> str:
         そのもの、またはその親ディレクトリのどちらでもよい）。
     include_details:
         True なら永続レコード全体（`record`）も返す（既定False。通常は
-        `status` / `units` / `stage_statuses` / `needs_input` / `warnings` で足りる）。
+        `status` / `units` / `stage_statuses` / `errors` / `needs_input` / `warnings` で足りる）。
 
     `units` は極性ごとの状態（`pending` / `running` / `validated` / `failed`）。受領を
     書いた後は `receipt`（検証を通った極性の解析フォルダの場所・照合した `.arf`・
@@ -182,7 +186,13 @@ def pipeline_status(pipeline_path: str, include_details: bool = False) -> str:
     書き換えない——監視・成果物確定をポーリング呼出しに依存させない（spec）。
     工程がこの機械のほかの run の Console を待っていれば `waiting`（工程ごとの
     `reason: "console_slot"`・`since`・待っている相手の `holder`）を返す。worker が
-    Windows の Job に残っていれば `warnings` に `WORKER_IN_JOB`。
+    閉じたら止めるか分からない Windows の Job に残っていれば `warnings` に `WORKER_IN_JOB`。
+
+    失敗・取消で終わった工程があれば `errors`（`{<stage_id>: {"code", "message", "cause"?,
+    "suspect_files"?}}`）を返す。Console が完了しなかったときの原因の分類（`cause`:
+    `system_resources` / `broken_input` / `input_suspected`）と疑わしいファイル（`suspect_files`:
+    `[{"name", "reason"}]`、配置の工程で断った切れたファイルも）はここで読める。ログの行
+    （`details.diagnosis.log_lines`）は `include_details=True` の `record` の工程の `error` にある。
     """
     from metabolomix.pipeline.recovery import read_status
     try:

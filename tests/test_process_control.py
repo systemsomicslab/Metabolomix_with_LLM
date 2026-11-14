@@ -1196,6 +1196,37 @@ def test_current_process_in_job_answers_a_bool():
     assert isinstance(pc.current_process_in_job(), bool)
 
 
+@windows_only
+def test_current_job_state_names_the_nearest_job_only_inside_a_job():
+    state = pc.current_job_state()
+    assert state["in_job"] is pc.current_process_in_job()
+    if state["in_job"]:
+        assert state["nearest_job"] in {"silent_breakaway", "breakaway_ok", "inherited_job",
+                                        "unsupported"}
+    else:
+        assert state["nearest_job"] is None
+
+
+@pytest.mark.parametrize("in_job, mode, expected", [
+    (True, "inherited_job", {"in_job": True, "nearest_job": "inherited_job"}),
+    (False, "inherited_job", {"in_job": False, "nearest_job": None}),
+    (None, "inherited_job", {"in_job": None, "nearest_job": None}),
+])
+def test_current_job_state_reads_the_nearest_job_when_in_one(monkeypatch, in_job, mode, expected):
+    monkeypatch.setattr(pc, "current_process_in_job", lambda: in_job)
+    monkeypatch.setattr(pc, "detach_breakaway_mode", lambda: mode)
+    assert pc.current_job_state() == expected
+
+
+def test_current_job_state_survives_a_failed_job_query(monkeypatch):
+    def failing():
+        raise DomainError("JOB_QUERY_FAILED", "x", {})
+
+    monkeypatch.setattr(pc, "current_process_in_job", lambda: True)
+    monkeypatch.setattr(pc, "detach_breakaway_mode", failing)
+    assert pc.current_job_state() == {"in_job": True, "nearest_job": None}
+
+
 # ---------- commit の空き（B8-T66） ----------
 
 @windows_only

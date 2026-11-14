@@ -51,6 +51,15 @@ def test_header_only_mzml_is_too_small(tmp_path):
     assert problem["size"] < raw_integrity.MIN_OPEN_FORMAT_BYTES
 
 
+def test_small_imzml_is_not_held_to_the_size_floor(tmp_path):
+    """imzML はメタデータだけで、スペクトルは隣の .ibd にある（画素の少ない正しい imzML は小さい）。"""
+    small = _mzml(tmp_path / "x.imzML", pad="", indexed=False)
+    assert small.stat().st_size < raw_integrity.MIN_OPEN_FORMAT_BYTES
+    assert raw_integrity.open_format_problem(small) is None
+    cut = _mzml(tmp_path / "y.imzML", pad="", indexed=False, closed=False)
+    assert raw_integrity.open_format_problem(cut)["reason"] == "truncated"
+
+
 def test_mzxml_needs_its_own_closing_tag(tmp_path):
     good = tmp_path / "a.mzXML"
     good.write_text("<mzXML>\n" + _PAD + "</mzXML>\n", encoding="utf-8")
@@ -147,8 +156,35 @@ def test_paths_with_spaces_and_forward_slashes_are_reduced(tmp_path):
     log.write_text(r"Exception: C:\Program Files\lab\data\lib.lbm2 and C:/lab/private/x.msp"
                    + "\n", encoding="utf-8")
     [line] = failure_diagnosis.diagnose_failure(log, exit_code=1, raw_paths=[])["log_lines"]
-    assert "lib.lbm2" in line and "x.msp" in line
-    assert "lab" not in line.replace("lib.lbm2", "")
+    # 2 つのパスが 1 行にあっても、どちらもファイル名だけが残る（間の文は残す）。
+    assert line == "Exception: lib.lbm2 and x.msp"
+
+
+@pytest.mark.parametrize("path, fragments", [
+    (r"C:\lab\Lab Library\x.msp", ["lab", "Library"]),
+    (r"C:\Users\me\OneDrive - Secret Univ\Lab Library\x.msp",
+     ["Users", "OneDrive", "Secret", "Univ", "Library"]),
+    ('"D:\\研究室 データ\\ライブラリ\\x.msp"', ["研究室", "データ", "ライブラリ"]),
+    (r"\\nas01\share name\lib\x.msp", ["nas01", "share", "name", "lib"]),
+    ("file:///C:/Users/me/My Docs/x.msp", ["file", "Users", "My", "Docs"]),
+    ('{"path": "C:\\\\Users\\\\me\\\\Lab Library\\\\x.msp"}', ["Users", "Lab", "Library"]),
+])
+def test_folder_names_with_spaces_leave_no_fragment(tmp_path, path, fragments):
+    """フォルダの名前に空白があっても、置き場所の断片を残さずファイル名だけにする。"""
+    log = tmp_path / "msdial.log"
+    log.write_text(f"Error: cannot open {path} now\n", encoding="utf-8")
+    [line] = failure_diagnosis.diagnose_failure(log, exit_code=1, raw_paths=[])["log_lines"]
+    assert "x.msp" in line
+    assert line.startswith("Error: cannot open ") and line.endswith(" now")
+    for fragment in fragments:
+        assert fragment not in line
+
+
+def test_a_slash_in_the_text_after_a_backslash_path_is_kept(tmp_path):
+    log = tmp_path / "msdial.log"
+    log.write_text(r"Error reading C:\lab\x.mzML failed (and/or) retry" + "\n", encoding="utf-8")
+    [line] = failure_diagnosis.diagnose_failure(log, exit_code=1, raw_paths=[])["log_lines"]
+    assert line == "Error reading x.mzML failed (and/or) retry"
 
 
 def test_cp932_log_is_read(tmp_path):

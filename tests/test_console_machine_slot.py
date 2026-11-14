@@ -91,6 +91,28 @@ def test_slot_records_its_owner_and_a_second_taker_waits(tmp_path, monkeypatch):
         thread.join(10)
 
 
+def test_slot_reads_the_poll_interval_when_called(tmp_path, monkeypatch):
+    """`poll_interval` を省くと、定義の時点でなく呼んだ時点の `POLL_INTERVAL_S` を使う
+    （pipeline の upstream は渡さないので、テストが差し替えた値が効く）。"""
+    import contextlib
+
+    use_config(monkeypatch, tmp_path, {})
+    seen = []
+
+    @contextlib.contextmanager
+    def fake_wait_for_lock(path, *, poll_interval, on_wait, should_abort):
+        seen.append(poll_interval)
+        yield 0.0
+
+    monkeypatch.setattr(process_control, "wait_for_lock", fake_wait_for_lock)
+    monkeypatch.setattr(machine_slot, "POLL_INTERVAL_S", 0.02)
+    with machine_slot.console_slot(owner={}):
+        pass
+    with machine_slot.console_slot(owner={}, poll_interval=0.5):
+        pass
+    assert seen == [0.02, 0.5]
+
+
 def test_slot_wait_can_be_abandoned(tmp_path, monkeypatch):
     from metabolomix.core.atomic_io import DomainError
 

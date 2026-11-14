@@ -256,11 +256,21 @@ def _dispatch_summary(pipeline_path: Path, *, launched: bool, launch: dict | Non
 
 
 def _launch_warnings(launch: dict | None) -> list[dict]:
-    """起動の結果から返す警告。worker がまだ Windows の Job に入っていれば `WORKER_IN_JOB`
-    （E2-T02。中継が `IsProcessInJob(worker, NULL)` で確かめた値。何段目の Job でも捕まえる）。"""
-    if launch and launch.get("worker_in_job") is True:
-        return [engine.worker_in_job_warning()]
-    return []
+    """起動の結果から返す警告。worker が閉じたら止めるかの分からない Windows の Job に残って
+    いれば `WORKER_IN_JOB`（E2-T02。`engine.worker_in_job_warning`）。
+
+    `worker_in_job` は中継が `IsProcessInJob(worker, NULL)` で確かめた値（何段目の Job でも）。
+    中継の直近の Job が `inherited_job`（`relay_breakaway`）なら、中継は worker を外へ出せず、
+    worker はその Job（閉じても止めない）に残ったと分かる。それ以外で worker が Job にいるなら、
+    中継から見えない外側の段にいる。"""
+    if not launch:
+        return []
+    relay_breakaway = launch.get("relay_breakaway")
+    warning = engine.worker_in_job_warning(
+        in_job=launch.get("worker_in_job"),
+        nearest_job=relay_breakaway if relay_breakaway == "inherited_job" else None,
+        details={"breakaway": launch.get("breakaway"), "relay_breakaway": relay_breakaway})
+    return [warning] if warning else []
 
 
 def _recheck_manifests(pipeline_path: Path) -> tuple[str, DomainError] | None:
@@ -421,7 +431,7 @@ def launch_pipeline_worker(path: Path) -> dict:
     `launch_detached`はworkerをすぐ終わる中継のプロセスから起こす。workerの親が残らない
     ので、MCPサーバがプロセスの木ごと消されてもworkerとConsoleは残る（Jobがbreakawayを
     許さない環境では、Jobごとの終了には巻き込まれる）。戻り値のpid・identityはworkerのもの。
-    `worker_in_job` が真なら worker はまだどこかの Job に入っている（`_launch_warnings`）。
+    `worker_in_job` が真なら worker はまだどこかの Job に入っている（警告するかは `_launch_warnings`）。
     """
     pipeline_path = Path(path)
     command = [sys.executable, "-m", "metabolomix.pipeline.worker",

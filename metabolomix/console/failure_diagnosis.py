@@ -31,8 +31,20 @@ _RESOURCE_PATTERNS = re.compile(
     r"|システム リソースが不足|システムリソースが不足", re.IGNORECASE)
 _ERROR_PATTERN = re.compile(r"exception|\berror\b|\bfail(?:ed|ure)?\b|エラー|例外|失敗",
                             re.IGNORECASE)
-#: パスらしい語（バックスラッシュを含む語と、`C:/` で始まる語）。ファイル名だけに縮める。
-_PATH_TOKEN = re.compile(r"[^\s\"'<>|]*\\[^\s\"'<>|]*|[A-Za-z]:/[^\s\"'<>|]*")
+#: 絶対パスの頭から最後の区切りまで（消すとファイル名だけが残る）。フォルダの名前は空白を含みうる
+#: （`OneDrive - 大学名`・`Program Files`）ので、成分は空白で切らない。成分がまたがないのは引用符・
+#: `<>|`・改行と、次のパスの頭（`X:\` / `X:/`）。バックスラッシュで始まるパス（`C:\` と UNC の
+#: `\\server`）はバックスラッシュだけを区切りにする（後ろの文の `and/or` までは食わない）。
+#: スラッシュで始まるパス（`C:/` と `file:` の URL）は両方を区切りにする。同じ行に区切りが続けば
+#: 文の一部まで消えうるが、置き場所を残すよりはよい。
+_COMPONENT_BACKSLASH = r"(?:(?![A-Za-z]:[\\/])[^\\\r\n\"'<>|])*"
+_COMPONENT_SLASH = r"(?:(?![A-Za-z]:[\\/])[^\\/\r\n\"'<>|])*"
+_ABSOLUTE_PATH_HEAD = re.compile(
+    r"(?:(?<![A-Za-z0-9])[A-Za-z]:\\|(?<!\\)\\\\)(?:" + _COMPONENT_BACKSLASH + r"\\)*"
+    r"|(?:file:/+(?:[A-Za-z]:/)?|(?<![A-Za-z0-9])[A-Za-z]:/)(?:" + _COMPONENT_SLASH + r"[\\/])*",
+    re.IGNORECASE)
+#: 残った相対パスらしい語（バックスラッシュを含む語）。ファイル名だけに縮める。
+_RELATIVE_PATH_TOKEN = re.compile(r"[^\s\"'<>|]*\\[^\s\"'<>|]*")
 
 #: ログを読む量（末尾から。落ちた理由は終わりの近くにある）。
 _LOG_TAIL_BYTES = 512 * 1024
@@ -71,8 +83,13 @@ def _file_name(token: str) -> str:
 
 
 def _file_names_only(line: str) -> str:
-    """行の中のパスらしい語をファイル名にし、長すぎる行を切る。"""
-    line = _PATH_TOKEN.sub(lambda m: _file_name(m.group(0)), line).strip()
+    """行の中のパスをファイル名にし、長すぎる行を切る。
+
+    まず絶対パス（ドライブ・UNC・`file:` の URL）の頭から最後の区切りまでを消し（フォルダの名前に
+    空白があっても断片を残さない）、次に残った相対パスらしい語をファイル名にする。
+    """
+    line = _ABSOLUTE_PATH_HEAD.sub("", line)
+    line = _RELATIVE_PATH_TOKEN.sub(lambda m: _file_name(m.group(0)), line).strip()
     return line if len(line) <= _MAX_LINE_CHARS else line[:_MAX_LINE_CHARS] + "…"
 
 
