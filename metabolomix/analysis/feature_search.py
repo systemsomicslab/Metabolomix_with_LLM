@@ -1256,15 +1256,22 @@ def merge_plan(ds, *, alignment_qc_path: str | None = None, dataset_hash: str | 
     群は `alignment_qc` の `merge_groups`（互いに最も近い mergeable な 2 スポット）だけで、
     ここでは足さない・広げない（`analysis_spec` の `features.merge_split` と同じ規則・同じ実装）。
     ``alignment_qc_path`` は `dataset_alignment_qc` が書いた JSON（今のデータセットの指紋で
-    作ったものだけを受ける）で、無ければその場で `find_split_pairs(ds)` を既定の閾値で回す。
+    作ったものだけを受ける）。無ければ `dataset_alignment_qc` がこのデータセットに持たせた最後の結果
+    （`alignment_qc.remembered`。データ・試料の表・除外が変わっていないものだけ）、それも無ければ
+    その場で `find_split_pairs(ds)` を既定の閾値で回す。``source`` は `alignment_qc`（ファイル）・
+    `last_alignment_qc`（最後の結果）・`find_split_pairs`（その場）。
     ``groups`` は残す ID が先頭の並び、``skipped`` はデータセットに 2 つ揃わない群。
     ``dataset_hash`` は計算済みの `dataset_fingerprint(ds)`（任意）、``field`` はエラーに書く欄の名前。
     """
     from metabolomix.analysis import alignment_qc
 
     if alignment_qc_path is None:
-        qc = alignment_qc.find_split_pairs(ds, dataset_hash=dataset_hash)
-        source, sha256 = "find_split_pairs", None
+        last = alignment_qc.remembered(ds, dataset_hash=dataset_hash)
+        if last is not None:
+            (qc, sha256), source = last, "last_alignment_qc"
+        else:
+            qc = alignment_qc.find_split_pairs(ds, dataset_hash=dataset_hash)
+            source, sha256 = "find_split_pairs", None
     else:
         qc, sha256 = alignment_qc.read_qc_file(alignment_qc_path, ds, field=field,
                                                dataset_hash=dataset_hash)

@@ -10,6 +10,11 @@
 
 **同じ spec・同じ入力なら同じ結果。** 時刻や乱数の ID を入れない。`rule_hash` は正規化した
 spec からパスの欄を除いて作り、入力のファイルは `input_fingerprint` に sha256 で入れる。
+
+入力はデータセットか外部の行列（TSV・MetaboLights の MAF・mwTab・xlsx。読み取りは
+`external_tables`）。`correlate` は報告とは別に、外部の表の値との Spearman の ρ を返す（特徴の対応は
+spec が渡す）。書いても効かない設定（`steps` に無い段の設定・`merge_split=false` や外部の行列での
+`features.alignment_qc`・ols でない検定の共変量）は誤りにせず、使わずに `notes` に書く。
 """
 from __future__ import annotations
 
@@ -22,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-from metabolomix.analysis import alignment_qc, recipe_matrix, spec_statistics
+from metabolomix.analysis import alignment_qc, external_tables, recipe_matrix, spec_statistics
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 __all__ = ["ANALYSIS_SCHEMA", "RESULT_SCHEMA", "normalize_spec", "rule_hash", "run_spec"]
@@ -33,6 +38,9 @@ _INVALID = "ANALYSIS_SPEC_INVALID"
 _PATH_KEYS = frozenset({"path", "matrix_path", "alignment_qc"})
 _SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]*$")
 _MISSING_TOKENS = frozenset({"", "na", "nan", "null", "none"})
+#: データセットの外の入力の形式（`input.source` と `correlate.external.source`）。
+EXTERNAL_SOURCES = ("tsv", *external_tables.SOURCES)
+_COLUMN_RE = re.compile(r"^[A-Za-z]+$")
 
 
 def _fail(message: str, **details) -> DomainError:
@@ -83,28 +91,55 @@ def _normalize_tsv(raw, label: str, columns: dict[str, str | None]) -> dict:
     return out
 
 
+def _normalize_external(raw, label: str) -> dict:
+    """データセットの外の表（TSV・MAF・mwTab・xlsx）。`label` は欄の名前（`input` など）。"""
+    source = raw.get("source") if isinstance(raw, dict) else None
+    if source not in EXTERNAL_SOURCES:
+        raise _fail(f"{label}.source は {' / '.join(EXTERNAL_SOURCES)}", field=f"{label}.source")
+    if source == "tsv":
+        raw = _exact_keys(raw, {"source", "matrix_path", "orientation", "id_column"},
+                          {"source", "matrix_path"}, label)
+        orientation = _choice(raw.get("orientation", "features_by_samples"),
+                              ("features_by_samples", "samples_by_features"), f"{label}.orientation")
+        default_id = "feature_id" if orientation == "features_by_samples" else "sample"
+        return {"source": "tsv", "matrix_path": _string(raw["matrix_path"], f"{label}.matrix_path"),
+                "orientation": orientation,
+                "id_column": _string(raw.get("id_column", default_id), f"{label}.id_column")}
+    if source in ("maf", "mwtab"):
+        raw = _exact_keys(raw, {"source", "path"}, {"source", "path"}, label)
+        return {"source": source, "path": _string(raw["path"], f"{label}.path")}
+    raw = _exact_keys(raw, {"source", "path", "sheet", "feature_column", "first_sample_column"},
+                      {"source", "path"}, label)
+    out = {"source": "xlsx", "path": _string(raw["path"], f"{label}.path"),
+           "sheet": None if raw.get("sheet") is None else _string(raw["sheet"], f"{label}.sheet")}
+    for key, default in (("feature_column", "A"), ("first_sample_column", "B")):
+        value = _string(raw.get(key, default), f"{label}.{key}")
+        if not _COLUMN_RE.match(value):
+            raise _fail(f"{label}.{key} は Excel の列の文字（A・B・AA）: {value!r}",
+                        field=f"{label}.{key}")
+        out[key] = value.upper()
+    if (external_tables.column_index(out["first_sample_column"], label)
+            <= external_tables.column_index(out["feature_column"], label)):
+        raise _fail(f"{label}.first_sample_column は feature_column より右の列", field=label)
+    return out
+
+
 def _normalize_input(raw) -> dict:
     raw = raw or {"source": "dataset"}
     source = raw.get("source") if isinstance(raw, dict) else None
     if source == "dataset":
         _exact_keys(raw, {"source"}, {"source"}, "input")
         return {"source": "dataset"}
-    if source != "tsv":
-        raise _fail("input.source は dataset / tsv", field="input.source")
-    raw = _exact_keys(raw, {"source", "matrix_path", "orientation", "id_column"},
-                      {"source", "matrix_path"}, "input")
-    orientation = _choice(raw.get("orientation", "features_by_samples"),
-                          ("features_by_samples", "samples_by_features"), "input.orientation")
-    default_id = "feature_id" if orientation == "features_by_samples" else "sample"
-    return {"source": "tsv", "matrix_path": _string(raw["matrix_path"], "input.matrix_path"),
-            "orientation": orientation,
-            "id_column": _string(raw.get("id_column", default_id), "input.id_column")}
+    if source not in EXTERNAL_SOURCES:
+        raise _fail(f"input.source は dataset / {' / '.join(EXTERNAL_SOURCES)}", field="input.source")
+    return _normalize_external(raw, "input")
 
 
 def _normalize_groups(raw, input_source: str) -> dict:
     raw = raw or ({"source": "metadata"} if input_source == "dataset" else None)
     if raw is None:
-        raise _fail("外部の行列（input.source=tsv）には groups の TSV が要る", field="groups")
+        raise _fail(f"外部の行列（input.source={input_source}）には groups の TSV が要る",
+                    field="groups")
     if raw.get("source") == "metadata":
         if input_source != "dataset":
             raise _fail("groups.source=metadata はデータセットの入力でだけ使える", field="groups")
@@ -163,12 +198,14 @@ def _normalize_covariates(raw):
             "columns": out_columns}
 
 
-def _normalize_features(raw) -> dict:
+def _normalize_features(raw, notes: list[str]) -> dict:
     """報告する特徴（`all` か `feature_ids`）と、割れたスポットのまとめ方。
 
     `merge_split`（既定 true）は、割れた 2 スポットを試料ごとの大きい方の値で 1 つにして
     から検定する（`alignment_qc` の `merge_groups` だけを対象にする）。`alignment_qc` は
-    `dataset_alignment_qc` が書いた JSON のパスで、無ければその場で `find_split_pairs` を回す。
+    `dataset_alignment_qc` が書いた JSON のパスで、無ければその場で `find_split_pairs` を回す
+    （`dataset_alignment_qc` がハンドルに持つ最後の結果は使わない——spec だけで再現する）。
+    `merge_split=false` の `alignment_qc` は効かないので捨て、`notes` に書く。
     """
     raw = raw if raw is not None else {"all": True}
     if not isinstance(raw, dict):
@@ -184,8 +221,8 @@ def _normalize_features(raw) -> dict:
     if not isinstance(merge, bool):
         raise _fail("features.merge_split は true / false", field="features.merge_split")
     if "alignment_qc" in raw and not merge:
-        raise _fail("features.alignment_qc は merge_split=true のときだけ使える（効かない設定を"
-                    "書かない）", field="features.alignment_qc")
+        notes.append("features.alignment_qc は merge_split=false なので効かず、使っていない")
+        raw = {k: v for k, v in raw.items() if k != "alignment_qc"}
     if "feature_ids" in raw:
         ids = raw["feature_ids"]
         if not isinstance(ids, list) or not ids or not all(isinstance(i, str) and i for i in ids):
@@ -246,7 +283,7 @@ def _normalize_aggregate(raw, input_source: str):
     return out
 
 
-def _normalize_analysis(raw, index: int, covariate_names: set) -> dict:
+def _normalize_analysis(raw, index: int, covariate_names: set, notes: list[str]) -> dict:
     label = f"analyses[{index}]"
     raw = _exact_keys(raw, {"analysis_id", "matrix", "test", "fold_change", "correction",
                             "bh_population", "thresholds"}, {"analysis_id", "test"}, label)
@@ -259,7 +296,9 @@ def _normalize_analysis(raw, index: int, covariate_names: set) -> dict:
     if not isinstance(used, list) or not all(isinstance(c, str) for c in used):
         raise _fail(f"{label}.test.covariates は列名のリスト", field=label)
     if kind != "ols" and used:
-        raise _fail(f"{label}: 共変量は test.kind=ols でだけ使える", field=label)
+        notes.append(f"{label}.test.covariates {used} は test.kind={kind} では効かず、使っていない"
+                     "（共変量で調整するなら kind=ols）")
+        used = []
     unknown = sorted(set(used) - covariate_names)
     if unknown:
         raise _fail(f"{label}: covariates.columns に無い共変量 {unknown}", field=label)
@@ -268,7 +307,8 @@ def _normalize_analysis(raw, index: int, covariate_names: set) -> dict:
     correction = _choice(raw.get("correction", "bh"), ("bh", "none"), f"{label}.correction")
     return {
         "analysis_id": analysis_id,
-        "matrix": recipe_matrix.normalize_recipe(raw.get("matrix")),
+        "matrix": recipe_matrix.normalize_recipe(raw.get("matrix"), notes=notes,
+                                                 label=f"{label}.matrix"),
         "test": {"kind": kind,
                  "transform": _choice(test.get("transform", "log2"), spec_statistics.TRANSFORMS,
                                       f"{label}.test.transform"),
@@ -284,10 +324,50 @@ def _normalize_analysis(raw, index: int, covariate_names: set) -> dict:
     }
 
 
-def normalize_spec(spec) -> dict:
-    """spec を検証して既定を埋める。未知のキーは拒否する。"""
+def _normalize_correlate(raw):
+    """外部の表の値との Spearman（`correlate`）。無ければ None（正規化した spec に欄を作らない）。"""
+    if raw is None:
+        return None
+    raw = _exact_keys(raw, {"external", "pairs", "sample_map", "stage"}, {"external", "pairs"},
+                      "correlate")
+    external = _normalize_external(raw["external"], "correlate.external")
+    pairs = raw["pairs"]
+    if not isinstance(pairs, list) or not pairs:
+        raise _fail("correlate.pairs は 1 つ以上の {feature_id, external_id}",
+                    field="correlate.pairs")
+    out_pairs = []
+    for i, pair in enumerate(pairs):
+        label = f"correlate.pairs[{i}]"
+        pair = _exact_keys(pair, {"feature_id", "external_id"}, {"feature_id", "external_id"},
+                           label)
+        item = {"feature_id": _string(pair["feature_id"], f"{label}.feature_id"),
+                "external_id": _string(pair["external_id"], f"{label}.external_id")}
+        if item in out_pairs:
+            raise _fail(f"correlate.pairs に同じ組が重複している: {item}", field=label)
+        out_pairs.append(item)
+    sample_map = raw.get("sample_map")
+    if sample_map is not None:
+        sample_map = _exact_keys(sample_map, {"path", "sample_column", "external_column"},
+                                 {"path"}, "correlate.sample_map")
+        sample_map = {
+            "path": _string(sample_map["path"], "correlate.sample_map.path"),
+            "sample_column": _string(sample_map.get("sample_column", "sample"),
+                                     "correlate.sample_map.sample_column"),
+            "external_column": _string(sample_map.get("external_column", "external_sample"),
+                                       "correlate.sample_map.external_column")}
+    return {"external": external, "pairs": out_pairs, "sample_map": sample_map,
+            "stage": _choice(raw.get("stage", "input"), ("input", "matrix"), "correlate.stage")}
+
+
+def normalize_spec(spec, *, notes: list[str] | None = None) -> dict:
+    """spec を検証して既定を埋める。未知のキーは拒否する。
+
+    書いても効かない設定は誤りにせず捨て、`notes`（渡せば）に理由を足す。捨てた設定は正規化した
+    spec にも `rule_hash` にも入らない（同じ規則なら同じ hash）。
+    """
+    notes = [] if notes is None else notes
     spec = _exact_keys(spec, {"schema", "input", "groups", "comparison", "injection_order",
-                              "covariates", "features", "aggregate", "analyses"},
+                              "covariates", "features", "aggregate", "analyses", "correlate"},
                        {"comparison", "analyses"}, "spec")
     if spec.get("schema", ANALYSIS_SCHEMA) != ANALYSIS_SCHEMA:
         raise _fail(f"schema は {ANALYSIS_SCHEMA}", field="schema")
@@ -303,23 +383,27 @@ def normalize_spec(spec) -> dict:
     analyses = spec["analyses"]
     if not isinstance(analyses, list) or not analyses:
         raise _fail("analyses は 1 つ以上の解析のリスト", field="analyses")
-    normalized_analyses = [_normalize_analysis(a, i, names) for i, a in enumerate(analyses)]
+    normalized_analyses = [_normalize_analysis(a, i, names, notes)
+                           for i, a in enumerate(analyses)]
     ids = [a["analysis_id"] for a in normalized_analyses]
     if len(set(ids)) != len(ids):
         raise _fail(f"analysis_id が重複している: {ids}", field="analyses")
     aggregate = _normalize_aggregate(spec.get("aggregate"), input_["source"])
-    features = _normalize_features(spec.get("features"))
+    features = _normalize_features(spec.get("features"), notes)
     if aggregate is not None and "feature_ids" in features:
-        raise _fail("aggregate を使うときは features.feature_ids を書かない（報告するのは集約した 1 本）",
-                    field="features")
+        # 併用できない（効かないのではなく、報告する行の定義がぶつかる）。種ごとの行は別の spec で回す。
+        raise _fail("aggregate を使うときは features.feature_ids を書かない（報告するのは集約した 1 本。"
+                    "種ごとの行は aggregate の無い別の spec で回す）", field="features")
     if input_["source"] != "dataset":
         # 外部の行列にはアライメントが無い: merge_split は何もしない（既定の true のまま通す）。
         if "alignment_qc" in features:
-            raise _fail("features.alignment_qc はデータセットの入力でだけ使える", field="features")
+            notes.append("features.alignment_qc は外部の行列（アライメントが無い）では効かず、"
+                         "使っていない")
+            features = {k: v for k, v in features.items() if k != "alignment_qc"}
         if any(a["bh_population"] == "annotated" for a in normalized_analyses):
             raise _fail("bh_population=annotated（SME のある特徴）はデータセットの入力でだけ使える",
                         field="analyses")
-    return {
+    out = {
         "schema": ANALYSIS_SCHEMA,
         "input": input_,
         "groups": _normalize_groups(spec.get("groups"), input_["source"]),
@@ -330,6 +414,11 @@ def normalize_spec(spec) -> dict:
         "aggregate": aggregate,
         "analyses": normalized_analyses,
     }
+    correlate = _normalize_correlate(spec.get("correlate"))
+    if correlate is not None:
+        # 書いたときだけ欄を作る（書かない spec の rule_hash を変えない）。
+        out["correlate"] = correlate
+    return out
 
 
 def _strip_paths(value):
@@ -420,35 +509,58 @@ def _float_or_nan(text) -> float:
     return float(text)
 
 
-def _external_matrix(spec_input: dict) -> tuple[np.ndarray, list[str], list[str], str]:
-    columns, rows, digest = _read_tsv(spec_input["matrix_path"], "input")
+def _external_matrix(spec_input: dict, label: str = "input"
+                     ) -> tuple[np.ndarray, list[str], list[str], str, dict | None, list[str]]:
+    """外部の表を（試料 × 特徴の値, 試料, 特徴 ID, sha256, 読み取りの要約, 文字の行として飛ばした行）にする。
+
+    TSV は数として読めない値を誤りにする（要約は None）。MAF・mwTab・xlsx は論文の表なので、読めない
+    セル（`ND`・`<LOQ` など）を欠測にし、その数と例を要約（`external_tables.ExternalTable.info`）に返す。
+    飛ばした行（xlsx の群の見出しなど）の名前は、特徴が無いときの `FEATURE_NOT_FOUND` が添える。
+    """
+    if spec_input["source"] != "tsv":
+        table = external_tables.read_table(spec_input, label)
+        return (table.values.T, list(table.samples), list(table.features),
+                _sha256(Path(spec_input["path"])), {"source": spec_input["source"], **table.info()},
+                list(table.skipped_rows or []))
+    columns, rows, digest = _read_tsv(spec_input["matrix_path"], label)
     id_column = spec_input["id_column"]
-    _require_column(columns, id_column, "input")
+    _require_column(columns, id_column, label)
     others = [c for c in columns if c != id_column]
     # csv.DictReader は同じ名前の列の最後の値しか残さない。重複した列名を通すと、
     # 1 つの試料（特徴）が 2 回数えられて片方の値が黙って消える。
     duplicated = sorted({c for c in others if others.count(c) > 1})
     if duplicated or not all(c.strip() for c in others):
         raise DomainError("ANALYSIS_INPUT_INVALID",
-                          f"input の列名が重複しているか空です（重複: {duplicated}）",
-                          {"field": "input", "duplicated": duplicated})
+                          f"{label} の列名が重複しているか空です（重複: {duplicated}）",
+                          {"field": label, "duplicated": duplicated})
     ids = [(row.get(id_column) or "").strip() for row in rows]
     if not all(ids):
-        raise DomainError("ANALYSIS_INPUT_INVALID", "input に ID が空の行がある",
-                          {"field": "input"})
+        raise DomainError("ANALYSIS_INPUT_INVALID", f"{label} に ID が空の行がある",
+                          {"field": label})
     if len(set(ids)) != len(ids):
-        raise DomainError("ANALYSIS_INPUT_INVALID", "input の行の ID が重複している",
-                          {"field": "input",
+        raise DomainError("ANALYSIS_INPUT_INVALID", f"{label} の行の ID が重複している",
+                          {"field": label,
                            "duplicated": sorted({i for i in ids if ids.count(i) > 1})})
     try:
         table = np.array([[_float_or_nan(row.get(c)) for c in others] for row in rows],
                          dtype=float)
     except ValueError as exc:
-        raise DomainError("ANALYSIS_INPUT_INVALID", f"input に数として読めない値がある: {exc}",
-                          {"field": "input"}) from exc
+        raise DomainError("ANALYSIS_INPUT_INVALID", f"{label} に数として読めない値がある: {exc}",
+                          {"field": label}) from exc
     if spec_input["orientation"] == "features_by_samples":
-        return table.T, others, ids, digest
-    return table, ids, others, digest
+        return table.T, others, ids, digest, None, []
+    return table, ids, others, digest, None, []
+
+
+def _feature_not_found(message: str, missing: list[str], skipped: list[str], **details) -> DomainError:
+    """`FEATURE_NOT_FOUND`。無い ID が外部の表で文字の行として飛ばした行の名前なら、そう書き添える。"""
+    skipped_set = set(skipped)
+    as_text = [m for m in missing if m in skipped_set]
+    if as_text:
+        message += (f"（{as_text[:10]} は表にあるが、試料のセルに数が無く欠測の印でない文字がある行なので"
+                    "群の見出しとして読まなかった）")
+        details["skipped_as_text"] = as_text[:50]
+    return DomainError("FEATURE_NOT_FOUND", message, {**details, "feature_ids": missing[:50]})
 
 
 def _check_cover(wanted: list[str], available, label: str, *, allow_extra: bool) -> None:
@@ -467,6 +579,7 @@ def _load(normalized: dict, ds) -> dict:
     files: dict[str, str] = {}
     detected = None
     metadata_rows = None
+    read_info, skipped = None, []
     if normalized["input"]["source"] == "dataset":
         if ds is None:
             raise DomainError("DATASET_REQUIRED", "input.source=dataset にはデータセットが要る", {})
@@ -483,7 +596,8 @@ def _load(normalized: dict, ds) -> dict:
             detected = None if detected is None else detected[include]
             metadata_rows = {names[k]: rows[i] for k, i in enumerate(include)}
     else:
-        values, names, feature_ids, files["matrix"] = _external_matrix(normalized["input"])
+        values, names, feature_ids, files["matrix"], read_info, skipped = _external_matrix(
+            normalized["input"])
 
     roles: dict[str, str] = {}
     groups: dict[str, str | None] = {}
@@ -542,7 +656,7 @@ def _load(normalized: dict, ds) -> dict:
 
     return {"values": values, "samples": names, "feature_ids": feature_ids, "roles": roles,
             "groups": groups, "detected": detected, "order": order, "covariates": covariates,
-            "files": files}
+            "files": files, "read_info": read_info, "skipped_as_text": skipped}
 
 
 # ---------- 割れたスポットのまとめ ----------
@@ -629,10 +743,13 @@ def _aggregate(matrix: dict, aggregate: dict, members: list[str]) -> tuple[np.nd
     if aggregate["kind"] == "sum":
         if not present:
             column = np.full(len(matrix["sample_ids"]), np.nan)
+            block = np.zeros((len(matrix["sample_ids"]), 0))
         else:
             block = matrix["values"][:, [index[f] for f in present]]
             column = np.where(np.all(np.isfinite(block), axis=1), block.sum(axis=1), np.nan)
-        return column, {"members": members, "summed": present, "dropped": dropped}
+        # 寄与（`_contributions`）は群が決まってから計算する。`_block` は結果に残さない。
+        return column, {"members": members, "summed": present, "dropped": dropped,
+                        "_block": block}
     if dropped:
         column = np.full(len(matrix["sample_ids"]), np.nan)
     else:
@@ -642,6 +759,36 @@ def _aggregate(matrix: dict, aggregate: dict, members: list[str]) -> tuple[np.nd
             column = np.where(np.isfinite(num) & np.isfinite(den) & (den > 0), num / den, np.nan)
     return column, {"numerator": aggregate["numerator"],
                     "denominator": aggregate["denominator"], "dropped": dropped}
+
+
+def _median(values: np.ndarray):
+    return float(np.median(values)) if values.size else None
+
+
+def _contributions(block: np.ndarray, column: np.ndarray, present: list[str],
+                   rows_ref: list[int], rows_test: list[int]) -> tuple[list[dict], int]:
+    """和の各メンバーが和に占める割合（試料ごとの member / 和）の要約と、使った試料の数。
+
+    見るのは比べる 2 群の試料のうち、和が有限で正のものだけ（和は行列の値＝変換の前）。
+    `share_median` は 2 群を合わせた中央値、`share_median_ref` / `_test` は群ごと、`share_max` は最大。
+    少数の特徴が和を支配していないか・群で寄与が入れ替わっていないかを見る材料で、判定には使わない。
+    """
+    chosen = np.zeros(len(column), dtype=bool)
+    chosen[rows_ref + rows_test] = True
+    usable = chosen & np.isfinite(column) & (column > 0)
+    in_ref = np.zeros(len(column), dtype=bool)
+    in_ref[rows_ref] = True
+    with np.errstate(all="ignore"):
+        shares = block / column[:, None]
+    out = []
+    for k, fid in enumerate(present):
+        values = shares[:, k]
+        both = values[usable]
+        out.append({"feature_id": fid, "share_median": _median(both),
+                    "share_median_ref": _median(values[usable & in_ref]),
+                    "share_median_test": _median(values[usable & ~in_ref]),
+                    "share_max": float(both.max()) if both.size else None})
+    return out, int(usable.sum())
 
 
 def _design(samples: list[str], used: list[str], spec_cov: dict | None, table) -> tuple:
@@ -707,11 +854,14 @@ def _meets(row: dict, thresholds: dict):
     return all(checks)
 
 
-def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: list[str] | None):
+def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: list[str] | None,
+                  matrices: list | None = None):
     # `data` の行列は、割れたスポットを 1 列にまとめた後（`_merge_plan`）。recipe はその列に当たる。
     matrix = recipe_matrix.build_matrix(
         data["values"], data["samples"], data["feature_ids"], data["roles"], analysis["matrix"],
         detected=data["detected"], injection_order=data["order"])
+    if matrices is not None:
+        matrices.append((analysis["analysis_id"], matrix))  # correlate（stage=matrix）が集約の前の行列を読む
     merged_from: dict[str, list[str]] = data["merged_from"]
     rename: dict[str, str] = data["rename"]
     origin = {fid: merged_from.get(fid, [fid]) for fid in matrix["feature_ids"]}
@@ -753,6 +903,10 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
                           {"group_n": {k: len(v) for k, v in members.items()}})
     rows_ref = [index[s] for s in members[reference]]
     rows_test = [index[s] for s in members[test]]
+    if aggregate_info is not None and "_block" in aggregate_info:
+        aggregate_info["contributions"], aggregate_info["n_samples_for_shares"] = _contributions(
+            aggregate_info.pop("_block"), matrix["values"][:, 0], aggregate_info["summed"],
+            rows_ref, rows_test)
     # 検出の例数は _load の検出状態（まとめた後はどちらかで検出）から数える。集約の行では数えない。
     detected = None if aggregate_info is not None or data["detected"] is None else data["detected"]
     det_col = {fid: j for j, fid in enumerate(data["feature_ids"])}
@@ -780,6 +934,7 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
             outcome["beta_log2"] = None
         fc = spec_statistics.fold_change(ref_raw, test_raw, analysis["fold_change"])
         finite_ref, finite_test = ref_raw[np.isfinite(ref_raw)], test_raw[np.isfinite(test_raw)]
+        constant = spec_statistics.constant_groups({reference: ref_raw, test: test_raw})
         results[fid] = {
             "feature_id": fid, "status": outcome["status"], "reason": outcome["reason"],
             "group_ref": reference, "group_test": test,
@@ -789,7 +944,7 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
             "fc_test_over_ref": fc,
             "log2fc_test_over_ref": math.log2(fc) if fc else None,
             "statistic": outcome["statistic"], "p": outcome["p"], "q": None,
-            "beta_log2": outcome["beta_log2"],
+            "beta_log2": outcome["beta_log2"], "constant_in_group": constant,
         }
         if detected is not None:
             results[fid]["detected_reference"] = int(detected[rows_ref, det_col[fid]].sum())
@@ -820,7 +975,7 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
                    "group_ref": reference, "group_test": test, "n_ref": None, "n_test": None,
                    "mean_ref": None, "mean_test": None, "fc_test_over_ref": None,
                    "log2fc_test_over_ref": None, "statistic": None, "p": None, "q": None,
-                   "beta_log2": None}
+                   "beta_log2": None, "constant_in_group": None}
         row = dict(row)
         row["merged_from"] = merged_from.get(fid)
         row["direction"] = _direction(row)
@@ -834,6 +989,8 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
             spec_statistics.detection_driven(row["direction"], d_ref, len(rows_ref), d_test,
                                              len(rows_test)) if row["status"] == "tested" else None)
         row["meets_thresholds"] = _meets(row, analysis["thresholds"])
+        # 一方の群の値（検定に入れる行列の値。変換の前）がすべて同じ: 未検出の埋め値の印（判定は変えない）
+        row["constant_in_group"] = row.pop("constant_in_group")
         rows.append(row)
     out = {
         "analysis_id": analysis["analysis_id"],
@@ -851,6 +1008,116 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
     return out
 
 
+def _sample_map(spec_map: dict | None, files: dict) -> dict[str, str] | None:
+    """`correlate.sample_map` の TSV（この側の試料 → 外部の表の試料）。無ければ None（同じ名前で照合）。
+
+    対応は 1 対 1。この側の 2 つの試料が外部の同じ試料を指すと、外部の 1 つの値を 2 回数えて n と p が
+    膨らむので `SAMPLE_MISMATCH`（反復の注入をまとめるなら、対応表に 1 つだけ書く）。
+    """
+    if spec_map is None:
+        return None
+    columns, rows, files["correlate.sample_map"] = _read_tsv(spec_map["path"],
+                                                             "correlate.sample_map")
+    for key in ("sample_column", "external_column"):
+        _require_column(columns, spec_map[key], "correlate.sample_map")
+    keyed = _keyed(rows, spec_map["sample_column"], "correlate.sample_map")
+    mapping = {}
+    for name, row in keyed.items():
+        external = (row.get(spec_map["external_column"]) or "").strip()
+        if name and external:
+            mapping[name] = external
+    targets = list(mapping.values())
+    shared = sorted({e for e in targets if targets.count(e) > 1})
+    if shared:
+        raise DomainError(
+            "SAMPLE_MISMATCH",
+            f"correlate.sample_map で外部の同じ試料に複数の試料が当たっている: {shared[:10]}"
+            "（外部の 1 つの値を 2 回数えないよう、対応は 1 対 1 にする）",
+            {"field": "correlate.sample_map", "duplicated_external": shared[:50],
+             "samples": {e: sorted(s for s, t in mapping.items() if t == e) for e in shared[:10]}})
+    return mapping
+
+
+def _correlate_rows(spec_corr: dict, values: np.ndarray, samples: list[str], feature_ids: list[str],
+                    rename: dict[str, str], external, analysis_id: str | None) -> list[dict]:
+    """組ごとの Spearman（この側の値は `values`＝試料 × 特徴、外部の表は試料で照合済みの列）。"""
+    ext_values, ext_index = external
+    column = {fid: j for j, fid in enumerate(feature_ids)}
+    rows = []
+    for pair in spec_corr["pairs"]:
+        used = rename.get(pair["feature_id"], pair["feature_id"])
+        row = {"analysis_id": analysis_id, "feature_id": pair["feature_id"],
+               "external_id": pair["external_id"],
+               "merged_into": used if used != pair["feature_id"] else None}
+        if used not in column:
+            rows.append({**row, "n": 0, "rho": None, "p": None, "reason": "not_in_matrix"})
+            continue
+        stat = spec_statistics.spearman(values[:, column[used]],
+                                        ext_values[:, ext_index[pair["external_id"]]])
+        rows.append({**row, **stat})
+    return rows
+
+
+def _correlate(normalized: dict, data: dict, analyses_matrices: list[tuple[str, dict]]) -> dict:
+    """`correlate` を実行する。`stage=input` は読んだ行列（割れのまとめの後、recipe の前）、`matrix` は
+    解析ごとの recipe の後の行列（集約の前）で、外部の表の値との Spearman を組ごとに出す。
+
+    試料は `sample_map`（無ければ同じ名前）で外部の表の試料に当て、当たった試料だけを使う。1 つも
+    当たらなければ `SAMPLE_MISMATCH`。外部の表に無い `external_id`・この側に無い `feature_id` は
+    `FEATURE_NOT_FOUND`。
+    """
+    spec_corr = normalized["correlate"]
+    files = data["files"]
+    ext_values, ext_samples, ext_features, files["correlate.external"], read_info, ext_skipped = (
+        _external_matrix(spec_corr["external"], "correlate.external"))
+    unknown_ext = [p["external_id"] for p in spec_corr["pairs"] if p["external_id"] not in ext_features]
+    if unknown_ext:
+        raise _feature_not_found(f"correlate.external に無い特徴: {unknown_ext[:10]}", unknown_ext,
+                                 ext_skipped, field="correlate.pairs",
+                                 external_examples=ext_features[:5])
+    known = set(data["feature_ids"]) | set(data["rename"])
+    unknown = [p["feature_id"] for p in spec_corr["pairs"] if p["feature_id"] not in known]
+    if unknown:
+        raise _feature_not_found(f"行列に無い feature_id: {unknown[:10]}", unknown,
+                                 data["skipped_as_text"], field="correlate.pairs")
+    mapping = _sample_map(spec_corr["sample_map"], files)
+    ext_position = {s: i for i, s in enumerate(ext_samples)}
+    ext_index = {f: j for j, f in enumerate(ext_features)}
+
+    def external_name(sample: str) -> str | None:
+        return sample if mapping is None else mapping.get(sample)
+
+    def aligned(samples: list[str]):
+        keep = [i for i, s in enumerate(samples) if external_name(s) in ext_position]
+        return keep, ext_values[[ext_position[external_name(samples[i])] for i in keep], :]
+
+    blocks = ([(None, data["values"], data["samples"], data["feature_ids"])]
+              if spec_corr["stage"] == "input"
+              else [(aid, m["values"], m["sample_ids"], m["feature_ids"]) for aid, m in analyses_matrices])
+    out_rows, matched = [], set()
+    for analysis_id, values, samples, feature_ids in blocks:
+        keep, ext_block = aligned(samples)
+        matched.update(samples[i] for i in keep)
+        out_rows += _correlate_rows(spec_corr, values[keep, :], samples, feature_ids, data["rename"],
+                                    (ext_block, ext_index), analysis_id)
+    if not matched:
+        raise DomainError(
+            "SAMPLE_MISMATCH",
+            "correlate: この側の試料が外部の表の試料に 1 つも当たらない（試料名は完全一致。"
+            "名前が違うなら sample_map の TSV で対応を渡す）",
+            {"field": "correlate", "samples": data["samples"][:10], "external_samples": ext_samples[:10]})
+    this_samples = set(data["samples"])
+    mapped_ext = {external_name(s) for s in matched}
+    return {"stage": spec_corr["stage"],
+            "external": read_info or {"source": spec_corr["external"]["source"],
+                                      "n_features": len(ext_features),
+                                      "n_samples": len(ext_samples)},
+            "n_samples_matched": len(matched),
+            "unmatched_samples": sorted(this_samples - matched),
+            "unmatched_external_samples": sorted(set(ext_samples) - mapped_ext),
+            "rows": out_rows}
+
+
 def run_spec(normalized: dict, ds=None) -> dict:
     """正規化済みの spec を実行して analysis-result.v1 を返す（丸めない）。"""
     data = _load(normalized, ds)
@@ -858,15 +1125,15 @@ def run_spec(normalized: dict, ds=None) -> dict:
     if reported is not None:
         unknown = [f for f in reported if f not in set(data["feature_ids"])]
         if unknown:
-            raise DomainError("FEATURE_NOT_FOUND", f"行列に無い feature_id: {unknown}",
-                              {"feature_ids": unknown})
+            raise _feature_not_found(f"行列に無い feature_id: {unknown}", unknown,
+                                     data["skipped_as_text"])
     aggregate = normalized["aggregate"]
     if aggregate is not None and "select" not in aggregate:
         members = aggregate.get("feature_ids") or [aggregate["numerator"], aggregate["denominator"]]
         unknown = [f for f in members if f not in set(data["feature_ids"])]
         if unknown:
-            raise DomainError("FEATURE_NOT_FOUND", f"行列に無い feature_id: {unknown}",
-                              {"feature_ids": unknown})
+            raise _feature_not_found(f"行列に無い feature_id: {unknown}", unknown,
+                                     data["skipped_as_text"])
     if aggregate is not None and "select" in aggregate and ds is None:
         raise DomainError("DATASET_REQUIRED", "aggregate.select にはデータセットが要る", {})
 
@@ -874,9 +1141,16 @@ def run_spec(normalized: dict, ds=None) -> dict:
 
     # 報告・集約の ID の検査は、まとめる前の特徴で済んでいる（消える側の ID も指定できる）。
     merge = _merge_plan(normalized, ds, data)
-    analyses = [_run_analysis(a, data, normalized, ds, reported) for a in normalized["analyses"]]
+    matrices: list[tuple[str, dict]] = []
+    analyses = [_run_analysis(a, data, normalized, ds, reported, matrices)
+                for a in normalized["analyses"]]
     reference, test = normalized["comparison"]["reference"], normalized["comparison"]["test"]
-    return {
+    extra = {}
+    if data["read_info"] is not None:
+        extra["input_read"] = data["read_info"]
+    if "correlate" in normalized:
+        extra["correlate"] = _correlate(normalized, data, matrices)
+    out = {
         "schema": RESULT_SCHEMA,
         "spec": copy.deepcopy(normalized),
         "rule_hash": rule_hash(normalized, merge["groups"] if merge["enabled"] else None),
@@ -890,4 +1164,8 @@ def run_spec(normalized: dict, ds=None) -> dict:
         "group_ref": reference,
         "group_test": test,
         "analyses": analyses,
+        **extra,
     }
+    # correlate は外部の表の sha256 を files に足す（_correlate が data["files"] に書く）。
+    out["input_fingerprint"]["files"] = dict(sorted(data["files"].items()))
+    return out

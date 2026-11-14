@@ -434,7 +434,9 @@ def dataset_feature_search(
         （同じ列・頼んだ ID のまま）、`merge_split` に出所・まとめた組・やり直した結果と BH の
         母集団。False なら従来どおり（`stats_unmerged` も `merged_from` 列も無い）。
     alignment_qc_path: `dataset_alignment_qc` が書いた JSON（今のデータセットで作ったものだけ）。
-        省略時はその場で割れを探す（既定の閾値）。`merge_split=False` とは併用できない。
+        省略時はこのハンドルで `dataset_alignment_qc` が最後に出した結果（データ・試料の表・除外が
+        変わっていないもの）、無ければその場で割れを探す（既定の閾値）。使った方は `merge_split.source`
+        （`alignment_qc` / `last_alignment_qc` / `find_split_pairs`）。`merge_split=False` とは併用できない。
 
     rt_offset_min: 目標照合の RT の窓の中心のずれ（分、任意）。中心を `rt_min + rt_offset_min` にする
         （幅 `rt_tol_min` と `candidates.delta_rt` 列（RT − rt_min）は変えない）。`rt_min` のある目標の

@@ -306,9 +306,14 @@ def test_merge_split_default_is_true():
         A.normalize_spec(_split_spec(features={"all": True, "merge_split": "yes"}))
     with pytest.raises(DomainError):
         A.normalize_spec(_split_spec(features={"all": True, "merge": True}))
-    with pytest.raises(DomainError):                                # 効かない設定は書かせない
-        A.normalize_spec(_split_spec(features={"all": True, "merge_split": False,
-                                               "alignment_qc": "qc.json"}))
+    # 効かない設定は誤りにせず、使わずに notes に書く（正規化した spec にも hash にも入らない）
+    notes: list[str] = []
+    normalized = A.normalize_spec(_split_spec(features={"all": True, "merge_split": False,
+                                                        "alignment_qc": "qc.json"}), notes=notes)
+    assert normalized["features"] == {"all": True, "merge_split": False}
+    assert len(notes) == 1 and "features.alignment_qc" in notes[0]
+    assert A.rule_hash(normalized) == A.rule_hash(
+        A.normalize_spec(_split_spec(features={"all": True, "merge_split": False})))
 
 
 def test_merged_from_in_rows():
@@ -505,8 +510,12 @@ def test_merge_split_is_a_no_op_for_tsv_input(files):
     assert on["rule_hash"] == off["rule_hash"]
     assert on["analyses"] == off["analyses"] and "merge_split" not in on["analyses"][0]
     assert all(r["merged_from"] is None for r in on["analyses"][0]["rows"])
-    with pytest.raises(DomainError):
-        A.normalize_spec(_spec(files, [MAIN], features={"all": True, "alignment_qc": "x.json"}))
+    # 外部の行列での features.alignment_qc は効かない: 誤りにせず、使わずに notes に書く
+    notes: list[str] = []
+    normalized = A.normalize_spec(_spec(files, [MAIN], features={"all": True,
+                                                                 "alignment_qc": "x.json"}),
+                                  notes=notes)
+    assert "alignment_qc" not in normalized["features"] and "外部の行列" in notes[0]
 
 
 def _annotated_ds():

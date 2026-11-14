@@ -10,6 +10,9 @@
 
 `transform="log2"` は有限の正値だけに当て、ほかは欠測にする（clip も pseudocount も
 入れない）。
+
+ほかに、外部の値との Spearman の ρ（`spearman`。spec の `correlate`）と、一方の群の値が
+すべて同じか（`constant_groups`。未検出の埋め値の印）。
 """
 from __future__ import annotations
 
@@ -19,8 +22,9 @@ import warnings
 import numpy as np
 from scipy import stats
 
-__all__ = ["FC_DEFINITIONS", "KINDS", "bh", "detection_driven", "detection_fisher_p", "fold_change",
-           "ols_group", "transform_values", "two_group"]
+__all__ = ["FC_DEFINITIONS", "KINDS", "bh", "constant_groups", "detection_driven",
+           "detection_fisher_p", "fold_change", "ols_group", "spearman", "transform_values",
+           "two_group"]
 
 KINDS = ("student", "welch", "mannwhitney", "ols")
 FC_DEFINITIONS = ("arithmetic_mean_ratio", "geometric_mean_ratio")
@@ -151,3 +155,44 @@ def detection_driven(direction: str | None, detected_ref: int | None, n_ref: int
     else:
         high, n_high, low = detected_ref, n_ref, detected_test
     return bool(high < n_high / 2 or low == 0)
+
+
+#: Spearman の ρ を出す最少の組の数（これ未満は ρ を null にする）。
+SPEARMAN_MIN_N = 5
+
+
+def spearman(x, y) -> dict:
+    """両方が有限の組だけで Spearman の ρ（同順位は平均の順位）と両側 p。
+
+    p は `scipy.stats.spearmanr` と同じ t 近似（自由度 n−2）。組が `SPEARMAN_MIN_N` 未満なら
+    ρ と p は null（`reason: too_few_pairs`）、どちらかの値がすべて同じなら null（`constant`）。
+    """
+    a = np.asarray(x, dtype=float)
+    b = np.asarray(y, dtype=float)
+    ok = np.isfinite(a) & np.isfinite(b)
+    a, b = a[ok], b[ok]
+    n = int(a.size)
+    if n < SPEARMAN_MIN_N:
+        return {"n": n, "rho": None, "p": None, "reason": "too_few_pairs"}
+    ra, rb = stats.rankdata(a), stats.rankdata(b)
+    if np.all(ra == ra[0]) or np.all(rb == rb[0]):
+        return {"n": n, "rho": None, "p": None, "reason": "constant"}
+    rho = float(np.corrcoef(ra, rb)[0, 1])
+    rho = max(-1.0, min(1.0, rho))
+    if abs(rho) >= 1.0:
+        p = 0.0
+    else:
+        t = rho * math.sqrt((n - 2) / (1.0 - rho * rho))
+        p = float(2 * stats.t.sf(abs(t), n - 2))
+    return {"n": n, "rho": rho, "p": p, "reason": None}
+
+
+def constant_groups(values_by_group: dict[str, np.ndarray]) -> list[str] | None:
+    """有限の値が 2 つ以上あり、すべて同じ群の名前（未検出の埋め値など）。無ければ None。"""
+    out = []
+    for label, raw in values_by_group.items():
+        finite = np.asarray(raw, dtype=float)
+        finite = finite[np.isfinite(finite)]
+        if finite.size >= 2 and np.all(finite == finite[0]):
+            out.append(label)
+    return out or None

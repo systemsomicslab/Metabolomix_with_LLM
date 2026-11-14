@@ -11,6 +11,17 @@
   パスの欄（`path` / `matrix_path`）を除いて作る——置き場所が違っても同じ規則なら同じ hash。
   入力のファイル（行列・群・共変量・注入順の TSV）は `input_fingerprint` に sha256 で入る。
 - **同じ spec・同じ入力なら同じ JSON。** 時刻や乱数の ID は結果に入れない。
+- **大きな結果は `output_path` の JSON に書く。** キーは昇順で、1 行に収まらない辞書・リストは要素ごとに
+  改行する（行は辞書のキーと区切りの `,` を含めて 1,000 字以下。数や文字列だけのリストは 1,000 字までずつ
+  詰める。字下げはしない。分けられない 1 つの値——1,000 字を超える文字列など——の行だけは超える）——1 行の
+  JSON は行の範囲で区切って読めないため。`output_path` を省いて行が上限を超えても**断らない**: 先頭の行
+  だけを載せ、`truncated: true` と全件の数を返す（上限と並びはツールごと。下の各節）。例外は
+  `dataset_claim_evidence` で、候補が 10 を超えると `output_path` を求めて `ANALYSIS_OUTPUT_REQUIRED` で断る
+  （§7）。
+- **効かない設定は誤りにしない。** 書いても使われない設定（recipe の `steps` に無い段の設定、
+  `merge_split=false` の `alignment_qc`、ols でない検定の共変量など）は捨てて `notes` に理由を書く。捨てた
+  設定は正規化した spec にも `rule_hash` にも入らない。形の誤りと、併用すると意味がぶつかる組み合わせ
+  （`aggregate` と `features.feature_ids`）は従来どおり誤り。
 - **判定（再現したか・明らかに別物か）は返さない。** 道具が返すのは数字と、spec に書いた
   規則を機械的に当てた結果だけ。
 - **研究室の参照ライブラリのパスは出さない。** ファイル名と sha256 だけ。
@@ -114,13 +125,14 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 
 | 欄 | 既定 | 意味 |
 |---|---|---|
-| `input` | `{"source": "dataset"}` | データセット（ハンドルか対話のセッション）か、外部の行列 `{"source": "tsv", "matrix_path", "orientation": "features_by_samples" \| "samples_by_features", "id_column"}`（較正用。論文の個体ごとの値など）。欠測は空・`NA`・`NaN`・`null` |
+| `input` | `{"source": "dataset"}` | データセット（ハンドルか対話のセッション）か、外部の行列。TSV は `{"source": "tsv", "matrix_path", "orientation": "features_by_samples" \| "samples_by_features", "id_column"}`（較正用。論文の個体ごとの値など。欠測は空・`NA`・`NaN`・`null`、数として読めない値は誤り）。論文側の表は MetaboLights の MAF `{"source": "maf", "path"}`・Metabolomics Workbench の mwTab `{"source": "mwtab", "path"}`・補足の xlsx `{"source": "xlsx", "path", "sheet": null, "feature_column": "A", "first_sample_column": "B"}`（下の「外部の表」） |
 | `groups` | データセットなら `metadata` | `metadata` は実験情報シート（`group`・`role`・`include`）。TSV は `{"source": "tsv", "path", "sample_column": "sample", "group_column": "group", "role_column": null}`。外部の行列には TSV が要る |
 | `comparison` | 必須 | `reference`（基準）と `test`（比較）の群の名前。比較名は `<test>_vs_<reference>` |
 | `injection_order` | `null` | ドリフト補正の注入順。`{"source": "metadata"}` か TSV `{"source": "tsv", "path", "sample_column", "order_column": "order"}` |
 | `covariates` | `null` | OLS の共変量の TSV `{"path", "sample_column": "sample", "missing": "drop" \| "error", "columns": [{"name", "type": "numeric"} \| {"name", "type": "categorical", "reference"}]}`。カテゴリは基準の水準に対する 0/1 の列に符号化する |
-| `features` | `{"all": true, "merge_split": true}` | 報告する特徴（`{"feature_ids": [...]}` で絞る）と、割れたスポットのまとめ（下の「割れたスポットのまとめ」）。BH の母集団は `bh_population` が決める。`merge_split` は無ければ true（v8 の既定）、`alignment_qc` は `dataset_alignment_qc` の `output_path` の JSON のパス（任意） |
-| `aggregate` | `null` | 1 本に集約して検定する。`{"kind": "sum", "label", "feature_ids": [...]}`・`{"kind": "sum", "label", "select": {"name_regex", "evidence": ["sme"]}}`（クラスの主張）・`{"kind": "ratio", "label", "numerator", "denominator"}`（比の主張） |
+| `features` | `{"all": true, "merge_split": true}` | 報告する特徴（`{"feature_ids": [...]}` で絞る）と、割れたスポットのまとめ（下の「割れたスポットのまとめ」）。BH の母集団は `bh_population` が決める。`merge_split` は無ければ true（v8 の既定）、`alignment_qc` は `dataset_alignment_qc` の `output_path` の JSON のパス（任意。`dataset_alignment_qc` がハンドルに持つ最後の結果は**使わない**——spec だけで再現するため） |
+| `aggregate` | `null` | 1 本に集約して検定する。`{"kind": "sum", "label", "feature_ids": [...]}`・`{"kind": "sum", "label", "select": {"name_regex", "evidence": ["sme"]}}`（クラスの主張）・`{"kind": "ratio", "label", "numerator", "denominator"}`（比の主張）。和はメンバーごとの寄与（`contributions`）も返す。**`features.feature_ids` とは併用できない**（報告するのは集約した 1 本なので、報告する特徴の定義がぶつかる。`ANALYSIS_SPEC_INVALID`・`field: features`。種ごとの行は `aggregate` の無い別の spec で回す） |
+| `correlate` | `null` | 外部の表の値との Spearman の ρ（下の「外部の表との相関」）。報告の数字（行・q）は変えない |
 
 解析（`analyses[]`）:
 
@@ -152,9 +164,63 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 比をとるので、割れた 2 スポットが両方選ばれても 1 回だけ数える（`aggregate.members` は選んだままの
 並び、`summed` はまとめた後の並び、`aggregate.merged_from` は選んだ特徴のうちまとめたもの。比の分子と
 分母が同じ物質にまとまるなら `ANALYSIS_SPEC_INVALID`）。行列に 2 つ揃わない群（別の run の JSON など）は
-まとめず、結果の `merge_split.skipped` に挙げる。外部の行列（`input.source=tsv`）にはアライメントが無く、`merge_split` は
-何もしない（`features.alignment_qc` と `bh_population=annotated` は `ANALYSIS_SPEC_INVALID`）。
-`merge_split=false` にすると 2 スポットのまま検定する（`alignment_qc` は書けない）。
+まとめず、結果の `merge_split.skipped` に挙げる。外部の行列（`input.source` が `dataset` 以外）にはアライメントが無く、
+`merge_split` は何もしない（`features.alignment_qc` は効かないので捨てて `notes` に書く。`bh_population=annotated` は
+`ANALYSIS_SPEC_INVALID`）。`merge_split=false` にすると 2 スポットのまま検定する（`alignment_qc` は効かないので捨てて
+`notes` に書く）。`dataset_alignment_qc` がハンドルに持つ最後の結果（§9）は使わない——同じ spec なら誰が回しても
+同じ組でまとめるため。既定でない閾値の組を使うなら、その JSON を `features.alignment_qc` に書く。
+
+**外部の表（MAF・mwTab・xlsx）。** 論文側の値の表を、特徴 × 試料の行列として読む（標準ライブラリだけ。
+reanalysis-study の読み取りを移したもの）。数として読めないセル（`ND`・`<LOQ` など）と非有限の値は欠測にし、
+**空でない読めないセルの数と例**（`input_read.n_unreadable_cells`・`unreadable_examples`。例は最大 5 種）を返す
+（黙って捨てない。空・`NA`・`NaN`・`null`・`none` は欠測で数えない）。試料・特徴の重複は `ANALYSIS_INPUT_INVALID`、
+ファイルが無ければ `ANALYSIS_INPUT_NOT_FOUND`。群は TSV で渡す（`groups.source=metadata` は使えない）。
+
+- **MAF**（`m_*.tsv`）: 見出しの `smallmolecule_abundance_std_error_sub` より右の列が試料。特徴 ID は
+  `row_<n>:<metabolite_identification>`（`n` は見出しの次の行を 1 とするデータの行の番号。空の行も数えるので、
+  同じ名前の行も別の特徴）。見出しにこの列が無ければ `ANALYSIS_INPUT_INVALID`。
+- **mwTab**（テキスト形式）: `MS_METABOLITE_DATA_START` 〜 `MS_METABOLITE_DATA_END` の区画。1 行目が `Samples`、
+  `Factors` の行は読まない。特徴 ID は 1 列目の名前。
+- **xlsx**: 1 枚のシート（`sheet` を省けば先頭。無い名前はあるシートの名前を添えて `ANALYSIS_INPUT_INVALID`）の
+  横長の表。列は Excel の文字（`A`・`B`・`AA`。`first_sample_column` は `feature_column` より右）。見出しの行は
+  2 つの列の両方に値がある最初の行で、それより上の表題・注記は読まない。試料は見出しの行の
+  `first_sample_column` から右の空でないセル。試料のセルに数が 1 つも無く、欠測の印でない文字がある行
+  （群の見出しなど）は特徴にせず、その数と名前の例（最大 5）を `input_read.n_rows_skipped_as_text`・
+  `rows_skipped_as_text` に返す（xlsx だけの欄）。欠測の印（`ND`・`n.d.`・`NQ`・`BDL`・`LOD`・`LOQ`・`tr`・
+  `-`・`n/a`・`not detected`、`<`・`>`・`≤`・`≥` で始まるもの（`<LOQ`・`<0.1`）、`#` で始まる Excel のエラー値）
+  だけの行は、どの試料でも検出されなかった物質として特徴に読み、そのセルを読めないセルに数える。spec の
+  特徴 ID（`features.feature_ids`・`aggregate`・`correlate.pairs`）が飛ばした行の名前なら、`FEATURE_NOT_FOUND`
+  がそう書き添える（`details.skipped_as_text`）。式は計算せず、保存された値を読む。
+
+`rule_hash` にパス（`path`）は入らない。ファイルの sha256 は `input_fingerprint.files.matrix`。
+
+**外部の表との相関（`correlate`、任意）。** 論文の表の値とこちらの値の一致を、特徴の対応ごとの Spearman の ρ で
+見る（較正用。判定はしない）。
+
+```json
+"correlate": {"external": {"source": "mwtab", "path": "ST000000.txt"},
+              "pairs": [{"feature_id": "1265", "external_id": "Glucose"}],
+              "sample_map": {"path": "map.tsv", "sample_column": "sample", "external_column": "external_sample"},
+              "stage": "input"}
+```
+
+- `external` は外部の表（`input` と同じ形: TSV・MAF・mwTab・xlsx）。`pairs` はこちらの `feature_id` と外部の表の
+  特徴 ID（`external_id`）の組で、**対応は spec が渡す**（名前の照合はしない）。どちらかの側に無い ID は
+  `FEATURE_NOT_FOUND`（割れの消える側の ID は残す ID に当たる。行の `merged_into`）。
+- `sample_map`（任意）は試料名の対応の TSV（こちらの試料 → 外部の表の試料）。無ければ同じ名前で照合する。
+  当たった試料だけを使い、1 つも当たらなければ `SAMPLE_MISMATCH`。対応は 1 対 1 で、こちらの試料の重複も、
+  外部の同じ試料を複数の試料が指す対応（外部の 1 つの値を 2 回数えて n と p が膨らむ）も `SAMPLE_MISMATCH`
+  （`details.duplicated` / `duplicated_external`。反復の注入は対応表に 1 つだけ書く）。
+- `stage`: `input`（既定。読んだ行列＝割れのまとめの後・recipe の前。群・役割を問わず当たった全試料）か
+  `matrix`（解析ごとの recipe の後の行列・集約の前。行に `analysis_id`。recipe が落とした特徴は
+  `reason: not_in_matrix`）。
+- ρ は両方が有限の試料だけで、同順位は平均の順位、p は t 近似（`scipy.stats.spearmanr` と同じ）。組が 5 未満なら
+  ρ と p は null（`reason: too_few_pairs`）、どちらかが一定なら null（`constant`）。
+- 結果の `correlate` は `{stage, external（読み取りの要約）, n_samples_matched, unmatched_samples,
+  unmatched_external_samples, rows: [{analysis_id, feature_id, external_id, merged_into, n, rho, p, reason}]}`。
+  戻り値の TSV の行は ρ を小数 4 桁、p を有効 4 桁にする（小さい p も 0 にしない。JSON は丸めない）。
+  外部の表と対応表の sha256 は `input_fingerprint.files` の `correlate.external`・`correlate.sample_map`。
+  書いたときだけ正規化した spec と `rule_hash` に入る（書かない spec の hash は変わらない）。
 
 **試料の照合は完全一致。** 群の TSV は行列の試料と過不足なく一致しなければ
 `SAMPLE_MISMATCH`（欠け・余り・重複を名前で挙げる）。注入順・共変量の TSV は行列の試料を
@@ -178,17 +244,35 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 | `merged_from` | 割れた 2 スポットをまとめた特徴だけ、まとめた特徴 ID（先頭が `feature_id` = 残した ID。受け持ちの多い側、同数なら小さい ID）。ほかは null（TSV では `;` 区切り） |
 | `detected_reference` / `detected_test` | 検定に入れた群の試料のうち、検出された（gap-fill でない）数。gap-fill は数えない。まとめた特徴は「どちらかのスポットで検出」の試料を数える。外部の行列・検出状態の無いデータセット・`aggregate` の行・`not_in_matrix` の行は null。群の試料数は `n_ref` / `n_test` ではなく群の `members`（値が欠けた試料も入る） |
 | `detection_fisher_p` | 検出の有無（検出 / 未検出）の 2×2 に対する Fisher の正確検定の両側 p（上の 2 欄が null なら null） |
+| `constant_in_group` | 一方の群の値（検定に入れる行列の値。変換の前）が、有限の値 2 つ以上ですべて同じなら、その群の名前（TSV では `;` 区切り。両群なら 2 つ）。ほかは null。未検出を同じ値で埋めた群（補完の `half_min` など）の印で、検定の値は変えない（**判定には使わない**。差が埋め値から来ていないかを見る）。行の最後の欄 |
 | `detection_driven` | 差が値の大小より検出の有無から来ているか。高い側の群（`direction`）の検出が群の試料数の半分に満たない（`<`）か、低い側の群の検出が 0 なら true。`status` が `tested` で向きがある行だけ（ほかは null）。`direction` が null の行は `detection_driven` も null（一方の群の平均がちょうど 0 で、変換も補完も無い行は向きが決まらないので、検出の差が大きくても null）。**判定（`meets_thresholds` など）は変えない。使い方は手順書** |
 
 解析ごとに `matrix`（`n_features_in`（まとめた後、recipe の前）・`n_features_out`（recipe の後）・段ごとの報告
-`steps`）、`bh_population_n`、`detection_available`（検出の例数を出せたか）・`n_detection_driven`（要約のみ）、集約なら `aggregate`（和: `members`・`summed`・`dropped`、まとめがあれば
-`merged_from`）、OLS なら `covariate_excluded_samples`。
+`steps`）、`bh_population_n`、`detection_available`（検出の例数を出せたか）・`n_detection_driven`・`n_constant_in_group`（要約のみ）、集約なら `aggregate`（和: `members`・`summed`・`dropped`、まとめがあれば
+`merged_from`、寄与 `contributions` と `n_samples_for_shares`。比: `numerator`・`denominator`・`dropped`）、OLS なら `covariate_excluded_samples`。
+
+**和の寄与（`aggregate.contributions`）。** 和の各メンバー（`summed` の順）が和に占める割合（試料ごとの
+メンバー ÷ 和。値は行列の値＝変換の前）の要約 `{feature_id, share_median, share_median_ref, share_median_test,
+share_max}`。使うのは比べる 2 群の試料のうち和が有限で正のもの（その数が `n_samples_for_shares`）で、
+`share_median` は 2 群を合わせた中央値、`_ref` / `_test` は群ごと、`share_max` は最大。少数の種が和を支配して
+いないか・群で寄与が入れ替わっていないかを見る材料で、判定には使わない（試料ごとの割合の和は 1 だが、
+中央値の和は 1 とは限らない）。
 結果の全体に `spec`（正規化後）・`rule_hash`・`merge_split`（`enabled`・`source`: `find_split_pairs` か
 `alignment_qc`・`groups`: まとめた群（残す ID が先頭）・`groups_hash`・`n_groups_given`・`skipped`）・
-`input_fingerprint`（`dataset_hash`・入力の TSV と `alignment_qc` の JSON ごとの sha256）・`comparison`。
+`input_fingerprint`（`dataset_hash`・入力の TSV と `alignment_qc` の JSON ごとの sha256）・`comparison`、
+外部の表（MAF・mwTab・xlsx）の入力なら `input_read`（`{source, n_features, n_samples, n_unreadable_cells,
+unreadable_examples}`。xlsx は `n_rows_skipped_as_text`・`rows_skipped_as_text` も）、`correlate` を書いたなら `correlate`、効かない設定を捨てたなら `notes`。
 `rule_hash` は正規化した spec（パスを除く）に、データセットの入力で `merge_split` が真なら使った群の
 hash も入れる——同じ spec でも割れの組が変われば別の規則で、`merge_split` を変えても変わる
 （外部の行列では `merge_split` は hash に入らない）。
+
+**戻り値（v1）。** `{status, schema, rule_hash, merge_split: {enabled, source, n_groups_used, n_groups_skipped,
+groups_hash}, input_fingerprint, input_read?, comparison, group_ref, group_test, output_path?, analyses, correlate?,
+notes?, note}`。`analyses[]` は解析ごとの要約（`n_rows`・`n_tested`・`n_meets_thresholds`・`n_constant_in_group` ほか。
+和の `aggregate.contributions` は TSV）。`output_path` を省けば解析ごとに行を TSV（`rows`。上の行の欄の順）で返し、
+**50 行を超える解析は p の小さい順の先頭 50 行だけ**を載せる（`truncated: true`・`rows_order: "p_ascending"`。
+`n_rows` は全件。p が null の行は後ろ。断らない）。`correlate` の行も TSV で、50 を超えれば先頭だけ（`truncated`）。
+全量は `output_path` の JSON。
 
 ### 2.1 統計エンジンの spec（analysis-spec.v2）と結果（analysis-result.v2）
 
@@ -246,9 +330,9 @@ sample_table_hash}, primary, warnings, analyses}`。`analyses[]` は解析ごと
 `n_units`・`n_qc_projected`・`n_features`・`explained_variance_ratio`、plsda は `classes`（cell → 個体数）・`n_units`・
 `n_features`・`scaling`・`imputation`・`n_components`・`r2x_cum`・`r2y_cum`・`q2_cum`・`q2`・`cv`・`permutation`・`vip_top`
 （VIP の上位 10）・`warnings`（pca と plsda は行を持たない）。長い一覧は切る。全量（行・CI・事前分布・交絡の
-表・PCA のスコア）は `output_path` の JSON に書く。**行を返すのは、どの解析も行数が 50 以下のときだけ**（v1 と同じ。
-TSV の列は `contrast_id feature_id status reason log2fc ci_low ci_high p q verdict`、composition は先頭に `table` 列）。
-50 を超える解析があって `output_path` が無ければ `ANALYSIS_OUTPUT_REQUIRED`。`rule_hash` は正規化した spec の hash
+表・PCA のスコア）は `output_path` の JSON に書く。`output_path` を省けば行を TSV で返し（列は `contrast_id feature_id
+status reason log2fc ci_low ci_high p q verdict`、composition は先頭に `table` 列）、**50 行を超える解析は p の小さい順の
+先頭 50 行だけ**を載せる（v1 と同じ。`truncated: true`・`rows_order: "p_ascending"`・`notes`。断らない）。`rule_hash` は正規化した spec の hash
 （実行のたびに変わる値を含まない）、`matrix_id` は前処理の入力と設定の hash（同じなら同じ ID）。
 
 **`analysis-result.v2` の全量（`output_path` の JSON）。** `{schema, spec（正規化後）, rule_hash, input_fingerprint,
@@ -315,7 +399,8 @@ matrix_id, preprocess: {steps, warnings, subject_source}, primary, analyses: [{a
 
 ## 3. 行列の recipe（matrix-recipe.v2）
 
-`steps` に挙げた段だけを、挙げた順に走らせる（挙げない段の設定は拒否する）。篩の段
+`steps` に挙げた段だけを、挙げた順に走らせる（挙げない段の設定は効かないので捨て、`notes` に書く。
+正規化した recipe にも `rule_hash` にも入らない）。篩の段
 （`detection_filter`・`qc_rsd_filter`）で落とした特徴はその直後に行列から外す——後の KNN の
 近傍・PQN の参照に混ざらない。既定（正規化で埋まる）:
 
@@ -483,9 +568,11 @@ detected` の **TSV**（列名 1 回、`rows` の文字列。依頼の特徴の�
 - `height`: データセットの強度の行列（`feature_matrix`）の値。`measure` で選んだ `.arf` の欄で、定量
   （`dataset_quant_apply` ほか）で値を変えたデータセットではその値。
 - `detected`: `detected_mask`（gap-fill なら false）。
-- 1 回 200 特徴まで。超過・知らない特徴 ID・空のリストは `DATASET_BAD_REQUEST`。ID は int でも str でもよい。
-- 戻り値に載せる行（特徴 × 試料）は **1,000 行まで**。超えるとき `output_path` が無ければ `DATASET_BAD_REQUEST`
-  （details: `n_samples`・`max_rows`（1000）・`n_rows`・`max_features_per_call` = floor(1000 / 試料の数)、少なくとも 1）。
+- 特徴の数に上限は無い。知らない特徴 ID・空のリストは `DATASET_BAD_REQUEST`。ID は int でも str でもよい。
+- 戻り値に載せる行（特徴 × 試料）は **1,000 行まで**。超えるとき `output_path` が無ければ**断らず**、依頼の順の
+  先頭の特徴の行を特徴ごとにそろえて（1 つの特徴の試料を途中で切らない）floor(1000 / 試料の数) 特徴分だけ載せる
+  （試料が 1,000 を超えれば最初の特徴の先頭 1,000 行）。戻り値は `truncated: true`・`n_rows`（全件）・
+  `n_rows_shown`・`n_features_shown`・`notes`（`truncated` はいつも付く。超えなければ false）。
   `output_path` があれば全量の TSV（同じ列・列名 1 回）をそのファイルへ原子的に書き、戻り値は要約
   `{status, n_features, n_samples, n_rows, output_path, sha256}`（`rows` は付かない。ほかの再解析のツールの
   `output_path` と同じ扱い。1,000 行以下でも `output_path` を渡せば同じく要約）。
@@ -561,6 +648,11 @@ spec:
 その特徴での統計は `dataset_analysis_run`（`features.feature_ids`）で別に出す。同じ spec・
 同じ入力なら同じ JSON になる（オブザーバーの「走らせ直しと照合」は JSON の一致で済む）。
 
+**戻り値。** `output_path` を省けば束をそのまま返す。候補が 10 を超えるときは `output_path` が要り、無ければ
+`ANALYSIS_OUTPUT_REQUIRED`（`details.n_candidates`）で断る——ほかの再解析のツールの「先頭の行と `truncated`」の
+扱いはまだ当てていない。`output_path` があれば JSON を書き、要約（`claim_id`・`rule_hash`・`input_fingerprint`・
+`default_selection`・`n_candidates`・`truncated`・走査ごとの判定）だけを返す。
+
 ## 8. 質量精度と新しい知見の候補
 
 `dataset_mass_accuracy(band_edges=[200], rank=1)`: SME の `rank` 位の候補の
@@ -629,8 +721,16 @@ log2fc_test_over_ref p q direction merged_from`（JSON には `sme_feature_id` �
 `merge_split=false`（または analysis_spec の `features.merge_split=false`）では、行・戻り値・`rule`・`rule_hash` が
 v7 と同じ（`merged_from`・`sme_feature_id`・`merge_split` を出さず、正規化した spec にも `merge_split` を載せない）。
 `statistics.result_id` の spec は `{"result_id", "merge_split": true（既定）, "alignment_qc": <JSON のパス、任意>}`
-（`alignment_qc` は `dataset_alignment_qc` の `output_path`。省略時はその場で探す。`rule_hash` にパスは入らない）。
-戻り値と JSON の `merge_split` は `{enabled, source, n_groups}`（`n_groups` はまとめた組の数）。
+（`alignment_qc` は `dataset_alignment_qc` の `output_path`。省略時はこのハンドルで `dataset_alignment_qc` が最後に
+出した結果（§9。データ・試料の表・除外が変わっていないもの）、それも無ければその場で探す。`rule_hash` にパスは
+入らない）。`merge_split=false` の `alignment_qc` は効かないので捨てて `notes` に書く（`rule_hash` は書かないときと同じ）。
+`statistics.analysis_spec` の効かない設定も、欄の名前の前に `statistics.analysis_spec: ` を付けて `notes` に書く
+（analysis_spec では最後の結果は使わない。spec だけで再現する）。
+戻り値と JSON の `merge_split` は `{enabled, source, n_groups}`（`n_groups` はまとめた組の数。`source` は
+`alignment_qc`（ファイル）・`last_alignment_qc`（ハンドルの最後の結果）・`find_split_pairs`（その場））。
+
+**行の上限。** `output_path` を省けば行を TSV で返し、50 を超えれば q の昇順の先頭 50 行だけを載せる
+（`truncated: true`・`n_rows` が全件・`notes`。断らない）。`truncated` は行を返すときいつも付く。全量は `output_path` の JSON。
 
 **外部の印（`labels`、任意）**。spec に `"labels": {"path": "<TSV>", "name": "xenobiotic", "feature_column": "feature_id",
 "label_column": "level", "order": ["A","B","C","D"]}` を足すと、行に `labels.<name>` の列（TSV の末尾。印が無い行は空）を足す。
@@ -706,7 +806,8 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
   エラー）・`filename`（1 試料でも
   欠ければ試料名の順。`block.injections` はその順位）。
 
-`output_path` の JSON:
+`output_path` の JSON（キーは昇順。長いリストは要素ごとに改行する——`pairs` は 1 組 1 行で、行の範囲で読める。
+共通の約束）:
 
 ```json
 {"schema": "alignment-qc.v1",
@@ -758,8 +859,17 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
   まとめない特徴は `partners` が空・`mergeable` が偽・`merge_group_id` が null。`component` は全体の
   成分のほかの特徴（報告用）。
 - 戻り値は `status`・`schema`・`injection_order_source`・`signal`（`detected` / `values`）・`summary`・
-  `output_path`（渡したとき）と、`group_aligned` の組（50 件以下のとき TSV: `pair_id feature_a
-  feature_b mz rt_a rt_b delta_rt adduct name_a name_b`）。
+  `kept_on_handle: true`・`output_path`（渡したとき）と、`group_aligned` の組があれば `n_group_aligned`（全件）・
+  `group_aligned_truncated`・先頭 50 組の TSV `group_aligned`（`pair_id feature_a feature_b mz rt_a rt_b delta_rt
+  adduct name_a name_b`。超えれば `notes` に、全組は `output_path` の JSON の `pairs` にあると書く）。
+- **最後の結果はハンドルに持つ**（`kept_on_handle`）。`output_path` と同じ中身（同じバイト列の sha256）を、
+  そのハンドル（データセット）に最後の 1 つとして持ち、前の結果は置き換える。`dataset_feature_search` の
+  `alignment_qc_path`・`dataset_novel_candidates` の `statistics.alignment_qc` を省いたときは、まずこれを使う
+  （`merge_split.source: last_alignment_qc`。`alignment_qc_sha256` はファイルで渡したときと同じ値）。既定でない
+  閾値（`ppm` ほか）で回した組を、パスを渡し直さずに使うため。**使わないのは**、データの指紋
+  （`dataset_fingerprint`）が作ったときと違うとき、試料の表・除外が変わったとき（`metadata_revision`。
+  `dataset_exclude`・`dataset_set_sample_metadata`）——群と注入順で型が変わるので、そのときは捨ててその場で探す。
+  `dataset_analysis_run` は使わない（spec だけで再現する決まり。§2）。
 
 ## 10. 根拠バンドル v3（evidence-v3）
 

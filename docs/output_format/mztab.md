@@ -356,7 +356,7 @@ BH をやり直して、`stats` の**すべての行**をそこから出す（�
 |---|---|
 | `stats` | まとめた後の値。まとめる組がデータセットに 1 つでもあれば**すべての行**をまとめた行列で検定し直した値にする（1 つの表の q は 1 つの BH の母集団から。組に入らない特徴も、正規化と BH はまとめた行列で回り直す）。組に入る特徴は 1 行（`feature_id` は組の残す ID＝受け持ちの多い側（同数なら小さい ID）。消える側の ID を頼んでも残す ID の行に解き、`notes` に書く）で、末尾の `merged_from` に 2 つの ID を `;` で（組に入らない行は空）。組が無ければ検定はやり直さず従来の値 |
 | `stats_unmerged` | まとめる前の従来の `stats`（頼んだ ID のまま・同じ列。`merged_from` は無い） |
-| `merge_split` | `{enabled, source, alignment_qc_sha256, n_groups, groups, renamed, recomputed, bh_population}`。`source` は `find_split_pairs`（その場で既定の閾値）か `alignment_qc`（`alignment_qc_path` の JSON）、`n_groups` はデータセットでまとめる組の数、`groups` はそのうち統計を付けた特徴に関わる組、`recomputed` は検定し直した result_id（組が無ければ空で、検定はやり直さない）、`bh_population` は検定し直した結果ごとの母集団（`n_features_total` はまとめた後の特徴数） |
+| `merge_split` | `{enabled, source, alignment_qc_sha256, n_groups, groups, renamed, recomputed, bh_population}`。`source` は `find_split_pairs`（その場で既定の閾値）・`alignment_qc`（`alignment_qc_path` の JSON）・`last_alignment_qc`（`dataset_alignment_qc` がこのハンドルに持つ最後の結果）、`n_groups` はデータセットでまとめる組の数、`groups` はそのうち統計を付けた特徴に関わる組、`recomputed` は検定し直した result_id（組が無ければ空で、検定はやり直さない）、`bh_population` は検定し直した結果ごとの母集団（`n_features_total` はまとめた後の特徴数） |
 
 `dataset_compare` の結果（統計エンジン）は、記録した spec（`input` の除外・群の上書きを含む）を、まとめた行列（`merge_feature_columns`。
 ゼロと NaN を「無い」として試料ごとに大きい方）で `run_spec_v2` に当て直し、`as_two_group` で同じ対比を取り直す
@@ -366,7 +366,9 @@ BH をやり直して、`stats` の**すべての行**をそこから出す（�
 まとめる前の数字をまとめた後の顔では返さない（`FEATURE_MERGE_UNAVAILABLE` のときは `merge_split=false` で呼び直す）。
 `merge_split=false` なら従来どおりで、`stats_unmerged` も `merged_from` 列も無く `merge_split` は
 `{"enabled": false}`。`alignment_qc_path` は `dataset_alignment_qc` が今のデータセットで書いた JSON だけを
-受け（`dataset_fingerprint` が違えば `ANALYSIS_INPUT_INVALID`）、`merge_split=false` とは併用できない。
+受け（`dataset_fingerprint` が違えば `ANALYSIS_INPUT_INVALID`）、`merge_split=false` とは併用できない。省けば
+`dataset_alignment_qc` がこのハンドルに持つ最後の結果（データ・試料の表・除外が変わっていないもの。`reanalysis` §9）、
+それも無ければその場で探す。
 
 **目標照合でも組は 1 つの候補。** `merge_split=true` では、判定（`targets[*]` の `status`・`counts`）を数える
 単位が「組の残す ID」になる——組の 2 スポットが同じ箱（層・水準）に qualified で入っても 1 つと数え、
