@@ -323,6 +323,7 @@ def test_group_change_makes_the_pca_figure_refuse_to_save(tmp_path):
     assert json.loads(dataset_set_sample_metadata(str(manifest)))["status"] == "success"
 
     err = json.loads(reports.save_figure("pca", "meta-1"))["error"]
+    # 試料の表の更新が図ごと捨てたので「図が無い」（missing_state）。捨て損ねた古い図は STALE_FIGURE
     assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
     assert not (tmp_path / "reports" / "figures" / "meta-1_pca.png").exists()
     dataset_pca(n_components=3)
@@ -343,12 +344,12 @@ def test_pca_figure_with_baked_metadata_is_stale_when_the_revision_moves(tmp_pat
     ds.metadata_revision += 1                         # 情報の更新（apply_metadata が進める版）
     assert not is_current(ds, ds.last_pca) and "pca" in ds.figures   # 統計エンジンの PCA は版が動けば古い
     err = json.loads(reports.save_figure("pca", "rev-1"))["error"]
-    assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
-    assert "作り直" in err["message"]
+    assert err["code"] == "STALE_FIGURE" and err["details"]["required_tools"] == ["dataset_plot"]
+    assert "作り直" in err["message"] and err["details"]["kind"] == "pca"
     assert not (tmp_path / "reports" / "figures" / "rev-1_pca.png").exists()
     # 試料の情報を焼き込まない図（loadings）も、元の結果が古ければ保存できない（統計エンジンの PCA は版に縛られる）
     err = json.loads(reports.save_figure("loadings", "rev-1"))["error"]
-    assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
+    assert err["code"] == "STALE_FIGURE" and err["details"]["required_tools"] == ["dataset_plot"]
     assert not (tmp_path / "reports" / "figures" / "rev-1_loadings.png").exists()
 
 
@@ -421,12 +422,16 @@ def test_save_figure_rejects_old_arguments_and_kinds():
     import inspect
 
     params = inspect.signature(reports.save_figure).parameters
-    assert list(params) == ["kind", "analysis_id", "title", "result_id", "dataset_handle"]
+    assert list(params) == ["kind", "analysis_id", "title", "result_id", "dataset_handle", "contrast_id"]
     out = json.loads(reports.save_figure("heatmap", "x"))
     assert out["status"] == "error" and "pca" in out["message"]
     assert "pca_loadings" not in out["message"]
     err = json.loads(reports.save_figure("eic", "x", result_id="r1"))
     assert err["status"] == "error" and "result_id" in err["message"]
+    err = json.loads(reports.save_figure("pca", "x", contrast_id="T_vs_C"))
+    assert err["status"] == "error" and "contrast_id" in err["message"]
+    # 説明文に「明示的なユーザー要求時だけ」の縛りは無い（報告書に埋め込む図を保存する）
+    assert "明示的" not in reports.save_figure.__doc__
 
 
 def test_save_figure_reads_the_chosen_handle(tmp_path):
@@ -538,3 +543,67 @@ def test_feature_search_accepts_int_ids_through_fastmcp(tmp_path):
             "feature_ids": ids, "dataset_handle": handle.handle_id})
         by_type[label] = json.loads(_content_text(out))
     assert by_type["int"]["features"] == by_type["str"]["features"]
+
+# ---------- dataset_plot(output_path=...) ----------
+
+def test_output_path_writes_the_drawn_figure(tmp_path):
+    ds = _analysed()
+    out = tmp_path / "out" / "deep" / "scores.png"
+    body = plot_tools.dataset_plot(kind="pca", output_path=str(out))
+    assert isinstance(body, list) and str(out) in body[0]
+    assert out.is_file() and out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert ds.figures["pca"]["kind"] == "pca"
+    # loadings は報告書用と同じく dpi 300 の PNG と同名の SVG
+    load = tmp_path / "load.png"
+    payload = json.loads(plot_tools.dataset_plot(kind="loadings", top_n=3, output="payload",
+                                                 output_path=str(load)))
+    assert payload["saved_files"] == [str(load), str(load.with_suffix(".svg"))]
+    assert load.is_file() and load.with_suffix(".svg").is_file()
+    assert payload["plot_schema"] == "lipidmix.pca_loadings.v1"
+    # 同じパスは上書き
+    assert plot_tools.dataset_plot(kind="pca", output_path=str(out))
+
+
+def test_output_path_must_be_a_png_and_writable(tmp_path):
+    ds = _analysed()
+    err = json.loads(plot_tools.dataset_plot(kind="pca", output_path=str(tmp_path / "x.svg")))["error"]
+    assert err["code"] == "DATASET_BAD_REQUEST" and err["details"]["output_path"].endswith("x.svg")
+    plot_tools.dataset_plot(kind="pca")
+    before = ds.figures["pca"]
+    blocker = tmp_path / "afile"
+    blocker.write_text("x", encoding="utf-8")                  # 親のフォルダの位置にファイルがある
+    err = json.loads(plot_tools.dataset_plot(kind="pca", output_path=str(blocker / "x.png")))["error"]
+    assert err["code"] == "FIGURE_SAVE_FAILED"
+    assert ds.figures["pca"] is before                         # 書けなければ図の置き場は変えない
+    # output_path はどの kind の引数でもある（kind の引数の取り違えにしない）
+    assert plot_tools.dataset_plot(kind="volcano", output_path=str(tmp_path / "v.png"))
+    assert (tmp_path / "v.png").is_file()
+
+
+def test_input_read_errors_are_not_reported_as_save_failures(tmp_path, monkeypatch):
+    """図を組み立てる間の OSError（`.EIC.aef` が読めない等）は FIGURE_SAVE_FAILED にしない（書くときだけ）。"""
+    ds = _analysed()
+
+    def locked(_ds, _request):
+        raise PermissionError(13, "The process cannot access the file", "x.EIC.aef")
+
+    before = ds.figures.get("pca")
+    monkeypatch.setitem(plot_tools._KINDS, "pca", locked)
+    for kwargs in ({}, {"output_path": str(tmp_path / "never.png")}):
+        with pytest.raises(PermissionError):
+            plot_tools.dataset_plot(kind="pca", **kwargs)
+    assert not (tmp_path / "never.png").exists() and ds.figures.get("pca") is before
+
+
+def test_dataset_plot_png_is_capped_in_pixels(tmp_path):
+    import io
+
+    from PIL import Image as PILImage
+
+    from metabolomix.plots import render
+
+    _analysed()
+    body = plot_tools.dataset_plot(kind="pca")
+    with PILImage.open(io.BytesIO(body[1].data)) as image:
+        width, height = image.size
+    assert width * height <= render.MAX_IMAGE_PIXELS * 1.05

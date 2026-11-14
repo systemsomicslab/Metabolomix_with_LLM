@@ -143,24 +143,49 @@ def stats_meta_lines(result: dict) -> list[str]:
     `mean_a` / `mean_b` は個体（単位）ごとの前処理後の線形値の算術平均（`mean_definition`）、
     `n_a` / `n_b` は注入の数のまま、`n_units_a` / `n_units_b` が比較に入った単位の数。
     `contrast_id` は `matrix_id` の行の末尾（どの対比を書いたかを残す）。`bh_n` は BH の母集団が空
-    （対比の n が無い）なら 0。`significant_rule` は 15 列目 `significant` の規則（R16。`row_significant`）。
+    （対比の n が無い）なら 0。`p_adjust_method` は `q_value` を作った多重比較の補正（`bh` / `bonferroni` /
+    `holm` / `none`。宣言の無い結果は `bh`）。`bh_population` / `bh_n` はその補正の母集団（名前は BH のときの
+    まま）、`q_interpretation` は補正の方法に合わせた `q_value` の読み方（`as_two_group` が決める:
+    `discovery_fdr` / `reproduction_only` / `fwer` / `unadjusted`）。`significant_rule` は 15 列目
+    `significant` の規則（R16。`row_significant`）。
+    交互作用（`contrast_kind == "interaction"`）は `mean_definition` を「定義しない（空欄）」にし、末尾に
+    `contrast_kind` / `interaction_factors` / `interaction_levels` / `interaction_definition` の 2 行を足す
+    （2 群の対比の行数は変えない）。`interaction_levels` は因子ごとに `<因子> reference <a0> test <a1>`
+    （`>` は大小と読めるので使わない）。
     """
     stats = result["statistics"]
     rule = stats["verdict_rule"]
     bh = stats["bh_population"]
     unit = unit_of(stats.get("subject_source"))
     bh_n = bh.get("n") or 0
-    return [
+    interaction = result.get("contrast_kind") == "interaction"
+    lines = [
         f"# test = {stats['test']}\teffect_size_definition = {result['effect_size_definition']['name']}"
         f"\tci_level = {stats['ci_level']}",
         f"# verdict_q_threshold = {rule['q_threshold']}\tequivalence_fc = {rule['equivalence_fc']}"
-        f"\tbh_population = {bh['name']}\tbh_n = {bh_n}\tq_interpretation = {bh['q_interpretation']}",
+        f"\tbh_population = {bh['name']}\tbh_n = {bh_n}\tq_interpretation = {bh['q_interpretation']}"
+        f"\tp_adjust_method = {stats.get('p_adjust_method') or 'bh'}",
         f"# unit = {unit}\tn_units_a = {stats['n_units_a']}\tn_units_b = {stats['n_units_b']}",
-        f"# mean_definition = {MEAN_DEFINITION}",
+        f"# mean_definition = {INTERACTION_MEAN_DEFINITION if interaction else MEAN_DEFINITION}",
         f"# matrix_id = {result['matrix_id']}\trule_hash = {result['rule_hash']}"
         f"\tcontrast_id = {result['contrast_id']}",
         f"# significant_rule = {SIGNIFICANT_RULE}",
     ]
+    if interaction:
+        info = result["interaction"]
+        a, b = info["factors"]
+        levels = info["levels"]
+        lines += [
+            f"# contrast_kind = interaction\tinteraction_factors = {a} x {b}"
+            f"\tinteraction_levels = {a} reference {levels[a][0]} test {levels[a][1]};"
+            f" {b} reference {levels[b][0]} test {levels[b][1]}",
+            f"# interaction_definition = {info['definition']}",
+        ]
+    return lines
+
+
+#: 交互作用の対比の `mean_definition`（`mean_a` / `mean_b` は空欄）。
+INTERACTION_MEAN_DEFINITION = "not defined for an interaction contrast (mean_a and mean_b are blank)"
 
 
 def unit_of(subject_source) -> str:

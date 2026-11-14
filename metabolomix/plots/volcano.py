@@ -198,7 +198,8 @@ def build_volcano_plot_payload(
     return {
         "plot_schema": VOLCANO_PLOT_SCHEMA,
         "plot_type": "scatter",
-        "title": title or f"Volcano ({group_a} vs {group_b})",
+        # 題の並びは test vs reference（対比 ID `test_vs_ref` と同じ向き。log2fc は正なら b＝test が高い）
+        "title": title or f"Volcano ({group_b} vs {group_a})",
         "comparison": {
             "group_a": group_a,
             "group_b": group_b,
@@ -258,6 +259,6 @@ def render_volcano_plot(last_differential: dict, title: str | None = None):
                        s=12, c=SIG_COLORS[sig], label=sig, alpha=0.7)
     ax.set_xlabel("log2 fold change")
     ax.set_ylabel("-log10 p")
-    ax.set_title(title or f"Volcano ({last_differential.get('a')} vs {last_differential.get('b')})")
+    ax.set_title(title or f"Volcano ({last_differential.get('b')} vs {last_differential.get('a')})")
     ax.legend()
     return fig

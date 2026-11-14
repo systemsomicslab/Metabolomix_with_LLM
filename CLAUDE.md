@@ -222,7 +222,9 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料�
   `.arf` から行列を組む `build_pca_matrix` は D 段で消えた（`tests/test_analysis_pca.py` が `arf/reader.py` に束縛を残さないことを固定）。
 - **対話の統計の結果は `ds.stat_matrices`（行列）と `ds.results`（`kind` が `compare` / `stat_pca`）に住む**。消費側
   （書き出し・根拠バンドル・図・特徴検索）は `compare` の記録を直に読まず、`stats_results.as_two_group` で対比を 1 つ選んだ
-  2 群の形で読む（`contrast_id`、または特徴検索が出す `result_id#contrast_id`）。行列・結果は除外・試料の表の更新・データの
+  2 群の形で読む（`contrast_id`、または特徴検索が出す `result_id#contrast_id`。省いて読める対比が複数なら
+  `as_two_group` の `CONTRAST_REQUIRED` を `tools/_contrast_choice.py` の `contrast_envelope` が `needs_input` にする。
+  交互作用を差の差として読むのは書き出しだけ＝`allow_interaction=True`）。行列・結果は除外・試料の表の更新・データの
   入れ替えで古くなる（`dataset_exclude` は行列も捨てる）。`dataset_analysis_run` の v2 は状態を持たず、spec だけで再現する自己完結の実行。
   利用者に尋ねる問いは `mcp_errors.needs_input`（エラーではない封筒。`retry_tools` は「`argument` を受けて呼び直せるツール」）。
   v1 の前処理・2 群比較（`dataset_service` / `differential.two_group_test`）と pipeline からの結果の引き継ぎは D 段で消した

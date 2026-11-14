@@ -197,12 +197,58 @@ def test_writer_without_samples_stays_v2(tmp_path):     # ARF 経路
 
 def test_tool_description_names_v3_and_domain_error_is_envelope(tmp_path):
     assert "v3" in T.dataset_export_evidence_bundle.__doc__
-    # 探索専用のデータセットの DomainError が TypeError（exc.details()）にならず封筒で返る
     handle, result_id = _handle_with_result(tmp_path)        # ハンドルで preprocess → differential
-    handles.registry.get(handle).dataset.exploratory_only = True
-    out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b"), result_id,
+    # 結果が見つからない DomainError が TypeError（exc.details()）にならず封筒で返る
+    out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b"), result_id + "#nope",
                                                       dataset_handle=handle))
-    assert out["error"]["code"] == "EXPLORATORY_ONLY_DATASET"
+    assert out["error"]["code"] == "CONTRAST_REQUIRED"
+    assert not (tmp_path / "b").exists()
+
+
+def test_exploratory_dataset_is_exported_with_the_mark_in_the_manifest(tmp_path):
+    """未完了の実行の探索専用のデータセットも断らず、manifest の exploratory に印と理由を書く。"""
+    handle, result_id = _handle_with_result(tmp_path)
+    ds = handles.registry.get(handle).dataset
+    out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "a"), result_id, dataset_handle=handle))
+    manifest = json.loads((tmp_path / "a" / "manifest.json").read_text(encoding="utf-8"))
+    assert "exploratory" not in manifest and "exploratory" not in out   # 探索専用でない束は今までどおり
+    ds.exploratory_only = True
+    ds.exploratory_reason = "解析ジョブが完了していない（status partial）"
+    out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b"), result_id, dataset_handle=handle))
+    assert out["contract_version"] == 3
+    assert out["exploratory"] == {"exploratory_only": True, "reason": ds.exploratory_reason}
+    manifest = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["exploratory"] == out["exploratory"]
+    assert manifest["contract_version"] == 3 and manifest["comparison"]["correction"] == "BH"
+
+
+def test_bundle_result_id_defaults_to_the_latest_comparison(tmp_path):
+    handle, result_id = _handle_with_result(tmp_path)
+    out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b"), dataset_handle=handle))
+    assert out["contract_version"] == 3
+    manifest = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["source_analysis_id"] == result_id
+
+
+def test_bundle_without_a_comparison_is_missing_state(tmp_path):
+    from metabolomix.core import session_state
+    from metabolomix.mztab.dataset_state import DatasetState
+
+    ds = DatasetState()
+    ds.analysis_dir = str(tmp_path)
+    session_state.session.dataset = ds
+    err = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b")))["error"]
+    assert err["code"] == "missing_state" and err["required_tools"] == ["dataset_compare"]
+    assert not (tmp_path / "b").exists()
+
+
+def test_bundle_correction_follows_the_records_p_adjust_method(tmp_path):
+    handle, result_id = _handle_with_result(tmp_path)
+    record = handles.registry.get(handle).dataset.results[result_id]
+    record["p_adjust_method"] = "bonferroni"                 # 統計エンジンの記録が持つ補正の方法
+    T.dataset_export_evidence_bundle(str(tmp_path / "b"), result_id, dataset_handle=handle)
+    comparison = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))["comparison"]
+    assert comparison["correction"] == "Bonferroni" and "p_adjust_method" not in comparison["statistics"]
 
 
 def test_tool_passes_handle_polarity(tmp_path):

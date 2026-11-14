@@ -10,6 +10,7 @@
   来歴は `{result_id, kind: "compare"|"stat_pca", dataset_hash, metadata_revision, parent_ids: [matrix_id]}`
   で、古さは `is_stats_current`（`result_state.is_current` もここへ回す）。
 - 読み替え: `as_two_group` が `compare` の記録の 1 つの対比を、利用者が読む 2 群の形（`kind="two_group"`）に写す。
+  2×2 の交互作用（差の差）は `allow_interaction=True` を渡した利用者（差次的の書き出し）だけが同じ形で読む。
 
 試料は**表示名**（`ds.sample_names`）で持つ。エンジンの試料 ID（試料の表があれば `ds.sample_ids`）は
 位置で表示名へ結ぶ（既存の利用者はすべて表示名で試料を引く）。
@@ -30,7 +31,10 @@ from metabolomix.core.atomic_io import DomainError, canonical_hash
 __all__ = [
     "MatrixNotFound",
     "as_two_group",
+    "contrast_choices",
     "contrast_ids",
+    "p_adjust_method",
+    "q_interpretation",
     "get_matrix",
     "sample_ids_by_name",
     "split_result_ref",
@@ -450,6 +454,83 @@ def _cell(assign: dict, factors: list[str]) -> str:
     return ":".join(str(assign.get(f, "")) for f in factors)
 
 
+def _interaction_cells(comp: dict, factors: list[str]) -> tuple[list[str], list[str]]:
+    """2×2 の交互作用の対比の (基準の cell, 比較の cell)。`stats.design` と同じ向き:
+    (a1,b1) と (a0,b0) が +1（比較）、(a0,b1) と (a1,b0) が −1（基準）。"""
+    a, b = comp["factors"]
+    (a0, a1), (b0, b1) = comp["levels"][a], comp["levels"][b]
+    test = [_cell({a: a1, b: b1}, factors), _cell({a: a0, b: b0}, factors)]
+    reference = [_cell({a: a0, b: b1}, factors), _cell({a: a1, b: b0}, factors)]
+    return reference, test
+
+
+def _contrast_label(comp: dict) -> str:
+    """対比の 1 行の説明（`needs_input` の選択肢に出す。向きは test vs reference）。"""
+    if comp.get("kind") == "interaction":
+        a, b = comp["factors"]
+        (a0, a1), (b0, b1) = comp["levels"][a], comp["levels"][b]
+        return (f"interaction {a} x {b}: ({a1} vs {a0} at {b}={b1}) minus "
+                f"({a1} vs {a0} at {b}={b0})")
+    at = comp.get("at") or {}
+    where = f" at {', '.join(f'{k}={v}' for k, v in sorted(at.items()))}" if at else ""
+    return f"{comp['test']} vs {comp['reference']} ({comp['factor']}{where})"
+
+
+def contrast_choices(record: dict, *, allow_interaction: bool = False) -> list[dict]:
+    """`compare` の記録の対比の選択肢 `[{"id", "kind", "label"}]`（spec の順）。
+    `allow_interaction` が偽なら交互作用を除く（2 群の形に読む利用者の選択肢）。"""
+    if (record or {}).get("kind") != "compare":
+        return []
+    return [{"id": c["id"], "kind": "interaction" if c.get("kind") == "interaction" else "simple",
+             "label": _contrast_label(c)}
+            for c in record["spec"]["comparisons"]
+            if allow_interaction or c.get("kind") != "interaction"]
+
+
+#: 多重比較の補正の方法（記録の `p_adjust_method`）。無ければ BH（補正の方法を選べる前の記録）。
+P_ADJUST_METHODS = ("bh", "bonferroni", "holm", "none")
+_DEFAULT_P_ADJUST = "bh"
+
+
+def _declared_p_adjust(engine: dict, spec: dict, analysis_id) -> str | None:
+    """エンジンの結果か spec の解析が宣言した補正の方法（どちらも無ければ None）。"""
+    value = (engine or {}).get("p_adjust_method")
+    if value is None:
+        value = (engine or {}).get("p_adjust")
+    if value is None:
+        analysis = next((a for a in (spec or {}).get("analyses") or []
+                         if a.get("analysis_id") == analysis_id), {})
+        value = analysis.get("p_adjust_method", analysis.get("p_adjust"))
+    if isinstance(value, dict):                     # {"method": ...} の形も受ける
+        value = value.get("method")
+    return str(value).lower() if value is not None else None
+
+
+def p_adjust_method(record: dict) -> str:
+    """記録の多重比較の補正の方法（`bh` / `bonferroni` / `holm` / `none`）。宣言が無ければ `bh`。"""
+    value = (record or {}).get("p_adjust_method")
+    if value is None:
+        value = _declared_p_adjust((record or {}).get("engine") or {}, (record or {}).get("spec") or {},
+                                   (record or {}).get("analysis_id"))
+    return str(value).lower() if value is not None else _DEFAULT_P_ADJUST
+
+
+#: 補正の方法 → `q` の読み方（報告した特徴だけの母集団 `reported` は方法によらず再現の確認）。
+_Q_INTERPRETATION = {"bonferroni": "fwer", "holm": "fwer", "none": "unadjusted"}
+
+
+def q_interpretation(bh: dict, method: str) -> str:
+    """`q` の読み方。BH はエンジンの値（`discovery_fdr` / `reproduction_only`）のまま、ほかの補正は方法から
+    決める: `bonferroni` / `holm` は `fwer`、`none` は `unadjusted`（補正しない p）。母集団が `reported` なら
+    方法によらず `reproduction_only`。補正の方法を記録する前のエンジンが BH の読み方を書いたままの記録でも、
+    メタ行が `q_interpretation = discovery_fdr` と `p_adjust_method = holm` を並べて食い違わないようにする。"""
+    if bh.get("name") == "reported":
+        return "reproduction_only"
+    if method in _Q_INTERPRETATION:
+        return _Q_INTERPRETATION[method]
+    return bh.get("q_interpretation") or "discovery_fdr"
+
+
 def split_result_ref(result_id: str, contrast_id: str | None = None) -> tuple[str, str | None]:
     """`result_id` か `result_id#contrast_id`（特徴検索が出す形）を `(記録の ID, 対比 ID)` に割る。
 
@@ -482,7 +563,8 @@ def _detection_driven(row: dict, n_units_ref: int, n_units_test: int) -> bool | 
                                             row.get("detected_test"), n_units_test)
 
 
-def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
+def as_two_group(record: dict, contrast_id: str | None = None, *,
+                 allow_interaction: bool = False) -> dict:
     """`compare` の記録の 1 つの対比を、利用者が読む 2 群の形（`kind="two_group"`）に写す。
 
     `a` は対比の基準（reference）、`b` は比較（test）で、log2fc は正なら b が高い
@@ -496,9 +578,18 @@ def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
     付ける（書き出し・根拠バンドル・volcano はこの印を読む）。`provenance` は元の記録のもの（`kind` は
     `"compare"`）。`allow_confounded=true`（既定）で完全交絡（全対比をまとめた表か、この対比の表）を越えた比較だけ、
     その写しに `comparison.unadjusted_confounded: true` と説明（`warnings`。`caveats` にも）を足す（記録は変えない）。
+    `contrast_kind` は `simple` か `interaction`、`statistics.p_adjust_method` は補正の方法（`p_adjust_method`）、
+    `statistics.bh_population.q_interpretation` はその方法での `q` の読み方（`q_interpretation`）。
 
-    対比が 1 つでなく `contrast_id` が無い・未知の ID なら `CONTRAST_REQUIRED`、交互作用なら
-    `CONTRAST_NOT_TWO_GROUP`（どちらも details に候補）。比較の記録でなければ `ANALYSIS_RESULT_NOT_FOUND`。
+    交互作用（2×2 の差の差）は `allow_interaction=True` のときだけ読む: `a` / `b` は基準の 2 cell・比較の
+    2 cell（`"C:M + T:F"` の形）、log2fc は (a1 vs a0 at b1) − (a1 vs a0 at b0)、`mean_a` / `mean_b` は None
+    （cell の平均の和に意味が無い）。`interaction` に因子・水準・定義が入る。
+
+    `contrast_id` を省いたとき、読める対比（`allow_interaction` が偽なら交互作用を除く）が 1 つならそれを使う。
+    2 つ以上なら `CONTRAST_REQUIRED`（details の `ambiguous: true` と選択肢 `choices`。ツールはこれを
+    `needs_input` にする）、交互作用しか無ければ `CONTRAST_NOT_TWO_GROUP`。未知の ID は `CONTRAST_REQUIRED`、
+    交互作用を名指しして `allow_interaction` が偽なら `CONTRAST_NOT_TWO_GROUP`（どれも details に候補）。
+    比較の記録でなければ `ANALYSIS_RESULT_NOT_FOUND`。
     """
     kind = (record or {}).get("kind")
     if kind != "compare":
@@ -507,28 +598,46 @@ def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
     ids = contrast_ids(record)
     simple = contrast_ids(record, two_group_only=True)
     candidates = {"contrast_ids": ids, "two_group_contrast_ids": simple}
+    usable = ids if allow_interaction else simple
     if contrast_id is None:
-        if len(ids) != 1:
+        if len(usable) == 1:
+            contrast_id = usable[0]
+        elif not usable:
+            raise DomainError("CONTRAST_NOT_TWO_GROUP",
+                              "この比較の対比は交互作用だけで、2 群の結果に読み替えられません"
+                              "（交互作用は dataset_export_differential で書き出せます）。",
+                              {"contrast_id": ids[0] if len(ids) == 1 else None, **candidates})
+        else:
+            rid = record.get("result_id")
             raise DomainError("CONTRAST_REQUIRED",
-                              f"この比較には対比が {len(ids)} つあります。contrast_id を指定してください。",
-                              candidates)
-        contrast_id = ids[0]
+                              f"この比較（result_id={rid}）には対比が {len(usable)} つあります。"
+                              "どれを使うか contrast_id で選んでください"
+                              "（result_id#contrast_id の形でも渡せます）。",
+                              {**candidates, "ambiguous": True, "result_id": rid,
+                               "choices": contrast_choices(record, allow_interaction=allow_interaction)})
     elif contrast_id not in ids:
         raise DomainError("CONTRAST_REQUIRED", f"この比較に対比 {contrast_id!r} はありません。",
                           {"contrast_id": contrast_id, **candidates})
     comp = next(c for c in record["spec"]["comparisons"] if c["id"] == contrast_id)
-    if comp.get("kind") == "interaction":
+    interaction = comp.get("kind") == "interaction"
+    if interaction and not allow_interaction:
         raise DomainError("CONTRAST_NOT_TWO_GROUP",
-                          f"対比 {contrast_id!r} は交互作用で、2 群の結果に読み替えられません。",
+                          f"対比 {contrast_id!r} は交互作用で、2 群の結果に読み替えられません"
+                          "（交互作用は dataset_export_differential で書き出せます）。",
                           {"contrast_id": contrast_id, **candidates})
 
     factors = record["spec"]["design"]["factors"]
-    at = dict(comp.get("at") or {})
-    ref_cell = _cell({**at, comp["factor"]: comp["reference"]}, factors)
-    test_cell = _cell({**at, comp["factor"]: comp["test"]}, factors)
+    if interaction:
+        ref_cells, test_cells = _interaction_cells(comp, factors)
+        label_a, label_b = " + ".join(ref_cells), " + ".join(test_cells)
+    else:
+        at = dict(comp.get("at") or {})
+        ref_cells = [_cell({**at, comp["factor"]: comp["reference"]}, factors)]
+        test_cells = [_cell({**at, comp["factor"]: comp["test"]}, factors)]
+        label_a, label_b = comp["reference"], comp["test"]
     units = list(record["units"].values())
-    units_a = [u for u in units if u.get("cell") == ref_cell]
-    units_b = [u for u in units if u.get("cell") == test_cell]
+    units_a = [u for u in units if u.get("cell") in ref_cells]
+    units_b = [u for u in units if u.get("cell") in test_cells]
     samples_a = [s for u in units_a for s in u["samples"]]
     samples_b = [s for u in units_b for s in u["samples"]]
 
@@ -551,24 +660,26 @@ def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
             row, q_threshold=q_threshold, log2fc_threshold=log2fc_threshold)
     finite = [r for r in rows if r["p"] is not None and math.isfinite(r["p"])]
     bh = engine["bh_population"]
+    method = p_adjust_method(record)
     caveats = [w.get("message") or str(w.get("code"))
                for w in engine.get("warnings") or [] if w.get("message") or w.get("code")]
     provenance = record["provenance"]
-    trace = _unadjusted_confounded(record, comp, contrast_id, (ref_cell, test_cell))
+    trace = _unadjusted_confounded(record, label_a, label_b, contrast_id, (*ref_cells, *test_cells))
     if trace is not None:
         # 書き出しのメタ行・volcano・図の但し書きはここを読む。
         # 記録の来歴は書き換えず、読み替えた結果の来歴にだけ足す。
         provenance = {**provenance, "comparison": trace,
                       "warnings": [*(provenance.get("warnings") or []), UNADJUSTED_CONFOUNDED_EXPLANATION]}
         caveats.append(UNADJUSTED_CONFOUNDED_EXPLANATION)
-    return {
+    view = {
         "kind": "two_group",
         "result_id": record["result_id"],
         "contrast_id": contrast_id,
+        "contrast_kind": "interaction" if interaction else "simple",
         "matrix_id": record["matrix_id"],
         "rule_hash": record["rule_hash"],
-        "a": comp["reference"],
-        "b": comp["test"],
+        "a": label_a,
+        "b": label_b,
         "samples_a": samples_a,
         "samples_b": samples_b,
         "n_a": len(samples_a),
@@ -589,13 +700,28 @@ def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
             "ci_level": engine["ci_level"],
             "verdict_rule": dict(engine["verdict_rule"]),
             "bh_population": {"name": bh["name"], "n": (bh.get("n_by_contrast") or {}).get(contrast_id),
-                              "q_interpretation": bh["q_interpretation"]},
+                              "q_interpretation": q_interpretation(bh, method)},
+            "p_adjust_method": method,
             "subject_source": engine["subject_source"],
             "n_units_a": len(units_a),
             "n_units_b": len(units_b),
         },
         "provenance": provenance,
     }
+    if interaction:
+        a, b = comp["factors"]
+        view["interaction"] = {
+            "factors": [a, b], "levels": {a: list(comp["levels"][a]), b: list(comp["levels"][b])},
+            "reference_cells": ref_cells, "test_cells": test_cells,
+            "definition": INTERACTION_DEFINITION.format(
+                a=a, b=b, a0=comp["levels"][a][0], a1=comp["levels"][a][1],
+                b0=comp["levels"][b][0], b1=comp["levels"][b][1])}
+    return view
+
+
+#: 交互作用の対比の log2fc の定義（書き出しのメタ行 `interaction_definition`。`=` とタブを含めない）。
+INTERACTION_DEFINITION = ("difference of differences: log2fc is ({a1} vs {a0} at {b} {b1}) minus "
+                          "({a1} vs {a0} at {b} {b0}); mean_a and mean_b are not defined (blank)")
 
 
 #: 完全交絡を未調整のまま越えた比較の来歴の `warnings` と `caveats` に書く説明
@@ -605,7 +731,8 @@ UNADJUSTED_CONFOUNDED_EXPLANATION = (
     "解析しました（群差とバッチ差を区別できない。図・TSV・レポートにこの旨を残すこと）。")
 
 
-def _unadjusted_confounded(record: dict, comp: dict, contrast_id: str, cells=()) -> dict | None:
+def _unadjusted_confounded(record: dict, reference: str, test: str, contrast_id: str,
+                           cells=()) -> dict | None:
     """`allow_confounded=true`（既定）で完全交絡を越えて走った対比なら、来歴の `comparison` に足す
     痕跡（`unadjusted_confounded: true`）。そうでなければ None（何も足さない）。
 
@@ -613,8 +740,9 @@ def _unadjusted_confounded(record: dict, comp: dict, contrast_id: str, cells=())
     この対比の群だけで見た表（`engine.confounding.by_contrast[contrast_id].confounded is True`。多群でまとめた表が
     部分交絡でも、一部の対比だけが完全交絡になりうる）のどちらか。許可は記録の spec のその比較の解析の
     `allow_confounded`（spec v2 の既定は true）。部分的な交絡・評価できない交絡には印を付けない（警告は `caveats`）。
-    痕跡の `confounding` は、この対比の状態（`batch_status`）と、その 2 つの cell に絞った群 × バッチの表、
-    全対比をまとめた表の状態（`pooled_batch_status`）。
+    痕跡の `confounding` は、この対比の状態（`batch_status`）と、その cell（2 群なら 2 つ、交互作用なら 4 つ）に
+    絞った群 × バッチの表、全対比をまとめた表の状態（`pooled_batch_status`）。`reference` / `test` は
+    写しの `a` / `b` の表示（交互作用なら cell を `+` でつないだもの）。
     """
     confounding = record["engine"].get("confounding") or {}
     analysis = next((a for a in record["spec"].get("analyses") or []
@@ -628,8 +756,8 @@ def _unadjusted_confounded(record: dict, comp: dict, contrast_id: str, cells=())
     if cells and all(c in table for c in cells):
         table = {c: table[c] for c in cells}
     return {"comparison_id": contrast_id,
-            "reference_group": comp["reference"],
-            "test_group": comp["test"],
+            "reference_group": reference,
+            "test_group": test,
             "confounding": {"batch_status": own.get("batch_status") or pooled,
                             "batch_table": copy.deepcopy(table),
                             "pooled_batch_status": pooled},

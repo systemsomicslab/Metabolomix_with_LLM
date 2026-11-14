@@ -595,8 +595,9 @@ def test_figures_with_baked_groups_go_stale_when_the_metadata_revision_moves(loa
     ds.metadata_revision += 1                               # 試料の情報の更新
     for kind in ("group_intensity", "species", "species_pca"):
         err = _error(reports.save_figure(kind, "b-1"))
-        assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
-        assert "作り直" in err["message"]
+        # 図が古い（理由の分かるコード。作り直しは dataset_plot）
+        assert err["code"] == "STALE_FIGURE" and err["details"]["required_tools"] == ["dataset_plot"]
+        assert err["details"]["kind"] == kind and "作り直" in err["message"]
         assert not (figures / f"b-1_{kind}.png").exists()
 
 
@@ -609,7 +610,8 @@ def test_species_pca_figure_is_dropped_with_the_pca_set_and_save_figure_rechecks
     # 取りこぼした古さ（結果が現在でない）は save_figure の直前の確認が塞ぐ
     ds.results[p["result_id"]]["provenance"]["dataset_id"] = "ds_other"
     err = _error(reports.save_figure("species_pca", "c-1"))
-    assert err["code"] == "missing_state" and "作り直" in err["message"]
+    assert err["code"] == "STALE_FIGURE" and "作り直" in err["message"]
+    assert err["details"]["result_id"] == p["result_id"]
     ds.results[p["result_id"]]["provenance"]["dataset_id"] = ds.dataset_id
     # 除外（前処理の入力の変更）で図ごと捨てられる
     result_state.invalidate_results(ds, {"exclusion"})

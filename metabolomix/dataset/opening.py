@@ -383,6 +383,8 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
         ds.analysis_dir = str(Path(selection.arf).parent)
     elif mztab_path:
         ds.analysis_dir = str(Path(mztab_path).parent)
+    if unit is not None:
+        _mark_unvalidated_unit(ds, unit)
     if unit is not None and adapter == "mztab":
         notes.extend(unit.notes)
     if unit is not None and unit.legacy:
@@ -390,6 +392,24 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
     return OpenedDataset(dataset=ds, kind=kind, path=path, adapter=adapter,
                          selection=selection, notes=notes, mztab_path=mztab_path,
                          polarity=polarity)
+
+
+def _mark_unvalidated_unit(ds, unit) -> None:
+    """検証を通っていない pipeline の単位（`allow_incomplete=True` で開いた）を探索専用にする。
+
+    ジョブが completed でも、単位の検証（`validate_outputs`）が済んでいなければ出力は確かめられていない。
+    印はジョブの status だけでなく単位の状態も見る（理由は書き出しのメタ行に載る）。
+    """
+    from metabolomix.pipeline import store
+
+    if unit.legacy:
+        return
+    status = store.unit_status(unit.record, unit.polarity)
+    if status == "validated":
+        return
+    ds.exploratory_only = True
+    reason = f"pipeline の単位 {unit.polarity} が検証を通っていない（{status}）"
+    ds.exploratory_reason = "; ".join(r for r in (getattr(ds, "exploratory_reason", None), reason) if r)
 
 
 def _load(kind: str, path: str, allow_incomplete: bool, polarity: str | None = None):
@@ -448,6 +468,7 @@ def _folder_via_job(job_path: Path, *, measure: str, allow_incomplete: bool,
         known.extend(p for p in paths if p not in known)
     ds.job_path = str(job_path)
     ds.exploratory_only = gate.exploratory_only
+    ds.exploratory_reason = gate.exploratory_reason
     ds.source_verification = "verified" if gate.verified else "legacy_unverified"
     if gate.incomplete_warning:
         ds.load_notes.insert(0, gate.incomplete_warning)

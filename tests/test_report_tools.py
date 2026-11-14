@@ -76,6 +76,12 @@ class ReportToolTests(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
+    def test_write_report_doc_does_not_prescribe_headings(self):
+        """見出しは自由（推奨の見出しの一覧を説明文に載せない）。"""
+        doc = server.write_report.__doc__
+        for heading in ("## 目的", "## 実施した解析", "## 主要な所見", "## 結論"):
+            self.assertNotIn(heading, doc)
+
     def test_write_report_creates_file_with_frontmatter_and_body(self):
         msg = server.write_report("a-1", "NEG / DS", "## 目的\nグループ比較")
         path = self.tmp / "reports_fallback" / "a-1.md"

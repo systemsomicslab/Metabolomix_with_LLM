@@ -4,13 +4,13 @@
 との契約でもある）。ここが決めるのは**どの結果を、どの来歴で書き出すか**だけで、
 列の追加・改名・並べ替えはしない。
 
-書き出す前に 2 つ確かめる:
+書き出す前に、その結果が今の前処理から出たものかを確かめる（`assert_current`）。前処理を
+やり直した後の古い結果を書き出すと、TSV の数字と**現在の**前処理条件が並んだファイルができる。
+どちらも正しく見えるので、読み手にはずれが分からない。
 
-- その結果が今の前処理から出たものか（`assert_current`）。前処理をやり直した後の
-  古い結果を書き出すと、TSV の数字と**現在の**前処理条件が並んだファイルができる。
-  どちらも正しく見えるので、読み手にはずれが分からない。
-- 探索専用のデータセットでないか。中断された実行の出力では、欠けた検体が
-  「その群には無い」ようにしか見えない。
+探索専用のデータセット（中断された実行の出力・検証を通っていない pipeline の単位）は断らずに書き出し、
+メタ行 `# exploratory = true` と理由を足す（欠けた検体が「その群には無い」ように見えうることを
+ファイルの中に残す）。
 
 メタ行の前処理条件は、その結果が使った行列の登録（`ds.stat_matrices` の前処理の設定）から取る。
 """
@@ -25,42 +25,58 @@ from metabolomix.analysis.result_state import assert_current
 from metabolomix.analysis.stats_results import as_two_group, get_matrix
 from metabolomix.core.atomic_io import DomainError
 
-__all__ = ["export_dataset_result"]
+__all__ = ["exploratory_reason", "export_dataset_result"]
+
+
+def exploratory_reason(ds) -> str | None:
+    """探索専用のデータセットなら理由（1 行。`=` とタブを含めない）、そうでなければ None。"""
+    if not getattr(ds, "exploratory_only", False):
+        return None
+    reason = getattr(ds, "exploratory_reason", None) or "incomplete analysis run (exploratory only)"
+    return " ".join(str(reason).replace("=", ":").split())
 
 
 def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = None,
-                          contrast_id: str | None = None) -> dict:
+                          contrast_id: str | None = None,
+                          exclude_feature_ids=None) -> dict:
     """差次的結果を InChIKey 付きの契約 TSV として書き出す。
 
     `result` は統計エンジンの `compare` の記録（`as_two_group` で 1 つの対比を読む。対比が複数なら
-    `contrast_id` が要り、無ければ `CONTRAST_REQUIRED`）。エンジンのメタ行を `msi_note` の後ろへ足す
+    `contrast_id` が要り、無ければ `CONTRAST_REQUIRED`）。2×2 の交互作用の対比も書ける（`mean_a` /
+    `mean_b` は空欄、メタ行に定義）。エンジンのメタ行を `msi_note` の後ろへ足す
     （`export_contract.stats_meta_lines`）。15 列・列の順序・契約の版は変えない。
+
+    `exclude_feature_ids` は検定の**後で**書き出しから落とす特徴 ID（外来の分子など）。q は計算し直さない
+    （多重比較の母集団は検定のときのまま）ことと落とした件数をメタ行に書く。`n_features_total` は落とした
+    行も数える（`n_with_inchikey + n_unannotated + n_excluded_after_test` が `n_features_total`。メタ行の
+    `excluded_after_test_note` にも書く）。結果に無い ID は戻り値の `exclude_feature_ids_not_found` に挙げる
+    （誤りにはしない）。
 
     Returns
     -------
     dict
         `output_path` ・件数・contract_version などの要約。
     """
-    if getattr(ds, "exploratory_only", False):
-        raise DomainError(
-            "EXPLORATORY_ONLY_DATASET",
-            "このデータセットは中断された解析の出力（探索専用）なので、"
-            "差次的エクスポートには使えません。Console 実行を完了させてから"
-            "読み込み直してください。",
-            {"job_path": getattr(ds, "job_path", None),
-             "source_verification": getattr(ds, "source_verification", None)})
     assert_current(ds, result)
     record = result
-    result = as_two_group(record, contrast_id)      # 比較でない結果・対比の曖昧さはここで DomainError
+    # 比較でない結果・対比の曖昧さはここで DomainError。書き出しは交互作用の対比も読む。
+    result = as_two_group(record, contrast_id, allow_interaction=True)
 
     q_threshold = result["q_threshold"]
     log2fc_threshold = result["log2fc_threshold"]
+
+    dropped_ids = {str(f) for f in (exclude_feature_ids or [])}
+    result_ids = {str(row["feature"]) for row in result["results"]}
+    not_found = sorted(dropped_ids - result_ids)
+    n_dropped = len(dropped_ids & result_ids)
 
     rows: list[dict] = []
     n_unannotated = 0
     annotations = getattr(ds, "feature_annotations", {}) or {}
     for row in result["results"]:
         fid = row["feature"]
+        if str(fid) in dropped_ids:
+            continue                            # 検定の後で落とす（q は計算し直さない）
         meta = ds.feature_metadata.get(fid, {})
         # 行単位で出所を1つに決める。決め手は InChIKey を供給した側——列ごとに
         # 選ぶと、name が SML 由来で inchikey が SME 由来、という食い違った行ができる。
@@ -135,28 +151,39 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
             "InChIKey が付いた特徴が 0 件のため書き出しません。"
             "下流のパスウェイ解析に使える背景集合がありません。",
             {"n_features_total": n_total, "n_with_inchikey": 0,
-             "n_unannotated": n_unannotated})
+             "n_unannotated": n_unannotated, "n_excluded_after_test": n_dropped})
 
+    reason = exploratory_reason(ds)
+    extra = [*_exploratory_lines(reason),
+             *_post_test_exclusion_lines(n_dropped, exclude_feature_ids is not None)]
     lines = [*_meta_lines(ds, result, rows, n_total, n_unannotated,
                           curation_line=curation_line,
-                          preprocess=_engine_preprocess(ds, record)),
+                          preprocess=_engine_preprocess(ds, record), extra_lines=extra),
              "\t".join(export_contract.EXPORT_COLUMNS)]
     lines += [export_contract.format_row(r) for r in rows]
     out = _atomic_write_text(Path(path), "\n".join(lines) + "\n")
 
-    return {
+    info = {
         "output_path": str(out),
         "contract_version": export_contract.CONTRACT_VERSION,
         "result_id": result["provenance"]["result_id"],
         "contrast_id": result["contrast_id"],
+        "contrast_kind": result["contrast_kind"],
         "group_a": result["a"],
         "group_b": result["b"],
         "n_features_total": n_total,
         "n_with_inchikey": len(rows),
         "n_unannotated": n_unannotated,
+        "p_adjust_method": result["statistics"]["p_adjust_method"],
         "curation": curation["state"] if curation else None,
         "curation_stats": stats if curation else None,
     }
+    if exclude_feature_ids is not None:
+        info["n_excluded_after_test"] = n_dropped
+        info["exclude_feature_ids_not_found"] = not_found
+    if reason is not None:
+        info["exploratory"] = {"exploratory_only": True, "reason": reason}
+    return info
 
 
 # ---------- 内部 ----------
@@ -188,6 +215,29 @@ def _unadjusted_confounded_lines(prov: dict) -> list[str]:
     return lines
 
 
+def _exploratory_lines(reason: str | None) -> list[str]:
+    """探索専用のデータセットの印（機械可読の真偽と理由）。探索専用でなければ何も足さない。"""
+    if reason is None:
+        return []
+    return [f"# exploratory = true\texploratory_reason = {reason}"]
+
+
+#: 検定の後で落とした行の説明（`=` とタブを含めない）。補正の方法・母集団によらず正しい書き方にする
+#: （母集団が `annotated` / `reported` なら、落とした行はもともと母集団の外のこともある）。
+#: `n_features_total` は落とした行も数えるので、件数の関係もここに書く。
+POST_TEST_EXCLUSION_NOTE = (
+    "rows dropped after testing; q_value not recomputed (the multiple-testing population is unchanged);"
+    " n_features_total still counts them (n_with_inchikey + n_unannotated + n_excluded_after_test"
+    " add up to n_features_total)")
+
+
+def _post_test_exclusion_lines(n_dropped: int, requested: bool) -> list[str]:
+    """検定の後で落とした特徴の件数と、q を計算し直していないことの宣言（指定が無ければ何も足さない）。"""
+    if not requested:
+        return []
+    return [f"# n_excluded_after_test = {n_dropped}\texcluded_after_test_note = {POST_TEST_EXCLUSION_NOTE}"]
+
+
 def _engine_preprocess(ds, record: dict) -> dict | str:
     """エンジンの結果の前処理条件（行列の登録にある前処理の設定）。無ければ不明と明示する。"""
     entry = get_matrix(ds, record["matrix_id"])
@@ -195,7 +245,7 @@ def _engine_preprocess(ds, record: dict) -> dict | str:
 
 
 def _meta_lines(ds, result, rows, n_total, n_unannotated,
-                *, curation_line, preprocess) -> list[str]:
+                *, curation_line, preprocess, extra_lines=()) -> list[str]:
     prov = result["provenance"]
     return export_contract.build_meta(
         group_a=result["a"], n_a=result["n_a"],
@@ -219,7 +269,8 @@ def _meta_lines(ds, result, rows, n_total, n_unannotated,
             *([curation_line] if curation_line else []),
         ],
         preprocess_line=f"# preprocess = {preprocess}",
-        stats_lines=export_contract.stats_meta_lines(result),
+        # 契約の版を上げずに足す行は msi_note の後ろだけ（探索専用・検定後の除外はさらにその末尾）
+        stats_lines=[*export_contract.stats_meta_lines(result), *extra_lines],
     )
 
 

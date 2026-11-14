@@ -235,7 +235,9 @@ def test_as_two_group_single_contrast_matches_rows():
         "test": "moderated_t", "ci_level": 0.95, "verdict_rule": engine["verdict_rule"],
         "bh_population": {"name": "matrix", "n": engine["bh_population"]["n_by_contrast"]["T_vs_C"],
                           "q_interpretation": "discovery_fdr"},
-        "subject_source": "subject_id", "n_units_a": 4, "n_units_b": 4}
+        "subject_source": "subject_id", "n_units_a": 4, "n_units_b": 4,
+        "p_adjust_method": "bh"}                                       # 記録に宣言が無ければ BH
+    assert view["contrast_kind"] == "simple" and "interaction" not in view
     rows = [r for r in engine["rows"] if r["contrast_id"] == "T_vs_C"]
     assert len(view["results"]) == len(rows) == 10
     for got, row in zip(view["results"], rows):
@@ -299,8 +301,13 @@ def test_as_two_group_requires_contrast_for_multi():
     assert stats_results.contrast_ids(rec) == ["T_vs_C", "U_vs_C"]
     e = _code(stats_results.as_two_group, rec)
     assert e.code == "CONTRAST_REQUIRED" and e.details["contrast_ids"] == ["T_vs_C", "U_vs_C"]
+    # 省いた曖昧さは選択肢つき（ツールはこれを needs_input にする）
+    assert e.details["ambiguous"] is True and e.details["result_id"] == rec["result_id"]
+    assert [c["id"] for c in e.details["choices"]] == ["T_vs_C", "U_vs_C"]
+    assert e.details["choices"][1] == {"id": "U_vs_C", "kind": "simple", "label": "U vs C (group)"}
     e = _code(stats_results.as_two_group, rec, "nope")
     assert e.code == "CONTRAST_REQUIRED" and e.details["contrast_ids"] == ["T_vs_C", "U_vs_C"]
+    assert "ambiguous" not in e.details                                # 未知の ID は選び直しではなく誤り
     view = stats_results.as_two_group(rec, "U_vs_C")
     assert view["a"] == "C" and view["b"] == "U" and view["contrast_id"] == "U_vs_C"
     assert view["samples_b"] == _names(ds, "U") and view["n_units_b"] == 4
@@ -332,6 +339,57 @@ def test_as_two_group_rejects_interaction():
     # 対比が 1 つだけの交互作用も読み替えない
     rec2, _, _ = _register(ds, [inter], factors=("group", "sex"))
     assert _code(stats_results.as_two_group, rec2).code == "CONTRAST_NOT_TWO_GROUP"
+    # 2 群の対比が 1 つだけなら、交互作用と並んでいても省いてそれを使う（2 群の形で読む利用者）
+    assert stats_results.as_two_group(rec)["contrast_id"] == "T_vs_C_F"
+
+
+def test_as_two_group_reads_interaction_when_allowed():
+    """2×2 の交互作用（差の差）は allow_interaction=True のときだけ読める（書き出し用）。"""
+    ds = _ds(sex=True)
+    at_f = {"id": "T_vs_C_F", "factor": "group", "reference": "C", "test": "T", "at": {"sex": "F"}}
+    inter = {"id": "ix", "kind": "interaction", "factors": ["group", "sex"],
+             "levels": {"group": ["C", "T"], "sex": ["F", "M"]}}
+    rec, rr, _ = _register(ds, [at_f, inter], factors=("group", "sex"))
+    view = stats_results.as_two_group(rec, "ix", allow_interaction=True)
+    assert view["contrast_kind"] == "interaction" and view["contrast_id"] == "ix"
+    # 基準は (C, M) と (T, F)、比較は (T, M) と (C, F)：log2fc = (T vs C at M) − (T vs C at F)
+    assert view["a"] == "C:M + T:F" and view["b"] == "T:M + C:F"
+    assert view["interaction"]["reference_cells"] == ["C:M", "T:F"]
+    assert view["interaction"]["test_cells"] == ["T:M", "C:F"]
+    assert view["interaction"]["factors"] == ["group", "sex"]
+    assert "minus" in view["interaction"]["definition"] and "=" not in view["interaction"]["definition"]
+    units = rec["units"].values()
+    assert view["n_units_a"] + view["n_units_b"] == len([u for u in units if u.get("cell")])
+    rows = [r for r in rr["analyses"][0]["result"]["rows"] if r["contrast_id"] == "ix"]
+    assert [r["log2fc"] for r in view["results"]] == [r["log2fc"] for r in rows]
+    assert all(r["mean_a"] is None and r["mean_b"] is None for r in view["results"])
+    # 省いたときは、交互作用も数えて 2 つあるので選ばせる
+    e = _code(stats_results.as_two_group, rec, allow_interaction=True)
+    assert e.code == "CONTRAST_REQUIRED" and e.details["ambiguous"] is True
+    kinds = {c["id"]: c["kind"] for c in e.details["choices"]}
+    assert kinds == {"T_vs_C_F": "simple", "ix": "interaction"}
+
+
+def test_as_two_group_reports_the_records_p_adjust_method():
+    ds = _ds()
+    rec, _, _ = _register(ds)
+    assert stats_results.p_adjust_method(rec) == "bh"
+    rec["p_adjust_method"] = "holm"                                   # 統計エンジンの記録が持つ補正の方法
+    stats = stats_results.as_two_group(rec)["statistics"]
+    assert stats["p_adjust_method"] == "holm"
+    # q の読み方は補正の方法に合わせる（エンジンが BH の読み方を書いたままでも FWER と読む）
+    assert stats["bh_population"]["q_interpretation"] == "fwer"
+
+
+@pytest.mark.parametrize("population,method,expected", [
+    ("matrix", "bh", "discovery_fdr"), ("annotated", "bh", "discovery_fdr"),
+    ("matrix", "bonferroni", "fwer"), ("matrix", "holm", "fwer"), ("matrix", "none", "unadjusted"),
+    ("reported", "bh", "reproduction_only"), ("reported", "holm", "reproduction_only"),
+    ("reported", "none", "reproduction_only")])
+def test_q_interpretation_follows_population_and_method(population, method, expected):
+    engine_value = "reproduction_only" if population == "reported" else "discovery_fdr"
+    bh = {"name": population, "q_interpretation": engine_value}
+    assert stats_results.q_interpretation(bh, method) == expected
 
 
 def test_as_two_group_reads_only_compare_records():

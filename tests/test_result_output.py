@@ -277,16 +277,31 @@ def test_export_refuses_a_stale_result(tmp_path):
     assert not (tmp_path / "stale.tsv").exists()
 
 
-def test_export_refuses_an_exploratory_dataset(tmp_path):
+def test_export_of_an_exploratory_dataset_writes_the_mark_in_the_meta_lines(tmp_path):
+    """未完了の実行の探索専用のデータセットも断らず、メタ行に印と理由を書く（戻り値にも）。"""
     from metabolomix.analysis.dataset_export import export_dataset_result
     ds, result = _prepared_dataset()
+    plain = [l for l in _exported_lines(export_dataset_result, ds, result, tmp_path / "p.tsv")
+             if l.startswith("#")]
+    assert not any("exploratory" in l for l in plain)
+
     ds.exploratory_only = True
-
-    with pytest.raises(DomainError) as exc:
-        export_dataset_result(ds, result, tmp_path / "x.tsv")
-
-    assert exc.value.code == "EXPLORATORY_ONLY_DATASET"
-    assert not (tmp_path / "x.tsv").exists()
+    ds.exploratory_reason = "解析ジョブが完了していない（status = partial）"
+    info = export_dataset_result(ds, result, tmp_path / "x.tsv")
+    meta = [l for l in (tmp_path / "x.tsv").read_text(encoding="utf-8").splitlines() if l.startswith("#")]
+    line = next(l for l in meta if l.startswith("# exploratory"))
+    chunks = dict(c.split(" = ", 1) for c in line.lstrip("# ").split("\t"))
+    assert chunks["exploratory"] == "true"
+    # 値に「=」を残さない（受け手は最初の = で区切る）
+    assert chunks["exploratory_reason"] == "解析ジョブが完了していない（status : partial）"
+    assert info["exploratory"] == {"exploratory_only": True, "reason": chunks["exploratory_reason"]}
+    # 新しい行は msi_note の後ろ（既存の行の並びは動かない）
+    msi = next(i for i, l in enumerate(meta) if l.startswith("# ontology / msi_level"))
+    assert meta.index(line) > msi
+    # 理由が無い古いデータセットは既定の文
+    ds.exploratory_reason = None
+    info = export_dataset_result(ds, result, tmp_path / "y.tsv")
+    assert info["exploratory"]["reason"] == "incomplete analysis run (exploratory only)"
 
 
 def test_export_refuses_when_no_feature_has_an_inchikey(tmp_path):
@@ -310,7 +325,8 @@ def test_a_failed_export_does_not_replace_the_previous_file(tmp_path):
     export_dataset_result(ds, result, out)
     before = out.read_text(encoding="utf-8")
 
-    ds.exploratory_only = True
+    for meta in ds.feature_metadata.values():      # InChIKey が 0 件 → NO_ANNOTATED_FEATURES で止まる
+        meta["inchikey"] = ""
     with pytest.raises(DomainError):
         export_dataset_result(ds, result, out)
 
