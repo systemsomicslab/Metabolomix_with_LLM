@@ -138,11 +138,20 @@ def confounding_report(units, groups: list[str]) -> dict:
 
 
 def assert_not_confounded(report: dict, *, allow_confounded: bool) -> None:
-    """完全交絡なら、明示の許可がない限り STATISTIC_CONFOUNDED で止める。"""
-    if report.get("batch_status") == "complete" and not allow_confounded:
+    """`allow_confounded=False` を明示したときだけ、完全交絡で STATISTIC_CONFOUNDED にして止める。
+
+    完全交絡は、全対比の群をまとめた表（`batch_status == "complete"`）か、対比ごとの表
+    （`by_contrast[cid]["confounded"]`。多群では一部の対比だけが完全交絡になりうる）のどちらか。
+    既定（`allow_confounded=True`）では止めず、交絡は結果の `confounding` に印として残る。
+    """
+    if allow_confounded:
+        return
+    contrasts = [cid for cid, item in (report.get("by_contrast") or {}).items()
+                 if item.get("confounded")]
+    if report.get("batch_status") == "complete" or contrasts:
         raise DomainError(
             "STATISTIC_CONFOUNDED",
-            "群とバッチが完全に交絡しているため、群差を検定できません。"
-            "それでも進めるなら allow_confounded を指定してください。",
-            {"batch_table": report.get("batch_table")},
+            "群とバッチが完全に交絡しているため、allow_confounded=false の指定に従って止めました"
+            "（既定の allow_confounded=true なら、交絡を印にして比較します）。",
+            {"batch_table": report.get("batch_table"), "contrasts": contrasts},
         )

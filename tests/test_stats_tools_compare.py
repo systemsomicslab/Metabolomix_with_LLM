@@ -71,18 +71,25 @@ def test_two_groups_default_moderated_t_summary_shape(ds):
     assert c["large_changes"] >= 3
     assert c["presence"]["available"] is True
     lines = out["top"].splitlines()
-    assert lines[0].split("\t") == ["contrast_id", "feature_id", "name", "log2fc", "ci_low",
-                                    "ci_high", "q", "verdict"]
+    assert lines[0].split("\t") == ["contrast_id", "feature_id", "name", "id_level", "log2fc",
+                                    "ci_low", "ci_high", "q", "verdict"]
     assert 1 < len(lines) <= 11
     first = lines[1].split("\t")
     assert first[0] == "T_vs_C" and first[-1] == "changed" and first[2].startswith("F")
+    assert first[3] == "none"                                  # 候補も注釈も無い合成データ
     assert out["record"]["written"] is True and "next" in out
-    assert out["confounding"].keys() >= {"batch_table", "warnings"}
+    assert list(out)[:2] == ["status", "confounding"]          # 交絡は先頭（読み落とさせない）
+    assert out["confounding"].keys() >= {"batch_table", "by_contrast", "warnings"}
+    assert out["matrix_source"] == "matrix_id"
+    assert out["p_adjust_method"] == "bh"
+    assert c["confounded"] is False
+    assert out["factorial"] is None and "f_top" not in out and "output" not in out
 
 
 def test_two_groups_without_matrix_id_registers_implicit_matrix(ds):
     out = _cmp(reference_group="C", test_group="T")
     assert out["status"] == "success"
+    assert out["matrix_source"] == "default"
     entry = stats_results.get_matrix(ds, out["matrix_id"])
     assert entry is not None and entry["record_id"]
     assert out["record"]["preprocess_record"]["written"] is True
@@ -338,19 +345,30 @@ def test_top_n_limits_rows_per_contrast(ds):
         == "DATASET_BAD_REQUEST"
 
 
-def test_confounded_refused_unless_allowed(tmp_path):
+def _confounded(tmp_path):
     state = _ds()
     for row in state.sample_metadata_rows:
         if row["role"] == "sample":
             row["batch"] = "B1" if row["group"] == "C" else "B2"
-    _install(state, tmp_path)
+    return _install(state, tmp_path)
+
+
+def test_confounded_compared_with_marks_by_default_and_refused_when_disallowed(tmp_path):
+    _confounded(tmp_path)
     mx = _pre()["matrix_id"]
-    refused = _cmp(reference_group="C", test_group="T", matrix_id=mx)
-    assert refused["error"]["code"] == "STATISTIC_CONFOUNDED"
-    ok = _cmp(reference_group="C", test_group="T", matrix_id=mx, allow_confounded=True)
+    ok = _cmp(reference_group="C", test_group="T", matrix_id=mx)      # 既定 allow_confounded=True
     assert ok["status"] == "success"
+    assert list(ok)[:2] == ["status", "confounding"]
     assert ok["confounding"]["batch_status"] == "complete"
+    assert ok["confounding"]["by_contrast"] == {"T_vs_C": {"batch_status": "complete",
+                                                           "confounded": True}}
     assert any(w["code"] == "batch_group_complete_confounding" for w in ok["confounding"]["warnings"])
+    assert _contrast(ok, "T_vs_C")["confounded"] is True
+    assert _contrast(ok, "T_vs_C")["batch_status"] == "complete"
+    assert any(w["code"] == "batch_group_complete_confounding" for w in ok["warnings"])
+    refused = _cmp(reference_group="C", test_group="T", matrix_id=mx, allow_confounded=False)
+    assert refused["error"]["code"] == "STATISTIC_CONFOUNDED"
+    assert refused["error"]["details"]["contrasts"] == ["T_vs_C"]
 
 
 def test_compare_writes_record_with_parent_matrix_record(ds):
@@ -404,17 +422,12 @@ def test_handle_isolation(tmp_path):
 # --- 修正ラウンド 1 ----------------------------------------------------------------------
 
 def test_failed_implicit_call_keeps_matrix_and_reports_its_id(tmp_path):
-    state = _ds()
-    for row in state.sample_metadata_rows:
-        if row["role"] == "sample":
-            row["batch"] = "B1" if row["group"] == "C" else "B2"
-    _install(state, tmp_path)
-    out = _cmp(reference_group="C", test_group="T")
+    state = _confounded(tmp_path)
+    out = _cmp(reference_group="C", test_group="T", allow_confounded=False)
     assert out["error"]["code"] == "STATISTIC_CONFOUNDED"
     mx = out["error"]["details"]["matrix_id"]
     assert mx in state.stat_matrices
-    assert _cmp(reference_group="C", test_group="T", matrix_id=mx,
-                allow_confounded=True)["status"] == "success"
+    assert _cmp(reference_group="C", test_group="T", matrix_id=mx)["status"] == "success"
 
 
 def test_n_q_below_counts_q_equal_to_threshold():
@@ -429,13 +442,202 @@ def test_n_q_below_counts_q_equal_to_threshold():
     assert stats_tools._omnibus_summary(engine)["n_q_below"] == 1
 
 
-def test_top_n_capped_and_reported_rejected(ds):
+def test_top_n_capped(ds):
     mx = _pre()["matrix_id"]
     assert _cmp(reference_group="C", test_group="T", matrix_id=mx, top_n=50)["status"] == "success"
     big = _cmp(reference_group="C", test_group="T", matrix_id=mx, top_n=51)
     assert big["error"]["code"] == "DATASET_BAD_REQUEST" and "result_id" in big["error"]["message"]
-    rep = _cmp(reference_group="C", test_group="T", matrix_id=mx, bh_population="reported")
-    assert rep["error"]["code"] == "DATASET_BAD_REQUEST"
+
+
+def test_reported_population_needs_its_ids_and_is_written_into_spec(ds):
+    mx = _pre()["matrix_id"]
+    no_ids = _cmp(reference_group="C", test_group="T", matrix_id=mx, bh_population="reported")
+    assert no_ids["error"]["code"] == "DATASET_BAD_REQUEST"
+    stray = _cmp(reference_group="C", test_group="T", matrix_id=mx, reported_feature_ids=["f0"])
+    assert stray["error"]["code"] == "DATASET_BAD_REQUEST"
+    out = _cmp(reference_group="C", test_group="T", matrix_id=mx, bh_population="reported",
+               reported_feature_ids=["f0", "f1", "f2", "f1"])
+    assert out["status"] == "success"
+    assert out["bh_population"]["name"] == "reported"
+    assert out["bh_population"]["n_by_contrast"] == {"T_vs_C": 3}
+    analysis = ds.last_differential["spec"]["analyses"][0]
+    assert analysis["bh_population"] == "reported"
+    assert analysis["reported_feature_ids"] == ["f0", "f1", "f2"]
+    path = Path(ds.analysis_dir) / "reports" / "stats" / f"{out['record']['record_id']}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["settings"]["spec"]["analyses"][0]["reported_feature_ids"] == ["f0", "f1", "f2"]
+    # q は報告した 3 特徴だけで補正する（行列の母集団とは別の数字）
+    rows = {r["feature_id"]: r for r in ds.last_differential["engine"]["rows"]}
+    assert rows["f5"]["q"] is None and rows["f0"]["q"] is not None
+
+
+def test_p_adjust_method_reaches_payload_record_and_q(ds):
+    mx = _pre()["matrix_id"]
+    bh = _cmp(reference_group="C", test_group="T", matrix_id=mx)
+    bh_rows = {r["feature_id"]: r for r in ds.last_differential["engine"]["rows"]}
+    holm = _cmp(reference_group="C", test_group="T", matrix_id=mx, p_adjust="holm")
+    rec = ds.last_differential
+    assert holm["p_adjust_method"] == "holm" and rec["p_adjust_method"] == "holm"
+    assert holm["bh_population"]["p_adjust_method"] == "holm"
+    assert holm["rule_hash"] != bh["rule_hash"]
+    assert rec["spec"]["analyses"][0]["p_adjust"] == "holm"
+    for r in rec["engine"]["rows"]:                            # FWER は FDR 以上
+        if r["q"] is not None:
+            assert r["q"] >= bh_rows[r["feature_id"]]["q"] - 1e-12
+    none = _cmp(reference_group="C", test_group="T", matrix_id=mx, p_adjust="none")
+    assert all(r["q"] == r["p"] for r in ds.last_differential["engine"]["rows"])
+    assert none["p_adjust_method"] == "none"
+    assert ds.results[bh["result_id"]]["p_adjust_method"] == "bh"
+    bad = _cmp(reference_group="C", test_group="T", matrix_id=mx, p_adjust="fdr")
+    assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
+
+
+# --- matrix_id の省略（直近の dataset_preprocess の行列） ------------------------------------
+
+def test_omitted_matrix_id_uses_latest_preprocess_of_the_handle(ds):
+    first = _pre(normalize="tic")["matrix_id"]
+    second = _pre(normalize="median")["matrix_id"]
+    assert first != second
+    out = _cmp(reference_group="C", test_group="T")
+    assert out["matrix_id"] == second and out["matrix_source"] == "latest_preprocess"
+    assert "preprocess_record" not in out["record"]               # 既定の前処理を足さない
+    assert set(ds.stat_matrices) == {first, second}
+    assert ds.last_differential["spec"]["preprocess"]["normalize"]["method"] == "median"
+    named = _cmp(reference_group="C", test_group="T", matrix_id=first)
+    assert named["matrix_id"] == first and named["matrix_source"] == "matrix_id"
+    # 前処理を作り直すと、それが直近になる（同じ ID でも順番は新しくなる）
+    _pre(normalize="tic")
+    assert _cmp(reference_group="C", test_group="T")["matrix_id"] == first
+    # 除外で古くなれば既定の前処理へ
+    apply_exclusions(ds, samples=["C0_r0"], features=[], mode="add", reason="bad")
+    stale = _cmp(reference_group="C", test_group="T")
+    assert stale["matrix_source"] == "default" and stale["matrix_id"] not in (first, second)
+
+
+def test_omitted_matrix_id_with_group_arguments_matches_groups(ds):
+    mx = _pre(group_levels=["r0", "r1"])["matrix_id"]
+    same = _cmp(reference_group="r0", test_group="r1", group_levels=["r0", "r1"])
+    assert same["matrix_id"] == mx and same["matrix_source"] == "latest_preprocess"
+    plain = _cmp(reference_group="r0", test_group="r1")             # 群の指定なし → 直近の行列の群
+    assert plain["matrix_id"] == mx and plain["matrix_source"] == "latest_preprocess"
+    other = _cmp(reference_group="C", test_group="T", group_levels=["C", "T"])
+    assert other["status"] == "success"
+    assert other["matrix_source"] == "default" and other["matrix_id"] != mx
+
+
+def test_default_matrix_is_not_taken_as_latest_preprocess(ds):
+    implicit = _cmp(reference_group="C", test_group="T")
+    assert implicit["matrix_source"] == "default"
+    again = _cmp(reference_group="C", test_group="T")
+    assert again["matrix_source"] == "default" and again["matrix_id"] == implicit["matrix_id"]
+    assert stats_results.latest_preprocess_matrix(ds) is None
+
+
+def test_latest_preprocess_is_per_handle(tmp_path):
+    a, b = _ds(), _ds()
+    a.analysis_dir = str(tmp_path / "a")
+    b.analysis_dir = str(tmp_path / "b")
+    session_state.session.dataset = a
+    handle_a = session_state.session.current_handle_id
+    mx_a = _pre(normalize="tic")["matrix_id"]
+    session_state.session.dataset = b
+    out = _cmp(reference_group="C", test_group="T")
+    assert out["matrix_source"] == "default" and out["matrix_id"] != mx_a
+    on_a = _cmp(reference_group="C", test_group="T", dataset_handle=handle_a)
+    assert on_a["matrix_id"] == mx_a and on_a["matrix_source"] == "latest_preprocess"
+
+
+# --- 多群・要因の F ----------------------------------------------------------------------
+
+def test_factorial_effects_returned_beside_contrasts(tmp_path):
+    _install(_ds(per_group=6, sex=True), tmp_path)
+    mx = _pre()["matrix_id"]
+    comparisons = [{"id": "T_vs_C_F", "factor": "group", "reference": "C", "test": "T",
+                    "at": {"sex": "F"}}]
+    out = _cmp(comparisons=comparisons, factors=["group", "sex"], matrix_id=mx)
+    assert out.get("status") == "success", out
+    assert set(out["factorial"]) == {"group", "sex", "group:sex"}
+    assert out["factorial"]["group"]["df1"] == 1 and out["factorial"]["group"]["n_tested"] == 10
+    assert out["factorial"]["group"]["n_q_below"] >= 3
+    lines = out["f_top"].splitlines()
+    assert lines[0].split("\t") == ["effect", "feature_id", "name", "id_level", "f", "df1", "df2", "f_q"]
+    assert {line.split("\t")[0] for line in lines[1:]} >= {"group"}
+    engine = session_state.session.dataset.last_differential["engine"]
+    assert engine["factorial"]["effects"]["group:sex"]["factors"] == ["group", "sex"]
+    assert engine["omnibus"] is not None                       # cell 全体の F は別の欄のまま
+
+
+def test_three_groups_f_top_lists_omnibus(tmp_path):
+    _install(_ds(groups=("C", "T", "U")), tmp_path)
+    out = _cmp(groups=["C", "T", "U"], matrix_id=_pre()["matrix_id"])
+    lines = out["f_top"].splitlines()
+    assert {line.split("\t")[0] for line in lines[1:]} == {"omnibus"}
+    assert out["factorial"] is None
+
+
+# --- output_path（全行の TSV） --------------------------------------------------------------
+
+def _read_tsv(path: Path) -> list[dict]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    head = lines[0].split("\t")
+    return [dict(zip(head, line.split("\t"))) for line in lines[1:]]
+
+
+def test_output_path_writes_all_rows_and_columns(ds, tmp_path):
+    from metabolomix.analysis import compare_table
+
+    mx = _pre()["matrix_id"]
+    target = tmp_path / "out" / "compare.tsv"
+    out = _cmp(reference_group="C", test_group="T", matrix_id=mx, output_path=str(target), top_n=1)
+    assert out["output"] == {"written": True, "path": str(target), "n_rows": 10,
+                             "ftests_path": None, "n_ftest_rows": 0}
+    head = target.read_text(encoding="utf-8").splitlines()[0].split("\t")
+    assert head == list(compare_table.COLUMNS)
+    rows = _read_tsv(target)
+    assert len(rows) == 10 and {r["feature_id"] for r in rows} == {f"f{k}" for k in range(10)}
+    engine = {r["feature_id"]: r for r in ds.last_differential["engine"]["rows"]}
+    for r in rows:
+        e = engine[r["feature_id"]]
+        assert r["contrast_id"] == "T_vs_C" and r["name"] == f"F{r['feature_id'][1:]}"
+        assert r["id_level"] == "none" and r["verdict"] == e["verdict"]
+        assert float(r["log2fc"]) == pytest.approx(e["log2fc"], rel=1e-9)
+        assert float(r["se"]) == pytest.approx(e["se"], rel=1e-9)
+        assert float(r["df"]) == pytest.approx(e["df"], rel=1e-9)
+        assert int(r["n_reference"]) == e["n_reference"] == 4
+        assert r["detected_test"] == str(e["detected_test"])
+        assert r["confounded"] == "false"
+        assert r["constant_in_group"] == ""
+    # 戻り値の top は切っても、ファイルは全行
+    assert len(out["top"].splitlines()) == 2
+
+
+def test_output_path_writes_ftests_for_multi_group(tmp_path):
+    _install(_ds(groups=("C", "T", "U")), tmp_path)
+    target = tmp_path / "multi.tsv"
+    out = _cmp(groups=["C", "T", "U"], matrix_id=_pre()["matrix_id"], output_path=str(target))
+    assert out["output"]["n_rows"] == 20
+    ftests = tmp_path / "multi.ftests.tsv"
+    assert out["output"]["ftests_path"] == str(ftests) and out["output"]["n_ftest_rows"] == 10
+    rows = _read_tsv(ftests)
+    assert {r["kind"] for r in rows} == {"omnibus"} and {r["effect"] for r in rows} == {""}
+    assert all(r["df1"] == "2" for r in rows)
+
+
+def test_output_path_validation_and_write_failure(ds, tmp_path, monkeypatch):
+    from metabolomix.analysis import compare_table
+
+    mx = _pre()["matrix_id"]
+    folder = _cmp(reference_group="C", test_group="T", matrix_id=mx, output_path=str(tmp_path))
+    assert folder["error"]["code"] == "DATASET_BAD_REQUEST"
+    empty = _cmp(reference_group="C", test_group="T", matrix_id=mx, output_path=" ")
+    assert empty["error"]["code"] == "DATASET_BAD_REQUEST"
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(compare_table, "atomic_write_bytes", boom)
+    out = _cmp(reference_group="C", test_group="T", matrix_id=mx, output_path=str(tmp_path / "x.tsv"))
+    assert out["status"] == "success"                         # 比較は成功し、書けなかった理由を返す
+    assert out["output"]["written"] is False and "disk full" in out["output"]["reason"]
 
 
 def test_japanese_group_names_give_unique_stable_ids(tmp_path):

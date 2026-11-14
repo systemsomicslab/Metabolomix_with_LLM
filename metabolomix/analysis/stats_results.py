@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import copy
+import itertools
 import math
 import re
 
@@ -36,6 +37,7 @@ __all__ = [
     "compare_spec",
     "contrast_id_for",
     "is_stats_current",
+    "latest_preprocess_matrix",
     "matrix_inputs",
     "prepare_default",
     "register_compare",
@@ -100,11 +102,19 @@ def _entry_current(entry: dict, dataset_hash: str, revision) -> bool:
             and entry.get("dataset_hash") == dataset_hash)
 
 
-def register_matrix(ds, prepared, config, group_overrides, *, exclusions: dict | None = None) -> dict:
+#: 登録の順番（プロセス内で単調に増える）。`latest_preprocess_matrix` が「最後に作った」行列を選ぶのに使う。
+_REGISTRATION_SEQ = itertools.count(1)
+#: `dataset_preprocess` が作った行列の `origin`（`matrix_id` を省いた比較・PCA が使う行列の印）。
+ORIGIN_PREPROCESS = "dataset_preprocess"
+
+
+def register_matrix(ds, prepared, config, group_overrides, *, exclusions: dict | None = None,
+                    origin: str | None = None) -> dict:
     """前処理済みの行列を `ds.stat_matrices[prepared.matrix_id]` に置き、その登録を返す。
 
     登録は `{matrix_id, prepared, config, group_overrides, exclusions: {samples, features},
-    dataset_hash, metadata_revision}`。`config` は前処理の設定（None なら `prepared.config`）、
+    dataset_hash, metadata_revision, origin, seq}`。`origin` は作り手（`dataset_preprocess` が作った
+    行列は `ORIGIN_PREPROCESS`、既定の前処理は ``"default"``）、`seq` は登録の順番。`config` は前処理の設定（None なら `prepared.config`）、
     `group_overrides` は試料名 → 群（None は空）。`exclusions` を渡さなければ、登録のときの
     `ds.excluded_samples` / `ds.excluded_features`（`dataset_exclude` の除外）を名前の並びで記録する
     ——行列は今の除外で作る前提で、除外が変われば `metadata_revision` が進んで登録ごと古くなる。
@@ -138,9 +148,20 @@ def register_matrix(ds, prepared, config, group_overrides, *, exclusions: dict |
         "exclusions": exclusions,
         "dataset_hash": current,
         "metadata_revision": revision,
+        "origin": origin,
+        "seq": next(_REGISTRATION_SEQ),
     }
     store[prepared.matrix_id] = entry
     return entry
+
+
+def latest_preprocess_matrix(ds) -> dict | None:
+    """このデータセット（ハンドル）で `dataset_preprocess` が最後に作った、まだ古くない行列の登録。無ければ None。"""
+    current = dataset_fingerprint(ds)
+    revision = getattr(ds, "metadata_revision", 0)
+    entries = [e for e in (getattr(ds, "stat_matrices", None) or {}).values()
+               if e.get("origin") == ORIGIN_PREPROCESS and _entry_current(e, current, revision)]
+    return max(entries, key=lambda e: e.get("seq") or 0) if entries else None
 
 
 def get_matrix(ds, matrix_id: str) -> dict | None:
@@ -161,11 +182,22 @@ class MatrixNotFound(LookupError):
         self.matrix_id = matrix_id
 
 
-def matrix_inputs(ds, matrix_id: str | None = None, *, group_levels=None, group_factors=None):
-    """「`matrix_id` か既定の行列」の入力側（純粋。登録も記録もしない）: `(登録 or None, inputs, 前処理の設定)`。
+def _entry_inputs(entry: dict) -> dict:
+    return {"exclude_samples": list(entry["exclusions"]["samples"]),
+            "exclude_features": list(entry["exclusions"]["features"]),
+            "group_overrides": dict(entry["group_overrides"])}
+
+
+def matrix_inputs(ds, matrix_id: str | None = None, *, group_levels=None, group_factors=None,
+                  prefer_latest: bool = False):
+    """「`matrix_id` か直近の前処理か既定の行列」の入力側（純粋。登録も記録もしない）:
+    `(登録 or None, inputs, 前処理の設定)`。
 
     `matrix_id` があれば登録済みの行列（`entry`）とその除外・群の上書き・設定をそのまま返す
-    （無い・古いなら `MatrixNotFound`）。無ければ `entry=None` で、今の除外と `group_levels` /
+    （無い・古いなら `MatrixNotFound`）。無ければ、`prefer_latest` のときは `latest_preprocess_matrix`
+    （このハンドルで `dataset_preprocess` が最後に作った行列）を返す——ただし `group_levels` /
+    `group_factors` を渡したときは、その群の上書きがその行列のものと同じときだけ（違う群で比べたいなら
+    既定の前処理へ回す）。どちらでもなければ `entry=None` で、今の除外と `group_levels` /
     `group_factors` から `study_inputs` を作り、設定は既定（`PREPROCESS_DEFAULTS` を正規化したもの）。
     `inputs` は `from_dataset(ds, **inputs)` にそのまま渡せる。
     """
@@ -173,11 +205,14 @@ def matrix_inputs(ds, matrix_id: str | None = None, *, group_levels=None, group_
         entry = get_matrix(ds, matrix_id)
         if entry is None:
             raise MatrixNotFound(matrix_id)
-        inputs = {"exclude_samples": list(entry["exclusions"]["samples"]),
-                  "exclude_features": list(entry["exclusions"]["features"]),
-                  "group_overrides": dict(entry["group_overrides"])}
-        return entry, inputs, entry["config"]
+        return entry, _entry_inputs(entry), entry["config"]
     inputs = study_inputs(ds, group_levels=group_levels, group_factors=group_factors)
+    if prefer_latest:
+        latest = latest_preprocess_matrix(ds)
+        if latest is not None and (not (group_levels or group_factors)
+                                   or dict(latest["group_overrides"])
+                                   == dict(sorted(inputs["group_overrides"].items()))):
+            return latest, _entry_inputs(latest), latest["config"]
     return None, inputs, stats_preprocess.normalize_preprocess_config(None)
 
 
@@ -272,6 +307,8 @@ def register_compare(ds, run_result: dict, *, log2fc_threshold, units,
         "engine": engine,
         "units": unit_map,
         "log2fc_threshold": threshold,
+        # 多重比較の補正の方法（bh / bonferroni / holm / none）。書き出しのメタ行と根拠バンドルが読む。
+        "p_adjust_method": engine.get("p_adjust_method", "bh"),
         "provenance": _provenance(ds, result_id, "compare", matrix_id, current),
     }
     existing = ds.results.get(result_id)
@@ -373,11 +410,19 @@ def contrast_id_for(test: str, reference: str, taken: set[str], *, test_pos: int
 
 
 def compare_spec(*, factors, comparisons, covariates, block, method, effect_size, bh_population,
-                 q_threshold, equivalence_fc, allow_confounded, preprocess, inputs) -> dict:
+                 q_threshold, equivalence_fc, allow_confounded, preprocess, inputs,
+                 p_adjust: str = "bh", reported_feature_ids=None) -> dict:
     """引数から組み立てた spec v2（正規化前）。`analyses` は compare 1 つ。結果の `spec` はこれを
-    `normalize_spec_v2` したもの（`dataset_analysis_run` に渡せば同じ数字を出し直せる）。"""
+    `normalize_spec_v2` したもの（`dataset_analysis_run` に渡せば同じ数字を出し直せる）。
+    `reported_feature_ids` は渡されたときだけ書く（`bh_population="reported"` の補正の母集団）。"""
     from metabolomix.analysis.stats import spec_v2
 
+    analysis = {"analysis_id": "compare", "kind": "compare", "test": method,
+                "effect_size": effect_size, "bh_population": bh_population, "p_adjust": p_adjust,
+                "verdict": {"q": q_threshold, "equivalence_fc": equivalence_fc},
+                "allow_confounded": allow_confounded}
+    if reported_feature_ids is not None:
+        analysis["reported_feature_ids"] = reported_feature_ids
     return {
         "schema": spec_v2.ANALYSIS_SCHEMA_V2,
         "input": {"source": "dataset", "exclude_samples": list(inputs["exclude_samples"]),
@@ -386,10 +431,7 @@ def compare_spec(*, factors, comparisons, covariates, block, method, effect_size
         "preprocess": preprocess,
         "design": {"factors": factors, "covariates": covariates, "block": block},
         "comparisons": comparisons,
-        "analyses": [{"analysis_id": "compare", "kind": "compare", "test": method,
-                      "effect_size": effect_size, "bh_population": bh_population,
-                      "verdict": {"q": q_threshold, "equivalence_fc": equivalence_fc},
-                      "allow_confounded": allow_confounded}],
+        "analyses": [analysis],
         "primary": "compare",
     }
 

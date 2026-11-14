@@ -177,7 +177,7 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     `matrix_id` を `dataset_compare` / `dataset_pca` に渡す。`matrix_id` を省いて `dataset_compare` だけを
     呼び直すと既定の前処理で行列を作り直すので、前に選んだ前処理とは別の行列になりうる。
     比較の前提検証は `dataset_compare`（統計エンジン。既定は moderated t）が守る: 群の明示を求め・
-    `include=false` と非 sample の役割を外し・完全交絡を `allow_confounded` なしには止める。
+    `include=false` と非 sample の役割を外し・完全交絡は既定では比べて印を付ける（`allow_confounded=false` で止める）。
 
     dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。

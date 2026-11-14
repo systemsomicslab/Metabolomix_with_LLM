@@ -321,11 +321,11 @@ def test_group_levels_on_job_dataset_keeps_the_batch_table(tmp_path):
         prepared = json.loads(stats_tools.dataset_preprocess(group_levels=["20260101", "20260102"]))
         assert prepared["status"] == "success", prepared
         refused = json.loads(stats_tools.dataset_compare(
-            reference_group="20260101", test_group="20260102", matrix_id=prepared["matrix_id"]))
+            reference_group="20260101", test_group="20260102", matrix_id=prepared["matrix_id"],
+            allow_confounded=False))
         assert refused["error"]["code"] == "STATISTIC_CONFOUNDED", source
-        out = json.loads(stats_tools.dataset_compare(
-            reference_group="20260101", test_group="20260102",
-            matrix_id=prepared["matrix_id"], allow_confounded=True))
+        out = json.loads(stats_tools.dataset_compare(                 # 既定は印を付けて比較する
+            reference_group="20260101", test_group="20260102", matrix_id=prepared["matrix_id"]))
         assert out["status"] == "success", out
         assert out["confounding"]["batch_table"] == {"20260101": {"20260101": 3},
                                                      "20260102": {"20260102": 3}}, source
@@ -346,7 +346,8 @@ def test_constant_mddata_batch_also_falls_back_to_filename_dates(tmp_path):
     assert ds.sample_meta[names[0]]["batch"] == "20260101"
     assert ds.sample_meta[names[0]]["batch_source"] == "filename_date"
     # Class ID（A / B）は日付と 1 対 1 なので、エンジンも完全交絡として日付のバッチ表を返す。
-    out = json.loads(stats_tools.dataset_compare(reference_group="A", test_group="B"))
+    out = json.loads(stats_tools.dataset_compare(reference_group="A", test_group="B",
+                                                 allow_confounded=False))
     assert out["error"]["code"] == "STATISTIC_CONFOUNDED"
     assert out["error"]["details"]["batch_table"] == {"A": {"20260101": 3}, "B": {"20260102": 3}}
 

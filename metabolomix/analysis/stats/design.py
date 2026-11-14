@@ -34,6 +34,8 @@ class Design:
     contrast_info: dict[str, dict]
     omnibus: np.ndarray           # p×m（各 cell − 最初の cell）
     dropped_cells: list[str] = field(default_factory=list)  # 単位が無かった cell（複数因子では DESIGN_INVALID にするので通常は空）
+    factors: list[str] = field(default_factory=list)        # cell を作った因子（この順で cell 名を ":" で結ぶ）
+    levels: dict[str, list[str]] = field(default_factory=dict)  # 因子 → 水準（昇順。cell の並びの元）
 
 
 def _invalid(message: str, **details) -> DomainError:
@@ -195,4 +197,47 @@ def build_design(units, *, factors: list[str], comparisons: list[dict],
     for j in range(1, k):
         omnibus[j, j - 1] = 1.0
         omnibus[0, j - 1] = -1.0
-    return Design(matrix, columns, cells, contrasts, info, omnibus, [])
+    return Design(matrix, columns, cells, contrasts, info, omnibus, [], list(factors),
+                  {f: list(levels[f]) for f in factors})
+
+
+def factorial_effects(design: Design) -> dict[str, dict]:
+    """要因モデルの主効果と交互作用の仮説（2 因子以上の cell means。cell が全部そろっているとき）。
+
+    因子の空でない部分集合 S ごとに、S の因子には「各水準 − 先頭の水準」（L−1 列）、S にない因子には
+    水準の単純平均（1/L）を当てた行列のクロネッカー積を作る。cell の並びは `itertools.product`
+    （先頭の因子が最も遅く変わる）なので、積も因子の順に取る。主効果は他の因子の水準を等しい重みで
+    平均した周辺平均の差（二元配置分散分析の Type III・重みなしの平均）、交互作用は差の差の全体。
+    共変量・ブロックの列は 0。戻り値は 効果の名前（因子を ":" で結ぶ）→ `{"factors", "df1", "matrix"（p×df1）}`。
+    因子が 1 つ・cell が欠けた計画では空（主効果は omnibus と同じ・交互作用が定義できない）。
+    """
+    factors, levels = list(design.factors), design.levels
+    if len(factors) < 2 or any(f not in levels for f in factors):
+        return {}
+    product = [":".join(c) for c in itertools.product(*(levels[f] for f in factors))]
+    if product != list(design.cells):
+        return {}
+    p = design.matrix.shape[1]
+    out: dict[str, dict] = {}
+    for size in range(1, len(factors) + 1):
+        for subset in itertools.combinations(factors, size):
+            mats = []
+            for f in factors:
+                n_lv = len(levels[f])
+                if f in subset:
+                    diff = np.zeros((n_lv, n_lv - 1))
+                    diff[0, :] = -1.0
+                    diff[1:, :] = np.eye(n_lv - 1)
+                    mats.append(diff)
+                else:
+                    mats.append(np.full((n_lv, 1), 1.0 / n_lv))
+            block = mats[0]
+            for m in mats[1:]:
+                block = np.kron(block, m)
+            if block.shape[1] == 0:
+                continue
+            full = np.zeros((p, block.shape[1]))
+            full[:len(design.cells), :] = block
+            out[":".join(subset)] = {"factors": list(subset), "df1": int(block.shape[1]),
+                                     "matrix": full}
+    return out

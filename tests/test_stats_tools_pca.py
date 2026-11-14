@@ -18,8 +18,9 @@ from tests.test_stats_results import _ds
 
 FLAT_OFF = dict(drift_mode="off", blank_min_ratio=None, detection_min_rate=None,
                 max_qc_rsd=None, max_d_ratio=None, normalize="none")
-PAYLOAD_KEYS = {"status", "result_id", "matrix_id", "scaling", "log2", "imputation", "n_fit",
-                "n_qc_projected", "explained_variance_ratio", "groups", "record", "loadings_note"}
+PAYLOAD_KEYS = {"status", "result_id", "matrix_id", "matrix_source", "scaling", "log2", "imputation",
+                "n_fit", "n_qc_projected", "explained_variance_ratio", "groups", "record",
+                "loadings_note"}
 
 
 def _install(state, tmp_path):
@@ -50,7 +51,7 @@ def test_pca_on_matrix_qc_projected_and_groups_counted(ds):
     out = _strict(dataset_pca(matrix_id=pre["matrix_id"], n_components=3))
     assert set(out) == PAYLOAD_KEYS
     assert out["status"] == "success" and out["result_id"].startswith("pca_")
-    assert out["matrix_id"] == pre["matrix_id"]
+    assert out["matrix_id"] == pre["matrix_id"] and out["matrix_source"] == "matrix_id"
     assert out["scaling"] == "autoscale" and out["log2"] is True
     assert out["n_fit"] == 8 and out["n_qc_projected"] == 4          # 4 個体 × 2 群、QC 4 本
     assert out["groups"] == {"C": 4, "T": 4}
@@ -77,7 +78,7 @@ def test_pca_on_matrix_qc_projected_and_groups_counted(ds):
 
 def test_pca_without_matrix_id_registers_the_default_matrix(ds):
     out = _pca()
-    assert out["status"] == "success"
+    assert out["status"] == "success" and out["matrix_source"] == "default"
     entry = stats_results.get_matrix(ds, out["matrix_id"])
     assert entry is not None and entry["record_id"]
     assert out["record"]["preprocess_record"]["written"] is True
@@ -105,6 +106,17 @@ def test_pca_group_levels_only_affect_labels_not_numbers(ds):
     assert implicit["groups"] != plain_default["groups"]
     assert (ds.results[implicit["result_id"]]["engine"]["scores"]
             == ds.results[plain_default["result_id"]]["engine"]["scores"])
+
+
+def test_pca_without_matrix_id_uses_latest_preprocess(ds):
+    first = _pre(normalize="tic")["matrix_id"]
+    latest = _pre(normalize="median")["matrix_id"]
+    out = _pca()
+    assert out["matrix_id"] == latest and out["matrix_source"] == "latest_preprocess"
+    assert "preprocess_record" not in out["record"]
+    assert set(ds.stat_matrices) == {first, latest}
+    record_file = json.loads(Path(out["record"]["path"]).read_text(encoding="utf-8"))
+    assert record_file["settings"]["matrix_source"] == "latest_preprocess"
 
 
 def test_pca_missing_matrix_is_missing_state(ds):

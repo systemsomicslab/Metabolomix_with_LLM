@@ -10,14 +10,17 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 from mcp.types import ToolAnnotations
 
-from metabolomix.analysis import stats_records, stats_results
+from metabolomix.analysis import compare_table, stats_records, stats_results
 from metabolomix.analysis.stats import preprocess as stats_preprocess
 from metabolomix.analysis.stats import pca as stats_pca
 from metabolomix.analysis.stats import spec_v2
+from metabolomix.analysis.stats.compare import P_ADJUST_METHODS
 from metabolomix.analysis.stats.data import from_dataset
+from metabolomix.analysis.stats_run_summary import factorial_summary
 from metabolomix.core import mcp_core
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
@@ -107,7 +110,8 @@ def dataset_preprocess(
 
     工程は 選択 → ドリフト補正 → 品質の足切り → 正規化 → log2 → 反復のまとめ（個体ごとの行列）。
     同じデータ・除外・群・設定は同じ `matrix_id`。比較（dataset_compare）・PCA（dataset_pca）は
-    この ID を受ける（省略時は既定の設定）。`dataset_exclude` の除外は自動で反映される。
+    この ID を受ける（省略時は、このハンドルで最後に作ったこの行列。無ければ既定の設定）。
+    `dataset_exclude` の除外は自動で反映される。
     `reports/stats/` に記録を 1 件追記する（書けないときは record.written=false。前処理は成功）。
 
     drift_mode: QC の LOESS ドリフト補正。"auto"（既定。条件が揃えば行う）/ "on" / "off"。
@@ -158,7 +162,7 @@ def dataset_preprocess(
         **summary,
         "record": record,
         "next": ("dataset_compare（2 群以上の比較）または dataset_pca を、この matrix_id を"
-                 "渡して（または省略して既定の前処理で）実行してください"),
+                 "渡して実行してください（省略しても、このハンドルで最後に作ったこの行列を使う）"),
     }))
 
 
@@ -166,13 +170,46 @@ def dataset_preprocess(
 
 #: 戻り値・記録の警告で、長い一覧を切るキー（エンジンの注意が持つ一覧）。
 _WARNING_LIST_KEYS = ("samples", "sample_ids", "unit_ids", "examples", "subjects")
-_TOP_COLUMNS = ["contrast_id", "feature_id", "name", "log2fc", "ci_low", "ci_high", "q", "verdict"]
+_TOP_COLUMNS = ["contrast_id", "feature_id", "name", "id_level", "log2fc", "ci_low", "ci_high", "q",
+                "verdict"]
+#: F 検定の上位（omnibus・要因の効果）の列。
+_F_TOP_COLUMNS = ["effect", "feature_id", "name", "id_level", "f", "df1", "df2", "f_q"]
 #: top の件数の上限（戻り値を肥大させない）。
 _TOP_N_MAX = 50
 
 
 def _bad_request(message: str, **details) -> DomainError:
     return DomainError("DATASET_BAD_REQUEST", message, details or None)
+
+
+def _reported_ids(bh_population, reported_feature_ids) -> list[str] | None:
+    """`bh_population="reported"` の母集団（特徴 ID の文字列のリスト。整数の ID も文字列にする）。
+
+    reported と reported_feature_ids は対で使う（片方だけは DATASET_BAD_REQUEST）。"""
+    if bh_population != "reported":
+        if reported_feature_ids is not None:
+            raise _bad_request('reported_feature_ids は bh_population="reported" のときだけ渡します。',
+                               bh_population=bh_population)
+        return None
+    if (not isinstance(reported_feature_ids, list) or not reported_feature_ids
+            or any(isinstance(f, bool) or not isinstance(f, (str, int)) or f == ""
+                   for f in reported_feature_ids)):
+        raise _bad_request('bh_population="reported" には reported_feature_ids（報告する特徴 ID の'
+                           "空でないリスト）が要ります。")
+    return list(dict.fromkeys(str(f) for f in reported_feature_ids))
+
+
+def _output_path(output_path):
+    """`output_path` の検証（比較を回す前に済ませる）。無ければ None。"""
+    if output_path is None:
+        return None
+    if not isinstance(output_path, str) or not output_path.strip():
+        raise _bad_request("output_path は書き出し先のファイルのパスです。", output_path=output_path)
+    path = Path(output_path)
+    if path.is_dir():
+        raise _bad_request("output_path がフォルダです。ファイルのパスを渡してください。",
+                           output_path=output_path)
+    return path
 
 
 def _design_and_comparisons(reference_group, test_group, groups, comparisons, factors):
@@ -240,30 +277,56 @@ def _fmt(value, spec: str = ".4g") -> str:
     return "" if value is None else format(value, spec)
 
 
+def _clean(text) -> str:
+    return str(text or "").replace("\t", " ").replace("\n", " ")
+
+
 def _top_table(ds, rows, cids, limit: int) -> str:
-    """対比ごとに changed の上位（q の小さい順）を TSV（列名は 1 回）にする。無ければ空文字。"""
+    """対比ごとに changed の上位（q の小さい順）を TSV（列名は 1 回）にする。無ければ空文字。
+    名前は `feature_metadata`、無ければ `feature_annotations`（MS1 注釈）から。`id_level` は msms / ms1 / none。"""
     lines = []
-    meta = getattr(ds, "feature_metadata", None) or {}
     for cid in cids:
         changed = [r for r in rows if r["contrast_id"] == cid and r["verdict"] == "changed"
                    and r["q"] is not None]
         changed.sort(key=lambda r: (r["q"], r["feature_id"]))
         for r in changed[:limit]:
-            name = str((meta.get(r["feature_id"]) or {}).get("name") or "")
-            lines.append("\t".join([cid, str(r["feature_id"]),
-                                    name.replace("\t", " ").replace("\n", " "),
+            ident = compare_table.identity_of(ds, r["feature_id"])
+            lines.append("\t".join([cid, str(r["feature_id"]), _clean(ident["name"]), ident["id_level"],
                                     _fmt(r["log2fc"]), _fmt(r["ci_low"]), _fmt(r["ci_high"]),
                                     _fmt(r["q"], ".3g"), r["verdict"]]))
     return "\n".join(["\t".join(_TOP_COLUMNS), *lines]) if lines else ""
+
+
+def _f_top_table(ds, engine: dict, limit: int) -> str:
+    """omnibus F と要因の F の効果ごとに、q が閾値以下の上位（q の小さい順）を TSV にする。無ければ空文字。
+    effect は omnibus なら `omnibus`、要因なら効果の名前（`group` / `group:B` など）。"""
+    q_thr = engine["verdict_rule"]["q_threshold"]
+    blocks = []
+    if engine.get("omnibus"):
+        blocks.append(("omnibus", engine["omnibus"]))
+    factorial = engine.get("factorial") or {}
+    for name in factorial.get("effects") or {}:
+        blocks.append((name, [r for r in factorial["rows"] if r["effect"] == name]))
+    lines = []
+    for effect, rows in blocks:
+        hits = [r for r in rows if r["f_q"] is not None and r["f_q"] <= q_thr]
+        hits.sort(key=lambda r: (r["f_q"], r["feature_id"]))
+        for r in hits[:limit]:
+            ident = compare_table.identity_of(ds, r["feature_id"])
+            lines.append("\t".join([effect, str(r["feature_id"]), _clean(ident["name"]), ident["id_level"],
+                                    _fmt(r["f"]), _fmt(r["df1"]), _fmt(r["df2"]), _fmt(r["f_q"], ".3g")]))
+    return "\n".join(["\t".join(_F_TOP_COLUMNS), *lines]) if lines else ""
 
 
 def _contrast_summaries(engine: dict, spec: dict, log2fc_threshold: float) -> list[dict]:
     """対比ごとの要約。`large_changes` は判定が changed で |log2fc| が閾値以上の件数。"""
     q_thr = engine["verdict_rule"]["q_threshold"]
     presence = engine["presence"]
+    by_contrast = (engine.get("confounding") or {}).get("by_contrast") or {}
     out = []
     for comp in spec["comparisons"]:
         cid = comp["id"]
+        conf = by_contrast.get(cid) or {}
         rows = [r for r in engine["rows"] if r["contrast_id"] == cid]
         verdicts = {"changed": 0, "unchanged": 0, "inconclusive": 0}
         for r in rows:
@@ -276,6 +339,8 @@ def _contrast_summaries(engine: dict, spec: dict, log2fc_threshold: float) -> li
             "contrast_id": cid,
             "reference": rows[0]["reference"] if rows else None,
             "test": rows[0]["test"] if rows else None,
+            "confounded": bool(conf.get("confounded")),
+            "batch_status": conf.get("batch_status"),
             "n_tested": n_tested, "n_not_tested": len(rows) - n_tested,
             "verdicts": verdicts, "large_changes": large,
             "presence": {"available": has_presence,
@@ -311,7 +376,7 @@ def _matrix_not_found(matrix_id) -> str:
         "dataset_preprocess を実行し直して、その matrix_id を渡してください。")
 
 
-def _write_compare_record(holder, entry, record, spec, summary) -> dict:
+def _write_compare_record(holder, entry, record, spec, summary, matrix_source: str) -> dict:
     """比較の記録を書く（親は行列の前処理の記録）。書けないときは `{"written": False, "reason"}`。"""
     try:
         reports_dir = mcp_core._resolve_report_dir(holder)
@@ -321,7 +386,8 @@ def _write_compare_record(holder, entry, record, spec, summary) -> dict:
             inputs={"dataset_hash": entry["dataset_hash"], "matrix_id": record["matrix_id"],
                     "result_id": record["result_id"]},
             parent_ids=parents,
-            settings={"spec": spec, "log2fc_threshold": record["log2fc_threshold"]},
+            settings={"spec": spec, "log2fc_threshold": record["log2fc_threshold"],
+                      "matrix_source": matrix_source},
             summary=summary)
     except DomainError as exc:
         return {"written": False, "reason": f"{exc.code}: {exc.message}"}
@@ -345,23 +411,28 @@ def dataset_compare(
     method: str = "moderated_t",
     effect_size: str = "log2_mean_difference",
     bh_population: str = "matrix",
+    reported_feature_ids: list[str] | None = None,
+    p_adjust: str = "bh",
     q_threshold: float = 0.05,
     equivalence_fc: float = 1.2,
     log2fc_threshold: float = 1.0,
-    allow_confounded: bool = False,
+    allow_confounded: bool = True,
     group_levels: list[str] | None = None,
     group_factors: list[list[str]] | None = None,
     top_n: int = 10,
+    output_path: str | None = None,
     dataset_handle: str | None = None,
 ) -> str:
     """2 群・多群・2 因子の比較を統計エンジン（analysis-spec v2）で行い、要約を返す。
 
     群の指定はちょうど 1 つ: reference_group+test_group（2 群）/ groups（3 群以上。先頭が基準で
     各群 − 基準の対比と omnibus F）/ comparisons（spec v2 の comparisons の形。2 因子・`at`・
-    交互作用。factors が要る）。判定（changed / unchanged / inconclusive）は q と CI で決まり、
+    交互作用。factors が要る。因子が 2 つ以上で cell がそろえば主効果・交互作用の F も `factorial` に返す）。
+    判定（changed / unchanged / inconclusive）は q と CI で決まり、
     log2fc_threshold は判定に使わない（large_changes の数え方・図の色分け・書き出しの significant 列だけ）。
     全行は result_id でセッションに保持し、直近の結果（図・書き出しの既定）にもなる。
     `reports/stats/` に記録を 1 件追記する（書けないときは record.written=false。比較は成功）。
+    戻り値の先頭は `confounding`（群とバッチの交絡。対比ごとの `by_contrast`）。
 
     covariates: 試料の表の列名。値がすべて数値なら numeric、さもなくば categorical。
     block: "subject_id" だけ（個体の固定効果。同じ個体が複数の群・cell に出る対応のある計画——前後比較など——で
@@ -370,17 +441,25 @@ def dataset_compare(
         入れ子（どの個体も 1 つの群にしか出ない）なら、まとめた行列でも collapse_replicates=False の行列でも
         計画行列が階数不足になり DESIGN_RANK_DEFICIENT で止まる（入れ子の技術反復は block ではなく既定の
         まとめで扱う）。
-    matrix_id: dataset_preprocess が返した行列 ID（その前処理・群・除外のまま比較する）。省略時は既定の
-        前処理で行列を作って登録する（QC のある換算済みデータでは drift_mode を尋ねる needs_input。
-        dataset_preprocess で行列を作ってその ID を渡す）。古い・無い ID は missing_state。
+    matrix_id: dataset_preprocess が返した行列 ID（その前処理・群・除外のまま比較する）。省略時は、この
+        ハンドルで dataset_preprocess が最後に作った行列（group_levels / group_factors を渡したときは群が
+        同じものだけ）、無ければ既定の前処理で行列を作って登録する（QC のある換算済みデータでは drift_mode を
+        尋ねる needs_input）。使った行列は戻り値の matrix_id と matrix_source（"matrix_id" /
+        "latest_preprocess" / "default"）。古い・無い ID は missing_state。
         ID と group_levels / group_factors の併用は不可（群は行列が決めている）。
     method: "moderated_t"（既定）など（エンジンの検定）。effect_size: "log2_mean_difference"（既定）/
-        "arithmetic_mean_ratio"。bh_population: "matrix"（既定）/ "annotated"（"reported" は報告した特徴の
-        一覧が要るので dataset_analysis_run の spec v2 だけで使える。ここでは DATASET_BAD_REQUEST）。
+        "arithmetic_mean_ratio"。bh_population: 補正の母集団 "matrix"（既定）/ "annotated" / "reported"
+        （reported_feature_ids の特徴だけ。reported のときだけ reported_feature_ids を渡す）。
+    p_adjust: 多重比較の補正 "bh"（既定。FDR）/ "bonferroni" / "holm"（FWER）/ "none"（補正なし）。
+        q 列はこの方法の値で、戻り値と記録に p_adjust_method として残る。
     q_threshold / equivalence_fc: 判定の q の閾値（既定 0.05）と同等とみなす倍率（既定 1.2）。
-    allow_confounded: 群とバッチが完全交絡でも進める（既定は STATISTIC_CONFOUNDED で止める）。
+    allow_confounded: 既定 true（群とバッチが完全交絡でも比較し、confounding と対比の confounded に印を
+        付ける）。false を渡すと完全交絡（全体か、どれかの対比）で STATISTIC_CONFOUNDED にして止める。
     top_n: 対比ごとに changed の上位（q の小さい順）を top に何件載せるか（既定 10、上限 50。
-        全行は result_id・書き出しで取り出す）。
+        F 検定があれば効果ごとの上位を f_top に。全行は result_id・output_path で取り出す）。
+    output_path: 全特徴 × 全対比の全列（統計量・df・CI・SE・群ごとの n と検出数・同定の列）を TSV で書く
+        先。F 検定（omnibus・要因）があれば `<stem>.ftests<拡張子>` にも書く。差次的エクスポート
+        （dataset_export_differential）の 15 列とは別物。書けなくても比較は成功し、output.written=false。
     dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。
     """
     holder = resolve_holder(dataset_handle)
@@ -394,12 +473,12 @@ def dataset_compare(
     try:
         if isinstance(top_n, bool) or not isinstance(top_n, int) or not 0 <= top_n <= _TOP_N_MAX:
             raise _bad_request(f"top_n は 0〜{_TOP_N_MAX} の整数です。全行は結果（result_id）に保持して"
-                               "あり、書き出し（dataset_export_differential）で取り出せます。",
+                               "あり、output_path・書き出し（dataset_export_differential）で取り出せます。",
                                top_n=top_n)
-        if bh_population == "reported":
-            raise _bad_request('bh_population="reported" はこのツールでは使えません（報告した特徴の一覧を'
-                               "渡せない）。dataset_analysis_run の spec v2（reported_feature_ids）で"
-                               "指定してください。", bh_population=bh_population)
+        reported = _reported_ids(bh_population, reported_feature_ids)
+        if p_adjust not in P_ADJUST_METHODS:
+            raise _bad_request(f"p_adjust は {list(P_ADJUST_METHODS)} のどれかです。", p_adjust=p_adjust)
+        out_path = _output_path(output_path)
         if (isinstance(log2fc_threshold, bool) or not isinstance(log2fc_threshold, (int, float))
                 or not math.isfinite(log2fc_threshold) or log2fc_threshold < 0):
             raise _bad_request("log2fc_threshold は 0 以上の有限の数です。",
@@ -414,16 +493,19 @@ def dataset_compare(
                                "group_factors は dataset_preprocess に渡してください。")
         try:
             entry, inputs, preprocess = stats_results.matrix_inputs(
-                ds, matrix_id, group_levels=group_levels, group_factors=group_factors)
+                ds, matrix_id, group_levels=group_levels, group_factors=group_factors,
+                prefer_latest=True)
         except stats_results.MatrixNotFound:
             return _matrix_not_found(matrix_id)
+        matrix_source = ("matrix_id" if matrix_id is not None
+                         else "latest_preprocess" if entry is not None else "default")
         study = from_dataset(ds, **inputs)
         spec = spec_v2.normalize_spec_v2(stats_results.compare_spec(
             factors=design_factors, comparisons=spec_comparisons,
             covariates=_covariate_specs(study, covariates), block=block, method=method,
             effect_size=effect_size, bh_population=bh_population, q_threshold=q_threshold,
             equivalence_fc=equivalence_fc, allow_confounded=allow_confounded,
-            preprocess=preprocess, inputs=inputs))
+            preprocess=preprocess, inputs=inputs, p_adjust=p_adjust, reported_feature_ids=reported))
 
         prepared = (entry["prepared"] if entry is not None
                     else _prepare_default(study, spec["preprocess"], "dataset_compare"))
@@ -449,11 +531,19 @@ def dataset_compare(
 
     engine = record["engine"]
     conf = engine["confounding"]
+    q_thr = engine["verdict_rule"]["q_threshold"]
     summary = {
+        # 交絡は先頭に置く（既定では止めないので、読み落とさせない）
+        "confounding": {"batch_status": conf.get("batch_status"),
+                        "batch_table": conf.get("batch_table"),
+                        "by_contrast": conf.get("by_contrast"),
+                        "warnings": conf.get("warnings")},
         "result_id": record["result_id"],
         "matrix_id": record["matrix_id"],
+        "matrix_source": matrix_source,
         "rule_hash": record["rule_hash"],
         "test": engine["test"],
+        "p_adjust_method": engine["p_adjust_method"],
         "effect_size_definition": {"name": engine["effect_size_definition"]["name"]},
         "ci_level": engine["ci_level"],
         "verdict_rule": engine["verdict_rule"],
@@ -463,20 +553,28 @@ def dataset_compare(
         "prior": engine["prior"],
         "contrasts": _contrast_summaries(engine, spec, record["log2fc_threshold"]),
         "omnibus": _omnibus_summary(engine),
-        "confounding": {"batch_status": conf.get("batch_status"),
-                        "batch_table": conf.get("batch_table"),
-                        "warnings": conf.get("warnings")},
+        "factorial": factorial_summary(engine, q_thr),
         "warnings": engine["warnings"],
     }
     summary = truncate_lists(json_safe(round_floats(summary)), _STEP_LIST_LIMIT,
                              keys=_WARNING_LIST_KEYS)
-    written = _write_compare_record(holder, entry, record, spec, summary)
+    output = None
+    if out_path is not None:
+        try:
+            output = {"written": True, **compare_table.write_compare_tables(out_path, ds, record)}
+        except OSError as exc:
+            output = {"written": False, "path": str(out_path), "reason": f"OSError: {exc}"}
+    written = _write_compare_record(holder, entry, record, spec, summary, matrix_source)
     if preprocess_record is not None:
         written = {**written, "preprocess_record": preprocess_record}
+    cids = [c["id"] for c in spec["comparisons"]]
+    f_top = _f_top_table(ds, engine, top_n)
     return json_payload(json_safe({
         "status": "success",
         **summary,
-        "top": _top_table(ds, engine["rows"], [c["id"] for c in spec["comparisons"]], top_n),
+        "top": _top_table(ds, engine["rows"], cids, top_n),
+        **({"f_top": f_top} if f_top else {}),
+        **({"output": output} if output is not None else {}),
         "record": written,
         "next": ("全行は result_id で保持した（直近の結果として書き出し・図の既定になる）。対比が複数の結果は"
                  "dataset_export_differential・dataset_export_evidence_bundle・dataset_plot(kind=volcano)・"
@@ -522,9 +620,10 @@ def dataset_pca(
     ローディング）は戻り値に載せず result_id でセッションに保持し、直近の PCA（図の既定）にもなる。
     `reports/stats/` に記録を 1 件追記する（書けないときは record.written=false。PCA は成功）。
 
-    matrix_id: dataset_preprocess が返した行列 ID。省略時は既定の前処理で行列を作って登録する
-        （QC のある換算済みデータでは drift_mode を尋ねる needs_input。dataset_preprocess で行列を
-        作ってその ID を渡す）。古い・無い ID は missing_state。
+    matrix_id: dataset_preprocess が返した行列 ID。省略時は、このハンドルで dataset_preprocess が最後に
+        作った行列、無ければ既定の前処理で行列を作って登録する（QC のある換算済みデータでは drift_mode を
+        尋ねる needs_input）。使った行列は戻り値の matrix_id と matrix_source（"matrix_id" /
+        "latest_preprocess" / "default"）。古い・無い ID は missing_state。
     scaling: "autoscale"（既定。平均 0・SD 1）/ "pareto"（SD の平方根で割る）。
     n_components: 主成分数（既定 5。個体数・特徴数の小さい方が上限）。
     impute: 欠測の補い方 "half_min"（既定）/ "knn" / "none"（欠測があれば PCA_MISSING_VALUES）。
@@ -546,9 +645,12 @@ def dataset_pca(
         label_overrides = stats_results.study_inputs(
             ds, group_levels=group_levels, group_factors=group_factors)["group_overrides"]
         try:
-            entry, inputs, config = stats_results.matrix_inputs(ds, matrix_id)   # 群は行列を選ばない
+            # 群は行列を選ばない（色分けだけ）。省略時は直近の dataset_preprocess の行列
+            entry, inputs, config = stats_results.matrix_inputs(ds, matrix_id, prefer_latest=True)
         except stats_results.MatrixNotFound:
             return _matrix_not_found(matrix_id)
+        matrix_source = ("matrix_id" if matrix_id is not None
+                         else "latest_preprocess" if entry is not None else "default")
         if entry is not None:
             prepared = entry["prepared"]
         else:
@@ -573,6 +675,7 @@ def dataset_pca(
     summary = truncate_lists(json_safe(round_floats({
         "result_id": record["result_id"],
         "matrix_id": record["matrix_id"],
+        "matrix_source": matrix_source,
         "scaling": result["scaling"],
         "log2": result["log2"],
         "imputation": result["imputation"],
@@ -584,7 +687,7 @@ def dataset_pca(
     written = _write_pca_record(
         holder, entry, record,
         {"scaling": scaling, "n_components": n_components, "impute": impute,
-         "group_labels": label_overrides}, summary)
+         "group_labels": label_overrides, "matrix_source": matrix_source}, summary)
     if preprocess_record is not None:
         written = {**written, "preprocess_record": preprocess_record}
     return json_payload(json_safe({
