@@ -207,7 +207,7 @@ MCP も import しない。ツール層の仕事は、極性の出所を決め�
 4. ├─ [目標照合] metabolomix/mztab/polarity.py  dataset_polarity()
 5. │  ├─ metabolomix/console/job_manager.py  load_job()
 6. │  └─ metabolomix/console/output_collector.py  read_adduct_polarity()
-7. ├─ [目標照合] metabolomix/analysis/feature_search.py  normalize_targets()
+7. ├─ [目標照合] metabolomix/analysis/feature_search.py  normalize_targets()（種の目標に同位体の標識があれば `analysis/msms_rules.py` `isotope_labelled()` で見て `FEATURE_TARGET_INVALID`）
 8. │  └─ metabolomix/analysis/feature_search.py  theoretical_mz()
 9. ├─ [目標照合] metabolomix/analysis/feature_search.py  match_target()
 10. │  └─ metabolomix/analysis/feature_search.py  _identity()（SME の付加体は綴りでなく組成で比べる: `msdial/adducts.py` `same_adduct()`。種の目標の SME・SML の名前は MS/MS の合否と同じ `analysis/msms_rules.py` `name_lipid_species()` で読む）

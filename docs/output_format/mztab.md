@@ -441,6 +441,11 @@ qualified にせず数にも入れない——選んだ残す ID の行が必ず
   `LPC 16:0`。経路は `reanalysis` §4 の `name` / `name_cleaned`）。MSP の記録名がそのまま SME の名前になる
   Console / mzTab-M のデータセットでも、同じ記録を走査と MS/MS で別の種に読まない。同位体の標識のある名前
   （`(d7)` などの内部標準）は種に読まない。
+- **目標の側も同じ: 同位体の標識のある `lipid_species`（`PC 15:0_18:1(d7)`・`PC 33:1(d7)` などの内部標準）は
+  `FEATURE_TARGET_INVALID`（`field: lipid_species`）。** GOSLIN は標識を落として読む（`PC 33:1`）ので、受けると天然の種を
+  探し、候補の側では読まない内部標準の名前の特徴を「SME・SML の裏付けが無い」`unannotated` にしてしまう。天然の種なら
+  標識の無い名前を、内部標準そのものは窓検索（`min_mz`/`max_mz`・`min_rt`/`max_rt`）で探す。長鎖塩基の `d18:1` は
+  標識ではない（`:` が続く）。`dataset_claim_evidence` の `target.lipid_species` も同じ。
 - 名前を種のレベルに読めない SME 候補（`Unknown`、クラスだけの名前、内部標準など）は InChIKey の無い候補と
   同じく評価できないものとして飛ばす（`sme_identity_unresolved`）。曖昧な SML は名前を持たないので
   種では照らせず `unannotated`。

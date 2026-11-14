@@ -535,7 +535,8 @@ InChIKey が一意に決まらない脂質の種は `{"lipid_species": "PC 18:3_
 | `ontology_formula` | 名前で読めなければ、ClassyFire の `Ontology` と分子式から和の組成の種を作る（`pathway.msp_lipid.from_class_formula`。LPS・LPG も） |
 
 同位体の標識のある名前（`(d7)` など、内部標準）と、どの経路でも読めない記録は目標とも別物とも
-数えない。名前の 2 つの経路（`name` → `name_cleaned`）は、目標照合（`dataset_feature_search` と束の既定の特徴）が
+数えない。そのため目標の側の `target.lipid_species` に標識があれば `MSMS_RULES_INVALID`（`field: target.lipid_species`）——
+GOSLIN は標識を落として読むので、受けると天然の種の合否を内部標準の合否として返してしまう（天然の種なら標識の無い名前を渡す）。名前の 2 つの経路（`name` → `name_cleaned`）は、目標照合（`dataset_feature_search` と束の既定の特徴）が
 SME 候補・SML の名前を読むのと、MS-DIAL の注釈（`msdial_rank`）を読むのとも同じ（`msms_rules.name_lipid_species`）——
 同じ名前を走査と MS/MS で別の種に読まない。目標の候補の経路は `target_in_top_rank` の `detail.species_route`、候補の表では
 `lipid_species`・`species_route` の列に出る。
@@ -587,9 +588,14 @@ dot の足切りは二乗の値と比べる）の列を足す——**合否に�
 （`carbon_direction` 既定 `increasing`・`double_bond_direction` 既定 `decreasing`・
 `max_violations` 既定 0。逆相の LC の向き）。
 
-- `auto` は SME rank 1 の名前（`sml` を足せば SML の名前も）を GOSLIN で読み、分子種
-  （`16:0_18:1`）は鎖を足して種のレベル（`34:1`）に直す。エーテル（`O-` / `P-`）は別の
-  クラス（`PC O-`）として扱う。`adduct` は SME rank 1 の付加体と**綴りでなく組成で**比べる
+- `auto` は SME rank 1 の名前（`sml` を足せば SML の名前も）を GOSLIN の種のレベルに読む。読み手は目標照合の
+  種の目標・MS/MS の合否と同じ `msms_rules.name_lipid_species`（§4 の `name` → `name_cleaned`）で、名前をそのまま
+  読めなければ注記・付加体の表記を外して読む（MSP の記録名がそのまま SME の名前になる Console / mzTab-M の
+  `PC 34:1; ExampleDB ID-0001` は `PC 34:1`）。同位体の標識のある名前（`PC 15:0_18:1(d7)` などの内部標準）は
+  集めない（天然の種の列に混ぜない）。分子種（`16:0_18:1`）は鎖を足して種のレベル（`34:1`）に直る。エーテルは別の
+  クラス（`PC O-`）として扱い、`P-` は GOSLIN の規約でビニルエーテルの二重結合を数えて `O-` に直る（`PE P-18:0_20:4`
+  も `PE P-38:4` も `PE O-38:5`）——プラスマローゲンの列は `lipid_class: "PE O-"` で集める（`"PE P-"` では
+  集まらず、`notes` にそう書く）。`adduct` は SME rank 1 の付加体と**綴りでなく組成で**比べる
   （`msdial.adducts.same_adduct`。mzTab-M の `[M+H]1+` と `[M+H]+`、`[M+HCOO]-` と `[M+FA-H]-` は同じ）。
 - 同じ（炭素数, 二重結合数）が複数あれば RT の中央値で並べ、`duplicates` に挙げる。
 - 同じ二重結合数の中で炭素数の昇順、同じ炭素数の中で二重結合数の昇順に並べた**隣どうし**で、
@@ -608,8 +614,8 @@ dot の足切りは二乗の値と比べる）の列を足す——**合否に�
 - `coeluting`: |ΔRT| ≤ `rt_window` の特徴（`drt` = 相手 − この特徴、`r` = 試料間の log1p 強度の
   Pearson 相関。値が 5 組未満なら空）。
 - `as_ion_of`: この特徴が、相手の付加体（`adducts` の組）・同位体（M+1、M+2 は 13C2・34S・37Cl・81Br と、
-  `mz_tol` が 13C2 との差 2.46 mDa より狭いときだけ 18O、8.59 mDa より狭いときだけ 41K。広い窓ではどちらも 13C2 の行
-  `isotope_M+2` に含む）・
+  `mz_tol` が 13C2 との差 2.46 mDa より狭いときは 18O、8.59 mDa より狭いときは 41K も。それより広い窓では、この特徴が 13C2 の
+  窓に入ればどちらも 13C2 の行 `isotope_M+2` に含み、窓の外なら当たった M+2 の位置のうちいちばん近いときだけ 18O・41K の行を出す）・
   源内断片（`-H2O` ほか）として説明できる関係。列は `of of_name relation dmz_mda drt r isotope_ratio
   expected_ratio isotope_consistent strong ambiguous informational`。
 - `ions_of_this`: 相手がこの特徴のイオンとして説明できる関係。列は `ion relation dmz_mda drt r
@@ -642,8 +648,10 @@ dot の足切りは二乗の値と比べる）の列を足す——**合否に�
   81Br +1.997952・41K +1.998119）が同じ窓に入った行。一方に決めず並べ、どれも `strong` にしない。分離できない M+2 の束
   （硫黄を持つ化合物の 13C2・34S・18O が重なった重心）は、窓が重心から両方までの差以上なら 13C2 と 34S の両方に入る。
   相手のイオンの組成が分かっていて O・S・Cl・Br・K を持たなければその行は出さない（脂質の M+2 は 13C2 だけ。`[M+K]+` は
-  K を持つ）。18O・41K は `mz_tol` が 13C2 との差（2.46 / 8.59 mDa）より狭いときだけ見る（既定の 0.01 Da では 13C2 の行が
-  18O と 41K も含み、並べて曖昧にはしない。41K のピークは `isotope_M+2` の行で `dmz_mda` が約 −8.6）。
+  K を持つ）。18O・41K は `mz_tol` が 13C2 との差（2.46 / 8.59 mDa）以上なら、この特徴が 13C2 の窓に入るかぎり 13C2 の行が含み
+  （既定の 0.01 Da で 41K の位置のピークは `isotope_M+2` の行で `dmz_mda` が約 −8.6）、並べて曖昧にはしない。13C2 の窓の外
+  （既定の窓で 41K の位置から 1.41 mDa より低い側）なら、当たった M+2 の位置のうちいちばん近いときだけ 18O・41K の行を出す
+  （窓を広げて説明を失わない。より近い 34S などで説明されるなら出さない）。
 - `informational`: 同位体の強度比が期待比を超えた行（その強度は同位体だけでは説明できず、別物質が
   重なっている目印）。重なった M+2 の行は期待比（この特徴の窓に入る M+2 の和）が同じなので、そろって立つか
   立たないか——13C2 だけの期待比に合わないことで「別物質」と言わない。

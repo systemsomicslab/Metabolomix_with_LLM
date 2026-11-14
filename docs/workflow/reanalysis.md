@@ -121,7 +121,7 @@ ols でない検定の共変量）は `normalize_spec(spec, notes=...)` が捨�
 2. ├─ metabolomix/tools/_holder.py  resolve_holder()
 3. ├─ [ライブラリ無しで記憶が lbm_only のとき] metabolomix/library/tools.py  lbm_only_not_evaluable()（`not_evaluable` を返す）
 4. ├─ metabolomix/library/matching.py  normalize_ion_mode()
-5. ├─ metabolomix/analysis/msms_rules.py  normalize_rules()
+5. ├─ metabolomix/analysis/msms_rules.py  normalize_rules()（種の目標に同位体の標識があれば `isotope_labelled()` で見て `MSMS_RULES_INVALID`）
 6. │  └─ metabolomix/analysis/msms_rules.py  normalize_ions()
 7. ├─ metabolomix/library/tools.py  _spot_query()
 8. ├─ metabolomix/library/tools.py  _measured_spectrum()
@@ -150,7 +150,7 @@ ols でない検定の共変量）は `normalize_spec(spec, notes=...)` が捨�
 2. ├─ metabolomix/analysis/homolog.py  normalize_spec()
 3. ├─ metabolomix/analysis/homolog.py  members_from_names()（`auto.adduct` は `msdial/adducts.py` `same_adduct()` で組成で比べる）
 4. │  └─ metabolomix/analysis/homolog.py  species_of()
-5. │     └─ metabolomix/msdial/lipid_identity.py  normalize_lipid_name()
+5. │     └─ metabolomix/analysis/msms_rules.py  name_lipid_species()（目標照合・MS/MS の合否と同じ読み手。標識付きは読まない）
 6. ├─ metabolomix/analysis/homolog.py  check()（比べた隣どうしの対が 0 なら `not_evaluable`。ツールが `notes` に理由を書く）
 7. └─ metabolomix/analysis/homolog.py  rule_hash()
 
@@ -174,7 +174,7 @@ ols でない検定の共変量）は `normalize_spec(spec, notes=...)` が捨�
 
 1. metabolomix/tools/reanalysis_tools.py  dataset_claim_evidence()
 2. ├─ metabolomix/analysis/claim_evidence.py  normalize_claim_spec()
-3. │  ├─ metabolomix/analysis/feature_search.py  normalize_targets()
+3. │  ├─ metabolomix/analysis/feature_search.py  normalize_targets()（種の目標に同位体の標識があれば `FEATURE_TARGET_INVALID`）
 4. │  └─ metabolomix/analysis/msms_rules.py  normalize_rules()
 5. ├─ metabolomix/analysis/claim_evidence.py  build()
 6. │  ├─ metabolomix/analysis/alignment_qc.py  find_split_pairs()

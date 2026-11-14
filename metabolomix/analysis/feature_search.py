@@ -155,7 +155,12 @@ def _clean_tiers(target_id, tiers) -> list[list[str]]:
 
 
 def _species_target(target_id, raw: dict) -> dict | None:
-    """``lipid_species`` を種のレベルに直す。指定が無ければ None（InChIKey の目標）。"""
+    """``lipid_species`` を種のレベルに直す。指定が無ければ None（InChIKey の目標）。
+
+    同位体の標識のある名前（内部標準 ``PC 15:0_18:1(d7)``）は断る: SME・SML の候補の名前も標識付きは種に読まない
+    （``msms_rules.name_lipid_species``）ので種として一致を確かめられず、GOSLIN は標識を落として読む（PC 33:1）ので、
+    受けると天然の種を探して、内部標準そのものの同定を「SME・SML の裏付けが無い」と言ってしまう。"""
+    from metabolomix.analysis.msms_rules import isotope_labelled
     from metabolomix.msdial.lipid_identity import lipid_species_of, normalize_lipid_name
 
     value = raw.get("lipid_species")
@@ -164,6 +169,13 @@ def _species_target(target_id, raw: dict) -> dict | None:
     if raw.get("inchikey") is not None:
         raise _invalid(target_id, "lipid_species",
                        "inchikey と lipid_species は同時に指定できない（どちらか一方）")
+    if isotope_labelled(value):
+        raise _invalid(
+            target_id, "lipid_species",
+            f"lipid_species に同位体の標識（内部標準）がある: {value!r}。SME・SML の候補の名前も標識付きは種に"
+            "読まない（MS/MS の合否と同じ）ので種として一致を確かめられず、標識を外して読むと天然の種を探してしまう。"
+            "天然の種を探すなら標識の無い名前を渡す。内部標準そのものは m/z と RT の窓"
+            "（dataset_feature_search の窓検索）で探す")
     species = lipid_species_of(value) if isinstance(value, str) else None
     if species is None:
         raise _invalid(

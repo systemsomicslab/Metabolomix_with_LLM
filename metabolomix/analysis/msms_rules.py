@@ -23,8 +23,8 @@ from metabolomix.analysis.spectral_match import (
     DEFAULT_MIN_FRAGMENT_RELATIVE_INTENSITY, fragment_matches_excluding_precursor)
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
-__all__ = ["CANDIDATE_COLUMNS", "RULES_SCHEMA", "candidate_rows", "find_ions", "name_lipid_species",
-           "normalize_ion", "normalize_ions", "normalize_rules", "qualify", "query_window",
+__all__ = ["CANDIDATE_COLUMNS", "RULES_SCHEMA", "candidate_rows", "find_ions", "isotope_labelled",
+           "name_lipid_species", "normalize_ion", "normalize_ions", "normalize_rules", "qualify", "query_window",
            "record_lipid_species", "rules_hash"]
 
 RULES_SCHEMA = "msms-rules.v1"
@@ -65,9 +65,17 @@ def inchikey_block(value) -> str:
 
 
 def lipid_species(value) -> str:
-    """目標の脂質の種（`PC 34:4`・`PC 18:3_16:1` など）を種のレベルに直す。"""
+    """目標の脂質の種（`PC 34:4`・`PC 18:3_16:1` など）を種のレベルに直す。
+
+    同位体の標識のある名前（内部標準 `PC 15:0_18:1(d7)`）は断る: ライブラリの記録も標識付きは種に読まない
+    （`name_lipid_species`）ので種として合否を出せず、GOSLIN は標識を落として読む（PC 33:1）ので、受けると
+    天然の種の合否を内部標準の合否として返してしまう。"""
     from metabolomix.msdial.lipid_identity import lipid_species_of
 
+    if isotope_labelled(value):
+        raise _fail(f"target.lipid_species に同位体の標識（内部標準）がある: {value!r}。ライブラリの記録も標識付きは"
+                    "種に読まないので種として合否を出せず、標識を外して読むと天然の種の合否になる"
+                    "（天然の種を確かめるなら標識の無い名前を渡す）", field="target.lipid_species")
     species = lipid_species_of(value) if isinstance(value, str) else None
     if species is None:
         raise _fail("target.lipid_species は種のレベル以下の脂質名（例 PC 34:4。クラスだけは不可）",
@@ -232,6 +240,13 @@ def _labelled_rest(name) -> tuple[bool, str | None]:
         return False, None
     _qualifier, rest = msp_lipid.split_qualifier(name)
     return msp_lipid.has_isotope_label(rest), rest
+
+
+def isotope_labelled(name) -> bool:
+    """名前（MS-DIAL の限定子を外して）に同位体の標識（内部標準。`(d7)`・`-d31`・`13C`）があるか。
+
+    `name_lipid_species` が種に読まない名前。種の目標（`lipid_species`）の側もこれで断る。"""
+    return _labelled_rest(name)[0]
 
 
 @lru_cache(maxsize=65536)

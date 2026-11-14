@@ -1465,3 +1465,26 @@ def test_homolog_check_auto_adduct_matches_the_mztab_spelling(tmp_path):
     assert absent["verdict"] == "not_evaluable" and absent["n_members"] == 0 and absent["n_pairs"] == 0
     [note] = absent["notes"]
     assert "not_evaluable" in note and "0 件" in note
+
+
+def test_homolog_check_auto_reads_noted_sme_names_and_skips_internal_standards(tmp_path):
+    """Console / mzTab-M の SME の名前は MSP の記録名（注記付き）のまま。同族列も目標照合・MS/MS の合否と同じ読み手で
+    注記を外して読み、RT の規則違反を見つける。同位体の標識のある内部標準は天然の種の列に混ぜない（レビュー V2）。"""
+    noted = tuple({**f, "sme": [{**f["sme"][0], "name": f"{f['sme'][0]['name']}; ExampleDB ID-000{i}"}]}
+                  for i, f in enumerate(HOMOLOG_FEATURES, 1))
+    standard = {"id": "40", "mz": 767.6290, "rt": 9.0, "values": _scaled(10),
+                "sme": [{"name": "PC 15:0_18:1(d7)", "inchikey": "DDDDDDDDDDDDDD-UHFFFAOYSA-N",
+                         "formula": "C41H73D7NO8P", "adduct": "[M+H]1+", "theo": 767.6290}]}
+    mztab = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab", features=noted + (standard,))
+    handle = _open({"mztab": mztab})
+    out = json.loads(R.dataset_homolog_check(
+        {"auto": {"lipid_class": "PC", "adduct": "[M+H]+"}}, dataset_handle=handle))
+    assert out["verdict"] == "fail" and out["n_violations"] == 2, out
+    assert out["n_members"] == 3 and out["n_pairs"] == 2
+    header, *rows = out["members"].splitlines()
+    assert sorted(r.split("	")[0] for r in rows) == ["30", "31", "32"]     # 内部標準（40）は集めない
+    # P- は種のレベルで O- に直るので、P- のクラスは集まらず、notes がそう書く（断らない）
+    plasmalogen = json.loads(R.dataset_homolog_check(
+        {"auto": {"lipid_class": "PC P-"}}, dataset_handle=handle))
+    assert plasmalogen["verdict"] == "not_evaluable" and plasmalogen["n_members"] == 0
+    assert any("'PC O-'" in note for note in plasmalogen["notes"])

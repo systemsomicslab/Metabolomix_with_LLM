@@ -12,7 +12,8 @@
 `not_evaluable` を返す（空の列を「違反なし」と読ませない）。
 
 `auto` の `adduct` は SME の付加体と綴りでなく組成で比べる（`msdial.adducts.same_adduct`。mzTab-M の
-`[M+H]1+` と `[M+H]+`、`[M+HCOO]-` と `[M+FA-H]-` は同じ）。
+`[M+H]1+` と `[M+H]+`、`[M+HCOO]-` と `[M+FA-H]-` は同じ）。`auto` の名前は目標照合・MS/MS の合否と同じ読み手
+（`msms_rules.name_lipid_species`）で種に読む（`species_of`）。
 """
 from __future__ import annotations
 
@@ -83,19 +84,23 @@ def normalize_spec(spec) -> dict:
 
 
 def species_of(name) -> tuple[str, int, int] | None:
-    """名前を GOSLIN で種のレベル（`CLASS C:DB`）に読み、(class, C, DB) を返す。"""
-    from metabolomix.msdial.lipid_identity import normalize_lipid_name
+    """名前を GOSLIN の種のレベル（`CLASS C:DB`）に読み、(class, C, DB) を返す。
+
+    読み手は目標照合（SME・SML の名前）と MS/MS の合否（ライブラリの記録）と同じ `msms_rules.name_lipid_species`:
+    名前をそのまま → 読めなければ注記・付加体の表記を外し古い書式を略記に直して読む（MSP の記録名がそのまま SME の
+    名前になる Console / mzTab-M の `PC 34:1; ExampleDB ID-0001` は PC 34:1）。同位体の標識のある名前（内部標準
+    `PC 15:0_18:1(d7)`）は読まない（天然の種の列に混ぜない）。種のレベルなので分子種（16:0_18:1）は鎖を足した和に、
+    `P-` は GOSLIN の規約でビニルエーテルの二重結合を数えて `O-` になる（`PC P-16:0_18:1` も `PC P-34:1` も `PC O-34:2`）。
+    """
+    from metabolomix.analysis.msms_rules import name_lipid_species
 
     if not isinstance(name, str) or not name.strip():
         return None
-    parsed = normalize_lipid_name(name)
-    text = parsed.get("normalized") if parsed.get("parse_ok") else None
-    if not text:
+    species = name_lipid_species(name)[0]
+    if not species:
         return None
-    species = text.split("|", 1)[0]
-    # 分子種（16:0_18:1）は鎖を足して種のレベルに直す
     head, _, tail = species.partition(" ")
-    # エーテル（O- / P-）は別のクラスとして扱う（PC O-34:1 は PC 34:1 の同族ではない）
+    # エーテル（O-。P- は種のレベルで O- に直っている）は別のクラスとして扱う（PC O-34:1 は PC 34:1 の同族ではない）
     ether = re.match(r"([OP])-", tail)
     if ether:
         head = f"{head} {ether.group(1)}-"

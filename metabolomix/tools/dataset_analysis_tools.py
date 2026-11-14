@@ -411,7 +411,8 @@ def dataset_feature_search(
     **目標照合**（`targets` あり、1 回 50 件まで）: 各要素は `target_id`・`inchikey`（必須。
     先頭 14 文字で照合）と、`formula` か（`expected_mz` と `adduct`）。InChIKey が一意に決まらない
     脂質の種は `inchikey` の代わりに `lipid_species`（`PC 34:4`・`PC 18:3_16:1`。GOSLIN の種の
-    レベルに直し、SME 候補の名前の種と照らす。分子種は確かめない。opt-in）。任意で `name` `ppm`
+    レベルに直し、SME 候補の名前の種と照らす。分子種は確かめない。opt-in。同位体の標識のある内部標準の名前
+    （`PC 15:0_18:1(d7)`）は候補の側でも種に読まないので `FEATURE_TARGET_INVALID`——内部標準は窓検索で探す）。任意で `name` `ppm`
     （既定 10）`rt_min` `rt_tol_min`（既定 0.3）`adduct_tiers` `polarity`。付加体の層を上から、
     証拠の水準 `sme_match` → `sml_match` → `unannotated` の順に見て、qualified がちょうど 1 つの
     ときだけ `resolved`。2 つ以上なら `needs_input`（`multiple_qualified_candidates`）、無ければ

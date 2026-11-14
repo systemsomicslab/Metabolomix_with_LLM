@@ -20,7 +20,8 @@ X と Y が同時に溶出し（|ΔRT| ≤ rt_window）、Δm/z が既知の関�
 X から束のどの同位体までの差も `mz_tol` 以内のときだけ——重心が真ん中なら 13C2 と 34S の差 10.91 mDa の半分（約 5.5 mDa
 を電荷で割った値）以上の窓が要る（既定の 10 mDa は覆う）。それより狭い窓では、重心は近い方の位置の行だけに当たり、
 期待比は遠い方の同位体を欠くので、Y 自身の束が `informational`（別物質）になりうる。重心から両端のどちらまでの差より
-狭い窓（タウロコール酸 [M-H]- で約 5.2 mDa 未満）では M+2 の行が 1 つも出ない。束を分離しない装置では `mz_tol` を
+狭い窓（タウロコール酸 [M-H]- で約 5.2 mDa 未満）では 13C2 と 34S の行は出ず、窓に 18O の位置（重心から約 2.7 mDa）が
+入れば 18O の行だけが立って、やはり `informational` になる。束を分離しない装置では `mz_tol` を
 約 6 mDa / 電荷以上にする。窓は X の Δm/z で決まるので、同じ X と Y の M+2 の行は（どの位置の行でも）同じ期待比を持つ。
 
 強い説明（`strong`）は、(a) 前駆体側の FoundInUpperMsMs リンク（裏付けつき）、(b) 同位体で強度比が
@@ -30,10 +31,12 @@ X から束のどの同位体までの差も `mz_tol` 以内のときだけ—�
 M+2 の位置は 13C2（+2.006710）・18O（+2.004245）・34S（+1.995796）・37Cl（+1.997050）・81Br（+1.997952）・
 41K（+1.998119。`[M+K]+` など K を持つイオン）を見る。
 18O は 13C2 から 2.46 mDa（を電荷で割った値）しか離れないので、窓（`mz_tol`）がその差以上なら 13C2 と分けられず、
-18O の行（`isotope_M+2_18O`）は出さずに 13C2 の行（`isotope_M+2`）が 18O も含む——既定の 10 mDa ではいつもこちら。
-窓がその差より狭い（分離された 18O を見る）ときだけ 18O を別の説明として見る。41K も同じく、13C2 から 8.59 mDa
-（を電荷で割った値）より広い窓（既定の 10 mDa）では 13C2 の行が 41K も含み、それより狭い窓でだけ 41K の行
-（`isotope_M+2_41K`）を出す（K を持つイオンの M+2 がどれも 13C2 と 41K の 2 行に当たって `ambiguous` になるのを避ける）。
+X が 13C2 の窓に入るかぎり 18O の行（`isotope_M+2_18O`）は出さずに 13C2 の行（`isotope_M+2`）が 18O も含む。
+窓がその差より狭い（分離された 18O を見る）ときは 18O を別の説明として見る。41K も同じく、13C2 から 8.59 mDa
+（を電荷で割った値）以上の窓（既定の 10 mDa）では X が 13C2 の窓に入るかぎり 13C2 の行が 41K も含み、それより狭い
+窓では 41K の行（`isotope_M+2_41K`）を出す（K を持つイオンの M+2 がどれも 13C2 と 41K の 2 行に当たって `ambiguous` に
+なるのを避ける）。X が 13C2 の窓の外なら、18O・41K の行は X が当たった M+2 の位置のうちいちばん近いときだけ出す
+（窓を広げて説明を失わない。`_SUBSUMED`）。
 41K は 37Cl から 1.07 mDa、81Br から 0.17 mDa なので、K と Cl・Br を両方持つイオンではそれらと重なる。Y のイオンの組成が
 分かっていてその元素（O・S・Cl・Br・K）を持たなければ、その説明は出さない（同位体の表に無い元素を含む組成でも、組成式が
 読めればこの門には使い、期待比だけを求めない）。2 つ以上の M+2 が同じ Δm/z の窓に入るときは一方に決めず、どれにも
@@ -76,11 +79,15 @@ ISOTOPE_DELTAS = {
 #: M+2 の同位体（Δm/z の窓が重なりうる。既定の 10 mDa では 13C2 と 37Cl の差 9.66 mDa、34S と 37Cl の差 1.25 mDa が
 #: 窓の内側。13C2 と 34S の差 10.91 mDa は外側だが、分離できない M+2 の束の重心はその間に来る）。
 M2_ISOTOPES = frozenset(code for code, (k, _, _) in ISOTOPE_DELTAS.items() if k == 2)
-#: 窓（mz_tol）が 2 つの位置の差（を電荷で割った値）以上なら、左の位置を見ずに右の行に含める（窓では分けられない）。
-#: 18O は 13C2 から 2.46 mDa で、ほぼすべての有機物のイオンが C と O を持つ——分けられない窓で両方を並べると、
-#: どの M+2 も `ambiguous`（強い説明にならない）になってしまう。41K（13C2 から 8.59 mDa）も同じで、既定の 10 mDa では
-#: K を持つイオン（`[M+K]+`）の M+2 がどれも 13C2 と 41K の両方に当たる。期待比は X の窓で決まり行によらないので、
-#: 含めても比の判定は変わらない。
+#: 窓（mz_tol）が 2 つの位置の差（を電荷で割った値）以上で、X が右の行にも当たるなら、左の行を出さずに右の行に含める
+#: （窓では分けられない）。18O は 13C2 から 2.46 mDa で、ほぼすべての有機物のイオンが C と O を持つ——分けられない窓で
+#: 両方を並べると、どの M+2 も `ambiguous`（強い説明にならない）になってしまう。41K（13C2 から 8.59 mDa）も同じで、
+#: 既定の 10 mDa では K を持つイオン（`[M+K]+`）の M+2 がどれも 13C2 と 41K の両方に当たる。期待比は X の窓で決まり
+#: 行によらないので、含めても比の判定は変わらない。X が右の行に当たらない（右の位置は X の窓の外。41K の位置から
+#: 13C2 と逆の側へ「窓 − 8.59 mDa」より離れた X）なら、左の行は X が当たった M+2 の位置のうちいちばん近いときだけ
+#: 右の行の代わりに出す——窓の幅だけで消すと、その X は狭い窓では説明され、広い窓では説明が付かない。いちばん近い
+#: ときに限るのは、分離された 34S（18O から 8.45 mDa）のように、より近い位置で説明される X を遠い 18O と並べて
+#: `ambiguous` にしないため。
 _SUBSUMED = {"isotope_M+2_18O": "isotope_M+2", "isotope_M+2_41K": "isotope_M+2"}
 #: 同位体の位置が X の窓に入るかの比較で、浮動小数の誤差だけを吸う許容 [Da]（行の窓と期待比の窓を一致させる）。
 _WINDOW_EPS = 1e-9
@@ -206,15 +213,23 @@ def _explanations(x: dict, y: dict, adducts: list[str], mz_tol: float) -> list[t
                 found.append((f"adduct:{other.name}/{y_adduct.name}", delta))
     charge = y_adduct.charge if y_adduct else 1
     counts = ion_element_counts(y.get("formula"), y.get("adduct"))
+    isotopes = {}
     for relation, (_, shift, element) in ISOTOPE_DELTAS.items():
         if element != "C" and counts is not None and not counts.get(element):
             continue                    # Y のイオンにその元素が無い（その同位体では説明できない）
-        into = _SUBSUMED.get(relation)
-        if into is not None and mz_tol >= abs(ISOTOPE_DELTAS[into][1] - shift) / charge:
-            continue                    # 窓では 13C2 と分けられない 18O・41K は 13C2 の行に含める
         delta = x["mz"] - (y["mz"] + shift / charge)
         if abs(delta) <= mz_tol:
-            found.append((relation, delta))
+            isotopes[relation] = delta
+    for relation, delta in isotopes.items():
+        into = _SUBSUMED.get(relation)
+        if into is not None and mz_tol >= abs(ISOTOPE_DELTAS[into][1] - ISOTOPE_DELTAS[relation][1]) / charge:
+            # 窓では 13C2 と分けられない 18O・41K: X が 13C2 の行にも当たれば 13C2 の行に含める。当たらなければ
+            # （X は 13C2 の窓の外）、当たった M+2 の位置のうち X にいちばん近いときだけ 13C2 の代わりに立てる
+            # （窓の幅だけで消すと、狭い窓では説明される X が広い窓で説明を失う）
+            if into in isotopes or any(abs(other) < abs(delta) for code, other in isotopes.items()
+                                       if code != relation and code in M2_ISOTOPES):
+                continue
+        found.append((relation, delta))
     for relation, loss in INSOURCE_LOSSES:
         delta = x["mz"] - (y["mz"] - loss / charge)
         if abs(delta) <= mz_tol:

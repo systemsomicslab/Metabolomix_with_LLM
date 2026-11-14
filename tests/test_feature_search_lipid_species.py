@@ -277,3 +277,20 @@ def test_isotope_labelled_internal_standard_is_not_read_as_the_species():
     assert name_lipid_species("PC 15:0_18:1(d7)") == (None, None)
     assert classify_identity([_pc("PC 15:0_18:1(d7)")], None, lipid_species="PC 33:1",
                              adduct="[M+H]+") == ("unannotated", ["sme_identity_unresolved"], None)
+
+
+def test_isotope_labelled_species_target_is_refused_not_read_as_the_natural_species():
+    """目標の側も候補の側と同じく標識を読む（レビュー V3）。素の GOSLIN は `PC 15:0_18:1(d7)` を PC 33:1 に読むので、
+    受けると内部標準の特徴（SME も同じ名前）を「SME の裏付けが無い」unannotated にし、天然の PC 33:1 を探してしまう。
+    断って、標識の無い名前か窓検索を案内する。"""
+    for name in ("PC 15:0_18:1(d7)", "PC 33:1(d7)", "w/o MS2: PC 15:0_18:1(d7)", "PE 16:0-d31_18:1"):
+        raw = {"target_id": "IS", "lipid_species": name, "formula": "C41H73D7NO8P", "rt_min": 8.4}
+        with pytest.raises(DomainError) as exc:
+            normalize_targets([raw], dataset_polarity="positive")
+        assert exc.value.code == "FEATURE_TARGET_INVALID"
+        assert exc.value.details == {"target_id": "IS", "field": "lipid_species"}
+        assert "標識" in exc.value.message and "窓検索" in exc.value.message
+    # 長鎖塩基の d18:1 は標識ではない（`:` が続く）
+    [target] = normalize_targets([{"target_id": "SM", "lipid_species": "SM d18:1/16:0", "formula": "C39H79N2O6P"}],
+                                 dataset_polarity="positive")
+    assert target["lipid_species"] == "SM 34:1;O2"

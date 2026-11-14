@@ -63,6 +63,30 @@ def test_species_from_names():
     assert H.species_of("Glucose") is None
 
 
+@pytest.mark.parametrize("name, species", [
+    ("PC 34:1; ExampleDB ID-0001", ("PC", 34, 1)),        # MSP の記録名（注記付き）がそのまま SME の名前になる
+    ("PE 36:2;O (oxPE)", ("PE", 36, 2)),
+    ("Phosphatidylcholine 16:0-18:1", ("PC", 34, 1)),
+    ("SM d18:1/16:0", ("SM", 34, 1)),
+    ("PE P-38:4", ("PE O-", 38, 5)),                      # GOSLIN の種のレベル: P- は O- に直る
+    ("PE P-18:0_20:4", ("PE O-", 38, 5)),                 # 分子種でも種のレベルと同じ（以前は PE P- 38:4 で別の列）
+    ("PC 15:0_18:1(d7)", None),                           # 同位体の標識のある内部標準は読まない
+])
+def test_species_are_read_like_the_scan_and_the_msms_side(name, species):
+    """同族列の名前は、目標照合の種の目標・MS/MS の合否と同じ読み手（`msms_rules.name_lipid_species`）で読む
+    （レビュー V2）。種の文字列を独立に（GOSLIN の種のレベルの鎖の和として）確かめる。"""
+    from metabolomix.analysis.msms_rules import name_lipid_species
+
+    assert H.species_of(name) == species
+    read, _route = name_lipid_species(name)
+    if species is None:
+        assert read is None
+    else:
+        head = species[0].replace(" O-", "")
+        ether = "O-" if species[0].endswith(" O-") else ""
+        assert read.split(";")[0] == f"{head} {ether}{species[1]}:{species[2]}"
+
+
 def test_members_from_names_filters_class_and_adduct():
     features = [
         {"feature_id": "1", "names": {"sme": "PC 34:1"}, "adduct": "[M+H]+"},

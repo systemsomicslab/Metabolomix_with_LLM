@@ -48,6 +48,8 @@ def test_species_target_is_normalized_to_species_level():
     {"lipid_species": "PC 34:4", "inchikey": "JLPULHDHAOZNQI-ZTIMHPMXSA-N"},
     {"lipid_species": "PC"},
     {"lipid_species": "Glucose"},
+    {"lipid_species": "PC 15:0_18:1(d7)"},          # 内部標準（標識付きの記録は種に読まないので合否を出せない。レビュー V3）
+    {"lipid_species": "PC 33:1(d7)"},
     {},
 ])
 def test_invalid_species_targets(target):
@@ -236,3 +238,11 @@ def test_species_claim_passes_the_species_to_the_msms_rules():
         {**spec, "target": {**spec["target"], "lipid_species": "PC 34:4"}},
         dataset_polarity="positive")
     assert C.rule_hash(normalized) == C.rule_hash(same)
+
+
+def test_isotope_labelled_target_names_the_field():
+    with pytest.raises(DomainError) as exc:
+        M.normalize_rules({"target": {"lipid_species": "PC 15:0_18:1(d7)"}})
+    assert exc.value.details == {"field": "target.lipid_species"}
+    assert "標識" in exc.value.message
+    assert M.isotope_labelled("PC 15:0_18:1(d7)") and not M.isotope_labelled("SM d18:1/16:0")
