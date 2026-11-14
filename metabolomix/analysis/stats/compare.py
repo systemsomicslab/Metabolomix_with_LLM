@@ -21,8 +21,11 @@
   対比の `confounded` は 3 値: `true`＝その対比の群だけで見て完全交絡、`false`＝完全交絡ではない（部分・なし・
   単一バッチ）、`None`＝評価できない（バッチが不明な個体がある。「交絡なし」ではない）。
   `allow_confounded=False` を明示したときだけ、まとめた表かどれかの対比が完全交絡なら STATISTIC_CONFOUNDED で止める。
-- 片群一定（D4）: 対比の群（cell）のどれかで、有限値が 2 個体以上あり値がすべて同じ（丸めの誤差の内。埋め値の
+- 片群一定（D4）: 対比の群（cell）のどれかで、**読んだ値**（注入ごと。ドリフト補正・正規化・反復のまとめの前。
+  `PreparedMatrix.sample_raw_values`）の有限の正値が 2 注入以上あり、すべて同じ（相対の丸めの誤差の内。埋め値の
   疑い）なら、行の `constant_in_group` にその cell を挙げ、件数を警告 `constant_in_group` に出す（判定は変えない）。
+  判定の規則は v1 と共有（`spec_statistics.constant_columns`）。正規化の係数は試料ごとに違うので、検定する log2 で
+  調べると埋め値が見えなくなる。読んだ値を持たない行列（外から作ったもの）は、個体の log2 の分散で調べる。
 - 要因の F（2 因子以上・moderated t）: 主効果と交互作用（多水準を含む）の moderated F を `factorial` に返す。
   向きと log2fc を持たないので比較の行とは別の欄（omnibus と同じ扱い）。
 
@@ -350,8 +353,16 @@ def _verdict(row: dict, q_threshold: float, eq_log2: float) -> tuple[str, str]:
 _EXAMPLES = 20
 
 
-def _constant_cells(log2: np.ndarray, cell_idx: dict, cells) -> dict[str, np.ndarray]:
-    """cell ごとに、有限値が 2 個体以上あって値がすべて同じ（丸めの誤差の内）特徴（G,）の印。"""
+def _constant_cells(log2: np.ndarray, cell_idx: dict, cells, raw: np.ndarray | None = None,
+                    raw_rows: dict | None = None) -> dict[str, np.ndarray]:
+    """cell ごとに、値がすべて同じ（埋め値の疑い）特徴（G,）の印。
+
+    `raw`（読んだ値＝注入 × 特徴）と `raw_rows`（cell → その個体の注入の行）があればそれで調べる: 有限の正値
+    （エンジンは 0 以下を欠測とする）が 2 注入以上あり、すべて同じ（`spec_statistics.constant_columns`。v1 と同じ
+    意味）。無ければ個体の log2 で、有限値が 2 個体以上あって分散が丸めの誤差の内。
+    """
+    if raw is not None and raw_rows is not None:
+        return {c: spec_statistics.constant_columns(raw[raw_rows[c]], positive_only=True) for c in cells}
     g = log2.shape[1]
     tol = _variance_tolerance(log2) if log2.size else np.zeros(g)
     out = {}
@@ -364,6 +375,27 @@ def _constant_cells(log2: np.ndarray, cell_idx: dict, cells) -> dict[str, np.nda
         with np.errstate(invalid="ignore"):
             out[c] = (n_fin >= _MIN_UNITS) & (var <= tol)
     return out
+
+
+def _raw_rows(prepared, units, cell_idx: dict, cells) -> tuple[np.ndarray | None, dict | None]:
+    """読んだ値（`sample_raw_values`）と、cell ごとのその個体の注入の行。読んだ値が無い・形が合わない・個体の
+    注入が行に無いなら (None, None)（個体の log2 で調べる）。"""
+    raw = getattr(prepared, "sample_raw_values", None)
+    sample_ids = list(getattr(prepared, "sample_ids", None) or [])
+    if raw is None:
+        return None, None
+    raw = np.asarray(raw, dtype=float)
+    if raw.ndim != 2 or raw.shape != (len(sample_ids), len(prepared.feature_ids)):
+        return None, None
+    position = {sid: k for k, sid in enumerate(sample_ids)}
+    rows = {}
+    for c in cells:
+        per_unit = [list(getattr(units[i], "sample_ids", None) or []) for i in cell_idx[c]]
+        members = [sid for ids in per_unit for sid in ids]
+        if not all(per_unit) or any(sid not in position for sid in members):
+            return None, None
+        rows[c] = [position[sid] for sid in members]
+    return raw, rows
 
 
 def _confounded_flag(status: str) -> bool | None:
@@ -503,7 +535,8 @@ def compare(prepared: PreparedMatrix, *, factors: list[str], comparisons: list[d
                              "n_reported": len(reported), "n_not_in_matrix": len(outside),
                              "examples": outside[:_EXAMPLES]})
 
-    constant = _constant_cells(log2, cell_idx, used_cells)
+    raw, raw_rows = _raw_rows(prepared, units, cell_idx, used_cells)
+    constant = _constant_cells(log2, cell_idx, used_cells, raw, raw_rows)
     rows: list[dict] = []
     bh_n: dict[str, int] = {}
     presence_n: dict[str, int] = {}

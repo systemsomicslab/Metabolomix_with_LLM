@@ -27,12 +27,29 @@ _NO_GROUP = "(none)"
 
 
 def _class_prepared(prepared: PreparedMatrix, suffix: str, names: list[str],
-                    values: np.ndarray) -> PreparedMatrix:
-    """クラスを特徴に見立てた PreparedMatrix（検出マスク・注釈・QC は持たない）。"""
+                    values: np.ndarray, raw_values: np.ndarray | None = None) -> PreparedMatrix:
+    """クラスを特徴に見立てた PreparedMatrix（検出マスク・注釈・QC は持たない）。
+
+    `raw_values` は注入ごとの読んだ値のクラスの合計（片群一定の印が読む）。渡さなければ持たない（compare は
+    個体の値で調べる）。注入ごとの線形値（`sample_values`）は特徴の列なので持ち越さない。
+    """
     return dataclasses.replace(
         prepared, matrix_id=f"{prepared.matrix_id}:{suffix}", log2=values,
         feature_ids=list(names), detected_units=None, qc_log2=np.empty((0, len(names))),
-        annotated_features=frozenset(), feature_classes={})
+        annotated_features=frozenset(), feature_classes={}, sample_values=None,
+        sample_detected=None, sample_raw_values=raw_values)
+
+
+def _raw_class_totals(prepared: PreparedMatrix, members: dict[str, list[int]],
+                      names: list[str]) -> np.ndarray | None:
+    """注入ごとの読んだ値（`sample_raw_values`）のクラスの合計（欠測・0 以下のメンバーは 0。合計の規則と同じ）。"""
+    raw = getattr(prepared, "sample_raw_values", None)
+    if raw is None:
+        return None
+    raw = np.asarray(raw, dtype=float)
+    with np.errstate(invalid="ignore"):
+        positive = np.where(np.isfinite(raw) & (raw > 0), raw, 0.0)
+    return np.column_stack([positive[:, members[c]].sum(axis=1) for c in names]) if names else None
 
 
 def composition(prepared: PreparedMatrix, *, assay_kind: str, factors, comparisons,
@@ -102,7 +119,8 @@ def composition(prepared: PreparedMatrix, *, assay_kind: str, factors, compariso
 
     absolute = None
     if names:
-        absolute = compare(_class_prepared(prepared, "class_total", names, log_total),
+        absolute = compare(_class_prepared(prepared, "class_total", names, log_total,
+                                           _raw_class_totals(prepared, members, names)),
                            factors=factors, comparisons=comparisons, **compare_kwargs)
 
     return {

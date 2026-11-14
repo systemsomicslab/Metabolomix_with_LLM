@@ -823,12 +823,109 @@ def test_constant_in_group_marks_one_sided_fill_values(monkeypatch):
     assert w["examples"] == ["f01", "f02"]
     # 判定は変えない: 印を付ける検査を止めた（どの cell も一定でないとみなす）実行と、判定・q・区間が同じ
     monkeypatch.setattr(compare_mod, "_constant_cells",
-                        lambda log2, cell_idx, cells: {c: np.zeros(log2.shape[1], bool) for c in cells})
+                        lambda log2, cell_idx, cells, *raw: {c: np.zeros(log2.shape[1], bool) for c in cells})
     unmarked = compare(_prepared(x, ["A"] * 4 + ["B"] * 4), factors=["group"], comparisons=BVA)
     assert all(r["constant_in_group"] is None for r in unmarked["rows"])
     assert not any(w["code"] == "constant_in_group" for w in unmarked["warnings"])
     for key in ("verdict", "verdict_reason", "q", "ci_low", "ci_high"):
         assert [r[key] for r in unmarked["rows"]] == [r[key] for r in res["rows"]], key
+
+
+def _study(values, rows, feature_ids=None):
+    """rows: (sample_id, role, group, subject_id) のタプル列（統計エンジンの StudyData）。"""
+    from metabolomix.analysis.stats.data import SampleInfo, StudyData
+
+    values = np.asarray(values, dtype=float)
+    samples = [SampleInfo(sample_id=r[0], role=r[1], group=r[2], batch="b1", injection_order=None,
+                          subject_id=r[3], include=True, attributes={}) for r in rows]
+    return StudyData(values=values, detected=None, sample_ids=[s.sample_id for s in samples],
+                     feature_ids=feature_ids or [f"f{j}" for j in range(values.shape[1])],
+                     samples=samples, quant=None, dataset_hash="h")
+
+
+_NO_FILTERS = {"drift": {"mode": "off"},
+               "filters": {"blank_ratio": None, "detection": None, "qc_rsd": None, "d_ratio": None}}
+
+
+def test_constant_in_group_reads_raw_injections_under_default_normalization():
+    """D4 は読んだ値（正規化の前）で探す: 既定の正規化（auto → PQN）は試料ごとの係数で埋め値を散らす。"""
+    from metabolomix.analysis.stats.preprocess import preprocess
+
+    rng = np.random.default_rng(7)
+    values = rng.lognormal(10.0, 0.4, (10, 6))
+    values[:5, 0] = 1000.0                                  # A の 5 試料を同じ値で埋めた
+    rows = [(f"s{i}", "sample", "A" if i < 5 else "B", None) for i in range(10)]
+    prep = preprocess(_study(values, rows), {"filters": _NO_FILTERS["filters"]})
+    assert next(s for s in prep.steps if s["step"] == "normalize")["method"] == "pqn"
+    assert np.ptp(prep.log2[:5, 0]) > 0.05                  # 検定する log2 では A の f0 はもう一定でない
+    assert np.array_equal(prep.sample_raw_values, values)   # 読んだ値（注入 × 特徴）
+    res = compare(prep, factors=["group"], comparisons=BVA)
+    rows_ = _rows(res)
+    assert rows_["f0"]["constant_in_group"] == ["A"]
+    assert all(rows_[f"f{j}"]["constant_in_group"] is None for j in range(1, 6))
+    w = next(w for w in res["warnings"] if w["code"] == "constant_in_group")
+    assert w["examples"] == ["f0"] and w["n_rows"] == 1
+
+
+def test_constant_in_group_ignores_values_made_equal_by_normalization():
+    """特徴の少ない PQN は試料ごとに中央の特徴を参照の値にそろえる。読んだ値が違えば印を付けない。"""
+    from metabolomix.analysis.stats.preprocess import preprocess
+
+    values = np.array([[10, 5, 100], [12, 6, 110], [11, 5, 90], [20, 5, 100], [22, 6, 105],
+                       [21, 5, 95], [15, 5, 100], [16, 5, 101]], dtype=float)
+    rows = [(f"HC{i}", "sample", "HC", None) for i in range(3)]
+    rows += [(f"RA{i}", "sample", "RA", None) for i in range(3)]
+    rows += [("QC1", "qc", None, None), ("QC2", "qc", None, None)]
+    prep = preprocess(_study(values, rows), {**_NO_FILTERS, "normalize": {"method": "pqn"}})
+    flat = [j for j in range(3) for cell in (slice(0, 3), slice(3, 6))
+            if np.ptp(prep.log2[cell, j]) < 1e-9]
+    assert flat                                             # 正規化の後の log2 は一定に見える
+    res = compare(prep, factors=["group"],
+                  comparisons=[{"id": "RA_vs_HC", "factor": "group", "reference": "HC", "test": "RA"}])
+    assert all(r["constant_in_group"] is None for r in res["rows"])
+    assert not any(w["code"] == "constant_in_group" for w in res["warnings"])
+
+
+def test_constant_in_group_looks_at_injections_before_replicate_collapsing():
+    """反復注入をまとめる前の注入ごとの値で探す: 注入が同じ値なら印、注入は違い個体の平均だけ同じなら印なし。"""
+    from metabolomix.analysis.stats.preprocess import preprocess
+
+    rng = np.random.default_rng(3)
+    rows, values = [], []
+    for group in ("A", "B"):
+        for k in range(3):
+            for r in range(2):
+                rows.append((f"{group}{k}_r{r}", "sample", group, f"{group}{k}"))
+                row = rng.lognormal(10.0, 0.3, 3)
+                if group == "A":
+                    row[0] = 500.0                          # f0: A の全注入を同じ値で埋めた
+                    row[1] = (900.0, 1100.0)[r]              # f1: 注入は違い、どの個体も同じ 2 値
+                values.append(row)
+    prep = preprocess(_study(np.array(values), rows), {**_NO_FILTERS, "normalize": {"method": "none"}})
+    assert len(prep.units) == 6 and all(u.n_injections == 2 for u in prep.units)
+    assert np.ptp(prep.log2[[i for i, u in enumerate(prep.units) if u.group == "A"], 1]) < 1e-12
+    res = _rows(compare(prep, factors=["group"], comparisons=BVA))
+    assert res["f0"]["constant_in_group"] == ["A"]
+    assert res["f1"]["constant_in_group"] is None           # 個体の値だけで見れば一定に見える
+    assert res["f2"]["constant_in_group"] is None
+
+
+def test_constant_in_group_class_totals_use_raw_member_sums():
+    """組成の絶対量（クラスの合計）も、注入ごとの読んだ値のクラスの合計で探す。"""
+    import dataclasses
+
+    from metabolomix.analysis.stats.composition import composition
+    from metabolomix.analysis.stats.preprocess import preprocess
+
+    rng = np.random.default_rng(5)
+    values = rng.lognormal(10.0, 0.4, (10, 4))
+    values[:5, 0], values[:5, 1] = 300.0, 700.0             # クラス X の 2 メンバーが A で埋め値
+    rows = [(f"s{i}", "sample", "A" if i < 5 else "B", None) for i in range(10)]
+    prep = preprocess(_study(values, rows), {"filters": _NO_FILTERS["filters"]})
+    prep = dataclasses.replace(prep, feature_classes={"f0": "X", "f1": "X", "f2": "Y", "f3": "Y"})
+    res = composition(prep, assay_kind="metabolite", factors=["group"], comparisons=BVA)
+    absolute = {r["feature_id"]: r for r in res["absolute"]["rows"]}
+    assert absolute["X"]["constant_in_group"] == ["A"] and absolute["Y"]["constant_in_group"] is None
 
 
 def _factorial_data(n_per=3, seed=4, levels_a=("a1", "a2", "a3"), levels_b=("b1", "b2"), g=2,

@@ -374,7 +374,8 @@ def run_spec_v2(normalized: dict, source, *, assay_kind: str = "unknown",
         elif kind == "plsda":
             res = plsda(prepared, factors=design["factors"], classes=a.get("classes"),
                         n_components=a["n_components"], scaling=a["scaling"], impute=a["impute"],
-                        cv_folds=a["cv_folds"], n_permutations=a["n_permutations"], seed=a["seed"])
+                        cv_folds=a["cv_folds"], n_permutations=a["n_permutations"], seed=a["seed"],
+                        block=design["block"])
         else:
             kw = dict(common, covariates=design["covariates"], block=design["block"],
                       test=a["test"], effect_size=a["effect_size"],

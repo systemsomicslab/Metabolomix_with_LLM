@@ -380,8 +380,12 @@ output?, record, next, notes?}`。
   全量の記録の `description`）。`log2fc` は**正なら test が高い**。`mean_*` は個体ごとの前処理後の線形値の算術平均。
   行の `se` は log2fc の標準誤差（moderated t・Welch・Student。順位の検定と算術平均の比では定義できないので空）。
 - 行の `constant_in_group`: 群（cell）の中で値がすべて同じ（埋め値の疑い。gap-fill を同じ値で埋めた群など）なら、その
-  cell の一覧（無ければ null）。判定は変えず、件数を警告 `constant_in_group`（`{n_rows, n_features, by_contrast, examples}`）に
-  出す。片群が一定の値だと、群の差は値の大きさより埋め方で決まりうる。
+  cell の一覧（無ければ null）。調べるのは cell の個体の**読んだ値**＝注入ごとの値（ドリフト補正・正規化・反復のまとめの
+  前）で、有限の正値が 2 注入以上あり、すべて同じ（相対の丸めの誤差の内）なら挙げる（`dataset_analysis_run` v1 の
+  `constant_in_group` と同じ規則）。検定する個体の log2 では探さない——正規化（既定は PQN）の試料ごとの係数が埋め値を
+  散らして見えなくし、逆に特徴の少ない PQN は埋め値でない値を一定に見せる。判定は変えず、件数を警告
+  `constant_in_group`（`{n_rows, n_features, by_contrast, examples}`）に出す。片群が一定の値だと、群の差は値の大きさより
+  埋め方で決まりうる。
 - エラー: 群の指定が合わない・`top_n` / `log2fc_threshold` / `p_adjust` / `output_path` が不正・`bh_population=reported`
   なのに `reported_feature_ids` が無いは `DATASET_BAD_REQUEST`。`reported` 以外で `reported_feature_ids` を渡したときは
   誤りにせず、ID を使わずに戻り値の `notes` に書く（効かない引数の組）。
