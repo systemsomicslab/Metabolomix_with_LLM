@@ -35,12 +35,17 @@ def run_worker(pipeline_path: Path) -> dict:
     importをここへ遅延させているのは、`metabolomix.pipeline.service` が無くても
     本モジュール自体のimport（や、それを静的にASTだけ検査する試験）を
     壊さないため。
+
+    起動直後に自分がまだ Windows の Job に入っているか（`IsProcessInJob(自分, NULL)`）を
+    確かめて `run_engine` に渡す。入っていれば run の記録に `WORKER_IN_JOB` の警告が残る。
     """
+    from metabolomix.core.process_control import current_process_in_job
     from metabolomix.pipeline.engine import run_engine
     from metabolomix.pipeline.service import build_handlers  # Task18が実装する
 
     handlers = build_handlers()
-    return run_engine(Path(pipeline_path), handlers)
+    # 切り離し起動で Job から抜けきれたか（何段目の Job でも）を自分で確かめて記録に残す。
+    return run_engine(Path(pipeline_path), handlers, worker_in_job=current_process_in_job())
 
 
 def main(argv: list[str]) -> int:

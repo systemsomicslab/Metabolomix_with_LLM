@@ -128,11 +128,29 @@ def test_units_and_top_level_unit_keys_cannot_be_mixed(tmp_path):
     ("comparisons", [{"comparison_id": "a", "reference_group": "x", "test_group": "y"}]),
 ])
 def test_downstream_keys_are_rejected_with_replacements(tmp_path, key, value):
+    """消えた下流のキーは知らないキーと同じ誤りで断り、代わりのツールを案内する（C21-M27）。"""
     err = _code(lambda: resolve_request(_root(tmp_path), {key: value}))
-    assert err.code == "PIPELINE_DOWNSTREAM_REMOVED"
-    assert err.details["removed_keys"] == [key]
+    assert err.code == "PIPELINE_REQUEST_INVALID"
+    assert err.details["unknown_keys"] == [key]
     assert "dataset_compare" in err.details["replacements"]
     assert "load_dataset" in err.details["replacements"]
+    assert "dataset_compare" in err.message
+
+
+def test_downstream_keys_in_units_are_unknown_keys_with_replacements(tmp_path):
+    err = _code(lambda: resolve_request(_root(tmp_path), {"units": [
+        {"polarity": "negative", "raw_dir": "neg", "comparisons": []}]}))
+    assert err.code == "PIPELINE_REQUEST_INVALID"
+    assert err.details["unknown_keys"] == ["comparisons"]
+    assert err.details["index"] == 0
+    assert "dataset_compare" in err.details["replacements"]
+
+
+def test_plain_unknown_keys_carry_no_replacements(tmp_path):
+    err = _code(lambda: resolve_request(_root(tmp_path), {"methd_file": "m.txt"}))
+    assert err.code == "PIPELINE_REQUEST_INVALID"
+    assert err.details["unknown_keys"] == ["methd_file"]
+    assert "replacements" not in err.details
 
 
 def test_request_file_downstream_keys_are_ignored_with_warning(tmp_path):
@@ -364,7 +382,7 @@ def test_unit_sample_manifest_is_updated_by_polarity(tmp_path):
 @pytest.mark.parametrize("updates", [
     {"method_file": "other.txt"}, {"library_mode": "msp_only"},
     {"alignment_reference": "method"}, {"polarity": "positive"},
-    {"value_sources": {}}, {"units": {"negative": {"method_file": "x.txt"}}},
+    {"units": {"negative": {"method_file": "x.txt"}}},
 ])
 def test_resume_cannot_change_upstream(tmp_path, updates):
     req = resolve_request(_root(tmp_path), {"polarity": "negative"})
@@ -380,8 +398,23 @@ def test_resume_cannot_change_upstream(tmp_path, updates):
 def test_resume_downstream_updates_are_refused_with_replacements(tmp_path, updates):
     req = resolve_request(_root(tmp_path), {"polarity": "negative"})
     err = _code(lambda: merge_updates(req, updates))
-    assert err.code == "PIPELINE_DOWNSTREAM_REMOVED"
+    assert err.code == "PIPELINE_REQUEST_INVALID"
+    assert err.details["unknown_keys"] in (["comparisons"], ["target"], ["preprocess"])
     assert "dataset_compare" in err.details["replacements"]
+
+
+@pytest.mark.parametrize("updates", [
+    {"method": "other.txt"}, {"value_sources": {}},
+    {"units": {"negative": {"sample_manifest": "s.tsv", "sheet": "x"}}},
+])
+def test_resume_unknown_update_keys_are_request_errors(tmp_path, updates):
+    """知らないキー（打ち間違い・内部キー）は「上流の変更」ではなく要求の誤り。"""
+    req = resolve_request(_root(tmp_path), {"polarity": "negative"})
+    before = copy.deepcopy(req)
+    err = _code(lambda: merge_updates(req, updates))
+    assert err.code == "PIPELINE_REQUEST_INVALID"
+    assert "replacements" not in err.details
+    assert req == before
 
 
 # ---------- 単位の平らな要求・極性の確定 ----------

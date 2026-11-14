@@ -7,7 +7,8 @@
    自分自身のidentity）が今も生きているかを`same_process`で見る。このprobeが
    どう転んでも（生存・消失・判定不能）ファイルには一切触れない。極性ごとの単位の
    状態（`units`）と、受領があればその要約（`receipt`: 解析フォルダの場所と `next`）を
-   添える。旧 v1 の run も読め、`legacy: true` と注意 1 行を添える。
+   添える。走っている工程が待っていれば（機械全体で 1 本の Console の順番待ち）`waiting` に
+   工程ごとの待ちの状態を出す。旧 v1 の run も読め、`legacy: true` と注意 1 行を添える。
 2. **`request_cancel`**: 協調的な取消フラグ（`engine.cancel_request_path`が指す小さな
    JSON）を書いて受理を返すだけ。プロセスを直接殺さない——Console の停止は
    `supervise` 側の `cancel_path` 監視に、工程の停止は engine の stage 境界チェックに
@@ -16,8 +17,8 @@
    **launchしない**。旧 v1 の run は `PIPELINE_RUN_LEGACY`（記録を書き換えない）。
    以下の順で安全装置を通す:
 
-   a. `updates` を `request.merge_updates` で検証する（下流のキーは
-      `PIPELINE_DOWNSTREAM_REMOVED`、上流の条件は `NEW_PIPELINE_REQUIRED`）。
+   a. `updates` を `request.merge_updates` で検証する（知らないキー・下流のキーは
+      `PIPELINE_REQUEST_INVALID`、上流の条件は `NEW_PIPELINE_REQUIRED`）。
    b. 監視を失ったまま稼働中のConsoleがどれかの単位にあれば`EXECUTION_UNRESOLVED`。
    c. `rerun_upstream`が無いのに、Console の状態が分からない単位（upstream が
       `running` のまま）がある、または進められる単位が 1 つも無い（全単位が失敗）なら
@@ -162,6 +163,12 @@ def read_status(path: Path, *, include_details: bool = False) -> dict:
         "stage_statuses": _stage_statuses(record),
         "units": {p: store.unit_status(record, p) for p in store.run_units(record)},
     }
+    waiting = {stage_id: stage["waiting"]
+               for stage_id, stage in (record.get("stages") or {}).items()
+               if isinstance(stage, dict) and stage.get("status") == "running"
+               and stage.get("waiting")}
+    if waiting:
+        result["waiting"] = waiting
     if store.is_legacy(record):
         result["legacy"] = True
         result["note"] = _LEGACY_NOTE
@@ -395,6 +402,7 @@ def _manifest_content_changed(pipeline_root: Path, record: dict, request: dict) 
 
 def _reset_stage_for_resume(stage: dict) -> dict:
     reset = dict(stage)
+    reset.pop("waiting", None)
     reset["status"] = "pending"
     reset["input_fingerprint"] = None
     reset["result_refs"] = []

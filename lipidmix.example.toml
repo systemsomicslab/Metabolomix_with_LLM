@@ -12,6 +12,9 @@
 [msdial]
 # MS-DIAL Console の実行体。console_* / pipeline_* ツールを使うときだけ必要。
 exe = 'C:\MS-DIAL\MSDIALCUI.exe'
+# Console を起こす前に確かめる commit の空き（物理メモリ＋ページファイルのうち未確保の量）の下限（GB）。
+# 下回っても止めず、pipeline の警告 LOW_COMMIT_MEMORY を残すだけ。既定 8、0 で測らない。
+# min_free_commit_gb = 8
 # 脂質ライブラリ（.lbm2）は [library] lbm に書く（以前の [msdial] lbm は CONFIG_INVALID になる）。
 
 [library]

@@ -44,6 +44,8 @@ from metabolomix.core.atomic_io import DomainError
 
 __all__ = [
     "OwnedProcess",
+    "commit_memory_status",
+    "current_process_in_job",
     "detach_breakaway_mode",
     "file_lock",
     "launch_detached",
@@ -51,6 +53,7 @@ __all__ = [
     "resolve_python_launch",
     "same_process",
     "start_owned_process",
+    "wait_for_lock",
 ]
 
 # --- CreateProcessW / Job Object のフラグ（winbase.h） ---
@@ -357,6 +360,23 @@ if _IS_WINDOWS:  # pragma: no branch - Windows専用の宣言ブロック
                              ctypes.POINTER(_SECURITY_ATTRIBUTES),
                              _wt.DWORD, _wt.DWORD, _wt.HANDLE]
     _CreateFileW.restype = _wt.HANDLE
+
+    class _MEMORYSTATUSEX(ctypes.Structure):
+        _fields_ = [
+            ("dwLength", _wt.DWORD),
+            ("dwMemoryLoad", _wt.DWORD),
+            ("ullTotalPhys", ctypes.c_ulonglong),
+            ("ullAvailPhys", ctypes.c_ulonglong),
+            ("ullTotalPageFile", ctypes.c_ulonglong),
+            ("ullAvailPageFile", ctypes.c_ulonglong),
+            ("ullTotalVirtual", ctypes.c_ulonglong),
+            ("ullAvailVirtual", ctypes.c_ulonglong),
+            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+        ]
+
+    _GlobalMemoryStatusEx = _kernel32.GlobalMemoryStatusEx
+    _GlobalMemoryStatusEx.argtypes = [ctypes.POINTER(_MEMORYSTATUSEX)]
+    _GlobalMemoryStatusEx.restype = _wt.BOOL
 
 
 def _win_error(code: str, message: str, details: dict | None = None) -> DomainError:
@@ -804,6 +824,51 @@ def detach_breakaway_mode() -> str:
     return _breakaway_mode(True, int(info.BasicLimitInformation.LimitFlags))
 
 
+def _in_any_job(process_handle) -> bool:
+    """`process_handle` のプロセスが、何段目かを問わずどれかのJobに入っているか。
+
+    `IsProcessInJob` にJobハンドル NULL を渡すと「いずれかのJobの下で動いているか」を答える
+    （入れ子のJobの外側まで含む）。どのJobか・そのJobの制限は分からない。
+    """
+    in_job = _wt.BOOL()
+    if not _IsProcessInJob(process_handle, None, ctypes.byref(in_job)):
+        raise _win_error("JOB_QUERY_FAILED", "IsProcessInJobに失敗した")
+    return bool(in_job.value)
+
+
+def current_process_in_job() -> bool | None:
+    """現在のプロセスがどれかのJobに入っているか（何段目でも）。Windows以外・問い合わせ失敗はNone。
+
+    pipelineのworkerが起動直後に自分を確かめ、runの記録に残すのに使う
+    （`launch_detached`の`worker_in_job`と同じ事実を、worker自身から見たもの）。
+    """
+    if not _IS_WINDOWS:
+        return None
+    try:
+        return _in_any_job(_GetCurrentProcess())
+    except DomainError:
+        return None
+
+
+def commit_memory_status() -> dict | None:
+    """機械全体のcommit（物理メモリ＋ページファイル）の空きと上限をバイトで返す。
+
+    `GlobalMemoryStatusEx` の `ullAvailPageFile`（まだ確保されていないcommitの量）と
+    `ullTotalPageFile`（今のcommitの上限）。空きの物理メモリ（`ullAvailPhys`）だけを見ても、
+    commitの上限で落ちる（Windowsのエラー1450）ことは予測できない——物理メモリが空いていても
+    確保済みのcommitが上限に近ければ、大きな確保は失敗する。Windows以外・問い合わせ失敗はNone。
+    """
+    if not _IS_WINDOWS:
+        return None
+    status = _MEMORYSTATUSEX()
+    status.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
+    if not _GlobalMemoryStatusEx(ctypes.byref(status)):
+        return None
+    return {"available_commit_bytes": int(status.ullAvailPageFile),
+            "commit_limit_bytes": int(status.ullTotalPageFile),
+            "available_physical_bytes": int(status.ullAvailPhys)}
+
+
 def _detach_flags(mode: str, command: list[str]) -> int:
     """切り離し起動のCreateProcessWフラグを返す（`mode`は`detach_breakaway_mode`の値）。
 
@@ -825,11 +890,16 @@ def _detach_flags(mode: str, command: list[str]) -> int:
 
 def _spawn_detached(command: list[str], cwd: Path, log_path: Path,
                     env: dict | None) -> dict:
-    """現在のプロセスから1段だけ切り離して起こし、pid・identity・breakawayを返す（待たない）。
+    """現在のプロセスから1段だけ切り離して起こし、pid・identity・breakaway・worker_in_jobを返す（待たない）。
 
     中継（`metabolomix.core.detach_relay`）がワーカーを起こすときの本体。`command`は
     `resolve_python_launch`を通した後のもの。identityは子のプロセスハンドルを開いている
     間に取る（ハンドルを持つ間はpidが再利用されないので、pidと生成時刻が同じ子を指す）。
+
+    `breakaway`はこのプロセス（中継）の直近のJobから見た値で、外側のJobは見えない
+    （`QueryInformationJobObject(NULL)`は直近のJobしか答えない）。そこで起こした子を
+    `IsProcessInJob(子, NULL)`で確かめ、何段目かを問わずJobに残っているかを`worker_in_job`に
+    返す（問い合わせに失敗したらNone）。
     """
     mode = detach_breakaway_mode()
     flags = _detach_flags(mode, command)
@@ -837,10 +907,15 @@ def _spawn_detached(command: list[str], cwd: Path, log_path: Path,
     try:
         identity = {"pid": int(pi.dwProcessId),
                     "creation_time": _creation_time(pi.hProcess)}
+        try:
+            worker_in_job = _in_any_job(pi.hProcess)
+        except DomainError:
+            worker_in_job = None
     finally:
         _CloseHandle(pi.hThread)
         _CloseHandle(pi.hProcess)
-    return {"pid": int(pi.dwProcessId), "identity": identity, "breakaway": mode}
+    return {"pid": int(pi.dwProcessId), "identity": identity, "breakaway": mode,
+            "worker_in_job": worker_in_job}
 
 
 def launch_detached(command: list[str], *, cwd: Path, log_path: Path) -> dict:
@@ -860,13 +935,18 @@ def launch_detached(command: list[str], *, cwd: Path, log_path: Path) -> dict:
     もう居ないので、木をたどってもワーカーに届かない。2段とも同じフラグの規則
     （`_detach_flags`。breakawayは許されるときだけ）で起こす。
 
-    戻り値の形は変わらない: `{"pid", "identity", "breakaway", "log_path"}`。pidとidentityは
-    **ワーカーのもの**（中継のものではない）。`breakaway`はこのプロセスから見た値。
+    戻り値: `{"pid", "identity", "breakaway", "relay_breakaway", "worker_in_job", "log_path"}`。
+    pidとidentityは**ワーカーのもの**（中継のものではない）。`breakaway`はこのプロセスの直近の
+    Jobから見た値、`relay_breakaway`は中継の直近のJobから見た値（ワーカーを起こした段）。
+    `worker_in_job`は起こしたワーカーが何段目かを問わずJobに残っているか（中継が
+    `IsProcessInJob(ワーカー, NULL)`で確かめる。分からなければNone）。
     ワーカーの起動の誤り（`PROCESS_LAUNCH_FAILED`など）は中継から同じcodeで返す。
 
-    限界: Jobがbreakawayを許さない環境（`inherited_job`。KILL_ON_JOB_CLOSEは無い）では
-    中継もワーカーもそのJobに残る。木ごとの終了には残るが、Jobごとの終了
-    （`TerminateJobObject`や、後からKILL_ON_JOB_CLOSEを付けて閉じること）には巻き込まれる。
+    限界: 直近のJobの制限しか読めないので、`DETACH_UNSUPPORTED`で断れるのは直近（この
+    プロセスと中継のそれぞれ1段）がKILL_ON_JOB_CLOSE付きでbreakawayを許さないときだけ。
+    それより外側のJobや、breakawayを許さないJob（`inherited_job`）には、中継もワーカーも
+    残る。木ごとの終了には残るが、そのJobが閉じる（KILL_ON_JOB_CLOSE）・終了させられる
+    （`TerminateJobObject`）と巻き込まれる。`worker_in_job`が真ならこの限界の中にいる。
     """
     if not _IS_WINDOWS:
         raise _unsupported_platform("launch_detached")
@@ -877,8 +957,11 @@ def launch_detached(command: list[str], *, cwd: Path, log_path: Path) -> dict:
     mode = detach_breakaway_mode()
     flags = _detach_flags(mode, command)
     launched = _launch_via_relay(command, cwd, log_path, env, flags)
+    worker_in_job = launched.get("worker_in_job")
     return {"pid": launched["pid"], "identity": launched["identity"],
-            "breakaway": mode, "log_path": str(log_path)}
+            "breakaway": mode, "relay_breakaway": launched.get("breakaway"),
+            "worker_in_job": worker_in_job if isinstance(worker_in_job, bool) else None,
+            "log_path": str(log_path)}
 
 
 def _launch_via_relay(command: list[str], cwd: Path, log_path: Path,
@@ -1041,6 +1124,43 @@ def file_lock(path: Path, *, timeout: float = 30.0, poll_interval: float = 0.05)
                     {"path": str(path), "timeout_s": timeout})
             time.sleep(poll_interval)
         yield path
+    finally:
+        if acquired:
+            _unlock(fd)
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def wait_for_lock(path: Path, *, poll_interval: float = 1.0, on_wait=None,
+                  should_abort=None):
+    """`file_lock`と同じOSの排他ロックを、取れるまで（上限なしで）待って取る。
+
+    長く待つことが前提の排他（機械全体でMS-DIAL Consoleを同時に1本にする等）に使う。
+    待ち始めた（最初の試みで取れなかった）ときに`on_wait()`を1回だけ呼ぶ——待っていることを
+    外へ知らせる場所。待つ間は`poll_interval`秒ごとに`should_abort()`を見て、真なら
+    `LOCK_WAIT_ABORTED`で抜ける（取消の要求など）。ロックはwithを抜けた時と、持っている
+    プロセスが終わった時（OSが外す）に解ける。yieldする値は待った秒数。
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_RDWR | os.O_CREAT
+    flags |= getattr(os, "O_BINARY", 0)
+    fd = os.open(path, flags, 0o644)
+    acquired = False
+    started = time.monotonic()
+    try:
+        notified = False
+        while not _try_lock(fd):
+            if not notified:
+                notified = True
+                if on_wait is not None:
+                    on_wait()
+            if should_abort is not None and should_abort():
+                raise DomainError("LOCK_WAIT_ABORTED",
+                                  f"ロックを待つのを取りやめた: {path}", {"path": str(path)})
+            time.sleep(max(0.0, poll_interval))
+        acquired = True
+        yield time.monotonic() - started
     finally:
         if acquired:
             _unlock(fd)

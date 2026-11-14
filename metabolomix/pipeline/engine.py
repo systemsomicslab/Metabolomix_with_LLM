@@ -57,6 +57,7 @@ from metabolomix.pipeline import store
 
 __all__ = [
     "RECEIPT_STAGE_ID",
+    "WORKER_IN_JOB_WARNING_CODE",
     "build_stages",
     "cancel_request_path",
     "cancel_requested",
@@ -66,8 +67,10 @@ __all__ = [
     "finish_success",
     "make_context",
     "mark_stage_running",
+    "report_stage_waiting",
     "run_engine",
     "stage_inputs_unchanged",
+    "worker_in_job_warning",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -83,6 +86,23 @@ _OWNER_LOCK_FILENAME = "worker.lock"
 #: 取消の協調フラグ。`recovery.request_cancel` が書き、ここではその置き場所の契約と
 #: 読み手だけを持つ。owner lockの解放を待たずに書ける小さな独立ファイルにする。
 _CANCEL_REQUEST_FILENAME = "cancel-request.json"
+
+#: worker が Windows の Job に入ったまま動いている（E2-T02）。run の記録（worker 自身が書く）と
+#: `pipeline_run` / `pipeline_resume` の戻り値（起こした側が中継から聞く）の両方に出す。
+WORKER_IN_JOB_WARNING_CODE = "WORKER_IN_JOB"
+
+
+def worker_in_job_warning() -> dict:
+    """`WORKER_IN_JOB` の警告（`{"code", "message"}`）。"""
+    return {
+        "code": WORKER_IN_JOB_WARNING_CODE,
+        "message": ("pipeline の worker が Windows の Job（プロセスをまとめて止める単位）に入ったまま"
+                    "動いている。起こした側の Job が worker を外へ出すこと（breakaway）を許していない段が"
+                    "どこかにある。その Job が閉じる・終了させられる（MCP クライアントの終了など）と、"
+                    "worker と MS-DIAL Console も止まることがある。閉じたら止める設定（kill-on-close）"
+                    "かどうかは外側の段まで確かめられない。止まったら pipeline_status で確かめ、"
+                    "pipeline_resume で続きから再開する。"),
+    }
 
 
 def _now_iso() -> str:
@@ -299,6 +319,7 @@ def commit_stage_outcome(pipeline_path: Path, record: dict, stage: dict, outcome
         if target.get("status") == "pending":
             return current
         previous_result_refs = list(target.get("result_refs") or [])
+        target.pop("waiting", None)
         target["status"] = outcome.get("status")
         target["updated_at"] = _now_iso()
         target["result_refs"] = list(outcome.get("result_refs") or [])
@@ -329,6 +350,31 @@ def commit_stage_outcome(pipeline_path: Path, record: dict, stage: dict, outcome
         return current
 
     return _save_with_retry(pipeline_path, record, _apply)
+
+
+def report_stage_waiting(pipeline_path: Path, stage_id: str, waiting: dict | None) -> None:
+    """走っている工程の「待っている」状態（`stages[<id>]["waiting"]`）を書く。None なら消す。
+
+    handler は自分で `store.save_run` を呼ばないので、長く待つ handler（Console の順番待ち）は
+    engine が context に渡す `report_waiting` からここを呼ぶ。工程がもう `running` でない
+    （`prepare_resume` が `pending` へ戻した等）なら何も書かない。保存に失敗しても handler は
+    止めない（表示のための記録で、工程の結果ではない）。`commit_stage_outcome` が消す。
+    """
+    def _apply(current: dict) -> dict:
+        target = (current.get("stages") or {}).get(stage_id)
+        if target is None or target.get("status") != "running":
+            return current
+        if waiting is None:
+            target.pop("waiting", None)
+        else:
+            target["waiting"] = copy.deepcopy(waiting)
+        target["updated_at"] = _now_iso()
+        return current
+
+    try:
+        _save_with_retry(pipeline_path, store.load_run(pipeline_path), _apply)
+    except DomainError:
+        _logger.warning("pipeline stage %s: 待ちの状態を保存できなかった", stage_id, exc_info=True)
 
 
 def _unit_statuses(record: dict) -> dict[str, str]:
@@ -493,6 +539,8 @@ def _run_stage_loop(pipeline_path: Path, handlers: dict) -> dict:
                 break
             stage = record["stages"][stage_id]
             context = make_context(record, stage, entry, request)
+            context["report_waiting"] = (
+                lambda waiting, _sid=stage_id: report_stage_waiting(pipeline_path, _sid, waiting))
             outcome = _invoke_handler(handlers[entry["handler"]], context)
             record = commit_stage_outcome(pipeline_path, record, stage, outcome, unit=unit)
             visited[stage_id] = outcome.get("status")
@@ -519,21 +567,32 @@ def _run_stage_loop(pipeline_path: Path, handlers: dict) -> dict:
         {"pipeline_root": str(pipeline_path)})
 
 
-def _record_worker_identity(pipeline_path: Path) -> None:
+def _record_worker_identity(pipeline_path: Path, worker_in_job: bool | None = None) -> None:
     """自分（現在プロセス）のidentityをrunへ刻む（spec §9.3「ロックにはowner
     identityを記録し」の実体）。`recovery.read_status`/`prepare_resume`がこれを読み、
     `same_process`でこのworkerがまだ生きているかを判定する。
+
+    `worker_in_job`（本番の worker が起動直後に自分を確かめた値。`worker.run_worker`）が
+    真なら `worker.in_job` と `WORKER_IN_JOB` の警告を残す（警告は run に 1 つだけ）。
     """
     record = store.load_run(pipeline_path)
 
     def _apply(current: dict) -> dict:
-        current["worker"] = {"identity": process_identity(os.getpid()), "started_at": _now_iso()}
+        worker = {"identity": process_identity(os.getpid()), "started_at": _now_iso()}
+        if worker_in_job is not None:
+            worker["in_job"] = bool(worker_in_job)
+        current["worker"] = worker
+        warnings = current.setdefault("warnings", [])
+        if worker_in_job and not any(w.get("code") == WORKER_IN_JOB_WARNING_CODE
+                                     for w in warnings):
+            warnings.append({**worker_in_job_warning(), "stage_id": None, "details": {}})
         return current
 
     _save_with_retry(pipeline_path, record, _apply)
 
 
-def run_engine(pipeline_path: Path, handlers: dict[str, Callable[[dict], dict]]) -> dict:
+def run_engine(pipeline_path: Path, handlers: dict[str, Callable[[dict], dict]], *,
+               worker_in_job: bool | None = None) -> dict:
     """永続化済みrunを、計画の最後まで（または取消まで）1回分進める。
 
     `pipeline_path` は `store.create_run`/`find_or_create_run` が返す
@@ -544,6 +603,9 @@ def run_engine(pipeline_path: Path, handlers: dict[str, Callable[[dict], dict]])
     取得できなければ即 `PIPELINE_ALREADY_RUNNING`。ロック取得の成否だけを判定するために
     `__enter__`/`__exit__` を手で呼ぶ（stage loop 本体の中の state 更新lockの
     `LOCK_TIMEOUT` まで `PIPELINE_ALREADY_RUNNING` に化けさせないため）。
+
+    `worker_in_job` は本番の worker（`worker.run_worker`）だけが渡す（`_record_worker_identity`）。
+    handler の context には `report_waiting(waiting | None)`（`report_stage_waiting`）を足す。
     """
     pipeline_path = Path(pipeline_path)
     if store.is_legacy(store.load_run(pipeline_path)):
@@ -560,7 +622,7 @@ def run_engine(pipeline_path: Path, handlers: dict[str, Callable[[dict], dict]])
             ) from exc
         raise
     try:
-        _record_worker_identity(pipeline_path)
+        _record_worker_identity(pipeline_path, worker_in_job)
         return _run_stage_loop(pipeline_path, handlers)
     finally:
         owner_lock.__exit__(None, None, None)

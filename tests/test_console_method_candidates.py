@@ -78,3 +78,22 @@ def test_does_not_report_truncated_when_nothing_was_cut(tmp_path):
 def test_missing_dataset_root_is_an_envelope_not_an_exception(tmp_path):
     parsed = _json.loads(console_method_candidates(str(tmp_path / "nope")))
     assert parsed["error"]["code"] == "DATASET_ROOT_NOT_FOUND"
+
+
+def test_polarity_aliases_are_normalized(tmp_path):
+    """`pos` / `+` などの書き方は "positive" に読み替え、usable の判定に効かせる（A11-V68）。"""
+    root = tmp_path / "POS"
+    _write_param(root, "own_param_1.txt", ion="Positive")
+    for alias in ("pos", "POS", "+", " Positive "):
+        parsed = _json.loads(console_method_candidates(str(root), polarity=alias))
+        assert parsed["polarity"] == "positive"
+        assert parsed["candidates"][0]["usable"] == "direct"
+
+
+def test_unreadable_polarity_is_an_error_not_a_silent_mismatch(tmp_path):
+    """読めない極性を黙って「どれとも一致しない」扱いにしない。"""
+    root = tmp_path / "POS"
+    _write_param(root, "own_param_1.txt", ion="Positive")
+    parsed = _json.loads(console_method_candidates(str(root), polarity="postive"))
+    assert parsed["error"]["code"] == "POLARITY_INVALID"
+    assert parsed["error"]["details"] == {"polarity": "postive"}

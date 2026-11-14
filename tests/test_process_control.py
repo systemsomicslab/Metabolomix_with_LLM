@@ -1135,3 +1135,136 @@ def test_launched_pid_is_the_interpreter_that_runs_the_code_even_from_a_venv(tmp
             f"{key}: 返したpidがコードを実行しているプロセスではない（リダイレクタ）"
         assert os.path.normcase(result[key]["child"]["prefix"]) == \
             os.path.normcase(result["prefix"]), f"{key}: 子がvenvを失っている"
+
+
+# ---------- worker がまだ Job に入っているかの確かめ（E2-T02） ----------
+
+@windows_only
+def test_worker_left_in_a_job_is_reported(tmp_path):
+    """breakaway を許さない Job の中から起こすと worker はその Job に残り、`worker_in_job` が真。
+
+    直近の Job（制限なし）は KILL_ON_JOB_CLOSE が無いので `inherited_job` で起動は通る。
+    そのとき worker が何段目かの Job に残っていることを、中継が `IsProcessInJob(worker, NULL)`
+    で確かめて返す——外側の Job が閉じたら止める設定かどうかは分からないので、呼び出し側が
+    警告に出す材料になる。
+    """
+    detacher = _write_script(tmp_path, "detacher.py", _DETACHER_SRC)
+    worker_script = _write_script(tmp_path, "worker.py", _WORKER_SRC)
+    out_path = tmp_path / "detached.json"
+    gate = tmp_path / "assigned.gate"
+
+    identity = None
+    try:
+        with _test_job(0) as (k, job, _close_job):
+            command, env = pc.resolve_python_launch(
+                [sys.executable, str(detacher), _REPO_ROOT, str(out_path),
+                 str(tmp_path), str(tmp_path / "worker.log"),
+                 str(worker_script), str(gate)])
+            launcher = subprocess.Popen(
+                command, env=env, cwd=str(tmp_path), stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                launcher_handle = k.OpenProcess(
+                    _PROCESS_SET_QUOTA | _PROCESS_TERMINATE
+                    | _PROCESS_QUERY_LIMITED_INFORMATION, False, launcher.pid)
+                assert launcher_handle, f"OpenProcessに失敗した: {ctypes.get_last_error()}"
+                try:
+                    assert k.AssignProcessToJobObject(job, launcher_handle), \
+                        f"detacherをJobへ入れられなかった: {ctypes.get_last_error()}"
+                finally:
+                    k.CloseHandle(launcher_handle)
+                gate.write_text("go", encoding="utf-8")
+                assert launcher.wait(timeout=60) == 0
+            finally:
+                if launcher.poll() is None:
+                    launcher.kill()
+                    launcher.wait(timeout=20)
+
+            info = json.loads(out_path.read_text(encoding="utf-8"))
+            assert "error" not in info, f"起動に失敗した: {info}"
+            identity = info["identity"]
+            assert info["breakaway"] == "inherited_job"
+            assert info["relay_breakaway"] == "inherited_job"
+            assert info["worker_in_job"] is True
+    finally:
+        _kill_pid_if_same(identity)
+    assert _wait_until_gone(identity)
+
+
+@windows_only
+def test_current_process_in_job_answers_a_bool():
+    assert isinstance(pc.current_process_in_job(), bool)
+
+
+# ---------- commit の空き（B8-T66） ----------
+
+@windows_only
+def test_commit_memory_status_reports_available_within_the_limit():
+    status = pc.commit_memory_status()
+    assert status is not None
+    assert 0 < status["available_commit_bytes"] <= status["commit_limit_bytes"]
+    assert status["available_physical_bytes"] > 0
+
+
+# ---------- 長く待つ排他（B8-T66） ----------
+
+def test_wait_for_lock_waits_for_the_holder_and_reports_the_wait_once(tmp_path):
+    path = tmp_path / "slot.lock"
+    held = threading.Event()
+    release = threading.Event()
+
+    def holder():
+        with file_lock(path):
+            held.set()
+            release.wait(10)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    try:
+        assert held.wait(10)
+        notices = []
+
+        def on_wait():
+            notices.append(time.monotonic())
+            threading.Timer(0.3, release.set).start()
+
+        with pc.wait_for_lock(path, poll_interval=0.05, on_wait=on_wait) as waited:
+            assert waited > 0
+        assert len(notices) == 1
+    finally:
+        release.set()
+        thread.join(10)
+
+
+def test_wait_for_lock_does_not_report_a_wait_when_free(tmp_path):
+    notices = []
+    with pc.wait_for_lock(tmp_path / "slot.lock", on_wait=lambda: notices.append(1)):
+        pass
+    assert notices == []
+
+
+def test_wait_for_lock_stops_when_asked_to_abort(tmp_path):
+    path = tmp_path / "slot.lock"
+    with file_lock(path):
+        checks = []
+
+        def should_abort():
+            checks.append(1)
+            return len(checks) >= 3
+
+        result = {}
+
+        def waiter():
+            try:
+                with pc.wait_for_lock(path, poll_interval=0.01, should_abort=should_abort):
+                    result["acquired"] = True
+            except DomainError as exc:
+                result["code"] = exc.code
+
+        thread = threading.Thread(target=waiter)
+        thread.start()
+        thread.join(10)
+    assert result == {"code": "LOCK_WAIT_ABORTED"}
+    # 待つのをやめたらロックは持っていない（次の人が取れる）。
+    with file_lock(path, timeout=1.0):
+        pass

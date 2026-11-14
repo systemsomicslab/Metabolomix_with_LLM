@@ -61,9 +61,10 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
         "sample_manifest"?, "keep_extension"?}]`（1〜2 件。`polarity` と `raw_dir`
         （`dataset_root` 相対）は必須で、重ならない。単位の `sample_manifest` の既定は
         `<raw_dir>/sample-manifest.tsv`）。`units` とトップの単位の項目は混ぜられない。
-        下流の項目（`target` / `preprocess` / `comparisons`）は `PIPELINE_DOWNSTREAM_REMOVED`
-        （`details.replacements`: `load_dataset` → `dataset_preprocess` / `dataset_compare` /
-        `dataset_pca`）。相対パスは `dataset_root` 基準。`library_mode="msp_only"` は LBM を使わず研究室の参照
+        知らない項目は `PIPELINE_REQUEST_INVALID`（`details.unknown_keys`）。消えた下流の項目
+        （`target` / `preprocess` / `comparisons`）なら文面と `details.replacements`
+        （`load_dataset` → `dataset_preprocess` / `dataset_compare` / `dataset_pca`）で案内する。
+        相対パスは `dataset_root` 基準。`library_mode="msp_only"` は LBM を使わず研究室の参照
         ライブラリ（.msp）だけで同定する（`msp_file` か極性の設定 `[library]
         msp_positive` / `msp_negative`。メソッドの Text DB・注釈器設定表の宣言は空にする）。
         `library_mode="msp_then_lbm"`（脂質の run 用）は研究室 MSP（priority 2 の注釈器設定表）を
@@ -103,6 +104,10 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
     起動せずに `needs_input` を保存することがある（不正なsample_manifest等、
     spec §9.2「既知の不正入力はConsole起動前に拒否する」）。条件だけ確認したい
     利用者はこちらを使い、実際に進めたいときは `pipeline_run` を使う。
+
+    開いた形式（mzML・imzML・mzXML）の計測ファイルの末尾が閉じタグで終わらない・32 KiB 未満なら、
+    run を作る前に `PIPELINE_INPUT_INVALID`（`details.files` に `{"name", "size", "reason"}`）で
+    名指しして断る（Console は切れた mzML を読むところで落ち、どのファイルかを言わない）。
     """
     from metabolomix.pipeline.service import plan_pipeline
     try:
@@ -135,7 +140,16 @@ def pipeline_run(dataset_root: str, request: dict | None = None,
     （活動中／completed／失敗・取消・部分完了済み）を再利用した場合は
     `launched=false` のみを返し、`launch` キー自体を持たない（起動していない
     以上、handshake結果も存在しない）。既存runを本当に進めたい場合は
-    `pipeline_resume` を使う。
+    `pipeline_resume` を使う。`launch.worker_in_job` が true なら worker が Windows の Job に
+    残っている（何段目の Job でも）。その Job が閉じると worker と Console も止まりうるので、
+    警告 `WORKER_IN_JOB` を `warnings` に返す（止まったら `pipeline_status` → `pipeline_resume`）。
+
+    Console はこの機械で同時に 1 本だけ回す（run を跨いで。待つ間は `pipeline_status` の
+    `waiting`）。起こす前の commit の空きが `[msdial] min_free_commit_gb`（既定 8 GB）を
+    下回れば警告 `LOW_COMMIT_MEMORY` を残す（止めない）。Console が完了しなければ工程の誤り
+    `MSDIAL_EXECUTION_FAILED` に `details.cause`（`system_resources`: 終了コード 1450 などの
+    資源不足 / `broken_input` / `input_suspected`）と `details.diagnosis`（疑わしいファイル・
+    ログのエラーの行）が付く。
     """
     from metabolomix.pipeline.service import start_pipeline
     try:
@@ -166,6 +180,9 @@ def pipeline_status(pipeline_path: str, include_details: bool = False) -> str:
     を追加で行う。workerが消えていれば `observed_health="worker_missing"` と
     `recovery_hint`（`pipeline_resume` を促す）を返すが、statusフィールド自体は
     書き換えない——監視・成果物確定をポーリング呼出しに依存させない（spec）。
+    工程がこの機械のほかの run の Console を待っていれば `waiting`（工程ごとの
+    `reason: "console_slot"`・`since`・待っている相手の `holder`）を返す。worker が
+    Windows の Job に残っていれば `warnings` に `WORKER_IN_JOB`。
     """
     from metabolomix.pipeline.recovery import read_status
     try:
@@ -186,9 +203,9 @@ def pipeline_resume(pipeline_path: str, updates: dict | None = None,
         そのもの、またはその親ディレクトリ＝pipeline_rootのどちらでもよい）。
     updates:
         `sample_manifest`（1 極性の run）か `units: {<極性>: {"sample_manifest": …}}` だけ。
-        変えると受領だけを書き直す。下流の項目（`target` / `preprocess` / `comparisons`）は
-        `PIPELINE_DOWNSTREAM_REMOVED`、上流の条件（メソッド・ライブラリ・極性…）は
-        `NEW_PIPELINE_REQUIRED`。旧形式（pipeline-run.v1）の run は `PIPELINE_RUN_LEGACY`
+        変えると受領だけを書き直す。知らない項目（消えた下流の項目 `target` / `preprocess` /
+        `comparisons` を含む）は `PIPELINE_REQUEST_INVALID`（下流の項目なら `details.replacements`）、
+        上流の条件（メソッド・ライブラリ・極性…）は `NEW_PIPELINE_REQUIRED`。旧形式（pipeline-run.v1）の run は `PIPELINE_RUN_LEGACY`
         （読むなら `load_dataset(pipeline_path=…)`、Console をやり直すなら新しい `pipeline_run`）。
     request_id:
         冪等性キー。同一内容の再送は新しいrevisionを作らず直前の結果を返す。

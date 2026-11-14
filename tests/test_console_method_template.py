@@ -166,3 +166,26 @@ def test_template_choice_required_truncates_many_candidates(tmp_path, monkeypatc
     assert f"{n_siblings} 件" in error["message"]
     assert len(error["details"]["candidates"]) == MAX_REPORTED_CANDIDATES
     assert error["details"]["truncated"] is True
+
+
+def test_template_accepts_a_polarity_alias(tmp_path, monkeypatch):
+    from metabolomix.tools.console_tools import console_method_template
+    _ready(tmp_path, monkeypatch)
+    src = _neg_param(tmp_path / "neg_param_1.txt")
+    out = tmp_path / "param_POS.txt"
+    parsed = _json.loads(console_method_template(
+        out_path=str(out), polarity="pos", based_on=str(src)))
+    assert parsed["status"] == "written"
+    assert parsed["polarity"] == "positive"
+    assert "Ion mode: Positive" in out.read_text(encoding="ascii")
+
+
+def test_template_refuses_an_unreadable_polarity(tmp_path, monkeypatch):
+    from metabolomix.tools.console_tools import console_method_template
+    _ready(tmp_path, monkeypatch)
+    src = _neg_param(tmp_path / "neg_param_1.txt")
+    out = tmp_path / "param_POS.txt"
+    parsed = _json.loads(console_method_template(
+        out_path=str(out), polarity="postive", based_on=str(src)))
+    assert parsed["error"]["code"] == "POLARITY_INVALID"
+    assert not out.exists()
