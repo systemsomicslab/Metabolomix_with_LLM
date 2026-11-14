@@ -96,7 +96,8 @@ def injection_trend(ds, rows: list[dict]) -> dict:
     実測 m/z（`ds.per_sample_mz`）と理論 m/z の差。注入順は割れの組の判定と同じ規則
     （`alignment_qc.sample_injection_order`。出所を `injection_order_source` に書く）。
     試料ごとの m/z が無ければ `{"status": "unavailable"}`。rho は、注入順の出所が
-    `filename`（採取時刻が読めない）か、データのある試料が `MIN_INJECTIONS_FOR_RHO` 未満なら
+    `filename`（採取時刻が読めない・試料の表が宣言でファイル名の順と書いた）か、データのある試料が
+    `MIN_INJECTIONS_FOR_RHO` 未満なら
     None で、理由を `rho_unavailable_reason`（`filename_order` / `too_few_samples`）に書く。
     注入順が MS-DIAL の振った値（.mddata / mzTab-M）でファイル名の順と一致するなら、rho は出すが
     `warnings` に `injection_order_may_be_file_order` を添える（MS-DIAL の既定はファイルの順）。

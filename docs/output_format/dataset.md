@@ -225,7 +225,8 @@ subject_source, groups: {群: 個体数}, quant, steps, warnings, record, next}`
 - 注入順とバッチの出所の注意: `injection_order_may_be_file_order`（注入順が MS-DIAL の振った値（`.mddata` /
   mzTab-M）で、ファイル名の順と一致する。MS-DIAL は利用者が入れない限り注入順をファイルの順で振るので、実際の測定順とは
   限らない。`n_samples`。同じ注意を交絡の判定（`dataset_compare` の `confounding.warnings` に `n_units` 付きで。エンジンの
-  結果（`dataset_analysis_run` の比較も）では `confounding.injection_order.may_be_file_order` も立つ）と
+  結果（`dataset_analysis_run` の比較も）では `confounding.injection_order.may_be_file_order` も立つ。交絡の判定は、試料の表が
+  宣言 `# injection_order_source = filename` でファイル名の順と書いた注入順〔出所 `filename`〕にも同じ注意を付ける）と
   質量精度の注入順の ρ（`dataset_mass_accuracy` の `injection_trend.warnings`）も返す。判定は、MS-DIAL 由来の注入順を
   ファイル名の順に並べて狭義に増えるとき（同じ注入順の試料があれば立てない））・`batch_candidates`（バッチが不明な試料の名前の 8 桁が 2 種類以上。`values`。
   ドリフト補正・反復のまとめ・交絡には当てていない。バッチなら試料の表の `batch` に入れる）。
@@ -321,7 +322,7 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 - 応答の `resolved_samples` が**群の定義そのもの**（実際に比較したサンプル名）、`n_a` / `n_b` が実 n。プールに2件以上のサンプルが入れば「プール群として解決」caveat を付す
 - 応答の `resolved_class_ids` は**選択されたサンプルが持つ Class ID**であって群の定義ではない。両群で同じ Class ID になり得る（上の `ILG_6h` vs `ILG_0h`）ため、縮退比較と誤読しないこと。その場合は「Class ID では区別されず」caveat が付く
 
-**一致ゼロ・両群が同じ Class ID を掴む指定は `status="error"` で落とす**（成功扱いで n=0 を返すと「有意0件＝群間差なし」と誤読されるため）。`24M` と `GF` は `24M_GF_*` を共有するので排他ではなくエラーになる。なお交互作用検定は依然として提供しない。
+**一致ゼロ・両群が同じ Class ID を掴む指定は `status="error"` で落とす**（成功扱いで n=0 を返すと「有意0件＝群間差なし」と誤読されるため）。`24M` と `GF` は `24M_GF_*` を共有するので排他ではなくエラーになる。交互作用はいまの `dataset_compare` で検定できる（§11.2: `comparisons` の `kind: "interaction"` の 2×2 の対比〔差の差〕と、因子が 2 つ以上で cell がそろうときの `factorial` の主効果・交互作用の F）。
 
 **QC・ブランクは比較群に入らない**。試料の `role` が `qc` / `blank` の試料は群ラベルを `None` にしてから展開するため、どちらのプールにも寄らない。QC の Class ID が指定トークンを含む場合（例 `QC_24M` と `group_a="24M"`）に黙って群平均へ混ざるのを防ぐための明示的な封鎖であり、除外内訳は caveat「比較対象から除外（生体試料でないため）」に出る。`n_a` / `n_b` は除外後の実 n。
 
@@ -389,7 +390,7 @@ output?, record, next, notes?}`。
 - `factorial`: 因子が 2 つ以上で、全水準の組（cell）がそろうときの**主効果と交互作用の F**（Type III。多水準を含む
   moderated F）の効果ごとの `{df1, n_tested, n_q_below}`（効果の名前は因子名、交互作用は `group:sex` のように `:` で結ぶ）。
   無ければ null。F は向きと log2fc を持たないので、対比の行とは別の欄（omnibus と同じ扱い）。
-- `top`: 対比ごとに `changed` の上位（q の小さい順。`top_n` 既定 10・上限 50）の TSV
+- `top`: 対比ごとに `changed` の上位（q の小さい順。`top_n` 既定 10。50 を超える値は断らず 50 に下げて比べ、`notes` に書く。そのとき 50 行で切った対比があれば `top_truncated: true` と `top_n_more`〔対比 → 載せなかった changed の行数〕、`f_top` で切った効果があれば `f_top_n_more`〔効果 → 行数〕。全行は `output_path`・`result_id`）の TSV
   （`contrast_id feature_id name id_level log2fc ci_low ci_high q verdict`）。`name` は `feature_metadata`、無ければ
   MS1 注釈（`feature_annotations`）の名前、`id_level` は `msms` / `ms1` / `none`。無ければ空文字。`f_top` は
   omnibus・要因の効果ごとに `f_q ≤ q_threshold` の上位の TSV（`effect feature_id name id_level f df1 df2 f_q`。
@@ -419,7 +420,7 @@ output?, record, next, notes?}`。
   散らして見えなくし、逆に特徴の少ない PQN は埋め値でない値を一定に見せる。判定は変えず、件数を警告
   `constant_in_group`（`{n_rows, n_features, by_contrast, examples}`）に出す。片群が一定の値だと、群の差は値の大きさより
   埋め方で決まりうる。
-- エラー: 群の指定が合わない・`top_n` / `log2fc_threshold` / `p_adjust` / `output_path` が不正・`bh_population=reported`
+- エラー: 群の指定が合わない・`top_n`（整数でない・負）/ `log2fc_threshold` / `p_adjust` / `output_path` が不正・`bh_population=reported`
   なのに `reported_feature_ids` が無いは `DATASET_BAD_REQUEST`。`reported` 以外で `reported_feature_ids` を渡したときは
   誤りにせず、ID を使わずに戻り値の `notes` に書く（効かない引数の組）。
   `matrix_id` が古い・無いは `missing_state`（`stat_matrix`）。`matrix_id` と一緒に渡した `group_levels` / `group_factors` は
@@ -762,7 +763,17 @@ PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（
 その極性の測定の注入順・バッチ。強度の大きい極性の総量がもう一方の失敗やドリフトを隠さない）: 失敗した注入は
 どれかの極性で失敗したもの（データの `by_polarity` に内訳）、ドリフトの兆候の行は `polarity` 付き。
 既定（`drift_mode=auto`）がドリフト補正を当てなかった（換算済み・注入順がファイルの順かもしれない）ときは、概観は
-補正なしで計算し、そのことを事実と `next`（`dataset_preprocess(drift_mode="on")`）に出す。
+補正なしで計算し、そのことを事実と `next`（`dataset_preprocess(drift_mode="on")`）に出す。陽陰を統合したデータセットで
+当てなかった極性のほかに補正の条件を満たさない極性があるときも、当てなかった極性を事実に名指しする（`drift_mode="on"` は
+その極性のせいで `PREPROCESS_PRECONDITION` になるので `next` に勧めず、注入順が確かでない極性には実際の順の入れ方を添える）。
+交絡の事実の「注入順が群で偏っている」は、注入順がファイルの順かもしれない（MS-DIAL の既定・シートの宣言
+`# injection_order_source = filename`）ときは偏りがファイル名の並びかもしれないと添え、データに
+`injection_order_may_be_file_order: true`、`next` に `dataset_set_sample_metadata`（実際の測定順を入れる）を足す。
+ドリフトの兆候の事実（兆候あり・なしのどちらも）も同じ注入順で ρ を測るので、ρ に使った QC の注入順がファイルの順
+かもしれないときは「ρ はファイル名の並びとの相関で、実際の測定順でのドリフトを見ていないかもしれない」と添え（統合した
+データセットではその極性を名指しする）、データ（と `batches` のその行）に `injection_order_may_be_file_order: true`、
+`next` に同じ入れ方を足す。注入順が群で偏っていなくても、品質の段だけの概観（交絡を評価しない）でも付く。ρ と判定
+（`drift_sign`）は変えない。
 既定の前処理が失敗する（足切りで特徴が 1 つも残らない など）ときも概観は失敗しない: 品質の段（前処理の前の試料から
 計算する）だけを出し、全体・クラス・分子種の段は `omitted` に失敗の理由（足切りの内訳 `details` を含む）を書いて省く。
 交絡はこのとき評価しない。

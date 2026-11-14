@@ -19,6 +19,7 @@ from metabolomix.analysis.stats import quality, spec_v2
 from metabolomix.analysis.stats.composition import composition
 from metabolomix.analysis.stats.confounding import confounding_report
 from metabolomix.analysis.stats.data import from_dataset
+from metabolomix.analysis.stats.preprocess import run_remedy
 from metabolomix.core import mcp_core
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
@@ -39,21 +40,36 @@ _DRIFT_HELD = {"quant_normalized": "内部標準などで換算済み",
                "injection_order_may_be_file_order": "注入順が MS-DIAL の既定（ファイルの順）かもしれない"}
 
 
-def _drift_note(prepared) -> str | None:
-    """既定の前処理が drift=auto で補正を止めたなら、その旨（理由と drift_mode="on" での呼び直し）。"""
+def _drift_note(prepared) -> tuple[str | None, bool]:
+    """既定の前処理が drift=auto で補正を止めたなら、その旨の文と、drift_mode="on" で呼び直せるか。
+
+    陽陰を統合したデータセットでは、止めた極性（段の `by_polarity` の `rerun_with`）を名指しする。ほかの極性が
+    補正の条件を満たさない（段の全体に `rerun_with` が無い）ときも止めた極性は書き、drift_mode="on" はその極性の
+    せいで PREPROCESS_PRECONDITION になると添える（呼び直せない。注入順が確かでない極性は実際の順の入れ方）。
+    止めていなければ `(None, False)`。
+    """
     step = next((s for s in prepared.steps if s.get("step") == "drift"), {})
-    if not step.get("rerun_with"):
-        return None
-    held = {p: st.get("reasons") or [] for p, st in (step.get("by_polarity") or {}).items()
-            if st.get("rerun_with")}
+    by = step.get("by_polarity") or {}
+    held = {p: st.get("reasons") or [] for p, st in by.items() if st.get("rerun_with")}
+    rerunnable = bool(step.get("rerun_with"))
     if held:
         # 陽陰を統合したデータセット: 補正は極性ごと。止めた極性だけを名指しする
         why = "; ".join(f"{p}: " + "・".join(_DRIFT_HELD.get(r, r) for r in rs) for p, rs in held.items())
-        return (f"ドリフト補正は既定（drift=auto）では {', '.join(held)} に当てなかった（{why}）。概観はその極性を"
-                "補正なしで計算した（補正するなら dataset_preprocess(drift_mode=\"on\")）")
+        head = (f"ドリフト補正は既定（drift=auto）では {', '.join(held)} に当てなかった（{why}）。概観はその極性を"
+                "補正なしで計算した")
+        if rerunnable:
+            return head + "（補正するなら dataset_preprocess(drift_mode=\"on\")）", True
+        other = [p for p, st in by.items() if p not in held and st.get("status") != "applied"]
+        unsure = [p for p, rs in held.items() if "injection_order_may_be_file_order" in rs]
+        remedy = ("実際の注入順で補正するなら先に入れる: " + "".join(run_remedy(p) for p in unsure)
+                  if unsure else "")
+        return (head + f"。ほかの極性（{', '.join(other)}）は補正の条件を満たさないので、drift_mode=\"on\" は "
+                "PREPROCESS_PRECONDITION になる。" + remedy).rstrip(), False
+    if not rerunnable:
+        return None, False
     why = "・".join(_DRIFT_HELD.get(r, r) for r in step.get("reasons") or [])
     return (f"ドリフト補正は既定（drift=auto）では当てなかった（{why}）。概観は補正なしで計算した"
-            "（補正するなら dataset_preprocess(drift_mode=\"on\")）")
+            "（補正するなら dataset_preprocess(drift_mode=\"on\")）"), True
 
 
 def _curation_judgments(holder, ds) -> int | None:
@@ -215,7 +231,7 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
     # 1. 既定の前処理（drift=auto が補正を止めたら、補正なしで計算したことを事実に書く。§7）
     try:
         prepared = stats_results.prepare_default(study, config)
-        drift_note = _drift_note(prepared)
+        drift_note, drift_rerunnable = _drift_note(prepared)
         entry, _record = register_default(holder, ds, study, prepared, config, inputs)
     except DomainError as exc:
         return _quality_only(holder, ds, study, exc, rsd=rsd, failed=failed, drift=drift,
@@ -257,7 +273,7 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
     q_sec = overview.quality_facts(rsd=rsd, failed=failed, detection=detection,
                                    drift=drift, confounding=conf, replicate_warnings=replicates,
                                    verdict=verdict, reasons=reasons, n_qc=len(prepared.qc_ids),
-                                   n_blank=n_blank, drift_note=drift_note,
+                                   n_blank=n_blank, drift_note=drift_note, drift_rerunnable=drift_rerunnable,
                                    pca_id=pca_rec["result_id"] if pca_rec else None)
     g_sec = overview.global_facts(pca_result=pca_result, labels=labels, record=record, plan=plan,
                                   omitted=omitted, quality_note=q_note, exploratory=exploratory)
@@ -340,7 +356,8 @@ def dataset_overview(top_n: int = 5, dataset_handle: str | None = None) -> str:
     - 2 群の向きは**仮**（試料の表で先に現れた群を基準。名前から対照を推測しない）。向きを決めるのは
       `dataset_compare(reference_group=..., test_group=...)`。
     - 品質の判定（`ok` / `caution` / `poor` / `not_evaluable`）を先に置く。`poor` でも差の段は「参考」と添えて出すが、
-      群とバッチが完全交絡なら比較を回さない。群が 1 つでも比較しない。探索専用のデータセット（未完了の実行）は
+      群とバッチが完全交絡なら比較を回さない。注入順がファイルの順かもしれない（MS-DIAL の既定・シートの宣言で
+      ファイル名の順）なら、注入順を使う事実（ドリフトの兆候・注入順の偏り）に但し書きを添え、next に実際の測定順の入れ方を足す。群が 1 つでも比較しない。探索専用のデータセット（未完了の実行）は
       比較を回し、全体・クラス・分子種の段の先頭に探索専用の印の事実（理由つき）を置く。
     - クラスの段は付加体の選別（`dataset_select_features`）の後だけ出す（それまでは理由と次の一手）。
     - 事実には段ごとの ID（`Q1` `G1` `C1` `S1`）が付き、外からは `<overview_id>#Q1` で引く。考察は事実 ID を挙げて

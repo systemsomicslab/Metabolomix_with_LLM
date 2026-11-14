@@ -136,7 +136,8 @@ def _injection_order(names: list[str], rows: list[dict | None],
 
     引数で渡されればそれ（`metadata`。1 試料でも欠ける・数でなければ DomainError——
     呼び出し側が明示した順を黙って捨てない）、無ければ実験情報シートの `injection_order`
-    （出所が利用者のシートなら `manifest`、mzTab などから推した値なら `metadata`）。
+    （出所が利用者のシートなら `manifest`、mzTab などから推した値なら `metadata`。全試料の値をシートが
+    宣言 `# injection_order_source = filename` でファイル名の順と書いていれば、値はそのまま出所を `filename`）。
     シートの値が 1 試料でも欠ければ、推した順を信じずファイル名（試料名）の順にする
     （pipeline の参照ファイルの選び方 `choose_alignment_reference` と同じ規約）。
     """
@@ -152,8 +153,14 @@ def _injection_order(names: list[str], rows: list[dict | None],
         return order, "metadata"
     order = [_number((row or {}).get("injection_order")) for row in rows]
     if all(v is not None for v in order) and names:
-        sources = {(((row or {}).get("provenance") or {}).get("injection_order") or {})
-                   .get("source") for row in rows}
+        from metabolomix.analysis.sample_manifest import order_provenance_label
+
+        provs = [((row or {}).get("provenance") or {}).get("injection_order") or {} for row in rows]
+        if all(order_provenance_label(p) == "filename" for p in provs):
+            # シートが宣言でファイル名の順と書いた値（`# injection_order_source = filename`）は、自前の
+            # ファイル名の順と同じく実際の注入順とは限らない（値はシートのまま。ρ は出さない）
+            return order, "filename"
+        sources = {p.get("source") for p in provs}
         return order, "manifest" if sources == {"user_manifest"} else "metadata"
     ranked = sorted(range(len(names)), key=lambda i: (names[i], i))
     order = [0.0] * len(names)

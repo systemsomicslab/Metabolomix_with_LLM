@@ -540,25 +540,29 @@ def _clean(text) -> str:
     return str(text or "").replace("\t", " ").replace("\n", " ")
 
 
-def _top_table(ds, rows, cids, limit: int) -> str:
+def _top_table(ds, rows, cids, limit: int) -> tuple[str, dict[str, int]]:
     """対比ごとに changed の上位（q の小さい順）を TSV（列名は 1 回）にする。無ければ空文字。
-    名前は `feature_metadata`、無ければ `feature_annotations`（MS1 注釈）から。`id_level` は msms / ms1 / none。"""
-    lines = []
+    名前は `feature_metadata`、無ければ `feature_annotations`（MS1 注釈）から。`id_level` は msms / ms1 / none。
+    2 つ目の戻り値は `limit` で載せきれなかった対比 → 行数（載せきれたら空）。"""
+    lines, more = [], {}
     for cid in cids:
         changed = [r for r in rows if r["contrast_id"] == cid and r["verdict"] == "changed"
                    and r["q"] is not None]
         changed.sort(key=lambda r: (r["q"], r["feature_id"]))
+        if len(changed) > limit:
+            more[cid] = len(changed) - limit
         for r in changed[:limit]:
             ident = compare_table.identity_of(ds, r["feature_id"])
             lines.append("\t".join([cid, str(r["feature_id"]), _clean(ident["name"]), ident["id_level"],
                                     _fmt(r["log2fc"]), _fmt(r["ci_low"]), _fmt(r["ci_high"]),
                                     _fmt(r["q"], ".3g"), r["verdict"]]))
-    return "\n".join(["\t".join(_TOP_COLUMNS), *lines]) if lines else ""
+    return ("\n".join(["\t".join(_TOP_COLUMNS), *lines]) if lines else ""), more
 
 
-def _f_top_table(ds, engine: dict, limit: int) -> str:
+def _f_top_table(ds, engine: dict, limit: int) -> tuple[str, dict[str, int]]:
     """omnibus F と要因の F の効果ごとに、q が閾値以下の上位（q の小さい順）を TSV にする。無ければ空文字。
-    effect は omnibus なら `omnibus`、要因なら効果の名前（`group` / `group:B` など）。"""
+    effect は omnibus なら `omnibus`、要因なら効果の名前（`group` / `group:B` など）。
+    2 つ目の戻り値は `limit` で載せきれなかった効果 → 行数（載せきれたら空）。"""
     q_thr = engine["verdict_rule"]["q_threshold"]
     blocks = []
     if engine.get("omnibus"):
@@ -566,15 +570,17 @@ def _f_top_table(ds, engine: dict, limit: int) -> str:
     factorial = engine.get("factorial") or {}
     for name in factorial.get("effects") or {}:
         blocks.append((name, [r for r in factorial["rows"] if r["effect"] == name]))
-    lines = []
+    lines, more = [], {}
     for effect, rows in blocks:
         hits = [r for r in rows if r["f_q"] is not None and r["f_q"] <= q_thr]
         hits.sort(key=lambda r: (r["f_q"], r["feature_id"]))
+        if len(hits) > limit:
+            more[effect] = len(hits) - limit
         for r in hits[:limit]:
             ident = compare_table.identity_of(ds, r["feature_id"])
             lines.append("\t".join([effect, str(r["feature_id"]), _clean(ident["name"]), ident["id_level"],
                                     _fmt(r["f"]), _fmt(r["df1"]), _fmt(r["df2"]), _fmt(r["f_q"], ".3g")]))
-    return "\n".join(["\t".join(_F_TOP_COLUMNS), *lines]) if lines else ""
+    return ("\n".join(["\t".join(_F_TOP_COLUMNS), *lines]) if lines else ""), more
 
 
 def _contrast_summaries(engine: dict, spec: dict, log2fc_threshold: float) -> list[dict]:
@@ -718,8 +724,10 @@ def dataset_compare(
     q_threshold / equivalence_fc: 判定の q の閾値（既定 0.05）と同等とみなす倍率（既定 1.2）。
     allow_confounded: 既定 true（群とバッチが完全交絡でも比較し、confounding と対比の confounded に印を
         付ける）。false を渡すと完全交絡（全体か、どれかの対比）で STATISTIC_CONFOUNDED にして止める。
-    top_n: 対比ごとに changed の上位（q の小さい順）を top に何件載せるか（既定 10、上限 50。
-        F 検定があれば効果ごとの上位を f_top に。全行は result_id・output_path で取り出す）。
+    top_n: 対比ごとに changed の上位（q の小さい順）を top に何件載せるか（既定 10。F 検定があれば効果ごとの
+        上位を f_top に。全行は result_id・output_path で取り出す）。50 を超える値は断らず 50 に下げて比べ、
+        notes に書く。そのとき 50 行で切った対比・効果があれば top_truncated: true と top_n_more /
+        f_top_n_more（対比・効果 → 載せなかった行数）。整数でない・負の値は DATASET_BAD_REQUEST。
     output_path: 全特徴 × 全対比の全列（統計量・df・CI・SE・群ごとの n と検出数・同定の列）を TSV で書く
         先。F 検定（omnibus・要因）があれば `<stem>.ftests<拡張子>` にも書く。差次的エクスポート
         （dataset_export_differential）の 15 列とは別物。書けなくても比較は成功し、output.written=false。
@@ -734,11 +742,15 @@ def dataset_compare(
                              "DatasetState がありません。先に load_dataset を実行してください。")
     used_matrix = matrix_source = None
     try:
-        if isinstance(top_n, bool) or not isinstance(top_n, int) or not 0 <= top_n <= _TOP_N_MAX:
-            raise _bad_request(f"top_n は 0〜{_TOP_N_MAX} の整数です。全行は結果（result_id）に保持して"
-                               "あり、output_path・書き出し（dataset_export_differential）で取り出せます。",
-                               top_n=top_n)
+        if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 0:
+            raise _bad_request("top_n は 0 以上の整数です。", top_n=top_n)
         reported, notes = _reported_ids(bh_population, reported_feature_ids)
+        top_capped = top_n > _TOP_N_MAX
+        if top_capped:
+            # 長いだけの指定は断らない: 上限に下げて比べ、全行の取り出し方を書く
+            notes.append(f"top_n={top_n} は上限の {_TOP_N_MAX} に下げた（戻り値を肥大させない）。全行は result_id・"
+                         "output_path（全列の TSV）・dataset_export_differential で取り出せる。")
+            top_n = _TOP_N_MAX
         if p_adjust not in P_ADJUST_METHODS:
             raise _bad_request(f"p_adjust は {list(P_ADJUST_METHODS)} のどれかです。", p_adjust=p_adjust)
         out_path = _output_path(output_path)
@@ -838,12 +850,19 @@ def dataset_compare(
     if preprocess_record is not None:
         written = {**written, "preprocess_record": preprocess_record}
     cids = [c["id"] for c in spec["comparisons"]]
-    f_top = _f_top_table(ds, engine, top_n)
+    top, top_more = _top_table(ds, engine["rows"], cids, top_n)
+    f_top, f_top_more = _f_top_table(ds, engine, top_n)
+    # 上限に下げた呼び出しで切った対比・効果があれば、切った印と行数（下げていなければ頼んだ件数どおり）
+    cut = {} if not top_capped else {
+        **({"top_truncated": True} if top_more or f_top_more else {}),
+        **({"top_n_more": top_more} if top_more else {}),
+        **({"f_top_n_more": f_top_more} if f_top_more else {})}
     return json_payload(json_safe({
         "status": "success",
         **summary,
-        "top": _top_table(ds, engine["rows"], cids, top_n),
+        "top": top,
         **({"f_top": f_top} if f_top else {}),
+        **cut,
         **({"output": output} if output is not None else {}),
         **({"notes": notes} if notes else {}),
         "record": written,

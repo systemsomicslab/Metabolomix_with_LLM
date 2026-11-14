@@ -653,10 +653,50 @@ def test_n_q_below_counts_q_equal_to_threshold():
 
 
 def test_top_n_capped(ds):
+    """上限（50）を超える top_n は断らず、上限に下げて比べ notes に書く。整数でない・負の値だけを断る。"""
     mx = _pre()["matrix_id"]
     assert _cmp(reference_group="C", test_group="T", matrix_id=mx, top_n=50)["status"] == "success"
     big = _cmp(reference_group="C", test_group="T", matrix_id=mx, top_n=51)
-    assert big["error"]["code"] == "DATASET_BAD_REQUEST" and "result_id" in big["error"]["message"]
+    assert big["status"] == "success" and big["result_id"].startswith("cmp_")
+    assert any("top_n=51" in n and "50" in n and "output_path" in n for n in big["notes"])
+    # changed は 3 行だけなので、上限で切った対比は無い
+    changed = _contrast(big, "T_vs_C")["verdicts"]["changed"]
+    assert len(big["top"].splitlines()) - 1 == changed
+    assert "top_truncated" not in big and "top_n_more" not in big
+    for bad in (-1, 2.5, "5", True):
+        refused = _cmp(reference_group="C", test_group="T", matrix_id=mx, top_n=bad)
+        assert refused["error"]["code"] == "DATASET_BAD_REQUEST", bad
+
+
+def test_top_n_over_the_cap_returns_the_first_rows_and_counts_the_rest(tmp_path, monkeypatch):
+    """上限で切ったら、載せた行は上限まで（q の小さい順）・切った印と対比 / 効果ごとの載せなかった行数。"""
+    monkeypatch.setattr(stats_tools, "_TOP_N_MAX", 2)
+    _install(_ds(groups=("C", "T", "U")), tmp_path)
+    mx = _pre()["matrix_id"]
+    out = _cmp(groups=["C", "T", "U"], matrix_id=mx, top_n=7)
+    assert out["status"] == "success"
+    assert any("top_n=7" in n for n in out["notes"])
+    engine = session_state.session.dataset.results[out["result_id"]]["engine"]
+    rows = [line.split("\t") for line in out["top"].splitlines()[1:]]
+    more = {}
+    for c in out["contrasts"]:
+        cid, changed = c["contrast_id"], c["verdicts"]["changed"]
+        shown = [r for r in rows if r[0] == cid]
+        assert len(shown) == min(changed, 2)
+        # 載せたのは q の小さい順の先頭（エンジンの行から独立に数え直す）
+        best = sorted((r for r in engine["rows"] if r["contrast_id"] == cid and r["verdict"] == "changed"),
+                      key=lambda r: (r["q"], r["feature_id"]))[:2]
+        assert [r[1] for r in shown] == [r["feature_id"] for r in best]
+        if changed > 2:
+            more[cid] = changed - 2
+    assert more and out["top_n_more"] == more and out["top_truncated"] is True
+    q_thr = engine["verdict_rule"]["q_threshold"]
+    n_f = sum(1 for o in engine["omnibus"] if o["f_q"] is not None and o["f_q"] <= q_thr)
+    assert n_f > 2 and out["f_top_n_more"] == {"omnibus": n_f - 2}
+    assert len(out["f_top"].splitlines()) - 1 == 2
+    # 上限以下の top_n は頼んだ件数どおり（切った印は付けない）
+    plain = _cmp(groups=["C", "T", "U"], matrix_id=mx, top_n=1)
+    assert "top_truncated" not in plain and "notes" not in plain
 
 
 def test_reported_population_needs_its_ids_and_is_written_into_spec(ds):

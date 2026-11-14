@@ -264,3 +264,186 @@ def test_overview_keeps_quality_when_preprocessing_leaves_nothing(tmp_path):
         assert "PREPROCESS_PRECONDITION" in out[key]["omitted"], out[key]
     assert "qc_rsd" in out["global"]["omitted"]           # 足切りの内訳（details）を落とさない
     assert "pca" not in out["result_ids"] and "compare" not in out["result_ids"]
+
+
+def test_overview_confounding_fact_carries_the_file_order_caveat(tmp_path):
+    """A6: 注入順が MS-DIAL の既定（ファイルの順）かもしれないとき、概観の交絡の事実の「注入順が群で偏っている」に
+    「ファイル名の並びを見ているだけかもしれない」を添え、事実のデータと next にも出す。"""
+    from scipy import stats as sps
+
+    from tests.test_injection_order_source import _file_order_ds
+
+    ds = _install(_file_order_ds(tmp_path), tmp_path)
+    out = _ov()
+    assert "injection_order_biased" in out["quality"]["facts"][0]
+    conf = next(f for f in out["quality"]["facts"] if "注入順が群で偏っている" in f)
+    assert "ファイル名の並びを見ているだけかもしれない" in conf and "injection_order" in conf
+    assert "dataset_set_sample_metadata（injection_order に実際の測定順を入れる）" in out["quality"]["next"]
+    data = next(x["data"] for x in ds.results[out["overview_id"]]["facts"]["quality"]
+                if "注入順が群で偏っている" in x["text"])
+    assert data["injection_order"] == "biased" and data["injection_order_may_be_file_order"] is True
+    # 偏りの判定そのものは同じ（個体＝subject の注入順の平均で、Kruskal–Wallis を独立に計算）
+    by_subject: dict[str, list[float]] = {}
+    for row in ds.sample_metadata_rows:
+        if row["role"] == "sample":
+            by_subject.setdefault(row["group"] + "|" + row["subject_id"], []).append(row["injection_order"])
+    means = {g: [sum(v) / len(v) for k, v in by_subject.items() if k.startswith(g + "|")] for g in ("C", "T")}
+    assert sps.kruskal(means["C"], means["T"]).pvalue < 0.05
+
+
+def test_overview_confounding_fact_without_file_order_has_no_caveat(tmp_path):
+    """注入順がファイルの順でない（手で入れた順）なら、偏りの事実に但し書きもデータの印も付けない。"""
+    ds = _ds()
+    for row in ds.sample_metadata_rows:      # 群ごとに固まった順（偏り）。出所は利用者のシート
+        row["provenance"] = {"injection_order": {"value": row["injection_order"], "source": "user_manifest",
+                                                 "confidence": "confirmed"}}
+    ds = _install(ds, tmp_path)
+    out = _ov()
+    fact = next(x for x in ds.results[out["overview_id"]]["facts"]["quality"] if "batch_status" in x["data"])
+    assert fact["data"]["injection_order"] == "biased" and "注入順が群で偏っている" in fact["text"]
+    assert "ファイル名の並び" not in fact["text"]
+    assert "injection_order_may_be_file_order" not in fact["data"]
+    assert "dataset_set_sample_metadata" not in out["quality"]["next"]
+
+
+def test_overview_drift_note_names_the_held_polarity_when_another_cannot_be_corrected():
+    """陽陰を統合したデータセットで、陽イオンは注入順がファイルの順かもしれず drift=auto が止め、陰イオンは QC が
+    足りず補正できない: 段の全体に rerun_with は無いが、概観は止めた極性を名指しし、drift_mode="on" を勧めない。"""
+    from dataclasses import replace
+
+    from metabolomix.analysis import overview
+    from metabolomix.analysis.stats import preprocess as P
+    from metabolomix.tools.overview_tools import _drift_note
+    from tests.test_stats_preprocess_merged import OFF_FILTERS, _merged
+
+    study = _merged()
+    study.samples = [replace(s, injection_order_may_be_file_order=True) for s in study.samples]
+    runs = [dict(r, batch="b1" if r["injection_order"] <= 8 else "b2") for r in study.polarity_runs["negative"]]
+    study = replace(study, polarity_runs={"negative": runs})
+    prep = P.preprocess(study, {"filters": OFF_FILTERS})
+    step = next(s for s in prep.steps if s["step"] == "drift")
+    assert "rerun_with" not in step and step["by_polarity"]["positive"].get("rerun_with")
+    note, rerunnable = _drift_note(prep)
+    assert note is not None and rerunnable is False
+    assert "positive に当てなかった" in note and "注入順が MS-DIAL の既定" in note
+    assert "negative" in note and "PREPROCESS_PRECONDITION" in note
+    assert P.run_remedy("positive") in note
+    with pytest.raises(Exception):          # 書いたとおり drift=on は陰イオンの条件で止まる
+        P.preprocess(study, {"filters": OFF_FILTERS, "drift": {"mode": "on"}})
+    facts = overview.quality_facts(rsd={"status": "not_evaluable"}, failed={"failed": []},
+                                   detection={"status": "not_evaluable"}, drift=[], confounding={},
+                                   replicate_warnings=[], verdict="caution", reasons=[], n_qc=6, n_blank=1,
+                                   drift_note=note, drift_rerunnable=rerunnable, pca_id=None)
+    assert any(x["text"].endswith(note) for x in facts["facts"])
+    assert "drift_mode" not in facts["next"]
+    # 全極性が保留（段の全体に rerun_with）なら、これまでどおり drift_mode="on" を勧める
+    held_all = P.preprocess(_merged(flagged_neg=True), {"filters": OFF_FILTERS})
+    note2, rerun2 = _drift_note(held_all)
+    assert rerun2 is True and 'dataset_preprocess(drift_mode="on")' in note2
+
+
+def _interleaved_file_order_ds(tmp_path, *, source="msdial_mddata"):
+    """注入順が raw のファイル名の順位（出所 `source`。既定は .mddata＝MS-DIAL の既定かもしれない順）で、ファイル名の
+    順では群が交互に並ぶ（注入順は群で偏らない）DatasetState。QC 6 本（1 バッチ）が試料の間に挟まる。"""
+    ds = _ds(n_qc=6)
+    qc = [n for n in ds.sample_names if n.startswith("QC")]
+    c = [n for n in ds.sample_names if n.startswith("C")]
+    t = [n for n in ds.sample_names if n.startswith("T")]
+    seq = []
+    for k, name in enumerate(x for pair in zip(c, t) for x in pair):
+        if k % 3 == 0:
+            seq.append(qc[k // 3])
+        seq.append(name)
+    assert sorted(seq) == sorted(ds.sample_names)
+    position = {name: k for k, name in enumerate(seq, start=1)}
+    ds.sample_raw_paths = [str(tmp_path / "raw" / f"run{position[n]:02d}.raw") for n in ds.sample_names]
+    for name, row in zip(ds.sample_names, ds.sample_metadata_rows):
+        row["injection_order"] = position[name]
+        row["provenance"] = {"injection_order": {"value": position[name], "source": source,
+                                                 "confidence": "declared"}}
+    return ds
+
+
+def _drift_fact(ds, out) -> dict:
+    return next(x for x in ds.results[out["overview_id"]]["facts"]["quality"] if "batches" in x["data"])
+
+
+def test_overview_drift_sign_fact_carries_the_file_order_caveat_when_the_order_is_not_biased(tmp_path):
+    """注入順がファイルの順かもしれず、群では偏らない（交絡の事実に但し書きが付かない）ときも、同じ注入順で測る
+    ドリフトの兆候の事実に「ρ はファイル名の並びとの相関かもしれない」を添え、データの印と next の入れ方を出す。"""
+    import numpy as np
+    from scipy import stats as sps
+
+    from metabolomix.analysis.stats import data as stats_data
+
+    ds = _install(_interleaved_file_order_ds(tmp_path), tmp_path)
+    assert all(s.injection_order_may_be_file_order for s in stats_data.from_dataset(ds).samples)
+    out = _ov()
+    assert out["status"] == "success", out
+    drift = _drift_fact(ds, out)
+    assert "ファイル名の並びとの相関" in drift["text"] and "injection_order に入れる" in drift["text"]
+    assert drift["data"]["injection_order_may_be_file_order"] is True
+    assert drift["data"]["batches"][0]["injection_order_may_be_file_order"] is True
+    assert "dataset_set_sample_metadata（injection_order に実際の測定順を入れる）" in out["quality"]["next"]
+    # ρ は QC の総量（log2）と注入順の Spearman のまま（独立に計算）
+    qc = [j for j, n in enumerate(ds.sample_names) if n.startswith("QC")]
+    rho, p = sps.spearmanr([ds.sample_metadata_rows[j]["injection_order"] for j in qc],
+                           np.log2(ds.feature_matrix[:, qc].sum(axis=0)))
+    assert drift["data"]["batches"][0]["rho"] == pytest.approx(rho)
+    assert drift["data"]["batches"][0]["p"] == pytest.approx(p)
+    # 注入順は群で偏らない: 交絡の事実に但し書きは付かない（個体の注入順の平均で Kruskal–Wallis を独立に計算）
+    conf = next(x for x in ds.results[out["overview_id"]]["facts"]["quality"] if "batch_status" in x["data"])
+    assert conf["data"]["injection_order"] == "ok" and "ファイル名の並び" not in conf["text"]
+    by_subject: dict[tuple, list[float]] = {}
+    for row in ds.sample_metadata_rows:
+        if row["role"] == "sample":
+            by_subject.setdefault((row["group"], row["subject_id"]), []).append(row["injection_order"])
+    means = {g: [float(np.mean(v)) for (grp, _s), v in by_subject.items() if grp == g] for g in ("C", "T")}
+    assert sps.kruskal(means["C"], means["T"]).pvalue >= 0.05
+
+
+def test_overview_drift_sign_caveat_reaches_the_quality_only_overview(tmp_path):
+    """既定の前処理が失敗し品質の段だけを出す（交絡は評価しない）ときも、ドリフトの兆候の事実に但し書きが付く
+    （印は ρ に使った QC の注入順から読み、交絡の判定には頼らない）。"""
+    ds = _install(_no_features_left(_interleaved_file_order_ds(tmp_path)), tmp_path)
+    out = _ov()
+    assert "PREPROCESS_PRECONDITION" in out["global"]["omitted"]
+    drift = _drift_fact(ds, out)
+    assert "ファイル名の並びとの相関" in drift["text"]
+    assert drift["data"]["injection_order_may_be_file_order"] is True
+    assert "dataset_set_sample_metadata（injection_order に実際の測定順を入れる）" in out["quality"]["next"]
+
+
+def test_overview_drift_sign_fact_with_a_sheet_order_has_no_caveat(tmp_path):
+    """同じ並びでも、利用者のシートが入れた注入順（確かな順）なら但し書きもデータの印も付けない。"""
+    ds = _install(_interleaved_file_order_ds(tmp_path, source="user_manifest"), tmp_path)
+    out = _ov()
+    drift = _drift_fact(ds, out)
+    assert "ファイル名の並び" not in drift["text"]
+    assert "injection_order_may_be_file_order" not in drift["data"]
+    assert "injection_order_may_be_file_order" not in drift["data"]["batches"][0]
+    assert "dataset_set_sample_metadata" not in out["quality"]["next"]
+
+
+def test_overview_drift_sign_caveat_names_the_polarity_whose_order_may_be_file_order():
+    """陽陰を統合したデータセット: 陽イオンの測定の注入順だけがファイルの順かもしれないなら、その行にだけ印が付き、
+    ドリフトの兆候の事実の但し書きはその極性を名指しする。"""
+    from dataclasses import replace
+
+    from metabolomix.analysis import overview
+    from metabolomix.analysis.stats import quality
+    from tests.test_stats_preprocess_merged import _merged
+
+    study = _merged()
+    study.samples = [replace(s, injection_order_may_be_file_order=True) for s in study.samples]
+    rows = quality.drift_signs(study)
+    assert {r["polarity"]: "injection_order_may_be_file_order" in r for r in rows} == {
+        "positive": True, "negative": False}
+    facts = overview.quality_facts(rsd={"status": "not_evaluable"}, failed={"failed": []},
+                                   detection={"status": "not_evaluable"}, drift=rows, confounding={},
+                                   replicate_warnings=[], verdict="caution", reasons=[], n_qc=6, n_blank=1,
+                                   drift_note=None, pca_id=None)
+    drift = next(x for x in facts["facts"] if "batches" in x["data"])
+    assert "（ただし positive の QC の注入順は" in drift["text"] and "negative の QC" not in drift["text"]
+    assert drift["data"]["injection_order_may_be_file_order"] is True
+    assert "dataset_set_sample_metadata（injection_order に実際の測定順を入れる）" in facts["next"]

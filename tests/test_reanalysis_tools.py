@@ -414,6 +414,49 @@ def test_novel_candidates_from_result_id_and_from_spec(data):
     assert out["rule_hash"] != from_spec["rule_hash"]
 
 
+def test_novel_candidates_from_an_uncorrected_analysis_say_why_the_list_is_empty(data):
+    """C7: 補正しない解析（correction=none）は q を持たないので、q_max で絞る候補は出ない。空の一覧が
+    「該当なし」に読まれないよう notes に理由を書く（同じ spec の bh なら候補は出る）。"""
+    handle = _open(data)
+    uncorrected = _spec(data, features={"all": True})
+    uncorrected["analyses"][0]["correction"] = "none"
+    out = json.loads(R.dataset_novel_candidates(
+        {"statistics": {"analysis_spec": uncorrected, "analysis_id": "main"}, "q_max": 1.0},
+        dataset_handle=handle))
+    assert out["status"] == "success" and out["n_rows"] == 0
+    assert any("correction=none" in n and "q_max" in n and "statistics.analysis_id=main" in n
+               for n in out["notes"])
+    corrected = json.loads(R.dataset_novel_candidates(
+        {"statistics": {"analysis_spec": _spec(data, features={"all": True}), "analysis_id": "main"},
+         "q_max": 1.0}, dataset_handle=handle))
+    assert corrected["n_rows"] == 2 and not any("correction=none" in n for n in corrected.get("notes", []))
+
+
+def test_analysis_run_v1_notes_ineffective_settings_kept_in_the_spec(data, tmp_path):
+    """C7: v1 の効かない設定（補正なしの q の閾値・drift_correct の無い注入順・ols の無い共変量）は断らず notes に書き、
+    spec と rule_hash には残す。使わない注入順の表は読まない（欠けた試料・無いファイルで断らない）。"""
+    handle = _open(data)
+    order = tmp_path / "order.tsv"
+    order.write_text("sample\torder\nHC1\t1\n", encoding="utf-8")      # ほかの試料は欠ける
+    spec = _spec(data, injection_order={"source": "tsv", "path": str(order)},
+                 covariates={"path": str(tmp_path / "missing.tsv"),
+                             "columns": [{"name": "age", "type": "numeric"}]})
+    spec["analyses"][0].update(correction="none", thresholds={"p": 0.05, "q": 0.05})
+    out = json.loads(R.dataset_analysis_run(spec, dataset_handle=handle))
+    assert out["status"] == "success", out
+    heads = [n.split(" ")[0] for n in out["notes"]]
+    assert heads == ["analyses[0].thresholds.q", "injection_order", "covariates"]
+    assert out["analyses"][0]["n_meets_thresholds"] == 0
+    assert "injection_order" not in out["input_fingerprint"]["files"]
+    # 書いた設定は spec に残る（捨てない）ので、書かない spec とは前と同じく別の rule_hash
+    bare = _spec(data)
+    bare["analyses"][0].update(correction="none", thresholds={"p": 0.05, "q": 0.05})
+    plain = json.loads(R.dataset_analysis_run(bare, dataset_handle=handle))
+    assert plain["status"] == "success" and "notes" in plain
+    assert out["rule_hash"] != plain["rule_hash"]
+    assert out["analyses"][0]["rows"] == plain["analyses"][0]["rows"]
+
+
 # ---------- 関係 ----------
 
 def test_feature_relations_name_adduct_isotope_and_insource(data):
@@ -1195,6 +1238,38 @@ def test_analysis_run_v2_output_path_strict_json(tmp_path):
     again = tmp_path / "out" / "r2.json"
     R.dataset_analysis_run(_v2_spec(), output_path=str(again))
     assert again.read_bytes() == path.read_bytes()
+
+
+def test_analysis_run_v2_composition_summary_carries_the_inner_confounding(tmp_path):
+    """C4: 既定の allow_confounded=true は完全交絡でも組成を比べる。止める代わりの印（交絡）は要約に残る:
+    組成の要約に内側の比較の `confounding` と、その注意（完全交絡ほか）をコードで重ねずに載せる。"""
+    state = _v2_state(tmp_path)
+    for k, fid in enumerate(state.feature_ids):
+        state.feature_metadata[fid]["ontology"] = "PC" if k < 3 else ("PE" if k < 6 else "TG")
+    for row in state.sample_metadata_rows:
+        if row.get("group") == "T":
+            row["batch"] = "B2"          # C は全部 B1・T は全部 B2: どのバッチも 1 群だけ＝完全交絡
+    spec = _v2_spec(analyses=[{"analysis_id": "cmp", "kind": "compare"},
+                              {"analysis_id": "comp", "kind": "composition"}], primary="comp")
+    path = tmp_path / "full.json"
+    full = json.loads(R.dataset_analysis_run(spec, output_path=str(path)))
+    out = json.loads(R.dataset_analysis_run(spec))
+    assert out["status"] == "success" and full["analyses"] == [
+        {k: v for k, v in a.items() if k not in ("rows", "truncated", "rows_order")} for a in out["analyses"]]
+    cmp_, comp = out["analyses"]
+    saved = _strict_loads(path.read_text(encoding="utf-8"))
+    inner = saved["analyses"][1]["result"]
+    assert inner["absolute"]["confounding"]["batch_status"] == "complete"
+    expected = {"batch_status": "complete", "by_contrast": {"T_vs_C": {"batch_status": "complete",
+                                                                       "confounded": True}}}
+    assert comp["confounding"] == expected and cmp_["confounding"] == expected
+    codes = [w["code"] for w in comp["warnings"]]
+    assert codes.count("batch_group_complete_confounding") == 1          # 2 つの表で重ねない
+    warn = next(w for w in comp["warnings"] if w["code"] == "batch_group_complete_confounding")
+    assert warn["tables"] == ["absolute", "clr"]
+    inner_codes = {w["code"] for name in ("absolute", "clr") for w in inner[name]["warnings"]}
+    assert inner_codes <= set(codes) and len(codes) == len(set(codes))
+    assert "batch_group_complete_confounding" in {w["code"] for w in cmp_["warnings"]}
 
 
 def test_analysis_run_v2_inline_row_limit(tmp_path):

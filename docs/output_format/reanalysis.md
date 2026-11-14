@@ -19,7 +19,14 @@
 - **効かない設定は誤りにしない。** 書いても使われない設定（recipe の `steps` に無い段の設定、
   `merge_split=false` の `alignment_qc`、ols でない検定の共変量、`rt_min` の無い主張の `rt_offset_min` など）は
   捨てて `notes` に理由を書く。捨てた
-  設定は正規化した spec にも `rule_hash` にも入らない。形の誤りと、併用すると意味がぶつかる組み合わせ
+  設定は正規化した spec にも `rule_hash` にも入らない。analysis-spec.v1 の次の設定も効かないので `notes` に書くが、
+  前から正規化した spec と `rule_hash` に入っていたので**spec には残す**（hash は前と同じ）: `correction="none"` の
+  解析の `bh_population`（q を計算しない）と `thresholds.q`（q が null なので満たせず、`meets_thresholds` はどの行も
+  false）、`drift_correct` を `steps` に持つ解析の無い spec の `injection_order`、共変量で調整する解析
+  （`test.kind=ols` で `test.covariates` のあるもの）の無い spec の `covariates`（この 2 つの TSV は読まないので、
+  ファイルが無い・試料が欠けても断らず、`input_fingerprint.files` にも載らない）。`dataset_novel_candidates` の
+  `statistics.analysis_spec` で選んだ解析が `correction="none"` なら、q が無いので候補が出ないことも `notes` に書く。
+  形の誤りと、併用すると意味がぶつかる組み合わせ
   （`aggregate` と `features.feature_ids`）は従来どおり誤り。
 - **判定（再現したか・明らかに別物か）は返さない。** 道具が返すのは数字と、spec に書いた
   規則を機械的に当てた結果だけ。
@@ -373,8 +380,12 @@ spec の `preprocess.drift.mode` を `"on"` にして呼び直す（`rule_hash` 
 
 **戻り値は要約だけ。** `{status, schema: "analysis-result.v2", rule_hash, matrix_id, input_fingerprint: {dataset_hash,
 sample_table_hash}, primary, warnings, analyses}`。`analyses[]` は解析ごとの要約で、compare は `n_rows`・`n_tested`・
-`verdicts: {changed, unchanged, inconclusive}`・`n_q_below`（`q ≤ 閾値`）・`test`・`warnings`、composition はそれに
-`tables`（`clr` / `absolute` ごとの同じ件数）・`class_label_kind`・`n_classes`、compare はさらに `p_adjust_method` と、
+`verdicts: {changed, unchanged, inconclusive}`・`n_q_below`（`q ≤ 閾値`）・`test`・`warnings`・`confounding`
+（群とバッチの交絡 `{batch_status, by_contrast}`。既定の `allow_confounded=true` は完全交絡でも比べるので、ここに印が残る）、
+composition はそれに `tables`（`clr` / `absolute` ごとの同じ件数）・`class_label_kind`・`n_classes`（`confounding` は
+内側の比較のもの〔`absolute`、無ければ `clr`。同じ個体なので同じ値〕、`warnings` は組成そのものの注意に内側の比較の注意
+〔完全交絡・注入順の偏り・`constant_in_group`・`units_missing_model_values` ほか〕を足し、コードで重ねない。内側から来た
+注意はどの表のものかを `tables`〔`absolute` / `clr`〕に持つ）、compare はさらに `p_adjust_method` と、
 要因の F があれば `factorial`（効果ごとの `{df1, n_tested, n_q_below}`）、pca は `scaling`・`imputation`・`n_fit`・
 `n_units`・`n_qc_projected`・`n_features`・`explained_variance_ratio`、plsda は `classes`（cell → 個体数）・`n_units`・
 `n_features`・`scaling`・`imputation`・`n_components`・`r2x_cum`・`r2y_cum`・`q2_cum`・`q2`・`cv`・`permutation`・`vip_top`
@@ -813,10 +824,10 @@ SML にその列が無い mzTab では**エラーにせず**、`subset_available
 | キー | 意味 |
 |---|---|
 | `per_injection` | `[{sample, injection_order, median_ppm, n}]`（注入順の昇順。`n` はその試料で使えた特徴の数。1 つも無い試料は載せない） |
-| `spearman_rho` | `injection_order` と `median_ppm` の Spearman の ρ。**`injection_order_source` が `filename`（採取時刻・注入順が読めず、ファイル名の順に落ちた）なら出さず `null`**（ファイル名の順は注入順とは限らない）。データのある試料が 5 未満、または片方が定数でも `null` |
+| `spearman_rho` | `injection_order` と `median_ppm` の Spearman の ρ。**`injection_order_source` が `filename`（採取時刻・注入順が読めず、ファイル名の順に落ちた・試料の表が宣言 `# injection_order_source = filename` でファイル名の順と書いた）なら出さず `null`**（ファイル名の順は注入順とは限らない）。データのある試料が 5 未満、または片方が定数でも `null` |
 | `rho_unavailable_reason` | `spearman_rho` を出さない理由（`filename_order` / `too_few_samples`）。ρ が出ているとき、片方が定数で `null` のときは無い |
 | `n_samples` | `per_injection` の件数 |
-| `injection_order_source` | 注入順の出所（`manifest` / `metadata` / `filename`。§9 の `alignment_qc` と同じ規則）。`filename` のとき `per_injection` はファイル名の順で、ρ は無い |
+| `injection_order_source` | 注入順の出所（`manifest` / `metadata` / `filename`。§9 の `alignment_qc` と同じ規則）。`filename` のとき `per_injection` はファイル名の順（シートの宣言なら、シートの値）で、ρ は無い |
 | `warnings` | 注入順の注意（無ければ鍵ごと無い）。`injection_order_may_be_file_order`（`n_samples`・`message`）: 注入順が MS-DIAL の振った値（`.mddata` / mzTab-M の MS:4000089）で、ファイル名の順と一致する。MS-DIAL は利用者が入れない限りファイルの順で振るので、実際の測定順とは限らない。**ρ はそのまま出す**（ρ はファイル名の並びとの相関かもしれない）。`injection_order_source` が `filename` のときは出さない |
 
 試料ごとの m/z が無い（`.arf` を取り込めていない）ときは `{"status": "unavailable"}` だけ。
@@ -938,7 +949,8 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
 - **注入順**（`injection_order_source`）: `manifest`（pipeline の実験情報シートの `injection_order`）・
   `metadata`（シート以外から推した値、または呼び出し側が渡した順。渡した順に欠ける試料があれば
   エラー）・`filename`（1 試料でも
-  欠ければ試料名の順。`block.injections` はその順位）。
+  欠ければ試料名の順。`block.injections` はその順位。全試料の値をシートが宣言
+  `# injection_order_source = filename` でファイル名の順と書いたときも `filename` で、値はシートのまま）。
 
 `output_path` の JSON（キーは昇順。長いリストは要素ごとに改行する——`pairs` は 1 組 1 行で、行の範囲で読める。
 共通の約束）:

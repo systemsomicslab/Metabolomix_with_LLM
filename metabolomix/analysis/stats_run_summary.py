@@ -71,6 +71,40 @@ def _cut_warnings(warnings: list[dict]) -> list[dict]:
     return kept
 
 
+def confounding_summary(results) -> dict | None:
+    """比較の結果（`stats-compare.v1`）の交絡 `{batch_status, by_contrast}`。最初に交絡を持つ結果のもの。
+
+    組成は内側の比較（`absolute` / `clr`）を渡す。どちらも同じ個体で組むので同じ値で、`absolute` を先に読む
+    （CLR が計算できないときも絶対量はある）。交絡を持つ結果が無ければ None。既定の `allow_confounded=true` は
+    完全交絡でも比べるので、交絡は要約に印として残す（止める代わり）。"""
+    for sub in results:
+        conf = sub.get("confounding")
+        if conf:
+            return {"batch_status": conf.get("batch_status"), "by_contrast": conf.get("by_contrast")}
+    return None
+
+
+def composition_warnings(own: list[dict], inner: dict[str, dict]) -> list[dict]:
+    """組成の注意: 組成そのもの（`own`）と内側の比較（`absolute` / `clr`）の注意をコードで重ねずにまとめる。
+
+    内側の注意（完全交絡・注入順の偏り・片群一定ほか）は、どの表から来たかを `tables` に付ける。同じコードが
+    両方の表にあれば先に現れたもの（`absolute`）を残し、`tables` に両方を並べる。"""
+    out = [dict(w) for w in own]
+    seen = {w.get("code"): w for w in out}
+    for name, sub in inner.items():
+        for w in sub.get("warnings") or []:
+            code = w.get("code")
+            if code in seen:
+                tables = seen[code].get("tables")
+                if tables is not None and name not in tables:
+                    tables.append(name)
+                continue
+            item = {**w, "tables": [name]}
+            out.append(item)
+            seen[code] = item
+    return out
+
+
 def factorial_summary(res: dict, q_threshold: float) -> dict | None:
     """要因の F（`stats-compare.v1` の `factorial`）の効果ごとの件数。無ければ None。"""
     factorial = res.get("factorial")
@@ -112,13 +146,20 @@ def analysis_summary(entry: dict, q_threshold: float) -> dict:
         out["tables"] = {name: _counts(rows, q_threshold) for name, rows in tables.items()}
         out["class_label_kind"] = res["class_label_kind"]
         out["n_classes"] = len(res["classes"])
-        out["warnings"] = _cut_warnings(res["warnings"])
+        inner = {name: sub for name in ("absolute", "clr") if (sub := res.get(name)) is not None}
+        confounding = confounding_summary(inner.values())
+        if confounding is not None:
+            out["confounding"] = confounding
+        out["warnings"] = _cut_warnings(composition_warnings(res["warnings"], inner))
     else:
         out["test"] = res["test"]
         out["p_adjust_method"] = res.get("p_adjust_method", "bh")
         factorial = factorial_summary(res, q_threshold)
         if factorial is not None:
             out["factorial"] = factorial
+        confounding = confounding_summary([res])
+        if confounding is not None:
+            out["confounding"] = confounding
         out["warnings"] = _cut_warnings(res["warnings"])
     return out
 

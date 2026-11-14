@@ -476,6 +476,7 @@ def compare(prepared: PreparedMatrix, *, factors: list[str], comparisons: list[d
                           {"cell_n": cell_n})
 
     proxies = [SimpleNamespace(group=unit_cell[i], batch=u.batch, injection_order=u.injection_order,
+                               injection_order_source=getattr(u, "injection_order_source", None),
                                injection_order_may_be_file_order=getattr(
                                    u, "injection_order_may_be_file_order", False))
                for i, u in enumerate(units)]

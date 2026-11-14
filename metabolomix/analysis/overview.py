@@ -141,10 +141,30 @@ def _polarity_of(row: dict) -> str:
     return f"{row['polarity']} の" if row.get("polarity") else ""
 
 
+def _drift_order_caveat(drift: list[dict]) -> str:
+    """ドリフトの兆候の事実に添える但し書き（ρ に使った QC の注入順がファイルの順かもしれない行が無ければ空）。
+
+    統合したデータセットでは、そうである極性を名指しする（極性ごとに注入順の出所が違いうる）。"""
+    unsure = [d for d in drift if d.get("injection_order_may_be_file_order")]
+    if not unsure:
+        return ""
+    where = ", ".join(dict.fromkeys(str(d["polarity"]) for d in unsure if d.get("polarity")))
+    return (f"（ただし {where + ' の ' if where else ''}QC の注入順は MS-DIAL の既定〔ファイルの順〕かシートの宣言で"
+            "ファイル名の順かもしれず、ρ はファイル名の並びとの相関で、実際の測定順でのドリフトを見ていないかもしれない。"
+            "実際の測定順は試料の表の injection_order に入れる）")
+
+
 def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict], confounding: dict,
                   replicate_warnings: list, verdict: str, reasons: list[str], n_qc: int, n_blank: int,
-                  drift_note: str | None, pca_id: str | None) -> dict:
-    """品質の段。判定（ok / caution / poor / not_evaluable）と理由のコードを最初の事実に置く。"""
+                  drift_note: str | None, pca_id: str | None, drift_rerunnable: bool = True) -> dict:
+    """品質の段。判定（ok / caution / poor / not_evaluable）と理由のコードを最初の事実に置く。
+
+    `drift_rerunnable` は drift_note の補正を dataset_preprocess(drift_mode="on") で当てられるか（統合した
+    データセットで、ほかの極性が補正の条件を満たさなければ偽。`next` に drift_mode="on" を勧めない）。
+    交絡の注入順が「ファイルの順かもしれない」（`injection_order.may_be_file_order`）なら、偏りの事実にその但し書きを
+    添え、事実のデータに `injection_order_may_be_file_order=True` を足す（偽なら足さない）。ドリフトの兆候も同じ:
+    ρ に使った QC の注入順がファイルの順かもしれない行（`drift` の行の `injection_order_may_be_file_order`）があれば、
+    兆候の有無の事実に但し書きとデータの印を足す。どちらかで但し書きを付けたら `next` に実際の測定順の入れ方を足す。"""
     f = _Facts("Q")
     f.add(f"判定 {verdict}" + (f"（{', '.join(reasons)}）" if reasons else "")
           + f"。QC {n_qc} 本・ブランク {n_blank} 本"
@@ -167,23 +187,34 @@ def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict]
     else:
         f.add(f"実検出と gap-fill の別は評価できない（{detection.get('reason')}）", **detection)
     flagged = [d for d in drift if d.get("flag")]
+    drift_unsure = _drift_order_caveat(drift)
+    drift_mark = {"injection_order_may_be_file_order": True} if drift_unsure else {}
     if flagged:
         f.add("ドリフトの兆候: " + "; ".join(f"{_polarity_of(d)}バッチ {d['batch']} で QC の総量と注入順の"
                                            f" ρ={_g(d['rho'], 2)}（QC {d['n_qc']} 本）"
-                                           for d in flagged[:3]), batches=drift)
+                                           for d in flagged[:3]) + drift_unsure, batches=drift, **drift_mark)
     elif drift:
         unit = "極性・バッチ" if any(d.get("polarity") for d in drift) else "バッチ"
-        f.add(f"ドリフトの兆候なし（QC が 5 本以上の {len(drift)} {unit}で |ρ|<0.6 か p≥0.05）", batches=drift)
+        f.add(f"ドリフトの兆候なし（QC が 5 本以上の {len(drift)} {unit}で |ρ|<0.6 か p≥0.05）" + drift_unsure,
+              batches=drift, **drift_mark)
     status = confounding.get("batch_status")
     inj = (confounding.get("injection_order") or {}).get("status")
+    may_file = bool((confounding.get("injection_order") or {}).get("may_be_file_order"))
     conf_text = {"complete": "群とバッチが完全交絡（群差とバッチ差を区別できない。比較は回していない）",
                  "partial": f"群とバッチが部分交絡（Cramér の V={_g(confounding.get('cramers_v'), 2)}）",
                  "none": "群とバッチの交絡なし", "single_batch": "バッチは 1 つ",
                  "not_evaluable": "群とバッチの交絡は評価できない（バッチが不明な試料がある）",
                  "not_computed": "群とバッチの交絡は評価していない（前処理の行列が作れない）"}.get(status, str(status))
-    f.add(conf_text + ("・注入順が群で偏っている" if inj == "biased" else ""),
+    inj_text = ""
+    if inj == "biased":
+        inj_text = "・注入順が群で偏っている" + (
+            "（ただし注入順は MS-DIAL の既定〔ファイルの順〕かシートの宣言でファイル名の順かもしれず、偏りは"
+            "ファイル名の並びを見ているだけかもしれない。実際の測定順は試料の表の injection_order に入れる）"
+            if may_file else "")
+    f.add(conf_text + inj_text,
           batch_status=status, cramers_v=confounding.get("cramers_v"), injection_order=inj,
-          batch_table=confounding.get("batch_table"))
+          batch_table=confounding.get("batch_table"),
+          **({"injection_order_may_be_file_order": True} if may_file else {}))
     if replicate_warnings:
         f.add(f"反復注入らしい試料名が {len(replicate_warnings)} 組あるのに subject_id が無い（独立な試料として数えている）",
               stems=[w.get("stem") for w in replicate_warnings])
@@ -192,8 +223,10 @@ def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict]
     nxt = [f'dataset_plot(kind="pca", result_id="{pca_id}", color_by="batch")'] if pca_id else []
     if failed.get("failed"):
         nxt.append(f"dataset_exclude(samples={_j(failed['failed'][:5])})")
-    if drift_note:
+    if drift_note and drift_rerunnable:
         nxt.append('dataset_preprocess(drift_mode="on")')
+    if (may_file and inj == "biased") or drift_unsure:
+        nxt.append("dataset_set_sample_metadata（injection_order に実際の測定順を入れる）")
     if replicate_warnings:
         nxt.append("dataset_set_sample_metadata（subject_id を入れて反復をまとめる）")
     return {"verdict": verdict, "facts": f.items, "next": " / ".join(nxt) or "なし"}

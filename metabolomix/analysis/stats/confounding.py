@@ -3,7 +3,8 @@
 単位（units）は属性 `group` `batch` `injection_order`（float | None）を持つ任意の
 オブジェクト。生体試料だけを渡す（QC・ブランクは呼び出し側で除く）。
 `groups` に入っていない群の単位は数えない。任意の属性 `injection_order_may_be_file_order`（真なら
-注入順が MS-DIAL の既定＝ファイルの順かもしれない）を持つ単位があれば、注入順の結果にその旨を添える。
+注入順が MS-DIAL の既定＝ファイルの順かもしれない）か `injection_order_source == "filename"`（試料の表が
+注入順をファイル名の順と宣言した）を持つ単位があれば、注入順の結果にその旨を添える。
 """
 from __future__ import annotations
 
@@ -52,13 +53,21 @@ def _injection_order(counted: list, present_groups: list[str]) -> tuple[dict, li
     n_with = sum(len(v) for v in orders.values())
     if n_with == 0:
         return result, warnings  # 注入順が無いだけなら警告しない
-    flagged = sum(bool(getattr(u, "injection_order_may_be_file_order", False)) for u in counted
-                  if _is_finite_number(u.injection_order))
-    if flagged:
-        # 注入順が MS-DIAL の既定（ファイルの順）かもしれない: 偏りの検定はファイル名の並びを見ているだけかもしれない
+    ordered = [u for u in counted if _is_finite_number(u.injection_order)]
+    msdial = sum(bool(getattr(u, "injection_order_may_be_file_order", False)) for u in ordered)
+    # 試料の表の宣言 `# injection_order_source = filename` の値も、実際の測定順とは限らない（ドリフト補正の
+    # drift=auto が当てないのと同じ扱い。preprocess._order_uncertain）
+    declared = sum(not getattr(u, "injection_order_may_be_file_order", False)
+                   and getattr(u, "injection_order_source", None) == "filename" for u in ordered)
+    if msdial or declared:
+        # 注入順がファイルの順かもしれない: 偏りの検定はファイル名の並びを見ているだけかもしれない
         result["may_be_file_order"] = True
-        warnings.append({"code": FILE_ORDER_WARNING, "n_units": flagged,
-                         "message": "注入順は MS-DIAL が振った値で、ファイル名の順と一致する（MS-DIAL の既定かもしれない）。"
+        what = "。".join((["注入順は MS-DIAL が振った値で、ファイル名の順と一致する（MS-DIAL の既定かもしれない）"]
+                         if msdial else [])
+                        + (["注入順は試料の表がファイル名の順と宣言した値（injection_order_source = filename）"]
+                           if declared else []))
+        warnings.append({"code": FILE_ORDER_WARNING, "n_units": msdial + declared,
+                         "message": f"{what}。"
                                     "注入順の偏りの判定はファイル名の並びを見ているだけかもしれない"
                                     "（実際の測定順は試料の表の injection_order に入れる）。"})
     reason = None

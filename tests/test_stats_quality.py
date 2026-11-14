@@ -112,3 +112,28 @@ def test_quality_verdict_rules():
                                                drift=[{"flag": True}], confounding=_conf(),
                                                replicate_warnings=[])
     assert verdict == "caution" and reasons == ["drift_sign", "qc_not_evaluable"]
+
+
+def test_drift_signs_mark_rows_whose_qc_order_may_be_file_order():
+    """ρ に使った QC の注入順が実際の測定順とは限らない（MS-DIAL の既定〔ファイルの順〕かもしれない・試料の表が
+    宣言でファイル名の順と書いた）なら、その行に印を付ける。ρ・p・判定は変えない。確かな順の行には鍵ごと付けない。"""
+    from dataclasses import replace
+
+    from scipy import stats as sps
+
+    study = _study(_ds(n_qc=6, seed=11))
+    plain = quality.drift_signs(study)
+    assert len(plain) == 1 and "injection_order_may_be_file_order" not in plain[0]
+    qc = [i for i, s in enumerate(study.samples) if s.role == "qc"]
+    rho, p = sps.spearmanr([study.samples[i].injection_order for i in qc],
+                           np.log2(study.values[qc].sum(axis=1)))
+    for marked in ({"injection_order_may_be_file_order": True}, {"injection_order_source": "filename"}):
+        unsure = replace(study, samples=[replace(s, **marked) if s.role == "qc" else s for s in study.samples])
+        rows = quality.drift_signs(unsure)
+        assert rows[0]["injection_order_may_be_file_order"] is True, marked
+        assert np.isclose(rows[0]["rho"], rho) and np.isclose(rows[0]["p"], p)
+        assert rows[0]["flag"] == plain[0]["flag"]
+    # 生体試料の注入順だけが不確かなら、QC の注入順で測る ρ には関わらないので付けない
+    bio = replace(study, samples=[replace(s, injection_order_source="filename") if s.role == "sample" else s
+                                  for s in study.samples])
+    assert "injection_order_may_be_file_order" not in quality.drift_signs(bio)[0]

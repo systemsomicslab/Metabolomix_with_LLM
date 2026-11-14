@@ -279,3 +279,82 @@ def test_mass_accuracy_rho_carries_the_file_order_warning():
     shuffled.sample_metadata_rows = sample_manifest.resolve_metadata(shuffled, None)
     shuffled.per_sample_mz = ds.per_sample_mz
     assert "warnings" not in mass_accuracy.injection_trend(shuffled, rows)
+
+
+# ---------- シートの宣言でファイル名の順（`# injection_order_source = filename`）の注入順 ----------
+
+def _filename_declared_ds(tmp_path, declaration="filename"):
+    """6 試料（A,A,A,B,B,B）・注入順 1..6 を、シートが宣言でファイル名の順と書いた（または宣言なしの）データセット。"""
+    root = tmp_path / f"raw_{declaration or 'plain'}"
+    root.mkdir()
+    names = [f"r{i}.mzML" for i in range(1, 7)]
+    for name in names:
+        (root / name).write_bytes(b"x")
+    body = [f"s{i}\t{n}\tsample\t{'A' if i <= 3 else 'B'}\t\t{i}\t\ttrue\t"
+            for i, n in enumerate(names, start=1)]
+    head = [f"# injection_order_source = {declaration}"] if declaration else []
+    sheet = root / "sample-manifest.tsv"
+    sheet.write_text("\n".join(["# schema = sample-manifest.v2", *head, _V2_HEADER, *body]) + "\n",
+                     encoding="utf-8")
+    rows = sample_manifest.parse_manifest(sheet, source_root=root, expected_sources=names)
+    sample_ids = [r["sample_id"] for r in rows]
+    return SimpleNamespace(feature_matrix=[[float(10 + i) for i in range(6)]], detected_mask=None,
+                           feature_ids=["f1"], sample_names=sample_ids, sample_metadata_rows=rows,
+                           per_sample_mz={"f1": {n: 100.0 + 1e-4 * k for k, n in enumerate(sample_ids)}})
+
+
+def test_filename_declared_order_suppresses_mass_accuracy_rho(tmp_path):
+    """A6: シートが宣言でファイル名の順と書いた注入順は、自前のファイル名の順と同じく ρ を出さない
+    （試料の表の出所 `filename` と、質量精度・割れの組の判定の出所を揃える）。"""
+    from metabolomix.analysis import alignment_qc
+
+    ds = _filename_declared_ds(tmp_path)
+    order, source = alignment_qc.sample_injection_order(ds)
+    assert source == "filename" and order == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]   # 値はシートのまま
+    rows = [{"feature_id": "f1", "theoretical_mz": 100.0}]
+    trend = mass_accuracy.injection_trend(ds, rows)
+    assert trend["injection_order_source"] == "filename"
+    assert trend["spearman_rho"] is None and trend["rho_unavailable_reason"] == "filename_order"
+    # 宣言の無いシート（利用者が手で入れた順）は従来どおり manifest で ρ を出す
+    plain = _filename_declared_ds(tmp_path, declaration=None)
+    assert alignment_qc.sample_injection_order(plain)[1] == "manifest"
+    assert mass_accuracy.injection_trend(plain, rows)["spearman_rho"] == pytest.approx(1.0)
+
+
+def test_filename_declared_order_carries_the_file_order_caveat_in_confounding(tmp_path):
+    """A6: 交絡の判定も、宣言でファイル名の順の注入順の偏りに「ファイル名の並びかもしれない」を添える。"""
+    from scipy import stats as sps
+
+    ds = _filename_declared_ds(tmp_path)
+    samples = stats_data.from_dataset(ds).samples
+    assert [s.injection_order_source for s in samples] == ["filename"] * 6
+    assert not any(s.injection_order_may_be_file_order for s in samples)    # matrix_id を変えない
+    rep = confounding_report(samples, ["A", "B"])
+    expected_p = sps.kruskal([1, 2, 3], [4, 5, 6]).pvalue                   # 独立の計算
+    assert rep["injection_order"]["status"] == "biased"
+    assert rep["injection_order"]["kruskal_p"] == pytest.approx(expected_p)
+    assert rep["injection_order"]["may_be_file_order"] is True
+    warn = next(w for w in rep["warnings"] if w["code"] == "injection_order_may_be_file_order")
+    assert warn["n_units"] == 6 and "injection_order_source = filename" in warn["message"]
+    plain = stats_data.from_dataset(_filename_declared_ds(tmp_path, declaration=None)).samples
+    rep = confounding_report(plain, ["A", "B"])
+    assert rep["injection_order"]["status"] == "biased" and "may_be_file_order" not in rep["injection_order"]
+
+
+def test_compare_confounding_reads_the_filename_declared_source():
+    """比較の交絡の判定（compare が組む代理の単位）にも、単位の注入順の出所が届く。"""
+    from dataclasses import replace
+
+    from metabolomix.analysis.stats.compare import compare
+    from tests.test_stats_preprocess import _drift_study
+
+    study = _drift_study()
+    study.samples = [replace(s, injection_order_source="filename") for s in study.samples]
+    cfg = {"filters": {"blank_ratio": None, "detection": None, "qc_rsd": None, "d_ratio": None},
+           "normalize": {"method": "none"}, "drift": {"mode": "off"}}
+    prep = P.preprocess(study, cfg)
+    groups = sorted({u.group for u in prep.units if u.group is not None})
+    res = compare(prep, factors=["group"],
+                  comparisons=[{"id": "x", "factor": "group", "reference": groups[0], "test": groups[1]}])
+    assert res["confounding"]["injection_order"]["may_be_file_order"] is True
+    assert any(w["code"] == "injection_order_may_be_file_order" for w in res["warnings"])

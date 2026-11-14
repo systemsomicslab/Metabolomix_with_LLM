@@ -86,7 +86,10 @@ property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` 
 
 書いても効かない設定（`steps` に無い段の設定・`merge_split=false` や外部の表での `features.alignment_qc`・
 ols でない検定の共変量）は `normalize_spec(spec, notes=...)` が捨てて理由を `notes` に足し、戻り値と JSON の
-`notes` に出す（捨てた設定は `rule_hash` に入らない）。入力が陽陰を統合したデータセットなら、`drift_correct` は
+`notes` に出す（捨てた設定は `rule_hash` に入らない）。`correction=none` の `bh_population`・`thresholds.q` と、
+`_uses_injection_order()` が偽（`drift_correct` の解析が無い）の `injection_order`・`_uses_covariates()` が偽（共変量で調整する
+ols が無い）の `covariates` も `notes` に書くが、spec には残す（`rule_hash` は前と同じ）。`_load()` はこの 2 つの表を読まない。
+入力が陽陰を統合したデータセットなら、`drift_correct` は
 `_polarity_orders()` が決めた極性ごとの注入順で当てはめる（`metadata` は陽イオンが試料の表、陰イオンが
 `quant_state.polarity_runs.negative`。TSV は 1 つの注入順を全極性に当て、陰イオンの測定と違えば
 `run_spec(..., notes=...)` が `notes` に足す）。`output_path` が無く 50 行を超える解析は
@@ -100,8 +103,14 @@ ols でない検定の共変量）は `normalize_spec(spec, notes=...)` が捨�
 2. ├─ metabolomix/analysis/stats/spec_v2.py  normalize_spec_v2()
 3. ├─ metabolomix/analysis/stats/spec_v2.py  run_spec_v2()
 4. ├─ metabolomix/analysis/stats_run_summary.py  run_summary()
-5. ├─ metabolomix/analysis/stats_run_summary.py  inline_rows()
-6. └─ metabolomix/tools/reanalysis_tools.py  write_result()
+5. │  └─ metabolomix/analysis/stats_run_summary.py  analysis_summary()
+6. │     ├─ [compare / composition] metabolomix/analysis/stats_run_summary.py  confounding_summary()
+7. │     └─ [composition] metabolomix/analysis/stats_run_summary.py  composition_warnings()
+8. ├─ metabolomix/analysis/stats_run_summary.py  inline_rows()
+9. └─ metabolomix/tools/reanalysis_tools.py  write_result()
+
+compare / composition の要約は交絡 `confounding`（`batch_status`・`by_contrast`。composition は内側の比較のもの）を持ち、
+composition の `warnings` は `composition_warnings()` が内側の比較（絶対量・CLR）の注意をコードで重ねずに足す。
 
 割れたスポットのまとめ（`features.merge_split`、既定 true）は recipe の前（行列を読んだ直後。recipe・集約・検定はまとめた行列に当たる）に、
 `alignment_qc` の `merge_groups` だけに行う（`features.alignment_qc` に JSON を渡せばその群、
@@ -259,6 +268,7 @@ spec の `rt_offset_min`（任意）は `normalize_claim_spec` が形を検め�
 （`alignment_qc.remembered()`。データの指紋と `metadata_revision` が作ったときと同じものだけ）を使い、無ければ
 その場で探す（`merge_split.source`）。効かない設定（`merge_split=false` の `statistics.alignment_qc`、
 埋め込んだ analysis_spec の効かない設定）は `_drop_ineffective_novel_settings()` が外して `notes` に書く。
+analysis_spec で選んだ解析が `correction=none` なら、q が無いので候補が出ないことも `notes` に書く。
 `output_path` が無く 50 行を超えれば q の昇順の先頭 50 行だけを TSV にし、`truncated` を立てる（断らない）。
 
 割れたスポットの組は 1 候補（残す ID＝受け持ちの多い側（同数なら小さい ID））に数える。`statistics.result_id` では `statistics.merge_split`
