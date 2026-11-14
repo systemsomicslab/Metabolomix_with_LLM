@@ -97,8 +97,9 @@
 14.    │  ├─ metabolomix/quant/records.py  merged_record_folder()
 15.    │  ├─ metabolomix/quant/records.py  write_record()
 16.    │  ├─ metabolomix/quant/derive.py  derive()
-17.    │  └─ metabolomix/quant/derive.py  carry_exploratory()（両側の探索専用の印を極性付きで合わせる）
-18.    └─ metabolomix/quant/derive.py  register()
+17.    │  ├─ metabolomix/quant/derive.py  carry_exploratory()（両側の探索専用の印を極性付きで合わせる）
+18.    │  └─ metabolomix/quant/merge.py  merged_source_verification()（出所の裏取りは陽陰の弱いほう）
+19.    └─ metabolomix/quant/derive.py  register()
 
 ## dataset_select_features
 

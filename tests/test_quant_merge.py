@@ -586,6 +586,43 @@ def test_merge_carries_exploratory_from_either_side(tmp_path, monkeypatch):
     assert pos.exploratory_reason is None  # 元は不変
 
 
+def test_merge_takes_weaker_source_verification(tmp_path, monkeypatch):
+    """出所の裏取りも POS だけの写しにしない（書き出しのメタ行で NEG の特徴まで verified を名乗る）。"""
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.source_verification = neg.source_verification = "verified"
+    merged, info = _merge(pos, neg, mapping_rows=None)
+    assert merged.source_verification == "verified"
+    assert "source_verification" not in info  # 陽陰で同じなら欄は無い
+    for neg_value, expected in (("direct_unverified", "direct_unverified"),
+                                ("legacy_unverified", "legacy_unverified"),
+                                ("something_new", "something_new")):  # 知らない値はいちばん弱い
+        neg.source_verification = neg_value
+        merged, info = _merge(pos, neg, mapping_rows=None)
+        assert merged.source_verification == expected
+        assert info["source_verification"] == {"merged": expected, "positive": "verified",
+                                               "negative": neg_value}
+    pos.source_verification, neg.source_verification = "direct_unverified", "legacy_unverified"
+    merged, info = _merge(pos, neg, mapping_rows=None)  # POS の側が弱くても弱いほう
+    assert merged.source_verification == "direct_unverified"
+    assert info["source_verification"]["merged"] == "direct_unverified"
+    assert pos.source_verification == "direct_unverified"  # 元は不変
+    assert neg.source_verification == "legacy_unverified"
+
+
+def test_tool_merge_returns_source_verification(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.source_verification, neg.source_verification = "verified", "direct_unverified"
+    hp, hn = _open(pos, "positive"), _open(neg, "negative")
+    out = json.loads(_tool()(hp, hn))
+    assert out["source_verification"] == {"merged": "direct_unverified",
+                                          "positive": "verified",
+                                          "negative": "direct_unverified"}
+    merged = handles.registry.get(out["dataset_handle"]).dataset
+    assert merged.source_verification == "direct_unverified"
+
+
 def test_tool_merge_returns_exploratory(tmp_path, monkeypatch):
     _point(tmp_path, monkeypatch)
     pos, neg = _pair(tmp_path)

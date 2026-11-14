@@ -106,6 +106,10 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
   統合はどちらかの親が探索専用なら探索専用で、理由は極性付きで `; ` でつなぐ（`negative: <理由>`。理由の無い
   印は `incomplete analysis run (exploratory only)`）。派生が探索専用のときだけ、apply・merge・select の戻り値に
   `exploratory`（`{exploratory_only: true, reason}`）が載る（でなければ欄が無い）。
+- **出所の裏取り**: 統合したデータセットの `source_verification` は、陽陰で同じならその値、違えば弱いほう
+  （`verified` > `legacy_unverified` > `direct_unverified`。知らない値はいちばん弱いもの）。書き出しのメタ行
+  `# source_verification` と `dataset_status` もこの値。陽陰で違うときだけ、merge の戻り値に
+  `source_verification`（`merged` と `positive` `negative`）が載る（同じなら欄が無い）。
 
 ## 6. 記録・audit・古さ
 
