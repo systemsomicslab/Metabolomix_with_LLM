@@ -108,6 +108,38 @@ def test_xlsx_matrix_finds_the_header_and_skips_title_and_group_rows(tmp_path):
     assert table.features == ["Alanine", "Glycine"]
     assert _nan_equal(table.values, [[1.5, 2, math.nan], [4, math.nan, 6]])
     assert table.n_unreadable == 1 and table.unreadable_examples == ["ND"]
+    # 飛ばした文字の行は数と名前の例を返す（黙って捨てない）
+    assert table.skipped_rows == ["Amino acids"]
+    assert table.info() == {"n_features": 2, "n_samples": 3, "n_unreadable_cells": 1,
+                            "unreadable_examples": ["ND"], "n_rows_skipped_as_text": 1,
+                            "rows_skipped_as_text": ["Amino acids"]}
+
+
+def test_xlsx_rows_of_missing_markers_are_features_not_headings(tmp_path):
+    sheet = [["Metabolite", "S1", "S2", "S3"],
+             ["Glucose", 1, 2, 3],
+             ["Lactate", "ND", "n.d.", "<LOQ"],          # どの試料でも検出されなかった物質
+             ["Pyruvate", "-", "#DIV/0!", "≤0.1"],     # 印・Excel のエラー値・≤ 始まり
+             ["Citrate", 4, "ND", 6],
+             ["Treated", "group", "ND", None]]          # 印でない文字がある行は群の見出し
+    table = X.read_xlsx_matrix(str(write_xlsx(tmp_path / "supp.xlsx", {"T": sheet})))
+    assert table.features == ["Glucose", "Lactate", "Pyruvate", "Citrate"]
+    assert _nan_equal(table.values[1:3], [[math.nan] * 3] * 2)
+    assert table.n_unreadable == 7                       # 3 + 3 + 1（飛ばした行のセルは数えない）
+    assert table.unreadable_examples == ["ND", "n.d.", "<LOQ", "-", "#DIV/0!"]
+    assert table.info()["n_rows_skipped_as_text"] == 1
+    assert table.info()["rows_skipped_as_text"] == ["Treated"]
+    # 例は最大 5 つ、数は全件
+    many = [["Metabolite", "S1"], *[[f"Group {i}", "label"] for i in range(7)], ["Glucose", 1]]
+    info = X.read_xlsx_matrix(str(write_xlsx(tmp_path / "many.xlsx", {"T": many}))).info()
+    assert info["n_rows_skipped_as_text"] == 7 and len(info["rows_skipped_as_text"]) == 5
+
+
+def test_maf_and_mwtab_have_no_skipped_rows_fields(tmp_path):
+    mwtab = write_mwtab(tmp_path / "mw.txt", SAMPLES, [("Lactate", ["ND", "ND", "ND"])])
+    table = X.read_mwtab(str(mwtab))
+    assert table.skipped_rows is None and "n_rows_skipped_as_text" not in table.info()
+    assert table.features == ["Lactate"] and table.n_unreadable == 3
 
 
 def test_xlsx_rows_fill_gaps_and_read_inline_and_shared_strings(tmp_path):

@@ -11,10 +11,13 @@
   パスの欄（`path` / `matrix_path`）を除いて作る——置き場所が違っても同じ規則なら同じ hash。
   入力のファイル（行列・群・共変量・注入順の TSV）は `input_fingerprint` に sha256 で入る。
 - **同じ spec・同じ入力なら同じ JSON。** 時刻や乱数の ID は結果に入れない。
-- **大きな結果は `output_path` の JSON に書く。** キーは昇順で、1 行が 1,000 字を超える辞書・リストは
-  要素ごとに改行する（数や文字列だけのリストは 1,000 字までずつ詰める。字下げはしない）——1 行の JSON は
-  行の範囲で区切って読めないため。`output_path` を省いて行が上限を超えても**断らない**: 先頭の行だけを
-  載せ、`truncated: true` と全件の数を返す（上限と並びはツールごと。下の各節）。
+- **大きな結果は `output_path` の JSON に書く。** キーは昇順で、1 行に収まらない辞書・リストは要素ごとに
+  改行する（行は辞書のキーと区切りの `,` を含めて 1,000 字以下。数や文字列だけのリストは 1,000 字までずつ
+  詰める。字下げはしない。分けられない 1 つの値——1,000 字を超える文字列など——の行だけは超える）——1 行の
+  JSON は行の範囲で区切って読めないため。`output_path` を省いて行が上限を超えても**断らない**: 先頭の行
+  だけを載せ、`truncated: true` と全件の数を返す（上限と並びはツールごと。下の各節）。例外は
+  `dataset_claim_evidence` で、候補が 10 を超えると `output_path` を求めて `ANALYSIS_OUTPUT_REQUIRED` で断る
+  （§7）。
 - **効かない設定は誤りにしない。** 書いても使われない設定（recipe の `steps` に無い段の設定、
   `merge_split=false` の `alignment_qc`、ols でない検定の共変量など）は捨てて `notes` に理由を書く。捨てた
   設定は正規化した spec にも `rule_hash` にも入らない。形の誤りと、併用すると意味がぶつかる組み合わせ
@@ -181,8 +184,13 @@ reanalysis-study の読み取りを移したもの）。数として読めない
 - **xlsx**: 1 枚のシート（`sheet` を省けば先頭。無い名前はあるシートの名前を添えて `ANALYSIS_INPUT_INVALID`）の
   横長の表。列は Excel の文字（`A`・`B`・`AA`。`first_sample_column` は `feature_column` より右）。見出しの行は
   2 つの列の両方に値がある最初の行で、それより上の表題・注記は読まない。試料は見出しの行の
-  `first_sample_column` から右の空でないセル。試料のセルに数が 1 つも無く文字がある行（群の見出しなど）は
-  特徴にしない。式は計算せず、保存された値を読む。
+  `first_sample_column` から右の空でないセル。試料のセルに数が 1 つも無く、欠測の印でない文字がある行
+  （群の見出しなど）は特徴にせず、その数と名前の例（最大 5）を `input_read.n_rows_skipped_as_text`・
+  `rows_skipped_as_text` に返す（xlsx だけの欄）。欠測の印（`ND`・`n.d.`・`NQ`・`BDL`・`LOD`・`LOQ`・`tr`・
+  `-`・`n/a`・`not detected`、`<`・`>`・`≤`・`≥` で始まるもの（`<LOQ`・`<0.1`）、`#` で始まる Excel のエラー値）
+  だけの行は、どの試料でも検出されなかった物質として特徴に読み、そのセルを読めないセルに数える。spec の
+  特徴 ID（`features.feature_ids`・`aggregate`・`correlate.pairs`）が飛ばした行の名前なら、`FEATURE_NOT_FOUND`
+  がそう書き添える（`details.skipped_as_text`）。式は計算せず、保存された値を読む。
 
 `rule_hash` にパス（`path`）は入らない。ファイルの sha256 は `input_fingerprint.files.matrix`。
 
@@ -200,7 +208,9 @@ reanalysis-study の読み取りを移したもの）。数として読めない
   特徴 ID（`external_id`）の組で、**対応は spec が渡す**（名前の照合はしない）。どちらかの側に無い ID は
   `FEATURE_NOT_FOUND`（割れの消える側の ID は残す ID に当たる。行の `merged_into`）。
 - `sample_map`（任意）は試料名の対応の TSV（こちらの試料 → 外部の表の試料）。無ければ同じ名前で照合する。
-  当たった試料だけを使い、1 つも当たらなければ `SAMPLE_MISMATCH`。
+  当たった試料だけを使い、1 つも当たらなければ `SAMPLE_MISMATCH`。対応は 1 対 1 で、こちらの試料の重複も、
+  外部の同じ試料を複数の試料が指す対応（外部の 1 つの値を 2 回数えて n と p が膨らむ）も `SAMPLE_MISMATCH`
+  （`details.duplicated` / `duplicated_external`。反復の注入は対応表に 1 つだけ書く）。
 - `stage`: `input`（既定。読んだ行列＝割れのまとめの後・recipe の前。群・役割を問わず当たった全試料）か
   `matrix`（解析ごとの recipe の後の行列・集約の前。行に `analysis_id`。recipe が落とした特徴は
   `reason: not_in_matrix`）。
@@ -208,6 +218,7 @@ reanalysis-study の読み取りを移したもの）。数として読めない
   ρ と p は null（`reason: too_few_pairs`）、どちらかが一定なら null（`constant`）。
 - 結果の `correlate` は `{stage, external（読み取りの要約）, n_samples_matched, unmatched_samples,
   unmatched_external_samples, rows: [{analysis_id, feature_id, external_id, merged_into, n, rho, p, reason}]}`。
+  戻り値の TSV の行は ρ を小数 4 桁、p を有効 4 桁にする（小さい p も 0 にしない。JSON は丸めない）。
   外部の表と対応表の sha256 は `input_fingerprint.files` の `correlate.external`・`correlate.sample_map`。
   書いたときだけ正規化した spec と `rule_hash` に入る（書かない spec の hash は変わらない）。
 
@@ -250,7 +261,7 @@ share_max}`。使うのは比べる 2 群の試料のうち和が有限で正の
 `alignment_qc`・`groups`: まとめた群（残す ID が先頭）・`groups_hash`・`n_groups_given`・`skipped`）・
 `input_fingerprint`（`dataset_hash`・入力の TSV と `alignment_qc` の JSON ごとの sha256）・`comparison`、
 外部の表（MAF・mwTab・xlsx）の入力なら `input_read`（`{source, n_features, n_samples, n_unreadable_cells,
-unreadable_examples}`）、`correlate` を書いたなら `correlate`、効かない設定を捨てたなら `notes`。
+unreadable_examples}`。xlsx は `n_rows_skipped_as_text`・`rows_skipped_as_text` も）、`correlate` を書いたなら `correlate`、効かない設定を捨てたなら `notes`。
 `rule_hash` は正規化した spec（パスを除く）に、データセットの入力で `merge_split` が真なら使った群の
 hash も入れる——同じ spec でも割れの組が変われば別の規則で、`merge_split` を変えても変わる
 （外部の行列では `merge_split` は hash に入らない）。
@@ -357,7 +368,8 @@ matrix_id, preprocess: {steps, warnings, subject_source}, primary, analyses: [{a
 
 ## 3. 行列の recipe（matrix-recipe.v2）
 
-`steps` に挙げた段だけを、挙げた順に走らせる（挙げない段の設定は拒否する）。篩の段
+`steps` に挙げた段だけを、挙げた順に走らせる（挙げない段の設定は効かないので捨て、`notes` に書く。
+正規化した recipe にも `rule_hash` にも入らない）。篩の段
 （`detection_filter`・`qc_rsd_filter`）で落とした特徴はその直後に行列から外す——後の KNN の
 近傍・PQN の参照に混ざらない。既定（正規化で埋まる）:
 
@@ -548,6 +560,11 @@ spec:
 **束は特徴を決めない。** 最終の特徴は再解析の実行役が override の規則の範囲で決め、
 その特徴での統計は `dataset_analysis_run`（`features.feature_ids`）で別に出す。同じ spec・
 同じ入力なら同じ JSON になる（オブザーバーの「走らせ直しと照合」は JSON の一致で済む）。
+
+**戻り値。** `output_path` を省けば束をそのまま返す。候補が 10 を超えるときは `output_path` が要り、無ければ
+`ANALYSIS_OUTPUT_REQUIRED`（`details.n_candidates`）で断る——ほかの再解析のツールの「先頭の行と `truncated`」の
+扱いはまだ当てていない。`output_path` があれば JSON を書き、要約（`claim_id`・`rule_hash`・`input_fingerprint`・
+`default_selection`・`n_candidates`・`truncated`・走査ごとの判定）だけを返す。
 
 ## 8. 質量精度と新しい知見の候補
 

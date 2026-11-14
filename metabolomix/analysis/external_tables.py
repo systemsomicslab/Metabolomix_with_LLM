@@ -11,7 +11,9 @@
   `Samples`、`Factors` の行は読まない。特徴の ID は 1 列目の名前。
 - **xlsx**: 1 枚のシートの横長の表。見出しの行は `feature_column` と `first_sample_column` の両方に値がある
   最初の行で、それより上の表題・注記は読まない。試料は見出しの行の `first_sample_column` から右の空でない
-  セル。試料のセルに数が 1 つも無く文字がある行（群の見出しなど）は特徴にしない。
+  セル。試料のセルに数が 1 つも無く、欠測の印（`ND`・`<LOQ`・`n.d.`・`-` など）でない文字がある行（群の
+  見出しなど）は特徴にしない。飛ばした行の数と名前の例を返す（`n_rows_skipped_as_text`）。欠測の印だけの
+  行（どの試料でも検出されなかった物質）は特徴として読み、そのセルを読めないセルに数える。
 
 数として読めないセル（空・`NA`・`ND`・`<LOQ` など）と非有限の値は欠測（NaN）にし、空でない読めない
 セルの数と例を返す（黙って捨てない）。試料・特徴の重複は `ANALYSIS_INPUT_INVALID`。
@@ -38,6 +40,12 @@ SOURCES = ("maf", "mwtab", "xlsx")
 #: MAF の固定の列の最後（これより右が試料の列）。
 MAF_FIXED_LAST = "smallmolecule_abundance_std_error_sub"
 _MISSING = frozenset({"", "na", "nan", "null", "none"})
+#: 論文の表の欠測の印（読めないセルとして数える）。xlsx の行が群の見出しかを決めるとき、これらは文字と
+#: 見なさない。`<`・`>`・`≤`・`≥` で始まるもの（`<LOQ`・`<0.1`）と `#` で始まる Excel のエラー値も印。
+_MISSING_MARKERS = frozenset({
+    "nd", "n.d.", "n.d", "nd.", "n/d", "nq", "n.q.", "n.q", "bdl", "bql", "blq", "lod", "loq",
+    "tr", "tr.", "trace", "-", "--", "---", "–", "—", "n/a", "not detected", "below lod",
+    "below loq"})
 _INVALID = "ANALYSIS_INPUT_INVALID"
 _REL_OFFICE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 #: 読めないセルの例として返す種類の数。
@@ -52,11 +60,17 @@ class ExternalTable:
     values: np.ndarray                  # shape (n_features, n_samples)
     n_unreadable: int = 0
     unreadable_examples: list[str] = field(default_factory=list)
+    #: 文字の行として飛ばした行の特徴の名前（xlsx だけ。ほかの形式は None）。
+    skipped_rows: list[str] | None = None
 
     def info(self) -> dict:
-        return {"n_features": len(self.features), "n_samples": len(self.samples),
-                "n_unreadable_cells": self.n_unreadable,
-                "unreadable_examples": list(self.unreadable_examples)}
+        out = {"n_features": len(self.features), "n_samples": len(self.samples),
+               "n_unreadable_cells": self.n_unreadable,
+               "unreadable_examples": list(self.unreadable_examples)}
+        if self.skipped_rows is not None:
+            out["n_rows_skipped_as_text"] = len(self.skipped_rows)
+            out["rows_skipped_as_text"] = self.skipped_rows[:_EXAMPLES]
+        return out
 
 
 class _Cells:
@@ -80,6 +94,12 @@ class _Cells:
         if cell not in self.examples and len(self.examples) < _EXAMPLES:
             self.examples.append(cell)
         return math.nan
+
+
+def _is_missing_marker(text: str) -> bool:
+    """空・`NA` などの欠測の綴りか、論文の表の欠測の印（`_MISSING_MARKERS`・`<`/`>` 始まり・Excel のエラー値）。"""
+    cell = text.strip().lower()
+    return cell in _MISSING or cell in _MISSING_MARKERS or cell[:1] in ("<", ">", "≤", "≥", "#")
 
 
 def _fail(label: str, message: str, **details) -> DomainError:
@@ -298,7 +318,7 @@ def read_xlsx_matrix(path_text: str, *, sheet: str | None = None, feature_column
     head = rows[head_at]
     columns = [i for i in range(scol, len(head)) if cell(head, i)]
     samples = [cell(head, i) for i in columns]
-    cells, features, values = _Cells(), [], []
+    cells, features, values, skipped = _Cells(), [], [], []
     for row in rows[head_at + 1:]:
         name = cell(row, fcol)
         if not name:
@@ -306,11 +326,14 @@ def read_xlsx_matrix(path_text: str, *, sheet: str | None = None, feature_column
         texts = [cell(row, i) for i in columns]
         probe = _Cells()
         numbers = [probe.number(t) for t in texts]
-        if all(math.isnan(v) for v in numbers) and any(t.lower() not in _MISSING for t in texts):
-            continue  # 群の見出しなどの文字の行
+        if all(math.isnan(v) for v in numbers) and not all(_is_missing_marker(t) for t in texts):
+            skipped.append(name)  # 群の見出しなどの文字の行（欠測の印だけの行は特徴として読む）
+            continue
         features.append(name)
         values.extend(cells.number(t) for t in texts)
-    return _table(features, samples, values, cells, label)
+    table = _table(features, samples, values, cells, label)
+    table.skipped_rows = skipped
+    return table
 
 
 def read_table(spec_input: dict, label: str = "input") -> ExternalTable:

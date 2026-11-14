@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 
 import pytest
+from scipy import stats
 
 from metabolomix.analysis import alignment_qc, mass_accuracy
 from metabolomix.core import handles, session_state
@@ -48,6 +50,41 @@ def test_json_lines_breaks_long_values_and_stays_parseable():
     # 辞書のキーが文字列でなくても json.dumps と同じ規則
     wide = {1: "x" * 600, True: "y" * 600}
     assert json.loads(R.result_bytes(wide)) == json.loads(json.dumps(wide))
+
+
+def _max_line(payload) -> int:
+    text = R.result_bytes(payload).decode("utf-8")
+    assert json.loads(text) == json.loads(json.dumps(payload))
+    return max(len(line) for line in text.splitlines())
+
+
+def test_json_lines_count_the_key_and_the_trailing_comma_in_the_width():
+    width = R.JSON_LINE_WIDTH
+    # 詰めた値（996 字の文字列 1 つのリスト）に `"key":` が付く行
+    assert _max_line({"key": ["a" * 996], "pad": "x" * 10}) <= width
+    # ちょうど 1,000 字に詰めた辞書の要素に区切りの `,` が付く行
+    item = {"v": "b" * (width - len('{"v":""}'))}
+    assert len(json.dumps(item, separators=(",", ":"))) == width
+    assert _max_line([item, item]) <= width
+    # 数や文字列だけのリストを 1,000 字ちょうどまで詰めた行に `,` が付く行
+    assert _max_line({"k": ["a" * 498, "b" * 497, "c" * 10, "d" * 600]}) <= width
+    # 入れ子の形を変えても行は上限以下（分けられない 1 つの値が上限を超えない限り）
+    rng = random.Random(7)
+
+    def node(depth):
+        kind = rng.random()
+        if depth > 2 or kind < 0.35:
+            return rng.choice([rng.randint(-10**6, 10**6), "s" * rng.randint(0, 900), None,
+                               rng.random()])
+        if kind < 0.65:
+            return [node(depth + 1) for _ in range(rng.randint(0, 20))]
+        return {f"k{rng.randint(0, 10**5)}" + "x" * rng.randint(0, 40): node(depth + 1)
+                for _ in range(rng.randint(0, 10))}
+
+    for _ in range(60):
+        assert _max_line({"root": node(0), "nums": list(range(rng.randint(0, 2000)))}) <= width
+    # 分けられない 1 つの値（上限より長い文字列）の行だけは超える
+    assert _max_line({"long": "z" * (width + 10), "x": list(range(500))}) > width
 
 
 def test_alignment_qc_output_is_line_broken_and_matches_the_kept_result(tmp_path):
@@ -255,6 +292,26 @@ def test_analysis_run_v1_returns_input_read_correlate_contributions_and_notes(tm
     saved = json.loads(target.read_text(encoding="utf-8"))
     assert saved["notes"] == agg["notes"]
     assert [c["feature_id"] for c in saved["analyses"][0]["aggregate"]["contributions"]] == ["F1", "F2"]
+
+
+def test_analysis_run_v1_correlate_rows_keep_small_p(tmp_path):
+    # 行の p は有効 4 桁（小数 4 桁に丸めると 5e-5 未満の p が 0.0 に化ける）、ρ は小数 4 桁
+    ours, theirs = list(range(1, 9)), [1, 2, 3, 4, 5, 6, 8, 7]
+    paper = write_mwtab(tmp_path / "paper.txt", SAMPLES, [("F1", ours)])
+    external = write_mwtab(tmp_path / "external.txt", SAMPLES, [("Glucose", theirs)])
+    spec = {"input": {"source": "mwtab", "path": str(paper)},
+            "groups": {"source": "tsv", "path": str(_groups_tsv(tmp_path)), "role_column": "role"},
+            "comparison": {"reference": "HC", "test": "RA"},
+            "analyses": [{"analysis_id": "main", "test": {"kind": "student"}}],
+            "correlate": {"external": {"source": "mwtab", "path": str(external)},
+                          "pairs": [{"feature_id": "F1", "external_id": "Glucose"}]}}
+    out = json.loads(R.dataset_analysis_run(spec))
+    assert out["status"] == "success", out
+    [row] = _tsv_rows(out["correlate"]["rows"])
+    expected = stats.spearmanr(ours, theirs)
+    assert expected.pvalue < 5e-5
+    assert float(row["p"]) == float(f"{expected.pvalue:.4g}") and float(row["p"]) > 0
+    assert row["rho"] == str(round(float(expected.statistic), 4))
 
 
 def test_analysis_run_aggregate_with_feature_ids_is_spec_invalid(tmp_path):

@@ -95,25 +95,31 @@ def _json_key(key) -> str:
     return json.dumps(key, ensure_ascii=False)
 
 
-def _json_lines(value) -> str:
-    """値を JSON にする。1 行が `JSON_LINE_WIDTH` 字以下なら詰め、超える辞書・リストは要素ごとに改行する。
+def _json_lines(value, width: int = JSON_LINE_WIDTH) -> str:
+    """値を JSON にする。1 行に収まれば詰め、収まらない辞書・リストは要素ごとに改行する。
 
     行ごとに区切るのは、大きな結果（割れの組・候補・行）をファイルの行の範囲で読めるようにするため
     （1 行の JSON は行の範囲で区切れない）。空白は改行だけで、字下げはしない。キーは昇順。
-    数や文字列だけのリストは、1 行が上限を超えない分ずつ詰める。
+    `width` はこの値を詰めて書ける字数で、要素の行は辞書のキー（`"key":`）と区切りの `,` の分を
+    引いて渡す——行は `JSON_LINE_WIDTH` 字以下になる。数や文字列だけのリストは、`,` を含めて上限を
+    超えない分ずつ詰める。例外は分けられない 1 つの値（長い文字列・長いキーと数）だけで、その行は超える。
     """
     compact = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
                          allow_nan=False)
-    if len(compact) <= JSON_LINE_WIDTH or not isinstance(value, (dict, list)) or not value:
+    if len(compact) <= width or not isinstance(value, (dict, list)) or not value:
         return compact
     if isinstance(value, dict):
-        items = [_json_key(k) + ":" + _json_lines(value[k]) for k in sorted(value)]
+        items = []
+        for key in sorted(value):
+            prefix = _json_key(key) + ":"
+            items.append(prefix + _json_lines(value[key], JSON_LINE_WIDTH - len(prefix) - 1))
     elif any(isinstance(v, (dict, list)) for v in value):
-        items = [_json_lines(v) for v in value]
+        items = [_json_lines(v, JSON_LINE_WIDTH - 1) for v in value]
     else:
         items, line = [], ""
         for text in (json.dumps(v, ensure_ascii=False, allow_nan=False) for v in value):
-            if line and len(line) + 1 + len(text) > JSON_LINE_WIDTH:
+            # 行の末尾の区切り `,` まで数える（最後の行には付かないが、同じ規則で詰める）
+            if line and len(line) + 1 + len(text) + 1 > JSON_LINE_WIDTH:
                 items.append(line)
                 line = text
             else:
@@ -178,7 +184,7 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     **`aggregate` と `features.feature_ids` は併用できない**（報告するのは集約した 1 本。
     `ANALYSIS_SPEC_INVALID`。種ごとの行は aggregate の無い別の spec で回す）。`bh_population` は
     `matrix` / `reported` / `annotated`（SME のある特徴だけ）。`correlate`（任意）は外部の表の値との
-    Spearman の ρ を、spec に書いた特徴の対応（`pairs`）ごとに返す。
+    Spearman の ρ を、spec に書いた特徴の対応（`pairs`）ごとに返す（試料の対応 `sample_map` は 1 対 1）。
     書いても効かない設定（`steps` に無い段の設定・`merge_split=false` や外部の行列での
     `features.alignment_qc`・ols でない検定の共変量）は誤りにせず、使わずに `notes` に書く。
 
@@ -297,7 +303,9 @@ def _correlate_summary(block: dict, *, inline: bool) -> dict:
            "n_rows": len(rows)}
     if inline:
         shown = rows[:MAX_INLINE_ROWS]
-        out["rows"] = rows_table(round_floats(shown, digits=4), _CORRELATE_COLUMNS)
+        # p は `_cell` が有効 4 桁にする（小数 4 桁に丸めると 5e-5 未満の p が 0.0 に化ける）。ρ だけ小数 4 桁
+        out["rows"] = rows_table([{**r, "rho": None if r["rho"] is None else round(r["rho"], 4)}
+                                  for r in shown], _CORRELATE_COLUMNS)
         out["truncated"] = len(shown) < len(rows)
     return out
 

@@ -510,16 +510,18 @@ def _float_or_nan(text) -> float:
 
 
 def _external_matrix(spec_input: dict, label: str = "input"
-                     ) -> tuple[np.ndarray, list[str], list[str], str, dict | None]:
-    """外部の表を（試料 × 特徴の値, 試料, 特徴 ID, sha256, 読み取りの要約）にする。
+                     ) -> tuple[np.ndarray, list[str], list[str], str, dict | None, list[str]]:
+    """外部の表を（試料 × 特徴の値, 試料, 特徴 ID, sha256, 読み取りの要約, 文字の行として飛ばした行）にする。
 
     TSV は数として読めない値を誤りにする（要約は None）。MAF・mwTab・xlsx は論文の表なので、読めない
     セル（`ND`・`<LOQ` など）を欠測にし、その数と例を要約（`external_tables.ExternalTable.info`）に返す。
+    飛ばした行（xlsx の群の見出しなど）の名前は、特徴が無いときの `FEATURE_NOT_FOUND` が添える。
     """
     if spec_input["source"] != "tsv":
         table = external_tables.read_table(spec_input, label)
         return (table.values.T, list(table.samples), list(table.features),
-                _sha256(Path(spec_input["path"])), {"source": spec_input["source"], **table.info()})
+                _sha256(Path(spec_input["path"])), {"source": spec_input["source"], **table.info()},
+                list(table.skipped_rows or []))
     columns, rows, digest = _read_tsv(spec_input["matrix_path"], label)
     id_column = spec_input["id_column"]
     _require_column(columns, id_column, label)
@@ -546,8 +548,19 @@ def _external_matrix(spec_input: dict, label: str = "input"
         raise DomainError("ANALYSIS_INPUT_INVALID", f"{label} に数として読めない値がある: {exc}",
                           {"field": label}) from exc
     if spec_input["orientation"] == "features_by_samples":
-        return table.T, others, ids, digest, None
-    return table, ids, others, digest, None
+        return table.T, others, ids, digest, None, []
+    return table, ids, others, digest, None, []
+
+
+def _feature_not_found(message: str, missing: list[str], skipped: list[str], **details) -> DomainError:
+    """`FEATURE_NOT_FOUND`。無い ID が外部の表で文字の行として飛ばした行の名前なら、そう書き添える。"""
+    skipped_set = set(skipped)
+    as_text = [m for m in missing if m in skipped_set]
+    if as_text:
+        message += (f"（{as_text[:10]} は表にあるが、試料のセルに数が無く欠測の印でない文字がある行なので"
+                    "群の見出しとして読まなかった）")
+        details["skipped_as_text"] = as_text[:50]
+    return DomainError("FEATURE_NOT_FOUND", message, {**details, "feature_ids": missing[:50]})
 
 
 def _check_cover(wanted: list[str], available, label: str, *, allow_extra: bool) -> None:
@@ -566,7 +579,7 @@ def _load(normalized: dict, ds) -> dict:
     files: dict[str, str] = {}
     detected = None
     metadata_rows = None
-    read_info = None
+    read_info, skipped = None, []
     if normalized["input"]["source"] == "dataset":
         if ds is None:
             raise DomainError("DATASET_REQUIRED", "input.source=dataset にはデータセットが要る", {})
@@ -583,7 +596,7 @@ def _load(normalized: dict, ds) -> dict:
             detected = None if detected is None else detected[include]
             metadata_rows = {names[k]: rows[i] for k, i in enumerate(include)}
     else:
-        values, names, feature_ids, files["matrix"], read_info = _external_matrix(
+        values, names, feature_ids, files["matrix"], read_info, skipped = _external_matrix(
             normalized["input"])
 
     roles: dict[str, str] = {}
@@ -643,7 +656,7 @@ def _load(normalized: dict, ds) -> dict:
 
     return {"values": values, "samples": names, "feature_ids": feature_ids, "roles": roles,
             "groups": groups, "detected": detected, "order": order, "covariates": covariates,
-            "files": files, "read_info": read_info}
+            "files": files, "read_info": read_info, "skipped_as_text": skipped}
 
 
 # ---------- 割れたスポットのまとめ ----------
@@ -996,7 +1009,11 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
 
 
 def _sample_map(spec_map: dict | None, files: dict) -> dict[str, str] | None:
-    """`correlate.sample_map` の TSV（この側の試料 → 外部の表の試料）。無ければ None（同じ名前で照合）。"""
+    """`correlate.sample_map` の TSV（この側の試料 → 外部の表の試料）。無ければ None（同じ名前で照合）。
+
+    対応は 1 対 1。この側の 2 つの試料が外部の同じ試料を指すと、外部の 1 つの値を 2 回数えて n と p が
+    膨らむので `SAMPLE_MISMATCH`（反復の注入をまとめるなら、対応表に 1 つだけ書く）。
+    """
     if spec_map is None:
         return None
     columns, rows, files["correlate.sample_map"] = _read_tsv(spec_map["path"],
@@ -1009,6 +1026,15 @@ def _sample_map(spec_map: dict | None, files: dict) -> dict[str, str] | None:
         external = (row.get(spec_map["external_column"]) or "").strip()
         if name and external:
             mapping[name] = external
+    targets = list(mapping.values())
+    shared = sorted({e for e in targets if targets.count(e) > 1})
+    if shared:
+        raise DomainError(
+            "SAMPLE_MISMATCH",
+            f"correlate.sample_map で外部の同じ試料に複数の試料が当たっている: {shared[:10]}"
+            "（外部の 1 つの値を 2 回数えないよう、対応は 1 対 1 にする）",
+            {"field": "correlate.sample_map", "duplicated_external": shared[:50],
+             "samples": {e: sorted(s for s, t in mapping.items() if t == e) for e in shared[:10]}})
     return mapping
 
 
@@ -1042,18 +1068,18 @@ def _correlate(normalized: dict, data: dict, analyses_matrices: list[tuple[str, 
     """
     spec_corr = normalized["correlate"]
     files = data["files"]
-    ext_values, ext_samples, ext_features, files["correlate.external"], read_info = (
+    ext_values, ext_samples, ext_features, files["correlate.external"], read_info, ext_skipped = (
         _external_matrix(spec_corr["external"], "correlate.external"))
     unknown_ext = [p["external_id"] for p in spec_corr["pairs"] if p["external_id"] not in ext_features]
     if unknown_ext:
-        raise DomainError("FEATURE_NOT_FOUND", f"correlate.external に無い特徴: {unknown_ext[:10]}",
-                          {"field": "correlate.pairs", "feature_ids": unknown_ext[:50],
-                           "external_examples": ext_features[:5]})
+        raise _feature_not_found(f"correlate.external に無い特徴: {unknown_ext[:10]}", unknown_ext,
+                                 ext_skipped, field="correlate.pairs",
+                                 external_examples=ext_features[:5])
     known = set(data["feature_ids"]) | set(data["rename"])
     unknown = [p["feature_id"] for p in spec_corr["pairs"] if p["feature_id"] not in known]
     if unknown:
-        raise DomainError("FEATURE_NOT_FOUND", f"行列に無い feature_id: {unknown[:10]}",
-                          {"field": "correlate.pairs", "feature_ids": unknown[:50]})
+        raise _feature_not_found(f"行列に無い feature_id: {unknown[:10]}", unknown,
+                                 data["skipped_as_text"], field="correlate.pairs")
     mapping = _sample_map(spec_corr["sample_map"], files)
     ext_position = {s: i for i, s in enumerate(ext_samples)}
     ext_index = {f: j for j, f in enumerate(ext_features)}
@@ -1099,15 +1125,15 @@ def run_spec(normalized: dict, ds=None) -> dict:
     if reported is not None:
         unknown = [f for f in reported if f not in set(data["feature_ids"])]
         if unknown:
-            raise DomainError("FEATURE_NOT_FOUND", f"行列に無い feature_id: {unknown}",
-                              {"feature_ids": unknown})
+            raise _feature_not_found(f"行列に無い feature_id: {unknown}", unknown,
+                                     data["skipped_as_text"])
     aggregate = normalized["aggregate"]
     if aggregate is not None and "select" not in aggregate:
         members = aggregate.get("feature_ids") or [aggregate["numerator"], aggregate["denominator"]]
         unknown = [f for f in members if f not in set(data["feature_ids"])]
         if unknown:
-            raise DomainError("FEATURE_NOT_FOUND", f"行列に無い feature_id: {unknown}",
-                              {"feature_ids": unknown})
+            raise _feature_not_found(f"行列に無い feature_id: {unknown}", unknown,
+                                     data["skipped_as_text"])
     if aggregate is not None and "select" in aggregate and ds is None:
         raise DomainError("DATASET_REQUIRED", "aggregate.select にはデータセットが要る", {})
 

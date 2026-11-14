@@ -321,6 +321,64 @@ def test_correlate_errors(files):
     assert info.value.code == "SAMPLE_MISMATCH"
 
 
+def test_correlate_sample_map_many_to_one_is_refused(files):
+    # 外部の同じ試料に 2 つの試料を当てると、外部の 1 つの値を 2 回数えて n と p が膨らむ
+    sample_map = _write(files["dir"] / "dup.tsv", ["sample", "external_sample"],
+                        [["HC1", "HC1"], ["HC2", "HC1"], *[[s, s] for s in SAMPLES[2:]]])
+    with pytest.raises(DomainError) as info:
+        _run(_spec(files, correlate=_corr(files, sample_map={"path": str(sample_map)})))
+    assert info.value.code == "SAMPLE_MISMATCH"
+    assert info.value.details["field"] == "correlate.sample_map"
+    assert info.value.details["duplicated_external"] == ["HC1"]
+    assert info.value.details["samples"] == {"HC1": ["HC1", "HC2"]}
+    # この側の試料の重複も従来どおり SAMPLE_MISMATCH
+    twice = _write(files["dir"] / "twice.tsv", ["sample", "external_sample"],
+                   [["HC1", "HC1"], ["HC1", "HC2"]])
+    with pytest.raises(DomainError) as info:
+        _run(_spec(files, correlate=_corr(files, sample_map={"path": str(twice)})))
+    assert info.value.code == "SAMPLE_MISMATCH" and info.value.details["duplicated"] == ["HC1"]
+
+
+def test_correlate_xlsx_external_keeps_undetected_rows_and_names_skipped_rows(files):
+    sheet = [["Metabolite", *SAMPLES],
+             ["Organic acids", *(["group"] * len(SAMPLES))],     # 群の見出しの行（飛ばす）
+             ["Glucose", *GLUCOSE],
+             ["Lactate", *(["ND"] * (len(SAMPLES) - 1)), "<LOQ"]]   # どの試料でも検出されなかった物質
+    xlsx = write_xlsx(files["dir"] / "supp.xlsx", {"T": sheet})
+    external = {"source": "xlsx", "path": str(xlsx)}
+    block = _run(_spec(files, correlate={
+        "external": external,
+        "pairs": [{"feature_id": "F1", "external_id": "Glucose"},
+                  {"feature_id": "F4", "external_id": "Lactate"}]}))["correlate"]
+    assert block["external"] == {"source": "xlsx", "n_features": 2, "n_samples": 8,
+                                 "n_unreadable_cells": 8, "unreadable_examples": ["ND", "<LOQ"],
+                                 "n_rows_skipped_as_text": 1,
+                                 "rows_skipped_as_text": ["Organic acids"]}
+    lactate = block["rows"][1]
+    assert lactate["external_id"] == "Lactate" and lactate["reason"] == "too_few_pairs"
+    with pytest.raises(DomainError) as info:
+        _run(_spec(files, correlate={"external": external,
+                                     "pairs": [{"feature_id": "F1", "external_id": "Organic acids"}]}))
+    assert info.value.code == "FEATURE_NOT_FOUND"
+    assert info.value.details["skipped_as_text"] == ["Organic acids"]
+    assert "群の見出し" in info.value.message
+
+
+def test_xlsx_input_feature_ids_name_skipped_rows(files):
+    sheet = [["Metabolite", *SAMPLES], ["Lipids", *(["x"] * len(SAMPLES))],
+             *[[f, *v] for f, v in VALUES.items()]]
+    xlsx = write_xlsx(files["dir"] / "supp.xlsx", {"T": sheet})
+    spec = _spec(files, input={"source": "xlsx", "path": str(xlsx)},
+                 features={"feature_ids": ["F1", "Lipids"]})
+    with pytest.raises(DomainError) as info:
+        _run(spec)
+    assert info.value.code == "FEATURE_NOT_FOUND"
+    assert info.value.details["feature_ids"] == ["Lipids"]
+    assert info.value.details["skipped_as_text"] == ["Lipids"]
+    result = _run(_spec(files, input={"source": "xlsx", "path": str(xlsx)}))
+    assert result["input_read"]["n_rows_skipped_as_text"] == 1
+
+
 def test_correlate_too_few_matched_samples_is_null(files):
     sample_map = _write(files["dir"] / "few.tsv", ["sample", "external_sample"],
                         [[s, s] for s in SAMPLES[:4]])
