@@ -166,13 +166,35 @@ SME 由来という食い違った行ができる。
 `dataset_status(view=...)`:
 
 - `summary`（既定）: 概要。`groups`（群＝Class ID ごとの件数）・`roles`・`n_ungrouped`（群の宣言が
-  無い試料の数）・`tags`（タグごとの特徴数）・`excluded`（除外の件数）を含む。`samples`（name/role）は従来どおり。
-- `samples`: 試料の TSV（name・group・role・batch・injection_order・subject_id・excluded）。`excluded` は
+  無い試料の数）・`tags`（タグごとの特徴数）・`excluded`（除外の件数）を含む。`samples` は name/role の TSV（列名
+  `name\trole`）で、役割は試料の表から読む（`view="samples"`・統計エンジンと同じ。`dataset_set_sample_metadata` で
+  直した役割もここに出る。空は `sample`）。
+- `samples`: 試料の TSV（name・group・role・batch・batch_source・injection_order・injection_order_source・
+  subject_id・excluded、続けて実験情報シートに足した因子の列を名前の順に。足していなければ因子の列は無い）。
+  `*_source` は値の出所（`sheet` / `mddata` / `mzTab` / `raw_acquisition_time` / `filename`）で、バッチが空で試料名に
+  8 桁の数字があれば `batch_source` は `candidate:<8 桁>`（候補。統計には当てない）。`excluded` は
   `dataset_exclude` の理由、実験情報シートの `include=false` の試料は「include=false（実験情報シート）」、
   除外していなければ空。`query` は因子トークン（`_` 区切りの AND・順不同、`,` 区切りの複数指定は OR。旧
   `dataset_status(view="samples")` の `specs` と同じ文法）。役割では落とさない。
 - `tags`: タグごとの特徴 ID（先頭 50 件）。**特徴のタグは MS-DIAL の `_tags.xml` から読んだもの**で、
   アノテーションの確かさそのものではない。
+- `results`: このハンドルの統計の行列（`stat_matrices`）と結果（`results`）の一覧。`{view, n_matrices, matrices,
+  n_results, results, note}` で、`matrices` と `results` は TSV（1 件も無ければ空文字列。真偽の列の値は `True` /
+  `False`、値の無い欄は空）。
+  - `matrices` の列: `matrix_id`・`current`・`drift`（ドリフト補正の段の状態 `applied` / `partial` / `skipped`）・
+    `filters`（当てた足切りの名前を `/` で連ねたもの。`blank_ratio` / `detection` / `qc_rsd` / `d_ratio`）・
+    `normalize`（正規化の方法）・`n_features`（行列の特徴数）・`n_units`（行列の単位の数。反復をまとめた行列なら
+    個体、まとめない行列なら注入）・`excluded_samples` / `excluded_features`（行列を作ったときの除外の**件数**）・
+    `group_overrides`（群を上書きした試料の件数）。
+  - `results` の列: `result_id`・`kind`（`compare` / `stat_pca` / `overview` / `species_pca`）・`matrix_id`・
+    `contrasts`（`compare` の対比 ID を spec の順に `,` で連ねたもの。ほかの種類は空）・`origin`（`overview` は最初の
+    概観が回した比較で、特徴検索の既定の選択に入らない。利用者が回した結果は空）・`current`・`last`（`True` は
+    図・書き出しが `result_id` を省いたときに使う直近の結果＝直近の比較か直近の PCA）。
+  - `current`: `True` は今のデータ（データの指紋。指紋を持たない `species_pca` はデータセットの ID）と今の
+    `metadata_revision` で作った行列・結果。`False` は除外・試料の表の更新・データの入れ替えの前に作ったもので、
+    今の結果として読まない（作り直す）。古い `matrix_id` を渡したツールは `missing_state`（`dataset_preprocess` を
+    案内）で断る。
+  - 掘るときは `result_id`（compare は `contrast_id` も）を渡す。`query` は効かず、使わずに `notes` に書く（断らない）。
 
 **除外（`dataset_exclude`）は入力を変えない。** `excluded_samples` / `excluded_features`（名前・特徴 ID -> 理由）は
 解析の状態で、定量行列・試料名・特徴 ID・データセットの指紋は元のまま。前処理（`dataset_preprocess`）が除外した

@@ -35,7 +35,8 @@ CLAUDE.md 冒頭を直す（統合で合算する）。`MCP_INSTRUCTIONS` は統
   読み直し、それでも読めなければ Ontology と分子式（`msp_lipid.from_class_formula`）から種を作る。`CLASS_FORMS` に LPS・LPG を足す。
   どの経路で種を得たかを行に出す。reanalysis.md の「記録の name の種で決める」規則も書き直す。
 - **A3-T12**: 前駆体の既定の窓を MS-DIAL と同じ `max(0.01 Da, m/z × 20 ppm)` にする（m/z 500 以下は今と同じ）。候補の表に
-  `ppm_error` を出す。`library_msms_qualify` と `dataset_claim_evidence` も `mz_tol_ppm` を受け、使った窓を返り値に出す。
+  `delta_ppm`（= (測定 − 参照) / 参照 × 1e6。`library_match_feature` の同名の列と同じ名前・符号。列名は `ppm_error` では
+  ない）を出す。`library_msms_qualify` と `dataset_claim_evidence` も `mz_tol_ppm` を受け、使った窓を返り値に出す。
   library.md:380 の「窓は MS-DIAL と同じ」を正しくする。
 - **E6-T25**: 照合の上位が MS-DIAL の注釈と食い違うとき、`library_match_feature`・`library_msms_qualify`・
   `dataset_claim_evidence` が印（`top_differs_from_msdial` と、MS-DIAL の注釈の候補順位）を返す。claim の合否で目標が
