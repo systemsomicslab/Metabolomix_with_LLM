@@ -181,7 +181,7 @@ stdio サーバでは 2026-09 時点で未検証(ブラウザで `html_path` を
 (試料名・群名・脂質名・強度)はサーバへ送られる。サーバ側のジョブ ID と送った config は
 run ディレクトリの `remote-job-measure.json`(描画のジョブは `remote-job-render.json`)。サーバは版を返さないので manifest の `upstream_commit` /
 `package_version` は空になる。サーバのジョブが失敗しても理由は固定文しか返らない(本文はサーバの worker.log)。
-`remote_fallback` と失敗の封筒に `job_id`・`record`(そのジョブの記録の場所)、封筒に `details.run_dir` が残る。
+ローカルへ回って成功したときは戻り値の `backend` の文にサーバの `job <job_id>`(投入まで進んだときだけ)と理由が出て、`job_id`・`record`(そのジョブの記録の場所)は `pathway_project` の manifest の `remote_fallback` に残る(描画のジョブの記録はいつも run ディレクトリの `remote-job-render.json`)。失敗の封筒には `job_id`・`record` と `details.run_dir` が残る。
 どちらも使えないときはサーバ側のコード(`MSLM_REMOTE_UNAVAILABLE` など。`details.local` にローカルが使えない理由)。
 
 **ローカルの R を使う**ときの初回のセットアップ(サーバだけで足りるなら要らない):

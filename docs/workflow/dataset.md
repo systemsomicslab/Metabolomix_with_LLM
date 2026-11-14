@@ -326,13 +326,15 @@ TSV は書かない（消費者のいない `feature-qc.tsv` を 2026-09-03 に�
 1. metabolomix/tools/mztab_tools.py dataset_status()
 2. └─ metabolomix/tools/mztab_tools.py _tags_view()
 
-`results`（`current` は登録のときのデータの指紋と `metadata_revision` が今と同じか）:
+`results`（`current` は登録のときのデータの指紋と `metadata_revision` が今と同じか。指紋を持たない分子種の PCA
+（`species_pca`）はデータセットの ID と `metadata_revision` で見る）:
 1. metabolomix/tools/mztab_tools.py dataset_status()
 2. └─ metabolomix/tools/mztab_tools.py _results_view()
 3.    └─ metabolomix/analysis/result_state.py dataset_fingerprint()
 4.    └─ metabolomix/tools/mztab_tools.py _matrix_recipe()
-5.    └─ metabolomix/analysis/result_state.py is_stats_current()
-6.    └─ metabolomix/analysis/stats_results.py contrast_ids()
+5.    └─ metabolomix/analysis/result_state.py is_stats_current()（来歴に指紋を持つ結果）
+6.    └─ metabolomix/analysis/result_state.py is_current()（それ以外）
+7.    └─ metabolomix/analysis/stats_results.py contrast_ids()
 
 ## dataset_exclude
 

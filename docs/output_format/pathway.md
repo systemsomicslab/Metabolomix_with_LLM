@@ -70,7 +70,7 @@
 | node | パスウェイのノード名（＝MS-DIAL Ontology と完全一致したサブクラス） |
 | scope | `whole`（サブクラス全体）か、アシル鎖（`18:0` 等。そのノードの鎖サブセット） |
 | n_features | そのスコープに入った分子種の数（常に 1 以上。下記） |
-| mean_a / mean_b | 各群の個体の `2**log2`（スコープの集計値を log2 にしたもの）の算術平均（エンジンの定義。下記） |
+| mean_a / mean_b | 各群の単位（`matrix_id` の行列の units。反復をまとめた行列なら個体、まとめない行列なら注入）の `2**log2`（スコープの集計値を log2 にしたもの。個体にまとめた単位は注入の log2 の平均）の算術平均（エンジンの定義。下記） |
 | log2fc | log2 空間の群平均差（統計エンジンの `log2_mean_difference`）。**正なら group_b が高い** |
 | q | BH-FDR。補正単位は**パスウェイ × スコープ種別**（whole と各鎖は別々） |
 | call | `verdict` が `changed`（q ≤ 閾値）なら符号で up / down、検定できなければ NA、それ以外は ns |
@@ -97,7 +97,7 @@ manifest の `warnings` に `drift_not_applied_by_default`（`reasons` と `sugg
 `dataset_pca` と同じ）。補正するなら `dataset_preprocess(drift_mode="on")` の `matrix_id` を渡す（当てなかった行列でなければ `warnings` は無い）。
 既定の行列は登録され、前処理の記録が `reports/stats/` に 1 件書かれる（manifest の `preprocess_record_id`。同じ行列の 2 回目以降は記録を足さない。
 直近の `dataset_preprocess` の行列ならその前処理の記録）。返った `matrix_id` は dataset_compare / dataset_pca にそのまま渡せる。
-mean_a / mean_b は個体の `2**log2` の算術平均（エンジンの定義。旧 v1 の生値の平均とは別物）。
+mean_a / mean_b は単位（上記。まとめた行列なら個体、まとめない行列なら注入）の `2**log2` の算術平均（エンジンの定義。旧 v1 の生値の平均とは別物）。
 
 上流はデータに無いサブクラスのノード（対応表経由の PC/PE/PS など）と、指定した各鎖について
 全ノードに**空のスコープ**（分子種 0・値は全部 null）を出す。これは「値の付いたノード」ではないので
@@ -164,9 +164,17 @@ mean_a / mean_b は個体の `2**log2` の算術平均（エンジンの定義�
   計測のジョブ。run に 1 つ）と `remote-job-render.json`（`pathway_plot` の描画のジョブ。直近の 1 回だけ）。ローカルの
   `bridge.log` は直近のローカルの R の呼び出しのもの（`pathway_plot` が R で描けば計測の分は上書きされる）。
 - 研究室サーバのジョブが失敗したとき、サーバは理由を固定文でしか返さない（本文は上流の worker.log にだけあり、API では
-  取れない）。`remote_fallback`（成功してローカルへ回ったときは戻り値の `backend` と manifest、失敗の封筒では
-  `details.remote` か `details.remote_fallback`）に `job_id`（投入まで進んだときだけ）と `record`（そのジョブの
-  `remote-job-<mode>.json` の場所。manifest の `remote_fallback.record` は計測の記録を指し、描画では上書きされない）が残る。
+  取れない）。
+  - **ローカルの R へ回って成功したとき**: `pathway_project` / `pathway_plot` の戻り値の `backend` は 1 行の文で、
+    ローカルの R で動いたことと、使えなかったサーバの api_url・`job <job_id>`（投入まで進んだときだけ）・コードと
+    message を書く。戻り値に `remote_fallback` の鍵は無く、記録の場所（`record`）も出ない。`pathway_project` は
+    manifest の `remote_fallback`（`api_url`・`code`・`message` と、あれば `job_id`・`record`。サーバで動いた・
+    サーバを設定していないなら null）に残し、その `record` は計測の記録 `<run_dir>/remote-job-measure.json` を指す
+    （描画では上書きされない）。`pathway_plot` は manifest を書き直さないので、描画のジョブの記録はいつも
+    `<run_dir>/remote-job-render.json`（`run_dir` は `pathway_project` の戻り値の `run_dir`。`pathway_plot` の `figures[].pdf` の置かれたフォルダでもある）。
+  - **失敗の封筒**: `details.remote`（ローカルの R も使えなかったとき）か `details.remote_fallback`（ローカルの R が
+    動いて失敗したとき）に `job_id`（投入まで進んだときだけ）と `record`（そのジョブの `remote-job-<mode>.json` の
+    場所）が残り、`details.run_dir` も付く。
 - `MSLM_R_PACKAGES_MISSING` は R の仮想環境に MSLipidMapper が無い（未復元・古い・公開関数が無い）。
   `MSLM_R_PACKAGE_LOAD_FAILED` は入っているのに R が読み込めない（message に R の `loadNamespace` の本文）。
   後者はローカルの R を「動かして失敗した」ものとして扱い、サーバが先に失敗していればその理由は `details.remote_fallback`。

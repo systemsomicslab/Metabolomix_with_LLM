@@ -247,7 +247,9 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料�
   `as_two_group` の `CONTRAST_REQUIRED` を `tools/_contrast_choice.py` の `contrast_envelope` が `needs_input` にする。
   交互作用を差の差として読むのは書き出しだけ＝`allow_interaction=True`）。行列・結果は除外・試料の表の更新・データの
   入れ替えで古くなる（`dataset_exclude` は行列も捨てる）。`dataset_analysis_run` の v2 は状態を持たず、spec だけで再現する自己完結の実行。
-  利用者に尋ねる問いは `mcp_errors.needs_input`（エラーではない封筒。`retry_tools` は「`argument` を受けて呼び直せるツール」）。
+  利用者に尋ねる問いは `mcp_errors.needs_input`（エラーではない封筒。`retry_tools` は答えを入れて呼び直せるツール:
+  `argument` があればその引数に、無ければ `field` の spec の路に `value` を入れ、`patch: true` なら `value` の
+  「引数名 → 値」の dict のとおりに引数を置き換える〔null は外し、ほかはそのまま〕。正準は `docs/output_format/core.md`）。
   v1 の前処理・2 群比較（`dataset_service` / `differential.two_group_test`）と pipeline からの結果の引き継ぎは D 段で消した
   （`differential.py` に残るのは volcano の点列だけ）。
 - **差次的エクスポートの列定義は `metabolomix/analysis/export_contract.py` が唯一の正準**。

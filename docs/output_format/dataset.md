@@ -298,6 +298,7 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 - **`mode`**: `add`（既定・追加。`reason` が要る）/ `remove`（再包含）/ `clear`（全消去）。現状の表示は `dataset_status(view="samples")` の `excluded` 列。
 - 現データに存在しない試料名・特徴 ID が 1 つでもあれば全体を拒み、何も変更しない（タイプミスで黙って一部だけ除外されない）。全試料の除外も拒む。
 - 実際に除外が変わったときだけ、登録した行列（`stat_matrices`）を空にし、比較・PCA の結果を古いとする（`dataset_preprocess` からやり直す）。同じ引数の再実行は何も動かさない（冪等）。
+- ハンドルの行列・結果の一覧と、それぞれが今も通用するか（`current`）は `dataset_status(view="results")` が返す（列の意味は `mztab` トピック §13.5b）。
 
 除外集合は DatasetState の `excluded_samples`（試料名 -> 理由）と `excluded_features`（特徴 ID -> 理由）に持つ。変えると `metadata_revision` が進む。**`dataset_preprocess`**（→ `dataset_pca` / `dataset_compare`）・`dataset_plot`・`dataset_feature_search` の強度順がいずれも自動的に除外を反映する。除外は前処理の記録に残る（試料の除外は select の工程の `excluded_by_include` の件数、記録の `settings.exclusions`）。前処理の出力に除外を知らせる専用の注記は付かない。`dataset_status(view="samples")` は各試料に `excluded` を付して現在の除外状態を示す。
 
