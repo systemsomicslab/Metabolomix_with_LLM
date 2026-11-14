@@ -176,12 +176,30 @@ def _batches(**kw):
     return [x.batch for x in D.from_dataset(_ds(**kw)).samples]
 
 
-def test_constant_declared_batch_is_ignored_and_falls_back_to_filename_dates():
+def test_constant_declared_batch_is_ignored_and_filename_dates_are_only_candidates():
+    """A7: 試料名の 8 桁はバッチに当てない（候補として `batch_candidates` に持つだけ）。"""
     names = ["smp_20260101_a", "smp_20260101_b", "smp_20260102_c"]
     ms = [{"name": n, "batch": "1"} for n in names]
-    assert _batches(sample_names=names, msdial_samples=ms) == ["20260101", "20260101", "20260102"]
+    assert _batches(sample_names=names, msdial_samples=ms) == [None, None, None]
     meta = {n: {"batch": "1"} for n in names}
-    assert _batches(sample_names=names, sample_meta=meta) == ["20260101", "20260101", "20260102"]
+    study = D.from_dataset(_ds(sample_names=names, sample_meta=meta))
+    assert [x.batch for x in study.samples] == [None, None, None]
+    assert study.batch_candidates == {
+        "smp_20260101_a": {"value": "20260101", "source": "filename_date"},
+        "smp_20260101_b": {"value": "20260101", "source": "filename_date"},
+        "smp_20260102_c": {"value": "20260102", "source": "filename_date"}}
+
+
+def test_filename_date_batch_from_an_old_row_or_sample_meta_is_not_used():
+    names = ["smp_20260101_a", "smp_20260102_b", "c"]
+    rows = [{"sample_id": n, "batch": "20260101" if i == 0 else None,
+             "provenance": {"batch": {"value": "20260101", "source": "filename_date",
+                                      "confidence": "inferred"}} if i == 0 else {}}
+            for i, n in enumerate(names)]
+    assert _batches(sample_names=names, sample_ids=names, sample_metadata_rows=rows) == [None, None, None]
+    meta = {n: {"batch": d, "batch_source": "filename_date"}
+            for n, d in zip(names, ["20260101", "20260102", None])}
+    assert _batches(sample_names=names, sample_meta=meta) == [None, None, None]
 
 
 def test_informative_declared_batches_win_over_dates():
@@ -194,5 +212,49 @@ def test_no_declared_batch_and_no_date_stays_unknown_and_row_batch_wins():
     assert _batches() == [None, None, None]
     names = ["smp_20260101_a", "b", "c"]
     rows = [{"sample_id": n, "batch": "B7" if n == "b" else None} for n in names]
-    assert _batches(sample_names=names, sample_ids=names, sample_metadata_rows=rows) == [
-        "20260101", "B7", None]
+    study = D.from_dataset(_ds(sample_names=names, sample_ids=names, sample_metadata_rows=rows))
+    assert [x.batch for x in study.samples] == [None, "B7", None]
+    assert study.batch_candidates == {"smp_20260101_a": {"value": "20260101", "source": "filename_date"}}
+
+
+# --- 注入順の出所とファイルの順（A6） -------------------------------------------------
+
+def test_injection_order_source_by_origin():
+    names = ["a", "b", "c"]
+    rows = [{"sample_id": "a", "injection_order": 3,
+             "provenance": {"injection_order": {"source": "user_manifest"}}},
+            {"sample_id": "b", "injection_order": 1,
+             "provenance": {"injection_order": {"source": "msdial_mddata"}}},
+            {"sample_id": "c", "injection_order": 2,
+             "provenance": {"injection_order": {"source": "mztab"}}}]
+    study = D.from_dataset(_ds(sample_names=names, sample_ids=names, sample_metadata_rows=rows))
+    assert [x.injection_order_source for x in study.samples] == ["sheet", "mddata", "mzTab"]
+    ms = [{"name": n, "injection_order": i} for i, n in enumerate(names, start=1)]
+    assert [x.injection_order_source for x in D.from_dataset(_ds(msdial_samples=ms)).samples] == [
+        "mddata"] * 3
+    assert [x.injection_order_source for x in D.from_dataset(_ds()).samples] == [None] * 3
+
+
+def test_msdial_order_matching_file_names_is_flagged():
+    """MS-DIAL の既定（ファイル名の順に 1, 2, …）と一致する注入順には印を付ける。"""
+    names = ["s_B", "s_A", "s_C"]
+    file_order = [{"name": n, "injection_order": o} for n, o in zip(names, [2, 1, 3])]
+    flagged = D.from_dataset(_ds(sample_names=names, msdial_samples=file_order)).samples
+    assert all(x.injection_order_may_be_file_order for x in flagged)
+    shuffled = [{"name": n, "injection_order": o} for n, o in zip(names, [1, 3, 2])]
+    assert not any(x.injection_order_may_be_file_order
+                   for x in D.from_dataset(_ds(sample_names=names, msdial_samples=shuffled)).samples)
+    # 利用者のシートの値は（ファイルの順と一致しても）印を付けない
+    rows = [{"sample_id": n, "injection_order": o, "provenance": {"injection_order": {"source": "user_manifest"}}}
+            for n, o in zip(names, [2, 1, 3])]
+    sheet = D.from_dataset(_ds(sample_names=names, sample_ids=names, sample_metadata_rows=rows)).samples
+    assert not any(x.injection_order_may_be_file_order for x in sheet)
+
+
+def test_file_order_uses_raw_file_names_when_known():
+    """鍵は raw のファイル名（全試料で分かるとき）。試料名の順とは違ってよい。"""
+    names = ["zeta", "alpha", "mid"]
+    ms = [{"name": n, "injection_order": o, "file_path": f"C:/raw/{f}"}
+          for n, o, f in zip(names, [1, 2, 3], ["r01.wiff", "r02.wiff", "r03.wiff"])]
+    samples = D.from_dataset(_ds(sample_names=names, msdial_samples=ms)).samples
+    assert all(x.injection_order_may_be_file_order for x in samples)

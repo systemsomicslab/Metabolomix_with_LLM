@@ -28,6 +28,11 @@ PREPROCESS_DEFAULTS = {
     "injection_columns": [],
 }
 
+#: 既定の dict に載せない任意のキー（path → 既定値）。既定値のときは設定に書かない（書けば matrix_id が
+#: 変わり、既定どおりの前処理の ID がこのキーを足す前と食い違う）。
+_OPTIONAL = {("drift", "loess_degree"): 1, ("normalize", "features"): None,
+             ("normalize", "exclude_features"): None}
+
 _ENUMS = {("drift", "mode"): ("auto", "on", "off"),
           ("normalize", "method"): ("auto", "none", "tic", "median", "pqn"),
           ("filters", "detection", "by"): ("group", "all")}
@@ -55,10 +60,17 @@ def _merge(default, raw, path: tuple):
     if isinstance(default, dict):
         if not isinstance(raw, dict):
             raise _invalid(f"{'.'.join(path) or '設定'} は object で指定する", path, raw)
-        unknown = sorted(set(raw) - set(default))
+        optional = {key[-1]: value for key, value in _OPTIONAL.items() if key[:-1] == path}
+        unknown = sorted(set(raw) - set(default) - set(optional))
         if unknown:
             raise _invalid(f"未知のキー: {unknown}", path + (unknown[0],), raw[unknown[0]])
-        return {k: _merge(v, raw.get(k, copy.deepcopy(v)), path + (k,)) for k, v in default.items()}
+        out = {k: _merge(v, raw.get(k, copy.deepcopy(v)), path + (k,)) for k, v in default.items()}
+        for k, fallback in optional.items():
+            if k in raw:
+                value = _optional_value(path + (k,), raw[k])
+                if value != fallback:
+                    out[k] = value
+        return out
     if path in _ENUMS:
         if raw not in _ENUMS[path]:
             raise _invalid(f"{'.'.join(path)} は {list(_ENUMS[path])} のどれか", path, raw)
@@ -84,6 +96,21 @@ def _merge(default, raw, path: tuple):
     return _number(path, raw, lo=0.0)
 
 
+def _optional_value(path: tuple, raw):
+    """任意のキーの値を検める（既定値なら呼び出し側が落とす）。"""
+    if path == ("drift", "loess_degree"):
+        if isinstance(raw, bool) or raw not in (1, 2):
+            raise _invalid("drift.loess_degree は 1（局所線形。既定）か 2（局所 2 次）", path, raw)
+        return int(raw)
+    # normalize.features / exclude_features: 特徴 ID のリスト（空・None は指定なし）
+    if raw is None:
+        return None
+    if (not isinstance(raw, list)
+            or any(not isinstance(f, str) or not f.strip() for f in raw)):
+        raise _invalid(f"{'.'.join(path)} は空でない文字列（特徴 ID）のリストで指定する", path, raw)
+    return sorted({f.strip() for f in raw}) or None
+
+
 def normalize_preprocess_config(raw: dict | None) -> dict:
     """既定を埋めた前処理設定を返す。未知のキー・不正な値は PREPROCESS_CONFIG_INVALID。"""
     return _merge(PREPROCESS_DEFAULTS, {} if raw is None else raw, ())
@@ -100,6 +127,10 @@ class UnitInfo:
     n_injections: int
     sample_ids: list[str]
     attributes: dict[str, str] = field(default_factory=dict)
+    #: 注入順の出所（まとめた注入で 1 つに決まらなければ "mixed"。値が無ければ None）。
+    injection_order_source: str | None = None
+    #: 注入順が MS-DIAL の既定（ファイルの順）かもしれない注入を含む（`injection_order_may_be_file_order`）。
+    injection_order_may_be_file_order: bool = False
 
 
 @dataclass
@@ -129,7 +160,8 @@ class PreparedMatrix:
 
 @dataclass
 class NeedsInput:
-    """既定を決めずに利用者へ尋ねる封筒（spec §4 のドリフト補正の既定）。"""
+    """利用者へ尋ねる封筒。前処理は今は返さない（ドリフト補正の既定は尋ねずに off で計算し、
+    理由と `on` で呼び直す選択肢を注意で返す。2026-11-14 の C3）。受け手の分岐の互換のために残す。"""
     field: str
     reason: str
     options: list[dict]
@@ -159,7 +191,7 @@ def _nanmin(block: np.ndarray) -> np.ndarray:
     return np.where(np.isfinite(low), low, np.nan)
 
 
-def _matrix_id(study: StudyData, config: dict, normalize_method: str) -> str:
+def _matrix_id(study: StudyData, config: dict, normalize_method: str, extras: dict | None = None) -> str:
     table = [[s.sample_id, s.role, s.group, s.batch, s.injection_order, s.subject_id,
               bool(s.include), dict(sorted(s.attributes.items()))] for s in study.samples]
     source = study.dataset_hash
@@ -173,10 +205,14 @@ def _matrix_id(study: StudyData, config: dict, normalize_method: str) -> str:
                   "shape": list(values.shape), "detected_sha256": hashlib.sha256(det).hexdigest(),
                   "feature_ids": list(study.feature_ids)}
     # normalize=auto は quant_state で方法が決まるので、解決後の方法も指紋に入れる
-    return "mx_" + canonical_hash({"dataset_hash": source, "sample_table_hash": canonical_hash(table),
-                                   "config": config, "normalize_method": normalize_method,
-                                   "feature_ids_hash": feature_hash,
-                                   "feature_merges": [list(g) for g in study.feature_merges]})[:16]
+    body = {"dataset_hash": source, "sample_table_hash": canonical_hash(table),
+            "config": config, "normalize_method": normalize_method,
+            "feature_ids_hash": feature_hash,
+            "feature_merges": [list(g) for g in study.feature_merges]}
+    # 既定の判断を変えた事情（drift=auto を止めた理由など）。あるときだけ足す（無ければ ID は前と同じ）
+    if extras:
+        body["extras"] = extras
+    return "mx_" + canonical_hash(body)[:16]
 
 
 # --- 1. 選択 -----------------------------------------------------------------
@@ -206,13 +242,61 @@ def _batch_key(s) -> str:
     return s.batch if s.batch is not None else _NO_BATCH
 
 
-#: LOESS の近傍の最小数。statsmodels は近傍数を int(frac·n) で決め、最も遠い近傍の重みは 0。
+#: LOESS の近傍の最小数（局所線形）。statsmodels は近傍数を int(frac·n) で決め、最も遠い近傍の重みは 0。
 #: 近傍が 3 だと等間隔の QC で等距離の 2 点がともに重み 0 になり、xvals 経路の当てはめが NaN になる。
 _MIN_LOESS_NEIGHBOURS = 4
 
 
+def _min_neighbours(degree: int) -> int:
+    """局所 d 次の当てはめに要る近傍の数。重み 0 になりうる両端の 2 点を除いて d + 1 点が残る数。"""
+    return _MIN_LOESS_NEIGHBOURS + (int(degree) - 1)
+
+
 def _neighbours(span: float, n: int) -> int:
     return int(span * n + 1e-10)    # statsmodels の lowess と同じ数え方
+
+
+def _local_poly(x, y, xvals, span: float, degree: int) -> np.ndarray:
+    """局所多項式回帰（LOESS。頑健化の反復なし）を `xvals` で評価する。numpy だけで書く。
+
+    近傍は statsmodels の lowess と同じ: 近い順に k = int(span·n) 点（2 ≤ k ≤ n。距離が同じなら左を先に）、
+    半径はその最も遠い距離、重みは tricube (1 − (d/半径)³)³。近傍で重みが正の点が d + 1 未満、または
+    計画行列の階数が足りなければ NaN。degree=1 は statsmodels の `lowess(it=0, delta=0, xvals=...)` と
+    数値誤差の範囲で一致する（tests/test_stats_preprocess.py が縛る）。
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    xvals = np.asarray(xvals, dtype=float)
+    n = len(x)
+    k = min(max(_neighbours(span, n), 2), n)
+    order = np.argsort(x, kind="stable")
+    xs, ys = x[order], y[order]
+    out = np.full(len(xvals), np.nan)
+    for t, xv in enumerate(xvals):
+        dist = np.abs(xs - xv)
+        near = np.sort(np.argsort(dist, kind="stable")[:k])
+        radius = float(dist[near].max())
+        if radius <= 0:
+            continue
+        weight = np.clip(1.0 - (dist[near] / radius) ** 3, 0.0, None) ** 3
+        ok = weight > 1e-12
+        if int(ok.sum()) < degree + 1:
+            continue
+        design = np.vander(xs[near][ok] - xv, degree + 1, increasing=True)
+        root = np.sqrt(weight[ok])
+        coef, _res, rank, _sv = np.linalg.lstsq(design * root[:, None], ys[near][ok] * root, rcond=None)
+        if rank < degree + 1:
+            continue
+        out[t] = coef[0]
+    return out
+
+
+def _loess(y, x, xvals, span: float, degree: int) -> np.ndarray:
+    """局所線形は statsmodels の lowess（従来どおり）、局所 2 次は `_local_poly`。"""
+    if degree == 1:
+        from statsmodels.nonparametric.smoothers_lowess import lowess
+        return lowess(y, x, frac=span, it=0, delta=0.0, xvals=xvals)
+    return _local_poly(x, y, xvals, span, degree)
 
 
 def _drift_batches(samples) -> list[str]:
@@ -231,7 +315,7 @@ def _drift_eligibility(samples, cfg: dict) -> list[str]:
         bio = [s.injection_order for s in samples if s.role == "sample" and _batch_key(s) == b]
         if len(qc) < cfg["min_qc_per_batch"]:
             reasons.append(f"too_few_qc:{b}")
-        elif _neighbours(cfg["span"], len(qc)) < _MIN_LOESS_NEIGHBOURS:
+        elif _neighbours(cfg["span"], len(qc)) < _min_neighbours(cfg.get("loess_degree", 1)):
             reasons.append(f"too_few_qc_for_span:{b}")
         elif bio and not (min(qc) <= min(bio) and max(qc) >= max(bio)):
             reasons.append(f"qc_not_interspersed:{b}")
@@ -244,9 +328,9 @@ def _drift(values: np.ndarray, samples, cfg: dict) -> dict:
     全バッチで補正できた特徴だけを補正し（一部のバッチだけの補正はしない）、水準もその特徴だけ
     合わせる。補正できた特徴が 1 つも無いバッチがあれば全体を飛ばす。成功したときだけ values を書き換える。
     """
-    from statsmodels.nonparametric.smoothers_lowess import lowess
-
     span, min_qc = cfg["span"], cfg["min_qc_per_batch"]
+    degree = cfg.get("loess_degree", 1)
+    min_near = _min_neighbours(degree)
     batches = _drift_batches(samples)
     n_feat = values.shape[1]
     work = values.copy()
@@ -265,10 +349,10 @@ def _drift(values: np.ndarray, samples, cfg: dict) -> dict:
         for j in range(n_feat):
             y = _positive(values[qc, j])
             ok = np.isfinite(y)
-            if ok.sum() < min_qc or _neighbours(span, int(ok.sum())) < _MIN_LOESS_NEIGHBOURS:
+            if ok.sum() < min_qc or _neighbours(span, int(ok.sum())) < min_near:
                 too_few[b] += 1
                 continue
-            fit = lowess(y[ok], x_qc[ok], frac=span, it=0, delta=0.0, xvals=x_all)
+            fit = _loess(y[ok], x_qc[ok], x_all, span, degree)
             if not np.all(np.isfinite(fit)) or np.any(fit <= 0):
                 fit_invalid[b] += 1
                 continue
@@ -277,7 +361,7 @@ def _drift(values: np.ndarray, samples, cfg: dict) -> dict:
         if not in_batch.any():
             empty.append(f"fit_invalid:{b}" if fit_invalid[b] else f"no_correctable_feature:{b}")
         corrected &= in_batch
-    record = {"step": "drift", "method": "loess", "span": span, "batches": batches,
+    record = {"step": "drift", "method": "loess", "span": span, "loess_degree": degree, "batches": batches,
               "uncorrected_too_few_qc": too_few, "uncorrected_fit_invalid": fit_invalid}
     if not empty and not corrected.any():
         # バッチごとには補正できても、全バッチで補正できる特徴が 1 つも無い
@@ -305,22 +389,44 @@ def _drift(values: np.ndarray, samples, cfg: dict) -> dict:
             "uncorrected_features": int(n_feat - len(cols)), "rows_not_corrected": not_corrected}
 
 
-_NEEDS_DRIFT_REASON = (
-    "このデータは内部標準などで換算済み（quant_state.normalized）で、QC もある。"
-    "内部標準の比はドリフトの一部をすでに打ち消しているため、QC の LOESS でドリフト補正を"
-    "重ねると換算済みの値の尺度を動かしうる。補正するか（on）しないか（off）を選んでほしい。")
+#: drift=auto が補正を止めた理由（補正の条件は満たしている。drift=on で呼び直せば補正する）。
+_AUTO_HOLD_MESSAGES = {
+    "quant_normalized": "内部標準などで換算済み（quant_state.normalized）。内部標準の比はドリフトの一部を"
+                        "すでに打ち消しているので、QC の LOESS を重ねると換算済みの値の尺度を動かしうる",
+    "injection_order_may_be_file_order": "注入順が MS-DIAL の既定（ファイルの順）かもしれない。"
+                                         "実際の測定順でなければ、LOESS は誤った順でドリフトを当てはめる",
+}
 
 
-def _drift_step(values, samples, cfg, quant) -> dict | NeedsInput:
+def _order_uncertain(samples) -> bool:
+    """ドリフト補正に使う注入（生体・QC）の注入順が確かでない（MS-DIAL の既定かもしれない・ファイル名の順）。"""
+    return any(s.injection_order_may_be_file_order or s.injection_order_source == "filename"
+               for s in samples if s.role in ("sample", "qc"))
+
+
+def _auto_hold(samples, quant) -> list[str]:
+    """drift=auto が補正しない理由（補正の条件を満たすときだけ問う）。"""
+    held = []
+    if quant is not None and quant.normalized:
+        held.append("quant_normalized")
+    if _order_uncertain(samples):
+        held.append("injection_order_may_be_file_order")
+    return held
+
+
+def _drift_step(values, samples, cfg, quant) -> dict:
+    """ドリフト補正の段。mode=auto は条件を満たしても、換算済み・注入順が不確かなら補正しない
+    （尋ねずに off で計算し、理由と drift=on の選択肢を `rerun_with` に残す）。mode=on は条件を満たせば
+    必ず補正し、満たさなければ PREPROCESS_PRECONDITION。"""
     mode = cfg["mode"]
     if mode == "off":
         return {"step": "drift", "status": "skipped", "reason": "mode_off"}
-    has_qc = any(s.role == "qc" for s in samples)
-    if mode == "auto" and has_qc and quant is not None and quant.normalized:
-        return NeedsInput(field="preprocess.drift.mode", reason=_NEEDS_DRIFT_REASON, options=[
-            {"value": "on", "label": "QC の LOESS でドリフト補正する（換算済みの値に重ねる）"},
-            {"value": "off", "label": "ドリフト補正をしない（内部標準の換算だけに任せる）"}])
     reasons = _drift_eligibility(samples, cfg)
+    if not reasons and mode == "auto":
+        held = _auto_hold(samples, quant)
+        if held:
+            return {"step": "drift", "status": "skipped", "reason": held[0], "reasons": held,
+                    "rerun_with": {"preprocess.drift.mode": "on"}}
     step = ({"step": "drift", "status": "skipped", "reason": reasons[0], "reasons": reasons}
             if reasons else _drift(values, samples, cfg))
     if step["status"] == "skipped" and mode == "on":
@@ -328,6 +434,18 @@ def _drift_step(values, samples, cfg, quant) -> dict | NeedsInput:
                           f"drift.mode=on だがドリフト補正の条件を満たさない: {step['reasons']}",
                           {"reasons": step["reasons"]})
     return step
+
+
+def _drift_hold_warning(step: dict) -> dict | None:
+    """drift=auto が補正を止めたときの注意（理由と、drift=on で呼び直す選択肢）。"""
+    if step.get("rerun_with") is None:
+        return None
+    reasons = list(step.get("reasons") or [])
+    return {"code": "drift_not_applied_by_default", "reasons": reasons,
+            "message": "ドリフト補正は条件を満たすが、既定（drift=auto）では当てなかった: "
+                       + "。".join(_AUTO_HOLD_MESSAGES[r] for r in reasons if r in _AUTO_HOLD_MESSAGES)
+                       + "。補正するなら drift_mode=\"on\" で呼び直す。",
+            "suggestion": dict(step["rerun_with"])}
 
 
 # --- 3. 品質の足切り ---------------------------------------------------------
@@ -426,8 +544,48 @@ def _filters(values, samples, detected, cfg, feature_ids) -> tuple[np.ndarray, d
 
 # --- 4. 正規化 ---------------------------------------------------------------
 
-def _normalize_step(values, samples, cfg, quant) -> tuple[np.ndarray, dict]:
-    """係数は残った特徴（values の列）だけ・生体＋QC の行から。recipe_matrix._normalize を使う。"""
+def _factor_columns(cfg, kept_ids: list[str], all_ids: list[str],
+                    all_values: np.ndarray) -> tuple[np.ndarray | None, dict]:
+    """正規化の係数を計算する列（試料 × 特徴）と、その記録。指定が無ければ (None, {})。
+
+    既定は残った特徴（品質の足切りの後）すべて。`features` を指せばその特徴だけ（足切りで落ちた特徴も
+    使える。内部標準は生体の分散が小さく D-ratio で落ちうるため。値はドリフト補正の後）。
+    `exclude_features` はその中から外す。係数を計算する列から外した特徴も行列には残る。
+    """
+    chosen, excluded = cfg.get("features"), cfg.get("exclude_features")
+    if chosen is None and excluded is None:
+        return None, {}
+    position = {fid: j for j, fid in enumerate(all_ids)}
+    unknown = sorted(f for f in (chosen or []) + (excluded or []) if f not in position)
+    if unknown:
+        field_name = ("normalize.features" if chosen and set(unknown) & set(chosen)
+                      else "normalize.exclude_features")
+        raise DomainError("PREPROCESS_CONFIG_INVALID",
+                          f"{field_name} に存在しない特徴 ID がある: {unknown[:20]}",
+                          {"field": field_name, "unknown_features": unknown})
+    base = list(chosen) if chosen is not None else list(kept_ids)
+    drop = set(excluded or [])
+    use = [f for f in base if f not in drop]
+    if not use:
+        raise DomainError("PREPROCESS_CONFIG_INVALID", "正規化の係数を計算する特徴が 1 つも残らない",
+                          {"field": "normalize.exclude_features" if excluded else "normalize.features"})
+    kept = set(kept_ids)
+    record = {"factor_features": len(use),
+              "factor_feature_basis": "features" if chosen is not None else "kept_features"}
+    if excluded is not None:
+        record["excluded_from_factors"] = len(drop & set(base))
+    outside = [f for f in use if f not in kept]
+    if outside:
+        record["factor_features_filtered_out"] = outside
+    return all_values[:, [position[f] for f in use]], record
+
+
+def _normalize_step(values, samples, cfg, quant, factor_values=None,
+                    factor_record=None) -> tuple[np.ndarray, dict]:
+    """係数は残った特徴（values の列）だけ・生体＋QC の行から。recipe_matrix._normalize を使う。
+
+    `factor_values` を渡せば係数はその列から計算し、`values` のすべての列に当てる（特徴の部分集合の正規化）。
+    """
     from metabolomix.analysis.recipe_matrix import _normalize
 
     requested = cfg["method"]
@@ -441,14 +599,32 @@ def _normalize_step(values, samples, cfg, quant) -> tuple[np.ndarray, dict]:
     ids = [s.sample_id for s in samples]
     roles = {s.sample_id: s.role for s in samples}
     reference = "qc" if any(s.role == "qc" for s in samples) else "sample"
-    out, report = _normalize(values, ids, roles, {"method": method, "reference": reference})
+    basis = values if factor_values is None else factor_values
+    _scaled, report = _normalize(basis, ids, roles, {"method": method, "reference": reference})
+    factors = np.array([report["factors"][i] for i in ids], dtype=float)
+    out = values / factors[:, None]
     step = {"step": "normalize", "status": "applied", "requested": requested, "method": method,
             "factors": [report["factors"][i] for i in ids], "factor_samples": ids,
             "factors_set_to_one": len(report["unscaled_samples"]),
-            "unscaled_samples": report["unscaled_samples"]}
+            "unscaled_samples": report["unscaled_samples"], **(factor_record or {})}
     if method == "pqn":
         step["reference"] = reference
+        if reference == "sample":
+            # QC が無いときは参照の取り方を明示する（生体試料・全群の中央値で、群の組成差を吸収しうる）。
+            # QC があるときの段の形（reference="qc" だけ）は変えない
+            step["reference_definition"] = "median_of_samples_all_groups"
     return out, step
+
+
+def _pqn_reference_warning(step: dict) -> dict | None:
+    """QC が無い PQN の参照（生体試料の特徴ごとの中央値）を明示する注意。"""
+    if step.get("method") != "pqn" or step.get("reference") != "sample":
+        return None
+    return {"code": "pqn_reference_is_samples",
+            "message": "QC が無いので、PQN の参照スペクトルは生体試料（全群）の特徴ごとの中央値。"
+                       "群の間で全体の組成が大きく違うと、係数がその差の一部を吸収しうる"
+                       "（係数を計算する特徴を絞るなら normalization_features）。"}
+
 
 
 # --- 5. log2 -----------------------------------------------------------------
@@ -467,6 +643,7 @@ def _unit_of(members, unit_id: str, drop=frozenset()) -> UnitInfo:
     """まとめる注入（群・属性が一致する技術反復）から単位を作る。バッチが食い違えば矛盾。"""
     first = members[0]
     seen = sorted({str(s.batch) for s in members})
+    sources = {s.injection_order_source for s in members if s.injection_order is not None}
     if len(seen) > 1:
         raise DomainError("SUBJECT_INCONSISTENT",
                           f"同じ個体 {first.subject_id} の技術反復（群・属性が同じ注入）が別の batch を持つ: {seen}",
@@ -477,7 +654,11 @@ def _unit_of(members, unit_id: str, drop=frozenset()) -> UnitInfo:
                     subject_id=first.subject_id,
                     injection_order=None if any(o is None for o in orders) else float(np.mean(orders)),
                     n_injections=len(members), sample_ids=[s.sample_id for s in members],
-                    attributes={k: v for k, v in first.attributes.items() if k not in drop})
+                    attributes={k: v for k, v in first.attributes.items() if k not in drop},
+                    injection_order_source=(None if not sources else sources.pop() if len(sources) == 1
+                                            else "mixed"),
+                    injection_order_may_be_file_order=any(s.injection_order_may_be_file_order
+                                                          for s in members))
 
 
 def _unit_ids(keys: list[tuple], firsts: list, ignore=frozenset()) -> list[str]:
@@ -593,8 +774,23 @@ def _collapse(log2, det, samples, enabled: bool, injection_columns=()):
 
 # --- 入口 --------------------------------------------------------------------
 
-def preprocess(study: StudyData, config: dict) -> PreparedMatrix | NeedsInput:
+def _batch_candidate_warning(study: StudyData, samples) -> dict | None:
+    """バッチが不明な試料の名前に 8 桁が 2 種類以上あるとき、候補として返す（統計には当てていない）。"""
+    found = {s.sample_id: study.batch_candidates[s.sample_id]["value"] for s in samples
+             if s.batch is None and s.sample_id in study.batch_candidates}
+    values = sorted(set(found.values()))
+    if len(values) < 2:
+        return None
+    return {"code": "batch_candidates", "source": "filename_date", "n_samples": len(found),
+            "values": values[:20], "values_n_more": max(0, len(values) - 20),
+            "message": "試料名の 8 桁の数字（取得日らしい）が複数ある。バッチの候補として返すだけで、ドリフト補正・"
+                       "反復のまとめ・交絡の判定には当てていない。バッチなら試料の表の batch 列に入れる"
+                       "（dataset_set_sample_metadata）。"}
+
+
+def preprocess(study: StudyData, config: dict) -> PreparedMatrix:
     """spec §4 の 1〜6 を順に当てる。補完はしない。"""
+    from metabolomix.analysis.sample_manifest import file_order_warning
     cfg = normalize_preprocess_config(config)
     steps = []
     keep_rows, step = _select(study)
@@ -603,12 +799,19 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix | NeedsInput:
     values = np.array(np.asarray(study.values, dtype=float)[keep_rows], copy=True)
     detected = None if study.detected is None else np.asarray(study.detected, bool)[keep_rows]
 
+    notes = []
+    flagged = [s for s in samples if s.role in ("sample", "qc") and s.injection_order_may_be_file_order]
+    if flagged:
+        notes.append(file_order_warning(len(flagged)))
     step = _drift_step(values, samples, cfg["drift"], study.quant)
-    if isinstance(step, NeedsInput):
-        return step
     steps.append(step)
+    hold = _drift_hold_warning(step)
+    if hold is not None:
+        notes.append(hold)
+    extras = {"drift_held": step["reasons"]} if hold is not None else None
 
-    feature_ids = list(study.feature_ids)
+    all_ids = list(study.feature_ids)
+    feature_ids = list(all_ids)
     keep_cols, step = _filters(values, samples, detected, cfg["filters"], feature_ids)
     steps.append(step)
     cols = np.nonzero(keep_cols)[0]
@@ -616,12 +819,18 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix | NeedsInput:
     # ブランクは足切りにだけ使い、行列には入れない
     rows = [k for k, s in enumerate(samples) if s.role != "blank"]
     samples = [samples[k] for k in rows]
+    drifted = values[rows]
     values = values[np.ix_(rows, cols)]
     detected = None if detected is None else detected[np.ix_(rows, cols)]
 
-    values, step = _normalize_step(values, samples, cfg["normalize"], study.quant)
+    factor_values, factor_record = _factor_columns(cfg["normalize"], feature_ids, all_ids, drifted)
+    values, step = _normalize_step(values, samples, cfg["normalize"], study.quant,
+                                   factor_values=factor_values, factor_record=factor_record)
     steps.append(step)
     normalize_method = step["method"]
+    pqn_note = _pqn_reference_warning(step)
+    if pqn_note is not None:
+        notes.append(pqn_note)
 
     log2, missing = _log2(values)
     bio = [k for k, s in enumerate(samples) if s.role == "sample"]
@@ -638,14 +847,17 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix | NeedsInput:
         frozenset(cfg["injection_columns"]))
     steps.append(step)
 
-    notes = []
     if split_warning is not None:
         notes.append(split_warning)
     if not any(s.subject_id is not None for s in bio_samples):
         notes += replicate_name_warnings([s.sample_id for s in bio_samples])
+    batch_note = _batch_candidate_warning(study, samples)
+    if batch_note is not None:
+        notes.append(batch_note)
     kept = set(feature_ids)
     return PreparedMatrix(
-        matrix_id=_matrix_id(study, cfg, normalize_method), log2=unit_log2, units=units, feature_ids=feature_ids,
+        matrix_id=_matrix_id(study, cfg, normalize_method, extras), log2=unit_log2, units=units,
+        feature_ids=feature_ids,
         detected_units=det_units, qc_log2=log2[qc] if qc else np.empty((0, len(cols))),
         qc_ids=[samples[k].sample_id for k in qc], steps=steps, config=cfg, quant=study.quant,
         dataset_hash=study.dataset_hash, subject_source=source, warnings=notes,

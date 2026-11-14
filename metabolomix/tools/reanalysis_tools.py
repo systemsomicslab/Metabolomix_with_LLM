@@ -111,8 +111,8 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     v2: `lipidmix://docs/output-format/reanalysis` と statistics-engine の spec。spec だけで同じ数字を
     出し直せる自己完結の実行で、除外は `input.exclude_samples` / `exclude_features` と
     `group_overrides` に書いたものだけを使う（`dataset_exclude` の除外は読まない。spec に無い除外が
-    あれば注意 `dataset_exclusions_not_in_spec` を返す）。前処理が利用者への確認を要するときは
-    `needs_input` の封筒（`field` の spec の欄に答えて呼び直す）。状態も記録も書かない。
+    あれば注意 `dataset_exclusions_not_in_spec` を返す）。前処理は確認を求めない（`drift.mode="auto"` が
+    補正を当てなかったときは前処理の段と warnings の `drift_not_applied_by_default` に理由と呼び直し方）。状態も記録も書かない。
     戻り値は解析ごとの要約（行は同じ規則: `output_path` に全量の JSON、無ければ 50 行以下だけ TSV）。
 
     v1（analysis-spec.v1）:

@@ -217,7 +217,7 @@ hash も入れる——同じ spec でも割れの組が変われば別の規則
 | 欄 | 既定 | 意味 |
 |---|---|---|
 | `input` | `{"source": "dataset"}` | `source` はデータセットだけ。`exclude_samples` / `exclude_features`（空でない文字列のリスト。重複は順序を保って落とす）と `group_overrides`（試料 → 群）は**この spec に書いたものだけ**が効く（下の「自己完結」） |
-| `preprocess` | 上の値 | 前処理の設定（`dataset_preprocess` の引数と同じ。`drift.mode` は `auto` / `on` / `off`、足切りは `null` でその足切りを行わない、`normalize.method` は `auto` / `none` / `tic` / `median` / `pqn`）。`injection_columns` は個体のまとめの鍵から外す試料の表の列（取得日・注入番号など注入ごとに違う属性）。不正なら `ANALYSIS_SPEC_INVALID`（`details.field` が `preprocess.` から始まる） |
+| `preprocess` | 上の値 | 前処理の設定（`dataset_preprocess` の引数と同じ。`drift.mode` は `auto` / `on` / `off`、足切りは `null` でその足切りを行わない、`normalize.method` は `auto` / `none` / `tic` / `median` / `pqn`。任意の欄 `drift.loess_degree`（`1` 既定 / `2`）と `normalize.features` / `normalize.exclude_features`（正規化の係数を求める特徴 ID。既定の値のときは spec に現れない）は `dataset_preprocess` の `loess_degree` / `normalization_features` / `normalization_exclude_features` と同じ）。`injection_columns` は個体のまとめの鍵から外す試料の表の列（取得日・注入番号など注入ごとに違う属性）。不正なら `ANALYSIS_SPEC_INVALID`（`details.field` が `preprocess.` から始まる） |
 | `design` | `{"factors": ["group"], "covariates": [], "block": null}` | `factors`（重複のない文字列。`group`・`batch` か、試料の表の列名。sample-manifest v2 の後ろに足した因子の列も使える。交互作用の対比は 2 因子のモデルだけ）・`covariates`（`{name, type: numeric \| categorical, reference?}`）・`block`（`"subject_id"` など） |
 | `comparisons` | 必須 | 対比のリスト。`{id, factor, reference, test, at?}`（`at` は他の因子の水準で層別）か、交互作用 `{id, kind: "interaction", factors: [2 因子], levels: {因子: [基準, 比較]}}`。`id` は英数字と `_ . -` で重複不可 |
 | `analyses[].kind` | 必須 | `compare` / `composition` / `pca`。`analysis_id` は重複不可 |
@@ -232,10 +232,10 @@ spec の `input` に無い除外がデータセットにあれば、結果の `w
 `assay_kind`（`record_objective(assay_kind=...)`。spec には載らない）で決まる（`class_label_kind`: `lipid_class` /
 `msdial_ontology`）。同じ spec でも `assay_kind` が違えばクラスの切り方が違うので、組成を再現するときは種別も揃える。
 
-**`needs_input`。** 前処理が利用者への確認を要するとき（内部標準で換算済みの値に QC があり `drift.mode=auto`）は、
-結果の代わりに `{"needs_input": {"field": "preprocess.drift.mode", "reason", "options", "retry_tools": ["dataset_analysis_run"]}}`
-を返す（`core.md` の「利用者に尋ねる封筒」）。この経路は `argument` を持たない——答えは spec の `field` の欄に入れて
-`dataset_analysis_run` を呼び直す。
+**前処理は尋ねない。** `drift.mode="auto"` は、補正できても内部標準で換算済みの値か、注入順が MS-DIAL の既定
+（ファイルの順）かもしれないときは補正を当てずに回す。前処理の `steps` のドリフトの段に `reason`・`reasons`・
+`rerun_with: {"preprocess.drift.mode": "on"}` が、`warnings` に `drift_not_applied_by_default` が載る。補正するなら
+spec の `preprocess.drift.mode` を `"on"` にして呼び直す（`rule_hash` が変わる）。
 
 **戻り値は要約だけ。** `{status, schema: "analysis-result.v2", rule_hash, matrix_id, input_fingerprint: {dataset_hash,
 sample_table_hash}, primary, warnings, analyses}`。`analyses[]` は解析ごとの要約で、compare は `n_rows`・`n_tested`・

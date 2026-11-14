@@ -241,15 +241,12 @@ def test_compare_without_dataset_is_missing_state():
 
 # --- needs_input ------------------------------------------------------------------------
 
-def test_compare_needs_input_then_retry(ds):
+def test_compare_on_normalized_data_with_qc_does_not_ask(ds):
+    """C3: 換算済み・QC ありでも、既定の前処理は尋ねずに行列を作って比較する。"""
     ds.quant_state = {"normalized": True, "method": "is_ratio", "unit": "ratio", "record_id": "q1"}
     out = _cmp(reference_group="C", test_group="T")
-    body = out["needs_input"]
-    assert "error" not in out
-    assert body["field"] == "preprocess.drift.mode" and body["argument"] == "drift_mode"
-    assert "dataset_preprocess" in body["reason"] and "matrix_id" in body["reason"]
-    assert body["retry_tools"] == ["dataset_preprocess"]
-    assert not ds.stat_matrices
+    assert "needs_input" not in out and out["status"] == "success"
+    assert out["matrix_id"] in ds.stat_matrices
     mx = _pre(drift_mode="off")["matrix_id"]
     ok = _cmp(reference_group="C", test_group="T", matrix_id=mx)
     assert ok["status"] == "success" and ok["matrix_id"] == mx

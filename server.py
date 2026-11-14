@@ -62,6 +62,7 @@ from metabolomix.tools.stats_tools import *  # dataset_preprocess, dataset_compa
 from metabolomix.tools.overview_tools import *  # dataset_overview（最初の概観）
 from metabolomix.tools.plot_tools import *  # dataset_plot（dataset 系と reports の後。save_figure が遅延 import する）
 from metabolomix.tools.pipeline_tools import *  # pipeline_plan, pipeline_run, pipeline_status, pipeline_resume, pipeline_cancel
+from metabolomix.tools.sample_sheet_tools import *  # pipeline_sample_sheet（ISA / mwTab から実験情報シートを書く）
 from metabolomix.tools.maintenance import *  # server_update
 from metabolomix.tools.curation_tools import *  # curation_review, curation_suggest, curation_submit, curation_flags, curation_view_data
 from metabolomix.pathway.tools import *  # pathway_project, pathway_plot（MSLipidMapper 連携）

@@ -21,8 +21,7 @@ from metabolomix.analysis.stats.data import from_dataset
 from metabolomix.core import mcp_core
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
-from metabolomix.core.mcp_errors import (DRIFT_ARGUMENT, DRIFT_RETRY_TOOLS, default_matrix_needs_input, missing_state, mztab_error,
-                                         needs_input)
+from metabolomix.core.mcp_errors import default_matrix_needs_input, missing_state, mztab_error
 from metabolomix.core.serialization import json_payload, json_safe, round_floats, truncate_lists
 from metabolomix.tools._holder import resolve_holder
 from metabolomix.tools._matrix_store import register_default, store_matrix
@@ -36,14 +35,25 @@ _STEP_LIST_LIMIT = 20
 
 def _config(*, drift_mode="auto", drift_span=0.75, blank_min_ratio=3.0, detection_min_rate=0.5,
             detection_by="group", max_qc_rsd=0.30, max_d_ratio=0.5, normalize="auto",
-            collapse_replicates=True, injection_columns=None) -> dict:
+            collapse_replicates=True, injection_columns=None, loess_degree=1,
+            normalization_features=None, normalization_exclude_features=None) -> dict:
     """平らな引数を前処理の設定（`PREPROCESS_DEFAULTS` の形）へ写す。
 
     足切りの引数が None ならその足切りを行わない（`filters.<name> = None`）。検証はここでは
-    しない（`normalize_preprocess_config` が `PREPROCESS_CONFIG_INVALID` で止める）。
+    しない（`normalize_preprocess_config` が `PREPROCESS_CONFIG_INVALID` で止める）。任意のキー
+    （`drift.loess_degree`・`normalize.features` / `exclude_features`）は既定値なら載せない（既定の
+    行列の `matrix_id` を、このキーを足す前と同じに保つ）。
     """
+    drift = {"mode": drift_mode, "span": drift_span}
+    if loess_degree != 1:
+        drift["loess_degree"] = loess_degree
+    normalize_cfg = {"method": normalize}
+    if normalization_features is not None:
+        normalize_cfg["features"] = normalization_features
+    if normalization_exclude_features is not None:
+        normalize_cfg["exclude_features"] = normalization_exclude_features
     return {
-        "drift": {"mode": drift_mode, "span": drift_span},
+        "drift": drift,
         "filters": {
             "blank_ratio": None if blank_min_ratio is None else {"min": blank_min_ratio},
             "detection": (None if detection_min_rate is None
@@ -51,7 +61,7 @@ def _config(*, drift_mode="auto", drift_span=0.75, blank_min_ratio=3.0, detectio
             "qc_rsd": None if max_qc_rsd is None else {"max": max_qc_rsd},
             "d_ratio": None if max_d_ratio is None else {"max": max_d_ratio},
         },
-        "normalize": {"method": normalize},
+        "normalize": normalize_cfg,
         "collapse_replicates": collapse_replicates,
         "injection_columns": [] if injection_columns is None else injection_columns,
     }
@@ -102,6 +112,9 @@ def dataset_preprocess(
     group_levels: list[str] | None = None,
     group_factors: list[list[str]] | None = None,
     dataset_handle: str | None = None,
+    loess_degree: int = 1,
+    normalization_features: list[str] | None = None,
+    normalization_exclude_features: list[str] | None = None,
 ) -> str:
     """統計エンジンの前処理を回して、前処理済みの行列を作る（行列 ID を返す）。
 
@@ -111,14 +124,23 @@ def dataset_preprocess(
     `reports/stats/` に記録を 1 件追記する（書けないときは record.written=false。前処理は成功）。
 
     drift_mode: QC の LOESS ドリフト補正。"auto"（既定。条件が揃えば行う）/ "on" / "off"。
-        内部標準などで換算済みの値に QC がある場合は auto だと尋ねる（needs_input の封筒。
-        答えを drift_mode に入れて呼び直す）。drift_span: LOESS の窓（0〜1、既定 0.75）。
+        auto は条件が揃っても、内部標準などで換算済みのとき・注入順が MS-DIAL の既定（ファイルの順）
+        かもしれないときは補正せずに計算し、warnings の `drift_not_applied_by_default` に理由と
+        `drift_mode="on"` での呼び直しを返す（尋ねない。補正できない理由があればそれだけを返す）。
+        "on" は条件が揃えば必ず補正し、揃わなければ PREPROCESS_PRECONDITION。
+        drift_span: LOESS の窓（0〜1、既定 0.75）。loess_degree: LOESS の局所多項式の次数 1（既定。
+        局所線形）/ 2（局所 2 次。要る QC が 1 つ多い）。
     blank_min_ratio: 生体試料の平均がブランク平均のこの倍数未満の特徴を除く（既定 3.0）。
     detection_min_rate: 検出率（gap-fill を除く）の下限（既定 0.5）。detection_by: "group"（群ごと）/
         "all"（全体）。検出の別が無いデータでは評価できない旨を steps に出す。
     max_qc_rsd: QC の RSD がこれを超える特徴を除く（既定 0.30）。max_d_ratio: D-ratio の上限（既定 0.5）。
     上の 4 つの足切りは None でその足切りを行わない。
     normalize: "auto"（既定。換算済みなら何もしない）/ "none" / "tic" / "median" / "pqn"。
+        PQN の参照は QC があれば QC の、無ければ生体試料（全群）の特徴ごとの中央値（QC が無いときは
+        steps の `reference_definition` と warnings の `pqn_reference_is_samples` で明示する）。
+    normalization_features: 正規化の係数をこの特徴 ID だけから計算する（足切りで落ちた特徴も使える。
+        内部標準など）。normalization_exclude_features: 係数の計算から外す特徴 ID。どちらも係数の計算だけで、
+        外した特徴も行列には残り、係数で割られる。
     collapse_replicates: 同じ個体（subject_id）の反復注入を 1 個体にまとめる（既定 True）。
     injection_columns: 個体のまとめの鍵から外す試料の表の列（取得日・注入番号など注入ごとに違う属性）。
     group_levels / group_factors: 試料名（と試料の表の群）の因子トークンで群を解く（group_factors は因子軸の
@@ -137,17 +159,15 @@ def dataset_preprocess(
             drift_mode=drift_mode, drift_span=drift_span, blank_min_ratio=blank_min_ratio,
             detection_min_rate=detection_min_rate, detection_by=detection_by,
             max_qc_rsd=max_qc_rsd, max_d_ratio=max_d_ratio, normalize=normalize,
-            collapse_replicates=collapse_replicates, injection_columns=injection_columns))
+            collapse_replicates=collapse_replicates, injection_columns=injection_columns,
+            loess_degree=loess_degree, normalization_features=normalization_features,
+            normalization_exclude_features=normalization_exclude_features))
         inputs = stats_results.study_inputs(ds, group_levels=group_levels,
                                             group_factors=group_factors)
         study = from_dataset(ds, **inputs)
         prepared = stats_preprocess.preprocess(study, config)
     except DomainError as exc:
         return _domain_envelope(exc)
-
-    if isinstance(prepared, stats_preprocess.NeedsInput):
-        return needs_input(prepared.field, prepared.reason, prepared.options,
-                           argument=DRIFT_ARGUMENT, retry_tools=DRIFT_RETRY_TOOLS)
 
     try:
         _entry, summary, record = store_matrix(holder, ds, study, prepared, config, inputs)
@@ -371,8 +391,9 @@ def dataset_compare(
         計画行列が階数不足になり DESIGN_RANK_DEFICIENT で止まる（入れ子の技術反復は block ではなく既定の
         まとめで扱う）。
     matrix_id: dataset_preprocess が返した行列 ID（その前処理・群・除外のまま比較する）。省略時は既定の
-        前処理で行列を作って登録する（QC のある換算済みデータでは drift_mode を尋ねる needs_input。
-        dataset_preprocess で行列を作ってその ID を渡す）。古い・無い ID は missing_state。
+        前処理で行列を作って登録する（drift=auto は換算済み・注入順がファイルの順かもしれないときドリフト補正を
+        当てず、警告 drift_not_applied_by_default を返す。補正するなら dataset_preprocess(drift_mode="on") の
+        ID を渡す）。古い・無い ID は missing_state。
         ID と group_levels / group_factors の併用は不可（群は行列が決めている）。
     method: "moderated_t"（既定）など（エンジンの検定）。effect_size: "log2_mean_difference"（既定）/
         "arithmetic_mean_ratio"。bh_population: "matrix"（既定）/ "annotated"（"reported" は報告した特徴の
@@ -523,8 +544,8 @@ def dataset_pca(
     `reports/stats/` に記録を 1 件追記する（書けないときは record.written=false。PCA は成功）。
 
     matrix_id: dataset_preprocess が返した行列 ID。省略時は既定の前処理で行列を作って登録する
-        （QC のある換算済みデータでは drift_mode を尋ねる needs_input。dataset_preprocess で行列を
-        作ってその ID を渡す）。古い・無い ID は missing_state。
+        （drift=auto が補正を当てなかったときは警告 drift_not_applied_by_default。補正するなら
+        dataset_preprocess(drift_mode="on") の ID を渡す）。古い・無い ID は missing_state。
     scaling: "autoscale"（既定。平均 0・SD 1）/ "pareto"（SD の平方根で割る）。
     n_components: 主成分数（既定 5。個体数・特徴数の小さい方が上限）。
     impute: 欠測の補い方 "half_min"（既定）/ "knn" / "none"（欠測があれば PCA_MISSING_VALUES）。
@@ -587,9 +608,12 @@ def dataset_pca(
          "group_labels": label_overrides}, summary)
     if preprocess_record is not None:
         written = {**written, "preprocess_record": preprocess_record}
+    # drift=auto が補正を当てなかった行列なら、その理由と呼び直し方を添える（数字は補正なしで出ている）
+    held = [w for w in prepared.warnings if w.get("code") == "drift_not_applied_by_default"]
     return json_payload(json_safe({
         "status": "success",
         **summary,
+        **({"warnings": held} if held else {}),
         "record": written,
         "loadings_note": ("スコアとローディングの全量（特徴数 × 主成分数）は本要約に非同梱。result_id で"
                           "セッションに保持しており、図は dataset_plot(kind=\"pca\" / \"loadings\") で出す。"

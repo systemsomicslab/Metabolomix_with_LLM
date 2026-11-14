@@ -93,6 +93,8 @@ def injection_trend(ds, rows: list[dict]) -> dict:
     試料ごとの m/z が無ければ `{"status": "unavailable"}`。rho は、注入順の出所が
     `filename`（採取時刻が読めない）か、データのある試料が `MIN_INJECTIONS_FOR_RHO` 未満なら
     None で、理由を `rho_unavailable_reason`（`filename_order` / `too_few_samples`）に書く。
+    注入順が MS-DIAL の振った値（.mddata / mzTab-M）でファイル名の順と一致するなら、rho は出すが
+    `warnings` に `injection_order_may_be_file_order` を添える（MS-DIAL の既定はファイルの順）。
     """
     per_sample = getattr(ds, "per_sample_mz", None)
     if per_sample is None:
@@ -125,9 +127,16 @@ def injection_trend(ds, rows: list[dict]) -> dict:
         value = float(spearmanr([p["injection_order"] for p in per_injection],
                                 [p["median_ppm"] for p in per_injection]).statistic)
         rho = value if math.isfinite(value) else None      # 片方が定数なら相関は定義できない
+    warnings = []
+    if source != "filename":
+        from metabolomix.analysis.sample_manifest import injection_order_file_order_warning
+        flag = injection_order_file_order_warning(ds)
+        if flag is not None:
+            warnings.append(flag)
     return {"per_injection": per_injection, "spearman_rho": rho,
             **({"rho_unavailable_reason": reason} if reason else {}),
-            "n_samples": len(per_injection), "injection_order_source": source}
+            "n_samples": len(per_injection), "injection_order_source": source,
+            **({"warnings": warnings} if warnings else {})}
 
 
 def band_summary(rows: list[dict], band_edges: list[float]) -> dict:

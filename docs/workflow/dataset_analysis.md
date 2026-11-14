@@ -6,30 +6,45 @@
 ## dataset_preprocess
 
 統計エンジンの前処理（spec 2026-11-06 §4）。行列 ID を返し、`ds.stat_matrices[matrix_id]` に置く。除外（`ds.excluded_*`）と群の上書き（`group_levels` / `group_factors`）は
-手順 3 が入力へ写す。`needs_input`（内部標準で換算済み＋QC のドリフト補正）は手順 5 の戻りから封筒にする。
-手順 9 の記録は `reports/stats/` への追記で、書き先が決まらない・書けないときも前処理は成功する。
+手順 3 が入力へ写す。手順 5 は問いを返さない: `drift_mode="auto"` は、補正できても内部標準で換算済み・注入順が
+ファイルの順かもしれないときは当てずに計算し（`_auto_hold`）、ドリフトの段に理由と `rerun_with`（`drift_mode="on"`）を、
+警告に `drift_not_applied_by_default` を載せる。正規化の係数は `normalization_features` の部分集合からも求められる
+（`_factor_columns`。除いた特徴も行列に残す）。手順 20 の記録は `reports/stats/` への追記で、書き先が決まらない・
+書けないときも前処理は成功する。
 
 1. metabolomix/tools/stats_tools.py  dataset_preprocess()
 2. └─ metabolomix/analysis/stats/preprocess.py  normalize_preprocess_config()
 3. └─ metabolomix/analysis/stats_results.py  study_inputs()
 4. └─ metabolomix/analysis/stats/data.py  from_dataset()
 5. └─ metabolomix/analysis/stats/preprocess.py  preprocess()
-6. └─ metabolomix/tools/_matrix_store.py  store_matrix()
-7.    └─ metabolomix/analysis/stats_results.py  register_matrix()
-8.    └─ metabolomix/tools/_matrix_store.py  preprocess_summary()
-9.    └─ metabolomix/analysis/stats_records.py  write_stats_record()
+6.    └─ metabolomix/analysis/stats/preprocess.py  _select()
+7.    └─ metabolomix/analysis/stats/preprocess.py  _drift_step()
+8.       └─ metabolomix/analysis/stats/preprocess.py  _drift_eligibility()
+9.       └─ metabolomix/analysis/stats/preprocess.py  _auto_hold()
+10.       └─ metabolomix/analysis/stats/preprocess.py  _drift()
+11.          └─ metabolomix/analysis/stats/preprocess.py  _loess()
+12.             └─ metabolomix/analysis/stats/preprocess.py  _local_poly()
+13.    └─ metabolomix/analysis/stats/preprocess.py  _filters()
+14.    └─ metabolomix/analysis/stats/preprocess.py  _factor_columns()
+15.    └─ metabolomix/analysis/stats/preprocess.py  _normalize_step()
+16.    └─ metabolomix/analysis/stats/preprocess.py  _collapse()
+17. └─ metabolomix/tools/_matrix_store.py  store_matrix()
+18.    └─ metabolomix/analysis/stats_results.py  register_matrix()
+19.    └─ metabolomix/tools/_matrix_store.py  preprocess_summary()
+20.    └─ metabolomix/analysis/stats_records.py  write_stats_record()
 
 行列の登録・要約・前処理の記録は `tools/_matrix_store.py`（ツールではない共有部品。`dataset_compare` / `dataset_pca` /
 `pathway_project` の既定の前処理も同じ `register_default` → `store_matrix` を通る）。`injection_columns` は手順 2 が設定に写し、
-個体のまとめ（手順 5 の `preprocess()` の中の `collapse`）の鍵から外す。
+個体のまとめ（手順 16 の `_collapse`）の鍵から外す。LOESS は `loess_degree=1`（既定）なら statsmodels の lowess、
+`2` なら同じ近傍と三乗重みの局所 2 次を numpy で解く（`_local_poly`。近傍の最小数は次数 + 3）。
 
 ## dataset_compare
 
 統計エンジンの比較（spec 2026-11-06 §5〜§9・§12）。群の指定（手順 2）を spec v2 の対比へ写す。入力側は手順 3 の
 `matrix_inputs` が決める: `matrix_id` を渡せば登録済みの行列（手順 4）の設定・群・除外のまま、省略すれば今の除外と
 群の引数から（手順 5）既定の設定で作る。spec は引数から組み立てて（手順 8）正規化する（手順 9）ので、結果の `spec` を
-`dataset_analysis_run` に渡せば同じ数字を出し直せる。`matrix_id` が無いときは既定の前処理を回し（手順 10・11。`needs_input`
-＝換算済み＋QC はここの戻りから封筒にする）、行列を登録して前処理の記録も 1 件書く（手順 12）。`run_spec_v2` が登録済みの
+`dataset_analysis_run` に渡せば同じ数字を出し直せる。`matrix_id` が無いときは既定の前処理を回し（手順 10・11。drift=auto が補正を当てなかったときは
+警告 `drift_not_applied_by_default` が結果に載る）、行列を登録して前処理の記録も 1 件書く（手順 12）。`run_spec_v2` が登録済みの
 行列を再利用して比較し（手順 13）、結果は `ds.results[result_id]` と `ds.last_differential` に置く（手順 14）。
 手順 15・16 の記録は親を行列の前処理の記録にして `reports/stats/` へ追記する（書けなくても比較は成功）。
 
@@ -56,7 +71,7 @@
 行列は群の引数と無関係に決める: `matrix_id` を渡せば登録済みの行列（手順 2）、省略すれば既定の前処理で
 行列を作って登録する（手順 3。前処理の記録も 1 件書く）。`group_levels` / `group_factors` は手順 5 が個体ごとの
 色分けの群に解くだけで、PCA の数字（手順 4）には効かない。結果は `ds.results[result_id]` と `ds.last_pca`
-（`kind="stat_pca"`）に置く（手順 6）。`needs_input`（換算済み＋QC）は手順 3 の戻りから封筒にする。
+（`kind="stat_pca"`）に置く（手順 6）。drift=auto が補正を当てなかったときは警告 `drift_not_applied_by_default` が載る。
 手順 7 の記録は親を行列の前処理の記録にして `reports/stats/` へ追記する（書けなくても PCA は成功）。
 図（`dataset_plot` の `pca` / `loadings`）は `tool_helpers.stat_pca_rows`（スコア）と
 `plots/pca_loadings.dataset_features`（`kept_features` のローディング）が `stat_pca` の記録を読む。

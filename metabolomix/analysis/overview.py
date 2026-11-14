@@ -183,7 +183,7 @@ def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict]
     if failed.get("failed"):
         nxt.append(f"dataset_exclude(samples={_j(failed['failed'][:5])})")
     if drift_note:
-        nxt.append('dataset_preprocess(drift_mode="on" か "off")')
+        nxt.append('dataset_preprocess(drift_mode="on")')
     if replicate_warnings:
         nxt.append("dataset_set_sample_metadata（subject_id を入れて反復をまとめる）")
     return {"verdict": verdict, "facts": f.items, "next": " / ".join(nxt) or "なし"}

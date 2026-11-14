@@ -34,7 +34,7 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
     ),
     "pipeline.md": (
         "pipeline_plan", "pipeline_run", "pipeline_status",
-        "pipeline_resume", "pipeline_cancel",
+        "pipeline_resume", "pipeline_cancel", "pipeline_sample_sheet",
         "console_method_candidates", "console_method_template",
     ),
     "library.md": ("library_load", "library_match_feature", "library_plot_mirror",
@@ -178,4 +178,4 @@ class TestScopeBoundary(unittest.TestCase):
             registered,
             "対象範囲の分類と登録済みツールが一致しない",
         )
-        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 51)
+        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 52)

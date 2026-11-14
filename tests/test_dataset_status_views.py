@@ -74,13 +74,14 @@ def test_samples_view_lists_columns_and_excluded_reason():
     status = _status(view="samples")
 
     lines = status["samples"].splitlines()
-    assert lines[0] == "name\tgroup\trole\tbatch\tinjection_order\tsubject_id\texcluded"
+    assert lines[0] == ("name\tgroup\trole\tbatch\tbatch_source\tinjection_order"
+                        "\tinjection_order_source\tsubject_id\texcluded")
     by_name = {line.split("\t")[0]: line.split("\t") for line in lines[1:]}
     assert len(by_name) == 4
     assert by_name[SAMPLES[0]][1] == "control"
     assert by_name[SAMPLES[3]][2] == "qc"
-    assert by_name[SAMPLES[1]][6] == "injection failed"
-    assert by_name[SAMPLES[0]][6] == ""
+    assert by_name[SAMPLES[1]][8] == "injection failed"
+    assert by_name[SAMPLES[0]][8] == ""
     assert status["n_matched"] == 4
 
 
@@ -166,13 +167,13 @@ def test_samples_view_appends_factor_columns_in_name_order():
     status = _status(view="samples")
 
     lines = status["samples"].splitlines()
-    assert lines[0] == ("name\tgroup\trole\tbatch\tinjection_order\tsubject_id\texcluded"
-                        "\tGenotype\tTreatment")
+    assert lines[0] == ("name\tgroup\trole\tbatch\tbatch_source\tinjection_order"
+                        "\tinjection_order_source\tsubject_id\texcluded\tGenotype\tTreatment")
     by_name = {line.split("\t")[0]: line.split("\t") for line in lines[1:]}
-    assert by_name[SAMPLES[0]][7:] == ["WT", "ctrl"]
-    assert by_name[SAMPLES[2]][7:] == ["KO", "ctrl"]
-    assert by_name[SAMPLES[3]][7:] == ["", "ILG"]
-    assert all(len(cells) == 9 for cells in by_name.values())
+    assert by_name[SAMPLES[0]][9:] == ["WT", "ctrl"]
+    assert by_name[SAMPLES[2]][9:] == ["KO", "ctrl"]
+    assert by_name[SAMPLES[3]][9:] == ["", "ILG"]
+    assert all(len(cells) == 11 for cells in by_name.values())
 
 
 def test_samples_view_without_factor_columns_is_unchanged():
@@ -182,5 +183,6 @@ def test_samples_view_without_factor_columns_is_unchanged():
     session_state.session.dataset = ds
 
     lines = _status(view="samples")["samples"].splitlines()
-    assert lines[0] == "name\tgroup\trole\tbatch\tinjection_order\tsubject_id\texcluded"
-    assert all(len(line.split("\t")) == 7 for line in lines)
+    assert lines[0] == ("name\tgroup\trole\tbatch\tbatch_source\tinjection_order"
+                        "\tinjection_order_source\tsubject_id\texcluded")
+    assert all(len(line.split("\t")) == 9 for line in lines)

@@ -156,21 +156,20 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 利用者へ尋ねる問いで、**クライアントは答えを推測して呼び直してはならない**（利用者に `options` を見せて選んでもらう）。
 
 ```json
-{"needs_input": {"field":       "preprocess.drift.mode",
-                 "reason":      "内部標準で換算済みの値に QC があります。QC のドリフト補正を重ねるか…",
-                 "options":     [{"value": "on", "label": "…"}, {"value": "off", "label": "…"}],
-                 "argument":    "drift_mode",
-                 "retry_tools": ["dataset_preprocess"]}}
+{"needs_input": {"field":       "polarity",
+                 "reason":      "この run には極性の単位が 2 つある。どちらを読むか…",
+                 "options":     [{"value": "positive", "label": "…"}, {"value": "negative", "label": "…"}],
+                 "argument":    "polarity",
+                 "retry_tools": ["load_dataset"]}}
 ```
 
 - `field` は答えが入る設定の欄（spec の路）。`reason` は尋ねる理由、`options` は `{value, label}` の選択肢。
-- `argument` は答え（選ばれた `value`）を入れて呼び直すツールの**引数名**。無いこともある（下の spec の経路）。
-- `retry_tools` は「`argument` を受けて呼び直せるツール」の候補（OR）。`dataset_preprocess`・`dataset_compare`・
-  `dataset_pca`・`pathway_project` が既定の前処理を自分で回して尋ねたときは、`drift_mode` 引数を持つのが
-  `dataset_preprocess` だけなので、いつも `["dataset_preprocess"]`（`reason` に、そのツールの `drift_mode` で行列を作り、
-  返った `matrix_id` を元のツールに渡して呼び直すと書く）。
-- `dataset_analysis_run` の spec v2 の経路は `argument` を持たず、`retry_tools` は `["dataset_analysis_run"]`、答えは
-  spec の `field`（`preprocess.drift.mode`）に入れて呼び直す（`reanalysis.md` §2.1）。
+- `argument` は答え（選ばれた `value`）を入れて呼び直すツールの**引数名**。
+- `retry_tools` は「`argument` を受けて呼び直せるツール」の候補（OR）。
+- 統計エンジンの前処理（`dataset_preprocess`・`dataset_compare`・`dataset_pca`・`pathway_project`・`dataset_analysis_run`
+  の spec v2）は**尋ねない**: ドリフト補正の既定（`drift_mode=auto`）は、補正できても内部標準で換算済み・注入順が
+  ファイルの順かもしれないときは当てずに計算し、`warnings` の `drift_not_applied_by_default`（理由と
+  `suggestion: {"preprocess.drift.mode": "on"}`）で呼び直し方を示す（`dataset.md` §10.2）。
 - 定量の `dataset_quant_preview` / `dataset_quant_apply` / `dataset_merge_polarities` / `dataset_select_features` も、
   別の問いで `status="needs_input"` の応答を返す（`quant.md`）。こちらは上の封筒ではなく、各ツールの戻り値の形。
 

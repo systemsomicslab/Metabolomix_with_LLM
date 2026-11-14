@@ -159,13 +159,25 @@ def test_same_spec_same_dataset_same_result():
     assert a == b
 
 
-def test_needs_input_passthrough_for_is_normalized_dataset_with_qc():
+def test_is_normalized_dataset_with_qc_runs_without_drift_and_offers_on():
+    """C3: 換算済み・QC が挟まった注入順でも drift=auto は尋ねず（needs_input を返さない）、補正なしで回して
+    当てなかった理由と drift_mode="on" での呼び直しを前処理の段と warnings に残す。"""
     ds = _ds()
+    qc_slots = {1, 3, 6, 9, 12, 15, 18, 20}           # 各バッチ 20 注入のうち QC の位置
+    for b in range(2):
+        rows = ds.sample_metadata_rows[20 * b:20 * (b + 1)]
+        qc = iter(sorted(qc_slots))
+        others = iter(o for o in range(1, 21) if o not in qc_slots)
+        for row in rows:
+            row["injection_order"] = 20 * b + (next(qc) if row["role"] == "qc" else next(others))
     ds.quant_state = {"normalized": True, "method": "is", "unit": "pmol"}
-    n = normalize_spec_v2(_spec())   # drift mode auto
+    n = normalize_spec_v2(_spec(preprocess={"filters": {"blank_ratio": None, "d_ratio": None, "qc_rsd": None}}))
+    assert n["preprocess"]["drift"]["mode"] == "auto"
     r = run_spec_v2(n, ds)
-    assert r["status"] == "needs_input"
-    assert r["rule_hash"] == rule_hash_v2(n) and r["spec"] == n
+    assert "status" not in r and r["rule_hash"] == rule_hash_v2(n) and r["spec"] == n
+    drift = next(st for st in r["preprocess"]["steps"] if st["step"] == "drift")
+    assert drift["status"] == "skipped" and drift["reason"] == "quant_normalized"
+    assert drift["rerun_with"] == {"preprocess.drift.mode": "on"}
 
 
 def test_rule_hash_ignores_key_order_but_tracks_values():

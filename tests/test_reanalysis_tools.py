@@ -1019,16 +1019,15 @@ def test_analysis_run_v2_inline_row_limit(tmp_path):
     assert ok["analyses"][0]["n_rows"] == 60
 
 
-def test_analysis_run_v2_needs_input_envelope_names_spec_field(tmp_path):
+def test_analysis_run_v2_normalized_with_qc_does_not_ask(tmp_path):
+    """drift=auto は換算済み・QC ありでも尋ねない（needs_input を返さずに実行する。2026-11-14 の C3）。"""
     state = _v2_state(tmp_path)
     state.quant_state = {"normalized": True, "method": "is_ratio", "unit": "ratio",
                          "record_id": "q_test_1"}
     spec = _v2_spec(preprocess={"filters": _V2_OFF["filters"], "normalize": {"method": "none"}})
-    out = json.loads(R.dataset_analysis_run(spec))
-    body = out["needs_input"]
-    assert "error" not in out and body["field"] == "preprocess.drift.mode"
-    assert "argument" not in body and body["retry_tools"] == ["dataset_analysis_run"]
-    assert {o["value"] for o in body["options"]} == {"on", "off"}
+    out = json.loads(R.dataset_analysis_run(spec, output_path=str(tmp_path / "o.json")))
+    assert "needs_input" not in out and "error" not in out, out
+    assert out["analyses"]
 
 
 def test_analysis_run_v2_dataset_exclusions_not_in_spec_warn(tmp_path):

@@ -18,7 +18,6 @@ from metabolomix.analysis.stats import quality, spec_v2
 from metabolomix.analysis.stats.composition import composition
 from metabolomix.analysis.stats.confounding import confounding_report
 from metabolomix.analysis.stats.data import from_dataset
-from metabolomix.analysis.stats.preprocess import NeedsInput, normalize_preprocess_config
 from metabolomix.core import mcp_core, session_state
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
@@ -34,8 +33,19 @@ _Q, _EQ_FC, _LOG2FC = 0.05, 1.2, 1.0
 _MSDIAL_SOURCE = "msdial_folder"          # quant.table.MSDIAL_SOURCE と同じ（定量の鎖が使える入口）
 _NOTE = ("考察は事実 ID（例 {oid}#S1）を挙げて、事実と別の欄に書く。サーバは考察を書かない。"
          "判定は changed / unchanged / inconclusive だけ（有意でないことは変わっていないことではない）。")
-_DRIFT_NOTE = ("ドリフト補正の既定が未決（内部標準で換算済みかつ QC あり）のため、概観は補正なしで計算した"
-               "（決めるには dataset_preprocess(drift_mode=...)）")
+#: drift=auto が補正を止めた理由（前処理の drift の段の `reasons`）→ 概観の事実に書く短い言い方。
+_DRIFT_HELD = {"quant_normalized": "内部標準などで換算済み",
+               "injection_order_may_be_file_order": "注入順が MS-DIAL の既定（ファイルの順）かもしれない"}
+
+
+def _drift_note(prepared) -> str | None:
+    """既定の前処理が drift=auto で補正を止めたなら、その旨（理由と drift_mode="on" での呼び直し）。"""
+    step = next((s for s in prepared.steps if s.get("step") == "drift"), {})
+    if not step.get("rerun_with"):
+        return None
+    why = "・".join(_DRIFT_HELD.get(r, r) for r in step.get("reasons") or [])
+    return (f"ドリフト補正は既定（drift=auto）では当てなかった（{why}）。概観は補正なしで計算した"
+            "（補正するなら dataset_preprocess(drift_mode=\"on\")）")
 
 
 def _curation_judgments(holder, ds) -> int | None:
@@ -190,14 +200,10 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
     detection = quality.detection_summary(study)
     n_blank = sum(1 for s in study.samples if s.include and s.role == "blank")
 
-    # 1. 既定の前処理（ドリフト補正の既定が未決なら補正なしで計算する。§7）
-    drift_note = None
+    # 1. 既定の前処理（drift=auto が補正を止めたら、補正なしで計算したことを事実に書く。§7）
     try:
         prepared = stats_results.prepare_default(study, config)
-        if isinstance(prepared, NeedsInput):
-            config = normalize_preprocess_config({**config, "drift": {**config["drift"], "mode": "off"}})
-            prepared = stats_results.prepare_default(study, config)
-            drift_note = _DRIFT_NOTE
+        drift_note = _drift_note(prepared)
         entry, _record = register_default(holder, ds, study, prepared, config, inputs)
     except DomainError as exc:
         return _quality_only(holder, ds, study, exc, rsd=rsd, failed=failed, drift=drift,

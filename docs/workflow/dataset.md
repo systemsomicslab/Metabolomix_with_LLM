@@ -38,8 +38,21 @@ flowchart TD
 純関数側は見つからなければ**空リスト**を返す。文面（「存在しません」等）を持つのは
 ツール層だけで、以前のようにエラー文字列がパスの位置に紛れ込むことはない。
 
+`all_files=True` のときは、一覧の後に **raw の取得時刻**の節を足す（`metabolomix/rawmeta/`。
+スペクトルは解さず、ファイルの見出しのメタデータだけを読む: `.wiff` の OLE の時刻・mzML の
+`startTimeStamp`・Thermo `.raw` の見出し・Bruker `.d` の `analysis.tdf` / `analysis.sqlite`）。
+raw ごとの取得時刻と順（読めないものは順が空で、理由を出す）、40 分を超える間隔の数を返し、
+フォルダに `sample-manifest.tsv` があればその群（生体試料の行）と取得順の重なり
+（`complete` / `partial` / `independent` / `unknown`）を群の組ごとに返す。
+
 1. metabolomix/tools/dataset.py  list_data_files()
 2. └─ metabolomix/core/path_resolvers.py  list_data_files()
+3. └─ metabolomix/tools/dataset.py  _acquisition_lines()
+4.    └─ metabolomix/rawmeta/acquisition.py  acquisition_order()
+5.       └─ metabolomix/rawmeta/acquisition.py  read_acquisition_times()
+6.    └─ metabolomix/rawmeta/acquisition.py  gaps_over()
+7.    └─ metabolomix/tools/dataset.py  _sheet_groups()
+8.    └─ metabolomix/rawmeta/acquisition.py  group_overlap()
 
 ## load_dataset
 
