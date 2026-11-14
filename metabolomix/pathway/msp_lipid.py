@@ -12,7 +12,8 @@ MS-DIAL で複数のクラスに分かれる、組成式が無い・そのクラ
 名前に頭部の語（`cholin` / `ethanolamin` / `serin` / `inositol`）があればクラスと突き合わせる。
 
 名前で読む経路（設計書 4.2）は `from_name`: 古い MS-DIAL の書式・英語のクラス名を MS-DIAL 5 の略記に直し、
-GOSLIN で読めたものだけ、先頭の頭部から LbmClass を決める。
+GOSLIN で読めたものだけ、先頭の頭部から LbmClass を決める。`shorthand` は同じ直し（と注記・付加体の
+表記の切り落とし）だけを返す口で、MS/MS の合否が記録の脂質の種を引くのに使う（`analysis.msms_rules`）。
 """
 from __future__ import annotations
 
@@ -64,6 +65,8 @@ CLASS_FORMS: dict[str, ClassForm] = {
     "PA": ClassForm("PA", "PA ", "", 34, 1, "C37H71O8P"),
     "LPC": ClassForm("LPC", "LPC ", "", 16, 0, "C24H50NO7P", "cholin"),
     "LPE": ClassForm("LPE", "LPE ", "", 16, 0, "C21H44NO7P", "ethanolamin"),
+    "LPS": ClassForm("LPS", "LPS ", "", 16, 0, "C22H44NO9P", "serin"),
+    "LPG": ClassForm("LPG", "LPG ", "", 16, 0, "C22H45O9P"),
     "PE P-": ClassForm("EtherPE", "PE P-", "", 32, 1, "C37H72NO7P", "ethanolamin"),
     "PE O-": ClassForm("EtherPE", "PE O-", "", 32, 1, "C37H74NO7P", "ethanolamin"),
     "PC P-": ClassForm("EtherPC", "PC P-", "", 34, 1, "C42H82NO7P", "cholin"),
@@ -91,6 +94,8 @@ CLASSYFIRE_TO_CLASS: dict[str, str] = {
     "1-acyl-sn-glycero-3-phosphocholines": "LPC",
     "2-acyl-sn-glycero-3-phosphocholines": "LPC",
     "1-acyl-sn-glycero-3-phosphoethanolamines": "LPE",
+    "1-acyl-glycerol-3-phosphoserines": "LPS",
+    "Lysophosphatidylglycerols": "LPG",
     "1-(1Z-alkenyl),2-acylglycerophosphoethanolamines": "PE P-",
     "1-alkyl,2-acylglycerophosphoethanolamines": "PE O-",
     "1-(1Z-alkenyl),2-acyl-glycerophosphocholines": "PC P-",
@@ -194,7 +199,7 @@ _ENGLISH_NAME = re.compile(
     rf"^({'|'.join(_ENGLISH_HEADS)})(?:\s+(lyso|alkyl|alkenyl))?\s+(\d.*)$", re.IGNORECASE)
 _ENGLISH_MODIFIER = {"alkyl": "O-", "alkenyl": "P-"}
 
-# `;` の後ろが空白を含む注記（`LPC 16:0; PlaSMA ID-1486`）のときだけ切る。`;O2` の修飾は残す。
+# `;` の後ろが空白を含む注記（`LPC 16:0; ExampleDB ID-0000`）のときだけ切る。`;O2` の修飾は残す。
 _ANNOTATION = re.compile(r";(?=[^;]*\s)")
 # 酸化の修飾 `;O` / `;O2` …。Cer / HexCer / SM（長鎖塩基の ;O2 / ;O3）以外では経路 1 で読まない。
 _OXIDIZED = re.compile(r";O(?![a-z])")
@@ -237,6 +242,30 @@ def _to_msdial5(name: str) -> tuple[str, str | None]:
             return f"L{abbrev} {chains.replace('-', '_')}", None
         return f"{abbrev} {_ENGLISH_MODIFIER.get(modifier, '')}{chains.replace('-', '_')}", None
     return name, None
+
+
+# 名前の末尾の付加体の表記（`PC 34:1 [M+H]+` / `PC 34:1 (M+H)+` / `[M-H]-`）。`M` で始まる括弧だけを切る
+# （`(2OH)` `(d7)` のような括弧は残す）。
+_ADDUCT_SUFFIX = re.compile(r"\s*[\[(]\s*\d*M(?:[+-][A-Za-z0-9]+)*\s*[\])]\s*\d*[+-]*\s*$")
+
+
+def shorthand(name: str | None) -> str | None:
+    """限定子を外した名前を、GOSLIN に渡す MS-DIAL 5 の略記の候補に直す。直せなければ None。
+
+    `|` の後・空白を含む `;` の後の注記（`; ExampleDB ID-0000`）・末尾の付加体の表記を切り、古い
+    MS-DIAL の書式（`Cer[NS] d30:1`）・英語のクラス名（`Phosphatidylcholine 16:0-18:1`）を略記に直す。
+    GOSLIN で読めるかは確かめない（読むのは呼び出し側）。クラスの決定・酸化の修飾の扱いは
+    `from_name` の役目で、ここではしない。
+    """
+    if not name or not name.strip():
+        return None
+    text = name.split("|", 1)[0].strip()
+    m = _ANNOTATION.search(text)
+    if m:
+        text = text[:m.start()].strip()
+    text = _ADDUCT_SUFFIX.sub("", text).strip()
+    text, _bracket = _to_msdial5(text)
+    return text or None
 
 
 def _ceramide_class(head: str, name: str, bracket: str | None) -> str:

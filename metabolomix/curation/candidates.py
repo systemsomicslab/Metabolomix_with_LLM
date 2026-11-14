@@ -9,7 +9,7 @@ plots.mirror、curation.evidence（payload の間引き）、curation.trend。to
 """
 from __future__ import annotations
 
-from metabolomix.analysis.spectral_match import match_spectrum, total_score
+from metabolomix.analysis.spectral_match import fix_mass_tolerance, match_spectrum, total_score
 from metabolomix.curation import trend
 from metabolomix.curation.evidence import MIRROR_MAX_PEAKS, REFERENCE_MZ_WINDOW, _keep_most_intense_peaks
 from metabolomix.msdial.adducts import parse_adduct
@@ -127,7 +127,10 @@ def build_library_candidates(ev: dict, *, msdial_matches, representative, store,
         item = pool.setdefault(record_key(record), _from_record(record, "msdial"))
         item["msdial_total_score"] = match.get("total_score")
     if measured and rep_mz is not None:
-        for record in store.candidates(float(rep_mz), mz_tol=scoring["mz_tol"], ion_mode=ev.get("ion_mode")):
+        # 前駆体の窓は library_match_feature / library_msms_qualify と同じ MS-DIAL の FixMassTolerance
+        # （m/z 500 を超えたら同じ ppm に広げる）。窓に入っても |Δm/z| が dmz_fail_mda 以上ならハードで落ちる。
+        window = fix_mass_tolerance(scoring["mz_tol"], float(rep_mz))
+        for record in store.candidates(float(rep_mz), mz_tol=window, ion_mode=ev.get("ion_mode")):
             key = record_key(record)
             if key in pool:
                 if pool[key]["source"] == "msdial":

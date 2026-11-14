@@ -289,8 +289,9 @@ def _library_sha(store) -> str | None:
     return store.summary()["source_sha256"] if store is not None else None
 
 
-_QUALIFY_COLUMNS = ("rank", "name", "formula", "inchikey", "adduct", "total_score",
-                    "matched_peaks_count", "fragment_matches_excl_precursor")
+def _bad_mz_tol_ppm(value) -> bool:
+    return value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                  or not math.isfinite(value) or value <= 0)
 
 
 # ---------- MS/MS の合否 ----------
@@ -300,19 +301,29 @@ def library_msms_qualify(rules: dict, spot_id: int | None = None,
                          precursor_mz: float | None = None, rt: float | None = None,
                          ion_mode: str | None = None, arf2_path: str | None = None,
                          dcl_file: str | None = None, top_n: int = 10,
-                         dataset_handle: str | None = None) -> str:
+                         dataset_handle: str | None = None,
+                         mz_tol_ppm: float | None = None) -> str:
     """MS/MS の照合に、spec で書いた合否の規則（msms-rules.v1）を当てる（再解析で使う）。
 
-    照合は `library_match_feature` と同じ（`spot_id` か `precursor_mz` のどちらか一方）。
+    照合は `library_match_feature` と同じ（`spot_id` か `precursor_mz` のどちらか一方。前駆体の
+    窓は MS-DIAL と同じく m/z 500 を超えたら ppm で広がる。`mz_tol_ppm`（任意、0 より大きい数）は
+    その窓に重ねる ppm の絞り込み）。使った窓は `query`（`mz_tol`・`mz_window`・`mz_tol_ppm`）に出る。
+    `ion_mode` は `positive` / `negative`（`pos` / `neg` / `+` / `-` も可。読めない値は
+    `DATASET_BAD_REQUEST`）。
     規則の形と検査の意味は `lipidmix://docs/output-format/reanalysis` §4（`target` は
     `inchikey` か、InChIKey が一意に決まらない脂質の種の `lipid_species`）。設定した検査だけを
-    `checks` に並べ、`verdict` は `qualified` / `not_qualified` / `not_evaluable`。
+    `checks` に並べ、`verdict` は `qualified` / `not_qualified` / `not_evaluable`。既定の規則でも
+    断片の一致を 1 本求め（`min_fragments_excl_precursor` 既定 1）、断片は測定の基準ピークに対して
+    `min_fragment_relative_intensity`（既定 0.01）以上の窓だけを数える。
     `rule_hash` は正規化した規則から作る。MS/MS が無ければ `not_evaluable`（「断片が
     合わなかった」ではない）。「明らかに別物か」は判断しない（再解析の規則で決める）。
+    `target_rank` と `top1_is_target`（1 位が目標か）を返し、`spot_id` のスポットに MS-DIAL の注釈が
+    あれば `msdial_name`・`msdial_rank`・`top_differs_from_msdial` も返す（`library_match_feature` と同じ）。
+    候補の表は `delta_ppm`、`.dbs` の注釈の足切りがあれば `passes_dbs_cutoffs`（足切りの値は
+    `dbs_cutoffs`。合否には当てない）、種の目標なら `lipid_species`・`species_route` の列を持つ。
     dataset_handle: ハンドルのライブラリ・`.arf2` / `.dcl` を使う。省略時は対話のセッション。
     """
     from metabolomix.analysis import msms_rules
-    from metabolomix.analysis.spectral_match import fragment_matches_excluding_precursor
     from metabolomix.library import matching
     from metabolomix.library import tools as library_tools
 
@@ -331,6 +342,13 @@ def library_msms_qualify(rules: dict, spot_id: int | None = None,
                            {"field": "spot_id"})
     if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 1:
         return mztab_error("DATASET_BAD_REQUEST", "top_n は 1 以上の整数", {"field": "top_n"})
+    if _bad_mz_tol_ppm(mz_tol_ppm):
+        return mztab_error("DATASET_BAD_REQUEST", "mz_tol_ppm は 0 より大きい有限の数（省略可）",
+                           {"field": "mz_tol_ppm"})
+    try:
+        ion_mode = matching.normalize_ion_mode(ion_mode)
+    except ValueError as exc:
+        return mztab_error("DATASET_BAD_REQUEST", str(exc), {"field": "ion_mode"})
     try:
         normalized = msms_rules.normalize_rules(rules)
     except DomainError as exc:
@@ -342,12 +360,14 @@ def library_msms_qualify(rules: dict, spot_id: int | None = None,
         need=("arf2", "dcl") if spot_id is not None else ("dcl",))
     if lacking:
         return json_payload({**lacking, "verdict": "not_evaluable", "checks": []})
+    annotation = None
     if spot_id is not None:
         spot = library_tools.spot_msms_query(int(spot_id), arf2_path=arf2_path, dcl_file=dcl_file,
                                              rt=rt, ion_mode=ion_mode)
         measured = spot.get("measured") if spot["status"] == "ok" else None
         if spot["status"] == "ok":
             precursor_mz, rt, ion_mode = spot["precursor_mz"], spot["rt"], spot["ion_mode"]
+            annotation = spot.get("msdial_annotation")
     else:
         measured = library_tools._measured_spectrum(precursor_mz, rt=rt, dcl_file=dcl_file)
         spot = {"status": "ok" if measured else "not_found"}
@@ -359,26 +379,30 @@ def library_msms_qualify(rules: dict, spot_id: int | None = None,
             "status": spot["status"], "verdict": "not_evaluable", "checks": [], **base,
             "message": spot.get("message") or "MS/MS が無い（未取得）。断片が合わなかったのではない。"}))
     matched = matching.score_candidates(store, precursor_mz=precursor_mz, rt=rt,
-                                        ion_mode=ion_mode, measured=measured)
+                                        ion_mode=ion_mode, measured=measured,
+                                        mz_tol_ppm=mz_tol_ppm)
+    base["query"].update(msms_rules.query_window(matched["query"]))
     ms2_tol = matched["query"]["ms2_tol"]
     if matched["status"] == "no_candidates":
         return json_payload(round_floats({"status": "no_candidates", "verdict": "not_evaluable",
                                           "checks": [], **base}))
     outcome = msms_rules.qualify(matched["scored"], measured, precursor_mz, normalized,
                                  ms2_tol=ms2_tol)
-    tol = normalized["precursor_exclusion_tol"] or ms2_tol
-    rows = [{"rank": rank, "name": record.get("name"), "formula": record.get("formula"),
-             "inchikey": record.get("inchikey"), "adduct": record.get("adduct"),
-             "total_score": result["total_score"],
-             "matched_peaks_count": result["matched_peaks_count"],
-             "fragment_matches_excl_precursor": fragment_matches_excluding_precursor(
-                 result["alignment"], precursor_mz, tol)}
-            for rank, (record, result) in enumerate(matched["scored"][:top_n], start=1)]
+    cutoffs = matched["dbs_cutoffs"]
+    rows = msms_rules.candidate_rows(matched["scored"], precursor_mz, normalized, ms2_tol=ms2_tol,
+                                     cutoffs=cutoffs, top_n=top_n)
+    columns = list(msms_rules.CANDIDATE_COLUMNS)
+    if cutoffs:
+        columns.append("passes_dbs_cutoffs")
+    if "lipid_species" in normalized["target"]:
+        columns += ["lipid_species", "species_route"]
     return json_payload(round_floats({
         "status": "success", **library_tools.identified_by_lbm(holder, spot_id),
         **outcome, **base,
+        **matching.msdial_agreement(matched["scored"], annotation),
+        **({"dbs_cutoffs": cutoffs} if cutoffs else {}),
         "n_candidates": matched["n_candidates"],
-        "candidates": rows_table(rows, _QUALIFY_COLUMNS),
+        "candidates": rows_table(rows, columns),
     }))
 
 

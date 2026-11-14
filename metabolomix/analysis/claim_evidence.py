@@ -156,11 +156,15 @@ def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
     msms = spec.get("msms")
     out_msms = None
     if msms is not None:
-        if not isinstance(msms, dict) or set(msms) - {"top_n", "rules"}:
-            raise _fail("msms は {top_n, rules}", field="msms")
+        if not isinstance(msms, dict) or set(msms) - {"top_n", "rules", "mz_tol_ppm"}:
+            raise _fail("msms は {top_n, rules, mz_tol_ppm}", field="msms")
         top_n = msms.get("top_n", 10)
         if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 1:
             raise _fail("msms.top_n は 1 以上の整数", field="msms.top_n")
+        ppm = msms.get("mz_tol_ppm")
+        if ppm is not None and (isinstance(ppm, bool) or not isinstance(ppm, (int, float))
+                                or not math.isfinite(ppm) or ppm <= 0):
+            raise _fail("msms.mz_tol_ppm は 0 より大きい有限の数（省略可）", field="msms.mz_tol_ppm")
         rules = msms.get("rules") or {}
         if "target" in rules:
             raise _fail("msms.rules.target は書かない（主張の target から決まる）",
@@ -170,6 +174,9 @@ def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
                       else {"inchikey": raw_target.get("inchikey")})
         out_msms = {"top_n": top_n, "rules": msms_rules.normalize_rules(
             rules, target={**identifier, "formula": target["formula"]})}
+        if ppm is not None:
+            # 渡したときだけ規則に載せる（省けば前駆体の窓は library_match_feature の既定と同じ）
+            out_msms["mz_tol_ppm"] = float(ppm)
 
     relations = spec.get("relations")
     out_relations = None
@@ -299,7 +306,9 @@ def _spectrum_available(spot: dict) -> bool | None:
 
 def _msms_for(fid, *, store, spot_query, arf2_path, dcl_path, msms_spec,
               lbm_only: bool = False) -> dict:
-    from metabolomix.analysis.spectral_match import fragment_matches_excluding_precursor
+    """候補 1 つの照合（`library_msms_qualify` と同じ芯）。`window` は使った前駆体の窓、`top` の行は
+    `msms_rules.candidate_rows`（`delta_ppm`・下限つきの断片の本数・`.dbs` の足切り・種の経路）。
+    スポットに MS-DIAL の注釈があれば `msdial_name`・`msdial_rank`・`top_differs_from_msdial` を足す。"""
     from metabolomix.library import matching
 
     try:
@@ -320,25 +329,22 @@ def _msms_for(fid, *, store, spot_query, arf2_path, dcl_path, msms_spec,
         return {"status": spot.get("status"), "message": spot.get("message"),
                 "spectrum_available": available}
     matched = matching.score_candidates(store, precursor_mz=spot["precursor_mz"], rt=spot["rt"],
-                                        ion_mode=spot["ion_mode"], measured=spot["measured"])
+                                        ion_mode=spot["ion_mode"], measured=spot["measured"],
+                                        mz_tol_ppm=msms_spec.get("mz_tol_ppm"))
     ms2_tol = matched["query"]["ms2_tol"]
-    tol = msms_spec["rules"]["precursor_exclusion_tol"] or ms2_tol
-    top = []
-    for rank, (record, result) in enumerate(matched["scored"][: msms_spec["top_n"]], start=1):
-        top.append({"rank": rank, "name": record.get("name"), "formula": record.get("formula"),
-                    "inchikey": record.get("inchikey"), "adduct": record.get("adduct"),
-                    "total_score": result["total_score"],
-                    "matched_peaks_count": result["matched_peaks_count"],
-                    "fragment_matches_excl_precursor": fragment_matches_excluding_precursor(
-                        result["alignment"], spot["precursor_mz"], tol)})
+    top = msms_rules.candidate_rows(matched["scored"], spot["precursor_mz"], msms_spec["rules"],
+                              ms2_tol=ms2_tol, cutoffs=matched["dbs_cutoffs"],
+                              top_n=msms_spec["top_n"])
     if matched["status"] == "no_candidates":
         qualify = {"verdict": "not_evaluable", "checks": [], "target_rank": None,
-                   "reason": "no_library_candidates"}
+                   "top1_is_target": False, "reason": "no_library_candidates"}
     else:
         qualify = msms_rules.qualify(matched["scored"], spot["measured"], spot["precursor_mz"],
                                      msms_spec["rules"], ms2_tol=ms2_tol)
     return {"status": matched["status"], "precursor_mz": spot["precursor_mz"],
+            "window": msms_rules.query_window(matched["query"]),
             "n_measured_peaks": len(spot["measured"]), "n_candidates": matched["n_candidates"],
+            **matching.msdial_agreement(matched["scored"], spot.get("msdial_annotation")),
             "top": top, "qualify": qualify, "spectrum_available": available}
 
 

@@ -76,7 +76,7 @@ def test_split_qualifier():
 
 def test_from_name_examples():
     assert ml.from_name("PE 32:1") == ("PE 32:1", "PE")
-    assert ml.from_name("LPC 16:0; PlaSMA ID-1486") == ("LPC 16:0", "LPC")
+    assert ml.from_name("LPC 16:0; ExampleDB ID-0000") == ("LPC 16:0", "LPC")
     assert ml.from_name("Cer 24:1;O2|Cer 12:0;O2/12:1") == "ambiguous_class"
     assert ml.from_name("Cer[NS] d30:1") == ("Cer 30:1;O2", "Cer_NS")
     assert ml.from_name("SM d34:2") == ("SM 34:2;O2", "SM")
@@ -175,4 +175,4 @@ def test_from_name_oxidized_shorthand_goes_to_route_2():
     assert ml.from_name("Cer 18:1;O2/16:0") == ("Cer 18:1;O2/16:0", "Cer_NS")
     assert ml.from_name("SM 34:1;O2") == ("SM 34:1;O2", "SM")
     assert ml.from_name("SM 34:1;O3") == ("SM 34:1;O3", "SM")
-    assert ml.from_name("LPC 16:0; PlaSMA ID-1486") == ("LPC 16:0", "LPC")   # `;` の注記は切るだけ
+    assert ml.from_name("LPC 16:0; ExampleDB ID-0000") == ("LPC 16:0", "LPC")   # `;` の注記は切るだけ

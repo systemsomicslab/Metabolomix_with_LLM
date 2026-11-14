@@ -1075,3 +1075,147 @@ def test_analysis_run_does_not_touch_session_or_reports(tmp_path):
     assert session_state.session.dataset is state
     assert session_state.session.current_handle_id == handle_before
     assert not (tmp_path / "analysis" / "reports").exists()
+
+
+# ---------- 2026-11-13 の事実確認（担当 1: MS/MS とライブラリ） ----------
+
+def _annotate_spot(monkeypatch, spot_id, name, inchikey=None):
+    """`.arf2` の代表の注釈（MS-DIAL の名前・InChIKey）を差し替える（library フィクスチャの後に呼ぶ）。"""
+    records = [{"AlignmentID": int(f["id"]), "MassCenter": f["mz"], "RT": f["rt"],
+                "IonMode": "Positive", "Name": "Unknown"} for f in RELATION_FEATURES]
+    records[[r["AlignmentID"] for r in records].index(spot_id)].update(Name=name, InChIKey=inchikey)
+    monkeypatch.setattr(alignment_spot, "load_catalog", lambda _path: records)
+
+
+def test_msms_qualify_reports_window_delta_ppm_and_msdial_agreement(data, library, monkeypatch):
+    _annotate_spot(monkeypatch, 20, "GABA", GABA_KEY)
+    handle = _open(data, msp=library)
+    out = json.loads(R.library_msms_qualify({"target": {"inchikey": GABA_KEY}}, spot_id=20,
+                                            dataset_handle=handle, mz_tol_ppm=5))
+    assert out["verdict"] == "qualified"      # 既定でも断片 1 本（87・69 の 2 本）を求める
+    assert out["rules"]["min_fragments_excl_precursor"] == 1
+    assert out["target_rank"] == 1 and out["top1_is_target"] is True
+    assert out["query"]["mz_tol"] == pytest.approx(0.01)
+    assert out["query"]["mz_window"] == pytest.approx(0.01)   # m/z 500 以下は Da のまま
+    assert out["query"]["mz_tol_ppm"] == 5
+    assert out["msdial_name"] == "GABA" and out["msdial_rank"] == 1
+    assert out["top_differs_from_msdial"] is False
+    lines = out["candidates"].splitlines()
+    header = lines[0].split("\t")
+    row = dict(zip(header, lines[1].split("\t")))
+    assert {"inchikey", "delta_ppm"} <= set(header) and "ppm_error" not in header
+    assert row["inchikey"] == GABA_KEY and float(row["delta_ppm"]) == pytest.approx(0.0)
+    assert row["fragment_matches_excl_precursor"] == "2"
+    assert "passes_dbs_cutoffs" not in header             # .msp には注釈の足切りが無い
+
+
+def test_msms_qualify_flags_a_top_hit_that_differs_from_msdial(data, library, monkeypatch):
+    _annotate_spot(monkeypatch, 20, "Glutamine")
+    handle = _open(data, msp=library)
+    out = json.loads(R.library_msms_qualify({"target": {"inchikey": GABA_KEY}}, spot_id=20,
+                                            dataset_handle=handle))
+    assert out["msdial_name"] == "Glutamine" and out["msdial_rank"] is None
+    assert out["top_differs_from_msdial"] is True
+    _annotate_spot(monkeypatch, 20, "Unknown")
+    plain = json.loads(R.library_msms_qualify({"target": {"inchikey": GABA_KEY}}, spot_id=20,
+                                              dataset_handle=handle))
+    assert "msdial_name" not in plain and "top_differs_from_msdial" not in plain
+
+
+def test_msms_qualify_reads_short_ion_mode_and_rejects_unreadable(data, library):
+    handle = _open(data, msp=library)
+    rules = {"target": {"inchikey": GABA_KEY}}
+    ok = json.loads(R.library_msms_qualify(rules, precursor_mz=104.0706, rt=2.0, ion_mode="pos",
+                                           dataset_handle=handle))
+    assert ok["query"]["ion_mode"] == "positive" and ok["target_rank"] == 1
+    neg = json.loads(R.library_msms_qualify(rules, precursor_mz=104.0706, rt=2.0, ion_mode="-",
+                                            dataset_handle=handle))
+    assert neg["status"] == "no_candidates"               # 陽イオンの記録は陰イオンの照合に出ない
+    bad = json.loads(R.library_msms_qualify(rules, precursor_mz=104.0706, ion_mode="sideways",
+                                            dataset_handle=handle))
+    assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert bad["error"]["details"]["field"] == "ion_mode"
+
+
+@pytest.mark.parametrize("bad", [0, -1, float("nan"), True, "5"])
+def test_msms_qualify_rejects_a_bad_mz_tol_ppm(data, library, bad):
+    out = json.loads(R.library_msms_qualify({"target": {"inchikey": GABA_KEY}}, spot_id=20,
+                                            dataset_handle=_open(data, msp=library),
+                                            mz_tol_ppm=bad))
+    assert out["error"]["details"]["field"] == "mz_tol_ppm"
+
+
+def test_claim_evidence_msms_takes_mz_tol_ppm_and_shows_the_window(data, library, monkeypatch):
+    _annotate_spot(monkeypatch, 20, "GABA", GABA_KEY)
+    handle = _open(data, msp=library)
+    claim = {**CLAIM, "msms": {"top_n": 3, "rules": {}, "mz_tol_ppm": 5}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    assert out["rule"]["msms"]["mz_tol_ppm"] == 5
+    msms = {c["feature_id"]: c["msms"] for c in out["candidates"]}["20"]
+    assert msms["window"] == {"mz_tol": 0.01, "mz_window": 0.01, "mz_tol_ppm": 5.0}
+    assert msms["qualify"]["top1_is_target"] is True
+    assert msms["msdial_name"] == "GABA" and msms["top_differs_from_msdial"] is False
+    top = msms["top"][0]
+    assert top["inchikey"] == GABA_KEY and top["delta_ppm"] == pytest.approx(0.0)
+    # 省けば規則に載らない（rule_hash を変えない）
+    plain = json.loads(R.dataset_claim_evidence({**CLAIM, "msms": {"top_n": 3, "rules": {}}},
+                                                dataset_handle=handle))
+    assert "mz_tol_ppm" not in plain["rule"]["msms"]
+    assert {c["feature_id"]: c["msms"] for c in plain["candidates"]}["20"]["window"][
+        "mz_tol_ppm"] is None
+    bad = json.loads(R.dataset_claim_evidence(
+        {**CLAIM, "msms": {"rules": {}, "mz_tol_ppm": -1}}, dataset_handle=handle))
+    assert bad["error"]["code"] == "CLAIM_SPEC_INVALID"
+
+
+def test_diagnostic_ions_neutral_loss_floor_and_key_named_errors(data, library):
+    handle = _open(data, msp=library)
+    out = json.loads(dcl_tools.dcl_diagnostic_ions(
+        [20], [{"neutral_loss": 17.0265, "label": "-NH3", "min_relative_intensity": 0.5},
+               {"neutral_loss": 35.0371, "label": "-NH3-H2O", "min_relative_intensity": 0.5}],
+        dataset_handle=handle))
+    rows = {r.split("\t")[1]: r.split("\t") for r in out["ions"].splitlines()[1:]}
+    assert rows["-NH3"][4] == "true"                       # 87.0441 は基準ピーク
+    assert rows["-NH3-H2O"][4] == "false"                  # 69.0335 は 0.4 しかない
+    bad = json.loads(dcl_tools.dcl_diagnostic_ions(
+        [20], [{"neutral_loss": 17.0265, "min_intensity": 0.5}], dataset_handle=handle))
+    assert bad["error"]["code"] == "MSMS_RULES_INVALID"
+    assert "min_intensity" in bad["error"]["message"] and "[0][0]" not in bad["error"]["message"]
+    assert bad["error"]["details"]["field"] == "ions[0]"
+
+
+def test_msms_qualify_shows_whether_each_candidate_passes_the_dbs_cutoffs(data, library, tmp_path):
+    from tests.dbs_fixture import record, write_dbs
+
+    dbs = write_dbs(tmp_path / "lab" / "lib.msp2.dbs", [("lib", [
+        record(ion_mode=0), record(name="Decoy", inchikey="AAAAAAAAAAAAAA-UHFFFAOYSA-N",
+                                   ion_mode=0, peaks=((30.0, 999.0),))], ["k"])])
+    handle = _open(data, msp=dbs)
+    out = json.loads(R.library_msms_qualify({"target": {"inchikey": GABA_KEY}}, spot_id=20,
+                                            dataset_handle=handle))
+    assert out["dbs_cutoffs"]["total_score_cutoff"] == pytest.approx(0.8)
+    assert out["dbs_cutoffs"]["minimum_spectrum_match"] == pytest.approx(1.0)
+    lines = out["candidates"].splitlines()
+    header = lines[0].split("\t")
+    rows = {r.split("\t")[1]: dict(zip(header, r.split("\t"))) for r in lines[1:]}
+    assert header[-1] == "passes_dbs_cutoffs"
+    assert rows["GABA"]["passes_dbs_cutoffs"] == "true"
+    assert rows["Decoy"]["passes_dbs_cutoffs"] == "false"
+    assert out["verdict"] == "qualified"                  # 足切りは材料。合否には当てない
+
+
+def test_dbs_cutoffs_compare_squared_dots_and_skip_the_sentinel():
+    from metabolomix.library import matching
+
+    assert matching.dbs_cutoffs({"ms1_tolerance": 0.01}) is None
+    cutoffs = matching.dbs_cutoffs({"squared_weighted_dot_cutoff": 0.25, "total_score_cutoff": 1.0,
+                                    "minimum_spectrum_match": 2.0})
+    assert set(cutoffs) == {"squared_weighted_dot_cutoff", "total_score_cutoff",
+                            "minimum_spectrum_match"}
+    good = {"weighted_dot_product": 0.6, "total_score": 1.5, "matched_peaks_count": 3}
+    assert matching.passes_dbs_cutoffs(good, cutoffs) is True
+    # weighted dot 0.45 の二乗は 0.2025 < 0.25
+    assert matching.passes_dbs_cutoffs({**good, "weighted_dot_product": 0.45}, cutoffs) is False
+    assert matching.passes_dbs_cutoffs({**good, "weighted_dot_product": -1}, cutoffs) is False
+    assert matching.passes_dbs_cutoffs({**good, "matched_peaks_count": 1}, cutoffs) is False
+    assert matching.passes_dbs_cutoffs(good, None) is None

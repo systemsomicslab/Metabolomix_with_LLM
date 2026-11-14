@@ -39,7 +39,9 @@ def test_an_explicit_path_that_does_not_exist_is_an_error(tmp_path, monkeypatch)
     assert exc.value.code == "LIBRARY_NOT_FOUND"
 
 
-def test_library_load_hides_file_name(tmp_path, monkeypatch):
+def test_library_load_shows_the_file_name_and_hash_only(tmp_path, monkeypatch):
+    """戻り値のライブラリはいつもファイル名と sha256（置き場所は出さない）。`library_names` は消した
+    （2026-11-13 の事実確認 C5。名前を隠す切り替えは要らない）。"""
     import json
 
     from metabolomix.library import tools as library_tools
@@ -48,14 +50,15 @@ def test_library_load_hides_file_name(tmp_path, monkeypatch):
 
     use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     session_state.session = session_state.AnalysisSession()
-    lib = tmp_path / "Zebra_SecretLab_VS21.msp2.dbs"
+    folder = tmp_path / "PrivateFolderXYZ"
+    folder.mkdir()
+    lib = folder / "lib.msp2.dbs"
     write_dbs(lib, [("lib", [record(mz=500.0, ion_mode=0)], ["k"])])
-    shown = json.loads(library_tools.library_load(file_path=str(lib)))
-    assert shown["file"] == lib.name  # 既定は今までどおり
-    raw = library_tools.library_load(file_path=str(lib), library_names=False)
+    raw = library_tools.library_load(file_path=str(lib))
     out = json.loads(raw)
-    assert out["status"] == "success" and out["source_sha256"] and out["record_count"] == 1
-    assert "Zebra" not in raw and "SecretLab" not in raw and "file" not in out
-    bad = json.loads(library_tools.library_load(file_path=str(lib), library_names="x"))
-    assert bad["status"] == "error"
+    assert out["status"] == "success" and out["file"] == lib.name
+    assert out["source_sha256"] and out["record_count"] == 1
+    assert "PrivateFolderXYZ" not in raw
+    with pytest.raises(TypeError):
+        library_tools.library_load(file_path=str(lib), library_names=False)
     session_state.session = session_state.AnalysisSession()
