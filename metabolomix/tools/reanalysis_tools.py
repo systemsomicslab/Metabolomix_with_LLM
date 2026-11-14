@@ -111,8 +111,8 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     v2: `lipidmix://docs/output-format/reanalysis` と statistics-engine の spec。spec だけで同じ数字を
     出し直せる自己完結の実行で、除外は `input.exclude_samples` / `exclude_features` と
     `group_overrides` に書いたものだけを使う（`dataset_exclude` の除外は読まない。spec に無い除外が
-    あれば注意 `dataset_exclusions_not_in_spec` を返す）。前処理が利用者への確認を要するときは
-    `needs_input` の封筒（`field` の spec の欄に答えて呼び直す）。状態も記録も書かない。
+    あれば注意 `dataset_exclusions_not_in_spec` を返す）。前処理は確認を求めない（`drift.mode="auto"` が
+    補正を当てなかったときは前処理の段と warnings の `drift_not_applied_by_default` に理由と呼び直し方）。状態も記録も書かない。
     戻り値は解析ごとの要約（行は同じ規則: `output_path` に全量の JSON、無ければ 50 行以下だけ TSV）。
 
     v1（analysis-spec.v1）:
@@ -718,8 +718,9 @@ def dataset_mass_accuracy(band_edges: list[float] | None = None, rank: int = 1,
     `injection_trend`: 試料ごとの実測 m/z（隣接 `.arf` の検出されたセル）があれば、試料ごとの
     誤差の中央値 `per_injection`（`sample` `injection_order` `median_ppm` `n`）と注入順との
     `spearman_rho`（5 試料未満、または注入順の出所が `filename`＝採取時刻が読めないときは null。
-    理由は `rho_unavailable_reason`）・`n_samples`・`injection_order_source`。無ければ
-    `{"status": "unavailable"}`。
+    理由は `rho_unavailable_reason`）・`n_samples`・`injection_order_source`・`warnings`（注入順が
+    MS-DIAL の振った値でファイル名の順と一致するときだけ `injection_order_may_be_file_order`。ρ は出すが、
+    MS-DIAL の既定＝ファイルの順かもしれない）。無ければ `{"status": "unavailable"}`。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     """
     from metabolomix.analysis import mass_accuracy

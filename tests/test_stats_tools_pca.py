@@ -224,16 +224,22 @@ def test_invalid_group_levels_leave_no_matrix_or_record(ds, tmp_path):
     assert ds.last_pca is None
 
 
-def test_pca_needs_input_envelope_and_no_leftovers(ds):
-    ds.quant_state = {"normalized": True, "method": "is_ratio", "unit": "ratio", "record_id": "q1"}
+def test_pca_on_normalized_data_with_qc_does_not_ask_and_says_drift_was_held(tmp_path):
+    """C3: 換算済み・QC あり・補正できる注入順でも、既定の前処理は尋ねずに補正なしで PCA を出し、
+    当てなかった理由と drift_mode="on" での呼び直しを warnings に添える。"""
+    from tests.test_stats_tools_preprocess import _interspersed_qc
+
+    state = _install(_ds(n_qc=6), tmp_path)
+    _interspersed_qc(state)
+    state.quant_state = {"normalized": True, "method": "is_ratio", "unit": "ratio", "record_id": "q1"}
     out = _pca()
-    body = out["needs_input"]
-    assert "error" not in out and body["argument"] == "drift_mode"
-    assert body["retry_tools"] == ["dataset_preprocess"]
-    assert "dataset_pca" in body["reason"] and "matrix_id" in body["reason"]
-    assert not ds.stat_matrices
+    assert "needs_input" not in out and out["status"] == "success"
+    assert out["matrix_id"] in state.stat_matrices
+    (held,) = out["warnings"]
+    assert held["code"] == "drift_not_applied_by_default" and held["reasons"] == ["quant_normalized"]
+    assert held["suggestion"] == {"preprocess.drift.mode": "on"}
     mx = _pre(drift_mode="off")["matrix_id"]
-    assert _pca(matrix_id=mx)["status"] == "success"
+    assert "warnings" not in _pca(matrix_id=mx)
 
 
 def test_implicit_pca_record_has_the_preprocess_record_as_parent(ds):

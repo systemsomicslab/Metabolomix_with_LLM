@@ -28,7 +28,7 @@ run ディレクトリの `request.json` → `bridge-result.json`。
 前提: `session.assay_kind == "lipid"`（違えば `missing_state` → `record_objective`）。
 入力は直近のデータセットの統計エンジンの行列（`matrix_id` 省略時は既定の前処理＝`dataset_compare` と同じ。
 データセットが無ければ `missing_state` → `load_dataset`、名指しの行列が無い・古いなら `missing_state("stat_matrix")` →
-`dataset_preprocess`、QC のある換算済みデータで drift_mode が未定なら `needs_input`）。既定の行列は、要求の検査（試料・個体数・aggregation・q_threshold）がすべて済んでから登録し、前処理の記録を書く（`register_default`。以降のエラーには `details.matrix_id` を添える）。
+`dataset_preprocess`。drift=auto は換算済み・注入順がファイルの順かもしれないときドリフト補正を当てずに計算する）。既定の行列は、要求の検査（試料・個体数・aggregation・q_threshold）がすべて済んでから登録し、前処理の記録を書く（`register_default`。以降のエラーには `details.matrix_id` を添える）。
 旧 ARF 経路（`source="arf"`）は B-2b Task 8 で消えた。MSLipidMapper へは行列の注入ごとの値（生体のみ・欠測は 0）を渡す。
 状態変更: `session.pathway.last_run_id` / `last_run_dir`。
 R の仮想環境は起動前に確かめる（`_check_environment()`）: `r/renv/library` に MSLipidMapper が無ければ

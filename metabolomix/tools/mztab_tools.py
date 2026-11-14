@@ -80,8 +80,12 @@ def dataset_status(dataset_handle: str | None = None, view: str = "summary",
         dataset_compare の reference_group / test_group の群名が並ぶ（そのまま使う）・
         役割ごとの件数 `roles`・群の無い試料の数 `n_ungrouped`・特徴のタグごとの件数 `tags`・
         除外の件数 `excluded`（`dataset_exclude`）を含む。
-      - `"samples"`: 試料の TSV（name・group・role・batch・injection_order・subject_id・excluded。
-        `excluded` は除外の理由、除外していなければ空）。`query` で絞れる。
+      - `"samples"`: 試料の TSV（name・group・role・batch・batch_source・injection_order・
+        injection_order_source・subject_id・excluded。`*_source` は値の出所 sheet / mddata / mzTab /
+        raw_acquisition_time / filename（後の 2 つはシートの宣言 `# injection_order_source = ...`）
+        （シートの空欄を .mddata・mzTab-M で埋めた値もその出所で示す）。バッチが空で試料名に 8 桁があれば
+        batch_source は `candidate:<8 桁>`（候補。統計には当てない）。`excluded` は除外の理由、
+        除外していなければ空）。`query` で絞れる。
       - `"tags"`: タグごとの特徴 ID（各タグ先頭 50 件まで。`n_features` は全件数）。`query` に
         タグ名を渡すとそのタグだけ。
     query: `view="samples"` では因子トークン。`_` 区切りで全トークンを含む試料に一致（順不同の AND）し、
@@ -205,6 +209,18 @@ def _excluded_cell(ds, name: str, row: dict) -> str:
     return "include=false（実験情報シート）" if not row.get("include", True) else ""
 
 
+def _source_cell(row: dict, field: str) -> str:
+    """値の出所（sheet / mddata / mzTab / raw_acquisition_time / filename）。値が無いバッチは試料名の 8 桁の候補
+    （`candidate:<値>`）。"""
+    from metabolomix.analysis import sample_manifest
+
+    prov = (row.get("provenance") or {}).get(field) or {}
+    if row.get(field) is None:
+        candidate = prov.get("candidate") or {}
+        return _tsv_cell(f"candidate:{candidate['value']}") if candidate.get("value") else ""
+    return _tsv_cell(sample_manifest.order_provenance_label(prov))
+
+
 def _samples_view(ds, query: str | None) -> str:
     """試料の TSV。`query` は因子トークン（`msdial/sample_factors.py` の文法。旧 ARF 経路の試料検索と同じ）。"""
     from metabolomix.analysis import sample_manifest
@@ -233,14 +249,16 @@ def _samples_view(ds, query: str | None) -> str:
 
     # 足した因子の列（sample_manifest の因子の列。名前の順）を後ろに並べる。無ければ列を足さない。
     factor_columns = sorted(sample_manifest._factor_columns_of(rows))
-    lines = ["\t".join(["name", "group", "role", "batch", "injection_order", "subject_id",
-                       "excluded", *map(_tsv_cell, factor_columns)])]
+    lines = ["\t".join(["name", "group", "role", "batch", "batch_source", "injection_order",
+                       "injection_order_source", "subject_id", "excluded",
+                       *map(_tsv_cell, factor_columns)])]
     for name in selected:
         row = by_name[name]
         subject = (ds.sample_meta.get(name) or {}).get("subject_id", row.get("subject_id"))
         lines.append("\t".join([
             _tsv_cell(name), _tsv_cell(row.get("group")), _tsv_cell(row.get("role")),
-            _tsv_cell(row.get("batch")), _tsv_cell(row.get("injection_order")),
+            _tsv_cell(row.get("batch")), _source_cell(row, "batch"),
+            _tsv_cell(row.get("injection_order")), _source_cell(row, "injection_order"),
             _tsv_cell(subject), _excluded_cell(ds, name, row),
             *(_tsv_cell(row.get(column)) for column in factor_columns)]))
     return json_payload({"view": "samples", "query": query, "n_total": len(names),

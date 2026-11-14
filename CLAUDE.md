@@ -5,7 +5,7 @@
 ## このリポジトリは何か
 
 MS-DIAL（LC-MS リピドミクス／メタボロミクス解析ソフト）の出力を読み、LLM から使える形で
-公開する **MCP サーバ `ms-data-parser`**。ツール 56・リソース 2・リソーステンプレート 1。
+公開する **MCP サーバ `ms-data-parser`**。ツール 57・リソース 2・リソーステンプレート 1。
 GUI の外では読めない圧縮 MessagePack と独自バイナリを解し、解析そのものをサーバ側で回して
 要約だけを返す（生の行列を LLM の文脈に載せない）。
 
@@ -25,7 +25,7 @@ ASSAY KIND（脂質か一般代謝物か）は `load_dataset` の後に `record_
 ション済み MS/MS。MessagePack ではない独自バイナリ）/ `.EIC.aef`（クロマトグラム）/
 **mzTab-M 2.0**（標準交換形式。Console 経路が産み、`DatasetState` の正準入力になる）。
 サイドカー（`*_tags.xml` `.mddata` `.mdproject`）はタグと試料クラスの取得に読む。
-生の測定ファイル（`.wiff`/`.raw` 等）は自分では解さず、MS-DIAL Console への入力として扱う。
+生の測定ファイル（`.wiff`/`.raw` 等）のスペクトルは解さない。取得時刻のメタデータだけ読み（`metabolomix/rawmeta/`。取得順・群と取得順の重なり・試料の表の注入順）、本体は MS-DIAL Console への入力として扱う。
 MSLipidMapper（R）が書く**パスウェイ測定 JSON-LD**も読む（`pathway_project`）。
 
 **やること** — (a) **統計エンジン**（`metabolomix/analysis/stats/`）による前処理/QC（ブランク・検出率・QC RSD・D-ratio の足切り、
@@ -146,6 +146,9 @@ metabolomix/library/   参照ライブラリ（.dbs / .msp）の読み取りと�
                     共有する 2 つの入口にすぎないため（spec 2026-09-19）
 metabolomix/console/   MS-DIAL Console 実行層（job_manager / runner / execution / method_file / output_collector）。
                     MCP の入口は pipeline と tools/console_tools.py（メソッドファイルの候補と雛形）
+metabolomix/rawmeta/   raw の取得時刻のメタデータ（.wiff の OLE・mzML・Thermo .raw・Bruker .d。スペクトルは解さない。stdlib と core/atomic_io だけに依存）と、
+                    ISA / mwTab の試料の表から因子の列付きの sample-manifest.v2 を組む部品。MCP の入口は
+                    list_data_files(all_files=True) と tools/sample_sheet_tools.py（pipeline_sample_sheet）
 metabolomix/pipeline/  生データフォルダ起点の統括（受付 request/inputs/store・独立 worker が回す engine・
                     工程 handler の service・再開/取消の recovery・受領の receipt・load_dataset へ渡す session_handoff）
 metabolomix/handoff/   Console 成果物の受け渡しスキーマ（analysis-job.json）

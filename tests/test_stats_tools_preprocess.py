@@ -71,16 +71,64 @@ def _normalized(ds):
                       "record_id": "q_test_1"}
 
 
-def test_preprocess_needs_input_for_normalized_with_qc(ds):
+def _interspersed_qc(state):
+    """QC を 6 本にして試料の間に挟む（ドリフト補正の条件を満たす注入順。出所は利用者のシート扱い）。"""
+    qc_slots = [1, 5, 9, 13, 17, 22]
+    others = iter(o for o in range(1, 23) if o not in qc_slots)
+    slots = iter(qc_slots)
+    for row in state.sample_metadata_rows:
+        row["injection_order"] = next(slots) if row["role"] == "qc" else next(others)
+
+
+def test_preprocess_auto_drift_on_normalized_with_qc_computes_off_and_offers_on(tmp_path):
+    """C3: 換算済み・QC あり・drift=auto は尋ねない（needs_input を返さない）。補正せずに行列を作り、
+    理由と drift_mode="on" での呼び直しを warnings に返す。"""
+    state = _ds(n_qc=6)
+    state.analysis_dir = str(tmp_path / "analysis")
+    _interspersed_qc(state)
+    session_state.session.dataset = state
+    _normalized(state)
+    out = _call(**{**FLAT_OFF, "drift_mode": "auto"})
+    assert "needs_input" not in out and out["status"] == "success"
+    drift = next(s for s in out["steps"] if s["step"] == "drift")
+    assert drift["status"] == "skipped" and drift["reason"] == "quant_normalized"
+    assert drift["rerun_with"] == {"preprocess.drift.mode": "on"}
+    note = next(w for w in out["warnings"] if w["code"] == "drift_not_applied_by_default")
+    assert note["suggestion"] == {"preprocess.drift.mode": "on"}
+    on = _call(**{**FLAT_OFF, "drift_mode": "on"})
+    assert next(s for s in on["steps"] if s["step"] == "drift")["status"] == "applied"
+    assert on["matrix_id"] != out["matrix_id"]
+
+
+def test_preprocess_auto_drift_never_asks_when_correction_is_impossible(ds):
+    """QC が 4 本（LOESS の近傍が足りない）なら補正できないので、その理由だけを返す。"""
     _normalized(ds)
     out = _call(**{**FLAT_OFF, "drift_mode": "auto"})
-    body = out["needs_input"]
-    assert "error" not in out
-    assert body["field"] == "preprocess.drift.mode"
-    assert body["argument"] == "drift_mode"
-    assert body["retry_tools"] == ["dataset_preprocess"]
-    assert {o["value"] for o in body["options"]} == {"on", "off"}
-    assert not ds.stat_matrices                                   # 行列は作らない
+    assert "needs_input" not in out and out["status"] == "success"
+    drift = next(s for s in out["steps"] if s["step"] == "drift")
+    assert drift["reason"] == "too_few_qc_for_span:B1" and "rerun_with" not in drift
+    assert not any(w["code"] == "drift_not_applied_by_default" for w in out["warnings"])
+
+
+def test_preprocess_loess_degree_and_normalization_subset_arguments(ds):
+    base = _call(**FLAT_OFF)
+    same = _call(**{**FLAT_OFF, "loess_degree": 1})
+    assert same["matrix_id"] == base["matrix_id"]                 # 既定値は設定に載らない
+    cfg = stats_results.get_matrix(ds, base["matrix_id"])["config"]
+    assert "loess_degree" not in cfg["drift"] and set(cfg["normalize"]) == {"method"}
+    sub = _call(**{**FLAT_OFF, "normalize": "median", "normalization_features": ["f3", "f4"],
+                   "normalization_exclude_features": ["f4"]})
+    norm = next(s for s in sub["steps"] if s["step"] == "normalize")
+    assert norm["factor_features"] == 1 and norm["excluded_from_factors"] == 1
+    assert sub["n_features"] == 10                                # 外した特徴も行列に残る
+    cfg = stats_results.get_matrix(ds, sub["matrix_id"])["config"]
+    assert cfg["normalize"] == {"method": "median", "features": ["f3", "f4"], "exclude_features": ["f4"]}
+    bad = _call(**{**FLAT_OFF, "loess_degree": 3})
+    assert bad["error"]["code"] == "PREPROCESS_CONFIG_INVALID"
+    assert bad["error"]["details"]["field"] == "drift.loess_degree"
+    unknown = _call(**{**FLAT_OFF, "normalize": "pqn", "normalization_features": ["nope"]})
+    assert unknown["error"]["code"] == "PREPROCESS_CONFIG_INVALID"
+    assert unknown["error"]["details"]["unknown_features"] == ["nope"]
 
 
 def test_preprocess_drift_off_after_needs_input(ds):

@@ -35,6 +35,10 @@ class SampleInfo:
     subject_id: str | None
     include: bool
     attributes: dict[str, str] = field(default_factory=dict)
+    #: 注入順の出所（`sheet` / `mzTab` / `mddata` / `raw_acquisition_time` / `filename`。値が無ければ None）。
+    injection_order_source: str | None = None
+    #: 注入順が MS-DIAL 由来で、データセットのその値がファイル名の順と一致する（MS-DIAL の既定かもしれない）。
+    injection_order_may_be_file_order: bool = False
 
 
 @dataclass(frozen=True)
@@ -59,6 +63,9 @@ class StudyData:
     annotated_features: frozenset[str] = frozenset()
     #: 割れのまとめの記録（組ごとの特徴 ID）。除外との区別（matrix_id）のために持つ。
     feature_merges: tuple = ()
+    #: バッチが不明な試料の、試料名の 8 桁からの候補（試料 ID → `{"value", "source": "filename_date"}`）。
+    #: 統計には当てない（前処理が注意として返すだけ）。
+    batch_candidates: dict[str, dict] = field(default_factory=dict)
 
 
 def quant_state_of(ds) -> QuantState | None:
@@ -136,15 +143,48 @@ def _role(value) -> str | None:
     return text.lower() if text else None
 
 
-def _samples_table(ds, names: list[str]) -> list[SampleInfo]:
-    """試料の表。sample_metadata_rows → msdial_samples → roles / sample_meta の順に欄ごと埋める。
+def _order_and_source(row: dict, ms: dict, sm: dict, mz_order=None) -> tuple[float | None, str | None]:
+    """注入順と出所の名前。試料の表の行 → .mddata（msdial_samples）→ sample_meta → mzTab-M の MTD の順。"""
+    from metabolomix.analysis.sample_manifest import injection_order_source_label, order_provenance_label
+    value = _float_or_none(row.get("injection_order"))
+    if value is not None:
+        return value, order_provenance_label((row.get("provenance") or {}).get("injection_order"))
+    value = _float_or_none(ms.get("injection_order"))
+    if value is not None:
+        return value, "mddata"
+    value = _float_or_none(sm.get("run_order"))
+    if value is not None:
+        return value, injection_order_source_label(sm.get("run_order_source"))
+    value = _float_or_none(mz_order)
+    if value is not None:
+        return value, "mzTab"
+    return None, None
 
-    バッチだけは、試料の表の行（利用者のシート・解析フォルダの行）がそのまま勝ち、無ければ
-    msdial_samples / sample_meta の宣言を「2 種類以上あるとき」だけ採り（定数のラベル、MS-DIAL の既定
-    "1" は情報を持たない）、それも無ければ試料名の 8 桁の日付へ戻す。根拠バンドルの試料表（`build_dataset_pp_inputs`）と同じ規則で、
-    定義は `sample_manifest.batch_labels_informative` / `filename_date_batch` の 1 つだけ。
+
+def _row_batch(row: dict) -> str | None:
+    """試料の表の行のバッチ。試料名の 8 桁から埋めた値（古い記録の `filename_date`）は採らない。"""
+    prov = (row.get("provenance") or {}).get("batch") or {}
+    if prov.get("source") == "filename_date":
+        return None
+    return _str_or_none(row.get("batch"))
+
+
+def _samples_table(ds, names: list[str]) -> tuple[list[SampleInfo], dict[str, dict]]:
+    """試料の表と、バッチの候補。sample_metadata_rows → msdial_samples → roles / sample_meta の順に欄ごと埋める。
+
+    バッチは、試料の表の行（利用者のシート・解析フォルダの行）がそのまま勝ち、無ければ msdial_samples /
+    sample_meta の宣言を「2 種類以上あるとき」だけ採る（定数のラベル、MS-DIAL の既定 "1" は情報を持たない。
+    `sample_manifest.batch_labels_informative`）。それも無ければ不明（None）のまま。試料名の 8 桁
+    （`filename_date_batch`）は候補として返すだけで、ドリフト補正・反復のまとめ・交絡の判定には当てない（A7）。
+
+    注入順は値と出所（`sheet` / `mzTab` / `mddata` / …）を持つ。MS-DIAL 由来の注入順がファイル名の順と
+    一致する試料には `injection_order_may_be_file_order` を立てる（MS-DIAL はファイルの順で振るのが既定。A6）。
+    試料の表の行が無い（mzTab-M だけから読んだ）データセットは、mzTab-M の MTD（MS:4000088 のバッチ・
+    MS:4000089 の注入順）も最後に読む（`dataset_status(view="samples")` の既定の行と同じ値）。
     """
-    from metabolomix.analysis.sample_manifest import batch_labels_informative, filename_date_batch
+    from metabolomix.analysis.sample_manifest import (
+        MSDIAL_ORDER_SOURCES, _mztab_batch_and_order, batch_labels_informative, file_order_keys,
+        filename_date_batch, matches_file_order)
     rows = list(getattr(ds, "sample_metadata_rows", None) or [])
     msdial = list(getattr(ds, "msdial_samples", None) or [])
     roles = getattr(ds, "roles", None) or {}
@@ -159,6 +199,7 @@ def _samples_table(ds, names: list[str]) -> list[SampleInfo]:
         ms = (next((by_name[k] for k in keys if k in by_name), None)
               or (msdial[i] if len(msdial) == len(names) else {}))
         sm = next((meta[k] for k in keys if meta.get(k)), {})
+        mz_batch, mz_order = _mztab_batch_and_order(ds, i) if not rows else (None, None)
         role = (_role(row.get("role")) or _role(ms.get("role"))
                 or next((r for k in keys if (r := _role(roles.get(k)))), None)
                 or _role(sm.get("role")))
@@ -171,10 +212,10 @@ def _samples_table(ds, names: list[str]) -> list[SampleInfo]:
             role = _role(detect_sample_roles(
                 [label], {label: class_id} if class_id else None).get(label)) or "sample"
         group = _str_or_none(row.get("group")) or _str_or_none(ms.get("group"))
-        declared = _str_or_none(ms.get("batch")) or _str_or_none(sm.get("batch"))
-        order = next((o for o in (_float_or_none(row.get("injection_order")),
-                                  _float_or_none(ms.get("injection_order")),
-                                  _float_or_none(sm.get("run_order"))) if o is not None), None)
+        declared = (_str_or_none(ms.get("batch"))
+                    or (_str_or_none(sm.get("batch")) if sm.get("batch_source") != "filename_date" else None)
+                    or _str_or_none(mz_batch))
+        order, order_source = _order_and_source(row, ms, sm, mz_order)
         # B-2 の dataset_set_sample_metadata は subject_id を行と sample_meta の両方に置く。
         subject = (_str_or_none(row.get("subject_id")) or _str_or_none(sm.get("subject_id"))
                    or _str_or_none(row.get("biological_sample_id")))
@@ -183,18 +224,28 @@ def _samples_table(ds, names: list[str]) -> list[SampleInfo]:
                  if k not in _CORE_KEYS and k not in _BOOKKEEPING_KEYS
                  and not isinstance(v, (dict, list, tuple, set, frozenset))
                  and (s := _str_or_none(v)) is not None}
-        plan.append((name, keys, _str_or_none(row.get("batch")), declared, role, group, order,
+        plan.append((name, keys, _row_batch(row), declared, role, group, order, order_source,
                      subject, _include(row), attrs))
     use_declared = batch_labels_informative([p[3] for p in plan])
-    out = []
-    for name, keys, row_batch, declared, role, group, order, subject, include, attrs in plan:
+    # MS-DIAL 由来の注入順がファイルの順と一致するか（鍵は ds.sample_names の順に並ぶ）
+    file_keys = file_order_keys(ds) if len(display) == len(names) else list(names)
+    msdial_idx = [i for i, p in enumerate(plan) if p[6] is not None and p[7] in MSDIAL_ORDER_SOURCES]
+    file_order = matches_file_order([plan[i][6] for i in msdial_idx],
+                                    [file_keys[i] for i in msdial_idx])
+    out, candidates = [], {}
+    for i, (name, keys, row_batch, declared, role, group, order, order_source, subject, include,
+            attrs) in enumerate(plan):
         batch = row_batch or (declared if use_declared else None)
         if batch is None:
-            batch = next((d for k in reversed(keys) if (d := filename_date_batch(k))), None)
+            candidate = next((d for k in reversed(keys) if (d := filename_date_batch(k))), None)
+            if candidate is not None:
+                candidates[name] = {"value": candidate, "source": "filename_date"}
         out.append(SampleInfo(sample_id=name, role=role, group=group, batch=batch,
                               injection_order=order, subject_id=subject,
-                              include=include, attributes=attrs))
-    return out
+                              include=include, attributes=attrs,
+                              injection_order_source=order_source,
+                              injection_order_may_be_file_order=file_order and i in msdial_idx))
+    return out, candidates
 
 
 def _fingerprint(ds) -> str | None:
@@ -251,7 +302,7 @@ def from_dataset(ds, *, exclude_samples=(), exclude_features=(),
             classes[fid] = str(ontology)
     annotated = frozenset(fid for fid, cands in (getattr(ds, "feature_candidates", None) or {}).items()
                           if cands)
-    samples = _samples_table(ds, names)
+    samples, batch_candidates = _samples_table(ds, names)
     feature_ids = list(ds.feature_ids)
 
     display = list(getattr(ds, "sample_names", None) or names)
@@ -288,7 +339,8 @@ def from_dataset(ds, *, exclude_samples=(), exclude_features=(),
     return StudyData(values=values, detected=detected, sample_ids=names,
                      feature_ids=feature_ids, samples=samples,
                      quant=quant_state_of(ds), dataset_hash=_fingerprint(ds),
-                     feature_classes=classes, annotated_features=annotated)
+                     feature_classes=classes, annotated_features=annotated,
+                     batch_candidates=batch_candidates)
 
 
 def merge_feature_columns(study: StudyData, groups: list[list[str]]) -> StudyData:

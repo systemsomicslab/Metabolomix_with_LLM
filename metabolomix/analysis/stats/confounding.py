@@ -2,7 +2,8 @@
 
 単位（units）は属性 `group` `batch` `injection_order`（float | None）を持つ任意の
 オブジェクト。生体試料だけを渡す（QC・ブランクは呼び出し側で除く）。
-`groups` に入っていない群の単位は数えない。
+`groups` に入っていない群の単位は数えない。任意の属性 `injection_order_may_be_file_order`（真なら
+注入順が MS-DIAL の既定＝ファイルの順かもしれない）を持つ単位があれば、注入順の結果にその旨を添える。
 """
 from __future__ import annotations
 
@@ -14,6 +15,8 @@ from scipy import stats as _sps
 from metabolomix.core.atomic_io import DomainError
 
 CRAMERS_V_THRESHOLD = 0.5
+#: `sample_manifest.FILE_ORDER_WARNING` と同じ文字列（この純計算の層から sample_manifest を引かない）。
+FILE_ORDER_WARNING = "injection_order_may_be_file_order"
 INJECTION_ORDER_ALPHA = 0.05
 
 
@@ -49,6 +52,15 @@ def _injection_order(counted: list, present_groups: list[str]) -> tuple[dict, li
     n_with = sum(len(v) for v in orders.values())
     if n_with == 0:
         return result, warnings  # 注入順が無いだけなら警告しない
+    flagged = sum(bool(getattr(u, "injection_order_may_be_file_order", False)) for u in counted
+                  if _is_finite_number(u.injection_order))
+    if flagged:
+        # 注入順が MS-DIAL の既定（ファイルの順）かもしれない: 偏りの検定はファイル名の並びを見ているだけかもしれない
+        result["may_be_file_order"] = True
+        warnings.append({"code": FILE_ORDER_WARNING, "n_units": flagged,
+                         "message": "注入順は MS-DIAL が振った値で、ファイル名の順と一致する（MS-DIAL の既定かもしれない）。"
+                                    "注入順の偏りの判定はファイル名の並びを見ているだけかもしれない"
+                                    "（実際の測定順は試料の表の injection_order に入れる）。"})
     reason = None
     if n_with < len(counted):
         reason = "注入順が欠けた生体試料があるため、注入順の偏りは評価できません。"

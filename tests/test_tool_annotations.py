@@ -97,6 +97,8 @@ EXPECTED_ANNOTATIONS = {
     "pipeline_status": READ_ONLY,
     "pipeline_resume": LOCAL_WRITE,
     "pipeline_cancel": LOCAL_WRITE,
+    # ISA / mwTab を sample-manifest.v2 にして raw フォルダへ書く。既存は overwrite=True が要り、同じ引数の再実行は同じ表になる。
+    "pipeline_sample_sheet": LOCAL_WRITE,
     # --- DCL ---
     "dcl_find_msms": READ_ONLY,
     # --- 参照ライブラリ（MS/MS スペクトル照合） ---

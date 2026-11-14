@@ -29,8 +29,14 @@
   （`dataset_status` の `samples`）。ブランクは前処理で行列から外れ、QC は残る。QC・ブランクは 2 群比較に入らない。
   `dataset_exclude` で除いた試料・特徴は前処理と図と強度順の検索が除く（可逆）。
   実験情報シートに足した因子の列（`Genotype` など）があれば、`dataset_status(view="samples")` の TSV は
-  固定の列（`name group role batch injection_order subject_id excluded`）の後ろに、その列を名前の順に並べる
-  （値を持たない試料は空欄。因子の列が無いデータセットでは列は増えない）。
+  固定の列（`name group role batch batch_source injection_order injection_order_source subject_id excluded`）の後ろに、
+  その列を名前の順に並べる（値を持たない試料は空欄。因子の列が無いデータセットでは列は増えない）。
+  `batch_source` / `injection_order_source` は値の出所（`sheet` = 実験情報シート・利用者 / `mddata` = MS-DIAL の
+  `.mddata` / `mzTab` = mzTab-M の MS:4000088・MS:4000089 / `raw_acquisition_time` = raw の取得時刻の順 / `filename` =
+  ファイル名の順。後の 2 つは、シートが schema の行の直後に宣言の行 `# injection_order_source = <raw_acquisition_time |
+  filename>` を持つとき。`pipeline_sample_sheet` は取得時刻から注入順を作ったシートにこの行を書く）。シートの空欄は `.mddata`（無ければ
+  mzTab-M）の値で埋まり、その出所が出る（統計が使う値と同じ）。バッチが空で試料名に 8 桁の数字があれば
+  `batch_source` は `candidate:<8 桁>`（**候補だけで、統計には当てていない**。§11.1）。
 - **MS/MS の実スペクトルは `.dcl`**（`dcl` トピック）。`.arf` のセルの MS/MS の有無は取得の参照があることだけを示す。
 - **最初の概観**。`load_dataset` の `overview` と `dataset_overview` は品質 → 全体 → クラス → 分子種の 4 段の事実（ID つき）。
   2 群の向きは仮、クラスの段は付加体の選別の後だけ。意味は §11.9。
@@ -177,11 +183,13 @@ pseudocount も clip も使わない。補完は PCA のためだけに `dataset
 
 | 引数 | 既定 | 意味 |
 |---|---|---|
-| `drift_mode` / `drift_span` | `auto` / 0.75 | QC の LOESS ドリフト補正。`auto` は条件が揃えば行う（`on` / `off`）。内部標準などで換算済みの値に QC がある場合は `auto` では**尋ねる**（`needs_input`。`core.md`）。答えを `drift_mode` に入れて呼び直す |
+| `drift_mode` / `drift_span` | `auto` / 0.75 | QC の LOESS ドリフト補正（`auto` / `on` / `off`）。`auto` は条件（QC の数・挟まり方・注入順）が揃えば行うが、揃っていても内部標準などで換算済みの値（`quant_normalized`）か、注入順が MS-DIAL の既定（ファイルの順）かもしれない・シートの宣言でファイル名の順（出所 `filename`）のとき（どちらも `injection_order_may_be_file_order`）は**当てずに**計算する。**尋ねない**（`needs_input` は返さない）: ドリフトの段は `status: skipped`・`reason`・`reasons`・`rerun_with: {"preprocess.drift.mode": "on"}`、`warnings` に `drift_not_applied_by_default`（`reasons`・`message`・`suggestion`）。`on` は条件が揃えば必ず当て、揃わなければ `PREPROCESS_PRECONDITION`。条件が揃わないときの `auto` は理由を `reasons` に残して飛ばすだけ（呼び直しの案内は出さない） |
+| `loess_degree` | 1 | LOESS の局所多項式の次数（`1` = 局所線形。statsmodels の lowess と同じ / `2` = 局所 2 次。同じ近傍・三乗重みを numpy で解く）。2 は近傍が 1 点多く要る。ドリフトの段の記録に `loess_degree` が出る |
 | `blank_min_ratio` | 3.0 | 生体試料の平均がブランク平均のこの倍数未満の特徴を除く |
 | `detection_min_rate` / `detection_by` | 0.5 / `group` | gap-fill を除いた検出率の下限（`group` は群ごと、`all` は全体）。検出状態が無いデータでは評価できない旨が steps に出る |
 | `max_qc_rsd` / `max_d_ratio` | 0.30 / 0.5 | QC の RSD の上限・D-ratio の上限 |
-| `normalize` | `auto` | `auto`（換算済みなら何もしない）/ `none` / `tic` / `median` / `pqn` |
+| `normalize` | `auto` | `auto`（換算済みなら何もしない。それ以外は `pqn`）/ `none` / `tic` / `median` / `pqn`。PQN の参照スペクトルは QC があれば QC の特徴ごとの中央値、**QC が無ければ生体試料（全群）の特徴ごとの中央値**で、正規化の段に `reference`（`qc` / `sample`）を書く。QC が無いときは `reference_definition: "median_of_samples_all_groups"` と注意 `pqn_reference_is_samples`（群の間で全体の組成が大きく違うと、係数がその差の一部を吸収しうる） |
+| `normalization_features` / `normalization_exclude_features` | なし | 正規化の係数を求める特徴を絞る・除く（特徴 ID のリスト）。既定は足切りの後に残った特徴すべて。**係数から外した特徴も行列には残り**、同じ係数で割られる。`normalization_features` に挙げた特徴は足切りで落ちていても係数に使う（値はドリフト補正の後）。正規化の段に `factor_features`（係数に使った数）・`factor_feature_basis`（`features` / `kept_features`）・`excluded_from_factors`・`factor_features_filtered_out`（足切りで落ちていた特徴）が出る。無い ID・空になる指定（`normalization_features=[]` も）・`normalize="none"` との組は `PREPROCESS_CONFIG_INVALID`（`normalization_exclude_features=[]` は指定なしと同じ）。`normalize="auto"` が換算済みのデータで正規化しないときは効かず、正規化の段に `factor_features_ignored: true`、`warnings` に `normalization_features_ignored`（行列と `matrix_id` は指定なしと同じ） |
 | `collapse_replicates` | true | 同じ個体（`subject_id`）の反復注入を 1 個体にまとめる |
 | `injection_columns` | `[]` | 個体のまとめの鍵から外す試料の表の列（取得日・注入番号など、注入ごとに違う属性。技術反復が別の個体に割れるのを防ぐ） |
 | `group_levels` / `group_factors` | なし | 試料名（と試料の表の群）の因子トークンで群を解く。解いた群は行列の設定に記録される |
@@ -197,6 +205,13 @@ subject_source, groups: {群: 個体数}, quant, steps, warnings, record, next}`
   足切りごとの落とした数は独立のマスクで**重なり得る**ので足し算しない（全体は `dropped`）。`collapse` は
   `subject_source`（`subject_id` / `injection` / `mixed`）・`n_injections`・`n_units`・`collapsed_units`。
 - `groups` の群が 1 つだけなら警告 `single_group`（`group_levels` / `group_factors` の綴りか試料の表の群を確かめる）。
+- 注入順とバッチの出所の注意: `injection_order_may_be_file_order`（注入順が MS-DIAL の振った値（`.mddata` /
+  mzTab-M）で、ファイル名の順と一致する。MS-DIAL は利用者が入れない限り注入順をファイルの順で振るので、実際の測定順とは
+  限らない。`n_samples`。同じ注意を交絡の判定（`dataset_compare` の `confounding.warnings` に `n_units` 付きで。エンジンの
+  結果（`dataset_analysis_run` の比較も）では `confounding.injection_order.may_be_file_order` も立つ）と
+  質量精度の注入順の ρ（`dataset_mass_accuracy` の `injection_trend.warnings`）も返す。判定は、MS-DIAL 由来の注入順を
+  ファイル名の順に並べて狭義に増えるとき（同じ注入順の試料があれば立てない））・`batch_candidates`（バッチが不明な試料の名前の 8 桁が 2 種類以上。`values`。
+  ドリフト補正・反復のまとめ・交絡には当てていない。バッチなら試料の表の `batch` に入れる）。
 - `quant` は定量で作ったデータセット（内部標準で換算済み）のときだけ `{normalized, method, unit}`、それ以外は null。
 - `record` は `reports/stats/` への記録 1 件（`{written: true, record_id, path}`）。書けないときは `{written: false, reason}`
   で、前処理自体は成功している。記録は追記専用（`lipidmix.stats-record.v1`: `step` は `preprocess` / `compare` / `pca`、
@@ -221,7 +236,7 @@ subject_source, groups: {群: 個体数}, quant, steps, warnings, record, next}`
 
 #### 10.4 `dataset_pca`
 
-統計エンジンの PCA（`stats-pca.v1`）。`matrix_id`（`dataset_preprocess` の行列。省略時は既定の前処理）の log2 行列で、**軸は生体の個体だけで決め、QC は同じ軸へ投影する**（QC は軸の計算に使わない）。欠測は PCA のためだけに補う（`impute`）。`group_levels` / `group_factors` は色分けの表示と記録にだけ使い、スコア・寄与率は群の指定で変わらない。戻り値は `{status, result_id, matrix_id, scaling, log2: true, imputation, n_fit, n_qc_projected, explained_variance_ratio, groups: {群: 個体数}, record, loadings_note}` の要約で、スコア・ローディングの全量は `result_id`（`ds.last_pca`）に保持する。図は `dataset_plot(kind="pca" / "loadings")`（QC は白抜き、ローディングは軸の計算で値が変わった特徴だけ）。`matrix_id` を渡して、その行列が古い（除外・試料の表の変更）・無いときは `missing_state`（`dataset_preprocess` を案内）。`matrix_id` を省いて既定の前処理が利用者への確認を要する（QC のある換算済みデータ）ときは `needs_input`（`core.md`。`dataset_preprocess(drift_mode=...)` で行列を作り、その `matrix_id` を渡す）。既定の前処理で行列を作ったときは、その行列を登録して前処理の記録も書く（エラーのときも `details.matrix_id` に残る）。結果（`stat_pca`）は、除外・試料の表の**どんな**更新（`group` だけの変更も）でも古くなる（`group_levels` / `group_factors` の色分けが焼き込まれているため）。
+統計エンジンの PCA（`stats-pca.v1`）。`matrix_id`（`dataset_preprocess` の行列。省略時は既定の前処理）の log2 行列で、**軸は生体の個体だけで決め、QC は同じ軸へ投影する**（QC は軸の計算に使わない）。欠測は PCA のためだけに補う（`impute`）。`group_levels` / `group_factors` は色分けの表示と記録にだけ使い、スコア・寄与率は群の指定で変わらない。戻り値は `{status, result_id, matrix_id, scaling, log2: true, imputation, n_fit, n_qc_projected, explained_variance_ratio, groups: {群: 個体数}, record, loadings_note}` の要約で、スコア・ローディングの全量は `result_id`（`ds.last_pca`）に保持する。図は `dataset_plot(kind="pca" / "loadings")`（QC は白抜き、ローディングは軸の計算で値が変わった特徴だけ）。`matrix_id` を渡して、その行列が古い（除外・試料の表の変更）・無いときは `missing_state`（`dataset_preprocess` を案内）。`matrix_id` を省いた既定の前処理は尋ねない: `drift_mode=auto` がドリフト補正を当てなかった行列なら、戻り値に `warnings`（`drift_not_applied_by_default`。補正するなら `dataset_preprocess(drift_mode="on")` で行列を作り、その `matrix_id` を渡す）が付く。既定の前処理で行列を作ったときは、その行列を登録して前処理の記録も書く（エラーのときも `details.matrix_id` に残る）。結果（`stat_pca`）は、除外・試料の表の**どんな**更新（`group` だけの変更も）でも古くなる（`group_levels` / `group_factors` の色分けが焼き込まれているため）。
 
 #### 10.5 手動サンプル/ピーク除外（`dataset_exclude`）
 
@@ -245,7 +260,7 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 
 #### 11.1 群ラベルの由来
 
-群ラベルは試料の情報の `group`（`dataset_status(view="samples")`。ファイル名由来の factor トークン / Class ID 機構、`metabolomix/msdial/classes.py` の `assign_sample_groups`）から取得する。バッチは試料の情報の `batch`（ファイル名中の8桁日付）。比較（`dataset_compare`）は行列（`dataset_preprocess` の `matrix_id`、省略時は既定の前処理）を消費する。
+群ラベルは試料の情報の `group`（`dataset_status(view="samples")`。ファイル名由来の factor トークン / Class ID 機構、`metabolomix/msdial/classes.py` の `assign_sample_groups`）から取得する。バッチは試料の情報の `batch` で、実験情報シート・利用者の訂正・MS-DIAL の宣言（`.mddata`、mzTab-M の MS:4000088。全試料で同じ値の宣言は GUI の既定とみなして採らない）から来る値だけを使う。**試料名の 8 桁の数字（取得日らしい）はバッチに当てない**: 候補として試料の表の `batch_source`（`candidate:<8 桁>`）と前処理の注意 `batch_candidates` に出すだけで、ドリフト補正・反復のまとめ・交絡の判定は使わない（バッチが無ければ交絡は「評価不可」）。比較（`dataset_compare`）は行列（`dataset_preprocess` の `matrix_id`、省略時は既定の前処理）を消費する。
 
 試料の `group` は常に**完全な Class ID**（例 `24M_GF_F`）である。一方、旧 ARF 経路の差次的解析の `group_a` / `group_b` は**因子トークンによるプール指定**を受け付けた。いまの `dataset_compare` は群名（`reference_group` / `test_group`）を渡し、同じトークン文法で試料名を引くのは `dataset_status(view="samples", query=...)`。**以下は旧 ARF 経路（撤去済み）の例**で、いまトークンを受けるのは `dataset_status(view="samples", query=...)` だけ。`dataset_compare` は群名を受け、下の注意（QC/ブランクは比較群に入らない・一致ゼロや両群が同じ Class ID は拒む）の意味は保たれる。旧経路の例（`sample_factors.expand_sample_specs`。トークンは Class ID とサンプル名の両方から解決される）:
 
@@ -309,7 +324,7 @@ contrasts, omnibus, confounding, warnings, top, record, next}`。
 - エラー: 群の指定が合わない・`top_n` / `log2fc_threshold` が範囲外・`bh_population=reported` は `DATASET_BAD_REQUEST`。
   `matrix_id` が古い・無いは `missing_state`（`stat_matrix`）。`matrix_id` と `group_levels` / `group_factors` の併用は
   `DATASET_BAD_REQUEST`（群は行列が決めている）。`EXPLORATORY_ONLY_DATASET`（途中で止まった実行のデータセット）。
-  既定の前処理が確認を要するときは `needs_input`（`core.md`）。
+  既定の前処理は尋ねない（`drift_mode=auto` が補正を当てなかったときは `warnings` に `drift_not_applied_by_default`）。
   既定の前処理で行列を作ったあとにエラーになったとき、`details.matrix_id` にその行列の ID が残る（呼び直しに使える）。
 - `record`: `{written, record_id, path}`（比較の記録。親は行列の前処理の記録）。既定の前処理で行列を作ったときは
   `preprocess_record` に前処理の記録も付く。
@@ -587,8 +602,8 @@ PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（
 | `ok` | 上のどれでもない |
 
 `poor` でも差は出すが、各段の事実に「品質 Q1 が poor のため参考」と付く（完全交絡のときだけ比較そのものを回さない）。
-QC のある換算済みデータでドリフト補正の既定が未決（`dataset_preprocess` なら `needs_input`）のときは、概観は止まらず
-補正なしで計算し、そのことを事実と `next`（`dataset_preprocess(drift_mode=…)`）に出す。
+既定（`drift_mode=auto`）がドリフト補正を当てなかった（換算済み・注入順がファイルの順かもしれない）ときは、概観は
+補正なしで計算し、そのことを事実と `next`（`dataset_preprocess(drift_mode="on")`）に出す。
 既定の前処理が失敗する（足切りで特徴が 1 つも残らない など）ときも概観は失敗しない: 品質の段（前処理の前の試料から
 計算する）だけを出し、全体・クラス・分子種の段は `omitted` に失敗の理由（足切りの内訳 `details` を含む）を書いて省く。
 交絡はこのとき評価しない。

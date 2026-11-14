@@ -1,5 +1,6 @@
 """stats.preprocess: 選択・バッチ別ドリフト補正・同時の足切り・正規化・log2・個体でのまとめ。"""
 import copy
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -226,17 +227,136 @@ def test_drift_records_rows_not_corrected():
         {"sample_id": "blank_noorder", "reason": "no_injection_order"}]
 
 
-def test_is_normalized_with_qc_and_auto_drift_returns_needs_input():
+def _warning(prep, code):
+    return next((w for w in prep.warnings if w["code"] == code), None)
+
+
+def test_is_normalized_with_qc_and_auto_drift_computes_off_and_says_so():
+    """C3: 換算済み・QC あり・drift=auto は尋ねない。補正せずに計算し、理由と drift=on の選択肢を返す。"""
     quant = QuantState(normalized=True, method="internal_standard", unit="pmol")
-    out = P.preprocess(_drift_study(quant=quant), {})
-    assert isinstance(out, P.NeedsInput)
-    assert out.field == "preprocess.drift.mode"
-    assert [o["value"] for o in out.options] == ["on", "off"]
-    env = out.to_envelope()
-    assert env["status"] == "needs_input" and env["field"] == out.field and env["reason"]
-    # 明示すれば進む
-    prep = P.preprocess(_drift_study(quant=quant), {"drift": {"mode": "on"}, "filters": OFF_FILTERS})
+    study = _drift_study(quant=quant)
+    prep = P.preprocess(study, {"filters": OFF_FILTERS})
+    assert isinstance(prep, P.PreparedMatrix)
+    drift = _step(prep, "drift")
+    assert drift["status"] == "skipped" and drift["reason"] == "quant_normalized"
+    assert drift["rerun_with"] == {"preprocess.drift.mode": "on"}
+    assert np.array_equal(prep.log2, _raw_bio_log2(study))      # 値は補正していない
+    note = _warning(prep, "drift_not_applied_by_default")
+    assert note["reasons"] == ["quant_normalized"]
+    assert note["suggestion"] == {"preprocess.drift.mode": "on"} and "drift_mode" in note["message"]
+    # 明示すれば補正する（注意は出ない）
+    on = P.preprocess(_drift_study(quant=quant), {"drift": {"mode": "on"}, "filters": OFF_FILTERS})
+    assert _step(on, "drift")["status"] == "applied"
+    assert _warning(on, "drift_not_applied_by_default") is None
+
+
+def test_auto_drift_never_holds_when_correction_is_impossible_anyway():
+    """補正の条件を満たさないなら、その理由だけを返す（drift=on を勧めない）。"""
+    quant = QuantState(normalized=True, method="internal_standard", unit="pmol")
+    study = _drift_study(quant=quant, qc_step=5)                     # 各バッチ 4 QC（近傍が足りない）
+    prep = P.preprocess(study, {"filters": OFF_FILTERS})
+    drift = _step(prep, "drift")
+    assert drift["reason"] == "too_few_qc_for_span:B1" and "rerun_with" not in drift
+    assert _warning(prep, "drift_not_applied_by_default") is None
+    no_order = P.preprocess(_simple(quant=quant), {})
+    assert _step(no_order, "drift")["reason"] == "no_injection_order"
+    assert _warning(no_order, "drift_not_applied_by_default") is None
+
+
+def _file_order(study):
+    """生体・QC の注入順に `injection_order_may_be_file_order` を立てた写し（MS-DIAL の既定の順）。"""
+    study.samples = [replace(s, injection_order_source="mddata", injection_order_may_be_file_order=True)
+                     for s in study.samples]
+    return study
+
+
+def test_auto_drift_holds_when_order_may_be_file_order_and_on_still_corrects():
+    """A6: 注入順が MS-DIAL の既定かもしれないなら auto は補正しない。on は補正し、注意は残す。"""
+    cfg = {"filters": OFF_FILTERS, "normalize": {"method": "none"}}
+    prep = P.preprocess(_file_order(_drift_study()), cfg)
+    drift = _step(prep, "drift")
+    assert drift["status"] == "skipped" and drift["reason"] == "injection_order_may_be_file_order"
+    assert _warning(prep, "drift_not_applied_by_default")["reasons"] == ["injection_order_may_be_file_order"]
+    flag = _warning(prep, "injection_order_may_be_file_order")
+    assert flag["n_samples"] == 32 and "MS-DIAL" in flag["message"]
+    assert all(u.injection_order_may_be_file_order and u.injection_order_source == "mddata"
+               for u in prep.units)
+    # 止めた事情は matrix_id に入る（同じ設定で補正した行列と ID が食い違わない）
+    assert prep.matrix_id != P.preprocess(_drift_study(), cfg).matrix_id
+    on = P.preprocess(_file_order(_drift_study()), {**cfg, "drift": {"mode": "on"}})
+    assert _step(on, "drift")["status"] == "applied"
+    assert _warning(on, "injection_order_may_be_file_order") is not None
+    assert _warning(on, "drift_not_applied_by_default") is None
+
+
+def test_unflagged_order_keeps_the_matrix_id_and_has_no_order_warning():
+    prep = P.preprocess(_drift_study(), {"filters": OFF_FILTERS})
     assert _step(prep, "drift")["status"] == "applied"
+    assert _warning(prep, "injection_order_may_be_file_order") is None
+    assert all(not u.injection_order_may_be_file_order for u in prep.units)
+
+
+# --- LOESS の次数（E10-T21b） ------------------------------------------------
+
+def test_local_poly_degree_one_matches_statsmodels_lowess():
+    from statsmodels.nonparametric.smoothers_lowess import lowess
+    rng = np.random.default_rng(7)
+    for trial in range(40):
+        n = int(rng.integers(5, 25))
+        x = (np.arange(1, n + 1) * 3.0 if trial % 2
+             else np.sort(rng.choice(np.arange(1, 300), n, replace=False)).astype(float))
+        y = rng.lognormal(10, 0.3, n)
+        xv = np.concatenate([np.sort(rng.uniform(x.min(), x.max(), 15)), x])
+        span = float(rng.uniform(0.4, 1.0))
+        ref = lowess(y, x, frac=span, it=0, delta=0.0, xvals=xv)
+        ours = P._local_poly(x, y, xv, span, 1)
+        assert np.array_equal(np.isfinite(ref), np.isfinite(ours))
+        ok = np.isfinite(ref)
+        np.testing.assert_allclose(ours[ok], ref[ok], rtol=1e-7)
+
+
+def _quadratic_drift_study():
+    """1 バッチ × 31 注入。QC は 3 つおき（11 本）。全試料が同じ 2 次のドリフト（中ほどで最大）。"""
+    rows, vals = [], []
+    for o in range(1, 32):
+        is_qc = (o - 1) % 3 == 0
+        rows.append((f"s{o}", "qc" if is_qc else "sample", None if is_qc else ("G1" if o % 2 else "G2"),
+                     "B1", float(o), None))
+        vals.append([1000.0 * (1 + 0.004 * (o - 1) * (31 - o))])
+    return _study(vals, rows)
+
+
+def test_loess_degree_two_removes_quadratic_drift_better_than_linear():
+    cfg = {"filters": OFF_FILTERS, "normalize": {"method": "none"}}
+    lin = P.preprocess(_quadratic_drift_study(), cfg)
+    quad = P.preprocess(_quadratic_drift_study(), {**cfg, "drift": {"loess_degree": 2}})
+    assert _step(quad, "drift")["status"] == "applied" and _step(quad, "drift")["loess_degree"] == 2
+    assert _step(lin, "drift")["loess_degree"] == 1
+    assert np.nanstd(quad.log2[:, 0]) < 1e-9                      # 局所 2 次は 2 次のドリフトを消す
+    assert np.nanstd(lin.log2[:, 0]) > 10 * np.nanstd(quad.log2[:, 0])
+
+
+def test_loess_degree_config_is_optional_and_validated():
+    assert "loess_degree" not in P.normalize_preprocess_config({"drift": {"loess_degree": 1}})["drift"]
+    assert P.normalize_preprocess_config({"drift": {"loess_degree": 2}})["drift"]["loess_degree"] == 2
+    for bad in (3, 0, True, "2", 1.5):
+        with pytest.raises(DomainError) as e:
+            P.normalize_preprocess_config({"drift": {"loess_degree": bad}})
+        assert e.value.code == "PREPROCESS_CONFIG_INVALID" and e.value.details["field"] == "drift.loess_degree"
+    # 既定の 1 を書いても書かなくても同じ matrix_id、2 は別の ID
+    a = P.preprocess(_drift_study(), {"filters": OFF_FILTERS}).matrix_id
+    assert a == P.preprocess(_drift_study(), {"filters": OFF_FILTERS, "drift": {"loess_degree": 1}}).matrix_id
+    assert a != P.preprocess(_drift_study(), {"filters": OFF_FILTERS, "drift": {"loess_degree": 2}}).matrix_id
+
+
+def test_loess_degree_two_needs_one_more_neighbour():
+    """span 0.75 × 6 QC → 近傍 4: 局所線形は補正できるが、局所 2 次は近傍が足りない。"""
+    cfg = {"filters": OFF_FILTERS, "normalize": {"method": "none"}}
+    assert _step(P.preprocess(_drift_study(), cfg), "drift")["status"] == "applied"
+    prep = P.preprocess(_drift_study(), {**cfg, "drift": {"loess_degree": 2}})
+    assert _step(prep, "drift")["reasons"] == ["too_few_qc_for_span:B1", "too_few_qc_for_span:B2"]
+    full = P.preprocess(_drift_study(), {**cfg, "drift": {"loess_degree": 2, "span": 1.0}})
+    assert _step(full, "drift")["status"] == "applied"
 
 
 # --- 正規化 -----------------------------------------------------------------
@@ -280,6 +400,122 @@ def test_no_qc_skips_qc_steps_with_reasons():
     norm = _step(prep, "normalize")
     assert norm["method"] == "pqn" and norm["reference"] == "sample"
     assert prep.qc_log2.shape == (0, 3) and prep.qc_ids == []
+    # QC が無い PQN の参照（生体試料・全群の中央値）は明示する（A7）
+    assert norm["reference_definition"] == "median_of_samples_all_groups"
+    assert _warning(prep, "pqn_reference_is_samples") is not None
+    with_qc = P.preprocess(_simple(), {})
+    assert _step(with_qc, "normalize")["reference"] == "qc"
+    assert "reference_definition" not in _step(with_qc, "normalize")      # QC があるときの形は変えない
+    assert _warning(with_qc, "pqn_reference_is_samples") is None
+
+
+# --- 正規化の特徴の部分集合（B2-T21） -------------------------------------------
+
+def test_normalization_factors_from_a_feature_subset_apply_to_all_features():
+    base = _simple(n_feat=4)
+    cfg = {"normalize": {"method": "median"}, "filters": OFF_FILTERS, "drift": {"mode": "off"}}
+    full = P.preprocess(base, cfg)
+    sub = P.preprocess(base, {**cfg, "normalize": {"method": "median", "features": ["f1", "f0"]}})
+    step = _step(sub, "normalize")
+    assert step["factor_features"] == 2 and step["factor_feature_basis"] == "features"
+    assert sub.feature_ids == full.feature_ids == ["f0", "f1", "f2", "f3"]     # どの特徴も残る
+    expect = P.preprocess(_study(base.values[:, :2], [(s.sample_id, s.role, s.group, s.batch,
+                                                       s.injection_order, s.subject_id)
+                                                      for s in base.samples]),
+                          {**cfg, "normalize": {"method": "median"}})
+    assert step["factors"] == pytest.approx(_step(expect, "normalize")["factors"])
+    assert step["factors"] != pytest.approx(_step(full, "normalize")["factors"])
+    factors = np.array(step["factors"])
+    bio = [i for i, s in enumerate(base.samples) if s.role == "sample"]
+    np.testing.assert_allclose(sub.log2, np.log2(base.values[bio] / factors[bio, None]))
+
+
+def test_normalization_exclude_features_keeps_them_in_the_matrix():
+    base = _simple(n_feat=4)
+    cfg = {"filters": OFF_FILTERS, "drift": {"mode": "off"}}
+    out = P.preprocess(base, {**cfg, "normalize": {"method": "tic", "exclude_features": ["f3"]}})
+    step = _step(out, "normalize")
+    assert step["factor_feature_basis"] == "kept_features" and step["factor_features"] == 3
+    assert step["excluded_from_factors"] == 1
+    assert "f3" in out.feature_ids
+    same = P.preprocess(base, {**cfg, "normalize": {"method": "tic", "features": ["f0", "f1", "f2"]}})
+    assert step["factors"] == pytest.approx(_step(same, "normalize")["factors"])
+
+
+def test_normalization_subset_can_use_a_feature_dropped_by_filters():
+    """内部標準のように足切り（ここでは QC の RSD）で落ちる特徴でも係数の計算に使える。"""
+    base = _simple(n_feat=3)
+    rows = [(s.sample_id, s.role, s.group, s.batch, s.injection_order, s.subject_id) for s in base.samples]
+    noisy = np.r_[1e3 * np.arange(1, 7), 1.0, 1e7, 50.0]
+    study = _study(np.column_stack([base.values, noisy]), rows)
+    prep = P.preprocess(study, {"drift": {"mode": "off"},
+                                "normalize": {"method": "median", "features": ["f3"]}})
+    assert "f3" not in prep.feature_ids
+    step = _step(prep, "normalize")
+    assert step["factor_features_filtered_out"] == ["f3"]
+
+
+def test_normalization_subset_rejects_unknown_or_empty():
+    base = _simple(n_feat=3)
+    with pytest.raises(DomainError) as e:
+        P.preprocess(base, {"normalize": {"method": "pqn", "features": ["f0", "zz"]}})
+    assert e.value.code == "PREPROCESS_CONFIG_INVALID" and e.value.details["unknown_features"] == ["zz"]
+    with pytest.raises(DomainError) as e:
+        P.preprocess(base, {"normalize": {"method": "pqn", "features": ["f0"],
+                                          "exclude_features": ["f0"]}})
+    assert e.value.code == "PREPROCESS_CONFIG_INVALID"
+    for bad in ("f0", [""], [1]):
+        with pytest.raises(DomainError):
+            P.normalize_preprocess_config({"normalize": {"features": bad}})
+    # features=[] は係数を計算する特徴が空なので不正。exclude_features=[] は何も外さない（指定なしと同じで設定に載らない）
+    with pytest.raises(DomainError) as e:
+        P.normalize_preprocess_config({"normalize": {"features": []}})
+    assert e.value.code == "PREPROCESS_CONFIG_INVALID" and e.value.details["field"] == "normalize.features"
+    assert P.normalize_preprocess_config({"normalize": {"exclude_features": []}})["normalize"] == {"method": "auto"}
+
+
+def test_normalization_subset_with_method_none_is_rejected():
+    """method=none は係数を計算しないので、係数の特徴の指定は矛盾（黙って捨てない）。"""
+    for key in ("features", "exclude_features"):
+        with pytest.raises(DomainError) as e:
+            P.normalize_preprocess_config({"normalize": {"method": "none", key: ["f0"]}})
+        assert e.value.code == "PREPROCESS_CONFIG_INVALID"
+        assert e.value.details["field"] == f"normalize.{key}"
+
+
+def test_normalization_subset_ignored_when_auto_resolves_to_none_says_so_and_keeps_the_id():
+    """換算済みのデータでは auto が正規化しない: 指定は効かず、その旨を段と warnings に残し、ID は指定なしと同じ。"""
+    quant = QuantState(normalized=True, method="internal_standard", unit="pmol")
+    cfg = {"filters": OFF_FILTERS, "drift": {"mode": "off"}}
+    plain = P.preprocess(_simple(n_feat=4, quant=quant), cfg)
+    sub = P.preprocess(_simple(n_feat=4, quant=quant),
+                       {**cfg, "normalize": {"method": "auto", "features": ["f0", "f1"]}})
+    step = _step(sub, "normalize")
+    assert step["status"] == "skipped" and step["reason"] == "quant_normalized"
+    assert step["factor_features_ignored"] is True
+    assert _warning(sub, "normalization_features_ignored") is not None
+    assert "factor_features_ignored" not in _step(plain, "normalize")
+    assert _warning(plain, "normalization_features_ignored") is None
+    assert sub.matrix_id == plain.matrix_id
+    np.testing.assert_allclose(sub.log2, plain.log2)
+    # 無い ID は、効かない場面でも誤り
+    with pytest.raises(DomainError):
+        P.preprocess(_simple(n_feat=4, quant=quant), {**cfg, "normalize": {"features": ["zz"]}})
+
+
+# --- バッチの候補（A7-V65） -------------------------------------------------------
+
+def test_batch_candidates_are_reported_but_not_used():
+    study = _simple()
+    study.batch_candidates = {"a0": {"value": "20240101", "source": "filename_date"},
+                              "b0": {"value": "20240202", "source": "filename_date"}}
+    prep = P.preprocess(study, {})
+    note = _warning(prep, "batch_candidates")
+    assert note["values"] == ["20240101", "20240202"] and note["n_samples"] == 2
+    assert all(u.batch is None for u in prep.units)
+    single = _simple()
+    single.batch_candidates = {"a0": {"value": "20240101", "source": "filename_date"}}
+    assert _warning(P.preprocess(single, {}), "batch_candidates") is None
 
 
 # --- 足切り -----------------------------------------------------------------
@@ -405,7 +641,7 @@ def test_injection_source_reports_replicate_name_warnings():
             (("P01_1", "G1"), ("P01_2", "G1"), ("P02_1", "G2"), ("P02_2", "G2"))]
     prep = P.preprocess(_study(np.ones((4, 1)), rows), {"filters": OFF_FILTERS})
     assert prep.subject_source == "injection" and len(prep.units) == 4
-    assert {w["stem"] for w in prep.warnings} == {"P01", "P02"}
+    assert {w["stem"] for w in prep.warnings if w["code"] == "possible_technical_replicates"} == {"P01", "P02"}
 
 
 # --- matrix_id・補完 --------------------------------------------------------

@@ -476,14 +476,15 @@ def test_absent_samples_details_are_cut_with_a_count(monkeypatch, tmp_path, fake
     assert len(body["error"]["details"]["absent"]) == 20 and body["error"]["details"]["absent_n_more"] == 5
 
 
-def test_needs_input_for_normalized_data_with_qc(monkeypatch, tmp_path, fake_measure):
+def test_normalized_data_with_qc_does_not_ask(monkeypatch, tmp_path, fake_measure):
+    """既定の前処理は drift=auto を尋ねない（換算済み・QC ありでも行列を作って進む。2026-11-14 の C3）。"""
     ds = _qc_session(monkeypatch, tmp_path)
     ds.quant_state = {"normalized": True, "method": "is_ratio", "unit": "ratio", "record_id": "q1"}
-    body = json.loads(tools.pathway_project(**_GROUPS))
-    inner = body["needs_input"]
-    assert inner["field"] == "preprocess.drift.mode" and inner["argument"] == "drift_mode"
-    assert "pathway_project" in inner["reason"] and inner["retry_tools"] == ["dataset_preprocess"]
-    assert fake_measure == [] and not getattr(ds, "stat_matrices", None)
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    # 尋ねずに既定の前処理へ進む（この小さな fixture では既定の足切りで注釈の付いた特徴が落ちるので、
+    # 投影そのものは足切りを切った行列で確かめる）
+    assert "needs_input" not in body
+    assert "drift" not in json.dumps(body.get("error") or {}, ensure_ascii=False)
     from metabolomix.tools.stats_tools import dataset_preprocess
     pre = json.loads(dataset_preprocess(drift_mode="off", blank_min_ratio=None, detection_min_rate=None,
                                         max_qc_rsd=None, max_d_ratio=None))

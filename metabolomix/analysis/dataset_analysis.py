@@ -1,8 +1,8 @@
 """DatasetState の試料の表を、役割・バッチ・注入順の写像に組むアダプタ（MCP 非依存）。
 
 `build_dataset_pp_inputs` は DatasetState の feature_matrix を (n_samples, n_features) に転置し、
-解析に残す試料（`included_sample_indices`）と、役割・バッチ・注入順（明示メタデータか、試料名と
-mzTab-M の MTD から推定したもの）を返す。根拠バンドルの `samples.tsv`（`evidence_export`）が読む。
+解析に残す試料（`included_sample_indices`）と、役割・バッチ・注入順（明示メタデータか、試料名の
+役割のトークンと mzTab-M の MTD から推定したもの）を返す。根拠バンドルの `samples.tsv`（`evidence_export`）が読む。
 前処理と検定は統計エンジン（`analysis/stats/`）が持つ。
 
 依存は metabolomix.analysis.* のみ。arf/ mztab/ tools/ を import しない
@@ -84,8 +84,11 @@ def build_dataset_pp_inputs(ds):
                         することは別の判断——`sample_names`/`matrix` には現れない
                         キーが残ることがある）。
         sample_meta   : {sample_name: {role, batch, batch_source, run_order,
-                         run_order_source}}
+                         run_order_source[, batch_candidate]}}
                         — 根拠バンドルの `samples.tsv` の役割と注入順の材料。
+                        明示メタデータの無い（mzTab-M だけの）データセットでは、バッチは
+                        2 種類以上ある MTD のラベルだけ。試料名の 8 桁はバッチに当てず、
+                        `batch_candidate`（`{value, source: "filename_date"}`）に添えるだけ。
                         roles と同じく include=false 分も含めた全件分を返す。
     """
     if ds.feature_matrix is None or not ds.sample_names or not ds.feature_ids:
@@ -139,8 +142,8 @@ def build_dataset_pp_inputs(ds):
 
     mztab_batches = [_assay_field(i, "batch") for i in range(len(sample_names))]
     # MS-DIAL のバッチラベルは CSV インポートで指定しない限り全件 "1" になる。
-    # 定数のラベルは情報を持たないので、その場合はファイル名日付の推定に戻す。
-    # 定数を採ると、日付で分かれていた交絡が検出できなくなる。
+    # 定数のラベルは情報を持たないので採らない（バッチは不明のまま）。試料名の 8 桁はバッチに当てず、
+    # 候補（`batch_candidate`）として添えるだけ（A7。解析フォルダの経路の試料の表と同じ規則）。
     use_mztab_batch = sample_manifest.batch_labels_informative(mztab_batches)
 
     sample_meta: dict = {}
@@ -148,8 +151,6 @@ def build_dataset_pp_inputs(ds):
         date = sample_manifest.filename_date_batch(name)
         if use_mztab_batch and mztab_batches[i] is not None:
             batch, batch_source = mztab_batches[i], "mztab_batch_label"
-        elif date:
-            batch, batch_source = date, "filename_date"
         else:
             batch, batch_source = None, None
 
@@ -161,6 +162,8 @@ def build_dataset_pp_inputs(ds):
             "run_order": run_order,
             "run_order_source": "mztab_injection_sequence" if run_order is not None else None,
         }
+        if batch is None and date:
+            sample_meta[name]["batch_candidate"] = {"value": date, "source": "filename_date"}
     # `dataset_exclude` で除外した試料は、明示メタデータの経路と同じく行列と名前から外す
     # （roles / sample_meta の写像は全件分のまま）。
     keep_idx = included_sample_indices(ds)

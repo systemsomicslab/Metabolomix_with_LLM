@@ -264,7 +264,7 @@ def test_dataset_status_shows_load_notes_and_marks_validation_not_applicable(tmp
     assert len(status["load_notes"]["first"]) <= 3
 
 
-# ---------- R40: 定数のバッチラベルは無視して、ファイル名の日付へ（mzTab 経路と同じ規則） ----------
+# ---------- R40 / A7: 定数のバッチラベルは無視する。ファイル名の日付は候補だけ（両経路とも） ----------
 
 def _dated_spec() -> dict:
     spec = _spec()
@@ -274,8 +274,13 @@ def _dated_spec() -> dict:
     return spec
 
 
-def test_constant_mtd_batch_falls_back_to_filename_dates_on_both_routes(tmp_path):
-    from metabolomix.analysis import dataset_analysis, stats_results
+_CANDIDATE = {"value": "20260101", "source": "filename_date", "confidence": "inferred"}
+
+
+def test_constant_mtd_batch_leaves_batch_unknown_with_date_candidates(tmp_path):
+    """定数の MTD のバッチ（MS-DIAL の既定 1）は採らず、試料名の 8 桁もバッチに当てない（候補だけ）。"""
+    from metabolomix.analysis import stats_results
+    from metabolomix.tools import mztab_tools
 
     spec = _dated_spec()
     names = [s["name"] for s in spec["samples"]]
@@ -287,33 +292,32 @@ def test_constant_mtd_batch_falls_back_to_filename_dates_on_both_routes(tmp_path
         handles.registry = handles.HandleRegistry()
         _load(job_path=str(job), source=source)
         ds = session_state.session.dataset
-        meta = dataset_analysis.build_dataset_pp_inputs(ds)[-1]
         if source == "folder":
-            # 行の来歴: バッチは推定（ファイル名の日付）、注入順は mzTab-M の MTD（未確認）。
+            # 行の来歴: バッチは不明で、試料名の日付は候補。注入順は mzTab-M の MTD（未確認）。
             prov = ds.sample_metadata_rows[0]["provenance"]
-            assert prov["batch"] == {"value": "20260101", "source": "filename_date",
-                                     "confidence": "inferred"}
+            assert prov["batch"] == {"value": None, "source": None, "confidence": None,
+                                     "candidate": _CANDIDATE}
             assert prov["injection_order"]["source"] == "mztab"
-        seen[source] = {
-            "meta": {n: (m["batch"], m["batch_source"]) for n, m in meta.items()},
-            # エンジンが群比較の交絡評価に使う試料のバッチ（解析フォルダ・mzTab-M とも同じ日付）。
-            "engine_batches": stats_results.sample_batches(ds)}
-    assert seen["folder"]["meta"] == seen["mztab"]["meta"]
-    assert seen["folder"]["meta"][names[0]] == ("20260101", "filename_date")
-    # エンジンの見るバッチ。解析フォルダ・mzTab-M の両経路とも v1（上の `meta`）と同じ日付
-    # （定数のラベルは採らず、ファイル名の日付へ戻す。規則は sample_manifest の定義 1 つ）。
-    assert seen["folder"]["engine_batches"][names[0]] == "20260101"
-    assert seen["folder"]["engine_batches"][names[3]] == "20260102"
-    assert seen["mztab"]["engine_batches"] == seen["folder"]["engine_batches"]
+            view = json.loads(mztab_tools.dataset_status(view="samples"))["samples"].splitlines()
+            header = view[0].split("\t")
+            row = dict(zip(header, view[1].split("\t")))
+            assert row["batch"] == "" and row["batch_source"] == "candidate:20260101"
+            assert row["injection_order_source"] == "mzTab"
+        # エンジンが交絡・ドリフト・反復のまとめに使うバッチ（両経路とも不明）
+        seen[source] = stats_results.sample_batches(ds)
+    assert all(b is None for b in seen["folder"].values())
+    assert seen["mztab"] == seen["folder"]
 
 
 def test_group_levels_on_job_dataset_keeps_the_batch_table(tmp_path):
-    """job の mzTab-M 経路で group_levels を使っても、交絡の batch_table は空にならない。"""
+    """job の mzTab-M 経路で group_levels を使っても、交絡の batch_table は空にならない
+    （バッチは MTD の宣言 MS:4000088。2 種類以上あるので採る）。"""
     from metabolomix.tools import stats_tools
 
     spec = _dated_spec()
     job = _job(tmp_path, spec=spec, with_mddata=False)
-    _add_mtd(job.parent / "msdial" / "Height_x.mzTab", [1] * 6, [9, 8, 7, 6, 5, 4])
+    _add_mtd(job.parent / "msdial" / "Height_x.mzTab", ["20260101"] * 3 + ["20260102"] * 3,
+             [9, 8, 7, 6, 5, 4])
     for source in ("folder", "mztab"):
         session_state.session = session_state.AnalysisSession()
         handles.registry = handles.HandleRegistry()
@@ -332,9 +336,9 @@ def test_group_levels_on_job_dataset_keeps_the_batch_table(tmp_path):
         assert out["confounding"]["batch_status"] == "complete", source
 
 
-def test_constant_mddata_batch_also_falls_back_to_filename_dates(tmp_path):
-    """ARF 経路はバッチを常にファイル名の日付から推定する（MS-DIAL に専用項目が無い）。
-    解析フォルダの経路は、定数の `.mddata` のバッチ（GUI の既定の 1）も採らず同じ日付へ戻る。"""
+def test_constant_mddata_batch_is_unknown_and_dates_are_only_candidates(tmp_path):
+    """解析フォルダの経路は、定数の `.mddata` のバッチ（GUI の既定の 1）を採らず、試料名の日付もバッチに
+    当てない（候補として前処理の注意 `batch_candidates` に返すだけ。交絡は評価できない）。"""
     from metabolomix.tools import stats_tools
 
     spec = _dated_spec()
@@ -343,12 +347,13 @@ def test_constant_mddata_batch_also_falls_back_to_filename_dates(tmp_path):
     write_msdial_folder(folder, **spec)
     _load(directory=str(folder))
     ds = session_state.session.dataset
-    assert ds.sample_meta[names[0]]["batch"] == "20260101"
-    assert ds.sample_meta[names[0]]["batch_source"] == "filename_date"
-    # Class ID（A / B）は日付と 1 対 1 なので、エンジンも完全交絡として日付のバッチ表を返す。
+    assert ds.sample_meta[names[0]]["batch"] is None
+    assert ds.sample_metadata_rows[0]["provenance"]["batch"]["candidate"] == _CANDIDATE
     out = json.loads(stats_tools.dataset_compare(reference_group="A", test_group="B"))
-    assert out["error"]["code"] == "STATISTIC_CONFOUNDED"
-    assert out["error"]["details"]["batch_table"] == {"A": {"20260101": 3}, "B": {"20260102": 3}}
+    assert out["status"] == "success", out
+    assert out["confounding"]["batch_status"] == "not_evaluable"
+    note = next(w for w in out["warnings"] if w["code"] == "batch_candidates")
+    assert note["values"] == ["20260101", "20260102"]
 
 
 # ---------- R42: pipeline の解析フォルダは run の試料対応表の役割を、前処理の前から見せる ----------

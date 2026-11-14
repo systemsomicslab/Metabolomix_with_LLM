@@ -46,6 +46,7 @@ import server
 # D: 旧 Console 6 ツール（旧 Console 計画ほか）を pipeline へ吸収（59→53）。
 # A: 最初の概観 dataset_overview を追加（58→59）。
 # 枠組みの見直し A1: 長い読み込みの受付番号を引く dataset_load_status を追加（53→54）。
+# 棚卸し D2: ISA / mwTab から raw フォルダの sample-manifest.v2 を作る pipeline_sample_sheet を追加（56→57）。
 EXPECTED_TOOLS = sorted([
     "list_data_files",
     "load_dataset",
@@ -99,6 +100,7 @@ EXPECTED_TOOLS = sorted([
     "pipeline_status",
     "pipeline_resume",
     "pipeline_cancel",
+    "pipeline_sample_sheet",
     "console_method_candidates",
     "console_method_template",
     "server_update",

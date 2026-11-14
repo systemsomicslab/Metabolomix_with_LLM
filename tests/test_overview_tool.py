@@ -85,8 +85,15 @@ def test_overview_complete_confounding_does_not_compare(tmp_path):
     assert not any(r.get("kind") == "compare" for r in ds.results.values())
 
 
-def test_overview_drift_undecided_uses_off_and_says_so(tmp_path):
+def test_overview_drift_held_by_auto_uses_no_correction_and_says_so(tmp_path):
+    """換算済み・QC が試料の間に挟まる（補正の条件を満たす）とき、既定の drift=auto は補正しない。
+    概観は補正なしで計算し、その旨と drift_mode="on" での呼び直しを事実に書く。"""
     ds = _ds(n_qc=6)
+    qc_slots = [1, 5, 9, 13, 17, 22]
+    others = iter(o for o in range(1, 23) if o not in qc_slots)
+    slots = iter(qc_slots)
+    for row in ds.sample_metadata_rows:
+        row["injection_order"] = next(slots) if row["role"] == "qc" else next(others)
     ds.quant_state = {"schema": "lipidmix.quant-state.v1", "normalized": True,
                       "method": "internal_standard", "unit": "pmol", "steps": ["normalize"], "skipped": []}
     _install(ds, tmp_path)
@@ -94,8 +101,20 @@ def test_overview_drift_undecided_uses_off_and_says_so(tmp_path):
     out = _strict(text)
     assert "needs_input" not in out and out["status"] == "success"
     assert "drift skipped" in out["state"]
-    assert "dataset_preprocess(drift_mode=" in out["quality"]["next"]
-    assert any("ドリフト補正の既定が未決" in f for f in out["quality"]["facts"])
+    assert 'dataset_preprocess(drift_mode="on")' in out["quality"]["next"]
+    assert any("既定（drift=auto）では当てなかった（内部標準などで換算済み）" in f
+               for f in out["quality"]["facts"])
+
+
+def test_overview_drift_impossible_has_no_drift_note(tmp_path):
+    """補正の条件を満たさない（QC が試料の前に固まっている）なら、drift=on を勧めない。"""
+    ds = _ds(n_qc=6)
+    ds.quant_state = {"schema": "lipidmix.quant-state.v1", "normalized": True,
+                      "method": "internal_standard", "unit": "pmol", "steps": ["normalize"], "skipped": []}
+    _install(ds, tmp_path)
+    out = _ov()
+    assert "drift_mode" not in out["quality"]["next"]
+    assert not any("drift=auto" in f for f in out["quality"]["facts"])
 
 
 def test_overview_multi_group_with_classes_and_size_budget(tmp_path):

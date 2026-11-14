@@ -6,7 +6,8 @@ raw を run の中へ配置し、極性ごとに MS-DIAL Console を回し、解
 (`results/receipt.json`)を書く。統計は計算しない。続きは `load_dataset(pipeline_path=…, polarity=…)` で
 GUI の入口と同じ鎖へ合流する(前処理・比較・PCA は `dataset_preprocess` / `dataset_compare` /
 `dataset_pca`。[dataset_analysis.md](dataset_analysis.md))。Console に渡すメソッドファイルを選ぶ・作る
-2 ツール(`console_method_candidates` / `console_method_template`)もここに置く。
+2 ツール(`console_method_candidates` / `console_method_template`)と、受付が読む試料の表
+(`sample-manifest.tsv`)を ISA / mwTab から作る `pipeline_sample_sheet` もここに置く。
 
 MCP層は薄い(`metabolomix/tools/pipeline_tools.py` と `metabolomix/tools/console_tools.py`)。実体は `metabolomix/pipeline/service.py`
 （受付・工程handler一式）と `metabolomix/pipeline/recovery.py`（読取専用status・取消・
@@ -248,6 +249,37 @@ Console を捨てない——やり直しの対象にも、`UPSTREAM_RERUN_REQUI
 チェックに委ねる。旧 v1 の run(`pipeline-run.v1`。読むだけの記録)は `PIPELINE_RUN_LEGACY` で
 断る(再開も同じ)。受理(このツールが成功したこと)と実際の停止確定
 (`cancelled`)は別状態で、後者は`pipeline_status`で確認する。
+
+## pipeline_sample_sheet
+
+前提: なし(データセットも run も要らない)。状態変更: なし(セッションには書かない)。raw フォルダに
+`sample-manifest.tsv`(`output_name`)を 1 つ書くだけ。
+
+1. metabolomix/tools/sample_sheet_tools.py  pipeline_sample_sheet()
+2. └─ metabolomix/pipeline/inputs.py  list_primary_names()
+3. └─ metabolomix/rawmeta/sample_table.py  build_sample_sheet()
+4.    └─ metabolomix/rawmeta/sample_table.py  _load_sample_table()
+5.       └─ metabolomix/rawmeta/sample_table.py  read_mwtab_samples()
+6.       └─ metabolomix/rawmeta/sample_table.py  read_table()
+7.    └─ metabolomix/rawmeta/sample_table.py  resolve_column()
+8.    └─ metabolomix/rawmeta/sample_table.py  _assay_map()
+9.    └─ metabolomix/rawmeta/sample_table.py  factor_group()
+10.    └─ metabolomix/rawmeta/acquisition.py  acquisition_order()
+11.       └─ metabolomix/rawmeta/acquisition.py  read_acquisition_times()
+12. └─ metabolomix/analysis/sample_manifest.py  parse_manifest()
+13. └─ metabolomix/core/atomic_io.py  atomic_write_bytes()
+14. └─ metabolomix/rawmeta/acquisition.py  gaps_over()
+
+raw の一覧は受付(`pipeline_plan` / `pipeline_run`)と同じ `list_primary_names` で取り、各 raw を試料の表の
+行へ(ISA は assay 表の Raw Spectral Data File、mwTab は SUBJECT_SAMPLE_FACTORS の RAW_FILE_NAME、どちらも無ければ
+試料名と raw の語幹で)対応づける。群は選んだ因子の値の組(`factor_group`)、注入順は raw の取得時刻の順
+(`acquisition_order`。スペクトルは読まず、ファイルの見出しのメタデータだけ)で、1 つでも読めない raw が
+あれば注入順を空にして、読めなかったファイル名を返す(一部だけの順位を注入順と呼ばない)。全部読めたときは
+schema の行の直後に宣言の行 `# injection_order_source = raw_acquisition_time` を書き、`parse_manifest` が注入順の
+出所の記録に `derived_from` を足す(試料の表と統計の出所が `raw_acquisition_time` になる)。試料の表が UTF-8 で
+読めなければ `SAMPLE_TABLE_INVALID`。書く前に
+受付と同じ厳密な読み手(`parse_manifest`)へ一時ファイルで通し、通ったものだけを原子的に書く。既にあれば
+`overwrite=True` が無い限り `SAMPLE_SHEET_EXISTS` で止まる。
 
 ## console_method_candidates
 
