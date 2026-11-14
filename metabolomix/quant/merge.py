@@ -305,6 +305,9 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     new.artifact_paths = {}
     new.job_path = None
     new.ion_mode_majority = None  # 陽陰の両方を持つので極性は決まらない
+    # SME の理論 m/z の出所（mzTab-M か、組成式と付加体の計算か）。2 極性で違えば mixed。
+    sources = {getattr(ds, "theoretical_mz_source", "mztab") for ds in (pos_ds, neg_ds)}
+    new.theoretical_mz_source = sources.pop() if len(sources) == 1 else "mixed"
     new.curation_flags = None  # 選別が極性ごとの .arf2（quant_state["arf2_by_polarity"]）から読む
     new.sample_metadata_rows = None
     new.library_record = None

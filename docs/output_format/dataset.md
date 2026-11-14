@@ -21,6 +21,16 @@
 - **`.arf2` は特徴の代表**（スポット代表カタログ）。`Name` `Ontology` `Formula` `InChIKey` `AdductType` と、
   試料間の統計（`HeightAverage` `FillPercentage` `SignalToNoise*` など）を持つが、試料別の強度は持たない。
   `.arf` の `Name` と食い違うことがあり、代表の注釈は `.arf2` を優先する（`feature_metadata`）。
+- **SME の理論 m/z は注釈の組成式と付加体から計算する（`directory=` で開いたとき）**。`.arf2` は上流の
+  Reference m/z（照合した参照の記録のプリカーサー m/z。mzTab-M の SME の `theoretical_mass_to_charge`）を持たない。
+  mzTab-M と照合しない解析フォルダ（`load_dataset(directory=...)`）では、SME（rank 1）の `theoretical_mass_to_charge` を
+  `.arf2` の `Formula` と `AdductType` のモノアイソトピックの m/z として計算する（`dataset_feature_search` の目標の
+  理論 m/z と同じ計算）。**値は注釈が表す m/z で、ライブラリの記録に書かれたプリカーサー m/z ではない**（記録の値が
+  丸めてある・実測値であるときは、同じアラインメントの mzTab-M の値と違う）。組成式か付加体が無い・読めない
+  （質量表 H C N O P S Na Cl K F Br と D に無い元素を含む）同定は空のままで、質量精度と新しい知見の候補に入らない。
+  件数は読み込みの注記（`load_notes`）に、出所は `dataset_mass_accuracy` / `dataset_novel_candidates` の
+  `theoretical_mz_source`（`formula_adduct`）に出る。`job_path` / `pipeline_path` を解析フォルダで読んだときは、照合した
+  正準 mzTab-M の SME の値を同じスポット ID に写す（`mztab`。計算した値で上書きしない）。意味は `reanalysis` トピック §8。
 - **同定の標準化の列**。`.arf2` の注釈は GOSLIN で正規化され、`feature_metadata["identity"]` に
   `normalized`（標準化した脂質名）・`msi_level`（MSI の同定水準。**`.arf2` 由来のヒューリスティックで、
   MS/MS の有無ではない**）が入る。`dataset_feature_search` の行にも出る。意味は `identity` トピック。

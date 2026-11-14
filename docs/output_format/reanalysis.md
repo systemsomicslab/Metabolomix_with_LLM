@@ -672,7 +672,18 @@ spec:
 `dataset_mass_accuracy(band_edges=[200], rank=1)`: SME の `rank` 位の候補の
 (実測 − 理論)/理論 × 10⁶ を、理論 m/z の帯ごと（`[min_mz, max_mz)`）にまとめる。
 `n`・`median`・`q1`・`q3`（`statistics.quantiles(n=4)` の exclusive 法）・`within_5ppm`・
-`within_10ppm`（|ppm| ≤ 5・10 の割合）。n<2 の帯は `n` だけ。**許容幅は当てない**が、材料として勧める幅を
+`within_10ppm`（|ppm| ≤ 5・10 の割合）。n<2 の帯は `n` だけ。
+
+**理論 m/z の出所（`theoretical_mz_source`）**。`mztab`: mzTab-M の SME の `theoretical_mass_to_charge`（上流の
+Reference m/z＝ライブラリの記録のプリカーサー m/z。job / pipeline を解析フォルダで読んだときも、照合した mzTab-M から
+写した値）。`formula_adduct`: mzTab-M と照合しない解析フォルダ（`load_dataset(directory=...)`）。`.arf2` は Reference m/z を
+持たないので、注釈の組成式（`Formula`）と付加体（`AdductType`）のモノアイソトピックの m/z を計算した値で、
+**注釈を表す m/z であってライブラリの記録のプリカーサー m/z ではない**（誤差は「実測 − 注釈の厳密な m/z」。記録の値が
+丸めてある・実測値であるライブラリでは `mztab` と少し違う）。組成式か付加体が無い・読めない同定は数えない（件数は
+読み込みの注記）。`mixed`: 出所の違う 2 極性を `dataset_merge_polarities` で統合したもの。`dataset_novel_candidates` の
+行の `ppm` も同じ理論 m/z から出し、戻り値と JSON に同じ `theoretical_mz_source` を書く。
+
+**許容幅は当てない**が、材料として勧める幅を
 添える: 帯ごとの `recommended_mz_tol_ppm` と、全体の `recommended_tolerance`
 （`{n, basis, mz_tol_ppm, median_ppm, mad_ppm}`）。幅は `ceil(|中央値| + 3 × MAD)`（MAD は中央値からの絶対偏差の
 中央値で、尺度の補正 1.4826 は掛けない。1 ppm 未満にしない）。中心を 0 に置いた ±窓で系統的なずれと散らばりの
@@ -722,7 +733,7 @@ SML にその列が無い mzTab では**エラーにせず**、`subset_available
 `{"analysis_spec", "analysis_id"}`（**analysis-spec.v1 だけ**とその解析。v2 の spec はここでは通らないので、統計エンジンの
 結果は `dataset_compare` の `result_id` で渡す）。SME rank 1 の同定があり、
 |ppm| が帯の許容幅以内（`max_mz` 未満の最初の帯、無ければ `default`）で、q < `q_max` の特徴から
-除外を外した一覧（q の昇順）。`dataset_compare` の結果は、加えて判定 `verdict` が `changed` の行だけ
+除外を外した一覧（q の昇順。`ppm` の理論 m/z とその出所 `theoretical_mz_source` は `dataset_mass_accuracy` と同じ）。`dataset_compare` の結果は、加えて判定 `verdict` が `changed` の行だけ
 （検出が足りず量を判定できない `inconclusive` の行は q が小さくても候補にしない。`q_max` が判定の q の閾値より
 大きくても、判定が `changed` でない行は通らない）。analysis-spec.v1 の結果（判定を持たない）は q だけで選ぶ。行は `feature_id name inchikey adduct mz rt ppm group_ref group_test
 log2fc_test_over_ref p q direction merged_from`（JSON には `sme_feature_id` も）。論文の同定リストとの

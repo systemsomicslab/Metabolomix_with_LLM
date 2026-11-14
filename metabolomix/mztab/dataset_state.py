@@ -264,6 +264,12 @@ class DatasetState:
         self.curation_flags: dict | None = None
         # load_notes: 読み込み時に分かった注記（.mddata が無い等）。
         self.load_notes: list[str] = []
+        # theoretical_mz_source: SME の theoretical_mass_to_charge の出所。`mztab`（mzTab-M の SME の値。
+        # job / pipeline を解析フォルダで読んだときは照合した mzTab-M から写したもの）/ `formula_adduct`
+        # （mzTab-M と照合しない解析フォルダ。注釈の組成式と付加体から計算した値。`dataset.opening`）/
+        # `mixed`（出所の違う 2 極性を統合したもの）。SME の候補のキーは mzTab-M の経路と同じ集合に
+        # 保つので、出所は候補ではなくここに置く。指紋には入れない。
+        self.theoretical_mz_source: str = "mztab"
         # excluded_samples / excluded_features: `dataset_exclude` が持つ除外（名前または特徴 ID -> 理由）。
         # 解析の状態であって入力ではないので指紋（`result_state.dataset_fingerprint`）には入れない
         # （`sample_meta` の編集と同じ扱い）。前処理（`dataset_analysis`）が行列から外す。

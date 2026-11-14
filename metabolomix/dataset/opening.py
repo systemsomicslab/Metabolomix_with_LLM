@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import math
 import threading
 import time
 import uuid
@@ -366,6 +367,8 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
 
         selection = select_alignment(Path(raw).expanduser())
         ds = load_msdial_folder(selection, measure=measure)
+        # mzTab-M と照合しないので、SME の理論 m/z は注釈の組成式と付加体から計算する。
+        _fill_formula_theoretical_mz(ds)
         # pipeline の run の中の解析フォルダなら、run の試料の対応表（実験情報シートと受領）を当てる。
         unit = _enclosing_run_unit(Path(selection.arf).parent)
         if unit is not None:
@@ -591,6 +594,43 @@ def _fill_theoretical_mz(ds, theo_by_fid: dict[str, float]) -> None:
         for candidate in candidates or []:
             if candidate.get("rank") == 1 and candidate.get("theoretical_mass_to_charge") is None:
                 candidate["theoretical_mass_to_charge"] = theo
+
+
+def _fill_formula_theoretical_mz(ds) -> dict[str, int]:
+    """mzTab-M と照合しない解析フォルダ（`directory` の入口）の SME（rank 1）に、理論 m/z を計算して入れる。
+
+    `.arf2` は上流の Reference m/z を持たず、この入口は正準 mzTab-M も読まないので、写す値が無い
+    （空のままだと質量精度と新しい知見の候補が 0 件になる）。注釈の組成式（`.arf2` の Formula。
+    `feature_metadata` の `formula`）と付加体（AdductType。SME の `adduct`）のモノアイソトピックの m/z
+    （特徴検索と同じ `feature_search.theoretical_mz`）を入れる。値は注釈が表す m/z で、ライブラリの記録の
+    プリカーサー m/z ではない。既に値のある候補（mzTab-M から写したもの）は触らない。組成式か付加体が無い・
+    読めない（未知の元素を含む）候補は None のまま。出所は `ds.theoretical_mz_source`（`formula_adduct`）と
+    読み込みの注記（件数）に残す——SME の候補のキーは mzTab-M の経路と同じ集合のまま（欄を足さない）。
+
+    戻り値は {"computed": 入れた数, "not_computable": 入れられなかった数}。
+    """
+    from metabolomix.analysis.feature_search import theoretical_mz
+
+    computed = not_computable = 0
+    metadata = ds.feature_metadata or {}
+    for fid, candidates in (ds.feature_candidates or {}).items():
+        formula = (metadata.get(fid) or {}).get("formula")
+        for candidate in candidates or []:
+            if candidate.get("rank") != 1 or candidate.get("theoretical_mass_to_charge") is not None:
+                continue
+            value = theoretical_mz(formula, candidate.get("adduct"))
+            if value is not None and math.isfinite(value) and value > 0:
+                candidate["theoretical_mass_to_charge"] = value
+                computed += 1
+            else:
+                not_computable += 1
+    ds.theoretical_mz_source = "formula_adduct"
+    if computed or not_computable:
+        ds.load_notes.append(
+            f"SME の理論 m/z は、mzTab-M と照合しない解析フォルダなので注釈の組成式と付加体から計算した"
+            f"（{computed} 件。組成式か付加体が無い・読めない {not_computable} 件は空のままで、質量精度と"
+            "新しい知見の候補に入らない）。ライブラリの記録のプリカーサー m/z ではない。")
+    return {"computed": computed, "not_computable": not_computable}
 
 
 def _matching_arf(gate, artifact_paths: dict[str, list[str]],

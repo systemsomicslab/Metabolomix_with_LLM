@@ -178,17 +178,84 @@ def test_job_folder_sme_takes_theoretical_mz_from_canonical_mztab(tmp_path):
     via_run = open_dataset(pipeline_path=str(run)).dataset
     assert via_run.feature_candidates["0"][0]["theoretical_mass_to_charge"] == pytest.approx(theo)
 
+    # mzTab-M の値が勝つ（組成式と付加体から計算した値 760.58508 では上書きしない）。
+    assert folder.theoretical_mz_source == via_run.theoretical_mz_source == "mztab"
+    assert not any("組成式と付加体から計算" in note for note in folder.load_notes)
+
     session_state.session.dataset = folder
     out = json.loads(R.dataset_mass_accuracy(band_edges=[], subset="rank1"))
     assert out["overall"]["n"] == 1
     assert out["bands"][0]["n"] == 1
+    assert out["theoretical_mz_source"] == "mztab"
 
 
-def test_directory_folder_sme_has_no_theoretical_mz(tmp_path):
-    """directory の入口には正準 mzTab-M が無いので理論 m/z は空のまま（推測で埋めない）。"""
+#: PC 34:1（C42H82NO8P）の [M+H]+ のモノアイソトピックの m/z（元素の質量から手で足した値）。
+_PC_34_1_MH = 760.585081
+
+
+def test_directory_folder_sme_theoretical_mz_from_formula_and_adduct(tmp_path):
+    """directory の入口は正準 mzTab-M と照合しないので、SME（rank 1）の理論 m/z を注釈の組成式（`.arf2` の
+    Formula）と付加体（AdductType）から計算する（空のままだと質量精度と新しい知見の候補が 0 件になる）。
+    出所は候補ではなくデータセット（`theoretical_mz_source`）と読み込みの注記に残す。"""
+    from metabolomix.tools import reanalysis_tools as R
+
     folder = _folder(tmp_path / "gui")
     ds = open_dataset(directory=str(folder)).dataset
+    assert ds.feature_candidates["0"][0]["theoretical_mass_to_charge"] == pytest.approx(
+        _PC_34_1_MH, abs=1e-5)
+    assert ds.theoretical_mz_source == "formula_adduct"
+    note = next(n for n in ds.load_notes if "組成式と付加体から計算" in n)
+    assert "1 件" in note and "0 件" in note
+
+    session_state.session.dataset = ds
+    out = json.loads(R.dataset_mass_accuracy(band_edges=[], subset="rank1"))
+    assert out["overall"]["n"] == 1
+    assert out["theoretical_mz_source"] == "formula_adduct"
+    # 新しい知見の候補も同じ理論 m/z で質量の窓を通る（以前は SME の ppm が無く 0 件）。
+    from metabolomix.analysis import mass_accuracy
+
+    spec = mass_accuracy.normalize_novel_spec({"statistics": {"result_id": "r"}, "q_max": 0.05})
+    rows = mass_accuracy.novel_candidates(
+        ds, spec, {"0": {"q": 0.01, "p": 0.001, "log2fc_test_over_ref": 1.0}},
+        group_ref="A", group_test="B")
+    assert [r["feature_id"] for r in rows] == ["0"]
+    assert rows[0]["ppm"] == pytest.approx((760.5851 - _PC_34_1_MH) / _PC_34_1_MH * 1e6, abs=0.01)
+    # 読み込みの注記は dataset_status の load_notes にも出る（load_dataset の要約を見ていなくても気づける）。
+    from metabolomix.tools.mztab_tools import dataset_status
+
+    status = json.loads(dataset_status())
+    assert any("組成式と付加体から計算" in n for n in status["load_notes"]["first"])
+
+
+@pytest.mark.parametrize("formula,adduct", [
+    ("", "[M+H]+"),              # 組成式が無い
+    ("null", "[M+H]+"),          # MS-DIAL が書く空の組成式
+    ("C6H12O6Se", "[M+H]+"),     # 未知の元素（質量表に無い）
+    ("Ca(OH)2", "[M+H]+"),       # 組成式として読めない
+    ("C42H82NO8P", "[M+?]+"),    # 付加体として読めない
+])
+def test_directory_folder_leaves_theoretical_mz_empty_when_not_computable(tmp_path, formula,
+                                                                          adduct):
+    spec = _spec()
+    spec["spots"][0].update(formula=formula, adduct=adduct)
+    write_msdial_folder(tmp_path / "gui", **spec)
+    ds = open_dataset(directory=str(tmp_path / "gui")).dataset
     assert ds.feature_candidates["0"][0]["theoretical_mass_to_charge"] is None
+    note = next(n for n in ds.load_notes if "組成式と付加体から計算" in n)
+    assert "（0 件" in note and "読めない 1 件" in note
+
+
+def test_directory_folder_theoretical_mz_for_other_adducts(tmp_path):
+    """付加体は MS-DIAL の表記をそのまま読む（陰イオン・多量体も特徴検索と同じ計算）。"""
+    from metabolomix.analysis.feature_search import theoretical_mz
+
+    spec = _spec()
+    spec["spots"][0].update(formula="C4H9NO2", adduct="[M+CH3COO]-", mz=162.0772)
+    write_msdial_folder(tmp_path / "gui", **spec)
+    ds = open_dataset(directory=str(tmp_path / "gui")).dataset
+    theo = ds.feature_candidates["0"][0]["theoretical_mass_to_charge"]
+    assert theo == pytest.approx(theoretical_mz("C4H9NO2", "[M+CH3COO]-"))
+    assert theo == pytest.approx(162.077181, abs=1e-5)
 
 
 def test_incomplete_job_gate_shared(tmp_path):
