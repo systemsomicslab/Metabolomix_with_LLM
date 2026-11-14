@@ -12,9 +12,10 @@
 
 ## 1. 単位と値
 
-- `unit` は規則が返す文字列（例: 細胞あたりの pmol）。**正規化していない（`skip=True`）データセットは
-  `normalized=false`・`unit=null`**で、値は MS-DIAL の強度のまま。単位が違うデータセット同士・
-  正規化済みと未正規化は統合しない。
+- `unit` は規則が返す文字列（例: 細胞あたりの pmol）。**正規化していないデータセット（`skip=True` で
+  飛ばしたもの、正規化の工程を通っていないもの）は `normalized=false`・`unit=null`**で、値は MS-DIAL の
+  強度のまま。単位が違うデータセット同士・正規化済みと未正規化は統合しない（`QUANT_MERGE_STATE_MISMATCH`）。
+  未正規化どうしは、skip を挟まなくてもそのまま統合する。
 - 正規化した行列の行は**内部標準以外の特徴**。内部標準の行は値を持たず、後段の選別で除かれる。
 - 内部標準の値が 0・負・欠測の試料は、その試料の値を**欠測（NaN）**にして理由を `status_counts`
   に数える。中央値などで埋めない。参照表に無いクラスは `Any others` の行で計算する
@@ -71,10 +72,10 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 `QUANT_BAD_REQUEST`（UTF-8 でない表もこれ）・`QUANT_POLARITY_REQUIRED`（`polarity` を渡す）・
 `QUANT_SOURCE_UNSUPPORTED`（解析フォルダ以外の入力）・`QUANT_ALREADY_NORMALIZED`・
 `QUANT_ALREADY_SELECTED`（選別済みのデータセットは正規化しない）・
-`QUANT_NORMALIZE_STEP_REQUIRED`（統合の前に正規化かその skip が要る）・
 `QUANT_CURATION_UNREADABLE`（キュレーションの記録が読めない。`apply_curation=False` で進められる）・
 `DATASET_HANDLE_LIMIT`（新しいハンドルを足せない。記録を書く前に止める）・
-`QUANT_NEEDS_DETECTION`（検出の印が無い入力）・`QUANT_MERGE_STATE_MISMATCH`・
+`QUANT_NEEDS_DETECTION`（検出の印が無い入力）・`QUANT_MERGE_STATE_MISMATCH`（正規化の状態が陽陰で違う。
+`details.differs` と `details.normalize`）・
 `QUANT_MERGE_SAMPLE_CONFLICT`（同じ試料の群・役割が陽陰で食い違う）・`QUANT_HANDLE_BUSY`・
 `QUANT_REFERENCE_NOT_FOUND`。封筒・戻り値には**ローカルのパスを載せない**（参照表は sha256・
 単位・ファイル名の末尾だけ）。
@@ -87,7 +88,9 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 - **apply**: `status`・`dataset_handle`（新しいハンドル）・`record_id`・`status_counts`（セルの状態ごと
   の件数）・`unit`・`polarity`・`reference`・`classes`・`internal_standard_ids`。
 - **merge**: `status`・`dataset_handle`・`record_id`・`rule`（試料の照合規則）・`n_features`
-  （`positive` `negative` `merged`）・`n_samples`・`unit`・`normalized`。
+  （`positive` `negative` `merged`）・`n_samples`・`unit`・`normalized`・`normalize`（極性ごとに正規化を
+  どう通ったか: `applied`＝dataset_quant_apply / `skipped`＝`skip=True` / `not_run`＝どちらも通っていない。
+  記録の `settings.normalize` にも同じものを書く）。
   特徴 ID は `positive:<id>` / `negative:<id>`、行は POS の特徴のあとに NEG、試料の列は共通 ID
   （POS の順）。各特徴の出自は `feature_metadata[<fid>]["origin"]`（極性と元の特徴 ID）。
 - **select**: `status`・`dataset_handle`・`record_id`・`audit_file`・`n_retained`・`n_excluded`・
@@ -117,6 +120,7 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 
 1. gap-fill のセルは値が入っていても検出ではない（§2）。`detected_mask` を見る。
 2. 単位は規則が決める。`normalized=false` の値に単位は無い。単位・normalized が違うものを混ぜない。
+   統合したデータセットの `normalize` が `not_run` の側は、正規化の工程を一度も通っていない強度のまま。
 3. 内部標準の欠測・0・負の試料の値は欠測。補完していない。
 4. 統合後の特徴 ID は `positive:` / `negative:` の接頭辞つき。統合前の ID・キュレーションの
    フラグと同じものではない（フラグは極性ごとの `.arf2` から元の特徴 ID で引く）。

@@ -206,6 +206,8 @@ PATHWAY_ERROR_CODES = frozenset({
     "MSLM_NOT_CONFIGURED",
     # MSLipidMapper（R パッケージ）か、その公開関数が無い。自動インストールはしない。
     "MSLM_R_PACKAGES_MISSING",
+    # MSLipidMapper は入っているが R が読み込めない（message に loadNamespace の本文）。
+    "MSLM_R_PACKAGE_LOAD_FAILED",
     # [mslipidmapper] mslipidmapper_api_url のサーバに届かない・生存確認が通らない・API が 404/5xx を返した
     # （ローカルの R も使えなかったときだけ表に出る。使えればそちらへ回る）。
     "MSLM_REMOTE_UNAVAILABLE",

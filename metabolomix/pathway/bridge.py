@@ -116,6 +116,8 @@ def _check_environment() -> None:
 
 
 #: ローカルの R が「使えない」ことを表すコード（「動かして失敗した」とは区別する）。
+#: `MSLM_R_PACKAGE_LOAD_FAILED`（入っているのに読み込めない。R 側が理由の本文を返す）は入れない:
+#: 動かして失敗したものとして、ローカルの理由をそのまま上げる（サーバの失敗は details.remote_fallback）。
 _LOCAL_UNAVAILABLE = frozenset({"MSLM_NOT_CONFIGURED", "MSLM_R_PACKAGES_MISSING"})
 
 
@@ -189,6 +191,8 @@ def run_bridge(request: dict, run_dir: Path, *, timeout_s: float = 300.0) -> dic
     （未到達・404・ジョブ失敗・時間切れ・成果物の欠落）は、ローカルの R へ回し、
     その理由を `remote_fallback` に残す。ローカルの R も使えなければ（未設定・
     仮想環境が未復元）、サーバ側のエラーを上げる（details.local にローカルの理由）。
+    `remote_fallback` はサーバのジョブ ID（`job_id`。投入まで進んだときだけ）と送受信の記録
+    `remote-job.json` の場所（`record`）も持つ（サーバは失敗の本文を返さず、本文は上流の worker.log にしか無い）。
     """
     url = api_url()
     if url is None:
@@ -196,7 +200,9 @@ def run_bridge(request: dict, run_dir: Path, *, timeout_s: float = 300.0) -> dic
     try:
         return _run_remote(url, request, run_dir, timeout_s)
     except BridgeError as remote_exc:
-        fallback = {"api_url": url, "code": remote_exc.code, "message": remote_exc.message}
+        fallback = {"api_url": url, "code": remote_exc.code, "message": remote_exc.message,
+                    **{k: remote_exc.details[k] for k in ("job_id", "record")
+                       if remote_exc.details.get(k)}}
     try:
         result = _run_local(request, run_dir, timeout_s=timeout_s)
     except BridgeError as local_exc:

@@ -140,11 +140,16 @@ flowchart TD
 レビューの探し先は、セッションの `review_dirs` → 送信用テキストの `arf2_path` →
 データセット（`dataset_handle`、省けば直近）の `.arf2` のフォルダの順（`data/` は探さない。
 サーバ再起動の後でも、貼った文なら送れる）。どれも無ければ `missing_state("dataset", ["load_dataset"])`。
+送信用テキストも `review_id` も無ければ、データセットの `.arf2` に対する最新のレビューを使う
+（`_latest_review_for_submit()` → `suggest.latest_review()`。無ければ `missing_state("curation_review")`。
+`assign` / `redundant` の要素があれば `cs-…` を求めるエラー）。
 書いた後、同じ `.arf2` を持つ開いているハンドルすべての `curation_flags` を読み直す
 （`submission.after_write` → `curation_tools._refresh_open_handles`。ハンドルごとにそのハンドルのロックの下で
 1 つずつ、`REFRESH_LOCK_TIMEOUT` 秒だけ待つ。取れなければ `open_handles.not_refreshed`）。
 
 1. metabolomix/curation/flags.py  parse_submission_text()（`submission_text` のとき）
+1. metabolomix/tools/curation_tools.py  _latest_review_for_submit()（`review_id` も送信用テキストも無いとき）
+1. └─ metabolomix/curation/suggest.py  latest_review()
 2. metabolomix/curation/review.py  is_valid_review_id()（形が違えばパスに使う前にエラー。`cs-…` は metabolomix/curation/suggest.py  is_valid_suggestion_id() も許す）
 3. metabolomix/tools/curation_tools.py  _find_review()
 4. └─ metabolomix/tools/curation_tools.py  _load_any()

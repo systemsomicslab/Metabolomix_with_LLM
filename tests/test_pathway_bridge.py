@@ -187,6 +187,31 @@ def test_error_result_carries_code(configured, monkeypatch):
     assert exc.value.code == "MSLM_R_PACKAGES_MISSING"
 
 
+def test_load_failure_is_its_own_code_with_the_reason(configured, monkeypatch):
+    """R 側が「入っているが読み込めない」を返したら、そのコードと本文のまま上げる（B11-T45）。"""
+    run_dir = configured / "run"
+    run_dir.mkdir()
+    monkeypatch.setattr(bridge, "BRIDGE_SCRIPT", _fake(configured, """
+        (out / "bridge-result.json").write_text(json.dumps(
+            {"status": "error", "code": "MSLM_R_PACKAGE_LOAD_FAILED",
+             "message": "読み込めませんでした: package or namespace load failed"}), encoding="utf-8")
+        sys.exit(2)
+    """))
+    with pytest.raises(bridge.BridgeError) as exc:
+        bridge.run_bridge({"mode": "check", "out_dir": str(run_dir)}, run_dir, timeout_s=60)
+    assert exc.value.code == "MSLM_R_PACKAGE_LOAD_FAILED"
+    assert "namespace load failed" in exc.value.message
+    assert "MSLM_R_PACKAGE_LOAD_FAILED" not in bridge._LOCAL_UNAVAILABLE
+
+
+def test_r_bridge_tells_missing_from_unloadable():
+    """mslm_bridge.R は未導入（find.package）と読み込みの失敗（loadNamespace の本文）を分ける。"""
+    text = bridge.BRIDGE_SCRIPT.read_text(encoding="utf-8")
+    assert 'find.package("MSLipidMapper"' in text and 'loadNamespace("MSLipidMapper")' in text
+    assert '"MSLM_R_PACKAGE_LOAD_FAILED"' in text and "conditionMessage(e)" in text
+    assert 'requireNamespace("MSLipidMapper"' not in text
+
+
 def test_nonzero_without_result_is_run_failed_with_log_tail(configured, monkeypatch):
     run_dir = configured / "run"
     run_dir.mkdir()

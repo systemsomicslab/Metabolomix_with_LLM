@@ -5,6 +5,7 @@
 （実物の Rscript の契約は test_pathway_bridge.py が縛る）。
 """
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -255,3 +256,45 @@ def test_pathway_project_through_the_server(lipid_arf, serve, tmp_path):  # noqa
                           .read_text(encoding="utf-8"))
     assert manifest["backend"] == {"kind": "remote", "api_url": URL, "job_id": "job_1"}
     assert manifest["remote_fallback"] is None
+
+
+def test_failed_server_job_keeps_job_id_and_record_in_the_fallback(serve, local_calls, tmp_path):
+    """サーバのジョブが失敗してローカルへ回ったとき、job_id と remote-job.json の場所が残る（B11-T44）。"""
+    serve(FakeServer(final="failed"))
+    res = bridge.run_bridge(_measure_request(tmp_path), tmp_path)
+    fb = res["remote_fallback"]
+    assert fb["job_id"] == "job_1" and fb["record"] == str(tmp_path / remote.JOB_RECORD)
+    assert "job job_1" in fb["message"] and "worker.log" in fb["message"]
+    assert json.loads((tmp_path / remote.JOB_RECORD).read_text(encoding="utf-8"))["job_id"] == "job_1"
+
+
+def test_unreachable_server_fallback_has_record_but_no_job_id(serve, local_calls, tmp_path):
+    serve(FakeServer(health=404))
+    fb = bridge.run_bridge(_measure_request(tmp_path), tmp_path)["remote_fallback"]
+    assert "job_id" not in fb and fb["record"].endswith(remote.JOB_RECORD)
+
+
+def test_failed_server_job_without_local_r_keeps_job_id_and_run_dir(lipid_arf, serve, tmp_path):  # noqa: F811
+    serve(FakeServer(final="failed"))      # [mslipidmapper] rscript は書いていない
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    err = body["error"]
+    assert err["code"] == "MSLM_RUN_FAILED"
+    assert err["details"]["remote"]["job_id"] == "job_1"
+    run_dir = Path(err["details"]["run_dir"])
+    assert run_dir.parent == tmp_path / "reports" / "pathway"
+    assert err["details"]["remote"]["record"] == str(run_dir / remote.JOB_RECORD)
+    assert err["details"]["local"]["code"] == "MSLM_NOT_CONFIGURED"
+
+
+def test_local_load_failure_after_server_failure_surfaces_the_r_reason(serve, tmp_path, monkeypatch):
+    """R が MSLipidMapper を読み込めなかった（T45）なら、その本文を上げ、サーバの失敗も残す。"""
+    serve(FakeServer(final="failed"))
+
+    def cannot_load(request, run_dir, *, timeout_s=300.0):
+        raise bridge.BridgeError("MSLM_R_PACKAGE_LOAD_FAILED", "読み込めませんでした: DLL が無い",
+                                 {"log": "bridge.log"})
+    monkeypatch.setattr(bridge, "_run_local", cannot_load)
+    with pytest.raises(bridge.BridgeError) as exc:
+        bridge.run_bridge(_measure_request(tmp_path), tmp_path)
+    assert exc.value.code == "MSLM_R_PACKAGE_LOAD_FAILED" and "DLL" in exc.value.message
+    assert exc.value.details["remote_fallback"]["job_id"] == "job_1"

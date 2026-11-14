@@ -132,15 +132,16 @@ def dataset_merge_polarities(positive_handle: str, negative_handle: str,
                              record_folder: str | None = None) -> str:
     """陽イオンと陰イオンのデータセットを 1 つに統合し、新しいハンドルを作る（元は変えない）。
 
-    positive_handle / negative_handle: load_dataset などで開いたハンドル。どちらも
-    dataset_quant_apply を通した（skip=True で飛ばした記録でもよい）もので、normalized と
-    単位が同じでなければ統合しない。特徴 ID は positive:<id> / negative:<id>、行は POS の特徴
-    のあとに NEG の特徴、試料の列は共通 ID（POS の順）。試料は名前（極性の印を除いた名前）で
-    照合し、食い違えば needs_input（only_in に片側にしか無い試料）で止まる。mapping_csv
-    （列: mode, source_sample, sample_id, group, sample_type）で対応づけて再実行する。
-    normalized・method・unit のどれかが違っても統合しない。mapping_csv の mode 列は
-    positive / negative（pos / neg も可）。group / sample_type 列は規則が検証するだけで
-    適用しない（試料の実験情報は POS のものを使う）。
+    positive_handle / negative_handle: load_dataset などで開いたハンドル。正規化の状態
+    （normalized・method・unit）が同じでなければ統合しない。dataset_quant_apply を通していない
+    側は未正規化として扱う（skip=True を挟まなくてよい）ので、両方とも未正規化ならそのまま
+    統合する。各側の通り方は戻り値と記録の normalize（applied / skipped / not_run）。
+    特徴 ID は positive:<id> / negative:<id>、行は POS の特徴のあとに NEG の特徴、試料の列は
+    共通 ID（POS の順）。試料は名前（極性の印を除いた名前）で照合し、食い違えば needs_input
+    （only_in に片側にしか無い試料）で止まる。mapping_csv（列: mode, source_sample, sample_id,
+    group, sample_type）で対応づけて再実行する。mapping_csv の mode 列は positive / negative
+    （pos / neg も可）。group / sample_type 列は規則が検証するだけで適用しない（試料の実験情報は
+    POS のものを使う）。
     記録は 2 つの解析フォルダの共通の親の reports/quant/。共通の親が決められなければ
     needs_input で record_folder（既存のフォルダ）を求める。規則プラグイン（[quant] rules）が要る。
     キュレーションのフラグは写さず、選別が極性ごとの .arf2 からその時点のものを読む。

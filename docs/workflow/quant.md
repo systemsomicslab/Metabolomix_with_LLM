@@ -8,6 +8,8 @@
 
 標準の順序は `dataset_quant_preview`（確認）→ `dataset_quant_apply`（正規化。`skip=True` で飛ばせる）
 →（陽・陰の 2 データセットなら）`dataset_merge_polarities` → `dataset_select_features`。
+正規化しないなら、`dataset_quant_apply` を通さずに `dataset_merge_polarities` へ進んでもよい
+（未正規化どうしとして統合する）。
 どの工程も元のハンドルは変えず、**新しいハンドル**の派生データセットを作って直近にする
 （`metabolomix/quant/derive.py` の `register()`）。
 
@@ -65,8 +67,10 @@
 
 ## dataset_merge_polarities
 
-前提: 2 つのハンドルのどちらにもデータセットがあり、`dataset_quant_apply` を通している
-（normalized・method・unit が同じ）。試料名が食い違えば `needs_input`（`only_in`）で止まり、
+前提: 2 つのハンドルのどちらにもデータセットがあり、正規化の状態（normalized・method・unit）が同じ。
+`dataset_quant_apply` を通していない側は未正規化（`skip=True` と同じ値）として扱う
+（`_check_states()`。違えば `QUANT_MERGE_STATE_MISMATCH`。各側の通り方 `applied` / `skipped` / `not_run` は
+`normalize_status()` が決め、記録の `settings.normalize` と戻り値の `normalize` に書く）。試料名が食い違えば `needs_input`（`only_in`）で止まり、
 記録の置き場が決まらなければ `needs_input`（`record_folder`）。状態変更: 2 つの解析フォルダの
 共通の親（または `record_folder`）の `reports/quant/` に記録を書き、新しいハンドルを登録する。
 
@@ -79,6 +83,7 @@
 7.    │  ├─ metabolomix/quant/plugin.py  load_rules()
 8.    │  ├─ metabolomix/quant/merge.py  _check_polarities()
 9.    │  ├─ metabolomix/quant/merge.py  _check_states()
+9.    │  │  └─ metabolomix/quant/merge.py  normalize_status()（食い違いの details と記録・戻り値）
 10.    │  ├─ metabolomix/quant/merge.py  _match()
 11.    │  │  └─ metabolomix/quant/plugin.py  call()
 12.    │  ├─ metabolomix/quant/merge.py  _check_groups()

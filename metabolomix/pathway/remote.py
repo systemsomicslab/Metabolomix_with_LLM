@@ -113,7 +113,7 @@ def _wait(client: httpx.Client, job_id: str, timeout_s: float, details: dict) ->
         if status.get("status") == "failed":
             raise RemoteError("MSLM_RUN_FAILED",
                               f"サーバ側の MSLipidMapper が失敗しました: {status.get('error') or ''}"
-                              f"（詳細はサーバの worker.log）",
+                              f"（job {job_id}。原因の本文はサーバの worker.log にだけあり、API では取れない）",
                               {**details, "remote_status": status})
         if _monotonic() >= deadline:
             raise RemoteError("MSLM_TIMEOUT",

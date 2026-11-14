@@ -229,14 +229,54 @@ def test_merge_by_exact_name(tmp_path, monkeypatch):
     assert list(merged.feature_matrix[row]) == [60.0, 30.0, 40.0]  # a は NEG の 3 列目
 
 
-def test_merge_requires_quant_state(tmp_path, monkeypatch):
+def _record(tmp_path, record_id):
+    return json.loads((tmp_path / "run" / "reports" / "quant"
+                       / f"{record_id}.json").read_text(encoding="utf-8"))
+
+
+def test_merge_accepts_datasets_without_quant_state(tmp_path, monkeypatch):
+    """dataset_quant_apply も skip も通っていない 2 つは、未正規化のまま統合して記録に書く。"""
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.quant_state = neg.quant_state = None
+    merged, info = _merge(pos, neg, mapping_rows=None)
+    assert info["normalize"] == {"positive": "not_run", "negative": "not_run"}
+    assert info["normalized"] is False and info["unit"] is None
+    st = merged.quant_state
+    assert st["normalized"] is False and st["method"] is None and st["unit"] is None
+    assert st["steps"] == ["merge"] and st["skipped"] == [] and st["internal_standard_ids"] == []
+    assert list(merged.feature_matrix[merged.feature_ids.index("negative:0")]) == [30.0, 40.0, 60.0]
+    rec = _record(tmp_path, info["record_id"])
+    assert rec["parent_ids"] == []  # 親の記録が無い
+    assert rec["settings"]["normalize"] == {"positive": "not_run", "negative": "not_run"}
+    assert rec["summary"]["normalized"] is False
+
+
+def test_merge_treats_not_run_like_skipped(tmp_path, monkeypatch):
+    """skip=True で飛ばした側と、正規化を通っていない側は同じ未正規化として統合する。"""
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path, unit=None)  # 両方 skip
+    neg.quant_state = None
+    merged, info = _merge(pos, neg, mapping_rows=None)
+    assert info["normalize"] == {"positive": "skipped", "negative": "not_run"}
+    assert merged.quant_state["skipped"] == ["normalize"]
+    rec = _record(tmp_path, info["record_id"])
+    assert rec["parent_ids"] == ["q_pos"]
+    assert rec["settings"]["normalize"] == {"positive": "skipped", "negative": "not_run"}
+
+
+def test_merge_still_refuses_normalized_with_not_run(tmp_path, monkeypatch):
+    """片方だけ正規化済みなら、もう片方が正規化を通っていなくても混ぜない。"""
     _point(tmp_path, monkeypatch)
     pos, neg = _pair(tmp_path)
     neg.quant_state = None
     with pytest.raises(DomainError) as exc:
         _merge(pos, neg, mapping_rows=None)
-    assert exc.value.code == "QUANT_NORMALIZE_STEP_REQUIRED"
-    assert "dataset_quant_apply" in exc.value.message and "skip" in exc.value.message
+    assert exc.value.code == "QUANT_MERGE_STATE_MISMATCH"
+    d = exc.value.details
+    assert d["differs"]["normalized"] == [True, False] and d["differs"]["unit"] == ["nmol", None]
+    assert d["normalize"] == {"positive": "applied", "negative": "not_run"}
+    assert not (tmp_path / "run" / "reports").exists()  # 何も書かない
 
 
 def test_merged_ids_and_origin(tmp_path, monkeypatch):
@@ -437,13 +477,24 @@ def test_tool_refusals_are_coded(tmp_path, monkeypatch):
         "QUANT_MERGE_POLARITY_INVALID", "QUANT_MERGE_STATE_MISMATCH")
 
 
-def test_tool_normalize_step_required(tmp_path, monkeypatch):
+def test_tool_merges_without_normalize_step(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.quant_state = neg.quant_state = None
+    hp, hn = _open(pos, "positive"), _open(neg, "negative")
+    out = json.loads(_tool()(hp, hn))
+    assert out["status"] == "merged" and out["normalized"] is False
+    assert out["normalize"] == {"positive": "not_run", "negative": "not_run"}
+
+
+def test_tool_refuses_mixed_normalization_with_not_run(tmp_path, monkeypatch):
     _point(tmp_path, monkeypatch)
     pos, neg = _pair(tmp_path)
     neg.quant_state = None
     hp, hn = _open(pos, "positive"), _open(neg, "negative")
     err = json.loads(_tool()(hp, hn))["error"]
-    assert err["code"] == "QUANT_NORMALIZE_STEP_REQUIRED" and "dataset_quant_apply" in err["message"]
+    assert err["code"] == "QUANT_MERGE_STATE_MISMATCH"
+    assert err["details"]["normalize"] == {"positive": "applied", "negative": "not_run"}
 
 
 def test_tool_rules_unavailable_envelope(tmp_path, monkeypatch):
@@ -478,16 +529,17 @@ def test_merge_refuses_non_msdial_source(tmp_path, monkeypatch):
     assert not (tmp_path / "run" / "reports").exists()
 
 
-def test_merge_requires_normalize_step_not_just_any_state(tmp_path, monkeypatch):
-    """quant_state があっても、正規化（か、その skip）を通っていなければ統合しない。"""
+def test_merge_accepts_selected_but_unnormalized(tmp_path, monkeypatch):
+    """選別だけ通した（skip も挟めない）2 つも、未正規化どうしとして統合する。"""
     _point(tmp_path, monkeypatch)
     pos, neg = _pair(tmp_path)
     for ds, rid in ((pos, "q_p"), (neg, "q_n")):
         ds.quant_state = qd.quant_state(normalized=False, method=None, unit=None, record_id=rid,
                                         steps=["select"], skipped=[])
-    with pytest.raises(DomainError) as exc:
-        _merge(pos, neg, mapping_rows=None)
-    assert exc.value.code == "QUANT_NORMALIZE_STEP_REQUIRED"
+    merged, info = _merge(pos, neg, mapping_rows=None)
+    assert info["normalize"] == {"positive": "not_run", "negative": "not_run"}
+    assert merged.quant_state["steps"] == ["select", "merge"]
+    assert _record(tmp_path, info["record_id"])["parent_ids"] == ["q_p", "q_n"]
 
 
 def test_tool_checks_handle_capacity_before_writing(tmp_path, monkeypatch):

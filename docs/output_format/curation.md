@@ -232,7 +232,7 @@ neg 154 件中 9 件・pos 469 件中 27 件に立った。
 | `table` | 1 スポット 1 行の TSV（列は下表）。強い説明のあるスポットが先、次に対象の種類（`flagged` → `likely_wrong` → `unannotated`）、同順位は `spot_id` 昇順の**先頭 `max_rows` 行だけ**（引数、既定 100）。載せた行数は `n_table_rows_shown`。全件は `html_path` |
 | `html_path` | 候補付けビューア HTML のパス。ユーザーがブラウザで開いて選び、「送信」で直接送る（受け口が無いときは「送信用テキストをコピー」でチャットへ貼る） |
 | `submit` | ビューアから直接送れるか。`{"via": "viewer", "idle_timeout_min": 30}` ならビューアの Submit(候補付けは「送信」)が記録と `_tags.xml` の反映を行う。`{"via": "copy", "reason"}` なら受け口を立てられず、送信用テキストを貼る経路だけ |
-| `library` | 使った参照ライブラリの `path` と `sha256` |
+| `library` | 使った参照ライブラリの `file`（ファイル名だけ。置き場所は出さない）と `sha256` |
 | `analysis_params` | 検索アダクトと RT 窓の出所。`source`（param ファイルか既定か）・`path`・`rt_window`（分） |
 | `options` / `thresholds` | 実際に使った引数（`rt_window` は解決後の値）としきい値 |
 
@@ -356,6 +356,15 @@ EIC（`partner_eic`）を持つ。
 - 候補付けビューアの「元の注釈に戻す」は `clear` を送る。`clear` はそのスポットの**有効な判断を丸ごと**（`wrong` でも `assign` でも）消し、
   `_tags.xml` の Misannotation も外す。
 - `curation_flags` の TSV は 7 列: `spot_id`・`flag`・`name`（`assign` の記録名）・`of`（`redundant` の相手）・`note`・`source`・`ts`。
+  `source` は判断の出どころ: `user`（ユーザーが出した判断。ビューアの送信はいつもこれ）/ `llm`（LLM が出した判断）。
+  `curation_submit` の呼び出し側が申告し、1 回の送信の全行に同じ値が付く。
+
+### `curation_submit` の `review_id` を省いたとき
+
+送信用テキストも `review_id` も無い送信（`flags` を直接渡す）は、データセット（`dataset_handle`、省けば直近）の
+`.arf2` に対する最新のレビュー（`cr-…`。`curation_suggest` の既定と同じ規則で、同じ秒の ID は `created_at` の
+新しいほう）に記録し、戻り値の `review_id` と `review_id_source: "latest"` で示す。レビューが無ければ
+`missing_state("curation_review")`。候補付け（`assign` / `redundant`）の送信は `review_id`（`cs-…`）を省けない。
 - `dataset_feature_search` の `curation_flag` 列は有効な判断: `wrong` / `suspect` / `assign:<記録名>` / `redundant`（無ければ空）。
 - `curation_review` のスポットの `flag` / `flag_note` は `wrong` / `suspect` / `confirmed` だけ。`assign` / `redundant` は別項目 `decision`
   （`{flag, name}` または `{flag, of}`）に出る。

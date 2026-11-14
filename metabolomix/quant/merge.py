@@ -1,8 +1,10 @@
 """POS と NEG の統合（Task 12）。
 
-正規化済み（または正規化を飛ばした）2 つのデータセットを、特徴を縦に連結した 1 つの派生
-データセットにする。試料は規則プラグインの `match_samples` で共通 ID に照合し、食い違えば
-黙って部分集合で統合せず止まる（`QUANT_MERGE_SAMPLE_MISMATCH`。対応表で進められる）。
+正規化の状態がそろった 2 つのデータセット（両方を同じく正規化したもの、または両方とも
+未正規化のもの。未正規化は skip=True で飛ばしたものも、正規化の工程を通っていないものも同じ）を、
+特徴を縦に連結した 1 つの派生データセットにする。試料は規則プラグインの `match_samples` で
+共通 ID に照合し、食い違えば黙って部分集合で統合せず止まる（`QUANT_MERGE_SAMPLE_MISMATCH`。
+対応表で進められる）。
 
 特徴 ID は `positive:<id>` / `negative:<id>`（msdial-workflow と同じ書式）。`derive` は親に無い
 ID の副次データを落とすので、特徴ごとの副次データ（候補・注釈・タグ・試料ごとの m/z）は
@@ -29,7 +31,7 @@ from metabolomix.quant.plugin import call, load_rules, rules_settings
 from metabolomix.quant.records import merged_record_folder, write_record
 from metabolomix.quant.table import require_msdial_source, resolve_quant_polarity
 
-__all__ = ["MAPPING_COLUMNS", "merge", "merge_tool", "read_mapping"]
+__all__ = ["MAPPING_COLUMNS", "merge", "merge_tool", "normalize_status", "read_mapping"]
 
 MAPPING_COLUMNS = ("mode", "source_sample", "sample_id", "group", "sample_type")
 #: 規則プラグイン（msdial-workflow の config.MODES・対応表の `mode` 列）が使うモード名。
@@ -85,27 +87,38 @@ def _check_polarities(pos_ds, neg_ds, polarities) -> None:
                           {"positive": polarities[0], "negative": polarities[1]})
 
 
+def normalize_status(state: dict) -> str:
+    """正規化の工程をどう通ったか: `applied`（dataset_quant_apply）/ `skipped`（skip=True）/
+    `not_run`（どちらも通っていない。値はそのまま＝未正規化）。"""
+    if "normalize" in (state.get("steps") or []):
+        return "applied"
+    if "normalize" in (state.get("skipped") or []):
+        return "skipped"
+    return "not_run"
+
+
 def _check_states(pos_ds, neg_ds) -> tuple[dict, dict]:
-    states = []
-    for label, ds in (("positive", pos_ds), ("negative", neg_ds)):
-        state = getattr(ds, "quant_state", None)
-        if not state or not ({"normalize"} & set((state.get("steps") or [])
-                                                  + (state.get("skipped") or []))):
-            raise DomainError(
-                "QUANT_NORMALIZE_STEP_REQUIRED",
-                f"{label} のデータセットは正規化の工程を通っていません。統合の前に "
-                "dataset_quant_apply で正規化してください（正規化しないなら skip=True で"
-                "飛ばした記録を作ります）。",
-                {"polarity": label})
-        states.append(state)
-    pos, neg = states
-    diffs = {k: [pos.get(k), neg.get(k)] for k in ("normalized", "method", "unit")
-             if pos.get(k) != neg.get(k)}
+    """両側の quant_state（無ければ空 dict）。正規化の状態が違えば統合しない。
+
+    正規化の工程を通っていない側（`quant_state` が無い・選別だけ通った等）は未正規化
+    （normalized=False・method=None・unit=None）として扱う。skip=True で飛ばしたのと同じ値なので、
+    未正規化どうしは手順を挟ませずにそのまま統合する。
+    """
+    pos, neg = ((getattr(ds, "quant_state", None) or {}) for ds in (pos_ds, neg_ds))
+
+    def view(state: dict) -> dict:
+        return {"normalized": bool(state.get("normalized")), "method": state.get("method"),
+                "unit": state.get("unit")}
+
+    pos_view, neg_view = view(pos), view(neg)
+    diffs = {k: [pos_view[k], neg_view[k]] for k in pos_view if pos_view[k] != neg_view[k]}
     if diffs:
         raise DomainError("QUANT_MERGE_STATE_MISMATCH",
                           "正規化の状態（normalized・method・unit）が 2 つのデータセットで違うため、"
-                          "統合しません。両方に同じ正規化を掛けるか、両方を飛ばしてください。",
-                          {"differs": diffs})
+                          "統合しません。両方に同じ正規化を掛けるか、両方とも正規化せずに渡して"
+                          "ください。",
+                          {"differs": diffs, "normalize": {"positive": normalize_status(pos),
+                                                           "negative": normalize_status(neg)}})
     return pos, neg
 
 
@@ -208,6 +221,8 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
 
     `mapping_input` は (対応表のファイル名, sha256)（記録の入力に `mapping:<名前>` で載る）。
     正規化の状態（normalized・method・unit）が 2 つで違えば統合しない（method の違いも）。
+    正規化の工程を通っていない側は未正規化として扱い、各側が正規化をどう通ったか
+    （`applied` / `skipped` / `not_run`）を記録の `settings.normalize` と戻り値の `normalize` に書く。
     対応表の group / sample_type 列は規則が検証するだけで適用しない（試料の実験情報は POS の
     ものを使う）。
     `folder` を省くと 2 つの解析フォルダの共通の親（無理なら QUANT_RECORD_LOCATION_REQUIRED）。
@@ -247,6 +262,7 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     if mapping_input is not None:
         inputs[f"mapping:{mapping_input[0]}"] = mapping_input[1]
     parents = [pos_state.get("record_id"), neg_state.get("record_id")]
+    normalize = {"positive": normalize_status(pos_state), "negative": normalize_status(neg_state)}
     n_pos, n_neg = len(pos_ds.feature_ids), len(neg_ds.feature_ids)
     counts = {"positive": n_pos, "negative": n_neg, "merged": n_pos + n_neg}
     qderive.check_capacity()  # 登録できない記録を残さない
@@ -254,7 +270,8 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
         folder, "merge", inputs=inputs, parent_ids=[p for p in parents if p],
         settings={"rules": rules_settings(plugin), "match_rule": rule,
                   "mapping": mapping_input[0] if mapping_input else None,
-                  "handles": {"positive": pos_handle_id, "negative": neg_handle_id}},
+                  "handles": {"positive": pos_handle_id, "negative": neg_handle_id},
+                  "normalize": normalize},
         summary={"n_features": counts, "n_samples": len(pos_ids), "unit": pos_state.get("unit"),
                  "normalized": bool(pos_state.get("normalized"))})
     state = qderive.quant_state(
@@ -292,7 +309,8 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     new.sample_metadata_rows = None
     new.library_record = None
     info = {"record_id": record["record_id"], "rule": rule, "n_features": counts,
-            "n_samples": len(pos_ids), "unit": state["unit"], "normalized": state["normalized"]}
+            "n_samples": len(pos_ids), "unit": state["unit"], "normalized": state["normalized"],
+            "normalize": normalize}
     return new, info
 
 

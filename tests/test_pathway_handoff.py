@@ -239,7 +239,8 @@ def test_drop_reasons_partition_the_rows():
     dropped = {k: v for k, v in r.items() if k.startswith("dropped_") and k != "dropped_duplicate_names"}
     assert dropped == {"dropped_unannotated": 2, "dropped_unparsable_name": 1, "dropped_isotope_label": 1,
                        "dropped_ambiguous_class": 1, "dropped_unmapped_ontology": 1, "dropped_ambiguous_ontology": 1,
-                       "dropped_class_name_conflict": 1, "dropped_no_formula": 1, "dropped_formula_mismatch": 1}
+                       "dropped_class_name_conflict": 1, "dropped_no_formula": 1, "dropped_formula_mismatch": 1,
+                       "dropped_name_head": 0}
     assert sum(r["kept_by_route"].values()) + sum(dropped.values()) == len(rows)
     assert r["n_kept"] == sum(r["kept_by_route"].values()) - r["dropped_duplicate_names"] == 3
     assert "dropped_non_msdial_ontology" not in r
@@ -282,7 +283,8 @@ def test_every_reason_resolve_row_can_return_is_a_report_key():
     reasons = set()
     for module in (handoff, msp_lipid):
         for node in ast.walk(ast.parse(inspect.getsource(module))):
-            if isinstance(node, ast.FunctionDef) and (node.name == "resolve_row" or node.name.startswith("from_")):
+            if isinstance(node, ast.FunctionDef) and (node.name in ("resolve_row", "_resolve_route")
+                                                      or node.name.startswith("from_")):
                 for sub in ast.walk(node):
                     values = []
                     if isinstance(sub, ast.Return) and sub.value is not None:
@@ -297,8 +299,30 @@ def test_every_reason_resolve_row_can_return_is_a_report_key():
                         elif isinstance(v, ast.Name) and isinstance(getattr(module, v.id, None), str):
                             reasons.add(getattr(module, v.id))
     assert {"unannotated", "unparsable_name", "isotope_label", "ambiguous_class", "unmapped_ontology",
-            "ambiguous_ontology", "class_name_conflict", "no_formula", "formula_mismatch"} <= reasons
+            "ambiguous_ontology", "class_name_conflict", "no_formula", "formula_mismatch", "name_head"} <= reasons
     report = handoff._new_report("dataset")
     assert {f"dropped_{r}" for r in reasons} <= set(report), reasons - {k[8:] for k in report}
 
 
+def test_as_is_name_whose_head_upstream_cannot_read_is_dropped():
+    """経路 as_is でも、上流が名前の頭からクラスを読めない名前（`(` 始まり）は落として数える（B11-T42）。"""
+    from metabolomix.msdial.lipid_identity import normalize_lipid_name
+    name = "(9Z)-octadecenoic acid"
+    assert normalize_lipid_name(name)["parse_ok"]            # GOSLIN は読める（だから as_is に入っていた）
+    assert handoff.resolve_row(name, "FA").reason == "name_head"
+    assert handoff.resolve_row("[M]PC 34:1", "PC").reason in ("name_head", "unparsable_name")
+    assert handoff.resolve_row("no MS2: PC 34:1", "PC").route == "as_is"   # 限定子の頭は英字
+    assert handoff.resolve_row("PC 34:1", "PC").route == "as_is"
+    t = handoff.build_from_dataset(**_ds_with(_KEEP + [{"name": name, "ontology": "FA"}]))
+    assert t.names == ["PC 38:3", "PE 18:0_20:4"]
+    assert t.report["dropped_name_head"] == 1
+    assert sum(t.report["kept_by_route"].values()) + sum(_dropped(t.report).values()) == 3
+
+
+def test_upstream_head_check_follows_the_written_name():
+    # mzTab-M には # を _ に直して書くので、その形で確かめる。前後の空白は上流も除く
+    assert handoff.upstream_head_ok("  PC 34:1")
+    assert handoff.upstream_head_ok("#x")
+    assert handoff.upstream_head_ok("-d7 PC") and handoff.upstream_head_ok("+x") and handoff.upstream_head_ok(";x")
+    assert not handoff.upstream_head_ok("(9Z)-x") and not handoff.upstream_head_ok("[x]")
+    assert not handoff.upstream_head_ok("") and not handoff.upstream_head_ok("ω-3")
