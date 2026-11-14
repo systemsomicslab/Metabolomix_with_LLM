@@ -182,21 +182,37 @@ def _bad_request(message: str, **details) -> DomainError:
     return DomainError("DATASET_BAD_REQUEST", message, details or None)
 
 
-def _reported_ids(bh_population, reported_feature_ids) -> list[str] | None:
-    """`bh_population="reported"` の母集団（特徴 ID の文字列のリスト。整数の ID も文字列にする）。
+def _reported_ids(bh_population, reported_feature_ids) -> tuple[list[str] | None, list[str]]:
+    """`bh_population="reported"` の母集団（特徴 ID の文字列のリスト。整数の ID も文字列にする）と注記。
 
-    reported と reported_feature_ids は対で使う（片方だけは DATASET_BAD_REQUEST）。"""
+    `reported` なのに ID が無い（空・不正）ときだけ DATASET_BAD_REQUEST（補正の母集団が決まらない）。
+    `reported` 以外で ID を渡したときは効かない引数の組なので、ID を使わずに注記を返す（誤りにしない）。"""
     if bh_population != "reported":
-        if reported_feature_ids is not None:
-            raise _bad_request('reported_feature_ids は bh_population="reported" のときだけ渡します。',
-                               bh_population=bh_population)
-        return None
+        if reported_feature_ids is None:
+            return None, []
+        return None, [f'reported_feature_ids は bh_population="reported" のときだけ補正の母集団に使う。'
+                      f'bh_population="{bh_population}" なので使っていない（報告した特徴だけで補正するなら'
+                      ' bh_population="reported" を渡して呼び直す）。']
     if (not isinstance(reported_feature_ids, list) or not reported_feature_ids
             or any(isinstance(f, bool) or not isinstance(f, (str, int)) or f == ""
                    for f in reported_feature_ids)):
         raise _bad_request('bh_population="reported" には reported_feature_ids（報告する特徴 ID の'
                            "空でないリスト）が要ります。")
-    return list(dict.fromkeys(str(f) for f in reported_feature_ids))
+    return list(dict.fromkeys(str(f) for f in reported_feature_ids)), []
+
+
+def _with_matrix(exc: DomainError, matrix_id, matrix_source) -> DomainError:
+    """`matrix_id` を省いた呼び出しのエラーに、使った（作った）行列とその出所を足す。
+
+    既定の前処理で作った行列は呼び直しにそのまま使え、直近の `dataset_preprocess` の行列なら、群がその前処理の
+    `group_levels` / `group_factors` で決まっていたことが分かる（既定の群が消えた理由を読めるように）。"""
+    if matrix_id is None or matrix_source in (None, "matrix_id"):
+        return exc
+    details = {**(exc.details or {}), "matrix_id": matrix_id, "matrix_source": matrix_source}
+    if matrix_source == "latest_preprocess":
+        details["matrix_note"] = ("matrix_id を省いたので、このハンドルで dataset_preprocess が最後に作った行列を"
+                                  "使った（群・除外・設定はその前処理のもの）。別の行列は matrix_id で名指しする。")
+    return DomainError(exc.code, exc.message, details)
 
 
 def _output_path(output_path):
@@ -339,7 +355,7 @@ def _contrast_summaries(engine: dict, spec: dict, log2fc_threshold: float) -> li
             "contrast_id": cid,
             "reference": rows[0]["reference"] if rows else None,
             "test": rows[0]["test"] if rows else None,
-            "confounded": bool(conf.get("confounded")),
+            "confounded": conf.get("confounded"),          # true / false / null（評価できない）
             "batch_status": conf.get("batch_status"),
             "n_tested": n_tested, "n_not_tested": len(rows) - n_tested,
             "verdicts": verdicts, "large_changes": large,
@@ -445,11 +461,12 @@ def dataset_compare(
         ハンドルで dataset_preprocess が最後に作った行列（group_levels / group_factors を渡したときは群が
         同じものだけ）、無ければ既定の前処理で行列を作って登録する（QC のある換算済みデータでは drift_mode を
         尋ねる needs_input）。使った行列は戻り値の matrix_id と matrix_source（"matrix_id" /
-        "latest_preprocess" / "default"）。古い・無い ID は missing_state。
-        ID と group_levels / group_factors の併用は不可（群は行列が決めている）。
+        "latest_preprocess" / "default"。省いた呼び出しのエラーにも details.matrix_id / matrix_source）。
+        古い・無い ID は missing_state。ID と group_levels / group_factors の併用は不可（群は行列が決めている）。
     method: "moderated_t"（既定）など（エンジンの検定）。effect_size: "log2_mean_difference"（既定）/
         "arithmetic_mean_ratio"。bh_population: 補正の母集団 "matrix"（既定）/ "annotated" / "reported"
-        （reported_feature_ids の特徴だけ。reported のときだけ reported_feature_ids を渡す）。
+        （reported_feature_ids の特徴だけ。reported なのに ID が無ければ DATASET_BAD_REQUEST。reported 以外で
+        渡した ID は使わず、その旨を notes に書く）。
     p_adjust: 多重比較の補正 "bh"（既定。FDR）/ "bonferroni" / "holm"（FWER）/ "none"（補正なし）。
         q 列はこの方法の値で、戻り値と記録に p_adjust_method として残る。
     q_threshold / equivalence_fc: 判定の q の閾値（既定 0.05）と同等とみなす倍率（既定 1.2）。
@@ -469,13 +486,13 @@ def dataset_compare(
     if ds is None:
         return missing_state("dataset", ["load_dataset"],
                              "DatasetState がありません。先に load_dataset を実行してください。")
-    implicit_matrix = None
+    used_matrix = matrix_source = None
     try:
         if isinstance(top_n, bool) or not isinstance(top_n, int) or not 0 <= top_n <= _TOP_N_MAX:
             raise _bad_request(f"top_n は 0〜{_TOP_N_MAX} の整数です。全行は結果（result_id）に保持して"
                                "あり、output_path・書き出し（dataset_export_differential）で取り出せます。",
                                top_n=top_n)
-        reported = _reported_ids(bh_population, reported_feature_ids)
+        reported, notes = _reported_ids(bh_population, reported_feature_ids)
         if p_adjust not in P_ADJUST_METHODS:
             raise _bad_request(f"p_adjust は {list(P_ADJUST_METHODS)} のどれかです。", p_adjust=p_adjust)
         out_path = _output_path(output_path)
@@ -499,6 +516,7 @@ def dataset_compare(
             return _matrix_not_found(matrix_id)
         matrix_source = ("matrix_id" if matrix_id is not None
                          else "latest_preprocess" if entry is not None else "default")
+        used_matrix = entry["matrix_id"] if entry is not None else None
         study = from_dataset(ds, **inputs)
         spec = spec_v2.normalize_spec_v2(stats_results.compare_spec(
             factors=design_factors, comparisons=spec_comparisons,
@@ -516,7 +534,7 @@ def dataset_compare(
         if entry is None:
             entry, preprocess_record = register_default(holder, ds, study, prepared,
                                                          preprocess, inputs)
-            implicit_matrix = prepared.matrix_id
+            used_matrix = prepared.matrix_id      # 行列は登録済み。呼び直しにそのまま使える
         run = spec_v2.run_spec_v2(spec, study, prepared=prepared)
         try:
             record = stats_results.register_compare(ds, run, log2fc_threshold=log2fc_threshold,
@@ -524,10 +542,7 @@ def dataset_compare(
         except ValueError as exc:
             raise DomainError("STUDY_DATA_INVALID", str(exc)) from exc
     except DomainError as exc:
-        if implicit_matrix is not None:           # 行列は登録済み。呼び直しにそのまま使える
-            exc = DomainError(exc.code, exc.message, {**(exc.details or {}),
-                                                      "matrix_id": implicit_matrix})
-        return _domain_envelope(exc)
+        return _domain_envelope(_with_matrix(exc, used_matrix, matrix_source))
 
     engine = record["engine"]
     conf = engine["confounding"]
@@ -575,6 +590,7 @@ def dataset_compare(
         "top": _top_table(ds, engine["rows"], cids, top_n),
         **({"f_top": f_top} if f_top else {}),
         **({"output": output} if output is not None else {}),
+        **({"notes": notes} if notes else {}),
         "record": written,
         "next": ("全行は result_id で保持した（直近の結果として書き出し・図の既定になる）。対比が複数の結果は"
                  "dataset_export_differential・dataset_export_evidence_bundle・dataset_plot(kind=volcano)・"
@@ -623,7 +639,8 @@ def dataset_pca(
     matrix_id: dataset_preprocess が返した行列 ID。省略時は、このハンドルで dataset_preprocess が最後に
         作った行列、無ければ既定の前処理で行列を作って登録する（QC のある換算済みデータでは drift_mode を
         尋ねる needs_input）。使った行列は戻り値の matrix_id と matrix_source（"matrix_id" /
-        "latest_preprocess" / "default"）。古い・無い ID は missing_state。
+        "latest_preprocess" / "default"。省いた呼び出しのエラーにも details.matrix_id / matrix_source）。
+        古い・無い ID は missing_state。
     scaling: "autoscale"（既定。平均 0・SD 1）/ "pareto"（SD の平方根で割る）。
     n_components: 主成分数（既定 5。個体数・特徴数の小さい方が上限）。
     impute: 欠測の補い方 "half_min"（既定）/ "knn" / "none"（欠測があれば PCA_MISSING_VALUES）。
@@ -638,7 +655,7 @@ def dataset_pca(
     if ds is None:
         return missing_state("dataset", ["load_dataset"],
                              "DatasetState がありません。先に load_dataset を実行してください。")
-    implicit_matrix = None
+    used_matrix = matrix_source = None
     preprocess_record = None
     try:
         # 群の指定の検証は行列を登録する前に済ませる（不正な指定が行列・記録を残さない）
@@ -651,6 +668,7 @@ def dataset_pca(
             return _matrix_not_found(matrix_id)
         matrix_source = ("matrix_id" if matrix_id is not None
                          else "latest_preprocess" if entry is not None else "default")
+        used_matrix = entry["matrix_id"] if entry is not None else None
         if entry is not None:
             prepared = entry["prepared"]
         else:
@@ -659,15 +677,12 @@ def dataset_pca(
             if isinstance(prepared, str):
                 return prepared
             entry, preprocess_record = register_default(holder, ds, study, prepared, config, inputs)
-            implicit_matrix = prepared.matrix_id
+            used_matrix = prepared.matrix_id      # 行列は登録済み。呼び直しにそのまま使える
         result = stats_pca.pca(prepared, scaling=scaling, n_components=n_components, impute=impute)
         labels = stats_results.unit_group_labels(ds, prepared, label_overrides)
         record = stats_results.register_pca(ds, result, labels)
     except DomainError as exc:
-        if implicit_matrix is not None:           # 行列は登録済み。呼び直しにそのまま使える
-            exc = DomainError(exc.code, exc.message, {**(exc.details or {}),
-                                                      "matrix_id": implicit_matrix})
-        return _domain_envelope(exc)
+        return _domain_envelope(_with_matrix(exc, used_matrix, matrix_source))
 
     groups: dict[str, int] = {}
     for label in labels.values():

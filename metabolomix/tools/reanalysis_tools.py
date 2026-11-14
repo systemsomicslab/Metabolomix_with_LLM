@@ -246,7 +246,7 @@ def _analysis_run_v2(spec: dict, holder, output_path: str | None) -> str:
     if written is None:
         by_id = {e["analysis_id"]: e for e in result["analyses"]}
         for item in summary["analyses"]:
-            if item["kind"] != "pca":
+            if item["kind"] not in ("pca", "plsda"):     # 行の表を持たない解析には rows を付けない
                 item["rows"] = S.inline_rows(by_id[item["analysis_id"]], rows_table)
     return json_payload(json_safe(round_floats({
         "status": "success", **summary, **({"output_path": written} if written else {}),

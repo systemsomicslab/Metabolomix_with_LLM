@@ -262,16 +262,19 @@ matrix_id, preprocess: {steps, warnings, subject_source}, primary, analyses: [{a
   `q_interpretation` は `discovery_fdr`（`p_adjust=bh` で `matrix` / `annotated`）・`fwer`（`bonferroni` / `holm`）・
   `unadjusted`（`none`）か `reproduction_only`（`reported`。報告した特徴だけの補正で、探索の FDR ではない）。
   `omnibus` は cell が 3 つ以上のときの全 cell の F 検定の行 `{feature_id, f, f_p, f_q, df1, df2}`（無ければ null）。
+  `df2` は `df_prior + df_residual` で、事前分布の自由度が ∞ なら `"inf"`（JSON。F の参照分布は χ²(df1)/df1 の極限）、
+  F を計算していない行では null。
   `factorial` は因子が 2 つ以上で全 cell がそろうときの主効果と交互作用の F（Type III。多水準を含む moderated F）で、
   `{effects: {効果の名前: {factors, df1}}, hypothesis, rows: [{effect, feature_id, f, f_p, f_q, df1, df2}]}`（無ければ null。
   効果の名前は因子名、交互作用は `:` で結ぶ。`f_q` は効果ごとに `p_adjust` で補正）。
   `confounding` は `{batch_table, batch_status, cramers_v, injection_order, warnings, by_contrast: {対比 ID: {batch_status,
-  confounded}}}`（全対比をまとめた表と、対比ごとの表）。
+  confounded}}}`（全対比をまとめた表と、対比ごとの表。`confounded` は `true`＝完全交絡 / `false` / `null`＝バッチ不明で
+  評価できない。交絡なしではない）。
   行（対比 × 特徴）: `feature_id`・`contrast_id`・`reference`・`test`・`status`（`tested` / `not_tested`）・`reason`・
   `n_reference` / `n_test`（有限値の個体数）・`detected_reference` / `detected_test`（検出された個体数。検出状態が
   無ければ null）・`quantity_judgeable`（群のどの cell も検出の割合が `min_detected_fraction` 以上か。null は検出状態なし）・
   `constant_in_group`（群の cell の中で値がすべて同じ＝埋め値の疑いの cell の一覧。無ければ null。判定は変えず、件数を警告
-  `constant_in_group` に出す）・`confounded`（その対比が群とバッチの完全交絡か）・
+  `constant_in_group` に出す）・`confounded`（その対比が群とバッチの完全交絡か。評価できなければ null）・
   `log2fc`（正なら test が高い）・`se`（log2fc の標準誤差。順位の検定・算術平均の比では null）・`ci_low` / `ci_high`・
   `ci_unavailable_reason`・`statistic` / `df` / `p`・`mean_reference` /
   `mean_test`（個体ごとの前処理後の線形値の算術平均。単純な 2 群の対比だけ、交互作用は null）・`q`・`presence_p` /
@@ -715,7 +718,7 @@ UTF-8・改行は CRLF）。
 | `comparison.statistics` | `{test, ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n, q_interpretation}, subject_source, n_units_a, n_units_b}`。`n` は選んだ対比の BH の母集団の大きさ |
 | `comparison.effect_size_definition` / `mean_definition` | 効果量の定義（`{name, description}`）と、`mean_a` / `mean_b` が「個体ごとの前処理後の線形値の算術平均」であること |
 | `comparison.matrix_id` / `rule_hash` / `contrast_id` | どの行列・どの規則・どの対比を書いたか（`contrast_id` は 2 群の結果なら 1 つの対比の ID） |
-| `comparison.unadjusted_confounded` | `allow_confounded=true` で完全交絡を越えて走った比較だけ `true`（それ以外は欄が無い）。同じ印は来歴 `provenance.result.comparison.unadjusted_confounded`（と `provenance.result.warnings` の説明）にも載る |
+| `comparison.unadjusted_confounded` | `allow_confounded=true`（既定）で完全交絡（全対比をまとめた表か、その対比の表）を越えて走った比較だけ `true`（それ以外は欄が無い）。同じ印は来歴 `provenance.result.comparison.unadjusted_confounded`（と `provenance.result.warnings` の説明）にも載る |
 | `intensities_stage` | `pre_imputation`（補完の前）/ `post_imputation`（補完の後） |
 | `population.detection_unavailable_reason` | `detected` が全行空のときの理由。検出状態を使えれば `null` |
 | `population.exclusions` | 除外の来歴。エンジンの結果は、その行列を作ったときの除外（`dataset_exclude` の試料・特徴。名前は 20 件で切り、残りは `n_more`）を、結果が読んだ行列の登録から引く（今の `ds.excluded_*` ではない） |

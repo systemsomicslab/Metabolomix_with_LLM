@@ -147,7 +147,7 @@ def assert_not_confounded(report: dict, *, allow_confounded: bool) -> None:
     if allow_confounded:
         return
     contrasts = [cid for cid, item in (report.get("by_contrast") or {}).items()
-                 if item.get("confounded")]
+                 if item.get("confounded") is True]   # None（評価できない）は止めない
     if report.get("batch_status") == "complete" or contrasts:
         raise DomainError(
             "STATISTIC_CONFOUNDED",

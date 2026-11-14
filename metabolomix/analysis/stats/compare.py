@@ -18,13 +18,16 @@
   ③区間が ±幅の内 → `unchanged`、④それ以外 → `inconclusive`。区間が無ければ `unchanged` にしない。
 - 補正の母集団（§8。名前は `bh_population` のまま）と交絡（§9）の表を結果に必ず書く。交絡では止めない（既定
   `allow_confounded=True`）: 全対比の群をまとめた表に加え、対比ごとの交絡（`confounding.by_contrast`）を書く。
+  対比の `confounded` は 3 値: `true`＝その対比の群だけで見て完全交絡、`false`＝完全交絡ではない（部分・なし・
+  単一バッチ）、`None`＝評価できない（バッチが不明な個体がある。「交絡なし」ではない）。
   `allow_confounded=False` を明示したときだけ、まとめた表かどれかの対比が完全交絡なら STATISTIC_CONFOUNDED で止める。
 - 片群一定（D4）: 対比の群（cell）のどれかで、有限値が 2 個体以上あり値がすべて同じ（丸めの誤差の内。埋め値の
   疑い）なら、行の `constant_in_group` にその cell を挙げ、件数を警告 `constant_in_group` に出す（判定は変えない）。
 - 要因の F（2 因子以上・moderated t）: 主効果と交互作用（多水準を含む）の moderated F を `factorial` に返す。
   向きと log2fc を持たないので比較の行とは別の欄（omnibus と同じ扱い）。
 
-MCP・セッションには依存しない。数字は丸めない（非有限は None）。
+MCP・セッションには依存しない。数字は丸めない（非有限は None。ただし F の分母の自由度 `df2` は、事前分布の
+自由度 `df_prior` が ∞ なら `inf` のまま残す——F の参照分布は χ²(df1)/df1 の極限で、「計算していない」ではない）。
 """
 from __future__ import annotations
 
@@ -362,14 +365,27 @@ def _constant_cells(log2: np.ndarray, cell_idx: dict, cells) -> dict[str, np.nda
     return out
 
 
+def _confounded_flag(status: str) -> bool | None:
+    """対比の `confounded`: 完全交絡なら True、評価できない（バッチ不明）なら None、それ以外は False。"""
+    if status == "not_evaluable":
+        return None
+    return status == "complete"
+
+
 def _contrast_confounding(proxies, info, cids) -> dict[str, dict]:
-    """対比ごとの交絡（その対比の群だけで見た群 × バッチ）。`confounded` は完全交絡のとき真。"""
+    """対比ごとの交絡（その対比の群だけで見た群 × バッチ）。`confounded` は `_confounded_flag` の 3 値。"""
     out = {}
     for cid in cids:
         cells = info[cid]["reference_cells"] + info[cid]["test_cells"]
         status = confounding_report(proxies, cells)["batch_status"]
-        out[cid] = {"batch_status": status, "confounded": status == "complete"}
+        out[cid] = {"batch_status": status, "confounded": _confounded_flag(status)}
     return out
+
+
+def _df2(value) -> float | None:
+    """F の分母の自由度。NaN は None、`df_prior = ∞` の ∞ は inf のまま（χ² の極限。`_num` で消さない）。"""
+    value = float(value)
+    return None if math.isnan(value) else value
 
 
 def compare(prepared: PreparedMatrix, *, factors: list[str], comparisons: list[dict],
@@ -432,7 +448,7 @@ def compare(prepared: PreparedMatrix, *, factors: list[str], comparisons: list[d
     confounding["by_contrast"] = _contrast_confounding(proxies, info, cids)
     assert_not_confounded(confounding, allow_confounded=allow_confounded)
     warnings.extend(dict(w) for w in confounding["warnings"])
-    complete = [cid for cid in cids if confounding["by_contrast"][cid]["confounded"]]
+    complete = [cid for cid in cids if confounding["by_contrast"][cid]["confounded"] is True]
     if complete and confounding["batch_status"] != "complete":
         warnings.append({"code": "contrast_complete_confounding",
                          "message": "群とバッチが完全に交絡している対比があります"
@@ -566,7 +582,7 @@ def compare(prepared: PreparedMatrix, *, factors: list[str], comparisons: list[d
     def f_rows(raw):
         fq = adjust_p_values([o[1] if o else None for o in raw], method)
         return [{"feature_id": fid, "f": o[0] if o else None, "f_p": o[1] if o else None,
-                 "f_q": _num(fq[j]), "df1": o[2] if o else None, "df2": _num(o[3]) if o else None}
+                 "f_q": _num(fq[j]), "df1": o[2] if o else None, "df2": _df2(o[3]) if o else None}
                 for j, (fid, o) in enumerate(zip(feature_ids, raw))]
 
     omnibus = f_rows(omnibus_raw) if want_omnibus else None

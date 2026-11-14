@@ -147,3 +147,24 @@ def test_errors():
     with pytest.raises(DomainError) as e:
         P.plsda(flat, factors=["group"], n_permutations=1)
     assert e.value.code == "PLSDA_TOO_FEW_FEATURES"
+
+
+def test_plsda_summary_in_analysis_run_has_no_rows(tmp_path):
+    """dataset_analysis_run（spec v2）の要約: plsda は行の表を持たないので `rows` を付けない（pca と同じ）。"""
+    import json
+
+    from metabolomix.core import session_state
+    from metabolomix.tools.reanalysis_tools import dataset_analysis_run
+    from tests.test_stats_results import OFF, T_VS_C, _ds
+
+    state = _ds()
+    state.analysis_dir = str(tmp_path / "analysis")
+    session_state.session.dataset = state
+    spec = {"schema": "analysis-spec.v2", "preprocess": OFF, "comparisons": [T_VS_C],
+            "analyses": [{"analysis_id": "cmp", "kind": "compare"},
+                         {"analysis_id": "pl", "kind": "plsda", "n_permutations": 5}]}
+    out = json.loads(dataset_analysis_run(spec))
+    cmp_, pl = out["analyses"]
+    assert cmp_["kind"] == "compare" and cmp_["rows"].startswith("contrast_id\t")
+    assert pl["kind"] == "plsda" and "rows" not in pl
+    assert {"q2", "permutation", "vip_top"} <= pl.keys()

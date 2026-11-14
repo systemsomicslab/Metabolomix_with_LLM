@@ -18,7 +18,7 @@
    "by_contrast": {
     "RA_vs_HC": {
      "batch_status": "not_evaluable",
-     "confounded": false
+     "confounded": null
     }
    },
    "warnings": [
@@ -31,7 +31,7 @@
   "contrasts": [
    {
     "batch_status": "not_evaluable",
-    "confounded": false,
+    "confounded": null,
     "contrast_id": "RA_vs_HC",
     "large_changes": 0,
     "n_not_tested": 0,

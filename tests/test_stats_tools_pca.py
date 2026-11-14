@@ -143,7 +143,15 @@ def test_pca_knn_failure_envelope(ds):
 def test_pca_specification_errors_are_envelopes(ds):
     mx = _pre()["matrix_id"]
     assert _pca(matrix_id=mx, scaling="bogus")["error"]["code"] == "PCA_SPECIFICATION_INVALID"
-    assert _pca(matrix_id=mx, n_components=0)["error"]["code"] == "PCA_SPECIFICATION_INVALID"
+    named = _pca(matrix_id=mx, n_components=0)["error"]
+    assert named["code"] == "PCA_SPECIFICATION_INVALID"
+    assert "matrix_source" not in (named.get("details") or {})       # 名指しの行列は呼び手が知っている
+    # matrix_id を省いて直近の dataset_preprocess の行列を使ったときは、エラーにもその行列と出所が残る
+    implicit = _pca(n_components=0)["error"]
+    assert implicit["code"] == "PCA_SPECIFICATION_INVALID"
+    assert implicit["details"]["matrix_id"] == mx
+    assert implicit["details"]["matrix_source"] == "latest_preprocess"
+    assert "matrix_note" in implicit["details"]
 
 
 # --- 図 ----------------------------------------------------------------------------------

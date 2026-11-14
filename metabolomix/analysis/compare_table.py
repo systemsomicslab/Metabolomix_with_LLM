@@ -10,6 +10,8 @@
   `effect` は要因の効果の名前（`group` / `group:B` など）で、omnibus では空）。
 
 値の書き方: 数は有効 10 桁（`.10g`）、真偽は `true` / `false`、無い値（None）は空欄、一覧は `,` で結ぶ。
+無限大は `inf` と書く（F の `df2` は事前分布の自由度 `df_prior` が ∞ のとき ∞＝χ² の極限で、空欄の「計算していない」と
+区別する）。`confounded` は `true`（その対比が完全交絡）/ `false` / 空欄（バッチ不明で評価できない。交絡なしではない）。
 同定の列は `feature_metadata`（`.arf2` / mzTab-M SME）を先に、無ければ `feature_annotations`（SML。
 MS1 注釈）から取る。`id_level` は `msms` / `ms1` / `none`（`overview.id_level` と同じ 3 分類）、`msi_level`
 は道具が付けた MSI の水準（解析フォルダのデータセットだけが持つ。mzTab-M では空欄）。
@@ -59,6 +61,8 @@ def _cell(value) -> str:
     if isinstance(value, int):
         return str(value)
     if isinstance(value, float):
+        if math.isinf(value):
+            return "inf" if value > 0 else "-inf"
         return format(value, ".10g") if math.isfinite(value) else ""
     if isinstance(value, (list, tuple)):
         return ",".join(_cell(v) for v in value)

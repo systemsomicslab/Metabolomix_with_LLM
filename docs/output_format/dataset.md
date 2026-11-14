@@ -308,7 +308,9 @@ output?, record, next}`。
   全対比をまとめた表の `batch_status = complete` と、対比ごとの `by_contrast[...].confounded`（多群では一部の対比だけが
   完全交絡になりうる）で印を付ける。その対比の群差はバッチ差と区別できない（結論に使わない）。`allow_confounded=false` を
   渡すと、どちらかの完全交絡で `STATISTIC_CONFOUNDED`（`details.contrasts` に完全交絡の対比）で止める。バッチ情報が
-  無ければ「評価不可」で、「交絡あり」ではない。部分的な交絡は警告に出る。
+  無ければ「評価不可」で、「交絡あり」でも「交絡なし」でもない（対比の `confounded` は null。TSV では空欄）。
+  `confounded` は `true`（その対比の群だけで見て完全交絡）/ `false`（部分交絡・交絡なし・単一バッチ）/ `null`。
+  部分的な交絡は警告に出る。
 - `contrasts[]`: `{contrast_id, reference, test, confounded, batch_status, n_tested, n_not_tested, verdicts: {changed,
   unchanged, inconclusive}, large_changes, presence: {available, n_q_below}}`。`presence` は検出の有無そのものの検定
   （gap-fill を除く検出状態があるときだけ `available`）。`omnibus` は 3 群以上（cell が 3 つ以上）のときの全 cell の
@@ -329,7 +331,9 @@ output?, record, next}`。
   ci_low ci_high ci_unavailable_reason statistic df p q presence_p presence_q verdict verdict_reason`。数は有効 10 桁、
   真偽は `true` / `false`、無い値は空欄、一覧は `,` で結ぶ。メタ行は無い）。omnibus・要因の F があれば
   `<stem>.ftests<拡張子>` にも書く（`kind effect feature_id name id_level f df1 df2 f_p f_q`。`kind` は `omnibus` /
-  `factorial`）。`msi_level` は解析フォルダのデータセットだけ（mzTab-M では空欄）。**差次的エクスポート
+  `factorial`）。`df2`（F の分母の自由度＝`df_prior + df_residual`）が `inf` なのは事前分布の自由度 `df_prior` が ∞
+  のとき（F の参照分布は χ²(df1)/df1 の極限。`f_top` も同じ）。空欄は F を計算していない行。`msi_level` は
+  解析フォルダのデータセットだけ（mzTab-M では空欄）。**差次的エクスポート
   （`dataset_export_differential`。§11.4 の 15 列の契約）とは別物**。書けなかったときも比較は成功し、`written=false` と
   `reason`。`output_path` がフォルダ・空文字なら比較の前に `DATASET_BAD_REQUEST`。
 - `bh_population.q_interpretation`: `discovery_fdr`（`p_adjust=bh` で `matrix` / `annotated`）・`fwer`（`bonferroni` /
@@ -341,11 +345,14 @@ output?, record, next}`。
   cell の一覧（無ければ null）。判定は変えず、件数を警告 `constant_in_group`（`{n_rows, n_features, by_contrast, examples}`）に
   出す。片群が一定の値だと、群の差は値の大きさより埋め方で決まりうる。
 - エラー: 群の指定が合わない・`top_n` / `log2fc_threshold` / `p_adjust` / `output_path` が不正・`bh_population=reported`
-  と `reported_feature_ids` の片方だけは `DATASET_BAD_REQUEST`。
+  なのに `reported_feature_ids` が無いは `DATASET_BAD_REQUEST`。`reported` 以外で `reported_feature_ids` を渡したときは
+  誤りにせず、ID を使わずに戻り値の `notes` に書く（効かない引数の組）。
   `matrix_id` が古い・無いは `missing_state`（`stat_matrix`）。`matrix_id` と `group_levels` / `group_factors` の併用は
   `DATASET_BAD_REQUEST`（群は行列が決めている）。`EXPLORATORY_ONLY_DATASET`（途中で止まった実行のデータセット）。
   既定の前処理が確認を要するときは `needs_input`（`core.md`）。
-  既定の前処理で行列を作ったあとにエラーになったとき、`details.matrix_id` にその行列の ID が残る（呼び直しに使える）。
+  `matrix_id` を省いた呼び出しが行列を決めたあとにエラーになったとき、`details.matrix_id` と `matrix_source` に
+  その行列と出所が残る（`default` は既定の前処理で作って登録した行列で、呼び直しに使える。`latest_preprocess` は
+  直近の `dataset_preprocess` の行列で、群・除外・設定はその前処理のもの＝`details.matrix_note`）。
 - `record`: `{written, record_id, path}`（比較の記録。親は行列の前処理の記録。設定に `spec`・`log2fc_threshold`・
   `matrix_source`）。既定の前処理で行列を作ったときは `preprocess_record` に前処理の記録も付く。
 
@@ -420,10 +427,11 @@ mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`（`CONTRAC
 
 `p_value` / `q_value` はエンジンの p と BH の q（`q_value` の読みは `q_interpretation`）、`log2fc` は正なら `group_b`（比較）が高い。**エンジンの結果の `significant` は、`q ≤ q_threshold` かつ `|log2fc| ≥ log2fc_threshold`（`dataset_compare` の `log2fc_threshold`）に加えて、判定 `verdict` が `changed` の行だけ `true`**（`significant_rule`）。検出の割合が足りず量を判定できない行（`inconclusive` / `quantity_not_judgeable`）や BH の母集団の外の行は、q が小さく |log2fc| が大きくても `false`——gap-fill の値で動いた量を主張にしない。`true` の行の数は、その対比の `dataset_compare` の `large_changes` と同じ（InChIKey の無い行は書き出さないので、書き出しではその分少ないことがある）。同じ印を根拠バンドルの `features.tsv` の `significant`・volcano の `up` / `down`（§11.2.1）が使う。**`verdict` の 3 値そのものは TSV の列には出ない**（契約の列は据え置き）ので、判定は `dataset_compare` の要約・`top` か、根拠バンドル（`reanalysis.md` §10）で読む。
 
-**交絡を越えた比較の印**: `allow_confounded=true` で完全交絡（`confounding.batch_status = complete`）を越えて走った
-エンジンの比較は、`source_verification` の後に `# unadjusted_confounded = true` と
+**交絡を越えた比較の印**: `allow_confounded=true`（既定）で完全交絡（全対比をまとめた `confounding.batch_status = complete`
+か、書き出す対比の `confounding.by_contrast[対比].confounded = true`）を越えて走ったエンジンの比較は、
+`source_verification` の後に `# unadjusted_confounded = true` と
 `# unadjusted_confounded_note = …`（日本語の説明）を書き、volcano の `caveats` と図の下端（ASCII の但し書き）、根拠バンドルの
-`comparison.unadjusted_confounded`（`reanalysis.md` §10）にも同じ印が載る。部分的な交絡・交絡の無い比較には何も足さない。
+`comparison.unadjusted_confounded`（`reanalysis.md` §10）にも同じ印が載る。部分的な交絡・評価できない交絡・交絡の無い比較には何も足さない。
 
 **有意な行だけでなく、InChIKey が付いた全行を書き出す。** 下流の濃縮解析は
 「検出された化合物」を背景に取る必要があり、有意な行だけでは背景が作れない。
@@ -645,7 +653,8 @@ TSV（`changed` と `unchanged` を最大 5 つずつ）、多群は moderated F
 
 **群と向き**:
 - 群が 1 つ以下・探索専用のデータセット（`allow_incomplete=True` で開いた未完了の実行）・群とバッチの完全交絡では
-  比較を回さない（`omitted` に理由）。
+  比較を回さない（`omitted` に理由）。完全交絡は全群をまとめた表で見る: 多群でまとめた表が部分交絡なら、一部の対だけが
+  完全交絡でも比較は回し、その対は比較の記録（`result_ids.compare`）の `confounding.by_contrast` と行の `confounded` に印が付く。
 - 2 群の向きは**仮**: 試料の表で先に出た群を対照にする（事実に「仮の向き」と付く）。向きを決めるのは
   `dataset_compare(reference_group=…, test_group=…)`。
 - 3〜6 群は全対、7 群以上は対照との対だけ（と moderated F）。

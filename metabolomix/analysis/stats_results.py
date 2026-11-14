@@ -475,8 +475,8 @@ def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
     （検定していない行は p・q・log2fc が None）、`volcano` は p が有限の行だけ。各行の `significant` は
     `export_contract.row_significant`（記録の閾値に加えて `verdict == "changed"`。R16）で、ここで 1 回だけ
     付ける（書き出し・根拠バンドル・volcano はこの印を読む）。`provenance` は元の記録のもの（`kind` は
-    `"compare"`）。`allow_confounded=true` で完全交絡を越えた比較だけ、その写しに
-    `comparison.unadjusted_confounded: true` と説明（`warnings`。`caveats` にも）を足す（記録は変えない）。
+    `"compare"`）。`allow_confounded=true`（既定）で完全交絡（全対比をまとめた表か、この対比の表）を越えた比較だけ、
+    その写しに `comparison.unadjusted_confounded: true` と説明（`warnings`。`caveats` にも）を足す（記録は変えない）。
 
     対比が 1 つでなく `contrast_id` が無い・未知の ID なら `CONTRAST_REQUIRED`、交互作用なら
     `CONTRAST_NOT_TWO_GROUP`（どちらも details に候補）。比較の記録でなければ `ANALYSIS_RESULT_NOT_FOUND`。
@@ -530,7 +530,7 @@ def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
     caveats = [w.get("message") or str(w.get("code"))
                for w in engine.get("warnings") or [] if w.get("message") or w.get("code")]
     provenance = record["provenance"]
-    trace = _unadjusted_confounded(record, comp, contrast_id)
+    trace = _unadjusted_confounded(record, comp, contrast_id, (ref_cell, test_cell))
     if trace is not None:
         # 書き出しのメタ行・volcano・図の但し書きはここを読む。
         # 記録の来歴は書き換えず、読み替えた結果の来歴にだけ足す。
@@ -577,28 +577,37 @@ def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
 #: 完全交絡を未調整のまま越えた比較の来歴の `warnings` と `caveats` に書く説明
 #: （書き出しの `unadjusted_confounded_note` は来歴の warnings から「未調整」を含む行を拾う）。
 UNADJUSTED_CONFOUNDED_EXPLANATION = (
-    "allow_confounded=true が明示されたため、群とバッチの完全交絡を未調整の"
-    "まま解析を継続しました（図・TSV・レポートにこの旨を残すこと）。")
+    "群とバッチが完全交絡の比較を、allow_confounded=true（既定。false なら止める）のまま未調整で"
+    "解析しました（群差とバッチ差を区別できない。図・TSV・レポートにこの旨を残すこと）。")
 
 
-def _unadjusted_confounded(record: dict, comp: dict, contrast_id: str) -> dict | None:
-    """`allow_confounded=true` で完全交絡を越えて走った比較なら、来歴の `comparison` に足す
+def _unadjusted_confounded(record: dict, comp: dict, contrast_id: str, cells=()) -> dict | None:
+    """`allow_confounded=true`（既定）で完全交絡を越えて走った対比なら、来歴の `comparison` に足す
     痕跡（`unadjusted_confounded: true`）。そうでなければ None（何も足さない）。
 
-    完全交絡はエンジンの交絡の表（`engine.confounding.batch_status == "complete"`。比較に入った群すべてで
-    見たもの＝`allow_confounded` が実際に越えさせた判定）で、許可は記録の spec のその比較の解析の
-    `allow_confounded`。部分的な交絡には印を付けない（警告は `caveats` にある）。
+    完全交絡はエンジンの交絡の表で、全対比をまとめた表（`engine.confounding.batch_status == "complete"`）か、
+    この対比の群だけで見た表（`engine.confounding.by_contrast[contrast_id].confounded is True`。多群でまとめた表が
+    部分交絡でも、一部の対比だけが完全交絡になりうる）のどちらか。許可は記録の spec のその比較の解析の
+    `allow_confounded`（spec v2 の既定は true）。部分的な交絡・評価できない交絡には印を付けない（警告は `caveats`）。
+    痕跡の `confounding` は、この対比の状態（`batch_status`）と、その 2 つの cell に絞った群 × バッチの表、
+    全対比をまとめた表の状態（`pooled_batch_status`）。
     """
     confounding = record["engine"].get("confounding") or {}
     analysis = next((a for a in record["spec"].get("analyses") or []
                      if a.get("analysis_id") == record.get("analysis_id")), {})
-    allowed = bool(analysis.get("allow_confounded", False))
-    if not (allowed and confounding.get("batch_status") == "complete"):
+    allowed = bool(analysis.get("allow_confounded", True))
+    pooled = confounding.get("batch_status")
+    own = (confounding.get("by_contrast") or {}).get(contrast_id) or {}
+    if not (allowed and (pooled == "complete" or own.get("confounded") is True)):
         return None
+    table = confounding.get("batch_table") or {}
+    if cells and all(c in table for c in cells):
+        table = {c: table[c] for c in cells}
     return {"comparison_id": contrast_id,
             "reference_group": comp["reference"],
             "test_group": comp["test"],
-            "confounding": {"batch_status": confounding.get("batch_status"),
-                            "batch_table": copy.deepcopy(confounding.get("batch_table"))},
+            "confounding": {"batch_status": own.get("batch_status") or pooled,
+                            "batch_table": copy.deepcopy(table),
+                            "pooled_batch_status": pooled},
             "allow_confounded": allowed,
             "unadjusted_confounded": True}

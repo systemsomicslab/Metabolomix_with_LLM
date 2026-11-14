@@ -453,11 +453,16 @@ def test_reported_population_needs_its_ids_and_is_written_into_spec(ds):
     mx = _pre()["matrix_id"]
     no_ids = _cmp(reference_group="C", test_group="T", matrix_id=mx, bh_population="reported")
     assert no_ids["error"]["code"] == "DATASET_BAD_REQUEST"
+    # reported 以外で ID を渡しても誤りにしない（効かない引数の組は notes に書き、母集団は行列のまま）
     stray = _cmp(reference_group="C", test_group="T", matrix_id=mx, reported_feature_ids=["f0"])
-    assert stray["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert stray["status"] == "success"
+    assert stray["bh_population"]["name"] == "matrix"
+    assert stray["bh_population"]["n_by_contrast"] == {"T_vs_C": 10}
+    assert len(stray["notes"]) == 1 and 'bh_population="reported"' in stray["notes"][0]
+    assert "reported_feature_ids" not in ds.last_differential["spec"]["analyses"][0]
     out = _cmp(reference_group="C", test_group="T", matrix_id=mx, bh_population="reported",
                reported_feature_ids=["f0", "f1", "f2", "f1"])
-    assert out["status"] == "success"
+    assert out["status"] == "success" and "notes" not in out
     assert out["bh_population"]["name"] == "reported"
     assert out["bh_population"]["n_by_contrast"] == {"T_vs_C": 3}
     analysis = ds.last_differential["spec"]["analyses"][0]
@@ -681,3 +686,119 @@ def test_matrix_id_spec_reproduces_numbers(tmp_path):
     new = {(r["feature_id"], r["contrast_id"]): (r["verdict"], r["q"])
            for r in rerun["analyses"][0]["result"]["rows"]}
     assert old == new
+
+
+# --- レビューの指摘（交絡の 3 値・対比ごとの印・行列の出所・F の df2） -------------------------
+
+def _split_batches(state):
+    """C → B1、T → B2、U は個体で 2 つに割る: まとめた表は partial、T_vs_C だけが完全交絡。"""
+    for row in state.sample_metadata_rows:
+        if row["role"] != "sample":
+            continue
+        g, subject = row["group"], row["subject_id"]
+        row["batch"] = ("B1" if g == "C" else "B2" if g == "T"
+                        else "B1" if subject in ("U0", "U1") else "B2")
+    return state
+
+
+def test_one_confounded_pair_among_three_groups_is_marked_not_stopped(tmp_path):
+    ds = _install(_split_batches(_ds(groups=("C", "T", "U"))), tmp_path)
+    mx = _pre()["matrix_id"]
+    out = _cmp(groups=["C", "T", "U"], matrix_id=mx)
+    assert out["status"] == "success"
+    assert out["confounding"]["batch_status"] == "partial"
+    assert out["confounding"]["by_contrast"]["T_vs_C"] == {"batch_status": "complete", "confounded": True}
+    assert out["confounding"]["by_contrast"]["U_vs_C"]["confounded"] is False
+    assert _contrast(out, "T_vs_C")["confounded"] is True
+    assert any(w["code"] == "contrast_complete_confounding" for w in out["warnings"])
+    # 消費側: 対比ごとの完全交絡にも未調整の印が付き、部分交絡の対比には付かない
+    rec = ds.last_differential
+    tc = stats_results.as_two_group(rec, "T_vs_C")["provenance"]
+    assert tc["comparison"]["unadjusted_confounded"] is True
+    assert tc["comparison"]["confounding"]["batch_status"] == "complete"
+    assert tc["comparison"]["confounding"]["pooled_batch_status"] == "partial"
+    assert set(tc["comparison"]["confounding"]["batch_table"]) == {"C", "T"}
+    assert stats_results.UNADJUSTED_CONFOUNDED_EXPLANATION in tc["warnings"]
+    assert "comparison" not in stats_results.as_two_group(rec, "U_vs_C")["provenance"]
+    # allow_confounded=false の明示だけが止める（どの対比が完全交絡かを details に）
+    refused = _cmp(groups=["C", "T", "U"], matrix_id=mx, allow_confounded=False)
+    assert refused["error"]["code"] == "STATISTIC_CONFOUNDED"
+    assert refused["error"]["details"]["contrasts"] == ["T_vs_C"]
+
+
+def test_default_call_on_complete_confounding_does_not_claim_an_explicit_choice(tmp_path):
+    ds = _confounded(tmp_path)
+    out = _cmp(reference_group="C", test_group="T")             # allow_confounded を渡さない
+    assert out["status"] == "success"
+    warnings = stats_results.as_two_group(ds.last_differential)["provenance"]["warnings"]
+    text = next(w for w in warnings if "未調整" in w)
+    assert "明示" not in text and "既定" in text
+
+
+def test_unknown_batches_leave_confounded_unknown_not_false(tmp_path):
+    state = _ds()
+    for row in state.sample_metadata_rows:
+        if row["role"] == "sample" and row["group"] == "T":
+            row["batch"] = None
+    ds = _install(state, tmp_path)
+    mx = _pre()["matrix_id"]
+    path = tmp_path / "rows.tsv"
+    out = _cmp(reference_group="C", test_group="T", matrix_id=mx, output_path=str(path))
+    assert out["confounding"]["batch_status"] == "not_evaluable"
+    assert out["confounding"]["by_contrast"]["T_vs_C"] == {"batch_status": "not_evaluable",
+                                                           "confounded": None}
+    assert _contrast(out, "T_vs_C")["confounded"] is None
+    assert all(r["confounded"] is None for r in ds.last_differential["engine"]["rows"])
+    assert {row["confounded"] for row in _read_tsv(path)} == {""}       # 空欄（false ではない）
+    assert "comparison" not in stats_results.as_two_group(ds.last_differential)["provenance"]
+    # 評価できない交絡は allow_confounded=false でも止めない（完全交絡ではない）
+    assert _cmp(reference_group="C", test_group="T", matrix_id=mx,
+                allow_confounded=False)["status"] == "success"
+
+
+def test_error_after_latest_preprocess_names_the_matrix_and_its_source(ds):
+    mx = _pre(group_factors=[["C"], ["T"]])["matrix_id"]
+    out = _cmp(reference_group="C", test_group="T")
+    assert out["error"]["code"] == "DESIGN_INVALID"
+    details = out["error"]["details"]
+    assert details["matrix_id"] == mx and details["matrix_source"] == "latest_preprocess"
+    assert "dataset_preprocess" in details["matrix_note"]
+    # 名指しした行列のエラーには足さない（呼び手が知っている）
+    named = _cmp(reference_group="C", test_group="T", matrix_id=mx)
+    assert "matrix_source" not in (named["error"].get("details") or {})
+
+
+def test_error_after_implicit_default_matrix_reports_source(tmp_path):
+    state = _confounded(tmp_path)
+    out = _cmp(reference_group="C", test_group="T", allow_confounded=False)
+    assert out["error"]["details"]["matrix_source"] == "default"
+    assert out["error"]["details"]["matrix_id"] in state.stat_matrices
+    assert "matrix_note" not in out["error"]["details"]
+
+
+def test_infinite_df2_is_written_as_inf_not_blank(tmp_path):
+    import math
+    ds = _install(_ds(groups=("C", "T", "U")), tmp_path)
+    mx = _pre()["matrix_id"]
+    path = tmp_path / "rows.tsv"
+    text = dataset_compare(groups=["C", "T", "U"], matrix_id=mx, output_path=str(path), top_n=50)
+    out = _strict(text)
+    engine = ds.last_differential["engine"]
+    assert math.isinf(engine["prior"]["df_prior"])                  # この合成データは事前分布の自由度が ∞
+    assert all(o["df2"] == math.inf for o in engine["omnibus"] if o["f"] is not None)
+    f_lines = out["f_top"].splitlines()
+    assert len(f_lines) > 1 and all(line.split("\t")[6] == "inf" for line in f_lines[1:])
+    ftests = _read_tsv(Path(out["output"]["ftests_path"]))
+    assert ftests and {row["df2"] for row in ftests} == {"inf"}
+
+
+def test_overview_compares_three_groups_when_only_one_pair_is_confounded(tmp_path):
+    from metabolomix.tools.overview_tools import dataset_overview
+    ds = _install(_split_batches(_ds(groups=("C", "T", "U"))), tmp_path)
+    out = _strict(dataset_overview())
+    assert out["status"] == "success"
+    assert any(f.startswith("G3 moderated F") for f in out["global"]["facts"]), out["global"]
+    rec = ds.results[out["result_ids"]["compare"]]
+    assert rec["p_adjust_method"] == "bh"                     # どの比較の記録にも補正の方法が残る
+    assert rec["engine"]["confounding"]["by_contrast"]["T_vs_C"]["confounded"] is True
+    assert all(r["confounded"] is True for r in rec["engine"]["rows"] if r["contrast_id"] == "T_vs_C")

@@ -805,8 +805,9 @@ def test_se_defined_per_test():
     assert all(r["se"] is None for r in ratio.values())
 
 
-def test_constant_in_group_marks_one_sided_fill_values():
+def test_constant_in_group_marks_one_sided_fill_values(monkeypatch):
     """D4: 片方の群の値がすべて同じ（埋め値）の特徴に印を付け、件数を警告で返す。判定は変えない。"""
+    from metabolomix.analysis.stats import compare as compare_mod
     rng = np.random.default_rng(1)
     x = rng.normal(20.0, 0.3, (8, 4))
     x[:4, 1] = 12.0                                    # A だけ一定（埋め値）
@@ -820,8 +821,14 @@ def test_constant_in_group_marks_one_sided_fill_values():
     w = next(w for w in res["warnings"] if w["code"] == "constant_in_group")
     assert w["n_rows"] == 2 and w["n_features"] == 2 and w["by_contrast"] == {"BvsA": 2}
     assert w["examples"] == ["f01", "f02"]
-    base = compare(_prepared(x, ["A"] * 4 + ["B"] * 4), factors=["group"], comparisons=BVA)
-    assert [r["verdict"] for r in base["rows"]] == [r["verdict"] for r in res["rows"]]
+    # 判定は変えない: 印を付ける検査を止めた（どの cell も一定でないとみなす）実行と、判定・q・区間が同じ
+    monkeypatch.setattr(compare_mod, "_constant_cells",
+                        lambda log2, cell_idx, cells: {c: np.zeros(log2.shape[1], bool) for c in cells})
+    unmarked = compare(_prepared(x, ["A"] * 4 + ["B"] * 4), factors=["group"], comparisons=BVA)
+    assert all(r["constant_in_group"] is None for r in unmarked["rows"])
+    assert not any(w["code"] == "constant_in_group" for w in unmarked["warnings"])
+    for key in ("verdict", "verdict_reason", "q", "ci_low", "ci_high"):
+        assert [r[key] for r in unmarked["rows"]] == [r[key] for r in res["rows"]], key
 
 
 def _factorial_data(n_per=3, seed=4, levels_a=("a1", "a2", "a3"), levels_b=("b1", "b2"), g=2,

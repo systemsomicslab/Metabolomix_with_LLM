@@ -263,8 +263,9 @@ def pathway_project(group_a: str | list[str] | None = None,
 
     - 入力は `load_dataset` で開いた直近のデータセットの統計エンジンの行列
       （`dataset_handle` でハンドルを選べる。run の置き場所もそのデータセットの解析フォルダ）。
-    - matrix_id: dataset_preprocess が返した行列 ID。省略時は既定の前処理（dataset_compare と同じ。
-      QC のある換算済みデータでは drift_mode を尋ねる needs_input）。古い・無い ID は missing_state。
+    - matrix_id: dataset_preprocess が返した行列 ID。省略時は既定の前処理（dataset_compare / dataset_pca と
+      違い、直近の dataset_preprocess の行列は選ばない。QC のある換算済みデータでは drift_mode を尋ねる
+      needs_input）。古い・無い ID は missing_state。
       MSLipidMapper へは行列の注入ごとの値（欠測は 0）を渡す。
     - group_a / group_b: サンプル名のリスト（group_a_label / group_b_label が群名になる）。
       行列に無い試料（QC・ブランク・除外）を指すと PATHWAY_BAD_REQUEST。
