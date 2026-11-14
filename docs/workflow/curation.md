@@ -92,7 +92,7 @@ flowchart TD
 34. │     ├─ metabolomix/arf2/reader.py  load_catalog()（同じファイルならキャッシュ済み）
 35. │     └─ metabolomix/curation/adduct_isomer.py  pool_entry()（`evidence_tier()` で証拠の段階を付ける）
 36. │  └─ metabolomix/curation/judge.py  lipid_rules_active()（脂質規則フラグが 1 件でも True か）
-37. │  └─ metabolomix/curation/adduct_isomer.py  find_adduct_isomer()（有効な `wrong` フラグのスポットは相手から外す → `adduct_isomer`）
+37. │  └─ metabolomix/curation/adduct_isomer.py  find_adduct_isomer()（有効な `wrong` フラグのスポットは相手から外す。Y 自身のアダクトは `msdial/adducts.py` `same_adduct()` で組成で除く → `adduct_isomer`）
 38. │  └─ metabolomix/curation/judge.py  judge_spot()
 39. │  └─ metabolomix/curation/judge.py  auto_note()（判定根拠の文 → `auto_note`）
 40. metabolomix/tools/curation_tools.py  _open_submit()
@@ -123,7 +123,7 @@ flowchart TD
 10. │  └─ metabolomix/curation/trend.py  fit_trends()（相手 Y = 注釈付きで対象でも wrong / redundant でもないスポットの傾向）
 11. │  └─ metabolomix/curation/evidence.py  collect()（`keep_measured=True` で対象の証拠を集める）
 12. │  └─ metabolomix/curation/candidates.py  build_library_candidates()（① MS-DIAL の下位候補 ② 閾値を緩めた再検索）
-13. │  └─ metabolomix/curation/relations.py  find_relations()（④ 別スポットの同位体・アダクト・インソース断片としての説明。Y 自身のアダクトは `msdial/adducts.py` `same_adduct()` で組成で除き、同位体の期待比は Y のイオンの組成から `curation/isotope.py` `envelope_ratios()`）
+13. │  └─ metabolomix/curation/relations.py  find_relations()（④ 別スポットの同位体・アダクト・インソース断片としての説明。Y 自身のアダクトは `msdial/adducts.py` `same_adduct()` で組成で除き、同位体の期待比は Y のイオンの組成の `curation/isotope.py` `isotopologues()` のうち X の窓に入るものの和）
 14. metabolomix/tools/curation_tools.py  _open_submit()
 15. └─ metabolomix/curation/submit_server.py  register()（受け口が無ければ 127.0.0.1 の空きポートで起動。失敗したら `submit.via = "copy"`）
 16. metabolomix/curation/suggest.py  save_suggestion()

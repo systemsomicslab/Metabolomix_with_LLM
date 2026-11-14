@@ -1,7 +1,9 @@
 import math
+from itertools import product
 
 import numpy as np
 import pytest
+from scipy.stats import multinomial
 
 from metabolomix.analysis.feature_search import DEFAULT_ADDUCT_TIERS
 from metabolomix.curation import relations
@@ -37,11 +39,58 @@ def _brute_ratios(ion: dict) -> tuple[float, float]:
     return dist[1] / dist[0], dist[2] / dist[0]
 
 
+#: 同位体の原子質量（NIST の Atomic Weights and Isotopic Compositions）と存在比。実装の表（質量差の表）とは
+#: 別にここで書き、多項分布（scipy）で元素ごとの同位体の組み合わせを数え上げる独立の計算で、窓に入る同位体の
+#: 期待比を確かめる。
+NIST = {
+    "H": [(1.00782503223, 0.999885), (2.01410177812, 0.000115)],
+    "C": [(12.0, 0.9893), (13.00335483507, 0.0107)],
+    "N": [(14.00307400443, 0.99636), (15.00010889888, 0.00364)],
+    "O": [(15.99491461957, 0.99757), (16.99913175650, 0.00038), (17.99915961286, 0.00205)],
+    "S": [(31.9720711744, 0.9499), (32.9714589098, 0.0075), (33.967867004, 0.0425), (35.96708071, 0.0001)],
+    "Cl": [(34.968852682, 0.7576), (36.965902602, 0.2424)],
+    "P": [(30.97376199842, 1.0)],
+    "K": [(38.9637064864, 0.932581), (39.963998166, 0.000117), (40.9618252579, 0.067302)],
+    "I": [(126.904473, 1.0)],
+}
+
+#: 窓（mz_tol）に入る範囲で、Y からのずれ dmz の X に入る同位体だけの和と比べる（`_fine(... mz_tol=WIDE)` は M+k の和）
+WIDE = 1.0
+
+
+def _fine(ion: dict, k: int, dmz: float, mz_tol: float, charge: int = 1) -> float:
+    """イオンの組成の M+k の同位体の組み合わせのうち、Y からの m/z のずれ（質量差 / 価数）が dmz から mz_tol 以内に
+    来るものの、M に対する比の和。"""
+    per_element = []
+    for element, n in ion.items():
+        isotopes = NIST[element]
+        light = isotopes[0][0]
+        options = []
+        for heavy_counts in product(range(min(n, 2) + 1), repeat=len(isotopes) - 1):
+            nominal = sum(c * round(isotopes[i + 1][0] - light) for i, c in enumerate(heavy_counts))
+            if sum(heavy_counts) > n or nominal > 2:
+                continue
+            p = multinomial.pmf([n - sum(heavy_counts), *heavy_counts], n, [a for _, a in isotopes])
+            shift = sum(c * (isotopes[i + 1][0] - light) for i, c in enumerate(heavy_counts))
+            options.append((nominal, shift, p))
+        per_element.append(options)
+    mono, total = None, 0.0
+    for combo in product(*per_element):
+        nominal = sum(o[0] for o in combo)
+        p = math.prod(o[2] for o in combo)
+        shift = sum(o[1] for o in combo)
+        if nominal == 0:
+            mono = p
+        elif nominal == k and abs(dmz - shift / charge) <= mz_tol:
+            total += p
+    return float(total / mono)
+
+
 def test_expected_ratios_of_pure_carbon_are_binomial():
     q = 0.0107 / 0.9893
-    m1, m2 = relations.expected_isotope_ratios("C43", None)
-    assert m1 == pytest.approx(43 * q, rel=1e-9)
-    assert m2 == pytest.approx(math.comb(43, 2) * q ** 2, rel=1e-9)
+    assert relations.expected_isotope_ratio("C43", None, 1, 1.003355, WIDE) == pytest.approx(43 * q, rel=1e-9)
+    assert relations.expected_isotope_ratio("C43", None, 2, 2.006710, WIDE) == pytest.approx(
+        math.comb(43, 2) * q ** 2, rel=1e-9)
 
 
 @pytest.mark.parametrize("formula, adduct, ion", [
@@ -55,8 +104,11 @@ def test_expected_ratios_of_pure_carbon_are_binomial():
     ("C4H9NO2", "[M+H]1+", {"C": 4, "H": 10, "N": 1, "O": 2}),                 # mzTab-M の表記
 ])
 def test_expected_ratios_are_the_sums_of_the_ion_envelope(formula, adduct, ion):
+    """窓が M+k の全体を覆えば、期待比はイオンの同位体分布の M+1 の和・M+2 の和（原子を 1 個ずつ畳み込む計算）。"""
     assert relations.ion_element_counts(formula, adduct) == ion
-    m1, m2 = relations.expected_isotope_ratios(formula, adduct)
+    charge = parse_adduct(adduct).charge
+    m1 = relations.expected_isotope_ratio(formula, adduct, 1, 1.0 / charge, WIDE)
+    m2 = relations.expected_isotope_ratio(formula, adduct, 2, 2.0 / charge, WIDE)
     b1, b2 = _brute_ratios(ion)
     assert m1 == pytest.approx(b1, rel=1e-9) and m2 == pytest.approx(b2, rel=1e-9)
 
@@ -65,15 +117,28 @@ def test_taurocholate_m_plus_2_is_about_13c2_plus_34s_plus_18o():
     # 手計算の一次の項: 13C2 C(26,2)·q_C² + 34S 1·q_S + 18O 7·q_O（交差項 13C·15N などが残りの約 5 %）
     q_c, q_s, q_o = 0.0107 / 0.9893, 0.0425 / 0.9499, 0.00205 / 0.99757
     first_order = math.comb(26, 2) * q_c ** 2 + q_s + 7 * q_o
-    _, m2 = relations.expected_isotope_ratios("C26H45NO7S", "[M-H]-")
+    m2 = relations.expected_isotope_ratio("C26H45NO7S", "[M-H]-", 2, 2.0013, WIDE)
     assert first_order == pytest.approx(0.0971, abs=1e-4)
     assert first_order < m2 < first_order * 1.07
 
 
-@pytest.mark.parametrize("formula", [None, "", "Unknown", "C10Xq3", "C6H5I"])
-def test_unknown_or_unmodelled_formula_has_no_expected_ratio(formula):
-    assert relations.expected_isotope_ratios(formula, "[M-H]-") is None
+@pytest.mark.parametrize("formula", [None, "", "Unknown", "None", "C10Xq3", "C42H82NO8P (PC)"])
+def test_unreadable_formula_has_no_counts_and_no_expected_ratio(formula):
+    assert relations.expected_isotope_ratio(formula, "[M-H]-", 1, 1.003355, WIDE) is None
     assert relations.ion_element_counts(formula, "[M-H]-") is None
+
+
+def test_formula_with_an_element_without_isotope_data_keeps_its_counts():
+    """セレノメチオニンの Se は同位体の表に無い（最も多い 80Se の下に 74Se〜78Se がある）。期待比は求めないが、
+    組成式は読めるので元素の数は返す（Cl・Br・S の説明の門に使う）。"""
+    assert relations.ion_element_counts("C5H11NO2Se", "[M+H]+") == {"C": 5, "H": 12, "N": 1, "O": 2, "Se": 1}
+    assert relations.expected_isotope_ratio("C5H11NO2Se", "[M+H]+", 1, 1.003355, WIDE) is None
+
+
+
+def test_formula_with_a_trailing_charge_is_read():
+    # 第四級アンモニウムの組成式はライブラリによって電荷の記号を付ける（コリン `C5H14NO+`）
+    assert relations.ion_element_counts("C5H14NO+", "[M]+") == {"C": 5, "H": 14, "N": 1, "O": 1}
 
 
 def test_m_plus_2_with_a_consistent_ratio_is_a_strong_explanation():
@@ -165,16 +230,16 @@ def test_chlorine_m_plus_2_is_explained_when_the_window_is_narrow():
     found = _m2(CL, 1.997050, 0.32, mz_tol=0.005)
     [rel] = found
     assert rel["relation"] == "isotope_M+2_37Cl" and rel["ambiguous"] is False
-    # 期待比は M+2 の和（37Cl 0.2424/0.7576 に 13C2・18O・交差項が乗る）
-    expected = _brute_ratios({"C": 10, "H": 7, "Cl": 1, "N": 1, "O": 3})[1]
-    assert expected == pytest.approx(0.2424 / 0.7576 + 0.012, abs=1e-3)
+    # 期待比は X の窓（±5 mDa）に入る M+2: 37Cl 0.2424/0.7576 と 13C+15N。13C2（9.66 mDa）・18O（7.2 mDa）は窓の外
+    expected = _fine({"C": 10, "H": 7, "Cl": 1, "N": 1, "O": 3}, 2, 1.997050, 0.005)
+    assert expected == pytest.approx(0.2424 / 0.7576 + 10 * 0.0107 / 0.9893 * 0.00364 / 0.99636, rel=1e-3)
     assert rel["expected_ratio"] == pytest.approx(expected, abs=1e-4)
     assert rel["isotope_consistent"] is True and rel["strong"] is True
 
 
 def test_overlapping_m_plus_2_windows_are_ambiguous_not_a_separate_compound():
-    """既定の 10 mDa では 13C2 と 37Cl の窓が重なる。一方に決めず（強い説明にしない）、どの行も同じ M+2 の和を
-    期待比にするので、13C2 だけの期待比に合わないことで「別物質」と言わない。"""
+    """既定の 10 mDa では 13C2 と 37Cl の窓が重なる。一方に決めず（強い説明にしない）、どの行も X の窓に入る
+    M+2 の和（37Cl も 13C2 も入る）を期待比にするので、13C2 だけの期待比に合わないことで「別物質」と言わない。"""
     found = {r["relation"]: r for r in _m2(CL, 1.997050, 0.32)}
     # 組成式に S・Br が無いので 34S・81Br は出さない
     assert set(found) == {"isotope_M+2", "isotope_M+2_37Cl"}
@@ -262,8 +327,10 @@ def test_isotope_and_adduct_are_strong_on_a_folder_dataset():
 HEIGHTS = [1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0]
 
 
-def _ion_y(formula, adduct):
-    mz = mz_from_neutral(monoisotopic_mass(parse_formula(formula)), parse_adduct(adduct))
+def _ion_y(formula, adduct, mz=None):
+    """注釈付きの Y（組成式と付加体から m/z を計算する。元素質量の表に無い元素を含むなら `mz` で渡す）。"""
+    if mz is None:
+        mz = mz_from_neutral(monoisotopic_mass(parse_formula(formula)), parse_adduct(adduct))
     return {"spot_id": 1, "name": "Y", "mz": mz, "rt": 10.0, "adduct": adduct, "formula": formula,
             "heights": list(HEIGHTS)}
 
@@ -272,6 +339,7 @@ def test_dimer_m_plus_1_uses_twice_the_carbons():
     """[2M+H]+ の M+1 は炭素 40 個ぶん。中性の組成式（炭素 20）で見ると強すぎて別物質に見えていた。"""
     found = _m2(_ion_y("C20H40O2", "[2M+H]+"), 1.003355, 0.437, adducts=[])
     [rel] = [r for r in found if r["relation"] == "isotope_M+1"]
+    assert rel["expected_ratio"] == pytest.approx(_fine({"C": 40, "H": 81, "O": 4}, 1, 1.003355, 0.010), abs=1e-4)
     assert rel["expected_ratio"] == pytest.approx(_brute_ratios({"C": 40, "H": 81, "O": 4})[0], abs=1e-4)
     assert 0.437 > 1.5 * _brute_ratios({"C": 20, "H": 41, "O": 2})[0]      # 中性の炭素数なら別物質
     assert rel["isotope_consistent"] is True and rel["informational"] is False and rel["strong"] is True
@@ -281,7 +349,7 @@ def test_chloride_adduct_m_plus_2_is_the_37cl_isotope():
     """[M+Cl]- のイオンは Cl を持つので 37Cl の説明が出る（中性の組成式に Cl が無くても）。"""
     found = {r["relation"]: r for r in _m2(_ion_y("C20H40O2", "[M+Cl]-"), 1.997050, 0.34, adducts=[])}
     assert set(found) == {"isotope_M+2", "isotope_M+2_37Cl"}             # 13C2 は 9.66 mDa で窓の内
-    expected = _brute_ratios({"C": 20, "H": 40, "O": 2, "Cl": 1})[1]
+    expected = _fine({"C": 20, "H": 40, "O": 2, "Cl": 1}, 2, 1.997050, 0.010)
     for rel in found.values():
         assert rel["expected_ratio"] == pytest.approx(expected, abs=1e-4)
         assert rel["isotope_consistent"] is True and rel["informational"] is False
@@ -298,7 +366,8 @@ def test_unresolved_m_plus_2_of_a_sulfur_compound_is_not_a_separate_compound():
     13C2 だけの期待比（約 0.038）では 1.5 倍を超えて別物質に見えていた。"""
     found = {r["relation"]: r for r in _m2(_ion_y("C26H45NO7S", "[M-H]-"), 2.0013, 0.097, adducts=[])}
     assert set(found) == {"isotope_M+2", "isotope_M+2_34S"}              # Cl・Br は出さない
-    expected = _brute_ratios({"C": 26, "H": 44, "N": 1, "O": 7, "S": 1})[1]
+    expected = _fine({"C": 26, "H": 44, "N": 1, "O": 7, "S": 1}, 2, 2.0013, 0.010)
+    assert expected == pytest.approx(_brute_ratios({"C": 26, "H": 44, "N": 1, "O": 7, "S": 1})[1], rel=0.01)
     assert 0.097 > 1.5 * math.comb(26, 2) * (0.0107 / 0.9893) ** 2       # 13C2 だけなら別物質
     for rel in found.values():
         assert rel["expected_ratio"] == pytest.approx(expected, abs=1e-4)
@@ -325,17 +394,19 @@ def test_oxygen_rich_m_plus_2_counts_18o():
     [rel] = _m2(_ion_y("C6H12O6", "[M-H]-"), 2.0046, 0.0145, adducts=[])
     assert rel["relation"] == "isotope_M+2"
     assert 0.0145 > 1.5 * math.comb(6, 2) * (0.0107 / 0.9893) ** 2
-    assert rel["expected_ratio"] == pytest.approx(_brute_ratios({"C": 6, "H": 11, "O": 6})[1], abs=1e-4)
+    assert rel["expected_ratio"] == pytest.approx(_fine({"C": 6, "H": 11, "O": 6}, 2, 2.0046, 0.010), abs=1e-4)
     assert rel["isotope_consistent"] is True and rel["informational"] is False and rel["strong"] is True
 
 
 def test_resolved_18o_peak_is_its_own_explanation_when_the_window_is_narrow():
-    """窓が 13C2 と 18O の差（2.46 mDa）より狭ければ、分離された 18O（+2.004246）は 13C2 の窓の外。
-    18O の説明が 1 つだけ立ち、期待比は M+2 の和。"""
+    """窓が 13C2 と 18O の差（2.46 mDa）より狭ければ、分離された 18O（+2.004245）は 13C2 の窓の外。
+    18O の説明が 1 つだけ立ち、期待比はその窓に入る 18O（6 個）だけ。"""
     y = _ion_y("C6H12O6", "[M-H]-")
     [rel] = _m2(y, 2.004246, 0.0145, adducts=[], mz_tol=0.002)
     assert rel["relation"] == "isotope_M+2_18O" and rel["ambiguous"] is False
-    assert rel["expected_ratio"] == pytest.approx(_brute_ratios({"C": 6, "H": 11, "O": 6})[1], abs=1e-4)
+    expected = _fine({"C": 6, "H": 11, "O": 6}, 2, 2.004246, 0.002)
+    assert expected == pytest.approx(6 * 0.00205 / 0.99757, rel=1e-3)
+    assert rel["expected_ratio"] == pytest.approx(expected, abs=1e-4)
     assert rel["isotope_consistent"] is True and rel["strong"] is True
     # 既定の 10 mDa では 13C2 と分けられないので、13C2 の行（isotope_M+2）だけ（18O の行と並べて曖昧にしない）
     [rel] = _m2(y, 2.004246, 0.0145, adducts=[])
@@ -386,3 +457,90 @@ def test_adduct_with_the_same_mz_as_y_is_skipped_but_a_real_partner_is_kept():
                                                   parse_adduct("[M+Na]+"))}
     [rel] = relations.find_relations(sodium, [y], links={}, **{**KW, "adducts": adducts})
     assert rel["relation"] == "adduct:[M+Na]+/[M+H]1+" and rel["strong"] is True
+
+
+# ---------- 分離された 1 つの M+2 はその位置の窓に入る同位体だけと比べる（レビュー V1） ----------
+
+def test_resolved_13c2_of_a_chloride_ion_is_judged_against_its_own_position():
+    """[M+Cl]- の 13C2 の位置（37Cl から 9.66 mDa）だけに当たる X。5 mDa の窓では 37Cl と分離されているので、
+    期待比は 13C2 とその近く（18O・13C+2H など）の和で、37Cl（0.32）を足した M+2 の全体ではない。
+    その位置の同位体の 5 倍の X を「同位体で説明できる」（strong）と言っていた。"""
+    ion = {"C": 20, "H": 40, "O": 2, "Cl": 1}
+    y = _ion_y("C20H40O2", "[M+Cl]-")
+    own = _fine(ion, 2, 2.006710, 0.005)
+    assert own == pytest.approx(0.0275, abs=5e-4)                         # 13C2 0.0222 + 18O 0.0041 + 交差項
+    assert 5 * own < 1.5 * _brute_ratios(ion)[1]                          # M+2 の全体（0.347）なら「同位体」になる
+    [rel] = _m2(y, 2.006710, 5 * own, adducts=[], mz_tol=0.005)
+    assert rel["relation"] == "isotope_M+2" and rel["ambiguous"] is False
+    assert rel["expected_ratio"] == pytest.approx(own, abs=1e-4)
+    assert rel["isotope_consistent"] is False and rel["informational"] is True and rel["strong"] is False
+    [rel] = _m2(y, 2.006710, own, adducts=[], mz_tol=0.005)
+    assert rel["isotope_consistent"] is True and rel["strong"] is True
+
+
+def test_resolved_34s_of_a_sulfatide_is_judged_against_its_own_position():
+    """スルファチド [M-H]- の 34S の位置（13C2 から 10.91 mDa で窓の外）だけに当たる X。期待比は 34S と、窓に入る
+    18O（8.45 mDa）・13C+15N・13C+33S などの和で、13C2（炭素 42 個で約 0.10）は含まない。"""
+    ion = {"C": 42, "H": 80, "N": 1, "O": 11, "S": 1}
+    y = _ion_y("C42H81NO11S", "[M-H]-")
+    own = _fine(ion, 2, 1.995796, 0.010)
+    assert 0.0425 / 0.9499 < own < 0.08                                   # 34S 0.0447 + 18O 0.0226 + 交差項
+    [rel] = _m2(y, 1.995796, 5 * 0.0425 / 0.9499, adducts=[])
+    assert rel["relation"] == "isotope_M+2_34S" and rel["ambiguous"] is False
+    assert rel["expected_ratio"] == pytest.approx(own, abs=1e-4)
+    assert rel["informational"] is True and rel["strong"] is False
+    [rel] = _m2(y, 1.995796, 0.0425 / 0.9499, adducts=[])
+    assert rel["isotope_consistent"] is True and rel["strong"] is True
+
+
+def test_resolved_13c2_of_glutathione_does_not_borrow_the_34s():
+    """グルタチオン [M-H]- の 13C2 の位置に当たる X（34S は 10.91 mDa で窓の外）。期待比は約 0.02 で、
+    34S（0.045）を足した M+2 の全体（0.065）ではない。"""
+    ion = {"C": 10, "H": 16, "N": 3, "O": 6, "S": 1}
+    own = _fine(ion, 2, 2.006710, 0.010)
+    assert own == pytest.approx(0.020, abs=2e-3)
+    [rel] = _m2(_ion_y("C10H17N3O6S", "[M-H]-"), 2.006710, 0.09, adducts=[])
+    assert rel["relation"] == "isotope_M+2" and rel["expected_ratio"] == pytest.approx(own, abs=1e-4)
+    assert rel["informational"] is True and rel["strong"] is False
+
+
+def test_isotopologue_terms_sum_to_the_envelope_and_carry_their_masses():
+    from metabolomix.curation import isotope
+
+    ion = {"C": 26, "H": 44, "N": 1, "O": 7, "S": 1, "K": 1, "Cl": 1}
+    terms = isotope.isotopologues(ion)
+    envelope = isotope.envelope_ratios(ion)
+    for k in (1, 2):
+        assert sum(r for kk, _, r in terms if kk == k) == pytest.approx(envelope[k], rel=1e-12)
+        assert sum(r for kk, _, r in terms if kk == k) == pytest.approx(_fine(ion, k, float(k), WIDE), rel=1e-9)
+    # 質量差つきの項: 窓を狭めた和も数え上げと一致する（13C2 の位置 ±3 mDa、34S の位置 ±1 mDa）
+    for k, dmz, tol in ((2, 2.006710, 0.003), (2, 1.995796, 0.001), (1, 0.997035, 0.002)):
+        window = sum(r for kk, shift, r in terms if kk == k and abs(dmz - shift) <= tol)
+        assert window == pytest.approx(_fine(ion, k, dmz, tol), rel=1e-9)
+
+
+# ---------- 同位体の表に無い元素を含んでも組成式で門を通す（レビュー V2） ----------
+
+def test_iodine_compound_keeps_its_gate_and_expected_ratios():
+    """チロキシン C15H11I4NO4（ヨウ素は単一同位体）。組成式が分かっているので Cl・Br の説明は出さず、M+1・M+2 の
+    期待比も求まる（ヨウ素を表に無い元素として組成式ごと捨てると、M+2 は 37Cl・81Br と並んで曖昧になっていた）。"""
+    ion = {"C": 15, "H": 10, "I": 4, "N": 1, "O": 4}
+    y = _ion_y("C15H11I4NO4", "[M-H]-", mz=775.6801)
+    [rel] = _m2(y, 1.003355, 0.17, adducts=[])
+    assert rel["relation"] == "isotope_M+1"
+    assert rel["expected_ratio"] == pytest.approx(_fine(ion, 1, 1.003355, 0.010), abs=1e-4)
+    assert rel["isotope_consistent"] is True and rel["strong"] is True
+    [rel] = _m2(y, 2.006710, 0.012, adducts=[])
+    assert rel["relation"] == "isotope_M+2" and rel["ambiguous"] is False
+    assert rel["expected_ratio"] == pytest.approx(_fine(ion, 2, 2.006710, 0.010), abs=1e-4)
+    assert rel["isotope_consistent"] is True and rel["strong"] is True
+
+
+def test_element_without_isotope_data_still_gates_the_halogen_explanations():
+    """Se の同位体は表に無いので期待比は空だが、組成式に Cl・Br が無いことは分かる: 37Cl の位置の X に
+    37Cl・81Br の説明を並べない（13C2 の行だけ、期待比は空で強い説明にも別物質にもならない）。"""
+    y = _ion_y("C5H11NO2Se", "[M+H]+", mz=198.0028)
+    [rel] = _m2(y, 1.997050, 0.3, adducts=[])
+    assert rel["relation"] == "isotope_M+2" and rel["ambiguous"] is False
+    assert rel["expected_ratio"] is None and rel["isotope_consistent"] is None
+    assert rel["informational"] is False and rel["strong"] is False

@@ -11,21 +11,25 @@ X と Y が同時に溶出し（|ΔRT| ≤ rt_window）、Δm/z が既知の関�
 同じ）。Y と同じ m/z になる付加体（`[M+H]+` に対する `[2M+2H]2+` など）も、Δm/z が何も区別しないので除く。
 
 同位体の期待比は Y の**イオン**の組成（中性の組成式の n_mol 倍に付加体の原子を足したもの。`[2M+H]+` は炭素も
-2 倍、`[M+Cl]-` は Cl を 1 個持つ）の整数質量の同位体分布（`curation.isotope.envelope_ratios`）から求める。
-M+1 はその M+1 の和（13C・15N・2H・17O・33S）、M+2 はその M+2 の和（13C2・18O・34S・37Cl・81Br・41K と
-交差項）。M+2 の行はどの同位体の位置で見つけても同じ和を期待比にする——分離できない M+2 の束の強度は和で、
-分離された 1 つの同位体の強度もその和を超えないので、同位体を別物質と言わない側の上限になる。
+2 倍、`[M+Cl]-` は Cl を 1 個持つ）の M+k の同位体の組み合わせ（`curation.isotope.isotopologues`。M+1 は 13C・15N・
+2H・17O・33S・40K、M+2 は 13C2・18O・34S・37Cl・81Br・41K と 13C+15N などの交差項。それぞれ正確な質量差を持つ）の
+うち、**m/z が X から `mz_tol` 以内に来るものの比の和**。X のピークに入りうるのはその窓の中の同位体だけなので、
+分離できない M+2 の束（重心が 13C2 と 34S の間に来る）はその束の和と、分離された 1 つの同位体（13C2 だけ・34S だけ）は
+その位置の近くの同位体だけと比べる。分離された位置の強度を窓の外の同位体（Cl を持つイオンの 13C2 に 37Cl など）まで
+足した和と比べると、その位置の同位体の何倍もの別物質を「同位体で説明できる」と言ってしまう。
+窓は X の Δm/z で決まるので、同じ X と Y の M+2 の行は（どの位置の行でも）同じ期待比を持つ。
 
 強い説明（`strong`）は、(a) 前駆体側の FoundInUpperMsMs リンク（裏付けつき）、(b) 同位体で強度比が
 期待比に合う（裏付けつき・M+2 の取り違えの恐れが無い）、(c) アダクトの組・インソース断片で、Δm/z と
 同時溶出に加えて試料間の相関 r ≥ min_r がそろう、のどれか。Δm/z が合うだけでは断定しない。
 
-M+2 の位置は 13C2（+2.006710）・18O（+2.004246）・34S（+1.995796）・37Cl（+1.997050）・81Br（+1.997952）を見る。
+M+2 の位置は 13C2（+2.006710）・18O（+2.004245）・34S（+1.995796）・37Cl（+1.997050）・81Br（+1.997952）を見る。
 18O は 13C2 から 2.46 mDa（を電荷で割った値）しか離れないので、窓（`mz_tol`）がその差以上なら 13C2 と分けられず、
 18O の行（`isotope_M+2_18O`）は出さずに 13C2 の行（`isotope_M+2`）が 18O も含む——既定の 10 mDa ではいつもこちら。
 窓がその差より狭い（分離された 18O を見る）ときだけ 18O を別の説明として見る。Y のイオンの組成が分かっていて
-その元素（O・S・Cl・Br）を持たなければ、その説明は出さない。2 つ以上の M+2 が同じ Δm/z の窓に入るときは
-一方に決めず、どれにも `ambiguous` を付けて並べ（強い説明にしない）、期待比（M+2 の和）に合わないときだけ
+その元素（O・S・Cl・Br）を持たなければ、その説明は出さない（同位体の表に無い元素を含む組成でも、組成式が読めれば
+この門には使い、期待比だけを求めない）。2 つ以上の M+2 が同じ Δm/z の窓に入るときは一方に決めず、どれにも
+`ambiguous` を付けて並べ（強い説明にしない）、期待比（X の窓に入る M+2 の和。行によらず同じ）に合わないときだけ
 情報（別物質）にする。
 
 FoundInUpperMsMs のリンクは無向の対（実データで相互 100%、相手が高 m/z 側になるのは半々）。
@@ -33,41 +37,53 @@ FoundInUpperMsMs のリンクは無向の対（実データで相互 100%、相�
 X が Y より軽い（X の m/z < Y の m/z）ときに限る。upper（前駆体）側は m/z の大小で決める。
 リンクは裏付け（supported）には向きによらず数える。
 
-deps: msdial.adducts、msdial.peak_verification（組成式）、curation.isotope（同位体分布）。
+deps: msdial.adducts、msdial.peak_verification（組成式）、curation.isotope（同位体の組み合わせと質量差）。
 """
 from __future__ import annotations
 
 import math
+import re
 from bisect import bisect_left, bisect_right
 from functools import lru_cache
 from statistics import median
 
-from metabolomix.curation.isotope import ABUNDANCES, envelope_ratios
-from metabolomix.msdial.adducts import ion_counts, mz_from_neutral, neutral_from_mz, parse_adduct, same_adduct
+from metabolomix.curation.isotope import ISOTOPE_SHIFTS, isotopologues
+from metabolomix.msdial.adducts import (SAME_MZ_TOL, ion_counts, mz_from_neutral, neutral_from_mz, parse_adduct,
+                                        same_adduct)
 from metabolomix.msdial.peak_verification import parse_formula
 
 ISOTOPE_RATIO_FACTOR = 1.5
 SUPPORT_LINKS = frozenset({"correl_similar", "chrom_similar", "found_in_upper_msms"})
-#: 関係コード → (整数質量のずれ k（M+k）, 質量差 [Da], その位置の重い同位体の元素)。質量差は同位体の質量の差から
-#: 計算した値。期待比は位置によらず M+k の和（`expected_isotope_ratios`）。
+#: 関係コード → (整数質量のずれ k（M+k）, 質量差 [Da], その位置の重い同位体の元素)。質量差は同位体の質量の差
+#: （`curation.isotope.ISOTOPE_SHIFTS`）。期待比は X の窓に入る M+k の同位体の和（`expected_isotope_ratio`）。
 ISOTOPE_DELTAS = {
-    "isotope_M+1": (1, 1.003355, "C"),
-    "isotope_M+2": (2, 2.006710, "C"),           # 13C2（18O と分けられない窓では 18O も含む）
-    "isotope_M+2_18O": (2, 2.004246, "O"),       # 18O − 16O。窓が 13C2 との差より狭いときだけ（`_SUBSUMED`）
-    "isotope_M+2_34S": (2, 1.995796, "S"),       # 34S − 32S
-    "isotope_M+2_37Cl": (2, 1.997050, "Cl"),     # 37Cl − 35Cl
-    "isotope_M+2_81Br": (2, 1.997952, "Br"),     # 81Br − 79Br
+    "isotope_M+1": (1, ISOTOPE_SHIFTS["C"][1], "C"),            # 13C（+1.003355）
+    "isotope_M+2": (2, 2 * ISOTOPE_SHIFTS["C"][1], "C"),        # 13C2（+2.006710。18O と分けられない窓では 18O も含む）
+    "isotope_M+2_18O": (2, ISOTOPE_SHIFTS["O"][2], "O"),        # 18O（+2.004245）。窓が 13C2 との差より狭いときだけ（`_SUBSUMED`）
+    "isotope_M+2_34S": (2, ISOTOPE_SHIFTS["S"][2], "S"),        # 34S（+1.995796）
+    "isotope_M+2_37Cl": (2, ISOTOPE_SHIFTS["Cl"][2], "Cl"),     # 37Cl（+1.997050）
+    "isotope_M+2_81Br": (2, ISOTOPE_SHIFTS["Br"][2], "Br"),     # 81Br（+1.997952）
 }
 #: M+2 の同位体（Δm/z の窓が重なりうる。既定の 10 mDa では 13C2 と 37Cl の差 9.66 mDa、34S と 37Cl の差 1.25 mDa が
 #: 窓の内側。13C2 と 34S の差 10.91 mDa は外側だが、分離できない M+2 の束の重心はその間に来る）。
 M2_ISOTOPES = frozenset(code for code, (k, _, _) in ISOTOPE_DELTAS.items() if k == 2)
 #: 窓（mz_tol）が 2 つの位置の差（を電荷で割った値）以上なら、左の位置を見ずに右の行に含める（窓では分けられない）。
 #: 18O は 13C2 から 2.46 mDa で、ほぼすべての有機物のイオンが C と O を持つ——分けられない窓で両方を並べると、
-#: どの M+2 も `ambiguous`（強い説明にならない）になってしまう。期待比はどちらの行も M+2 の和なので、含めても
+#: どの M+2 も `ambiguous`（強い説明にならない）になってしまう。期待比は X の窓で決まり行によらないので、含めても
 #: 比の判定は変わらない。
 _SUBSUMED = {"isotope_M+2_18O": "isotope_M+2"}
-#: Y と同じ m/z になる付加体（Δm/z が何も区別しない）を除くための許容 [Da]。浮動小数の誤差だけを吸う。
-SAME_MZ_TOL = 1e-6
+#: 同位体の位置が X の窓に入るかの比較で、浮動小数の誤差だけを吸う許容 [Da]（行の窓と期待比の窓を一致させる）。
+_WINDOW_EPS = 1e-9
+#: 元素記号（と標識の D）。組成式の中にこれ以外の記号があれば読めない組成式とみなす（`C10Xq3` の `Xq`）。
+_ELEMENTS = frozenset("""
+H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr
+Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt
+Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr Rf Db Sg Bh Hs Mt Ds Rg Cn Nh Fl Mc
+Lv Ts Og D
+""".split())
+#: 組成式は元素記号と個数の並びだけ（`Unknown` や `None` のような語は組成式でない）。末尾の電荷（`C5H14NO+`）は
+#: 読み飛ばす（`parse_formula` と同じ）。
+_FORMULA_RE = re.compile(r"(?:[A-Z][a-z]?\d*)+(?:\d*[+-]|[+-]\d*)?")
 #: 質量は各中性損失の組成式から monoisotopic_mass で計算した値（Task 5 で照合済み）。想定は spec §6 の表。
 INSOURCE_LOSSES = [
     ("insource:-H2O", 18.010565),          # H2O。脱水（Cer・DG など）
@@ -84,16 +100,13 @@ INSOURCE_LOSSES = [
 
 @lru_cache(maxsize=4096)
 def _ion_composition(formula: str | None, adduct: str | None) -> tuple | None:
-    if not formula:
+    if not formula or not _FORMULA_RE.fullmatch(formula.strip()):
         return None
-    try:
-        counts = parse_formula(formula)
-    except ValueError:
+    counts = parse_formula(formula)
+    if any(element not in _ELEMENTS for element in counts):
         return None
     ion = ion_counts(counts, adduct)
     counts = ion if ion is not None else counts
-    if any(element not in ABUNDANCES for element in counts):
-        return None
     return tuple(sorted(counts.items()))
 
 
@@ -101,25 +114,38 @@ def _text(value) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _charge(adduct) -> int:
+    parsed = parse_adduct(_text(adduct))
+    return parsed.charge if parsed else 1
+
+
 def ion_element_counts(formula, adduct) -> dict | None:
     """Y のイオンの元素の数（中性の組成式の n_mol 倍に付加体の原子を足したもの。付加体が読めない・差し引いて
-    負になるなら中性の組成式のまま）。組成式が無い・読めない・同位体の表に無い元素を含むなら None
-    （「その元素を持たない」とは区別する）。"""
+    負になるなら中性の組成式のまま）。組成式が無い・読めない（元素記号でない記号を含む）なら None
+    （「その元素を持たない」とは区別する）。同位体の表に無い元素（Se・Fe など）を含んでも数は返す。"""
     items = _ion_composition(_text(formula), _text(adduct))
     return None if items is None else dict(items)
 
 
 @lru_cache(maxsize=4096)
-def _ratios(items: tuple) -> tuple | None:
-    ratios = envelope_ratios(dict(items))
-    return None if ratios is None else tuple(ratios)
+def _isotopologues(items: tuple) -> tuple | None:
+    terms = isotopologues(dict(items))
+    return None if terms is None else tuple(terms)
 
 
-def expected_isotope_ratios(formula, adduct) -> tuple[float, float] | None:
-    """Y のイオンの (M+1 の和 / M, M+2 の和 / M)。組成が分からなければ None。"""
+def expected_isotope_ratio(formula, adduct, k: int, dmz: float, mz_tol: float) -> float | None:
+    """X（Y からの Δm/z が `dmz`）が Y のイオンの M+k の同位体ピークだとしたときの、X の強度の Y に対する期待比。
+
+    Y のイオンの M+k の同位体の組み合わせ（`curation.isotope.isotopologues`）のうち、m/z（Y + 質量差 / 価数）が
+    X から `mz_tol` 以内に来るものの比の和。組成式が無い・読めない・同位体の表に無い元素を含むなら None。
+    """
     items = _ion_composition(_text(formula), _text(adduct))
-    ratios = None if items is None else _ratios(items)
-    return None if ratios is None else (ratios[1], ratios[2])
+    terms = None if items is None else _isotopologues(items)
+    if terms is None:
+        return None
+    charge = _charge(adduct)
+    return sum(ratio for term_k, shift, ratio in terms
+               if term_k == k and abs(dmz - shift / charge) <= mz_tol + _WINDOW_EPS)
 
 
 def _pairs(x, y):
@@ -186,14 +212,13 @@ def _explanations(x: dict, y: dict, adducts: list[str], mz_tol: float) -> list[t
     return found
 
 
-def _isotope_check(entry: dict, relation: str, x: dict, y: dict) -> None:
+def _isotope_check(entry: dict, relation: str, x: dict, y: dict, mz_tol: float) -> None:
     """同位体の行に強度比・期待比・`isotope_consistent` を書く（期待比が求まらなければ consistent は None）。
 
-    期待比は Y のイオンの M+k の和（M+2 の行はどの位置でも同じ M+2 の和）。"""
+    期待比は Y のイオンの M+k の同位体のうち X の窓（`mz_tol`）に入るものの和（`expected_isotope_ratio`）。"""
     k = ISOTOPE_DELTAS[relation][0]
-    ratios = expected_isotope_ratios(y.get("formula"), y.get("adduct"))
+    expected = expected_isotope_ratio(y.get("formula"), y.get("adduct"), k, x["mz"] - y["mz"], mz_tol)
     ratio = median_ratio(x.get("heights") or [], y.get("heights") or [])
-    expected = None if ratios is None else ratios[k - 1]
     entry.update(isotope_ratio=None if ratio is None else round(ratio, 4),
                  expected_ratio=None if expected is None else round(expected, 4))
     if ratio is not None and expected is not None:
@@ -226,16 +251,15 @@ def find_relations(target: dict, partners: list[dict], *, adducts, rt_window, mz
                      "msdial_links": kinds, "isotope_ratio": None, "expected_ratio": None,
                      "isotope_consistent": None, "informational": False, "ambiguous": False}
             if relation in ISOTOPE_DELTAS:
-                _isotope_check(entry, relation, target, y)
+                _isotope_check(entry, relation, target, y, mz_tol)
                 entry["informational"] = entry["isotope_consistent"] is False
             entries.append(entry)
         m2 = [e for e in entries if e["relation"] in M2_ISOTOPES]
         if len(m2) > 1:
-            # 窓が重なる M+2 は一方に決めない。期待比（M+2 の和）に合わないときだけ別物質（情報）とする。
-            all_inconsistent = all(e["isotope_consistent"] is False for e in m2)
+            # 窓が重なる M+2 は一方に決めない（強い説明にしない）。期待比は X の窓に入る M+2 の和で行によらず
+            # 同じなので、期待比に合わないとき（別物質の情報）もそろう。
             for e in m2:
                 e["ambiguous"] = True
-                e["informational"] = all_inconsistent
         for entry in entries:
             relation = entry["relation"]
             # (a) 前駆体側の FoundInUpperMsMs（裏付けつき）

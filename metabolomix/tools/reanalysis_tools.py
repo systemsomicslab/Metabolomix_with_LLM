@@ -599,7 +599,8 @@ def dataset_feature_relations(feature_id: str | int, rt_window: float = 0.05, mz
     綴りでなく組成で見分けて除く（mzTab-M の `[M+H]1+` と `[M+H]+`、`[M+HCOO]-` と `[M+FA-H]-` は同じ）。
     `strong`: 付加体・源内断片は Δm/z と同時溶出に加えて r ≥ min_r、同位体は加えて強度比が期待比の
     1.5 倍以下。期待比は Y の**イオン**の組成（中性の組成式の n_mol 倍に付加体の原子を足す。`[2M+H]+` は
-    炭素も 2 倍、`[M+Cl]-` は Cl を持つ）の M+1 の和・M+2 の和（13C2・18O・34S・37Cl・81Br・41K と交差項）。
+    炭素も 2 倍、`[M+Cl]-` は Cl を持つ）の M+k の同位体（M+2 は 13C2・18O・34S・37Cl・81Br・41K と交差項）のうち、
+    m/z がこの特徴から mz_tol 以内に来るものの和（分離された 13C2 だけ・34S だけの位置は、窓の外の 37Cl・13C2 を足さない）。
     M+2 は 13C2・34S・37Cl・81Br（mz_tol が 13C2 との差 2.46 mDa より狭いときだけ 18O も）を見て、窓が
     重なれば `ambiguous`（一方に決めず、strong にしない）。`informational` は強度比が期待比を超えた同位体
     （別物質）。MS-DIAL のリンクは使わない。

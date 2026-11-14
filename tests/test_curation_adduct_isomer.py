@@ -107,6 +107,52 @@ def test_partner_under_its_own_adduct_is_not_a_different_adduct():
     assert adduct_isomer.find_adduct_isomer(PI_173, [PI_173, twin], TH) is None
 
 
+PC_MZ = {a: mz_from_neutral(monoisotopic_mass(parse_formula("C42H82NO8P")), parse_adduct(a))
+         for a in ("[M+HCOO]-", "[M-H]-")}
+FA18_MZ = _fa18_mz("[M-H2O-H]-")
+
+
+@pytest.mark.parametrize("y_name,y_adduct,y_formula,y_mz,x_name,x_adduct,x_formula", [
+    # .arf2 の AdductType が MSP の綴り（`[M+CHO2]-`）でも、既定の `[M+HCOO]-` と同じイオン
+    ("PC 34:1|PC 16:0_18:1", "[M+CHO2]-", "C42H82NO8P", PC_MZ["[M+HCOO]-"], "PE 37:1", "[M+HCOO]-",
+     "C42H82NO8P"),
+    ("PC 34:1|PC 16:0_18:1", "[M+HCOO]1-", "C42H82NO8P", PC_MZ["[M+HCOO]-"], "PE 37:1", "[M+HCOO]-",
+     "C42H82NO8P"),
+    # `[M-H-H2O]-` と既定の `[M-H2O-H]-`
+    ("FA 18:0", "[M-H-H2O]-", "C18H36O2", FA18_MZ, "unknown acid", "[M-H]-", "C18H34O"),
+])
+def test_coeluting_spot_at_the_partner_own_mz_is_not_its_other_adduct(y_name, y_adduct, y_formula, y_mz,
+                                                                       x_name, x_adduct, x_formula):
+    """X が Y と同じ m/z（+0.6 ppm）・同じ RT にいるとき、Y 自身のアダクトを別の綴りで仮定して「Y の別アダクト」
+    と言わない（重複スポットで、この理由の対象ではない）。"""
+    y = spot(1, y_name, y_adduct, y_mz, 5.00, y_formula, "PC", 50000.0, CHAIN_CONFIRMED)
+    x = spot(2, x_name, x_adduct, y_mz * (1 + 0.6e-6), 5.01, x_formula, "PE", 5000.0, rep())
+    assert adduct_isomer.find_adduct_isomer(x, [x, y], TH) is None
+    # 同じ Y の本当の別アダクト（[M-H]-）の X は、今までどおり Y の別アダクト
+    if y_formula == "C42H82NO8P":
+        other = spot(3, "PE 37:1", "[M-H]-", PC_MZ["[M-H]-"], 5.01, "C42H84NO8P", "PE", 5000.0, rep())
+        hit = adduct_isomer.find_adduct_isomer(other, [other, y], TH)
+        assert (hit["of"], hit["as_adduct"], hit["severity"]) == (1, "[M-H]-", "strong")
+
+
+def test_assumed_adduct_with_the_partner_own_mz_is_skipped():
+    """X 自身のアダクト `[2M+2H]2+` は、Y の `[M+H]+` と同じ m/z（中性質量の 2 倍に 2H、価数 2）。
+    X が Y の m/z にいても、それは Y の別アダクトでなく Y と同じイオン。"""
+    neutral = monoisotopic_mass(parse_formula("C42H82NO8P"))
+    y_mz = mz_from_neutral(neutral, parse_adduct("[M+H]+"))
+    assert mz_from_neutral(neutral, parse_adduct("[2M+2H]2+")) == pytest.approx(y_mz, abs=1e-9)
+    y = spot(1, "PC 34:1|PC 16:0_18:1", "[M+H]+", y_mz, 5.00, "C42H82NO8P", "PC", 50000.0, CHAIN_CONFIRMED)
+    x = spot(2, "dimer", "[2M+2H]2+", y_mz * (1 + 0.6e-6), 5.01, "C21H41NO4", "Other", 5000.0, rep())
+    assert adduct_isomer.find_adduct_isomer(x, [x, y], TH) is None
+
+
+def test_x_own_adduct_is_not_tried_twice_under_another_spelling():
+    names = [a.name for a in adduct_isomer._candidate_adducts(parse_adduct("[M+CHO2]-"))]
+    assert "[M+HCOO]-" in names and "[M+CHO2]-" not in names
+    names = [a.name for a in adduct_isomer._candidate_adducts(parse_adduct("[M+Br]-"))]
+    assert names[-1] == "[M+Br]-"                       # 既定に無いアダクトは今までどおり足す
+
+
 def test_strongest_partner_wins_when_several_explain_the_spot():
     weaker = {**DGDG_657, "spot_id": 300, "tier": 2, "height": 10 ** 6}
     hit = adduct_isomer.find_adduct_isomer(PI_660, [PI_660, weaker, DGDG_657], TH)
