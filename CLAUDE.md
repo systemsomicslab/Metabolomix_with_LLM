@@ -88,7 +88,9 @@ setup が無ければ作る。追跡されている `.vscode/mcp.json` も `.ven
 無ければ `missing_state("dataset", ["load_dataset"])`）`[paths] library_cache`（照合用 SQLite キャッシュの置き場所。既定は
 **設定ファイルのフォルダ**の `data/.library-cache`）
 `[server] max_dataset_handles`（データセットのハンドルの上限。既定 8）`[server] caveat_mode`
-（意味論ダイジェスト。`digest` 既定 / `off`。他の値は `CONFIG_INVALID`）。
+（意味論ダイジェスト。`digest` 既定 / `off`。他の値は `CONFIG_INVALID`）
+`[msdial] min_free_commit_gb`（Console を起こす前に測る commit の空きの下限。既定 8、0 で測らない。
+下回っても止めず `LOW_COMMIT_MEMORY` の警告だけ）。
 設定ファイルが読めないとき、記録・ハンドル・ライブラリのツールは `CONFIG_INVALID` の封筒を返し
 （`mcp_errors.config_invalid_as_envelope`）、ダイジェストだけは送出せず `digest` で続けて問題を 1 行添える。
 
@@ -125,13 +127,15 @@ tmp に書いて指す。
 新しく足すものもこの規則に合わせる（新しい環境変数も `LIPIDMIX_` で始める）。
 
 ```
-metabolomix/core/      FastMCP インスタンス・設定・セッション状態・パス解決・共通ヘルパ（依存グラフの leaf）
+metabolomix/core/      FastMCP インスタンス・設定・セッション状態・パス解決・共通ヘルパ（依存グラフの leaf）。
+                    極性の別名（pos / + など）の正規化は polarity_names.py の 1 か所
 metabolomix/msdial/    MS-DIAL 固有サイドカー（*_tags.xml / .mddata）・同定・ピーク検証・サンプル因子
 metabolomix/analysis/  入力形式に依存しない数値処理（前処理/QC・PCA・差次的解析・エクスポート契約）。
                     統計エンジンの結果の登録と読み替えは stats_results.py（`as_two_group` が compare の記録の 1 対比を
                     2 群の形にして、書き出し・図・特徴検索に渡す）、記録は stats_records.py、`dataset_analysis_run` v2 の要約は stats_run_summary.py。
-                    最初の概観（`dataset_overview`。`load_dataset(overview=True)` なら読み込みの最後にも返す）の事実の組み立ては overview.py、品質の純計算は stats/quality.py。
-                    `dataset_compare(output_path=...)` の全行の表（差次的エクスポートの契約とは別物）は compare_table.py
+                    最初の概観（`dataset_overview`。既定の `load_dataset` は返さず、`overview=True` のときだけ読み込みの最後にも返す）の事実の組み立ては overview.py、品質の純計算は stats/quality.py。
+                    `dataset_compare(output_path=...)` の全行の表（差次的エクスポートの契約とは別物）は compare_table.py。
+                    v1 の外部の表（MAF・mwTab・xlsx）と correlate の読み取りは external_tables.py
 metabolomix/analysis/stats/  統計エンジン（MCP にもセッションにも依存しない純計算。data（StudyData）・preprocess・design・
                     limma（moderated t）・compare・composition・pca・plsda（PLS-DA と VIP。spec v2 の解析の種類）・confounding・
                     spec_v2（analysis-spec.v2 の正規化と実行）・external）。
@@ -147,6 +151,9 @@ metabolomix/library/   参照ライブラリ（.dbs / .msp）の読み取りと�
                     形式ごとに分けないのは、2 つが同じレコード形と同じ store を
                     共有する 2 つの入口にすぎないため（spec 2026-09-19）
 metabolomix/console/   MS-DIAL Console 実行層（job_manager / runner / execution / method_file / output_collector）。
+                    機械全体で Console を 1 本にするロック（machine_slot.py。設定ファイルのフォルダの
+                    `data/.msdial-console.lock`。待つ間 `pipeline_status` は `waiting`）、mzML の切れの検査（raw_integrity.py）、
+                    失敗の見立て（failure_diagnosis.py。msdial.log から原因と疑わしいファイル）。
                     MCP の入口は pipeline と tools/console_tools.py（メソッドファイルの候補と雛形）
 metabolomix/rawmeta/   raw の取得時刻のメタデータ（.wiff の OLE・mzML・Thermo .raw・Bruker .d。スペクトルは解さない。stdlib と core/atomic_io だけに依存）と、
                     ISA / mwTab の試料の表から因子の列付きの sample-manifest.v2 を組む部品。MCP の入口は
@@ -205,12 +212,22 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料�
   など）はスレッドをまたいで使える形で持ち、閉じるのと使うのはハンドルのロックで直列にする。
   `library_load` → `load_dataset` の順なら、セッション自身のライブラリは新しいハンドルへ
   移る（写さない。閉じたあと古いライブラリへ落ちない）。
-- **解釈規則の選択軸は `session.assay_kind`**（`lipid` / `metabolite` / `unknown`、既定
-  `unknown`）。脂質名文法は脂質アッセイでしか成り立たないので、ダイジェスト
-  （`assay_digest()`）がここで分岐する。**`caveat_emitted` の bool だけに
-  戻さない**——`load_dataset` が（種別の確定より先に）ダイジェストを出すので、まず `unknown` で
-  1 回出る。`record_objective(assay_kind=...)` が確定した種別のダイジェストをもう 1 回だけ届ける
-  （`caveat_emitted_kind` があるのはそのため）。
+- **解釈規則の選択軸はハンドルごとのアッセイ種別 `DatasetState.assay_kind`**（`lipid` / `metabolite` /
+  `unknown`、既定 `unknown`）。`session.assay_kind` は直近（または固定中）のハンドルの値を読む
+  property にすぎない。`record_objective(assay_kind=...)` は直近か渡したハンドルへ書き、
+  `load_dataset` は解析フォルダの目的ファイルから読み戻す。データセットを開く前に記録した種別は、
+  最初に直近になるハンドルへ引き継ぐ。脂質名文法は脂質アッセイでしか成り立たないので、
+  ダイジェスト（`assay_digest()`）がここで分岐する。**`caveat_emitted` の bool だけに
+  戻さない**——ダイジェストは種別ごとに 1 回（`caveat_emitted_kinds`）。`load_dataset` が（種別の確定より
+  先に）まず `unknown` で出し、`record_objective(assay_kind=...)` が確定した種別のものを 1 回だけ届ける。
+  `pathway_project` は種別で止めない（`lipid` でなければ `notes.assay_kind` に前提を書くだけ）。
+- **長くかかりうるツール（`handle_dispatch.LONG_RUNNING`。`pathway_project` `dataset_homolog_check`）は
+  受付番号を返せる**。`wait_seconds` の間に終わらなければ `_wrap_job` が `job_…` の受付番号を返し、
+  結果は `job_status(job_id=...)` で引く（`core/pending_loads.py` の `PendingJobs`。`load_dataset` の
+  `load_id` と `dataset_load_status` と同じ形）。新しく長いツールを足すときもここへ載せる。
+- **`MCP_INSTRUCTIONS` は 4,000 字以内**（Claude Code はサーバの指示を 4,096 字で切り、後半は届かない。
+  `tests/test_instructions_text.py` が縛る）。入口の判定・種別・記録の置き場所・並列の作法のように
+  ツールをまたぐ規則だけを置き、1 つのツールの細部はそのツールの説明と output-format へ書く。
 - **前提状態が無いときは例外でなく機械可読な封筒を返す**:
   `{"error": {"code": "missing_state", "state": ..., "required_tools": [...], "message": ...}}`
   （`metabolomix/core/mcp_errors.py` の `missing_state`）。クライアントはこれを読んでリプレイする契約。

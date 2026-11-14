@@ -91,190 +91,28 @@ def _build_report_meta(analysis_id: str, dataset: str, status: str) -> dict:
     }
 
 
+#: サーバの指示（クライアントがシステムプロンプトに載せる）。Claude Code は 4,096 字で切るので、
+#: 4,000 字以内に保つ（tests/test_instructions_text.py が縛る）。詳細は各ツールの説明と output-format へ委ねる。
 MCP_INSTRUCTIONS = """
-This server parses and analyzes MS-DIAL outputs — lipidomics and general
-(hydrophilic) metabolomics both.
+Parses and analyzes MS-DIAL output (lipidomics and general metabolomics).
 
-Before interpreting any output from `load_dataset` / `dataset_*` / `curation_*` /
-`library_*` / `dcl_*`, you MUST read the MCP resource `lipidmix://docs/output-format`
-(the shared core: row granularity, lipid-name grammar, mandatory caveats) and use
-it as the authoritative definition. Do not infer a field's meaning from its name
-alone. In particular, distinguish a feature (alignment spot) from one sample's
-value of it, gap-filled values from detected peaks, and EIC `peak_top`
-coordinates from intensity.
+MEANINGS — `lipidmix://docs/output-format` (core) and `.../output-format/{topic}` define every field; topics: `dataset` `dcl` `eic` `identity` `mztab` `library` `curation` `pathway` `reanalysis` `quant`. `docs_read(topic=..., section=...)` returns the same text. Read the core and the output's topic before interpreting it; never infer a field from its name. A row is a feature (alignment spot) or one sample's value of it; gap-filled values are not detected peaks; EIC `peak_top` is a coordinate, not an intensity.
 
-The per-topic field definitions are split into topic resources — read the one
-matching the output you are about to interpret, not the whole document:
-`lipidmix://docs/output-format/{topic}` where topic is one of `dataset` (a
-dataset loaded from a MS-DIAL analysis folder: rows are feature x sample,
-gap-fill and `detected_mask`, the `.arf2` representative and its identity
-columns, sample roles, preprocessing/QC and differential), `dcl` (.dcl
-deconvoluted MS/MS), `eic` (EIC figures from `dataset_plot`), `identity`
-(annotation confidence), `mztab` (a dataset loaded from mzTab-M: SME vs SML
-identification, the feature table, the differential export's identity columns),
-`library` (reference-library MS/MS matching: what each score means, `-1` vs `0`,
-the deliberately ported upstream quirks), `curation` (alignment curation:
-`curation_review`'s verdict, reason-code table, and mandatory caveats — e.g.
-`UNKNOWN` is not a mismatch), `pathway` (MSLipidMapper pathway projection: node
-table and adjacent opposite pairs — adjacency is a drawing template, not
-curated reactions), `reanalysis` (dataset handles for parallel reanalysis
-agents, the spec-driven matrix/statistics tools, MS/MS pass/fail rules and the
-claim evidence bundle), or `quant` (internal-standard normalization, polarity
-merge and feature selection: `dataset_quant_*`, `dataset_merge_polarities`,
-`dataset_select_features` - the gap-fill mark in `detected_mask`, units,
-`needs_input` envelopes, records). A client that cannot read MCP resources calls
-`docs_read(topic=...)` instead (no topic = the core; same text). `load_dataset` carries a short semantics digest in its
-`caveat` field until you have fetched the core; fetch the topic before
-interpreting the matching tool's output.
+ENTRY POINT — two equal entries meet at an MS-DIAL analysis folder. Start with `list_data_files(directory)` (`all_files=True` adds raw files).
+1. MS-DIAL output present (.arf/.arf2/.dcl, mzTab-M, a completed job or pipeline run), even beside raw files: `load_dataset(directory=...)` (or `mztab_path=` / `job_path=` / `pipeline_path=`). Each load opens a handle that becomes current; mixed processing batches are fine (the latest is used). On `status: "loading"`, poll `dataset_load_status`. Then `dataset_overview` and `dataset_status` (groups, roles). Re-run MS-DIAL only if the user asks.
+2. Only raw files (.d and Waters .raw are folders): ASK THE USER FOR PERMISSION before MS-DIAL Console (tens of minutes per polarity; writes a run folder). Then `pipeline_run` and poll `pipeline_status`; at `completed`/`partial`, `load_dataset(pipeline_path=..., polarity=...)`. On `needs_input`, fix only the sample sheet via `pipeline_resume`; re-running Console (`rerun_upstream=true`) needs consent too. Helpers: `pipeline_plan`, `pipeline_sample_sheet` (from ISA/mwTab), `console_method_candidates` / `console_method_template`.
 
-ENTRY POINT — there are two equal entries, and they meet at a MS-DIAL analysis
-folder: read a folder MS-DIAL has already processed (1), or build one from raw
-data with MS-DIAL Console (2) and then read it as in 1. First check whether
-MS-DIAL has already been run on the user's folder, then go downstream if it has,
-or ask before running it if it has not. Look before picking a tool:
-`list_data_files(directory)` (the directory is required; nothing is searched on
-its own) lists MS-DIAL output in the folder, and `all_files=True` also shows raw
-instrument files.
+ASSAY KIND — the format does not say lipid or metabolite. AFTER `load_dataset`, propose 1-2 candidates with evidence; only the user settles it; store it with `record_objective(assay_kind=...)` (kept per handle). Until it is `lipid`, apply no lipid-name grammar or class knowledge. Send no filename-derived term to external services unconfirmed.
 
-1. MS-DIAL HAS BEEN RUN (the folder contains MS-DIAL output: .arf/.arf2/
-   .dcl/.EIC.aef, an mzTab-M file, a completed analysis-job.json, or a
-   completed pipeline run). Go downstream — this applies even when raw files
-   sit in the same folder. Call
-   `load_dataset(directory=...)` (or `mztab_path=` / `job_path=` /
-   `pipeline_path=`). It opens the dataset as a new handle that EVERY time
-   becomes the current one (auto-selecting PeakProperties.arf over
-   DriftSpots.arf) and returns the counts, the group and role breakdown, the
-   library record and a FIRST OVERVIEW (`overview`, see below; skip it with
-   `overview=False`). A load still running after `wait_seconds` (default 20 s)
-   returns `status: "loading"` with a `load_id` instead and keeps loading: call
-   `dataset_load_status(load_id=..., wait_seconds=...)` (it waits up to
-   `wait_seconds`, at most 30 s, for the load to finish; the default 0 returns
-   at once) until it returns the load's own result
-   (the handle becomes current only when the load finishes). Tools called without
-   `dataset_handle` act on that current dataset and use its files; a tool that
-   needs a file the dataset does not have says so instead of searching a data
-   folder. Look at `dataset_status` (`view=summary|samples|tags`) for the groups,
-   roles and tags before proposing a comparison. Re-run MS-DIAL on such a folder
-   only if the user explicitly asks for it.
-2. NO TRACE OF MS-DIAL (only unprocessed instrument files). Any format
-   MS-DIAL itself reads qualifies: .abf .ibf .cdf .mzml .wiff .raw .d .wiff2
-   .qgd .lcd .lrp .imzml. For Agilent/Bruker .d and Waters .raw, one
-   measurement is a FOLDER, not a file — a directory listing showing only
-   sub-folders with those extensions IS raw data, not an empty folder. The
-   Console route is an equal entry, not a fallback: what it makes is an
-   analysis folder per polarity, which you then read exactly as in 1. Running
-   MS-DIAL Console takes tens of minutes per polarity and writes a run folder
-   (under `runs/` in the raw-data folder by default), so
-   ASK THE USER FOR PERMISSION before launching it, and launch nothing until
-   they agree. Once they agree, call `pipeline_run(dataset_root)` (both
-   polarities in one run go in `request.units`). If they want to see the
-   resolved settings (method file, LBM, polarity) first, call `pipeline_plan`
-   before asking; to choose or make a method file, use
-   `console_method_candidates` / `console_method_template`.
-   `pipeline_run` starts an independent worker (through a short-lived relay
-   process, so the worker is not in this server's process tree) that places
-   the raw files in the run, runs Console one polarity at a time, checks each
-   analysis folder
-   against its mzTab-M and writes a receipt — it computes no statistics — and
-   returns a compact dispatch receipt (`pipeline_id`/`pipeline_path`) at once.
-   Poll with `pipeline_status(pipeline_path)`. When it reports `completed` or
-   `partial`, join route 1 with `load_dataset(pipeline_path=...,
-   polarity=...)` (one handle per polarity; the receipt in the status names
-   the polarities whose analysis folder passed, and the exact call to make —
-   with `source="mztab"` for a polarity whose folder did not match its mzTab-M)
-   and go on with `dataset_preprocess` /
-   `dataset_compare` / `dataset_pca`. When it reports `needs_input`, fix ONLY
-   the sample sheet with `pipeline_resume` (never re-ask about items already
-   confirmed). Console is never re-run on its own: re-running a failed
-   polarity needs `rerun_upstream=true`, which also needs the user's consent.
+FIRST LOOK — `dataset_overview` returns facts with IDs: present quality first (`poor` before any difference); its group direction is provisional until `dataset_compare(reference_group=..., test_group=...)`; keep interpretation apart, citing the IDs.
 
-MIXED-DATE FOLDERS ARE FINE — a folder may contain files from several MS-DIAL
-processing runs (multiple dates/batches). This is NOT a blocker and must not be
-treated as unanalyzable: the file selection auto-selects the LATEST batch (by
-the `AlignmentResult_<timestamp>` embedded in the filenames). `load_dataset`
-reports which batch it selected and which `.arf` it did not choose. Proceed with
-analysis; only ask the user if they explicitly want an older batch.
+RECORDS — `record_objective`, `write_report`, `save_figure` and `pathway_*` write under `[paths] reports_dir` if set, else `reports/` in the loaded dataset's analysis folder; with no dataset they return `missing_state`.
 
-ASSAY KIND — settle whether this is `lipid` (lipidomics) or `metabolite`
-(general/hydrophilic metabolomics) before interpreting any compound name. THE
-FILE FORMAT DOES NOT TELL YOU: MS-DIAL writes both into the same .arf/.mzTab.
-Until it is settled, apply neither lipid shorthand grammar nor lipid-class
-knowledge. Settle it AFTER `load_dataset`, because a record needs a loaded
-dataset to know where it goes: from the groups, polarity and compound classes the
-load shows, infer the likely objective and the biological context (organism/cell
-line/treatment) and present 1-2 candidates WITH the evidence behind each — never
-a single confident statement. Only the user's confirmation settles it. Then
-record it with `record_objective(assay_kind=...)` (create it with analysis_id,
-dataset, polarity, groups, comparison and sub_questions; later calls change only
-the fields they pass, e.g. `add_subquestions`). That call also switches the
-semantics digest this server sends: the rules for the settled kind arrive once
-in its reply. For `metabolite`, GOSLIN/LIPID MAPS normalization and the lipid
-checks do not apply; identification rests on the candidate set (adducts,
-isomers, rank). Never send filename-derived terms to external services before
-the user confirms them.
+MS/MS EVIDENCE — `has_msms` only says an MS/MS acquisition exists; spectra are in `.dcl` (`dcl_*`). Score them with `library_match_feature` / `library_msms_qualify`; `dataset_claim_evidence` bundles a claim's numbers with a `rule_hash`. Rest MSI level 2 on a spectrum you saw. `not_found` from `dcl_find_msms` means no MS/MS was acquired, not that fragments are absent.
 
-RECORDS — `record_objective`, `write_report`, `save_figure`, `pathway_project` and
-`pathway_plot` write, and `read_report` reads, under `[paths] reports_dir` from the
-settings file when it is set, otherwise under `reports/` in the analysis folder of the
-loaded dataset (never in the repository), so a dataset must be loaded first; without
-one they answer `missing_state`.
+STATISTICS — `dataset_preprocess` returns a `matrix_id`; `dataset_compare` / `dataset_pca` use the latest one unless given (`matrix_source` says which). Verdicts changed / unchanged / inconclusive rest on q and the CI: "not significant" is not "unchanged". State the warnings (confounding, small n, normalization, drift not corrected) with the result. A `needs_input` reply is a question for the user: answer through a tool in `retry_tools`. A long call may return a `job_id` (`job_status`); a long table returns its first rows with `truncated: true` (pass an output path for all).
 
-MS/MS EVIDENCE — the real spectra live in `.dcl`; the acquisition flags that
-loaded rows carry (has_msms) only record that an MS/MS acquisition reference
-exists. Read the spectrum itself with `dcl_spot_spectrum`, `dcl_diagnostic_ions`
-or `dcl_find_msms` (`dcl_*`; they read the dataset's alignment `.dcl`, and a
-per-sample `.dcl` needs `file_path`), score it against a reference library with
-`library_msms_qualify` / `library_match_feature`, and take the pass/fail numbers
-for a claim from `dataset_claim_evidence` (they return numbers and a `rule_hash`,
-never verdicts). When you claim identification confidence (MSI Level 2), rest it
-on a spectrum seen in the `.dcl` — never on the acquisition flag alone. A
-`not_found` from `dcl_find_msms` means no MS/MS was acquired for that precursor,
-NOT that the expected fragments are absent.
-
-DIFFERENTIAL ANALYSIS — `dataset_preprocess` (optional; normalization / QC
-filtering / drift correction, and it returns a `matrix_id`) builds the matrix that
-`dataset_compare` and `dataset_pca` read; without a `matrix_id` they use the
-default preprocessing, so fold changes are not dominated by per-sample loading
-differences. `dataset_exclude` removes samples or features (reversibly) before it.
-Read each feature's verdict — changed / unchanged / inconclusive — which rests on
-q and the confidence interval, never on |log2fc| alone. When a tool answers
-`needs_input` (not an error), ask the user, then call a tool in `retry_tools`
-with the answer in `argument` (for `dataset_analysis_run` the answer goes into
-the spec `field`). Always surface the tool's caveats — group/batch confounding,
-small n (few replicates), and normalization status — as first-class findings,
-never bury them.
-
-FIRST OVERVIEW — `load_dataset` returns, and `dataset_overview` re-issues after
-curation, quantification, selection, exclusions or sample-sheet changes, a coarse
-map in four stages: quality -> global -> classes -> species. Present the quality
-stage first; when its verdict is `poor`, say so before any difference. The
-two-group direction is PROVISIONAL (the group seen first in the sample table is
-the reference) — never present it as the user's control; settle it with
-`dataset_compare(reference_group=..., test_group=...)`. The classes stage stays
-omitted until adducts are selected. Each fact carries an ID (`Q1`, `G1`, `C1`,
-`S1`; from outside `<overview_id>#Q1`). The server writes facts only: write any
-interpretation in a separate section from the facts, citing the fact IDs it rests
-on. Drill down with each stage's `next`.
-
-PARALLEL REANALYSIS — when several agents share this server (a reanalysis team),
-do not rely on the current dataset: `load_dataset` always makes the handle it
-opens the current one, which every call without `dataset_handle` uses, and
-`library_load` without `dataset_handle` loads into that current dataset, so the
-agents would switch it under each other. Pass the `dataset_handle` that
-`load_dataset` returned to `dataset_*`, `library_*`, `curation_*` and the
-reanalysis tools (`dataset_list` / `dataset_close` manage the open handles);
-calls on different handles run in parallel and never touch each other. Decision
-numbers come from spec-driven tools (`dataset_analysis_run`,
-`dataset_claim_evidence`, `library_msms_qualify`), which return a `rule_hash` and
-give identical JSON for an identical spec — see
-`lipidmix://docs/output-format/reanalysis`. They return numbers, never verdicts.
-`dataset_alignment_qc` finds one compound split over two alignment spots (e.g. the
-first injections drifted in RT); run it before reading results.
-`dataset_sample_peaks` (read-only; datasets loaded from a MS-DIAL analysis folder
-only) returns one row per feature x sample (a TSV, header once; at most 1000
-rows inline; more rows need an output file path argument) with `rt`, `mz`, `height` and
-`detected` (false = gap-filled) - use it to judge whether two spots are one
-compound split in two, or whether RT drifts across injections.
+PARALLEL REANALYSIS — calls without `dataset_handle` act on the current dataset, which every `load_dataset` switches. When agents share this server, pass `dataset_handle`; `dataset_list` / `dataset_close` manage handles. Spec-driven tools (`dataset_analysis_run`, `dataset_claim_evidence`, `library_msms_qualify`) return numbers and a `rule_hash`, never verdicts. Run `dataset_alignment_qc` (one compound split over two spots) before reading results.
 """.strip()
 
 mcp = FastMCP(
