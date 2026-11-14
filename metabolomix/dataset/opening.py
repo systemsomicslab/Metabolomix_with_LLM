@@ -741,16 +741,18 @@ def _with_hint(exc: DomainError) -> DomainError:
 
 def _folder_via_run(unit, *, measure: str, allow_incomplete: bool):
     """pipeline の run の極性の単位（`session_handoff.UnitRun`）を解析フォルダで読む。
-    run から引き継ぐのは解決済みの試料対応表だけ。"""
-    from metabolomix.analysis import sample_manifest
+    run から引き継ぐのは解決済みの試料対応表だけ。
+
+    対応表の行は mzTab-M のアダプタと同じ `session_handoff.bind_manifest_rows` で試料へ結んで当てる
+    （raw のパス、結べなければ raw の名前か sample_id。roles / sample_meta も組み直す）。全試料を結べ
+    なければ読み込みは止めず、当てずに `ds.load_notes` に注記を残す。"""
+    from metabolomix.pipeline import session_handoff
 
     ds, selection, gate = _folder_via_job(unit.job_path, measure=measure,
                                           allow_incomplete=allow_incomplete,
                                           analysis_dir=unit.analysis_dir)
-    rows = unit.manifest_rows
-    if rows is not None:
-        # roles / sample_meta も組み直す（run の試料対応表の役割を、前処理の前から見せる）。
-        sample_manifest.apply_defaults_and_inputs(ds, sample_manifest.resolve_metadata(ds, rows))
+    if unit.manifest_rows is not None:
+        session_handoff.bind_manifest_rows(ds, unit.manifest_rows)
     notes = [*unit.notes, _folder_note(gate, "run"),
              "run の解析行列は読んでいない（解析フォルダのアダプタが run から引き継ぐのは"
              "解決済みの試料対応表だけ）。"]

@@ -147,32 +147,31 @@ mzTab-M は mzTab-M のフォルダ。指紋には入れない）を決める。
 31.         └─ metabolomix/dataset/opening.py _fill_theoretical_mz()（照合した mzTab-M の SME rank 1 の理論 m/z を同じスポット ID に写す。`theoretical_mz_source = mztab`）
 32.      └─ [pipeline_path を解析フォルダで] metabolomix/dataset/opening.py _folder_via_run()
 33.         └─ metabolomix/dataset/opening.py _folder_via_job()（単位のジョブで。照合の候補に単位の解析フォルダ `analysis_dir` を渡す）
-34.         └─ [単位が試料の対応表を持つとき] metabolomix/analysis/sample_manifest.py resolve_metadata()
-35.         └─ [単位が試料の対応表を持つとき] metabolomix/analysis/sample_manifest.py apply_defaults_and_inputs()
-36.      └─ [directory] metabolomix/dataset/library_memory.py remember_from_folder()
-37.      └─ [run の中の directory] metabolomix/dataset/library_memory.py remember_from_run()（known / lbm_only ならこちら）
-38.      └─ [job_path] metabolomix/dataset/library_memory.py remember_from_job()
-39.      └─ [pipeline_path] metabolomix/dataset/library_memory.py remember_from_run()（選んだ極性の単位の入力から）
-40.      └─ [mztab_path] metabolomix/dataset/library_memory.py unknown_record()
-41.   └─ metabolomix/dataset/opening.py _signature()
-42.   └─ metabolomix/core/handles.py HandleRegistry.put_base()
-43. └─ metabolomix/mztab/polarity.py dataset_polarity()
-44. └─ metabolomix/tools/handle_tools.py alignment_files_for()
-45. └─ metabolomix/tools/handle_tools.py _recall_assay_kind()（解析フォルダの目的ファイルの `assay_kind` をハンドルへ読み戻す）
-46.   └─ metabolomix/core/mcp_core.py _report_dir_candidates()
-47.   └─ metabolomix/tools/objective.py recall_assay_kind()
-48. └─ metabolomix/tools/handle_tools.py _open_library_for()
-49. └─ metabolomix/core/session_state.py AnalysisSession.adopt_handle()（直近にする。受け付けた読み込みは `_CurrentTicket.may_become_current()` に従う。直近のハンドルが無いうちに記録したセッションの種別は `_SessionKindCarry` がこのハンドルへ移す）
-50.    └─ metabolomix/core/handles.py HandleRegistry.add()
-51. └─ [開く前に記録した種別を引き継いだとき] metabolomix/tools/handle_tools.py _SessionKindCarry.persist()（登録の後。ハンドルのロックを最長 `HANDLE_LOCK_WAIT` 待ち、その種別を書いた目的にこの解析フォルダを書く。書けなければ `notes` に記録し直すよう書く）
-52.    └─ metabolomix/tools/objective.py persist_carried_kind()
-53. └─ metabolomix/tools/mztab_tools.py load_summary_lines()
-54.    └─ [解析フォルダ] metabolomix/tools/mztab_tools.py _folder_summary_text()
-55.    └─ [mzTab-M] metabolomix/tools/mztab_tools.py _summary_text()
-56. └─ metabolomix/tools/mztab_tools.py sample_group_role_counts()
-57. └─ metabolomix/dataset/library_memory.py public_view()
-58. └─ metabolomix/core/session_state.py AnalysisSession.take_caveat()（意味論の要約。このハンドルの種別で、未読・種別ごとに 1 回だけ。戻り値の最上位 `caveat`）
-59. └─ [overview=True] metabolomix/tools/handle_tools.py _first_overview()（既定は計算しない。`dataset_overview` と同じ組み立て）
+34.         └─ [単位が試料の対応表を持つとき] metabolomix/pipeline/session_handoff.py bind_manifest_rows()（mzTab-M のアダプタと同じ。中身は下の pipeline_path 経路の 9〜13）
+35.      └─ [directory] metabolomix/dataset/library_memory.py remember_from_folder()
+36.      └─ [run の中の directory] metabolomix/dataset/library_memory.py remember_from_run()（known / lbm_only ならこちら）
+37.      └─ [job_path] metabolomix/dataset/library_memory.py remember_from_job()
+38.      └─ [pipeline_path] metabolomix/dataset/library_memory.py remember_from_run()（選んだ極性の単位の入力から）
+39.      └─ [mztab_path] metabolomix/dataset/library_memory.py unknown_record()
+40.   └─ metabolomix/dataset/opening.py _signature()
+41.   └─ metabolomix/core/handles.py HandleRegistry.put_base()
+42. └─ metabolomix/mztab/polarity.py dataset_polarity()
+43. └─ metabolomix/tools/handle_tools.py alignment_files_for()
+44. └─ metabolomix/tools/handle_tools.py _recall_assay_kind()（解析フォルダの目的ファイルの `assay_kind` をハンドルへ読み戻す）
+45.   └─ metabolomix/core/mcp_core.py _report_dir_candidates()
+46.   └─ metabolomix/tools/objective.py recall_assay_kind()
+47. └─ metabolomix/tools/handle_tools.py _open_library_for()
+48. └─ metabolomix/core/session_state.py AnalysisSession.adopt_handle()（直近にする。受け付けた読み込みは `_CurrentTicket.may_become_current()` に従う。直近のハンドルが無いうちに記録したセッションの種別は `_SessionKindCarry` がこのハンドルへ移す）
+49.    └─ metabolomix/core/handles.py HandleRegistry.add()
+50. └─ [開く前に記録した種別を引き継いだとき] metabolomix/tools/handle_tools.py _SessionKindCarry.persist()（登録の後。ハンドルのロックを最長 `HANDLE_LOCK_WAIT` 待ち、その種別を書いた目的にこの解析フォルダを書く。書けなければ `notes` に記録し直すよう書く）
+51.    └─ metabolomix/tools/objective.py persist_carried_kind()
+52. └─ metabolomix/tools/mztab_tools.py load_summary_lines()
+53.    └─ [解析フォルダ] metabolomix/tools/mztab_tools.py _folder_summary_text()
+54.    └─ [mzTab-M] metabolomix/tools/mztab_tools.py _summary_text()
+55. └─ metabolomix/tools/mztab_tools.py sample_group_role_counts()
+56. └─ metabolomix/dataset/library_memory.py public_view()
+57. └─ metabolomix/core/session_state.py AnalysisSession.take_caveat()（意味論の要約。このハンドルの種別で、未読・種別ごとに 1 回だけ。戻り値の最上位 `caveat`）
+58. └─ [overview=True] metabolomix/tools/handle_tools.py _first_overview()（既定は計算しない。`dataset_overview` と同じ組み立て）
 
 job / pipeline を解析フォルダで読むときも、ジョブの門（`job_gate()`: ジョブの記録・完了・
 正準 mzTab-M の一意な選択と実在・出所の裏取り）は mzTab-M で読むときと同じものを通り、
@@ -189,6 +188,8 @@ mzTab-M の evidence と同じ候補（`arf_candidates()`。pipeline はどれ�
 アーティファクト（`job_artifact_paths()`）は mzTab-M のアダプタと同じく `artifact_paths` に載せる。
 pipeline の run を解析フォルダで読むときに run から引き継ぐのは試料の対応表だけ（v3 の run は受領
 `results/receipt.json` の `units.<極性>.samples.rows`、旧 v1 の run は記録の `inputs.manifest`）。
+対応表の行は mzTab-M のアダプタと同じ `bind_manifest_rows()` で試料へ結んでから当てる（raw のパス、結べなければ
+raw の名前か `sample_id`。全試料を結べなければ読み込みは止めずに当てず、`load_notes` に注記を残す）。
 受領が無い・照合できない v3 の run は run の記録の単位から解析フォルダを引き、試料の対応表は載らない
 （注記が出る）。検証を通っていない単位（`validated` でない）は `PIPELINE_UNIT_NOT_VALIDATED` で止め、
 `allow_incomplete=True` なら探索用に読む。旧 v1 の run が計算した差次的結果はどちらの経路でも載せない
@@ -253,17 +254,21 @@ pipeline_path 経路（`source="mztab"`。選んだ極性の単位のジョブ�
 6.       └─ [v3 の run] metabolomix/pipeline/receipt.py read_receipt()
 7.       └─ [旧 v1 の run] metabolomix/pipeline/session_handoff.py run_manifest_rows()
 8.    └─ metabolomix/mztab/loading.py load_dataset_state()
-9.    └─ metabolomix/pipeline/session_handoff.py bind_manifest_rows()
-10.      └─ metabolomix/analysis/sample_manifest.py resolve_metadata()
-11.      └─ [raw のパスで結べないとき] metabolomix/pipeline/session_handoff.py _rows_by_name()
-12.      └─ metabolomix/analysis/sample_manifest.py apply_defaults_and_inputs()
+9.    └─ metabolomix/pipeline/session_handoff.py bind_manifest_rows()（結べなければ注記を `ds.load_notes` へ）
+10.      └─ metabolomix/pipeline/session_handoff.py _bind_manifest_rows()
+11.         └─ metabolomix/analysis/sample_manifest.py resolve_metadata()
+12.         └─ [raw のパスで結べないとき] metabolomix/pipeline/session_handoff.py _rows_by_name()
+13.         └─ metabolomix/analysis/sample_manifest.py apply_defaults_and_inputs()
 
 dataset と試料の対応表を**同じ run の同じ単位から**載せる。
 別の run の試料対応表を混ぜられると、群の対応が黙ってずれた統計が出るため。
 対応表の行は**試料へ結んでから**当てる（`bind_manifest_rows()`）。受領の行の並びはシートの並び（`pipeline_sample_sheet`
 なら取得順）で、mzTab-M の assay の順とは限らず、位置で当てると群と include=false が別の試料に付く。まず raw のパス
 （mzTab-M の `ms_run[N]-location` → `ds.assay_sources`）で、結べなければ行の raw の名前か `sample_id` で試料名と結ぶ
-（解析フォルダの経路 `opening._apply_run_rows` と同じ鍵）。全試料を結べなければ当てず、`load_notes` に注記を残す。
+（run の中の解析フォルダを `directory` で開く経路 `opening._apply_run_rows` と同じ鍵）。全試料を結べなければ読み込みは
+止めずに当てず、`load_notes` に注記を残す（`bind_manifest_rows()` が書く。解析フォルダのアダプタ `_folder_via_run()` も同じ）。
+`load_notes` は `load_dataset` の `summary` の「読み込みの注記」の行（`_summary_text()` も `_folder_summary_text()` と同じく
+載せる）と `dataset_status` の `load_notes` に出る。
 `resolve_unit()` は `pipeline-run.json` の版で分かれる: v3 の run は受領（`read_receipt()`。登録した hash と
 照合してから読む）の単位から解析フォルダ・ジョブ・試料の対応表を引き、旧 v1 の run（`store.is_legacy()`。読むだけの
 記録）は 1 単位として、`resolve_metadata` が `record["inputs"]["manifest"]` に書いた行（`run_manifest_rows()`）を引く。

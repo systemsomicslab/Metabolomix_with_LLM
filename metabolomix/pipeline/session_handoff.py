@@ -153,15 +153,13 @@ def load_run_dataset(pipeline_path, *, polarity: str | None = None,
     `pipeline_path` は `pipeline-run.json` でもその親ディレクトリでもよい
     （`pipeline_status` と同じ規約）。選んだ単位のジョブと試料の対応表だけを載せる
     （旧 v1 の run が持つ差次的結果は戻さない）。試料の対応表の行は試料へ結んでから当てる
-    （`bind_manifest_rows`。位置では当てない）。
+    （`bind_manifest_rows`。位置では当てない。結べなければ当てず、注記を `ds.load_notes` に残す）。
     """
     unit = resolve_unit(pipeline_path, polarity, allow_incomplete=allow_incomplete)
     ds = mztab_loading.load_dataset_state(job_path=unit.job_path,
                                           allow_incomplete=allow_incomplete)
     if unit.manifest_rows is not None:
-        note = bind_manifest_rows(ds, unit.manifest_rows)
-        if note:
-            ds.load_notes.append(note)
+        bind_manifest_rows(ds, unit.manifest_rows)
     return ds
 
 
@@ -178,16 +176,31 @@ def _rows_by_name(rows: list[dict], sample_names: list[str]) -> list[dict | None
 
 
 def bind_manifest_rows(ds, rows: list[dict]) -> str | None:
-    """受領の試料の対応表の行を mzTab-M のデータセットの試料へ結んで当てる。当てられなければ注記を返す。
+    """run の試料の対応表の行（受領、旧 v1 は記録）をデータセットの試料へ結んで当てる。
+
+    `pipeline_path` で開く両方のアダプタ（mzTab-M は `load_run_dataset`、解析フォルダは
+    `dataset.opening._folder_via_run`）が通る。当てられなければ当てず、注記を `ds.load_notes` に
+    残して返す（`load_dataset` の `summary` の「読み込みの注記」と `dataset_status` の `load_notes` に出る。
+    読み込みは止めない）。当てられれば None。
 
     行の並びはシートの並び（`pipeline_sample_sheet` なら取得順）で、`ds.sample_names`（mzTab-M の
     assay の順＝MS-DIAL のファイルの順）とは限らない。試料の表を位置で読む消費側（統計エンジンの
     試料の表・`included_sample_indices`）に順の違う行を渡すと、群と include=false が別の試料に付く。
-    そこで解析フォルダの経路と同じく、まず raw のパス（mzTab-M の `ms_run[N]-location` →
-    `ds.assay_sources`。`sample_manifest.resolve_metadata`）で結び、結べなければ行の raw の名前か
-    `sample_id` を試料名と結ぶ。どちらでも全試料を結べなければ当てない（群は
-    `dataset_set_sample_metadata` で与える）。読み込みの一部なので `metadata_revision` は進めない。
+    そこでまず raw のパス（mzTab-M の `ms_run[N]-location` → `ds.assay_sources`。解析フォルダのアダプタは
+    `_folder_via_job` が同じ値を `ds.sample_raw_paths` に写す。`sample_manifest.resolve_metadata`）で結び、
+    結べなければ（raw を動かした run など）行の raw の名前か `sample_id` を試料名と結ぶ（run の中の
+    解析フォルダを `directory` で開く経路 `dataset.opening._apply_run_rows` と同じ鍵）。どちらでも全試料を
+    結べなければ当てない（群は `dataset_set_sample_metadata` で与える）。読み込みの一部なので
+    `metadata_revision` は進めない。
     """
+    note = _bind_manifest_rows(ds, rows)
+    if note:
+        ds.load_notes.append(note)
+    return note
+
+
+def _bind_manifest_rows(ds, rows: list[dict]) -> str | None:
+    """`bind_manifest_rows` の本体。当てられなければ注記を返す。"""
     from metabolomix.analysis import sample_manifest
 
     def resolve():
@@ -202,20 +215,20 @@ def bind_manifest_rows(ds, rows: list[dict]) -> str | None:
         matched = _rows_by_name(rows, list(ds.sample_names))
         missing = [name for name, row in zip(ds.sample_names, matched) if row is None]
         if missing:
-            return (f"試料 {missing[:5]} を run の試料の対応表（受領）と raw のパスでも名前でも結べないので、"
+            return (f"試料 {missing[:5]} を run の試料の対応表と raw のパスでも名前でも結べないので、"
                     "対応表は当てていない（群は dataset_set_sample_metadata で与える）。")
         ds.sample_raw_paths = [row.get("source_file") for row in matched]
         resolved = resolve()
         if resolved is None:
             ds.sample_raw_paths = previous
-            return ("run の試料の対応表（受領）の行に raw のパスが無く試料へ結べないので、対応表は"
+            return ("run の試料の対応表の行に raw のパスが無く試料へ結べないので、対応表は"
                     "当てていない（群は dataset_set_sample_metadata で与える）。")
     revision = ds.metadata_revision
     try:
         sample_manifest.apply_defaults_and_inputs(ds, resolved)
     except DomainError as exc:
         ds.sample_raw_paths = previous
-        return (f"run の試料の対応表（受領）を当てられなかった（{exc.code}: {exc.message}）。"
+        return (f"run の試料の対応表を当てられなかった（{exc.code}: {exc.message}）。"
                 "群は dataset_set_sample_metadata で与える。")
     ds.metadata_revision = revision
     return None

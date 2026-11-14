@@ -54,30 +54,39 @@ def sample_group_role_counts(ds) -> dict:
     """試料の群（Class ID）ごと・役割ごとの件数。`load_dataset` の戻り値と `dataset_status` の要約が共有する。
 
     群と役割は試料の対応表（`_metadata_rows`）から数える。群の宣言が無い試料は `n_ungrouped`。
-    `groups` と `n_ungrouped` は統計に入る試料（`include` が真。統計エンジンの `_include` と同じ読み方）
-    だけを数え、実験情報シートの `include=false` の試料（`pipeline_sample_sheet` の群 `unassigned` など）は
-    `excluded_by_sheet`（シートの群 → 件数。群が無ければ `(群なし)`。1 件も無ければ鍵ごと出さない）に分ける。
+    `groups` と `n_ungrouped` は統計に入る試料（`included_sample_indices` と同じ集合）だけを数え、外す
+    試料は外した理由ごとに分ける（どちらも群 → 件数。群が無ければ `(群なし)`。1 件も無ければ鍵ごと出さない）:
+    実験情報シートの `include=false`（`pipeline_sample_sheet` の群 `unassigned` など。`include` の読み方は
+    統計エンジンの `_include` と同じ）は `excluded_by_sheet`、`dataset_exclude` で外した試料
+    （`ds.excluded_samples`）は `excluded_by_dataset_exclude`（シートでも外した試料はシートの側だけに数える）。
     `groups` に並ぶ群名は dataset_compare にそのまま渡せる。`roles` は全試料を数える。
     """
     rows = _metadata_rows(ds)
+    names = list(ds.sample_names)
+    dropped = getattr(ds, "excluded_samples", None) or {}
     groups: dict[str, int] = {}
     roles: dict[str, int] = {}
-    excluded: dict[str, int] = {}
+    by_sheet: dict[str, int] = {}
+    by_exclude: dict[str, int] = {}
     n_ungrouped = 0
-    for row in rows:
+    for index, row in enumerate(rows):
         role = row.get("role") or "sample"
         roles[role] = roles.get(role, 0) + 1
         group = row.get("group")
+        name = names[index] if index < len(names) else None
         if not bool(row.get("include", True)):
-            key = group or "(群なし)"
-            excluded[key] = excluded.get(key, 0) + 1
+            by_sheet[group or "(群なし)"] = by_sheet.get(group or "(群なし)", 0) + 1
+        elif name is not None and name in dropped:
+            by_exclude[group or "(群なし)"] = by_exclude.get(group or "(群なし)", 0) + 1
         elif group:
             groups[group] = groups.get(group, 0) + 1
         else:
             n_ungrouped += 1
     out = {"groups": groups, "roles": roles, "n_ungrouped": n_ungrouped}
-    if excluded:
-        out["excluded_by_sheet"] = excluded
+    if by_sheet:
+        out["excluded_by_sheet"] = by_sheet
+    if by_exclude:
+        out["excluded_by_dataset_exclude"] = by_exclude
     return out
 
 
@@ -91,8 +100,9 @@ def dataset_status(dataset_handle: str | None = None, view: str = "summary",
         dataset_compare の reference_group / test_group の群名が並ぶ（そのまま使う）・
         役割ごとの件数 `roles`・群の無い試料の数 `n_ungrouped`・特徴のタグごとの件数 `tags`・
         除外の件数 `excluded`（`dataset_exclude`）を含む。`groups` と `n_ungrouped` は統計に入る試料だけを
-        数え、実験情報シートの include=false の試料（群 `unassigned` など）は `excluded_by_sheet`
-        （シートの群 → 件数。無ければ鍵ごと出さない）に分ける。
+        数え、外した試料は群 → 件数で分ける: 実験情報シートの include=false の試料（群 `unassigned` など）は
+        `excluded_by_sheet`、`dataset_exclude` で外した試料は `excluded_by_dataset_exclude`（シートでも外した
+        試料はシートの側だけ。どちらも 1 件も無ければ鍵ごと出さない）。
       - `"samples"`: 試料の TSV（name・group・role・batch・batch_source・injection_order・
         injection_order_source・subject_id・excluded。`*_source` は値の出所 sheet / mddata / mzTab /
         raw_acquisition_time / filename（後の 2 つはシートの宣言 `# injection_order_source = ...`）
@@ -461,6 +471,9 @@ def _summary_text(ds, filename: str) -> str:
     if ds.validation_result.get("warnings"):
         lines.append(f"- 警告 {len(ds.validation_result['warnings'])} 件: " +
                      "; ".join(ds.validation_result["warnings"][:3]))
+    # 読み込みの注記（pipeline の run の試料の対応表を結べず当てなかった旨など）。解析フォルダの要約と同じ行。
+    if ds.load_notes:
+        lines.append(f"- 読み込みの注記 {len(ds.load_notes)} 件: " + "; ".join(ds.load_notes[:3]))
     return "\n".join(lines)
 
 

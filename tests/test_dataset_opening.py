@@ -1271,13 +1271,15 @@ def test_mztab_source_binds_receipt_rows_to_samples_not_by_position(tmp_path, so
     assert mztab.sample_names == ["s0", "s1", "s2", "s3"]
     assert _group_and_include(mztab) == expected
     assert included_sample_indices(mztab) == [0, 1, 2]
-    if source_dir == "C:/data":   # 解析フォルダの経路は raw のパスで結ぶ（同じ試料に付く）
-        folder = open_dataset(pipeline_path=str(run), polarity="negative").dataset
-        assert _group_and_include(folder) == expected
-        assert included_sample_indices(folder) == [0, 1, 2]
-    else:                         # raw のパスが違えば raw の名前で結んだ（パスは行のものを覚える）
-        assert [p.replace("\\", "/") for p in mztab.sample_raw_paths] == [
-            f"D:/moved/s{i}.wiff" for i in range(4)]
+    # 解析フォルダのアダプタも同じ結び方（raw のパスが違えば raw の名前で結び、読み込みを断らない）。
+    folder = open_dataset(pipeline_path=str(run), polarity="negative").dataset
+    assert _group_and_include(folder) == expected
+    assert included_sample_indices(folder) == [0, 1, 2]
+    assert not [n for n in folder.load_notes if "試料の対応表" in n]
+    if source_dir == "D:/moved":  # raw のパスが違えば raw の名前で結んだ（パスは行のものを覚える）
+        for ds in (mztab, folder):
+            assert [p.replace("\\", "/") for p in ds.sample_raw_paths] == [
+                f"D:/moved/s{i}.wiff" for i in range(4)]
     assert [r["sample_id"] for r in mztab.sample_metadata_rows] == mztab.sample_names
     assert mztab.sample_ids == ["s0", "s1", "s2", "s3"]
     # 前処理の入力（役割と試料の付帯情報）も組み直す。読み込みの一部なので版は進めない。
@@ -1312,14 +1314,63 @@ def test_sample_counts_omit_excluded_by_sheet_when_every_sample_is_included(tmp_
                                     "n_ungrouped": 0}
 
 
-def test_mztab_source_leaves_unbindable_receipt_rows_unapplied(tmp_path):
-    """raw のパスでも名前でも全試料を結べない受領の行は、位置では当てず、注記を残して当てない。"""
+@pytest.mark.parametrize("source", ["auto", "mztab"])
+def test_unbindable_receipt_rows_are_left_unapplied_with_a_note_the_load_returns(tmp_path, source):
+    """raw のパスでも名前でも全試料を結べない受領の行は、位置では当てず、読み込みを止めずに当てない。
+
+    注記は `load_dataset` の戻り値（`summary` の「読み込みの注記」の行）と `dataset_status` の
+    `load_notes` に出る（どちらのアダプタでも。群が空の理由を、呼び出し側が戻り値だけで知れる）。"""
+    from metabolomix.tools.handle_tools import load_dataset
+    from metabolomix.tools.mztab_tools import dataset_status
+
     rows = [_manifest_row(f"x{i}", "ctrl") for i in range(4)]
     run = _v3_run(tmp_path, rows=rows)
-    ds = open_dataset(pipeline_path=str(run), polarity="negative", source="mztab").dataset
-    assert not ds.sample_metadata_rows
+    ds = open_dataset(pipeline_path=str(run), polarity="negative", source=source).dataset
+    assert not any(row.get("group") for row in ds.sample_metadata_rows or [])
     note = next(n for n in ds.load_notes if "試料の対応表" in n)
     assert "当てていない" in note and "dataset_set_sample_metadata" in note
+    assert "（受領）" not in note   # 旧 v1 の run は記録の対応表なので、受領とは書かない
+
+    out = json.loads(load_dataset(pipeline_path=str(run), source=source, overview=False))
+    assert out["status"] == "success", out
+    assert out["sample_counts"]["groups"] == {} and out["sample_counts"]["n_ungrouped"] == 4
+    line = next(line for line in out["summary"] if line.startswith("- 読み込みの注記"))
+    assert note in line
+    assert note in json.loads(dataset_status())["load_notes"]["first"]
+
+
+def test_status_counts_leave_dataset_exclude_samples_out_of_groups(tmp_path):
+    """`dataset_status` の `groups` / `n_ungrouped` は統計に入る試料（`included_sample_indices`）だけ。
+
+    `dataset_exclude` で外した試料は `excluded_by_dataset_exclude`、シートの include=false は
+    `excluded_by_sheet` に分ける（両方で外した試料はシートの側だけ）。群ごとの数は、統計に残る試料の位置と
+    試料の表の群から別に数えたものと一致する。"""
+    from collections import Counter
+
+    from metabolomix.analysis.dataset_analysis import included_sample_indices
+    from metabolomix.tools.handle_tools import load_dataset
+    from metabolomix.tools.mztab_tools import dataset_status
+    from metabolomix.tools.sample_tools import dataset_exclude
+
+    run = _v3_run(tmp_path, rows=_shuffled_rows())   # s0, s1 ctrl / s2 case / s3 unassigned（include=false）
+    load_dataset(pipeline_path=str(run), overview=False)
+    out = json.loads(dataset_exclude(samples=["s2", "s3"], reason="outlier"))
+    assert "error" not in out, out
+    status = json.loads(dataset_status())
+    assert status["groups"] == {"ctrl": 2}
+    assert status["n_ungrouped"] == 0
+    assert status["excluded_by_sheet"] == {"unassigned": 1}
+    assert status["excluded_by_dataset_exclude"] == {"case": 1}
+    assert status["roles"] == {"sample": 4} and status["excluded"]["samples"] == 2
+    ds = session_state.session.dataset
+    kept = included_sample_indices(ds)
+    assert kept == [0, 1]
+    assert Counter(ds.sample_metadata_rows[i]["group"] for i in kept) == status["groups"]
+
+    json.loads(dataset_exclude(mode="clear", samples=[]))
+    status = json.loads(dataset_status())
+    assert status["groups"] == {"ctrl": 2, "case": 1}
+    assert "excluded_by_dataset_exclude" not in status
 
 
 def test_mztab_source_matches_spots_on_the_batch_the_receipt_verified(tmp_path):
