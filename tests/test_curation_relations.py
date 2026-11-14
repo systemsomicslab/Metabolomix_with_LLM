@@ -1,5 +1,9 @@
+import math
+
+import numpy as np
 import pytest
 
+from metabolomix.analysis.feature_search import DEFAULT_ADDUCT_TIERS
 from metabolomix.curation import relations
 from metabolomix.msdial.adducts import mz_from_neutral, parse_adduct
 from metabolomix.msdial.peak_verification import monoisotopic_mass, parse_formula
@@ -17,9 +21,59 @@ def _x(mz, *, rt=10.01, heights=None):
             "heights": heights if heights is not None else [h * 0.1 for h in Y["heights"]]}
 
 
-def test_expected_isotope_ratio_is_binomial():
-    assert relations.expected_isotope_ratio(43, 1) == pytest.approx(43 * 0.0107 / 0.9893, rel=1e-6)
-    assert relations.expected_isotope_ratio(43, 2) == pytest.approx(903 * (0.0107 / 0.9893) ** 2, rel=1e-6)
+#: 整数質量のずれ → 存在比（IUPAC の代表値）。実装の表（curation.isotope.ABUNDANCES）とは別にここで書き、
+#: 原子を 1 個ずつ畳み込む（実装の二乗法を使わない）独立の計算で期待比を確かめる。
+IUPAC = {"H": [0.999885, 0.000115], "C": [0.9893, 0.0107], "N": [0.99636, 0.00364],
+         "O": [0.99757, 0.00038, 0.00205], "S": [0.9499, 0.0075, 0.0425], "P": [1.0],
+         "Cl": [0.7576, 0.0, 0.2424], "Br": [0.5069, 0.0, 0.4931]}
+
+
+def _brute_ratios(ion: dict) -> tuple[float, float]:
+    """イオンの組成（手で書く）から (M+1 / M, M+2 / M)。36S（M+4）は M..M+2 の比に効かない。"""
+    dist = np.array([1.0])
+    for element, n in ion.items():
+        for _ in range(n):
+            dist = np.convolve(dist, IUPAC[element])[:3]
+    return dist[1] / dist[0], dist[2] / dist[0]
+
+
+def test_expected_ratios_of_pure_carbon_are_binomial():
+    q = 0.0107 / 0.9893
+    m1, m2 = relations.expected_isotope_ratios("C43", None)
+    assert m1 == pytest.approx(43 * q, rel=1e-9)
+    assert m2 == pytest.approx(math.comb(43, 2) * q ** 2, rel=1e-9)
+
+
+@pytest.mark.parametrize("formula, adduct, ion", [
+    ("C26H45NO7S", "[M-H]-", {"C": 26, "H": 44, "N": 1, "O": 7, "S": 1}),      # タウロコール酸
+    ("C10H17N3O6S", "[M-H]-", {"C": 10, "H": 16, "N": 3, "O": 6, "S": 1}),     # グルタチオン
+    ("C6H12O6", "[M-H]-", {"C": 6, "H": 11, "O": 6}),                           # ヘキソース
+    ("C20H40O2", "[2M+H]+", {"C": 40, "H": 81, "O": 4}),                        # 二量体は 2 倍
+    ("C20H40O2", "[M+Cl]-", {"C": 20, "H": 40, "O": 2, "Cl": 1}),              # 付加体の Cl
+    ("C42H80NO8P", "[M+HCOO]-", {"C": 43, "H": 81, "N": 1, "O": 10, "P": 1}),  # ギ酸の原子
+    ("C6H5Br", "[M-H]-", {"C": 6, "H": 4, "Br": 1}),
+    ("C4H9NO2", "[M+H]1+", {"C": 4, "H": 10, "N": 1, "O": 2}),                 # mzTab-M の表記
+])
+def test_expected_ratios_are_the_sums_of_the_ion_envelope(formula, adduct, ion):
+    assert relations.ion_element_counts(formula, adduct) == ion
+    m1, m2 = relations.expected_isotope_ratios(formula, adduct)
+    b1, b2 = _brute_ratios(ion)
+    assert m1 == pytest.approx(b1, rel=1e-9) and m2 == pytest.approx(b2, rel=1e-9)
+
+
+def test_taurocholate_m_plus_2_is_about_13c2_plus_34s_plus_18o():
+    # 手計算の一次の項: 13C2 C(26,2)·q_C² + 34S 1·q_S + 18O 7·q_O（交差項 13C·15N などが残りの約 5 %）
+    q_c, q_s, q_o = 0.0107 / 0.9893, 0.0425 / 0.9499, 0.00205 / 0.99757
+    first_order = math.comb(26, 2) * q_c ** 2 + q_s + 7 * q_o
+    _, m2 = relations.expected_isotope_ratios("C26H45NO7S", "[M-H]-")
+    assert first_order == pytest.approx(0.0971, abs=1e-4)
+    assert first_order < m2 < first_order * 1.07
+
+
+@pytest.mark.parametrize("formula", [None, "", "Unknown", "C10Xq3", "C6H5I"])
+def test_unknown_or_unmodelled_formula_has_no_expected_ratio(formula):
+    assert relations.expected_isotope_ratios(formula, "[M-H]-") is None
+    assert relations.ion_element_counts(formula, "[M-H]-") is None
 
 
 def test_m_plus_2_with_a_consistent_ratio_is_a_strong_explanation():
@@ -107,29 +161,26 @@ def _m2(y, delta, ratio, **kw):
     return relations.find_relations(x, [y], links={}, **{**KW, **kw})
 
 
-def test_expected_ratio_for_one_chlorine_and_one_bromine():
-    assert relations.expected_isotope_ratio(1, 1, relations.ISOTOPE_ABUNDANCE["Cl"]) == pytest.approx(
-        0.2424 / 0.7576, rel=1e-6)
-    assert relations.expected_isotope_ratio(2, 1, relations.ISOTOPE_ABUNDANCE["Br"]) == pytest.approx(
-        2 * 0.4931 / 0.5069, rel=1e-6)
-
-
 def test_chlorine_m_plus_2_is_explained_when_the_window_is_narrow():
     found = _m2(CL, 1.997050, 0.32, mz_tol=0.005)
     [rel] = found
     assert rel["relation"] == "isotope_M+2_37Cl" and rel["ambiguous"] is False
-    assert rel["expected_ratio"] == pytest.approx(0.32, abs=1e-3)
+    # 期待比は M+2 の和（37Cl 0.2424/0.7576 に 13C2・18O・交差項が乗る）
+    expected = _brute_ratios({"C": 10, "H": 7, "Cl": 1, "N": 1, "O": 3})[1]
+    assert expected == pytest.approx(0.2424 / 0.7576 + 0.012, abs=1e-3)
+    assert rel["expected_ratio"] == pytest.approx(expected, abs=1e-4)
     assert rel["isotope_consistent"] is True and rel["strong"] is True
 
 
 def test_overlapping_m_plus_2_windows_are_ambiguous_not_a_separate_compound():
-    """既定の 10 mDa では 13C2 と 37Cl の窓が重なる。一方に決めず、13C2 の期待比に合わないことだけで
-    「別物質」と言わない（37Cl の期待比には合う）。"""
+    """既定の 10 mDa では 13C2 と 37Cl の窓が重なる。一方に決めず（強い説明にしない）、どの行も同じ M+2 の和を
+    期待比にするので、13C2 だけの期待比に合わないことで「別物質」と言わない。"""
     found = {r["relation"]: r for r in _m2(CL, 1.997050, 0.32)}
-    assert set(found) == {"isotope_M+2", "isotope_M+2_37Cl"}      # 組成式に Br が無いので 81Br は出さない
+    # 組成式に S・Br が無いので 34S・81Br は出さない
+    assert set(found) == {"isotope_M+2", "isotope_M+2_37Cl"}
     assert all(r["ambiguous"] and not r["strong"] for r in found.values())
-    assert found["isotope_M+2"]["isotope_consistent"] is False      # 炭素 10 個の 13C2 には強すぎる
-    assert found["isotope_M+2_37Cl"]["isotope_consistent"] is True
+    assert found["isotope_M+2"]["expected_ratio"] == found["isotope_M+2_37Cl"]["expected_ratio"]
+    assert all(r["isotope_consistent"] is True for r in found.values())
     assert not any(r["informational"] for r in found.values())
 
 
@@ -143,6 +194,7 @@ def test_overlapping_m_plus_2_too_intense_for_every_explanation_is_informational
 def test_without_a_formula_all_m_plus_2_explanations_are_listed_and_ambiguous():
     unknown = {**CL, "formula": None}
     found = {r["relation"]: r for r in _m2(unknown, 2.006710, 0.05)}
+    # 34S（+1.995796）は 13C2 から 10.9 mDa で窓の外
     assert set(found) == {"isotope_M+2", "isotope_M+2_37Cl", "isotope_M+2_81Br"}
     assert all(r["ambiguous"] and r["isotope_consistent"] is None and not r["informational"]
                for r in found.values())
@@ -203,3 +255,134 @@ def test_isotope_and_adduct_are_strong_on_a_folder_dataset():
         _folder_dataset(), "3", rt_window=0.05, mz_tol=0.01, min_r=0.7, adducts=ADDUCTS)["as_ion_of"]
     assert [(e["of"], e["relation"]) for e in as_ion] == [("1", "adduct:[M+CH3COO]-/[M+HCOO]-")]
     assert as_ion[0]["of_name"] == "PC 34:2" and as_ion[0]["strong"] is True
+
+
+# ---------- イオンの組成で期待比を求める（二量体・付加体の原子。レビュー R8） ----------
+
+HEIGHTS = [1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0]
+
+
+def _ion_y(formula, adduct):
+    mz = mz_from_neutral(monoisotopic_mass(parse_formula(formula)), parse_adduct(adduct))
+    return {"spot_id": 1, "name": "Y", "mz": mz, "rt": 10.0, "adduct": adduct, "formula": formula,
+            "heights": list(HEIGHTS)}
+
+
+def test_dimer_m_plus_1_uses_twice_the_carbons():
+    """[2M+H]+ の M+1 は炭素 40 個ぶん。中性の組成式（炭素 20）で見ると強すぎて別物質に見えていた。"""
+    found = _m2(_ion_y("C20H40O2", "[2M+H]+"), 1.003355, 0.437, adducts=[])
+    [rel] = [r for r in found if r["relation"] == "isotope_M+1"]
+    assert rel["expected_ratio"] == pytest.approx(_brute_ratios({"C": 40, "H": 81, "O": 4})[0], abs=1e-4)
+    assert 0.437 > 1.5 * _brute_ratios({"C": 20, "H": 41, "O": 2})[0]      # 中性の炭素数なら別物質
+    assert rel["isotope_consistent"] is True and rel["informational"] is False and rel["strong"] is True
+
+
+def test_chloride_adduct_m_plus_2_is_the_37cl_isotope():
+    """[M+Cl]- のイオンは Cl を持つので 37Cl の説明が出る（中性の組成式に Cl が無くても）。"""
+    found = {r["relation"]: r for r in _m2(_ion_y("C20H40O2", "[M+Cl]-"), 1.997050, 0.34, adducts=[])}
+    assert set(found) == {"isotope_M+2", "isotope_M+2_37Cl"}             # 13C2 は 9.66 mDa で窓の内
+    expected = _brute_ratios({"C": 20, "H": 40, "O": 2, "Cl": 1})[1]
+    for rel in found.values():
+        assert rel["expected_ratio"] == pytest.approx(expected, abs=1e-4)
+        assert rel["isotope_consistent"] is True and rel["informational"] is False
+        assert rel["ambiguous"] is True and rel["strong"] is False
+    # 同じ分子の [M-H]- は Cl を持たない: 37Cl の説明は出ず、強度比 0.34 は M+2 には強すぎる（別物質）
+    [rel] = _m2(_ion_y("C20H40O2", "[M-H]-"), 1.997050, 0.34, adducts=[])
+    assert rel["relation"] == "isotope_M+2" and rel["informational"] is True
+
+
+# ---------- 34S・18O の M+2（レビュー R9） ----------
+
+def test_unresolved_m_plus_2_of_a_sulfur_compound_is_not_a_separate_compound():
+    """タウロコール酸 [M-H]- の分離できない M+2（13C2・34S・18O の束。重心 +2.0013、強度比 0.097）。
+    13C2 だけの期待比（約 0.038）では 1.5 倍を超えて別物質に見えていた。"""
+    found = {r["relation"]: r for r in _m2(_ion_y("C26H45NO7S", "[M-H]-"), 2.0013, 0.097, adducts=[])}
+    assert set(found) == {"isotope_M+2", "isotope_M+2_34S"}              # Cl・Br は出さない
+    expected = _brute_ratios({"C": 26, "H": 44, "N": 1, "O": 7, "S": 1})[1]
+    assert 0.097 > 1.5 * math.comb(26, 2) * (0.0107 / 0.9893) ** 2       # 13C2 だけなら別物質
+    for rel in found.values():
+        assert rel["expected_ratio"] == pytest.approx(expected, abs=1e-4)
+        assert rel["isotope_consistent"] is True and rel["informational"] is False
+        assert rel["ambiguous"] is True and rel["strong"] is False
+
+
+def test_resolved_34s_peak_is_its_own_explanation():
+    """分離された 34S（+1.995796）は 13C2 から 10.9 mDa で窓の外。34S の説明が 1 つだけ立つ。"""
+    [rel] = _m2(_ion_y("C26H45NO7S", "[M-H]-"), 1.995796, 0.045, adducts=[])
+    assert rel["relation"] == "isotope_M+2_34S" and rel["ambiguous"] is False
+    assert rel["isotope_consistent"] is True and rel["strong"] is True
+
+
+def test_sulfur_isotope_without_a_formula_is_not_called_a_halogen():
+    unknown = {**_ion_y("C26H45NO7S", "[M-H]-"), "formula": None}
+    found = {r["relation"]: r for r in _m2(unknown, 1.995796, 0.045, adducts=[])}
+    assert set(found) == {"isotope_M+2_34S", "isotope_M+2_37Cl", "isotope_M+2_81Br"}
+    assert all(r["ambiguous"] and r["isotope_consistent"] is None for r in found.values())
+
+
+def test_oxygen_rich_m_plus_2_counts_18o():
+    """ヘキソース [M-H]- の M+2 は 18O（6 個）が主。13C2 だけの期待比では別物質に見えていた。"""
+    [rel] = _m2(_ion_y("C6H12O6", "[M-H]-"), 2.0046, 0.0145, adducts=[])
+    assert rel["relation"] == "isotope_M+2"
+    assert 0.0145 > 1.5 * math.comb(6, 2) * (0.0107 / 0.9893) ** 2
+    assert rel["expected_ratio"] == pytest.approx(_brute_ratios({"C": 6, "H": 11, "O": 6})[1], abs=1e-4)
+    assert rel["isotope_consistent"] is True and rel["informational"] is False and rel["strong"] is True
+
+
+def test_resolved_18o_peak_is_its_own_explanation_when_the_window_is_narrow():
+    """窓が 13C2 と 18O の差（2.46 mDa）より狭ければ、分離された 18O（+2.004246）は 13C2 の窓の外。
+    18O の説明が 1 つだけ立ち、期待比は M+2 の和。"""
+    y = _ion_y("C6H12O6", "[M-H]-")
+    [rel] = _m2(y, 2.004246, 0.0145, adducts=[], mz_tol=0.002)
+    assert rel["relation"] == "isotope_M+2_18O" and rel["ambiguous"] is False
+    assert rel["expected_ratio"] == pytest.approx(_brute_ratios({"C": 6, "H": 11, "O": 6})[1], abs=1e-4)
+    assert rel["isotope_consistent"] is True and rel["strong"] is True
+    # 既定の 10 mDa では 13C2 と分けられないので、13C2 の行（isotope_M+2）だけ（18O の行と並べて曖昧にしない）
+    [rel] = _m2(y, 2.004246, 0.0145, adducts=[])
+    assert rel["relation"] == "isotope_M+2" and rel["ambiguous"] is False and rel["strong"] is True
+
+
+def test_18o_needs_oxygen_and_follows_the_charge():
+    # O を持たないイオン: 狭い窓で 18O の位置にある X は説明できない
+    assert _m2(_ion_y("C10H16N2", "[M+H]+"), 2.004246, 0.01, adducts=[], mz_tol=0.002) == []
+    # 2 価では 13C2 と 18O の差は 1.23 mDa。2 mDa の窓では分けられず 13C2 の行になる
+    y = _ion_y("C42H80NO10P", "[M-2H]2-")
+    [rel] = _m2(y, 2.004246 / 2, 0.05, adducts=[], mz_tol=0.002)
+    assert rel["relation"] == "isotope_M+2"
+
+
+def test_lipid_without_sulfur_has_no_34s_explanation():
+    found = relations.find_relations(_x(Y_MZ + 1.995796 + 0.006), [Y], links={}, **KW)
+    assert [r["relation"] for r in found] == ["isotope_M+2"]
+
+
+# ---------- Y 自身の付加体は組成で見分ける（レビュー R11） ----------
+
+POSITIVE = [a for tier in DEFAULT_ADDUCT_TIERS["positive"] for a in tier]
+NEGATIVE = [a for tier in DEFAULT_ADDUCT_TIERS["negative"] for a in tier]
+
+
+def _isobar(y, delta=0.001):
+    """Y と同時に溶出し、強度が相関する、Y と同じ m/z（+delta）の別の特徴。"""
+    return {"spot_id": 9, "name": None, "mz": y["mz"] + delta, "rt": 10.02, "adduct": None,
+            "formula": None, "heights": [h * 0.4 for h in y["heights"]]}
+
+
+@pytest.mark.parametrize("adduct, adducts", [
+    ("[M+H]1+", POSITIVE), ("[M+H]+", POSITIVE),
+    ("[M+HCOO]1-", NEGATIVE), ("[M+HCOO]-", NEGATIVE), ("[M+CHO2]1-", NEGATIVE),
+    ("[M+CH3COO]1-", NEGATIVE), ("[M+Hac-H]-", NEGATIVE),
+])
+def test_coeluting_isobar_is_not_an_adduct_of_its_own_ion(adduct, adducts):
+    y = _ion_y("C42H82NO8P", adduct)
+    assert relations.find_relations(_isobar(y), [y], links={}, **{**KW, "adducts": adducts}) == []
+
+
+def test_adduct_with_the_same_mz_as_y_is_skipped_but_a_real_partner_is_kept():
+    y = _ion_y("C42H82NO8P", "[M+H]1+")
+    adducts = ["[2M+2H]2+", "[M+Na]+"]                  # [2M+2H]2+ は [M+H]+ と同じ m/z
+    assert relations.find_relations(_isobar(y), [y], links={}, **{**KW, "adducts": adducts}) == []
+    sodium = {**_isobar(y), "mz": mz_from_neutral(monoisotopic_mass(parse_formula("C42H82NO8P")),
+                                                  parse_adduct("[M+Na]+"))}
+    [rel] = relations.find_relations(sodium, [y], links={}, **{**KW, "adducts": adducts})
+    assert rel["relation"] == "adduct:[M+Na]+/[M+H]1+" and rel["strong"] is True

@@ -175,7 +175,7 @@ MCP も import しない。ツール層の仕事は、極性の出所を決め�
 7. ├─ [目標照合] metabolomix/analysis/feature_search.py  normalize_targets()
 8. │  └─ metabolomix/analysis/feature_search.py  theoretical_mz()
 9. ├─ [目標照合] metabolomix/analysis/feature_search.py  match_target()
-10. │  └─ metabolomix/analysis/feature_search.py  _identity()
+10. │  └─ metabolomix/analysis/feature_search.py  _identity()（SME の付加体は綴りでなく組成で比べる: `msdial/adducts.py` `same_adduct()`）
 11. ├─ [目標照合] metabolomix/analysis/feature_search.py  estimate_rt_offset()
 12. ├─ [目標照合] metabolomix/analysis/feature_search.py  rule_hash()
 13. ├─ [include_statistics=true] metabolomix/analysis/feature_search.py  select_results()

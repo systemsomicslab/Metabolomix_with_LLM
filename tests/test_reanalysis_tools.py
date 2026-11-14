@@ -452,9 +452,27 @@ def test_feature_relations_columns_carry_strong_ambiguous_and_informational(data
                      "expected_ratio", "isotope_consistent", "strong", "ambiguous", "informational"]
     [row] = as_ion
     assert (row["of"], row["of_name"], row["relation"]) == ("20", "GABA", "isotope_M+1")
-    # C4 の M+1 の期待比 4 × 0.0107 / 0.9893 ≈ 0.0433、実測 5 / 100 = 0.05（1.5 倍以内）
-    assert float(row["expected_ratio"]) == pytest.approx(0.0433, abs=1e-4)
+    # イオン C4H10NO2+ の M+1 の和: 13C 4·q_C + 2H 10·q_H + 15N 1·q_N + 17O 2·q_O（q = a / (1 − a)）
+    # = 0.043263 + 0.001150 + 0.003653 + 0.000762 ≈ 0.0488。実測 5 / 100 = 0.05（1.5 倍以内）
+    hand = (4 * 0.0107 / 0.9893 + 10 * 0.000115 / 0.999885 + 0.00364 / 0.99636
+            + 2 * 0.00038 / 0.99757)
+    assert hand == pytest.approx(0.0488, abs=1e-4)
+    assert float(row["expected_ratio"]) == pytest.approx(hand, abs=1e-4)
     assert float(row["isotope_ratio"]) == pytest.approx(0.05, abs=1e-3)
+
+
+def test_feature_relations_do_not_call_a_coeluting_isobar_an_adduct_of_itself(tmp_path):
+    """mzTab-M の付加体は `[M+H]1+` と書かれる。既定の付加体 `[M+H]+` と綴りが違っても Y 自身の付加体なので、
+    同時に溶出して強度が相関する同じ m/z の特徴を「Y の [M+H]+」（強い説明）と言わない。"""
+    isobar = {"id": "27", "mz": 104.0716, "rt": 2.00, "values": _scaled(40), "sme": []}
+    mztab = write_mztab(tmp_path / "iso" / "AlignResult-1.mzTab", features=(RELATION_FEATURES[0], isobar))
+    out = json.loads(handle_tools.load_dataset(mztab_path=str(mztab), library="none"))
+    assert out["status"] == "success", out
+    handle = out["dataset_handle"]
+    as_ion = json.loads(R.dataset_feature_relations("27", dataset_handle=handle))
+    assert as_ion["n_coeluting"] == 1 and as_ion["as_ion_of"] == ""
+    ions = json.loads(R.dataset_feature_relations("20", dataset_handle=handle))["ions_of_this"]
+    assert "adduct:" not in ions
 
 
 def test_feature_relations_unknown_feature(data):

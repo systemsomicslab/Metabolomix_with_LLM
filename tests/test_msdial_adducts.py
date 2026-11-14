@@ -1,6 +1,8 @@
 import pytest
 
-from metabolomix.msdial.adducts import mz_from_neutral, neutral_from_mz, parse_adduct
+from metabolomix.msdial.adducts import (
+    adduct_key, ion_counts, mz_from_neutral, neutral_from_mz, parse_adduct, same_adduct,
+)
 from metabolomix.msdial.peak_verification import ADDUCT_SHIFTS
 
 
@@ -52,3 +54,44 @@ def test_unusual_adducts(name, expected):
         assert adduct is not None
         for key, value in expected.items():
             assert getattr(adduct, key) == value
+
+
+# ---------- 同じイオンかを組成で比べる（same_adduct）とイオンの組成（ion_counts） ----------
+
+
+@pytest.mark.parametrize("a, b", [
+    ("[M+FA-H]-", "[M+HCOO]-"), ("[M+FA-H]-", "[M+HCOO]1-"), ("[M+FA-H]-", "[M+CHO2]1-"),
+    ("[M+CH3COO]-", "[M+Hac-H]-"), ("[M+CH3COO]-", "[M+C2H3O2]1-"),
+    ("[M-H2O-H]-", "[M-H-H2O]-"), ("[M+H]+", "[M+H]1+"), ("[M+H]+", " [M + H]+ "),
+    ("[2M+FA-H]-", "[2M+HCOO]1-"), ("[M-2H]2-", "[M-2H]2-"),
+])
+def test_same_ion_written_differently(a, b):
+    assert same_adduct(a, b) and same_adduct(b, a)
+    assert adduct_key(a) == adduct_key(b) is not None
+
+
+@pytest.mark.parametrize("a, b", [
+    ("[M+H]+", "[M]+"), ("[M]+", "[M]-"), ("[M-H]-", "[2M-H]-"), ("[M-H]-", "[M+Na-2H]-"),
+    ("[M+H]+", "[M+2H]2+"), ("[M+HCOO]-", "[M+CH3COO]-"), ("[M+H]+", None), (None, None), ("", ""),
+])
+def test_different_ions_are_not_the_same(a, b):
+    assert not same_adduct(a, b)
+
+
+def test_unparseable_adducts_fall_back_to_the_spelling():
+    # 略記を解けない表記（IsoProp）は綴りで比べる。価数 1 の `1` と空白・大文字小文字だけを無視する。
+    assert adduct_key("[M+IsoProp+H]+") is None
+    assert same_adduct("[M+IsoProp+H]1+", "[M+IsoProp+H]+")
+    assert same_adduct("[m+isoprop+h]+", "[M+IsoProp+H]+")
+    assert not same_adduct("[M+IsoProp+H]+", "[M+IsoProp+Na]+")
+    assert not same_adduct("[M+IsoProp+H]2+", "[M+IsoProp+H]+")
+
+
+def test_ion_counts_multiply_by_n_mol_and_add_the_adduct_atoms():
+    neutral = {"C": 20, "H": 40, "O": 2}
+    assert ion_counts(neutral, "[2M+H]+") == {"C": 40, "H": 81, "O": 4}
+    assert ion_counts(neutral, "[M+Cl]-") == {"C": 20, "H": 40, "O": 2, "Cl": 1}
+    assert ion_counts(neutral, "[M+HCOO]1-") == {"C": 21, "H": 41, "O": 4}
+    assert ion_counts({"C": 1, "H": 4}, "[M-H2O+H]+") is None      # O が負になる
+    assert ion_counts(neutral, "[M+Xx]+") is None
+    assert ion_counts(neutral, None) is None

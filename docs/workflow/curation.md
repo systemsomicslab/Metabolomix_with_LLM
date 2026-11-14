@@ -84,7 +84,7 @@ flowchart TD
 26. │     ├─ metabolomix/curation/eic_shape.py  spot_shape()
 27. │     ├─ metabolomix/curation/evidence.py  _downsample_points()（形状計算の後に payload だけ間引く）
 28. │     ├─ metabolomix/curation/isotope.py  measured_envelope()（→ `isotopes.measured`）
-29. │     └─ metabolomix/curation/isotope.py  theoretical_envelope()（組成式＋アダクトの原子。`msdial/adducts.py` `adduct_composition()` → `isotopes.theoretical`）
+29. │     └─ metabolomix/curation/isotope.py  theoretical_envelope()（イオンの組成＝組成式の n_mol 倍＋アダクトの原子。`msdial/adducts.py` `ion_counts()` → `envelope_ratios()` → `isotopes.theoretical`）
 30. │  └─ metabolomix/curation/trend.py  composition()（`LipidParser` はモジュールで 1 つだけ作る）
 31. │  └─ metabolomix/curation/trend.py  fit_trends()
 32. │  └─ metabolomix/curation/review.py  _adduct_isomer_pool()（対象に絞らずアラインメントの注釈付き全スポット）
@@ -123,7 +123,7 @@ flowchart TD
 10. │  └─ metabolomix/curation/trend.py  fit_trends()（相手 Y = 注釈付きで対象でも wrong / redundant でもないスポットの傾向）
 11. │  └─ metabolomix/curation/evidence.py  collect()（`keep_measured=True` で対象の証拠を集める）
 12. │  └─ metabolomix/curation/candidates.py  build_library_candidates()（① MS-DIAL の下位候補 ② 閾値を緩めた再検索）
-13. │  └─ metabolomix/curation/relations.py  find_relations()（④ 別スポットの同位体・アダクト・インソース断片としての説明）
+13. │  └─ metabolomix/curation/relations.py  find_relations()（④ 別スポットの同位体・アダクト・インソース断片としての説明。Y 自身のアダクトは `msdial/adducts.py` `same_adduct()` で組成で除き、同位体の期待比は Y のイオンの組成から `curation/isotope.py` `envelope_ratios()`）
 14. metabolomix/tools/curation_tools.py  _open_submit()
 15. └─ metabolomix/curation/submit_server.py  register()（受け口が無ければ 127.0.0.1 の空きポートで起動。失敗したら `submit.via = "copy"`）
 16. metabolomix/curation/suggest.py  save_suggestion()

@@ -1,14 +1,16 @@
-"""MS1 の同位体パターン（純関数）。ビューアの MS1 パネル用で、判定には使わない。
+"""MS1 の同位体パターン（純関数）。ビューアの MS1 パネルと、イオン関係の同位体の期待比
+（`curation.relations`。`envelope_ratios`）が使う。
 
 実測は `.arf2` の Key 53 `IsotopicPeaks`（代表試料の M, M+1, M+2。要素の Key 0 が
 相対強度 %、Key 1 が m/z、Key 4 が絶対強度。docs/schema/AlignmentSpotProperty.md・molecule_ms_reference.md）。
-理論は組成式＋アダクトの原子から、整数質量の分解能（M+k の k ごと）で畳み込む。
+理論は組成式＋アダクトの原子（`msdial.adducts.ion_counts`: n_mol 倍＋付加・脱離する原子）から、
+整数質量の分解能（M+k の k ごと）で畳み込む。M+2 は 13C2・18O・34S・37Cl・81Br・41K と交差項（13C+15N など）の和。
 アダクトが読めなければ中性の組成式だけで計算し、`basis` で区別する。
 deps: msdial.adducts / msdial.peak_verification。
 """
 from __future__ import annotations
 
-from metabolomix.msdial.adducts import adduct_composition
+from metabolomix.msdial.adducts import ion_counts
 from metabolomix.msdial.peak_verification import parse_formula
 
 #: 元素ごとの天然存在比（整数質量のずれ k → 存在比）。IUPAC 代表値。
@@ -53,6 +55,22 @@ def _power(dist: dict[int, float], count: int, n: int) -> list[float]:
     return result
 
 
+def envelope_ratios(counts: dict[str, int], n: int = N_PEAKS) -> list[float] | None:
+    """元素の数（イオンの組成）から、M..M+(n-1) の強度の M に対する比（M が 1。丸めない）。
+
+    表（`ABUNDANCES`）に無い元素・負の個数があれば None。
+    """
+    if any(element not in ABUNDANCES or count < 0 for element, count in counts.items()):
+        return None
+    dist = [1.0] + [0.0] * (n - 1)
+    for element, count in counts.items():
+        if count:
+            dist = _convolve(dist, dict(enumerate(_power(ABUNDANCES[element], count, n))), n)
+    if dist[0] <= 0:
+        return None
+    return [x / dist[0] for x in dist]
+
+
 def theoretical_envelope(formula, adduct, n: int = N_PEAKS) -> dict | None:
     """M=100 とした M..M+(n-1) の相対強度。組成式が読めなければ None。"""
     if not formula or str(formula).strip() in ("", "Unknown"):
@@ -61,24 +79,14 @@ def theoretical_envelope(formula, adduct, n: int = N_PEAKS) -> dict | None:
         counts = parse_formula(str(formula))
     except ValueError:
         return None
-    composition = adduct_composition(adduct)
     basis = "formula"
-    if composition is not None:
-        n_mol, _charge, delta = composition
-        merged = {k: v * n_mol for k, v in counts.items()}
-        for k, v in delta.items():
-            merged[k] = merged.get(k, 0) + v
-        if all(v >= 0 for v in merged.values()):
-            counts, basis = merged, "formula+adduct"
-    if any(element not in ABUNDANCES for element in counts):
+    ion = ion_counts(counts, adduct)
+    if ion is not None:
+        counts, basis = ion, "formula+adduct"
+    ratios = envelope_ratios(counts, n)
+    if ratios is None:
         return None
-    dist = [1.0] + [0.0] * (n - 1)
-    for element, count in counts.items():
-        if count:
-            dist = _convolve(dist, dict(enumerate(_power(ABUNDANCES[element], count, n))), n)
-    if dist[0] <= 0:
-        return None
-    return {"relative": [round(x / dist[0] * 100, 2) for x in dist], "basis": basis}
+    return {"relative": [round(x * 100, 2) for x in ratios], "basis": basis}
 
 
 def measured_envelope(raw) -> list[list]:

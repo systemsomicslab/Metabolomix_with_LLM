@@ -595,11 +595,14 @@ def dataset_feature_relations(feature_id: str | int, rt_window: float = 0.05, mz
     `as_ion_of`（この特徴が相手のイオン）と `ions_of_this`（相手がこの特徴のイオン）を TSV で
     返す。付加体の関係は説明される側（Y）の付加体から計算する: Y の付加体は SME rank 1、無ければ
     SML 注釈（MS1 だけの同定）の付加体で、どちらも無い Y の `as_ion_of` には付加体の関係は出ない
-    （`ions_of_this` はこの特徴の付加体から見るので、未注釈の相手も付加体として出る）。
-    `strong`: 付加体・源内断片は Δm/z と同時溶出に加えて r ≥ min_r、同位体は加えて強度比が Y の
-    組成式の期待比の 1.5 倍以下。M+2 は 13C2・37Cl・81Br を見て、窓が重なれば `ambiguous`
-    （一方に決めず、strong にしない）。`informational` は強度比が期待比を超えた同位体（別物質。重なった
-    M+2 はすべての期待比を超えたときだけ）。MS-DIAL のリンクは使わない。
+    （`ions_of_this` はこの特徴の付加体から見るので、未注釈の相手も付加体として出る）。Y 自身の付加体は
+    綴りでなく組成で見分けて除く（mzTab-M の `[M+H]1+` と `[M+H]+`、`[M+HCOO]-` と `[M+FA-H]-` は同じ）。
+    `strong`: 付加体・源内断片は Δm/z と同時溶出に加えて r ≥ min_r、同位体は加えて強度比が期待比の
+    1.5 倍以下。期待比は Y の**イオン**の組成（中性の組成式の n_mol 倍に付加体の原子を足す。`[2M+H]+` は
+    炭素も 2 倍、`[M+Cl]-` は Cl を持つ）の M+1 の和・M+2 の和（13C2・18O・34S・37Cl・81Br・41K と交差項）。
+    M+2 は 13C2・34S・37Cl・81Br（mz_tol が 13C2 との差 2.46 mDa より狭いときだけ 18O も）を見て、窓が
+    重なれば `ambiguous`（一方に決めず、strong にしない）。`informational` は強度比が期待比を超えた同位体
+    （別物質）。MS-DIAL のリンクは使わない。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     """
     from metabolomix.analysis import claim_evidence, feature_search
