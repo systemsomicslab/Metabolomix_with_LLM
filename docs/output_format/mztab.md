@@ -371,7 +371,7 @@ BH をやり直して、`stats` の**すべての行**をそこから出す（�
 `dataset_compare` の結果（統計エンジン）は、記録した spec（`input` の除外・群の上書きを含む）を、まとめた行列（`merge_feature_columns`。
 ゼロと NaN を「無い」として試料ごとに大きい方）で `run_spec_v2` に当て直し、`as_two_group` で同じ対比を取り直す
 （対比が複数の結果は `result_id#contrast_id` の形で名指す。`contrast_id` 引数で絞ってもよい。交互作用の対比は対象外）。
-元の記録が無い・まとめた行列で比較をやり直せない・利用者への確認が要る前処理になるときは `FEATURE_MERGE_UNAVAILABLE`。
+元の記録が無い・まとめた行列で比較をやり直せない（記録の `analysis_id` と spec の解析が食い違う内部の不整合も含む）ときは `FEATURE_MERGE_UNAVAILABLE`。
 
 まとめる前の数字をまとめた後の顔では返さない（`FEATURE_MERGE_UNAVAILABLE` のときは `merge_split=false` で呼び直す）。
 `merge_split=false` なら従来どおりで、`stats_unmerged` も `merged_from` 列も無く `merge_split` は

@@ -315,7 +315,6 @@ def _analysis_run_v2(spec: dict, holder, output_path: str | None) -> str:
     from metabolomix.analysis import stats_results
     from metabolomix.analysis import stats_run_summary as S
     from metabolomix.analysis.stats.spec_v2 import normalize_spec_v2, run_spec_v2
-    from metabolomix.core.mcp_errors import needs_input
     from metabolomix.core.serialization import json_safe, truncate_lists
 
     ds, error = _dataset_or_error(holder, True)
@@ -325,9 +324,6 @@ def _analysis_run_v2(spec: dict, holder, output_path: str | None) -> str:
         normalized = normalize_spec_v2(spec)
         assay_kind = _assay_kind(holder)
         result = run_spec_v2(normalized, ds, assay_kind=assay_kind)
-        if result.get("status") == "needs_input":
-            return needs_input(result["field"], result["reason"], result["options"],
-                               retry_tools=["dataset_analysis_run"])
         written = write_result(output_path, json_safe(result)) if output_path else None
     except DomainError as exc:
         details = truncate_lists(json_safe(exc.details), S.LIST_LIMIT,

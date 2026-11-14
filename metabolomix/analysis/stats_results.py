@@ -221,7 +221,10 @@ def matrix_inputs(ds, matrix_id: str | None = None, *, group_levels=None, group_
 
 
 def prepare_default(study, config):
-    """既定の前処理（純粋。登録も記録もしない）。`PreparedMatrix`、利用者への確認が要るときは `NeedsInput`。"""
+    """既定の前処理（純粋。登録も記録もしない）。`PreparedMatrix` を返し、作れなければ `DomainError`。
+
+    利用者には尋ねない: drift=auto が補正を当てなかった行列は `warnings` に `drift_not_applied_by_default`
+    （理由と drift_mode="on" での呼び直し）を持つ。"""
     return stats_preprocess.preprocess(study, config)
 
 

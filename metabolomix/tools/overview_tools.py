@@ -12,6 +12,7 @@ from __future__ import annotations
 from mcp.types import ToolAnnotations
 
 from metabolomix.analysis import overview, stats_records, stats_results
+from metabolomix.analysis.dataset_export import exploratory_reason
 from metabolomix.analysis.result_state import dataset_fingerprint
 from metabolomix.analysis.stats import pca as stats_pca
 from metabolomix.analysis.stats import quality, spec_v2
@@ -230,13 +231,13 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
     except DomainError:
         pca_result = None
 
-    # 4. 比較（群が 2 つ以上・探索専用でない・完全交絡でないとき。直近にしない）
+    # 4. 比較（群が 2 つ以上・完全交絡でないとき。直近にしない）。探索専用のデータセットも dataset_compare・
+    # 書き出しと同じく断らずに比べ、比較の数字を使う段の事実に印を付ける
     comps, pairs_omitted = overview.group_comparisons(plan)
+    exploratory = exploratory_reason(ds)
     record, omitted = None, None
     if plan["mode"] == "none":
         omitted = plan["reason"]
-    elif getattr(ds, "exploratory_only", False):
-        omitted = "探索専用のデータセット（allow_incomplete=True で開いた未完了の実行）なので比較しない"
     elif conf.get("batch_status") == "complete":
         omitted = "群とバッチが完全交絡なので比較しない（品質の段を見る）"
     else:
@@ -252,7 +253,7 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
                                    n_blank=n_blank, drift_note=drift_note,
                                    pca_id=pca_rec["result_id"] if pca_rec else None)
     g_sec = overview.global_facts(pca_result=pca_result, labels=labels, record=record, plan=plan,
-                                  omitted=omitted, quality_note=q_note)
+                                  omitted=omitted, quality_note=q_note, exploratory=exploratory)
 
     # 5. クラス（付加体の選別の後だけ。§4.3）
     chain = overview.chain_state(ds, curation_judgments=_curation_judgments(holder, ds))
@@ -276,11 +277,11 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
         except DomainError as exc:
             gate, gate_next = f"{exc.code}: {exc.message}", g_sec["next"]
     c_sec = overview.class_facts(composition_result=comp_result, gate=gate, gate_next=gate_next,
-                                 plan=plan, quality_note=q_note)
+                                 plan=plan, quality_note=q_note, exploratory=exploratory)
 
     # 6. 分子種
     s_sec = overview.species_facts(ds, record=record, plan=plan, top_n=top_n, pairs_omitted=pairs_omitted,
-                                   omitted=omitted, quality_note=q_note)
+                                   omitted=omitted, quality_note=q_note, exploratory=exploratory)
 
     sections = {"quality": q_sec, "global": g_sec, "classes": c_sec, "species": s_sec}
     ids = {"compare": record["result_id"] if record else None,
@@ -292,7 +293,9 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
                                       "assay_kind": assay_kind, "chain": chain})
     settings = {"thresholds": quality.QUALITY_THRESHOLDS, "top_n": top_n, "plan": plan,
                 "verdict_rule": {"q": _Q, "equivalence_fc": _EQ_FC}, "log2fc_threshold": _LOG2FC,
-                "result_ids": ids, "chain": chain, "assay_kind": assay_kind}
+                "result_ids": ids, "chain": chain, "assay_kind": assay_kind,
+                # 探索専用のときだけ足す（そうでないデータセットの記録の形は変えない）
+                **({"exploratory": {"exploratory_only": True, "reason": exploratory}} if exploratory else {})}
     reg = overview.register_overview(ds, result_id=oid, matrix_id=prepared.matrix_id, sections=sections,
                                      parents=[prepared.matrix_id, ids["compare"], ids["pca"]],
                                      settings=json_safe(settings))
@@ -324,13 +327,14 @@ def dataset_overview(top_n: int = 5, dataset_handle: str | None = None) -> str:
     `load_dataset(overview=True)` も読み込みの最後に同じものを返す（`overview` 欄。既定は載せない）。鎖を進めた後（キュレーション・換算・統合・
     選別・除外・試料の表の更新）に呼び直すと、同じ形で出し直す。図は入れない（各段の `next` の dataset_plot で描く）。
 
-    - 計算は C の既定の前処理（ドリフト補正の既定が未決なら補正なしで計算し、そう書く）・PCA（QC は投影）・
+    - 計算は C の既定の前処理（drift=auto がドリフト補正を当てなかったら補正なしで計算し、そう書く）・PCA（QC は投影）・
       moderated t（2 群は 1 対比、3〜6 群は全対と moderated F、7 群以上は基準との対比と F）。判定は
       changed / unchanged / inconclusive だけ（q≤0.05、同等 ±1.2 倍）。
     - 2 群の向きは**仮**（試料の表で先に現れた群を基準。名前から対照を推測しない）。向きを決めるのは
       `dataset_compare(reference_group=..., test_group=...)`。
     - 品質の判定（`ok` / `caution` / `poor` / `not_evaluable`）を先に置く。`poor` でも差の段は「参考」と添えて出すが、
-      群とバッチが完全交絡なら比較を回さない。群が 1 つ・探索専用のデータセットも比較しない。
+      群とバッチが完全交絡なら比較を回さない。群が 1 つでも比較しない。探索専用のデータセット（未完了の実行）は
+      比較を回し、全体・クラス・分子種の段の先頭に探索専用の印の事実（理由つき）を置く。
     - クラスの段は付加体の選別（`dataset_select_features`）の後だけ出す（それまでは理由と次の一手）。
     - 事実には段ごとの ID（`Q1` `G1` `C1` `S1`）が付き、外からは `<overview_id>#Q1` で引く。考察は事実 ID を挙げて
       事実と別に書く（サーバは考察を書かない）。

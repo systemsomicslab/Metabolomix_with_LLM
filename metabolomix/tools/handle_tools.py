@@ -185,7 +185,8 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         （`INCOMPLETE_ANALYSIS_JOB`）。True で読んだデータセットは探索専用になる（検証を
         通っていない pipeline の単位も同じ）。比較も書き出しもできるが、欠けた検体を
         「その群には無い」と読み違えうるので、差次的 TSV のメタ行（`# exploratory = true`）・
-        根拠バンドルの manifest（`exploratory`）・図に印と理由が載る。
+        根拠バンドルの manifest（`exploratory`）・図・最初の概観（dataset_overview）の比較を使う段の事実に
+        印と理由が載る。
     library: `"auto"`（既定）はデータセットが同定に使ったライブラリの記憶
         （`library_record`）を読み取り専用で開く。実体の sha256 を測り直し、変わっている・
         無いとき（`mismatch`）、記憶が決められないとき（`unknown`）、LBM だけのとき

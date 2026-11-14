@@ -128,7 +128,7 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 
 多くのツールは、先行するツールが作ったセッション状態に依存する。
 `dataset_plot(kind="pca")` は `dataset_pca` の結果を、`dataset_plot(kind="volcano")` は
-`dataset_compare` の結果を必要とする。`dataset_compare` と `dataset_pca` は前処理済みの行列（`dataset_preprocess` の
+`dataset_compare` の結果を必要とする。`dataset_compare` と `dataset_pca`（と `pathway_project`）は前処理済みの行列（`dataset_preprocess` の
 `matrix_id`）を受けるが、省くとそのハンドルで `dataset_preprocess` が最後に作った行列を使い、それも無ければ既定の前処理で自分で行列を作る（戻り値の `matrix_source`）。
 
 その状態が無いとき、ツールは本文に次の JSON を返す。
@@ -168,8 +168,9 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 - `retry_tools` は「`argument` を受けて呼び直せるツール」の候補（OR）。
 - 統計エンジンの前処理（`dataset_preprocess`・`dataset_compare`・`dataset_pca`・`pathway_project`・`dataset_analysis_run`
   の spec v2）は**尋ねない**: ドリフト補正の既定（`drift_mode=auto`）は、補正できても内部標準で換算済み・注入順が
-  ファイルの順かもしれないときは当てずに計算し、`warnings` の `drift_not_applied_by_default`（理由と
-  `suggestion: {"preprocess.drift.mode": "on"}`）で呼び直し方を示す（`dataset.md` §10.2）。
+  ファイルの順かもしれないときは当てずに計算し、戻り値の `warnings`（`pathway_project` は run の manifest にも）の
+  `drift_not_applied_by_default`（理由と `suggestion: {"preprocess.drift.mode": "on"}`）で呼び直し方を示す
+  （`dataset.md` §10.2。`dataset_pca` / `pathway_project` は補正を当てなかった行列を使ったときだけ `warnings` を載せる）。
 - 定量の `dataset_quant_preview` / `dataset_quant_apply` / `dataset_merge_polarities` / `dataset_select_features` も、
   別の問いで `status="needs_input"` の応答を返す（`quant.md`）。こちらは上の封筒ではなく、各ツールの戻り値の形。
 

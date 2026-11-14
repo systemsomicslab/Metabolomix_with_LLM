@@ -18,8 +18,8 @@ from metabolomix.analysis.stats.pca import pca
 from metabolomix.analysis.stats.plsda import IMPUTES as _PLSDA_IMPUTE
 from metabolomix.analysis.stats.plsda import SCALINGS as _PLSDA_SCALING
 from metabolomix.analysis.stats.plsda import plsda
-from metabolomix.analysis.stats.preprocess import (NeedsInput, PreparedMatrix,
-                                                   normalize_preprocess_config, preprocess)
+from metabolomix.analysis.stats.preprocess import (PreparedMatrix, normalize_preprocess_config,
+                                                   preprocess)
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 ANALYSIS_SCHEMA_V2 = "analysis-spec.v2"
@@ -314,7 +314,7 @@ def _study_of(normalized: dict, source) -> StudyData:
                         group_overrides=inp["group_overrides"])
 
 
-def prepare_spec_v2(normalized: dict, source) -> PreparedMatrix | NeedsInput:
+def prepare_spec_v2(normalized: dict, source) -> PreparedMatrix:
     """StudyData を作り（`source` が DatasetState 相当のとき）、spec の前処理設定で前処理する。
 
     `source` が StudyData のときはそれをそのまま使い、spec の `input`（除外・群の上書き）は
@@ -329,17 +329,15 @@ def run_spec_v2(normalized: dict, source, *, assay_kind: str = "unknown",
 
     `source` は DatasetState 相当か StudyData（`prepare_spec_v2` と同じ扱い）。`prepared` を渡すと
     前処理をやり直さずそれを使う（同じ spec・同じ source から `prepare_spec_v2` が返したものを
-    呼び出し側が保証する）。前処理が利用者への確認を要するときは `{"status": "needs_input", ...}`
-    を返す。どれかの解析が DomainError を出したら全体を失敗させる（一部だけ載せた
-    analysis-result.v2 は「全解析を報告する」契約を壊すので返さない）。
+    呼び出し側が保証する）。前処理は利用者に尋ねない（drift=auto が補正を当てなかったときは
+    `preprocess.warnings` の `drift_not_applied_by_default`）。どれかの解析が DomainError を出したら
+    全体を失敗させる（一部だけ載せた analysis-result.v2 は「全解析を報告する」契約を壊すので返さない）。
     """
     spec = copy.deepcopy(normalized)
     rule_hash = rule_hash_v2(spec)
     study = _study_of(spec, source)
     if prepared is None:
         prepared = preprocess(study, spec["preprocess"])
-    if isinstance(prepared, NeedsInput):
-        return {**prepared.to_envelope(), "spec": spec, "rule_hash": rule_hash}
     design = spec["design"]
     common = dict(factors=design["factors"], comparisons=spec["comparisons"])
     results = []

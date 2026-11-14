@@ -175,12 +175,34 @@ def test_overview_bad_top_n_and_missing_dataset():
     assert _strict(dataset_overview())["error"]["code"] == "missing_state"
 
 
-def test_overview_exploratory_dataset_does_not_compare(tmp_path):
+def test_overview_exploratory_dataset_compares_and_carries_the_mark(tmp_path):
+    """探索専用のデータセットも dataset_compare・書き出しと同じく比較を回し、比較の数字を使う段の先頭に
+    印の事実（理由つき）を置く。探索専用でないデータセットの事実には印が無い。"""
     ds = _ds()
     ds.exploratory_only = True
+    ds.exploratory_reason = "analysis job status = partial"   # 理由は 1 行（= は : に）
     _install(ds, tmp_path)
     out = _ov()
-    assert "探索専用" in out["species"]["omitted"] and "compare" not in out["result_ids"]
+    assert "compare" in out["result_ids"] and out["result_ids"]["compare"] in ds.results
+    assert "omitted" not in out["species"] and "omitted" not in out["global"]
+    for key in ("global", "species"):
+        first = out[key]["facts"][0]
+        assert first.startswith(("G1 探索専用", "S1 探索専用")), first
+        assert "analysis job status : partial" in first
+    assert out["species"]["facts"][1].startswith("S2 T_vs_C（仮の向き）")
+    record = ds.results[out["overview_id"]]
+    assert record["settings"]["exploratory"] == {"exploratory_only": True,
+                                                 "reason": "analysis job status : partial"}
+    s1 = next(f for f in record["facts"]["species"] if f["id"] == "S1")
+    assert s1["data"] == {"exploratory": True, "reason": "analysis job status : partial"}
+
+
+def test_overview_of_a_complete_dataset_has_no_exploratory_mark(tmp_path):
+    ds = _ds()
+    _install(ds, tmp_path)
+    out = _ov()
+    assert not any("探索専用" in f for key in ("global", "species") for f in out[key]["facts"])
+    assert "exploratory" not in ds.results[out["overview_id"]]["settings"]
 
 
 def test_overview_embedded_omits_counts(tmp_path):

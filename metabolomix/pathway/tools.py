@@ -183,15 +183,34 @@ def _with_details(envelope: str, **extra) -> str:
     return json_payload(body)
 
 
-def _with_matrix(envelope: str, matrix_id: str | None) -> str:
-    """暗黙に登録した行列の ID を、エラーの封筒の details に足す（呼び直しにそのまま使える）。"""
-    return _with_details(envelope, matrix_id=matrix_id)
+#: `matrix_id` を省いて直近の `dataset_preprocess` の行列を使ったときの、エラーの details の説明
+#: （dataset_compare / dataset_pca の `matrix_note` と同じ趣旨。群は group_a / group_b の試料が決める）。
+_LATEST_MATRIX_NOTE = ("matrix_id を省いたので、このハンドルで dataset_preprocess が最後に作った行列を使った"
+                       "（除外・足切り・設定はその前処理のもの）。別の行列は matrix_id で名指しする。")
 
 
-def _bridge_envelope(exc, run_dir: Path, matrix_id: str | None = None) -> str:
+def _matrix_details(matrix_id: str | None, matrix_source: str | None) -> dict:
+    """`matrix_id` を省いた呼び出しのエラーに足す、使った（作った）行列とその出所。名指しなら空。
+
+    既定の前処理で作った行列（`default`）は呼び直しにそのまま使え、直近の `dataset_preprocess` の行列
+    （`latest_preprocess`）なら、試料・特徴がその前処理の除外と足切りで決まっていたことが分かる。"""
+    if matrix_id is None or matrix_source in (None, "matrix_id"):
+        return {}
+    out = {"matrix_id": matrix_id, "matrix_source": matrix_source}
+    if matrix_source == "latest_preprocess":
+        out["matrix_note"] = _LATEST_MATRIX_NOTE
+    return out
+
+
+def _with_matrix(envelope: str, matrix: dict | None) -> str:
+    """暗黙に選んだ・登録した行列（`_matrix_details`）を、エラーの封筒の details に足す（呼び直しにそのまま使える）。"""
+    return _with_details(envelope, **(matrix or {}))
+
+
+def _bridge_envelope(exc, run_dir: Path, matrix: dict | None = None) -> str:
     """ブリッジの失敗の封筒。run のディレクトリ（`remote-job-<mode>.json`・`bridge.log` の置き場）を添える（B11-T44）。"""
     return _with_details(mcp_errors.pathway_error(exc.code, exc.message, exc.details),
-                         run_dir=str(run_dir), matrix_id=matrix_id)
+                         run_dir=str(run_dir), **(matrix or {}))
 
 
 def _domain_envelope(exc: DomainError) -> str:
@@ -200,27 +219,32 @@ def _domain_envelope(exc: DomainError) -> str:
 
 
 def _build_dataset(group_a, group_b, label_a, label_b, holder, matrix_id=None):
-    """統計エンジンの行列（`matrix_id`、省略時は既定の前処理）から MSLipidMapper へ渡す表を作る。
+    """統計エンジンの行列から MSLipidMapper へ渡す表を作る。
 
+    行列は dataset_compare / dataset_pca と同じ決め方（`matrix_inputs(prefer_latest=True)`）: `matrix_id` を
+    渡せば登録済みのその行列、省けばこのハンドルで `dataset_preprocess` が最後に作った行列、それも無ければ
+    既定の前処理（出所は文脈の `matrix_source` = `matrix_id` / `latest_preprocess` / `default`）。
     値は行列の注入ごとの線形値（生体だけ。QC・ブランク・除外は元から入らない）で、欠測は 0
     （MSLipidMapper の約束）。ここでは登録しない（要求の検査がすべて済んでから呼び出し側が
     `register_default` で登録し、前処理の記録を書く）。戻り値は
     `((表, 正規化の注記, dataset_id, 群名 a, 群名 b, 試料 → 単位, 行列 ID, 文脈), None)` か `(None, 封筒)`。
     試料 → 単位は行列の units（collapse_replicates=True の行列で subject_id のある注入は個体にまとまり、
-    それ以外は注入ごと）。文脈は `{"entry", "study", "config", "inputs", "prepared", "n_units"}`
-    （名指しの行列なら entry がある。n_units は比べる 2 群それぞれの単位の数）。
+    それ以外は注入ごと）。文脈は `{"entry", "study", "config", "inputs", "prepared", "n_units", "matrix_source"}`
+    （登録済みの行列なら entry がある。n_units は比べる 2 群それぞれの単位の数）。
     """
     ds = holder.dataset
     if ds is None:
         return None, mcp_errors.missing_state("dataset", ["load_dataset"],
                                               "先に load_dataset を実行してください。")
     try:
-        entry, inputs, config = stats_results.matrix_inputs(ds, matrix_id)
+        entry, inputs, config = stats_results.matrix_inputs(ds, matrix_id, prefer_latest=True)
     except stats_results.MatrixNotFound:
         return None, mcp_errors.missing_state(
             "stat_matrix", ["dataset_preprocess"],
             f"行列 {matrix_id!r} がありません（無い・または除外や試料の表の変更で古くなりました）。"
             "dataset_preprocess を実行し直して、その matrix_id を渡してください。")
+    matrix_source = ("matrix_id" if matrix_id is not None
+                     else "latest_preprocess" if entry is not None else "default")
     study = None
     try:
         if entry is not None:
@@ -228,10 +252,11 @@ def _build_dataset(group_a, group_b, label_a, label_b, holder, matrix_id=None):
         else:
             study = from_dataset(ds, **inputs)
             prepared = stats_results.prepare_default(study, config)
-            if not hasattr(prepared, "matrix_id"):          # NeedsInput
-                return None, mcp_errors.default_matrix_needs_input(prepared, "pathway_project")
     except DomainError as exc:
         return None, _domain_envelope(exc)
+    # 直近の前処理の行列なら、以降のエラーに行列と出所を添える。既定の行列はまだ登録していないので
+    # 添えない（要求の検査で止まれば行列も記録も残さない）
+    chosen = _matrix_details(prepared.matrix_id, matrix_source) if entry is not None else {}
     if prepared.sample_values is None or not prepared.sample_ids:
         return None, mcp_errors.missing_state(
             "stat_matrix", ["dataset_preprocess"],
@@ -248,15 +273,19 @@ def _build_dataset(group_a, group_b, label_a, label_b, holder, matrix_id=None):
             f"行列 {prepared.matrix_id} に無い試料が指定されています（QC・ブランク・除外した試料は行列に入りません）: "
             f"{', '.join(absent[:20])}",
             {"absent": absent[:20], **({"absent_n_more": len(absent) - 20} if len(absent) > 20 else {}),
-             "matrix_id": prepared.matrix_id})
+             "matrix_id": prepared.matrix_id, **chosen})
     values = np.asarray(prepared.sample_values, dtype=float)
     # 欠測は 0（MSLipidMapper の約束）。0 以下・非有限はエンジンも欠測として扱うので同じく 0 で書く
     values = np.where(np.isfinite(values) & (values > 0), values, 0.0)
-    table = handoff.build_from_dataset(
-        pp_matrix=values, pp_sample_names=names, pp_feature_names=list(prepared.feature_ids),
-        roles=ds.roles, sample_names=ds.sample_names, sample_ids=ds.sample_ids,
-        metadata_rows=ds.sample_metadata_rows, annotations=ds.feature_annotations,
-        group_a=wanted_a, group_b=wanted_b, group_a_label=label_a, group_b_label=label_b)
+    try:
+        # 群の大きさ・サブクラス注釈の付いた特徴の数は、使った行列（足切り・除外）で決まる
+        table = handoff.build_from_dataset(
+            pp_matrix=values, pp_sample_names=names, pp_feature_names=list(prepared.feature_ids),
+            roles=ds.roles, sample_names=ds.sample_names, sample_ids=ds.sample_ids,
+            metadata_rows=ds.sample_metadata_rows, annotations=ds.feature_annotations,
+            group_a=wanted_a, group_b=wanted_b, group_a_label=label_a, group_b_label=label_b)
+    except handoff.HandoffError as exc:
+        return None, _with_matrix(mcp_errors.pathway_error(exc.code, exc.message, exc.details), chosen)
     subject_of = {handoff.clean_text(name_of.get(sid, sid)): unit.unit_id
                   for unit in prepared.units for sid in unit.sample_ids}
     unit_counts = {}
@@ -264,14 +293,14 @@ def _build_dataset(group_a, group_b, label_a, label_b, holder, matrix_id=None):
         n_units = len({subject_of[handoff.clean_text(n)]
                        for n, g in zip(table.sample_names, table.groups) if g == label})
         if n_units < 2:
-            raise handoff.HandoffError(
+            return None, mcp_errors.pathway_error(
                 "PATHWAY_BAD_REQUEST",
                 f"群 {label} の単位が 2 未満です（単位は行列 {prepared.matrix_id} の units: 反復をまとめた"
                 f"行列なら個体、まとめない行列なら注入。{n_units}）。",
-                {"group": str(label), "n_units": n_units})
+                {"group": str(label), "n_units": n_units, **chosen})
         unit_counts[handoff.clean_text(label)] = n_units
     context = {"entry": entry, "study": study, "config": config, "inputs": inputs, "prepared": prepared,
-               "n_units": unit_counts}
+               "n_units": unit_counts, "matrix_source": matrix_source}
     return (table, _normalization_text(prepared), ds.dataset_id, label_a, label_b, subject_of,
             prepared.matrix_id, context), None
 
@@ -298,9 +327,13 @@ def pathway_project(group_a: str | list[str] | None = None,
 
     - 入力は `load_dataset` で開いた直近のデータセットの統計エンジンの行列
       （`dataset_handle` でハンドルを選べる。run の置き場所もそのデータセットの解析フォルダ）。
-    - matrix_id: dataset_preprocess が返した行列 ID。省略時は既定の前処理（dataset_compare / dataset_pca と
-      違い、直近の dataset_preprocess の行列は選ばない。drift=auto が補正を当てないときは当てずに計算する）。
-      古い・無い ID は missing_state。
+    - matrix_id: dataset_preprocess が返した行列 ID。省略時は dataset_compare / dataset_pca と同じく、この
+      ハンドルで dataset_preprocess が最後に作った行列、無ければ既定の前処理で行列を作って登録する（drift=auto
+      が補正を当てなかった行列なら、戻り値と manifest の warnings に drift_not_applied_by_default（理由と
+      呼び直し方。dataset_pca と同じ。補正するなら dataset_preprocess(drift_mode="on") の matrix_id を渡す））。
+      使った行列は戻り値と manifest の matrix_id と matrix_source
+      （"matrix_id" / "latest_preprocess" / "default"。省いた呼び出しのエラーにも details.matrix_id /
+      matrix_source）。古い・無い ID は missing_state。
       MSLipidMapper へは行列の注入ごとの値（欠測は 0）を渡す。比べる単位は行列の units に従う:
       collapse_replicates=True（既定）の行列で、試料の表に subject_id がある注入だけが log2 の平均で
       1 個体にまとまる。collapse_replicates=False の行列（dataset_compare に渡したのと同じ matrix_id）
@@ -352,16 +385,13 @@ def pathway_project(group_a: str | list[str] | None = None,
     if str(group_a_label) == str(group_b_label):
         return mcp_errors.pathway_error(
             "PATHWAY_BAD_REQUEST", "group_a_label と group_b_label が同じです。")
-    try:
-        built, err = _build_dataset(group_a, group_b, group_a_label, group_b_label, holder, matrix_id)
-    except handoff.HandoffError as exc:
-        return mcp_errors.pathway_error(exc.code, exc.message, exc.details)
+    built, err = _build_dataset(group_a, group_b, group_a_label, group_b_label, holder, matrix_id)
     if err:
         return err
     table, normalization, dataset_id, label_a, label_b, subject_of, used_matrix_id, ctx = built
+    matrix_source = ctx["matrix_source"]
     # 要求の検査がすべて済んだので、既定の行列をここで登録して前処理の記録を 1 件書く（dataset_compare と同じ）。
-    # 以降のエラーには行列の ID を添える（呼び直しにそのまま使える）。
-    implicit_matrix = None
+    # 以降のエラーには、名指しでない行列（直近の前処理・既定）の ID と出所を添える（呼び直しにそのまま使える）。
     entry, preprocess_record = ctx["entry"], None
     if entry is None:
         try:
@@ -369,7 +399,11 @@ def pathway_project(group_a: str | list[str] | None = None,
                 holder, holder.dataset, ctx["study"], ctx["prepared"], ctx["config"], ctx["inputs"])
         except DomainError as exc:
             return _domain_envelope(exc)
-        implicit_matrix = used_matrix_id
+    implicit_matrix = _matrix_details(used_matrix_id, matrix_source)
+    # drift=auto が補正を当てなかった行列なら、その理由と呼び直し方を戻り値と manifest に添える
+    # （dataset_pca と同じ。数字は補正なしで出ている。normalization の drift=skipped だけでは呼び直し方が分からない）
+    held = [dict(w) for w in ctx["prepared"].warnings or []
+            if w.get("code") == "drift_not_applied_by_default"]
     # 群名は mzTab-M に書いた形（# → _）で JSON-LD に戻ってくる
     label_a, label_b = handoff.clean_text(label_a), handoff.clean_text(label_b)
 
@@ -394,7 +428,7 @@ def pathway_project(group_a: str | list[str] | None = None,
         return _bridge_envelope(exc, run_dir, implicit_matrix)
     except jsonld.JsonldError as exc:
         return _with_details(mcp_errors.pathway_error(exc.code, exc.message),
-                             run_dir=str(run_dir), matrix_id=implicit_matrix)
+                             run_dir=str(run_dir), **implicit_matrix)
 
     # 上流は指定鎖ごとに全ノードへ空スコープを出すので、鎖がデータに無くても失敗しない。
     # 分子種の入った鎖スコープがどのパスウェイにも無い鎖は指定の誤りとして返す（spec §5）
@@ -447,7 +481,9 @@ def pathway_project(group_a: str | list[str] | None = None,
                 "pathways": pathways, "acyl_chains": list(acyl_chains or []),
                 "aggregation": aggregation, "q_threshold": q_threshold,
                 "normalization": normalization, "dataset_id": dataset_id,
-                "matrix_id": used_matrix_id, "preprocess_record_id": (entry or {}).get("record_id"),
+                "matrix_id": used_matrix_id, "matrix_source": matrix_source,
+                "preprocess_record_id": (entry or {}).get("record_id"),
+                **({"warnings": held} if held else {}),
                 "test": method,
                 "backend": result.get("backend"),
                 "remote_fallback": result.get("remote_fallback"),
@@ -468,7 +504,9 @@ def pathway_project(group_a: str | list[str] | None = None,
     return json_payload({
         "run_id": run_id, "source": "dataset", "run_dir": str(run_dir),
         "groups": groups, "n_units": ctx["n_units"], "group_a": label_a, "group_b": label_b,
-        "normalization": normalization, "matrix_id": used_matrix_id, "method": method,
+        "normalization": normalization, "matrix_id": used_matrix_id, "matrix_source": matrix_source,
+        "method": method,
+        **({"warnings": held} if held else {}),
         **({"preprocess_record": preprocess_record} if preprocess_record is not None else {}),
         "backend": _backend_text(result),
         "handoff": table.report,
