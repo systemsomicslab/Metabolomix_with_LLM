@@ -192,6 +192,19 @@ def annotation_row(fid, source, raw, index=0):
                 scores={k:raw[k] for k in ('confidence_measure','confidence_value') if raw.get(k) is not None})
 
 
+def library_candidate(candidate, computed: bool):
+    """根拠バンドルに写す SME の候補。`computed`（その特徴の rank 1 の理論 m/z を組成式と付加体から計算した。
+    `DatasetState.theoretical_mz_computed`）なら、その `theoretical_mass_to_charge` を空にした写し。
+
+    バンドルの `provenance.theoretical_mass_to_charge` はライブラリの記録のプリカーサー m/z（mzTab-M の SME の値）の
+    意味のまま保つ。計算した値は注釈が表す m/z で別物だが、来歴の欄を足さず（契約の形を変えない）、
+    `directory=` で開いたデータセットでは計算の前と同じ空にする。データセットの候補は変えない。
+    """
+    if not computed or candidate.get('rank') != 1:
+        return candidate
+    return {**candidate, 'theoretical_mass_to_charge': None}
+
+
 def curate_annotations(annotations, flags, fid_to_spot):
     if not flags:
         return annotations
@@ -430,6 +443,7 @@ def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=N
         raise DomainError('EVIDENCE_INTENSITIES_UNAVAILABLE',
                           f'試料ごとの値を取り出せません: {exc.message}',exc.details) from exc
     adducts = alignment_qc._feature_adducts(ds)
+    computed_mz = getattr(ds,'theoretical_mz_computed',None) or set()
     features, annotations, mapping = [], [], {}
     for row in result['results']:
         fid = str(row['feature'])
@@ -441,7 +455,8 @@ def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=N
         features.append(feature)
         candidates = getattr(ds,'feature_candidates',{}).get(row['feature'],[]) or []
         if candidates:
-            annotations.extend(annotation_row(fid,'msdial_sme',candidate,i) for i,candidate in enumerate(candidates))
+            annotations.extend(annotation_row(fid,'msdial_sme',library_candidate(candidate,fid in computed_mz),i)
+                               for i,candidate in enumerate(candidates))
             if meta.get('inchikey') or meta.get('name'):
                 annotations.append(annotation_row(fid,'msdial_resolved_annotation',meta))
             annotation = getattr(ds,'feature_annotations',{}).get(row['feature'],{})

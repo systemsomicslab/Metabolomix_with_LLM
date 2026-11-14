@@ -300,6 +300,30 @@ def test_merged_ids_and_origin(tmp_path, monkeypatch):
     assert merged.roles.keys() == {"S1", "S2", "S3"} and merged.sample_meta.keys() == {"S1", "S2", "S3"}
 
 
+@pytest.mark.parametrize("pos_source,neg_source,expected", [
+    ("formula_adduct", "formula_adduct", "formula_adduct"),
+    ("mztab", "mztab", "mztab"),
+    ("formula_adduct", "mztab", "mixed"),
+])
+def test_merged_theoretical_mz_source(tmp_path, monkeypatch, pos_source, neg_source, expected):
+    """SME の理論 m/z の出所は統合後も残す（2 極性で違えば mixed。質量精度の読み方が変わるため）。"""
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.theoretical_mz_source, neg.theoretical_mz_source = pos_source, neg_source
+    merged, _ = _merge(pos, neg, mapping_rows=None)
+    assert merged.theoretical_mz_source == expected
+
+
+def test_merged_theoretical_mz_computed_ids(tmp_path, monkeypatch):
+    """計算した理論 m/z の特徴は統合後の ID で持つ（根拠バンドルが特徴ごとに来歴へ写すかを決める）。"""
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.theoretical_mz_computed, neg.theoretical_mz_computed = {"1"}, set()
+    merged, _ = _merge(pos, neg, mapping_rows=None)
+    assert merged.theoretical_mz_computed == {"positive:1"}
+    assert pos.theoretical_mz_computed == {"1"}  # 元は不変
+
+
 def test_merged_quant_state_and_record(tmp_path, monkeypatch):
     _point(tmp_path, monkeypatch)
     pos, neg = _pair(tmp_path)

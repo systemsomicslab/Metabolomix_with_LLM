@@ -307,6 +307,7 @@ def test_mass_accuracy_msms_matched_needs_the_sml_columns(data):
     # 既定の rank1 は今までどおり動く（旗の有無の注記は付かない）
     plain = json.loads(R.dataset_mass_accuracy(dataset_handle=handle))
     assert plain["subset"] == "rank1" and "subset_available" not in plain
+    assert plain["theoretical_mz_source"] == "mztab"
     bad = json.loads(R.dataset_mass_accuracy(subset="nope", dataset_handle=handle))
     assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
 
@@ -402,6 +403,7 @@ def test_novel_candidates_from_result_id_and_from_spec(data):
     out = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
     assert out["status"] == "success" and out["n_rows"] == 2
     assert out["group_ref"] == "HC"
+    assert out["theoretical_mz_source"] == "mztab"      # mzTab-M の SME の値
     excluded = json.loads(R.dataset_novel_candidates(
         {**spec, "exclude": {"inchikey_blocks": [GABA_KEY]}}, dataset_handle=handle))
     assert excluded["n_rows"] == 1

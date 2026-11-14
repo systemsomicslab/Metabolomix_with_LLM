@@ -766,6 +766,8 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str | None = None
     に検定・CI 水準・判定規則・BH の母集団・単位。`intensities.tsv` は結果が読んだ行列の線形値
     （正規化の後・log2 の前、補完なし＝`pre_imputation`）。探索専用のデータセットも断らず、manifest の
     最上位に `exploratory`（`{exploratory_only: true, reason}`）を足す（戻り値にも）。
+    `annotations.tsv` の `msdial_sme` 行の来歴の `theoretical_mass_to_charge` はライブラリの記録のプリカーサー m/z
+    （mzTab-M の SME の値）だけ。`directory=` で開いたデータセットが組成式と付加体から計算した値は写さない（`null`）。
 
     spectrum_links は同じアラインメントの `.dcl` へ ID（SMF_ID == AlignmentID == `.dcl` の番号）で
     結び、m/z・RT は検証にだけ使う。`.arf2` / `.dcl` はハンドルならそのハンドルのもの、対話の

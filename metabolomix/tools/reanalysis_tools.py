@@ -881,6 +881,11 @@ def dataset_mass_accuracy(band_edges: list[float] | None = None, rank: int = 1,
     由来も数える。この旗は rank 1 の同定を表すので `rank=1` のときだけ。列の無い mzTab では
     `subset_available: false` と `note` を付けて n=0 を返す——手順の後退（帯の n 不足 → 極性全体 →
     rank1）を止めない）。
+    `theoretical_mz_source`: 理論 m/z の出所。`mztab`（mzTab-M の SME の値＝ライブラリの記録の
+    プリカーサー m/z。job / pipeline を解析フォルダで読んだときも照合した mzTab-M から写す）/
+    `formula_adduct`（mzTab-M と照合しない解析フォルダ〔`load_dataset(directory=...)`〕。注釈の組成式と
+    付加体から計算した値で、注釈を表す。組成式か付加体が読めない同定は数えない）/ `mixed`（出所の違う
+    2 極性の統合）。
     `injection_trend`: 試料ごとの実測 m/z（隣接 `.arf` の検出されたセル）があれば、試料ごとの
     誤差の中央値 `per_injection`（`sample` `injection_order` `median_ppm` `n`）と注入順との
     `spearman_rho`（5 試料未満、または注入順の出所が `filename`＝採取時刻が読めないときは null。
@@ -920,10 +925,16 @@ def dataset_mass_accuracy(band_edges: list[float] | None = None, rank: int = 1,
                 "選べない（n=0）。subset=rank1 を使う"}
     return json_payload(round_floats({"status": "success", "rank": rank, "subset": subset,
                                       **extra,
+                                      "theoretical_mz_source": _theoretical_mz_source(ds),
                                       "band_edges": sorted(float(e) for e in edges),
                                       **summary,
                                       "injection_trend": mass_accuracy.injection_trend(ds, rows)},
                                      digits=4))
+
+
+def _theoretical_mz_source(ds) -> str:
+    """SME の理論 m/z の出所（`DatasetState.theoretical_mz_source`。`mztab` / `formula_adduct` / `mixed`）。"""
+    return getattr(ds, "theoretical_mz_source", None) or "mztab"
 
 
 def _novel_result_stats(ds, result: dict, source: dict, *,
@@ -989,6 +1000,8 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     spec の `ppm_offset`（任意。`{default, bands: [{max_mz, offset}]}`）は質量の窓の中心のずれ
     （判定が `|ppm − 中心| ≤ 許容幅`。幅と行の `ppm` 列は変えず、渡したときだけ `rule_hash` に入る。
     帯は理論 m/z が `max_mz` 未満の最初のもの。形の誤りは `NOVEL_SPEC_INVALID`）。
+    `theoretical_mz_source`（戻り値と JSON）は行の `ppm` の理論 m/z の出所（`dataset_mass_accuracy` と同じ。
+    `formula_adduct` は注釈の組成式と付加体から計算した値）。
     output_path: JSON をここへ書き、要約だけを返す。省略時は行を TSV で返し、50 を超えれば q の昇順の
         先頭 50 行だけを載せる（`truncated: true`・`n_rows` が全件。断らない）。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
@@ -1054,6 +1067,7 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
                           "rule": normalized,
                           "rule_hash": mass_accuracy.rule_hash(normalized, groups_hash),
                           "group_ref": group_ref, "group_test": group_test,
+                          "theoretical_mz_source": _theoretical_mz_source(ds),
                           **({"merge_split": merge_info} if merge_info else {}),
                           **({"labels": labels_info} if labels_info else {}),
                           "rows": rows}
@@ -1086,6 +1100,7 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
         "status": "success",
         "rule_hash": result_payload["rule_hash"],
         "group_ref": group_ref, "group_test": group_test,
+        "theoretical_mz_source": result_payload["theoretical_mz_source"],
         **({"merge_split": merge_info} if merge_info else {}),
         **({"labels": labels_info} if labels_info else {}),
         "n_rows": len(rows),
