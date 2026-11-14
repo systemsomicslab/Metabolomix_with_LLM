@@ -208,9 +208,9 @@ hash も入れる——同じ spec でも割れの組が変われば別の規則
  "design": {"factors": ["group"], "covariates": [], "block": null},
  "comparisons": [{"id": "RA_vs_HC", "factor": "group", "reference": "HC", "test": "RA"}],
  "analyses": [{"analysis_id": "main", "kind": "compare", "test": "moderated_t",
-               "effect_size": "log2_mean_difference", "bh_population": "matrix",
+               "effect_size": "log2_mean_difference", "bh_population": "matrix", "p_adjust": "bh",
                "verdict": {"q": 0.05, "equivalence_fc": 1.2}, "min_detected_fraction": 0.5,
-               "allow_confounded": false}],
+               "allow_confounded": true}],
  "primary": "main"}
 ```
 
@@ -220,10 +220,11 @@ hash も入れる——同じ spec でも割れの組が変われば別の規則
 | `preprocess` | 上の値 | 前処理の設定（`dataset_preprocess` の引数と同じ。`drift.mode` は `auto` / `on` / `off`、足切りは `null` でその足切りを行わない、`normalize.method` は `auto` / `none` / `tic` / `median` / `pqn`。任意の欄 `drift.loess_degree`（`1` 既定 / `2`）と `normalize.features` / `normalize.exclude_features`（正規化の係数を求める特徴 ID。既定の値のときは spec に現れない）は `dataset_preprocess` の `loess_degree` / `normalization_features` / `normalization_exclude_features` と同じ）。`injection_columns` は個体のまとめの鍵から外す試料の表の列（取得日・注入番号など注入ごとに違う属性）。不正なら `ANALYSIS_SPEC_INVALID`（`details.field` が `preprocess.` から始まる） |
 | `design` | `{"factors": ["group"], "covariates": [], "block": null}` | `factors`（重複のない文字列。`group`・`batch` か、試料の表の列名。sample-manifest v2 の後ろに足した因子の列も使える。交互作用の対比は 2 因子のモデルだけ）・`covariates`（`{name, type: numeric \| categorical, reference?}`）・`block`（`"subject_id"` など） |
 | `comparisons` | 必須 | 対比のリスト。`{id, factor, reference, test, at?}`（`at` は他の因子の水準で層別）か、交互作用 `{id, kind: "interaction", factors: [2 因子], levels: {因子: [基準, 比較]}}`。`id` は英数字と `_ . -` で重複不可 |
-| `analyses[].kind` | 必須 | `compare` / `composition` / `pca`。`analysis_id` は重複不可 |
-| compare / composition | | `test`（既定 `moderated_t`。`welch` / `student` / `mannwhitney` は 1 因子・共変量なし・ブロックなしだけ）・`effect_size`（`log2_mean_difference` 既定 / `arithmetic_mean_ratio`）・`bh_population`（`matrix` 既定 / `annotated` / `reported`。`reported` は `reported_feature_ids` が要り、そのときだけ書ける）・`verdict.q`（既定 0.05）・`verdict.equivalence_fc`（既定 1.2）・`min_detected_fraction`（既定 0.5）・`allow_confounded`（既定 false。完全交絡は `STATISTIC_CONFOUNDED` で止める） |
+| `analyses[].kind` | 必須 | `compare` / `composition` / `pca` / `plsda`。`analysis_id` は重複不可 |
+| compare / composition | | `test`（既定 `moderated_t`。`welch` / `student` / `mannwhitney` は 1 因子・共変量なし・ブロックなしだけ）・`effect_size`（`log2_mean_difference` 既定 / `arithmetic_mean_ratio`）・`bh_population`（`matrix` 既定 / `annotated` / `reported`。`reported` は `reported_feature_ids` が要り、そのときだけ書ける）・`p_adjust`（多重比較の補正。`bh` 既定 / `bonferroni` / `holm` / `none`。`q` はこの方法の値）・`verdict.q`（既定 0.05）・`verdict.equivalence_fc`（既定 1.2）・`min_detected_fraction`（既定 0.5）・`allow_confounded`（既定 true。完全交絡でも比べて `confounding` と行の `confounded` に印を付ける。false なら完全交絡で `STATISTIC_CONFOUNDED` で止める） |
 | pca | | `scaling`（`autoscale` 既定 / `pareto`）・`n_components`（既定 5）・`impute`（`half_min` 既定 / `knn` / `none`） |
-| `primary` | compare / composition が 1 つならそれ | 2 つ以上あるときは必須（`ANALYSIS_SPEC_INVALID`） |
+| plsda | | PLS 判別分析。クラスは `design.factors` の水準の組（cell。`classes` に cell 名を並べて絞れる。2 つ以上）。`n_components`（既定 2）・`scaling`（`autoscale` 既定 / `pareto`）・`impute`（`half_min` 既定 / `knn` / `none`）・`cv_folds`（層化 k 分割の数。既定 7、2 以上）・`n_permutations`（並べ替え検定の回数。既定 200、1〜10000）・`seed`（分割と並べ替えの乱数。既定 0） |
+| `primary` | compare / composition が 1 つならそれ | 2 つ以上あるときは必須（`ANALYSIS_SPEC_INVALID`）。pca / plsda は選べない |
 
 **自己完結（再現のための規則）。** v2 は spec だけで同じ数字を出し直せる実行で、`dataset_exclude` の除外は読まない。
 spec の `input` に無い除外がデータセットにあれば、結果の `warnings` に
@@ -240,8 +241,11 @@ spec の `preprocess.drift.mode` を `"on"` にして呼び直す（`rule_hash` 
 **戻り値は要約だけ。** `{status, schema: "analysis-result.v2", rule_hash, matrix_id, input_fingerprint: {dataset_hash,
 sample_table_hash}, primary, warnings, analyses}`。`analyses[]` は解析ごとの要約で、compare は `n_rows`・`n_tested`・
 `verdicts: {changed, unchanged, inconclusive}`・`n_q_below`（`q ≤ 閾値`）・`test`・`warnings`、composition はそれに
-`tables`（`clr` / `absolute` ごとの同じ件数）・`class_label_kind`・`n_classes`、pca は `scaling`・`imputation`・`n_fit`・
-`n_units`・`n_qc_projected`・`n_features`・`explained_variance_ratio`。長い一覧は切る。全量（行・CI・事前分布・交絡の
+`tables`（`clr` / `absolute` ごとの同じ件数）・`class_label_kind`・`n_classes`、compare はさらに `p_adjust_method` と、
+要因の F があれば `factorial`（効果ごとの `{df1, n_tested, n_q_below}`）、pca は `scaling`・`imputation`・`n_fit`・
+`n_units`・`n_qc_projected`・`n_features`・`explained_variance_ratio`、plsda は `classes`（cell → 個体数）・`n_units`・
+`n_features`・`scaling`・`imputation`・`n_components`・`r2x_cum`・`r2y_cum`・`q2_cum`・`q2`・`cv`・`permutation`・`vip_top`
+（VIP の上位 10）・`warnings`（pca と plsda は行を持たない）。長い一覧は切る。全量（行・CI・事前分布・交絡の
 表・PCA のスコア）は `output_path` の JSON に書く。**行を返すのは、どの解析も行数が 50 以下のときだけ**（v1 と同じ。
 TSV の列は `contrast_id feature_id status reason log2fc ci_low ci_high p q verdict`、composition は先頭に `table` 列）。
 50 を超える解析があって `output_path` が無ければ `ANALYSIS_OUTPUT_REQUIRED`。`rule_hash` は正規化した spec の hash
@@ -252,14 +256,27 @@ matrix_id, preprocess: {steps, warnings, subject_source}, primary, analyses: [{a
 は kind ごとに次のスキーマ。
 
 - **`stats-compare.v1`**（compare）: `{matrix_id, test（実際に使った検定名）, effect_size_definition: {name, description},
-  ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n_by_contrast,
-  q_interpretation}, presence, prior, design, group_n, subject_source, confounding, warnings, rows, omnibus}`。
-  `q_interpretation` は `discovery_fdr`（`matrix` / `annotated`）か `reproduction_only`（`reported`。報告した特徴だけの
-  補正で、探索の FDR ではない）。`omnibus` は 3 群以上の F 検定（無ければ null）。
+  ci_level, p_adjust_method, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name,
+  n_by_contrast, p_adjust_method, q_interpretation}, presence, prior, design, group_n, subject_source, confounding,
+  warnings, rows, omnibus, factorial}`。
+  `q_interpretation` は `discovery_fdr`（`p_adjust=bh` で `matrix` / `annotated`）・`fwer`（`bonferroni` / `holm`）・
+  `unadjusted`（`none`）か `reproduction_only`（`reported`。報告した特徴だけの補正で、探索の FDR ではない）。
+  `omnibus` は cell が 3 つ以上のときの全 cell の F 検定の行 `{feature_id, f, f_p, f_q, df1, df2}`（無ければ null）。
+  `df2` は `df_prior + df_residual` で、事前分布の自由度が ∞ なら `"inf"`（JSON。F の参照分布は χ²(df1)/df1 の極限）、
+  F を計算していない行では null。
+  `factorial` は因子が 2 つ以上で全 cell がそろうときの主効果と交互作用の F（Type III。多水準を含む moderated F）で、
+  `{effects: {効果の名前: {factors, df1}}, hypothesis, rows: [{effect, feature_id, f, f_p, f_q, df1, df2}]}`（無ければ null。
+  効果の名前は因子名、交互作用は `:` で結ぶ。`f_q` は効果ごとに `p_adjust` で補正）。
+  `confounding` は `{batch_table, batch_status, cramers_v, injection_order, warnings, by_contrast: {対比 ID: {batch_status,
+  confounded}}}`（全対比をまとめた表と、対比ごとの表。`confounded` は `true`＝完全交絡 / `false` / `null`＝バッチ不明で
+  評価できない。交絡なしではない）。
   行（対比 × 特徴）: `feature_id`・`contrast_id`・`reference`・`test`・`status`（`tested` / `not_tested`）・`reason`・
   `n_reference` / `n_test`（有限値の個体数）・`detected_reference` / `detected_test`（検出された個体数。検出状態が
   無ければ null）・`quantity_judgeable`（群のどの cell も検出の割合が `min_detected_fraction` 以上か。null は検出状態なし）・
-  `log2fc`（正なら test が高い）・`ci_low` / `ci_high`・`ci_unavailable_reason`・`statistic` / `df` / `p`・`mean_reference` /
+  `constant_in_group`（群の cell の中で値がすべて同じ＝埋め値の疑いの cell の一覧。無ければ null。判定は変えず、件数を警告
+  `constant_in_group` に出す）・`confounded`（その対比が群とバッチの完全交絡か。評価できなければ null）・
+  `log2fc`（正なら test が高い）・`se`（log2fc の標準誤差。順位の検定・算術平均の比では null）・`ci_low` / `ci_high`・
+  `ci_unavailable_reason`・`statistic` / `df` / `p`・`mean_reference` /
   `mean_test`（個体ごとの前処理後の線形値の算術平均。単純な 2 群の対比だけ、交互作用は null）・`q`・`presence_p` /
   `presence_q`（検出の有無そのものの検定）・`verdict`・`verdict_reason`。
 - **判定（`verdict`）は 3 値**で、規則は機械的:
@@ -272,6 +289,20 @@ matrix_id, preprocess: {steps, warnings, subject_source}, primary, analyses: [{a
 - **`stats-pca.v1`**（pca）: `{matrix_id, scaling, log2: true, imputation, n_fit, unit_ids, qc_ids, scores: {units, qc},
   explained_variance_ratio, loadings, kept_features}`。軸は生体の個体だけで決め、QC は同じ軸へ**投影**する（軸の計算に
   使わない）。欠測は PCA のためだけに補い（`imputation`）、行列そのものは変えない。
+- **`stats-plsda.v1`**（plsda）: `{matrix_id, factors, classes: {cell: 個体数}, y_coding, n_units, unit_ids, scaling,
+  imputation, n_features, n_features_dropped_constant, n_components_requested, n_components, r2x_cum, r2y_cum, q2_cum, q2,
+  cv: {method: "stratified_kfold", folds, seed, scaling_within_fold: true, q2_definition: "1 - PRESS/TSS"},
+  permutation: {n, n_finite, p, statistic: "q2", q2_null_mean, q2_null_q95}, vip: [{feature_id, vip}]（降順）,
+  scores: {unit_ids, values}, warnings}`。**成分数・交差検証の Q2・並べ替え検定の p を必ず返す**（PLS-DA は群の札で
+  軸を選ぶので、当てはめの R2Y やスコアの分離だけでは過学習と区別できない）。Q2 は層化 k 分割で、分割ごとに学習の個体
+  だけで中心と尺度を決めて予測した `1 − PRESS/TSS`（`q2_cum` は成分 1〜A それぞれ、`q2` は A 成分）。並べ替え検定は
+  クラスの札を入れ替えて同じ分割で Q2 を出し直した帰無分布で `p = (1 + #{Q2_perm ≥ Q2}) / (1 + n)`。VIP は全個体の
+  当てはめの変数重要度（二乗の平均が 1。目安の 1 は経験則で、検定ではない）。Y は 2 クラスなら後のクラスを 1 とした
+  1 列、3 クラス以上はクラスごとの指示変数。全個体で値の変わらない特徴は外す。成分数・分割数を個体数と特徴数で
+  頭打ちにしたら警告（`n_components_capped` / `cv_folds_capped`）、Q2 が正でなければ `plsda_q2_not_positive`（予測
+  できない模型の VIP は判別の根拠にならない）。値の欠けた個体は外す（`units_missing_model_values`）。エラーは
+  `PLSDA_SPECIFICATION_INVALID`（引数）・`STATISTIC_GROUP_TOO_SMALL`（2 個体以上のクラスが 2 つ未満）・
+  `PLSDA_MISSING_VALUES`（`impute=none` で欠測あり）・`PLSDA_TOO_FEW_FEATURES`（値の変わる特徴が 2 未満）。
 - **`stats-composition.v1`**（composition）: `{class_label_kind, classes, unclassified_features, zero_handling, clr, absolute,
   unit, warnings}`。`clr` / `absolute` はそれぞれ stats-compare.v1。クラスの合計が 0 以下の個体があるクラスは `clr` から
   除く（`zero_handling.excluded_classes`）。欠測のメンバーは合計に 0 として入り、その件数と警告
@@ -730,7 +761,7 @@ UTF-8・改行は CRLF）。
 | `comparison.statistics` | `{test, ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n, q_interpretation}, subject_source, n_units_a, n_units_b}`。`n` は選んだ対比の BH の母集団の大きさ |
 | `comparison.effect_size_definition` / `mean_definition` | 効果量の定義（`{name, description}`）と、`mean_a` / `mean_b` が「個体ごとの前処理後の線形値の算術平均」であること |
 | `comparison.matrix_id` / `rule_hash` / `contrast_id` | どの行列・どの規則・どの対比を書いたか（`contrast_id` は 2 群の結果なら 1 つの対比の ID） |
-| `comparison.unadjusted_confounded` | `allow_confounded=true` で完全交絡を越えて走った比較だけ `true`（それ以外は欄が無い）。同じ印は来歴 `provenance.result.comparison.unadjusted_confounded`（と `provenance.result.warnings` の説明）にも載る |
+| `comparison.unadjusted_confounded` | `allow_confounded=true`（既定）で完全交絡（全対比をまとめた表か、その対比の表）を越えて走った比較だけ `true`（それ以外は欄が無い）。同じ印は来歴 `provenance.result.comparison.unadjusted_confounded`（と `provenance.result.warnings` の説明）にも載る |
 | `intensities_stage` | `pre_imputation`（補完の前）/ `post_imputation`（補完の後） |
 | `population.detection_unavailable_reason` | `detected` が全行空のときの理由。検出状態を使えれば `null` |
 | `population.exclusions` | 除外の来歴。エンジンの結果は、その行列を作ったときの除外（`dataset_exclude` の試料・特徴。名前は 20 件で切り、残りは `n_more`）を、結果が読んだ行列の登録から引く（今の `ds.excluded_*` ではない） |

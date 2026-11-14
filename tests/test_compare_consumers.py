@@ -628,7 +628,8 @@ def test_allow_confounded_trace_reaches_export_volcano_and_evidence(tmp_path):
     from metabolomix.plots.result_output import _UNADJUSTED_CONFOUNDED_NOTE, figure_annotations
     ds = _install(_confounded(_annotate(_ds())), tmp_path)
     pp = json.loads(dataset_preprocess(**FLAT_OFF))
-    err = json.loads(dataset_compare(matrix_id=pp["matrix_id"], reference_group="C", test_group="T"))
+    err = json.loads(dataset_compare(matrix_id=pp["matrix_id"], reference_group="C", test_group="T",
+                                     allow_confounded=False))
     assert err["error"]["code"] == "STATISTIC_CONFOUNDED"
     out = json.loads(dataset_compare(matrix_id=pp["matrix_id"], reference_group="C", test_group="T",
                                      allow_confounded=True))

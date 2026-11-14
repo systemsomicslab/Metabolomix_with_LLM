@@ -236,7 +236,7 @@ subject_source, groups: {群: 個体数}, quant, steps, warnings, record, next}`
 
 #### 10.4 `dataset_pca`
 
-統計エンジンの PCA（`stats-pca.v1`）。`matrix_id`（`dataset_preprocess` の行列。省略時は既定の前処理）の log2 行列で、**軸は生体の個体だけで決め、QC は同じ軸へ投影する**（QC は軸の計算に使わない）。欠測は PCA のためだけに補う（`impute`）。`group_levels` / `group_factors` は色分けの表示と記録にだけ使い、スコア・寄与率は群の指定で変わらない。戻り値は `{status, result_id, matrix_id, scaling, log2: true, imputation, n_fit, n_qc_projected, explained_variance_ratio, groups: {群: 個体数}, record, loadings_note}` の要約で、スコア・ローディングの全量は `result_id`（`ds.last_pca`）に保持する。図は `dataset_plot(kind="pca" / "loadings")`（QC は白抜き、ローディングは軸の計算で値が変わった特徴だけ）。`matrix_id` を渡して、その行列が古い（除外・試料の表の変更）・無いときは `missing_state`（`dataset_preprocess` を案内）。`matrix_id` を省いた既定の前処理は尋ねない: `drift_mode=auto` がドリフト補正を当てなかった行列なら、戻り値に `warnings`（`drift_not_applied_by_default`。補正するなら `dataset_preprocess(drift_mode="on")` で行列を作り、その `matrix_id` を渡す）が付く。既定の前処理で行列を作ったときは、その行列を登録して前処理の記録も書く（エラーのときも `details.matrix_id` に残る）。結果（`stat_pca`）は、除外・試料の表の**どんな**更新（`group` だけの変更も）でも古くなる（`group_levels` / `group_factors` の色分けが焼き込まれているため）。
+統計エンジンの PCA（`stats-pca.v1`）。`matrix_id`（`dataset_preprocess` の行列。省略時は、そのハンドルで `dataset_preprocess` が最後に作った行列、無ければ既定の前処理）の log2 行列で、**軸は生体の個体だけで決め、QC は同じ軸へ投影する**（QC は軸の計算に使わない）。欠測は PCA のためだけに補う（`impute`）。`group_levels` / `group_factors` は色分けの表示と記録にだけ使い、スコア・寄与率は群の指定で変わらない。戻り値は `{status, result_id, matrix_id, matrix_source, scaling, log2: true, imputation, n_fit, n_qc_projected, explained_variance_ratio, groups: {群: 個体数}, record, loadings_note}` の要約で（`matrix_source` は `matrix_id` / `latest_preprocess` / `default`）、スコア・ローディングの全量は `result_id`（`ds.last_pca`）に保持する。図は `dataset_plot(kind="pca" / "loadings")`（QC は白抜き、ローディングは軸の計算で値が変わった特徴だけ）。`matrix_id` を渡して、その行列が古い（除外・試料の表の変更）・無いときは `missing_state`（`dataset_preprocess` を案内）。`matrix_id` を省いた行列の前処理は尋ねない: `drift_mode=auto` がドリフト補正を当てなかった行列なら、戻り値に `warnings`（`drift_not_applied_by_default`。補正するなら `dataset_preprocess(drift_mode="on")` で行列を作り、その `matrix_id` を渡す）が付く。既定の前処理で行列を作ったときは、その行列を登録して前処理の記録も書く（エラーのときも `details.matrix_id` に残る）。結果（`stat_pca`）は、除外・試料の表の**どんな**更新（`group` だけの変更も）でも古くなる（`group_levels` / `group_factors` の色分けが焼き込まれているため）。
 
 #### 10.5 手動サンプル/ピーク除外（`dataset_exclude`）
 
@@ -260,7 +260,7 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 
 #### 11.1 群ラベルの由来
 
-群ラベルは試料の情報の `group`（`dataset_status(view="samples")`。ファイル名由来の factor トークン / Class ID 機構、`metabolomix/msdial/classes.py` の `assign_sample_groups`）から取得する。バッチは試料の情報の `batch` で、実験情報シート・利用者の訂正・MS-DIAL の宣言（`.mddata`、mzTab-M の MS:4000088。全試料で同じ値の宣言は GUI の既定とみなして採らない）から来る値だけを使う。**試料名の 8 桁の数字（取得日らしい）はバッチに当てない**: 候補として試料の表の `batch_source`（`candidate:<8 桁>`）と前処理の注意 `batch_candidates` に出すだけで、ドリフト補正・反復のまとめ・交絡の判定は使わない（バッチが無ければ交絡は「評価不可」）。比較（`dataset_compare`）は行列（`dataset_preprocess` の `matrix_id`、省略時は既定の前処理）を消費する。
+群ラベルは試料の情報の `group`（`dataset_status(view="samples")`。ファイル名由来の factor トークン / Class ID 機構、`metabolomix/msdial/classes.py` の `assign_sample_groups`）から取得する。バッチは試料の情報の `batch` で、実験情報シート・利用者の訂正・MS-DIAL の宣言（`.mddata`、mzTab-M の MS:4000088。全試料で同じ値の宣言は GUI の既定とみなして採らない）から来る値だけを使う。**試料名の 8 桁の数字（取得日らしい）はバッチに当てない**: 候補として試料の表の `batch_source`（`candidate:<8 桁>`）と前処理の注意 `batch_candidates` に出すだけで、ドリフト補正・反復のまとめ・交絡の判定は使わない（バッチが無ければ交絡は「評価不可」）。比較（`dataset_compare`）は行列（`dataset_preprocess` の `matrix_id`。省略時は、そのハンドルで `dataset_preprocess` が最後に作った行列、無ければ既定の前処理）を消費する。
 
 試料の `group` は常に**完全な Class ID**（例 `24M_GF_F`）である。一方、旧 ARF 経路の差次的解析の `group_a` / `group_b` は**因子トークンによるプール指定**を受け付けた。いまの `dataset_compare` は群名（`reference_group` / `test_group`）を渡し、同じトークン文法で試料名を引くのは `dataset_status(view="samples", query=...)`。**以下は旧 ARF 経路（撤去済み）の例**で、いまトークンを受けるのは `dataset_status(view="samples", query=...)` だけ。`dataset_compare` は群名を受け、下の注意（QC/ブランクは比較群に入らない・一致ゼロや両群が同じ Class ID は拒む）の意味は保たれる。旧経路の例（`sample_factors.expand_sample_specs`。トークンは Class ID とサンプル名の両方から解決される）:
 
@@ -289,7 +289,15 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 同じ道具で比べる。群の指定は **reference_group+test_group / groups / comparisons のちょうど 1 つ**。既定の検定は
 **moderated t**（経験ベイズで分散を縮める線形モデル。`welch` / `student` / `mannwhitney` は 1 因子・共変量なし・ブロックなしだけ）。
 `covariates`（試料の表の列名。値がすべて数値なら numeric、さもなくば categorical）・`block`（`"subject_id"` だけ）を受ける。
-`bh_population="reported"` はここでは使えない（報告した特徴の一覧を渡せない。`dataset_analysis_run` の spec v2 だけ）。
+補正の母集団 `bh_population` は `matrix`（既定）/ `annotated` / `reported`（`reported_feature_ids` に渡した特徴だけ。
+対で使い、片方だけは `DATASET_BAD_REQUEST`。ID の一覧は記録の spec の `reported_feature_ids` に残る）。
+多重比較の補正 `p_adjust` は `bh`（既定。FDR）/ `bonferroni` / `holm`（FWER）/ `none`（補正なし）で、行の `q` は
+この方法の値（下の表の「BH の `q`」は既定の場合の言い方）。
+
+**行列（`matrix_id`）**: 渡せばその行列（その前処理・群・除外）で比べる。**省くと、そのハンドルで `dataset_preprocess` が
+最後に作った行列**（`group_levels` / `group_factors` を渡したときは、群がそれと同じ行列だけ）を使い、無ければ既定の前処理で
+行列を作って登録する。どれを使ったかは戻り値の `matrix_id` と `matrix_source`（`matrix_id` / `latest_preprocess` /
+`default`）。除外・試料の表の変更で古くなった行列は「最後に作った行列」に数えない（既定の前処理へ回る）。
 
 **判定（`verdict`）は 3 値**で、規則は機械的（`q_threshold` 既定 0.05、`equivalence_fc` 既定 1.2、CI は 95%）:
 
@@ -305,29 +313,63 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 書き出しの `significant` 列だけ）。
 
 戻り値（要約だけ。全行は `result_id` でセッションに保持し、直近の結果＝図・書き出しの既定になる）:
-`{status, result_id, matrix_id, rule_hash, test, effect_size_definition: {name}, ci_level, verdict_rule: {q_threshold,
-equivalence_fc, equivalence_log2}, bh_population: {name, n_by_contrast, q_interpretation}, subject_source, group_n, prior,
-contrasts, omnibus, confounding, warnings, top, record, next}`。
+`{status, confounding, result_id, matrix_id, matrix_source, rule_hash, test, p_adjust_method, effect_size_definition: {name},
+ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n_by_contrast,
+q_interpretation, p_adjust_method}, subject_source, group_n, prior, contrasts, omnibus, factorial, warnings, top, f_top?,
+output?, record, next}`。
 
-- `contrasts[]`: `{contrast_id, reference, test, n_tested, n_not_tested, verdicts: {changed, unchanged, inconclusive},
-  large_changes, presence: {available, n_q_below}}`。`presence` は検出の有無そのものの検定（gap-fill を除く検出状態がある
-  ときだけ `available`）。`omnibus` は 3 群以上のときの F 検定の `{n_tested, n_q_below}`（無ければ null）。
+- `confounding`（**先頭**）: `{batch_status, batch_table, by_contrast: {対比 ID: {batch_status, confounded}}, warnings}`。
+  完全交絡（どのバッチも 1 群だけで、群とバッチを分離できない）でも**既定では止めずに比べ**（`allow_confounded` 既定 true）、
+  全対比をまとめた表の `batch_status = complete` と、対比ごとの `by_contrast[...].confounded`（多群では一部の対比だけが
+  完全交絡になりうる）で印を付ける。その対比の群差はバッチ差と区別できない（結論に使わない）。`allow_confounded=false` を
+  渡すと、どちらかの完全交絡で `STATISTIC_CONFOUNDED`（`details.contrasts` に完全交絡の対比）で止める。バッチ情報が
+  無ければ「評価不可」で、「交絡あり」でも「交絡なし」でもない（対比の `confounded` は null。TSV では空欄）。
+  `confounded` は `true`（その対比の群だけで見て完全交絡）/ `false`（部分交絡・交絡なし・単一バッチ）/ `null`。
+  部分的な交絡は警告に出る。
+- `contrasts[]`: `{contrast_id, reference, test, confounded, batch_status, n_tested, n_not_tested, verdicts: {changed,
+  unchanged, inconclusive}, large_changes, presence: {available, n_q_below}}`。`presence` は検出の有無そのものの検定
+  （gap-fill を除く検出状態があるときだけ `available`）。`omnibus` は 3 群以上（cell が 3 つ以上）のときの全 cell の
+  F 検定の `{n_tested, n_q_below}`（無ければ null）。
+- `factorial`: 因子が 2 つ以上で、全水準の組（cell）がそろうときの**主効果と交互作用の F**（Type III。多水準を含む
+  moderated F）の効果ごとの `{df1, n_tested, n_q_below}`（効果の名前は因子名、交互作用は `group:sex` のように `:` で結ぶ）。
+  無ければ null。F は向きと log2fc を持たないので、対比の行とは別の欄（omnibus と同じ扱い）。
 - `top`: 対比ごとに `changed` の上位（q の小さい順。`top_n` 既定 10・上限 50）の TSV
-  （`contrast_id feature_id name log2fc ci_low ci_high q verdict`）。無ければ空文字。**全行は `top` ではなく
-  `result_id` から書き出しで取る**。
-- `confounding`: `{batch_status, batch_table, warnings}`。完全交絡（群が単一バッチに偏り、群とバッチを分離できない）は
-  `allow_confounded=true` の明示なしには `STATISTIC_CONFOUNDED` で止める。バッチ情報が無ければ「評価不可」で、
-  「交絡あり」ではない。部分的な交絡は警告に出る。
-- `bh_population.q_interpretation`: `discovery_fdr`（`matrix` / `annotated`）か `reproduction_only`（`reported`）。
+  （`contrast_id feature_id name id_level log2fc ci_low ci_high q verdict`）。`name` は `feature_metadata`、無ければ
+  MS1 注釈（`feature_annotations`）の名前、`id_level` は `msms` / `ms1` / `none`。無ければ空文字。`f_top` は
+  omnibus・要因の効果ごとに `f_q ≤ q_threshold` の上位の TSV（`effect feature_id name id_level f df1 df2 f_q`。
+  `effect` は `omnibus` か効果の名前）で、F が無い・該当が無ければ欄ごと無い。**全行は `top` ではなく
+  `output_path` か `result_id` からの書き出しで取る**。
+- `output`（`output_path` を渡したときだけ）: `{written, path, n_rows, ftests_path, n_ftest_rows}`。
+  `output_path` に**全特徴 × 全対比の全列**の TSV を書く（列は `contrast_id feature_id` ＋同定の列 `name ontology inchikey
+  id_level annotation_source msms_assigned msi_level` ＋比較の行の全欄 `reference test status reason n_reference n_test
+  detected_reference detected_test quantity_judgeable constant_in_group confounded mean_reference mean_test log2fc se
+  ci_low ci_high ci_unavailable_reason statistic df p q presence_p presence_q verdict verdict_reason`。数は有効 10 桁、
+  真偽は `true` / `false`、無い値は空欄、一覧は `,` で結ぶ。メタ行は無い）。omnibus・要因の F があれば
+  `<stem>.ftests<拡張子>` にも書く（`kind effect feature_id name id_level f df1 df2 f_p f_q`。`kind` は `omnibus` /
+  `factorial`）。`df2`（F の分母の自由度＝`df_prior + df_residual`）が `inf` なのは事前分布の自由度 `df_prior` が ∞
+  のとき（F の参照分布は χ²(df1)/df1 の極限。`f_top` も同じ）。空欄は F を計算していない行。`msi_level` は
+  解析フォルダのデータセットだけ（mzTab-M では空欄）。**差次的エクスポート
+  （`dataset_export_differential`。§11.4 の 15 列の契約）とは別物**。書けなかったときも比較は成功し、`written=false` と
+  `reason`。`output_path` がフォルダ・空文字なら比較の前に `DATASET_BAD_REQUEST`。
+- `bh_population.q_interpretation`: `discovery_fdr`（`p_adjust=bh` で `matrix` / `annotated`）・`fwer`（`bonferroni` /
+  `holm`）・`unadjusted`（`none`）・`reproduction_only`（`reported`）。`p_adjust_method` は補正の方法（記録にも残る）。
 - `effect_size`（`log2_mean_difference` 既定 / `arithmetic_mean_ratio`）の定義は `effect_size_definition`（`name` と、
   全量の記録の `description`）。`log2fc` は**正なら test が高い**。`mean_*` は個体ごとの前処理後の線形値の算術平均。
-- エラー: 群の指定が合わない・`top_n` / `log2fc_threshold` が範囲外・`bh_population=reported` は `DATASET_BAD_REQUEST`。
+  行の `se` は log2fc の標準誤差（moderated t・Welch・Student。順位の検定と算術平均の比では定義できないので空）。
+- 行の `constant_in_group`: 群（cell）の中で値がすべて同じ（埋め値の疑い。gap-fill を同じ値で埋めた群など）なら、その
+  cell の一覧（無ければ null）。判定は変えず、件数を警告 `constant_in_group`（`{n_rows, n_features, by_contrast, examples}`）に
+  出す。片群が一定の値だと、群の差は値の大きさより埋め方で決まりうる。
+- エラー: 群の指定が合わない・`top_n` / `log2fc_threshold` / `p_adjust` / `output_path` が不正・`bh_population=reported`
+  なのに `reported_feature_ids` が無いは `DATASET_BAD_REQUEST`。`reported` 以外で `reported_feature_ids` を渡したときは
+  誤りにせず、ID を使わずに戻り値の `notes` に書く（効かない引数の組）。
   `matrix_id` が古い・無いは `missing_state`（`stat_matrix`）。`matrix_id` と `group_levels` / `group_factors` の併用は
   `DATASET_BAD_REQUEST`（群は行列が決めている）。`EXPLORATORY_ONLY_DATASET`（途中で止まった実行のデータセット）。
   既定の前処理は尋ねない（`drift_mode=auto` が補正を当てなかったときは `warnings` に `drift_not_applied_by_default`）。
-  既定の前処理で行列を作ったあとにエラーになったとき、`details.matrix_id` にその行列の ID が残る（呼び直しに使える）。
-- `record`: `{written, record_id, path}`（比較の記録。親は行列の前処理の記録）。既定の前処理で行列を作ったときは
-  `preprocess_record` に前処理の記録も付く。
+  `matrix_id` を省いた呼び出しが行列を決めたあとにエラーになったとき、`details.matrix_id` と `matrix_source` に
+  その行列と出所が残る（`default` は既定の前処理で作って登録した行列で、呼び直しに使える。`latest_preprocess` は
+  直近の `dataset_preprocess` の行列で、群・除外・設定はその前処理のもの＝`details.matrix_note`）。
+- `record`: `{written, record_id, path}`（比較の記録。親は行列の前処理の記録。設定に `spec`・`log2fc_threshold`・
+  `matrix_source`）。既定の前処理で行列を作ったときは `preprocess_record` に前処理の記録も付く。
 
 #### 11.2.1 `dataset_plot(kind="volcano")` の返り値（`lipidmix.volcano.v1`）
 
@@ -364,7 +406,7 @@ contrasts, omnibus, confounding, warnings, top, record, next}`。
 
 `dataset_compare` は次を無言で握りつぶさず、戻り値に前景化する:
 
-1. **交絡（群⟂バッチ）**: `confounding`（`batch_status` / `batch_table` / `warnings`。§11.2）。完全交絡（群が単一バッチに偏り、処理効果と測定バッチを分離できない）は `allow_confounded=true` の明示なしには `STATISTIC_CONFOUNDED` で止める。判定は実際に比較した群に対して行う（QC・ブランクは比較群に入らない）。バッチ情報が無ければ「評価不可」で、「交絡なし」ではない。
+1. **交絡（群⟂バッチ）**: `confounding`（`batch_status` / `batch_table` / `by_contrast` / `warnings`。§11.2）。完全交絡（群が単一バッチに偏り、処理効果と測定バッチを分離できない）は既定では比較して印を付け（`confounding` と対比の `confounded`）、`allow_confounded=false` を渡したときだけ `STATISTIC_CONFOUNDED` で止める。判定は実際に比較した群に対して行う（QC・ブランクは比較群に入らない）。バッチ情報が無ければ「評価不可」で、「交絡なし」ではない。
 2. **小 n・検定不能**: `warnings` と、判定 `inconclusive`（理由は `verdict_reason`）。**「有意でない」は「変わっていない」ではない**——`inconclusive` を `unchanged` と読まない。
 3. **正規化の状態**: 前処理の `steps[]`（§10.2・§10.3）。正規化を行わなかった行列の log2FC は測定量の差を含みうる。
 
@@ -400,10 +442,11 @@ mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`（`CONTRAC
 
 `p_value` / `q_value` はエンジンの p と BH の q（`q_value` の読みは `q_interpretation`）、`log2fc` は正なら `group_b`（比較）が高い。**エンジンの結果の `significant` は、`q ≤ q_threshold` かつ `|log2fc| ≥ log2fc_threshold`（`dataset_compare` の `log2fc_threshold`）に加えて、判定 `verdict` が `changed` の行だけ `true`**（`significant_rule`）。検出の割合が足りず量を判定できない行（`inconclusive` / `quantity_not_judgeable`）や BH の母集団の外の行は、q が小さく |log2fc| が大きくても `false`——gap-fill の値で動いた量を主張にしない。`true` の行の数は、その対比の `dataset_compare` の `large_changes` と同じ（InChIKey の無い行は書き出さないので、書き出しではその分少ないことがある）。同じ印を根拠バンドルの `features.tsv` の `significant`・volcano の `up` / `down`（§11.2.1）が使う。**`verdict` の 3 値そのものは TSV の列には出ない**（契約の列は据え置き）ので、判定は `dataset_compare` の要約・`top` か、根拠バンドル（`reanalysis.md` §10）で読む。
 
-**交絡を越えた比較の印**: `allow_confounded=true` で完全交絡（`confounding.batch_status = complete`）を越えて走った
-エンジンの比較は、`source_verification` の後に `# unadjusted_confounded = true` と
+**交絡を越えた比較の印**: `allow_confounded=true`（既定）で完全交絡（全対比をまとめた `confounding.batch_status = complete`
+か、書き出す対比の `confounding.by_contrast[対比].confounded = true`）を越えて走ったエンジンの比較は、
+`source_verification` の後に `# unadjusted_confounded = true` と
 `# unadjusted_confounded_note = …`（日本語の説明）を書き、volcano の `caveats` と図の下端（ASCII の但し書き）、根拠バンドルの
-`comparison.unadjusted_confounded`（`reanalysis.md` §10）にも同じ印が載る。部分的な交絡・交絡の無い比較には何も足さない。
+`comparison.unadjusted_confounded`（`reanalysis.md` §10）にも同じ印が載る。部分的な交絡・評価できない交絡・交絡の無い比較には何も足さない。
 
 **有意な行だけでなく、InChIKey が付いた全行を書き出す。** 下流の濃縮解析は
 「検出された化合物」を背景に取る必要があり、有意な行だけでは背景が作れない。
@@ -625,7 +668,8 @@ TSV（`changed` と `unchanged` を最大 5 つずつ）、多群は moderated F
 
 **群と向き**:
 - 群が 1 つ以下・探索専用のデータセット（`allow_incomplete=True` で開いた未完了の実行）・群とバッチの完全交絡では
-  比較を回さない（`omitted` に理由）。
+  比較を回さない（`omitted` に理由）。完全交絡は全群をまとめた表で見る: 多群でまとめた表が部分交絡なら、一部の対だけが
+  完全交絡でも比較は回し、その対は比較の記録（`result_ids.compare`）の `confounding.by_contrast` と行の `confounded` に印が付く。
 - 2 群の向きは**仮**: 試料の表で先に出た群を対照にする（事実に「仮の向き」と付く）。向きを決めるのは
   `dataset_compare(reference_group=…, test_group=…)`。
 - 3〜6 群は全対、7 群以上は対照との対だけ（と moderated F）。

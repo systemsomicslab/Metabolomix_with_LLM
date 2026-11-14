@@ -17,8 +17,12 @@ ROW_COLUMNS = ("contrast_id", "feature_id", "status", "reason", "log2fc", "ci_lo
 _VERDICTS = ("changed", "unchanged", "inconclusive")
 
 
+#: plsda の要約に載せる VIP の上位の数（全量は output_path の JSON）。
+VIP_TOP = 10
+
+
 def tables_of(entry: dict) -> dict[str, list[dict]]:
-    """解析 1 件の行の表。compare は 1 つ（`""`）、composition は clr と絶対量、pca は無し。"""
+    """解析 1 件の行の表。compare は 1 つ（`""`）、composition は clr と絶対量、pca・plsda は無し。"""
     kind, res = entry["kind"], entry["result"]
     if kind == "compare":
         return {"": res["rows"]}
@@ -47,9 +51,34 @@ def _cut_warnings(warnings: list[dict]) -> list[dict]:
     return kept
 
 
+def factorial_summary(res: dict, q_threshold: float) -> dict | None:
+    """要因の F（`stats-compare.v1` の `factorial`）の効果ごとの件数。無ければ None。"""
+    factorial = res.get("factorial")
+    if not factorial:
+        return None
+    out = {}
+    for name, eff in factorial["effects"].items():
+        rows = [r for r in factorial["rows"] if r["effect"] == name and r["f_p"] is not None]
+        out[name] = {"df1": eff["df1"], "n_tested": len(rows),
+                     "n_q_below": sum(1 for r in rows if r["f_q"] is not None and r["f_q"] <= q_threshold)}
+    return out
+
+
+def _plsda_summary(base: dict, res: dict) -> dict:
+    return truncate_lists(json_safe(round_floats({
+        **base, "classes": res["classes"], "n_units": res["n_units"], "n_features": res["n_features"],
+        "scaling": res["scaling"], "imputation": res["imputation"],
+        "n_components": res["n_components"], "r2x_cum": res["r2x_cum"], "r2y_cum": res["r2y_cum"],
+        "q2_cum": res["q2_cum"], "q2": res["q2"], "cv": res["cv"],
+        "permutation": res["permutation"], "vip_top": res["vip"][:VIP_TOP],
+        "warnings": res["warnings"]})), LIST_LIMIT, keys=("unit_ids",))
+
+
 def analysis_summary(entry: dict, q_threshold: float) -> dict:
     kind, res = entry["kind"], entry["result"]
     base = {"analysis_id": entry["analysis_id"], "kind": kind}
+    if kind == "plsda":
+        return _plsda_summary(base, res)
     if kind == "pca":
         return truncate_lists(json_safe(round_floats({
             **base, "scaling": res["scaling"], "imputation": res["imputation"],
@@ -66,6 +95,10 @@ def analysis_summary(entry: dict, q_threshold: float) -> dict:
         out["warnings"] = _cut_warnings(res["warnings"])
     else:
         out["test"] = res["test"]
+        out["p_adjust_method"] = res.get("p_adjust_method", "bh")
+        factorial = factorial_summary(res, q_threshold)
+        if factorial is not None:
+            out["factorial"] = factorial
         out["warnings"] = _cut_warnings(res["warnings"])
     return out
 

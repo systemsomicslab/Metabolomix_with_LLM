@@ -129,7 +129,7 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 多くのツールは、先行するツールが作ったセッション状態に依存する。
 `dataset_plot(kind="pca")` は `dataset_pca` の結果を、`dataset_plot(kind="volcano")` は
 `dataset_compare` の結果を必要とする。`dataset_compare` と `dataset_pca` は前処理済みの行列（`dataset_preprocess` の
-`matrix_id`）を受けるが、省くと既定の前処理で自分で行列を作る。
+`matrix_id`）を受けるが、省くとそのハンドルで `dataset_preprocess` が最後に作った行列を使い、それも無ければ既定の前処理で自分で行列を作る（戻り値の `matrix_source`）。
 
 その状態が無いとき、ツールは本文に次の JSON を返す。
 

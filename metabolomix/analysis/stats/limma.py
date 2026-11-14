@@ -63,6 +63,7 @@ class Moderated:
 
     `f`・`f_p` は limma `classifyTestsF(fstat.only=TRUE)` の F と上側確率。F の分母の自由度
     `f_df2` は limma と同じく `df_prior + df_residual`（`df_total` と違い Σdf_residual で頭打ちにしない）。
+    `se` は係数の標準誤差 `√s2_post·stdev_unscaled`（G×k。t = 係数 / se、区間の半幅 = t 分位 × se）。
     """
 
     t: np.ndarray
@@ -79,6 +80,7 @@ class Moderated:
     contrast_names: list[str]
     f_df1: int = 0
     f_df2: np.ndarray | None = None
+    se: np.ndarray | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -567,8 +569,8 @@ def ebayes(fit: LinearFit, *, ci_level: float = 0.95) -> Moderated:
         t = coef / stdev / np.sqrt(s2_post)[:, None]
     df_total = np.minimum(df_res + df_prior, float(np.nansum(df_res)))
     p = 2 * stats.t.sf(np.abs(t), df_total[:, None])
-    margin = (np.sqrt(s2_post)[:, None] * stdev
-              * stats.t.ppf((1 + ci_level) / 2, df_total)[:, None])
+    se = np.sqrt(s2_post)[:, None] * stdev
+    margin = se * stats.t.ppf((1 + ci_level) / 2, df_total)[:, None]
     f, df1 = _classify_tests_f(t, fit.cov_coefficients)
     f_df2 = df_prior + df_res
     f_p = _f_sf(f, df1, f_df2)
@@ -587,4 +589,5 @@ def ebayes(fit: LinearFit, *, ci_level: float = 0.95) -> Moderated:
         contrast_names=list(fit.column_names),
         f_df1=df1,
         f_df2=f_df2,
+        se=se,
     )

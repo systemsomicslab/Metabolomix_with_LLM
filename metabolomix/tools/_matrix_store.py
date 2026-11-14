@@ -114,17 +114,20 @@ def preprocess_summary(study, prepared) -> dict:
     return truncate_lists(json_safe(round_floats(summary)), _STEP_LIST_LIMIT)
 
 
-def store_matrix(holder, ds, study, prepared, config, inputs):
+def store_matrix(holder, ds, study, prepared, config, inputs, *,
+                 origin: str = stats_results.ORIGIN_PREPROCESS):
     """行列を登録し、前処理の記録を 1 件書く。`(登録, 要約, record 欄)` を返す。
 
     記録が書けたときは登録に `record_id` を持たせる（後続の比較の記録がここを親にする）。
-    別のデータから作った行列は DomainError(STUDY_DATA_INVALID)。
+    `origin` は登録の作り手（既定は `dataset_preprocess`。`matrix_id` を省いた比較・PCA はこの印の
+    付いた最後の行列を使う）。別のデータから作った行列は DomainError(STUDY_DATA_INVALID)。
     """
     try:
         entry = stats_results.register_matrix(
             ds, prepared, config, inputs["group_overrides"],
             exclusions={"samples": inputs["exclude_samples"],
-                        "features": inputs["exclude_features"]})
+                        "features": inputs["exclude_features"]},
+            origin=origin)
     except ValueError as exc:
         raise DomainError("STUDY_DATA_INVALID", str(exc)) from exc
     summary = preprocess_summary(study, prepared)
@@ -140,5 +143,6 @@ def register_default(holder, ds, study, prepared, config, inputs):
     entry = stats_results.get_matrix(ds, prepared.matrix_id)
     if entry is not None:
         return entry, None
-    entry, _summary, record = store_matrix(holder, ds, study, prepared, config, inputs)
+    entry, _summary, record = store_matrix(holder, ds, study, prepared, config, inputs,
+                                           origin="default")
     return entry, record

@@ -40,36 +40,44 @@
 
 ## dataset_compare
 
-統計エンジンの比較（spec 2026-11-06 §5〜§9・§12）。群の指定（手順 2）を spec v2 の対比へ写す。入力側は手順 3 の
-`matrix_inputs` が決める: `matrix_id` を渡せば登録済みの行列（手順 4）の設定・群・除外のまま、省略すれば今の除外と
-群の引数から（手順 5）既定の設定で作る。spec は引数から組み立てて（手順 8）正規化する（手順 9）ので、結果の `spec` を
-`dataset_analysis_run` に渡せば同じ数字を出し直せる。`matrix_id` が無いときは既定の前処理を回し（手順 10・11。drift=auto が補正を当てなかったときは
-警告 `drift_not_applied_by_default` が結果に載る）、行列を登録して前処理の記録も 1 件書く（手順 12）。`run_spec_v2` が登録済みの
-行列を再利用して比較し（手順 13）、結果は `ds.results[result_id]` と `ds.last_differential` に置く（手順 14）。
-手順 15・16 の記録は親を行列の前処理の記録にして `reports/stats/` へ追記する（書けなくても比較は成功）。
+統計エンジンの比較（spec 2026-11-06 §5〜§9・§12）。群の指定（手順 2）を spec v2 の対比へ写す。`reported_feature_ids`
+（`bh_population="reported"` と対）と `output_path` の検証は比較の前に済ませる。入力側は手順 3 の `matrix_inputs`
+（`prefer_latest=True`）が決める: `matrix_id` を渡せば登録済みの行列（手順 4）の設定・群・除外のまま、省略すれば
+このハンドルで `dataset_preprocess` が最後に作った行列（手順 5。登録の `origin` と順番 `seq` で選ぶ。群の引数を渡したときは
+群が同じものだけ）、それも無ければ今の除外と群の引数から（手順 6）既定の設定で作る（戻り値の `matrix_source` が
+`matrix_id` / `latest_preprocess` / `default`）。spec は引数から組み立てて（手順 9）正規化する（手順 10）ので、結果の `spec` を
+`dataset_analysis_run` に渡せば同じ数字を出し直せる。行列が無いときは既定の前処理を回し（手順 11・12。drift=auto が補正を
+当てなかったときは警告 `drift_not_applied_by_default` が結果に載る）、行列を登録して前処理の記録も 1 件書く（手順 13）。
+`run_spec_v2` が登録済みの行列を再利用して比較し（手順 14。交絡は `compare` が対比ごとにも調べ、既定では止めずに印を付ける）、結果は
+`ds.results[result_id]` と `ds.last_differential` に置く（手順 15。記録に `p_adjust_method`）。`output_path` があれば全行の
+TSV（と F 検定の TSV）を書き（手順 16）、手順 17・18 の記録は親を行列の前処理の記録にして `reports/stats/` へ追記する
+（どちらも書けなくても比較は成功）。戻り値の `top` / `f_top` の名前と `id_level` は手順 16 と同じ `identity_of` で引く。
 
 1. metabolomix/tools/stats_tools.py  dataset_compare()
 2. └─ metabolomix/tools/stats_tools.py  _design_and_comparisons()
 3. └─ metabolomix/analysis/stats_results.py  matrix_inputs()
 4.    └─ metabolomix/analysis/stats_results.py  get_matrix()（`matrix_id` あり）
-5.    └─ metabolomix/analysis/stats_results.py  study_inputs()（`matrix_id` なし）
-6. └─ metabolomix/analysis/stats/data.py  from_dataset()
-7. └─ metabolomix/tools/stats_tools.py  _covariate_specs()
-8. └─ metabolomix/analysis/stats_results.py  compare_spec()
-9. └─ metabolomix/analysis/stats/spec_v2.py  normalize_spec_v2()
-10. └─ metabolomix/tools/stats_tools.py  _prepare_default()（`matrix_id` なし）
-11.    └─ metabolomix/analysis/stats_results.py  prepare_default()
-12. └─ metabolomix/tools/_matrix_store.py  register_default()
-13. └─ metabolomix/analysis/stats/spec_v2.py  run_spec_v2()
-14. └─ metabolomix/analysis/stats_results.py  register_compare()
-15. └─ metabolomix/tools/stats_tools.py  _write_compare_record()
-16.    └─ metabolomix/analysis/stats_records.py  write_stats_record()
+5.    └─ metabolomix/analysis/stats_results.py  latest_preprocess_matrix()（`matrix_id` なし）
+6.    └─ metabolomix/analysis/stats_results.py  study_inputs()（`matrix_id` なし）
+7. └─ metabolomix/analysis/stats/data.py  from_dataset()
+8. └─ metabolomix/tools/stats_tools.py  _covariate_specs()
+9. └─ metabolomix/analysis/stats_results.py  compare_spec()
+10. └─ metabolomix/analysis/stats/spec_v2.py  normalize_spec_v2()
+11. └─ metabolomix/tools/stats_tools.py  _prepare_default()（行列なし）
+12.    └─ metabolomix/analysis/stats_results.py  prepare_default()
+13. └─ metabolomix/tools/_matrix_store.py  register_default()
+14. └─ metabolomix/analysis/stats/spec_v2.py  run_spec_v2()
+15. └─ metabolomix/analysis/stats_results.py  register_compare()
+16. └─ metabolomix/analysis/compare_table.py  write_compare_tables()（`output_path` あり）
+17. └─ metabolomix/tools/stats_tools.py  _write_compare_record()
+18.    └─ metabolomix/analysis/stats_records.py  write_stats_record()
 
 ## dataset_pca
 
 統計エンジンの PCA（spec 2026-11-06 §10。stats-pca.v1）。軸は生体の個体で決め、QC は同じ軸へ投影する。
-行列は群の引数と無関係に決める: `matrix_id` を渡せば登録済みの行列（手順 2）、省略すれば既定の前処理で
-行列を作って登録する（手順 3。前処理の記録も 1 件書く）。`group_levels` / `group_factors` は手順 5 が個体ごとの
+行列は群の引数と無関係に決める（`matrix_inputs(prefer_latest=True)`）: `matrix_id` を渡せば登録済みの行列（手順 2）、
+省略すればこのハンドルで `dataset_preprocess` が最後に作った行列、それも無ければ既定の前処理で行列を作って登録する
+（手順 3。前処理の記録も 1 件書く）。どれを使ったかは戻り値の `matrix_source`。`group_levels` / `group_factors` は手順 5 が個体ごとの
 色分けの群に解くだけで、PCA の数字（手順 4）には効かない。結果は `ds.results[result_id]` と `ds.last_pca`
 （`kind="stat_pca"`）に置く（手順 6）。drift=auto が補正を当てなかったときは警告 `drift_not_applied_by_default` が載る。
 手順 7 の記録は親を行列の前処理の記録にして `reports/stats/` へ追記する（書けなくても PCA は成功）。
@@ -77,7 +85,7 @@
 `plots/pca_loadings.dataset_features`（`kept_features` のローディング）が `stat_pca` の記録を読む。
 
 1. metabolomix/tools/stats_tools.py  dataset_pca()
-2. └─ metabolomix/analysis/stats_results.py  get_matrix()
+2. └─ metabolomix/analysis/stats_results.py  matrix_inputs()
 3. └─ metabolomix/tools/_matrix_store.py  register_default()
 4. └─ metabolomix/analysis/stats/pca.py  pca()
 5. └─ metabolomix/analysis/stats_results.py  unit_group_labels()
@@ -89,7 +97,8 @@
 最初の概観（spec 2026-11-06-dataset-overview-design）。`load_dataset` も読み込みの最後に同じ `build_overview_payload()` を呼ぶ
 （`embedded=True`、`dataset.md` の `load_dataset`）。統計は C のエンジンだけを通す: 既定の前処理（手順 3〜5。ドリフト補正の既定が
 未決〔`NeedsInput`〕なら drift を off にして作り直し、そう書く）→ 品質の純計算（手順 7〜10。前処理前の値）→ PCA（手順 12〜13）→
-spec v2 の比較（手順 15〜18。群が 1 つ・探索専用・完全交絡なら回さない）→ 選別の後だけ組成（手順 20）。比較と PCA は `make_current=False` で
+spec v2 の比較（手順 15〜18。群が 1 つ・探索専用・全群をまとめた表で完全交絡なら回さない。一部の対だけの完全交絡では
+止めず、`allow_confounded=True` で対比に印を付ける）→ 選別の後だけ組成（手順 20）。比較と PCA は `make_current=False` で
 `ds.results` に置き、直近（`last_differential` / `last_pca`）は動かさない。事実の組み立ては `analysis/overview.py`（手順 6・11・19・21〜24）で、
 概観は `ds.results[ovw_…]`（`kind="overview"`、手順 25）と `reports/stats/`（step=overview、親は前処理の記録、手順 26）に残す。
 
@@ -217,7 +226,7 @@ result_id は計算のたびに発行される UUID なので入れず、統計�
 6.    └─ metabolomix/analysis/sample_manifest.py  apply_metadata()
 7.       └─ metabolomix/analysis/result_state.py  invalidate_results()
 
-対話ツール `dataset_compare`（統計エンジン）は、群名だけで対照/処置の向きを決めない・QC/blank/unknown/standard・`include=false` を混ぜない・完全交絡を `allow_confounded=true` の明示なしには通さない（`STATISTIC_CONFOUNDED`）。
+対話ツール `dataset_compare`（統計エンジン）は、群名だけで対照/処置の向きを決めない・QC/blank/unknown/standard・`include=false` を混ぜない・完全交絡は既定では比べて印を付け（`confounding` と対比の `confounded`）、`allow_confounded=false` を渡したときだけ止める（`STATISTIC_CONFOUNDED`）。
 
 ## dataset_export_evidence_bundle
 

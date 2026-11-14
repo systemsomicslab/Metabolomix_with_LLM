@@ -1,7 +1,7 @@
 """analysis-spec.v2 の正規化と実行（統計エンジン spec §8・§12）。
 
-宣言的な入口: 前処理を 1 回だけ回し、spec の順に compare / composition / pca を実行して
-**全部**を載せて返す（選んだものだけにしない）。`primary` は報告の主役を指すだけ。
+宣言的な入口: 前処理を 1 回だけ回し、spec の順に compare / composition / pca / plsda を実行して
+**全部**を載せて返す（選んだものだけにしない）。`primary` は報告の主役を指すだけ（compare / composition）。
 丸めはここでは行わない（配線層の仕事）。v1（analysis_spec）とは独立で、v1 の schema は拒否する。
 """
 from __future__ import annotations
@@ -10,10 +10,14 @@ import copy
 import math
 import re
 
-from metabolomix.analysis.stats.compare import BH_POPULATIONS, EFFECT_SIZES, TESTS, compare
+from metabolomix.analysis.stats.compare import (BH_POPULATIONS, EFFECT_SIZES, P_ADJUST_METHODS, TESTS,
+                                                compare)
 from metabolomix.analysis.stats.composition import composition
 from metabolomix.analysis.stats.data import StudyData, from_dataset
 from metabolomix.analysis.stats.pca import pca
+from metabolomix.analysis.stats.plsda import IMPUTES as _PLSDA_IMPUTE
+from metabolomix.analysis.stats.plsda import SCALINGS as _PLSDA_SCALING
+from metabolomix.analysis.stats.plsda import plsda
 from metabolomix.analysis.stats.preprocess import (NeedsInput, PreparedMatrix,
                                                    normalize_preprocess_config, preprocess)
 from metabolomix.core.atomic_io import DomainError, canonical_hash
@@ -22,7 +26,9 @@ ANALYSIS_SCHEMA_V2 = "analysis-spec.v2"
 RESULT_SCHEMA_V2 = "analysis-result.v2"
 _INVALID = "ANALYSIS_SPEC_INVALID"
 _ID_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
-_KINDS = ("compare", "composition", "pca")
+_KINDS = ("compare", "composition", "pca", "plsda")
+#: primary に選べる解析（検定の行を持つもの）。pca / plsda は報告の主役にしない。
+_STAT_KINDS = ("compare", "composition")
 _PCA_SCALING = ("autoscale", "pareto")
 _PCA_IMPUTE = ("half_min", "knn", "none")
 _VERDICT_DEFAULT = {"q": 0.05, "equivalence_fc": 1.2}
@@ -142,13 +148,17 @@ def _analysis(raw, i: int) -> dict:
             raise _fail(f"{path}.n_components は 1 以上の整数", field=path + ".n_components")
         return {"analysis_id": aid, "kind": kind, "scaling": scaling, "n_components": n,
                 "impute": impute}
+    if kind == "plsda":
+        return _plsda_analysis(raw, aid, path)
     a = _keys(raw, {"analysis_id", "kind", "test", "effect_size", "bh_population",
                     "reported_feature_ids", "verdict", "min_detected_fraction",
-                    "allow_confounded"}, {"analysis_id", "kind"}, path)
+                    "allow_confounded", "p_adjust"}, {"analysis_id", "kind"}, path)
     test, eff = a.get("test", "moderated_t"), a.get("effect_size", "log2_mean_difference")
     bh = a.get("bh_population", "matrix")
+    method = a.get("p_adjust", "bh")
     for name, val, allowed in (("test", test, TESTS), ("effect_size", eff, EFFECT_SIZES),
-                               ("bh_population", bh, BH_POPULATIONS)):
+                               ("bh_population", bh, BH_POPULATIONS),
+                               ("p_adjust", method, P_ADJUST_METHODS)):
         if val not in allowed:
             raise _fail(f"{path}.{name} は {list(allowed)} のどれか", field=f"{path}.{name}",
                         value=repr(val))
@@ -168,14 +178,48 @@ def _analysis(raw, i: int) -> dict:
                  path + ".verdict.equivalence_fc", lambda v: v > 1)
     mdf = _number(a.get("min_detected_fraction", 0.5), path + ".min_detected_fraction",
                   lambda v: 0 <= v <= 1)
-    conf = a.get("allow_confounded", False)
+    conf = a.get("allow_confounded", True)
     if not isinstance(conf, bool):
         raise _fail(f"{path}.allow_confounded は真偽値", field=path + ".allow_confounded")
     out = {"analysis_id": aid, "kind": kind, "test": test, "effect_size": eff,
-           "bh_population": bh, "verdict": {"q": q, "equivalence_fc": fc},
+           "bh_population": bh, "p_adjust": method, "verdict": {"q": q, "equivalence_fc": fc},
            "min_detected_fraction": mdf, "allow_confounded": conf}
     if ids is not None:
         out["reported_feature_ids"] = list(ids)
+    return out
+
+
+def _int_at_least(value, low: int, path: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < low:
+        raise _fail(f"{path} は {low} 以上の整数", field=path, value=repr(value))
+    return value
+
+
+def _plsda_analysis(raw: dict, aid: str, path: str) -> dict:
+    """PLS-DA の解析（クラスは design.factors の水準の組。`classes` で cell を絞れる）。"""
+    a = _keys(raw, {"analysis_id", "kind", "classes", "n_components", "scaling", "impute",
+                    "cv_folds", "n_permutations", "seed"}, {"analysis_id", "kind"}, path)
+    scaling, impute = a.get("scaling", "autoscale"), a.get("impute", "half_min")
+    if scaling not in _PLSDA_SCALING:
+        raise _fail(f"{path}.scaling は {list(_PLSDA_SCALING)}", field=path + ".scaling")
+    if impute not in _PLSDA_IMPUTE:
+        raise _fail(f"{path}.impute は {list(_PLSDA_IMPUTE)}", field=path + ".impute")
+    out = {"analysis_id": aid, "kind": "plsda", "scaling": scaling, "impute": impute,
+           "n_components": _int_at_least(a.get("n_components", 2), 1, path + ".n_components"),
+           "cv_folds": _int_at_least(a.get("cv_folds", 7), 2, path + ".cv_folds"),
+           "n_permutations": _int_at_least(a.get("n_permutations", 200), 1,
+                                           path + ".n_permutations"),
+           "seed": _int_at_least(a.get("seed", 0), 0, path + ".seed")}
+    if out["n_permutations"] > 10000:
+        raise _fail(f"{path}.n_permutations は 10000 以下", field=path + ".n_permutations")
+    classes = a.get("classes")
+    if classes is not None:
+        if (not isinstance(classes, list) or len(classes) < 2
+                or any(not isinstance(c, str) or not c for c in classes)
+                or len(set(classes)) != len(classes)):
+            raise _fail(f"{path}.classes は重複のない 2 つ以上の cell 名（因子の水準を : で結ぶ）",
+                        field=path + ".classes")
+        out["classes"] = list(classes)
     return out
 
 
@@ -231,7 +275,7 @@ def normalize_spec_v2(spec) -> dict:
     aids = [a["analysis_id"] for a in analyses]
     if len(set(aids)) != len(aids):
         raise _fail(f"analysis_id が重複している: {aids}", field="analyses")
-    stat_ids = [a["analysis_id"] for a in analyses if a["kind"] != "pca"]
+    stat_ids = [a["analysis_id"] for a in analyses if a["kind"] in _STAT_KINDS]
     primary = spec.get("primary")
     if primary is None:
         if len(stat_ids) >= 2:
@@ -304,6 +348,10 @@ def run_spec_v2(normalized: dict, source, *, assay_kind: str = "unknown",
         if kind == "pca":
             res = pca(prepared, scaling=a["scaling"], n_components=a["n_components"],
                       impute=a["impute"])
+        elif kind == "plsda":
+            res = plsda(prepared, factors=design["factors"], classes=a.get("classes"),
+                        n_components=a["n_components"], scaling=a["scaling"], impute=a["impute"],
+                        cv_folds=a["cv_folds"], n_permutations=a["n_permutations"], seed=a["seed"])
         else:
             kw = dict(common, covariates=design["covariates"], block=design["block"],
                       test=a["test"], effect_size=a["effect_size"],
@@ -311,7 +359,7 @@ def run_spec_v2(normalized: dict, source, *, assay_kind: str = "unknown",
                       reported_feature_ids=a.get("reported_feature_ids"),
                       q_threshold=a["verdict"]["q"], equivalence_fc=a["verdict"]["equivalence_fc"],
                       min_detected_fraction=a["min_detected_fraction"],
-                      allow_confounded=a["allow_confounded"])
+                      allow_confounded=a["allow_confounded"], p_adjust=a["p_adjust"])
             res = (compare(prepared, **kw) if kind == "compare"
                    else composition(prepared, assay_kind=assay_kind, **kw))
         results.append({"analysis_id": a["analysis_id"], "kind": kind, "result": res})

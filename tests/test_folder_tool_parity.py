@@ -325,11 +325,11 @@ def test_group_levels_on_job_dataset_keeps_the_batch_table(tmp_path):
         prepared = json.loads(stats_tools.dataset_preprocess(group_levels=["20260101", "20260102"]))
         assert prepared["status"] == "success", prepared
         refused = json.loads(stats_tools.dataset_compare(
-            reference_group="20260101", test_group="20260102", matrix_id=prepared["matrix_id"]))
+            reference_group="20260101", test_group="20260102", matrix_id=prepared["matrix_id"],
+            allow_confounded=False))
         assert refused["error"]["code"] == "STATISTIC_CONFOUNDED", source
-        out = json.loads(stats_tools.dataset_compare(
-            reference_group="20260101", test_group="20260102",
-            matrix_id=prepared["matrix_id"], allow_confounded=True))
+        out = json.loads(stats_tools.dataset_compare(                 # 既定は印を付けて比較する
+            reference_group="20260101", test_group="20260102", matrix_id=prepared["matrix_id"]))
         assert out["status"] == "success", out
         assert out["confounding"]["batch_table"] == {"20260101": {"20260101": 3},
                                                      "20260102": {"20260102": 3}}, source
@@ -349,9 +349,14 @@ def test_constant_mddata_batch_is_unknown_and_dates_are_only_candidates(tmp_path
     ds = session_state.session.dataset
     assert ds.sample_meta[names[0]]["batch"] is None
     assert ds.sample_metadata_rows[0]["provenance"]["batch"]["candidate"] == _CANDIDATE
+    # バッチが無いので交絡は評価できず、allow_confounded=false でも止まらない（confounded は不明の null）
+    refused = json.loads(stats_tools.dataset_compare(reference_group="A", test_group="B",
+                                                     allow_confounded=False))
+    assert refused["status"] == "success", refused
     out = json.loads(stats_tools.dataset_compare(reference_group="A", test_group="B"))
     assert out["status"] == "success", out
     assert out["confounding"]["batch_status"] == "not_evaluable"
+    assert all(item["confounded"] is None for item in out["confounding"]["by_contrast"].values())
     note = next(w for w in out["warnings"] if w["code"] == "batch_candidates")
     assert note["values"] == ["20260101", "20260102"]
 

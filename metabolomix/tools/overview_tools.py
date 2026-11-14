@@ -99,10 +99,12 @@ def _counts(ds, study, prepared) -> dict:
 
 
 def _compare(ds, study, prepared, config, inputs, comps):
+    # 全群をまとめた表の完全交絡は呼ぶ前に外してある。多群で一部の対だけが完全交絡なら止めずに比べ、
+    # 記録の `confounding.by_contrast` と対比の `confounded` の印に残す（dataset_compare の既定と同じ）。
     spec = spec_v2.normalize_spec_v2(stats_results.compare_spec(
         factors=["group"], comparisons=comps, covariates=[], block=None, method="moderated_t",
         effect_size="log2_mean_difference", bh_population="matrix", q_threshold=_Q,
-        equivalence_fc=_EQ_FC, allow_confounded=False, preprocess=config, inputs=inputs))
+        equivalence_fc=_EQ_FC, allow_confounded=True, preprocess=config, inputs=inputs))
     run = spec_v2.run_spec_v2(spec, study, prepared=prepared)
     return stats_results.register_compare(ds, run, log2fc_threshold=_LOG2FC, units=prepared.units,
                                           make_current=False, origin="overview")

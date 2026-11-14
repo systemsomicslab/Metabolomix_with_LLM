@@ -36,7 +36,8 @@ def test_defaults_filled_and_unknown_keys_rejected():
     a = n["analyses"][0]
     assert a["test"] == "moderated_t" and a["effect_size"] == "log2_mean_difference"
     assert a["bh_population"] == "matrix" and a["min_detected_fraction"] == 0.5
-    assert a["verdict"] == {"q": 0.05, "equivalence_fc": 1.2} and a["allow_confounded"] is False
+    assert a["verdict"] == {"q": 0.05, "equivalence_fc": 1.2} and a["allow_confounded"] is True
+    assert a["p_adjust"] == "bh"
     assert n["primary"] == "a1"
     assert normalize_spec_v2(copy.deepcopy(n)) == n
     assert rule_hash_v2(n) == rule_hash_v2(normalize_spec_v2(_spec()))
@@ -206,3 +207,60 @@ def test_preprocess_error_details_are_flat():
     e = _code(normalize_spec_v2, _spec(preprocess={"drift": {"mode": "bogus"}}))
     assert e.code == "ANALYSIS_SPEC_INVALID" and "details" not in e.details
     assert e.details["field"].startswith("preprocess.")
+
+
+# --- 補正の方法・PLS-DA（仕分けの一覧 2026-11-13 の B2-T21） ----------------------------------
+
+def test_p_adjust_normalized_validated_and_reaches_engine():
+    n = normalize_spec_v2(_spec(analyses=[{"analysis_id": "a1", "kind": "compare", "p_adjust": "holm"}]))
+    assert n["analyses"][0]["p_adjust"] == "holm"
+    assert rule_hash_v2(n) != rule_hash_v2(normalize_spec_v2(_spec()))
+    e = _code(normalize_spec_v2, _spec(analyses=[{"analysis_id": "a1", "kind": "compare",
+                                                  "p_adjust": "fdr"}]))
+    assert e.code == "ANALYSIS_SPEC_INVALID" and e.details["field"] == "analyses[0].p_adjust"
+    r = run_spec_v2(normalize_spec_v2(_spec(preprocess=_FULL["preprocess"], analyses=[
+        {"analysis_id": "a1", "kind": "compare", "p_adjust": "bonferroni"}])), _ds())
+    res = r["analyses"][0]["result"]
+    assert res["p_adjust_method"] == "bonferroni"
+    assert res["bh_population"]["q_interpretation"] == "fwer"
+
+
+def test_allow_confounded_default_true_and_explicit_false_still_stops():
+    n = normalize_spec_v2(_spec())
+    assert n["analyses"][0]["allow_confounded"] is True
+    off = normalize_spec_v2(_spec(analyses=[{"analysis_id": "a1", "kind": "compare",
+                                             "allow_confounded": False}]))
+    assert off["analyses"][0]["allow_confounded"] is False
+
+
+def test_plsda_normalized_with_defaults_and_validated():
+    n = normalize_spec_v2(_spec(analyses=[{"analysis_id": "pl", "kind": "plsda"}]))
+    assert n["analyses"][0] == {"analysis_id": "pl", "kind": "plsda", "scaling": "autoscale",
+                                "impute": "half_min", "n_components": 2, "cv_folds": 7,
+                                "n_permutations": 200, "seed": 0}
+    assert n["primary"] is None                       # plsda は primary にならない
+    for bad in ({"n_components": 0}, {"cv_folds": 1}, {"n_permutations": 0}, {"seed": -1},
+                {"scaling": "unit"}, {"impute": "zero"}, {"classes": ["C"]}, {"classes": ["C", "C"]},
+                {"n_permutations": 10001}, {"test": "welch"}):
+        e = _code(normalize_spec_v2, _spec(analyses=[{"analysis_id": "pl", "kind": "plsda", **bad}]))
+        assert e.code == "ANALYSIS_SPEC_INVALID", bad
+    e = _code(normalize_spec_v2, _spec(analyses=[{"analysis_id": "pl", "kind": "plsda"}],
+                                       primary="pl"))
+    assert e.details["field"] == "primary"
+
+
+def test_plsda_runs_in_spec_and_returns_q2_permutation_and_vip():
+    spec = _spec(preprocess=_FULL["preprocess"],
+                 analyses=[{"analysis_id": "cmp", "kind": "compare"},
+                           {"analysis_id": "pl", "kind": "plsda", "n_permutations": 20,
+                            "classes": ["C", "T"]}])
+    r = run_spec_v2(normalize_spec_v2(spec), _ds())
+    assert [a["kind"] for a in r["analyses"]] == ["compare", "plsda"] and r["primary"] == "cmp"
+    pl = r["analyses"][1]["result"]
+    assert pl["schema"] == "stats-plsda.v1" and pl["n_components"] == 2
+    assert len(pl["q2_cum"]) == 2 and pl["q2"] == pl["q2_cum"][-1]
+    assert pl["permutation"]["n"] == 20 and 0 < pl["permutation"]["p"] <= 1
+    assert {v["feature_id"] for v in pl["vip"]} <= {f"f{k}" for k in range(12)}
+    assert pl["vip"][0]["feature_id"] in {"f0", "f1", "f2"}           # 仕込んだ差の特徴が上位
+    again = run_spec_v2(normalize_spec_v2(spec), _ds())
+    assert again["analyses"][1]["result"] == pl                         # seed で決まる
