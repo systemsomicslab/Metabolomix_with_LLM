@@ -19,7 +19,7 @@ import numpy as np
 from scipy import stats as sps
 
 from metabolomix.analysis.stats.data import (DETECTED, GAP_FILLED, MISSING, StudyData, cell_states,
-                                             polarity_samples)
+                                             order_may_be_file_order, polarity_samples)
 
 __all__ = ["QUALITY_THRESHOLDS", "qc_rsd_summary", "failed_qc", "detection_summary",
            "drift_signs", "quality_verdict"]
@@ -136,7 +136,11 @@ def _drift_signs_in(study: StudyData, samples, cols: np.ndarray | None) -> list[
         if not (math.isfinite(rho) and math.isfinite(p)):
             continue
         flag = abs(rho) >= QUALITY_THRESHOLDS["drift_rho"] and p < QUALITY_THRESHOLDS["drift_p"]
-        out.append({"batch": batch, "n_qc": int(keep.sum()), "rho": rho, "p": p, "flag": bool(flag)})
+        # ρ に使った QC の注入順が実際の測定順とは限らない（MS-DIAL の既定・シートの宣言でファイル名の順）なら印を
+        # 付ける（ρ はファイル名の並びとの相関かもしれない）。確かな順の行には鍵ごと付けない
+        unsure = any(order_may_be_file_order(samples[i]) for i, k in zip(rows, keep) if k)
+        out.append({"batch": batch, "n_qc": int(keep.sum()), "rho": rho, "p": p, "flag": bool(flag),
+                    **({"injection_order_may_be_file_order": True} if unsure else {})})
     return out
 
 
@@ -144,7 +148,8 @@ def drift_signs(study: StudyData) -> list[dict]:
     """バッチごと（QC が `drift_min_qc` 本以上）の、QC の総量の log2 と注入順の Spearman。
 
     統合したデータセットは極性ごとに、その極性の特徴の総量とその極性の測定の注入順・バッチで見て、
-    各行に `polarity` を足す。
+    各行に `polarity` を足す。ρ に使った QC の注入順が実際の測定順とは限らない（`data.order_may_be_file_order`）
+    行には `injection_order_may_be_file_order: True` を足す（ρ は出す。判定はそのまま）。
     """
     blocks = _polarity_columns(study)
     if not blocks:

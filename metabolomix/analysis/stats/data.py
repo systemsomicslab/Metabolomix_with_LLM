@@ -88,6 +88,13 @@ def run_of(sample: SampleInfo) -> dict:
             "injection_order_may_be_file_order": bool(sample.injection_order_may_be_file_order)}
 
 
+def order_may_be_file_order(sample: SampleInfo) -> bool:
+    """注入 1 本の注入順が実際の測定順とは限らない: MS-DIAL の既定（ファイルの順）かもしれないか、試料の表が宣言
+    `# injection_order_source = filename` でファイル名の順と書いた値（drift=auto が補正を止める条件・概観の
+    ドリフトの兆候の但し書きが同じ規則で読む）。"""
+    return bool(sample.injection_order_may_be_file_order) or sample.injection_order_source == "filename"
+
+
 def polarity_samples(study: StudyData, polarity: str) -> list[SampleInfo]:
     """その極性の特徴の測定としての試料の表（`samples` と同じ順・同じ試料）。
 

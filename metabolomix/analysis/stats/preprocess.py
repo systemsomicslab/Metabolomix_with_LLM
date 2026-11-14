@@ -20,7 +20,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from metabolomix.analysis.stats.data import (DETECTED, SAMPLE_TABLE_POLARITY, QuantState, StudyData,
-                                             cell_states, polarity_samples, replicate_name_warnings)
+                                             cell_states, order_may_be_file_order, polarity_samples,
+                                             replicate_name_warnings)
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 PREPROCESS_DEFAULTS = {
@@ -542,8 +543,7 @@ _AUTO_HOLD_MESSAGES = {
 
 def _order_uncertain(samples) -> bool:
     """ドリフト補正に使う注入（生体・QC）の注入順が確かでない（MS-DIAL の既定かもしれない・ファイル名の順）。"""
-    return any(s.injection_order_may_be_file_order or s.injection_order_source == "filename"
-               for s in samples if s.role in ("sample", "qc"))
+    return any(order_may_be_file_order(s) for s in samples if s.role in ("sample", "qc"))
 
 
 def _auto_hold(samples, quant) -> list[str]:
