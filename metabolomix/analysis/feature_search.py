@@ -725,7 +725,8 @@ def match_target(ds, target: dict, *, max_results: int,
 # ---------- 窓検索と差次的統計の結合（spec §4.2・§6） ----------
 
 #: 窓検索の行の列（この順で TSV にする）。`inchikey_ambiguity` は名前から InChIKey を引いたとき
-#: 研究室 MSP に同じ名前の別の InChIKey があった特徴の印（`name_conflict`。無ければ空）。
+#: 研究室 MSP に同じ名前の別の InChIKey があり、構造からも導けず InChIKey が空のまま残った特徴の印
+#: （`name_conflict`。無ければ空）。
 WINDOW_COLUMNS = ("feature_id", "mz", "rt", "evidence", "name", "inchikey", "adduct", "n_sme",
                   "ontology", "n_detected", "normalized", "msi_level", "inchikey_ambiguity")
 
@@ -758,7 +759,7 @@ def _window_identity(candidates, annotation) -> dict:
     （曖昧なら名前は None、InChIKey は ``;`` 連結）。目標の判定（`_identity`）とは別物で、
     ここは「この特徴には何が付いているか」を並べるだけ。
     ``inchikey_ambiguity`` は、その証拠の名前から InChIKey を引いたとき同名衝突があった（研究室 MSP に
-    同じ名前の別の InChIKey があり、どれにも決めなかった）なら ``name_conflict``、無ければ None。
+    同じ名前の別の InChIKey があり、どれにも決めず、構造からも導けなかった）なら ``name_conflict``、無ければ None。
     """
     candidates = list(candidates or [])
     if candidates:

@@ -131,7 +131,7 @@ mzTab-M は mzTab-M のフォルダ。指紋には入れない）を決める。
 43.   └─ metabolomix/core/mcp_core.py _report_dir_candidates()
 44.   └─ metabolomix/tools/objective.py recall_assay_kind()
 45. └─ metabolomix/tools/handle_tools.py _open_library_for()
-46. └─ metabolomix/core/session_state.py AnalysisSession.adopt_handle()（直近にする。受け付けた読み込みは `_CurrentTicket.may_become_current()` に従う）
+46. └─ metabolomix/core/session_state.py AnalysisSession.adopt_handle()（直近にする。受け付けた読み込みは `_CurrentTicket.may_become_current()` に従う。直近のハンドルが無いうちに記録したセッションの種別は `_SessionKindCarry` がこのハンドルへ移す）
 47.    └─ metabolomix/core/handles.py HandleRegistry.add()
 48. └─ metabolomix/tools/mztab_tools.py load_summary_lines()
 49.    └─ [解析フォルダ] metabolomix/tools/mztab_tools.py _folder_summary_text()

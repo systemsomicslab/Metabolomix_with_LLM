@@ -291,22 +291,26 @@ def _resolve_inchikey(database_identifier, inchi, smiles, msp_table, msp_counts:
     MSP を RDKit より前に置くのは、研究室が整備した値をそのまま使い、RDKit の有無
     （機械のアプリケーション制御）で結果を変えないため（spec §3.2）。`derive_inchikey`
     はモジュール属性として呼ぶ（既存テストがここを差し替えて RDKit 不在を再現する）。
-    `flags` を渡すと、MSP の表で同じ名前に別の InChIKey があり決めなかったとき
-    `flags["name_conflict"] = True` を書く（特徴単位の曖昧の印 `inchikey_name_conflict` の材料）。
+    `flags` を渡すと、MSP の表で同じ名前に別の InChIKey があり決めず、構造（InChI / SMILES）からも
+    導けずに InChIKey が空のまま残ったとき `flags["name_conflict"] = True` を書く（特徴単位の曖昧の印
+    `inchikey_name_conflict` の材料）。構造から導けたなら、その InChIKey は名前に依らないので印を付けない。
     """
     text = str(database_identifier or "").strip()
     if text and _INCHIKEY_RE.match(text):
         return text, "database_identifier"
+    name_conflict = False
     if msp_table is not None:
         inchikey, outcome = msp_inchikey.lookup(msp_table, database_identifier)
         counter = _MSP_LOOKUP_COUNTERS.get(outcome)
         if counter is not None:
             msp_counts[counter] += 1
-        if outcome == "conflicting" and flags is not None:
-            flags["name_conflict"] = True
         if inchikey:
             return inchikey, "msp_library"
-    return derive_inchikey(database_identifier, inchi, smiles)
+        name_conflict = outcome == "conflicting"
+    inchikey, source = derive_inchikey(database_identifier, inchi, smiles)
+    if name_conflict and inchikey is None and flags is not None:
+        flags["name_conflict"] = True
+    return inchikey, source
 
 
 def build_dataset_state(

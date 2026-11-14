@@ -68,7 +68,7 @@
 | 欄 | 意味 |
 |---|---|
 | `dataset_handle` | ハンドルの ID |
-| `assay_kind` | このハンドルの種別（`lipid` / `metabolite` / `unknown`）。ハンドルごとに持ち、解析フォルダ配下 `reports/` の目的ファイルに記録があれば読み戻す（`notes` に注記）。`record_objective(assay_kind=...)` で確定・変更する |
+| `assay_kind` | このハンドルの種別（`lipid` / `metabolite` / `unknown`）。ハンドルごとに持ち、解析フォルダ配下 `reports/` の目的ファイルに記録があれば読み戻す（`notes` に注記）。データセットを開く前に（`[paths] reports_dir` の目的へ）記録した種別は、次に直近になるハンドルへ引き継ぐ（目的ファイルの種別と食い違えば `unknown`。`notes` に注記）。`record_objective(assay_kind=...)` で確定・変更する |
 | `adapter` | 読んだアダプタ。`msdial_folder`（解析フォルダの `.arf` / `.arf2` を直接）/ `mztab`（mzTab-M）。`job_path` / `pipeline_path` の既定は `msdial_folder`（`source="mztab"` で `mztab`） |
 | `polarity` / `polarity_source` | データセットの極性と出所（`job_declared` / `adduct_majority` / `arf2_ion_mode` / `unknown`）。`dataset_feature_search` の目標照合と同じ決め方 |
 | `n_features` / `n_samples` | 特徴数・試料数 |

@@ -71,8 +71,8 @@
 
 ## dataset_overview
 
-最初の概観（spec 2026-11-06-dataset-overview-design）。`load_dataset` も読み込みの最後に同じ `build_overview_payload()` を呼ぶ
-（`embedded=True`、`dataset.md` の `load_dataset`）。統計は C のエンジンだけを通す: 既定の前処理（手順 3〜5。ドリフト補正の既定が
+最初の概観（spec 2026-11-06-dataset-overview-design）。`load_dataset(overview=True)` のときだけ、読み込みの最後に同じ
+`build_overview_payload()` を呼ぶ（`embedded=True`、`dataset.md` の `load_dataset`。既定の `overview=False` では呼ばない）。統計は C のエンジンだけを通す: 既定の前処理（手順 3〜5。ドリフト補正の既定が
 未決〔`NeedsInput`〕なら drift を off にして作り直し、そう書く）→ 品質の純計算（手順 7〜10。前処理前の値）→ PCA（手順 12〜13）→
 spec v2 の比較（手順 15〜18。群が 1 つ・探索専用・完全交絡なら回さない）→ 選別の後だけ組成（手順 20）。比較と PCA は `make_current=False` で
 `ds.results` に置き、直近（`last_differential` / `last_pca`）は動かさない。事実の組み立ては `analysis/overview.py`（手順 6・11・19・21〜24）で、

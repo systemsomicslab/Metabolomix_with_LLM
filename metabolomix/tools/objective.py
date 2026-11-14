@@ -122,12 +122,18 @@ def recall_assay_kind(ds, report_dirs) -> tuple[str | None, str | None]:
 
 
 def _kind_note(holder, assay_kind: str | None) -> str:
-    """種別を書いたときの戻り値の 1 句（どのハンドルの種別が切り替わったか）。"""
+    """種別を書いたときの戻り値の 1 句（どのハンドルの種別が切り替わったか）。
+
+    データセットが無い（`[paths] reports_dir` の目的へ、読み込みの前に記録した）なら、種別はセッションに
+    置き、次に直近になるハンドルへ `load_dataset` が引き継ぐ（`AnalysisSession.adopt_handle`）。
+    """
     if assay_kind is None:
         return ""
     handle_id = getattr(holder, "handle_id", None) or getattr(holder, "current_handle_id", None)
-    where = f"ハンドル {handle_id}" if handle_id else "セッション"
-    return f", assay_kind={assay_kind}（{where} のデータセットに記録）"
+    if handle_id and getattr(holder, "dataset", None) is not None:
+        return f", assay_kind={assay_kind}（ハンドル {handle_id} のデータセットに記録）"
+    return (f", assay_kind={assay_kind}（データセットが無いのでセッションに置いた。"
+            "次に load_dataset で開いて直近になるデータセットへ引き継ぐ）")
 
 
 # 目的を作る呼び出しは同じパスへ上書きするので冪等だが、既存の目的に add_subquestions を渡すと
@@ -166,7 +172,8 @@ def record_objective(
     読み戻す（作成時に省けば unknown で、ハンドルの種別は動かさない）。
     dataset_handle: 置き場所（そのデータセットの解析フォルダ配下 reports/）と種別を書くハンドル
     （省略時は直近。設定の `[paths] reports_dir` があれば置き場所はそちらが先）。どちらも無ければ
-    missing_state（load_dataset）。
+    missing_state（load_dataset）。設定の置き場所があってデータセットがまだ無いときに渡した assay_kind は
+    セッションに置き、次に `load_dataset` で開いて直近になるデータセットへ引き継ぐ。
     """
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):

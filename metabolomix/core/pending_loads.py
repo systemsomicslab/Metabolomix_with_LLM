@@ -65,10 +65,14 @@ def clamp_wait(value, *, maximum: float = MAX_WAIT_SECONDS) -> tuple[float, str 
         raise DomainError("DATASET_BAD_REQUEST",
                           f"wait_seconds は秒数（0〜{maximum:g}）です: {value!r}",
                           {"field": "wait_seconds"})
-    used = min(max(float(value), 0.0), float(maximum))
+    try:
+        number = float(value)
+    except OverflowError:   # 浮動小数に収まらない巨大な整数（JSON の整数は桁数に上限が無い）
+        number = math.inf if value > 0 else -math.inf
+    used = min(max(number, 0.0), float(maximum))
     if used == value:
         return used, None
-    shown = "inf" if math.isinf(value) else f"{value:g}"
+    shown = ("-inf" if number < 0 else "inf") if math.isinf(number) else f"{number:g}"
     return used, (f"wait_seconds={shown} は 0〜{maximum:g} 秒の外なので {used:g} 秒に丸めた"
                   "（デスクトップアプリの中継が 36〜60 秒ほどで呼び出しを打ち切るため）。")
 

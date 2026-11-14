@@ -197,11 +197,13 @@ v2 の実験情報シートは、既知の列（と任意の `subject_id`）の�
 | `msp_lookup` | MSP 表の使用状況。`status`（`used` / `no_msp` / `unavailable` / `not_applicable`）、`file`（MSP のファイル名だけ）、`resolved` / `conflicting_names` / `unmatched`（**照合の試行回数**: 特徴ごとの SME 最良証拠 1 件と、SML 行 × 参照特徴）。`conflicting_names` は同じ名前に別の InChIKey が MSP にあって付けなかった数 |
 
 **同名衝突の特徴単位の印**: `conflicting_names` は試行回数の合計で、どの特徴かは分からない。名前から InChIKey を
-引こうとして MSP に同じ名前の別の InChIKey があった（どれにも決めなかった）特徴には、特徴単位の印
+引こうとして MSP に同じ名前の別の InChIKey があり（どれにも決めなかった）、構造（InChI / SMILES）からも RDKit で
+導けずに InChIKey が空のまま残った特徴には、特徴単位の印
 `inchikey_name_conflict: true` が付く（最良証拠は `feature_metadata[fid]`、各 SME 候補は候補ごと、SML の注釈は注釈ごと。
-曖昧な SML 注釈はどれかの行が衝突なら付く）。`dataset_feature_search` の窓の行は `inchikey_ambiguity` 列に
-`name_conflict` を出す（無ければ空）。印の付いた特徴の InChIKey が空なのは「未同定」ではなく「同名の物質が複数あって
-決めなかった」。差次的エクスポートの列は変えない（InChIKey の無い行として扱う）。
+曖昧な SML 注釈はどれかの行が衝突なら付く）。構造から導けた InChIKey（`inchi_derived` / `smiles_derived`）は名前に
+依らないので、名前が衝突しても印は付かない（`conflicting_names` の試行回数には数える）。`dataset_feature_search` の
+窓の行は `inchikey_ambiguity` 列に `name_conflict` を出す（無ければ空）。印の付いた特徴の InChIKey が空なのは
+「未同定」ではなく「同名の物質が複数あって決めなかった」。差次的エクスポートの列は変えない（InChIKey の無い行として扱う）。
 
 **解決の順序**: `database_identifier` が InChIKey 形 → **研究室 MSP の表**（`MspDB:<名前>`）→ RDKit（InChI / SMILES）。
 MSP を RDKit より前に置くのは、RDKit の有無（Windows のアプリケーション制御がネイティブ DLL を
@@ -266,7 +268,8 @@ p / q / 平均は有効 4 桁）。
 は最後に並ぶ。**検出の印（`detected_mask`）が無いデータセット**は gap-fill を見分けられないので、除外していない試料の全セル（NaN は無視）の最大で並べ、`notes` に 1 行そう書く（`n_detected` は空のまま）。`dataset_exclude` した特徴は両方の並びで出さない。
 `features` は `evidence` の後ろに `ontology`（MS-DIAL の Ontology。mzTab-M では SML 注釈にあれば）・`n_detected`
 （検出セルの数。除外した試料を数えない。検出状態が無いデータセットでは空で、0 ではない）・`normalized`（GOSLIN で
-標準化した脂質名）・`msi_level`（MSI の同定水準）を持つ。`normalized` と `msi_level` は解析フォルダのデータセット
+標準化した脂質名）・`msi_level`（MSI の同定水準）・`inchikey_ambiguity`（同名衝突で InChIKey を決めなかった特徴なら
+`name_conflict`、無ければ空。§13.6 の「同名衝突の特徴単位の印」）を持つ。`normalized` と `msi_level` は解析フォルダのデータセット
 （`.arf2` の同定の標準化。意味は `docs/output_format/identity.md`）だけで、mzTab-M のデータセットでは空。
 
 **`evidence`（証拠の水準）** は 2 種類ある。

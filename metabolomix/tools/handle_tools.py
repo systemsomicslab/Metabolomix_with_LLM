@@ -219,6 +219,8 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
     アッセイ種別（`assay_kind`）はハンドルごとに持つ。解析フォルダ配下 `reports/` の目的ファイル
     （`record_objective` が書いたもの）に `lipid` / `metabolite` が記録されていれば、それを読み戻して
     このハンドルの種別にし（`notes` に注記）、無ければ `unknown`（`record_objective(assay_kind=...)` で確定）。
+    データセットを開く前に（`[paths] reports_dir` の目的へ）記録した種別は、そのあと最初に直近になる
+    ハンドルへ引き継ぐ（目的ファイルの種別と食い違えば unknown。どちらも `notes` に注記）。
 
     成功すると、いつも**新しいハンドルを直近にする**。`dataset_handle` を省いた `dataset_*` /
     `library_*` はこの直近のハンドルに効く。再解析のエージェントは返った `dataset_handle` を
@@ -275,13 +277,19 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
 MAX_WAIT_SECONDS = pending_loads.MAX_WAIT_SECONDS
 
 
-def _input_label(directory, mztab_path, job_path, pipeline_path, polarity) -> str | None:
-    """受付の一覧（`dataset_load_status` の選択肢）に見せる短い説明。入力の名前だけ（パスは出さない）。"""
-    path = directory or mztab_path or job_path or pipeline_path
+def _input_name(path) -> str | None:
+    """入力の名前だけ（パスは出さない）。`pipeline-run.json` はそれを置いた run のフォルダの名前。"""
     if not path:
         return None
     path = Path(str(path))
-    name = (path.parent.name if path.name.lower() == "pipeline-run.json" else path.name) or str(path)
+    return (path.parent.name if path.name.lower() == "pipeline-run.json" else path.name) or str(path)
+
+
+def _input_label(directory, mztab_path, job_path, pipeline_path, polarity) -> str | None:
+    """受付の一覧（`dataset_load_status` の選択肢）に見せる短い説明。入力の名前だけ（パスは出さない）。"""
+    name = _input_name(directory or mztab_path or job_path or pipeline_path)
+    if name is None:
+        return None
     return f"{name} ({polarity})" if polarity else name
 
 
@@ -334,11 +342,11 @@ def _argument_error(overview, library) -> str | None:
     return None
 
 
-def _recall_assay_kind(handle) -> str | None:
-    """解析フォルダの目的ファイルに記録した種別をハンドルへ読み戻す。戻り値は注記（無ければ None）。
+def _recall_assay_kind(handle) -> tuple[str | None, str | None]:
+    """解析フォルダの目的ファイルに記録した種別をハンドルへ読み戻す。(読み戻した種別, 注記)。
 
     記録の置き場所が決まらない・設定ファイルが読めない・読めないファイルは、読み戻さずに `unknown`
-    のまま続ける（読み込みは止めない）。
+    のまま続ける（読み込みは止めない）。食い違いで読み戻さなかったときは (None, 理由)。
     """
     from metabolomix.tools import objective
 
@@ -346,10 +354,42 @@ def _recall_assay_kind(handle) -> str | None:
         kind, note = objective.recall_assay_kind(
             handle.dataset, mcp_core._report_dir_candidates(handle))
     except (DomainError, OSError):
-        return None
+        return None, None
     if kind is not None:
         handle.assay_kind = kind
-    return note
+    return kind, note
+
+
+class _SessionKindCarry:
+    """データセットを開く前に記録したセッションの種別を、直近になるハンドルへ当てる
+    （`AnalysisSession.adopt_handle` の `take_session_assay_kind`。セッションのロックの下で呼ばれる）。
+
+    目的ファイルから読み戻せた種別と同じなら何も足さない。読み戻した種別と食い違えば、どちらも採らずに
+    `unknown` にする（目的ファイルどうしの食い違いと同じ扱い）。目的ファイルどうしが食い違って読み戻さな
+    かったときも当てない。目的ファイルに記録が無ければ当てる。どの場合も `note` に 1 文を残す（同じなら無し）。
+    """
+
+    def __init__(self, handle, recalled: str | None, recall_note: str | None):
+        self._handle = handle
+        self._recalled = recalled
+        self._recall_conflict = recalled is None and recall_note is not None
+        self.note: str | None = None
+
+    def __call__(self, kind: str) -> None:
+        if self._recalled == kind:
+            return
+        if self._recalled is not None:
+            self._handle.assay_kind = "unknown"
+            self.note = (f"目的ファイルの assay_kind={self._recalled} と、データセットを開く前に記録した "
+                         f"assay_kind={kind} が食い違うので、どちらも採らず unknown にした"
+                         "（record_objective(assay_kind=...) で確定する）。")
+        elif self._recall_conflict:
+            self.note = (f"データセットを開く前に記録した assay_kind={kind} も、目的ファイルが食い違うので"
+                         "当てていない（unknown のまま）。")
+        else:
+            self._handle.assay_kind = kind
+            self.note = (f"assay_kind={kind} を、データセットを開く前の record_objective の記録から"
+                         "このハンドルへ引き継いだ。")
 
 
 def _load_now(*, directory: str | None = None, mztab_path: str | None = None,
@@ -392,7 +432,9 @@ def _load_now(*, directory: str | None = None, mztab_path: str | None = None,
                     "adapter": opened.adapter, "measure": measure},
             arf2_path=arf2, dcl_path=dcl)
         # 種別はハンドル（データセット）ごと。目的ファイルに記録があれば読み戻す（登録の前に）。
-        kind_note = _recall_assay_kind(handle)
+        recalled, kind_note = _recall_assay_kind(handle)
+        # ハンドルが無いうちに記録したセッションの種別は、直近になるこのハンドルへ移す（adopt_handle）。
+        carry = _SessionKindCarry(handle, recalled, kind_note)
         store, note = (None, "library=\"none\" なので読んでいない。") if library == "none" \
             else _open_library_for(ds)
         handle.library.store = store
@@ -404,7 +446,8 @@ def _load_now(*, directory: str | None = None, mztab_path: str | None = None,
             # 受け付けた後に別のハンドルが直近になっていたら（`ticket`）、登録だけして移さない。
             made_current = session_state.session.adopt_handle(
                 handle, move_library=(library == "auto"), reservation=reservation,
-                may_become_current=ticket.may_become_current if ticket is not None else None)
+                may_become_current=ticket.may_become_current if ticket is not None else None,
+                take_session_assay_kind=carry)
         except DomainError:
             handle.close()
             raise
@@ -422,7 +465,8 @@ def _load_now(*, directory: str | None = None, mztab_path: str | None = None,
                         "sha256": summary["source_sha256"],
                         "record_count": summary["record_count"]}
     detection = getattr(ds, "detected_mask", None) is not None
-    notes = [*polarity_notes, *opened.notes, *([kind_note] if kind_note else [])]
+    notes = [*polarity_notes, *opened.notes,
+             *(note for note in (kind_note, carry.note) if note)]
     # 意味論ダイジェスト（未読・種別ごとに 1 回・`caveat_mode=off` で止まる）。最上位の文字列として
     # 先頭に置く——結論より前に解釈の前提が目に入るように。無ければ鍵ごと出さない。
     # 種別はこのハンドルのもの（直近にしなかった読み込みでも、そのデータセットの規則を出す）。
@@ -609,7 +653,7 @@ def dataset_list() -> str:
             "polarity": handle.polarity,
             "assay_kind": handle.assay_kind,
             "source_kind": handle.source.get("kind"),
-            "source": Path(handle.source.get("path") or "").name,
+            "source": _input_name(handle.source.get("path")) or "",
             "n_features": len(handle.dataset.feature_ids),
             "n_samples": len(handle.dataset.sample_names),
             "library_sha256": store.summary()["source_sha256"][:16] if store is not None else None,
@@ -638,8 +682,9 @@ def dataset_close(dataset_handle: str) -> str:
     `dataset_handle` を省いた呼び出しはデータセットが無い状態（`missing_state`）になる。
     開いている別のハンドルへは落ちない（もう一度 `load_dataset` で読む）。
 
-    戻り値: `closed`（閉じたハンドル）・`source`（何を閉じたか: 入口の種類・入力の名前・極性。パスは
-    出さない。開き直すときの手がかり）・`was_current`（直近だったか）・`open_handles`（残りの数）。
+    戻り値: `closed`（閉じたハンドル）・`source`（何を閉じたか: 入口の種類・入力の名前（`pipeline-run.json`
+    はその run のフォルダの名前）・極性。パスは出さない。開き直すときの手がかり）・`was_current`（直近だったか）・
+    `open_handles`（残りの数）。
     """
     handle = handles.registry.peek(dataset_handle)
     was_current = dataset_handle == session_state.session.current_handle_id
@@ -650,7 +695,7 @@ def dataset_close(dataset_handle: str) -> str:
     source = getattr(handle, "source", None) or {}
     closed_source = {key: value for key, value in (
         ("kind", source.get("kind")),
-        ("name", Path(source["path"]).name if source.get("path") else None),
+        ("name", _input_name(source.get("path"))),
         ("polarity", getattr(handle, "polarity", None))) if value}
     return json_payload({"status": "success", "closed": dataset_handle,
                          **({"source": closed_source} if closed_source else {}),

@@ -80,7 +80,9 @@ def _call(app, name, args) -> dict:
 @pytest.mark.parametrize("value, used, noted", [
     (0, 0.0, False), (5, 5.0, False), (30, 30.0, False), (2.5, 2.5, False),
     (-1, 0.0, True), (-math.inf, 0.0, True), (31, 30.0, True), (60, 30.0, True),
-    (math.inf, 30.0, True)])
+    (math.inf, 30.0, True),
+    # 浮動小数に収まらない巨大な整数も断らずに丸める（OverflowError で落ちない）
+    (10 ** 400, 30.0, True), (-(10 ** 400), 0.0, True)])
 def test_clamp_wait_clamps_numbers(value, used, noted):
     got, note = pending_loads.clamp_wait(value)
     assert got == used

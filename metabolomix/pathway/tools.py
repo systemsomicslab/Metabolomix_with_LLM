@@ -287,7 +287,8 @@ def pathway_project(group_a: str | list[str] | None = None,
     if isinstance(holder, str):
         return holder
     s = session_state.session
-    if s.assay_kind != "lipid":
+    # 種別はハンドルごと: 渡したハンドルの種別を見る（直近のハンドルの種別ではない）。
+    if getattr(holder, "assay_kind", "unknown") != "lipid":
         return mcp_errors.missing_state(
             "assay_kind", ["record_objective"],
             "MSLipidMapper は脂質専用です。record_objective(assay_kind='lipid') で種別を確定してください。")

@@ -825,6 +825,38 @@ def test_conflicting_sme_name_marks_the_candidate_and_the_feature(tmp_path, monk
     assert "inchikey_name_conflict" not in ds.feature_metadata["5"]
 
 
+def test_conflicting_name_with_a_structure_derived_key_is_not_marked(tmp_path, monkeypatch):
+    """同名衝突でも、構造（InChI / SMILES）から InChIKey を導けたら印を付けない（レビュー指摘）。
+
+    導いた InChIKey は名前に依らない確かな値で、`inchikey_ambiguity=name_conflict` を並べると
+    正しい同定を曖昧と読ませる。印は「同名衝突のせいで InChIKey が空のまま」の特徴だけに付く。
+    """
+    from metabolomix.analysis import feature_search
+
+    def rdkit_derive(database_identifier, inchi, smiles):
+        if smiles:
+            return "ROHFNLRQFUQHCH-UHFFFAOYSA-N", "smiles_derived"
+        return None, "none"
+    monkeypatch.setattr("metabolomix.mztab.dataset_state.derive_inchikey", rdkit_derive)
+    p = tmp_path / "Height_conflict_rdkit.mzTab"
+    p.write_text(_MSPDB_MZTAB.replace("SME	1	MspDB:Citrulline	NC(=O)NCCCC(N)C(O)=O	null	Citrulline",
+                                      "SME	1	MspDB:Leucine	CC(C)CC(N)C(O)=O	null	Leucine"),
+                 encoding="utf-8")
+    ds = build_dataset_state(parse_mztab(p), p.name, p, msp_table=_TABLE)
+    # SME の最良証拠と候補（特徴 1）・SML の注釈（特徴 3）: 名前は衝突するが SMILES から導けた。
+    assert ds.feature_metadata["1"]["inchikey"] == "ROHFNLRQFUQHCH-UHFFFAOYSA-N"
+    assert ds.feature_metadata["1"]["inchikey_source"] == "smiles_derived"
+    assert "inchikey_name_conflict" not in ds.feature_metadata["1"]
+    assert "inchikey_name_conflict" not in ds.feature_candidates["1"][0]
+    assert ds.feature_annotations["3"]["inchikey_source"] == "smiles_derived"
+    assert "inchikey_name_conflict" not in ds.feature_annotations["3"]
+    window = feature_search._window_identity(ds.feature_candidates.get("3"),
+                                             ds.feature_annotations["3"])
+    assert window["inchikey_ambiguity"] is None
+    # 衝突の試行は数える（印とは別。MSP の表で決まらなかった事実）。
+    assert ds.inchikey_coverage["msp_lookup"]["conflicting_names"] >= 1
+
+
 def test_inchikey_shaped_identifier_wins_over_the_msp(tmp_path, monkeypatch):
     _without_rdkit(monkeypatch)
     ds = _build_msp(tmp_path)
