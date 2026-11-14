@@ -194,7 +194,9 @@ def test_export_interaction_contrast_writes_the_difference_of_differences(tmp_pa
     values, keys = _parse_meta(meta)
     assert len(keys) == len(set(keys))
     assert values["contrast_kind"] == "interaction" and values["interaction_factors"] == "group x sex"
-    assert values["interaction_levels"] == "group C>T; sex F>M"
+    # 水準は「基準 → 比較」を言葉で書く（`>` は大小と読めるので使わない）
+    assert values["interaction_levels"] == "group reference C test T; sex reference F test M"
+    assert ">" not in values["interaction_levels"]
     assert "minus" in values["interaction_definition"]
     assert values["mean_definition"] == export_contract.INTERACTION_MEAN_DEFINITION
     assert set(values) <= V1_META_KEYS | NEW_META_KEYS | OPTIONAL_META_KEYS
@@ -447,9 +449,20 @@ def test_novel_candidates_reads_compare_result(tmp_path):
     multi = _compare(groups=["C", "T", "U"])
     ambiguous = {"statistics": {"result_id": multi["result_id"], "merge_split": False},
                  "ppm": {"default": 5.0}, "q_max": 0.2}
-    err = json.loads(reanalysis_tools.dataset_novel_candidates(ambiguous))["error"]
-    assert err["code"] == "CONTRAST_REQUIRED"
-    assert err["details"]["two_group_contrast_ids"] == ["T_vs_C", "U_vs_C"]
+    # ID だけなら誤りでなく問い（spec の statistics.result_id に result_id#contrast_id を入れて呼び直す）
+    asked = json.loads(reanalysis_tools.dataset_novel_candidates(ambiguous))
+    assert "error" not in asked
+    body = asked["needs_input"]
+    assert body["field"] == "statistics.result_id" and "argument" not in body
+    assert body["retry_tools"] == ["dataset_novel_candidates"]
+    assert [o["value"] for o in body["options"]] == [f"{multi['result_id']}#T_vs_C",
+                                                    f"{multi['result_id']}#U_vs_C"]
+    assert all(o["label"] for o in body["options"])
+    # 未知の対比の名指しは誤りのまま（候補つき）
+    unknown = {"statistics": {"result_id": f"{multi['result_id']}#nope", "merge_split": False},
+               "ppm": {"default": 5.0}, "q_max": 0.2}
+    err = json.loads(reanalysis_tools.dataset_novel_candidates(unknown))["error"]
+    assert err["code"] == "CONTRAST_REQUIRED" and err["details"]["two_group_contrast_ids"] == ["T_vs_C", "U_vs_C"]
     named = {"statistics": {"result_id": f"{multi['result_id']}#U_vs_C", "merge_split": False},
              "ppm": {"default": 5.0}, "q_max": 0.2}
     ok = json.loads(reanalysis_tools.dataset_novel_candidates(named))
@@ -767,6 +780,12 @@ def test_export_exclude_feature_ids_drops_rows_after_testing(ds, tmp_path):
     values, keys = _parse_meta(meta)
     assert len(keys) == len(set(keys)) and set(values) <= V1_META_KEYS | NEW_META_KEYS | OPTIONAL_META_KEYS
     assert values["n_excluded_after_test"] == "2" and "not recomputed" in values["excluded_after_test_note"]
+    # 注記は補正の方法・母集団によらず正しい書き方（BH と決めつけない）で、件数の関係も書く
+    note = values["excluded_after_test_note"]
+    assert "BH" not in note and "multiple-testing population is unchanged" in note
+    assert "n_features_total still counts them" in note
+    assert (int(values["n_features_total"]) == info["n_features_total"]
+            == int(values["n_with_inchikey"]) + int(values["n_unannotated"]) + int(values["n_excluded_after_test"]))
     full_rows = {line.split("\t")[0]: line for line in body_full[1:]}
     cut_rows = {line.split("\t")[0]: line for line in body[1:]}
     assert set(full_rows) - set(cut_rows) == {"f0", "f3"}
@@ -783,10 +802,22 @@ def test_export_meta_and_bundle_carry_the_records_p_adjust_method(ds, tmp_path):
     path = tmp_path / "h.tsv"
     export_dataset_result(ds, ds.last_differential, path)
     meta, _ = _read(path)
-    assert _parse_meta(meta)[0]["p_adjust_method"] == "holm"
+    values = _parse_meta(meta)[0]
+    # q の読み方は補正の方法に合わせる（FWER の調整 p を discovery_fdr と並べない）
+    assert values["p_adjust_method"] == "holm" and values["q_interpretation"] == "fwer"
     evidence_export.export_dataset_evidence(ds, ds.last_differential, tmp_path / "b")
     comparison = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))["comparison"]
     assert comparison["correction"] == "Holm"
+    assert comparison["statistics"]["bh_population"]["q_interpretation"] == "fwer"
+    # 補正しない p は unadjusted、宣言の無い記録（補正の方法を記録する前）は BH のまま discovery_fdr
+    for method, expected in (("none", "unadjusted"), ("bonferroni", "fwer"), (None, "discovery_fdr")):
+        if method is None:
+            ds.last_differential.pop("p_adjust_method")
+        else:
+            ds.last_differential["p_adjust_method"] = method
+        export_dataset_result(ds, ds.last_differential, path)
+        values = _parse_meta(_read(path)[0])[0]
+        assert values["q_interpretation"] == expected and values["p_adjust_method"] == (method or "bh")
 
 
 def test_save_figure_contrast_id_redraws_the_chosen_contrast(tmp_path):

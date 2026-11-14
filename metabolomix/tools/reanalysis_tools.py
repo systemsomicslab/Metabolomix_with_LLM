@@ -776,7 +776,8 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     SME（rank 1）の同定があり、質量誤差が m/z 帯ごとの許容幅（`ppm.default` と
     `ppm.bands: [{max_mz, ppm}]`）に入り、q が `q_max` 未満の特徴から、`exclude`
     （`feature_ids`・`inchikey_blocks`）を除いた一覧。統計は `statistics` が
-    `{"result_id"}`（`dataset_compare` の 2 群比較。対比が複数の結果は `"result_id#contrast_id"`。
+    `{"result_id"}`（`dataset_compare` の 2 群比較。対比が複数の結果は `"result_id#contrast_id"`——ID だけなら
+    誤りでなく `needs_input`〔`field="statistics.result_id"`、選択肢は `result_id#contrast_id` の一覧〕。
     `dataset_compare` の結果は q に加えて判定が `changed` の行だけ）か `{"analysis_spec", "analysis_id"}`
     （**analysis-spec.v1 だけ**: `dataset_analysis_run` の v1 の spec のその解析。analysis-spec.v2 はここでは
     通らない——統計エンジンの結果は `dataset_compare` を回してその `result_id` を渡す）。q の昇順。`rule_hash` を返す。
@@ -865,7 +866,10 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
                               "指定してください。", {"n_rows": len(rows)})
         written = write_result(output_path, result_payload) if output_path else None
     except DomainError as exc:
-        return mztab_error(exc.code, exc.message, exc.details or None)
+        from metabolomix.tools._contrast_choice import contrast_envelope
+
+        # 対比が複数の結果を ID だけで渡したときは誤りでなく問い（spec の statistics.result_id で選ぶ）
+        return contrast_envelope(exc, "dataset_novel_candidates", spec_field="statistics.result_id")
     columns = ("feature_id", "name", "inchikey", "adduct", "mz", "rt", "ppm", "group_ref",
                "group_test", "log2fc_test_over_ref", "p", "q", "direction")
     if merge_info:

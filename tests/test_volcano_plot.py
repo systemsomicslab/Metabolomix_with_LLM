@@ -144,9 +144,6 @@ class TestBuildVolcanoPlotPayload(unittest.TestCase):
                 volcano_plot.build_volcano_plot_payload(last, max_points=bad)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 class TestVolcanoTitleOrder(unittest.TestCase):
     def test_rendered_title_reads_test_vs_reference(self):
         import matplotlib.pyplot as plt
@@ -156,3 +153,7 @@ class TestVolcanoTitleOrder(unittest.TestCase):
             self.assertEqual(fig.axes[0].get_title(), "Volcano (9w vs 24M)")
         finally:
             plt.close(fig)
+
+
+if __name__ == "__main__":
+    unittest.main()

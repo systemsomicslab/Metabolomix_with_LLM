@@ -580,6 +580,21 @@ def test_output_path_must_be_a_png_and_writable(tmp_path):
     assert (tmp_path / "v.png").is_file()
 
 
+def test_input_read_errors_are_not_reported_as_save_failures(tmp_path, monkeypatch):
+    """図を組み立てる間の OSError（`.EIC.aef` が読めない等）は FIGURE_SAVE_FAILED にしない（書くときだけ）。"""
+    ds = _analysed()
+
+    def locked(_ds, _request):
+        raise PermissionError(13, "The process cannot access the file", "x.EIC.aef")
+
+    before = ds.figures.get("pca")
+    monkeypatch.setitem(plot_tools._KINDS, "pca", locked)
+    for kwargs in ({}, {"output_path": str(tmp_path / "never.png")}):
+        with pytest.raises(PermissionError):
+            plot_tools.dataset_plot(kind="pca", **kwargs)
+    assert not (tmp_path / "never.png").exists() and ds.figures.get("pca") is before
+
+
 def test_dataset_plot_png_is_capped_in_pixels(tmp_path):
     import io
 

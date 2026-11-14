@@ -515,7 +515,9 @@ SML にその列が無い mzTab では**エラーにせず**、`subset_available
  "exclude": {"feature_ids": [], "inchikey_blocks": []}}
 ```
 
-`statistics` は `{"result_id"}`（`dataset_compare` の 2 群比較。`reference_group` が基準）か
+`statistics` は `{"result_id"}`（`dataset_compare` の 2 群比較。`reference_group` が基準。対比が複数の結果は
+`result_id#contrast_id` で 1 つ選ぶ。ID だけなら誤りでなく `needs_input`——`field` は `statistics.result_id`、選択肢の
+`value` は `result_id#contrast_id`、`argument` は無い）か
 `{"analysis_spec", "analysis_id"}`（**analysis-spec.v1 だけ**とその解析。v2 の spec はここでは通らないので、統計エンジンの
 結果は `dataset_compare` の `result_id` で渡す）。SME rank 1 の同定があり、
 |ppm| が帯の許容幅以内（`max_mz` 未満の最初の帯、無ければ `default`）で、q < `q_max` の特徴から
@@ -686,7 +688,7 @@ UTF-8・改行は CRLF）。
 | `comparison.polarity` | データセットの極性（`positive` / `negative`）。ハンドルなら `load_dataset` の `polarity`、対話のセッションなら同じ規則で決める。決まらなければ `null` |
 | `comparison.preprocess` | `value` に当たった前処理の設定（結果が読んだ行列の前処理の設定） |
 | `comparison.method` | 実際に使った検定名（`moderated_t` / `welch` / `student` / `mannwhitney`） |
-| `comparison.statistics` | `{test, ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n, q_interpretation}, subject_source, n_units_a, n_units_b}`。`n` は選んだ対比の BH の母集団の大きさ |
+| `comparison.statistics` | `{test, ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n, q_interpretation}, subject_source, n_units_a, n_units_b}`。`n` は選んだ対比の多重比較の補正の母集団の大きさ（キーの名前は BH のときのまま）。`q_interpretation` は `correction` の方法での `q` の読み方（`discovery_fdr` / `fwer` / `unadjusted` / `reproduction_only`。`dataset.md` の書き出しのメタ行と同じ） |
 | `comparison.effect_size_definition` / `mean_definition` | 効果量の定義（`{name, description}`）と、`mean_a` / `mean_b` が「個体ごとの前処理後の線形値の算術平均」であること |
 | `comparison.matrix_id` / `rule_hash` / `contrast_id` | どの行列・どの規則・どの対比を書いたか（`contrast_id` は 2 群の結果なら 1 つの対比の ID） |
 | `comparison.correction` | `q` を作った多重比較の補正。比較の記録の `p_adjust_method`（`bh` / `bonferroni` / `holm` / `none`）を `BH` / `Bonferroni` / `Holm` / `none` で書く。記録に無ければ `BH` |

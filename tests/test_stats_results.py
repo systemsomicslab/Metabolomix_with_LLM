@@ -347,7 +347,21 @@ def test_as_two_group_reports_the_records_p_adjust_method():
     rec, _, _ = _register(ds)
     assert stats_results.p_adjust_method(rec) == "bh"
     rec["p_adjust_method"] = "holm"                                   # 統計エンジンの記録が持つ補正の方法
-    assert stats_results.as_two_group(rec)["statistics"]["p_adjust_method"] == "holm"
+    stats = stats_results.as_two_group(rec)["statistics"]
+    assert stats["p_adjust_method"] == "holm"
+    # q の読み方は補正の方法に合わせる（エンジンが BH の読み方を書いたままでも FWER と読む）
+    assert stats["bh_population"]["q_interpretation"] == "fwer"
+
+
+@pytest.mark.parametrize("population,method,expected", [
+    ("matrix", "bh", "discovery_fdr"), ("annotated", "bh", "discovery_fdr"),
+    ("matrix", "bonferroni", "fwer"), ("matrix", "holm", "fwer"), ("matrix", "none", "unadjusted"),
+    ("reported", "bh", "reproduction_only"), ("reported", "holm", "reproduction_only"),
+    ("reported", "none", "reproduction_only")])
+def test_q_interpretation_follows_population_and_method(population, method, expected):
+    engine_value = "reproduction_only" if population == "reported" else "discovery_fdr"
+    bh = {"name": population, "q_interpretation": engine_value}
+    assert stats_results.q_interpretation(bh, method) == expected
 
 
 def test_as_two_group_reads_only_compare_records():

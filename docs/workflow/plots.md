@@ -42,7 +42,7 @@ Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT
 `missing_state`（`dataset_pca` / `dataset_compare`）か `COMPANION_ARTIFACT_MISSING`（`.EIC.aef` が無い）。
 状態変更: `ds.figures[kind]` を更新（メモリ上。描けた呼び出しだけ）。
 `output_path`（`.png`）を渡せば `write_figure_files` が同じ図をそのファイルに書く（親のフォルダは作り、書けなければ
-`FIGURE_SAVE_FAILED`）。`species_pca` はさらに結果を
+`FIGURE_SAVE_FAILED`。この符号はファイルに書く段だけで、図を組み立てる間の入力の読み取りの失敗には使わない）。`species_pca` はさらに結果を
 `ds.results` へ登録する（来歴の kind は `species_pca`。`loadings` の `result_id` には使え、分子種のローディングを描く。
 `pca` の `result_id` には使えない）。この結果は来歴に `metadata_revision` を持ち、試料の情報の更新・`dataset_exclude` で
 `is_current` が False になる（`STALE_ANALYSIS_RESULT`）。キュレーションの判断の更新では古くしない（旧 `dataset_plot(kind="species_pca")` と同じ）。

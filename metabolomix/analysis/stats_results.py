@@ -33,6 +33,7 @@ __all__ = [
     "contrast_choices",
     "contrast_ids",
     "p_adjust_method",
+    "q_interpretation",
     "get_matrix",
     "sample_ids_by_name",
     "split_result_ref",
@@ -477,6 +478,22 @@ def p_adjust_method(record: dict) -> str:
     return str(value).lower() if value is not None else _DEFAULT_P_ADJUST
 
 
+#: 補正の方法 → `q` の読み方（報告した特徴だけの母集団 `reported` は方法によらず再現の確認）。
+_Q_INTERPRETATION = {"bonferroni": "fwer", "holm": "fwer", "none": "unadjusted"}
+
+
+def q_interpretation(bh: dict, method: str) -> str:
+    """`q` の読み方。BH はエンジンの値（`discovery_fdr` / `reproduction_only`）のまま、ほかの補正は方法から
+    決める: `bonferroni` / `holm` は `fwer`、`none` は `unadjusted`（補正しない p）。母集団が `reported` なら
+    方法によらず `reproduction_only`。補正の方法を記録する前のエンジンが BH の読み方を書いたままの記録でも、
+    メタ行が `q_interpretation = discovery_fdr` と `p_adjust_method = holm` を並べて食い違わないようにする。"""
+    if bh.get("name") == "reported":
+        return "reproduction_only"
+    if method in _Q_INTERPRETATION:
+        return _Q_INTERPRETATION[method]
+    return bh.get("q_interpretation") or "discovery_fdr"
+
+
 def split_result_ref(result_id: str, contrast_id: str | None = None) -> tuple[str, str | None]:
     """`result_id` か `result_id#contrast_id`（特徴検索が出す形）を `(記録の ID, 対比 ID)` に割る。
 
@@ -505,7 +522,8 @@ def as_two_group(record: dict, contrast_id: str | None = None, *,
     付ける（書き出し・根拠バンドル・volcano はこの印を読む）。`provenance` は元の記録のもの（`kind` は
     `"compare"`）。`allow_confounded=true` で完全交絡を越えた比較だけ、その写しに
     `comparison.unadjusted_confounded: true` と説明（`warnings`。`caveats` にも）を足す（記録は変えない）。
-    `contrast_kind` は `simple` か `interaction`、`statistics.p_adjust_method` は補正の方法（`p_adjust_method`）。
+    `contrast_kind` は `simple` か `interaction`、`statistics.p_adjust_method` は補正の方法（`p_adjust_method`）、
+    `statistics.bh_population.q_interpretation` はその方法での `q` の読み方（`q_interpretation`）。
 
     交互作用（2×2 の差の差）は `allow_interaction=True` のときだけ読む: `a` / `b` は基準の 2 cell・比較の
     2 cell（`"C:M + T:F"` の形）、log2fc は (a1 vs a0 at b1) − (a1 vs a0 at b0)、`mean_a` / `mean_b` は None
@@ -581,6 +599,7 @@ def as_two_group(record: dict, contrast_id: str | None = None, *,
             row, q_threshold=q_threshold, log2fc_threshold=log2fc_threshold)
     finite = [r for r in rows if r["p"] is not None and math.isfinite(r["p"])]
     bh = engine["bh_population"]
+    method = p_adjust_method(record)
     caveats = [w.get("message") or str(w.get("code"))
                for w in engine.get("warnings") or [] if w.get("message") or w.get("code")]
     provenance = record["provenance"]
@@ -620,8 +639,8 @@ def as_two_group(record: dict, contrast_id: str | None = None, *,
             "ci_level": engine["ci_level"],
             "verdict_rule": dict(engine["verdict_rule"]),
             "bh_population": {"name": bh["name"], "n": (bh.get("n_by_contrast") or {}).get(contrast_id),
-                              "q_interpretation": bh["q_interpretation"]},
-            "p_adjust_method": p_adjust_method(record),
+                              "q_interpretation": q_interpretation(bh, method)},
+            "p_adjust_method": method,
             "subject_source": engine["subject_source"],
             "n_units_a": len(units_a),
             "n_units_b": len(units_b),

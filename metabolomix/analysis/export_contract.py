@@ -144,9 +144,14 @@ def stats_meta_lines(result: dict) -> list[str]:
     `n_a` / `n_b` は注入の数のまま、`n_units_a` / `n_units_b` が比較に入った単位の数。
     `contrast_id` は `matrix_id` の行の末尾（どの対比を書いたかを残す）。`bh_n` は BH の母集団が空
     （対比の n が無い）なら 0。`p_adjust_method` は `q_value` を作った多重比較の補正（`bh` / `bonferroni` /
-    `holm` / `none`。宣言の無い結果は `bh`）。`significant_rule` は 15 列目 `significant` の規則（R16。`row_significant`）。
+    `holm` / `none`。宣言の無い結果は `bh`）。`bh_population` / `bh_n` はその補正の母集団（名前は BH のときの
+    まま）、`q_interpretation` は補正の方法に合わせた `q_value` の読み方（`as_two_group` が決める:
+    `discovery_fdr` / `reproduction_only` / `fwer` / `unadjusted`）。`significant_rule` は 15 列目
+    `significant` の規則（R16。`row_significant`）。
     交互作用（`contrast_kind == "interaction"`）は `mean_definition` を「定義しない（空欄）」にし、末尾に
-    `contrast_kind` / `interaction_factors` / `interaction_definition` の 2 行を足す（2 群の対比の行数は変えない）。
+    `contrast_kind` / `interaction_factors` / `interaction_levels` / `interaction_definition` の 2 行を足す
+    （2 群の対比の行数は変えない）。`interaction_levels` は因子ごとに `<因子> reference <a0> test <a1>`
+    （`>` は大小と読めるので使わない）。
     """
     stats = result["statistics"]
     rule = stats["verdict_rule"]
@@ -172,7 +177,8 @@ def stats_meta_lines(result: dict) -> list[str]:
         levels = info["levels"]
         lines += [
             f"# contrast_kind = interaction\tinteraction_factors = {a} x {b}"
-            f"\tinteraction_levels = {a} {levels[a][0]}>{levels[a][1]}; {b} {levels[b][0]}>{levels[b][1]}",
+            f"\tinteraction_levels = {a} reference {levels[a][0]} test {levels[a][1]};"
+            f" {b} reference {levels[b][0]} test {levels[b][1]}",
             f"# interaction_definition = {info['definition']}",
         ]
     return lines

@@ -641,8 +641,14 @@ def dataset_plot(
         if output_path is not None:
             from pathlib import Path
 
-            saved = [str(p) for p in write_figure_files(ds, record, Path(output_path).expanduser(),
-                                                        title=title)]
+            try:
+                saved = [str(p) for p in write_figure_files(ds, record, Path(output_path).expanduser(),
+                                                            title=title)]
+            except OSError as exc:
+                # output_path に書けないときだけ（図の組み立て・入力の読み取りの OSError はここに来ない）。
+                # 図の置き場（ds.figures）は変えない。
+                return mztab_error("FIGURE_SAVE_FAILED", f"図を書けませんでした: {exc}",
+                                   {"output_path": output_path})
         if mode == plot_render.PAYLOAD:
             body = json_payload({**record["payload"], "saved_files": saved} if saved
                                 else record["payload"])
@@ -658,8 +664,5 @@ def dataset_plot(
         return contrast_envelope(exc, "dataset_plot")
     except ValueError as exc:                      # 描くものが無い等（描画部品の検査）
         return mztab_error("DATASET_BAD_REQUEST", str(exc), {"kind": kind})
-    except OSError as exc:                         # output_path に書けない（図の置き場は変えない）
-        return mztab_error("FIGURE_SAVE_FAILED", f"図を書けませんでした: {exc}",
-                           {"output_path": output_path})
     ds.figures[kind] = record
     return body

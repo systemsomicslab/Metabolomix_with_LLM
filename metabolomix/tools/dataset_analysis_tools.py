@@ -87,7 +87,8 @@ def dataset_export_differential(output_path: str,
         付く（列と契約の版は同じ。`mean_a` / `mean_b` は前処理後の線形値の算術平均）。
 
     exclude_feature_ids: 検定の**後で**書き出しから落とす特徴 ID（外来の分子など）。q は計算し直さない
-        （BH の母集団は検定のときのまま）ことと落とした件数を、メタ行 `n_excluded_after_test` に書く。
+        （多重比較の母集団は検定のときのまま）ことと落とした件数を、メタ行 `n_excluded_after_test` に書く。
+        `n_features_total` は落とした行も数える（`n_with_inchikey + n_unannotated + n_excluded_after_test`）。
         結果に無い ID は戻り値の `exclude_feature_ids_not_found`（誤りにはしない）。解析そのものから外すなら
         `dataset_exclude`（結果は古くなり、検定からやり直す）。
 
@@ -160,7 +161,9 @@ def dataset_export_differential(output_path: str,
         "log2fc_sign": "log2fc は正なら group_b が高い（上昇）。",
         "note": ("n_unannotated は InChIKey が付かず書き出さなかった行数です。"
                  "「変化が無かった」ではなく「調べていない」行です。"
-                 + ("n_excluded_after_test は検定の後で落とした行数で、q は計算し直していません。"
+                 + ("n_excluded_after_test は検定の後で落とした行数で、q は計算し直していません"
+                    "（n_features_total はこの行も数えます: n_with_inchikey + n_unannotated + "
+                    "n_excluded_after_test）。"
                     if exclude_feature_ids is not None else "")),
     })
 

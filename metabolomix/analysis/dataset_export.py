@@ -47,8 +47,10 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
     （`export_contract.stats_meta_lines`）。15 列・列の順序・契約の版は変えない。
 
     `exclude_feature_ids` は検定の**後で**書き出しから落とす特徴 ID（外来の分子など）。q は計算し直さない
-    （BH の母集団は検定のときのまま）ことと落とした件数をメタ行に書く。結果に無い ID は戻り値の
-    `exclude_feature_ids_not_found` に挙げる（誤りにはしない）。
+    （多重比較の母集団は検定のときのまま）ことと落とした件数をメタ行に書く。`n_features_total` は落とした
+    行も数える（`n_with_inchikey + n_unannotated + n_excluded_after_test` が `n_features_total`。メタ行の
+    `excluded_after_test_note` にも書く）。結果に無い ID は戻り値の `exclude_feature_ids_not_found` に挙げる
+    （誤りにはしない）。
 
     Returns
     -------
@@ -220,13 +222,20 @@ def _exploratory_lines(reason: str | None) -> list[str]:
     return [f"# exploratory = true\texploratory_reason = {reason}"]
 
 
+#: 検定の後で落とした行の説明（`=` とタブを含めない）。補正の方法・母集団によらず正しい書き方にする
+#: （母集団が `annotated` / `reported` なら、落とした行はもともと母集団の外のこともある）。
+#: `n_features_total` は落とした行も数えるので、件数の関係もここに書く。
+POST_TEST_EXCLUSION_NOTE = (
+    "rows dropped after testing; q_value not recomputed (the multiple-testing population is unchanged);"
+    " n_features_total still counts them (n_with_inchikey + n_unannotated + n_excluded_after_test"
+    " add up to n_features_total)")
+
+
 def _post_test_exclusion_lines(n_dropped: int, requested: bool) -> list[str]:
     """検定の後で落とした特徴の件数と、q を計算し直していないことの宣言（指定が無ければ何も足さない）。"""
     if not requested:
         return []
-    return [f"# n_excluded_after_test = {n_dropped}"
-            "\texcluded_after_test_note = rows dropped after testing; q_value not recomputed"
-            " (the BH population still includes them)"]
+    return [f"# n_excluded_after_test = {n_dropped}\texcluded_after_test_note = {POST_TEST_EXCLUSION_NOTE}"]
 
 
 def _engine_preprocess(ds, record: dict) -> dict | str:
