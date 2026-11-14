@@ -94,8 +94,8 @@ TSV（と F 検定の TSV）を書き（手順 16）、手順 17・18 の記録�
 
 ## dataset_overview
 
-最初の概観（spec 2026-11-06-dataset-overview-design）。`load_dataset` も読み込みの最後に同じ `build_overview_payload()` を呼ぶ
-（`embedded=True`、`dataset.md` の `load_dataset`）。統計は C のエンジンだけを通す: 既定の前処理（手順 3〜5。ドリフト補正の既定が
+最初の概観（spec 2026-11-06-dataset-overview-design）。`load_dataset(overview=True)` のときだけ、読み込みの最後に同じ
+`build_overview_payload()` を呼ぶ（`embedded=True`、`dataset.md` の `load_dataset`。既定の `overview=False` では呼ばない）。統計は C のエンジンだけを通す: 既定の前処理（手順 3〜5。ドリフト補正の既定が
 未決〔`NeedsInput`〕なら drift を off にして作り直し、そう書く）→ 品質の純計算（手順 7〜10。前処理前の値）→ PCA（手順 12〜13）→
 spec v2 の比較（手順 15〜18。群が 1 つ・探索専用・全群をまとめた表で完全交絡なら回さない。一部の対だけの完全交絡では
 止めず、`allow_confounded=True` で対比に印を付ける）→ 選別の後だけ組成（手順 20）。比較と PCA は `make_current=False` で

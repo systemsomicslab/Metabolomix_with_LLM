@@ -47,10 +47,12 @@ import server
 # A: 最初の概観 dataset_overview を追加（58→59）。
 # 枠組みの見直し A1: 長い読み込みの受付番号を引く dataset_load_status を追加（53→54）。
 # 棚卸し D2: ISA / mwTab から raw フォルダの sample-manifest.v2 を作る pipeline_sample_sheet を追加（56→57）。
+# 棚卸しの直し（担当 8）: 長い道具の受付番号を引く job_status を追加（統合時 57→58）。
 EXPECTED_TOOLS = sorted([
     "list_data_files",
     "load_dataset",
     "dataset_load_status",
+    "job_status",
     "dataset_list",
     "dataset_close",
     "dataset_status",

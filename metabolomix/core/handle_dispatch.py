@@ -17,9 +17,15 @@ FastMCP は同期関数のツールをイベントループのスレッドでそ
   ワーカーで動く同じデータセットへの呼び出しが行列を書き換えたり、`library_load` が
   store を閉じたりする最中に読んでしまう。
 
+- `LONG_RUNNING`（長くかかりうる道具。`wait_seconds` を持つ）は、`load_dataset` の受付と同じ形で
+  回す: 呼び出しを受付（`core.pending_loads.jobs`）のスレッドで始め（ハンドルのロックと固定はその
+  スレッドが取り、仕事が終わるまで持つ）、`wait_seconds`（既定 20 秒。0〜30 秒の外は丸めて
+  `wait_seconds_note` で知らせる）の中で終われば戻り値をそのまま返し、終わらなければ
+  `{"status": "running", "job_id": "job_…"}` を返して仕事は続ける。結果は `job_status(job_id)` で引く。
+
 `install(mcp)` は全ツールの登録が済んだ後（server.py の末尾）で 1 回呼ぶ。包むのは
 引数に `dataset_handle` を持つツールと `SESSION_READERS` と `ALWAYS_THREADED`（グローバルな
-セッションに触れない重いツール）だけ。包んだ関数は `tool.fn` を差し替えるだけで、module の
+セッションに触れない重いツール）と `LONG_RUNNING` だけ。包んだ関数は `tool.fn` を差し替えるだけで、module の
 関数はそのまま——ツールの中から別のツールの関数を直に呼んでも、同じスレッドでそのまま走る
 （もう一度スレッドへ回したりロックを取り直したりしない）。
 """
@@ -30,10 +36,12 @@ import inspect
 
 import anyio
 
-from metabolomix.core import handles, session_state
-from metabolomix.core.mcp_errors import missing_state
+from metabolomix.core import handles, pending_loads, session_state
+from metabolomix.core.atomic_io import DomainError
+from metabolomix.core.mcp_errors import missing_state, mztab_error
+from metabolomix.core.serialization import json_payload
 
-__all__ = ["ALWAYS_THREADED", "SESSION_READERS", "install"]
+__all__ = ["ALWAYS_THREADED", "LONG_RUNNING", "SESSION_READERS", "install"]
 
 #: ハンドルの有無に依らずスレッドで回すツール。読み込みは数分かかりうるので、イベントループ
 #: から外す。`load_dataset` は読み込みを受付（`core.pending_loads`）のスレッドで始め、
@@ -44,7 +52,15 @@ __all__ = ["ALWAYS_THREADED", "SESSION_READERS", "install"]
 ALWAYS_THREADED = frozenset({
     "load_dataset",
     "dataset_load_status",
+    "job_status",  # 受付簿のロックを取って読み、最長 `wait_seconds`（30 秒まで）待つ
     "dataset_merge_polarities",  # 2 つのハンドルのロックを自分で取る（最大 LOCK_TIMEOUT 待つ）
+})
+
+#: 長くかかりうるので、`wait_seconds` の中で終わらなければ受付番号（`job_…`）を返して続けるツール
+#: （`load_dataset` の受付と同じ形。どれも引数に `wait_seconds` を持つ）。
+LONG_RUNNING = frozenset({
+    "pathway_project",        # MSLipidMapper（研究室サーバ → ローカルの R。最悪で 600 秒を超える）
+    "dataset_homolog_check",  # auto は全特徴の名前を GOSLIN で読む（分のオーダー）
 })
 
 #: `dataset_handle` を持たないが、直近のハンドルの `session.dataset` / `session.library` を
@@ -100,12 +116,64 @@ def _wrap(fn, *, always: bool):
     return runner
 
 
+def _job_call(fn, kwargs: dict):
+    """受付のスレッドで回す呼び出し（ハンドルのロックと固定は、ここで取って仕事が終わるまで持つ）。
+
+    `dataset_handle` を渡した呼び出しはそのハンドルのロックの下、省いた呼び出しは受け付けたときの
+    直近のハンドルのロックと固定の下（`_call_pinned`。待つ間に閉じられたら `missing_state`）、
+    直近が無ければそのまま呼ぶ。
+    """
+    if kwargs.get("dataset_handle") is not None:
+        return functools.partial(_call_locked, fn, kwargs)
+    handle = _current_handle()
+    if handle is None:
+        return functools.partial(fn, **kwargs)
+    return functools.partial(_call_pinned, fn, kwargs, handle)
+
+
+def _wrap_job(fn, name: str):
+    """`LONG_RUNNING` のツールを、受付番号（`job_…`）を返せる形で包む。"""
+    default_wait = inspect.signature(fn).parameters["wait_seconds"].default
+
+    @functools.wraps(fn)
+    async def runner(**kwargs):
+        try:
+            wait, note = pending_loads.clamp_wait(kwargs.get("wait_seconds", default_wait))
+        except DomainError as exc:
+            return mztab_error(exc.code, exc.message, exc.details or None)
+        kwargs = {**kwargs, "wait_seconds": wait}
+        handle_id = kwargs.get("dataset_handle") or getattr(
+            session_state.session, "current_handle_id", None)
+        try:
+            entry = pending_loads.jobs.submit(_job_call(fn, kwargs), tool=name,
+                                              label=handle_id)
+        except DomainError as exc:  # 走っている受付が上限（JOB_LIMIT）
+            return mztab_error(exc.code, exc.message, exc.details or None)
+        payload = await anyio.to_thread.run_sync(entry.wait, wait)
+        if payload is not None:
+            pending_loads.jobs.discard(entry.job_id)  # 受付番号を誰にも渡していないので覚えない
+            return pending_loads.with_wait_note(payload, note)
+        return json_payload({
+            "status": "running", "job_id": entry.job_id, "tool": name,
+            **({"wait_seconds_note": note} if note else {}),
+            "note": ("仕事は続けている（ハンドルのロックは仕事が終わるまでこの仕事が持つ）。"
+                     "結果は job_status で引く。"),
+            "next": f'job_status(job_id="{entry.job_id}", wait_seconds=30)'})
+
+    return runner
+
+
 def install(mcp) -> list[str]:
-    """`dataset_handle` を持つ同期ツールと `SESSION_READERS` を包む。包んだツール名を返す
+    """`dataset_handle` を持つ同期ツールと `SESSION_READERS` と `LONG_RUNNING` を包む。包んだツール名を返す
     （2 回目は空）。"""
     wrapped = []
     for name, tool in mcp._tool_manager._tools.items():
         if tool.is_async:  # 元から async のツールと、包み済みのツール
+            continue
+        if name in LONG_RUNNING and "wait_seconds" in inspect.signature(tool.fn).parameters:
+            tool.fn = _wrap_job(tool.fn, name)
+            tool.is_async = True
+            wrapped.append(name)
             continue
         always = name in ALWAYS_THREADED
         if (not always and name not in SESSION_READERS

@@ -5,7 +5,7 @@
 ## このリポジトリは何か
 
 MS-DIAL（LC-MS リピドミクス／メタボロミクス解析ソフト）の出力を読み、LLM から使える形で
-公開する **MCP サーバ `ms-data-parser`**。ツール 57・リソース 2・リソーステンプレート 1。
+公開する **MCP サーバ `ms-data-parser`**。ツール 58・リソース 2・リソーステンプレート 1。
 GUI の外では読めない圧縮 MessagePack と独自バイナリを解し、解析そのものをサーバ側で回して
 要約だけを返す（生の行列を LLM の文脈に載せない）。
 
@@ -130,7 +130,7 @@ metabolomix/msdial/    MS-DIAL 固有サイドカー（*_tags.xml / .mddata）�
 metabolomix/analysis/  入力形式に依存しない数値処理（前処理/QC・PCA・差次的解析・エクスポート契約）。
                     統計エンジンの結果の登録と読み替えは stats_results.py（`as_two_group` が compare の記録の 1 対比を
                     2 群の形にして、書き出し・図・特徴検索に渡す）、記録は stats_records.py、`dataset_analysis_run` v2 の要約は stats_run_summary.py。
-                    最初の概観（`dataset_overview`。`load_dataset` も最後に返す）の事実の組み立ては overview.py、品質の純計算は stats/quality.py。
+                    最初の概観（`dataset_overview`。`load_dataset(overview=True)` なら読み込みの最後にも返す）の事実の組み立ては overview.py、品質の純計算は stats/quality.py。
                     `dataset_compare(output_path=...)` の全行の表（差次的エクスポートの契約とは別物）は compare_table.py
 metabolomix/analysis/stats/  統計エンジン（MCP にもセッションにも依存しない純計算。data（StudyData）・preprocess・design・
                     limma（moderated t）・compare・composition・pca・plsda（PLS-DA と VIP。spec v2 の解析の種類）・confounding・

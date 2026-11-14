@@ -5,6 +5,7 @@ SME と SML の区別・`identification_status`・`name_source`・`inchikey_cove
 `docs/output_format/dataset.md`（解析フォルダ）と `docs/output_format/mztab.md`（mzTab-M）。
 入口は `list_data_files`（フォルダの中身を確かめる）→ `load_dataset`（解析フォルダも mzTab-M も同じ入口）。
 期限（`wait_seconds`）の中で読み終わらなければ、`load_dataset` は受付番号を返し、`dataset_load_status` で結果を引く（こちらも `wait_seconds` で最長 30 秒まで終わりを待てる）。
+長い道具（`handle_dispatch.LONG_RUNNING`: `pathway_project` / `dataset_homolog_check`）の受付番号（`job_…`）は `job_status` で引く。
 読み込んだデータセットは `dataset_list` / `dataset_close` で管理し、`dataset_status` で試料を確かめ、
 `dataset_exclude` で外す。
 
@@ -12,6 +13,7 @@ SME と SML の区別・`identification_status`・`name_source`・`inchikey_cove
 flowchart TD
     LDF[list_data_files] --> LD[load_dataset]
     LD -.->|期限の外| LDS[dataset_load_status]
+    LR[pathway_project / dataset_homolog_check] -.->|期限の外| JS[job_status]
     LD --> ST[dataset_status]
     ST --> EX[dataset_exclude]
     LD --> LS[dataset_list / dataset_close]
@@ -74,7 +76,8 @@ mzTab-M は mzTab-M のフォルダ。指紋には入れない）を決める。
 `PIPELINE_POLARITY_REQUIRED` で、`load_dataset` はそれを `needs_input`（`field=polarity`・
 `retry_tools=["load_dataset"]`）にして返す。ほかの入口で `polarity` を渡すと `PIPELINE_POLARITY_NOT_APPLICABLE`）。
 
-受付: `load_dataset` は引数（`overview`・`library`・`wait_seconds` は 0〜30 秒）を確かめ、上限の枠を
+受付: `load_dataset` は引数（`overview`・`library`）を確かめ、`wait_seconds` を 0〜30 秒に丸め（丸めたら
+戻り値に `wait_seconds_note`。数でないものは `DATASET_BAD_REQUEST`）、上限の枠を
 1 本取ってから（`reserve()`。開いているハンドルと読み込み中の受付の和で数える）、本体 `_load_now()` を
 受付（`core/pending_loads.py`）の daemon スレッドで始め、受付そのもの（`PendingLoad`）を最長 `wait_seconds`
 （既定 20 秒）待つ。終われば本体の戻り値をそのまま返し、受付は忘れる。終わらなければ受付番号（`ld_…`）を
@@ -85,14 +88,15 @@ mzTab-M は mzTab-M のフォルダ。指紋には入れない）を決める。
 どう終わっても受付は誤りの封筒で終わる（`DomainError` は `mztab_error()`、それ以外は `DATASET_LOAD_FAILED`）。
 1. metabolomix/tools/handle_tools.py load_dataset()
 2. └─ metabolomix/tools/handle_tools.py _argument_error()
-3. └─ metabolomix/tools/handle_tools.py _wait_seconds()
+3. └─ metabolomix/core/pending_loads.py clamp_wait()
 4. └─ metabolomix/core/handles.py HandleRegistry.reserve()（上限なら受け付けない）
-5. └─ metabolomix/core/pending_loads.py PendingLoads.submit()（`_load_reserved()` を daemon スレッドで回す）
-6.    └─ metabolomix/core/pending_loads.py PendingLoads._run()
+5. └─ metabolomix/core/pending_loads.py PendingCalls.submit()（`_load_reserved()` を daemon スレッドで回す。`tool` と入力の名前 `_input_label()` を添える）
+6.    └─ metabolomix/core/pending_loads.py PendingCalls._run()
 7.       └─ metabolomix/tools/handle_tools.py _load_reserved()（本体。中身は下の入口とアダプタの選び方。終われば枠を返す）
 8. └─ metabolomix/core/pending_loads.py PendingLoad.wait()
-9. └─ [期限の中で終わったとき] metabolomix/core/pending_loads.py PendingLoads.discard()
-10. └─ [終わらなかったとき] metabolomix/tools/handle_tools.py _CurrentTicket.detach()
+9. └─ [期限の中で終わったとき] metabolomix/core/pending_loads.py PendingCalls.discard()
+10. └─ [期限の中で終わったとき] metabolomix/core/pending_loads.py with_wait_note()
+11. └─ [終わらなかったとき] metabolomix/tools/handle_tools.py _CurrentTicket.detach()
 
 入口とアダプタの選び方（本体。受付のスレッドで回る）:
 1. metabolomix/tools/handle_tools.py _load_now()
@@ -104,40 +108,51 @@ mzTab-M は mzTab-M のフォルダ。指紋には入れない）を決める。
 7.       └─ [mzTab-M のアダプタ] metabolomix/dataset/opening.py _load()（下の 3 経路）
 8.       └─ [directory] metabolomix/dataset/alignment_files.py select_alignment()
 9.       └─ [directory] metabolomix/dataset/msdial_adapter.py load_msdial_folder()
-10.      └─ [job_path を解析フォルダで] metabolomix/dataset/opening.py _folder_via_job()
-11.         └─ metabolomix/mztab/loading.py job_gate()
-12.         └─ metabolomix/mztab/loading.py job_artifact_paths()
-13.         └─ metabolomix/dataset/opening.py _matching_arf()
-14.            └─ metabolomix/mztab/evidence.py first_matching_arfs()（pipeline の validate_outputs と共有する選び方）
-15.               └─ metabolomix/mztab/evidence.py arf_candidates()
-16.            └─ metabolomix/mztab/loading.py read_mztab()
-17.            └─ metabolomix/mztab/evidence.py join_axes()
-18.            └─ metabolomix/mztab/evidence.py matching_arfs()
-19.               └─ metabolomix/mztab/evidence.py scan_arf()（最初に通った候補の ArfScan を返す）
-20.            └─ [pipeline で候補が合わないとき、単位の解析フォルダのバッチを新しい順に] metabolomix/dataset/alignment_files.py arf2_batches_newest_first()
-21.         └─ metabolomix/dataset/alignment_files.py select_alignment()
-22.         └─ metabolomix/dataset/msdial_adapter.py load_msdial_folder()（照合に読んだ ArfScan を使い、`.arf` を読み直さない）
-23.      └─ [pipeline_path を解析フォルダで] metabolomix/dataset/opening.py _folder_via_run()
-24.         └─ metabolomix/dataset/opening.py _folder_via_job()（単位のジョブで。照合の候補に単位の解析フォルダ `analysis_dir` を渡す）
-25.         └─ [単位が試料の対応表を持つとき] metabolomix/analysis/sample_manifest.py resolve_metadata()
-26.         └─ [単位が試料の対応表を持つとき] metabolomix/analysis/sample_manifest.py apply_defaults_and_inputs()
-27.      └─ [directory] metabolomix/dataset/library_memory.py remember_from_folder()
-28.      └─ [job_path] metabolomix/dataset/library_memory.py remember_from_job()
-29.      └─ [pipeline_path] metabolomix/dataset/library_memory.py remember_from_run()（選んだ極性の単位の入力から）
-30.      └─ [mztab_path] metabolomix/dataset/library_memory.py unknown_record()
-31.   └─ metabolomix/dataset/opening.py _signature()
-32.   └─ metabolomix/core/handles.py HandleRegistry.put_base()
-33. └─ metabolomix/mztab/polarity.py dataset_polarity()
-34. └─ metabolomix/tools/handle_tools.py alignment_files_for()
-35. └─ metabolomix/tools/handle_tools.py _open_library_for()
-36. └─ metabolomix/core/session_state.py AnalysisSession.adopt_handle()（直近にする。受け付けた読み込みは `_CurrentTicket.may_become_current()` に従う）
-37.    └─ metabolomix/core/handles.py HandleRegistry.add()
-38. └─ metabolomix/tools/mztab_tools.py load_summary_lines()
-39.    └─ [解析フォルダ] metabolomix/tools/mztab_tools.py _folder_summary_text()
-40.    └─ [mzTab-M] metabolomix/tools/mztab_tools.py _summary_text()
-41. └─ metabolomix/tools/mztab_tools.py sample_group_role_counts()
-42. └─ metabolomix/dataset/library_memory.py public_view()
-43. └─ metabolomix/core/session_state.py AnalysisSession.take_caveat()（意味論の要約。未読・種別ごとに 1 回だけ。戻り値の最上位 `caveat`）
+10.         └─ metabolomix/dataset/msdial_adapter.py _console_default_classes()（Console の既定の `.mddata` なら群を置かず役割をファイル名から推定）
+11.      └─ [directory] metabolomix/dataset/opening.py _enclosing_run_unit()（上へ 3 段まで `pipeline-run.json` を探し、解析フォルダがこのフォルダの単位を選ぶ）
+12.         └─ metabolomix/pipeline/session_handoff.py resolve_unit()
+13.      └─ [run の中の directory] metabolomix/dataset/opening.py _apply_run_rows()（試料を raw の名前か sample_id で結び、run の試料の対応表を当てる）
+14.         └─ metabolomix/analysis/sample_manifest.py resolve_metadata()
+15.         └─ metabolomix/analysis/sample_manifest.py apply_defaults_and_inputs()
+16.      └─ [job_path を解析フォルダで] metabolomix/dataset/opening.py _folder_via_job()
+17.         └─ metabolomix/mztab/loading.py job_gate()
+18.         └─ metabolomix/mztab/loading.py job_artifact_paths()
+19.         └─ metabolomix/dataset/opening.py _matching_arf()
+20.            └─ metabolomix/mztab/evidence.py first_matching_arfs()（pipeline の validate_outputs と共有する選び方）
+21.               └─ metabolomix/mztab/evidence.py arf_candidates()
+22.            └─ metabolomix/mztab/loading.py read_mztab()
+23.            └─ metabolomix/mztab/evidence.py join_axes()
+24.            └─ metabolomix/mztab/evidence.py matching_arfs()
+25.               └─ metabolomix/mztab/evidence.py scan_arf()（最初に通った候補の ArfScan を返す）
+26.            └─ [pipeline で候補が合わないとき、単位の解析フォルダのバッチを新しい順に] metabolomix/dataset/alignment_files.py arf2_batches_newest_first()
+27.         └─ metabolomix/dataset/alignment_files.py select_alignment()
+28.         └─ metabolomix/dataset/msdial_adapter.py load_msdial_folder()（照合に読んだ ArfScan を使い、`.arf` を読み直さない）
+29.      └─ [pipeline_path を解析フォルダで] metabolomix/dataset/opening.py _folder_via_run()
+30.         └─ metabolomix/dataset/opening.py _folder_via_job()（単位のジョブで。照合の候補に単位の解析フォルダ `analysis_dir` を渡す）
+31.         └─ [単位が試料の対応表を持つとき] metabolomix/analysis/sample_manifest.py resolve_metadata()
+32.         └─ [単位が試料の対応表を持つとき] metabolomix/analysis/sample_manifest.py apply_defaults_and_inputs()
+33.      └─ [directory] metabolomix/dataset/library_memory.py remember_from_folder()
+34.      └─ [run の中の directory] metabolomix/dataset/library_memory.py remember_from_run()（known / lbm_only ならこちら）
+35.      └─ [job_path] metabolomix/dataset/library_memory.py remember_from_job()
+36.      └─ [pipeline_path] metabolomix/dataset/library_memory.py remember_from_run()（選んだ極性の単位の入力から）
+37.      └─ [mztab_path] metabolomix/dataset/library_memory.py unknown_record()
+38.   └─ metabolomix/dataset/opening.py _signature()
+39.   └─ metabolomix/core/handles.py HandleRegistry.put_base()
+40. └─ metabolomix/mztab/polarity.py dataset_polarity()
+41. └─ metabolomix/tools/handle_tools.py alignment_files_for()
+42. └─ metabolomix/tools/handle_tools.py _recall_assay_kind()（解析フォルダの目的ファイルの `assay_kind` をハンドルへ読み戻す）
+43.   └─ metabolomix/core/mcp_core.py _report_dir_candidates()
+44.   └─ metabolomix/tools/objective.py recall_assay_kind()
+45. └─ metabolomix/tools/handle_tools.py _open_library_for()
+46. └─ metabolomix/core/session_state.py AnalysisSession.adopt_handle()（直近にする。受け付けた読み込みは `_CurrentTicket.may_become_current()` に従う。直近のハンドルが無いうちに記録したセッションの種別は `_SessionKindCarry` がこのハンドルへ移す）
+47.    └─ metabolomix/core/handles.py HandleRegistry.add()
+48. └─ metabolomix/tools/mztab_tools.py load_summary_lines()
+49.    └─ [解析フォルダ] metabolomix/tools/mztab_tools.py _folder_summary_text()
+50.    └─ [mzTab-M] metabolomix/tools/mztab_tools.py _summary_text()
+51. └─ metabolomix/tools/mztab_tools.py sample_group_role_counts()
+52. └─ metabolomix/dataset/library_memory.py public_view()
+53. └─ metabolomix/core/session_state.py AnalysisSession.take_caveat()（意味論の要約。このハンドルの種別で、未読・種別ごとに 1 回だけ。戻り値の最上位 `caveat`）
+54. └─ [overview=True] metabolomix/tools/handle_tools.py _first_overview()（既定は計算しない。`dataset_overview` と同じ組み立て）
 
 job / pipeline を解析フォルダで読むときも、ジョブの門（`job_gate()`: ジョブの記録・完了・
 正準 mzTab-M の一意な選択と実在・出所の裏取り）は mzTab-M で読むときと同じものを通り、
@@ -261,19 +276,21 @@ mzTab-M の `abundance_assay[N]` は非ゼロでも実測ピークか gap-fill �
 確認できなければ取り込まず、`feature_qc` に理由を残して warning を出す
 ——誤接合は検出/未検出を特徴間で入れ替えたまま静かに嘘をつくため。
 
-結果は `ds.detected_mask`（(特徴 × サンプル) の bool 行列）と `ds.feature_qc`（要約）。
+結果は `ds.detected_mask`（(特徴 × サンプル) の bool 行列）と `ds.feature_qc`（要約）、試料ごとのピークの
+RT `ds.per_sample_rt`（`_join()` が `.arf` の列を mzTab-M の試料の順に並べ替える。`dataset_sample_peaks` の材料）。
 TSV は書かない（消費者のいない `feature-qc.tsv` を 2026-09-03 に廃止した経緯）。
 
 ## dataset_status
 
-`view` で 3 通り。`summary`（既定）は概要に群・役割・タグ・除外の件数を足し、`samples` は試料の
-TSV（`query` は因子トークン。旧 `dataset_status(view="samples")` の `specs` と同じ文法で、
-`metabolomix/msdial/sample_factors.py` が照合する）、`tags` はタグごとの特徴 ID。
+`view` で 4 通り。`summary`（既定）は概要に群・役割・タグ・除外の件数とハンドルの `assay_kind` を足し、
+`samples` は試料の TSV（`query` は因子トークン。旧 `dataset_status(view="samples")` の `specs` と同じ文法で、
+`metabolomix/msdial/sample_factors.py` が照合する）、`tags` はタグごとの特徴 ID、`results` は
+ハンドルの統計の行列（`ds.stat_matrices`）と結果（`ds.results`）の一覧。
 
 `summary`:
 1. metabolomix/tools/mztab_tools.py dataset_status()
-2. └─ metabolomix/tools/mztab_tools.py _samples_tsv()
-3.    └─ metabolomix/analysis/preprocessing.py detect_sample_roles()
+2. └─ metabolomix/tools/mztab_tools.py _samples_tsv()（役割は試料の表から）
+3.    └─ metabolomix/tools/mztab_tools.py _metadata_rows()
 4. └─ metabolomix/tools/mztab_tools.py _detection_summary()
 5. └─ metabolomix/tools/mztab_tools.py sample_group_role_counts()
 6.    └─ metabolomix/tools/mztab_tools.py _metadata_rows()
@@ -290,6 +307,14 @@ TSV（`query` は因子トークン。旧 `dataset_status(view="samples")` の `
 `tags`:
 1. metabolomix/tools/mztab_tools.py dataset_status()
 2. └─ metabolomix/tools/mztab_tools.py _tags_view()
+
+`results`（`current` は登録のときのデータの指紋と `metadata_revision` が今と同じか）:
+1. metabolomix/tools/mztab_tools.py dataset_status()
+2. └─ metabolomix/tools/mztab_tools.py _results_view()
+3.    └─ metabolomix/analysis/result_state.py dataset_fingerprint()
+4.    └─ metabolomix/tools/mztab_tools.py _matrix_recipe()
+5.    └─ metabolomix/analysis/result_state.py is_stats_current()
+6.    └─ metabolomix/analysis/stats_results.py contrast_ids()
 
 ## dataset_exclude
 
@@ -314,27 +339,62 @@ TSV（`query` は因子トークン。旧 `dataset_status(view="samples")` の `
 ## dataset_load_status
 
 前提: `load_dataset` が受付番号（`ld_…`）を返していること（知らない番号は `DATASET_LOAD_NOT_FOUND`）。
+`load_id` を省くと、まだ結果を渡していない受付（`PendingCalls.unclaimed()`）から選ぶ: ちょうど 1 本ならそれ、
+2 本以上なら `needs_input`（`field=load_id`・受付の一覧が選択肢・`retry_tools=["dataset_load_status"]`）、
+無ければ `missing_state("load", ["load_dataset"])`。
 状態変更: なし（ハンドルの登録と直近の切り替えは、読み込みが終わったときに受付のスレッドが済ませている）。
+終わった戻り値を渡した受付には印を付け（`PendingCalls.claim()`）、省いた呼び出しの候補から外す。
 読み込み中は `{"status": "loading", "load_id", "elapsed_s"}`、終われば `load_dataset` の戻り値そのもの。
-終わった受付は終わってから 1 時間覚え（同じ文字列を返す）、64 件を超えると終わったものを終わった順に
+終わった受付は終わってから 1 時間覚え（番号を渡せば同じ文字列を返す）、64 件を超えると終わったものを終わった順に
 古いものから捨てる。読み込み中のものは捨てず、64 件すべてが読み込み中なら `load_dataset` が
 `DATASET_LOAD_LIMIT` で受け付けない。
-`wait_seconds`（既定 0。0 以上 30 以下で、`load_dataset` と同じ `_wait_seconds()` で確かめる。外れた値は
+`wait_seconds`（既定 0。`clamp_wait()` が 0〜30 秒に丸め、丸めたら `wait_seconds_note`。数でないものは
 `DATASET_BAD_REQUEST`）が 0 より大きければ、受付そのものを最長その秒数だけ待ち、その中で終われば戻り値を
 そのまま返す。終わらなければ待たないときと同じく今の状態を返す。待っても状態は変わらない。
 
 1. metabolomix/tools/handle_tools.py  dataset_load_status()
-2. └─ metabolomix/tools/handle_tools.py  _wait_seconds()
-3. ├─ [wait_seconds > 0] metabolomix/core/pending_loads.py  PendingLoads.wait()
-4. │  ├─ metabolomix/core/pending_loads.py  PendingLoads._lookup()
-5. │  └─ metabolomix/core/pending_loads.py  PendingLoad.wait()
-6. └─ [待たない・待っても終わらない] metabolomix/core/pending_loads.py  PendingLoads.snapshot()
-7.    ├─ metabolomix/core/pending_loads.py  PendingLoads._prune()
-8.    └─ metabolomix/core/pending_loads.py  PendingLoads._lookup()
+2. └─ metabolomix/tools/handle_tools.py  _pick_pending()
+3.    └─ [load_id を省いたとき] metabolomix/core/pending_loads.py  PendingCalls.unclaimed()
+4. └─ metabolomix/tools/handle_tools.py  _poll()
+5.    └─ metabolomix/core/pending_loads.py  clamp_wait()
+6.    ├─ [wait_seconds > 0] metabolomix/core/pending_loads.py  PendingCalls.wait()
+7.    │  ├─ metabolomix/core/pending_loads.py  PendingCalls._lookup()
+8.    │  └─ metabolomix/core/pending_loads.py  PendingLoad.wait()
+9.    └─ metabolomix/core/pending_loads.py  PendingCalls.snapshot()
+10.      ├─ metabolomix/core/pending_loads.py  PendingCalls._prune()
+11.      └─ metabolomix/core/pending_loads.py  PendingCalls._lookup()
+12.   └─ [終わっていたとき] metabolomix/core/pending_loads.py  PendingCalls.claim()
+
+## job_status
+
+長い道具（`handle_dispatch.LONG_RUNNING`: `pathway_project` / `dataset_homolog_check`。どれも `wait_seconds`、
+既定 20 秒を持つ）は、`install()` が `_wrap_job()` で包む。呼び出しは受付（`pending_loads.jobs`、`PendingJobs`）の
+daemon スレッドで始まり、ハンドルのロックと固定はそのスレッドが取って仕事が終わるまで持つ（`_job_call()`:
+`dataset_handle` を渡せば `_call_locked()`、省けば受け付けたときの直近のハンドルで `_call_pinned()`）。
+`wait_seconds` の中で終われば戻り値をそのまま返し（受付は忘れる）、終わらなければ
+`{"status": "running", "job_id": "job_…", "tool", "next"}` を返して仕事は続く。
+前提: その受付番号を道具が返していること（知らない番号は `JOB_NOT_FOUND`。`job_id` を省いたときの選び方は
+`dataset_load_status` と同じで、無ければ `missing_state("job", ["pathway_project", "dataset_homolog_check"])`）。
+状態変更: なし（仕事は受付のスレッドで終わる）。走っている間は `{"status": "running", "job_id", "tool", "elapsed_s"}`、
+終われば道具の戻り値そのもの。仕事が例外で終われば `JOB_FAILED` の封筒。
+
+受付（長い道具の呼び出し）:
+1. metabolomix/core/handle_dispatch.py  _wrap_job()
+2. └─ metabolomix/core/pending_loads.py  clamp_wait()
+3. └─ metabolomix/core/handle_dispatch.py  _job_call()
+4. └─ metabolomix/core/pending_loads.py  PendingCalls.submit()
+5. └─ metabolomix/core/pending_loads.py  PendingLoad.wait()
+
+引く:
+1. metabolomix/tools/handle_tools.py  job_status()
+2. └─ metabolomix/tools/handle_tools.py  _pick_pending()
+3. └─ metabolomix/core/pending_loads.py  PendingCalls.tool_of()
+4. └─ metabolomix/tools/handle_tools.py  _poll()
 
 ## dataset_list
 
-前提: なし。状態変更: なし。`current` は `session.current_handle_id` と同じハンドルか。
+前提: なし。状態変更: なし。`current` は `session.current_handle_id` と同じハンドルか。`assay_kind` は
+そのハンドルのデータセットの種別（`DatasetHandle.assay_kind`）。
 
 1. metabolomix/tools/handle_tools.py  dataset_list()
 2. └─ metabolomix/core/handles.py  HandleRegistry.list()
@@ -347,6 +407,9 @@ TSV（`query` は因子トークン。旧 `dataset_status(view="samples")` の `
 データセットが無い状態になる（次に `session.dataset` を読んだときに `current_handle_id` を
 None に戻す。別のハンドルへは落ちない）。
 
+戻り値の `source`（入口の種類・入力の名前・極性）は閉じる前に `HandleRegistry.peek()` で読む。
+
 1. metabolomix/tools/handle_tools.py  dataset_close()
-2. └─ metabolomix/core/handles.py  HandleRegistry.close()
-3.    └─ metabolomix/core/handles.py  DatasetHandle.close()
+2. └─ metabolomix/core/handles.py  HandleRegistry.peek()
+3. └─ metabolomix/core/handles.py  HandleRegistry.close()
+4.    └─ metabolomix/core/handles.py  DatasetHandle.close()

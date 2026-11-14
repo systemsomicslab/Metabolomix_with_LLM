@@ -301,7 +301,7 @@
   ]
  },
  "search_window": {
-  "features": "feature_id\tmz\trt\tevidence\tname\tinchikey\tadduct\tn_sme\tontology\tn_detected\tnormalized\tmsi_level\n1\t104.107\t1.2\tsme\tCholine\tOEYIOHPDSNJKLS-UHFFFAOYSA-N\t[M]1+\t1\t\t\t\t\n2\t184.0733\t1.25\tnone\t\t\t\t0\t\t\t\t\n3\t500.2\t5.0\tnone\t\t\t\t0\t\t\t\t",
+  "features": "feature_id\tmz\trt\tevidence\tname\tinchikey\tadduct\tn_sme\tontology\tn_detected\tnormalized\tmsi_level\tinchikey_ambiguity\n1\t104.107\t1.2\tsme\tCholine\tOEYIOHPDSNJKLS-UHFFFAOYSA-N\t[M]1+\t1\t\t\t\t\t\n2\t184.0733\t1.25\tnone\t\t\t\t0\t\t\t\t\t\n3\t500.2\t5.0\tnone\t\t\t\t0\t\t\t\t\t",
   "merge_split": {
    "alignment_qc_sha256": null,
    "bh_population": {},
@@ -324,6 +324,7 @@
   "stats_unmerged": ""
  },
  "status": {
+  "assay_kind": "unknown",
   "detection": {
    "available": false,
    "note": "mzTab-M の非ゼロ値には gap-fill による補間値が含まれ得ます。検出状態が取り込めていないため、検出率・欠測率は語れません。",

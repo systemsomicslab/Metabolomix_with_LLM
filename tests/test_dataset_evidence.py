@@ -439,3 +439,46 @@ def test_spot_mz_falls_back_when_nothing_was_detected():
     assert spot_representative_mz([_cell(-2, 5.0, 777.0)], 123.0) == 123.0
     assert spot_representative_mz([], 123.0) == 123.0
     assert spot_representative_mz([_cell(1, None, 500.0)], 123.0) == 123.0
+
+
+# --- 試料ごとの RT（mzTab-M でも dataset_sample_peaks を使えるように。棚卸し B6-G09） ---
+
+def _join_with_rt(rt, sample_names=("s2", "s1")):
+    from metabolomix.mztab import evidence
+    detected = np.array([[True, True], [True, False]])
+    measured = np.array([[700.5, 700.5], [800.25, np.nan]])
+    return evidence._join([700.5, 800.25], ["s1", "s2"], detected, measured,
+                          feature_mz=[700.5, 800.25], sample_names=list(sample_names),
+                          mz_tolerance=evidence.MZ_TOLERANCE, rt=rt)
+
+
+def test_join_reorders_per_sample_rt_to_the_mztab_samples():
+    rt = np.array([[1.0, 1.1], [2.0, 2.2]])
+    result = _join_with_rt(rt)
+    assert result["status"] == "ok"
+    # 列は mzTab-M の試料の順（s2, s1）。gap-fill のセル（特徴 2 × s2）も .arf の値のまま。
+    assert result["per_sample_rt"].tolist() == [[1.1, 1.0], [2.2, 2.0]]
+
+
+def test_join_without_matching_rt_leaves_none():
+    assert _join_with_rt(None)["per_sample_rt"] is None
+    assert _join_with_rt(np.ones((3, 2)))["per_sample_rt"] is None   # 形が合わない
+
+
+def test_apply_evidence_sets_and_resets_per_sample_rt():
+    from metabolomix.mztab import evidence
+    ds = _ds_with_features(sample_names=("s2", "s1"))
+    result = _join_with_rt(np.array([[1.0, 1.1], [2.0, 2.2]]))
+    evidence.apply_evidence(ds, result)
+    assert ds.per_sample_rt.tolist() == [[1.1, 1.0], [2.2, 2.0]]
+    # 取り込めなかった照合は、前の RT を残さない。
+    evidence.apply_evidence(ds, {"status": "rejected", "reason": "mz_mismatch", "detail": {}})
+    assert ds.per_sample_rt is None
+
+
+def test_apply_evidence_ignores_rt_of_the_wrong_shape():
+    from metabolomix.mztab import evidence
+    ds = _ds_with_features(n_features=3)
+    result = _join_with_rt(np.array([[1.0, 1.1], [2.0, 2.2]]), sample_names=("s1", "s2"))
+    evidence.apply_evidence(ds, result)
+    assert ds.per_sample_rt is None

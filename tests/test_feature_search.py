@@ -728,7 +728,7 @@ def test_window_and_filters_are_anded_and_inclusive():
     assert [r["feature_id"] for r in rows] == ["4"]
     assert list(rows[0]) == ["feature_id", "mz", "rt", "evidence", "name", "inchikey",
                              "adduct", "n_sme", "ontology", "n_detected", "normalized",
-                             "msi_level"]
+                             "msi_level", "inchikey_ambiguity"]
 
 
 def test_window_evidence_name_inchikey_adduct_and_truncation():
@@ -744,7 +744,7 @@ def test_window_evidence_name_inchikey_adduct_and_truncation():
     assert by["1"] == {"feature_id": "1", "mz": 100.0, "rt": 1.0, "evidence": "sme",
                        "name": "Alpha", "inchikey": GABA_KEY, "adduct": "[M+H]1+", "n_sme": 2,
                        "ontology": None, "n_detected": None, "normalized": None,
-                       "msi_level": None}
+                       "msi_level": None, "inchikey_ambiguity": None}
     assert by["2"]["evidence"] == "sml" and by["2"]["name"] == "Beta"
     assert by["2"]["inchikey"] == OTHER_KEY and by["2"]["adduct"] == "[M+Na]+"
     assert by["2"]["n_sme"] == 0
@@ -753,7 +753,7 @@ def test_window_evidence_name_inchikey_adduct_and_truncation():
     assert by["4"] == {"feature_id": "4", "mz": 400.0, "rt": 4.0, "evidence": "none",
                        "name": None, "inchikey": None, "adduct": None, "n_sme": 0,
                        "ontology": None, "n_detected": None, "normalized": None,
-                       "msi_level": None}
+                       "msi_level": None, "inchikey_ambiguity": None}
     rows, truncated = _window(ds, min_mz=0, max_results=3)
     assert [r["feature_id"] for r in rows] == ["1", "2", "3"] and truncated == 1
 

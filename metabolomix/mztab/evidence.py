@@ -424,16 +424,18 @@ def scan_evidence(
     arf_names = [scan.file_names.get(file_id) or f"Sample_{file_id}"
                  for file_id in scan.file_ids]
     return _join(scan.spot_mz, arf_names, scan.detected, scan.per_sample_mz,
-                 feature_mz=feature_mz, sample_names=sample_names, mz_tolerance=mz_tolerance)
+                 feature_mz=feature_mz, sample_names=sample_names, mz_tolerance=mz_tolerance,
+                 rt=scan.per_sample_rt)
 
 
 def _join(spot_mz: list, arf_names: list[str], detected: np.ndarray, measured: np.ndarray, *,
           feature_mz: list[float | None], sample_names: list[str],
-          mz_tolerance: float) -> dict:
+          mz_tolerance: float, rt: np.ndarray | None = None) -> dict:
     """スポット数・m/z・試料名で接合を確かめ、mzTab-M の特徴 × assay の検出マスクを組む。
 
     detected / measured は `.arf` のスポット × `arf_names` の列（measured は検出された
-    セルの実測 m/z。それ以外は NaN）。
+    セルの実測 m/z。それ以外は NaN）。`rt`（同じ並びの試料ごとのピークの RT。`ArfScan.per_sample_rt`）を
+    渡せば、mzTab-M の試料の順に並べ替えて `per_sample_rt` として返す（`dataset_sample_peaks` の材料）。
     """
     n_features = len(feature_mz)
     if len(spot_mz) != n_features:
@@ -474,7 +476,7 @@ def _join(spot_mz: list, arf_names: list[str], detected: np.ndarray, measured: n
     columns = [position[name.strip()] for name in sample_names]
     mask = detected[:, columns].copy()
     # 特徴（行）ごとの {試料名: 検出されたセルの実測 m/z}。gap-fill のセルの m/z は
-    # 補間値で実測ではないので入れない。質量精度の注入順の傾向の材料（RT は持たない）。
+    # 補間値で実測ではないので入れない。質量精度の注入順の傾向の材料（RT は `per_sample_rt`）。
     per_sample_mz: list[dict[str, float]] = []
     for row in measured[:, columns]:
         per_sample_mz.append({sample_names[col]: float(mz) for col, mz in enumerate(row)
@@ -482,10 +484,14 @@ def _join(spot_mz: list, arf_names: list[str], detected: np.ndarray, measured: n
 
     n_cells = int(mask.size)
     n_detected = int(mask.sum())
+    per_sample_rt = None
+    if rt is not None and getattr(rt, "shape", None) == detected.shape:
+        per_sample_rt = np.asarray(rt, dtype=float)[:, columns].copy()
     return {
         "status": "ok",
         "detected_mask": mask,
         "per_sample_mz": per_sample_mz,
+        "per_sample_rt": per_sample_rt,
         "n_cells": n_cells,
         "n_detected": n_detected,
         "gap_filled_rate": round(1.0 - n_detected / n_cells, 4) if n_cells else None,
@@ -569,6 +575,7 @@ def apply_evidence(ds, result: dict | None, tried: list[str] | None = None) -> N
     `feature_qc["source"] = None` と理由を書き、警告で利用者に伝える。
     """
     ds.per_sample_mz = None
+    ds.per_sample_rt = None
     if result is None:
         ds.feature_qc = {"source": None, "reason": "no_candidate", "tried": list(tried or [])}
         return
@@ -590,6 +597,11 @@ def apply_evidence(ds, result: dict | None, tried: list[str] | None = None) -> N
         # 特徴 ID → {試料名: m/z}（検出されたセルが 1 つも無い特徴は持たない）。
         # 指紋には入らない（`result_state.dataset_fingerprint` は行列と検出マスクだけを数える）。
         ds.per_sample_mz = {fid: cells for fid, cells in zip(ds.feature_ids, rows) if cells}
+    rt = result.get("per_sample_rt")
+    if rt is not None and rt.shape == (len(ds.feature_ids), len(ds.sample_names)):
+        # 試料ごとのピークの RT（分。gap-fill のセルも .arf の値）。`dataset_sample_peaks` の材料。
+        # 指紋には入らない（解析フォルダの経路と同じ）。
+        ds.per_sample_rt = rt
     ds.feature_qc = {
         "source": "arf",
         "tried": list(tried or []),

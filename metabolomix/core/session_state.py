@@ -74,6 +74,12 @@ def assay_digest(assay_kind: str) -> str:
     return f"{SEMANTICS_CAVEAT}\n{_ASSAY_CAVEAT_LINE[assay_kind]}"
 
 
+def dataset_assay_kind(ds) -> str:
+    """データセットのアッセイ種別（`DatasetState.assay_kind`。持たない・不正なら unknown）。"""
+    value = getattr(ds, "assay_kind", None)
+    return value if value in ASSAY_KINDS else "unknown"
+
+
 #: `dataset_handle` を省いた呼び出しが、ロックを取ったハンドルの ID（`core.handle_dispatch` が
 #: ワーカースレッドの中で置く）。置かれている間、`session.dataset` / `session.library` は
 #: 直近のハンドルでなくこのハンドルを読む——呼び出しの途中で `load_dataset` が直近を
@@ -150,18 +156,25 @@ class AnalysisSession:
         # リセットしない（データ切替のたびに再注入しないため）。
         self.output_format_seen = False
         self.caveat_emitted = False
-        # どの種別で前置したか。種別が確定したとき（unknown→lipid/metabolite）に
+        # 直近に前置した種別。種別が確定したとき（unknown→lipid/metabolite）に
         # 1回だけ再注入するために持つ。これが無いと、load_dataset 時点の unknown で
         # 1回出て終わり、後から種別が確定しても解釈規則が二度と届かない。
         self.caveat_emitted_kind: str | None = None
+        # これまでに前置した種別の集合（出すかの判定はこれを見る）。種別はハンドルごとに持つので、
+        # 直近の 1 種別だけで判定すると、2 つ目のデータセットを開くたびに unknown 用が、その種別を
+        # 記録するたびに確定後の種別用が出直す（極性 2 つの読み込みで 4 回）。種別ごとにセッションで 1 回。
+        self.caveat_emitted_kinds: set[str] = set()
         # `load_dataset` はワーカースレッドで走り、同時に呼ばれうる。出したかの判定と記録を
         # 1 つの区間にして、ダイジェストが 2 回出ないようにする。
         self._caveat_lock = threading.Lock()
 
-        # --- アッセイ種別（解釈規則の選択軸。データ切替では消さない） ---
-        # 確定は利用者との合意事項（record_objective）で、
-        # パーサ出力からは決まらない。既定の unknown は「脂質」ではない。
-        self.assay_kind = "unknown"
+        # --- アッセイ種別（解釈規則の選択軸） ---
+        # 種別はデータセット（ハンドル）が持つ（`DatasetState.assay_kind`。`record_objective` が書き、
+        # `load_dataset` が解析フォルダの目的ファイルから読み戻す）。`assay_kind` は直近（固定中は
+        # その）ハンドルの値を読む property（下）。ハンドルが無いあいだだけ、ここのセッション自身の
+        # 値を読み書きし、`load_dataset` が次に直近にするハンドルへ移す（`adopt_handle` の
+        # `take_session_assay_kind`。ライブラリと同じ規則）。既定の unknown は「脂質」ではない。
+        self._assay_kind = "unknown"
 
         # --- DatasetState（ハンドルの登録簿が持つ。session はその直近を指す） ---
         # データセットはハンドルの登録簿（core.handles.registry）に住む。ここが持つのは
@@ -279,7 +292,7 @@ class AnalysisSession:
             self._make_current(handle.handle_id)
 
     def adopt_handle(self, handle, *, move_library: bool = False, reservation=None,
-                     may_become_current=None) -> bool:
+                     may_become_current=None, take_session_assay_kind=None) -> bool:
         """出来上がったハンドルを登録簿に入れ、**直近にする**（`load_dataset` が使う）。直近にしたかを返す。
 
         上限なら `DATASET_HANDLE_LIMIT`（DomainError）を投げ、直近もライブラリも動かさない。
@@ -292,6 +305,12 @@ class AnalysisSession:
         `may_become_current(generation)` は、今の直近の世代（`current_generation`）を受けて
         直近にしてよいかを答える（受け付けた `load_dataset` の判定。このロックの下で呼ぶ）。偽なら
         ハンドルを登録するだけで、直近もライブラリも動かさず False を返す。
+
+        `take_session_assay_kind(kind)` を渡すと、直近のハンドルが無いあいだにセッション自身が持っていた
+        アッセイ種別（データセットを開く前の `record_objective(assay_kind=...)`。`unknown` 以外）を、
+        直近になるこのハンドルへ**移す**（ライブラリと同じ規則。登録の前にこのロックの下で呼び、
+        ハンドルへの当て方は呼び出し側が決める）。登録できたときだけセッション自身の値を `unknown` へ戻す
+        （上限で止まれば種別はセッションに残る）。
         """
         from metabolomix.core import handles
 
@@ -299,13 +318,19 @@ class AnalysisSession:
             current = may_become_current is None or bool(
                 may_become_current(self._current_generation))
             own = self._library
-            move = (current and move_library and handle.library.store is None
-                    and self._current_handle() is None
-                    and _PINNED_HANDLE_ID.get() is None and own.store is not None)
+            alone = (current and self._current_handle() is None
+                     and _PINNED_HANDLE_ID.get() is None)
+            move = (alone and move_library and handle.library.store is None
+                    and own.store is not None)
+            carry_kind = (alone and take_session_assay_kind is not None
+                          and self._assay_kind != "unknown")
             if move:
                 handle.library = own
+            if carry_kind:
+                # 登録の前（まだ誰にも見えない）に当てる。上限で止まればハンドルごと捨てられる。
+                take_session_assay_kind(self._assay_kind)
             try:
-                # 上限ならここで止まり、ライブラリはセッションに残る
+                # 上限ならここで止まり、ライブラリと種別はセッションに残る
                 handles.registry.add(handle, reservation=reservation)
             except Exception:
                 if move:
@@ -313,6 +338,8 @@ class AnalysisSession:
                 raise
             if move:
                 self._library = LibraryState()
+            if carry_kind:
+                self._assay_kind = "unknown"
             if current:
                 self._make_current(handle.handle_id)
             return current
@@ -370,8 +397,33 @@ class AnalysisSession:
             self._library = value
         # 固定先が閉じられていれば置き先が無い（セッション自身へは書かない）。
 
+    @property
+    def assay_kind(self) -> str:
+        """直近（`pinned_handle` の中ならその）ハンドルのデータセットのアッセイ種別。
+
+        ハンドルが無ければセッション自身の値（既定 unknown）。固定先が閉じられていれば unknown
+        （セッション自身の値へは落ちない）。
+        """
+        handle = self._handle()
+        if handle is not None:
+            return dataset_assay_kind(handle.dataset)
+        if _PINNED_HANDLE_ID.get() is not None:
+            return "unknown"
+        return self._assay_kind
+
+    @assay_kind.setter
+    def assay_kind(self, value: str) -> None:
+        normalized = normalize_assay_kind(value)
+        handle = self._handle()
+        if handle is not None:
+            if handle.dataset is not None:
+                handle.dataset.assay_kind = normalized
+        elif _PINNED_HANDLE_ID.get() is None:
+            self._assay_kind = normalized
+        # 固定先が閉じられていれば置き先が無い（セッション自身へは書かない）。
+
     def set_assay_kind(self, assay_kind: str) -> str:
-        """アッセイ種別を確定する。正規化した値を返し、未知の値は拒否する。
+        """アッセイ種別を確定する（直近のハンドルのデータセットへ）。正規化した値を返し、未知の値は拒否する。
 
         黙って `unknown` へ落とさない——落とすと、利用者が種別を伝えたつもりのまま
         サーバは未確定として振る舞い、どちらの規則も当たらない状態が続く。
@@ -380,37 +432,43 @@ class AnalysisSession:
         self.assay_kind = normalized
         return normalized
 
-    def take_caveat(self) -> str | None:
+    def take_caveat(self, assay_kind: str | None = None) -> str | None:
         """いま届けるべき意味論ダイジェストを返す（無ければ None）。出したことを記録する。
 
         規則: `[server] caveat_mode = 'off'` で止める・output-format の核が読まれていれば止める・
-        同じ種別では 1 回だけ・種別が変わったらもう 1 回（unknown のまま解析が進むと種別固有の
-        規則が一度も届かないため）。JSON を返す入口（`load_dataset`）が最上位の `caveat` として載せ、
+        種別ごとにセッションで 1 回だけ（まだ出していない種別になったらもう 1 回。unknown のまま解析が
+        進むと種別固有の規則が一度も届かないため。別のハンドルで同じ種別が出ても出し直さない）。JSON を返す入口（`load_dataset`）が最上位の `caveat` として載せ、
         `record_objective(assay_kind=...)` が確定後の 1 回を戻り値の先頭へ前置する。設定ファイルが
         読めない（`caveat_mode` の値が digest / off 以外、旧 `[msdial] lbm` が残っている、TOML の
         構文など）ときは**送出しない**: 既定の digest で続け、問題を 1 行だけ添える
         （状態を変えたあとで落ちないため。黙って既定に落とすのでもない）。
+
+        `assay_kind` は届ける種別（省けば `self.assay_kind`＝直近のハンドルの値）。`load_dataset` は
+        開いたハンドルの値を、`record_objective` は書いたハンドルの値を渡す（直近でないハンドルでも
+        その種別で届ける）。
         """
+        kind = normalize_assay_kind(assay_kind) if assay_kind is not None else self.assay_kind
         try:
             setting = user_config.get_setting("server.caveat_mode")
         except user_config.ConfigInvalidError as exc:
-            digest = self._take_digest()
+            digest = self._take_digest(kind)
             note = _config_problem_note(exc)
             return f"{digest}\n\n{note}" if digest else note
         if setting is not None and setting.value == "off":
             return None
-        return self._take_digest()
+        return self._take_digest(kind)
 
-    def _take_digest(self) -> str | None:
+    def _take_digest(self, kind: str) -> str | None:
         """ダイジェスト本体。出す条件を満たせば記録して返し、満たさなければ None。"""
         with self._caveat_lock:
             if self.output_format_seen:
                 return None
-            if self.caveat_emitted and self.caveat_emitted_kind == self.assay_kind:
+            if kind in self.caveat_emitted_kinds:
                 return None
             self.caveat_emitted = True
-            self.caveat_emitted_kind = self.assay_kind
-            return assay_digest(self.assay_kind)
+            self.caveat_emitted_kind = kind
+            self.caveat_emitted_kinds.add(kind)
+            return assay_digest(kind)
 
 
 def _config_problem_note(exc: "user_config.ConfigInvalidError") -> str:

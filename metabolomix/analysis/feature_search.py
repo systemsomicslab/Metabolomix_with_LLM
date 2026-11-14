@@ -845,9 +845,11 @@ def estimate_rt_offset(ds, targets: list[dict], *, mz_array: np.ndarray | None =
 
 # ---------- 窓検索と差次的統計の結合（spec §4.2・§6） ----------
 
-#: 窓検索の行の列（この順で TSV にする）。
+#: 窓検索の行の列（この順で TSV にする）。`inchikey_ambiguity` は名前から InChIKey を引いたとき
+#: 研究室 MSP に同じ名前の別の InChIKey があり、構造からも導けず InChIKey が空のまま残った特徴の印
+#: （`name_conflict`。無ければ空）。
 WINDOW_COLUMNS = ("feature_id", "mz", "rt", "evidence", "name", "inchikey", "adduct", "n_sme",
-                  "ontology", "n_detected", "normalized", "msi_level")
+                  "ontology", "n_detected", "normalized", "msi_level", "inchikey_ambiguity")
 
 #: 特徴ごとの統計の行の列。`detected_a/b` は注入単位の検出数（マスクから数え直す）、`detected_units_a/b`・
 #: `presence_p`・`detection_driven` は比較の記録の個体単位の検出から（`as_two_group`）。
@@ -879,23 +881,32 @@ def _window_identity(candidates, annotation) -> dict:
     ``chemical_name`` ・**その候補自身の** ``inchikey`` ・``adduct``。SME が無ければ SML 注釈
     （曖昧なら名前は None、InChIKey は ``;`` 連結）。目標の判定（`_identity`）とは別物で、
     ここは「この特徴には何が付いているか」を並べるだけ。
+    ``inchikey_ambiguity`` は、その証拠の名前から InChIKey を引いたとき同名衝突があった（研究室 MSP に
+    同じ名前の別の InChIKey があり、どれにも決めず、構造からも導けなかった）なら ``name_conflict``、無ければ None。
     """
     candidates = list(candidates or [])
     if candidates:
         top = min(candidates, key=_rank_key)
         return {"evidence": "sme", "name": top.get("chemical_name"),
                 "inchikey": top.get("inchikey"), "adduct": top.get("adduct"),
-                "n_sme": len(candidates)}
+                "n_sme": len(candidates), "inchikey_ambiguity": _ambiguity(top)}
     annotation = annotation or {}
     if annotation:
         if annotation.get("ambiguous"):
             keys = [key for key in annotation.get("inchikeys") or [] if key]
             return {"evidence": "sml", "name": None, "inchikey": ";".join(keys) or None,
-                    "adduct": annotation.get("adduct"), "n_sme": 0}
+                    "adduct": annotation.get("adduct"), "n_sme": 0,
+                    "inchikey_ambiguity": _ambiguity(annotation)}
         return {"evidence": "sml", "name": annotation.get("name"),
                 "inchikey": annotation.get("inchikey"), "adduct": annotation.get("adduct"),
-                "n_sme": 0}
-    return {"evidence": "none", "name": None, "inchikey": None, "adduct": None, "n_sme": 0}
+                "n_sme": 0, "inchikey_ambiguity": _ambiguity(annotation)}
+    return {"evidence": "none", "name": None, "inchikey": None, "adduct": None, "n_sme": 0,
+            "inchikey_ambiguity": None}
+
+
+def _ambiguity(entry: dict) -> str | None:
+    """同名衝突の印（`mztab.dataset_state._resolve_inchikey` が付ける `inchikey_name_conflict`）。"""
+    return "name_conflict" if (entry or {}).get("inchikey_name_conflict") else None
 
 
 def _check_range(low, high, label: str) -> None:
@@ -1001,7 +1012,7 @@ def search_window(ds, *, feature_ids: list[str] | None, min_mz, max_mz, min_rt, 
         annotation = ds.feature_annotations.get(fid) or {}
         # 同定の標準化の列は解析フォルダのデータセットだけが持つ（mzTab-M は None のまま）
         ident = meta.get("identity") or {}
-        rows.append({
+        row = {
             "feature_id": fid,
             "mz": float(mz) if _is_number(mz) else None,
             "rt": float(rt) if _is_number(rt) else None,
@@ -1010,7 +1021,8 @@ def search_window(ds, *, feature_ids: list[str] | None, min_mz, max_mz, min_rt, 
             "n_detected": None if counts is None else int(counts[index]),
             "normalized": ident.get("normalized"),
             "msi_level": ident.get("msi_level"),
-        })
+        }
+        rows.append({column: row[column] for column in WINDOW_COLUMNS})   # 列の順を TSV と揃える
     return rows, len(hits) - len(rows)
 
 

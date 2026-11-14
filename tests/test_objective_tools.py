@@ -49,12 +49,41 @@ class ObjectiveServerToolTests(unittest.TestCase):
         self.assertIn("小問2件", out)
         self.assertNotIn("knowledge_coverage", out)
 
-    def test_create_without_required_fields_names_them(self):
+    def test_create_without_fields_writes_and_names_the_empty_ones(self):
+        """欄を省いても作る（C10）。空のまま作った欄を名指しし、後から足せる。"""
         out = server.record_objective("exp-new", confirmed_objective="確定")
-        self.assertIn("見つかりません", out)
+        self.assertTrue((self.reports / "exp-new.objective.md").exists())
+        self.assertIn("空のまま作った欄", out)
         for name in ("dataset", "polarity", "groups", "comparison", "sub_questions"):
             self.assertIn(name, out)
-        self.assertFalse((self.reports / "exp-new.objective.md").exists())
+        meta, subqs, _ = notes.parse_objective(self.reports / "exp-new.objective.md")
+        self.assertEqual(meta["confirmed_objective"], "確定")
+        self.assertEqual(meta["dataset"], "")
+        self.assertEqual(subqs, [])
+
+    def test_create_with_assay_kind_only(self):
+        """`record_objective(id, assay_kind=...)` だけで目的を作り、ハンドルの種別を確定する。"""
+        out = server.record_objective("exp-kind", assay_kind="lipid")
+        self.assertIn("objective を記録", out)
+        meta, _subqs, _ = notes.parse_objective(self.reports / "exp-kind.objective.md")
+        self.assertEqual(meta["assay_kind"], "lipid")
+        self.assertEqual(meta["analysis_dir"], str(self.dataset_dir))
+        self.assertEqual(session_state.session.dataset.assay_kind, "lipid")
+
+    def test_fields_left_empty_can_be_filled_later(self):
+        server.record_objective("exp-fill", assay_kind="metabolite")
+        out = server.record_objective("exp-fill", dataset="NEG", groups=["a", "b"],
+                                      sub_questions=["最初の問い"])
+        self.assertIn("更新", out)
+        meta, subqs, _ = notes.parse_objective(self.reports / "exp-fill.objective.md")
+        self.assertEqual(meta["dataset"], "NEG")
+        self.assertEqual(meta["groups"], ["a", "b"])
+        self.assertEqual([label for label, _ in subqs], ["Q1"])
+        # 小問のある目的にもう一度 sub_questions を渡しても、増やさず注記する。
+        again = server.record_objective("exp-fill", sub_questions=["別の問い"])
+        self.assertIn("add_subquestions", again)
+        _meta, subqs, _ = notes.parse_objective(self.reports / "exp-fill.objective.md")
+        self.assertEqual(len(subqs), 1)
 
     def test_update_changes_only_the_passed_fields(self):
         self._create("exp-3", biological_context="RAW macrophage")

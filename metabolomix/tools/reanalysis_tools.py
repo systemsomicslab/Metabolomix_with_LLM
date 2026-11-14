@@ -323,7 +323,8 @@ def _analysis_run_v2(spec: dict, holder, output_path: str | None) -> str:
         return error
     try:
         normalized = normalize_spec_v2(spec)
-        result = run_spec_v2(normalized, ds, assay_kind=_assay_kind(holder))
+        assay_kind = _assay_kind(holder)
+        result = run_spec_v2(normalized, ds, assay_kind=assay_kind)
         if result.get("status") == "needs_input":
             return needs_input(result["field"], result["reason"], result["options"],
                                retry_tools=["dataset_analysis_run"])
@@ -359,7 +360,8 @@ def _analysis_run_v2(spec: dict, holder, output_path: str | None) -> str:
             notes.append(f"行が {MAX_INLINE_ROWS} を超える解析（{truncated}）は p の小さい順の先頭 "
                          f"{MAX_INLINE_ROWS} 行だけを載せた。全行は output_path を指定して JSON に書く。")
     return json_payload(json_safe(round_floats({
-        "status": "success", **summary, **({"output_path": written} if written else {}),
+        "status": "success", "assay_kind": assay_kind, **summary,
+        **({"output_path": written} if written else {}),
         **({"notes": notes} if notes else {}),
         "note": "判定（再現したか）は返さない。状態と記録は変えていない。"})))
 
@@ -370,9 +372,8 @@ _DETAIL_LIST_KEYS = ("samples", "sample_ids", "unit_ids", "feature_ids", "candid
 
 
 def _assay_kind(holder) -> str:
-    """組成のクラスの種類の決め方に使う、記録済みの脂質／代謝物の別（無ければ unknown）。"""
-    from metabolomix.core.session_state import session
-    return getattr(session, "assay_kind", "unknown") or "unknown"
+    """組成のクラスの種類の決め方に使う、そのハンドル（データセット）の脂質／代謝物の別（無ければ unknown）。"""
+    return getattr(holder, "assay_kind", "unknown") or "unknown"
 
 
 # ---------- 共通 ----------
@@ -520,7 +521,8 @@ def library_msms_qualify(rules: dict, spot_id: int | None = None,
 # ---------- 同族列 ----------
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def dataset_homolog_check(spec: dict, dataset_handle: str | None = None) -> str:
+def dataset_homolog_check(spec: dict, dataset_handle: str | None = None,
+                          wait_seconds: float = 20.0) -> str:
     """同族列の RT の単調性を検査する（homolog-check.v1。再解析で使う）。
 
     `members`（`feature_id`・`carbons`・`double_bonds` を手で並べる）か `auto`
@@ -530,6 +532,8 @@ def dataset_homolog_check(spec: dict, dataset_handle: str | None = None) -> str:
     `max_violations` 既定 0）。同じ（炭素数, 二重結合数）が複数あれば RT の中央値で並べ
     `duplicates` に挙げる。戻り値は `verdict`（pass / fail）・違反の TSV・`rule_hash`。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
+    wait_seconds: 待つ秒数（既定 20。0〜30 秒）。超えたら仕事を続けたまま `status: "running"` と `job_id` を
+        返す（結果は `job_status(job_id=...)`。`handle_dispatch.LONG_RUNNING`）。
     """
     from metabolomix.analysis import homolog
 
@@ -666,8 +670,10 @@ def dataset_sample_peaks(feature_ids: list[str | int], dataset_handle: str | Non
     `rt` は分（gap-fill のセルも `.arf` の値）、`mz` は検出されたセルの実測 m/z（gap-fill は null）、
     `height` はデータセットの強度の行列の値（`measure` で選んだ `.arf` の欄。定量で変えたデータセットは
     その値）、`detected` は `detected_mask`（gap-fill なら false）。
-    試料ごとの RT（`per_sample_rt`）を持つデータセットだけ。持たなければ `DATASET_BAD_REQUEST`
-    （`directory` / `job_path` / `pipeline_path` で解析フォルダを読む）。
+    `per_sample_rt` のあるデータセットだけ: 解析フォルダ（`.arf`）から読んだもの、または mzTab-M で読み
+    隣の `.arf` と照合できたもの（`summary` の検出状態の行）。照合できなかった mzTab-M・統合などで
+    作り直したデータセットは `DATASET_BAD_REQUEST`（`directory` / `job_path` / `pipeline_path` で解析
+    フォルダを読む）。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     output_path: 全量の TSV をここへ書き、要約（`n_rows`・`n_features`・`n_samples`・`output_path`・
         `sha256`）だけを返す（ほかの再解析のツールと同じ規則）。
@@ -685,8 +691,8 @@ def dataset_sample_peaks(feature_ids: list[str | int], dataset_handle: str | Non
     if rt_matrix is None:
         return mztab_error(
             "DATASET_BAD_REQUEST",
-            "このデータセットには per_sample_rt が無い（mzTab-M から読んだか、統合などで作り直した）。"
-            "解析フォルダ（.arf）から読んだデータセットだけ使える。",
+            "このデータセットには per_sample_rt が無い（mzTab-M を隣の .arf と照合できなかったか、"
+            "統合などで作り直した）。解析フォルダ（.arf）から読むか、照合できる .arf を mzTab-M の隣に置く。",
             {"field": "per_sample_rt", "source_format": getattr(ds, "source_format", None)})
     row_of = {fid: i for i, fid in enumerate(ds.feature_ids)}
     wanted = list(dict.fromkeys(str(f) for f in feature_ids))

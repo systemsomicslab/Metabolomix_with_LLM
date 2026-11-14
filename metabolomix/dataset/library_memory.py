@@ -166,43 +166,6 @@ def public_view(record: dict | None) -> dict | None:
     return {k: v for k, v in record.items() if k != "path"}
 
 
-#: ライブラリのファイル名を伏せたときの置き換え語。
-HIDDEN_NAME = "(ライブラリ名は伏せた)"
-
-
-def redact_library_names(value, names):
-    """`value`（JSON になる辞書・リスト・文字列）から、ライブラリのファイル名 `names` を伏せた写しを返す。
-
-    `library_names=False` の戻り値用。名前の欄（`file`・`candidates`・`remembered`・`opened`）は
-    中身を置き換え語にし、そのほかの文字列に名前が混じっていれば（注記・誤りの文言・概観）置き換える。
-    sha256・件数・status・kind は文字列に名前を含まないので変わらない。大文字小文字は区別しない。
-    """
-    names = sorted({n for n in names if n}, key=len, reverse=True)
-    if not names:
-        return value
-    pattern = re.compile("|".join(re.escape(n) for n in names), re.IGNORECASE)
-
-    def walk(node):
-        if isinstance(node, str):
-            return pattern.sub(HIDDEN_NAME, node)
-        if isinstance(node, (list, tuple)):
-            return [walk(item) for item in node]
-        if isinstance(node, dict):
-            return {key: walk(item) for key, item in node.items()}
-        return node
-    return walk(value)
-
-
-def library_names_in(record: dict | None, *extra: str | None) -> set[str]:
-    """記録（`library_record`）と `extra` のファイルの名前（パスなら名前の部分）を集める。"""
-    found: set[str] = set()
-    items = [(record or {}).get("file"), *((record or {}).get("candidates") or []), *extra]
-    for item in items:
-        if isinstance(item, str) and item:
-            found.add(PureWindowsPath(item).name or item)
-    return found
-
-
 def is_lbm_annotator(annotator_id: str | None) -> bool | None:
     """代表の `annotator_id` が LBM 由来なら True、MSP のファイルのパス（末尾が `.msp` + 数字）なら False、
     ほかは None。

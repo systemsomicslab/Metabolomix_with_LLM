@@ -100,7 +100,38 @@ def _msdial_samples(file_ids: list[int], arf_names: dict[int, str | None],
             "file_path": record.get("file_path") or None,
             "in_mddata": bool(record),
         })
+    if _console_default_classes(file_ids, by_id):
+        # MS-DIAL Console が書く既定の .mddata（Class ID = FileID・種類はすべて sample）は、
+        # 利用者の宣言ではない。群は置かず、役割はファイル名から推定する（QC・ブランクを sample と読まない）。
+        from metabolomix.analysis.preprocessing import detect_sample_roles
+
+        roles = detect_sample_roles(names)
+        for sample in samples:
+            sample["group"] = None
+            sample["role"] = roles.get(sample["name"], "sample")
+            sample["role_declared"] = False
+        notes.append(f".mddata（{mddata.name}）は MS-DIAL Console の既定（Class ID = FileID・種類は"
+                     "すべて sample）なので、群・役割の宣言とみなさない。群は置かず、役割はファイル名から"
+                     "推定した（dataset_set_sample_metadata で群を与える。pipeline の run の中の解析"
+                     "フォルダなら、run の実験情報シートから当てる）。")
     return names, samples
+
+
+def _console_default_classes(file_ids: list[int], by_id: dict[int, dict]) -> bool:
+    """`.mddata` が MS-DIAL Console の既定か（全試料が宣言にあり、種類がすべて sample（0）で、
+    Class ID が FileID かファイル名のまま）。2 試料以上のときだけ見る（1 試料では見分けられない）。"""
+    records = [by_id.get(file_id) for file_id in file_ids]
+    if len(records) < 2 or any(record is None for record in records):
+        return False
+    for record in records:
+        if record.get("analysis_file_type") not in (0, None):
+            return False
+        class_id = str(record.get("class_id") or "").strip()
+        file_name = str(record.get("file_name") or "").strip()
+        defaults = {str(record["file_id"]), file_name, Path(file_name).stem} - {""}
+        if class_id not in defaults:
+            return False
+    return True
 
 
 def _annotator_file_name(annotator_id):

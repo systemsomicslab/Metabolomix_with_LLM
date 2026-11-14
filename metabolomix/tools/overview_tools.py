@@ -1,8 +1,8 @@
 """最初の概観 `dataset_overview`（spec 2026-11-06-dataset-overview-design、計画 2026-11-09-a-overview）。
 
 品質 → 全体 → クラス → 分子種の 4 段で「群の間で何が変わり、何が変わっていないか」を粗く示す。
-`load_dataset` は読み込みの最後に `build_overview_payload(embedded=True)` を呼び、鎖を進めた後は
-`dataset_overview` で同じ形を出し直す。統計はすべて C のエンジン（既定の前処理・PCA・spec v2 の比較・組成）を通す。
+`dataset_overview` が出す（`load_dataset(overview=True)` も読み込みの最後に `build_overview_payload(embedded=True)` を
+呼んで同じものを載せる）。鎖を進めた後は `dataset_overview` で同じ形を出し直す。統計はすべて C のエンジン（既定の前処理・PCA・spec v2 の比較・組成）を通す。
 
 概観の比較と PCA は `ds.results` に登録する（`result_id` で掘れる）が、直近（`last_differential` / `last_pca`）は
 動かさない（判断 #3）。概観そのものは `ds.results[ovw_…]` と `reports/stats/`（step=overview）に残す。
@@ -18,7 +18,7 @@ from metabolomix.analysis.stats import quality, spec_v2
 from metabolomix.analysis.stats.composition import composition
 from metabolomix.analysis.stats.confounding import confounding_report
 from metabolomix.analysis.stats.data import from_dataset
-from metabolomix.core import mcp_core, session_state
+from metabolomix.core import mcp_core
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import missing_state, mztab_error
@@ -172,6 +172,7 @@ def _quality_only(holder, ds, study, exc: DomainError, *, rsd, failed, drift, de
         "status": "success",
         "overview_id": oid,
         "provisional": chain["provisional"],
+        "assay_kind": assay_kind,
         "state": _state_line(holder, ds, chain, None, assay_kind),
         **({} if embedded else {"counts": _counts(ds, study, None)}),
         "quality": _texts(q_sec),
@@ -191,7 +192,8 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
     `embedded=True`（`load_dataset` の中）は `counts` を省く（`load_dataset` の summary と重なるため）。
     """
     ds = holder.dataset
-    assay_kind = getattr(session_state.session, "assay_kind", "unknown") or "unknown"
+    # 種別はハンドル（データセット）ごと。直近のハンドルを読み替えず、渡されたもの（holder）の値を使う。
+    assay_kind = getattr(holder, "assay_kind", "unknown") or "unknown"
 
     _, inputs, config = stats_results.matrix_inputs(ds, None)
     study = from_dataset(ds, **inputs)
@@ -300,6 +302,7 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
         "status": "success",
         "overview_id": oid,
         "provisional": chain["provisional"],
+        "assay_kind": assay_kind,
         "state": _state_line(holder, ds, chain, prepared, assay_kind),
         **({} if embedded else {"counts": _counts(ds, study, prepared)}),
         "quality": _texts(q_sec),
@@ -318,7 +321,7 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
 def dataset_overview(top_n: int = 5, dataset_handle: str | None = None) -> str:
     """最初の概観: 品質 → 全体 → クラス → 分子種の 4 段で「群の間で何が変わり、何が変わっていないか」を粗く示す。
 
-    `load_dataset` が読み込みの最後に同じものを返す（`overview` 欄）。鎖を進めた後（キュレーション・換算・統合・
+    `load_dataset(overview=True)` も読み込みの最後に同じものを返す（`overview` 欄。既定は載せない）。鎖を進めた後（キュレーション・換算・統合・
     選別・除外・試料の表の更新）に呼び直すと、同じ形で出し直す。図は入れない（各段の `next` の dataset_plot で描く）。
 
     - 計算は C の既定の前処理（ドリフト補正の既定が未決なら補正なしで計算し、そう書く）・PCA（QC は投影）・
@@ -336,6 +339,9 @@ def dataset_overview(top_n: int = 5, dataset_handle: str | None = None) -> str:
 
     top_n: 分子種の段の上位の件数（既定 5、0〜20）。
     dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。
+
+    戻り値の `assay_kind` はそのハンドルの種別（組成のラベルとクラスの段の規則を決める。
+    `record_objective(assay_kind=...)` で確定）。
     """
     if isinstance(top_n, bool) or not isinstance(top_n, int) or not 0 <= top_n <= _TOP_N_MAX:
         return mztab_error("DATASET_BAD_REQUEST", f"top_n は 0〜{_TOP_N_MAX} の整数です。", {"top_n": top_n})

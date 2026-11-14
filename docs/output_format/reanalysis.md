@@ -54,17 +54,32 @@
 - **上限。** `lipidmix.local.toml` の `[server] max_dataset_handles`（既定 8。1 未満は 1）。`load_dataset` がハンドルを 1 本使う
   （前に読んだものは閉じずに残る）。超えると `DATASET_HANDLE_LIMIT` で止め、古いハンドルを
   黙って閉じない。寿命は明示の `dataset_close` か、サーバの終了まで。
-- **受付番号。** `load_dataset` は最長 `wait_seconds`（既定 20。0〜30 秒）待ち、終わらなければ読み込みを
-  続けたまま `{"status": "loading", "load_id": "ld_…"}` を返す。`dataset_load_status(load_id)` は読み込み中なら
-  `status: "loading"`、終われば `load_dataset` の戻り値そのもの（1 時間覚える）。`wait_seconds`（既定 0）を
-  渡すと最長 30 秒まで終わりを待ってから返す。受付番号を返した後に別の
-  ハンドルが直近になっていたら直近にせず、`current: false` が付く。上限は読み込み中の受付も 1 本と数える。
+- **受付番号。** `load_dataset` は最長 `wait_seconds`（既定 20。0〜30 秒。範囲の外の数は丸めて `wait_seconds_note`
+  を付ける）待ち、終わらなければ読み込みを続けたまま `{"status": "loading", "load_id": "ld_…"}` を返す。
+  `dataset_load_status(load_id)` は読み込み中なら `status: "loading"`、終われば `load_dataset` の戻り値そのもの
+  （1 時間覚える）。`load_id` を省くと、まだ結果を渡していない読み込みが 1 本ならそれ、2 本以上なら `needs_input`
+  （受付の一覧つき）、無ければ `missing_state`。`wait_seconds`（既定 0）を渡すと最長 30 秒まで終わりを待ってから
+  返す。受付番号を返した後に別のハンドルが直近になっていたら直近にせず、`current: false` が付く。上限は読み込み中の
+  受付も 1 本と数える。
+- **長い道具の受付番号。** `pathway_project` と `dataset_homolog_check` も `wait_seconds`（既定 20。0〜30 秒）を持ち、
+  その中で終わらなければ仕事を続けたまま `{"status": "running", "job_id": "job_…", "tool", "next"}` を返す。ハンドルの
+  ロックは仕事が終わるまでその仕事が持つ（同じハンドルへの次の呼び出しは仕事の後に並ぶ）。結果は
+  `job_status(job_id, wait_seconds)` で引く（走っている間は `status: "running"` と `elapsed_s`、終われば道具の戻り値
+  そのもの。`job_id` の省き方は `dataset_load_status` と同じ。知らない番号は `JOB_NOT_FOUND`）。
+- **ハンドルを見失う条件。** ハンドルは次のときに無くなり、以後そのハンドルを渡した呼び出しは
+  `DATASET_HANDLE_NOT_FOUND`（`details.open_handles` に開いているハンドル）を返す（直近や別のハンドルへは落ちない）:
+  (1) `dataset_close` で閉じた（戻り値の `source` が閉じたものの入口の種類・入力の名前・極性）、(2) サーバのプロセスが
+  終わった・再起動した（`server_update` の後の再起動、クライアントの再接続でサーバが起動し直したときも。ハンドルは
+  プロセスの中にだけある）、(3) 読み込みが受付の後に失敗した（ハンドルは登録されない）。上限に達しても古いハンドルは
+  閉じない。見失ったら `dataset_list` で開いているものを確かめ、`load_dataset` で開き直す（同じ入力なら読み込み済みの
+  基を使い回すが、前処理・比較の結果はハンドルごとなので作り直す）。
 
 `load_dataset` の戻り値:
 
 | 欄 | 意味 |
 |---|---|
 | `dataset_handle` | ハンドルの ID |
+| `assay_kind` | このハンドルの種別（`lipid` / `metabolite` / `unknown`）。ハンドルごとに持ち、解析フォルダ配下 `reports/` の目的ファイルに記録があれば読み戻す（`notes` に注記）。データセットを開く前に（`[paths] reports_dir` の目的へ）記録した種別は、次に直近になるハンドルへ引き継ぐ（目的ファイルの種別と食い違えば `unknown`。`notes` に注記）。`record_objective(assay_kind=...)` で確定・変更する |
 | `adapter` | 読んだアダプタ。`msdial_folder`（解析フォルダの `.arf` / `.arf2` を直接）/ `mztab`（mzTab-M）。`job_path` / `pipeline_path` の既定は `msdial_folder`（`source="mztab"` で `mztab`） |
 | `polarity` / `polarity_source` | データセットの極性と出所（`job_declared` / `adduct_majority` / `arf2_ion_mode` / `unknown`）。`dataset_feature_search` の目標照合と同じ決め方 |
 | `n_features` / `n_samples` | 特徴数・試料数 |
@@ -76,14 +91,11 @@
 | `reused_base` | 読み込み済みのものを使い回したか |
 | `summary` | 特徴・試料の数、定量種別、検出状態、同定の内訳、出所の裏取り、読み込みの注記（行の配列） |
 | `sample_counts` | `{groups, roles, n_ungrouped}`: 群（Class ID）ごと・役割ごとの試料数と、群の宣言が無い試料の数 |
-| `next` | 次の一手の例（3 行） |
+| `overview` | `overview=True` のときだけ。最初の概観（[dataset.md](dataset.md) §11.9。既定は載せない） |
+| `wait_seconds_note` | `wait_seconds` を 0〜30 秒に丸めたときだけ |
+| `next` | 次の一手の例（3 行。最初が `dataset_overview()`） |
 
-**`library_names=False` のとき**（戻り値を run の記録へ保存する側が付ける）: ライブラリのファイル名が戻り値のどこにも
-出ない。`library` は `{sha256, record_count}` だけ（`file` の欄が**無い**。欠けではなく伏せた結果）、
-`library_record` は `file`・`candidates` の欄が無い（`sha256`・`status`・`kind` などは残る）、注記・概観・誤りの文言に
-混じっていたファイル名は `(ライブラリ名は伏せた)` に置き換わる。sha256・`record_count`・`status`・`kind` は
-`library_names=True` と同じ。受付番号を返す遅い読み込みでは、この選択が `dataset_load_status` の最終の戻り値に
-引き継がれる。
+ライブラリはいつもファイル名と sha256 だけを返す（置き場所は出さない）。
 
 ライブラリは**データセットが同定に使ったものの記憶**（`library_record`。[library.md](library.md)）から
 引く。実体の sha256 を測り直して `known` のままなら読み取り専用で開き、`mismatch`（内容が変わった・
@@ -313,8 +325,8 @@ notes?, note}`。`analyses[]` は解析ごとの要約（`n_rows`・`n_tested`�
 **自己完結（再現のための規則）。** v2 は spec だけで同じ数字を出し直せる実行で、`dataset_exclude` の除外は読まない。
 spec の `input` に無い除外がデータセットにあれば、結果の `warnings` に
 `{"code": "dataset_exclusions_not_in_spec", "n_samples", "n_features"}` が載る（効いていない除外の件数）。対話の
-`dataset_compare` が結果の spec に除外を写して持つのとは逆の向き。組成のクラスの名前は、そのセッションの
-`assay_kind`（`record_objective(assay_kind=...)`。spec には載らない）で決まる（`class_label_kind`: `lipid_class` /
+`dataset_compare` が結果の spec に除外を写して持つのとは逆の向き。組成のクラスの名前は、そのハンドルの
+`assay_kind`（`record_objective(assay_kind=...)`。spec には載らず、戻り値の `assay_kind` に出る）で決まる（`class_label_kind`: `lipid_class` /
 `msdial_ontology`）。同じ spec でも `assay_kind` が違えばクラスの切り方が違うので、組成を再現するときは種別も揃える。
 
 **前処理は尋ねない。** `drift.mode="auto"` は、補正できても内部標準で換算済みの値か、注入順が MS-DIAL の既定
@@ -576,8 +588,10 @@ detected` の **TSV**（列名 1 回、`rows` の文字列。依頼の特徴の�
   `output_path` があれば全量の TSV（同じ列・列名 1 回）をそのファイルへ原子的に書き、戻り値は要約
   `{status, n_features, n_samples, n_rows, output_path, sha256}`（`rows` は付かない。ほかの再解析のツールの
   `output_path` と同じ扱い。1,000 行以下でも `output_path` を渡せば同じく要約）。
-- 解析フォルダ（`.arf`）から読んだデータセットだけ。mzTab-M で読んだデータセットは `per_sample_rt`
-  が無いので `DATASET_BAD_REQUEST`（`field: per_sample_rt`）。
+- 試料ごとの RT（`per_sample_rt`）のあるデータセットだけ: 解析フォルダ（`.arf`）から読んだもの、または mzTab-M で
+  読み、隣の `.arf` と同じアラインメントだと照合できたもの（検出状態を取り込めたとき。`.arf` の列を mzTab-M の試料の順に
+  並べ替えて持つ）。照合できなかった mzTab-M と、統合などで作り直したデータセットは `DATASET_BAD_REQUEST`
+  （`field: per_sample_rt`）。
 
 ## 7. 証拠の束（claim-evidence.v1）
 
