@@ -2,6 +2,7 @@
 
 InChIKey の規則・主張の hash は固定値で縛る。2026-11-14 に既定（`min_fragments_excl_precursor` 1・
 `min_fragment_relative_intensity` 0.01）を変えたので、そのとき値を引き直した（意図した変化。事実確認 A1）。
+陽イオンの既定の付加体の第 2 層を足したとき（A12）にも、付加体の段が hash に入る主張の値を引き直した。
 """
 from __future__ import annotations
 
@@ -136,15 +137,17 @@ def test_inchikey_claim_rule_hash_is_pinned():
             "msms": {"top_n": 3, "rules": {"min_fragments_excl_precursor": 2}},
             "relations": {"rt_window": 0.05}}
     # merge_split=false は v7 と同じ規則。`msms` があると MS/MS の規則の既定（2026-11-14 に変えた）が
-    # hash に入るので、v7 の値（fb5977…）から変わった。既定（true）は merge_split が規則に入る
+    # hash に入るので、v7 の値（fb5977…）から変わった。既定（true）は merge_split が規則に入る。
+    # 陽イオンの既定の付加体の第 2 層に [M+CH3OH+H]+ と [M+H-2H2O]+ を足したとき（A12）にも段の並びが
+    # 変わったので値を書き直した（旧い段では 9be780…・c17e3e… が再現することを確かめた）
     normalized = C.normalize_claim_spec({**spec, "merge_split": False}, dataset_polarity="positive")
     assert C.rule_hash(normalized) == \
-        "9be780c9eca0d647b47ce5f15c2bcc0fa847d2fd96bfda30c63bcc14d47d805a"
-    # `msms` が無ければ MS/MS の既定は hash に入らず、v7 の hash のまま（既定を変える前の実装で引いた値）
+        "518eae70c026ef5bf94fd511bfa7127d281d5cc8798400b954f63cc206b28e7e"
+    # `msms` が無ければ MS/MS の既定は hash に入らない（付加体の段の変更だけを受ける）
     no_msms = {k: v for k, v in spec.items() if k != "msms"}
     assert C.rule_hash(C.normalize_claim_spec({**no_msms, "merge_split": False},
                                               dataset_polarity="positive")) == \
-        "c17e3edbf0f15e48e6fda7e87b53cf765b64eee7fd6b73ea2165cfcab827307b"
+        "0c2297849bae893d85d724a03a45b55a062792a0492d05365d1618938e63d7fb"
     merged = C.normalize_claim_spec(spec, dataset_polarity="positive")
     assert merged["merge_split"] is True
     assert C.rule_hash(merged) != C.rule_hash(normalized)

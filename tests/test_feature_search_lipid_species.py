@@ -95,6 +95,9 @@ def test_target_without_any_identifier_still_names_inchikey():
 
 
 # ---------- InChIKey の目標は変わらない（変更前の値で固定） ----------
+# 値は 2026-11-14 に陽イオンの既定の付加体の層へ [M+CH3OH+H]+・[M+H-2H2O]+ を足した後のもの（A12-T18。
+# 足す前は rule_hash 1890f39f…・照合 5ff0be55…。層を戻した計算で一致を確かめてある）。種の目標の追加では
+# 変わらないことを縛る。
 
 def test_inchikey_targets_are_byte_identical_to_before():
     [t] = normalize_targets([{"target_id": "c1", "inchikey": GABA_KEY, "formula": "C4H9NO2",
@@ -102,7 +105,7 @@ def test_inchikey_targets_are_byte_identical_to_before():
     assert sorted(t) == ["adduct_tiers", "applicable", "expected_mz", "formula", "inchikey_block",
                          "name", "polarity", "ppm", "rt_min", "rt_tol_min", "target_id",
                          "theoretical_mz"]
-    assert rule_hash([t]) == "1890f39fd2d7408cba18962e9c6028180bad10b1f11fd6cdc2d216e4d4324d19"
+    assert rule_hash([t]) == "1c44a07e577acede3e79209ad348daba9eb4a288dd4bc74f5e71d465f649e4e6"
     t2 = normalize_targets([{"target_id": "c2", "inchikey": GABA_KEY, "expected_mz": 104.0706,
                              "adduct": "[M+H]+"}], dataset_polarity=None)
     assert rule_hash(t2) == "33131cfe7e1b022b54412d0d6d10b0fe8a7bfdfcf947f65a4ef3cfd30082b7f1"
@@ -121,7 +124,7 @@ def test_inchikey_matching_output_is_unchanged():
     assert canonical_hash(out) == PINNED_MATCH_HASH
 
 
-PINNED_MATCH_HASH = "5ff0be55dc08b1bfc345b3155bd94de05e1b7395739da1715a3fb1c95265a4ba"
+PINNED_MATCH_HASH = "114bf20c06306d0e2e79fdc6d938da8331c4590319dfcb3d7f863b615f7f11e4"
 
 
 # ---------- 種の目標の照合 ----------

@@ -19,7 +19,7 @@ from metabolomix.analysis import export_contract, stats_results
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import missing_state, mztab_error
-from metabolomix.core.serialization import json_payload
+from metabolomix.core.serialization import json_payload, round_floats
 from metabolomix.tools._holder import resolve_holder
 # 極性の決め方は mztab/polarity.py が唯一の実装（ハンドルの読み込みと共有）。
 from metabolomix.mztab.polarity import dataset_polarity as _dataset_polarity
@@ -222,11 +222,11 @@ def _missing(state: str, message: str) -> str:
 
 _POLARITIES = ("positive", "negative")
 
-# 丸めの桁（spec §4.2）。m/z 4 桁・ppm 2 桁・RT 3 桁・log2FC 4 桁。p・q・平均は有効 4 桁。
+# 丸めの桁（spec §4.2）。m/z 4 桁・ppm 2 桁・RT 3 桁・log2FC 4 桁。p・q・平均・presence_p は有効 4 桁。
 _CANDIDATE_DIGITS = {"theoretical_mz": 4, "mz": 4, "ppm": 2, "rt": 3, "delta_rt": 3}
 _WINDOW_DIGITS = {"mz": 4, "rt": 3}
 _STATS_DIGITS = {"log2fc": 4}
-_STATS_SIGNIFICANT = ("p", "q", "mean_a", "mean_b")
+_STATS_SIGNIFICANT = ("p", "q", "mean_a", "mean_b", "presence_p")
 
 
 def _round(value, digits: int):
@@ -346,6 +346,8 @@ def dataset_feature_search(
     sort: str = "mz",
     dataset_handle: str | None = None,
     contrast_id: str | None = None,
+    include_statistics: bool = True,
+    rt_offset_min: float | None = None,
 ) -> str:
     """DatasetState の特徴を探し、目的の物質に当たる特徴を規則で判定する（読み取り専用）。
 
@@ -380,22 +382,38 @@ def dataset_feature_search(
     `max_results` 件まで）・`rule`（正規化した規則と `rule_hash`。result_id・表示名 `name`・
     目標の並び順を含まないので、同じ目標・同じ極性なら別の session でも同じ hash）。hash は表示用の丸め（理論 m/z を
     4 桁に）より前の値から作るので、返された `rule.targets` から計算し直すことはできない
-    ——照合は `rule_hash` の値どうしで行う。
+    ——照合は `rule_hash` の値どうしで行う。付加体の層の既定は、陽イオン `[M+H]+ [M]+` ／
+    `[M+Na]+ [M+NH4]+ [M+H-H2O]+ [M+H-NH3]+ [2M+H]+ [M+2H]2+ [M+CH3OH+H]+ [M+H-2H2O]+`、陰イオン
+    `[M-H]-` ／ `[M-H2O-H]- [M+Cl]- [M+FA-H]- [M+CH3COO]- [2M-H]- [M+Na-2H]-`。
+    `rt_offset`（目標照合だけ）: 目標の `rt_min` と特徴の一意の一致（質量の窓・`rt_min` の ±2 分・MS/MS が
+    別物質でない特徴が付加体ごとにたかだか 1 つで、それらが 0.05 分以内に同時溶出し、その特徴に合う目標も
+    1 つ。同じ化合物の `[M+H]+` と `[M+Na]+` などは 1 組）から推定した系統的な RT のずれ（特徴 − 目標、分）。
+    `{n_pairs, median_min, q1_min, q3_min, shift_min, criteria}`。`shift_min` は一意の一致が 10 以上かつ
+    |中央値| > 0.2 分のときだけ値が入り（ほかは null と `reason`）、照合には当てない。
 
+    include_statistics: False なら比較の統計（`stats`・`stats_unmerged`・`results`・`stats_source`）を
+        付けない（前処理などを決める前に群の差を見ないため。既定 True）。
     result_ids: 統計を付ける 2 群比較（`dataset_compare` の結果の対比）。省略時は
         今も有効な 2 群比較の全部（古いものは使わず `notes` に挙げる）。`dataset_compare` の結果は対比ごとに
         1 つの比較として数え、ID は対比が 1 つなら `result_id`、複数なら `result_id#contrast_id`
         （交互作用の対比は 2 群の形にならないので使わない）。名指しした ID が無い・古いときは
-        `missing_state`。差次的結果が 1 件も無ければ統計なしで返す。
+        `missing_state`。差次的結果が 1 件も無ければ統計なしで返す。比較の統計が付かない呼び出し
+        （結果が無い・`include_statistics=false`・`result_ids=[]`）では、統計にだけ効く引数
+        （`with_group_labels`・`contrast_id`・`result_ids`、窓検索の `alignment_qc_path`・`merge_split=false`）を
+        誤りにせず、効かなかったことを `notes` に書く。
     contrast_id: `dataset_compare` の結果から使う対比を 1 つに絞る（その対比が無い結果は飛ばす）。
     max_results: 窓検索の行数・目標ごとの候補数の上限（既定 20）。打ち切りは `notes` に書く。
     sort: 窓検索の並び（`mz` 既定 / `intensity`）。`targets` とは併用できない（`DATASET_BAD_REQUEST`。
         目標照合は規則の順で並べる）。
 
-    `stats` は TSV（`feature_id result_id status log2fc p q mean_a mean_b detected_a detected_b`）。
+    `stats` は TSV（`feature_id result_id status log2fc p q mean_a mean_b detected_a detected_b
+    detected_units_a detected_units_b presence_p detection_driven`）。
     `status` は `tested` / `not_in_matrix`（前処理で落ちた）/ `not_testable`（p が無い）で、
     後の 2 つは数値欄が空（「差が無かった」ではない）。`detected_*` は群ごとの実検出例数
-    （gap-fill を数えない。検出状態が無ければ空）。`results` に BH の母集団
+    （注入単位。gap-fill を数えない。検出状態が無ければ空）。`detected_units_*` は比較の記録の個体単位の検出数
+    （反復注入をまとめていなければ `detected_*` と同じ）、`presence_p` は検出の有無の Fisher の正確検定の
+    p（比較の記録の値。個体単位。有効 4 桁）、`detection_driven` は差が値の大小でなく検出の有無から
+    来ているか（高い側の群の検出が個体の半数未満か、低い側の検出が 0。`tested` の行だけ）。`results` に BH の母集団
     （`bh_population`）と caveat。キュレーションのフラグは反映しない（あれば `notes`）。
     欄の意味は `lipidmix://docs/output-format/mztab`。
 
@@ -418,11 +436,15 @@ def dataset_feature_search(
     alignment_qc_path: `dataset_alignment_qc` が書いた JSON（今のデータセットで作ったものだけ）。
         省略時はその場で割れを探す（既定の閾値）。`merge_split=False` とは併用できない。
 
+    rt_offset_min: 目標照合の RT の窓の中心のずれ（分、任意）。中心を `rt_min + rt_offset_min` にする
+        （幅 `rt_tol_min` と `candidates.delta_rt` 列（RT − rt_min）は変えない）。`rt_min` のある目標の
+        `rt_offset_min` と `rule.rt_offset_min` に出て `rule_hash` に入る（省けば従来と同じ hash）。
+        窓検索では効かない（誤りにせず `notes` に書く）。有限の数でなければ `DATASET_BAD_REQUEST`。
     ppm_offset: 目標照合の質量の窓の中心のずれ（任意）。`{"default": 0.0, "bands": [{"max_mz": 200,
         "offset": -8.3}]}`。中心は「実測 − 理論」の ppm の符号つきの値で、帯は理論 m/z が `max_mz`
         未満の最初の帯（無ければ `default`）。幅（目標の `ppm`）は変えず、候補の `ppm` 列も実測 − 理論の
         まま。`rule.ppm_offset` と各目標の `ppm_offset`（付加体ごと）に出て `rule_hash` に入る。
-        窓検索（`targets` なし）では使えない（`DATASET_BAD_REQUEST`）。
+        窓検索（`targets` なし）では効かない（誤りにせず `notes` に書く）。形の誤りは `DATASET_BAD_REQUEST`。
 
     dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
@@ -433,13 +455,15 @@ def dataset_feature_search(
     ds = holder.dataset
     if ds is None:
         return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
-    if ppm_offset is not None and targets is None:
-        return mztab_error("DATASET_BAD_REQUEST",
-                           "ppm_offset は目標照合（targets）のときだけ使える（効かない設定を渡さない）。",
-                           {"field": "ppm_offset"})
-    if not isinstance(merge_split, bool):
-        return mztab_error("DATASET_BAD_REQUEST", f"merge_split は true / false: {merge_split!r}",
-                           {"field": "merge_split"})
+    if rt_offset_min is not None and (isinstance(rt_offset_min, bool)
+                                      or not isinstance(rt_offset_min, (int, float))
+                                      or not math.isfinite(rt_offset_min)):
+        return mztab_error("DATASET_BAD_REQUEST", f"rt_offset_min は有限の数（分）: {rt_offset_min!r}",
+                           {"field": "rt_offset_min"})
+    for name, flag in (("merge_split", merge_split), ("include_statistics", include_statistics)):
+        if not isinstance(flag, bool):
+            return mztab_error("DATASET_BAD_REQUEST", f"{name} は true / false: {flag!r}",
+                               {"field": name})
     if alignment_qc_path is not None and not merge_split:
         return mztab_error("DATASET_BAD_REQUEST",
                            "alignment_qc_path は merge_split=true のときだけ使える"
@@ -475,11 +499,19 @@ def dataset_feature_search(
 
     notes: list[str] = []
     payload: dict = {}
+    if targets is None:
+        # 目標照合にだけ効く中心のずれは、窓検索では誤りにせず効かなかったと書く（C7。形の誤りは誤り）
+        unused = [name for name, value in (("ppm_offset", ppm_offset), ("rt_offset_min", rt_offset_min))
+                  if value is not None]
+        if unused:
+            notes.append("目標照合（targets）でないので効かなかった引数: " + ", ".join(unused)
+                         + "（窓検索の m/z・RT の窓はずらさない）。")
     # データの指紋（行列全体の hash）は 1 回だけ計算し、割れの照合・結果の選択（古い結果を
     # 選ばない照合）・stats_source のすべてで使う。
     dataset_hash = dataset_fingerprint(ds)
     plan = None
     try:
+        offset_spec = normalize_ppm_offset(ppm_offset, code="DATASET_BAD_REQUEST")
         if targets is None:
             rows, truncated = feature_search.search_window(
                 ds, **window, max_results=max_results, sort=sort)
@@ -504,9 +536,9 @@ def dataset_feature_search(
                                    {"target_id": None, "field": "targets"})
             polarity, polarity_source, polarity_notes = _dataset_polarity(ds)
             notes.extend(polarity_notes)
-            offset_spec = normalize_ppm_offset(ppm_offset, code="DATASET_BAD_REQUEST")
             normalized = feature_search.normalize_targets(targets, dataset_polarity=polarity,
-                                                          ppm_offset=offset_spec)
+                                                          ppm_offset=offset_spec,
+                                                          rt_offset_min=rt_offset_min)
             # 特徴の m/z 配列は 1 回だけ作り、全目標で使い回す
             mz_array = feature_search._feature_mz_array(ds)
             merged_map = None
@@ -524,6 +556,10 @@ def dataset_feature_search(
                              f"（{', '.join(cut)}）。")
             candidates = [row for m in matches for row in m["candidates"]]
             payload["targets"] = [_target_summary(m) for m in matches]
+            # 系統的な RT のずれの推定（当てない。当てるなら rt_offset_min で呼び直す）
+            payload["rt_offset"] = round_floats(
+                feature_search.estimate_rt_offset(ds, normalized, mz_array=mz_array,
+                                                  merged_from=merged_map), digits=3)
             if merge_split:
                 shown = [{**row, "merged_from": ";".join(row["merged_from"] or []) or None}
                          for row in candidates]
@@ -537,86 +573,127 @@ def dataset_feature_search(
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
 
-    try:
-        chosen = feature_search.select_results(
-            ds, None if result_ids is None else list(dict.fromkeys(result_ids)),
-            dataset_hash=dataset_hash, contrast_id=contrast_id)
-    except DomainError as exc:                    # 対比の指定の誤り（CONTRAST_* / DATASET_BAD_REQUEST）
-        return mztab_error(exc.code, exc.message, exc.details or None)
-    if result_ids is not None:
-        if chosen["missing"] or chosen["stale"]:
-            # 名指しの結果を黙って落とすと、呼び出し側は統計が付いたつもりで読む
-            return _missing(
-                "dataset_compare_result",
-                "result_ids に指定した差次的結果が使えません"
-                f"（無い・2 群比較でない: {chosen['missing']} / 古い: {chosen['stale']}）。"
-                "dataset_compare で計算し直すか、result_ids を省略して今も有効な結果だけを"
-                "使ってください。")
-    else:
-        if chosen["stale"]:
-            notes.append("古い差次的結果（前処理・群の訂正前）は統計に使っていない: "
-                         + ", ".join(chosen["stale"]))
-        for entry in chosen["missing"]:           # 効かなかった contrast_id・交互作用だけの結果
-            notes.append(f"統計に使えなかった指定: {entry}")
-    results = chosen["results"]
-    if not results:
-        notes.append("差次的結果（2 群比較）が 1 件も無いので統計を付けていない"
-                     "（dataset_compare を実行すると付く）。")
-
-    merge_block: dict = {"enabled": merge_split}
-    unmerged = None
-    if not merge_split:
-        stats = feature_search.feature_stats(ds, stat_features, results,
-                                             with_labels=with_group_labels)
+    ineffective: list[str] = []            # 比較の統計が付かないので効かなかった引数（C7）
+    if not include_statistics:
+        results: list[dict] = []
+        notes.append("include_statistics=false なので比較の統計（stats・results）を付けていない。")
+        if result_ids is not None:
+            ineffective.append("result_ids")
+        if contrast_id is not None:
+            ineffective.append(f"contrast_id={contrast_id!r}")
     else:
         try:
-            if plan is None and results and stat_features:
-                # 窓検索で統計を付けないなら割れを探さない（行列全体を掃くので）
-                plan = feature_search.merge_plan(ds, alignment_qc_path=alignment_qc_path,
-                                                 dataset_hash=dataset_hash)
-            plan = plan or {"source": None, "groups": [], "alignment_qc_sha256": None}
-            merged = feature_search.merged_feature_stats(ds, stat_features, results,
-                                                         groups=plan["groups"],
-                                                         with_labels=with_group_labels)
-        except DomainError as exc:
+            chosen = feature_search.select_results(
+                ds, None if result_ids is None else list(dict.fromkeys(result_ids)),
+                dataset_hash=dataset_hash, contrast_id=contrast_id)
+        except DomainError as exc:                # 対比の指定の誤り（CONTRAST_* / DATASET_BAD_REQUEST）
             return mztab_error(exc.code, exc.message, exc.details or None)
-        stats, unmerged = merged["stats"], merged["stats_unmerged"]
-        for row in stats:
-            row["merged_from"] = ";".join(row["merged_from"]) if row["merged_from"] else None
-        merge_block.update({
-            "source": plan["source"],
-            "alignment_qc_sha256": plan["alignment_qc_sha256"],
-            "n_groups": len(plan["groups"]),
-            "groups": list(merged["touched"].values()),
-            "renamed": merged["renamed"],
-            "recomputed": list(merged["results"]),
-            "bh_population": {
-                summary["result_id"]: summary["bh_population"]
-                for summary in feature_search.result_summaries(merged["view"],
-                                                               list(merged["results"].values()))},
-        })
-        if merged["renamed"]:
-            notes.append("割れたスポットをまとめ、消える側の ID を残す ID の行に出した: "
-                         + ", ".join(f"{a} → {b}" for a, b in merged["renamed"].items()))
-    if any(row["detected_a"] is None for row in stats):
-        if getattr(ds, "detected_mask", None) is None:
-            notes.append("検出状態（gap-fill の区別）を取り込めていないので detected_a / "
-                         "detected_b は空（非ゼロ値は実測と補間を区別しない）。")
+        if result_ids is not None:
+            if chosen["missing"] or chosen["stale"]:
+                # 名指しの結果を黙って落とすと、呼び出し側は統計が付いたつもりで読む
+                return _missing(
+                    "dataset_compare_result",
+                    "result_ids に指定した差次的結果が使えません"
+                    f"（無い・2 群比較でない: {chosen['missing']} / 古い: {chosen['stale']}）。"
+                    "dataset_compare で計算し直すか、result_ids を省略して今も有効な結果だけを"
+                    "使ってください。")
         else:
-            notes.append("結果の試料と検出状態の列の対応を保証できず、detected_a / detected_b を"
-                         "数えていない結果がある。")
-    columns = (feature_search.STATS_COLUMNS_LABELED if with_group_labels
-               else feature_search.STATS_COLUMNS)
-    digits = {**_STATS_DIGITS, "log2fc_test_over_ref": 4}
-    if merge_split:
-        payload["stats"] = _table(stats, columns + ("merged_from",), digits=digits,
-                                  significant=_STATS_SIGNIFICANT)
-        payload["stats_unmerged"] = _table(unmerged, columns, digits=digits,
-                                           significant=_STATS_SIGNIFICANT)
+            if chosen["stale"]:
+                notes.append("古い差次的結果（前処理・群の訂正前）は統計に使っていない: "
+                             + ", ".join(chosen["stale"]))
+            for entry in chosen["missing"]:       # 効かなかった contrast_id・交互作用だけの結果
+                notes.append(f"統計に使えなかった指定: {entry}")
+        results = chosen["results"]
+        if not results:
+            if result_ids is not None and not result_ids:
+                notes.append("result_ids=[] なので統計を付けていない（統計を外すだけなら "
+                             "include_statistics=false）。")
+            else:
+                notes.append("差次的結果（2 群比較）が 1 件も無いので統計を付けていない"
+                             "（dataset_compare を実行すると付く）。")
+            if contrast_id is not None:
+                ineffective.append(f"contrast_id={contrast_id!r}")
+    if not results:
+        if with_group_labels:
+            ineffective.append("with_group_labels=true")
+        if targets is None:
+            # 窓検索では割れのまとめは統計にだけ効く（目標照合では候補の数え方にも効く）
+            if alignment_qc_path is not None:
+                ineffective.append("alignment_qc_path")
+            if not merge_split:
+                ineffective.append("merge_split=false")
+    if ineffective:
+        notes.append("比較の統計を付けていないので効かなかった引数: " + ", ".join(ineffective) + "。")
+
+    merge_block: dict = {"enabled": merge_split}
+    if not include_statistics:
+        if plan is not None:
+            # 目標照合の候補の数え方に使った割れの組（統計はやり直していない）
+            wanted = set(stat_features)
+            merge_block.update({
+                "source": plan["source"], "alignment_qc_sha256": plan["alignment_qc_sha256"],
+                "n_groups": len(plan["groups"]),
+                "groups": [list(group) for group in plan["groups"] if wanted.intersection(group)]})
+        payload["merge_split"] = merge_block
     else:
-        payload["stats"] = _table(stats, columns, digits=digits, significant=_STATS_SIGNIFICANT)
-    payload["merge_split"] = merge_block
-    payload["results"] = feature_search.result_summaries(ds, results)
+        unmerged = None
+        if not merge_split:
+            stats = feature_search.feature_stats(ds, stat_features, results,
+                                                 with_labels=with_group_labels)
+        else:
+            try:
+                if plan is None and results and stat_features:
+                    # 窓検索で統計を付けないなら割れを探さない（行列全体を掃くので）
+                    plan = feature_search.merge_plan(ds, alignment_qc_path=alignment_qc_path,
+                                                     dataset_hash=dataset_hash)
+                plan = plan or {"source": None, "groups": [], "alignment_qc_sha256": None}
+                merged = feature_search.merged_feature_stats(ds, stat_features, results,
+                                                             groups=plan["groups"],
+                                                             with_labels=with_group_labels)
+            except DomainError as exc:
+                return mztab_error(exc.code, exc.message, exc.details or None)
+            stats, unmerged = merged["stats"], merged["stats_unmerged"]
+            for row in stats:
+                row["merged_from"] = ";".join(row["merged_from"]) if row["merged_from"] else None
+            merge_block.update({
+                "source": plan["source"],
+                "alignment_qc_sha256": plan["alignment_qc_sha256"],
+                "n_groups": len(plan["groups"]),
+                "groups": list(merged["touched"].values()),
+                "renamed": merged["renamed"],
+                "recomputed": list(merged["results"]),
+                "bh_population": {
+                    summary["result_id"]: summary["bh_population"]
+                    for summary in feature_search.result_summaries(merged["view"],
+                                                                   list(merged["results"].values()))},
+            })
+            if merged["renamed"]:
+                notes.append("割れたスポットをまとめ、消える側の ID を残す ID の行に出した: "
+                             + ", ".join(f"{a} → {b}" for a, b in merged["renamed"].items()))
+        if any(row["detected_a"] is None for row in stats):
+            if getattr(ds, "detected_mask", None) is None:
+                notes.append("検出状態（gap-fill の区別）を取り込めていないので detected_a / "
+                             "detected_b は空（非ゼロ値は実測と補間を区別しない）。")
+            else:
+                notes.append("結果の試料と検出状態の列の対応を保証できず、detected_a / detected_b を"
+                             "数えていない結果がある。")
+        if any(r.get("n_units_a") not in (None, r.get("n_a")) or r.get("n_units_b") not in (None, r.get("n_b"))
+               for r in results):
+            notes.append("反復注入を個体にまとめた比較がある: detected_a / detected_b は注入の数、"
+                         "detected_units_a / detected_units_b・presence_p・detection_driven は個体の数"
+                         "（results の n_units_a / n_units_b）で数える。")
+        columns = (feature_search.STATS_COLUMNS_LABELED if with_group_labels
+                   else feature_search.STATS_COLUMNS)
+        digits = {**_STATS_DIGITS, "log2fc_test_over_ref": 4}
+        if merge_split:
+            payload["stats"] = _table(stats, columns + ("merged_from",), digits=digits,
+                                      significant=_STATS_SIGNIFICANT)
+            payload["stats_unmerged"] = _table(unmerged, columns, digits=digits,
+                                               significant=_STATS_SIGNIFICANT)
+        else:
+            payload["stats"] = _table(stats, columns, digits=digits, significant=_STATS_SIGNIFICANT)
+        payload["merge_split"] = merge_block
+        payload["results"] = feature_search.result_summaries(ds, results)
     if targets is not None:
         from metabolomix.analysis.analysis_spec import merge_groups_hash
 
@@ -631,10 +708,13 @@ def dataset_feature_search(
         if offset_spec is not None:
             # 渡したときだけ出す（省けば従来と同じ戻り値）
             payload["rule"]["ppm_offset"] = offset_spec
-    payload["stats_source"] = {
-        "result_ids": [(r.get("provenance") or {}).get("result_id") for r in results],
-        "dataset_hash": dataset_hash,
-    }
+        if rt_offset_min is not None:
+            payload["rule"]["rt_offset_min"] = float(rt_offset_min)
+    if include_statistics:
+        payload["stats_source"] = {
+            "result_ids": [(r.get("provenance") or {}).get("result_id") for r in results],
+            "dataset_hash": dataset_hash,
+        }
     curation = _curation_note(ds)
     if curation:
         notes.append(curation)

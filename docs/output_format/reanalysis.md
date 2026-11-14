@@ -449,11 +449,25 @@ dot の足切りは二乗の値と比べる）の列を足す——**合否に�
 
 - `coeluting`: |ΔRT| ≤ `rt_window` の特徴（`drt` = 相手 − この特徴、`r` = 試料間の log1p 強度の
   Pearson 相関。値が 5 組未満なら空）。
-- `as_ion_of`: この特徴が、相手の付加体（`adducts` の組）・同位体（M+1 / M+2）・源内断片
-  （`-H2O` ほか）として説明できる関係。`ions_of_this`: 相手がこの特徴のイオンとして説明できる関係。
-- 相手の付加体は SME rank 1 の付加体。**同定の無い相手には付加体の関係は出ない**（同位体・
-  源内断片だけ）。MS-DIAL のリンク（`.arf2`）は使わないので、裏付け（`strong`）は相関
-  `r ≥ min_r` と同位体の強度比だけで決まる。
+- `as_ion_of`: この特徴が、相手の付加体（`adducts` の組）・同位体（M+1、M+2 は 13C2・37Cl・81Br）・
+  源内断片（`-H2O` ほか）として説明できる関係。列は `of of_name relation dmz_mda drt r isotope_ratio
+  expected_ratio isotope_consistent strong ambiguous informational`。
+- `ions_of_this`: 相手がこの特徴のイオンとして説明できる関係。列は `ion relation dmz_mda drt r
+  isotope_consistent strong ambiguous informational`。付加体の関係はこの特徴の付加体から計算するので、
+  **注釈の無い相手も付加体・同位体・源内断片として出る**。
+- 付加体の関係は説明される側の付加体から計算する。その付加体は SME rank 1、無ければ SML 注釈（MS1 だけの
+  同定）のもの。どちらも無い相手の `as_ion_of` には付加体の関係は出ない（同位体・源内断片だけ）。
+  同位体の期待比に使う組成式も、SME の行 → SML 注釈 → 同定のある特徴の `formula`（解析フォルダの `.arf2`）の順に採る。
+- **`strong` は Δm/z が合うことだけでは立たない**。MS-DIAL のリンク（`.arf2`）は使わないので、裏付けは
+  試料間の相関 `r ≥ min_r` だけ。付加体・源内断片は Δm/z と同時溶出（`rt_window`）に加えて `r ≥ min_r`
+  のとき、同位体はさらに強度比が組成式の期待比の 1.5 倍以下（`isotope_consistent=true`）で、M+2 の
+  取り違えの恐れ（`ambiguous`）が無いときだけ `strong`。
+- `ambiguous`: 同じ相手に 2 つ以上の M+2 の説明（13C2 +2.006710・37Cl +1.997050・81Br +1.997952）が
+  同じ窓に入った行。一方に決めず並べ、どれも `strong` にしない。相手の組成式が分かっていて Cl・Br を
+  持たなければそのハロゲンの行は出さない（脂質の M+2 は 13C2 だけ）。
+- `informational`: 同位体の強度比が期待比を超えた行（その強度は同位体だけでは説明できず、別物質が
+  重なっている目印）。`ambiguous` の行は、すべての説明が期待比を超えたときだけ立つ——13C2 の期待比に
+  合わないことだけで「別物質」と言わない。
 
 ### 6.1 試料ごとのピーク（`dataset_sample_peaks`）
 
@@ -552,7 +566,14 @@ spec:
 `dataset_mass_accuracy(band_edges=[200], rank=1)`: SME の `rank` 位の候補の
 (実測 − 理論)/理論 × 10⁶ を、理論 m/z の帯ごと（`[min_mz, max_mz)`）にまとめる。
 `n`・`median`・`q1`・`q3`（`statistics.quantiles(n=4)` の exclusive 法）・`within_5ppm`・
-`within_10ppm`（|ppm| ≤ 5・10 の割合）。n<2 の帯は `n` だけ。**許容幅は決めない**。
+`within_10ppm`（|ppm| ≤ 5・10 の割合）。n<2 の帯は `n` だけ。**許容幅は当てない**が、材料として勧める幅を
+添える: 帯ごとの `recommended_mz_tol_ppm` と、全体の `recommended_tolerance`
+（`{n, basis, mz_tol_ppm, median_ppm, mad_ppm}`）。幅は `ceil(|中央値| + 3 × MAD)`（MAD は中央値からの絶対偏差の
+中央値で、尺度の補正 1.4826 は掛けない。1 ppm 未満にしない）。中心を 0 に置いた ±窓で系統的なずれと散らばりの
+両方を覆う幅なので、中心をずらすなら中央値を `ppm_offset` に、`3 × MAD` を幅に分けて渡してよい。同定が 10 件未満
+なら `mz_tol_ppm`（帯は `recommended_mz_tol_ppm`）は null で、`recommended_tolerance` に `reason: too_few` と `min_n`。
+どれを当てるかは再解析の規則で決める（`dataset_feature_search` の目標の `ppm`、`library_match_feature` の
+`mz_tol_ppm`）。
 
 `subset`（既定 `rank1`）: `rank1` は `rank` 位の SME すべて。`msms_matched` はそのうち、その特徴の
 MS/MS が参照スペクトルに照合されたもの（SML の `opt_global_spectrum_matched` が真。mzTab-M の

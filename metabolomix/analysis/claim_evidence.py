@@ -54,13 +54,30 @@ def formula_index(ds) -> dict:
     return out
 
 
+def _text(value) -> str | None:
+    return value if isinstance(value, str) and value.strip() not in ("", "null") else None
+
+
 def _partner(ds, index: int, formulas: dict) -> dict:
+    """関係の相手 1 つ。同定は SME rank 1、無ければ（曖昧でない）SML 注釈（MS1 だけの同定）。
+
+    組成式は SME 行の `chemical_formula`、無ければ SML 注釈の `chemical_formula`、それも無ければ
+    特徴の `formula`（解析フォルダの `.arf2` のスポットの組成式）。解析フォルダから開いたデータセットは
+    SME 行を持たないので、後の 2 つが同位体の期待比の材料になる。
+    """
     fid = ds.feature_ids[index]
     meta = ds.feature_metadata.get(fid) or {}
     top = _top_candidate(ds, fid)
+    annotation = (getattr(ds, "feature_annotations", None) or {}).get(fid) or {}
+    if annotation.get("ambiguous"):
+        annotation = {}
+    named = bool(top) or bool(annotation)
+    formula = (_text(formulas.get(top.get("sme_id"))) or _text(annotation.get("chemical_formula"))
+               or (_text(meta.get("formula")) if named else None))
     return {"spot_id": fid, "mz": meta.get("mz"), "rt": meta.get("rt"),
-            "name": top.get("chemical_name"), "adduct": top.get("adduct"),
-            "formula": formulas.get(top.get("sme_id")), "heights": _heights(ds, index)}
+            "name": top.get("chemical_name") or annotation.get("name"),
+            "adduct": top.get("adduct") or annotation.get("adduct"),
+            "formula": formula, "heights": _heights(ds, index)}
 
 
 def feature_relations(ds, feature_id: str, *, rt_window: float, mz_tol: float, min_r: float,
@@ -69,7 +86,9 @@ def feature_relations(ds, feature_id: str, *, rt_window: float, mz_tol: float, m
 
     `as_ion_of`: この特徴が、相手の（付加体・同位体・源内断片の）イオンとして説明できる関係。
     `ions_of_this`: 相手が、この特徴のイオンとして説明できる関係。
-    MS-DIAL のリンク（`.arf2`）は使わないので、裏付けは試料間の強度の相関だけ。
+    MS-DIAL のリンク（`.arf2`）は使わないので、裏付けは試料間の強度の相関だけ。強い説明（`strong`）は
+    付加体・源内断片なら相関 r ≥ min_r（Δm/z と同時溶出に加えて）、同位体なら加えて強度比が組成式の
+    期待比に合うこと（`curation.relations`）。
     """
     from metabolomix.curation.relations import find_relations, profile_correlation
 

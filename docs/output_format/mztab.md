@@ -240,17 +240,36 @@ mzTab-M の `abundance_assay[N]` は非ゼロでも実測ピークか gap-fill �
 
 窓検索（`targets` なし）は `features stats stats_unmerged merge_split results stats_source notes`、
 目標照合（`targets` あり）は `targets candidates stats stats_unmerged merge_split results rule stats_source
-notes` を返す（`stats_unmerged` は `merge_split=true`（既定）のときだけ）。`features` `candidates` `stats` は
+rt_offset notes` を返す（`stats_unmerged` は `merge_split=true`（既定）のときだけ）。`include_statistics=false` では
+比較の統計（`stats` `stats_unmerged` `results` `stats_source`）を付けず、`merge_split` は `{enabled}`（目標照合で
+割れの組を候補の数え方に使ったときは `source` `alignment_qc_sha256` `n_groups` `groups` も）だけになる。
+`result_ids` `contrast_id` はそのとき効かないので、渡していれば `notes` に書く。`features` `candidates` `stats` は
 TSV（列名 1 回）で、空欄は「値が無い」。数値は丸めてある（m/z 4 桁・ppm 2 桁・RT 3 桁・log2FC 4 桁・
-p / q / 平均は有効 4 桁）。
+p / q / 平均 / `presence_p` は有効 4 桁）。
 
 **`ppm_offset`（質量の窓の中心のずれ、目標照合だけ・任意）**。形は `docs/output_format/reanalysis.md` §8 と同じ
 （`{"default": 0.0, "bands": [{"max_mz": 200, "offset": -8.3}]}`。中心は「実測 − 理論」の ppm の符号つきの値で、帯は
 理論 m/z が `max_mz` 未満の最初の帯、無ければ `default`）。付加体ごとの理論 m/z で帯を引いた中心に対し、質量の窓は
 `|ppm − 中心| ≤ ppm`。**窓の幅（目標の `ppm`）と `candidates.ppm` 列は変わらない**（実測 − 理論のまま）。`rule.ppm_offset` に
 正規化した spec（渡したときだけ。渡さなければ欄ごと無い）、`rule.targets[].ppm_offset` に付加体ごとの中心（2 桁。渡したときだけ）が出て、
-`rule_hash` に入る（渡さなければ従来と同じ hash）。窓検索（`targets` なし）で渡すと `DATASET_BAD_REQUEST`
-（`field: ppm_offset`）。形の誤りも `DATASET_BAD_REQUEST`。
+`rule_hash` に入る（渡さなければ従来と同じ hash）。窓検索（`targets` なし）では効かないので、誤りにせず
+「目標照合（targets）でないので効かなかった引数」として `notes` に書く。形の誤りは窓検索でも `DATASET_BAD_REQUEST`（`field: ppm_offset`）。
+
+**`rt_offset_min`（RT の窓の中心のずれ、目標照合だけ・任意）**。`rt_min` を持つ目標の RT の窓の中心を
+`rt_min + rt_offset_min`（分）に置き、`|RT − 中心| ≤ rt_tol_min` で見る。**窓の幅（`rt_tol_min`）と
+`candidates.delta_rt` 列（RT − `rt_min`）は変わらない**。渡したときだけ `rule.rt_offset_min` と `rule.targets[]` の
+`rt_offset_min`（`rt_min` のある目標だけ）が出て `rule_hash` に入る（渡さなければ従来と同じ hash）。窓検索では効かないので
+`notes` に書く（`ppm_offset` と同じ）。有限の数でないときは `DATASET_BAD_REQUEST`（`field: rt_offset_min`）。
+
+**`rt_offset`（RT のずれの見積もり、目標照合のときいつも）**。`rt_min` を持つ目標と特徴の組のうち、質量の窓
+（`ppm_offset` があればずらした中心）に入り、|RT − `rt_min`| ≤ 2 分で、目標から見ても特徴から見ても相手が 1 つだけの
+組（`contradicted` と除外した特徴は数えない。割れの組は 1 つと数える）から、RT − `rt_min` を測る。目標は付加体を
+複数持つので、**付加体ごとに一致がたかだか 1 つ**で、一致した特徴どうしが 0.05 分（`criteria.coelute_min`）以内に
+同時溶出していれば、同じ化合物の `[M+H]+` と `[M+Na]+` などとみなして **1 組**と数える（付加体の数だけ数えない。
+同時溶出しない・ある付加体に 2 つ以上あるときは数えない）。
+`{n_pairs, median_min, q1_min, q3_min, shift_min, criteria}` で、`shift_min` は組が 10 以上かつ |中央値| > 0.2 分の
+ときだけ中央値（それ以外は null で `reason` が `too_few_pairs` / `below_threshold`）。**見積もりであって当ててはいない**
+——勧めを使うなら `rt_offset_min` に渡して呼び直す（判定と `rule_hash` が変わるのはそのときだけ）。
 
 **窓検索の `sort` と追加の列**。`sort="mz"`（既定）は m/z 昇順、`sort="intensity"` は強度の降順で、条件が無くても
 上位 `max_results` 件を返す（`sort="mz"` で条件が無ければ `FEATURE_SEARCH_EMPTY_QUERY`。`targets` と併用すると
@@ -309,11 +328,17 @@ p / q / 平均は有効 4 桁）。
 | `status` | `tested`（p が有限）/ `not_in_matrix`（前処理で落ち、検定の行列に居ない）/ `not_testable`（行列には居るが p が無い）。**後の 2 つは数値欄が空で、「差が無かった」ではない** |
 | `log2fc` | 正なら `group_b` が高い（`results[*].log2fc_sign`） |
 | `q` | その結果に付いた BH の q をそのまま（窓で絞った件数で掛け直していない） |
-| `detected_a` / `detected_b` | 群ごとの**実検出の例数**（§13.7 の検出状態から数える）。**gap-fill の値は検出に数えない**。検出状態が無い・試料の対応を保証できないときは空で、`notes` に理由。非ゼロの平均があっても検出 0 例はありうる（埋め値の平均） |
+| `detected_a` / `detected_b` | 群ごとの**実検出の例数**（§13.7 の検出状態から数える）。**gap-fill の値は検出に数えない**。検出状態が無い・試料の対応を保証できないときは空で、`notes` に理由。非ゼロの平均があっても検出 0 例はありうる（埋め値の平均）。注入の数で数える |
+| `detected_units_a` / `detected_units_b` | 群ごとの**個体単位の実検出数**（結果の行の `detected_reference` / `detected_test` をそのまま写す。`presence_p` と `detection_driven` の分子で、分母は `results[*].n_units_a` / `n_units_b`）。反復注入をまとめていなければ `detected_a` / `detected_b` と同じ。結果の行列に無い特徴・検出状態の無い結果は空。量を判定できない行（`not_testable`）にも付く |
+| `presence_p` | 検出の有無そのものの検定（Fisher）の p（有効 4 桁）。結果の行（`dataset_compare` の `presence_p`）をそのまま写す。量を判定できない行（`not_testable`）にも付く。結果の行列に無い特徴・検出状態の無い結果は空。**反復注入を個体にまとめた比較では個体の数で数える**（`detected_a` / `detected_b` と単位が違うときは `notes` に 1 行） |
+| `detection_driven` | 量の差が値の大小より検出の有無から来ているか（`reanalysis` §6 の `detection_driven` と同じ規則。高い側の群の検出が個体数の半分未満か、低い側の検出が 0 なら true）。`tested` で `log2fc` が 0 でない行だけ、ほかは空。**判定は変えない**——true の行は量の差を言う前に検出の差として読む |
 | `comparison` / `group_a` / `group_b` / `log2fc_test_over_ref` | `with_group_labels=true`（opt-in）のときだけ末尾に付く。`comparison` は `<group_b>_vs_<group_a>`。`log2fc_test_over_ref` は `log2fc` と同じ値（正なら `group_b` が高い）を比較名と同じ向きの名前で書いたもの——`RA_vs_HC` の比較で `group_a=HC` と読み違えないための欄 |
 
 `results[*]` は統計を付けた結果ごとの `{result_id, group_a, group_b, n_a, n_b, log2fc_sign,
-bh_population, caveats}`。`bh_population = {n_features_total, n_in_matrix, n_tested}` はデータセットの
+bh_population, caveats}`（統計エンジンの結果は加えて個体の数 `n_units_a` / `n_units_b`。反復注入をまとめていなければ
+`n_a` / `n_b` と同じ）。差次的結果が 1 件も無い（`result_ids=[]` を含む）ときは統計を付けず、統計にだけ効く引数
+（`with_group_labels=true`・`contrast_id`、窓検索では `alignment_qc_path`・`merge_split=false` も）を渡していれば
+「効かなかった引数」として `notes` に挙げる。`bh_population = {n_features_total, n_in_matrix, n_tested}` はデータセットの
 特徴数・前処理後に検定の行列に残った数・p が有限だった数で、**BH は `n_tested` 件に掛かっている**。
 `caveats` は差次的結果の注意書き（交絡の警告を含む）をそのまま写す。
 

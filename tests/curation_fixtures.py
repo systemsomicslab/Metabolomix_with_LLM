@@ -282,7 +282,8 @@ def _mz(formula: str, adduct: str) -> float:
     return mz_from_neutral(monoisotopic_mass(parse_formula(formula)), parse_adduct(adduct))
 
 
-def write_suggest_set(folder: Path, *, with_param: bool = True, with_arf: bool = True) -> dict:
+def write_suggest_set(folder: Path, *, with_param: bool = True, with_arf: bool = True,
+                      with_adduct_partner: bool = False) -> dict:
     """候補付け用の一式（負イオン、6 試料）。
 
     spot 0: PC 34:2 [M+HCOO]-、注釈付き（相手 Y）
@@ -291,6 +292,8 @@ def write_suggest_set(folder: Path, *, with_param: bool = True, with_arf: bool =
     spot 2: 未注釈、MS/MS が PE 18:0_18:2 [M-H]- と合う（② で候補が出る）
     spot 3: 未注釈、spot 0 の [M+HCOO]- → [M-CH3]-（-60.0211）、spot 0 への FoundInUpperMsMs リンク
     spot 4: 未注釈、MS/MS なし、関係なし（候補は出ない）
+    spot 5（`with_adduct_partner=True` のときだけ）: 未注釈、spot 0 の [M+CH3COO]-（同時溶出・強度は試料間で
+            spot 0 に比例＝相関 1）。MS-DIAL のリンクは無い（付加体の組は Δm/z・同時溶出・相関で強い説明になる）
     """
     folder.mkdir(parents=True, exist_ok=True)
     pc342 = _mz("C42H80NO8P", "[M+HCOO]-")
@@ -315,6 +318,10 @@ def write_suggest_set(folder: Path, *, with_param: bool = True, with_arf: bool =
         {"spot_id": 4, "name": "Unknown", "mz": 432.1234, "rt": 3.00, "adduct": "[M-H]-", "formula": "",
          "ontology": "", "scale": 0.7, "spectrum": [], "matches": [unknown], "links": []},
     ]
+    if with_adduct_partner:
+        specs.append({"spot_id": 5, "name": "Unknown", "mz": _mz("C42H80NO8P", "[M+CH3COO]-"), "rt": 10.02,
+                      "adduct": "[M-H]-", "formula": "", "ontology": "", "scale": 0.2, "spectrum": [],
+                      "matches": [unknown], "links": []})
     write_arf2(folder / "AlignmentResult_x.arf2", [
         arf2_spot_raw(spot_id=s["spot_id"], name=s["name"], mz=s["mz"], rt=s["rt"], ontology=s["ontology"],
                       adduct=s["adduct"], formula=s["formula"], ion_mode=1, representative_file_id=0,

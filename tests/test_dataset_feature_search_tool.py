@@ -104,7 +104,11 @@ def test_target_mode_payload_shape_and_rule_hash():
     rid = _differential()
     parsed = _search(targets=[_target()])
     assert set(parsed) == {"targets", "candidates", "stats", "stats_unmerged", "merge_split",
-                           "results", "rule", "stats_source", "notes"}
+                           "results", "rule", "rt_offset", "stats_source", "notes"}
+    # 一意の一致は 1 組だけなので、ずれは示さない（推定するだけで照合には当てない）
+    assert parsed["rt_offset"]["n_pairs"] == 1 and parsed["rt_offset"]["shift_min"] is None
+    assert parsed["rt_offset"]["reason"] == "too_few_pairs"
+    assert "rt_offset_min" not in parsed["rule"]
 
     [target] = parsed["targets"]
     assert target["status"] == "resolved" and target["reason"] is None
@@ -568,11 +572,18 @@ def test_target_candidates_include_the_partner_outside_the_mass_window(tmp_path)
     assert {r["feature_id"] for r in _tsv(off["candidates"])} == {"31"}
 
 
-def test_ppm_offset_with_window_search_is_bad_request():
+def test_ppm_offset_with_window_search_is_noted_not_refused():
+    # 窓検索では効かないが、誤りにせず効かなかったと notes に書く（C7）
     _load_ds()
     parsed = _search(feature_ids=["f1"], ppm_offset={"default": -3})
-    assert parsed["error"]["code"] == "DATASET_BAD_REQUEST"
-    assert parsed["error"]["details"]["field"] == "ppm_offset"
+    assert "error" not in parsed
+    assert [r["feature_id"] for r in _tsv(parsed["features"])] == ["f1"]
+    [note] = [n for n in parsed["notes"] if "目標照合（targets）でないので効かなかった引数" in n]
+    assert "ppm_offset" in note and "rt_offset_min" not in note
+    # 形の誤りは窓検索でも誤り
+    bad = _search(feature_ids=["f1"], ppm_offset={"default": "x"})
+    assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert bad["error"]["details"]["field"] == "ppm_offset"
 
 
 def test_ppm_offset_appears_in_rule():
@@ -692,3 +703,126 @@ def test_intensity_sort_without_detected_mask_uses_all_cells_and_notes():
     assert any("detected_mask" in n and "全セル" in n for n in parsed["notes"])
     # mz 順には注記を足さない
     assert not any("detected_mask" in n for n in _search(min_mz=100.0)["notes"])
+
+
+# ---- 統計を付けない（include_statistics）・効かなかった引数の注記（B1・C7） ----
+
+def test_include_statistics_false_drops_the_statistics():
+    _load_ds()
+    _differential()
+    parsed = _search(min_mz=100.0, max_mz=102.0, include_statistics=False)
+    assert set(parsed) == {"features", "merge_split", "notes"}
+    assert len(_tsv(parsed["features"])) == 3
+    assert parsed["merge_split"] == {"enabled": True}
+    assert any("include_statistics=false" in n for n in parsed["notes"])
+    target = _search(targets=[_target()], include_statistics=False)
+    assert set(target) == {"targets", "candidates", "merge_split", "rule", "rt_offset", "notes"}
+    assert target["targets"][0]["selected_feature_id"] == "f5"
+    assert target["merge_split"]["groups"] == [] and "recomputed" not in target["merge_split"]
+    # 規則は統計の有無によらない
+    assert target["rule"]["rule_hash"] == _search(targets=[_target()])["rule"]["rule_hash"]
+
+
+def test_include_statistics_false_notes_arguments_that_had_no_effect():
+    _load_ds()
+    rid = _differential()
+    parsed = _search(min_mz=100.0, max_mz=102.0, include_statistics=False, result_ids=[rid],
+                     contrast_id="x", with_group_labels=True)
+    assert "error" not in parsed
+    [note] = [n for n in parsed["notes"] if "効かなかった引数" in n]
+    assert "result_ids" in note and "contrast_id='x'" in note and "with_group_labels=true" in note
+    bad = _search(min_mz=100.0, include_statistics="no")
+    assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert bad["error"]["details"]["field"] == "include_statistics"
+
+
+def test_empty_result_ids_says_so_instead_of_no_result():
+    _load_ds()
+    _differential()
+    parsed = _search(min_mz=100.0, max_mz=102.0, result_ids=[])
+    assert parsed["stats"] == "" and parsed["results"] == []
+    assert any("result_ids=[]" in n for n in parsed["notes"])
+    assert not any("1 件も無い" in n for n in parsed["notes"])
+
+
+def test_arguments_that_need_a_comparison_are_noted_without_one():
+    _load_ds()
+    parsed = _search(min_mz=100.0, max_mz=102.0, with_group_labels=True, contrast_id="T_vs_C",
+                     alignment_qc_path="unused.json")
+    assert "error" not in parsed and parsed["stats"] == ""
+    [note] = [n for n in parsed["notes"] if "効かなかった引数" in n]
+    for word in ("with_group_labels=true", "contrast_id='T_vs_C'", "alignment_qc_path"):
+        assert word in note
+    plain = _search(min_mz=100.0, max_mz=102.0, merge_split=False)
+    assert any("merge_split=false" in n for n in plain["notes"] if "効かなかった引数" in n)
+    # 比較の結果があれば効くので注記しない
+    _differential()
+    used = _search(min_mz=100.0, max_mz=102.0, with_group_labels=True)
+    assert not any("効かなかった引数" in n for n in used["notes"])
+
+
+def test_stats_have_presence_columns_from_the_comparison():
+    ds = _load_ds()
+    ds.detected_mask = np.ones_like(ds.feature_matrix, dtype=bool)
+    _differential()
+    parsed = _search(feature_ids=["f0"])
+    header = parsed["stats"].splitlines()[0].split("\t")
+    assert header[-5:] == ["detected_units_a", "detected_units_b", "presence_p", "detection_driven",
+                           "merged_from"]
+    [row] = _tsv(parsed["stats"])
+    assert row["status"] == "tested"
+    assert row["presence_p"] == "1.0"                          # 両群とも全個体で検出
+    assert row["detection_driven"] == "false"                 # 検定できた行で、検出に差が無い
+    assert (row["detected_units_a"], row["detected_units_b"]) == ("4", "4")
+    [summary] = parsed["results"]
+    assert summary["n_units_a"] == 4 and summary["n_units_b"] == 4
+
+
+def test_detection_driven_and_rounded_presence_p_when_a_group_is_not_detected():
+    ds = _load_ds()
+    mask = np.ones_like(ds.feature_matrix, dtype=bool)
+    mask[0, 4:] = False                                        # f0 は treat の 4 個体すべてで未検出
+    mask[1, 5:] = False                                        # f1 は treat で 1/4
+    ds.detected_mask = mask
+    _differential()
+    rows = {r["feature_id"]: r for r in _tsv(_search(feature_ids=["f0", "f1"])["stats"])}
+    f0, f1 = rows["f0"], rows["f1"]
+    assert (f0["detected_units_a"], f0["detected_units_b"]) == ("4", "0")
+    assert (f1["detected_units_a"], f1["detected_units_b"]) == ("4", "1")
+    assert f0["status"] == "tested"
+    assert f0["detection_driven"] == "true"                   # 低い側の検出が 0（差は検出の有無から）
+    # presence_p は p・q と同じく有効 4 桁（Fisher の p = 1/35・1/7 を 17 桁の repr で出さない）
+    assert (f0["presence_p"], f1["presence_p"]) == ("0.02857", "0.1429")
+
+
+# ---- RT の窓の中心のずれ（rt_offset_min。D3） ----
+
+def test_rt_offset_min_shifts_target_rt_window_and_enters_the_rule():
+    _load_ds()
+    early = _target(rt_min=1.0)                                # f5 は RT 1.5（窓 ±0.3 の外）
+    plain = _search(targets=[early])
+    assert plain["targets"][0]["status"] == "needs_input"
+    shifted = _search(targets=[early], rt_offset_min=0.5)
+    assert shifted["targets"][0]["status"] == "resolved"
+    assert shifted["targets"][0]["selected_feature_id"] == "f5"
+    assert shifted["rule"]["rt_offset_min"] == 0.5
+    assert shifted["rule"]["targets"][0]["rt_offset_min"] == 0.5
+    assert shifted["rule"]["rule_hash"] != plain["rule"]["rule_hash"]
+    assert "rt_offset_min" not in plain["rule"]
+    [row] = _tsv(shifted["candidates"])
+    assert row["delta_rt"] == "0.5"                            # 列は RT − rt_min のまま
+
+
+def test_rt_offset_min_is_noted_for_window_search_and_refused_when_not_a_number():
+    _load_ds()
+    # 窓検索では効かないが、誤りにせず効かなかったと notes に書く（C7）
+    window = _search(feature_ids=["f1"], rt_offset_min=0.5)
+    assert "error" not in window
+    assert [r["feature_id"] for r in _tsv(window["features"])] == ["f1"]
+    [note] = [n for n in window["notes"] if "目標照合（targets）でないので効かなかった引数" in n]
+    assert "rt_offset_min" in note
+    for bad in (True, float("inf"), "0.5"):
+        for out in (_search(targets=[_target()], rt_offset_min=bad),
+                    _search(feature_ids=["f1"], rt_offset_min=bad)):
+            assert out["error"]["code"] == "DATASET_BAD_REQUEST"
+            assert out["error"]["details"]["field"] == "rt_offset_min"

@@ -95,6 +95,16 @@ def test_candidate_label_tells_records_with_the_same_sum_name_apart(tmp_path):
     assert _run(tmp_path, f"candidateLabel({bare})") == "X"
 
 
+def test_relation_label_marks_overlapping_m_plus_2_explanations(tmp_path):
+    base = {"of": 7, "of_name": "PC 34:1", "relation": "isotope_M+2_13C2", "informational": False}
+    plain = json.dumps({**base, "ambiguous": False})
+    assert _run(tmp_path, f"relationLabel({plain})") == "#7（PC 34:1）の別イオン: isotope_M+2_13C2"
+    ambiguous = json.dumps({**base, "relation": "isotope_M+2_37Cl", "ambiguous": True})
+    assert _run(tmp_path, f"relationLabel({ambiguous})") ==         "#7（PC 34:1）の別イオン: isotope_M+2_37Cl（M+2 の候補が重なる）"
+    info = json.dumps({**base, "of_name": None, "ambiguous": True, "informational": True})
+    assert _run(tmp_path, f"relationLabel({info})") ==         "#7（?）の別イオン: isotope_M+2_13C2（M+2 の候補が重なる）（情報のみ）"
+
+
 def test_candidate_detail_shows_a_short_inchikey(tmp_path):
     base = {"scores": {"total_score": 0.9, "weighted_dot_product": 0.8, "matched_peaks_count": 3},
             "dmz_mda": 1.5, "soft": ["trend_outlier"], "info": []}

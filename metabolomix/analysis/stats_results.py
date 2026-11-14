@@ -466,13 +466,32 @@ def split_result_ref(result_id: str, contrast_id: str | None = None) -> tuple[st
     return base, named
 
 
+def _detection_driven(row: dict, n_units_ref: int, n_units_test: int) -> bool | None:
+    """差が検出の有無から来ているか（`spec_statistics.detection_driven`。個体単位の検出数と個体数）。
+
+    検定できた行で、向き（log2fc の符号）と検出数があるときだけ。ほかは None。
+    """
+    from metabolomix.analysis import spec_statistics
+
+    log2fc = row.get("log2fc")
+    if (row.get("status") != "tested" or not isinstance(log2fc, (int, float))
+            or not math.isfinite(log2fc) or log2fc == 0):
+        return None
+    direction = "test_higher" if log2fc > 0 else "ref_higher"
+    return spec_statistics.detection_driven(direction, row.get("detected_reference"), n_units_ref,
+                                            row.get("detected_test"), n_units_test)
+
+
 def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
     """`compare` の記録の 1 つの対比を、利用者が読む 2 群の形（`kind="two_group"`）に写す。
 
     `a` は対比の基準（reference）、`b` は比較（test）で、log2fc は正なら b が高い
     （`export_contract.LOG2FC_SIGN`）。`samples_a` / `samples_b` は比較に入った個体に属する注入の
     表示名、`n_a` / `n_b` は注入の数、`n_units_a` / `n_units_b` は個体の数。`results` は対比の全特徴
-    （検定していない行は p・q・log2fc が None）、`volcano` は p が有限の行だけ。各行の `significant` は
+    （検定していない行は p・q・log2fc が None）、`volcano` は p が有限の行だけ。各行は記録の検出の有無の
+    検定 `presence_p` / `presence_q`（Fisher の正確検定。個体単位）と個体単位の検出数 `detected_units_a` /
+    `detected_units_b` を写し、`detection_driven`（差が値の大小でなく検出の有無から来ているか。
+    `spec_statistics.detection_driven`、検定できた行だけ）を足す。各行の `significant` は
     `export_contract.row_significant`（記録の閾値に加えて `verdict == "changed"`。R16）で、ここで 1 回だけ
     付ける（書き出し・根拠バンドル・volcano はこの印を読む）。`provenance` は元の記録のもの（`kind` は
     `"compare"`）。`allow_confounded=true`（既定）で完全交絡（全対比をまとめた表か、この対比の表）を越えた比較だけ、
@@ -518,7 +537,12 @@ def as_two_group(record: dict, contrast_id: str | None = None) -> dict:
     log2fc_threshold = record["log2fc_threshold"]
     rows = [{"feature": r["feature_id"], "mean_a": r["mean_reference"], "mean_b": r["mean_test"],
              "log2fc": r["log2fc"], "t": r["statistic"], "p": r["p"], "q": r["q"],
-             "ci_low": r["ci_low"], "ci_high": r["ci_high"], "verdict": r["verdict"]}
+             "ci_low": r["ci_low"], "ci_high": r["ci_high"], "verdict": r["verdict"],
+             # 検出の有無（個体単位）。記録の値をそのまま写す（検出状態が無ければ None）
+             "presence_p": r.get("presence_p"), "presence_q": r.get("presence_q"),
+             "detected_units_a": r.get("detected_reference"),
+             "detected_units_b": r.get("detected_test"),
+             "detection_driven": _detection_driven(r, len(units_a), len(units_b))}
             for r in engine["rows"] if r["contrast_id"] == contrast_id]
     for row in rows:
         # 有意の印はここで 1 回だけ付ける（R16: 閾値に加えて判定が changed）。書き出し・根拠バンドル・
