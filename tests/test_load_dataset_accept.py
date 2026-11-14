@@ -808,3 +808,23 @@ def test_fast_load_is_not_left_open(tmp_path, fresh_state):
     _load(directory=str(_folder(tmp_path / "a")), wait_seconds=20)
     out = json.loads(handle_tools.dataset_load_status())
     assert out["error"]["code"] == "missing_state"
+
+
+def test_load_still_inside_its_callers_wait_is_not_picked(tmp_path, fresh_state, gate):
+    """受け付けた `load_dataset` がまだ自分の `wait_seconds` の中で待っている読み込みは、省いた
+    `dataset_load_status` の候補に並ばない（その呼び出しが結果を直に受け取る。横取りすると持ち主が結果を
+    失う。レビュー指摘 R16）。"""
+    box = {}
+    folder = str(_folder(tmp_path / "a"))
+    caller = threading.Thread(target=lambda: box.setdefault("out", json.loads(
+        handle_tools.load_dataset(directory=folder, overview=False, wait_seconds=_TIMEOUT))),
+        daemon=True)
+    caller.start()
+    assert gate.entered.wait(_TIMEOUT)
+    assert len(fresh_state._entries) == 1                     # 受付はある
+    out = json.loads(handle_tools.dataset_load_status())
+    assert out["error"]["code"] == "missing_state" and out["error"]["state"] == "load"
+    gate.release.set()
+    caller.join(_TIMEOUT)
+    assert box["out"]["status"] == "success"
+    assert fresh_state._entries == {}                         # 直に渡したので覚えていない

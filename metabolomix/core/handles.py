@@ -166,6 +166,10 @@ class DatasetHandle:
         self.dcl_path = dcl_path
         self.created_seq = 0
         self.last_used_seq = 0
+        # `lock` を持っている長い仕事（`handle_dispatch.LONG_RUNNING`）: `{"job_id", "tool", "since"}`。
+        # 仕事の受付のスレッドがロックを取ってから放す前まで置く。ロックを待ちきれなかったほかの呼び出しの
+        # `HANDLE_BUSY` がこれを名指す（ロックの外から読む。読むだけなので食い違っても封筒の文面だけ）。
+        self.running_job: dict | None = None
 
     @property
     def assay_kind(self) -> str:

@@ -49,22 +49,36 @@
 - **並行と直列。** ハンドルを渡した呼び出しはサーバの別スレッドで回り、別のハンドルどうしは
   並行に進む。同じハンドルへの呼び出しは 1 本ずつ（到着順は保証しない）。ハンドルを渡さない
   呼び出しも、直近のハンドルがあればそのハンドルの呼び出しとして 1 本ずつに並ぶ（途中で
-  `load_dataset` が直近を切り替えても、始めたときの直近のハンドルで最後まで動く）。
+  `load_dataset` が直近を切り替えても、始めたときの直近のハンドルで最後まで動く）。順番は最長 25 秒だけ
+  待つ。それでも前の呼び出し（長い道具の仕事など）がハンドルを持っていれば、**何もせずに** `HANDLE_BUSY`
+  を返す（`details.dataset_handle`・`waited_s`。ハンドルを持つのが長い道具の仕事なら `details.job_id` /
+  `tool` / `running_s` / `next` と `required_tools: ["job_status"]`）。`job_status(job_id)` で仕事の終わりを
+  待ってから、同じ呼び出しをし直す。クライアントの中継が 36〜60 秒ほどで打ち切った呼び出しが、仕事の後で
+  黙って効くことはない（待ちきれなければ何もせずに返るため）。`dataset_close` も同じで、走っている仕事の
+  ハンドルは閉じずに `HANDLE_BUSY` を返す（仕事は止めない）。
 - **上限。** `lipidmix.local.toml` の `[server] max_dataset_handles`（既定 8。1 未満は 1）。`load_dataset` がハンドルを 1 本使う
   （前に読んだものは閉じずに残る）。超えると `DATASET_HANDLE_LIMIT` で止め、古いハンドルを
   黙って閉じない。寿命は明示の `dataset_close` か、サーバの終了まで。
 - **受付番号。** `load_dataset` は最長 `wait_seconds`（既定 20。0〜30 秒。範囲の外の数は丸めて `wait_seconds_note`
   を付ける）待ち、終わらなければ読み込みを続けたまま `{"status": "loading", "load_id": "ld_…"}` を返す。
   `dataset_load_status(load_id)` は読み込み中なら `status: "loading"`、終われば `load_dataset` の戻り値そのもの
-  （1 時間覚える）。`load_id` を省くと、まだ結果を渡していない読み込みが 1 本ならそれ、2 本以上なら `needs_input`
+  （1 時間覚える）。`load_id` を省くと、受付番号を渡し済みでまだ結果を渡していない読み込み（呼び出しがまだ
+  自分の `wait_seconds` の中で待っているものは並べない）が 1 本ならそれ、2 本以上なら `needs_input`
   （受付の一覧つき）、無ければ `missing_state`。`wait_seconds`（既定 0）を渡すと最長 30 秒まで終わりを待ってから
   返す。受付番号を返した後に別のハンドルが直近になっていたら直近にせず、`current: false` が付く。上限は読み込み中の
   受付も 1 本と数える。
 - **長い道具の受付番号。** `pathway_project` と `dataset_homolog_check` も `wait_seconds`（既定 20。0〜30 秒）を持ち、
-  その中で終わらなければ仕事を続けたまま `{"status": "running", "job_id": "job_…", "tool", "next"}` を返す。ハンドルの
-  ロックは仕事が終わるまでその仕事が持つ（同じハンドルへの次の呼び出しは仕事の後に並ぶ）。結果は
-  `job_status(job_id, wait_seconds)` で引く（走っている間は `status: "running"` と `elapsed_s`、終われば道具の戻り値
-  そのもの。`job_id` の省き方は `dataset_load_status` と同じ。知らない番号は `JOB_NOT_FOUND`（終わって 1 時間を
+  その中で終わらなければ仕事を続けたまま `{"status": "running", "job_id": "job_…", "tool", "dataset_handle", "next"}`
+  を返す（`dataset_handle` はその仕事のハンドル。ハンドルなしで動く仕事には付かない。同じハンドルで別の長い
+  仕事が先に走っていて順番を待っていれば `queued_behind: {job_id, tool}`）。ハンドルのロックは仕事が終わるまで
+  その仕事が持つ（同じハンドルへのほかの呼び出しは最長 25 秒待って `HANDLE_BUSY`。上の「並行と直列」。後から
+  呼んだ長い道具の仕事だけは、受付番号を返したうえでロックが空くまで待つ）。結果は `job_status(job_id, wait_seconds)`
+  で引く（走っている間は `status: "running"` と `dataset_handle`・`elapsed_s`、終われば道具の戻り値（JSON の
+  オブジェクトなら、その先頭に `job_id` と `dataset_handle` を足したもの——どのハンドルの結果かを取り違えない））。`job_id` を省くと、受付番号を
+  渡し済みでまだ結果を渡していない仕事から選ぶ: 1 本で、それが直近のハンドルかハンドルなしの仕事ならそれ。
+  直近でないハンドルの仕事 1 本（別のエージェントのものかもしれない）や 2 本以上なら `needs_input`
+  （選択肢の label にハンドル）、無ければ `missing_state`。並行のエージェントは受け取った `job_id` を渡す。
+  知らない番号は `JOB_NOT_FOUND`（終わって 1 時間を
   過ぎた・件数の上限で古いものから捨てた・サーバが再起動した。道具を呼び直す）。長い道具を呼んだとき走っている受付が
   上限なら、その道具が `JOB_LIMIT`（`details.running` と `max_entries`。`job_status` でどれかが終わるのを待って呼び直す）。
   道具が `DomainError` 以外で止まれば、その結果（道具の戻り値か `job_status`）が `JOB_FAILED`（`details.exception` は
@@ -82,7 +96,7 @@
 | 欄 | 意味 |
 |---|---|
 | `dataset_handle` | ハンドルの ID |
-| `assay_kind` | このハンドルの種別（`lipid` / `metabolite` / `unknown`）。ハンドルごとに持ち、解析フォルダ配下 `reports/` の目的ファイルに記録があれば読み戻す（`notes` に注記）。データセットを開く前に（`[paths] reports_dir` の目的へ）記録した種別は、次に直近になるハンドルへ引き継ぐ（目的ファイルの種別と食い違えば `unknown`。`notes` に注記）。`record_objective(assay_kind=...)` で確定・変更する |
+| `assay_kind` | このハンドルの種別（`lipid` / `metabolite` / `unknown`）。ハンドルごとに持ち、解析フォルダ配下 `reports/` の目的ファイルに記録があれば読み戻す（`notes` に注記）。データセットを開く前に（`[paths] reports_dir` の目的へ）記録した種別は、次に直近になるハンドルへ引き継ぎ、その目的にこのハンドルの解析フォルダ（`analysis_dir`）を書く（開き直しても読み戻す。書けなかった・どの目的の種別か分からないときは `notes` が `record_objective(assay_kind=...)` で記録し直すよう言う。目的ファイルの種別と食い違えば `unknown`。`notes` に注記）。共有の `[paths] reports_dir` の目的は frontmatter の `analysis_dir` がこの解析フォルダのものだけを読む（同じ `analysis_id` を別のフォルダで記録しても、`record_objective` はその目的を書き換えず自分の解析フォルダ配下 `reports/` に作る）。`record_objective(assay_kind=...)` で確定・変更する |
 | `adapter` | 読んだアダプタ。`msdial_folder`（解析フォルダの `.arf` / `.arf2` を直接）/ `mztab`（mzTab-M）。`job_path` / `pipeline_path` の既定は `msdial_folder`（`source="mztab"` で `mztab`） |
 | `polarity` / `polarity_source` | データセットの極性と出所（`job_declared` / `adduct_majority` / `arf2_ion_mode` / `unknown`）。`dataset_feature_search` の目標照合と同じ決め方 |
 | `n_features` / `n_samples` | 特徴数・試料数 |

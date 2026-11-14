@@ -45,16 +45,20 @@ def mini():
     def dataset_homolog_check(spec: str = "x", dataset_handle: str | None = None,
                               wait_seconds: float = 20.0) -> str:
         state["started"].set()
-        handle = handles.registry.peek(session_state.session.current_handle_id)
+        handle = handles.registry.peek(dataset_handle or session_state.session.current_handle_id)
         if handle is not None:
             # 受付のスレッドがハンドルのロックを持っている（別のスレッドからは取れない）。
             probe = {}
-            thread = threading.Thread(
-                target=lambda: probe.setdefault("got", handle.lock.acquire(timeout=0.01)))
+
+            def try_lock():   # 取れたら同じスレッドで放す（RLock は取ったスレッドしか放せない）
+                got = handle.lock.acquire(timeout=0.01)
+                if got:
+                    handle.lock.release()
+                probe["got"] = got
+
+            thread = threading.Thread(target=try_lock)
             thread.start()
             thread.join(_TIMEOUT)
-            if probe.get("got"):
-                handle.lock.release()
             state["lock_held"] = not probe.get("got")
         assert state["release"].wait(_TIMEOUT), "テストが Event を放さなかった"
         if state["error"] is not None:
@@ -134,7 +138,9 @@ def test_slow_job_returns_job_id_then_the_result(fresh, mini):
 
     state["release"].set()
     done = json.loads(handle_tools.job_status(job_id, wait_seconds=_TIMEOUT))
-    assert done == {"status": "success", "spec": "s", "wait_seconds": 0.05}
+    # 道具の戻り値の先頭に job_id（ハンドルが無ければ dataset_handle は付かない）。
+    assert done == {"job_id": job_id, "status": "success", "spec": "s", "wait_seconds": 0.05}
+    assert list(done)[0] == "job_id"
     # 番号を渡せば何度でも同じ結果。省いた問い合わせからは外れる（結果を渡した）。
     assert json.loads(handle_tools.job_status(job_id)) == done
     missing = json.loads(handle_tools.job_status())
@@ -242,3 +248,91 @@ def test_long_running_tools_are_wrapped_in_the_server():
         assert "wait_seconds" in tools[name].parameters["properties"], name
     assert tools["job_status"].is_async
     assert tools["job_status"].annotations.readOnlyHint is True
+
+
+# ---------- 受付番号を省いた job_status が他人の仕事を引かない・仕事がハンドルを名乗る（レビュー指摘 R16） ----------
+
+
+def test_running_envelope_status_and_result_name_the_handle(fresh, mini):
+    app, state = mini
+    session_state.session.dataset = DatasetState()
+    hid = session_state.session.current_handle_id
+    out = _call(app, "dataset_homolog_check", {"spec": "s", "wait_seconds": 0.05})
+    assert out["status"] == "running" and out["dataset_handle"] == hid
+    running = json.loads(handle_tools.job_status(out["job_id"]))
+    assert running["dataset_handle"] == hid and running["status"] == "running"
+    state["release"].set()
+    done = json.loads(handle_tools.job_status(out["job_id"], wait_seconds=_TIMEOUT))
+    assert list(done)[:2] == ["job_id", "dataset_handle"]
+    assert done["job_id"] == out["job_id"] and done["dataset_handle"] == hid
+    assert done["status"] == "success" and done["spec"] == "s"
+
+
+def test_job_still_inside_its_callers_wait_is_not_picked(fresh, mini):
+    """受け付けた呼び出しがまだ自分の `wait_seconds` の中で待っている仕事は、省いた job_status の候補に並ばない
+    （その呼び出しが結果を直に受け取る。横取りすると持ち主が結果を失う）。"""
+    app, state = mini
+    box = {}
+    caller = threading.Thread(
+        target=lambda: box.setdefault("out", _call(app, "dataset_homolog_check",
+                                                   {"spec": "mine", "wait_seconds": _TIMEOUT})),
+        daemon=True)
+    caller.start()
+    assert state["started"].wait(_TIMEOUT)
+    assert len(fresh._entries) == 1               # 受付はある
+    out = json.loads(handle_tools.job_status())
+    assert out["error"]["code"] == "missing_state" and out["error"]["state"] == "job"
+    state["release"].set()
+    caller.join(_TIMEOUT)
+    assert box["out"] == {"status": "success", "spec": "mine", "wait_seconds": _TIMEOUT}
+
+
+def test_lone_job_on_another_handle_is_asked_not_taken(fresh, mini):
+    """結果を渡していない受付が 1 本でも、直近でないハンドルの仕事なら黙って引かない（`needs_input`）。"""
+    app, state = mini
+    session_state.session.dataset = DatasetState()
+    other = session_state.session.current_handle_id
+    session_state.session.dataset = DatasetState()          # 直近は別のハンドル
+    out = _call(app, "dataset_homolog_check", {"dataset_handle": other, "wait_seconds": 0.05})
+    job_id = out["job_id"]
+    asked = json.loads(handle_tools.job_status())
+    body = asked["needs_input"]
+    assert [o["value"] for o in body["options"]] == [job_id]
+    assert other in body["options"][0]["label"] and other in body["reason"]
+    assert body["argument"] == "job_id" and body["retry_tools"] == ["job_status"]
+    state["release"].set()
+    done = json.loads(handle_tools.job_status(job_id, wait_seconds=_TIMEOUT))   # 番号を渡せば引ける
+    assert done["status"] == "success" and done["dataset_handle"] == other
+
+
+def test_lone_job_on_the_current_handle_is_picked(fresh, mini):
+    app, state = mini
+    session_state.session.dataset = DatasetState()
+    hid = session_state.session.current_handle_id
+    job_id = _call(app, "dataset_homolog_check", {"dataset_handle": hid, "wait_seconds": 0.05})["job_id"]
+    state["release"].set()
+    done = json.loads(handle_tools.job_status(wait_seconds=_TIMEOUT))
+    assert done["job_id"] == job_id and done["status"] == "success"
+
+
+def test_unannounced_entries_are_not_listed():
+    book = pending_loads.PendingJobs()
+    gate = threading.Event()
+    entry = book.submit(lambda: (gate.wait(_TIMEOUT), "{}")[1], tool="t", label="dh_a",
+                        announced=False)
+    try:
+        assert book.unclaimed() == []
+        book.announce(entry.job_id)
+        assert [e["id"] for e in book.unclaimed()] == [entry.job_id]
+        assert book.label_of(entry.job_id) == "dh_a"
+    finally:
+        gate.set()
+    assert entry.wait(_TIMEOUT) == "{}"
+
+
+def test_with_fields_prepends_without_overriding():
+    assert json.loads(pending_loads.with_fields('{"a": 1, "job_id": "own"}',
+                                                {"job_id": "job_x", "dataset_handle": "dh_1"})) == {
+        "job_id": "own", "dataset_handle": "dh_1", "a": 1}
+    assert pending_loads.with_fields('{"a": 1}', {"dataset_handle": None}) == '{"a": 1}'
+    assert pending_loads.with_fields("[1]", {"job_id": "j"}) == "[1]"

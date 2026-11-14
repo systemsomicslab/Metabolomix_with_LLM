@@ -175,6 +175,10 @@ class AnalysisSession:
         # 値を読み書きし、`load_dataset` が次に直近にするハンドルへ移す（`adopt_handle` の
         # `take_session_assay_kind`。ライブラリと同じ規則）。既定の unknown は「脂質」ではない。
         self._assay_kind = "unknown"
+        # セッション自身の種別を書いた目的の analysis_id（`record_objective` が置く。`remember_session_kind_objective`）。
+        # 種別と一緒にハンドルへ渡し、`load_dataset` がその目的にハンドルの解析フォルダを書く（開き直しで読み戻せる
+        # ように）。種別をほかの経路で書き換えたら消える（どの目的の種別か分からなくなる）。
+        self._assay_kind_objective: str | None = None
 
         # --- DatasetState（ハンドルの登録簿が持つ。session はその直近を指す） ---
         # データセットはハンドルの登録簿（core.handles.registry）に住む。ここが持つのは
@@ -306,11 +310,12 @@ class AnalysisSession:
         直近にしてよいかを答える（受け付けた `load_dataset` の判定。このロックの下で呼ぶ）。偽なら
         ハンドルを登録するだけで、直近もライブラリも動かさず False を返す。
 
-        `take_session_assay_kind(kind)` を渡すと、直近のハンドルが無いあいだにセッション自身が持っていた
-        アッセイ種別（データセットを開く前の `record_objective(assay_kind=...)`。`unknown` 以外）を、
-        直近になるこのハンドルへ**移す**（ライブラリと同じ規則。登録の前にこのロックの下で呼び、
-        ハンドルへの当て方は呼び出し側が決める）。登録できたときだけセッション自身の値を `unknown` へ戻す
-        （上限で止まれば種別はセッションに残る）。
+        `take_session_assay_kind(kind, analysis_id)` を渡すと、直近のハンドルが無いあいだにセッション自身が
+        持っていたアッセイ種別（データセットを開く前の `record_objective(assay_kind=...)`。`unknown` 以外）を、
+        その種別を書いた目的の analysis_id（分からなければ None）と一緒に、直近になるこのハンドルへ**移す**
+        （ライブラリと同じ規則。登録の前にこのロックの下で呼び、ハンドルへの当て方と目的への書き戻しは
+        呼び出し側が決める）。登録できたときだけセッション自身の値を `unknown` へ戻す（上限で止まれば
+        種別はセッションに残る）。
         """
         from metabolomix.core import handles
 
@@ -328,7 +333,7 @@ class AnalysisSession:
                 handle.library = own
             if carry_kind:
                 # 登録の前（まだ誰にも見えない）に当てる。上限で止まればハンドルごと捨てられる。
-                take_session_assay_kind(self._assay_kind)
+                take_session_assay_kind(self._assay_kind, self._assay_kind_objective)
             try:
                 # 上限ならここで止まり、ライブラリと種別はセッションに残る
                 handles.registry.add(handle, reservation=reservation)
@@ -340,6 +345,7 @@ class AnalysisSession:
                 self._library = LibraryState()
             if carry_kind:
                 self._assay_kind = "unknown"
+                self._assay_kind_objective = None
             if current:
                 self._make_current(handle.handle_id)
             return current
@@ -420,7 +426,23 @@ class AnalysisSession:
                 handle.dataset.assay_kind = normalized
         elif _PINNED_HANDLE_ID.get() is None:
             self._assay_kind = normalized
+            self._assay_kind_objective = None   # どの目的の種別か分からなくなる（書いた側が置き直す）
         # 固定先が閉じられていれば置き先が無い（セッション自身へは書かない）。
+
+    def remember_session_kind_objective(self, analysis_id: str, kind: str) -> None:
+        """セッション自身に置いた種別 `kind` を書いた目的の analysis_id を覚える。
+
+        `record_objective` が、データセットを開く前に種別を書いたあとで呼ぶ。`adopt_handle` が種別と一緒に
+        最初に直近になるハンドルへ渡し、`load_dataset` がその目的にハンドルの解析フォルダを書く——書かないと
+        目的は解析フォルダに結び付かず、同じフォルダを開き直しても種別を読み戻せない。
+        覚えるのは、直近のハンドルがまだ無く、セッション自身の種別がまだ `kind` のときだけ（判定と記録は
+        `adopt_handle` と同じロックの下。種別を書いてからここまでの間に別の読み込みが種別を持って行ったなら、
+        覚えない）。
+        """
+        with self._current_lock:
+            if (self._current_handle() is None and _PINNED_HANDLE_ID.get() is None
+                    and self._assay_kind == normalize_assay_kind(kind)):
+                self._assay_kind_objective = analysis_id
 
     def set_assay_kind(self, assay_kind: str) -> str:
         """アッセイ種別を確定する（直近のハンドルのデータセットへ）。正規化した値を返し、未知の値は拒否する。

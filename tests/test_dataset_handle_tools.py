@@ -271,6 +271,13 @@ def test_same_handle_calls_are_serialized(pos_mztab):
             spans.append(start)
             return self
 
+        def acquire(self, blocking=True, timeout=-1):  # handle_dispatch は acquire(timeout=…) で取る
+            self.__enter__()
+            return True
+
+        def release(self):
+            self.__exit__(None, None, None)
+
         def __exit__(self, *exc):
             spans.append(time.perf_counter())
             real_lock.release()

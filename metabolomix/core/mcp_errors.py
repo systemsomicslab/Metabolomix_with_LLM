@@ -179,6 +179,10 @@ MZTAB_ERROR_CODES = frozenset({
     "JOB_NOT_FOUND",
     "JOB_LIMIT",
     "JOB_FAILED",
+    # ハンドルのロックが handle_dispatch.HANDLE_LOCK_WAIT 秒待っても空かなかった（長い仕事か別の呼び出しが
+    # 持っている）。何もしていない。`handle_busy` で返る（走っている仕事があれば details.job_id / tool と
+    # required_tools=["job_status"]）。
+    "HANDLE_BUSY",
     # dataset_analysis_run（spec v2 の plsda）: 指定の誤り・欠測がある（補完しない）・値の変わる特徴が 2 未満。
     "PLSDA_SPECIFICATION_INVALID",
     "PLSDA_MISSING_VALUES",
@@ -201,6 +205,38 @@ def mztab_error(code: str, message: str, details: dict | None = None) -> str:
     payload: dict = {"code": code, "message": message}
     if details is not None:
         payload["details"] = details
+    return json_payload({"error": payload})
+
+
+HANDLE_BUSY = "HANDLE_BUSY"
+
+
+def handle_busy(dataset_handle: str, waited_s: float, job: dict | None = None) -> str:
+    """ハンドルのロックを待ちきれなかった呼び出しの封筒（何もしていない）。
+
+    `job` はそのハンドルのロックを持っている長い仕事（`{"job_id", "tool", "running_s"}`。分からなければ
+    None）。あれば `details` に載せ、`required_tools=["job_status"]`（その仕事の終わりを待てる）と
+    `details.next` を付ける。無ければ別の呼び出しがロックを持っているので、少し待って呼び直す。
+    """
+    waited = round(float(waited_s), 1)
+    details: dict = {"dataset_handle": dataset_handle, "waited_s": waited}
+    done_nothing = ("この呼び出しは何もしていません（待つのをやめたので、後からロックが空いても黙って"
+                    "効くことはありません）。")
+    if job and job.get("job_id"):
+        job_id, tool = job["job_id"], job.get("tool")
+        details.update({"job_id": job_id, **({"tool": tool} if tool else {}),
+                        **({"running_s": job["running_s"]} if job.get("running_s") is not None else {}),
+                        "next": f'job_status(job_id="{job_id}", wait_seconds=30)'})
+        message = (f"ハンドル {dataset_handle} では長い仕事（{tool or '道具'}、受付番号 {job_id}）が"
+                   f"ロックを持っていて、{waited:g} 秒待っても空きませんでした。{done_nothing}"
+                   f"job_status(job_id=\"{job_id}\") でその仕事が終わるのを待ってから、同じ呼び出しを"
+                   "し直してください。")
+        payload = {"code": HANDLE_BUSY, "message": message, "details": details,
+                   "required_tools": ["job_status"]}
+    else:
+        message = (f"ハンドル {dataset_handle} では別の呼び出しがロックを持っていて、{waited:g} 秒待っても"
+                   f"空きませんでした。{done_nothing}少し待ってから同じ呼び出しをし直してください。")
+        payload = {"code": HANDLE_BUSY, "message": message, "details": details}
     return json_payload({"error": payload})
 
 

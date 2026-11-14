@@ -174,6 +174,15 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 - 定量の `dataset_quant_preview` / `dataset_quant_apply` / `dataset_merge_polarities` / `dataset_select_features` も、
   別の問いで `status="needs_input"` の応答を返す（`quant.md`）。こちらは上の封筒ではなく、各ツールの戻り値の形。
 
+### ハンドルが塞がっている（`HANDLE_BUSY`）
+
+同じデータセットのハンドルへの呼び出しは 1 本ずつ動く。前の呼び出し（多くは `pathway_project` /
+`dataset_homolog_check` が受付番号を返して続けている仕事）がハンドルを持ったまま 25 秒たつと、後の呼び出しは
+**何もせずに** `{"error": {"code": "HANDLE_BUSY", "details": {"dataset_handle", "waited_s", "job_id", "tool",
+"running_s", "next"}, "required_tools": ["job_status"], …}}` を返す（`job_id` 以下は長い仕事が持っているときだけ）。
+`job_status(job_id)` で仕事の終わりを待ってから、**同じ呼び出しをし直す**。待ちきれなかった呼び出しが後から黙って
+効くことはない。`dataset_close` も同じで、仕事が走っているハンドルは閉じない（`reanalysis.md` の「並行と直列」）。
+
 ### 判定 3 値と「有意でない ≠ 変わっていない」
 
 統計エンジンの比較（`dataset_compare`・`dataset_analysis_run` の spec v2）は、行ごとに `verdict` を返す:

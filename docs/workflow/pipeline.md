@@ -253,7 +253,9 @@ Console を捨てない——やり直しの対象にも、`UPSTREAM_RERUN_REQUI
 ## pipeline_sample_sheet
 
 前提: なし(データセットも run も要らない)。状態変更: なし(セッションには書かない)。raw フォルダに
-`sample-manifest.tsv`(`output_name`)を 1 つ書くだけ。
+`sample-manifest.tsv`(`output_name`)を 1 つ書くだけ。raw ごとに取得時刻の見出しを開く(数百のファイルや
+ネットワークの共有では数十秒かかりうる)ので、`handle_dispatch.ALWAYS_THREADED` に載せてワーカースレッドで回す
+(その間もイベントループは `job_status` などに答える)。
 
 1. metabolomix/tools/sample_sheet_tools.py  pipeline_sample_sheet()
 2. └─ metabolomix/pipeline/inputs.py  list_primary_names()
