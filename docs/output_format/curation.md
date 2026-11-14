@@ -500,7 +500,7 @@ MS-DIAL はアラインメントを保存するたびにメモリ上のタグで
 | `curation_review` / `curation_submit` / `curation_flags` | `{"status": "error", "message", "flags_file", "line"}`。`curation_submit` は壊れた記録に追記しない |
 | `dataset_export_differential` | 同上の形でエラー。ファイルは書かない |
 | `dataset_export_differential` | `{"error": {"code": "CURATION_FLAGS_INVALID", "message", "details": {"flags_file", "line"}}}`。ファイルは書かない |
-| `dataset_feature_search` | 一覧は返す。`curation_flag` 列を空にし、ヘッダに壊れた記録を名指しする注記を 1 行足す |
+| `dataset_feature_search` | 一覧は返す（判断はもともと反映せず、判断の列も無い）。読めなかった記録とその理由を名指しし、「キュレーションを反映していない」と書いた注記を `notes` に 1 行足す |
 
 `line` は 1 始まりの行番号。その行を直すか消してから、もう一度実行する。
 
