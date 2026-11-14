@@ -137,7 +137,7 @@ metabolomix/analysis/  入力形式に依存しない数値処理（前処理/QC
                     `dataset_compare(output_path=...)` の全行の表（差次的エクスポートの契約とは別物）は compare_table.py。
                     v1 の外部の表（MAF・mwTab・xlsx）と correlate の読み取りは external_tables.py
 metabolomix/analysis/stats/  統計エンジン（MCP にもセッションにも依存しない純計算。data（StudyData）・preprocess・design・
-                    limma（moderated t）・compare・composition・pca・plsda（PLS-DA と VIP。spec v2 の解析の種類）・confounding・
+                    limma（moderated t）・compare・composition・pca・plsda（PLS-DA と VIP。spec v2 の解析の種類。交差検証と並べ替えは独立な単位〔design.block / subject_id〕でまとめる）・confounding・
                     spec_v2（analysis-spec.v2 の正規化と実行）・external）。
                     `core.session_state` / `core.mcp_core` / `tools.*` を import しない。MCP の入口は tools/stats_tools.py
                     （dataset_preprocess / dataset_compare / dataset_pca）。行列の登録と前処理の記録は共有の非ツール部品
@@ -155,7 +155,7 @@ metabolomix/console/   MS-DIAL Console 実行層（job_manager / runner / execut
                     `data/.msdial-console.lock`。待つ間 `pipeline_status` は `waiting`）、mzML の切れの検査（raw_integrity.py）、
                     失敗の見立て（failure_diagnosis.py。msdial.log から原因と疑わしいファイル）。
                     MCP の入口は pipeline と tools/console_tools.py（メソッドファイルの候補と雛形）
-metabolomix/rawmeta/   raw の取得時刻のメタデータ（.wiff の OLE・mzML・Thermo .raw・Bruker .d。スペクトルは解さない。stdlib と core/atomic_io だけに依存）と、
+metabolomix/rawmeta/   raw の取得時刻のメタデータ（.wiff の OLE・mzML・Thermo .raw・Bruker .d・Agilent .d の AcqData/Contents.xml・.wiff2 は同じ幹の .wiff。読めないファイルがあっても読めた分の取得順は残す。スペクトルは解さない。stdlib と core/atomic_io だけに依存）と、
                     ISA / mwTab の試料の表から因子の列付きの sample-manifest.v2 を組む部品。MCP の入口は
                     list_data_files(all_files=True) と tools/sample_sheet_tools.py（pipeline_sample_sheet）
 metabolomix/pipeline/  生データフォルダ起点の統括（受付 request/inputs/store・独立 worker が回す engine・
@@ -225,6 +225,10 @@ metabolomix/tools/     形式に紐づかない MCP 公開層（入口・試料�
   受付番号を返せる**。`wait_seconds` の間に終わらなければ `_wrap_job` が `job_…` の受付番号を返し、
   結果は `job_status(job_id=...)` で引く（`core/pending_loads.py` の `PendingJobs`。`load_dataset` の
   `load_id` と `dataset_load_status` と同じ形）。新しく長いツールを足すときもここへ載せる。
+  仕事はハンドルのロックを終わるまで持つ（`DatasetHandle.running_job` に受付番号）。**ほかの呼び出しの
+  ロック待ちは `handle_dispatch.HANDLE_LOCK_WAIT`（25 秒）で打ち切り、ツールを呼ばずに `HANDLE_BUSY`**
+  （走っている仕事を名指す）を返す——上限なく待つと、クライアントが諦めた呼び出しが後から黙って効く。
+  2 つのハンドルを取るツールは `acquire_all` で同じ上限を使う。
 - **`MCP_INSTRUCTIONS` は 4,000 字以内**（Claude Code はサーバの指示を 4,096 字で切り、後半は届かない。
   `tests/test_instructions_text.py` が縛る）。入口の判定・種別・記録の置き場所・並列の作法のように
   ツールをまたぐ規則だけを置き、1 つのツールの細部はそのツールの説明と output-format へ書く。
