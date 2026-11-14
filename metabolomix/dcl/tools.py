@@ -92,7 +92,8 @@ def dcl_spot_spectrum(spot_id: int, arf2_path: str | None = None, dcl_file: str 
     `library_match_feature(spot_id=...)` と同じ規則で、`.arf2` の precursor・RT と照らした
     アラインメント `.dcl` の `dcl[spot_id]` を返す（索引の崩れは `dcl_precursor_mismatch`、
     ID が無ければ `spot_not_found`、MS/MS が無ければ `not_found`）。mzTab-M の SMF_ID は
-    スポット ID と同じ。
+    スポット ID と同じ。`ion_mode` は `.arf2` の極性をそのまま小文字で返す（`positive` / `negative` /
+    `both` / `unknown`。照合の絞り込みのように Both / Unknown を null にしない）。
     dataset_handle: `load_dataset` が返したハンドル（省略時は直近）。`arf2_path` / `dcl_file` を省けば
         そのデータセットの `.arf2` / `.dcl` を使う（データフォルダは探さない）。
     """
@@ -114,7 +115,7 @@ def dcl_spot_spectrum(spot_id: int, arf2_path: str | None = None, dcl_file: str 
         "spot_id": int(spot_id),
         "precursor_mz": round(float(spot["precursor_mz"]), 4),
         "rt": None if spot["rt"] is None else round(float(spot["rt"]), 3),
-        "ion_mode": spot["ion_mode"],
+        "ion_mode": spot["arf2_ion_mode"],
         "n_peaks": len(spot["measured"]),
         "peaks": [[round(float(mz), 4), float(f"{float(i):.6g}")] for mz, i in spot["measured"]],
     })

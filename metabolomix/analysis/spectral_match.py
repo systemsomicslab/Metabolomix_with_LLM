@@ -48,6 +48,7 @@ __all__ = [
     "total_score",
     "fragment_matches_excluding_precursor",
     "MEASURED_BASE_PEAK",
+    "DEFAULT_MIN_FRAGMENT_RELATIVE_INTENSITY",
 ]
 
 _PEAK_COUNT_PENALTY = {1: 0.75, 2: 0.88, 3: 0.94, 4: 0.97}
@@ -601,6 +602,11 @@ def match_spectrum(measured, reference, *, ms2_tol, mass_begin=0.0, mass_end=200
 #: `match_spectrum` の `alignment` の `measured` の尺度。`normalize_measured` が測定の基準ピーク
 #: （最大ピーク）を 100 にするので、窓の測定強度 / 100 が基準ピークに対する比になる。
 MEASURED_BASE_PEAK = 100.0
+
+#: 断片の一致に数える測定強度の下限の既定（測定の基準ピークに対する比）。msms-rules.v1 の
+#: `min_fragment_relative_intensity` と `library_match_feature(detail=true)` が同じ値を使う——
+#: 同じ名前の列 `fragment_matches_excl_precursor` が、既定のままならどの道具でも同じ本数になるように。
+DEFAULT_MIN_FRAGMENT_RELATIVE_INTENSITY = 0.01
 
 
 def fragment_matches_excluding_precursor(alignment, precursor_mz, tol, *,

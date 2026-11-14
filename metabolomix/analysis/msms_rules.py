@@ -19,7 +19,8 @@ import math
 import re
 from functools import lru_cache
 
-from metabolomix.analysis.spectral_match import fragment_matches_excluding_precursor
+from metabolomix.analysis.spectral_match import (
+    DEFAULT_MIN_FRAGMENT_RELATIVE_INTENSITY, fragment_matches_excluding_precursor)
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 __all__ = ["CANDIDATE_COLUMNS", "RULES_SCHEMA", "candidate_rows", "find_ions", "normalize_ion",
@@ -34,7 +35,7 @@ DEFAULT_ION_TOL = 0.01
 _DEFAULTS = {
     "top_rank": 5,
     "min_fragments_excl_precursor": 1,
-    "min_fragment_relative_intensity": 0.01,
+    "min_fragment_relative_intensity": DEFAULT_MIN_FRAGMENT_RELATIVE_INTENSITY,
     "precursor_exclusion_tol": None,
     "same_formula_margin": None,
     "lipid_class": None,

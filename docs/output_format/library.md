@@ -259,9 +259,13 @@ BINARY 照合のままで、`ion_mode.name`（大文字始まり）をそのま�
 照合し直し、全候補を `last_match` に持ってから描く。照合に失敗したら直前の照合を捨て、その封筒
 （`spot_not_found` / `not_found` / `no_candidates` など）を返す。`candidate`（任意）は描く候補を InChIKey
 （全体か先頭 14 文字）か名前（大小を問わない完全一致）で選び、`rank` より優先する（照合の候補に無ければ
-`status: "error"`）。どのスポット・前駆体・候補の図かを、画像は caption（`Mirror: spot <id> (precursor m/z=…) vs
+`status: "error"`）。**全体の InChIKey は全体で一致する候補を選ぶ**——先頭ブロック（骨格）が同じ別の立体異性体
+（D-グルコースと D-ガラクトースなど）を選ばない。全体で合う候補が無いときだけ、先頭ブロックが同じ最上位の候補を
+選び、caption に 1 文を足す。どのスポット・前駆体・候補の図かを、画像は caption（`Mirror: spot <id> (precursor m/z=…) vs
 <名前> (rank <n>, InChIKey=…, precursor m/z=<参照>)`。precursor で照合したときは `measured`）、
-`output="payload"` は `match`（`spot_id`・`precursor_mz`・`rank`・`name`・`inchikey`・`reference_precursor_mz`）に出す。
+`output="payload"` は `match`（`spot_id`・`precursor_mz`・`rank`・`name`・`inchikey`・`reference_precursor_mz`・
+`picked_by`）に出す。`picked_by` は候補の選び方: `rank`（`candidate` を省いた）/ `inchikey`（全体の一致）/
+`inchikey_block`（先頭ブロックの一致。全体の InChIKey を渡して全体で合わなかったときも）/ `name`。
 
 `build_mirror_payload` / `render_mirror`（`metabolomix/plots/mirror.py`）の座標契約は
 `lipidmix.mirror.v2`。上段が測定（上向き）、下段が参照（下向き）、横軸 m/z 共通。
@@ -445,13 +449,14 @@ Console でも同じ判定が走る。一方**描画は GUI だけ**にある
 ### 照合の詳細（`detail=true`）とライブラリの検索
 
 `library_match_feature(detail=true)`（opt-in。再解析で使う）は、既存の列の並びを変えずに
-TSV の末尾へ 1 列を足し、payload に 3 つの欄を足す。`detail` を渡さない戻り値は変わらない
+TSV の末尾へ 1 列を足し、payload に 4 つの欄を足す。`detail` を渡さない戻り値は変わらない
 （`inchikey` は 2026-11-14 から既定の列。§14.6）。
 
 | 欄 | 意味 |
 |---|---|
-| `fragment_matches_excl_precursor`（列） | 一致した参照ピーク（`matched_peaks_count` と同じ規則）のうち、前駆体 m/z ± `precursor_exclusion_tol` を除いた本数。測定強度の下限は掛けない（合否の `library_msms_qualify` は `min_fragment_relative_intensity` 以上だけを数える。reanalysis.md §4）。比較できない（測定か参照が空）なら空 |
+| `fragment_matches_excl_precursor`（列） | 一致した参照ピーク（`matched_peaks_count` と同じ規則）のうち、前駆体 m/z ± `precursor_exclusion_tol` を除き、測定強度が基準ピークの `min_fragment_relative_intensity` 以上の窓の本数。下限の既定は MS/MS の合否の規則と同じ 0.01 なので、既定のままなら `library_msms_qualify` / `dataset_claim_evidence` の同じ名前の列と同じ本数になる（reanalysis.md §4）。比較できない（測定か参照が空）なら空 |
 | `precursor_exclusion_tol` | 前駆体を除く幅（Da）。省略時は採点に使った `ms2_tol` |
+| `min_fragment_relative_intensity` | 上の列に使った測定強度の下限（基準ピークに対する比）。引数 `min_fragment_relative_intensity`（0 以上 1 以下、`0` で下限なし）で変えられ、省略時は 0.01 |
 | `measured_peaks` | 照合に使った測定スペクトル（全ピーク `[m/z, 強度]`） |
 | `alignments` | 候補ごと（`rank` 順）の一致したピーク `[m/z, 測定の強度, 参照の強度]`。強度は採点の前処理（足切り・正規化）の後の値 |
 

@@ -349,7 +349,7 @@ InChIKey が一意に決まらない脂質の種は `{"lipid_species": "PC 18:3_
 | `species_route` | 読み方 |
 |---|---|
 | `name` | 記録の `name`（MS-DIAL の限定子を外して）をそのまま GOSLIN で読む |
-| `name_cleaned` | `\|` の後・`; ` の後の注記（`PC 34:1; PlaSMA ID-1486`）・末尾の付加体の表記（`[M+H]+`）を外し、古い MS-DIAL の書式（`Cer[NS] d18:1/16:0`）・英語のクラス名（`Phosphatidylcholine 16:0-18:1`）を略記に直して読む（`pathway.msp_lipid.shorthand`） |
+| `name_cleaned` | `\|` の後・`; ` の後の注記（`PC 34:1; ExampleDB ID-0000`）・末尾の付加体の表記（`[M+H]+`）を外し、古い MS-DIAL の書式（`Cer[NS] d18:1/16:0`）・英語のクラス名（`Phosphatidylcholine 16:0-18:1`）を略記に直して読む（`pathway.msp_lipid.shorthand`） |
 | `ontology_formula` | 名前で読めなければ、ClassyFire の `Ontology` と分子式から和の組成の種を作る（`pathway.msp_lipid.from_class_formula`。LPS・LPG も） |
 
 同位体の標識のある名前（`(d7)` など、内部標準）と、どの経路でも読めない記録は目標とも別物とも
@@ -377,7 +377,8 @@ pass するので、1 位かどうかはこの欄で読む。`spot_id` のスポ
 `library_match_feature` と同じ `msdial_name`・`msdial_rank`・`top_differs_from_msdial`（library.md §14.6）。
 候補の表（`candidates`、TSV）の列は `rank name formula inchikey adduct delta_ppm total_score
 matched_peaks_count fragment_matches_excl_precursor`（`delta_ppm` は `(測定 − 参照) / 参照 × 1e6`、
-`fragment_matches_excl_precursor` は合否と同じ規則＝強度の下限つきで数える）。`.dbs` に注釈の足切り
+`fragment_matches_excl_precursor` は合否と同じ規則＝強度の下限つきで数える。`library_match_feature(detail=true)` の
+同じ名前の列も既定は同じ下限 0.01 で、使った下限を `min_fragment_relative_intensity` に返す）。`.dbs` に注釈の足切り
 （dot・一致率・総合スコア・`minimum_spectrum_match`）があれば、値を `dbs_cutoffs` に 1 回載せ、
 候補ごとに `passes_dbs_cutoffs`（MS-DIAL の `IsSpectrumMatch` と総合スコアの足切りを全部通るか。
 dot の足切りは二乗の値と比べる）の列を足す——**合否には当てない材料**（`.msp` には足切りが無いので列も無い）。
@@ -486,7 +487,7 @@ spec:
 | `scans` | 走査ごとの判定（`counts` は `default_selection` と同じ意味）と、候補の特徴 ID |
 | `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか。組の片方だけが質量の窓に入ったときに足した相手は `merge_partner`）・`split`（下）・`msms`（spot_id = SMF_ID の照合の上位 `top`（`library_msms_qualify` の候補の表と同じ欄。`passes_dbs_cutoffs`・種の欄も同じ条件で）と `qualify`（`target_rank`・`top1_is_target` を含む）、使った前駆体の窓 `window`（`mz_tol`・`mz_window`・`mz_tol_ppm`）、スポットに MS-DIAL の注釈があれば `msdial_name`・`msdial_rank`・`top_differs_from_msdial`。ライブラリが無ければ `{"status": "no_library", "spectrum_available": ...}`（データセットの同定が LBM だけ＝記憶が `lbm_only` のときは、MSP のスペクトルが無いので評価できない: 候補ごとは `{"status": "not_evaluable", "reason": "lbm_only", "spectrum_available": ...}` で、理由の文は束の `msms_not_evaluable_reason` に 1 回だけ。`no_library` は `library_load` を促すが、このデータセットには照合に使える MSP が無い）、MS/MS が無い・索引の崩れはその `status`。`spectrum_available` は代表スペクトルの有無で、ライブラリの有無によらず spot を先に照会して決める: `true`=ある、`false`=照会して無かった（`not_found` で `reason` が `no_spectrum`）、`null`=分からない（`.arf2` / `.dcl` のファイル自体が無い `not_found` の `reason` `no_arf2` / `no_dcl`・`spot_not_found`・`dcl_precursor_mismatch`・`spot_id_not_integer`、ハンドルに `.arf2` / `.dcl` が無いとき））・`relations` |
 | `truncated` | `max_candidates` で打ち切った候補の数 |
-| `rule` / `rule_hash` | 正規化した spec とその hash。spec の `merge_split`（既定 true）は真のときだけ `rule` に載り、`rule_hash` には判定でまとめた組の hash も入る（false は v7 と同じ規則・同じ hash） |
+| `rule` / `rule_hash` | 正規化した spec とその hash。spec の `merge_split`（既定 true）は真のときだけ `rule` に載り、`rule_hash` には判定でまとめた組の hash も入る（false は v7 と同じ規則。hash が v7 と同じなのは spec に `msms` が無いときだけ: `msms` があると、2026-11-14 に MS/MS の規則の既定（`min_fragments_excl_precursor` 1・`min_fragment_relative_intensity` 0.01）を変えたので hash も変わる） |
 | `merge_split` / `merge_groups_hash` | 割れの組を判定で 1 つの候補にしたか（spec の `merge_split`）と、その組（§9 の `merge_groups`）の hash（false なら null） |
 | `input_fingerprint` | `dataset_hash`（データの指紋）・`library_sha256` |
 

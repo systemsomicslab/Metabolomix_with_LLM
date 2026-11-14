@@ -199,7 +199,7 @@ _ENGLISH_NAME = re.compile(
     rf"^({'|'.join(_ENGLISH_HEADS)})(?:\s+(lyso|alkyl|alkenyl))?\s+(\d.*)$", re.IGNORECASE)
 _ENGLISH_MODIFIER = {"alkyl": "O-", "alkenyl": "P-"}
 
-# `;` の後ろが空白を含む注記（`LPC 16:0; PlaSMA ID-1486`）のときだけ切る。`;O2` の修飾は残す。
+# `;` の後ろが空白を含む注記（`LPC 16:0; ExampleDB ID-0000`）のときだけ切る。`;O2` の修飾は残す。
 _ANNOTATION = re.compile(r";(?=[^;]*\s)")
 # 酸化の修飾 `;O` / `;O2` …。Cer / HexCer / SM（長鎖塩基の ;O2 / ;O3）以外では経路 1 で読まない。
 _OXIDIZED = re.compile(r";O(?![a-z])")
@@ -252,7 +252,7 @@ _ADDUCT_SUFFIX = re.compile(r"\s*[\[(]\s*\d*M(?:[+-][A-Za-z0-9]+)*\s*[\])]\s*\d*
 def shorthand(name: str | None) -> str | None:
     """限定子を外した名前を、GOSLIN に渡す MS-DIAL 5 の略記の候補に直す。直せなければ None。
 
-    `|` の後・空白を含む `;` の後の注記（`; PlaSMA ID-1486`）・末尾の付加体の表記を切り、古い
+    `|` の後・空白を含む `;` の後の注記（`; ExampleDB ID-0000`）・末尾の付加体の表記を切り、古い
     MS-DIAL の書式（`Cer[NS] d30:1`）・英語のクラス名（`Phosphatidylcholine 16:0-18:1`）を略記に直す。
     GOSLIN で読めるかは確かめない（読むのは呼び出し側）。クラスの決定・酸化の修飾の扱いは
     `from_name` の役目で、ここではしない。

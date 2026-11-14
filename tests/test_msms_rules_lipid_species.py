@@ -55,7 +55,7 @@ def test_invalid_species_targets(target):
     assert exc.value.code == "MSMS_RULES_INVALID"
 
 
-def test_inchikey_rules_are_unchanged():
+def test_inchikey_rules_hash_is_pinned():
     rules = M.normalize_rules({"target": {"inchikey": "JLPULHDHAOZNQI-ZTIMHPMXSA-N",
                                           "formula": "C42H82NO8P"},
                                "lipid_class": "PC", "same_formula_margin": {"min_delta": 0.1}})
@@ -77,7 +77,7 @@ def test_species_target_rank_is_found_by_the_record_name():
     ({"name": "PC 16:0_18:1"}, "PC 34:1", "name"),
     ({"name": "low score: PC 34:1"}, "PC 34:1", "name"),
     # 注記・英語のクラス名・古い書式は直してから読む
-    ({"name": "PC 34:1; PlaSMA ID-1486"}, "PC 34:1", "name_cleaned"),
+    ({"name": "PC 34:1; ExampleDB ID-0000"}, "PC 34:1", "name_cleaned"),
     ({"name": "Phosphatidylcholine 16:0-18:1"}, "PC 34:1", "name_cleaned"),
     ({"name": "Cer[NS] d18:1/16:0"}, "Cer 34:1;O2", "name_cleaned"),
     # 名前で読めなければ ClassyFire の Ontology と分子式から（LPS / LPG も）
@@ -130,15 +130,21 @@ def test_same_formula_margin_compares_against_other_species():
 GABA_KEY = "BTCSSZJGUNDROE-UHFFFAOYSA-N"
 
 
-def test_inchikey_claim_rule_hash_is_unchanged():
+def test_inchikey_claim_rule_hash_is_pinned():
     spec = {"claim_id": "C1", "target": {"inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": 2.0},
             "scan": {"ppm": [10, 20], "rt_tol_min": [0.3]},
             "msms": {"top_n": 3, "rules": {"min_fragments_excl_precursor": 2}},
             "relations": {"rt_window": 0.05}}
-    # merge_split=false（v7 と同じ規則）は v7 の hash のまま。既定（true）は merge_split が規則に入る
+    # merge_split=false は v7 と同じ規則。`msms` があると MS/MS の規則の既定（2026-11-14 に変えた）が
+    # hash に入るので、v7 の値（fb5977…）から変わった。既定（true）は merge_split が規則に入る
     normalized = C.normalize_claim_spec({**spec, "merge_split": False}, dataset_polarity="positive")
     assert C.rule_hash(normalized) == \
         "9be780c9eca0d647b47ce5f15c2bcc0fa847d2fd96bfda30c63bcc14d47d805a"
+    # `msms` が無ければ MS/MS の既定は hash に入らず、v7 の hash のまま（既定を変える前の実装で引いた値）
+    no_msms = {k: v for k, v in spec.items() if k != "msms"}
+    assert C.rule_hash(C.normalize_claim_spec({**no_msms, "merge_split": False},
+                                              dataset_polarity="positive")) == \
+        "c17e3edbf0f15e48e6fda7e87b53cf765b64eee7fd6b73ea2165cfcab827307b"
     merged = C.normalize_claim_spec(spec, dataset_polarity="positive")
     assert merged["merge_split"] is True
     assert C.rule_hash(merged) != C.rule_hash(normalized)

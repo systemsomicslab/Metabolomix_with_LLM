@@ -645,11 +645,11 @@ def test_mirror_payload_names_what_was_matched(fresh_session, monkeypatch):
     payload = json.loads(tools.library_plot_mirror(output="payload"))
     assert payload["match"] == {"spot_id": None, "precursor_mz": 104.0706, "rank": 1,
                                 "name": "GABA", "inchikey": None,
-                                "reference_precursor_mz": 104.0706}
+                                "reference_precursor_mz": 104.0706, "picked_by": "rank"}
     caption = tools.library_plot_mirror()[0]
     assert "precursor m/z=104.0706" in caption and "GABA" in caption and "InChIKey=-" in caption
     picked = json.loads(tools.library_plot_mirror(output="payload", candidate="gaba"))
-    assert picked["match"]["rank"] == 1
+    assert picked["match"]["rank"] == 1 and picked["match"]["picked_by"] == "name"
     absent = json.loads(tools.library_plot_mirror(output="payload", candidate="Glutamine"))
     assert absent["status"] == "error" and "Glutamine" in absent["message"]
 

@@ -237,3 +237,97 @@ def test_mirror_by_spot_id_on_a_dataset(monkeypatch):
     missing = json.loads(tools.library_plot_mirror(output="payload", spot_id=99))
     assert missing["status"] == "spot_not_found"
     assert session_state.session.library.last_match is None   # 古い照合を黙って描かない
+
+
+# ---------- 対向プロットの候補の選び方（全体の InChIKey は立体異性体まで見分ける） ----------
+
+def test_pick_candidate_prefers_the_full_inchikey_over_its_first_block():
+    candidates = [{"name": "D-Glucose", "inchikey": "WQZGKKKJIJFFOK-GASJEMHNSA-N"},
+                  {"name": "D-Galactose", "inchikey": "WQZGKKKJIJFFOK-SVZMEOIVSA-N"}]
+    # 同じ骨格（先頭ブロック）の 2 位を全体の InChIKey で選ぶ（大小を問わない）
+    assert tools._pick_candidate(candidates, "WQZGKKKJIJFFOK-SVZMEOIVSA-N") == (1, "inchikey")
+    assert tools._pick_candidate(candidates, " wqzgkkkjijffok-svzmeoivsa-n ") == (1, "inchikey")
+    # 先頭 14 文字だけなら、先頭ブロックが同じ最上位
+    assert tools._pick_candidate(candidates, "WQZGKKKJIJFFOK") == (0, "inchikey_block")
+    # 全体で合う候補が無いときだけ先頭ブロックで選ぶ（選び方で分かる）
+    assert tools._pick_candidate(candidates, "WQZGKKKJIJFFOK-UHFFFAOYSA-N") == (0, "inchikey_block")
+    assert tools._pick_candidate(candidates, "d-galactose") == (1, "name")
+    assert tools._pick_candidate(candidates, "BTCSSZJGUNDROE-UHFFFAOYSA-N") is None
+    assert tools._pick_candidate(candidates, "Fructose") is None
+
+
+def test_mirror_full_inchikey_draws_the_stereoisomer_asked_for():
+    _match(spot_id=0)
+    candidates = session_state.session.library.last_match["candidates"]
+    # 2 位の候補を 1 位と同じ骨格の別の立体異性体にする（合成の InChIKey）
+    candidates[1]["inchikey"] = "JLPULHDHAOZNQI-UHFFFAOYSA-N"
+    exact = json.loads(tools.library_plot_mirror(output="payload",
+                                                 candidate="JLPULHDHAOZNQI-UHFFFAOYSA-N"))
+    assert exact["match"]["rank"] == 2 and exact["match"]["picked_by"] == "inchikey"
+    assert exact["match"]["inchikey"] == "JLPULHDHAOZNQI-UHFFFAOYSA-N"
+    by_rank = json.loads(tools.library_plot_mirror(output="payload"))
+    assert by_rank["match"]["rank"] == 1 and by_rank["match"]["picked_by"] == "rank"
+    # 全体で合う候補が無ければ先頭ブロックの最上位を描き、caption で知らせる
+    fallback = json.loads(tools.library_plot_mirror(output="payload",
+                                                    candidate="JLPULHDHAOZNQI-XXXXXXXXXX-N"))
+    assert fallback["match"]["rank"] == 1 and fallback["match"]["picked_by"] == "inchikey_block"
+    caption = tools.library_plot_mirror(candidate="JLPULHDHAOZNQI-XXXXXXXXXX-N")[0]
+    assert "No candidate has the full InChIKey given" in caption
+    assert "No candidate has the full InChIKey" not in tools.library_plot_mirror(
+        candidate="JLPULHDHAOZNQI")[0]
+
+
+# ---------- dcl_spot_spectrum の極性（照合の絞り込みとは別に .arf2 の値を残す） ----------
+
+@pytest.mark.parametrize("ion_mode, expected", [
+    ("Positive", "positive"), ("Negative", "negative"), ("Both", "both"), ("Unknown", "unknown")])
+def test_spot_spectrum_reports_the_arf2_polarity(monkeypatch, ion_mode, expected):
+    records = [dict(_RECORDS[0]), dict(_RECORDS[1], IonMode=ion_mode)]
+    monkeypatch.setattr(alignment_spot, "load_catalog", lambda _path: records)
+    out = json.loads(dcl_tools.dcl_spot_spectrum(spot_id=1, **_FILES))
+    assert out["status"] == "ok" and out["ion_mode"] == expected
+    spot = tools.spot_msms_query(1, rt=None, ion_mode=None, **_FILES)
+    # 照合の絞り込みは Both / Unknown を None（絞らない）にする
+    assert spot["ion_mode"] == (expected if expected in ("positive", "negative") else None)
+    assert spot["arf2_ion_mode"] == expected
+
+
+# ---------- detail の断片の本数は合否の規則と同じ下限で数える ----------
+
+def _weak_fragment_dcl(workspace):
+    # spot 0 の 184.0733 を基準ピーク（760.5851）の 0.5 % にする（既定の下限 1 % 未満）
+    (workspace / "AlignmentResult_1.dcl").write_bytes(build_dcl_bytes([
+        {"precursor_mz": 760.5851, "rt": 3.0,
+         "spectrum": [(184.0733, 5.0), (760.5851, 1000.0)]},
+        {"precursor_mz": 104.0706, "rt": 1.2, "spectrum": [(87.0441, 999.0), (69.0335, 500.0)]},
+    ]))
+
+
+def _fragment_cells(out):
+    lines = out["candidates_table"].splitlines()
+    header = lines[0].split("\t")
+    rows = [dict(zip(header, line.split("\t"))) for line in lines[1:]]
+    return {row["name"]: row["fragment_matches_excl_precursor"] for row in rows}
+
+
+def test_detail_fragment_count_uses_the_rule_floor_by_default(workspace):
+    _weak_fragment_dcl(workspace)
+    out = _match(spot_id=0, detail=True)
+    assert out["min_fragment_relative_intensity"] == 0.01
+    assert _fragment_cells(out)["PC 34:1"] == "0"           # 0.5 % の 184 は数えない
+    unfloored = _match(spot_id=0, detail=True, min_fragment_relative_intensity=0)
+    assert unfloored["min_fragment_relative_intensity"] == 0
+    assert _fragment_cells(unfloored)["PC 34:1"] == "1"
+    # 同じ名前の列が、既定のまま library_msms_qualify と同じ本数になる
+    from metabolomix.tools import reanalysis_tools
+
+    qualify = json.loads(reanalysis_tools.library_msms_qualify(
+        {"target": {"inchikey": "JLPULHDHAOZNQI-ZTIMHPMXSA-N"}}, spot_id=0, **_FILES))
+    assert _fragment_cells({"candidates_table": qualify["candidates"]})["PC 34:1"] == "0"
+
+
+@pytest.mark.parametrize("bad", [-0.1, 1.5, float("nan"), True, "0.01"])
+def test_detail_floor_rejects_values_outside_zero_to_one(bad):
+    out = _match(spot_id=0, detail=True, min_fragment_relative_intensity=bad)
+    assert out["status"] == "invalid_arguments"
+    assert "min_fragment_relative_intensity" in out["message"]

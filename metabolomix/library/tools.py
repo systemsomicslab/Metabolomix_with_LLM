@@ -14,12 +14,14 @@ from __future__ import annotations
 import contextlib
 import math
 import os
+import re
 from pathlib import Path
 
 from mcp.server.fastmcp import Image
 from mcp.types import ToolAnnotations
 
-from metabolomix.analysis.spectral_match import fragment_matches_excluding_precursor, match_spectrum
+from metabolomix.analysis.spectral_match import (
+    DEFAULT_MIN_FRAGMENT_RELATIVE_INTENSITY, fragment_matches_excluding_precursor, match_spectrum)
 from metabolomix.arf2.reader import format_spots_as_table
 from metabolomix.core import mcp_errors, user_config
 from metabolomix.core.mcp_core import mcp
@@ -341,7 +343,9 @@ def _spot_query(spot_id: int, *, arf2_path: str | None, dcl_file: str | None,
 
     precursor m/z・RT・極性は ARF2、測定スペクトルはアラインメント `.dcl` の
     `dcl[spot_id]`（precursor を m/z で探さない——同じ m/z の別スポットを拾わないため）。
-    ARF2 の極性が `Both` / `Unknown` なら極性で絞らない（None）。`msdial_annotation` は ARF2 の
+    `ion_mode` は照合の絞り込みに使う極性で、ARF2 の極性が `Both` / `Unknown` なら絞らない（None）。
+    `arf2_ion_mode` は ARF2 の極性をそのまま小文字にしたもの（`positive` / `negative` / `both` /
+    `unknown`。`dcl_spot_spectrum` が返す。Both と Unknown を None に潰さない）。`msdial_annotation` は ARF2 の
     代表の注釈（`{name, inchikey}`。未注釈なら None。照合の上位との食い違いを見るのに使う）。
     `not_found` には `reason` が付く: `no_arf2` / `no_dcl`（ファイルが無い＝スペクトルの有無は
     分からない）と `no_spectrum`（照会して無かった）。`status` の値は変えない。
@@ -381,6 +385,7 @@ def _spot_query(spot_id: int, *, arf2_path: str | None, dcl_file: str | None,
         "precursor_mz": precursor_mz,
         "rt": rt if rt is not None else record.get("RT"),
         "ion_mode": ion_mode or _arf2_polarity(record.get("IonMode")),
+        "arf2_ion_mode": str(record.get("IonMode") or "").lower() or None,
         "measured": msms["spectrum"],
         "msdial_annotation": annotation,
     }
@@ -555,6 +560,7 @@ def library_match_feature(
     precursor_exclusion_tol: float | None = None,
     dataset_handle: str | None = None,
     mz_tol_ppm: float | None = None,
+    min_fragment_relative_intensity: float | None = None,
 ) -> str:
     """測定 MS/MS（`.dcl`）を参照ライブラリ（`library_load` 済みの store）と照合し、
     上位候補を返す。
@@ -631,11 +637,15 @@ def library_match_feature(
     `session.library.last_match` に持ち、`library_plot_mirror` がそこから読む。
 
     `detail=True`（opt-in。再解析で使う）のときだけ、TSV の末尾に
-    `fragment_matches_excl_precursor`（前駆体 ± `precursor_exclusion_tol` を除いた一致の
-    本数。省略時の幅は採点に使った `ms2_tol`。測定強度の下限は掛けない）の列を足し、payload に
-    `precursor_exclusion_tol`・`measured_peaks`（測定スペクトル）・`alignments`
-    （候補ごとの一致したピーク `[m/z, 測定, 参照]`）を足す——直前の照合の状態
-    （`last_match`）を読まずに、戻り値だけで照合の中身を確かめられる。
+    `fragment_matches_excl_precursor`（前駆体 ± `precursor_exclusion_tol` を除き、測定強度が基準
+    ピークの `min_fragment_relative_intensity` 以上の一致の本数。省略時の幅は採点に使った
+    `ms2_tol`、下限は MS/MS の合否の規則と同じ既定 0.01）の列を足し、payload に
+    `precursor_exclusion_tol`・`min_fragment_relative_intensity`（使った下限）・
+    `measured_peaks`（測定スペクトル）・`alignments`（候補ごとの一致したピーク
+    `[m/z, 測定, 参照]`）を足す——直前の照合の状態（`last_match`）を読まずに、戻り値だけで
+    照合の中身を確かめられる。下限の既定が合否の規則と同じなので、既定のままなら
+    `library_msms_qualify` / `dataset_claim_evidence` の同じ名前の列と同じ本数になる
+    （`0` で下限なし。0 以上 1 以下の数。`detail=False` では使わない）。
     **`matched_peaks_count` は前駆体の一致も 1 本に数える**（意味は変えていない）。
 
     dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
@@ -678,6 +688,15 @@ def library_match_feature(
             "status": "invalid_arguments",
             "message": f"precursor_exclusion_tol は正の数で指定してください: {precursor_exclusion_tol!r}",
         })
+    floor = min_fragment_relative_intensity
+    if floor is not None and (isinstance(floor, bool) or not isinstance(floor, (int, float))
+                              or not math.isfinite(floor) or not 0 <= floor <= 1):
+        return json_payload({
+            "status": "invalid_arguments",
+            "message": ("min_fragment_relative_intensity は 0 以上 1 以下の数（測定の基準ピークに対する比。"
+                        f"省略可）で指定してください: {floor!r}"),
+        })
+    floor = DEFAULT_MIN_FRAGMENT_RELATIVE_INTENSITY if floor is None else float(floor)
 
     run = _run_match(holder, dataset_handle, precursor_mz=precursor_mz, spot_id=spot_id, rt=rt,
                      ion_mode=ion_mode, dcl_file=dcl_file, arf2_path=arf2_path, mz_tol=mz_tol,
@@ -719,7 +738,7 @@ def library_match_feature(
         columns += _DETAIL_COLUMNS
         for row, (_record, result) in zip(rows, top):
             row["fragment_matches_excl_precursor"] = fragment_matches_excluding_precursor(
-                result["alignment"], precursor_mz, exclusion_tol)
+                result["alignment"], precursor_mz, exclusion_tol, min_relative_intensity=floor)
     table = format_spots_as_table(rows, columns=columns)
 
     payload = {
@@ -738,6 +757,7 @@ def library_match_feature(
     }
     if detail:
         payload["precursor_exclusion_tol"] = exclusion_tol
+        payload["min_fragment_relative_intensity"] = floor
         payload["measured_peaks"] = [[float(mz), float(intensity)] for mz, intensity in measured]
         payload["alignments"] = [
             {"rank": i + 1,
@@ -748,18 +768,35 @@ def library_match_feature(
     return json_payload(round_floats(payload))
 
 
-def _pick_candidate(candidates: list, candidate: str) -> int | None:
-    """`candidate`（InChIKey（全体か先頭 14 文字）か名前。大小を問わない）に合う最上位の候補の添字。"""
+_FULL_INCHIKEY_RE = re.compile(r"^[A-Z]{14}-[A-Z]{10}-[A-Z]$")
+_INCHIKEY_BLOCK_RE = re.compile(r"^[A-Z]{14}$")
+
+
+def _pick_candidate(candidates: list, candidate: str) -> tuple[int, str] | None:
+    """`candidate`（InChIKey（全体か先頭 14 文字）か名前。大小を問わない）に合う最上位の候補。
+
+    戻り値は `(添字, picked_by)`。InChIKey の全体を渡したら、まず全体の一致（`inchikey`）を探す——
+    先頭ブロックだけで比べると、同じ骨格の別の立体異性体（D-グルコースと D-ガラクトースなど）の
+    上位を黙って選ぶため。全体の一致が無いときだけ先頭ブロックで探す（`inchikey_block`。図に出す）。
+    先頭 14 文字を渡したら先頭ブロックで、それ以外は名前の完全一致（`name`）で探す。
+    """
     wanted = candidate.strip()
-    block = wanted[:14].upper()
-    for i, cand in enumerate(candidates):
-        key = cand.get("inchikey")
-        if isinstance(key, str) and len(block) == 14 and key.strip()[:14].upper() == block:
-            return i
+    upper = wanted.upper()
+    keys = [cand.get("inchikey").strip().upper() if isinstance(cand.get("inchikey"), str) else ""
+            for cand in candidates]
+    if _FULL_INCHIKEY_RE.match(upper):
+        exact = next((i for i, key in enumerate(keys) if key == upper), None)
+        if exact is not None:
+            return exact, "inchikey"
+        upper = upper[:14]
+    if _INCHIKEY_BLOCK_RE.match(upper):
+        block = next((i for i, key in enumerate(keys) if key[:14] == upper), None)
+        if block is not None:
+            return block, "inchikey_block"
     folded = wanted.casefold()
     for i, cand in enumerate(candidates):
         if isinstance(cand.get("name"), str) and cand["name"].strip().casefold() == folded:
-            return i
+            return i, "name"
     return None
 
 
@@ -777,14 +814,17 @@ def library_plot_mirror(rank: int = 1, output: str | None = None,
     照合に失敗したら直前の照合を捨て、その封筒（`spot_not_found` / `not_found` /
     `no_candidates` など）を返す——古い照合を黙って描かない。
     `candidate`（任意）は描く候補を InChIKey（全体か先頭 14 文字）か名前（大小を問わない完全一致）で
-    選ぶ（`rank` より優先）。照合の候補に無ければ誤り。
+    選ぶ（`rank` より優先）。全体の InChIKey は全体で一致する候補を選ぶ（同じ先頭ブロックの別の
+    立体異性体を選ばない）。全体で合う候補が無いときだけ先頭ブロックの最上位を選び、それを
+    `match.picked_by: "inchikey_block"`（画像は caption の 1 文）で示す。照合の候補に無ければ誤り。
 
     上段が測定、下段が参照（選んだ候補）。`output="image"`（既定）は
     サーバ側で描画した PNG を返し、`output="payload"` は座標を丸めた
     `lipidmix.mirror.v2` JSON を返す（Use-LLLM 等、自前で描くクライアント向け。
     v2 で採点外ピーク `unscored_mz` の層を追加）。どちらも、どのスポット（`spot_id`。
     precursor m/z で照合したときは null）・測定の precursor m/z・どの候補（順位・名前・InChIKey）の
-    図かを示す（画像は caption、payload は `match`）。
+    図かを示す（画像は caption、payload は `match`。`match.picked_by` は候補の選び方で
+    `rank` / `inchikey` / `inchikey_block` / `name`）。
 
     測定側の一致色分けには許容幅（`ms2_tol`）が要る——`library_match_feature`
     が使った値（store の `search_params` か既定値）を自動で引き継ぐ。
@@ -856,14 +896,16 @@ def library_plot_mirror(rank: int = 1, output: str | None = None,
         )
 
     candidates = last_match["candidates"]
+    picked_by = "rank"
     if candidate is not None:
-        index = _pick_candidate(candidates, candidate)
-        if index is None:
+        picked = _pick_candidate(candidates, candidate)
+        if picked is None:
             return json_payload({
                 "status": "error",
                 "message": (f"candidate={candidate!r} は照合の候補（{len(candidates)} 件）にありません"
                             "（InChIKey か候補の名前で指定します）。"),
             })
+        index, picked_by = picked
         rank = index + 1
     elif rank < 1 or rank > len(candidates):
         return json_payload({
@@ -875,7 +917,7 @@ def library_plot_mirror(rank: int = 1, output: str | None = None,
     match_info = {"spot_id": last_match.get("spot_id"),
                   "precursor_mz": last_match.get("precursor_mz"),
                   "rank": rank, "name": chosen["name"], "inchikey": chosen.get("inchikey"),
-                  "reference_precursor_mz": chosen["precursor_mz"]}
+                  "reference_precursor_mz": chosen["precursor_mz"], "picked_by": picked_by}
     payload = mirror_plot.build_mirror_payload(
         last_match["measured"], chosen["spectrum"], chosen["alignment"],
         title=f"{chosen['name']} (rank {rank})",
@@ -899,6 +941,11 @@ def library_plot_mirror(rank: int = 1, output: str | None = None,
         f"precursor m/z={chosen['precursor_mz']}, "
         f"y-axis={scale}, labels={label_policy})."
     )
+    # 全体の InChIKey を渡したのに全体で合う候補が無く、先頭ブロックで選んだときは図にも出す
+    # （同じ骨格の別の立体異性体を描いている）。
+    if picked_by == "inchikey_block" and _FULL_INCHIKEY_RE.match(candidate.strip().upper()):
+        caption += (" No candidate has the full InChIKey given; picked the top candidate "
+                    "sharing its first block.")
     # 足切りで採点から外れたピークがあるときだけ件数を添える。図の灰色の層は
     # 見落としやすく、「描かれているのに採点されていない」は数値の読み違いに直結する。
     if payload["unscored_peak_count"]:

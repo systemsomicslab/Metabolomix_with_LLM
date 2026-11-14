@@ -161,7 +161,8 @@ m/z 500 を超えたら同じ ppm に広げる（`query.mz_window`）。
 手順 1 で `MissingState`）。`spot_id` を渡したときは、ライブラリだけが要る（手順 2 で照合し直す）。
 状態変更: `spot_id` を渡したときだけ `last_match` を書き換える（全候補。照合に失敗したら捨てて、その封筒を返す）。
 
-`candidate`（InChIKey か名前）を渡すと手順 3 で描く候補を選ぶ（`rank` より優先）。どのスポット・前駆体・
+`candidate`（InChIKey か名前）を渡すと手順 3 で描く候補を選ぶ（`rank` より優先）。全体の InChIKey は
+全体の一致を先に探し、無いときだけ先頭ブロックで探す（選び方は `match.picked_by`）。どのスポット・前駆体・
 候補の図かを caption（画像）と `match`（payload）に出す。
 
 `ms2_tol` は `library_match_feature` が使った値（`last_match` に保持済み）を自動で

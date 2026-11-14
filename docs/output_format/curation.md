@@ -244,7 +244,7 @@ neg 154 件中 9 件・pos 469 件中 27 件に立った。
 | `name` | 今の名前（未注釈は `Unknown` 系） |
 | `target` | 対象の種類。`flagged`＝有効な `wrong` フラグのあるスポット、`likely_wrong`＝元レビューの判定が `likely_wrong`（フラグ無し）、`unannotated`＝`.arf2` に代表が無いスポット。`include_decided=True` のときは、判断済み（assign / redundant）の注釈付きスポットも `flagged` で戻る |
 | `top_candidate` | 候補（①②）の先頭の名前（和組成があれば和組成）。候補が無ければ空 |
-| `source` | 先頭の候補の出所。`msdial`（MS-DIAL 自身の下位候補）・`research`（閾値を緩めた再検索だけで出たもの）・`msdial+research`（両方） |
+| `source` | 先頭の候補の出所。`msdial`（MS-DIAL 自身の下位候補）・`research`（閾値を緩めた再検索だけで出たもの。前駆体の窓は `library_match_feature` と同じ `ms1_tolerance`（既定 0.01 Da）を m/z 500 を超えたら同じ ppm に広げた幅で、窓に入っても下の `dmz_out` はハードで落とす）・`msdial+research`（両方） |
 | `total_score` | 先頭の候補の総合スコア（`library` トピックの `total_score` と同じ物差し。RT・precursor の一致度を足した**非正規化の和**で 1 を超える）。比較できなければ `-1` |
 | `reasons` | 先頭の候補のソフト理由・情報の理由コードをカンマ区切り |
 | `relation` | 先頭のイオン関係（④）を `<関係コード>(#<相手スポット>)` で。無ければ空 |
