@@ -134,3 +134,28 @@ def test_parent_is_the_pinned_handle_not_the_current_one(tmp_path, monkeypatch):
     with session_state.pinned_handle(a):
         out = json.loads(qt.dataset_select_features(skip_adduct_filter=True))
         assert handles.registry.get(out["dataset_handle"]).source["parents"] == [a]
+
+
+def test_merged_handle_is_refused_before_asking_polarity(tmp_path, monkeypatch):
+    """統合したハンドル（極性なし）は、極性を尋ねず QUANT_ALREADY_MERGED で断り、記録もハンドルも作らない。"""
+    from tests.test_quant_merge import _pair
+
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path, unit=None)
+    hp, hn = _open(pos, "positive"), _open(neg, "negative")
+    merged = _call("dataset_merge_polarities", positive_handle=hp, negative_handle=hn)
+    assert merged["status"] == "merged"
+    mh = merged["dataset_handle"]
+    ref = tmp_path / "ref.csv"
+    ref.write_text(REF, encoding="utf-8")
+    records = tmp_path / "run" / "reports" / "quant"
+    before = sorted(p.name for p in records.iterdir())
+    for name, args in (("dataset_quant_apply", {"skip": True}),
+                       ("dataset_quant_apply", {"reference_path": str(ref)}),
+                       ("dataset_quant_apply", {"reference_path": str(ref), "polarity": "positive"}),
+                       ("dataset_quant_preview", {"reference_path": str(ref)})):
+        err = _call(name, dataset_handle=mh, **args)["error"]
+        assert err["code"] == "QUANT_ALREADY_MERGED", (name, args, err)
+        assert err["details"]["parent_handles"] == {"positive": hp, "negative": hn}
+        assert str(tmp_path) not in json.dumps(err)
+    assert sorted(p.name for p in records.iterdir()) == before

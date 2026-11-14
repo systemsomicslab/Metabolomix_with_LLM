@@ -564,3 +564,59 @@ def test_read_mapping_non_utf8_is_bad_request(tmp_path):
         qm.read_mapping(path)
     assert exc.value.code == "QUANT_BAD_REQUEST"
     assert "map.csv" in exc.value.message and str(path.parent) not in exc.value.message
+
+
+# ---- 探索専用の印と、統合したデータセットの正規化（F4・F10） ----
+
+def test_merge_carries_exploratory_from_either_side(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    merged, info = _merge(pos, neg, mapping_rows=None)
+    assert merged.exploratory_only is False and merged.exploratory_reason is None
+    assert "exploratory" not in info
+    neg.exploratory_only, neg.exploratory_reason = True, "解析ジョブが完了していない（status failed）"
+    merged, info = _merge(pos, neg, mapping_rows=None)  # POS だけの写しでは落ちていた
+    assert merged.exploratory_only is True
+    assert merged.exploratory_reason == "negative: 解析ジョブが完了していない（status failed）"
+    assert info["exploratory"] == {"exploratory_only": True, "reason": merged.exploratory_reason}
+    pos.exploratory_only, pos.exploratory_reason = True, None
+    merged, _ = _merge(pos, neg, mapping_rows=None)
+    assert merged.exploratory_reason == ("positive: incomplete analysis run (exploratory only); "
+                                         "negative: 解析ジョブが完了していない（status failed）")
+    assert pos.exploratory_reason is None  # 元は不変
+
+
+def test_tool_merge_returns_exploratory(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    neg.exploratory_only, neg.exploratory_reason = True, "r-neg"
+    hp, hn = _open(pos, "positive"), _open(neg, "negative")
+    out = json.loads(_tool()(hp, hn))
+    assert out["exploratory"] == {"exploratory_only": True, "reason": "negative: r-neg"}
+    assert handles.registry.get(out["dataset_handle"]).dataset.exploratory_only is True
+
+
+def test_merged_dataset_is_not_normalized(tmp_path, monkeypatch):
+    """内部標準は極性ごとなので、統合したデータセットは正規化しない。skip=True も統合の状態
+    （極性ごとの .arf2・内部標準）を消して極性を取り違えたハンドルを作るので掛けない。"""
+    from metabolomix.quant.inputs import reference_input
+    from tests.test_quant_normalize import REF
+
+    _point(tmp_path, monkeypatch)
+    ref = tmp_path / "ref.csv"
+    ref.write_text(REF, encoding="utf-8")
+    for unit, root in ((None, "run_a"), ("nmol", "run_b")):  # 未正規化どうし・正規化どうし
+        pos, neg = _pair(tmp_path, unit=unit, root=root)
+        merged, info = _merge(pos, neg, mapping_rows=None, pos_handle_id="dh_p",
+                              neg_handle_id="dh_n")
+        records = tmp_path / root / "reports" / "quant"
+        before = sorted(p.name for p in records.iterdir())
+        for call in (lambda: qn.preview(merged, reference_input(str(ref)), None, "positive"),
+                     lambda: qn.apply(merged, reference_input(str(ref)), None, "positive"),
+                     lambda: qn.skip(merged, "positive")):
+            with pytest.raises(DomainError) as exc:
+                call()
+            assert exc.value.code == "QUANT_ALREADY_MERGED", unit
+            assert exc.value.details == {"record_id": info["record_id"],
+                                         "parent_handles": {"positive": "dh_p", "negative": "dh_n"}}
+        assert sorted(p.name for p in records.iterdir()) == before  # 記録を書かない

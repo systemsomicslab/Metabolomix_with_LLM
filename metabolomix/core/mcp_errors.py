@@ -133,6 +133,12 @@ CONSOLE_ERROR_CODES = frozenset({
     "LBM_AMBIGUOUS",
     # pipeline の library_mode="msp_then_lbm" で `[library] lbm` が未設定の場合（v8）。
     "LBM_NOT_CONFIGURED",
+    # console_method_candidates / console_method_template の polarity が positive / negative（pos・neg・+・- も可）
+    # として読めない（黙って「どの候補とも一致しない」・極性なしにしない）。
+    "POLARITY_INVALID",
+    # pipeline_run の受付・prepare_input で、mzML / mzXML が途中で切れている・小さすぎる・読めない
+    # （Console はそこで落ちるので先に名指しして断る。details.files / n_files / min_bytes / reasons）。
+    "PIPELINE_INPUT_INVALID",
 })
 
 
@@ -183,6 +189,22 @@ MZTAB_ERROR_CODES = frozenset({
     # `.arf` が大きすぎて読めない（伸長後の大きさの見積もりが空きメモリを超える、または読む途中で
     # メモリが尽きた）。details に path_name / estimated_bytes / available_bytes / remedy。
     "ARF_TOO_LARGE",
+    # dataset_plot(output_path=...) が指したファイルに書けない（書く段だけ。図の置き場は変えない）。
+    "FIGURE_SAVE_FAILED",
+    # save_figure が保存しようとした図が古い（試料の情報の更新後・元の結果が今の状態から出たものでない）。
+    # details.required_tools は dataset_plot（描き直す）。
+    "STALE_FIGURE",
+    # job_status: 知らない受付番号・走っている受付が上限・道具が DomainError 以外で止まった。
+    "JOB_NOT_FOUND",
+    "JOB_LIMIT",
+    "JOB_FAILED",
+    # dataset_analysis_run（spec v2 の plsda）: 指定の誤り・欠測がある（補完しない）・値の変わる特徴が 2 未満。
+    "PLSDA_SPECIFICATION_INVALID",
+    "PLSDA_MISSING_VALUES",
+    "PLSDA_TOO_FEW_FEATURES",
+    # pipeline_sample_sheet: 試料の表・引数が読めない／合わない、同じ名前のシートが既にある（overwrite=False）。
+    "SAMPLE_TABLE_INVALID",
+    "SAMPLE_SHEET_EXISTS",
 })
 
 

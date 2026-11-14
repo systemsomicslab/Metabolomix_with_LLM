@@ -248,7 +248,7 @@ def select(ds, *, adduct: ReferenceInput | None, apply_curation: bool = True,
             "n_retained": counts["retained"], "n_excluded": counts["excluded"],
             "reasons": dict(reasons), "curation": curation, "curation_by_polarity": by_polarity,
             "adducts": adduct_info,
-            "skipped": skipped, "examples": examples}
+            "skipped": skipped, "examples": examples, **qderive.exploratory_info(new)}
     return new, info
 
 

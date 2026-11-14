@@ -26,28 +26,34 @@
 
 ## dataset_quant_preview
 
-前提: データセット（無ければ `missing_state`）。極性が決まらなければ `polarity` が要る
+前提: データセット（無ければ `missing_state`）。陽陰を統合したデータセットは、極性を解く前に
+`check_not_merged()` が `QUANT_ALREADY_MERGED` で断る（内部標準は極性ごと。`_check_not_normalized()` も
+同じ検査を通す）。極性が決まらなければ `polarity` が要る
 （`QUANT_POLARITY_REQUIRED`）。状態変更: なし（読み取り専用。記録も書かない）。
 
 1. metabolomix/quant/tools.py  dataset_quant_preview()
 2. ├─ metabolomix/quant/tools.py  _context()
 3. │  ├─ metabolomix/tools/_holder.py  resolve_holder()
-4. │  └─ metabolomix/quant/table.py  resolve_quant_polarity()
-5. ├─ metabolomix/quant/tools.py  _reference()
-6. │  └─ metabolomix/quant/inputs.py  reference_input()
-7. └─ metabolomix/quant/normalize.py  preview_tool()
-8.    ├─ metabolomix/quant/normalize.py  preview()
-9.    │  ├─ metabolomix/quant/normalize.py  _compute()
-10.    │  │  ├─ metabolomix/quant/plugin.py  load_rules()
-11.    │  │  ├─ metabolomix/quant/table.py  feature_rows()
-12.    │  │  └─ metabolomix/quant/plugin.py  call()
-13.    │  └─ metabolomix/quant/normalize.py  _preview_dict()
-14.    └─ metabolomix/quant/inputs.py  quant_error()
+4. │  ├─ metabolomix/quant/normalize.py  check_not_merged()
+5. │  └─ metabolomix/quant/table.py  resolve_quant_polarity()
+6. ├─ metabolomix/quant/tools.py  _reference()
+7. │  └─ metabolomix/quant/inputs.py  reference_input()
+8. └─ metabolomix/quant/normalize.py  preview_tool()
+9.    ├─ metabolomix/quant/normalize.py  preview()
+10.    │  ├─ metabolomix/quant/normalize.py  _compute()
+11.    │  │  ├─ metabolomix/quant/plugin.py  load_rules()
+12.    │  │  ├─ metabolomix/quant/normalize.py  _check_not_normalized()（解析フォルダ由来・未統合・未選別・未正規化）
+13.    │  │  ├─ metabolomix/quant/table.py  feature_rows()
+14.    │  │  └─ metabolomix/quant/plugin.py  call()
+15.    │  └─ metabolomix/quant/normalize.py  _preview_dict()
+16.    └─ metabolomix/quant/inputs.py  quant_error()
 
 ## dataset_quant_apply
 
-前提: preview と同じ。`reference_path` は `skip=True` のときだけ省ける。正規化済みには掛けない
-（`QUANT_ALREADY_NORMALIZED`）。状態変更: 解析フォルダの `reports/quant/` に記録を 1 件書き、
+前提: preview と同じ。`reference_path` は `skip=True` のときだけ省ける。正規化済み・選別済み・統合済みには
+掛けない（`QUANT_ALREADY_NORMALIZED` / `QUANT_ALREADY_SELECTED` / `QUANT_ALREADY_MERGED`。`skip()` も
+`_check_not_normalized()` を通す）。派生は `derive()` の `carry_exploratory()` で親の探索専用の印を
+引き継ぐ（選別も同じ）。状態変更: 解析フォルダの `reports/quant/` に記録を 1 件書き、
 新しいハンドルを登録して直近にする。内部標準が未解決（`needs_input`）なら何も書かない。
 
 1. metabolomix/quant/tools.py  dataset_quant_apply()
@@ -61,9 +67,10 @@
 9.    │  ├─ metabolomix/quant/records.py  write_record()
 10.    │  └─ metabolomix/quant/derive.py  derive()
 11.    ├─ [skip=True] metabolomix/quant/normalize.py  skip()
-12.    │  ├─ metabolomix/quant/records.py  write_record()
-13.    │  └─ metabolomix/quant/derive.py  derive()
-14.    └─ metabolomix/quant/derive.py  register()
+12.    │  ├─ metabolomix/quant/normalize.py  _check_not_normalized()
+13.    │  ├─ metabolomix/quant/records.py  write_record()
+14.    │  └─ metabolomix/quant/derive.py  derive()
+15.    └─ metabolomix/quant/derive.py  register()
 
 ## dataset_merge_polarities
 
@@ -83,14 +90,15 @@
 7.    │  ├─ metabolomix/quant/plugin.py  load_rules()
 8.    │  ├─ metabolomix/quant/merge.py  _check_polarities()
 9.    │  ├─ metabolomix/quant/merge.py  _check_states()
-9.    │  │  └─ metabolomix/quant/merge.py  normalize_status()（食い違いの details と記録・戻り値）
-10.    │  ├─ metabolomix/quant/merge.py  _match()
-11.    │  │  └─ metabolomix/quant/plugin.py  call()
-12.    │  ├─ metabolomix/quant/merge.py  _check_groups()
-13.    │  ├─ metabolomix/quant/records.py  merged_record_folder()
-14.    │  ├─ metabolomix/quant/records.py  write_record()
-15.    │  └─ metabolomix/quant/derive.py  derive()
-16.    └─ metabolomix/quant/derive.py  register()
+10.    │  │  └─ metabolomix/quant/merge.py  normalize_status()（食い違いの details と記録・戻り値）
+11.    │  ├─ metabolomix/quant/merge.py  _match()
+12.    │  │  └─ metabolomix/quant/plugin.py  call()
+13.    │  ├─ metabolomix/quant/merge.py  _check_groups()
+14.    │  ├─ metabolomix/quant/records.py  merged_record_folder()
+15.    │  ├─ metabolomix/quant/records.py  write_record()
+16.    │  ├─ metabolomix/quant/derive.py  derive()
+17.    │  └─ metabolomix/quant/derive.py  carry_exploratory()（両側の探索専用の印を極性付きで合わせる）
+18.    └─ metabolomix/quant/derive.py  register()
 
 ## dataset_select_features
 

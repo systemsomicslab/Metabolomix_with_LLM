@@ -224,7 +224,8 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     正規化の工程を通っていない側は未正規化として扱い、各側が正規化をどう通ったか
     （`applied` / `skipped` / `not_run`）を記録の `settings.normalize` と戻り値の `normalize` に書く。
     対応表の group / sample_type 列は規則が検証するだけで適用しない（試料の実験情報は POS の
-    ものを使う）。
+    ものを使う）。どちらかが探索専用（`exploratory_only`）なら統合も探索専用で、理由は極性付きで
+    合わせる（戻り値の `exploratory`）。
     `folder` を省くと 2 つの解析フォルダの共通の親（無理なら QUANT_RECORD_LOCATION_REQUIRED）。
     `polarities` は (positive 側, negative 側) の極性（省くとデータセットから決める）。
     記録は検査がすべて通ってから書く（止まるときは何も書かない）。
@@ -308,9 +309,11 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     new.curation_flags = None  # 選別が極性ごとの .arf2（quant_state["arf2_by_polarity"]）から読む
     new.sample_metadata_rows = None
     new.library_record = None
+    # 探索専用の印は POS だけでなく両側から（どちらかが探索専用なら統合も探索専用。理由は極性付きで）。
+    qderive.carry_exploratory(new, [pos_ds, neg_ds], labels=["positive", "negative"])
     info = {"record_id": record["record_id"], "rule": rule, "n_features": counts,
             "n_samples": len(pos_ids), "unit": state["unit"], "normalized": state["normalized"],
-            "normalize": normalize}
+            "normalize": normalize, **qderive.exploratory_info(new)}
     return new, info
 
 

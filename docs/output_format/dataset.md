@@ -498,6 +498,13 @@ n_excluded_after_test` が `n_features_total`。下流が `n_features_total` と
 などで、ローディングの全行は `ds.results[result_id]` に持つ。`ds.figures[kind]` に置かれ、
 `save_figure(kind=...)` が dpi 300 の PNG と SVG を書く（試料の情報の更新後は作り直しを求められる）。
 
+**図の保存の誤り**（`dataset_plot` のどの kind でも同じ）: `dataset_plot(output_path=...)` が指したファイルに書けなければ
+`FIGURE_SAVE_FAILED`（`details.output_path`。書く段だけの符号で、図を組み立てる間の入力の読み取りの失敗には使わない）で、
+セッションの図（`ds.figures[kind]`）は変えない。`save_figure` は、置かれた図が古ければ保存せず `STALE_FIGURE`
+（試料の情報を焼き込んだ図の後に試料の情報が更新された、または図の元の結果がいまのデータセットの状態から出たもの
+でない。`details` に `kind`・`result_id`・`required_tools: ["dataset_plot"]`。描き直してから保存する）。置かれた図が
+無ければ `missing_state`（`required_tools` は `dataset_plot`）。
+
 #### 11.5 `dataset_plot(kind="group_intensity")` の返り値（`lipidmix.group_intensity.v1`）
 
 選んだクラス・分子種が、指定した試料群のそれぞれで**見つかるか・どれくらいあるか**を示す
@@ -509,7 +516,7 @@ n_excluded_after_test` が `n_features_total`。下流が `n_features_total` と
 `save_figure(kind="group_intensity")`（`reports/figures/<analysis_id>_group_intensity.png` を dpi 300 で、
 同名の `.svg` と一緒に書く。直前の `dataset_plot(kind="group_intensity")` が無ければ `missing_state`）。
 
-**エラーと状態**: 入力の誤り（群が 1 試料にも当たらない・`output` の値が不正・`detection_limit` が 0 以下や非有限・`ncols` が 1 未満など）は例外ではなく `{"status": "error", "message": ...}` で返す。呼び出しが（missing_state を含め）失敗したときは、前回の図を `save_figure(kind="group_intensity")` が保存しないようセッションの図を破棄する。画像モードでは描画に成功してから図を保持する。群の指定が `blank` / `qc` の役割で全滅したときは、`blank` / `qc` を書くよう案内を添える。
+**エラーと状態**: 入力の誤り（群が 1 試料にも当たらない・`output` の値が不正・`detection_limit` が 0 以下や非有限など。`dataset_plot` に `ncols` は無い）は例外ではなく誤りの封筒 `{"error": {"code": "DATASET_BAD_REQUEST", "message", "details"?}}` で返す。呼び出しが（`missing_state` を含め）失敗しても**セッションの図（`ds.figures["group_intensity"]`）は変えない**——前回の図がそのまま残り、`save_figure(kind="group_intensity")` は前回の呼び出しの図を保存する（失敗した呼び出しの引数の図ではない）。図を置くのは、組み立て・（画像モードなら）描画・`output_path` の書き出しがすべて成功してから。群の指定が `blank` / `qc` の役割で全滅したときは、`blank` / `qc` を書くよう案内を添える。
 
 **検定はしない**。1 パネル = 1 項目、1 点 = 1 試料、群ごとに log10 空間の平均 ± SD を添えるだけで、
 群間の有意差は述べない（検定は `dataset_compare`。小 n の p 値が図に独り歩きするのを避ける）。
@@ -564,7 +571,7 @@ n_excluded_after_test` が `n_features_total`。下流が `n_features_total` と
 分母が 0 で描かなかった試料・`caveats`）。以下は `output="payload"`（または env `LIPIDMIX_PLOT_OUTPUT=payload`）の契約。
 ファイルは `save_figure(kind="species")`（`reports/figures/<analysis_id>_species.png` を dpi 300 で、同名の `.svg` と
 一緒に書く）。入力の誤り・パネルが 40 枚を超える・判断の記録ファイルが読めないときは
-`{"status": "error", "message": ...}`。失敗した呼び出しの後は前回の図を破棄する。**検定はしない**。
+`{"error": {"code": "DATASET_BAD_REQUEST", "message", "details"?}}`。失敗した呼び出しはセッションの図を変えない（前回の図が残る。§11.5）。**検定はしない**。
 
 | フィールド | 意味 |
 |------------|------|
@@ -594,7 +601,7 @@ n_excluded_after_test` が `n_features_total`。下流が `n_features_total` と
 説明（寄与率・`pc1_r_top` / `pc1_r_bottom`）。以下は `output="payload"` の契約。ファイルは
 `save_figure(kind="species_pca")`。ローディング全量（`loadings_rows`）は戻り値に載せずセッションに残す。
 入力の誤り（計算に使う試料が 3 未満・合計 0 の試料・未知の `orient_by` / `normalize` など）は
-`{"status": "error", "message": ...}`。失敗した呼び出しの後は前回の結果を破棄する。
+`{"error": {"code": "DATASET_BAD_REQUEST", "message", "details"?}}`。失敗した呼び出しは前回の図を変えず（§11.5）、入力の誤りなら結果（`ds.results`）にも何も足さない（結果を登録するのは計算が通ったときだけ）。
 
 | フィールド | 意味 |
 |------------|------|
@@ -618,7 +625,7 @@ autoscale の順。主成分の**符号は本来任意**で、`orient_by` を指
 ファイルは `save_figure(kind="loadings")`（PNG と同名 `.svg`）。入力元は `result_id`（省けば直近の `dataset_pca`。`species_pca` の結果も渡せる）で、
 候補（結果の出どころ）が 2 つ以上あってどれも優先できないときは `AMBIGUOUS_RESULT_SOURCE` で止まる。ローディングを持たない古い
 PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（`pcs` が 1〜3 個でない・その PCA にない主成分・未知の `value`・
-全件表示が 60 特徴量を超える、など）は `{"status": "error", "message": ...}`。失敗した呼び出しの後は前回の図を破棄する。
+全件表示が 60 特徴量を超える、など）は `{"error": {"code": "DATASET_BAD_REQUEST", "message", "details"?}}`。失敗した呼び出しはセッションの図を変えない（前回の図が残る。§11.5）。
 
 | フィールド | 意味 |
 |------------|------|

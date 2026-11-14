@@ -26,7 +26,8 @@ from metabolomix.quant.plugin import call, load_rules, rules_settings
 from metabolomix.quant.records import record_dir, write_record
 from metabolomix.quant.table import feature_rows, require_msdial_source
 
-__all__ = ["analysis_folder", "apply", "apply_tool", "preview", "preview_tool", "skip"]
+__all__ = ["analysis_folder", "apply", "apply_tool", "check_not_merged", "preview", "preview_tool",
+           "skip"]
 
 _UNRESOLVED = ("standard_ambiguous", "standard_missing")
 #: 値を残す status（それ以外のセルは NaN）。
@@ -55,9 +56,44 @@ def analysis_folder(ds) -> Path:
                       "実行してください。")
 
 
+def _merged_parents(ds) -> dict[str, str | None]:
+    """統合したデータセットの極性ごとの親のハンドル（特徴の `origin` から。統合でなければ空）。"""
+    parents: dict[str, str | None] = {}
+    metadata = getattr(ds, "feature_metadata", None) or {}
+    for fid in getattr(ds, "feature_ids", None) or []:
+        origin = (metadata.get(fid) or {}).get("origin")
+        if not isinstance(origin, dict):
+            continue
+        polarity = str(origin.get("polarity"))
+        if polarity not in parents:
+            parents[polarity] = origin.get("handle_id")
+            if len(parents) == 2:
+                break
+    return parents
+
+
+def check_not_merged(ds) -> None:
+    """陽イオンと陰イオンを統合したデータセットなら QUANT_ALREADY_MERGED。
+
+    内部標準は極性ごとの行で、参照表はクラスで引く。統合したデータセットを割ると、一方の極性の
+    内部標準で他方の極性の同じクラスを割りうる（同じ名前の内部標準が両極性にあれば、片方を選ぶと
+    両極性に当たる）。`skip=True` も統合の記録（極性ごとの `.arf2`・内部標準）を消し、極性を
+    取り違えたハンドルを作るので掛けない。正規化は統合の前に極性ごとに行う。
+    """
+    state = getattr(ds, "quant_state", None) or {}
+    parents = _merged_parents(ds)
+    if "merge" in (state.get("steps") or []) or parents:
+        raise DomainError("QUANT_ALREADY_MERGED",
+                          "このデータセットは陽イオンと陰イオンを統合済みです。内部標準は極性ごとなので、"
+                          "統合したものは正規化しません（一方の極性の内部標準で他方の極性の特徴を割りうる）。"
+                          "極性ごとのハンドルで正規化（または skip=True）してから統合し直してください。",
+                          {"record_id": state.get("record_id"), "parent_handles": parents})
+
+
 def _check_not_normalized(ds) -> None:
-    """正規化を掛けてよいか: 解析フォルダ由来・未正規化・未選別。"""
+    """正規化を掛けてよいか: 解析フォルダ由来・未統合・未正規化・未選別。"""
     require_msdial_source(ds)
+    check_not_merged(ds)
     state = getattr(ds, "quant_state", None)
     if state and "select" in (state.get("steps") or []):
         raise DomainError("QUANT_ALREADY_SELECTED",
@@ -237,7 +273,8 @@ def apply(ds, ref: ReferenceInput, bindings: dict | None, polarity: str, *,
     new = qderive.derive(ds, matrix=matrix, detected=mask, state=state)
     info = {"record_id": record_id, "status_counts": dict(counts), "unit": result.get("unit"),
             "polarity": polarity, "reference": {k: reference[k] for k in ("sha256", "label", "method")},
-            "classes": pv["classes"], "internal_standard_ids": is_ids}
+            "classes": pv["classes"], "internal_standard_ids": is_ids,
+            **qderive.exploratory_info(new)}
     return new, info
 
 
@@ -259,7 +296,8 @@ def skip(ds, polarity: str, *, folder: Path | None = None, reuse: dict | None = 
     state = qderive.quant_state(normalized=False, method=None, unit=None,
                                 record_id=record["record_id"], steps=[], skipped=["normalize"])
     new = qderive.derive(ds, matrix=ds.feature_matrix, detected=ds.detected_mask, state=state)
-    return new, {"record_id": record["record_id"], "polarity": polarity, "skipped": True}
+    return new, {"record_id": record["record_id"], "polarity": polarity, "skipped": True,
+                 **qderive.exploratory_info(new)}
 
 
 def _error(exc: DomainError) -> str:

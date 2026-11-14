@@ -63,8 +63,9 @@ CLAUDE.md 冒頭を直す（統合で合算する）。`MCP_INSTRUCTIONS` は統
   一方に決めず `ambiguous` の印と両方の候補を返す（13C2 の期待比に合わないことを「別物質」と言わない）。curation.md:312 を直す。
 - **A12-T18**: 陽イオンの既定の付加体の層に `[M+CH3OH+H]+` と `[M+H-2H2O]+` を足す（`rule_hash` は変わる。テストと spec の
   既定の表を直す）。
-- **B5-V67**: 特徴検索の統計に Fisher の p（`presence_p`）と `detection_driven` の印を足す（担当 7 が `as_two_group` の 2 群の形に
-  `presence_p` と `detection_driven` を載せる。ここはそれを列にする）。列の並びを固定したテストを直す。
+- **B5-V67**: 特徴検索の統計に Fisher の p（`presence_p`）と `detection_driven` の印を足す。`as_two_group` が記録の
+  `presence_p` と個体単位の検出数を 2 群の形に引き継ぎ `detection_driven` の印を足す部分も**この担当で入れた**（当初は
+  担当 7 の持ち分だったが、列にする側と同じ変更にまとめた）。列の並びを固定したテストを直す。
 - **B1-T17**: `dataset_feature_search` に `include_statistics`（既定 True）を足し、False なら比較の統計を付けない。
 - **D3-rt-offset**: 特徴検索が目標の RT と特徴の一意の一致から系統的な RT のずれを推定して返す（一意の一致 n ≥ 10 かつ
   |中央値| > 0.2 分のときだけ `shift_min` を出す。適用はしない）。目標の RT の中心をずらす `rt_offset_min` を受ける
@@ -175,8 +176,8 @@ CLAUDE.md 冒頭を直す（統合で合算する）。`MCP_INSTRUCTIONS` は統
   ことと落とした件数をメタ行に書く）。
 - **E1-T07（書き出し）**: 2×2 の交互作用の対比（差の差。向きと log2fc を持つ）を書き出せるようにする。
 - **B2（消費側）**: 書き出しのメタ行と根拠バンドルの `correction` に、記録の `p_adjust_method`（無ければ BH）を出す。
-- **B5（消費側）**: `as_two_group` が記録の `presence_p` と個体単位の検出数を 2 群の形に引き継ぎ、`detection_driven`
-  （検出の有無だけで差が出ている）の印を足す。
+- ~~**B5（消費側）**~~: `as_two_group` の `presence_p`・個体単位の検出数・`detection_driven` は担当 2 へ移した（担当 2 の
+  B5-V67）。
 - **A11-V68（図）**: volcano の題の「vs」の並びを `test vs reference` にそろえる。
 - **B12（図の大きさ）**: `dataset_plot` と（担当 1 の）mirror の既定の PNG の大きさを見直す（読める範囲で小さく）。
 - **C11-M06**: `write_report` の説明文から推奨の見出しの一覧を外す（見出しは自由）。
@@ -216,12 +217,15 @@ CLAUDE.md 冒頭を直す（統合で合算する）。`MCP_INSTRUCTIONS` は統
 
 持ち分: `pathway/*`（`msp_lipid.py` は担当 1）`tools/curation_tools.py` `curation/*`（`relations.py` は担当 2）`quant/*`。
 
-- **A8-V72/V60**: `pathway_project` が `dataset_compare` と同じ `test` を受ける。「常に反復をまとめる」と書いた docstring・
+- **A8-V72/V60**: `pathway_project` が `dataset_compare` と同じ検定の選択を `method`（既定 `moderated_t`）で受ける
+  （引数名は `test` ではなく `method`）。「常に反復をまとめる」と書いた docstring・
   pathway.md:71 を、行列の units に従うと直す。
 - **C1（パスウェイ側）**: `pathway_project` の lipid の関門（`missing_state`）を外す。脂質のアッセイでないときは、名前の文法が
   前提であることを `notes` で返す。
 - **B11-T46（残り）**: 返り値に「ノードの和はクラスの総量ではない」の 1 文を足す。
-- **B11-T44**: リモートの失敗で `job_id`・`remote-job.json` の場所・`run_dir` を返り値に残す（上流の worker.log は上流の改修が要る）。
+- **B11-T44**: リモートの失敗で `job_id`・ジョブの記録の場所・`run_dir` を返り値に残す（上流の worker.log は上流の改修が要る）。
+  記録はジョブの種類ごとに `remote-job-measure.json`（`pathway_project` の計測）と `remote-job-render.json`
+  （`pathway_plot` の描画）に分けた（1 つの `remote-job.json` では描画のジョブが計測の記録を上書きする）。
 - **B11-T45**: `mslm_bridge.R` の `requireNamespace` の失敗を、未導入と読み込みの失敗に分け、失敗の本文を返す
   （新しいコード `MSLM_R_PACKAGE_LOAD_FAILED`）。
 - **B11-T42**: handoff の as_is の経路でも名前の頭（`(` で始まる FA 名など）を確かめて落とし、理由別の件数に入れる。pathway.md:17 を合わせる。
@@ -255,3 +259,27 @@ CLAUDE.md 冒頭を直す（統合で合算する）。`MCP_INSTRUCTIONS` は統
 2. 担当ごとに別の目でレビューし、指摘を確かめてから直す。
 3. main で直列に `--no-ff` で統合し（衝突は main で解く）、全テストを通す。
 4. MCP_INSTRUCTIONS・文書・記録を main で直す。
+
+## 統合で決めたこと
+
+9 本を `fix/inventory` へ統合するときに、担当をまたいで決めたこと（実装はこのとおり）。
+
+- **`drift_mode="auto"` は尋ねない**: 既定の前処理は `needs_input` を出さない。補正の条件を満たしていても既定で
+  当てないとき（換算済みの値・注入順の出所が確かでない など）は補正せずに作り、理由と `drift_mode="on"` で
+  呼び直せることを返す（担当 3 の A6・C3）。
+- **交絡は印であって関門ではない**: `dataset_compare` と spec v2 の比較は `allow_confounded` の既定を True にし、完全交絡でも
+  比べて先頭の `confounding` と対比ごとの `confounded` に印を付ける。止めるのは `allow_confounded=false` を明示したとき
+  だけ（`STATISTIC_CONFOUNDED`。担当 4 の C4）。最初の概観（`dataset_overview`）だけは、全群をまとめた表で完全交絡
+  （と探索専用のデータセット）なら比較の段を回さず `omitted` に理由を書く。
+- **行列は直近の前処理のものを使う**: `matrix_id` を省いた `dataset_compare` / `dataset_pca` は、そのハンドルで
+  `dataset_preprocess` が最後に作った行列を使い（無ければ既定の前処理）、`matrix_source`（`matrix_id` /
+  `latest_preprocess` / `default`）で示す（担当 4 の C12）。
+- **探索専用のデータセットも書き出せる**: 未完了の実行・検証を通っていない pipeline の単位から開いたデータセットの
+  書き出しと根拠バンドルを断らず、メタ行 `# exploratory = true` と manifest の `exploratory` に理由を書く（担当 7 の C19。
+  `EXPLORATORY_ONLY_DATASET` は消した）。定量の派生（正規化・統合・選別）も親の印を引き継ぐ（統合はどちらかの親が
+  探索専用なら探索専用。統合後の追補）。
+- **`assay_kind` はハンドルごと**: アッセイ種別はデータセット（ハンドル）が持ち、`record_objective` は直近か渡した
+  ハンドルへ書き、`load_dataset` は解析フォルダの目的ファイルから読み戻す。`session.assay_kind` は直近のハンドルの値を
+  読むだけ（担当 8 の C1）。
+- **ツールは 58**: 担当 3 の `pipeline_sample_sheet` と担当 8 の `job_status` を足した合計（登録数・`USAGE.md`・
+  CLAUDE.md の冒頭は統合で合算した）。

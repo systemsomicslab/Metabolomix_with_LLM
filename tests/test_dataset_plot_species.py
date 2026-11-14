@@ -669,3 +669,11 @@ def test_rows_by_spot_skips_nan_cells(loaded):
     ds.feature_matrix[0][SAMPLES.index("ctrl_1")] = np.nan
     rows = dataset_rows.rows_by_spot(ds, ["0"], groups=["ctrl"])
     assert NAME["ctrl_1"] not in {r["file_name"] for r in rows[0]}
+
+
+def test_failed_group_intensity_call_keeps_the_previous_figure(loaded):
+    plot_tools.dataset_plot(kind="group_intensity", items=["PG"], groups=["ctrl"])
+    before = loaded["ds"].figures["group_intensity"]
+    err = _error(plot_tools.dataset_plot(kind="group_intensity", items=["PG"], groups=["nonexistent"]))
+    assert err["code"] == "DATASET_BAD_REQUEST"
+    assert loaded["ds"].figures["group_intensity"] is before

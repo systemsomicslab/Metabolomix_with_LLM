@@ -47,6 +47,8 @@ def _context(dataset_handle, polarity):
             "データセットがありません。load_dataset を実行するか、開いている"
             "ハンドルを渡してください。")
     try:
+        # 統合したデータセットは極性が決まらないので、極性を尋ねる前に統合済みと答える。
+        normalize.check_not_merged(ds)
         resolved = resolve_quant_polarity(ds, holder, polarity)
     except DomainError as exc:
         return quant_error(exc.code, exc.message, exc.details or None)
@@ -77,7 +79,8 @@ def dataset_quant_preview(reference_path: str, bindings: dict | None = None,
     bindings は {内部標準の名前: 特徴 ID}（unresolved の standard_name が鍵）で候補を選ぶ。濃度から係数を作るなら
     concentrations（{内部標準名: 濃度}）と solvent_volume・cells_millions（unit 任意）。
     polarity は極性が決まらないデータセットのとき必須。規則プラグイン（[quant] rules）が要る。
-    MS-DIAL の解析フォルダ（.arf / .arf2）から読んだデータセットだけ（ほかは QUANT_SOURCE_UNSUPPORTED）。
+    MS-DIAL の解析フォルダ（.arf / .arf2）から読んだデータセットだけ（ほかは QUANT_SOURCE_UNSUPPORTED。
+    陽陰を統合したものは QUANT_ALREADY_MERGED）。
     dataset_handle: ハンドルのデータセット。省略時は直近のデータセット。
     """
     ctx = _context(dataset_handle, polarity)
@@ -107,7 +110,9 @@ def dataset_quant_apply(reference_path: str | None = None, bindings: dict | None
     detected_mask で印を引き継ぐ。内部標準が 0・負・欠測の試料は欠測にして理由を数える）。
     正規化済みのデータセットには掛けない。skip=True は値を変えず「正規化を飛ばした」記録と
     派生を作る（reference_path は skip=True のときだけ省ける。読まない）。選別済みの
-    データセットには掛けない（QUANT_ALREADY_SELECTED）。新しいハンドルの極性は解いた polarity。
+    データセットには掛けない（QUANT_ALREADY_SELECTED）。陽陰を統合したデータセットにも掛けない
+    （QUANT_ALREADY_MERGED。内部標準は極性ごとなので、正規化は統合の前に極性ごとに行う）。
+    新しいハンドルの極性は解いた polarity。親が探索専用なら派生も探索専用（戻り値の exploratory）。
     dataset_handle: ハンドルのデータセット。省略時は直近のデータセット。
     """
     ctx = _context(dataset_handle, polarity)
@@ -145,6 +150,7 @@ def dataset_merge_polarities(positive_handle: str, negative_handle: str,
     記録は 2 つの解析フォルダの共通の親の reports/quant/。共通の親が決められなければ
     needs_input で record_folder（既存のフォルダ）を求める。規則プラグイン（[quant] rules）が要る。
     キュレーションのフラグは写さず、選別が極性ごとの .arf2 からその時点のものを読む。
+    どちらかが探索専用なら統合も探索専用（戻り値の exploratory に極性付きの理由）。
     """
     pos = resolve_holder(positive_handle)
     if isinstance(pos, str):
@@ -171,6 +177,7 @@ def dataset_select_features(skip_adduct_filter: bool = False, apply_curation: bo
     決まらなければ polarity が必須。統合後は各特徴の出自の極性）。
     全判断は解析フォルダの reports/quant/<record_id>.audit.json に書き、戻り値は理由ごとの
     件数と例 5 件・record_id・採用表の sha256 とファイル名だけ。規則プラグイン（[quant] rules）が要る。
+    親が探索専用なら派生も探索専用（戻り値の exploratory）。
     dataset_handle: ハンドルのデータセット。省略時は直近のデータセット。
     """
     holder = resolve_holder(dataset_handle)

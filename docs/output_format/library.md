@@ -150,8 +150,8 @@
 ものではない旨が `note` に付く。
 
 **ライブラリの示し方**: `library_load` の戻り値はライブラリをいつもファイル名（`file`）と中身の sha256
-（`source_sha256`）で示し、置き場所（パス）は出さない。名前を伏せる切り替え（旧 `library_names`）は消した
-（2026-11-13 の事実確認 C5）。`load_dataset` の戻り値の `library` / `library_record` も
+（`source_sha256`）で示し、置き場所（パス）は出さない。名前を伏せる切り替えの引数は無い（ファイル名と sha256 は
+いつも出る）。`load_dataset` の戻り値の `library` / `library_record` も
 いつもファイル名と sha256 だけ（[reanalysis.md](reanalysis.md) §1 の `load_dataset` の表）。
 
 **エラー戻り値**: ライブラリを 1 つに決められないときは `{"status": "error", "code": ..., "message": ..., "details": ...}`

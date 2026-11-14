@@ -190,3 +190,32 @@ def test_set_current_sets_handle_id():
     session_state.session.set_current("dh_x")
     assert session_state.session.current_handle_id == "dh_x"
     session_state.session.set_current(None)
+
+
+# ---- 探索専用の印（F4） ----
+
+def test_derive_carries_exploratory_mark():
+    ds = _ds()
+    ds.exploratory_only, ds.exploratory_reason = True, "解析ジョブが完了していない（status failed）"
+    new = qd.derive(ds, matrix=ds.feature_matrix, detected=ds.detected_mask, state=_state())
+    assert new.exploratory_only is True and new.exploratory_reason == ds.exploratory_reason
+    clean = qd.derive(_ds(), matrix=ds.feature_matrix, detected=ds.detected_mask, state=_state())
+    assert clean.exploratory_only is False and clean.exploratory_reason is None
+    assert qd.exploratory_info(clean) == {}
+    assert qd.exploratory_info(new) == {"exploratory": {"exploratory_only": True,
+                                                        "reason": ds.exploratory_reason}}
+
+
+def test_carry_exploratory_combines_labelled_parents():
+    a, b, new = _ds(), _ds(), _ds()
+    qd.carry_exploratory(new, [a, b], labels=["positive", "negative"])
+    assert new.exploratory_only is False and new.exploratory_reason is None
+    b.exploratory_only, b.exploratory_reason = True, "r-b"
+    qd.carry_exploratory(new, [a, b], labels=["positive", "negative"])
+    assert new.exploratory_only is True and new.exploratory_reason == "negative: r-b"
+    a.exploratory_only = True  # 理由の無い印も、どちらの親かが分かるように既定の文面で数える
+    qd.carry_exploratory(new, [a, b], labels=["positive", "negative"])
+    assert new.exploratory_reason == ("positive: incomplete analysis run (exploratory only); "
+                                      "negative: r-b")
+    qd.carry_exploratory(new, [a])  # ラベル無しで理由も無ければ理由は None（書き出しが既定を使う）
+    assert new.exploratory_only is True and new.exploratory_reason is None

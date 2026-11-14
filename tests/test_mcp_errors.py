@@ -117,5 +117,25 @@ class NeedsInputEnvelopeTests(unittest.TestCase):
                                            kwargs.pop("options"), **kwargs)
 
 
+
+class CodeListsTests(unittest.TestCase):
+    """仕分けの一覧の直し（2026-11-14）で足した・消した符号が、封筒の種類ごとの一覧と合う。"""
+
+    def test_new_codes_are_listed_by_envelope(self):
+        for code in ("POLARITY_INVALID", "PIPELINE_INPUT_INVALID"):  # console_error で返る
+            self.assertIn(code, mcp_errors.CONSOLE_ERROR_CODES)
+        for code in ("FIGURE_SAVE_FAILED", "STALE_FIGURE", "JOB_NOT_FOUND", "JOB_LIMIT", "JOB_FAILED",
+                     "PLSDA_SPECIFICATION_INVALID", "PLSDA_MISSING_VALUES", "PLSDA_TOO_FEW_FEATURES",
+                     "SAMPLE_TABLE_INVALID", "SAMPLE_SHEET_EXISTS"):  # mztab_error で返る
+            self.assertIn(code, mcp_errors.MZTAB_ERROR_CODES)
+        self.assertIn("MSLM_R_PACKAGE_LOAD_FAILED", mcp_errors.PATHWAY_ERROR_CODES)
+
+    def test_removed_codes_are_not_listed(self):
+        lists = mcp_errors.CONSOLE_ERROR_CODES | mcp_errors.MZTAB_ERROR_CODES | mcp_errors.PATHWAY_ERROR_CODES
+        for code in ("EXPLORATORY_ONLY_DATASET", "QUANT_NORMALIZE_STEP_REQUIRED",
+                     "PIPELINE_DOWNSTREAM_REMOVED", "REPEATED_MEASURES_UNSUPPORTED", "LIBRARY_BAD_REQUEST"):
+            self.assertNotIn(code, lists)
+
+
 if __name__ == "__main__":
     unittest.main()

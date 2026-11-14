@@ -183,6 +183,11 @@ SME 由来という食い違った行ができる。
 
 v2 の実験情報シートは、既知の列（と任意の `subject_id`）の後ろに**因子の列**（`Genotype`・`Treatment` など）を足せる。列名は空でなく、既知の列・足した列どうしと重ならないこと（重なれば `SAMPLE_MANIFEST_INVALID`）。値（空は欠落）は行にそのまま載り、受領の `samples.rows`・`dataset_set_sample_metadata`・データセットの試料の表を通って、analysis-spec v2 の `design.factors` / `covariates` が列名で引く。因子の列の値だけの変更も `changed_fields` に列名で出て、差次的解析の結果を古くする。
 
+`pipeline_sample_sheet` は ISA / mwTab の試料の表からこの v2 のシートを raw のフォルダに書く（受付と同じ読み手で
+確かめてから書く）。同じ名前のシートが既にあり `overwrite=True` でなければ `SAMPLE_SHEET_EXISTS`（`details.path`）、
+試料の表・引数が読めない・合わない（因子の列が無い・`output_name` にフォルダを含む・読み書きできないなど）ときは
+`SAMPLE_TABLE_INVALID` で、どちらもシートを書かない。
+
 ### 13.6 `inchikey_coverage`
 
 `load_dataset` の要約と `dataset_status` が読む集計。
