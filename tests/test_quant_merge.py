@@ -771,6 +771,43 @@ def test_tool_merge_carries_the_kind_recorded_on_the_negative_handle(tmp_path, m
     assert handles.registry.get(hp).dataset.assay_kind == "unknown"
 
 
+def test_conflicting_kinds_send_the_user_to_the_parent_handles(tmp_path, monkeypatch):
+    """陽陰の種別が食い違うときの注記は、誤っている側の極性のハンドルへ記録し直して統合し直すよう言う
+    （レビュー V1）。統合したハンドルは陽イオンの写しで解析フォルダも陽イオンのものなので、そこへ記録すると
+    陽イオンの解析フォルダの目的を書き換え、開き直した陽イオンのデータセットの種別まで変わる。注記どおりに
+    すれば、陽イオンの目的は 1 バイトも変わらず、統合し直したハンドルが揃った種別を持つ。"""
+    from metabolomix.core import mcp_core
+    from metabolomix.tools import objective
+
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.analysis_dir = str(tmp_path / "run" / "pos")
+    neg.analysis_dir = str(tmp_path / "run" / "neg")
+    hp, hn = _open(pos, "positive"), _open(neg, "negative")
+    objective.record_objective("study", assay_kind="metabolite", dataset_handle=hp)
+    objective.record_objective("study", assay_kind="lipid", dataset_handle=hn)
+    pos_file = tmp_path / "run" / "pos" / "reports" / "study.objective.md"
+    before = pos_file.read_bytes()
+
+    out = json.loads(_tool()(hp, hn))
+    assert out["status"] == "merged" and out["assay_kind"] == "unknown"
+    (note,) = out["notes"]
+    assert "食い違う" in note and hp in note and hn in note and "統合し直す" in note
+    assert out["dataset_handle"] not in note and "統合したハンドル>" not in note
+
+    def recalled(holder_id, ds):
+        return objective.recall_assay_kind(ds, mcp_core._report_dir_candidates(handles.registry.get(holder_id)))[0]
+
+    # 注記どおり、誤っている側（陰イオン）を直して統合し直す
+    objective.record_objective("study", assay_kind="metabolite", dataset_handle=hn)
+    again = json.loads(_tool()(hp, hn))
+    assert again["assay_kind"] == "metabolite" and "notes" not in again
+    assert handles.registry.get(again["dataset_handle"]).dataset.assay_kind == "metabolite"
+    # 陽イオンの解析フォルダの目的は書き換わらず、開き直したときの種別もそれぞれの記録のまま
+    assert pos_file.read_bytes() == before
+    assert recalled(hp, pos) == "metabolite" and recalled(hn, neg) == "metabolite"
+
+
 def test_single_parent_derive_keeps_the_kind(tmp_path, monkeypatch):
     """正規化・選別の派生（親 1 つ）は親の種別をそのまま持つ。"""
     pos, _neg = _pair(tmp_path)

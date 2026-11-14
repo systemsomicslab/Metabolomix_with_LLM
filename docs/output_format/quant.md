@@ -113,8 +113,11 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
   `unknown`、それ以外は `same`。`batch` は `same` / `different`。`n_samples_differ` は注入順かバッチの違う試料の数。
   記録の `summary.negative_runs` にも書く。陽陰は別の注入なので、統計の前処理は極性ごとの測定でドリフトを当てる）。
   `assay_kind`（統合したハンドルのアッセイ種別。陽陰で同じならその値、片方が `unknown` ならもう片方、`lipid` と
-  `metabolite` で食い違えば `unknown`。陽陰で違うときだけ `notes` にどちらから決めたか・食い違いを書き、食い違いは
-  統合したハンドルへ `record_objective(dataset_handle=..., assay_kind=...)` で確定する）。
+  `metabolite` で食い違えば `unknown`。陽陰で違うときだけ `notes` にどちらから決めたか・食い違いを書く。食い違いは、
+  誤っている側の極性のハンドル（注記が両方のハンドル ID を挙げる）へ
+  `record_objective(dataset_handle=<その極性のハンドル>, assay_kind=...)` で記録し直してから統合し直す。統合したハンドルは
+  陽イオンの写しで解析フォルダも陽イオンのものなので、そこへ記録すると陽イオンの解析フォルダに結び付いた目的に書き、
+  開き直した陽イオンのデータセットの種別まで変わる）。
   特徴 ID は `positive:<id>` / `negative:<id>`、行は POS の特徴のあとに NEG、試料の列は共通 ID
   （POS の順）。各特徴の出自は `feature_metadata[<fid>]["origin"]`（極性と元の特徴 ID）。
 - **select**: `status`・`dataset_handle`・`record_id`・`audit_file`・`n_retained`・`n_excluded`・

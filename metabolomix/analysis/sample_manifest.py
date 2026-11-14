@@ -850,9 +850,10 @@ def apply_metadata(ds, rows: list[dict]) -> dict:
                     if before.get(field) != after.get(field)}
 
     # ここまでの検証が全部通ってから、まとめて反映する（半端な適用を作らない）。
-    # 因子の列は設計（design.factors）の入力なので、群と同じく差次的解析を古くする。
+    # 因子の列は設計（design.factors）の入力なので、群と同じく差次的解析を古くする。捨てた図の理由
+    # （save_figure の STALE_FIGURE の details.reason）には、広げる前の実際に変わった列だけを残す。
     invalidate_results(ds, changed | (STAT_FIELDS if changed & _factor_columns_of(rows + old_rows)
-                                      else set()))
+                                      else set()), reason=changed)
     ds.sample_metadata_rows = rows
     ds.sample_ids = [row["sample_id"] for row in rows]
     if changed:   # 何も変わらない再適用は版を進めない（図・分子種 PCA を無駄に古くしない）

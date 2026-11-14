@@ -147,8 +147,9 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
     まだ一度も描いていなければ missing_state（`dataset_plot` を案内）。結果から作った図（pca / volcano / loadings /
     species_pca）は、その結果が現在のものでなければ保存せず `STALE_FIGURE`（理由と `required_tools=["dataset_plot"]`。
     前処理・解析をやり直してから描き直す）。除外（`dataset_exclude`）と試料の表の更新
-    （`dataset_set_sample_metadata`。前処理の入力の列なら pca / loadings / species_pca / volcano、群だけなら volcano）は
-    図ごと捨てるが、捨てた図も `STALE_FIGURE`（`details.reason` に変わったもの: `exclusion` や列名）で、
+    （`dataset_set_sample_metadata`。前処理の入力の列なら pca / loadings / species_pca / volcano、群・足した因子の列
+    だけなら volcano）は図ごと捨てるが、捨てた図も `STALE_FIGURE`（`details.reason` に実際に変わったもの: `exclusion`
+    や列名）で、
     描いたことの無い図（missing_state）と見分けられる。group_intensity / species / species_pca は群を図に焼き込むので、
     試料の情報（群・役割）が更新されたあとも `STALE_FIGURE`（species_pca は結果から作った図でもある）。
     eic / eic_compounds は結果から作った図ではないので、描いたとおりに保存する（あとで `dataset_exclude` しても変わらない）。

@@ -52,8 +52,9 @@ Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT
 `ds.last_differential`）。`dataset_exclude` や前処理・群の変更で古くなった結果は
 `result_state.invalidate_results` が `last_*` と `ds.figures` の該当 kind を同時に捨てるので、
 古い図は最新として描かれず保存もされない（捨てた kind には理由の印 `ds.discarded_figures` を残し、`save_figure` は
-`STALE_FIGURE` を返す。`dataset_plot` が同じ kind を描き直すと印は消える）。別の kind の引数が渡されたら `DATASET_BAD_REQUEST`
-（`_check_arguments`。どの kind の引数かを書く）。
+`STALE_FIGURE` を返す。`dataset_plot` が同じ kind を描き直すと印は消える）。別の kind の引数が渡されても断らず、
+`_drop_unused_arguments` が外して注記を返し（どの kind の引数か）、説明の最後の `notes:` 行（payload は `notes` 欄、描けなかった
+誤りの封筒〔`missing_state` と `needs_input` を除く〕は `details.notes`）に書く。図はその引数を渡さない呼び出しと同じで、置き場の図（`ds.figures[kind]`）に注記は混ぜない。
 
 `group_intensity` / `species` / `species_pca` の項目・行は `plots/dataset_rows.py` が `DatasetState` から選ぶ:
 値は `feature_matrix`、gap-fill の印は `detected_mask`、群は試料の対応表（`sample_metadata_rows`）の
@@ -71,8 +72,8 @@ EIC は特徴 ID（= `.arf2` の MasterAlignmentID）をそのまま `.EIC.aef` 
 試料（`included_sample_indices`）を外す。
 
 1. metabolomix/tools/plot_tools.py  dataset_plot()
-2. ├─ metabolomix/tools/_holder.py  resolve_holder()
-3. ├─ metabolomix/tools/plot_tools.py  _check_arguments()
+2. ├─ metabolomix/tools/plot_tools.py  _drop_unused_arguments()
+3. ├─ metabolomix/tools/_holder.py  resolve_holder()
 4. ├─ [kind=volcano] metabolomix/tools/plot_tools.py  _volcano()
 5. │  ├─ metabolomix/analysis/stats_results.py  split_result_ref()
 6. │  ├─ metabolomix/tools/plot_tools.py  _pick_result()
@@ -119,7 +120,8 @@ EIC は特徴 ID（= `.arf2` の MasterAlignmentID）をそのまま `.EIC.aef` 
 （`required_tools` は `dataset_plot`、データセットが無ければ `load_dataset`）。置き場の図が古ければ（`_stale_figure`）
 保存せず `STALE_FIGURE`（`details.required_tools` は `dataset_plot`）。除外・試料の表の更新で
 `result_state.invalidate_results` が捨てた図も、捨てた kind に残る印（`ds.discarded_figures`。`dataset_plot` が同じ kind を
-描き直すと消える）から `STALE_FIGURE`（`details.reason` に変わったもの。文言は `_discarded_message`）。
+描き直すと消える）から `STALE_FIGURE`（`details.reason` に実際に変わったもの。因子の列だけの更新は `invalidate_results` の
+`reason` に広げる前の列を渡すので、群を挙げない。文言は `_discarded_message`）。
 状態変更: `reports/figures/` に PNG（`loadings` `group_intensity` `species` `species_pca` は SVG も）を書く。
 
 `kind` は `dataset_plot` の kind（`FIGURE_KINDS`）。`source` 引数と ARF の候補は無い。未知の `kind` は

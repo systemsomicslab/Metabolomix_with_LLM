@@ -567,21 +567,26 @@ def test_species_pca_respects_excluded_samples_and_features(loaded):
 # ---------- 引数の持ち主・形式名・図の古さ・save_figure ----------
 
 def test_argument_ownership_names_the_owning_kinds(loaded):
-    err = _error(plot_tools.dataset_plot(kind="species", items=["PG"], groups=["ctrl"], detection_limit=5))
-    assert err["code"] == "DATASET_BAD_REQUEST" and "group_intensity" in err["message"]
-    err = _error(plot_tools.dataset_plot(kind="group_intensity", items=["PG"], groups=["ctrl"],
-                                         share_basis=["PG"]))
-    assert "species" in err["message"] and err["details"]["belongs_to"] == ["species"]
-    err = _error(plot_tools.dataset_plot(kind="species", items=["PG"], groups=["ctrl"], normalize="total"))
-    assert "species_pca" in err["message"]
-    err = _error(plot_tools.dataset_plot(kind="group_intensity", items=["PG"], groups=["ctrl"],
-                                         require_msms=True))
-    assert err["details"]["belongs_to"] == ["species", "species_pca"]       # 共有する kind は全部挙げる
-    err = _error(plot_tools.dataset_plot(kind="volcano", items=["PG"]))
-    assert err["details"]["belongs_to"] == ["group_intensity", "species", "species_pca"]
+    """別の kind の引数は断らずに使わず、notes にその引数の持ち主の kind を全部挙げる（レビュー V4）。"""
+    def notes(kind, **kw):
+        body = _p(kind, **kw)
+        return body.pop("notes"), body
+
+    got, body = notes("species", items=["PG"], groups=["ctrl"], detection_limit=5)
+    assert got == ["detection_limit は kind=group_intensity の引数なので使っていない（kind='species'）。"]
+    assert body == _species(items=["PG"], groups=["ctrl"])               # 描いた図は渡さないときと同じ
+    got, _ = notes("group_intensity", items=["PG"], groups=["ctrl"], share_basis=["PG"])
+    assert got == ["share_basis は kind=species の引数なので使っていない（kind='group_intensity'）。"]
+    got, _ = notes("species", items=["PG"], groups=["ctrl"], normalize="total")
+    assert "kind=species_pca の引数" in got[0]
+    got, _ = notes("group_intensity", items=["PG"], groups=["ctrl"], require_msms=True)
+    assert "kind=species / species_pca の引数" in got[0]                  # 共有する kind は全部挙げる
     # value は loadings と species が共有する（loadings の値は r / coefficient、species の値は share / intensity）
-    err = _error(plot_tools.dataset_plot(kind="group_intensity", items=["PG"], groups=["ctrl"], value="share"))
-    assert err["details"]["belongs_to"] == ["loadings", "species"]
+    got, _ = notes("group_intensity", items=["PG"], groups=["ctrl"], value="share")
+    assert "kind=loadings / species の引数" in got[0]
+    # 結果の無い volcano でも、前提の誤り（missing_state）の前に引数では断らない
+    err = _error(plot_tools.dataset_plot(kind="volcano", items=["PG"]))
+    assert err["code"] == "missing_state"
 
 
 def test_figures_with_baked_groups_go_stale_when_the_metadata_revision_moves(loaded, tmp_path):

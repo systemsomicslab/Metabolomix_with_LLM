@@ -233,13 +233,16 @@ def merged_source_verification(pos_ds, neg_ds) -> tuple[str, dict]:
     return merged, {"source_verification": {"merged": merged, **sides}}
 
 
-def merged_assay_kind(pos_ds, neg_ds) -> tuple[str, list[str]]:
+def merged_assay_kind(pos_ds, neg_ds, *, pos_handle_id: str | None = None,
+                      neg_handle_id: str | None = None) -> tuple[str, list[str]]:
     """統合のアッセイ種別と、陽陰で違うときだけの注記。
 
     `derive` は陽イオンの写しなので、そのままでは陰イオンにだけ記録した種別（`record_objective` は書いた
     ハンドルだけを切り替える）を落とす。陽陰で同じならその値、片方が `unknown` ならもう片方、`lipid` と
-    `metabolite` で食い違えば `unknown`（どちらの解釈規則も黙って当てない。統合したハンドルへ
-    `record_objective(assay_kind=...)` で確定する）。
+    `metabolite` で食い違えば `unknown`（どちらの解釈規則も黙って当てない）。食い違いの注記は、誤っている側の
+    極性のハンドル（`pos_handle_id` / `neg_handle_id`）へ `record_objective(assay_kind=...)` で記録し直してから
+    統合し直すよう言う——統合したハンドルは陽イオンの写しで解析フォルダ（`analysis_dir`）も陽イオンのものなので、
+    そこへ記録すると陽イオンの解析フォルダに結び付いた目的を書き、開き直した陽イオンのデータセットの種別まで変わる。
     """
     sides = {"positive": dataset_assay_kind(pos_ds), "negative": dataset_assay_kind(neg_ds)}
     if sides["positive"] == sides["negative"]:
@@ -249,9 +252,13 @@ def merged_assay_kind(pos_ds, neg_ds) -> tuple[str, list[str]]:
         (side, kind), = known.items()
         other = "negative" if side == "positive" else "positive"
         return kind, [f"assay_kind は {side} の {kind} を採った（{other} は unknown）。"]
+    parents = (f"positive={pos_handle_id or '陽イオンのハンドル'}, "
+               f"negative={neg_handle_id or '陰イオンのハンドル'}")
     return "unknown", [f"assay_kind が陽陰で食い違う（positive={sides['positive']}, negative={sides['negative']}）"
-                       "ので unknown にした。record_objective(dataset_handle=<統合したハンドル>, assay_kind=...) で"
-                       "確定する。"]
+                       "ので unknown にした。誤っている側の極性のハンドル（" + parents + "）へ "
+                       "record_objective(dataset_handle=<その極性のハンドル>, assay_kind=...) で記録し直してから"
+                       "統合し直す（統合したハンドルへ記録すると、陽イオンの解析フォルダに結び付いた目的に書くので、"
+                       "開き直した陽イオンのデータセットの種別まで変わる）。"]
 
 
 def _runs_match(pos_runs: list[dict], neg_runs: list[dict]) -> dict:
@@ -397,7 +404,8 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     qderive.carry_exploratory(new, [pos_ds, neg_ds], labels=["positive", "negative"])
     new.source_verification, verification_info = merged_source_verification(pos_ds, neg_ds)
     # アッセイ種別も POS の写しにしない（NEG にだけ記録した種別を黙って落とさない）
-    new.assay_kind, kind_notes = merged_assay_kind(pos_ds, neg_ds)
+    new.assay_kind, kind_notes = merged_assay_kind(pos_ds, neg_ds, pos_handle_id=pos_handle_id,
+                                                   neg_handle_id=neg_handle_id)
     # 陰イオンの測定を、統合したデータセットが陽イオンの測定として読む値（統計エンジンと同じ読み方）と比べる
     pos_runs = sample_runs(new)
     runs_match = _runs_match([pos_runs[str(sid)] for sid in pos_ids],

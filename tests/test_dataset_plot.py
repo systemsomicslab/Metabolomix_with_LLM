@@ -1,7 +1,7 @@
 """dataset_plot（volcano・pca・loadings・eic・eic_compounds）と図の置き場（B-2b Task 6）。
 
 純粋な組み立て（`plots/*`）は各々のテストが固定している。ここでは `DatasetState` を入力に、
-ツール層の仕事——結果の選び方（古い結果は描かない）・引数の取り違えの拒否・`.EIC.aef` の出所・
+ツール層の仕事——結果の選び方（古い結果は描かない）・別の kind の引数の扱い（断らずに notes）・`.EIC.aef` の出所・
 形式名・`save_figure` が `ds.figures` から描くこと——を見る。fixture はテスト自身が作る。
 """
 import json
@@ -221,17 +221,30 @@ def test_payload_format_names_are_kept(tmp_path):
                     dataset_handle=handle_id)["plot_schema"] == "lipidmix.species_pca.v1"
 
 
-def test_irrelevant_argument_rejected():
-    _analysed()
-    err = json.loads(plot_tools.dataset_plot(kind="volcano", top_n=5))["error"]
-    assert err["code"] == "DATASET_BAD_REQUEST"
-    assert "top_n" in err["message"] and "loadings" in err["message"]
-    err = json.loads(plot_tools.dataset_plot(kind="pca", feature_id="1"))["error"]
-    assert err["code"] == "DATASET_BAD_REQUEST" and "eic" in err["message"]
-    err = json.loads(plot_tools.dataset_plot(kind="loadings", color_by="batch"))["error"]
-    assert err["code"] == "DATASET_BAD_REQUEST" and "pca" in err["message"]
+def test_irrelevant_argument_is_ignored_with_a_note():
+    """別の kind の引数は断らずに使わず、図を描いて説明の `notes:` 行（payload は `notes`）にどの kind の引数かを
+    書く（save_figure と同じ扱い。レビュー V4）。図はその引数を渡さない呼び出しと同じもの。未知の kind は誤り。"""
+    ds = _analysed()
+    body = plot_tools.dataset_plot(kind="volcano", top_n=5)
+    assert isinstance(body, list) and isinstance(body[1], Image)
+    assert "\nnotes: top_n は kind=loadings の引数なので使っていない（kind='volcano'）。" in body[0]
+    caption = plot_tools.dataset_plot(kind="pca", feature_id="1")[0]
+    assert "notes: feature_id は kind=eic の引数" in caption
+    caption = plot_tools.dataset_plot(kind="loadings", color_by="batch")[0]
+    assert "notes: color_by は kind=pca の引数" in caption
+    # payload は notes 欄（形式名は変えない）。図は引数を渡さない呼び出しと同じ
+    plain = _payload(kind="pca")
+    noted = _payload(kind="pca", top_n=5, contrast_id="treat_vs_ctrl")
+    assert noted.pop("notes") == ["contrast_id は kind=volcano の引数なので使っていない（kind='pca'）。",
+                                  "top_n は kind=loadings の引数なので使っていない（kind='pca'）。"]
+    assert noted == plain and noted["plot_schema"] == "lipidmix.pca_scores.v1"
+    assert "notes" not in plain
+    assert ds.figures["pca"]["payload"] == plain       # 置き場の図にも notes を混ぜない
+    # 描けない呼び出しの誤りにも、使わなかった引数を添える（ここは .EIC.aef が無い）
     err = json.loads(plot_tools.dataset_plot(kind="eic", result_id="res_x", feature_id="0"))["error"]
-    assert err["code"] == "DATASET_BAD_REQUEST" and "result_id" in err["message"]
+    assert err["code"] == "COMPANION_ARTIFACT_MISSING"
+    assert err["details"]["notes"] == [
+        "result_id は kind=volcano / pca / loadings の引数なので使っていない（kind='eic'）。"]
     err = json.loads(plot_tools.dataset_plot(kind="heatmap"))["error"]
     assert err["code"] == "DATASET_BAD_REQUEST"
     assert all(kind in err["message"] for kind in plot_tools._KINDS)
@@ -384,6 +397,23 @@ def test_only_held_figures_get_the_discard_mark():
     err = json.loads(reports.save_figure("pca", "m-1"))["error"]
     assert err["code"] == "STALE_FIGURE" and err["details"]["reason"] == ["batch", "role"]
     assert "batch, role" in err["message"]
+
+
+def test_factor_only_change_names_only_the_changed_column():
+    """足した因子の列だけが変わった試料の表の更新は、群と同じく差次的解析を古くする（volcano を捨てる）が、
+    捨てた理由に挙げるのは実際に変わった列だけ（群・biological_sample_id は変わっていない。レビュー V2）。"""
+    ds = _analysed()
+    _payload(kind="pca")
+    _payload(kind="volcano")
+    rows = [dict(row, dose="hi" if i % 2 else "lo") for i, row in enumerate(ds.sample_metadata_rows)]
+    out = sample_manifest.apply_metadata(ds, rows)
+    assert out["changed_fields"] == ["dose"]
+    assert "volcano" not in ds.figures and "pca" in ds.figures     # 捨てる範囲は群の変更と同じ
+    assert ds.discarded_figures == {"volcano": ["dose"]}
+    err = json.loads(reports.save_figure("volcano", "f-1"))["error"]
+    assert err["code"] == "STALE_FIGURE"
+    assert err["details"] == {"kind": "volcano", "reason": ["dose"], "required_tools": ["dataset_plot"]}
+    assert "変わった列: dose）" in err["message"] and "group" not in err["message"]
 
 
 def test_pca_figure_with_baked_metadata_is_stale_when_the_revision_moves(tmp_path):
