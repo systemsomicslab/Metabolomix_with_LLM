@@ -207,7 +207,8 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         読み込みは成功し、`overview` に `status:"unavailable"` と理由が載る。
 
     wait_seconds: 読み込みを待つ秒数（既定 20。0〜30 秒。範囲の外の数は丸めて `wait_seconds_note` を
-        付ける。数でないもの（bool・文字列・NaN）は `DATASET_BAD_REQUEST`）。
+        付ける。NaN は `DATASET_BAD_REQUEST`。数でない値は MCP の引数検査が先に扱う: 真偽値と数に読める
+        文字列は数に変えて通り（true は 1 秒）、数に読めない値は封筒でない引数検査のエラー）。
         この中で終われば下の戻り値をそのまま返す。終わらなければ読み込みは続け、受付番号を
         `{"status": "loading", "load_id": "ld_…", "next": "dataset_load_status(load_id=…)"}` で返す。
         `dataset_load_status()` を呼ぶと、読み込み中は `status: "loading"`、終われば
@@ -424,14 +425,14 @@ class _SessionKindCarry:
             self.note += f"目的ファイルに残せなかった（ハンドルが別の呼び出しで塞がっていた）。{redo}"
             return
         try:
-            name = objective.persist_carried_kind(self._handle, analysis_id, kind)
+            name, placed = objective.persist_carried_kind(self._handle, analysis_id, kind)
         except (DomainError, OSError, ValueError) as exc:
             self.note += f"目的ファイルに残せなかった（{type(exc).__name__}）。{redo}"
             return
         finally:
             self._handle.lock.release()
         self.note += (f"目的ファイル（{name}）にもこの解析フォルダの種別として残した"
-                      "（開き直すと読み戻す）。")
+                      "（開き直すと読み戻す）。" + (f"{placed}。" if placed else ""))
 
 
 def _load_now(*, directory: str | None = None, mztab_path: str | None = None,
@@ -641,7 +642,8 @@ def dataset_load_status(load_id: str | None = None, wait_seconds: float = 0.0) -
     load_id: 引く受付番号。省くと、まだ結果を渡していない読み込みから選ぶ（ちょうど 1 本ならそれ、
         2 本以上なら `needs_input`（選べる受付つき）、無ければ `missing_state`（`load_dataset`））。
     wait_seconds: 読み込みが終わるのを待つ秒数（既定 0 は待たずにすぐ返す。0〜30 秒。範囲の外の数は
-        丸めて `wait_seconds_note` を付ける。数でないもの（bool・文字列・NaN）は `DATASET_BAD_REQUEST`）。
+        丸めて `wait_seconds_note` を付ける。NaN は `DATASET_BAD_REQUEST`。数でない値は MCP の引数検査が先に
+        扱う: 真偽値と数に読める文字列は数に変えて通り、数に読めない値は封筒でない引数検査のエラー）。
         その中で終われば、すぐ下の戻り値を返す。呼び直しの回数を減らす。
 
     読み込み中は `{"status": "loading", "load_id", "elapsed_s"}`（`elapsed_s` は受け付けてからの秒）。

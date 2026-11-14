@@ -126,8 +126,11 @@ def _create_slot(analysis_id: str, holder) -> tuple[Path, str, str | None]:
     書き込み先の候補の先頭（設定の `[paths] reports_dir` があればそちら）の `<analysis_id>.objective.md` が
     空いていればそこ。埋まっていれば（`_resolve_objective_file` が取らなかった、別の解析フォルダか別の
     analysis_id の目的）上書きしない: データセットに解析フォルダがあればその配下 reports/ に作る（読み戻し
-    `recall_assay_kind` はそこを自分の目的として読む）。無ければ（データセットを開く前）同じ置き場所に
-    番号付きの名前（`<analysis_id>-2.objective.md` …）で、まだどの解析フォルダにも結び付けずに作る（開く前に
+    `recall_assay_kind` はそこを自分の目的として読む）。その reports/ に書けなければ（解析フォルダが読み取り
+    専用。共有の置き場所を設定する主な理由）、共有の置き場所に番号付きの名前（`<analysis_id>-2.objective.md` …）で
+    作る——呼び出し側が frontmatter に `analysis_dir`（この解析フォルダ）を書くので、`recall_assay_kind` と
+    `_resolve_objective_file`（`_belongs`）がこの解析フォルダの目的として読み書きする。解析フォルダが無ければ
+    （データセットを開く前）同じ置き場所に番号付きの名前で、まだどの解析フォルダにも結び付けずに作る（開く前に
     渡した種別を次に開いたデータセットが引き継ぐとき `persist_carried_kind` が、解析フォルダのある
     `record_objective` が更新するときはその呼び出しが結び付ける）。
     """
@@ -139,9 +142,14 @@ def _create_slot(analysis_id: str, holder) -> tuple[Path, str, str | None]:
     mine = _analysis_dir(holder)
     own = Path(mine) / "reports" if mine else None
     shared = own is None or not _same_dir(own, report_dir)
-    if own is not None and shared:
-        directory = mcp_core._first_writable_dir([own])
+    if own is not None and shared and mcp_core._dir_is_writable(own):
+        directory = own
         where = "このデータセットの解析フォルダ配下 reports/ に作った"
+    elif own is not None and shared:
+        # 解析フォルダに書けない。共有の置き場所に別の名前で作り、frontmatter の analysis_dir で結び付ける
+        directory = report_dir
+        where = ("このデータセットの解析フォルダ配下 reports/ に書けないので、共有の置き場所に別の名前で作った"
+                 "（この解析フォルダの目的として読み戻す）")
     elif own is None:
         directory = report_dir
         where = "まだどの解析フォルダにも結び付けずに別の名前で作った"
@@ -170,13 +178,14 @@ def _new_fields(*, assay_kind=None, dataset=None, polarity=None, groups=None, co
     }
 
 
-def persist_carried_kind(holder, analysis_id: str, kind: str) -> str:
+def persist_carried_kind(holder, analysis_id: str, kind: str) -> tuple[str, str | None]:
     """データセットを開く前に記録して `holder` へ引き継いだ種別を、開き直しで読み戻せるように目的に残す。
 
     `analysis_id` の目的（`_resolve_objective_file`。共有の置き場所にある別の解析フォルダのものは見ない）が
     あれば、種別と、frontmatter に無ければこの解析フォルダ（`analysis_dir`）を書く。無ければ種別だけの
-    目的を作る（`_create_slot`）。書いた目的のファイル名を返す。書けなければ OSError / ValueError /
-    DomainError（`CONFIG_INVALID`）。データセットに解析フォルダが無ければ ValueError（読み戻せない）。
+    目的を作る（`_create_slot`）。(書いた目的のファイル名, 置き場所か名前を変えたときの理由 or None) を返す。
+    書けなければ OSError / ValueError / DomainError（`CONFIG_INVALID`）。データセットに解析フォルダが無ければ
+    ValueError（読み戻せない）。
     """
     mine = _analysis_dir(holder)
     if not mine:
@@ -188,11 +197,11 @@ def persist_carried_kind(holder, analysis_id: str, kind: str) -> str:
         if not meta.get("analysis_dir"):
             updates["analysis_dir"] = mine
         notes.update_objective_meta(existing, updates)
-        return existing.name
-    report_dir, slug, _placed = _create_slot(analysis_id, holder)
+        return existing.name, None
+    report_dir, slug, placed = _create_slot(analysis_id, holder)
     path = notes.write_objective(report_dir, analysis_id,
                                  {**_new_fields(assay_kind=kind), "analysis_dir": mine}, [], slug=slug)
-    return path.name
+    return path.name, placed
 
 
 def _remember_session_kind(holder, analysis_id: str, kind: str) -> None:
@@ -327,7 +336,9 @@ def record_objective(
     （省略時は直近。設定の `[paths] reports_dir` があれば置き場所はそちらが先）。どちらも無ければ
     missing_state（load_dataset）。共有の置き場所にある同じ analysis_id の目的が別の解析フォルダのもの
     （frontmatter の analysis_dir が違う）なら、それは書き換えず、このデータセットの解析フォルダ配下
-    reports/ に作る（戻り値に一言）。設定の置き場所があってデータセットがまだ無いとき（開く前の記録）は、
+    reports/ に作る（戻り値に一言）。その reports/ に書けなければ（解析フォルダが読み取り専用）、共有の置き場所に
+    別の名前（`<analysis_id>-2.objective.md` …）で作り、frontmatter の analysis_dir でこの解析フォルダに結び付ける
+    （戻り値に一言。開き直すと読み戻し、以後の更新もそちらへ）。設定の置き場所があってデータセットがまだ無いとき（開く前の記録）は、
     どれかの解析フォルダに結び付いた目的を書き換えない: 同じ analysis_id の目的が別の解析フォルダのもの
     なら、別の名前（`<analysis_id>-2.objective.md` …）でまだどのフォルダにも結び付いていない目的を作る
     （戻り値に一言。以後の開く前の記録もそちらへ）。そのとき渡した assay_kind はセッションに置き、次に

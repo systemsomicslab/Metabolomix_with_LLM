@@ -36,6 +36,7 @@ from metabolomix.analysis.stats.data import sample_runs
 from metabolomix.core import handle_dispatch
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_errors import missing_state
+from metabolomix.core.session_state import dataset_assay_kind
 from metabolomix.core.serialization import json_payload
 from metabolomix.quant import derive as qderive
 from metabolomix.quant.inputs import quant_error
@@ -44,7 +45,7 @@ from metabolomix.quant.plugin import call, load_rules, rules_settings
 from metabolomix.quant.records import merged_record_folder, write_record
 from metabolomix.quant.table import require_msdial_source, resolve_quant_polarity
 
-__all__ = ["MAPPING_COLUMNS", "merge", "merge_tool", "merged_source_verification",
+__all__ = ["MAPPING_COLUMNS", "merge", "merge_tool", "merged_assay_kind", "merged_source_verification",
            "normalize_status", "read_mapping"]
 
 MAPPING_COLUMNS = ("mode", "source_sample", "sample_id", "group", "sample_type")
@@ -232,6 +233,34 @@ def merged_source_verification(pos_ds, neg_ds) -> tuple[str, dict]:
     return merged, {"source_verification": {"merged": merged, **sides}}
 
 
+def merged_assay_kind(pos_ds, neg_ds, *, pos_handle_id: str | None = None,
+                      neg_handle_id: str | None = None) -> tuple[str, list[str]]:
+    """統合のアッセイ種別と、陽陰で違うときだけの注記。
+
+    `derive` は陽イオンの写しなので、そのままでは陰イオンにだけ記録した種別（`record_objective` は書いた
+    ハンドルだけを切り替える）を落とす。陽陰で同じならその値、片方が `unknown` ならもう片方、`lipid` と
+    `metabolite` で食い違えば `unknown`（どちらの解釈規則も黙って当てない）。食い違いの注記は、誤っている側の
+    極性のハンドル（`pos_handle_id` / `neg_handle_id`）へ `record_objective(assay_kind=...)` で記録し直してから
+    統合し直すよう言う——統合したハンドルは陽イオンの写しで解析フォルダ（`analysis_dir`）も陽イオンのものなので、
+    そこへ記録すると陽イオンの解析フォルダに結び付いた目的を書き、開き直した陽イオンのデータセットの種別まで変わる。
+    """
+    sides = {"positive": dataset_assay_kind(pos_ds), "negative": dataset_assay_kind(neg_ds)}
+    if sides["positive"] == sides["negative"]:
+        return sides["positive"], []
+    known = {side: kind for side, kind in sides.items() if kind != "unknown"}
+    if len(known) == 1:
+        (side, kind), = known.items()
+        other = "negative" if side == "positive" else "positive"
+        return kind, [f"assay_kind は {side} の {kind} を採った（{other} は unknown）。"]
+    parents = (f"positive={pos_handle_id or '陽イオンのハンドル'}, "
+               f"negative={neg_handle_id or '陰イオンのハンドル'}")
+    return "unknown", [f"assay_kind が陽陰で食い違う（positive={sides['positive']}, negative={sides['negative']}）"
+                       "ので unknown にした。誤っている側の極性のハンドル（" + parents + "）へ "
+                       "record_objective(dataset_handle=<その極性のハンドル>, assay_kind=...) で記録し直してから"
+                       "統合し直す（統合したハンドルへ記録すると、陽イオンの解析フォルダに結び付いた目的に書くので、"
+                       "開き直した陽イオンのデータセットの種別まで変わる）。"]
+
+
 def _runs_match(pos_runs: list[dict], neg_runs: list[dict]) -> dict:
     """陰イオンの測定（バッチ・注入順）が陽イオンと同じか。
 
@@ -277,7 +306,8 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     `quant_state["polarity_runs"]["negative"]`（統合後の試料名 → `run_of` の形）に残し、統合したデータセットが
     陽イオンの測定として読む値（`sample_runs(統合後)`）と同じかを `polarity_runs_match` と戻り値・記録の
     `negative_runs` に書く。どちらかが探索専用（`exploratory_only`）なら統合も探索専用で、理由は極性付きで
-    合わせる（戻り値の `exploratory`）。
+    合わせる（戻り値の `exploratory`）。アッセイ種別は両側から決める（`merged_assay_kind`。戻り値の `assay_kind`、
+    陽陰で違えば `notes`）。
     `folder` を省くと 2 つの解析フォルダの共通の親（無理なら QUANT_RECORD_LOCATION_REQUIRED）。
     `polarities` は (positive 側, negative 側) の極性（省くとデータセットから決める）。
     記録は検査がすべて通ってから書く（止まるときは何も書かない）。
@@ -373,6 +403,9 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     # 書き出しのメタ行で verified を名乗っていた）。
     qderive.carry_exploratory(new, [pos_ds, neg_ds], labels=["positive", "negative"])
     new.source_verification, verification_info = merged_source_verification(pos_ds, neg_ds)
+    # アッセイ種別も POS の写しにしない（NEG にだけ記録した種別を黙って落とさない）
+    new.assay_kind, kind_notes = merged_assay_kind(pos_ds, neg_ds, pos_handle_id=pos_handle_id,
+                                                   neg_handle_id=neg_handle_id)
     # 陰イオンの測定を、統合したデータセットが陽イオンの測定として読む値（統計エンジンと同じ読み方）と比べる
     pos_runs = sample_runs(new)
     runs_match = _runs_match([pos_runs[str(sid)] for sid in pos_ids],
@@ -389,8 +422,9 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     new.quant_state["record_id"] = record["record_id"]
     info = {"record_id": record["record_id"], "rule": rule, "n_features": counts,
             "n_samples": len(pos_ids), "unit": state["unit"], "normalized": state["normalized"],
-            "normalize": normalize, "negative_runs": runs_match, **verification_info,
-            **qderive.exploratory_info(new)}
+            "normalize": normalize, "negative_runs": runs_match, "assay_kind": new.assay_kind,
+            **verification_info, **qderive.exploratory_info(new),
+            **({"notes": kind_notes} if kind_notes else {})}
     return new, info
 
 

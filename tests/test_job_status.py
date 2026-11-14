@@ -336,3 +336,31 @@ def test_with_fields_prepends_without_overriding():
         "job_id": "own", "dataset_handle": "dh_1", "a": 1}
     assert pending_loads.with_fields('{"a": 1}', {"dataset_handle": None}) == '{"a": 1}'
     assert pending_loads.with_fields("[1]", {"job_id": "j"}) == "[1]"
+
+
+# ---------- MCP から見た wait_seconds の型（最終検証 F20。USAGE.md・ツールの説明と同じ振る舞い） ----------
+
+
+@pytest.mark.parametrize("value, code", [
+    (True, "DATASET_LOAD_NOT_FOUND"),        # 真偽値は MCP の引数検査が数（1 秒）に変えて通す
+    ("10", "DATASET_LOAD_NOT_FOUND"),        # 数に読める文字列も数に変わる
+    ("nan", "DATASET_BAD_REQUEST"),          # NaN は届いて、clamp_wait が断る
+    (math.nan, "DATASET_BAD_REQUEST"),
+])
+def test_wait_seconds_types_over_mcp(value, code):
+    out = _call(server.mcp, "dataset_load_status", {"load_id": "ld_nope", "wait_seconds": value})
+    assert out["error"]["code"] == code
+    if code == "DATASET_BAD_REQUEST":
+        assert out["error"]["details"] == {"field": "wait_seconds"}
+
+
+@pytest.mark.parametrize("tool, args", [
+    ("dataset_load_status", {"load_id": "ld_nope"}),
+    ("load_dataset", {"directory": "no_such_folder"}),
+])
+def test_unreadable_wait_seconds_is_an_argument_error_over_mcp(tool, args):
+    """数に読めない値は封筒（DATASET_BAD_REQUEST）ではなく、ツールに届く前の引数検査のエラー。"""
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    with pytest.raises(ToolError, match="wait_seconds"):
+        asyncio.run(server.mcp.call_tool(tool, {**args, "wait_seconds": "abc"}))

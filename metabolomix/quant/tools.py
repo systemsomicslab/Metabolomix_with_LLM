@@ -157,6 +157,10 @@ def dataset_merge_polarities(positive_handle: str, negative_handle: str,
     needs_input で record_folder（既存のフォルダ）を求める。規則プラグイン（[quant] rules）が要る。
     キュレーションのフラグは写さず、選別が極性ごとの .arf2 からその時点のものを読む。
     どちらかが探索専用なら統合も探索専用（戻り値の exploratory に極性付きの理由）。
+    アッセイ種別（戻り値の assay_kind）は両側から: 陽陰で同じならその値、片方が unknown ならもう片方、lipid と
+    metabolite で食い違えば unknown（陽陰で違えば notes。食い違いは、誤っている側の極性のハンドルへ
+    record_objective(dataset_handle=<その極性のハンドル>, assay_kind=...) で記録し直してから統合し直す。統合した
+    ハンドルの解析フォルダは陽イオンのものなので、そこへ記録すると陽イオンのデータセットの種別まで変わる）。
     2 つのハンドルのロックを待つのは合わせて最長 25 秒（handle_dispatch.HANDLE_LOCK_WAIT）。待ちきれなければ
     何もせずに HANDLE_BUSY（ほかのツールと同じ封筒。長い道具の仕事がロックを持っていれば details.job_id /
     tool と required_tools=["job_status"]。job_status で終わりを待ってから呼び直す）。

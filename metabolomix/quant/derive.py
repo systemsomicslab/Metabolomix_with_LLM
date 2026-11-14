@@ -3,8 +3,12 @@
 正規化・統合・選別は元の DatasetState を書き換えず、複製に値・検出マスク・欄を差し替えた
 派生の DatasetState を作り、新しいハンドルとして開いて直近にする。元のハンドルは残る。
 
-`quant_state` は統計側（C）との受け渡し。C は `getattr(ds, "quant_state", None)` を読み、
-`normalized` / `method` / `unit` だけを使う。それ以外のキーは自由（`**extra`）。
+`quant_state` は統計側（C）との受け渡し。C は `getattr(ds, "quant_state", None)` の `normalized` / `method` /
+`unit` と、統合したデータセットの `polarity_runs`（陰イオンの測定。ドリフト補正を極性ごとに当てる）・
+`source_sample_names`（`sample_manifest.file_order_keys` が読み、drift=auto の保留と
+`injection_order_may_be_file_order` の注意を左右する）を読む。`**extra` で足すほかのキーにも読み手がある
+（`steps` / `skipped` / `record_id` / `internal_standard_ids` / `record_folder` / `arf2_by_polarity`。読み手の一覧は
+docs/output_format/quant.md §3）。キーの改名・削除は読み手を直してから行う（黙って欠けると既定の読み方に落ちる）。
 """
 from __future__ import annotations
 

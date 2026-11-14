@@ -340,9 +340,10 @@ def test_volcano_from_compare_result_with_contrast_id(tmp_path):
     body = plot_tools.dataset_plot(kind="volcano", contrast_id="U_vs_C")
     assert isinstance(body, list) and "C" in body[0] and "U" in body[0]
     assert ds.figures["volcano"]["result"]["contrast_id"] == "U_vs_C"
-    # contrast_id は volcano 以外の kind の引数ではない
+    # contrast_id は volcano 以外の kind では使わない（引数では断らない。notes は test_dataset_plot が縛る。
+    # ここは PCA を回していないので、前提の missing_state まで進む。レビュー V4）
     err = json.loads(plot_tools.dataset_plot(kind="pca", contrast_id="T_vs_C"))["error"]
-    assert err["code"] == "DATASET_BAD_REQUEST"
+    assert err["code"] == "missing_state" and "dataset_pca" in err["required_tools"]
 
 
 def test_volcano_single_contrast_needs_no_contrast_id(ds):
@@ -980,9 +981,9 @@ def test_save_figure_contrast_id_redraws_the_chosen_contrast(tmp_path):
     _asks_for_contrast(reports.save_figure("volcano", "v-4", result_id=rid), "save_figure",
                        ["T_vs_C", "U_vs_C"])
     assert not (figures / "v-4_volcano.png").exists()
-    # contrast_id は volcano だけ
-    err = json.loads(reports.save_figure("loadings", "v-5", contrast_id="T_vs_C"))
-    assert err["status"] == "error" and "volcano" in err["message"]
+    # contrast_id は volcano だけに効く。ほかの kind では断らずに使わない（loadings はまだ描いていないので missing_state）
+    err = json.loads(reports.save_figure("loadings", "v-5", contrast_id="T_vs_C"))["error"]
+    assert err["code"] == "missing_state" and err["required_tools"] == ["dataset_plot"]
 
 
 def test_volcano_caption_reads_test_vs_reference(ds):

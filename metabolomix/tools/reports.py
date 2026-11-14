@@ -144,17 +144,23 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
     kind は `dataset_plot` の kind: "pca" / "volcano"（間引き前の全点）/ "loadings" / "group_intensity" /
     "species" / "species_pca" / "eic" / "eic_compounds"。loadings / group_intensity / species / species_pca は
     dpi 300 の PNG と同名 .svg、pca / volcano / eic / eic_compounds は dpi 120 の PNG だけ。`dataset_plot` が最後に作った図（`ds.figures[kind]`）を描く。
-    まだ図が無ければ missing_state（`dataset_plot` を案内）。結果から作った図（pca / volcano / loadings）は、
-    その結果が現在のものでなければ（前処理・除外・群の変更で古くなった）保存せず `STALE_FIGURE`（理由と、作り直す
-    `dataset_plot` の呼び方を添える）。group_intensity / species / species_pca は群を図に焼き込むので、試料の情報
-    （群・役割）が更新されたあとも `STALE_FIGURE`（species_pca は結果から作った図でもある）。
+    まだ一度も描いていなければ missing_state（`dataset_plot` を案内）。結果から作った図（pca / volcano / loadings /
+    species_pca）は、その結果が現在のものでなければ保存せず `STALE_FIGURE`（理由と `required_tools=["dataset_plot"]`。
+    前処理・解析をやり直してから描き直す）。除外（`dataset_exclude`）と試料の表の更新
+    （`dataset_set_sample_metadata`。前処理の入力の列なら pca / loadings / species_pca / volcano、群・足した因子の列
+    だけなら volcano）は図ごと捨てるが、捨てた図も `STALE_FIGURE`（`details.reason` に実際に変わったもの: `exclusion`
+    や列名）で、
+    描いたことの無い図（missing_state）と見分けられる。group_intensity / species / species_pca は群を図に焼き込むので、
+    試料の情報（群・役割）が更新されたあとも `STALE_FIGURE`（species_pca は結果から作った図でもある）。
     eic / eic_compounds は結果から作った図ではないので、描いたとおりに保存する（あとで `dataset_exclude` しても変わらない）。
-    result_id: kind が pca / volcano / loadings のときだけ。登録された結果を名指しして描く
+    result_id: kind が pca / volcano / loadings で効く。登録された結果を名指しして描く
       （`dataset_plot` を呼ばなくてよい。古い結果は STALE_ANALYSIS_RESULT）。volcano では
-      `"result_id#contrast_id"`（`dataset_feature_search` が出す形）でも対比を選べる。
-    contrast_id: kind が volcano のときだけ。`dataset_compare` の結果の対比（`T_vs_C` など）を選んで描き直す
+      `"result_id#contrast_id"`（`dataset_feature_search` が出す形）でも対比を選べる。ほかの kind では使わず、
+      置き場の図を保存して戻り値の `notes:` 行にそう書く。
+    contrast_id: kind が volcano で効く。`dataset_compare` の結果の対比（`T_vs_C` など）を選んで描き直す
       （`result_id` を省けば直近の差次的結果）。`result_id#contrast_id` と食い違えば DATASET_BAD_REQUEST。
-      2 群の対比が複数ある結果で対比を選ばなければ `needs_input`（選択肢は対比の一覧）。
+      2 群の対比が複数ある結果で対比を選ばなければ `needs_input`（選択肢は対比の一覧）。ほかの kind では使わず、
+      戻り値の `notes:` 行にそう書く。
     dataset_handle: `load_dataset` が返したハンドル（省略時は直近）。
     画面に出すだけなら `dataset_plot`（画像を返す。`output_path` で任意の場所にも書ける）。返り値の相対パスは
     write_report の本文に `![...](figures/<analysis_id>_<kind>.png)` として埋め込める。
@@ -167,13 +173,16 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
     if kind not in FIGURE_KINDS:
         return json_payload({"status": "error", "message":
                              f"kind は {', '.join(FIGURE_KINDS)} のどれかを指定してください（受け取った値: {kind!r}）。"})
+    # 効かない引数は断らずに使わず、戻り値の notes に書く（その kind の図は引数によらず同じものを保存する）。
+    notes_out = []
     if result_id is not None and kind not in _RESULT_KINDS:
-        return json_payload({"status": "error", "message":
-                             f"result_id は kind が {' / '.join(_RESULT_KINDS)} のときだけ指定できます"
-                             f"（kind={kind!r}）。"})
+        notes_out.append(f"result_id={result_id!r} は kind が {' / '.join(_RESULT_KINDS)} のときだけ効くので"
+                         f"使っていない（kind={kind!r} は dataset_plot が置いた図を保存した）。")
+        result_id = None
     if contrast_id is not None and kind != "volcano":
-        return json_payload({"status": "error", "message":
-                             f"contrast_id は kind が volcano のときだけ指定できます（kind={kind!r}）。"})
+        notes_out.append(f"contrast_id={contrast_id!r} は kind が volcano のときだけ効くので使っていない"
+                         f"（kind={kind!r}）。")
+        contrast_id = None
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
         return holder
@@ -187,20 +196,41 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
         else:
             record = ds.figures.get(kind)
             if record is None:
+                discarded = (getattr(ds, "discarded_figures", None) or {}).get(kind)
+                if discarded is not None:
+                    return mcp_errors.mztab_error("STALE_FIGURE", _discarded_message(kind, discarded), {
+                        "kind": kind, "reason": list(discarded), "required_tools": ["dataset_plot"]})
                 return mcp_errors.missing_state(
                     f"{kind}_figure", ["dataset_plot"],
-                    f"先に dataset_plot(kind=\"{kind}\") で図を作ってください（このデータセットに {kind} の図がありません。"
-                    "前処理・除外・群の変更で古くなった結果の図は捨てられます）。")
+                    f"先に dataset_plot(kind=\"{kind}\") で図を作ってください（このデータセットで {kind} の図は"
+                    "まだ描かれていません）。")
             stale = _stale_figure(ds, record)
             if stale:
                 return mcp_errors.mztab_error("STALE_FIGURE", stale, {
                     "kind": kind, "result_id": record.get("result_id"),
                     "required_tools": ["dataset_plot"]})
-        return _save_record(ds, record, analysis_id, title, holder)
+        return _save_record(ds, record, analysis_id, title, holder, notes_out)
     except plot_tools._Missing as exc:
         return mcp_errors.missing_state(exc.state, exc.required_tools, exc.message)
     except DomainError as exc:
         return contrast_envelope(exc, "save_figure")
+
+
+#: 図を捨てた理由のうち、試料の表の列でないもの（`result_state.invalidate_results` の `changed`）。
+_DISCARD_CAUSES = {"exclusion": "除外（dataset_exclude）", "dataset": "データの入れ替え",
+                   "detection": "検出の印の変更", "comparison": "比較の指定の変更",
+                   "pca_settings": "PCA の設定の変更"}
+
+
+def _discarded_message(kind: str, changed) -> str:
+    """捨てた図（`ds.discarded_figures[kind]`）の STALE_FIGURE の文言。"""
+    causes = [_DISCARD_CAUSES[c] for c in changed if c in _DISCARD_CAUSES]
+    columns = [str(c) for c in changed if c not in _DISCARD_CAUSES]
+    if columns:
+        causes.append(f"試料の表の更新（変わった列: {', '.join(columns)}）")
+    cause = "・".join(causes) or "解析の入力の変更"
+    return (f"{_LABELS[kind]}の図は、{cause}で元の結果ごと古くなったので捨てました。前処理・解析をやり直してから "
+            f"dataset_plot(kind=\"{kind}\") で描き直してください。")
 
 
 def _stale_figure(ds, record: dict) -> str | None:
@@ -222,8 +252,10 @@ def _stale_figure(ds, record: dict) -> str | None:
     return None
 
 
-def _save_record(ds, record: dict, analysis_id: str, title: str | None, holder) -> str:
-    """図の記録を `reports/figures/` に保存し、どの結果から描いたかを添えて返す。"""
+def _save_record(ds, record: dict, analysis_id: str, title: str | None, holder,
+                 notes_out: list[str] | None = None) -> str:
+    """図の記録を `reports/figures/` に保存し、どの結果から描いたかを添えて返す（`notes_out` は使わなかった
+    引数の注記。最後の `notes:` 行になる）。"""
     from metabolomix.tools.plot_tools import write_figure_files
 
     kind = record["kind"]
@@ -232,8 +264,11 @@ def _save_record(ds, record: dict, analysis_id: str, title: str | None, holder) 
     both = "（同名の .svg も保存）" if len(written) > 1 else ""
     label = _LABELS[kind]
     origin = f" result_id={record['result_id']}" if record.get("result_id") else ""
-    return (f"{label}図を保存: {out_path}{both}{origin}\n"
+    text = (f"{label}図を保存: {out_path}{both}{origin}\n"
             f"本文に ![{label}](figures/{out_path.name}) で埋め込めます。")
+    if notes_out:
+        text += "\nnotes: " + " ".join(notes_out)
+    return text
 
 
 def _figures_dir(holder):

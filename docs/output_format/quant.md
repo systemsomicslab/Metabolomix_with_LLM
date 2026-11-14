@@ -35,8 +35,14 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 ## 3. `quant_state`（派生データセットが持つ状態）
 
 統計（`dataset_*` の前処理・検定）は `getattr(ds, "quant_state", None)` の `normalized` / `method` /
-`unit` と、統合したデータセットの `polarity_runs`（陰イオンの測定。ドリフト補正を極性ごとに当てる）を読む。
-それ以外のキーは自由。
+`unit` と、統合したデータセットの `polarity_runs`（陰イオンの測定。ドリフト補正を極性ごとに当てる）・
+`source_sample_names`（raw のパスが全試料で分からないときの「注入順がファイルの順か」の鍵。
+`sample_manifest.file_order_keys` が陽イオンの元の試料名で見て、drift=auto の保留と `injection_order_may_be_file_order`
+の注意を左右する）を読む。ほかのキーにも読み手がある: `steps` / `skipped`（`dataset_overview` の工程の鎖、統合の
+`normalize`（`applied` / `skipped` / `not_run`）、統合・選別済みのデータセットを正規化が断る判定）、`record_id`（次の
+工程の記録と統計の前処理の記録の親）、`internal_standard_ids`（選別が除く内部標準。統合は極性の接頭辞を付けて引き継ぐ）・
+`record_folder` / `arf2_by_polarity`（`dataset_select_features`）。`schema` と `polarity_runs_match` は記録として持つだけ。
+選別は知らないキーもそのまま引き継ぐ。キーの改名・削除は読み手を直してから行う（黙って欠けると既定の読み方に落ちる）。
 
 | キー | 意味 |
 |---|---|
@@ -106,6 +112,12 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
   `injection_order` は両方分かる試料のどれかで違えば `different`、違わないが片方でも分からない試料があれば
   `unknown`、それ以外は `same`。`batch` は `same` / `different`。`n_samples_differ` は注入順かバッチの違う試料の数。
   記録の `summary.negative_runs` にも書く。陽陰は別の注入なので、統計の前処理は極性ごとの測定でドリフトを当てる）。
+  `assay_kind`（統合したハンドルのアッセイ種別。陽陰で同じならその値、片方が `unknown` ならもう片方、`lipid` と
+  `metabolite` で食い違えば `unknown`。陽陰で違うときだけ `notes` にどちらから決めたか・食い違いを書く。食い違いは、
+  誤っている側の極性のハンドル（注記が両方のハンドル ID を挙げる）へ
+  `record_objective(dataset_handle=<その極性のハンドル>, assay_kind=...)` で記録し直してから統合し直す。統合したハンドルは
+  陽イオンの写しで解析フォルダも陽イオンのものなので、そこへ記録すると陽イオンの解析フォルダに結び付いた目的に書き、
+  開き直した陽イオンのデータセットの種別まで変わる）。
   特徴 ID は `positive:<id>` / `negative:<id>`、行は POS の特徴のあとに NEG、試料の列は共通 ID
   （POS の順）。各特徴の出自は `feature_metadata[<fid>]["origin"]`（極性と元の特徴 ID）。
 - **select**: `status`・`dataset_handle`・`record_id`・`audit_file`・`n_retained`・`n_excluded`・

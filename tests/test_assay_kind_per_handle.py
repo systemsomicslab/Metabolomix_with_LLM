@@ -514,3 +514,80 @@ def test_numbered_objective_is_not_taken_for_its_file_name(tmp_path, fresh_state
     out = objective.record_objective("study-2", assay_kind="metabolite", dataset_handle=other)
     assert "objective を更新: study-2-2.objective.md" in out, out
     assert _meta(numbered)["confirmed_objective"] == "結び付いていない"
+
+
+# ---------- 解析フォルダが読み取り専用でも、2 つ目のフォルダの目的を記録できる（最終検証 F24） ----------
+
+
+def _read_only_folders(monkeypatch, *folders):
+    """`folders` の配下だけを書けないことにする（共有の置き場所を設定する主な理由）。"""
+    from pathlib import Path
+
+    from metabolomix.core import mcp_core
+
+    real = mcp_core._dir_is_writable
+    roots = [Path(f).resolve() for f in folders]
+
+    def writable(directory):
+        resolved = Path(directory).resolve()
+        if any(resolved == root or root in resolved.parents for root in roots):
+            return False
+        return real(directory)
+    monkeypatch.setattr(mcp_core, "_dir_is_writable", writable)
+
+
+def test_read_only_folders_put_the_second_objective_in_the_shared_place(tmp_path, fresh_state, monkeypatch):
+    """同じ analysis_id を 2 極性で記録する。共有の `study.objective.md` は pos のもので、neg の解析フォルダは
+    書けない。断らず、共有の置き場所に番号付きの名前で neg の目的を作り、frontmatter で neg に結び付ける。"""
+    from tests.config_fixtures import use_config
+
+    shared = tmp_path / "shared"
+    use_config(monkeypatch, tmp_path, {"paths.reports_dir": shared})
+    pos_dir, neg_dir = _folder(tmp_path / "pos"), _folder(tmp_path / "neg")
+    _read_only_folders(monkeypatch, pos_dir, neg_dir)
+    pos = _load(directory=str(pos_dir))["dataset_handle"]
+    neg = _load(directory=str(neg_dir))["dataset_handle"]
+    objective.record_objective("study", assay_kind="lipid", dataset_handle=pos)
+    out = objective.record_objective("study", assay_kind="metabolite", dataset_handle=neg)
+    assert "objective を記録: study-2.objective.md" in out, out
+    assert "別の解析フォルダ（pos）" in out and "共有の置き場所に別の名前で作った" in out
+    assert str(tmp_path) not in out
+    assert not (neg_dir / "reports" / "study.objective.md").exists()
+    numbered = shared / "study-2.objective.md"
+    meta = _meta(numbered)
+    assert meta["analysis_id"] == "study" and meta["assay_kind"] == "metabolite"
+    assert objective._same_dir(meta["analysis_dir"], neg_dir)
+    assert _meta(shared / "study.objective.md")["assay_kind"] == "lipid"          # pos のものは動かない
+    assert handles.registry.peek(neg).assay_kind == "metabolite"
+    assert handles.registry.peek(pos).assay_kind == "lipid"
+    # 以後の neg の更新もその目的へ（pos の目的は書き換えない）
+    updated = objective.record_objective("study", confirmed_objective="neg の確定", dataset_handle=neg)
+    assert "objective を更新: study-2.objective.md" in updated, updated
+    assert _meta(numbered)["confirmed_objective"] == "neg の確定"
+    assert not _meta(shared / "study.objective.md").get("confirmed_objective")
+    # 開き直すと、それぞれが自分の種別を読み戻す
+    assert _reopen(pos_dir)["assay_kind"] == "lipid"
+    again_neg = _reopen(neg_dir)
+    assert again_neg["assay_kind"] == "metabolite"
+    assert any("study-2.objective.md" in note for note in again_neg.get("notes") or []), again_neg
+
+
+def test_carried_kind_is_saved_in_the_shared_place_when_the_folder_is_read_only(tmp_path, fresh_state,
+                                                                                monkeypatch):
+    """開く前に記録した種別を残す（`persist_carried_kind`）も同じ道を通る。"""
+    from tests.config_fixtures import use_config
+
+    shared = tmp_path / "shared"
+    use_config(monkeypatch, tmp_path, {"paths.reports_dir": shared})
+    pos_dir, neg_dir = _folder(tmp_path / "pos"), _folder(tmp_path / "neg")
+    _read_only_folders(monkeypatch, pos_dir, neg_dir)
+    pos = _load(directory=str(pos_dir))["dataset_handle"]
+    neg = _load(directory=str(neg_dir))["dataset_handle"]
+    objective.record_objective("study", assay_kind="lipid", dataset_handle=pos)
+    name, placed = objective.persist_carried_kind(handles.registry.get(neg), "study", "metabolite")
+    assert name == "study-2.objective.md" and "共有の置き場所に別の名前で作った" in placed
+    assert str(tmp_path) not in placed
+    meta = _meta(shared / name)
+    assert meta["assay_kind"] == "metabolite" and objective._same_dir(meta["analysis_dir"], neg_dir)
+    assert _meta(shared / "study.objective.md")["assay_kind"] == "lipid"
+    assert _reopen(neg_dir)["assay_kind"] == "metabolite"

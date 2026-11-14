@@ -207,6 +207,10 @@ class DatasetState:
         # 結果から作った図（pca / loadings / volcano）は、その結果が古くなったとき
         # `result_state.invalidate_results` が捨てる。
         self.figures: dict[str, dict] = {}
+        # discarded_figures: `invalidate_results` が捨てた図の kind -> 捨てた理由（変わったもの。`exclusion` や
+        # 試料の表の列名）。save_figure が「描いたことが無い」（missing_state）と「古くなって捨てた」
+        # （STALE_FIGURE と理由）を見分ける印で、dataset_plot が同じ kind を描き直すと消える。指紋に含めない。
+        self.discarded_figures: dict[str, list[str]] = {}
 
         # --- 同一性と来歴（metabolomix/analysis/result_state.py が読み書きする） ---
         # dataset_id: この DatasetState 実体の ID。結果の provenance が指す先で、
@@ -279,7 +283,8 @@ class DatasetState:
         # （`sample_meta` の編集と同じ扱い）。前処理（`dataset_analysis`）が行列から外す。
         self.excluded_samples: dict[str, str] = {}
         self.excluded_features: dict[str, str] = {}
-        # quant_state: 定量の工程（metabolomix/quant）が置く受け渡し。統計側は normalized / method / unit を読む。
+        # quant_state: 定量の工程（metabolomix/quant）が置く受け渡し。統計側は normalized / method / unit と、統合した
+        # データセットの polarity_runs / source_sample_names を読む（読み手の一覧は docs/output_format/quant.md §3）。
         self.quant_state: dict | None = None
         # stat_matrices: matrix_id -> 統計エンジンの前処理済み行列（`PreparedMatrix`）と、その設定・群の上書き・
         # 除外・指紋・metadata_revision（`analysis/stats_results.register_matrix`）。古さは `get_matrix` が見る。
