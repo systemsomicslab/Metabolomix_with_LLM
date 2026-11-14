@@ -61,16 +61,20 @@ NEEDS_INPUT = "needs_input"
 
 
 def needs_input(field: str, reason: str, options: list[dict], *, argument: str | None = None,
-                retry_tools: list[str]) -> str:
+                patch: bool = False, retry_tools: list[str]) -> str:
     """利用者に尋ねてから呼び直す封筒を返す（エラーではない）。
 
     引数:
         field: 答えが入る設定の欄（引数名か spec の路。例 "contrast_id"・"statistics.result_id"）。
+            `patch=True` では問いの主題（答えは各選択肢の `value` が名指す引数に入る）。
         reason: なぜ尋ねるのか（LLM と人間が読む説明）。
         options: 選択肢 `[{"value", "label"}, ...]`。`value` を引数に入れて呼び直す。
         argument: 呼び直すツールの引数名（例 "contrast_id"）。spec で答える経路
             （`dataset_novel_candidates` の `statistics.result_id`）では渡さず、封筒にも載せない
             （`field` が答えの場所）。
+        patch: True なら答えが 1 つの引数に収まらない問い（選択肢ごとに替える引数が違う）。各選択肢の
+            `value` は「引数名 → 値」の dict で、呼び直しはその dict のとおりに引数を置き換え（値が null の
+            引数は外す）、ほかの引数はそのまま渡す。封筒に `"patch": true` を載せ、`argument` は持たない。
         retry_tools: 答えを入れて呼び直せるツール名の候補（OR）。
 
     `missing_state` と同じく、復旧の手掛かりが欠けた封筒は出さない（ValueError）。
@@ -84,9 +88,17 @@ def needs_input(field: str, reason: str, options: list[dict], *, argument: str |
         raise ValueError("options は value と label を持つ選択肢の 1 つ以上のリストです。")
     if not retry_tools:
         raise ValueError("retry_tools は必須です（答えを入れて呼び直せるツールの候補）。")
+    if patch:
+        if argument:
+            raise ValueError("patch の封筒は argument を持たない（選択肢の value が替える引数を名指す）。")
+        if any(not isinstance(o["value"], dict) or not o["value"]
+               or any(not isinstance(k, str) or not k for k in o["value"]) for o in options):
+            raise ValueError("patch の選択肢の value は「引数名 → 値」の空でない dict です。")
     body: dict = {"field": field, "reason": reason, "options": [dict(o) for o in options]}
     if argument:
         body["argument"] = argument
+    if patch:
+        body["patch"] = True
     body["retry_tools"] = list(retry_tools)
     return json_payload({NEEDS_INPUT: body})
 

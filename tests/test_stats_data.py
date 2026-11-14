@@ -258,3 +258,20 @@ def test_file_order_uses_raw_file_names_when_known():
           for n, o, f in zip(names, [1, 2, 3], ["r01.wiff", "r02.wiff", "r03.wiff"])]
     samples = D.from_dataset(_ds(sample_names=names, msdial_samples=ms)).samples
     assert all(x.injection_order_may_be_file_order for x in samples)
+
+
+def test_sample_table_matches_from_dataset_samples_without_reading_values():
+    """`sample_table` は `from_dataset(...).samples` と同じ試料の表（除外と群の上書きを当てたもの）を、値の行列を
+    読まずに返す（群の上書きが試料ごとにどの群を当てるかを比べる呼び手向け）。"""
+    rows = [{"sample_id": "a", "role": "sample", "group": "G1"},
+            {"sample_id": "b", "role": "sample", "group": "G1"},
+            {"sample_id": "c", "role": "qc"}]
+    ds = _ds(sample_metadata_rows=rows, sample_ids=["a", "b", "c"])
+    for kw in ({}, {"exclude_samples": ["b"]}, {"group_overrides": {"a": "G2"}},
+               {"exclude_samples": ["c"], "group_overrides": {"b": " G3 "}}):
+        assert D.sample_table(ds, **kw) == D.from_dataset(ds, **kw).samples
+    table = D.sample_table(ds, exclude_samples=["b"], group_overrides={"a": "G2"})
+    assert [(s.sample_id, s.group, s.include) for s in table] == [("a", "G2", True), ("b", "G1", False),
+                                                                  ("c", None, True)]
+    no_values = SimpleNamespace(**{k: v for k, v in vars(ds).items() if k not in ("feature_matrix", "detected_mask")})
+    assert D.sample_table(no_values) == D.from_dataset(ds).samples

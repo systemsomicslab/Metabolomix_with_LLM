@@ -382,14 +382,22 @@ output?, record, next, notes?}`。
   なのに `reported_feature_ids` が無いは `DATASET_BAD_REQUEST`。`reported` 以外で `reported_feature_ids` を渡したときは
   誤りにせず、ID を使わずに戻り値の `notes` に書く（効かない引数の組）。
   `matrix_id` が古い・無いは `missing_state`（`stat_matrix`）。`matrix_id` と一緒に渡した `group_levels` / `group_factors` は
-  誤りにしない: 行列の群（登録の `group_overrides`）と同じなら `notes` に書いてそのまま比べ、違えば `needs_input`
-  （`field` / `argument` = `matrix_id`。選択肢は「行列の群で比べる＝群の引数を外す」と「その群の行列を `dataset_preprocess` で
-  作る・`matrix_id` を外す」。群は行列が決めている）。`comparisons` の無い `factors` も誤りにしない: `["group"]` なら群の指定の
-  設計と同じなので `notes` に書いて比べる。ほかの因子を挙げ、群の名前がその因子の水準なら「その因子のモデルで水準として
-  比べる（ほかの因子の水準ごとに `at` を付け、基準と比較の両方の cell に試料がある組だけ）」と読め、群の名前が group 列の
-  水準でもあれば「`factors` を外して group 列で比べる」とも読めて数字が変わるので `needs_input`（`field` / `argument` =
-  `comparisons`。選択肢は因子ごとのそのまま渡せる `comparisons` の形と、group 列の読みが成り立つときだけ `null`。対比が
-  50 個を超える読みは選択肢にせず `reason` に書く）。群の名前がどの因子の水準でもなければ group 列で比べて `notes` に書く。途中で止まった実行（探索専用）のデータセットも比較は断らない
+  誤りにしない: 前処理に入る試料（除外していないもの）を行列と同じ群に分けるなら `notes` に書いてそのまま比べる——
+  登録の `group_overrides` の dict ではなく試料ごとの群で比べるので、試料の表の群（Class ID）と同じ分け方の
+  `group_levels` も同じ（上書きの無い行列と同じ `matrix_id` になる）。違えば `needs_input`（`field` = `matrix_id`、
+  `patch: true`。選択肢は「行列の群で比べる」= `{"group_levels": null}`（渡した群の引数を外す）と「渡した群で比べる」=
+  `{"matrix_id": null}`（群が同じ直近の `dataset_preprocess` の行列か既定の前処理。行列の前処理の設定を保つなら
+  `dataset_preprocess` にその設定と群を渡して作った `matrix_id` を渡す）。群は行列が決めている）。選択肢は対比の群の名前が
+  その群にある読みだけで、行列の群でしか比べられなければ群の引数を使わず `notes` に書いて比べ、どちらでも比べられなければ
+  群の誤りを返す。`comparisons` の無い `factors` も誤りにしない: 空（`[]`）か `["group"]` なら群の指定の
+  設計と同じなので `notes` に書いて比べる。ほかの因子を挙げ、群の名前がその因子の水準で `factors` のモデルが組めるなら
+  （比較に入る試料に因子の値が欠けず、2 因子以上なら水準の直積のどの cell にも試料がある。組めないモデルは設計が
+  `DESIGN_INVALID` で断る）「その因子のモデルで水準として比べる（ほかの因子の水準ごとに `at` を付ける）」と読め、群の名前が
+  group 列の水準でもあれば「`factors` を外して group 列で比べる」とも読めて数字が変わるので `needs_input`（`field` =
+  `comparisons`、`patch: true`。選択肢は因子ごとの `{"comparisons": [...], "reference_group": null, "test_group": null}`
+  （`groups` で指定したなら `"groups": null`）と、group 列の読みが成り立つときだけ `{"factors": null}`。対比が 50 個を超える
+  読みは選択肢にせず `reason` に書く）。群の名前がどの因子の水準でもないか、`factors` のモデルが組めなければ group 列で
+  比べて `notes` に書く（理由つき）。途中で止まった実行（探索専用）のデータセットも比較は断らない
   （書き出しと図に探索専用の印が載る。§11.4）。
   既定の前処理は尋ねない（`drift_mode=auto` が補正を当てなかったときは `warnings` に `drift_not_applied_by_default`）。
   `matrix_id` を省いた呼び出しが行列を決めたあとにエラーになったとき、`details.matrix_id` と `matrix_source` に

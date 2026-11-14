@@ -164,8 +164,14 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 ```
 
 - `field` は答えが入る設定の欄（spec の路）。`reason` は尋ねる理由、`options` は `{value, label}` の選択肢。
-- `argument` は答え（選ばれた `value`）を入れて呼び直すツールの**引数名**。
-- `retry_tools` は「`argument` を受けて呼び直せるツール」の候補（OR）。
+- `argument` は答え（選ばれた `value`）を入れて呼び直すツールの**引数名**。`argument` が無い封筒は、`field` の
+  spec の路に `value` を入れて呼び直す。
+- `"patch": true` の封筒は、選択肢ごとに替える引数が違う問い（`argument` を持たない。`field` は問いの主題）。
+  選ばれた `value` は「引数名 → 値」の dict で、**その dict のとおりに引数を置き換え（値が `null` の引数は外し）、
+  ほかの引数はそのまま渡して**呼び直す。例: `dataset_compare` の `{"comparisons": [...], "reference_group": null,
+  "test_group": null}`（群の指定を対比に替える）・`{"factors": null}`・`{"matrix_id": null}`。
+- `retry_tools` は「答えを入れて呼び直せるツール」の候補（OR）。`argument` があればその引数を、`patch` なら
+  `value` の引数をすべて受ける。
 - 統計エンジンの前処理（`dataset_preprocess`・`dataset_compare`・`dataset_pca`・`pathway_project`・`dataset_analysis_run`
   の spec v2）は**尋ねない**: ドリフト補正の既定（`drift_mode=auto`）は、補正できても内部標準で換算済み・注入順が
   ファイルの順かもしれないときは当てずに計算し、戻り値の `warnings`（`pathway_project` は run の manifest にも）の

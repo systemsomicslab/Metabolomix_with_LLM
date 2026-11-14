@@ -46,6 +46,13 @@ def _contrast(out, cid):
     return next(c for c in out["contrasts"] if c["contrast_id"] == cid)
 
 
+def _replay(kw: dict, option: dict) -> dict:
+    """patch の封筒の答え方（core.md）どおりに呼び直す: 選択肢の value の引数を置き換え、null の引数は外し、
+    ほかの引数はそのまま渡す。"""
+    merged = {**kw, **option["value"]}
+    return _cmp(**{k: v for k, v in merged.items() if v is not None})
+
+
 # --- 群の指定 ---------------------------------------------------------------------------
 
 def test_two_groups_default_moderated_t_summary_shape(ds):
@@ -161,56 +168,100 @@ def test_factors_matching_the_group_design_are_noted_not_refused(ds):
     assert multi["status"] == "success" and multi["result_id"] == plain["result_id"]
 
 
+def test_empty_factors_without_comparisons_are_noted_not_refused(ds):
+    """comparisons の無い factors=[] は因子を挙げていない（効かない引数）: 断らず notes に書き、同じ比較になる。"""
+    mx = _pre()["matrix_id"]
+    plain = _cmp(reference_group="C", test_group="T", matrix_id=mx)
+    out = _cmp(reference_group="C", test_group="T", matrix_id=mx, factors=[])
+    assert out["status"] == "success"
+    assert (out["rule_hash"], out["result_id"]) == (plain["rule_hash"], plain["result_id"])
+    assert len(out["notes"]) == 1 and "factors=[]" in out["notes"][0]
+    # 形の誤り（リストでない・文字列でない要素）は従来どおり断る
+    for bad in ("group", [1], [""]):
+        assert _cmp(reference_group="C", test_group="T", matrix_id=mx,
+                    factors=bad)["error"]["code"] == "DATASET_BAD_REQUEST"
+    # comparisons には因子が要る（空の factors では設計が決まらない）
+    comp = [{"id": "T_vs_C", "factor": "group", "reference": "C", "test": "T"}]
+    assert _cmp(comparisons=comp, factors=[], matrix_id=mx)["error"]["code"] == "DATASET_BAD_REQUEST"
+
+
 def test_other_factors_without_comparisons_ask_which_model_to_fit(tmp_path):
     """群の指定に別の因子を添えると「group だけのモデル」と「その因子も入れたモデルで水準ごとに比べる」の 2 通りに
-    読め、数字が変わる: needs_input で尋ねる。選択肢の comparisons はそのまま渡せる（ほかの因子の水準ごとの at 付き）。"""
+    読め、数字が変わる: needs_input で尋ねる。答えは 1 つの引数に収まらないので patch の封筒（argument なし）で、
+    選択肢の value の引数を置き換えて（null は外して）呼び直せばそれぞれの読みの比較になる。"""
     _install(_ds(per_group=6, sex=True), tmp_path)
     mx = _pre()["matrix_id"]
-    asked = _cmp(reference_group="C", test_group="T", matrix_id=mx, factors=["group", "sex"])
+    kw = dict(reference_group="C", test_group="T", matrix_id=mx, factors=["group", "sex"])
+    asked = _cmp(**kw)
     assert "error" not in asked and "status" not in asked
     body = asked["needs_input"]
-    assert (body["field"], body["argument"], body["retry_tools"]) == ("comparisons", "comparisons",
-                                                                      ["dataset_compare"])
+    assert (body["field"], body["patch"], body["retry_tools"]) == ("comparisons", True, ["dataset_compare"])
+    assert "argument" not in body
     values = [o["value"] for o in body["options"]]
     # C / T は sex の水準ではないので、sex の水準として比べる読みは選択肢にしない
-    assert values == [[{"id": "T_vs_C_at_F", "factor": "group", "reference": "C", "test": "T", "at": {"sex": "F"}},
-                       {"id": "T_vs_C_at_M", "factor": "group", "reference": "C", "test": "T", "at": {"sex": "M"}}],
-                      None]
-    two_factor = _cmp(comparisons=values[0], factors=["group", "sex"], matrix_id=mx)
-    one_factor = _cmp(reference_group="C", test_group="T", matrix_id=mx)
+    comps = [{"id": "T_vs_C_at_F", "factor": "group", "reference": "C", "test": "T", "at": {"sex": "F"}},
+             {"id": "T_vs_C_at_M", "factor": "group", "reference": "C", "test": "T", "at": {"sex": "M"}}]
+    assert values == [{"comparisons": comps, "reference_group": None, "test_group": None}, {"factors": None}]
+    two_factor = _replay(kw, body["options"][0])
+    one_factor = _replay(kw, body["options"][1])
     assert two_factor["status"] == one_factor["status"] == "success"
     assert [c["contrast_id"] for c in two_factor["contrasts"]] == ["T_vs_C_at_F", "T_vs_C_at_M"]
+    assert two_factor["result_id"] == _cmp(comparisons=comps, factors=["group", "sex"],
+                                           matrix_id=mx)["result_id"]
+    assert one_factor["result_id"] == _cmp(reference_group="C", test_group="T", matrix_id=mx)["result_id"]
     assert two_factor["rule_hash"] != one_factor["rule_hash"]          # 2 通りの読みは別の規則
+    # groups で指定したときは groups を外す選択肢になる
+    by_groups = _cmp(groups=["C", "T"], matrix_id=mx, factors=["group", "sex"])["needs_input"]
+    assert by_groups["options"][0]["value"] == {"comparisons": comps, "groups": None}
+    assert _replay(dict(groups=["C", "T"], matrix_id=mx, factors=["group", "sex"]),
+                   by_groups["options"][0])["result_id"] == two_factor["result_id"]
 
 
 def test_factor_levels_that_are_not_groups_offer_only_the_factor_model(tmp_path):
     """群の名前が group 列の水準でなく因子の水準なら、group 列で比べる読みは成り立たない: 因子のモデルの読みだけを
-    選択肢にする（null を並べない）。選択肢をそのまま渡した比較は、その因子の 1 因子のモデルで比べる。"""
+    選択肢にする（factors を外す選択肢を並べない）。選択肢で呼び直した比較は、その因子の 1 因子のモデルで比べる。"""
     _install(_ds(per_group=6, sex=True), tmp_path)
     mx = _pre()["matrix_id"]
-    asked = _cmp(reference_group="F", test_group="M", matrix_id=mx, factors=["sex"])
-    body = asked["needs_input"]
+    kw = dict(reference_group="F", test_group="M", matrix_id=mx, factors=["sex"])
+    body = _cmp(**kw)["needs_input"]
     assert [o["value"] for o in body["options"]] == [
-        [{"id": "M_vs_F", "factor": "sex", "reference": "F", "test": "M"}]]
-    out = _cmp(comparisons=body["options"][0]["value"], factors=["sex"], matrix_id=mx)
+        {"comparisons": [{"id": "M_vs_F", "factor": "sex", "reference": "F", "test": "M"}],
+         "reference_group": None, "test_group": None}]
+    out = _replay(kw, body["options"][0])
     assert out["status"] == "success" and [c["contrast_id"] for c in out["contrasts"]] == ["M_vs_F"]
     # どの因子の水準でも group 列の水準でもない群は、従来どおり比較が群の誤りを返す
     bad = _cmp(reference_group="X", test_group="Y", matrix_id=mx, factors=["sex"])
     assert "error" in bad and "needs_input" not in bad
 
 
-def test_factor_model_options_skip_cells_without_samples(tmp_path):
-    """at の組は基準と比較の両方の cell に試料があるものだけ（無い cell の対比はモデルが断るので選択肢にしない）。"""
+def test_factor_model_with_empty_cells_is_not_offered(tmp_path):
+    """2 因子以上のモデルは、水準の直積のどれかの cell に試料が無いだけで設計が断る（DESIGN_INVALID）。その読みは
+    呼び直しても誤りになるので選択肢にせず、group 列で比べる読みだけが立つ: 尋ねずに group 列で比べて注記する。"""
     ds = _ds(per_group=6, sex=True)
-    for row in ds.sample_metadata_rows:    # T 群の女性を「O」にする: T:F の cell は無くなり、T:O だけがある
+    for row in ds.sample_metadata_rows:    # T 群の女性を「O」にする: T:F と C:O の cell が空になる
         if row["group"] == "T" and row.get("sex") == "F":
             row["sex"] = "O"
     _install(ds, tmp_path)
     mx = _pre()["matrix_id"]
-    body = _cmp(reference_group="C", test_group="T", matrix_id=mx, factors=["group", "sex"])["needs_input"]
-    assert body["options"][0]["value"] == [
-        {"id": "T_vs_C_at_M", "factor": "group", "reference": "C", "test": "T", "at": {"sex": "M"}}]
-    assert body["options"][-1]["value"] is None
+    at_m = [{"id": "T_vs_C_at_M", "factor": "group", "reference": "C", "test": "T", "at": {"sex": "M"}}]
+    refused = _cmp(comparisons=at_m, factors=["group", "sex"], matrix_id=mx)
+    assert refused["error"]["code"] == "DESIGN_INVALID"                # その読みは組めない
+    plain = _cmp(reference_group="C", test_group="T", matrix_id=mx)
+    out = _cmp(reference_group="C", test_group="T", matrix_id=mx, factors=["group", "sex"])
+    assert "needs_input" not in out and out["status"] == "success"
+    assert out["result_id"] == plain["result_id"]
+    assert len(out["notes"]) == 1 and "cell" in out["notes"][0]
+
+
+def test_factor_model_with_missing_factor_values_is_not_offered(tmp_path):
+    """比較に入る試料に因子の値が無ければ、その因子のモデルは組めない（設計が断る）: 選択肢にせず注記する。"""
+    ds = _ds(per_group=6, sex=True)
+    ds.sample_metadata_rows[-1].pop("sex")
+    _install(ds, tmp_path)
+    mx = _pre()["matrix_id"]
+    out = _cmp(reference_group="C", test_group="T", matrix_id=mx, factors=["group", "sex"])
+    assert "needs_input" not in out and out["status"] == "success"
+    assert len(out["notes"]) == 1 and "sex" in out["notes"][0]
 
 
 def test_factors_the_group_names_do_not_belong_to_are_noted(tmp_path):
@@ -314,7 +365,8 @@ def test_preprocess_tool_notes_inert_arguments_instead_of_refusing(ds):
 
 def test_matrix_id_carries_its_groups_and_asks_when_group_arguments_differ(ds):
     """matrix_id の行列は群を決めている。同じ群の引数は重複なので notes に書いて進み、違う群は「行列の群」と
-    「渡した群（別の行列）」の 2 通りに読めて数字が変わるので needs_input で尋ねる（誤りにしない）。"""
+    「渡した群（別の行列）」の 2 通りに読めて数字が変わるので needs_input で尋ねる（誤りにしない）。答えは選択肢ごとに
+    替える引数が違うので patch の封筒（argument なし）で、選択肢は対比の群がその群にある読みだけ。"""
     mx = _pre(group_levels=["r0", "r1"])["matrix_id"]
     out = _cmp(reference_group="r0", test_group="r1", matrix_id=mx)
     assert out["status"] == "success" and "notes" not in out
@@ -322,13 +374,72 @@ def test_matrix_id_carries_its_groups_and_asks_when_group_arguments_differ(ds):
     same = _cmp(reference_group="r0", test_group="r1", matrix_id=mx, group_levels=["r0", "r1"])
     assert same["status"] == "success" and same["result_id"] == out["result_id"]
     assert len(same["notes"]) == 1 and "group_levels" in same["notes"][0]
-    clash = _cmp(reference_group="C", test_group="T", matrix_id=mx, group_levels=["C", "T"])
+    clash_kw = dict(reference_group="C", test_group="T", matrix_id=mx, group_levels=["C", "T"])
+    clash = _cmp(**clash_kw)
     assert "error" not in clash
     body = clash["needs_input"]
-    assert (body["field"], body["argument"]) == ("matrix_id", "matrix_id")
-    assert body["retry_tools"] == ["dataset_compare", "dataset_preprocess"]
-    assert [o["value"] for o in body["options"]] == [mx, None]
-    assert "dataset_preprocess" in body["options"][1]["label"]
+    assert (body["field"], body["patch"], body["retry_tools"]) == ("matrix_id", True, ["dataset_compare"])
+    assert "argument" not in body
+    # C / T は行列の群（r0 / r1）に無い: 「行列の群で比べる」は呼び直しても群の誤りになるので選択肢にしない
+    assert [o["value"] for o in body["options"]] == [{"matrix_id": None}]
+    assert "dataset_preprocess" in body["options"][0]["label"]
+    replayed = _replay(clash_kw, body["options"][0])
+    assert replayed["status"] == "success" and replayed["matrix_source"] == "default"
+    assert replayed["matrix_id"] != mx and replayed["group_n"] == {"C": 4, "T": 4}
+    # 行列の群でしか比べられない（渡した群に r0 / r1 が無い）なら、群の引数は効かない: notes に書いて行列の群で比べる
+    unused = _cmp(reference_group="r0", test_group="r1", matrix_id=mx, group_levels=["C", "T"])
+    assert unused["status"] == "success" and unused["result_id"] == out["result_id"]
+    assert len(unused["notes"]) == 1 and "group_levels" in unused["notes"][0]
+
+
+def test_matrix_group_question_offers_both_readings_when_both_hold(ds):
+    """行列の群（C / other）でも渡した群（C / T0 / other）でも対比の名前が群になるなら、2 通りの読みを選択肢にする。
+    value の引数を置き換えて（null は外して）呼び直せば、行列の群の読みは群の引数なしの比較と、渡した群の読みは
+    matrix_id なしの比較と同じ結果になり、2 つの読みの数字は違う（other に入る個体が違う）。"""
+    mx = _pre(group_levels=["C"])["matrix_id"]               # C 群の試料は C、ほかは other
+    kw = dict(reference_group="C", test_group="other", matrix_id=mx, group_levels=["C", "T0"])
+    body = _cmp(**kw)["needs_input"]
+    assert body["patch"] is True and "argument" not in body
+    assert [o["value"] for o in body["options"]] == [{"group_levels": None}, {"matrix_id": None}]
+    on_matrix = _replay(kw, body["options"][0])
+    on_passed = _replay(kw, body["options"][1])
+    assert on_matrix["result_id"] == _cmp(reference_group="C", test_group="other", matrix_id=mx)["result_id"]
+    assert on_matrix["group_n"] == {"C": 4, "other": 4}
+    assert on_passed["matrix_source"] == "default" and on_passed["matrix_id"] != mx
+    assert on_passed["group_n"] == {"C": 4, "T0": 1, "other": 3}
+    assert on_passed["result_id"] == _cmp(reference_group="C", test_group="other",
+                                          group_levels=["C", "T0"])["result_id"]
+    assert on_matrix["rule_hash"] != on_passed["rule_hash"]
+    assert on_matrix["top"] != on_passed["top"]
+
+
+def test_group_arguments_equal_to_the_sample_table_groups_are_redundant_with_matrix_id(ds):
+    """試料の表の群（Class ID の C / T）と同じ分け方の group_levels は、上書きの無い行列と同じ行列になる（同じ
+    matrix_id）。群は上書きの dict でなく試料ごとの群で比べるので、行列を最後に登録した前処理が群の引数を渡したか
+    どうかによらず、いつも notes に書いて群の引数なしと同じ比較をする（尋ねない）。"""
+    mx = _pre()["matrix_id"]
+    assert _pre(group_levels=["C", "T"])["matrix_id"] == mx
+    tops = set()
+    for rebuild in ({}, {"group_levels": ["C", "T"]}, {}):
+        _pre(**rebuild)                                   # 同じ行列 ID の登録を、群の引数の有無を替えて上書きする
+        plain = _cmp(reference_group="C", test_group="T", matrix_id=mx)
+        out = _cmp(reference_group="C", test_group="T", matrix_id=mx, group_levels=["C", "T"])
+        assert "needs_input" not in out and out["status"] == "success"
+        assert out["result_id"] == plain["result_id"] and out["rule_hash"] == plain["rule_hash"]
+        assert len(out["notes"]) == 1 and "group_levels" in out["notes"][0]
+        tops.add(out["top"])
+    assert len(tops) == 1                                 # どの登録でも同じ数字
+
+
+def test_omitted_matrix_id_takes_latest_preprocess_when_group_arguments_give_its_groups(ds):
+    """matrix_id を省き、直近の前処理の行列と同じ分け方の群の引数を渡したら、その行列を使う（群の引数を渡して前処理を
+    したかどうかによらない）。試料の表の群と同じ分け方の group_levels は、上書きの無い前処理の行列の群と同じ。"""
+    mx = _pre(normalize="tic")["matrix_id"]
+    for rebuild in ({}, {"group_levels": ["C", "T"]}):
+        _pre(normalize="tic", **rebuild)
+        out = _cmp(reference_group="C", test_group="T", group_levels=["C", "T"])
+        assert out["matrix_id"] == mx and out["matrix_source"] == "latest_preprocess"
+        assert ds.last_differential["spec"]["preprocess"]["normalize"]["method"] == "tic"
 
 
 def test_unknown_or_stale_matrix_id_is_missing_state(ds):

@@ -106,6 +106,27 @@ class NeedsInputEnvelopeTests(unittest.TestCase):
         self.assertNotIn("argument", body)
         self.assertEqual(body["field"], "statistics.result_id")
 
+    def test_patch_envelope_names_the_arguments_in_each_value(self):
+        """答えが 1 つの引数に収まらない問いは patch の封筒: argument を持たず、各選択肢の value が「引数名 → 値」の
+        dict（null はその引数を外す）。"""
+        options = [{"value": {"group_levels": None}, "label": "行列の群"},
+                   {"value": {"matrix_id": None}, "label": "渡した群"}]
+        body = json.loads(mcp_errors.needs_input(
+            "matrix_id", "理由", options, patch=True, retry_tools=["dataset_compare"]))["needs_input"]
+        self.assertIs(body["patch"], True)
+        self.assertNotIn("argument", body)
+        self.assertEqual(body["options"], options)
+        self.assertEqual(list(body), ["field", "reason", "options", "patch", "retry_tools"])
+        plain = json.loads(mcp_errors.needs_input("f", "r", self.OPTIONS, argument="contrast_id",
+                                                  retry_tools=["t"]))["needs_input"]
+        self.assertNotIn("patch", plain)
+        for bad in ([{"value": "B_vs_A", "label": "x"}], [{"value": {}, "label": "x"}],
+                    [{"value": {"": 1}, "label": "x"}]):
+            with self.subTest(options=bad), self.assertRaises(ValueError):
+                mcp_errors.needs_input("f", "r", bad, patch=True, retry_tools=["t"])
+        with self.assertRaises(ValueError):
+            mcp_errors.needs_input("f", "r", options, argument="matrix_id", patch=True, retry_tools=["t"])
+
     def test_required_parts_are_validated(self):
         ok = dict(field="f", reason="r", options=self.OPTIONS, retry_tools=["t"])
         for key, bad in (("field", ""), ("reason", ""), ("options", []),
