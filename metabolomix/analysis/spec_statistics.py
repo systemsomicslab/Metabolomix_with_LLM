@@ -165,11 +165,19 @@ SPEARMAN_MIN_N = 5
 #: 組がこの数以下なら、同順位の有無によらず全順列（9! = 362,880 通り）を数えた正確な並べ替えの p。
 #: R の `cor.test(method="spearman")` が正確な分布を数える境界と同じ。
 SPEARMAN_EXACT_MAX_N = 9
-#: 組がこの数以下なら、同順位が無ければ AS 89 の Edgeworth 展開（R の `cor.test` と同じ）、あれば
-#: モンテカルロの並べ替え（`SPEARMAN_PERMUTATIONS` 回）。超えれば t 近似（大きい n では十分に正確）。
+#: 同順位が無ければ、組がこの数以下まで正確な並べ替えの p（S の帰無分布を部分集合の動的計画法で数える。
+#: 14 組で一時に約 40 MB・0.15 秒、n ごとに 1 回だけ）。
+SPEARMAN_EXACT_NO_TIES_MAX_N = 14
+#: 組がこの数以下で同順位が無ければ AS 89 の Edgeworth 展開（R の `cor.test` と同じ）、超えれば t 近似。
 SPEARMAN_EDGEWORTH_MAX_N = 1290
-#: 同順位のある組の並べ替えの回数（両側 p の最小は 2 / (回数 + 1) ≈ 1e-4）と、その乱数の種（同じ入力なら同じ p）。
-SPEARMAN_PERMUTATIONS = 20000
+#: 近似（Edgeworth・t）の両側 p がこれ未満なら使わず、並べ替えの p にする。近似は裾で p を小さく出しすぎる:
+#: Edgeworth は正確な分布（10〜16 組）・4×10⁶ 回の並べ替え（20〜50 組）と比べて 1e-3 以上ではずれが数 %
+#: 以内（1e-3 以上の範囲は n によらず中心を含む 1 つの区間で単調）だが、3e-4 の辺りから正確な p の半分以下に
+#: なり、さらに裾では 0 に潰れる（n=10 の ρ=0.95 で正確な p の 1/200。R も 0）。t 近似も裾では小さく
+#: （|ρ| = 1 で 0）、1290 組の 1e-3 では Edgeworth との差が 0.5 % 以内。
+SPEARMAN_APPROX_MIN_P = 1e-3
+#: 並べ替えの回数（両側 p の最小は 2 / (回数 + 1) ≈ 2e-5）と、その乱数の種（同じ入力なら同じ p）。
+SPEARMAN_PERMUTATIONS = 100_000
 _SPEARMAN_SEED = 0
 #: 並べ替えの帰無分布を一度に作る行の数（n が大きくても一時の行列を数十 MB に抑える）。
 _PERMUTATION_CHUNK = 2000
@@ -190,10 +198,38 @@ def _permutations(n: int) -> np.ndarray:
 
 
 @functools.lru_cache(maxsize=None)
-def _s_null_counts(n: int) -> np.ndarray:
-    """同順位の無い n 組の `S = Σ d²`（順位の差の 2 乗和）の帰無分布: S の値ごとの順列の数。"""
-    perms = _permutations(n).astype(np.int32)
-    return np.bincount(((perms - np.arange(n)) ** 2).sum(axis=1))
+def _s_null_lower_half(n: int) -> np.ndarray:
+    """同順位の無い n 組の `S = Σ d²`（順位の差の 2 乗和）の帰無分布の下半分: S = 0..n(n²−1)/6 の値ごとの順列の数。
+
+    位置 0..n−1 に順位を 1 つずつ割り当てる動的計画法で、状態は使った順位の集合（2ⁿ 通り。使った数ごとの層に
+    分ける）と途中の S。S の分布は n(n²−1)/6 を中心に対称なので下半分だけを数える。
+    n ≤ `SPEARMAN_EXACT_NO_TIES_MAX_N` だけで呼ぶ（数は n! ≤ 14! で int64 に収まる）。
+    """
+    half = n * (n * n - 1) // 6
+    masks = np.arange(1 << n, dtype=np.int64)
+    used = np.zeros(1 << n, dtype=np.int64)
+    for bit in range(n):
+        used += (masks >> bit) & 1
+    order = np.argsort(used, kind="stable")
+    bounds = np.searchsorted(used[order], np.arange(n + 2))
+    layers = [order[bounds[k]:bounds[k + 1]] for k in range(n + 1)]
+    index = np.empty(1 << n, dtype=np.int64)
+    for layer in layers:
+        index[layer] = np.arange(layer.size)
+    current = np.zeros((1, half + 1), dtype=np.int64)
+    current[0, 0] = 1
+    for position in range(n):
+        layer = layers[position]
+        nxt = np.zeros((layers[position + 1].size, half + 1), dtype=np.int64)
+        for rank in range(n):
+            free = ((layer >> rank) & 1) == 0
+            step = (position - rank) ** 2
+            if step <= half:
+                # 順位を 1 つ決めると、使った集合から次の集合への対応は 1 対 1（同じ行へ重ねて足さない）
+                target = index[layer[free] | (1 << rank)]
+                nxt[target, step:] += current[np.flatnonzero(free), :half + 1 - step]
+        current = nxt
+    return current[0]
 
 
 def _two_sided(upper: float, lower: float) -> float:
@@ -209,16 +245,16 @@ def _tail_counts(null: np.ndarray, observed: float) -> tuple[int, int]:
 def _exact_p(ra: np.ndarray, rb: np.ndarray, ties: bool) -> float:
     """全順列を数えた正確な両側 p（`min(1, 2·min(上側, 下側))`。R・scipy の並べ替えの両側と同じ）。
 
-    同順位が無ければ S の帰無分布（n ごとに 1 回だけ数える）から、あれば平均の順位のまま `rb` を
-    並べ替えて `Σ (ra − ā)·rb` を数える（ρ は周辺を変えない並べ替えでこの量に比例する）。
+    同順位が無ければ S の帰無分布（n ごとに 1 回だけ数える。対称なので観測の側の裾は
+    `P[S′ ≤ min(s, S の最大 − s)]`）から、あれば平均の順位のまま `rb` を並べ替えて `Σ (ra − ā)·rb` を数える
+    （ρ は周辺を変えない並べ替えでこの量に比例する）。
     """
     n = int(ra.size)
     if not ties:
-        counts = _s_null_counts(n)
-        total = float(counts.sum())
+        lower_half = _s_null_lower_half(n)
         s = int(round(float(((ra - rb) ** 2).sum())))
-        # S が小さいほど正の相関。上側（S が大きい側）は P[S′ ≥ s]、下側は P[S′ ≤ s]
-        return _two_sided(counts[s:].sum() / total, counts[:s + 1].sum() / total)
+        tail = int(lower_half[:min(s, 2 * (lower_half.size - 1) - s) + 1].sum())
+        return float(min(1.0, 2.0 * tail / math.factorial(n)))
     centered = ra - ra.mean()
     null = rb[_permutations(n)] @ centered
     upper, lower = _tail_counts(null, float(rb @ centered))
@@ -245,7 +281,11 @@ def _monte_carlo_p(ra: np.ndarray, rb: np.ndarray) -> float:
 
 
 def _as89_upper(n: int, s: int) -> float:
-    """P[S′ ≥ s]（同順位の無い n 組。AS 89 の Edgeworth 展開。R の `prho` と同じ式）。"""
+    """P[S′ ≥ s]（同順位の無い n 組。AS 89 の Edgeworth 展開。R の `prho` と同じ式）。
+
+    裾では展開が [0, 1] を外れ、ここで 0 か 1 に抑える（R も同じで、強い相関の p が 0 になる）。その値は
+    使わない: `spearman` は両側 p が `SPEARMAN_APPROX_MIN_P` 未満なら並べ替えの p に替える。
+    """
     if s <= 0:
         return 1.0
     if s > n * (n * n - 1) / 3:
@@ -270,36 +310,27 @@ def _edgeworth_p(ra: np.ndarray, rb: np.ndarray) -> float:
     return float(min(1.0, 2.0 * one))
 
 
-def _p_floor(ra: np.ndarray, rb: np.ndarray) -> float:
-    """並べ替えの両側 p がとりうる最小の下限（最も極端な並びの確率の 2 倍）。
-
-    同じ ρ を与える並びは、少なくとも一方の同順位の中の入れ替えの数だけある（同順位が無ければ 1 つ）。
-    近似（Edgeworth・t）の p がこれを下回らないように抑える（|ρ| = 1 で p = 0 にしない）。
-    """
-    n = int(ra.size)
-    log_same = max(sum(math.lgamma(int(c) + 1) for c in np.unique(r, return_counts=True)[1])
-                   for r in (ra, rb))
-    return float(min(1.0, 2.0 * math.exp(log_same - math.lgamma(n + 1))))
-
-
 def spearman(x, y) -> dict:
     """両方が有限の組だけで Spearman の ρ（同順位は平均の順位）と両側 p。
 
     t 近似（自由度 n−2）は小さい n で p を小さく出しすぎる（n=5 の |ρ|=1 で 0、正確には 2/5! = 0.0167）。
     p の出し方（`p_method`）は組の数と同順位で決まる:
 
-    - 組が `SPEARMAN_EXACT_MAX_N`（9）以下: 全順列を数えた正確な並べ替えの p（`exact_permutation`）。同順位が
-      無ければ R の `cor.test(method="spearman")` と同じ値、あれば平均の順位のまま並べ替える条件付きの正確な p
-      （R は同順位があると t 近似に落ちる）。
-    - 10〜`SPEARMAN_EDGEWORTH_MAX_N`（1290）組で同順位が無い: AS 89 の Edgeworth 展開（`edgeworth`。R と同じ）。
-    - 10〜1290 組で同順位がある: モンテカルロの並べ替え（`monte_carlo_permutation`。`SPEARMAN_PERMUTATIONS` 回、
-      種は固定で同じ入力なら同じ p。最小は約 1e-4）。同順位（未検出の 0 など）があると t 近似は p を最大で
-      半分ほどに小さく出す。
+    - 組が `SPEARMAN_EXACT_MAX_N`（9）以下、または同順位が無く `SPEARMAN_EXACT_NO_TIES_MAX_N`（14）以下:
+      全順列を数えた正確な並べ替えの p（`exact_permutation`）。同順位が無ければ S の正確な分布（9 組以下は R の
+      `cor.test(method="spearman")` と同じ値。R は 10 組から Edgeworth）、あれば平均の順位のまま並べ替える
+      条件付きの正確な p（R は同順位があると t 近似に落ちる）。
+    - 15〜`SPEARMAN_EDGEWORTH_MAX_N`（1290）組で同順位が無い: AS 89 の Edgeworth 展開（`edgeworth`。R と同じ）。
     - 1290 組を超える: t 近似（`t_approx`）。
+    - 10 組以上で同順位がある（1290 組まで）、または近似（Edgeworth・t）の両側 p が `SPEARMAN_APPROX_MIN_P`
+      （1e-3）未満: モンテカルロの並べ替え（`monte_carlo_permutation`。`SPEARMAN_PERMUTATIONS` 回、種は固定で
+      同じ入力なら同じ p。最小は 2/(回数+1) ≈ 2e-5 で、最小のときは「観測より極端な並べ替えが無かった」＝本当の
+      p はそれ以下）。同順位（未検出の 0 など）があると t 近似は p を最大で半分ほどに小さく出し、近似は裾で
+      p を何桁も小さく出す（Edgeworth は 0 に潰れる）。
 
-    近似の 2 つ（Edgeworth・t）は、並べ替えでとりうる最小の p（`_p_floor`）で下から抑える（|ρ| = 1 でも 0 に
-    しない）。組が `SPEARMAN_MIN_N` 未満なら ρ と p は null（`reason: too_few_pairs`）、どちらかの値がすべて
-    同じなら null（`constant`）。どちらも `p_method` は null。
+    p は 0 にならない（正確な p の最小は 2/n!、並べ替えの最小は 2/(回数+1)、近似は 1e-3 以上だけを使う）。
+    組が `SPEARMAN_MIN_N` 未満なら ρ と p は null（`reason: too_few_pairs`）、どちらかの値がすべて同じなら null
+    （`constant`）。どちらも `p_method` は null。
     """
     a = np.asarray(x, dtype=float)
     b = np.asarray(y, dtype=float)
@@ -314,18 +345,18 @@ def spearman(x, y) -> dict:
     rho = float(np.corrcoef(ra, rb)[0, 1])
     rho = max(-1.0, min(1.0, rho))
     ties = len(np.unique(ra)) < n or len(np.unique(rb)) < n
-    if n <= SPEARMAN_EXACT_MAX_N:
-        p, method = _exact_p(ra, rb, ties), "exact_permutation"
-    elif ties and n <= SPEARMAN_EDGEWORTH_MAX_N:
+    if n <= SPEARMAN_EXACT_MAX_N or (not ties and n <= SPEARMAN_EXACT_NO_TIES_MAX_N):
+        return {"n": n, "rho": rho, "p": _exact_p(ra, rb, ties), "reason": None,
+                "p_method": "exact_permutation"}
+    p = method = None
+    if n > SPEARMAN_EDGEWORTH_MAX_N:
+        t = rho * math.sqrt((n - 2) / (1.0 - rho * rho)) if abs(rho) < 1.0 else math.inf
+        p, method = float(2 * stats.t.sf(abs(t), n - 2)), "t_approx"
+    elif not ties:
+        p, method = _edgeworth_p(ra, rb), "edgeworth"
+    if p is None or p < SPEARMAN_APPROX_MIN_P:
+        # 同順位のある組と、近似が裾に入った組（近似は p を小さく出しすぎ、Edgeworth は 0 に潰れる）
         p, method = _monte_carlo_p(ra, rb), "monte_carlo_permutation"
-    else:
-        if n <= SPEARMAN_EDGEWORTH_MAX_N:
-            p, method = _edgeworth_p(ra, rb), "edgeworth"
-        else:
-            t = rho * math.sqrt((n - 2) / (1.0 - rho * rho)) if abs(rho) < 1.0 else math.inf
-            p, method = float(2 * stats.t.sf(abs(t), n - 2)), "t_approx"
-        # 近似は裾で 0 に潰れうる（|ρ| = 1 なら t 近似は 0、Edgeworth も 0 で頭打ち）。並べ替えでとりうる最小で抑える
-        p = max(p, _p_floor(ra, rb))
     return {"n": n, "rho": rho, "p": p, "reason": None, "p_method": method}
 
 

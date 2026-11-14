@@ -187,7 +187,7 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     `ANALYSIS_SPEC_INVALID`。種ごとの行は aggregate の無い別の spec で回す）。`bh_population` は
     `matrix` / `reported` / `annotated`（SME のある特徴だけ）。`correlate`（任意）は外部の表の値との
     Spearman の ρ を、spec に書いた特徴の対応（`pairs`）ごとに返す（試料の対応 `sample_map` は 1 対 1。
-    p は小さい n・同順位では並べ替えの p で、出し方は行の `p_method`）。
+    p は小さい n・同順位・近似の裾〔1e-3 未満〕では並べ替えの p で、出し方は行の `p_method`）。
     書いても効かない設定（`steps` に無い段の設定・`merge_split=false` や外部の行列での
     `features.alignment_qc`・ols でない検定の共変量）は誤りにせず、使わずに `notes` に書く。
 

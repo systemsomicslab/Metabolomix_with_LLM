@@ -231,13 +231,19 @@ reanalysis-study の読み取りを移したもの）。数として読めない
   `reason: not_in_matrix`）。
 - ρ は両方が有限の試料だけで、同順位は平均の順位。p は両側で、出し方は行の `p_method`（t 近似は小さい n で p を
   小さく出しすぎる——5 組の |ρ| = 1 で 0、正確には 2/5! = 0.0167）:
-  - 9 組以下: `exact_permutation`（全順列を数えた正確な並べ替えの p。同順位が無ければ R の
-    `cor.test(method = "spearman")` と同じ値、あれば平均の順位のまま並べ替える条件付きの正確な p）。
-  - 10〜1290 組で同順位なし: `edgeworth`（AS 89 の Edgeworth 展開。R と同じ）。
-  - 10〜1290 組で同順位あり（未検出の 0 など）: `monte_carlo_permutation`（20,000 回の並べ替え、乱数の種は固定で
-    同じ入力なら同じ p。最小は約 1e-4）。同順位があると t 近似は p を最大で半分ほどに小さく出す。
+  - 9 組以下、または同順位なしで 14 組以下: `exact_permutation`（全順列を数えた正確な並べ替えの p。同順位が
+    無ければ S = Σd² の正確な分布で、9 組以下は R の `cor.test(method = "spearman")` と同じ値〔R は 10 組から
+    Edgeworth〕。同順位があれば平均の順位のまま並べ替える条件付きの正確な p）。
+  - 15〜1290 組で同順位なし: `edgeworth`（AS 89 の Edgeworth 展開。R と同じ）。
   - 1290 組を超える: `t_approx`（t 近似、自由度 n−2）。
-  近似（`edgeworth` / `t_approx`）の p は、並べ替えでとりうる最小（同順位が無ければ 2/n!）を下回らない（0 にしない）。
+  - 10〜1290 組で同順位あり（未検出の 0 など）、または近似（`edgeworth` / `t_approx`）の両側 p が 1e-3 未満:
+    `monte_carlo_permutation`（100,000 回の並べ替え、乱数の種は固定で同じ入力なら同じ p）。同順位があると t 近似は
+    p を最大で半分ほどに小さく出し、近似は裾で p を何桁も小さく出す（Edgeworth は 1e-3 未満で正確な p の半分以下に
+    なり、強い相関では 0 に潰れる。R の `cor.test` も 0 を返す）。
+  - **並べ替えの p の最小は 2/(回数+1) ≈ 2.0e-5**。この値なら観測より極端な並べ替えが 1 つも無かったという意味で、
+    本当の p はそれ以下（上限として読む。論文の p がこれより小さくても食い違いではない）。1e-4 を下回る辺りでは
+    観測より極端な並べ替えが数個しかなく、桁の目安として読む。
+  p は 0 にならない（正確な p の最小は 2/n!、並べ替えの最小は上のとおり、近似は 1e-3 以上だけを使う）。
   組が 5 未満なら ρ と p は null（`reason: too_few_pairs`）、どちらかが一定なら null（`constant`）。どちらも `p_method` は null。
 - 結果の `correlate` は `{stage, external（読み取りの要約）, n_samples_matched, unmatched_samples,
   unmatched_external_samples, rows: [{analysis_id, feature_id, external_id, merged_into, n, rho, p, reason, p_method}]}`
