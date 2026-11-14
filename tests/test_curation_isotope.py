@@ -43,9 +43,26 @@ def test_dimer_doubles_the_atom_counts():
     assert dimer[1] == pytest.approx(2 * mono[1], rel=0.03)
 
 
-@pytest.mark.parametrize("formula", [None, "", "Unknown", "C10Xq3"])
+@pytest.mark.parametrize("formula", [None, "", "Unknown", "C10Xq3", "C5H11NO2Se"])
 def test_unreadable_formula_gives_none(formula):
+    # Se は同位体の表に無い（最も多い 80Se の下に軽い同位体がある）ので計算しない
     assert isotope.theoretical_envelope(formula, "[M+H]+") is None
+
+
+def test_monoisotopic_iodine_does_not_block_the_envelope():
+    # チロキシン C15H11I4NO4 [M-H]-（イオン C15H10I4NO4）。ヨウ素は 127I だけで同位体のピークを作らない。
+    # M+1 = 13C 15·q_C + 2H 10·q_H + 15N q_N + 17O 4·q_O（q = a / (1 − a)）
+    hand = (15 * 0.0107 / 0.9893 + 10 * 0.000115 / 0.999885 + 0.00364 / 0.99636 + 4 * 0.00038 / 0.99757)
+    env = isotope.theoretical_envelope("C15H11I4NO4", "[M-H]-")
+    assert env["relative"][1] == pytest.approx(100 * hand, abs=0.01)
+
+
+def test_every_heavy_isotope_has_its_mass_shift():
+    for element, dist in isotope.ABUNDANCES.items():
+        heavy = {k for k in dist if k > 0}
+        assert heavy == set(isotope.ISOTOPE_SHIFTS.get(element, {})), element
+        for k, shift in isotope.ISOTOPE_SHIFTS.get(element, {}).items():
+            assert abs(shift - k) < 0.01, (element, k)       # 質量差は整数質量のずれに近い
 
 
 def test_measured_envelope_keeps_mz_relative_and_absolute_abundance():

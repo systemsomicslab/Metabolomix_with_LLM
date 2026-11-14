@@ -32,7 +32,7 @@ from metabolomix.analysis.result_state import is_current
 from metabolomix.analysis.stats_results import as_two_group, contrast_ids, split_result_ref
 from metabolomix.analysis.mass_accuracy import offset_for
 from metabolomix.core.atomic_io import DomainError, canonical_hash
-from metabolomix.msdial.adducts import mz_from_neutral, parse_adduct
+from metabolomix.msdial.adducts import mz_from_neutral, parse_adduct, same_adduct
 from metabolomix.msdial.peak_verification import monoisotopic_mass, parse_formula
 
 __all__ = [
@@ -63,8 +63,10 @@ __all__ = [
 
 # 付加体の層の既定（spec §4.1。手順書 v5 工程 7-1 の第 1 段と同じ集合に、陰イオンの酢酸付加
 # `[M+CH3COO]-` と、陽イオンのメタノール付加 `[M+CH3OH+H]+`・二重の脱水 `[M+H-2H2O]+` を足した
-# （2026-11-14。どちらも Console の標準のメソッドが探す付加体）。MS-DIAL の mzTab は `[M+CH3COO]1-` と
-# 書き、比較時に `1` を落とす）。ギ酸付加は `[M+FA-H]-`（`[M+HCOO]-` と同じ質量なので別に持たない）。
+# （2026-11-14。どちらも Console の標準のメソッドが探す付加体）。ギ酸付加は `[M+FA-H]-`（`[M+HCOO]-` と同じ
+# イオンなので別に持たない）。SME の付加体との照合は綴りでなく組成で比べる（`msdial.adducts.same_adduct`:
+# MS-DIAL の mzTab の `[M+HCOO]1-`・MSP の `[M+CHO2]-` は `[M+FA-H]-` に、`[M+Hac-H]-`・`[M+C2H3O2]-` は
+# `[M+CH3COO]-` に一致する）。
 # 層を変えると、付加体の層を省いた目標の rule_hash が変わる。
 DEFAULT_ADDUCT_TIERS: dict[str, list[list[str]]] = {
     "positive": [
@@ -92,17 +94,6 @@ _POLARITIES = ("positive", "negative")
 _SIGN_OF = {"positive": "+", "negative": "-"}
 _POLARITY_OF_SIGN = {sign: polarity for polarity, sign in _SIGN_OF.items()}
 _INCHIKEY_BLOCK_RE = re.compile(r"[A-Z]{14}")
-
-#: `[M+H]1+`（mzTab-M）と `[M+H]+`（利用者の記法）を同じ adduct として扱うための
-#: 末尾電荷表記。`1+` / `1-` だけを落とす——`2+` を `+` に潰すと価数が消える。
-_ADDUCT_UNIT_CHARGE_RE = re.compile(r"\]1([+-])$")
-
-
-def _normalize_adduct(value) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip().replace(" ", "")
-    return _ADDUCT_UNIT_CHARGE_RE.sub(r"]\1", text).casefold()
 
 
 # parse_formula は読めない部分を黙って捨てるので（"Ca(OH)2" が Ca+O+H2 になる等）、
@@ -447,7 +438,6 @@ def _identity(candidates, annotation, *, inchikey_block: str | None = None,
         wanted, key_of, name_key = lipid_species, lipid_species_of, "chemical_name"
     else:
         wanted, key_of, name_key = inchikey_block, _key_block, "inchikey"
-    wanted_adduct = _normalize_adduct(adduct)
     parsed = parse_adduct(adduct)
     wanted_charge = parsed.charge if parsed is not None else None
 
@@ -463,7 +453,8 @@ def _identity(candidates, annotation, *, inchikey_block: str | None = None,
         if block != wanted:
             reasons.append("identifier_mismatch")
             continue
-        if _normalize_adduct(candidate.get("adduct")) != wanted_adduct:
+        # 綴りでなく組成で比べる（`[M+HCOO]1-` と `[M+FA-H]-` は同じイオン。読めない表記は綴りで比べる）
+        if not same_adduct(candidate.get("adduct"), adduct):
             reasons.append("adduct_mismatch")
             continue
         charge = candidate.get("charge")
@@ -515,8 +506,8 @@ def classify_identity(candidates: list[dict], annotation: dict | None, *,
     ``sml_match`` / ``unannotated`` / ``contradicted``。``sme_rank`` は ``sme_match`` の
     ときだけ一致した候補の rank、それ以外は None。
 
-    - SME 候補（rank を問わない）のどれかが InChIKey 先頭ブロック・付加体（正規化して比較）・
-      価数のすべてで一致 → ``sme_match``。電荷が None の候補は、付加体が一致していれば
+    - SME 候補（rank を問わない）のどれかが InChIKey 先頭ブロック・付加体（綴りでなく組成で比較。
+      ``msdial.adducts.same_adduct``）・価数のすべてで一致 → ``sme_match``。電荷が None の候補は、付加体が一致していれば
       電荷の確認を通す（欠測は反証ではない）。
     - InChIKey を持つ SME 候補がどれも一致しない → ``contradicted``（理由は出た順に一意化）。
     - InChIKey を持つ SME 候補が無ければ SME は無いものとして SML を見る（SME 候補が

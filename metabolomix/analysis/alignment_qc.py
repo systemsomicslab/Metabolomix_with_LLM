@@ -7,7 +7,7 @@ MS-DIAL のアライメントは、1 つの物質を 2 つ以上のスポット�
 
 数値・ドメイン層の純ロジックで、MCP にもセッションにも依存しない。
 
-- 候補: 同じ付加体、|Δm/z| ≤ `ppm`、`min_rt_gap` < |ΔRT| ≤ `max_rt_gap` の 2 スポット
+- 候補: 同じ付加体（綴りでなく組成で比べる。`[M+HCOO]-` と `[M+CHO2]-`）、|Δm/z| ≤ `ppm`、`min_rt_gap` < |ΔRT| ≤ `max_rt_gap` の 2 スポット
   （m/z の昇順に並べて掃くので、全組を比べない）。
 - 割れの判定: 試料ごとの受け持ち（検出状態があれば検出、無ければ 2 スポットの値の大きい方）が
   補い合うこと。検出状態があれば「両方で検出された試料」が `max_both_detected` 以下で、
@@ -52,6 +52,7 @@ from typing import NamedTuple
 import numpy as np
 
 from metabolomix.core.atomic_io import DomainError
+from metabolomix.msdial.adducts import same_adduct
 
 __all__ = ["SCHEMA", "TYPES", "MergedMatrix", "find_split_pairs", "merge_matrix_columns",
            "id_order", "inchikey_match", "names_compatible", "order_label", "read_qc_file",
@@ -400,8 +401,9 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
             gap = abs(rt_b - rt_a)
             if not params["min_rt_gap"] < gap <= params["max_rt_gap"]:
                 continue
-            # 付加体が分からないスポットは組にしない（None どうしを「同じ」と読まない）。
-            if adducts.get(fid_a) is None or adducts.get(fid_a) != adducts.get(fid_b):
+            # 付加体が分からないスポットは組にしない（None どうしを「同じ」と読まない）。付加体は綴りでなく
+            # 組成で比べる（2 つの半分の注釈が別のライブラリの綴り `[M+HCOO]-` / `[M+CHO2]-` のことがある）。
+            if adducts.get(fid_a) is None or not same_adduct(adducts.get(fid_a), adducts.get(fid_b)):
                 continue
             assessed = _owners(matrix[index_a], matrix[index_b],
                                None if mask is None else mask[index_a],

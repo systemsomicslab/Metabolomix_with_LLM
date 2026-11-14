@@ -308,7 +308,7 @@ p / q / 平均 / `presence_p` は有効 4 桁）。
 | `features.evidence`（窓検索） | `sme` | SME 候補（MS/MS を見た同定）がある。`name` `inchikey` `adduct` は rank 最上位の候補のもの |
 | | `sml` | SME は無く、SML 注釈（MS1 照合のラベル）だけがある。曖昧な注釈は `name` が空で `inchikey` を `;` で連結 |
 | | `none` | 注釈が無い。**統計は付く**（注釈が無いことは「調べていない」ではない） |
-| `candidates.evidence`（目標照合） | `sme_match` | SME 候補のどれか（rank を問わない）が InChIKey 先頭ブロック・付加体・価数のすべてで目標と一致。一致した rank が `sme_rank` |
+| `candidates.evidence`（目標照合） | `sme_match` | SME 候補のどれか（rank を問わない）が InChIKey 先頭ブロック・付加体・価数のすべてで目標と一致。一致した rank が `sme_rank`。**付加体は綴りでなく組成で比べる**（n_mol・価数・極性・付加と脱離の原子が同じなら同じ: MS-DIAL の mzTab の `[M+HCOO]1-`・MSP の `[M+CHO2]-` は層の `[M+FA-H]-` に、`[M+Hac-H]-`・`[M+C2H3O2]-` は `[M+CH3COO]-` に、`[M-H-H2O]-` は `[M-H2O-H]-` に一致する。組成で読めない表記どうしは、空白と価数 1 の `1` と大文字小文字を無視した綴りで比べる） |
 | | `sml_match` | SME が無い（または InChIKey を解決できた SME 候補が無い）特徴で、SML 注釈の InChIKey 先頭ブロックが一致 |
 | | `unannotated` | 注釈が無い、または SML が別物質（SML は MS1 照合だけで異性体を区別できないので矛盾としない）。**`rt_min` があるときだけ** qualified |
 | | `contradicted` | InChIKey を持つ SME 候補がどれも一致しない＝ MS/MS の同定が別物質。qualified にならない |

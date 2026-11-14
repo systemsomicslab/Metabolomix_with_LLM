@@ -431,6 +431,45 @@ def test_identity_adduct_and_charge_must_match():
                              inchikey_block=block, adduct="[M+H]+")[0] == "contradicted"
 
 
+@pytest.mark.parametrize("sme_adduct, tier_adduct", [
+    # MS-DIAL 5 の mzTab はギ酸付加を `[M+HCOO]1-` と書き、研究室の MSP は `[M+CHO2]-` と書く
+    ("[M+HCOO]1-", "[M+FA-H]-"), ("[M+CHO2]1-", "[M+FA-H]-"), ("[M+HCOO]-", "[M+FA-H]-"),
+    ("[M+Hac-H]1-", "[M+CH3COO]-"), ("[M+C2H3O2]1-", "[M+CH3COO]-"),
+    ("[M-H-H2O]1-", "[M-H2O-H]-"), ("[M+H]1+", "[M+H]+"), ("[M+NH4]1+", "[M+NH4]+"),
+])
+def test_identity_compares_adducts_by_composition_not_spelling(sme_adduct, tier_adduct):
+    charge = -1 if sme_adduct.endswith("-") else 1
+    assert classify_identity([_candidate(adduct=sme_adduct, charge=charge)], None,
+                             inchikey_block=GABA_KEY[:14], adduct=tier_adduct) == ("sme_match", [], 1)
+
+
+@pytest.mark.parametrize("sme_adduct, tier_adduct", [
+    ("[M+Na-2H]1-", "[M-H]-"), ("[2M-H]1-", "[M-H]-"), ("[M+HCOO]1-", "[M+CH3COO]-"),
+    ("[M+H]1+", "[M]+"), ("[M]1-", "[M]+"), ("[M+2H]2+", "[M+H]+"),
+])
+def test_different_ions_stay_adduct_mismatches(sme_adduct, tier_adduct):
+    assert classify_identity([_candidate(adduct=sme_adduct)], None,
+                             inchikey_block=GABA_KEY[:14], adduct=tier_adduct) \
+        == ("contradicted", ["adduct_mismatch"], None)
+
+
+def test_formate_identification_from_msdial_resolves_the_negative_target():
+    """負イオンの脂質（PC は [M-H]- を作らない）。正しい特徴の SME 1 位が正しい InChIKey と `[M+HCOO]1-` を
+    持つ。綴りで比べると既定の層の `[M+FA-H]-` と食い違って `contradicted` になり、同定の無い特徴より下に落ちていた。"""
+    key = "WTJKGGKOPKCXLL-VYOBOKEXSA-N"
+    formula = "C42H82NO8P"
+    mz = theoretical_mz(formula, "[M+FA-H]-")
+    [target] = normalize_targets([{"target_id": "pc", "inchikey": key, "formula": formula,
+                                   "rt_min": 10.0}], dataset_polarity="negative")
+    sme = _candidate(adduct="[M+HCOO]1-", charge=-1, inchikey=key, chemical_name="PC 16:0_18:1",
+                     exp_mass_to_charge=mz, theoretical_mass_to_charge=mz)
+    out = match_target(_dataset({"1": {"mz": mz, "rt": 10.0, "candidates": [sme]}}), target,
+                       max_results=20)
+    assert out["status"] == "resolved" and out["selected_feature_id"] == "1"
+    assert out["selected_adduct"] == "[M+FA-H]-" and out["selected_evidence"] == "sme_match"
+    assert _row(out, "1", "[M+FA-H]-")["reasons"] == ""
+
+
 def test_sml_of_another_isomer_is_not_a_contradiction():
     ds = _dataset({"1": {"mz": MH, "rt": 1.2,
                          "annotation": {"sml_id": "9", "ambiguous": False,

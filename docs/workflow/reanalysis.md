@@ -151,7 +151,7 @@ ols でない検定の共変量）は `normalize_spec(spec, notes=...)` が捨�
 2. ├─ metabolomix/analysis/claim_evidence.py  feature_relations()
 3. │  ├─ metabolomix/analysis/claim_evidence.py  formula_index()
 4. │  ├─ metabolomix/curation/relations.py  profile_correlation()
-5. │  └─ metabolomix/curation/relations.py  find_relations()
+5. │  └─ metabolomix/curation/relations.py  find_relations()（Y 自身の付加体は `msdial/adducts.py` `same_adduct()` で組成で除き、同位体の期待比は Y のイオンの組成の `curation/isotope.py` `isotopologues()` のうち X の窓に入るものの和）
 6. └─ metabolomix/tools/reanalysis_tools.py  rows_table()
 
 ## dataset_claim_evidence
