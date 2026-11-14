@@ -239,8 +239,9 @@ Console を捨てない——やり直しの対象にも、`UPSTREAM_RERUN_REQUI
 (稼働中の Console の最中に届いたシートの訂正は受け付け、受領だけを戻す)。worker が
 居なくなった run の `running` は、今までどおり `rerun_upstream=true` を求める。ただし Console の順番待ちの間に
 worker が消え、Console をまだ起こしていない単位(`_console_never_started`。job は順番が来てから Console を起こす前に
-`store.console_attempt_dir` の下へ書くので、無ければ起きていない。`console_job_path` は Console の終了後にしか
-記録されないので使えない)は状態が分かっているので数えず、`upstream` と `validate_outputs` だけを戻して
+`store.console_attempt_dir` の下へ書くので、今の attempt の job が無ければ起きていない。単位の `console_job_path` は
+見ない: Console の終了後にしか書かれず `rerun_upstream=true` も消さないので、走っている attempt では空か前の
+attempt を指すだけ)は状態が分かっているので数えず、`upstream` と `validate_outputs` だけを戻して
 `rerun_upstream` なしで最初の Console から続ける(戻り値の `console_not_started_units`)。
 
 ## pipeline_cancel
@@ -298,7 +299,10 @@ RAW_FILE_NAME、どちらも無ければ試料名と raw の語幹で)対応づ�
 埋めない(付け方の違う順を混ぜない)。試料の表が UTF-8 で
 読めなければ `SAMPLE_TABLE_INVALID`。書く前に
 受付と同じ厳密な読み手(`parse_manifest`)へ一時ファイルで通し、通ったものだけを原子的に書く。既にあれば
-`overwrite=True` が無い限り `SAMPLE_SHEET_EXISTS` で止まる。
+`overwrite=True` が無い限り `SAMPLE_SHEET_EXISTS` で止まる。`_notes` は、順の欠けた生体試料か QC が統計に入る
+(`include=true`)ときだけ「ドリフト補正と注入順の偏りの判定は行われない」と書く(前処理の `_select` が
+`include=false` の試料を先に外すので、外した試料の欠けた順はどちらも止めない)。`.wiff2` の取得時刻は同じ幹の
+`.wiff`(SCIEX OS が並べて書く OLE のファイル)から読む(`acquisition._read_wiff2`)。
 
 ## console_method_candidates
 

@@ -144,9 +144,10 @@ def _console_never_started(pipeline_root: Path, record: dict, polarity: str) -> 
     Console をまだ起こしていないか（読むだけ）。
 
     `service._run_console_unit` は順番が来てから今の attempt の実行フォルダに `analysis-job.json` を作り、
-    その後で Console を起こす。だから job が無ければ Console は起きていない。`console_job_path` は
-    Console の終了後にしか記録されないので、ここでは使えない（走っている間はいつも空）。worker が
-    生きているかは呼び出し側が見る（生きていれば本当に待っている最中）。
+    その後で Console を起こす。だから今の attempt の job が無ければ Console は起きていない。単位の
+    `console_job_path` は見ない: Console の終了後にしか書かれず、`rerun_upstream=true` の再開も消さないので、
+    走っている attempt では空か前の attempt（失敗した Console）を指すだけで、今の attempt の手がかりにならない。
+    worker が生きているかは呼び出し側が見る（生きていれば本当に待っている最中）。
     """
     stage = (record.get("stages") or {}).get(store.unit_stage_id("upstream", polarity)) or {}
     waiting = stage.get("waiting")
@@ -154,8 +155,6 @@ def _console_never_started(pipeline_root: Path, record: dict, polarity: str) -> 
             or waiting.get("reason") != "console_slot"):
         return False
     unit = store.run_units(record).get(polarity) or {}
-    if (unit.get("upstream") or {}).get("console_job_path"):
-        return False
     unit_root = Path(pipeline_root) / (unit.get("unit_root") or polarity)
     job = store.console_attempt_dir(unit_root, stage.get("attempt")) / job_manager.JOB_FILENAME
     return not job.exists()

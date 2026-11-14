@@ -9,6 +9,7 @@ import struct
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from metabolomix.analysis import sample_manifest
@@ -176,11 +177,30 @@ def test_bruker_wins_over_agilent_and_missing_layouts_name_both_vendors(tmp_path
 
 
 def test_wiff2_is_unreadable_with_a_format_specific_reason(tmp_path):
-    """SCIEX OS の .wiff2 は stdlib で読める取得時刻の欄が無い。理由は形式に即して書き、変換の道を示す。"""
+    """SCIEX OS の .wiff2 自身は stdlib で読める取得時刻の欄が無い。同じ幹の .wiff も無ければ、理由は形式に即して
+    書き（.wiff が無いことも）、変換の道を示す。"""
     (tmp_path / "s1.wiff2").write_bytes(b"\x00" * 64)
     got = A.read_acquisition_times(tmp_path / "s1.wiff2")
     assert got["source"] == "unreadable" and got["start_utc"] is None
-    assert ".wiff2" in got["error"] and "mzML" in got["error"]
+    assert ".wiff2" in got["error"] and "mzML" in got["error"] and "s1.wiff" in got["error"]
+
+
+def test_wiff2_reads_the_acquisition_time_of_the_same_stem_wiff(tmp_path):
+    """SCIEX OS は同じ取得に <幹>.wiff（OLE 複合ファイル）も書く。.wiff2 の取得時刻はその .wiff から読む。"""
+    end = T0 + timedelta(minutes=9, seconds=20)
+    (tmp_path / "s1.wiff2").write_bytes(b"\x00" * 64)                # 暗号化された SQLite（読まない）
+    write_wiff(tmp_path / "s1.wiff", T0, end)
+    (tmp_path / "s1.wiff.scan").write_bytes(b"\x00" * 16)
+    got = A.read_acquisition_times(tmp_path / "s1.wiff2")
+    assert got == {"start_utc": T0.isoformat(), "end_utc": end.isoformat(), "source": "wiff_ole_sibling",
+                   "error": None}
+    # 同じ幹の .wiff と同じ時刻（並べて読んでも同じ取得を指す）
+    assert A.read_acquisition_times(tmp_path / "s1.wiff")["start_utc"] == got["start_utc"]
+    # 同じ幹の .wiff が壊れていれば、その名前を挙げて unreadable
+    (tmp_path / "s2.wiff2").write_bytes(b"\x00" * 64)
+    (tmp_path / "s2.wiff").write_bytes(b"not an OLE file" * 40)
+    broken = A.read_acquisition_times(tmp_path / "s2.wiff2")
+    assert broken["source"] == "unreadable" and "s2.wiff" in broken["error"]
 
 
 def test_other_formats_are_unreadable_without_raising(tmp_path):
@@ -272,6 +292,55 @@ def test_qc_injections_keep_a_session_continuous():
     rows = _rows(times)
     out = A.group_overlap(rows, {"a1": "A", "a2": "A", "b1": "B", "b2": "B"})
     assert out["overlap"] == "independent" and len(out["by_session"]) == 1
+
+
+def _cycle(order: list[str], minutes: float, start: datetime = T0) -> dict[str, datetime]:
+    return {name: start + timedelta(minutes=minutes * k) for k, name in enumerate(order)}
+
+
+def test_long_cycle_batches_are_one_session_not_one_per_injection():
+    """1 周期 50 分のメソッドで A,B を交互に 8 本続けて測った 1 本の取得は independent（まとまりは 1 つ）。
+    固定の 40 分で区切ると 1 本ずつのまとまりになり、いつも partial になっていた。"""
+    order = ["a1", "b1", "a2", "b2", "a3", "b3", "a4", "b4"]
+    rows = _rows(_cycle(order, 50))
+    groups = {f: f[0].upper() for f in order}
+    # 独立に計算した区切り: 間隔（分）の中央値 50 の 3 倍と 40 分の大きいほう
+    starts = np.array([datetime.fromisoformat(r["start_utc"]).timestamp() for r in rows])
+    expected_gap = max(40.0, 3 * float(np.median(np.diff(np.sort(starts)) / 60)))
+    assert expected_gap == 150.0 and A.session_gap_minutes(rows) == expected_gap
+    assert set(A.acquisition_sessions(rows).values()) == {1}
+    assert len(set(A.acquisition_sessions(rows, A.GAP_MINUTES).values())) == 8    # 固定の 40 分なら 8 つに割れる
+    out = A.group_overlap(rows, groups)
+    assert out["overlap"] == "independent" and out["session_gap_minutes"] == 150.0
+    assert [s["groups"] for s in out["by_session"]] == [{"A": 4, "B": 4}]
+
+
+def test_long_cycle_batches_still_split_at_a_real_break():
+    """1 周期 50 分でも、夜を越す中断（周期の 3 倍を超える）では区切り、片方の群だけの日があれば partial。"""
+    day1 = _cycle(["a1", "b1", "a2", "b2"], 50)
+    day2 = _cycle(["a3", "a4", "a5"], 50, start=T0 + timedelta(hours=20))
+    rows = _rows({**day1, **day2})
+    groups = {f: f[0].upper() for f in [*day1, *day2]}
+    assert A.session_gap_minutes(rows) == 150.0
+    out = A.group_overlap(rows, groups)
+    assert out["overlap"] == "partial"
+    assert [s["groups"] for s in out["by_session"]] == [{"A": 2, "B": 2}, {"A": 3}]
+
+
+def test_session_gap_uses_the_lower_median_and_ignores_duplicate_times():
+    """間隔が偶数個なら短いほうの中央値（中断が間隔の半分を占める少ない注入でも、中断を 1 周期と読まない）。
+    同じ時刻の取得（.wiff2 と同じ幹の .wiff）は 1 つに数え、間隔 0 で区切りを縮めない。"""
+    few = _rows({"a1": T0, "b1": T0 + timedelta(minutes=20), "a2": T0 + timedelta(minutes=290),
+                 "a3": T0 + timedelta(minutes=310), "b2": T0 + timedelta(minutes=1370)})
+    # 間隔 20, 270, 20, 1060 → 低いほうの中央値 20 → 60 分（平均の中央値 145 なら 435 分で中断を読み落とす）
+    assert float(np.median([20, 270, 20, 1060])) == 145.0 and A.session_gap_minutes(few) == 60.0
+    assert A.acquisition_sessions(few) == {"a1": 1, "b1": 1, "a2": 2, "a3": 2, "b2": 3}
+    twins = {}
+    for k in range(6):
+        t = T0 + timedelta(minutes=50 * k)
+        twins[f"s{k}.wiff"], twins[f"s{k}.wiff2"] = t, t
+    assert A.session_gap_minutes(_rows(twins)) == 150.0
+    assert A.session_gap_minutes(_rows({"a1": T0})) == A.GAP_MINUTES and A.session_gap_minutes([]) == A.GAP_MINUTES
 
 
 # ---------- ISA / mwTab からのシート ----------

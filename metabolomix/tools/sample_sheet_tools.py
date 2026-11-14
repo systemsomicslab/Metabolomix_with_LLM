@@ -46,9 +46,14 @@ def _notes(built: dict) -> list[str]:
         note = (f"取得時刻の読めない raw {n_unreadable} 件（unreadable）は injection_order を空にし、読めた raw は"
                 "取得時刻の順（読めたものの中の順位）にした。空欄は不明のまま扱われる（MS-DIAL の番号では埋めない）。")
         unread = set(built["unreadable"])
-        if any(r["role"] in ("sample", "qc") for r in built["rows"] if r["source_file"] in unread):
+        # 前処理は include=false の試料を先に外す（`_select`）ので、欠けた順が補正と判定を止めるのは統計に入る試料だけ
+        missing = [r for r in built["rows"] if r["source_file"] in unread and r["role"] in ("sample", "qc")]
+        if any(r["include"] == "true" for r in missing):
             note += ("生体試料か QC の順が欠けるので、ドリフト補正と注入順の偏りの判定は、その順を埋めるまで"
                      "行われない（分かれば injection_order を埋める）。")
+        elif missing:
+            note += ("順の欠けた生体試料は統計から外した試料（include=false）だけなので、ドリフト補正と注入順の偏りの"
+                     "判定は止まらない（その試料を include=true にするなら injection_order も埋める）。")
         notes.append(note)
     n_unassigned = len(built["unassigned_samples"])
     if n_unassigned:
@@ -91,11 +96,14 @@ def pipeline_sample_sheet(
     （ファイルと試料の対応か因子の列が合っていない）。因子の列はシートの後ろに渡した名前で足す
     （`dataset_compare(factors=...)` がその列で計画を組める）。シートの既知の列と**完全に同じ**名前（`group`・`batch`
     など）だけは `factor_<名>` に改めて書き、`renamed_factor_columns` と `notes` に出す（`Group` のように大文字小文字
-    だけ違う名前はそのまま）。注入順は raw の取得時刻（メタデータだけを読む）の順で、シートの schema の行の直後に
+    だけ違う名前はそのまま）。注入順は raw の取得時刻（メタデータだけを読む。`.wiff2` は SCIEX OS が並べて書く
+    同じ幹の `.wiff` から読む）の順で、シートの schema の行の直後に
     `# injection_order_source = raw_acquisition_time` を書く（読み込んだ試料の表・統計の注入順の出所が
     `raw_acquisition_time` になる）。読めない raw があっても読めた raw の順は残し、読めない raw の注入順だけを空に
     する（`injection_order_source: "raw_acquisition_time_partial"`。空欄は MS-DIAL の番号で埋まらず不明のまま）。
     どれも読めなければ `none`（宣言も書かない）。読めなかったファイルは `unreadable`、理由は `unreadable_reasons`。
+    順の欠けた生体試料か QC が統計に入る（`include=true`）ときだけ、`notes` がドリフト補正と注入順の偏りの判定は
+    行われないと書く（`include=false` の試料は前処理が先に外すので止めない）。
     バッチは空。試料の表は UTF-8（BOM 可）。
     1 行は raw のフォルダの主ファイル 1 つ（pipeline の受付と同じ一覧。形式が混ざるときは `keep_extension`）。
 

@@ -11,7 +11,7 @@ from metabolomix.analysis import sample_manifest
 from metabolomix.pipeline.inputs import list_primary_names
 from metabolomix.tools.dataset import list_data_files
 from metabolomix.tools.sample_sheet_tools import pipeline_sample_sheet
-from tests.test_rawmeta import T0, _isa, write_agilent_d, write_mzml
+from tests.test_rawmeta import T0, _isa, write_agilent_d, write_mzml, write_wiff
 
 
 def _call(**kw) -> dict:
@@ -101,6 +101,75 @@ def test_agilent_d_folders_get_an_injection_order(tmp_path):
                                           expected_sources=list_primary_names(raw, {}))
     order = {r["source_file"].replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]: r["injection_order"] for r in rows}
     assert order == {"s2.d": 1, "s1.d": 2, "s3.d": 3}
+
+
+def test_wiff2_primaries_take_their_order_from_the_same_stem_wiff(tmp_path):
+    """SCIEX OS のフォルダ（同じ幹の .wiff・.wiff.scan・.wiff2）で .wiff2 を主ファイルに選んでも、注入順は
+    同じ幹の .wiff の取得時刻から付く（mzML への変換を求めない）。list_data_files も .wiff2 を読めたと示す。"""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    for k, stem in enumerate(["s2", "s1", "s3"]):                  # 1 周期 50 分の取得
+        start = T0 + timedelta(minutes=50 * k)
+        write_wiff(raw / f"{stem}.wiff", start, start + timedelta(minutes=45))
+        (raw / f"{stem}.wiff.scan").write_bytes(b"\x00" * 16)
+        (raw / f"{stem}.wiff2").write_bytes(b"\x00" * 64)
+    mwtab = tmp_path / "ST000006.txt"
+    mwtab.write_text("#METABOLOMICS WORKBENCH STUDY_ID:ST000006\n"
+                     + "".join(f"SUBJECT_SAMPLE_FACTORS\t-\t{n}\tTreatment:{t}\tRAW_FILE_NAME={n}.wiff2\n"
+                               for n, t in (("s1", "ctrl"), ("s2", "drug"), ("s3", "drug"))), encoding="utf-8")
+    out = _call(raw_dir=str(raw), sample_table=str(mwtab), factor_columns=["Treatment"], keep_extension=".wiff2")
+    assert out["status"] == "success" and out["injection_order_source"] == "raw_acquisition_time", out
+    assert out["unreadable"] == [] and out["unreadable_reasons"] == {}
+    names = list_primary_names(raw, {"keep_extension": ".wiff2"})
+    rows = sample_manifest.parse_manifest(raw / "sample-manifest.tsv", source_root=raw, expected_sources=names)
+    order = {r["source_file"].replace("\\", "/").rsplit("/", 1)[-1]: r["injection_order"] for r in rows}
+    assert order == {"s2.wiff2": 1, "s1.wiff2": 2, "s3.wiff2": 3}
+    text = list_data_files(directory=str(raw), all_files=True)
+    line = next(x for x in text.splitlines() if x.startswith("s1.wiff2\t"))
+    assert line.split("\t")[1] == (T0 + timedelta(minutes=50)).isoformat() and line.split("\t")[3] == "wiff_ole_sibling"
+    # .wiff と .wiff2 が同じ時刻で並んでも、区切りの間隔は 1 周期（50 分）の 3 倍のまま（間隔 0 で縮めない）
+    assert "150 分を超える間隔で区切った取得のまとまり（1 個）" in text
+
+
+def test_order_missing_only_for_excluded_samples_does_not_claim_drift_is_blocked(tmp_path):
+    """取得時刻の読めない raw が統計から外した試料（群 unassigned・include=false）だけなら、ドリフト補正と注入順の
+    偏りの判定は止まらない（前処理の _select が先に外す）。notes もそう書き、止まると言わない。"""
+    from types import SimpleNamespace
+
+    from metabolomix.analysis.stats import data as stats_data
+    from metabolomix.analysis.stats import preprocess as P
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    for k, stem in enumerate(["qc1", "c1", "d1", "qc2", "c2", "d2", "qc3"]):
+        write_mzml(raw / f"{stem}.mzML", T0 + timedelta(minutes=10 * k))
+    (raw / "x1.mzML").write_text("<mzML><run id='r'/></mzML>", encoding="utf-8")   # 時刻が無く、表に行も無い
+    s_table = tmp_path / "s.txt"
+    s_table.write_text("Sample Name\tFactor Value[Treatment]\nc1\tCtrl\nc2\tCtrl\nd1\tCase\nd2\tCase\n",
+                       encoding="utf-8")
+    out = _call(raw_dir=str(raw), sample_table=str(s_table), factor_columns=["Treatment"],
+                qc_selector=["Sample Name", "^qc"])
+    assert out["status"] == "success" and out["unreadable"] == ["x1.mzML"] and out["unassigned_samples"] == ["x1"]
+    note = next(n for n in out["notes"] if "取得時刻の読めない raw 1 件" in n)
+    assert "その順を埋めるまで行われない" not in note and "止まらない" in note
+
+    names = list_primary_names(raw, {})
+    rows = sample_manifest.parse_manifest(raw / "sample-manifest.tsv", source_root=raw, expected_sources=names)
+
+    def drift_reasons(sheet_rows):
+        ds = SimpleNamespace(feature_matrix=[[100.0 + k for k in range(len(sheet_rows))]],
+                             detected_mask=[[True] * len(sheet_rows)], feature_ids=["f"],
+                             sample_names=[r["sample_id"] for r in sheet_rows], sample_metadata_rows=sheet_rows)
+        prep = P.preprocess(stats_data.from_dataset(ds), {"filters": {"blank_ratio": None, "qc_rsd": None,
+                                                                      "d_ratio": None},
+                                                          "normalize": {"method": "none"}, "drift": {"mode": "auto"}})
+        step = next(s for s in prep.steps if s["step"] == "drift")
+        return step.get("reasons") or []
+
+    assert "no_injection_order" not in drift_reasons(rows)
+    # 対照: 同じ試料を統計に入れれば（include=true）、欠けた順がドリフト補正を止める（notes の文言が要る場合）
+    included = [dict(r, include=True, group="Ctrl") if r["sample_id"] == "x1" else r for r in rows]
+    assert drift_reasons(included) == ["no_injection_order"]
 
 
 def test_unassigned_renamed_and_ambiguous_rows_are_returned_with_notes(tmp_path):

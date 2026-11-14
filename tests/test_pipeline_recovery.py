@@ -384,6 +384,52 @@ def test_a_console_job_written_before_the_worker_died_still_requires_rerun(tmp_p
     assert set(_unit_stage_ids("negative")) <= set(accepted["reset_stage_ids"])
 
 
+def test_a_rerun_attempt_killed_while_waiting_resumes_without_rerun_upstream(tmp_path, monkeypatch):
+    """1 回目の Console が失敗して単位の console_job_path が attempt-0001 を指したまま、rerun_upstream=true で
+    やり直した 2 回目が順番待ちの間に殺された。前の attempt の console_job_path に惑わされず、今の attempt
+    （attempt-0002）の job が無いので Console はまだ起きていないと読み、rerun_upstream なしで続ける。"""
+    path = create_synthetic_run(tmp_path)
+    failed_console = synthetic_handlers()
+
+    def console_failed(context):
+        run_dir = store_module.console_attempt_dir(context["unit_root"], context.get("attempt"))
+        run_dir.mkdir(parents=True)
+        (run_dir / "analysis-job.json").write_text("{}", encoding="utf-8")
+        (run_dir / "execution-result.json").write_text(json.dumps({
+            "schema": "console-execution.v1",
+            "process_identity": {"pid": 4242, "creation_time": 7}}), encoding="utf-8")
+        job_rel = (run_dir / "analysis-job.json").relative_to(context["pipeline_root"]).as_posix()
+        return {"status": "failed", "result_refs": [], "warnings": [],
+                "error": {"code": "MSDIAL_EXECUTION_FAILED", "message": "exited", "details": {}},
+                "unit_updates": {"upstream": {"console_job_path": job_rel, "execution_id": "exec-1",
+                                              "verification": {"status": "failed"}}}}
+
+    failed_console["upstream"] = console_failed
+    assert run_engine(path, failed_console)["status"] == "failed"
+    monkeypatch.setattr(recovery_module, "same_process", lambda identity: False)   # 1 回目の Console はもう居ない
+    prepare_resume(path, rerun_upstream=True)
+
+    handlers = synthetic_handlers()
+
+    def waiting_then_killed(context):
+        context["report_waiting"](dict(_SLOT_WAIT))
+        raise _WorkerKilled
+
+    handlers["upstream"] = waiting_then_killed
+    with pytest.raises(_WorkerKilled):
+        run_engine(path, handlers)
+    record = load_run(path)
+    stage = record["stages"]["upstream:negative"]
+    assert stage["status"] == "running" and stage["attempt"] == 2 and stage["waiting"]["reason"] == "console_slot"
+    assert record["units"]["negative"]["upstream"]["console_job_path"].endswith("attempt-0001/analysis-job.json")
+
+    assert read_status(path)["recovery_hint"]["console_not_started_units"] == ["negative"]
+    accepted = prepare_resume(path)
+    assert accepted["console_not_started_units"] == ["negative"]
+    assert set(accepted["reset_stage_ids"]) == {"upstream:negative", "validate_outputs:negative", "receipt"}
+    assert run_engine(path, synthetic_handlers())["status"] == "completed"
+
+
 def test_execution_unresolved_when_console_alive_but_unverified(tmp_path, monkeypatch):
     path = create_synthetic_run(tmp_path)
     run_dir = path / "negative" / "console" / "attempt-0001"
