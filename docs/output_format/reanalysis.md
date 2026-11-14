@@ -276,7 +276,7 @@ share_max}`。使うのは比べる 2 群の試料のうち和が有限で正の
 `alignment_qc`・`groups`: まとめた群（残す ID が先頭）・`groups_hash`・`n_groups_given`・`skipped`）・
 `input_fingerprint`（`dataset_hash`・入力の TSV と `alignment_qc` の JSON ごとの sha256）・`comparison`、
 外部の表（MAF・mwTab・xlsx）の入力なら `input_read`（`{source, n_features, n_samples, n_unreadable_cells,
-unreadable_examples}`。xlsx は `n_rows_skipped_as_text`・`rows_skipped_as_text` も）、`correlate` を書いたなら `correlate`、効かない設定を捨てたなら `notes`。
+unreadable_examples}`。xlsx は `n_rows_skipped_as_text`・`rows_skipped_as_text` も）、`correlate` を書いたなら `correlate`、効かない設定を捨てたとき・陽陰を統合したデータセットの `drift_correct` を TSV の 1 つの注入順で当て、陰イオンの測定の注入順と違う試料があったとき（§3 の `drift_correct`）は `notes`。
 `rule_hash` は正規化した spec（パスを除く）に、データセットの入力で `merge_split` が真なら使った群の
 hash も入れる——同じ spec でも割れの組が変われば別の規則で、`merge_split` を変えても変わる
 （外部の行列では `merge_split` は hash に入らない）。
@@ -428,7 +428,7 @@ matrix_id, preprocess: {steps, warnings, subject_source}, primary, analyses: [{a
 | `detection_filter` | `{"basis": "detected", "min_rate": {}}` | 役割（`qc`・`sample`・`blank`）ごとの検出率の最小。挙げた役割のすべてを満たす特徴を残す。`basis`: `detected` は gap-fill を除く実検出（検出状態が無ければ `DETECTION_UNAVAILABLE`）、`positive` は値が有限かつ > 0（gap-fill を含む） |
 | `impute` | `{"method": "half_min", "missing": "zero", "k": 10, "scale": "log2", "rowmax": 0.5, "colmax": 0.8}` | 欠測（`missing`: `zero` は ≤0 か非有限、`nan` は非有限だけ）を埋める。`half_min`: 特徴ごとの正の値の最小の半分（正の値が無い特徴は欠測のまま）。`knn`: 下記。`none` |
 | `normalize` | `{"method": "pqn", "reference": "qc"}` | `pqn`: 参照（`reference` の役割の試料の、特徴ごとの正の値の中央値）に対する商の中央値で割る。`tic`（有限値の和）・`median`（正の値の中央値）は係数を試料間の中央値で割る。係数が 0・非有限の試料は割らずに報告する。入力が陽陰を統合したデータセットなら、係数は極性ごとにその極性の特徴だけから求め、その極性の列だけを割る（段の報告は `by_polarity`: 極性 → `factors`・`unscaled_samples`。陽イオンと陰イオンは別の注入） |
-| `drift_correct` | `{"method": "loess", "span": 0.75, "iterations": 0, "min_qc": 4}` | 特徴ごとに、正の QC 値を注入順に対して LOWESS で当て、`値 / 当てはめ × QC 値の中央値` に直す。正の QC 値が `min_qc` 未満、または当てはめが正の有限でない特徴は直さず数える。注入順はすべての試料に要る（`INJECTION_ORDER_MISSING`）。注入順は試料ごとに 1 つなので、陽陰を統合したデータセットでもすべての特徴に同じ順を当てる（陰イオンの注入順が違うなら、極性ごとの測定で補正する v2 か `dataset_preprocess` を使う） |
+| `drift_correct` | `{"method": "loess", "span": 0.75, "iterations": 0, "min_qc": 4}` | 特徴ごとに、正の QC 値を注入順に対して LOWESS で当て、`値 / 当てはめ × QC 値の中央値` に直す。正の QC 値が `min_qc` 未満、または当てはめが正の有限でない特徴は直さず数える。注入順はすべての試料に要る（`INJECTION_ORDER_MISSING`）。入力が陽陰を統合したデータセットなら、極性ごとにその極性の注入順で当てはめる（陽イオンと陰イオンは別の注入）: `injection_order.source=metadata` は、陽イオンを試料の表（陽イオンの試料の表。当てたシートを含む）の注入順、陰イオンを統合が残した陰イオンの測定（`quant_state.polarity_runs.negative`）の注入順で（その極性の注入順の無い試料があれば、message の先頭と `details.polarity` に極性を添えて `INJECTION_ORDER_MISSING`）。TSV は試料ごとに 1 つの注入順なので全極性にそれを当て、陰イオンの測定の注入順と違う（または分からない）試料があれば、結果と戻り値の `notes` にその数と試料を書く（陰イオンをその測定の順で補正するなら `metadata` か v2・`dataset_preprocess`）。段の報告の `by_polarity` は極性 → `uncorrected_features`・`injection_order`（使った注入順: `metadata` / `tsv` / `polarity_runs.negative`） |
 | `qc_rsd_filter` | `{"max_rsd": 0.3}` | QC の有限値の `std(ddof=1)/mean` が `max_rsd` 以下の特徴を残す。RSD が出ない特徴も落とす（別に数える） |
 
 **参照する標準の定義:**
@@ -772,8 +772,8 @@ v7 と同じ（`merged_from`・`sme_feature_id`・`merge_split` を出さず、�
 （`alignment_qc` は `dataset_alignment_qc` の `output_path`。省略時はこのハンドルで `dataset_alignment_qc` が最後に
 出した結果（§9。データ・試料の表・除外が変わっていないもの）、それも無ければその場で探す。`rule_hash` にパスは
 入らない）。`merge_split=false` の `alignment_qc` は効かないので捨てて `notes` に書く（`rule_hash` は書かないときと同じ）。
-`statistics.analysis_spec` の効かない設定も、欄の名前の前に `statistics.analysis_spec: ` を付けて `notes` に書く
-（analysis_spec では最後の結果は使わない。spec だけで再現する）。
+`statistics.analysis_spec` の効かない設定と実行時の注記（統合したデータセットの `drift_correct` の注入順。§3）も、
+欄の名前の前に `statistics.analysis_spec: ` を付けて `notes` に書く（analysis_spec では最後の結果は使わない。spec だけで再現する）。
 戻り値と JSON の `merge_split` は `{enabled, source, n_groups}`（`n_groups` はまとめた組の数。`source` は
 `alignment_qc`（ファイル）・`last_alignment_qc`（ハンドルの最後の結果）・`find_split_pairs`（その場））。
 

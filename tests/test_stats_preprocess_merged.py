@@ -323,12 +323,13 @@ def _point(tmp_path, monkeypatch):
     monkeypatch.setenv("LIPIDMIX_CONFIG", str(cfg))
 
 
-def _folder(path, order, values, ion, *, permute=None):
+def _folder(path, order, values, ion, *, permute=None, names=None):
     from metabolomix.dataset.alignment_files import select_alignment
     from metabolomix.dataset.msdial_adapter import load_msdial_folder
     from tests.msdial_folder_fixtures import write_msdial_folder
     idx = list(range(15)) if permute is None else permute
-    samples = [{"file_id": k, "name": IDS[i], "class_id": GROUPS[i] or ROLES[i].upper(),
+    names = list(IDS) if names is None else names
+    samples = [{"file_id": k, "name": names[i], "class_id": GROUPS[i] or ROLES[i].upper(),
                 "file_type": {"sample": 0, "qc": 2, "blank": 3}[ROLES[i]], "order": order[i]}
                for k, i in enumerate(idx)]
     spots = [{"name": f"{ion} {30 + j}:1", "ontology": ion, "mz": 500.0 + j,
@@ -458,3 +459,340 @@ def test_v1_recipe_normalizes_each_polarity(tmp_path, monkeypatch, method):
         expected = totals / np.median(totals)
         got = [step["by_polarity"]["negative"]["factors"][sid] for sid in IDS]
         np.testing.assert_allclose(got, expected, rtol=1e-12)
+
+
+# --- レビュー指摘: 統合は陽イオンの試料の表（シート）を引き継ぎ、陽陰の測定を前処理が読む値で比べる ----------
+
+#: .mddata の注入順（MS-DIAL の既定＝ファイルの順）と、シートで入れた実際の順（陽イオン・陰イオン）。
+FILE_ORDER = list(range(1, 16))
+POS_TRUE = [1, 9, 3, 5, 13, 2, 8, 4, 11, 10, 6, 7, 12, 14, 15]
+NEG_TRUE = [1, 3, 5, 7, 2, 4, 9, 6, 8, 11, 10, 13, 12, 14, 15]
+_SHEET_HEADER = "sample_id\tsource_file\trole\tgroup\tbatch\tinjection_order\tqc_pool\tinclude"
+
+
+def _sheet_text(names, order) -> str:
+    """raw（fixture の .mddata の file_path は C:/data/<試料名>.wiff）を挙げた sample-manifest.v1。"""
+    lines = ["# schema = sample-manifest.v1", _SHEET_HEADER]
+    for i, name in enumerate(names):
+        lines.append("\t".join([str(name), f"{name}.wiff", ROLES[i], GROUPS[i] or "", "", str(order[i]),
+                                "", ""]))
+    return "\n".join(lines) + "\n"
+
+
+def _sheet(ds, order, path):
+    from metabolomix.analysis import sample_manifest
+    path.write_text(_sheet_text(ds.sample_names, order), encoding="utf-8")
+    return sample_manifest.apply_sample_manifest(ds, str(path))
+
+
+def _sheeted_pair(tmp_path, pos_order, neg_order):
+    pos_v, neg_v = _values()
+    pos = _folder(tmp_path / "run" / "pos", FILE_ORDER, pos_v, "PC")
+    neg = _folder(tmp_path / "run" / "neg", FILE_ORDER, neg_v, "PE")
+    _sheet(pos, pos_order, tmp_path / "pos.tsv")
+    _sheet(neg, neg_order, tmp_path / "neg.tsv")
+    return pos, neg, pos_v, neg_v
+
+
+def _matches_each_polarity(prep, pos, neg, cfg):
+    for prefix, ds in (("positive", pos), ("negative", neg)):
+        alone = P.preprocess(from_dataset(ds), cfg)
+        by_unit = {u.unit_id: k for k, u in enumerate(alone.units)}
+        order = [by_unit[u.unit_id] for u in prep.units]
+        ids = [f"{prefix}:{f}" for f in alone.feature_ids]
+        np.testing.assert_allclose(_columns(prep, ids), alone.log2[order], rtol=1e-12)
+        assert _step(prep, "drift")["by_polarity"][prefix] == {
+            k: v for k, v in _step(alone, "drift").items() if k != "step"}
+
+
+def test_merge_carries_positive_sheet_and_blocks_follow_each_sheet(tmp_path, monkeypatch):
+    """陽陰の両方にシート（.mddata のファイルの順と違う実際の順）を当ててから統合: 統合したデータセットの
+    試料の表は陽イオンのシート、陰イオンは陰イオンのシートの順で、各極性の値はその極性だけを前処理したものと同じ。
+    陽イオンの値は statsmodels の lowess（陽イオンのシートの順）と numpy の TIC から計算し直したものと合う。"""
+    from metabolomix.quant import merge as qm
+    _point(tmp_path, monkeypatch)
+    pos, neg, pos_v, _neg_v = _sheeted_pair(tmp_path, POS_TRUE, NEG_TRUE)
+    merged, info = qm.merge(pos, neg, polarities=("positive", "negative"), mapping_rows=None)
+    assert info["negative_runs"] == {"injection_order": "different", "batch": "same",
+                                     "n_samples_differ": sum(a != b for a, b in zip(POS_TRUE, NEG_TRUE))}
+    assert merged.sample_metadata_rows == pos.sample_metadata_rows      # 陽イオンのシートを引き継ぐ
+    assert merged.quant_state["record_id"] is not None
+    study = from_dataset(merged)
+    assert [s.injection_order for s in study.samples] == [float(o) for o in POS_TRUE]
+    assert {s.injection_order_source for s in study.samples} == {"sheet"}
+    assert [s.injection_order for s in polarity_samples(study, "negative")] == [float(o) for o in NEG_TRUE]
+
+    for cfg in ({"drift": {"mode": "on"}, "normalize": {"method": "tic"}, "filters": OFF_FILTERS},
+                {"drift": {"mode": "on"}, "normalize": {"method": "pqn"}}, {}):
+        prep = P.preprocess(study, cfg)
+        _matches_each_polarity(prep, pos, neg, cfg)
+    # 既定（drift=auto）: シートの順は確かなので両極性とも補正する
+    assert _step(P.preprocess(study, {}), "drift")["status"] == "applied"
+
+    # 陽イオンの塊を独立に計算し直す（陽イオンのシートの順で LOESS、陽イオンの特徴の和で TIC）
+    prep = P.preprocess(study, {"drift": {"mode": "on"}, "normalize": {"method": "tic"},
+                                "filters": OFF_FILTERS, "collapse_replicates": False})
+    rows = [i for i, r in enumerate(ROLES) if r != "blank"]
+    qc = [i for i in rows if ROLES[i] == "qc"]
+    bio = [k for k, i in enumerate(rows) if ROLES[i] == "sample"]
+
+    def expected(order):
+        x_all = np.array([order[i] for i in rows], dtype=float)
+        x_qc = np.array([order[i] for i in qc], dtype=float)
+        out = np.empty((len(rows), 4))
+        for j in range(4):
+            fit = lowess(pos_v[qc, j], x_qc, frac=0.75, it=0, delta=0.0, xvals=x_all)
+            out[:, j] = pos_v[rows, j] / fit * np.median(pos_v[qc, j])
+        totals = out.sum(axis=1)
+        return (out / (totals / np.median(totals))[:, None])[bio]
+
+    np.testing.assert_allclose(prep.sample_values[:, :4], expected(POS_TRUE), rtol=1e-10)
+    # 統合がシートを落とした（陽イオンを .mddata のファイルの順で当てはめた）値とは合わない
+    assert not np.allclose(prep.sample_values[:, :4], expected(FILE_ORDER), rtol=1e-3)
+
+
+def test_merge_compares_the_runs_the_merged_dataset_reads(tmp_path, monkeypatch):
+    """両極性に同じ実際の順のシート: 統合の negative_runs は same で、前処理も同じ順を読む
+    （陽陰の違い・ファイルの順の注意は出ず、既定の drift=auto は両極性を補正する）。"""
+    from metabolomix.quant import merge as qm
+    _point(tmp_path, monkeypatch)
+    pos, neg, _pv, _nv = _sheeted_pair(tmp_path, POS_TRUE, POS_TRUE)
+    merged, info = qm.merge(pos, neg, polarities=("positive", "negative"), mapping_rows=None)
+    assert info["negative_runs"] == {"injection_order": "same", "batch": "same", "n_samples_differ": 0}
+    assert merged.quant_state["polarity_runs_match"] == {"negative": info["negative_runs"]}
+    prep = P.preprocess(from_dataset(merged), {"filters": OFF_FILTERS})
+    codes = {w["code"] for w in prep.warnings}
+    assert "polarity_runs_differ" not in codes and "injection_order_may_be_file_order" not in codes
+    assert _step(prep, "drift")["status"] == "applied"
+    _matches_each_polarity(prep, pos, neg, {"filters": OFF_FILTERS})
+
+
+def test_merged_file_order_uses_positive_source_names_without_raw_paths(tmp_path, monkeypatch):
+    """raw のパスが無く、統合が試料を共通 ID へ改名するとき、陽イオンの注入順がファイルの順かは陽イオンの
+    元の試料名で見る（陽イオンだけのデータセットと同じ印・同じ drift=auto の判断）。"""
+    from metabolomix.quant import merge as qm
+    _point(tmp_path, monkeypatch)
+    pos_v, neg_v = _values()
+    stems = [f"S{i}" for i in range(15)]           # S1 と S10 は _pos を付けると並びが入れ替わる
+    pos_names, neg_names = [f"{n}_pos" for n in stems], [f"{n}_neg" for n in stems]
+    rank = {n: k + 1 for k, n in enumerate(sorted(pos_names))}
+    file_order = [rank[n] for n in pos_names]       # MS-DIAL の既定（陽イオンのファイル名の順）
+    pos = _folder(tmp_path / "run" / "pos", file_order, pos_v, "PC", names=pos_names)
+    neg = _folder(tmp_path / "run" / "neg", file_order, neg_v, "PE", names=neg_names)
+    for ds in (pos, neg):
+        for entry in ds.msdial_samples:
+            entry["file_path"] = None
+    merged, info = qm.merge(pos, neg, polarities=("positive", "negative"), mapping_rows=None)
+    assert info["rule"] == "polarity_token_removed" and merged.sample_names == stems
+    assert merged.quant_state["source_sample_names"] == {"positive": pos_names, "negative": neg_names}
+    merged_study, pos_study = from_dataset(merged), from_dataset(pos)
+    flags = [s.injection_order_may_be_file_order for s in pos_study.samples]
+    assert any(flags)
+    assert [s.injection_order_may_be_file_order for s in merged_study.samples] == flags
+    cfg = {"filters": OFF_FILTERS}
+    prep = P.preprocess(merged_study, cfg)
+    alone = P.preprocess(pos_study, cfg)
+    assert _step(prep, "drift")["by_polarity"]["positive"] == {
+        k: v for k, v in _step(alone, "drift").items() if k != "step"}
+    assert _step(alone, "drift")["reason"] == "injection_order_may_be_file_order"
+
+
+# --- レビュー指摘: 統合後に陰イオンの測定を入れ直す手順を、注意とシートの戻り値が示す ----------------------
+
+def test_merged_warnings_name_the_negative_run_remedy():
+    prep = P.preprocess(_merged(flagged_neg=True), {"filters": OFF_FILTERS})
+    order = next(w for w in prep.warnings if w["code"] == "injection_order_may_be_file_order")
+    hold = next(w for w in prep.warnings if w["code"] == "drift_not_applied_by_default")
+    for warn in (order, hold):
+        assert "negative のハンドルに dataset_set_sample_metadata" in warn["message"]
+        assert "dataset_merge_polarities で統合し直す" in warn["message"]
+    assert "その注入順のまま" in hold["message"]
+    differ = next(w for w in P.preprocess(_merged(), {"drift": {"mode": "on"}}).warnings
+                  if w["code"] == "polarity_runs_differ")
+    assert "negative のハンドルに dataset_set_sample_metadata" in differ["message"]
+    assert "統合したハンドルに dataset_set_sample_metadata" in P.run_remedy("positive")
+
+
+def test_sheet_on_merged_handle_sets_only_positive_run_and_remerge_sets_negative(tmp_path, monkeypatch):
+    """統合したハンドルへのシートは陽イオンの測定だけを決め（戻り値の notes が言う）、陰イオンの測定は
+    陰イオンのハンドルにシートを当てて統合し直すと変わる（注意が示す手順が効く）。"""
+    import json
+
+    from metabolomix.core import handles, session_state
+    from metabolomix.quant import merge as qm
+    from metabolomix.tools.dataset_analysis_tools import dataset_set_sample_metadata
+    _point(tmp_path, monkeypatch)
+    pos_v, neg_v = _values()
+    pos = _folder(tmp_path / "run" / "pos", FILE_ORDER, pos_v, "PC")
+    neg = _folder(tmp_path / "run" / "neg", FILE_ORDER, neg_v, "PE")
+    ids = []
+    for ds, polarity in ((pos, "positive"), (neg, "negative")):
+        session_state.session.dataset = ds
+        holder = handles.registry.get(session_state.session.current_handle_id)
+        holder.polarity = polarity
+        ids.append(holder.handle_id)
+    first = json.loads(qm.merge_tool(handles.registry.get(ids[0]), handles.registry.get(ids[1]),
+                                     None, None))
+    sheet = tmp_path / "true.tsv"
+    sheet.write_text(_sheet_text(IDS, POS_TRUE), encoding="utf-8")
+
+    out = json.loads(dataset_set_sample_metadata(str(sheet), dataset_handle=first["dataset_handle"]))
+    assert out["status"] == "success"
+    assert any("陽イオンの測定だけ" in n and "統合し直す" in n for n in out["notes"])
+    study = from_dataset(handles.registry.get(first["dataset_handle"]).dataset)
+    assert [s.injection_order for s in study.samples] == [float(o) for o in POS_TRUE]
+    neg_run = polarity_samples(study, "negative")
+    assert [s.injection_order for s in neg_run] == [float(o) for o in FILE_ORDER]
+    prep = P.preprocess(study, {"filters": OFF_FILTERS})
+    hold = next(w for w in prep.warnings if w["code"] == "drift_not_applied_by_default")
+    assert hold["polarities"] == {"negative": ["injection_order_may_be_file_order"]}
+
+    # 示された手順: 陰イオンのハンドルにシートを当てて統合し直す
+    plain = json.loads(dataset_set_sample_metadata(str(sheet), dataset_handle=ids[1]))
+    assert plain["status"] == "success" and "notes" not in plain     # 統合でなければ注記は無い
+    assert json.loads(dataset_set_sample_metadata(str(sheet), dataset_handle=ids[0]))["status"] == "success"
+    second = json.loads(qm.merge_tool(handles.registry.get(ids[0]), handles.registry.get(ids[1]),
+                                      None, None))
+    assert second["negative_runs"] == {"injection_order": "same", "batch": "same", "n_samples_differ": 0}
+    study = from_dataset(handles.registry.get(second["dataset_handle"]).dataset)
+    assert [s.injection_order for s in polarity_samples(study, "negative")] == [float(o) for o in POS_TRUE]
+    assert _step(P.preprocess(study, {"filters": OFF_FILTERS}), "drift")["status"] == "applied"
+
+
+# --- レビュー指摘: analysis-spec v1 の drift_correct も極性ごとの注入順で ------------------------------
+
+def _v1_spec(recipe, order):
+    return {"input": {"source": "dataset"}, "groups": {"source": "metadata"},
+            "comparison": {"reference": "A", "test": "B"}, "features": {"merge_split": False},
+            "injection_order": order,
+            "analyses": [{"analysis_id": "main", "test": {"kind": "welch"}, "matrix": recipe}]}
+
+
+def test_v1_recipe_drift_correct_uses_each_polarity_run(tmp_path, monkeypatch):
+    """injection_order.source=metadata: 統合したデータセットの drift_correct は、陽イオンを試料の表（陽イオンの
+    シート）の順、陰イオンを統合が残した陰イオンの測定の順で当てはめる（統合して回した行 = 極性ごとに回した行）。
+    陰イオンの行は statsmodels の lowess（陰イオンの順）と scipy の Welch の t から計算し直したものと合う。"""
+    from scipy import stats as sps
+
+    from metabolomix.analysis import analysis_spec as A
+    from metabolomix.quant import merge as qm
+    _point(tmp_path, monkeypatch)
+    pos, neg, _pos_v, neg_v = _sheeted_pair(tmp_path, POS_TRUE, NEG_TRUE)
+    merged, _info = qm.merge(pos, neg, polarities=("positive", "negative"), mapping_rows=None)
+    spec = A.normalize_spec(_v1_spec({"steps": ["drift_correct"]}, {"source": "metadata"}))
+    notes: list[str] = []
+    both = A.run_spec(spec, merged, notes=notes)["analyses"][0]
+    assert notes == []
+    rows = {r["feature_id"]: r for r in both["rows"]}
+    for prefix, ds in (("positive", pos), ("negative", neg)):
+        alone = A.run_spec(spec, ds)["analyses"][0]
+        for r in alone["rows"]:
+            mine = rows[f"{prefix}:{r['feature_id']}"]
+            for key in ("log2fc_test_over_ref", "p", "statistic"):
+                assert mine[key] == pytest.approx(r[key], rel=1e-10)
+    drift = next(s for s in both["matrix"]["steps"] if s["step"] == "drift_correct")
+    assert drift["by_polarity"] == {
+        "positive": {"uncorrected_features": 0, "injection_order": "metadata"},
+        "negative": {"uncorrected_features": 0, "injection_order": "polarity_runs.negative"}}
+
+    qc = [i for i, r in enumerate(ROLES) if r == "qc"]
+    x_all = np.array(NEG_TRUE, dtype=float)
+    x_pos = np.array(POS_TRUE, dtype=float)
+    a = [i for i, (r, g) in enumerate(zip(ROLES, GROUPS)) if r == "sample" and g == "A"]
+    b = [i for i, (r, g) in enumerate(zip(ROLES, GROUPS)) if r == "sample" and g == "B"]
+    for j in range(3):
+        fit = lowess(neg_v[qc, j], x_all[qc], frac=0.75, it=0, delta=0.0, xvals=x_all)
+        corrected = neg_v[:, j] / fit * np.median(neg_v[qc, j])
+        t, p = sps.ttest_ind(np.log2(corrected[b]), np.log2(corrected[a]), equal_var=False)
+        row = rows[f"negative:{neg.feature_ids[j]}"]
+        assert row["p"] == pytest.approx(p, rel=1e-9) and row["statistic"] == pytest.approx(t, rel=1e-9)
+        # 陽イオンの順で当てはめた（直す前の）p とは違う
+        fit_pos = lowess(neg_v[qc, j], x_pos[qc], frac=0.75, it=0, delta=0.0, xvals=x_pos)
+        wrong = neg_v[:, j] / fit_pos * np.median(neg_v[qc, j])
+        wrong_p = sps.ttest_ind(np.log2(wrong[b]), np.log2(wrong[a]), equal_var=False).pvalue
+        assert row["p"] != pytest.approx(wrong_p, rel=1e-6)
+
+    # 統合が陰イオンの測定を残していない（測定を残す前の版の統合）なら、陰イオンの注入順が無いと極性を添えて断る
+    # （陽イオンの順で陰イオンを当てはめない）
+    merged.quant_state = {k: v for k, v in merged.quant_state.items() if k != "polarity_runs"}
+    with pytest.raises(DomainError) as exc:
+        A.run_spec(spec, merged)
+    assert exc.value.code == "INJECTION_ORDER_MISSING" and exc.value.details["polarity"] == "negative"
+    assert exc.value.message.startswith("negative: ")
+
+
+def test_v1_recipe_drift_correct_with_tsv_order_notes_the_negative_run(tmp_path, monkeypatch):
+    """injection_order が TSV（試料ごとに 1 つ）なら全極性にそれを使い、陰イオンの測定と違えば notes に書く
+    （v1 の結果と dataset_analysis_run の戻り値）。同じなら書かない。"""
+    import json
+
+    from metabolomix.analysis import analysis_spec as A
+    from metabolomix.core import session_state
+    from metabolomix.quant import merge as qm
+    from metabolomix.tools.reanalysis_tools import dataset_analysis_run
+    _point(tmp_path, monkeypatch)
+    pos, neg, _pv, _nv = _sheeted_pair(tmp_path, POS_TRUE, NEG_TRUE)
+    merged, _info = qm.merge(pos, neg, polarities=("positive", "negative"), mapping_rows=None)
+    tsv = tmp_path / "order.tsv"
+    tsv.write_text("sample\torder\n" + "".join(f"{sid}\t{o}\n" for sid, o in zip(IDS, POS_TRUE)),
+                   encoding="utf-8")
+    raw = _v1_spec({"steps": ["drift_correct"]}, {"source": "tsv", "path": str(tsv)})
+    notes: list[str] = []
+    result = A.run_spec(A.normalize_spec(raw), merged, notes=notes)
+    n_differ = sum(a != b for a, b in zip(POS_TRUE, NEG_TRUE))
+    assert len(notes) == 1 and f"{n_differ} 試料で違う" in notes[0] and "negative" in notes[0]
+    drift = next(s for s in result["analyses"][0]["matrix"]["steps"] if s["step"] == "drift_correct")
+    assert drift["by_polarity"]["negative"]["injection_order"] == "tsv"
+    session_state.session.dataset = merged
+    out = json.loads(dataset_analysis_run(raw))
+    assert out["status"] == "success" and any("drift_correct" in n for n in out["notes"])
+
+    same_pos, same_neg, _a, _b = _sheeted_pair(tmp_path / "same", POS_TRUE, POS_TRUE)
+    same, _ = qm.merge(same_pos, same_neg, polarities=("positive", "negative"), mapping_rows=None)
+    quiet: list[str] = []
+    A.run_spec(A.normalize_spec(raw), same, notes=quiet)
+    assert quiet == []
+
+
+# --- レビュー指摘: ある極性の係数の特徴をすべて除く指定は断らず、その極性の残った特徴すべてから --------------
+
+def test_merged_exclusion_covering_a_polarity_falls_back_for_that_polarity():
+    prep = P.preprocess(_merged(), {"drift": {"mode": "off"}, "filters": OFF_FILTERS,
+                                    "normalize": {"method": "tic", "exclude_features": list(NEG_IDS)}})
+    by = _step(prep, "normalize")["by_polarity"]
+    assert by["negative"]["factor_features_fallback"] == "all_factor_features_excluded_in_polarity"
+    assert by["negative"]["factor_features"] == 3 and by["negative"]["factor_feature_basis"] == "kept_features"
+    assert "factor_features_fallback" not in by["positive"]
+    note = next(w for w in prep.warnings if w["code"] == "normalization_exclude_features_cover_polarity")
+    assert note["polarities"] == ["negative"]
+    # 陰イオンの係数は陰イオンの特徴すべての TIC、陽イオンは陽イオンの特徴すべての TIC（numpy で）
+    rows = [i for i, r in enumerate(ROLES) if r != "blank"]
+    study = _merged()
+    neg_tot, pos_tot = study.values[rows, 4:].sum(axis=1), study.values[rows, :4].sum(axis=1)
+    np.testing.assert_allclose(by["negative"]["factors"], neg_tot / np.median(neg_tot), rtol=1e-12)
+    np.testing.assert_allclose(by["positive"]["factors"], pos_tot / np.median(pos_tot), rtol=1e-12)
+    # features と exclude で陰イオンが空になる組も同じ（陽イオンは features のとおり）
+    both = P.preprocess(_merged(), {"drift": {"mode": "off"}, "filters": OFF_FILTERS,
+                                    "normalize": {"method": "tic", "features": ["positive:p0", NEG_IDS[0]],
+                                                  "exclude_features": [NEG_IDS[0]]}})
+    by = _step(both, "normalize")["by_polarity"]
+    assert by["negative"]["factor_features_fallback"] == "all_factor_features_excluded_in_polarity"
+    assert by["positive"]["factor_features"] == 1
+    # 全極性で空になる指定は、統合でないデータセットと同じく断る
+    with pytest.raises(DomainError) as exc:
+        P.preprocess(_merged(), {"normalize": {"method": "tic",
+                                               "exclude_features": POS_IDS + NEG_IDS}})
+    assert exc.value.code == "PREPROCESS_CONFIG_INVALID"
+
+
+def test_merged_exclusion_emptying_a_polarity_without_listed_features_reports_the_exclusion():
+    """features に陰イオンの特徴が無く、除外が陰イオンの残った特徴をすべて外す: 陰イオンは除外も当てずに残った特徴
+    すべてから求め、理由は除外（記録が除外を当てたように読めない）。"""
+    prep = P.preprocess(_merged(), {"drift": {"mode": "off"}, "filters": OFF_FILTERS,
+                                    "normalize": {"method": "tic", "features": ["positive:p0"],
+                                                  "exclude_features": list(NEG_IDS)}})
+    by = _step(prep, "normalize")["by_polarity"]
+    assert by["negative"]["factor_features_fallback"] == "all_factor_features_excluded_in_polarity"
+    assert by["negative"]["factor_features"] == 3 and "excluded_from_factors" not in by["negative"]
+    codes = {w["code"] for w in prep.warnings}
+    assert "normalization_exclude_features_cover_polarity" in codes

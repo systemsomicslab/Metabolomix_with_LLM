@@ -266,14 +266,32 @@ def _for_polarity(exc: DomainError, polarity: str) -> DomainError:
                        {**(exc.details or {}), "polarity": polarity})
 
 
+def run_remedy(polarity: str) -> str:
+    """統合したデータセットで、その極性の測定（バッチ・注入順）を入れ直す手順（注意の文面に添える）。
+
+    統合したハンドルへ当てるシートは陽イオンの raw を挙げるので、陽イオンの測定だけを決める。ほかの極性の
+    測定は統合が残した値（`quant_state.polarity_runs`）なので、その極性のハンドルにシートを当てて統合し直す。
+    """
+    if polarity == SAMPLE_TABLE_POLARITY:
+        return (f"{polarity} の実際のバッチ・注入順は、統合したハンドルに dataset_set_sample_metadata（{polarity} の"
+                f" raw を挙げたシート）で入れる（統合の前に {polarity} のハンドルへ当てたシートも統合が引き継ぐ）。")
+    return (f"{polarity} の実際のバッチ・注入順は、{polarity} のハンドルに dataset_set_sample_metadata（{polarity} の"
+            f" raw を挙げたシート）で入れてから dataset_merge_polarities で統合し直す（統合したハンドルへのシートは"
+            f" {SAMPLE_TABLE_POLARITY} の raw を挙げるので、{polarity} の測定は変わらない）。")
+
+
 def _merged_run_warnings(study: StudyData, blocks, samples) -> list[dict]:
-    """統合したデータセットの測定の注意: 極性ごとの注入順がファイルの順かもしれない・陽陰で注入順やバッチが違う。"""
+    """統合したデータセットの測定の注意: 極性ごとの注入順がファイルの順かもしれない・陽陰で注入順やバッチが違う。
+    文面には、その極性の測定を入れ直す手順（`run_remedy`）を添える。"""
     from metabolomix.analysis.sample_manifest import file_order_warning
     notes = []
     for label, _cols, table in blocks:
         flagged = [s for s in table if s.role in ("sample", "qc") and s.injection_order_may_be_file_order]
         if flagged:
-            notes.append({**file_order_warning(len(flagged)), "polarity": label})
+            notes.append({**file_order_warning(len(flagged)), "polarity": label,
+                          "message": f"{label} の注入順は MS-DIAL が振った値（.mddata / mzTab-M の MS:4000089）で、"
+                                     "ファイル名の順と一致する。MS-DIAL は利用者が入れない限り注入順をファイルの順で"
+                                     "振るので、実際の測定順とは限らない。" + run_remedy(label)})
     for label, _cols, table in blocks:
         if label not in study.polarity_runs:
             continue
@@ -299,7 +317,8 @@ def _merged_run_warnings(study: StudyData, blocks, samples) -> list[dict]:
                        "（注入順の分からない極性には当てない）。交絡の判定・比較の共変量 batch・反復のまとめは、"
                        f"統合したデータセットの試料の表（{SAMPLE_TABLE_POLARITY} の測定）を使う。"
                        + (f"{label} の測定は統合が残していない（測定を残す前の版の統合）。"
-                          "dataset_merge_polarities で統合し直すと残る。" if unrecorded else "")})
+                          "dataset_merge_polarities で統合し直すと残る。" if unrecorded else
+                          f"{label} の測定が実際と違えば（注入順が MS-DIAL の既定のままなど）、" + run_remedy(label))})
     return notes
 
 
@@ -581,6 +600,11 @@ def _drift_hold_warning_blocks(step: dict) -> dict | None:
     warn = {"code": "drift_not_applied_by_default",
             "reasons": list(dict.fromkeys(r for rs in held.values() for r in rs)), "polarities": held}
     head = f"ドリフト補正は条件を満たすが、既定（drift=auto）では当てなかった極性がある（{why}）。"
+    unsure = [p for p, rs in held.items() if "injection_order_may_be_file_order" in rs]
+    if unsure:
+        # drift=on は確かでない注入順のまま当てはめる。実際の順を入れる手順を先に示す
+        head += ("drift_mode=\"on\" は、注入順が確かでない極性（" + ", ".join(unsure) + "）をその注入順のまま"
+                 "当てはめる。実際の順で補正するなら先に入れる: " + "".join(run_remedy(p) for p in unsure))
     if step.get("rerun_with"):
         warn["message"] = head + "補正するなら drift_mode=\"on\" で呼び直す。"
         warn["suggestion"] = dict(step["rerun_with"])
@@ -731,23 +755,39 @@ def _resolved_method(cfg: dict, quant) -> str:
     return requested
 
 
-def _block_factor_config(cfg: dict, block_ids: set) -> tuple[dict, bool]:
-    """極性の塊の正規化の設定: 係数の特徴の指定をその極性の特徴に絞る。`features` にその極性の特徴が
-    1 つも無ければ、その極性は指定なし（残った特徴すべて）に戻し、真を返す。"""
+#: 極性の塊で係数の特徴の指定が効かず、その極性の残った特徴すべてから係数を求めた理由。
+_FALLBACK_NO_LISTED = "no_listed_feature_in_polarity"
+_FALLBACK_ALL_EXCLUDED = "all_factor_features_excluded_in_polarity"
+
+
+def _block_factor_config(cfg: dict, block_ids: set, kept_block_ids: list[str]) -> tuple[dict, str | None]:
+    """極性の塊の正規化の設定: 係数の特徴の指定をその極性の特徴に絞る。
+
+    その極性で係数を求める特徴が残らないときは、その極性は指定なし（足切りの後に残ったその極性の特徴すべて）に
+    戻し、理由を返す: `features` にその極性の特徴が 1 つも無い（`no_listed_feature_in_polarity`）、
+    `exclude_features` がその極性の係数の特徴をすべて外す（`all_factor_features_excluded_in_polarity`）。
+    指定全体が空になる（どの極性にも残らない）ときは、呼び出し側が極性に分ける前に PREPROCESS_CONFIG_INVALID で止める。
+    """
     sub = {k: v for k, v in cfg.items() if k not in ("features", "exclude_features")}
-    fell_back = False
+    fallback = None
     chosen, excluded = cfg.get("features"), cfg.get("exclude_features")
     if chosen is not None:
         mine = [f for f in chosen if f in block_ids]
         if mine:
             sub["features"] = mine
         else:
-            fell_back = True
+            fallback = _FALLBACK_NO_LISTED
     if excluded is not None:
         mine = [f for f in excluded if f in block_ids]
         if mine:
             sub["exclude_features"] = mine
-    return sub, fell_back
+    drop = set(sub.get("exclude_features") or ())
+    if not [f for f in sub.get("features", kept_block_ids) if f not in drop]:
+        # 除外がその極性の係数の特徴を空にした（features が効かなかった極性でも、除外を当てないのはここ）
+        sub.pop("features", None)
+        sub.pop("exclude_features", None)
+        fallback = _FALLBACK_ALL_EXCLUDED
+    return sub, fallback
 
 
 def _normalize_blocks(values, samples, cfg, quant, blocks, kept_ids, kept_cols, all_ids,
@@ -765,26 +805,26 @@ def _normalize_blocks(values, samples, cfg, quant, blocks, kept_ids, kept_cols, 
         return out, step, []
     out = np.array(values, copy=True)
     position = {int(j): k for k, j in enumerate(kept_cols)}
-    by, fell_back, first = {}, [], None
+    by, fell_back, first = {}, {}, None
     for label, cols, _table in blocks:
         kept_pos = [position[int(j)] for j in cols if int(j) in position]
         if not kept_pos:
             by[label] = {"status": "skipped", "reason": "no_features"}
             continue
         block_ids = [all_ids[j] for j in cols]
-        sub_cfg, fell = _block_factor_config(cfg, set(block_ids))
+        kept_block = [kept_ids[k] for k in kept_pos]
+        sub_cfg, fell = _block_factor_config(cfg, set(block_ids), kept_block)
         if fell:
-            fell_back.append(label)
+            fell_back.setdefault(fell, []).append(label)
         try:
-            fv, frec = _factor_columns(sub_cfg, [kept_ids[k] for k in kept_pos], block_ids,
-                                       drifted[:, cols])
+            fv, frec = _factor_columns(sub_cfg, kept_block, block_ids, drifted[:, cols])
         except DomainError as exc:
             raise _for_polarity(exc, label) from None
         if fell and not frec:
             # 指定がこの極性に効かず、係数は残ったこの極性の特徴すべてから（記録の形は指定ありと揃える）
             frec = {"factor_features": len(kept_pos), "factor_feature_basis": "kept_features"}
         if fell:
-            frec = {**frec, "factor_features_fallback": "no_listed_feature_in_polarity"}
+            frec = {**frec, "factor_features_fallback": fell}
         sub, step = _normalize_step(values[:, kept_pos], samples, sub_cfg, quant,
                                     factor_values=fv, factor_record=frec)
         out[:, kept_pos] = sub
@@ -804,11 +844,19 @@ def _normalize_blocks(values, samples, cfg, quant, blocks, kept_ids, kept_cols, 
             step[key] = first[key]
     step["by_polarity"] = by
     notes = []
-    if fell_back:
-        notes.append({"code": "normalization_features_not_in_polarity", "polarities": fell_back,
+    if _FALLBACK_NO_LISTED in fell_back:
+        notes.append({"code": "normalization_features_not_in_polarity",
+                      "polarities": fell_back[_FALLBACK_NO_LISTED],
                       "message": "normalization_features にこの極性の特徴が無いので、その極性の正規化の係数は"
                                  "足切りの後に残ったその極性の特徴すべてから求めた（統合したデータセットは係数を"
                                  "極性ごとに求める。絞るなら各極性の特徴 ID を挙げる）。"})
+    if _FALLBACK_ALL_EXCLUDED in fell_back:
+        notes.append({"code": "normalization_exclude_features_cover_polarity",
+                      "polarities": fell_back[_FALLBACK_ALL_EXCLUDED],
+                      "message": "normalization_exclude_features（と normalization_features）でこの極性の係数の特徴が"
+                                 "1 つも残らないので、その極性の正規化の係数は足切りの後に残ったその極性の特徴すべてから"
+                                 "求めた（この極性には除外を当てていない。統合したデータセットは係数を極性ごとに、その極性の"
+                                 "特徴だけから求めるので、ほかの極性の特徴では割らない）。"})
     return out, step, notes
 
 

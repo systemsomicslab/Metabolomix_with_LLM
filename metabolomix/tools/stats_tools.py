@@ -129,7 +129,11 @@ def dataset_preprocess(
     陽陰を統合したデータセット（dataset_merge_polarities）は、ドリフト補正をその極性の注入順・バッチで、
     正規化の係数をその極性の特徴だけから、極性ごとに当てる（各極性の値は、その極性だけを前処理して並べたものと
     同じ）。段の `by_polarity` に極性ごとの記録（ドリフトの段は一部の極性だけ補正すれば status=partial）、
-    陽陰で注入順・バッチが違えば warnings の `polarity_runs_differ`。
+    陽陰で注入順・バッチが違えば warnings の `polarity_runs_differ`（注意の文面に、その極性の注入順・バッチを入れ直す
+    手順: 陽イオンは統合したハンドルへのシート、陰イオンは陰イオンのハンドルへのシートと統合のし直し）。
+    ある極性だけ normalization_features / normalization_exclude_features で係数の特徴が残らなければ断らず、
+    その極性は残った特徴すべてから求めて注意（`normalization_features_not_in_polarity` /
+    `normalization_exclude_features_cover_polarity`）を返す。
 
     drift_mode: QC の LOESS ドリフト補正。"auto"（既定。条件が揃えば行う）/ "on" / "off"。
         auto は条件が揃っても、内部標準などで換算済みのとき・注入順が MS-DIAL の既定（ファイルの順）

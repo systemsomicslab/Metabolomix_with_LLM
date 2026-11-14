@@ -203,7 +203,7 @@ pseudocount も clip も使わない。補完は PCA のためだけに `dataset
 | `detection_min_rate` / `detection_by` | 0.5 / `group` | gap-fill を除いた検出率の下限（`group` は群ごと、`all` は全体）。検出状態が無いデータでは評価できない旨が steps に出る |
 | `max_qc_rsd` / `max_d_ratio` | 0.30 / 0.5 | QC の RSD の上限・D-ratio の上限 |
 | `normalize` | `auto` | `auto`（換算済みなら何もしない。それ以外は `pqn`）/ `none` / `tic` / `median` / `pqn`。PQN の参照スペクトルは QC があれば QC の特徴ごとの中央値、**QC が無ければ生体試料（全群）の特徴ごとの中央値**で、正規化の段に `reference`（`qc` / `sample`）を書く。QC が無いときは `reference_definition: "median_of_samples_all_groups"` と注意 `pqn_reference_is_samples`（群の間で全体の組成が大きく違うと、係数がその差の一部を吸収しうる） |
-| `normalization_features` / `normalization_exclude_features` | なし | 正規化の係数を求める特徴を絞る・除く（特徴 ID のリスト）。既定は足切りの後に残った特徴すべて。**係数から外した特徴も行列には残り**、同じ係数で割られる。`normalization_features` に挙げた特徴は足切りで落ちていても係数に使う（値はドリフト補正の後）。正規化の段に `factor_features`（係数に使った数）・`factor_feature_basis`（`features` / `kept_features`）・`excluded_from_factors`・`factor_features_filtered_out`（足切りで落ちていた特徴）が出る。無い ID・空になる指定（`normalization_features=[]` も）・`normalize="none"` との組は `PREPROCESS_CONFIG_INVALID`（`normalization_exclude_features=[]` は指定なしと同じ）。`normalize="auto"` が換算済みのデータで正規化しないときは効かず、正規化の段に `factor_features_ignored: true`、`warnings` に `normalization_features_ignored`（行列と `matrix_id` は指定なしと同じ） |
+| `normalization_features` / `normalization_exclude_features` | なし | 正規化の係数を求める特徴を絞る・除く（特徴 ID のリスト）。既定は足切りの後に残った特徴すべて。**係数から外した特徴も行列には残り**、同じ係数で割られる。`normalization_features` に挙げた特徴は足切りで落ちていても係数に使う（値はドリフト補正の後）。正規化の段に `factor_features`（係数に使った数）・`factor_feature_basis`（`features` / `kept_features`）・`excluded_from_factors`・`factor_features_filtered_out`（足切りで落ちていた特徴）が出る。無い ID・空になる指定（`normalization_features=[]` も）・`normalize="none"` との組は `PREPROCESS_CONFIG_INVALID`（`normalization_exclude_features=[]` は指定なしと同じ。陽陰を統合したデータセットで、ある極性だけが空になる指定は断らず、その極性は残った特徴すべてから求める。下の「陽陰を統合したデータセット」）。`normalize="auto"` が換算済みのデータで正規化しないときは効かず、正規化の段に `factor_features_ignored: true`、`warnings` に `normalization_features_ignored`（行列と `matrix_id` は指定なしと同じ） |
 | `collapse_replicates` | true | 同じ個体（`subject_id`）の反復注入を 1 個体にまとめる |
 | `injection_columns` | `[]` | 個体のまとめの鍵から外す試料の表の列（取得日・注入番号など、注入ごとに違う属性。技術反復が別の個体に割れるのを防ぐ） |
 | `group_levels` / `group_factors` | なし | 試料名（と試料の表の群）の因子トークンで群を解く。解いた群は行列の設定に記録される |
@@ -228,8 +228,9 @@ subject_source, groups: {群: 個体数}, quant, steps, warnings, record, next}`
   ドリフト補正・反復のまとめ・交絡には当てていない。バッチなら試料の表の `batch` に入れる）。
 - **陽陰を統合したデータセット**（`dataset_merge_polarities`。すべての特徴が `feature_metadata[<fid>]["origin"]["polarity"]`
   を持つ）は、陽イオンと陰イオンが別の注入・別の測定の列なので、**ドリフト補正と正規化を極性ごと**に当てる。
-  ドリフトはその極性の測定の注入順・バッチで当てはめ（陽イオンは統合したデータセットの試料の表、陰イオンは統合が
-  残した `quant_state.polarity_runs.negative`）、正規化の係数（`tic` / `median` / `pqn`、`auto` が解いた方法も）は
+  ドリフトはその極性の測定の注入順・バッチで当てはめ（陽イオンは統合したデータセットの試料の表＝陽イオンの試料の表で、
+  陽イオンに当てたシートも統合が引き継ぐ。陰イオンは統合が陰イオンの試料の表（当てたシートを含む）から読んで残した
+  `quant_state.polarity_runs.negative`）、正規化の係数（`tic` / `median` / `pqn`、`auto` が解いた方法も）は
   その極性の特徴だけから求めてその極性の列だけを割る。各極性の値・係数は、**その極性だけを前処理して並べたものと同じ**。
   足切り（ブランク比・検出率・QC RSD・D-ratio）・log2・反復のまとめは特徴ごと・セルごとの計算なので、分けなくても同じ。
   記録: ドリフトの段は `by_polarity`（極性 → その極性の段）と、全極性で補正すれば `status: applied`、一部なら
@@ -237,13 +238,24 @@ subject_source, groups: {群: 個体数}, quant, steps, warnings, record, next}`
   `rerun_with` は当てなかった極性がすべて drift=auto の保留のときだけ）。`drift_mode="on"` で条件を満たさない極性が
   あれば `PREPROCESS_PRECONDITION`（message の先頭と `details.polarity` に極性）。正規化の段は方法・参照・`factor_samples`
   を上に、`by_polarity` に極性ごとの `factors`・`factors_set_to_one`・`unscaled_samples`・係数の特徴の記録。
-  `normalization_features` は極性ごとにその極性の特徴だけを使い、ある極性の特徴が 1 つも無ければその極性は
-  残った特徴すべてから求めて（`factor_features_fallback: "no_listed_feature_in_polarity"`）、注意
-  `normalization_features_not_in_polarity`（`polarities`）を返す。注意: `injection_order_may_be_file_order` と
+  `normalization_features` / `normalization_exclude_features` は極性ごとにその極性の特徴だけを使い、ある極性の特徴が
+  1 つも無ければその極性は残った特徴すべてから求めて（`factor_features_fallback: "no_listed_feature_in_polarity"`）、注意
+  `normalization_features_not_in_polarity`（`polarities`）を、除外（と `normalization_features`）でその極性の係数の特徴が
+  1 つも残らなければ、同じくその極性は残った特徴すべてから求めて（その極性に除外は当てない。
+  `factor_features_fallback: "all_factor_features_excluded_in_polarity"`）、注意
+  `normalization_exclude_features_cover_polarity`（`polarities`）を返す（ほかの極性の特徴では割らない。全極性で空に
+  なる指定は統合でないデータセットと同じく `PREPROCESS_CONFIG_INVALID`）。注意: `injection_order_may_be_file_order` と
   `drift_not_applied_by_default`（`polarities`: 極性 → 保留の理由）は極性付き。陽陰で注入順・バッチが違う（片方だけ
   分からない）試料があれば `polarity_runs_differ`（`polarity`・`reference_polarity: "positive"`・
   `n_injection_order_differs`・`n_injection_order_unknown`・`n_batch_differs`・`samples`。統合が測定を残していない
   （その版より前の統合）なら `runs_recorded: false` で、その極性のドリフト補正は当てない。統合し直すと残る）。
+  これらの注意の `message` は、その極性の測定を入れ直す手順を添える。**統合したハンドルへ当てるシート
+  （`dataset_set_sample_metadata`）は陽イオンの raw を挙げるので、`batch`・`injection_order` は陽イオンの測定だけを
+  決める**（群・役割・include・subject_id・因子の列は試料ごとなので両極性に効く）。陰イオンの測定を変えるなら、陰イオンの
+  ハンドルに陰イオンの raw を挙げたシートを当ててから `dataset_merge_polarities` で統合し直す（統合したハンドルへの
+  シートの戻り値の `notes` もこれを言う）。`drift_mode="on"` は注入順が確かでない極性もその注入順のまま当てはめる。
+  raw のパスが無いデータセットの「注入順がファイルの順か」は、陽イオンの元の試料名（統合は試料を共通 ID へ改名する。
+  `quant_state.source_sample_names`）で見る（陽イオンだけのデータセットと同じ判定）。
   交絡の判定・比較の共変量 `batch`・反復のまとめは統合したデータセットの試料の表（陽イオンの測定）を使う。
   `matrix_id` には極性の塊（特徴の分け方と極性ごとの測定）が入る（統合でないデータセットの `matrix_id` と値は変わらない）。
 - `quant` は定量で作ったデータセット（内部標準で換算済み）のときだけ `{normalized, method, unit}`、それ以外は null。

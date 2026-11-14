@@ -12,10 +12,16 @@ ID の副次データを落とすので、特徴ごとの副次データ（候�
 場所を `quant_state["arf2_by_polarity"]` に置く（統合後の ID と ID 空間が違うため。選別が
 その時点のフラグを極性ごとに読み直す）。
 
-試料の表は陽イオンのもの（統合したデータセットの試料の表＝陽イオンの測定）。陰イオンは別の注入・別の
+試料の表は陽イオンのもの: 陽イオンのデータセットの試料の表（当てたシート `sample_metadata_rows` と
+`sample_ids` も）をそのまま持ち、統合したデータセットの試料の表＝陽イオンの測定。陰イオンは別の注入・別の
 測定の列なので、試料ごとの陰イオンのバッチと注入順（統計エンジンが陰イオンのデータセットから読む値）を
-`quant_state["polarity_runs"]["negative"]` に残し、陽イオンと同じかを `polarity_runs_match` に書く。
-統計エンジンの前処理はこれでドリフト補正を極性ごとに当てる（正規化の係数も極性ごと）。
+`quant_state["polarity_runs"]["negative"]` に残し、統合したデータセットが陽イオンの測定として読む値と同じかを
+`polarity_runs_match` に書く。統計エンジンの前処理はこれでドリフト補正を極性ごとに当てる（正規化の係数も極性ごと）。
+試料は共通 ID へ改名するので、元の試料名を `quant_state["source_sample_names"]` に残す（raw のパスが無い
+データセットのファイルの順は、陽イオンの元の試料名で見る。`sample_manifest.file_order_keys`）。
+統合したハンドルへ後から当てるシートは陽イオンの raw を挙げるので、バッチ・注入順は陽イオンの測定だけを決める
+（群・役割・include などの試料の実験情報は試料ごとなので両極性に効く）。陰イオンの測定を変えるなら、陰イオンの
+ハンドルにシートを当てて統合し直す。
 """
 from __future__ import annotations
 
@@ -268,8 +274,9 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     正規化の工程を通っていない側は未正規化として扱い、各側が正規化をどう通ったか
     （`applied` / `skipped` / `not_run`）を記録の `settings.normalize` と戻り値の `normalize` に書く。
     対応表の group / sample_type 列は規則が検証するだけで適用しない（試料の実験情報は POS の
-    ものを使う）。陰イオンの試料ごとのバッチ・注入順は `quant_state["polarity_runs"]["negative"]`
-    （統合後の試料名 → `run_of` の形）に残し、陽イオンと同じかを `polarity_runs_match` と戻り値・記録の
+    ものを使う。陽イオンに当てたシートも試料の表ごと引き継ぐ）。陰イオンの試料ごとのバッチ・注入順は
+    `quant_state["polarity_runs"]["negative"]`（統合後の試料名 → `run_of` の形）に残し、統合したデータセットが
+    陽イオンの測定として読む値（`sample_runs(統合後)`）と同じかを `polarity_runs_match` と戻り値・記録の
     `negative_runs` に書く。どちらかが探索専用（`exploratory_only`）なら統合も探索専用で、理由は極性付きで
     合わせる（戻り値の `exploratory`）。
     `folder` を省くと 2 つの解析フォルダの共通の親（無理なら QUANT_RECORD_LOCATION_REQUIRED）。
@@ -290,10 +297,8 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
 
     order = [neg_pos[sid] for sid in pos_ids]  # 共通 ID（POS の順）ごとの NEG の列
     # 陰イオンの測定（バッチ・注入順）を統合後の試料名で残す（陽陰は別の注入。統計エンジンが極性ごとに読む）
-    pos_table, neg_table = sample_runs(pos_ds), sample_runs(neg_ds)
+    neg_table = sample_runs(neg_ds)
     neg_runs = {str(sid): neg_table[str(neg_ds.sample_names[j])] for sid, j in zip(pos_ids, order)}
-    runs_match = _runs_match([pos_table[str(n)] for n in pos_ds.sample_names],
-                             [neg_runs[str(sid)] for sid in pos_ids])
     matrix = np.vstack([np.asarray(pos_ds.feature_matrix, dtype=float),
                         np.asarray(neg_ds.feature_matrix, dtype=float)[:, order]])
     detected = np.vstack([np.asarray(pos_ds.detected_mask, dtype=bool),
@@ -318,22 +323,17 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     n_pos, n_neg = len(pos_ds.feature_ids), len(neg_ds.feature_ids)
     counts = {"positive": n_pos, "negative": n_neg, "merged": n_pos + n_neg}
     qderive.check_capacity()  # 登録できない記録を残さない
-    record = write_record(
-        folder, "merge", inputs=inputs, parent_ids=[p for p in parents if p],
-        settings={"rules": rules_settings(plugin), "match_rule": rule,
-                  "mapping": mapping_input[0] if mapping_input else None,
-                  "handles": {"positive": pos_handle_id, "negative": neg_handle_id},
-                  "normalize": normalize},
-        summary={"n_features": counts, "n_samples": len(pos_ids), "unit": pos_state.get("unit"),
-                 "normalized": bool(pos_state.get("normalized")), "negative_runs": runs_match})
+    # 記録 ID は記録を書いてから入れる（陽陰の測定の比較は、統合したデータセットが読む値で行うため）
     state = qderive.quant_state(
         normalized=bool(pos_state.get("normalized")), method=pos_state.get("method"),
-        unit=pos_state.get("unit"), record_id=record["record_id"],
+        unit=pos_state.get("unit"), record_id=None,
         steps=_union(pos_state.get("steps") or [], neg_state.get("steps") or []) + ["merge"],
         skipped=_union(pos_state.get("skipped") or [], neg_state.get("skipped") or []),
         record_folder=str(folder),
         arf2_by_polarity={"positive": _arf2_path(pos_ds), "negative": _arf2_path(neg_ds)},
-        polarity_runs={"negative": neg_runs}, polarity_runs_match={"negative": runs_match},
+        polarity_runs={"negative": neg_runs},
+        source_sample_names={"positive": [str(n) for n in pos_ds.sample_names],
+                             "negative": [str(neg_ds.sample_names[j]) for j in order]},
         internal_standard_ids=_is_ids(pos_state, "positive") + _is_ids(neg_state, "negative"))
     new = qderive.derive(pos_ds, matrix=matrix, detected=detected, feature_ids=fids,
                          feature_metadata=metadata, sample_names=pos_ids,
@@ -366,13 +366,28 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
                                                                       ("negative", neg_ds))
                                    for fid in getattr(ds, "theoretical_mz_computed", None) or ()}
     new.curation_flags = None  # 選別が極性ごとの .arf2（quant_state["arf2_by_polarity"]）から読む
-    new.sample_metadata_rows = None
+    # 試料の表（当てたシート `sample_metadata_rows` と `sample_ids`）は陽イオンのものを derive がそのまま
+    # 引き継ぐ（統合したデータセットの試料の表＝陽イオンの測定。陽イオンだけで前処理したのと同じ値を読む）。
     new.library_record = None
     # 探索専用の印と出所の裏取りは POS だけでなく両側から（どちらかが探索専用なら統合も探索専用で
     # 理由は極性付き。裏取りは弱いほう。POS だけの写しでは、裏取りの無い NEG の特徴まで
     # 書き出しのメタ行で verified を名乗っていた）。
     qderive.carry_exploratory(new, [pos_ds, neg_ds], labels=["positive", "negative"])
     new.source_verification, verification_info = merged_source_verification(pos_ds, neg_ds)
+    # 陰イオンの測定を、統合したデータセットが陽イオンの測定として読む値（統計エンジンと同じ読み方）と比べる
+    pos_runs = sample_runs(new)
+    runs_match = _runs_match([pos_runs[str(sid)] for sid in pos_ids],
+                             [neg_runs[str(sid)] for sid in pos_ids])
+    new.quant_state["polarity_runs_match"] = {"negative": runs_match}
+    record = write_record(
+        folder, "merge", inputs=inputs, parent_ids=[p for p in parents if p],
+        settings={"rules": rules_settings(plugin), "match_rule": rule,
+                  "mapping": mapping_input[0] if mapping_input else None,
+                  "handles": {"positive": pos_handle_id, "negative": neg_handle_id},
+                  "normalize": normalize},
+        summary={"n_features": counts, "n_samples": len(pos_ids), "unit": pos_state.get("unit"),
+                 "normalized": bool(pos_state.get("normalized")), "negative_runs": runs_match})
+    new.quant_state["record_id"] = record["record_id"]
     info = {"record_id": record["record_id"], "rule": rule, "n_features": counts,
             "n_samples": len(pos_ids), "unit": state["unit"], "normalized": state["normalized"],
             "normalize": normalize, "negative_runs": runs_match, **verification_info,

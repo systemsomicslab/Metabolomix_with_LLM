@@ -53,34 +53,39 @@ property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` 
 14. │  │  ├─ metabolomix/analysis/alignment_qc.py  read_qc_file()
 15. │  │  ├─ metabolomix/analysis/alignment_qc.py  usable_merge_groups()
 16. │  │  └─ metabolomix/analysis/alignment_qc.py  merge_matrix_columns()
-17. │  ├─ metabolomix/analysis/analysis_spec.py  _run_analysis()
-18. │  │  ├─ metabolomix/analysis/analysis_spec.py  _merged_polarity()（入力が陽陰を統合したデータセットなら 特徴 → 極性）
-19. │  │  ├─ metabolomix/analysis/recipe_matrix.py  build_matrix()
-20. │  │  │  ├─ metabolomix/analysis/recipe_matrix.py  knn_impute()
-21. │  │  │  └─ [統合したデータセットの normalize] metabolomix/analysis/recipe_matrix.py  _normalize_by_polarity()
-22. │  │  ├─ metabolomix/analysis/analysis_spec.py  _aggregate()
-23. │  │  ├─ [和] metabolomix/analysis/analysis_spec.py  _contributions()
-24. │  │  ├─ metabolomix/analysis/analysis_spec.py  _design()
-25. │  │  ├─ metabolomix/analysis/spec_statistics.py  two_group()
-26. │  │  ├─ metabolomix/analysis/spec_statistics.py  ols_group()
-27. │  │  ├─ metabolomix/analysis/spec_statistics.py  fold_change()
-28. │  │  ├─ metabolomix/analysis/spec_statistics.py  constant_groups()
-29. │  │  └─ metabolomix/analysis/spec_statistics.py  bh()
-30. │  ├─ [correlate] metabolomix/analysis/analysis_spec.py  _correlate()
-31. │  │  ├─ metabolomix/analysis/analysis_spec.py  _external_matrix()
-32. │  │  ├─ metabolomix/analysis/analysis_spec.py  _sample_map()
-33. │  │  └─ metabolomix/analysis/analysis_spec.py  _correlate_rows()
-34. │  │     └─ metabolomix/analysis/spec_statistics.py  spearman()
-35. │  └─ metabolomix/analysis/analysis_spec.py  rule_hash()
-36. ├─ metabolomix/tools/reanalysis_tools.py  write_result()
-37. │  └─ metabolomix/tools/reanalysis_tools.py  result_bytes()
-38. ├─ [output_path なし] metabolomix/analysis/stats_run_summary.py  first_by_p()
-39. ├─ metabolomix/tools/reanalysis_tools.py  _aggregate_summary()
-40. └─ [correlate] metabolomix/tools/reanalysis_tools.py  _correlate_summary()
+17. │  ├─ [統合したデータセット・drift_correct] metabolomix/analysis/analysis_spec.py  _polarity_orders()（極性ごとの注入順。TSV の注入順が陰イオンの測定と違えば `notes`）
+18. │  ├─ metabolomix/analysis/analysis_spec.py  _run_analysis()
+19. │  │  ├─ metabolomix/analysis/analysis_spec.py  _merged_polarity()（入力が陽陰を統合したデータセットなら 特徴 → 極性）
+20. │  │  ├─ metabolomix/analysis/recipe_matrix.py  build_matrix()
+21. │  │  │  ├─ metabolomix/analysis/recipe_matrix.py  knn_impute()
+22. │  │  │  ├─ [統合したデータセットの normalize] metabolomix/analysis/recipe_matrix.py  _normalize_by_polarity()
+23. │  │  │  └─ [統合したデータセットの drift_correct] metabolomix/analysis/recipe_matrix.py  _drift_correct_by_polarity()
+24. │  │  ├─ metabolomix/analysis/analysis_spec.py  _aggregate()
+25. │  │  ├─ [和] metabolomix/analysis/analysis_spec.py  _contributions()
+26. │  │  ├─ metabolomix/analysis/analysis_spec.py  _design()
+27. │  │  ├─ metabolomix/analysis/spec_statistics.py  two_group()
+28. │  │  ├─ metabolomix/analysis/spec_statistics.py  ols_group()
+29. │  │  ├─ metabolomix/analysis/spec_statistics.py  fold_change()
+30. │  │  ├─ metabolomix/analysis/spec_statistics.py  constant_groups()
+31. │  │  └─ metabolomix/analysis/spec_statistics.py  bh()
+32. │  ├─ [correlate] metabolomix/analysis/analysis_spec.py  _correlate()
+33. │  │  ├─ metabolomix/analysis/analysis_spec.py  _external_matrix()
+34. │  │  ├─ metabolomix/analysis/analysis_spec.py  _sample_map()
+35. │  │  └─ metabolomix/analysis/analysis_spec.py  _correlate_rows()
+36. │  │     └─ metabolomix/analysis/spec_statistics.py  spearman()
+37. │  └─ metabolomix/analysis/analysis_spec.py  rule_hash()
+38. ├─ metabolomix/tools/reanalysis_tools.py  write_result()
+39. │  └─ metabolomix/tools/reanalysis_tools.py  result_bytes()
+40. ├─ [output_path なし] metabolomix/analysis/stats_run_summary.py  first_by_p()
+41. ├─ metabolomix/tools/reanalysis_tools.py  _aggregate_summary()
+42. └─ [correlate] metabolomix/tools/reanalysis_tools.py  _correlate_summary()
 
 書いても効かない設定（`steps` に無い段の設定・`merge_split=false` や外部の表での `features.alignment_qc`・
 ols でない検定の共変量）は `normalize_spec(spec, notes=...)` が捨てて理由を `notes` に足し、戻り値と JSON の
-`notes` に出す（捨てた設定は `rule_hash` に入らない）。`output_path` が無く 50 行を超える解析は
+`notes` に出す（捨てた設定は `rule_hash` に入らない）。入力が陽陰を統合したデータセットなら、`drift_correct` は
+`_polarity_orders()` が決めた極性ごとの注入順で当てはめる（`metadata` は陽イオンが試料の表、陰イオンが
+`quant_state.polarity_runs.negative`。TSV は 1 つの注入順を全極性に当て、陰イオンの測定と違えば
+`run_spec(..., notes=...)` が `notes` に足す）。`output_path` が無く 50 行を超える解析は
 `first_by_p()` の先頭 50 行だけを TSV にし、`truncated`・`rows_order` を立てる（断らない）。
 
 `spec["schema"] == "analysis-spec.v2"` のときは、`resolve_holder()` のあと v1 の鎖でなく次へ振り分ける

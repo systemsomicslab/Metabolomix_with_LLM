@@ -17,6 +17,8 @@
 `_polarity_blocks` が極性の塊（列と、その極性の測定としての試料の表 `polarity_samples`）に分ける。ドリフト補正
 （手順 16）と正規化（手順 22）は塊ごとに同じ `_drift_step` / `_normalize_step` を当て、段に `by_polarity` を残す
 （各極性の値は、その極性だけを前処理して並べたものと同じ）。足切り（手順 19）は特徴ごとの計算なので塊に分けない。
+統合したデータセットの試料の表は陽イオンのもの（統合が陽イオンに当てたシートごと引き継ぐ）なので、陽イオンの塊は
+陽イオンだけのデータセットと同じ試料の表を読む。
 
 1. metabolomix/tools/stats_tools.py  dataset_preprocess()
 2. └─ metabolomix/analysis/stats/preprocess.py  normalize_preprocess_config()
@@ -32,7 +34,7 @@
 12.   │  └─ metabolomix/analysis/stats/preprocess.py  _drift()
 13.   │     └─ metabolomix/analysis/stats/preprocess.py  _loess()
 14.   │        └─ metabolomix/analysis/stats/preprocess.py  _local_poly()
-15.   ├─ [統合したデータセット] metabolomix/analysis/stats/preprocess.py  _merged_run_warnings()（陽陰で注入順・バッチが違えば `polarity_runs_differ`）
+15.   ├─ [統合したデータセット] metabolomix/analysis/stats/preprocess.py  _merged_run_warnings()（陽陰で注入順・バッチが違えば `polarity_runs_differ`。文面に `run_remedy()` の入れ直す手順）
 16.   ├─ [統合したデータセット] metabolomix/analysis/stats/preprocess.py  _drift_blocks()（極性ごとに `_drift_step()`）
 17.   ├─ [統合したデータセット] metabolomix/analysis/stats/preprocess.py  _drift_hold_warning_blocks()
 18.   ├─ [統合したデータセット] metabolomix/analysis/stats/preprocess.py  _polarity_fingerprint()（`matrix_id` に入れる極性の塊）
@@ -40,7 +42,7 @@
 20.   ├─ [統合でない] metabolomix/analysis/stats/preprocess.py  _factor_columns()
 21.   ├─ [統合でない] metabolomix/analysis/stats/preprocess.py  _normalize_step()
 22.   ├─ [統合したデータセット] metabolomix/analysis/stats/preprocess.py  _normalize_blocks()（極性ごとに `_factor_columns()` → `_normalize_step()`）
-23.   │  └─ metabolomix/analysis/stats/preprocess.py  _block_factor_config()（係数の特徴の指定をその極性の特徴に絞る）
+23.   │  └─ metabolomix/analysis/stats/preprocess.py  _block_factor_config()（係数の特徴の指定をその極性の特徴に絞る。その極性で係数の特徴が残らなければ、その極性は残った特徴すべて）
 24.   └─ metabolomix/analysis/stats/preprocess.py  _collapse()
 25. └─ metabolomix/tools/_matrix_store.py  store_matrix()
 26.    └─ metabolomix/analysis/stats_results.py  register_matrix()
@@ -250,6 +252,13 @@ result_id は計算のたびに発行される UUID なので入れず、統計�
 5.    └─ metabolomix/analysis/sample_manifest.py  resolve_metadata()
 6.    └─ metabolomix/analysis/sample_manifest.py  apply_metadata()
 7.       └─ metabolomix/analysis/result_state.py  invalidate_results()
+8. └─ metabolomix/analysis/stats/data.py  merged_feature_polarity()（陽陰を統合したデータセットなら戻り値に `notes`）
+9.    └─ metabolomix/analysis/stats/preprocess.py  run_remedy()（陰イオンの測定を入れ直す手順の文面）
+
+陽陰を統合したデータセットでは、シートは陽イオンの raw を挙げる（統合したデータセットの raw のパスは陽イオンのもの）
+ので、`batch`・`injection_order` は陽イオンの測定だけを決める。陰イオンの測定は統合が残した
+`quant_state.polarity_runs.negative` のままで、変えるなら陰イオンのハンドルにシートを当ててから統合し直す
+（手順 8・9 が戻り値の `notes` にそう書く）。
 
 対話ツール `dataset_compare`（統計エンジン）は、群名だけで対照/処置の向きを決めない・QC/blank/unknown/standard・`include=false` を混ぜない・完全交絡は既定では比べて印を付け（`confounding` と対比の `confounded`）、`allow_confounded=false` を渡したときだけ止める（`STATISTIC_CONFOUNDED`）。
 

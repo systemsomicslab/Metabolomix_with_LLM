@@ -175,7 +175,8 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     `comparison`（`reference` / `test` の群の名前。比較名は `<test>_vs_<ref>`）、
     `analyses`（名前つきの解析を並べる——感度解析は 1 つの spec に並べる。各解析は
     `matrix`（matrix-recipe.v2: 段の順序・検出率・KNN・PQN・LOESS・RSD。統合したデータセットの正規化の
-    係数は極性ごと）と
+    係数は極性ごと、drift_correct は極性ごとの注入順: injection_order.source=metadata は陽イオンが試料の表、
+    陰イオンが統合の残した陰イオンの測定。TSV の 1 つの注入順は全極性に当て、陰イオンの測定と違えば notes）と
     `test`（`student` / `welch` / `mannwhitney` / `ols`）・`fold_change`・`correction`・
     `bh_population`・`thresholds`）、入力は `input`（データセットか外部の行列: TSV・MetaboLights の
     MAF・mwTab・xlsx）、群は `groups`（実験情報シートか TSV）、`covariates`（OLS の共変量の TSV）、
@@ -216,7 +217,7 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
                                       and "select" in (normalized["aggregate"] or {}))
         if error:
             return error
-        result = analysis_spec.run_spec(normalized, ds)
+        result = analysis_spec.run_spec(normalized, ds, notes=notes)
         if notes:
             result["notes"] = list(notes)
         written = write_result(output_path, result) if output_path else None
@@ -1038,7 +1039,9 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
             stats_rows, merge = _novel_result_stats(ds, result, source,
                                                     dataset_hash=dataset_hash)
         else:
-            run = analysis_spec.run_spec(source["analysis_spec"], ds)
+            run_notes: list[str] = []
+            run = analysis_spec.run_spec(source["analysis_spec"], ds, notes=run_notes)
+            notes += [f"statistics.analysis_spec: {n}" for n in run_notes]
             analysis = next(a for a in run["analyses"] if a["analysis_id"] == source["analysis_id"])
             group_ref, group_test = run["group_ref"], run["group_test"]
             stats_rows = {row["feature_id"]: row for row in analysis["rows"]

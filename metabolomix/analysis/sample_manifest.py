@@ -513,11 +513,20 @@ def matches_file_order(orders, keys) -> bool:
 
 def file_order_keys(ds) -> list[str]:
     """試料ごとの「ファイルの順」の鍵（`ds.sample_names` の順）。raw のパスが全試料で分かればそのファイル名、
-    さもなくば試料名（MS-DIAL の試料名はファイルの幹）。"""
+    さもなくば試料名（MS-DIAL の試料名はファイルの幹）。
+
+    陽陰を統合したデータセット（`dataset_merge_polarities`）は試料を共通 ID へ改名しているので、試料名の代わりに
+    試料の表の測定（陽イオン）の元の試料名（`quant_state["source_sample_names"]["positive"]`）で見る
+    （陽イオンだけのデータセットと同じ鍵）。"""
     names = [str(n) for n in (getattr(ds, "sample_names", None) or [])]
     paths = [_raw_path_for_sample(ds, i) for i in range(len(names))]
     if names and all(paths):
         return [os.path.basename(str(p).replace("\\", "/").rstrip("/")) for p in paths]
+    state = getattr(ds, "quant_state", None)
+    source = ((state.get("source_sample_names") or {}).get("positive")
+              if isinstance(state, dict) else None)
+    if isinstance(source, list) and len(source) == len(names):
+        return [str(n) for n in source]
     return names
 
 
