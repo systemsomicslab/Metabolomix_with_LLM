@@ -178,11 +178,14 @@ def test_bruker_wins_over_agilent_and_missing_layouts_name_both_vendors(tmp_path
 
 def test_wiff2_is_unreadable_with_a_format_specific_reason(tmp_path):
     """SCIEX OS の .wiff2 自身は stdlib で読める取得時刻の欄が無い。同じ幹の .wiff も無ければ、理由は形式に即して
-    書き（.wiff が無いことも）、変換の道を示す。"""
+    書き（同じ幹の .wiff が無いことも）、変換の道を示す。理由にファイル名は入れない（どのファイルかは行が持つ）。"""
     (tmp_path / "s1.wiff2").write_bytes(b"\x00" * 64)
+    (tmp_path / "s2.wiff2").write_bytes(b"\x00" * 64)
     got = A.read_acquisition_times(tmp_path / "s1.wiff2")
     assert got["source"] == "unreadable" and got["start_utc"] is None
-    assert ".wiff2" in got["error"] and "mzML" in got["error"] and "s1.wiff" in got["error"]
+    assert ".wiff2" in got["error"] and "mzML" in got["error"] and "同じ幹の .wiff" in got["error"]
+    assert "s1" not in got["error"]
+    assert A.read_acquisition_times(tmp_path / "s2.wiff2")["error"] == got["error"]
 
 
 def test_wiff2_reads_the_acquisition_time_of_the_same_stem_wiff(tmp_path):
@@ -196,11 +199,19 @@ def test_wiff2_reads_the_acquisition_time_of_the_same_stem_wiff(tmp_path):
                    "error": None}
     # 同じ幹の .wiff と同じ時刻（並べて読んでも同じ取得を指す）
     assert A.read_acquisition_times(tmp_path / "s1.wiff")["start_utc"] == got["start_utc"]
-    # 同じ幹の .wiff が壊れていれば、その名前を挙げて unreadable
+    # 同じ幹の .wiff が壊れていれば、そう言って unreadable（理由にファイル名は入れない）
     (tmp_path / "s2.wiff2").write_bytes(b"\x00" * 64)
     (tmp_path / "s2.wiff").write_bytes(b"not an OLE file" * 40)
     broken = A.read_acquisition_times(tmp_path / "s2.wiff2")
-    assert broken["source"] == "unreadable" and "s2.wiff" in broken["error"]
+    assert broken["source"] == "unreadable" and "同じ幹の .wiff を読めない" in broken["error"]
+    assert "s2" not in broken["error"]
+
+
+def test_unreadable_reasons_do_not_carry_the_path_of_an_os_error(tmp_path):
+    """OSError の文字列はパスを含むので、理由はその strerror だけ（ファイルごとに理由の種類を増やさない）。"""
+    err = PermissionError(13, "Permission denied", str(tmp_path / "secret_dir" / "x.raw"))
+    assert A._reason(err) == "Permission denied" and "secret_dir" not in A._reason(err)
+    assert A._reason(OSError()) == "OSError" and A._reason(ValueError("壊れている")) == "壊れている"
 
 
 def test_other_formats_are_unreadable_without_raising(tmp_path):
@@ -341,6 +352,40 @@ def test_session_gap_uses_the_lower_median_and_ignores_duplicate_times():
         twins[f"s{k}.wiff"], twins[f"s{k}.wiff2"] = t, t
     assert A.session_gap_minutes(_rows(twins)) == 150.0
     assert A.session_gap_minutes(_rows({"a1": T0})) == A.GAP_MINUTES and A.session_gap_minutes([]) == A.GAP_MINUTES
+
+
+def write_raw_and_mzml_twins(folder: Path, order: list[str], minutes: float) -> list[Path]:
+    """1 周期 `minutes` 分の取得ごとに、Thermo の .raw（FILETIME。小数秒 .120）と、それを変換した mzML
+    （`startTimeStamp` は整数秒）を並べて書く。2 つは同じ取得で、開始が 1 秒足らず違う。"""
+    paths = []
+    for k, name in enumerate(order):
+        start = T0 + timedelta(minutes=minutes * k)
+        paths.append(write_thermo_raw(folder / f"{name}.raw", start + timedelta(milliseconds=120)))
+        paths.append(write_mzml(folder / f"{name}.mzML", start))
+    return paths
+
+
+def test_raw_and_converted_mzml_twins_do_not_collapse_the_session_gap(tmp_path):
+    """ベンダーの raw と変換した mzML が同じフォルダにあると、開始が 1 秒足らず違う双子が間隔の半分を 1 秒未満に
+    する。完全に同じ時刻だけを 1 つにすると中央値が潰れて区切りが 40 分に戻り、1 周期 50 分の取得が 1 本ずつの
+    まとまりに割れて partial になっていた。双子は 1 つの取得に数え、raw だけのときと同じ判定にする。"""
+    order = ["a1", "b1", "a2", "b2", "a3", "b3", "a4", "b4"]
+    rows = A.acquisition_order(write_raw_and_mzml_twins(tmp_path, order, 50))
+    raw_only = [r for r in rows if r["file"].endswith(".raw")]
+    # 独立に計算した区切り: 双子（1 分未満）を除いた隣どうしの間隔（分）の低いほうの中央値の 3 倍と 40 分の大きいほう
+    starts = np.sort([datetime.fromisoformat(r["start_utc"]).timestamp() for r in rows])
+    diffs = np.diff(starts)
+    kept = np.sort(diffs[diffs >= 60]) / 60
+    assert len(kept) == 7 and float(np.min(diffs)) < 1        # 双子の間隔は 1 秒未満
+    expected = max(40.0, 3 * float(kept[(len(kept) - 1) // 2]))
+    assert expected == pytest.approx(150.0, abs=0.01)
+    assert A.session_gap_minutes(rows) == pytest.approx(expected)
+    assert A.session_gap_minutes(rows) == pytest.approx(A.session_gap_minutes(raw_only), abs=0.01)
+    groups = {f"{name}.raw": name[0].upper() for name in order}
+    for subset in (rows, raw_only):
+        out = A.group_overlap(subset, groups)
+        assert out["overlap"] == "independent" and out["session_gap_minutes"] == 150.0
+        assert len(out["by_session"]) == 1 and set(A.acquisition_sessions(subset).values()) == {1}
 
 
 # ---------- ISA / mwTab からのシート ----------

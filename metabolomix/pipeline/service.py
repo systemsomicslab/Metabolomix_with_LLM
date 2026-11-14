@@ -260,7 +260,8 @@ def _launch_warnings(launch: dict | None) -> list[dict]:
 
     `worker_in_job` は中継が `IsProcessInJob(worker, NULL)` で確かめた値（何段目の Job でも）。
     中継の直近の Job が `inherited_job`（`relay_breakaway`）なら、中継は worker を外へ出せず、
-    worker はその Job（閉じても止めない）に残ったと分かる。それ以外で worker が Job にいるなら、
+    worker はその Job（閉じても止めない）に残ったと分かる（警告せず、その外側の段を確かめていない注記を
+    `launch.outer_jobs` に添える。`_launch_and_await`）。それ以外で worker が Job にいるなら、
     中継から見えない外側の段にいる。"""
     if not launch:
         return []
@@ -440,8 +441,14 @@ def launch_pipeline_worker(path: Path) -> dict:
 
 
 def _launch_and_await(pipeline_path: Path, *, baseline_record: dict) -> dict:
-    """launch直前の状態を基準にworkerを起動し、handshakeを待つ。"""
+    """launch直前の状態を基準にworkerを起動し、handshakeを待つ。
+
+    worker が Job に残り、中継の直近の Job が `inherited_job` なら（`WORKER_IN_JOB` は出さない）、外側の段を
+    確かめていない注記（`engine.worker_outer_jobs_note`。`outer_jobs` / `outer_jobs_note`）を起動の結果に添える。
+    """
     launch_info = launch_pipeline_worker(pipeline_path)
+    launch_info.update(engine.worker_outer_jobs_note(
+        in_job=launch_info.get("worker_in_job"), nearest_job=launch_info.get("relay_breakaway")) or {})
     baseline_identity = (baseline_record.get("worker") or {}).get("identity")
     baseline_status = baseline_record["status"]
     launch_info["handshake"] = _await_launch_handshake(

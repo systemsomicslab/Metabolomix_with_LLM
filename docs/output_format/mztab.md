@@ -169,6 +169,11 @@ SME 由来という食い違った行ができる。
   無い試料の数）・`tags`（タグごとの特徴数）・`excluded`（除外の件数）を含む。`samples` は name/role の TSV（列名
   `name\trole`）で、役割は試料の表から読む（`view="samples"`・統計エンジンと同じ。`dataset_set_sample_metadata` で
   直した役割もここに出る。空は `sample`）。
+  `groups` と `n_ungrouped` は**統計に入る試料だけ**（`included_sample_indices` と同じ集合）を数える。外した試料は外した理由ごとに
+  群 → 件数で分け（群が無ければ `(群なし)`。1 件も無ければ鍵ごと出さない）、`groups` には載せない: 実験情報シートの `include=false`
+  の試料（`pipeline_sample_sheet` の群 `unassigned` など。`unassigned` は群ではなく、`dataset_compare` に渡せない）は
+  `excluded_by_sheet`、`dataset_exclude` で外した試料は `excluded_by_dataset_exclude`（シートでも外した試料はシートの側だけに
+  数える）。`roles` は全試料を数える。
 - `samples`: 試料の TSV（name・group・role・batch・batch_source・injection_order・injection_order_source・
   subject_id・excluded、続けて実験情報シートに足した因子の列を名前の順に。足していなければ因子の列は無い）。
   `*_source` は値の出所（`sheet` / `mddata` / `mzTab` / `raw_acquisition_time` / `filename`）で、バッチが空で試料名に

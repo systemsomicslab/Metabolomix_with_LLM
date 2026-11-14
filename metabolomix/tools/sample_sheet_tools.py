@@ -31,6 +31,16 @@ def _envelope(exc: DomainError) -> str:
     return mztab_error(exc.code, exc.message, details)
 
 
+def _capped_reasons(reasons: dict[str, int]) -> tuple[dict[str, int], int]:
+    """読めなかった理由 → 件数を、件数の多い順（同数は先に出た順）に先頭 `_LIST_LIMIT` 種類だけ返す。
+
+    理由はファイルによらない文面にしてある（`rawmeta.acquisition`）が、OS やベンダーの例外の文面が
+    ファイルごとに違うこともあるので、一覧と同じ上限で切る。2 つ目は切った理由の種類の数。
+    """
+    ranked = sorted(reasons.items(), key=lambda item: -item[1])
+    return dict(ranked[:_LIST_LIMIT]), max(len(ranked) - _LIST_LIMIT, 0)
+
+
 def _bad(message: str, **details) -> DomainError:
     return DomainError("SAMPLE_TABLE_INVALID", message, details or None)
 
@@ -101,8 +111,9 @@ def pipeline_sample_sheet(
     `# injection_order_source = raw_acquisition_time` を書く（読み込んだ試料の表・統計の注入順の出所が
     `raw_acquisition_time` になる）。読めない raw があっても読めた raw の順は残し、読めない raw の注入順だけを空に
     する（`injection_order_source: "raw_acquisition_time_partial"`。空欄は MS-DIAL の番号で埋まらず不明のまま）。
-    どれも読めなければ `none`（宣言も書かない）。読めなかったファイルは `unreadable`、理由は `unreadable_reasons`。
-    順の欠けた生体試料か QC が統計に入る（`include=true`）ときだけ、`notes` がドリフト補正と注入順の偏りの判定は
+    どれも読めなければ `none`（宣言も書かない）。読めなかったファイルは `unreadable`、理由は `unreadable_reasons`
+    （理由 → 件数。件数の多い順に先頭 20 種類で、切った種類の数は `unreadable_reasons_n_more`。一覧も先頭 20 件で、
+    切った件数は `<一覧>_n_more`）。順の欠けた生体試料か QC が統計に入る（`include=true`）ときだけ、`notes` がドリフト補正と注入順の偏りの判定は
     行われないと書く（`include=false` の試料は前処理が先に外すので止めない）。
     バッチは空。試料の表は UTF-8（BOM 可）。
     1 行は raw のフォルダの主ファイル 1 つ（pipeline の受付と同じ一覧。形式が混ざるときは `keep_extension`）。
@@ -154,6 +165,7 @@ def pipeline_sample_sheet(
         return mztab_error("SAMPLE_TABLE_INVALID", f"読み書きできない: {exc}", None)
 
     notes = _notes(built)
+    reasons, n_more_reasons = _capped_reasons(built["unreadable_reasons"])
     summary = {
         "status": "success",
         "path": str(target),
@@ -167,7 +179,8 @@ def pipeline_sample_sheet(
         "unreadable": built["unreadable"],
         "qc_samples": built["qc_samples"],
         "blank_samples": built["blank_samples"],
-        "unreadable_reasons": built["unreadable_reasons"],
+        "unreadable_reasons": reasons,
+        **({"unreadable_reasons_n_more": n_more_reasons} if n_more_reasons else {}),
         "unassigned_samples": built["unassigned_samples"],
         "files_not_in_assay": built["files_not_in_assay"],
         "ambiguous_files": built["ambiguous_files"],

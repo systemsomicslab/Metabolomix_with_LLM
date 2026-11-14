@@ -241,7 +241,8 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
     ライブラリの記録（ファイル名と sha256。置き場所は出さない）に、`caveat`（意味論の要約。未読で、その
     種別にまだ出していないときだけ先頭に載る。`assay_kind` が確定したあとの最初の 1 回は
     `record_objective` の戻り値が運ぶ）、`summary`（特徴・試料の数、検出状態、同定の内訳、読み込みの
-    注記）、`sample_counts`（群と役割ごとの試料数）、`overview`（最初の概観。`overview=True` のとき）、
+    注記）、`sample_counts`（群と役割ごとの試料数。群は統計に入る試料だけを数え、実験情報シートの include=false
+    の試料は `excluded_by_sheet` に分ける）、`overview`（最初の概観。`overview=True` のとき）、
     `next`（次の一手の例）。概観の比較と PCA は `result_id` で掘れるが直近の結果にはしない。
     """
     bad = _argument_error(overview, library)
