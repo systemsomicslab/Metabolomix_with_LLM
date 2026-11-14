@@ -23,8 +23,8 @@ def lipid_arf(monkeypatch, tmp_path):
 
     s = session_state.AnalysisSession()
     monkeypatch.setattr(session_state, "session", s)
-    s.assay_kind = "lipid"
     ds = _ds(groups=("C", "P"), per_group=2, reps=1, n_qc=0)
+    ds.assay_kind = "lipid"   # 種別はデータセット（ハンドル）ごと
     ds.analysis_dir = str(tmp_path)   # 記録（run）の置き場所の基準: <tmp>/reports/pathway
     ds.feature_annotations = {"f0": {"name": "PC 34:1", "ontology": "PC"},
                               "f1": {"name": "LPC 18:1", "ontology": "LPC"}}
@@ -384,8 +384,8 @@ def _qc_session(monkeypatch, tmp_path, **kw):
     from tests.test_stats_results import _ds
     s = session_state.AnalysisSession()
     monkeypatch.setattr(session_state, "session", s)
-    s.assay_kind = "lipid"
     ds = _ds(groups=("C", "P"), per_group=2, reps=1, n_qc=4, **kw)
+    ds.assay_kind = "lipid"   # 種別はデータセット（ハンドル）ごと
     ds.analysis_dir = str(tmp_path)
     ds.feature_annotations = {"f0": {"name": "PC 34:1", "ontology": "PC"},
                               "f1": {"name": "LPC 18:1", "ontology": "LPC"}}
@@ -440,8 +440,8 @@ def test_too_few_units_leaves_no_matrix_no_record(monkeypatch, tmp_path, fake_me
     from tests.test_stats_results import _ds
     s = session_state.AnalysisSession()
     monkeypatch.setattr(session_state, "session", s)
-    s.assay_kind = "lipid"
     ds = _ds(groups=("C", "P"), per_group=1, reps=2, n_qc=0)
+    ds.assay_kind = "lipid"   # 種別はデータセット（ハンドル）ごと
     ds.analysis_dir = str(tmp_path)
     ds.feature_annotations = {"f0": {"name": "PC 34:1", "ontology": "PC"},
                               "f1": {"name": "LPC 18:1", "ontology": "LPC"}}
@@ -517,8 +517,8 @@ def test_tool_subject_of_collapses_replicates_in_compare_scopes(monkeypatch, tmp
     from tests.test_stats_results import _ds
     s = session_state.AnalysisSession()
     monkeypatch.setattr(session_state, "session", s)
-    s.assay_kind = "lipid"
     ds = _ds(groups=("C", "P"), per_group=3, reps=2, n_qc=0)
+    ds.assay_kind = "lipid"   # 種別はデータセット（ハンドル）ごと
     ds.analysis_dir = str(tmp_path)
     ds.feature_annotations = {"f0": {"name": "PC 34:1", "ontology": "PC"},
                               "f1": {"name": "LPC 18:1", "ontology": "LPC"}}
@@ -554,8 +554,8 @@ def test_group_with_too_few_units_after_collapse_is_bad_request(monkeypatch, tmp
     from tests.test_stats_results import _ds
     s = session_state.AnalysisSession()
     monkeypatch.setattr(session_state, "session", s)
-    s.assay_kind = "lipid"
     ds = _ds(groups=("C", "P"), per_group=1, reps=2, n_qc=0)     # 各群 1 個体 × 2 反復
+    ds.assay_kind = "lipid"   # 種別はデータセット（ハンドル）ごと
     ds.analysis_dir = str(tmp_path)
     ds.feature_annotations = {"f0": {"name": "PC 34:1", "ontology": "PC"},
                               "f1": {"name": "LPC 18:1", "ontology": "LPC"}}

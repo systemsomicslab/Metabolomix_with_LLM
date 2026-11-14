@@ -305,9 +305,16 @@ def test_pipeline_folder_without_mddata_binds_manifest_by_mztab_raw_paths(tmp_pa
         f"C:/data/s{i}.wiff" for i in range(4)]
     assert [r["group"] for r in ds.sample_metadata_rows] == ["ctrl", "ctrl", "case", "case"]
     assert [r["sample_id"] for r in ds.sample_metadata_rows] == ds.sample_names
-    # directory= で開くときは変わらない（job の mzTab-M が無いので raw のパスは None のまま）。
-    direct = open_dataset(directory=str(run / "input")).dataset
-    assert direct.sample_raw_paths is None
+    # directory= で run の中の解析フォルダを開いても、run の試料の表（manifest）を当てる（B9-T06）。
+    direct_opened = open_dataset(directory=str(run / "input"))
+    direct = direct_opened.dataset
+    assert [p.replace("\\", "/") for p in direct.sample_raw_paths] == [
+        f"C:/data/s{i}.wiff" for i in range(4)]
+    assert [r["group"] for r in direct.sample_metadata_rows] == ["ctrl", "ctrl", "case", "case"]
+    assert any("run の試料の対応表" in note and "当てた" in note
+               for note in direct_opened.notes), direct_opened.notes
+    # 基の指紋が run の記録を数える（run の試料の対応表が変われば基も変わる）。
+    assert direct_opened.run_root is not None
 
 
 def _shifted_spec() -> dict:
@@ -1114,3 +1121,38 @@ def test_mztab_source_without_a_verified_batch_falls_back_to_the_newest_name(tmp
     write_msdial_folder(run / "negative" / "input", **_other_spec(), stem="AlignResult-2",
                         with_mddata=False)
     assert opening.pipeline_arf2(run, "negative").name == "AlignResult-2.arf2"
+
+
+# ---------- MS-DIAL Console の既定の .mddata（棚卸し B9-T06） ----------
+
+
+def _console_folder(path: Path, class_ids) -> Path:
+    names = ["QC_01", "S_01", "S_02", "QC_02"]
+    samples = [{"file_id": i, "name": n, "class_id": c(i, n) if callable(c) else c}
+               for (i, n), c in zip(enumerate(names), class_ids)]
+    spots = [{"name": "PC 34:1", "mz": 760.5851, "heights": [1.0, 2.0, 3.0, 4.0]}]
+    write_msdial_folder(path, spots=spots, samples=samples)
+    return path
+
+
+@pytest.mark.parametrize("default", [lambda i, n: str(i), lambda i, n: n])
+def test_console_default_mddata_is_not_a_group_declaration(tmp_path, default):
+    """Class ID が FileID（かファイル名）のまま・種類がすべて sample の .mddata は宣言とみなさない。"""
+    from metabolomix.tools.mztab_tools import _metadata_rows
+
+    opened = open_dataset(directory=str(_console_folder(tmp_path / "f", [default] * 4)))
+    rows = _metadata_rows(opened.dataset)
+    assert [r["group"] for r in rows] == [None] * 4
+    assert [r["role"] for r in rows] == ["qc", "sample", "sample", "qc"]
+    assert rows[0]["provenance"]["role"]["source"] == "filename_token"
+    assert rows[0]["provenance"]["role"]["confidence"] == "inferred"
+    assert any("Console の既定" in note for note in opened.dataset.load_notes), opened.dataset.load_notes
+
+
+def test_declared_classes_are_kept(tmp_path):
+    from metabolomix.tools.mztab_tools import _metadata_rows
+
+    opened = open_dataset(directory=str(_console_folder(tmp_path / "f", ["QC", "A", "B", "QC"])))
+    rows = _metadata_rows(opened.dataset)
+    assert [r["group"] for r in rows] == ["QC", "A", "B", "QC"]
+    assert not any("Console の既定" in note for note in opened.dataset.load_notes)

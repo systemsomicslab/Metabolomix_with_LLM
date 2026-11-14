@@ -70,6 +70,8 @@ class OpenedDataset:
         解析フォルダで読んだとき。基の指紋が今の `.arf` の候補を数えるのに使う）
     polarity: `pipeline_path` で開いた run の極性の単位（`polarity` を省いて 1 単位に決まったときも）。
         他の入口は None
+    run_root: `directory` で開いた解析フォルダが pipeline の run の中にあり、その run の試料の対応表と
+        ライブラリの記録を当てたときの run の根（基の指紋が run の記録と受領を数えるのに使う）
     """
 
     dataset: DatasetState
@@ -81,6 +83,7 @@ class OpenedDataset:
     reused_base: bool = False
     mztab_path: str | None = None
     polarity: str | None = None
+    run_root: str | None = None
 
 
 def open_dataset(*, directory=None, mztab_path=None, job_path=None, pipeline_path=None,
@@ -259,6 +262,11 @@ def _dependencies(base: OpenedDataset) -> set[str]:
         paths.update(_folder_listing(base.selection.arf.parent))
     if getattr(ds, "job_path", None):
         paths.update(_job_files(Path(ds.job_path)))
+    if base.run_root:
+        from metabolomix.pipeline.receipt import RECEIPT_RELATIVE_PATH
+
+        paths.add(str(Path(base.run_root) / "pipeline-run.json"))
+        paths.add(str(Path(base.run_root) / RECEIPT_RELATIVE_PATH))
     if base.kind == "pipeline_path":
         from metabolomix.pipeline.receipt import RECEIPT_RELATIVE_PATH
         from metabolomix.pipeline.recovery import normalize_pipeline_root
@@ -358,6 +366,10 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
 
         selection = select_alignment(Path(raw).expanduser())
         ds = load_msdial_folder(selection, measure=measure)
+        # pipeline の run の中の解析フォルダなら、run の試料の対応表（実験情報シートと受領）を当てる。
+        unit = _enclosing_run_unit(Path(selection.arf).parent)
+        if unit is not None:
+            notes.extend(_apply_run_rows(ds, unit))
     elif kind == "job_path":
         ds, selection, gate = _folder_via_job(Path(raw).expanduser(), measure=measure,
                                               allow_incomplete=allow_incomplete)
@@ -370,6 +382,11 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
 
     if kind == "directory":
         record = library_memory.remember_from_folder(selection)
+        if unit is not None:
+            # run の中の解析フォルダは、run が固定したライブラリ（sha256 つき）を先に使う。
+            run_record = library_memory.remember_from_run(unit.pipeline_root, unit.polarity)
+            if run_record.get("status") in ("known", "lbm_only"):
+                record = run_record
     elif kind == "job_path":
         record = library_memory.remember_from_job(Path(raw).expanduser())
     elif kind == "pipeline_path":
@@ -385,11 +402,90 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
         ds.analysis_dir = str(Path(mztab_path).parent)
     if unit is not None and adapter == "mztab":
         notes.extend(unit.notes)
-    if unit is not None and unit.legacy:
+    if unit is not None and unit.legacy and kind == "pipeline_path":
         notes.append("旧 v1 の run なので、run が計算した差次的結果は戻していない（比較は dataset_compare でやり直す）。")
     return OpenedDataset(dataset=ds, kind=kind, path=path, adapter=adapter,
                          selection=selection, notes=notes, mztab_path=mztab_path,
-                         polarity=polarity)
+                         polarity=polarity,
+                         run_root=str(unit.pipeline_root) if unit is not None else None)
+
+
+#: 解析フォルダから pipeline の run の根（`pipeline-run.json` のあるフォルダ）を探す深さ
+#: （`<run>/<単位>/input/` と旧 v1 の `<run>/input/`）。
+_RUN_SEARCH_DEPTH = 3
+
+
+def _same_dir(a: Path, b: Path) -> bool:
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return False
+
+
+def _enclosing_run_unit(folder: Path):
+    """解析フォルダを含む pipeline の run の極性の単位（`session_handoff.UnitRun`）。無ければ None。
+
+    フォルダから上へ `_RUN_SEARCH_DEPTH` 段まで `pipeline-run.json` を探し、run の単位のうち解析フォルダが
+    このフォルダのものを選ぶ（検証を通っていない単位も、試料の対応表を当てるためだけに読む）。
+    run の記録が読めない・どの単位とも合わないときは None（解析フォルダだけで開く）。
+    """
+    from metabolomix.pipeline import session_handoff, store
+
+    folder = Path(folder)
+    for root in [folder, *folder.parents][:_RUN_SEARCH_DEPTH + 1]:
+        if not (root / "pipeline-run.json").is_file():
+            continue
+        try:
+            units = store.run_units(store.load_run(root))
+        except (DomainError, OSError, ValueError):
+            return None
+        for polarity in units:
+            try:
+                unit = session_handoff.resolve_unit(root, polarity, allow_incomplete=True)
+            except (DomainError, OSError, ValueError):
+                continue
+            if _same_dir(unit.analysis_dir, folder):
+                return unit
+        return None
+    return None
+
+
+def _apply_run_rows(ds, unit) -> list[str]:
+    """run の試料の対応表を、解析フォルダで読んだデータセットへ当てる。注記を返す。
+
+    試料は対応表の行の `source_file`（raw）の名前（拡張子を除く）か `sample_id` で結ぶ。全試料が結べた
+    ときだけ当てる（読み込みの一部なので `metadata_revision` は進めない）。
+    """
+    from metabolomix.analysis import sample_manifest
+
+    rows = unit.manifest_rows
+    where = f"pipeline の run（{unit.pipeline_root.name}・{unit.polarity}）"
+    if not rows:
+        return [f"解析フォルダは {where} の中にあるが、run の受領に試料の対応表が無いので当てていない"
+                "（群は dataset_set_sample_metadata で与える）。"]
+    by_key: dict[str, dict] = {}
+    for row in rows:
+        source = row.get("source_file")
+        for key in (Path(str(source)).stem if source else None, row.get("sample_id")):
+            if key:
+                by_key.setdefault(str(key).strip().casefold(), row)
+    matched = [by_key.get(str(name or "").strip().casefold()) for name in ds.sample_names]
+    missing = [name for name, row in zip(ds.sample_names, matched) if row is None]
+    if missing:
+        return [f"解析フォルダは {where} の中にあるが、試料 {missing[:5]} を run の試料の対応表と"
+                "結べないので、対応表は当てていない（群は dataset_set_sample_metadata で与える）。"]
+    previous = ds.sample_raw_paths
+    ds.sample_raw_paths = [row.get("source_file") for row in matched]
+    revision = ds.metadata_revision
+    try:
+        sample_manifest.apply_defaults_and_inputs(ds, sample_manifest.resolve_metadata(ds, rows))
+    except DomainError as exc:
+        ds.sample_raw_paths = previous
+        return [f"解析フォルダは {where} の中にあるが、run の試料の対応表を当てられなかった"
+                f"（{exc.code}）。群は dataset_set_sample_metadata で与える。"]
+    ds.metadata_revision = revision
+    return [f"解析フォルダは {where} の中にあるので、群と役割は run の試料の対応表（実験情報シートと"
+            "受領）から当てた（.mddata の宣言より先）。"]
 
 
 def _load(kind: str, path: str, allow_incomplete: bool, polarity: str | None = None):

@@ -131,6 +131,10 @@ class DatasetState:
 
     def __init__(self):
         self.source_format: str = "mztab"
+        # assay_kind: 脂質（lipid）か一般代謝物（metabolite）か、未確定（unknown）か。解釈規則の選択軸。
+        # `record_objective(assay_kind=...)` が書き、`load_dataset` が解析フォルダの目的ファイル
+        # （reports/*.objective.md）から読み戻す。派生（quant の複製）は親の値を引き継ぐ。指紋には入れない。
+        self.assay_kind: str = "unknown"
         self.source_files: dict[str, str] = {}          # path -> sha256
         self.quantification_measure: str | None = None  # peak_height | peak_area_above_zero
         self.quantification_confidence: str | None = None
@@ -173,8 +177,9 @@ class DatasetState:
         self.per_sample_mz: dict[str, dict[str, float]] | None = None
         # per_sample_rt: 試料ごとのピークの RT（分）の (n_features, n_samples) float 行列
         # （feature_matrix と同じ並び。gap-fill のセルも .arf の値。セルが無ければ NaN）。
-        # 解析フォルダ（.arf）から読んだデータセットだけが持つ。`dataset_sample_peaks` の材料。
-        # 指紋には入れない。mzTab-M の経路は None（値が無い。0 行列と混同させない）。
+        # 解析フォルダ（.arf）から読んだデータセットと、mzTab-M を隣の `.arf` と照合できた
+        # データセット（`evidence.apply_evidence`）が持つ。`dataset_sample_peaks` の材料。
+        # 指紋には入れない。照合できなかった mzTab-M は None（値が無い。0 行列と混同させない）。
         self.per_sample_rt: np.ndarray | None = None
 
         # --- ジョブ由来フィールド（load_dataset(job_path=...) で設定） ---
@@ -279,12 +284,15 @@ _MSP_LOOKUP_COUNTERS = {"resolved": "resolved", "conflicting": "conflicting_name
                         "unmatched": "unmatched"}
 
 
-def _resolve_inchikey(database_identifier, inchi, smiles, msp_table, msp_counts: dict):
+def _resolve_inchikey(database_identifier, inchi, smiles, msp_table, msp_counts: dict,
+                      flags: dict | None = None):
     """InChIKey 形の識別子 → 研究室 MSP の表 → RDKit の順で解決する。
 
     MSP を RDKit より前に置くのは、研究室が整備した値をそのまま使い、RDKit の有無
     （機械のアプリケーション制御）で結果を変えないため（spec §3.2）。`derive_inchikey`
     はモジュール属性として呼ぶ（既存テストがここを差し替えて RDKit 不在を再現する）。
+    `flags` を渡すと、MSP の表で同じ名前に別の InChIKey があり決めなかったとき
+    `flags["name_conflict"] = True` を書く（特徴単位の曖昧の印 `inchikey_name_conflict` の材料）。
     """
     text = str(database_identifier or "").strip()
     if text and _INCHIKEY_RE.match(text):
@@ -294,6 +302,8 @@ def _resolve_inchikey(database_identifier, inchi, smiles, msp_table, msp_counts:
         counter = _MSP_LOOKUP_COUNTERS.get(outcome)
         if counter is not None:
             msp_counts[counter] += 1
+        if outcome == "conflicting" and flags is not None:
+            flags["name_conflict"] = True
         if inchikey:
             return inchikey, "msp_library"
     return derive_inchikey(database_identifier, inchi, smiles)
@@ -358,11 +368,12 @@ def build_dataset_state(
                                      msp_table=msp_table)
         ds.feature_candidates[fid] = candidates
         evidence = _best_evidence(row.get("SME_ID_REFS"), sme_by_id)
+        resolve_flags: dict = {}
         ik, src = _resolve_inchikey(
             evidence.get("database_identifier"),
             evidence.get("inchi"),
             evidence.get("smiles"),
-            msp_table, msp_counts,
+            msp_table, msp_counts, resolve_flags,
         )
         ds.feature_metadata[fid] = {
             "name": evidence.get("chemical_name"),
@@ -375,6 +386,10 @@ def build_dataset_state(
             "smiles": evidence.get("smiles"),
             "inchi": evidence.get("inchi"),
         }
+        if resolve_flags.get("name_conflict"):
+            # 名前から InChIKey を引こうとして、研究室 MSP に同じ名前の別の InChIKey があった
+            # （どれかに決めない）。書き出しの列は変えず、同定の欄（特徴検索など）で知らせる。
+            ds.feature_metadata[fid]["inchikey_name_conflict"] = True
         by_source[src] = by_source.get(src, 0) + 1
         # RDKit があれば拾えたはずの取りこぼし。構造が無い行は RDKit の有無に
         # 関係なく InChIKey を持てないので、ここには数えない。
@@ -637,9 +652,12 @@ def _all_candidates(refs, sme_by_id: dict, *, msp_table=None) -> list[dict]:
         }
         for key, column in _SME_TEXT_FIELDS.items():
             candidate[key] = row.get(column)
+        resolve_flags: dict = {}
         candidate["inchikey"], candidate["inchikey_source"] = _resolve_inchikey(
             candidate["database_identifier"], candidate["inchi"], candidate["smiles"],
-            msp_table, {"resolved": 0, "conflicting_names": 0, "unmatched": 0})
+            msp_table, {"resolved": 0, "conflicting_names": 0, "unmatched": 0}, resolve_flags)
+        if resolve_flags.get("name_conflict"):
+            candidate["inchikey_name_conflict"] = True
         candidates.append(candidate)
     return candidates
 
@@ -696,11 +714,14 @@ def _build_feature_annotations(sml_rows, known_feature_ids: set, *,
             for key, column in _SML_FLAG_FIELDS.items():
                 entry[key] = _to_flag(row.get(column))
             # inchi は保持しないが、導出の材料としては渡す（他実装が書く余地を残す）。
+            resolve_flags: dict = {}
             ik, src = _resolve_inchikey(row.get("database_identifier"),
                                         row.get("inchi"), row.get("smiles"),
-                                        msp_table, msp_counts)
+                                        msp_table, msp_counts, resolve_flags)
             entry["inchikey"] = ik
             entry["inchikey_source"] = src
+            if resolve_flags.get("name_conflict"):
+                entry["inchikey_name_conflict"] = True
             by_feature.setdefault(fid, []).append(entry)
 
     annotations: dict[str, dict] = {}
@@ -721,7 +742,9 @@ def _build_feature_annotations(sml_rows, known_feature_ids: set, *,
                             "sml_ids": [e["sml_id"] for e in entries],
                             "name": None,
                             "inchikeys": inchikeys,
-                            **flags}
+                            **flags,
+                            **({"inchikey_name_conflict": True}
+                               if any(e.get("inchikey_name_conflict") for e in entries) else {})}
 
     warnings: list[str] = []
     if ambiguous:

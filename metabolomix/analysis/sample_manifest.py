@@ -454,6 +454,10 @@ def _msdial_row(ds, index: int, sample: dict, name: str) -> dict:
     if not in_mddata:
         provenance["role"] = {"value": values["role"], "source": "default",
                               "confidence": "inferred"}
+    elif not sample.get("role_declared", True):
+        # Console の既定の .mddata（class=FileID・type=0）は宣言とみなさない。役割はファイル名の推定。
+        provenance["role"] = {"value": values["role"], "source": "filename_token",
+                              "confidence": "inferred"}
     for field, fallback in (("batch", mz_batch), ("injection_order", mz_order)):
         if values[field] is None and fallback is not None:
             values[field] = fallback

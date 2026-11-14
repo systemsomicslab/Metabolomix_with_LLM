@@ -196,6 +196,13 @@ v2 の実験情報シートは、既知の列（と任意の `subject_id`）の�
 | `identified_by` | **同定の出所内訳**。`sme`（MS/MS 証拠あり）/ `sml_only`（MS1 注釈のみ）/ `none` |
 | `msp_lookup` | MSP 表の使用状況。`status`（`used` / `no_msp` / `unavailable` / `not_applicable`）、`file`（MSP のファイル名だけ）、`resolved` / `conflicting_names` / `unmatched`（**照合の試行回数**: 特徴ごとの SME 最良証拠 1 件と、SML 行 × 参照特徴）。`conflicting_names` は同じ名前に別の InChIKey が MSP にあって付けなかった数 |
 
+**同名衝突の特徴単位の印**: `conflicting_names` は試行回数の合計で、どの特徴かは分からない。名前から InChIKey を
+引こうとして MSP に同じ名前の別の InChIKey があった（どれにも決めなかった）特徴には、特徴単位の印
+`inchikey_name_conflict: true` が付く（最良証拠は `feature_metadata[fid]`、各 SME 候補は候補ごと、SML の注釈は注釈ごと。
+曖昧な SML 注釈はどれかの行が衝突なら付く）。`dataset_feature_search` の窓の行は `inchikey_ambiguity` 列に
+`name_conflict` を出す（無ければ空）。印の付いた特徴の InChIKey が空なのは「未同定」ではなく「同名の物質が複数あって
+決めなかった」。差次的エクスポートの列は変えない（InChIKey の無い行として扱う）。
+
 **解決の順序**: `database_identifier` が InChIKey 形 → **研究室 MSP の表**（`MspDB:<名前>`）→ RDKit（InChI / SMILES）。
 MSP を RDKit より前に置くのは、RDKit の有無（Windows のアプリケーション制御がネイティブ DLL を
 拒否する機械がある）で結果を変えないため。MSP 表はジョブ経由の読み込み（`job_path`）でだけ作られ、

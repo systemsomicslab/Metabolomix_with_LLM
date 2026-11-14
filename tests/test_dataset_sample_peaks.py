@@ -210,6 +210,19 @@ def test_mztab_dataset_reports_per_sample_rt_unavailable(tmp_path):
     assert "per_sample_rt" in out["error"]["message"]
 
 
+def test_mztab_next_to_its_arf_has_per_sample_rt(tmp_path):
+    """mzTab-M でも、隣の `.arf` と同じアラインメントだと照合できれば試料ごとの RT を持つ（棚卸し B6-G09）。"""
+    write_msdial_folder(tmp_path, **_spec())
+    write_matching_mztab(tmp_path / "x.mzTab", _spec())
+    ds = open_dataset(mztab_path=str(tmp_path / "x.mzTab")).dataset
+    assert ds.detected_mask is not None
+    assert ds.per_sample_rt.shape == ds.feature_matrix.shape
+    session_state.session.dataset = ds
+    rows = _rows(R.dataset_sample_peaks(["1"]))
+    assert [(r["sample"], r["rt"]) for r in rows] == [
+        ("s0", pytest.approx(3.30)), ("s1", pytest.approx(3.31)), ("s2", pytest.approx(3.35))]
+
+
 def test_no_dataset_is_a_missing_state_envelope():
     out = json.loads(R.dataset_sample_peaks(["0"]))
     assert out["error"]["code"] == "missing_state"

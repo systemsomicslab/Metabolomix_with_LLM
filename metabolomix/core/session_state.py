@@ -74,6 +74,12 @@ def assay_digest(assay_kind: str) -> str:
     return f"{SEMANTICS_CAVEAT}\n{_ASSAY_CAVEAT_LINE[assay_kind]}"
 
 
+def dataset_assay_kind(ds) -> str:
+    """データセットのアッセイ種別（`DatasetState.assay_kind`。持たない・不正なら unknown）。"""
+    value = getattr(ds, "assay_kind", None)
+    return value if value in ASSAY_KINDS else "unknown"
+
+
 #: `dataset_handle` を省いた呼び出しが、ロックを取ったハンドルの ID（`core.handle_dispatch` が
 #: ワーカースレッドの中で置く）。置かれている間、`session.dataset` / `session.library` は
 #: 直近のハンドルでなくこのハンドルを読む——呼び出しの途中で `load_dataset` が直近を
@@ -158,10 +164,12 @@ class AnalysisSession:
         # 1 つの区間にして、ダイジェストが 2 回出ないようにする。
         self._caveat_lock = threading.Lock()
 
-        # --- アッセイ種別（解釈規則の選択軸。データ切替では消さない） ---
-        # 確定は利用者との合意事項（record_objective）で、
-        # パーサ出力からは決まらない。既定の unknown は「脂質」ではない。
-        self.assay_kind = "unknown"
+        # --- アッセイ種別（解釈規則の選択軸） ---
+        # 種別はデータセット（ハンドル）が持つ（`DatasetState.assay_kind`。`record_objective` が書き、
+        # `load_dataset` が解析フォルダの目的ファイルから読み戻す）。`assay_kind` は直近（固定中は
+        # その）ハンドルの値を読む property（下）。ハンドルが無いあいだだけ、ここのセッション自身の
+        # 値を読み書きする。既定の unknown は「脂質」ではない。
+        self._assay_kind = "unknown"
 
         # --- DatasetState（ハンドルの登録簿が持つ。session はその直近を指す） ---
         # データセットはハンドルの登録簿（core.handles.registry）に住む。ここが持つのは
@@ -370,8 +378,33 @@ class AnalysisSession:
             self._library = value
         # 固定先が閉じられていれば置き先が無い（セッション自身へは書かない）。
 
+    @property
+    def assay_kind(self) -> str:
+        """直近（`pinned_handle` の中ならその）ハンドルのデータセットのアッセイ種別。
+
+        ハンドルが無ければセッション自身の値（既定 unknown）。固定先が閉じられていれば unknown
+        （セッション自身の値へは落ちない）。
+        """
+        handle = self._handle()
+        if handle is not None:
+            return dataset_assay_kind(handle.dataset)
+        if _PINNED_HANDLE_ID.get() is not None:
+            return "unknown"
+        return self._assay_kind
+
+    @assay_kind.setter
+    def assay_kind(self, value: str) -> None:
+        normalized = normalize_assay_kind(value)
+        handle = self._handle()
+        if handle is not None:
+            if handle.dataset is not None:
+                handle.dataset.assay_kind = normalized
+        elif _PINNED_HANDLE_ID.get() is None:
+            self._assay_kind = normalized
+        # 固定先が閉じられていれば置き先が無い（セッション自身へは書かない）。
+
     def set_assay_kind(self, assay_kind: str) -> str:
-        """アッセイ種別を確定する。正規化した値を返し、未知の値は拒否する。
+        """アッセイ種別を確定する（直近のハンドルのデータセットへ）。正規化した値を返し、未知の値は拒否する。
 
         黙って `unknown` へ落とさない——落とすと、利用者が種別を伝えたつもりのまま
         サーバは未確定として振る舞い、どちらの規則も当たらない状態が続く。
@@ -380,7 +413,7 @@ class AnalysisSession:
         self.assay_kind = normalized
         return normalized
 
-    def take_caveat(self) -> str | None:
+    def take_caveat(self, assay_kind: str | None = None) -> str | None:
         """いま届けるべき意味論ダイジェストを返す（無ければ None）。出したことを記録する。
 
         規則: `[server] caveat_mode = 'off'` で止める・output-format の核が読まれていれば止める・
@@ -390,27 +423,32 @@ class AnalysisSession:
         読めない（`caveat_mode` の値が digest / off 以外、旧 `[msdial] lbm` が残っている、TOML の
         構文など）ときは**送出しない**: 既定の digest で続け、問題を 1 行だけ添える
         （状態を変えたあとで落ちないため。黙って既定に落とすのでもない）。
+
+        `assay_kind` は届ける種別（省けば `self.assay_kind`＝直近のハンドルの値）。`load_dataset` は
+        開いたハンドルの値を、`record_objective` は書いたハンドルの値を渡す（直近でないハンドルでも
+        その種別で届ける）。
         """
+        kind = normalize_assay_kind(assay_kind) if assay_kind is not None else self.assay_kind
         try:
             setting = user_config.get_setting("server.caveat_mode")
         except user_config.ConfigInvalidError as exc:
-            digest = self._take_digest()
+            digest = self._take_digest(kind)
             note = _config_problem_note(exc)
             return f"{digest}\n\n{note}" if digest else note
         if setting is not None and setting.value == "off":
             return None
-        return self._take_digest()
+        return self._take_digest(kind)
 
-    def _take_digest(self) -> str | None:
+    def _take_digest(self, kind: str) -> str | None:
         """ダイジェスト本体。出す条件を満たせば記録して返し、満たさなければ None。"""
         with self._caveat_lock:
             if self.output_format_seen:
                 return None
-            if self.caveat_emitted and self.caveat_emitted_kind == self.assay_kind:
+            if self.caveat_emitted and self.caveat_emitted_kind == kind:
                 return None
             self.caveat_emitted = True
-            self.caveat_emitted_kind = self.assay_kind
-            return assay_digest(self.assay_kind)
+            self.caveat_emitted_kind = kind
+            return assay_digest(kind)
 
 
 def _config_problem_note(exc: "user_config.ConfigInvalidError") -> str:

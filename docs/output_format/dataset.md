@@ -17,7 +17,7 @@
   読んだ `.arf` そのものが持つので、常に付く。
 - **試料ごとのピークの RT**。解析フォルダのデータセットは、特徴 × 試料の RT（`per_sample_rt`）も持つ。
   `dataset_sample_peaks(feature_ids)` が `rt` `mz` `height` `detected` を行にして返す（gap-fill の `rt` は
-  検出の位置ではない）。mzTab-M で読んだデータセットには無い。意味は `reanalysis` トピック §6.1。
+  検出の位置ではない）。mzTab-M で読んだデータセットは、隣の `.arf` と照合できたときだけ持つ。意味は `reanalysis` トピック §6.1。
 - **`.arf2` は特徴の代表**（スポット代表カタログ）。`Name` `Ontology` `Formula` `InChIKey` `AdductType` と、
   試料間の統計（`HeightAverage` `FillPercentage` `SignalToNoise*` など）を持つが、試料別の強度は持たない。
   `.arf` の `Name` と食い違うことがあり、代表の注釈は `.arf2` を優先する（`feature_metadata`）。
@@ -31,8 +31,11 @@
   実験情報シートに足した因子の列（`Genotype` など）があれば、`dataset_status(view="samples")` の TSV は
   固定の列（`name group role batch injection_order subject_id excluded`）の後ろに、その列を名前の順に並べる
   （値を持たない試料は空欄。因子の列が無いデータセットでは列は増えない）。
+  MS-DIAL Console が書く既定の `.mddata`（Class ID = FileID・種類はすべて sample）は宣言とみなさない: 群は置かず
+  （`group` は空）、役割はファイル名から推定する（役割の出所は `filename_token` / `inferred`）。解析フォルダが pipeline の
+  run の中にあれば、`directory=` で開いても run の試料の対応表（実験情報シートと受領）から群と役割を当てる（注記が出る）。
 - **MS/MS の実スペクトルは `.dcl`**（`dcl` トピック）。`.arf` のセルの MS/MS の有無は取得の参照があることだけを示す。
-- **最初の概観**。`load_dataset` の `overview` と `dataset_overview` は品質 → 全体 → クラス → 分子種の 4 段の事実（ID つき）。
+- **最初の概観**。`dataset_overview`（`load_dataset(overview=True)` の `overview` も同じ）は品質 → 全体 → クラス → 分子種の 4 段の事実（ID つき）。
   2 群の向きは仮、クラスの段は付加体の選別の後だけ。意味は §11.9。
 - **EIC**。クロマトグラムは `.EIC.aef` から `dataset_plot(kind="eic" | "eic_compounds")` が描く（`eic` トピック）。
   `peak_top` は強度でなく頂点の座標。
@@ -558,15 +561,17 @@ PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（
 #### 11.9 最初の概観（`dataset_overview` と `load_dataset` の `overview`。構成見直し A）
 
 読み込んだ直後に「群の間で何が変わり、何が変わらなかったか」を **品質 → 全体 → クラス → 分子種** の 4 段で粗く示す。
-`load_dataset` は既定でこれを `overview` 欄に入れて返し（`overview=False` で切れる。失敗しても読み込みは成功し
-`{"status": "unavailable", "error": {...}, "next": ...}`）、`dataset_overview(top_n=5, dataset_handle=None)` は同じものを
-出し直す（除外・試料の表の訂正・キュレーション・定量の鎖の後）。
+`dataset_overview(top_n=5, dataset_handle=None)` がこれを返し、鎖を進めた後（除外・試料の表の訂正・キュレーション・
+定量の鎖の後）に呼び直すと出し直す。`load_dataset(overview=True)` なら読み込みの最後に同じものを `overview` 欄に入れて
+返す（既定 `False` では載せない。失敗しても読み込みは成功し `{"status": "unavailable", "error": {...}, "next": ...}`）。
+戻り値の `assay_kind` はそのハンドルの種別（組成のラベルとクラスの段の規則を決める）。
 
 **戻り値の形**（`load_dataset` の中では `counts` を省く。`summary` と重なるため）:
 
 | キー | 意味 |
 |---|---|
 | `overview_id` | `ovw_<12 桁>`。データの指紋・試料の表の版・行列・比較と PCA の結果・設定から決まる（同じ入力なら同じ ID） |
+| `assay_kind` | そのハンドルの種別（`lipid` / `metabolite` / `unknown`）。クラスの段と組成のラベルの規則を決める |
 | `provisional` | 定量の鎖（付加体の選別 `dataset_select_features`）を通る前なら `true`。分子種の数え方に同じ分子種の複数の付加体・内部標準の行が混ざりうる |
 | `state` | 1 行の状態（キュレーション・正規化・統合・選別の有無、前処理のレシピ、`assay_kind`）。ドリフト補正を飛ばしたら `drift skipped` |
 | `counts` | 役割ごとの試料数・特徴数・同定の水準（`msms` / `ms1` / `none`）の内訳（`dataset_overview` だけ） |

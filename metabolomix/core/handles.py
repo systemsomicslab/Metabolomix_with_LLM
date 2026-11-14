@@ -167,6 +167,15 @@ class DatasetHandle:
         self.created_seq = 0
         self.last_used_seq = 0
 
+    @property
+    def assay_kind(self) -> str:
+        """データセットのアッセイ種別（`DatasetState.assay_kind`。`AnalysisSession.assay_kind` と同じ名前）。"""
+        return session_state.dataset_assay_kind(self.dataset)
+
+    @assay_kind.setter
+    def assay_kind(self, value: str) -> None:
+        self.dataset.assay_kind = session_state.normalize_assay_kind(value)
+
     def close(self) -> None:
         store = self.library.store
         if store is not None:

@@ -255,7 +255,8 @@ def pathway_project(group_a: str | list[str] | None = None,
                     pathways: list[str] | None = None, acyl_chains: list[str] | None = None,
                     aggregation: str = "sum", q_threshold: float = 0.05,
                     matrix_id: str | None = None,
-                    dataset_handle: str | None = None) -> str:
+                    dataset_handle: str | None = None,
+                    wait_seconds: float = 20.0) -> str:
     """前処理済みの脂質データを MSLipidMapper のパスウェイへ投影し、2 群を比べる。
 
     返すのは小さな表だけ（ノード表と、逆向きに動く隣接ペア）。JSON-LD・中間 mzTab-M は
@@ -277,6 +278,8 @@ def pathway_project(group_a: str | list[str] | None = None,
     脂質アッセイ（record_objective の assay_kind=lipid）でだけ使える。
     MSLipidMapper は [mslipidmapper] mslipidmapper_api_url の研究室サーバを先に使い、使えなければローカルの R
     （[mslipidmapper] rscript）で動かす。どちらで動いたかは戻り値の backend。
+    wait_seconds: 待つ秒数（既定 20。0〜30 秒）。超えたら仕事を続けたまま `status: "running"` と `job_id` を
+    返す（結果は `job_status(job_id=...)`。`handle_dispatch.LONG_RUNNING`）。
     """
     from metabolomix.tools._holder import resolve_holder
 

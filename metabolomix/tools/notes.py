@@ -328,13 +328,17 @@ def _append_under_section(body: str, header: str, new_line: str) -> str:
     return "\n".join(out)
 
 
-def add_subquestions(path: str | Path, texts: list[str]) -> Path:
-    """創発的な小問を採番（既存 Q の最大+1）して本文に追記する。"""
+def add_subquestions(path: str | Path, texts: list[str], *, initial: bool = False) -> Path:
+    """創発的な小問を採番（既存 Q の最大+1）して本文に追記する。
+
+    `initial=True` は「派生する小問」の節へ足す（小問を省いて作った目的に、後から最初の小問を足すとき）。
+    """
     path = Path(path)
     meta, subqs, body = parse_objective(path)
     next_n = (max(int(label[1:]) for label, _ in subqs) if subqs else 0) + 1
+    header = _SUBQ_HEADER if initial else _EMERGENT_HEADER
     new_body = body
     for text in texts:
-        new_body = _append_under_section(new_body, _EMERGENT_HEADER, f"- Q{next_n}: {text}")
+        new_body = _append_under_section(new_body, header, f"- Q{next_n}: {text}")
         next_n += 1
     return write_note(path.parent, path.stem, meta, new_body)
