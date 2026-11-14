@@ -198,6 +198,7 @@
   ],
   "rt_offset": {
    "criteria": {
+    "coelute_min": 0.05,
     "min_abs_median_min": 0.2,
     "min_pairs": 10,
     "window_min": 2.0
@@ -238,14 +239,14 @@
     }
    ]
   },
-  "stats": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\tpresence_p\tdetection_driven\tmerged_from\n1\tcmp_X\ttested\t0.8361\t9.643e-08\t2.893e-07\t11.1\t19.78\t\t\t\t\t",
+  "stats": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\tdetected_units_a\tdetected_units_b\tpresence_p\tdetection_driven\tmerged_from\n1\tcmp_X\ttested\t0.8361\t9.643e-08\t2.893e-07\t11.1\t19.78\t\t\t\t\t\t\t",
   "stats_source": {
    "dataset_hash": "X",
    "result_ids": [
     "cmp_X"
    ]
   },
-  "stats_unmerged": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\tpresence_p\tdetection_driven\n1\tcmp_X\ttested\t0.8361\t9.643e-08\t2.893e-07\t11.1\t19.78\t\t\t\t",
+  "stats_unmerged": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\tdetected_units_a\tdetected_units_b\tpresence_p\tdetection_driven\n1\tcmp_X\ttested\t0.8361\t9.643e-08\t2.893e-07\t11.1\t19.78\t\t\t\t\t\t",
   "targets": [
    {
     "adduct_tier_used": 1,

@@ -746,6 +746,9 @@ RT_OFFSET_WINDOW_MIN = 2.0
 #: ずれを示す（`shift_min` を出す）のに要る一意の一致の数と、中央値の絶対値の下限（分）。
 RT_OFFSET_MIN_PAIRS = 10
 RT_OFFSET_MIN_ABS_MEDIAN = 0.2
+#: 1 つの目標の別の付加体に一致した特徴を、同じ化合物の付加体として 1 組にまとめる RT の差の上限（分）。
+#: `dataset_feature_relations` が同時溶出とみなす `rt_window` の既定と同じ値。
+RT_OFFSET_COELUTE_MIN = 0.05
 
 
 def estimate_rt_offset(ds, targets: list[dict], *, mz_array: np.ndarray | None = None,
@@ -753,10 +756,15 @@ def estimate_rt_offset(ds, targets: list[dict], *, mz_array: np.ndarray | None =
     """目標の ``rt_min`` と特徴の一意の一致から、系統的な RT のずれ（特徴の RT − 目標の rt_min）を推定する。
 
     推定するだけで、照合には当てない（当てるなら ``rt_offset_min`` を渡して呼び直す）。一致は、目標の
-    どれかの付加体の質量の窓（目標の ``ppm``・``ppm_offset`` の中心）に入り、``|RT − rt_min| ≤``
+    付加体の質量の窓（目標の ``ppm``・``ppm_offset`` の中心）に入り、``|RT − rt_min| ≤``
     ``RT_OFFSET_WINDOW_MIN`` で、MS/MS の同定が別物質（``contradicted``）でない特徴。``rt_min`` は
-    ``rt_offset_min`` を当てる前の値。目標ごとに一致がちょうど 1 つ（割れの組は残す ID で 1 つ）で、
-    その特徴に一致する目標も 1 つだけの組の差を数える（reanalysis-study の paper-rt-offset と同じ規則）。
+    ``rt_offset_min`` を当てる前の値。割れの組は残す ID で 1 つと数える。
+
+    規則は reanalysis-study の paper-rt-offset（論文の行ごとに m/z が 1 つ）を、付加体を複数持つ目標に広げたもの:
+    目標の付加体ごとに一致がたかだか 1 つ（2 つ以上の付加体があれば一意でない）で、一致した特徴どうしが
+    ``RT_OFFSET_COELUTE_MIN`` 以内に同時溶出し（1 つの化合物の ``[M+H]+`` と ``[M+Na]+`` などとみなす）、
+    そのどの特徴に一致する目標もこの目標だけのとき、1 組と数える（差は特徴ごとの差の中央値）。付加体ごとに
+    数えないのは、同じ化合物を付加体の数だけ数えて組の数を水増ししないため。
     ``rt_min`` の無い目標・``not_applicable`` の目標・除外した特徴は使わない。
 
     戻り値 ``{n_pairs, median_min, q1_min, q3_min, shift_min, criteria}``（四分位は 2 組以上のとき
@@ -772,7 +780,8 @@ def estimate_rt_offset(ds, targets: list[dict], *, mz_array: np.ndarray | None =
     kept_of = {fid: kept for kept, group in (merged_from or {}).items() for fid in group}
     feature_ids = list(ds.feature_ids)
     excluded = getattr(ds, "excluded_features", None) or {}
-    per_target: list[dict[str, list[float]]] = []
+    # 目標ごとに 付加体 → {特徴（割れの組は残す ID）: [RT − rt_min, ...]}
+    per_target: list[dict[str, dict[str, list[float]]]] = []
     for target in targets:
         rt_min = target.get("rt_min")
         if rt_min is None or not target.get("applicable", True):
@@ -780,7 +789,7 @@ def estimate_rt_offset(ds, targets: list[dict], *, mz_array: np.ndarray | None =
         identifier = ({"lipid_species": target["lipid_species"]} if target.get("lipid_species")
                       else {"inchikey_block": target["inchikey_block"]})
         centers = target.get("ppm_offset") or {}
-        units: dict[str, list[float]] = {}
+        by_adduct: dict[str, dict[str, list[float]]] = {}
         for tier in target["adduct_tiers"]:
             for adduct in tier:
                 theo = target["theoretical_mz"][adduct]
@@ -797,19 +806,30 @@ def estimate_rt_offset(ds, targets: list[dict], *, mz_array: np.ndarray | None =
                                          ds.feature_annotations.get(fid), **identifier, adduct=adduct)
                     if identity["evidence"] == "contradicted":
                         continue
-                    units.setdefault(kept_of.get(fid, fid), []).append(rt - rt_min)
-        per_target.append(units)
-    targets_of = Counter(unit for units in per_target for unit in units)
+                    (by_adduct.setdefault(adduct, {})
+                     .setdefault(kept_of.get(fid, fid), []).append(rt - rt_min))
+        per_target.append(by_adduct)
+    targets_of = Counter(unit for by_adduct in per_target
+                         for unit in {u for units in by_adduct.values() for u in units})
     deltas = []
-    for units in per_target:
-        if len(units) == 1:
-            [(unit, values)] = units.items()
-            if targets_of[unit] == 1:
-                deltas.append(statistics.median(values))
+    for by_adduct in per_target:
+        if not by_adduct or any(len(units) != 1 for units in by_adduct.values()):
+            continue                                   # 一致なし・ある付加体に 2 つ以上
+        per_unit: dict[str, list[float]] = {}
+        for units in by_adduct.values():
+            for unit, values in units.items():
+                per_unit.setdefault(unit, []).extend(values)
+        if any(targets_of[unit] != 1 for unit in per_unit):
+            continue                                   # 特徴から見て目標が 1 つでない
+        unit_deltas = [statistics.median(values) for values in per_unit.values()]
+        if max(unit_deltas) - min(unit_deltas) > RT_OFFSET_COELUTE_MIN + _BOUNDARY_EPS:
+            continue                                   # 付加体どうしが同時溶出しない（別の化合物かもしれない）
+        deltas.append(statistics.median(unit_deltas))
     out = {"n_pairs": len(deltas), "median_min": None, "q1_min": None, "q3_min": None,
            "shift_min": None,
            "criteria": {"window_min": RT_OFFSET_WINDOW_MIN, "min_pairs": RT_OFFSET_MIN_PAIRS,
-                        "min_abs_median_min": RT_OFFSET_MIN_ABS_MEDIAN}}
+                        "min_abs_median_min": RT_OFFSET_MIN_ABS_MEDIAN,
+                        "coelute_min": RT_OFFSET_COELUTE_MIN}}
     if deltas:
         out["median_min"] = statistics.median(deltas)
     if len(deltas) >= 2:
@@ -829,10 +849,11 @@ def estimate_rt_offset(ds, targets: list[dict], *, mz_array: np.ndarray | None =
 WINDOW_COLUMNS = ("feature_id", "mz", "rt", "evidence", "name", "inchikey", "adduct", "n_sme",
                   "ontology", "n_detected", "normalized", "msi_level")
 
-#: 特徴ごとの統計の行の列。`detected_a/b` は注入単位の検出数（マスクから数え直す）、`presence_p` と
-#: `detection_driven` は比較の記録の個体単位の検出から（`as_two_group`）。
+#: 特徴ごとの統計の行の列。`detected_a/b` は注入単位の検出数（マスクから数え直す）、`detected_units_a/b`・
+#: `presence_p`・`detection_driven` は比較の記録の個体単位の検出から（`as_two_group`）。
 STATS_COLUMNS = ("feature_id", "result_id", "status", "log2fc", "p", "q", "mean_a", "mean_b",
-                 "detected_a", "detected_b", "presence_p", "detection_driven")
+                 "detected_a", "detected_b", "detected_units_a", "detected_units_b", "presence_p",
+                 "detection_driven")
 
 #: `with_group_labels=True` のときの列（既存の列の後ろに群の名前と比較の向きを足す）。
 STATS_COLUMNS_LABELED = STATS_COLUMNS + ("comparison", "group_a", "group_b",
@@ -1133,6 +1154,11 @@ def _num_or_none(value):
     return float(value) if _is_number(value) else None
 
 
+def _count_or_none(value):
+    """検出の例数（整数）。数でなければ None（bool は数えない）。"""
+    return int(value) if _is_number(value) else None
+
+
 def feature_stats(ds, feature_ids: list[str], results: list[dict], *,
                   with_labels: bool = False) -> list[dict]:
     """特徴 × 結果の統計行（特徴が外側、結果が内側）。注釈の有無に関わらず全特徴に付ける。
@@ -1142,8 +1168,9 @@ def feature_stats(ds, feature_ids: list[str], results: list[dict], *,
     結果の行列に無い）。後の 2 つは ``log2fc p q mean_a mean_b`` がすべて None。``q`` は結果の
     値をそのまま返し、ここで BH を掛け直さない（母集団は結果が持つ）。``tested`` でも q が
     None のことはある。``detected_a/b`` は検出例数で、マスクから対応を保証して取れないとき
-    None（呼び出し側が注記する）。取れるときは status に関わらず付ける。``presence_p`` は結果の行の
-    検出の有無の Fisher の p（個体単位。行があれば status に関わらず。検出状態が無ければ None）、
+    None（呼び出し側が注記する）。取れるときは status に関わらず付ける。``detected_units_a/b`` は
+    結果の行の個体単位の検出数（``presence_p`` と ``detection_driven`` の分子。行があれば status に関わらず。
+    検出状態が無ければ None）、``presence_p`` は結果の行の検出の有無の Fisher の p（個体単位。同じく）、
     ``detection_driven`` は差が検出の有無から来ているかの印（``tested`` の行だけ、ほかは None）。
 
     ``with_labels=True`` のときだけ ``comparison``・``group_a``・``group_b``・
@@ -1164,6 +1191,7 @@ def feature_stats(ds, feature_ids: list[str], results: list[dict], *,
             else:
                 status = "not_testable"
             tested = status == "tested"
+            row_of = source or {}                  # 結果の行の写し（行列に無ければ空）
             det_a, det_b = counter(fid) if counter is not None else (None, None)
             rows.append({
                 "feature_id": fid,
@@ -1176,7 +1204,9 @@ def feature_stats(ds, feature_ids: list[str], results: list[dict], *,
                 "mean_b": _num_or_none(source.get("mean_b")) if tested else None,
                 "detected_a": det_a,
                 "detected_b": det_b,
-                "presence_p": _num_or_none(source.get("presence_p")) if source is not None else None,
+                "detected_units_a": _count_or_none(row_of.get("detected_units_a")),
+                "detected_units_b": _count_or_none(row_of.get("detected_units_b")),
+                "presence_p": _num_or_none(row_of.get("presence_p")),
                 "detection_driven": source.get("detection_driven") if tested else None,
             })
             if with_labels:

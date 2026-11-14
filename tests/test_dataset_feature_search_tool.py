@@ -572,11 +572,18 @@ def test_target_candidates_include_the_partner_outside_the_mass_window(tmp_path)
     assert {r["feature_id"] for r in _tsv(off["candidates"])} == {"31"}
 
 
-def test_ppm_offset_with_window_search_is_bad_request():
+def test_ppm_offset_with_window_search_is_noted_not_refused():
+    # 窓検索では効かないが、誤りにせず効かなかったと notes に書く（C7）
     _load_ds()
     parsed = _search(feature_ids=["f1"], ppm_offset={"default": -3})
-    assert parsed["error"]["code"] == "DATASET_BAD_REQUEST"
-    assert parsed["error"]["details"]["field"] == "ppm_offset"
+    assert "error" not in parsed
+    assert [r["feature_id"] for r in _tsv(parsed["features"])] == ["f1"]
+    [note] = [n for n in parsed["notes"] if "目標照合（targets）でないので効かなかった引数" in n]
+    assert "ppm_offset" in note and "rt_offset_min" not in note
+    # 形の誤りは窓検索でも誤り
+    bad = _search(feature_ids=["f1"], ppm_offset={"default": "x"})
+    assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert bad["error"]["details"]["field"] == "ppm_offset"
 
 
 def test_ppm_offset_appears_in_rule():
@@ -760,12 +767,32 @@ def test_stats_have_presence_columns_from_the_comparison():
     _differential()
     parsed = _search(feature_ids=["f0"])
     header = parsed["stats"].splitlines()[0].split("\t")
-    assert header[-3:] == ["presence_p", "detection_driven", "merged_from"]
+    assert header[-5:] == ["detected_units_a", "detected_units_b", "presence_p", "detection_driven",
+                           "merged_from"]
     [row] = _tsv(parsed["stats"])
+    assert row["status"] == "tested"
     assert row["presence_p"] == "1.0"                          # 両群とも全個体で検出
-    assert row["detection_driven"] in ("false", "")           # 検定できた行なら false
+    assert row["detection_driven"] == "false"                 # 検定できた行で、検出に差が無い
+    assert (row["detected_units_a"], row["detected_units_b"]) == ("4", "4")
     [summary] = parsed["results"]
     assert summary["n_units_a"] == 4 and summary["n_units_b"] == 4
+
+
+def test_detection_driven_and_rounded_presence_p_when_a_group_is_not_detected():
+    ds = _load_ds()
+    mask = np.ones_like(ds.feature_matrix, dtype=bool)
+    mask[0, 4:] = False                                        # f0 は treat の 4 個体すべてで未検出
+    mask[1, 5:] = False                                        # f1 は treat で 1/4
+    ds.detected_mask = mask
+    _differential()
+    rows = {r["feature_id"]: r for r in _tsv(_search(feature_ids=["f0", "f1"])["stats"])}
+    f0, f1 = rows["f0"], rows["f1"]
+    assert (f0["detected_units_a"], f0["detected_units_b"]) == ("4", "0")
+    assert (f1["detected_units_a"], f1["detected_units_b"]) == ("4", "1")
+    assert f0["status"] == "tested"
+    assert f0["detection_driven"] == "true"                   # 低い側の検出が 0（差は検出の有無から）
+    # presence_p は p・q と同じく有効 4 桁（Fisher の p = 1/35・1/7 を 17 桁の repr で出さない）
+    assert (f0["presence_p"], f1["presence_p"]) == ("0.02857", "0.1429")
 
 
 # ---- RT の窓の中心のずれ（rt_offset_min。D3） ----
@@ -786,11 +813,16 @@ def test_rt_offset_min_shifts_target_rt_window_and_enters_the_rule():
     assert row["delta_rt"] == "0.5"                            # 列は RT − rt_min のまま
 
 
-def test_rt_offset_min_is_refused_for_window_search_and_bad_values():
+def test_rt_offset_min_is_noted_for_window_search_and_refused_when_not_a_number():
     _load_ds()
+    # 窓検索では効かないが、誤りにせず効かなかったと notes に書く（C7）
     window = _search(feature_ids=["f1"], rt_offset_min=0.5)
-    assert window["error"]["code"] == "DATASET_BAD_REQUEST"
-    assert window["error"]["details"]["field"] == "rt_offset_min"
+    assert "error" not in window
+    assert [r["feature_id"] for r in _tsv(window["features"])] == ["f1"]
+    [note] = [n for n in window["notes"] if "目標照合（targets）でないので効かなかった引数" in n]
+    assert "rt_offset_min" in note
     for bad in (True, float("inf"), "0.5"):
-        out = _search(targets=[_target()], rt_offset_min=bad)
-        assert out["error"]["details"]["field"] == "rt_offset_min"
+        for out in (_search(targets=[_target()], rt_offset_min=bad),
+                    _search(feature_ids=["f1"], rt_offset_min=bad)):
+            assert out["error"]["code"] == "DATASET_BAD_REQUEST"
+            assert out["error"]["details"]["field"] == "rt_offset_min"

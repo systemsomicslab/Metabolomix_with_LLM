@@ -778,7 +778,8 @@ def test_unannotated_feature_gets_its_statistics():
     assert (row["log2fc"], row["p"], row["q"]) == (-0.5, 0.2, 0.4)
     assert (row["mean_a"], row["mean_b"]) == (1.0, 2.0)
     assert list(row) == ["feature_id", "result_id", "status", "log2fc", "p", "q", "mean_a",
-                         "mean_b", "detected_a", "detected_b", "presence_p", "detection_driven"]
+                         "mean_b", "detected_a", "detected_b", "detected_units_a", "detected_units_b",
+                         "presence_p", "detection_driven"]
     # 行は特徴が外側、結果が内側の順
     other = _two_group(ds, [_row_of("1")], result_id="diff_2")
     rows = feature_stats(ds, ["1", "3"], [result, other])
@@ -960,14 +961,19 @@ def test_rule_hash_does_not_mutate_the_targets():
 
 # ---------- 割れたスポットのまとめと検定のやり直し（spec 2026-10-28 §4.3 (c)） ----------
 
-def _computed_ds():
-    """統計エンジンの 2 群比較を登録した DatasetState と、`select_results` が展開した 2 群の形。"""
+def _computed_ds(detected_mask=None):
+    """統計エンジンの 2 群比較を登録した DatasetState と、`select_results` が展開した 2 群の形。
+
+    ``detected_mask`` を渡せば、比較の前に検出の印として置く（検出の有無の検定を付ける）。
+    """
     from metabolomix.analysis.feature_search import select_results
     from tests.engine_chain import declare_groups, register_two_group
 
     rng = np.random.default_rng(7)
     ds = DatasetState()
     ds.feature_matrix = rng.random((12, 8)) * 1000.0 + 1.0
+    if detected_mask is not None:
+        ds.detected_mask = detected_mask
     ds.sample_names = [f"ctrl_{i}" for i in range(4)] + [f"treat_{i}" for i in range(4)]
     ds.feature_ids = [str(i) for i in range(12)]
     ds.feature_metadata = {str(i): {"mz": 100.0 + i, "rt": 1.0 + i} for i in range(12)}
@@ -1082,16 +1088,31 @@ def test_include_false_sample_does_not_feed_n_detected_or_intensity_order():
 def test_stats_carry_presence_p_and_detection_driven_from_the_result():
     ds = _stats_dataset()
     result = _two_group(ds, [
-        _row_of("1", presence_p=0.03, detection_driven=True),
-        _row_of("2", p=None, q=None, presence_p=0.5, detection_driven=None),
+        _row_of("1", presence_p=0.03, detection_driven=True, detected_units_a=3, detected_units_b=0),
+        _row_of("2", p=None, q=None, presence_p=0.5, detection_driven=None, detected_units_a=1,
+                detected_units_b=2),
     ])
     rows = {r["feature_id"]: r for r in feature_stats(ds, ["1", "2", "4"], [result])}
     assert (rows["1"]["presence_p"], rows["1"]["detection_driven"]) == (0.03, True)
-    # 検定できない行も検出の有無の p は残す（検出の差で量を判定できないときこそ要る）。印は付けない
+    # 個体単位の検出数（presence_p・detection_driven の分子）も写す
+    assert (rows["1"]["detected_units_a"], rows["1"]["detected_units_b"]) == (3, 0)
+    # 検定できない行も検出の有無の p と検出数は残す（検出の差で量を判定できないときこそ要る）。印は付けない
     assert rows["2"]["status"] == "not_testable"
     assert (rows["2"]["presence_p"], rows["2"]["detection_driven"]) == (0.5, None)
+    assert (rows["2"]["detected_units_a"], rows["2"]["detected_units_b"]) == (1, 2)
     # 結果の行列に無い特徴は空
     assert (rows["4"]["presence_p"], rows["4"]["detection_driven"]) == (None, None)
+    assert (rows["4"]["detected_units_a"], rows["4"]["detected_units_b"]) == (None, None)
+
+
+def test_engine_result_rows_carry_unit_detection_counts():
+    mask = np.ones((12, 8), dtype=bool)
+    mask[0, 4:] = False                                 # 特徴 0 は treat で 0/4
+    ds, result = _computed_ds(mask)
+    rows = {r["feature_id"]: r for r in feature_stats(ds, ["0", "1"], [result])}
+    assert (rows["0"]["detected_units_a"], rows["0"]["detected_units_b"]) == (4, 0)
+    assert (rows["1"]["detected_units_a"], rows["1"]["detected_units_b"]) == (4, 4)
+    assert rows["0"]["presence_p"] < rows["1"]["presence_p"]
 
 
 def test_engine_result_summary_carries_unit_counts():
@@ -1149,7 +1170,40 @@ def test_rt_offset_is_estimated_from_unique_matches():
     out = estimate_rt_offset(ds, normalize_targets(targets, dataset_polarity="positive"))
     assert out["n_pairs"] == 12 and out["median_min"] == pytest.approx(0.5)
     assert out["shift_min"] == pytest.approx(0.5) and "reason" not in out
-    assert out["criteria"] == {"window_min": 2.0, "min_pairs": 10, "min_abs_median_min": 0.2}
+    assert out["criteria"] == {"window_min": 2.0, "min_pairs": 10, "min_abs_median_min": 0.2,
+                               "coelute_min": 0.05}
+
+
+def _multi_adduct_dataset(shift, n=12, *, na_shift=None):
+    """組成式の目標 n 個（既定の付加体の層）と、それぞれ [M+H]+ と [M+Na]+ の 2 つの特徴（RT は rt_min + shift。
+    [M+Na]+ だけ rt_min + na_shift にずらせる）。"""
+    features, targets = {}, []
+    for i in range(n):
+        key = f"{chr(65 + i) * 14}-UHFFFAOYSA-N"
+        formula = f"C{4 + i}H{9 + 2 * i}NO2"
+        for adduct, extra in (("[M+H]+", shift), ("[M+Na]+", shift if na_shift is None else na_shift)):
+            mz = theoretical_mz(formula, adduct)
+            features[f"{i}{adduct}"] = {"mz": mz, "rt": 2.0 + i + extra,
+                                        "candidates": [_candidate(inchikey=key, exp_mass_to_charge=mz,
+                                                                  adduct=adduct)]}
+        targets.append({"target_id": f"t{i}", "inchikey": key, "formula": formula, "rt_min": 2.0 + i})
+    return features, targets
+
+
+def test_rt_offset_counts_a_compound_seen_as_several_adducts_once():
+    # 同じ化合物の [M+H]+ と [M+Na]+ が同時溶出していれば 1 組（付加体の数だけ数えない）
+    features, targets = _multi_adduct_dataset(0.5)
+    out = estimate_rt_offset(_dataset(features), normalize_targets(targets, dataset_polarity="positive"))
+    assert out["n_pairs"] == 12 and out["shift_min"] == pytest.approx(0.5)
+    # 付加体どうしの RT が 0.05 分を超えて離れていれば、どちらが目標か決まらないので数えない
+    features, targets = _multi_adduct_dataset(0.5, na_shift=0.8)
+    out = estimate_rt_offset(_dataset(features), normalize_targets(targets, dataset_polarity="positive"))
+    assert out["n_pairs"] == 0 and out["reason"] == "too_few_pairs"
+    # 同じ付加体に 2 つの特徴があれば（ほかの付加体が 1 つでも）一意でない
+    features, targets = _multi_adduct_dataset(0.5)
+    features["dup"] = {**features["0[M+Na]+"], "rt": 3.5, "candidates": []}
+    out = estimate_rt_offset(_dataset(features), normalize_targets(targets, dataset_polarity="positive"))
+    assert out["n_pairs"] == 11
 
 
 def test_rt_offset_needs_ten_pairs_and_a_large_enough_median():

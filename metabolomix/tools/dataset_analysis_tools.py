@@ -222,11 +222,11 @@ def _missing(state: str, message: str) -> str:
 
 _POLARITIES = ("positive", "negative")
 
-# 丸めの桁（spec §4.2）。m/z 4 桁・ppm 2 桁・RT 3 桁・log2FC 4 桁。p・q・平均は有効 4 桁。
+# 丸めの桁（spec §4.2）。m/z 4 桁・ppm 2 桁・RT 3 桁・log2FC 4 桁。p・q・平均・presence_p は有効 4 桁。
 _CANDIDATE_DIGITS = {"theoretical_mz": 4, "mz": 4, "ppm": 2, "rt": 3, "delta_rt": 3}
 _WINDOW_DIGITS = {"mz": 4, "rt": 3}
 _STATS_DIGITS = {"log2fc": 4}
-_STATS_SIGNIFICANT = ("p", "q", "mean_a", "mean_b")
+_STATS_SIGNIFICANT = ("p", "q", "mean_a", "mean_b", "presence_p")
 
 
 def _round(value, digits: int):
@@ -386,9 +386,10 @@ def dataset_feature_search(
     `[M+Na]+ [M+NH4]+ [M+H-H2O]+ [M+H-NH3]+ [2M+H]+ [M+2H]2+ [M+CH3OH+H]+ [M+H-2H2O]+`、陰イオン
     `[M-H]-` ／ `[M-H2O-H]- [M+Cl]- [M+FA-H]- [M+CH3COO]- [2M-H]- [M+Na-2H]-`。
     `rt_offset`（目標照合だけ）: 目標の `rt_min` と特徴の一意の一致（質量の窓・`rt_min` の ±2 分・MS/MS が
-    別物質でない特徴がちょうど 1 つで、その特徴に合う目標も 1 つ）から推定した系統的な RT のずれ
-    （特徴 − 目標、分）。`{n_pairs, median_min, q1_min, q3_min, shift_min, criteria}`。`shift_min` は一意の
-    一致が 10 以上かつ |中央値| > 0.2 分のときだけ値が入り（ほかは null と `reason`）、照合には当てない。
+    別物質でない特徴が付加体ごとにたかだか 1 つで、それらが 0.05 分以内に同時溶出し、その特徴に合う目標も
+    1 つ。同じ化合物の `[M+H]+` と `[M+Na]+` などは 1 組）から推定した系統的な RT のずれ（特徴 − 目標、分）。
+    `{n_pairs, median_min, q1_min, q3_min, shift_min, criteria}`。`shift_min` は一意の一致が 10 以上かつ
+    |中央値| > 0.2 分のときだけ値が入り（ほかは null と `reason`）、照合には当てない。
 
     include_statistics: False なら比較の統計（`stats`・`stats_unmerged`・`results`・`stats_source`）を
         付けない（前処理などを決める前に群の差を見ないため。既定 True）。
@@ -406,11 +407,12 @@ def dataset_feature_search(
         目標照合は規則の順で並べる）。
 
     `stats` は TSV（`feature_id result_id status log2fc p q mean_a mean_b detected_a detected_b
-    presence_p detection_driven`）。
+    detected_units_a detected_units_b presence_p detection_driven`）。
     `status` は `tested` / `not_in_matrix`（前処理で落ちた）/ `not_testable`（p が無い）で、
     後の 2 つは数値欄が空（「差が無かった」ではない）。`detected_*` は群ごとの実検出例数
-    （注入単位。gap-fill を数えない。検出状態が無ければ空）。`presence_p` は検出の有無の Fisher の正確検定の
-    p（比較の記録の値。反復注入をまとめた個体単位）、`detection_driven` は差が値の大小でなく検出の有無から
+    （注入単位。gap-fill を数えない。検出状態が無ければ空）。`detected_units_*` は比較の記録の個体単位の検出数
+    （反復注入をまとめていなければ `detected_*` と同じ）、`presence_p` は検出の有無の Fisher の正確検定の
+    p（比較の記録の値。個体単位。有効 4 桁）、`detection_driven` は差が値の大小でなく検出の有無から
     来ているか（高い側の群の検出が個体の半数未満か、低い側の検出が 0。`tested` の行だけ）。`results` に BH の母集団
     （`bh_population`）と caveat。キュレーションのフラグは反映しない（あれば `notes`）。
     欄の意味は `lipidmix://docs/output-format/mztab`。
@@ -437,12 +439,12 @@ def dataset_feature_search(
     rt_offset_min: 目標照合の RT の窓の中心のずれ（分、任意）。中心を `rt_min + rt_offset_min` にする
         （幅 `rt_tol_min` と `candidates.delta_rt` 列（RT − rt_min）は変えない）。`rt_min` のある目標の
         `rt_offset_min` と `rule.rt_offset_min` に出て `rule_hash` に入る（省けば従来と同じ hash）。
-        窓検索では使えない（`DATASET_BAD_REQUEST`）。
+        窓検索では効かない（誤りにせず `notes` に書く）。有限の数でなければ `DATASET_BAD_REQUEST`。
     ppm_offset: 目標照合の質量の窓の中心のずれ（任意）。`{"default": 0.0, "bands": [{"max_mz": 200,
         "offset": -8.3}]}`。中心は「実測 − 理論」の ppm の符号つきの値で、帯は理論 m/z が `max_mz`
         未満の最初の帯（無ければ `default`）。幅（目標の `ppm`）は変えず、候補の `ppm` 列も実測 − 理論の
         まま。`rule.ppm_offset` と各目標の `ppm_offset`（付加体ごと）に出て `rule_hash` に入る。
-        窓検索（`targets` なし）では使えない（`DATASET_BAD_REQUEST`）。
+        窓検索（`targets` なし）では効かない（誤りにせず `notes` に書く）。形の誤りは `DATASET_BAD_REQUEST`。
 
     dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
@@ -453,14 +455,6 @@ def dataset_feature_search(
     ds = holder.dataset
     if ds is None:
         return _missing("dataset", "DatasetState がありません。先に load_dataset を実行してください。")
-    if ppm_offset is not None and targets is None:
-        return mztab_error("DATASET_BAD_REQUEST",
-                           "ppm_offset は目標照合（targets）のときだけ使える（効かない設定を渡さない）。",
-                           {"field": "ppm_offset"})
-    if rt_offset_min is not None and targets is None:
-        return mztab_error("DATASET_BAD_REQUEST",
-                           "rt_offset_min は目標照合（targets）のときだけ使える（効かない設定を渡さない）。",
-                           {"field": "rt_offset_min"})
     if rt_offset_min is not None and (isinstance(rt_offset_min, bool)
                                       or not isinstance(rt_offset_min, (int, float))
                                       or not math.isfinite(rt_offset_min)):
@@ -505,11 +499,19 @@ def dataset_feature_search(
 
     notes: list[str] = []
     payload: dict = {}
+    if targets is None:
+        # 目標照合にだけ効く中心のずれは、窓検索では誤りにせず効かなかったと書く（C7。形の誤りは誤り）
+        unused = [name for name, value in (("ppm_offset", ppm_offset), ("rt_offset_min", rt_offset_min))
+                  if value is not None]
+        if unused:
+            notes.append("目標照合（targets）でないので効かなかった引数: " + ", ".join(unused)
+                         + "（窓検索の m/z・RT の窓はずらさない）。")
     # データの指紋（行列全体の hash）は 1 回だけ計算し、割れの照合・結果の選択（古い結果を
     # 選ばない照合）・stats_source のすべてで使う。
     dataset_hash = dataset_fingerprint(ds)
     plan = None
     try:
+        offset_spec = normalize_ppm_offset(ppm_offset, code="DATASET_BAD_REQUEST")
         if targets is None:
             rows, truncated = feature_search.search_window(
                 ds, **window, max_results=max_results, sort=sort)
@@ -534,7 +536,6 @@ def dataset_feature_search(
                                    {"target_id": None, "field": "targets"})
             polarity, polarity_source, polarity_notes = _dataset_polarity(ds)
             notes.extend(polarity_notes)
-            offset_spec = normalize_ppm_offset(ppm_offset, code="DATASET_BAD_REQUEST")
             normalized = feature_search.normalize_targets(targets, dataset_polarity=polarity,
                                                           ppm_offset=offset_spec,
                                                           rt_offset_min=rt_offset_min)
@@ -679,7 +680,8 @@ def dataset_feature_search(
         if any(r.get("n_units_a") not in (None, r.get("n_a")) or r.get("n_units_b") not in (None, r.get("n_b"))
                for r in results):
             notes.append("反復注入を個体にまとめた比較がある: detected_a / detected_b は注入の数、"
-                         "presence_p と detection_driven は個体の数（results の n_units_a / n_units_b）で数える。")
+                         "detected_units_a / detected_units_b・presence_p・detection_driven は個体の数"
+                         "（results の n_units_a / n_units_b）で数える。")
         columns = (feature_search.STATS_COLUMNS_LABELED if with_group_labels
                    else feature_search.STATS_COLUMNS)
         digits = {**_STATS_DIGITS, "log2fc_test_over_ref": 4}
