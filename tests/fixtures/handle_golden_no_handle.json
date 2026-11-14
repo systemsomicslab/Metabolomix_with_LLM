@@ -191,9 +191,24 @@
     "log2fc_sign": "positive means group_b is higher",
     "n_a": 3,
     "n_b": 3,
+    "n_units_a": 3,
+    "n_units_b": 3,
     "result_id": "cmp_X"
    }
   ],
+  "rt_offset": {
+   "criteria": {
+    "min_abs_median_min": 0.2,
+    "min_pairs": 10,
+    "window_min": 2.0
+   },
+   "median_min": 0.0,
+   "n_pairs": 1,
+   "q1_min": null,
+   "q3_min": null,
+   "reason": "too_few_pairs",
+   "shift_min": null
+  },
   "rule": {
    "merge_groups_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
    "merge_split": true,
@@ -223,14 +238,14 @@
     }
    ]
   },
-  "stats": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\tmerged_from\n1\tcmp_X\ttested\t0.8361\t9.643e-08\t2.893e-07\t11.1\t19.78\t\t\t",
+  "stats": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\tpresence_p\tdetection_driven\tmerged_from\n1\tcmp_X\ttested\t0.8361\t9.643e-08\t2.893e-07\t11.1\t19.78\t\t\t\t\t",
   "stats_source": {
    "dataset_hash": "X",
    "result_ids": [
     "cmp_X"
    ]
   },
-  "stats_unmerged": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\n1\tcmp_X\ttested\t0.8361\t9.643e-08\t2.893e-07\t11.1\t19.78\t\t",
+  "stats_unmerged": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\tpresence_p\tdetection_driven\n1\tcmp_X\ttested\t0.8361\t9.643e-08\t2.893e-07\t11.1\t19.78\t\t\t\t",
   "targets": [
    {
     "adduct_tier_used": 1,

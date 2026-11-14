@@ -310,6 +310,7 @@ neg 154 件中 9 件・pos 469 件中 27 件に立った。
 |---|---|
 | `adduct:<X のアダクト>/<Y のアダクト>` | 同じ中性分子の別アダクト。Y の中性質量に、解析で検索したアダクト（param ファイルの `Searched adduct ions`。二量体・多価を含む。無ければ極性ごとの既定）を付けた m/z が X に一致 |
 | `isotope_M+1` / `isotope_M+2` | Y の 13C 同位体（+1.003355 / +2.006710 を電荷で割る） |
+| `isotope_M+2_37Cl` / `isotope_M+2_81Br` | Y の 37Cl / 81Br 同位体（+1.997050 / +1.997952 を電荷で割る）。Y の組成式が分かっていてその元素を持たなければ出さない（組成式が無ければ出す） |
 | `insource:-H2O` `-2H2O` `-NH3` `-HCOOCH3` `-CH3COOCH3` `-C3H5NO2` `-C2H8NO4P` `-C3H8NO6P` `-C6H10O5` | Y からの中性損失によるインソース断片（`metabolomix/curation/relations.py` の表。質量はそれぞれの組成式から計算） |
 | `found_in_upper_msms` | 質量差が上のどれでも説明できないが、MS-DIAL が「Y の MS/MS に X が見える」とリンクしている |
 
@@ -321,15 +322,22 @@ neg 154 件中 9 件・pos 469 件中 27 件に立った。
 log1p で求めた Pearson の `r` ≥ `relation_min_r`（既定 0.8。両方の高さが正の試料が 5 以上のときだけ計算、足りなければ `r` は空）。
 どちらも無い関係は載せるが `no_support`（ソフト）を付けて順位を下げる。`msdial_links` は X–Y 間の MS-DIAL のリンク種別。
 
-**強い説明**（`strong = true`）: 裏付けがあり、情報でなく、かつ (a) `found_in_upper_msms` の関係、(b) Y が前駆体側（上の m/z の規則）の
-`found_in_upper_msms` リンクを持つ関係、または (c) 同位体で `isotope_consistent` のもの。強い説明のあるスポットでは、それがカードの先頭で
-初期選択（`preset`）になる。**アダクトの組・インソース断片は、Y が前駆体側のリンクを伴わない限り強い説明にならない**（Δm/z が合うだけでは
-断定しない）。
+**強い説明**（`strong = true`）: 情報でなく、かつ次のどれか。(a) 裏付けがあり、`found_in_upper_msms` の関係か、Y が前駆体側（上の m/z の
+規則）の `found_in_upper_msms` リンクを持つ関係。(b) 同位体で、裏付けがあり、`isotope_consistent = true` で、`ambiguous` でないもの。
+(c) アダクトの組・インソース断片で、Δm/z と同時溶出（`rt_window`）に加えて試料間の相関 `r` ≥ `relation_min_r` がそろうもの（MS-DIAL の
+`correl_similar` / `chrom_similar` リンクだけでは足りない。r を測れないときは (a) によるしかない）。強い説明のあるスポットでは、それが
+カードの先頭で初期選択（`preset`）になる。**Δm/z が合うだけでは断定しない**——r と RT がそろって初めて強い。
+
+**M+2 の取り違え（`ambiguous`）**: 13C2・37Cl・81Br の Δm/z は互いに 10 mDa 以内なので、`relation_mz_tol` の窓に同じ Y の M+2 が 2 つ以上
+入ることがある。そのときは一方に決めず、どの行にも `ambiguous = true` を付けて並べ、強い説明にしない。脂質など Y の組成式に Cl・Br が
+無ければハロゲンの行は出ないので、13C2 だけになり `ambiguous` にはならない。
 
 **同位体の強度比の規則**: `isotope_ratio` は試料ごとの X の高さ / Y の高さの中央値（両方が正の試料だけ）。`expected_ratio` は Y の組成式の
-炭素数 n から二項分布で求めた期待比 `C(n,k)·q^k`（k = 1 または 2、q = 0.0107 / (1 − 0.0107)）。`isotope_ratio` が `expected_ratio` の
+その元素の原子数 n から二項分布で求めた期待比 `C(n,k)·q^k`（q = a / (1 − a)。13C は a = 0.0107 で k = 1（M+1）または 2（M+2）、
+37Cl は a = 0.2424・81Br は a = 0.4931 で k = 1）。`isotope_ratio` が `expected_ratio` の
 **1.5 倍以下**なら `isotope_consistent = true`（Y の同位体として矛盾しない）。**1.5 倍を超えれば X は実在の別物質**（同位体の重なり）と
-みなし、`informational = true`（情報として添えるだけで、`redundant` には選べない）。比が求められない（炭素数不明・共通試料なし）ときは
+みなし、`informational = true`（情報として添えるだけで、`redundant` には選べない）。`ambiguous` の行は、**すべての**説明が 1.5 倍を
+超えたときだけ `informational`（13C2 の期待比に合わないことだけで別物質と言わない）。比が求められない（原子数不明・共通試料なし）ときは
 `isotope_consistent` は `null` で、強い説明にはならない。
 
 関係の並び順は（強い説明 → 情報でないもの → 裏付けありのもの、`|Δm/z|` 昇順）。ビューアのために、上位 3 件の関係は相手 Y の代表試料の
@@ -356,7 +364,7 @@ EIC（`partner_eic`）を持つ。
 - 候補付けビューアの「元の注釈に戻す」は `clear` を送る。`clear` はそのスポットの**有効な判断を丸ごと**（`wrong` でも `assign` でも）消し、
   `_tags.xml` の Misannotation も外す。
 - `curation_flags` の TSV は 7 列: `spot_id`・`flag`・`name`（`assign` の記録名）・`of`（`redundant` の相手）・`note`・`source`・`ts`。
-- `dataset_feature_search` の `curation_flag` 列は有効な判断: `wrong` / `suspect` / `assign:<記録名>` / `redundant`（無ければ空）。
+- `dataset_feature_search` は判断を反映しない（判断の列も無い。SME / SML の生の同定だけを見る）。判断の記録があれば、その件数と「反映していない」を `notes` に 1 行書く（`dataset_export_differential` の同定とは食い違いうる）。
 - `curation_review` のスポットの `flag` / `flag_note` は `wrong` / `suspect` / `confirmed` だけ。`assign` / `redundant` は別項目 `decision`
   （`{flag, name}` または `{flag, of}`）に出る。
 - エクスポートでの扱い（下の「エクスポートのメタ行」以降）: `assign` は同定を置き換え、`redundant` は除外する。

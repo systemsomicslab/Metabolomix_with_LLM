@@ -44,6 +44,7 @@ __all__ = [
     "STATS_COLUMNS_LABELED",
     "WINDOW_COLUMNS",
     "classify_identity",
+    "estimate_rt_offset",
     "feature_stats",
     "match_target",
     "merge_map",
@@ -61,12 +62,15 @@ __all__ = [
 ]
 
 # 付加体の層の既定（spec §4.1。手順書 v5 工程 7-1 の第 1 段と同じ集合に、陰イオンの酢酸付加
-# `[M+CH3COO]-` を足した。MS-DIAL の mzTab は `[M+CH3COO]1-` と書き、比較時に `1` を落とす）。
-# ギ酸付加は `[M+FA-H]-`（`[M+HCOO]-` と同じ質量なので別に持たない）。
+# `[M+CH3COO]-` と、陽イオンのメタノール付加 `[M+CH3OH+H]+`・二重の脱水 `[M+H-2H2O]+` を足した
+# （2026-11-14。どちらも Console の標準のメソッドが探す付加体）。MS-DIAL の mzTab は `[M+CH3COO]1-` と
+# 書き、比較時に `1` を落とす）。ギ酸付加は `[M+FA-H]-`（`[M+HCOO]-` と同じ質量なので別に持たない）。
+# 層を変えると、付加体の層を省いた目標の rule_hash が変わる。
 DEFAULT_ADDUCT_TIERS: dict[str, list[list[str]]] = {
     "positive": [
         ["[M+H]+", "[M]+"],
-        ["[M+Na]+", "[M+NH4]+", "[M+H-H2O]+", "[M+H-NH3]+", "[2M+H]+", "[M+2H]2+"],
+        ["[M+Na]+", "[M+NH4]+", "[M+H-H2O]+", "[M+H-NH3]+", "[2M+H]+", "[M+2H]2+",
+         "[M+CH3OH+H]+", "[M+H-2H2O]+"],
     ],
     "negative": [
         ["[M-H]-"],
@@ -316,7 +320,8 @@ def _normalize_one(raw, dataset_polarity: str | None):
 
 
 def normalize_targets(targets: list[dict], *, dataset_polarity: str | None,
-                      ppm_offset: dict | None = None) -> list[dict]:
+                      ppm_offset: dict | None = None,
+                      rt_offset_min: float | None = None) -> list[dict]:
     """目標のリストを検証して正規化する（既定値を埋め、理論 m/z を全付加体について計算する）。
 
     検証失敗は ``FEATURE_TARGET_INVALID``（details に ``target_id`` と ``field``）。
@@ -328,11 +333,17 @@ def normalize_targets(targets: list[dict], *, dataset_polarity: str | None,
     ``ppm_offset``（正規化済み。`mass_accuracy.normalize_ppm_offset`）を渡したときだけ、各目標に
     ``ppm_offset``（付加体 → その理論 m/z の帯の中心のずれ）を足す（rule_hash に入る）。渡さなければ
     目標の辞書は今と同じ。
+
+    ``rt_offset_min``（分。有限の数）を渡したときだけ、``rt_min`` のある目標に ``rt_offset_min`` を足す
+    （RT の窓の中心を ``rt_min + rt_offset_min`` にずらす。幅と ``delta_rt`` 列は変えない。rule_hash に入る）。
+    渡さなければ目標の辞書は今と同じ。
     """
     if dataset_polarity not in (None, *_POLARITIES):
         raise ValueError(f"dataset_polarity は positive / negative / None: {dataset_polarity!r}")
     if not isinstance(targets, list):
         raise _invalid(None, "targets", "targets はリストで指定する")
+    if rt_offset_min is not None and not _is_number(rt_offset_min):
+        raise _invalid(None, "rt_offset_min", f"rt_offset_min は有限の数（分）: {rt_offset_min!r}")
     if len(targets) > MAX_TARGETS:
         raise _invalid(None, "targets",
                        f"目標は 1 回 {MAX_TARGETS} 件まで（{len(targets)} 件渡された）")
@@ -352,6 +363,8 @@ def normalize_targets(targets: list[dict], *, dataset_polarity: str | None,
             if ppm_offset is not None:
                 item["ppm_offset"] = {adduct: offset_for(mz, ppm_offset)
                                       for adduct, mz in item["theoretical_mz"].items()}
+            if rt_offset_min is not None and item["rt_min"] is not None:
+                item["rt_offset_min"] = float(rt_offset_min)
             normalized.append(item)
     if undecided:
         raise DomainError(
@@ -373,7 +386,8 @@ def rule_hash(normalized_targets: list[dict], *, merge_groups_hash: str | None =
 
     覆うのは照合を左右する欄だけ: ``target_id``・InChIKey 先頭ブロック（種の目標は
     ``lipid_species``）・分子式か
-    expected_mz・付加体の層と理論 m/z・ppm・RT・目標の極性・``applicable``。``name`` は
+    expected_mz・付加体の層と理論 m/z・ppm・RT・目標の極性・``applicable``、渡したときだけの
+    ``ppm_offset`` と ``rt_offset_min``（省けば欄ごと無いので hash は変わらない）。``name`` は
     入れず、目標は ``target_id`` の順に並べ替えてから作る——表示名の変更や
     ``targets`` の並べ替えでは hash は変わらない。
 
@@ -555,7 +569,8 @@ def match_target(ds, target: dict, *, max_results: int,
 
     行は（qualified が先、層の昇順、|ppm| の昇順）に並べ、``max_results`` 件で打ち切って
     残りの件数を ``truncated`` に書く。``counts`` は特徴 ID の一意な件数（打ち切り前）。
-    ``ppm`` は符号つき（観測 − 理論）、``delta_rt`` は RT − rt_min。数値は丸めない
+    ``ppm`` は符号つき（観測 − 理論）、``delta_rt`` は RT − rt_min（``rt_offset_min`` があっても
+    rt_min からの差のまま。RT の窓は ``|RT − (rt_min + rt_offset_min)| ≤ rt_tol_min``）。数値は丸めない
     （丸めはツール層の仕事）。``sme_rank`` は ``sme_match`` の行で一致した候補の rank だが、
     その候補が rank を持たなければ ``sme_match`` でも None になりうる。
 
@@ -596,6 +611,8 @@ def match_target(ds, target: dict, *, max_results: int,
     centers = target.get("ppm_offset") or {}
     rt_min = target["rt_min"]
     rt_tol = target["rt_tol_min"]
+    # RT の窓の中心（`rt_offset_min` があればずらす。`delta_rt` 列は RT − rt_min のまま）
+    rt_center = None if rt_min is None else rt_min + target.get("rt_offset_min", 0.0)
     feature_ids = list(ds.feature_ids)
     if mz_array is None:
         mz_array = _feature_mz_array(ds)
@@ -610,7 +627,7 @@ def match_target(ds, target: dict, *, max_results: int,
             rt_ok, delta_rt = True, None
         elif _is_number(rt):
             delta_rt = rt - rt_min
-            rt_ok = abs(delta_rt) <= rt_tol + _BOUNDARY_EPS
+            rt_ok = abs(rt - rt_center) <= rt_tol + _BOUNDARY_EPS
         else:
             rt_ok, delta_rt = False, None
         if not partner:
@@ -722,15 +739,100 @@ def match_target(ds, target: dict, *, max_results: int,
     return out
 
 
+# ---------- 系統的な RT のずれの推定（適用はしない） ----------
+
+#: 一意の一致を探す RT の幅（分。目標の rt_min の前後）。参照の表と特徴の RT がずれていても拾える幅。
+RT_OFFSET_WINDOW_MIN = 2.0
+#: ずれを示す（`shift_min` を出す）のに要る一意の一致の数と、中央値の絶対値の下限（分）。
+RT_OFFSET_MIN_PAIRS = 10
+RT_OFFSET_MIN_ABS_MEDIAN = 0.2
+
+
+def estimate_rt_offset(ds, targets: list[dict], *, mz_array: np.ndarray | None = None,
+                       merged_from: dict[str, list[str]] | None = None) -> dict:
+    """目標の ``rt_min`` と特徴の一意の一致から、系統的な RT のずれ（特徴の RT − 目標の rt_min）を推定する。
+
+    推定するだけで、照合には当てない（当てるなら ``rt_offset_min`` を渡して呼び直す）。一致は、目標の
+    どれかの付加体の質量の窓（目標の ``ppm``・``ppm_offset`` の中心）に入り、``|RT − rt_min| ≤``
+    ``RT_OFFSET_WINDOW_MIN`` で、MS/MS の同定が別物質（``contradicted``）でない特徴。``rt_min`` は
+    ``rt_offset_min`` を当てる前の値。目標ごとに一致がちょうど 1 つ（割れの組は残す ID で 1 つ）で、
+    その特徴に一致する目標も 1 つだけの組の差を数える（reanalysis-study の paper-rt-offset と同じ規則）。
+    ``rt_min`` の無い目標・``not_applicable`` の目標・除外した特徴は使わない。
+
+    戻り値 ``{n_pairs, median_min, q1_min, q3_min, shift_min, criteria}``（四分位は 2 組以上のとき
+    ``statistics.quantiles(n=4)``）。``shift_min`` は一意の一致が ``RT_OFFSET_MIN_PAIRS`` 以上かつ
+    ``|中央値| > RT_OFFSET_MIN_ABS_MEDIAN`` のときだけ中央値、そうでなければ None で、理由を
+    ``reason``（``too_few_pairs`` / ``below_threshold``）に書く。数値は丸めない。
+    """
+    import statistics
+    from collections import Counter
+
+    if mz_array is None:
+        mz_array = _feature_mz_array(ds)
+    kept_of = {fid: kept for kept, group in (merged_from or {}).items() for fid in group}
+    feature_ids = list(ds.feature_ids)
+    excluded = getattr(ds, "excluded_features", None) or {}
+    per_target: list[dict[str, list[float]]] = []
+    for target in targets:
+        rt_min = target.get("rt_min")
+        if rt_min is None or not target.get("applicable", True):
+            continue
+        identifier = ({"lipid_species": target["lipid_species"]} if target.get("lipid_species")
+                      else {"inchikey_block": target["inchikey_block"]})
+        centers = target.get("ppm_offset") or {}
+        units: dict[str, list[float]] = {}
+        for tier in target["adduct_tiers"]:
+            for adduct in tier:
+                theo = target["theoretical_mz"][adduct]
+                with np.errstate(invalid="ignore"):
+                    hits = np.nonzero(np.abs((mz_array - theo) / theo * 1e6 - centers.get(adduct, 0.0))
+                                      <= target["ppm"] + _BOUNDARY_EPS)[0]
+                for index in hits:
+                    fid = feature_ids[index]
+                    rt = (ds.feature_metadata.get(fid) or {}).get("rt")
+                    if (fid in excluded or not _is_number(rt)
+                            or abs(rt - rt_min) > RT_OFFSET_WINDOW_MIN + _BOUNDARY_EPS):
+                        continue
+                    identity = _identity(ds.feature_candidates.get(fid) or [],
+                                         ds.feature_annotations.get(fid), **identifier, adduct=adduct)
+                    if identity["evidence"] == "contradicted":
+                        continue
+                    units.setdefault(kept_of.get(fid, fid), []).append(rt - rt_min)
+        per_target.append(units)
+    targets_of = Counter(unit for units in per_target for unit in units)
+    deltas = []
+    for units in per_target:
+        if len(units) == 1:
+            [(unit, values)] = units.items()
+            if targets_of[unit] == 1:
+                deltas.append(statistics.median(values))
+    out = {"n_pairs": len(deltas), "median_min": None, "q1_min": None, "q3_min": None,
+           "shift_min": None,
+           "criteria": {"window_min": RT_OFFSET_WINDOW_MIN, "min_pairs": RT_OFFSET_MIN_PAIRS,
+                        "min_abs_median_min": RT_OFFSET_MIN_ABS_MEDIAN}}
+    if deltas:
+        out["median_min"] = statistics.median(deltas)
+    if len(deltas) >= 2:
+        out["q1_min"], _, out["q3_min"] = statistics.quantiles(deltas, n=4)
+    if len(deltas) < RT_OFFSET_MIN_PAIRS:
+        out["reason"] = "too_few_pairs"
+    elif abs(out["median_min"]) <= RT_OFFSET_MIN_ABS_MEDIAN:
+        out["reason"] = "below_threshold"
+    else:
+        out["shift_min"] = out["median_min"]
+    return out
+
+
 # ---------- 窓検索と差次的統計の結合（spec §4.2・§6） ----------
 
 #: 窓検索の行の列（この順で TSV にする）。
 WINDOW_COLUMNS = ("feature_id", "mz", "rt", "evidence", "name", "inchikey", "adduct", "n_sme",
                   "ontology", "n_detected", "normalized", "msi_level")
 
-#: 特徴ごとの統計の行の列。
+#: 特徴ごとの統計の行の列。`detected_a/b` は注入単位の検出数（マスクから数え直す）、`presence_p` と
+#: `detection_driven` は比較の記録の個体単位の検出から（`as_two_group`）。
 STATS_COLUMNS = ("feature_id", "result_id", "status", "log2fc", "p", "q", "mean_a", "mean_b",
-                 "detected_a", "detected_b")
+                 "detected_a", "detected_b", "presence_p", "detection_driven")
 
 #: `with_group_labels=True` のときの列（既存の列の後ろに群の名前と比較の向きを足す）。
 STATS_COLUMNS_LABELED = STATS_COLUMNS + ("comparison", "group_a", "group_b",
@@ -1040,7 +1142,9 @@ def feature_stats(ds, feature_ids: list[str], results: list[dict], *,
     結果の行列に無い）。後の 2 つは ``log2fc p q mean_a mean_b`` がすべて None。``q`` は結果の
     値をそのまま返し、ここで BH を掛け直さない（母集団は結果が持つ）。``tested`` でも q が
     None のことはある。``detected_a/b`` は検出例数で、マスクから対応を保証して取れないとき
-    None（呼び出し側が注記する）。取れるときは status に関わらず付ける。
+    None（呼び出し側が注記する）。取れるときは status に関わらず付ける。``presence_p`` は結果の行の
+    検出の有無の Fisher の p（個体単位。行があれば status に関わらず。検出状態が無ければ None）、
+    ``detection_driven`` は差が検出の有無から来ているかの印（``tested`` の行だけ、ほかは None）。
 
     ``with_labels=True`` のときだけ ``comparison``・``group_a``・``group_b``・
     ``log2fc_test_over_ref``（``log2fc`` と同じ値。group_b / group_a）を足す。
@@ -1072,6 +1176,8 @@ def feature_stats(ds, feature_ids: list[str], results: list[dict], *,
                 "mean_b": _num_or_none(source.get("mean_b")) if tested else None,
                 "detected_a": det_a,
                 "detected_b": det_b,
+                "presence_p": _num_or_none(source.get("presence_p")) if source is not None else None,
+                "detection_driven": source.get("detection_driven") if tested else None,
             })
             if with_labels:
                 rows[-1].update({"comparison": comparison_name(result),
@@ -1085,7 +1191,8 @@ def result_summaries(ds, results: list[dict]) -> list[dict]:
 
     ``bh_population``: ``n_features_total`` はデータセットの特徴数、``n_in_matrix`` は結果の
     行数（前処理後に残った特徴）、``n_tested`` は p が有限の行数。q の解釈にはこの母集団が要る
-    （窓で絞った特徴の数ではなく、この母集団で BH が掛かっている）。
+    （窓で絞った特徴の数ではなく、この母集団で BH が掛かっている）。比較の記録から読み替えた結果
+    （``n_units_a`` を持つ）には、個体の数 ``n_units_a`` / ``n_units_b`` も足す。
     """
     summaries = []
     for result in results:
@@ -1104,6 +1211,9 @@ def result_summaries(ds, results: list[dict]) -> list[dict]:
             },
             "caveats": list(result.get("caveats") or []),
         })
+        if "n_units_a" in result:
+            # 比較の記録の個体の数（`presence_p` / `detection_driven` の分母。`n_a` / `n_b` は注入の数）
+            summaries[-1].update(n_units_a=result["n_units_a"], n_units_b=result.get("n_units_b"))
     return summaries
 
 

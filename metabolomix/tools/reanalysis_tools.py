@@ -451,15 +451,20 @@ def dataset_homolog_check(spec: dict, dataset_handle: str | None = None) -> str:
 def dataset_feature_relations(feature_id: str | int, rt_window: float = 0.05, mz_tol: float = 0.01,
                               min_r: float = 0.7, adducts: list[str] | None = None,
                               dataset_handle: str | None = None) -> str:
-    """mzTab-M の特徴 1 つについて、同時溶出の特徴と付加体・同位体・源内断片の関係を返す
+    """特徴 1 つについて、同時溶出の特徴と付加体・同位体・源内断片の関係を返す
     （再解析で使う。関係の規則はアラインメントのキュレーションの関係と同じ）。
 
     rt_window: 同時溶出とみなす RT の差（分、既定 0.05）。mz_tol: 関係の m/z の許容（Da）。
     min_r: 試料間の強度の相関（log1p の Pearson）がこれ以上なら裏付けあり。
     adducts: 付加体の候補（省略時はデータセットの極性の既定の層を平らにしたもの）。
     `as_ion_of`（この特徴が相手のイオン）と `ions_of_this`（相手がこの特徴のイオン）を TSV で
-    返す。相手の付加体は SME rank 1 の付加体で、同定の無い相手には付加体の関係は出ない
-    （同位体・源内断片だけ）。MS-DIAL のリンクは使わない（裏付けは相関だけ）。
+    返す。付加体の関係は説明される側（Y）の付加体から計算する: Y の付加体は SME rank 1、無ければ
+    SML 注釈（MS1 だけの同定）の付加体で、どちらも無い Y の `as_ion_of` には付加体の関係は出ない
+    （`ions_of_this` はこの特徴の付加体から見るので、未注釈の相手も付加体として出る）。
+    `strong`: 付加体・源内断片は Δm/z と同時溶出に加えて r ≥ min_r、同位体は加えて強度比が Y の
+    組成式の期待比の 1.5 倍以下。M+2 は 13C2・37Cl・81Br を見て、窓が重なれば `ambiguous`
+    （一方に決めず、strong にしない）。`informational` は強度比が期待比を超えた同位体（別物質。重なった
+    M+2 はすべての期待比を超えたときだけ）。MS-DIAL のリンクは使わない。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     """
     from metabolomix.analysis import claim_evidence, feature_search
@@ -480,8 +485,10 @@ def dataset_feature_relations(feature_id: str | int, rt_window: float = 0.05, mz
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
     relation_columns = ("of", "of_name", "relation", "dmz_mda", "drt", "r", "isotope_ratio",
-                        "expected_ratio", "isotope_consistent", "strong")
-    ion_columns = ("ion", "relation", "dmz_mda", "drt", "r", "isotope_consistent", "strong")
+                        "expected_ratio", "isotope_consistent", "strong", "ambiguous",
+                        "informational")
+    ion_columns = ("ion", "relation", "dmz_mda", "drt", "r", "isotope_consistent", "strong",
+                   "ambiguous", "informational")
     return json_payload(round_floats({
         "status": "success",
         "feature_id": out["feature_id"],
@@ -685,7 +692,12 @@ def dataset_mass_accuracy(band_edges: list[float] | None = None, rank: int = 1,
 
     band_edges: 帯の境界（理論 m/z。既定 [200] → `<200` と `≥200`）。rank: 見る SME 候補の順位
     （既定 1）。帯ごとに `n median q1 q3 within_5ppm within_10ppm`（四分位は
-    `statistics.quantiles(n=4)`）。許容幅は決めない（再解析の規則で決める）。
+    `statistics.quantiles(n=4)`）と、勧める許容幅 `recommended_mz_tol_ppm`。全体の勧めは
+    `recommended_tolerance`（`n` `mz_tol_ppm` `median_ppm` `mad_ppm` `basis`）。勧める幅は
+    `ceil(|中央値| + 3 × MAD)`（MAD は尺度の補正なし。1 ppm 未満にしない）で、同定が 10 件未満なら
+    null（`reason: too_few`）。材料であって当てはしない——目標照合（`dataset_feature_search` /
+    `dataset_claim_evidence`）の目標の `ppm` や `library_match_feature` の `mz_tol_ppm` にそのまま
+    渡すか、中央値を `ppm_offset` に・`3 × MAD` を幅に分けて渡すかは再解析の規則で決める。
     subset: `rank1`（既定。rank の SME すべて）か `msms_matched`（そのうち、特徴の MS/MS が参照
     スペクトルに照合されたもの。SML の `opt_global_spectrum_matched` が真。LBM 由来も研究室 MSP
     由来も数える。この旗は rank 1 の同定を表すので `rank=1` のときだけ。列の無い mzTab では

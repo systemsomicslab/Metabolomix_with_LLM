@@ -240,7 +240,13 @@ def test_as_two_group_single_contrast_matches_rows():
     assert len(view["results"]) == len(rows) == 10
     for got, row in zip(view["results"], rows):
         assert set(got) == {"feature", "mean_a", "mean_b", "log2fc", "t", "p", "q",
-                            "ci_low", "ci_high", "verdict", "significant"}
+                            "ci_low", "ci_high", "verdict", "significant", "presence_p",
+                            "presence_q", "detected_units_a", "detected_units_b",
+                            "detection_driven"}
+        # 検出の有無は記録の値（個体単位）をそのまま写す
+        assert (got["presence_p"], got["presence_q"]) == (row["presence_p"], row["presence_q"])
+        assert (got["detected_units_a"], got["detected_units_b"]) == (
+            row["detected_reference"], row["detected_test"])
         assert got["significant"] is (export_contract.is_significant(
             q=row["q"], log2fc=row["log2fc"], q_threshold=0.05, log2fc_threshold=1.0)
             and row["verdict"] == "changed")                           # R16
@@ -262,6 +268,28 @@ def test_as_two_group_single_contrast_matches_rows():
     view["results"][0]["log2fc"] = 999
     assert rec["engine"]["rows"][0]["log2fc"] != 999
     json.loads(json_payload(json_safe(view)))
+
+
+def test_as_two_group_carries_presence_and_detection_driven():
+    """記録の Fisher の p（個体単位）と個体単位の検出数を写し、検出の有無だけの差に印を付ける（B5）。"""
+    from scipy import stats as scipy_stats
+
+    ds = _ds()
+    f3 = ds.feature_ids.index("f3")
+    for j, name in enumerate(ds.sample_names):
+        if name.startswith("C"):
+            ds.detected_mask[f3, j] = False                  # C 群では全注入が未検出（埋め値）
+        elif name.startswith("T"):
+            ds.feature_matrix[f3, j] *= 4
+    rec, _, _ = _register(ds)
+    rows = {r["feature"]: r for r in stats_results.as_two_group(rec)["results"]}
+    gap = rows["f3"]
+    assert (gap["detected_units_a"], gap["detected_units_b"]) == (0, 4)   # 個体の数（注入は 8）
+    assert gap["presence_p"] == pytest.approx(scipy_stats.fisher_exact([[4, 0], [0, 4]])[1])
+    assert gap["detection_driven"] is True                    # 低い側の検出が 0
+    both = rows["f0"]
+    assert (both["detected_units_a"], both["detected_units_b"]) == (4, 4)
+    assert both["presence_p"] == pytest.approx(1.0) and both["detection_driven"] is False
 
 
 def test_as_two_group_requires_contrast_for_multi():

@@ -101,10 +101,12 @@ def test_inchikey_claim_rule_hash_is_unchanged():
             "scan": {"ppm": [10, 20], "rt_tol_min": [0.3]},
             "msms": {"top_n": 3, "rules": {"min_fragments_excl_precursor": 2}},
             "relations": {"rt_window": 0.05}}
-    # merge_split=false（v7 と同じ規則）は v7 の hash のまま。既定（true）は merge_split が規則に入る
+    # merge_split=false（v7 と同じ規則）は v7 の hash のまま。既定（true）は merge_split が規則に入る。
+    # 陽イオンの既定の付加体の第 2 層に [M+CH3OH+H]+ と [M+H-2H2O]+ を足したとき（A12）に段の並びが
+    # 変わったので値を書き直した（旧 fb597799… は旧い段で再現することを確かめた）
     normalized = C.normalize_claim_spec({**spec, "merge_split": False}, dataset_polarity="positive")
     assert C.rule_hash(normalized) == \
-        "fb597799f7388814f93093b472ee773769e40aabaaf6ad0bb0fabb56338f33db"
+        "bf54910d89dda55309c5188e15e0ade7fd26cb4b73d76cf19bce2a204d187f03"
     merged = C.normalize_claim_spec(spec, dataset_polarity="positive")
     assert merged["merge_split"] is True
     assert C.rule_hash(merged) != C.rule_hash(normalized)

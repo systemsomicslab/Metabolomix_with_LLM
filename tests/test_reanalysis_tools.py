@@ -229,6 +229,29 @@ def test_mass_accuracy_by_band(data):
     low, high = out["bands"]
     assert (low["min_mz"], low["max_mz"], low["n"]) == (None, 200.0, 1)
     assert high["n"] == 1
+    # 勧める許容幅は 10 件から。2 件では出さず、理由を添える（A3-T12）
+    assert low["recommended_mz_tol_ppm"] is None and high["recommended_mz_tol_ppm"] is None
+    assert out["recommended_tolerance"]["mz_tol_ppm"] is None
+    assert out["recommended_tolerance"]["reason"] == "too_few"
+
+
+def test_mass_accuracy_recommends_a_tolerance(tmp_path):
+    # ppm が -4.0 … +1.5（0.5 刻み）の 12 個の同定 → 中央値 -1.25、MAD 1.5 → ceil(1.25 + 4.5) = 6
+    features = tuple(
+        {"id": str(i + 1), "mz": 300.0 + i, "rt": 1.0 + i, "values": [10] * 8, "matched": True,
+         "sme": [{"name": f"N{i}", "inchikey": f"{chr(65 + i) * 14}-UHFFFAOYSA-N", "formula": "C1",
+                  "adduct": "[M+H]1+", "theo": 300.0 + i,
+                  "exp": (300.0 + i) * (1 + (-4.0 + 0.5 * i) * 1e-6)}]}
+        for i in range(12))
+    handle = _open({"mztab": write_mztab(tmp_path / "t" / "AlignResult-1.mzTab", features=features)})
+    out = json.loads(R.dataset_mass_accuracy(dataset_handle=handle))
+    rec = out["recommended_tolerance"]
+    assert rec["n"] == 12 and rec["mz_tol_ppm"] == 6.0
+    assert rec["median_ppm"] == pytest.approx(-1.25, abs=1e-3)
+    assert rec["mad_ppm"] == pytest.approx(1.5, abs=1e-3)
+    low, high = out["bands"]
+    assert low["n"] == 0 and low["recommended_mz_tol_ppm"] is None
+    assert high["n"] == 12 and high["recommended_mz_tol_ppm"] == 6.0
 
 
 #: SML の `opt_global_spectrum_matched` を持つ合成の特徴（ppm はそれぞれ +2 / +8 / -3、1 つは同定なし）。
@@ -391,6 +414,34 @@ def test_feature_relations_name_adduct_isotope_and_insource(data):
     assert ions["23"] == "insource:-H2O"
     as_ion = json.loads(R.dataset_feature_relations("21", dataset_handle=handle))["as_ion_of"]
     assert "adduct:[M+Na]+/[M+H]1+" in as_ion          # 相手の付加体は MS-DIAL の表記のまま
+
+
+def _tsv(text):
+    header, *lines = text.splitlines()
+    names = header.split("\t")
+    return names, [dict(zip(names, line.split("\t"))) for line in lines]
+
+
+def test_feature_relations_columns_carry_strong_ambiguous_and_informational(data):
+    handle = _open(data)
+    names, ions = _tsv(json.loads(R.dataset_feature_relations("20", dataset_handle=handle))["ions_of_this"])
+    assert names == ["ion", "relation", "dmz_mda", "drt", "r", "isotope_consistent", "strong",
+                     "ambiguous", "informational"]
+    by_relation = {(row["ion"], row["relation"]): row for row in ions}
+    # MS-DIAL のリンクが無い mzTab でも、同時溶出・Δm/z・試料間の相関 r ≥ min_r がそろえば強い（B1-T17）
+    na = by_relation[("21", "adduct:[M+Na]+/[M+H]1+")]
+    assert (na["strong"], na["ambiguous"], na["informational"]) == ("true", "false", "false")
+    iso = by_relation[("22", "isotope_M+1")]
+    assert (iso["isotope_consistent"], iso["strong"], iso["ambiguous"]) == ("true", "true", "false")
+    assert by_relation[("23", "insource:-H2O")]["strong"] == "true"
+    names, as_ion = _tsv(json.loads(R.dataset_feature_relations("22", dataset_handle=handle))["as_ion_of"])
+    assert names == ["of", "of_name", "relation", "dmz_mda", "drt", "r", "isotope_ratio",
+                     "expected_ratio", "isotope_consistent", "strong", "ambiguous", "informational"]
+    [row] = as_ion
+    assert (row["of"], row["of_name"], row["relation"]) == ("20", "GABA", "isotope_M+1")
+    # C4 の M+1 の期待比 4 × 0.0107 / 0.9893 ≈ 0.0433、実測 5 / 100 = 0.05（1.5 倍以内）
+    assert float(row["expected_ratio"]) == pytest.approx(0.0433, abs=1e-4)
+    assert float(row["isotope_ratio"]) == pytest.approx(0.05, abs=1e-3)
 
 
 def test_feature_relations_unknown_feature(data):
@@ -865,8 +916,11 @@ def test_novel_candidates_labels_column_and_counts(data, tmp_path):
 
 # ---------- ppm_offset（質量の窓の中心のずれ） ----------
 
-#: ppm_offset を足す前（v8）の実装で CLAIM を処理した rule_hash
-_CLAIM_RULE_HASH_V8 = "41f68e9459154e44cd3fe48101cdb088bc4969e917940bcfa3fb25b7410b524c"
+#: ppm_offset を足す前（v8）の実装で CLAIM を処理した rule_hash。陽イオンの既定の付加体の
+#: 第 2 段に [M+CH3OH+H]+ と [M+H-2H2O]+ を足したとき（A12）に段の並びが変わったので
+#: 書き直した（旧 41f68e94… は旧い段で再現することを確かめた）。ppm_offset を省いた
+#: ときに規則が変わらないことを縛るのは、この値と ppm_offset の有無の比較
+_CLAIM_RULE_HASH_V8 = "10003a763b0bc7c19f996242b458b66567e2a550fcbfde582ecd43e3b92d7292"
 
 
 def test_claim_evidence_ppm_offset_matches_feature_search(data):
