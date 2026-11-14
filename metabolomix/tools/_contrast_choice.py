@@ -5,7 +5,8 @@
 対比を 1 つ選ぶツール（`dataset_plot(kind="volcano")`・`save_figure`・`dataset_export_differential`・
 `dataset_export_evidence_bundle`）は `needs_input`（`field` / `argument` = `contrast_id`、選択肢は対比の一覧）で
 返す。spec で対比を選ぶツール（`dataset_novel_candidates` の `statistics.result_id`）は `spec_field` を渡し、
-`field` をその spec の路に、選択肢の値を `result_id#contrast_id` の形にする（`argument` は載せない）。
+`field` をその spec の路に、選択肢の値を `result_id#contrast_id` の形にする（`argument` は載せない。理由の文は
+同じ階層の `contrast_id` の欄でも選べることも言う）。
 未知の ID・交互作用の名指しなどはそのまま `mztab_error` の封筒にする。
 """
 from __future__ import annotations
@@ -32,7 +33,10 @@ def contrast_envelope(exc: DomainError, tool: str, *, spec_field: str | None = N
                                retry_tools=[tool])
         rid = details.get("result_id")
         options = [{"value": f"{rid}#{c['id']}", "label": c["label"]} for c in choices]
+        parent, dot, _leaf = spec_field.rpartition(".")
+        sibling = f"{parent}{dot}contrast_id"
         reason = (f"この比較（result_id={rid}）には対比が {len(choices)} つあります。spec の {spec_field} を"
-                  " `result_id#contrast_id` の形にして、どの対比を使うか選んでください。")
+                  f" `result_id#contrast_id` の形にして（同じ階層の {sibling} に対比の ID を書いてもよい）、"
+                  "どの対比を使うか選んでください。")
         return needs_input(spec_field, reason, options, retry_tools=[tool])
     return mztab_error(exc.code, exc.message, details or None)

@@ -184,7 +184,8 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         読み込む（既定 False。bool 以外は `DATASET_BAD_REQUEST`——`"false"` という
         文字列を真と読まないため）。中断時点の生成物なので、既定では拒否する
         （`INCOMPLETE_ANALYSIS_JOB`）。True で読んだデータセットは探索専用になる（検証を
-        通っていない pipeline の単位も同じ）。比較も書き出しもできるが、欠けた検体を
+        通っていない pipeline の単位も同じ。`directory` で run の中の解析フォルダを開いたときも、その
+        単位が検証を通っていなければ同じ印を付ける。断らない）。比較も書き出しもできるが、欠けた検体を
         「その群には無い」と読み違えうるので、差次的 TSV のメタ行（`# exploratory = true`）・
         根拠バンドルの manifest（`exploratory`）・図・最初の概観（dataset_overview）の比較を使う段の事実に
         印と理由が載る。

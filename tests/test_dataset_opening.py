@@ -1129,14 +1129,27 @@ def test_unvalidated_unit_opened_for_exploration_is_marked_exploratory(tmp_path)
         assert validated.exploratory_only is False and validated.exploratory_reason is None, source
 
 
-def test_directory_inside_an_unvalidated_unit_is_not_marked_exploratory(tmp_path):
-    """`directory=` が run の中の解析フォルダを開くときに引く単位は、試料の対応表とライブラリの記録を
-    当てるためだけのもの。探索専用の印は `pipeline_path` で開いた単位だけに付く。"""
+def test_directory_inside_an_unvalidated_unit_is_marked_exploratory(tmp_path):
+    """`directory=` が run の中の解析フォルダを開くときも、その単位の試料の対応表とライブラリを当てるので、
+    検証を通っていない単位なら `pipeline_path` で開いたときと同じ探索専用の印を付ける（断らない。理由に run の名前）。
+    検証を通った単位は印を付けない。"""
+    from metabolomix.analysis import dataset_export
+
     run = _v3_run(tmp_path, ("negative", "positive"), failed=("negative",))
     opened = open_dataset(directory=str(run / "negative" / "input"))
     assert opened.run_root is not None
-    assert opened.dataset.exploratory_only is False
-    assert opened.dataset.exploratory_reason is None
+    ds = opened.dataset
+    assert ds.exploratory_only is True
+    assert ds.exploratory_reason == f"pipeline の run {run.name} の単位 negative が検証を通っていない（failed）"
+    assert "=" not in ds.exploratory_reason
+    # 書き出しのメタ行と根拠バンドルの manifest が読む理由（`pipeline_path` で開いたときと同じ扱い）
+    assert dataset_export.exploratory_reason(ds) == ds.exploratory_reason
+    via_run = open_dataset(pipeline_path=str(run), polarity="negative", allow_incomplete=True).dataset
+    assert via_run.exploratory_only is True
+    validated = open_dataset(directory=str(run / "positive" / "input"))
+    assert validated.run_root is not None
+    assert validated.dataset.exploratory_only is False
+    assert validated.dataset.exploratory_reason is None
 
 
 def test_unknown_polarity_is_refused(tmp_path):

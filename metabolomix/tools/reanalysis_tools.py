@@ -204,7 +204,10 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
 
     output_path: 結果の JSON をここへ書き、要約だけを返す。省略時は解析ごとに行を TSV で返し、
         50 行を超える解析は p の小さい順の先頭 50 行だけを載せる（`truncated: true`・`n_rows` が全件・
-        `rows_order`。断らない）。
+        `rows_order`。断らない）。集約の要約（`aggregate`）は output_path の有無によらず、メンバーが
+        50 を超えれば寄与 `contributions` を `share_median` の大きい順の先頭 50 行、`members`・`summed`・
+        `dropped`・`merged_from` を先頭 50 件だけ載せる（件数は `n_<名前>`、切ったかは `<名前>_truncated`、
+        寄与の並びは `contributions_order`。全量は output_path の JSON）。
     対話のセッション・ハンドルの状態は変えない（読むだけ）。
     """
     from metabolomix.analysis import analysis_spec
@@ -231,7 +234,7 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
 
-    summary, truncated = [], []
+    summary, truncated, aggregate_cut = [], [], []
     for analysis in result["analyses"]:
         rows = analysis["rows"]
         item = {
@@ -247,7 +250,9 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
             "n_constant_in_group": sum(1 for r in rows if r["constant_in_group"]),
         }
         if "aggregate" in analysis:
-            item["aggregate"] = _aggregate_summary(analysis["aggregate"])
+            item["aggregate"], cut = _aggregate_summary(analysis["aggregate"])
+            if cut:
+                aggregate_cut.append(analysis["analysis_id"])
         if "covariate_excluded_samples" in analysis:
             item["covariate_excluded_samples"] = analysis["covariate_excluded_samples"]
         if written is None:
@@ -261,6 +266,11 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     if truncated:
         notes.append(f"行が {MAX_INLINE_ROWS} を超える解析（{truncated}）は p の小さい順の先頭 "
                      f"{MAX_INLINE_ROWS} 行だけを載せた。全行は output_path を指定して JSON に書く。")
+    if aggregate_cut:
+        where = "output_path の JSON" if written else "output_path を指定して書く JSON"
+        notes.append(f"集約のメンバーが {MAX_INLINE_ROWS} を超える解析（{aggregate_cut}）は、寄与を "
+                     f"share_median の大きい順の先頭 {MAX_INLINE_ROWS} 行、members・summed・dropped・"
+                     f"merged_from を先頭 {MAX_INLINE_ROWS} 件だけ載せた（件数は n_*）。全量は {where} にある。")
     return json_payload({
         "status": "success",
         "schema": result["schema"],
@@ -292,13 +302,51 @@ _CORRELATE_COLUMNS = ("analysis_id", "feature_id", "external_id", "merged_into",
 _NAME_LIST_LIMIT = 10
 
 
-def _aggregate_summary(info: dict) -> dict:
-    """集約の要約。和のメンバーごとの寄与（`contributions`）は TSV にする（全量は output_path の JSON）。"""
-    out = {k: v for k, v in info.items() if k != "contributions"}
+#: 集約の要約で件数を数えて先頭 `MAX_INLINE_ROWS` 件に切るリスト（`merged_from` は辞書で、同じく先頭だけ）。
+_AGGREGATE_LISTS = ("members", "summed", "dropped", "merged_from")
+
+
+def _share_order(index_row: tuple[int, dict]):
+    """寄与の並べ替えの鍵: `share_median` の大きい順（null・非有限は後ろ）、同じなら元の順。"""
+    index, row = index_row
+    share = row.get("share_median")
+    usable = (isinstance(share, (int, float)) and not isinstance(share, bool)
+              and math.isfinite(share))
+    return (not usable, -share if usable else 0.0, index)
+
+
+def _aggregate_summary(info: dict) -> tuple[dict, bool]:
+    """集約の要約と、何かを切ったか。
+
+    和のメンバーごとの寄与（`contributions`）は TSV にする。メンバーが `MAX_INLINE_ROWS` を超えれば、
+    寄与は `share_median` の大きい順（和を支配するメンバー）の先頭 `MAX_INLINE_ROWS` 行、`members`・
+    `summed`・`dropped`・`merged_from` は先頭 `MAX_INLINE_ROWS` 件だけを載せる（断らない）。件数は
+    いつも `n_<名前>`、切ったかは `<名前>_truncated`。全量は `output_path` の JSON（結果と `rule_hash` は
+    変えない。戻り値の要約だけを切る）。
+    """
+    out = {k: v for k, v in info.items() if k != "contributions" and k not in _AGGREGATE_LISTS}
+    cut = False
+    for key in _AGGREGATE_LISTS:
+        if key not in info:
+            continue
+        values = info[key]
+        shown = (dict(list(values.items())[:MAX_INLINE_ROWS]) if isinstance(values, dict)
+                 else list(values[:MAX_INLINE_ROWS]))
+        out[key] = shown
+        out[f"n_{key}"] = len(values)
+        out[f"{key}_truncated"] = len(shown) < len(values)
+        cut = cut or out[f"{key}_truncated"]
     if "contributions" in info:
-        out["contributions"] = rows_table(round_floats(info["contributions"], digits=4),
-                                          _CONTRIBUTION_COLUMNS)
-    return out
+        rows = info["contributions"]
+        shown = rows
+        if len(rows) > MAX_INLINE_ROWS:
+            shown = [row for _i, row in sorted(enumerate(rows), key=_share_order)][:MAX_INLINE_ROWS]
+            out["contributions_order"] = "share_median_desc"
+            cut = True
+        out["contributions"] = rows_table(round_floats(shown, digits=4), _CONTRIBUTION_COLUMNS)
+        out["n_contributions"] = len(rows)
+        out["contributions_truncated"] = len(shown) < len(rows)
+    return out, cut
 
 
 def _correlate_summary(block: dict, *, inline: bool) -> dict:
@@ -379,7 +427,9 @@ _DETAIL_LIST_KEYS = ("samples", "sample_ids", "unit_ids", "feature_ids", "candid
 
 
 def _assay_kind(holder) -> str:
-    """組成のクラスの種類の決め方に使う、そのハンドル（データセット）の脂質／代謝物の別（無ければ unknown）。"""
+    """そのハンドル（データセット）の脂質／代謝物の別（無ければ unknown）。
+
+    組成のクラスはいつも MS-DIAL の ontology で切るので、変わるのはラベル `class_label_kind` だけ（数字は同じ）。"""
     return getattr(holder, "assay_kind", "unknown") or "unknown"
 
 
@@ -799,7 +849,9 @@ def dataset_claim_evidence(spec: dict, dataset_handle: str | None = None,
 
     spec: `claim_id`・`target`（`dataset_feature_search` の目標と同じ形。`target_id` は
     `claim_id`。脂質の種の主張は `inchikey` の代わりに `lipid_species`）・`scan`（`ppm` と `rt_tol_min` の水準のリスト、任意で `adduct_tiers`——
-    全組で走査する）・`msms`（`top_n` と msms-rules.v1 の `rules`。target は書かない）・
+    全組で走査する）・`msms`（`{top_n, rules, mz_tol_ppm}`。`rules` は msms-rules.v1 で target は
+    書かない。`mz_tol_ppm` は任意（0 より大きい有限の数）で、前駆体の窓に重ねる ppm の絞り込み。
+    渡したときだけ規則と `rule_hash` に入る）・
     `relations`（`rt_window` / `mz_tol` / `min_r`）・`max_candidates`（既定 50）・`merge_split`
     （既定 true。割れたスポットの組を判定で 1 つの候補（残す ID）と数え、窓の外の相手も候補に
     `merge_partner` で足す。false は v7 と同じ規則・同じ `rule_hash`）・`ppm_offset`（任意。
@@ -809,8 +861,12 @@ def dataset_claim_evidence(spec: dict, dataset_handle: str | None = None,
     走査の全変種に効く。幅 `rt_tol_min` は変えず、渡したときだけ `rule.rt_offset_min`・`rule.target` と
     `rule_hash` に入る。目標に `rt_min` が無ければ効かないので、誤りにせず捨てて `notes` に書く）。
     束に入るのは、規則で選んだ既定の特徴（`default_selection`。`dataset_feature_search`
-    の目標照合と同じ規則で、決まらなければ `needs_input`）、走査ごとの判定、候補ごとの
-    照合（spot_id = SMF_ID）・合否・関係。**特徴は決めない**（実行役が決め、統計は
+    の目標照合と同じ規則で、決まらなければ `needs_input`。割れの組はいつも `find_split_pairs` を既定の閾値で
+    回したもので、`dataset_alignment_qc` がハンドルに持つ最後の結果は使わない）、走査ごとの判定、候補ごとの
+    照合（spot_id = SMF_ID）・合否・関係。候補ごとの `msms` は使った前駆体の窓 `window`（`mz_tol`・
+    `mz_window`・`mz_tol_ppm`）と、`qualify` の `target_rank`・`top1_is_target`（1 位が目標か）を持ち、
+    スポットに MS-DIAL の注釈があれば `msdial_name`・`msdial_rank`・`top_differs_from_msdial` も持つ
+    （`library_msms_qualify` と同じ）。**特徴は決めない**（実行役が決め、統計は
     `dataset_analysis_run` を別に呼ぶ）。`rule_hash`・`input_fingerprint`（データの指紋・
     ライブラリの sha256）を含み、同じ spec・同じ入力なら同じ JSON になる。
     output_path: JSON をここへ書き、要約だけを返す。省略時は束を返し、候補が 10 を超えれば断らず
@@ -998,8 +1054,10 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     SME（rank 1）の同定があり、質量誤差が m/z 帯ごとの許容幅（`ppm.default` と
     `ppm.bands: [{max_mz, ppm}]`）に入り、q が `q_max` 未満の特徴から、`exclude`
     （`feature_ids`・`inchikey_blocks`）を除いた一覧。統計は `statistics` が
-    `{"result_id"}`（`dataset_compare` の 2 群比較。対比が複数の結果は `"result_id#contrast_id"`——ID だけなら
-    誤りでなく `needs_input`〔`field="statistics.result_id"`、選択肢は `result_id#contrast_id` の一覧〕。
+    `{"result_id"}`（`dataset_compare` の 2 群比較。対比が複数の結果は `"result_id#contrast_id"` か
+    `{"result_id", "contrast_id"}` で 1 つ選ぶ——2 つは同じ規則・同じ `rule_hash`。`#` の後ろと `contrast_id` が
+    食い違えば `DATASET_BAD_REQUEST`。ID だけなら誤りでなく `needs_input`〔`field="statistics.result_id"`、
+    選択肢は `result_id#contrast_id` の一覧〕。
     `dataset_compare` の結果は q に加えて判定が `changed` の行だけ）か `{"analysis_spec", "analysis_id"}`
     （**analysis-spec.v1 だけ**: `dataset_analysis_run` の v1 の spec のその解析。analysis-spec.v2 はここでは
     通らない——統計エンジンの結果は `dataset_compare` を回してその `result_id` を渡す）。q の昇順。`rule_hash` を返す。
@@ -1012,7 +1070,8 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     データ・試料の表・除外が変わっていなければ——を使い、無ければその場で探す。使った方は
     `merge_split.source` の `alignment_qc` / `last_alignment_qc` / `find_split_pairs`）、analysis_spec では
     spec の `features.merge_split` で決まる（spec だけで再現するので最後の結果は使わない）。
-    `merge_split=false` の `statistics.alignment_qc` など、効かない設定は誤りにせず `notes` に書く。
+    `merge_split=false` の `statistics.alignment_qc`・`analysis_spec` の隣の `statistics.contrast_id` など、
+    効かない設定は誤りにせず `notes` に書く。
     spec の `labels`（`{path, name, feature_column="feature_id", label_column="level",
     order=["A","B","C","D"]}`）は外部の印の TSV。行に `labels.<name>` の列（特徴ごとの最も強い
     水準、割れの組はどちらかの最も強い水準）と水準ごとの件数 `labels.counts`（全体と上位 20）を
@@ -1134,7 +1193,8 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
 def _drop_ineffective_novel_settings(spec, notes: list[str]):
     """novel-candidates の spec から、書いても効かない設定を除いた写し（理由は `notes`）。
 
-    `statistics.merge_split=false` の `statistics.alignment_qc` は使われないので外す（誤りにしない）。
+    `statistics.merge_split=false` の `statistics.alignment_qc` と、`statistics.analysis_spec` の隣の
+    `statistics.contrast_id` は使われないので外す（誤りにしない）。
     `statistics.analysis_spec`（analysis-spec.v1）の効かない設定は `analysis_spec.normalize_spec` が外し、
     その注記をここで集める。形の誤りは触らない（`normalize_novel_spec` が断る）。
     """
@@ -1149,6 +1209,11 @@ def _drop_ineffective_novel_settings(spec, notes: list[str]):
         except DomainError:
             pass  # 形の誤りは normalize_novel_spec が同じ理由で断る
         notes[:] = [f"statistics.analysis_spec: {n}" for n in notes]
+        if "contrast_id" in stats_spec and "result_id" not in stats_spec:
+            # analysis-spec.v1 の比較は spec の comparison の 1 つだけなので、対比の名指しは効かない
+            notes.append("statistics.contrast_id は statistics.analysis_spec では効かず（比較は spec の "
+                         "comparison の 1 つ）、使っていない")
+            return {**spec, "statistics": {k: v for k, v in stats_spec.items() if k != "contrast_id"}}
         return spec
     if stats_spec.get("merge_split") is False and "alignment_qc" in stats_spec:
         notes.append("statistics.alignment_qc は statistics.merge_split=false なので効かず、使っていない")
@@ -1189,8 +1254,10 @@ def dataset_alignment_qc(output_path: str | None = None, ppm: float = 15.0,
     結果（output_path と同じ中身）はこのハンドル（データセット）に最後の 1 つとして持ち
     （`kept_on_handle`）、`dataset_feature_search` の `alignment_qc_path`・`dataset_novel_candidates` の
     `statistics.alignment_qc` を省いたときに使われる（データ・試料の表・除外が変われば使われない）。
-    `dataset_analysis_run` は spec だけで再現する決まりなので使わない（spec の `features.alignment_qc` に
-    JSON のパスを書く）。
+    `dataset_analysis_run` と `dataset_claim_evidence` は spec だけで再現する決まりなので使わない
+    （`dataset_analysis_run` は spec の `features.alignment_qc` に JSON のパスを書く。証拠の束の割れの組は
+    いつも既定の閾値で探すので、既定でない閾値で回した後は同じ目標でも `dataset_feature_search` と
+    組・判定・`rule_hash` が違いうる）。
     """
     from metabolomix.analysis import alignment_qc
 

@@ -475,6 +475,41 @@ def test_novel_candidates_reads_compare_result(tmp_path):
     assert ds2.last_differential["kind"] == "compare"
 
 
+def test_novel_candidates_accepts_statistics_contrast_id(tmp_path):
+    from metabolomix.analysis import mass_accuracy
+
+    _novel_ready(tmp_path, groups=("C", "T", "U"))
+    rid = _compare(groups=["C", "T", "U"])["result_id"]
+
+    def spec(**statistics):
+        return {"statistics": {"merge_split": False, **statistics}, "ppm": {"default": 5.0}, "q_max": 0.2}
+
+    # 対比の欄で選んでも `#` の形と同じ規則・同じ rule_hash・同じ行
+    by_key = json.loads(reanalysis_tools.dataset_novel_candidates(spec(result_id=rid, contrast_id="U_vs_C")))
+    by_ref = json.loads(reanalysis_tools.dataset_novel_candidates(spec(result_id=f"{rid}#U_vs_C")))
+    assert by_key["status"] == "success", by_key
+    assert by_key["group_test"] == "U" and by_key["rule_hash"] == by_ref["rule_hash"]
+    assert by_key["rows"] == by_ref["rows"]
+    # `#` の後ろと同じなら重ねて書いてもよい。食い違えば DATASET_BAD_REQUEST（ほかの対比を選ぶツールと同じ）
+    both = json.loads(reanalysis_tools.dataset_novel_candidates(
+        spec(result_id=f"{rid}#U_vs_C", contrast_id="U_vs_C")))
+    assert both["rule_hash"] == by_ref["rule_hash"]
+    clash = json.loads(reanalysis_tools.dataset_novel_candidates(
+        spec(result_id=f"{rid}#U_vs_C", contrast_id="T_vs_C")))["error"]
+    assert clash["code"] == "DATASET_BAD_REQUEST"
+    # contrast_id を書かない spec の正規化（＝rule_hash の材料）は前と同じ（欄が増えない）
+    plain = mass_accuracy.normalize_novel_spec(spec(result_id=rid))
+    assert plain["statistics"] == {"result_id": rid}
+    assert mass_accuracy.normalize_novel_spec(spec(result_id=rid, contrast_id=None)) == plain
+    keyed = mass_accuracy.normalize_novel_spec(spec(result_id=rid, contrast_id="T_vs_C"))
+    assert keyed["statistics"] == {"result_id": f"{rid}#T_vs_C"}
+    bad = json.loads(reanalysis_tools.dataset_novel_candidates(spec(result_id=rid, contrast_id=3)))["error"]
+    assert bad["code"] == "NOVEL_SPEC_INVALID" and bad["details"]["field"] == "statistics.contrast_id"
+    # ID だけの問いは、対比の欄でも選べることを言う
+    asked = json.loads(reanalysis_tools.dataset_novel_candidates(spec(result_id=rid)))["needs_input"]
+    assert "statistics.contrast_id" in asked["reason"]
+
+
 # --- fix round 1 ---------------------------------------------------------------------------
 
 def _multi(tmp_path):

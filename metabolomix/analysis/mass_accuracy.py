@@ -179,6 +179,30 @@ def band_summary(rows: list[dict], band_edges: list[float]) -> dict:
 
 # ---------- 新しい知見の候補 ----------
 
+_STATISTICS_SHAPE = ("statistics は {result_id[, contrast_id]}（対比は result_id#contrast_id の形でも選べる）"
+                     "か {analysis_spec, analysis_id}")
+
+
+def _result_ref(stats_spec: dict) -> str:
+    """`statistics.result_id` と任意の `statistics.contrast_id` を `result_id[#contrast_id]` の 1 つの形にする。
+
+    `contrast_id` を書かない spec は `result_id` をそのまま（正規化した spec と `rule_hash` は前と同じ）。
+    書けば `result_id#contrast_id` の形と同じ文字列にする（同じ対比なら同じ `rule_hash`）。`result_id` の `#` の
+    後ろと食い違えば `DATASET_BAD_REQUEST`（`stats_results.split_result_ref`。ほかの対比を選ぶツールと同じ）。
+    """
+    result_id = str(stats_spec["result_id"])
+    contrast_id = stats_spec.get("contrast_id")
+    if contrast_id is None:
+        return result_id
+    if not isinstance(contrast_id, str) or not contrast_id.strip():
+        raise DomainError(_INVALID, "statistics.contrast_id は空でない文字列（省略可）",
+                          {"field": "statistics.contrast_id"})
+    from metabolomix.analysis.stats_results import split_result_ref
+
+    base, named = split_result_ref(result_id, contrast_id)
+    return f"{base}#{named}"
+
+
 def normalize_novel_spec(spec) -> dict:
     if not isinstance(spec, dict) or set(spec) - {"schema", "statistics", "ppm", "q_max", "exclude",
                                                          "labels", "ppm_offset"}:
@@ -186,16 +210,15 @@ def normalize_novel_spec(spec) -> dict:
                           {})
     stats_spec = spec.get("statistics")
     if not isinstance(stats_spec, dict):
-        raise DomainError(_INVALID, "statistics は {result_id} か {analysis_spec, analysis_id}",
-                          {"field": "statistics"})
-    if "result_id" in stats_spec and not set(stats_spec) - {"result_id", "merge_split",
+        raise DomainError(_INVALID, _STATISTICS_SHAPE, {"field": "statistics"})
+    if "result_id" in stats_spec and not set(stats_spec) - {"result_id", "contrast_id", "merge_split",
                                                             "alignment_qc"}:
         # 割れたスポットのまとめ（既定 true）。analysis_spec の側は features.merge_split で決める。
         merge = stats_spec.get("merge_split", True)
         if not isinstance(merge, bool):
             raise DomainError(_INVALID, "statistics.merge_split は true / false",
                               {"field": "statistics.merge_split"})
-        statistics_out = {"result_id": str(stats_spec["result_id"])}
+        statistics_out = {"result_id": _result_ref(stats_spec)}
         if merge:
             # 真（既定）のときだけ規則に載せる。false は v7 と同じ規則・同じ rule_hash になる
             statistics_out["merge_split"] = True
@@ -213,8 +236,7 @@ def normalize_novel_spec(spec) -> dict:
             raise DomainError(_INVALID, f"analysis_id が spec に無い（{ids}）",
                               {"field": "statistics.analysis_id"})
     else:
-        raise DomainError(_INVALID, "statistics は {result_id} か {analysis_spec, analysis_id}",
-                          {"field": "statistics"})
+        raise DomainError(_INVALID, _STATISTICS_SHAPE, {"field": "statistics"})
     ppm = spec.get("ppm", {"default": 10.0, "bands": []})
     if (not isinstance(ppm, dict) or set(ppm) - {"default", "bands"}
             or _number(ppm.get("default", 10.0)) is None):

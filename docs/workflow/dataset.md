@@ -268,7 +268,9 @@ completed は「実行後にファイルが増えた」以上の意味を持た�
 （`INCOMPLETE_ANALYSIS_JOB`）。`allow_incomplete=True` で読んだ場合は
 `exploratory_only=True`（理由は `exploratory_reason`。`JobGate.exploratory_reason`）になる。`pipeline_path` で
 検証を通っていない単位を開いたときも、ジョブの status によらず同じ印を付ける（`opening._mark_unvalidated_unit`。
-`store.unit_status` が `validated` でない）。比較も書き出しも断らないが、欠けた検体は mzTab 上「その群に無い」ように
+`store.unit_status` が `validated` でない）。`directory` が run の中の解析フォルダを開き、`_enclosing_run_unit()` が
+引いた単位が検証を通っていないときも同じ印で、理由に run のフォルダの名前を足す（試料の対応表とライブラリはその単位から
+当てるので、`pipeline_path` を迂回しても印は外れない。断らない）。比較も書き出しも断らないが、欠けた検体は mzTab 上「その群に無い」ように
 しか見えないので、差次的 TSV のメタ行（`# exploratory = true` と理由）・根拠バンドルの manifest（`exploratory`）・
 図の但し書き・最初の概観（`dataset_overview`）の比較を使う段の先頭の事実に印を載せる。
 
