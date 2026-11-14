@@ -57,3 +57,51 @@ def test_unknown_topic_does_not_set_flag():
     session_state.session.output_format_seen = False
     docs_read("../etc")
     assert session_state.session.output_format_seen is False
+
+
+def test_outline_lists_level2_headings_with_sizes():
+    text = resources.output_format_section("reanalysis")
+    out = docs_read("reanalysis", outline=True)
+    rows = out.split("heading\tchars\n", 1)[1].strip().splitlines()
+    level2 = [line[3:].strip() for line in text.splitlines() if line.startswith("## ")]
+    assert [row.split("\t")[0] for row in rows] == level2
+    assert all(int(row.split("\t")[1]) > 0 for row in rows)
+
+
+def test_section_returns_one_section_including_subsections():
+    text = resources.output_format_section("reanalysis")
+    first = next(line[3:].strip() for line in text.splitlines() if line.startswith("## "))
+    body = docs_read("reanalysis", section=first)
+    assert body.startswith(f"## {first}")
+    assert body in text
+    assert len(body) < len(text)
+    assert "\n## " not in body
+
+
+def test_section_matches_case_insensitive_substring_and_reports_misses():
+    text = resources.output_format_section("dataset")
+    first = next(line[3:].strip() for line in text.splitlines() if line.startswith("## "))
+    titles = [line[3:].strip() for line in text.splitlines() if line.startswith("## ")]
+    needle = first.upper()
+    hits = [t for t in titles if needle.lower() in t.lower()]
+    picked = docs_read("dataset", section=needle)
+    if len(hits) == 1:
+        assert picked.startswith(f"## {first}")
+    else:
+        assert json.loads(picked)["error"]["details"]["headings"] == hits
+    miss = json.loads(docs_read("dataset", section="no such heading xyz"))
+    assert miss["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert miss["error"]["details"]["field"] == "section"
+    assert first in miss["error"]["details"]["headings"]
+
+
+def test_section_without_topic_reads_the_core():
+    core = resources.output_format_reference()
+    first = next(line[3:].strip() for line in core.splitlines() if line.startswith("## "))
+    assert docs_read(section=first).startswith(f"## {first}")
+
+
+def test_section_does_not_set_the_seen_flag():
+    session_state.session.output_format_seen = False
+    docs_read(outline=True)
+    assert session_state.session.output_format_seen is False
