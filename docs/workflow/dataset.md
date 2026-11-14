@@ -42,10 +42,13 @@ flowchart TD
 
 `all_files=True` のときは、一覧の後に **raw の取得時刻**の節を足す（`metabolomix/rawmeta/`。
 スペクトルは解さず、ファイルの見出しのメタデータだけを読む: `.wiff` の OLE の時刻・mzML の
-`startTimeStamp`・Thermo `.raw` の見出し・Bruker `.d` の `analysis.tdf` / `analysis.sqlite`）。
+`startTimeStamp`・Thermo `.raw` の見出し・Bruker `.d` の `analysis.tdf` / `analysis.sqlite`・Agilent `.d` の
+`AcqData/Contents.xml` の `AcquiredTime`。`.wiff2` などは読めず、理由を出す）。
 raw ごとの取得時刻と順（読めないものは順が空で、理由を出す）、40 分を超える間隔の数を返し、
 フォルダに `sample-manifest.tsv` があればその群（生体試料の行）と取得順の重なり
-（`complete` / `partial` / `independent` / `unknown`）を群の組ごとに返す。
+（`complete` / `partial` / `independent` / `unknown`）を群の組ごとに返す。`independent` かどうかは、取得の時刻を
+40 分を超える間隔で区切った取得のまとまり（`acquisition_sessions`。群の無い QC も間を埋める）ごとに見る——暦の日付
+（UTC）で区切ると、UTC+9 の朝 9 時や夜をまたぐ 1 本の取得が 2 つに割れる。
 
 1. metabolomix/tools/dataset.py  list_data_files()
 2. └─ metabolomix/core/path_resolvers.py  list_data_files()
@@ -55,6 +58,7 @@ raw ごとの取得時刻と順（読めないものは順が空で、理由を�
 6.    └─ metabolomix/rawmeta/acquisition.py  gaps_over()
 7.    └─ metabolomix/tools/dataset.py  _sheet_groups()
 8.    └─ metabolomix/rawmeta/acquisition.py  group_overlap()
+9.       └─ metabolomix/rawmeta/acquisition.py  acquisition_sessions()
 
 ## load_dataset
 

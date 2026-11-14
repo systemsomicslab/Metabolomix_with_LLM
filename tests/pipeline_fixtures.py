@@ -728,7 +728,7 @@ class PipelineHarness:
 
     def console_run_dir(self, run, *, attempt: int | None = None,
                         polarity: str = "negative") -> Path:
-        """pipelineが所有するConsole job のrun_dir（`_CONSOLE_RUN_SUBDIR`規約）。
+        """pipelineが所有するConsole job のrun_dir（`store.console_attempt_dir`の規約）。
 
         Console実行はattemptごとに別ディレクトリ（`console/attempt-NNNN/`）を
         持つ——`rerun_upstream=True`が前回の終了証跡・ログ・復旧用スナップ

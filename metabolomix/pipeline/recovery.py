@@ -8,7 +8,9 @@
    どう転んでも（生存・消失・判定不能）ファイルには一切触れない。極性ごとの単位の
    状態（`units`）と、受領があればその要約（`receipt`: 解析フォルダの場所と `next`）を
    添える。走っている工程が待っていれば（機械全体で 1 本の Console の順番待ち）`waiting` に
-   工程ごとの待ちの状態を出す。失敗・取消で終わった工程があれば `errors` に工程ごとの誤りの
+   工程ごとの待ちの状態を出す。worker が居ないと観測できたとき（`worker_missing`）の待ちの記録は
+   もう待っていないので `waiting` に出さず、`interrupted_while_waiting`（中断の時点の待ちの状態）に
+   出す。Console をまだ起こしていない単位（`_console_never_started`）は `recovery_hint` に名前を挙げる。失敗・取消で終わった工程があれば `errors` に工程ごとの誤りの
    要約（`receipt.stage_error_summary`。Console が落ちた見立ての `cause` と `suspect_files` を
    含む）を出す。旧 v1 の run も読め、`legacy: true` と注意 1 行を添える。
 2. **`request_cancel`**: 協調的な取消フラグ（`engine.cancel_request_path`が指す小さな
@@ -24,7 +26,10 @@
    b. 監視を失ったまま稼働中のConsoleがどれかの単位にあれば`EXECUTION_UNRESOLVED`。
    c. `rerun_upstream`が無いのに、Console の状態が分からない単位（upstream が
       `running` のまま）がある、または進められる単位が 1 つも無い（全単位が失敗）なら
-      `UPSTREAM_RERUN_REQUIRED`（自動再試行はしない）。失敗した単位があっても他の単位を
+      `UPSTREAM_RERUN_REQUIRED`（自動再試行はしない）。ただし worker が居ないと観測でき、
+      Console の順番待ちのまま止まって Console をまだ起こしていない単位（`_console_never_started`）は
+      状態が分かっているので数えず、`upstream` と `validate_outputs` を `pending` へ戻して
+      `rerun_upstream` なしで最初の Console から続ける（`console_not_started_units` で知らせる）。失敗した単位があっても他の単位を
       進められるなら止めず、失敗した単位はそのまま（`not_retried_units` で知らせる）。
    d. `rerun_upstream=True` は upstream が `succeeded` でない単位の 3 工程を `pending` へ
       戻す。成功した単位は戻さない（Console を再起動しない）。
@@ -51,6 +56,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from metabolomix.console import execution as console_execution
+from metabolomix.console import job_manager
 from metabolomix.console import method_file as method_file_mod
 from metabolomix.core.atomic_io import DomainError, atomic_write_json, canonical_hash
 from metabolomix.core.process_control import same_process
@@ -133,6 +139,28 @@ def _worker_health(record: dict) -> str:
     return "ok" if alive else "worker_missing"
 
 
+def _console_never_started(pipeline_root: Path, record: dict, polarity: str) -> bool:
+    """単位の `upstream` が Console の順番待ち（`waiting.reason == "console_slot"`）のまま止まり、
+    Console をまだ起こしていないか（読むだけ）。
+
+    `service._run_console_unit` は順番が来てから今の attempt の実行フォルダに `analysis-job.json` を作り、
+    その後で Console を起こす。だから job が無ければ Console は起きていない。`console_job_path` は
+    Console の終了後にしか記録されないので、ここでは使えない（走っている間はいつも空）。worker が
+    生きているかは呼び出し側が見る（生きていれば本当に待っている最中）。
+    """
+    stage = (record.get("stages") or {}).get(store.unit_stage_id("upstream", polarity)) or {}
+    waiting = stage.get("waiting")
+    if (stage.get("status") != "running" or not isinstance(waiting, dict)
+            or waiting.get("reason") != "console_slot"):
+        return False
+    unit = store.run_units(record).get(polarity) or {}
+    if (unit.get("upstream") or {}).get("console_job_path"):
+        return False
+    unit_root = Path(pipeline_root) / (unit.get("unit_root") or polarity)
+    job = store.console_attempt_dir(unit_root, stage.get("attempt")) / job_manager.JOB_FILENAME
+    return not job.exists()
+
+
 def _receipt_summary(pipeline_root: Path, record: dict) -> dict | None:
     """受領の要約（解析フォルダの場所・照合した `.arf`・`next`）。受領が無ければ None。"""
     data = receipt_mod.read_receipt(pipeline_root, record)
@@ -183,7 +211,10 @@ def read_status(path: Path, *, include_details: bool = False) -> dict:
                for stage_id, stage in (record.get("stages") or {}).items()
                if isinstance(stage, dict) and stage.get("status") == "running"
                and stage.get("waiting")}
-    if waiting:
+    if waiting and observed_health == "worker_missing":
+        # 待っていた worker はもう居ない。記録に残った待ちは中断の時点のもので、今は何も待っていない
+        result["interrupted_while_waiting"] = waiting
+    elif waiting:
         result["waiting"] = waiting
     errors = _stage_errors(record)
     if errors:
@@ -201,6 +232,15 @@ def read_status(path: Path, *, include_details: bool = False) -> dict:
                     else "SUPERVISION_UNKNOWN",
             "message": "workerの生存を確認できません。prepare_resumeで再開してください。",
         }
+        not_started = (sorted(p for p in store.run_units(record)
+                              if _console_never_started(pipeline_root, record, p))
+                       if observed_health == "worker_missing" and not store.is_legacy(record) else [])
+        if not_started:
+            result["recovery_hint"]["console_not_started_units"] = not_started
+            result["recovery_hint"]["message"] = (
+                f"worker が居ません。極性 {', '.join(not_started)} は Console の順番待ちの間に止まり、Console を"
+                "まだ起こしていません。pipeline_resume で再開すれば rerun_upstream なしで最初の Console から"
+                "続きます。")
     if include_details:
         result["record"] = _without_library_location(record)
     return result
@@ -450,7 +490,8 @@ def _clear_cancel_request(pipeline_root: Path, *, prior_status: str,
 
 def _resume_receipt(record: dict, *, reused: bool, reset_stage_ids: list | None = None,
                     not_retried_units: list | None = None,
-                    held_units: list | None = None) -> dict:
+                    held_units: list | None = None,
+                    not_started_units: list | None = None) -> dict:
     out = {
         "pipeline_id": record["identity"]["pipeline_id"],
         "status": record["status"],
@@ -462,6 +503,9 @@ def _resume_receipt(record: dict, *, reused: bool, reset_stage_ids: list | None 
         out["not_retried_units"] = sorted(not_retried_units)
         out["hint"] = ("失敗した極性の Console は自動ではやり直しません。"
                        "やり直すなら rerun_upstream=true で再開してください。")
+    if not_started_units:
+        # 順番待ちの間に worker が消え、Console をまだ起こしていなかった単位（やり直しではなく 1 回目）
+        out["console_not_started_units"] = sorted(not_started_units)
     if held_units:
         # rerun_upstream=true でも、生きている worker が回している単位は戻さない。黙って
         # reset_stage_ids から消えるだけだと「やり直しが効かなかった」と読まれる。
@@ -528,9 +572,14 @@ def prepare_resume(path: Path, *, updates: dict | None = None,
                  if any((record["stages"].get(store.unit_stage_id(h, p)) or {}).get("status")
                         == "running" for h in store.UNIT_HANDLERS)}
                 if live_worker else set())
+        # worker が居ないと観測でき、Console の順番待ちのまま止まった単位は、Console を起こしていない
+        # ことが分かっている（状態不明ではない）。やり直しの明示なしで最初の Console から続ける。
+        not_started = (sorted(p for p in units if p not in held
+                              and _console_never_started(pipeline_root, record, p))
+                       if worker_health in _RESUMABLE_RUNNING_HEALTH else [])
         if not rerun_upstream:
             unresolved = sorted(p for p, s in upstream_status.items()
-                                if s == "running" and p not in held)
+                                if s == "running" and p not in held and p not in not_started)
             if unresolved or all(s == "failed" for s in unit_states.values()):
                 raise DomainError(
                     "UPSTREAM_RERUN_REQUIRED", "上流の再実行を明示してください",
@@ -577,6 +626,9 @@ def prepare_resume(path: Path, *, updates: dict | None = None,
         for polarity in rerun_units:
             for handler in store.UNIT_HANDLERS:
                 reset_ids.add(store.unit_stage_id(handler, polarity))
+        for polarity in not_started:
+            if polarity not in rerun_units:   # 配置済みの入力（prepare_input）は e で確かめて使う
+                reset_ids.update(store.unit_stage_id(h, polarity) for h in ("upstream", "validate_outputs"))
         if reset_ids or request_changed or manifest_changed:
             reset_ids.add(engine.RECEIPT_STAGE_ID)
         for sid in reset_ids:
@@ -617,7 +669,8 @@ def prepare_resume(path: Path, *, updates: dict | None = None,
         saved = store.load_run(pipeline_root)
         return _resume_receipt(saved, reused=False, reset_stage_ids=sorted(reset_ids),
                                not_retried_units=not_retried,
-                               held_units=sorted(held) if rerun_upstream else None)
+                               held_units=sorted(held) if rerun_upstream else None,
+                               not_started_units=not_started)
 
     raise DomainError(
         "STATE_REVISION_CONFLICT",

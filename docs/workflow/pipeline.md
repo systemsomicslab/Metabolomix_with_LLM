@@ -189,7 +189,10 @@ v8 の要求を出すと、その run を再利用する(上書きしたメソ�
 単位ごとの状態(`units`)と、受領があればその要約(解析フォルダの場所・照合した `.arf`・
 次の呼び出し `load_dataset(pipeline_path=…, polarity=…)`)も返す。走っている工程が機械全体の
 Console の順番を待っていれば `waiting`(`{<stage_id>: {"reason": "console_slot", "since", "message",
-"holder": {"pipeline_id", "unit", "since"}}}`。工程の status は `running` のまま)を返す。失敗・取消で
+"holder": {"pipeline_id", "unit", "since"}}}`。工程の status は `running` のまま)を返す。待っていた worker が
+居ない(`worker_missing`)なら、記録に残った待ちは中断の時点のものなので `waiting` に出さず `interrupted_while_waiting`
+に出し、Console をまだ起こしていない単位(`recovery._console_never_started`: 待ちの理由が `console_slot` で、今の
+attempt の `analysis-job.json` が無い)を `recovery_hint.console_not_started_units` に挙げる。失敗・取消で
 終わった工程があれば `errors`(`{<stage_id>: {"code", "message", "cause"?, "suspect_files"?, "n_suspect_files"?}}`。
 手順6-7)を返す——`stage_statuses` は状態の文字列だけなので、これが無いと Console が落ちた原因と疑わしい
 ファイルは `include_details=true` の記録全体を引かないと見えない(1 極性の run は受領も書かれない)。要約は
@@ -234,7 +237,11 @@ Console の順番を待っていれば `waiting`(`{<stage_id>: {"reason": "conso
 Console を捨てない——やり直しの対象にも、`UPSTREAM_RERUN_REQUIRED` の理由にも数えない
 (`rerun_upstream=True` で外した単位は戻り値の `held_units` と `hint` で言う)
 (稼働中の Console の最中に届いたシートの訂正は受け付け、受領だけを戻す)。worker が
-居なくなった run の `running` は、今までどおり `rerun_upstream=true` を求める。
+居なくなった run の `running` は、今までどおり `rerun_upstream=true` を求める。ただし Console の順番待ちの間に
+worker が消え、Console をまだ起こしていない単位(`_console_never_started`。job は順番が来てから Console を起こす前に
+`store.console_attempt_dir` の下へ書くので、無ければ起きていない。`console_job_path` は Console の終了後にしか
+記録されないので使えない)は状態が分かっているので数えず、`upstream` と `validate_outputs` だけを戻して
+`rerun_upstream` なしで最初の Console から続ける(戻り値の `console_not_started_units`)。
 
 ## pipeline_cancel
 
@@ -258,25 +265,37 @@ Console を捨てない——やり直しの対象にも、`UPSTREAM_RERUN_REQUI
 1. metabolomix/tools/sample_sheet_tools.py  pipeline_sample_sheet()
 2. └─ metabolomix/pipeline/inputs.py  list_primary_names()
 3. └─ metabolomix/rawmeta/sample_table.py  build_sample_sheet()
-4.    └─ metabolomix/rawmeta/sample_table.py  _load_sample_table()
-5.       └─ metabolomix/rawmeta/sample_table.py  read_mwtab_samples()
-6.       └─ metabolomix/rawmeta/sample_table.py  read_table()
-7.    └─ metabolomix/rawmeta/sample_table.py  resolve_column()
-8.    └─ metabolomix/rawmeta/sample_table.py  _assay_map()
-9.    └─ metabolomix/rawmeta/sample_table.py  factor_group()
-10.    └─ metabolomix/rawmeta/acquisition.py  acquisition_order()
-11.       └─ metabolomix/rawmeta/acquisition.py  read_acquisition_times()
-12. └─ metabolomix/analysis/sample_manifest.py  parse_manifest()
-13. └─ metabolomix/core/atomic_io.py  atomic_write_bytes()
-14. └─ metabolomix/rawmeta/acquisition.py  gaps_over()
+4.    └─ metabolomix/rawmeta/sample_table.py  _sheet_factor_names()
+5.    └─ metabolomix/rawmeta/sample_table.py  _load_sample_table()
+6.       └─ metabolomix/rawmeta/sample_table.py  read_mwtab_samples()
+7.       └─ metabolomix/rawmeta/sample_table.py  read_table()
+8.    └─ metabolomix/rawmeta/sample_table.py  resolve_column()
+9.    └─ metabolomix/rawmeta/sample_table.py  _table_rows()
+10.    └─ metabolomix/rawmeta/sample_table.py  _assay_map()
+11.    └─ metabolomix/rawmeta/sample_table.py  _file_index()
+12.    └─ metabolomix/rawmeta/sample_table.py  factor_group()
+13.    └─ [生体試料のどれも群が決まらないとき] metabolomix/rawmeta/sample_table.py  _unmatched_error()
+14.    └─ metabolomix/rawmeta/acquisition.py  acquisition_order()
+15.       └─ metabolomix/rawmeta/acquisition.py  read_acquisition_times()
+16. └─ metabolomix/analysis/sample_manifest.py  parse_manifest()
+17. └─ metabolomix/core/atomic_io.py  atomic_write_bytes()
+18. └─ metabolomix/tools/sample_sheet_tools.py  _notes()
+19. └─ metabolomix/rawmeta/acquisition.py  gaps_over()
 
 raw の一覧は受付(`pipeline_plan` / `pipeline_run`)と同じ `list_primary_names` で取り、各 raw を試料の表の
-行へ(ISA は assay 表の Raw Spectral Data File、mwTab は SUBJECT_SAMPLE_FACTORS の RAW_FILE_NAME、どちらも無ければ
-試料名と raw の語幹で)対応づける。群は選んだ因子の値の組(`factor_group`)、注入順は raw の取得時刻の順
-(`acquisition_order`。スペクトルは読まず、ファイルの見出しのメタデータだけ)で、1 つでも読めない raw が
-あれば注入順を空にして、読めなかったファイル名を返す(一部だけの順位を注入順と呼ばない)。全部読めたときは
-schema の行の直後に宣言の行 `# injection_order_source = raw_acquisition_time` を書き、`parse_manifest` が注入順の
-出所の記録に `derived_from` を足す(試料の表と統計の出所が `raw_acquisition_time` になる)。試料の表が UTF-8 で
+行へ(ISA は assay 表の Raw Spectral Data File と Derived Spectral Data File、mwTab は SUBJECT_SAMPLE_FACTORS の
+RAW_FILE_NAME、どちらも無ければ試料名と raw の語幹で)対応づける。表のファイル名と合わなければ幹で引く
+(`_file_index`。名前・幹が別々の試料に当たるファイルは対応に入れない。ISA も mwTab も同じ)。同じ Sample Name の
+行どうしで因子(と役割を決める列)の値が食い違う試料は行を決められない(`_table_rows`)。群は選んだ因子の値の組
+(`factor_group`)で、群の決まらない生体試料は群 `unassigned`・`include=false`(統計に入れない)。生体試料のどれも群が
+決まらなければ書かずに `SAMPLE_TABLE_INVALID`(`_unmatched_error`)。因子の列名がシートの既知の列と完全に同じなら
+`factor_<名>` に改める(`_sheet_factor_names`)。注入順は raw の取得時刻の順(`acquisition_order`。スペクトルは
+読まず、ファイルの見出しのメタデータだけ)で、読めない raw があっても読めた raw の順位は残し、読めない raw の
+注入順だけを空にして読めなかったファイル名と理由を返す。1 つでも読めれば schema の行の直後に宣言の行
+`# injection_order_source = raw_acquisition_time` を書き、`parse_manifest` が注入順の出所の記録に `derived_from` を
+足す(試料の表と統計の出所が `raw_acquisition_time` になる)。一部だけ空のときは空の行にも `derived_from` を付け
+(`sample_manifest.sheet_order_unknown`)、`_merge_row` と統計エンジンはその空欄を `.mddata`・mzTab-M の番号で
+埋めない(付け方の違う順を混ぜない)。試料の表が UTF-8 で
 読めなければ `SAMPLE_TABLE_INVALID`。書く前に
 受付と同じ厳密な読み手(`parse_manifest`)へ一時ファイルで通し、通ったものだけを原子的に書く。既にあれば
 `overwrite=True` が無い限り `SAMPLE_SHEET_EXISTS` で止まる。

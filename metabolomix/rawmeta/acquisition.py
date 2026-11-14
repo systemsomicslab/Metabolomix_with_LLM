@@ -6,15 +6,24 @@
   （ファイルシステムの更新時刻は取得ではなく複製・ダウンロードの時刻なので使わない）。
 - Thermo の `.raw`（ファイル）は先頭のファイルヘッダ（0xA101・UTF-16 の `Finnigan`）のオフセット 40 の FILETIME
   （RawFileReader の `FileHeader.CreationDate` と一致することを reanalysis-study で確かめた値）。
-- Bruker の `.d`（フォルダ）は `analysis.tdf`（表 GlobalMetadata）か `analysis.sqlite`（表 Properties）の鍵
-  `AcquisitionDateTime`（読み取り専用・immutable で開く）。
+- `.d`（フォルダ）は Bruker と Agilent を見分ける。Bruker は `analysis.tdf`（表 GlobalMetadata）か
+  `analysis.sqlite`（表 Properties）の鍵 `AcquisitionDateTime`（読み取り専用・immutable で開く）。どちらも無ければ
+  Agilent（MassHunter）の `AcqData/Contents.xml` の `AcquiredTime`（時刻帯つきの ISO 8601。小数秒は 7 桁まで）。
+  Agilent の終了時刻は読まない（`end_utc` は None）。
 - mzML は `<run startTimeStamp>`。
 
-ほかの形式（Waters の `.raw` フォルダ・`.wiff2`・`.abf` など）は止まらずに `unreadable` とする。
+ほかの形式（Waters の `.raw` フォルダ・SCIEX OS の `.wiff2`・`.abf` など）は止まらずに `unreadable` とし、
+形式ごとに何が無かったかを `error` に書く。`.wiff2` は中身の形式が公開されておらず、stdlib で読める取得時刻の欄が
+見つからない（mzML に変換すれば `startTimeStamp` を読む）。
 reanalysis-study の `reanalysis/acquisition.py` から移した（判定の数字は道具が出す）。
+
+群と取得順の重なり（`group_overlap`）は、取得の時刻を 40 分（`GAP_MINUTES`）を超える間隔で区切った
+取得のまとまり（`acquisition_sessions`）ごとに見る。暦の日付（UTC でも現地でも）で区切ると、夜をまたぐ
+1 本の連続した取得や、UTC+9 の朝 9 時をまたぐ取得が 2 つに割れる。
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 import struct
 import xml.etree.ElementTree as ET
@@ -24,7 +33,7 @@ from itertools import combinations
 from pathlib import Path
 
 __all__ = ["GAP_MINUTES", "read_acquisition_times", "acquisition_order", "gaps_over",
-           "group_overlap"]
+           "acquisition_sessions", "group_overlap"]
 
 EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
 OLE_MAGIC = bytes.fromhex("D0CF11E0A1B11AE1")
@@ -121,8 +130,40 @@ def _read_thermo_raw(path: Path) -> tuple[datetime | None, datetime | None]:
     return _filetime(struct.unpack_from("<Q", hdr, 40)[0]), None
 
 
-def _read_bruker_d(path: Path) -> tuple[str, datetime]:
-    """.d フォルダの AcquisitionDateTime。(source, 開始時刻)。.tdf を先に見る。"""
+#: Agilent の `AcquiredTime` の形。`Contents.xml` の注記どおり時が 1 桁のことがあり、小数秒は 7 桁まで出る
+#: （`2024-02-07T17:18:28.2110274+09:00`）。
+_AGILENT_TIME = re.compile(
+    r"(\d{4})-(\d{2})-(\d{2})T(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?")
+
+
+def _agilent_time(text: str) -> datetime:
+    """`AcquiredTime` の値を UTC の時刻にする（時刻帯が無ければ UTC とみなす。小数秒は 6 桁で切る）。"""
+    m = _AGILENT_TIME.fullmatch(text.strip())
+    if not m:
+        raise ValueError(f"Agilent の AcquiredTime の形が読めない: {text.strip()[:40]!r}")
+    year, month, day, hour, minute, second, frac, zone = m.groups()
+    tz = timezone.utc
+    if zone and zone != "Z":
+        digits = zone[1:].replace(":", "")
+        offset = timedelta(hours=int(digits[:2]), minutes=int(digits[2:]))
+        tz = timezone(-offset if zone[0] == "-" else offset)
+    t = datetime(int(year), int(month), int(day), int(hour), int(minute), int(second),
+                 int((frac or "0")[:6].ljust(6, "0")), tzinfo=tz)
+    return t.astimezone(timezone.utc)
+
+
+def _read_agilent_d(contents: Path) -> datetime:
+    """Agilent（MassHunter）の `AcqData/Contents.xml` の `AcquiredTime`（名前空間は問わない）。"""
+    root = ET.parse(contents).getroot()
+    stamp = next(((el.text or "").strip() for el in root.iter()
+                  if el.tag.rsplit("}", 1)[-1] == "AcquiredTime"), "")
+    if not stamp:
+        raise ValueError("Agilent の AcqData/Contents.xml に AcquiredTime が無い")
+    return _agilent_time(stamp)
+
+
+def _read_d_folder(path: Path) -> tuple[str, datetime]:
+    """.d フォルダの取得の開始時刻。(source, 開始)。Bruker（.tdf を先に）→ Agilent の順に見る。"""
     for db, table, source in (("analysis.tdf", "GlobalMetadata", "bruker_tdf"),
                               ("analysis.sqlite", "Properties", "bruker_baf")):
         f = path / db
@@ -134,29 +175,36 @@ def _read_bruker_d(path: Path) -> tuple[str, datetime]:
         finally:
             con.close()
         if not row or not row[0]:
-            raise ValueError(f"{db} に AcquisitionDateTime が無い")
+            raise ValueError(f"Bruker の {db} に AcquisitionDateTime が無い")
         t = datetime.fromisoformat(str(row[0]))
         if t.tzinfo is None:  # 時刻帯が無ければ UTC とみなす
             t = t.replace(tzinfo=timezone.utc)
         return source, t.astimezone(timezone.utc)
-    raise ValueError(".d に analysis.tdf も analysis.sqlite も無い")
+    contents = path / "AcqData" / "Contents.xml"
+    if contents.is_file():
+        return "agilent_acqdata", _read_agilent_d(contents)
+    raise ValueError(".d に Bruker の analysis.tdf / analysis.sqlite も Agilent の AcqData/Contents.xml も無い")
 
 
 def read_acquisition_times(path: Path) -> dict:
     """1 つの raw の取得時刻。`{"start_utc", "end_utc", "source", "error"}`。
 
-    `source` は `wiff_ole` / `mzml` / `thermo_raw` / `bruker_tdf` / `bruker_baf` / `unreadable`。
-    読めないときは例外にせず `unreadable` と理由（`error`）を返す。時刻は UTC の ISO 8601。
+    `source` は `wiff_ole` / `mzml` / `thermo_raw` / `bruker_tdf` / `bruker_baf` / `agilent_acqdata` /
+    `unreadable`。読めないときは例外にせず `unreadable` と理由（`error`。形式ごとに何が無かったか）を返す。
+    時刻は UTC の ISO 8601。
     """
     path = Path(path)
     unreadable = {"start_utc": None, "end_utc": None, "source": _UNREADABLE}
     suffix = path.suffix.lower()
     if suffix == ".d" and path.is_dir():
         try:
-            source, start = _read_bruker_d(path)
-        except (OSError, ValueError, sqlite3.Error) as exc:
+            source, start = _read_d_folder(path)
+        except (OSError, ValueError, sqlite3.Error, ET.ParseError) as exc:
             return {**unreadable, "error": str(exc) or type(exc).__name__}
         return {"start_utc": start.isoformat(), "end_utc": None, "source": source, "error": None}
+    if suffix == ".wiff2" and path.is_file():
+        return {**unreadable, "error": ("SCIEX OS の .wiff2 は stdlib で取得時刻を読めない形式"
+                                        "（mzML に変換すれば startTimeStamp を読む）")}
     if suffix == ".raw" and path.is_file():
         try:
             start, _ = _read_thermo_raw(path)
@@ -201,45 +249,75 @@ def gaps_over(rows: list[dict], minutes: float = GAP_MINUTES) -> int:
     return sum(1 for a, b in zip(starts, starts[1:]) if (b - a) > timedelta(minutes=minutes))
 
 
-def _judge_pair(ranks: dict[str, list[int]], dates: dict[str, Counter], a: str, b: str) -> str:
-    """complete: 2 群の順位の範囲が重ならない。independent: 重なり、かつ取得日（UTC）ごとに両群が居る。
-    それ以外は partial。"""
+def acquisition_sessions(rows: list[dict], minutes: float = GAP_MINUTES) -> dict[str, int]:
+    """取得のまとまりの番号（1 始まり）。ファイル名 → 番号。
+
+    読めた時刻を順に並べ、隣どうしの間隔が `minutes` を超えるところで区切る（`gaps_over` と同じ規則）。
+    群の無いファイル（QC など）も並べるので、QC が間を埋める連続した取得は 1 つのまとまりになる。
+    暦の日付で区切らないので、夜をまたぐ取得や UTC の日付の境目（UTC+9 なら朝 9 時）で割れない。
+    時刻の読めないファイルは入らない。
+    """
+    timed = sorted(((datetime.fromisoformat(r["start_utc"]), r["file"]) for r in rows if r.get("start_utc")))
+    out: dict[str, int] = {}
+    session, previous = 0, None
+    for t, name in timed:
+        if previous is None or (t - previous) > timedelta(minutes=minutes):
+            session += 1
+        out[name] = session
+        previous = t
+    return out
+
+
+def _judge_pair(ranks: dict[str, list[int]], sessions: dict[int, Counter], a: str, b: str) -> str:
+    """complete: 2 群の順位の範囲が重ならない。independent: 重なり、かつどちらかの群がいる取得のまとまり
+    （`acquisition_sessions`）のすべてに両群がいる。それ以外は partial。"""
     ra, rb = ranks[a], ranks[b]
     if max(ra) < min(rb) or max(rb) < min(ra):
         return "complete"
-    days = [d for d, c in dates.items() if c[a] or c[b]]
-    return "independent" if all(dates[d][a] and dates[d][b] for d in days) else "partial"
+    used = [k for k, c in sessions.items() if c[a] or c[b]]
+    return "independent" if all(sessions[k][a] and sessions[k][b] for k in used) else "partial"
 
 
 def group_overlap(rows: list[dict], group_of: dict[str, str]) -> dict:
     """群（`group_of`: ファイル名 → 群）と取得の順の重なりを、群の組ごとに判定する。
 
     組ごとの `overlap`: `complete`（2 群の取得順の範囲が重ならない＝取得順と群が完全に交絡）/
-    `independent`（重なり、かつどちらかの群がいる取得日のすべてに両群がいる）/ `partial`（それ以外）/
+    `independent`（重なり、かつどちらかの群がいる取得のまとまりのすべてに両群がいる。まとまりは
+    `GAP_MINUTES` 分を超える間隔で区切る: `acquisition_sessions`）/ `partial`（それ以外）/
     `unknown`（群のある試料に取得時刻の読めないものがある）。群の無いファイル（QC など）は判定に
-    使わない（順位は全ファイルの中の順のまま）。全体の `overlap` は組の判定が 1 種類ならそれ、
-    混ざれば `partial`、組が無ければ `unknown`。
+    使わない（順位は全ファイルの中の順のまま。まとまりの区切りには使う）。全体の `overlap` は組の判定が
+    1 種類ならそれ、混ざれば `partial`、組が無ければ `unknown`。`by_session` はまとまりごとの最初と最後の
+    取得時刻（UTC）と群ごとの件数。
     """
     grouped = [r for r in rows if group_of.get(r["file"])]
     unreadable = sorted(r["file"] for r in grouped if r["rank"] is None)
+    session_of = acquisition_sessions(rows)
     ranks: dict[str, list[int]] = {}
-    dates: dict[str, Counter] = {}
+    sessions: dict[int, Counter] = {}
     for r in grouped:
         if r["rank"] is None:
             continue
         g = group_of[r["file"]]
         ranks.setdefault(g, []).append(r["rank"])
-        dates.setdefault(r["start_utc"][:10], Counter())[g] += 1
+        sessions.setdefault(session_of[r["file"]], Counter())[g] += 1
     groups = sorted({group_of[r["file"]] for r in grouped})
     pairs = list(combinations(groups, 2))
     if unreadable:
         comparisons = [{"groups": [a, b], "overlap": "unknown"} for a, b in pairs]
     else:
-        comparisons = [{"groups": [a, b], "overlap": _judge_pair(ranks, dates, a, b)}
+        comparisons = [{"groups": [a, b], "overlap": _judge_pair(ranks, sessions, a, b)}
                        for a, b in pairs]
     states = {c["overlap"] for c in comparisons}
     overall = (next(iter(states)) if len(states) == 1 else "partial") if states else "unknown"
+    bounds: dict[int, list[str]] = {}
+    for r in rows:
+        k = session_of.get(r["file"])
+        if k is not None:
+            bounds.setdefault(k, []).append(r["start_utc"])
+    by_session = [{"session": k, "first_utc": min(bounds[k], key=datetime.fromisoformat),
+                   "last_utc": max(bounds[k], key=datetime.fromisoformat),
+                   "groups": dict(sorted(c.items()))}
+                  for k, c in sorted(sessions.items())]
     return {"overlap": overall, "comparisons": comparisons,
             "group_rank_ranges": {g: [min(v), max(v)] for g, v in sorted(ranks.items())},
-            "by_date": {d: dict(sorted(c.items())) for d, c in sorted(dates.items())},
-            "unreadable_grouped": unreadable}
+            "by_session": by_session, "unreadable_grouped": unreadable}

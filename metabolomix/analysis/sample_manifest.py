@@ -194,6 +194,9 @@ def parse_manifest(path: Path, *, source_root: Path,
     schema の行と見出しの間には宣言の行 `# injection_order_source = <raw_acquisition_time | filename |
     sheet>` を置ける（`ORDER_SOURCE_DECLARATION`）。`sheet` 以外なら、値のある注入順の出所の記録に
     `derived_from` を足す（`source` は `user_manifest` のまま。出所の名前は `order_provenance_label`）。
+    宣言のあるシートが一部の行にだけ注入順を持つ（`pipeline_sample_sheet` が取得時刻の読めない raw を空にした）
+    ときは、空の行の出所の記録にも `derived_from` を足す: その作り方では順が分からなかった印で、`.mddata`・
+    mzTab-M の番号で埋めない（`sheet_order_unknown`。番号の付け方が違う値を混ぜない）。すべて空なら印は付けない。
     """
     path = Path(path)
     source_root = Path(source_root).resolve()
@@ -378,6 +381,12 @@ def parse_manifest(path: Path, *, source_root: Path,
             {"missing_sources": missing},
         )
 
+    if order_origin is not None and any(row["injection_order"] is not None for row in rows):
+        # 宣言した作り方で一部の行だけ順が付いたシート: 空の行は「その作り方では分からない」（別の番号で埋めない）
+        for row in rows:
+            if row["injection_order"] is None:
+                row["provenance"]["injection_order"]["derived_from"] = order_origin
+
     # batch内（blank=未確認batchも1グループとして扱う）の注入順重複を拒否する。
     by_batch: dict[str | None, list[int]] = {}
     for row in rows:
@@ -482,6 +491,18 @@ def injection_order_source_label(source) -> str:
     if source is None:
         return "sheet"
     return INJECTION_ORDER_SOURCES.get(str(source), str(source))
+
+
+def sheet_order_unknown(row) -> bool:
+    """試料の表の行の注入順が「宣言した作り方（取得時刻・ファイル名）では分からない」空欄か。
+
+    `parse_manifest` が、一部の行にだけ注入順を持つ宣言つきのシートの空の行に付ける印（値が無く、出所の記録に
+    `derived_from` がある）。この空欄は `.mddata`・mzTab-M の番号で埋めない（`_merge_row` と統計エンジンの
+    試料の表）——シートの順位と MS-DIAL の番号は付け方が違い、混ぜるとドリフト補正・交絡の判定が狂う。
+    """
+    row = row or {}
+    prov = (row.get("provenance") or {}).get("injection_order") or {}
+    return row.get("injection_order") is None and bool(prov.get("derived_from"))
 
 
 def order_provenance_label(prov) -> str:
@@ -658,7 +679,8 @@ def _merge_row(ds, index: int, name: str, row: dict) -> dict:
     """明示シートの1行へ、埋まっていない列だけdataset由来の候補で補う。
 
     バッチと注入順の空欄は `.mddata` の宣言（解析フォルダ）→ mzTab-M の MTD（未確認）の順に埋め、値と出所を
-    行に残す（統計エンジンも同じ順に読むので、試料の表に見える値と統計が使う値が食い違わない）。
+    行に残す（統計エンジンも同じ順に読むので、試料の表に見える値と統計が使う値が食い違わない）。ただし
+    宣言つきのシートが「その作り方では分からない」と印を付けた注入順の空欄（`sheet_order_unknown`）は埋めない。
     明示値と違う候補は上書きせず ``conflicts`` に残す。
     """
     values = dict(row)
@@ -673,6 +695,8 @@ def _merge_row(ds, index: int, name: str, row: dict) -> dict:
 
     md_batch, md_order = _mddata_batch_and_order(ds, index)
     mz_batch, mz_order = _mztab_batch_and_order(ds, index)
+    if sheet_order_unknown(row):
+        md_order = mz_order = None    # シートの作り方では分からない注入順は、別の番号で埋めない
     declared = {"source": "msdial_mddata", "confidence": "declared"}
     for field, md_value, mz_value in (("batch", md_batch, mz_batch),
                                       ("injection_order", md_order, mz_order)):
@@ -867,8 +891,10 @@ def pp_inputs_from_rows(sample_names: list[str], rows: list[dict]) -> tuple[dict
             "batch": row.get("batch"),
             "batch_source": batch_prov.get("source"),
             "run_order": row.get("injection_order"),
-            # シートが宣言で作り方を書いた注入順（raw の取得時刻・ファイル名）はその名前を出所にする
-            "run_order_source": order_prov.get("derived_from") or order_prov.get("source"),
+            # シートが宣言で作り方を書いた注入順（raw の取得時刻・ファイル名）はその名前を出所にする。値の無い
+            # 注入順に出所は無い（`sheet_order_unknown` の印の `derived_from` を出所と読ませない）
+            "run_order_source": ((order_prov.get("derived_from") or order_prov.get("source"))
+                                 if row.get("injection_order") is not None else None),
         }
         # 任意の列。シートが持ち、値があるときだけ載せる（B では持つだけで統計には使わない）。
         if row.get("subject_id") is not None:

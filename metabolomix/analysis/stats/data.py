@@ -144,11 +144,18 @@ def _role(value) -> str | None:
 
 
 def _order_and_source(row: dict, ms: dict, sm: dict, mz_order=None) -> tuple[float | None, str | None]:
-    """注入順と出所の名前。試料の表の行 → .mddata（msdial_samples）→ sample_meta → mzTab-M の MTD の順。"""
-    from metabolomix.analysis.sample_manifest import injection_order_source_label, order_provenance_label
+    """注入順と出所の名前。試料の表の行 → .mddata（msdial_samples）→ sample_meta → mzTab-M の MTD の順。
+
+    試料の表が「宣言した作り方（raw の取得時刻など）では分からない」と印を付けた空欄（`sheet_order_unknown`）は
+    不明のまま（None）にする: 表の順位と MS-DIAL の番号は付け方が違い、混ぜるとドリフト補正が順を取り違える。
+    """
+    from metabolomix.analysis.sample_manifest import (
+        injection_order_source_label, order_provenance_label, sheet_order_unknown)
     value = _float_or_none(row.get("injection_order"))
     if value is not None:
         return value, order_provenance_label((row.get("provenance") or {}).get("injection_order"))
+    if sheet_order_unknown(row):
+        return None, None
     value = _float_or_none(ms.get("injection_order"))
     if value is not None:
         return value, "mddata"
