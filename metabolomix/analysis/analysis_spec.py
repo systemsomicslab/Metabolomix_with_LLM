@@ -14,7 +14,9 @@ spec からパスの欄を除いて作り、入力のファイルは `input_fing
 入力はデータセットか外部の行列（TSV・MetaboLights の MAF・mwTab・xlsx。読み取りは
 `external_tables`）。`correlate` は報告とは別に、外部の表の値との Spearman の ρ を返す（特徴の対応は
 spec が渡す）。書いても効かない設定（`steps` に無い段の設定・`merge_split=false` や外部の行列での
-`features.alignment_qc`・ols でない検定の共変量）は誤りにせず、使わずに `notes` に書く。
+`features.alignment_qc`・ols でない検定の共変量）は誤りにせず、使わずに `notes` に書く。`correction=none` の
+`bh_population`・`thresholds.q`、`drift_correct` の無い spec の `injection_order`、共変量で調整する ols の無い spec の
+`covariates` も `notes` に書くが、前から正規化した spec に入っていたので残す（`rule_hash` を変えない。表は読まない）。
 """
 from __future__ import annotations
 
@@ -305,6 +307,14 @@ def _normalize_analysis(raw, index: int, covariate_names: set, notes: list[str])
     thresholds = _exact_keys(raw.get("thresholds", {}), {"p", "q", "fc"}, set(),
                              f"{label}.thresholds")
     correction = _choice(raw.get("correction", "bh"), ("bh", "none"), f"{label}.correction")
+    if correction == "none":
+        # 補正しないので q を計算しない（行の q は null）。書いた設定は正規化した spec に残す（rule_hash を変えない）
+        if "bh_population" in raw:
+            notes.append(f"{label}.bh_population は correction=none では効かず（q を計算しない）、使っていない")
+        if thresholds.get("q") is not None:
+            notes.append(f"{label}.thresholds.q は correction=none では q を計算しないので満たせず、"
+                         "meets_thresholds はどの行も false（p・fc を満たしても）。q で絞るなら correction=bh、"
+                         "そうでなければ thresholds.q を外す")
     return {
         "analysis_id": analysis_id,
         "matrix": recipe_matrix.normalize_recipe(raw.get("matrix"), notes=notes,
@@ -359,6 +369,16 @@ def _normalize_correlate(raw):
             "stage": _choice(raw.get("stage", "input"), ("input", "matrix"), "correlate.stage")}
 
 
+def _uses_injection_order(analyses: list[dict]) -> bool:
+    """注入順を使う解析（recipe の `steps` に `drift_correct`）があるか。注入順を使うのはその段だけ。"""
+    return any("drift_correct" in a["matrix"]["steps"] for a in analyses)
+
+
+def _uses_covariates(analyses: list[dict]) -> bool:
+    """共変量の表を使う解析（`test.kind=ols` で `test.covariates` が空でない）があるか。"""
+    return any(a["test"]["kind"] == "ols" and a["test"]["covariates"] for a in analyses)
+
+
 def normalize_spec(spec, *, notes: list[str] | None = None) -> dict:
     """spec を検証して既定を埋める。未知のキーは拒否する。
 
@@ -403,6 +423,12 @@ def normalize_spec(spec, *, notes: list[str] | None = None) -> dict:
         if any(a["bh_population"] == "annotated" for a in normalized_analyses):
             raise _fail("bh_population=annotated（SME のある特徴）はデータセットの入力でだけ使える",
                         field="analyses")
+    # 使う解析が無い表は読まない（`_load`）。書いた設定は正規化した spec に残す（rule_hash を変えない）
+    if spec.get("injection_order") is not None and not _uses_injection_order(normalized_analyses):
+        notes.append("injection_order は drift_correct を steps に持つ解析が無いので効かず、読んでいない")
+    if covariates is not None and not _uses_covariates(normalized_analyses):
+        notes.append("covariates は共変量で調整する解析（test.kind=ols で test.covariates のあるもの）が無いので"
+                     "効かず、読んでいない")
     out = {
         "schema": ANALYSIS_SCHEMA,
         "input": input_,
@@ -627,9 +653,10 @@ def _load(normalized: dict, ds) -> dict:
             else:
                 roles[name] = "sample"
 
+    # 使う解析が無い注入順・共変量の表は読まない（効かない設定で断らない。`normalize_spec` が notes に書く）
     order = None
     spec_order = normalized["injection_order"]
-    if spec_order is not None:
+    if spec_order is not None and _uses_injection_order(normalized["analyses"]):
         if spec_order["source"] == "metadata":
             order = {n: (metadata_rows or {}).get(n, {}).get("injection_order") for n in names}
         else:
@@ -646,7 +673,7 @@ def _load(normalized: dict, ds) -> dict:
                                   {"field": "injection_order"}) from exc
 
     covariates = None
-    if normalized["covariates"] is not None:
+    if normalized["covariates"] is not None and _uses_covariates(normalized["analyses"]):
         spec_cov = normalized["covariates"]
         columns, rows_, files["covariates"] = _read_tsv(spec_cov["path"], "covariates")
         _require_column(columns, spec_cov["sample_column"], "covariates")

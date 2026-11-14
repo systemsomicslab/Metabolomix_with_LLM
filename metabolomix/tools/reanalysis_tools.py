@@ -173,7 +173,9 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     （捨てた設定は正規化した spec と rule_hash に入らない）。
     plsda の交差検証と並べ替え検定は、同じ個体の単位（`design.block`、無ければ `subject_id`）をまとめて
     分割・入れ替える（`cv.group_by`・`permutation.scheme`）。
-    戻り値は解析ごとの要約（行は v1 と同じ規則: `output_path` に全量の JSON、無ければ TSV）。
+    戻り値は解析ごとの要約（行は v1 と同じ規則: `output_path` に全量の JSON、無ければ TSV）。compare と
+    composition の要約は交絡 `confounding`（`batch_status`・`by_contrast`）を持ち、composition の `warnings` には
+    内側の比較（絶対量・CLR）の注意（完全交絡など）もコードで重ねずに載る。
 
     v1（analysis-spec.v1）:
 
@@ -197,6 +199,9 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     p は小さい n・同順位・近似の裾〔1e-3 未満〕では並べ替えの p で、出し方は行の `p_method`）。
     書いても効かない設定（`steps` に無い段の設定・`merge_split=false` や外部の行列での
     `features.alignment_qc`・ols でない検定の共変量）は誤りにせず、使わずに `notes` に書く。
+    `correction=none` の `bh_population` と `thresholds.q`（q が null なので満たせず meets_thresholds は false）・
+    drift_correct の解析が無い spec の `injection_order`・共変量で調整する ols の無い spec の `covariates`
+    （この 2 つの TSV は読まない）も `notes` に書くが、spec と rule_hash には残す（hash は前と同じ）。
 
     返すのは数字と向き（`direction`）と閾値を機械的に当てた `meets_thresholds` だけで、
     再現したかの判定は返さない。結果には正規化した spec・`rule_hash`・`input_fingerprint`
@@ -1012,7 +1017,8 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     データ・試料の表・除外が変わっていなければ——を使い、無ければその場で探す。使った方は
     `merge_split.source` の `alignment_qc` / `last_alignment_qc` / `find_split_pairs`）、analysis_spec では
     spec の `features.merge_split` で決まる（spec だけで再現するので最後の結果は使わない）。
-    `merge_split=false` の `statistics.alignment_qc` など、効かない設定は誤りにせず `notes` に書く。
+    `merge_split=false` の `statistics.alignment_qc` など、効かない設定は誤りにせず `notes` に書く（analysis_spec で
+    選んだ解析が `correction=none` なら、q が無いので候補が出ないことも）。
     spec の `labels`（`{path, name, feature_column="feature_id", label_column="level",
     order=["A","B","C","D"]}`）は外部の印の TSV。行に `labels.<name>` の列（特徴ごとの最も強い
     水準、割れの組はどちらかの最も強い水準）と水準ごとの件数 `labels.counts`（全体と上位 20）を
@@ -1060,6 +1066,13 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
             run = analysis_spec.run_spec(source["analysis_spec"], ds, notes=run_notes)
             notes += [f"statistics.analysis_spec: {n}" for n in run_notes]
             analysis = next(a for a in run["analyses"] if a["analysis_id"] == source["analysis_id"])
+            chosen_spec = next(a for a in source["analysis_spec"]["analyses"]
+                               if a["analysis_id"] == source["analysis_id"])
+            if chosen_spec["correction"] == "none":
+                # 候補は q < q_max の行だけ。補正しない解析は q を持たないので、空の一覧は「該当なし」ではない
+                notes.append(f"statistics.analysis_id={source['analysis_id']} は correction=none なので q を計算せず"
+                             "（行の q は null）、q_max を満たす行が無い（候補の一覧はこの理由で空）。q で絞るなら "
+                             "correction=bh の解析を選ぶ。")
             group_ref, group_test = run["group_ref"], run["group_test"]
             stats_rows = {row["feature_id"]: row for row in analysis["rows"]
                           if row["status"] == "tested"}

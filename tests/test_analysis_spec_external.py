@@ -430,7 +430,9 @@ def test_covariates_on_a_non_ols_test_are_dropped_with_a_note(files):
     notes: list[str] = []
     normalized = A.normalize_spec(with_cov, notes=notes)
     assert normalized["analyses"][0]["test"]["covariates"] == []
-    assert len(notes) == 1 and "analyses[0].test.covariates" in notes[0] and "ols" in notes[0]
+    assert "analyses[0].test.covariates" in notes[0] and "ols" in notes[0]
+    # 共変量で調整する解析が無いので、covariates の表そのものも効かない（spec には残し、読まない）
+    assert len(notes) == 2 and notes[1].startswith("covariates は")
     plain = A.normalize_spec(_spec(files, [{"analysis_id": "main", "test": {"kind": "welch"}}],
                                    covariates=cov))
     assert A.rule_hash(normalized) == A.rule_hash(plain)
@@ -448,6 +450,58 @@ def test_recipe_settings_not_in_steps_are_notes_not_errors(files):
     normalized = A.normalize_spec(spec, notes=notes)
     assert normalized["analyses"][0]["matrix"] == {"schema": "matrix-recipe.v2", "steps": []}
     assert notes and notes[0].startswith("analyses[0].matrix:")
+
+
+def test_correction_none_with_bh_population_and_q_threshold_is_a_note(files):
+    """C7: 補正しない解析の bh_population と thresholds.q は効かない。spec には残し（rule_hash は前と同じ）、
+    notes に書く。q は null なので、q の閾値は p・fc を満たす行でも満たせない（meets_thresholds=false）。"""
+    analysis = {"analysis_id": "main", "test": {"kind": "student"}, "correction": "none",
+                "bh_population": "reported", "thresholds": {"p": 0.05, "q": 0.05}}
+    notes: list[str] = []
+    normalized = A.normalize_spec(_spec(files, [analysis], features={"feature_ids": ["F1", "F4"]}),
+                                  notes=notes)
+    a = normalized["analyses"][0]
+    assert (a["correction"], a["bh_population"], a["thresholds"]["q"]) == ("none", "reported", 0.05)
+    assert len(notes) == 2
+    assert notes[0].startswith("analyses[0].bh_population") and "correction=none" in notes[0]
+    assert notes[1].startswith("analyses[0].thresholds.q") and "meets_thresholds" in notes[1]
+    row = _rows(A.run_spec(normalized))["F1"]
+    p = stats.ttest_ind(np.log2(VALUES["F1"][3:6]), np.log2(VALUES["F1"][:3])).pvalue   # 独立の計算
+    assert row["p"] == pytest.approx(p) and p < 0.05 and row["q"] is None
+    assert row["meets_thresholds"] is False                                 # 書いたとおり満たせない
+    # 既定の bh_population・q の閾値の無い補正なしの解析は何も言わない
+    quiet: list[str] = []
+    A.normalize_spec(_spec(files, [{"analysis_id": "main", "test": {"kind": "student"}, "correction": "none",
+                                    "thresholds": {"p": 0.05}}]), notes=quiet)
+    assert quiet == []
+
+
+def test_unused_injection_order_and_covariates_are_notes_and_not_read(files):
+    """C7: drift_correct の無い spec の injection_order と、共変量で調整する ols の無い spec の covariates は効かない。
+    表は読まず（欠けた試料・無いファイルで断らない）、notes に書く。spec には残す（rule_hash は前と同じ）。"""
+    partial = _write(files["dir"] / "order.tsv", ["sample", "order"],
+                     [[s, i] for i, s in enumerate(SAMPLES[:-1], start=1)])        # QC2 が欠ける
+    order = {"source": "tsv", "path": str(partial)}
+    cov = {"path": str(files["dir"] / "no_such_covariates.tsv"),
+           "columns": [{"name": "age", "type": "numeric"}]}
+    spec = _spec(files, injection_order=order, covariates=cov)
+    notes: list[str] = []
+    normalized = A.normalize_spec(spec, notes=notes)
+    assert normalized["injection_order"]["path"] == str(partial) and normalized["covariates"]["path"]
+    assert [n.split(" ")[0] for n in notes] == ["injection_order", "covariates"]
+    result = A.run_spec(normalized)
+    assert set(result["input_fingerprint"]["files"]) == {"groups", "matrix"}
+    # 効かない表を足しても数字は同じ
+    plain = A.run_spec(A.normalize_spec(_spec(files)))
+    assert result["analyses"][0]["rows"] == plain["analyses"][0]["rows"]
+    # drift_correct のある解析があれば、その表は従来どおり読み・確かめる（欠けた試料は SAMPLE_MISMATCH）
+    drift = {"analysis_id": "main", "test": {"kind": "student"},
+             "matrix": {"steps": ["drift_correct"]}}
+    used = A.normalize_spec(_spec(files, [drift], injection_order=order), notes=(used_notes := []))
+    assert not any(n.startswith("injection_order") for n in used_notes)
+    with pytest.raises(DomainError) as exc:
+        A.run_spec(used)
+    assert exc.value.code == "SAMPLE_MISMATCH"
 
 
 def test_alignment_qc_on_external_input_is_a_note(files):

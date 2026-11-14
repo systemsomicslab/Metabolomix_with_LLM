@@ -19,6 +19,7 @@ from metabolomix.analysis.stats import quality, spec_v2
 from metabolomix.analysis.stats.composition import composition
 from metabolomix.analysis.stats.confounding import confounding_report
 from metabolomix.analysis.stats.data import from_dataset
+from metabolomix.analysis.stats.preprocess import run_remedy
 from metabolomix.core import mcp_core
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
@@ -39,21 +40,36 @@ _DRIFT_HELD = {"quant_normalized": "内部標準などで換算済み",
                "injection_order_may_be_file_order": "注入順が MS-DIAL の既定（ファイルの順）かもしれない"}
 
 
-def _drift_note(prepared) -> str | None:
-    """既定の前処理が drift=auto で補正を止めたなら、その旨（理由と drift_mode="on" での呼び直し）。"""
+def _drift_note(prepared) -> tuple[str | None, bool]:
+    """既定の前処理が drift=auto で補正を止めたなら、その旨の文と、drift_mode="on" で呼び直せるか。
+
+    陽陰を統合したデータセットでは、止めた極性（段の `by_polarity` の `rerun_with`）を名指しする。ほかの極性が
+    補正の条件を満たさない（段の全体に `rerun_with` が無い）ときも止めた極性は書き、drift_mode="on" はその極性の
+    せいで PREPROCESS_PRECONDITION になると添える（呼び直せない。注入順が確かでない極性は実際の順の入れ方）。
+    止めていなければ `(None, False)`。
+    """
     step = next((s for s in prepared.steps if s.get("step") == "drift"), {})
-    if not step.get("rerun_with"):
-        return None
-    held = {p: st.get("reasons") or [] for p, st in (step.get("by_polarity") or {}).items()
-            if st.get("rerun_with")}
+    by = step.get("by_polarity") or {}
+    held = {p: st.get("reasons") or [] for p, st in by.items() if st.get("rerun_with")}
+    rerunnable = bool(step.get("rerun_with"))
     if held:
         # 陽陰を統合したデータセット: 補正は極性ごと。止めた極性だけを名指しする
         why = "; ".join(f"{p}: " + "・".join(_DRIFT_HELD.get(r, r) for r in rs) for p, rs in held.items())
-        return (f"ドリフト補正は既定（drift=auto）では {', '.join(held)} に当てなかった（{why}）。概観はその極性を"
-                "補正なしで計算した（補正するなら dataset_preprocess(drift_mode=\"on\")）")
+        head = (f"ドリフト補正は既定（drift=auto）では {', '.join(held)} に当てなかった（{why}）。概観はその極性を"
+                "補正なしで計算した")
+        if rerunnable:
+            return head + "（補正するなら dataset_preprocess(drift_mode=\"on\")）", True
+        other = [p for p, st in by.items() if p not in held and st.get("status") != "applied"]
+        unsure = [p for p, rs in held.items() if "injection_order_may_be_file_order" in rs]
+        remedy = ("実際の注入順で補正するなら先に入れる: " + "".join(run_remedy(p) for p in unsure)
+                  if unsure else "")
+        return (head + f"。ほかの極性（{', '.join(other)}）は補正の条件を満たさないので、drift_mode=\"on\" は "
+                "PREPROCESS_PRECONDITION になる。" + remedy).rstrip(), False
+    if not rerunnable:
+        return None, False
     why = "・".join(_DRIFT_HELD.get(r, r) for r in step.get("reasons") or [])
     return (f"ドリフト補正は既定（drift=auto）では当てなかった（{why}）。概観は補正なしで計算した"
-            "（補正するなら dataset_preprocess(drift_mode=\"on\")）")
+            "（補正するなら dataset_preprocess(drift_mode=\"on\")）"), True
 
 
 def _curation_judgments(holder, ds) -> int | None:
@@ -215,7 +231,7 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
     # 1. 既定の前処理（drift=auto が補正を止めたら、補正なしで計算したことを事実に書く。§7）
     try:
         prepared = stats_results.prepare_default(study, config)
-        drift_note = _drift_note(prepared)
+        drift_note, drift_rerunnable = _drift_note(prepared)
         entry, _record = register_default(holder, ds, study, prepared, config, inputs)
     except DomainError as exc:
         return _quality_only(holder, ds, study, exc, rsd=rsd, failed=failed, drift=drift,
@@ -257,7 +273,7 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
     q_sec = overview.quality_facts(rsd=rsd, failed=failed, detection=detection,
                                    drift=drift, confounding=conf, replicate_warnings=replicates,
                                    verdict=verdict, reasons=reasons, n_qc=len(prepared.qc_ids),
-                                   n_blank=n_blank, drift_note=drift_note,
+                                   n_blank=n_blank, drift_note=drift_note, drift_rerunnable=drift_rerunnable,
                                    pca_id=pca_rec["result_id"] if pca_rec else None)
     g_sec = overview.global_facts(pca_result=pca_result, labels=labels, record=record, plan=plan,
                                   omitted=omitted, quality_note=q_note, exploratory=exploratory)
