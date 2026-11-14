@@ -1201,6 +1201,25 @@ def test_analysis_run_v2_inline_row_limit(tmp_path):
     assert ok["analyses"][0]["n_rows"] == 60 and "truncated" not in ok["analyses"][0]
 
 
+def test_analysis_run_v2_notes_inert_settings_instead_of_refusing(tmp_path):
+    """dataset_compare と同じく、効かない設定は断らない: reported 以外の母集団の reported_feature_ids・
+    normalize=none の係数の特徴・drift=off の loess_degree は捨てて notes に書き、結果と rule_hash は書かない spec と同じ。"""
+    _v2_state(tmp_path)
+    plain = json.loads(R.dataset_analysis_run(_v2_spec()))
+    inert = _v2_spec(
+        preprocess={**_V2_OFF, "drift": {"mode": "off", "loess_degree": 2},
+                    "normalize": {"method": "none", "features": ["f0"]}},
+        analyses=[{"analysis_id": "cmp", "kind": "compare", "reported_feature_ids": ["f0", "f1"]}])
+    out = json.loads(R.dataset_analysis_run(inert))
+    assert "error" not in out and out["status"] == "success" and "notes" not in plain
+    assert (out["rule_hash"], out["matrix_id"]) == (plain["rule_hash"], plain["matrix_id"])
+    assert out["analyses"][0]["rows"] == plain["analyses"][0]["rows"]
+    assert len(out["notes"]) == 3
+    assert any("analyses[0].reported_feature_ids" in n for n in out["notes"])
+    assert any("loess_degree" in n for n in out["notes"])
+    assert any("normalization_features" in n for n in out["notes"])
+
+
 def test_analysis_run_v2_normalized_with_qc_does_not_ask(tmp_path):
     """drift=auto は換算済み・QC ありでも尋ねない（needs_input を返さずに実行する。2026-11-14 の C3）。"""
     state = _v2_state(tmp_path)

@@ -421,13 +421,16 @@ def compare_spec(*, factors, comparisons, covariates, block, method, effect_size
                  p_adjust: str = "bh", reported_feature_ids=None) -> dict:
     """引数から組み立てた spec v2（正規化前）。`analyses` は compare 1 つ。結果の `spec` はこれを
     `normalize_spec_v2` したもの（`dataset_analysis_run` に渡せば同じ数字を出し直せる）。
-    `reported_feature_ids` は渡されたときだけ書く（`bh_population="reported"` の補正の母集団）。"""
+    `reported_feature_ids` は渡されたときだけ書く（`bh_population="reported"` の補正の母集団）。
+    `p_adjust` は既定（bh）でないときだけ書く（正規化も既定を書かない。rule_hash を補正の方法を選べる前と同じに保つ）。"""
     from metabolomix.analysis.stats import spec_v2
 
     analysis = {"analysis_id": "compare", "kind": "compare", "test": method,
-                "effect_size": effect_size, "bh_population": bh_population, "p_adjust": p_adjust,
+                "effect_size": effect_size, "bh_population": bh_population,
                 "verdict": {"q": q_threshold, "equivalence_fc": equivalence_fc},
                 "allow_confounded": allow_confounded}
+    if p_adjust != _DEFAULT_P_ADJUST:
+        analysis["p_adjust"] = p_adjust
     if reported_feature_ids is not None:
         analysis["reported_feature_ids"] = reported_feature_ids
     return {

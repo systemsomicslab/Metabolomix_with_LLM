@@ -67,7 +67,7 @@
    "s2_prior": 0.008115
   },
   "result_id": "cmp_X",
-  "rule_hash": "a2327d549ee54e07a9692c9c4805136afe61bb741b15bbedb71912c3d8e95a73",
+  "rule_hash": "5648d7cf64f271b2b24f7e251a2dbeaa3e41eab7fd5ae4871342dda7a20ae3c0",
   "status": "success",
   "subject_source": "injection",
   "test": "moderated_t",

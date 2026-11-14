@@ -37,7 +37,7 @@ def test_defaults_filled_and_unknown_keys_rejected():
     assert a["test"] == "moderated_t" and a["effect_size"] == "log2_mean_difference"
     assert a["bh_population"] == "matrix" and a["min_detected_fraction"] == 0.5
     assert a["verdict"] == {"q": 0.05, "equivalence_fc": 1.2} and a["allow_confounded"] is True
-    assert a["p_adjust"] == "bh"
+    assert "p_adjust" not in a                       # 既定（bh）は書かない（rule_hash を前と同じに保つ）
     assert n["primary"] == "a1"
     assert normalize_spec_v2(copy.deepcopy(n)) == n
     assert rule_hash_v2(n) == rule_hash_v2(normalize_spec_v2(_spec()))
@@ -74,8 +74,47 @@ def test_reported_requires_feature_ids():
     assert _code(normalize_spec_v2, _spec(analyses=[a])).code == "ANALYSIS_SPEC_INVALID"
     ok = normalize_spec_v2(_spec(analyses=[{**a, "reported_feature_ids": ["f1"]}]))
     assert ok["analyses"][0]["reported_feature_ids"] == ["f1"]
-    bad = {"analysis_id": "a1", "kind": "compare", "reported_feature_ids": ["f1"]}
-    assert _code(normalize_spec_v2, _spec(analyses=[bad])).code == "ANALYSIS_SPEC_INVALID"
+
+
+@pytest.mark.parametrize("bh", [None, "matrix", "annotated"])
+def test_reported_ids_with_other_population_are_dropped_with_a_note(bh):
+    """reported 以外の母集団で書いた reported_feature_ids は効かない: 誤りにせず捨てて notes（dataset_compare と同じ）。
+    捨てた ID は正規化した spec にも rule_hash にも入らない。"""
+    a = {"analysis_id": "a1", "kind": "compare", **({"bh_population": bh} if bh else {})}
+    notes: list[str] = []
+    n = normalize_spec_v2(_spec(analyses=[{**a, "reported_feature_ids": ["f1"]}]), notes=notes)
+    assert "reported_feature_ids" not in n["analyses"][0]
+    assert len(notes) == 1 and "analyses[0].reported_feature_ids" in notes[0]
+    assert rule_hash_v2(n) == rule_hash_v2(normalize_spec_v2(_spec(analyses=[a])))
+    normalize_spec_v2(_spec(analyses=[a]), notes=(clean := []))
+    assert clean == []
+
+
+# main（p_adjust を足す前）の normalize_spec_v2 → rule_hash_v2 が返した値。p_adjust を足しても、既定（bh）の spec は
+# 同じ hash でなければならない（同じ規則を前後で別の規則と読ませない）。値は git の main の実装で計算した。
+_MAIN_RULE_HASH = {
+    True: "bfa7ec48f6bae8287c6d07bac936040b141697b9aa60561758cff6979df46fff",
+    False: "6cc266eb227fc93caab9dab98650ae22dc3753150eac22f9063c81598a9eb909",
+}
+
+
+@pytest.mark.parametrize("confounded", [True, False])
+def test_default_p_adjust_keeps_the_rule_hash_from_before_p_adjust(confounded):
+    base = {"analysis_id": "a1", "kind": "compare", "allow_confounded": confounded}
+    omitted = normalize_spec_v2(_spec(analyses=[base]))
+    explicit = normalize_spec_v2(_spec(analyses=[{**base, "p_adjust": "bh"}]))
+    assert "p_adjust" not in omitted["analyses"][0] and "p_adjust" not in explicit["analyses"][0]
+    assert rule_hash_v2(omitted) == rule_hash_v2(explicit) == _MAIN_RULE_HASH[confounded]
+    holm = normalize_spec_v2(_spec(analyses=[{**base, "p_adjust": "holm"}]))
+    assert holm["analyses"][0]["p_adjust"] == "holm"         # 既定でない方法は書き、hash も変わる
+    assert rule_hash_v2(holm) != _MAIN_RULE_HASH[confounded]
+
+
+def test_omitted_allow_confounded_hashes_as_the_new_default_true():
+    """allow_confounded の既定を false → true に変えたのは規則の変更: 省いた spec は明示の true と同じ hash
+    （main で省いた spec の hash＝明示の false の hash とは違う）。明示した true / false は main と同じ。"""
+    omitted = rule_hash_v2(normalize_spec_v2(_spec()))
+    assert omitted == _MAIN_RULE_HASH[True] != _MAIN_RULE_HASH[False]
 
 
 def test_ids_and_factors_validated():
@@ -241,12 +280,37 @@ def test_plsda_normalized_with_defaults_and_validated():
     assert n["primary"] is None                       # plsda は primary にならない
     for bad in ({"n_components": 0}, {"cv_folds": 1}, {"n_permutations": 0}, {"seed": -1},
                 {"scaling": "unit"}, {"impute": "zero"}, {"classes": ["C"]}, {"classes": ["C", "C"]},
-                {"n_permutations": 10001}, {"test": "welch"}):
+                {"test": "welch"}):
         e = _code(normalize_spec_v2, _spec(analyses=[{"analysis_id": "pl", "kind": "plsda", **bad}]))
         assert e.code == "ANALYSIS_SPEC_INVALID", bad
     e = _code(normalize_spec_v2, _spec(analyses=[{"analysis_id": "pl", "kind": "plsda"}],
                                        primary="pl"))
     assert e.details["field"] == "primary"
+
+
+def test_plsda_permutations_above_the_cap_are_lowered_with_a_note():
+    """上限（10000）を超える n_permutations は断らず、上限に下げて notes に書く。spec と hash は回した回数。"""
+    notes: list[str] = []
+    n = normalize_spec_v2(_spec(analyses=[{"analysis_id": "pl", "kind": "plsda", "n_permutations": 50000}]),
+                          notes=notes)
+    assert n["analyses"][0]["n_permutations"] == 10000
+    assert len(notes) == 1 and "n_permutations=50000" in notes[0] and "10000" in notes[0]
+    capped = normalize_spec_v2(_spec(analyses=[{"analysis_id": "pl", "kind": "plsda", "n_permutations": 10000}]),
+                               notes=(none := []))
+    assert none == [] and rule_hash_v2(n) == rule_hash_v2(capped)
+
+
+def test_inert_preprocess_keys_are_dropped_with_notes_and_keep_the_hash():
+    """normalize.method=none の係数の特徴・drift.mode=off の loess_degree は効かない: 捨てて notes、hash は書かない spec と同じ。"""
+    plain = {"drift": {"mode": "off"}, "normalize": {"method": "none"}}
+    inert = {"drift": {"mode": "off", "loess_degree": 2},
+             "normalize": {"method": "none", "features": ["f1"], "exclude_features": ["f2"]}}
+    notes: list[str] = []
+    n = normalize_spec_v2(_spec(preprocess=inert), notes=notes)
+    assert n["preprocess"] == normalize_spec_v2(_spec(preprocess=plain))["preprocess"]
+    assert rule_hash_v2(n) == rule_hash_v2(normalize_spec_v2(_spec(preprocess=plain)))
+    assert len(notes) == 2 and all(x.startswith("preprocess: ") for x in notes)
+    assert any("loess_degree" in x for x in notes) and any("normalization_features" in x for x in notes)
 
 
 def test_plsda_runs_in_spec_and_returns_q2_permutation_and_vip():

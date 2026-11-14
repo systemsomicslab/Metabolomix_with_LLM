@@ -198,12 +198,12 @@ pseudocount も clip も使わない。補完は PCA のためだけに `dataset
 | 引数 | 既定 | 意味 |
 |---|---|---|
 | `drift_mode` / `drift_span` | `auto` / 0.75 | QC の LOESS ドリフト補正（`auto` / `on` / `off`）。`auto` は条件（QC の数・挟まり方・注入順）が揃えば行うが、揃っていても内部標準などで換算済みの値（`quant_normalized`）か、注入順が MS-DIAL の既定（ファイルの順）かもしれない・シートの宣言でファイル名の順（出所 `filename`）のとき（どちらも `injection_order_may_be_file_order`）は**当てずに**計算する。**尋ねない**（`needs_input` は返さない）: ドリフトの段は `status: skipped`・`reason`・`reasons`・`rerun_with: {"preprocess.drift.mode": "on"}`、`warnings` に `drift_not_applied_by_default`（`reasons`・`message`・`suggestion`）。`on` は条件が揃えば必ず当て、揃わなければ `PREPROCESS_PRECONDITION`。条件が揃わないときの `auto` は理由を `reasons` に残して飛ばすだけ（呼び直しの案内は出さない） |
-| `loess_degree` | 1 | LOESS の局所多項式の次数（`1` = 局所線形。statsmodels の lowess と同じ / `2` = 局所 2 次。同じ近傍・三乗重みを numpy で解く）。2 は近傍が 1 点多く要る。ドリフトの段の記録に `loess_degree` が出る |
+| `loess_degree` | 1 | LOESS の局所多項式の次数（`1` = 局所線形。statsmodels の lowess と同じ / `2` = 局所 2 次。同じ近傍・三乗重みを numpy で解く）。2 は近傍が 1 点多く要る。ドリフトの段の記録に `loess_degree` が出る。`drift_mode="off"` では効かないので使わず、`warnings` に `loess_degree_ignored`（`reason: "drift_off"`。行列と `matrix_id` は渡さないときと同じ） |
 | `blank_min_ratio` | 3.0 | 生体試料の平均がブランク平均のこの倍数未満の特徴を除く |
 | `detection_min_rate` / `detection_by` | 0.5 / `group` | gap-fill を除いた検出率の下限（`group` は群ごと、`all` は全体）。検出状態が無いデータでは評価できない旨が steps に出る |
 | `max_qc_rsd` / `max_d_ratio` | 0.30 / 0.5 | QC の RSD の上限・D-ratio の上限 |
 | `normalize` | `auto` | `auto`（換算済みなら何もしない。それ以外は `pqn`）/ `none` / `tic` / `median` / `pqn`。PQN の参照スペクトルは QC があれば QC の特徴ごとの中央値、**QC が無ければ生体試料（全群）の特徴ごとの中央値**で、正規化の段に `reference`（`qc` / `sample`）を書く。QC が無いときは `reference_definition: "median_of_samples_all_groups"` と注意 `pqn_reference_is_samples`（群の間で全体の組成が大きく違うと、係数がその差の一部を吸収しうる） |
-| `normalization_features` / `normalization_exclude_features` | なし | 正規化の係数を求める特徴を絞る・除く（特徴 ID のリスト）。既定は足切りの後に残った特徴すべて。**係数から外した特徴も行列には残り**、同じ係数で割られる。`normalization_features` に挙げた特徴は足切りで落ちていても係数に使う（値はドリフト補正の後）。正規化の段に `factor_features`（係数に使った数）・`factor_feature_basis`（`features` / `kept_features`）・`excluded_from_factors`・`factor_features_filtered_out`（足切りで落ちていた特徴）が出る。無い ID・空になる指定（`normalization_features=[]` も）・`normalize="none"` との組は `PREPROCESS_CONFIG_INVALID`（`normalization_exclude_features=[]` は指定なしと同じ）。`normalize="auto"` が換算済みのデータで正規化しないときは効かず、正規化の段に `factor_features_ignored: true`、`warnings` に `normalization_features_ignored`（行列と `matrix_id` は指定なしと同じ） |
+| `normalization_features` / `normalization_exclude_features` | なし | 正規化の係数を求める特徴を絞る・除く（特徴 ID のリスト）。既定は足切りの後に残った特徴すべて。**係数から外した特徴も行列には残り**、同じ係数で割られる。`normalization_features` に挙げた特徴は足切りで落ちていても係数に使う（値はドリフト補正の後）。正規化の段に `factor_features`（係数に使った数）・`factor_feature_basis`（`features` / `kept_features`）・`excluded_from_factors`・`factor_features_filtered_out`（足切りで落ちていた特徴）が出る。無い ID・係数に使う特徴が 1 つも残らない指定は `PREPROCESS_CONFIG_INVALID`。空のリストは指定なしと同じ（`normalization_features=[]` は `warnings` に `normalization_features_empty`）。`normalize="none"` では効かないので使わず、`warnings` に `normalization_features_ignored`（`reason: "method_none"`）。`normalize="auto"` が換算済みのデータで正規化しないときも効かず、正規化の段に `factor_features_ignored: true`、`warnings` に `normalization_features_ignored`（`reason: "quant_normalized"`）。どちらも行列と `matrix_id` は指定なしと同じ |
 | `collapse_replicates` | true | 同じ個体（`subject_id`）の反復注入を 1 個体にまとめる |
 | `injection_columns` | `[]` | 個体のまとめの鍵から外す試料の表の列（取得日・注入番号など、注入ごとに違う属性。技術反復が別の個体に割れるのを防ぐ） |
 | `group_levels` / `group_factors` | なし | 試料名（と試料の表の群）の因子トークンで群を解く。解いた群は行列の設定に記録される |
@@ -304,7 +304,8 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 **moderated t**（経験ベイズで分散を縮める線形モデル。`welch` / `student` / `mannwhitney` は 1 因子・共変量なし・ブロックなしだけ）。
 `covariates`（試料の表の列名。値がすべて数値なら numeric、さもなくば categorical）・`block`（`"subject_id"` だけ）を受ける。
 補正の母集団 `bh_population` は `matrix`（既定）/ `annotated` / `reported`（`reported_feature_ids` に渡した特徴だけ。
-対で使い、片方だけは `DATASET_BAD_REQUEST`。ID の一覧は記録の spec の `reported_feature_ids` に残る）。
+`reported` なのに ID が無ければ `DATASET_BAD_REQUEST`、`reported` 以外で渡した ID は使わずに `notes` に書く。ID の一覧は記録の spec の
+`reported_feature_ids` に残る）。
 多重比較の補正 `p_adjust` は `bh`（既定。FDR）/ `bonferroni` / `holm`（FWER）/ `none`（補正なし）で、行の `q` は
 この方法の値（下の表の「BH の `q`」は既定の場合の言い方）。
 
@@ -330,8 +331,12 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 `{status, confounding, result_id, matrix_id, matrix_source, rule_hash, test, p_adjust_method, effect_size_definition: {name},
 ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n_by_contrast,
 q_interpretation, p_adjust_method}, subject_source, group_n, prior, contrasts, omnibus, factorial, warnings, top, f_top?,
-output?, record, next}`。
+output?, record, next, notes?}`。
 
+- `rule_hash` は結果の spec（analysis-spec v2 に写して正規化したもの）の hash で、`result_id` はそれと `matrix_id`・
+  `log2fc_threshold` の hash。`p_adjust` は既定の `bh` なら spec に書かないので、補正の方法を選べる前と同じ hash になる。
+  `allow_confounded` の既定を 2026-11-14 に false から true へ変えた（完全交絡で止めずに比べる規則の変更）ので、既定で
+  呼んだ比較の `rule_hash` と `result_id` はそれより前の記録と違う（意図した変化。`allow_confounded=false` を明示すれば前と同じ）。
 - `confounding`（**先頭**）: `{batch_status, batch_table, by_contrast: {対比 ID: {batch_status, confounded}}, warnings}`。
   完全交絡（どのバッチも 1 群だけで、群とバッチを分離できない）でも**既定では止めずに比べ**（`allow_confounded` 既定 true）、
   全対比をまとめた表の `batch_status = complete` と、対比ごとの `by_contrast[...].confounded`（多群では一部の対比だけが
@@ -376,8 +381,15 @@ output?, record, next}`。
 - エラー: 群の指定が合わない・`top_n` / `log2fc_threshold` / `p_adjust` / `output_path` が不正・`bh_population=reported`
   なのに `reported_feature_ids` が無いは `DATASET_BAD_REQUEST`。`reported` 以外で `reported_feature_ids` を渡したときは
   誤りにせず、ID を使わずに戻り値の `notes` に書く（効かない引数の組）。
-  `matrix_id` が古い・無いは `missing_state`（`stat_matrix`）。`matrix_id` と `group_levels` / `group_factors` の併用は
-  `DATASET_BAD_REQUEST`（群は行列が決めている）。途中で止まった実行（探索専用）のデータセットも比較は断らない
+  `matrix_id` が古い・無いは `missing_state`（`stat_matrix`）。`matrix_id` と一緒に渡した `group_levels` / `group_factors` は
+  誤りにしない: 行列の群（登録の `group_overrides`）と同じなら `notes` に書いてそのまま比べ、違えば `needs_input`
+  （`field` / `argument` = `matrix_id`。選択肢は「行列の群で比べる＝群の引数を外す」と「その群の行列を `dataset_preprocess` で
+  作る・`matrix_id` を外す」。群は行列が決めている）。`comparisons` の無い `factors` も誤りにしない: `["group"]` なら群の指定の
+  設計と同じなので `notes` に書いて比べる。ほかの因子を挙げ、群の名前がその因子の水準なら「その因子のモデルで水準として
+  比べる（ほかの因子の水準ごとに `at` を付け、基準と比較の両方の cell に試料がある組だけ）」と読め、群の名前が group 列の
+  水準でもあれば「`factors` を外して group 列で比べる」とも読めて数字が変わるので `needs_input`（`field` / `argument` =
+  `comparisons`。選択肢は因子ごとのそのまま渡せる `comparisons` の形と、group 列の読みが成り立つときだけ `null`。対比が
+  50 個を超える読みは選択肢にせず `reason` に書く）。群の名前がどの因子の水準でもなければ group 列で比べて `notes` に書く。途中で止まった実行（探索専用）のデータセットも比較は断らない
   （書き出しと図に探索専用の印が載る。§11.4）。
   既定の前処理は尋ねない（`drift_mode=auto` が補正を当てなかったときは `warnings` に `drift_not_applied_by_default`）。
   `matrix_id` を省いた呼び出しが行列を決めたあとにエラーになったとき、`details.matrix_id` と `matrix_source` に

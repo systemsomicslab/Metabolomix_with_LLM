@@ -102,33 +102,64 @@ def _optional_value(path: tuple, raw):
         if isinstance(raw, bool) or raw not in (1, 2):
             raise _invalid("drift.loess_degree は 1（局所線形。既定）か 2（局所 2 次）", path, raw)
         return int(raw)
-    # normalize.features / exclude_features: 特徴 ID のリスト（None は指定なし）。空のリストは、features なら
-    # 係数を計算する特徴が 1 つも無いので不正、exclude_features なら何も外さない（指定なしと同じ）。
+    # normalize.features / exclude_features: 特徴 ID のリスト（None は指定なし）。空のリストは指定なしと同じ
+    # （features の空は絞らない＝残った特徴すべて。normalize_preprocess_config が notes に書く）。
     if raw is None:
         return None
     if (not isinstance(raw, list)
             or any(not isinstance(f, str) or not f.strip() for f in raw)):
         raise _invalid(f"{'.'.join(path)} は空でない文字列（特徴 ID）のリストで指定する", path, raw)
-    if not raw and path == ("normalize", "features"):
-        raise _invalid("normalize.features が空のリスト（係数を計算する特徴が 1 つも無い）。"
-                       "絞らないなら渡さない", path, raw)
     return sorted({f.strip() for f in raw}) or None
 
 
-def normalize_preprocess_config(raw: dict | None) -> dict:
+def _ignored(code: str, message: str, **extra) -> dict:
+    return {"code": code, **extra, "message": message}
+
+
+def _drop_inert(cfg: dict, raw, notes: list[dict]) -> None:
+    """書いても効かないキーを設定から捨て、`notes` に書く（捨てたキーは matrix_id にも rule_hash にも入らない）。
+
+    - `normalize.method="none"` の係数の特徴（`features` / `exclude_features`）: 係数を計算しない。
+    - 空の `normalize.features`: 絞らない（指定なしと同じ。`_optional_value` が落としている）。
+    - `drift.mode="off"` の `drift.loess_degree`: 補正しない。
+    いずれも任意のキー（`_OPTIONAL`）だけで、既定の dict のキー（`drift.span` など）は従来どおり残す。
+    """
+    norm, drift = cfg["normalize"], cfg["drift"]
+    raw_norm = raw.get("normalize") if isinstance(raw, dict) else None
+    empty_features = isinstance(raw_norm, dict) and raw_norm.get("features") == []
+    if norm["method"] == "none":
+        given = [k for k in ("features", "exclude_features") if k in norm]
+        for key in given:
+            del norm[key]
+        if given or empty_features:
+            notes.append(_ignored(
+                "normalization_features_ignored",
+                "normalize=none は正規化の係数を計算しないので、normalization_features / "
+                "normalization_exclude_features（normalize.features / exclude_features）は効かず、"
+                "使っていない（行列と matrix_id は指定なしと同じ）。", reason="method_none"))
+    elif empty_features:
+        notes.append(_ignored(
+            "normalization_features_empty",
+            "normalization_features（normalize.features）が空のリストなので、指定なしとして扱った"
+            "（係数は足切りの後に残ったすべての特徴から計算する）。内部標準などに絞るなら特徴 ID を渡す。"))
+    if drift["mode"] == "off" and "loess_degree" in drift:
+        del drift["loess_degree"]
+        notes.append(_ignored(
+            "loess_degree_ignored",
+            "drift_mode=off はドリフトを補正しないので、loess_degree（drift.loess_degree）は効かず、"
+            "使っていない（行列と matrix_id は指定なしと同じ）。", reason="drift_off"))
+
+
+def normalize_preprocess_config(raw: dict | None, *, notes: list[dict] | None = None) -> dict:
     """既定を埋めた前処理設定を返す。未知のキー・不正な値は PREPROCESS_CONFIG_INVALID。
 
-    `normalize.method="none"` に係数の特徴（`features` / `exclude_features`）を添えるのは矛盾なので不正
-    （`auto` が換算済みのデータで `none` に決まったときは、前処理が `factor_features_ignored` を残す）。
+    書いても効かない任意のキー（`normalize.method="none"` の `features` / `exclude_features`、空の
+    `features`、`drift.mode="off"` の `loess_degree`）は誤りにせず捨て、`notes`（渡せば）に
+    `{"code", "reason"?, "message"}` を足す（`_drop_inert`）。`auto` が換算済みのデータで `none` に
+    決まったときはデータで決まるので、前処理が `factor_features_ignored` を残す。
     """
     cfg = _merge(PREPROCESS_DEFAULTS, {} if raw is None else raw, ())
-    norm = cfg["normalize"]
-    if norm["method"] == "none":
-        for key in ("features", "exclude_features"):
-            if key in norm:
-                raise _invalid(f"normalize.method=none では正規化の係数を計算しないので normalize.{key} は"
-                               "使えない（係数の特徴を絞るなら method を auto / tic / median / pqn にする）",
-                               ("normalize", key), norm[key])
+    _drop_inert(cfg, raw, [] if notes is None else notes)
     return cfg
 
 
@@ -599,7 +630,8 @@ def _normalize_step(values, samples, cfg, quant, factor_values=None,
         step = {"step": "normalize", "status": "skipped", "requested": requested, "method": "none",
                 "reason": "quant_normalized" if requested == "auto" else "method_none"}
         if factor_record:
-            # auto が換算済みのデータで none に決まった: 係数の特徴の指定は効かない（行列も ID も指定なしと同じ）
+            # auto が換算済みのデータで none に決まった（明示の none は normalize_preprocess_config がキーごと
+            # 捨てている）: 係数の特徴の指定は効かない（行列も ID も指定なしと同じ）
             step["factor_features_ignored"] = True
         return values, step
     ids = [s.sample_id for s in samples]
@@ -797,7 +829,8 @@ def _batch_candidate_warning(study: StudyData, samples) -> dict | None:
 def preprocess(study: StudyData, config: dict) -> PreparedMatrix:
     """spec §4 の 1〜6 を順に当てる。補完はしない。"""
     from metabolomix.analysis.sample_manifest import file_order_warning
-    cfg = normalize_preprocess_config(config)
+    config_notes: list[dict] = []
+    cfg = normalize_preprocess_config(config, notes=config_notes)
     steps = []
     keep_rows, step = _select(study)
     steps.append(step)
@@ -805,7 +838,7 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix:
     values = np.array(np.asarray(study.values, dtype=float)[keep_rows], copy=True)
     detected = None if study.detected is None else np.asarray(study.detected, bool)[keep_rows]
 
-    notes = []
+    notes = list(config_notes)     # 効かない引数を捨てた注記（normalize_preprocess_config）
     flagged = [s for s in samples if s.role in ("sample", "qc") and s.injection_order_may_be_file_order]
     if flagged:
         notes.append(file_order_warning(len(flagged)))
@@ -839,7 +872,7 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix:
         notes.append(pqn_note)
     id_cfg = cfg
     if step.get("factor_features_ignored"):
-        notes.append({"code": "normalization_features_ignored",
+        notes.append({"code": "normalization_features_ignored", "reason": "quant_normalized",
                       "message": "normalize=auto は換算済みのデータ（quant_normalized）で正規化しないので、"
                                  "normalization_features / normalization_exclude_features は効いていない"
                                  "（行列は指定なしと同じ）。"})

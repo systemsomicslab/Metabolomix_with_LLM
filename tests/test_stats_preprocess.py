@@ -349,6 +349,21 @@ def test_loess_degree_config_is_optional_and_validated():
     assert a != P.preprocess(_drift_study(), {"filters": OFF_FILTERS, "drift": {"loess_degree": 2}}).matrix_id
 
 
+def test_loess_degree_with_drift_off_is_ignored_with_a_note_and_keeps_the_id():
+    """drift.mode=off は補正しないので loess_degree は効かない: 断らず、設定から捨てて注記し、ID は書かないときと同じ。"""
+    notes: list[dict] = []
+    cfg = P.normalize_preprocess_config({"drift": {"mode": "off", "loess_degree": 2}}, notes=notes)
+    assert "loess_degree" not in cfg["drift"]
+    assert [(n["code"], n.get("reason")) for n in notes] == [("loess_degree_ignored", "drift_off")]
+    off = {"filters": OFF_FILTERS, "drift": {"mode": "off"}}
+    plain = P.preprocess(_drift_study(), off)
+    inert = P.preprocess(_drift_study(), {**off, "drift": {"mode": "off", "loess_degree": 2}})
+    assert inert.matrix_id == plain.matrix_id
+    np.testing.assert_array_equal(inert.log2, plain.log2)
+    assert _warning(inert, "loess_degree_ignored") is not None
+    assert _warning(plain, "loess_degree_ignored") is None
+
+
 def test_loess_degree_two_needs_one_more_neighbour():
     """span 0.75 × 6 QC → 近傍 4: 局所線形は補正できるが、局所 2 次は近傍が足りない。"""
     cfg = {"filters": OFF_FILTERS, "normalize": {"method": "none"}}
@@ -467,20 +482,35 @@ def test_normalization_subset_rejects_unknown_or_empty():
     for bad in ("f0", [""], [1]):
         with pytest.raises(DomainError):
             P.normalize_preprocess_config({"normalize": {"features": bad}})
-    # features=[] は係数を計算する特徴が空なので不正。exclude_features=[] は何も外さない（指定なしと同じで設定に載らない）
-    with pytest.raises(DomainError) as e:
-        P.normalize_preprocess_config({"normalize": {"features": []}})
-    assert e.value.code == "PREPROCESS_CONFIG_INVALID" and e.value.details["field"] == "normalize.features"
+    # 空のリストは指定なしと同じ（設定に載らない）。features=[] は「絞らない」と読み、断らずに注記する
+    notes: list[dict] = []
+    assert P.normalize_preprocess_config({"normalize": {"features": []}}, notes=notes)["normalize"] == {"method": "auto"}
+    assert [n["code"] for n in notes] == ["normalization_features_empty"]
     assert P.normalize_preprocess_config({"normalize": {"exclude_features": []}})["normalize"] == {"method": "auto"}
+    cfg = {"filters": OFF_FILTERS, "drift": {"mode": "off"}, "normalize": {"method": "pqn"}}
+    plain = P.preprocess(_simple(n_feat=3), cfg)
+    empty = P.preprocess(_simple(n_feat=3), {**cfg, "normalize": {"method": "pqn", "features": []}})
+    assert empty.matrix_id == plain.matrix_id
+    np.testing.assert_array_equal(empty.log2, plain.log2)
+    assert _warning(empty, "normalization_features_empty") is not None
 
 
-def test_normalization_subset_with_method_none_is_rejected():
-    """method=none は係数を計算しないので、係数の特徴の指定は矛盾（黙って捨てない）。"""
-    for key in ("features", "exclude_features"):
-        with pytest.raises(DomainError) as e:
-            P.normalize_preprocess_config({"normalize": {"method": "none", key: ["f0"]}})
-        assert e.value.code == "PREPROCESS_CONFIG_INVALID"
-        assert e.value.details["field"] == f"normalize.{key}"
+@pytest.mark.parametrize("key", ["features", "exclude_features"])
+def test_normalization_subset_with_method_none_is_ignored_with_a_note_and_keeps_the_id(key):
+    """method=none は係数を計算しないので、係数の特徴の指定は効かない: 断らず、設定から捨てて注記する
+    （auto が換算済みのデータで none に決まったときと同じ扱い。行列と ID は指定なしと同じ）。"""
+    notes: list[dict] = []
+    cfg = P.normalize_preprocess_config({"normalize": {"method": "none", key: ["f0"]}}, notes=notes)
+    assert cfg["normalize"] == {"method": "none"}
+    assert [(n["code"], n.get("reason")) for n in notes] == [("normalization_features_ignored", "method_none")]
+    base = {"filters": OFF_FILTERS, "drift": {"mode": "off"}}
+    plain = P.preprocess(_simple(n_feat=4), {**base, "normalize": {"method": "none"}})
+    sub = P.preprocess(_simple(n_feat=4), {**base, "normalize": {"method": "none", key: ["f0"]}})
+    assert sub.matrix_id == plain.matrix_id and sub.config == plain.config
+    np.testing.assert_array_equal(sub.log2, plain.log2)
+    warning = _warning(sub, "normalization_features_ignored")
+    assert warning is not None and warning["reason"] == "method_none"
+    assert _warning(plain, "normalization_features_ignored") is None
 
 
 def test_normalization_subset_ignored_when_auto_resolves_to_none_says_so_and_keeps_the_id():
@@ -493,7 +523,7 @@ def test_normalization_subset_ignored_when_auto_resolves_to_none_says_so_and_kee
     step = _step(sub, "normalize")
     assert step["status"] == "skipped" and step["reason"] == "quant_normalized"
     assert step["factor_features_ignored"] is True
-    assert _warning(sub, "normalization_features_ignored") is not None
+    assert _warning(sub, "normalization_features_ignored")["reason"] == "quant_normalized"
     assert "factor_features_ignored" not in _step(plain, "normalize")
     assert _warning(plain, "normalization_features_ignored") is None
     assert sub.matrix_id == plain.matrix_id

@@ -122,7 +122,7 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 10. EICの `peak_top` は強度ではなく頂点座標である。強度は `max_intensity`、平均強度は `mean_intensity` を使う。
 11. `total_samples` はEIC全スポットにわたるサンプルエントリ総数であり、ユニークサンプル数は `len(unique_file_ids)` である。
 12. m/zとRTの微小差はファイル形式の浮動小数精度、代表値の定義、アラインメント処理に由来し得る。厳密一致ではなく許容差を用いる。
-13. **mzTab-M（`dataset_*` 経路）の `abundance_assay[N]` は、非ゼロでも実測ピークとは限らない。** mzTab-M 自体は gap-fill（未検出セルの補間値）を区別する列を持たない。`load_dataset` は隣接する `.arf` が同一アライメントであると数値で検証できた場合にだけ検出状態を取り込む。`dataset_status` の `detection.available` が `false` の間は、**検出率・欠測率・「n 件で検出」といった主張をしてはいけない**。実データでは 60 サンプル × 714 特徴のうち**セルの 70.0% が gap-fill** だったので、非ゼロを検出と数えると検出率を 3 倍以上に過大評価する。検出状態があるときは `dataset_preprocess(min_detection_rate=...)` で実検出率による足切りができる（ARF 経路の同名引数と同義）。
+13. **mzTab-M（`dataset_*` 経路）の `abundance_assay[N]` は、非ゼロでも実測ピークとは限らない。** mzTab-M 自体は gap-fill（未検出セルの補間値）を区別する列を持たない。`load_dataset` は隣接する `.arf` が同一アライメントであると数値で検証できた場合にだけ検出状態を取り込む。`dataset_status` の `detection.available` が `false` の間は、**検出率・欠測率・「n 件で検出」といった主張をしてはいけない**。実データでは 60 サンプル × 714 特徴のうち**セルの 70.0% が gap-fill** だったので、非ゼロを検出と数えると検出率を 3 倍以上に過大評価する。検出状態があるときは `dataset_preprocess(detection_min_rate=...)` で実検出率による足切りができる（gap-fill を数えない検出率。検出状態が無ければこの足切りは行わず、前処理の `steps` の足切りの段（`step: "filter"`）に `filters.detection = {status: "skipped", reason: "no_detected_mask"}` と出る）。
 
 ## 状態不足の伝え方（MCP クライアント向けの契約）
 

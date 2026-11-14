@@ -166,6 +166,10 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     `group_overrides` に書いたものだけを使う（`dataset_exclude` の除外は読まない。spec に無い除外が
     あれば注意 `dataset_exclusions_not_in_spec` を返す）。前処理は確認を求めない（`drift.mode="auto"` が
     補正を当てなかったときは前処理の段と warnings の `drift_not_applied_by_default` に理由と呼び直し方）。状態も記録も書かない。
+    書いても効かない設定（`bh_population` が reported でない解析の `reported_feature_ids`・
+    `normalize.method="none"` の `features` / `exclude_features`・`drift.mode="off"` の `loess_degree`）は
+    誤りにせず捨てて `notes` に書き、上限（10000）を超える plsda の `n_permutations` は上限に下げて `notes` に書く
+    （捨てた設定は正規化した spec と rule_hash に入らない）。
     戻り値は解析ごとの要約（行は v1 と同じ規則: `output_path` に全量の JSON、無ければ TSV）。
 
     v1（analysis-spec.v1）:
@@ -320,8 +324,10 @@ def _analysis_run_v2(spec: dict, holder, output_path: str | None) -> str:
     ds, error = _dataset_or_error(holder, True)
     if error:
         return error
+    # 効かない設定を捨てた・上限に下げた理由（normalize_spec_v2）と、行を切った理由をここに集める
+    notes: list[str] = []
     try:
-        normalized = normalize_spec_v2(spec)
+        normalized = normalize_spec_v2(spec, notes=notes)
         assay_kind = _assay_kind(holder)
         result = run_spec_v2(normalized, ds, assay_kind=assay_kind)
         written = write_result(output_path, json_safe(result)) if output_path else None
@@ -340,7 +346,6 @@ def _analysis_run_v2(spec: dict, holder, output_path: str | None) -> str:
     extra = ([{"code": "dataset_exclusions_not_in_spec", "n_samples": n_samples,
                "n_features": n_features}] if n_samples or n_features else [])
     summary = S.run_summary(result, extra_warnings=extra)
-    notes = []
     if written is None:
         by_id = {e["analysis_id"]: e for e in result["analyses"]}
         truncated = []
