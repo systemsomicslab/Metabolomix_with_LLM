@@ -64,7 +64,11 @@
   その中で終わらなければ仕事を続けたまま `{"status": "running", "job_id": "job_…", "tool", "next"}` を返す。ハンドルの
   ロックは仕事が終わるまでその仕事が持つ（同じハンドルへの次の呼び出しは仕事の後に並ぶ）。結果は
   `job_status(job_id, wait_seconds)` で引く（走っている間は `status: "running"` と `elapsed_s`、終われば道具の戻り値
-  そのもの。`job_id` の省き方は `dataset_load_status` と同じ。知らない番号は `JOB_NOT_FOUND`）。
+  そのもの。`job_id` の省き方は `dataset_load_status` と同じ。知らない番号は `JOB_NOT_FOUND`（終わって 1 時間を
+  過ぎた・件数の上限で古いものから捨てた・サーバが再起動した。道具を呼び直す）。長い道具を呼んだとき走っている受付が
+  上限なら、その道具が `JOB_LIMIT`（`details.running` と `max_entries`。`job_status` でどれかが終わるのを待って呼び直す）。
+  道具が `DomainError` 以外で止まれば、その結果（道具の戻り値か `job_status`）が `JOB_FAILED`（`details.exception` は
+  例外の種類だけ。本文はサーバのログ）。
 - **ハンドルを見失う条件。** ハンドルは次のときに無くなり、以後そのハンドルを渡した呼び出しは
   `DATASET_HANDLE_NOT_FOUND`（`details.open_handles` に開いているハンドル）を返す（直近や別のハンドルへは落ちない）:
   (1) `dataset_close` で閉じた（戻り値の `source` が閉じたものの入口の種類・入力の名前・極性）、(2) サーバのプロセスが

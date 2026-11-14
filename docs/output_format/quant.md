@@ -16,6 +16,10 @@
   飛ばしたもの、正規化の工程を通っていないもの）は `normalized=false`・`unit=null`**で、値は MS-DIAL の
   強度のまま。単位が違うデータセット同士・正規化済みと未正規化は統合しない（`QUANT_MERGE_STATE_MISMATCH`）。
   未正規化どうしは、skip を挟まなくてもそのまま統合する。
+- **正規化は統合の前に、極性ごとに行う**。内部標準は極性ごとの行で、参照表はクラスで引くので、陽陰を統合した
+  データセットを割ると一方の極性の内部標準で他方の極性の同じクラスを割りうる。統合したデータセット（`quant_state.steps`
+  に `merge`、または特徴に `origin`）には preview・apply・`skip=True` のどれも掛けず `QUANT_ALREADY_MERGED`
+  （`details.parent_handles` に極性ごとの親のハンドル。そのハンドルで正規化してから統合し直す）。極性を尋ねる前に断る。
 - 正規化した行列の行は**内部標準以外の特徴**。内部標準の行は値を持たず、後段の選別で除かれる。
 - 内部標準の値が 0・負・欠測の試料は、その試料の値を**欠測（NaN）**にして理由を `status_counts`
   に数える。中央値などで埋めない。参照表に無いクラスは `Any others` の行で計算する
@@ -72,6 +76,7 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 `QUANT_BAD_REQUEST`（UTF-8 でない表もこれ）・`QUANT_POLARITY_REQUIRED`（`polarity` を渡す）・
 `QUANT_SOURCE_UNSUPPORTED`（解析フォルダ以外の入力）・`QUANT_ALREADY_NORMALIZED`・
 `QUANT_ALREADY_SELECTED`（選別済みのデータセットは正規化しない）・
+`QUANT_ALREADY_MERGED`（陽陰を統合したデータセットは正規化しない。§1。`details` に `record_id` と `parent_handles`）・
 `QUANT_CURATION_UNREADABLE`（キュレーションの記録が読めない。`apply_curation=False` で進められる）・
 `DATASET_HANDLE_LIMIT`（新しいハンドルを足せない。記録を書く前に止める）・
 `QUANT_NEEDS_DETECTION`（検出の印が無い入力）・`QUANT_MERGE_STATE_MISMATCH`（正規化の状態が陽陰で違う。
@@ -96,6 +101,15 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 - **select**: `status`・`dataset_handle`・`record_id`・`audit_file`・`n_retained`・`n_excluded`・
   `reasons`（理由ごとの件数）・`curation`・`curation_by_polarity`・`adducts`（`sha256` `label`）・
   `skipped`・`examples`（除外の例 5 件）。**全判断は audit にあり、戻り値には載せない。**
+- **探索専用の印**: 派生は親の `exploratory_only` / `exploratory_reason` を引き継ぐ（未完了の実行・検証を
+  通っていない pipeline の単位から開いたデータセットの派生も、書き出しのメタ行・根拠バンドル・図に印が載る）。
+  統合はどちらかの親が探索専用なら探索専用で、理由は極性付きで `; ` でつなぐ（`negative: <理由>`。理由の無い
+  印は `incomplete analysis run (exploratory only)`）。派生が探索専用のときだけ、apply・merge・select の戻り値に
+  `exploratory`（`{exploratory_only: true, reason}`）が載る（でなければ欄が無い）。
+- **出所の裏取り**: 統合したデータセットの `source_verification` は、陽陰で同じならその値、違えば弱いほう
+  （`verified` > `legacy_unverified` > `direct_unverified`。知らない値はいちばん弱いもの）。書き出しのメタ行
+  `# source_verification` と `dataset_status` もこの値。陽陰で違うときだけ、merge の戻り値に
+  `source_verification`（`merged` と `positive` `negative`）が載る（同じなら欄が無い）。
 
 ## 6. 記録・audit・古さ
 

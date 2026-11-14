@@ -607,3 +607,14 @@ def test_dataset_plot_png_is_capped_in_pixels(tmp_path):
     with PILImage.open(io.BytesIO(body[1].data)) as image:
         width, height = image.size
     assert width * height <= render.MAX_IMAGE_PIXELS * 1.05
+
+
+def test_failed_loadings_call_keeps_the_previous_figure():
+    """失敗した呼び出しは図の置き場を変えない（前回の図が残り、save_figure はそれを保存する）。"""
+    ds = _analysed()
+    plot_tools.dataset_plot(kind="loadings", top_n=3)
+    before = ds.figures["loadings"]
+    for kwargs in ({"pcs": [1, 9]}, {"value": "nope"}):
+        err = json.loads(plot_tools.dataset_plot(kind="loadings", **kwargs))["error"]
+        assert err["code"] == "DATASET_BAD_REQUEST", kwargs
+        assert ds.figures["loadings"] is before, kwargs

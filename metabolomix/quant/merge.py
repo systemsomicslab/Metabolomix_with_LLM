@@ -31,7 +31,8 @@ from metabolomix.quant.plugin import call, load_rules, rules_settings
 from metabolomix.quant.records import merged_record_folder, write_record
 from metabolomix.quant.table import require_msdial_source, resolve_quant_polarity
 
-__all__ = ["MAPPING_COLUMNS", "merge", "merge_tool", "normalize_status", "read_mapping"]
+__all__ = ["MAPPING_COLUMNS", "merge", "merge_tool", "merged_source_verification",
+           "normalize_status", "read_mapping"]
 
 MAPPING_COLUMNS = ("mode", "source_sample", "sample_id", "group", "sample_type")
 #: 規則プラグイン（msdial-workflow の config.MODES・対応表の `mode` 列）が使うモード名。
@@ -43,6 +44,8 @@ LOCK_TIMEOUT = 30.0
 _MAX_LISTED = 20
 _HOW_MAPPING = ("mapping_csv（列: mode, source_sample, sample_id, group, sample_type。"
                 "mode は positive / negative）")
+#: 出所の裏取り（`DatasetState.source_verification`）の強い順。統合は弱いほうを名乗る。
+_VERIFICATION_RANK = {"verified": 2, "legacy_unverified": 1, "direct_unverified": 0}
 
 
 def read_mapping(path: Path) -> tuple[list[dict], str]:
@@ -203,6 +206,21 @@ def _arf2_path(ds) -> str | None:
     return found[0] if len(found) == 1 else None
 
 
+def merged_source_verification(pos_ds, neg_ds) -> tuple[str, dict]:
+    """統合の出所の裏取りと、陽陰で違うときだけ戻り値に足す欄。
+
+    統合は両側の特徴を持つので、POS の値をそのまま名乗らない。陽陰で同じならその値、違えば
+    弱いほう（verified > legacy_unverified > direct_unverified。知らない値はいちばん弱いものと
+    して扱う）を名乗り、戻り値に `source_verification`（`merged` と極性ごとの値）を足す。
+    """
+    sides = {prefix: getattr(ds, "source_verification", None) or "direct_unverified"
+             for prefix, ds in (("positive", pos_ds), ("negative", neg_ds))}
+    merged = min(sides.values(), key=lambda value: _VERIFICATION_RANK.get(value, -1))
+    if sides["positive"] == sides["negative"]:
+        return merged, {}
+    return merged, {"source_verification": {"merged": merged, **sides}}
+
+
 def _union(a, b) -> list:
     return list(a) + [x for x in b if x not in a]
 
@@ -224,7 +242,8 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     正規化の工程を通っていない側は未正規化として扱い、各側が正規化をどう通ったか
     （`applied` / `skipped` / `not_run`）を記録の `settings.normalize` と戻り値の `normalize` に書く。
     対応表の group / sample_type 列は規則が検証するだけで適用しない（試料の実験情報は POS の
-    ものを使う）。
+    ものを使う）。どちらかが探索専用（`exploratory_only`）なら統合も探索専用で、理由は極性付きで
+    合わせる（戻り値の `exploratory`）。
     `folder` を省くと 2 つの解析フォルダの共通の親（無理なら QUANT_RECORD_LOCATION_REQUIRED）。
     `polarities` は (positive 側, negative 側) の極性（省くとデータセットから決める）。
     記録は検査がすべて通ってから書く（止まるときは何も書かない）。
@@ -308,9 +327,14 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     new.curation_flags = None  # 選別が極性ごとの .arf2（quant_state["arf2_by_polarity"]）から読む
     new.sample_metadata_rows = None
     new.library_record = None
+    # 探索専用の印と出所の裏取りは POS だけでなく両側から（どちらかが探索専用なら統合も探索専用で
+    # 理由は極性付き。裏取りは弱いほう。POS だけの写しでは、裏取りの無い NEG の特徴まで
+    # 書き出しのメタ行で verified を名乗っていた）。
+    qderive.carry_exploratory(new, [pos_ds, neg_ds], labels=["positive", "negative"])
+    new.source_verification, verification_info = merged_source_verification(pos_ds, neg_ds)
     info = {"record_id": record["record_id"], "rule": rule, "n_features": counts,
             "n_samples": len(pos_ids), "unit": state["unit"], "normalized": state["normalized"],
-            "normalize": normalize}
+            "normalize": normalize, **verification_info, **qderive.exploratory_info(new)}
     return new, info
 
 

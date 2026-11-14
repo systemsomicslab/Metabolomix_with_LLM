@@ -16,9 +16,43 @@ import numpy as np
 from metabolomix.core import handles, session_state
 from metabolomix.mztab.polarity import dataset_polarity
 
-__all__ = ["QUANT_STATE_SCHEMA", "check_capacity", "derive", "quant_state", "register"]
+__all__ = ["QUANT_STATE_SCHEMA", "carry_exploratory", "check_capacity", "derive",
+           "exploratory_info", "quant_state", "register"]
 
 QUANT_STATE_SCHEMA = "lipidmix.quant-state.v1"
+#: 理由の無い探索専用の印を、ラベル付きで合わせるときの文面（書き出しの既定の理由と同じ）。
+_DEFAULT_EXPLORATORY_REASON = "incomplete analysis run (exploratory only)"
+
+
+def carry_exploratory(new, parents, *, labels=None) -> None:
+    """親の探索専用の印（`exploratory_only` / `exploratory_reason`）を派生へ写す。
+
+    親のどれかが探索専用なら派生も探索専用で、理由は探索専用の親の理由を `; ` でつなぐ（同じ理由は
+    1 回）。`labels`（親と同じ長さ。統合なら極性）を渡すと各理由の頭に `<label>: ` を付け、理由の無い
+    親は既定の文面で数える（どちらの親が探索専用かを残す）。探索専用の親が無ければ印を下ろす。
+    """
+    labels = list(labels) if labels is not None else [None] * len(parents)
+    reasons = []
+    flagged = False
+    for label, parent in zip(labels, parents):
+        if not getattr(parent, "exploratory_only", False):
+            continue
+        flagged = True
+        reason = getattr(parent, "exploratory_reason", None)
+        if label is not None:
+            reasons.append(f"{label}: {reason or _DEFAULT_EXPLORATORY_REASON}")
+        elif reason:
+            reasons.append(reason)
+    new.exploratory_only = flagged
+    new.exploratory_reason = ("; ".join(dict.fromkeys(reasons)) or None) if flagged else None
+
+
+def exploratory_info(ds) -> dict:
+    """派生が探索専用なら戻り値に足す `{"exploratory": {exploratory_only, reason}}`（でなければ空）。"""
+    if not getattr(ds, "exploratory_only", False):
+        return {}
+    return {"exploratory": {"exploratory_only": True,
+                            "reason": getattr(ds, "exploratory_reason", None)}}
 
 
 def quant_state(*, normalized: bool, method: str | None, unit: str | None, record_id: str,
@@ -84,8 +118,12 @@ def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
     セル数・検出数・欠測率だけ新しい行列から数え直す）は持ち越さない。`curation_flags` は
     アラインメント単位のフラグ集合なので触らない。**親に無い新しい ID（統合後の
     `positive:<id>` など）には副次データを付けない。呼び出し側が埋める。**
+
+    探索専用の印（`exploratory_only` / `exploratory_reason`）は親のものを引き継ぐ（`carry_exploratory`。
+    統合は 2 つ目の親の印を呼び出し側が合わせる）。
     """
     new = copy.deepcopy(ds)
+    carry_exploratory(new, [ds])
     parent_names = list(ds.sample_names)
     idx = _sample_positions(parent_names, sample_names, sample_index)
     if len(set(idx)) != len(idx):
