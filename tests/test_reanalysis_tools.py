@@ -961,6 +961,113 @@ def test_claim_evidence_bad_offset_is_spec_invalid(data):
     assert out["error"]["code"] == "CLAIM_SPEC_INVALID"
 
 
+# ---------- rt_offset_min（RT の窓の中心のずれ） ----------
+
+#: rt_min を特徴 20（RT 2.00）から 0.5 分ずらした目標。rt_tol_min 0.3 では窓 [1.2, 1.8] に入らない。
+SHIFTED_TARGET = {"inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": 1.5}
+
+
+def test_claim_evidence_rt_offset_matches_feature_search(data):
+    handle = _open(data)
+    claim = {"claim_id": "C1", "target": SHIFTED_TARGET, "scan": {"ppm": [10, 20], "rt_tol_min": [0.3]},
+             "rt_offset_min": 0.5}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    search = json.loads(T.dataset_feature_search(
+        targets=[{"target_id": "C1", **SHIFTED_TARGET}], rt_offset_min=0.5, dataset_handle=handle))
+    assert out["default_selection"]["status"] == search["targets"][0]["status"] == "resolved"
+    assert out["default_selection"]["selected_feature_id"] == search["targets"][0]["selected_feature_id"] == "20"
+    # 走査の全変種にも同じずれが効く
+    assert [s["selected_feature_id"] for s in out["scans"]] == ["20", "20"]
+    assert out["rule"]["rt_offset_min"] == 0.5 and out["rule"]["target"]["rt_offset_min"] == 0.5
+    assert "notes" not in out
+    # ずらさなければ RT の窓の外（判定が変わる）
+    plain = json.loads(R.dataset_claim_evidence({k: v for k, v in claim.items() if k != "rt_offset_min"},
+                                                dataset_handle=handle))
+    assert plain["default_selection"]["selected_feature_id"] != "20"
+    assert "rt_offset_min" not in plain["rule"] and "rt_offset_min" not in plain["rule"]["target"]
+
+
+def test_claim_evidence_rt_offset_enters_the_rule_hash_only_when_set(data):
+    handle = _open(data)
+    # 省けば従来と同じ hash（v8 の値）。渡せば（0 でも）規則の一部
+    assert json.loads(R.dataset_claim_evidence(CLAIM, dataset_handle=handle))["rule_hash"] == _CLAIM_RULE_HASH_V8
+    for value in (0, -0.2):
+        shifted = json.loads(R.dataset_claim_evidence({**CLAIM, "rt_offset_min": value},
+                                                      dataset_handle=handle))
+        assert shifted["rule_hash"] != _CLAIM_RULE_HASH_V8
+    assert (json.loads(R.dataset_claim_evidence({**CLAIM, "rt_offset_min": 0.1}, dataset_handle=handle))["rule_hash"]
+            != json.loads(R.dataset_claim_evidence({**CLAIM, "rt_offset_min": 0.2}, dataset_handle=handle))["rule_hash"])
+
+
+def test_claim_evidence_rt_offset_without_rt_min_is_ignored_with_a_note(data, tmp_path):
+    handle = _open(data)
+    bare = {"claim_id": "C2", "target": {"inchikey": GABA_KEY, "formula": "C4H9NO2"}}
+    plain = json.loads(R.dataset_claim_evidence(bare, dataset_handle=handle))
+    out = json.loads(R.dataset_claim_evidence({**bare, "rt_offset_min": 0.5}, dataset_handle=handle))
+    assert "error" not in out
+    assert out["rule_hash"] == plain["rule_hash"] and "rt_offset_min" not in out["rule"]
+    assert any("rt_offset_min" in n and "rt_min" in n for n in out["notes"])
+    assert "notes" not in plain
+    # 理由は書いた JSON と要約にも残る
+    path = tmp_path / "c2.json"
+    summary = json.loads(R.dataset_claim_evidence({**bare, "rt_offset_min": 0.5}, dataset_handle=handle,
+                                                  output_path=str(path)))
+    assert summary["notes"] == out["notes"]
+    assert json.loads(path.read_text(encoding="utf-8"))["notes"] == out["notes"]
+
+
+@pytest.mark.parametrize("value", ["x", True, float("nan"), float("inf")])
+def test_claim_evidence_bad_rt_offset_is_spec_invalid(data, value):
+    out = json.loads(R.dataset_claim_evidence({**CLAIM, "rt_offset_min": value},
+                                              dataset_handle=_open(data)))
+    assert out["error"]["code"] == "CLAIM_SPEC_INVALID"
+    assert out["error"]["details"]["field"] == "rt_offset_min"
+
+
+# ---------- 候補が多いときの戻り値（断らず先頭だけ） ----------
+
+def test_claim_evidence_inline_truncates_with_the_selected_feature_first(data, tmp_path, monkeypatch):
+    handle = _open(data)
+    # [M+Na]+ だけの目標で、RT 5.0 の 25 を既定の特徴にする（特徴の並びでは 21 が先）
+    claim = {"claim_id": "C5", "target": {"inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": 5.0,
+                                          "adduct_tiers": [["[M+Na]+"]]}}
+    full = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    assert full["default_selection"]["selected_feature_id"] == "25"
+    assert [c["feature_id"] for c in full["candidates"]] == ["21", "25"]
+    assert full["truncated"] == 0 and "n_candidates_shown" not in full     # 上限内は束のまま
+
+    monkeypatch.setattr(R, "MAX_INLINE_CANDIDATES", 1)
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    assert out["status"] == "success" and "error" not in out
+    assert [c["feature_id"] for c in out["candidates"]] == ["25"]
+    assert out["truncated"] is True
+    assert out["n_candidates"] == 2 and out["n_candidates_shown"] == 1
+    assert out["candidates_order"] == "default_selection_first"
+    assert out["max_candidates_truncated"] == 0
+    assert any("output_path" in n for n in out["notes"])
+    # 判定・規則・走査は束と同じ（候補の一覧だけを切る）
+    for key in ("default_selection", "scans", "rule_hash", "rule", "input_fingerprint"):
+        assert out[key] == full[key]
+    # output_path は全件を書く（束の truncated は max_candidates の打ち切りの数のまま）
+    path = tmp_path / "c5.json"
+    summary = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle, output_path=str(path)))
+    assert summary["n_candidates"] == 2 and summary["truncated"] == 0
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert [c["feature_id"] for c in saved["candidates"]] == ["21", "25"] and saved["truncated"] == 0
+    assert "notes" not in saved
+
+
+def test_claim_evidence_inline_cut_reports_the_max_candidates_cut_too(data, monkeypatch):
+    handle = _open(data)
+    monkeypatch.setattr(R, "MAX_INLINE_CANDIDATES", 1)
+    claim = {**CLAIM, "max_candidates": 2}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    assert out["truncated"] is True and out["n_candidates"] == 2
+    assert out["max_candidates_truncated"] > 0
+    assert any("max_candidates=2" in n for n in out["notes"])
+    assert out["candidates"][0]["feature_id"] == out["default_selection"]["selected_feature_id"]
+
+
 def test_claim_evidence_on_an_lbm_only_dataset_is_not_evaluable_not_no_library(data, library):
     """同定が LBM だけのデータセット（MSP が無い）。no_library は library_load を促すので使わない。"""
     from metabolomix.core import handles

@@ -487,13 +487,18 @@ def test_feature_search_merge_split_false(tmp_path):
     assert parsed["stats"].splitlines()[0] == "\t".join(STATS_COLUMNS)
     assert [r["feature_id"] for r in _tsv(parsed["stats"])] == ["30", "31"]
 
-    # 効かない設定は書かせない・別のデータセットの JSON は拒む
+    # 効かない設定（merge_split=false の alignment_qc_path）は誤りにせず、読まずに notes に書く。
+    # 別のデータセットの JSON は、使うとき（merge_split=true）だけ拒む
     qc_path = tmp_path / "qc.json"
     qc_path.write_text(json.dumps({"schema": "alignment-qc.v1", "dataset_fingerprint": "other",
                                    "merge_groups": [{"features": ["30", "31"], "mergeable": True}]}),
                        encoding="utf-8")
-    bad = _search(feature_ids=["30"], merge_split=False, alignment_qc_path=str(qc_path))
-    assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
+    ignored = _search(feature_ids=["30"], merge_split=False, alignment_qc_path=str(qc_path))
+    assert "error" not in ignored
+    assert ignored["merge_split"] == {"enabled": False}
+    assert ignored["stats"] == _search(feature_ids=["30"], merge_split=False)["stats"]
+    assert sum("alignment_qc_path" in n for n in ignored["notes"]) == 1
+    assert any("merge_split=false" in n for n in ignored["notes"])
     foreign = _search(feature_ids=["30"], alignment_qc_path=str(qc_path))
     assert foreign["error"]["code"] == "ANALYSIS_INPUT_INVALID"
 
@@ -683,12 +688,19 @@ def test_excluded_features_are_omitted_in_both_sorts():
     assert "f1" not in _ids(_search(sort="intensity"))
 
 
-def test_sort_with_targets_is_rejected_and_bad_sort_too():
+def test_sort_with_targets_is_ignored_with_a_note_and_bad_sort_is_rejected():
     _load_ds()
+    plain = _search(targets=[_target()], sort="mz")
     parsed = _search(targets=[_target()], sort="intensity")
-    assert parsed["error"]["code"] == "DATASET_BAD_REQUEST"
+    # 目標照合では効かないので誤りにせず、notes に書いて規則の順のまま返す（C7）
+    assert "error" not in parsed
+    assert parsed["targets"] == plain["targets"] and parsed["candidates"] == plain["candidates"]
+    assert parsed["rule"]["rule_hash"] == plain["rule"]["rule_hash"]
+    assert any("sort='intensity'" in n for n in parsed["notes"])
+    assert not any("sort=" in n for n in plain["notes"])
+    # 形の誤り（mz / intensity 以外）は従来どおり誤り
     assert _search(min_mz=100.0, sort="bogus")["error"]["code"] == "DATASET_BAD_REQUEST"
-    assert "error" not in _search(targets=[_target()], sort="mz")
+    assert _search(targets=[_target()], sort="bogus")["error"]["code"] == "DATASET_BAD_REQUEST"
 
 
 def test_intensity_sort_without_detected_mask_uses_all_cells_and_notes():

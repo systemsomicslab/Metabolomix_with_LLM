@@ -15,11 +15,10 @@
   改行する（行は辞書のキーと区切りの `,` を含めて 1,000 字以下。数や文字列だけのリストは 1,000 字までずつ
   詰める。字下げはしない。分けられない 1 つの値——1,000 字を超える文字列など——の行だけは超える）——1 行の
   JSON は行の範囲で区切って読めないため。`output_path` を省いて行が上限を超えても**断らない**: 先頭の行
-  だけを載せ、`truncated: true` と全件の数を返す（上限と並びはツールごと。下の各節）。例外は
-  `dataset_claim_evidence` で、候補が 10 を超えると `output_path` を求めて `ANALYSIS_OUTPUT_REQUIRED` で断る
-  （§7）。
+  だけを載せ、`truncated: true` と全件の数を返す（上限と並びはツールごと。下の各節）。
 - **効かない設定は誤りにしない。** 書いても使われない設定（recipe の `steps` に無い段の設定、
-  `merge_split=false` の `alignment_qc`、ols でない検定の共変量など）は捨てて `notes` に理由を書く。捨てた
+  `merge_split=false` の `alignment_qc`、ols でない検定の共変量、`rt_min` の無い主張の `rt_offset_min` など）は
+  捨てて `notes` に理由を書く。捨てた
   設定は正規化した spec にも `rule_hash` にも入らない。形の誤りと、併用すると意味がぶつかる組み合わせ
   （`aggregate` と `features.feature_ids`）は従来どおり誤り。
 - **判定（再現したか・明らかに別物か）は返さない。** 道具が返すのは数字と、spec に書いた
@@ -613,6 +612,12 @@ spec:
   （`{"default": 0.0, "bands": [{"max_mz": 200, "offset": -8.0}]}`。中心は実測 − 理論の ppm、帯は理論 m/z が
   `max_mz` 未満の最初の帯）。既定の特徴と `scan` の全変種に同じ spec が効き、**窓の幅（`scan.ppm`）は変えない**。
   渡したときだけ `rule.ppm_offset` と `rule_hash` に入る（省けば v8 と同じ hash）。形の誤りは `CLAIM_SPEC_INVALID`。
+- `rt_offset_min`（任意、分）は RT の窓の中心のずれ。意味は `dataset_feature_search` の `rt_offset_min` と同じで、
+  中心を `rt_min + rt_offset_min` に置き `|RT − 中心| ≤ rt_tol_min` で見る（`mztab` §13.8）。既定の特徴と `scan` の全変種に
+  同じ値が効き、**窓の幅（`scan.rt_tol_min`）は変えない**。渡したときだけ `rule.rt_offset_min` と `rule.target.rt_offset_min`、
+  `rule_hash` に入る（0 でも入る。省けば従来と同じ hash）。`target` に `rt_min` が無ければ RT の窓が無く効かないので、
+  誤りにせず捨てて `notes`（束と戻り値）に書く（規則にも hash にも入らない）。有限の数でなければ `CLAIM_SPEC_INVALID`
+  （`field: rt_offset_min`）。ずれの見積もりは `dataset_feature_search` の目標照合が返す `rt_offset`（当てはしない）。
 - `target` は `dataset_feature_search` の目標と同じ形（`target_id` は `claim_id`）。脂質の種の主張
   （InChIKey が無い C1〜C4 型）は `"target": {"lipid_species": "PC 18:3_16:1", "formula": …}`。
   `rule.target` に `lipid_species`（種のレベル）と `lipid_species_input` が載り、`rule_hash` は
@@ -632,7 +637,8 @@ spec:
 | `default_selection` | `target` をそのまま当てた目標照合（`dataset_feature_search` と同じ規則）。`status` が `resolved` なら `selected_feature_id` が規則で選んだ既定の特徴、決まらなければ `needs_input`（`reason`）。割れたスポットの組（§9 の `merge_groups`）は 1 つの候補として数え、`selected_feature_id` は残す ID（受け持ちの多い側、同数なら小さい ID）、`merged_from` にその組（それ以外は null。走査も同じ）。`counts` は下の表（組は 1 つと数える。MS/MS の合否はどちらかのスポットが `qualified` なら 1） |
 | `scans` | 走査ごとの判定（`counts` は `default_selection` と同じ意味）と、候補の特徴 ID |
 | `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか。組の片方だけが質量の窓に入ったときに足した相手は `merge_partner`）・`split`（下）・`msms`（spot_id = SMF_ID の照合の上位 `top`（`library_msms_qualify` の候補の表と同じ欄。`passes_dbs_cutoffs`・種の欄も同じ条件で）と `qualify`（`target_rank`・`top1_is_target` を含む）、使った前駆体の窓 `window`（`mz_tol`・`mz_window`・`mz_tol_ppm`）、スポットに MS-DIAL の注釈があれば `msdial_name`・`msdial_rank`・`top_differs_from_msdial`。ライブラリが無ければ `{"status": "no_library", "spectrum_available": ...}`（データセットの同定が LBM だけ＝記憶が `lbm_only` のときは、MSP のスペクトルが無いので評価できない: 候補ごとは `{"status": "not_evaluable", "reason": "lbm_only", "spectrum_available": ...}` で、理由の文は束の `msms_not_evaluable_reason` に 1 回だけ。`no_library` は `library_load` を促すが、このデータセットには照合に使える MSP が無い）、MS/MS が無い・索引の崩れはその `status`。`spectrum_available` は代表スペクトルの有無で、ライブラリの有無によらず spot を先に照会して決める: `true`=ある、`false`=照会して無かった（`not_found` で `reason` が `no_spectrum`）、`null`=分からない（`.arf2` / `.dcl` のファイル自体が無い `not_found` の `reason` `no_arf2` / `no_dcl`・`spot_not_found`・`dcl_precursor_mismatch`・`spot_id_not_integer`、ハンドルに `.arf2` / `.dcl` が無いとき））・`relations` |
-| `truncated` | `max_candidates` で打ち切った候補の数 |
+| `truncated` | `max_candidates` で打ち切った候補の数（束の欄。`output_path` を省いて候補を切った戻り値だけは意味が違う——下の「戻り値」） |
+| `notes` | 効かずに捨てた spec の設定とその理由（`target` に `rt_min` が無いときの `rt_offset_min`）。無ければ欄ごと無い |
 | `rule` / `rule_hash` | 正規化した spec とその hash。spec の `merge_split`（既定 true）は真のときだけ `rule` に載り、`rule_hash` には判定でまとめた組の hash も入る（false は v7 と同じ規則。hash が v7 と同じなのは spec に `msms` が無いときだけ: `msms` があると、2026-11-14 に MS/MS の規則の既定（`min_fragments_excl_precursor` 1・`min_fragment_relative_intensity` 0.01）を変えたので hash も変わる） |
 | `merge_split` / `merge_groups_hash` | 割れの組を判定で 1 つの候補にしたか（spec の `merge_split`）と、その組（§9 の `merge_groups`）の hash（false なら null） |
 | `input_fingerprint` | `dataset_hash`（データの指紋）・`library_sha256` |
@@ -662,10 +668,16 @@ spec:
 その特徴での統計は `dataset_analysis_run`（`features.feature_ids`）で別に出す。同じ spec・
 同じ入力なら同じ JSON になる（オブザーバーの「走らせ直しと照合」は JSON の一致で済む）。
 
-**戻り値。** `output_path` を省けば束をそのまま返す。候補が 10 を超えるときは `output_path` が要り、無ければ
-`ANALYSIS_OUTPUT_REQUIRED`（`details.n_candidates`）で断る——ほかの再解析のツールの「先頭の行と `truncated`」の
-扱いはまだ当てていない。`output_path` があれば JSON を書き、要約（`claim_id`・`rule_hash`・`input_fingerprint`・
-`default_selection`・`n_candidates`・`truncated`・走査ごとの判定）だけを返す。
+**戻り値。** `output_path` を省けば束をそのまま返す。候補が 10 を超えるときも**断らない**: 束の候補を
+`candidates_order: "default_selection_first"` の順——既定の特徴（`default_selection` の `selected_feature_id` と
+`merged_from`）→ 既定の照合で見えた候補（`scans` に `default`）→ ほかの候補、同じ段の中は束の並び（特徴の並び順）——に
+並べた先頭 10 件だけを `candidates` に載せ、`truncated: true`・`n_candidates`（束の候補の全件＝`output_path` が書く数）・
+`n_candidates_shown`・`candidates_order`・`notes`（`output_path` で全件を書ける旨）を返す。このとき束の `truncated`
+（`max_candidates` で打ち切った数）は `max_candidates_truncated` に移る（0 でなければ `notes` にも書く。打ち切った候補は
+`output_path` の JSON にも入らないので、要るなら `max_candidates` を増やす）。候補の一覧のほか（`default_selection`・
+`scans` の `candidate_feature_ids` を含む判定・`rule`・`rule_hash`・`input_fingerprint`）は束と同じ。`output_path` が
+あれば JSON を書き、要約（`claim_id`・`rule_hash`・`input_fingerprint`・`default_selection`・`n_candidates`・`truncated`
+（束と同じ `max_candidates` の打ち切りの数）・走査ごとの判定、捨てた設定があれば `notes`）だけを返す。
 
 ## 8. 質量精度と新しい知見の候補
 

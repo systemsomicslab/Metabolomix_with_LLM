@@ -129,9 +129,31 @@ def feature_relations(ds, feature_id: str, *, rt_window: float, mz_tol: float, m
 
 # ---------- 証拠の束 ----------
 
-def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
+def _rt_offset_min(spec: dict, raw_target: dict, notes: list[str] | None) -> float | None:
+    """spec の `rt_offset_min`（RT の窓の中心のずれ、分。任意）。形の誤りは `CLAIM_SPEC_INVALID`。
+
+    目標に `rt_min` が無ければ RT の窓が無く効かないので、誤りにせず捨てて `notes` に書く（規則にも
+    `rule_hash` にも入れない）。省けば None（規則は従来のまま）。
+    """
+    value = spec.get("rt_offset_min")
+    if value is None:
+        return None
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value)):
+        raise _fail(f"rt_offset_min は有限の数（分）: {value!r}", field="rt_offset_min")
+    if raw_target.get("rt_min") is None:
+        if notes is not None:
+            notes.append("rt_offset_min は target に rt_min が無い（RT の窓が無い）ので効かず、使っていない"
+                         "（規則にも rule_hash にも入れていない）。")
+        return None
+    return float(value)
+
+
+def normalize_claim_spec(spec, *, dataset_polarity: str | None,
+                         notes: list[str] | None = None) -> dict:
+    """claim-evidence-spec.v1 を正規化する。効かない設定は捨てて理由を `notes` に足す（渡したとき）。"""
     allowed = {"schema", "claim_id", "target", "scan", "msms", "relations", "max_candidates",
-               "merge_split", "ppm_offset"}
+               "merge_split", "ppm_offset", "rt_offset_min"}
     if not isinstance(spec, dict) or set(spec) - allowed:
         raise _fail(f"spec の未知のキー: {sorted(set(spec or {}) - allowed)}")
     if spec.get("schema", SPEC_SCHEMA) != SPEC_SCHEMA:
@@ -145,8 +167,11 @@ def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
     raw_target = {"target_id": claim_id.strip(), **raw_target}
     # 質量の窓の中心のずれ（任意）。既定の目標と走査の全変種に同じ spec を渡す（幅は変えない）
     offset = mass_accuracy.normalize_ppm_offset(spec.get("ppm_offset"), code="CLAIM_SPEC_INVALID")
+    # RT の窓の中心のずれ（任意。dataset_feature_search の rt_offset_min と同じ意味）。既定の目標と
+    # 走査の全変種に同じ値を渡す（幅 rt_tol_min と delta_rt は変えない）
+    rt_offset = _rt_offset_min(spec, raw_target, notes)
     target = feature_search.normalize_targets([raw_target], dataset_polarity=dataset_polarity,
-                                              ppm_offset=offset)[0]
+                                              ppm_offset=offset, rt_offset_min=rt_offset)[0]
 
     scan = spec.get("scan") or {}
     if not isinstance(scan, dict) or set(scan) - {"ppm", "rt_tol_min", "adduct_tiers"}:
@@ -170,7 +195,7 @@ def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
         # 検証は目標の正規化に任せる（読めない付加体・極性の食い違いを同じ規則で落とす）
         feature_search.normalize_targets(
             [{**raw_target, "adduct_tiers": out_scan["adduct_tiers"]}],
-            dataset_polarity=dataset_polarity, ppm_offset=offset)
+            dataset_polarity=dataset_polarity, ppm_offset=offset, rt_offset_min=rt_offset)
 
     msms = spec.get("msms")
     out_msms = None
@@ -219,6 +244,9 @@ def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
     if offset is not None:
         # 渡したときだけ規則に載せる（省けば v8 と同じ spec・同じ rule_hash）
         out["ppm_offset"] = offset
+    if rt_offset is not None:
+        # 効くときだけ規則に載せる（省けば従来と同じ spec・同じ rule_hash。目標の rt_offset_min にも入る）
+        out["rt_offset_min"] = rt_offset
     return out
 
 
@@ -418,7 +446,8 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
             if normalized["scan"]["adduct_tiers"] is not None:
                 variant["adduct_tiers"] = normalized["scan"]["adduct_tiers"]
             target = feature_search.normalize_targets([variant], dataset_polarity=dataset_polarity,
-                                                      ppm_offset=normalized.get("ppm_offset"))[0]
+                                                      ppm_offset=normalized.get("ppm_offset"),
+                                                      rt_offset_min=normalized.get("rt_offset_min"))[0]
             match = feature_search.match_target(ds, target, max_results=unlimited,
                                                 mz_array=mz_array, merged_from=merged_map)
             label = f"ppm={ppm:g},rt_tol_min={rt_tol:g}"
