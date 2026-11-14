@@ -695,9 +695,13 @@ TSV（`changed` と `unchanged` を最大 5 つずつ）、多群は moderated F
 対ごとの数（`pair n_changed n_up n_down`）と上位（`feature_id name id_level f_q`）。
 
 **群と向き**:
-- 群が 1 つ以下・探索専用のデータセット（`allow_incomplete=True` で開いた未完了の実行）・群とバッチの完全交絡では
-  比較を回さない（`omitted` に理由）。完全交絡は全群をまとめた表で見る: 多群でまとめた表が部分交絡なら、一部の対だけが
-  完全交絡でも比較は回し、その対は比較の記録（`result_ids.compare`）の `confounding.by_contrast` と行の `confounded` に印が付く。
+- 群が 1 つ以下・群とバッチの完全交絡では比較を回さない（`omitted` に理由）。完全交絡は全群をまとめた表で見る:
+  多群でまとめた表が部分交絡なら、一部の対だけが完全交絡でも比較は回し、その対は比較の記録（`result_ids.compare`）の
+  `confounding.by_contrast` と行の `confounded` に印が付く。
+- 探索専用のデータセット（`allow_incomplete=True` で開いた未完了の実行・検証を通っていない pipeline の単位）も、
+  `dataset_compare` と書き出しと同じく比較を回す。比較の数字を使う段（全体・クラス・分子種）の**先頭の事実**が探索専用の印
+  （理由つき。`data` は `{exploratory: true, reason}`）で、欠けた検体が「その群には無い」ように見えうるので差は参考。
+  概観の記録の `settings.exploratory`（`{exploratory_only: true, reason}`）にも残る（探索専用でなければ欄が無い）。
 - 2 群の向きは**仮**: 試料の表で先に出た群を対照にする（事実に「仮の向き」と付く）。向きを決めるのは
   `dataset_compare(reference_group=…, test_group=…)`。
 - 3〜6 群は全対、7 群以上は対照との対だけ（と moderated F）。

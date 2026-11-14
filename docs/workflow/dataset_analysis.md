@@ -46,12 +46,12 @@
 このハンドルで `dataset_preprocess` が最後に作った行列（手順 5。登録の `origin` と順番 `seq` で選ぶ。群の引数を渡したときは
 群が同じものだけ）、それも無ければ今の除外と群の引数から（手順 6）既定の設定で作る（戻り値の `matrix_source` が
 `matrix_id` / `latest_preprocess` / `default`）。spec は引数から組み立てて（手順 9）正規化する（手順 10）ので、結果の `spec` を
-`dataset_analysis_run` に渡せば同じ数字を出し直せる。行列が無いときは既定の前処理を回し（手順 11・12。drift=auto が補正を
-当てなかったときは警告 `drift_not_applied_by_default` が結果に載る）、行列を登録して前処理の記録も 1 件書く（手順 13）。
-`run_spec_v2` が登録済みの行列を再利用して比較し（手順 14。交絡は `compare` が対比ごとにも調べ、既定では止めずに印を付ける）、結果は
-`ds.results[result_id]` と `ds.last_differential` に置く（手順 15。記録に `p_adjust_method`）。`output_path` があれば全行の
-TSV（と F 検定の TSV）を書き（手順 16）、手順 17・18 の記録は親を行列の前処理の記録にして `reports/stats/` へ追記する
-（どちらも書けなくても比較は成功）。戻り値の `top` / `f_top` の名前と `id_level` は手順 16 と同じ `identity_of` で引く。
+`dataset_analysis_run` に渡せば同じ数字を出し直せる。行列が無いときは既定の前処理を回し（手順 11。尋ねない: drift=auto が補正を
+当てなかったときは警告 `drift_not_applied_by_default` が結果に載る）、行列を登録して前処理の記録も 1 件書く（手順 12）。
+`run_spec_v2` が登録済みの行列を再利用して比較し（手順 13。交絡は `compare` が対比ごとにも調べ、既定では止めずに印を付ける）、結果は
+`ds.results[result_id]` と `ds.last_differential` に置く（手順 14。記録に `p_adjust_method`）。`output_path` があれば全行の
+TSV（と F 検定の TSV）を書き（手順 15）、手順 16・17 の記録は親を行列の前処理の記録にして `reports/stats/` へ追記する
+（どちらも書けなくても比較は成功）。戻り値の `top` / `f_top` の名前と `id_level` は手順 15 と同じ `identity_of` で引く。
 
 1. metabolomix/tools/stats_tools.py  dataset_compare()
 2. └─ metabolomix/tools/stats_tools.py  _design_and_comparisons()
@@ -63,14 +63,13 @@ TSV（と F 検定の TSV）を書き（手順 16）、手順 17・18 の記録�
 8. └─ metabolomix/tools/stats_tools.py  _covariate_specs()
 9. └─ metabolomix/analysis/stats_results.py  compare_spec()
 10. └─ metabolomix/analysis/stats/spec_v2.py  normalize_spec_v2()
-11. └─ metabolomix/tools/stats_tools.py  _prepare_default()（行列なし）
-12.    └─ metabolomix/analysis/stats_results.py  prepare_default()
-13. └─ metabolomix/tools/_matrix_store.py  register_default()
-14. └─ metabolomix/analysis/stats/spec_v2.py  run_spec_v2()
-15. └─ metabolomix/analysis/stats_results.py  register_compare()
-16. └─ metabolomix/analysis/compare_table.py  write_compare_tables()（`output_path` あり）
-17. └─ metabolomix/tools/stats_tools.py  _write_compare_record()
-18.    └─ metabolomix/analysis/stats_records.py  write_stats_record()
+11. └─ metabolomix/analysis/stats_results.py  prepare_default()（行列なし）
+12. └─ metabolomix/tools/_matrix_store.py  register_default()
+13. └─ metabolomix/analysis/stats/spec_v2.py  run_spec_v2()
+14. └─ metabolomix/analysis/stats_results.py  register_compare()
+15. └─ metabolomix/analysis/compare_table.py  write_compare_tables()（`output_path` あり）
+16. └─ metabolomix/tools/stats_tools.py  _write_compare_record()
+17.    └─ metabolomix/analysis/stats_records.py  write_stats_record()
 
 ## dataset_pca
 
@@ -95,10 +94,11 @@ TSV（と F 検定の TSV）を書き（手順 16）、手順 17・18 の記録�
 ## dataset_overview
 
 最初の概観（spec 2026-11-06-dataset-overview-design）。`load_dataset(overview=True)` のときだけ、読み込みの最後に同じ
-`build_overview_payload()` を呼ぶ（`embedded=True`、`dataset.md` の `load_dataset`。既定の `overview=False` では呼ばない）。統計は C のエンジンだけを通す: 既定の前処理（手順 3〜5。ドリフト補正の既定が
-未決〔`NeedsInput`〕なら drift を off にして作り直し、そう書く）→ 品質の純計算（手順 7〜10。前処理前の値）→ PCA（手順 12〜13）→
-spec v2 の比較（手順 15〜18。群が 1 つ・探索専用・全群をまとめた表で完全交絡なら回さない。一部の対だけの完全交絡では
-止めず、`allow_confounded=True` で対比に印を付ける）→ 選別の後だけ組成（手順 20）。比較と PCA は `make_current=False` で
+`build_overview_payload()` を呼ぶ（`embedded=True`、`dataset.md` の `load_dataset`。既定の `overview=False` では呼ばない）。統計は C のエンジンだけを通す: 既定の前処理（手順 3〜5。尋ねない:
+drift=auto がドリフト補正を当てなかったら補正なしで計算し、そう書く）→ 品質の純計算（手順 7〜10。前処理前の値）→ PCA（手順 12〜13）→
+spec v2 の比較（手順 15〜18。群が 1 つ・全群をまとめた表で完全交絡なら回さない。一部の対だけの完全交絡では
+止めず、`allow_confounded=True` で対比に印を付ける。探索専用のデータセットも比較を回し、`analysis/dataset_export.py` の `exploratory_reason()` の理由で
+全体・クラス・分子種の段の先頭に印の事実を置く）→ 選別の後だけ組成（手順 20）。比較と PCA は `make_current=False` で
 `ds.results` に置き、直近（`last_differential` / `last_pca`）は動かさない。事実の組み立ては `analysis/overview.py`（手順 6・11・19・21〜24）で、
 概観は `ds.results[ovw_…]`（`kind="overview"`、手順 25）と `reports/stats/`（step=overview、親は前処理の記録、手順 26）に残す。
 

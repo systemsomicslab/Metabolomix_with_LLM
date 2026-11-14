@@ -3,7 +3,7 @@
 統計エンジンの行列（前処理済みの脂質データ）を MSLipidMapper（R パッケージ）に渡し、
 同梱パスウェイ（remodeling / ceramide / global）へ投影する経路。MSLipidMapper は
 `[mslipidmapper] mslipidmapper_api_url` の研究室サーバ（REST API）を先に使い、使えなければローカルの Rscript へ回す。前提状態の連鎖は
-`load_dataset` →（`dataset_preprocess`。省略時は既定の前処理を自分で回す）→
+`load_dataset` →（`dataset_preprocess`。省略時は直近の `dataset_preprocess` の行列、それも無ければ既定の前処理を自分で回す）→
 `pathway_project` → `pathway_plot`（`assay_kind` は問わない。lipid でなければ `notes.assay_kind` に名前の文法が前提である旨）。値の**意味**は
 [pathway.md（output_format）](../output_format/pathway.md) を見ること。
 
@@ -34,9 +34,12 @@ message に R の本文を入れる。
 ## pathway_project
 
 前提: なし（データセット（ハンドル）の `assay_kind` は問わない。lipid でなければ戻り値と manifest の `notes.assay_kind` に注意を書く）。
-入力は直近のデータセットの統計エンジンの行列（`matrix_id` 省略時は既定の前処理。`dataset_compare` / `dataset_pca` と違い、直近の `dataset_preprocess` の行列は選ばない。
+入力は直近のデータセットの統計エンジンの行列。行列は `dataset_compare` / `dataset_pca` と同じ決め方（手順 3 の
+`matrix_inputs(prefer_latest=True)`）: `matrix_id` を渡せば登録済みのその行列、省けばこのハンドルで `dataset_preprocess` が
+最後に作った行列（手順 4）、それも無ければ既定の前処理（手順 5。drift=auto は換算済み・注入順がファイルの順かもしれないとき
+ドリフト補正を当てずに計算する）。どれを使ったかは戻り値と manifest の `matrix_source`（`matrix_id` / `latest_preprocess` / `default`）。
 データセットが無ければ `missing_state` → `load_dataset`、名指しの行列が無い・古いなら `missing_state("stat_matrix")` →
-`dataset_preprocess`。drift=auto は換算済み・注入順がファイルの順かもしれないときドリフト補正を当てずに計算する）。既定の行列は、要求の検査（試料・単位の数・aggregation・q_threshold・method）がすべて済んでから登録し、前処理の記録を書く（`register_default`。以降のエラーには `details.matrix_id` を添える）。
+`dataset_preprocess`。既定の行列は、要求の検査（試料・単位の数・aggregation・q_threshold・method）がすべて済んでから登録し、前処理の記録を書く（手順 8 の `register_default`）。`matrix_id` を省いた呼び出しのエラーには、使った行列の `details.matrix_id` と `matrix_source` を添える（既定の行列は登録の後のエラーだけ。`latest_preprocess` なら `details.matrix_note` も）。
 旧 ARF 経路（`source="arf"`）は B-2b Task 8 で消えた。MSLipidMapper へは行列の注入ごとの値（生体のみ・欠測は 0）を渡す。
 状態変更: `session.pathway.last_run_id` / `last_run_dir`。
 R の仮想環境は起動前に確かめる（`_check_environment()`）: `r/renv/library` に MSLipidMapper が無ければ
@@ -47,24 +50,25 @@ R の仮想環境は起動前に確かめる（`_check_environment()`）: `r/ren
 1. metabolomix/pathway/tools.py  pathway_project()
 2. ├─ metabolomix/pathway/tools.py  _build_dataset()
 3. │  ├─ metabolomix/analysis/stats_results.py  matrix_inputs()
-4. │  ├─ [matrix_id なし] metabolomix/analysis/stats_results.py  prepare_default()
-5. │  └─ metabolomix/pathway/handoff.py  build_from_dataset()
-6. │     └─ metabolomix/pathway/handoff.py  resolve_row()（経路か落とす理由。残す名前の頭は upstream_head_ok() で確かめる）
-7. ├─ [matrix_id なし] metabolomix/tools/_matrix_store.py  register_default()
-8. ├─ metabolomix/pathway/handoff.py  write_mztab()
-9. ├─ metabolomix/pathway/bridge.py  run_bridge()
-10. │  ├─ [mslipidmapper_api_url あり] metabolomix/pathway/bridge.py  _run_remote()
-11. │  │  ├─ metabolomix/pathway/bridge.py  _remote_config()
-12. │  │  └─ metabolomix/pathway/remote.py  run_job()（output.format=jsonld。記録は `remote-job-measure.json`）
-13. │  └─ [mslipidmapper_api_url なし・サーバ失敗] metabolomix/pathway/bridge.py  _run_local()
-14. │     ├─ metabolomix/pathway/bridge.py  _check_environment()
-15. │     └─ （R 側。mode=measure で `mslm_bridge.R` が `MSLipidMapper::mztab_pathway_measurements` を呼ぶ）
-16. ├─ metabolomix/pathway/jsonld.py  load_graph()
-17. ├─ metabolomix/pathway/compare.py  compare_scopes()
-18. │  ├─ metabolomix/analysis/stats/external.py  prepared_from_injections()（注入を行列の単位にまとめる。まとめない行列なら注入ごと）
-19. │  └─ metabolomix/analysis/stats/compare.py  compare()（`method` の検定。スコープ種別ごとに 1 回）
-20. └─ metabolomix/pathway/compare.py  opposite_pairs()
-21.    └─ metabolomix/pathway/jsonld.py  adjacent_lipid_pairs()
+4. │  │  └─ [matrix_id なし] metabolomix/analysis/stats_results.py  latest_preprocess_matrix()
+5. │  ├─ [行列なし] metabolomix/analysis/stats_results.py  prepare_default()
+6. │  └─ metabolomix/pathway/handoff.py  build_from_dataset()
+7. │     └─ metabolomix/pathway/handoff.py  resolve_row()（経路か落とす理由。残す名前の頭は upstream_head_ok() で確かめる）
+8. ├─ [行列なし] metabolomix/tools/_matrix_store.py  register_default()
+9. ├─ metabolomix/pathway/handoff.py  write_mztab()
+10. ├─ metabolomix/pathway/bridge.py  run_bridge()
+11. │  ├─ [mslipidmapper_api_url あり] metabolomix/pathway/bridge.py  _run_remote()
+12. │  │  ├─ metabolomix/pathway/bridge.py  _remote_config()
+13. │  │  └─ metabolomix/pathway/remote.py  run_job()（output.format=jsonld。記録は `remote-job-measure.json`）
+14. │  └─ [mslipidmapper_api_url なし・サーバ失敗] metabolomix/pathway/bridge.py  _run_local()
+15. │     ├─ metabolomix/pathway/bridge.py  _check_environment()
+16. │     └─ （R 側。mode=measure で `mslm_bridge.R` が `MSLipidMapper::mztab_pathway_measurements` を呼ぶ）
+17. ├─ metabolomix/pathway/jsonld.py  load_graph()
+18. ├─ metabolomix/pathway/compare.py  compare_scopes()
+19. │  ├─ metabolomix/analysis/stats/external.py  prepared_from_injections()（注入を行列の単位にまとめる。まとめない行列なら注入ごと）
+20. │  └─ metabolomix/analysis/stats/compare.py  compare()（`method` の検定。スコープ種別ごとに 1 回）
+21. └─ metabolomix/pathway/compare.py  opposite_pairs()
+22.    └─ metabolomix/pathway/jsonld.py  adjacent_lipid_pairs()
 
 ## pathway_plot
 

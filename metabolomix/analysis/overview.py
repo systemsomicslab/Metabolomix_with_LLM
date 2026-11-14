@@ -221,10 +221,26 @@ def _verdict_counts(rows: list[dict]) -> dict:
     return out
 
 
+def _exploratory_fact(f: _Facts, exploratory: str | None) -> None:
+    """探索専用のデータセットなら、その段の先頭に印の事実を足す（`exploratory` は理由。無ければ何もしない）。
+
+    比較は断らずに回す（dataset_compare・書き出しと同じ）が、未完了の実行では欠けた検体が「その群には無い」
+    ように見えうるので、比較の数字を使う段（全体・クラス・分子種）ごとに同じ印を付ける。"""
+    if exploratory is None:
+        return
+    f.add(f"探索専用のデータセット（{exploratory}）。比較は回したが、未完了の実行で欠けた検体が「その群には無い」"
+          "ように見えうるので、この段の差は参考（書き出し・図にも探索専用の印が載る）",
+          exploratory=True, reason=exploratory)
+
+
 def global_facts(*, pca_result: dict | None, labels: dict, record: dict | None, plan: dict,
-                 omitted: str | None, quality_note: str | None) -> dict:
-    """全体の段: PCA の寄与率・群の重心・群で説明される分散（η²）と、比較の全体の件数。"""
+                 omitted: str | None, quality_note: str | None, exploratory: str | None = None) -> dict:
+    """全体の段: PCA の寄与率・群の重心・群で説明される分散（η²）と、比較の全体の件数。
+
+    `exploratory`（探索専用のデータセットの理由）があれば、比較を回した段の先頭に印の事実を置く。"""
     f = _Facts("G")
+    if record is not None:
+        _exploratory_fact(f, exploratory)
     if pca_result is not None:
         evr = list(pca_result.get("explained_variance_ratio") or [])
         units = pca_result["unit_ids"]
@@ -270,8 +286,10 @@ def global_facts(*, pca_result: dict | None, labels: dict, record: dict | None, 
 # --- クラス --------------------------------------------------------------------------------
 
 def class_facts(*, composition_result: dict | None, gate: str | None, gate_next: str,
-                plan: dict, quality_note: str | None) -> dict:
-    """クラスの段。門（選別の前・定量の鎖が使えない入口）を通らなければ `omitted`。"""
+                plan: dict, quality_note: str | None, exploratory: str | None = None) -> dict:
+    """クラスの段。門（選別の前・定量の鎖が使えない入口）を通らなければ `omitted`。
+
+    `exploratory`（探索専用のデータセットの理由）があれば、先頭に印の事実を置く。"""
     if gate is not None:
         return {"omitted": gate, "facts": [], "next": gate_next}
     comp = composition_result or {}
@@ -279,6 +297,7 @@ def class_facts(*, composition_result: dict | None, gate: str | None, gate_next:
     if absolute is None:
         return {"omitted": "クラスの付いた特徴が無い", "facts": [], "next": gate_next}
     f = _Facts("C")
+    _exploratory_fact(f, exploratory)
     label = "脂質クラス" if comp.get("class_label_kind") == "lipid_class" else "MS-DIAL のオントロジー"
     classes = comp.get("classes") or {}
     clr = comp.get("clr")
@@ -328,11 +347,14 @@ def class_facts(*, composition_result: dict | None, gate: str | None, gate_next:
 # --- 分子種 --------------------------------------------------------------------------------
 
 def species_facts(ds, *, record: dict | None, plan: dict, top_n: int, pairs_omitted: bool,
-                  omitted: str | None, quality_note: str | None) -> dict:
-    """分子種の段: 判定ごとの件数（上昇・下降）、出方だけが違う特徴、変わった上位。"""
+                  omitted: str | None, quality_note: str | None, exploratory: str | None = None) -> dict:
+    """分子種の段: 判定ごとの件数（上昇・下降）、出方だけが違う特徴、変わった上位。
+
+    `exploratory`（探索専用のデータセットの理由）があれば、先頭に印の事実を置く。"""
     if record is None:
         return {"omitted": omitted, "facts": [], "next": "dataset_overview() を条件を直してから呼び直す"}
     f = _Facts("S")
+    _exploratory_fact(f, exploratory)
     engine = record["engine"]
     rid = record["result_id"]
     rows = engine["rows"]

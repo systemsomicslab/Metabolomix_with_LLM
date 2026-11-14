@@ -52,7 +52,7 @@ def test_load_dataset_overview_must_be_bool(tmp_path, fresh_state):
     assert out["error"]["code"] == "DATASET_BAD_REQUEST"
 
 
-def test_load_dataset_incomplete_overview_has_no_comparisons(tmp_path, fresh_state, monkeypatch):
+def test_load_dataset_incomplete_overview_compares_with_the_mark(tmp_path, fresh_state, monkeypatch):
     real = opening.open_dataset
 
     def exploratory(**kwargs):
@@ -63,8 +63,8 @@ def test_load_dataset_incomplete_overview_has_no_comparisons(tmp_path, fresh_sta
     monkeypatch.setattr(opening, "open_dataset", exploratory)
     out = _load(directory=str(_folder(tmp_path / "a")), overview=True)
     assert out["status"] == "success"
-    assert "探索専用" in out["overview"]["species"]["omitted"]
-    assert "compare" not in out["overview"]["result_ids"]
+    assert "compare" in out["overview"]["result_ids"]
+    assert out["overview"]["species"]["facts"][0].startswith("S1 探索専用")
 
 
 def test_load_dataset_survives_overview_failure(tmp_path, fresh_state, monkeypatch):

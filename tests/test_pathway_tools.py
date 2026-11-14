@@ -461,7 +461,55 @@ def test_pathway_project_uses_registered_matrix_id(lipid_arf, fake_measure):
                                         max_qc_rsd=None, max_d_ratio=None))
     body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"], matrix_id=pre["matrix_id"]))
     assert "error" not in body, body
-    assert body["matrix_id"] == pre["matrix_id"]
+    assert body["matrix_id"] == pre["matrix_id"] and body["matrix_source"] == "matrix_id"
+
+
+def test_pathway_project_without_matrix_id_uses_latest_preprocess(lipid_arf, fake_measure, tmp_path):
+    """matrix_id を省くと dataset_compare / dataset_pca と同じく、このハンドルで dataset_preprocess が最後に作った
+    行列を使う（既定の前処理を回さず、前処理の記録も足さない）。出所は戻り値と manifest の matrix_source。"""
+    from metabolomix.tools.stats_tools import dataset_preprocess
+    first = json.loads(dataset_preprocess(blank_min_ratio=None, detection_min_rate=None,
+                                          max_qc_rsd=None, max_d_ratio=None))
+    second = json.loads(dataset_preprocess(blank_min_ratio=None, detection_min_rate=None,
+                                           max_qc_rsd=None, max_d_ratio=None, normalize="median"))
+    assert first["matrix_id"] != second["matrix_id"]
+    records = _stats_records(tmp_path)
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    assert "error" not in body, body
+    assert body["matrix_id"] == second["matrix_id"] and body["matrix_source"] == "latest_preprocess"
+    assert "preprocess_record" not in body and _stats_records(tmp_path) == records
+    manifest = json.loads((tmp_path / "reports" / "pathway" / body["run_id"] / "manifest.json")
+                          .read_text(encoding="utf-8"))
+    assert manifest["matrix_id"] == second["matrix_id"] and manifest["matrix_source"] == "latest_preprocess"
+    assert manifest["preprocess_record_id"] == second["record"]["record_id"]
+    # 名指しは名指しのまま
+    named = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"], matrix_id=first["matrix_id"]))
+    assert named["matrix_id"] == first["matrix_id"] and named["matrix_source"] == "matrix_id"
+
+
+def test_pathway_project_default_matrix_reports_its_source(lipid_arf, fake_measure, tmp_path):
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    assert "error" not in body, body
+    assert body["matrix_source"] == "default"
+    manifest = json.loads((tmp_path / "reports" / "pathway" / body["run_id"] / "manifest.json")
+                          .read_text(encoding="utf-8"))
+    assert manifest["matrix_source"] == "default"
+    # 既定の行列は dataset_preprocess の行列ではない（次の呼び出しも既定の行列を使い直す）
+    again = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    assert again["matrix_id"] == body["matrix_id"] and again["matrix_source"] == "default"
+
+
+def test_error_after_latest_preprocess_names_the_matrix_and_its_source(lipid_arf, fake_measure):
+    from metabolomix.tools.stats_tools import dataset_preprocess
+    pre = json.loads(dataset_preprocess(blank_min_ratio=None, detection_min_rate=None,
+                                        max_qc_rsd=None, max_d_ratio=None))
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"], acyl_chains=["99:9"]))
+    details = body["error"]["details"]
+    assert details["matrix_id"] == pre["matrix_id"] and details["matrix_source"] == "latest_preprocess"
+    assert "dataset_preprocess" in details["matrix_note"]
+    named = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"], acyl_chains=["99:9"],
+                                             matrix_id=pre["matrix_id"]))
+    assert "matrix_source" not in named["error"]["details"]         # 名指しの行列は呼び手が知っている
 
 
 def _qc_session(monkeypatch, tmp_path, **kw):
@@ -682,6 +730,12 @@ def test_units_follow_the_matrix_not_a_fixed_collapse(monkeypatch, tmp_path, fak
     assert "error" not in body, body
     assert body["n_units"] == {"C": 6, "P": 6} and body["groups"] == {"C": 6, "P": 6}
     assert seen[-1]["C0_r0"] != seen[-1]["C0_r1"]
+    # matrix_id を省けば直近の dataset_preprocess の行列（まとめない行列）のまま
+    latest = json.loads(tools.pathway_project(**groups, pathways=["remodeling"]))
+    assert latest["matrix_source"] == "latest_preprocess" and latest["n_units"] == {"C": 6, "P": 6}
+    pre = json.loads(dataset_preprocess(collapse_replicates=True, blank_min_ratio=None,
+                                        detection_min_rate=None, max_qc_rsd=None, max_d_ratio=None))
     collapsed = json.loads(tools.pathway_project(**groups, pathways=["remodeling"]))
+    assert collapsed["matrix_id"] == pre["matrix_id"]
     assert collapsed["n_units"] == {"C": 3, "P": 3}
     assert seen[-1]["C0_r0"] == seen[-1]["C0_r1"]

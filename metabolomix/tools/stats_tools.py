@@ -24,7 +24,7 @@ from metabolomix.analysis.stats_run_summary import factorial_summary
 from metabolomix.core import mcp_core
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
-from metabolomix.core.mcp_errors import default_matrix_needs_input, missing_state, mztab_error
+from metabolomix.core.mcp_errors import missing_state, mztab_error
 from metabolomix.core.serialization import json_payload, json_safe, round_floats, truncate_lists
 from metabolomix.tools._holder import resolve_holder
 from metabolomix.tools._matrix_store import register_default, store_matrix
@@ -122,8 +122,8 @@ def dataset_preprocess(
     """統計エンジンの前処理を回して、前処理済みの行列を作る（行列 ID を返す）。
 
     工程は 選択 → ドリフト補正 → 品質の足切り → 正規化 → log2 → 反復のまとめ（個体ごとの行列）。
-    同じデータ・除外・群・設定は同じ `matrix_id`。比較（dataset_compare）・PCA（dataset_pca）は
-    この ID を受ける（省略時は、このハンドルで最後に作ったこの行列。無ければ既定の設定）。
+    同じデータ・除外・群・設定は同じ `matrix_id`。比較（dataset_compare）・PCA（dataset_pca）・パスウェイ
+    （pathway_project）はこの ID を受ける（省略時は、このハンドルで最後に作ったこの行列。無ければ既定の設定）。
     `dataset_exclude` の除外は自動で反映される。
     `reports/stats/` に記録を 1 件追記する（書けないときは record.written=false。前処理は成功）。
 
@@ -395,16 +395,6 @@ def _omnibus_summary(engine: dict):
             "n_q_below": sum(1 for o in tested if o["f_q"] is not None and o["f_q"] <= q_thr)}
 
 
-def _prepare_default(study, config, tool: str):
-    """既定の前処理（純粋。登録も記録もしない）。利用者への確認が要るときは `needs_input` の封筒（str）、
-    さもなくば `PreparedMatrix`。`tool` は理由に書く呼び直し先（drift_mode の引数を持たないツール）。
-    「matrix_id か既定の行列」の入力側は `stats_results.matrix_inputs` / `prepare_default`（パスウェイと共有）。"""
-    prepared = stats_results.prepare_default(study, config)
-    if isinstance(prepared, stats_preprocess.NeedsInput):
-        return default_matrix_needs_input(prepared, tool)
-    return prepared
-
-
 def _matrix_not_found(matrix_id) -> str:
     return missing_state(
         "stat_matrix", ["dataset_preprocess"],
@@ -548,9 +538,7 @@ def dataset_compare(
             preprocess=preprocess, inputs=inputs, p_adjust=p_adjust, reported_feature_ids=reported))
 
         prepared = (entry["prepared"] if entry is not None
-                    else _prepare_default(study, spec["preprocess"], "dataset_compare"))
-        if isinstance(prepared, str):
-            return prepared
+                    else stats_results.prepare_default(study, spec["preprocess"]))
 
         preprocess_record = None
         if entry is None:
@@ -696,9 +684,7 @@ def dataset_pca(
             prepared = entry["prepared"]
         else:
             study = from_dataset(ds, **inputs)
-            prepared = _prepare_default(study, config, "dataset_pca")
-            if isinstance(prepared, str):
-                return prepared
+            prepared = stats_results.prepare_default(study, config)
             entry, preprocess_record = register_default(holder, ds, study, prepared, config, inputs)
             used_matrix = prepared.matrix_id      # 行列は登録済み。呼び直しにそのまま使える
         result = stats_pca.pca(prepared, scaling=scaling, n_components=n_components, impute=impute)

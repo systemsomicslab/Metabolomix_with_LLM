@@ -174,19 +174,6 @@ class PreparedMatrix:
     sample_detected: np.ndarray | None = None  # 検出の別が無い研究は None
 
 
-@dataclass
-class NeedsInput:
-    """利用者へ尋ねる封筒。前処理は今は返さない（ドリフト補正の既定は尋ねずに off で計算し、
-    理由と `on` で呼び直す選択肢を注意で返す。2026-11-14 の C3）。受け手の分岐の互換のために残す。"""
-    field: str
-    reason: str
-    options: list[dict]
-
-    def to_envelope(self) -> dict:
-        return {"status": "needs_input", "field": self.field, "reason": self.reason,
-                "options": self.options}
-
-
 def _positive(x: np.ndarray) -> np.ndarray:
     """有限の正値だけを残し、それ以外を NaN にした写し。"""
     x = np.asarray(x, dtype=float)

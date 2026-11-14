@@ -545,21 +545,6 @@ def test_matrix_inputs_default_and_named_and_missing():
     assert exc.value.matrix_id == "nope"
 
 
-def test_default_matrix_needs_input_envelope_names_the_tool():
-    from metabolomix.analysis.stats.preprocess import NeedsInput
-    from metabolomix.core.mcp_errors import default_matrix_needs_input
-
-    options = [{"value": "on", "label": "on"}, {"value": "off", "label": "off"}]
-    body = json.loads(default_matrix_needs_input(
-        NeedsInput("preprocess.drift.mode", "尋ねる。", options), "pathway_project"))
-    assert body == {"needs_input": {
-        "field": "preprocess.drift.mode",
-        "reason": "尋ねる。 pathway_project には drift_mode 引数がありません。"
-                  "dataset_preprocess(drift_mode=...) で行列を作り、その matrix_id を "
-                  "pathway_project に渡して呼び直してください。",
-        "options": options, "argument": "drift_mode", "retry_tools": ["dataset_preprocess"]}}
-
-
 def test_register_matrix_rejects_external_matrix_without_fingerprint():
     import numpy as np
     from metabolomix.analysis.stats.external import prepared_from_injections

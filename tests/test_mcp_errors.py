@@ -80,31 +80,31 @@ class TestDatasetBadRequest(unittest.TestCase):
 class NeedsInputEnvelopeTests(unittest.TestCase):
     """利用者に尋ねてから呼び直す封筒。エラーではない（`error` キーを持たない）。"""
 
-    OPTIONS = [{"value": "on", "label": "補正する"}, {"value": "off", "label": "補正しない"}]
+    OPTIONS = [{"value": "B_vs_A", "label": "B vs A（対照 A）"},
+               {"value": "C_vs_A", "label": "C vs A（対照 A）"}]
 
     def test_needs_input_envelope_shape(self):
         raw = mcp_errors.needs_input(
-            "preprocess.drift.mode", "内部標準で換算済みの値に QC のドリフト補正を重ねるか",
-            self.OPTIONS, argument="drift_mode",
-            retry_tools=["dataset_preprocess", "dataset_compare"])
+            "contrast_id", "この比較には対比が 2 つあります。どの対比を描くか選んでください。",
+            self.OPTIONS, argument="contrast_id", retry_tools=["dataset_plot", "save_figure"])
         payload = json.loads(raw)
         self.assertEqual(set(payload), {"needs_input"})
         self.assertNotIn("error", payload)
         body = payload["needs_input"]
-        self.assertEqual(body["field"], "preprocess.drift.mode")
-        self.assertIn("ドリフト", body["reason"])
+        self.assertEqual(body["field"], "contrast_id")
+        self.assertIn("対比", body["reason"])
         self.assertEqual(body["options"], self.OPTIONS)
-        self.assertEqual(body["argument"], "drift_mode")
-        self.assertEqual(body["retry_tools"], ["dataset_preprocess", "dataset_compare"])
-        self.assertIn("補正する", raw)   # 日本語をエスケープしない
+        self.assertEqual(body["argument"], "contrast_id")
+        self.assertEqual(body["retry_tools"], ["dataset_plot", "save_figure"])
+        self.assertIn("対照", raw)   # 日本語をエスケープしない
 
     def test_argument_is_omitted_when_not_given(self):
-        """spec の欄で答える経路（dataset_analysis_run の v2）は argument を持たない。"""
+        """spec の欄で答える経路（dataset_novel_candidates の statistics.result_id）は argument を持たない。"""
         body = json.loads(mcp_errors.needs_input(
-            "preprocess.drift.mode", "理由", self.OPTIONS,
-            retry_tools=["dataset_analysis_run"]))["needs_input"]
+            "statistics.result_id", "理由", self.OPTIONS,
+            retry_tools=["dataset_novel_candidates"]))["needs_input"]
         self.assertNotIn("argument", body)
-        self.assertEqual(body["field"], "preprocess.drift.mode")
+        self.assertEqual(body["field"], "statistics.result_id")
 
     def test_required_parts_are_validated(self):
         ok = dict(field="f", reason="r", options=self.OPTIONS, retry_tools=["t"])
