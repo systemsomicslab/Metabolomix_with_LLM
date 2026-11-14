@@ -133,8 +133,9 @@ def dcl_diagnostic_ions(spot_ids: list[int], ions: list[dict], arf2_path: str | 
 
     spot_ids: アラインメントのスポット ID（mzTab-M の SMF_ID）。1 回 200 件まで。
     ions: 各要素は `{"mz": 184.0733}`（診断イオン）か `{"neutral_loss": 141.0191}`（前駆体からの
-        中性損失）に、任意で `label`・`tol`（Da、既定 0.01）・`min_relative_intensity`（診断イオン
-        だけ。最大ピークに対する比、既定 0）。
+        中性損失）に、任意で `label`・`tol`（Da、既定 0.01）・`min_relative_intensity`（最大ピークに
+        対する比、既定 0。中性損失は生成イオン＝前駆体 − neutral_loss の比）。知らないキーは
+        `MSMS_RULES_INVALID`（誤りの文がそのキーを名指す）。
     TSV（`spot_id label kind target_mz found observed_mz relative_intensity status`）。
     `status` が `ok` 以外の行（MS/MS が無い・索引の崩れ）は照会していない（`found` は空）——
     「イオンが無かった」と読まない。
@@ -163,10 +164,10 @@ def dcl_diagnostic_ions(spot_ids: list[int], ions: list[dict], arf2_path: str | 
                                   f"ions[{i}] は mz か neutral_loss のどちらか一方を持つ辞書",
                                   {"field": f"ions[{i}]"})
             if "mz" in ion:
-                normalized += msms_rules.normalize_ions([ion], kind="ion", label=f"ions[{i}]")
+                normalized.append(msms_rules.normalize_ion(ion, kind="ion", label=f"ions[{i}]"))
             else:
-                renamed = {("delta" if k == "neutral_loss" else k): v for k, v in ion.items()}
-                normalized += msms_rules.normalize_ions([renamed], kind="loss", label=f"ions[{i}]")
+                normalized.append(msms_rules.normalize_ion(ion, kind="loss", label=f"ions[{i}]",
+                                                           loss_key="neutral_loss"))
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
     arf2_path, dcl_file, lacking = alignment_paths(holder, dataset_handle, arf2_path, dcl_file)

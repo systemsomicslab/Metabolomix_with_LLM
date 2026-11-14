@@ -46,6 +46,8 @@ __all__ = [
     "gaussian_similarity",
     "fix_mass_tolerance",
     "total_score",
+    "fragment_matches_excluding_precursor",
+    "MEASURED_BASE_PEAK",
 ]
 
 _PEAK_COUNT_PENALTY = {1: 0.75, 2: 0.88, 3: 0.94, 4: 0.97}
@@ -596,17 +598,29 @@ def match_spectrum(measured, reference, *, ms2_tol, mass_begin=0.0, mass_end=200
     }
 
 
-def fragment_matches_excluding_precursor(alignment, precursor_mz, tol):
+#: `match_spectrum` の `alignment` の `measured` の尺度。`normalize_measured` が測定の基準ピーク
+#: （最大ピーク）を 100 にするので、窓の測定強度 / 100 が基準ピークに対する比になる。
+MEASURED_BASE_PEAK = 100.0
+
+
+def fragment_matches_excluding_precursor(alignment, precursor_mz, tol, *,
+                                         min_relative_intensity: float = 0.0):
     """一致した参照ピークのうち、前駆体（`precursor_mz` ± `tol`）を除いた本数。
 
     `alignment` は `match_spectrum` の `alignment`（`_matched_peaks_walk` の行）。
     `matched_peaks_count` は前駆体の一致も 1 本に数えるので、前駆体しか合っていない
     候補でも 1 になる（spec 2026-10-22 §2 の 3）。比較できない（alignment が空）なら None。
+
+    `min_relative_intensity`（既定 0 = 下限なし）は測定側の強度の下限で、窓の測定強度が
+    測定の基準ピークに対してこの比以上の窓だけを数える（雑音の 1 本を一致に数えないため。
+    2026-11-13 の事実確認 A1）。`matched_peaks_count`（MS-DIAL の写し）の意味は変えない。
     """
     if not alignment:
         return None
+    floor = float(min_relative_intensity) * MEASURED_BASE_PEAK
     return sum(1 for row in alignment
-               if row.get("matched") and abs(float(row["mz"]) - float(precursor_mz)) > tol)
+               if row.get("matched") and abs(float(row["mz"]) - float(precursor_mz)) > tol
+               and float(row.get("measured") or 0.0) >= floor)
 
 
 def gaussian_similarity(actual, reference, tolerance):

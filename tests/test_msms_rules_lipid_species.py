@@ -1,6 +1,7 @@
 """msms-rules.v1 の種の目標（`target.lipid_species`）と、証拠の束の種の主張（純ロジック）。
 
-InChIKey の規則・主張の hash は、この口を足す前の値で固定する（既存の挙動を変えない）。
+InChIKey の規則・主張の hash は固定値で縛る。2026-11-14 に既定（`min_fragments_excl_precursor` 1・
+`min_fragment_relative_intensity` 0.01）を変えたので、そのとき値を引き直した（意図した変化。事実確認 A1）。
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ def _record(name, inchikey=None, formula=PC_FORMULA):
 
 
 def _result(score, matched_mz):
-    alignment = [{"mz": mz, "measured": 1.0, "reference": 1.0, "matched": True}
+    alignment = [{"mz": mz, "measured": 50.0, "reference": 1.0, "matched": True}
                  for mz in matched_mz]
     return {"total_score": score, "weighted_dot_product": score / 3, "alignment": alignment}
 
@@ -59,17 +60,50 @@ def test_inchikey_rules_are_unchanged():
                                           "formula": "C42H82NO8P"},
                                "lipid_class": "PC", "same_formula_margin": {"min_delta": 0.1}})
     assert rules["target"] == {"inchikey_block": "JLPULHDHAOZNQI", "formula": "C42H82NO8P"}
-    assert M.rules_hash(rules) == "932ae02d1c890c8bfcb87eec9b1345bb8cd99a8a864b45f1ef0f08116d132e69"
+    assert M.rules_hash(rules) == "46345c9781e7f5ea28cd95da198ff17f0424c3090fb3135bad987d6124700408"
 
 
 def test_species_target_rank_is_found_by_the_record_name():
     out = M.qualify(_scored(), MEASURED, PRECURSOR, _species_rules(top_rank=1), ms2_tol=0.025)
     assert out["target_rank"] == 2
     assert out["checks"][0] == {"check": "target_in_top_rank", "status": "fail", "value": 2,
-                                "detail": {"top_rank": 1}}
+                                "detail": {"top_rank": 1, "species_route": "name"}}
     out = M.qualify(_scored(), MEASURED, PRECURSOR,
                     _species_rules(min_fragments_excl_precursor=2), ms2_tol=0.025)
     assert out["verdict"] == "qualified" and out["target_rank"] == 2
+
+
+@pytest.mark.parametrize("record, species, route", [
+    ({"name": "PC 16:0_18:1"}, "PC 34:1", "name"),
+    ({"name": "low score: PC 34:1"}, "PC 34:1", "name"),
+    # 注記・英語のクラス名・古い書式は直してから読む
+    ({"name": "PC 34:1; PlaSMA ID-1486"}, "PC 34:1", "name_cleaned"),
+    ({"name": "Phosphatidylcholine 16:0-18:1"}, "PC 34:1", "name_cleaned"),
+    ({"name": "Cer[NS] d18:1/16:0"}, "Cer 34:1;O2", "name_cleaned"),
+    # 名前で読めなければ ClassyFire の Ontology と分子式から（LPS / LPG も）
+    ({"name": "1-oleoyl-glycero-3-phosphoserine", "ontology": "1-acyl-glycerol-3-phosphoserines",
+      "formula": "C24H46NO9P"}, "LPS 18:1", "ontology_formula"),
+    ({"name": "lysophosphatidylglycerol", "ontology": "Lysophosphatidylglycerols",
+      "formula": "C22H45O9P"}, "LPG 16:0", "ontology_formula"),
+    ({"name": "LPS 18:1"}, "LPS 18:1", "name"),
+    # 同位体の標識（内部標準）・脂質でない記録は種に読まない
+    ({"name": "PC 15:0-18:1(d7)"}, None, None),
+    ({"name": "Glucose", "ontology": "Hexoses", "formula": "C6H12O6"}, None, None),
+    ({"name": ""}, None, None),
+])
+def test_record_lipid_species_routes(record, species, route):
+    assert M.record_lipid_species(record) == (species, route)
+
+
+def test_species_target_found_through_the_ontology_route():
+    scored = [(_record("Glucose", formula="C6H12O6"), _result(2.0, [754.5381])),
+              ({"name": "1-oleoyl-glycero-3-phosphoserine",
+                "ontology": "1-acyl-glycerol-3-phosphoserines", "formula": "C24H46NO9P"},
+               _result(1.5, [184.0733, 754.5381]))]
+    rules = M.normalize_rules({"target": {"lipid_species": "LPS 18:1"}})
+    out = M.qualify(scored, MEASURED, PRECURSOR, rules, ms2_tol=0.025)
+    assert out["target_rank"] == 2 and out["top1_is_target"] is False
+    assert out["checks"][0]["detail"]["species_route"] == "ontology_formula"
 
 
 def test_ether_record_is_not_the_diacyl_species():
@@ -104,7 +138,7 @@ def test_inchikey_claim_rule_hash_is_unchanged():
     # merge_split=false（v7 と同じ規則）は v7 の hash のまま。既定（true）は merge_split が規則に入る
     normalized = C.normalize_claim_spec({**spec, "merge_split": False}, dataset_polarity="positive")
     assert C.rule_hash(normalized) == \
-        "fb597799f7388814f93093b472ee773769e40aabaaf6ad0bb0fabb56338f33db"
+        "9be780c9eca0d647b47ce5f15c2bcc0fa847d2fd96bfda30c63bcc14d47d805a"
     merged = C.normalize_claim_spec(spec, dataset_polarity="positive")
     assert merged["merge_split"] is True
     assert C.rule_hash(merged) != C.rule_hash(normalized)

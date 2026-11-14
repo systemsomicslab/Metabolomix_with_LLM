@@ -79,21 +79,34 @@ property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` 
 前提: ライブラリ（`library_load` か、ライブラリつきの `load_dataset`）。無ければ
 `missing_state`。状態変更: なし（直近の照合 `last_match` も書かない）。
 
+`ion_mode` は手順 4 で正規化し（読めない値は `DATASET_BAD_REQUEST`）、`mz_tol_ppm` は 0 より大きい有限の数だけを
+受ける。前駆体の窓は `library_match_feature` と同じ（m/z 500 を超えたら同じ ppm。手順 9 の中）。候補の表の行は
+`msms_rules.candidate_rows()`（`dataset_claim_evidence` の `msms.top` と共有）。
+
 1. metabolomix/tools/reanalysis_tools.py  library_msms_qualify()
 2. ├─ metabolomix/tools/_holder.py  resolve_holder()
 3. ├─ [ライブラリ無しで記憶が lbm_only のとき] metabolomix/library/tools.py  lbm_only_not_evaluable()（`not_evaluable` を返す）
-4. ├─ metabolomix/analysis/msms_rules.py  normalize_rules()
-5. ├─ metabolomix/library/tools.py  _spot_query()
-6. ├─ metabolomix/library/tools.py  _measured_spectrum()
-7. ├─ metabolomix/library/matching.py  score_candidates()
-8. ├─ metabolomix/analysis/msms_rules.py  qualify()
-9. │  ├─ metabolomix/analysis/spectral_match.py  fragment_matches_excluding_precursor()
-10. │  ├─ metabolomix/analysis/msms_rules.py  _lipid_class()
-11. │  │  └─ metabolomix/msdial/lipid_identity.py  normalize_lipid_name()
-12. │  └─ metabolomix/analysis/msms_rules.py  find_ions()
-13. └─ metabolomix/analysis/msms_rules.py  rules_hash()
-14. └─ metabolomix/library/tools.py  identified_by_lbm()
-15.    └─ metabolomix/dataset/library_memory.py  is_lbm_annotator()  [記憶が lbm_also で spot_id の照合のとき]
+4. ├─ metabolomix/library/matching.py  normalize_ion_mode()
+5. ├─ metabolomix/analysis/msms_rules.py  normalize_rules()
+6. │  └─ metabolomix/analysis/msms_rules.py  normalize_ions()
+7. ├─ metabolomix/library/tools.py  _spot_query()
+8. ├─ metabolomix/library/tools.py  _measured_spectrum()
+9. ├─ metabolomix/library/matching.py  score_candidates()
+10. ├─ metabolomix/analysis/msms_rules.py  query_window()
+11. ├─ metabolomix/analysis/msms_rules.py  qualify()
+12. │  ├─ metabolomix/analysis/msms_rules.py  record_lipid_species()  [種の目標のとき]
+13. │  ├─ metabolomix/analysis/spectral_match.py  fragment_matches_excluding_precursor()
+14. │  ├─ metabolomix/analysis/msms_rules.py  _lipid_class()
+15. │  │  └─ metabolomix/msdial/lipid_identity.py  normalize_lipid_name()
+16. │  └─ metabolomix/analysis/msms_rules.py  find_ions()
+17. ├─ metabolomix/analysis/msms_rules.py  candidate_rows()
+18. │  ├─ metabolomix/library/matching.py  delta_ppm()
+19. │  ├─ metabolomix/library/matching.py  passes_dbs_cutoffs()  [`.dbs` に足切りがあるとき]
+20. │  └─ metabolomix/analysis/msms_rules.py  record_lipid_species()  [種の目標のとき]
+21. ├─ metabolomix/library/matching.py  msdial_agreement()  [spot_id のスポットに注釈があるとき]
+22. └─ metabolomix/analysis/msms_rules.py  rules_hash()
+23. └─ metabolomix/library/tools.py  identified_by_lbm()
+24.    └─ metabolomix/dataset/library_memory.py  is_lbm_annotator()  [記憶が lbm_also で spot_id の照合のとき]
 
 ## dataset_homolog_check
 
@@ -134,12 +147,14 @@ property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` 
 8. │  ├─ metabolomix/analysis/feature_search.py  match_target()
 9. │  ├─ metabolomix/analysis/claim_evidence.py  _msms_for()
 10. │  │  ├─ metabolomix/library/tools.py  _spot_query()
-11. │  │  ├─ metabolomix/library/matching.py  score_candidates()
-12. │  │  └─ metabolomix/analysis/msms_rules.py  qualify()
-13. │  ├─ metabolomix/analysis/claim_evidence.py  feature_relations()
-14. │  ├─ metabolomix/analysis/claim_evidence.py  _selection()
-15. │  └─ metabolomix/analysis/claim_evidence.py  rule_hash()
-16. └─ metabolomix/tools/reanalysis_tools.py  write_result()
+11. │  │  ├─ metabolomix/library/matching.py  score_candidates()（`msms.mz_tol_ppm` を渡す）
+12. │  │  ├─ metabolomix/analysis/msms_rules.py  candidate_rows()（`library_msms_qualify` と同じ行）
+13. │  │  ├─ metabolomix/library/matching.py  msdial_agreement()
+14. │  │  └─ metabolomix/analysis/msms_rules.py  qualify()
+15. │  ├─ metabolomix/analysis/claim_evidence.py  feature_relations()
+16. │  ├─ metabolomix/analysis/claim_evidence.py  _selection()
+17. │  └─ metabolomix/analysis/claim_evidence.py  rule_hash()
+18. └─ metabolomix/tools/reanalysis_tools.py  write_result()
 
 候補ごとの `split` は `find_split_pairs`（既定の閾値）の `split_partners`。`default_selection.counts.qualified`
 （と走査ごとの `counts.qualified`）は、規則で qualified になった特徴のうち MS/MS の合否

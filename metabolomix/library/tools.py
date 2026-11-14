@@ -31,6 +31,7 @@ from metabolomix.library.defaults import DEFAULT_MS2_TOL as _DEFAULT_MS2_TOL
 from metabolomix.library.defaults import DEFAULT_MZ_TOL as _DEFAULT_MZ_TOL
 from metabolomix.library.defaults import DEFAULT_RT_TOL as _DEFAULT_RT_TOL
 from metabolomix.library import matching
+from metabolomix.library.record import inchikey_standard
 from metabolomix.library.store import open_store
 from metabolomix.plots import mirror as mirror_plot
 from metabolomix.plots import render as plot_render
@@ -53,13 +54,13 @@ _RANK_KEY = "total_score"
 # 意図的に含めない（座標は session.library.last_match にだけ持つ）。
 _CANDIDATE_TABLE_COLUMNS = [
     "rank", "name", "precursor_mz", "delta_mz", "delta_ppm", "ion_mode", "adduct", "rt", "formula",
-    "ontology", "compound_class", "total_score",
+    "inchikey", "inchikey_standard", "ontology", "compound_class", "total_score",
     "simple_dot_product", "weighted_dot_product",
     "reverse_dot_product", "matched_peaks_percentage", "matched_peaks_count",
     "entropy_similarity",
 ]
 #: `detail=True` のときだけ末尾に足す列（既存の列の並びは変えない）。
-_DETAIL_COLUMNS = ["inchikey", "fragment_matches_excl_precursor"]
+_DETAIL_COLUMNS = ["fragment_matches_excl_precursor"]
 
 
 def _delta_cells(query_mz: float, ref_mz: float) -> tuple[str, str]:
@@ -97,7 +98,7 @@ def _not_remembered(record: dict | None) -> dict:
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
           structured_output=False)
 def library_load(file_path: str | None = None, rebuild: bool = False,
-                 dataset_handle: str | None = None, library_names: bool = True) -> str:
+                 dataset_handle: str | None = None) -> str:
     """参照ライブラリを読み込み、照合用の SQLite store を構築（または既存キャッシュを
     再利用）する。
 
@@ -128,54 +129,14 @@ def library_load(file_path: str | None = None, rebuild: bool = False,
     疑いがあるときなど）。通常は不要——store は元ファイルの sha256 をキーに
     キャッシュされるため、内容が変わらない限り再構築しない。
 
+    戻り値のライブラリはいつもファイル名（`file`）と中身の sha256（`source_sha256`）で示し、
+    置き場所（パス）は出さない。
+
     dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は直近のデータセット。ハンドルのライブラリ・照合結果だけを読み書きする。
         ハンドルへは読み取り専用で開く。
-    library_names: 既定 True（今までどおり、戻り値にライブラリのファイル名を出す）。False なら
-        戻り値の JSON のどこにもライブラリのファイル名（`file`・候補・`differs_from_record`・
-        注記・誤りの文言に混じる名前）を出さず、sha256・`record_count` などだけを返す。
-        **戻り値を run の記録（追跡する場所）へ保存するときは False にする**。bool 以外は
-        `LIBRARY_BAD_REQUEST`。
     """
-    if not isinstance(library_names, bool):
-        return json_payload({"status": "error", "code": "LIBRARY_BAD_REQUEST",
-                             "message": f"library_names は true / false です: {library_names!r}"})
-    out = _library_load(file_path, rebuild, dataset_handle)
-    if library_names:
-        return out
-    return _hide_library_names(out, file_path, dataset_handle)
-
-
-def _hide_library_names(out: str, file_path: str | None, dataset_handle: str | None) -> str:
-    """`library_load` の戻り値の JSON から、ライブラリのファイル名を除く（`library_names=False`）。"""
-    import json
-
-    from metabolomix.dataset.library_memory import library_names_in, redact_library_names
-    from metabolomix.tools._holder import resolve_holder
-
-    try:
-        payload = json.loads(out)
-    except ValueError:
-        return out  # 封筒でない文字列（ハンドルの誤りなど）は名前を含まない
-    holder = resolve_holder(dataset_handle)
-    record = (getattr(holder.dataset, "library_record", None)
-              if not isinstance(holder, str) else None)
-    extra = [file_path, payload.get("file") if isinstance(payload, dict) else None]
-    for key in user_config.MSP_SETTING_KEYS.values():  # LIBRARY_NOT_REMEMBERED の候補
-        try:
-            setting = user_config.get_setting(key)
-        except user_config.ConfigInvalidError:
-            continue
-        if setting is not None:
-            extra.append(setting.value)
-    names = library_names_in(record, *extra)
-    if isinstance(payload, dict):
-        payload.pop("file", None)
-        payload.pop("candidates", None)
-        differs = payload.get("differs_from_record")
-        if isinstance(differs, dict):
-            payload["differs_from_record"] = {"differs": True}
-    return json_payload(redact_library_names(payload, names))
+    return _library_load(file_path, rebuild, dataset_handle)
 
 
 def _library_load(file_path, rebuild, dataset_handle) -> str:
@@ -366,12 +327,22 @@ _NO_MSMS_MESSAGE = (
 )
 
 
+def _arf2_polarity(value) -> str | None:
+    """ARF2 の `IonMode`（`Positive` / `Negative` / `Both` / `Unknown`）を照合の極性にする。読めなければ None。"""
+    try:
+        return matching.normalize_ion_mode(str(value)) if value else None
+    except ValueError:
+        return None
+
+
 def _spot_query(spot_id: int, *, arf2_path: str | None, dcl_file: str | None,
                 rt: float | None, ion_mode: str | None) -> dict:
     """アラインメントのスポットから照合の入力を組む。失敗は `status` 付きの封筒。
 
     precursor m/z・RT・極性は ARF2、測定スペクトルはアラインメント `.dcl` の
     `dcl[spot_id]`（precursor を m/z で探さない——同じ m/z の別スポットを拾わないため）。
+    ARF2 の極性が `Both` / `Unknown` なら極性で絞らない（None）。`msdial_annotation` は ARF2 の
+    代表の注釈（`{name, inchikey}`。未注釈なら None。照合の上位との食い違いを見るのに使う）。
     `not_found` には `reason` が付く: `no_arf2` / `no_dcl`（ファイルが無い＝スペクトルの有無は
     分からない）と `no_spectrum`（照会して無かった）。`status` の値は変えない。
     """
@@ -401,13 +372,17 @@ def _spot_query(spot_id: int, *, arf2_path: str | None, dcl_file: str | None,
     if msms["status"] != "ok":
         return {"status": "not_found", "reason": "no_spectrum",
                 "message": f"spot_id={spot_id} に一致する MS/MS が見つかりませんでした。" + _NO_MSMS_MESSAGE}
-    polarity = ion_mode or str(record.get("IonMode") or "").lower() or None
+    name = record.get("Name")
+    annotation = None
+    if isinstance(name, str) and name.strip() and name.strip() not in ("Unknown", "null"):
+        annotation = {"name": name.strip(), "inchikey": record.get("InChIKey") or None}
     return {
         "status": "ok",
         "precursor_mz": precursor_mz,
         "rt": rt if rt is not None else record.get("RT"),
-        "ion_mode": polarity,
+        "ion_mode": ion_mode or _arf2_polarity(record.get("IonMode")),
         "measured": msms["spectrum"],
+        "msdial_annotation": annotation,
     }
 
 
@@ -448,6 +423,122 @@ def identified_by_lbm(holder, spot_id) -> dict:
     return {"identified_by_lbm": True} if is_lbm_annotator(meta.get("annotator_id")) else {}
 
 
+def _clear_last_match(holder) -> None:
+    """照合に失敗したら直前の照合を捨てる（`library_plot_mirror` が古い照合を黙って描かない）。"""
+    holder.library.last_match = None
+
+
+def _run_match(holder, dataset_handle, *, precursor_mz, spot_id, rt, ion_mode, dcl_file,
+               arf2_path, mz_tol, ms2_tol, rt_tol, mz_tol_ppm, top_n) -> dict:
+    """照合して `last_match` を書く（`library_match_feature` と `library_plot_mirror(spot_id=…)` の芯）。
+
+    成功なら `{"status": "success", ...}`（照合の材料）。照合を試みて失敗したら（ファイルが無い・
+    `spot_not_found`・`dcl_precursor_mismatch`・`not_found`・`no_candidates`）直前の `last_match` を
+    捨て、戻り値の封筒（`{"envelope": ...}`）を返す。引数の誤りは呼び出し側が先に断る。
+    """
+    from metabolomix.tools._holder import alignment_paths
+
+    arf2_path, dcl_file, lacking = alignment_paths(
+        holder, dataset_handle, arf2_path, dcl_file,
+        need=("arf2", "dcl") if spot_id is not None else ("dcl",))
+    if lacking:
+        _clear_last_match(holder)
+        return {"envelope": lacking}
+    measured = None
+    annotation = None
+    if spot_id is not None:
+        spot = _spot_query(spot_id, arf2_path=arf2_path, dcl_file=dcl_file,
+                           rt=rt, ion_mode=ion_mode)
+        if spot["status"] != "ok":
+            _clear_last_match(holder)
+            return {"envelope": spot}
+        precursor_mz, rt, ion_mode, measured = (
+            spot["precursor_mz"], spot["rt"], spot["ion_mode"], spot["measured"])
+        annotation = spot.get("msdial_annotation")
+
+    # `.dcl` 側の窓は library 側の resolved_mz_tol/resolved_rt_tol を渡さない
+    # （Important 7 — library_match_feature の docstring 参照）。_measured_spectrum 自身の
+    # 固定既定（dcl/reader.py と同じ mz_tol=0.01/rt_tol=0.2）を使う。
+    if measured is None:
+        measured = _measured_spectrum(precursor_mz, rt=rt, dcl_file=dcl_file)
+    if not measured:
+        _clear_last_match(holder)
+        return {"envelope": {
+            "status": "not_found",
+            "message": (
+                f"precursor m/z={precursor_mz}"
+                + (f", RT={rt}" if rt is not None else "")
+                + " に一致する MS/MS が見つかりませんでした。"
+                "MS/MS 未取得（.dcl が無い、または該当 precursor の記録が無い）のであって、"
+                "期待フラグメントが合わなかったのではありません。"
+            ),
+        }}
+
+    # 許容幅の解決（明示 → store の search_params → 既定）・候補の検索・採点・並べ替えは
+    # library/matching.py が唯一の実装。採点の関数はこの module の名前を渡す
+    # （既存のテストがここの match_spectrum を差し替えて順位付けを確かめている）。
+    matched = matching.score_candidates(
+        holder.library.store, precursor_mz=precursor_mz, rt=rt, ion_mode=ion_mode,
+        measured=measured, mz_tol=mz_tol, ms2_tol=ms2_tol, rt_tol=rt_tol, mz_tol_ppm=mz_tol_ppm,
+        match_fn=match_spectrum)
+    if matched["status"] == "no_candidates":
+        _clear_last_match(holder)
+        window = matched["query"]["mz_window"]
+        return {"envelope": {
+            "status": "no_candidates",
+            "message": (
+                # 許容幅は書式を指定して埋める。`.dbs` 由来の値は C# の 32bit float を
+                # 64bit へ広げたもので `0.009999999776482582` になり、しかも
+                # `round_floats()` は payload 構造の中の float しか辿らないので
+                # **文字列へ焼いた数値には届かない**（成功時の query.mz_tol は
+                # 構造の中の float なので丸まる——だからここだけ素の値が出ていた）。
+                f"precursor m/z={precursor_mz}±{window:.4g}"
+                + (f"（かつ ±{mz_tol_ppm:g} ppm）" if mz_tol_ppm is not None else "")
+                + (f", ion_mode={ion_mode}" if ion_mode else "")
+                + " に該当する参照レコードが見つかりませんでした。"
+            ),
+        }}
+
+    scored = matched["scored"]
+    top = scored[:top_n] if top_n >= 0 else scored
+    holder.library.last_match = {
+        "spot_id": spot_id,
+        "precursor_mz": precursor_mz,
+        "rt": rt,
+        "ion_mode": ion_mode,
+        "ms2_tol": matched["query"]["ms2_tol"],
+        "measured": measured,
+        "unscored_mz": matched["unscored_mz"],
+        "candidates": [
+            {
+                "name": record["name"],
+                "precursor_mz": record["precursor_mz"],
+                "ion_mode": record["ion_mode"],
+                "adduct": record["adduct"],
+                "rt": record["rt"],
+                "formula": record["formula"],
+                "inchikey": record["inchikey"],
+                "smiles": record["smiles"],
+                "compound_class": record["compound_class"],
+                "ontology": record["ontology"],
+                "library_id": record["library_id"],
+                "record_index": record["record_index"],
+                "spectrum": record["spectrum"],
+                "scores": {k: v for k, v in result.items() if k != "alignment"},
+                "alignment": result["alignment"],
+            }
+            for record, result in top
+        ],
+    }
+    return {"status": "success", "precursor_mz": precursor_mz, "rt": rt, "ion_mode": ion_mode,
+            "measured": measured, "matched": matched, "top": top,
+            "agreement": matching.msdial_agreement(scored, annotation)}
+
+
+def _bool_cell(value) -> str | None:
+    return None if value is None else ("true" if value else "false")
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def library_match_feature(
     precursor_mz: float | None = None,
@@ -476,24 +567,27 @@ def library_match_feature(
     照合せず `status="dcl_precursor_mismatch"`、ID が無ければ `spot_not_found`。
     `rt` / `ion_mode` を明示すれば ARF2 の値より優先する。
 
-    `ion_mode` は `"positive"` / `"negative"`（大小は問わない——`store.candidates()`
-    が `COLLATE NOCASE` で比較するため、PAI2 由来の `IonMode.Positive.name`
-    のような `"Positive"` 表記もそのまま渡してよい）。
+    `ion_mode` は `"positive"` / `"negative"`（`"pos"` / `"neg"` / `"+"` / `"-"`、大小を問わない。
+    `core.polarity_names.normalize_polarity` で正規化する）。読めない値は `invalid_arguments`
+    （黙って極性不明のレコードだけに絞らない）。ARF2 の極性が `Both` / `Unknown` なら絞らない。
 
     `mz_tol` / `ms2_tol` / `rt_tol` は明示指定が無ければ store の `search_params`
     （`.dbs` 由来なら実値）を使い、それも無ければ既定値
     （`_DEFAULT_MZ_TOL` / `_DEFAULT_MS2_TOL` / `_DEFAULT_RT_TOL`、現在の値は
     0.01 / 0.025 / 0.2）を使う。**これらは参照ライブラリの候補検索（`store.candidates()`
-    の precursor m/z 窓・RT 窓）にだけ効く。** `.dcl` から測定 MS/MS を引く窓は
+    の precursor m/z 窓・RT 窓）にだけ効く。** 前駆体の窓は MS-DIAL と同じく、`mz_tol` を
+    m/z 500 を超えたら同じ ppm に広げる（上流 `FixMassTolerance`。既定なら
+    `max(0.01 Da, m/z × 20 ppm)`。実際の幅は `query.mz_window`）。
+    `.dcl` から測定 MS/MS を引く窓は
     `_measured_spectrum` 内部の固定既定（`dcl/reader.py` と同じ `mz_tol=0.01`/
     `rt_tol=0.2`）を常に使い、ここの引数や store の `search_params` の影響を受けない
     （最終レビュー Important 7: `.dbs` の `RtTolerance` 既定 100.0 のような
     ライブラリ用の値を `.dcl` 側の RT 窓に流用すると、同じ precursor m/z の
     別ピークの測定スペクトルを黙って拾ってしまうため、2 つの窓を分離した）。
-    `mz_tol_ppm`（任意）は上の Da の窓に**重ねる追加の絞り込み**で、窓を広げない:
+    `mz_tol_ppm`（任意）は上の窓に**重ねる追加の絞り込み**で、窓を広げない:
     参照との差が ±`mz_tol_ppm` ppm を超える候補を落とす（`mz_tol_ppm=10` なら +44 ppm の候補は
-    落ちる）。省略時は絞らない。既定の窓 0.01 Da は MS-DIAL に合わせたもので、低い m/z では
-    数十 ppm に当たる——候補の行の `delta_ppm` を見て受け入れること。候補の行には
+    落ちる）。省略時は絞らない。既定の窓 0.01 Da は低い m/z では数十 ppm に当たる——候補の行の
+    `delta_ppm` を見て受け入れること。候補の行には
     `delta_mz = 測定 - 参照`（Da）と `delta_ppm = (測定 - 参照) / 参照 * 1e6` が付く
     （測定が参照より高いと正）。`precursor_mz` 列（参照の前駆体）は 6 桁で出す。
     足切り（`relative_amp_cutoff` / `absolute_amp_cutoff`）と質量範囲
@@ -503,7 +597,9 @@ def library_match_feature(
 
     `.dcl` に MS/MS が無い（未取得）場合は `status="not_found"` を返す——
     「候補と合わなかった」のではなく「照合する測定スペクトルがそもそも無い」ことを
-    区別するため、`dcl_find_msms` と同じ文言の方針に揃える。
+    区別するため、`dcl_find_msms` と同じ文言の方針に揃える。照合を試みて失敗したら
+    （`not_found` / `no_candidates` / `spot_not_found` / `dcl_precursor_mismatch` / ファイルが無い）
+    直前の照合（`last_match`）を捨てる——`library_plot_mirror` が古い照合を黙って描かないため。
 
     候補は **`total_score` の降順**で返す（`rank` 列・`ranked_by` フィールドが
     同じ基準を指す）。MS-DIAL の総合スコア（上流 `GetTotalScore`）で、
@@ -520,19 +616,23 @@ def library_match_feature(
     この判定が無いと全候補が `True` になってゲートとして働かないので、
     **`total_score` 単独比較が現実的な最良の近似**という位置づけ。
     帰結として、上位に化学的にありえない候補が残ることがある
-    （`docs/output_format/library.md` §14.9）。
+    （`docs/output_format/library.md` §14.9）。`spot_id` で照合したとき、スポットに MS-DIAL の
+    注釈（`.arf2` の代表の名前）があれば、`msdial_name`・`msdial_rank`（注釈と同じ物質の候補の
+    順位。全候補の中で、無ければ null）・`top_differs_from_msdial`（1 位が注釈と別の物質か）を足す
+    （同じ物質かは InChIKey の先頭ブロック → 脂質の種 → 名前の順に比べる）。
 
     `top_n` は上位何件を返すかの上限（既定 5）。負値を渡すと全件を返す
     （明示的な仕様ではなく Python のスライス挙動に由来する副作用的な動作
     ——件数を絞りたくないだけなら大きな正の値を渡すこと）。
 
-    候補一覧は TSV（列名 1 回）で返す。**スペクトル座標と alignment は戻り値に
-    含めない**（LLM の文脈を食うため）。座標は `session.library.last_match` に
-    持ち、`library_plot_mirror` がそこから読む。
+    候補一覧は TSV（列名 1 回）で返す。`inchikey` はライブラリの値のまま、`inchikey_standard` は
+    標準の InChIKey か（第 2 ブロックの 9 文字目が `S`。非標準 `N` は false、形でなければ空）。
+    **スペクトル座標と alignment は戻り値に含めない**（LLM の文脈を食うため）。座標は
+    `session.library.last_match` に持ち、`library_plot_mirror` がそこから読む。
 
-    `detail=True`（opt-in。再解析で使う）のときだけ、TSV の末尾に `inchikey` と
+    `detail=True`（opt-in。再解析で使う）のときだけ、TSV の末尾に
     `fragment_matches_excl_precursor`（前駆体 ± `precursor_exclusion_tol` を除いた一致の
-    本数。省略時の幅は採点に使った `ms2_tol`）の列を足し、payload に
+    本数。省略時の幅は採点に使った `ms2_tol`。測定強度の下限は掛けない）の列を足し、payload に
     `precursor_exclusion_tol`・`measured_peaks`（測定スペクトル）・`alignments`
     （候補ごとの一致したピーク `[m/z, 測定, 参照]`）を足す——直前の照合の状態
     （`last_match`）を読まずに、戻り値だけで照合の中身を確かめられる。
@@ -543,7 +643,7 @@ def library_match_feature(
         `arf2_path` / `dcl_file` を省けばそのデータセットの `.arf2` / `.dcl` を使う
         （データフォルダは探さない。データセットが無ければ missing_state）。
     """
-    from metabolomix.tools._holder import alignment_paths, resolve_holder
+    from metabolomix.tools._holder import resolve_holder
 
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
@@ -569,104 +669,24 @@ def library_match_feature(
             "status": "invalid_arguments",
             "message": "precursor_mz か spot_id のどちらか一方を指定してください。",
         })
-    arf2_path, dcl_file, lacking = alignment_paths(
-        holder, dataset_handle, arf2_path, dcl_file,
-        need=("arf2", "dcl") if spot_id is not None else ("dcl",))
-    if lacking:
-        return json_payload(lacking)
-    measured = None
-    if spot_id is not None:
-        spot = _spot_query(spot_id, arf2_path=arf2_path, dcl_file=dcl_file,
-                           rt=rt, ion_mode=ion_mode)
-        if spot["status"] != "ok":
-            return json_payload(spot)
-        precursor_mz, rt, ion_mode, measured = (
-            spot["precursor_mz"], spot["rt"], spot["ion_mode"], spot["measured"])
-
+    try:
+        ion_mode = matching.normalize_ion_mode(ion_mode)
+    except ValueError as exc:
+        return json_payload({"status": "invalid_arguments", "message": str(exc)})
     if precursor_exclusion_tol is not None and not precursor_exclusion_tol > 0:
         return json_payload({
             "status": "invalid_arguments",
             "message": f"precursor_exclusion_tol は正の数で指定してください: {precursor_exclusion_tol!r}",
         })
 
-    # `.dcl` 側の窓は library 側の resolved_mz_tol/resolved_rt_tol を渡さない
-    # （Important 7 — 上のクラス docstring参照）。_measured_spectrum 自身の
-    # 固定既定（dcl/reader.py と同じ mz_tol=0.01/rt_tol=0.2）を使う。
-    if measured is None:
-        measured = _measured_spectrum(precursor_mz, rt=rt, dcl_file=dcl_file)
-    if not measured:
-        return json_payload({
-            "status": "not_found",
-            "message": (
-                f"precursor m/z={precursor_mz}"
-                + (f", RT={rt}" if rt is not None else "")
-                + " に一致する MS/MS が見つかりませんでした。"
-                "MS/MS 未取得（.dcl が無い、または該当 precursor の記録が無い）のであって、"
-                "期待フラグメントが合わなかったのではありません。"
-            ),
-        })
-
-    # 許容幅の解決（明示 → store の search_params → 既定）・候補の検索・採点・並べ替えは
-    # library/matching.py が唯一の実装。採点の関数はこの module の名前を渡す
-    # （既存のテストがここの match_spectrum を差し替えて順位付けを確かめている）。
-    matched = matching.score_candidates(
-        store_obj, precursor_mz=precursor_mz, rt=rt, ion_mode=ion_mode, measured=measured,
-        mz_tol=mz_tol, ms2_tol=ms2_tol, rt_tol=rt_tol, mz_tol_ppm=mz_tol_ppm,
-        match_fn=match_spectrum)
-    resolved_mz_tol = matched["query"]["mz_tol"]
+    run = _run_match(holder, dataset_handle, precursor_mz=precursor_mz, spot_id=spot_id, rt=rt,
+                     ion_mode=ion_mode, dcl_file=dcl_file, arf2_path=arf2_path, mz_tol=mz_tol,
+                     ms2_tol=ms2_tol, rt_tol=rt_tol, mz_tol_ppm=mz_tol_ppm, top_n=top_n)
+    if "envelope" in run:
+        return json_payload(run["envelope"])
+    precursor_mz, measured, matched, top = (
+        run["precursor_mz"], run["measured"], run["matched"], run["top"])
     resolved_ms2_tol = matched["query"]["ms2_tol"]
-    if matched["status"] == "no_candidates":
-        return json_payload({
-            "status": "no_candidates",
-            "message": (
-                # 許容幅は書式を指定して埋める。`.dbs` 由来の値は C# の 32bit float を
-                # 64bit へ広げたもので `0.009999999776482582` になり、しかも
-                # `round_floats()` は payload 構造の中の float しか辿らないので
-                # **文字列へ焼いた数値には届かない**（成功時の query.mz_tol は
-                # 構造の中の float なので丸まる——だからここだけ素の値が出ていた）。
-                f"precursor m/z={precursor_mz}±{resolved_mz_tol:.4g}"
-                + (f"（かつ ±{mz_tol_ppm:g} ppm）" if mz_tol_ppm is not None else "")
-                + (f", ion_mode={ion_mode}" if ion_mode else "")
-                + " に該当する参照レコードが見つかりませんでした。"
-            ),
-        })
-
-    # 足切りで採点から外れたピーク（図が「描かれてはいるが採点に入っていない」ピークを
-    # 区別するのに使う）と、総合スコアの降順（同点は候補順）に並べた候補。
-    unscored_mz = matched["unscored_mz"]
-    scored = matched["scored"]
-    candidates = scored
-    top = scored[:top_n] if top_n >= 0 else scored
-
-    holder.library.last_match = {
-        "spot_id": spot_id,
-        "precursor_mz": precursor_mz,
-        "rt": rt,
-        "ion_mode": ion_mode,
-        "ms2_tol": resolved_ms2_tol,
-        "measured": measured,
-        "unscored_mz": unscored_mz,
-        "candidates": [
-            {
-                "name": record["name"],
-                "precursor_mz": record["precursor_mz"],
-                "ion_mode": record["ion_mode"],
-                "adduct": record["adduct"],
-                "rt": record["rt"],
-                "formula": record["formula"],
-                "inchikey": record["inchikey"],
-                "smiles": record["smiles"],
-                "compound_class": record["compound_class"],
-                "ontology": record["ontology"],
-                "library_id": record["library_id"],
-                "record_index": record["record_index"],
-                "spectrum": record["spectrum"],
-                "scores": {k: v for k, v in result.items() if k != "alignment"},
-                "alignment": result["alignment"],
-            }
-            for record, result in top
-        ],
-    }
 
     rows = [
         {
@@ -679,6 +699,8 @@ def library_match_feature(
             "adduct": record["adduct"],
             "rt": record["rt"],
             "formula": record["formula"],
+            "inchikey": record["inchikey"],
+            "inchikey_standard": _bool_cell(inchikey_standard(record["inchikey"])),
             "ontology": record["ontology"],
             "compound_class": record["compound_class"],
             "total_score": result["total_score"],
@@ -695,8 +717,7 @@ def library_match_feature(
     exclusion_tol = precursor_exclusion_tol or resolved_ms2_tol
     if detail:
         columns += _DETAIL_COLUMNS
-        for row, (record, result) in zip(rows, top):
-            row["inchikey"] = record["inchikey"]
+        for row, (_record, result) in zip(rows, top):
             row["fragment_matches_excl_precursor"] = fragment_matches_excluding_precursor(
                 result["alignment"], precursor_mz, exclusion_tol)
     table = format_spots_as_table(rows, columns=columns)
@@ -709,9 +730,10 @@ def library_match_feature(
         # 候補ごとではなく 1 回だけ載せる（内訳の 3 列は session 側にだけ持つ）。
         "scoring": matched["scoring"],
         "measured_peak_count": len(measured),
-        "n_candidates": len(candidates),
+        "n_candidates": matched["n_candidates"],
         "top_n": len(top),
         "ranked_by": _RANK_KEY,
+        **run["agreement"],
         "candidates_table": table,
     }
     if detail:
@@ -726,17 +748,43 @@ def library_match_feature(
     return json_payload(round_floats(payload))
 
 
+def _pick_candidate(candidates: list, candidate: str) -> int | None:
+    """`candidate`（InChIKey（全体か先頭 14 文字）か名前。大小を問わない）に合う最上位の候補の添字。"""
+    wanted = candidate.strip()
+    block = wanted[:14].upper()
+    for i, cand in enumerate(candidates):
+        key = cand.get("inchikey")
+        if isinstance(key, str) and len(block) == 14 and key.strip()[:14].upper() == block:
+            return i
+    folded = wanted.casefold()
+    for i, cand in enumerate(candidates):
+        if isinstance(cand.get("name"), str) and cand["name"].strip().casefold() == folded:
+            return i
+    return None
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def library_plot_mirror(rank: int = 1, output: str | None = None,
                         scale: str = mirror_plot.RELATIVE,
                         label_policy: str = mirror_plot.AUTO,
-                        dataset_handle: str | None = None) -> list | str:
-    """直近の `library_match_feature` 結果から対向プロット（mirror plot）を描く。
+                        dataset_handle: str | None = None,
+                        spot_id: int | None = None,
+                        candidate: str | None = None) -> list | str:
+    """対向プロット（mirror plot）を描く。既定は直近の `library_match_feature` の結果から。
 
-    上段が測定、下段が参照（`rank` 位の候補）。`output="image"`（既定）は
+    `spot_id` を渡すと、そのスポットを `library_match_feature(spot_id=…)` と同じ規則（許容幅は
+    store の `search_params` か既定値）で照合し直してから描く（全候補を `last_match` に持つ）。
+    照合に失敗したら直前の照合を捨て、その封筒（`spot_not_found` / `not_found` /
+    `no_candidates` など）を返す——古い照合を黙って描かない。
+    `candidate`（任意）は描く候補を InChIKey（全体か先頭 14 文字）か名前（大小を問わない完全一致）で
+    選ぶ（`rank` より優先）。照合の候補に無ければ誤り。
+
+    上段が測定、下段が参照（選んだ候補）。`output="image"`（既定）は
     サーバ側で描画した PNG を返し、`output="payload"` は座標を丸めた
     `lipidmix.mirror.v2` JSON を返す（Use-LLLM 等、自前で描くクライアント向け。
-    v2 で採点外ピーク `unscored_mz` の層を追加）。
+    v2 で採点外ピーク `unscored_mz` の層を追加）。どちらも、どのスポット（`spot_id`。
+    precursor m/z で照合したときは null）・測定の precursor m/z・どの候補（順位・名前・InChIKey）の
+    図かを示す（画像は caption、payload は `match`）。
 
     測定側の一致色分けには許容幅（`ms2_tol`）が要る——`library_match_feature`
     が使った値（store の `search_params` か既定値）を自動で引き継ぐ。
@@ -776,49 +824,79 @@ def library_plot_mirror(rank: int = 1, output: str | None = None,
 
     dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッション。ハンドルのライブラリ・照合結果だけを読み書きする。
+        `spot_id` で照合し直すときは、そのデータセットの `.arf2` / `.dcl` を使う。
     """
     from metabolomix.tools._holder import resolve_holder
 
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
         return holder
+    try:
+        mode = plot_render.resolve_plot_output(output)
+    except ValueError as exc:
+        return json_payload({"status": "error", "message": str(exc)})
+    if candidate is not None and (not isinstance(candidate, str) or not candidate.strip()):
+        return json_payload({"status": "error",
+                             "message": "candidate は InChIKey か候補の名前（空でない文字列）です。"})
+    if spot_id is not None:
+        if holder.library.store is None:
+            return mcp_errors.missing_state(
+                "library_store", ["library_load"],
+                "spot_id で照合し直すには参照ライブラリが要ります（先に library_load）。")
+        run = _run_match(holder, dataset_handle, precursor_mz=None, spot_id=spot_id, rt=None,
+                         ion_mode=None, dcl_file=None, arf2_path=None, mz_tol=None,
+                         ms2_tol=None, rt_tol=None, mz_tol_ppm=None, top_n=-1)
+        if "envelope" in run:
+            return json_payload(run["envelope"])
     last_match = holder.library.last_match
     if not last_match or not last_match.get("candidates"):
         return mcp_errors.missing_state(
             "library_match", ["library_match_feature"],
-            "先に library_match_feature を実行してください（直近の照合結果がありません）。",
+            "先に library_match_feature を実行するか、spot_id を渡してください（直近の照合結果がありません）。",
         )
 
     candidates = last_match["candidates"]
-    if rank < 1 or rank > len(candidates):
+    if candidate is not None:
+        index = _pick_candidate(candidates, candidate)
+        if index is None:
+            return json_payload({
+                "status": "error",
+                "message": (f"candidate={candidate!r} は照合の候補（{len(candidates)} 件）にありません"
+                            "（InChIKey か候補の名前で指定します）。"),
+            })
+        rank = index + 1
+    elif rank < 1 or rank > len(candidates):
         return json_payload({
             "status": "error",
             "message": f"rank は 1〜{len(candidates)} の範囲で指定してください（受け取った値: {rank!r}）。",
         })
 
-    try:
-        mode = plot_render.resolve_plot_output(output)
-    except ValueError as exc:
-        return json_payload({"status": "error", "message": str(exc)})
-
-    candidate = candidates[rank - 1]
+    chosen = candidates[rank - 1]
+    match_info = {"spot_id": last_match.get("spot_id"),
+                  "precursor_mz": last_match.get("precursor_mz"),
+                  "rank": rank, "name": chosen["name"], "inchikey": chosen.get("inchikey"),
+                  "reference_precursor_mz": chosen["precursor_mz"]}
     payload = mirror_plot.build_mirror_payload(
-        last_match["measured"], candidate["spectrum"], candidate["alignment"],
-        title=f"{candidate['name']} (rank {rank})",
+        last_match["measured"], chosen["spectrum"], chosen["alignment"],
+        title=f"{chosen['name']} (rank {rank})",
         ms2_tol=last_match.get("ms2_tol"),
         unscored_mz=last_match.get("unscored_mz"),
     )
 
     if mode == plot_render.PAYLOAD:
-        return json_payload(round_floats(payload))
+        return json_payload(round_floats({**payload, "match": match_info}))
 
     try:
         png = mirror_plot.render_mirror(payload, scale=scale, label_policy=label_policy)
     except ValueError as exc:
         return json_payload({"status": "error", "message": str(exc)})
+    measured_side = (f"spot {match_info['spot_id']}" if match_info["spot_id"] is not None
+                     else "measured")
     caption = (
-        f"Mirror: measured vs {candidate['name']} "
-        f"(rank {rank}, precursor m/z={candidate['precursor_mz']}, "
+        f"Mirror: {measured_side} (precursor m/z={float(match_info['precursor_mz']):.4f}) "
+        f"vs {chosen['name']} "
+        f"(rank {rank}, InChIKey={chosen.get('inchikey') or '-'}, "
+        f"precursor m/z={chosen['precursor_mz']}, "
         f"y-axis={scale}, labels={label_policy})."
     )
     # 足切りで採点から外れたピークがあるときだけ件数を添える。図の灰色の層は
@@ -845,7 +923,8 @@ def library_search(name: str | None = None, formula: str | None = None,
 
     name: 大小を問わない部分一致。formula: 完全一致（例 `C42H82NO8P`）。
     inchikey: 先頭 14 文字（構造の骨格のブロック）で照合する（全体を渡してよい）。
-    ion_mode: `positive` / `negative`（極性不明のレコードは残す。`library_match_feature` と同じ）。
+    ion_mode: `positive` / `negative`（`pos` / `neg` / `+` / `-` も可。読めない値は `invalid_arguments`。
+        極性不明のレコードは残す。`library_match_feature` と同じ）。
     条件は与えたものの AND で、1 つも無ければ `invalid_arguments`。`limit`（既定 50）件まで
     TSV（列名 1 回）で返し、打ち切った件数を `truncated` に書く。スペクトルは返さない
     （ピーク数 `n_peaks` だけ）。
@@ -869,6 +948,10 @@ def library_search(name: str | None = None, formula: str | None = None,
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         return json_payload({"status": "invalid_arguments",
                              "message": f"limit は 1 以上の整数で指定してください: {limit!r}"})
+    try:
+        ion_mode = matching.normalize_ion_mode(ion_mode)
+    except ValueError as exc:
+        return json_payload({"status": "invalid_arguments", "message": str(exc)})
     block = inchikey.strip()[:14].upper() if inchikey else None
     records, truncated = store_obj.search(
         name=name.strip() if name else None, formula=formula.strip() if formula else None,

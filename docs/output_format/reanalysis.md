@@ -317,33 +317,71 @@ matrix_id, preprocess: {steps, warnings, subject_source}, primary, analyses: [{a
 
 ## 4. MS/MS の合否（msms-rules.v1）と診断イオン
 
-`library_msms_qualify(rules, spot_id | precursor_mz, ...)`。照合は `library_match_feature` と
-同じ（採点の芯は `library/matching.py`）。規則（正規化後。既定はこのとおり）:
+`library_msms_qualify(rules, spot_id | precursor_mz, ..., mz_tol_ppm)`。照合は `library_match_feature` と
+同じ（採点の芯は `library/matching.py`。前駆体の窓は MS-DIAL と同じく m/z 500 を超えたら同じ ppm に広がる。
+`mz_tol_ppm`（任意）はその窓に重ねる ppm の絞り込み。使った窓は `query` の `mz_tol`・`mz_window`・
+`mz_tol_ppm`。`ion_mode` は `pos` / `neg` / `+` / `-` も読み、読めない値は `DATASET_BAD_REQUEST`）。
+規則（正規化後。既定はこのとおり）:
 
 ```json
 {"schema": "msms-rules.v1",
  "target": {"inchikey_block": "HVYWMOMLDIMFJA", "formula": null},
- "top_rank": 5, "min_fragments_excl_precursor": null, "precursor_exclusion_tol": null,
- "same_formula_margin": null, "lipid_class": null,
+ "top_rank": 5, "min_fragments_excl_precursor": 1, "min_fragment_relative_intensity": 0.01,
+ "precursor_exclusion_tol": null, "same_formula_margin": null, "lipid_class": null,
  "diagnostic_ions": [], "neutral_losses": [], "ions_match": "all"}
 ```
+
+**2026-11-14 に既定を変えた（事実確認 A1）**: `min_fragments_excl_precursor` の既定を `null` → `1`
+（前駆体だけが合った候補を既定で qualified にしない）、`min_fragment_relative_intensity`（0 以上 1 以下。
+測定の基準ピークに対する比）を足して既定 0.01 にした。断片の一致は、測定強度が基準ピークの
+`min_fragment_relative_intensity` 以上の窓だけを数える（雑音の窓を「一致」に数えない）。既定が
+変わったので、同じ規則でも `rule_hash` は前と違う（意図した変化）。`min_fragments_excl_precursor: null`
+を明示すれば断片の検査を外せる。`matched_peaks_count`（MS-DIAL の写し）の意味は変えていない。
 
 入力の `target` は `{"inchikey": <InChIKey 全体か先頭 14 文字>, "formula": <任意>}`。
 InChIKey が一意に決まらない脂質の種は `{"lipid_species": "PC 18:3_16:1", "formula": <任意>}`
 （`inchikey` と排他。opt-in）で、正規化後は `{"lipid_species": "PC 34:4", "formula": …}`（GOSLIN の
 種のレベル。読み方は `lipidmix://docs/output-format/mztab` §13.8）。種の目標では、下の
-`target_in_top_rank` と `same_formula_margin` の「目標か別物か」をライブラリの記録の `name` の種で
-決める——同じ種の別の分子種（`PC 14:0_20:4`）は目標の候補で、別物には数えない。種に読めない
-名前の記録は目標とも別物とも数えない。InChIKey の規則の正規化と `rule_hash` は変わらない。
-設定した検査だけが `checks` に並ぶ（各行 `{check, status: pass|fail|not_evaluable, value, detail}`）:
+`target_in_top_rank` と `same_formula_margin` の「目標か別物か」をライブラリの記録の種
+（`msms_rules.record_lipid_species`）で決める——同じ種の別の分子種（`PC 14:0_20:4`）は目標の候補で、
+別物には数えない。記録の種は次の順に読み、最初に読めた経路を `species_route` とする:
+
+| `species_route` | 読み方 |
+|---|---|
+| `name` | 記録の `name`（MS-DIAL の限定子を外して）をそのまま GOSLIN で読む |
+| `name_cleaned` | `\|` の後・`; ` の後の注記（`PC 34:1; PlaSMA ID-1486`）・末尾の付加体の表記（`[M+H]+`）を外し、古い MS-DIAL の書式（`Cer[NS] d18:1/16:0`）・英語のクラス名（`Phosphatidylcholine 16:0-18:1`）を略記に直して読む（`pathway.msp_lipid.shorthand`） |
+| `ontology_formula` | 名前で読めなければ、ClassyFire の `Ontology` と分子式から和の組成の種を作る（`pathway.msp_lipid.from_class_formula`。LPS・LPG も） |
+
+同位体の標識のある名前（`(d7)` など、内部標準）と、どの経路でも読めない記録は目標とも別物とも
+数えない。目標の候補の経路は `target_in_top_rank` の `detail.species_route`、候補の表では
+`lipid_species`・`species_route` の列に出る。
+設定した検査が `checks` に並ぶ（各行 `{check, status: pass|fail|not_evaluable, value, detail}`。
+既定の規則では `target_in_top_rank` と `min_fragments`）:
 
 | 検査 | 合格の条件 | `value` |
 |---|---|---|
 | `target_in_top_rank`（常に） | 総合スコアの順で `top_rank` 位までに、InChIKey 先頭ブロックが目標と一致する候補がある（最上位のそれを「目標の候補」） | 目標の候補の順位（無ければ null） |
-| `min_fragments` | 目標の候補の、前駆体 ± `precursor_exclusion_tol`（省略時は採点の `ms2_tol`）を除いた一致の本数 ≥ 最小 | その本数 |
+| `min_fragments`（既定で入る） | 目標の候補の、前駆体 ± `precursor_exclusion_tol`（省略時は採点の `ms2_tol`）を除き、測定強度が基準ピークの `min_fragment_relative_intensity` 以上の一致の本数 ≥ 最小（`detail.min_relative_intensity` に下限） | その本数 |
 | `same_formula_margin` | 全候補のうち、目標と同じ分子式（`target.formula`、無ければ目標の候補の分子式）で先頭ブロックが違うものの最高点との差 ≥ `min_delta`（`score` 既定 `total_score`）。別物が無ければ pass | 差（目標 − 別物） |
 | `lipid_class` | 1 位の候補の名前を GOSLIN で読んだクラス（正規化名の最初の空白の前）が一致 | 読めたクラス |
-| `diagnostic_ions` / `neutral_losses` | 測定スペクトルに ±`tol`（既定 0.01 Da）のピークがあり、最大ピークに対する相対強度 ≥ `min_relative_intensity`。`ions_match` が `all` なら全部、`any` なら 1 つ。中性損失は前駆体 − `delta` を探す | 見つかった数 |
+| `diagnostic_ions` / `neutral_losses` | 測定スペクトルに ±`tol`（既定 0.01 Da）のピークがあり、最大ピークに対する相対強度 ≥ `min_relative_intensity`。`ions_match` が `all` なら全部、`any` なら 1 つ。中性損失は前駆体 − `delta`（生成イオン）を探し、`min_relative_intensity` はその生成イオンの比 | 見つかった数 |
+
+要素は診断イオンが `{mz, label, tol, min_relative_intensity}`（`min_relative_intensity` 既定 0）、中性損失が
+`{delta, label, tol, min_relative_intensity}`（中性損失の `min_relative_intensity` は渡したときだけ規則に載る——
+省いた規則の `rule_hash` は変わらない）。知らないキー・欠けたキーは `MSMS_RULES_INVALID` で、誤りの文が
+そのキーと要素（`neutral_losses[0]` など）を名指す。
+
+戻り値は `verdict`・`checks` のほかに、`target_rank`（目標の候補の順位。無ければ null）と
+`top1_is_target`（1 位が目標か）を返す。既定の `top_rank` 5 では、目標が 2 位でも `target_in_top_rank` は
+pass するので、1 位かどうかはこの欄で読む。`spot_id` のスポットに MS-DIAL の注釈があれば、
+`library_match_feature` と同じ `msdial_name`・`msdial_rank`・`top_differs_from_msdial`（library.md §14.6）。
+候補の表（`candidates`、TSV）の列は `rank name formula inchikey adduct delta_ppm total_score
+matched_peaks_count fragment_matches_excl_precursor`（`delta_ppm` は `(測定 − 参照) / 参照 × 1e6`、
+`fragment_matches_excl_precursor` は合否と同じ規則＝強度の下限つきで数える）。`.dbs` に注釈の足切り
+（dot・一致率・総合スコア・`minimum_spectrum_match`）があれば、値を `dbs_cutoffs` に 1 回載せ、
+候補ごとに `passes_dbs_cutoffs`（MS-DIAL の `IsSpectrumMatch` と総合スコアの足切りを全部通るか。
+dot の足切りは二乗の値と比べる）の列を足す——**合否には当てない材料**（`.msp` には足切りが無いので列も無い）。
+種の目標なら `lipid_species`・`species_route` の列も足す。
 
 `verdict`: すべて pass → `qualified`、どれか fail → `not_qualified`、fail が無く判定できない
 検査がある → `not_evaluable`。目標の候補が無いと、それに依る検査は `not_evaluable`
@@ -353,7 +391,8 @@ InChIKey が一意に決まらない脂質の種は `{"lipid_species": "PC 18:3_
 
 `dcl_diagnostic_ions(spot_ids, ions)` は同じ照会（`find_ions`）をスポットの一覧に当てる。
 `ions` の各要素は `{"mz"}` か `{"neutral_loss"}`（任意で `label`・`tol`・
-`min_relative_intensity`）。行の `status` が `ok` 以外（MS/MS が無い・索引の崩れ）のスポットは
+`min_relative_intensity`。中性損失の比は生成イオン＝前駆体 − `neutral_loss` の測定強度の比。知らない
+キーは `MSMS_RULES_INVALID` で、誤りの文が `ions[i]` とそのキーを名指す）。行の `status` が `ok` 以外（MS/MS が無い・索引の崩れ）のスポットは
 照会していない——`found` が空なのは「イオンが無かった」ではない。
 
 ## 5. 同族列の RT（homolog-check.v1）
@@ -418,7 +457,7 @@ spec:
 {"claim_id": "C1",
  "target": {"inchikey": "...", "formula": "...", "rt_min": 8.4},
  "scan": {"ppm": [10, 20], "rt_tol_min": [0.3, 1.0], "adduct_tiers": null},
- "msms": {"top_n": 10, "rules": {"min_fragments_excl_precursor": 2}},
+ "msms": {"top_n": 10, "rules": {"min_fragments_excl_precursor": 2}, "mz_tol_ppm": 10},
  "relations": {"rt_window": 0.05, "mz_tol": 0.01, "min_r": 0.7},
  "max_candidates": 50}
 ```
@@ -435,6 +474,8 @@ spec:
 - `scan` の `ppm` × `rt_tol_min` の全組で目標照合を走らせ直す（`adduct_tiers` を渡すと
   付加体も広げる）。省略時は目標の `ppm` / `rt_tol_min` の 1 組。
 - `msms.rules` は msms-rules.v1 から `target` を除いたもの（target は主張の InChIKey か脂質の種と分子式）。
+  `msms.mz_tol_ppm`（任意、0 より大きい数）は前駆体の窓に重ねる ppm の絞り込み（`library_msms_qualify` と同じ）。
+  渡したときだけ `rule.msms` と `rule_hash` に入る。形の誤りは `CLAIM_SPEC_INVALID`。
 - `msms` / `relations` を省くと、その欄を作らない。
 
 結果:
@@ -443,7 +484,7 @@ spec:
 |---|---|
 | `default_selection` | `target` をそのまま当てた目標照合（`dataset_feature_search` と同じ規則）。`status` が `resolved` なら `selected_feature_id` が規則で選んだ既定の特徴、決まらなければ `needs_input`（`reason`）。割れたスポットの組（§9 の `merge_groups`）は 1 つの候補として数え、`selected_feature_id` は残す ID（受け持ちの多い側、同数なら小さい ID）、`merged_from` にその組（それ以外は null。走査も同じ）。`counts` は下の表（組は 1 つと数える。MS/MS の合否はどちらかのスポットが `qualified` なら 1） |
 | `scans` | 走査ごとの判定（`counts` は `default_selection` と同じ意味）と、候補の特徴 ID |
-| `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか。組の片方だけが質量の窓に入ったときに足した相手は `merge_partner`）・`split`（下）・`msms`（spot_id = SMF_ID の照合の上位 `top` と `qualify`。ライブラリが無ければ `{"status": "no_library", "spectrum_available": ...}`（データセットの同定が LBM だけ＝記憶が `lbm_only` のときは、MSP のスペクトルが無いので評価できない: 候補ごとは `{"status": "not_evaluable", "reason": "lbm_only", "spectrum_available": ...}` で、理由の文は束の `msms_not_evaluable_reason` に 1 回だけ。`no_library` は `library_load` を促すが、このデータセットには照合に使える MSP が無い）、MS/MS が無い・索引の崩れはその `status`。`spectrum_available` は代表スペクトルの有無で、ライブラリの有無によらず spot を先に照会して決める: `true`=ある、`false`=照会して無かった（`not_found` で `reason` が `no_spectrum`）、`null`=分からない（`.arf2` / `.dcl` のファイル自体が無い `not_found` の `reason` `no_arf2` / `no_dcl`・`spot_not_found`・`dcl_precursor_mismatch`・`spot_id_not_integer`、ハンドルに `.arf2` / `.dcl` が無いとき））・`relations` |
+| `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか。組の片方だけが質量の窓に入ったときに足した相手は `merge_partner`）・`split`（下）・`msms`（spot_id = SMF_ID の照合の上位 `top`（`library_msms_qualify` の候補の表と同じ欄。`passes_dbs_cutoffs`・種の欄も同じ条件で）と `qualify`（`target_rank`・`top1_is_target` を含む）、使った前駆体の窓 `window`（`mz_tol`・`mz_window`・`mz_tol_ppm`）、スポットに MS-DIAL の注釈があれば `msdial_name`・`msdial_rank`・`top_differs_from_msdial`。ライブラリが無ければ `{"status": "no_library", "spectrum_available": ...}`（データセットの同定が LBM だけ＝記憶が `lbm_only` のときは、MSP のスペクトルが無いので評価できない: 候補ごとは `{"status": "not_evaluable", "reason": "lbm_only", "spectrum_available": ...}` で、理由の文は束の `msms_not_evaluable_reason` に 1 回だけ。`no_library` は `library_load` を促すが、このデータセットには照合に使える MSP が無い）、MS/MS が無い・索引の崩れはその `status`。`spectrum_available` は代表スペクトルの有無で、ライブラリの有無によらず spot を先に照会して決める: `true`=ある、`false`=照会して無かった（`not_found` で `reason` が `no_spectrum`）、`null`=分からない（`.arf2` / `.dcl` のファイル自体が無い `not_found` の `reason` `no_arf2` / `no_dcl`・`spot_not_found`・`dcl_precursor_mismatch`・`spot_id_not_integer`、ハンドルに `.arf2` / `.dcl` が無いとき））・`relations` |
 | `truncated` | `max_candidates` で打ち切った候補の数 |
 | `rule` / `rule_hash` | 正規化した spec とその hash。spec の `merge_split`（既定 true）は真のときだけ `rule` に載り、`rule_hash` には判定でまとめた組の hash も入る（false は v7 と同じ規則・同じ hash） |
 | `merge_split` / `merge_groups_hash` | 割れの組を判定で 1 つの候補にしたか（spec の `merge_split`）と、その組（§9 の `merge_groups`）の hash（false なら null） |

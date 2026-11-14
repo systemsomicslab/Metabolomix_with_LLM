@@ -7,17 +7,23 @@
 
 設定していない検査は行を出さない。`verdict` は、すべて pass → `qualified`、
 どれか fail → `not_qualified`、fail が無く判定できない検査がある → `not_evaluable`。
+
+既定の規則でも断片の一致を 1 本は求める（`min_fragments_excl_precursor` の既定 1。一致 0 本で
+qualified にしない）。断片の一致は、測定の基準ピークに対する強度が `min_fragment_relative_intensity`
+（既定 0.01）以上の窓だけを数える（雑音の 1 本で qualified にしない。2026-11-13 の事実確認 A1）。
 """
 from __future__ import annotations
 
 import copy
 import math
 import re
+from functools import lru_cache
 
 from metabolomix.analysis.spectral_match import fragment_matches_excluding_precursor
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
-__all__ = ["RULES_SCHEMA", "find_ions", "normalize_ions", "normalize_rules", "qualify",
+__all__ = ["CANDIDATE_COLUMNS", "RULES_SCHEMA", "candidate_rows", "find_ions", "normalize_ion",
+           "normalize_ions", "normalize_rules", "qualify", "query_window", "record_lipid_species",
            "rules_hash"]
 
 RULES_SCHEMA = "msms-rules.v1"
@@ -27,7 +33,8 @@ DEFAULT_ION_TOL = 0.01
 
 _DEFAULTS = {
     "top_rank": 5,
-    "min_fragments_excl_precursor": None,
+    "min_fragments_excl_precursor": 1,
+    "min_fragment_relative_intensity": 0.01,
     "precursor_exclusion_tol": None,
     "same_formula_margin": None,
     "lipid_class": None,
@@ -78,25 +85,41 @@ def _normalize_target(raw_target: dict, formula) -> dict:
     return {"lipid_species": lipid_species(raw_target["lipid_species"]), "formula": formula}
 
 
+def normalize_ion(item, *, kind: str, label: str, loss_key: str = "delta") -> dict:
+    """診断イオン（`mz`）か中性損失（`delta`）の 1 件。誤りの文は原因のキーを名指す。
+
+    `min_relative_intensity`（測定の最大ピークに対する比の下限）は両方で受ける。中性損失の比は
+    生成イオン（前駆体 − `delta`）の測定強度の比。診断イオンは省くと 0 を埋め、中性損失は
+    渡したときだけ載せる（省いた規則の `rule_hash` を変えない）。`loss_key` は呼び手が中性損失の
+    値に使うキーの名前（`dcl_diagnostic_ions` は `neutral_loss`）。戻り値はいつも `delta`。
+    """
+    key = "mz" if kind == "ion" else loss_key
+    allowed = {key, "label", "tol", "min_relative_intensity"}
+    if not isinstance(item, dict):
+        raise _fail(f"{label} は {{{key}, label, tol, min_relative_intensity}} の辞書", field=label)
+    unknown = sorted(set(item) - allowed)
+    if unknown:
+        raise _fail(f"{label} の未知のキー: {unknown}（使えるのは {key}・label・tol・"
+                    "min_relative_intensity）", field=label, unknown=unknown)
+    if key not in item:
+        raise _fail(f"{label} に {key} が無い", field=f"{label}.{key}")
+    out = {
+        ("mz" if kind == "ion" else "delta"): _positive(item[key], f"{label}.{key}"),
+        "label": str(item.get("label") or f"{key}={item[key]}"),
+        "tol": _positive(item.get("tol", DEFAULT_ION_TOL), f"{label}.tol"),
+    }
+    if kind == "ion" or "min_relative_intensity" in item:
+        out["min_relative_intensity"] = _positive(item.get("min_relative_intensity", 0.0),
+                                                  f"{label}.min_relative_intensity",
+                                                  allow_zero=True)
+    return out
+
+
 def normalize_ions(items, *, kind: str, label: str) -> list[dict]:
-    """診断イオン（`mz`）か中性損失（`delta`）の一覧。"""
-    key = "mz" if kind == "ion" else "delta"
+    """診断イオン（`mz`）か中性損失（`delta`）の一覧。各要素は `normalize_ion`。"""
     if not isinstance(items, list):
         raise _fail(f"{label} はリスト", field=label)
-    out = []
-    for i, item in enumerate(items):
-        allowed = {key, "label", "tol"} | ({"min_relative_intensity"} if kind == "ion" else set())
-        if not isinstance(item, dict) or key not in item or set(item) - allowed:
-            raise _fail(f"{label}[{i}] は {{{key}, label, tol}} の辞書", field=f"{label}[{i}]")
-        out.append({
-            key: _positive(item[key], f"{label}[{i}].{key}"),
-            "label": str(item.get("label") or f"{key}={item[key]}"),
-            "tol": _positive(item.get("tol", DEFAULT_ION_TOL), f"{label}[{i}].tol"),
-            **({"min_relative_intensity": _positive(item.get("min_relative_intensity", 0.0),
-                                                    f"{label}[{i}].min_relative_intensity",
-                                                    allow_zero=True)} if kind == "ion" else {}),
-        })
-    return out
+    return [normalize_ion(item, kind=kind, label=f"{label}[{i}]") for i, item in enumerate(items)]
 
 
 def normalize_rules(rules, *, target: dict | None = None) -> dict:
@@ -125,6 +148,12 @@ def normalize_rules(rules, *, target: dict | None = None) -> dict:
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise _fail("min_fragments_excl_precursor は 0 以上の整数か null",
                         field="min_fragments_excl_precursor")
+    floor = out["min_fragment_relative_intensity"]
+    if (isinstance(floor, bool) or not isinstance(floor, (int, float)) or not math.isfinite(floor)
+            or not 0 <= floor <= 1):
+        raise _fail("min_fragment_relative_intensity は 0 以上 1 以下の数（測定の基準ピークに対する比）",
+                    field="min_fragment_relative_intensity")
+    out["min_fragment_relative_intensity"] = float(floor)
     if out["precursor_exclusion_tol"] is not None:
         out["precursor_exclusion_tol"] = _positive(out["precursor_exclusion_tol"],
                                                    "precursor_exclusion_tol")
@@ -190,13 +219,55 @@ def _block(record) -> str | None:
     return key.strip()[:14].upper() if isinstance(key, str) and key.strip() else None
 
 
+#: 記録の種を得た経路（`record_lipid_species` の 2 つめの値）。
+SPECIES_ROUTES = ("name", "name_cleaned", "ontology_formula")
+
+
+@lru_cache(maxsize=65536)
+def _species_of(name, ontology, formula) -> tuple[str | None, str | None]:
+    from metabolomix.msdial.lipid_identity import lipid_species_of
+    from metabolomix.pathway import msp_lipid
+
+    if not isinstance(name, str) or not name.strip():
+        return None, None
+    _qualifier, rest = msp_lipid.split_qualifier(name)
+    if msp_lipid.has_isotope_label(rest):
+        return None, None          # 同位体の標識のある記録（内部標準）は種に読まない
+    species = lipid_species_of(name)
+    if species is not None:
+        return species, "name"
+    shorthand = msp_lipid.shorthand(rest)
+    species = lipid_species_of(shorthand) if shorthand else None
+    if species is not None:
+        return species, "name_cleaned"
+    built = msp_lipid.from_class_formula(ontology, formula, rest)
+    if isinstance(built, tuple):
+        species = lipid_species_of(built[0])
+        if species is not None:
+            return species, "ontology_formula"
+    return None, None
+
+
+def record_lipid_species(record) -> tuple[str | None, str | None]:
+    """ライブラリの記録の脂質の種（GOSLIN の種のレベル）と、それを得た経路。読めなければ (None, None)。
+
+    経路は順に `name`（記録の name をそのまま GOSLIN で読む）→ `name_cleaned`（限定子・`|` の後・
+    `;` の後の注記・付加体の表記を外し、古い MS-DIAL の書式と英語のクラス名を略記に直して読む。
+    `pathway.msp_lipid.shorthand`）→ `ontology_formula`（ClassyFire の Ontology と分子式から和の組成の
+    種を作る。`pathway.msp_lipid.from_class_formula`）。同位体の標識のある名前（内部標準）は読まない。
+    """
+    if not isinstance(record, dict):
+        return None, None
+    formula = record.get("formula")
+    return _species_of(record.get("name"), record.get("ontology"),
+                       formula.strip() if isinstance(formula, str) else None)
+
+
 def _target_key(rules: dict):
-    """記録 → 目標と比べる識別子（InChIKey の先頭ブロックか、名前の種）と、目標の値。"""
+    """記録 → 目標と比べる識別子（InChIKey の先頭ブロックか、記録の種）と、目標の値。"""
     target = rules["target"]
     if "lipid_species" in target:
-        from metabolomix.msdial.lipid_identity import lipid_species_of
-
-        return (lambda record: lipid_species_of(record.get("name"))), target["lipid_species"]
+        return (lambda record: record_lipid_species(record)[0]), target["lipid_species"]
     return _block, target["inchikey_block"]
 
 
@@ -218,32 +289,43 @@ def _check(check: str, status: str, value=None, detail=None) -> dict:
 def qualify(scored: list, measured, precursor_mz: float, rules: dict, *, ms2_tol: float) -> dict:
     """照合の結果（`score_candidates` の `scored`。総合スコアの降順）に規則を当てる。
 
-    種の目標（`target.lipid_species`）では、目標か別物かを記録の `name` の種で決める
-    （同じ種の別の分子種は目標として数え、`same_formula_margin` の相手にしない）。
+    種の目標（`target.lipid_species`）では、目標か別物かを記録の種（`record_lipid_species`。
+    名前 → 注記を外した名前 → Ontology と分子式の順に読む）で決める（同じ種の別の分子種は
+    目標として数え、`same_formula_margin` の相手にしない）。目標の候補の種を得た経路は
+    `target_in_top_rank` の `detail.species_route`。
+
+    戻り値の `top1_is_target` は 1 位の候補が目標か（目標が候補に無ければ False）。既定の
+    `top_rank`（5）では 1 位が別物でも `target_in_top_rank` は pass しうるので、`target_rank` と
+    並べて見る。
     """
     key_of, block = _target_key(rules)
+    species_target = "lipid_species" in rules["target"]
     checks = []
     target_index = next((i for i, (record, _) in enumerate(scored) if key_of(record) == block),
                         None)
     in_top = target_index is not None and target_index < rules["top_rank"]
-    checks.append(_check("target_in_top_rank", "pass" if in_top else "fail",
-                         None if target_index is None else target_index + 1,
-                         {"top_rank": rules["top_rank"]}))
     target = scored[target_index] if target_index is not None else None
+    detail = {"top_rank": rules["top_rank"]}
+    if species_target and target is not None:
+        detail["species_route"] = record_lipid_species(target[0])[1]
+    checks.append(_check("target_in_top_rank", "pass" if in_top else "fail",
+                         None if target_index is None else target_index + 1, detail))
 
     if rules["min_fragments_excl_precursor"] is not None:
         tol = rules["precursor_exclusion_tol"] or ms2_tol
+        floor = rules["min_fragment_relative_intensity"]
         if target is None:
             checks.append(_check("min_fragments", "not_evaluable", None,
                                  {"reason": "target_not_among_candidates"}))
         else:
-            count = fragment_matches_excluding_precursor(target[1].get("alignment") or [],
-                                                         precursor_mz, tol)
+            count = fragment_matches_excluding_precursor(
+                target[1].get("alignment") or [], precursor_mz, tol, min_relative_intensity=floor)
             status = ("not_evaluable" if count is None
                       else "pass" if count >= rules["min_fragments_excl_precursor"] else "fail")
             checks.append(_check("min_fragments", status, count,
                                  {"minimum": rules["min_fragments_excl_precursor"],
-                                  "precursor_exclusion_tol": tol}))
+                                  "precursor_exclusion_tol": tol,
+                                  "min_relative_intensity": floor}))
 
     margin = rules["same_formula_margin"]
     if margin is not None:
@@ -292,4 +374,51 @@ def qualify(scored: list, measured, precursor_mz: float, rules: dict, *, ms2_tol
     verdict = ("not_qualified" if "fail" in statuses
                else "not_evaluable" if "not_evaluable" in statuses else "qualified")
     return {"verdict": verdict, "checks": checks,
-            "target_rank": None if target_index is None else target_index + 1}
+            "target_rank": None if target_index is None else target_index + 1,
+            "top1_is_target": target_index == 0}
+
+
+# ---------- 候補の行（`library_msms_qualify` の表と `dataset_claim_evidence` の `msms.top`） ----------
+
+#: 候補の行の既定の列。`.dbs` の足切りがあれば `passes_dbs_cutoffs`、種の目標なら
+#: `lipid_species`・`species_route` を呼び出し側が足す。
+CANDIDATE_COLUMNS = ("rank", "name", "formula", "inchikey", "adduct", "delta_ppm", "total_score",
+                     "matched_peaks_count", "fragment_matches_excl_precursor")
+
+
+def candidate_rows(scored, precursor_mz: float, rules: dict, *, ms2_tol: float,
+                   cutoffs: dict | None, top_n: int) -> list[dict]:
+    """MS/MS の合否の候補の上位 `top_n` 行。
+
+    `delta_ppm` は `(測定 - 参照) / 参照 * 1e6`（小数 2 桁）。`fragment_matches_excl_precursor` は合否と
+    同じ規則（前駆体 ± `precursor_exclusion_tol` を除き、測定強度が `min_fragment_relative_intensity`
+    以上の窓）で数える。`.dbs` に注釈の足切りがあれば `passes_dbs_cutoffs`（合否には当てない材料）、
+    種の目標なら `lipid_species` と `species_route`（記録の種を得た経路）を足す。
+    """
+    from metabolomix.library import matching
+
+    tol = rules["precursor_exclusion_tol"] or ms2_tol
+    species_target = "lipid_species" in rules["target"]
+    rows = []
+    for rank, (record, result) in enumerate(scored[:top_n], start=1):
+        ppm = matching.delta_ppm(precursor_mz, record.get("precursor_mz"))
+        row = {"rank": rank, "name": record.get("name"), "formula": record.get("formula"),
+               "inchikey": record.get("inchikey"), "adduct": record.get("adduct"),
+               "delta_ppm": None if ppm is None else round(ppm, 2),
+               "total_score": result["total_score"],
+               "matched_peaks_count": result["matched_peaks_count"],
+               "fragment_matches_excl_precursor": fragment_matches_excluding_precursor(
+                   result["alignment"], precursor_mz, tol,
+                   min_relative_intensity=rules["min_fragment_relative_intensity"])}
+        if cutoffs:
+            row["passes_dbs_cutoffs"] = matching.passes_dbs_cutoffs(result, cutoffs)
+        if species_target:
+            row["lipid_species"], row["species_route"] = record_lipid_species(record)
+        rows.append(row)
+    return rows
+
+
+def query_window(query: dict) -> dict:
+    """照合に使った前駆体の窓（`score_candidates` の `query` から）。`mz_tol` は m/z 500 以下の Da の幅、
+    `mz_window` は実際に使った Da の幅（m/z 500 を超えたら ppm で広がる）、`mz_tol_ppm` は重ねた ppm の絞り込み。"""
+    return {k: query[k] for k in ("mz_tol", "mz_window", "mz_tol_ppm")}
