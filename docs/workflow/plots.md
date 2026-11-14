@@ -51,7 +51,8 @@ Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT
 `STALE_ANALYSIS_RESULT`（`result_state.assert_current`）。無ければ直近（`ds.last_pca` /
 `ds.last_differential`）。`dataset_exclude` や前処理・群の変更で古くなった結果は
 `result_state.invalidate_results` が `last_*` と `ds.figures` の該当 kind を同時に捨てるので、
-古い図は最新として描かれず保存もされない。別の kind の引数が渡されたら `DATASET_BAD_REQUEST`
+古い図は最新として描かれず保存もされない（捨てた kind には理由の印 `ds.discarded_figures` を残し、`save_figure` は
+`STALE_FIGURE` を返す。`dataset_plot` が同じ kind を描き直すと印は消える）。別の kind の引数が渡されたら `DATASET_BAD_REQUEST`
 （`_check_arguments`。どの kind の引数かを書く）。
 
 `group_intensity` / `species` / `species_pca` の項目・行は `plots/dataset_rows.py` が `DatasetState` から選ぶ:
@@ -114,14 +115,16 @@ EIC は特徴 ID（= `.arf2` の MasterAlignmentID）をそのまま `.EIC.aef` 
 ## save_figure
 
 前提: `dataset_plot` で図を作ってある（`ds.figures[kind]`）か、`result_id` で登録済みの結果を名指しする
-（pca / volcano / loadings。volcano は `contrast_id` でも対比を選んで描き直せる）。無ければ `missing_state`
+（pca / volcano / loadings。volcano は `contrast_id` でも対比を選んで描き直せる）。一度も描いていなければ `missing_state`
 （`required_tools` は `dataset_plot`、データセットが無ければ `load_dataset`）。置き場の図が古ければ（`_stale_figure`）
-保存せず `STALE_FIGURE`（`details.required_tools` は `dataset_plot`）。
+保存せず `STALE_FIGURE`（`details.required_tools` は `dataset_plot`）。除外・試料の表の更新で
+`result_state.invalidate_results` が捨てた図も、捨てた kind に残る印（`ds.discarded_figures`。`dataset_plot` が同じ kind を
+描き直すと消える）から `STALE_FIGURE`（`details.reason` に変わったもの。文言は `_discarded_message`）。
 状態変更: `reports/figures/` に PNG（`loadings` `group_intensity` `species` `species_pca` は SVG も）を書く。
 
-`kind` は `dataset_plot` の kind（`FIGURE_KINDS`）。`source` 引数と ARF の候補は無い。未知の `kind` と、
-`result_id` を使わない `kind`（`group_intensity` `species` `species_pca` `eic` 系）への指定、volcano 以外への
-`contrast_id` は `{"status": "error"}`。`contrast_id` と `result_id#contrast_id` が食い違えば `DATASET_BAD_REQUEST`
+`kind` は `dataset_plot` の kind（`FIGURE_KINDS`）。`source` 引数と ARF の候補は無い。未知の `kind` は
+`{"status": "error"}`。`result_id` を使わない `kind`（`group_intensity` `species` `species_pca` `eic` 系）への `result_id` と
+volcano 以外への `contrast_id` は断らずに使わず、置き場の図を保存して戻り値の `notes:` 行に書く（`_save_record`）。`contrast_id` と `result_id#contrast_id` が食い違えば `DATASET_BAD_REQUEST`
 （`split_result_ref`）、2 群の対比が複数で選ばなければ `needs_input`（`contrast_envelope`）。`pca` / `volcano` は
 `save_result_figure()`（探索専用データセットから描いた図には図の中に但し書きが入る）、`loadings` と
 `group_intensity` `species` `species_pca` は dpi 300 の PNG と SVG、`eic` 系は dpi 120 の PNG。
@@ -132,13 +135,14 @@ EIC は特徴 ID（= `.arf2` の MasterAlignmentID）をそのまま `.EIC.aef` 
 1. metabolomix/tools/reports.py  save_figure()
 2. ├─ metabolomix/tools/_holder.py  resolve_holder()
 3. ├─ [result_id / contrast_id 指定] metabolomix/tools/plot_tools.py  build_figure()
-4. ├─ [どちらも省略] metabolomix/tools/reports.py  _stale_figure()
-5. ├─ [DomainError] metabolomix/tools/_contrast_choice.py  contrast_envelope()
-6. └─ metabolomix/tools/reports.py  _save_record()
-7.    └─ metabolomix/tools/plot_tools.py  write_figure_files()
-8.       ├─ [kind=pca / volcano] metabolomix/plots/result_output.py  save_result_figure()
-9.       │  └─ [kind=pca] metabolomix/plots/pca_scores.py  render_pca_scores()
-10.      ├─ [kind=loadings / group_intensity / species / species_pca] metabolomix/plots/render.py  render_files()
-11.      │  ├─ metabolomix/plots/pca_loadings.py  render_loadings_plot()
-12.      │  └─ metabolomix/plots/group_intensity.py  render_group_intensity_plot()
-13.      └─ [kind=eic / eic_compounds] metabolomix/plots/eic.py  render_eic_plot()
+4. ├─ [どちらも省略・置き場に無く、捨てた印がある] metabolomix/tools/reports.py  _discarded_message()
+5. ├─ [どちらも省略] metabolomix/tools/reports.py  _stale_figure()
+6. ├─ [DomainError] metabolomix/tools/_contrast_choice.py  contrast_envelope()
+7. └─ metabolomix/tools/reports.py  _save_record()
+8.    └─ metabolomix/tools/plot_tools.py  write_figure_files()
+9.       ├─ [kind=pca / volcano] metabolomix/plots/result_output.py  save_result_figure()
+10.      │  └─ [kind=pca] metabolomix/plots/pca_scores.py  render_pca_scores()
+11.      ├─ [kind=loadings / group_intensity / species / species_pca] metabolomix/plots/render.py  render_files()
+12.      │  ├─ metabolomix/plots/pca_loadings.py  render_loadings_plot()
+13.      │  └─ metabolomix/plots/group_intensity.py  render_group_intensity_plot()
+14.      └─ [kind=eic / eic_compounds] metabolomix/plots/eic.py  render_eic_plot()

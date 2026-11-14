@@ -617,12 +617,17 @@ def test_species_pca_figure_is_dropped_with_the_pca_set_and_save_figure_rechecks
     result_state.invalidate_results(ds, {"exclusion"})
     assert "species_pca" not in ds.figures
     err = _error(reports.save_figure("species_pca", "c-1"))
-    assert err["code"] == "missing_state"
+    assert err["code"] == "STALE_FIGURE" and err["details"]["reason"] == ["exclusion"]
 
 
-def test_save_figure_result_id_is_not_accepted_for_the_new_kinds(loaded):
-    err = json.loads(reports.save_figure("species", "x", result_id="r1"))
-    assert err["status"] == "error" and "result_id" in err["message"]
+def test_save_figure_result_id_is_not_used_for_the_new_kinds(loaded, tmp_path):
+    """species 系は result_id から描き直せない。断らずに使わず、置き場の図を保存して notes に書く。"""
+    err = _error(reports.save_figure("species", "x", result_id="r1"))
+    assert err["code"] == "missing_state"                   # まだ描いていない
+    plot_tools.dataset_plot(kind="species", items=["PG"], groups=["ctrl", "ko"])
+    msg = reports.save_figure("species", "x", result_id="r1")
+    assert (tmp_path / "reports" / "figures" / "x_species.png").is_file()
+    assert "notes:" in msg and "result_id='r1'" in msg
 
 
 def test_failed_render_does_not_store_the_figure(loaded, monkeypatch):

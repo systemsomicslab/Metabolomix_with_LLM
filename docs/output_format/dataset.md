@@ -579,8 +579,11 @@ n_excluded_after_test` が `n_features_total`。下流が `n_features_total` と
 `FIGURE_SAVE_FAILED`（`details.output_path`。書く段だけの符号で、図を組み立てる間の入力の読み取りの失敗には使わない）で、
 セッションの図（`ds.figures[kind]`）は変えない。`save_figure` は、置かれた図が古ければ保存せず `STALE_FIGURE`
 （試料の情報を焼き込んだ図の後に試料の情報が更新された、または図の元の結果がいまのデータセットの状態から出たもの
-でない。`details` に `kind`・`result_id`・`required_tools: ["dataset_plot"]`。描き直してから保存する）。置かれた図が
-無ければ `missing_state`（`required_tools` は `dataset_plot`）。
+でない。`details` に `kind`・`result_id`・`required_tools: ["dataset_plot"]`。描き直してから保存する）。除外
+（`dataset_exclude`）・試料の表の更新（前処理の入力の列なら pca / loadings / species_pca / volcano、群だけなら volcano）が
+図ごと捨てた図も `STALE_FIGURE`（`details` に `kind`・`reason`（変わったもの: `exclusion` や試料の表の列名）・
+`required_tools: ["dataset_plot"]`）。一度も描いていない図だけが `missing_state`（`required_tools` は `dataset_plot`）。
+kind が使わない `result_id` / `contrast_id` は断らずに使わず、保存した戻り値の最後の `notes:` 行に書く。
 
 #### 11.5 `dataset_plot(kind="group_intensity")` の返り値（`lipidmix.group_intensity.v1`）
 

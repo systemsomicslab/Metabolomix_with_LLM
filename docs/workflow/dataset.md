@@ -88,7 +88,8 @@ mzTab-M は mzTab-M のフォルダ。指紋には入れない）を決める。
 `retry_tools=["load_dataset"]`）にして返す。ほかの入口で `polarity` を渡すと `PIPELINE_POLARITY_NOT_APPLICABLE`）。
 
 受付: `load_dataset` は引数（`overview`・`library`）を確かめ、`wait_seconds` を 0〜30 秒に丸め（丸めたら
-戻り値に `wait_seconds_note`。数でないものは `DATASET_BAD_REQUEST`）、上限の枠を
+戻り値に `wait_seconds_note`。NaN は `DATASET_BAD_REQUEST`。MCP からの呼び出しでは型の検査が先に効き、真偽値と
+数に読める文字列は数に変わって届き、数に読めない値はツールに届く前に引数検査のエラー）、上限の枠を
 1 本取ってから（`reserve()`。開いているハンドルと読み込み中の受付の和で数える）、本体 `_load_now()` を
 受付（`core/pending_loads.py`）の daemon スレッドで始め、受付そのもの（`PendingLoad`）を最長 `wait_seconds`
 （既定 20 秒）待つ。終われば本体の戻り値をそのまま返し、受付は忘れる。終わらなければ受付番号（`ld_…`）を
@@ -367,8 +368,8 @@ TSV は書かない（消費者のいない `feature-qc.tsv` を 2026-09-03 に�
 終わった受付は終わってから 1 時間覚え（番号を渡せば同じ文字列を返す）、64 件を超えると終わったものを終わった順に
 古いものから捨てる。読み込み中のものは捨てず、64 件すべてが読み込み中なら `load_dataset` が
 `DATASET_LOAD_LIMIT` で受け付けない。
-`wait_seconds`（既定 0。`clamp_wait()` が 0〜30 秒に丸め、丸めたら `wait_seconds_note`。数でないものは
-`DATASET_BAD_REQUEST`）が 0 より大きければ、受付そのものを最長その秒数だけ待ち、その中で終われば戻り値を
+`wait_seconds`（既定 0。`clamp_wait()` が 0〜30 秒に丸め、丸めたら `wait_seconds_note`。NaN は
+`DATASET_BAD_REQUEST`。MCP からの呼び出しでは `load_dataset` と同じく型の検査が先に効く）が 0 より大きければ、受付そのものを最長その秒数だけ待ち、その中で終われば戻り値を
 そのまま返す。終わらなければ待たないときと同じく今の状態を返す。待っても状態は変わらない。
 
 1. metabolomix/tools/handle_tools.py  dataset_load_status()

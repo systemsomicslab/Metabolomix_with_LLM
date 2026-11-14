@@ -60,7 +60,9 @@ def clamp_wait(value, *, maximum: float = MAX_WAIT_SECONDS) -> tuple[float, str 
     """`wait_seconds` を 0〜`maximum` 秒に丸める。(使う秒数, 丸めたときの注記 or None)。
 
     範囲の外の数（負・上限超え・±無限）は断らずに丸め、丸めたことを注記で返す。数でないもの
-    （bool・文字列・NaN）は丸めようがないので `DATASET_BAD_REQUEST`（DomainError）。
+    （bool・文字列・NaN）は丸めようがないので `DATASET_BAD_REQUEST`（DomainError）。MCP からの呼び出しでは
+    FastMCP の引数検査（`wait_seconds: float`）が先に効き、真偽値と数に読める文字列は数に変わって届き、数に
+    読めない値は届かないので、ここで断る数でない値は NaN だけ（関数を直に呼んだときは bool・文字列も断る）。
     """
     if (isinstance(value, bool) or not isinstance(value, (int, float))
             or (isinstance(value, float) and math.isnan(value))):

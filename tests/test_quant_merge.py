@@ -731,3 +731,51 @@ def test_merged_dataset_is_not_normalized(tmp_path, monkeypatch):
             assert exc.value.details == {"record_id": info["record_id"],
                                          "parent_handles": {"positive": "dh_p", "negative": "dh_n"}}
         assert sorted(p.name for p in records.iterdir()) == before  # 記録を書かない
+
+
+# ---- アッセイ種別は両側から（最終検証 F19） ----
+
+@pytest.mark.parametrize("pos_kind, neg_kind, expected, noted", [
+    ("unknown", "unknown", "unknown", False),
+    ("lipid", "lipid", "lipid", False),
+    ("unknown", "lipid", "lipid", True),       # 陰イオンにだけ記録した種別を落とさない
+    ("metabolite", "unknown", "metabolite", True),
+    ("metabolite", "lipid", "unknown", True),  # 食い違えば、どちらの解釈規則も黙って当てない
+])
+def test_merge_takes_assay_kind_from_both_sides(tmp_path, monkeypatch, pos_kind, neg_kind, expected, noted):
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.assay_kind, neg.assay_kind = pos_kind, neg_kind
+    merged, info = _merge(pos, neg, mapping_rows=None)
+    assert merged.assay_kind == expected and info["assay_kind"] == expected
+    assert ("notes" in info) is noted
+    if noted:
+        assert len(info["notes"]) == 1 and "assay_kind" in info["notes"][0]
+    if expected == "unknown" and noted:
+        assert "record_objective" in info["notes"][0] and "食い違う" in info["notes"][0]
+    assert (pos.assay_kind, neg.assay_kind) == (pos_kind, neg_kind)  # 元は不変
+
+
+def test_tool_merge_carries_the_kind_recorded_on_the_negative_handle(tmp_path, monkeypatch):
+    """陰イオンのハンドルが直近のときに record_objective(assay_kind="lipid") した（陰イオンだけが lipid）。"""
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    hp, hn = _open(pos, "positive"), _open(neg, "negative")
+    handles.registry.get(hn).dataset.assay_kind = "lipid"
+    out = json.loads(_tool()(hp, hn))
+    assert out["status"] == "merged" and out["assay_kind"] == "lipid"
+    assert any("negative の lipid" in note for note in out["notes"])
+    merged = handles.registry.get(out["dataset_handle"])
+    assert merged.dataset.assay_kind == "lipid"
+    assert session_state.session.assay_kind == "lipid"   # 統合したハンドルが直近
+    assert handles.registry.get(hp).dataset.assay_kind == "unknown"
+
+
+def test_single_parent_derive_keeps_the_kind(tmp_path, monkeypatch):
+    """正規化・選別の派生（親 1 つ）は親の種別をそのまま持つ。"""
+    pos, _neg = _pair(tmp_path)
+    pos.assay_kind = "metabolite"
+    ones = np.ones((len(pos.feature_ids), 2))
+    new = qd.derive(pos, matrix=ones, detected=np.ones(ones.shape, dtype=bool),
+                    sample_names=["S1_pos", "S2_pos"], state=pos.quant_state)
+    assert new.assay_kind == "metabolite"

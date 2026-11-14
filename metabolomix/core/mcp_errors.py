@@ -184,7 +184,8 @@ MZTAB_ERROR_CODES = frozenset({
     "ARF_TOO_LARGE",
     # dataset_plot(output_path=...) が指したファイルに書けない（書く段だけ。図の置き場は変えない）。
     "FIGURE_SAVE_FAILED",
-    # save_figure が保存しようとした図が古い（試料の情報の更新後・元の結果が今の状態から出たものでない）。
+    # save_figure が保存しようとした図が古い（試料の情報の更新後・元の結果が今の状態から出たものでない。除外・
+    # 試料の表の更新が図ごと捨てた図も。そのときは details.reason に変わったもの）。
     # details.required_tools は dataset_plot（描き直す）。
     "STALE_FIGURE",
     # job_status: 知らない受付番号・走っている受付が上限・道具が DomainError 以外で止まった。

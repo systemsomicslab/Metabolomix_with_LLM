@@ -665,4 +665,6 @@ def dataset_plot(
     except ValueError as exc:                      # 描くものが無い等（描画部品の検査）
         return mztab_error("DATASET_BAD_REQUEST", str(exc), {"kind": kind})
     ds.figures[kind] = record
+    # 描き直した図は新しいもの（捨てた図の印を消す。save_figure はもう STALE_FIGURE を返さない）
+    (getattr(ds, "discarded_figures", None) or {}).pop(kind, None)
     return body

@@ -945,9 +945,9 @@ def test_save_figure_contrast_id_redraws_the_chosen_contrast(tmp_path):
     _asks_for_contrast(reports.save_figure("volcano", "v-4", result_id=rid), "save_figure",
                        ["T_vs_C", "U_vs_C"])
     assert not (figures / "v-4_volcano.png").exists()
-    # contrast_id は volcano だけ
-    err = json.loads(reports.save_figure("loadings", "v-5", contrast_id="T_vs_C"))
-    assert err["status"] == "error" and "volcano" in err["message"]
+    # contrast_id は volcano だけに効く。ほかの kind では断らずに使わない（loadings はまだ描いていないので missing_state）
+    err = json.loads(reports.save_figure("loadings", "v-5", contrast_id="T_vs_C"))["error"]
+    assert err["code"] == "missing_state" and err["required_tools"] == ["dataset_plot"]
 
 
 def test_volcano_caption_reads_test_vs_reference(ds):

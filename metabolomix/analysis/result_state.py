@@ -120,11 +120,24 @@ _PCA_FIGURES = ("pca", "loadings", "species_pca")
 _DIFFERENTIAL_FIGURES = ("volcano",)
 
 
-def _drop_figures(ds, kinds: tuple[str, ...]) -> None:
+def _drop_figures(ds, kinds: tuple[str, ...], changed: set[str]) -> None:
+    """図を捨て、捨てた kind に理由（変わったもの）の印を残す（`ds.discarded_figures`）。
+
+    印は `save_figure` が読み、「描いたことの無い図」（missing_state）と「古くなって捨てた図」（`STALE_FIGURE`
+    と理由）を見分ける。`dataset_plot` が同じ kind を描き直すと消える。置かれていなかった kind には残さない。
+    """
     figures = getattr(ds, "figures", None)
-    if figures:
-        for kind in kinds:
-            figures.pop(kind, None)
+    if not figures:
+        return
+    dropped = [kind for kind in kinds if figures.pop(kind, None) is not None]
+    if not dropped:
+        return
+    marks = getattr(ds, "discarded_figures", None)
+    if not isinstance(marks, dict):
+        marks = {}
+        ds.discarded_figures = marks
+    for kind in dropped:
+        marks[kind] = sorted(changed)
 
 
 def invalidate_results(ds, changed: set[str]) -> None:
@@ -147,18 +160,18 @@ def invalidate_results(ds, changed: set[str]) -> None:
     """
     changed = set(changed)
     # 結果から作った図（dataset_plot の置き場 ds.figures）も同じ依存で捨てる。残すと save_figure が
-    # 古い結果の図を現在のものとして保存する。
+    # 古い結果の図を現在のものとして保存する。捨てた kind には理由の印を残す（save_figure の STALE_FIGURE）。
     if changed & _PP_INVALIDATING:
         ds.stat_matrices = {}
         ds.last_pca = None
         ds.last_differential = None
-        _drop_figures(ds, _PCA_FIGURES + _DIFFERENTIAL_FIGURES)
+        _drop_figures(ds, _PCA_FIGURES + _DIFFERENTIAL_FIGURES, changed)
     elif changed & _STAT_INVALIDATING:
         ds.last_differential = None
-        _drop_figures(ds, _DIFFERENTIAL_FIGURES)
+        _drop_figures(ds, _DIFFERENTIAL_FIGURES, changed)
     elif "pca_settings" in changed:
         ds.last_pca = None
-        _drop_figures(ds, _PCA_FIGURES)
+        _drop_figures(ds, _PCA_FIGURES, changed)
 
 
 def new_provenance(ds, *, kind: str, input_fingerprint: str,
