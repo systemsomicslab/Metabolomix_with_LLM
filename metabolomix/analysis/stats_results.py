@@ -28,6 +28,7 @@ from metabolomix.analysis import differential, export_contract
 from metabolomix.analysis.result_state import dataset_fingerprint, is_stats_current
 from metabolomix.analysis.stats import preprocess as stats_preprocess
 from metabolomix.analysis.stats.compare import _model_value, _verdict, adjust_p_values
+from metabolomix.analysis.stats.data import sample_table
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 __all__ = [
@@ -39,6 +40,7 @@ __all__ = [
     "p_adjust_method",
     "q_interpretation",
     "get_matrix",
+    "groups_match",
     "sample_ids_by_name",
     "split_result_ref",
     "compare_spec",
@@ -195,6 +197,26 @@ def _entry_inputs(entry: dict) -> dict:
             "group_overrides": dict(entry["group_overrides"])}
 
 
+def _included_groups(ds, exclude_samples, group_overrides) -> dict[str, str | None]:
+    """前処理に入る試料（除外していないもの。役割を問わない）の群: 試料 ID → 群。除外した試料は前処理の
+    最初（選択）で落ちるので、その群は数字に効かない。"""
+    table = sample_table(ds, exclude_samples=exclude_samples or (),
+                         group_overrides=group_overrides or None)
+    return {s.sample_id: s.group for s in table if s.include}
+
+
+def groups_match(ds, inputs: dict, group_overrides: dict) -> bool:
+    """行列の入力 `inputs`（`from_dataset` に渡す形）の群の上書きを `group_overrides` に替えても、前処理に入る
+    試料（除外していないもの）の群が 1 つも変わらないか（変わらなければ前処理も比較も同じ数字になる）。
+
+    群の上書きの dict 同士ではなく、試料ごとに当たる群で比べる: 試料の表の群と同じ値を上書きする指定
+    （`group_levels` が Class ID と同じ分け方）は、上書きの無い行列と同じ行列になる（同じ `matrix_id`）。
+    dict で比べると、同じ行列 ID の登録を最後に作った前処理が群の引数を渡したかどうかで答えが変わる。
+    """
+    return (_included_groups(ds, inputs.get("exclude_samples"), inputs.get("group_overrides"))
+            == _included_groups(ds, inputs.get("exclude_samples"), group_overrides))
+
+
 def matrix_inputs(ds, matrix_id: str | None = None, *, group_levels=None, group_factors=None,
                   prefer_latest: bool = False):
     """「`matrix_id` か直近の前処理か既定の行列」の入力側（純粋。登録も記録もしない）:
@@ -203,8 +225,8 @@ def matrix_inputs(ds, matrix_id: str | None = None, *, group_levels=None, group_
     `matrix_id` があれば登録済みの行列（`entry`）とその除外・群の上書き・設定をそのまま返す
     （無い・古いなら `MatrixNotFound`）。無ければ、`prefer_latest` のときは `latest_preprocess_matrix`
     （このハンドルで `dataset_preprocess` が最後に作った行列）を返す——ただし `group_levels` /
-    `group_factors` を渡したときは、その群の上書きがその行列のものと同じときだけ（違う群で比べたいなら
-    既定の前処理へ回す）。どちらでもなければ `entry=None` で、今の除外と `group_levels` /
+    `group_factors` を渡したときは、その群がその行列の群と同じ（前処理に入る試料ごとに同じ群。`groups_match`）
+    ときだけ（違う群で比べたいなら既定の前処理へ回す）。どちらでもなければ `entry=None` で、今の除外と `group_levels` /
     `group_factors` から `study_inputs` を作り、設定は既定（`PREPROCESS_DEFAULTS` を正規化したもの）。
     `inputs` は `from_dataset(ds, **inputs)` にそのまま渡せる。
     """
@@ -217,8 +239,7 @@ def matrix_inputs(ds, matrix_id: str | None = None, *, group_levels=None, group_
     if prefer_latest:
         latest = latest_preprocess_matrix(ds)
         if latest is not None and (not (group_levels or group_factors)
-                                   or dict(latest["group_overrides"])
-                                   == dict(sorted(inputs["group_overrides"].items()))):
+                                   or groups_match(ds, _entry_inputs(latest), inputs["group_overrides"])):
             return latest, _entry_inputs(latest), latest["config"]
     return None, inputs, stats_preprocess.normalize_preprocess_config(None)
 
@@ -424,13 +445,16 @@ def compare_spec(*, factors, comparisons, covariates, block, method, effect_size
                  p_adjust: str = "bh", reported_feature_ids=None) -> dict:
     """引数から組み立てた spec v2（正規化前）。`analyses` は compare 1 つ。結果の `spec` はこれを
     `normalize_spec_v2` したもの（`dataset_analysis_run` に渡せば同じ数字を出し直せる）。
-    `reported_feature_ids` は渡されたときだけ書く（`bh_population="reported"` の補正の母集団）。"""
+    `reported_feature_ids` は渡されたときだけ書く（`bh_population="reported"` の補正の母集団）。
+    `p_adjust` は既定（bh）でないときだけ書く（正規化も既定を書かない。rule_hash を補正の方法を選べる前と同じに保つ）。"""
     from metabolomix.analysis.stats import spec_v2
 
     analysis = {"analysis_id": "compare", "kind": "compare", "test": method,
-                "effect_size": effect_size, "bh_population": bh_population, "p_adjust": p_adjust,
+                "effect_size": effect_size, "bh_population": bh_population,
                 "verdict": {"q": q_threshold, "equivalence_fc": equivalence_fc},
                 "allow_confounded": allow_confounded}
+    if p_adjust != _DEFAULT_P_ADJUST:
+        analysis["p_adjust"] = p_adjust
     if reported_feature_ids is not None:
         analysis["reported_feature_ids"] = reported_feature_ids
     return {

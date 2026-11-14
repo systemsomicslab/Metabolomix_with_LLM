@@ -66,9 +66,15 @@ def test_results_view_marks_stale_results_after_metadata_change(ds):
     assert _table(out["results"])[0]["current"] == "False"
 
 
-def test_results_view_refuses_query(ds):
+def test_results_view_ignores_query_with_a_note(ds):
+    """query は samples / tags でだけ効く: results では断らず、一覧をそのまま返して notes に書く。"""
+    mx = json.loads(dataset_preprocess(**FLAT_OFF))["matrix_id"]
+    json.loads(dataset_compare(reference_group="C", test_group="T", matrix_id=mx))
+    plain = _results()
     out = json.loads(mztab_tools.dataset_status(view="results", query="x"))
-    assert out["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert "error" not in out and "notes" not in plain
+    assert (out["matrices"], out["results"]) == (plain["matrices"], plain["results"])
+    assert len(out["notes"]) == 1 and "query" in out["notes"][0] and "view=results" in out["notes"][0]
 
 
 def test_summary_sample_roles_follow_the_sample_table(ds):

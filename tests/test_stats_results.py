@@ -566,6 +566,23 @@ def test_study_inputs_non_exclusive_values_are_bad_request():
     assert _code(stats_results.study_inputs, _ds(), group_levels=["c0", "r0"]).code == "DATASET_BAD_REQUEST"
 
 
+def test_groups_match_compares_the_group_each_included_sample_gets():
+    """群の上書きは dict でなく、前処理に入る試料ごとの群で比べる: 試料の表の群（Class ID）と同じ分け方の上書きは
+    上書きなしと同じ。除外した試料の群は数字に効かないので比べない。"""
+    ds = _ds()
+    plain = stats_results.study_inputs(ds)
+    by_class = stats_results.study_inputs(ds, group_levels=["C", "T"])["group_overrides"]
+    assert by_class and by_class != plain["group_overrides"]          # dict は違う
+    assert stats_results.groups_match(ds, plain, by_class)            # 試料ごとの群は同じ
+    assert stats_results.groups_match(ds, {**plain, "group_overrides": by_class}, {})
+    by_rep = stats_results.study_inputs(ds, group_levels=["r0", "r1"])["group_overrides"]
+    assert not stats_results.groups_match(ds, plain, by_rep)
+    # 除外した試料だけが群を変えるなら同じ（その試料は前処理の選択で落ちる）
+    excluded = {**plain, "exclude_samples": ["C0_r0"]}
+    assert stats_results.groups_match(ds, excluded, {"C0_r0": "X"})
+    assert not stats_results.groups_match(ds, plain, {"C0_r0": "X"})
+
+
 # --- 「matrix_id か既定の行列」の入力側（比較・PCA・パスウェイが共有） ----------------------
 
 def test_matrix_inputs_default_and_named_and_missing():

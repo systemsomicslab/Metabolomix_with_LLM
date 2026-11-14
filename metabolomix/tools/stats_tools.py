@@ -9,7 +9,9 @@
 """
 from __future__ import annotations
 
+import itertools
 import math
+import re
 from pathlib import Path
 
 from mcp.types import ToolAnnotations
@@ -19,12 +21,12 @@ from metabolomix.analysis.stats import preprocess as stats_preprocess
 from metabolomix.analysis.stats import pca as stats_pca
 from metabolomix.analysis.stats import spec_v2
 from metabolomix.analysis.stats.compare import P_ADJUST_METHODS
-from metabolomix.analysis.stats.data import from_dataset
+from metabolomix.analysis.stats.data import from_dataset, sample_table
 from metabolomix.analysis.stats_run_summary import factorial_summary
 from metabolomix.core import mcp_core
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
-from metabolomix.core.mcp_errors import missing_state, mztab_error
+from metabolomix.core.mcp_errors import missing_state, mztab_error, needs_input
 from metabolomix.core.serialization import json_payload, json_safe, round_floats, truncate_lists
 from metabolomix.tools._holder import resolve_holder
 from metabolomix.tools._matrix_store import register_default, store_matrix
@@ -133,7 +135,8 @@ def dataset_preprocess(
         `drift_mode="on"` での呼び直しを返す（尋ねない。補正できない理由があればそれだけを返す）。
         "on" は条件が揃えば必ず補正し、揃わなければ PREPROCESS_PRECONDITION。
         drift_span: LOESS の窓（0〜1、既定 0.75）。loess_degree: LOESS の局所多項式の次数 1（既定。
-        局所線形）/ 2（局所 2 次。要る QC が 1 つ多い）。
+        局所線形）/ 2（局所 2 次。要る QC が 1 つ多い）。drift_mode="off" では効かないので使わず、
+        warnings の `loess_degree_ignored` に書く（matrix_id は渡さないときと同じ）。
     blank_min_ratio: 生体試料の平均がブランク平均のこの倍数未満の特徴を除く（既定 3.0）。
     detection_min_rate: 検出率（gap-fill を除く）の下限（既定 0.5）。detection_by: "group"（群ごと）/
         "all"（全体）。検出の別が無いデータでは評価できない旨を steps に出す。
@@ -144,7 +147,10 @@ def dataset_preprocess(
         steps の `reference_definition` と warnings の `pqn_reference_is_samples` で明示する）。
     normalization_features: 正規化の係数をこの特徴 ID だけから計算する（足切りで落ちた特徴も使える。
         内部標準など）。normalization_exclude_features: 係数の計算から外す特徴 ID。どちらも係数の計算だけで、
-        外した特徴も行列には残り、係数で割られる。
+        外した特徴も行列には残り、係数で割られる。normalize="none"（と、換算済みのデータで "none" に決まった
+        "auto"）では効かないので使わず、warnings の `normalization_features_ignored`（reason が method_none /
+        quant_normalized）に書く（matrix_id は渡さないときと同じ）。空のリストは渡さないのと同じ
+        （`normalization_features_empty`）。
     collapse_replicates: 同じ個体（subject_id）の反復注入を 1 個体にまとめる（既定 True）。
     injection_columns: 個体のまとめの鍵から外す試料の表の列（取得日・注入番号など注入ごとに違う属性）。
     group_levels / group_factors: 試料名（と試料の表の群）の因子トークンで群を解く（group_factors は因子軸の
@@ -159,17 +165,20 @@ def dataset_preprocess(
         return missing_state("dataset", ["load_dataset"],
                              "DatasetState がありません。先に load_dataset を実行してください。")
     try:
-        config = stats_preprocess.normalize_preprocess_config(_config(
+        raw_config = _config(
             drift_mode=drift_mode, drift_span=drift_span, blank_min_ratio=blank_min_ratio,
             detection_min_rate=detection_min_rate, detection_by=detection_by,
             max_qc_rsd=max_qc_rsd, max_d_ratio=max_d_ratio, normalize=normalize,
             collapse_replicates=collapse_replicates, injection_columns=injection_columns,
             loess_degree=loess_degree, normalization_features=normalization_features,
-            normalization_exclude_features=normalization_exclude_features))
+            normalization_exclude_features=normalization_exclude_features)
+        # 設定の誤りは群の解決より先に返す。効かない引数を捨てた注記は前処理が warnings に載せる
+        # （前処理は生の設定を正規化し直すので、その注記を拾うために生の設定を渡す）
+        config = stats_preprocess.normalize_preprocess_config(raw_config)
         inputs = stats_results.study_inputs(ds, group_levels=group_levels,
                                             group_factors=group_factors)
         study = from_dataset(ds, **inputs)
-        prepared = stats_preprocess.preprocess(study, config)
+        prepared = stats_preprocess.preprocess(study, raw_config)
     except DomainError as exc:
         return _domain_envelope(exc)
 
@@ -253,6 +262,7 @@ def _design_and_comparisons(reference_group, test_group, groups, comparisons, fa
 
     2 群は `reference_group`+`test_group`、3 群以上は `groups`（先頭が基準で各群 − 基準）、
     2 因子などは `comparisons`（spec の形そのまま。`factors` が要る）。それ以外は DATASET_BAD_REQUEST。
+    `comparisons` の無い `factors` はここでは見ない（`_factors_without_comparisons` が注記か問いにする）。
     """
     pair = (reference_group is not None, test_group is not None)
     if any(pair) and not all(pair):
@@ -264,8 +274,6 @@ def _design_and_comparisons(reference_group, test_group, groups, comparisons, fa
         raise _bad_request("群の指定はちょうど 1 つです（reference_group+test_group / groups / "
                            f"comparisons のどれか）。指定された: {chosen or 'なし'}",
                            specified=chosen)
-    if comparisons is None and factors is not None:
-        raise _bad_request("factors は comparisons（2 因子などの対比）を指定するときだけ使います。")
     if comparisons is not None:
         if not factors:
             raise _bad_request("comparisons を指定するときは factors（モデルの因子）も指定してください。")
@@ -281,6 +289,213 @@ def _design_and_comparisons(reference_group, test_group, groups, comparisons, fa
     taken: set[str] = set()
     return ["group"], [{"id": stats_results.contrast_id_for(t, ref, taken, test_pos=i, ref_pos=0), "factor": "group",
                         "reference": ref, "test": t} for i, t in enumerate(tests, start=1)]
+
+
+#: needs_input の選択肢 1 つに並べる対比の上限。超える読みは選択肢にせず理由の文に書く（ほかに選択肢が無ければ並べる）。
+_MAX_OPTION_CONTRASTS = 50
+
+
+def _sample_level(sample, factor: str):
+    """試料の因子の値（`stats.design._value` と同じ読み方。group / batch は欄、ほかは試料の表の列）。"""
+    if factor in ("group", "batch"):
+        value = getattr(sample, factor, None)
+    else:
+        value = (getattr(sample, "attributes", None) or {}).get(factor)
+    return None if value is None or str(value) == "" else str(value)
+
+
+def _id_suffix(level: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.\-]", "_", level) or "_"
+
+
+def _model_samples(study) -> list:
+    """比較のモデルに入る試料（生体試料で、除外していないもの）。"""
+    return [s for s in study.samples if s.role == "sample" and s.include]
+
+
+def _named_levels(spec_comparisons) -> set[str]:
+    return {c["reference"] for c in spec_comparisons} | {c["test"] for c in spec_comparisons}
+
+
+def _factor_design_problem(study, factors: list[str]) -> str | None:
+    """`factors` のモデル（spec v2 の cell means の設計）が組めない理由。組めるなら None。
+
+    `stats.design.build_design` と同じ規則を試料で先に見る: 比較のモデルに入る試料にその因子の値が無ければ断られ、
+    因子が 2 つ以上なら水準の直積のどれかの cell に試料が無いだけで断られる（DESIGN_INVALID）。
+    """
+    samples = _model_samples(study)
+    missing = sorted({f for f in factors for s in samples if _sample_level(s, f) is None})
+    if missing:
+        return f"因子 {missing} の値が無い試料がある"
+    if len(factors) >= 2:
+        cells = {tuple(_sample_level(s, f) for f in factors) for s in samples}
+        full = set(itertools.product(*(sorted({c[i] for c in cells}) for i in range(len(factors)))))
+        empty = sorted(":".join(c) for c in full - cells)
+        if empty:
+            return f"試料の無い cell がある（{empty[:5]}{' ほか' if len(empty) > 5 else ''}）"
+    return None
+
+
+def _factor_model_comparisons(study, factors: list[str], factor: str, spec_comparisons) -> list[dict] | None:
+    """群の指定の対比を「`factors` のモデルで、因子 `factor` の水準として比べる」comparisons に写す。
+
+    群の名前がすべて `factor` の水準でなければ None（その読みは成り立たない）。因子が 2 つ以上なら、ほかの因子の
+    水準の組ごとに `at` を付けた対比にする（spec v2 は複数因子の単純な対比に `at` を要る）。モデルが組めること
+    （値の欠けも空の cell も無いこと。`_factor_design_problem`）は呼び手が先に確かめる。
+    """
+    samples = _model_samples(study)
+    if not _named_levels(spec_comparisons) <= {_sample_level(s, factor) for s in samples}:
+        return None
+    others = [f for f in factors if f != factor]
+    combos = sorted({tuple(_sample_level(s, f) for f in others) for s in samples})
+    out, taken = [], set()
+    for c in spec_comparisons:
+        for combo in combos:
+            if not others:
+                item = {**c, "factor": factor}
+            else:
+                cid = f"{c['id']}_at_{'_'.join(_id_suffix(v) for v in combo)}"
+                n = 2
+                while cid in taken:
+                    cid, n = f"{cid}_{n}", n + 1
+                item = {**c, "factor": factor, "id": cid, "at": dict(zip(others, combo))}
+            if item["id"] not in taken:
+                taken.add(item["id"])
+                out.append(item)
+    return out or None
+
+
+def _factors_without_comparisons(study, factors, spec_comparisons,
+                                 group_args: list[str]) -> tuple[str | None, str | None]:
+    """`comparisons` の無い `factors` を `(注記, needs_input の封筒)` のどちらかにする（渡されていなければ両方 None）。
+
+    群の指定（reference_group+test_group / groups）は `group` の 1 因子のモデルで比べる。`factors` が空（因子を
+    挙げていない）か、ちょうど `["group"]`（その設計と同じ）なら効かない（重複した）引数なので注記して進める。
+    ほかの因子を挙げたとき、群の名前がどれかの因子の水準なら「`factors` のモデルでその因子の水準として比べる
+    （ほかの因子の水準ごとの `at`）」と読め、群の名前が group 列の水準でもあれば「因子を外して group 列で 1 因子の
+    モデルで比べる」とも読めて数字が変わるので尋ねる。答えは 1 つの引数に収まらない（前者は `comparisons` を足して
+    群の指定 `group_args` を外し、後者は `factors` を外す）ので、選択肢の値は替える引数の dict（`patch` の封筒）。
+    因子の水準でないか、`factors` のモデルが組めない（因子の値が無い試料・2 因子以上で試料の無い cell。
+    `_factor_design_problem`）なら前者は成り立たないので、group 列で比べて注記する（group 列の水準でもなければ、
+    比較そのものが群の誤りを返す）。
+    """
+    if factors is None:
+        return None, None
+    if not isinstance(factors, list) or any(not isinstance(f, str) or not f for f in factors):
+        raise _bad_request("factors は因子名（文字列）のリストです。", factors=factors)
+    if not factors:
+        return ("factors=[] は因子を挙げていない（comparisons を渡したときだけ使う引数）ので使わず、群の指定の"
+                '設計 design.factors=["group"] で比べた。'), None
+    unique = list(dict.fromkeys(factors))
+    if unique == ["group"]:
+        return ('factors は comparisons を渡したときだけ使う引数で、この比較は design.factors=["group"]（群の指定の'
+                "設計）と同じなので、そのまま比べた。"), None
+    named = ", ".join(f"{c['reference']} → {c['test']}" for c in spec_comparisons)
+    group_reading = _named_levels(spec_comparisons) <= {
+        v for s in _model_samples(study) if (v := _sample_level(s, "group")) is not None}
+    problem = _factor_design_problem(study, unique)
+    readings = [] if problem else [
+        (factor, comps) for factor in unique
+        if (comps := _factor_model_comparisons(study, unique, factor, spec_comparisons)) is not None]
+    if not readings:
+        if not group_reading:
+            return None, None            # どちらの読みも成り立たない: 比較が群の誤り（使える群の一覧つき）を返す
+        why = (f"このモデルは組めない（{problem}）" if problem
+               else f"群の名前（{named}）はそのどの因子の水準でもない")
+        return (f"factors={unique} は comparisons を渡したときだけ使う引数で、{why}ので、試料の表の群（group 列）の"
+                "1 因子のモデルで比べた（ほかの因子で調整するなら covariates に渡す）。"), None
+    fits = [(f, c) for f, c in readings if len(c) <= _MAX_OPTION_CONTRASTS]
+    shown = fits if (fits or group_reading) else readings
+    left_out = [(f, len(c)) for f, c in readings if (f, c) not in shown]
+    dropped = " / ".join(group_args)
+    options = [{"value": {"comparisons": comps, **{name: None for name in group_args}},
+                "label": (f"factors={unique} のモデルで、因子 {factor} の水準として比べる"
+                          + (f"（ほかの因子の水準ごとに at を付けた {len(comps)} 対比）" if len(unique) > 1 else "")
+                          + f"。comparisons にこの対比を渡し、{dropped} を外す（factors はそのまま）")}
+               for factor, comps in shown]
+    if group_reading:
+        options.append({"value": {"factors": None},
+                        "label": "factors を外し、試料の表の群（group 列）の水準として 1 因子のモデルで比べる"
+                                 "（ほかの因子で調整するなら covariates に渡す）"})
+    reason = (f"factors={unique} は comparisons（対比）を渡したときのモデルの因子です。群の指定（{named}）だけでは、"
+              "その因子をモデルに入れてどの水準の組で比べるのかが決まらず、読み方で数字が変わります。選択肢の value の"
+              "引数を置き換えて（null の引数は外して）呼び直してください。")
+    if left_out:
+        reason += "".join(f"因子 {f} の水準として比べる読みは対比が {n} 個になるので選択肢に載せていません"
+                          "（その読みなら comparisons を組んで渡す）。" for f, n in left_out)
+    return None, needs_input("comparisons", reason, options, patch=True, retry_tools=["dataset_compare"])
+
+
+def _group_names(spec_comparisons) -> set[str]:
+    """対比が group 因子の水準として名指す群の名前（単純な対比の reference / test、交互作用の levels.group、
+    at.group）。spec の正規化の前に読むので、形の崩れた対比は飛ばす（誤りは正規化が返す）。"""
+    out: set[str] = set()
+    for c in spec_comparisons or []:
+        if not isinstance(c, dict):
+            continue
+        if c.get("factor") == "group":
+            out.update(v for v in (c.get("reference"), c.get("test")) if isinstance(v, str))
+        levels = c.get("levels")
+        if isinstance(levels, dict) and isinstance(levels.get("group"), list):
+            out.update(v for v in levels["group"] if isinstance(v, str))
+        at = c.get("at")
+        if isinstance(at, dict) and isinstance(at.get("group"), str):
+            out.add(at["group"])
+    return out
+
+
+def _group_levels_under(ds, inputs, group_overrides) -> set[str]:
+    """行列の入力 `inputs` の群の上書きを `group_overrides` にしたとき、比較のモデルに入る試料の群の水準。"""
+    table = sample_table(ds, exclude_samples=inputs.get("exclude_samples") or (),
+                         group_overrides=group_overrides or None)
+    return {v for s in table if s.role == "sample" and s.include
+            and (v := _sample_level(s, "group")) is not None}
+
+
+def _matrix_group_conflict(ds, inputs, matrix_id, group_levels, group_factors,
+                           spec_comparisons) -> tuple[str | None, str | None]:
+    """`matrix_id` と `group_levels` / `group_factors` を一緒に渡したときの `(注記, needs_input の封筒)`。
+
+    行列の群は前処理のときに決まっている。渡した群の引数が、前処理に入る試料をこの行列（`inputs` は行列の入力）と
+    同じ群に分けるなら効かない（重複した）引数なので注記して進める——上書きの dict ではなく試料ごとの群で比べる
+    （試料の表の群と同じ分け方の `group_levels` は上書きの無い行列と同じ行列になる。`stats_results.groups_match`）。
+    違えば「行列の群で比べる（群の引数を外す）」と「渡した群で比べる（`matrix_id` を外す。行列が変わる）」の 2 通りに
+    読め、数字が変わるので尋ねる（選択肢の値は替える引数の dict。`patch` の封筒）。選択肢は対比の群の名前がその群の
+    水準にある読みだけ: 行列の群でしか比べられなければ群の引数は効かないので注記して進め、どちらでも比べられなければ
+    比較が群の誤りを返す（両方 None）。群の引数を渡していなければ両方 None。
+    """
+    if not (group_levels or group_factors):
+        return None, None
+    wanted = stats_results.study_inputs(ds, group_levels=group_levels,
+                                        group_factors=group_factors)["group_overrides"]
+    if stats_results.groups_match(ds, inputs, wanted):
+        return ("matrix_id を渡すと群は行列が決める。渡した group_levels / group_factors は試料をこの行列と同じ群に"
+                "分けるので、そのまま比べた。"), None
+    names = _group_names(spec_comparisons)
+    on_matrix = names <= _group_levels_under(ds, inputs, inputs.get("group_overrides"))
+    on_passed = names <= _group_levels_under(ds, inputs, wanted)
+    if not (on_matrix or on_passed):
+        return None, None                # どちらの群でも比べられない: 比較が群の誤り（行列の群の一覧つき）を返す
+    if not on_passed:
+        return (f"matrix_id を渡すと群は行列が決める。渡した group_levels / group_factors の群には {sorted(names)} が"
+                "無く、その群では比べられないので使わず、この行列の群で比べた。"), None
+    group_args = {name: None for name, value in (("group_levels", group_levels), ("group_factors", group_factors))
+                  if value is not None}
+    options = []
+    if on_matrix:
+        options.append({"value": group_args,
+                        "label": f"この行列の群（前処理で決めた群）で比べる（{' / '.join(group_args)} を外す）"})
+    options.append({"value": {"matrix_id": None},
+                    "label": ("渡した群で比べる（matrix_id を外す。群が同じ直近の dataset_preprocess の行列か、無ければ"
+                              "既定の前処理で行列を作る。この行列と同じ前処理の設定で比べるなら、dataset_preprocess に"
+                              "その設定と群を渡して作った matrix_id を渡す）")})
+    reason = (f"matrix_id={matrix_id} の行列の群と、渡した group_levels / group_factors の群が違います。行列の群は"
+              "前処理のときに決まっているので、どちらの群で比べるかで数字が変わります。")
+    if not on_matrix:
+        reason += (f"この行列の群には {sorted(names)} が無いので、この行列のままでは比べられません（渡した群で比べるには"
+                   "行列が変わり、数字はその行列の前処理の設定で決まります）。")
+    reason += "選択肢の value の引数を置き換えて（null の引数は外して）呼び直してください。"
+    return None, needs_input("matrix_id", reason, options, patch=True, retry_tools=["dataset_compare"])
 
 
 def _is_number(text: str) -> bool:
@@ -454,6 +669,12 @@ def dataset_compare(
     群の指定はちょうど 1 つ: reference_group+test_group（2 群）/ groups（3 群以上。先頭が基準で
     各群 − 基準の対比と omnibus F）/ comparisons（spec v2 の comparisons の形。2 因子・`at`・
     交互作用。factors が要る。因子が 2 つ以上で cell がそろえば主効果・交互作用の F も `factorial` に返す）。
+    comparisons の無い factors は、空（[]）か ["group"] なら群の指定の設計と同じなので notes に書いてそのまま比べる。
+    ほかの因子で、群の名前がその因子の水準でそのモデルが組める（比較に入る試料に因子の値が欠けず、2 因子以上なら
+    空の cell が無い）なら「その因子のモデルで比べる」読みが立ち、数字が変わるので needs_input（patch の封筒。
+    選択肢の value は替える引数の dict で、その引数を置き換え・null の引数を外して呼び直す: 因子のモデルは
+    comparisons を足して群の指定を外し、群の名前が group 列の水準なら factors を外す選択肢も並ぶ）。どの因子の
+    水準でもないかモデルが組めなければ group 列で比べて notes に書く。
     判定（changed / unchanged / inconclusive）は q と CI で決まり、
     log2fc_threshold は判定に使わない（large_changes の数え方・図の色分け・書き出しの significant 列だけ）。
     全行は result_id でセッションに保持し、直近の結果（図・書き出しの既定）にもなる。
@@ -473,8 +694,11 @@ def dataset_compare(
         順かもしれないときドリフト補正を当てず、警告 drift_not_applied_by_default を返す。補正するなら
         dataset_preprocess(drift_mode="on") の ID を渡す）。使った行列は戻り値の matrix_id と matrix_source
         （"matrix_id" / "latest_preprocess" / "default"。省いた呼び出しのエラーにも details.matrix_id /
-        matrix_source）。古い・無い ID は missing_state。ID と group_levels / group_factors の併用は不可
-        （群は行列が決めている）。
+        matrix_source）。古い・無い ID は missing_state。ID と一緒に渡した group_levels / group_factors は、
+        試料を行列と同じ群に分けるなら（試料の表の群と同じ分け方も。試料ごとの群で比べる）notes に書いてそのまま
+        比べ、違えば needs_input（patch の封筒。行列の群で比べる＝群の引数を外すか、渡した群で比べる＝matrix_id を
+        外すか。群は行列が決めている。選択肢は対比の群の名前がその群にある読みだけで、行列の群でしか比べられなければ
+        群の引数を使わず notes に書いて比べる）。
     method: "moderated_t"（既定）など（エンジンの検定）。effect_size: "log2_mean_difference"（既定）/
         "arithmetic_mean_ratio"。bh_population: 補正の母集団 "matrix"（既定）/ "annotated" / "reported"
         （reported_feature_ids の特徴だけ。reported なのに ID が無ければ DATASET_BAD_REQUEST。reported 以外で
@@ -519,19 +743,30 @@ def dataset_compare(
         design_factors, spec_comparisons = _design_and_comparisons(
             reference_group, test_group, groups, comparisons, factors)
 
-        if matrix_id is not None and (group_levels or group_factors):
-            raise _bad_request("matrix_id を渡すと群は行列が決めています。group_levels / "
-                               "group_factors は dataset_preprocess に渡してください。")
         try:
             entry, inputs, preprocess = stats_results.matrix_inputs(
                 ds, matrix_id, group_levels=group_levels, group_factors=group_factors,
                 prefer_latest=True)
         except stats_results.MatrixNotFound:
             return _matrix_not_found(matrix_id)
+        if matrix_id is not None:
+            note, asked = _matrix_group_conflict(ds, inputs, matrix_id, group_levels, group_factors,
+                                                 spec_comparisons)
+            if asked is not None:
+                return asked
+            if note is not None:
+                notes.append(note)
         matrix_source = ("matrix_id" if matrix_id is not None
                          else "latest_preprocess" if entry is not None else "default")
         used_matrix = entry["matrix_id"] if entry is not None else None
         study = from_dataset(ds, **inputs)
+        if comparisons is None:
+            group_args = (["groups"] if groups is not None else ["reference_group", "test_group"])
+            note, asked = _factors_without_comparisons(study, factors, spec_comparisons, group_args)
+            if asked is not None:
+                return asked
+            if note is not None:
+                notes.append(note)
         spec = spec_v2.normalize_spec_v2(stats_results.compare_spec(
             factors=design_factors, comparisons=spec_comparisons,
             covariates=_covariate_specs(study, covariates), block=block, method=method,

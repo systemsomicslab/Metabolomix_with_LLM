@@ -302,7 +302,8 @@ TSV は書かない（消費者のいない `feature-qc.tsv` を 2026-09-03 に�
 `view` で 4 通り。`summary`（既定）は概要に群・役割・タグ・除外の件数とハンドルの `assay_kind` を足し、
 `samples` は試料の TSV（`query` は因子トークン。旧 `dataset_status(view="samples")` の `specs` と同じ文法で、
 `metabolomix/msdial/sample_factors.py` が照合する）、`tags` はタグごとの特徴 ID、`results` は
-ハンドルの統計の行列（`ds.stat_matrices`）と結果（`ds.results`）の一覧。
+ハンドルの統計の行列（`ds.stat_matrices`）と結果（`ds.results`）の一覧。`query` は `samples` と `tags` でだけ効き、
+`summary` / `results` では断らずに使わず、戻り値の `notes` にそう書く。
 
 `summary`:
 1. metabolomix/tools/mztab_tools.py dataset_status()

@@ -252,8 +252,10 @@ mzTab-M の `abundance_assay[N]` は非ゼロでも実測ピークか gap-fill �
 
 **`source is None` を「gap-fill が無い」と読まないこと。** 取り込めていないだけで、
 その mzTab-M の非ゼロ値には補間値が混じり得る。この状態では検出率・欠測率を語れず、
-`dataset_preprocess` の `min_detection_rate` も使えない（0 より大きい値を渡すと
-引数エラーになる。黙って未検出 0 件として通さない）。
+`dataset_preprocess` の `detection_min_rate` も効かない: 誤りにはならず、検出率の足切りを行わずに
+前処理の `steps` の足切りの段に `filters.detection = {status: "skipped", reason: "no_detected_mask"}` と
+記録する（検出率で落とした特徴は 0 件だが、それは「全特徴が検出率を満たした」という意味ではない）。
+足切りが効いたかは戻り値の `steps` で確かめる。
 
 ### 13.8 `dataset_feature_search` の戻り値
 
@@ -398,7 +400,9 @@ BH をやり直して、`stats` の**すべての行**をそこから出す（�
 組の片方だけが質量の窓に入ったときは、相手のスポットも同じ付加体で行に足す（`reasons` に `merge_partner`。
 qualified にせず数にも入れない——選んだ残す ID の行が必ずある）。組でない 2 スポットは従来どおり
 `needs_input`（`multiple_qualified_candidates`）。`rule` には `merge_split` と、判定でまとめた組の hash
-`merge_groups_hash` が並び、`merge_split=true` のときだけ `rule_hash` に入る（false は v7 と同じ hash）。
+`merge_groups_hash` が並び、`merge_split=true` のときだけ `rule_hash` に入る（false は v7 と同じ規則と hash。
+ただし陽イオンで分子式（`formula`）を渡し `adduct_tiers` を省いた目標は除く: 2026-11-14 に陽イオンの既定の付加体の層へ `[M+CH3OH+H]+` と
+`[M+H-2H2O]+` を足したので、照合する付加体（規則）も hash も v7 と違う。層を明示した目標・`expected_mz` の目標・陰イオンの目標は同じ）。
 
 **`rule_hash` と `stats_source` は別物**。`rule = {targets, polarity, polarity_source, rule_hash}` の
 `targets` は既定値を埋めて付加体の層を解決した目標で、`rule_hash` はその正規化後の目標
@@ -407,6 +411,8 @@ qualified にせず数にも入れない——選んだ残す ID の行が必ず
 **表示名 `name` は入れず、目標は `target_id` の順に並べ替えてから作る**——改名や `targets` の
 並べ替えでは hash は変わらない。既定値を明示しても省いても、別の session・別の実行役でも、
 同じ目標・同じ極性なら同じ hash になる——判断ログには「この規則で呼んだ」とだけ書ける。
+分子式を渡して `adduct_tiers` を省いた目標は既定の層を解決して hash に入れるので、既定の層を変えればその目標の hash も変わる
+（2026-11-14 の陽イオンの層の追加が、その意図した変化）。
 **hash は表示用の丸め（`rule.targets` の理論 m/z を 4 桁に丸める）より前の値から作るので、
 返された `rule.targets` から hash を計算し直すことはできない**（計算し直すと別の値になり、
 規則が変わったように見える）。照合するときは `rule_hash` の値どうしを比べる。`polarity_source` は `job_declared`（ジョブの宣言）/

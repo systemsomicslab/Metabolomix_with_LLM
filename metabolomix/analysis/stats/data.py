@@ -282,6 +282,41 @@ def _resolve_sample_indices(display: list[str], ids: list[str], requested, what:
     return out
 
 
+def _engine_sample_ids(ds) -> list[str]:
+    """エンジンの試料 ID の並び（試料の表の行があれば安定 ID、無ければ表示名）。"""
+    rows = getattr(ds, "sample_metadata_rows", None)
+    ids = list(getattr(ds, "sample_ids", None) or []) if rows else []
+    return ids or list(ds.sample_names)
+
+
+def _study_samples(ds, names: list[str], exclude_samples,
+                   group_overrides) -> tuple[list[SampleInfo], dict[str, dict]]:
+    """試料の表に除外（`include=False`）と群の上書きを当てたものと、バッチの候補（`from_dataset` の試料側）。"""
+    samples, batch_candidates = _samples_table(ds, names)
+    display = list(getattr(ds, "sample_names", None) or names)
+    if exclude_samples:
+        for pos in _resolve_sample_indices(display, names, list(exclude_samples),
+                                           "exclude_samples").values():
+            samples[pos] = replace(samples[pos], include=False)
+    if group_overrides:
+        for item, group in group_overrides.items():
+            if not isinstance(group, str) or not group.strip():
+                raise DomainError("STUDY_DATA_INVALID", "group_overrides の群は空でない文字列",
+                                  {"field": "group_overrides", "sample": item, "value": repr(group)})
+        resolved = _resolve_sample_indices(display, names, list(group_overrides),
+                                           "group_overrides")
+        for item, pos in resolved.items():
+            samples[pos] = replace(samples[pos], group=group_overrides[item].strip())
+    return samples, batch_candidates
+
+
+def sample_table(ds, *, exclude_samples=(), group_overrides: dict[str, str] | None = None) -> list[SampleInfo]:
+    """`from_dataset(ds, exclude_samples=..., group_overrides=...).samples` と同じ試料の表（値の行列は読まない）。
+
+    試料の表だけが要る呼び手（群の上書きが試料ごとにどの群を当てるかの比べ合わせなど）向け。"""
+    return _study_samples(ds, _engine_sample_ids(ds), exclude_samples, group_overrides)[0]
+
+
 def from_dataset(ds, *, exclude_samples=(), exclude_features=(),
                  group_overrides: dict[str, str] | None = None) -> StudyData:
     """DatasetState から StudyData を作る。ds は書き換えない（配列も写す）。
@@ -299,9 +334,7 @@ def from_dataset(ds, *, exclude_samples=(), exclude_features=(),
                           {"feature_matrix_shape": list(values.T.shape),
                            "detected_mask_shape": list(np.shape(mask))})
     detected = None if mask is None else np.array(np.asarray(mask, dtype=bool).T, copy=True)
-    rows = getattr(ds, "sample_metadata_rows", None)
-    ids = list(getattr(ds, "sample_ids", None) or []) if rows else []
-    names = ids or list(ds.sample_names)
+    names = _engine_sample_ids(ds)
     classes = {}
     for fid, meta in (getattr(ds, "feature_metadata", None) or {}).items():
         ontology = (meta or {}).get("ontology")
@@ -309,23 +342,8 @@ def from_dataset(ds, *, exclude_samples=(), exclude_features=(),
             classes[fid] = str(ontology)
     annotated = frozenset(fid for fid, cands in (getattr(ds, "feature_candidates", None) or {}).items()
                           if cands)
-    samples, batch_candidates = _samples_table(ds, names)
     feature_ids = list(ds.feature_ids)
-
-    display = list(getattr(ds, "sample_names", None) or names)
-    if exclude_samples:
-        for pos in _resolve_sample_indices(display, names, list(exclude_samples),
-                                           "exclude_samples").values():
-            samples[pos] = replace(samples[pos], include=False)
-    if group_overrides:
-        for item, group in group_overrides.items():
-            if not isinstance(group, str) or not group.strip():
-                raise DomainError("STUDY_DATA_INVALID", "group_overrides の群は空でない文字列",
-                                  {"field": "group_overrides", "sample": item, "value": repr(group)})
-        resolved = _resolve_sample_indices(display, names, list(group_overrides),
-                                           "group_overrides")
-        for item, pos in resolved.items():
-            samples[pos] = replace(samples[pos], group=group_overrides[item].strip())
+    samples, batch_candidates = _study_samples(ds, names, exclude_samples, group_overrides)
     if exclude_features:
         known = set(feature_ids)
         unknown = [f for f in exclude_features if f not in known]

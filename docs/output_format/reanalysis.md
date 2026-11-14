@@ -322,7 +322,7 @@ notes?, note}`。`analyses[]` は解析ごとの要約（`n_rows`・`n_tested`�
  "design": {"factors": ["group"], "covariates": [], "block": null},
  "comparisons": [{"id": "RA_vs_HC", "factor": "group", "reference": "HC", "test": "RA"}],
  "analyses": [{"analysis_id": "main", "kind": "compare", "test": "moderated_t",
-               "effect_size": "log2_mean_difference", "bh_population": "matrix", "p_adjust": "bh",
+               "effect_size": "log2_mean_difference", "bh_population": "matrix",
                "verdict": {"q": 0.05, "equivalence_fc": 1.2}, "min_detected_fraction": 0.5,
                "allow_confounded": true}],
  "primary": "main"}
@@ -331,13 +331,13 @@ notes?, note}`。`analyses[]` は解析ごとの要約（`n_rows`・`n_tested`�
 | 欄 | 既定 | 意味 |
 |---|---|---|
 | `input` | `{"source": "dataset"}` | `source` はデータセットだけ。`exclude_samples` / `exclude_features`（空でない文字列のリスト。重複は順序を保って落とす）と `group_overrides`（試料 → 群）は**この spec に書いたものだけ**が効く（下の「自己完結」） |
-| `preprocess` | 上の値 | 前処理の設定（`dataset_preprocess` の引数と同じ。`drift.mode` は `auto` / `on` / `off`、足切りは `null` でその足切りを行わない、`normalize.method` は `auto` / `none` / `tic` / `median` / `pqn`。任意の欄 `drift.loess_degree`（`1` 既定 / `2`）と `normalize.features` / `normalize.exclude_features`（正規化の係数を求める特徴 ID。既定の値のときは spec に現れない）は `dataset_preprocess` の `loess_degree` / `normalization_features` / `normalization_exclude_features` と同じ）。`injection_columns` は個体のまとめの鍵から外す試料の表の列（取得日・注入番号など注入ごとに違う属性）。不正なら `ANALYSIS_SPEC_INVALID`（`details.field` が `preprocess.` から始まる） |
+| `preprocess` | 上の値 | 前処理の設定（`dataset_preprocess` の引数と同じ。`drift.mode` は `auto` / `on` / `off`、足切りは `null` でその足切りを行わない、`normalize.method` は `auto` / `none` / `tic` / `median` / `pqn`。任意の欄 `drift.loess_degree`（`1` 既定 / `2`）と `normalize.features` / `normalize.exclude_features`（正規化の係数を求める特徴 ID。既定の値のときは spec に現れない）は `dataset_preprocess` の `loess_degree` / `normalization_features` / `normalization_exclude_features` と同じ）。書いても効かない任意の欄（`normalize.method="none"` の `features` / `exclude_features`、`drift.mode="off"` の `loess_degree`）は誤りにせず捨てて `notes` に書き、空の `features` は書かないのと同じ（どれも正規化した spec と `rule_hash` に入らない）。`injection_columns` は個体のまとめの鍵から外す試料の表の列（取得日・注入番号など注入ごとに違う属性）。不正なら `ANALYSIS_SPEC_INVALID`（`details.field` が `preprocess.` から始まる） |
 | `design` | `{"factors": ["group"], "covariates": [], "block": null}` | `factors`（重複のない文字列。`group`・`batch` か、試料の表の列名。sample-manifest v2 の後ろに足した因子の列も使える。交互作用の対比は 2 因子のモデルだけ）・`covariates`（`{name, type: numeric \| categorical, reference?}`）・`block`（`"subject_id"` など） |
 | `comparisons` | 必須 | 対比のリスト。`{id, factor, reference, test, at?}`（`at` は他の因子の水準で層別）か、交互作用 `{id, kind: "interaction", factors: [2 因子], levels: {因子: [基準, 比較]}}`。`id` は英数字と `_ . -` で重複不可 |
 | `analyses[].kind` | 必須 | `compare` / `composition` / `pca` / `plsda`。`analysis_id` は重複不可 |
-| compare / composition | | `test`（既定 `moderated_t`。`welch` / `student` / `mannwhitney` は 1 因子・共変量なし・ブロックなしだけ）・`effect_size`（`log2_mean_difference` 既定 / `arithmetic_mean_ratio`）・`bh_population`（`matrix` 既定 / `annotated` / `reported`。`reported` は `reported_feature_ids` が要り、そのときだけ書ける）・`p_adjust`（多重比較の補正。`bh` 既定 / `bonferroni` / `holm` / `none`。`q` はこの方法の値）・`verdict.q`（既定 0.05）・`verdict.equivalence_fc`（既定 1.2）・`min_detected_fraction`（既定 0.5）・`allow_confounded`（既定 true。完全交絡でも比べて `confounding` と行の `confounded` に印を付ける。false なら完全交絡で `STATISTIC_CONFOUNDED` で止める） |
+| compare / composition | | `test`（既定 `moderated_t`。`welch` / `student` / `mannwhitney` は 1 因子・共変量なし・ブロックなしだけ）・`effect_size`（`log2_mean_difference` 既定 / `arithmetic_mean_ratio`）・`bh_population`（`matrix` 既定 / `annotated` / `reported`。`reported` は `reported_feature_ids` が要る。ほかの母集団で書いた `reported_feature_ids` は効かないので、誤りにせず捨てて `notes` に書く＝正規化した spec と `rule_hash` に入らない）・`p_adjust`（多重比較の補正。`bh` 既定 / `bonferroni` / `holm` / `none`。`q` はこの方法の値。**既定の `bh` は正規化した spec に書かない**ので、`p_adjust` を足す前の spec と `rule_hash` は同じ。`bh` を明示しても同じ hash）・`verdict.q`（既定 0.05）・`verdict.equivalence_fc`（既定 1.2）・`min_detected_fraction`（既定 0.5）・`allow_confounded`（既定 true。完全交絡でも比べて `confounding` と行の `confounded` に印を付ける。false なら完全交絡で `STATISTIC_CONFOUNDED` で止める。正規化した spec にはいつも書く。2026-11-14 に既定を false から true へ変えた——完全交絡で止めずに比べる規則の変更——ので、これを省いた spec の `rule_hash` は前と違う（意図した変化）。true / false を明示した spec の hash は前と同じ） |
 | pca | | `scaling`（`autoscale` 既定 / `pareto`）・`n_components`（既定 5）・`impute`（`half_min` 既定 / `knn` / `none`） |
-| plsda | | PLS 判別分析。クラスは `design.factors` の水準の組（cell。`classes` に cell 名を並べて絞れる。2 つ以上）。`n_components`（既定 2）・`scaling`（`autoscale` 既定 / `pareto`）・`impute`（`half_min` 既定 / `knn` / `none`）・`cv_folds`（層化 k 分割の数。既定 7、2 以上）・`n_permutations`（並べ替え検定の回数。既定 200、1〜10000）・`seed`（分割と並べ替えの乱数。既定 0） |
+| plsda | | PLS 判別分析。クラスは `design.factors` の水準の組（cell。`classes` に cell 名を並べて絞れる。2 つ以上）。`n_components`（既定 2）・`scaling`（`autoscale` 既定 / `pareto`）・`impute`（`half_min` 既定 / `knn` / `none`）・`cv_folds`（層化 k 分割の数。既定 7、2 以上）・`n_permutations`（並べ替え検定の回数。既定 200、1 以上。10000 を超える値は 10000 に下げて回し、`notes` に書く＝正規化した spec と `rule_hash` は 10000）・`seed`（分割と並べ替えの乱数。既定 0） |
 | `primary` | compare / composition が 1 つならそれ | 2 つ以上あるときは必須（`ANALYSIS_SPEC_INVALID`）。pca / plsda は選べない |
 
 **自己完結（再現のための規則）。** v2 は spec だけで同じ数字を出し直せる実行で、`dataset_exclude` の除外は読まない。
@@ -362,7 +362,8 @@ sample_table_hash}, primary, warnings, analyses}`。`analyses[]` は解析ごと
 （VIP の上位 10）・`warnings`（pca と plsda は行を持たない）。長い一覧は切る。全量（行・CI・事前分布・交絡の
 表・PCA のスコア）は `output_path` の JSON に書く。`output_path` を省けば行を TSV で返し（列は `contrast_id feature_id
 status reason log2fc ci_low ci_high p q verdict`、composition は先頭に `table` 列）、**50 行を超える解析は p の小さい順の
-先頭 50 行だけ**を載せる（v1 と同じ。`truncated: true`・`rows_order: "p_ascending"`・`notes`。断らない）。`rule_hash` は正規化した spec の hash
+先頭 50 行だけ**を載せる（v1 と同じ。`truncated: true`・`rows_order: "p_ascending"`・`notes`。断らない）。効かない設定を捨てた・上限に下げた理由も
+`notes` に載る。`rule_hash` は正規化した spec の hash
 （実行のたびに変わる値を含まない）、`matrix_id` は前処理の入力と設定の hash（同じなら同じ ID）。
 
 **`analysis-result.v2` の全量（`output_path` の JSON）。** `{schema, spec（正規化後）, rule_hash, input_fingerprint,
@@ -481,8 +482,9 @@ matrix_id, preprocess: {steps, warnings, subject_source}, primary, analyses: [{a
 （前駆体だけが合った候補を既定で qualified にしない）、`min_fragment_relative_intensity`（0 以上 1 以下。
 測定の基準ピークに対する比）を足して既定 0.01 にした。断片の一致は、測定強度が基準ピークの
 `min_fragment_relative_intensity` 以上の窓だけを数える（雑音の窓を「一致」に数えない）。既定が
-変わったので、同じ規則でも `rule_hash` は前と違う（意図した変化）。`min_fragments_excl_precursor: null`
-を明示すれば断片の検査を外せる。`matched_peaks_count`（MS-DIAL の写し）の意味は変えていない。
+変わったので、この 2 つを省いた spec は規則そのものが変わり、`rule_hash` も前と違う（意図した変化）。
+`min_fragments_excl_precursor: null` と `min_fragment_relative_intensity: 0` を明示すれば前と同じ判定になるが、
+`min_fragment_relative_intensity` は正規化した規則にいつも載るので、`rule_hash` は前の値に戻らない。`matched_peaks_count`（MS-DIAL の写し）の意味は変えていない。
 
 入力の `target` は `{"inchikey": <InChIKey 全体か先頭 14 文字>, "formula": <任意>}`。
 InChIKey が一意に決まらない脂質の種は `{"lipid_species": "PC 18:3_16:1", "formula": <任意>}`
@@ -675,7 +677,7 @@ spec:
 | `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか。組の片方だけが質量の窓に入ったときに足した相手は `merge_partner`）・`split`（下）・`msms`（spot_id = SMF_ID の照合の上位 `top`（`library_msms_qualify` の候補の表と同じ欄。`passes_dbs_cutoffs`・種の欄も同じ条件で）と `qualify`（`target_rank`・`top1_is_target` を含む）、使った前駆体の窓 `window`（`mz_tol`・`mz_window`・`mz_tol_ppm`）、スポットに MS-DIAL の注釈があれば `msdial_name`・`msdial_rank`・`top_differs_from_msdial`。ライブラリが無ければ `{"status": "no_library", "spectrum_available": ...}`（データセットの同定が LBM だけ＝記憶が `lbm_only` のときは、MSP のスペクトルが無いので評価できない: 候補ごとは `{"status": "not_evaluable", "reason": "lbm_only", "spectrum_available": ...}` で、理由の文は束の `msms_not_evaluable_reason` に 1 回だけ。`no_library` は `library_load` を促すが、このデータセットには照合に使える MSP が無い）、MS/MS が無い・索引の崩れはその `status`。`spectrum_available` は代表スペクトルの有無で、ライブラリの有無によらず spot を先に照会して決める: `true`=ある、`false`=照会して無かった（`not_found` で `reason` が `no_spectrum`）、`null`=分からない（`.arf2` / `.dcl` のファイル自体が無い `not_found` の `reason` `no_arf2` / `no_dcl`・`spot_not_found`・`dcl_precursor_mismatch`・`spot_id_not_integer`、ハンドルに `.arf2` / `.dcl` が無いとき））・`relations` |
 | `truncated` | `max_candidates` で打ち切った候補の数（束の欄。`output_path` を省いて候補を切った戻り値だけは意味が違う——下の「戻り値」） |
 | `notes` | 効かずに捨てた spec の設定とその理由（`target` に `rt_min` が無いときの `rt_offset_min`）。無ければ欄ごと無い |
-| `rule` / `rule_hash` | 正規化した spec とその hash。spec の `merge_split`（既定 true）は真のときだけ `rule` に載り、`rule_hash` には判定でまとめた組の hash も入る（false は v7 と同じ規則。hash が v7 と同じなのは spec に `msms` が無いときだけ: `msms` があると、2026-11-14 に MS/MS の規則の既定（`min_fragments_excl_precursor` 1・`min_fragment_relative_intensity` 0.01）を変えたので hash も変わる） |
+| `rule` / `rule_hash` | 正規化した spec とその hash。spec の `merge_split`（既定 true）は真のときだけ `rule` に載り、`rule_hash` には判定でまとめた組の hash も入る（false でも v7 と同じ規則・hash になるのは、spec に `msms` が無く、かつ目標が陽イオンで分子式（`formula`）を渡し `adduct_tiers` を省いたものでないときだけ。2026-11-14 に既定を 2 つ変えたので、規則そのものが変わり hash も変わる: `msms` があれば MS/MS の規則の既定（`min_fragments_excl_precursor` 1・`min_fragment_relative_intensity` 0.01）、陽イオンで分子式を渡し `adduct_tiers` を省いた目標は既定の付加体の層（`[M+CH3OH+H]+`・`[M+H-2H2O]+` を足した。正規化した目標の層と理論 m/z が hash に入る）。層を明示した目標・`expected_mz` の目標・陰イオンの目標は変わらない） |
 | `merge_split` / `merge_groups_hash` | 割れの組を判定で 1 つの候補にしたか（spec の `merge_split`）と、その組（§9 の `merge_groups`）の hash（false なら null） |
 | `input_fingerprint` | `dataset_hash`（データの指紋）・`library_sha256` |
 
@@ -795,7 +797,9 @@ log2fc_test_over_ref p q direction merged_from`（JSON には `sme_feature_id` �
 `adduct` `mz` `ppm` `rt`）は SME（rank 1）を持つ方のスポットから取り、その ID を `sme_feature_id` に書く
 （両方にあれば残す ID）。`exclude.feature_ids` は組のどちらかの ID に当たれば組ごと外す。
 `merge_split=false`（または analysis_spec の `features.merge_split=false`）では、行・戻り値・`rule`・`rule_hash` が
-v7 と同じ（`merged_from`・`sme_feature_id`・`merge_split` を出さず、正規化した spec にも `merge_split` を載せない）。
+v7 と同じ（`merged_from`・`sme_feature_id`・`merge_split` を出さず、正規化した spec にも `merge_split` を載せない。
+ただし陽イオンで分子式を渡し `adduct_tiers` を省いた目標は、2026-11-14 に既定の付加体の層を足したので規則も hash も
+v7 と違う——`dataset_feature_search`（mztab.md §13.8）と `dataset_claim_evidence` の `rule` の欄を見る）。
 `statistics.result_id` の spec は `{"result_id", "merge_split": true（既定）, "alignment_qc": <JSON のパス、任意>}`
 （`alignment_qc` は `dataset_alignment_qc` の `output_path`。省略時はこのハンドルで `dataset_alignment_qc` が最後に
 出した結果（§9。データ・試料の表・除外が変わっていないもの）、それも無ければその場で探す。`rule_hash` にパスは

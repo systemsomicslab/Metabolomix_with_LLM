@@ -9,7 +9,9 @@
 手順 3 が入力へ写す。手順 5 は問いを返さない: `drift_mode="auto"` は、補正できても内部標準で換算済み・注入順が
 ファイルの順かもしれないときは当てずに計算し（`_auto_hold`）、ドリフトの段に理由と `rerun_with`（`drift_mode="on"`）を、
 警告に `drift_not_applied_by_default` を載せる。正規化の係数は `normalization_features` の部分集合からも求められる
-（`_factor_columns`。除いた特徴も行列に残す）。手順 20 の記録は `reports/stats/` への追記で、書き先が決まらない・
+（`_factor_columns`。除いた特徴も行列に残す）。書いても効かない任意のキー（`normalize="none"` の係数の特徴・空の
+`normalization_features`・`drift_mode="off"` の `loess_degree`）は手順 2 が誤りにせず設定から捨て（`_drop_inert`。
+`matrix_id` は渡さないときと同じ）、手順 5 が生の設定を正規化し直すときにその注記を `warnings` に載せる。手順 20 の記録は `reports/stats/` への追記で、書き先が決まらない・
 書けないときも前処理は成功する。
 
 1. metabolomix/tools/stats_tools.py  dataset_preprocess()
@@ -41,17 +43,22 @@
 ## dataset_compare
 
 統計エンジンの比較（spec 2026-11-06 §5〜§9・§12）。群の指定（手順 2）を spec v2 の対比へ写す。`reported_feature_ids`
-（`bh_population="reported"` と対）と `output_path` の検証は比較の前に済ませる。入力側は手順 3 の `matrix_inputs`
+（`bh_population="reported"` の母集団。ほかの母集団なら使わずに注記する）と `output_path` の検証は比較の前に済ませる。入力側は手順 3 の `matrix_inputs`
 （`prefer_latest=True`）が決める: `matrix_id` を渡せば登録済みの行列（手順 4）の設定・群・除外のまま、省略すれば
 このハンドルで `dataset_preprocess` が最後に作った行列（手順 5。登録の `origin` と順番 `seq` で選ぶ。群の引数を渡したときは
-群が同じものだけ）、それも無ければ今の除外と群の引数から（手順 6）既定の設定で作る（戻り値の `matrix_source` が
-`matrix_id` / `latest_preprocess` / `default`）。spec は引数から組み立てて（手順 9）正規化する（手順 10）ので、結果の `spec` を
-`dataset_analysis_run` に渡せば同じ数字を出し直せる。行列が無いときは既定の前処理を回し（手順 11。尋ねない: drift=auto が補正を
-当てなかったときは警告 `drift_not_applied_by_default` が結果に載る）、行列を登録して前処理の記録も 1 件書く（手順 12）。
-`run_spec_v2` が登録済みの行列を再利用して比較し（手順 13。交絡は `compare` が対比ごとにも調べ、既定では止めずに印を付ける）、結果は
-`ds.results[result_id]` と `ds.last_differential` に置く（手順 14。記録に `p_adjust_method`）。`output_path` があれば全行の
-TSV（と F 検定の TSV）を書き（手順 15）、手順 16・17 の記録は親を行列の前処理の記録にして `reports/stats/` へ追記する
-（どちらも書けなくても比較は成功）。戻り値の `top` / `f_top` の名前と `id_level` は手順 15 と同じ `identity_of` で引く。
+群が同じものだけ＝手順 7 の `groups_match`）、それも無ければ今の除外と群の引数から（手順 6）既定の設定で作る（戻り値の
+`matrix_source` が `matrix_id` / `latest_preprocess` / `default`）。`matrix_id` と一緒に渡した群の引数は手順 8 が、
+`comparisons` の無い `factors` は手順 12 が、効かない（重複した）引数なら注記にし、読み方で数字が変わるなら `needs_input`
+（`patch: true`。選択肢の value は替える引数の dict）を返す（断らない）。群が同じかは上書きの dict でなく、前処理に入る試料
+ごとの群で比べる（手順 7・9 の `groups_match`。値の行列を読まない `stats/data.py` の `sample_table` で試料の表だけを組む）。
+選択肢はその読みで比べられるものだけ: 行列の群と渡した群のどちらに対比の群の名前があるか（手順 10）、`factors` のモデルが
+組めるか（手順 13。値の欠け・空の cell）を先に見る。spec は引数から組み立てて（手順 16）正規化する（手順 17）ので、結果の `spec` を
+`dataset_analysis_run` に渡せば同じ数字を出し直せる。行列が無いときは既定の前処理を回し（手順 18。尋ねない: drift=auto が補正を
+当てなかったときは警告 `drift_not_applied_by_default` が結果に載る）、行列を登録して前処理の記録も 1 件書く（手順 19）。
+`run_spec_v2` が登録済みの行列を再利用して比較し（手順 20。交絡は `compare` が対比ごとにも調べ、既定では止めずに印を付ける）、結果は
+`ds.results[result_id]` と `ds.last_differential` に置く（手順 21。記録に `p_adjust_method`）。`output_path` があれば全行の
+TSV（と F 検定の TSV）を書き（手順 22）、手順 23・24 の記録は親を行列の前処理の記録にして `reports/stats/` へ追記する
+（どちらも書けなくても比較は成功）。戻り値の `top` / `f_top` の名前と `id_level` は手順 22 と同じ `identity_of` で引く。
 
 1. metabolomix/tools/stats_tools.py  dataset_compare()
 2. └─ metabolomix/tools/stats_tools.py  _design_and_comparisons()
@@ -59,17 +66,24 @@ TSV（と F 検定の TSV）を書き（手順 15）、手順 16・17 の記録�
 4.    └─ metabolomix/analysis/stats_results.py  get_matrix()（`matrix_id` あり）
 5.    └─ metabolomix/analysis/stats_results.py  latest_preprocess_matrix()（`matrix_id` なし）
 6.    └─ metabolomix/analysis/stats_results.py  study_inputs()（`matrix_id` なし）
-7. └─ metabolomix/analysis/stats/data.py  from_dataset()
-8. └─ metabolomix/tools/stats_tools.py  _covariate_specs()
-9. └─ metabolomix/analysis/stats_results.py  compare_spec()
-10. └─ metabolomix/analysis/stats/spec_v2.py  normalize_spec_v2()
-11. └─ metabolomix/analysis/stats_results.py  prepare_default()（行列なし）
-12. └─ metabolomix/tools/_matrix_store.py  register_default()
-13. └─ metabolomix/analysis/stats/spec_v2.py  run_spec_v2()
-14. └─ metabolomix/analysis/stats_results.py  register_compare()
-15. └─ metabolomix/analysis/compare_table.py  write_compare_tables()（`output_path` あり）
-16. └─ metabolomix/tools/stats_tools.py  _write_compare_record()
-17.    └─ metabolomix/analysis/stats_records.py  write_stats_record()
+7.    └─ metabolomix/analysis/stats_results.py  groups_match()（`matrix_id` なし・群の引数あり）
+8. └─ metabolomix/tools/stats_tools.py  _matrix_group_conflict()（`matrix_id` あり）
+9.    └─ metabolomix/analysis/stats_results.py  groups_match()
+10.   └─ metabolomix/tools/stats_tools.py  _group_levels_under()（群が違うとき）
+11. └─ metabolomix/analysis/stats/data.py  from_dataset()
+12. └─ metabolomix/tools/stats_tools.py  _factors_without_comparisons()（`comparisons` なし）
+13.   └─ metabolomix/tools/stats_tools.py  _factor_design_problem()
+14.   └─ metabolomix/tools/stats_tools.py  _factor_model_comparisons()
+15. └─ metabolomix/tools/stats_tools.py  _covariate_specs()
+16. └─ metabolomix/analysis/stats_results.py  compare_spec()
+17. └─ metabolomix/analysis/stats/spec_v2.py  normalize_spec_v2()
+18. └─ metabolomix/analysis/stats_results.py  prepare_default()（行列なし）
+19. └─ metabolomix/tools/_matrix_store.py  register_default()
+20. └─ metabolomix/analysis/stats/spec_v2.py  run_spec_v2()
+21. └─ metabolomix/analysis/stats_results.py  register_compare()
+22. └─ metabolomix/analysis/compare_table.py  write_compare_tables()（`output_path` あり）
+23. └─ metabolomix/tools/stats_tools.py  _write_compare_record()
+24.    └─ metabolomix/analysis/stats_records.py  write_stats_record()
 
 ## dataset_pca
 

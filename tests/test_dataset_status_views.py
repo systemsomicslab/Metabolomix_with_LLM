@@ -151,7 +151,11 @@ def test_unknown_view_is_refused_and_missing_state_still_wins():
     session_state.session.dataset = _dataset()
     bad = _status(view="nope")
     assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
-    assert _status(view="summary", query="x")["error"]["code"] == "DATASET_BAD_REQUEST"
+    # query は summary では効かない: 断らず、要約をそのまま返して notes に書く
+    summary = _status(view="summary", query="x")
+    assert "error" not in summary and summary["n_samples"] == _status()["n_samples"]
+    assert len(summary["notes"]) == 1 and "view=summary" in summary["notes"][0]
+    assert "notes" not in _status()
 
 
 def test_samples_view_appends_factor_columns_in_name_order():

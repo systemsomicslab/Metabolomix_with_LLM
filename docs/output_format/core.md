@@ -122,7 +122,7 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 10. EICの `peak_top` は強度ではなく頂点座標である。強度は `max_intensity`、平均強度は `mean_intensity` を使う。
 11. `total_samples` はEIC全スポットにわたるサンプルエントリ総数であり、ユニークサンプル数は `len(unique_file_ids)` である。
 12. m/zとRTの微小差はファイル形式の浮動小数精度、代表値の定義、アラインメント処理に由来し得る。厳密一致ではなく許容差を用いる。
-13. **mzTab-M（`dataset_*` 経路）の `abundance_assay[N]` は、非ゼロでも実測ピークとは限らない。** mzTab-M 自体は gap-fill（未検出セルの補間値）を区別する列を持たない。`load_dataset` は隣接する `.arf` が同一アライメントであると数値で検証できた場合にだけ検出状態を取り込む。`dataset_status` の `detection.available` が `false` の間は、**検出率・欠測率・「n 件で検出」といった主張をしてはいけない**。実データでは 60 サンプル × 714 特徴のうち**セルの 70.0% が gap-fill** だったので、非ゼロを検出と数えると検出率を 3 倍以上に過大評価する。検出状態があるときは `dataset_preprocess(min_detection_rate=...)` で実検出率による足切りができる（ARF 経路の同名引数と同義）。
+13. **mzTab-M（`dataset_*` 経路）の `abundance_assay[N]` は、非ゼロでも実測ピークとは限らない。** mzTab-M 自体は gap-fill（未検出セルの補間値）を区別する列を持たない。`load_dataset` は隣接する `.arf` が同一アライメントであると数値で検証できた場合にだけ検出状態を取り込む。`dataset_status` の `detection.available` が `false` の間は、**検出率・欠測率・「n 件で検出」といった主張をしてはいけない**。実データでは 60 サンプル × 714 特徴のうち**セルの 70.0% が gap-fill** だったので、非ゼロを検出と数えると検出率を 3 倍以上に過大評価する。検出状態があるときは `dataset_preprocess(detection_min_rate=...)` で実検出率による足切りができる（gap-fill を数えない検出率。検出状態が無ければこの足切りは行わず、前処理の `steps` の足切りの段（`step: "filter"`）に `filters.detection = {status: "skipped", reason: "no_detected_mask"}` と出る）。
 
 ## 状態不足の伝え方（MCP クライアント向けの契約）
 
@@ -164,8 +164,14 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 ```
 
 - `field` は答えが入る設定の欄（spec の路）。`reason` は尋ねる理由、`options` は `{value, label}` の選択肢。
-- `argument` は答え（選ばれた `value`）を入れて呼び直すツールの**引数名**。
-- `retry_tools` は「`argument` を受けて呼び直せるツール」の候補（OR）。
+- `argument` は答え（選ばれた `value`）を入れて呼び直すツールの**引数名**。`argument` が無い封筒は、`field` の
+  spec の路に `value` を入れて呼び直す。
+- `"patch": true` の封筒は、選択肢ごとに替える引数が違う問い（`argument` を持たない。`field` は問いの主題）。
+  選ばれた `value` は「引数名 → 値」の dict で、**その dict のとおりに引数を置き換え（値が `null` の引数は外し）、
+  ほかの引数はそのまま渡して**呼び直す。例: `dataset_compare` の `{"comparisons": [...], "reference_group": null,
+  "test_group": null}`（群の指定を対比に替える）・`{"factors": null}`・`{"matrix_id": null}`。
+- `retry_tools` は「答えを入れて呼び直せるツール」の候補（OR）。`argument` があればその引数を、`patch` なら
+  `value` の引数をすべて受ける。
 - 統計エンジンの前処理（`dataset_preprocess`・`dataset_compare`・`dataset_pca`・`pathway_project`・`dataset_analysis_run`
   の spec v2）は**尋ねない**: ドリフト補正の既定（`drift_mode=auto`）は、補正できても内部標準で換算済み・注入順が
   ファイルの順かもしれないときは当てずに計算し、戻り値の `warnings`（`pathway_project` は run の manifest にも）の

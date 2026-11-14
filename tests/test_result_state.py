@@ -66,7 +66,7 @@ def test_dataset_fingerprint_changes_with_the_matrix():
 
 
 def test_dataset_fingerprint_changes_with_the_detection_mask():
-    """検出マスクは min_detection_rate の入力。変われば前処理の入力が変わる。"""
+    """検出マスクは detection_min_rate（dataset_preprocess の検出率の足切り）の入力。変われば前処理の入力が変わる。"""
     ds = make_dataset()
     before = dataset_fingerprint(ds)
     ds.detected_mask = np.ones(ds.feature_matrix.shape, dtype=bool)

@@ -98,6 +98,7 @@ def dataset_status(dataset_handle: str | None = None, view: str = "summary",
         `,` で区切った複数の指定は OR。トークンは試料名・群（Class ID）から取る（日付や拡張子の
         処理タイムスタンプは除く）。QC・ブランクも落とさない（role 列で見分ける）。例 `"ILG_6h"`、
         `"ILG_6h,control_6h"`。1 件も一致しなければ使えるトークンの語彙を添えて拒む。
+        `view="summary"` / `"results"` では効かないので、使わずにその旨を `notes` に書く（断らない）。
 
     load_dataset を先に実行しておくこと。
     未実行の場合は missing_state エンベロープを返す。
@@ -121,16 +122,15 @@ def dataset_status(dataset_handle: str | None = None, view: str = "summary",
     if view not in VIEWS:
         return mztab_error("DATASET_BAD_REQUEST",
                            f"view は {list(VIEWS)} のどれかです: {view!r}", {"view": view})
-    if query is not None and view in ("summary", "results"):
-        return mztab_error("DATASET_BAD_REQUEST",
-                           "query は view=samples（因子トークン）か view=tags（タグ名）で使います。",
-                           {"view": view})
+    # query は samples（因子トークン）と tags（タグ名）でだけ効く。ほかの view では使わずに notes に書く
+    notes = ([f"query は view=samples（因子トークン）か view=tags（タグ名）でだけ効きます。view={view} では"
+              "使わずに返しました。"] if query is not None and view in ("summary", "results") else [])
     if view == "samples":
         return _samples_view(ds, query)
     if view == "tags":
         return _tags_view(ds, query)
     if view == "results":
-        return _results_view(ds)
+        return _results_view(ds, notes)
 
     from metabolomix.core import version
     update = version.update_status()
@@ -171,6 +171,8 @@ def dataset_status(dataset_handle: str | None = None, view: str = "summary",
         payload["job_path"] = ds.job_path
     if ds.artifact_paths:
         payload["artifact_roles"] = {role: len(paths) for role, paths in ds.artifact_paths.items()}
+    if notes:
+        payload["notes"] = notes
     return json_payload(payload)
 
 
@@ -327,7 +329,7 @@ def _matrix_recipe(prepared) -> tuple[str, str, str]:
             (steps.get("normalize") or {}).get("method") or "")
 
 
-def _results_view(ds) -> str:
+def _results_view(ds, notes: list[str] | None = None) -> str:
     """`view="results"`: ハンドルの統計の行列と結果の一覧（TSV 2 本）。"""
     from metabolomix.analysis import stats_results
     from metabolomix.analysis.result_state import dataset_fingerprint, is_current, is_stats_current
@@ -382,6 +384,7 @@ def _results_view(ds) -> str:
         "results": format_spots_as_table(result_rows, columns=result_columns) if result_rows else "",
         "note": ("current=false の行列・結果は除外・試料の表の更新・データの入れ替えの前に作ったもの"
                  "（作り直す）。結果を掘るときは result_id（と contrast_id）を渡す。"),
+        **({"notes": list(notes)} if notes else {}),
     })
 
 
