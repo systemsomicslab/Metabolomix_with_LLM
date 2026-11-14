@@ -342,10 +342,14 @@ notes?, note}`。`analyses[]` は解析ごとの要約（`n_rows`・`n_tested`�
 `n_rows` は全件。p が null の行は後ろ。断らない）。`correlate` の行も TSV で、50 を超えれば先頭だけ（`truncated`）。
 全量は `output_path` の JSON。
 集約の要約（`analyses[].aggregate`）は `output_path` の有無によらず、載せたリストごとにいつも件数 `n_<名前>`
-（`n_members`・`n_summed`・`n_dropped`・`n_merged_from` のうち載るもの。和なら `n_contributions` も）を持つ。メンバーが 50 を超えれば**断らず**、
-寄与 `contributions` は `share_median` の大きい順（和を支配するメンバー。null は後ろ、同じなら `summed` の順）の
-先頭 50 行（`contributions_order: "share_median_desc"`）、`members`・`summed`・`dropped`・`merged_from` は先頭 50 件だけを
-載せ、切ったものに `<名前>_truncated: true`（切らなければ false）と `notes` を付ける。50 以下なら寄与は `summed` の順の全行。
+（`n_members`・`n_summed`・`n_dropped`・`n_merged_from` のうち載るもの。和なら `n_contributions` も）を持つ。
+リストはそれぞれ自分の長さで**断らずに**切る。寄与 `contributions` は、和に入ったメンバー（`n_contributions` ＝
+`n_summed`）が 50 を超えたときだけ `share_median` の大きい順（和を支配するメンバー。null は後ろ、同じなら `summed` の順）の
+先頭 50 行にし（`contributions_order: "share_median_desc"`）、50 以下なら `summed` の順の全行（並べ替えない。
+`contributions_order` は無い）。`members`・`summed`・`dropped`・`merged_from` は 50 件を超えたものだけ先頭 50 件を載せる。
+切ったものに `<名前>_truncated: true`（切らなければ false）を付け、`notes` は切ったものだけを名指す（寄与の並べ替えは
+寄与を切ったときだけ書く）。recipe の段（検出率など）が落としたメンバーや、割れの相手にまとめたメンバーがあれば、
+`members` だけが 50 を超え、寄与は切らずに `summed` の順のまま、ということがある。
 切るのは戻り値の要約だけで、`output_path` の JSON・`rule_hash` は全メンバーのまま。
 
 ### 2.1 統計エンジンの spec（analysis-spec.v2）と結果（analysis-result.v2）

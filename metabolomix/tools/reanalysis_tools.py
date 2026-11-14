@@ -204,10 +204,11 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
 
     output_path: 結果の JSON をここへ書き、要約だけを返す。省略時は解析ごとに行を TSV で返し、
         50 行を超える解析は p の小さい順の先頭 50 行だけを載せる（`truncated: true`・`n_rows` が全件・
-        `rows_order`。断らない）。集約の要約（`aggregate`）は output_path の有無によらず、メンバーが
-        50 を超えれば寄与 `contributions` を `share_median` の大きい順の先頭 50 行、`members`・`summed`・
-        `dropped`・`merged_from` を先頭 50 件だけ載せる（件数は `n_<名前>`、切ったかは `<名前>_truncated`、
-        寄与の並びは `contributions_order`。全量は output_path の JSON）。
+        `rows_order`。断らない）。集約の要約（`aggregate`）は output_path の有無によらず、和に入った
+        メンバー（`n_contributions`）が 50 を超えれば寄与 `contributions` を `share_median` の大きい順の
+        先頭 50 行（`contributions_order`）、`members`・`summed`・`dropped`・`merged_from` はそれぞれ 50 件を
+        超えたものだけ先頭 50 件を載せる（件数は `n_<名前>`、切ったかは `<名前>_truncated`。`notes` は切った
+        ものだけを名指す。全量は output_path の JSON）。
     対話のセッション・ハンドルの状態は変えない（読むだけ）。
     """
     from metabolomix.analysis import analysis_spec
@@ -234,7 +235,7 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
 
-    summary, truncated, aggregate_cut = [], [], []
+    summary, truncated, aggregate_cut = [], [], {}
     for analysis in result["analyses"]:
         rows = analysis["rows"]
         item = {
@@ -252,7 +253,7 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
         if "aggregate" in analysis:
             item["aggregate"], cut = _aggregate_summary(analysis["aggregate"])
             if cut:
-                aggregate_cut.append(analysis["analysis_id"])
+                aggregate_cut[analysis["analysis_id"]] = cut
         if "covariate_excluded_samples" in analysis:
             item["covariate_excluded_samples"] = analysis["covariate_excluded_samples"]
         if written is None:
@@ -267,10 +268,7 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
         notes.append(f"行が {MAX_INLINE_ROWS} を超える解析（{truncated}）は p の小さい順の先頭 "
                      f"{MAX_INLINE_ROWS} 行だけを載せた。全行は output_path を指定して JSON に書く。")
     if aggregate_cut:
-        where = "output_path の JSON" if written else "output_path を指定して書く JSON"
-        notes.append(f"集約のメンバーが {MAX_INLINE_ROWS} を超える解析（{aggregate_cut}）は、寄与を "
-                     f"share_median の大きい順の先頭 {MAX_INLINE_ROWS} 行、members・summed・dropped・"
-                     f"merged_from を先頭 {MAX_INLINE_ROWS} 件だけ載せた（件数は n_*）。全量は {where} にある。")
+        notes.extend(_aggregate_cut_notes(aggregate_cut, written=written is not None))
     return json_payload({
         "status": "success",
         "schema": result["schema"],
@@ -315,17 +313,19 @@ def _share_order(index_row: tuple[int, dict]):
     return (not usable, -share if usable else 0.0, index)
 
 
-def _aggregate_summary(info: dict) -> tuple[dict, bool]:
-    """集約の要約と、何かを切ったか。
+def _aggregate_summary(info: dict) -> tuple[dict, list[str]]:
+    """集約の要約と、切ったものの名前（寄与 `contributions` が先、あとは `_AGGREGATE_LISTS` の順）。
 
-    和のメンバーごとの寄与（`contributions`）は TSV にする。メンバーが `MAX_INLINE_ROWS` を超えれば、
-    寄与は `share_median` の大きい順（和を支配するメンバー）の先頭 `MAX_INLINE_ROWS` 行、`members`・
-    `summed`・`dropped`・`merged_from` は先頭 `MAX_INLINE_ROWS` 件だけを載せる（断らない）。件数は
-    いつも `n_<名前>`、切ったかは `<名前>_truncated`。全量は `output_path` の JSON（結果と `rule_hash` は
-    変えない。戻り値の要約だけを切る）。
+    和のメンバーごとの寄与（`contributions`）は TSV にする。リストはそれぞれ自分の長さで切る:
+    寄与は和に入ったメンバー（`summed`）が `MAX_INLINE_ROWS` を超えたときだけ `share_median` の大きい順
+    （和を支配するメンバー）の先頭 `MAX_INLINE_ROWS` 行にし（`contributions_order`）、超えなければ `summed`
+    の順の全行のまま。`members`・`summed`・`dropped`・`merged_from` は `MAX_INLINE_ROWS` を超えたものだけ
+    先頭 `MAX_INLINE_ROWS` 件を載せる（断らない。`members` だけが長く、和に入ったものが少ないこともある）。
+    件数はいつも `n_<名前>`、切ったかは `<名前>_truncated`。全量は `output_path` の JSON（結果と
+    `rule_hash` は変えない。戻り値の要約だけを切る）。
     """
     out = {k: v for k, v in info.items() if k != "contributions" and k not in _AGGREGATE_LISTS}
-    cut = False
+    cut_lists: list[str] = []
     for key in _AGGREGATE_LISTS:
         if key not in info:
             continue
@@ -335,18 +335,42 @@ def _aggregate_summary(info: dict) -> tuple[dict, bool]:
         out[key] = shown
         out[f"n_{key}"] = len(values)
         out[f"{key}_truncated"] = len(shown) < len(values)
-        cut = cut or out[f"{key}_truncated"]
-    if "contributions" in info:
-        rows = info["contributions"]
-        shown = rows
-        if len(rows) > MAX_INLINE_ROWS:
-            shown = [row for _i, row in sorted(enumerate(rows), key=_share_order)][:MAX_INLINE_ROWS]
-            out["contributions_order"] = "share_median_desc"
-            cut = True
-        out["contributions"] = rows_table(round_floats(shown, digits=4), _CONTRIBUTION_COLUMNS)
-        out["n_contributions"] = len(rows)
-        out["contributions_truncated"] = len(shown) < len(rows)
-    return out, cut
+        if out[f"{key}_truncated"]:
+            cut_lists.append(key)
+    if "contributions" not in info:
+        return out, cut_lists
+    rows = info["contributions"]
+    shown = rows
+    if len(rows) > MAX_INLINE_ROWS:
+        shown = [row for _i, row in sorted(enumerate(rows), key=_share_order)][:MAX_INLINE_ROWS]
+        out["contributions_order"] = "share_median_desc"
+    out["contributions"] = rows_table(round_floats(shown, digits=4), _CONTRIBUTION_COLUMNS)
+    out["n_contributions"] = len(rows)
+    out["contributions_truncated"] = len(shown) < len(rows)
+    return out, (["contributions"] if out["contributions_truncated"] else []) + cut_lists
+
+
+def _aggregate_cut_notes(cut_by_analysis: dict[str, list[str]], *, written: bool) -> list[str]:
+    """集約の要約で切ったものだけを名指す `notes`（同じものを切った解析は 1 行にまとめる）。
+
+    寄与の並べ替え（`share_median` の大きい順）は寄与そのものを切ったときだけ書く。メンバーの一覧
+    だけを切った解析の寄与は `summed` の順の全行で、並べ替えていない。
+    """
+    where = "output_path の JSON" if written else "output_path を指定して書く JSON"
+    grouped: dict[tuple[str, ...], list[str]] = {}
+    for analysis_id, names in cut_by_analysis.items():
+        grouped.setdefault(tuple(names), []).append(analysis_id)
+    notes = []
+    for names, analysis_ids in grouped.items():
+        parts = []
+        if "contributions" in names:
+            parts.append(f"寄与 contributions を share_median の大きい順の先頭 {MAX_INLINE_ROWS} 行")
+        lists = [name for name in names if name != "contributions"]
+        if lists:
+            parts.append(f"{'・'.join(lists)} を先頭 {MAX_INLINE_ROWS} 件")
+        notes.append(f"集約の要約（解析 {analysis_ids}）は、{'、'.join(parts)}だけ載せた（件数は n_*、"
+                     f"切ったものは *_truncated）。全量は {where} にある。")
+    return notes
 
 
 def _correlate_summary(block: dict, *, inline: bool) -> dict:

@@ -84,7 +84,8 @@ property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` 
 41. │  └─ metabolomix/tools/reanalysis_tools.py  result_bytes()
 42. ├─ [output_path なし] metabolomix/analysis/stats_run_summary.py  first_by_p()
 43. ├─ metabolomix/tools/reanalysis_tools.py  _aggregate_summary()
-44. └─ [correlate] metabolomix/tools/reanalysis_tools.py  _correlate_summary()
+44. ├─ [集約の要約を切った] metabolomix/tools/reanalysis_tools.py  _aggregate_cut_notes()
+45. └─ [correlate] metabolomix/tools/reanalysis_tools.py  _correlate_summary()
 
 書いても効かない設定（`steps` に無い段の設定・`merge_split=false` や外部の表での `features.alignment_qc`・
 ols でない検定の共変量）は `normalize_spec(spec, notes=...)` が捨てて理由を `notes` に足し、戻り値と JSON の
@@ -93,6 +94,9 @@ ols でない検定の共変量）は `normalize_spec(spec, notes=...)` が捨�
 `quant_state.polarity_runs.negative`。TSV は 1 つの注入順を全極性に当て、陰イオンの測定と違えば
 `run_spec(..., notes=...)` が `notes` に足す）。`output_path` が無く 50 行を超える解析は
 `first_by_p()` の先頭 50 行だけを TSV にし、`truncated`・`rows_order` を立てる（断らない）。
+集約の要約は `_aggregate_summary()` がリストごとに自分の長さで切り（寄与は和に入ったメンバーが 50 を超えた
+ときだけ `share_median` の大きい順に並べ替えて切る）、`_aggregate_cut_notes()` が切ったものだけを `notes` に
+名指す。
 
 `spec["schema"] == "analysis-spec.v2"` のときは、`resolve_holder()` のあと v1 の鎖でなく次へ振り分ける
 （データセットは常に要る。除外は spec の `input` だけを使い、`dataset_exclude` の除外は読まない。

@@ -344,7 +344,9 @@ def test_analysis_run_v1_aggregate_summary_is_capped_by_share(tmp_path):
     assert agg["members"] == agg["summed"] == list(values)[:R.MAX_INLINE_ROWS]
     assert agg["members_truncated"] is agg["summed_truncated"] is agg["contributions_truncated"] is True
     assert agg["contributions_order"] == "share_median_desc"
-    assert any("share_median の大きい順" in note for note in out["notes"])
+    [note] = [n for n in out["notes"] if n.startswith("集約の要約")]
+    assert "['main']" in note and "寄与 contributions を share_median の大きい順の先頭 50 行" in note
+    assert "members・summed を先頭 50 件" in note and "dropped" not in note
     # 独立の計算: 比べる 2 群（HC・RA の 6 試料）の試料ごとの割合（メンバー ÷ 和）の中央値、大きい順
     matrix = np.array([values[f] for f in values], dtype=float)[:, :6]
     shares = np.median(matrix / matrix.sum(axis=0), axis=1)
@@ -363,6 +365,68 @@ def test_analysis_run_v1_aggregate_summary_is_capped_by_share(tmp_path):
     assert written["rule_hash"] == out["rule_hash"]
 
 
+def test_analysis_run_v1_aggregate_notes_name_only_what_was_cut(tmp_path):
+    # 和に入ったメンバーが 50 以下なら、members だけが 50 を超えても寄与は切らず summed の順のまま。
+    # notes は切ったものだけを名指し、寄与を並べ替えたとは書かない（レビュー指摘: 切っていない寄与の
+    # 先頭行を「和を支配するメンバー」と読ませない）。
+    import numpy as np
+
+    n, n_zero = 60, 20
+    values = {f"F{k:03d}": ([0] * len(SAMPLES) if k < n_zero
+                            else [(k + 1) * (s + 1) + 50 * (k % 3) for s in range(len(SAMPLES))])
+              for k in range(n)}
+    ids = list(values)
+    paper = write_mwtab(tmp_path / "paper.txt", SAMPLES, list(values.items()))
+    spec = {"input": {"source": "mwtab", "path": str(paper)},
+            "groups": {"source": "tsv", "path": str(_groups_tsv(tmp_path)), "role_column": "role"},
+            "comparison": {"reference": "HC", "test": "RA"},
+            "analyses": [{"analysis_id": "raw", "test": {"kind": "student"}},
+                         {"analysis_id": "filtered", "test": {"kind": "student"},
+                          "matrix": {"steps": ["detection_filter"],
+                                     "detection_filter": {"basis": "positive",
+                                                          "min_rate": {"sample": 0.5}}}}],
+            "aggregate": {"kind": "sum", "label": "total", "feature_ids": ids}}
+    out = json.loads(R.dataset_analysis_run(spec))
+    assert out["status"] == "success", out
+    by_id = {a["analysis_id"]: a["aggregate"] for a in out["analyses"]}
+
+    filtered = by_id["filtered"]
+    assert filtered["n_members"] == n and filtered["members_truncated"] is True
+    assert filtered["members"] == ids[:R.MAX_INLINE_ROWS]
+    assert filtered["n_summed"] == filtered["n_contributions"] == n - n_zero
+    assert filtered["summed"] == ids[n_zero:] and filtered["summed_truncated"] is False
+    assert filtered["n_dropped"] == n_zero and filtered["dropped"] == ids[:n_zero]
+    assert filtered["dropped_truncated"] is False
+    assert filtered["contributions_truncated"] is False and "contributions_order" not in filtered
+    # 寄与は summed の順の全行。値は独立の計算（HC・RA の 6 試料の割合 メンバー ÷ 和 の中央値）と合う
+    matrix = np.array([values[f] for f in ids[n_zero:]], dtype=float)[:, :6]
+    shares = np.median(matrix / matrix.sum(axis=0), axis=1)
+    shown = _tsv_rows(filtered["contributions"])
+    assert [r["feature_id"] for r in shown] == ids[n_zero:]
+    assert [float(r["share_median"]) for r in shown] == pytest.approx(
+        [round(float(x), 4) for x in shares], abs=1e-12)
+    assert list(shares) != sorted(shares, reverse=True)  # summed の順は share の大きい順ではない
+
+    raw = by_id["raw"]
+    assert raw["n_summed"] == raw["n_contributions"] == n
+    assert raw["contributions_truncated"] is raw["summed_truncated"] is raw["members_truncated"] is True
+    assert raw["contributions_order"] == "share_median_desc"
+
+    aggregate_notes = [note for note in out["notes"] if note.startswith("集約の要約")]
+    assert len(aggregate_notes) == 2
+    [raw_note] = [note for note in aggregate_notes if "['raw']" in note]
+    [filtered_note] = [note for note in aggregate_notes if "['filtered']" in note]
+    assert "寄与 contributions を share_median の大きい順の先頭 50 行" in raw_note
+    assert "members・summed を先頭 50 件" in raw_note
+    assert "share_median" not in filtered_note and "contributions" not in filtered_note
+    assert "、members を先頭 50 件だけ載せた" in filtered_note
+    assert "output_path を指定して書く JSON" in filtered_note
+    # output_path を渡せば全量はその JSON（notes の案内も変わる）
+    written = json.loads(R.dataset_analysis_run(spec, output_path=str(tmp_path / "agg.json")))
+    assert any(note.startswith("集約の要約（解析 ['filtered']）") and "output_path の JSON" in note
+               for note in written["notes"])
+
+
 def test_aggregate_summary_caps_dropped_and_merged_from_and_keeps_small_ones():
     info = {"members": [f"M{i}" for i in range(60)], "summed": ["M0", "M1"],
             "dropped": [f"M{i}" for i in range(2, 60)],
@@ -371,7 +435,8 @@ def test_aggregate_summary_caps_dropped_and_merged_from_and_keeps_small_ones():
                               {"feature_id": "M1", "share_median": 0.75}],
             "n_samples_for_shares": 4}
     out, cut = R._aggregate_summary(info)
-    assert cut is True
+    # 切ったものだけを名指す（寄与と summed は 2 件で切らない）
+    assert cut == ["members", "dropped", "merged_from"]
     assert out["n_dropped"] == 58 and len(out["dropped"]) == R.MAX_INLINE_ROWS and out["dropped_truncated"]
     assert out["n_merged_from"] == 55 and list(out["merged_from"]) == [f"M{i}" for i in range(50)]
     assert out["merged_from_truncated"] is True
@@ -380,7 +445,7 @@ def test_aggregate_summary_caps_dropped_and_merged_from_and_keeps_small_ones():
     assert out["contributions_truncated"] is False and "contributions_order" not in out
     assert out["n_samples_for_shares"] == 4
     small, small_cut = R._aggregate_summary({"numerator": "A", "denominator": "B", "dropped": []})
-    assert small_cut is False
+    assert small_cut == []
     assert small == {"numerator": "A", "denominator": "B", "dropped": [], "n_dropped": 0,
                      "dropped_truncated": False}
 
