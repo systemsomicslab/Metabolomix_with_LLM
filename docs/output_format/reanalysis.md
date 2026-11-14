@@ -621,7 +621,8 @@ detected` の **TSV**（列名 1 回、`rows` の文字列。依頼の特徴の�
   `n_rows_shown`・`n_features_shown`・`notes`（`truncated` はいつも付く。超えなければ false）。
   `output_path` があれば全量の TSV（同じ列・列名 1 回）をそのファイルへ原子的に書き、戻り値は要約
   `{status, n_features, n_samples, n_rows, output_path, sha256}`（`rows` は付かない。ほかの再解析のツールの
-  `output_path` と同じ扱い。1,000 行以下でも `output_path` を渡せば同じく要約）。
+  `output_path` と同じ扱い。1,000 行以下でも `output_path` を渡せば同じく要約）。そのパスに既にあるファイルは置き換える
+  ので、ツールの注釈は読み取り専用ではない（`readOnlyHint=false`・冪等。ほかの `output_path` を持つツールと同じ）。
 - 試料ごとの RT（`per_sample_rt`）のあるデータセットだけ: 解析フォルダ（`.arf`）から読んだもの、または mzTab-M で
   読み、隣の `.arf` と同じアラインメントだと照合できたもの（検出状態を取り込めたとき。`.arf` の列を mzTab-M の試料の順に
   並べ替えて持つ）。照合できなかった mzTab-M と、統合などで作り直したデータセットは `DATASET_BAD_REQUEST`
@@ -966,11 +967,12 @@ UTF-8・改行は CRLF）。
 | `comparison.polarity` | データセットの極性（`positive` / `negative`）。ハンドルなら `load_dataset` の `polarity`、対話のセッションなら同じ規則で決める。決まらなければ `null` |
 | `comparison.preprocess` | `value` に当たった前処理の設定（結果が読んだ行列の前処理の設定） |
 | `comparison.method` | 実際に使った検定名（`moderated_t` / `welch` / `student` / `mannwhitney`） |
-| `comparison.statistics` | `{test, ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n, q_interpretation}, subject_source, n_units_a, n_units_b}`。`n` は選んだ対比の多重比較の補正の母集団の大きさ（キーの名前は BH のときのまま）。`q_interpretation` は `correction` の方法での `q` の読み方（`discovery_fdr` / `fwer` / `unadjusted` / `reproduction_only`。`dataset.md` の書き出しのメタ行と同じ） |
+| `comparison.statistics` | `{test, ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n, q_interpretation}, subject_source, n_units_a, n_units_b}`。`n` は選んだ対比の BH の母集団の大きさ（比較の補正の母集団と同じ）。`q_interpretation` は `features.tsv` の `q_value`（BH）の読み方（`discovery_fdr`、母集団が `reported` なら `reproduction_only`。`dataset.md` の書き出しのメタ行と同じ） |
 | `comparison.effect_size_definition` / `mean_definition` | 効果量の定義（`{name, description}`）と、`mean_a` / `mean_b` が「個体ごとの前処理後の線形値の算術平均」であること |
 | `comparison.matrix_id` / `rule_hash` / `contrast_id` | どの行列・どの規則・どの対比を書いたか（`contrast_id` は 2 群の結果なら 1 つの対比の ID） |
-| `comparison.correction` | `q` を作った多重比較の補正。比較の記録の `p_adjust_method`（`bh` / `bonferroni` / `holm` / `none`）を `BH` / `Bonferroni` / `Holm` / `none` で書く。記録に無ければ `BH` |
-| `exploratory` | 最上位の欄。探索専用のデータセット（未完了の実行を `allow_incomplete=True` で開いた・検証を通っていない pipeline の単位）から書いたときだけ `{exploratory_only: true, reason}`（書き出しは断らない）。探索専用でなければ欄が無い |
+| `comparison.correction` | `features.tsv` の `q_value` を作った多重比較の補正で、契約どおりいつも `BH`（`significant` もその q で読む） |
+| `comparison.p_adjust_method` / `q_value_source` | 比較の補正が BH でない（`dataset_compare(p_adjust=bonferroni / holm / none)`）ときだけ。比較の方法（`bonferroni` / `holm` / `none`）と `recomputed_from_p_value`（同じ母集団の p から BH の q を計算し直し、判定と `significant` もその q で読み直した）。戻り値にも同じ 2 つと `notes`。BH の比較の manifest には無い |
+| `exploratory` | 最上位の欄。探索専用のデータセット（未完了の実行を `allow_incomplete=True` で開いた・検証を通っていない pipeline の単位）から書いたときだけ `{exploratory_only: true, reason}`（書き出しは断らない）。同じものを `comparison.exploratory` にも写す（`comparison` をそのまま見せる受け手にも印が届く）。探索専用でなければどちらの欄も無い |
 | `comparison.unadjusted_confounded` | `allow_confounded=true`（既定）で完全交絡（全対比をまとめた表か、その対比の表）を越えて走った比較だけ `true`（それ以外は欄が無い）。同じ印は来歴 `provenance.result.comparison.unadjusted_confounded`（と `provenance.result.warnings` の説明）にも載る |
 | `intensities_stage` | `pre_imputation`（補完の前）/ `post_imputation`（補完の後） |
 | `population.detection_unavailable_reason` | `detected` が全行空のときの理由。検出状態を使えれば `null` |
@@ -1011,7 +1013,8 @@ UTF-8・改行は CRLF）。
 `features.tsv` に任意の列 `adduct` が増える。mzTab-M の SML の `adduct_ions`（SML が無い特徴は rank 1 の
 SME の付加体）。無ければ空。`features.tsv` の `significant` は差次的の書き出しの `significant` 列と同じ印で、
 エンジンの結果は判定 `verdict` が `changed` の行だけ `true` になりうる（`dataset.md` §11.4。判定できない行は q が
-小さくても `false`）。
+小さくても `false`）。`q_value` は書き出しと同じく契約の BH の q で、`significant` もその q で読んだ判定（比較が
+`bonferroni` / `holm` / `none` なら同じ母集団の p から計算し直す。`comparison.p_adjust_method` / `q_value_source`）。
 
 `annotations.tsv` の `source` が `msdial_sme` の行の `provenance_json` は SME の候補そのもの（mzTab-M の SME の欄）。
 その `theoretical_mass_to_charge` は**ライブラリの記録のプリカーサー m/z**（mzTab-M の SME の値。job / pipeline を
@@ -1021,7 +1024,7 @@ SME の付加体）。無ければ空。`features.tsv` の `significant` は差�
 値と出所は `dataset_mass_accuracy` / `dataset_novel_candidates` で読む。
 
 戻り値には v2 の欄に `n_samples`・`n_intensity_rows`・`intensities_stage` が足される（探索専用のデータセットなら
-`exploratory` も）。
+`exploratory` も。比較の補正が BH でなければ `p_adjust_method`・`q_value_source`・`notes` も）。
 
 ### `spectrum_links.tsv` と `.dcl` の出どころ
 

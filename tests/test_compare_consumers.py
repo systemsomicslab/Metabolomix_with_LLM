@@ -31,10 +31,12 @@ V1_META_KEYS = {"contract_version", "exported_at", "source_mztab", "source_job",
                 "n_with_inchikey", "n_unannotated"}
 NEW_META_KEYS = {"test", "effect_size_definition", "ci_level", "verdict_q_threshold", "equivalence_fc",
                  "bh_population", "bh_n", "q_interpretation", "p_adjust_method", "unit", "n_units_a", "n_units_b",
-                 "mean_definition", "matrix_id", "rule_hash", "contrast_id", "significant_rule"}
-#: 条件つきのメタ行（交互作用・探索専用・検定後の除外のときだけ）。どれも msi_note の後ろに足す。
+                 "mean_definition", "matrix_id", "rule_hash", "contrast_id", "significant_rule",
+                 "q_value_method", "q_value_source"}
+#: 条件つきのメタ行（交互作用・探索専用・検定後の除外・BH の q を計算し直したときだけ）。どれも msi_note の後ろに足す。
 OPTIONAL_META_KEYS = {"contrast_kind", "interaction_factors", "interaction_levels", "interaction_definition",
-                      "exploratory", "exploratory_reason", "n_excluded_after_test", "excluded_after_test_note"}
+                      "exploratory", "exploratory_reason", "n_excluded_after_test", "excluded_after_test_note",
+                      "q_value_note"}
 
 
 def _annotate(ds):
@@ -97,12 +99,15 @@ def test_export_compare_result_keeps_15_columns_and_appends_meta_lines(ds, tmp_p
     assert info["contrast_id"] == "T_vs_C" and info["result_id"] == out["result_id"]
     # 新しい行は msi_note の後ろだけ。既存の行の並びは動かない
     msi = next(i for i, line in enumerate(meta) if line.startswith("# ontology / msi_level"))
-    assert msi == len(meta) - 1 - 6
+    assert msi == len(meta) - 1 - 7
     values, _ = _parse_meta(meta[msi + 1:])
     assert values["test"] == "moderated_t" and values["effect_size_definition"] == "log2_mean_difference"
     assert values["ci_level"] == "0.95" and values["verdict_q_threshold"] == "0.05"
     assert values["bh_population"] == "matrix" and values["bh_n"] == "10"
     assert values["q_interpretation"] == "discovery_fdr" and values["p_adjust_method"] == "bh"
+    # q_value は契約の BH の q（比較が BH なのでそのまま）
+    assert values["q_value_method"] == "bh" and values["q_value_source"] == "comparison"
+    assert "q_value_note" not in values and info["q_value_source"] == "comparison" and "notes" not in info
     assert values["unit"] == "subject" and values["n_units_a"] == "4" and values["n_units_b"] == "4"
     assert values["mean_definition"] == "linear arithmetic mean over units after preprocessing"
     assert values["matrix_id"] == out["matrix_id"] and values["rule_hash"] == out["rule_hash"]
@@ -818,28 +823,108 @@ def test_export_exclude_feature_ids_drops_rows_after_testing(ds, tmp_path):
     assert err["code"] == "DATASET_BAD_REQUEST"
 
 
-def test_export_meta_and_bundle_carry_the_records_p_adjust_method(ds, tmp_path):
+def _hand_bh(p_by_key: dict) -> dict:
+    """Benjamini–Hochberg の q を手で（numpy・エンジンを使わず）: 昇順の i 番目は min_{k>=i} p_(k)·m/k を 1 で頭打ち。"""
+    ordered = sorted(p_by_key.items(), key=lambda kv: kv[1])
+    m = len(ordered)
+    out, running = {}, 1.0
+    for rank in range(m, 0, -1):
+        key, p = ordered[rank - 1]
+        running = min(running, p * m / rank)
+        out[key] = running
+    return out
+
+
+def _export_cells(path) -> dict:
+    meta, body = _read(path)
+    col = {name: i for i, name in enumerate(export_contract.EXPORT_COLUMNS)}
+    cells = {line.split("\t")[0]: line.split("\t") for line in body[1:]}
+    return _parse_meta(meta)[0], {fid: (float(c[col["q_value"]]) if c[col["q_value"]] else None,
+                                        c[col["significant"]] == "true") for fid, c in cells.items()}
+
+
+@pytest.mark.parametrize("method", ["none", "holm", "bonferroni"])
+def test_export_and_bundle_write_the_contract_bh_q_for_a_non_bh_comparison(ds, tmp_path, method):
+    """R5/R21: 契約の q_value は BH の q（FDR）。比較が別の補正でも、同じ母集団で p から計算し直し、
+    significant もその q で読む（比較の補正の方法はメタ行 p_adjust_method に残す）。"""
+    # 中くらいの差を 2 つ作る: f4（p≈0.009。BH では有意、holm / bonferroni では有意でない）と
+    # f5（p≈0.033。補正しない p では有意、BH では有意でない）。log2fc の閾値は 0（判定だけで印が決まる）。
+    for j, name in enumerate(ds.sample_names):
+        if name.startswith("T"):
+            ds.feature_matrix[4, j] *= 2 ** 0.08
+            ds.feature_matrix[5, j] *= 2 ** 0.27
+    bh_out = _compare(reference_group="C", test_group="T", p_adjust="bh", log2fc_threshold=0.0)
+    bh_record = ds.results[bh_out["result_id"]]
+    other_out = _compare(reference_group="C", test_group="T", p_adjust=method, log2fc_threshold=0.0)
+    record = ds.results[other_out["result_id"]]
+    assert record["p_adjust_method"] == method
+    rows = [r for r in record["engine"]["rows"] if r["contrast_id"] == "T_vs_C"]
+    # 手で計算した BH（母集団は比較の q が付いた行。ここでは行列の全特徴）
+    population = {r["feature_id"]: r["p"] for r in rows if r["q"] is not None}
+    assert len(population) == record["engine"]["bh_population"]["n_by_contrast"]["T_vs_C"]
+    expected_q = _hand_bh(population)
+    # エンジンが p_adjust="bh" で出した q と一致する（同じ母集団の BH）
+    bh_rows = {r["feature_id"]: r for r in bh_record["engine"]["rows"] if r["contrast_id"] == "T_vs_C"}
+    assert all(bh_rows[f]["q"] == pytest.approx(q, rel=1e-12) for f, q in expected_q.items())
+    bh_significant = {r["feature"]: r["significant"] for r in stats_results.as_two_group(bh_record)["results"]}
+    own_significant = {r["feature"]: r["significant"] for r in stats_results.as_two_group(record)["results"]}
+    # 比較の補正の印は BH の印と違う（テストが区別できること）: none は f5 を、holm / bonferroni は f4 を変える
+    assert own_significant != bh_significant
+    assert bh_significant["f4"] is True and bh_significant["f5"] is False
+
+    path = tmp_path / f"{method}.tsv"
+    info = export_dataset_result(ds, record, path)
+    values, cells = _export_cells(path)
+    assert values["p_adjust_method"] == method                    # 比較の補正の方法は残す
+    assert values["q_value_method"] == "bh" and values["q_value_source"] == "recomputed_from_p_value"
+    assert method in values["q_value_note"] and "Benjamini-Hochberg" in values["q_value_note"]
+    assert values["q_interpretation"] == "discovery_fdr"           # q_value の読み方（BH）
+    assert values["bh_population"] == "matrix" and values["bh_n"] == str(len(population))
+    assert info["p_adjust_method"] == method and info["q_value_source"] == "recomputed_from_p_value"
+    assert info["notes"] and method in info["notes"][0]
+    for fid, (q, significant) in cells.items():
+        assert q == pytest.approx(expected_q[fid], rel=1e-5)      # 書式は有効数字 6 桁
+        assert significant == bh_significant[fid]                 # BH の比較と同じ印
+    # BH の比較の書き出しと q_value・significant が一致する
+    export_dataset_result(ds, bh_record, tmp_path / "bh.tsv")
+    _, bh_cells = _export_cells(tmp_path / "bh.tsv")
+    assert cells == bh_cells
+
+    # 根拠バンドルも同じ（features.tsv の q_value は BH、correction は BH、比較の方法は comparison に足す）
+    summary = evidence_export.export_dataset_evidence(ds, record, tmp_path / f"b-{method}")
+    manifest = json.loads((tmp_path / f"b-{method}" / "manifest.json").read_text(encoding="utf-8"))
+    comparison = manifest["comparison"]
+    assert comparison["correction"] == "BH"
+    assert comparison["p_adjust_method"] == method and comparison["q_value_source"] == "recomputed_from_p_value"
+    assert comparison["statistics"]["bh_population"]["q_interpretation"] == "discovery_fdr"
+    assert "p_adjust_method" not in comparison["statistics"]
+    assert summary["q_value_source"] == "recomputed_from_p_value" and summary["notes"]
+    features = {r["feature_id"]: r for r in _tsv(tmp_path / f"b-{method}" / "features.tsv")}
+    for fid, row in features.items():
+        assert float(row["q_value"]) == pytest.approx(expected_q[fid], rel=1e-9)
+        assert (row["significant"] == "true") == bh_significant[fid]
+
+
+def test_bh_comparison_export_and_bundle_are_unchanged_by_the_contract_q(ds, tmp_path):
+    """BH の比較は q をそのまま書き、manifest に比較の方法の欄を足さない（共有の見本は変わらない）。"""
     _compare(reference_group="C", test_group="T")
-    ds.last_differential["p_adjust_method"] = "holm"      # 統計エンジンの記録の補正の方法（無ければ bh）
-    path = tmp_path / "h.tsv"
-    export_dataset_result(ds, ds.last_differential, path)
-    meta, _ = _read(path)
-    values = _parse_meta(meta)[0]
-    # q の読み方は補正の方法に合わせる（FWER の調整 p を discovery_fdr と並べない）
-    assert values["p_adjust_method"] == "holm" and values["q_interpretation"] == "fwer"
-    evidence_export.export_dataset_evidence(ds, ds.last_differential, tmp_path / "b")
+    record = ds.last_differential
+    info = export_dataset_result(ds, record, tmp_path / "x.tsv")
+    values, cells = _export_cells(tmp_path / "x.tsv")
+    assert values["q_value_method"] == "bh" and values["q_value_source"] == "comparison"
+    assert "notes" not in info
+    own = {r["feature_id"]: r["q"] for r in record["engine"]["rows"]}
+    assert all(q == pytest.approx(own[fid], rel=1e-5) for fid, (q, _) in cells.items())
+    summary = evidence_export.export_dataset_evidence(ds, record, tmp_path / "b")
     comparison = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))["comparison"]
-    assert comparison["correction"] == "Holm"
-    assert comparison["statistics"]["bh_population"]["q_interpretation"] == "fwer"
-    # 補正しない p は unadjusted、宣言の無い記録（補正の方法を記録する前）は BH のまま discovery_fdr
-    for method, expected in (("none", "unadjusted"), ("bonferroni", "fwer"), (None, "discovery_fdr")):
-        if method is None:
-            ds.last_differential.pop("p_adjust_method")
-        else:
-            ds.last_differential["p_adjust_method"] = method
-        export_dataset_result(ds, ds.last_differential, path)
-        values = _parse_meta(_read(path)[0])[0]
-        assert values["q_interpretation"] == expected and values["p_adjust_method"] == (method or "bh")
+    assert comparison["correction"] == "BH" and "p_adjust_method" not in comparison
+    assert "q_value_source" not in comparison and "notes" not in summary
+    # 補正の方法を記録する前の記録（宣言が無い）も BH
+    record.pop("p_adjust_method", None)
+    export_dataset_result(ds, record, tmp_path / "y.tsv")
+    values, _ = _export_cells(tmp_path / "y.tsv")
+    assert values["p_adjust_method"] == "bh" and values["q_value_source"] == "comparison"
+    assert values["q_interpretation"] == "discovery_fdr"
 
 
 def test_save_figure_contrast_id_redraws_the_chosen_contrast(tmp_path):

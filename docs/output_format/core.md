@@ -195,6 +195,8 @@ CI があるときだけで、n が小さい・ばらつきが大きいときの
 逆に、書き出し・根拠バンドルの `significant` と volcano の `up` / `down` は判定を見る: `q ≤ 閾値` かつ
 `|log2fc| ≥ log2fc_threshold` に加えて `verdict` が `changed` の行だけ（`large_changes` と同じ数え方）。
 `inconclusive` の行（検出が足りず量を判定できない行など）は q が小さくても有意にしない（`dataset.md` §11.4）。
+書き出しと根拠バンドル（別リポジトリとの契約）の `q_value` は比較の `p_adjust` によらず BH の q で、判定と `significant` も
+その q で読む（BH でない比較は同じ母集団の p から計算し直し、メタ行 `q_value_source` に書く）。
 
 ### annotations の解釈
 

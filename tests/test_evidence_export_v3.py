@@ -239,6 +239,7 @@ def test_exploratory_dataset_is_exported_with_the_mark_in_the_manifest(tmp_path)
     out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "a"), result_id, dataset_handle=handle))
     manifest = json.loads((tmp_path / "a" / "manifest.json").read_text(encoding="utf-8"))
     assert "exploratory" not in manifest and "exploratory" not in out   # 探索専用でない束は今までどおり
+    assert "exploratory" not in manifest["comparison"]
     ds.exploratory_only = True
     ds.exploratory_reason = "解析ジョブが完了していない（status partial）"
     out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b"), result_id, dataset_handle=handle))
@@ -246,6 +247,8 @@ def test_exploratory_dataset_is_exported_with_the_mark_in_the_manifest(tmp_path)
     assert out["exploratory"] == {"exploratory_only": True, "reason": ds.exploratory_reason}
     manifest = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["exploratory"] == out["exploratory"]
+    # comparison にも同じ印（受け手が comparison をそのまま見せる経路〔get_comparison_evidence の facts〕でも届く）
+    assert manifest["comparison"]["exploratory"] == out["exploratory"]
     assert manifest["contract_version"] == 3 and manifest["comparison"]["correction"] == "BH"
 
 
@@ -269,13 +272,18 @@ def test_bundle_without_a_comparison_is_missing_state(tmp_path):
     assert not (tmp_path / "b").exists()
 
 
-def test_bundle_correction_follows_the_records_p_adjust_method(tmp_path):
+def test_bundle_correction_is_bh_and_names_the_comparisons_own_method(tmp_path):
+    """features.tsv の q_value は契約の BH の q なので correction はいつも BH。比較が別の補正なら、その方法と
+    q を計算し直したことを comparison に足す（statistics には重ねない）。"""
     handle, result_id = _handle_with_result(tmp_path)
     record = handles.registry.get(handle).dataset.results[result_id]
     record["p_adjust_method"] = "bonferroni"                 # 統計エンジンの記録が持つ補正の方法
-    T.dataset_export_evidence_bundle(str(tmp_path / "b"), result_id, dataset_handle=handle)
+    out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b"), result_id, dataset_handle=handle))
     comparison = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))["comparison"]
-    assert comparison["correction"] == "Bonferroni" and "p_adjust_method" not in comparison["statistics"]
+    assert comparison["correction"] == "BH" and "p_adjust_method" not in comparison["statistics"]
+    assert comparison["p_adjust_method"] == "bonferroni"
+    assert comparison["q_value_source"] == "recomputed_from_p_value"
+    assert out["p_adjust_method"] == "bonferroni" and "bonferroni" in out["notes"][0]
 
 
 def test_tool_passes_handle_polarity(tmp_path):

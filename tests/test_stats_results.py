@@ -379,6 +379,45 @@ def test_as_two_group_reports_the_records_p_adjust_method():
     assert stats["p_adjust_method"] == "holm"
     # q の読み方は補正の方法に合わせる（エンジンが BH の読み方を書いたままでも FWER と読む）
     assert stats["bh_population"]["q_interpretation"] == "fwer"
+    assert "q_value_method" not in stats_results.as_two_group(rec)          # 契約の読み方でなければ足さない
+    # 契約の書き出しの読み方: q は BH、読み方も BH、比較の方法はそのまま
+    contract = stats_results.as_two_group(rec, contract_q=True)
+    assert contract["statistics"]["p_adjust_method"] == "holm"
+    assert contract["statistics"]["bh_population"]["q_interpretation"] == "discovery_fdr"
+    assert contract["q_value_method"] == "bh" and contract["q_value_source"] == "recomputed_from_p_value"
+    rec["p_adjust_method"] = "bh"
+    assert stats_results.as_two_group(rec, contract_q=True)["q_value_source"] == "comparison"
+
+
+def _bh_row(fid, p, *, q="in", status="tested", judgeable=True, ci=(-0.1, 0.1)):
+    """`contract_bh_rows` に渡す記録の行（`q` が None なら補正の母集団の外）。"""
+    return {"feature_id": fid, "contrast_id": "c", "status": status, "quantity_judgeable": judgeable,
+            "p": p, "q": None if q is None else 1.0, "ci_low": ci[0], "ci_high": ci[1],
+            "verdict": "x", "verdict_reason": "x"}
+
+
+def test_contract_bh_rows_matches_a_hand_worked_bh_and_rereads_the_verdict():
+    """手で計算した BH: p = 0.01, 0.04, 0.03, 0.005（m = 4）を昇順に 0.005·4/1 = 0.02, 0.01·4/2 = 0.02,
+    0.03·4/3 = 0.04, 0.04·4/4 = 0.04 とし、上から累積の最小を取る → q = 0.02, 0.04, 0.04, 0.02。
+    母集団の外の行（記録の q が無い）は p が小さくても入れない（m は 4 のまま）。"""
+    rows = [_bh_row("a", 0.01), _bh_row("b", 0.04, ci=(-0.5, 0.9)), _bh_row("c", 0.03),
+            _bh_row("d", 0.005), _bh_row("out", 0.0001, q=None), _bh_row("nt", None, q=None, status="not_tested"),
+            _bh_row("nj", 0.002, judgeable=False)]
+    # nj も母集団の中（q は付く）だが量を判定できない。入れると m = 5 になるので、まず外して手計算と比べる
+    rule = {"q_threshold": 0.03, "equivalence_fc": 1.2, "equivalence_log2": 0.263}
+    out = stats_results.contract_bh_rows(rows[:6], rule)
+    assert [round(r["q"], 12) if r["q"] is not None else None for r in out] == [0.02, 0.04, 0.04, 0.02, None, None]
+    # 判定はエンジンの規則で読み直す: q ≤ 0.03 は changed、超えれば区間（±0.263 の内なら unchanged）
+    assert [(r["verdict"], r["verdict_reason"]) for r in out] == [
+        ("changed", "q_below_threshold"), ("inconclusive", "neither"), ("unchanged", "ci_within_equivalence"),
+        ("changed", "q_below_threshold"), ("inconclusive", "outside_bh_population"),
+        ("inconclusive", "not_tested")]
+    # 量を判定できない行は q が小さくても changed にしない（q は母集団の中なので付く）
+    judged = stats_results.contract_bh_rows(rows, rule)
+    assert judged[-1]["q"] is not None and judged[-1]["verdict"] == "inconclusive"
+    assert judged[-1]["verdict_reason"] == "quantity_not_judgeable"
+    # 記録の行は変えない
+    assert rows[0]["q"] == 1.0 and rows[0]["verdict"] == "x"
 
 
 @pytest.mark.parametrize("population,method,expected", [

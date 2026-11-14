@@ -309,7 +309,8 @@ PCAスコアプロットで明らかに外れた1サンプルや、特定のピ�
 補正の母集団 `bh_population` は `matrix`（既定）/ `annotated` / `reported`（`reported_feature_ids` に渡した特徴だけ。
 対で使い、片方だけは `DATASET_BAD_REQUEST`。ID の一覧は記録の spec の `reported_feature_ids` に残る）。
 多重比較の補正 `p_adjust` は `bh`（既定。FDR）/ `bonferroni` / `holm`（FWER）/ `none`（補正なし）で、行の `q` は
-この方法の値（下の表の「BH の `q`」は既定の場合の言い方）。
+この方法の値（下の表の「BH の `q`」は既定の場合の言い方）。別リポジトリとの契約の書き出し（`dataset_export_differential` の
+`q_value`・根拠バンドルの `features.tsv`）は方法によらず BH の q を書く（§11.4。BH でなければ同じ母集団で p から計算し直す）。
 
 **行列（`matrix_id`）**: 渡せばその行列（その前処理・群・除外）で比べる。**省くと、そのハンドルで `dataset_preprocess` が
 最後に作った行列**（`group_levels` / `group_factors` を渡したときは、群がそれと同じ行列だけ）を使い、無ければ既定の前処理で
@@ -407,7 +408,7 @@ test が高い）。
 | `points[].feature` | 特徴量名（`differential` の `feature`） |
 | `points[].log2fc` | log2 fold change（x軸）。**正=群Bで高い（上昇）** |
 | `points[].neg_log10_p` | `-log10(p)`（y軸）。`q` ではなく **`p`**。p が 0.0（アンダーフロー。検定はできている）は最小の正の float で `-log10` を取る（約 307.65。検定不能の扱いにしない。結果の p は 0 のまま） |
-| `points[].sig` | `up` / `down` / `ns`。`dataset_compare` の結果は、書き出しの `significant` と同じ規則（§11.4。判定が `changed` で、q と \|log2fc\| が閾値を満たす）の行だけが符号で `up` / `down`、ほかは `ns`——判定できない（`inconclusive`）行は q が小さくても `ns` |
+| `points[].sig` | `up` / `down` / `ns`。`dataset_compare` の結果は、書き出しの `significant` と同じ規則（§11.4。判定が `changed` で、q と \|log2fc\| が閾値を満たす）の行だけが符号で `up` / `down`、ほかは `ns`——判定できない（`inconclusive`）行は q が小さくても `ns`。q と判定は比較の補正（`p_adjust`）のままで、比較が `bonferroni` / `holm` / `none` なら契約の書き出しの BH の q とは違う |
 | `thresholds` | 判定に使った `q` と `log2fc` のしきい値 |
 | `comparison` | `group_a` / `group_b` / `n_a` / `n_b`（プール解決後の実n） |
 | `render_hints.guides.x` | 縦破線の位置（`±log2fc_threshold`） |
@@ -456,7 +457,8 @@ mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`（`CONTRAC
 | メタ行 | 意味 |
 |---|---|
 | `# test = … effect_size_definition = … ci_level = …` | 実際の検定名（`moderated_t` など）・効果量の定義の名前・CI の水準 |
-| `# verdict_q_threshold = … equivalence_fc = … bh_population = … bh_n = … q_interpretation = … p_adjust_method = …` | 判定の規則と多重比較の補正の母集団（キーの名前は BH のときのまま。`bh_n` は選んだ対比の大きさ）。`p_adjust_method` は `q_value` を作った多重比較の補正（`bh` / `bonferroni` / `holm` / `none`。比較の記録に無ければ `bh`）。`q_interpretation` はその補正での `q_value` の読み方: `discovery_fdr`（BH・`matrix` / `annotated`）/ `fwer`（`bonferroni` / `holm` の調整 p）/ `unadjusted`（`none`。p そのもの）/ `reproduction_only`（母集団が `reported`。方法によらない） |
+| `# verdict_q_threshold = … equivalence_fc = … bh_population = … bh_n = … q_interpretation = … p_adjust_method = …` | 判定の規則と BH の母集団（比較の補正の母集団と同じ。`bh_n` は選んだ対比の大きさ）。`p_adjust_method` は**比較の**多重比較の補正（`bh` / `bonferroni` / `holm` / `none`。比較の記録に無ければ `bh`）で、`q_value` 列の方法ではない（次の行）。`q_interpretation` は `q_value` の読み方: `discovery_fdr`（BH・`matrix` / `annotated`）/ `reproduction_only`（母集団が `reported`） |
+| `# q_value_method = bh  q_value_source = …  q_value_note = …` | `q_value` 列は契約どおりいつも Benjamini–Hochberg の q（FDR）。`q_value_source` は `comparison`（比較が BH で、その q をそのまま書いた）か `recomputed_from_p_value`（比較が `bonferroni` / `holm` / `none` で、同じ母集団〔`bh_population` / `bh_n`〕の p から BH の q を計算し直した）。計算し直したときだけ `q_value_note`（比較の方法と、`significant` もこの q で判定を読み直したこと。ASCII） |
 | `# unit = … n_units_a = … n_units_b = …` | 比較の単位。`subject`（全試料が被験者 ID を持ち技術反復を 1 個体にまとめた）・`injection`（被験者 ID が無い・まとめを切った。単位は注入）・`mixed`（混在）。`n_units_*` は比較に入った単位の数（`n_a` / `n_b` は注入の数のまま） |
 | `# mean_definition = …` | `mean_a` / `mean_b` は「個体ごとの前処理後の線形値の算術平均」 |
 | `# matrix_id = … rule_hash = … contrast_id = …` | どの行列・どの規則・どの対比を書いたか（2 群比較の結果の対比は 1 つ） |
@@ -466,7 +468,8 @@ mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`（`CONTRAC
 | `# exploratory = true  exploratory_reason = …` | 探索専用のデータセット（未完了の実行を `allow_incomplete=True` で開いた・検証を通っていない pipeline の単位）から書いたときだけ。理由は 1 行（`=` とタブは含まない） |
 | `# n_excluded_after_test = …  excluded_after_test_note = …` | `exclude_feature_ids` を渡したときだけ。検定の後に落とした行の数（q は計算し直さず、多重比較の母集団は検定のときのまま）。`n_features_total` は落とした行も数え、`n_with_inchikey + n_unannotated + n_excluded_after_test` が `n_features_total`（注記にも書く） |
 
-`p_value` / `q_value` はエンジンの p と補正した q（既定は BH。方法は `p_adjust_method`、`q_value` の読みは `q_interpretation`）、`log2fc` は正なら `group_b`（比較）が高い。**エンジンの結果の `significant` は、`q ≤ q_threshold` かつ `|log2fc| ≥ log2fc_threshold`（`dataset_compare` の `log2fc_threshold`）に加えて、判定 `verdict` が `changed` の行だけ `true`**（`significant_rule`）。検出の割合が足りず量を判定できない行（`inconclusive` / `quantity_not_judgeable`）や BH の母集団の外の行は、q が小さく |log2fc| が大きくても `false`——gap-fill の値で動いた量を主張にしない。`true` の行の数は、その対比の `dataset_compare` の `large_changes` と同じ（InChIKey の無い行は書き出さないので、書き出しではその分少ないことがある）。同じ印を根拠バンドルの `features.tsv` の `significant`・volcano の `up` / `down`（§11.2.1）が使う。**`verdict` の 3 値そのものは TSV の列には出ない**（契約の列は据え置き）ので、判定は `dataset_compare` の要約・`top` か、根拠バンドル（`reanalysis.md` §10）で読む。
+`p_value` / `q_value` はエンジンの p と **BH の q**（契約の意味。比較が別の補正なら同じ母集団で p から計算し直す。`q_value_method` /
+`q_value_source`。比較の補正の方法は `p_adjust_method`）、`log2fc` は正なら `group_b`（比較）が高い。**エンジンの結果の `significant` は、`q ≤ q_threshold` かつ `|log2fc| ≥ log2fc_threshold`（`dataset_compare` の `log2fc_threshold`）に加えて、判定 `verdict` が `changed` の行だけ `true`**（`significant_rule`）。検出の割合が足りず量を判定できない行（`inconclusive` / `quantity_not_judgeable`）や BH の母集団の外の行は、q が小さく |log2fc| が大きくても `false`——gap-fill の値で動いた量を主張にしない。`verdict` は `q_value` の BH の q で読んだ判定で、比較が BH なら比較の判定そのもの、別の補正なら同じ規則（`compare._verdict`）で BH の q から読み直したもの（戻り値の `notes` にも書く）。比較が BH なら `true` の行の数は、その対比の `dataset_compare` の `large_changes` と同じ（InChIKey の無い行は書き出さないので、書き出しではその分少ないことがある。比較が `holm` / `bonferroni` / `none` なら BH で数え直すので違いうる）。同じ印を根拠バンドルの `features.tsv` の `significant`・volcano の `up` / `down`（§11.2.1）が使う（volcano は比較の補正の q のまま読むので、比較が BH でなければ書き出し・根拠バンドルの BH の印と件数が違いうる）。**`verdict` の 3 値そのものは TSV の列には出ない**（契約の列は据え置き）ので、判定は `dataset_compare` の要約・`top` か、根拠バンドル（`reanalysis.md` §10）で読む。
 
 **交絡を越えた比較の印**: `allow_confounded=true`（既定）で完全交絡（全対比をまとめた `confounding.batch_status = complete`
 か、書き出す対比の `confounding.by_contrast[対比].confounded = true`）を越えて走ったエンジンの比較は、
@@ -477,10 +480,14 @@ mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`（`CONTRAC
 **交互作用の対比**（2×2 の 2 因子の設計の `interaction_*`）は名指しすれば書き出せる。`group_a` は基準の 2 セル
 （`a0:b1 + a1:b0`）、`group_b` は比較の 2 セル（`a1:b1 + a0:b0`）、`log2fc` は差の差（正なら `a1` の効果が `b1` で大きい）、
 `mean_a` / `mean_b` は空欄。根拠バンドルと volcano は 2 群の対比だけ（交互作用は `CONTRAST_NOT_TWO_GROUP`）。
+契約の版（`contract_version = 1`）と `log2fc_sign` の行は 2 群のときと同じなので、交互作用だと分かる印はメタ行
+`contrast_kind = interaction` と `interaction_definition`（戻り値の `contrast_kind` にも）だけ。受け手はこの印を見て、
+`log2fc` を 2 群の比、`group_a` / `group_b` を 2 つの群として読まない（2 群の対比の書き出しには `contrast_kind` の行が無い）。
 
 **探索専用のデータセットも断らない**: 未完了の実行・検証を通っていない pipeline の単位から開いたデータセット
 （`exploratory_only`）でも書き出し、メタ行 `# exploratory = true` と `exploratory_reason` を `msi_note` の後に足す（戻り値の
 `exploratory` にも）。欠けた検体が「その群には無い」ように見えうるので、受け手はこの印を見て結論の重みを下げる。
+根拠バンドルでは manifest の最上位の `exploratory` と `comparison.exploratory` に同じ印が載る（`reanalysis.md` §10）。
 
 **検定の後に行を落とす**（`exclude_feature_ids`）: 渡した特徴 ID の行を書き出さない。q は計算し直さない（多重比較の母集団は
 検定のときのまま。母集団が `annotated` / `reported` なら、落とした行はもともと母集団の外のこともある）ので、落とした数と注記を

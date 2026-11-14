@@ -143,11 +143,13 @@ def stats_meta_lines(result: dict) -> list[str]:
     `mean_a` / `mean_b` は個体（単位）ごとの前処理後の線形値の算術平均（`mean_definition`）、
     `n_a` / `n_b` は注入の数のまま、`n_units_a` / `n_units_b` が比較に入った単位の数。
     `contrast_id` は `matrix_id` の行の末尾（どの対比を書いたかを残す）。`bh_n` は BH の母集団が空
-    （対比の n が無い）なら 0。`p_adjust_method` は `q_value` を作った多重比較の補正（`bh` / `bonferroni` /
-    `holm` / `none`。宣言の無い結果は `bh`）。`bh_population` / `bh_n` はその補正の母集団（名前は BH のときの
-    まま）、`q_interpretation` は補正の方法に合わせた `q_value` の読み方（`as_two_group` が決める:
-    `discovery_fdr` / `reproduction_only` / `fwer` / `unadjusted`）。`significant_rule` は 15 列目
-    `significant` の規則（R16。`row_significant`）。
+    （対比の n が無い）なら 0。`p_adjust_method` は**比較の**多重比較の補正（`bh` / `bonferroni` / `holm` /
+    `none`。宣言の無い結果は `bh`）。`q_value` 列は契約どおりいつも Benjamini–Hochberg の q で（`as_two_group(...,
+    contract_q=True)`。比較が別の補正なら同じ母集団で p から計算し直す）、それを `q_value_method = bh` と
+    `q_value_source`（`comparison` / `recomputed_from_p_value`）の行に書く（計算し直したときは `q_value_note` も）。
+    `bh_population` / `bh_n` はその BH の母集団（比較の補正の母集団と同じ）、`q_interpretation` は `q_value` の
+    読み方（`discovery_fdr`、母集団が `reported` なら `reproduction_only`）。`significant_rule` は 15 列目
+    `significant` の規則（R16。`row_significant`。`verdict` は `q_value` の q で読んだ判定）。
     交互作用（`contrast_kind == "interaction"`）は `mean_definition` を「定義しない（空欄）」にし、末尾に
     `contrast_kind` / `interaction_factors` / `interaction_levels` / `interaction_definition` の 2 行を足す
     （2 群の対比の行数は変えない）。`interaction_levels` は因子ごとに `<因子> reference <a0> test <a1>`
@@ -170,6 +172,7 @@ def stats_meta_lines(result: dict) -> list[str]:
         f"# matrix_id = {result['matrix_id']}\trule_hash = {result['rule_hash']}"
         f"\tcontrast_id = {result['contrast_id']}",
         f"# significant_rule = {SIGNIFICANT_RULE}",
+        q_value_line(result),
     ]
     if interaction:
         info = result["interaction"]
@@ -182,6 +185,26 @@ def stats_meta_lines(result: dict) -> list[str]:
             f"# interaction_definition = {info['definition']}",
         ]
     return lines
+
+
+#: `q_value_note`（比較の補正が BH でなく、契約の BH の q を p から計算し直したときだけ）。`=` とタブを含めない。
+Q_VALUE_RECOMPUTED_NOTE = (
+    "the comparison adjusted p with {method}; q_value is the Benjamini-Hochberg q recomputed from p_value"
+    " over the same population (bh_population and bh_n), and significant reads the verdict with this q")
+
+
+def q_value_line(result: dict) -> str:
+    """`q_value` 列を作った補正の行。`q_value_method` は `q_value` の方法（契約の書き出しはいつも `bh`）、
+    `q_value_source` は比較の q をそのまま書いた（`comparison`）か p から計算し直した
+    （`recomputed_from_p_value`。`q_value_note` に比較の方法を書く）か。"""
+    stats = result["statistics"]
+    method = stats.get("p_adjust_method") or "bh"
+    q_method = result.get("q_value_method") or method
+    source = result.get("q_value_source") or "comparison"
+    line = f"# q_value_method = {q_method}\tq_value_source = {source}"
+    if source != "comparison":
+        line += f"\tq_value_note = {Q_VALUE_RECOMPUTED_NOTE.format(method=method)}"
+    return line
 
 
 #: 交互作用の対比の `mean_definition`（`mean_a` / `mean_b` は空欄）。

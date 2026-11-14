@@ -215,7 +215,8 @@ spec の `rt_offset_min`（任意）は `normalize_claim_spec` が形を検め�
 
 ## dataset_sample_peaks
 
-前提: データセット（無ければ `missing_state`）。状態変更: なし。解析フォルダ（`.arf`）から読んだ
+前提: データセット（無ければ `missing_state`）。状態変更: なし（`output_path` を渡せばそのファイルを書き、既存は置き換える。
+注釈は読み取り専用ではない）。解析フォルダ（`.arf`）から読んだ
 データセットだけ（`per_sample_rt` が無ければ `DATASET_BAD_REQUEST`）。`output_path` が無く行（特徴 × 試料）が
 1,000 を超えれば、先頭の特徴の行を特徴ごとにそろえて載せ `truncated` を立てる（断らない）。
 

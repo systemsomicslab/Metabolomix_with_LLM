@@ -137,8 +137,10 @@ spec v2 の比較（手順 15〜18。群が 1 つ・全群をまとめた表で�
 欠けた検体が「その群には無い」ようにしか見えない）は断らず、メタ行 `# exploratory = true` と理由（`exploratory_reason`）を足す。
 `dataset_compare` の結果（統計エンジン）は、対比を 1 つ選んで（複数あるときは `contrast_id` か `result_id#contrast_id`。`stats_results.split_result_ref`。
 省くと `as_two_group` が `CONTRAST_REQUIRED`〔`ambiguous` と選択肢〕を送出し、ツールが `contrast_envelope` で `needs_input` にする）手順 4 の `as_two_group`（`allow_interaction=True`。
-2×2 の交互作用の対比も差の差として読む）で 2 群の形に読み替えてから書き、メタ行に `stats_meta_lines`（検定・判定規則・BH の母集団・
-補正の方法 `p_adjust_method`・単位・`matrix_id`、交互作用ならその定義など）が足される。`exclude_feature_ids` の行は検定の後に落とし
+2×2 の交互作用の対比も差の差として読む。`contract_q=True`: `q_value` は契約の BH の q で、比較が `bonferroni` / `holm` / `none` なら
+手順 6 の `contract_bh_rows` が同じ母集団で p から BH の q を計算し直し、判定と `significant` もその q で読み直す）で 2 群の形に読み替えてから書き、
+メタ行に `stats_meta_lines`（検定・判定規則・BH の母集団・比較の補正の方法 `p_adjust_method`・`q_value_method = bh` と `q_value_source`・
+単位・`matrix_id`、交互作用ならその定義など）が足される。`exclude_feature_ids` の行は検定の後に落とし
 （q は計算し直さない）、件数をメタ行 `n_excluded_after_test` に書く。前処理条件は登録した行列の設定から取る。出力は一時ファイルへ書いてから
 置換するので、途中で落ちた出力が「新しい完成品」として残らない。
 
@@ -147,14 +149,17 @@ spec v2 の比較（手順 15〜18。群が 1 つ・全群をまとめた表で�
 3. │  ├─ metabolomix/analysis/result_state.py  assert_current()
 4. │  ├─ metabolomix/analysis/dataset_export.py  exploratory_reason()
 5. │  ├─ metabolomix/analysis/stats_results.py  as_two_group()（`dataset_compare` の結果の対比 1 つを 2 群の形に読み替える。各行の `significant`（判定が changed のときだけ）と、`allow_confounded` で完全交絡を越えた比較の `provenance.comparison` をここで付ける）
-6. │  ├─ metabolomix/analysis/export_contract.py  row_significant()（行の印を読む。印の無い行は `is_significant()` かつ判定が changed）
-7. │  ├─ metabolomix/analysis/dataset_export.py  _meta_lines()
-8. │  │  ├─ metabolomix/analysis/dataset_export.py  _engine_preprocess()
-9. │  │  ├─ metabolomix/analysis/export_contract.py  stats_meta_lines()
-10.│  │  └─ metabolomix/analysis/export_contract.py  build_meta()
-11.│  ├─ metabolomix/analysis/export_contract.py  format_row()
-12.│  └─ metabolomix/analysis/dataset_export.py  _atomic_write_text()
-13.└─ [CONTRAST_REQUIRED ほか] metabolomix/tools/_contrast_choice.py  contrast_envelope()
+6. │  │  └─ [比較の補正が BH でない] metabolomix/analysis/stats_results.py  contract_bh_rows()（比較の q が付いた行〔補正の母集団〕の p から BH の q、判定はその q で `compare._verdict` を読み直す）
+7. │  ├─ metabolomix/analysis/export_contract.py  row_significant()（行の印を読む。印の無い行は `is_significant()` かつ判定が changed）
+8. │  ├─ metabolomix/analysis/dataset_export.py  _meta_lines()
+9. │  │  ├─ metabolomix/analysis/dataset_export.py  _engine_preprocess()
+10.│  │  ├─ metabolomix/analysis/export_contract.py  stats_meta_lines()
+11.│  │  │  └─ metabolomix/analysis/export_contract.py  q_value_line()
+12.│  │  └─ metabolomix/analysis/export_contract.py  build_meta()
+13.│  ├─ metabolomix/analysis/export_contract.py  format_row()
+14.│  ├─ metabolomix/analysis/dataset_export.py  _atomic_write_text()
+15.│  └─ metabolomix/analysis/dataset_export.py  recomputed_q_note()（BH の q を計算し直したときの戻り値の `notes`）
+16.└─ [CONTRAST_REQUIRED ほか] metabolomix/tools/_contrast_choice.py  contrast_envelope()
 
 ## dataset_feature_search
 
@@ -243,22 +248,25 @@ result_id は計算のたびに発行される UUID なので入れず、統計�
 
 全特徴量と候補の根拠と、試料ごとの値と検出を新しいv3バンドルへ保存する。旧15列TSVは変更しない。
 `result_id` を省けば直近の差次的結果（`ds.last_differential`）。対比は書き出しと同じ選び方（省いて 2 群の対比が複数なら
-`needs_input`）。`manifest.json` の `comparison.correction` は記録の `p_adjust_method`（無ければ BH）。探索専用のデータセットも
-断らず、manifest の最上位に `exploratory`（印と理由）を足す。
+`needs_input`）。`features.tsv` の `q_value` と `significant` は書き出しと同じく契約の BH の q（`as_two_group(contract_q=True)`）で、
+`manifest.json` の `comparison.correction` はいつも `BH`。比較の補正が BH でなければ `comparison.p_adjust_method` と `q_value_source` を足す。
+探索専用のデータセットも断らず、manifest の最上位と `comparison` に `exploratory`（印と理由）を足す。
 
 1. metabolomix/tools/dataset_analysis_tools.py  dataset_export_evidence_bundle()
 2.    └─ metabolomix/tools/handle_tools.py  _alignment_files()（対話のセッションのとき。ハンドルはその `.arf2` / `.dcl`）
 3.    └─ metabolomix/analysis/evidence_export.py  export_dataset_evidence()
 4.       └─ metabolomix/analysis/dataset_export.py  exploratory_reason()
-5.       └─ metabolomix/analysis/evidence_export.py  comparison_of()
-6.       └─ metabolomix/analysis/evidence_export.py  _samples_table()
-7.       └─ metabolomix/analysis/evidence_export.py  _engine_intensity_rows()
-8.       └─ metabolomix/analysis/evidence_export.py  library_candidate()（SME の候補ごと。計算した理論 m/z は写さない）
-9.       └─ metabolomix/analysis/evidence_export.py  dataset_spectrum_links()
-10.         └─ metabolomix/analysis/evidence_export.py  _id_space_check()
-11.         └─ metabolomix/analysis/evidence_export.py  link_alignment_spectra()
-12.      └─ metabolomix/analysis/evidence_export.py  write_evidence_bundle()
-13.   └─ [CONTRAST_REQUIRED ほか] metabolomix/tools/_contrast_choice.py  contrast_envelope()
+5.       └─ metabolomix/analysis/stats_results.py  as_two_group()（`contract_q=True`。比較の補正が BH でなければ `contract_bh_rows()`）
+6.       └─ metabolomix/analysis/evidence_export.py  comparison_of()
+7.       └─ metabolomix/analysis/evidence_export.py  _samples_table()
+8.       └─ metabolomix/analysis/evidence_export.py  _engine_intensity_rows()
+9.       └─ metabolomix/analysis/evidence_export.py  library_candidate()（SME の候補ごと。計算した理論 m/z は写さない）
+10.      └─ metabolomix/analysis/evidence_export.py  dataset_spectrum_links()
+11.         └─ metabolomix/analysis/evidence_export.py  _id_space_check()
+12.         └─ metabolomix/analysis/evidence_export.py  link_alignment_spectra()
+13.      └─ metabolomix/analysis/evidence_export.py  write_evidence_bundle()
+14.      └─ metabolomix/analysis/dataset_export.py  recomputed_q_note()（BH の q を計算し直したときの戻り値の `notes`）
+15.   └─ [CONTRAST_REQUIRED ほか] metabolomix/tools/_contrast_choice.py  contrast_envelope()
 
 spectrum_links は同じアラインメントの `.dcl` に ID（SMF_ID == AlignmentID == `.dcl` の番号）で結び、
 m/z・RT は検証にだけ使う（`link_alignment_spectra()` が結ぶ）。

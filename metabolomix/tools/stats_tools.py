@@ -480,7 +480,9 @@ def dataset_compare(
         （reported_feature_ids の特徴だけ。reported なのに ID が無ければ DATASET_BAD_REQUEST。reported 以外で
         渡した ID は使わず、その旨を notes に書く）。
     p_adjust: 多重比較の補正 "bh"（既定。FDR）/ "bonferroni" / "holm"（FWER）/ "none"（補正なし）。
-        q 列はこの方法の値で、戻り値と記録に p_adjust_method として残る。
+        q 列はこの方法の値で、戻り値と記録に p_adjust_method として残る。別リポジトリとの契約の書き出し
+        （dataset_export_differential・dataset_export_evidence_bundle）の q_value は方法によらず BH の q
+        （BH でなければ同じ母集団で p から計算し直し、significant もその q で読む）。
     q_threshold / equivalence_fc: 判定の q の閾値（既定 0.05）と同等とみなす倍率（既定 1.2）。
     allow_confounded: 既定 true（群とバッチが完全交絡でも比較し、confounding と対比の confounded に印を
         付ける）。false を渡すと完全交絡（全体か、どれかの対比）で STATISTIC_CONFOUNDED にして止める。
