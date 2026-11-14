@@ -438,3 +438,79 @@ def test_remembered_objective_is_dropped_when_the_kind_changes_elsewhere(fresh_s
     assert session._assay_kind_objective is None
     session.remember_session_kind_objective("exp", "lipid")   # 種別がもう lipid でなければ覚えない
     assert session._assay_kind_objective is None
+
+
+# ---------- データセットが無いときも、別の解析フォルダの共有の目的を書き換えない（レビュー指摘 R14 の残り） ----------
+
+
+def test_record_before_load_leaves_another_folders_shared_objective_alone(tmp_path, fresh_state,
+                                                                          monkeypatch):
+    """データセットを開く前の記録（解析フォルダの無い呼び出し）も、共有の置き場所にある別の解析フォルダの
+    目的を書き換えない。まだどのフォルダのものでもない目的として別の名前で作り、次に開いたデータセットへ
+    結び付ける。元のフォルダは開き直しても自分の種別を読み戻す。"""
+    from tests.config_fixtures import use_config
+
+    shared = tmp_path / "shared"
+    use_config(monkeypatch, tmp_path, {"paths.reports_dir": shared})
+    pos_dir, neg_dir = _folder(tmp_path / "pos"), _folder(tmp_path / "neg")
+    pos = _load(directory=str(pos_dir))["dataset_handle"]
+    objective.record_objective("study", assay_kind="lipid", dataset_handle=pos)
+    owned = shared / "study.objective.md"
+    assert objective._same_dir(_meta(owned)["analysis_dir"], pos_dir)
+
+    # サーバの再起動の後、まだ何も開かずに同じ analysis_id へ記録する。
+    handle_tools.dataset_close(pos)
+    session_state.session = session_state.AnalysisSession()
+    out = objective.record_objective("study", assay_kind="metabolite", confirmed_objective="次の確定")
+    assert "objective を記録" in out, out
+    assert "別の解析フォルダ（pos）" in out and str(tmp_path) not in out
+    assert _meta(owned)["assay_kind"] == "lipid"                 # pos の目的は動かない
+    assert not _meta(owned).get("confirmed_objective")
+    unbound = shared / "study-2.objective.md"
+    meta = _meta(unbound)
+    assert meta["analysis_id"] == "study" and meta["assay_kind"] == "metabolite"
+    assert meta["confirmed_objective"] == "次の確定" and "analysis_dir" not in meta
+    # 開く前の続きの記録も、その結び付いていない目的へ（pos の目的ではない）。
+    more = objective.record_objective("study", add_subquestions=["追記の小問"])
+    assert "objective を更新: study-2.objective.md" in more, more
+    assert "追記の小問" not in owned.read_text(encoding="utf-8")
+
+    # 次に開いた neg が種別を引き継ぎ、その目的に neg の解析フォルダが付く。
+    first = _load(directory=str(neg_dir))
+    assert first["assay_kind"] == "metabolite"
+    assert any("引き継いだ" in note and "study-2.objective.md" in note and "残した" in note
+               for note in first.get("notes") or []), first
+    assert objective._same_dir(_meta(unbound)["analysis_dir"], neg_dir)
+    assert _meta(owned)["assay_kind"] == "lipid"
+
+    again_pos = _reopen(pos_dir)
+    assert again_pos["assay_kind"] == "lipid"
+    assert any("study.objective.md" in note for note in again_pos.get("notes") or []), again_pos
+    assert _reopen(neg_dir)["assay_kind"] == "metabolite"
+
+
+def test_numbered_objective_is_not_taken_for_its_file_name(tmp_path, fresh_state, monkeypatch):
+    """番号付きの名前（`study-2.objective.md`）の目的は analysis_id が study のもの。analysis_id "study-2" の
+    記録はそれを自分の目的とみなさず、上書きもしない。"""
+    from tests.config_fixtures import use_config
+
+    shared = tmp_path / "shared"
+    use_config(monkeypatch, tmp_path, {"paths.reports_dir": shared})
+    pos_dir = _folder(tmp_path / "pos")
+    pos = _load(directory=str(pos_dir))["dataset_handle"]
+    objective.record_objective("study", assay_kind="lipid", dataset_handle=pos)
+    handle_tools.dataset_close(pos)
+    session_state.session = session_state.AnalysisSession()
+    objective.record_objective("study", confirmed_objective="結び付いていない")
+    numbered = shared / "study-2.objective.md"
+    assert _meta(numbered)["analysis_id"] == "study"
+
+    # データセットの無い呼び出しも、解析フォルダのある呼び出しも、study-2 を別の目的として扱う。
+    out = objective.record_objective("study-2", confirmed_objective="別の研究")
+    assert "objective を記録" in out, out
+    assert _meta(numbered)["confirmed_objective"] == "結び付いていない"
+    assert _meta(shared / "study-2-2.objective.md")["analysis_id"] == "study-2"
+    other = _load(directory=str(_folder(tmp_path / "other")))["dataset_handle"]
+    out = objective.record_objective("study-2", assay_kind="metabolite", dataset_handle=other)
+    assert "objective を更新: study-2-2.objective.md" in out, out
+    assert _meta(numbered)["confirmed_objective"] == "結び付いていない"

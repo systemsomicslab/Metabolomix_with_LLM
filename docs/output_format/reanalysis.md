@@ -55,7 +55,8 @@
   `tool` / `running_s` / `next` と `required_tools: ["job_status"]`）。`job_status(job_id)` で仕事の終わりを
   待ってから、同じ呼び出しをし直す。クライアントの中継が 36〜60 秒ほどで打ち切った呼び出しが、仕事の後で
   黙って効くことはない（待ちきれなければ何もせずに返るため）。`dataset_close` も同じで、走っている仕事の
-  ハンドルは閉じずに `HANDLE_BUSY` を返す（仕事は止めない）。
+  ハンドルは閉じずに `HANDLE_BUSY` を返す（仕事は止めない）。2 つのハンドルを取る `dataset_merge_polarities` も
+  同じ封筒で、待つのは 2 本合わせて最長 25 秒（`details.dataset_handle` は空かなかったほう）。
 - **上限。** `lipidmix.local.toml` の `[server] max_dataset_handles`（既定 8。1 未満は 1）。`load_dataset` がハンドルを 1 本使う
   （前に読んだものは閉じずに残る）。超えると `DATASET_HANDLE_LIMIT` で止め、古いハンドルを
   黙って閉じない。寿命は明示の `dataset_close` か、サーバの終了まで。
@@ -96,7 +97,7 @@
 | 欄 | 意味 |
 |---|---|
 | `dataset_handle` | ハンドルの ID |
-| `assay_kind` | このハンドルの種別（`lipid` / `metabolite` / `unknown`）。ハンドルごとに持ち、解析フォルダ配下 `reports/` の目的ファイルに記録があれば読み戻す（`notes` に注記）。データセットを開く前に（`[paths] reports_dir` の目的へ）記録した種別は、次に直近になるハンドルへ引き継ぎ、その目的にこのハンドルの解析フォルダ（`analysis_dir`）を書く（開き直しても読み戻す。書けなかった・どの目的の種別か分からないときは `notes` が `record_objective(assay_kind=...)` で記録し直すよう言う。目的ファイルの種別と食い違えば `unknown`。`notes` に注記）。共有の `[paths] reports_dir` の目的は frontmatter の `analysis_dir` がこの解析フォルダのものだけを読む（同じ `analysis_id` を別のフォルダで記録しても、`record_objective` はその目的を書き換えず自分の解析フォルダ配下 `reports/` に作る）。`record_objective(assay_kind=...)` で確定・変更する |
+| `assay_kind` | このハンドルの種別（`lipid` / `metabolite` / `unknown`）。ハンドルごとに持ち、解析フォルダ配下 `reports/` の目的ファイルに記録があれば読み戻す（`notes` に注記）。データセットを開く前に（`[paths] reports_dir` の目的へ）記録した種別は、次に直近になるハンドルへ引き継ぎ、その目的にこのハンドルの解析フォルダ（`analysis_dir`）を書く（開き直しても読み戻す。書けなかった・どの目的の種別か分からないときは `notes` が `record_objective(assay_kind=...)` で記録し直すよう言う。目的ファイルの種別と食い違えば `unknown`。`notes` に注記）。共有の `[paths] reports_dir` の目的は frontmatter の `analysis_dir` がこの解析フォルダのものだけを読む（同じ `analysis_id` を別のフォルダで記録しても、`record_objective` はその目的を書き換えず自分の解析フォルダ配下 `reports/` に作る。データセットを開く前の記録も、どれかの解析フォルダに結び付いた目的は書き換えず、別の名前（`<analysis_id>-2.objective.md` …）でまだ結び付いていない目的を作り、次に引き継いだハンドルの解析フォルダを書く）。`record_objective(assay_kind=...)` で確定・変更する |
 | `adapter` | 読んだアダプタ。`msdial_folder`（解析フォルダの `.arf` / `.arf2` を直接）/ `mztab`（mzTab-M）。`job_path` / `pipeline_path` の既定は `msdial_folder`（`source="mztab"` で `mztab`） |
 | `polarity` / `polarity_source` | データセットの極性と出所（`job_declared` / `adduct_majority` / `arf2_ion_mode` / `unknown`）。`dataset_feature_search` の目標照合と同じ決め方 |
 | `n_features` / `n_samples` | 特徴数・試料数 |

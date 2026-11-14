@@ -182,6 +182,7 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 "running_s", "next"}, "required_tools": ["job_status"], …}}` を返す（`job_id` 以下は長い仕事が持っているときだけ）。
 `job_status(job_id)` で仕事の終わりを待ってから、**同じ呼び出しをし直す**。待ちきれなかった呼び出しが後から黙って
 効くことはない。`dataset_close` も同じで、仕事が走っているハンドルは閉じない（`reanalysis.md` の「並行と直列」）。
+2 つのハンドルを取る `dataset_merge_polarities` も同じ封筒で、待つのは 2 本**合わせて**最長 25 秒（`details.dataset_handle` は空かなかったほう）。
 
 ### 判定 3 値と「有意でない ≠ 変わっていない」
 

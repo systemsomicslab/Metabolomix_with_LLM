@@ -13,10 +13,12 @@ FastMCP は同期関数のツールをイベントループのスレッドでそ
   触らない。ロックを待つ間にそのハンドルが閉じられたら、ツールを呼ばずに `missing_state`
   を返す。直近のハンドルが無ければ今までどおりイベントループのスレッドで同期に呼ぶ。
 - ロックは最長 `HANDLE_LOCK_WAIT`（25 秒）だけ待つ。空かなければツールを呼ばずに `HANDLE_BUSY`
-  （`mcp_errors.handle_busy`。ロックを持つ長い仕事があればその `job_id` と道具）を返す。デスクトップアプリの
-  中継は 36〜60 秒ほどで呼び出しを打ち切るが、サーバ側の待ちは止まらない（`anyio.to_thread.run_sync` は
-  スレッドを見捨てない）——際限なく待つと、打ち切られた呼び出しが仕事の後でロックを取って黙って効き、
-  待つ呼び出しがワーカースレッドを塞ぐ。待ちに上限を置き、待ちきれなければ何もせずに返す。
+  （`mcp_errors.handle_busy`。ロックを持つ長い仕事があればその `job_id` と道具）を返す。2 つのハンドルの
+  ロックを自分で取るツール（`dataset_merge_polarities`）も `acquire_all` で同じ上限（全部で 25 秒）と
+  封筒を使う。デスクトップアプリの中継は 36〜60 秒ほどで呼び出しを打ち切るが、サーバ側の待ちは
+  止まらない（`anyio.to_thread.run_sync` はスレッドを見捨てない）——際限なく待つと、打ち切られた
+  呼び出しが仕事の後でロックを取って黙って効き、待つ呼び出しがワーカースレッドを塞ぐ。待ちに上限を
+  置き、待ちきれなければ何もせずに返す。
 - `SESSION_READERS`（`dataset_handle` を持たないが `session.dataset` / `session.library` を
   読むツール）も、渡さない呼び出しと同じ道を通す。イベントループでロックを取らずに読むと、
   ワーカーで動く同じデータセットへの呼び出しが行列を書き換えたり、`library_load` が
@@ -50,8 +52,8 @@ from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_errors import handle_busy, missing_state, mztab_error
 from metabolomix.core.serialization import json_payload
 
-__all__ = ["ALWAYS_THREADED", "HANDLE_LOCK_WAIT", "LONG_RUNNING", "SESSION_READERS", "install",
-           "queued_behind"]
+__all__ = ["ALWAYS_THREADED", "HANDLE_LOCK_WAIT", "LONG_RUNNING", "SESSION_READERS", "acquire_all",
+           "install", "queued_behind"]
 
 #: ハンドルのロックを待つ秒数（超えたらツールを呼ばずに `HANDLE_BUSY`）。デスクトップアプリの中継が
 #: 呼び出しを打ち切る 36〜60 秒ほどより短く（`pending_loads.MAX_WAIT_SECONDS` と同じ考え）。長い仕事の
@@ -68,7 +70,7 @@ ALWAYS_THREADED = frozenset({
     "load_dataset",
     "dataset_load_status",
     "job_status",  # 受付簿のロックを取って読み、最長 `wait_seconds`（30 秒まで）待つ
-    "dataset_merge_polarities",  # 2 つのハンドルのロックを自分で取る（最大 LOCK_TIMEOUT 待つ）
+    "dataset_merge_polarities",  # 2 つのハンドルのロックを自分で取る（`acquire_all`。全部で最長 HANDLE_LOCK_WAIT）
     # raw ごとに取得時刻の見出しを開く（.wiff の OLE・Thermo の見出し・Bruker の sqlite・mzML）。
     # 数百のファイルやネットワークの共有では数十秒かかりうる。どちらもセッションに触れない。
     "list_data_files",
@@ -107,6 +109,27 @@ def _acquire(handle, *, job: bool) -> str | None:
     if handle.lock.acquire(timeout=HANDLE_LOCK_WAIT):
         return None
     return _busy(handle, time.monotonic() - started)
+
+
+def acquire_all(handle_list) -> tuple[list, str | None]:
+    """自分でロックを取るツール（`dataset_merge_polarities`。引数に `dataset_handle` を持たず、2 つのハンドルの
+    ロックを取る）の待ち。渡した順にロックを取り、待つのは**全部で**最長 `HANDLE_LOCK_WAIT` 秒（1 本ごとでは
+    ない——1 本ごとに待つと中継の打ち切りを超え、打ち切られた呼び出しが後から効く）。
+
+    取れれば (取ったハンドル, None)。放すのは呼び出し側（逆順に `lock.release()`）。待ちきれなければ、取った
+    ロックを放して ([], `HANDLE_BUSY`)（空かなかったハンドルを持つ長い仕事があれば名指す。`_busy`）。
+    """
+    started = time.monotonic()
+    deadline = started + HANDLE_LOCK_WAIT
+    acquired: list = []
+    for handle in handle_list:
+        if handle.lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            acquired.append(handle)
+            continue
+        for held in reversed(acquired):
+            held.lock.release()
+        return [], _busy(handle, time.monotonic() - started)
+    return acquired, None
 
 
 def _release(handle, *, job: bool) -> None:

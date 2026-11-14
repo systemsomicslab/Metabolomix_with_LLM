@@ -195,29 +195,79 @@ def test_read_mapping_accepts_mode_aliases(tmp_path):
 
 
 def test_lock_timeout_is_busy(tmp_path, monkeypatch):
+    """ロックを待ちきれなければ、ほかのツールと同じ `HANDLE_BUSY`（何もせず、新しいハンドルも作らない）。
+    ロックを持つのが長い道具の仕事なら、その受付番号と道具を名指して `job_status` へ案内する。"""
     import threading
+    import time
+
+    from metabolomix.core import handle_dispatch
     _point(tmp_path, monkeypatch)
     pos, neg = _pair(tmp_path)
     hp, hn = _open(pos, "positive"), _open(neg, "negative")
-    monkeypatch.setattr(qm, "LOCK_TIMEOUT", 0.2)
+    monkeypatch.setattr(handle_dispatch, "HANDLE_LOCK_WAIT", 0.2)
     held, release = threading.Event(), threading.Event()
     blocker = handles.registry.get(max(hp, hn))
 
     def hold():
         with blocker.lock:
+            blocker.running_job = {"job_id": "job_x", "tool": "pathway_project",
+                                   "since": time.monotonic()}
             held.set()
             release.wait(5)
+            blocker.running_job = None
     t = threading.Thread(target=hold)
     t.start()
     held.wait(5)
+    n_before = len(handles.registry.list())
     try:
         out = json.loads(_tool()(hp, hn))
     finally:
         release.set()
         t.join()
-    assert out["error"]["code"] == "QUANT_HANDLE_BUSY"
+    error = out["error"]
+    assert error["code"] == "HANDLE_BUSY"
+    assert error["details"]["dataset_handle"] == blocker.handle_id
+    assert error["details"]["job_id"] == "job_x" and error["details"]["tool"] == "pathway_project"
+    assert error["required_tools"] == ["job_status"] and "job_x" in error["details"]["next"]
+    assert len(handles.registry.list()) == n_before          # 何も登録していない
     ok = json.loads(_tool()(hp, hn))  # 取ったロックは戻っている
     assert ok["status"] == "merged"
+
+
+class _SlowLock:
+    """取るのに `delay` 秒かかるロック（取れたか・渡された待ちの上限を覚える）。"""
+
+    def __init__(self, delay: float, ok: bool):
+        self.delay, self.ok, self.timeouts, self.released = delay, ok, [], 0
+
+    def acquire(self, blocking=True, timeout=-1):
+        self.timeouts.append(timeout)
+        import time
+        time.sleep(self.delay)
+        return self.ok
+
+    def release(self):
+        self.released += 1
+
+
+def test_lock_wait_is_one_deadline_across_both_handles(tmp_path, monkeypatch):
+    """2 つのハンドルのロックの待ちは合わせて最長 `HANDLE_LOCK_WAIT`（1 本ごとではない）。1 本目に時間を
+    使ったら、2 本目はその残りしか待たない。待ちきれなければ取った 1 本目も放して何もしない。"""
+    from metabolomix.core import handle_dispatch
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    hp, hn = _open(pos, "positive"), _open(neg, "negative")
+    monkeypatch.setattr(handle_dispatch, "HANDLE_LOCK_WAIT", 1.0)
+    first, second = sorted((handles.registry.get(hp), handles.registry.get(hn)),
+                           key=lambda h: h.handle_id)
+    first.lock, second.lock = _SlowLock(0.4, True), _SlowLock(0.0, False)
+    out = json.loads(_tool()(hp, hn))
+    assert out["error"]["code"] == "HANDLE_BUSY"
+    assert out["error"]["details"]["dataset_handle"] == second.handle_id
+    assert "job_id" not in out["error"]["details"]       # 長い仕事の持ち物ではない
+    assert first.lock.timeouts == [pytest.approx(1.0, abs=0.05)]
+    assert 0 <= second.lock.timeouts[0] <= 0.65           # 残り（1.0 - 0.4）だけ。1 本ごとの 1.0 ではない
+    assert first.lock.released == 1 and second.lock.released == 0
 
 
 def test_merge_by_exact_name(tmp_path, monkeypatch):

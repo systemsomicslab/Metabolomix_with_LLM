@@ -279,14 +279,19 @@ def write_objective(
     meta_fields: dict,
     sub_questions: list[str],
     evidence: list[str] | None = None,
+    slug: str | None = None,
 ) -> Path:
-    """objective レコードを <directory>/<analysis_id>.objective.md として書き出す。"""
+    """objective レコードを <directory>/<analysis_id>.objective.md として書き出す。
+
+    `slug` を渡すとそのファイル名（`<slug>.md`）で書く（同じ名前の目的が別の解析フォルダのものなので、
+    番号付きの名前で作るとき。frontmatter の `analysis_id` はいつも `analysis_id`）。
+    """
     meta = {"type": "objective", "analysis_id": analysis_id}
     meta.update(meta_fields)
     meta.setdefault("status", "active")
     meta["confirmed"] = bool(meta.get("confirmed_objective"))
     body = build_objective_body(meta.get("confirmed_objective", ""), sub_questions, evidence)
-    return write_note(directory, objective_slug(analysis_id), meta, body)
+    return write_note(directory, slug or objective_slug(analysis_id), meta, body)
 
 
 def update_objective_meta(path: str | Path, updates: dict) -> Path:
