@@ -427,15 +427,20 @@ def _identity(candidates, annotation, *, inchikey_block: str | None = None,
     識別子を借りて一致してしまう（spec §2）。
 
     ``lipid_species`` を渡すと（種の目標）、識別子は InChIKey の先頭ブロックではなく
-    候補自身の ``chemical_name``（SML なら ``name``）を種のレベルに読んだもの。読めない
+    候補自身の ``chemical_name``（SML なら ``name``）を種のレベルに読んだもの。読み方は MS/MS の
+    合否（ライブラリの記録の種）と同じ ``msms_rules.name_lipid_species``（名前 → 注記を外した名前。
+    `PE 36:2;O (oxPE)` は `PE 36:2;O`。同位体の標識のある内部標準の名前は読まない）。読めない
     名前は InChIKey の無い候補と同じく評価できないものとして飛ばす。
     """
     if (inchikey_block is None) == (lipid_species is None):
         raise ValueError("inchikey_block と lipid_species のどちらか一方を渡す")
     if lipid_species is not None:
-        from metabolomix.msdial.lipid_identity import lipid_species_of
+        from metabolomix.analysis.msms_rules import name_lipid_species
 
-        wanted, key_of, name_key = lipid_species, lipid_species_of, "chemical_name"
+        def key_of(name):
+            return name_lipid_species(name)[0]
+
+        wanted, name_key = lipid_species, "chemical_name"
     else:
         wanted, key_of, name_key = inchikey_block, _key_block, "inchikey"
     parsed = parse_adduct(adduct)

@@ -838,3 +838,30 @@ def test_rt_offset_min_is_noted_for_window_search_and_refused_when_not_a_number(
                     _search(feature_ids=["f1"], rt_offset_min=bad)):
             assert out["error"]["code"] == "DATASET_BAD_REQUEST"
             assert out["error"]["details"]["field"] == "rt_offset_min"
+
+
+def test_rt_offset_min_without_any_rt_target_is_dropped_with_a_note():
+    """どの目標にも rt_min が無ければ RT の窓が無く効かない。rule に出さず（効いたと読ませない）、notes に書く。
+    rule_hash は渡さないときと同じ（最終検証 F2。dataset_claim_evidence の spec の rt_offset_min と同じ扱い）。"""
+    _load_ds()
+    no_rt = _target(rt_min=None)
+    plain = _search(targets=[no_rt], include_statistics=False)
+    out = _search(targets=[no_rt], rt_offset_min=0.5, include_statistics=False)
+    assert "error" not in out
+    assert "rt_offset_min" not in out["rule"]
+    assert "rt_offset_min" not in out["rule"]["targets"][0]
+    assert out["rule"]["rule_hash"] == plain["rule"]["rule_hash"]
+    assert out["targets"] == plain["targets"]
+    [note] = [n for n in out["notes"] if "rt_offset_min" in n]
+    assert "rt_min が無い" in note and "rule_hash" in note
+
+
+def test_rt_offset_min_names_the_targets_it_did_not_apply_to():
+    _load_ds()
+    out = _search(targets=[_target(rt_min=1.0), _target(target_id="c2", rt_min=None)],
+                  rt_offset_min=0.5, include_statistics=False)
+    assert out["rule"]["rt_offset_min"] == 0.5
+    by_id = {t["target_id"]: t for t in out["rule"]["targets"]}
+    assert by_id["c1"]["rt_offset_min"] == 0.5 and "rt_offset_min" not in by_id["c2"]
+    [note] = [n for n in out["notes"] if "rt_offset_min" in n]
+    assert "c2" in note and "c1" not in note

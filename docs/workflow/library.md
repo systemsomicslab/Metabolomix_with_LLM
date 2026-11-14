@@ -137,7 +137,7 @@ m/z 500 を超えたら同じ ppm に広げる（`query.mz_window`）。
 33. │  └─ [失敗したとき] metabolomix/library/tools.py  _clear_last_match()
 34. │  └─ [spot_id の照合で注釈があるとき] metabolomix/library/matching.py  msdial_agreement()
 35. │     └─ metabolomix/library/matching.py  _same_compound()
-36. │        └─ metabolomix/analysis/msms_rules.py  record_lipid_species()
+36. │        └─ metabolomix/analysis/msms_rules.py  record_lipid_species()（MS-DIAL の注釈の名前は `name_lipid_species()`）
 37. └─ metabolomix/library/record.py  inchikey_standard()
 38. └─ [detail=true] metabolomix/analysis/spectral_match.py  fragment_matches_excluding_precursor()
 39. └─ metabolomix/arf2/reader.py  format_spots_as_table()

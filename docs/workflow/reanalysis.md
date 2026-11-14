@@ -148,10 +148,10 @@ ols でない検定の共変量）は `normalize_spec(spec, notes=...)` が捨�
 
 1. metabolomix/tools/reanalysis_tools.py  dataset_homolog_check()
 2. ├─ metabolomix/analysis/homolog.py  normalize_spec()
-3. ├─ metabolomix/analysis/homolog.py  members_from_names()
+3. ├─ metabolomix/analysis/homolog.py  members_from_names()（`auto.adduct` は `msdial/adducts.py` `same_adduct()` で組成で比べる）
 4. │  └─ metabolomix/analysis/homolog.py  species_of()
 5. │     └─ metabolomix/msdial/lipid_identity.py  normalize_lipid_name()
-6. ├─ metabolomix/analysis/homolog.py  check()
+6. ├─ metabolomix/analysis/homolog.py  check()（比べた隣どうしの対が 0 なら `not_evaluable`。ツールが `notes` に理由を書く）
 7. └─ metabolomix/analysis/homolog.py  rule_hash()
 
 ## dataset_feature_relations

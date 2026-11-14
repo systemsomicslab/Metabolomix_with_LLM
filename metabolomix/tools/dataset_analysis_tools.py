@@ -485,8 +485,10 @@ def dataset_feature_search(
         読まずに `notes` に書く（誤りにしない）。
 
     rt_offset_min: 目標照合の RT の窓の中心のずれ（分、任意）。中心を `rt_min + rt_offset_min` にする
-        （幅 `rt_tol_min` と `candidates.delta_rt` 列（RT − rt_min）は変えない）。`rt_min` のある目標の
-        `rt_offset_min` と `rule.rt_offset_min` に出て `rule_hash` に入る（省けば従来と同じ hash）。
+        （幅 `rt_tol_min` と `candidates.delta_rt` 列（RT − rt_min）は変えない）。`rt_min` のある目標にだけ効き、
+        その目標の `rt_offset_min` と `rule.rt_offset_min` に出て `rule_hash` に入る（省けば従来と同じ hash）。
+        `rt_min` の無い目標には効かず、どの目標にも `rt_min` が無ければ使わずに `notes` に書く（`rule` にも
+        `rule_hash` にも入らない。一部の目標だけに無ければ、その `target_id` を `notes` に挙げる）。
         窓検索では効かない（誤りにせず `notes` に書く）。有限の数でなければ `DATASET_BAD_REQUEST`。
     ppm_offset: 目標照合の質量の窓の中心のずれ（任意）。`{"default": 0.0, "bands": [{"max_mz": 200,
         "offset": -8.3}]}`。中心は「実測 − 理論」の ppm の符号つきの値で、帯は理論 m/z が `max_mz`
@@ -587,6 +589,16 @@ def dataset_feature_search(
             normalized = feature_search.normalize_targets(targets, dataset_polarity=polarity,
                                                           ppm_offset=offset_spec,
                                                           rt_offset_min=rt_offset_min)
+            if rt_offset_min is not None:
+                # RT の窓の無い（rt_min の無い）目標には効かない。どれにも効かなければ規則に載せない（C7）
+                without_rt = [t["target_id"] for t in normalized if "rt_offset_min" not in t]
+                rt_offset_applied = len(without_rt) < len(normalized)
+                if not rt_offset_applied:
+                    notes.append("rt_offset_min はどの目標にも rt_min が無い（RT の窓が無い）ので効かず、"
+                                 "使っていない（規則にも rule_hash にも入れていない）。")
+                elif without_rt:
+                    notes.append("rt_offset_min は rt_min の無い目標（RT の窓が無い）には効かない: "
+                                 + ", ".join(without_rt) + "。")
             # 特徴の m/z 配列は 1 回だけ作り、全目標で使い回す
             mz_array = feature_search._feature_mz_array(ds)
             merged_map = None
@@ -757,7 +769,7 @@ def dataset_feature_search(
         if offset_spec is not None:
             # 渡したときだけ出す（省けば従来と同じ戻り値）
             payload["rule"]["ppm_offset"] = offset_spec
-        if rt_offset_min is not None:
+        if rt_offset_min is not None and rt_offset_applied:
             payload["rule"]["rt_offset_min"] = float(rt_offset_min)
     if include_statistics:
         payload["stats_source"] = {

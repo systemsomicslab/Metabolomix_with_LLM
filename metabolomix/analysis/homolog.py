@@ -7,7 +7,12 @@
 並びの向きと許す外れの数は spec の `rule` で決める（既定は逆相の向き・外れ 0）。
 同じ（炭素数, 二重結合数）の特徴が複数あれば RT の中央値で並べ、`duplicates` に挙げる。
 隣どうし（同じ二重結合数の中で炭素数の昇順、同じ炭素数の中で二重結合数の昇順）で、
-規則の向きに反する対を違反として数える。RT が同じ対は違反にしない。
+規則の向きに反する対を違反として数える。RT が同じ対は違反にしない。比べた隣どうしの対が 1 つも無い
+（RT のある種が 2 つ未満、または隣どうしになる種が無い）ときは検査していないので、`pass` でなく
+`not_evaluable` を返す（空の列を「違反なし」と読ませない）。
+
+`auto` の `adduct` は SME の付加体と綴りでなく組成で比べる（`msdial.adducts.same_adduct`。mzTab-M の
+`[M+H]1+` と `[M+H]+`、`[M+HCOO]-` と `[M+FA-H]-` は同じ）。
 """
 from __future__ import annotations
 
@@ -15,6 +20,7 @@ import re
 from statistics import median
 
 from metabolomix.core.atomic_io import DomainError, canonical_hash
+from metabolomix.msdial.adducts import same_adduct
 
 __all__ = ["SPEC_SCHEMA", "check", "members_from_names", "normalize_spec", "species_of"]
 
@@ -102,10 +108,12 @@ def species_of(name) -> tuple[str, int, int] | None:
 
 
 def members_from_names(features: list[dict], auto: dict) -> list[dict]:
-    """`features` の各要素 {feature_id, names: {sme, sml}, adduct} から同族の候補を集める。"""
+    """`features` の各要素 {feature_id, names: {sme, sml}, adduct} から同族の候補を集める。
+
+    `auto["adduct"]` は特徴の付加体と綴りでなく組成で比べる（`same_adduct`）。"""
     out = []
     for feature in features:
-        if auto["adduct"] and feature.get("adduct") != auto["adduct"]:
+        if auto["adduct"] and not same_adduct(feature.get("adduct"), auto["adduct"]):
             continue
         for source in auto["evidence"]:
             species = species_of((feature.get("names") or {}).get(source))
@@ -124,7 +132,9 @@ def _violates(direction: str, rt_low: float, rt_high: float) -> bool:
 
 
 def check(members: list[dict], rt_of: dict, rule: dict) -> dict:
-    """members（{feature_id, carbons, double_bonds}）の RT（rt_of: feature_id → 分）を検査する。"""
+    """members（{feature_id, carbons, double_bonds}）の RT（rt_of: feature_id → 分）を検査する。
+
+    `n_pairs` は比べた隣どうしの対の数。0 なら `verdict` は `not_evaluable`（検査していない）。"""
     groups: dict[tuple[int, int], list[str]] = {}
     for m in members:
         if rt_of.get(m["feature_id"]) is not None:
@@ -132,6 +142,7 @@ def check(members: list[dict], rt_of: dict, rule: dict) -> dict:
     rt_by_species = {key: median(rt_of[f] for f in fids) for key, fids in groups.items()}
     duplicates = {f"{c}:{d}": sorted(fids) for (c, d), fids in groups.items() if len(fids) > 1}
     violations = []
+    n_pairs = 0
     for axis, direction in (("carbons", rule["carbon_direction"]),
                             ("double_bonds", rule["double_bond_direction"])):
         other = "double_bonds" if axis == "carbons" else "carbons"
@@ -142,6 +153,7 @@ def check(members: list[dict], rt_of: dict, rule: dict) -> dict:
         for keys in series.values():
             keys.sort(key=lambda k: k[0] if axis == "carbons" else k[1])
             for low, high in zip(keys, keys[1:]):
+                n_pairs += 1
                 if _violates(direction, rt_by_species[low], rt_by_species[high]):
                     violations.append({"axis": axis, "low": f"{low[0]}:{low[1]}",
                                        "high": f"{high[0]}:{high[1]}",
@@ -156,7 +168,11 @@ def check(members: list[dict], rt_of: dict, rule: dict) -> dict:
                         else "violation" if m["feature_id"] in flagged else "ok")}
             for m in sorted(members, key=lambda m: (m["carbons"], m["double_bonds"],
                                                     m["feature_id"]))]
-    return {"verdict": "pass" if len(violations) <= rule["max_violations"] else "fail",
+    if n_pairs == 0:
+        verdict = "not_evaluable"
+    else:
+        verdict = "pass" if len(violations) <= rule["max_violations"] else "fail"
+    return {"verdict": verdict, "n_pairs": n_pairs,
             "n_violations": len(violations), "violations": violations, "members": rows,
             "duplicates": duplicates}
 

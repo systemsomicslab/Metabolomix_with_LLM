@@ -74,3 +74,30 @@ def test_members_from_names_filters_class_and_adduct():
     assert [m["feature_id"] for m in H.members_from_names(features, auto)] == ["1"]
     auto = {"lipid_class": "PC", "evidence": ["sme", "sml"], "adduct": None}
     assert [m["feature_id"] for m in H.members_from_names(features, auto)] == ["1", "3", "4"]
+
+
+# ---------- 付加体は組成で比べ、空の列は pass にしない（最終検証 F26） ----------
+
+@pytest.mark.parametrize("feature_adduct, wanted", [
+    ("[M+H]1+", "[M+H]+"), ("[M+H]+", "[M+H]1+"), ("[M+HCOO]1-", "[M+FA-H]-"), ("[M+CHO2]-", "[M+HCOO]-"),
+])
+def test_members_from_names_compares_adducts_by_composition(feature_adduct, wanted):
+    features = [{"feature_id": "1", "names": {"sme": "PC 34:1"}, "adduct": feature_adduct},
+                {"feature_id": "2", "names": {"sme": "PC 36:1"}, "adduct": "[M+Na]1+"}]
+    auto = {"lipid_class": "PC", "evidence": ["sme"], "adduct": wanted}
+    assert [m["feature_id"] for m in H.members_from_names(features, auto)] == ["1"]
+
+
+def test_nothing_to_compare_is_not_evaluable_not_pass():
+    assert H.check([], {}, RULE)["verdict"] == "not_evaluable"
+    one = H.check(_members(("a", 34, 1)), {"a": 7.0}, RULE)
+    assert one["verdict"] == "not_evaluable" and one["n_pairs"] == 0
+    # 隣どうしにならない 2 種（炭素数も二重結合数も違う）・RT の無い種も比べられない
+    apart = H.check(_members(("a", 34, 1), ("b", 36, 2)), {"a": 8.0, "b": 7.0}, RULE)
+    assert apart["verdict"] == "not_evaluable" and apart["n_pairs"] == 0
+    no_rt = H.check(_members(("a", 34, 1), ("b", 36, 1)), {"a": 8.0}, RULE)
+    assert no_rt["verdict"] == "not_evaluable"
+    # 比べた対があれば従来どおり（34:1–36:1・36:1–38:1・36:1–36:2 の 3 対）
+    out = H.check(_members(("a", 34, 1), ("b", 36, 1), ("c", 38, 1), ("d", 36, 2)),
+                  {"a": 7.0, "b": 8.0, "c": 9.0, "d": 7.5}, RULE)
+    assert out["verdict"] == "pass" and out["n_pairs"] == 3

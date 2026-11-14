@@ -23,9 +23,9 @@ from metabolomix.analysis.spectral_match import (
     DEFAULT_MIN_FRAGMENT_RELATIVE_INTENSITY, fragment_matches_excluding_precursor)
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
-__all__ = ["CANDIDATE_COLUMNS", "RULES_SCHEMA", "candidate_rows", "find_ions", "normalize_ion",
-           "normalize_ions", "normalize_rules", "qualify", "query_window", "record_lipid_species",
-           "rules_hash"]
+__all__ = ["CANDIDATE_COLUMNS", "RULES_SCHEMA", "candidate_rows", "find_ions", "name_lipid_species",
+           "normalize_ion", "normalize_ions", "normalize_rules", "qualify", "query_window",
+           "record_lipid_species", "rules_hash"]
 
 RULES_SCHEMA = "msms-rules.v1"
 _INVALID = "MSMS_RULES_INVALID"
@@ -224,16 +224,32 @@ def _block(record) -> str | None:
 SPECIES_ROUTES = ("name", "name_cleaned", "ontology_formula")
 
 
-@lru_cache(maxsize=65536)
-def _species_of(name, ontology, formula) -> tuple[str | None, str | None]:
-    from metabolomix.msdial.lipid_identity import lipid_species_of
+def _labelled_rest(name) -> tuple[bool, str | None]:
+    """限定子を外した名前と、それが同位体の標識（内部標準）を持つか。名前が無ければ (False, None)。"""
     from metabolomix.pathway import msp_lipid
 
     if not isinstance(name, str) or not name.strip():
-        return None, None
+        return False, None
     _qualifier, rest = msp_lipid.split_qualifier(name)
-    if msp_lipid.has_isotope_label(rest):
-        return None, None          # 同位体の標識のある記録（内部標準）は種に読まない
+    return msp_lipid.has_isotope_label(rest), rest
+
+
+@lru_cache(maxsize=65536)
+def name_lipid_species(name) -> tuple[str | None, str | None]:
+    """名前だけから脂質の種（GOSLIN の種のレベル）と、それを得た経路（`name` / `name_cleaned`）。
+
+    `record_lipid_species` の名前の 2 つの経路そのもので、ライブラリの記録・SME 候補の `chemical_name`・SML と
+    MS-DIAL の注釈の名前をすべてこれで読む（目標照合の種の目標・MS/MS の合否・`msdial_agreement` が同じ名前を
+    同じ種に読む）。`name`（限定子を外してそのまま）→ `name_cleaned`（注記・付加体の表記を外し古い書式を略記に
+    直す。`pathway.msp_lipid.shorthand`。`PE 36:2;O (oxPE)` → `PE 36:2;O`）。同位体の標識のある名前（内部標準）と
+    読めない名前は (None, None)。
+    """
+    from metabolomix.msdial.lipid_identity import lipid_species_of
+    from metabolomix.pathway import msp_lipid
+
+    labelled, rest = _labelled_rest(name)
+    if rest is None or labelled:
+        return None, None          # 同位体の標識のある名前（内部標準）は種に読まない
     species = lipid_species_of(name)
     if species is not None:
         return species, "name"
@@ -241,6 +257,20 @@ def _species_of(name, ontology, formula) -> tuple[str | None, str | None]:
     species = lipid_species_of(shorthand) if shorthand else None
     if species is not None:
         return species, "name_cleaned"
+    return None, None
+
+
+@lru_cache(maxsize=65536)
+def _species_of(name, ontology, formula) -> tuple[str | None, str | None]:
+    from metabolomix.msdial.lipid_identity import lipid_species_of
+    from metabolomix.pathway import msp_lipid
+
+    labelled, rest = _labelled_rest(name)
+    if rest is None or labelled:
+        return None, None          # 同位体の標識のある記録（内部標準）は種に読まない
+    species, route = name_lipid_species(name)
+    if species is not None:
+        return species, route
     built = msp_lipid.from_class_formula(ontology, formula, rest)
     if isinstance(built, tuple):
         species = lipid_species_of(built[0])
@@ -252,7 +282,7 @@ def _species_of(name, ontology, formula) -> tuple[str | None, str | None]:
 def record_lipid_species(record) -> tuple[str | None, str | None]:
     """ライブラリの記録の脂質の種（GOSLIN の種のレベル）と、それを得た経路。読めなければ (None, None)。
 
-    経路は順に `name`（記録の name をそのまま GOSLIN で読む）→ `name_cleaned`（限定子・`|` の後・
+    経路は順に `name`（記録の name をそのまま GOSLIN で読む）→ `name_cleaned`（ここまでは `name_lipid_species`。限定子・`|` の後・
     `;` の後の注記（`;` の直後に空白の無い修飾 `;O…` `;2OH` `;(2OH)` `;Ep` … は残す。GOSLIN が読めない修飾なら
     種に読まない）・付加体の表記を外し、古い MS-DIAL の書式と英語のクラス名を略記に直して読む。
     `pathway.msp_lipid.shorthand`）→ `ontology_formula`（ClassyFire の Ontology と分子式から和の組成の

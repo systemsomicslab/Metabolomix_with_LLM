@@ -278,9 +278,11 @@ p / q / 平均 / `presence_p` は有効 4 桁）。
 
 **`rt_offset_min`（RT の窓の中心のずれ、目標照合だけ・任意）**。`rt_min` を持つ目標の RT の窓の中心を
 `rt_min + rt_offset_min`（分）に置き、`|RT − 中心| ≤ rt_tol_min` で見る。**窓の幅（`rt_tol_min`）と
-`candidates.delta_rt` 列（RT − `rt_min`）は変わらない**。渡したときだけ `rule.rt_offset_min` と `rule.targets[]` の
-`rt_offset_min`（`rt_min` のある目標だけ）が出て `rule_hash` に入る（渡さなければ従来と同じ hash）。窓検索では効かないので
-`notes` に書く（`ppm_offset` と同じ）。有限の数でないときは `DATASET_BAD_REQUEST`（`field: rt_offset_min`）。
+`candidates.delta_rt` 列（RT − `rt_min`）は変わらない**。渡したときだけ `rule.targets[]` の `rt_offset_min`（`rt_min` のある
+目標だけ）が出て `rule_hash` に入り（渡さなければ従来と同じ hash）、`rt_min` のある目標が 1 つでもあれば `rule.rt_offset_min` も
+出る。**`rt_min` の無い目標には RT の窓が無いので効かない**: どの目標にも `rt_min` が無ければ使わずに `notes` に書き、
+`rule` にも `rule_hash` にも入れない（`dataset_claim_evidence` の spec の `rt_offset_min` と同じ）。一部の目標だけに無ければ、
+効かなかった `target_id` を `notes` に挙げる。窓検索では効かないので `notes` に書く（`ppm_offset` と同じ）。有限の数でないときは `DATASET_BAD_REQUEST`（`field: rt_offset_min`）。
 
 **`rt_offset`（RT のずれの見積もり、目標照合のときいつも）**。`rt_min` を持つ目標と特徴の組のうち、質量の窓
 （`ppm_offset` があればずらした中心）に入り、|RT − `rt_min`| ≤ 2 分で、目標から見ても特徴から見ても相手が 1 つだけの
@@ -433,7 +435,13 @@ qualified にせず数にも入れない——選んだ残す ID の行が必ず
   分子種の主張の裏取りは MS/MS（鎖の断片）で別に見る。
 - 修飾は種に残る（`PE 34:1;O` ≠ `PE 34:1`）。エーテルは別のクラス（`PC O-34:1` ≠ `PC 34:1`）。
   GOSLIN は `P-` のビニルエーテルの二重結合を数えて `O-` に直すので、`PC P-34:1` は `PC O-34:2` と一致する。
-- 名前を種のレベルに読めない SME 候補（`Unknown`、クラスだけの名前など）は InChIKey の無い候補と
+- SME 候補・SML の名前は、MS/MS の合否（`library_msms_qualify`・`dataset_claim_evidence` の `msms`）がライブラリの
+  記録を読むのと同じ読み方で種に読む（`msms_rules.name_lipid_species`）: 名前をそのまま → 読めなければ注記・
+  付加体の表記を外し古い書式を略記に直した名前（`PE 36:2;O (oxPE)` → `PE 36:2;O`、`LPC 16:0; ExampleDB ID-0000` →
+  `LPC 16:0`。経路は `reanalysis` §4 の `name` / `name_cleaned`）。MSP の記録名がそのまま SME の名前になる
+  Console / mzTab-M のデータセットでも、同じ記録を走査と MS/MS で別の種に読まない。同位体の標識のある名前
+  （`(d7)` などの内部標準）は種に読まない。
+- 名前を種のレベルに読めない SME 候補（`Unknown`、クラスだけの名前、内部標準など）は InChIKey の無い候補と
   同じく評価できないものとして飛ばす（`sme_identity_unresolved`）。曖昧な SML は名前を持たないので
   種では照らせず `unannotated`。
 - 正規化後の目標は `lipid_species`（種のレベル）・`lipid_species_input`（入力を GOSLIN で読んだ綴り）を持ち、

@@ -138,3 +138,53 @@ class TestExpandedTables(unittest.TestCase):
         # 既存の1価挙動が数値的に不変であることを保証。
         self.assertAlmostEqual(pv.adduct_mz(500.0, "[M+H]+"), 500.0 + pv.PROTON_MASS, places=6)
         self.assertAlmostEqual(pv.adduct_mz(500.0, "[M+HCOO]-"), 500.0 + 44.99820286, places=6)
+
+
+class CompositionAdductTests(unittest.TestCase):
+    """表（ADDUCT_SHIFTS）に無い MS-DIAL の綴りも組成で読む（最終検証 F28）。
+
+    理論 m/z は元素質量から手で組み立てた値と比べる（実装の parse_adduct を使わない独立の計算）。
+    """
+
+    H, O, K, E = (pv.ELEMENT_MASSES["H"], pv.ELEMENT_MASSES["O"], pv.ELEMENT_MASSES["K"],
+                  pv.ELECTRON_MASS)
+
+    def _neutral(self, formula):
+        return pv.monoisotopic_mass(pv.parse_formula(formula))
+
+    def test_msdial_spellings_get_a_theoretical_mz(self):
+        cer = self._neutral("C34H67NO3")
+        water = 2 * self.H + self.O
+        cases = {
+            "[M+H-H2O]+": cer + self.H - water - self.E,
+            "[M+K]+": cer + self.K - self.E,
+            "[M-H2O-H]-": cer - water - self.H + self.E,
+            "[M+H]1+": cer + self.H - self.E,
+            "[2M+H]+": 2 * cer + self.H - self.E,
+            "[M+2H]2+": (cer + 2 * self.H - 2 * self.E) / 2,
+        }
+        for adduct, theoretical in cases.items():
+            observed = theoretical * (1 + 8e-6)                      # +8 ppm
+            result = pv.mass_error_ppm(observed, "C34H67NO3", adduct)
+            self.assertEqual(result["band"], "BORDERLINE", adduct)
+            self.assertAlmostEqual(result["ppm"], 8.0, places=2)
+            self.assertAlmostEqual(result["theoretical_mz"], round(theoretical, 4), places=4)
+
+    def test_msdial_water_loss_spelling_matches_the_table_spelling(self):
+        observed = 520.5088
+        a = pv.mass_error_ppm(observed, "C34H67NO3", "[M+H-H2O]+")
+        b = pv.mass_error_ppm(observed, "C34H67NO3", "[M-H2O+H]+")
+        self.assertEqual(a, b)
+        self.assertEqual(a["band"], "PASS")
+
+    def test_polarity_is_read_from_the_composition(self):
+        for adduct, mode, band in (("[M+H-H2O]+", "Negative", "FAIL"), ("[M+K]+", "Negative", "FAIL"),
+                                   ("[M-H2O-H]-", "Positive", "FAIL"), ("[M+CHO2]-", "Negative", "PASS"),
+                                   ("[M+H]1+", "Positive", "PASS"), ("[M+H-H2O]+", "Positive", "PASS")):
+            self.assertEqual(pv.adduct_consistency(adduct, mode)["band"], band, (adduct, mode))
+        self.assertEqual(pv.adduct_consistency("[M+ZZ]+", "Positive")["band"], "UNKNOWN")
+
+    def test_class_typical_adducts_are_compared_by_composition(self):
+        for adduct in ("[M+HCOO]-", "[M+FA-H]-", "[M+CHO2]-", "[M+HCOO]1-", "[M+Hac-H]-"):
+            self.assertIs(pv.adduct_consistency(adduct, "Negative", "PC")["class_typical"], True, adduct)
+        self.assertIs(pv.adduct_consistency("[M-H]-", "Negative", "PC")["class_typical"], False)

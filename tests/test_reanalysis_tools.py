@@ -1437,3 +1437,31 @@ def test_dbs_cutoffs_compare_squared_dots_and_skip_the_sentinel():
     assert matching.passes_dbs_cutoffs({**good, "weighted_dot_product": -1}, cutoffs) is False
     assert matching.passes_dbs_cutoffs({**good, "matched_peaks_count": 1}, cutoffs) is False
     assert matching.passes_dbs_cutoffs(good, None) is None
+
+
+# ---------- dataset_homolog_check の auto は付加体を組成で比べる（最終検証 F26） ----------
+
+#: mzTab-M の SME の付加体は `[M+H]1+`。RT は炭素数が増えるほど早い（逆相の向きに反する）。
+HOMOLOG_FEATURES = tuple(
+    {"id": str(30 + i), "mz": mz, "rt": rt, "values": _scaled(10),
+     "sme": [{"name": name, "inchikey": key, "formula": formula, "adduct": "[M+H]1+", "theo": mz}]}
+    for i, (name, key, formula, mz, rt) in enumerate((
+        ("PC 32:1", "AAAAAAAAAAAAAA-UHFFFAOYSA-N", "C40H78NO8P", 732.5538, 5.0),
+        ("PC 34:1", "BBBBBBBBBBBBBB-UHFFFAOYSA-N", "C42H82NO8P", 760.5851, 4.0),
+        ("PC 36:1", "CCCCCCCCCCCCCC-UHFFFAOYSA-N", "C44H86NO8P", 788.6164, 3.0),
+    )))
+
+
+def test_homolog_check_auto_adduct_matches_the_mztab_spelling(tmp_path):
+    mztab = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab", features=HOMOLOG_FEATURES)
+    handle = _open({"mztab": mztab})
+    for adduct in ("[M+H]1+", "[M+H]+"):
+        out = json.loads(R.dataset_homolog_check(
+            {"auto": {"lipid_class": "PC", "adduct": adduct}}, dataset_handle=handle))
+        assert out["verdict"] == "fail" and out["n_violations"] == 2, out
+        assert out["n_members"] == 3 and out["n_pairs"] == 2 and "notes" not in out
+    absent = json.loads(R.dataset_homolog_check(
+        {"auto": {"lipid_class": "PC", "adduct": "[M+Na]+"}}, dataset_handle=handle))
+    assert absent["verdict"] == "not_evaluable" and absent["n_members"] == 0 and absent["n_pairs"] == 0
+    [note] = absent["notes"]
+    assert "not_evaluable" in note and "0 件" in note

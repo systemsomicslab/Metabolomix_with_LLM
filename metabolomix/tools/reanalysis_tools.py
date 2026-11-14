@@ -536,8 +536,10 @@ def dataset_homolog_check(spec: dict, dataset_handle: str | None = None,
     （`lipid_class` の SME rank 1 の名前を GOSLIN で種のレベルに読んで集める。`evidence`
     に `sml` を足すと SML の名前も見る。`adduct` で SME の付加体を絞る）のどちらか一方と、
     `rule`（`carbon_direction` 既定 increasing・`double_bond_direction` 既定 decreasing・
-    `max_violations` 既定 0）。同じ（炭素数, 二重結合数）が複数あれば RT の中央値で並べ
-    `duplicates` に挙げる。戻り値は `verdict`（pass / fail）・違反の TSV・`rule_hash`。
+    `max_violations` 既定 0）。`adduct` は綴りでなく組成で比べる（mzTab-M の `[M+H]1+` と `[M+H]+` は同じ）。
+    同じ（炭素数, 二重結合数）が複数あれば RT の中央値で並べ `duplicates` に挙げる。戻り値は `verdict`
+    （pass / fail / not_evaluable）・比べた隣どうしの対の数 `n_pairs`・違反の TSV・`rule_hash`。比べた対が 0
+    （`auto` が集めた種が 2 つ未満など）なら検査していないので `not_evaluable` で、理由を `notes` に書く。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     wait_seconds: 待つ秒数（既定 20。0〜30 秒）。超えたら仕事を続けたまま `status: "running"` と `job_id` を
         返す（結果は `job_status(job_id=...)`。`handle_dispatch.LONG_RUNNING`）。
@@ -573,6 +575,17 @@ def dataset_homolog_check(spec: dict, dataset_handle: str | None = None,
         return mztab_error(exc.code, exc.message, exc.details or None)
     rt_of = {fid: (ds.feature_metadata.get(fid) or {}).get("rt") for fid in ds.feature_ids}
     outcome = homolog.check(members, rt_of, normalized["rule"])
+    notes = []
+    if outcome["n_pairs"] == 0:
+        n_species = len({(m["carbons"], m["double_bonds"]) for m in members
+                         if rt_of.get(m["feature_id"]) is not None})
+        auto = normalized["auto"]
+        found = (f"auto（lipid_class={auto['lipid_class']!r}・adduct={auto['adduct']!r}・"
+                 f"evidence={'/'.join(auto['evidence'])}）が集めた特徴は {len(members)} 件"
+                 if auto is not None else f"members は {len(members)} 件")
+        notes.append(f"{found}、RT のある種は {n_species} 個で、比べられる隣どうし（同じ二重結合数で炭素数が隣・"
+                     "同じ炭素数で二重結合数が隣）の対が無い。検査していないので verdict は not_evaluable"
+                     "（違反が無いという意味ではない）。")
     violations = [{"axis": v["axis"], "low": v["low"], "high": v["high"], "rt_low": v["rt_low"],
                    "rt_high": v["rt_high"], "features_low": ";".join(v["features_low"]),
                    "features_high": ";".join(v["features_high"])} for v in outcome["violations"]]
@@ -580,6 +593,7 @@ def dataset_homolog_check(spec: dict, dataset_handle: str | None = None,
         "status": "success",
         "verdict": outcome["verdict"],
         "n_members": len(outcome["members"]),
+        "n_pairs": outcome["n_pairs"],
         "n_violations": outcome["n_violations"],
         "violations": rows_table(violations, ("axis", "low", "high", "rt_low", "rt_high",
                                               "features_low", "features_high")),
@@ -588,6 +602,7 @@ def dataset_homolog_check(spec: dict, dataset_handle: str | None = None,
         "duplicates": outcome["duplicates"],
         "rule": normalized["rule"],
         "rule_hash": homolog.rule_hash(normalized),
+        **({"notes": notes} if notes else {}),
     }, digits=4))
 
 
@@ -611,9 +626,11 @@ def dataset_feature_relations(feature_id: str | int, rt_window: float = 0.05, mz
     `strong`: 付加体・源内断片は Δm/z と同時溶出に加えて r ≥ min_r、同位体は加えて強度比が期待比の
     1.5 倍以下。期待比は Y の**イオン**の組成（中性の組成式の n_mol 倍に付加体の原子を足す。`[2M+H]+` は
     炭素も 2 倍、`[M+Cl]-` は Cl を持つ）の M+k の同位体（M+2 は 13C2・18O・34S・37Cl・81Br・41K と交差項）のうち、
-    m/z がこの特徴から mz_tol 以内に来るものの和（分離された 13C2 だけ・34S だけの位置は、窓の外の 37Cl・13C2 を足さない）。
-    M+2 は 13C2・34S・37Cl・81Br（mz_tol が 13C2 との差 2.46 mDa より狭いときだけ 18O も）を見て、窓が
-    重なれば `ambiguous`（一方に決めず、strong にしない）。`informational` は強度比が期待比を超えた同位体
+    m/z がこの特徴から mz_tol 以内に来るものの和（分離された 13C2 だけ・34S だけの位置は、窓の外の 37Cl・13C2 を足さない。
+    分離できない M+2 の束が束全体と比べられるのは、束のどの同位体までの差も mz_tol 以内のときだけ——重心が 13C2 と 34S の
+    真ん中なら約 5.5 mDa / 電荷以上。狭い窓では束が `informational` になりうる）。
+    M+2 は 13C2・34S・37Cl・81Br（mz_tol が 13C2 との差 2.46 mDa より狭いときだけ 18O、8.59 mDa より狭いときだけ 41K も。
+    広い窓では 13C2 の行が含む）を見て、窓が重なれば `ambiguous`（一方に決めず、strong にしない）。`informational` は強度比が期待比を超えた同位体
     （別物質）。MS-DIAL のリンクは使わない。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     """
