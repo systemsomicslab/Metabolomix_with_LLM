@@ -23,7 +23,8 @@ reanalysis-study の `reanalysis/acquisition.py` から移した（判定の数�
 ごとに見る。暦の日付（UTC でも現地でも）で区切ると、夜をまたぐ 1 本の連続した取得や、UTC+9 の朝 9 時をまたぐ
 取得が 2 つに割れる。区切る間隔（`session_gap_minutes`）は 40 分（`GAP_MINUTES`）と、隣どうしの取得の間隔の
 中央値（LC の 1 周期の目安）の `SESSION_GAP_FACTOR` 倍の大きいほう——1 周期が 40 分を超える長いグラジエントの
-メソッドで、連続した取得の 1 本 1 本をまとまりに割らない。
+メソッドで、連続した取得の 1 本 1 本をまとまりに割らない。開始が `SAME_ACQUISITION_SECONDS` 秒より近い取得
+（ベンダーの raw と変換した mzML、`.wiff2` と同じ幹の `.wiff` のように同じ取得を指すファイル）は中央値では 1 つに数える。
 """
 from __future__ import annotations
 
@@ -37,8 +38,8 @@ from datetime import datetime, timedelta, timezone
 from itertools import combinations
 from pathlib import Path
 
-__all__ = ["GAP_MINUTES", "SESSION_GAP_FACTOR", "read_acquisition_times", "acquisition_order", "gaps_over",
-           "session_gap_minutes", "acquisition_sessions", "group_overlap"]
+__all__ = ["GAP_MINUTES", "SAME_ACQUISITION_SECONDS", "SESSION_GAP_FACTOR", "read_acquisition_times",
+           "acquisition_order", "gaps_over", "session_gap_minutes", "acquisition_sessions", "group_overlap"]
 
 EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
 OLE_MAGIC = bytes.fromhex("D0CF11E0A1B11AE1")
@@ -49,6 +50,12 @@ GAP_MINUTES = 40
 #: 取得のまとまりを区切る間隔は、隣どうしの取得の間隔の中央値（LC の 1 周期の目安）のこの倍より長いもの。
 #: 1 本・2 本の注入が抜けた（失敗・別のフォルダの QC）だけの間隔では区切らない。
 SESSION_GAP_FACTOR = 3
+#: 開始がこれ（秒）より近い 2 つの取得は同じ取得を指すファイルとみなし、1 周期の中央値の間隔に数えない。
+#: ベンダーの raw（Thermo の FILETIME・Agilent の 7 桁の小数秒）と、それを変換した mzML の `startTimeStamp`
+#: （整数秒）は 1 秒足らず違うので、完全に同じ時刻だけを 1 つにすると、N 組の双子が 2N-1 個の間隔の N 個を
+#: 1 秒未満にして中央値を潰し、区切りを `GAP_MINUTES` に戻す。LC-MS の 1 周期は 1 分を下回らない。
+#: `GAP_MINUTES / SESSION_GAP_FACTOR`（13.3 分）以下なら、捨てた間隔はもともと下限より短い区切りしか作らない。
+SAME_ACQUISITION_SECONDS = 60
 _UNREADABLE = "unreadable"
 
 
@@ -195,6 +202,13 @@ def _read_d_folder(path: Path) -> tuple[str, datetime]:
     raise ValueError(".d に Bruker の analysis.tdf / analysis.sqlite も Agilent の AcqData/Contents.xml も無い")
 
 
+def _reason(exc: Exception) -> str:
+    """読めなかった理由の文面。OSError の文字列はパスを含むので、その理由（`strerror`）だけにする
+    （どのファイルかは行の `file` が持つ。理由ごとに件数を数える `unreadable_reasons` を 1 ファイル 1 種類にしない）。"""
+    text = exc.strerror if isinstance(exc, OSError) else str(exc)
+    return text or type(exc).__name__
+
+
 def _wiff_sibling(path: Path) -> Path | None:
     """`.wiff2` と同じ幹の `.wiff`（SCIEX OS が同じ取得に並べて書く）。無ければ None。"""
     for suffix in (".wiff", ".WIFF"):
@@ -210,18 +224,20 @@ def _read_wiff2(path: Path, unreadable: dict) -> dict:
     `.wiff2` 自身は中身の形式が公開されておらず、stdlib で読める取得時刻の欄が無い。SCIEX OS は同じ取得に
     `<幹>.wiff`・`<幹>.wiff.scan`・`<幹>.timeseries.data` も書くので、その `.wiff` の `SampleSubtree` を読む
     （`source` は `wiff_ole_sibling`）。
+
+    理由（`error`）にファイル名を入れない: どのファイルかは行（`file`）が持ち、試料の表の `unreadable_reasons` は
+    理由ごとに件数を数えるので、名前入りの理由は SCIEX OS のフォルダ（.wiff2 だけ）で 1 ファイル 1 種類になる。
     """
     sibling = _wiff_sibling(path)
     if sibling is None:
-        return {**unreadable, "error": (f"SCIEX OS の .wiff2 は stdlib で取得時刻を読めない形式で、同じ幹の .wiff"
-                                        f"（{path.stem}.wiff。SCIEX OS が並べて書く）も無い"
-                                        "（mzML に変換すれば startTimeStamp を読む）")}
+        return {**unreadable, "error": ("SCIEX OS の .wiff2 は stdlib で取得時刻を読めない形式で、同じ幹の .wiff"
+                                        "（SCIEX OS が並べて書く）も無い（mzML に変換すれば startTimeStamp を読む）")}
     try:
         start, end = _read_wiff(sibling)
     except (OSError, ValueError, struct.error, IndexError) as exc:
-        return {**unreadable, "error": f"同じ幹の {sibling.name} を読めない: {str(exc) or type(exc).__name__}"}
+        return {**unreadable, "error": f"同じ幹の .wiff を読めない: {_reason(exc)}"}
     if start is None:
-        return {**unreadable, "error": f"同じ幹の {sibling.name} に開始時刻が無い"}
+        return {**unreadable, "error": "同じ幹の .wiff に開始時刻が無い"}
     return {"start_utc": start.isoformat(), "end_utc": end.isoformat() if end else None,
             "source": "wiff_ole_sibling", "error": None}
 
@@ -231,7 +247,7 @@ def read_acquisition_times(path: Path) -> dict:
 
     `source` は `wiff_ole` / `wiff_ole_sibling`（`.wiff2` の時刻を同じ幹の `.wiff` から読んだ）/ `mzml` /
     `thermo_raw` / `bruker_tdf` / `bruker_baf` / `agilent_acqdata` / `unreadable`。読めないときは例外にせず
-    `unreadable` と理由（`error`。形式ごとに何が無かったか）を返す。時刻は UTC の ISO 8601。
+    `unreadable` と理由（`error`。形式ごとに何が無かったか。ファイル名・パスは入れない）を返す。時刻は UTC の ISO 8601。
     """
     path = Path(path)
     unreadable = {"start_utc": None, "end_utc": None, "source": _UNREADABLE}
@@ -240,7 +256,7 @@ def read_acquisition_times(path: Path) -> dict:
         try:
             source, start = _read_d_folder(path)
         except (OSError, ValueError, sqlite3.Error, ET.ParseError) as exc:
-            return {**unreadable, "error": str(exc) or type(exc).__name__}
+            return {**unreadable, "error": _reason(exc)}
         return {"start_utc": start.isoformat(), "end_utc": None, "source": source, "error": None}
     if suffix == ".wiff2" and path.is_file():
         return _read_wiff2(path, unreadable)
@@ -248,7 +264,7 @@ def read_acquisition_times(path: Path) -> dict:
         try:
             start, _ = _read_thermo_raw(path)
         except (OSError, ValueError, struct.error) as exc:
-            return {**unreadable, "error": str(exc) or type(exc).__name__}
+            return {**unreadable, "error": _reason(exc)}
         if start is None:
             return {**unreadable, "error": "開始時刻が無い"}
         return {"start_utc": start.isoformat(), "end_utc": None, "source": "thermo_raw", "error": None}
@@ -258,7 +274,7 @@ def read_acquisition_times(path: Path) -> dict:
     try:
         start, end = (_read_wiff if suffix == ".wiff" else _read_mzml)(path)
     except (OSError, ValueError, struct.error, ET.ParseError, IndexError) as exc:
-        return {**unreadable, "error": str(exc) or type(exc).__name__}
+        return {**unreadable, "error": _reason(exc)}
     source = "wiff_ole" if suffix == ".wiff" else "mzml"
     if start is None:
         return {**unreadable, "error": "開始時刻が無い"}
@@ -295,11 +311,13 @@ def session_gap_minutes(rows: list[dict], floor: float = GAP_MINUTES,
     開始から次の開始までの間隔は LC の 1 周期（グラジエント・平衡化・オートサンプラ）より短くならないので、
     1 周期が `floor` を超える長いグラジエントのメソッドでは、固定の `floor` だと連続した取得の 1 本 1 本が
     まとまりに割れる。中央値は `statistics.median_low`（間隔が偶数個なら短いほう。中断が間隔の半分近くを
-    占める少ない注入でも、中断の長さを 1 周期と読まない）。同じ時刻の取得（`.wiff2` と同じ幹の `.wiff` の
-    ように同じ取得を指すファイル）は 1 つに数える（間隔 0 で中央値を縮めない）。読めた時刻が 2 つ未満なら `floor`。
+    占める少ない注入でも、中断の長さを 1 周期と読まない）。開始が `SAME_ACQUISITION_SECONDS` 秒より近い取得
+    （ベンダーの raw と変換した mzML、`.wiff2` と同じ幹の `.wiff` のように同じ取得を指すファイル）は 1 つに数える
+    （その間の 1 秒足らずの間隔で中央値を縮めない）。数える間隔が無ければ `floor`。
     """
-    times = sorted({datetime.fromisoformat(r["start_utc"]) for r in rows if r.get("start_utc")})
-    intervals = [(b - a) / timedelta(minutes=1) for a, b in zip(times, times[1:])]
+    times = sorted(datetime.fromisoformat(r["start_utc"]) for r in rows if r.get("start_utc"))
+    same = timedelta(seconds=SAME_ACQUISITION_SECONDS)
+    intervals = [(b - a) / timedelta(minutes=1) for a, b in zip(times, times[1:]) if (b - a) >= same]
     if not intervals:
         return float(floor)
     return max(float(floor), factor * statistics.median_low(intervals))

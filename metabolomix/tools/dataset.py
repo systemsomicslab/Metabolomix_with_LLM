@@ -117,7 +117,8 @@ def list_data_files(
     実験情報シート `sample-manifest.tsv` があれば、その群と取得順の重なり（群の組ごとに
     complete / independent / partial / unknown。independent は、40 分と隣どうしの取得の間隔の中央値の 3 倍の
     大きいほうを超える間隔で区切った取得のまとまりのどれにも両群がいること。暦の日付では区切らず、1 周期が
-    40 分を超える長いメソッドでも連続した取得を割らない。群 `unassigned` の行は入れない）も返す。
+    40 分を超える長いメソッドでも連続した取得を割らない。開始が 1 分より近い取得（raw と変換した mzML など、
+    同じ取得を指すファイル）は中央値では 1 つに数える。群 `unassigned` の行は入れない）も返す。
 
     返すのは絶対パスで、`dcl_find_msms(file_path=...)` 等へそのまま渡せる。
     フォルダ全体をまず解析するなら `load_dataset(directory=...)` が入口。

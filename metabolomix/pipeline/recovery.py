@@ -543,8 +543,12 @@ def prepare_resume(path: Path, *, updates: dict | None = None,
                     "IDEMPOTENCY_CONFLICT",
                     f"request_id={request_id!r}は既存の異なる内容のresumeと衝突しています。",
                     {"request_id": request_id})
+            # 再送にも 1 回目と同じ単位の内訳を返す（Console を最初から起こす単位を、再送で黙って落とさない）
             return _resume_receipt(record, reused=True,
-                                   reset_stage_ids=prior.get("reset_stage_ids"))
+                                   reset_stage_ids=prior.get("reset_stage_ids"),
+                                   not_retried_units=prior.get("not_retried_units"),
+                                   held_units=prior.get("held_units"),
+                                   not_started_units=prior.get("console_not_started_units"))
 
         # --- a. updatesの検証・統合（下流のキー・上流の条件の変更はここで止める） ---
         current_request = _load_full_request(pipeline_root, record)
@@ -653,6 +657,11 @@ def prepare_resume(path: Path, *, updates: dict | None = None,
                 "updates_hash": updates_hash,
                 "revision": record["request"]["revision"],
                 "reset_stage_ids": sorted(reset_ids),
+                # 戻り値の単位の内訳（再送で同じものを返す）。空なら持たない
+                **{key: units_ for key, units_ in (
+                    ("not_retried_units", not_retried),
+                    ("held_units", sorted(held) if rerun_upstream else []),
+                    ("console_not_started_units", not_started)) if units_},
             }
             record["resume_log"] = resume_log
 

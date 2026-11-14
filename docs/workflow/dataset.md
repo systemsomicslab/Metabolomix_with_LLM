@@ -54,6 +54,9 @@ raw ごとの取得時刻と順（読めないものは順が空で、理由を�
 （UTC）で区切ると、UTC+9 の朝 9 時や夜をまたぐ 1 本の取得が 2 つに割れる。区切る間隔（`session_gap_minutes`）は
 40 分と、隣どうしの取得の間隔の中央値（`median_low`。LC の 1 周期の目安）の 3 倍の大きいほうで、1 周期が 40 分を
 超える長いメソッドでも連続した取得の 1 本 1 本を割らない（固定の 40 分ではそうしたメソッドがいつも `partial` になる）。
+開始が 1 分（`SAME_ACQUISITION_SECONDS`）より近い取得——ベンダーの raw と変換した mzML（小数秒と整数秒で 1 秒足らず
+違う）、`.wiff2` と同じ幹の `.wiff`——は同じ取得として中央値の間隔に数えない（数えると間隔の半分が 1 秒未満になり、
+区切りが 40 分に戻る）。
 
 1. metabolomix/tools/dataset.py  list_data_files()
 2. └─ metabolomix/core/path_resolvers.py  list_data_files()
@@ -250,9 +253,17 @@ pipeline_path 経路（`source="mztab"`。選んだ極性の単位のジョブ�
 6.       └─ [v3 の run] metabolomix/pipeline/receipt.py read_receipt()
 7.       └─ [旧 v1 の run] metabolomix/pipeline/session_handoff.py run_manifest_rows()
 8.    └─ metabolomix/mztab/loading.py load_dataset_state()
+9.    └─ metabolomix/pipeline/session_handoff.py bind_manifest_rows()
+10.      └─ metabolomix/analysis/sample_manifest.py resolve_metadata()
+11.      └─ [raw のパスで結べないとき] metabolomix/pipeline/session_handoff.py _rows_by_name()
+12.      └─ metabolomix/analysis/sample_manifest.py apply_defaults_and_inputs()
 
 dataset と試料の対応表を**同じ run の同じ単位から**載せる。
 別の run の試料対応表を混ぜられると、群の対応が黙ってずれた統計が出るため。
+対応表の行は**試料へ結んでから**当てる（`bind_manifest_rows()`）。受領の行の並びはシートの並び（`pipeline_sample_sheet`
+なら取得順）で、mzTab-M の assay の順とは限らず、位置で当てると群と include=false が別の試料に付く。まず raw のパス
+（mzTab-M の `ms_run[N]-location` → `ds.assay_sources`）で、結べなければ行の raw の名前か `sample_id` で試料名と結ぶ
+（解析フォルダの経路 `opening._apply_run_rows` と同じ鍵）。全試料を結べなければ当てず、`load_notes` に注記を残す。
 `resolve_unit()` は `pipeline-run.json` の版で分かれる: v3 の run は受領（`read_receipt()`。登録した hash と
 照合してから読む）の単位から解析フォルダ・ジョブ・試料の対応表を引き、旧 v1 の run（`store.is_legacy()`。読むだけの
 記録）は 1 単位として、`resolve_metadata` が `record["inputs"]["manifest"]` に書いた行（`run_manifest_rows()`）を引く。

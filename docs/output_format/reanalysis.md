@@ -108,7 +108,7 @@
 | `arf2` / `dcl` | スポットの照合（spot_id = SMF_ID）に使うファイル名。解析フォルダで読んだならその `.arf2` / `.dcl`。決まらなければ `null` |
 | `reused_base` | 読み込み済みのものを使い回したか |
 | `summary` | 特徴・試料の数、定量種別、検出状態、同定の内訳、出所の裏取り、読み込みの注記（行の配列） |
-| `sample_counts` | `{groups, roles, n_ungrouped}`: 群（Class ID）ごと・役割ごとの試料数と、群の宣言が無い試料の数 |
+| `sample_counts` | `{groups, roles, n_ungrouped}`: 群（Class ID）ごと・役割ごとの試料数と、群の宣言が無い試料の数。`groups` と `n_ungrouped` は統計に入る試料だけを数え、実験情報シートの `include=false` の試料は `excluded_by_sheet`（シートの群 → 件数。無ければ鍵ごと出さない）に分ける（`dataset_status` の要約と同じ） |
 | `overview` | `overview=True` のときだけ。最初の概観（[dataset.md](dataset.md) §11.9。既定は載せない） |
 | `wait_seconds_note` | `wait_seconds` を 0〜30 秒に丸めたときだけ |
 | `next` | 次の一手の例（3 行。最初が `dataset_overview()`） |

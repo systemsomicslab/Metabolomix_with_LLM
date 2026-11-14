@@ -244,10 +244,14 @@ def test_rerun_upstream_resets_only_failed_units(tmp_path):
     positive_before = {sid: dict(first["stages"][sid]) for sid in _unit_stage_ids("positive")}
 
     # 明示しない再開は、失敗した極性の Console をやり直さない（上流には触れない）。
-    without = prepare_resume(path)
+    without = prepare_resume(path, request_id="no-rerun")
     assert without["reset_stage_ids"] == []
     assert without["not_retried_units"] == ["negative"]
     assert "rerun_upstream" in without["hint"]
+    # 同じ request_id の再送も、やり直さなかった極性と案内を返す
+    replay = prepare_resume(path, request_id="no-rerun")
+    assert replay["reused"] is True and replay["not_retried_units"] == ["negative"]
+    assert replay["hint"] == without["hint"]
     record = load_run(path)
     assert record["stages"]["upstream:negative"]["status"] == "failed"
     assert record["stages"]["upstream:negative"]["attempt"] == 1
@@ -366,6 +370,19 @@ def test_a_console_that_never_started_resumes_without_rerun_upstream(tmp_path, m
     assert stage["status"] == "pending" and "waiting" not in stage
     # 新しい worker は最初の Console から最後まで進める
     assert run_engine(path, synthetic_handlers())["status"] == "completed"
+
+
+def test_a_replayed_resume_keeps_the_units_whose_console_never_started(tmp_path, monkeypatch):
+    """同じ request_id の再送は 1 回目と同じ内訳を返す（Console を最初から起こす単位を再送で落とさない）。"""
+    path = _killed_while_waiting(tmp_path, monkeypatch)
+    first = prepare_resume(path, request_id="r1")
+    replay = prepare_resume(path, request_id="r1")
+    assert first["console_not_started_units"] == replay["console_not_started_units"] == ["negative"]
+    assert replay["reused"] is True and replay["reset_stage_ids"] == first["reset_stage_ids"]
+    # 空の内訳は記録に持たない（戻り値にも出ない）
+    entry = load_run(path)["resume_log"]["r1"]
+    assert "not_retried_units" not in entry and "held_units" not in entry
+    assert "not_retried_units" not in replay and "held_units" not in replay
 
 
 def test_a_console_job_written_before_the_worker_died_still_requires_rerun(tmp_path, monkeypatch):

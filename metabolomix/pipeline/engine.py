@@ -57,6 +57,7 @@ from metabolomix.pipeline import store
 
 __all__ = [
     "RECEIPT_STAGE_ID",
+    "OUTER_JOBS_UNCHECKED",
     "WORKER_IN_JOB_WARNING_CODE",
     "build_stages",
     "cancel_request_path",
@@ -71,6 +72,7 @@ __all__ = [
     "run_engine",
     "stage_inputs_unchanged",
     "worker_in_job_warning",
+    "worker_outer_jobs_note",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -95,6 +97,28 @@ WORKER_IN_JOB_WARNING_CODE = "WORKER_IN_JOB"
 #: 中のプロセスを止めない（KILL_ON_JOB_CLOSE が無い）と分かっている。
 _JOB_KNOWN_NOT_TO_KILL = "inherited_job"
 
+#: worker の直近の Job が `inherited_job` で、それより外側の段は確かめていない（`worker_outer_jobs_note`）。
+OUTER_JOBS_UNCHECKED = "unchecked"
+_OUTER_JOBS_NOTE = ("worker は閉じても止めない Windows の Job（inherited_job）に入っている。Windows の問い合わせは"
+                    "直近の Job しか見られないので、その外側に閉じたら中のプロセスを止める Job（kill-on-close）が"
+                    "あるかは確かめていない（あれば MCP クライアントの終了などで worker と MS-DIAL Console も"
+                    "止まる）。止まったら pipeline_status で確かめ、pipeline_resume で続きから再開する。")
+
+
+def worker_outer_jobs_note(*, in_job: bool | None, nearest_job: str | None) -> dict | None:
+    """`worker_in_job_warning` が黙る場合（worker の直近の Job が `inherited_job`）の軽い注記。
+
+    直近の Job は閉じても止めないと分かるが、`QueryInformationJobObject(NULL)` は直近の Job しか読まないので、
+    Job が入れ子なら外側に kill-on-close の Job がありうる（`0x3000 → 0x0 → 0x2000` の入れ子では、
+    中継は 0x3000 を黙って抜け、worker は 0x0 と外側の 0x2000 に残り、外側が閉じると止まる）。Windows 11 の
+    シェルの配下では毎回こうなるので `WORKER_IN_JOB` の警告にはせず（毎回出る警告は読み飛ばされる）、
+    `{"outer_jobs": "unchecked", "outer_jobs_note": ...}` を起動の戻り値（`launch`）と run の記録（`worker`）に
+    添える。当てはまらなければ None。
+    """
+    if in_job is not True or nearest_job != _JOB_KNOWN_NOT_TO_KILL:
+        return None
+    return {"outer_jobs": OUTER_JOBS_UNCHECKED, "outer_jobs_note": _OUTER_JOBS_NOTE}
+
 
 def worker_in_job_warning(*, in_job: bool | None, nearest_job: str | None,
                           details: dict | None = None) -> dict | None:
@@ -105,7 +129,7 @@ def worker_in_job_warning(*, in_job: bool | None, nearest_job: str | None,
     （`in_job` が真でない）と、直近の Job が `inherited_job`（worker を外へ出すことは許さないが、
     閉じても止めない。Windows 11 ではシェルの配下のプロセスが制限の無い Job にいることが普通に
     あり、そこから起こすと毎回こうなる）のとき。それより外側の段は見えないが、毎回出る警告は
-    読み飛ばされるので出さない。警告するのは、直近の Job が分からない（中継は自分の直近の Job を
+    読み飛ばされるので出さない（代わりに `worker_outer_jobs_note` の注記を添える）。警告するのは、直近の Job が分からない（中継は自分の直近の Job を
     抜けさせたのに worker がまだどこかの Job にいる＝見えない外側の段）・閉じたら止める
     （`unsupported`）とき。`details` は判断の材料（`breakaway` / `relay_breakaway` /
     `nearest_job`）。警告は `{"code", "message", "details"}`、警告しないなら None。
@@ -593,19 +617,22 @@ def _record_worker_identity(pipeline_path: Path, worker_job: dict | None = None)
     `worker_job`（本番の worker が起動直後に自分を確かめた
     `process_control.current_job_state()`。`worker.run_worker`）があれば `worker.in_job` と
     `worker.nearest_job` に残し、`worker_in_job_warning` が警告を返せば `WORKER_IN_JOB` を
-    run に 1 つだけ残す。
+    run に 1 つだけ残す。直近の Job が `inherited_job` なら警告の代わりに外側の段を確かめていない注記
+    （`worker_outer_jobs_note`。`worker.outer_jobs` / `worker.outer_jobs_note`）を残す。
     """
     record = store.load_run(pipeline_path)
     in_job = (worker_job or {}).get("in_job")
     nearest_job = (worker_job or {}).get("nearest_job")
     warning = worker_in_job_warning(in_job=in_job, nearest_job=nearest_job,
                                     details={"nearest_job": nearest_job})
+    outer_note = worker_outer_jobs_note(in_job=in_job, nearest_job=nearest_job)
 
     def _apply(current: dict) -> dict:
         worker = {"identity": process_identity(os.getpid()), "started_at": _now_iso()}
         if in_job is not None:
             worker["in_job"] = bool(in_job)
             worker["nearest_job"] = nearest_job
+            worker.update(outer_note or {})
         current["worker"] = worker
         warnings = current.setdefault("warnings", [])
         if warning and not any(w.get("code") == WORKER_IN_JOB_WARNING_CODE for w in warnings):

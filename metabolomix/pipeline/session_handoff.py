@@ -19,7 +19,8 @@ from metabolomix.mztab import loading as mztab_loading
 from metabolomix.pipeline import receipt as receipt_mod
 from metabolomix.pipeline import recovery, store
 
-__all__ = ["UnitRun", "load_run_dataset", "resolve_unit", "run_manifest_rows"]
+__all__ = ["UnitRun", "bind_manifest_rows", "load_run_dataset", "resolve_unit",
+           "run_manifest_rows"]
 
 _INPUT_SUBDIR = "input"
 
@@ -151,14 +152,73 @@ def load_run_dataset(pipeline_path, *, polarity: str | None = None,
 
     `pipeline_path` は `pipeline-run.json` でもその親ディレクトリでもよい
     （`pipeline_status` と同じ規約）。選んだ単位のジョブと試料の対応表だけを載せる
-    （旧 v1 の run が持つ差次的結果は戻さない）。
+    （旧 v1 の run が持つ差次的結果は戻さない）。試料の対応表の行は試料へ結んでから当てる
+    （`bind_manifest_rows`。位置では当てない）。
     """
     unit = resolve_unit(pipeline_path, polarity, allow_incomplete=allow_incomplete)
     ds = mztab_loading.load_dataset_state(job_path=unit.job_path,
                                           allow_incomplete=allow_incomplete)
     if unit.manifest_rows is not None:
-        ds.sample_metadata_rows = unit.manifest_rows
+        note = bind_manifest_rows(ds, unit.manifest_rows)
+        if note:
+            ds.load_notes.append(note)
     return ds
+
+
+def _rows_by_name(rows: list[dict], sample_names: list[str]) -> list[dict | None]:
+    """試料名ごとの行。行の `source_file`（raw）の名前（拡張子を除く）か `sample_id` で結ぶ
+    （解析フォルダの経路 `dataset.opening._apply_run_rows` と同じ鍵）。"""
+    by_key: dict[str, dict] = {}
+    for row in rows:
+        source = row.get("source_file")
+        for key in (Path(str(source)).stem if source else None, row.get("sample_id")):
+            if key:
+                by_key.setdefault(str(key).strip().casefold(), row)
+    return [by_key.get(str(name or "").strip().casefold()) for name in sample_names]
+
+
+def bind_manifest_rows(ds, rows: list[dict]) -> str | None:
+    """受領の試料の対応表の行を mzTab-M のデータセットの試料へ結んで当てる。当てられなければ注記を返す。
+
+    行の並びはシートの並び（`pipeline_sample_sheet` なら取得順）で、`ds.sample_names`（mzTab-M の
+    assay の順＝MS-DIAL のファイルの順）とは限らない。試料の表を位置で読む消費側（統計エンジンの
+    試料の表・`included_sample_indices`）に順の違う行を渡すと、群と include=false が別の試料に付く。
+    そこで解析フォルダの経路と同じく、まず raw のパス（mzTab-M の `ms_run[N]-location` →
+    `ds.assay_sources`。`sample_manifest.resolve_metadata`）で結び、結べなければ行の raw の名前か
+    `sample_id` を試料名と結ぶ。どちらでも全試料を結べなければ当てない（群は
+    `dataset_set_sample_metadata` で与える）。読み込みの一部なので `metadata_revision` は進めない。
+    """
+    from metabolomix.analysis import sample_manifest
+
+    def resolve():
+        try:
+            return sample_manifest.resolve_metadata(ds, rows)
+        except (DomainError, TypeError):    # TypeError: source_file の無い行（raw のパスで結べない）
+            return None
+
+    previous = getattr(ds, "sample_raw_paths", None)
+    resolved = resolve()
+    if resolved is None:
+        matched = _rows_by_name(rows, list(ds.sample_names))
+        missing = [name for name, row in zip(ds.sample_names, matched) if row is None]
+        if missing:
+            return (f"試料 {missing[:5]} を run の試料の対応表（受領）と raw のパスでも名前でも結べないので、"
+                    "対応表は当てていない（群は dataset_set_sample_metadata で与える）。")
+        ds.sample_raw_paths = [row.get("source_file") for row in matched]
+        resolved = resolve()
+        if resolved is None:
+            ds.sample_raw_paths = previous
+            return ("run の試料の対応表（受領）の行に raw のパスが無く試料へ結べないので、対応表は"
+                    "当てていない（群は dataset_set_sample_metadata で与える）。")
+    revision = ds.metadata_revision
+    try:
+        sample_manifest.apply_defaults_and_inputs(ds, resolved)
+    except DomainError as exc:
+        ds.sample_raw_paths = previous
+        return (f"run の試料の対応表（受領）を当てられなかった（{exc.code}: {exc.message}）。"
+                "群は dataset_set_sample_metadata で与える。")
+    ds.metadata_revision = revision
+    return None
 
 
 def run_manifest_rows(pipeline_root: Path, record: dict) -> list[dict] | None:

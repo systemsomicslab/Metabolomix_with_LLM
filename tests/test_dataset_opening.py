@@ -1236,6 +1236,92 @@ def test_unmatched_analysis_folder_opens_only_through_the_mztab(tmp_path):
         == ["ctrl", "ctrl", "case", "case"]
 
 
+def _shuffled_rows(source_dir: str = "C:/data") -> list[dict]:
+    """受領の行をシートの順（取得順）で: s3（未割り当て・include=false）, s2 case, s1 ctrl, s0 ctrl。
+    `ds.sample_names`（mzTab-M の assay の順）は s0..s3 なので、位置で当てると群も除外もずれる。"""
+    rows = []
+    for name, group in (("s3", "unassigned"), ("s2", "case"), ("s1", "ctrl"), ("s0", "ctrl")):
+        row = _manifest_row(name, group)
+        row["source_file"] = f"{source_dir}/{name}.wiff"
+        if group == "unassigned":
+            row["include"] = False
+            row["provenance"]["include"] = {**row["provenance"]["include"], "value": False}
+        rows.append(row)
+    return rows
+
+
+def _group_and_include(ds) -> dict:
+    from metabolomix.analysis.stats.data import from_dataset
+
+    return {s.sample_id: (s.group, s.include) for s in from_dataset(ds).samples}
+
+
+@pytest.mark.parametrize("source_dir", ["C:/data", "D:/moved"])
+def test_mztab_source_binds_receipt_rows_to_samples_not_by_position(tmp_path, source_dir):
+    """`source="mztab"` でも受領の行は試料へ結んでから当てる（シートの順は mzTab-M の assay の順と違う）。
+
+    raw のパス（mzTab-M の `ms_run[N]-location`）で結べればそれで、パスが違えば raw の名前で結ぶ。群・include は
+    解析フォルダの経路と同じ試料に付き、統計エンジンの試料の表と `included_sample_indices` も同じ試料を外す。"""
+    from metabolomix.analysis.dataset_analysis import included_sample_indices
+
+    run = _v3_run(tmp_path, rows=_shuffled_rows(source_dir))
+    mztab = open_dataset(pipeline_path=str(run), polarity="negative", source="mztab").dataset
+    expected = {"s0": ("ctrl", True), "s1": ("ctrl", True), "s2": ("case", True),
+                "s3": ("unassigned", False)}
+    assert mztab.sample_names == ["s0", "s1", "s2", "s3"]
+    assert _group_and_include(mztab) == expected
+    assert included_sample_indices(mztab) == [0, 1, 2]
+    if source_dir == "C:/data":   # 解析フォルダの経路は raw のパスで結ぶ（同じ試料に付く）
+        folder = open_dataset(pipeline_path=str(run), polarity="negative").dataset
+        assert _group_and_include(folder) == expected
+        assert included_sample_indices(folder) == [0, 1, 2]
+    else:                         # raw のパスが違えば raw の名前で結んだ（パスは行のものを覚える）
+        assert [p.replace("\\", "/") for p in mztab.sample_raw_paths] == [
+            f"D:/moved/s{i}.wiff" for i in range(4)]
+    assert [r["sample_id"] for r in mztab.sample_metadata_rows] == mztab.sample_names
+    assert mztab.sample_ids == ["s0", "s1", "s2", "s3"]
+    # 前処理の入力（役割と試料の付帯情報）も組み直す。読み込みの一部なので版は進めない。
+    assert set(mztab.roles) == set(mztab.sample_names)
+    assert mztab.metadata_revision == 0
+
+
+@pytest.mark.parametrize("source", ["auto", "mztab"])
+def test_sample_counts_keep_sheet_excluded_samples_out_of_groups(tmp_path, source):
+    """`sample_counts` と `dataset_status` の要約の群は統計に入る試料だけ。include=false の試料（群
+    `unassigned`）は `excluded_by_sheet` に分ける（`dataset_compare` の群の水準と同じ集合）。"""
+    from metabolomix.tools.handle_tools import load_dataset
+    from metabolomix.tools.mztab_tools import dataset_status
+
+    run = _v3_run(tmp_path, rows=_shuffled_rows())
+    out = json.loads(load_dataset(pipeline_path=str(run), source=source, overview=False))
+    counts = out["sample_counts"]
+    assert counts["groups"] == {"ctrl": 2, "case": 1}
+    assert counts["excluded_by_sheet"] == {"unassigned": 1}
+    assert counts["n_ungrouped"] == 0 and counts["roles"] == {"sample": 4}
+    status = json.loads(dataset_status())
+    assert status["groups"] == {"ctrl": 2, "case": 1}
+    assert status["excluded_by_sheet"] == {"unassigned": 1}
+
+
+def test_sample_counts_omit_excluded_by_sheet_when_every_sample_is_included(tmp_path):
+    from metabolomix.tools.handle_tools import load_dataset
+
+    rows = [_manifest_row(f"s{i}", "ctrl" if i < 2 else "case") for i in range(4)]
+    out = json.loads(load_dataset(pipeline_path=str(_v3_run(tmp_path, rows=rows)), overview=False))
+    assert out["sample_counts"] == {"groups": {"ctrl": 2, "case": 2}, "roles": {"sample": 4},
+                                    "n_ungrouped": 0}
+
+
+def test_mztab_source_leaves_unbindable_receipt_rows_unapplied(tmp_path):
+    """raw のパスでも名前でも全試料を結べない受領の行は、位置では当てず、注記を残して当てない。"""
+    rows = [_manifest_row(f"x{i}", "ctrl") for i in range(4)]
+    run = _v3_run(tmp_path, rows=rows)
+    ds = open_dataset(pipeline_path=str(run), polarity="negative", source="mztab").dataset
+    assert not ds.sample_metadata_rows
+    note = next(n for n in ds.load_notes if "試料の対応表" in n)
+    assert "当てていない" in note and "dataset_set_sample_metadata" in note
+
+
 def test_mztab_source_matches_spots_on_the_batch_the_receipt_verified(tmp_path):
     """`source="mztab"` のスポットの照合は、受領が照合したバッチ（`alignment.arf2`）を使う。
     `rerun_upstream` の後は前のバッチも同じフォルダに残り、名前の順では決まらない。"""

@@ -268,3 +268,67 @@ def test_list_data_files_marks_unreadable_raws(tmp_path):
     assert "読めた 1 / 2 件" in text
     line = next(x for x in text.splitlines() if x.startswith("b.wiff\t"))
     assert line.split("\t")[2] == "" and line.split("\t")[3].startswith("unreadable")
+
+
+def test_list_data_files_counts_raw_and_mzml_twins_as_one_acquisition(tmp_path):
+    """raw と変換した mzML が並ぶフォルダでも、1 周期 50 分の取得は 1 つのまとまり（independent）。"""
+    from tests.test_rawmeta import write_raw_and_mzml_twins
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    order = ["a1", "b1", "a2", "b2", "a3", "b3", "a4", "b4"]
+    write_raw_and_mzml_twins(raw, order, 50)
+    (raw / "sample-manifest.tsv").write_text(
+        "sample_id\tsource_file\tgroup\trole\n"
+        + "".join(f"{n}\t{n}.raw\t{n[0].upper()}\tsample\n" for n in order), encoding="utf-8")
+    text = list_data_files(directory=str(raw), all_files=True)
+    assert "## 群と取得順の重なり（sample-manifest.tsv の群）: independent" in text
+    assert "150 分を超える間隔で区切った取得のまとまり（1 個）" in text
+    assert "A\tB\tindependent" in text.split("group_a\tgroup_b\toverlap\n", 1)[1]
+
+
+def _mwtab(tmp_path, names: list[str], suffix: str):
+    table = tmp_path / "ST000007.txt"
+    table.write_text("#METABOLOMICS WORKBENCH STUDY_ID:ST000007\n"
+                     + "".join(f"SUBJECT_SAMPLE_FACTORS\t-\t{n}\tTreatment:{'ctrl' if k % 2 else 'drug'}"
+                               f"\tRAW_FILE_NAME={n}{suffix}\n" for k, n in enumerate(names)),
+                     encoding="utf-8")
+    return table
+
+
+def test_unreadable_reasons_group_files_with_the_same_reason(tmp_path):
+    """SCIEX OS のフォルダ（.wiff2 だけで同じ幹の .wiff が無い）でも、理由はファイルによらない 1 種類に
+    まとまる（`unreadable` を 20 件に切っても理由が 1 ファイル 1 種類で返り、戻り値が縮まなかった）。"""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    names = [f"s{k:02d}" for k in range(40)]
+    for n in names:
+        (raw / f"{n}.wiff2").write_bytes(b"\x00" * 64)
+    out = _call(raw_dir=str(raw), sample_table=str(_mwtab(tmp_path, names, ".wiff2")),
+                factor_columns=["Treatment"])
+    assert out["status"] == "success" and out["injection_order_source"] == "none", out
+    assert len(out["unreadable"]) == 20 and out["unreadable_n_more"] == 20
+    assert len(out["unreadable_reasons"]) == 1 and list(out["unreadable_reasons"].values()) == [40]
+    assert "同じ幹の .wiff" in next(iter(out["unreadable_reasons"]))
+    assert "unreadable_reasons_n_more" not in out
+
+
+def test_unreadable_reasons_are_capped_like_the_lists(tmp_path):
+    """ファイルごとに文面の違う理由（壊れた Agilent の AcquiredTime の値）は、件数の多い順に先頭 20 種類だけ返し、
+    切った種類の数を `unreadable_reasons_n_more` に置く。"""
+    from tests.test_rawmeta import write_agilent_d
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    names = [f"s{k:02d}" for k in range(25)]
+    for k, n in enumerate(names):
+        # 最後の 3 本は同じ壊れ方（件数 3 の理由が先頭に来る）
+        write_agilent_d(raw / f"{n}.d", "broken" if k >= 22 else f"broken{k:02d}")
+    out = _call(raw_dir=str(raw), sample_table=str(_mwtab(tmp_path, names, ".d")),
+                factor_columns=["Treatment"])
+    assert out["status"] == "success", out
+    reasons = out["unreadable_reasons"]
+    assert len(reasons) == 20 and out["unreadable_reasons_n_more"] == 3     # 23 種類のうち 20 種類
+    first, count = next(iter(reasons.items()))
+    assert count == 3 and "'broken'" in first
+    assert sum(reasons.values()) == 3 + 19

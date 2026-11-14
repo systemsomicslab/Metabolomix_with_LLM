@@ -54,20 +54,31 @@ def sample_group_role_counts(ds) -> dict:
     """試料の群（Class ID）ごと・役割ごとの件数。`load_dataset` の戻り値と `dataset_status` の要約が共有する。
 
     群と役割は試料の対応表（`_metadata_rows`）から数える。群の宣言が無い試料は `n_ungrouped`。
+    `groups` と `n_ungrouped` は統計に入る試料（`include` が真。統計エンジンの `_include` と同じ読み方）
+    だけを数え、実験情報シートの `include=false` の試料（`pipeline_sample_sheet` の群 `unassigned` など）は
+    `excluded_by_sheet`（シートの群 → 件数。群が無ければ `(群なし)`。1 件も無ければ鍵ごと出さない）に分ける。
+    `groups` に並ぶ群名は dataset_compare にそのまま渡せる。`roles` は全試料を数える。
     """
     rows = _metadata_rows(ds)
     groups: dict[str, int] = {}
     roles: dict[str, int] = {}
+    excluded: dict[str, int] = {}
     n_ungrouped = 0
     for row in rows:
+        role = row.get("role") or "sample"
+        roles[role] = roles.get(role, 0) + 1
         group = row.get("group")
-        if group:
+        if not bool(row.get("include", True)):
+            key = group or "(群なし)"
+            excluded[key] = excluded.get(key, 0) + 1
+        elif group:
             groups[group] = groups.get(group, 0) + 1
         else:
             n_ungrouped += 1
-        role = row.get("role") or "sample"
-        roles[role] = roles.get(role, 0) + 1
-    return {"groups": groups, "roles": roles, "n_ungrouped": n_ungrouped}
+    out = {"groups": groups, "roles": roles, "n_ungrouped": n_ungrouped}
+    if excluded:
+        out["excluded_by_sheet"] = excluded
+    return out
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
@@ -79,7 +90,9 @@ def dataset_status(dataset_handle: str | None = None, view: str = "summary",
       - `"summary"`（既定）: 概要。`samples` に name/role の TSV が入る。群（Class ID）ごとの件数 `groups` に
         dataset_compare の reference_group / test_group の群名が並ぶ（そのまま使う）・
         役割ごとの件数 `roles`・群の無い試料の数 `n_ungrouped`・特徴のタグごとの件数 `tags`・
-        除外の件数 `excluded`（`dataset_exclude`）を含む。
+        除外の件数 `excluded`（`dataset_exclude`）を含む。`groups` と `n_ungrouped` は統計に入る試料だけを
+        数え、実験情報シートの include=false の試料（群 `unassigned` など）は `excluded_by_sheet`
+        （シートの群 → 件数。無ければ鍵ごと出さない）に分ける。
       - `"samples"`: 試料の TSV（name・group・role・batch・batch_source・injection_order・
         injection_order_source・subject_id・excluded。`*_source` は値の出所 sheet / mddata / mzTab /
         raw_acquisition_time / filename（後の 2 つはシートの宣言 `# injection_order_source = ...`）

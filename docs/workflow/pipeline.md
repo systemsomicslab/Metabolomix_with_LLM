@@ -103,10 +103,16 @@ worker のもので、handshake(worker 自身が `pipeline-run.json` に書く i
 中継から見えない外側の段)なら、`_launch_warnings`(手順19)が `pipeline_run` / `pipeline_resume` の戻り値の
 `warnings` に `WORKER_IN_JOB`(`details.breakaway` / `relay_breakaway`)を足す。中継の直近の Job が
 `inherited_job`(breakaway は許さないが閉じても止めない)なら worker もその Job にいると分かるので警告しない
-(Windows 11 ではシェルの配下のプロセスが制限の無い Job にいることが普通にあり、警告すると毎回の雑音になる。
-それより外側の段は見えない)。worker も起動直後に自分を確かめ(`process_control.current_job_state`: 何段目かを
+(Windows 11 ではシェルの配下のプロセスが制限の無い Job にいることが普通にあり、警告すると毎回の雑音になる)。
+ただしそれより外側の段は見えない: Job は入れ子になりうるので、直近が閉じても止めない Job でも、その外側に
+KILL_ON_JOB_CLOSE の Job があれば、外側が閉じたとき worker と Console は止まる(`0x3000 → 0x0 → 0x2000` の
+入れ子では、中継は 0x3000 を黙って抜け、worker は 0x0 と外側の 0x2000 に残る)。そこで警告の代わりに軽い注記を
+添える(`engine.worker_outer_jobs_note`): `_launch_and_await`(手順14)が起動の結果に
+`launch.outer_jobs: "unchecked"` と `launch.outer_jobs_note`(外側の段は確かめていない。止まったら
+`pipeline_status` → `pipeline_resume`)を足す。worker も起動直後に自分を確かめ(`process_control.current_job_state`: 何段目かを
 問わず Job にいるかと、直近の Job の制限)、run の記録の `worker.in_job` / `worker.nearest_job` に残し、同じ規則で
-`warnings`(`WORKER_IN_JOB`、run に 1 つだけ。`details.nearest_job`)に残す。どちらも止めはしない。
+`warnings`(`WORKER_IN_JOB`、run に 1 つだけ。`details.nearest_job`)か、直近が `inherited_job` なら
+`worker.outer_jobs` / `worker.outer_jobs_note` の注記に残す。どちらも止めはしない。
 
 `_await_launch_handshake` は短い上限だけ待ち、超えても
 起動失敗と決め付けず再起動もしない(`launch.handshake="not_confirmed"`のまま
@@ -243,6 +249,9 @@ worker が消え、Console をまだ起こしていない単位(`_console_never_
 見ない: Console の終了後にしか書かれず `rerun_upstream=true` も消さないので、走っている attempt では空か前の
 attempt を指すだけ)は状態が分かっているので数えず、`upstream` と `validate_outputs` だけを戻して
 `rerun_upstream` なしで最初の Console から続ける(戻り値の `console_not_started_units`)。
+同じ `request_id` の再送は、`prepare_resume` が `resume_log[request_id]` に残した内訳(`not_retried_units` /
+`held_units` / `console_not_started_units`。空なら持たない)を `_resume_receipt` に渡し、1 回目と同じ内訳を
+`reused: true` で返す(再送で、Console を最初から起こす単位の知らせを落とさない)。
 
 ## pipeline_cancel
 
@@ -413,7 +422,8 @@ MS-DIAL GUI が解析のたびに保存する `<project>_param_<終了時刻>.tx
 
 手順2で worker は自分がまだ Windows の Job に入っているか(何段目でも)を確かめ、手順4で run の記録の
 `worker.in_job` / `worker.nearest_job` に残す(閉じたら止めるか分からない Job なら警告 `WORKER_IN_JOB`。
-直近の Job が `inherited_job` なら警告しない。試験の harness は `run_engine` を直に呼ぶので確かめない)。
+直近の Job が `inherited_job` なら警告せず、外側の段を確かめていない注記 `worker.outer_jobs: "unchecked"` /
+`worker.outer_jobs_note` を残す。試験の harness は `run_engine` を直に呼ぶので確かめない)。
 手順9は受付と同じ切れた mzML の検査を配置の前にもう一度行う(受付の後に切れたものも Console の前で止める)。
 
 工程の計画(`engine.build_stages`)は単位ごとの `prepare_input:<極性>` →

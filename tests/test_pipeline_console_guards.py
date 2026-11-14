@@ -406,13 +406,29 @@ def test_worker_in_a_job_that_may_kill_it_is_warned(tmp_path, nearest_job):
 
 
 def test_worker_in_a_job_known_not_to_kill_on_close_is_not_warned(tmp_path):
-    """直近の Job が閉じても止めない（`inherited_job`。Windows 11 のシェルの配下でいつもこうなる）。"""
+    """直近の Job が閉じても止めない（`inherited_job`。Windows 11 のシェルの配下でいつもこうなる）なら
+    `WORKER_IN_JOB` は出さず、その外側の段（kill-on-close の Job があるか）を確かめていないことだけを
+    run の記録の `worker` に注記する（Job の問い合わせは直近の Job しか読めない）。"""
     path = create_synthetic_run(tmp_path)
     engine._record_worker_identity(path, {"in_job": True, "nearest_job": "inherited_job"})
     record = load_run(path)
     assert record["worker"]["in_job"] is True
     assert record["worker"]["nearest_job"] == "inherited_job"
     assert "WORKER_IN_JOB" not in [w["code"] for w in record.get("warnings") or []]
+    assert record["worker"]["outer_jobs"] == "unchecked"
+    note = record["worker"]["outer_jobs_note"]
+    assert "外側" in note and "kill-on-close" in note and "pipeline_resume" in note
+
+
+@pytest.mark.parametrize("job", [{"in_job": True, "nearest_job": None},
+                                 {"in_job": True, "nearest_job": "unsupported"},
+                                 {"in_job": False, "nearest_job": None}])
+def test_outer_jobs_note_only_when_the_nearest_job_is_inherited(tmp_path, job):
+    """警告する場合（直近の Job が分からない・閉じたら止める）と Job の外では、外側の段の注記は付けない。"""
+    path = create_synthetic_run(tmp_path)
+    engine._record_worker_identity(path, job)
+    worker = load_run(path)["worker"]
+    assert "outer_jobs" not in worker and "outer_jobs_note" not in worker
 
 
 def test_worker_outside_any_job_is_not_warned(tmp_path):
@@ -481,6 +497,12 @@ def test_resume_returns_a_warning_when_the_worker_stays_in_a_job(tmp_path, monke
     for warning in warnings:
         assert warning["details"] == {"breakaway": "silent_breakaway",
                                       "relay_breakaway": relay_breakaway}
+    # 警告しない inherited_job でも、外側の段を確かめていないことは起動の結果に注記する
+    if in_job is True and relay_breakaway == "inherited_job":
+        assert summary["launch"]["outer_jobs"] == "unchecked"
+        assert "外側" in summary["launch"]["outer_jobs_note"]
+    else:
+        assert "outer_jobs" not in summary["launch"]
 
 
 def test_start_returns_a_warning_when_the_worker_stays_in_a_job(tmp_path, monkeypatch):
