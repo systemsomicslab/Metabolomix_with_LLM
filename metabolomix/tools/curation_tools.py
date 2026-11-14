@@ -380,7 +380,8 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
     `source` は判断の出どころ: ユーザーが出した判断は "user"（既定。ビューアの送信はいつも "user"）、
     LLM が出した判断は "llm"。記録の各行に残り、curation_flags の source 列に出る。
     `review_id` を省くと（送信用テキストも無いとき）、データセット（`dataset_handle`、省けば直近）の
-    `.arf2` に対する最新のレビュー（`cr-…`）を使い、戻り値の `review_id` と `review_id_source: "latest"` で示す。
+    `.arf2` に対する最新のレビュー（`cr-…`）を使い、戻り値の `review_id` と `review_id_source: "latest"` で示す
+    （そのレビューに拒まれたエラー——対象外のスポットなど——にも同じ 2 つが付く）。
     候補付け（`cs-…`）への送信は `review_id` を省けない。
     不正な要素が 1 つでもあれば何も書かずにエラーを返す（同じ spot_id を 1 回の送信で
     2 回以上名指しした場合も含む——どちらを採るか決められないため）。
@@ -431,7 +432,13 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
     try:
         result = submission.submit_flags(saved, entries, review_id=review_id, source=source)
     except submission.SubmissionError as exc:
-        return _error(str(exc), **exc.details)
+        if latest is None:
+            return _error(str(exc), **exc.details)
+        # 自動で選んだレビューに拒まれたときも、どのレビューを使ったかを示す（より広い前のレビューを
+        # 飛ばした可能性があるため。対象外のスポットなら review_id を渡して呼び直す）
+        return _error(f"{exc}（review_id を省いたので、このアラインメントの最新のレビュー {review_id} を"
+                      "使いました。別のレビューに送るなら review_id を渡してください。）",
+                      **{**exc.details, "review_id": review_id, "review_id_source": "latest"})
     if latest is not None:
         result["review_id_source"] = "latest"
     return json_payload(result)

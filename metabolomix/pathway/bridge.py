@@ -170,7 +170,8 @@ def _run_remote(base_url: str, request: dict, run_dir: Path, timeout_s: float) -
     config, names = _remote_config(request)
     try:
         result = remote.run_job(base_url, _api_token(), Path(request["mztab"]), config,
-                                list(names.values()), Path(run_dir), timeout_s=timeout_s)
+                                list(names.values()), Path(run_dir), timeout_s=timeout_s,
+                                record_name=remote.job_record_name(request["mode"]))
     except remote.RemoteError as exc:
         # 描画ジョブの失敗はローカルと同じく描画だけの失敗（pathway_project の結果は有効）
         code = ("PATHWAY_RENDER_FAILED" if request["mode"] == "render" and exc.code == "MSLM_RUN_FAILED"
@@ -191,8 +192,9 @@ def run_bridge(request: dict, run_dir: Path, *, timeout_s: float = 300.0) -> dic
     （未到達・404・ジョブ失敗・時間切れ・成果物の欠落）は、ローカルの R へ回し、
     その理由を `remote_fallback` に残す。ローカルの R も使えなければ（未設定・
     仮想環境が未復元）、サーバ側のエラーを上げる（details.local にローカルの理由）。
-    `remote_fallback` はサーバのジョブ ID（`job_id`。投入まで進んだときだけ）と送受信の記録
-    `remote-job.json` の場所（`record`）も持つ（サーバは失敗の本文を返さず、本文は上流の worker.log にしか無い）。
+    `remote_fallback` はサーバのジョブ ID（`job_id`。投入まで進んだときだけ）と送受信の記録の場所
+    （`record`。mode ごとの `remote-job-<mode>.json`）も持つ（サーバは失敗の本文を返さず、本文は上流の
+    worker.log にしか無い）。
     """
     url = api_url()
     if url is None:

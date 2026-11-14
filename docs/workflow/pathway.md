@@ -16,12 +16,14 @@
 → 成果物の取得。config は JSON で送る）。request はローカルと同じ dict で、`_remote_config()` が API の
 config に写す（`analysis.normalization` は常に none。サーバは 3 パスウェイを全部計算し、頼んだ分だけ落とす）。
 サーバのどんな失敗でもローカルへ回し、理由を戻り値の `remote_fallback` に残す（`job_id` は投入まで進んだときだけ、
-`record` は `remote-job.json` の場所。サーバは失敗の本文を返さず、本文は上流の worker.log にだけある）。ローカルも使えない
+`record` はそのジョブの送受信の記録の場所。サーバは失敗の本文を返さず、本文は上流の worker.log にだけある）。
+記録の名前は `job_record_name()` が request の mode ごとに決める（`remote-job-measure.json` / `remote-job-render.json`。
+同じ run で `pathway_plot` の描画のジョブが、manifest の `remote_fallback.record` が指す計測の記録を上書きしない）。ローカルも使えない
 （`MSLM_NOT_CONFIGURED` / `MSLM_R_PACKAGES_MISSING`）ときはサーバ側のエラーを上げる
 （`details.remote` にサーバの理由、`details.local` にローカルの理由）。ローカルの R が動いて失敗したとき
 （`MSLM_R_PACKAGE_LOAD_FAILED` を含む）はローカルのエラーを上げ、サーバの理由は `details.remote_fallback`。
-戻り値の `backend` がどちらで動いたかを示す。`pathway_project` / `pathway_plot` はブリッジの失敗の封筒に
-`details.run_dir` を足す。
+戻り値の `backend` がどちらで動いたかを示す。`pathway_project` / `pathway_plot` はブリッジを呼んでからの失敗の封筒
+（ブリッジ・JSON-LD の読み取り・`pathway_plot` の PDF の欠落と画像化の失敗）に `details.run_dir` を足す。
 
 ローカルの R 側は `metabolomix/pathway/mslm_bridge.R` で、起動直後に renv の仮想環境 `r/` を有効化し、
 上流の公開関数（`MSLipidMapper::` で始まるもの）だけを呼ぶ。Python との契約は
@@ -53,7 +55,7 @@ R の仮想環境は起動前に確かめる（`_check_environment()`）: `r/ren
 9. ├─ metabolomix/pathway/bridge.py  run_bridge()
 10. │  ├─ [mslipidmapper_api_url あり] metabolomix/pathway/bridge.py  _run_remote()
 11. │  │  ├─ metabolomix/pathway/bridge.py  _remote_config()
-12. │  │  └─ metabolomix/pathway/remote.py  run_job()（output.format=jsonld）
+12. │  │  └─ metabolomix/pathway/remote.py  run_job()（output.format=jsonld。記録は `remote-job-measure.json`）
 13. │  └─ [mslipidmapper_api_url なし・サーバ失敗] metabolomix/pathway/bridge.py  _run_local()
 14. │     ├─ metabolomix/pathway/bridge.py  _check_environment()
 15. │     └─ （R 側。mode=measure で `mslm_bridge.R` が `MSLipidMapper::mztab_pathway_measurements` を呼ぶ）
@@ -74,6 +76,6 @@ R の仮想環境は起動前に確かめる（`_check_environment()`）: `r/ren
 1. metabolomix/pathway/tools.py  pathway_plot()
 2. ├─ metabolomix/pathway/tools.py  _load_manifest()
 3. ├─ metabolomix/pathway/bridge.py  run_bridge()
-4. │  ├─ [mslipidmapper_api_url あり] metabolomix/pathway/remote.py  run_job()（output.format=pdf。ジョブ失敗は `PATHWAY_RENDER_FAILED`）
+4. │  ├─ [mslipidmapper_api_url あり] metabolomix/pathway/remote.py  run_job()（output.format=pdf。ジョブ失敗は `PATHWAY_RENDER_FAILED`。記録は `remote-job-render.json`）
 5. │  └─ [mslipidmapper_api_url なし・サーバ失敗] （R 側。mode=render で `mslm_bridge.R` が `MSLipidMapper::render_pathway_from_config` を呼ぶ）
 6. └─ metabolomix/plots/pdf_raster.py  pdf_first_page_png()（PNG を `<pathway>.png` に書く。戻り値は既定で場所と要約の JSON、`inline_image=true` は [JSON, 画像…]）

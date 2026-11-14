@@ -68,7 +68,7 @@ def _handoff_note(report: dict) -> str | None:
 
     研究室 MSP の行（慣用名・ID・ClassyFire の Ontology）は名前かクラスと組成式から MS-DIAL の
     クラスと略記の名前に直して入れる。残した行は経路ごとに、落とした行は理由ごとに数える。
-    同名の行を 1 行に絞った件数（`dropped_duplicate_names`）は脂質の理由とは別に述べる。
+    同名の重複で落とした行数（`dropped_duplicate_names`。同名ごとに 1 行を残す）は脂質の理由とは別に述べる。
     """
     dropped = {k: report.get(f"dropped_{k}") or 0 for k in _DROP_LABELS}
     duplicates = report.get("dropped_duplicate_names") or 0
@@ -81,7 +81,7 @@ def _handoff_note(report: dict) -> str | None:
         dropped_text = "、".join(f"{_DROP_LABELS[k]} {n}" for k, n in dropped.items() if n)
         text += f"脂質として入れられない行を計 {sum(dropped.values())} 件除いた（{dropped_text}）。"
     if duplicates:
-        text += f"同名の行 {duplicates} 件は平均強度が最大の 1 行に絞った。"
+        text += f"同名の重複で {duplicates} 行を落とした（同名ごとに平均強度が最大の 1 行を残す）。"
     return text + f"残した行の経路は {kept_text}（重複名の整理後に {report.get('n_kept')} 件）。"
 
 
@@ -189,7 +189,7 @@ def _with_matrix(envelope: str, matrix_id: str | None) -> str:
 
 
 def _bridge_envelope(exc, run_dir: Path, matrix_id: str | None = None) -> str:
-    """ブリッジの失敗の封筒。run のディレクトリ（`remote-job.json`・`bridge.log` の置き場）を添える（B11-T44）。"""
+    """ブリッジの失敗の封筒。run のディレクトリ（`remote-job-<mode>.json`・`bridge.log` の置き場）を添える（B11-T44）。"""
     return _with_details(mcp_errors.pathway_error(exc.code, exc.message, exc.details),
                          run_dir=str(run_dir), matrix_id=matrix_id)
 
@@ -538,14 +538,14 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
         if not outputs.get(p):
             return mcp_errors.pathway_error(
                 "PATHWAY_RENDER_FAILED", f"{p} の PDF が出力されませんでした。",
-                {"pathway": p, "log": str(run_dir / "bridge.log")})
+                {"pathway": p, "log": str(run_dir / "bridge.log"), "run_dir": str(run_dir)})
         pdf = Path(outputs[p])
         try:
             png, w, h = pdf_raster.pdf_first_page_png(pdf)
         except Exception as exc:  # 0 ページ・壊れた PDF など。PyMuPDF の例外型は版で揺れる
             return mcp_errors.pathway_error(
                 "PATHWAY_RENDER_FAILED", f"{p} の PDF を画像にできません: {exc}",
-                {"pathway": p, "pdf": str(pdf)})
+                {"pathway": p, "pdf": str(pdf), "run_dir": str(run_dir)})
         png_path = run_dir / f"{p}.png"
         png_path.write_bytes(png)
         images.append(Image(data=png, format="png"))

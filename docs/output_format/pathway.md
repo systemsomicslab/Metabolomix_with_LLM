@@ -48,7 +48,7 @@
   何行落ちたかの内訳は返さない。
   試し（MTBLS6965 の 2 群比較、`msp_then_lbm`）の件数は
   `docs/superpowers/specs/2026-10-28-reanalysis-v8-trial.md` の節「MSP の脂質の handoff（2026-11-02）」。
-  同名の行は平均強度最大の 1 行だけ残す（`dropped_duplicate_names`。`kept_by_route` は絞る前の数で、
+  同名の行は平均強度最大の 1 行だけ残す（`dropped_duplicate_names` は落とした行の数。`kept_by_route` は絞る前の数で、
   `n_kept` = その合計 − `dropped_duplicate_names`）——sum がアダクト違いを二重計上しないため。
 - 中間 mzTab-M に書く文字列（試料名・群名・脂質名・Ontology）の `#` は `_` に置き換わる
   （上流の `read.table` は `#` 以降をコメントとして捨てるため）。群名も置換後の形で返る。
@@ -140,11 +140,16 @@ mean_a / mean_b は個体の `2**log2` の算術平均（エンジンの定義�
 
 ## 失敗したとき
 
-- ブリッジの失敗（`MSLM_*`・`PATHWAY_RENDER_FAILED`）の封筒は `details.run_dir`（その run のディレクトリ）を持つ。
-  サーバの送受信の記録 `remote-job.json` とローカルの `bridge.log` はそこにある。
+- MSLipidMapper を呼んでからの失敗（ブリッジの `MSLM_*`、JSON-LD を読めない `MSLM_OUTPUT_INVALID`、
+  `pathway_plot` の `PATHWAY_RENDER_FAILED`——PDF が出ない・画像にできないときも）の封筒は `details.run_dir`
+  （その run のディレクトリ）を持つ。呼ぶ前に断る `pathway_plot` の manifest.json の読み取りの失敗は `details.manifest`。
+- run のディレクトリには、サーバの送受信の記録がジョブの種類ごとに残る: `remote-job-measure.json`（`pathway_project` の
+  計測のジョブ。run に 1 つ）と `remote-job-render.json`（`pathway_plot` の描画のジョブ。直近の 1 回だけ）。ローカルの
+  `bridge.log` は直近のローカルの R の呼び出しのもの（`pathway_plot` が R で描けば計測の分は上書きされる）。
 - 研究室サーバのジョブが失敗したとき、サーバは理由を固定文でしか返さない（本文は上流の worker.log にだけあり、API では
   取れない）。`remote_fallback`（成功してローカルへ回ったときは戻り値の `backend` と manifest、失敗の封筒では
-  `details.remote` か `details.remote_fallback`）に `job_id`（投入まで進んだときだけ）と `record`（`remote-job.json` の場所）が残る。
+  `details.remote` か `details.remote_fallback`）に `job_id`（投入まで進んだときだけ）と `record`（そのジョブの
+  `remote-job-<mode>.json` の場所。manifest の `remote_fallback.record` は計測の記録を指し、描画では上書きされない）が残る。
 - `MSLM_R_PACKAGES_MISSING` は R の仮想環境に MSLipidMapper が無い（未復元・古い・公開関数が無い）。
   `MSLM_R_PACKAGE_LOAD_FAILED` は入っているのに R が読み込めない（message に R の `loadNamespace` の本文）。
   後者はローカルの R を「動かして失敗した」ものとして扱い、サーバが先に失敗していればその理由は `details.remote_fallback`。

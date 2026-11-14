@@ -488,6 +488,23 @@ def test_submit_without_review_id_uses_the_latest_review(ready):
     assert rows[-1]["review_id"] == latest
 
 
+def test_submit_without_review_id_names_the_latest_review_when_it_refuses(ready):
+    """最新のレビューが絞り込みで対象外のスポットを断ったとき、どのレビューを使ったかをエラーで示す。"""
+    broad = json.loads(curation_tools.curation_review())["review_id"]
+    narrow = json.loads(curation_tools.curation_review(name_contains="34:1"))["review_id"]
+    body = json.loads(curation_tools.curation_submit(flags=[{"spot_id": 1, "flag": "wrong"}]))
+    assert body["status"] == "error" and "対象外" in body["message"]
+    assert body["review_id"] == narrow != broad and body["review_id_source"] == "latest"
+    assert narrow in body["message"] and "review_id を渡して" in body["message"]
+    assert json.loads(curation_tools.curation_flags())["n_flags"] == 0
+    # review_id を渡したときのエラーには付けない
+    body = json.loads(curation_tools.curation_submit(review_id=narrow, flags=[{"spot_id": 1, "flag": "wrong"}]))
+    assert body["status"] == "error" and "review_id_source" not in body
+    # 広いほうを名指しすれば送れる
+    body = json.loads(curation_tools.curation_submit(review_id=broad, flags=[{"spot_id": 1, "flag": "wrong"}]))
+    assert body["status"] == "ok" and "review_id_source" not in body
+
+
 def test_submit_with_review_id_does_not_say_latest(ready):
     review_id = json.loads(curation_tools.curation_review())["review_id"]
     body = json.loads(curation_tools.curation_submit(review_id=review_id,

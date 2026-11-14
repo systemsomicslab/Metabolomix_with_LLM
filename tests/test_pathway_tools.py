@@ -191,10 +191,13 @@ def test_handoff_note_names_the_new_reasons_and_duplicate_names():
                                 "kept_by_route": {"as_is": 10, "name": 0, "class_formula": 0}, "n_kept": 10})
     assert "計 6 件" in note and "同位体の標識 3" in note and "頭部" in note and "`(` 始まり" in note
     assert "同名" not in note
-    # 同名の行を絞っただけでも注意を出す（脂質の理由とは別に述べる）
+    # 同名の行を絞っただけでも注意を出す（脂質の理由とは別に述べる）。件数は落とした行の数
     note = tools._handoff_note({"dropped_duplicate_names": 4,
                                 "kept_by_route": {"as_is": 10, "name": 0, "class_formula": 0}, "n_kept": 6})
-    assert "同名の行 4 件" in note and "計" not in note
+    assert "同名の重複で 4 行を落とした" in note and "計" not in note
+    # 2 行が 1 行になったとき「1 件を 1 行に絞った」と読ませない
+    note = tools._handoff_note({"dropped_duplicate_names": 1, "kept_by_route": {"as_is": 2}, "n_kept": 1})
+    assert "同名の重複で 1 行を落とした" in note and "1 行を残す" in note
 
 
 def test_project_returns_handoff_counts_at_top_level(lipid_arf, fake_measure):
@@ -240,7 +243,7 @@ def test_bridge_error_becomes_envelope(lipid_arf, monkeypatch, tmp_path):
     monkeypatch.setattr(bridge, "run_bridge", boom)
     body = json.loads(tools.pathway_project(**_GROUPS))
     assert body["error"]["code"] == "MSLM_NOT_CONFIGURED"
-    # 失敗しても run のディレクトリ（remote-job.json・bridge.log の置き場）を辿れる（B11-T44）
+    # 失敗しても run のディレクトリ（remote-job-<mode>.json・bridge.log の置き場）を辿れる（B11-T44）
     run_dir = Path(body["error"]["details"]["run_dir"])
     assert run_dir.parent == tmp_path / "reports" / "pathway" and (run_dir / "input.mztab").is_file()
 
@@ -353,11 +356,22 @@ def test_render_failure_envelope(lipid_arf, fake_measure, monkeypatch):
     monkeypatch.setattr(bridge, "run_bridge", fail)
     body = json.loads(tools.pathway_plot())
     assert body["error"]["code"] == "PATHWAY_RENDER_FAILED"
+    assert Path(body["error"]["details"]["run_dir"]).name == session_state.session.pathway.last_run_id
+
+
+def test_missing_pdf_becomes_render_failed_with_run_dir(lipid_arf, fake_measure, monkeypatch):
+    """ブリッジが成功を返しても PDF が無ければ PATHWAY_RENDER_FAILED で、run のディレクトリを添える。"""
+    run_id = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))["run_id"]
+    monkeypatch.setattr(bridge, "run_bridge", lambda request, run_dir, *, timeout_s=300.0:
+                        {"status": "ok", "outputs": {}})
+    err = json.loads(tools.pathway_plot())["error"]
+    assert err["code"] == "PATHWAY_RENDER_FAILED" and err["details"]["pathway"] == "remodeling"
+    assert err["details"]["run_dir"] == str(tools._run_dir(run_id, session_state.session))
 
 
 def test_unreadable_pdf_becomes_render_failed(lipid_arf, fake_measure, monkeypatch):
     """PDF が壊れている（0 ページ・読めない）なら例外を漏らさず PATHWAY_RENDER_FAILED。"""
-    json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    run_id = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))["run_id"]
 
     def render(request, run_dir, *, timeout_s=300.0):
         pdf = run_dir / "remodeling.pdf"
@@ -368,6 +382,7 @@ def test_unreadable_pdf_becomes_render_failed(lipid_arf, fake_measure, monkeypat
     body = json.loads(tools.pathway_plot())
     assert body["error"]["code"] == "PATHWAY_RENDER_FAILED"
     assert "remodeling" in body["error"]["message"]
+    assert body["error"]["details"]["run_dir"] == str(tools._run_dir(run_id, session_state.session))
 
 
 @pytest.mark.parametrize("bad", ["../..", r"..\..", "pw_x", "pw_20261014_120000_abcdef/../x"])

@@ -142,7 +142,8 @@ flowchart TD
 サーバ再起動の後でも、貼った文なら送れる）。どれも無ければ `missing_state("dataset", ["load_dataset"])`。
 送信用テキストも `review_id` も無ければ、データセットの `.arf2` に対する最新のレビューを使う
 （`_latest_review_for_submit()` → `suggest.latest_review()`。無ければ `missing_state("curation_review")`。
-`assign` / `redundant` の要素があれば `cs-…` を求めるエラー）。
+`assign` / `redundant` の要素があれば `cs-…` を求めるエラー）。そうして選んだレビューに `submit_flags()` が
+拒んだとき（対象外のスポットなど）も、エラーに `review_id` と `review_id_source: "latest"` を添える。
 書いた後、同じ `.arf2` を持つ開いているハンドルすべての `curation_flags` を読み直す
 （`submission.after_write` → `curation_tools._refresh_open_handles`。ハンドルごとにそのハンドルのロックの下で
 1 つずつ、`REFRESH_LOCK_TIMEOUT` 秒だけ待つ。取れなければ `open_handles.not_refreshed`）。

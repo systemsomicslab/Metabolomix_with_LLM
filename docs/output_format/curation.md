@@ -358,6 +358,10 @@ EIC（`partner_eic`）を持つ。
 - `curation_flags` の TSV は 7 列: `spot_id`・`flag`・`name`（`assign` の記録名）・`of`（`redundant` の相手）・`note`・`source`・`ts`。
   `source` は判断の出どころ: `user`（ユーザーが出した判断。ビューアの送信はいつもこれ）/ `llm`（LLM が出した判断）。
   `curation_submit` の呼び出し側が申告し、1 回の送信の全行に同じ値が付く。
+- `dataset_feature_search` の `curation_flag` 列は有効な判断: `wrong` / `suspect` / `assign:<記録名>` / `redundant`（無ければ空）。
+- `curation_review` のスポットの `flag` / `flag_note` は `wrong` / `suspect` / `confirmed` だけ。`assign` / `redundant` は別項目 `decision`
+  （`{flag, name}` または `{flag, of}`）に出る。
+- エクスポートでの扱い（下の「エクスポートのメタ行」以降）: `assign` は同定を置き換え、`redundant` は除外する。
 
 ### `curation_submit` の `review_id` を省いたとき
 
@@ -365,10 +369,9 @@ EIC（`partner_eic`）を持つ。
 `.arf2` に対する最新のレビュー（`cr-…`。`curation_suggest` の既定と同じ規則で、同じ秒の ID は `created_at` の
 新しいほう）に記録し、戻り値の `review_id` と `review_id_source: "latest"` で示す。レビューが無ければ
 `missing_state("curation_review")`。候補付け（`assign` / `redundant`）の送信は `review_id`（`cs-…`）を省けない。
-- `dataset_feature_search` の `curation_flag` 列は有効な判断: `wrong` / `suspect` / `assign:<記録名>` / `redundant`（無ければ空）。
-- `curation_review` のスポットの `flag` / `flag_note` は `wrong` / `suspect` / `confirmed` だけ。`assign` / `redundant` は別項目 `decision`
-  （`{flag, name}` または `{flag, of}`）に出る。
-- エクスポートでの扱い（下の「エクスポートのメタ行」以降）: `assign` は同定を置き換え、`redundant` は除外する。
+選ばれるのは対象のスポットを問わず最新のレビューなので、`name_contains` や `ontology` で絞ったレビューが最新だと、
+その外のスポットは「このレビューの対象外」で断られる。そのエラー（`status: "error"`）にも `review_id`（使ったレビュー）と
+`review_id_source: "latest"` が付く。別のレビューに送るなら `review_id` を渡して呼び直す。
 
 ### `curation_submit` の戻り値の `open_handles`（開いているデータセットへの反映）
 

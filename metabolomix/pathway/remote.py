@@ -22,13 +22,22 @@ CONNECT_TIMEOUT_S = 5.0
 #: 1 回の HTTP 往復（アップロード・成果物の取得を含む）の待ち時間。
 REQUEST_TIMEOUT_S = 60.0
 POLL_INTERVAL_S = 2.0
-#: run ディレクトリに残す送受信の記録（bridge.log に相当する出どころ）。
-JOB_RECORD = "remote-job.json"
 
 #: テストが httpx.MockTransport を差し込む口。
 _transport: httpx.BaseTransport | None = None
 _sleep = time.sleep
 _monotonic = time.monotonic
+
+
+def job_record_name(mode: str) -> str:
+    """run ディレクトリに残す送受信の記録（bridge.log に相当する出どころ）のファイル名。
+
+    ジョブの種類（request の mode）ごとに別のファイル（`remote-job-measure.json` /
+    `remote-job-render.json`）: 同じ run で pathway_plot の描画のジョブが、pathway_project の
+    計測のジョブの記録（manifest の `remote_fallback.record` が指す）を上書きしないため。
+    同じ種類のジョブは直近の 1 回だけが残る。
+    """
+    return f"remote-job-{mode}.json"
 
 
 class RemoteError(Exception):
@@ -137,19 +146,20 @@ def _download(client: httpx.Client, job_id: str, name: str, dest: Path, details:
 
 
 def run_job(base_url: str, token: str | None, mztab: Path, config: dict,
-            artifacts: list[str], run_dir: Path, *, timeout_s: float) -> dict:
+            artifacts: list[str], run_dir: Path, *, timeout_s: float, record_name: str) -> dict:
     """ジョブを 1 つ回し、`artifacts`（成果物名）を run_dir に同名で保存する。
 
     戻り値はサーバの状態応答の `result`（`job_id` を足したもの）。
-    送受信の記録は run_dir/remote-job.json（トークンは書かない）。
+    送受信の記録は run_dir/`record_name`（`job_record_name(mode)`。トークンは書かない）で、
+    失敗の details の `record` がその場所。
     """
     run_dir = Path(run_dir)
-    details = {"api_url": base_url, "record": str(run_dir / JOB_RECORD)}
+    record_path = run_dir / record_name
+    details = {"api_url": base_url, "record": str(record_path)}
     record: dict = {"api_url": base_url, "config": config, "artifacts": artifacts}
 
     def save_record():
-        (run_dir / JOB_RECORD).write_text(json.dumps(record, ensure_ascii=False, indent=1),
-                                          encoding="utf-8")
+        record_path.write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
 
     try:
         with _client(base_url, token) as client:
