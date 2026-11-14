@@ -569,8 +569,9 @@ def library_match_feature(
     `spot_id`（MasterAlignmentID。`dataset_feature_search` 等で引ける）を渡すと、precursor m/z・
     RT・極性を `.arf2`（`arf2_path`、省略時は直近のデータセットの `.arf2`）から取り、
     測定スペクトルはアラインメント `.dcl`（`dcl_file`、省略時はデータセットの `.dcl`）の
-    そのスポットの代表 MS/MS を使う。precursor が ARF2 と ±0.01 で合わなければ
-    照合せず `status="dcl_precursor_mismatch"`、ID が無ければ `spot_not_found`。
+    そのスポットの代表 MS/MS を使う。`.dcl` の precursor・RT が ARF2 の `MassCenter`・`RT` と
+    ±0.05 Da・±0.2 分（`alignment_spot.PRECURSOR_TOLERANCE` / `RT_TOLERANCE`。RT だけのずれでも）で
+    合わなければ照合せず `status="dcl_precursor_mismatch"`、ID が無ければ `spot_not_found`。
     `rt` / `ion_mode` を明示すれば ARF2 の値より優先する。
 
     `ion_mode` は `"positive"` / `"negative"`（`"pos"` / `"neg"` / `"+"` / `"-"`、大小を問わない。

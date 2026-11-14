@@ -77,6 +77,11 @@ def fake_measure(monkeypatch):
     return calls
 
 
+def _bridge_without_outputs(monkeypatch):
+    """ブリッジは済むが JSON-LD の出力が無い（`MSLM_OUTPUT_INVALID`）。行列を決めた後の失敗を起こす。"""
+    monkeypatch.setattr(bridge, "run_bridge", lambda request, run_dir, **_: {"status": "ok", "outputs": {}})
+
+
 @pytest.mark.parametrize("kind", ["metabolite", "unknown"])
 def test_runs_without_a_lipid_assay_and_says_what_it_assumes(lipid_arf, fake_measure, tmp_path, kind):
     """assay_kind が lipid でなくても止めない（C1）。名前の文法が前提であることを notes で返す。"""
@@ -241,16 +246,33 @@ def test_mapped_nodes_counts_nonempty_whole_over_lipid_nodes(lipid_arf, fake_mea
     assert {l.split("\t")[0] for l in res["nodes_tsv"].splitlines()[1:]} == {"PC"}   # PE は行にならない
 
 
-def test_requested_chain_absent_everywhere_is_bad_request(lipid_arf, fake_measure, monkeypatch):
+def test_requested_chain_absent_everywhere_keeps_the_finished_run(lipid_arf, fake_measure, monkeypatch,
+                                                                   tmp_path):
+    """どのパスウェイにも分子種の無い鎖を指定しても、済んだブリッジの run を捨てない（R35）。
+
+    その鎖のスコープが行にならないだけで、ほかのスコープ（BH はパスウェイ×スコープ種別ごと）は
+    その鎖を指定しなかった run と同じ値になる。無かった鎖は missing_chains と notes に書く。"""
     # 22:6 は上流が空スコープとして出すだけ（どのパスウェイにも分子種が無い）
     monkeypatch.setattr(sys.modules[__name__], "_EXTRA", _empty_scope_items("PC", "acyl-22:6"))
     body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"],
                                             acyl_chains=["18:0", "22:6"]))
-    assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
-    assert body["error"]["details"]["missing_chains"] == ["22:6"]
+    assert "error" not in body, body
+    assert len(fake_measure) == 1                        # ブリッジは 1 回だけ（呼び直しが要らない）
+    assert body["missing_chains"] == ["22:6"]
+    assert "22:6" in body["notes"]["acyl_chains"] and "BH" in body["notes"]["acyl_chains"]
+    run_dir = tmp_path / "reports" / "pathway" / body["run_id"]
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["missing_chains"] == ["22:6"] and manifest["acyl_chains"] == ["18:0", "22:6"]
+    assert manifest["notes"]["acyl_chains"] == body["notes"]["acyl_chains"]
+    assert (run_dir / "nodes.tsv").is_file()
+    tsv = body["pathways"]["remodeling"]["nodes_tsv"]
+    scopes = {line.split("	")[1] for line in tsv.splitlines()[1:]}
+    assert scopes == {"whole", "18:0"}                   # 22:6 の空スコープは行にならない
+    # その鎖を指定しなかった run と同じ行（同じ p・q）。無い鎖はほかのスコープの検定に入らない
     ok = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"],
                                           acyl_chains=["18:0"]))
-    assert "run_id" in ok
+    assert "missing_chains" not in ok and "acyl_chains" not in ok["notes"]
+    assert ok["pathways"]["remodeling"]["nodes_tsv"] == tsv
 
 
 def test_same_groups_are_bad_request(lipid_arf, fake_measure):
@@ -499,15 +521,17 @@ def test_pathway_project_default_matrix_reports_its_source(lipid_arf, fake_measu
     assert again["matrix_id"] == body["matrix_id"] and again["matrix_source"] == "default"
 
 
-def test_error_after_latest_preprocess_names_the_matrix_and_its_source(lipid_arf, fake_measure):
+def test_error_after_latest_preprocess_names_the_matrix_and_its_source(lipid_arf, fake_measure, monkeypatch):
     from metabolomix.tools.stats_tools import dataset_preprocess
     pre = json.loads(dataset_preprocess(blank_min_ratio=None, detection_min_rate=None,
                                         max_qc_rsd=None, max_d_ratio=None))
-    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"], acyl_chains=["99:9"]))
+    _bridge_without_outputs(monkeypatch)              # ブリッジの後の失敗（JSON-LD が無い）
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    assert body["error"]["code"] == "MSLM_OUTPUT_INVALID"
     details = body["error"]["details"]
     assert details["matrix_id"] == pre["matrix_id"] and details["matrix_source"] == "latest_preprocess"
     assert "dataset_preprocess" in details["matrix_note"]
-    named = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"], acyl_chains=["99:9"],
+    named = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"],
                                              matrix_id=pre["matrix_id"]))
     assert "matrix_source" not in named["error"]["details"]         # 名指しの行列は呼び手が知っている
 
@@ -640,9 +664,10 @@ def test_too_few_units_leaves_no_matrix_no_record(monkeypatch, tmp_path, fake_me
     assert not getattr(ds, "stat_matrices", None) and _stats_records(tmp_path) == []
 
 
-def test_error_after_implicit_matrix_carries_matrix_id(lipid_arf, fake_measure, tmp_path):
-    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"], acyl_chains=["99:9"]))
-    assert body["error"]["code"] == "PATHWAY_BAD_REQUEST"
+def test_error_after_implicit_matrix_carries_matrix_id(lipid_arf, fake_measure, tmp_path, monkeypatch):
+    _bridge_without_outputs(monkeypatch)
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    assert body["error"]["code"] == "MSLM_OUTPUT_INVALID"
     from metabolomix.analysis import stats_results
     assert stats_results.get_matrix(lipid_arf.dataset, body["error"]["details"]["matrix_id"]) is not None
 

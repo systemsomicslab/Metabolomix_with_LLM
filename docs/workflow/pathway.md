@@ -41,6 +41,8 @@ message に R の本文を入れる。
 データセットが無ければ `missing_state` → `load_dataset`、名指しの行列が無い・古いなら `missing_state("stat_matrix")` →
 `dataset_preprocess`。既定の行列は、要求の検査（試料・単位の数・aggregation・q_threshold・method）がすべて済んでから登録し、前処理の記録を書く（手順 8 の `register_default`）。`matrix_id` を省いた呼び出しのエラーには、使った行列の `details.matrix_id` と `matrix_source` を添える（手順 6 の受け渡しの検査——サブクラス注釈の付いた特徴の数・群の大きさ——も含む。既定の行列は登録の後のエラーだけ。`latest_preprocess` なら `details.matrix_note` も）。
 旧 ARF 経路（`source="arf"`）は B-2b Task 8 で消えた。MSLipidMapper へは行列の注入ごとの値（生体のみ・欠測は 0）を渡す。
+指定した `acyl_chains` のうち分子種の入った鎖スコープがどのパスウェイにも無い鎖は、手順 17 の後で数えて戻り値と manifest の
+`missing_chains`・`notes.acyl_chains` に書くだけで、run は捨てない（空スコープは手順 18 の比較から外れる）。
 状態変更: `session.pathway.last_run_id` / `last_run_dir`。
 R の仮想環境は起動前に確かめる（`_check_environment()`）: `r/renv/library` に MSLipidMapper が無ければ
 `MSLM_R_PACKAGES_MISSING`（`reason=not_restored`）、`r/setup.R` が残す目印（復元に使った `renv.lock` の md5、

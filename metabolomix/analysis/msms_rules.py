@@ -253,7 +253,8 @@ def record_lipid_species(record) -> tuple[str | None, str | None]:
     """ライブラリの記録の脂質の種（GOSLIN の種のレベル）と、それを得た経路。読めなければ (None, None)。
 
     経路は順に `name`（記録の name をそのまま GOSLIN で読む）→ `name_cleaned`（限定子・`|` の後・
-    `;` の後の注記・付加体の表記を外し、古い MS-DIAL の書式と英語のクラス名を略記に直して読む。
+    `;` の後の注記（`;` の直後に空白の無い修飾 `;O…` `;2OH` `;(2OH)` `;Ep` … は残す。GOSLIN が読めない修飾なら
+    種に読まない）・付加体の表記を外し、古い MS-DIAL の書式と英語のクラス名を略記に直して読む。
     `pathway.msp_lipid.shorthand`）→ `ontology_formula`（ClassyFire の Ontology と分子式から和の組成の
     種を作る。`pathway.msp_lipid.from_class_formula`）。同位体の標識のある名前（内部標準）は読まない。
     """

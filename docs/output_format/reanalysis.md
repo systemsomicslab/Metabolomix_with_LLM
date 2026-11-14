@@ -480,7 +480,7 @@ InChIKey が一意に決まらない脂質の種は `{"lipid_species": "PC 18:3_
 | `species_route` | 読み方 |
 |---|---|
 | `name` | 記録の `name`（MS-DIAL の限定子を外して）をそのまま GOSLIN で読む |
-| `name_cleaned` | `\|` の後・`; ` の後の注記（`PC 34:1; ExampleDB ID-0000`）・末尾の付加体の表記（`[M+H]+`）を外し、古い MS-DIAL の書式（`Cer[NS] d18:1/16:0`）・英語のクラス名（`Phosphatidylcholine 16:0-18:1`）を略記に直して読む（`pathway.msp_lipid.shorthand`） |
+| `name_cleaned` | `\|` の後・`; ` の後の注記（`PC 34:1; ExampleDB ID-0000`。`;` の直後に空白の無い修飾——`;O` `;O2` `;O3` `;OH` `;OOH` `;2OH` `;(2OH)` `;(3OH)` `;Ep` `;O(FA 16:0)` など、修飾として知らない語も——は注記が続いても残し、括弧の外の次の空白から後ろの注記だけを外す: `PE 36:2;O (oxPE)` → `PE 36:2;O`。注記を足しても読みは変わらない。GOSLIN が読めない修飾（`;(2OH)` `;(OH)`）を残した名前は種に読まず、次の経路へ回る）・末尾の付加体の表記（`[M+H]+`）を外し、古い MS-DIAL の書式（`Cer[NS] d18:1/16:0`）・英語のクラス名（`Phosphatidylcholine 16:0-18:1`）を略記に直して読む（`pathway.msp_lipid.shorthand`） |
 | `ontology_formula` | 名前で読めなければ、ClassyFire の `Ontology` と分子式から和の組成の種を作る（`pathway.msp_lipid.from_class_formula`。LPS・LPG も） |
 
 同位体の標識のある名前（`(d7)` など、内部標準）と、どの経路でも読めない記録は目標とも別物とも

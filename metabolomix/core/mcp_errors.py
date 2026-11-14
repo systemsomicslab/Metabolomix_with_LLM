@@ -222,7 +222,7 @@ PATHWAY_ERROR_CODES = frozenset({
     "MSLM_OUTPUT_INVALID",
     # PDF 描画だけが失敗した（ブラウザ不在・unpkg 不達）。pathway_project の結果は有効。
     "PATHWAY_RENDER_FAILED",
-    # 引数を直して呼び直すしかない誤り（未知のパスウェイ名・群が小さい・鎖がデータに無い）。
+    # 引数を直して呼び直すしかない誤り（未知のパスウェイ名・群が小さい）。データに無い鎖は誤りにせず missing_chains。
     "PATHWAY_BAD_REQUEST",
 })
 

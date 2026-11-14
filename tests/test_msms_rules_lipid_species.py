@@ -81,6 +81,20 @@ def test_species_target_rank_is_found_by_the_record_name():
     ({"name": "PC 34:1; ExampleDB ID-0000"}, "PC 34:1", "name_cleaned"),
     ({"name": "Phosphatidylcholine 16:0-18:1"}, "PC 34:1", "name_cleaned"),
     ({"name": "Cer[NS] d18:1/16:0"}, "Cer 34:1;O2", "name_cleaned"),
+    # 酸化の修飾（;O ;O2 ;O3）は空白の注記が続いても残す（注記だけを切る。R10）
+    ({"name": "PE 36:2;O (oxPE)"}, "PE 36:2;O", "name_cleaned"),
+    ({"name": "FA 18:2;O (9-HODE)"}, "FA 18:2;O", "name_cleaned"),
+    ({"name": "TG 52:2;O3 (x)"}, "TG 52:2;O3", "name_cleaned"),
+    ({"name": "PE 36:2;O (oxPE) [M+H]+"}, "PE 36:2;O", "name_cleaned"),
+    ({"name": "Cer 18:1;O2/16:0 (x)"}, "Cer 34:1;O2", "name_cleaned"),
+    # `;O` 以外の修飾も注記の前で残す（レビュー V1）。和: C 18+24=42・二重結合 1・O 2+1=3、
+    # エポキシの環は GOSLIN が二重結合 1 つに数える（20:4 の 4 + 環 1 = 和 36:5、O 1）
+    ({"name": "Cer 18:1;O2/24:0;2OH (x)"}, "Cer 42:1;O3", "name_cleaned"),
+    ({"name": "PC 16:0_20:4;Ep (x)"}, "PC 36:5;O", "name_cleaned"),
+    ({"name": "PC 34:2;2OH (x)"}, "PC 34:2;O", "name_cleaned"),
+    # GOSLIN が読めない修飾（`;(2OH)` `;(OH)`）は残して読まない（修飾を落とした種に読み違えない）
+    ({"name": "Cer 18:1;O2/16:0;(2OH) (Cer AS)"}, None, None),
+    ({"name": "PC 16:0_18:2;(OH) (x)"}, None, None),
     # 名前で読めなければ ClassyFire の Ontology と分子式から（LPS / LPG も）
     ({"name": "1-oleoyl-glycero-3-phosphoserine", "ontology": "1-acyl-glycerol-3-phosphoserines",
       "formula": "C24H46NO9P"}, "LPS 18:1", "ontology_formula"),
@@ -94,6 +108,63 @@ def test_species_target_rank_is_found_by_the_record_name():
 ])
 def test_record_lipid_species_routes(record, species, route):
     assert M.record_lipid_species(record) == (species, route)
+
+
+OXPE_FORMULA = "C41H78NO9P"   # PE 36:2;O（PE 36:2 の C41H78NO8P に O が 1 つ）
+
+
+def test_oxidized_species_target_is_found_through_a_record_with_a_note():
+    """`PE 36:2;O (oxPE)` の記録は種 PE 36:2;O（修飾を落とした PE 36:2 ではない。R10）。
+
+    目標の候補になり、同じ種の別の分子種（`PE 18:0_18:2;O`）は `same_formula_margin` の別物に数えない。"""
+    scored = [({"name": "PE 36:2;O (oxPE)", "formula": OXPE_FORMULA}, _result(2.6, [754.5381])),
+              ({"name": "PE 18:0_18:2;O", "formula": OXPE_FORMULA}, _result(2.4, [754.5381]))]
+    rules = M.normalize_rules({"target": {"lipid_species": "PE 36:2;O"},
+                               "same_formula_margin": {"min_delta": 0.1}})
+    out = M.qualify(scored, MEASURED, PRECURSOR, rules, ms2_tol=0.025)
+    assert out["target_rank"] == 1 and out["top1_is_target"] is True
+    assert out["checks"][0]["detail"]["species_route"] == "name_cleaned"
+    margin = next(c for c in out["checks"] if c["check"] == "same_formula_margin")
+    assert margin["status"] == "pass" and margin["detail"]["reason"] == "no_same_formula_alternative"
+    # 修飾の無い PE 36:2 は別の種（同じ記録を目標に数えない）
+    plain = M.qualify(scored, MEASURED, PRECURSOR,
+                      M.normalize_rules({"target": {"lipid_species": "PE 36:2"}}), ms2_tol=0.025)
+    assert plain["target_rank"] is None
+
+
+def test_msdial_agreement_reads_the_oxidized_record_as_the_same_compound():
+    from metabolomix.library.matching import msdial_agreement
+
+    scored = [({"name": "PE 36:2;O (oxPE)"}, {}), ({"name": "PE 36:2"}, {})]
+    assert msdial_agreement(scored, {"name": "PE 36:2;O"}) == {
+        "msdial_name": "PE 36:2;O", "msdial_rank": 1, "top_differs_from_msdial": False}
+    assert msdial_agreement(scored, {"name": "PE 36:2"})["msdial_rank"] == 2
+
+
+CER_NS_FORMULA = "C34H67NO3"   # Cer 18:1;O2/16:0（Cer 34:1;O2）
+CER_AS_FORMULA = "C34H67NO4"   # Cer 18:1;O2/16:0;(2OH)（脂肪酸に水酸基。O が 1 つ多い）
+
+
+def test_a_hydroxy_fatty_acyl_record_with_a_note_is_not_the_non_hydroxy_species():
+    """`Cer 18:1;O2/16:0;(2OH) (Cer AS)` の記録を、注記を切るときに `;(2OH)` まで落として
+    Cer NS の種 Cer 34:1;O2 に読まない（レビュー V1）。目標の候補にも MS-DIAL の注釈と同じ物質にも数えない。"""
+    from metabolomix.library.matching import msdial_agreement
+
+    scored = [({"name": "Cer 18:1;O2/16:0;(2OH) (Cer AS)", "formula": CER_AS_FORMULA}, _result(2.6, [754.5381])),
+              ({"name": "Cer 18:1;O2/16:0", "formula": CER_NS_FORMULA}, _result(2.4, [754.5381]))]
+    out = M.qualify(scored, MEASURED, PRECURSOR,
+                    M.normalize_rules({"target": {"lipid_species": "Cer 34:1;O2"}}), ms2_tol=0.025)
+    assert out["target_rank"] == 2 and out["top1_is_target"] is False
+    assert msdial_agreement(scored, {"name": "Cer 34:1;O2"}) == {
+        "msdial_name": "Cer 34:1;O2", "msdial_rank": 2, "top_differs_from_msdial": True}
+
+
+@pytest.mark.parametrize("name", ["Cer 18:1;O2/24:0;2OH", "PC 16:0_20:4;Ep", "PC 34:2;2OH", "FA 18:2;9OH,13OH",
+                                  "FA 18:1;oxo", "TG 16:0_18:1_18:2;O(FA 16:0)", "Cer 18:1;O2/32:0;O(FA 18:2)"])
+def test_a_note_does_not_change_the_record_species(name):
+    bare = M.record_lipid_species({"name": name})
+    assert bare[1] == "name" and bare[0] is not None
+    assert M.record_lipid_species({"name": name + " (x)"}) == (bare[0], "name_cleaned")
 
 
 def test_species_target_found_through_the_ontology_route():
