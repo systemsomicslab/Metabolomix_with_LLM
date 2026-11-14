@@ -196,3 +196,18 @@ def test_row_significant_honours_verdict_and_row_flag():
         assert not row_significant({"q": 0.01, "log2fc": 2.0, "verdict": verdict}, **thr)
     assert not row_significant({"q": 0.01, "log2fc": 2.0, "significant": False}, **thr)
     assert row_significant({"q": 0.9, "log2fc": 0.0, "significant": True}, **thr)   # 行の印が勝つ
+
+
+def test_q_value_line_names_the_method_of_the_q_value_column():
+    """`q_value` 列の方法の行。契約の読み方（`contract_q`）の写しは `bh` と出所、計算し直したときだけ注記を足す。
+    契約の読み方でない写し（`q_value_method` が無い）は比較の方法をそのまま書き、BH と偽らない。"""
+    from metabolomix.analysis.export_contract import q_value_line
+    stats = {"p_adjust_method": "holm"}
+    recomputed = q_value_line({"statistics": stats, "q_value_method": "bh",
+                               "q_value_source": "recomputed_from_p_value"})
+    chunks = dict(c.split(" = ", 1) for c in recomputed.lstrip("# ").split("\t"))
+    assert chunks["q_value_method"] == "bh" and chunks["q_value_source"] == "recomputed_from_p_value"
+    assert "holm" in chunks["q_value_note"] and "=" not in chunks["q_value_note"]
+    assert q_value_line({"statistics": {"p_adjust_method": "bh"}, "q_value_method": "bh",
+                         "q_value_source": "comparison"}) == "# q_value_method = bh\tq_value_source = comparison"
+    assert q_value_line({"statistics": stats}) == "# q_value_method = holm\tq_value_source = comparison"

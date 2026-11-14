@@ -11,6 +11,8 @@
   で、古さは `is_stats_current`（`result_state.is_current` もここへ回す）。
 - 読み替え: `as_two_group` が `compare` の記録の 1 つの対比を、利用者が読む 2 群の形（`kind="two_group"`）に写す。
   2×2 の交互作用（差の差）は `allow_interaction=True` を渡した利用者（差次的の書き出し）だけが同じ形で読む。
+  別リポジトリとの契約の書き出し（差次的の書き出し・根拠バンドル）は `contract_q=True` で読み、`q` は契約の
+  BH の q（比較が別の補正なら同じ母集団で p から計算し直す。`contract_bh_rows`）。
 
 試料は**表示名**（`ds.sample_names`）で持つ。エンジンの試料 ID（試料の表があれば `ds.sample_ids`）は
 位置で表示名へ結ぶ（既存の利用者はすべて表示名で試料を引く）。
@@ -25,12 +27,13 @@ import re
 from metabolomix.analysis import differential, export_contract
 from metabolomix.analysis.result_state import dataset_fingerprint, is_stats_current
 from metabolomix.analysis.stats import preprocess as stats_preprocess
-from metabolomix.analysis.stats.compare import _model_value
+from metabolomix.analysis.stats.compare import _model_value, _verdict, adjust_p_values
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 __all__ = [
     "MatrixNotFound",
     "as_two_group",
+    "contract_bh_rows",
     "contrast_choices",
     "contrast_ids",
     "p_adjust_method",
@@ -519,19 +522,50 @@ def p_adjust_method(record: dict) -> str:
 
 
 #: 補正の方法 → `q` の読み方（報告した特徴だけの母集団 `reported` は方法によらず再現の確認）。
-_Q_INTERPRETATION = {"bonferroni": "fwer", "holm": "fwer", "none": "unadjusted"}
+_Q_INTERPRETATION = {"bh": "discovery_fdr", "bonferroni": "fwer", "holm": "fwer", "none": "unadjusted"}
 
 
 def q_interpretation(bh: dict, method: str) -> str:
-    """`q` の読み方。BH はエンジンの値（`discovery_fdr` / `reproduction_only`）のまま、ほかの補正は方法から
-    決める: `bonferroni` / `holm` は `fwer`、`none` は `unadjusted`（補正しない p）。母集団が `reported` なら
-    方法によらず `reproduction_only`。補正の方法を記録する前のエンジンが BH の読み方を書いたままの記録でも、
-    メタ行が `q_interpretation = discovery_fdr` と `p_adjust_method = holm` を並べて食い違わないようにする。"""
+    """`q` の読み方を補正の方法から決める: `bh` は `discovery_fdr`、`bonferroni` / `holm` は `fwer`、`none` は
+    `unadjusted`（補正しない p）。母集団が `reported` なら方法によらず `reproduction_only`。記録のエンジンが書いた
+    読み方（`bh` の値）は使わない——契約の書き出しは比較が `holm` でも BH の q を書く（`contract_bh_rows`）ので、
+    読み方は q を作った方法から決める（メタ行が `q_interpretation = discovery_fdr` と FWER の値を並べて
+    食い違わないようにする）。知らない方法だけエンジンの値（無ければ `discovery_fdr`）。"""
     if bh.get("name") == "reported":
         return "reproduction_only"
     if method in _Q_INTERPRETATION:
         return _Q_INTERPRETATION[method]
     return bh.get("q_interpretation") or "discovery_fdr"
+
+
+#: 契約の書き出し（差次的の書き出しの `q_value`・根拠バンドルの `features.tsv` の `q_value`）の多重比較の補正。
+#: 別リポジトリ（massbank-context）との契約で `q_value` は Benjamini–Hochberg の q（FDR）、`significant` はその q で読む。
+CONTRACT_Q_METHOD = "bh"
+#: `q_value_source`: 比較の q がそのまま BH（`comparison`）か、比較の補正が BH でなく p から計算し直した
+#: （`recomputed_from_p_value`）か。
+Q_VALUE_FROM_COMPARISON = "comparison"
+Q_VALUE_RECOMPUTED = "recomputed_from_p_value"
+
+
+def contract_bh_rows(rows: list[dict], verdict_rule: dict) -> list[dict]:
+    """1 つの対比の記録の行（`engine.rows` の同じ `contrast_id` の行）の `q` を契約の BH の q に置き換え、
+    判定 `verdict` / `verdict_reason` をその q でエンジンの規則（`compare._verdict`）どおりに読み直した写し。
+
+    BH の母集団は**比較と同じ**: 記録の `q` が付いた行の p（エンジンは補正の母集団 `bh_population` の外の行と
+    p の無い行に q を付けない。どの補正の方法でも、母集団の中で p が有限な行には q が付く）。だからエンジンが
+    同じ比較を `p_adjust="bh"` で回したときの q と判定に一致する。行の順と記録は変えない。
+    """
+    ps = [r.get("p") if r.get("q") is not None else None for r in rows]
+    qs = adjust_p_values(ps, CONTRACT_Q_METHOD)
+    eq_log2 = verdict_rule.get("equivalence_log2")
+    if eq_log2 is None:
+        eq_log2 = math.log2(verdict_rule["equivalence_fc"])
+    out = []
+    for row, q in zip(rows, qs):
+        new = {**row, "q": q}
+        new["verdict"], new["verdict_reason"] = _verdict(new, verdict_rule["q_threshold"], eq_log2)
+        out.append(new)
+    return out
 
 
 def split_result_ref(result_id: str, contrast_id: str | None = None) -> tuple[str, str | None]:
@@ -567,7 +601,7 @@ def _detection_driven(row: dict, n_units_ref: int, n_units_test: int) -> bool | 
 
 
 def as_two_group(record: dict, contrast_id: str | None = None, *,
-                 allow_interaction: bool = False) -> dict:
+                 allow_interaction: bool = False, contract_q: bool = False) -> dict:
     """`compare` の記録の 1 つの対比を、利用者が読む 2 群の形（`kind="two_group"`）に写す。
 
     `a` は対比の基準（reference）、`b` は比較（test）で、log2fc は正なら b が高い
@@ -583,6 +617,13 @@ def as_two_group(record: dict, contrast_id: str | None = None, *,
     その写しに `comparison.unadjusted_confounded: true` と説明（`warnings`。`caveats` にも）を足す（記録は変えない）。
     `contrast_kind` は `simple` か `interaction`、`statistics.p_adjust_method` は補正の方法（`p_adjust_method`）、
     `statistics.bh_population.q_interpretation` はその方法での `q` の読み方（`q_interpretation`）。
+
+    `contract_q=True`（別リポジトリとの契約の書き出し: 差次的の書き出しと根拠バンドル）は、行の `q` を契約の
+    BH の q にする: 比較の補正が `bh` ならそのまま、`bonferroni` / `holm` / `none` なら同じ母集団で p から
+    BH の q を計算し直し、判定 `verdict` と `significant` もその q で読み直す（`contract_bh_rows`）。
+    `q_interpretation` は BH の読み方（`discovery_fdr`、母集団が `reported` なら `reproduction_only`）、
+    `statistics.p_adjust_method` は比較の補正の方法のまま。写しに `q_value_method`（`bh`）と `q_value_source`
+    （`comparison` / `recomputed_from_p_value`）が足される。
 
     交互作用（2×2 の差の差）は `allow_interaction=True` のときだけ読む: `a` / `b` は基準の 2 cell・比較の
     2 cell（`"C:M + T:F"` の形）、log2fc は (a1 vs a0 at b1) − (a1 vs a0 at b0)、`mean_a` / `mean_b` は None
@@ -647,6 +688,11 @@ def as_two_group(record: dict, contrast_id: str | None = None, *,
     engine = record["engine"]
     q_threshold = engine["verdict_rule"]["q_threshold"]
     log2fc_threshold = record["log2fc_threshold"]
+    method = p_adjust_method(record)
+    engine_rows = [r for r in engine["rows"] if r["contrast_id"] == contrast_id]
+    recomputed = contract_q and method != CONTRACT_Q_METHOD
+    if recomputed:
+        engine_rows = contract_bh_rows(engine_rows, engine["verdict_rule"])
     rows = [{"feature": r["feature_id"], "mean_a": r["mean_reference"], "mean_b": r["mean_test"],
              "log2fc": r["log2fc"], "t": r["statistic"], "p": r["p"], "q": r["q"],
              "ci_low": r["ci_low"], "ci_high": r["ci_high"], "verdict": r["verdict"],
@@ -655,7 +701,7 @@ def as_two_group(record: dict, contrast_id: str | None = None, *,
              "detected_units_a": r.get("detected_reference"),
              "detected_units_b": r.get("detected_test"),
              "detection_driven": _detection_driven(r, len(units_a), len(units_b))}
-            for r in engine["rows"] if r["contrast_id"] == contrast_id]
+            for r in engine_rows]
     for row in rows:
         # 有意の印はここで 1 回だけ付ける（R16: 閾値に加えて判定が changed）。書き出し・根拠バンドル・
         # volcano・新しい知見の候補はこの印を読み、閾値から計算し直さない。
@@ -663,7 +709,6 @@ def as_two_group(record: dict, contrast_id: str | None = None, *,
             row, q_threshold=q_threshold, log2fc_threshold=log2fc_threshold)
     finite = [r for r in rows if r["p"] is not None and math.isfinite(r["p"])]
     bh = engine["bh_population"]
-    method = p_adjust_method(record)
     caveats = [w.get("message") or str(w.get("code"))
                for w in engine.get("warnings") or [] if w.get("message") or w.get("code")]
     provenance = record["provenance"]
@@ -703,7 +748,8 @@ def as_two_group(record: dict, contrast_id: str | None = None, *,
             "ci_level": engine["ci_level"],
             "verdict_rule": dict(engine["verdict_rule"]),
             "bh_population": {"name": bh["name"], "n": (bh.get("n_by_contrast") or {}).get(contrast_id),
-                              "q_interpretation": q_interpretation(bh, method)},
+                              "q_interpretation": q_interpretation(
+                                  bh, CONTRACT_Q_METHOD if contract_q else method)},
             "p_adjust_method": method,
             "subject_source": engine["subject_source"],
             "n_units_a": len(units_a),
@@ -711,6 +757,9 @@ def as_two_group(record: dict, contrast_id: str | None = None, *,
         },
         "provenance": provenance,
     }
+    if contract_q:
+        view["q_value_method"] = CONTRACT_Q_METHOD
+        view["q_value_source"] = Q_VALUE_RECOMPUTED if recomputed else Q_VALUE_FROM_COMPARISON
     if interaction:
         a, b = comp["factors"]
         view["interaction"] = {

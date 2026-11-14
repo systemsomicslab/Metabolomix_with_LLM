@@ -82,9 +82,14 @@ def dataset_export_differential(output_path: str,
         `result_id#contrast_id` の形でも渡せる）。対比が 1 つなら省略できる。複数で省けば `needs_input`
         （`argument="contrast_id"`、選択肢は対比の一覧）、未知の ID は `CONTRAST_REQUIRED`（details に候補）。
         2×2 の交互作用の対比（差の差）も書ける: `group_a` / `group_b` は基準の 2 cell・比較の 2 cell、
-        `log2fc` は差の差、`mean_a` / `mean_b` は空欄で、メタ行 `contrast_kind = interaction` と定義が付く。
-        15 列の後ろ（`msi_note` の後）に検定・判定規則・補正の方法（`p_adjust_method`）・単位などのメタ行が
+        `log2fc` は差の差、`mean_a` / `mean_b` は空欄で、メタ行 `contrast_kind = interaction` と定義が付く
+        （契約の版と `log2fc_sign` は 2 群と同じなので、交互作用の印はこの 2 行だけ）。
+        15 列の後ろ（`msi_note` の後）に検定・判定規則・比較の補正の方法（`p_adjust_method`）・単位などのメタ行が
         付く（列と契約の版は同じ。`mean_a` / `mean_b` は前処理後の線形値の算術平均）。
+
+    `q_value` は契約どおりいつも Benjamini–Hochberg の q（FDR）。比較が `p_adjust=bonferroni` / `holm` / `none`
+    なら、同じ補正の母集団で記録の p から BH の q を計算し直し、`significant` もその q で判定を読み直す（メタ行
+    `q_value_method = bh` と `q_value_source`、戻り値の `q_value_source` と `notes`）。
 
     exclude_feature_ids: 検定の**後で**書き出しから落とす特徴 ID（外来の分子など）。q は計算し直さない
         （多重比較の母集団は検定のときのまま）ことと落とした件数を、メタ行 `n_excluded_after_test` に書く。
@@ -761,11 +766,13 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str | None = None
     `result_id`（`dataset_compare` の結果。省けば直近の差次的結果。`result_id#contrast_id` の形も受ける）は
     `contrast_id` で対比を 1 つ選ぶ（対比が 1 つなら省略可。複数で省けば `needs_input`
     〔`argument="contrast_id"`、選択肢は対比の一覧〕、未知の ID は `CONTRAST_REQUIRED`、交互作用は
-    `CONTRAST_NOT_TWO_GROUP`）。`comparison.method` は実際の検定名（`moderated_t` など）、`comparison.correction`
-    は多重比較の補正（記録の `p_adjust_method`。無ければ BH）、`comparison.statistics`
+    `CONTRAST_NOT_TWO_GROUP`）。`comparison.method` は実際の検定名（`moderated_t` など）。`features.tsv` の
+    `q_value` と `significant` は契約どおり BH の q とその q で読んだ判定で、`comparison.correction` はいつも `BH`
+    （比較が `bonferroni` / `holm` / `none` なら同じ母集団で p から計算し直し、`comparison.p_adjust_method` と
+    `q_value_source`、戻り値の `notes` に書く）。`comparison.statistics`
     に検定・CI 水準・判定規則・BH の母集団・単位。`intensities.tsv` は結果が読んだ行列の線形値
     （正規化の後・log2 の前、補完なし＝`pre_imputation`）。探索専用のデータセットも断らず、manifest の
-    最上位に `exploratory`（`{exploratory_only: true, reason}`）を足す（戻り値にも）。
+    最上位と `comparison` に `exploratory`（`{exploratory_only: true, reason}`）を足す（戻り値にも）。
     `annotations.tsv` の `msdial_sme` 行の来歴の `theoretical_mass_to_charge` はライブラリの記録のプリカーサー m/z
     （mzTab-M の SME の値）だけ。`directory=` で開いたデータセットが組成式と付加体から計算した値は写さない（`null`）。
 

@@ -650,7 +650,11 @@ def _peak_cell(value) -> str | None:
     return str(round(value, 6)) if math.isfinite(value) else None
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+# output_path を渡せばそのパスへ TSV を書く（既存のファイルは置き換える）ので読み取り専用ではない。
+# 同じ引数なら同じ内容 → 冪等（ほかの output_path を持つ再解析のツールと同じ）。
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                      idempotentHint=True),
+          structured_output=False)
 def dataset_sample_peaks(feature_ids: list[str | int], dataset_handle: str | None = None,
                          output_path: str | None = None) -> str:
     """特徴 × 試料ごとのピークの `rt`・`mz`・`height`・`detected` を返す（再解析で使う）。
@@ -672,7 +676,8 @@ def dataset_sample_peaks(feature_ids: list[str | int], dataset_handle: str | Non
     フォルダを読む）。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     output_path: 全量の TSV をここへ書き、要約（`n_rows`・`n_features`・`n_samples`・`output_path`・
-        `sha256`）だけを返す（ほかの再解析のツールと同じ規則）。
+        `sha256`）だけを返す（ほかの再解析のツールと同じ規則）。そのパスに既にあるファイルは置き換える
+        （このためツールの注釈は読み取り専用ではない）。省けばファイルを書かない。
     """
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):

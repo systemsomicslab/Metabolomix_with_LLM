@@ -8,6 +8,11 @@
 やり直した後の古い結果を書き出すと、TSV の数字と**現在の**前処理条件が並んだファイルができる。
 どちらも正しく見えるので、読み手にはずれが分からない。
 
+`q_value` 列は契約どおりいつも Benjamini–Hochberg の q（FDR）で、`significant` もその q で読む。比較が
+`p_adjust=bonferroni` / `holm` / `none` なら、同じ補正の母集団（`bh_population`）で記録の p から BH の q を計算し直す
+（`stats_results.as_two_group(..., contract_q=True)`）。比較の補正の方法はメタ行 `p_adjust_method` に残し、
+`q_value_method = bh` と `q_value_source` の行を足す。
+
 探索専用のデータセット（中断された実行の出力・検証を通っていない pipeline の単位）は断らずに書き出し、
 メタ行 `# exploratory = true` と理由を足す（欠けた検体が「その群には無い」ように見えうることを
 ファイルの中に残す）。
@@ -25,7 +30,20 @@ from metabolomix.analysis.result_state import assert_current
 from metabolomix.analysis.stats_results import as_two_group, get_matrix
 from metabolomix.core.atomic_io import DomainError
 
-__all__ = ["exploratory_reason", "export_dataset_result"]
+__all__ = ["exploratory_reason", "export_dataset_result", "recomputed_q_note"]
+
+
+def recomputed_q_note(result: dict) -> str | None:
+    """契約の BH の q を p から計算し直した（比較の補正が BH でない）ときの戻り値の注意。そうでなければ None。
+
+    `result` は `as_two_group(..., contract_q=True)` の写し。差次的の書き出しと根拠バンドルが同じ文面を返す。
+    """
+    if result.get("q_value_source") != "recomputed_from_p_value":
+        return None
+    method = result["statistics"]["p_adjust_method"]
+    return (f"比較は p_adjust={method} で補正しましたが、契約の q_value は Benjamini-Hochberg の q です。"
+            "同じ補正の母集団（bh_population）で p から計算し直し、significant もこの q で判定を読み直しました"
+            f"（{method} の判定・large_changes とは件数が違いうる）。比較の補正の方法は p_adjust_method に残しています。")
 
 
 def exploratory_reason(ds) -> str | None:
@@ -44,7 +62,8 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
     `result` は統計エンジンの `compare` の記録（`as_two_group` で 1 つの対比を読む。対比が複数なら
     `contrast_id` が要り、無ければ `CONTRAST_REQUIRED`）。2×2 の交互作用の対比も書ける（`mean_a` /
     `mean_b` は空欄、メタ行に定義）。エンジンのメタ行を `msi_note` の後ろへ足す
-    （`export_contract.stats_meta_lines`）。15 列・列の順序・契約の版は変えない。
+    （`export_contract.stats_meta_lines`）。15 列・列の順序・契約の版は変えない。`q_value` は契約の BH の q
+    （比較が別の補正なら p から計算し直し、戻り値の `q_value_source` と `notes` に書く）。
 
     `exclude_feature_ids` は検定の**後で**書き出しから落とす特徴 ID（外来の分子など）。q は計算し直さない
     （多重比較の母集団は検定のときのまま）ことと落とした件数をメタ行に書く。`n_features_total` は落とした
@@ -60,7 +79,8 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
     assert_current(ds, result)
     record = result
     # 比較でない結果・対比の曖昧さはここで DomainError。書き出しは交互作用の対比も読む。
-    result = as_two_group(record, contrast_id, allow_interaction=True)
+    # q は契約の BH の q（比較が別の補正なら同じ母集団で p から計算し直し、significant もその q で読む）。
+    result = as_two_group(record, contrast_id, allow_interaction=True, contract_q=True)
 
     q_threshold = result["q_threshold"]
     log2fc_threshold = result["log2fc_threshold"]
@@ -175,9 +195,14 @@ def export_dataset_result(ds, result: dict, path: Path, curation: dict | None = 
         "n_with_inchikey": len(rows),
         "n_unannotated": n_unannotated,
         "p_adjust_method": result["statistics"]["p_adjust_method"],
+        "q_value_method": result["q_value_method"],
+        "q_value_source": result["q_value_source"],
         "curation": curation["state"] if curation else None,
         "curation_stats": stats if curation else None,
     }
+    note = recomputed_q_note(result)
+    if note:
+        info["notes"] = [note]
     if exclude_feature_ids is not None:
         info["n_excluded_after_test"] = n_dropped
         info["exclude_feature_ids_not_found"] = not_found
@@ -226,7 +251,7 @@ def _exploratory_lines(reason: str | None) -> list[str]:
 #: （母集団が `annotated` / `reported` なら、落とした行はもともと母集団の外のこともある）。
 #: `n_features_total` は落とした行も数えるので、件数の関係もここに書く。
 POST_TEST_EXCLUSION_NOTE = (
-    "rows dropped after testing; q_value not recomputed (the multiple-testing population is unchanged);"
+    "rows dropped after testing; q_value not recomputed without them (the multiple-testing population is unchanged);"
     " n_features_total still counts them (n_with_inchikey + n_unannotated + n_excluded_after_test"
     " add up to n_features_total)")
 
