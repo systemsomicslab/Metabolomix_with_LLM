@@ -20,8 +20,10 @@ Claude のデスクトップアプリの中継は MCP の呼び出しを 36〜60
   件数が `MAX_ENTRIES`（64）に達したら、終わったものを終わった順に古いものから捨てる。
   走っているものは捨てない。すべてが走っていれば `DATASET_LOAD_LIMIT` / `JOB_LIMIT` で受け付けない。
 - 受付番号を省いた問い合わせのために、まだ結果を渡していない受付（`unclaimed`）を並べられる。
-  結果を渡した受付（`claim`）はそこから外れる。受付簿はプロセスに 1 つで、クライアントを区別しない
-  （HTTP 待受では別の接続の受付も並ぶ）。
+  結果を渡した受付（`claim`）はそこから外れる。並ぶのは受付番号を呼び出し側へ渡した（`announce`）
+  受付だけ——受け付けた呼び出しがまだ自分の `wait_seconds` の中で待っている受付は、その呼び出しが結果を
+  直に受け取るので並べない（省いた問い合わせが、別のエージェントの受付を横取りしないため）。
+  受付簿はプロセスに 1 つで、クライアントを区別しない（HTTP 待受では別の接続の受付も並ぶ）。
 
 依存: atomic_io・mcp_errors・serialization（どれも leaf）だけ。tools・session は import しない。
 """
@@ -40,8 +42,8 @@ from metabolomix.core.mcp_errors import mztab_error
 from metabolomix.core.serialization import json_payload
 
 __all__ = ["MAX_ENTRIES", "MAX_WAIT_SECONDS", "TTL_SECONDS", "PendingCalls", "PendingJobs",
-           "PendingLoad", "PendingLoads", "clamp_wait", "failure_envelope", "jobs", "registry",
-           "with_wait_note"]
+           "PendingLoad", "PendingLoads", "clamp_wait", "current_entry", "failure_envelope", "jobs",
+           "registry", "with_fields", "with_wait_note"]
 
 #: 終わった受付を覚えておく秒数（終わったときから数える）。
 TTL_SECONDS = 3600.0
@@ -94,18 +96,50 @@ def with_wait_note(payload, note: str | None):
     return json_payload(value)
 
 
+def with_fields(payload, fields: dict):
+    """JSON の dict の戻り値の先頭へ `fields` を足す（戻り値が既に持つ鍵は書き換えない）。
+
+    `job_status` が終わった仕事の戻り値に `job_id` と `dataset_handle` を名乗らせるのに使う。
+    足すものが無い・JSON の dict でない戻り値（画像を含む一覧など）はそのまま返す。
+    """
+    fields = {key: value for key, value in fields.items() if value is not None}
+    if not fields or not isinstance(payload, str):
+        return payload
+    try:
+        value = json.loads(payload)
+    except ValueError:
+        return payload
+    if not isinstance(value, dict):
+        return payload
+    return json_payload({**fields, **value})
+
+
+#: 受付のスレッドが回している受付（`current_entry`）。受付ごとに daemon スレッドを 1 本起こすので、
+#: スレッドに 1 つ。
+_running = threading.local()
+
+
+def current_entry() -> "PendingLoad | None":
+    """このスレッドが回している受付（受付のスレッドの中でだけ。外なら None）。
+
+    `handle_dispatch` が、ハンドルのロックを取った長い仕事の受付番号をハンドルに記すのに使う。
+    """
+    return getattr(_running, "entry", None)
+
+
 class PendingLoad:
     """1 つの受付。`payload` と `finished_at` は受付簿のロックの下で一緒に書く。
 
-    `tool` は受け付けた道具の名前、`label` は一覧に見せる短い説明（入力のフォルダの名前など）。
-    `claimed` は結果を呼び出し側へ渡したか（`unclaimed` から外す）。
+    `tool` は受け付けた道具の名前、`label` は一覧に見せる短い説明（入力のフォルダの名前・長い仕事は
+    ハンドルの ID）。`claimed` は結果を呼び出し側へ渡したか（`unclaimed` から外す）。`announced` は
+    受付番号を呼び出し側へ渡したか（渡すまでは `unclaimed` に並べない）。
     """
 
     __slots__ = ("load_id", "started_at", "finished_at", "payload", "done", "tool", "label",
-                 "claimed")
+                 "claimed", "announced")
 
     def __init__(self, load_id: str, started_at: float, *, tool: str | None = None,
-                 label: str | None = None):
+                 label: str | None = None, announced: bool = True):
         self.load_id = load_id
         self.started_at = started_at
         self.finished_at: float | None = None
@@ -114,6 +148,7 @@ class PendingLoad:
         self.tool = tool
         self.label = label
         self.claimed = False
+        self.announced = announced
 
     @property
     def job_id(self) -> str:
@@ -152,17 +187,19 @@ class PendingCalls:
         self._entries: dict[str, PendingLoad] = {}
 
     def submit(self, fn: Callable[[], object], *, tool: str | None = None,
-               label: str | None = None) -> PendingLoad:
+               label: str | None = None, announced: bool = True) -> PendingLoad:
         """`fn` を daemon スレッドで回し、受付を返す。
 
         上限なら終わった受付を古いものから捨てて空きを作る。すべてが走っていれば上限の誤り
-        （DomainError。スレッドは起こさない）。
+        （DomainError。スレッドは起こさない）。`announced=False` の受付は、`announce` するまで
+        `unclaimed` に並べない（受け付けた呼び出しが自分の期限の中で結果を直に待つあいだ）。
         """
         with self._lock:
             self._prune()
             self._make_room()
             load_id = f"{self.prefix}_{uuid.uuid4().hex[:12]}"
-            entry = PendingLoad(load_id, self._clock(), tool=tool, label=label)
+            entry = PendingLoad(load_id, self._clock(), tool=tool, label=label,
+                                announced=announced)
             self._entries[load_id] = entry
         thread = threading.Thread(target=self._run, args=(entry, fn),
                                   name=f"{self.thread_label}-{load_id}", daemon=True)
@@ -211,21 +248,36 @@ class PendingCalls:
             if entry is not None:
                 entry.claimed = True
 
+    def announce(self, load_id: str) -> None:
+        """受付番号を呼び出し側へ渡した印を付ける（`unclaimed` に並べる。無ければ何もしない）。"""
+        with self._lock:
+            entry = self._entries.get(load_id)
+            if entry is not None:
+                entry.announced = True
+
     def tool_of(self, load_id: str) -> str | None:
         """受け付けた道具の名前（知らない番号・名前の無い受付は None）。"""
         with self._lock:
             entry = self._entries.get(load_id)
             return entry.tool if entry is not None else None
 
+    def label_of(self, load_id: str) -> str | None:
+        """受付の短い説明（長い仕事はハンドルの ID。知らない番号・説明の無い受付は None）。"""
+        with self._lock:
+            entry = self._entries.get(load_id)
+            return entry.label if entry is not None else None
+
     def unclaimed(self) -> list[dict]:
         """まだ結果を渡していない受付（走っているものと、終わって引かれていないもの）を受け付けた順に。
 
-        各要素は `{"id", "state": "loading"|"done", "elapsed_s", "tool", "label"}`。
+        受付番号をまだ誰にも渡していない受付（`announced` が偽。受け付けた呼び出しが自分の期限の中で
+        結果を待っている）は並べない。各要素は `{"id", "state": "loading"|"done", "elapsed_s", "tool", "label"}`。
         """
         with self._lock:
             self._prune()
             now = self._clock()
-            entries = sorted((e for e in self._entries.values() if not e.claimed),
+            entries = sorted((e for e in self._entries.values()
+                              if not e.claimed and e.announced),
                              key=lambda e: e.started_at)
             return [{"id": e.load_id,
                      "state": "loading" if e.finished_at is None else "done",
@@ -258,6 +310,7 @@ class PendingCalls:
     def _run(self, entry: PendingLoad, fn: Callable[[], object]) -> None:
         """受付のスレッドの本体。どの出口でも戻り値を置いて受付を終える。"""
         payload: object = None
+        _running.entry = entry  # `current_entry`（このスレッドは受付ごとに 1 本）
         try:
             try:
                 payload = fn()
@@ -274,6 +327,7 @@ class PendingCalls:
             _logger.exception("%s の結果を封筒にできなかった（%s）",
                               entry.tool or self.thread_label, entry.load_id)
         finally:
+            _running.entry = None
             self._finish(entry, payload if self._safe_accepts(payload) else self._last_resort())
 
     def _safe_accepts(self, payload) -> bool:

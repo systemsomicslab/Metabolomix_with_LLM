@@ -151,6 +151,9 @@ def dataset_merge_polarities(positive_handle: str, negative_handle: str,
     needs_input で record_folder（既存のフォルダ）を求める。規則プラグイン（[quant] rules）が要る。
     キュレーションのフラグは写さず、選別が極性ごとの .arf2 からその時点のものを読む。
     どちらかが探索専用なら統合も探索専用（戻り値の exploratory に極性付きの理由）。
+    2 つのハンドルのロックを待つのは合わせて最長 25 秒（handle_dispatch.HANDLE_LOCK_WAIT）。待ちきれなければ
+    何もせずに HANDLE_BUSY（ほかのツールと同じ封筒。長い道具の仕事がロックを持っていれば details.job_id /
+    tool と required_tools=["job_status"]。job_status で終わりを待ってから呼び直す）。
     """
     pos = resolve_holder(positive_handle)
     if isinstance(pos, str):

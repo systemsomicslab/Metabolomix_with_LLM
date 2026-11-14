@@ -21,6 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
+from metabolomix.core import handle_dispatch
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_errors import missing_state
 from metabolomix.core.serialization import json_payload
@@ -39,8 +40,6 @@ MAPPING_COLUMNS = ("mode", "source_sample", "sample_id", "group", "sample_type")
 MODES = {"positive": "positive", "negative": "negative"}
 _MODE_ALIASES = {"pos": "positive", "positive": "positive", "neg": "negative",
                  "negative": "negative"}
-#: ハンドルのロックを待つ秒数（超えたら QUANT_HANDLE_BUSY）。
-LOCK_TIMEOUT = 30.0
 _MAX_LISTED = 20
 _HOW_MAPPING = ("mapping_csv（列: mode, source_sample, sample_id, group, sample_type。"
                 "mode は positive / negative）")
@@ -368,17 +367,15 @@ def merge_tool(pos_holder, neg_holder, mapping_csv: str | None, record_folder: s
             return quant_error("QUANT_RECORD_FOLDER_INVALID",
                                f"record_folder は既存のフォルダを指してください: {folder.name}",
                                {"label": folder.name})
-    # 2 つのハンドルのロックを handle_id の順に取る（逆順の呼び出しと噛み合っても止まらない）
+    # 2 つのハンドルのロックを handle_id の順に取る（逆順の呼び出しと噛み合っても止まらない）。待つのは
+    # 全部で最長 handle_dispatch.HANDLE_LOCK_WAIT 秒（ほかのツールと同じ上限）。待ちきれなければ何もせずに、
+    # ほかのツールと同じ HANDLE_BUSY（ロックを持つ長い仕事があればその job_id と道具）を返す——中継が
+    # 打ち切った後でロックが空いて、知らされない統合のハンドルが登録されることはない。
     ordered = sorted({id(h): h for h in holders}.values(), key=lambda h: h.handle_id)
-    acquired = []
+    acquired, busy = handle_dispatch.acquire_all(ordered)
+    if busy is not None:
+        return busy
     try:
-        for handle in ordered:
-            if not handle.lock.acquire(timeout=LOCK_TIMEOUT):
-                return quant_error("QUANT_HANDLE_BUSY",
-                                   "ハンドルが別の処理で使われていて待ちきれませんでした。"
-                                   "少し待ってからやり直してください。",
-                                   {"dataset_handle": handle.handle_id})
-            acquired.append(handle)
         pos_ds, neg_ds = pos_holder.dataset, neg_holder.dataset
         try:
             mapping_rows, mapping_input = None, None

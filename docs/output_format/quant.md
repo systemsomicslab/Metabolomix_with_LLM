@@ -81,8 +81,10 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 `DATASET_HANDLE_LIMIT`（新しいハンドルを足せない。記録を書く前に止める）・
 `QUANT_NEEDS_DETECTION`（検出の印が無い入力）・`QUANT_MERGE_STATE_MISMATCH`（正規化の状態が陽陰で違う。
 `details.differs` と `details.normalize`）・
-`QUANT_MERGE_SAMPLE_CONFLICT`（同じ試料の群・役割が陽陰で食い違う）・`QUANT_HANDLE_BUSY`・
-`QUANT_REFERENCE_NOT_FOUND`。封筒・戻り値には**ローカルのパスを載せない**（参照表は sha256・
+`QUANT_MERGE_SAMPLE_CONFLICT`（同じ試料の群・役割が陽陰で食い違う）・
+`QUANT_REFERENCE_NOT_FOUND`。ハンドルのロックを待ちきれなければ、どのツールも（2 つのハンドルを取る `dataset_merge_polarities` も、待つのは全部で最長 25 秒）
+何もせずに `HANDLE_BUSY` を返す（`core.md` の「ハンドルが塞がっている」。長い道具の仕事がロックを持っていれば `details.job_id` と
+`required_tools: ["job_status"]`）。封筒・戻り値には**ローカルのパスを載せない**（参照表は sha256・
 単位・ファイル名の末尾だけ）。
 
 ## 5. 各ツールの戻り値の欄

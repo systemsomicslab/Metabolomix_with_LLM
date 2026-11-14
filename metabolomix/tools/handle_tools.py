@@ -24,7 +24,8 @@ from pathlib import Path
 
 from mcp.types import ToolAnnotations
 
-from metabolomix.core import handles, mcp_core, pending_loads, session_state, user_config
+from metabolomix.core import (handle_dispatch, handles, mcp_core, pending_loads, session_state,
+                              user_config)
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import missing_state, mztab_error, needs_input
@@ -251,13 +252,15 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         reservation = handles.registry.reserve()
         ticket = _CurrentTicket(session_state.session.current_generation)
         try:
+            # 受付番号を返すまでは、省いた dataset_load_status の候補に並べない（ここで結果を直に待つので）。
             pending = pending_loads.registry.submit(functools.partial(
                 _load_reserved, reservation, ticket, directory=directory, mztab_path=mztab_path,
                 job_path=job_path, pipeline_path=pipeline_path, polarity=polarity,
                 allow_incomplete=allow_incomplete, source=source, measure=measure,
                 arf2_path=arf2_path, library=library, overview=overview),
                 tool="load_dataset",
-                label=_input_label(directory, mztab_path, job_path, pipeline_path, polarity))
+                label=_input_label(directory, mztab_path, job_path, pipeline_path, polarity),
+                announced=False)
         except BaseException:
             reservation.release()
             raise
@@ -269,6 +272,7 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
         pending_loads.registry.discard(pending.load_id)  # 受付番号を誰にも渡していないので覚えない
         return pending_loads.with_wait_note(payload, wait_note)
     ticket.detach()  # ここから後に終わる読み込みは、受け付けた後の直近の動きを見る
+    pending_loads.registry.announce(pending.load_id)
     return json_payload({"status": "loading", "load_id": pending.load_id,
                          **({"wait_seconds_note": wait_note} if wait_note else {}),
                          "next": f'dataset_load_status(load_id="{pending.load_id}", '
@@ -369,15 +373,19 @@ class _SessionKindCarry:
     目的ファイルから読み戻せた種別と同じなら何も足さない。読み戻した種別と食い違えば、どちらも採らずに
     `unknown` にする（目的ファイルどうしの食い違いと同じ扱い）。目的ファイルどうしが食い違って読み戻さな
     かったときも当てない。目的ファイルに記録が無ければ当てる。どの場合も `note` に 1 文を残す（同じなら無し）。
+
+    当てた種別は、登録の後に `persist` が目的ファイルへ残す（その種別を書いた目的にこのハンドルの解析フォルダを
+    書く。`objective.persist_carried_kind`）——残さないと、同じ解析フォルダを開き直したときに読み戻せない。
     """
 
     def __init__(self, handle, recalled: str | None, recall_note: str | None):
         self._handle = handle
         self._recalled = recalled
         self._recall_conflict = recalled is None and recall_note is not None
+        self._carried: tuple[str, str | None] | None = None
         self.note: str | None = None
 
-    def __call__(self, kind: str) -> None:
+    def __call__(self, kind: str, analysis_id: str | None = None) -> None:
         if self._recalled == kind:
             return
         if self._recalled is not None:
@@ -390,8 +398,39 @@ class _SessionKindCarry:
                          "当てていない（unknown のまま）。")
         else:
             self._handle.assay_kind = kind
+            self._carried = (kind, analysis_id)
             self.note = (f"assay_kind={kind} を、データセットを開く前の record_objective の記録から"
                          "このハンドルへ引き継いだ。")
+
+    def persist(self) -> None:
+        """当てた種別を目的ファイルに残す（登録の後に、セッションのロックの外で呼ぶ）。
+
+        書く間はハンドルのロックを持つ（同じハンドルへの `record_objective` と重ならない）。登録の後なので
+        ほかの呼び出しが先にロックを取りうる——待つのは `handle_dispatch.HANDLE_LOCK_WAIT` 秒まで。
+        残せなかったときは `note` にそう書く（開き直すと unknown に戻るので、記録し直すよう促す）。
+        """
+        if self._carried is None:
+            return
+        from metabolomix.tools import objective
+
+        kind, analysis_id = self._carried
+        redo = ("同じ解析フォルダを開き直すと unknown に戻るので、record_objective(assay_kind=...) で"
+                "記録し直す。")
+        if analysis_id is None:
+            self.note += f"目的ファイルには残していない（どの目的の種別か分からない）。{redo}"
+            return
+        if not self._handle.lock.acquire(timeout=handle_dispatch.HANDLE_LOCK_WAIT):
+            self.note += f"目的ファイルに残せなかった（ハンドルが別の呼び出しで塞がっていた）。{redo}"
+            return
+        try:
+            name = objective.persist_carried_kind(self._handle, analysis_id, kind)
+        except (DomainError, OSError, ValueError) as exc:
+            self.note += f"目的ファイルに残せなかった（{type(exc).__name__}）。{redo}"
+            return
+        finally:
+            self._handle.lock.release()
+        self.note += (f"目的ファイル（{name}）にもこの解析フォルダの種別として残した"
+                      "（開き直すと読み戻す）。")
 
 
 def _load_now(*, directory: str | None = None, mztab_path: str | None = None,
@@ -453,6 +492,7 @@ def _load_now(*, directory: str | None = None, mztab_path: str | None = None,
         except DomainError:
             handle.close()
             raise
+        carry.persist()   # 引き継いだ種別を目的ファイルへ（登録の後。セッションのロックの外）
     except DomainError as exc:
         if exc.code == "PIPELINE_POLARITY_REQUIRED":
             return needs_input("polarity", exc.message, (exc.details or {})["options"],
@@ -540,16 +580,24 @@ _NEXT_STEPS = (
 
 
 def _pick_pending(book, given: str | None, *, field: str, tool: str,
-                  start_tools: list[str], state: str) -> tuple[str | None, str | None]:
+                  start_tools: list[str], state: str,
+                  foreign=None) -> tuple[str | None, str | None]:
     """受付番号を決める。(番号, 封筒)。省いたら、まだ結果を渡していない受付から選ぶ。
 
-    ちょうど 1 本ならそれ、2 本以上なら `needs_input`（選べる受付つき）、無ければ `missing_state`。
+    並ぶのは受付番号を呼び出し側へ渡した受付だけ（`PendingCalls.unclaimed`）。ちょうど 1 本ならそれ、
+    2 本以上なら `needs_input`（選べる受付つき）、無ければ `missing_state`。`foreign(entry)` が理由の文を
+    返す 1 本（直近でないハンドルの仕事など。別のエージェントのものかもしれない）は黙って選ばず、
+    その 1 本を選択肢にした `needs_input` にする（選ぶと結果を渡した印が付き、持ち主の省いた問い合わせ
+    から消えるため）。
     """
     if given is not None:
         return given, None
     open_entries = book.unclaimed()
+    reason = None
     if len(open_entries) == 1:
-        return open_entries[0]["id"], None
+        reason = foreign(open_entries[0]) if foreign is not None else None
+        if reason is None:
+            return open_entries[0]["id"], None
     if not open_entries:
         return None, missing_state(
             state, start_tools,
@@ -559,14 +607,16 @@ def _pick_pending(book, given: str | None, *, field: str, tool: str,
                 "label": " ".join(str(part) for part in (
                     e["tool"], e["label"], e["state"], f"{e['elapsed_s']}s") if part)}
                for e in open_entries]
-    return None, needs_input(field, f"結果を渡していない受付が {len(options)} 本あります。"
-                             f"どれを引くか {field} で選ぶ。", options,
+    if reason is None:
+        reason = f"結果を渡していない受付が {len(options)} 本あります。"
+    return None, needs_input(field, f"{reason}どれを引くか {field} で選ぶ。", options,
                              argument=field, retry_tools=[tool])
 
 
-def _poll(book, entry_id: str, wait_seconds, running: dict) -> str:
-    """受付を引く（最長 `wait_seconds` 秒待つ）。終わっていれば戻り値（渡した印を付ける）、
-    走っていれば `running` に `elapsed_s` を足したもの。"""
+def _poll(book, entry_id: str, wait_seconds, running, done_fields: dict | None = None) -> str:
+    """受付を引く（最長 `wait_seconds` 秒待つ）。終わっていれば戻り値（渡した印を付ける。JSON の dict なら
+    `done_fields` を先頭へ足す）、走っていれば `running`（dict か、待った後に dict を組む関数）に
+    `elapsed_s` を足したもの。"""
     try:
         wait, wait_note = pending_loads.clamp_wait(wait_seconds)
         if wait > 0:
@@ -577,8 +627,9 @@ def _poll(book, entry_id: str, wait_seconds, running: dict) -> str:
         return mztab_error(exc.code, exc.message, exc.details or None)
     if state == "done":
         book.claim(entry_id)
+        payload = pending_loads.with_fields(payload, done_fields or {})
         return pending_loads.with_wait_note(payload, wait_note)
-    return json_payload({**running, "elapsed_s": round(elapsed, 1),
+    return json_payload({**(running() if callable(running) else running), "elapsed_s": round(elapsed, 1),
                          **({"wait_seconds_note": wait_note} if wait_note else {})})
 
 
@@ -615,25 +666,46 @@ def job_status(job_id: str | None = None, wait_seconds: float = 0.0) -> str:
     """長い道具（`pathway_project` / `dataset_homolog_check`）が返した受付番号（`job_…`）を引く。
 
     その道具は自分の `wait_seconds`（既定 20 秒）の中で終わらなければ、仕事を続けたまま
-    `{"status": "running", "job_id": "job_…", "tool", "next"}` を返す（デスクトップアプリの中継が
-    36〜60 秒ほどで呼び出しを打ち切るため）。仕事はそのハンドルのロックの下で続く。
+    `{"status": "running", "job_id": "job_…", "tool", "dataset_handle", "next"}` を返す（デスクトップアプリの
+    中継が 36〜60 秒ほどで呼び出しを打ち切るため）。仕事はそのハンドルのロックの下で続き、その間、同じ
+    ハンドルへのほかの呼び出しは最長 25 秒待ってから何もせずに `HANDLE_BUSY`（`details.job_id` がこの仕事）を
+    返す——この関数で終わりを待ってから呼び直す。
 
-    job_id: 引く受付番号。省くと、まだ結果を渡していない受付から選ぶ（ちょうど 1 本ならそれ、
-        2 本以上なら `needs_input`、無ければ `missing_state`）。
+    job_id: 引く受付番号（受け取った番号を渡すのが確実）。省くと、受付番号を渡し済みで、まだ結果を渡して
+        いない受付から選ぶ: ちょうど 1 本で、それが直近のハンドル（または ハンドルなし）の仕事ならそれ。
+        直近でないハンドルの仕事 1 本（別のエージェントのものかもしれない）や 2 本以上なら `needs_input`
+        （選べる受付つき。label にハンドル）、無ければ `missing_state`。
     wait_seconds: 終わるのを待つ秒数（既定 0。0〜30 秒。範囲の外の数は丸めて `wait_seconds_note`）。
 
-    走っている間は `{"status": "running", "job_id", "tool", "elapsed_s"}`。終われば、その道具の
-    戻り値そのもの（成功か誤りの封筒）。終わった受付は 1 時間覚えていて、番号を渡せば何度引いても
-    同じ戻り値を返す。知らない受付番号は `JOB_NOT_FOUND`。
+    走っている間は `{"status": "running", "job_id", "tool", "dataset_handle", "elapsed_s"}`（別の長い仕事が
+    ロックを持っていて順番を待っていれば `queued_behind`）。終われば、その道具の戻り値（成功か
+    誤りの封筒。JSON のオブジェクトなら、その先頭に `job_id` と `dataset_handle`（その仕事のハンドル）を足したもの）。終わった受付は
+    1 時間覚えていて、番号を渡せば何度引いても同じ戻り値を返す。知らない受付番号は `JOB_NOT_FOUND`。
     """
+    current = session_state.session.current_handle_id
+
+    def foreign(entry: dict) -> str | None:
+        label = entry.get("label")
+        if label is None or label == current:
+            return None
+        return (f"結果を渡していない受付は 1 本ですが、直近でないハンドル {label} の仕事です"
+                "（別のエージェントのものかもしれない。受け取った job_id を渡すのが確実）。")
+
     job_id, envelope = _pick_pending(
         pending_loads.jobs, job_id, field="job_id", tool="job_status",
-        start_tools=["pathway_project", "dataset_homolog_check"], state="job")
+        start_tools=["pathway_project", "dataset_homolog_check"], state="job", foreign=foreign)
     if envelope is not None:
         return envelope
     tool = pending_loads.jobs.tool_of(job_id)
-    return _poll(pending_loads.jobs, job_id, wait_seconds,
-                 {"status": "running", "job_id": job_id, **({"tool": tool} if tool else {})})
+    handle_id = pending_loads.jobs.label_of(job_id)
+
+    def running() -> dict:   # 待った後に組む（順番待ちは待つ間に変わりうる）
+        return {"status": "running", "job_id": job_id, **({"tool": tool} if tool else {}),
+                **({"dataset_handle": handle_id} if handle_id else {}),
+                **handle_dispatch.queued_behind(handle_id, job_id)}
+
+    return _poll(pending_loads.jobs, job_id, wait_seconds, running,
+                 done_fields={"job_id": job_id, "dataset_handle": handle_id})
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
@@ -683,6 +755,11 @@ def dataset_close(dataset_handle: str) -> str:
     対話のセッションの直近のハンドル（`dataset_list` の `current`）を閉じると、
     `dataset_handle` を省いた呼び出しはデータセットが無い状態（`missing_state`）になる。
     開いている別のハンドルへは落ちない（もう一度 `load_dataset` で読む）。
+
+    閉じるのもそのハンドルのロックの下で行う。長い道具（`pathway_project` / `dataset_homolog_check`）が
+    そのハンドルで走っている間は、最長 25 秒待ってから**何も閉じずに** `HANDLE_BUSY`（`details.job_id` と
+    `tool` がその仕事）を返す——仕事を止めはしない。`job_status(job_id)` で仕事の終わり（か結果）を待ってから
+    閉じ直す。待ちきれなかった閉じ方が、仕事の後で黙って効くことはない。
 
     戻り値: `closed`（閉じたハンドル）・`source`（何を閉じたか: 入口の種類・入力の名前（`pipeline-run.json`
     はその run のフォルダの名前）・極性。パスは出さない。開き直すときの手がかり）・`was_current`（直近だったか）・

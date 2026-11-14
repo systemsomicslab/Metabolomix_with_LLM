@@ -17,7 +17,10 @@
 ワーカースレッドに回す。`dataset_merge_polarities` は `dataset_handle` も `session.dataset` も持たないが、
 `handle_dispatch.ALWAYS_THREADED` に載せてあり、セッションのロックを取らずにワーカースレッドで
 回る（ロックの待ちでイベントループを塞がない）。2 つのハンドルのロックは `handle_id` の順に
-自分で取る（`SESSION_READERS` には載せない）。
+自分で取る（`SESSION_READERS` には載せない）。待つのはほかのツールと同じく**全部で**最長
+`handle_dispatch.HANDLE_LOCK_WAIT`（25 秒。1 本ごとではない）で、待ちきれなければ取ったロックを放し、何もせずに
+`HANDLE_BUSY`（`mcp_errors.handle_busy()`。ロックを持つ長い道具の仕事があればその `job_id` と道具）を返す
+（`handle_dispatch.acquire_all()`）。
 
 4 ツールとも入力は MS-DIAL の解析フォルダから読んだデータセットだけ
 （`metabolomix/quant/table.py` の `require_msdial_source()`。ほかは `QUANT_SOURCE_UNSUPPORTED`）。
@@ -84,22 +87,23 @@
 1. metabolomix/quant/tools.py  dataset_merge_polarities()
 2. ├─ metabolomix/tools/_holder.py  resolve_holder()
 3. └─ metabolomix/quant/merge.py  merge_tool()
-4.    ├─ metabolomix/quant/merge.py  read_mapping()
-5.    ├─ metabolomix/quant/table.py  resolve_quant_polarity()
-6.    ├─ metabolomix/quant/merge.py  merge()
-7.    │  ├─ metabolomix/quant/plugin.py  load_rules()
-8.    │  ├─ metabolomix/quant/merge.py  _check_polarities()
-9.    │  ├─ metabolomix/quant/merge.py  _check_states()
-10.    │  │  └─ metabolomix/quant/merge.py  normalize_status()（食い違いの details と記録・戻り値）
-11.    │  ├─ metabolomix/quant/merge.py  _match()
-12.    │  │  └─ metabolomix/quant/plugin.py  call()
-13.    │  ├─ metabolomix/quant/merge.py  _check_groups()
-14.    │  ├─ metabolomix/quant/records.py  merged_record_folder()
-15.    │  ├─ metabolomix/quant/records.py  write_record()
-16.    │  ├─ metabolomix/quant/derive.py  derive()
-17.    │  ├─ metabolomix/quant/derive.py  carry_exploratory()（両側の探索専用の印を極性付きで合わせる）
-18.    │  └─ metabolomix/quant/merge.py  merged_source_verification()（出所の裏取りは陽陰の弱いほう）
-19.    └─ metabolomix/quant/derive.py  register()
+4.    ├─ metabolomix/core/handle_dispatch.py  acquire_all()（2 つのハンドルのロック。全部で最長 `HANDLE_LOCK_WAIT`。待ちきれなければ `HANDLE_BUSY`）
+5.    ├─ metabolomix/quant/merge.py  read_mapping()
+6.    ├─ metabolomix/quant/table.py  resolve_quant_polarity()
+7.    ├─ metabolomix/quant/merge.py  merge()
+8.    │  ├─ metabolomix/quant/plugin.py  load_rules()
+9.    │  ├─ metabolomix/quant/merge.py  _check_polarities()
+10.    │  ├─ metabolomix/quant/merge.py  _check_states()
+11.    │  │  └─ metabolomix/quant/merge.py  normalize_status()（食い違いの details と記録・戻り値）
+12.    │  ├─ metabolomix/quant/merge.py  _match()
+13.    │  │  └─ metabolomix/quant/plugin.py  call()
+14.    │  ├─ metabolomix/quant/merge.py  _check_groups()
+15.    │  ├─ metabolomix/quant/records.py  merged_record_folder()
+16.    │  ├─ metabolomix/quant/records.py  write_record()
+17.    │  ├─ metabolomix/quant/derive.py  derive()
+18.    │  ├─ metabolomix/quant/derive.py  carry_exploratory()（両側の探索専用の印を極性付きで合わせる）
+19.    │  └─ metabolomix/quant/merge.py  merged_source_verification()（出所の裏取りは陽陰の弱いほう）
+20.    └─ metabolomix/quant/derive.py  register()
 
 ## dataset_select_features
 

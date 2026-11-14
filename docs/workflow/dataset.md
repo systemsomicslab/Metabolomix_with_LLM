@@ -23,6 +23,8 @@ flowchart TD
 
 前提: なし
 状態変更: なし
+`all_files=True` では raw ごとに見出しを開く（下）ので、`handle_dispatch.ALWAYS_THREADED` に載せてワーカースレッドで
+回す（数百のファイルやネットワークの共有で数十秒かかっても、イベントループは `job_status` などに答える）。
 
 ツール層（`tools/dataset.py`）は純関数（`path_resolvers.list_data_files`）の結果を拡張子ごとに
 まとめて返す。**`directory` は必須**（既定の探索先・環境変数は無い。B-2b）。
@@ -99,13 +101,14 @@ mzTab-M は mzTab-M のフォルダ。指紋には入れない）を決める。
 2. └─ metabolomix/tools/handle_tools.py _argument_error()
 3. └─ metabolomix/core/pending_loads.py clamp_wait()
 4. └─ metabolomix/core/handles.py HandleRegistry.reserve()（上限なら受け付けない）
-5. └─ metabolomix/core/pending_loads.py PendingCalls.submit()（`_load_reserved()` を daemon スレッドで回す。`tool` と入力の名前 `_input_label()` を添える）
+5. └─ metabolomix/core/pending_loads.py PendingCalls.submit()（`_load_reserved()` を daemon スレッドで回す。`tool` と入力の名前 `_input_label()` を添える。`announced=False`: 受付番号を返すまで、省いた `dataset_load_status` の候補に並べない）
 6.    └─ metabolomix/core/pending_loads.py PendingCalls._run()
 7.       └─ metabolomix/tools/handle_tools.py _load_reserved()（本体。中身は下の入口とアダプタの選び方。終われば枠を返す）
 8. └─ metabolomix/core/pending_loads.py PendingLoad.wait()
 9. └─ [期限の中で終わったとき] metabolomix/core/pending_loads.py PendingCalls.discard()
 10. └─ [期限の中で終わったとき] metabolomix/core/pending_loads.py with_wait_note()
 11. └─ [終わらなかったとき] metabolomix/tools/handle_tools.py _CurrentTicket.detach()
+12. └─ [終わらなかったとき] metabolomix/core/pending_loads.py PendingCalls.announce()（受付番号を返す。ここから省いた問い合わせの候補に並ぶ）
 
 入口とアダプタの選び方（本体。受付のスレッドで回る）:
 1. metabolomix/tools/handle_tools.py _load_now()
@@ -158,13 +161,15 @@ mzTab-M は mzTab-M のフォルダ。指紋には入れない）を決める。
 48. └─ metabolomix/tools/handle_tools.py _open_library_for()
 49. └─ metabolomix/core/session_state.py AnalysisSession.adopt_handle()（直近にする。受け付けた読み込みは `_CurrentTicket.may_become_current()` に従う。直近のハンドルが無いうちに記録したセッションの種別は `_SessionKindCarry` がこのハンドルへ移す）
 50.    └─ metabolomix/core/handles.py HandleRegistry.add()
-51. └─ metabolomix/tools/mztab_tools.py load_summary_lines()
-52.    └─ [解析フォルダ] metabolomix/tools/mztab_tools.py _folder_summary_text()
-53.    └─ [mzTab-M] metabolomix/tools/mztab_tools.py _summary_text()
-54. └─ metabolomix/tools/mztab_tools.py sample_group_role_counts()
-55. └─ metabolomix/dataset/library_memory.py public_view()
-56. └─ metabolomix/core/session_state.py AnalysisSession.take_caveat()（意味論の要約。このハンドルの種別で、未読・種別ごとに 1 回だけ。戻り値の最上位 `caveat`）
-57. └─ [overview=True] metabolomix/tools/handle_tools.py _first_overview()（既定は計算しない。`dataset_overview` と同じ組み立て）
+51. └─ [開く前に記録した種別を引き継いだとき] metabolomix/tools/handle_tools.py _SessionKindCarry.persist()（登録の後。ハンドルのロックを最長 `HANDLE_LOCK_WAIT` 待ち、その種別を書いた目的にこの解析フォルダを書く。書けなければ `notes` に記録し直すよう書く）
+52.    └─ metabolomix/tools/objective.py persist_carried_kind()
+53. └─ metabolomix/tools/mztab_tools.py load_summary_lines()
+54.    └─ [解析フォルダ] metabolomix/tools/mztab_tools.py _folder_summary_text()
+55.    └─ [mzTab-M] metabolomix/tools/mztab_tools.py _summary_text()
+56. └─ metabolomix/tools/mztab_tools.py sample_group_role_counts()
+57. └─ metabolomix/dataset/library_memory.py public_view()
+58. └─ metabolomix/core/session_state.py AnalysisSession.take_caveat()（意味論の要約。このハンドルの種別で、未読・種別ごとに 1 回だけ。戻り値の最上位 `caveat`）
+59. └─ [overview=True] metabolomix/tools/handle_tools.py _first_overview()（既定は計算しない。`dataset_overview` と同じ組み立て）
 
 job / pipeline を解析フォルダで読むときも、ジョブの門（`job_gate()`: ジョブの記録・完了・
 正準 mzTab-M の一意な選択と実在・出所の裏取り）は mzTab-M で読むときと同じものを通り、
@@ -351,7 +356,8 @@ TSV は書かない（消費者のいない `feature-qc.tsv` を 2026-09-03 に�
 ## dataset_load_status
 
 前提: `load_dataset` が受付番号（`ld_…`）を返していること（知らない番号は `DATASET_LOAD_NOT_FOUND`）。
-`load_id` を省くと、まだ結果を渡していない受付（`PendingCalls.unclaimed()`）から選ぶ: ちょうど 1 本ならそれ、
+`load_id` を省くと、受付番号を渡し済み（`announce()` 済み）でまだ結果を渡していない受付（`PendingCalls.unclaimed()`。
+受け付けた `load_dataset` がまだ自分の `wait_seconds` の中で待っている受付は、その呼び出しが結果を直に受け取るので並べない）から選ぶ: ちょうど 1 本ならそれ、
 2 本以上なら `needs_input`（`field=load_id`・受付の一覧が選択肢・`retry_tools=["dataset_load_status"]`）、
 無ければ `missing_state("load", ["load_dataset"])`。
 状態変更: なし（ハンドルの登録と直近の切り替えは、読み込みが終わったときに受付のスレッドが済ませている）。
@@ -383,25 +389,48 @@ TSV は書かない（消費者のいない `feature-qc.tsv` を 2026-09-03 に�
 既定 20 秒を持つ）は、`install()` が `_wrap_job()` で包む。呼び出しは受付（`pending_loads.jobs`、`PendingJobs`）の
 daemon スレッドで始まり、ハンドルのロックと固定はそのスレッドが取って仕事が終わるまで持つ（`_job_call()`:
 `dataset_handle` を渡せば `_call_locked()`、省けば受け付けたときの直近のハンドルで `_call_pinned()`）。
-`wait_seconds` の中で終われば戻り値をそのまま返し（受付は忘れる）、終わらなければ
-`{"status": "running", "job_id": "job_…", "tool", "next"}` を返して仕事は続く。
-前提: その受付番号を道具が返していること（知らない番号は `JOB_NOT_FOUND`。`job_id` を省いたときの選び方は
-`dataset_load_status` と同じで、無ければ `missing_state("job", ["pathway_project", "dataset_homolog_check"])`）。
-状態変更: なし（仕事は受付のスレッドで終わる）。走っている間は `{"status": "running", "job_id", "tool", "elapsed_s"}`、
-終われば道具の戻り値そのもの。仕事が例外で終われば `JOB_FAILED` の封筒。
+仕事のスレッドはロックが空くまで待ち（`_acquire(job=True)`。`HANDLE_LOCK_WAIT` を使わない）、持つ間は
+`DatasetHandle.running_job` に受付番号と道具を置く（ほかの呼び出しの `HANDLE_BUSY` と `queued_behind()` が読む）。
+`wait_seconds` の中で終われば戻り値をそのまま返し（受付は忘れる）、終わらなければ受付番号を渡した印を付けて
+（`PendingCalls.announce()`）`{"status": "running", "job_id": "job_…", "tool", "dataset_handle", "next"}`（順番待ちなら
+`queued_behind`）を返して仕事は続く。
+前提: その受付番号を道具が返していること（知らない番号は `JOB_NOT_FOUND`）。`job_id` を省くと、受付番号を渡し済みで
+まだ結果を渡していない受付（`PendingCalls.unclaimed()`）から選ぶ: ちょうど 1 本で、それが直近のハンドル
+（`session.current_handle_id`）かハンドルなしの仕事ならそれ、直近でないハンドルの仕事 1 本や 2 本以上なら
+`needs_input`（`field=job_id`・label にハンドル・`retry_tools=["job_status"]`）、無ければ
+`missing_state("job", ["pathway_project", "dataset_homolog_check"])`。
+状態変更: なし（仕事は受付のスレッドで終わる）。走っている間は `{"status": "running", "job_id", "tool", "dataset_handle",
+"elapsed_s"}`（順番待ちなら `queued_behind`）、終われば道具の戻り値（JSON のオブジェクトなら、その先頭に `job_id` と
+`dataset_handle` を足したもの。`with_fields()`）。仕事が例外で終われば `JOB_FAILED` の封筒。
+
+同じハンドルへのほかの呼び出し（`_call_locked()` / `_call_pinned()`）は、ロックを最長 `HANDLE_LOCK_WAIT`（25 秒）だけ
+待つ（`_acquire()`）。空かなければツールを呼ばずに `mcp_errors.handle_busy()` の `HANDLE_BUSY`（ロックを持つ仕事が
+あれば `details.job_id` / `tool` / `running_s` / `next` と `required_tools=["job_status"]`）を返す。
 
 受付（長い道具の呼び出し）:
 1. metabolomix/core/handle_dispatch.py  _wrap_job()
 2. └─ metabolomix/core/pending_loads.py  clamp_wait()
 3. └─ metabolomix/core/handle_dispatch.py  _job_call()
-4. └─ metabolomix/core/pending_loads.py  PendingCalls.submit()
-5. └─ metabolomix/core/pending_loads.py  PendingLoad.wait()
+4. └─ metabolomix/core/pending_loads.py  PendingCalls.submit()（`announced=False`）
+5.    └─ [受付のスレッド] metabolomix/core/handle_dispatch.py  _acquire()（`job=True`。`running_job` を置く）
+6. └─ metabolomix/core/pending_loads.py  PendingLoad.wait()
+7. └─ [終わらなかったとき] metabolomix/core/pending_loads.py  PendingCalls.announce()
+8. └─ [終わらなかったとき] metabolomix/core/handle_dispatch.py  queued_behind()
 
 引く:
 1. metabolomix/tools/handle_tools.py  job_status()
 2. └─ metabolomix/tools/handle_tools.py  _pick_pending()
 3. └─ metabolomix/core/pending_loads.py  PendingCalls.tool_of()
-4. └─ metabolomix/tools/handle_tools.py  _poll()
+4. └─ metabolomix/core/pending_loads.py  PendingCalls.label_of()
+5. └─ metabolomix/tools/handle_tools.py  _poll()
+6.    ├─ [走っているとき] metabolomix/core/handle_dispatch.py  queued_behind()
+7.    └─ [終わっていたとき] metabolomix/core/pending_loads.py  with_fields()
+
+ハンドルが塞がっているとき（長い道具でないツールの呼び出し）:
+1. metabolomix/core/handle_dispatch.py  _call_locked()（`_call_pinned()` も同じ）
+2. └─ metabolomix/core/handle_dispatch.py  _acquire()
+3.    └─ [`HANDLE_LOCK_WAIT` 秒で取れなかったとき] metabolomix/core/handle_dispatch.py  _busy()
+4.       └─ metabolomix/core/mcp_errors.py  handle_busy()
 
 ## dataset_list
 
@@ -420,6 +449,8 @@ daemon スレッドで始まり、ハンドルのロックと固定はそのス�
 None に戻す。別のハンドルへは落ちない）。
 
 戻り値の `source`（入口の種類・入力の名前・極性）は閉じる前に `HandleRegistry.peek()` で読む。
+閉じるのもそのハンドルのロックの下（`handle_dispatch._call_locked()`）。長い道具の仕事がロックを持っていれば、
+最長 `HANDLE_LOCK_WAIT`（25 秒）待ってから閉じずに `HANDLE_BUSY` を返す（上の job_status の節。仕事は止めない）。
 
 1. metabolomix/tools/handle_tools.py  dataset_close()
 2. └─ metabolomix/core/handles.py  HandleRegistry.peek()
