@@ -42,7 +42,12 @@
   直近になる**（`load_dataset` の戻り値の `dataset_handle`、`dataset_list` の `current`）。
   ハンドルを渡さない呼び出しはこの直近のハンドル（のデータセット・`library_load` の
   ライブラリ・直近の照合）を使う。再解析のエージェントは、返ったハンドルを渡して呼び、直近を
-  当てにしない——ハンドルを渡した呼び出しは対話の状態を読みも書きもしない。閉じた・無い
+  当てにしない——ハンドルを渡した呼び出しは、そのハンドルだけを読み書きし、直近を読みも切り替えもしない。
+  **例外は定量の派生**（`dataset_quant_apply`・`dataset_merge_polarities`・`dataset_select_features`）で、
+  `dataset_handle` を渡しても、作った派生の新しいハンドルを**直近にする**（上限で止まれば直近は動かない）。以後
+  ハンドルを渡さない呼び出しは派生のデータセットに効くので、並行のエージェントが派生を作ったら、対話の側は
+  `dataset_list` の `current` で直近を確かめる。また `pathway_project` は、ハンドルを渡しても対話のセッションの
+  「直近のパスウェイの run」（`pathway_plot` が `run_id` を省いたときに描くもの）を書き換える。閉じた・無い
   ハンドルは `DATASET_HANDLE_NOT_FOUND`（開いているハンドルの一覧つき）で、対話のセッションへ
   黙って落ちない。直近のハンドルを閉じると、渡さない呼び出しはデータセットもライブラリも無い状態
   （`missing_state`）になり、開いている別のハンドルへも、前に読んだライブラリへも落ちない。
@@ -60,8 +65,12 @@
   待つ。それでも前の呼び出し（長い道具の仕事など）がハンドルを持っていれば、**何もせずに** `HANDLE_BUSY`
   を返す（`details.dataset_handle`・`waited_s`。ハンドルを持つのが長い道具の仕事なら `details.job_id` /
   `tool` / `running_s` / `next` と `required_tools: ["job_status"]`）。`job_status(job_id)` で仕事の終わりを
-  待ってから、同じ呼び出しをし直す。クライアントの中継が 36〜60 秒ほどで打ち切った呼び出しが、仕事の後で
-  黙って効くことはない（待ちきれなければ何もせずに返るため）。`dataset_close` も同じで、走っている仕事の
+  待ってから、同じ呼び出しをし直す。**上限があるのはロックの待ちだけ**で、道具そのものの走る時間には上限が無い。
+  待ちきれずに `HANDLE_BUSY` を返した呼び出しは、仕事の後で黙って効くことはない（何もせずに返るため）。しかし 25 秒の
+  内にハンドルを取れた呼び出しは、クライアントの中継が 36〜60 秒ほどで打ち切っても、サーバでは最後まで動いて効く
+  （たとえば待ちが 23 秒で残りの道具が 20 秒なら、クライアントには時間切れに見えても行列の登録や結果の記録は残り、
+  `matrix_id` を省いた後の `dataset_compare` / `dataset_pca` はその行列を使う）。状態を変える呼び出しが打ち切られたら、
+  し直す前に `dataset_status(view="results")` などで効いたかを確かめる。`dataset_close` も同じで、走っている仕事の
   ハンドルは閉じずに `HANDLE_BUSY` を返す（仕事は止めない）。2 つのハンドルを取る `dataset_merge_polarities` も
   同じ封筒で、待つのは 2 本合わせて最長 25 秒（`details.dataset_handle` は空かなかったほう）。
 - **上限。** `lipidmix.local.toml` の `[server] max_dataset_handles`（既定 8。1 未満は 1）。`load_dataset` がハンドルを 1 本使う
@@ -95,9 +104,23 @@
   `DATASET_HANDLE_NOT_FOUND`（`details.open_handles` に開いているハンドル）を返す（直近や別のハンドルへは落ちない）:
   (1) `dataset_close` で閉じた（戻り値の `source` が閉じたものの入口の種類・入力の名前・極性）、(2) サーバのプロセスが
   終わった・再起動した（`server_update` の後の再起動、クライアントの再接続でサーバが起動し直したときも。ハンドルは
-  プロセスの中にだけある）、(3) 読み込みが受付の後に失敗した（ハンドルは登録されない）。上限に達しても古いハンドルは
-  閉じない。見失ったら `dataset_list` で開いているものを確かめ、`load_dataset` で開き直す（同じ入力なら読み込み済みの
-  基を使い回すが、前処理・比較の結果はハンドルごとなので作り直す）。
+  プロセスの中にだけある）、(3) 読み込みが受付の後に失敗した（ハンドルは登録されない）、(4) **別のサーバのプロセス**で
+  開いた（既定の stdio では MCP クライアント（Claude Desktop・Claude Code の各セッション・WebUI など）ごとにサーバの
+  プロセスが 1 本ずつ起き、登録簿はプロセスごとに別。ほかのクライアント（別のセッションで動くエージェントを含む）が
+  開いたハンドルは、同時に動いていても自分のプロセスからは見えず `DATASET_HANDLE_NOT_FOUND`。ハンドルを受け渡せるのは
+  同じプロセスにつないだ者どうし（同じクライアントの中のエージェントどうし）だけ。`LIPIDMIX_TRANSPORT=streamable-http` で
+  HTTP に待ち受けたサーバは、すべての接続が 1 つの登録簿と 1 つの直近を共有するので、別の接続の `dataset_close`・直近の
+  切り替えもそのまま効く）。上限に達しても古いハンドルは閉じない。
+  ハンドルは残っていても、**ハンドルを渡さない呼び出しの行き先**は次で変わる: `load_dataset`（受付番号を返した後に
+  終わった読み込みも、その間に別のハンドルが直近になっていなければ——呼んだ側が待つのをやめていても——終わったときに
+  直近になる。直近のハンドルを閉じても世代は進まないので、閉じた後に終わった読み込みは直近になる）と、定量の派生
+  （上の「対話のセッションは直近のハンドルを指すだけ」。`dataset_handle` を渡しても直近になる）。並行のエージェントは
+  いつもハンドルを渡す。また、受付番号（`load_id`・`job_id`）は終わって 1 時間・件数の上限・再起動で忘れられ、その後は
+  どのハンドルが自分の読み込みのものかを受付番号から引けない（`dataset_list` の `source`・`polarity` で見分ける）。
+  見失ったら `dataset_list` で開いているものを確かめ、`load_dataset` で開き直す（同じ入力なら読み込み済みの
+  基を使い回すが、前処理・比較の結果はハンドルごとなので作り直す）。ただし設定ファイル（`lipidmix.local.toml`）が
+  読めないとき、`dataset_list` は一覧を返さず `CONFIG_INVALID` の封筒だけを返す（開いているハンドルは残っている。
+  設定ファイルを直してから一覧を引き直す。ハンドルの ID を覚えていれば、設定を読まない道具にはそのまま渡せる）。
 
 `load_dataset` の戻り値:
 
@@ -321,10 +344,20 @@ hash も入れる——同じ spec でも割れの組が変われば別の規則
 **戻り値（v1）。** `{status, schema, rule_hash, merge_split: {enabled, source, n_groups_used, n_groups_skipped,
 groups_hash}, input_fingerprint, input_read?, comparison, group_ref, group_test, output_path?, analyses, correlate?,
 notes?, note}`。`analyses[]` は解析ごとの要約（`n_rows`・`n_tested`・`n_meets_thresholds`・`n_constant_in_group` ほか。
-和の `aggregate.contributions` は TSV）。`output_path` を省けば解析ごとに行を TSV（`rows`。上の行の欄の順）で返し、
+和の `aggregate.contributions` は TSV。下の段落のとおり 50 を超えれば先頭だけ）。`output_path` を省けば解析ごとに行を TSV（`rows`。上の行の欄の順）で返し、
 **50 行を超える解析は p の小さい順の先頭 50 行だけ**を載せる（`truncated: true`・`rows_order: "p_ascending"`。
 `n_rows` は全件。p が null の行は後ろ。断らない）。`correlate` の行も TSV で、50 を超えれば先頭だけ（`truncated`）。
 全量は `output_path` の JSON。
+集約の要約（`analyses[].aggregate`）は `output_path` の有無によらず、載せたリストごとにいつも件数 `n_<名前>`
+（`n_members`・`n_summed`・`n_dropped`・`n_merged_from` のうち載るもの。和なら `n_contributions` も）を持つ。
+リストはそれぞれ自分の長さで**断らずに**切る。寄与 `contributions` は、和に入ったメンバー（`n_contributions` ＝
+`n_summed`）が 50 を超えたときだけ `share_median` の大きい順（和を支配するメンバー。null は後ろ、同じなら `summed` の順）の
+先頭 50 行にし（`contributions_order: "share_median_desc"`）、50 以下なら `summed` の順の全行（並べ替えない。
+`contributions_order` は無い）。`members`・`summed`・`dropped`・`merged_from` は 50 件を超えたものだけ先頭 50 件を載せる。
+切ったものに `<名前>_truncated: true`（切らなければ false）を付け、`notes` は切ったものだけを名指す（寄与の並べ替えは
+寄与を切ったときだけ書く）。recipe の段（検出率など）が落としたメンバーや、割れの相手にまとめたメンバーがあれば、
+`members` だけが 50 を超え、寄与は切らずに `summed` の順のまま、ということがある。
+切るのは戻り値の要約だけで、`output_path` の JSON・`rule_hash` は全メンバーのまま。
 
 ### 2.1 統計エンジンの spec（analysis-spec.v2）と結果（analysis-result.v2）
 
@@ -365,9 +398,11 @@ notes?, note}`。`analyses[]` は解析ごとの要約（`n_rows`・`n_tested`�
 **自己完結（再現のための規則）。** v2 は spec だけで同じ数字を出し直せる実行で、`dataset_exclude` の除外は読まない。
 spec の `input` に無い除外がデータセットにあれば、結果の `warnings` に
 `{"code": "dataset_exclusions_not_in_spec", "n_samples", "n_features"}` が載る（効いていない除外の件数）。対話の
-`dataset_compare` が結果の spec に除外を写して持つのとは逆の向き。組成のクラスの名前は、そのハンドルの
-`assay_kind`（`record_objective(assay_kind=...)`。spec には載らず、戻り値の `assay_kind` に出る）で決まる（`class_label_kind`: `lipid_class` /
-`msdial_ontology`）。同じ spec でも `assay_kind` が違えばクラスの切り方が違うので、組成を再現するときは種別も揃える。
+`dataset_compare` が結果の spec に除外を写して持つのとは逆の向き。組成のクラスは種別によらず、いつも MS-DIAL の
+ontology（特徴の `ontology`。無い特徴は `unclassified_features` に数える）で切る。ハンドルの `assay_kind`
+（`record_objective(assay_kind=...)`。spec には載らず、戻り値の `assay_kind` に出る）が変えるのはクラスの名前の読み方の
+ラベル `class_label_kind`（`lipid` なら `lipid_class`、ほかは `msdial_ontology`）だけで、同じ spec・同じ入力なら
+クラス・CLR・絶対量の数字と `rule_hash` は種別によらず同じ（組成を再現するのに種別を揃える必要は無い）。
 
 **前処理は尋ねない。** `drift.mode="auto"` は、補正できても内部標準で換算済みの値か、注入順が MS-DIAL の既定
 （ファイルの順）かもしれないときは補正を当てずに回す。前処理の `steps` のドリフトの段に `reason`・`reasons`・
@@ -737,7 +772,7 @@ spec:
 
 | 欄 | 意味 |
 |---|---|
-| `default_selection` | `target` をそのまま当てた目標照合（`dataset_feature_search` と同じ規則）。`status` が `resolved` なら `selected_feature_id` が規則で選んだ既定の特徴、決まらなければ `needs_input`（`reason`）。割れたスポットの組（§9 の `merge_groups`）は 1 つの候補として数え、`selected_feature_id` は残す ID（受け持ちの多い側、同数なら小さい ID）、`merged_from` にその組（それ以外は null。走査も同じ）。`counts` は下の表（組は 1 つと数える。MS/MS の合否はどちらかのスポットが `qualified` なら 1） |
+| `default_selection` | `target` をそのまま当てた目標照合（`dataset_feature_search` と同じ規則。ただし割れの組はいつも `find_split_pairs` を既定の閾値で回したもので、`dataset_alignment_qc` がハンドルに持つ最後の結果は使わない——既定でない閾値で回した後は `dataset_feature_search` と組・`counts`・`status`・`rule_hash` が違いうる。§9）。`status` が `resolved` なら `selected_feature_id` が規則で選んだ既定の特徴、決まらなければ `needs_input`（`reason`）。割れたスポットの組（§9 の `merge_groups`）は 1 つの候補として数え、`selected_feature_id` は残す ID（受け持ちの多い側、同数なら小さい ID）、`merged_from` にその組（それ以外は null。走査も同じ）。`counts` は下の表（組は 1 つと数える。MS/MS の合否はどちらかのスポットが `qualified` なら 1） |
 | `scans` | 走査ごとの判定（`counts` は `default_selection` と同じ意味）と、候補の特徴 ID |
 | `candidates` | 全走査の候補の和（特徴の並び順）。`evidence`（`sme_match` など、走査で見えたもの）・`adducts`・`scans`（どの走査で見えたか。組の片方だけが質量の窓に入ったときに足した相手は `merge_partner`）・`split`（下）・`msms`（spot_id = SMF_ID の照合の上位 `top`（`library_msms_qualify` の候補の表と同じ欄。`passes_dbs_cutoffs`・種の欄も同じ条件で）と `qualify`（`target_rank`・`top1_is_target` を含む）、使った前駆体の窓 `window`（`mz_tol`・`mz_window`・`mz_tol_ppm`）、スポットに MS-DIAL の注釈があれば `msdial_name`・`msdial_rank`・`top_differs_from_msdial`。ライブラリが無ければ `{"status": "no_library", "spectrum_available": ...}`（データセットの同定が LBM だけ＝記憶が `lbm_only` のときは、MSP のスペクトルが無いので評価できない: 候補ごとは `{"status": "not_evaluable", "reason": "lbm_only", "spectrum_available": ...}` で、理由の文は束の `msms_not_evaluable_reason` に 1 回だけ。`no_library` は `library_load` を促すが、このデータセットには照合に使える MSP が無い）、MS/MS が無い・索引の崩れはその `status`。`spectrum_available` は代表スペクトルの有無で、ライブラリの有無によらず spot を先に照会して決める: `true`=ある、`false`=照会して無かった（`not_found` で `reason` が `no_spectrum`）、`null`=分からない（`.arf2` / `.dcl` のファイル自体が無い `not_found` の `reason` `no_arf2` / `no_dcl`・`spot_not_found`・`dcl_precursor_mismatch`・`spot_id_not_integer`、ハンドルに `.arf2` / `.dcl` が無いとき））・`relations` |
 | `truncated` | `max_candidates` で打ち切った候補の数（束の欄。`output_path` を省いて候補を切った戻り値だけは意味が違う——下の「戻り値」） |
@@ -757,7 +792,8 @@ spec:
 | `msms_spectrum_available` | 質量の窓に入った候補（`mass` と同じ母集団。`merge_partner` の行を除き、割れの組は 1 つ）のうち、組のどれかのスポットに**代表 MS/MS がある**（候補の `msms.spectrum_available` が `true`）数。RT の窓では絞らない（RT の窓の外のスポットの代表 MS/MS も数える）。**0 は照会して無かった**（全部の単位が `false`）、**`null` は頼まなかった（`msms` なし）か分からなかった**（`true` の単位が無く、`null` の単位が 1 つでもある）、**数は下限**（`null` の単位は数に入らない）。単位の中は、どれか `true` なら `true`、`true` が無く `null` があれば `null`、全部 `false` なら `false`。`max_candidates` で打ち切って照会していない候補は数えない |
 
 `split`（候補が割れたアライメントスポットの組に入るときだけ。入らなければ `null`。§9 の
-`find_split_pairs` を既定の閾値で回し、`split_partners` を写す）:
+`find_split_pairs` を既定の閾値で回し、`split_partners` を写す。`dataset_alignment_qc` がハンドルに持つ最後の結果は
+使わない——束は spec と入力だけで再現する）:
 
 | 欄 | 意味 |
 |---|---|
@@ -844,7 +880,10 @@ SML にその列が無い mzTab では**エラーにせず**、`subset_available
 ```
 
 `statistics` は `{"result_id"}`（`dataset_compare` の 2 群比較。`reference_group` が基準。対比が複数の結果は
-`result_id#contrast_id` で 1 つ選ぶ。ID だけなら誤りでなく `needs_input`——`field` は `statistics.result_id`、選択肢の
+`result_id#contrast_id` か、任意の欄 `statistics.contrast_id` で 1 つ選ぶ——`{"result_id": "res_x", "contrast_id": "T_vs_C"}` は
+`"res_x#T_vs_C"` に正規化するので同じ規則・同じ `rule_hash`。`#` の後ろと `contrast_id` を両方書いて食い違えば
+`DATASET_BAD_REQUEST`、`contrast_id` が空でない文字列でなければ `NOVEL_SPEC_INVALID`。`contrast_id` を書かない spec の
+正規化と `rule_hash` は前と同じ。ID だけなら誤りでなく `needs_input`——`field` は `statistics.result_id`、選択肢の
 `value` は `result_id#contrast_id`、`argument` は無い）か
 `{"analysis_spec", "analysis_id"}`（**analysis-spec.v1 だけ**とその解析。v2 の spec はここでは通らないので、統計エンジンの
 結果は `dataset_compare` の `result_id` で渡す）。SME rank 1 の同定があり、
@@ -865,10 +904,11 @@ log2fc_test_over_ref p q direction merged_from`（JSON には `sme_feature_id` �
 v7 と同じ（`merged_from`・`sme_feature_id`・`merge_split` を出さず、正規化した spec にも `merge_split` を載せない。
 ただし陽イオンで分子式を渡し `adduct_tiers` を省いた目標は、2026-11-14 に既定の付加体の層を足したので規則も hash も
 v7 と違う——`dataset_feature_search`（mztab.md §13.8）と `dataset_claim_evidence` の `rule` の欄を見る）。
-`statistics.result_id` の spec は `{"result_id", "merge_split": true（既定）, "alignment_qc": <JSON のパス、任意>}`
+`statistics.result_id` の spec は `{"result_id", "contrast_id": <任意>, "merge_split": true（既定）, "alignment_qc": <JSON のパス、任意>}`
 （`alignment_qc` は `dataset_alignment_qc` の `output_path`。省略時はこのハンドルで `dataset_alignment_qc` が最後に
 出した結果（§9。データ・試料の表・除外が変わっていないもの）、それも無ければその場で探す。`rule_hash` にパスは
-入らない）。`merge_split=false` の `alignment_qc` は効かないので捨てて `notes` に書く（`rule_hash` は書かないときと同じ）。
+入らない）。`merge_split=false` の `alignment_qc` と、`analysis_spec` の隣に書いた `contrast_id`（analysis-spec.v1 の比較は
+spec の `comparison` の 1 つ）は効かないので捨てて `notes` に書く（`rule_hash` は書かないときと同じ）。
 `statistics.analysis_spec` の効かない設定と実行時の注記（統合したデータセットの `drift_correct` の注入順。§3）も、
 欄の名前の前に `statistics.analysis_spec: ` を付けて `notes` に書く（analysis_spec では最後の結果は使わない。spec だけで再現する）。
 戻り値と JSON の `merge_split` は `{enabled, source, n_groups}`（`n_groups` はまとめた組の数。`source` は
@@ -1015,7 +1055,9 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
   閾値（`ppm` ほか）で回した組を、パスを渡し直さずに使うため。**使わないのは**、データの指紋
   （`dataset_fingerprint`）が作ったときと違うとき、試料の表・除外が変わったとき（`metadata_revision`。
   `dataset_exclude`・`dataset_set_sample_metadata`）——群と注入順で型が変わるので、そのときは捨ててその場で探す。
-  `dataset_analysis_run` は使わない（spec だけで再現する決まり。§2）。
+  `dataset_analysis_run`（§2）と `dataset_claim_evidence`（§7）は使わない（spec だけで再現する決まり）。束の割れの組は
+  いつも `find_split_pairs` を既定の閾値で回したもので、既定でない閾値で `dataset_alignment_qc` を回した後は、同じ目標でも
+  `dataset_feature_search` と組・`counts`・`status`・`rule_hash` が違いうる。
 
 ## 10. 根拠バンドル v3（evidence-v3）
 

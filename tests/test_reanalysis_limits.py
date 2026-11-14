@@ -17,7 +17,7 @@ from metabolomix.tools import reanalysis_tools as R
 from metabolomix.tools import sample_tools
 from tests.external_table_fixtures import write_mwtab
 from tests.reanalysis_fixtures import SAMPLES
-from tests.test_reanalysis_tools import (SPLIT_CHANGED, SPLIT_FEATURES, _compare_on, _groups_tsv,
+from tests.test_reanalysis_tools import (CE_KEY, SPLIT_CHANGED, SPLIT_FEATURES, _compare_on, _groups_tsv,
                                          _split_handle, _tsv_rows)
 
 
@@ -147,6 +147,10 @@ def test_last_alignment_qc_is_used_when_the_path_is_omitted(tmp_path):
     fresh = json.loads(T.dataset_feature_search(feature_ids=["30"], dataset_handle=handle))
     assert fresh["merge_split"]["source"] == "find_split_pairs"
     assert fresh["merge_split"]["n_groups"] == 1
+    claim = {"claim_id": "C9", "target": {"inchikey": CE_KEY, "expected_mz": 650.6, "adduct": "[M+H]+",
+                                          "rt_min": 20.3, "rt_tol_min": 0.5}}
+    claim_before = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    assert claim_before["default_selection"]["merged_from"] == ["30", "31"]
 
     # 既定でない閾値（ppm=1 では 30/31 の 6 ppm の組を拾わない）で回し、その結果が使われる
     qc_path = tmp_path / "qc_strict.json"
@@ -173,6 +177,11 @@ def test_last_alignment_qc_is_used_when_the_path_is_omitted(tmp_path):
     run = json.loads(R.dataset_analysis_run(run_spec, dataset_handle=handle))
     assert run["merge_split"]["source"] == "find_split_pairs"
     assert run["merge_split"]["n_groups_used"] == 1
+    # dataset_claim_evidence も spec だけで再現する: 最後の結果を使わず、いつも既定の閾値の組（文書の約束。§7・§9）
+    claim_after = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    assert claim_after["default_selection"] == claim_before["default_selection"]
+    assert claim_after["rule_hash"] == claim_before["rule_hash"]
+    assert claim_after["merge_groups_hash"] == claim_before["merge_groups_hash"]
 
 
 def test_last_alignment_qc_is_dropped_when_exclusions_or_data_change(tmp_path):
@@ -250,6 +259,25 @@ def test_novel_candidates_ineffective_settings_are_notes(tmp_path):
         dataset_handle=handle))
     assert from_spec["status"] == "success", from_spec
     assert any(n.startswith("statistics.analysis_spec: analyses[0].matrix") for n in from_spec["notes"])
+    # analysis_spec の隣の statistics.contrast_id は効かない（比較は spec の 1 つ）ので、断らず捨てて notes に
+    with_contrast = json.loads(R.dataset_novel_candidates(
+        {"statistics": {"analysis_spec": analysis, "analysis_id": "main", "contrast_id": "RA_vs_HC"},
+         "q_max": 1.0}, dataset_handle=handle))
+    assert with_contrast["status"] == "success", with_contrast
+    assert with_contrast["rule_hash"] == from_spec["rule_hash"]
+    assert any(n.startswith("statistics.contrast_id") for n in with_contrast["notes"])
+
+
+def test_claim_evidence_description_names_the_msms_fields():
+    # ツールの説明は LLM が読む唯一の入口: msms.mz_tol_ppm と、候補の msms が返す窓・順位・MS-DIAL との一致を書く
+    import asyncio
+
+    from metabolomix.core.mcp_core import mcp
+
+    description = {t.name: t for t in asyncio.run(mcp.list_tools())}["dataset_claim_evidence"].description
+    for word in ("mz_tol_ppm", "`window`", "target_rank", "top1_is_target", "msdial_name", "msdial_rank",
+                 "top_differs_from_msdial"):
+        assert word in description, word
 
 
 # ---------- dataset_analysis_run（v1）: notes・外部の表・correlate・寄与・群の中で一定（C7・D4・B4） ----------
@@ -292,6 +320,134 @@ def test_analysis_run_v1_returns_input_read_correlate_contributions_and_notes(tm
     saved = json.loads(target.read_text(encoding="utf-8"))
     assert saved["notes"] == agg["notes"]
     assert [c["feature_id"] for c in saved["analyses"][0]["aggregate"]["contributions"]] == ["F1", "F2"]
+
+
+def test_analysis_run_v1_aggregate_summary_is_capped_by_share(tmp_path):
+    # 和のメンバーが 50 を超えれば、戻り値の寄与は share_median の大きい順の先頭 50 行、メンバーの一覧は
+    # 先頭 50 件（件数 n_*・印 *_truncated・notes）。output_path の JSON は全メンバーのまま。
+    import numpy as np
+
+    n = 120
+    values = {f"F{k:03d}": [(k + 1) * (s + 1) + 50 * (k % 3) for s in range(len(SAMPLES))]
+              for k in range(n)}
+    paper = write_mwtab(tmp_path / "paper.txt", SAMPLES, list(values.items()))
+    spec = {"input": {"source": "mwtab", "path": str(paper)},
+            "groups": {"source": "tsv", "path": str(_groups_tsv(tmp_path)), "role_column": "role"},
+            "comparison": {"reference": "HC", "test": "RA"},
+            "analyses": [{"analysis_id": "main", "test": {"kind": "student"}}],
+            "aggregate": {"kind": "sum", "label": "total", "feature_ids": list(values)}}
+    out = json.loads(R.dataset_analysis_run(spec))
+    assert out["status"] == "success", out
+    agg = out["analyses"][0]["aggregate"]
+    assert agg["n_members"] == agg["n_summed"] == agg["n_contributions"] == n
+    assert agg["n_dropped"] == 0 and agg["dropped"] == [] and agg["dropped_truncated"] is False
+    assert agg["members"] == agg["summed"] == list(values)[:R.MAX_INLINE_ROWS]
+    assert agg["members_truncated"] is agg["summed_truncated"] is agg["contributions_truncated"] is True
+    assert agg["contributions_order"] == "share_median_desc"
+    [note] = [n for n in out["notes"] if n.startswith("集約の要約")]
+    assert "['main']" in note and "寄与 contributions を share_median の大きい順の先頭 50 行" in note
+    assert "members・summed を先頭 50 件" in note and "dropped" not in note
+    # 独立の計算: 比べる 2 群（HC・RA の 6 試料）の試料ごとの割合（メンバー ÷ 和）の中央値、大きい順
+    matrix = np.array([values[f] for f in values], dtype=float)[:, :6]
+    shares = np.median(matrix / matrix.sum(axis=0), axis=1)
+    expected = sorted(range(n), key=lambda k: (-shares[k], k))[:R.MAX_INLINE_ROWS]
+    shown = _tsv_rows(agg["contributions"])
+    assert [r["feature_id"] for r in shown] == [f"F{k:03d}" for k in expected]
+    assert [float(r["share_median"]) for r in shown] == pytest.approx(
+        [round(float(shares[k]), 4) for k in expected], abs=1e-12)
+    # output_path の JSON は全メンバー（summed の順）。戻り値の要約は同じく切る
+    target = tmp_path / "agg.json"
+    written = json.loads(R.dataset_analysis_run(spec, output_path=str(target)))
+    assert written["analyses"][0]["aggregate"]["contributions_truncated"] is True
+    saved = json.loads(target.read_text(encoding="utf-8"))["analyses"][0]["aggregate"]
+    assert [c["feature_id"] for c in saved["contributions"]] == list(values)
+    assert saved["members"] == saved["summed"] == list(values)
+    assert written["rule_hash"] == out["rule_hash"]
+
+
+def test_analysis_run_v1_aggregate_notes_name_only_what_was_cut(tmp_path):
+    # 和に入ったメンバーが 50 以下なら、members だけが 50 を超えても寄与は切らず summed の順のまま。
+    # notes は切ったものだけを名指し、寄与を並べ替えたとは書かない（レビュー指摘: 切っていない寄与の
+    # 先頭行を「和を支配するメンバー」と読ませない）。
+    import numpy as np
+
+    n, n_zero = 60, 20
+    values = {f"F{k:03d}": ([0] * len(SAMPLES) if k < n_zero
+                            else [(k + 1) * (s + 1) + 50 * (k % 3) for s in range(len(SAMPLES))])
+              for k in range(n)}
+    ids = list(values)
+    paper = write_mwtab(tmp_path / "paper.txt", SAMPLES, list(values.items()))
+    spec = {"input": {"source": "mwtab", "path": str(paper)},
+            "groups": {"source": "tsv", "path": str(_groups_tsv(tmp_path)), "role_column": "role"},
+            "comparison": {"reference": "HC", "test": "RA"},
+            "analyses": [{"analysis_id": "raw", "test": {"kind": "student"}},
+                         {"analysis_id": "filtered", "test": {"kind": "student"},
+                          "matrix": {"steps": ["detection_filter"],
+                                     "detection_filter": {"basis": "positive",
+                                                          "min_rate": {"sample": 0.5}}}}],
+            "aggregate": {"kind": "sum", "label": "total", "feature_ids": ids}}
+    out = json.loads(R.dataset_analysis_run(spec))
+    assert out["status"] == "success", out
+    by_id = {a["analysis_id"]: a["aggregate"] for a in out["analyses"]}
+
+    filtered = by_id["filtered"]
+    assert filtered["n_members"] == n and filtered["members_truncated"] is True
+    assert filtered["members"] == ids[:R.MAX_INLINE_ROWS]
+    assert filtered["n_summed"] == filtered["n_contributions"] == n - n_zero
+    assert filtered["summed"] == ids[n_zero:] and filtered["summed_truncated"] is False
+    assert filtered["n_dropped"] == n_zero and filtered["dropped"] == ids[:n_zero]
+    assert filtered["dropped_truncated"] is False
+    assert filtered["contributions_truncated"] is False and "contributions_order" not in filtered
+    # 寄与は summed の順の全行。値は独立の計算（HC・RA の 6 試料の割合 メンバー ÷ 和 の中央値）と合う
+    matrix = np.array([values[f] for f in ids[n_zero:]], dtype=float)[:, :6]
+    shares = np.median(matrix / matrix.sum(axis=0), axis=1)
+    shown = _tsv_rows(filtered["contributions"])
+    assert [r["feature_id"] for r in shown] == ids[n_zero:]
+    assert [float(r["share_median"]) for r in shown] == pytest.approx(
+        [round(float(x), 4) for x in shares], abs=1e-12)
+    assert list(shares) != sorted(shares, reverse=True)  # summed の順は share の大きい順ではない
+
+    raw = by_id["raw"]
+    assert raw["n_summed"] == raw["n_contributions"] == n
+    assert raw["contributions_truncated"] is raw["summed_truncated"] is raw["members_truncated"] is True
+    assert raw["contributions_order"] == "share_median_desc"
+
+    aggregate_notes = [note for note in out["notes"] if note.startswith("集約の要約")]
+    assert len(aggregate_notes) == 2
+    [raw_note] = [note for note in aggregate_notes if "['raw']" in note]
+    [filtered_note] = [note for note in aggregate_notes if "['filtered']" in note]
+    assert "寄与 contributions を share_median の大きい順の先頭 50 行" in raw_note
+    assert "members・summed を先頭 50 件" in raw_note
+    assert "share_median" not in filtered_note and "contributions" not in filtered_note
+    assert "、members を先頭 50 件だけ載せた" in filtered_note
+    assert "output_path を指定して書く JSON" in filtered_note
+    # output_path を渡せば全量はその JSON（notes の案内も変わる）
+    written = json.loads(R.dataset_analysis_run(spec, output_path=str(tmp_path / "agg.json")))
+    assert any(note.startswith("集約の要約（解析 ['filtered']）") and "output_path の JSON" in note
+               for note in written["notes"])
+
+
+def test_aggregate_summary_caps_dropped_and_merged_from_and_keeps_small_ones():
+    info = {"members": [f"M{i}" for i in range(60)], "summed": ["M0", "M1"],
+            "dropped": [f"M{i}" for i in range(2, 60)],
+            "merged_from": {f"M{i}": [f"M{i}", f"N{i}"] for i in range(55)},
+            "contributions": [{"feature_id": "M0", "share_median": 0.25},
+                              {"feature_id": "M1", "share_median": 0.75}],
+            "n_samples_for_shares": 4}
+    out, cut = R._aggregate_summary(info)
+    # 切ったものだけを名指す（寄与と summed は 2 件で切らない）
+    assert cut == ["members", "dropped", "merged_from"]
+    assert out["n_dropped"] == 58 and len(out["dropped"]) == R.MAX_INLINE_ROWS and out["dropped_truncated"]
+    assert out["n_merged_from"] == 55 and list(out["merged_from"]) == [f"M{i}" for i in range(50)]
+    assert out["merged_from_truncated"] is True
+    # 寄与が 50 以下なら summed の順のまま全行（並べ替えない）
+    assert [r["feature_id"] for r in _tsv_rows(out["contributions"])] == ["M0", "M1"]
+    assert out["contributions_truncated"] is False and "contributions_order" not in out
+    assert out["n_samples_for_shares"] == 4
+    small, small_cut = R._aggregate_summary({"numerator": "A", "denominator": "B", "dropped": []})
+    assert small_cut == []
+    assert small == {"numerator": "A", "denominator": "B", "dropped": [], "n_dropped": 0,
+                     "dropped_truncated": False}
 
 
 def test_analysis_run_v1_correlate_rows_keep_small_p(tmp_path):

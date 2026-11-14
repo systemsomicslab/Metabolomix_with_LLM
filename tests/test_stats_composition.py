@@ -116,6 +116,20 @@ def test_label_kind_follows_assay_kind():
                      "unknown": "msdial_ontology"}
 
 
+def test_assay_kind_changes_only_the_label_not_the_classes_or_numbers():
+    # クラスはいつも ontology（feature_classes）で切る。種別が変えるのはラベルだけ（reanalysis.md §2.1）
+    import json
+
+    prep = _prep(_data(), 5)
+    runs = {k: composition(prep, assay_kind=k, factors=["group"], comparisons=BVA)
+            for k in ("lipid", "metabolite", "unknown")}
+    bodies = {k: json.dumps({key: v for key, v in r.items() if key != "class_label_kind"},
+                            sort_keys=True, default=str)
+              for k, r in runs.items()}
+    assert len(set(bodies.values())) == 1
+    assert runs["lipid"]["classes"] and runs["lipid"]["classes"] == runs["metabolite"]["classes"]
+
+
 def test_composition_shift_detected_by_clr_not_by_absolute():
     # 全特徴が B 群で厳密に 2 倍（log2 で +1）: 総量だけが動く
     prep = _prep(_data(factor={j: 1.0 for j in range(8)}), 5)

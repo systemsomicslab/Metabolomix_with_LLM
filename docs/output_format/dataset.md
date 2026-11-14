@@ -53,7 +53,7 @@
   `batch_source` は `candidate:<8 桁>`（**候補だけで、統計には当てていない**。§11.1）。
   MS-DIAL Console が書く既定の `.mddata`（Class ID = FileID・種類はすべて sample）は宣言とみなさない: 群は置かず
   （`group` は空）、役割はファイル名から推定する（役割の出所は `filename_token` / `inferred`）。解析フォルダが pipeline の
-  run の中にあれば、`directory=` で開いても run の試料の対応表（実験情報シートと受領）から群と役割を当てる（注記が出る）。
+  run の中にあれば、`directory=` で開いても run の試料の対応表（実験情報シートと受領）から群と役割を当てる（注記が出る）。その単位が検証を通っていなければ、`pipeline_path` で開いたときと同じ探索専用の印（`exploratory_reason` に run と単位の名前）も付く。
 - **MS/MS の実スペクトルは `.dcl`**（`dcl` トピック）。`.arf` のセルの MS/MS の有無は取得の参照があることだけを示す。
 - **最初の概観**。`dataset_overview`（`load_dataset(overview=True)` の `overview` も同じ）は品質 → 全体 → クラス → 分子種の 4 段の事実（ID つき）。
   2 群の向きは仮、クラスの段は付加体の選別の後だけ。意味は §11.9。

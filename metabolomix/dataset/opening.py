@@ -403,10 +403,11 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
         ds.analysis_dir = str(Path(selection.arf).parent)
     elif mztab_path:
         ds.analysis_dir = str(Path(mztab_path).parent)
-    if unit is not None and kind == "pipeline_path":
-        # 探索専用の印は pipeline_path で開いた単位だけ（`directory` が run の中の解析フォルダを開いたときの
-        # 単位は、試料の対応表とライブラリの記録を当てるためだけに引いたもの。旧 v1 の注記と同じ線引き）。
-        _mark_unvalidated_unit(ds, unit)
+    if unit is not None:
+        # 探索専用の印は単位の状態を見る。`directory` が run の中の解析フォルダを開いたときも、その単位の
+        # 試料の対応表とライブラリを当てるので、検証を通っていない単位なら同じ印を付ける（断らない。
+        # 理由には run の名前も書く——どの run の単位かは入口からは分からないため）。
+        _mark_unvalidated_unit(ds, unit, name_run=kind == "directory")
     if unit is not None and adapter == "mztab":
         notes.extend(unit.notes)
     if unit is not None and unit.legacy and kind == "pipeline_path":
@@ -495,11 +496,14 @@ def _apply_run_rows(ds, unit) -> list[str]:
             "受領）から当てた（.mddata の宣言より先）。"]
 
 
-def _mark_unvalidated_unit(ds, unit) -> None:
-    """検証を通っていない pipeline の単位（`allow_incomplete=True` で開いた）を探索専用にする。
+def _mark_unvalidated_unit(ds, unit, *, name_run: bool = False) -> None:
+    """検証を通っていない pipeline の単位を探索専用にする。
 
-    ジョブが completed でも、単位の検証（`validate_outputs`）が済んでいなければ出力は確かめられていない。
-    印はジョブの status だけでなく単位の状態も見る（理由は書き出しのメタ行に載る）。
+    `pipeline_path`（`allow_incomplete=True`）で開いた単位と、`directory` が run の中の解析フォルダを
+    開いたときに引いた単位（`_enclosing_run_unit`）の両方に当てる。ジョブが completed でも、単位の検証
+    （`validate_outputs`）が済んでいなければ出力は確かめられていない。印はジョブの status だけでなく
+    単位の状態も見る（理由は書き出しのメタ行に載る）。印は情報で、何も断らない。
+    `name_run` なら理由に run のフォルダの名前も書く（`directory` の入口は run を名指ししないため）。
     """
     from metabolomix.pipeline import store
 
@@ -509,7 +513,9 @@ def _mark_unvalidated_unit(ds, unit) -> None:
     if status == "validated":
         return
     ds.exploratory_only = True
-    reason = f"pipeline の単位 {unit.polarity} が検証を通っていない（{status}）"
+    where = (f"pipeline の run {unit.pipeline_root.name} の単位 {unit.polarity}" if name_run
+             else f"pipeline の単位 {unit.polarity}")
+    reason = f"{where} が検証を通っていない（{status}）"
     ds.exploratory_reason = "; ".join(r for r in (getattr(ds, "exploratory_reason", None), reason) if r)
 
 
