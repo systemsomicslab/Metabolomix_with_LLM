@@ -11,9 +11,19 @@ from mcp.types import ToolAnnotations
 
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import console_error
+from metabolomix.core.polarity_names import normalize_polarity
 from metabolomix.core.serialization import json_payload
 
 __all__ = ["console_method_template", "console_method_candidates"]
+
+
+def _polarity_or_error(polarity) -> tuple[str | None, str | None]:
+    """極性を `normalize_polarity` で "positive" / "negative" にする。読めなければ封筒
+    `POLARITY_INVALID`（黙って別の極性・極性なしとして扱わない）。"""
+    try:
+        return normalize_polarity(polarity), None
+    except ValueError as exc:
+        return None, console_error("POLARITY_INVALID", str(exc), {"polarity": polarity})
 
 
 def _non_ascii_override_error(overrides: dict[str, str]) -> str | None:
@@ -59,7 +69,8 @@ def console_method_template(
     加えて、GUI 由来では必ず空の `Lbm file path` を解決して埋めます。
 
     out_path: 書き出し先。
-    polarity: "positive" / "negative"（作りたい側）。
+    polarity: "positive" / "negative"（作りたい側。"pos" / "neg" / "+" / "-" も可。読めない値は
+        POLARITY_INVALID）。
     based_on: 元にするパラメータファイル。省略時は dataset_root から探します
         （**極性は問いません** — 別極性から作るのがこのツールの用途なので）。
     dataset_root: based_on 省略時の探索先。dataset_root 直下・兄弟フォルダ・
@@ -71,9 +82,9 @@ def console_method_template(
         Text DB と注釈器設定表の宣言を空にする（解決順・止まる条件も pipeline_plan と同じ）。
     msp_file: library_mode="msp_only" で使う MSP の明示パス。
     """
-    if polarity not in ("positive", "negative"):
-        return console_error("JOB_NOT_PLANNED",
-                             f"polarity は 'positive' または 'negative' です: {polarity!r}")
+    polarity, polarity_error = _polarity_or_error(polarity)
+    if polarity_error:
+        return polarity_error
     library_error = _library_mode_error(library_mode, None, msp_file)
     if library_error:
         return library_error
@@ -186,7 +197,8 @@ def console_method_candidates(
     しないため、**兄弟フォルダ**（POS の隣の NEG 等）と**過去 run** まで探します。
 
     dataset_root: 生データフォルダ。
-    polarity: "positive" / "negative"。省略すると極性で区別せず全件返します。
+    polarity: "positive" / "negative"（"pos" / "neg" / "+" / "-" も可。読めない値は
+        POLARITY_INVALID）。省略すると極性で区別せず全件返します。
         指定すると各候補に `usable` が付き、一致しないものは
         `needs_polarity_conversion`（console_method_template を経由させる）。
     omics: 既定 "lipidomics"。None で絞り込みません。
@@ -195,6 +207,10 @@ def console_method_candidates(
     候補には比較用の `key_params`（検出・アライメント条件のうち結果を変える少数）が
     付きます。候補が 10 件を超えるときは付きません（戻り値が肥大するため）。
     """
+    if polarity is not None:
+        polarity, polarity_error = _polarity_or_error(polarity)
+        if polarity_error:
+            return polarity_error
     root = Path(dataset_root).expanduser()
     if not root.is_dir():
         return console_error("DATASET_ROOT_NOT_FOUND",

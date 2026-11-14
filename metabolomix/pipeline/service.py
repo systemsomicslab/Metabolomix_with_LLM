@@ -21,7 +21,8 @@ Console を回し（`upstream`）、出来た mzTab-M と解析フォルダ（`.
 **Console用workerを二重起動しない**: `upstream` handlerは共通監視経路
 `metabolomix.console.execution.supervise`を直接呼ぶ——pipeline用workerが既に
 「起動して見張る」役を担っているため。単位は要求の順に 1 つずつ回す（1 台の PC で
-Console を 2 本並べない）。
+Console を 2 本並べない）。run を跨いでも、機械全体で Console は 1 本
+（`console.machine_slot.console_slot`。待つ間は工程の `waiting` に出す）。
 
 **launchはsys.executableで、cwdは常にこのcheckout自身**（`_REPO_ROOT`）。
 """
@@ -36,7 +37,9 @@ from pathlib import Path
 
 from metabolomix.analysis.sample_manifest import parse_manifest
 from metabolomix.console import execution as console_execution
+from metabolomix.console import failure_diagnosis
 from metabolomix.console import job_manager
+from metabolomix.console import machine_slot
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 from metabolomix.core.process_control import launch_detached
 from metabolomix.handoff.schema import SCHEMA_VERSION, AnalysisJob
@@ -68,6 +71,9 @@ _INPUT_SUBDIR = "input"  # metabolomix.pipeline.inputs._INPUT_SUBDIRと同じ値
 #: `pipeline_plan` / `pipeline_run` の戻り値に出す受付の警告（`request.resolve_request` が出す）。
 _INTAKE_WARNING_CODES = frozenset({"REQUEST_FILE_DOWNSTREAM_IGNORED",
                                    "REQUEST_FILE_UNIT_KEYS_IGNORED"})
+
+#: Console の順番待ちを取消で抜けた（Console は起こしていない）。
+CONSOLE_WAIT_CANCELLED = "CONSOLE_WAIT_CANCELLED"
 
 #: 起動受理を待つ上限（秒）。「短い上限」——超えても失敗と決め付けず、
 #: pipeline_pathと（未確認の）launch状態を返す。
@@ -241,11 +247,30 @@ def _dispatch_summary(pipeline_path: Path, *, launched: bool, launch: dict | Non
     # 受付の警告（要求ファイルから読み飛ばしたもの）。読み飛ばした値こそ受付の時点で見せる。
     intake = [w for w in record.get("warnings") or []
               if w.get("code") in _INTAKE_WARNING_CODES]
-    if intake:
-        summary["warnings"] = intake
+    warnings = intake + _launch_warnings(launch)
+    if warnings:
+        summary["warnings"] = warnings
     if launch is not None:
         summary["launch"] = launch
     return summary
+
+
+def _launch_warnings(launch: dict | None) -> list[dict]:
+    """起動の結果から返す警告。worker が閉じたら止めるかの分からない Windows の Job に残って
+    いれば `WORKER_IN_JOB`（E2-T02。`engine.worker_in_job_warning`）。
+
+    `worker_in_job` は中継が `IsProcessInJob(worker, NULL)` で確かめた値（何段目の Job でも）。
+    中継の直近の Job が `inherited_job`（`relay_breakaway`）なら、中継は worker を外へ出せず、
+    worker はその Job（閉じても止めない）に残ったと分かる。それ以外で worker が Job にいるなら、
+    中継から見えない外側の段にいる。"""
+    if not launch:
+        return []
+    relay_breakaway = launch.get("relay_breakaway")
+    warning = engine.worker_in_job_warning(
+        in_job=launch.get("worker_in_job"),
+        nearest_job=relay_breakaway if relay_breakaway == "inherited_job" else None,
+        details={"breakaway": launch.get("breakaway"), "relay_breakaway": relay_breakaway})
+    return [warning] if warning else []
 
 
 def _recheck_manifests(pipeline_path: Path) -> tuple[str, DomainError] | None:
@@ -384,6 +409,9 @@ def resume_pipeline(path: Path, updates: dict | None = None,
         baseline_record = store.load_run(pipeline_path)
         launch_info = _launch_and_await(pipeline_path, baseline_record=baseline_record)
         summary["launch"] = launch_info
+        launch_warnings = _launch_warnings(launch_info)
+        if launch_warnings:
+            summary["warnings"] = list(summary.get("warnings") or []) + launch_warnings
     else:
         summary["launch"] = {"launched": False}
     return summary
@@ -403,6 +431,7 @@ def launch_pipeline_worker(path: Path) -> dict:
     `launch_detached`はworkerをすぐ終わる中継のプロセスから起こす。workerの親が残らない
     ので、MCPサーバがプロセスの木ごと消されてもworkerとConsoleは残る（Jobがbreakawayを
     許さない環境では、Jobごとの終了には巻き込まれる）。戻り値のpid・identityはworkerのもの。
+    `worker_in_job` が真なら worker はまだどこかの Job に入っている（警告するかは `_launch_warnings`）。
     """
     pipeline_path = Path(path)
     command = [sys.executable, "-m", "metabolomix.pipeline.worker",
@@ -497,7 +526,51 @@ def _handle_upstream(context: dict) -> dict:
     作る」）。固定パスにすると、再実行が前回の終了証跡・ログ・実行前スナップショットを
     上書きし、timeoutで打ち切った事実が後から証明できなくなる。stageの`attempt`は
     `engine.mark_stage_running`が単調に増やすので、これが「何回目のConsole実行か」になる。
+
+    **機械全体で Console は 1 本**（B8-T66）。Console を起こす前に `machine_slot.console_slot`
+    で順番を取る。待つ間は `context["report_waiting"]` で工程の `waiting` に出し、取消が
+    来たら `CONSOLE_WAIT_CANCELLED`（Console は起こしていない）。順番が来たら commit の空きを
+    測り、下限を下回れば警告 `LOW_COMMIT_MEMORY`（止めない）。完了しなかったら
+    `failure_diagnosis` の見立て（資源不足・壊れた入力・ログに名前の出た入力）を
+    `details.diagnosis` と `details.cause` に載せる。
     """
+    pipeline_root = context["pipeline_root"]
+    cancel_path = engine.cancel_request_path(pipeline_root)
+    report_waiting = context.get("report_waiting") or (lambda _waiting: None)
+    waited_notice: list[bool] = []
+
+    def _on_wait() -> None:
+        waited_notice.append(True)
+        waiting = {"reason": "console_slot", "since": _now_iso(),
+                   "message": ("この機械では MS-DIAL Console を同時に 1 本だけ回す。"
+                               "ほかの run の Console が終わるのを待っている。")}
+        holder = machine_slot.read_owner()
+        if holder:
+            waiting["holder"] = {key: holder.get(key)
+                                 for key in ("pipeline_id", "unit", "since") if holder.get(key)}
+        report_waiting(waiting)
+
+    owner = {"pipeline_id": context["pipeline_id"], "unit": context["unit"],
+             "pipeline_path": str(pipeline_root)}
+    try:
+        with machine_slot.console_slot(owner=owner, on_wait=_on_wait,
+                                       should_abort=cancel_path.exists) as waited_s:
+            if waited_notice:
+                report_waiting(None)
+            return _run_console_unit(context, cancel_path=cancel_path,
+                                     waited_s=waited_s if waited_notice else None)
+    except DomainError as exc:
+        if exc.code != "LOCK_WAIT_ABORTED":
+            raise
+        return {"status": "failed", "result_refs": [], "warnings": [],
+                "error": {"code": CONSOLE_WAIT_CANCELLED,
+                          "message": ("ほかの run の MS-DIAL Console が終わるのを待っている間に取消を受けた。"
+                                      "この単位の Console は起こしていない。"),
+                          "details": {"unit": context["unit"]}}}
+
+
+def _run_console_unit(context: dict, *, cancel_path: Path, waited_s: float | None) -> dict:
+    """機械全体の Console の順番を取った後の `upstream` の本体（`_handle_upstream`）。"""
     pipeline_root = context["pipeline_root"]
     unit_root = context["unit_root"]
     request = context["unit_request"]
@@ -533,8 +606,8 @@ def _handle_upstream(context: dict) -> dict:
             "exe_sha256": inputs_snapshot["exe"].get("sha256"),
         })
 
-    supervised = console_execution.supervise(
-        job_path, cancel_path=engine.cancel_request_path(pipeline_root))
+    memory, commit_warning = machine_slot.check_commit_memory()
+    supervised = console_execution.supervise(job_path, cancel_path=cancel_path)
     job = job_manager.load_job(job_path)
 
     upstream_update = {
@@ -543,7 +616,12 @@ def _handle_upstream(context: dict) -> dict:
         "verification": {"status": job.status, "termination": supervised.get("termination"),
                          "exit_code": supervised.get("exit_code")},
     }
-    warnings = [{"code": "CONSOLE_WARNING", "message": w} for w in job.warnings[:5]]
+    if memory is not None:
+        upstream_update["memory_before"] = memory
+    if waited_s is not None:
+        upstream_update["console_slot_waited_s"] = round(waited_s, 1)
+    warnings = [commit_warning] if commit_warning else []
+    warnings += [{"code": "CONSOLE_WARNING", "message": w} for w in job.warnings[:5]]
 
     if job.status == "completed":
         return _ok(warnings, unit_updates={"upstream": upstream_update})
@@ -551,11 +629,22 @@ def _handle_upstream(context: dict) -> dict:
     message = job.error or (
         f"MS-DIAL Consoleの実行が完了しませんでした"
         f"（termination={supervised.get('termination')}）。")
+    details = {"termination": supervised.get("termination"),
+               "exit_code": supervised.get("exit_code"),
+               "unit": context["unit"]}
+    if supervised.get("termination") in {"exited", "worker_lost"}:
+        diagnosis = failure_diagnosis.diagnose_failure(
+            run_dir / console_execution.CONSOLE_LOG_FILENAME,
+            exit_code=supervised.get("exit_code"),
+            raw_paths=job_manager.list_raw_inputs(dataset_root))
+        if diagnosis:
+            details["diagnosis"] = diagnosis
+            if diagnosis.get("cause"):
+                details["cause"] = diagnosis["cause"]
+                message = f"{message} {diagnosis['message']}"
     return {"status": "failed", "result_refs": [], "warnings": warnings,
             "error": {"code": "MSDIAL_EXECUTION_FAILED", "message": message,
-                      "details": {"termination": supervised.get("termination"),
-                                  "exit_code": supervised.get("exit_code"),
-                                  "unit": context["unit"]}},
+                      "details": details},
             "unit_updates": {"upstream": upstream_update}}
 
 

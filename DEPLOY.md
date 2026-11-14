@@ -47,8 +47,18 @@ configuration or in a shell when testing manually:
 External assets (MS-DIAL Console, reference libraries, MSLipidMapper), where reports and the
 library cache go (`[paths] reports_dir` / `library_cache`), the open dataset-handle limit
 (`[server] max_dataset_handles`) and the semantics digest (`[server] caveat_mode`) are set in
-`lipidmix.local.toml` (copy `lipidmix.example.toml`), not in environment variables. The library
-cache defaults to `data/.library-cache` next to that settings file.
+`lipidmix.local.toml` (copy `lipidmix.example.toml`), not in environment variables. So is the
+free-commit floor checked before each MS-DIAL Console run (`[msdial] min_free_commit_gb`,
+default 8 GB, `0` turns the check off; below it the pipeline only records a
+`LOW_COMMIT_MEMORY` warning). The library cache defaults to `data/.library-cache` next to that
+settings file.
+
+The pipeline also keeps a Console lock file, `data/.msdial-console.lock`, next to the settings
+file, so that only one MS-DIAL Console runs at a time across runs. The lock is shared only by
+servers and workers that read the same settings file: the main checkout and worktrees that
+point `LIPIDMIX_CONFIG` at the main checkout's `lipidmix.local.toml`. A second clone that reads
+its own settings file takes its own lock and can start a second Console at the same time; point
+its `LIPIDMIX_CONFIG` at the same settings file to share the lock.
 
 Do not set `LIPIDMIX_TRANSPORT=streamable-http` for this mode. The default
 transport is `stdio`.

@@ -425,9 +425,10 @@ def test_downstream_updates_are_refused_on_resume(tmp_path):
     path = _completed(tmp_path)
     with pytest.raises(DomainError) as caught:
         prepare_resume(path, updates={"comparisons": []})
-    assert caught.value.code == "PIPELINE_DOWNSTREAM_REMOVED"
+    assert caught.value.code == "PIPELINE_REQUEST_INVALID"
+    assert "dataset_compare" in caught.value.details["replacements"]
     with pytest.raises(DomainError) as caught:
-        prepare_resume(path, updates={"method": "other.txt"})
+        prepare_resume(path, updates={"method_file": "other.txt"})
     assert caught.value.code == "NEW_PIPELINE_REQUIRED"
     assert load_run(path)["status"] == "completed"
 

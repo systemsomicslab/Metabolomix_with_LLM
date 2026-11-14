@@ -21,25 +21,37 @@ MCP層は薄い(`metabolomix/tools/pipeline_tools.py` と `metabolomix/tools/con
 3.    ├─ metabolomix/pipeline/service.py  _prepare_run()
 4.    │  ├─ metabolomix/pipeline/request.py  resolve_request()
 5.    │  ├─ [単位（極性）ごと] metabolomix/pipeline/inputs.py  inspect_inputs()
-6.    │  ├─ [単位（極性）ごと] metabolomix/pipeline/service.py  _precheck_manifest()
-7.    │  │  └─ metabolomix/analysis/sample_manifest.py  parse_manifest()
-8.    │  ├─ metabolomix/pipeline/store.py  find_or_create_run()
-9.    │  └─ [manifest不正を検出した場合] metabolomix/pipeline/service.py  _mark_needs_input_without_launch()
-10.   ├─ [manifest不正が無かった場合のみ] metabolomix/pipeline/store.py  load_run()
-11.   ├─ [manifest不正あり、または既存run(活動中/completed/失敗/取消/部分完了)を再利用した場合] metabolomix/pipeline/service.py  _dispatch_summary()
-12.   ├─ [新規作成直後の`planned` runのときだけ] metabolomix/pipeline/service.py  _launch_and_await()
-13.   │  ├─ metabolomix/pipeline/service.py  launch_pipeline_worker()
-14.   │  │  └─ metabolomix/core/process_control.py  launch_detached()
-15.   │  └─ metabolomix/pipeline/service.py  _await_launch_handshake()
-16.   └─ metabolomix/pipeline/service.py  _dispatch_summary()
+6.    │  │  └─ metabolomix/pipeline/inputs.py  _assert_open_format_inputs()
+7.    │  │     └─ metabolomix/console/raw_integrity.py  broken_open_format_files()
+8.    │  ├─ [単位（極性）ごと] metabolomix/pipeline/service.py  _precheck_manifest()
+9.    │  │  └─ metabolomix/analysis/sample_manifest.py  parse_manifest()
+10.   │  ├─ metabolomix/pipeline/store.py  find_or_create_run()
+11.   │  └─ [manifest不正を検出した場合] metabolomix/pipeline/service.py  _mark_needs_input_without_launch()
+12.   ├─ [manifest不正が無かった場合のみ] metabolomix/pipeline/store.py  load_run()
+13.   ├─ [manifest不正あり、または既存run(活動中/completed/失敗/取消/部分完了)を再利用した場合] metabolomix/pipeline/service.py  _dispatch_summary()
+14.   ├─ [新規作成直後の`planned` runのときだけ] metabolomix/pipeline/service.py  _launch_and_await()
+15.   │  ├─ metabolomix/pipeline/service.py  launch_pipeline_worker()
+16.   │  │  └─ metabolomix/core/process_control.py  launch_detached()
+17.   │  └─ metabolomix/pipeline/service.py  _await_launch_handshake()
+18.   └─ metabolomix/pipeline/service.py  _dispatch_summary()
+19.      └─ metabolomix/pipeline/service.py  _launch_warnings()
 
-事前検査(手順6-7)で壊れた実験情報シート等の既知の不正入力を検出した場合、
-`find_or_create_run` でrunは作るがworkerは起動しない(手順9で`needs_input`のまま
-保存し、手順10のstatus読み直し自体を行わず手順11の発送receiptへ直行する)。
+手順6-7は開いた形式(mzML・imzML・mzXML)の主ファイルの末尾が根の要素の閉じタグ(`</indexedmzML>` /
+`</mzML>` / `</mzXML>`)で終わるか、サイズが下限(`raw_integrity.MIN_OPEN_FORMAT_BYTES`、32 KiB)以上かを
+確かめ(imzML は閉じタグだけ。メタデータだけでスペクトルは隣の `.ibd` にあるので小さくてよい。`.ibd` の
+中身は見ない)、切れた・小さすぎるファイルを名指しして `PIPELINE_INPUT_INVALID`(`details.files` に
+`{"name", "size", "reason"}`、`reason` は `truncated` / `too_small` / `unreadable`)で断る。読むのは末尾の
+数 KB だけで、XML 全体の検証はしない。ベンダーの形式は見ない。Console は切れた mzML を読むところで落ち、
+どのファイルかをログに残さないので、run を作る前に止める。
+事前検査(手順8-9)で壊れた実験情報シート等の既知の不正入力を検出した場合、
+`find_or_create_run` でrunは作るがworkerは起動しない(手順11で`needs_input`のまま
+保存し、手順12のstatus読み直し自体を行わず手順13の発送receiptへ直行する)。
 要求は `pipeline-request.v3`(`request.resolve_request`)で、1 極性の形も 2 極性の
 `units` の形も単位の並びに正規化する。入力計画(`inspect_inputs`)と事前検査は単位ごとに
 回し、run(`pipeline-run.v3`)は単位ごとの記録 `record["units"][<極性>]` を持つ。
-下流のキー(`target` / `preprocess` / `comparisons`)は `PIPELINE_DOWNSTREAM_REMOVED`
+下流のキー(`target` / `preprocess` / `comparisons`)は、ほかの知らないキーと同じ
+`PIPELINE_REQUEST_INVALID`(`details.unknown_keys`。下流のキーがあれば文面と `details.replacements` で
+`load_dataset` → `dataset_preprocess` / `dataset_compare` / `dataset_pca` を案内する。`request._unknown_keys`)
 (元フォルダの `analysis-request.json` に書かれたものは読み飛ばして警告
 `REQUEST_FILE_DOWNSTREAM_IGNORED`)。明示の `units` は単位を丸ごと決めるので、
 `analysis-request.json` のトップの単位のキー(`polarity` `method_file` …)は使わず、警告
@@ -48,13 +60,13 @@ MCP層は薄い(`metabolomix/tools/pipeline_tools.py` と `metabolomix/tools/con
 もう片方の中にある(`.` を含む)のも `PIPELINE_REQUEST_INVALID`。
 
 **起動しないもう1つの経路（レビュー指摘1）**: manifestが正常でも、
-`find_or_create_run`(手順8)が既存run——活動中／completed／失敗・取消・部分完了
-済みのいずれか——を再利用した場合、手順10で読み直したstatusが`planned`で
-ないので手順11で起動せず終える。新規に作られたrunだけが`status="planned"`の
+`find_or_create_run`(手順10)が既存run——活動中／completed／失敗・取消・部分完了
+済みのいずれか——を再利用した場合、手順12で読み直したstatusが`planned`で
+ないので手順13で起動せず終える。新規に作られたrunだけが`status="planned"`の
 まま返るので、それだけを起動条件にする。既存runを本当に進めたい場合は
 `pipeline_resume`を使う。
 
-手順12の `_launch_and_await` は「launch直前に読んだ`baseline_record`」を引数に
+手順14の `_launch_and_await` は「launch直前に読んだ`baseline_record`」を引数に
 取る中間関数で、`launch_pipeline_worker`(起動)と`_await_launch_handshake`
 (handshake待ち)を1つにまとめている——resumeで前回workerの残骸identityが
 既に記録されているケースでも、両呼び出しが同じ基準時点の記録を共有できるように
@@ -79,9 +91,21 @@ Console にも渡らない(渡ると、サーバが終わってもアプリの�
 同じ規則で切り離す(breakaway のフラグは Job が許すときだけ)。戻り値の pid・identity は
 worker のもので、handshake(worker 自身が `pipeline-run.json` に書く identity)と
 `pipeline_status` / `pipeline_cancel` / `pipeline_resume` の追跡は今までどおり。
-限界: Job が breakaway を許さない環境(`inherited_job`。KILL_ON_JOB_CLOSE は無い)では中継も
-worker もその Job に残るので、木ごとの終了には残るが、Job ごとの終了(`TerminateJobObject`
-や、後から KILL_ON_JOB_CLOSE を付けて閉じること)には巻き込まれる。
+限界: Job の制限は直近の 1 段しか読めない(`QueryInformationJobObject(NULL)`)ので、`DETACH_UNSUPPORTED` で
+断れるのは直近の Job が KILL_ON_JOB_CLOSE 付きで breakaway を許さないときだけ。breakaway を許さない Job
+(`inherited_job`)や、それより外側の Job には中継も worker も残り、木ごとの終了には残るが、その Job が
+閉じる・終了させられる(`TerminateJobObject`)と巻き込まれる。そこで中継は起こした worker を
+`IsProcessInJob(worker, NULL)` で確かめ(何段目の Job でも捕まえる)、`launch_detached` の戻り値の
+`worker_in_job` に返す(`relay_breakaway` は中継の直近の Job から見た値)。警告するかは
+`engine.worker_in_job_warning` が決める: worker が Job に残り、その Job が閉じたら止める設定か分からない
+(中継が自分の直近の Job を抜けさせた `silent_breakaway` / `breakaway_ok` なのに worker がまだ Job にいる＝
+中継から見えない外側の段)なら、`_launch_warnings`(手順19)が `pipeline_run` / `pipeline_resume` の戻り値の
+`warnings` に `WORKER_IN_JOB`(`details.breakaway` / `relay_breakaway`)を足す。中継の直近の Job が
+`inherited_job`(breakaway は許さないが閉じても止めない)なら worker もその Job にいると分かるので警告しない
+(Windows 11 ではシェルの配下のプロセスが制限の無い Job にいることが普通にあり、警告すると毎回の雑音になる。
+それより外側の段は見えない)。worker も起動直後に自分を確かめ(`process_control.current_job_state`: 何段目かを
+問わず Job にいるかと、直近の Job の制限)、run の記録の `worker.in_job` / `worker.nearest_job` に残し、同じ規則で
+`warnings`(`WORKER_IN_JOB`、run に 1 つだけ。`details.nearest_job`)に残す。どちらも止めはしない。
 
 `_await_launch_handshake` は短い上限だけ待ち、超えても
 起動失敗と決め付けず再起動もしない(`launch.handshake="not_confirmed"`のまま
@@ -155,12 +179,23 @@ v8 の要求を出すと、その run を再利用する(上書きしたメソ�
 3.    └─ metabolomix/pipeline/store.py  load_run()
 4.    └─ metabolomix/core/process_control.py  same_process()
 5.    └─ metabolomix/pipeline/receipt.py  read_receipt()
+6.    └─ [失敗・取消で終わった工程があるとき] metabolomix/pipeline/recovery.py  _stage_errors()
+7.       └─ metabolomix/pipeline/receipt.py  stage_error_summary()
 
 `load_run` は読取専用で、このツール自身は `pipeline-run.json` を一切書き換えない。
 `status="running"`のときだけ`same_process`でworker identityの生存を確認するが、
 確認できなくても`status`フィールドは変えず`observed_health`という別軸で返す。
 単位ごとの状態(`units`)と、受領があればその要約(解析フォルダの場所・照合した `.arf`・
-次の呼び出し `load_dataset(pipeline_path=…, polarity=…)`)も返す。旧 v1 の run は
+次の呼び出し `load_dataset(pipeline_path=…, polarity=…)`)も返す。走っている工程が機械全体の
+Console の順番を待っていれば `waiting`(`{<stage_id>: {"reason": "console_slot", "since", "message",
+"holder": {"pipeline_id", "unit", "since"}}}`。工程の status は `running` のまま)を返す。失敗・取消で
+終わった工程があれば `errors`(`{<stage_id>: {"code", "message", "cause"?, "suspect_files"?, "n_suspect_files"?}}`。
+手順6-7)を返す——`stage_statuses` は状態の文字列だけなので、これが無いと Console が落ちた原因と疑わしい
+ファイルは `include_details=true` の記録全体を引かないと見えない(1 極性の run は受領も書かれない)。要約は
+`receipt.stage_error_summary` で、受領の単位の `error` と同じ形: `MSDIAL_EXECUTION_FAILED` の
+`details.cause` と `details.diagnosis.suspect_files`、配置の工程で断った `PIPELINE_INPUT_INVALID` の
+`details.files` を `cause` / `suspect_files`(`[{"name", "reason"}]`。10 件まで、超えたら `n_suspect_files`)に
+そろえ、文面は 600 字で切る。ログの行(`details.diagnosis.log_lines`)は載せない。旧 v1 の run は
 `legacy: true` で読めるだけ(再開・取消は `PIPELINE_RUN_LEGACY`)。
 
 ## pipeline_resume
@@ -176,6 +211,7 @@ v8 の要求を出すと、その run を再利用する(上書きしたメソ�
 9.       ├─ metabolomix/pipeline/service.py  launch_pipeline_worker()
 10.      │  └─ metabolomix/core/process_control.py  launch_detached()
 11.      └─ metabolomix/pipeline/service.py  _await_launch_handshake()
+12.   └─ [起動したとき] metabolomix/pipeline/service.py  _launch_warnings()
 
 受付の事前検査で `needs_input` に止まった run の resume は、起動する前に保存済みの要求と
 入力計画で単位ごとの事前検査(`_precheck_manifest`)をやり直す。直っていなければ
@@ -190,7 +226,9 @@ v8 の要求を出すと、その run を再利用する(上書きしたメソ�
 基準を「launch直前」に揃えないと、前回workerの残骸identityを新規launchの
 証拠と誤認しうる)。`rerun_upstream=True`を明示しない限りConsole実行はやり直さない。
 訂正できるのは試料の対応表(`sample_manifest`、2 極性なら `units.<極性>.sample_manifest`)
-だけで、戻すのは受領の工程だけ。`rerun_upstream=True` は失敗した単位の 3 工程と受領を戻す。
+だけで、戻すのは受領の工程だけ。`rerun_upstream=True` は失敗した単位の 3 工程と受領を戻す。`updates` の知らないキー(消えた下流のキーを
+含む)は `PIPELINE_REQUEST_INVALID`(下流のキーなら `details.replacements`)、上流の条件のキー(`method_file` ほか)は
+`NEW_PIPELINE_REQUIRED`。
 ただし worker が生きていて(`_worker_health` が `ok`)上流が `running` の単位は、その
 Console を捨てない——やり直しの対象にも、`UPSTREAM_RERUN_REQUIRED` の理由にも数えない
 (`rerun_upstream=True` で外した単位は戻り値の `held_units` と `hint` で言う)
@@ -216,15 +254,20 @@ Console を捨てない——やり直しの対象にも、`UPSTREAM_RERUN_REQUI
 前提: なし。状態変更: なし(読取専用)。
 
 1. metabolomix/tools/console_tools.py  console_method_candidates()
-2. └─ metabolomix/console/method_file.py  discover_method_candidates()
-3.    └─ metabolomix/console/method_file.py  method_search_dirs()
-4.    └─ metabolomix/console/method_file.py  scan_dir_for_method_files()
-5.    └─ metabolomix/console/method_file.py  past_run_method_files()
-6.       └─ metabolomix/console/method_file.py  read_method_keys()
-7.    └─ metabolomix/console/method_file.py  extract_key_params()
-8. └─ metabolomix/tools/console_tools.py  _capped_candidates()
-9.    └─ metabolomix/tools/console_tools.py  _candidate_payload()
-10. └─ metabolomix/tools/console_tools.py  _candidates_next_hint()
+2. └─ [polarity を渡したとき] metabolomix/tools/console_tools.py  _polarity_or_error()
+3.    └─ metabolomix/core/polarity_names.py  normalize_polarity()
+4. └─ metabolomix/console/method_file.py  discover_method_candidates()
+5.    └─ metabolomix/console/method_file.py  method_search_dirs()
+6.    └─ metabolomix/console/method_file.py  scan_dir_for_method_files()
+7.    └─ metabolomix/console/method_file.py  past_run_method_files()
+8.       └─ metabolomix/console/method_file.py  read_method_keys()
+9.    └─ metabolomix/console/method_file.py  extract_key_params()
+10. └─ metabolomix/tools/console_tools.py  _capped_candidates()
+11.    └─ metabolomix/tools/console_tools.py  _candidate_payload()
+12. └─ metabolomix/tools/console_tools.py  _candidates_next_hint()
+
+`polarity` は `normalize_polarity` で `positive` / `negative` に読み替える(`pos` / `neg` / `+` / `-` も可、
+大文字小文字を問わない)。読めない値は `POLARITY_INVALID`(黙って「どの候補とも一致しない」にしない)。
 
 MS-DIAL GUI が解析のたびに保存する `<project>_param_<終了時刻>.txt` を、`dataset_root` 直下 →
 兄弟フォルダ直下 → `search_dirs`(`method_search_dirs`)の順に探す。**再帰はしない**(深く掘ると無関係な
@@ -242,22 +285,24 @@ MS-DIAL GUI が解析のたびに保存する `<project>_param_<終了時刻>.tx
 前提: なし。状態変更: `out_path` にメソッドファイルを書く(セッションは変えない)。
 
 1. metabolomix/tools/console_tools.py  console_method_template()
-2. └─ metabolomix/tools/console_tools.py  _library_mode_error()
-3. └─ [based_on を省いたとき] metabolomix/console/method_file.py  discover_method_candidates()
-4. └─ metabolomix/tools/console_tools.py  _looks_like_method_text()
-5. └─ metabolomix/console/method_file.py  read_method_keys()
-6. └─ metabolomix/console/runner.py  get_exe_path()
-7. └─ metabolomix/tools/console_tools.py  _resolve_libraries()
-8.    └─ metabolomix/console/method_file.py  relative_path_overrides()
-9.    ├─ [library_mode="msp_only"] metabolomix/tools/console_tools.py  _msp_setting()
-10.   ├─ [library_mode="msp_only"] metabolomix/console/method_file.py  resolve_msp()
-11.   ├─ [library_mode="msp_only"] metabolomix/console/method_file.py  msp_only_overrides()
-12.   ├─ [library_mode="auto"] metabolomix/tools/console_tools.py  _lbm_setting()
-13.   └─ [library_mode="auto"] metabolomix/console/method_file.py  resolve_lbm()
-14. └─ metabolomix/tools/console_tools.py  _non_ascii_override_error()
-15. └─ metabolomix/console/method_file.py  write_effective_method_file()
+2. └─ metabolomix/tools/console_tools.py  _polarity_or_error()
+3. └─ metabolomix/tools/console_tools.py  _library_mode_error()
+4. └─ [based_on を省いたとき] metabolomix/console/method_file.py  discover_method_candidates()
+5. └─ metabolomix/tools/console_tools.py  _looks_like_method_text()
+6. └─ metabolomix/console/method_file.py  read_method_keys()
+7. └─ metabolomix/console/runner.py  get_exe_path()
+8. └─ metabolomix/tools/console_tools.py  _resolve_libraries()
+9.    └─ metabolomix/console/method_file.py  relative_path_overrides()
+10.   ├─ [library_mode="msp_only"] metabolomix/tools/console_tools.py  _msp_setting()
+11.   ├─ [library_mode="msp_only"] metabolomix/console/method_file.py  resolve_msp()
+12.   ├─ [library_mode="msp_only"] metabolomix/console/method_file.py  msp_only_overrides()
+13.   ├─ [library_mode="auto"] metabolomix/tools/console_tools.py  _lbm_setting()
+14.   └─ [library_mode="auto"] metabolomix/console/method_file.py  resolve_lbm()
+15. └─ metabolomix/tools/console_tools.py  _non_ascii_override_error()
+16. └─ metabolomix/console/method_file.py  write_effective_method_file()
 
-既存のパラメータから別極性のメソッドファイルを作る最後の手段。まず `pipeline_plan` の要求で `method_file` を
+既存のパラメータから別極性のメソッドファイルを作る最後の手段。`polarity` は `console_method_candidates` と
+同じく `normalize_polarity` で読み替え、読めない値は `POLARITY_INVALID`。まず `pipeline_plan` の要求で `method_file` を
 省いて試す(その極性で GUI 実行が一度でもあれば作る必要は無い)。`based_on` を省くと
 `discover_method_candidates` を**極性で絞らずに**呼び(別極性から作るのが用途)、候補が 1 件ならそれ、
 複数なら `METHOD_FILE_CHOICE_REQUIRED`(土台の選択は解析条件そのものなので最新を黙って採らない)。
@@ -281,27 +326,42 @@ MS-DIAL GUI が解析のたびに保存する `<project>_param_<終了時刻>.tx
 `tests/test_pipeline_engine.py`のASTテストがこれを固定する)。
 
 1. metabolomix/pipeline/worker.py  run_worker()
-2. └─ metabolomix/pipeline/engine.py  run_engine()
-3.    └─ metabolomix/pipeline/service.py  build_handlers()
-4.    └─ metabolomix/pipeline/engine.py  _run_stage_loop()
-5.       ├─ [単位（極性）ごと、要求の順] metabolomix/pipeline/service.py  _handle_prepare_input()
-6.       │  └─ metabolomix/pipeline/inputs.py  stage_inputs()
-7.       ├─ [単位ごと] metabolomix/pipeline/service.py  _handle_upstream()
-8.       │  └─ metabolomix/console/execution.py  supervise()
-9.       ├─ [単位ごと] metabolomix/pipeline/service.py  _handle_validate_outputs()
-10.      │  ├─ metabolomix/mztab/loading.py  job_gate()
-11.      │  └─ metabolomix/pipeline/service.py  _matching_alignment()
-12.      │     ├─ metabolomix/mztab/evidence.py  first_matching_arfs()
-13.      │     │  └─ [候補が合わないとき] metabolomix/dataset/alignment_files.py  batch_arfs_newest_first()
-14.      │     └─ metabolomix/mztab/evidence.py  matching_arfs()
-15.      └─ metabolomix/pipeline/service.py  _handle_receipt()
-16.         └─ metabolomix/pipeline/receipt.py  write_receipt()
-17.   └─ metabolomix/pipeline/engine.py  finish_success()
-18.      └─ metabolomix/pipeline/engine.py  final_status()
+2. └─ metabolomix/core/process_control.py  current_job_state()
+3. └─ metabolomix/pipeline/engine.py  run_engine()
+4.    └─ metabolomix/pipeline/engine.py  _record_worker_identity()
+5.    └─ metabolomix/pipeline/service.py  build_handlers()
+6.    └─ metabolomix/pipeline/engine.py  _run_stage_loop()
+7.       ├─ [単位（極性）ごと、要求の順] metabolomix/pipeline/service.py  _handle_prepare_input()
+8.       │  └─ metabolomix/pipeline/inputs.py  stage_inputs()
+9.       │     └─ metabolomix/pipeline/inputs.py  _assert_open_format_inputs()
+10.      ├─ [単位ごと] metabolomix/pipeline/service.py  _handle_upstream()
+11.      │  ├─ metabolomix/console/machine_slot.py  console_slot()
+12.      │  │  ├─ metabolomix/core/process_control.py  wait_for_lock()
+13.      │  │  └─ [順番を待つとき] metabolomix/pipeline/engine.py  report_stage_waiting()
+14.      │  └─ metabolomix/pipeline/service.py  _run_console_unit()
+15.      │     ├─ metabolomix/console/machine_slot.py  check_commit_memory()
+16.      │     │  └─ metabolomix/core/process_control.py  commit_memory_status()
+17.      │     ├─ metabolomix/console/execution.py  supervise()
+18.      │     └─ [完了しなかったとき] metabolomix/console/failure_diagnosis.py  diagnose_failure()
+19.      ├─ [単位ごと] metabolomix/pipeline/service.py  _handle_validate_outputs()
+20.      │  ├─ metabolomix/mztab/loading.py  job_gate()
+21.      │  └─ metabolomix/pipeline/service.py  _matching_alignment()
+22.      │     ├─ metabolomix/mztab/evidence.py  first_matching_arfs()
+23.      │     │  └─ [候補が合わないとき] metabolomix/dataset/alignment_files.py  batch_arfs_newest_first()
+24.      │     └─ metabolomix/mztab/evidence.py  matching_arfs()
+25.      └─ metabolomix/pipeline/service.py  _handle_receipt()
+26.         └─ metabolomix/pipeline/receipt.py  write_receipt()
+27.   └─ metabolomix/pipeline/engine.py  finish_success()
+28.      └─ metabolomix/pipeline/engine.py  final_status()
+
+手順2で worker は自分がまだ Windows の Job に入っているか(何段目でも)を確かめ、手順4で run の記録の
+`worker.in_job` / `worker.nearest_job` に残す(閉じたら止めるか分からない Job なら警告 `WORKER_IN_JOB`。
+直近の Job が `inherited_job` なら警告しない。試験の harness は `run_engine` を直に呼ぶので確かめない)。
+手順9は受付と同じ切れた mzML の検査を配置の前にもう一度行う(受付の後に切れたものも Console の前で止める)。
 
 工程の計画(`engine.build_stages`)は単位ごとの `prepare_input:<極性>` →
 `upstream:<極性>` → `validate_outputs:<極性>` を要求の順に並べ、最後に `receipt` を
-1 つ置く。手順4の `_run_stage_loop` はこの計画順で回す(`record["stages"]` の挿入順では
+1 つ置く。手順6の `_run_stage_loop` はこの計画順で回す(`record["stages"]` の挿入順では
 ない)。ある単位が失敗したら、その単位の残りの工程は飛ばしてもう片方の単位へ進む
 (Console を同時に 2 本走らせない)。validated の単位が 1 つも無ければ受領は書かない。
 
@@ -321,6 +381,33 @@ MS-DIAL GUI が解析のたびに保存する `<project>_param_<終了時刻>.tx
 にすると`rerun_upstream=true`の再実行が前回の終了証跡・ログ・実行前スナップショットを
 上書きしてしまう。Console の `-i` は `<pipeline_root>/<極性>/input/`(配置した raw)で、
 MS-DIAL はここへ `.arf` などを書く——このフォルダがそのまま解析フォルダになる。
+
+**機械全体で Console は 1 本**: 1 本の run の中では単位を 1 つずつ回すが、極性ごとに別の run を起こすと
+Console が並ぶ(研究室の MSP・LBM を読む脂質の run は 1 本で 20 GB 以上の commit を確保し、並ぶと遅くなる
+うえ commit の上限で Windows のエラー 1450 で落ちうる)。そこで `_handle_upstream` は Console を起こす前に
+`machine_slot.console_slot`(OS のファイルロック `process_control.wait_for_lock`。持っている worker が死ねば
+OS が外す)で順番を取る。ロックは設定ファイルのフォルダの `data/.msdial-console.lock` にあり、同じ設定
+ファイルを読むサーバ・worker の間で取り合う(main ツリーのサーバと、`LIPIDMIX_CONFIG` で main ツリーの
+`lipidmix.local.toml` を指す worktree)。自分の設定ファイルを読む別のクローンは別のロックになり、Console が
+2 本並びうる(そのクローンも `LIPIDMIX_CONFIG` で同じ設定ファイルを指せば 1 本になる)。機械で 1 つの固定の
+場所にしないのは、テストが設定ファイルをテストごとの tmp へ向けることで本物の run と取り合わずに済んで
+いるため。待つ間は engine が context に渡す `report_waiting` から `report_stage_waiting`(手順13)で工程の
+`waiting` に書き(status は `running` のまま。`pipeline_status` の `waiting`)、順番が来たら消す。
+待っている間に取消が来たら Console を起こさず `CONSOLE_WAIT_CANCELLED` で失敗にする(run は `cancelled`)。
+順番が来たら commit の空き(`GlobalMemoryStatusEx` の `ullAvailPageFile`)を測り(手順15-16)、
+下限(設定 `[msdial] min_free_commit_gb`、既定 8、0 で測らない)を下回れば警告 `LOW_COMMIT_MEMORY`
+を残す(止めない)。測った値は単位の `upstream.memory_before`、待った秒数は
+`upstream.console_slot_waited_s` に残る。
+
+Console が完了しなかったとき(終わり方が `exited` / `worker_lost`)は `failure_diagnosis.diagnose_failure`
+(手順18)の見立てを `MSDIAL_EXECUTION_FAILED` の `details.diagnosis` に、原因の分類を `details.cause` に載せる:
+終了コード 1450(`ERROR_NO_SYSTEM_RESOURCES`)かログのメモリ不足は `system_resources`、配置済みの mzML が
+切れていれば `broken_input`、`msdial.log` のエラーの行(無ければ最初のエラーより前に最後に名前の出た行)に
+計測ファイルの名前があれば `input_suspected`(見立てで確定ではない)。返すログの行は絶対パスをファイル名に
+する(研究室の参照ライブラリの置き場所を出さない): ドライブ・UNC・`file:` の URL で始まるパスの頭から
+最後の区切りまでを消す(フォルダの名前の空白で切らないので `OneDrive - 大学名` のような断片も残らない)。
+原因と疑わしいファイルは `pipeline_status` の `errors` と受領の単位の `error` にも出る
+(`receipt.stage_error_summary`)。
 
 `_handle_validate_outputs` は正準 mzTab-M(`job_gate`。ジョブが完了していなければ失敗)を
 確かめ、解析フォルダの `.arf` のうち mzTab-M と同じアラインメントだと確かめられたもの
