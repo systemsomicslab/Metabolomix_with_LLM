@@ -28,6 +28,7 @@
     MS-DIAL 5 の略記と `LbmClass` に直して入れる。ClassyFire の Ontology は使わず、名前と食い違えば名前を採る。
     クラスが 1 つに決まらない行（`Cer 34:1;O2` など）は `dropped_ambiguous_class`。Cer / HexCer / SM 以外の
     頭部で `;O…` の修飾がある名前（`FA 18:1;O`、`PC 16:0_18:2;O`、`FA 18:1;O (9-HODE)` 等）はこの経路で読まず、経路 `class_formula` に回す。
+    名前の後ろの空白を含む注記は切るが、酸化の修飾は残す（`SM 18:1;O2/16:0 (x)` → `SM 18:1;O2/16:0`）。
   - 経路 `class_formula`: 名前が読めない行（慣用名・IUPAC 名・ID）のうち、ClassyFire の Ontology が 1 つの
     `LbmClass` に決まり、組成式がそのクラスの基準の形に合う行。組成式から**和の組成**の名前（`TG 54:3` 等。
     鎖ごとの内訳は無い）を作る。作れない行は、この順で最初に当たった理由で落ちる:
@@ -99,7 +100,9 @@ mean_a / mean_b は個体の `2**log2` の算術平均（エンジンの定義�
 上流はデータに無いサブクラスのノード（対応表経由の PC/PE/PS など）と、指定した各鎖について
 全ノードに**空のスコープ**（分子種 0・値は全部 null）を出す。これは「値の付いたノード」ではないので
 行にせず、BH の分母にも入れない。指定した `acyl_chains` のうち、分子種の入った鎖スコープが
-どのパスウェイにも無い鎖があれば `PATHWAY_BAD_REQUEST`（`details.missing_chains`）。
+どのパスウェイにも無い鎖があっても run は捨てずに返し（その鎖のスコープが行にならないだけで、ほかのスコープの
+比較は鎖を指定しなかった run と同じ値）、無かった鎖を戻り値と manifest の `missing_chains` と `notes.acyl_chains` に書く
+（綴りの誤りなら正しい綴りで呼び直す）。
 
 ## 逆向きに動く隣接ペア（opposite_pairs_tsv）
 
@@ -116,10 +119,11 @@ mean_a / mean_b は個体の `2**log2` の算術平均（エンジンの定義�
 （MCP の時間切れで戻り値が失われても run に残る）。
 
 - `notes`: `adjacency`（隣接の注意）・`handoff`（行を落としたか同名を絞ったときの注意。無ければ null）・
-  `values`（値の意味。クラスの総量ではない旨）・`assay_kind`（下記。lipid なら null）。戻り値の `notes` も同じ
-  （null のものは載せず、`figure` を足す）。
+  `values`（値の意味。クラスの総量ではない旨）・`assay_kind`（下記。lipid なら null）・`acyl_chains`（データに無かった
+  鎖があるときだけ。上記）。戻り値の `notes` も同じ（null のものは載せず、`figure` を足す）。
 - `test`（使った検定）と `n_units`（群ごとの単位の数）。`matrix_id` と `matrix_source`（行列の出所。上記）。
   ドリフト補正を当てなかった行列なら `warnings`（戻り値と同じ `drift_not_applied_by_default`。上記）。
+  `acyl_chains` は指定した鎖、`missing_chains` はそのうちデータに無かった鎖（あるときだけ。戻り値にも同じ欄）。
 - `opposite_pairs`: パスウェイ名 → `{"rows": [...], "undeterminable": 件数}`。`rows` は
   `opposite_pairs_tsv` と同じ欄（`node_1` `call_1` `log2fc_1` `node_2` `call_2` `log2fc_2` `via`）の辞書。
 - 非有限の数値（NaN・inf）は null で書く。

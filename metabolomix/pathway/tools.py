@@ -118,6 +118,13 @@ def _assay_note(assay_kind) -> str | None:
             "dropped_* に数えています。種別は record_objective(assay_kind=...) で記録できます。")
 
 
+def _missing_chains_note(missing: list[str]) -> str:
+    """指定した鎖のうち、分子種の入った鎖スコープがどのパスウェイにも無いものの注意。"""
+    return (f"指定した鎖のうち、分子種の入った鎖スコープがどのパスウェイ（のノード）にも無いもの: "
+            f"{', '.join(missing)}。その鎖のスコープは行にならず、BH の分母にも入らない（ほかのスコープの"
+            "比較はそのまま有効）。綴りの誤りなら \"18:0\" の形で呼び直す。")
+
+
 def _run_dir(run_id: str, holder) -> Path:
     return mcp_core._resolve_report_dir(holder) / "pathway" / run_id
 
@@ -341,7 +348,9 @@ def pathway_project(group_a: str | list[str] | None = None,
     - group_a / group_b: サンプル名のリスト（group_a_label / group_b_label が群名になる）。
       行列に無い試料（QC・ブランク・除外）を指すと PATHWAY_BAD_REQUEST。
     - pathways: remodeling / ceramide / global（既定は 3 つ全部）。
-    - acyl_chains: 例 ["18:0","20:4"]。指定すると鎖サブセットのスコープも比べる。
+    - acyl_chains: 例 ["18:0","20:4"]。指定すると鎖サブセットのスコープも比べる。分子種の入った鎖スコープが
+      どのパスウェイにも無い鎖は、その鎖のスコープが行にならないだけで run は返す（戻り値と manifest の
+      missing_chains と notes.acyl_chains）。
     - aggregation: sum | mean | median（サブクラス内の分子種の集計）。
     - method: スコープの比較の検定。dataset_compare の method と同じ値（moderated_t 既定 / welch /
       student / mannwhitney）。主の比較と同じ検定にするなら同じ値を渡す。
@@ -431,15 +440,12 @@ def pathway_project(group_a: str | list[str] | None = None,
                              run_dir=str(run_dir), **implicit_matrix)
 
     # 上流は指定鎖ごとに全ノードへ空スコープを出すので、鎖がデータに無くても失敗しない。
-    # 分子種の入った鎖スコープがどのパスウェイにも無い鎖は指定の誤りとして返す（spec §5）
+    # 分子種の入った鎖スコープがどのパスウェイにも無い鎖は、その鎖のスコープが行にならないだけ
+    # （空スコープは比較から外れ、BH はパスウェイ×スコープ種別ごと）。済んだ run を捨てずに返し、
+    # 無かった鎖を missing_chains と notes に書く
     present = {c for g in graphs.values() for sc in g.scopes.values()
                if sc.scope_type != "subclass" and sc.n_features > 0 for c in sc.chains}
     missing_chains = [c for c in (acyl_chains or []) if c not in present]
-    if missing_chains:
-        return _with_matrix(mcp_errors.pathway_error(
-            "PATHWAY_BAD_REQUEST",
-            f"指定した鎖がデータ（パスウェイ上のノード）にありません: {', '.join(missing_chains)}",
-            {"missing_chains": missing_chains, "run_dir": str(run_dir)}), implicit_matrix)
 
     per_pathway, all_rows, pair_rows = {}, [], {}
     for p, graph in graphs.items():
@@ -475,10 +481,13 @@ def pathway_project(group_a: str | list[str] | None = None,
                         "反復をまとめた行列なら個体、まとめない行列なら注入。群ごとの数は n_units）。"
                         + _NOT_CLASS_TOTAL),
              "assay_kind": _assay_note(getattr(holder, "assay_kind", "unknown"))}
+    if missing_chains:
+        notes["acyl_chains"] = _missing_chains_note(missing_chains)
     manifest = {"run_id": run_id, "schema_version": jsonld.SCHEMA_VERSION, "source": "dataset",
                 "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "group_a": label_a, "group_b": label_b, "groups": groups, "n_units": ctx["n_units"],
                 "pathways": pathways, "acyl_chains": list(acyl_chains or []),
+                **({"missing_chains": missing_chains} if missing_chains else {}),
                 "aggregation": aggregation, "q_threshold": q_threshold,
                 "normalization": normalization, "dataset_id": dataset_id,
                 "matrix_id": used_matrix_id, "matrix_source": matrix_source,
@@ -507,6 +516,7 @@ def pathway_project(group_a: str | list[str] | None = None,
         "normalization": normalization, "matrix_id": used_matrix_id, "matrix_source": matrix_source,
         "method": method,
         **({"warnings": held} if held else {}),
+        **({"missing_chains": missing_chains} if missing_chains else {}),
         **({"preprocess_record": preprocess_record} if preprocess_record is not None else {}),
         "backend": _backend_text(result),
         "handoff": table.report,

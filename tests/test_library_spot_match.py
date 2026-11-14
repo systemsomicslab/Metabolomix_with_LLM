@@ -91,6 +91,28 @@ def test_precursor_mismatch_refuses_to_score():
     assert session_state.session.library.last_match is None
 
 
+def test_the_tool_description_states_the_precursor_and_rt_check(workspace):
+    """ツール説明は LLM が `dcl_precursor_mismatch` の原因を読む根拠。実際の許容幅（m/z と RT の両方）を
+    書き、古い ±0.01 を載せない（R36）。説明の幅は定数から引き、挙動とも突き合わせる。"""
+    import asyncio
+
+    from metabolomix.core.mcp_core import mcp
+
+    description = {t.name: t for t in asyncio.run(mcp.list_tools())}["library_match_feature"].description
+    assert f"±{alignment_spot.PRECURSOR_TOLERANCE} Da" in description
+    assert f"±{alignment_spot.RT_TOLERANCE} 分" in description
+    assert "±0.01 で" not in description
+    # 説明どおり: m/z は ±0.05 Da の中なら照合し（0.03 Da のずれ）、RT だけのずれ（0.3 分）でも照合しない
+    (workspace / "AlignmentResult_1.dcl").write_bytes(build_dcl_bytes([
+        {"precursor_mz": 760.5851, "rt": 3.0, "spectrum": [(184.07, 999.0)]},
+        {"precursor_mz": 104.0706 + 0.03, "rt": 1.2,
+         "spectrum": [(87.0441, 999.0), (69.0335, 500.0)]},
+        {"precursor_mz": 300.0, "rt": 2.0 + 0.3, "spectrum": [(100.0, 10.0)]},
+    ]))
+    assert _match(spot_id=1)["status"] == "success"
+    assert _match(spot_id=2)["status"] == "dcl_precursor_mismatch"
+
+
 def test_unknown_spot_is_reported():
     payload = _match(spot_id=42)
     assert payload["status"] == "spot_not_found"

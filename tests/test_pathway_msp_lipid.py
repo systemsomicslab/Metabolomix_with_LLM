@@ -176,3 +176,19 @@ def test_from_name_oxidized_shorthand_goes_to_route_2():
     assert ml.from_name("SM 34:1;O2") == ("SM 34:1;O2", "SM")
     assert ml.from_name("SM 34:1;O3") == ("SM 34:1;O3", "SM")
     assert ml.from_name("LPC 16:0; ExampleDB ID-0000") == ("LPC 16:0", "LPC")   # `;` の注記は切るだけ
+    # 長鎖塩基の ;O2 は空白の注記が続いても残す（注記だけを切る。`SM 18:1` に縮めない）
+    assert ml.from_name("SM 18:1;O2/16:0 (x)") == ("SM 18:1;O2/16:0", "SM")
+    assert ml.from_name("Cer 18:1;O2/16:0 (x)") == ("Cer 18:1;O2/16:0", "Cer_NS")
+
+
+def test_shorthand_keeps_the_oxidation_modifier_before_a_spaced_note():
+    assert ml.shorthand("PE 36:2;O (oxPE)") == "PE 36:2;O"
+    assert ml.shorthand("FA 18:2;O (9-HODE)") == "FA 18:2;O"
+    assert ml.shorthand("TG 52:2;O3 (x)") == "TG 52:2;O3"
+    assert ml.shorthand("Cer 18:1;O2/16:0 (x)") == "Cer 18:1;O2/16:0"
+    assert ml.shorthand("PC 34:1;O [M+H]+") == "PC 34:1;O"
+    assert ml.shorthand("Cer 18:1;O2/16:0;OH (x)") == "Cer 18:1;O2/16:0;OH"
+    # 修飾でない `;` の注記は従来どおり切る
+    assert ml.shorthand("LPC 16:0; ExampleDB ID-0000") == "LPC 16:0"
+    assert ml.shorthand("LPC 16:0; Oxidized note") == "LPC 16:0"
+    assert ml.shorthand("Cer 18:1;O2/16:0; ExampleDB ID-0000") == "Cer 18:1;O2/16:0"

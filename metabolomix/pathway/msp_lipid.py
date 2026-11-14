@@ -203,6 +203,7 @@ _ENGLISH_MODIFIER = {"alkyl": "O-", "alkenyl": "P-"}
 _ANNOTATION = re.compile(r";(?=[^;]*\s)")
 # 酸化の修飾 `;O` / `;O2` …。Cer / HexCer / SM（長鎖塩基の ;O2 / ;O3）以外では経路 1 で読まない。
 _OXIDIZED = re.compile(r";O(?![a-z])")
+_WHITESPACE = re.compile(r"\s")
 _SPHINGO_HEADS = ("Cer", "HexCer", "SM")
 
 # 頭部 → LbmClass（同名のもの）。PC / PE の `O-` / `P-` は EtherPC / EtherPE。
@@ -249,20 +250,31 @@ def _to_msdial5(name: str) -> tuple[str, str | None]:
 _ADDUCT_SUFFIX = re.compile(r"\s*[\[(]\s*\d*M(?:[+-][A-Za-z0-9]+)*\s*[\])]\s*\d*[+-]*\s*$")
 
 
+def _cut_annotation(text: str) -> str:
+    """空白を含む `;` の後の注記を切る。`;` が酸化の修飾（`;O` `;O2` `;O3` `;OH` …）の始まりなら、
+    修飾の語（次の空白まで。`;O2/16:0` の鎖も）を残してその後ろの注記だけを切る
+    （`PE 36:2;O (oxPE)` → `PE 36:2;O`、`Cer 18:1;O2/16:0 (x)` → `Cer 18:1;O2/16:0`）。"""
+    m = _ANNOTATION.search(text)
+    if m is None:
+        return text
+    if _OXIDIZED.match(text, m.start()):
+        space = _WHITESPACE.search(text, m.start())
+        return text[:space.start()].strip()
+    return text[:m.start()].strip()
+
+
 def shorthand(name: str | None) -> str | None:
     """限定子を外した名前を、GOSLIN に渡す MS-DIAL 5 の略記の候補に直す。直せなければ None。
 
     `|` の後・空白を含む `;` の後の注記（`; ExampleDB ID-0000`）・末尾の付加体の表記を切り、古い
     MS-DIAL の書式（`Cer[NS] d30:1`）・英語のクラス名（`Phosphatidylcholine 16:0-18:1`）を略記に直す。
+    酸化の修飾（`;O` `;O2` `;O3` …）は注記が続いても残す（`PE 36:2;O (oxPE)` → `PE 36:2;O`）。
     GOSLIN で読めるかは確かめない（読むのは呼び出し側）。クラスの決定・酸化の修飾の扱いは
     `from_name` の役目で、ここではしない。
     """
     if not name or not name.strip():
         return None
-    text = name.split("|", 1)[0].strip()
-    m = _ANNOTATION.search(text)
-    if m:
-        text = text[:m.start()].strip()
+    text = _cut_annotation(name.split("|", 1)[0].strip())
     text = _ADDUCT_SUFFIX.sub("", text).strip()
     text, _bracket = _to_msdial5(text)
     return text or None
@@ -285,15 +297,13 @@ def from_name(name: str | None) -> tuple[str, str] | str | None:
     返す名前は直した文字列であり、GOSLIN の正規化形ではない。Cer / HexCer のクラスの曖昧さは
     GOSLIN の可否より先に決める（水酸基付きの脂肪酸など、GOSLIN が読めない形でも曖昧と分かる）。
     Cer / HexCer / SM 以外の頭部で `;O…` の修飾がある名前（`FA 18:1;O (9-HODE)` も。注記を切る前に見る）も None。
+    注記を切っても酸化の修飾は残す（`SM 18:1;O2/16:0 (x)` → `SM 18:1;O2/16:0`）。
     """
     if not name or not name.strip():
         return None
     text = name.split("|", 1)[0].strip()
     oxidized = _OXIDIZED.search(text) is not None
-    m = _ANNOTATION.search(text)
-    if m:
-        text = text[:m.start()].strip()
-    text, bracket = _to_msdial5(text)
+    text, bracket = _to_msdial5(_cut_annotation(text))
     head_match = _HEAD.match(text)
     if head_match is None:
         return None
