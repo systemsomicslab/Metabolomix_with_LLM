@@ -281,8 +281,8 @@ p / q / 平均 / `presence_p` は有効 4 桁）。
 ——勧めを使うなら `rt_offset_min` に渡して呼び直す（判定と `rule_hash` が変わるのはそのときだけ）。
 
 **窓検索の `sort` と追加の列**。`sort="mz"`（既定）は m/z 昇順、`sort="intensity"` は強度の降順で、条件が無くても
-上位 `max_results` 件を返す（`sort="mz"` で条件が無ければ `FEATURE_SEARCH_EMPTY_QUERY`。`targets` と併用すると
-`DATASET_BAD_REQUEST`）。**強度は検出セル（gap-fill でない実測。`dataset_exclude` した試料の列を除く）の値の最大**、
+上位 `max_results` 件を返す（`sort="mz"` で条件が無ければ `FEATURE_SEARCH_EMPTY_QUERY`。目標照合（`targets`）では
+効かないので、誤りにせず `notes` に書いて規則の順で返す。`mz` / `intensity` 以外は `DATASET_BAD_REQUEST`）。**強度は検出セル（gap-fill でない実測。`dataset_exclude` した試料の列を除く）の値の最大**、
 つまりピークの高さ（データセットの測定値）の最大で、**EIC のクロマトグラムの最大ではない**。検出セルが無い特徴
 は最後に並ぶ。**検出の印（`detected_mask`）が無いデータセット**は gap-fill を見分けられないので、除外していない試料の全セル（NaN は無視）の最大で並べ、`notes` に 1 行そう書く（`n_detected` は空のまま）。`dataset_exclude` した特徴は両方の並びで出さない。
 `features` は `evidence` の後ろに `ontology`（MS-DIAL の Ontology。mzTab-M では SML 注釈にあれば）・`n_detected`
@@ -376,7 +376,8 @@ BH をやり直して、`stats` の**すべての行**をそこから出す（�
 まとめる前の数字をまとめた後の顔では返さない（`FEATURE_MERGE_UNAVAILABLE` のときは `merge_split=false` で呼び直す）。
 `merge_split=false` なら従来どおりで、`stats_unmerged` も `merged_from` 列も無く `merge_split` は
 `{"enabled": false}`。`alignment_qc_path` は `dataset_alignment_qc` が今のデータセットで書いた JSON だけを
-受け（`dataset_fingerprint` が違えば `ANALYSIS_INPUT_INVALID`）、`merge_split=false` とは併用できない。省けば
+受け（`dataset_fingerprint` が違えば `ANALYSIS_INPUT_INVALID`）、`merge_split=false` では効かない（読まずに `notes` に
+書く。誤りにしない）。省けば
 `dataset_alignment_qc` がこのハンドルに持つ最後の結果（データ・試料の表・除外が変わっていないもの。`reanalysis` §9）、
 それも無ければその場で探す。
 
@@ -431,7 +432,13 @@ SME / SML の生の同定だけを見るので、`dataset_export_differential` �
 `result_ids` を省いたときは、統計に使えなかった結果も `統計に使えなかった指定: …` の 1 行で入る
 （`dataset_compare` の結果の対比が交互作用だけで、2 群の形にならず統計は付かない）。`result_ids` を省いて
 `contrast_id` を渡し、その対比を持つ結果が 1 つも無ければ `CONTRAST_REQUIRED`（候補は全結果の対比）。`result_ids` で
-交互作用だけの結果を名指しすると `missing_state`（`dataset_compare`）で、メッセージにその理由が入る。
+交互作用だけの結果を名指しすると `missing_state`（`dataset_compare`）で、メッセージにその理由が入る。対比を選ばないと
+読めない曖昧さ（`as_two_group` の、選択肢つきの `CONTRAST_REQUIRED`）は誤りでなく `needs_input`（`field` / `argument` =
+`contrast_id`、選択肢は対比の一覧、`retry_tools` は `dataset_feature_search`）で返す——`dataset_export_differential`・
+`dataset_plot`・`save_figure`・`dataset_export_evidence_bundle` と同じ封筒。ID だけの `result_ids` と省いた `result_ids` は
+対比ごとに広げるので、今の選び方ではこの曖昧さは起きない。
+目標照合に渡した `sort="intensity"` と、`merge_split=false` と一緒に渡した `alignment_qc_path` は効かないので、誤りにせず
+`notes` に「効かなかった引数」として書く（`alignment_qc_path` のファイルは読まない）。
 
 ## `dataset_plot(kind="loadings")`（mzTab-M のデータセット）
 

@@ -424,9 +424,12 @@ def dataset_feature_search(
         （`with_group_labels`・`contrast_id`・`result_ids`、窓検索の `alignment_qc_path`・`merge_split=false`）を
         誤りにせず、効かなかったことを `notes` に書く。
     contrast_id: `dataset_compare` の結果から使う対比を 1 つに絞る（その対比が無い結果は飛ばす）。
+        どの結果にも無い対比・名指しと食い違う対比は誤り（`CONTRAST_REQUIRED` / `DATASET_BAD_REQUEST`）。
+        対比を選ばないと読めない曖昧さは誤りでなく `needs_input`（`argument="contrast_id"`、選択肢は対比の一覧。
+        ほかの対比を選ぶツールと同じ `contrast_envelope`）。
     max_results: 窓検索の行数・目標ごとの候補数の上限（既定 20）。打ち切りは `notes` に書く。
-    sort: 窓検索の並び（`mz` 既定 / `intensity`）。`targets` とは併用できない（`DATASET_BAD_REQUEST`。
-        目標照合は規則の順で並べる）。
+    sort: 窓検索の並び（`mz` 既定 / `intensity`）。目標照合（`targets`）では効かない（規則の順で並べる。
+        誤りにせず `notes` に書く）。`mz` / `intensity` 以外は `DATASET_BAD_REQUEST`。
 
     `stats` は TSV（`feature_id result_id status log2fc p q mean_a mean_b detected_a detected_b
     detected_units_a detected_units_b presence_p detection_driven`）。
@@ -458,7 +461,8 @@ def dataset_feature_search(
     alignment_qc_path: `dataset_alignment_qc` が書いた JSON（今のデータセットで作ったものだけ）。
         省略時はこのハンドルで `dataset_alignment_qc` が最後に出した結果（データ・試料の表・除外が
         変わっていないもの）、無ければその場で割れを探す（既定の閾値）。使った方は `merge_split.source`
-        （`alignment_qc` / `last_alignment_qc` / `find_split_pairs`）。`merge_split=False` とは併用できない。
+        （`alignment_qc` / `last_alignment_qc` / `find_split_pairs`）。`merge_split=False` では効かないので、
+        読まずに `notes` に書く（誤りにしない）。
 
     rt_offset_min: 目標照合の RT の窓の中心のずれ（分、任意）。中心を `rt_min + rt_offset_min` にする
         （幅 `rt_tol_min` と `candidates.delta_rt` 列（RT − rt_min）は変えない）。`rt_min` のある目標の
@@ -488,18 +492,19 @@ def dataset_feature_search(
         if not isinstance(flag, bool):
             return mztab_error("DATASET_BAD_REQUEST", f"{name} は true / false: {flag!r}",
                                {"field": name})
-    if alignment_qc_path is not None and not merge_split:
-        return mztab_error("DATASET_BAD_REQUEST",
-                           "alignment_qc_path は merge_split=true のときだけ使える"
-                           "（効かない設定を渡さない）。", {"field": "alignment_qc_path"})
-
     if sort not in ("mz", "intensity"):
         return mztab_error("DATASET_BAD_REQUEST", f"sort は mz か intensity: {sort!r}",
                            {"field": "sort"})
+
+    notes: list[str] = []
+    # 効かない引数は誤りにせず、使わずに notes に書く（C7。形の誤りは上で断る）
+    if alignment_qc_path is not None and not merge_split:
+        notes.append("alignment_qc_path は merge_split=false なので効かず、使っていない"
+                     "（割れたスポットをまとめない。ファイルも読んでいない）。")
+        alignment_qc_path = None
     if targets is not None and sort != "mz":
-        return mztab_error("DATASET_BAD_REQUEST",
-                           "sort は窓検索（targets なし）のときだけ使える（目標照合は規則の順で"
-                           "並ぶ。効かない設定を渡さない）。", {"field": "sort"})
+        notes.append(f"窓検索（targets なし）でないので効かなかった引数: sort={sort!r}"
+                     "（目標照合は規則の順で並ぶ）。")
 
     if feature_ids is not None:
         feature_ids = [str(f) for f in feature_ids]  # 整数で来ても文字列にそろえる
@@ -521,7 +526,6 @@ def dataset_feature_search(
     from metabolomix.analysis.mass_accuracy import normalize_ppm_offset
     from metabolomix.analysis.result_state import dataset_fingerprint
 
-    notes: list[str] = []
     payload: dict = {}
     if targets is None:
         # 目標照合にだけ効く中心のずれは、窓検索では誤りにせず効かなかったと書く（C7。形の誤りは誤り）
@@ -611,7 +615,8 @@ def dataset_feature_search(
                 ds, None if result_ids is None else list(dict.fromkeys(result_ids)),
                 dataset_hash=dataset_hash, contrast_id=contrast_id)
         except DomainError as exc:                # 対比の指定の誤り（CONTRAST_* / DATASET_BAD_REQUEST）
-            return mztab_error(exc.code, exc.message, exc.details or None)
+            # 対比を省いた曖昧さは誤りでなく問い（needs_input。contrast_id で選んで呼び直す）
+            return contrast_envelope(exc, "dataset_feature_search")
         if result_ids is not None:
             if chosen["missing"] or chosen["stale"]:
                 # 名指しの結果を黙って落とすと、呼び出し側は統計が付いたつもりで読む
@@ -675,7 +680,7 @@ def dataset_feature_search(
                                                              groups=plan["groups"],
                                                              with_labels=with_group_labels)
             except DomainError as exc:
-                return mztab_error(exc.code, exc.message, exc.details or None)
+                return contrast_envelope(exc, "dataset_feature_search")
             stats, unmerged = merged["stats"], merged["stats_unmerged"]
             for row in stats:
                 row["merged_from"] = ";".join(row["merged_from"]) if row["merged_from"] else None

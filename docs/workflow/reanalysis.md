@@ -158,7 +158,8 @@ ols でない検定の共変量）は `normalize_spec(spec, notes=...)` が捨�
 
 前提: データセット（無ければ `missing_state`）。`msms` を頼むときはライブラリ（無ければ候補ごとに
 `no_library`。同定が LBM だけのデータセット＝記憶が `lbm_only` なら候補ごとに `not_evaluable`
-（`reason: lbm_only`）で、理由の文は束の `msms_not_evaluable_reason` に 1 回）。状態変更: なし。`output_path` を渡すと JSON を書く。
+（`reason: lbm_only`）で、理由の文は束の `msms_not_evaluable_reason` に 1 回）。状態変更: なし。`output_path` を渡すと JSON を書く
+（省けば束を返し、候補が 10 を超えれば先頭 10 件と `truncated: true`。断らない）。
 
 1. metabolomix/tools/reanalysis_tools.py  dataset_claim_evidence()
 2. ├─ metabolomix/analysis/claim_evidence.py  normalize_claim_spec()
@@ -177,7 +178,14 @@ ols でない検定の共変量）は `normalize_spec(spec, notes=...)` が捨�
 15. │  ├─ metabolomix/analysis/claim_evidence.py  feature_relations()
 16. │  ├─ metabolomix/analysis/claim_evidence.py  _selection()
 17. │  └─ metabolomix/analysis/claim_evidence.py  rule_hash()
-18. └─ metabolomix/tools/reanalysis_tools.py  write_result()
+18. ├─ [output_path あり] metabolomix/tools/reanalysis_tools.py  write_result()
+19. └─ [output_path なし・候補 > 10] metabolomix/tools/reanalysis_tools.py  _inline_candidates()
+
+spec の `rt_offset_min`（任意）は `normalize_claim_spec` が形を検め（誤りは `CLAIM_SPEC_INVALID`）、目標に `rt_min` が
+あれば既定の目標と走査の全変種の `normalize_targets(rt_offset_min=...)` に渡す（`match_target` が RT の窓の中心を
+ずらす）。`rt_min` が無ければ効かないので捨てて `notes` に書く（束の `notes` と戻り値。規則にも `rule_hash` にも入らない）。
+`output_path` を省いて候補が 10 を超えるときは断らず、`_inline_candidates` が既定の特徴 → 既定の照合で見えた候補 →
+ほかの候補の順（同じ段の中は束の並び）に先頭 10 件を選び、`truncated: true` と全件の数を返す（束そのものは変えない）。
 
 候補ごとの `split` は `find_split_pairs`（既定の閾値）の `split_partners`。`default_selection.counts.qualified`
 （と走査ごとの `counts.qualified`）は、規則で qualified になった特徴のうち MS/MS の合否

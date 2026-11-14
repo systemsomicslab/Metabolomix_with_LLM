@@ -747,8 +747,31 @@ def dataset_sample_peaks(feature_ids: list[str | int], dataset_handle: str | Non
 
 # ---------- 証拠の束 ----------
 
-#: output_path なしで候補を返す上限。
+#: output_path なしで戻り値に載せる候補の上限。超えれば `CANDIDATES_ORDER` の先頭だけを載せ、`truncated` を立てる。
 MAX_INLINE_CANDIDATES = 10
+#: 打ち切ったときに載せる候補の並び（戻り値の `candidates_order`）。
+CANDIDATES_ORDER = "default_selection_first"
+
+
+def _inline_candidates(bundle: dict, limit: int) -> list[dict]:
+    """戻り値に載せる候補（`limit` 件まで）。並びは `CANDIDATES_ORDER`:
+
+    既定の特徴（`default_selection` の `selected_feature_id` と `merged_from`）→ 既定の照合で見えた候補
+    （`scans` に `default`）→ ほかの候補。同じ段の中は束の並び（データセットの特徴の順）。既定の特徴の
+    MS/MS・関係を打ち切りで落とさないため。
+    """
+    selection = bundle.get("default_selection") or {}
+    chosen = set(selection.get("merged_from") or [])
+    if selection.get("selected_feature_id") is not None:
+        chosen.add(selection["selected_feature_id"])
+
+    def tier(candidate: dict) -> int:
+        if candidate["feature_id"] in chosen:
+            return 0
+        return 1 if "default" in candidate.get("scans", ()) else 2
+
+    # sorted は安定なので、同じ段の中は束の並びのまま
+    return sorted(bundle["candidates"], key=tier)[:limit]
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
@@ -765,13 +788,19 @@ def dataset_claim_evidence(spec: dict, dataset_handle: str | None = None,
     （既定 true。割れたスポットの組を判定で 1 つの候補（残す ID）と数え、窓の外の相手も候補に
     `merge_partner` で足す。false は v7 と同じ規則・同じ `rule_hash`）・`ppm_offset`（任意。
     質量の窓の中心を帯ごとにずらす。`dataset_feature_search` と同じ形で、既定の特徴と走査の全変種に
-    効く。幅は変えず、渡したときだけ `rule_hash` に入る）。
+    効く。幅は変えず、渡したときだけ `rule_hash` に入る）・`rt_offset_min`（任意。分。RT の窓の中心を
+    `rt_min + rt_offset_min` にずらす。`dataset_feature_search` の `rt_offset_min` と同じ意味で、既定の特徴と
+    走査の全変種に効く。幅 `rt_tol_min` は変えず、渡したときだけ `rule.rt_offset_min`・`rule.target` と
+    `rule_hash` に入る。目標に `rt_min` が無ければ効かないので、誤りにせず捨てて `notes` に書く）。
     束に入るのは、規則で選んだ既定の特徴（`default_selection`。`dataset_feature_search`
     の目標照合と同じ規則で、決まらなければ `needs_input`）、走査ごとの判定、候補ごとの
     照合（spot_id = SMF_ID）・合否・関係。**特徴は決めない**（実行役が決め、統計は
     `dataset_analysis_run` を別に呼ぶ）。`rule_hash`・`input_fingerprint`（データの指紋・
     ライブラリの sha256）を含み、同じ spec・同じ入力なら同じ JSON になる。
-    output_path: JSON をここへ書き、要約だけを返す（候補が 10 を超えるときは必須）。
+    output_path: JSON をここへ書き、要約だけを返す。省略時は束を返し、候補が 10 を超えれば断らず
+        先頭の 10 件だけを載せる（並びは既定の特徴 → 既定の照合で見えた候補 → ほか。`truncated: true`・
+        `n_candidates` が全件・`n_candidates_shown`・`candidates_order`・`notes`。束の `max_candidates` で
+        打ち切った数はこのとき `max_candidates_truncated`）。
     dataset_handle: ハンドルのデータセット・ライブラリ・`.arf2` / `.dcl`。省略時は対話のセッション。
     """
     from metabolomix.analysis import claim_evidence
@@ -789,32 +818,49 @@ def dataset_claim_evidence(spec: dict, dataset_handle: str | None = None,
     # 同定が LBM だけのデータセットでライブラリが無いときは、MS/MS の照合を no_library でなく
     # not_evaluable（理由つき）にする（no_library は library_load を促すが、MSP は無い）。
     lbm_only = library_tools.lbm_only_not_evaluable(holder) if store is None else None
+    notes: list[str] = []
     try:
-        normalized = claim_evidence.normalize_claim_spec(spec, dataset_polarity=polarity)
+        normalized = claim_evidence.normalize_claim_spec(spec, dataset_polarity=polarity,
+                                                         notes=notes)
         bundle = claim_evidence.build(ds, normalized, store=store,
                                       spot_query=spot_query,
                                       arf2_path=arf2_path, dcl_path=dcl_path,
                                       dataset_polarity=polarity,
                                       library_sha256=_library_sha(store),
                                       no_library_reason=(lbm_only or {}).get("reason"))
-        if output_path is None and len(bundle["candidates"]) > MAX_INLINE_CANDIDATES:
-            raise DomainError(
-                "ANALYSIS_OUTPUT_REQUIRED",
-                f"候補が {MAX_INLINE_CANDIDATES} を超える（{len(bundle['candidates'])} 件）。"
-                "output_path を指定して JSON に書いてください。",
-                {"n_candidates": len(bundle["candidates"])})
+        if notes:
+            # 効かずに捨てた設定の理由は束にも残す（無ければ欄ごと無いので、束は従来と同じ JSON）
+            bundle["notes"] = list(notes)
         written = write_result(output_path, bundle) if output_path else None
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
+    n_candidates = len(bundle["candidates"])
     if written is None:
-        return json_payload(round_floats({"status": "success", **bundle}))
+        if n_candidates <= MAX_INLINE_CANDIDATES:
+            return json_payload(round_floats({"status": "success", **bundle}))
+        # 候補が多いときは断らず、既定の特徴を先に、先頭の候補だけを載せる（全件は output_path の JSON）
+        shown = _inline_candidates(bundle, MAX_INLINE_CANDIDATES)
+        cut_notes = [f"候補が {MAX_INLINE_CANDIDATES} を超える（{n_candidates} 件）ので、既定の特徴 → 既定の"
+                     f"照合で見えた候補 → ほかの候補の順（同じ段の中は特徴の並び順）の先頭 {len(shown)} 件"
+                     "だけを載せた。全件は output_path を指定して JSON に書く。"]
+        if bundle["truncated"]:
+            cut_notes.append(f"max_candidates={normalized['max_candidates']} で {bundle['truncated']} 件を"
+                             "打ち切っている（output_path の JSON にも入らない。要るなら max_candidates を増やす）。")
+        partial = {k: v for k, v in bundle.items() if k not in ("candidates", "truncated", "notes")}
+        return json_payload(round_floats({
+            "status": "success", **partial, "candidates": shown,
+            "truncated": True, "n_candidates": n_candidates, "n_candidates_shown": len(shown),
+            "candidates_order": CANDIDATES_ORDER, "max_candidates_truncated": bundle["truncated"],
+            "notes": notes + cut_notes,
+        }))
     return json_payload(round_floats({
         "status": "success", "output_path": written, "claim_id": bundle["claim_id"],
         "rule_hash": bundle["rule_hash"], "input_fingerprint": bundle["input_fingerprint"],
         "default_selection": bundle["default_selection"],
-        "n_candidates": len(bundle["candidates"]), "truncated": bundle["truncated"],
+        "n_candidates": n_candidates, "truncated": bundle["truncated"],
         "scans": [{k: s[k] for k in ("ppm", "rt_tol_min", "status", "selected_feature_id")}
                   for s in bundle["scans"]],
+        **({"notes": notes} if notes else {}),
     }))
 
 

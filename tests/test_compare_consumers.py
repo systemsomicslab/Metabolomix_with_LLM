@@ -526,6 +526,27 @@ def test_feature_search_tool_contrast_errors_are_envelopes(tmp_path):
         assert err["code"] == "CONTRAST_REQUIRED"
 
 
+def test_feature_search_ambiguous_contrast_is_needs_input(tmp_path, monkeypatch):
+    """対比を省いた曖昧さ（`as_two_group` の ambiguous な `CONTRAST_REQUIRED`）は誤りでなく問い。
+
+    ほかの対比を選ぶツール（書き出し・volcano・根拠バンドル）と同じ `contrast_envelope` を通す。
+    `select_results` は今は対比ごとに広げるのでこの曖昧さを出さないが、出たときの封筒の形を縛る。
+    """
+    ds, rid = _multi(tmp_path)
+
+    def _ambiguous(ds_, result_ids, **kwargs):
+        stats_results.as_two_group(ds_.results[rid])      # 対比が 2 つ → ambiguous な CONTRAST_REQUIRED
+
+    monkeypatch.setattr(feature_search, "select_results", _ambiguous)
+    asked = json.loads(DAT.dataset_feature_search(feature_ids=["f0"], merge_split=False,
+                                                  result_ids=[rid]))
+    assert "error" not in asked
+    body = asked["needs_input"]
+    assert body["field"] == "contrast_id" and body["argument"] == "contrast_id"
+    assert body["retry_tools"] == ["dataset_feature_search"]
+    assert [o["value"] for o in body["options"]] == ["T_vs_C", "U_vs_C"]
+
+
 def test_rid_hash_cid_accepted_by_export_evidence_and_volcano(tmp_path):
     ds, rid = _multi(tmp_path)
     named = f"{rid}#U_vs_C"
