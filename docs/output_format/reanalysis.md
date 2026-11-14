@@ -229,10 +229,19 @@ reanalysis-study の読み取りを移したもの）。数として読めない
 - `stage`: `input`（既定。読んだ行列＝割れのまとめの後・recipe の前。群・役割を問わず当たった全試料）か
   `matrix`（解析ごとの recipe の後の行列・集約の前。行に `analysis_id`。recipe が落とした特徴は
   `reason: not_in_matrix`）。
-- ρ は両方が有限の試料だけで、同順位は平均の順位、p は t 近似（`scipy.stats.spearmanr` と同じ）。組が 5 未満なら
-  ρ と p は null（`reason: too_few_pairs`）、どちらかが一定なら null（`constant`）。
+- ρ は両方が有限の試料だけで、同順位は平均の順位。p は両側で、出し方は行の `p_method`（t 近似は小さい n で p を
+  小さく出しすぎる——5 組の |ρ| = 1 で 0、正確には 2/5! = 0.0167）:
+  - 9 組以下: `exact_permutation`（全順列を数えた正確な並べ替えの p。同順位が無ければ R の
+    `cor.test(method = "spearman")` と同じ値、あれば平均の順位のまま並べ替える条件付きの正確な p）。
+  - 10〜1290 組で同順位なし: `edgeworth`（AS 89 の Edgeworth 展開。R と同じ）。
+  - 10〜1290 組で同順位あり（未検出の 0 など）: `monte_carlo_permutation`（20,000 回の並べ替え、乱数の種は固定で
+    同じ入力なら同じ p。最小は約 1e-4）。同順位があると t 近似は p を最大で半分ほどに小さく出す。
+  - 1290 組を超える: `t_approx`（t 近似、自由度 n−2）。
+  近似（`edgeworth` / `t_approx`）の p は、並べ替えでとりうる最小（同順位が無ければ 2/n!）を下回らない（0 にしない）。
+  組が 5 未満なら ρ と p は null（`reason: too_few_pairs`）、どちらかが一定なら null（`constant`）。どちらも `p_method` は null。
 - 結果の `correlate` は `{stage, external（読み取りの要約）, n_samples_matched, unmatched_samples,
-  unmatched_external_samples, rows: [{analysis_id, feature_id, external_id, merged_into, n, rho, p, reason}]}`。
+  unmatched_external_samples, rows: [{analysis_id, feature_id, external_id, merged_into, n, rho, p, reason, p_method}]}`
+  （戻り値の TSV の列は `analysis_id feature_id external_id merged_into n rho p p_method reason`）。
   戻り値の TSV の行は ρ を小数 4 桁、p を有効 4 桁にする（小さい p も 0 にしない。JSON は丸めない）。
   外部の表と対応表の sha256 は `input_fingerprint.files` の `correlate.external`・`correlate.sample_map`。
   書いたときだけ正規化した spec と `rule_hash` に入る（書かない spec の hash は変わらない）。
@@ -259,7 +268,7 @@ reanalysis-study の読み取りを移したもの）。数として読めない
 | `merged_from` | 割れた 2 スポットをまとめた特徴だけ、まとめた特徴 ID（先頭が `feature_id` = 残した ID。受け持ちの多い側、同数なら小さい ID）。ほかは null（TSV では `;` 区切り） |
 | `detected_reference` / `detected_test` | 検定に入れた群の試料のうち、検出された（gap-fill でない）数。gap-fill は数えない。まとめた特徴は「どちらかのスポットで検出」の試料を数える。外部の行列・検出状態の無いデータセット・`aggregate` の行・`not_in_matrix` の行は null。群の試料数は `n_ref` / `n_test` ではなく群の `members`（値が欠けた試料も入る） |
 | `detection_fisher_p` | 検出の有無（検出 / 未検出）の 2×2 に対する Fisher の正確検定の両側 p（上の 2 欄が null なら null） |
-| `constant_in_group` | 一方の群の値（検定に入れる行列の値。変換の前）が、有限の値 2 つ以上ですべて同じなら、その群の名前（TSV では `;` 区切り。両群なら 2 つ）。ほかは null。未検出を同じ値で埋めた群（補完の `half_min` など）の印で、検定の値は変えない（**判定には使わない**。差が埋め値から来ていないかを見る）。行の最後の欄 |
+| `constant_in_group` | 一方の群の**読んだ値**（割れのまとめの後・recipe の前）か、recipe に補完の段があれば**補完の直後の値**（後の段の正規化・ドリフト補正の前）が、観測の値 2 つ以上ですべて同じ（相対の丸めの誤差の内）なら、その群の名前（TSV では `;` 区切り。両群なら 2 つ）。ほかは null。観測の値は検定がそう扱う値で、`transform="log2"` なら有限の正値（0 は欠測なので、0 だけの群は印を付けない。その行は検定できない）、`none` なら有限の値（0 も値）。検定に入れる値（recipe の後）では探さない——正規化の試料ごとの係数が埋め値を散らして見えなくし、逆に特徴の少ない PQN は埋め値でない値を一定に見せる。統計エンジンの `constant_in_group` と同じ規則（`spec_statistics.constant_columns`）。同じ値で埋めた群（補完の `half_min`・LOD の埋め値など）の印で、検定の値は変えない（**判定には使わない**。差が埋め値から来ていないかを見る）。行の最後の欄 |
 | `detection_driven` | 差が値の大小より検出の有無から来ているか。高い側の群（`direction`）の検出が群の試料数の半分に満たない（`<`）か、低い側の群の検出が 0 なら true。`status` が `tested` で向きがある行だけ（ほかは null）。`direction` が null の行は `detection_driven` も null（一方の群の平均がちょうど 0 で、変換も補完も無い行は向きが決まらないので、検出の差が大きくても null）。**判定（`meets_thresholds` など）は変えない。使い方は手順書** |
 
 解析ごとに `matrix`（`n_features_in`（まとめた後、recipe の前）・`n_features_out`（recipe の後）・段ごとの報告
@@ -322,7 +331,7 @@ notes?, note}`。`analyses[]` は解析ごとの要約（`n_rows`・`n_tested`�
 | `analyses[].kind` | 必須 | `compare` / `composition` / `pca` / `plsda`。`analysis_id` は重複不可 |
 | compare / composition | | `test`（既定 `moderated_t`。`welch` / `student` / `mannwhitney` は 1 因子・共変量なし・ブロックなしだけ）・`effect_size`（`log2_mean_difference` 既定 / `arithmetic_mean_ratio`）・`bh_population`（`matrix` 既定 / `annotated` / `reported`。`reported` は `reported_feature_ids` が要り、そのときだけ書ける）・`p_adjust`（多重比較の補正。`bh` 既定 / `bonferroni` / `holm` / `none`。`q` はこの方法の値）・`verdict.q`（既定 0.05）・`verdict.equivalence_fc`（既定 1.2）・`min_detected_fraction`（既定 0.5）・`allow_confounded`（既定 true。完全交絡でも比べて `confounding` と行の `confounded` に印を付ける。false なら完全交絡で `STATISTIC_CONFOUNDED` で止める） |
 | pca | | `scaling`（`autoscale` 既定 / `pareto`）・`n_components`（既定 5）・`impute`（`half_min` 既定 / `knn` / `none`） |
-| plsda | | PLS 判別分析。クラスは `design.factors` の水準の組（cell。`classes` に cell 名を並べて絞れる。2 つ以上）。`n_components`（既定 2）・`scaling`（`autoscale` 既定 / `pareto`）・`impute`（`half_min` 既定 / `knn` / `none`）・`cv_folds`（層化 k 分割の数。既定 7、2 以上）・`n_permutations`（並べ替え検定の回数。既定 200、1〜10000）・`seed`（分割と並べ替えの乱数。既定 0） |
+| plsda | | PLS 判別分析。クラスは `design.factors` の水準の組（cell。`classes` に cell 名を並べて絞れる。2 つ以上）。`n_components`（既定 2）・`scaling`（`autoscale` 既定 / `pareto`）・`impute`（`half_min` 既定 / `knn` / `none`）・`cv_folds`（層化グループ k 分割の数。既定 7、2 以上。上限は独立な単位＝グループの数）・`n_permutations`（並べ替え検定の回数。既定 200、1〜10000）・`seed`（分割と並べ替えの乱数。既定 0） |
 | `primary` | compare / composition が 1 つならそれ | 2 つ以上あるときは必須（`ANALYSIS_SPEC_INVALID`）。pca / plsda は選べない |
 
 **自己完結（再現のための規則）。** v2 は spec だけで同じ数字を出し直せる実行で、`dataset_exclude` の除外は読まない。
@@ -372,8 +381,9 @@ matrix_id, preprocess: {steps, warnings, subject_source}, primary, analyses: [{a
   行（対比 × 特徴）: `feature_id`・`contrast_id`・`reference`・`test`・`status`（`tested` / `not_tested`）・`reason`・
   `n_reference` / `n_test`（有限値の個体数）・`detected_reference` / `detected_test`（検出された個体数。検出状態が
   無ければ null）・`quantity_judgeable`（群のどの cell も検出の割合が `min_detected_fraction` 以上か。null は検出状態なし）・
-  `constant_in_group`（群の cell の中で値がすべて同じ＝埋め値の疑いの cell の一覧。無ければ null。判定は変えず、件数を警告
-  `constant_in_group` に出す）・`confounded`（その対比が群とバッチの完全交絡か。評価できなければ null）・
+  `constant_in_group`（埋め値の疑いの cell の一覧。cell の個体の**読んだ値**＝注入ごとの値（ドリフト補正・正規化・反復の
+  まとめの前）の有限の正値が 2 注入以上あり、すべて同じ（相対の丸めの誤差の内）なら挙げる。v1 の `constant_in_group` と
+  同じ規則。無ければ null。判定は変えず、件数を警告 `constant_in_group` に出す）・`confounded`（その対比が群とバッチの完全交絡か。評価できなければ null）・
   `log2fc`（正なら test が高い）・`se`（log2fc の標準誤差。順位の検定・算術平均の比では null）・`ci_low` / `ci_high`・
   `ci_unavailable_reason`・`statistic` / `df` / `p`・`mean_reference` /
   `mean_test`（個体ごとの前処理後の線形値の算術平均。単純な 2 群の対比だけ、交互作用は null）・`q`・`presence_p` /
@@ -390,17 +400,31 @@ matrix_id, preprocess: {steps, warnings, subject_source}, primary, analyses: [{a
   使わない）。欠測は PCA のためだけに補い（`imputation`）、行列そのものは変えない。
 - **`stats-plsda.v1`**（plsda）: `{matrix_id, factors, classes: {cell: 個体数}, y_coding, n_units, unit_ids, scaling,
   imputation, n_features, n_features_dropped_constant, n_components_requested, n_components, r2x_cum, r2y_cum, q2_cum, q2,
-  cv: {method: "stratified_kfold", folds, seed, scaling_within_fold: true, q2_definition: "1 - PRESS/TSS"},
-  permutation: {n, n_finite, p, statistic: "q2", q2_null_mean, q2_null_q95}, vip: [{feature_id, vip}]（降順）,
+  cv: {method: "stratified_group_kfold", group_by, n_groups, class_groups, folds, seed, scaling_within_fold: true,
+  q2_definition: "1 - PRESS/TSS"}, permutation: {n, n_finite, p, statistic: "q2", scheme, min_attainable_p,
+  q2_null_mean, q2_null_q95}, vip: [{feature_id, vip}]（降順）,
   scores: {unit_ids, values}, warnings}`。**成分数・交差検証の Q2・並べ替え検定の p を必ず返す**（PLS-DA は群の札で
-  軸を選ぶので、当てはめの R2Y やスコアの分離だけでは過学習と区別できない）。Q2 は層化 k 分割で、分割ごとに学習の個体
-  だけで中心と尺度を決めて予測した `1 − PRESS/TSS`（`q2_cum` は成分 1〜A それぞれ、`q2` は A 成分）。並べ替え検定は
-  クラスの札を入れ替えて同じ分割で Q2 を出し直した帰無分布で `p = (1 + #{Q2_perm ≥ Q2}) / (1 + n)`。VIP は全個体の
+  軸を選ぶので、当てはめの R2Y やスコアの分離だけでは過学習と区別できない）。Q2 は層化グループ k 分割で、分割ごとに
+  学習の個体だけで中心と尺度を決めて予測した `1 − PRESS/TSS`（`q2_cum` は成分 1〜A それぞれ、`q2` は A 成分）。並べ替え
+  検定はクラスの札を入れ替えて同じ分割で Q2 を出し直した帰無分布で `p = (1 + #{Q2_perm ≥ Q2}) / (1 + n)`。
+  **分割と並べ替えは独立な単位（グループ）で行う**: `design.block` があればその値、無ければ `subject_id`、それも無い単位は
+  1 つずつ（`cv.group_by` = block の名前 / `subject_id` / `unit`、`n_groups`、クラスごとのグループ数 `class_groups`）。
+  同じ個体の複数の単位（属性で分かれた単位・`collapse_replicates=false` の注入）が学習と予測にまたがったり、並べ替えで
+  別々の札を受けたりすると、群差が無くても個体の違いで Q2 と p が良く見えるため。分割は同じグループの単位を同じ分割に
+  入れ、グループをクラスの組で層化して配る。分割数と成分数の上限はグループの数で決まる。並べ替えは、1 つのクラスだけの
+  グループは札をグループごと入れ替え、複数のクラスにまたがるグループ（対応のある計画・交差した計画）はグループの中で
+  入れ替える（`permutation.scheme`: `between_groups` / `within_groups` / `mixed`）。`min_attainable_p` は並べ替えの p が
+  およそ下回れない値（観測と同じ Q2 になる札の並びの数 / 入れ替えで作れる並びの数。2 クラスは名前の入れ替えも同じ Q2）。
+  各単位が 1 グループなら、分割・並べ替えも結果も単位ごとの層化 k 分割と同じ。VIP は全個体の
   当てはめの変数重要度（二乗の平均が 1。目安の 1 は経験則で、検定ではない）。Y は 2 クラスなら後のクラスを 1 とした
   1 列、3 クラス以上はクラスごとの指示変数。全個体で値の変わらない特徴は外す。成分数・分割数を個体数と特徴数で
   頭打ちにしたら警告（`n_components_capped` / `cv_folds_capped`）、Q2 が正でなければ `plsda_q2_not_positive`（予測
-  できない模型の VIP は判別の根拠にならない）。値の欠けた個体は外す（`units_missing_model_values`）。エラーは
-  `PLSDA_SPECIFICATION_INVALID`（引数）・`STATISTIC_GROUP_TOO_SMALL`（2 個体以上のクラスが 2 つ未満）・
+  できない模型の VIP は判別の根拠にならない）、`min_attainable_p` が 0.05 を超えれば `permutation_few_labelings`
+  （`{n_labelings, min_attainable_p}`。独立な単位が少なく、p が大きくても判別が無いとは言えない）、単位に `subject_id` が
+  無く前処理が反復注入らしい名前（`possible_technical_replicates`）を見つけていれば `plsda_units_may_not_be_independent`
+  （各単位を独立として扱うので Q2 と p が甘く出うる）。因子・block の値の欠けた個体は外す（`units_missing_model_values`。
+  `variables` に欠けた変数）。エラーは `PLSDA_SPECIFICATION_INVALID`（引数）・`STATISTIC_GROUP_TOO_SMALL`（2 個体以上の
+  クラスが 2 つ未満、またはグループが 1 つだけのクラスがある。`details.class_groups`・`group_by`）・
   `PLSDA_MISSING_VALUES`（`impute=none` で欠測あり）・`PLSDA_TOO_FEW_FEATURES`（値の変わる特徴が 2 未満）。
 - **`stats-composition.v1`**（composition）: `{class_label_kind, classes, unclassified_features, zero_handling, clr, absolute,
   unit, warnings}`。`clr` / `absolute` はそれぞれ stats-compare.v1。クラスの合計が 0 以下の個体があるクラスは `clr` から

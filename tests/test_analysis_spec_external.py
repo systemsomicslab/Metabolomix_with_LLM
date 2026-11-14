@@ -2,6 +2,7 @@
 効かない設定の notes・aggregate と features.feature_ids の併用の誤り。fixture は合成のファイル。"""
 from __future__ import annotations
 
+import itertools
 import math
 
 import numpy as np
@@ -62,40 +63,172 @@ def _rows(result, analysis=0):
 
 # ---------- Spearman と群の中で一定の印（spec_statistics） ----------
 
-def test_spearman_matches_scipy_with_ties_and_drops_non_finite_pairs():
+def _exact_spearman_p(x, y):
+    """両側の正確な並べ替えの p（独立の計算: y の平均の順位の全 n! の並びの ρ を数える）。"""
+    ra, rb = stats.rankdata(x), stats.rankdata(y)
+    perms = np.array(list(itertools.permutations(range(len(ra)))))
+    shuffled = rb[perms]
+    centered = shuffled - shuffled.mean(axis=1, keepdims=True)
+    rhos = (centered @ (ra - ra.mean())) / (np.linalg.norm(centered, axis=1) * np.linalg.norm(ra - ra.mean()))
+    observed = float(np.corrcoef(ra, rb)[0, 1])
+    upper, lower = (rhos >= observed - 1e-9).mean(), (rhos <= observed + 1e-9).mean()
+    return min(1.0, 2.0 * min(upper, lower))
+
+
+#: R 4.6.0 の `cor.test(x, y, method = "spearman")$p.value`（同順位なし。n ≤ 9 は正確な分布、10 以上は AS 89）。
+R_SPEARMAN = [
+    ([1, 2, 3, 4, 5], [1, 2, 3, 4, 5], 0.01666666667),
+    ([1, 2, 3, 5, 4], [1, 2, 3, 4, 5], 0.08333333333),
+    ([2, 1, 3, 4, 6, 5], [1, 2, 3, 4, 5, 6], 0.03333333333),
+    ([2, 1, 3, 4, 5, 7, 6], list(range(1, 8)), 0.006746031746),
+    ([2, 1, 3, 4, 5, 6, 8, 7], list(range(1, 9)), 0.001140873016),
+    ([3, 1, 2, 5, 4, 7, 6, 9, 8], list(range(1, 10)), 0.002028218695),
+    ([3, 1, 2, 5, 4, 7, 6, 10, 9, 8], list(range(1, 11)), 0.001380267141),
+    ([5, 1, 2, 8, 4, 7, 3, 10, 9, 6], list(range(1, 11)), 0.09579156914),
+    ([5, 1, 2, 8, 4, 7, 3, 10, 9, 6, 12, 11], list(range(1, 13)), 0.008170639816),
+    ([5, 1, 9, 8, 4, 7, 3, 10, 2, 6, 12, 11, 15, 13, 14], list(range(1, 16)), 0.004315957134),
+    ([10, 1, 9, 8, 4, 7, 3, 5, 2, 6, 12, 11, 15, 13, 14, 20, 17, 16, 19, 18], list(range(1, 21)),
+     1.984550312e-05),
+    ([3, 1, 2, 5, 4, 7, 6, 10, 9, 8], list(range(10, 0, -1)), 0.001380267141),
+]
+
+
+@pytest.mark.parametrize("x, y, r_p", R_SPEARMAN)
+def test_spearman_p_without_ties_matches_r_cor_test(x, y, r_p):
+    """同順位が無ければ R の cor.test と同じ p（n ≤ 9 は正確な並べ替え、10 以上は AS 89 の Edgeworth 展開）。"""
+    out = S.spearman(x, y)
+    assert out["rho"] == pytest.approx(stats.spearmanr(x, y).statistic)
+    assert out["p"] == pytest.approx(r_p, rel=1e-8)
+    if len(x) <= 9:
+        assert out["p_method"] == "exact_permutation"
+        assert out["p"] == pytest.approx(_exact_spearman_p(x, y), rel=1e-12)
+    else:
+        assert out["p_method"] == "edgeworth"
+
+
+def test_spearman_small_n_is_not_the_t_approximation():
+    """t 近似は小さい n で p を小さく出しすぎる: n=5 の |ρ|=1 は 0 でなく 2/5!、ρ=0.9 は 0.05 を超える。"""
+    perfect = S.spearman([1, 2, 3, 4, 5], [10, 20, 30, 40, 50])
+    assert perfect["rho"] == pytest.approx(1.0) and perfect["p"] == pytest.approx(2 / math.factorial(5))
+    reverse = S.spearman([1, 2, 3, 4, 5, 6], [6, 5, 4, 3, 2, 1])
+    assert reverse["rho"] == pytest.approx(-1.0) and reverse["p"] == pytest.approx(2 / math.factorial(6))
+    swap = S.spearman([1, 2, 3, 5, 4], [1, 2, 3, 4, 5])
+    assert swap["p"] == pytest.approx(1 / 12) and swap["p"] > 0.05
+    assert stats.spearmanr([1, 2, 3, 5, 4], [1, 2, 3, 4, 5]).pvalue < 0.05   # t 近似は「有意」に見せる
+    # 10 組以上の |ρ| = 1 も 0 にしない（並べ替えでとりうる最小 2/n! で抑える）
+    big = S.spearman(list(range(12)), list(range(12)))
+    assert big["p_method"] == "edgeworth" and big["p"] >= 2 / math.factorial(12) > 0
+
+
+def test_spearman_small_n_with_ties_is_the_exact_conditional_permutation():
     x = [1.0, 2.0, 2.0, 4.0, 5.0, 7.0, math.nan]
     y = [2.0, 1.0, 4.0, 3.0, 6.0, 5.0, 1.0]
     out = S.spearman(x, y)
-    expected = stats.spearmanr(x[:6], y[:6])
-    assert out["n"] == 6 and out["reason"] is None
-    assert out["rho"] == pytest.approx(expected.statistic)
-    assert out["p"] == pytest.approx(expected.pvalue)
-    perfect = S.spearman([1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 6])
-    assert perfect["rho"] == 1.0 and perfect["p"] == 0.0     # scipy と同じ（|ρ|=1 は p=0）
-    reverse = S.spearman([1, 2, 3, 4, 5], [10, 9, 8, 7, 6])
-    expected = stats.spearmanr([1, 2, 3, 4, 5], [10, 9, 8, 7, 6])
-    assert reverse["rho"] == pytest.approx(-1.0)
-    assert reverse["p"] == pytest.approx(expected.pvalue, abs=1e-12)
+    assert out["n"] == 6 and out["reason"] is None and out["p_method"] == "exact_permutation"
+    assert out["rho"] == pytest.approx(stats.spearmanr(x[:6], y[:6]).statistic)
+    assert out["p"] == pytest.approx(_exact_spearman_p(x[:6], y[:6]), rel=1e-12)
+    zeros = S.spearman([1, 2, 3, 4, 5, 6, 7, 8], [0, 0, 0, 1, 3, 2, 5, 4])   # 未検出の 0 の同順位
+    assert zeros["p"] == pytest.approx(_exact_spearman_p([1, 2, 3, 4, 5, 6, 7, 8],
+                                                          [0, 0, 0, 1, 3, 2, 5, 4]), rel=1e-12)
+
+
+def _exact_p_with_zero_ties(x, y):
+    """y の 0（同順位）の置き場所と残りの並びをすべて数えた正確な両側 p（区別できる並びは等確率）。"""
+    ra, rb = stats.rankdata(x), stats.rankdata(y)
+    n, low = len(ra), rb.min()
+    others = [v for v in rb if v != low]
+    centered = ra - ra.mean()
+    null = []
+    for zeros in itertools.combinations(range(n), n - len(others)):
+        rest = [i for i in range(n) if i not in zeros]
+        for perm in itertools.permutations(others):
+            arrangement = np.full(n, low)
+            arrangement[rest] = perm
+            null.append(float(arrangement @ centered))
+    null = np.array(null)
+    observed = float(rb @ centered)
+    return min(1.0, 2.0 * min((null >= observed - 1e-9).mean(), (null <= observed + 1e-9).mean()))
+
+
+def test_spearman_ties_from_ten_pairs_use_a_seeded_permutation():
+    """10 組以上で同順位（未検出の 0 など）があれば t 近似でなくモンテカルロの並べ替え（種は固定）。"""
+    x = list(range(1, 11))
+    y = [0, 0, 0, 2, 0, 0, 5, 1, 4, 3]
+    out = S.spearman(x, y)
+    exact = _exact_p_with_zero_ties(x, y)                   # 10!/5! = 30,240 通りを数える
+    assert out["p_method"] == "monte_carlo_permutation"
+    assert out["p"] == pytest.approx(exact, rel=0.15)        # 20,000 回の並べ替えの誤差の内
+    assert stats.spearmanr(x, y).pvalue < 0.8 * exact        # t 近似は小さく出しすぎる
+    assert S.spearman(x, y) == out                           # 同じ入力なら同じ p
+    perfect = S.spearman(x, [0, 0, 0, 1, 2, 3, 4, 5, 6, 7])
+    assert perfect["p"] >= 2 / (S.SPEARMAN_PERMUTATIONS + 1)
 
 
 def test_spearman_too_few_pairs_and_constant_are_null_with_reason():
     assert S.spearman([1, 2, 3, 4], [4, 3, 2, 1]) == {
-        "n": 4, "rho": None, "p": None, "reason": "too_few_pairs"}
-    assert S.spearman([1, 2, 3, 4, 5], [2, 2, 2, 2, 2])["reason"] == "constant"
+        "n": 4, "rho": None, "p": None, "reason": "too_few_pairs", "p_method": None}
+    out = S.spearman([1, 2, 3, 4, 5], [2, 2, 2, 2, 2])
+    assert out["reason"] == "constant" and out["p_method"] is None
 
 
 def test_constant_groups():
     assert S.constant_groups({"A": [0, 0, 0], "B": [1, 0, 0]}) == ["A"]
     assert S.constant_groups({"A": [5, math.nan, 5], "B": [math.nan, 2, math.nan]}) == ["A"]
     assert S.constant_groups({"A": [1, 2], "B": [3, 4]}) is None
+    # 0 以下を欠測とする読み方（log2 の検定・統計エンジン）では 0 の並びは観測の値でない
+    assert S.constant_groups({"A": [0, 0, 0], "B": [4, 0, 4]}, positive_only=True) == ["B"]
+    # 丸めの誤差の内は同じ値（相対 1e3·eps）、それを超えれば違う値
+    assert S.constant_groups({"A": [1000.0, 1000.0 * (1 + 1e-15)]}) == ["A"]
+    assert S.constant_groups({"A": [1000.0, 1000.0 * (1 + 1e-9)]}) is None
+    flags = S.constant_columns(np.array([[7.0, 0.0, 1.0], [7.0, 0.0, 2.0], [np.nan, 0.0, 1.0]]),
+                               positive_only=True)
+    assert flags.tolist() == [True, False, False]
 
 
 def test_constant_in_group_marks_rows_without_changing_the_test(files):
     result = _run(_spec(files))
     rows = _rows(result)
-    assert rows["F3"]["constant_in_group"] == ["HC"]
+    # log2 の検定では 0 は欠測（検定に入らない）。HC の 0 だけの F3 は観測の値が無いので印を付けない
+    assert rows["F3"]["constant_in_group"] is None and rows["F3"]["status"] == "not_testable"
     assert rows["F1"]["constant_in_group"] is None
     assert list(rows["F1"])[-1] == "constant_in_group"        # 行の最後の欄
+    # 変換なしの検定では 0 が値のまま入るので、HC の 0 の並びは片群一定
+    linear = _rows(_run(_spec(files, [{"analysis_id": "lin", "test": {"kind": "student",
+                                                                    "transform": "none"}}])))
+    assert linear["F3"]["constant_in_group"] == ["HC"] and linear["F1"]["constant_in_group"] is None
+
+
+FILL_VALUES = {
+    "F1": [10, 12, 11, 20, 22, 21, 15, 16],
+    "F2": [5, 6, 5, 5, 6, 5, 5, 5],
+    "FILL": [7, 7, 7, 30, 35, 28, 20, 21],     # HC を同じ値（7）で埋めた
+    "ZERO": [0, 0, 0, 30, 35, 28, 20, 21],     # HC が未検出（0）。補完の half_min が同じ値で埋める
+    "F4": [100, 110, 90, 50, 55, 45, 75, 76],
+}
+
+
+def test_constant_in_group_reads_values_before_normalization(files):
+    """埋め値は読んだ値（recipe の前）と補完の直後の値で探す。正規化（PQN）の試料ごとの係数は埋め値を散らす。"""
+    from metabolomix.analysis import recipe_matrix
+
+    matrix = _write(files["dir"] / "fill.tsv", ["feature_id", *SAMPLES],
+                    [[f, *v] for f, v in FILL_VALUES.items()])
+    recipe = {"steps": ["impute", "normalize"], "impute": {"method": "half_min"},
+              "normalize": {"method": "pqn"}}
+    spec = _spec(files, [{"analysis_id": "pqn", "test": {"kind": "student"}, "matrix": recipe}],
+                 input={"source": "tsv", "matrix_path": str(matrix)})
+    rows = _rows(_run(spec))
+    assert rows["FILL"]["constant_in_group"] == ["HC"]
+    assert rows["ZERO"]["constant_in_group"] == ["HC"]
+    assert rows["F1"]["constant_in_group"] is None and rows["F4"]["constant_in_group"] is None
+    # 検定に入れる値（recipe の後）では HC の埋め値がもう同じでない（ここで探すと見落とす）
+    values = np.array(list(FILL_VALUES.values()), dtype=float).T
+    roles = {s: ("qc" if s.startswith("QC") else "sample") for s in SAMPLES}
+    built = recipe_matrix.build_matrix(values, SAMPLES, list(FILL_VALUES), roles,
+                                       recipe_matrix.normalize_recipe(recipe))
+    after = built["values"][:3, [built["feature_ids"].index(f) for f in ("FILL", "ZERO")]]
+    assert np.ptp(after, axis=0).min() > 0.01
+    assert S.constant_groups({"HC": after[:, 0]}) is None and S.constant_groups({"HC": after[:, 1]}) is None
 
 
 # ---------- aggregate（和）の寄与・E9 ----------
@@ -257,7 +390,9 @@ def test_correlate_input_stage_is_spearman_against_the_external_values(files):
     assert first["analysis_id"] is None and first["merged_into"] is None
     assert (first["feature_id"], first["external_id"], first["n"]) == ("F1", "Glucose", 8)
     assert first["rho"] == pytest.approx(expected.statistic)
-    assert first["p"] == pytest.approx(expected.pvalue)
+    # 8 組・同順位なし: 全順列を数えた正確な p（t 近似の scipy.stats.spearmanr ではない）
+    assert first["p_method"] == "exact_permutation"
+    assert first["p"] == pytest.approx(_exact_spearman_p(VALUES["F1"], GLUCOSE), rel=1e-12)
     assert second["rho"] == pytest.approx(stats.spearmanr(VALUES["F4"], LACTATE).statistic)
     assert len(result["input_fingerprint"]["files"]["correlate.external"]) == 64
     # 報告の数字は変えない・rule_hash は correlate の有無で分かれる
@@ -302,7 +437,7 @@ def test_correlate_matrix_stage_reads_each_analysis_matrix(files):
     # recipe が落とした特徴（F3）は not_in_matrix
     assert by_key[("filtered", "F3")] == {
         "analysis_id": "filtered", "feature_id": "F3", "external_id": "Lactate",
-        "merged_into": None, "n": 0, "rho": None, "p": None, "reason": "not_in_matrix"}
+        "merged_into": None, "n": 0, "rho": None, "p": None, "reason": "not_in_matrix", "p_method": None}
 
 
 def test_correlate_errors(files):

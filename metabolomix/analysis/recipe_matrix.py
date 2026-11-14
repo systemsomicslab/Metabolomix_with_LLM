@@ -383,6 +383,10 @@ def build_matrix(values, sample_ids: list[str], feature_ids: list[str], roles: d
     篩の段（detection_filter・qc_rsd_filter）で落とした特徴は、**その段の直後に列から外す**。
     後の段（KNN の近傍・PQN の参照・TIC の和）に落とした特徴を混ぜると、論文の方法と
     違う数字になる。
+
+    `imputed_values` は補完の段（`impute`）の直後の値（後の段の正規化・ドリフト補正の前。列は最後に残った特徴）。
+    補完の段が無ければ None。補完の埋め値は後の段の試料ごとの係数で値が散るので、片群一定の印
+    （analysis_spec の `constant_in_group`）はここで探す。
     """
     current = np.array(values, dtype=float, copy=True)
     if current.shape != (len(sample_ids), len(feature_ids)):
@@ -390,6 +394,7 @@ def build_matrix(values, sample_ids: list[str], feature_ids: list[str], roles: d
                           {"shape": list(current.shape)})
     features = list(feature_ids)
     present = None if detected is None else np.asarray(detected, dtype=bool)
+    imputed = None
     reports = []
     for step in recipe["steps"]:
         config = recipe[step]
@@ -399,6 +404,7 @@ def build_matrix(values, sample_ids: list[str], feature_ids: list[str], roles: d
                                                 sample_ids, features, roles, config, present)
         elif step == "impute":
             current, report = _impute(current, config)
+            imputed = current.copy()
         elif step == "normalize":
             current, report = _normalize(current, sample_ids, roles, config)
         elif step == "drift_correct":
@@ -411,6 +417,8 @@ def build_matrix(values, sample_ids: list[str], feature_ids: list[str], roles: d
             columns = np.nonzero(keep)[0]
             current = current[:, columns]
             features = [features[j] for j in columns]
+            if imputed is not None:
+                imputed = imputed[:, columns]
             if present is not None:
                 present = present[:, columns]
         reports.append({"step": step, **report, "n_features_after": len(features)})
@@ -421,4 +429,5 @@ def build_matrix(values, sample_ids: list[str], feature_ids: list[str], roles: d
         "steps": reports,
         "n_features_in": len(feature_ids),
         "n_features_out": len(features),
+        "imputed_values": imputed,
     }

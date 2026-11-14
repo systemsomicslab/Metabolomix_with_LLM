@@ -1,6 +1,7 @@
 """PLS-DA と VIP（`metabolomix.analysis.stats.plsda`）。データは合成（テスト自身が作る）。"""
 from __future__ import annotations
 
+import math
 from types import SimpleNamespace
 
 import numpy as np
@@ -168,3 +169,167 @@ def test_plsda_summary_in_analysis_run_has_no_rows(tmp_path):
     assert cmp_["kind"] == "compare" and cmp_["rows"].startswith("contrast_id\t")
     assert pl["kind"] == "plsda" and "rows" not in pl
     assert {"q2", "permutation", "vip_top"} <= pl.keys()
+
+
+# --- 独立な単位（同じ個体の複数の単位）で分割・並べ替えをする -------------------------------
+
+def _nested(seed=100, n_subj=6, per=3, p=20, subject_sd=2.0, subject_ids=True):
+    """2 群 × n_subj 個体 × 個体ごとに per 単位（時点の属性で分かれた単位）。個体の差だけが大きく、群の差は無い。"""
+    rng = np.random.default_rng(seed)
+    units, rows = [], []
+    for cls in ("A", "B"):
+        for s in range(n_subj):
+            base = rng.normal(0.0, subject_sd, p)
+            for t in range(per):
+                sid = f"{cls}{s}"
+                units.append(SimpleNamespace(unit_id=f"{sid}|t{t}", group=cls, batch=None,
+                                             subject_id=sid if subject_ids else None,
+                                             attributes={"time": f"t{t}"}))
+                rows.append(20.0 + base + rng.normal(0.0, 0.3, p))
+    return SimpleNamespace(matrix_id="mx_nested", units=units, log2=np.array(rows),
+                           feature_ids=[f"f{j}" for j in range(p)])
+
+
+def _paired(n_subj=8, effect=0.0, seed=0, p=20):
+    """個体ごとに pre / post の 2 単位（対応のある計画）。"""
+    rng = np.random.default_rng(seed)
+    units, rows = [], []
+    for s in range(n_subj):
+        base = rng.normal(0.0, 2.0, p)
+        for cls in ("pre", "post"):
+            units.append(SimpleNamespace(unit_id=f"S{s}|{cls}", group=cls, batch=None, subject_id=f"S{s}",
+                                         attributes={"pair": f"S{s}"}))
+            row = 20.0 + base + rng.normal(0.0, 0.3, p)
+            if cls == "post":
+                row[:3] += effect
+            rows.append(row)
+    return SimpleNamespace(matrix_id="mx_paired", units=units, log2=np.array(rows),
+                           feature_ids=[f"f{j}" for j in range(p)])
+
+
+def test_units_of_one_subject_stay_in_one_fold_and_classes_are_spread():
+    pr = _nested()
+    labels = np.array([u.group for u in pr.units])
+    groups = np.array([u.subject_id for u in pr.units])
+    fold = P._folds(labels, 4, np.random.default_rng(0), groups)
+    for sid in set(groups.tolist()):
+        assert len(set(fold[groups == sid].tolist())) == 1          # 個体の単位は同じ分割
+    for cls in ("A", "B"):
+        per_fold = np.bincount([fold[groups == sid][0] for sid in sorted(set(groups[labels == cls].tolist()))],
+                               minlength=4)
+        assert per_fold.max() - per_fold.min() <= 1                 # クラスの個体を分割へ均等に配る
+
+
+def test_permutation_moves_whole_subjects_or_stays_within_pairs():
+    pr = _nested()
+    labels = np.array([u.group for u in pr.units])
+    groups = np.array([u.subject_id for u in pr.units])
+    plan = P._permutation_plan(labels, groups, ["A", "B"])
+    assert plan["scheme"] == "between_groups"
+    assert plan["n_labelings"] == math.comb(12, 6) and plan["min_attainable_p"] == 2 / math.comb(12, 6)
+    rng = np.random.default_rng(1)
+    for _ in range(20):
+        out = P._permuted(labels, plan, rng)
+        for sid in set(groups.tolist()):
+            assert len(set(out[groups == sid].tolist())) == 1      # 個体の単位は同じ札のまま
+        assert {c: int((out == c).sum()) for c in ("A", "B")} == {"A": 18, "B": 18}
+    pr = _paired()
+    labels = np.array([u.group for u in pr.units])
+    groups = np.array([u.subject_id for u in pr.units])
+    plan = P._permutation_plan(labels, groups, ["post", "pre"])
+    assert plan["scheme"] == "within_groups"
+    assert plan["n_labelings"] == 2 ** 8 and plan["min_attainable_p"] == 2 / 2 ** 8
+    out = P._permuted(labels, plan, np.random.default_rng(2))
+    for sid in set(groups.tolist()):
+        assert sorted(out[groups == sid].tolist()) == ["post", "pre"]  # 個体の中で入れ替える
+
+
+def test_null_data_with_several_units_per_subject_is_not_validated():
+    """群差の無いデータで、同じ個体の単位が学習と予測にまたがると Q2 と p が個体の違いで良く見えた。"""
+    for seed in (100, 101, 102):
+        res = P.plsda(_nested(seed=seed), factors=["group"], n_permutations=60, seed=seed)
+        assert res["cv"]["method"] == "stratified_group_kfold"
+        assert res["cv"]["group_by"] == "subject_id" and res["cv"]["n_groups"] == 12
+        assert res["cv"]["class_groups"] == {"A": 6, "B": 6} and res["n_units"] == 36
+        assert res["permutation"]["scheme"] == "between_groups"
+        assert res["permutation"]["p"] > 0.1 and res["q2"] < 0.3
+
+
+def test_real_difference_between_subjects_is_still_found():
+    pr = _nested(seed=7, subject_sd=0.5)
+    pr.log2[:18, :4] += 3.0                                         # A の個体だけ 4 特徴が高い
+    res = P.plsda(pr, factors=["group"], n_permutations=60, seed=0)
+    assert res["q2"] > 0.5 and res["permutation"]["p"] <= 0.05
+
+
+def test_paired_design_permutes_within_subjects_and_block_names_the_group():
+    res = P.plsda(_paired(effect=2.0), factors=["group"], n_permutations=60, seed=0)
+    assert res["cv"]["group_by"] == "subject_id" and res["cv"]["n_groups"] == 8
+    assert res["permutation"]["scheme"] == "within_groups"
+    assert res["q2"] > 0.3 and res["permutation"]["p"] <= 0.05
+    blocked = P.plsda(_paired(effect=2.0), factors=["group"], n_permutations=5, seed=0, block="pair")
+    assert blocked["cv"]["group_by"] == "pair" and blocked["cv"]["n_groups"] == 8
+
+
+def test_few_independent_units_warn_that_the_permutation_p_cannot_be_small():
+    res = P.plsda(_paired(n_subj=3, effect=3.0), factors=["group"], n_permutations=20, seed=0)
+    w = next(w for w in res["warnings"] if w["code"] == "permutation_few_labelings")
+    assert w["n_labelings"] == 8 and w["min_attainable_p"] == 0.25
+    assert res["permutation"]["min_attainable_p"] == 0.25 and res["permutation"]["p"] >= 0.2
+    # 3 個体 × 2 クラス（入れ子）: C(6, 3) = 20 通り、名前の入れ替えで同じ Q2 なので p は 0.1 を下回れない
+    res = P.plsda(_nested(n_subj=3, per=2), factors=["group"], n_permutations=40, seed=0)
+    assert res["permutation"]["min_attainable_p"] == pytest.approx(0.1)
+    assert any(w["code"] == "permutation_few_labelings" for w in res["warnings"])
+    assert res["permutation"]["p"] > 0.05
+
+
+def test_fold_cap_counts_subjects_and_one_subject_class_is_refused():
+    res = P.plsda(_nested(n_subj=3), factors=["group"], cv_folds=10, n_permutations=3)
+    assert res["cv"]["folds"] == 6 and res["n_units"] == 18
+    capped = next(w for w in res["warnings"] if w["code"] == "cv_folds_capped")
+    assert "subject_id" in capped["message"]
+    with pytest.raises(DomainError) as e:
+        P.plsda(_nested(n_subj=1, per=3), factors=["group"], n_permutations=3)
+    assert e.value.code == "STATISTIC_GROUP_TOO_SMALL"
+    assert e.value.details["class_groups"] == {"A": 1, "B": 1}
+
+
+def test_units_without_subject_are_each_a_group_and_replicate_names_warn():
+    pr = _nested(subject_ids=False)
+    pr.warnings = [{"code": "possible_technical_replicates", "stem": "A0"}]
+    res = P.plsda(pr, factors=["group"], n_permutations=3)
+    assert res["cv"]["group_by"] == "unit" and res["cv"]["n_groups"] == 36
+    assert any(w["code"] == "plsda_units_may_not_be_independent" for w in res["warnings"])
+
+
+def test_spec_v2_passes_the_design_block_and_preprocess_split_units_are_grouped():
+    """spec v2 の design.block が PLS-DA の独立な単位になり、前処理で属性に分かれた個体の単位はまとめて分割する。"""
+    from metabolomix.analysis.stats.data import SampleInfo, StudyData
+    from metabolomix.analysis.stats.spec_v2 import normalize_spec_v2, run_spec_v2
+
+    rng = np.random.default_rng(11)
+    samples, rows = [], []
+    for cls in ("A", "B"):
+        for s in range(6):
+            base = rng.normal(0.0, 1.0, 20)
+            for t in range(3):
+                samples.append(SampleInfo(sample_id=f"{cls}{s}_t{t}", role="sample", group=cls, batch="b1",
+                                          injection_order=None, subject_id=f"{cls}{s}", include=True,
+                                          attributes={"time": f"t{t}"}))
+                rows.append(2.0 ** (20.0 + base + rng.normal(0.0, 0.1, 20)))
+    study = StudyData(values=np.array(rows), detected=None, sample_ids=[s.sample_id for s in samples],
+                      feature_ids=[f"f{j}" for j in range(20)], samples=samples, quant=None, dataset_hash="h")
+    off = {"drift": {"mode": "off"}, "normalize": {"method": "none"},
+           "filters": {"blank_ratio": None, "detection": None, "qc_rsd": None, "d_ratio": None}}
+    spec = {"schema": "analysis-spec.v2", "preprocess": off,
+            "comparisons": [{"id": "BvsA", "factor": "group", "reference": "A", "test": "B"}],
+            "analyses": [{"analysis_id": "pl", "kind": "plsda", "n_permutations": 40}]}
+    out = run_spec_v2(normalize_spec_v2(spec), study)
+    res = out["analyses"][0]["result"]
+    assert res["n_units"] == 36                                      # 時点で分かれた単位
+    assert res["cv"]["group_by"] == "subject_id" and res["cv"]["n_groups"] == 12
+    assert res["permutation"]["p"] > 0.1
+    blocked = run_spec_v2(normalize_spec_v2({**spec, "design": {"factors": ["group"], "block": "subject_id"},
+                                             "analyses": [{"analysis_id": "pl", "kind": "plsda",
+                                                           "n_permutations": 3}]}), study)
+    assert blocked["analyses"][0]["result"]["cv"]["group_by"] == "subject_id"

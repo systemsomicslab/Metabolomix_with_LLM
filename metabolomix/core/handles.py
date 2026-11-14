@@ -106,7 +106,8 @@ def _array_bytes(value) -> int:
 
 
 #: 統計エンジンの行列（`PreparedMatrix`）が抱える配列の欄。
-_PREPARED_ARRAY_FIELDS = ("log2", "qc_log2", "sample_values", "detected_units", "sample_detected")
+_PREPARED_ARRAY_FIELDS = ("log2", "qc_log2", "sample_values", "detected_units", "sample_detected",
+                          "sample_raw_values")
 
 
 def _stat_matrix_bytes(ds) -> int:

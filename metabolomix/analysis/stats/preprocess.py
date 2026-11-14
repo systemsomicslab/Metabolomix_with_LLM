@@ -172,6 +172,10 @@ class PreparedMatrix:
     sample_values: np.ndarray | None = None
     sample_ids: list[str] = field(default_factory=list)
     sample_detected: np.ndarray | None = None  # 検出の別が無い研究は None
+    # 生体の注入 × 残した特徴（sample_values と同じ並び）の**読んだ値**（選択の直後。ドリフト補正・正規化・
+    # 反復のまとめの前の線形値）。片群一定の印（compare の `constant_in_group`）が埋め値を探す。
+    # 外から作った行列（stats/external.py・手で組んだもの）は None で、compare は個体の log2 で調べる。
+    sample_raw_values: np.ndarray | None = None
 
 
 def _positive(x: np.ndarray) -> np.ndarray:
@@ -803,6 +807,7 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix:
     steps.append(step)
     samples = [study.samples[i] for i in keep_rows]
     values = np.array(np.asarray(study.values, dtype=float)[keep_rows], copy=True)
+    raw = values.copy()      # 読んだ値（ドリフト補正は values をその場で書き換える）。片群一定の印が読む
     detected = None if study.detected is None else np.asarray(study.detected, bool)[keep_rows]
 
     notes = []
@@ -827,6 +832,7 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix:
     samples = [samples[k] for k in rows]
     drifted = values[rows]
     values = values[np.ix_(rows, cols)]
+    raw = raw[np.ix_(rows, cols)]
     detected = None if detected is None else detected[np.ix_(rows, cols)]
 
     factor_values, factor_record = _factor_columns(cfg["normalize"], feature_ids, all_ids, drifted)
@@ -879,7 +885,8 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix:
         annotated_features=frozenset(f for f in study.annotated_features if f in kept),
         sample_values=np.array(values[bio], copy=True),
         sample_ids=[samples[k].sample_id for k in bio],
-        sample_detected=None if detected is None else np.array(detected[bio], copy=True))
+        sample_detected=None if detected is None else np.array(detected[bio], copy=True),
+        sample_raw_values=np.array(raw[bio], copy=True))
 
 
 def impute_for_pca(log2: np.ndarray, *, method: str = "half_min",

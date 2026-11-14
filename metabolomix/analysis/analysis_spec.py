@@ -854,6 +854,36 @@ def _meets(row: dict, thresholds: dict):
     return all(checks)
 
 
+def _fill_blocks(data: dict, matrix: dict) -> list[np.ndarray]:
+    """片群一定の印を探す値（検定に入れる行列と同じ行＝試料・列＝特徴に並べる）。
+
+    読んだ値（割れのまとめの後・recipe の前）と、recipe に補完の段があればその直後の値（`imputed_values`）。
+    後の段の正規化・ドリフト補正は試料ごとの係数を掛けるので、検定に入れる値では埋め値が散って見えなくなる
+    （逆に、特徴の少ない PQN は試料ごとに中央の特徴を参照の値にそろえ、埋め値でない値を一定に見せる）。
+    """
+    column = {fid: j for j, fid in enumerate(data["feature_ids"])}
+    raw = np.asarray(data["values"], dtype=float)[:, [column[f] for f in matrix["feature_ids"]]]
+    blocks = [raw]
+    if matrix.get("imputed_values") is not None:
+        blocks.append(np.asarray(matrix["imputed_values"], dtype=float))
+    return blocks
+
+
+def _fill_constant(blocks: list[np.ndarray], j: int, rows_by_group: dict[str, list[int]], *,
+                   transform: str) -> list[str] | None:
+    """値がすべて同じ群（`spec_statistics.constant_groups`。読んだ値か補完の直後の値のどちらかで）。
+
+    観測の値は検定がそう扱う値: `transform="log2"` なら有限の正値（0 以下は変換で欠測になる。統計エンジンと
+    同じ）、`none` なら有限の値（v1 の行列は 0 を値として持ち、0 のままで検定に入る）。
+    """
+    found: set[str] = set()
+    for block in blocks:
+        found.update(spec_statistics.constant_groups(
+            {label: block[rows, j] for label, rows in rows_by_group.items()},
+            positive_only=transform == "log2") or [])
+    return [label for label in rows_by_group if label in found] or None
+
+
 def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: list[str] | None,
                   matrices: list | None = None):
     # `data` の行列は、割れたスポットを 1 列にまとめた後（`_merge_plan`）。recipe はその列に当たる。
@@ -865,6 +895,7 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
     merged_from: dict[str, list[str]] = data["merged_from"]
     rename: dict[str, str] = data["rename"]
     origin = {fid: merged_from.get(fid, [fid]) for fid in matrix["feature_ids"]}
+    fill_blocks = _fill_blocks(data, matrix)
     aggregate_info = None
     aggregate = normalized["aggregate"]
     if aggregate is not None:
@@ -878,6 +909,8 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
                             field="aggregate", members=members)
             aggregate = {**aggregate, "numerator": folded[0], "denominator": folded[1]}
         column, aggregate_info = _aggregate(matrix, aggregate, folded)
+        fill_blocks = [_aggregate({**matrix, "values": block}, aggregate, folded)[0][:, None]
+                       for block in fill_blocks]
         if merged_from:
             # 選んだ特徴のうち割れの相手を持つものは、まとめた 1 つとして 1 回だけ数える。
             aggregate_info["members"] = list(members)
@@ -934,7 +967,8 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
             outcome["beta_log2"] = None
         fc = spec_statistics.fold_change(ref_raw, test_raw, analysis["fold_change"])
         finite_ref, finite_test = ref_raw[np.isfinite(ref_raw)], test_raw[np.isfinite(test_raw)]
-        constant = spec_statistics.constant_groups({reference: ref_raw, test: test_raw})
+        constant = _fill_constant(fill_blocks, j, {reference: rows_ref, test: rows_test},
+                                  transform=transform)
         results[fid] = {
             "feature_id": fid, "status": outcome["status"], "reason": outcome["reason"],
             "group_ref": reference, "group_test": test,
@@ -989,7 +1023,7 @@ def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: li
             spec_statistics.detection_driven(row["direction"], d_ref, len(rows_ref), d_test,
                                              len(rows_test)) if row["status"] == "tested" else None)
         row["meets_thresholds"] = _meets(row, analysis["thresholds"])
-        # 一方の群の値（検定に入れる行列の値。変換の前）がすべて同じ: 未検出の埋め値の印（判定は変えない）
+        # 一方の群の値（読んだ値か補完の段の直後の値）がすべて同じ: 埋め値の印（判定は変えない）
         row["constant_in_group"] = row.pop("constant_in_group")
         rows.append(row)
     out = {
@@ -1050,7 +1084,8 @@ def _correlate_rows(spec_corr: dict, values: np.ndarray, samples: list[str], fea
                "external_id": pair["external_id"],
                "merged_into": used if used != pair["feature_id"] else None}
         if used not in column:
-            rows.append({**row, "n": 0, "rho": None, "p": None, "reason": "not_in_matrix"})
+            rows.append({**row, "n": 0, "rho": None, "p": None, "reason": "not_in_matrix",
+                         "p_method": None})
             continue
         stat = spec_statistics.spearman(values[:, column[used]],
                                         ext_values[:, ext_index[pair["external_id"]]])

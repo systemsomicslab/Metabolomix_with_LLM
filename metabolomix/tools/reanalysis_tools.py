@@ -166,6 +166,8 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     `group_overrides` に書いたものだけを使う（`dataset_exclude` の除外は読まない。spec に無い除外が
     あれば注意 `dataset_exclusions_not_in_spec` を返す）。前処理は確認を求めない（`drift.mode="auto"` が
     補正を当てなかったときは前処理の段と warnings の `drift_not_applied_by_default` に理由と呼び直し方）。状態も記録も書かない。
+    plsda の交差検証と並べ替え検定は、同じ個体の単位（`design.block`、無ければ `subject_id`）をまとめて
+    分割・入れ替える（`cv.group_by`・`permutation.scheme`）。
     戻り値は解析ごとの要約（行は v1 と同じ規則: `output_path` に全量の JSON、無ければ TSV）。
 
     v1（analysis-spec.v1）:
@@ -184,7 +186,8 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     **`aggregate` と `features.feature_ids` は併用できない**（報告するのは集約した 1 本。
     `ANALYSIS_SPEC_INVALID`。種ごとの行は aggregate の無い別の spec で回す）。`bh_population` は
     `matrix` / `reported` / `annotated`（SME のある特徴だけ）。`correlate`（任意）は外部の表の値との
-    Spearman の ρ を、spec に書いた特徴の対応（`pairs`）ごとに返す（試料の対応 `sample_map` は 1 対 1）。
+    Spearman の ρ を、spec に書いた特徴の対応（`pairs`）ごとに返す（試料の対応 `sample_map` は 1 対 1。
+    p は小さい n・同順位では並べ替えの p で、出し方は行の `p_method`）。
     書いても効かない設定（`steps` に無い段の設定・`merge_split=false` や外部の行列での
     `features.alignment_qc`・ols でない検定の共変量）は誤りにせず、使わずに `notes` に書く。
 
@@ -277,7 +280,7 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
 _CONTRIBUTION_COLUMNS = ("feature_id", "share_median", "share_median_ref", "share_median_test",
                          "share_max")
 _CORRELATE_COLUMNS = ("analysis_id", "feature_id", "external_id", "merged_into", "n", "rho", "p",
-                      "reason")
+                      "p_method", "reason")
 #: 戻り値に名前を並べる試料の数の上限（全件は output_path の JSON）。
 _NAME_LIST_LIMIT = 10
 

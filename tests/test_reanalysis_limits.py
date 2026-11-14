@@ -256,7 +256,7 @@ def test_novel_candidates_ineffective_settings_are_notes(tmp_path):
 
 def test_analysis_run_v1_returns_input_read_correlate_contributions_and_notes(tmp_path):
     values = {"F1": [10, 12, 11, 20, 22, 21, 15, 16], "F2": [5, 6, 5, 5, 6, 5, 5, 5],
-              "F3": [0, 0, 0, 1, 0, 0, 0, 0]}
+              "F3": [3, 3, 3, 1, 2, 5, 0, 0]}                  # HC の 3 試料が同じ値で埋めてある
     paper = write_mwtab(tmp_path / "paper.txt", SAMPLES, list(values.items()))
     external = write_mwtab(tmp_path / "external.txt", SAMPLES,
                            [("Glucose", ["1", "3", "2", "5", "8", "6", "4", "ND"])])
@@ -272,7 +272,7 @@ def test_analysis_run_v1_returns_input_read_correlate_contributions_and_notes(tm
     assert out["input_read"]["source"] == "mwtab" and out["input_read"]["n_unreadable_cells"] == 0
     assert any(n.startswith("analyses[0].matrix:") for n in out["notes"])
     item = out["analyses"][0]
-    assert item["n_constant_in_group"] == 1                   # F3 の HC がすべて 0
+    assert item["n_constant_in_group"] == 1                   # F3 の HC がすべて 3
     rows = {r["feature_id"]: r for r in _tsv_rows(item["rows"])}
     assert rows["F3"]["constant_in_group"] == "HC" and rows["F1"]["constant_in_group"] == ""
     corr = out["correlate"]
@@ -295,8 +295,9 @@ def test_analysis_run_v1_returns_input_read_correlate_contributions_and_notes(tm
 
 
 def test_analysis_run_v1_correlate_rows_keep_small_p(tmp_path):
-    # 行の p は有効 4 桁（小数 4 桁に丸めると 5e-5 未満の p が 0.0 に化ける）、ρ は小数 4 桁
-    ours, theirs = list(range(1, 9)), [1, 2, 3, 4, 5, 6, 8, 7]
+    # 行の p は有効 4 桁（小数 4 桁に丸めると 5e-5 未満の p が 0.0 に化ける）、ρ は小数 4 桁。
+    # 8 組の順位が一致: 正確な並べ替えの p は 2/8! = 4.96e-5（t 近似の 0 ではない）
+    ours, theirs = list(range(1, 9)), [10, 20, 30, 40, 50, 60, 70, 80]
     paper = write_mwtab(tmp_path / "paper.txt", SAMPLES, [("F1", ours)])
     external = write_mwtab(tmp_path / "external.txt", SAMPLES, [("Glucose", theirs)])
     spec = {"input": {"source": "mwtab", "path": str(paper)},
@@ -309,8 +310,10 @@ def test_analysis_run_v1_correlate_rows_keep_small_p(tmp_path):
     assert out["status"] == "success", out
     [row] = _tsv_rows(out["correlate"]["rows"])
     expected = stats.spearmanr(ours, theirs)
-    assert expected.pvalue < 5e-5
-    assert float(row["p"]) == float(f"{expected.pvalue:.4g}") and float(row["p"]) > 0
+    exact = 2 / 40320
+    assert exact < 5e-5
+    assert float(row["p"]) == float(f"{exact:.4g}") and float(row["p"]) > 0
+    assert row["p_method"] == "exact_permutation"
     assert row["rho"] == str(round(float(expected.statistic), 4))
 
 
