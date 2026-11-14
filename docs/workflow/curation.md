@@ -67,7 +67,7 @@ flowchart TD
 9. │  └─ metabolomix/curation/flags.py  orphaned_count()（以前の版の `.arf2` に付いたフラグ → `warnings`）
 10. │  └─ metabolomix/curation/flags.py  cleared_spots()（人が取り消したスポット → `flag_cleared`）
 11. │  └─ metabolomix/curation/apply.py  confirmed_spots()（記録の confirmed ∪ `_tags.xml` の Confirmed − 最新が wrong / suspect → `confirmed`）
-12. │  └─ metabolomix/curation/evidence.py  collect()
+12. │  └─ metabolomix/curation/evidence.py  collect()（参照が引けなければ m/z は `msdial/peak_verification.py` `mass_error_ppm()`、`adduct_band` は `adduct_consistency()`。どちらも表に無いアダクトの綴りを `msdial/adducts.py` `parse_adduct()` で読み、クラスの典型とは `same_adduct()` で比べる）
 13. │     ├─ metabolomix/curation/evidence.py  _arf_rows()
 14. │     │  └─ metabolomix/arf/reader.py  deserialize()
 15. │     ├─ metabolomix/curation/evidence.py  _check_file_ids()（`.arf` に無い `file_ids` は `UnknownFileIdsError` → エラー payload）
@@ -93,7 +93,7 @@ flowchart TD
 35. │     └─ metabolomix/curation/adduct_isomer.py  pool_entry()（`evidence_tier()` で証拠の段階を付ける）
 36. │  └─ metabolomix/curation/judge.py  lipid_rules_active()（脂質規則フラグが 1 件でも True か）
 37. │  └─ metabolomix/curation/adduct_isomer.py  find_adduct_isomer()（有効な `wrong` フラグのスポットは相手から外す。Y 自身のアダクトは `msdial/adducts.py` `same_adduct()` で組成で除く → `adduct_isomer`）
-38. │  └─ metabolomix/curation/judge.py  judge_spot()
+38. │  └─ metabolomix/curation/judge.py  judge_spot()（参照と注釈のアダクトの違い `adduct_differs_from_reference` は `msdial/adducts.py` `same_adduct()` で組成で比べる）
 39. │  └─ metabolomix/curation/judge.py  auto_note()（判定根拠の文 → `auto_note`）
 40. metabolomix/tools/curation_tools.py  _open_submit()
 41. └─ metabolomix/curation/submit_server.py  register()（受け口が無ければ 127.0.0.1 の空きポートで起動。失敗したら `submit.via = "copy"`）

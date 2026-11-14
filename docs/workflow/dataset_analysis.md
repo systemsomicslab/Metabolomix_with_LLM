@@ -207,10 +207,10 @@ MCP も import しない。ツール層の仕事は、極性の出所を決め�
 4. ├─ [目標照合] metabolomix/mztab/polarity.py  dataset_polarity()
 5. │  ├─ metabolomix/console/job_manager.py  load_job()
 6. │  └─ metabolomix/console/output_collector.py  read_adduct_polarity()
-7. ├─ [目標照合] metabolomix/analysis/feature_search.py  normalize_targets()
+7. ├─ [目標照合] metabolomix/analysis/feature_search.py  normalize_targets()（種の目標に同位体の標識があれば `analysis/msms_rules.py` `isotope_labelled()` で見て `FEATURE_TARGET_INVALID`）
 8. │  └─ metabolomix/analysis/feature_search.py  theoretical_mz()
 9. ├─ [目標照合] metabolomix/analysis/feature_search.py  match_target()
-10. │  └─ metabolomix/analysis/feature_search.py  _identity()（SME の付加体は綴りでなく組成で比べる: `msdial/adducts.py` `same_adduct()`）
+10. │  └─ metabolomix/analysis/feature_search.py  _identity()（SME の付加体は綴りでなく組成で比べる: `msdial/adducts.py` `same_adduct()`。種の目標の SME・SML の名前は MS/MS の合否と同じ `analysis/msms_rules.py` `name_lipid_species()` で読む）
 11. ├─ [目標照合] metabolomix/analysis/feature_search.py  estimate_rt_offset()
 12. ├─ [目標照合] metabolomix/analysis/feature_search.py  rule_hash()
 13. ├─ [include_statistics=true] metabolomix/analysis/feature_search.py  select_results()
@@ -239,7 +239,7 @@ MCP も import しない。ツール層の仕事は、極性の出所を決め�
 36.    ├─ metabolomix/curation/apply.py  arf2_for_mztab()
 37.    └─ metabolomix/curation/apply.py  flags_for_arf2()
 
-`include_statistics=false` では `select_results` と統計の枝（`feature_stats` 〜 `result_summaries`）を通らない。目標照合の `merge_split=true` は候補を数える前（`match_target` の前）に `merge_plan` を呼ぶので、その組だけを戻り値の `merge_split` に写す（窓検索では統計を付けるときだけ呼ぶ）。`estimate_rt_offset` は `rt_min` を持つ目標と互いに一意に合う特徴の組（目標の付加体ごとに一致がたかだか 1 つで、それらが同時溶出すれば 1 組）から RT のずれを測るだけで、判定には当てない（当てるのは `rt_offset_min` を渡したときの `match_target`）。`feature_stats` の行の `detected_units_a` / `detected_units_b` / `presence_p` / `detection_driven` は `as_two_group` が結果の行から写したもの。窓検索に渡した `ppm_offset` / `rt_offset_min` は効かないので、`notes` に書くだけで照合には通さない（形は検める）。目標照合に渡した `sort="intensity"` と、`merge_split=false` と一緒の `alignment_qc_path` も効かないので、誤りにせず `notes` に書くだけ（`alignment_qc_path` は読まない）。`select_results` と、統計を付けるときの `merge_plan`（窓検索）・`merged_feature_stats` が送出した `DomainError` は、ツール自身がそれぞれの呼び出しの直後に `contrast_envelope` で封筒にする（`select_results` の中から呼ぶのではない。対比を省いた曖昧さなら `needs_input`〔`argument="contrast_id"`〕、未知の対比や `FEATURE_MERGE_UNAVAILABLE` などほかの誤りは `mztab_error`）。目標照合が照合の前に呼ぶ `merge_plan` の誤りは、目標の誤りと同じく直に `mztab_error` にする。
+`include_statistics=false` では `select_results` と統計の枝（`feature_stats` 〜 `result_summaries`）を通らない。目標照合の `merge_split=true` は候補を数える前（`match_target` の前）に `merge_plan` を呼ぶので、その組だけを戻り値の `merge_split` に写す（窓検索では統計を付けるときだけ呼ぶ）。`estimate_rt_offset` は `rt_min` を持つ目標と互いに一意に合う特徴の組（目標の付加体ごとに一致がたかだか 1 つで、それらが同時溶出すれば 1 組）から RT のずれを測るだけで、判定には当てない（当てるのは `rt_offset_min` を渡したときの `match_target`）。`feature_stats` の行の `detected_units_a` / `detected_units_b` / `presence_p` / `detection_driven` は `as_two_group` が結果の行から写したもの。窓検索に渡した `ppm_offset` / `rt_offset_min` は効かないので、`notes` に書くだけで照合には通さない（形は検める）。目標照合の `rt_offset_min` は `normalize_targets` が `rt_min` のある目標にだけ足すので、どの目標にも足されなければツールが `notes` に書き、`rule.rt_offset_min` を出さない（`rule_hash` は正規化後の目標から作るので、もともと入らない）。目標照合に渡した `sort="intensity"` と、`merge_split=false` と一緒の `alignment_qc_path` も効かないので、誤りにせず `notes` に書くだけ（`alignment_qc_path` は読まない）。`select_results` と、統計を付けるときの `merge_plan`（窓検索）・`merged_feature_stats` が送出した `DomainError` は、ツール自身がそれぞれの呼び出しの直後に `contrast_envelope` で封筒にする（`select_results` の中から呼ぶのではない。対比を省いた曖昧さなら `needs_input`〔`argument="contrast_id"`〕、未知の対比や `FEATURE_MERGE_UNAVAILABLE` などほかの誤りは `mztab_error`）。目標照合が照合の前に呼ぶ `merge_plan` の誤りは、目標の誤りと同じく直に `mztab_error` にする。
 
 `dataset_compare` の結果（`compare` の記録）は `select_results` が対比ごとに 2 群の形に広げる（対比が複数なら ID は `result_id#contrast_id`、交互作用は除く）。`merge_split` の検定のやり直しは、その結果の spec で `stats/data.py` `from_dataset()` → `merge_feature_columns()` → `spec_v2.run_spec_v2()` → `as_two_group()` を通す（`retest_merged`）。
 

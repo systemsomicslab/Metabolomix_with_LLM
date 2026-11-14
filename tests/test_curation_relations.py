@@ -544,3 +544,120 @@ def test_element_without_isotope_data_still_gates_the_halogen_explanations():
     assert rel["relation"] == "isotope_M+2" and rel["ambiguous"] is False
     assert rel["expected_ratio"] is None and rel["isotope_consistent"] is None
     assert rel["informational"] is False and rel["strong"] is False
+
+
+# ---------- 41K の M+2（K を持つイオン。最終検証 F30） ----------
+
+def test_resolved_41k_of_a_potassium_adduct_is_its_own_explanation():
+    """ヘキソース [M+K]+ の M+2 は 41K（K 1 個で 0.067302 / 0.932581 ≈ 0.0722）が主。窓が 13C2 との差（8.59 mDa）より
+    狭ければ 41K の行（`isotope_M+2_41K`）が 1 つだけ立ち、期待比はその窓に入る同位体だけ（以前は行が無く、説明が付かなかった）。"""
+    y = _ion_y("C6H12O6", "[M+K]+")
+    ion = {"C": 6, "H": 12, "O": 6, "K": 1}
+    assert _fine(ion, 2, 1.998119, 0.005) == pytest.approx(0.067302 / 0.932581, rel=0.01)
+    for tol in (0.003, 0.005, 0.008):
+        [rel] = _m2(y, 1.998119, 0.072, adducts=[], mz_tol=tol)
+        assert rel["relation"] == "isotope_M+2_41K" and rel["ambiguous"] is False
+        assert rel["dmz_mda"] == pytest.approx(0.0, abs=0.01)
+        assert rel["expected_ratio"] == pytest.approx(_fine(ion, 2, 1.998119, tol), abs=1e-4)
+        assert rel["isotope_consistent"] is True and rel["strong"] is True
+    # 既定の 10 mDa では 13C2 と分けられないので、13C2 の行（isotope_M+2）が 41K も含む（2 行で曖昧にしない）
+    [rel] = _m2(y, 1.998119, 0.072, adducts=[])
+    assert rel["relation"] == "isotope_M+2" and rel["ambiguous"] is False and rel["strong"] is True
+    assert rel["dmz_mda"] == pytest.approx(-8.59, abs=0.01)
+    assert rel["expected_ratio"] == pytest.approx(_fine(ion, 2, 1.998119, 0.010), abs=1e-4)
+
+
+def test_41k_needs_potassium_and_follows_the_charge():
+    # K を持たないイオン（[M+H]+）: 狭い窓で 41K の位置にある X は説明できない
+    assert _m2(_ion_y("C6H12O6", "[M+H]+"), 1.998119, 0.07, adducts=[], mz_tol=0.005) == []
+    # 2 価では 13C2 と 41K の差は 4.30 mDa。5 mDa の窓では分けられず 13C2 の行になる
+    y = _ion_y("C42H80NO8P", "[M+2K]2+")
+    [rel] = _m2(y, 1.998119 / 2, 0.2, adducts=[], mz_tol=0.005)
+    assert rel["relation"] == "isotope_M+2"
+    [rel] = _m2(y, 1.998119 / 2, 0.2, adducts=[], mz_tol=0.003)
+    assert rel["relation"] == "isotope_M+2_41K"
+
+
+# ---------- 分離できない M+2 の束と窓の幅（文書の条件を縛る。最終検証 F29） ----------
+
+def test_unresolved_bundle_is_compared_with_the_whole_bundle_only_when_the_window_covers_it():
+    """タウロコール酸 [M-H]- の束（重心 +2.0015）が束全体の和と比べられるのは、重心から 13C2（5.21 mDa）と
+    34S（5.70 mDa）の両方が窓に入るときだけ。その間の窓では近い 13C2 の 1 行だけに当たり、期待比が 34S を欠くので
+    Y 自身の束が別物質（informational）に見える。近い方より狭ければ 13C2 と 34S の行は出ず、重心から 18O（2.74 mDa）が
+    窓に入れば 18O の行だけが立ってやはり informational（curation.md の期待比の段落と ambiguous の段落）。"""
+    ion = {"C": 26, "H": 44, "N": 1, "O": 7, "S": 1}
+    y = _ion_y("C26H45NO7S", "[M-H]-")
+    total = _fine(ion, 2, 2.0, WIDE)
+    assert total == pytest.approx(_brute_ratios(ion)[1], rel=0.01)
+    assert _m2(y, 2.0015, total, adducts=[], mz_tol=0.0025) == []
+    [rel] = _m2(y, 2.0015, total, adducts=[], mz_tol=0.005)
+    assert rel["relation"] == "isotope_M+2_18O" and rel["ambiguous"] is False
+    assert rel["dmz_mda"] == pytest.approx((2.0015 - 2.00424499329) * 1000, abs=0.01)
+    assert rel["expected_ratio"] == pytest.approx(_fine(ion, 2, 2.0015, 0.005), abs=1e-4)
+    assert rel["informational"] is True and rel["strong"] is False
+    [rel] = _m2(y, 2.0015, total, adducts=[], mz_tol=0.0055)
+    assert rel["relation"] == "isotope_M+2" and rel["ambiguous"] is False
+    assert rel["expected_ratio"] == pytest.approx(_fine(ion, 2, 2.0015, 0.0055), abs=1e-4)
+    assert total > 1.5 * rel["expected_ratio"]
+    assert rel["informational"] is True and rel["strong"] is False
+    for tol in (0.006, 0.010):
+        found = {r["relation"]: r for r in _m2(y, 2.0015, total, adducts=[], mz_tol=tol)}
+        assert set(found) == {"isotope_M+2", "isotope_M+2_34S"}
+        assert all(r["ambiguous"] and r["isotope_consistent"] is True and not r["informational"]
+                   for r in found.values())
+    [wide] = [r for r in _m2(y, 2.0015, total, adducts=[]) if r["relation"] == "isotope_M+2"]
+    assert wide["expected_ratio"] == pytest.approx(total, abs=1e-4)
+
+
+# ---------- 13C2 に含める 18O・41K と窓の幅（レビュー V1） ----------
+
+def test_41k_peak_below_its_position_keeps_its_explanation_as_the_window_widens():
+    """PC 34:1 [M+K]+ の分離された 41K のピークが Δm/z −1.5 mDa で測られた。窓が 13C2 との差（8.59 mDa）以上でも、
+    X は 13C2 から 10.09 mDa で 13C2 の窓の外なので、41K の行が立つ（以前は 9・10 mDa で窓の幅だけで 41K の行を消し、
+    説明が付かなかった）。期待比は X の窓に入る同位体の和（独立の多項分布の計算と照らす）。"""
+    ion = {"C": 42, "H": 82, "N": 1, "O": 8, "P": 1, "K": 1}
+    y = _ion_y("C42H82NO8P", "[M+K]+")
+    delta = 1.9981187715 - 0.0015
+    for tol in (0.005, 0.008, 0.009, 0.010):
+        expected = _fine(ion, 2, delta, tol)
+        [rel] = _m2(y, delta, expected, adducts=[], mz_tol=tol)
+        assert rel["relation"] == "isotope_M+2_41K" and rel["ambiguous"] is False
+        assert rel["dmz_mda"] == pytest.approx(-1.5, abs=0.01)
+        assert rel["expected_ratio"] == pytest.approx(expected, abs=1e-4)
+        assert rel["isotope_consistent"] is True and rel["strong"] is True
+    # 窓 10 mDa で 41K の期待比は 41K と 18O（7.63 mDa）と 13C+15N などの和。13C2（10.09 mDa）は入らない
+    assert _fine(ion, 2, delta, 0.010) < _fine(ion, 2, delta, WIDE)
+    # X が 13C2 の窓にも入れば（Δm/z −1.0 mDa、13C2 から 9.59 mDa）、13C2 の行が 41K を含む（並べて曖昧にしない）
+    [rel] = _m2(y, 1.9981187715 - 0.0010, 0.19, adducts=[], mz_tol=0.010)
+    assert rel["relation"] == "isotope_M+2" and rel["ambiguous"] is False
+
+
+def test_18o_peak_keeps_its_explanation_when_13c2_is_outside_the_window():
+    """ヘキソース [M-H]- の 18O のピークが Δm/z −1.0 mDa（13C2 から 3.46 mDa）。2.46 mDa 以上の窓でも 13C2 の窓の外なら
+    18O の行が立つ（以前は 2.5・3 mDa で窓の幅だけで消え、2 mDa の窓より説明が減っていた）。"""
+    ion = {"C": 6, "H": 11, "O": 6}
+    y = _ion_y("C6H12O6", "[M-H]-")
+    delta = 2.00424499329 - 0.0010
+    for tol in (0.002, 0.0025, 0.003):
+        [rel] = _m2(y, delta, 0.0123, adducts=[], mz_tol=tol)
+        assert rel["relation"] == "isotope_M+2_18O" and rel["ambiguous"] is False
+        assert rel["expected_ratio"] == pytest.approx(_fine(ion, 2, delta, tol), abs=1e-4)
+        assert rel["expected_ratio"] == pytest.approx(6 * 0.00205 / 0.99757, rel=0.01)
+    [rel] = _m2(y, delta, 0.0123, adducts=[], mz_tol=0.004)              # 13C2 の窓にも入る
+    assert rel["relation"] == "isotope_M+2"
+
+
+def test_folded_isotope_stands_in_only_as_the_nearest_position():
+    """13C2 の窓の外で 18O・41K の行を出すのは、当たった M+2 の位置のうちいちばん近いときだけ。分離された 34S（既定の窓で
+    18O から 8.45 mDa）を遠い 18O と並べて ambiguous にしない。41K と 18O が両方当たれば近い 41K だけ。"""
+    [rel] = _m2(_ion_y("C26H45NO7S", "[M-H]-"), 1.995796, 0.045, adducts=[])
+    assert rel["relation"] == "isotope_M+2_34S" and rel["ambiguous"] is False and rel["strong"] is True
+    # K と S を持つイオンで X が 41K の 0.5 mDa 下、窓 9 mDa（13C2 から 9.09 mDa で窓の外）: 41K がいちばん近く、34S
+    # （1.82 mDa）も窓に入るので並べて ambiguous。18O（6.6 mDa）は近くないので出さない
+    y = _ion_y("C26H45NO7S", "[M+K]+")
+    found = {r["relation"]: r for r in _m2(y, 1.9981187715 - 0.0005, 0.12, adducts=[], mz_tol=0.009)}
+    assert set(found) == {"isotope_M+2_34S", "isotope_M+2_41K"}
+    assert all(r["ambiguous"] and not r["strong"] for r in found.values())
+    # 既定の 10 mDa では、13C2 の窓の外にある X には 34S がいつも 41K より近い（34S の行だけ。以前と同じ）
+    [rel] = _m2(y, 1.9981187715 - 0.0015, 0.05, adducts=[])
+    assert rel["relation"] == "isotope_M+2_34S"

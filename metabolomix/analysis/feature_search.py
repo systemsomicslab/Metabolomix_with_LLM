@@ -155,7 +155,12 @@ def _clean_tiers(target_id, tiers) -> list[list[str]]:
 
 
 def _species_target(target_id, raw: dict) -> dict | None:
-    """``lipid_species`` を種のレベルに直す。指定が無ければ None（InChIKey の目標）。"""
+    """``lipid_species`` を種のレベルに直す。指定が無ければ None（InChIKey の目標）。
+
+    同位体の標識のある名前（内部標準 ``PC 15:0_18:1(d7)``）は断る: SME・SML の候補の名前も標識付きは種に読まない
+    （``msms_rules.name_lipid_species``）ので種として一致を確かめられず、GOSLIN は標識を落として読む（PC 33:1）ので、
+    受けると天然の種を探して、内部標準そのものの同定を「SME・SML の裏付けが無い」と言ってしまう。"""
+    from metabolomix.analysis.msms_rules import isotope_labelled
     from metabolomix.msdial.lipid_identity import lipid_species_of, normalize_lipid_name
 
     value = raw.get("lipid_species")
@@ -164,6 +169,13 @@ def _species_target(target_id, raw: dict) -> dict | None:
     if raw.get("inchikey") is not None:
         raise _invalid(target_id, "lipid_species",
                        "inchikey と lipid_species は同時に指定できない（どちらか一方）")
+    if isotope_labelled(value):
+        raise _invalid(
+            target_id, "lipid_species",
+            f"lipid_species に同位体の標識（内部標準）がある: {value!r}。SME・SML の候補の名前も標識付きは種に"
+            "読まない（MS/MS の合否と同じ）ので種として一致を確かめられず、標識を外して読むと天然の種を探してしまう。"
+            "天然の種を探すなら標識の無い名前を渡す。内部標準そのものは m/z と RT の窓"
+            "（dataset_feature_search の窓検索）で探す")
     species = lipid_species_of(value) if isinstance(value, str) else None
     if species is None:
         raise _invalid(
@@ -427,15 +439,20 @@ def _identity(candidates, annotation, *, inchikey_block: str | None = None,
     識別子を借りて一致してしまう（spec §2）。
 
     ``lipid_species`` を渡すと（種の目標）、識別子は InChIKey の先頭ブロックではなく
-    候補自身の ``chemical_name``（SML なら ``name``）を種のレベルに読んだもの。読めない
+    候補自身の ``chemical_name``（SML なら ``name``）を種のレベルに読んだもの。読み方は MS/MS の
+    合否（ライブラリの記録の種）と同じ ``msms_rules.name_lipid_species``（名前 → 注記を外した名前。
+    `PE 36:2;O (oxPE)` は `PE 36:2;O`。同位体の標識のある内部標準の名前は読まない）。読めない
     名前は InChIKey の無い候補と同じく評価できないものとして飛ばす。
     """
     if (inchikey_block is None) == (lipid_species is None):
         raise ValueError("inchikey_block と lipid_species のどちらか一方を渡す")
     if lipid_species is not None:
-        from metabolomix.msdial.lipid_identity import lipid_species_of
+        from metabolomix.analysis.msms_rules import name_lipid_species
 
-        wanted, key_of, name_key = lipid_species, lipid_species_of, "chemical_name"
+        def key_of(name):
+            return name_lipid_species(name)[0]
+
+        wanted, name_key = lipid_species, "chemical_name"
     else:
         wanted, key_of, name_key = inchikey_block, _key_block, "inchikey"
     parsed = parse_adduct(adduct)

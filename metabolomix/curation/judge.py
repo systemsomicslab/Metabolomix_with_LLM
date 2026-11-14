@@ -14,6 +14,8 @@ from __future__ import annotations
 import math
 import re
 
+from metabolomix.msdial.adducts import same_adduct
+
 DEFAULT_THRESHOLDS: dict[str, float] = {
     "ppm_pass": 5.0, "ppm_borderline": 10.0, "dmz_fail_mda": 10.0,
     "drt_pass": 0.5, "drt_borderline": 1.0,
@@ -230,7 +232,8 @@ def auto_note(spot: dict, th: dict) -> str | None:
 def judge_spot(ev: dict, trend_entry: dict | None, th: dict, *, lipid_rules: bool = False) -> dict:
     info: list[str] = list(ev.get("notes") or [])
     ref_adduct = ev.get("reference_adduct")
-    if ref_adduct and ev.get("adduct") and ref_adduct != ev.get("adduct"):
+    # 綴りでなく組成で比べる（MS-DIAL の `[M+HCOO]-` と参照の `[M+FA-H]-`・`[M+CHO2]-` は同じイオン）
+    if ref_adduct and ev.get("adduct") and not same_adduct(ref_adduct, ev.get("adduct")):
         info.append("adduct_differs_from_reference")
     checks = {"msms": _msms(ev, info, th, lipid_rules), "mz": _mz(ev, th), "rt": _rt(ev, info, th),
               "eic": _eic(ev, th), "ion": _ion(ev), "trend": _trend(trend_entry, info)}

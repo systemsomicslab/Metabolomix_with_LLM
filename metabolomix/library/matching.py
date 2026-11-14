@@ -184,13 +184,13 @@ def _clean_name(name) -> str | None:
 def _same_compound(record: dict, annotation: dict) -> bool:
     """ライブラリの記録が MS-DIAL の注釈と同じ物質か。InChIKey の先頭ブロック（両方にあれば）→
     脂質の種（両方が読めれば）→ 名前（限定子を外し大小を問わない）の順に比べる。"""
-    from metabolomix.analysis.msms_rules import record_lipid_species
+    from metabolomix.analysis.msms_rules import name_lipid_species, record_lipid_species
 
     a, b = _key_block(record.get("inchikey")), _key_block(annotation.get("inchikey"))
     if a and b:
         return a == b
     species_a = record_lipid_species(record)[0]
-    species_b = record_lipid_species({"name": annotation.get("name")})[0]
+    species_b = name_lipid_species(annotation.get("name"))[0]
     if species_a and species_b:
         return species_a == species_b
     name_a, name_b = _clean_name(record.get("name")), _clean_name(annotation.get("name"))

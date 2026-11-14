@@ -63,6 +63,30 @@ def test_species_from_names():
     assert H.species_of("Glucose") is None
 
 
+@pytest.mark.parametrize("name, species", [
+    ("PC 34:1; ExampleDB ID-0001", ("PC", 34, 1)),        # MSP の記録名（注記付き）がそのまま SME の名前になる
+    ("PE 36:2;O (oxPE)", ("PE", 36, 2)),
+    ("Phosphatidylcholine 16:0-18:1", ("PC", 34, 1)),
+    ("SM d18:1/16:0", ("SM", 34, 1)),
+    ("PE P-38:4", ("PE O-", 38, 5)),                      # GOSLIN の種のレベル: P- は O- に直る
+    ("PE P-18:0_20:4", ("PE O-", 38, 5)),                 # 分子種でも種のレベルと同じ（以前は PE P- 38:4 で別の列）
+    ("PC 15:0_18:1(d7)", None),                           # 同位体の標識のある内部標準は読まない
+])
+def test_species_are_read_like_the_scan_and_the_msms_side(name, species):
+    """同族列の名前は、目標照合の種の目標・MS/MS の合否と同じ読み手（`msms_rules.name_lipid_species`）で読む
+    （レビュー V2）。種の文字列を独立に（GOSLIN の種のレベルの鎖の和として）確かめる。"""
+    from metabolomix.analysis.msms_rules import name_lipid_species
+
+    assert H.species_of(name) == species
+    read, _route = name_lipid_species(name)
+    if species is None:
+        assert read is None
+    else:
+        head = species[0].replace(" O-", "")
+        ether = "O-" if species[0].endswith(" O-") else ""
+        assert read.split(";")[0] == f"{head} {ether}{species[1]}:{species[2]}"
+
+
 def test_members_from_names_filters_class_and_adduct():
     features = [
         {"feature_id": "1", "names": {"sme": "PC 34:1"}, "adduct": "[M+H]+"},
@@ -74,3 +98,30 @@ def test_members_from_names_filters_class_and_adduct():
     assert [m["feature_id"] for m in H.members_from_names(features, auto)] == ["1"]
     auto = {"lipid_class": "PC", "evidence": ["sme", "sml"], "adduct": None}
     assert [m["feature_id"] for m in H.members_from_names(features, auto)] == ["1", "3", "4"]
+
+
+# ---------- 付加体は組成で比べ、空の列は pass にしない（最終検証 F26） ----------
+
+@pytest.mark.parametrize("feature_adduct, wanted", [
+    ("[M+H]1+", "[M+H]+"), ("[M+H]+", "[M+H]1+"), ("[M+HCOO]1-", "[M+FA-H]-"), ("[M+CHO2]-", "[M+HCOO]-"),
+])
+def test_members_from_names_compares_adducts_by_composition(feature_adduct, wanted):
+    features = [{"feature_id": "1", "names": {"sme": "PC 34:1"}, "adduct": feature_adduct},
+                {"feature_id": "2", "names": {"sme": "PC 36:1"}, "adduct": "[M+Na]1+"}]
+    auto = {"lipid_class": "PC", "evidence": ["sme"], "adduct": wanted}
+    assert [m["feature_id"] for m in H.members_from_names(features, auto)] == ["1"]
+
+
+def test_nothing_to_compare_is_not_evaluable_not_pass():
+    assert H.check([], {}, RULE)["verdict"] == "not_evaluable"
+    one = H.check(_members(("a", 34, 1)), {"a": 7.0}, RULE)
+    assert one["verdict"] == "not_evaluable" and one["n_pairs"] == 0
+    # 隣どうしにならない 2 種（炭素数も二重結合数も違う）・RT の無い種も比べられない
+    apart = H.check(_members(("a", 34, 1), ("b", 36, 2)), {"a": 8.0, "b": 7.0}, RULE)
+    assert apart["verdict"] == "not_evaluable" and apart["n_pairs"] == 0
+    no_rt = H.check(_members(("a", 34, 1), ("b", 36, 1)), {"a": 8.0}, RULE)
+    assert no_rt["verdict"] == "not_evaluable"
+    # 比べた対があれば従来どおり（34:1–36:1・36:1–38:1・36:1–36:2 の 3 対）
+    out = H.check(_members(("a", 34, 1), ("b", 36, 1), ("c", 38, 1), ("d", 36, 2)),
+                  {"a": 7.0, "b": 8.0, "c": 9.0, "d": 7.5}, RULE)
+    assert out["verdict"] == "pass" and out["n_pairs"] == 3

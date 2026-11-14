@@ -134,7 +134,7 @@ function candidateLabel(c) {
   const species = c.name && c.sum_name && c.name !== c.sum_name ? `（${c.name}）` : "";
   return `${base}${species} ${c.adduct || ""}`.trim();
 }
-// 関係の見出し。M+2 の候補が重なる（13C2・18O・34S・37Cl・81Br のどれか決まらない）行は、そう書いて断定に見せない。
+// 関係の見出し。M+2 の候補が重なる（13C2・18O・34S・37Cl・81Br・41K のどれか決まらない）行は、そう書いて断定に見せない。
 function relationLabel(r) {
   return `#${r.of}（${r.of_name || "?"}）の別イオン: ${r.relation}` +
     (r.ambiguous ? "（M+2 の候補が重なる）" : "") + (r.informational ? "（情報のみ）" : "");
