@@ -128,6 +128,14 @@ def dataset_preprocess(
     （pathway_project）はこの ID を受ける（省略時は、このハンドルで最後に作ったこの行列。無ければ既定の設定）。
     `dataset_exclude` の除外は自動で反映される。
     `reports/stats/` に記録を 1 件追記する（書けないときは record.written=false。前処理は成功）。
+    陽陰を統合したデータセット（dataset_merge_polarities）は、ドリフト補正をその極性の注入順・バッチで、
+    正規化の係数をその極性の特徴だけから、極性ごとに当てる（各極性の値は、その極性だけを前処理して並べたものと
+    同じ）。段の `by_polarity` に極性ごとの記録（ドリフトの段は一部の極性だけ補正すれば status=partial）、
+    陽陰で注入順・バッチが違えば warnings の `polarity_runs_differ`（注意の文面に、その極性の注入順・バッチを入れ直す
+    手順: 陽イオンは統合したハンドルへのシート、陰イオンは陰イオンのハンドルへのシートと統合のし直し）。
+    ある極性だけ normalization_features / normalization_exclude_features で係数の特徴が残らなければ断らず、
+    その極性は残った特徴すべてから求めて注意（`normalization_features_not_in_polarity` /
+    `normalization_exclude_features_cover_polarity`）を返す。
 
     drift_mode: QC の LOESS ドリフト補正。"auto"（既定。条件が揃えば行う）/ "on" / "off"。
         auto は条件が揃っても、内部標準などで換算済みのとき・注入順が MS-DIAL の既定（ファイルの順）

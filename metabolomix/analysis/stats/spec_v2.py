@@ -325,7 +325,10 @@ def _sample_table_hash(study) -> str:
              "injection_order": s.injection_order, "subject_id": s.subject_id,
              "include": s.include, "attributes": dict(sorted(s.attributes.items()))}
             for s in study.samples]
-    return canonical_hash(rows)
+    if not study.polarity_runs:
+        return canonical_hash(rows)
+    # 陽陰を統合したデータセットは、陰イオンの測定（バッチ・注入順）も入力（前処理が極性ごとに読む）
+    return canonical_hash({"samples": rows, "polarity_runs": study.polarity_runs})
 
 
 def _study_of(normalized: dict, source) -> StudyData:

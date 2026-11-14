@@ -165,7 +165,8 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     出し直せる自己完結の実行で、除外は `input.exclude_samples` / `exclude_features` と
     `group_overrides` に書いたものだけを使う（`dataset_exclude` の除外は読まない。spec に無い除外が
     あれば注意 `dataset_exclusions_not_in_spec` を返す）。前処理は確認を求めない（`drift.mode="auto"` が
-    補正を当てなかったときは前処理の段と warnings の `drift_not_applied_by_default` に理由と呼び直し方）。状態も記録も書かない。
+    補正を当てなかったときは前処理の段と warnings の `drift_not_applied_by_default` に理由と呼び直し方）。陽陰を
+    統合したデータセットはドリフト補正と正規化を極性ごとに当てる（dataset_preprocess と同じ）。状態も記録も書かない。
     書いても効かない設定（`bh_population` が reported でない解析の `reported_feature_ids`・
     `normalize.method="none"` の `features` / `exclude_features`・`drift.mode="off"` の `loess_degree`）は
     誤りにせず捨てて `notes` に書き、上限（10000）を超える plsda の `n_permutations` は上限に下げて `notes` に書く
@@ -179,7 +180,9 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     spec の形と欄の意味は `lipidmix://docs/output-format/reanalysis` §2。要点:
     `comparison`（`reference` / `test` の群の名前。比較名は `<test>_vs_<ref>`）、
     `analyses`（名前つきの解析を並べる——感度解析は 1 つの spec に並べる。各解析は
-    `matrix`（matrix-recipe.v2: 段の順序・検出率・KNN・PQN・LOESS・RSD）と
+    `matrix`（matrix-recipe.v2: 段の順序・検出率・KNN・PQN・LOESS・RSD。統合したデータセットの正規化の
+    係数は極性ごと、drift_correct は極性ごとの注入順: injection_order.source=metadata は陽イオンが試料の表、
+    陰イオンが統合の残した陰イオンの測定。TSV の 1 つの注入順は全極性に当て、陰イオンの測定と違えば notes）と
     `test`（`student` / `welch` / `mannwhitney` / `ols`）・`fold_change`・`correction`・
     `bh_population`・`thresholds`）、入力は `input`（データセットか外部の行列: TSV・MetaboLights の
     MAF・mwTab・xlsx）、群は `groups`（実験情報シートか TSV）、`covariates`（OLS の共変量の TSV）、
@@ -221,7 +224,7 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
                                       and "select" in (normalized["aggregate"] or {}))
         if error:
             return error
-        result = analysis_spec.run_spec(normalized, ds)
+        result = analysis_spec.run_spec(normalized, ds, notes=notes)
         if notes:
             result["notes"] = list(notes)
         written = write_result(output_path, result) if output_path else None
@@ -1053,7 +1056,9 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
             stats_rows, merge = _novel_result_stats(ds, result, source,
                                                     dataset_hash=dataset_hash)
         else:
-            run = analysis_spec.run_spec(source["analysis_spec"], ds)
+            run_notes: list[str] = []
+            run = analysis_spec.run_spec(source["analysis_spec"], ds, notes=run_notes)
+            notes += [f"statistics.analysis_spec: {n}" for n in run_notes]
             analysis = next(a for a in run["analyses"] if a["analysis_id"] == source["analysis_id"])
             group_ref, group_test = run["group_ref"], run["group_test"]
             stats_rows = {row["feature_id"]: row for row in analysis["rows"]

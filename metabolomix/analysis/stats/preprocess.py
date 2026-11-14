@@ -3,6 +3,11 @@
 各段は `steps` に順に記録する（`{"step", "status": "applied"|"skipped", "reason"?, ...}`）。
 0 以下・非有限は欠測で、pseudocount も clip も使わない。補完は `impute_for_pca` だけが行う。
 MCP・セッションには依存しない。
+
+陽陰を統合したデータセット（`StudyData.feature_polarity` がある）は、ドリフト補正と正規化を**極性ごと**に
+当てる: 陽イオンと陰イオンは別の注入・別の測定の列なので、ドリフトはその極性の注入順・バッチで当てはめ、
+正規化の係数はその極性の特徴だけから求めてその極性の列だけを割る（各極性の値は、その極性だけを前処理して
+並べたものと同じ）。足切り・log2・反復のまとめは特徴ごと・セルごとの計算なので塊に分けなくても同じ。
 """
 from __future__ import annotations
 
@@ -14,8 +19,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from metabolomix.analysis.stats.data import (DETECTED, QuantState, StudyData, cell_states,
-                                             replicate_name_warnings)
+from metabolomix.analysis.stats.data import (DETECTED, SAMPLE_TABLE_POLARITY, QuantState, StudyData,
+                                             cell_states, polarity_samples, replicate_name_warnings)
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 PREPROCESS_DEFAULTS = {
@@ -39,6 +44,10 @@ _ENUMS = {("drift", "mode"): ("auto", "on", "off"),
 _NULLABLE = {("filters", name) for name in PREPROCESS_DEFAULTS["filters"]}
 _ROLES = ("sample", "qc", "blank")
 _NO_BATCH = "(none)"
+#: 統合したデータセットで極性の分からない特徴の塊（`feature_polarity` に無い特徴。通常は無い）。
+_UNKNOWN_POLARITY = "(unknown)"
+#: 注意に挙げる試料の数の上限。
+_MAX_LISTED = 20
 
 
 def _invalid(message: str, path: tuple, value=None) -> DomainError:
@@ -251,6 +260,101 @@ def _matrix_id(study: StudyData, config: dict, normalize_method: str, extras: di
     if extras:
         body["extras"] = extras
     return "mx_" + canonical_hash(body)[:16]
+
+
+# --- 統合したデータセットの極性の塊 -----------------------------------------
+
+def _feature_labels(study: StudyData) -> list[str]:
+    return [study.feature_polarity.get(f, _UNKNOWN_POLARITY) for f in study.feature_ids]
+
+
+def _polarity_blocks(study: StudyData, keep_rows: list[int]):
+    """統合したデータセットなら `[(極性, 列の位置, 選んだ行のその極性の測定としての試料)]`（特徴の順に
+    出てきた極性の順）。統合でなければ None（全特徴を 1 つの塊として扱う従来の前処理）。"""
+    if not study.feature_polarity:
+        return None
+    labels = _feature_labels(study)
+    out = []
+    for label in dict.fromkeys(labels):
+        cols = np.array([j for j, lab in enumerate(labels) if lab == label], dtype=int)
+        table = polarity_samples(study, label)
+        out.append((label, cols, [table[i] for i in keep_rows]))
+    return out
+
+
+def _polarity_fingerprint(study: StudyData) -> dict:
+    """matrix_id に入れる極性の塊（特徴の分け方と、極性ごとの測定のバッチ・注入順）。"""
+    labels = _feature_labels(study)
+    out = {}
+    for label in dict.fromkeys(labels):
+        runs = [[s.sample_id, s.batch, s.injection_order, s.injection_order_source,
+                 bool(s.injection_order_may_be_file_order)] for s in polarity_samples(study, label)]
+        out[label] = {"features": canonical_hash([f for f, lab in zip(study.feature_ids, labels)
+                                                  if lab == label]),
+                      "runs": canonical_hash(runs)}
+    return out
+
+
+def _for_polarity(exc: DomainError, polarity: str) -> DomainError:
+    """極性の塊の前処理で出た誤りに、どの極性かを足す。"""
+    return DomainError(exc.code, f"{polarity}: {exc.message}",
+                       {**(exc.details or {}), "polarity": polarity})
+
+
+def run_remedy(polarity: str) -> str:
+    """統合したデータセットで、その極性の測定（バッチ・注入順）を入れ直す手順（注意の文面に添える）。
+
+    統合したハンドルへ当てるシートは陽イオンの raw を挙げるので、陽イオンの測定だけを決める。ほかの極性の
+    測定は統合が残した値（`quant_state.polarity_runs`）なので、その極性のハンドルにシートを当てて統合し直す。
+    """
+    if polarity == SAMPLE_TABLE_POLARITY:
+        return (f"{polarity} の実際のバッチ・注入順は、統合したハンドルに dataset_set_sample_metadata（{polarity} の"
+                f" raw を挙げたシート）で入れる（統合の前に {polarity} のハンドルへ当てたシートも統合が引き継ぐ）。")
+    return (f"{polarity} の実際のバッチ・注入順は、{polarity} のハンドルに dataset_set_sample_metadata（{polarity} の"
+            f" raw を挙げたシート）で入れてから dataset_merge_polarities で統合し直す（統合したハンドルへのシートは"
+            f" {SAMPLE_TABLE_POLARITY} の raw を挙げるので、{polarity} の測定は変わらない）。")
+
+
+def _merged_run_warnings(study: StudyData, blocks, samples) -> list[dict]:
+    """統合したデータセットの測定の注意: 極性ごとの注入順がファイルの順かもしれない・陽陰で注入順やバッチが違う。
+    文面には、その極性の測定を入れ直す手順（`run_remedy`）を添える。"""
+    from metabolomix.analysis.sample_manifest import file_order_warning
+    notes = []
+    for label, _cols, table in blocks:
+        flagged = [s for s in table if s.role in ("sample", "qc") and s.injection_order_may_be_file_order]
+        if flagged:
+            notes.append({**file_order_warning(len(flagged)), "polarity": label,
+                          "message": f"{label} の注入順は MS-DIAL が振った値（.mddata / mzTab-M の MS:4000089）で、"
+                                     "ファイル名の順と一致する。MS-DIAL は利用者が入れない限り注入順をファイルの順で"
+                                     "振るので、実際の測定順とは限らない。" + run_remedy(label)})
+    for label, _cols, table in blocks:
+        if label not in study.polarity_runs:
+            continue
+        pairs = [(own, base) for own, base in zip(table, samples) if base.role in ("sample", "qc")]
+        order_diff = [b.sample_id for o, b in pairs if o.injection_order is not None
+                      and b.injection_order is not None and o.injection_order != b.injection_order]
+        order_unknown = [b.sample_id for o, b in pairs
+                         if (o.injection_order is None) != (b.injection_order is None)]
+        batch_diff = [b.sample_id for o, b in pairs if o.batch != b.batch]
+        if not (order_diff or order_unknown or batch_diff):
+            continue
+        listed = list(dict.fromkeys(order_diff + order_unknown + batch_diff))
+        unrecorded = all(run is None for run in study.polarity_runs[label])
+        notes.append({
+            "code": "polarity_runs_differ", "polarity": label,
+            "reference_polarity": SAMPLE_TABLE_POLARITY,
+            "n_injection_order_differs": len(order_diff),
+            "n_injection_order_unknown": len(order_unknown), "n_batch_differs": len(batch_diff),
+            **({"runs_recorded": False} if unrecorded else {}),
+            "samples": listed[:_MAX_LISTED], "samples_n_more": max(0, len(listed) - _MAX_LISTED),
+            "message": f"{SAMPLE_TABLE_POLARITY} と {label} で注入順（またはバッチ）が違う・片方だけ分からない試料がある"
+                       "（陽陰は別の注入・別の測定の列）。ドリフト補正は極性ごとに、その極性の注入順とバッチで当てた"
+                       "（注入順の分からない極性には当てない）。交絡の判定・比較の共変量 batch・反復のまとめは、"
+                       f"統合したデータセットの試料の表（{SAMPLE_TABLE_POLARITY} の測定）を使う。"
+                       + (f"{label} の測定は統合が残していない（測定を残す前の版の統合）。"
+                          "dataset_merge_polarities で統合し直すと残る。" if unrecorded else
+                          f"{label} の測定が実際と違えば（注入順が MS-DIAL の既定のままなど）、" + run_remedy(label))})
+    return notes
 
 
 # --- 1. 選択 -----------------------------------------------------------------
@@ -486,6 +590,66 @@ def _drift_hold_warning(step: dict) -> dict | None:
             "suggestion": dict(step["rerun_with"])}
 
 
+def _drift_blocks(values: np.ndarray, blocks, cfg: dict, quant) -> dict:
+    """統合したデータセットのドリフト補正: 極性ごとに、その極性の測定の注入順・バッチで `_drift_step` を当てる
+    （その極性だけを前処理したときと同じ）。
+
+    段の `status` は全極性で当てたら `applied`、一部なら `partial`、どれにも当てなければ `skipped`。
+    `reasons` は当てなかった極性の理由（重ねない）、`by_polarity` に極性ごとの段。`rerun_with` は、当てなかった
+    極性がすべて drift=auto の保留（drift=on なら当たる）のときだけ。drift=on で条件を満たさない極性があれば、
+    極性を添えて PREPROCESS_PRECONDITION。
+    """
+    if cfg["mode"] == "off":
+        return {"step": "drift", "status": "skipped", "reason": "mode_off"}
+    by = {}
+    for label, cols, samples in blocks:
+        sub = np.array(values[:, cols], copy=True)
+        try:
+            step = _drift_step(sub, samples, cfg, quant)
+        except DomainError as exc:
+            raise _for_polarity(exc, label) from None
+        values[:, cols] = sub
+        by[label] = {k: v for k, v in step.items() if k != "step"}
+    applied = [p for p, st in by.items() if st["status"] == "applied"]
+    skipped = [p for p, st in by.items() if st["status"] != "applied"]
+    out = {"step": "drift",
+           "status": "applied" if not skipped else ("partial" if applied else "skipped")}
+    if skipped:
+        reasons = list(dict.fromkeys(r for p in skipped
+                                     for r in (by[p].get("reasons") or [by[p]["reason"]])))
+        out.update(reason=reasons[0], reasons=reasons, polarities_skipped=skipped)
+        if all(by[p].get("rerun_with") for p in skipped):
+            out["rerun_with"] = {"preprocess.drift.mode": "on"}
+    out["by_polarity"] = by
+    return out
+
+
+def _drift_hold_warning_blocks(step: dict) -> dict | None:
+    """統合したデータセットで drift=auto が補正を止めた極性があるときの注意（極性ごとの理由つき）。"""
+    by = step.get("by_polarity") or {}
+    held = {p: list(st.get("reasons") or []) for p, st in by.items() if st.get("rerun_with")}
+    if not held:
+        return None
+    why = "。".join(f"{p}: " + "。".join(_AUTO_HOLD_MESSAGES[r] for r in rs if r in _AUTO_HOLD_MESSAGES)
+                   for p, rs in held.items())
+    warn = {"code": "drift_not_applied_by_default",
+            "reasons": list(dict.fromkeys(r for rs in held.values() for r in rs)), "polarities": held}
+    head = f"ドリフト補正は条件を満たすが、既定（drift=auto）では当てなかった極性がある（{why}）。"
+    unsure = [p for p, rs in held.items() if "injection_order_may_be_file_order" in rs]
+    if unsure:
+        # drift=on は確かでない注入順のまま当てはめる。実際の順を入れる手順を先に示す
+        head += ("drift_mode=\"on\" は、注入順が確かでない極性（" + ", ".join(unsure) + "）をその注入順のまま"
+                 "当てはめる。実際の順で補正するなら先に入れる: " + "".join(run_remedy(p) for p in unsure))
+    if step.get("rerun_with"):
+        warn["message"] = head + "補正するなら drift_mode=\"on\" で呼び直す。"
+        warn["suggestion"] = dict(step["rerun_with"])
+    else:
+        other = [p for p, st in by.items() if p not in held and st["status"] != "applied"]
+        warn["message"] = (head + f"ほかの極性（{', '.join(other)}）は補正の条件を満たさないので、"
+                           "drift_mode=\"on\" では PREPROCESS_PRECONDITION になる。")
+    return warn
+
+
 # --- 3. 品質の足切り ---------------------------------------------------------
 
 def _sd_mean(block: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -618,6 +782,119 @@ def _factor_columns(cfg, kept_ids: list[str], all_ids: list[str],
     return all_values[:, [position[f] for f in use]], record
 
 
+def _resolved_method(cfg: dict, quant) -> str:
+    """正規化の方法（auto は換算済みなら none、それ以外は pqn）。"""
+    requested = cfg["method"]
+    if requested == "auto":
+        return "none" if (quant is not None and quant.normalized) else "pqn"
+    return requested
+
+
+#: 極性の塊で係数の特徴の指定が効かず、その極性の残った特徴すべてから係数を求めた理由。
+_FALLBACK_NO_LISTED = "no_listed_feature_in_polarity"
+_FALLBACK_ALL_EXCLUDED = "all_factor_features_excluded_in_polarity"
+
+
+def _block_factor_config(cfg: dict, block_ids: set, kept_block_ids: list[str]) -> tuple[dict, str | None]:
+    """極性の塊の正規化の設定: 係数の特徴の指定をその極性の特徴に絞る。
+
+    その極性で係数を求める特徴が残らないときは、その極性は指定なし（足切りの後に残ったその極性の特徴すべて）に
+    戻し、理由を返す: `features` にその極性の特徴が 1 つも無い（`no_listed_feature_in_polarity`）、
+    `exclude_features` がその極性の係数の特徴をすべて外す（`all_factor_features_excluded_in_polarity`）。
+    指定全体が空になる（どの極性にも残らない）ときは、呼び出し側が極性に分ける前に PREPROCESS_CONFIG_INVALID で止める。
+    """
+    sub = {k: v for k, v in cfg.items() if k not in ("features", "exclude_features")}
+    fallback = None
+    chosen, excluded = cfg.get("features"), cfg.get("exclude_features")
+    if chosen is not None:
+        mine = [f for f in chosen if f in block_ids]
+        if mine:
+            sub["features"] = mine
+        else:
+            fallback = _FALLBACK_NO_LISTED
+    if excluded is not None:
+        mine = [f for f in excluded if f in block_ids]
+        if mine:
+            sub["exclude_features"] = mine
+    drop = set(sub.get("exclude_features") or ())
+    if not [f for f in sub.get("features", kept_block_ids) if f not in drop]:
+        # 除外がその極性の係数の特徴を空にした（features が効かなかった極性でも、除外を当てないのはここ）
+        sub.pop("features", None)
+        sub.pop("exclude_features", None)
+        fallback = _FALLBACK_ALL_EXCLUDED
+    return sub, fallback
+
+
+def _normalize_blocks(values, samples, cfg, quant, blocks, kept_ids, kept_cols, all_ids,
+                      drifted) -> tuple[np.ndarray, dict, list[dict]]:
+    """統合したデータセットの正規化: 係数を極性ごとに、その極性の特徴だけから求め、その極性の列だけを割る
+    （陽イオンの強度が陰イオンの係数を決めない）。各極性の値・係数は、その極性だけを前処理したときと同じ。
+
+    段の上には方法・参照と試料の並び、`by_polarity` に極性ごとの係数（`factors`・`factors_set_to_one`・
+    `unscaled_samples`・係数の特徴の記録）。正規化しない（none）ときは従来の段と同じ。
+    """
+    factor_values, factor_record = _factor_columns(cfg, kept_ids, all_ids, drifted)  # 無い ID・空の指定を先に
+    if _resolved_method(cfg, quant) == "none":
+        out, step = _normalize_step(values, samples, cfg, quant, factor_values=factor_values,
+                                    factor_record=factor_record)
+        return out, step, []
+    out = np.array(values, copy=True)
+    position = {int(j): k for k, j in enumerate(kept_cols)}
+    by, fell_back, first = {}, {}, None
+    for label, cols, _table in blocks:
+        kept_pos = [position[int(j)] for j in cols if int(j) in position]
+        if not kept_pos:
+            by[label] = {"status": "skipped", "reason": "no_features"}
+            continue
+        block_ids = [all_ids[j] for j in cols]
+        kept_block = [kept_ids[k] for k in kept_pos]
+        sub_cfg, fell = _block_factor_config(cfg, set(block_ids), kept_block)
+        if fell:
+            fell_back.setdefault(fell, []).append(label)
+        try:
+            fv, frec = _factor_columns(sub_cfg, kept_block, block_ids, drifted[:, cols])
+        except DomainError as exc:
+            raise _for_polarity(exc, label) from None
+        if fell and not frec:
+            # 指定がこの極性に効かず、係数は残ったこの極性の特徴すべてから（記録の形は指定ありと揃える）
+            frec = {"factor_features": len(kept_pos), "factor_feature_basis": "kept_features"}
+        if fell:
+            frec = {**frec, "factor_features_fallback": fell}
+        sub, step = _normalize_step(values[:, kept_pos], samples, sub_cfg, quant,
+                                    factor_values=fv, factor_record=frec)
+        out[:, kept_pos] = sub
+        first = first or step
+        by[label] = {k: v for k, v in step.items()
+                     if k not in ("step", "requested", "method", "factor_samples", "reference",
+                                  "reference_definition")}
+    applied = [st for st in by.values() if st.get("status") == "applied"]
+    step = {"step": "normalize", "status": "applied" if applied else "skipped",
+            "requested": cfg["method"], "method": _resolved_method(cfg, quant),
+            "factor_samples": [s.sample_id for s in samples],
+            "factors_set_to_one": sum(st.get("factors_set_to_one", 0) for st in applied)}
+    if not applied:
+        step["reason"] = "no_features"
+    for key in ("reference", "reference_definition"):
+        if first is not None and key in first:
+            step[key] = first[key]
+    step["by_polarity"] = by
+    notes = []
+    if _FALLBACK_NO_LISTED in fell_back:
+        notes.append({"code": "normalization_features_not_in_polarity",
+                      "polarities": fell_back[_FALLBACK_NO_LISTED],
+                      "message": "normalization_features にこの極性の特徴が無いので、その極性の正規化の係数は"
+                                 "足切りの後に残ったその極性の特徴すべてから求めた（統合したデータセットは係数を"
+                                 "極性ごとに求める。絞るなら各極性の特徴 ID を挙げる）。"})
+    if _FALLBACK_ALL_EXCLUDED in fell_back:
+        notes.append({"code": "normalization_exclude_features_cover_polarity",
+                      "polarities": fell_back[_FALLBACK_ALL_EXCLUDED],
+                      "message": "normalization_exclude_features（と normalization_features）でこの極性の係数の特徴が"
+                                 "1 つも残らないので、その極性の正規化の係数は足切りの後に残ったその極性の特徴すべてから"
+                                 "求めた（この極性には除外を当てていない。統合したデータセットは係数を極性ごとに、その極性の"
+                                 "特徴だけから求めるので、ほかの極性の特徴では割らない）。"})
+    return out, step, notes
+
+
 def _normalize_step(values, samples, cfg, quant, factor_values=None,
                     factor_record=None) -> tuple[np.ndarray, dict]:
     """係数は残った特徴（values の列）だけ・生体＋QC の行から。recipe_matrix._normalize を使う。
@@ -627,9 +904,7 @@ def _normalize_step(values, samples, cfg, quant, factor_values=None,
     from metabolomix.analysis.recipe_matrix import _normalize
 
     requested = cfg["method"]
-    method = requested
-    if requested == "auto":
-        method = "none" if (quant is not None and quant.normalized) else "pqn"
+    method = _resolved_method(cfg, quant)
     if method == "none":
         step = {"step": "normalize", "status": "skipped", "requested": requested, "method": "none",
                 "reason": "quant_normalized" if requested == "auto" else "method_none"}
@@ -844,15 +1119,28 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix:
     detected = None if study.detected is None else np.asarray(study.detected, bool)[keep_rows]
 
     notes = list(config_notes)     # 効かない引数を捨てた注記（normalize_preprocess_config）
-    flagged = [s for s in samples if s.role in ("sample", "qc") and s.injection_order_may_be_file_order]
-    if flagged:
-        notes.append(file_order_warning(len(flagged)))
-    step = _drift_step(values, samples, cfg["drift"], study.quant)
-    steps.append(step)
-    hold = _drift_hold_warning(step)
-    if hold is not None:
-        notes.append(hold)
-    extras = {"drift_held": step["reasons"]} if hold is not None else None
+    blocks = _polarity_blocks(study, keep_rows)
+    if blocks is None:
+        flagged = [s for s in samples if s.role in ("sample", "qc") and s.injection_order_may_be_file_order]
+        if flagged:
+            notes.append(file_order_warning(len(flagged)))
+        step = _drift_step(values, samples, cfg["drift"], study.quant)
+        steps.append(step)
+        hold = _drift_hold_warning(step)
+        if hold is not None:
+            notes.append(hold)
+        extras = {"drift_held": step["reasons"]} if hold is not None else None
+    else:
+        # 統合したデータセット: 極性ごとの測定で補正する（matrix_id に極性の塊を入れる）
+        notes += _merged_run_warnings(study, blocks, samples)
+        step = _drift_blocks(values, blocks, cfg["drift"], study.quant)
+        steps.append(step)
+        hold = _drift_hold_warning_blocks(step)
+        if hold is not None:
+            notes.append(hold)
+        extras = {"polarity_blocks": _polarity_fingerprint(study)}
+        if hold is not None:
+            extras["drift_held"] = hold["polarities"]
 
     all_ids = list(study.feature_ids)
     feature_ids = list(all_ids)
@@ -868,9 +1156,14 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix:
     raw = raw[np.ix_(rows, cols)]
     detected = None if detected is None else detected[np.ix_(rows, cols)]
 
-    factor_values, factor_record = _factor_columns(cfg["normalize"], feature_ids, all_ids, drifted)
-    values, step = _normalize_step(values, samples, cfg["normalize"], study.quant,
-                                   factor_values=factor_values, factor_record=factor_record)
+    if blocks is None:
+        factor_values, factor_record = _factor_columns(cfg["normalize"], feature_ids, all_ids, drifted)
+        values, step = _normalize_step(values, samples, cfg["normalize"], study.quant,
+                                       factor_values=factor_values, factor_record=factor_record)
+    else:
+        values, step, block_notes = _normalize_blocks(values, samples, cfg["normalize"], study.quant,
+                                                      blocks, feature_ids, cols, all_ids, drifted)
+        notes += block_notes
     steps.append(step)
     normalize_method = step["method"]
     pqn_note = _pqn_reference_warning(step)

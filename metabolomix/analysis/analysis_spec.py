@@ -884,12 +884,66 @@ def _fill_constant(blocks: list[np.ndarray], j: int, rows_by_group: dict[str, li
     return [label for label in rows_by_group if label in found] or None
 
 
+def _merged_polarity(normalized: dict, ds) -> dict[str, str] | None:
+    """入力が陽陰を統合したデータセットなら 特徴 ID → 極性（正規化の係数を極性ごとに求める）。でなければ None。
+    割れのまとめの後の ID は組の先頭の ID なので、そのまま引ける。"""
+    if normalized["input"]["source"] != "dataset" or ds is None:
+        return None
+    from metabolomix.analysis.stats.data import merged_feature_polarity
+    return merged_feature_polarity(ds) or None
+
+
+def _polarity_orders(normalized: dict, ds, data: dict, polarity: dict[str, str] | None,
+                     notes: list[str]) -> dict[str, dict] | None:
+    """統合したデータセットのドリフト補正（drift_correct）に使う、極性ごとの注入順。統合でなければ None。
+
+    `injection_order.source=metadata` なら、試料の表の極性（陽イオン）は試料の表の注入順、ほかの極性は統合が
+    残したその極性の測定（`quant_state.polarity_runs`。統計エンジンの前処理と同じ）。`tsv` は試料ごとに 1 つの
+    注入順なので全極性にそれを使い、その極性の測定と違う（または分からない）試料があれば `notes` に書く。
+    """
+    spec_order = normalized["injection_order"]
+    if not polarity or spec_order is None or not any(
+            "drift_correct" in a["matrix"]["steps"] for a in normalized["analyses"]):
+        return None
+    from metabolomix.analysis.stats.data import SAMPLE_TABLE_POLARITY
+    rows = getattr(ds, "sample_metadata_rows", None)
+    display = [str(n) for n in ds.sample_names]
+    ids = [str(n) for n in ((getattr(ds, "sample_ids", None) or []) if rows else [])] or display
+    display_of = dict(zip(ids, display))
+    recorded = (getattr(ds, "quant_state", None) or {}).get("polarity_runs") or {}
+    order = data["order"] or {}
+    plans: dict[str, dict] = {}
+    for label in dict.fromkeys(polarity.values()):
+        if label == SAMPLE_TABLE_POLARITY:
+            plans[label] = {"order": order, "source": spec_order["source"]}
+            continue
+        table = recorded.get(label) if isinstance(recorded.get(label), dict) else {}
+        own = {name: (table.get(display_of.get(name, name)) or {}).get("injection_order")
+               for name in data["samples"]}
+        if spec_order["source"] == "metadata":
+            plans[label] = {"order": own, "source": f"polarity_runs.{label}"}
+            continue
+        plans[label] = {"order": order, "source": "tsv"}
+        differ = [n for n in data["samples"]
+                  if own[n] is None or order.get(n) is None or float(own[n]) != float(order[n])]
+        if differ:
+            notes.append(
+                f"injection_order は TSV の 1 列（試料ごとに 1 つ）なので、陽陰を統合したデータセットの {label} の特徴の"
+                f"ドリフト補正（drift_correct）もその注入順で当てはめた。{label} の測定の注入順（統合が残した "
+                f"quant_state.polarity_runs.{label}）とは {len(differ)} 試料で違う（または分からない）: "
+                f"{differ[:10]}{' ほか' if len(differ) > 10 else ''}。{label} をその測定の注入順で補正するなら "
+                "injection_order.source=metadata（極性ごとの測定）か、analysis-spec v2・dataset_preprocess を使う。")
+    return plans
+
+
 def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: list[str] | None,
                   matrices: list | None = None):
     # `data` の行列は、割れたスポットを 1 列にまとめた後（`_merge_plan`）。recipe はその列に当たる。
     matrix = recipe_matrix.build_matrix(
         data["values"], data["samples"], data["feature_ids"], data["roles"], analysis["matrix"],
-        detected=data["detected"], injection_order=data["order"])
+        detected=data["detected"], injection_order=data["order"],
+        feature_polarity=_merged_polarity(normalized, ds),
+        injection_order_by_polarity=data.get("order_by_polarity"))
     if matrices is not None:
         matrices.append((analysis["analysis_id"], matrix))  # correlate（stage=matrix）が集約の前の行列を読む
     merged_from: dict[str, list[str]] = data["merged_from"]
@@ -1153,8 +1207,13 @@ def _correlate(normalized: dict, data: dict, analyses_matrices: list[tuple[str, 
             "rows": out_rows}
 
 
-def run_spec(normalized: dict, ds=None) -> dict:
-    """正規化済みの spec を実行して analysis-result.v1 を返す（丸めない）。"""
+def run_spec(normalized: dict, ds=None, *, notes: list[str] | None = None) -> dict:
+    """正規化済みの spec を実行して analysis-result.v1 を返す（丸めない）。
+
+    `notes`（渡せば）に実行時の注意を足す（陽陰を統合したデータセットのドリフト補正を TSV の 1 つの注入順で
+    当てたとき、その極性の測定と違う試料があること。`_polarity_orders`）。
+    """
+    notes = [] if notes is None else notes
     data = _load(normalized, ds)
     reported = normalized["features"].get("feature_ids")
     if reported is not None:
@@ -1176,6 +1235,8 @@ def run_spec(normalized: dict, ds=None) -> dict:
 
     # 報告・集約の ID の検査は、まとめる前の特徴で済んでいる（消える側の ID も指定できる）。
     merge = _merge_plan(normalized, ds, data)
+    data["order_by_polarity"] = _polarity_orders(normalized, ds, data,
+                                                 _merged_polarity(normalized, ds), notes)
     matrices: list[tuple[str, dict]] = []
     analyses = [_run_analysis(a, data, normalized, ds, reported, matrices)
                 for a in normalized["analyses"]]

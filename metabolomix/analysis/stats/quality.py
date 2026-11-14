@@ -6,6 +6,10 @@ gap-fill の割合・ドリフトの兆候を数え、交絡の報告（`confoun
 
 セッションにも MCP にも依存しない（`metabolomix/analysis/stats/` の規則）。失敗した QC 注入の
 規則（旧 `analysis.preprocessing.detect_failed_qc` と同じもの）はここだけが持つ。
+
+陽陰を統合したデータセット（`StudyData.feature_polarity`）は、注入ごとの総量を極性ごとに数える
+（失敗した QC 注入・ドリフトの兆候）。陽イオンと陰イオンは別の注入なので、強度の大きい極性の総量が
+もう一方の失敗やドリフトを隠さないように。ドリフトの兆候はその極性の測定の注入順・バッチで見る。
 """
 from __future__ import annotations
 
@@ -14,7 +18,8 @@ import math
 import numpy as np
 from scipy import stats as sps
 
-from metabolomix.analysis.stats.data import DETECTED, GAP_FILLED, MISSING, StudyData, cell_states
+from metabolomix.analysis.stats.data import (DETECTED, GAP_FILLED, MISSING, StudyData, cell_states,
+                                             polarity_samples)
 
 __all__ = ["QUALITY_THRESHOLDS", "qc_rsd_summary", "failed_qc", "detection_summary",
            "drift_signs", "quality_verdict"]
@@ -39,6 +44,15 @@ def _positive(block: np.ndarray) -> np.ndarray:
     return np.where(np.isfinite(b) & (b > 0), b, np.nan)
 
 
+def _polarity_columns(study: StudyData) -> list[tuple[str, np.ndarray]]:
+    """統合したデータセットの (極性, 列の位置)（特徴の順に出てきた極性の順）。統合でなければ空。"""
+    if not study.feature_polarity:
+        return []
+    labels = [study.feature_polarity.get(f, "(unknown)") for f in study.feature_ids]
+    return [(label, np.array([j for j, lab in enumerate(labels) if lab == label], dtype=int))
+            for label in dict.fromkeys(labels)]
+
+
 def qc_rsd_summary(study: StudyData) -> dict:
     """QC の特徴ごとの RSD（有限正値、ddof=1。前処理の qc_rsd の足切りと同じ定義）の分布。"""
     qc = _rows(study, "qc")
@@ -59,18 +73,29 @@ def qc_rsd_summary(study: StudyData) -> dict:
             "frac_le_030": float((vals <= QUALITY_THRESHOLDS["qc_rsd_ok"]).mean())}
 
 
+def _failed_in(study: StudyData, qc: list[int], block: np.ndarray) -> list[str]:
+    totals = np.nansum(_positive(block), axis=1)
+    median = float(np.median(totals))
+    if not math.isfinite(median) or median <= 0:
+        return []
+    cut = QUALITY_THRESHOLDS["failed_qc_ratio"] * median
+    return sorted(study.samples[i].sample_id for i, t in zip(qc, totals) if t < cut)
+
+
 def failed_qc(study: StudyData) -> dict:
-    """総量が QC の中央値の `failed_qc_ratio` 倍未満の QC 注入（試料 ID）。QC が 3 本未満は見ない。"""
+    """総量が QC の中央値の `failed_qc_ratio` 倍未満の QC 注入（試料 ID）。QC が 3 本未満は見ない。
+
+    統合したデータセットは極性ごとに総量を数え、どれかの極性で失敗した注入を `failed` に、極性ごとの内訳を
+    `by_polarity` に返す（統合の試料 ID は陽陰の 2 本の注入を表す）。
+    """
     qc = _rows(study, "qc")
     if len(qc) < 3:
         return {"checked": len(qc), "failed": []}
-    totals = np.nansum(_positive(study.values[qc]), axis=1)
-    median = float(np.median(totals))
-    if not math.isfinite(median) or median <= 0:
-        return {"checked": len(qc), "failed": []}
-    cut = QUALITY_THRESHOLDS["failed_qc_ratio"] * median
-    failed = sorted(study.samples[i].sample_id for i, t in zip(qc, totals) if t < cut)
-    return {"checked": len(qc), "failed": failed}
+    blocks = _polarity_columns(study)
+    if not blocks:
+        return {"checked": len(qc), "failed": _failed_in(study, qc, study.values[qc])}
+    by = {label: _failed_in(study, qc, study.values[np.ix_(qc, cols)]) for label, cols in blocks}
+    return {"checked": len(qc), "failed": sorted(set().union(*by.values())), "by_polarity": by}
 
 
 def detection_summary(study: StudyData) -> dict:
@@ -88,11 +113,10 @@ def detection_summary(study: StudyData) -> dict:
             "missing_frac": float((states == MISSING).sum() / total)}
 
 
-def drift_signs(study: StudyData) -> list[dict]:
-    """バッチごと（QC が `drift_min_qc` 本以上）の、QC の総量の log2 と注入順の Spearman。"""
+def _drift_signs_in(study: StudyData, samples, cols: np.ndarray | None) -> list[dict]:
     by_batch: dict[str, list[int]] = {}
     for i in _rows(study, "qc"):
-        s = study.samples[i]
+        s = samples[i]
         if s.injection_order is None:
             continue
         by_batch.setdefault(s.batch if s.batch is not None else _NO_BATCH, []).append(i)
@@ -101,11 +125,12 @@ def drift_signs(study: StudyData) -> list[dict]:
         rows = by_batch[batch]
         if len(rows) < QUALITY_THRESHOLDS["drift_min_qc"]:
             continue
-        totals = np.nansum(_positive(study.values[rows]), axis=1)
+        block = study.values[rows] if cols is None else study.values[np.ix_(rows, cols)]
+        totals = np.nansum(_positive(block), axis=1)
         keep = totals > 0
         if keep.sum() < QUALITY_THRESHOLDS["drift_min_qc"]:
             continue
-        order = np.array([study.samples[i].injection_order for i in rows], float)[keep]
+        order = np.array([samples[i].injection_order for i in rows], float)[keep]
         rho, p = sps.spearmanr(order, np.log2(totals[keep]))
         rho, p = float(rho), float(p)
         if not (math.isfinite(rho) and math.isfinite(p)):
@@ -113,6 +138,19 @@ def drift_signs(study: StudyData) -> list[dict]:
         flag = abs(rho) >= QUALITY_THRESHOLDS["drift_rho"] and p < QUALITY_THRESHOLDS["drift_p"]
         out.append({"batch": batch, "n_qc": int(keep.sum()), "rho": rho, "p": p, "flag": bool(flag)})
     return out
+
+
+def drift_signs(study: StudyData) -> list[dict]:
+    """バッチごと（QC が `drift_min_qc` 本以上）の、QC の総量の log2 と注入順の Spearman。
+
+    統合したデータセットは極性ごとに、その極性の特徴の総量とその極性の測定の注入順・バッチで見て、
+    各行に `polarity` を足す。
+    """
+    blocks = _polarity_columns(study)
+    if not blocks:
+        return _drift_signs_in(study, study.samples, None)
+    return [{"polarity": label, **row} for label, cols in blocks
+            for row in _drift_signs_in(study, polarity_samples(study, label), cols)]
 
 
 def quality_verdict(*, rsd: dict, failed: dict, drift: list[dict], confounding: dict,

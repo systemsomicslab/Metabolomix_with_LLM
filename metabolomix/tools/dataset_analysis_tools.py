@@ -206,6 +206,12 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     比較の前提検証は `dataset_compare`（統計エンジン。既定は moderated t）が守る: 群の明示を求め・
     `include=false` と非 sample の役割を外し・完全交絡は既定では比べて印を付ける（`allow_confounded=false` で止める）。
 
+    陽陰を統合したデータセット（`dataset_merge_polarities`）では、シートは陽イオンの raw を挙げる（統合したデータセットの
+    試料の表は陽イオンのもの）ので、`batch`・`injection_order` は**陽イオンの測定だけ**を決める（群・役割・include・
+    subject_id・因子の列は試料ごとなので両極性の特徴に効く）。陰イオンの測定は統合が残した値のままで、変えるなら陰イオンの
+    ハンドルに陰イオンの raw を挙げたシートを当ててから `dataset_merge_polarities` で統合し直す。統合したデータセットに
+    当てたときは戻り値の `notes` にこの旨を書く。
+
     dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
@@ -226,9 +232,18 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
         return mztab_error(
             "SAMPLE_MANIFEST_NOT_FOUND", str(exc), {"manifest_path": manifest_path})
 
+    from metabolomix.analysis.stats.data import merged_feature_polarity
+    notes = []
+    if merged_feature_polarity(ds):
+        from metabolomix.analysis.stats.preprocess import run_remedy
+        notes.append("陽陰を統合したデータセット: シートは陽イオンの raw を挙げるので、batch・injection_order は"
+                     "陽イオンの測定だけを決めた（群・役割・include・subject_id・因子の列は試料ごとなので両極性の特徴に"
+                     "効く）。陰イオンの測定は統合が残した値（quant_state.polarity_runs.negative）のまま。"
+                     + run_remedy("negative"))
     return json_payload({
         "status": "success",
         **summary,
+        **({"notes": notes} if notes else {}),
         "next": (("試料の表が変わったので（group だけの変更でも）、登録した行列（matrix_id）・dataset_compare と"
                   "dataset_pca の結果は古くなりました。dataset_preprocess を前と同じ引数で（既定でよいなら"
                   "既定のまま）呼び直し、返った新しい matrix_id を dataset_compare / dataset_pca に渡して"

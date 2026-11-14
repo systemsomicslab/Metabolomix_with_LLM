@@ -35,7 +35,8 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 ## 3. `quant_state`（派生データセットが持つ状態）
 
 統計（`dataset_*` の前処理・検定）は `getattr(ds, "quant_state", None)` の `normalized` / `method` /
-`unit` だけを読む。それ以外のキーは自由。
+`unit` と、統合したデータセットの `polarity_runs`（陰イオンの測定。ドリフト補正を極性ごとに当てる）を読む。
+それ以外のキーは自由。
 
 | キー | 意味 |
 |---|---|
@@ -49,6 +50,9 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 | `internal_standard_ids` | 内部標準の特徴 ID（選別後は残ったものだけ。統合後は `positive:<id>` / `negative:<id>`） |
 | `record_folder` | 統合後の記録の置き場（`dataset_merge_polarities` が足す） |
 | `arf2_by_polarity` | 統合後に、極性ごとのキュレーションのフラグを引く `.arf2`（`dataset_merge_polarities` が足す。フラグそのものは写さない） |
+| `polarity_runs` | 統合後の、陽イオン以外の極性の測定（`{"negative": {<統合後の試料名>: {batch, injection_order, injection_order_source, injection_order_may_be_file_order}}}`。陰イオンのデータセットの試料の表（当てたシートを含む）から統計エンジンと同じ規則で読んだ値。`dataset_merge_polarities` が足す）。統合したデータセットの試料の表は陽イオンの試料の表そのもの（陽イオンに当てたシート `sample_metadata_rows` も引き継ぐ）＝陽イオンの測定。統合したハンドルへ後から当てるシートは陽イオンの raw を挙げるので、陽イオンの測定だけを決める（陰イオンの測定は、陰イオンのハンドルにシートを当てて統合し直すと変わる） |
+| `polarity_runs_match` | `{"negative": <negative_runs と同じもの>}`（陰イオンの測定が、統合したデータセットが陽イオンの測定として読む値と同じか） |
+| `source_sample_names` | 統合前の試料名（`{"positive": [...], "negative": [...]}`。統合後の試料の順）。統合は試料を共通 ID へ改名するので、raw のパスが無いデータセットの「注入順がファイルの順か」は陽イオンの元の試料名で見る |
 
 ## 4. `status` と `needs_input`
 
@@ -97,7 +101,11 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 - **merge**: `status`・`dataset_handle`・`record_id`・`rule`（試料の照合規則）・`n_features`
   （`positive` `negative` `merged`）・`n_samples`・`unit`・`normalized`・`normalize`（極性ごとに正規化を
   どう通ったか: `applied`＝dataset_quant_apply / `skipped`＝`skip=True` / `not_run`＝どちらも通っていない。
-  記録の `settings.normalize` にも同じものを書く）。
+  記録の `settings.normalize` にも同じものを書く）・`negative_runs`（陰イオンの測定が、統合したデータセットが陽イオンの
+  測定として読む値（陽イオンの試料の表。当てたシートを含む）と同じか:
+  `injection_order` は両方分かる試料のどれかで違えば `different`、違わないが片方でも分からない試料があれば
+  `unknown`、それ以外は `same`。`batch` は `same` / `different`。`n_samples_differ` は注入順かバッチの違う試料の数。
+  記録の `summary.negative_runs` にも書く。陽陰は別の注入なので、統計の前処理は極性ごとの測定でドリフトを当てる）。
   特徴 ID は `positive:<id>` / `negative:<id>`、行は POS の特徴のあとに NEG、試料の列は共通 ID
   （POS の順）。各特徴の出自は `feature_metadata[<fid>]["origin"]`（極性と元の特徴 ID）。
 - **select**: `status`・`dataset_handle`・`record_id`・`audit_file`・`n_retained`・`n_excluded`・
