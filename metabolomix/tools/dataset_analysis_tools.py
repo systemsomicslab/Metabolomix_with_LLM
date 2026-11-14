@@ -416,7 +416,9 @@ def dataset_feature_search(
         （同じ列・頼んだ ID のまま）、`merge_split` に出所・まとめた組・やり直した結果と BH の
         母集団。False なら従来どおり（`stats_unmerged` も `merged_from` 列も無い）。
     alignment_qc_path: `dataset_alignment_qc` が書いた JSON（今のデータセットで作ったものだけ）。
-        省略時はその場で割れを探す（既定の閾値）。`merge_split=False` とは併用できない。
+        省略時はこのハンドルで `dataset_alignment_qc` が最後に出した結果（データ・試料の表・除外が
+        変わっていないもの）、無ければその場で割れを探す（既定の閾値）。使った方は `merge_split.source`
+        （`alignment_qc` / `last_alignment_qc` / `find_split_pairs`）。`merge_split=False` とは併用できない。
 
     ppm_offset: 目標照合の質量の窓の中心のずれ（任意）。`{"default": 0.0, "bands": [{"max_mz": 200,
         "offset": -8.3}]}`。中心は「実測 − 理論」の ppm の符号つきの値で、帯は理論 m/z が `max_mz`

@@ -1,9 +1,12 @@
 """`dataset_analysis_run` の v2（analysis-result.v2）の要約と行の表（MCP にもセッションにも依存しない）。
 
 エンジンの結果の全量は `output_path` の JSON に書き、戻り値は要約だけにする（戻り値を肥大させない）。
-行を返すのは、どの解析も `MAX_INLINE_ROWS` 以下のときだけ。
+`output_path` が無ければ解析ごとに行を TSV で返し、`MAX_INLINE_ROWS` を超える解析は p の小さい順の
+先頭 `MAX_INLINE_ROWS` 行だけを載せる（断らない。`first_by_p`）。
 """
 from __future__ import annotations
+
+import math
 
 from metabolomix.core.serialization import json_safe, round_floats, truncate_lists
 
@@ -30,6 +33,23 @@ def tables_of(entry: dict) -> dict[str, list[dict]]:
 
 def n_rows(entry: dict) -> int:
     return sum(len(rows) for rows in tables_of(entry).values())
+
+
+def first_by_p(rows: list[dict], limit: int) -> list[dict]:
+    """行が `limit` を超えれば、p の小さい順（p の無い・非有限の行は後ろ、同じなら元の順）の先頭 `limit` 行。
+
+    `limit` 以下なら元の順のまま全部。`dataset_analysis_run` の v1 と v2 が、`output_path` の無い戻り値を
+    切るのに使う（どの行を載せたかを `rows_order` で返す）。
+    """
+    if len(rows) <= limit:
+        return list(rows)
+
+    def key(index: int):
+        p = rows[index].get("p")
+        usable = isinstance(p, (int, float)) and not isinstance(p, bool) and math.isfinite(p)
+        return (not usable, p if usable else 0.0, index)
+
+    return [rows[i] for i in sorted(range(len(rows)), key=key)[:limit]]
 
 
 def _counts(rows: list[dict], q_threshold: float) -> dict:
@@ -70,15 +90,18 @@ def analysis_summary(entry: dict, q_threshold: float) -> dict:
     return out
 
 
-def inline_rows(entry: dict, rows_table) -> str:
+def inline_rows(entry: dict, rows_table, limit: int | None = None) -> str:
     """行の TSV（列名 1 回）。composition は先頭に `table` 列（clr / absolute）。
 
-    `rows_table(rows, columns)` は呼び出し側（v1 と共通の表の整形）が渡す。"""
+    `rows_table(rows, columns)` は呼び出し側（v1 と共通の表の整形）が渡す。`limit` を渡し、行がそれを
+    超えれば `first_by_p` の先頭 `limit` 行だけ（composition は 2 つの表を合わせて選ぶ）。"""
     tables = tables_of(entry)
     composition = entry["kind"] == "composition"
     rows = []
     for name, items in tables.items():
         rows += [{**r, "table": name} for r in items] if composition else items
+    if limit is not None:
+        rows = first_by_p(rows, limit)
     columns = (("table",) + ROW_COLUMNS) if composition else ROW_COLUMNS
     return rows_table(rows, columns) if rows else ""
 

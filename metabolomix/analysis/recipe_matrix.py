@@ -6,7 +6,8 @@
 
 **段の順序は recipe が決める**（`steps`）。論文によって「補完 → 正規化 → ドリフト補正」
 だったり「正規化 → 補完」だったりし、順序が違えば数字が違う。挙げた段だけを、挙げた順に
-走らせる。挙げない段の設定が recipe にあれば拒否する（書いたのに効かない設定を作らない）。
+走らせる。挙げない段の設定が recipe にあれば効かないので使わず、`notes` に書く
+（誤りにはしない。正規化した recipe にも残さないので `rule_hash` に入らない）。
 
 **標準の定義に合わせる。** KNN は R `impute::impute.knn`（`maxp` = 特徴数、すなわち
 2 段の分割をしない）と同じ規則、LOESS は `statsmodels.nonparametric.smoothers_lowess.lowess`。
@@ -101,8 +102,11 @@ def _normalize_step(step: str, raw) -> dict:
     return out
 
 
-def normalize_recipe(recipe) -> dict:
-    """recipe を検証して既定を埋める。`steps` に挙げた段の設定だけを残す。"""
+def normalize_recipe(recipe, *, notes: list[str] | None = None, label: str = "matrix") -> dict:
+    """recipe を検証して既定を埋める。`steps` に挙げた段の設定だけを残す。
+
+    `steps` に無い段の設定は効かないので捨て、`notes`（渡せば）にその旨を足す。`label` は注記に書く欄の名前。
+    """
     if recipe is None:
         recipe = {}
     if not isinstance(recipe, dict):
@@ -121,9 +125,9 @@ def normalize_recipe(recipe) -> dict:
     if len(set(steps)) != len(steps):
         raise _fail(f"steps に重複がある: {steps}", field="steps")
     orphan = sorted(set(recipe) & set(STEPS) - set(steps))
-    if orphan:
-        raise _fail(f"steps に無い段の設定がある（効かない設定は書かない）: {orphan}",
-                    field="steps", orphan=orphan)
+    if orphan and notes is not None:
+        notes.append(f"{label}: steps に無い段の設定 {orphan} は効かないので使っていない"
+                     "（その段を走らせるなら steps に足す）")
     out = {"schema": RECIPE_SCHEMA, "steps": list(steps)}
     for step in steps:
         out[step] = _normalize_step(step, recipe.get(step))

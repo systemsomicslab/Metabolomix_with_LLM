@@ -5,8 +5,9 @@
 正規化して呼び、戻り値を小さくするだけ。どのツールも `dataset_handle` を受け、省略時は
 対話のセッションのデータセットを読む（書き換えない）。
 
-大きな結果は `output_path` に JSON（キーの順を固定・改行なし）で書き、要約だけを返す。
-同じ spec・同じ入力なら同じファイルになる。
+大きな結果は `output_path` に JSON（キーの順を固定。長い辞書とリストは要素ごとに改行して、
+行の範囲で読める）で書き、要約だけを返す。同じ spec・同じ入力なら同じファイルになる。
+`output_path` を省いて行が上限を超えるときは断らず、先頭の行と `truncated`・全件数を返す。
 """
 from __future__ import annotations
 
@@ -28,14 +29,14 @@ __all__ = ["dataset_alignment_qc", "dataset_analysis_run", "dataset_claim_eviden
            "dataset_feature_relations", "dataset_homolog_check", "dataset_mass_accuracy",
            "dataset_novel_candidates", "dataset_sample_peaks", "library_msms_qualify"]
 
-#: output_path なしで行を返す上限（解析ごと）。超えれば output_path を求める。
+#: output_path なしで戻り値に載せる行の上限（解析ごと）。超えれば先頭の行だけを載せ、`truncated` を立てる。
 MAX_INLINE_ROWS = 50
 
 ROW_COLUMNS = ("feature_id", "status", "reason", "group_ref", "group_test", "n_ref", "n_test",
                "mean_ref", "mean_test", "fc_test_over_ref", "log2fc_test_over_ref",
                "statistic", "p", "q", "beta_log2", "direction", "meets_thresholds",
                "merged_from", "detected_reference", "detected_test", "detection_fisher_p",
-               "detection_driven")
+               "detection_driven", "constant_in_group")
 _SIGNIFICANT = frozenset({"mean_ref", "mean_test", "statistic", "p", "q", "beta_log2",
                           "detection_fisher_p"})
 _DECIMAL4 = frozenset({"fc_test_over_ref", "log2fc_test_over_ref"})
@@ -79,12 +80,58 @@ def _finite(value):
     return value
 
 
+#: `write_result` が 1 行に詰める上限の字数。これより長い辞書・リストは要素ごとに改行する。
+JSON_LINE_WIDTH = 1000
+
+
+def _json_key(key) -> str:
+    """辞書のキーを `json.dumps` と同じ規則で JSON の文字列にする（int・float・真偽・None も）。"""
+    if isinstance(key, bool):
+        key = "true" if key else "false"
+    elif key is None:
+        key = "null"
+    elif not isinstance(key, str):
+        key = json.dumps(key)
+    return json.dumps(key, ensure_ascii=False)
+
+
+def _json_lines(value) -> str:
+    """値を JSON にする。1 行が `JSON_LINE_WIDTH` 字以下なら詰め、超える辞書・リストは要素ごとに改行する。
+
+    行ごとに区切るのは、大きな結果（割れの組・候補・行）をファイルの行の範囲で読めるようにするため
+    （1 行の JSON は行の範囲で区切れない）。空白は改行だけで、字下げはしない。キーは昇順。
+    数や文字列だけのリストは、1 行が上限を超えない分ずつ詰める。
+    """
+    compact = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                         allow_nan=False)
+    if len(compact) <= JSON_LINE_WIDTH or not isinstance(value, (dict, list)) or not value:
+        return compact
+    if isinstance(value, dict):
+        items = [_json_key(k) + ":" + _json_lines(value[k]) for k in sorted(value)]
+    elif any(isinstance(v, (dict, list)) for v in value):
+        items = [_json_lines(v) for v in value]
+    else:
+        items, line = [], ""
+        for text in (json.dumps(v, ensure_ascii=False, allow_nan=False) for v in value):
+            if line and len(line) + 1 + len(text) > JSON_LINE_WIDTH:
+                items.append(line)
+                line = text
+            else:
+                line = f"{line},{text}" if line else text
+        items.append(line)
+    opening, closing = ("{", "}") if isinstance(value, dict) else ("[", "]")
+    return opening + "\n" + ",\n".join(items) + "\n" + closing
+
+
+def result_bytes(payload: dict) -> bytes:
+    """`write_result` が書くバイト列（キーの順を固定・長い辞書とリストは要素ごとに改行・非有限は null）。"""
+    return (_json_lines(_finite(payload)) + "\n").encode("utf-8")
+
+
 def write_result(output_path: str, payload: dict) -> str:
-    """結果の JSON を書く（キーの順を固定・改行なし・非有限は null）。書いた絶対パスを返す。"""
+    """結果の JSON を書く（`result_bytes`）。同じ中身なら同じバイト列になる。書いた絶対パスを返す。"""
     path = Path(output_path)
-    data = json.dumps(_finite(payload), ensure_ascii=False, sort_keys=True,
-                      separators=(",", ":"), allow_nan=False)
-    atomic_write_bytes(path, data.encode("utf-8"))
+    atomic_write_bytes(path, result_bytes(payload))
     return str(path.resolve())
 
 
@@ -113,7 +160,7 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     `group_overrides` に書いたものだけを使う（`dataset_exclude` の除外は読まない。spec に無い除外が
     あれば注意 `dataset_exclusions_not_in_spec` を返す）。前処理が利用者への確認を要するときは
     `needs_input` の封筒（`field` の spec の欄に答えて呼び直す）。状態も記録も書かない。
-    戻り値は解析ごとの要約（行は同じ規則: `output_path` に全量の JSON、無ければ 50 行以下だけ TSV）。
+    戻り値は解析ごとの要約（行は v1 と同じ規則: `output_path` に全量の JSON、無ければ TSV）。
 
     v1（analysis-spec.v1）:
 
@@ -122,19 +169,26 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     `analyses`（名前つきの解析を並べる——感度解析は 1 つの spec に並べる。各解析は
     `matrix`（matrix-recipe.v2: 段の順序・検出率・KNN・PQN・LOESS・RSD）と
     `test`（`student` / `welch` / `mannwhitney` / `ols`）・`fold_change`・`correction`・
-    `bh_population`・`thresholds`）、入力は `input`（データセットか外部の行列 TSV）、
-    群は `groups`（実験情報シートか TSV）、`covariates`（OLS の共変量の TSV）、
-    `aggregate`（クラスの和・2 特徴の比を 1 本の特徴として検定）、`features`（報告する特徴と、
-    `merge_split`——割れたスポットを試料ごとに大きい方の値の 1 列にまとめてから検定する。既定 true、
-    行の `merged_from`、外部の行列では何もしない）。`bh_population` は `matrix` / `reported` /
-    `annotated`（SME のある特徴だけ）。
+    `bh_population`・`thresholds`）、入力は `input`（データセットか外部の行列: TSV・MetaboLights の
+    MAF・mwTab・xlsx）、群は `groups`（実験情報シートか TSV）、`covariates`（OLS の共変量の TSV）、
+    `aggregate`（クラスの和・2 特徴の比を 1 本の特徴として検定。和はメンバーごとの寄与
+    `contributions` も返す）、`features`（報告する特徴と、`merge_split`——割れたスポットを試料ごとに
+    大きい方の値の 1 列にまとめてから検定する。既定 true、行の `merged_from`、外部の行列では何もしない。
+    `dataset_alignment_qc` がハンドルに持つ最後の結果は使わない——spec だけで再現する）。
+    **`aggregate` と `features.feature_ids` は併用できない**（報告するのは集約した 1 本。
+    `ANALYSIS_SPEC_INVALID`。種ごとの行は aggregate の無い別の spec で回す）。`bh_population` は
+    `matrix` / `reported` / `annotated`（SME のある特徴だけ）。`correlate`（任意）は外部の表の値との
+    Spearman の ρ を、spec に書いた特徴の対応（`pairs`）ごとに返す。
+    書いても効かない設定（`steps` に無い段の設定・`merge_split=false` や外部の行列での
+    `features.alignment_qc`・ols でない検定の共変量）は誤りにせず、使わずに `notes` に書く。
 
     返すのは数字と向き（`direction`）と閾値を機械的に当てた `meets_thresholds` だけで、
     再現したかの判定は返さない。結果には正規化した spec・`rule_hash`・`input_fingerprint`
     が入り、同じ spec・同じ入力なら同じ JSON になる。
 
-    output_path: 結果の JSON をここへ書き、要約だけを返す。省略時は解析ごとの行が
-        50 以下のときだけ行を TSV で返す（超えれば `ANALYSIS_OUTPUT_REQUIRED`）。
+    output_path: 結果の JSON をここへ書き、要約だけを返す。省略時は解析ごとに行を TSV で返し、
+        50 行を超える解析は p の小さい順の先頭 50 行だけを載せる（`truncated: true`・`n_rows` が全件・
+        `rows_order`。断らない）。
     対話のセッション・ハンドルの状態は変えない（読むだけ）。
     """
     from metabolomix.analysis import analysis_spec
@@ -144,27 +198,24 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
         return holder
     if isinstance(spec, dict) and spec.get("schema") == "analysis-spec.v2":
         return _analysis_run_v2(spec, holder, output_path)
+    from metabolomix.analysis.stats_run_summary import first_by_p
+
+    notes: list[str] = []
     try:
-        normalized = analysis_spec.normalize_spec(spec)
+        normalized = analysis_spec.normalize_spec(spec, notes=notes)
         ds, error = _dataset_or_error(holder, normalized["input"]["source"] == "dataset"
                                       or normalized["aggregate"] is not None
                                       and "select" in (normalized["aggregate"] or {}))
         if error:
             return error
         result = analysis_spec.run_spec(normalized, ds)
-        too_many = [a["analysis_id"] for a in result["analyses"]
-                    if len(a["rows"]) > MAX_INLINE_ROWS]
-        if output_path is None and too_many:
-            raise DomainError(
-                "ANALYSIS_OUTPUT_REQUIRED",
-                f"報告する行が {MAX_INLINE_ROWS} を超える解析がある（{too_many}）。output_path を"
-                "指定して JSON に書くか、features.feature_ids で絞ってください。",
-                {"analyses": too_many})
+        if notes:
+            result["notes"] = list(notes)
         written = write_result(output_path, result) if output_path else None
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
 
-    summary = []
+    summary, truncated = [], []
     for analysis in result["analyses"]:
         rows = analysis["rows"]
         item = {
@@ -177,14 +228,23 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
             "n_meets_thresholds": sum(1 for r in rows if r["meets_thresholds"]),
             "detection_available": any(r["detected_reference"] is not None for r in rows),
             "n_detection_driven": sum(1 for r in rows if r["detection_driven"]),
+            "n_constant_in_group": sum(1 for r in rows if r["constant_in_group"]),
         }
         if "aggregate" in analysis:
-            item["aggregate"] = analysis["aggregate"]
+            item["aggregate"] = _aggregate_summary(analysis["aggregate"])
         if "covariate_excluded_samples" in analysis:
             item["covariate_excluded_samples"] = analysis["covariate_excluded_samples"]
         if written is None:
-            item["rows"] = rows_table(rows)
+            shown = first_by_p(rows, MAX_INLINE_ROWS)
+            item["rows"] = rows_table(shown)
+            item["truncated"] = len(shown) < len(rows)
+            if item["truncated"]:
+                item["rows_order"] = "p_ascending"
+                truncated.append(analysis["analysis_id"])
         summary.append(item)
+    if truncated:
+        notes.append(f"行が {MAX_INLINE_ROWS} を超える解析（{truncated}）は p の小さい順の先頭 "
+                     f"{MAX_INLINE_ROWS} 行だけを載せた。全行は output_path を指定して JSON に書く。")
     return json_payload({
         "status": "success",
         "schema": result["schema"],
@@ -195,13 +255,51 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
                         "n_groups_skipped": len(result["merge_split"]["skipped"]),
                         "groups_hash": result["merge_split"]["groups_hash"]},
         "input_fingerprint": result["input_fingerprint"],
+        **({"input_read": result["input_read"]} if "input_read" in result else {}),
         "comparison": result["comparison"],
         "group_ref": result["group_ref"],
         "group_test": result["group_test"],
         **({"output_path": written} if written else {}),
         "analyses": summary,
+        **({"correlate": _correlate_summary(result["correlate"], inline=written is None)}
+           if "correlate" in result else {}),
+        **({"notes": notes} if notes else {}),
         "note": "判定（再現したか）は返さない。direction は group_test から見た向き。",
     })
+
+
+_CONTRIBUTION_COLUMNS = ("feature_id", "share_median", "share_median_ref", "share_median_test",
+                         "share_max")
+_CORRELATE_COLUMNS = ("analysis_id", "feature_id", "external_id", "merged_into", "n", "rho", "p",
+                      "reason")
+#: 戻り値に名前を並べる試料の数の上限（全件は output_path の JSON）。
+_NAME_LIST_LIMIT = 10
+
+
+def _aggregate_summary(info: dict) -> dict:
+    """集約の要約。和のメンバーごとの寄与（`contributions`）は TSV にする（全量は output_path の JSON）。"""
+    out = {k: v for k, v in info.items() if k != "contributions"}
+    if "contributions" in info:
+        out["contributions"] = rows_table(round_floats(info["contributions"], digits=4),
+                                          _CONTRIBUTION_COLUMNS)
+    return out
+
+
+def _correlate_summary(block: dict, *, inline: bool) -> dict:
+    """`correlate` の要約。行（組ごとの ρ）は TSV で、`MAX_INLINE_ROWS` を超えれば先頭だけ。"""
+    rows = block["rows"]
+    out = {"stage": block["stage"], "external": block["external"],
+           "n_samples_matched": block["n_samples_matched"],
+           "n_unmatched_samples": len(block["unmatched_samples"]),
+           "unmatched_samples": block["unmatched_samples"][:_NAME_LIST_LIMIT],
+           "n_unmatched_external_samples": len(block["unmatched_external_samples"]),
+           "unmatched_external_samples": block["unmatched_external_samples"][:_NAME_LIST_LIMIT],
+           "n_rows": len(rows)}
+    if inline:
+        shown = rows[:MAX_INLINE_ROWS]
+        out["rows"] = rows_table(round_floats(shown, digits=4), _CORRELATE_COLUMNS)
+        out["truncated"] = len(shown) < len(rows)
+    return out
 
 
 def _analysis_run_v2(spec: dict, holder, output_path: str | None) -> str:
@@ -221,12 +319,6 @@ def _analysis_run_v2(spec: dict, holder, output_path: str | None) -> str:
         if result.get("status") == "needs_input":
             return needs_input(result["field"], result["reason"], result["options"],
                                retry_tools=["dataset_analysis_run"])
-        too_many = [e["analysis_id"] for e in result["analyses"] if S.n_rows(e) > MAX_INLINE_ROWS]
-        if output_path is None and too_many:
-            raise DomainError(
-                "ANALYSIS_OUTPUT_REQUIRED",
-                f"報告する行が {MAX_INLINE_ROWS} を超える解析がある（{too_many}）。output_path を"
-                "指定して JSON に書いてください。", {"analyses": too_many})
         written = write_result(output_path, json_safe(result)) if output_path else None
     except DomainError as exc:
         details = truncate_lists(json_safe(exc.details), S.LIST_LIMIT,
@@ -243,13 +335,24 @@ def _analysis_run_v2(spec: dict, holder, output_path: str | None) -> str:
     extra = ([{"code": "dataset_exclusions_not_in_spec", "n_samples": n_samples,
                "n_features": n_features}] if n_samples or n_features else [])
     summary = S.run_summary(result, extra_warnings=extra)
+    notes = []
     if written is None:
         by_id = {e["analysis_id"]: e for e in result["analyses"]}
+        truncated = []
         for item in summary["analyses"]:
             if item["kind"] != "pca":
-                item["rows"] = S.inline_rows(by_id[item["analysis_id"]], rows_table)
+                entry = by_id[item["analysis_id"]]
+                item["rows"] = S.inline_rows(entry, rows_table, limit=MAX_INLINE_ROWS)
+                item["truncated"] = S.n_rows(entry) > MAX_INLINE_ROWS
+                if item["truncated"]:
+                    item["rows_order"] = "p_ascending"
+                    truncated.append(item["analysis_id"])
+        if truncated:
+            notes.append(f"行が {MAX_INLINE_ROWS} を超える解析（{truncated}）は p の小さい順の先頭 "
+                         f"{MAX_INLINE_ROWS} 行だけを載せた。全行は output_path を指定して JSON に書く。")
     return json_payload(json_safe(round_floats({
         "status": "success", **summary, **({"output_path": written} if written else {}),
+        **({"notes": notes} if notes else {}),
         "note": "判定（再現したか）は返さない。状態と記録は変えていない。"})))
 
 
@@ -495,9 +598,7 @@ def dataset_feature_relations(feature_id: str | int, rt_window: float = 0.05, mz
 
 # ---------- 試料ごとのピーク ----------
 
-#: `dataset_sample_peaks` が 1 回で受ける特徴の数の上限（これを超えたら呼び分ける）。
-MAX_SAMPLE_PEAK_FEATURES = 200
-#: `dataset_sample_peaks` が戻り値に載せる行（特徴 × 試料）の上限。超えれば `output_path` を求める。
+#: `dataset_sample_peaks` が戻り値に載せる行（特徴 × 試料）の上限。超えれば先頭の特徴の行だけを載せる。
 MAX_SAMPLE_PEAK_INLINE_ROWS = 1000
 SAMPLE_PEAK_COLUMNS = ("feature_id", "sample", "rt", "mz", "height", "detected")
 
@@ -516,21 +617,21 @@ def dataset_sample_peaks(feature_ids: list[str | int], dataset_handle: str | Non
     """特徴 × 試料ごとのピークの `rt`・`mz`・`height`・`detected` を返す（再解析で使う）。
 
     割れた 2 スポットが 1 つの物質か、RT がずれていくか（ドリフト）を試料ごとに見るための読み取り。
-    feature_ids: 特徴 ID（int でも str でもよい。`str()` に直す）。1 回 200 件まで（超えたら
-    `DATASET_BAD_REQUEST`）。知らない ID も `DATASET_BAD_REQUEST`（details の `unknown`）。
+    feature_ids: 特徴 ID（int でも str でもよい。`str()` に直す。重複は 1 つ）。知らない ID は
+    `DATASET_BAD_REQUEST`（details の `unknown`）。
     行（列 `feature_id, sample, rt, mz, height, detected`）を、依頼の特徴の順 × データセットの試料の順に、
     TSV（列名 1 回。`rows` の文字列）で返す。空欄は null（gap-fill の `mz`）、`detected` は true / false。
-    戻り値に載せる行（特徴 × 試料）は 1,000 行まで。超えるとき `output_path` が無ければ
-    `DATASET_BAD_REQUEST`（details の `n_samples`・`max_rows`・`max_features_per_call`）。
+    戻り値に載せる行（特徴 × 試料）は 1,000 行まで。超えるときは断らず、依頼の順の先頭の特徴の行を
+    特徴ごとにそろえて 1,000 行以内だけ載せ（試料が 1,000 を超えれば最初の特徴の先頭 1,000 行）、
+    `truncated: true`・`n_rows`（全件）・`n_rows_shown`・`n_features_shown` を返す。
     `rt` は分（gap-fill のセルも `.arf` の値）、`mz` は検出されたセルの実測 m/z（gap-fill は null）、
     `height` はデータセットの強度の行列の値（`measure` で選んだ `.arf` の欄。定量で変えたデータセットは
     その値）、`detected` は `detected_mask`（gap-fill なら false）。
-    解析フォルダ（`.arf`）から読んだデータセットだけ。mzTab-M で読んだデータセットは
-    `per_sample_rt` が無いので `DATASET_BAD_REQUEST`（`directory` / `job_path` / `pipeline_path` で
-    解析フォルダを読む）。
+    試料ごとの RT（`per_sample_rt`）を持つデータセットだけ。持たなければ `DATASET_BAD_REQUEST`
+    （`directory` / `job_path` / `pipeline_path` で解析フォルダを読む）。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     output_path: 全量の TSV をここへ書き、要約（`n_rows`・`n_features`・`n_samples`・`output_path`・
-        `sha256`）だけを返す（ほかの再解析のツールと同じ規則）。1,000 行を超えるときは必須。
+        `sha256`）だけを返す（ほかの再解析のツールと同じ規則）。
     """
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
@@ -541,12 +642,6 @@ def dataset_sample_peaks(feature_ids: list[str | int], dataset_handle: str | Non
     if not isinstance(feature_ids, list) or not feature_ids:
         return mztab_error("DATASET_BAD_REQUEST", "feature_ids は 1 件以上の特徴 ID のリスト",
                            {"field": "feature_ids"})
-    if len(feature_ids) > MAX_SAMPLE_PEAK_FEATURES:
-        return mztab_error(
-            "DATASET_BAD_REQUEST",
-            f"feature_ids は 1 回 {MAX_SAMPLE_PEAK_FEATURES} 件まで（{len(feature_ids)} 件）。"
-            "分けて呼んでください。",
-            {"field": "feature_ids", "max": MAX_SAMPLE_PEAK_FEATURES, "n": len(feature_ids)})
     rt_matrix = getattr(ds, "per_sample_rt", None)
     if rt_matrix is None:
         return mztab_error(
@@ -565,18 +660,12 @@ def dataset_sample_peaks(feature_ids: list[str | int], dataset_handle: str | Non
     mz_cells = getattr(ds, "per_sample_mz", None) or {}
     n_samples = len(ds.sample_names)
     n_rows = len(wanted) * n_samples
+    shown = wanted
     if output_path is None and n_rows > MAX_SAMPLE_PEAK_INLINE_ROWS:
-        per_call = max(1, MAX_SAMPLE_PEAK_INLINE_ROWS // max(1, n_samples))
-        return mztab_error(
-            "DATASET_BAD_REQUEST",
-            f"行（特徴 × 試料）が {MAX_SAMPLE_PEAK_INLINE_ROWS} を超える（{len(wanted)} 特徴 × "
-            f"{n_samples} 試料 = {n_rows} 行）。output_path を指定して全量をファイルへ書くか、"
-            f"特徴を {per_call} 件以下に分けて呼んでください（今の試料の数での 1 回の上限）。",
-            {"field": "feature_ids", "n_samples": n_samples,
-             "max_rows": MAX_SAMPLE_PEAK_INLINE_ROWS, "n_rows": n_rows,
-             "max_features_per_call": per_call})
+        # 特徴ごとにそろえて載せる（1 つの特徴の試料を途中で切らない。試料が上限を超えるときだけ切る）
+        shown = wanted[:max(1, MAX_SAMPLE_PEAK_INLINE_ROWS // max(1, n_samples))]
     rows = []
-    for fid in wanted:
+    for fid in shown:
         i = row_of[fid]
         cells = mz_cells.get(fid, {})
         for j, sample in enumerate(ds.sample_names):
@@ -586,13 +675,22 @@ def dataset_sample_peaks(feature_ids: list[str | int], dataset_handle: str | Non
                          "rt": _peak_cell(rt_matrix[i, j]), "mz": _peak_cell(mz),
                          "height": _peak_cell(matrix[i, j]),
                          "detected": "true" if detected else "false"})
+    if output_path is None:
+        rows = rows[:MAX_SAMPLE_PEAK_INLINE_ROWS]
     from metabolomix.arf2.reader import format_spots_as_table
 
     table = format_spots_as_table(rows, columns=list(SAMPLE_PEAK_COLUMNS))
     summary = {"status": "success", "n_features": len(wanted), "n_samples": n_samples,
-               "n_rows": len(rows)}
+               "n_rows": n_rows}
     if output_path is None:
-        return json_payload({**summary, "rows": table})
+        payload = {**summary, "truncated": len(rows) < n_rows, "rows": table}
+        if payload["truncated"]:
+            payload.update(
+                n_rows_shown=len(rows), n_features_shown=len(shown),
+                notes=[f"行（特徴 × 試料）が {MAX_SAMPLE_PEAK_INLINE_ROWS} を超える（{len(wanted)} 特徴 × "
+                       f"{n_samples} 試料 = {n_rows} 行）ので、先頭の {len(shown)} 特徴の {len(rows)} 行だけを"
+                       "載せた。全量は output_path を指定してファイルに書く（残りの特徴を分けて呼んでもよい）。"])
+        return json_payload(payload)
     try:
         data = table.encode("utf-8")
         atomic_write_bytes(Path(output_path), data)
@@ -785,8 +883,11 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     （`feature_id` は残す ID＝受け持ちの多い側、同数なら小さい ID。`merged_from` に 2 つの ID、同定と質量誤差は SME を持つ方の
     スポット＝`sme_feature_id`。両方にあれば残す ID）、統計はまとめた行列で検定し直した値。
     `{"result_id"}` では `statistics.merge_split`（既定 true）・`statistics.alignment_qc`
-    （`dataset_alignment_qc` の JSON。省略時はその場で探す）、analysis_spec では spec の
-    `features.merge_split` で決まる。
+    （`dataset_alignment_qc` の JSON。省略時はこのハンドルで `dataset_alignment_qc` が最後に出した結果——
+    データ・試料の表・除外が変わっていなければ——を使い、無ければその場で探す。使った方は
+    `merge_split.source` の `alignment_qc` / `last_alignment_qc` / `find_split_pairs`）、analysis_spec では
+    spec の `features.merge_split` で決まる（spec だけで再現するので最後の結果は使わない）。
+    `merge_split=false` の `statistics.alignment_qc` など、効かない設定は誤りにせず `notes` に書く。
     spec の `labels`（`{path, name, feature_column="feature_id", label_column="level",
     order=["A","B","C","D"]}`）は外部の印の TSV。行に `labels.<name>` の列（特徴ごとの最も強い
     水準、割れの組はどちらかの最も強い水準）と水準ごとの件数 `labels.counts`（全体と上位 20）を
@@ -794,7 +895,8 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     spec の `ppm_offset`（任意。`{default, bands: [{max_mz, offset}]}`）は質量の窓の中心のずれ
     （判定が `|ppm − 中心| ≤ 許容幅`。幅と行の `ppm` 列は変えず、渡したときだけ `rule_hash` に入る。
     帯は理論 m/z が `max_mz` 未満の最初のもの。形の誤りは `NOVEL_SPEC_INVALID`）。
-    output_path: JSON をここへ書き、要約だけを返す（行が 50 を超えるときは必須）。
+    output_path: JSON をここへ書き、要約だけを返す。省略時は行を TSV で返し、50 を超えれば q の昇順の
+        先頭 50 行だけを載せる（`truncated: true`・`n_rows` が全件。断らない）。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     """
     from metabolomix.analysis import analysis_spec, mass_accuracy
@@ -807,7 +909,9 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     ds, error = _dataset_or_error(holder, True)
     if error:
         return error
+    notes: list[str] = []
     try:
+        spec = _drop_ineffective_novel_settings(spec, notes)
         normalized = mass_accuracy.normalize_novel_spec(spec)
         source = normalized["statistics"]
         if "result_id" in source:
@@ -859,10 +963,8 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
                           **({"merge_split": merge_info} if merge_info else {}),
                           **({"labels": labels_info} if labels_info else {}),
                           "rows": rows}
-        if output_path is None and len(rows) > MAX_INLINE_ROWS:
-            raise DomainError("ANALYSIS_OUTPUT_REQUIRED",
-                              f"行が {MAX_INLINE_ROWS} を超える（{len(rows)} 件）。output_path を"
-                              "指定してください。", {"n_rows": len(rows)})
+        if notes:
+            result_payload["notes"] = list(notes)
         written = write_result(output_path, result_payload) if output_path else None
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
@@ -872,6 +974,17 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
         columns += ("merged_from",)
     if labels_info:
         columns += (f"labels.{labels_info['name']}",)
+    inline = {}
+    if not written:
+        # 行は q の昇順。超える分は切って、全件の数と打ち切りの印を返す（断らない）
+        shown = rows[:MAX_INLINE_ROWS]
+        inline = {"truncated": len(shown) < len(rows),
+                  "rows": rows_table([{**r, "mz": round(r["mz"], 4), "ppm": round(r["ppm"], 2),
+                                       "rt": None if r["rt"] is None else round(r["rt"], 3)}
+                                      for r in shown], columns)}
+        if inline["truncated"]:
+            notes.append(f"行が {MAX_INLINE_ROWS} を超える（{len(rows)} 件）ので、q の昇順の先頭 "
+                         f"{MAX_INLINE_ROWS} 行だけを載せた。全行は output_path を指定して JSON に書く。")
     return json_payload({
         "status": "success",
         "rule_hash": result_payload["rule_hash"],
@@ -879,16 +992,39 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
         **({"merge_split": merge_info} if merge_info else {}),
         **({"labels": labels_info} if labels_info else {}),
         "n_rows": len(rows),
-        **({"output_path": written} if written else
-           {"rows": rows_table([{**r, "mz": round(r["mz"], 4), "ppm": round(r["ppm"], 2),
-                                 "rt": None if r["rt"] is None else round(r["rt"], 3)}
-                                for r in rows], columns)}),
+        **({"output_path": written} if written else inline),
+        **({"notes": notes} if notes else {}),
     })
+
+
+def _drop_ineffective_novel_settings(spec, notes: list[str]):
+    """novel-candidates の spec から、書いても効かない設定を除いた写し（理由は `notes`）。
+
+    `statistics.merge_split=false` の `statistics.alignment_qc` は使われないので外す（誤りにしない）。
+    `statistics.analysis_spec`（analysis-spec.v1）の効かない設定は `analysis_spec.normalize_spec` が外し、
+    その注記をここで集める。形の誤りは触らない（`normalize_novel_spec` が断る）。
+    """
+    from metabolomix.analysis import analysis_spec
+
+    stats_spec = spec.get("statistics") if isinstance(spec, dict) else None
+    if not isinstance(stats_spec, dict):
+        return spec
+    if "analysis_spec" in stats_spec:
+        try:
+            analysis_spec.normalize_spec(stats_spec["analysis_spec"], notes=notes)
+        except DomainError:
+            pass  # 形の誤りは normalize_novel_spec が同じ理由で断る
+        notes[:] = [f"statistics.analysis_spec: {n}" for n in notes]
+        return spec
+    if stats_spec.get("merge_split") is False and "alignment_qc" in stats_spec:
+        notes.append("statistics.alignment_qc は statistics.merge_split=false なので効かず、使っていない")
+        return {**spec, "statistics": {k: v for k, v in stats_spec.items() if k != "alignment_qc"}}
+    return spec
 
 
 # ---------- アライメントの品質 ----------
 
-#: 戻り値に group_aligned の組を TSV で並べる上限（チームの監査に回す組。超えればファイルだけ）。
+#: 戻り値に並べる group_aligned の組（チームの監査に回す組）の列。並べるのは先頭 `MAX_INLINE_ROWS` 組まで。
 _GROUP_ALIGNED_COLUMNS = ("pair_id", "feature_a", "feature_b", "mz", "rt_a", "rt_b", "delta_rt",
                           "adduct", "name_a", "name_b")
 
@@ -912,8 +1048,15 @@ def dataset_alignment_qc(output_path: str | None = None, ppm: float = 15.0,
     （`injection_order_source`）。欄の意味は `lipidmix://docs/output-format/reanalysis`。
 
     output_path: 全体（組・連結成分・試料ごとの受け持ち）を JSON でここへ書く
-        （例 `results/alignment_qc_pos.json`）。戻り値は要約と `group_aligned` の組だけ。
-    dataset_handle: ハンドルのデータセット。省略時は対話のセッション。状態は変えない。
+        （例 `results/alignment_qc_pos.json`。長いリストは要素ごとに改行するので、行の範囲で読める）。
+        戻り値は要約と `group_aligned` の組（先頭 50 組。`n_group_aligned` が全件、超えれば
+        `group_aligned_truncated: true`）だけ。
+    dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
+    結果（output_path と同じ中身）はこのハンドル（データセット）に最後の 1 つとして持ち
+    （`kept_on_handle`）、`dataset_feature_search` の `alignment_qc_path`・`dataset_novel_candidates` の
+    `statistics.alignment_qc` を省いたときに使われる（データ・試料の表・除外が変われば使われない）。
+    `dataset_analysis_run` は spec だけで再現する決まりなので使わない（spec の `features.alignment_qc` に
+    JSON のパスを書く）。
     """
     from metabolomix.analysis import alignment_qc
 
@@ -924,26 +1067,41 @@ def dataset_alignment_qc(output_path: str | None = None, ppm: float = 15.0,
     if error:
         return error
     try:
-        qc = round_floats(alignment_qc.find_split_pairs(
+        qc = _finite(round_floats(alignment_qc.find_split_pairs(
             ds, ppm=ppm, max_rt_gap=max_rt_gap, max_interleaved_rt_gap=max_interleaved_rt_gap,
             min_block_size=min_block_size),
-            digits=6)
-        written = write_result(output_path, qc) if output_path else None
+            digits=6))
+        data = result_bytes(qc)
+        written = None
+        if output_path:
+            atomic_write_bytes(Path(output_path), data)
+            written = str(Path(output_path).resolve())
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, exc.details or None)
+    # 最後の結果をハンドルに持つ（sha256 は output_path のファイルと同じバイト列のもの）
+    alignment_qc.remember(ds, qc, sha256=hashlib.sha256(data).hexdigest())
     flagged = [p for p in qc["pairs"] if p["type"] == "group_aligned"]
     payload = {"status": "success", "schema": qc["schema"],
                "injection_order_source": qc["injection_order_source"],
                "signal": qc["params"]["signal"],
-               "summary": round_floats(qc["summary"], digits=4)}
+               "summary": round_floats(qc["summary"], digits=4),
+               "kept_on_handle": True}
     if written:
         payload["output_path"] = written
-    if flagged and len(flagged) <= MAX_INLINE_ROWS:
+    if flagged:
+        shown = flagged[:MAX_INLINE_ROWS]
+        payload["n_group_aligned"] = len(flagged)
+        payload["group_aligned_truncated"] = len(shown) < len(flagged)
         payload["group_aligned"] = rows_table(
             [{"pair_id": p["pair_id"], "feature_a": p["features"][0],
               "feature_b": p["features"][1], "mz": round(p["mz"][0], 4),
               "rt_a": round(p["rt"][0], 3), "rt_b": round(p["rt"][1], 3),
               "delta_rt": round(p["delta_rt"], 3), "adduct": p["adduct"],
-              "name_a": p["names"][0], "name_b": p["names"][1]} for p in flagged],
+              "name_a": p["names"][0], "name_b": p["names"][1]} for p in shown],
             _GROUP_ALIGNED_COLUMNS)
+        if payload["group_aligned_truncated"]:
+            payload["notes"] = [
+                f"group_aligned の組が {len(flagged)} あり、先頭 {len(shown)} 組だけを載せた。全組は "
+                "output_path の JSON の pairs（type が group_aligned）にある"
+                + ("。" if written else "（output_path を指定して呼び直すと書く）。")]
     return json_payload(payload)

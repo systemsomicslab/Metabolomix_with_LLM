@@ -167,8 +167,8 @@ def test_analysis_run_rows_have_detection_columns(data):
     out = json.loads(R.dataset_analysis_run(_spec(data), dataset_handle=handle))
     analysis = out["analyses"][0]
     header = analysis["rows"].splitlines()[0].split("	")
-    assert header[-4:] == ["detected_reference", "detected_test", "detection_fisher_p",
-                           "detection_driven"]
+    assert header[-5:] == ["detected_reference", "detected_test", "detection_fisher_p",
+                           "detection_driven", "constant_in_group"]
     assert analysis["detection_available"] is False       # 合成の mzTab は .arf が無い
     assert analysis["n_detection_driven"] == 0
 
@@ -196,7 +196,7 @@ def test_analysis_run_output_path_is_deterministic(data, tmp_path):
     assert saved["rule_hash"] == first["rule_hash"] and saved["schema"] == "analysis-result.v1"
 
 
-def test_analysis_run_requires_output_path_for_many_rows(tmp_path):
+def test_analysis_run_many_rows_are_truncated_not_refused(tmp_path):
     matrix = tmp_path / "m.tsv"
     lines = ["feature_id\t" + "\t".join(SAMPLES)]
     lines += [f"F{i}\t" + "\t".join(str(v + i) for v in BASE) for i in range(51)]
@@ -209,9 +209,20 @@ def test_analysis_run_requires_output_path_for_many_rows(tmp_path):
             "comparison": {"reference": "HC", "test": "RA"},
             "analyses": [{"analysis_id": "main", "test": {"kind": "welch"}}]}
     out = json.loads(R.dataset_analysis_run(spec))
-    assert out["error"]["code"] == "ANALYSIS_OUTPUT_REQUIRED"
+    item = out["analyses"][0]
+    assert "error" not in out and item["n_rows"] == 51 and item["truncated"] is True
+    assert item["rows_order"] == "p_ascending" and any("output_path" in n for n in out["notes"])
+    table = item["rows"].splitlines()
+    header = table[0].split("\t")
+    shown = [dict(zip(header, line.split("\t"))) for line in table[1:]]
+    assert len(shown) == R.MAX_INLINE_ROWS
+    ps = [float(r["p"]) for r in shown]
+    assert ps == sorted(ps)                                   # p の小さい順の先頭 50 行
     ok = json.loads(R.dataset_analysis_run(spec, output_path=str(tmp_path / "o.json")))
-    assert ok["analyses"][0]["n_rows"] == 51
+    assert ok["analyses"][0]["n_rows"] == 51 and "truncated" not in ok["analyses"][0]
+    assert "notes" not in ok
+    saved = json.loads((tmp_path / "o.json").read_text(encoding="utf-8"))
+    assert len(saved["analyses"][0]["rows"]) == 51
 
 
 def test_analysis_run_bad_spec_is_an_error_envelope(data):
@@ -536,7 +547,7 @@ def test_tool_writes_output_and_returns_summary(tmp_path):
     (merge,) = written["merge_groups"]
     assert merge["features"] == ["30", "31"] and merge["mergeable"] is True
     assert pair["merged"] is True and out["summary"]["n_merged_pairs"] == 1
-    # 同じ入力なら同じファイル・出力先なしなら要約だけ・ハンドルの状態は変えない
+    # 同じ入力なら同じファイル・出力先なしなら要約だけ・ハンドルの解析の状態（結果・行列）は変えない
     again = tmp_path / "again.json"
     R.dataset_alignment_qc(output_path=str(again), dataset_handle=handle)
     assert again.read_bytes() == target.read_bytes()
@@ -981,7 +992,9 @@ def test_analysis_run_v1_unchanged_golden(data, tmp_path):
     assert out["schema"] == "analysis-result.v1"
     assert list(out["analyses"][0]) == [
         "analysis_id", "n_features_in", "n_features_out", "bh_population_n", "n_rows", "n_tested",
-        "n_meets_thresholds", "detection_available", "n_detection_driven", "rows"]
+        "n_meets_thresholds", "detection_available", "n_detection_driven", "n_constant_in_group",
+        "rows", "truncated"]
+    assert out["analyses"][0]["truncated"] is False
     path = tmp_path / "v1.json"
     R.dataset_analysis_run(_spec(data), dataset_handle=handle, output_path=str(path))
     ds = handles.registry.get(handle).dataset
@@ -1013,10 +1026,16 @@ def test_analysis_run_v2_inline_row_limit(tmp_path):
     state.feature_ids = [f"f{k}" for k in range(nf)]
     state.feature_metadata = {f"f{k}": {"name": f"F{k}"} for k in range(nf)}
     out = json.loads(R.dataset_analysis_run(_v2_spec()))
-    assert out["error"]["code"] == "ANALYSIS_OUTPUT_REQUIRED"
-    assert out["error"]["details"]["analyses"] == ["cmp"]
+    item = out["analyses"][0]
+    assert "error" not in out and item["n_rows"] == 60
+    assert item["truncated"] is True and item["rows_order"] == "p_ascending"
+    assert any("['cmp']" in n for n in out["notes"])
+    lines = item["rows"].splitlines()
+    header = lines[0].split("\t")
+    ps = [float(dict(zip(header, line.split("\t")))["p"]) for line in lines[1:]]
+    assert len(ps) == R.MAX_INLINE_ROWS and ps == sorted(ps)
     ok = json.loads(R.dataset_analysis_run(_v2_spec(), output_path=str(tmp_path / "o.json")))
-    assert ok["analyses"][0]["n_rows"] == 60
+    assert ok["analyses"][0]["n_rows"] == 60 and "truncated" not in ok["analyses"][0]
 
 
 def test_analysis_run_v2_needs_input_envelope_names_spec_field(tmp_path):

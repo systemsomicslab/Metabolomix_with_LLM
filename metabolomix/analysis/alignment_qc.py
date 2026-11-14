@@ -35,6 +35,9 @@ MS-DIAL のアライメントは、1 つの物質を 2 つ以上のスポット�
   analysis_spec）はこれを呼ぶ。
 - 残すのは受け持ち（`n_owned`）の多い側、同数なら小さい ID（`_keep_first`）。割れの群の並びは
   **残す ID が先頭**（`merge_groups[].features`・`usable_merge_groups` の戻り・`merged_from`）。
+- `dataset_alignment_qc` の最後の結果はデータセットに持たせる（`remember`）。統計の側
+  （`feature_search.merge_plan`）は JSON のパスを省かれたとき `remembered` で読み、データの指紋か
+  `metadata_revision`（試料の表・除外の変更で進む）が変わっていれば使わない。
 """
 from __future__ import annotations
 
@@ -52,7 +55,8 @@ from metabolomix.core.atomic_io import DomainError
 
 __all__ = ["SCHEMA", "TYPES", "MergedMatrix", "find_split_pairs", "merge_matrix_columns",
            "id_order", "inchikey_match", "names_compatible", "order_label", "read_qc_file",
-           "sample_injection_order", "split_partners", "usable_merge_groups"]
+           "remember", "remembered", "sample_injection_order", "split_partners",
+           "usable_merge_groups"]
 
 SCHEMA = "alignment-qc.v1"
 TYPES = ("injection_block", "group_aligned", "interleaved")
@@ -659,6 +663,41 @@ def read_qc_file(path_text: str, ds, *, field: str,
                           "（dataset_fingerprint が合わない、または無い）。このデータセットで "
                           "dataset_alignment_qc を実行し直す", {"field": field})
     return qc, hashlib.sha256(raw).hexdigest()
+
+
+#: `dataset_alignment_qc` の最後の結果を持つ DatasetState の属性。
+_LAST_ATTR = "last_alignment_qc"
+
+
+def remember(ds, qc: dict, *, sha256: str) -> None:
+    """`dataset_alignment_qc` の最後の結果をデータセットに持たせる（前の結果は置き換える）。
+
+    `sha256` は `output_path` に書くのと同じバイト列の hash（ファイルで渡したときと同じ値になる）。
+    いつの試料の表・除外で作ったかを `metadata_revision` で覚え、`remembered` が照合する。
+    """
+    setattr(ds, _LAST_ATTR, {"qc": qc, "sha256": sha256,
+                             "metadata_revision": getattr(ds, "metadata_revision", 0)})
+
+
+def remembered(ds, *, dataset_hash: str | None = None) -> tuple[dict, str] | None:
+    """データセットが持つ最後の結果 `(中身, sha256)`。今も使えなければ捨てて None。
+
+    使えないのは、データの指紋（`dataset_fingerprint`）が作ったときと違うか、試料の表・除外が変わった
+    （`metadata_revision` が進んだ）とき——群と注入順で割れの型が変わるので、古い組を黙って使わない。
+    `dataset_hash` は計算済みの `dataset_fingerprint(ds)`（任意）。
+    """
+    entry = getattr(ds, _LAST_ATTR, None)
+    if not entry:
+        return None
+    if dataset_hash is None:
+        from metabolomix.analysis.result_state import dataset_fingerprint
+
+        dataset_hash = dataset_fingerprint(ds)
+    if (entry["qc"].get("dataset_fingerprint") != dataset_hash
+            or entry["metadata_revision"] != getattr(ds, "metadata_revision", 0)):
+        setattr(ds, _LAST_ATTR, None)
+        return None
+    return entry["qc"], entry["sha256"]
 
 
 def usable_merge_groups(qc: dict, feature_ids) -> tuple[list[list[str]], list[list[str]]]:
