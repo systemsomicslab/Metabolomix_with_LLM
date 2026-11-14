@@ -336,6 +336,10 @@ spec の `input` に無い除外がデータセットにあれば、結果の `w
 （ファイルの順）かもしれないときは補正を当てずに回す。前処理の `steps` のドリフトの段に `reason`・`reasons`・
 `rerun_with: {"preprocess.drift.mode": "on"}` が、`warnings` に `drift_not_applied_by_default` が載る。補正するなら
 spec の `preprocess.drift.mode` を `"on"` にして呼び直す（`rule_hash` が変わる）。
+入力が陽陰を統合したデータセット（`dataset_merge_polarities`）なら、前処理はドリフト補正と正規化を極性ごとに当てる
+（`dataset.md` §10.2。段の `by_polarity`・注意 `polarity_runs_differ`）。spec に新しい欄は無く `rule_hash` は変わらないが、
+`input_fingerprint.sample_table_hash` に陰イオンの測定（`quant_state.polarity_runs`）が入り、`matrix_id` に極性の塊が入る
+（統合でないデータセットの値・`sample_table_hash`・`matrix_id` は変わらない）。
 
 **戻り値は要約だけ。** `{status, schema: "analysis-result.v2", rule_hash, matrix_id, input_fingerprint: {dataset_hash,
 sample_table_hash}, primary, warnings, analyses}`。`analyses[]` は解析ごとの要約で、compare は `n_rows`・`n_tested`・
@@ -423,8 +427,8 @@ matrix_id, preprocess: {steps, warnings, subject_source}, primary, analyses: [{a
 |---|---|---|
 | `detection_filter` | `{"basis": "detected", "min_rate": {}}` | 役割（`qc`・`sample`・`blank`）ごとの検出率の最小。挙げた役割のすべてを満たす特徴を残す。`basis`: `detected` は gap-fill を除く実検出（検出状態が無ければ `DETECTION_UNAVAILABLE`）、`positive` は値が有限かつ > 0（gap-fill を含む） |
 | `impute` | `{"method": "half_min", "missing": "zero", "k": 10, "scale": "log2", "rowmax": 0.5, "colmax": 0.8}` | 欠測（`missing`: `zero` は ≤0 か非有限、`nan` は非有限だけ）を埋める。`half_min`: 特徴ごとの正の値の最小の半分（正の値が無い特徴は欠測のまま）。`knn`: 下記。`none` |
-| `normalize` | `{"method": "pqn", "reference": "qc"}` | `pqn`: 参照（`reference` の役割の試料の、特徴ごとの正の値の中央値）に対する商の中央値で割る。`tic`（有限値の和）・`median`（正の値の中央値）は係数を試料間の中央値で割る。係数が 0・非有限の試料は割らずに報告する |
-| `drift_correct` | `{"method": "loess", "span": 0.75, "iterations": 0, "min_qc": 4}` | 特徴ごとに、正の QC 値を注入順に対して LOWESS で当て、`値 / 当てはめ × QC 値の中央値` に直す。正の QC 値が `min_qc` 未満、または当てはめが正の有限でない特徴は直さず数える。注入順はすべての試料に要る（`INJECTION_ORDER_MISSING`） |
+| `normalize` | `{"method": "pqn", "reference": "qc"}` | `pqn`: 参照（`reference` の役割の試料の、特徴ごとの正の値の中央値）に対する商の中央値で割る。`tic`（有限値の和）・`median`（正の値の中央値）は係数を試料間の中央値で割る。係数が 0・非有限の試料は割らずに報告する。入力が陽陰を統合したデータセットなら、係数は極性ごとにその極性の特徴だけから求め、その極性の列だけを割る（段の報告は `by_polarity`: 極性 → `factors`・`unscaled_samples`。陽イオンと陰イオンは別の注入） |
+| `drift_correct` | `{"method": "loess", "span": 0.75, "iterations": 0, "min_qc": 4}` | 特徴ごとに、正の QC 値を注入順に対して LOWESS で当て、`値 / 当てはめ × QC 値の中央値` に直す。正の QC 値が `min_qc` 未満、または当てはめが正の有限でない特徴は直さず数える。注入順はすべての試料に要る（`INJECTION_ORDER_MISSING`）。注入順は試料ごとに 1 つなので、陽陰を統合したデータセットでもすべての特徴に同じ順を当てる（陰イオンの注入順が違うなら、極性ごとの測定で補正する v2 か `dataset_preprocess` を使う） |
 | `qc_rsd_filter` | `{"max_rsd": 0.3}` | QC の有限値の `std(ddof=1)/mean` が `max_rsd` 以下の特徴を残す。RSD が出ない特徴も落とす（別に数える） |
 
 **参照する標準の定義:**

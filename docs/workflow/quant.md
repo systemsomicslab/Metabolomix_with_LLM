@@ -80,6 +80,9 @@
 `normalize_status()` が決め、記録の `settings.normalize` と戻り値の `normalize` に書く）。試料名が食い違えば `needs_input`（`only_in`）で止まり、
 記録の置き場が決まらなければ `needs_input`（`record_folder`）。状態変更: 2 つの解析フォルダの
 共通の親（または `record_folder`）の `reports/quant/` に記録を書き、新しいハンドルを登録する。
+試料の表は陽イオンのもの。陰イオンの試料ごとのバッチ・注入順は `quant_state.polarity_runs.negative`（統合後の試料名 →
+測定）に残し（手順 15）、陽イオンと同じかを `negative_runs`（手順 16）で記録と戻り値に書く。統計エンジンの前処理は
+これでドリフト補正を極性ごとに当てる（`dataset_analysis.md` の `dataset_preprocess`）。
 
 1. metabolomix/quant/tools.py  dataset_merge_polarities()
 2. ├─ metabolomix/tools/_holder.py  resolve_holder()
@@ -95,11 +98,13 @@
 12.    │  │  └─ metabolomix/quant/plugin.py  call()
 13.    │  ├─ metabolomix/quant/merge.py  _check_groups()
 14.    │  ├─ metabolomix/quant/records.py  merged_record_folder()
-15.    │  ├─ metabolomix/quant/records.py  write_record()
-16.    │  ├─ metabolomix/quant/derive.py  derive()
-17.    │  ├─ metabolomix/quant/derive.py  carry_exploratory()（両側の探索専用の印を極性付きで合わせる）
-18.    │  └─ metabolomix/quant/merge.py  merged_source_verification()（出所の裏取りは陽陰の弱いほう）
-19.    └─ metabolomix/quant/derive.py  register()
+15.    │  ├─ metabolomix/analysis/stats/data.py  sample_runs()（陽陰それぞれの試料の測定。統計エンジンと同じ読み方）
+16.    │  ├─ metabolomix/quant/merge.py  _runs_match()（陰イオンの注入順・バッチが陽イオンと同じか → `negative_runs`）
+17.    │  ├─ metabolomix/quant/records.py  write_record()
+18.    │  ├─ metabolomix/quant/derive.py  derive()
+19.    │  ├─ metabolomix/quant/derive.py  carry_exploratory()（両側の探索専用の印を極性付きで合わせる）
+20.    │  └─ metabolomix/quant/merge.py  merged_source_verification()（出所の裏取りは陽陰の弱いほう）
+21.    └─ metabolomix/quant/derive.py  register()
 
 ## dataset_select_features
 

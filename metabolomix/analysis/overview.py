@@ -136,6 +136,11 @@ def _name(ds, fid: str) -> str:
 
 # --- 品質 ----------------------------------------------------------------------------------
 
+def _polarity_of(row: dict) -> str:
+    """統合したデータセットのドリフトの兆候の行の極性（`polarity` があれば「<極性> の」）。"""
+    return f"{row['polarity']} の" if row.get("polarity") else ""
+
+
 def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict], confounding: dict,
                   replicate_warnings: list, verdict: str, reasons: list[str], n_qc: int, n_blank: int,
                   drift_note: str | None, pca_id: str | None) -> dict:
@@ -151,8 +156,11 @@ def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict]
     else:
         f.add(f"QC の RSD は評価できない（{rsd.get('reason')}。QC {rsd.get('n_qc', 0)} 本）", **rsd)
     if failed.get("failed"):
+        by = {p: ids for p, ids in (failed.get("by_polarity") or {}).items() if ids}
+        where = ("（極性ごとの総量で: " + "; ".join(f"{p} {', '.join(ids[:5])}" for p, ids in by.items()) + "）"
+                 if by else "")
         f.add(f"失敗した QC 注入 {len(failed['failed'])} 本（総量が QC の中央値の 0.2 倍未満）: "
-              + ", ".join(failed["failed"][:5]), **failed)
+              + ", ".join(failed["failed"][:5]) + where, **failed)
     if detection.get("status") == "ok":
         f.add(f"生体試料のセル: 実検出 {_pct(detection['detected_frac'])}・gap-fill {_pct(detection['gap_filled_frac'])}"
               f"・欠測 {_pct(detection['missing_frac'])}", **detection)
@@ -160,10 +168,12 @@ def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict]
         f.add(f"実検出と gap-fill の別は評価できない（{detection.get('reason')}）", **detection)
     flagged = [d for d in drift if d.get("flag")]
     if flagged:
-        f.add("ドリフトの兆候: " + "; ".join(f"バッチ {d['batch']} で QC の総量と注入順の ρ={_g(d['rho'], 2)}"
-                                           f"（QC {d['n_qc']} 本）" for d in flagged[:3]), batches=drift)
+        f.add("ドリフトの兆候: " + "; ".join(f"{_polarity_of(d)}バッチ {d['batch']} で QC の総量と注入順の"
+                                           f" ρ={_g(d['rho'], 2)}（QC {d['n_qc']} 本）"
+                                           for d in flagged[:3]), batches=drift)
     elif drift:
-        f.add(f"ドリフトの兆候なし（QC が 5 本以上の {len(drift)} バッチで |ρ|<0.6 か p≥0.05）", batches=drift)
+        unit = "極性・バッチ" if any(d.get("polarity") for d in drift) else "バッチ"
+        f.add(f"ドリフトの兆候なし（QC が 5 本以上の {len(drift)} {unit}で |ρ|<0.6 か p≥0.05）", batches=drift)
     status = confounding.get("batch_status")
     inj = (confounding.get("injection_order") or {}).get("status")
     conf_text = {"complete": "群とバッチが完全交絡（群差とバッチ差を区別できない。比較は回していない）",

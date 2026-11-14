@@ -66,6 +66,90 @@ class StudyData:
     #: バッチが不明な試料の、試料名の 8 桁からの候補（試料 ID → `{"value", "source": "filename_date"}`）。
     #: 統計には当てない（前処理が注意として返すだけ）。
     batch_candidates: dict[str, dict] = field(default_factory=dict)
+    #: 陽陰を統合したデータセット（`dataset_merge_polarities`）だけ: 特徴 ID → 極性
+    #: （`feature_metadata[fid]["origin"]["polarity"]`）。空なら統合ではなく、前処理は全特徴を 1 つの塊として扱う。
+    feature_polarity: dict[str, str] = field(default_factory=dict)
+    #: 統合したデータセットだけ: 極性 → 試料ごと（`samples` と同じ順）のその極性の測定
+    #: （`run_of` の形。None はその試料の測定が分からない）。ここに無い極性は `samples` の値（統合した
+    #: データセットの試料の表＝陽イオンの測定）を使う（`polarity_samples`）。
+    polarity_runs: dict[str, list] = field(default_factory=dict)
+
+
+#: 統合したデータセットの試料の表（`samples`）がどの極性の測定か（`quant.merge` は陽イオンの側を土台にする）。
+SAMPLE_TABLE_POLARITY = "positive"
+#: 試料の測定（注入）ごとに極性で違いうる欄（`polarity_runs` の形）。
+RUN_FIELDS = ("batch", "injection_order", "injection_order_source", "injection_order_may_be_file_order")
+
+
+def run_of(sample: SampleInfo) -> dict:
+    """試料の測定の欄（バッチ・注入順とその出所）。統合が陰イオンの測定を残す形。"""
+    return {"batch": sample.batch, "injection_order": sample.injection_order,
+            "injection_order_source": sample.injection_order_source,
+            "injection_order_may_be_file_order": bool(sample.injection_order_may_be_file_order)}
+
+
+def polarity_samples(study: StudyData, polarity: str) -> list[SampleInfo]:
+    """その極性の特徴の測定としての試料の表（`samples` と同じ順・同じ試料）。
+
+    役割・群・個体・含めるか・属性は `samples` のまま（統合は陽陰で同じ試料を照合している）で、
+    バッチと注入順だけをその極性の測定（`polarity_runs`）に替える。`polarity_runs` に無い極性は `samples`。
+    """
+    runs = study.polarity_runs.get(polarity)
+    if runs is None:
+        return list(study.samples)
+    out = []
+    for sample, run in zip(study.samples, runs):
+        run = run or {}
+        out.append(replace(sample, batch=_str_or_none(run.get("batch")),
+                           injection_order=_float_or_none(run.get("injection_order")),
+                           injection_order_source=run.get("injection_order_source"),
+                           injection_order_may_be_file_order=bool(
+                               run.get("injection_order_may_be_file_order"))))
+    return out
+
+
+def merged_feature_polarity(ds) -> dict[str, str]:
+    """陽陰を統合したデータセットなら 特徴 ID → 極性（すべての特徴が統合の出自 `origin` を持つときだけ）。
+    でなければ空（`quant.select.is_merged` と同じ見分け方）。"""
+    metadata = getattr(ds, "feature_metadata", None) or {}
+    ids = list(getattr(ds, "feature_ids", None) or [])
+    out = {}
+    for fid in ids:
+        origin = (metadata.get(fid) or {}).get("origin")
+        if not isinstance(origin, dict) or not isinstance(origin.get("polarity"), str):
+            return {}
+        out[str(fid)] = origin["polarity"]
+    return out
+
+
+def _polarity_runs(ds, polarities, display: list[str]) -> dict[str, list]:
+    """統合したデータセットの、試料の表の極性（陽イオン）以外の極性の測定（`display` の順）。
+
+    統合が `quant_state["polarity_runs"]` に残した値を試料名で引く。残っていない極性（その版より前の
+    統合）は測定が分からない（None。注入順が無いのでドリフト補正はその極性に当たらない）。
+    """
+    recorded = (getattr(ds, "quant_state", None) or {}).get("polarity_runs") or {}
+    out = {}
+    for polarity in dict.fromkeys(polarities):
+        if polarity == SAMPLE_TABLE_POLARITY:
+            continue
+        table = recorded.get(polarity) if isinstance(recorded.get(polarity), dict) else {}
+        out[polarity] = [table.get(name) for name in display]
+    return out
+
+
+def sample_runs(ds) -> dict[str, dict]:
+    """試料名（`ds.sample_names`）→ 統計エンジンがその試料の測定として読む値（`run_of`）。
+
+    `from_dataset` と同じ試料の表から読む（試料の表の行 → .mddata → …。バッチは 2 種類以上あるときだけ）。
+    統合（`quant.merge`）が陰イオンの測定を残すのに使う。
+    """
+    rows = getattr(ds, "sample_metadata_rows", None)
+    ids = list(getattr(ds, "sample_ids", None) or []) if rows else []
+    names = ids or list(ds.sample_names)
+    samples, _candidates = _samples_table(ds, names)
+    display = list(getattr(ds, "sample_names", None) or names)
+    return {str(display[i]): run_of(s) for i, s in enumerate(samples)}
 
 
 def quant_state_of(ds) -> QuantState | None:
@@ -306,6 +390,7 @@ def from_dataset(ds, *, exclude_samples=(), exclude_features=(),
     feature_ids = list(ds.feature_ids)
 
     display = list(getattr(ds, "sample_names", None) or names)
+    feature_polarity = merged_feature_polarity(ds)
     if exclude_samples:
         for pos in _resolve_sample_indices(display, names, list(exclude_samples),
                                            "exclude_samples").values():
@@ -336,11 +421,16 @@ def from_dataset(ds, *, exclude_samples=(), exclude_features=(),
         feature_ids = [feature_ids[j] for j in keep]
         classes = {f: c for f, c in classes.items() if f not in drop}
         annotated = frozenset(f for f in annotated if f not in drop)
+        feature_polarity = {f: p for f, p in feature_polarity.items() if f not in drop}
+    # 残った特徴の極性の測定だけ（陽イオンは試料の表そのもの）
+    polarity_runs = (_polarity_runs(ds, feature_polarity.values(), [str(n) for n in display])
+                     if feature_polarity else {})
     return StudyData(values=values, detected=detected, sample_ids=names,
                      feature_ids=feature_ids, samples=samples,
                      quant=quant_state_of(ds), dataset_hash=_fingerprint(ds),
                      feature_classes=classes, annotated_features=annotated,
-                     batch_candidates=batch_candidates)
+                     batch_candidates=batch_candidates, feature_polarity=feature_polarity,
+                     polarity_runs=polarity_runs)
 
 
 def merge_feature_columns(study: StudyData, groups: list[list[str]]) -> StudyData:
@@ -390,8 +480,11 @@ def merge_feature_columns(study: StudyData, groups: list[list[str]]) -> StudyDat
             classes.pop(f, None)
             annotated.discard(f)
     keep = [i for i in range(len(ids)) if i not in drop]
+    kept_ids = [study.feature_ids[i] for i in keep]
+    # 統合したデータセットの極性は、まとめた列の先頭の特徴のもの
+    polarity = {f: study.feature_polarity[f] for f in kept_ids if f in study.feature_polarity}
     return replace(study, values=values[:, keep],
                    detected=None if det is None else det[:, keep],
-                   feature_ids=[study.feature_ids[i] for i in keep],
+                   feature_ids=kept_ids,
                    feature_classes=classes, annotated_features=frozenset(annotated),
-                   feature_merges=merges)
+                   feature_merges=merges, feature_polarity=polarity)

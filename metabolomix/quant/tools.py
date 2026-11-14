@@ -146,7 +146,9 @@ def dataset_merge_polarities(positive_handle: str, negative_handle: str,
     （only_in に片側にしか無い試料）で止まる。mapping_csv（列: mode, source_sample, sample_id,
     group, sample_type）で対応づけて再実行する。mapping_csv の mode 列は positive / negative
     （pos / neg も可）。group / sample_type 列は規則が検証するだけで適用しない（試料の実験情報は
-    POS のものを使う）。
+    POS のものを使う）。陰イオンは別の注入なので、試料ごとの陰イオンのバッチと注入順を残し
+    （統計の前処理がドリフト補正を極性ごとに当てる）、陽イオンと同じかを戻り値と記録の negative_runs
+    （injection_order: same / different / unknown、batch: same / different、n_samples_differ）に書く。
     記録は 2 つの解析フォルダの共通の親の reports/quant/。共通の親が決められなければ
     needs_input で record_folder（既存のフォルダ）を求める。規則プラグイン（[quant] rules）が要る。
     キュレーションのフラグは写さず、選別が極性ごとの .arf2 からその時点のものを読む。

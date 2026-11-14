@@ -226,6 +226,26 @@ subject_source, groups: {群: 個体数}, quant, steps, warnings, record, next}`
   質量精度の注入順の ρ（`dataset_mass_accuracy` の `injection_trend.warnings`）も返す。判定は、MS-DIAL 由来の注入順を
   ファイル名の順に並べて狭義に増えるとき（同じ注入順の試料があれば立てない））・`batch_candidates`（バッチが不明な試料の名前の 8 桁が 2 種類以上。`values`。
   ドリフト補正・反復のまとめ・交絡には当てていない。バッチなら試料の表の `batch` に入れる）。
+- **陽陰を統合したデータセット**（`dataset_merge_polarities`。すべての特徴が `feature_metadata[<fid>]["origin"]["polarity"]`
+  を持つ）は、陽イオンと陰イオンが別の注入・別の測定の列なので、**ドリフト補正と正規化を極性ごと**に当てる。
+  ドリフトはその極性の測定の注入順・バッチで当てはめ（陽イオンは統合したデータセットの試料の表、陰イオンは統合が
+  残した `quant_state.polarity_runs.negative`）、正規化の係数（`tic` / `median` / `pqn`、`auto` が解いた方法も）は
+  その極性の特徴だけから求めてその極性の列だけを割る。各極性の値・係数は、**その極性だけを前処理して並べたものと同じ**。
+  足切り（ブランク比・検出率・QC RSD・D-ratio）・log2・反復のまとめは特徴ごと・セルごとの計算なので、分けなくても同じ。
+  記録: ドリフトの段は `by_polarity`（極性 → その極性の段）と、全極性で補正すれば `status: applied`、一部なら
+  `partial`、どれにも当てなければ `skipped`（`reasons` は当てなかった極性の理由、`polarities_skipped`。
+  `rerun_with` は当てなかった極性がすべて drift=auto の保留のときだけ）。`drift_mode="on"` で条件を満たさない極性が
+  あれば `PREPROCESS_PRECONDITION`（message の先頭と `details.polarity` に極性）。正規化の段は方法・参照・`factor_samples`
+  を上に、`by_polarity` に極性ごとの `factors`・`factors_set_to_one`・`unscaled_samples`・係数の特徴の記録。
+  `normalization_features` は極性ごとにその極性の特徴だけを使い、ある極性の特徴が 1 つも無ければその極性は
+  残った特徴すべてから求めて（`factor_features_fallback: "no_listed_feature_in_polarity"`）、注意
+  `normalization_features_not_in_polarity`（`polarities`）を返す。注意: `injection_order_may_be_file_order` と
+  `drift_not_applied_by_default`（`polarities`: 極性 → 保留の理由）は極性付き。陽陰で注入順・バッチが違う（片方だけ
+  分からない）試料があれば `polarity_runs_differ`（`polarity`・`reference_polarity: "positive"`・
+  `n_injection_order_differs`・`n_injection_order_unknown`・`n_batch_differs`・`samples`。統合が測定を残していない
+  （その版より前の統合）なら `runs_recorded: false` で、その極性のドリフト補正は当てない。統合し直すと残る）。
+  交絡の判定・比較の共変量 `batch`・反復のまとめは統合したデータセットの試料の表（陽イオンの測定）を使う。
+  `matrix_id` には極性の塊（特徴の分け方と極性ごとの測定）が入る（統合でないデータセットの `matrix_id` と値は変わらない）。
 - `quant` は定量で作ったデータセット（内部標準で換算済み）のときだけ `{normalized, method, unit}`、それ以外は null。
 - `record` は `reports/stats/` への記録 1 件（`{written: true, record_id, path}`）。書けないときは `{written: false, reason}`
   で、前処理自体は成功している。記録は追記専用（`lipidmix.stats-record.v1`: `step` は `preprocess` / `compare` / `pca`、
@@ -691,6 +711,9 @@ PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（
 | `ok` | 上のどれでもない |
 
 `poor` でも差は出すが、各段の事実に「品質 Q1 が poor のため参考」と付く（完全交絡のときだけ比較そのものを回さない）。
+陽陰を統合したデータセットでは、失敗した QC 注入とドリフトの兆候を**極性ごと**に見る（極性ごとの特徴の総量と、
+その極性の測定の注入順・バッチ。強度の大きい極性の総量がもう一方の失敗やドリフトを隠さない）: 失敗した注入は
+どれかの極性で失敗したもの（データの `by_polarity` に内訳）、ドリフトの兆候の行は `polarity` 付き。
 既定（`drift_mode=auto`）がドリフト補正を当てなかった（換算済み・注入順がファイルの順かもしれない）ときは、概観は
 補正なしで計算し、そのことを事実と `next`（`dataset_preprocess(drift_mode="on")`）に出す。
 既定の前処理が失敗する（足切りで特徴が 1 つも残らない など）ときも概観は失敗しない: 品質の段（前処理の前の試料から

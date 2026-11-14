@@ -44,6 +44,13 @@ def _drift_note(prepared) -> str | None:
     step = next((s for s in prepared.steps if s.get("step") == "drift"), {})
     if not step.get("rerun_with"):
         return None
+    held = {p: st.get("reasons") or [] for p, st in (step.get("by_polarity") or {}).items()
+            if st.get("rerun_with")}
+    if held:
+        # 陽陰を統合したデータセット: 補正は極性ごと。止めた極性だけを名指しする
+        why = "; ".join(f"{p}: " + "・".join(_DRIFT_HELD.get(r, r) for r in rs) for p, rs in held.items())
+        return (f"ドリフト補正は既定（drift=auto）では {', '.join(held)} に当てなかった（{why}）。概観はその極性を"
+                "補正なしで計算した（補正するなら dataset_preprocess(drift_mode=\"on\")）")
     why = "・".join(_DRIFT_HELD.get(r, r) for r in step.get("reasons") or [])
     return (f"ドリフト補正は既定（drift=auto）では当てなかった（{why}）。概観は補正なしで計算した"
             "（補正するなら dataset_preprocess(drift_mode=\"on\")）")

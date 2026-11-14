@@ -854,12 +854,22 @@ def _meets(row: dict, thresholds: dict):
     return all(checks)
 
 
+def _merged_polarity(normalized: dict, ds) -> dict[str, str] | None:
+    """入力が陽陰を統合したデータセットなら 特徴 ID → 極性（正規化の係数を極性ごとに求める）。でなければ None。
+    割れのまとめの後の ID は組の先頭の ID なので、そのまま引ける。"""
+    if normalized["input"]["source"] != "dataset" or ds is None:
+        return None
+    from metabolomix.analysis.stats.data import merged_feature_polarity
+    return merged_feature_polarity(ds) or None
+
+
 def _run_analysis(analysis: dict, data: dict, normalized: dict, ds, reported: list[str] | None,
                   matrices: list | None = None):
     # `data` の行列は、割れたスポットを 1 列にまとめた後（`_merge_plan`）。recipe はその列に当たる。
     matrix = recipe_matrix.build_matrix(
         data["values"], data["samples"], data["feature_ids"], data["roles"], analysis["matrix"],
-        detected=data["detected"], injection_order=data["order"])
+        detected=data["detected"], injection_order=data["order"],
+        feature_polarity=_merged_polarity(normalized, ds))
     if matrices is not None:
         matrices.append((analysis["analysis_id"], matrix))  # correlate（stage=matrix）が集約の前の行列を読む
     merged_from: dict[str, list[str]] = data["merged_from"]
