@@ -258,6 +258,51 @@ def test_directory_folder_theoretical_mz_for_other_adducts(tmp_path):
     assert theo == pytest.approx(162.077181, abs=1e-5)
 
 
+def _bundle_sme_provenance(ds, out_dir: Path) -> dict:
+    """`ds` を前半・後半の 2 群で比べて根拠バンドルを書き、`msdial_sme` 行の来歴（特徴 ID → 候補）を返す。"""
+    import csv
+
+    from metabolomix.analysis.evidence_export import export_dataset_evidence
+    from tests.engine_chain import compare_halves
+
+    export_dataset_evidence(ds, compare_halves(ds), out_dir)
+    with (out_dir / "annotations.tsv").open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream, delimiter="	"))
+    return {r["feature_id"]: json.loads(r["provenance_json"])
+            for r in rows if r["source"] == "msdial_sme"}
+
+
+#: PC 34:1（POPC）の InChIKey（根拠バンドルは形の正しい InChIKey だけを受ける）。
+_POPC_INCHIKEY = "WTJKGGKOPKCXLL-VYOBOKEXSA-N"
+
+
+def _with_inchikey(spec: dict) -> dict:
+    spec["spots"][0]["matches"] = [match_result({0: "PC 34:1", 1: _POPC_INCHIKEY})]
+    return spec
+
+
+def test_evidence_bundle_does_not_carry_the_computed_theoretical_mz(tmp_path):
+    """根拠バンドルの `msdial_sme` 行の来歴の theoretical_mass_to_charge はライブラリの記録のプリカーサー m/z
+    （mzTab-M の値）の意味のまま。directory で組成式と付加体から計算した値は写さず null（計算を入れる前と同じ。
+    欄は足さない）。job は照合した mzTab-M の値をそのまま写す。"""
+    write_msdial_folder(tmp_path / "gui", **_with_inchikey(_spec()))
+    ds = open_dataset(directory=str(tmp_path / "gui")).dataset
+    assert ds.theoretical_mz_computed == {"0"}
+    provenance = _bundle_sme_provenance(ds, tmp_path / "bundle_dir")
+    assert "theoretical_mass_to_charge" in provenance["0"]
+    assert provenance["0"]["theoretical_mass_to_charge"] is None
+    # データセットの候補は変えない（質量精度と新しい知見の候補は計算した値を使い続ける）。
+    assert ds.feature_candidates["0"][0]["theoretical_mass_to_charge"] == pytest.approx(
+        _PC_34_1_MH, abs=1e-5)
+
+    job_ds = open_dataset(job_path=str(_job(tmp_path, spec=_with_inchikey(_theo_spec())))).dataset
+    assert job_ds.theoretical_mz_computed == set()
+    theo = job_ds.feature_candidates["0"][0]["theoretical_mass_to_charge"]
+    provenance = _bundle_sme_provenance(job_ds, tmp_path / "bundle_job")
+    assert theo is not None
+    assert provenance["0"]["theoretical_mass_to_charge"] == pytest.approx(theo)
+
+
 def test_incomplete_job_gate_shared(tmp_path):
     job = _job(tmp_path, status="partial")
     for source in ("auto", "mztab"):

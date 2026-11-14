@@ -314,6 +314,16 @@ def test_merged_theoretical_mz_source(tmp_path, monkeypatch, pos_source, neg_sou
     assert merged.theoretical_mz_source == expected
 
 
+def test_merged_theoretical_mz_computed_ids(tmp_path, monkeypatch):
+    """計算した理論 m/z の特徴は統合後の ID で持つ（根拠バンドルが特徴ごとに来歴へ写すかを決める）。"""
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.theoretical_mz_computed, neg.theoretical_mz_computed = {"1"}, set()
+    merged, _ = _merge(pos, neg, mapping_rows=None)
+    assert merged.theoretical_mz_computed == {"positive:1"}
+    assert pos.theoretical_mz_computed == {"1"}  # 元は不変
+
+
 def test_merged_quant_state_and_record(tmp_path, monkeypatch):
     _point(tmp_path, monkeypatch)
     pos, neg = _pair(tmp_path)

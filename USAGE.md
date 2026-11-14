@@ -260,6 +260,6 @@ run ディレクトリの `remote-job-measure.json`(描画のジョブは `remot
 
 | ツール | 内容 |
 |---|---|
-| `dataset_export_evidence_bundle` | result_idで指定した現行2群結果(`result_id` を省けば直近の差次的結果。`dataset_compare` の結果は `contrast_id` か `result_id#contrast_id` で対比を選び、2 群の対比が複数で選ばなければ `needs_input`。`manifest.json` の `comparison.correction` は記録の補正の方法(無ければ `BH`)。探索専用のデータセットも断らず、manifest の最上位に `exploratory`(`{exploratory_only: true, reason}`)を足す。`manifest.json` の `comparison` に実際の検定名・`statistics`・`matrix_id` / `rule_hash` / `contrast_id` が入り、`intensities.tsv` は結果が読んだ行列の正規化後・log2 前の値)を全特徴量・複数候補付きでv3バンドル（samples・intensities・adduct・comparison.polarity、同じアラインメントの `.dcl` への spectrum_links）へ保存。旧v1を変更しない。列の意味は `docs/output_format/reanalysis.md` §10。 |
+| `dataset_export_evidence_bundle` | result_idで指定した現行2群結果(`result_id` を省けば直近の差次的結果。`dataset_compare` の結果は `contrast_id` か `result_id#contrast_id` で対比を選び、2 群の対比が複数で選ばなければ `needs_input`。`manifest.json` の `comparison.correction` は記録の補正の方法(無ければ `BH`)。探索専用のデータセットも断らず、manifest の最上位に `exploratory`(`{exploratory_only: true, reason}`)を足す。`directory=` で開いたデータセットが組成式と付加体から計算した SME の理論 m/z は `annotations.tsv` の `msdial_sme` 行の来歴に写さない(`null`)。`manifest.json` の `comparison` に実際の検定名・`statistics`・`matrix_id` / `rule_hash` / `contrast_id` が入り、`intensities.tsv` は結果が読んだ行列の正規化後・log2 前の値)を全特徴量・複数候補付きでv3バンドル（samples・intensities・adduct・comparison.polarity、同じアラインメントの `.dcl` への spectrum_links）へ保存。旧v1を変更しない。列の意味は `docs/output_format/reanalysis.md` §10。 |
 
 出力先は新しいディレクトリを指定する。既存出力を上書きしない。未同定・手動訂正・前処理除外来歴を保持する。

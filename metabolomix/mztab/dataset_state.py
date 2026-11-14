@@ -270,6 +270,10 @@ class DatasetState:
         # `mixed`（出所の違う 2 極性を統合したもの）。SME の候補のキーは mzTab-M の経路と同じ集合に
         # 保つので、出所は候補ではなくここに置く。指紋には入れない。
         self.theoretical_mz_source: str = "mztab"
+        # theoretical_mz_computed: SME（rank 1）の理論 m/z を組成式と付加体から計算して入れた特徴 ID
+        # （`dataset.opening._fill_formula_theoretical_mz`。統合は `positive:<id>` へ付け替える）。根拠バンドルが
+        # その候補の `theoretical_mass_to_charge` を写さない（mzTab-M の値と混ぜない）ために特徴ごとに持つ。
+        self.theoretical_mz_computed: set[str] = set()
         # excluded_samples / excluded_features: `dataset_exclude` が持つ除外（名前または特徴 ID -> 理由）。
         # 解析の状態であって入力ではないので指紋（`result_state.dataset_fingerprint`）には入れない
         # （`sample_meta` の編集と同じ扱い）。前処理（`dataset_analysis`）が行列から外す。

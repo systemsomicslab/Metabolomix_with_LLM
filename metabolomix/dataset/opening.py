@@ -606,6 +606,7 @@ def _fill_formula_theoretical_mz(ds) -> dict[str, int]:
     プリカーサー m/z ではない。既に値のある候補（mzTab-M から写したもの）は触らない。組成式か付加体が無い・
     読めない（未知の元素を含む）候補は None のまま。出所は `ds.theoretical_mz_source`（`formula_adduct`）と
     読み込みの注記（件数）に残す——SME の候補のキーは mzTab-M の経路と同じ集合のまま（欄を足さない）。
+    計算して入れた特徴 ID は `ds.theoretical_mz_computed` に足す（根拠バンドルはその値を写さない）。
 
     戻り値は {"computed": 入れた数, "not_computable": 入れられなかった数}。
     """
@@ -621,6 +622,7 @@ def _fill_formula_theoretical_mz(ds) -> dict[str, int]:
             value = theoretical_mz(formula, candidate.get("adduct"))
             if value is not None and math.isfinite(value) and value > 0:
                 candidate["theoretical_mass_to_charge"] = value
+                ds.theoretical_mz_computed.add(fid)
                 computed += 1
             else:
                 not_computable += 1

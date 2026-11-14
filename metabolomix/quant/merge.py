@@ -308,6 +308,10 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     # SME の理論 m/z の出所（mzTab-M か、組成式と付加体の計算か）。2 極性で違えば mixed。
     sources = {getattr(ds, "theoretical_mz_source", "mztab") for ds in (pos_ds, neg_ds)}
     new.theoretical_mz_source = sources.pop() if len(sources) == 1 else "mixed"
+    # 計算した理論 m/z の特徴は、統合後の ID（`<極性>:<id>`）で持つ（根拠バンドルが特徴ごとに読む）。
+    new.theoretical_mz_computed = {f"{prefix}:{fid}" for prefix, ds in (("positive", pos_ds),
+                                                                      ("negative", neg_ds))
+                                   for fid in getattr(ds, "theoretical_mz_computed", None) or ()}
     new.curation_flags = None  # 選別が極性ごとの .arf2（quant_state["arf2_by_polarity"]）から読む
     new.sample_metadata_rows = None
     new.library_record = None

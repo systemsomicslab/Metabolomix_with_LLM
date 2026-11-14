@@ -681,7 +681,8 @@ Reference m/z＝ライブラリの記録のプリカーサー m/z。job / pipeli
 **注釈を表す m/z であってライブラリの記録のプリカーサー m/z ではない**（誤差は「実測 − 注釈の厳密な m/z」。記録の値が
 丸めてある・実測値であるライブラリでは `mztab` と少し違う）。組成式か付加体が無い・読めない同定は数えない（件数は
 読み込みの注記）。`mixed`: 出所の違う 2 極性を `dataset_merge_polarities` で統合したもの。`dataset_novel_candidates` の
-行の `ppm` も同じ理論 m/z から出し、戻り値と JSON に同じ `theoretical_mz_source` を書く。
+行の `ppm` も同じ理論 m/z から出し、戻り値と JSON に同じ `theoretical_mz_source` を書く。根拠バンドル（§10）の
+`msdial_sme` 行の来歴には計算した値を写さない（`null`）。
 
 **許容幅は当てない**が、材料として勧める幅を
 添える: 帯ごとの `recommended_mz_tol_ppm` と、全体の `recommended_tolerance`
@@ -964,6 +965,13 @@ UTF-8・改行は CRLF）。
 SME の付加体）。無ければ空。`features.tsv` の `significant` は差次的の書き出しの `significant` 列と同じ印で、
 エンジンの結果は判定 `verdict` が `changed` の行だけ `true` になりうる（`dataset.md` §11.4。判定できない行は q が
 小さくても `false`）。
+
+`annotations.tsv` の `source` が `msdial_sme` の行の `provenance_json` は SME の候補そのもの（mzTab-M の SME の欄）。
+その `theoretical_mass_to_charge` は**ライブラリの記録のプリカーサー m/z**（mzTab-M の SME の値。job / pipeline を
+解析フォルダで読んだときは照合した mzTab-M から写した値）だけを表す。`load_dataset(directory=...)` で開いたデータセットが
+組成式と付加体から計算した理論 m/z（§8 の `theoretical_mz_source: formula_adduct`）は別物なので**写さず `null`**
+（計算を入れる前と同じ。欄は足さない）。極性を統合したデータセットでも、計算した側の特徴だけが `null` になる。計算した
+値と出所は `dataset_mass_accuracy` / `dataset_novel_candidates` で読む。
 
 戻り値には v2 の欄に `n_samples`・`n_intensity_rows`・`intensities_stage` が足される（探索専用のデータセットなら
 `exploratory` も）。

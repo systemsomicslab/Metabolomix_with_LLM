@@ -29,7 +29,8 @@
   丸めてある・実測値であるときは、同じアラインメントの mzTab-M の値と違う）。組成式か付加体が無い・読めない
   （質量表 H C N O P S Na Cl K F Br と D に無い元素を含む）同定は空のままで、質量精度と新しい知見の候補に入らない。
   件数は読み込みの注記（`load_notes`）に、出所は `dataset_mass_accuracy` / `dataset_novel_candidates` の
-  `theoretical_mz_source`（`formula_adduct`）に出る。`job_path` / `pipeline_path` を解析フォルダで読んだときは、照合した
+  `theoretical_mz_source`（`formula_adduct`）に出る。根拠バンドルの `msdial_sme` 行の来歴には写さない
+  （`provenance.theoretical_mass_to_charge` はライブラリの記録の値の意味のままで、この入口では `null`）。`job_path` / `pipeline_path` を解析フォルダで読んだときは、照合した
   正準 mzTab-M の SME の値を同じスポット ID に写す（`mztab`。計算した値で上書きしない）。意味は `reanalysis` トピック §8。
 - **同定の標準化の列**。`.arf2` の注釈は GOSLIN で正規化され、`feature_metadata["identity"]` に
   `normalized`（標準化した脂質名）・`msi_level`（MSI の同定水準。**`.arf2` 由来のヒューリスティックで、

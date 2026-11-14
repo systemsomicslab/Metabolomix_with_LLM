@@ -252,12 +252,16 @@ result_id は計算のたびに発行される UUID なので入れず、統計�
 5.       └─ metabolomix/analysis/evidence_export.py  comparison_of()
 6.       └─ metabolomix/analysis/evidence_export.py  _samples_table()
 7.       └─ metabolomix/analysis/evidence_export.py  _engine_intensity_rows()
-8.       └─ metabolomix/analysis/evidence_export.py  dataset_spectrum_links()
-9.          └─ metabolomix/analysis/evidence_export.py  _id_space_check()
-10.         └─ metabolomix/analysis/evidence_export.py  link_alignment_spectra()
-11.      └─ metabolomix/analysis/evidence_export.py  write_evidence_bundle()
-12.   └─ [CONTRAST_REQUIRED ほか] metabolomix/tools/_contrast_choice.py  contrast_envelope()
+8.       └─ metabolomix/analysis/evidence_export.py  library_candidate()（SME の候補ごと。計算した理論 m/z は写さない）
+9.       └─ metabolomix/analysis/evidence_export.py  dataset_spectrum_links()
+10.         └─ metabolomix/analysis/evidence_export.py  _id_space_check()
+11.         └─ metabolomix/analysis/evidence_export.py  link_alignment_spectra()
+12.      └─ metabolomix/analysis/evidence_export.py  write_evidence_bundle()
+13.   └─ [CONTRAST_REQUIRED ほか] metabolomix/tools/_contrast_choice.py  contrast_envelope()
 
 spectrum_links は同じアラインメントの `.dcl` に ID（SMF_ID == AlignmentID == `.dcl` の番号）で結び、
 m/z・RT は検証にだけ使う（`link_alignment_spectra()` が結ぶ）。
 結べないときの状態と理由は manifest の provenance（`docs/output_format/reanalysis.md` §10）。
+`annotations.tsv` の `msdial_sme` 行の来歴は SME の候補そのものだが、組成式と付加体から計算した理論 m/z
+（`DatasetState.theoretical_mz_computed` の特徴。`directory=` で開いたデータセット）は `library_candidate()` が空にして写す
+（`theoretical_mass_to_charge` はライブラリの記録のプリカーサー m/z の意味のまま。データセットの候補は変えない）。
