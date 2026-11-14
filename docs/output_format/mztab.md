@@ -184,7 +184,12 @@ SME 由来という食い違った行ができる。
 v2 の実験情報シートは、既知の列（と任意の `subject_id`）の後ろに**因子の列**（`Genotype`・`Treatment` など）を足せる。列名は空でなく、既知の列・足した列どうしと重ならないこと（重なれば `SAMPLE_MANIFEST_INVALID`）。値（空は欠落）は行にそのまま載り、受領の `samples.rows`・`dataset_set_sample_metadata`・データセットの試料の表を通って、analysis-spec v2 の `design.factors` / `covariates` が列名で引く。因子の列の値だけの変更も `changed_fields` に列名で出て、差次的解析の結果を古くする。
 
 `pipeline_sample_sheet` は ISA / mwTab の試料の表からこの v2 のシートを raw のフォルダに書く（受付と同じ読み手で
-確かめてから書く）。同じ名前のシートが既にあり `overwrite=True` でなければ `SAMPLE_SHEET_EXISTS`（`details.path`）、
+確かめてから書く）。群の決まらない生体試料（因子の値が空・表に行が無い・別々の試料に当たるファイル・因子の値が
+食い違う同じ試料の行）は群 `unassigned` で `include=false`（統計の母集団に入らない。`unassigned` は群ではない）。
+因子の列は渡した名前で足し、既知の列と完全に同じ名前だけ `factor_<名>` に改める（`renamed_factor_columns`）。
+注入順は raw の取得時刻の順で（`.wiff2` は同じ幹の `.wiff` の時刻）、取得時刻の読めない raw の注入順だけを空にする（宣言の行は書き、読み手はその空欄に
+「取得時刻では分からない」印を付けて `.mddata`・mzTab-M の番号で埋めない。`notes` が「ドリフト補正と注入順の偏りの
+判定は行われない」と書くのは、順の欠けた生体試料か QC が統計に入る `include=true` のときだけ）。生体試料のどれも群が決まらなければ書かない。同じ名前のシートが既にあり `overwrite=True` でなければ `SAMPLE_SHEET_EXISTS`（`details.path`）、
 試料の表・引数が読めない・合わない（因子の列が無い・`output_name` にフォルダを含む・読み書きできないなど）ときは
 `SAMPLE_TABLE_INVALID` で、どちらもシートを書かない。
 

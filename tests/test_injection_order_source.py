@@ -206,6 +206,39 @@ def test_sheet_declaration_and_blank_orders(tmp_path):
                for r in rows)
 
 
+def test_blank_orders_of_a_partly_ordered_declared_sheet_are_not_filled_from_msdial(tmp_path):
+    """取得時刻の読めない raw の空欄（一部だけ順のある宣言つきのシート）は、.mddata の番号で埋めない。
+
+    シートの順位（1, 2）と MS-DIAL の番号（10, 20, 30）は付け方が違う。埋めると r2 が 20 になり、ドリフト補正が
+    r2 を r1・r3 より後ろに置いてしまう。空欄は不明（None）のままにし、ドリフト補正は順の欠けで止まる。
+    """
+    sheet, root, names = _declared_sheet(tmp_path, ["# injection_order_source = raw_acquisition_time"],
+                                         orders=("2", "", "1"))
+    rows = sample_manifest.parse_manifest(sheet, source_root=root, expected_sources=names)
+    assert [sample_manifest.sheet_order_unknown(r) for r in rows] == [False, True, False]
+    samples = [{"name": f"r{i}", "role": "sample", "group": "G", "batch": "1", "injection_order": o,
+                "file_path": str(root / n)} for i, (n, o) in enumerate(zip(names, (10, 20, 30)))]
+    ds = SimpleNamespace(sample_names=[s["name"] for s in samples], msdial_samples=samples, sample_assay_ids=[],
+                         assay_metadata={}, assay_sources={}, feature_matrix=[[1.0, 2.0, 3.0]],
+                         detected_mask=None, feature_ids=["f1"])
+    merged = sample_manifest.resolve_metadata(ds, rows)
+    assert [r["injection_order"] for r in merged] == [2, None, 1]
+    ds.sample_metadata_rows = merged
+    study = stats_data.from_dataset(ds)
+    assert [s.injection_order for s in study.samples] == [2.0, None, 1.0]
+    assert [s.injection_order_source for s in study.samples] == ["raw_acquisition_time", None,
+                                                                 "raw_acquisition_time"]
+    _roles, meta = sample_manifest.pp_inputs_from_rows(ds.sample_names, merged)
+    assert [m["run_order_source"] for m in meta.values()] == ["raw_acquisition_time", None, "raw_acquisition_time"]
+    # 宣言の無いシート（利用者が手で書いた）の空欄は、これまでどおり .mddata で埋める
+    (tmp_path / "plain").mkdir()
+    plain, root2, names2 = _declared_sheet(tmp_path / "plain", [], orders=("2", "", "1"))
+    plain_rows = sample_manifest.parse_manifest(plain, source_root=root2, expected_sources=names2)
+    for s, n in zip(samples, names2):
+        s["file_path"] = str(root2 / n)
+    assert [r["injection_order"] for r in sample_manifest.resolve_metadata(ds, plain_rows)] == [2, 20, 1]
+
+
 @pytest.mark.parametrize("lines", [["# injection_order_source = mddata"], ["# note = x"], ["# free comment"],
                                    ["# injection_order_source = filename",
                                     "# injection_order_source = filename"]])

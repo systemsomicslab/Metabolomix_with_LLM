@@ -65,8 +65,7 @@ __all__ = [
 #: 呼び出し元のcwdや別checkoutへ暗黙に依存させないため、ここで固定する。
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-#: 単位の根（`<pipeline_root>/<極性>`）の下の書込み先。
-_CONSOLE_RUN_SUBDIR = "console"
+#: 単位の根（`<pipeline_root>/<極性>`）の下の書込み先（Console の実行フォルダは `store.console_attempt_dir`）。
 _INPUT_SUBDIR = "input"  # metabolomix.pipeline.inputs._INPUT_SUBDIRと同じ値
 #: `pipeline_plan` / `pipeline_run` の戻り値に出す受付の警告（`request.resolve_request` が出す）。
 _INTAKE_WARNING_CODES = frozenset({"REQUEST_FILE_DOWNSTREAM_IGNORED",
@@ -575,8 +574,7 @@ def _run_console_unit(context: dict, *, cancel_path: Path, waited_s: float | Non
     unit_root = context["unit_root"]
     request = context["unit_request"]
     inputs_snapshot = store.absolutize_unit_inputs(context["unit_state"]["inputs"], unit_root)
-    attempt = max(1, int(context.get("attempt") or 1))
-    run_dir = unit_root / _CONSOLE_RUN_SUBDIR / f"attempt-{attempt:04d}"
+    run_dir = store.console_attempt_dir(unit_root, context.get("attempt"))
     run_dir.mkdir(parents=True, exist_ok=True)
     job_path = run_dir / job_manager.JOB_FILENAME
     dataset_root = unit_root / _INPUT_SUBDIR

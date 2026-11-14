@@ -20,7 +20,7 @@ def _sheet_groups(directory: Path) -> tuple[dict[str, str], str | None, int]:
     """raw のフォルダの実験情報シート（`sample-manifest.tsv`）の `source_file` → 群（生体試料の行だけ）。
 
     pipeline の受付と違って厳密には検証しない（群を読むだけ）。無い・読めないときは空と理由。群
-    `unassigned`（`pipeline_sample_sheet` が因子の値が空・試料の表に行の無い試料に付ける。群ではない）の行は
+    `unassigned`（`pipeline_sample_sheet` が群の決まらない試料に付ける。include=false で、群ではない）の行は
     判定に入れず、その数を 3 つ目に返す。
     """
     from metabolomix.pipeline.inputs import DEFAULT_MANIFEST_NAME
@@ -51,7 +51,8 @@ def _sheet_groups(directory: Path) -> tuple[dict[str, str], str | None, int]:
 def _acquisition_lines(directory: Path, paths: list[str]) -> list[str]:
     """raw ごとの取得時刻（メタデータだけ。スペクトルは解さない）とその順、間隔、群との重なり。"""
     from metabolomix.console.job_manager import is_raw_input
-    from metabolomix.rawmeta.acquisition import GAP_MINUTES, acquisition_order, gaps_over, group_overlap
+    from metabolomix.rawmeta.acquisition import (GAP_MINUTES, SESSION_GAP_FACTOR, acquisition_order,
+                                                 gaps_over, group_overlap)
 
     raws = [Path(p) for p in paths if is_raw_input(Path(p))]
     if not raws:
@@ -72,10 +73,14 @@ def _acquisition_lines(directory: Path, paths: list[str]) -> list[str]:
     elif groups:
         judged = group_overlap(rows, groups)
         lines.append(f"\n## 群と取得順の重なり（sample-manifest.tsv の群）: {judged['overlap']}")
+        gap = judged["session_gap_minutes"]
         lines.append("complete = 取得順の範囲が重ならない（群と測定順が完全に交絡）/ independent = 重なり、"
-                     "どの取得日（UTC）にも両群がいる / partial = それ以外 / unknown = 群のある raw に読めない時刻がある")
+                     f"{gap:g} 分を超える間隔で区切った取得のまとまり（{len(judged['by_session'])} 個）の"
+                     "どれにも両群がいる / partial = それ以外 / unknown = 群のある raw に読めない時刻がある"
+                     f"（区切る間隔は {GAP_MINUTES} 分と、隣どうしの取得の間隔の中央値の {SESSION_GAP_FACTOR} 倍の"
+                     "大きいほう。1 周期の長いメソッドで連続した取得を割らない）")
         if n_unassigned:
-            lines.append(f"群 unassigned（因子の値が空・試料の表に行が無い）の {n_unassigned} 行は判定に入れない")
+            lines.append(f"群 unassigned（群の決まらない試料。include=false）の {n_unassigned} 行は判定に入れない")
         lines.append("group_a\tgroup_b\toverlap")
         shown = judged["comparisons"][:_PAIR_LIMIT]
         lines.extend(f"{c['groups'][0]}\t{c['groups'][1]}\t{c['overlap']}" for c in shown)
@@ -106,9 +111,13 @@ def list_data_files(
 
     一覧に測定生データが入るとき（all_files=True か、生データの拡張子を extension に渡したとき）は、
     raw ごとの取得時刻（メタデータだけを読む: .wiff の OLE・Thermo .raw のファイルヘッダ・Bruker .d の
-    tdf/sqlite・mzML の startTimeStamp。スペクトルは解さない）と、そこからの順・40 分を超える間隔の数を
-    足す。フォルダに実験情報シート `sample-manifest.tsv` があれば、その群と取得順の重なり（群の組ごとに
-    complete / independent / partial / unknown。群 `unassigned` の行は入れない）も返す。
+    tdf/sqlite・Agilent .d の AcqData/Contents.xml・mzML の startTimeStamp・.wiff2 は同じ幹の .wiff
+    （SCIEX OS が並べて書く。source は wiff_ole_sibling で、その .wiff と同じ取得）。スペクトルは解さない。
+    読めないものは順が空で理由つき）と、そこからの順・40 分を超える間隔の数を足す。フォルダに
+    実験情報シート `sample-manifest.tsv` があれば、その群と取得順の重なり（群の組ごとに
+    complete / independent / partial / unknown。independent は、40 分と隣どうしの取得の間隔の中央値の 3 倍の
+    大きいほうを超える間隔で区切った取得のまとまりのどれにも両群がいること。暦の日付では区切らず、1 周期が
+    40 分を超える長いメソッドでも連続した取得を割らない。群 `unassigned` の行は入れない）も返す。
 
     返すのは絶対パスで、`dcl_find_msms(file_path=...)` 等へそのまま渡せる。
     フォルダ全体をまず解析するなら `load_dataset(directory=...)` が入口。
