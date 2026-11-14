@@ -30,7 +30,7 @@ def load_summary_lines(ds, opened) -> list[str]:
                         or opened.path or "").name or "mzTab-M"
         lines = _summary_text(ds, filename).splitlines()
     lines.append(f"- 出所の裏取り: {ds.source_verification}"
-                 + ("（探索専用: 2 群比較と差次的エクスポートは拒否されます）"
+                 + ("（探索専用: 書き出しと図に探索専用の印が付きます）"
                     if ds.exploratory_only else ""))
     if ds.artifact_paths:
         lines.append("- 付随アーティファクト: "

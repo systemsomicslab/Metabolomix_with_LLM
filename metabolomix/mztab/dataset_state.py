@@ -226,9 +226,11 @@ class DatasetState:
         # legacy_unverified（ジョブ経由だが証跡が無い・一致しない）/
         # direct_unverified（.mzTab を直接読んだ）。pipeline は verified だけを受ける。
         self.source_verification: str = "direct_unverified"
-        # exploratory_only: 完了していない実行の出力。探索はできるが、2 群比較と
-        # 差次的エクスポートは拒否する（欠けた検体を「その群に無い」と読み違えるため）。
+        # exploratory_only: 完了していない実行（または検証を通っていない pipeline の単位）の出力。
+        # 比較も書き出しもできるが、欠けた検体を「その群に無い」と読み違えうるので、書き出しと図に
+        # 探索専用の印を付ける。exploratory_reason はその理由（書き出しのメタ行に載る 1 行）。
         self.exploratory_only: bool = False
+        self.exploratory_reason: str | None = None
         # assay_sources: {abundance 列名: 実行時に予定した raw のパス}。
         # 完了ゲート（console/validation.map_assays）と同じ対応関係。
         self.assay_sources: dict = {}

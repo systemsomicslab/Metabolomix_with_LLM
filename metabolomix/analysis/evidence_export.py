@@ -55,10 +55,12 @@ def write_evidence_bundle(*, comparison, features, annotations, spectrum_links,
                            spectra_files, output_dir, source_analysis_id=None,
                            exclusions=None, provenance=None, preprocessing_report=None,
                            samples=None, intensities=None, intensities_stage=None,
-                           detection_unavailable_reason=None):
+                           detection_unavailable_reason=None, exploratory=None):
     """同じ親の一時ディレクトリを完成させてから公開する。既存出力は置換しない。
 
     `samples` と `intensities` を両方渡せば v3、どちらも無ければ v2（ARF 経路）。
+    `exploratory`（`{"exploratory_only", "reason"}`）は `exploratory_only` が真のときだけ manifest の最上位の
+    `exploratory` に書く（受け手は未知の欄を許す。ファイルと列は変えず、探索専用でない束の manifest も変えない）。
     """
     if (samples is None) != (intensities is None):
         raise ValueError('samples と intensities は両方渡すか、両方省いてください')
@@ -114,6 +116,8 @@ def write_evidence_bundle(*, comparison, features, annotations, spectrum_links,
         if v3:
             manifest['intensities_stage'] = intensities_stage
             manifest['population']['detection_unavailable_reason'] = detection_unavailable_reason
+        if exploratory is not None and exploratory.get('exploratory_only'):
+            manifest['exploratory'] = clean(exploratory)
         (staging/'manifest.json').write_text(packed(manifest)+'\n',encoding='utf-8')
         os.rename(staging, out)
     summary = dict(status='success', output_path=str(out/'manifest.json'),contract_version=version,
@@ -122,6 +126,8 @@ def write_evidence_bundle(*, comparison, features, annotations, spectrum_links,
     if v3:
         summary.update(n_samples=len(samples),n_intensity_rows=len(intensities),
                        intensities_stage=intensities_stage)
+    if exploratory is not None and exploratory.get('exploratory_only'):
+        summary['exploratory'] = clean(exploratory)
     return summary
 
 
@@ -130,18 +136,32 @@ def _intensity_cell(row):
     return {**row,'value':export_contract.format_number(row['value'],'.10g')}
 
 
+#: 記録の `p_adjust_method` → manifest の `comparison.correction`（BH は従来どおり `BH`）。
+_CORRECTION_NAMES = {'bh': 'BH', 'bonferroni': 'Bonferroni', 'holm': 'Holm', 'none': 'none'}
+
+
+def correction_name(method) -> str:
+    """補正の方法（`p_adjust_method`。無ければ BH）を manifest の `correction` の名前にする。"""
+    key = str(method or 'bh').lower()
+    return _CORRECTION_NAMES.get(key, key)
+
+
 def comparison_of(result, preprocess):
     """manifest の `comparison`。`result` は `as_two_group` の出力で、実際の検定名と `statistics`
-    （検定・CI 水準・判定規則・BH の母集団・単位）を持つ。`allow_confounded=true` で完全交絡を越えた比較なら
+    （検定・CI 水準・判定規則・BH の母集団・単位）を持つ。`correction` は記録の補正の方法
+    （`p_adjust_method`。無ければ BH。`statistics` には重ねて載せない）。`allow_confounded=true` で完全交絡を越えた比較なら
     `unadjusted_confounded: true` も足す。`n_a` / `n_b` は注入の数で、`samples.tsv` の群 a / b の行数と一致する。"""
     statistics = result['statistics']
+    method = statistics.get('p_adjust_method') or 'bh'
     comparison = dict(group_a=result['a'], group_b=result['b'], n_a=result['n_a'], n_b=result['n_b'],
                       log2fc_sign=export_contract.LOG2FC_SIGN,
-                      method=statistics['test'],correction='BH',
+                      method=statistics['test'],correction=correction_name(method),
                       q_threshold=result['q_threshold'],log2fc_threshold=result['log2fc_threshold'],
                       preprocess=clean(preprocess),log_transform=result.get('log_transform'))
     # spec §13: 書き出しのメタ行と同じ定義を manifest にも置く（受け手は未知の欄を許す）
-    comparison.update(contrast_id=result.get('contrast_id'),statistics=clean(statistics),
+    # 補正の方法は correction に出す（statistics の欄は v3 の見本のまま）
+    shown = {k: v for k, v in statistics.items() if k != 'p_adjust_method'}
+    comparison.update(contrast_id=result.get('contrast_id'),statistics=clean(shown),
                       effect_size_definition=clean(result.get('effect_size_definition')),
                       mean_definition=export_contract.MEAN_DEFINITION,
                       matrix_id=result.get('matrix_id'),rule_hash=result.get('rule_hash'))
@@ -391,9 +411,11 @@ def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=N
 
     `result` は統計エンジンの `compare` の記録（`as_two_group` で 1 つの対比を読む。対比が複数なら
     `contrast_id` が要る）。`comparison.method` は実際の検定名で `comparison.statistics` を足し、
-    `intensities.tsv` は行列の `sample_values`（`pre_imputation`）。"""
-    if getattr(ds,'exploratory_only',False):
-        raise DomainError('EXPLORATORY_ONLY_DATASET','探索専用データセットは比較の根拠として出力できません',{})
+    `intensities.tsv` は行列の `sample_values`（`pre_imputation`）。
+    探索専用のデータセット（中断された実行・検証を通っていない pipeline の単位）も断らず、manifest の
+    `exploratory` に `{exploratory_only: true, reason}` を書く（探索専用でなければ欄を作らない）。"""
+    from metabolomix.analysis.dataset_export import exploratory_reason
+    reason = exploratory_reason(ds)
     record = result
     assert_current(ds,record)
     result = as_two_group(record,contrast_id)
@@ -444,4 +466,5 @@ def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=N
                                       **link_provenance),
                                   exclusions=_engine_exclusions(entry),samples=samples,
                                   intensities=intensities,intensities_stage=stage,
-                                  detection_unavailable_reason=detection_reason)
+                                  detection_unavailable_reason=detection_reason,
+                                  exploratory=dict(exploratory_only=reason is not None,reason=reason))

@@ -182,9 +182,10 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
     allow_incomplete: **完了していない実行**（partial / failed / running）の出力を
         読み込む（既定 False。bool 以外は `DATASET_BAD_REQUEST`——`"false"` という
         文字列を真と読まないため）。中断時点の生成物なので、既定では拒否する
-        （`INCOMPLETE_ANALYSIS_JOB`）。True で読んだデータセットは探索専用になり、
-        2 群比較（dataset_compare）と差次的エクスポートは拒否される——欠けた検体を
-        「その群には無い」と読み違えたまま結論が出てしまうため。
+        （`INCOMPLETE_ANALYSIS_JOB`）。True で読んだデータセットは探索専用になる（検証を
+        通っていない pipeline の単位も同じ）。比較も書き出しもできるが、欠けた検体を
+        「その群には無い」と読み違えうるので、差次的 TSV のメタ行（`# exploratory = true`）・
+        根拠バンドルの manifest（`exploratory`）・図に印と理由が載る。
     library: `"auto"`（既定）はデータセットが同定に使ったライブラリの記憶
         （`library_record`）を読み取り専用で開く。実体の sha256 を測り直し、変わっている・
         無いとき（`mismatch`）、記憶が決められないとき（`unknown`）、LBM だけのとき

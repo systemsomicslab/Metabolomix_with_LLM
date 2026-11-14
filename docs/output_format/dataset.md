@@ -148,8 +148,8 @@ ARFサンプルとの結合は `FileID` を優先し、欠損時は正規化し�
 PCAスコアプロット用ブロック（旧パーサの返り値の末尾。**サンプル別の座標点列を同梱する**）。
 いまは `dataset_plot(kind="pca")` が同じ内容を作る（既定は PNG。`output="payload"` で座標点列）。
 散布図は**この点列からクライアント側（チャット）で描く**。`save_figure(kind="pca")` は PNG
-ファイルを reports/figures/ へ書き込む操作であり、ユーザーがファイルとしての図を明示的に
-求めたときだけ使う——対話の中で図を見せる目的では呼ばない。同じ点列は
+ファイルを reports/figures/ へ書き込む操作（報告書に埋め込む図）で、対話の中で図を見せるだけなら
+`dataset_plot` の画像で足りる（`output_path` を渡せば描いた図を任意の場所にも書く）。同じ点列は
 `ds.figures["pca"]` にも保持され、`save_figure(kind="pca")` はそこから描く。
 
 | キー/行 | 意味 |
@@ -157,7 +157,7 @@ PCAスコアプロット用ブロック（旧パーサの返り値の末尾。**
 | タイトル行 | 図タイトル |
 | `PC1 (x%) × PC2 (y%)` | PC1/PC2 説明分散率 |
 | 群別サンプル数 | 群ラベルがあれば `群=件数` を列挙、無ければ総サンプル数 |
-| 描画指示 | 上記座標から散布図を描く（group があれば群ごとに色分け・凡例付き）。PNG が必要なときのみ `save_figure(kind="pca")` |
+| 描画指示 | 上記座標から散布図を描く（group があれば群ごとに色分け・凡例付き）。PNG ファイルは `save_figure(kind="pca")` か `dataset_plot(output_path=...)` |
 | json 点列 | `x_label` / `y_label`（説明分散率つき軸名）と `points`。各点は `pc1` / `pc2` / `sample`、群分け時は `group` |
 
 ### 10. 前処理・QC（P2a）
@@ -308,7 +308,8 @@ contrasts, omnibus, confounding, warnings, top, record, next}`。
   全量の記録の `description`）。`log2fc` は**正なら test が高い**。`mean_*` は個体ごとの前処理後の線形値の算術平均。
 - エラー: 群の指定が合わない・`top_n` / `log2fc_threshold` が範囲外・`bh_population=reported` は `DATASET_BAD_REQUEST`。
   `matrix_id` が古い・無いは `missing_state`（`stat_matrix`）。`matrix_id` と `group_levels` / `group_factors` の併用は
-  `DATASET_BAD_REQUEST`（群は行列が決めている）。`EXPLORATORY_ONLY_DATASET`（途中で止まった実行のデータセット）。
+  `DATASET_BAD_REQUEST`（群は行列が決めている）。途中で止まった実行（探索専用）のデータセットも比較は断らない
+  （書き出しと図に探索専用の印が載る。§11.4）。
   既定の前処理が確認を要するときは `needs_input`（`core.md`）。
   既定の前処理で行列を作ったあとにエラーになったとき、`details.matrix_id` にその行列の ID が残る（呼び直しに使える）。
 - `record`: `{written, record_id, path}`（比較の記録。親は行列の前処理の記録）。既定の前処理で行列を作ったときは
@@ -319,7 +320,10 @@ contrasts, omnibus, confounding, warnings, top, record, next}`。
 `dataset_compare`（2群）の後に呼ぶ read-only ツール。**既定（`output="image"`）では
 サーバ側で描いた PNG と件数入りの1行キャプションを返す**ので、以下の表は
 `output="payload"`（または env `LIPIDMIX_PLOT_OUTPUT=payload`）でクライアントが自分で
-描くときの契約。ファイルとして PNG を残したいときだけ `save_figure(kind="volcano")` を呼ぶ。
+描くときの契約。PNG ファイルにも残すなら `output_path`（任意の場所）か `save_figure(kind="volcano")`（報告書の
+`reports/figures/`）。2 群の対比が複数ある結果で `contrast_id`（か `result_id#contrast_id`）を省くと `needs_input`
+（選択肢は対比の一覧。`core.md`）。題とキャプションの並びは `test vs reference`（`group_b` vs `group_a`。log2fc は正なら
+test が高い）。
 
 画像モードでは間引きをせず全特徴を描く。**有意件数はキャプションの
 `up=` / `down=` / `ns=` を読むこと**（図の点を数えない）。
@@ -357,7 +361,8 @@ LLMはこれらを解釈結果・報告書の注意点として必ず引用す�
 
 #### 11.4 `dataset_export_differential` — 差次的結果のエクスポート契約
 
-`dataset_compare` の後に呼ぶ（`result_id` は省略すると直近の結果。対比が複数の結果は `contrast_id` が要る。`result_id#contrast_id` の形も受ける）。
+`dataset_compare` の後に呼ぶ（`result_id` は省略すると直近の結果。対比が複数の結果は `contrast_id` が要る。`result_id#contrast_id` の形も受ける。
+省くと `needs_input`（`field` / `argument` = `contrast_id`、選択肢は対比の一覧）で、読める対比が 1 つならそれを黙って使う）。
 データセットの特徴ごとの同定（`feature_metadata` の名前・InChIKey・m/z・RT）を、比較の結果と特徴 ID で結んで
 1 ファイルに書き出す。読み込みの経路（解析フォルダ・mzTab-M）を問わず同じ規則で、行の出所は InChIKey を
 供給した側で 1 つに決める: SME 行の InChIKey があれば `name_source = mztab_sme`、無くて SML の候補が一意なら
@@ -377,11 +382,15 @@ mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`（`CONTRAC
 | メタ行 | 意味 |
 |---|---|
 | `# test = … effect_size_definition = … ci_level = …` | 実際の検定名（`moderated_t` など）・効果量の定義の名前・CI の水準 |
-| `# verdict_q_threshold = … equivalence_fc = … bh_population = … bh_n = … q_interpretation = …` | 判定の規則と BH の母集団（`bh_n` は選んだ対比の大きさ。`q_interpretation` は `discovery_fdr` / `reproduction_only`） |
+| `# verdict_q_threshold = … equivalence_fc = … bh_population = … bh_n = … q_interpretation = … p_adjust_method = …` | 判定の規則と BH の母集団（`bh_n` は選んだ対比の大きさ。`q_interpretation` は `discovery_fdr` / `reproduction_only`）。`p_adjust_method` は `q_value` を作った多重比較の補正（`bh` / `bonferroni` / `holm` / `none`。比較の記録に無ければ `bh`） |
 | `# unit = … n_units_a = … n_units_b = …` | 比較の単位。`subject`（全試料が被験者 ID を持ち技術反復を 1 個体にまとめた）・`injection`（被験者 ID が無い・まとめを切った。単位は注入）・`mixed`（混在）。`n_units_*` は比較に入った単位の数（`n_a` / `n_b` は注入の数のまま） |
 | `# mean_definition = …` | `mean_a` / `mean_b` は「個体ごとの前処理後の線形値の算術平均」 |
 | `# matrix_id = … rule_hash = … contrast_id = …` | どの行列・どの規則・どの対比を書いたか（2 群比較の結果の対比は 1 つ） |
 | `# significant_rule = q<=q_threshold & \|log2fc\|>=log2fc_threshold & verdict=changed` | 15 列目 `significant` の規則（下記） |
+| `# contrast_kind = interaction  interaction_factors = A x B  interaction_levels = A a0>a1; B b0>b1` | 交互作用の対比を書いたときだけ。どの 2 因子のどの水準の差の差か |
+| `# interaction_definition = …` | 交互作用の `log2fc` の定義（`(a1 vs a0 at B b1) minus (a1 vs a0 at B b0)`）。`mean_a` / `mean_b` は空欄で、`mean_definition` もその旨 |
+| `# exploratory = true  exploratory_reason = …` | 探索専用のデータセット（未完了の実行を `allow_incomplete=True` で開いた・検証を通っていない pipeline の単位）から書いたときだけ。理由は 1 行（`=` とタブは含まない） |
+| `# n_excluded_after_test = …  excluded_after_test_note = …` | `exclude_feature_ids` を渡したときだけ。検定の後に落とした行の数（q は計算し直さず、BH の母集団には残ったまま） |
 
 `p_value` / `q_value` はエンジンの p と BH の q（`q_value` の読みは `q_interpretation`）、`log2fc` は正なら `group_b`（比較）が高い。**エンジンの結果の `significant` は、`q ≤ q_threshold` かつ `|log2fc| ≥ log2fc_threshold`（`dataset_compare` の `log2fc_threshold`）に加えて、判定 `verdict` が `changed` の行だけ `true`**（`significant_rule`）。検出の割合が足りず量を判定できない行（`inconclusive` / `quantity_not_judgeable`）や BH の母集団の外の行は、q が小さく |log2fc| が大きくても `false`——gap-fill の値で動いた量を主張にしない。`true` の行の数は、その対比の `dataset_compare` の `large_changes` と同じ（InChIKey の無い行は書き出さないので、書き出しではその分少ないことがある）。同じ印を根拠バンドルの `features.tsv` の `significant`・volcano の `up` / `down`（§11.2.1）が使う。**`verdict` の 3 値そのものは TSV の列には出ない**（契約の列は据え置き）ので、判定は `dataset_compare` の要約・`top` か、根拠バンドル（`reanalysis.md` §10）で読む。
 
@@ -389,6 +398,18 @@ mz / rt / log2fc / p_value / q_value / mean_a / mean_b / significant`（`CONTRAC
 エンジンの比較は、`source_verification` の後に `# unadjusted_confounded = true` と
 `# unadjusted_confounded_note = …`（日本語の説明）を書き、volcano の `caveats` と図の下端（ASCII の但し書き）、根拠バンドルの
 `comparison.unadjusted_confounded`（`reanalysis.md` §10）にも同じ印が載る。部分的な交絡・交絡の無い比較には何も足さない。
+
+**交互作用の対比**（2×2 の 2 因子の設計の `interaction_*`）は名指しすれば書き出せる。`group_a` は基準の 2 セル
+（`a0:b1 + a1:b0`）、`group_b` は比較の 2 セル（`a1:b1 + a0:b0`）、`log2fc` は差の差（正なら `a1` の効果が `b1` で大きい）、
+`mean_a` / `mean_b` は空欄。根拠バンドルと volcano は 2 群の対比だけ（交互作用は `CONTRAST_NOT_TWO_GROUP`）。
+
+**探索専用のデータセットも断らない**: 未完了の実行・検証を通っていない pipeline の単位から開いたデータセット
+（`exploratory_only`）でも書き出し、メタ行 `# exploratory = true` と `exploratory_reason` を `msi_note` の後に足す（戻り値の
+`exploratory` にも）。欠けた検体が「その群には無い」ように見えうるので、受け手はこの印を見て結論の重みを下げる。
+
+**検定の後に行を落とす**（`exclude_feature_ids`）: 渡した特徴 ID の行を書き出さない。q は計算し直さない（BH の母集団には
+残ったまま）ので、落とした数と注記をメタ行 `n_excluded_after_test` に書く。見つからない ID は戻り値の
+`exclude_feature_ids_not_found`。
 
 **有意な行だけでなく、InChIKey が付いた全行を書き出す。** 下流の濃縮解析は
 「検出された化合物」を背景に取る必要があり、有意な行だけでは背景が作れない。

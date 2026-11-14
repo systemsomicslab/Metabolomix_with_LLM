@@ -199,6 +199,9 @@ def test_incomplete_job_gate_shared(tmp_path):
     for source in ("auto", "mztab"):
         opened = open_dataset(job_path=str(job), source=source, allow_incomplete=True)
         assert opened.dataset.exploratory_only is True, source
+        # 理由は書き出しのメタ行に載る 1 行（「=」を含まない）
+        reason = opened.dataset.exploratory_reason
+        assert "partial" in reason and "=" not in reason, source
 
 
 def test_job_without_arf_does_not_fall_back_to_mztab(tmp_path):
@@ -992,6 +995,19 @@ def test_unit_not_validated_is_refused(tmp_path):
     ask = _code(lambda: open_dataset(pipeline_path=str(run)))
     assert ask.code == "PIPELINE_POLARITY_REQUIRED"
     assert [o["value"] for o in ask.details["options"]] == ["positive"]
+
+
+def test_unvalidated_unit_opened_for_exploration_is_marked_exploratory(tmp_path):
+    """ジョブが completed でも、検証を通っていない単位の出力は探索専用（印は単位の状態も見る）。"""
+    run = _v3_run(tmp_path, ("negative", "positive"), failed=("negative",))
+    for source in ("auto", "mztab"):
+        ds = open_dataset(pipeline_path=str(run), polarity="negative", source=source,
+                          allow_incomplete=True).dataset
+        assert ds.exploratory_only is True, source
+        assert "negative" in ds.exploratory_reason and "failed" in ds.exploratory_reason, source
+        assert "=" not in ds.exploratory_reason
+        validated = open_dataset(pipeline_path=str(run), polarity="positive", source=source).dataset
+        assert validated.exploratory_only is False and validated.exploratory_reason is None, source
 
 
 def test_unknown_polarity_is_refused(tmp_path):

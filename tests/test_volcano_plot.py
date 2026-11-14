@@ -33,7 +33,8 @@ class TestBuildVolcanoPlotPayload(unittest.TestCase):
         ]))
         self.assertEqual(payload["plot_schema"], "lipidmix.volcano.v1")
         self.assertEqual(payload["plot_type"], "scatter")
-        self.assertEqual(payload["title"], "Volcano (24M vs 9w)")
+        # 題の並びは test vs reference（a＝24M が基準、b＝9w が比較）
+        self.assertEqual(payload["title"], "Volcano (9w vs 24M)")
         self.assertEqual(payload["comparison"],
                          {"group_a": "24M", "group_b": "9w", "n_a": 6, "n_b": 5})
         self.assertEqual(payload["axes"]["x"]["label"], "log2 fold change")
@@ -145,3 +146,13 @@ class TestBuildVolcanoPlotPayload(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestVolcanoTitleOrder(unittest.TestCase):
+    def test_rendered_title_reads_test_vs_reference(self):
+        import matplotlib.pyplot as plt
+
+        fig = volcano_plot.render_volcano_plot(_differential([_point("PC 34:1", 1.8, 3.4, "up")]))
+        try:
+            self.assertEqual(fig.axes[0].get_title(), "Volcano (9w vs 24M)")
+        finally:
+            plt.close(fig)

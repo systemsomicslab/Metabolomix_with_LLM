@@ -3,13 +3,17 @@
 MCP は画像を content ブロック（`ImageContent`）として返せる。座標点列を LLM の
 文脈へ流し込むより桁違いに安く、実測で volcano は 183,578 字（≒数万トークン）に
 対し PNG は約 470 画像トークンだった。画像トークンはおおよそ `幅×高さ/750` なので、
-**dpi を上げるとトークンが二乗で増える**点に注意（既定 100 を保つこと）。
+**dpi を上げるとトークンが二乗で増える**点に注意（既定 100 を保つこと）。返す画像（`render_png`）は
+さらに画素数を `MAX_IMAGE_PIXELS` で抑え、大きな図（重ね描きの EIC・格子の群別強度・対向プロットなど）は
+dpi を `MIN_IMAGE_DPI` まで下げて収める（文字が読める範囲で小さく）。
 
-図の保存（`save_figure`）と画像返し（`dataset_plot`）の両方がここを通る。
+図の保存（`save_figure` / `dataset_plot(output_path=...)` の `render_files`。画素数の上限は掛けない）と
+画像返し（`dataset_plot` / `library_plot_mirror` の `render_png`）の両方がここを通る。
 """
 from __future__ import annotations
 
 import io
+import math
 import os
 import tempfile
 import threading
@@ -45,6 +49,22 @@ def resolve_plot_output(requested: str | None) -> str:
 # 妥当な上限をこのあたりに置き、既定 dpi は上げない。
 DEFAULT_IMAGE_DPI = 100
 
+#: 返す画像の画素数の上限（≒ 530 画像トークン）。図の大きさ（インチ）から dpi を下げてこの中に収める
+#: （`bbox_inches="tight"` で余白を詰めるので、出来上がりはおおむねこれ以下）。
+MAX_IMAGE_PIXELS = 400_000
+#: 画素数を抑えるときも dpi はこれより下げない（既定の 10pt の文字が 10 画素ほどで読める下限）。
+MIN_IMAGE_DPI = 72
+
+
+def image_dpi(fig, dpi: int = DEFAULT_IMAGE_DPI) -> int:
+    """返す画像の dpi。`dpi` を上限に、画素数が `MAX_IMAGE_PIXELS` を超えないところまで下げる（下限 `MIN_IMAGE_DPI`）。"""
+    width, height = fig.get_size_inches()
+    area = float(width) * float(height)
+    if not area > 0:
+        return int(dpi)
+    fitted = math.sqrt(MAX_IMAGE_PIXELS / area)
+    return int(max(MIN_IMAGE_DPI, min(float(dpi), fitted)))
+
 
 # matplotlib の pyplot は図の登録簿（gcf）などの大域状態を持ち、スレッドセーフでない。
 # ツールはワーカースレッドから呼ばれるので、図の生成から破棄までを 1 本のロックで直列にする。
@@ -65,10 +85,13 @@ def figure_to_png(fig, dpi: int = DEFAULT_IMAGE_DPI) -> bytes:
 
 
 def render_png(build, /, *args, dpi: int = DEFAULT_IMAGE_DPI, **kwargs) -> bytes:
-    """`build(*args, **kwargs)` が返す Figure を PNG にする。生成から破棄までを `PLOT_LOCK` の下で行う。"""
+    """`build(*args, **kwargs)` が返す Figure を PNG にする。生成から破棄までを `PLOT_LOCK` の下で行う。
+
+    ツールの戻り値に載る画像なので、画素数を `MAX_IMAGE_PIXELS` に抑える（`image_dpi`）。
+    """
     with PLOT_LOCK:
         fig = build(*args, **kwargs)
-        return figure_to_png(fig, dpi)
+        return figure_to_png(fig, image_dpi(fig, dpi))
 
 
 def render_files(build, paths: dict[str, Path], /, *args, dpi: int = DEFAULT_IMAGE_DPI,

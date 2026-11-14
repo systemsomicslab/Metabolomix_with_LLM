@@ -669,6 +669,8 @@ gap-fill の値は背景で、本物のピークより大きくならないた�
 ## 10. 根拠バンドル v3（evidence-v3）
 
 `dataset_export_evidence_bundle` が書く。v2 に試料表・試料ごとの値と検出・付加体・極性を足したもの。
+`result_id` を省けば直近の差次的結果。対比は `contrast_id` か `result_id#contrast_id` で選び、2 群の対比が複数で選ばなければ
+`needs_input`（選択肢は対比の一覧）。交互作用の対比は 2 群の形にならないので書けない（`CONTRAST_NOT_TWO_GROUP`）。
 `dataset_export_evidence_bundle`（ARF 経路）は試料ごとの値を取り出さないので v2 のまま。契約の正は
 massbank-context の `docs/contracts/evidence-bundle-v3.md`。TSV は全ファイルとも同じ書き方（タブ区切り・
 UTF-8・改行は CRLF）。
@@ -687,6 +689,8 @@ UTF-8・改行は CRLF）。
 | `comparison.statistics` | `{test, ci_level, verdict_rule: {q_threshold, equivalence_fc, equivalence_log2}, bh_population: {name, n, q_interpretation}, subject_source, n_units_a, n_units_b}`。`n` は選んだ対比の BH の母集団の大きさ |
 | `comparison.effect_size_definition` / `mean_definition` | 効果量の定義（`{name, description}`）と、`mean_a` / `mean_b` が「個体ごとの前処理後の線形値の算術平均」であること |
 | `comparison.matrix_id` / `rule_hash` / `contrast_id` | どの行列・どの規則・どの対比を書いたか（`contrast_id` は 2 群の結果なら 1 つの対比の ID） |
+| `comparison.correction` | `q` を作った多重比較の補正。比較の記録の `p_adjust_method`（`bh` / `bonferroni` / `holm` / `none`）を `BH` / `Bonferroni` / `Holm` / `none` で書く。記録に無ければ `BH` |
+| `exploratory` | 最上位の欄。探索専用のデータセット（未完了の実行を `allow_incomplete=True` で開いた・検証を通っていない pipeline の単位）から書いたときだけ `{exploratory_only: true, reason}`（書き出しは断らない）。探索専用でなければ欄が無い |
 | `comparison.unadjusted_confounded` | `allow_confounded=true` で完全交絡を越えて走った比較だけ `true`（それ以外は欄が無い）。同じ印は来歴 `provenance.result.comparison.unadjusted_confounded`（と `provenance.result.warnings` の説明）にも載る |
 | `intensities_stage` | `pre_imputation`（補完の前）/ `post_imputation`（補完の後） |
 | `population.detection_unavailable_reason` | `detected` が全行空のときの理由。検出状態を使えれば `null` |
@@ -729,7 +733,8 @@ SME の付加体）。無ければ空。`features.tsv` の `significant` は差�
 エンジンの結果は判定 `verdict` が `changed` の行だけ `true` になりうる（`dataset.md` §11.4。判定できない行は q が
 小さくても `false`）。
 
-戻り値には v2 の欄に `n_samples`・`n_intensity_rows`・`intensities_stage` が足される。
+戻り値には v2 の欄に `n_samples`・`n_intensity_rows`・`intensities_stage` が足される（探索専用のデータセットなら
+`exploratory` も）。
 
 ### `spectrum_links.tsv` と `.dcl` の出どころ
 

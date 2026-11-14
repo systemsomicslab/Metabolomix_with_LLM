@@ -221,9 +221,11 @@ completed は「実行後にファイルが増えた」以上の意味を持た�
 
 完了していない実行（partial / failed / running）の出力は既定で読まない
 （`INCOMPLETE_ANALYSIS_JOB`）。`allow_incomplete=True` で読んだ場合は
-`exploratory_only=True` になり、2 群比較（dataset_compare）と差次的エクスポートは
-`EXPLORATORY_ONLY_DATASET` で拒否する。欠けた検体は mzTab 上「その群に無い」ように
-しか見えず、比較はその欠落ごと結論にしてしまう。
+`exploratory_only=True`（理由は `exploratory_reason`。`JobGate.exploratory_reason`）になる。`pipeline_path` で
+検証を通っていない単位を開いたときも、ジョブの status によらず同じ印を付ける（`opening._mark_unvalidated_unit`。
+`store.unit_status` が `validated` でない）。比較も書き出しも断らないが、欠けた検体は mzTab 上「その群に無い」ように
+しか見えないので、差次的 TSV のメタ行（`# exploratory = true` と理由）・根拠バンドルの manifest（`exploratory`）・
+図の但し書きに印を載せる。
 
 `select_primary_entry()` は候補が一意に決まらなければ読まずに停止する
 （`QUANTIFICATION_CONFLICT` / `POLARITY_MISMATCH` / `AMBIGUOUS_PRIMARY_MZTAB`）。
