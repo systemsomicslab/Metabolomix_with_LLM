@@ -97,8 +97,10 @@
 統合したハンドルへ後から当てるシートは陽イオンの raw を挙げるので陽イオンの測定だけを決め、陰イオンの測定は陰イオンの
 ハンドルにシートを当てて統合し直すと変わる。統合し直すと統合したハンドルへ当てたシートと除外は引き継がれない（統合は陽イオンの
 ハンドルの試料の表を引き継ぐ）。除外（`dataset_exclude`）は極性ごとのハンドルから統合後の ID に写す（手順 18。
-`derive()` の写しは陽イオンの生の特徴 ID のままなので、特徴は `positive:<id>` / `negative:<id>` に、試料は各側の名前を共通 ID
-へ写して和をとる。引き継いだときだけ戻り値の `exclusions` と `notes`、記録の `summary.exclusions`）。
+`derive()` は持ち越す ID の除外だけを残す——`positive:<id>` / `negative:<id>` は親に無い新しい ID なので特徴の除外は
+すべて落ち、試料の除外は陽イオンの側のものだけが共通 ID へ改名されて残る。そこで `merged_exclusions()` が両側から作り直し、
+特徴は `positive:<id>` / `negative:<id>` に、試料は各側の名前を共通 ID へ写して和をとる。引き継いだときだけ戻り値の
+`exclusions` と `notes`、記録の `summary.exclusions`）。
 
 1. metabolomix/quant/tools.py  dataset_merge_polarities()
 2. ├─ metabolomix/tools/_holder.py  resolve_holder()

@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
+from metabolomix.analysis.stats.preprocess import REMERGE_LOSS
 from metabolomix.core.atomic_io import DomainError, atomic_write_bytes
 from metabolomix.core.serialization import json_payload, round_floats
 from metabolomix.quant import derive as qderive
@@ -78,7 +79,8 @@ def check_not_merged(ds) -> None:
     内部標準は極性ごとの行で、参照表はクラスで引く。統合したデータセットを割ると、一方の極性の
     内部標準で他方の極性の同じクラスを割りうる（同じ名前の内部標準が両極性にあれば、片方を選ぶと
     両極性に当たる）。`skip=True` も統合の記録（極性ごとの `.arf2`・内部標準）を消し、極性を
-    取り違えたハンドルを作るので掛けない。正規化は統合の前に極性ごとに行う。
+    取り違えたハンドルを作るので掛けない。正規化は統合の前に極性ごとに行う。統合し直すと、統合したハンドルに
+    当てていた除外とシートは引き継がれない（`REMERGE_LOSS`）ので、統合し直してできたハンドルに当て直すと添える。
     """
     state = getattr(ds, "quant_state", None) or {}
     parents = _merged_parents(ds)
@@ -86,7 +88,9 @@ def check_not_merged(ds) -> None:
         raise DomainError("QUANT_ALREADY_MERGED",
                           "このデータセットは陽イオンと陰イオンを統合済みです。内部標準は極性ごとなので、"
                           "統合したものは正規化しません（一方の極性の内部標準で他方の極性の特徴を割りうる）。"
-                          "極性ごとのハンドルで正規化（または skip=True）してから統合し直してください。",
+                          "極性ごとのハンドルで正規化（または skip=True）してから統合し直してください（"
+                          + REMERGE_LOSS + "ので、統合したハンドルに当てていた除外とシートは、統合し直して"
+                          "できたハンドルに当て直す）。",
                           {"record_id": state.get("record_id"), "parent_handles": parents})
 
 

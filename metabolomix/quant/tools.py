@@ -111,7 +111,9 @@ def dataset_quant_apply(reference_path: str | None = None, bindings: dict | None
     正規化済みのデータセットには掛けない。skip=True は値を変えず「正規化を飛ばした」記録と
     派生を作る（reference_path は skip=True のときだけ省ける。読まない）。選別済みの
     データセットには掛けない（QUANT_ALREADY_SELECTED）。陽陰を統合したデータセットにも掛けない
-    （QUANT_ALREADY_MERGED。内部標準は極性ごとなので、正規化は統合の前に極性ごとに行う）。
+    （QUANT_ALREADY_MERGED。内部標準は極性ごとなので、正規化は統合の前に極性ごとに行う。統合し直すと
+    統合したハンドルに当てていた除外とシートは引き継がれないので、統合し直してできたハンドルに当て直す。
+    極性ごとのハンドルの除外は統合が引き継ぐ）。
     新しいハンドルの極性は解いた polarity。親が探索専用なら派生も探索専用（戻り値の exploratory）。
     dataset_handle: ハンドルのデータセット。省略時は直近のデータセット。
     """
