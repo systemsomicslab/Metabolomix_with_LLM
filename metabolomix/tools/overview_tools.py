@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+import json
+
 from mcp.types import ToolAnnotations
 
 from metabolomix.analysis import overview, stats_records, stats_results
@@ -378,7 +380,8 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False, to
         "note": _NOTE.format(oid=oid),
     }
     if capped_from is not None:
-        payload["notes"] = [_cap_note(capped_from, mode=plan["mode"] if record else None)]
+        payload["notes"] = [_cap_note(capped_from, mode=plan["mode"] if record else None,
+                                      levels=plan["levels"], matrix_id=prepared.matrix_id)]
     return json_safe(payload)
 
 
@@ -399,7 +402,8 @@ def dataset_overview(top_n: int = 5, dataset_handle: str | None = None) -> str:
       群とバッチが完全交絡なら比較を回さない。注入順がファイルの順かもしれない（MS-DIAL の既定・シートの宣言で
       ファイル名の順）なら、注入順を使う事実（ドリフトの兆候・注入順の偏り）に但し書きを添え、next に実際の測定順の入れ方を足す
       （陽陰を統合したデータセットで陽イオン以外の極性なら、統合したハンドルへのシートはその極性を変えないので、
-      その極性のハンドルにシートを当てて dataset_merge_polarities で統合し直す）。群が 1 つでも比較しない。探索専用のデータセット（未完了の実行）は
+      その極性のハンドルにシートを当てて dataset_merge_polarities で統合し直す。統合し直すと統合したハンドルに当てた
+      シートと除外は引き継がれないので、その手は next の中で dataset_exclude と drift_mode="on" より前に置く）。群が 1 つでも比較しない。探索専用のデータセット（未完了の実行）は
       比較を回し、全体・クラス・分子種の段の先頭に探索専用の印の事実（理由つき）を置く。
     - クラスの段は付加体の選別（`dataset_select_features`）の後だけ出す（それまでは理由と次の一手）。
     - 事実には段ごとの ID（`Q1` `G1` `C1` `S1`）が付き、外からは `<overview_id>#Q1` で引く。考察は事実 ID を挙げて
@@ -410,8 +414,11 @@ def dataset_overview(top_n: int = 5, dataset_handle: str | None = None) -> str:
     top_n: 分子種の段の上位の件数（既定 5、上限 20）。20 を超える値は断らず 20 に下げて出し、`notes` にそう書く
         （そのとき上位の表を 20 行で切ったら `species.top_truncated: true` と `species.top_n_more`＝載せなかった
         行数）。`notes` の全行の引き方は比べ方で変わる: 2 群は `result_ids.compare` を dataset_feature_search・
-        dataset_export_differential で、多群（上位は F の q の順）は `dataset_compare(output_path=...)` が書く F 検定の表
-        （`<stem>.ftests.tsv` の `f_q`）で引く。比較を回さなかった（群が 1 つ・完全交絡）なら引き方は書かない。
+        dataset_export_differential で、多群（上位は F の q の順）は概観の群と行列をそのまま渡した
+        `dataset_compare(groups=[<概観の群>], matrix_id=<概観の行列>, output_path=...)` が書く F 検定の表
+        （`<stem>.ftests.tsv` の `f_q`）で引く（注記はその呼び出しを書いたとおりに挙げる。`matrix_id` を省くと
+        このハンドルで dataset_preprocess が最後に作った行列で比べ、F の母集団と `f_q` が概観と違いうる）。
+        比較を回さなかった（群が 1 つ・完全交絡）なら引き方は書かない。
         整数でない・負の値は DATASET_BAD_REQUEST。
     dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。
 
@@ -441,12 +448,15 @@ def dataset_overview(top_n: int = 5, dataset_handle: str | None = None) -> str:
     return json_payload(payload)
 
 
-def _cap_note(requested: int, *, mode: str | None) -> str:
+def _cap_note(requested: int, *, mode: str | None, levels: list[str] | None = None,
+              matrix_id: str | None = None) -> str:
     """`top_n` を上限に下げたことの注記。全行の引き方は比較の回し方（`group_plan` の mode）で変わる。
 
     - `two`: 上位は 1 対比の行なので、概観の比較（`result_ids.compare`）を特徴検索・書き出しに名指しして引ける。
     - `multi`: 上位は moderated F の q（`f_q`）の順。書き出し・特徴検索は対比ごとの行なので F の順の残りは返らない。
-      F 検定の表は `dataset_compare(output_path=...)` が `<stem>.ftests.tsv` に書く。
+      F 検定の表は `dataset_compare(output_path=...)` が `<stem>.ftests.tsv` に書く。概観と同じ F の母集団になるのは
+      概観の行列（`matrix_id`）を全群（`levels`）で比べたときだけなので、その呼び出しを書いたとおりに挙げる
+      （`matrix_id` を省いた dataset_compare は、このハンドルで dataset_preprocess が最後に作った行列を使う）。
     - None: 比較を回していない（群が 1 つ・完全交絡・品質の段だけ）。引き方は書かない。
     """
     head = f"top_n={requested} は上限の {_TOP_N_MAX} に下げた（戻り値を肥大させない）。"
@@ -454,7 +464,10 @@ def _cap_note(requested: int, *, mode: str | None) -> str:
         return head + ("全行は result_ids.compare を dataset_feature_search（result_ids に名指し）・"
                        "dataset_export_differential（result_id）で引ける。")
     if mode == "multi":
-        return head + ("多群の上位は moderated F の q（f_q）の順で、載せなかった行は dataset_compare(output_path=...) が書く "
-                       "F 検定の表（<stem>.ftests.tsv の f_q）で引ける（対比ごとの行は result_ids.compare を "
-                       "dataset_feature_search に名指し）。")
+        call = (f"dataset_compare(groups={json.dumps(list(levels or []), ensure_ascii=False)}, "
+                f"matrix_id={json.dumps(matrix_id)}, output_path=...)")
+        return head + (f"多群の上位は moderated F の q（f_q）の順で、載せなかった行は {call} が書く F 検定の表"
+                       "（<stem>.ftests.tsv の f_q）で引ける（matrix_id は概観の行列。省くとこのハンドルで "
+                       "dataset_preprocess が最後に作った行列で比べるので、F の母集団と f_q が概観と違いうる。"
+                       "対比ごとの行は result_ids.compare を dataset_feature_search に名指し）。")
     return head

@@ -111,7 +111,9 @@ def dataset_quant_apply(reference_path: str | None = None, bindings: dict | None
     正規化済みのデータセットには掛けない。skip=True は値を変えず「正規化を飛ばした」記録と
     派生を作る（reference_path は skip=True のときだけ省ける。読まない）。選別済みの
     データセットには掛けない（QUANT_ALREADY_SELECTED）。陽陰を統合したデータセットにも掛けない
-    （QUANT_ALREADY_MERGED。内部標準は極性ごとなので、正規化は統合の前に極性ごとに行う）。
+    （QUANT_ALREADY_MERGED。内部標準は極性ごとなので、正規化は統合の前に極性ごとに行う。統合し直すと
+    統合したハンドルに当てていた除外とシートは引き継がれないので、統合し直してできたハンドルに当て直す。
+    極性ごとのハンドルの除外は統合が引き継ぐ）。
     新しいハンドルの極性は解いた polarity。親が探索専用なら派生も探索専用（戻り値の exploratory）。
     dataset_handle: ハンドルのデータセット。省略時は直近のデータセット。
     """
@@ -153,6 +155,10 @@ def dataset_merge_polarities(positive_handle: str, negative_handle: str,
     different、n_samples_differ）に書く。極性ごとの実際の注入順・バッチは、統合の前にそれぞれのハンドルへ
     dataset_set_sample_metadata で入れる（統合後のハンドルへのシートは陽イオンの raw を挙げるので陽イオンの
     測定だけを決める。陰イオンを直すなら陰イオンのハンドルに当てて統合し直す）。
+    極性ごとのハンドルの除外（dataset_exclude）は統合後の ID に写して引き継ぐ: 特徴は positive:<id> /
+    negative:<id>、試料は共通 ID の和（片方の極性だけで外した試料も両極性の特徴から外れる。理由に外した極性が付く）。
+    引き継いだときだけ戻り値に exclusions（特徴・試料の件数）と notes、記録の summary.exclusions に ID。
+    前の統合したハンドルに当てたシートと除外は、統合し直すと引き継がれない（統合は極性ごとのハンドルから作る）。
     記録は 2 つの解析フォルダの共通の親の reports/quant/。共通の親が決められなければ
     needs_input で record_folder（既存のフォルダ）を求める。規則プラグイン（[quant] rules）が要る。
     キュレーションのフラグは写さず、選別が極性ごとの .arf2 からその時点のものを読む。

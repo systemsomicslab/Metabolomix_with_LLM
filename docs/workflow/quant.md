@@ -87,16 +87,20 @@
 試料の表は陽イオンのもの（陽イオンに当てたシート `sample_metadata_rows` も `derive()` がそのまま引き継ぐ）。陰イオンの
 試料ごとのバッチ・注入順は陰イオンの試料の表（当てたシートを含む）から読み（手順 16）、`quant_state.polarity_runs.negative`
 （統合後の試料名 → 測定）に残す。統合前の試料名は `quant_state.source_sample_names` に残す。統合したデータセットが陽イオンの
-測定として読む値（手順 21。統合したデータセットに `sample_runs()` を当てる）と同じかを `negative_runs`（手順 22）で
-記録と戻り値に書くので、記録は統合したデータセットを作ってから書く（手順 23。記録 ID はそのあと `quant_state` に入れる）。
-アッセイ種別（`assay_kind`）は `derive()` が写す陽イオンの値のままにせず、両側から決める（手順 20。陽陰で同じならその値、
+測定として読む値（手順 22。統合したデータセットに `sample_runs()` を当てる）と同じかを `negative_runs`（手順 23）で
+記録と戻り値に書くので、記録は統合したデータセットを作ってから書く（手順 24。記録 ID はそのあと `quant_state` に入れる）。
+アッセイ種別（`assay_kind`）は `derive()` が写す陽イオンの値のままにせず、両側から決める（手順 21。陽陰で同じならその値、
 片方が `unknown` ならもう片方、`lipid` と `metabolite` で食い違えば `unknown`。戻り値の `assay_kind`、陽陰で違えば `notes`。
 食い違いの注記は親の 2 つのハンドルを挙げ、誤っている側へ `record_objective` で記録し直して統合し直すよう言う。`derive()` の
 写しは `analysis_dir` も陽イオンのものなので、統合したハンドルへの記録は陽イオンの解析フォルダの目的に書く）。
 統計エンジンの前処理はこれでドリフト補正を極性ごとに当てる（`dataset_analysis.md` の `dataset_preprocess`）。
 統合したハンドルへ後から当てるシートは陽イオンの raw を挙げるので陽イオンの測定だけを決め、陰イオンの測定は陰イオンの
-ハンドルにシートを当てて統合し直すと変わる。統合し直すと統合したハンドルへ当てたシートは引き継がれない（統合は陽イオンの
-ハンドルの試料の表を引き継ぐ）。
+ハンドルにシートを当てて統合し直すと変わる。統合し直すと統合したハンドルへ当てたシートと除外は引き継がれない（統合は陽イオンの
+ハンドルの試料の表を引き継ぐ）。除外（`dataset_exclude`）は極性ごとのハンドルから統合後の ID に写す（手順 18。
+`derive()` は持ち越す ID の除外だけを残す——`positive:<id>` / `negative:<id>` は親に無い新しい ID なので特徴の除外は
+すべて落ち、試料の除外は陽イオンの側のものだけが共通 ID へ改名されて残る。そこで `merged_exclusions()` が両側から作り直し、
+特徴は `positive:<id>` / `negative:<id>` に、試料は各側の名前を共通 ID へ写して和をとる。引き継いだときだけ戻り値の
+`exclusions` と `notes`、記録の `summary.exclusions`）。
 
 1. metabolomix/quant/tools.py  dataset_merge_polarities()
 2. ├─ metabolomix/tools/_holder.py  resolve_holder()
@@ -115,13 +119,14 @@
 15.    │  ├─ metabolomix/quant/records.py  merged_record_folder()
 16.    │  ├─ metabolomix/analysis/stats/data.py  sample_runs()（陰イオンの試料の測定。統計エンジンと同じ読み方）
 17.    │  ├─ metabolomix/quant/derive.py  derive()（陽イオンの試料の表・シートを引き継ぐ）
-18.    │  ├─ metabolomix/quant/derive.py  carry_exploratory()（両側の探索専用の印を極性付きで合わせる）
-19.    │  ├─ metabolomix/quant/merge.py  merged_source_verification()（出所の裏取りは陽陰の弱いほう）
-20.    │  ├─ metabolomix/quant/merge.py  merged_assay_kind()（アッセイ種別を両側から）
-21.    │  ├─ metabolomix/analysis/stats/data.py  sample_runs()（統合したデータセットが陽イオンの測定として読む値）
-22.    │  ├─ metabolomix/quant/merge.py  _runs_match()（陰イオンの注入順・バッチがそれと同じか → `negative_runs`）
-23.    │  └─ metabolomix/quant/records.py  write_record()
-24.    └─ metabolomix/quant/derive.py  register()
+18.    │  ├─ metabolomix/quant/merge.py  merged_exclusions()（両側の除外を統合後の ID に写す）
+19.    │  ├─ metabolomix/quant/derive.py  carry_exploratory()（両側の探索専用の印を極性付きで合わせる）
+20.    │  ├─ metabolomix/quant/merge.py  merged_source_verification()（出所の裏取りは陽陰の弱いほう）
+21.    │  ├─ metabolomix/quant/merge.py  merged_assay_kind()（アッセイ種別を両側から）
+22.    │  ├─ metabolomix/analysis/stats/data.py  sample_runs()（統合したデータセットが陽イオンの測定として読む値）
+23.    │  ├─ metabolomix/quant/merge.py  _runs_match()（陰イオンの注入順・バッチがそれと同じか → `negative_runs`）
+24.    │  └─ metabolomix/quant/records.py  write_record()
+25.    └─ metabolomix/quant/derive.py  register()
 
 ## dataset_select_features
 

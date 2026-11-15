@@ -302,23 +302,32 @@ def _for_polarity(exc: DomainError, polarity: str) -> DomainError:
                        {**(exc.details or {}), "polarity": polarity})
 
 
+#: 統合し直すと失うもの（`run_remedy`・概観の `next`・統合したハンドルへのシートの注記が同じ文を使う）。統合は
+#: 極性ごとのハンドルから作り直すので、前の統合したハンドルに当てたシートと除外は新しいハンドルに来ない
+#: （極性ごとのハンドルの除外は `merged_exclusions` が統合後の ID に写す）。
+REMERGE_LOSS = ("統合し直すと、統合したハンドルに当てたシートと除外〔dataset_exclude〕は引き継がれない"
+                "〔極性ごとのハンドルの除外は引き継ぐ〕")
+
+
 def run_remedy(polarity: str) -> str:
     """統合したデータセットで、その極性の測定（バッチ・注入順）を入れ直す手順（注意の文面に添える）。
 
     統合したハンドルへ当てるシートは陽イオンの raw を挙げるので、陽イオンの測定だけを決める。ほかの極性の
     測定は統合が残した値（`quant_state.polarity_runs`）なので、その極性のハンドルにシートを当てて統合し直す。
-    統合し直すと、前の統合したハンドルへ当てたシートは引き継がれない（統合は陽イオンのハンドルの試料の表を
-    引き継ぐ）ので、陽イオンの手順はほかの極性を統合し直した後に行うと添える（極性ごとの注意が別々に並んでも、
-    どの順に読んでも陽イオンの順が消えない）。複数の極性をまとめて書くなら `runs_remedy`。
+    統合し直すと、前の統合したハンドルへ当てたシートと除外（`dataset_exclude`）は引き継がれない（統合は陽イオンの
+    ハンドルの試料の表と、極性ごとのハンドルの除外を引き継ぐ。`REMERGE_LOSS`）ので、ほかの極性の手順は統合し直して
+    できたハンドルに除外を当て直すと添え、陽イオンの手順はほかの極性を統合し直した後に行うと添える（極性ごとの
+    注意が別々に並んでも、どの順に読んでも陽イオンの順と除外が消えない）。複数の極性をまとめて書くなら `runs_remedy`。
     """
     if polarity == SAMPLE_TABLE_POLARITY:
         return (f"{polarity} の実際のバッチ・注入順は、統合したハンドルに dataset_set_sample_metadata（{polarity} の"
                 f" raw を挙げたシート）で入れる（統合の前に {polarity} のハンドルへ当てたシートも統合が引き継ぐ。"
-                "統合したハンドルへ当てたシートは統合し直すと引き継がれないので、ほかの極性を統合し直すなら、"
-                "統合し直してできたハンドルに入れる）。")
+                "統合したハンドルへ当てたシートと除外〔dataset_exclude〕は統合し直すと引き継がれないので、ほかの極性を"
+                "統合し直すなら、統合し直してできたハンドルに入れ、除外も当て直す）。")
     return (f"{polarity} の実際のバッチ・注入順は、{polarity} のハンドルに dataset_set_sample_metadata（{polarity} の"
             f" raw を挙げたシート）で入れてから dataset_merge_polarities で統合し直す（統合したハンドルへのシートは"
-            f" {SAMPLE_TABLE_POLARITY} の raw を挙げるので、{polarity} の測定は変わらない）。")
+            f" {SAMPLE_TABLE_POLARITY} の raw を挙げるので、{polarity} の測定は変わらない。" + REMERGE_LOSS
+            + "ので、当てていれば統合し直してできたハンドルに当て直す）。")
 
 
 def runs_remedy(polarities) -> str:
@@ -369,7 +378,7 @@ def _merged_run_warnings(study: StudyData, blocks, samples) -> list[dict]:
                        "（注入順の分からない極性には当てない）。交絡の判定・比較の共変量 batch・反復のまとめは、"
                        f"統合したデータセットの試料の表（{SAMPLE_TABLE_POLARITY} の測定）を使う。"
                        + (f"{label} の測定は統合が残していない（測定を残す前の版の統合）。"
-                          "dataset_merge_polarities で統合し直すと残る。" if unrecorded else
+                          "dataset_merge_polarities で統合し直すと残る（" + REMERGE_LOSS + "）。" if unrecorded else
                           f"{label} の測定が実際と違えば（注入順が MS-DIAL の既定のままなど）、" + run_remedy(label))})
     return sorted(notes, key=lambda n: n.get("polarity") == SAMPLE_TABLE_POLARITY)
 

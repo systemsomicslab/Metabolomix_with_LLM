@@ -159,3 +159,32 @@ def test_merged_handle_is_refused_before_asking_polarity(tmp_path, monkeypatch):
         assert err["details"]["parent_handles"] == {"positive": hp, "negative": hn}
         assert str(tmp_path) not in json.dumps(err)
     assert sorted(p.name for p in records.iterdir()) == before
+
+
+def test_merged_refusal_says_what_remerging_loses(tmp_path, monkeypatch):
+    """QUANT_ALREADY_MERGED は統合し直しを勧めるので、統合し直すと統合したハンドルの除外とシートが失われ、
+    当て直すことを言う（ほかの統合し直しの手順と同じ REMERGE_LOSS）。言うとおりに統合し直すと、極性ごとの
+    ハンドルの除外は残り、統合したハンドルに当てた除外は消え、当て直せば効く。"""
+    from metabolomix.analysis.stats.preprocess import REMERGE_LOSS
+    from tests.test_quant_merge import _pair
+
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path, unit=None)
+    hp, hn = _open(pos, "positive"), _open(neg, "negative")
+    assert _call("dataset_exclude", samples=["S3_neg"], reason="neg-bad", dataset_handle=hn)["excluded_samples"]
+    mh = _call("dataset_merge_polarities", positive_handle=hp, negative_handle=hn)["dataset_handle"]
+    _call("dataset_exclude", samples=["S1"], reason="failed", dataset_handle=mh)
+    assert set(handles.registry.get(mh).dataset.excluded_samples) == {"S1", "S3"}
+
+    err = _call("dataset_quant_apply", skip=True, dataset_handle=mh)["error"]
+    assert err["code"] == "QUANT_ALREADY_MERGED"
+    assert REMERGE_LOSS in err["message"]
+    assert "統合したハンドルに当てていた除外とシートは、統合し直してできたハンドルに当て直す" in err["message"]
+
+    # 言うとおりに: 極性ごとのハンドルで skip=True → 統合し直す → 統合したハンドルの除外を当て直す。
+    sp = _call("dataset_quant_apply", skip=True, dataset_handle=hp)["dataset_handle"]
+    sn = _call("dataset_quant_apply", skip=True, dataset_handle=hn)["dataset_handle"]
+    mh2 = _call("dataset_merge_polarities", positive_handle=sp, negative_handle=sn)["dataset_handle"]
+    assert set(handles.registry.get(mh2).dataset.excluded_samples) == {"S3"}  # 極性ごとの除外だけが残る
+    _call("dataset_exclude", samples=["S1"], reason="failed", dataset_handle=mh2)
+    assert set(handles.registry.get(mh2).dataset.excluded_samples) == {"S1", "S3"}

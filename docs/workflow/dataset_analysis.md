@@ -125,12 +125,13 @@ TSV（と F 検定の TSV）を書き（手順 22）、手順 23・24 の記録�
 
 最初の概観（spec 2026-11-06-dataset-overview-design）。`load_dataset(overview=True)` のときだけ、読み込みの最後に同じ
 `build_overview_payload()` を呼ぶ（`embedded=True`、`dataset.md` の `load_dataset`。既定の `overview=False` では呼ばない）。統計は C のエンジンだけを通す: 既定の前処理（手順 3〜5。尋ねない:
-drift=auto がドリフト補正を当てなかったら補正なしで計算し、そう書く）→ 品質の純計算（手順 7〜10。前処理前の値。陽陰を統合したデータセットでは `failed_qc` と `drift_signs` が極性ごとの総量・その極性の注入順で見る。ρ に使った QC の注入順がファイルの順かもしれない行には `analysis/stats/data.py` の `order_may_be_file_order()` で印を付け、手順 21 の `quality_facts()` がドリフトの兆候の事実の但し書きにする。統合したデータセットではその極性の入れ直し方を `analysis/stats/preprocess.py` の `runs_remedy()`（極性ごとの `run_remedy()` を陽イオンを最後に並べる。`dataset_preprocess` の注意と同じ文と順）から書き、`next` は陽イオン以外の極性ならそのハンドルへのシートと統合し直し。drift=auto が補正を止めた注記は `tools/overview_tools.py` の `_drift_note()` が書き、注入順の出所〔MS-DIAL の既定・シートの宣言〕は前処理に渡した試料の表から読む）→ PCA（手順 12〜13）→
+drift=auto がドリフト補正を当てなかったら補正なしで計算し、そう書く）→ 品質の純計算（手順 7〜10。前処理前の値。陽陰を統合したデータセットでは `failed_qc` と `drift_signs` が極性ごとの総量・その極性の注入順で見る。ρ に使った QC の注入順がファイルの順かもしれない行には `analysis/stats/data.py` の `order_may_be_file_order()` で印を付け、手順 21 の `quality_facts()` がドリフトの兆候の事実の但し書きにする。統合したデータセットではその極性の入れ直し方を `analysis/stats/preprocess.py` の `runs_remedy()`（極性ごとの `run_remedy()` を陽イオンを最後に並べる。`dataset_preprocess` の注意と同じ文と順）から書き、`next` は陽イオン以外の極性ならそのハンドルへのシートと統合し直し〔統合し直すと統合したハンドルのシートと除外は引き継がれないので、統合し直す手は除外と `dataset_preprocess(drift_mode="on")` より前に置く〕。drift=auto が補正を止めた注記は `tools/overview_tools.py` の `_drift_note()` が書き、注入順の出所〔MS-DIAL の既定・シートの宣言〕は前処理に渡した試料の表から読む）→ PCA（手順 12〜13）→
 spec v2 の比較（手順 15〜18。群が 1 つ・全群をまとめた表で完全交絡なら回さない。一部の対だけの完全交絡では
 止めず、`allow_confounded=True` で対比に印を付ける。探索専用のデータセットも比較を回し、`analysis/dataset_export.py` の `exploratory_reason()` の理由で
 全体・クラス・分子種の段の先頭に印の事実を置く）→ 選別の後だけ組成（手順 20）。比較と PCA は `make_current=False` で
 `ds.results` に置き、直近（`last_differential` / `last_pca`）は動かさない。事実の組み立ては `analysis/overview.py`（手順 6・11・19・21〜24）で、
 概観は `ds.results[ovw_…]`（`kind="overview"`、手順 25）と `reports/stats/`（step=overview、親は前処理の記録、手順 26）に残す。
+`top_n` を上限に下げたときの注記（`tools/overview_tools.py` の `_cap_note()`）は、多群なら概観の群（手順 6）と行列（手順 3〜5 の `matrix_id`）を名指しした `dataset_compare(groups=..., matrix_id=..., output_path=...)` を挙げる（`matrix_id` を省いた `dataset_compare` は `matrix_inputs(prefer_latest=True)` で直近の `dataset_preprocess` の行列を使う）。
 
 1. metabolomix/tools/overview_tools.py  dataset_overview()
 2. └─ metabolomix/tools/overview_tools.py  build_overview_payload()
@@ -277,8 +278,9 @@ result_id は計算のたびに発行される UUID なので入れず、統計�
 陽陰を統合したデータセットでは、シートは陽イオンの raw を挙げる（統合したデータセットの raw のパスは陽イオンのもの）
 ので、`batch`・`injection_order` は陽イオンの測定だけを決める。陰イオンの測定は統合が残した
 `quant_state.polarity_runs.negative` のままで、変えるなら陰イオンのハンドルにシートを当ててから統合し直す
-（手順 8・9 が戻り値の `notes` にそう書く。統合し直すと統合したハンドルへ当てたシートは引き継がれないので、
-同じシートを陽イオンのハンドルにも当ててから統合し直すか、統合し直してできたハンドルに当て直すとも書く）。
+（手順 8・9 が戻り値の `notes` にそう書く。統合し直すと統合したハンドルへ当てたシートと除外（`dataset_exclude`）は
+引き継がれないので、同じシートを陽イオンのハンドルにも当ててから統合し直すか、統合し直してできたハンドルに当て直し、
+このハンドルの除外も当て直すとも書く）。
 
 対話ツール `dataset_compare`（統計エンジン）は、群名だけで対照/処置の向きを決めない・QC/blank/unknown/standard・`include=false` を混ぜない・完全交絡は既定では比べて印を付け（`confounding` と対比の `confounded`）、`allow_confounded=false` を渡したときだけ止める（`STATISTIC_CONFOUNDED`）。
 

@@ -530,8 +530,11 @@ def test_overview_names_the_negative_handle_remedy_when_the_negative_order_may_b
     assert "試料の表の injection_order に入れる" not in drift["text"]
     assert "negative のハンドルに dataset_set_sample_metadata" in facts["next"]
     assert "dataset_merge_polarities" in facts["next"]
-    # 統合し直すと統合したハンドルに当てたシートは引き継がれない（陽イオンのハンドルにも当てる）
-    assert "positive のハンドルにも当てておく" in facts["next"]
+    # 統合し直すと統合したハンドルに当てたシートと除外は引き継がれない（陽イオンのシートは陽イオンのハンドルにも当て、
+    # 除外は統合し直してできたハンドルに当て直す）
+    assert "positive のハンドルにも当てておき" in facts["next"]
+    assert "シートと除外〔dataset_exclude〕は引き継がれない" in facts["next"]
+    assert "除外は統合し直してできたハンドルに当て直す" in facts["next"]
     assert "dataset_set_sample_metadata（injection_order に実際の測定順を入れる）" not in facts["next"]
     # drift_mode="on" で呼び直せる（陽イオンは当たった）が、陰イオンは確かでない注入順のまま当てはめると添える
     assert rerunnable is True and 'dataset_preprocess(drift_mode="on")' in note
@@ -615,6 +618,63 @@ def test_overview_merged_negative_remedy_clears_the_caveat_end_to_end(tmp_path, 
     assert not any("当てなかった" in f for f in out2["quality"]["facts"])
 
 
+def test_overview_merged_next_puts_the_remerge_before_the_exclusion_and_following_it_keeps_it(
+        tmp_path, monkeypatch):
+    """統合したハンドルの品質の next に、失敗した QC の除外と陰イオンの入れ直し（統合し直す）が両方出るとき、
+    統合し直す手を除外と drift_mode="on" より前に置く。統合し直すと統合したハンドルに当てた除外は引き継がれないので、
+    逆の順では除外した失敗の注入が新しいハンドルの前処理に黙って戻る。書いた順に行えば除外が効く（最終の確かめ）。"""
+    from metabolomix.analysis import stats_results
+    from metabolomix.core import handles, session_state
+    from metabolomix.quant import merge as qm
+    from metabolomix.tools.dataset_analysis_tools import dataset_set_sample_metadata
+    from metabolomix.tools.stats_tools import dataset_preprocess
+    from tests.test_stats_preprocess_merged import (FILE_ORDER, IDS, NEG_TRUE, POS_TRUE, _folder, _point,
+                                                    _sheet_text, _values)
+
+    _point(tmp_path, monkeypatch)
+    pos_v, neg_v = _values()
+    failed = IDS[3]                                                   # QC の注入（両極性で失敗）
+    pos_v[3] *= 0.05
+    neg_v[3] *= 0.05
+    ids = []
+    for sub, polarity, values, ion in (("pos", "positive", pos_v, "PC"), ("neg", "negative", neg_v, "PE")):
+        session_state.session.dataset = _folder(tmp_path / "run" / sub, FILE_ORDER, values, ion)
+        holder = handles.registry.get(session_state.session.current_handle_id)
+        holder.polarity = polarity
+        ids.append(holder.handle_id)
+    sheets = {}
+    for name, order in (("pos", POS_TRUE), ("neg", NEG_TRUE)):
+        sheets[name] = tmp_path / f"{name}.tsv"
+        sheets[name].write_text(_sheet_text(IDS, order), encoding="utf-8")
+    assert json.loads(dataset_set_sample_metadata(str(sheets["pos"]), dataset_handle=ids[0]))["status"] == "success"
+
+    def merge():
+        return json.loads(qm.merge_tool(handles.registry.get(ids[0]), handles.registry.get(ids[1]),
+                                        None, None))["dataset_handle"]
+
+    first = merge()
+    steps = _ov(dataset_handle=first)["quality"]["next"].split(" / ")
+    remerge = next(i for i, s in enumerate(steps) if "dataset_merge_polarities" in s)
+    exclude = next(i for i, s in enumerate(steps) if s.startswith("dataset_exclude("))
+    assert steps[exclude] == f'dataset_exclude(samples=["{failed}"])'
+    assert remerge < exclude, steps
+    if 'dataset_preprocess(drift_mode="on")' in steps:
+        assert remerge < steps.index('dataset_preprocess(drift_mode="on")')
+    assert "シートと除外〔dataset_exclude〕は引き継がれない" in steps[remerge]
+
+    # 書いた順に: 陰イオンのハンドルにシート → 統合し直す → 統合し直してできたハンドルで除外 → 前処理
+    assert json.loads(dataset_set_sample_metadata(str(sheets["neg"]), dataset_handle=ids[1]))["status"] == "success"
+    second = merge()
+    body = json.loads(dataset_exclude(samples=[failed], reason="failed QC injection", dataset_handle=second))
+    assert body["changed"] is True
+    pre = json.loads(dataset_preprocess(dataset_handle=second))
+    assert pre["status"] == "success", pre
+    ds = handles.registry.get(second).dataset
+    prepared = stats_results.get_matrix(ds, pre["matrix_id"])["prepared"]
+    assert stats_results.sample_ids_by_name(ds)[failed] not in prepared.qc_ids
+    assert len(prepared.qc_ids) == 5
+
+
 def _qc_bracketed_file_order_ds(tmp_path):
     """`_interleaved_file_order_ds`（注入順＝raw のファイル名の順位、出所は .mddata）の最後の QC を走りの最後に置く:
     QC が生体を挟むのでドリフト補正の条件を満たし、drift=auto は注入順が確かでないことで補正を止める。"""
@@ -687,5 +747,49 @@ def test_overview_cap_note_points_to_a_recovery_path_that_exists(tmp_path):
     multi = _ov(top_n=30)
     assert "compare" in multi["result_ids"]
     (note,) = multi["notes"]
-    assert "ftests" in note and "f_q" in note and "dataset_compare(output_path=...)" in note
+    assert "ftests" in note and "f_q" in note and 'dataset_compare(groups=["C", "T", "U"], matrix_id="mx_' in note
     assert "dataset_export_differential" not in note
+
+
+def test_overview_cap_note_call_reproduces_the_overview_f_ranking_after_a_preprocess(tmp_path):
+    """多群の注記の呼び出しを書いたとおりに回すと、概観と同じ F の母集団・f_q の F 検定の表になる（最終の確かめ）。
+
+    概観はいつも既定の前処理の行列で比べるが、matrix_id を省いた dataset_compare はこのハンドルで dataset_preprocess が
+    最後に作った行列を使う。先に dataset_preprocess を回しておくと、群だけを渡した呼び出しは別の行列（別の母集団・
+    別の順位）になるので、注記は概観の行列と全群を名指しする。"""
+    import re
+    from pathlib import Path
+
+    from metabolomix.tools.stats_tools import dataset_compare, dataset_preprocess
+
+    ds = _install(_ds(groups=("C", "T", "U"), per_group=5), tmp_path)
+    pre = json.loads(dataset_preprocess(normalize="none", max_qc_rsd=None, max_d_ratio=None))
+    assert pre["status"] == "success", pre
+    out = _ov(top_n=30)
+    (note,) = out["notes"]
+    found = re.search(r"dataset_compare\(groups=(\[[^\]]*\]), matrix_id=(\"[^\"]+\"), output_path=\.\.\.\)", note)
+    assert found, note
+    groups, matrix_id = json.loads(found.group(1)), json.loads(found.group(2))
+    assert matrix_id != pre["matrix_id"] and matrix_id in out["state"]
+    assert "省くと" in note and "dataset_preprocess が最後に作った行列" in note
+
+    def ftests(**kw):
+        target = tmp_path / f"rest_{len(list(tmp_path.glob('rest_*.tsv')))}.tsv"
+        body = json.loads(dataset_compare(output_path=str(target), **kw))
+        assert body["output"]["written"] is not False, body
+        lines = Path(body["output"]["ftests_path"]).read_text(encoding="utf-8").splitlines()
+        head = lines[0].split("\t")
+        rows = [dict(zip(head, line.split("\t"))) for line in lines[1:]]
+        return body, {r["feature_id"]: float(r["f_q"]) for r in rows if r["kind"] == "omnibus" and r["f_q"]}
+
+    body, got = ftests(groups=groups, matrix_id=matrix_id)
+    assert body["matrix_id"] == matrix_id and body["matrix_source"] == "matrix_id"
+    engine = ds.results[out["result_ids"]["compare"]]["engine"]
+    want = {o["feature_id"]: o["f_q"] for o in engine["omnibus"] if o.get("f_q") is not None}
+    assert want and set(got) == set(want)
+    for fid, q in want.items():
+        assert got[fid] == pytest.approx(q, rel=1e-8, abs=1e-300)
+    # matrix_id を省くと直近の前処理の行列（注記が言う違い）
+    other, other_q = ftests(groups=groups)
+    assert other["matrix_source"] == "latest_preprocess" and other["matrix_id"] == pre["matrix_id"]
+    assert other_q != got

@@ -703,6 +703,30 @@ def test_save_figure_species_pca_names_the_handle_that_holds_the_result(loaded, 
     assert err["code"] == "DATASET_BAD_REQUEST" and "result_handle" not in err["details"]
 
 
+def test_save_figure_species_pca_does_not_send_another_kind_to_the_handle_that_holds_it(loaded, tmp_path):
+    """別のハンドルの結果でも、分子種の PCA でない結果（統計エンジンの PCA など）なら、そのハンドルで呼び直すようには
+    言わない（呼び直しても分子種の PCA の図は保存できない）。「分子種の PCA の結果ではない」と言い、持っている
+    ハンドルを文で名指す（details.result_handle は付けない）。"""
+    from metabolomix.tools import stats_tools
+
+    owner = loaded["handle"].handle_id
+    pre = json.loads(stats_tools.dataset_preprocess())
+    assert pre["status"] == "success", pre
+    stat = json.loads(stats_tools.dataset_pca())
+    rid = stat["result_id"]
+    assert loaded["ds"].results[rid]["provenance"]["kind"] == "stat_pca"
+    body = json.loads(handle_tools.load_dataset(directory=str(loaded["folder"])))   # 同じフォルダを別のハンドルで
+    other = body["dataset_handle"]
+    assert other != owner and session_state.session.current_handle_id == other
+    _pca(items=["PG", "DG"], standard_samples=["std"])                               # 直近のハンドルの図
+    err = _error(reports.save_figure("species_pca", "sp", result_id=rid))
+    assert err["code"] == "DATASET_BAD_REQUEST", err
+    assert "result_handle" not in err["details"] and err["details"]["result_kind"] == "stat_pca"
+    assert "分子種の PCA の結果ではありません" in err["message"] and owner in err["message"]
+    assert "dataset_handle=" not in err["message"]
+    assert not (tmp_path / "reports" / "figures" / "sp_species_pca.png").exists()
+
+
 def test_save_figure_species_pca_names_a_stale_result_without_a_redraw_loop(loaded, tmp_path):
     """名指しした結果が古い（除外のあと）なら、指定が同じでも「項目の指定が違う」とは言わず、描き直しも案内しない。
 

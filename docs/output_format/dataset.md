@@ -257,9 +257,10 @@ subject_source, groups: {群: 個体数}, quant, steps, warnings, record, next}`
   （`dataset_set_sample_metadata`）は陽イオンの raw を挙げるので、`batch`・`injection_order` は陽イオンの測定だけを
   決める**（群・役割・include・subject_id・因子の列は試料ごとなので両極性に効く）。陰イオンの測定を変えるなら、陰イオンの
   ハンドルに陰イオンの raw を挙げたシートを当ててから `dataset_merge_polarities` で統合し直す（統合したハンドルへの
-  シートの戻り値の `notes` もこれを言う）。統合し直すと、前の統合したハンドルへ当てたシートは引き継がれない（統合は
-  陽イオンのハンドルの試料の表を引き継ぐ）ので、陽イオンの手順は「ほかの極性を統合し直すなら、統合し直してできた
-  ハンドルに入れる」と添え、複数の極性の手順は上から行えば全部が入る順（陽イオンを最後）に書く: `drift_not_applied_by_default`
+  シートの戻り値の `notes` もこれを言う）。統合し直すと、前の統合したハンドルへ当てたシートと除外（`dataset_exclude`）は
+  引き継がれない（統合は陽イオンのハンドルの試料の表と、極性ごとのハンドルの除外を引き継ぐ）ので、陰イオンの手順は
+  「当てていれば統合し直してできたハンドルに当て直す」、陽イオンの手順は「ほかの極性を統合し直すなら、統合し直してできた
+  ハンドルに入れ、除外も当て直す」と添え、複数の極性の手順は上から行えば全部が入る順（陽イオンを最後）に書く: `drift_not_applied_by_default`
   の `message` は陰イオンの入れ直し（統合し直す）を先に、統合したハンドルへの陽イオンのシートを後に書き、極性ごとの
   `injection_order_may_be_file_order` も陽イオンのものを最後に並べる（`dataset_overview` の但し書き・注記と同じ文と順）。
   `drift_mode="on"` は注入順が確かでない極性もその注入順のまま当てはめる。
@@ -759,7 +760,7 @@ PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（
 | `quality` / `global` / `classes` / `species` | 各段。`facts`（事実の 1 行ずつ。先頭が ID）・`next`（掘る一手。引数は JSON）・省いた段は `omitted`（理由）。品質は `verdict` も |
 | `result_ids` | 概観が登録した `compare` / `pca` の結果 ID（回したものだけ） |
 | `record` | `reports/stats/` への記録（`written` と `record_id`・`path`、書けなければ `reason`） |
-| `notes` | `top_n` を上限の 20 に下げたときだけ。そのとき分子種の上位の表を 20 行で切ったら、`species` に `top_truncated: true` と `top_n_more`（載せなかった行数）。全行の引き方は比べ方で変わり、`notes` に書く: 2 群は `result_ids.compare` を `dataset_feature_search`（名指し）・`dataset_export_differential(result_id=...)` で、多群（上位は moderated F の `f_q` の順）は `dataset_compare(output_path=...)` が書く F 検定の表（`<stem>.ftests.tsv`）で引く。比較を回さなかった概観（群が 1 つ・完全交絡・品質の段だけ）は引き方を書かない |
+| `notes` | `top_n` を上限の 20 に下げたときだけ。そのとき分子種の上位の表を 20 行で切ったら、`species` に `top_truncated: true` と `top_n_more`（載せなかった行数）。全行の引き方は比べ方で変わり、`notes` に書く: 2 群は `result_ids.compare` を `dataset_feature_search`（名指し）・`dataset_export_differential(result_id=...)` で、多群（上位は moderated F の `f_q` の順）は概観の群と行列を名指しした `dataset_compare(groups=[<概観の群>], matrix_id=<概観の行列>, output_path=...)` が書く F 検定の表（`<stem>.ftests.tsv`）で引く（注記はその呼び出しを書いたとおりに挙げる。`matrix_id` を省くと、このハンドルで `dataset_preprocess` が最後に作った行列で比べるので、F の母集団と `f_q` が概観と違いうる）。比較を回さなかった概観（群が 1 つ・完全交絡・品質の段だけ）は引き方を書かない |
 
 **事実の ID**: 段ごとに `Q1, Q2, …` / `G1, …` / `C1, …` / `S1, …`。外から引くときは `<overview_id>#Q1`。
 解釈は事実と混ぜず別の節に書き、根拠の ID を挙げる。
@@ -793,7 +794,9 @@ PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（
 統合したデータセットでは極性を名指しし、入れ方を極性ごとに書く: 統合したハンドルへのシートは陽イオン（`positive`）の
 測定しか決めない（`quant.md` の `polarity_runs`）ので、陰イオンなど陽イオン以外の極性は、その極性のハンドルにシートを
 当てて `dataset_merge_polarities` で統合し直す（`next` は `<極性> のハンドルに dataset_set_sample_metadata → dataset_merge_polarities`。
-統合し直すと統合したハンドルに当てたシートは引き継がれないので、陽イオンの順も入れるなら陽イオンのハンドルにも当てる）。
+統合し直すと統合したハンドルに当てたシートと除外〔`dataset_exclude`〕は引き継がれないので、陽イオンの順も入れるなら陽イオンの
+ハンドルにも当て、統合したハンドルに当てていた除外は統合し直してできたハンドルに当て直す。統合し直す手は `next` の中で
+`dataset_exclude` と `dataset_preprocess(drift_mode="on")` より前に置き、書いた順に行えば除外が新しいハンドルに当たる）。
 陽イオンだけなら統合したハンドルへのシートで入る（`next` は `dataset_set_sample_metadata`）。注入順が群で偏っていなくても、品質の段だけの概観（交絡を評価しない）でも付く。ρ と判定
 （`drift_sign`）は変えない。
 既定の前処理が失敗する（足切りで特徴が 1 つも残らない など）ときも概観は失敗しない: 品質の段（前処理の前の試料から

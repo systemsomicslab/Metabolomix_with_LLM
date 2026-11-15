@@ -179,6 +179,21 @@ def test_derive_narrowing_prunes_feature_side_data():
     assert set(ds.feature_candidates) == {"f1", "f2"}
 
 
+def test_derive_carries_exclusions_to_the_new_names_and_ids():
+    """除外も名前・ID で引く欄: 改名した試料の除外は新しい名前へ写し、選ばなかった試料・特徴の除外は落とす
+    （親に無い ID の除外を残すと、統計が「存在しない特徴 ID」で止まる）。"""
+    ds = _ds()
+    ds.excluded_samples = {"s1": "bad", "s2": "qc fail"}
+    ds.excluded_features = {"f1": "contaminant", "f2": "noise"}
+    new = qd.derive(ds, matrix=np.ones((1, 2)), detected=np.ones((1, 2), dtype=bool), feature_ids=["f2"],
+                    sample_names=["M1", "M2"], sample_index=[2, 0], state=_state())
+    assert new.excluded_samples == {"M2": "bad"}
+    assert new.excluded_features == {"f2": "noise"}
+    assert ds.excluded_samples == {"s1": "bad", "s2": "qc fail"}            # 元は触らない
+    same = qd.derive(ds, matrix=ds.feature_matrix, detected=ds.detected_mask, state=_state())
+    assert same.excluded_samples == ds.excluded_samples and same.excluded_features == ds.excluded_features
+
+
 def test_derive_does_not_alias_inputs():
     ds = _ds()
     m = np.ones((2, 3))
