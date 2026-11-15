@@ -1300,6 +1300,43 @@ def test_mztab_source_binds_receipt_rows_to_samples_not_by_position(tmp_path, so
     assert mztab.metadata_revision == 0
 
 
+@pytest.mark.parametrize("source", ["mztab", "auto"])
+@pytest.mark.parametrize("absolute", [False, True])
+def test_sheet_applies_after_receipt_rows_were_bound_by_name(tmp_path, source, absolute):
+    """raw を動かした run（受領の行は今の run の場所、mzTab-M の `ms_run` は Console が走ったときの場所）を
+    開いて名前で結んだあとも、`dataset_set_sample_metadata` でシートを当てられる。
+
+    シートの検証の置き場所（`_raw_manifest_layout`）と試料への結び方（`resolve_metadata`）が同じ raw の
+    パスを見る。シートの `source_file` は今の場所の相対名でも絶対パスでもよく、行は位置ではなく raw で試料に付く
+    （シートの行の順は assay の順と逆）。"""
+    from metabolomix.tools.dataset_analysis_tools import dataset_set_sample_metadata
+    from metabolomix.tools.handle_tools import load_dataset
+
+    moved = (tmp_path / "moved").as_posix()
+    run = _v3_run(tmp_path, rows=_shuffled_rows(moved))
+    out = json.loads(load_dataset(pipeline_path=str(run), polarity="negative", source=source,
+                                  overview=False))
+    assert out["status"] == "success", out
+    ds = session_state.session.dataset
+    assert [p.replace("\\", "/") for p in ds.sample_raw_paths] == [f"{moved}/s{i}.wiff" for i in range(4)]
+    if source == "mztab":   # 置き場所の食い違いが起きる経路（assay_sources は Console が走ったときの場所）
+        assert all(p.replace("\\", "/").startswith("C:/data/") for p in ds.assay_sources.values())
+
+    groups = {"s0": "case", "s1": "case", "s2": "ctrl", "s3": "ctrl"}   # 受領の群と違う訂正
+    lines = ["# schema = sample-manifest.v1",
+             "sample_id\tsource_file\trole\tgroup\tbatch\tinjection_order\tqc_pool\tinclude"]
+    for name in ("s3", "s2", "s1", "s0"):
+        source_file = f"{moved}/{name}.wiff" if absolute else f"{name}.wiff"
+        lines.append(f"{name}\t{source_file}\tsample\t{groups[name]}\t1\t\t\ttrue")
+    sheet = tmp_path / "sheet.tsv"
+    sheet.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    applied = json.loads(dataset_set_sample_metadata(str(sheet)))
+    assert applied.get("status") == "success", applied
+    assert _group_and_include(ds) == {name: (group, True) for name, group in groups.items()}
+    assert [r["group"] for r in ds.sample_metadata_rows] == ["case", "case", "ctrl", "ctrl"]
+
+
 @pytest.mark.parametrize("source", ["auto", "mztab"])
 def test_sample_counts_keep_sheet_excluded_samples_out_of_groups(tmp_path, source):
     """`sample_counts` と `dataset_status` の要約の群は統計に入る試料だけ。include=false の試料（群

@@ -106,7 +106,8 @@ def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
            state: dict):
     """`ds` の複製に値・マスク・欄を差し替えた派生データセット（`ds` は動かさない）。
 
-    古い行列から出た結果（results / stat_matrices / last_*）は空に戻す。指紋は保存せず都度計算する
+    古い行列から出た結果（results / stat_matrices / last_*）と、図（figures）と捨てた図の印（discarded_figures）は
+    空に戻す（親の図は親の行列から描いたもので、この行列の図ではない）。指紋は保存せず都度計算する
     （`result_state.dataset_fingerprint`）ので、古い指紋が残ることはない。
 
     試料: `sample_index` は新しい各試料の親での位置。試料名だけを渡せば名前で引く（親に無い
@@ -189,6 +190,10 @@ def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
     new.dataset_id = f"ds_{uuid.uuid4().hex}"
     new.results = {}
     new.stat_matrices = {}
+    # 図と捨てた図の印も親のもの（親の行列から描いた図・親の除外の理由）なので持ち越さない。派生のハンドルは
+    # まだ何も描いていない（`save_figure` は `dataset_plot` を案内する missing_state を返す）。
+    new.figures = {}
+    new.discarded_figures = {}
     new.last_pca = None
     new.last_differential = None
     new.quant_state = copy.deepcopy(state)

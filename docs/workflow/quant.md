@@ -56,7 +56,8 @@
 前提: preview と同じ。`reference_path` は `skip=True` のときだけ省ける。正規化済み・選別済み・統合済みには
 掛けない（`QUANT_ALREADY_NORMALIZED` / `QUANT_ALREADY_SELECTED` / `QUANT_ALREADY_MERGED`。`skip()` も
 `_check_not_normalized()` を通す）。派生は `derive()` の `carry_exploratory()` で親の探索専用の印を
-引き継ぐ（選別も同じ）。状態変更: 解析フォルダの `reports/quant/` に記録を 1 件書き、
+引き継ぐ（選別も同じ）。親の結果・行列・図（`figures`）・捨てた図の印（`discarded_figures`）は `derive()` が
+空にする（統合・選別も同じ。派生でまだ描いていない図の `save_figure` は `missing_state`）。状態変更: 解析フォルダの `reports/quant/` に記録を 1 件書き、
 新しいハンドルを登録して直近にする。内部標準が未解決（`needs_input`）なら何も書かない。
 
 1. metabolomix/quant/tools.py  dataset_quant_apply()

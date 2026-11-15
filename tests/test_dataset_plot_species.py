@@ -635,6 +635,48 @@ def test_save_figure_result_id_is_not_used_for_the_new_kinds(loaded, tmp_path):
     assert "notes:" in msg and "result_id='r1'" in msg
 
 
+def test_save_figure_species_pca_result_id_must_name_the_held_figure(loaded, tmp_path):
+    """species_pca の result_id は描き直しには使えないが、置き場の図がその結果から描いたものかを確かめる。
+
+    別の項目の指定の図（置き場の図）を、名指しした結果の図として保存しない（報告書が R1 を語りながら R2 の PCA を
+    埋め込み、同じ analysis_id の R1 の図を上書きする）。違えば STALE_FIGURE で、`details.settings` の指定で
+    描き直せば名指しした結果と同じ図になる。置き場の図の結果を名指しすれば注記なしで保存し、同じ指定で描き直した
+    だけの結果を名指しすれば（同じ図なので）保存して notes に書く。"""
+    figures = tmp_path / "reports" / "figures"
+    first = _pca(items=["PG", "DGDG", "DG"], standard_samples=["std"])
+    second = _pca(items=["PG", "DG"], standard_samples=["std"])
+    r1, r2 = first["result_id"], second["result_id"]
+    assert r1 != r2 and loaded["ds"].figures["species_pca"]["result_id"] == r2
+    assert first["n_species"] != second["n_species"]
+
+    err = _error(reports.save_figure("species_pca", "sp", result_id=r1))
+    assert err["code"] == "STALE_FIGURE", err
+    assert err["details"]["result_id"] == r1 and err["details"]["held_result_id"] == r2
+    assert err["details"]["required_tools"] == ["dataset_plot"]
+    settings = err["details"]["settings"]
+    assert settings["items"] == ["PG", "DGDG", "DG"] and settings["standard_samples"] == ["std"]
+    assert r1 in err["message"] and r2 in err["message"]
+    assert not (figures / "sp_species_pca.png").exists()
+
+    msg = reports.save_figure("species_pca", "sp", result_id=r2)       # 置き場の図の結果
+    assert (figures / "sp_species_pca.png").is_file() and r2 in msg and "notes:" not in msg
+
+    # details.settings をそのまま dataset_plot に渡せば、名指しした結果と同じ図になり保存できる
+    redrawn = _p("species_pca", **settings)
+    assert redrawn["points"] == first["points"] and redrawn["n_species"] == first["n_species"]
+    msg = reports.save_figure("species_pca", "sp", result_id=redrawn["result_id"])
+    assert redrawn["result_id"] in msg and "notes:" not in msg
+    # 同じ指定で描き直しただけの別の結果（R1 と同じ計算）を名指しすれば、置き場の図を保存して notes に書く
+    msg = reports.save_figure("species_pca", "sp3", result_id=r1)
+    assert (figures / "sp3_species_pca.png").is_file()
+    assert redrawn["result_id"] in msg and "notes:" in msg and r1 in msg.split("notes:")[1]
+
+    # 分子種の PCA の結果でない ID は引数の誤り（置き場の図を黙って保存しない）
+    err = _error(reports.save_figure("species_pca", "sp2", result_id="res_nope"))
+    assert err["code"] == "DATASET_BAD_REQUEST" and err["details"]["result_id"] == "res_nope"
+    assert not (figures / "sp2_species_pca.png").exists()
+
+
 def test_failed_render_does_not_store_the_figure(loaded, monkeypatch):
     from metabolomix.plots import group_intensity as gi
 

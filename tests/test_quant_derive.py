@@ -55,11 +55,16 @@ def test_quant_state_shape_and_extra():
 
 def test_derive_resets_results_and_ids():
     ds = _ds()
+    ds.figures = {"group_intensity": {"kind": "group_intensity", "payload": {}}}
+    ds.discarded_figures = {"volcano": ["exclusion"]}
     new = qd.derive(ds, matrix=ds.feature_matrix * 2, detected=ds.detected_mask.copy(),
                     state=_state())
     assert new is not ds and new.dataset_id != ds.dataset_id
     assert new.dataset_id.startswith("ds_")
     assert new.results == {} and new.stat_matrices == {}
+    # 親の行列から描いた図と、親の除外・試料の表の更新が捨てた図の印は持ち越さない（親は変えない）
+    assert new.figures == {} and new.discarded_figures == {}
+    assert set(ds.figures) == {"group_intensity"} and ds.discarded_figures == {"volcano": ["exclusion"]}
     assert new.last_pca is None and new.last_differential is None
     assert new.source_format == "msdial_folder"
     assert new.quant_state["normalized"] is True

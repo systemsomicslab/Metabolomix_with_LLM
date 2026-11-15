@@ -126,7 +126,8 @@ FIGURE_KINDS = ("pca", "volcano", "loadings", "group_intensity", "species", "spe
 #: `result_id` で登録された結果から描ける kind（`ds.results`）。
 _RESULT_KINDS = ("pca", "volcano", "loadings")
 #: 結果から作った図（保存の直前に、その結果が今のものか確かめる）。`species_pca` は項目の指定から作る
-#: 結果なので `result_id` では描き直せない（`_RESULT_KINDS` には入れない）。
+#: 結果なので `result_id` では描き直せない（`_RESULT_KINDS` には入れない）。`save_figure` は名指しされた
+#: `result_id` と置き場の図の結果が同じかだけを確かめる（`_other_species_pca`）。
 _RESULT_DERIVED_KINDS = _RESULT_KINDS + ("species_pca",)
 _LABELS = {"pca": "PCA", "volcano": "volcano", "loadings": "ローディング",
            "group_intensity": "群別強度", "species": "分子種", "species_pca": "分子種の PCA",
@@ -155,7 +156,12 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
     eic / eic_compounds は結果から作った図ではないので、描いたとおりに保存する（あとで `dataset_exclude` しても変わらない）。
     result_id: kind が pca / volcano / loadings で効く。登録された結果を名指しして描く
       （`dataset_plot` を呼ばなくてよい。古い結果は STALE_ANALYSIS_RESULT）。volcano では
-      `"result_id#contrast_id"`（`dataset_feature_search` が出す形）でも対比を選べる。ほかの kind では使わず、
+      `"result_id#contrast_id"`（`dataset_feature_search` が出す形）でも対比を選べる。species_pca では描き直しに
+      使わず（項目の指定から作る結果）、置き場の図がその結果から描いたものかを確かめる: 同じなら保存し（同じ指定で
+      描き直しただけの別の結果なら、置き場の図を保存して `notes:` 行にそう書く）、違う指定なら保存せず
+      `STALE_FIGURE`（`details.held_result_id` に置き場の図の結果、`details.settings` に名指しした結果の項目の指定。
+      その指定で `dataset_plot(kind="species_pca", ...)` を描き直す）、分子種の PCA の結果でなければ
+      DATASET_BAD_REQUEST。ほかの kind（group_intensity / species / eic / eic_compounds）では使わず、
       置き場の図を保存して戻り値の `notes:` 行にそう書く。
     contrast_id: kind が volcano で効く。`dataset_compare` の結果の対比（`T_vs_C` など）を選んで描き直す
       （`result_id` を省けば直近の差次的結果）。`result_id#contrast_id` と食い違えば DATASET_BAD_REQUEST。
@@ -175,7 +181,12 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
                              f"kind は {', '.join(FIGURE_KINDS)} のどれかを指定してください（受け取った値: {kind!r}）。"})
     # 効かない引数は断らずに使わず、戻り値の notes に書く（その kind の図は引数によらず同じものを保存する）。
     notes_out = []
-    if result_id is not None and kind not in _RESULT_KINDS:
+    # species_pca の result_id は描き直しには使えないが、置き場の図がその結果から描いたものかを確かめる
+    # （別の項目の指定の図を、名指しした結果の図として保存しない）。
+    species_pca_id = None
+    if result_id is not None and kind == "species_pca":
+        species_pca_id, result_id = result_id, None
+    elif result_id is not None and kind not in _RESULT_KINDS:
         notes_out.append(f"result_id={result_id!r} は kind が {' / '.join(_RESULT_KINDS)} のときだけ効くので"
                          f"使っていない（kind={kind!r} は dataset_plot が置いた図を保存した）。")
         result_id = None
@@ -204,6 +215,12 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
                     f"{kind}_figure", ["dataset_plot"],
                     f"先に dataset_plot(kind=\"{kind}\") で図を作ってください（このデータセットで {kind} の図は"
                     "まだ描かれていません）。")
+            if species_pca_id is not None and record.get("result_id") != species_pca_id:
+                refusal = _other_species_pca(ds, record, species_pca_id)
+                if refusal is not None:
+                    return refusal
+                notes_out.append(f"result_id={species_pca_id!r} は置き場の図の結果 {record.get('result_id')} と同じ"
+                                 "入力・指定の分子種の PCA なので、置き場の図を保存した。")
             stale = _stale_figure(ds, record)
             if stale:
                 return mcp_errors.mztab_error("STALE_FIGURE", stale, {
@@ -214,6 +231,44 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
         return mcp_errors.missing_state(exc.state, exc.required_tools, exc.message)
     except DomainError as exc:
         return contrast_envelope(exc, "save_figure")
+
+
+def _other_species_pca(ds, record: dict, requested: str) -> str | None:
+    """置き場の分子種の PCA の図が、`save_figure(result_id=...)` が名指しした結果と別の結果から描いたもののときの封筒。
+
+    名指しした結果が置き場の図の結果と同じ計算（同じデータセット・入力の行列の指紋・項目の指定・試料の情報の版。
+    同じ指定で描き直しただけ）なら None（置き場の図はその結果の図と同じなので保存してよい）。違う指定の分子種の
+    PCA の結果なら `STALE_FIGURE`（その結果の項目の指定 `details.settings` で `dataset_plot(kind="species_pca", ...)` を
+    描き直してから保存する）、分子種の PCA の結果でなければ `DATASET_BAD_REQUEST`。
+    """
+    held = record.get("result_id")
+    result = (ds.results or {}).get(requested)
+    held_result = (ds.results or {}).get(held) or record.get("result") or {}
+    if result is not None and _same_species_pca(result, held_result):
+        return None
+    if result is None or (result.get("provenance") or {}).get("kind") != "species_pca":
+        return mcp_errors.mztab_error(
+            "DATASET_BAD_REQUEST",
+            f"result_id={requested} は分子種の PCA の結果ではありません（置き場の分子種の PCA の図は結果 {held} から"
+            "描いたもの）。dataset_plot(kind=\"species_pca\") の戻り値の result_id を渡すか、省いて置き場の図を"
+            "保存してください。",
+            {"kind": "species_pca", "result_id": requested, "held_result_id": held})
+    settings = result.get("settings") or {}
+    return mcp_errors.mztab_error(
+        "STALE_FIGURE",
+        f"置き場の分子種の PCA の図は結果 {held} から描いたもので、名指しした結果 {requested} の図ではありません"
+        "（項目の指定が違う）。details.settings の指定で dataset_plot(kind=\"species_pca\", ...) を描き直してから"
+        "保存してください。",
+        {"kind": "species_pca", "result_id": requested, "held_result_id": held,
+         "settings": settings, "required_tools": ["dataset_plot"]})
+
+
+def _same_species_pca(a: dict, b: dict) -> bool:
+    """2 つの分子種の PCA の結果が同じ計算か（同じデータセット・入力の行列・項目の指定・試料の情報の版）。"""
+    pa, pb = a.get("provenance") or {}, b.get("provenance") or {}
+    keys = ("kind", "dataset_id", "input_fingerprint", "metadata_revision")
+    return (pa.get("kind") == "species_pca" and all(pa.get(k) == pb.get(k) for k in keys)
+            and a.get("settings") == b.get("settings"))
 
 
 #: 図を捨てた理由のうち、試料の表の列でないもの（`result_state.invalidate_results` の `changed`）。

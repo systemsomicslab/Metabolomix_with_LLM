@@ -18,6 +18,7 @@ group_intensity / species / species_pca は `plot_species_kinds.py`（項目の�
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -512,6 +513,23 @@ def _drop_unused_arguments(kind: str, request: _Request) -> list[str]:
     return notes
 
 
+def _with_notes(envelope: str, notes: list[str]) -> str:
+    """誤りの封筒（`{"error": {...}}`）の `details.notes` に、使わなかった引数の注記を足す（注記が無ければそのまま）。
+
+    `dataset_plot` が描けずに返すどの誤りの封筒にも、断らずに外した引数を書く（直して呼び直す前に知れる）。
+    `missing_state` の封筒も `details` を持つ（`state` / `required_tools` / `message` はそのまま）。誤りでない封筒
+    （`needs_input`）は変えない。
+    """
+    if not notes:
+        return envelope
+    body = json.loads(envelope)
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return envelope
+    error["details"] = {**(error.get("details") or {}), "notes": list(notes)}
+    return json_payload(body)
+
+
 @mcp.tool(annotations=ToolAnnotations(
     # 図を ds.figures へ、species_pca は結果を ds.results へ登録する（メモリ上）。`output_path` を渡せば
     # 描いた図をそのファイルにも書く（同じパスは上書き）。
@@ -549,7 +567,8 @@ def dataset_plot(
 ) -> list | str:
     """データセットの図を描く — 既定は PNG 画像と 1 行の説明。`output_path` を渡せば同じ図をファイルにも書く。
 
-    kind と、その kind だけの引数（別の kind の引数は断らずに使わず、説明の最後の `notes:` 行〔payload は `notes`〕に
+    kind と、その kind だけの引数（別の kind の引数は断らずに使わず、説明の最後の `notes:` 行〔payload は `notes`。
+    描けなかった誤りの封筒は `missing_state` も含めて `details.notes`。誤りでない `needs_input` は持たない〕に
     どの kind の引数かを書く）:
       - `volcano`: 直近の 2 群の差次的結果（`dataset_compare`）。`result_id` で名指しもできる。対比が複数の結果は
         `contrast_id`（`T_vs_C` など。`result_id#contrast_id` の形でも可）で 1 つ選ぶ（2 群の対比が複数で省くと
@@ -626,22 +645,26 @@ def dataset_plot(
         return mztab_error("DATASET_BAD_REQUEST",
                            f"kind は {', '.join(_KINDS)} のどれかを指定してください（受け取った値: {kind!r}）。",
                            {"kinds": list(_KINDS)})
-    notes = _drop_unused_arguments(kind, request)   # 使わない引数は断らず、戻り値の notes に書く
+    # 使わない引数は断らず、戻り値の notes に書く。描けなかった誤りの封筒にも `details.notes` で添える
+    # （`_with_notes`。引数の形の誤り・ハンドル・データセットの無いとき・書けないときも）。
+    notes = _drop_unused_arguments(kind, request)
     try:
         mode = plot_render.resolve_plot_output(output)
     except ValueError as exc:
-        return mztab_error("DATASET_BAD_REQUEST", str(exc), {"output": output})
+        return _with_notes(mztab_error("DATASET_BAD_REQUEST", str(exc), {"output": output}), notes)
     if output_path is not None and not str(output_path).lower().endswith(".png"):
-        return mztab_error("DATASET_BAD_REQUEST",
-                           f"output_path は .png のファイルを指定してください（受け取った値: {output_path!r}）。",
-                           {"output_path": output_path})
+        return _with_notes(mztab_error(
+            "DATASET_BAD_REQUEST",
+            f"output_path は .png のファイルを指定してください（受け取った値: {output_path!r}）。",
+            {"output_path": output_path}), notes)
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
-        return holder
+        return _with_notes(holder, notes)
     ds = holder.dataset
     if ds is None:
-        return missing_state("dataset", ["load_dataset"],
-                             "DatasetState がありません。先に load_dataset を実行してください。")
+        return _with_notes(missing_state("dataset", ["load_dataset"],
+                                         "DatasetState がありません。先に load_dataset を実行してください。"),
+                           notes)
     try:
         record = _KINDS[kind](ds, request)
         saved = []
@@ -654,8 +677,8 @@ def dataset_plot(
             except OSError as exc:
                 # output_path に書けないときだけ（図の組み立て・入力の読み取りの OSError はここに来ない）。
                 # 図の置き場（ds.figures）は変えない。
-                return mztab_error("FIGURE_SAVE_FAILED", f"図を書けませんでした: {exc}",
-                                   {"output_path": output_path})
+                return _with_notes(mztab_error("FIGURE_SAVE_FAILED", f"図を書けませんでした: {exc}",
+                                               {"output_path": output_path}), notes)
         if mode == plot_render.PAYLOAD:
             body = json_payload({**record["payload"], **({"saved_files": saved} if saved else {}),
                                  **({"notes": notes} if notes else {})})
@@ -668,14 +691,13 @@ def dataset_plot(
                 caption += "\nnotes: " + " ".join(notes)
             body = [caption, Image(data=png, format="png")]
     except _Missing as exc:
-        return missing_state(exc.state, exc.required_tools, exc.message)
+        return _with_notes(missing_state(exc.state, exc.required_tools, exc.message), notes)
     except DomainError as exc:
-        if notes:   # 使わなかった引数も添える（例: eic_compounds に file_id でなく file_ids を渡した）
-            exc.details = {**(exc.details or {}), "notes": notes}
-        return contrast_envelope(exc, "dataset_plot")
+        # 使わなかった引数も添える（例: eic_compounds に file_id でなく file_ids を渡した）。対比を選ばせる問い
+        # （needs_input）は誤りの封筒ではないので変えない
+        return _with_notes(contrast_envelope(exc, "dataset_plot"), notes)
     except ValueError as exc:                      # 描くものが無い等（描画部品の検査）
-        return mztab_error("DATASET_BAD_REQUEST", str(exc),
-                           {"kind": kind, **({"notes": notes} if notes else {})})
+        return _with_notes(mztab_error("DATASET_BAD_REQUEST", str(exc), {"kind": kind}), notes)
     ds.figures[kind] = record
     # 描き直した図は新しいもの（捨てた図の印を消す。save_figure はもう STALE_FIGURE を返さない）
     (getattr(ds, "discarded_figures", None) or {}).pop(kind, None)

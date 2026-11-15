@@ -250,6 +250,49 @@ def test_irrelevant_argument_is_ignored_with_a_note():
     assert all(kind in err["message"] for kind in plot_tools._KINDS)
 
 
+def test_every_error_envelope_carries_the_unused_argument_notes(tmp_path, monkeypatch):
+    """kind が分かれば、描けなかったどの誤りの封筒（引数の形の誤り・ハンドルの誤り・データセットや結果の無い
+    `missing_state`・書けない `FIGURE_SAVE_FAILED`・図の組み立ての誤り）も `details.notes` に使わなかった引数を書く
+    （直して呼び直す前に、その引数が効かないと分かる）。ほかの欄は注記の無い呼び出しと同じ。"""
+    top_n = ["top_n は kind=loadings の引数なので使っていない（kind='pca'）。"]
+    items = ["items は kind=group_intensity / species / species_pca の引数なので使っていない（kind='eic'）。"]
+
+    def error(**kwargs):
+        body = json.loads(plot_tools.dataset_plot(**kwargs))
+        assert "error" in body, body
+        return body["error"]
+
+    # データセットが無い（missing_state も details.notes を持つ。state / required_tools はそのまま）
+    err = error(kind="pca", top_n=5)
+    assert err["code"] == "missing_state" and err["required_tools"] == ["load_dataset"]
+    assert err["details"] == {"notes": top_n}
+    plain = error(kind="pca")
+    assert "details" not in plain and {k: v for k, v in err.items() if k != "details"} == plain
+
+    _synthetic()                                     # 結果の無いデータセット
+    err = error(kind="volcano", top_n=5)
+    assert err["code"] == "missing_state" and err["required_tools"] == ["dataset_compare"]
+    assert err["details"]["notes"] == ["top_n は kind=loadings の引数なので使っていない（kind='volcano'）。"]
+    for kwargs, field in (({"output": "svg"}, "output"), ({"output_path": "x.svg"}, "output_path")):
+        err = error(kind="pca", top_n=5, **kwargs)
+        assert err["code"] == "DATASET_BAD_REQUEST"
+        assert err["details"] == {field: kwargs[field], "notes": top_n}
+    err = error(kind="eic", feature_id="0", items=["PC"], output_path=str(tmp_path / "fig.svg"))
+    assert err["code"] == "DATASET_BAD_REQUEST" and err["details"]["notes"] == items
+    err = error(kind="pca", top_n=5, dataset_handle="dh_nope")
+    assert err["code"] == "DATASET_HANDLE_NOT_FOUND"
+    assert err["details"]["notes"] == top_n and err["details"]["dataset_handle"] == "dh_nope"
+
+    _analysed()
+    blocker = tmp_path / "file"
+    blocker.write_text("x", encoding="utf-8")         # 親のフォルダがファイルなので書けない
+    err = error(kind="pca", top_n=5, output_path=str(blocker / "sub" / "fig.png"))
+    assert err["code"] == "FIGURE_SAVE_FAILED" and err["details"]["notes"] == top_n
+    # 図の組み立ての誤り（DomainError・ValueError）は今までどおり
+    err = error(kind="pca", top_n=5, result_id="res_nope")
+    assert err["code"] == "DATASET_BAD_REQUEST" and err["details"]["notes"] == top_n
+
+
 def test_plot_output_env_is_honoured(monkeypatch):
     _analysed()
     monkeypatch.setenv("LIPIDMIX_PLOT_OUTPUT", "payload")
@@ -550,6 +593,42 @@ def test_save_figure_reads_the_chosen_handle(tmp_path):
     assert "x_eic.png" in msg
     missing = json.loads(reports.save_figure("eic", "x", dataset_handle="dh_nope"))
     assert missing["error"]["code"] == "DATASET_HANDLE_NOT_FOUND"
+
+
+def test_derived_handle_has_no_figures_or_discard_marks_of_its_parent(tmp_path):
+    """定量の派生（`dataset_quant_apply` などの `derive`）は親の図も捨てた図の印も持ち越さない。
+
+    親の図は親の行列から描いたもの（正規化の前の値）で、派生の図ではない。派生でまだ描いていない図は、親が
+    持つ図（保存すれば親の値が派生の図として出る）でも、親の除外が捨てた図（STALE_FIGURE・理由 exclusion）でもなく
+    missing_state。親の図と印はそのまま。"""
+    from metabolomix.quant import tools as quant_tools
+
+    parent = _folder_handle(tmp_path / "f")
+    pid = parent.handle_id
+    _payload(kind="species_pca", items=["PC"], groups=["g1", "g2"], dataset_handle=pid)
+    assert json.loads(sample_tools.dataset_exclude(features=["2"], reason="noise",
+                                                   dataset_handle=pid))["changed"] is True
+    assert parent.dataset.discarded_figures == {"species_pca": ["exclusion"]}
+    _payload(kind="group_intensity", items=["PC"], groups=["g1", "g2"], dataset_handle=pid)
+    assert "group_intensity" in parent.dataset.figures
+
+    out = json.loads(quant_tools.dataset_quant_apply(skip=True, dataset_handle=pid))
+    assert out["status"] == "skipped", out
+    did = out["dataset_handle"]
+    derived = handles.registry.get(did).dataset
+    assert derived.figures == {} and derived.discarded_figures == {}
+    figures = tmp_path / "reports" / "figures"
+    for kind in ("group_intensity", "species_pca"):
+        err = json.loads(reports.save_figure(kind, "d-1", dataset_handle=did))["error"]
+        assert err["code"] == "missing_state" and err["required_tools"] == ["dataset_plot"], (kind, err)
+        assert not (figures / f"d-1_{kind}.png").exists()
+    # 親の図と印は変わらない
+    assert "group_intensity" in parent.dataset.figures
+    assert parent.dataset.discarded_figures == {"species_pca": ["exclusion"]}
+    assert "p-1_group_intensity.png" in reports.save_figure("group_intensity", "p-1", dataset_handle=pid)
+    # 派生で描けば派生の図として保存できる
+    _payload(kind="group_intensity", items=["PC"], groups=["g1", "g2"], dataset_handle=did)
+    assert "d-1_group_intensity.png" in reports.save_figure("group_intensity", "d-1", dataset_handle=did)
 
 
 # ---------- save_figure の振る舞い ----------

@@ -266,7 +266,7 @@ result_id は計算のたびに発行される UUID なので入れず、統計�
 
 1. metabolomix/tools/dataset_analysis_tools.py  dataset_set_sample_metadata()
 2. └─ metabolomix/analysis/sample_manifest.py  apply_sample_manifest()
-3.    └─ metabolomix/analysis/sample_manifest.py  _raw_manifest_layout()
+3.    └─ metabolomix/analysis/sample_manifest.py  _raw_manifest_layout()（シートの置き場所。試料ごとの `_raw_path_for_sample()` から取る＝手順 5 が行を試料へ結ぶのと同じ raw のパス。試料から引けないときだけ `ds.assay_sources`）
 4.    └─ metabolomix/analysis/sample_manifest.py  parse_manifest()（任意の列 `subject_id` を読む。`sample_meta` に持ち、統計エンジンの前処理が反復注入を 1 個体にまとめる鍵に使う。schema の行の直後の宣言 `# injection_order_source = ...` は `_read_declarations()` が読み、注入順の出所に `derived_from` を足す）
 5.    └─ metabolomix/analysis/sample_manifest.py  resolve_metadata()
 6.    └─ metabolomix/analysis/sample_manifest.py  apply_metadata()

@@ -266,7 +266,10 @@ dataset と試料の対応表を**同じ run の同じ単位から**載せる。
 対応表の行は**試料へ結んでから**当てる（`bind_manifest_rows()`）。受領の行の並びはシートの並び（`pipeline_sample_sheet`
 なら取得順）で、mzTab-M の assay の順とは限らず、位置で当てると群と include=false が別の試料に付く。まず raw のパス
 （mzTab-M の `ms_run[N]-location` → `ds.assay_sources`）で、結べなければ行の raw の名前か `sample_id` で試料名と結ぶ
-（run の中の解析フォルダを `directory` で開く経路 `opening._apply_run_rows` と同じ鍵）。全試料を結べなければ読み込みは
+（run の中の解析フォルダを `directory` で開く経路 `opening._apply_run_rows` と同じ鍵）。名前で結んだときは行の raw のパス
+（今の run の場所）を `ds.sample_raw_paths` に残し、あとの `dataset_set_sample_metadata` はシートの置き場所も試料への結び方も
+この値から取る（mzTab-M のアダプタの `ds.assay_sources` は Console が走ったときの場所のままなので、置き場所をそちらから取ると
+動かした run にはどのシートも当てられない）。全試料を結べなければ読み込みは
 止めずに当てず、`load_notes` に注記を残す（`bind_manifest_rows()` が書く。解析フォルダのアダプタ `_folder_via_run()` も同じ）。
 `load_notes` は `load_dataset` の `summary` の「読み込みの注記」の行（`_summary_text()` も `_folder_summary_text()` と同じく
 載せる）と `dataset_status` の `load_notes` に出る。
