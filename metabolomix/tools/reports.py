@@ -9,7 +9,7 @@ server は import しない。
 """
 
 from metabolomix.tools import notes
-from metabolomix.core import mcp_errors
+from metabolomix.core import handles, mcp_errors
 from metabolomix.core.mcp_errors import config_invalid_as_envelope
 from mcp.types import ToolAnnotations
 from metabolomix.core.serialization import json_payload
@@ -163,8 +163,9 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
       `details.settings` の指定で `dataset_plot(kind="species_pca", ...)` を描き直してから保存する。`stale`（名指しした
       結果が除外・試料の表の更新より前のもの）と `input`（同じ指定だが、キュレーションの判断の更新などで入力の行列が
       違う）はその結果の図をもう描けないので、置き場の図を保存するなら `held_result_id` を渡すか省く（`stale` で指定も
-      違えば `details.settings` も付く）。分子種の PCA の結果でなければ
-      DATASET_BAD_REQUEST。ほかの kind（group_intensity / species / eic / eic_compounds）では使わず、
+      違えば `details.settings` も付く）。分子種の PCA の結果でなければ DATASET_BAD_REQUEST。そのハンドルの結果に
+      無い ID も DATASET_BAD_REQUEST で、開いているほかのハンドルの結果なら `details.result_handle` にそのハンドル
+      （その `dataset_handle` で呼び直す）。ほかの kind（group_intensity / species / eic / eic_compounds）では使わず、
       置き場の図を保存して戻り値の `notes:` 行にそう書く。
     contrast_id: kind が volcano で効く。`dataset_compare` の結果の対比（`T_vs_C` など）を選んで描き直す
       （`result_id` を省けば直近の差次的結果）。`result_id#contrast_id` と食い違えば DATASET_BAD_REQUEST。
@@ -225,7 +226,7 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
                     "kind": kind, "result_id": record.get("result_id"),
                     "required_tools": ["dataset_plot"]})
             if species_pca_id is not None and record.get("result_id") != species_pca_id:
-                refusal = _other_species_pca(ds, record, species_pca_id)
+                refusal = _other_species_pca(ds, record, species_pca_id, holder=holder)
                 if refusal is not None:
                     return refusal
                 notes_out.append(f"result_id={species_pca_id!r} は置き場の図の結果 {record.get('result_id')} と同じ"
@@ -237,7 +238,7 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
         return contrast_envelope(exc, "save_figure")
 
 
-def _other_species_pca(ds, record: dict, requested: str) -> str | None:
+def _other_species_pca(ds, record: dict, requested: str, *, holder=None) -> str | None:
     """置き場の分子種の PCA の図が、`save_figure(result_id=...)` が名指しした結果と別の結果から描いたもののときの封筒。
 
     置き場の図は今のもの（呼ぶ前に `_stale_figure` が確かめる）。名指しした結果が置き場の図の結果と同じ計算
@@ -263,7 +264,28 @@ def _other_species_pca(ds, record: dict, requested: str) -> str | None:
     held_result = (ds.results or {}).get(held) or record.get("result") or {}
     if result is not None and _same_species_pca(result, held_result):
         return None
-    if result is None or (result.get("provenance") or {}).get("kind") != "species_pca":
+    if result is None:
+        # このハンドルの結果でない（別のハンドルの結果か、無い ID）。「分子種の PCA でない」とは言わず、
+        # 開いているほかのハンドルが持っていればそのハンドルを名指す（読むだけ。食い違っても文面だけ）
+        open_handles = handles.registry.list()
+        here = getattr(holder, "handle_id", None) or next(
+            (h.handle_id for h in open_handles if h.dataset is ds), None)
+        owner = next((h.handle_id for h in open_handles
+                      if h.handle_id != here and h.dataset is not None and h.dataset is not ds
+                      and requested in (getattr(h.dataset, "results", None) or {})), None)
+        details = {"kind": "species_pca", "result_id": requested, "held_result_id": held,
+                   **({"dataset_handle": here} if here else {}),
+                   **({"result_handle": owner} if owner else {})}
+        where = f"ハンドル {here} " if here else "このデータセット"
+        if owner:
+            message = (f"result_id={requested} は{where}の結果ではなく、ハンドル {owner} の結果です。その図を保存するなら "
+                       f"save_figure(..., result_id={requested!r}, dataset_handle={owner!r}) で呼んでください"
+                       f"（{where}の置き場の分子種の PCA の図は結果 {held} から描いたもの）。")
+        else:
+            message = (f"result_id={requested} は{where}の結果にありません（{where}の置き場の分子種の PCA の図は結果 "
+                       f"{held} から描いたもの）。別のハンドルで描いた図なら、そのハンドルを dataset_handle に渡してください。")
+        return mcp_errors.mztab_error("DATASET_BAD_REQUEST", message, details)
+    if (result.get("provenance") or {}).get("kind") != "species_pca":
         return mcp_errors.mztab_error(
             "DATASET_BAD_REQUEST",
             f"result_id={requested} は分子種の PCA の結果ではありません（置き場の分子種の PCA の図は結果 {held} から"

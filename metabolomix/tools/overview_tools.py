@@ -243,11 +243,14 @@ def _quality_only(holder, ds, study, exc: DomainError, *, rsd, failed, drift, de
     return json_safe(payload)
 
 
-def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False, top_capped: bool = False) -> dict:
+def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False, top_capped: bool = False,
+                           capped_from: int | None = None) -> dict:
     """概観を計算して登録し、戻り値の dict を返す。`DomainError` はそのまま送出する（呼び出し側が封筒にする）。
 
     `embedded=True`（`load_dataset` の中）は `counts` を省く（`load_dataset` の summary と重なるため）。
     `top_capped=True`（求めた `top_n` を上限に下げた）なら、分子種の段の上位の表を切ったときに印を付ける。
+    `capped_from`（下げる前の `top_n`）を渡すと、戻り値の `notes` に下げたことと、比べ方に合う全行の引き方を書く
+    （`_cap_note`）。
     """
     ds = holder.dataset
     # 種別はハンドル（データセット）ごと。直近のハンドルを読み替えず、渡されたもの（holder）の値を使う。
@@ -374,6 +377,8 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False, to
         "record": written,
         "note": _NOTE.format(oid=oid),
     }
+    if capped_from is not None:
+        payload["notes"] = [_cap_note(capped_from, mode=plan["mode"] if record else None)]
     return json_safe(payload)
 
 
@@ -404,7 +409,9 @@ def dataset_overview(top_n: int = 5, dataset_handle: str | None = None) -> str:
 
     top_n: 分子種の段の上位の件数（既定 5、上限 20）。20 を超える値は断らず 20 に下げて出し、`notes` にそう書く
         （そのとき上位の表を 20 行で切ったら `species.top_truncated: true` と `species.top_n_more`＝載せなかった
-        行数。全行は `result_ids.compare` を dataset_feature_search・dataset_export_differential で引ける）。
+        行数）。`notes` の全行の引き方は比べ方で変わる: 2 群は `result_ids.compare` を dataset_feature_search・
+        dataset_export_differential で、多群（上位は F の q の順）は `dataset_compare(output_path=...)` が書く F 検定の表
+        （`<stem>.ftests.tsv` の `f_q`）で引く。比較を回さなかった（群が 1 つ・完全交絡）なら引き方は書かない。
         整数でない・負の値は DATASET_BAD_REQUEST。
     dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。
 
@@ -413,11 +420,9 @@ def dataset_overview(top_n: int = 5, dataset_handle: str | None = None) -> str:
     """
     if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 0:
         return mztab_error("DATASET_BAD_REQUEST", "top_n は 0 以上の整数です。", {"top_n": top_n})
-    notes = []
-    if top_n > _TOP_N_MAX:
-        # 長いだけの指定は断らない: 上限に下げて出し、全行の引き方を書く（dataset_compare と同じ）
-        notes.append(f"top_n={top_n} は上限の {_TOP_N_MAX} に下げた（戻り値を肥大させない）。全行は result_ids.compare を "
-                     "dataset_feature_search（result_ids に名指し）・dataset_export_differential（result_id）で引ける。")
+    # 長いだけの指定は断らない: 上限に下げて出し、全行の引き方を notes に書く（dataset_compare と同じ）
+    capped_from = top_n if top_n > _TOP_N_MAX else None
+    if capped_from is not None:
         top_n = _TOP_N_MAX
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
@@ -426,9 +431,30 @@ def dataset_overview(top_n: int = 5, dataset_handle: str | None = None) -> str:
         return missing_state("dataset", ["load_dataset"],
                              "DatasetState がありません。先に load_dataset を実行してください。")
     try:
-        payload = build_overview_payload(holder, top_n=top_n, top_capped=bool(notes))
+        payload = build_overview_payload(holder, top_n=top_n, top_capped=capped_from is not None,
+                                         capped_from=capped_from)
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, json_safe(exc.details) if exc.details else None)
-    if notes:
-        payload = {**payload, "notes": notes}
+    if capped_from is not None and "notes" not in payload:
+        # 品質の段だけで返った（既定の前処理で特徴が残らない）: 比較が無いので引き方は書かない
+        payload = {**payload, "notes": [_cap_note(capped_from, mode=None)]}
     return json_payload(payload)
+
+
+def _cap_note(requested: int, *, mode: str | None) -> str:
+    """`top_n` を上限に下げたことの注記。全行の引き方は比較の回し方（`group_plan` の mode）で変わる。
+
+    - `two`: 上位は 1 対比の行なので、概観の比較（`result_ids.compare`）を特徴検索・書き出しに名指しして引ける。
+    - `multi`: 上位は moderated F の q（`f_q`）の順。書き出し・特徴検索は対比ごとの行なので F の順の残りは返らない。
+      F 検定の表は `dataset_compare(output_path=...)` が `<stem>.ftests.tsv` に書く。
+    - None: 比較を回していない（群が 1 つ・完全交絡・品質の段だけ）。引き方は書かない。
+    """
+    head = f"top_n={requested} は上限の {_TOP_N_MAX} に下げた（戻り値を肥大させない）。"
+    if mode == "two":
+        return head + ("全行は result_ids.compare を dataset_feature_search（result_ids に名指し）・"
+                       "dataset_export_differential（result_id）で引ける。")
+    if mode == "multi":
+        return head + ("多群の上位は moderated F の q（f_q）の順で、載せなかった行は dataset_compare(output_path=...) が書く "
+                       "F 検定の表（<stem>.ftests.tsv の f_q）で引ける（対比ごとの行は result_ids.compare を "
+                       "dataset_feature_search に名指し）。")
+    return head

@@ -1563,6 +1563,11 @@ def test_homolog_check_auto_reads_noted_sme_names_and_skips_internal_standards(t
         {"auto": {"lipid_class": "PC P-"}}, dataset_handle=handle))
     assert plasmalogen["verdict"] == "not_evaluable" and plasmalogen["n_members"] == 0
     assert any("'PC O-'" in note for note in plasmalogen["notes"])
+    # 修飾を書いた P- の指定（"PC P-;O"）も同じ案内で、案内のクラスに修飾を付け直す（最終の確かめ: 案内が消えていた）
+    oxidized = json.loads(R.dataset_homolog_check(
+        {"auto": {"lipid_class": "PC P-;O"}}, dataset_handle=handle))
+    assert oxidized["verdict"] == "not_evaluable" and oxidized["n_members"] == 0
+    assert any("'PC O-;O'" in note for note in oxidized["notes"]), oxidized["notes"]
 
 
 def test_homolog_check_auto_keeps_oxidized_species_in_their_own_series(tmp_path):

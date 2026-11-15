@@ -678,6 +678,31 @@ def test_save_figure_species_pca_result_id_must_name_the_held_figure(loaded, tmp
     assert not (figures / "sp2_species_pca.png").exists()
 
 
+def test_save_figure_species_pca_names_the_handle_that_holds_the_result(loaded, tmp_path):
+    """別のハンドルで描いた分子種の PCA の結果を、直近のハンドルの save_figure に名指ししたとき、「分子種の PCA の
+    結果ではない」とも「省けば置き場の図を保存する」とも言わない（直近の別の図を保存させない）。結果を持つ
+    ハンドルを details.result_handle と文で名指し、そのハンドルで呼び直せば保存できる（最終の確かめ）。"""
+    figures = tmp_path / "reports" / "figures"
+    first = _pca(items=["PG", "DGDG", "DG"], standard_samples=["std"])
+    r1, owner = first["result_id"], loaded["handle"].handle_id
+    body = json.loads(handle_tools.load_dataset(directory=str(loaded["folder"])))   # 同じフォルダを別のハンドルで
+    other = body["dataset_handle"]
+    assert other != owner and session_state.session.current_handle_id == other
+    held = _pca(items=["PG", "DG"], standard_samples=["std"])                          # 直近のハンドルの図
+    assert held["result_id"] != r1
+    err = _error(reports.save_figure("species_pca", "sp", result_id=r1))
+    assert err["code"] == "DATASET_BAD_REQUEST", err
+    assert err["details"]["result_handle"] == owner and err["details"]["dataset_handle"] == other
+    assert owner in err["message"] and "分子種の PCA の結果ではありません" not in err["message"]
+    assert "省いて" not in err["message"]
+    assert not (figures / "sp_species_pca.png").exists()
+    msg = reports.save_figure("species_pca", "sp", result_id=r1, dataset_handle=owner)
+    assert (figures / "sp_species_pca.png").is_file() and r1 in msg
+    # どのハンドルにも無い ID は result_handle を付けない
+    err = _error(reports.save_figure("species_pca", "sp2", result_id="res_nope"))
+    assert err["code"] == "DATASET_BAD_REQUEST" and "result_handle" not in err["details"]
+
+
 def test_save_figure_species_pca_names_a_stale_result_without_a_redraw_loop(loaded, tmp_path):
     """名指しした結果が古い（除外のあと）なら、指定が同じでも「項目の指定が違う」とは言わず、描き直しも案内しない。
 

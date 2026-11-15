@@ -685,8 +685,11 @@ def dataset_homolog_check(spec: dict, dataset_handle: str | None = None,
         notes.append(f"{found}、RT のある種は {n_species} 個で、比べられる隣どうし（同じ二重結合数で炭素数が隣・"
                      "同じ炭素数で二重結合数が隣）の対が無い。検査していないので verdict は not_evaluable"
                      "（違反が無いという意味ではない）。")
-        if auto is not None and auto["lipid_class"].endswith(" P-"):
-            ether_class = auto["lipid_class"][:-2] + "O-"
+        # 修飾を書いた指定（"PE P-;O"）も、クラスの部分が P- なら同じ案内（修飾はそのまま付け直す）
+        class_part, wanted_modification = homolog._wanted_class(auto["lipid_class"]) if auto is not None else ("", None)
+        if auto is not None and class_part.rstrip().endswith(" P-"):
+            ether_class = (class_part.rstrip()[:-2] + "O-"
+                           + (f";{wanted_modification}" if wanted_modification is not None else ""))
             notes.append(f"名前は GOSLIN の種のレベルに読むので、P-（プラスマローゲン）は O- に直る（PE P-18:0_20:4 は "
                          f"PE O-38:5）。lipid_class={auto['lipid_class']!r} の種は集まらない——プラスマローゲンの列は "
                          f"lipid_class={ether_class!r} で集める（O- のエーテルと同じ列になる）。")

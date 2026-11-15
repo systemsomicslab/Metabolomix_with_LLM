@@ -759,7 +759,7 @@ PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（
 | `quality` / `global` / `classes` / `species` | 各段。`facts`（事実の 1 行ずつ。先頭が ID）・`next`（掘る一手。引数は JSON）・省いた段は `omitted`（理由）。品質は `verdict` も |
 | `result_ids` | 概観が登録した `compare` / `pca` の結果 ID（回したものだけ） |
 | `record` | `reports/stats/` への記録（`written` と `record_id`・`path`、書けなければ `reason`） |
-| `notes` | `top_n` を上限の 20 に下げたときだけ。そのとき分子種の上位の表を 20 行で切ったら、`species` に `top_truncated: true` と `top_n_more`（載せなかった行数）。全行は `result_ids.compare` を `dataset_feature_search`（名指し）・`dataset_export_differential(result_id=...)` で引く |
+| `notes` | `top_n` を上限の 20 に下げたときだけ。そのとき分子種の上位の表を 20 行で切ったら、`species` に `top_truncated: true` と `top_n_more`（載せなかった行数）。全行の引き方は比べ方で変わり、`notes` に書く: 2 群は `result_ids.compare` を `dataset_feature_search`（名指し）・`dataset_export_differential(result_id=...)` で、多群（上位は moderated F の `f_q` の順）は `dataset_compare(output_path=...)` が書く F 検定の表（`<stem>.ftests.tsv`）で引く。比較を回さなかった概観（群が 1 つ・完全交絡・品質の段だけ）は引き方を書かない |
 
 **事実の ID**: 段ごとに `Q1, Q2, …` / `G1, …` / `C1, …` / `S1, …`。外から引くときは `<overview_id>#Q1`。
 解釈は事実と混ぜず別の節に書き、根拠の ID を挙げる。

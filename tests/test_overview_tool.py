@@ -483,6 +483,7 @@ def test_overview_top_n_above_the_cap_is_capped_with_a_note(tmp_path):
     out = _ov(top_n=30)
     assert out["status"] == "success", out
     assert any("top_n=30 は上限の 20 に下げた" in n for n in out["notes"])
+    assert any("result_ids.compare" in n and "dataset_export_differential" in n for n in out["notes"])
     rows = out["species"]["top"].splitlines()[1:]
     assert len(rows) == 20
     record = ds.results[out["result_ids"]["compare"]]
@@ -671,3 +672,20 @@ def test_overview_drift_held_note_without_the_sample_table_names_both_sources():
 
     note, _ = _drift_note(P.preprocess(_merged(flagged_neg=True), {"filters": OFF_FILTERS}))
     assert "MS-DIAL の既定（ファイルの順）かシートの宣言でファイル名の順かもしれない" in note
+
+
+def test_overview_cap_note_points_to_a_recovery_path_that_exists(tmp_path):
+    """上限に下げた注記の全行の引き方は比べ方に合わせる（最終の確かめ）。比較を回さなかった概観（群が 1 つ）は
+    result_ids.compare を案内しない（無い ID を探させない）。多群の上位は F の q の順なので、対比ごとの書き出しでなく
+    dataset_compare(output_path=...) の F 検定の表（.ftests）を案内する。"""
+    _install(_ds(groups=("C",)), tmp_path)
+    single = _ov(top_n=30)
+    assert "compare" not in single["result_ids"]
+    assert single["notes"] == ["top_n=30 は上限の 20 に下げた（戻り値を肥大させない）。"]
+
+    _install(_ds(groups=("C", "T", "U"), per_group=5), tmp_path)
+    multi = _ov(top_n=30)
+    assert "compare" in multi["result_ids"]
+    (note,) = multi["notes"]
+    assert "ftests" in note and "f_q" in note and "dataset_compare(output_path=...)" in note
+    assert "dataset_export_differential" not in note
