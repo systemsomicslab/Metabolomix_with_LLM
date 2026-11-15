@@ -735,7 +735,8 @@ PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（
 
 読み込んだ直後に「群の間で何が変わり、何が変わらなかったか」を **品質 → 全体 → クラス → 分子種** の 4 段で粗く示す。
 `dataset_overview(top_n=5, dataset_handle=None)` がこれを返し、鎖を進めた後（除外・試料の表の訂正・キュレーション・
-定量の鎖の後）に呼び直すと出し直す。`load_dataset(overview=True)` なら読み込みの最後に同じものを `overview` 欄に入れて
+定量の鎖の後）に呼び直すと出し直す。`top_n`（分子種の段の上位の件数）の上限は 20 で、超える値は断らず 20 に下げて出し
+`notes` に書く（整数でない・負は `DATASET_BAD_REQUEST`）。`load_dataset(overview=True)` なら読み込みの最後に同じものを `overview` 欄に入れて
 返す（既定 `False` では載せない。失敗しても読み込みは成功し `{"status": "unavailable", "error": {...}, "next": ...}`）。
 戻り値の `assay_kind` はそのハンドルの種別（組成のラベルとクラスの段の規則を決める）。
 
@@ -751,6 +752,7 @@ PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（
 | `quality` / `global` / `classes` / `species` | 各段。`facts`（事実の 1 行ずつ。先頭が ID）・`next`（掘る一手。引数は JSON）・省いた段は `omitted`（理由）。品質は `verdict` も |
 | `result_ids` | 概観が登録した `compare` / `pca` の結果 ID（回したものだけ） |
 | `record` | `reports/stats/` への記録（`written` と `record_id`・`path`、書けなければ `reason`） |
+| `notes` | `top_n` を上限の 20 に下げたときだけ。そのとき分子種の上位の表を 20 行で切ったら、`species` に `top_truncated: true` と `top_n_more`（載せなかった行数）。全行は `result_ids.compare` を `dataset_feature_search`（名指し）・`dataset_export_differential(result_id=...)` で引く |
 
 **事実の ID**: 段ごとに `Q1, Q2, …` / `G1, …` / `C1, …` / `S1, …`。外から引くときは `<overview_id>#Q1`。
 解釈は事実と混ぜず別の節に書き、根拠の ID を挙げる。
@@ -769,16 +771,23 @@ PCA 結果は候補にならない（PCA をやり直す）。入力の誤り（
 その極性の測定の注入順・バッチ。強度の大きい極性の総量がもう一方の失敗やドリフトを隠さない）: 失敗した注入は
 どれかの極性で失敗したもの（データの `by_polarity` に内訳）、ドリフトの兆候の行は `polarity` 付き。
 既定（`drift_mode=auto`）がドリフト補正を当てなかった（換算済み・注入順がファイルの順かもしれない）ときは、概観は
-補正なしで計算し、そのことを事実と `next`（`dataset_preprocess(drift_mode="on")`）に出す。陽陰を統合したデータセットで
-当てなかった極性のほかに補正の条件を満たさない極性があるときも、当てなかった極性を事実に名指しする（`drift_mode="on"` は
-その極性のせいで `PREPROCESS_PRECONDITION` になるので `next` に勧めず、注入順が確かでない極性には実際の順の入れ方を添える）。
+補正なしで計算し、そのことを事実と `next`（`dataset_preprocess(drift_mode="on")`）に出す。注入順が確かでない理由は
+出所どおりに書く（MS-DIAL が振った順なら「MS-DIAL の既定（ファイルの順）かもしれない」、試料の表の宣言
+`# injection_order_source = filename` なら「シートの宣言でファイル名の順」）。陽陰を統合したデータセットでは当てなかった
+極性を名指しし、注入順が確かでない極性には「drift_mode="on" はその注入順のまま当てはめる」と実際の順の入れ方を添える。
+当てなかった極性のほかに補正の条件を満たさない極性があるときは、`drift_mode="on"` はその極性のせいで
+`PREPROCESS_PRECONDITION` になるので `next` に勧めない。
 交絡の事実の「注入順が群で偏っている」は、注入順がファイルの順かもしれない（MS-DIAL の既定・シートの宣言
 `# injection_order_source = filename`）ときは偏りがファイル名の並びかもしれないと添え、データに
 `injection_order_may_be_file_order: true`、`next` に `dataset_set_sample_metadata`（実際の測定順を入れる）を足す。
 ドリフトの兆候の事実（兆候あり・なしのどちらも）も同じ注入順で ρ を測るので、ρ に使った QC の注入順がファイルの順
-かもしれないときは「ρ はファイル名の並びとの相関で、実際の測定順でのドリフトを見ていないかもしれない」と添え（統合した
-データセットではその極性を名指しする）、データ（と `batches` のその行）に `injection_order_may_be_file_order: true`、
-`next` に同じ入れ方を足す。注入順が群で偏っていなくても、品質の段だけの概観（交絡を評価しない）でも付く。ρ と判定
+かもしれないときは「ρ はファイル名の並びとの相関で、実際の測定順でのドリフトを見ていないかもしれない」と添え、データ
+（と `batches` のその行）に `injection_order_may_be_file_order: true`、`next` に実際の測定順の入れ方を足す。陽陰を
+統合したデータセットでは極性を名指しし、入れ方を極性ごとに書く: 統合したハンドルへのシートは陽イオン（`positive`）の
+測定しか決めない（`quant.md` の `polarity_runs`）ので、陰イオンなど陽イオン以外の極性は、その極性のハンドルにシートを
+当てて `dataset_merge_polarities` で統合し直す（`next` は `<極性> のハンドルに dataset_set_sample_metadata → dataset_merge_polarities`。
+統合し直すと統合したハンドルに当てたシートは引き継がれないので、陽イオンの順も入れるなら陽イオンのハンドルにも当てる）。
+陽イオンだけなら統合したハンドルへのシートで入る（`next` は `dataset_set_sample_metadata`）。注入順が群で偏っていなくても、品質の段だけの概観（交絡を評価しない）でも付く。ρ と判定
 （`drift_sign`）は変えない。
 既定の前処理が失敗する（足切りで特徴が 1 つも残らない など）ときも概観は失敗しない: 品質の段（前処理の前の試料から
 計算する）だけを出し、全体・クラス・分子種の段は `omitted` に失敗の理由（足切りの内訳 `details` を含む）を書いて省く。

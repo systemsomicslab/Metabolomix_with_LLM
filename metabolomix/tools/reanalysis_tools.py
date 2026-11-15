@@ -1019,7 +1019,9 @@ def dataset_mass_accuracy(band_edges: list[float] | None = None, rank: int = 1,
     2 極性の統合）。
     `injection_trend`: 試料ごとの実測 m/z（隣接 `.arf` の検出されたセル）があれば、試料ごとの
     誤差の中央値 `per_injection`（`sample` `injection_order` `median_ppm` `n`）と注入順との
-    `spearman_rho`（5 試料未満、または注入順の出所が `filename`＝採取時刻が読めないときは null。
+    `spearman_rho`（5 試料未満、または注入順の出所が `filename` のときは null。`filename` は、試料の表の注入順が
+    1 試料でも欠けてファイル名の順に落ちたときと、試料の表が宣言 `# injection_order_source = filename` でファイル名の
+    順と書いたとき〔シートは当たっていて、値はシートのまま〕。どちらも実際の注入順とは限らない。
     理由は `rho_unavailable_reason`）・`n_samples`・`injection_order_source`・`warnings`（注入順が
     MS-DIAL の振った値でファイル名の順と一致するときだけ `injection_order_may_be_file_order`。ρ は出すが、
     MS-DIAL の既定＝ファイルの順かもしれない）。無ければ `{"status": "unavailable"}`。
@@ -1306,8 +1308,9 @@ def dataset_alignment_qc(output_path: str | None = None, ppm: float = 15.0,
     `group_aligned`（受け持ちが群と一致。まとめない）・`interleaved`。`mergeable` は注釈が
     両立する `injection_block` と、ΔRT ≤ max_interleaved_rt_gap（既定 0.15 分）の `interleaved`。
     そのうち互いに |ΔRT| が最も近い相手どうしの 2 スポット（`merge_groups`）だけを、統計の側が
-    試料ごとに大きい方の値で 1 つにまとめる（ほかは `merge_reason: not_mutual_nearest` で印だけ）。注入順はハンドルの実験情報シート、無ければファイル名の順
-    （`injection_order_source`）。欄の意味は `lipidmix://docs/output-format/reanalysis`。
+    試料ごとに大きい方の値で 1 つにまとめる（ほかは `merge_reason: not_mutual_nearest` で印だけ）。注入順はハンドルの実験情報シート、
+    1 試料でも欠ければファイル名の順（出所は `injection_order_source`。シートが宣言 `# injection_order_source = filename`
+    でファイル名の順と書いた値も `filename` で、値はシートのまま）。欄の意味は `lipidmix://docs/output-format/reanalysis`。
 
     output_path: 全体（組・連結成分・試料ごとの受け持ち）を JSON でここへ書く
         （例 `results/alignment_qc_pos.json`。長いリストは要素ごとに改行するので、行の範囲で読める）。

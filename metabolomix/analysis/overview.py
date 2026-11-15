@@ -16,13 +16,15 @@ import json
 import math
 
 from metabolomix.analysis.result_state import dataset_fingerprint
+from metabolomix.analysis.stats.data import SAMPLE_TABLE_POLARITY
+from metabolomix.analysis.stats.preprocess import run_remedy
 from metabolomix.analysis.stats.quality import QUALITY_THRESHOLDS
 from metabolomix.analysis.stats_results import contrast_id_for, sample_ids_by_name
 from metabolomix.core.atomic_io import canonical_hash
 
 __all__ = ["OVERVIEW_SCHEMA", "MAX_PAIRWISE_GROUPS", "group_plan", "group_comparisons", "chain_state",
            "id_level", "quality_facts", "global_facts", "class_facts", "species_facts",
-           "overview_id", "register_overview"]
+           "overview_id", "register_overview", "polarity_order_remedy"]
 
 OVERVIEW_SCHEMA = "lipidmix.overview.v1"
 #: 全対を比べる群の数の上限（6 群で 15 対）。超えたら基準との対比と moderated F だけ。
@@ -141,17 +143,57 @@ def _polarity_of(row: dict) -> str:
     return f"{row['polarity']} の" if row.get("polarity") else ""
 
 
+def _unsure_polarities(drift: list[dict]) -> list[str]:
+    """ρ に使った QC の注入順がファイルの順かもしれない行の極性（統合したデータセットの行だけ。出た順）。"""
+    return list(dict.fromkeys(str(d["polarity"]) for d in drift
+                              if d.get("injection_order_may_be_file_order") and d.get("polarity")))
+
+
+def polarity_order_remedy(polarities) -> str:
+    """統合したデータセットで、注入順が確かでない極性の測定の入れ直し方（`preprocess.run_remedy` を極性ごとに）。
+
+    陽イオン（試料の表の極性。統合したハンドルへのシート）を最後に書く: 先にほかの極性を入れ直して統合し直すと、
+    前の統合したハンドルに当てたシートは引き継がれないので、書いた順に行えば両方が入る。"""
+    pols = list(dict.fromkeys(polarities))
+    return "".join(run_remedy(p) for p in sorted(pols, key=lambda p: p == SAMPLE_TABLE_POLARITY))
+
+
 def _drift_order_caveat(drift: list[dict]) -> str:
     """ドリフトの兆候の事実に添える但し書き（ρ に使った QC の注入順がファイルの順かもしれない行が無ければ空）。
 
-    統合したデータセットでは、そうである極性を名指しする（極性ごとに注入順の出所が違いうる）。"""
+    統合したデータセットでは、そうである極性を名指しし、その極性の測定の入れ直し方（`preprocess.run_remedy`）を
+    添える: 統合したハンドルへのシートは陽イオンの測定だけを決めるので、陰イオンの注入順は陰イオンのハンドルに
+    シートを当てて統合し直すまで変わらない。統合でなければ試料の表の injection_order に入れる。"""
     unsure = [d for d in drift if d.get("injection_order_may_be_file_order")]
     if not unsure:
         return ""
-    where = ", ".join(dict.fromkeys(str(d["polarity"]) for d in unsure if d.get("polarity")))
+    pols = _unsure_polarities(drift)
+    where = ", ".join(pols)
+    remedy = (polarity_order_remedy(pols).rstrip("。") if pols
+              else "実際の測定順は試料の表の injection_order に入れる")
     return (f"（ただし {where + ' の ' if where else ''}QC の注入順は MS-DIAL の既定〔ファイルの順〕かシートの宣言で"
             "ファイル名の順かもしれず、ρ はファイル名の並びとの相関で、実際の測定順でのドリフトを見ていないかもしれない。"
-            "実際の測定順は試料の表の injection_order に入れる）")
+            + remedy + "）")
+
+
+def _order_next(drift: list[dict], *, drift_unsure: bool, sheet_order_biased: bool) -> list[str]:
+    """実際の測定順の入れ方（品質の段の `next`）。
+
+    統合したハンドルへのシートは陽イオン（試料の表の極性）の測定だけを決める。陽イオン以外の極性の注入順が
+    確かでなければ、その極性のハンドルにシートを当てて統合し直す。統合し直すと統合したハンドルに当てたシートは
+    引き継がれない（統合は陽イオンのハンドルのシートを引き継ぐ）ので、陽イオンの測定も入れるなら陽イオンの
+    ハンドルに当ててから一緒に統合し直し、入れないなら、統合したハンドルで入れていれば陽イオンのハンドルにも当てる。
+    `sheet_order_biased` は交絡の注入順の偏り（統合したデータセットの試料の表＝陽イオンの測定）。"""
+    pols = _unsure_polarities(drift)
+    others = [p for p in pols if p != SAMPLE_TABLE_POLARITY]
+    sheet = sheet_order_biased or (drift_unsure and (not pols or SAMPLE_TABLE_POLARITY in pols))
+    if others:
+        handles = ([SAMPLE_TABLE_POLARITY] if sheet else []) + others
+        keep = ("" if sheet else f"。統合したハンドルに当てた {SAMPLE_TABLE_POLARITY} のシートは引き継がれないので、"
+                f"当てていれば {SAMPLE_TABLE_POLARITY} のハンドルにも当てておく")
+        return [f"{'・'.join(handles)} のハンドルに dataset_set_sample_metadata（その極性の raw と実際の測定順の"
+                f"シート）→ dataset_merge_polarities（統合し直す{keep}）"]
+    return ["dataset_set_sample_metadata（injection_order に実際の測定順を入れる）"] if sheet else []
 
 
 def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict], confounding: dict,
@@ -164,7 +206,8 @@ def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict]
     交絡の注入順が「ファイルの順かもしれない」（`injection_order.may_be_file_order`）なら、偏りの事実にその但し書きを
     添え、事実のデータに `injection_order_may_be_file_order=True` を足す（偽なら足さない）。ドリフトの兆候も同じ:
     ρ に使った QC の注入順がファイルの順かもしれない行（`drift` の行の `injection_order_may_be_file_order`）があれば、
-    兆候の有無の事実に但し書きとデータの印を足す。どちらかで但し書きを付けたら `next` に実際の測定順の入れ方を足す。"""
+    兆候の有無の事実に但し書きとデータの印を足す。どちらかで但し書きを付けたら `next` に実際の測定順の入れ方を足す
+    （統合したデータセットで陽イオン以外の極性なら、その極性のハンドルへのシートと統合し直し。`_order_next`）。"""
     f = _Facts("Q")
     f.add(f"判定 {verdict}" + (f"（{', '.join(reasons)}）" if reasons else "")
           + f"。QC {n_qc} 本・ブランク {n_blank} 本"
@@ -225,8 +268,7 @@ def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict]
         nxt.append(f"dataset_exclude(samples={_j(failed['failed'][:5])})")
     if drift_note and drift_rerunnable:
         nxt.append('dataset_preprocess(drift_mode="on")')
-    if (may_file and inj == "biased") or drift_unsure:
-        nxt.append("dataset_set_sample_metadata（injection_order に実際の測定順を入れる）")
+    nxt += _order_next(drift, drift_unsure=bool(drift_unsure), sheet_order_biased=may_file and inj == "biased")
     if replicate_warnings:
         nxt.append("dataset_set_sample_metadata（subject_id を入れて反復をまとめる）")
     return {"verdict": verdict, "facts": f.items, "next": " / ".join(nxt) or "なし"}
@@ -390,10 +432,13 @@ def class_facts(*, composition_result: dict | None, gate: str | None, gate_next:
 # --- 分子種 --------------------------------------------------------------------------------
 
 def species_facts(ds, *, record: dict | None, plan: dict, top_n: int, pairs_omitted: bool,
-                  omitted: str | None, quality_note: str | None, exploratory: str | None = None) -> dict:
+                  omitted: str | None, quality_note: str | None, exploratory: str | None = None,
+                  report_cut: bool = False) -> dict:
     """分子種の段: 判定ごとの件数（上昇・下降）、出方だけが違う特徴、変わった上位。
 
-    `exploratory`（探索専用のデータセットの理由）があれば、先頭に印の事実を置く。"""
+    `exploratory`（探索専用のデータセットの理由）があれば、先頭に印の事実を置く。`report_cut`（求めた件数を
+    上限に下げたとき）なら、上位の表を `top_n` で切ったときに `top_truncated: True` と `top_n_more`（載せなかった
+    行数）を足す。"""
     if record is None:
         return {"omitted": omitted, "facts": [], "next": "dataset_overview() を条件を直してから呼び直す"}
     f = _Facts("S")
@@ -418,15 +463,16 @@ def species_facts(ds, *, record: dict | None, plan: dict, top_n: int, pairs_omit
                   feature_ids=pres[:50])
         else:
             f.add("出方（検出の有無）の違いは評価できない（検出の別が無い）", n=None)
-        top = sorted((r for r in rows if r["verdict"] == "changed" and r["q"] is not None),
-                     key=lambda r: (r["q"], r["feature_id"]))[:top_n]
+        ranked = sorted((r for r in rows if r["verdict"] == "changed" and r["q"] is not None),
+                        key=lambda r: (r["q"], r["feature_id"]))
+        top = ranked[:top_n]
         table = _tsv(["contrast_id", "feature_id", "name", "id_level", "log2fc", "ci_low", "ci_high", "q"],
                      [[r["contrast_id"], r["feature_id"], _name(ds, r["feature_id"]), id_level(ds, r["feature_id"]),
                        _g(r["log2fc"]), _g(r["ci_low"]), _g(r["ci_high"]), _g(r["q"])] for r in top])
         ids = [r["feature_id"] for r in top]
         nxt = (f'dataset_plot(kind="volcano", result_id="{rid}", contrast_id="{cid}")'
                + (f' / dataset_feature_search(result_ids=["{rid}#{cid}"], feature_ids={_j(ids[:5])})' if ids else ""))
-        return {"facts": f.items, "top": table, "next": nxt}
+        return {"facts": f.items, "top": table, "next": nxt, **_cut(len(ranked), top_n, report_cut)}
 
     n_tested, n_sig = _omnibus_counts(record)
     sig = {o["feature_id"]: o for o in engine.get("omnibus") or []
@@ -445,14 +491,21 @@ def species_facts(ds, *, record: dict | None, plan: dict, top_n: int, pairs_omit
     f.add("F で差のある特徴について、対ごとの changed の件数は pairs の表"
           + ("（群が 7 つ以上なので基準との対比だけ。全対は dataset_compare で）" if pairs_omitted else ""),
           pairs={row[0]: row[1:] for row in pair_rows}, pairs_omitted=pairs_omitted)
-    top = sorted(sig.values(), key=lambda o: (o["f_q"], o["feature_id"]))[:top_n]
+    ranked = sorted(sig.values(), key=lambda o: (o["f_q"], o["feature_id"]))
+    top = ranked[:top_n]
     table = _tsv(["feature_id", "name", "id_level", "f_q"],
                  [[o["feature_id"], _name(ds, o["feature_id"]), id_level(ds, o["feature_id"]), _g(o["f_q"])]
                   for o in top])
     ids = [o["feature_id"] for o in top]
     nxt = (f'dataset_feature_search(result_ids=["{rid}"], feature_ids={_j(ids[:5])})' if ids
            else f"dataset_compare(groups={_j(plan['levels'])})")
-    return {"facts": f.items, "top": table, "pairs": pairs, "next": nxt}
+    return {"facts": f.items, "top": table, "pairs": pairs, "next": nxt, **_cut(len(ranked), top_n, report_cut)}
+
+
+def _cut(n_ranked: int, top_n: int, report: bool) -> dict:
+    """上位の表を上限で切った印（`report` のときだけ。切っていなければ足さない）。"""
+    more = n_ranked - top_n
+    return {"top_truncated": True, "top_n_more": more} if report and more > 0 else {}
 
 
 # --- 登録 ----------------------------------------------------------------------------------

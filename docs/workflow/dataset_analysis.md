@@ -125,7 +125,7 @@ TSV（と F 検定の TSV）を書き（手順 22）、手順 23・24 の記録�
 
 最初の概観（spec 2026-11-06-dataset-overview-design）。`load_dataset(overview=True)` のときだけ、読み込みの最後に同じ
 `build_overview_payload()` を呼ぶ（`embedded=True`、`dataset.md` の `load_dataset`。既定の `overview=False` では呼ばない）。統計は C のエンジンだけを通す: 既定の前処理（手順 3〜5。尋ねない:
-drift=auto がドリフト補正を当てなかったら補正なしで計算し、そう書く）→ 品質の純計算（手順 7〜10。前処理前の値。陽陰を統合したデータセットでは `failed_qc` と `drift_signs` が極性ごとの総量・その極性の注入順で見る。ρ に使った QC の注入順がファイルの順かもしれない行には `analysis/stats/data.py` の `order_may_be_file_order()` で印を付け、手順 21 の `quality_facts()` がドリフトの兆候の事実の但し書きにする）→ PCA（手順 12〜13）→
+drift=auto がドリフト補正を当てなかったら補正なしで計算し、そう書く）→ 品質の純計算（手順 7〜10。前処理前の値。陽陰を統合したデータセットでは `failed_qc` と `drift_signs` が極性ごとの総量・その極性の注入順で見る。ρ に使った QC の注入順がファイルの順かもしれない行には `analysis/stats/data.py` の `order_may_be_file_order()` で印を付け、手順 21 の `quality_facts()` がドリフトの兆候の事実の但し書きにする。統合したデータセットではその極性の入れ直し方を `analysis/stats/preprocess.py` の `run_remedy()` から書き、`next` は陽イオン以外の極性ならそのハンドルへのシートと統合し直し。drift=auto が補正を止めた注記は `tools/overview_tools.py` の `_drift_note()` が書き、注入順の出所〔MS-DIAL の既定・シートの宣言〕は前処理に渡した試料の表から読む）→ PCA（手順 12〜13）→
 spec v2 の比較（手順 15〜18。群が 1 つ・全群をまとめた表で完全交絡なら回さない。一部の対だけの完全交絡では
 止めず、`allow_confounded=True` で対比に印を付ける。探索専用のデータセットも比較を回し、`analysis/dataset_export.py` の `exploratory_reason()` の理由で
 全体・クラス・分子種の段の先頭に印の事実を置く）→ 選別の後だけ組成（手順 20）。比較と PCA は `make_current=False` で

@@ -234,7 +234,8 @@ spec の `rt_offset_min`（任意）は `normalize_claim_spec` が形を検め�
 6. └─ metabolomix/analysis/mass_accuracy.py  injection_trend()
 7.    └─ metabolomix/analysis/alignment_qc.py  sample_injection_order()
 
-注入順の出所が `filename`（採取時刻が読めずファイル名の順に落ちた）のときは、`injection_trend` の
+注入順の出所が `filename`（試料の表の注入順が欠けてファイル名の順に落ちた、または試料の表が宣言
+`# injection_order_source = filename` でファイル名の順と書いた〔値はシートのまま〕）のときは、`injection_trend` の
 `spearman_rho` を出さない（`null`。理由は `rho_unavailable_reason: "filename_order"`）。`per_injection` と
 `n_samples` は残す。
 
