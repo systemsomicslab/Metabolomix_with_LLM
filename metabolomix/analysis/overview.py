@@ -17,14 +17,14 @@ import math
 
 from metabolomix.analysis.result_state import dataset_fingerprint
 from metabolomix.analysis.stats.data import SAMPLE_TABLE_POLARITY
-from metabolomix.analysis.stats.preprocess import run_remedy
+from metabolomix.analysis.stats.preprocess import runs_remedy
 from metabolomix.analysis.stats.quality import QUALITY_THRESHOLDS
 from metabolomix.analysis.stats_results import contrast_id_for, sample_ids_by_name
 from metabolomix.core.atomic_io import canonical_hash
 
 __all__ = ["OVERVIEW_SCHEMA", "MAX_PAIRWISE_GROUPS", "group_plan", "group_comparisons", "chain_state",
            "id_level", "quality_facts", "global_facts", "class_facts", "species_facts",
-           "overview_id", "register_overview", "polarity_order_remedy"]
+           "overview_id", "register_overview"]
 
 OVERVIEW_SCHEMA = "lipidmix.overview.v1"
 #: 全対を比べる群の数の上限（6 群で 15 対）。超えたら基準との対比と moderated F だけ。
@@ -149,27 +149,19 @@ def _unsure_polarities(drift: list[dict]) -> list[str]:
                               if d.get("injection_order_may_be_file_order") and d.get("polarity")))
 
 
-def polarity_order_remedy(polarities) -> str:
-    """統合したデータセットで、注入順が確かでない極性の測定の入れ直し方（`preprocess.run_remedy` を極性ごとに）。
-
-    陽イオン（試料の表の極性。統合したハンドルへのシート）を最後に書く: 先にほかの極性を入れ直して統合し直すと、
-    前の統合したハンドルに当てたシートは引き継がれないので、書いた順に行えば両方が入る。"""
-    pols = list(dict.fromkeys(polarities))
-    return "".join(run_remedy(p) for p in sorted(pols, key=lambda p: p == SAMPLE_TABLE_POLARITY))
-
-
 def _drift_order_caveat(drift: list[dict]) -> str:
     """ドリフトの兆候の事実に添える但し書き（ρ に使った QC の注入順がファイルの順かもしれない行が無ければ空）。
 
-    統合したデータセットでは、そうである極性を名指しし、その極性の測定の入れ直し方（`preprocess.run_remedy`）を
-    添える: 統合したハンドルへのシートは陽イオンの測定だけを決めるので、陰イオンの注入順は陰イオンのハンドルに
-    シートを当てて統合し直すまで変わらない。統合でなければ試料の表の injection_order に入れる。"""
+    統合したデータセットでは、そうである極性を名指しし、その極性の測定の入れ直し方（`preprocess.runs_remedy`。
+    陽イオンを最後に。`dataset_preprocess` の注意と同じ文と順）を添える: 統合したハンドルへのシートは陽イオンの
+    測定だけを決めるので、陰イオンの注入順は陰イオンのハンドルにシートを当てて統合し直すまで変わらない。統合で
+    なければ試料の表の injection_order に入れる。"""
     unsure = [d for d in drift if d.get("injection_order_may_be_file_order")]
     if not unsure:
         return ""
     pols = _unsure_polarities(drift)
     where = ", ".join(pols)
-    remedy = (polarity_order_remedy(pols).rstrip("。") if pols
+    remedy = (runs_remedy(pols).rstrip("。") if pols
               else "実際の測定順は試料の表の injection_order に入れる")
     return (f"（ただし {where + ' の ' if where else ''}QC の注入順は MS-DIAL の既定〔ファイルの順〕かシートの宣言で"
             "ファイル名の順かもしれず、ρ はファイル名の並びとの相関で、実際の測定順でのドリフトを見ていないかもしれない。"

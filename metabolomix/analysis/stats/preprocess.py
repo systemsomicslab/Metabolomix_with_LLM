@@ -307,18 +307,34 @@ def run_remedy(polarity: str) -> str:
 
     統合したハンドルへ当てるシートは陽イオンの raw を挙げるので、陽イオンの測定だけを決める。ほかの極性の
     測定は統合が残した値（`quant_state.polarity_runs`）なので、その極性のハンドルにシートを当てて統合し直す。
+    統合し直すと、前の統合したハンドルへ当てたシートは引き継がれない（統合は陽イオンのハンドルの試料の表を
+    引き継ぐ）ので、陽イオンの手順はほかの極性を統合し直した後に行うと添える（極性ごとの注意が別々に並んでも、
+    どの順に読んでも陽イオンの順が消えない）。複数の極性をまとめて書くなら `runs_remedy`。
     """
     if polarity == SAMPLE_TABLE_POLARITY:
         return (f"{polarity} の実際のバッチ・注入順は、統合したハンドルに dataset_set_sample_metadata（{polarity} の"
-                f" raw を挙げたシート）で入れる（統合の前に {polarity} のハンドルへ当てたシートも統合が引き継ぐ）。")
+                f" raw を挙げたシート）で入れる（統合の前に {polarity} のハンドルへ当てたシートも統合が引き継ぐ。"
+                "統合したハンドルへ当てたシートは統合し直すと引き継がれないので、ほかの極性を統合し直すなら、"
+                "統合し直してできたハンドルに入れる）。")
     return (f"{polarity} の実際のバッチ・注入順は、{polarity} のハンドルに dataset_set_sample_metadata（{polarity} の"
             f" raw を挙げたシート）で入れてから dataset_merge_polarities で統合し直す（統合したハンドルへのシートは"
             f" {SAMPLE_TABLE_POLARITY} の raw を挙げるので、{polarity} の測定は変わらない）。")
 
 
+def runs_remedy(polarities) -> str:
+    """統合したデータセットで、注入順が確かでない極性の測定の入れ直し方（`run_remedy` を極性ごとに）を、書いた順に
+    行えば全部が入る順で 1 文にする（`dataset_preprocess` の注意と概観の但し書き・注記が同じ順を言う）。
+
+    陽イオン（試料の表の極性。統合したハンドルへのシート）を最後に書く: ほかの極性を入れ直して統合し直すと、
+    前の統合したハンドルへ当てたシートは引き継がれないので、先に統合し直してから陽イオンを入れる。"""
+    pols = list(dict.fromkeys(polarities))
+    return "".join(run_remedy(p) for p in sorted(pols, key=lambda p: p == SAMPLE_TABLE_POLARITY))
+
+
 def _merged_run_warnings(study: StudyData, blocks, samples) -> list[dict]:
     """統合したデータセットの測定の注意: 極性ごとの注入順がファイルの順かもしれない・陽陰で注入順やバッチが違う。
-    文面には、その極性の測定を入れ直す手順（`run_remedy`）を添える。"""
+    文面には、その極性の測定を入れ直す手順（`run_remedy`）を添える。並びは `runs_remedy` と同じく陽イオンの注意を
+    最後にする（上から順に行えば、統合し直す前に統合したハンドルへ当てたシートが消えない）。"""
     from metabolomix.analysis.sample_manifest import file_order_warning
     notes = []
     for label, _cols, table in blocks:
@@ -355,7 +371,7 @@ def _merged_run_warnings(study: StudyData, blocks, samples) -> list[dict]:
                        + (f"{label} の測定は統合が残していない（測定を残す前の版の統合）。"
                           "dataset_merge_polarities で統合し直すと残る。" if unrecorded else
                           f"{label} の測定が実際と違えば（注入順が MS-DIAL の既定のままなど）、" + run_remedy(label))})
-    return notes
+    return sorted(notes, key=lambda n: n.get("polarity") == SAMPLE_TABLE_POLARITY)
 
 
 # --- 1. 選択 -----------------------------------------------------------------
@@ -639,7 +655,7 @@ def _drift_hold_warning_blocks(step: dict) -> dict | None:
     if unsure:
         # drift=on は確かでない注入順のまま当てはめる。実際の順を入れる手順を先に示す
         head += ("drift_mode=\"on\" は、注入順が確かでない極性（" + ", ".join(unsure) + "）をその注入順のまま"
-                 "当てはめる。実際の順で補正するなら先に入れる: " + "".join(run_remedy(p) for p in unsure))
+                 "当てはめる。実際の順で補正するなら先に（書いた順に）入れる: " + runs_remedy(unsure))
     if step.get("rerun_with"):
         warn["message"] = head + "補正するなら drift_mode=\"on\" で呼び直す。"
         warn["suggestion"] = dict(step["rerun_with"])

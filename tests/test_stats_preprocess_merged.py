@@ -639,6 +639,9 @@ def test_sheet_on_merged_handle_sets_only_positive_run_and_remerge_sets_negative
     out = json.loads(dataset_set_sample_metadata(str(sheet), dataset_handle=first["dataset_handle"]))
     assert out["status"] == "success"
     assert any("陽イオンの測定だけ" in n and "統合し直す" in n for n in out["notes"])
+    # 統合し直すと、いま統合したハンドルへ当てたシートは消える（下で陽イオンのハンドルにも当ててから統合し直す）
+    assert any("いまこのハンドルへ当てたシートは引き継がれない" in n and "陽イオンのハンドルにも当てて" in n
+               for n in out["notes"])
     study = from_dataset(handles.registry.get(first["dataset_handle"]).dataset)
     assert [s.injection_order for s in study.samples] == [float(o) for o in POS_TRUE]
     neg_run = polarity_samples(study, "negative")
@@ -657,6 +660,103 @@ def test_sheet_on_merged_handle_sets_only_positive_run_and_remerge_sets_negative
     study = from_dataset(handles.registry.get(second["dataset_handle"]).dataset)
     assert [s.injection_order for s in polarity_samples(study, "negative")] == [float(o) for o in POS_TRUE]
     assert _step(P.preprocess(study, {"filters": OFF_FILTERS}), "drift")["status"] == "applied"
+
+
+# --- レビュー指摘: 両極性の注入順が確かでないとき、注意は上から行えば両方が入る順（陽イオンを最後）で言う ----------
+
+def _both_unsure():
+    study = _merged(flagged_neg=True)
+    study.samples = [replace(s, injection_order_may_be_file_order=True) for s in study.samples]
+    return study
+
+
+def test_merged_warnings_give_the_positive_remedy_last_like_the_overview():
+    """両極性とも注入順がファイルの順かもしれない: drift=auto の保留の注意は陰イオンの入れ直し（統合し直す）を先に、
+    統合したハンドルへの陽イオンのシートを後に書き、極性ごとの注意も陽イオンを最後に並べる。概観の但し書き・
+    注記と同じ文（`runs_remedy`）で、陽イオンの手順だけを読んでも統合し直した後に入れると分かる。"""
+    from metabolomix.tools.overview_tools import _drift_note
+
+    study = _both_unsure()
+    prep = P.preprocess(study, {"filters": OFF_FILTERS})
+    hold = next(w for w in prep.warnings if w["code"] == "drift_not_applied_by_default")
+    assert hold["polarities"] == {"positive": ["injection_order_may_be_file_order"],
+                                  "negative": ["injection_order_may_be_file_order"]}
+    neg, pos = P.run_remedy("negative"), P.run_remedy("positive")
+    msg = hold["message"]
+    assert neg in msg and pos in msg and msg.index(neg) < msg.index(pos)
+    both = P.runs_remedy(["positive", "negative"])
+    assert both == P.runs_remedy(["negative", "positive"]) == neg + pos
+    assert both in msg
+    # 極性ごとの注意（ファイルの順かもしれない）も陽イオンを最後に
+    order = [w["polarity"] for w in prep.warnings if w["code"] == "injection_order_may_be_file_order"]
+    assert order == ["negative", "positive"]
+    # 陽イオンの手順だけを読んでも、統合し直すと統合したハンドルへのシートが消えることが分かる
+    assert "統合し直すと引き継がれない" in pos and "統合し直してできたハンドルに入れる" in pos
+    # 概観（但し書き・drift=auto の注記）も同じ文・同じ順
+    note, _rerunnable = _drift_note(prep, study)
+    assert both.rstrip("。") in note
+    facts = overview.quality_facts(rsd={"status": "not_evaluable"}, failed={"failed": []},
+                                   detection={"status": "not_evaluable"}, drift=quality.drift_signs(study),
+                                   confounding={}, replicate_warnings=[], verdict="caution", reasons=[],
+                                   n_qc=6, n_blank=1, drift_note=None, pca_id=None)
+    drift = next(x for x in facts["facts"] if "batches" in x["data"])
+    assert both.rstrip("。") in drift["text"]
+
+
+def test_merged_hold_warning_followed_in_order_sets_both_runs(tmp_path, monkeypatch):
+    """drift=auto の保留の注意を書いた順に行うと両極性の注入順が入り、ドリフト補正が当たる。逆の順（統合したハンドルへの
+    陽イオンのシート → 陰イオンのハンドルへのシートと統合し直し）では、統合し直したハンドルが陽イオンのハンドルの
+    試料の表を引き継ぐので陽イオンの順が消え、陽イオンがまた保留になる（注意が陽イオンを最後に書く理由）。"""
+    import json
+
+    from metabolomix.core import handles, session_state
+    from metabolomix.quant import merge as qm
+    from metabolomix.tools.dataset_analysis_tools import dataset_set_sample_metadata
+    _point(tmp_path, monkeypatch)
+    pos_v, neg_v = _values()
+    ids = []
+    for sub, polarity, values, ion in (("pos", "positive", pos_v, "PC"), ("neg", "negative", neg_v, "PE")):
+        session_state.session.dataset = _folder(tmp_path / "run" / sub, FILE_ORDER, values, ion)
+        holder = handles.registry.get(session_state.session.current_handle_id)
+        holder.polarity = polarity
+        ids.append(holder.handle_id)
+
+    def merge():
+        return json.loads(qm.merge_tool(handles.registry.get(ids[0]), handles.registry.get(ids[1]),
+                                        None, None))["dataset_handle"]
+
+    def held(handle):
+        prep = P.preprocess(from_dataset(handles.registry.get(handle).dataset), {"filters": OFF_FILTERS})
+        hold = next((w for w in prep.warnings if w["code"] == "drift_not_applied_by_default"), None)
+        return prep, hold
+
+    sheet = tmp_path / "true.tsv"
+    sheet.write_text(_sheet_text(IDS, POS_TRUE), encoding="utf-8")
+
+    def apply(handle):
+        assert json.loads(dataset_set_sample_metadata(str(sheet), dataset_handle=handle))["status"] == "success"
+
+    first = merge()
+    _prep, hold = held(first)
+    assert set(hold["polarities"]) == {"positive", "negative"}
+    msg = hold["message"]
+    assert msg.index(P.run_remedy("negative")) < msg.index(P.run_remedy("positive"))
+
+    # 逆の順: 統合したハンドルに陽イオンのシート → 陰イオンのハンドルにシートを当てて統合し直す
+    apply(first)
+    assert held(first)[1]["polarities"] == {"negative": ["injection_order_may_be_file_order"]}
+    apply(ids[1])
+    second = merge()
+    assert held(second)[1]["polarities"] == {"positive": ["injection_order_may_be_file_order"]}
+
+    # 書いた順の最後の手: 統合し直してできたハンドルに陽イオンのシート → 両極性に補正が当たる
+    apply(second)
+    prep, hold = held(second)
+    assert hold is None
+    assert _step(prep, "drift")["status"] == "applied"
+    study = from_dataset(handles.registry.get(second).dataset)
+    assert [s.injection_order for s in study.samples] == [float(o) for o in POS_TRUE]
+    assert [s.injection_order for s in polarity_samples(study, "negative")] == [float(o) for o in POS_TRUE]
 
 
 # --- レビュー指摘: analysis-spec v1 の drift_correct も極性ごとの注入順で ------------------------------

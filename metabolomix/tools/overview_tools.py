@@ -19,6 +19,7 @@ from metabolomix.analysis.stats import quality, spec_v2
 from metabolomix.analysis.stats.composition import composition
 from metabolomix.analysis.stats.confounding import confounding_report
 from metabolomix.analysis.stats.data import from_dataset, polarity_samples
+from metabolomix.analysis.stats.preprocess import runs_remedy
 from metabolomix.core import mcp_core
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
@@ -69,8 +70,8 @@ def _drift_note(prepared, study=None) -> tuple[str | None, bool]:
 
     陽陰を統合したデータセットでは、止めた極性（段の `by_polarity` の `rerun_with`）を名指しする。注入順が確かで
     ない極性があれば、drift_mode="on" はその注入順のまま当てはめると添え、その極性の測定の入れ直し方
-    （`preprocess.run_remedy`。陰イオンはそのハンドルへのシートと統合し直し）を書く。ほかの極性が補正の条件を
-    満たさない（段の全体に `rerun_with` が無い）ときも止めた極性は書き、drift_mode="on" はその極性のせいで
+    （`preprocess.runs_remedy`。陰イオンはそのハンドルへのシートと統合し直し、陽イオンを最後に）を書く。ほかの極性が
+    補正の条件を満たさない（段の全体に `rerun_with` が無い）ときも止めた極性は書き、drift_mode="on" はその極性のせいで
     PREPROCESS_PRECONDITION になると添える（呼び直せない）。注入順が確かでない理由は `study`（前処理に渡した
     試料の表）があれば出所どおりに言う（MS-DIAL の既定かもしれない・シートの宣言でファイル名の順）。
     止めていなければ `(None, False)`。
@@ -86,17 +87,17 @@ def _drift_note(prepared, study=None) -> tuple[str | None, bool]:
         head = (f"ドリフト補正は既定（drift=auto）では {', '.join(held)} に当てなかった（{why}）。概観はその極性を"
                 "補正なしで計算した")
         unsure = [p for p, rs in held.items() if "injection_order_may_be_file_order" in rs]
-        remedy = overview.polarity_order_remedy(unsure)
+        remedy = runs_remedy(unsure)
         if rerunnable:
             if not unsure:
                 return head + "（補正するなら dataset_preprocess(drift_mode=\"on\")）", True
             return (head + "（補正するなら dataset_preprocess(drift_mode=\"on\")。ただし注入順が確かでない極性（"
-                    + ", ".join(unsure) + "）はその注入順のまま当てはめる。実際の注入順で補正するなら先に入れる: "
+                    + ", ".join(unsure) + "）はその注入順のまま当てはめる。実際の注入順で補正するなら先に（書いた順に）入れる: "
                     + remedy.rstrip("。") + "）"), True
         other = [p for p, st in by.items() if p not in held and st.get("status") != "applied"]
         return (head + f"。ほかの極性（{', '.join(other)}）は補正の条件を満たさないので、drift_mode=\"on\" は "
                 "PREPROCESS_PRECONDITION になる。"
-                + ("実際の注入順で補正するなら先に入れる: " + remedy if unsure else "")).rstrip(), False
+                + ("実際の注入順で補正するなら先に（書いた順に）入れる: " + remedy if unsure else "")).rstrip(), False
     if not rerunnable:
         return None, False
     why = _held_why(step.get("reasons") or [], study.samples if study is not None else None)

@@ -209,8 +209,10 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
     陽陰を統合したデータセット（`dataset_merge_polarities`）では、シートは陽イオンの raw を挙げる（統合したデータセットの
     試料の表は陽イオンのもの）ので、`batch`・`injection_order` は**陽イオンの測定だけ**を決める（群・役割・include・
     subject_id・因子の列は試料ごとなので両極性の特徴に効く）。陰イオンの測定は統合が残した値のままで、変えるなら陰イオンの
-    ハンドルに陰イオンの raw を挙げたシートを当ててから `dataset_merge_polarities` で統合し直す。統合したデータセットに
-    当てたときは戻り値の `notes` にこの旨を書く。
+    ハンドルに陰イオンの raw を挙げたシートを当ててから `dataset_merge_polarities` で統合し直す。統合し直すと統合した
+    ハンドルへ当てたシートは引き継がれない（統合は陽イオンのハンドルの試料の表を引き継ぐ）ので、陽イオンのシートは
+    統合し直してできたハンドルか、統合し直す前の陽イオンのハンドルに当てる。統合したデータセットに当てたときは戻り値の
+    `notes` にこの旨を書く。
 
     dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
         省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
@@ -239,7 +241,10 @@ def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None =
         notes.append("陽陰を統合したデータセット: シートは陽イオンの raw を挙げるので、batch・injection_order は"
                      "陽イオンの測定だけを決めた（群・役割・include・subject_id・因子の列は試料ごとなので両極性の特徴に"
                      "効く）。陰イオンの測定は統合が残した値（quant_state.polarity_runs.negative）のまま。"
-                     + run_remedy("negative"))
+                     + run_remedy("negative")
+                     + "統合し直すと、いまこのハンドルへ当てたシートは引き継がれない（統合は陽イオンのハンドルの試料の表を"
+                     "引き継ぐ）ので、同じシートを陽イオンのハンドルにも当ててから統合し直すか、統合し直してできたハンドルに"
+                     "当て直す。")
     return json_payload({
         "status": "success",
         **summary,
