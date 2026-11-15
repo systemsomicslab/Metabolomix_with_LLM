@@ -114,11 +114,12 @@ def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
     名前は ValueError）。index を渡したときの `sample_names` は新しい名前を決めるだけ（統合は
     試料を照合した ID へ改名するので、親に無い名前もありうる）。`sample_names` に並走する
     リスト（sample_assay_ids / sample_ids / sample_raw_paths / msdial_samples）は位置で、
-    名前で引く欄（roles / sample_meta / per_sample_mz の内側）は新しい名前へ、親の試料から
-    引き継ぐ。
+    名前で引く欄（roles / sample_meta / per_sample_mz の内側 / 試料の除外 excluded_samples）は新しい名前へ、
+    親の試料から引き継ぐ（選ばなかった試料の除外は落とす）。
 
     特徴: `feature_ids` を渡すと、ID で引く欄（feature_metadata（明示しないとき）/
-    feature_candidates / feature_annotations / per_sample_mz / feature_tags）をその ID に絞る。
+    feature_candidates / feature_annotations / per_sample_mz / feature_tags / 特徴の除外 excluded_features）を
+    その ID に絞る（選別が落とした特徴の除外を残すと、統計が「存在しない特徴 ID」で止まる）。
     親の母集団の要約（sml_rows / sme_rows は None、inchikey_coverage は空、feature_qc は
     セル数・検出数・欠測率だけ新しい行列から数え直す）は持ち越さない。`curation_flags` は
     アラインメント単位のフラグ集合なので触らない。**親に無い新しい ID（統合後の
@@ -157,8 +158,8 @@ def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
         for entry, name in zip(new.msdial_samples, new_names):
             if isinstance(entry, dict):
                 entry["name"] = name
-    for attr in ("roles", "sample_meta"):
-        old = getattr(ds, attr) or {}
+    for attr in ("roles", "sample_meta", "excluded_samples"):
+        old = getattr(ds, attr, None) or {}
         setattr(new, attr, {name: copy.deepcopy(old[parent_names[i]])
                             for name, i in zip(new_names, idx) if parent_names[i] in old})
     if ds.per_sample_mz is not None:
@@ -173,8 +174,8 @@ def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
         keep = set(new.feature_ids)
         if feature_metadata is None:
             new.feature_metadata = {k: v for k, v in new.feature_metadata.items() if k in keep}
-        for attr in ("feature_candidates", "feature_annotations", "feature_tags"):
-            setattr(new, attr, {k: v for k, v in getattr(new, attr).items() if k in keep})
+        for attr in ("feature_candidates", "feature_annotations", "feature_tags", "excluded_features"):
+            setattr(new, attr, {k: v for k, v in (getattr(new, attr, None) or {}).items() if k in keep})
         if new.per_sample_mz is not None:
             new.per_sample_mz = {k: v for k, v in new.per_sample_mz.items() if k in keep}
         new.sml_rows = None

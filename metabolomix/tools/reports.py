@@ -164,9 +164,11 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
       結果が除外・試料の表の更新より前のもの）と `input`（同じ指定だが、キュレーションの判断の更新などで入力の行列が
       違う）はその結果の図をもう描けないので、置き場の図を保存するなら `held_result_id` を渡すか省く（`stale` で指定も
       違えば `details.settings` も付く）。分子種の PCA の結果でなければ DATASET_BAD_REQUEST。そのハンドルの結果に
-      無い ID も DATASET_BAD_REQUEST で、開いているほかのハンドルの結果なら `details.result_handle` にそのハンドル
-      （その `dataset_handle` で呼び直す）。ほかの kind（group_intensity / species / eic / eic_compounds）では使わず、
-      置き場の図を保存して戻り値の `notes:` 行にそう書く。
+      無い ID も DATASET_BAD_REQUEST で、開いているほかのハンドルの分子種の PCA の結果なら `details.result_handle` に
+      そのハンドル（その `dataset_handle` で呼び直す）。ほかのハンドルの別の種類の結果（比較・PCA・概観）なら呼び直しを
+      案内せず、分子種の PCA の結果ではないと言ってそのハンドルを文で名指す（`details.result_kind` にその種類）。
+      ほかの kind（group_intensity / species / eic / eic_compounds）では使わず、置き場の図を保存して戻り値の
+      `notes:` 行にそう書く。
     contrast_id: kind が volcano で効く。`dataset_compare` の結果の対比（`T_vs_C` など）を選んで描き直す
       （`result_id` を省けば直近の差次的結果）。`result_id#contrast_id` と食い違えば DATASET_BAD_REQUEST。
       2 群の対比が複数ある結果で対比を選ばなければ `needs_input`（選択肢は対比の一覧）。ほかの kind では使わず、
@@ -265,14 +267,20 @@ def _other_species_pca(ds, record: dict, requested: str, *, holder=None) -> str 
     if result is not None and _same_species_pca(result, held_result):
         return None
     if result is None:
-        # このハンドルの結果でない（別のハンドルの結果か、無い ID）。「分子種の PCA でない」とは言わず、
-        # 開いているほかのハンドルが持っていればそのハンドルを名指す（読むだけ。食い違っても文面だけ）
+        # このハンドルの結果でない（別のハンドルの結果か、無い ID）。開いているほかのハンドルが分子種の PCA の
+        # 結果として持っていればそのハンドルを名指す（読むだけ。食い違っても文面だけ）。ほかのハンドルの別の種類の
+        # 結果（比較・PCA・概観）はそのハンドルで呼び直しても分子種の PCA の図にならないので、呼び直しを案内せず
+        # 「分子種の PCA の結果ではない」と言い、持っているハンドルを文で名指す。
         open_handles = handles.registry.list()
         here = getattr(holder, "handle_id", None) or next(
             (h.handle_id for h in open_handles if h.dataset is ds), None)
-        owner = next((h.handle_id for h in open_handles
-                      if h.handle_id != here and h.dataset is not None and h.dataset is not ds
-                      and requested in (getattr(h.dataset, "results", None) or {})), None)
+        found = [(h.handle_id, ((getattr(h.dataset, "results", None) or {}).get(requested) or {}))
+                 for h in open_handles
+                 if h.handle_id != here and h.dataset is not None and h.dataset is not ds
+                 and requested in (getattr(h.dataset, "results", None) or {})]
+        owner = next((hid for hid, res in found if (res.get("provenance") or {}).get("kind") == "species_pca"),
+                     None)
+        other = None if owner else next(iter(found), None)
         details = {"kind": "species_pca", "result_id": requested, "held_result_id": held,
                    **({"dataset_handle": here} if here else {}),
                    **({"result_handle": owner} if owner else {})}
@@ -281,6 +289,13 @@ def _other_species_pca(ds, record: dict, requested: str, *, holder=None) -> str 
             message = (f"result_id={requested} は{where}の結果ではなく、ハンドル {owner} の結果です。その図を保存するなら "
                        f"save_figure(..., result_id={requested!r}, dataset_handle={owner!r}) で呼んでください"
                        f"（{where}の置き場の分子種の PCA の図は結果 {held} から描いたもの）。")
+        elif other is not None:
+            kind = (other[1].get("provenance") or {}).get("kind") or other[1].get("kind")
+            details["result_kind"] = kind
+            message = (f"result_id={requested} は分子種の PCA の結果ではありません（ハンドル {other[0]} の "
+                       f"{kind} の結果。{where}の置き場の分子種の PCA の図は結果 {held} から描いたもの）。"
+                       "dataset_plot(kind=\"species_pca\") の戻り値の result_id を渡すか、省いて置き場の図を保存して"
+                       "ください。")
         else:
             message = (f"result_id={requested} は{where}の結果にありません（{where}の置き場の分子種の PCA の図は結果 "
                        f"{held} から描いたもの）。別のハンドルで描いた図なら、そのハンドルを dataset_handle に渡してください。")

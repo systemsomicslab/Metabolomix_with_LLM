@@ -17,7 +17,7 @@ import math
 
 from metabolomix.analysis.result_state import dataset_fingerprint
 from metabolomix.analysis.stats.data import SAMPLE_TABLE_POLARITY
-from metabolomix.analysis.stats.preprocess import runs_remedy
+from metabolomix.analysis.stats.preprocess import REMERGE_LOSS, runs_remedy
 from metabolomix.analysis.stats.quality import QUALITY_THRESHOLDS
 from metabolomix.analysis.stats_results import contrast_id_for, sample_ids_by_name
 from metabolomix.core.atomic_io import canonical_hash
@@ -172,19 +172,22 @@ def _order_next(drift: list[dict], *, drift_unsure: bool, sheet_order_biased: bo
     """実際の測定順の入れ方（品質の段の `next`）。
 
     統合したハンドルへのシートは陽イオン（試料の表の極性）の測定だけを決める。陽イオン以外の極性の注入順が
-    確かでなければ、その極性のハンドルにシートを当てて統合し直す。統合し直すと統合したハンドルに当てたシートは
-    引き継がれない（統合は陽イオンのハンドルのシートを引き継ぐ）ので、陽イオンの測定も入れるなら陽イオンの
-    ハンドルに当ててから一緒に統合し直し、入れないなら、統合したハンドルで入れていれば陽イオンのハンドルにも当てる。
-    `sheet_order_biased` は交絡の注入順の偏り（統合したデータセットの試料の表＝陽イオンの測定）。"""
+    確かでなければ、その極性のハンドルにシートを当てて統合し直す。統合し直すと統合したハンドルに当てたシートと
+    除外（`dataset_exclude`）は引き継がれない（統合は陽イオンのハンドルのシートと極性ごとのハンドルの除外を引き継ぐ。
+    `REMERGE_LOSS`）ので、陽イオンの測定も入れるなら陽イオンのハンドルに当ててから一緒に統合し直し、入れないなら、
+    統合したハンドルで入れていれば陽イオンのハンドルにも当てる。統合したハンドルに当てていた除外は、統合し直して
+    できたハンドルに当て直す。`sheet_order_biased` は交絡の注入順の偏り（統合したデータセットの試料の表＝陽イオンの
+    測定）。"""
     pols = _unsure_polarities(drift)
     others = [p for p in pols if p != SAMPLE_TABLE_POLARITY]
     sheet = sheet_order_biased or (drift_unsure and (not pols or SAMPLE_TABLE_POLARITY in pols))
     if others:
         handles = ([SAMPLE_TABLE_POLARITY] if sheet else []) + others
-        keep = ("" if sheet else f"。統合したハンドルに当てた {SAMPLE_TABLE_POLARITY} のシートは引き継がれないので、"
-                f"当てていれば {SAMPLE_TABLE_POLARITY} のハンドルにも当てておく")
+        keep = ("" if sheet else f"統合したハンドルに {SAMPLE_TABLE_POLARITY} のシートを当てていれば "
+                f"{SAMPLE_TABLE_POLARITY} のハンドルにも当てておき、")
         return [f"{'・'.join(handles)} のハンドルに dataset_set_sample_metadata（その極性の raw と実際の測定順の"
-                f"シート）→ dataset_merge_polarities（統合し直す{keep}）"]
+                f"シート）→ dataset_merge_polarities（{REMERGE_LOSS}。{keep}統合したハンドルに当てていた"
+                "除外は統合し直してできたハンドルに当て直す）"]
     return ["dataset_set_sample_metadata（injection_order に実際の測定順を入れる）"] if sheet else []
 
 
@@ -199,7 +202,10 @@ def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict]
     添え、事実のデータに `injection_order_may_be_file_order=True` を足す（偽なら足さない）。ドリフトの兆候も同じ:
     ρ に使った QC の注入順がファイルの順かもしれない行（`drift` の行の `injection_order_may_be_file_order`）があれば、
     兆候の有無の事実に但し書きとデータの印を足す。どちらかで但し書きを付けたら `next` に実際の測定順の入れ方を足す
-    （統合したデータセットで陽イオン以外の極性なら、その極性のハンドルへのシートと統合し直し。`_order_next`）。"""
+    （統合したデータセットで陽イオン以外の極性なら、その極性のハンドルへのシートと統合し直し。`_order_next`）。
+    統合し直す手は `next` の中で除外（`dataset_exclude`）と `dataset_preprocess(drift_mode="on")` より前に置く: 統合し直すと
+    統合したハンドルに当てた除外は引き継がれず、前処理の行列も前のハンドルに残るので、書いた順に行えば両方が
+    統合し直してできたハンドルに当たる。"""
     f = _Facts("Q")
     f.add(f"判定 {verdict}" + (f"（{', '.join(reasons)}）" if reasons else "")
           + f"。QC {n_qc} 本・ブランク {n_blank} 本"
@@ -256,11 +262,14 @@ def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict]
     if drift_note:
         f.add(drift_note, drift="off_undecided")
     nxt = [f'dataset_plot(kind="pca", result_id="{pca_id}", color_by="batch")'] if pca_id else []
+    order_next = _order_next(drift, drift_unsure=bool(drift_unsure), sheet_order_biased=may_file and inj == "biased")
+    remerge = [x for x in order_next if "dataset_merge_polarities" in x]
+    nxt += remerge                      # 統合し直す手は除外・drift_mode="on" より前（統合し直すと引き継がれない）
     if failed.get("failed"):
         nxt.append(f"dataset_exclude(samples={_j(failed['failed'][:5])})")
     if drift_note and drift_rerunnable:
         nxt.append('dataset_preprocess(drift_mode="on")')
-    nxt += _order_next(drift, drift_unsure=bool(drift_unsure), sheet_order_biased=may_file and inj == "biased")
+    nxt += [x for x in order_next if x not in remerge]
     if replicate_warnings:
         nxt.append("dataset_set_sample_metadata（subject_id を入れて反復をまとめる）")
     return {"verdict": verdict, "facts": f.items, "next": " / ".join(nxt) or "なし"}

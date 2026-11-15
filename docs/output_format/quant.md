@@ -56,7 +56,7 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 | `internal_standard_ids` | 内部標準の特徴 ID（選別後は残ったものだけ。統合後は `positive:<id>` / `negative:<id>`） |
 | `record_folder` | 統合後の記録の置き場（`dataset_merge_polarities` が足す） |
 | `arf2_by_polarity` | 統合後に、極性ごとのキュレーションのフラグを引く `.arf2`（`dataset_merge_polarities` が足す。フラグそのものは写さない） |
-| `polarity_runs` | 統合後の、陽イオン以外の極性の測定（`{"negative": {<統合後の試料名>: {batch, injection_order, injection_order_source, injection_order_may_be_file_order}}}`。陰イオンのデータセットの試料の表（当てたシートを含む）から統計エンジンと同じ規則で読んだ値。`dataset_merge_polarities` が足す）。統合したデータセットの試料の表は陽イオンの試料の表そのもの（陽イオンに当てたシート `sample_metadata_rows` も引き継ぐ）＝陽イオンの測定。統合したハンドルへ後から当てるシートは陽イオンの raw を挙げるので、陽イオンの測定だけを決める（陰イオンの測定は、陰イオンのハンドルにシートを当てて統合し直すと変わる。統合し直すと統合したハンドルへ当てたシートは引き継がれないので、陽イオンのシートは陽イオンのハンドルか、統合し直してできたハンドルに当てる） |
+| `polarity_runs` | 統合後の、陽イオン以外の極性の測定（`{"negative": {<統合後の試料名>: {batch, injection_order, injection_order_source, injection_order_may_be_file_order}}}`。陰イオンのデータセットの試料の表（当てたシートを含む）から統計エンジンと同じ規則で読んだ値。`dataset_merge_polarities` が足す）。統合したデータセットの試料の表は陽イオンの試料の表そのもの（陽イオンに当てたシート `sample_metadata_rows` も引き継ぐ）＝陽イオンの測定。統合したハンドルへ後から当てるシートは陽イオンの raw を挙げるので、陽イオンの測定だけを決める（陰イオンの測定は、陰イオンのハンドルにシートを当てて統合し直すと変わる。統合し直すと統合したハンドルへ当てたシートと除外〔`dataset_exclude`〕は引き継がれないので、陽イオンのシートは陽イオンのハンドルか、統合し直してできたハンドルに当て、統合したハンドルの除外は統合し直してできたハンドルに当て直す） |
 | `polarity_runs_match` | `{"negative": <negative_runs と同じもの>}`（陰イオンの測定が、統合したデータセットが陽イオンの測定として読む値と同じか） |
 | `source_sample_names` | 統合前の試料名（`{"positive": [...], "negative": [...]}`。統合後の試料の順）。統合は試料を共通 ID へ改名するので、raw のパスが無いデータセットの「注入順がファイルの順か」は陽イオンの元の試料名で見る |
 
@@ -120,6 +120,11 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
   開き直した陽イオンのデータセットの種別まで変わる）。
   特徴 ID は `positive:<id>` / `negative:<id>`、行は POS の特徴のあとに NEG、試料の列は共通 ID
   （POS の順）。各特徴の出自は `feature_metadata[<fid>]["origin"]`（極性と元の特徴 ID）。
+  `exclusions`（極性ごとのハンドルの除外〔`dataset_exclude`〕を引き継いだときだけ。`features` `samples` の件数）: 除外は
+  統合後の ID に写す——特徴は `positive:<id>` / `negative:<id>`（理由はそのまま）、試料は各側の試料名を共通 ID へ写した和
+  （統合したデータセットの試料は両極性の列を 1 つに持つので、片方の極性だけで外した試料も両極性の特徴から外れる。理由に
+  外した極性を付け、両方なら `; ` でつなぐ）。そのときは `notes` にも書き、記録の `summary.exclusions` に ID を残す。前の
+  統合したハンドルに当てたシートと除外は、統合し直すと引き継がれない（統合は極性ごとのハンドルから作る）。
 - **select**: `status`・`dataset_handle`・`record_id`・`audit_file`・`n_retained`・`n_excluded`・
   `reasons`（理由ごとの件数）・`curation`・`curation_by_polarity`・`adducts`（`sha256` `label`）・
   `skipped`・`examples`（除外の例 5 件）。**全判断は audit にあり、戻り値には載せない。**
@@ -128,6 +133,8 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
   統合はどちらかの親が探索専用なら探索専用で、理由は極性付きで `; ` でつなぐ（`negative: <理由>`。理由の無い
   印は `incomplete analysis run (exploratory only)`）。派生が探索専用のときだけ、apply・merge・select の戻り値に
   `exploratory`（`{exploratory_only: true, reason}`）が載る（でなければ欄が無い）。
+- **除外の引き継ぎ**: 派生は親の除外（`dataset_exclude`）を新しい試料名・特徴 ID へ写す。選別が落とした特徴・選ばなかった
+  試料の除外は落とす（無い ID の除外を残すと統計が「存在しない特徴 ID」で止まる）。統合は両極性の除外を統合後の ID に写す。
 - **図は引き継がない**: 派生（apply・skip・merge・select）は親の結果・行列と同じく、親の図（`dataset_plot` が置いた図。
   親の行列から描いたもの）も、親の除外・試料の表の更新が捨てた図の印も持たない。派生のハンドルでまだ描いていない図の
   `save_figure` は `missing_state`（`dataset_plot` を案内）で、親の図を保存することも、親の除外を理由に

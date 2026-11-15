@@ -22,6 +22,9 @@ ID の副次データを落とすので、特徴ごとの副次データ（候�
 統合したハンドルへ後から当てるシートは陽イオンの raw を挙げるので、バッチ・注入順は陽イオンの測定だけを決める
 （群・役割・include などの試料の実験情報は試料ごとなので両極性に効く）。陰イオンの測定を変えるなら、陰イオンの
 ハンドルにシートを当てて統合し直す。
+除外（`dataset_exclude`）は両極性のハンドルから統合後の ID に写す（`merged_exclusions`。特徴は接頭辞つき、試料は
+共通 ID の和）。統合は極性ごとのハンドルから作るので、前の統合したハンドルに当てたシートと除外は統合し直すと
+引き継がれない。
 """
 from __future__ import annotations
 
@@ -45,8 +48,8 @@ from metabolomix.quant.plugin import call, load_rules, rules_settings
 from metabolomix.quant.records import merged_record_folder, write_record
 from metabolomix.quant.table import require_msdial_source, resolve_quant_polarity
 
-__all__ = ["MAPPING_COLUMNS", "merge", "merge_tool", "merged_assay_kind", "merged_source_verification",
-           "normalize_status", "read_mapping"]
+__all__ = ["MAPPING_COLUMNS", "merge", "merge_tool", "merged_assay_kind", "merged_exclusions",
+           "merged_source_verification", "normalize_status", "read_mapping"]
 
 MAPPING_COLUMNS = ("mode", "source_sample", "sample_id", "group", "sample_type")
 #: 規則プラグイン（msdial-workflow の config.MODES・対応表の `mode` 列）が使うモード名。
@@ -291,6 +294,34 @@ def _rename_inner(per_sample, names, ids, prefix) -> dict:
             for fid, inner in (per_sample or {}).items()}
 
 
+def merged_exclusions(pos_ds, neg_ds, pos_ids, neg_ids) -> tuple[dict, dict, list[str]]:
+    """両極性のハンドルの除外（`dataset_exclude`）を統合後の ID に写す: `(特徴の除外, 試料の除外, notes)`。
+
+    特徴は `positive:<id>` / `negative:<id>`（理由はそのまま）。試料は各側の試料名を共通 ID（`pos_ids` / `neg_ids`。
+    入力の名前と位置がそろう）へ写して和をとる。統合したデータセットの試料は両極性の列を 1 つに持つので、片方の
+    極性だけで外した試料も両極性の特徴から外れる。理由には外した極性を付ける（両方なら `; ` でつなぐ）。
+    その極性のデータセットに無い名前・ID の除外は写さない。何も引き継がなければ notes は空。
+    """
+    features: dict[str, str] = {}
+    samples: dict[str, list[str]] = {}
+    for prefix, ds, ids in (("positive", pos_ds, pos_ids), ("negative", neg_ds, neg_ids)):
+        known = set(ds.feature_ids)
+        features.update({f"{prefix}:{fid}": reason
+                         for fid, reason in (getattr(ds, "excluded_features", None) or {}).items()
+                         if fid in known})
+        rename = dict(zip(ds.sample_names, ids))
+        for name, reason in (getattr(ds, "excluded_samples", None) or {}).items():
+            if name in rename:
+                samples.setdefault(str(rename[name]), []).append(f"{prefix}: {reason}")
+    by_sample = {sid: "; ".join(reasons) for sid, reasons in samples.items()}
+    if not (features or by_sample):
+        return features, by_sample, []
+    return features, by_sample, [
+        f"極性ごとのハンドルの除外（dataset_exclude）を引き継いだ: 特徴 {len(features)}（positive: / negative: を付けた ID）・"
+        f"試料 {len(by_sample)}（共通 ID。片方の極性だけで外した試料も、統合したハンドルでは両極性の特徴から外す。"
+        "理由に外した極性を付けた）。"]
+
+
 def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
           pos_handle_id: str | None = None, neg_handle_id: str | None = None,
           mapping_input: tuple[str, str] | None = None, folder: Path | None = None,
@@ -307,7 +338,8 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     陽イオンの測定として読む値（`sample_runs(統合後)`）と同じかを `polarity_runs_match` と戻り値・記録の
     `negative_runs` に書く。どちらかが探索専用（`exploratory_only`）なら統合も探索専用で、理由は極性付きで
     合わせる（戻り値の `exploratory`）。アッセイ種別は両側から決める（`merged_assay_kind`。戻り値の `assay_kind`、
-    陽陰で違えば `notes`）。
+    陽陰で違えば `notes`）。両側の除外は統合後の ID に写す（`merged_exclusions`。引き継いだときだけ戻り値の
+    `exclusions` と `notes`、記録の `summary.exclusions`）。
     `folder` を省くと 2 つの解析フォルダの共通の親（無理なら QUANT_RECORD_LOCATION_REQUIRED）。
     `polarities` は (positive 側, negative 側) の極性（省くとデータセットから決める）。
     記録は検査がすべて通ってから書く（止まるときは何も書かない）。
@@ -395,6 +427,9 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
                                                                       ("negative", neg_ds))
                                    for fid in getattr(ds, "theoretical_mz_computed", None) or ()}
     new.curation_flags = None  # 選別が極性ごとの .arf2（quant_state["arf2_by_polarity"]）から読む
+    # 除外は陽イオンの写しにしない（統合後の ID に写し、陰イオンの除外も落とさない）
+    new.excluded_features, new.excluded_samples, exclusion_notes = merged_exclusions(
+        pos_ds, neg_ds, pos_ids, neg_ids)
     # 試料の表（当てたシート `sample_metadata_rows` と `sample_ids`）は陽イオンのものを derive がそのまま
     # 引き継ぐ（統合したデータセットの試料の表＝陽イオンの測定。陽イオンだけで前処理したのと同じ値を読む）。
     new.library_record = None
@@ -418,13 +453,19 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
                   "handles": {"positive": pos_handle_id, "negative": neg_handle_id},
                   "normalize": normalize},
         summary={"n_features": counts, "n_samples": len(pos_ids), "unit": pos_state.get("unit"),
-                 "normalized": bool(pos_state.get("normalized")), "negative_runs": runs_match})
+                 "normalized": bool(pos_state.get("normalized")), "negative_runs": runs_match,
+                 # 引き継いだ除外（統合後の ID）。引き継がなければ欄を足さない（記録の形を変えない）
+                 **({"exclusions": {"features": sorted(new.excluded_features),
+                                    "samples": sorted(new.excluded_samples)}} if exclusion_notes else {})})
     new.quant_state["record_id"] = record["record_id"]
+    notes = kind_notes + exclusion_notes
     info = {"record_id": record["record_id"], "rule": rule, "n_features": counts,
             "n_samples": len(pos_ids), "unit": state["unit"], "normalized": state["normalized"],
             "normalize": normalize, "negative_runs": runs_match, "assay_kind": new.assay_kind,
             **verification_info, **qderive.exploratory_info(new),
-            **({"notes": kind_notes} if kind_notes else {})}
+            **({"exclusions": {"features": len(new.excluded_features), "samples": len(new.excluded_samples)}}
+               if exclusion_notes else {}),
+            **({"notes": notes} if notes else {})}
     return new, info
 
 

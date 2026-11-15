@@ -419,6 +419,75 @@ def test_tools_preprocess_and_overview_on_merged_handle(tmp_path, monkeypatch):
     assert any("negative S06" in fact for fact in view["quality"]["facts"])
 
 
+def test_merge_carries_both_polarities_exclusions_into_the_merged_ids(tmp_path, monkeypatch):
+    """dataset_merge_polarities は両極性のハンドルの除外（dataset_exclude）を統合後の ID に写す: 特徴は接頭辞つき、
+    試料は共通 ID の和（陽イオンの生の ID を残して統計を止めない・陰イオンの除外を黙って落とさない）。統合した
+    ハンドルの前処理・概観・比較・書き出しはそのまま回り、外れるのは写した ID だけ。"""
+    import json
+
+    from metabolomix.analysis import stats_results
+    from metabolomix.core import handles, session_state
+    from metabolomix.quant import merge as qm
+    from metabolomix.tools.dataset_analysis_tools import dataset_export_differential
+    from metabolomix.tools.overview_tools import dataset_overview
+    from metabolomix.tools.sample_tools import dataset_exclude
+    from metabolomix.tools.stats_tools import dataset_compare, dataset_preprocess
+    _point(tmp_path, monkeypatch)
+    pos_v, neg_v = _values()
+    # 試料名は極性で違い（規則が共通 ID へ改名する）、陰イオンは並びも違う
+    pos = _folder(tmp_path / "run" / "pos", POS_ORDER, pos_v, "PC", names=[f"{i}_pos" for i in IDS])
+    neg = _folder(tmp_path / "run" / "neg", NEG_ORDER, neg_v, "PE", names=[f"{i}_neg" for i in IDS],
+                  permute=[3, 0, 1, 2, 5, 4, 6, 8, 7, 9, 11, 10, 12, 14, 13])
+    ids = []
+    for k, (ds, polarity) in enumerate(((pos, "positive"), (neg, "negative"))):
+        for j, fid in enumerate(ds.feature_ids):                   # 書き出しは InChIKey の付いた特徴が要る
+            ds.feature_metadata[fid]["inchikey"] = f"{'AB' * 6}{chr(65 + k)}{chr(65 + j)}-UHFFFAOYSA-N"
+        session_state.session.dataset = ds
+        holder = handles.registry.get(session_state.session.current_handle_id)
+        holder.polarity = polarity
+        ids.append(holder.handle_id)
+    p_id, n_id = ids
+    for kw in ({"features": ["0"], "samples": ["S02_pos"], "reason": "contaminant", "dataset_handle": p_id},
+               {"features": ["1"], "samples": ["S04_neg", "S02_neg"], "reason": "bad injection",
+                "dataset_handle": n_id}):
+        assert json.loads(dataset_exclude(**kw))["changed"] is True
+
+    out = json.loads(qm.merge_tool(handles.registry.get(p_id), handles.registry.get(n_id), None, None))
+    assert out["status"] == "merged", out
+    assert out["exclusions"] == {"features": 2, "samples": 2}
+    assert any("除外" in n and "両極性の特徴から外す" in n for n in out["notes"])
+    m_id = out["dataset_handle"]
+    merged = handles.registry.get(m_id).dataset
+    assert merged.excluded_features == {"positive:0": "contaminant", "negative:1": "bad injection"}
+    assert merged.excluded_samples == {"S02": "positive: contaminant; negative: bad injection",
+                                       "S04": "negative: bad injection"}
+    record = json.loads((tmp_path / "run" / "reports" / "quant" / f"{out['record_id']}.json")
+                        .read_text(encoding="utf-8"))
+    assert record["summary"]["exclusions"] == {"features": ["negative:1", "positive:0"], "samples": ["S02", "S04"]}
+
+    pre = json.loads(dataset_preprocess(drift_mode="off", normalize="none", blank_min_ratio=None,
+                                        detection_min_rate=None, max_qc_rsd=None, max_d_ratio=None,
+                                        dataset_handle=m_id))
+    assert pre["status"] == "success", pre
+    prepared = stats_results.get_matrix(merged, pre["matrix_id"])["prepared"]
+    assert sorted(prepared.feature_ids) == sorted(set(merged.feature_ids) - {"positive:0", "negative:1"})
+    select = next(s for s in prepared.steps if s["step"] == "select")
+    engine_id = stats_results.sample_ids_by_name(merged)            # 統合後の試料名 → エンジンの試料 ID
+    assert sorted(select["excluded_by_include"]) == sorted(engine_id[n] for n in ("S02", "S04"))
+    view = json.loads(dataset_overview(dataset_handle=m_id))
+    assert view["status"] == "success", view
+    cmp = json.loads(dataset_compare(reference_group="A", test_group="B", matrix_id=pre["matrix_id"],
+                                     dataset_handle=m_id))
+    assert "error" not in cmp, cmp
+    target = tmp_path / "diff.tsv"
+    exp = json.loads(dataset_export_differential(output_path=str(target), dataset_handle=m_id))
+    assert "error" not in exp, exp
+    rows = [line.split("\t") for line in target.read_text(encoding="utf-8").splitlines()
+            if line and not line.startswith("#")]
+    exported = {r[rows[0].index("spot_id")] for r in rows[1:]}
+    assert exported == set(prepared.feature_ids)
+
+
 @pytest.mark.parametrize("method", ["tic", "median", "pqn"])
 def test_v1_recipe_normalizes_each_polarity(tmp_path, monkeypatch, method):
     """analysis-spec.v1 の recipe の正規化も、統合したデータセットでは係数を極性ごとに求める
@@ -639,9 +708,9 @@ def test_sheet_on_merged_handle_sets_only_positive_run_and_remerge_sets_negative
     out = json.loads(dataset_set_sample_metadata(str(sheet), dataset_handle=first["dataset_handle"]))
     assert out["status"] == "success"
     assert any("陽イオンの測定だけ" in n and "統合し直す" in n for n in out["notes"])
-    # 統合し直すと、いま統合したハンドルへ当てたシートは消える（下で陽イオンのハンドルにも当ててから統合し直す）
-    assert any("いまこのハンドルへ当てたシートは引き継がれない" in n and "陽イオンのハンドルにも当てて" in n
-               for n in out["notes"])
+    # 統合し直すと、いま統合したハンドルへ当てたシートと除外は消える（下で陽イオンのハンドルにも当ててから統合し直す）
+    assert any(P.REMERGE_LOSS in n and "いまこのハンドルへ当てたシートは" in n and "陽イオンのハンドルにも当てて" in n
+               and "このハンドルの除外も当て直す" in n for n in out["notes"])
     study = from_dataset(handles.registry.get(first["dataset_handle"]).dataset)
     assert [s.injection_order for s in study.samples] == [float(o) for o in POS_TRUE]
     neg_run = polarity_samples(study, "negative")
@@ -690,8 +759,11 @@ def test_merged_warnings_give_the_positive_remedy_last_like_the_overview():
     # 極性ごとの注意（ファイルの順かもしれない）も陽イオンを最後に
     order = [w["polarity"] for w in prep.warnings if w["code"] == "injection_order_may_be_file_order"]
     assert order == ["negative", "positive"]
-    # 陽イオンの手順だけを読んでも、統合し直すと統合したハンドルへのシートが消えることが分かる
-    assert "統合し直すと引き継がれない" in pos and "統合し直してできたハンドルに入れる" in pos
+    # 陽イオンの手順だけを読んでも、統合し直すと統合したハンドルへのシートと除外が消えることが分かる
+    assert "シートと除外〔dataset_exclude〕は統合し直すと引き継がれない" in pos
+    assert "統合し直してできたハンドルに入れ、除外も当て直す" in pos
+    # 陰イオンの手順（統合し直す）も、統合したハンドルに当てたシートと除外が引き継がれないと言う
+    assert P.REMERGE_LOSS in neg and "当てていれば統合し直してできたハンドルに当て直す" in neg
     # 概観（但し書き・drift=auto の注記）も同じ文・同じ順
     note, _rerunnable = _drift_note(prep, study)
     assert both.rstrip("。") in note

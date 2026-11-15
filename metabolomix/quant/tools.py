@@ -153,6 +153,10 @@ def dataset_merge_polarities(positive_handle: str, negative_handle: str,
     different、n_samples_differ）に書く。極性ごとの実際の注入順・バッチは、統合の前にそれぞれのハンドルへ
     dataset_set_sample_metadata で入れる（統合後のハンドルへのシートは陽イオンの raw を挙げるので陽イオンの
     測定だけを決める。陰イオンを直すなら陰イオンのハンドルに当てて統合し直す）。
+    極性ごとのハンドルの除外（dataset_exclude）は統合後の ID に写して引き継ぐ: 特徴は positive:<id> /
+    negative:<id>、試料は共通 ID の和（片方の極性だけで外した試料も両極性の特徴から外れる。理由に外した極性が付く）。
+    引き継いだときだけ戻り値に exclusions（特徴・試料の件数）と notes、記録の summary.exclusions に ID。
+    前の統合したハンドルに当てたシートと除外は、統合し直すと引き継がれない（統合は極性ごとのハンドルから作る）。
     記録は 2 つの解析フォルダの共通の親の reports/quant/。共通の親が決められなければ
     needs_input で record_folder（既存のフォルダ）を求める。規則プラグイン（[quant] rules）が要る。
     キュレーションのフラグは写さず、選別が極性ごとの .arf2 からその時点のものを読む。
