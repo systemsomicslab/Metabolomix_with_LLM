@@ -171,7 +171,10 @@ def test_overview_after_exclusion_recomputes(tmp_path):
 
 
 def test_overview_bad_top_n_and_missing_dataset():
-    assert _strict(dataset_overview(top_n=99))["error"]["code"] == "DATASET_BAD_REQUEST"
+    """整数でない・負の top_n だけを断る（上限を超える値は下げて続ける）。"""
+    for bad in (-1, True, "5", 1.5, None):
+        assert _strict(dataset_overview(top_n=bad))["error"]["code"] == "DATASET_BAD_REQUEST", bad
+    assert _strict(dataset_overview(top_n=99))["error"]["code"] == "missing_state"
     assert _strict(dataset_overview())["error"]["code"] == "missing_state"
 
 
@@ -446,4 +449,225 @@ def test_overview_drift_sign_caveat_names_the_polarity_whose_order_may_be_file_o
     drift = next(x for x in facts["facts"] if "batches" in x["data"])
     assert "（ただし positive の QC の注入順は" in drift["text"] and "negative の QC" not in drift["text"]
     assert drift["data"]["injection_order_may_be_file_order"] is True
+    # 陽イオン（試料の表の極性）の測定は統合したハンドルへのシートで入る
+    from metabolomix.analysis.stats.preprocess import run_remedy
+    assert run_remedy("positive").rstrip("。") in drift["text"]
     assert "dataset_set_sample_metadata（injection_order に実際の測定順を入れる）" in facts["next"]
+    assert "dataset_merge_polarities" not in facts["next"]
+
+
+def _many_changed_ds(n_features=100, n_changed=24):
+    """`_ds()` の試料で、特徴 n_features のうち先頭 n_changed が T 系の群で 4 倍（changed が 20 を超える）。変わる特徴は
+    少数にし、どの特徴も生体の揺れを QC の揺れより大きくして（既定の D-ratio の足切りで変わらない特徴を落とさない）、
+    既定の正規化（PQN）の係数を変わった特徴に引きずらせない。"""
+    import numpy as np
+
+    ds = _ds()
+    rng = np.random.default_rng(3)
+    spread = np.array([0.05 if name.startswith("QC") else 0.4 for name in ds.sample_names])[None, :]
+    fm = np.exp2(rng.normal(20, 1, (n_features, 1)) + rng.normal(0, 1, (n_features, len(ds.sample_names))) * spread)
+    for j, name in enumerate(ds.sample_names):
+        if name.startswith("T"):
+            fm[:n_changed, j] *= 4
+    ds.feature_matrix = fm
+    ds.detected_mask = np.ones_like(fm, dtype=bool)
+    ds.feature_ids = [f"f{k}" for k in range(n_features)]
+    ds.feature_metadata = {f: {"name": f.upper()} for f in ds.feature_ids}
+    return ds
+
+
+def test_overview_top_n_above_the_cap_is_capped_with_a_note(tmp_path):
+    """top_n が上限（20）を超えても断らず 20 に下げて出し、notes に書く。上位の表を 20 行で切ったら
+    species に top_truncated と載せなかった行数（top_n_more）。上限ちょうど・上限より小さい指定には印も注記も無い。"""
+    ds = _install(_many_changed_ds(), tmp_path)
+    out = _ov(top_n=30)
+    assert out["status"] == "success", out
+    assert any("top_n=30 は上限の 20 に下げた" in n for n in out["notes"])
+    rows = out["species"]["top"].splitlines()[1:]
+    assert len(rows) == 20
+    record = ds.results[out["result_ids"]["compare"]]
+    n_changed = sum(1 for r in record["engine"]["rows"] if r["verdict"] == "changed" and r["q"] is not None)
+    assert n_changed > 20
+    assert out["species"]["top_truncated"] is True and out["species"]["top_n_more"] == n_changed - 20
+    # 下げた値は上限ちょうどの指定と同じ概観（設定・ID は 20 を記録する）
+    at_cap = _ov(top_n=20)
+    assert at_cap["overview_id"] == out["overview_id"]
+    assert ds.results[out["overview_id"]]["settings"]["top_n"] == 20
+    for plain in (at_cap, _ov(top_n=5)):
+        assert "notes" not in plain and "top_truncated" not in plain["species"]
+        assert "top_n_more" not in plain["species"]
+
+
+def _merged_quality(study, *, drift_note=None, drift_rerunnable=True):
+    from metabolomix.analysis import overview
+    from metabolomix.analysis.stats import quality
+
+    rows = quality.drift_signs(study)
+    facts = overview.quality_facts(rsd={"status": "not_evaluable"}, failed={"failed": []},
+                                   detection={"status": "not_evaluable"}, drift=rows, confounding={},
+                                   replicate_warnings=[], verdict="caution", reasons=[], n_qc=6, n_blank=1,
+                                   drift_note=drift_note, drift_rerunnable=drift_rerunnable, pca_id=None)
+    return rows, facts, next(x for x in facts["facts"] if "batches" in x["data"])
+
+
+def test_overview_names_the_negative_handle_remedy_when_the_negative_order_may_be_file_order():
+    """陽陰を統合したデータセットで陰イオンの測定の注入順だけがファイルの順かもしれない: 統合したハンドルへの
+    シートは陽イオンの測定しか変えないので、但し書き・next・ドリフト補正の注記は、陰イオンのハンドルにシートを
+    当てて統合し直す手順（run_remedy("negative")）を示し、統合したハンドルへのシートを勧めない。"""
+    from metabolomix.analysis.stats import preprocess as P
+    from metabolomix.tools.overview_tools import _drift_note
+    from tests.test_stats_preprocess_merged import OFF_FILTERS, _merged
+
+    study = _merged(flagged_neg=True)
+    prep = P.preprocess(study, {"filters": OFF_FILTERS})
+    note, rerunnable = _drift_note(prep, study)
+    rows, facts, drift = _merged_quality(study, drift_note=note, drift_rerunnable=rerunnable)
+    assert {r["polarity"]: "injection_order_may_be_file_order" in r for r in rows} == {
+        "positive": False, "negative": True}
+    remedy = P.run_remedy("negative").rstrip("。")
+    assert "（ただし negative の QC の注入順は" in drift["text"] and remedy in drift["text"]
+    assert "試料の表の injection_order に入れる" not in drift["text"]
+    assert "negative のハンドルに dataset_set_sample_metadata" in facts["next"]
+    assert "dataset_merge_polarities" in facts["next"]
+    # 統合し直すと統合したハンドルに当てたシートは引き継がれない（陽イオンのハンドルにも当てる）
+    assert "positive のハンドルにも当てておく" in facts["next"]
+    assert "dataset_set_sample_metadata（injection_order に実際の測定順を入れる）" not in facts["next"]
+    # drift_mode="on" で呼び直せる（陽イオンは当たった）が、陰イオンは確かでない注入順のまま当てはめると添える
+    assert rerunnable is True and 'dataset_preprocess(drift_mode="on")' in note
+    assert "注入順が確かでない極性（negative）はその注入順のまま当てはめる" in note and remedy in note
+    assert 'dataset_preprocess(drift_mode="on")' in facts["next"]
+
+
+def test_overview_merged_remedy_when_both_polarity_orders_may_be_file_order():
+    """両極性の注入順がファイルの順かもしれない: next は両極性のハンドルにシートを当てて統合し直す 1 手（統合し直すと
+    統合したハンドルへのシートは消えるので、陽イオンも陽イオンのハンドルへ）。但し書きは陰イオンの入れ直し
+    （統合し直す）を先に、統合したハンドルへの陽イオンのシートを後に書く。"""
+    from dataclasses import replace
+
+    from metabolomix.analysis.stats import preprocess as P
+    from metabolomix.tools.overview_tools import _drift_note
+    from tests.test_stats_preprocess_merged import OFF_FILTERS, _merged
+
+    study = _merged(flagged_neg=True)
+    study.samples = [replace(s, injection_order_may_be_file_order=True) for s in study.samples]
+    note, rerunnable = _drift_note(P.preprocess(study, {"filters": OFF_FILTERS}), study)
+    _rows, facts, drift = _merged_quality(study, drift_note=note, drift_rerunnable=rerunnable)
+    assert "（ただし positive, negative の QC の注入順は" in drift["text"]
+    neg, pos = P.run_remedy("negative"), P.run_remedy("positive").rstrip("。")
+    assert drift["text"].index(neg) < drift["text"].index(pos)
+    # drift=auto の注記も同じ順（両極性とも保留で drift_mode="on" は呼び直せる）
+    assert rerunnable is True and "注入順が確かでない極性（positive, negative）" in note
+    assert note.index(neg) < note.index(pos)
+    assert "positive・negative のハンドルに dataset_set_sample_metadata" in facts["next"]
+    assert "当てておく" not in facts["next"]
+    assert "dataset_set_sample_metadata（injection_order に実際の測定順を入れる）" not in facts["next"]
+
+
+def test_overview_merged_negative_remedy_clears_the_caveat_end_to_end(tmp_path, monkeypatch):
+    """統合したハンドルの概観が示す手順が、陰イオンの注入順に実際に届く: 統合したハンドルへのシートの後も陰イオンの
+    但し書きは残り（統合したハンドルへのシートは陰イオンを変えない）、概観の next どおりに陰イオン（と陽イオン）の
+    ハンドルにシートを当てて統合し直すと、但し書き・印・入れ方の next が消え、ドリフト補正も両極性に当たる。"""
+    from metabolomix.analysis.stats import preprocess as P
+    from metabolomix.core import handles, session_state
+    from metabolomix.quant import merge as qm
+    from metabolomix.tools.dataset_analysis_tools import dataset_set_sample_metadata
+    from tests.test_stats_preprocess_merged import (FILE_ORDER, IDS, POS_TRUE, _folder, _point,
+                                                    _sheet_text, _values)
+
+    _point(tmp_path, monkeypatch)
+    pos_v, neg_v = _values()
+    ids = []
+    for sub, polarity, values, ion in (("pos", "positive", pos_v, "PC"), ("neg", "negative", neg_v, "PE")):
+        session_state.session.dataset = _folder(tmp_path / "run" / sub, FILE_ORDER, values, ion)
+        holder = handles.registry.get(session_state.session.current_handle_id)
+        holder.polarity = polarity
+        ids.append(holder.handle_id)
+
+    def merged_overview():
+        merged = json.loads(qm.merge_tool(handles.registry.get(ids[0]), handles.registry.get(ids[1]),
+                                          None, None))["dataset_handle"]
+        return merged, _ov(dataset_handle=merged)
+
+    sheet = tmp_path / "true.tsv"
+    sheet.write_text(_sheet_text(IDS, POS_TRUE), encoding="utf-8")
+    merged, _first = merged_overview()
+    assert json.loads(dataset_set_sample_metadata(str(sheet), dataset_handle=merged))["status"] == "success"
+    out = _ov(dataset_handle=merged)
+    ds = handles.registry.get(merged).dataset
+    drift = _drift_fact(ds, out)
+    assert {b["polarity"]: "injection_order_may_be_file_order" in b for b in drift["data"]["batches"]} == {
+        "positive": False, "negative": True}
+    assert P.run_remedy("negative").rstrip("。") in drift["text"]
+    assert "negative のハンドルに dataset_set_sample_metadata" in out["quality"]["next"]
+    assert "dataset_set_sample_metadata（injection_order に実際の測定順を入れる）" not in out["quality"]["next"]
+
+    # next のとおり: 陰イオンのハンドルにシート（統合したハンドルで入れた陽イオンの順は陽イオンのハンドルにも）→ 統合し直す
+    for handle in ids:
+        assert json.loads(dataset_set_sample_metadata(str(sheet), dataset_handle=handle))["status"] == "success"
+    merged2, out2 = merged_overview()
+    drift2 = _drift_fact(handles.registry.get(merged2).dataset, out2)
+    assert "injection_order_may_be_file_order" not in drift2["data"]
+    assert not any("injection_order_may_be_file_order" in b for b in drift2["data"]["batches"])
+    assert "ファイル名の並び" not in drift2["text"]
+    assert "dataset_set_sample_metadata" not in out2["quality"]["next"]
+    assert "dataset_merge_polarities" not in out2["quality"]["next"]
+    assert not any("当てなかった" in f for f in out2["quality"]["facts"])
+
+
+def _qc_bracketed_file_order_ds(tmp_path):
+    """`_interleaved_file_order_ds`（注入順＝raw のファイル名の順位、出所は .mddata）の最後の QC を走りの最後に置く:
+    QC が生体を挟むのでドリフト補正の条件を満たし、drift=auto は注入順が確かでないことで補正を止める。"""
+    ds = _interleaved_file_order_ds(tmp_path)
+    rows = dict(zip(ds.sample_names, ds.sample_metadata_rows))
+    last = [n for n in ds.sample_names if n.startswith("QC")][-1]
+    moved = rows[last]["injection_order"]
+    for name, row in rows.items():
+        pos = row["injection_order"]
+        new = len(rows) if name == last else (pos - 1 if pos > moved else pos)
+        row["injection_order"] = new
+        row["provenance"]["injection_order"]["value"] = new
+    ds.sample_raw_paths = [str(tmp_path / "raw" / f"run{rows[n]['injection_order']:02d}.raw") for n in ds.sample_names]
+    return ds
+
+
+def _sheet_declared_filename_order(ds):
+    """注入順の値はそのまま、試料の表が宣言 `# injection_order_source = filename` で書いた出所の記録にする。"""
+    for row in ds.sample_metadata_rows:
+        row["provenance"] = {"injection_order": {"value": row["injection_order"], "source": "user_manifest",
+                                                 "derived_from": "filename", "confidence": "declared"}}
+    return ds
+
+
+def test_overview_drift_held_note_names_the_order_source(tmp_path):
+    """drift=auto が注入順の不確かさで補正を止めた注記は、出所どおりに言う: MS-DIAL が振った順なら「MS-DIAL の既定
+    （ファイルの順）かもしれない」、シートの宣言でファイル名の順なら「シートの宣言でファイル名の順」（MS-DIAL の
+    既定とは言わない）。"""
+    from metabolomix.analysis.stats import data as stats_data
+
+    def held_note():
+        out = _ov()
+        notes = [f for f in out["quality"]["facts"] if "当てなかった" in f]
+        assert len(notes) == 1, out["quality"]["facts"]
+        return notes[0]
+
+    ds = _install(_qc_bracketed_file_order_ds(tmp_path), tmp_path)
+    assert all(s.injection_order_may_be_file_order for s in stats_data.from_dataset(ds).samples)
+    note = held_note()
+    assert "注入順が MS-DIAL の既定（ファイルの順）かもしれない" in note and "シートの宣言" not in note
+
+    ds = _install(_sheet_declared_filename_order(_qc_bracketed_file_order_ds(tmp_path / "declared")), tmp_path)
+    assert all(s.injection_order_source == "filename" and not s.injection_order_may_be_file_order
+               for s in stats_data.from_dataset(ds).samples)
+    note = held_note()
+    assert "シートの宣言（# injection_order_source = filename）でファイル名の順" in note
+    assert "MS-DIAL の既定" not in note
+
+
+def test_overview_drift_held_note_without_the_sample_table_names_both_sources():
+    """試料の表を渡さない（出所を読めない）ときは、両方の出所を挙げる言い方（MS-DIAL の既定とだけは言わない）。"""
+    from metabolomix.analysis.stats import preprocess as P
+    from metabolomix.tools.overview_tools import _drift_note
+    from tests.test_stats_preprocess_merged import OFF_FILTERS, _merged
+
+    note, _ = _drift_note(P.preprocess(_merged(flagged_neg=True), {"filters": OFF_FILTERS}))
+    assert "MS-DIAL の既定（ファイルの順）かシートの宣言でファイル名の順かもしれない" in note

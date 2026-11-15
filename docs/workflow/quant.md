@@ -94,7 +94,8 @@
 写しは `analysis_dir` も陽イオンのものなので、統合したハンドルへの記録は陽イオンの解析フォルダの目的に書く）。
 統計エンジンの前処理はこれでドリフト補正を極性ごとに当てる（`dataset_analysis.md` の `dataset_preprocess`）。
 統合したハンドルへ後から当てるシートは陽イオンの raw を挙げるので陽イオンの測定だけを決め、陰イオンの測定は陰イオンの
-ハンドルにシートを当てて統合し直すと変わる。
+ハンドルにシートを当てて統合し直すと変わる。統合し直すと統合したハンドルへ当てたシートは引き継がれない（統合は陽イオンの
+ハンドルの試料の表を引き継ぐ）。
 
 1. metabolomix/quant/tools.py  dataset_merge_polarities()
 2. ├─ metabolomix/tools/_holder.py  resolve_holder()
