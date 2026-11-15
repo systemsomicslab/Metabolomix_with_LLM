@@ -1563,3 +1563,40 @@ def test_homolog_check_auto_reads_noted_sme_names_and_skips_internal_standards(t
         {"auto": {"lipid_class": "PC P-"}}, dataset_handle=handle))
     assert plasmalogen["verdict"] == "not_evaluable" and plasmalogen["n_members"] == 0
     assert any("'PC O-'" in note for note in plasmalogen["notes"])
+
+
+def test_homolog_check_auto_keeps_oxidized_species_in_their_own_series(tmp_path):
+    """SME の `PE 36:2;O (oxPE)` は PE 36:2 の重複ではない（最終検証 WB）。混ぜると 36:2 の RT の中央値が
+    (12.0 + 9.0) / 2 = 10.5 < 36:1 の 11.0 に下がって違反が消えていた。修飾ごとの列で比べて違反を残し、
+    集めた修飾の内訳を notes に、`members` に `modification` の列を書く。rule_hash は spec だけで決まる（変わらない）。"""
+    rows = (("PE 18:0_18:2", "EEEEEEEEEEEEEE-UHFFFAOYSA-N", "C41H78NO8P", 744.5538, 12.0),
+            ("PE 36:2;O (oxPE)", "FFFFFFFFFFFFFF-UHFFFAOYSA-N", "C41H78NO9P", 760.5487, 9.0),
+            ("PE 18:0_18:1", "GGGGGGGGGGGGGG-UHFFFAOYSA-N", "C41H80NO8P", 746.5694, 11.0))
+    features = tuple({"id": str(50 + i), "mz": mz, "rt": rt, "values": _scaled(10),
+                      "sme": [{"name": name, "inchikey": key, "formula": formula, "adduct": "[M+H]1+",
+                               "theo": mz}]}
+                     for i, (name, key, formula, mz, rt) in enumerate(rows))
+    handle = _open({"mztab": write_mztab(tmp_path / "run" / "AlignResult-1.mzTab", features=features)})
+    spec = {"auto": {"lipid_class": "PE", "adduct": "[M+H]+"}}
+    out = json.loads(R.dataset_homolog_check(spec, dataset_handle=handle))
+    assert out["verdict"] == "fail" and out["n_violations"] == 1 and out["n_pairs"] == 1, out
+    assert out["duplicates"] == {}
+    [violation] = _tsv_rows(out["violations"])
+    assert (violation["low"], violation["high"]) == ("36:1", "36:2")
+    members = {r["feature_id"]: r for r in _tsv_rows(out["members"])}
+    assert members["51"]["modification"] == "O" and members["51"]["status"] == "ok"
+    assert members["50"]["modification"] == "" and members["50"]["status"] == "violation"
+    [note] = out["notes"]
+    assert "無修飾 2 件" in note and ";O 1 件" in note and "'PE;O'" in note
+    from metabolomix.analysis import homolog
+    assert out["rule_hash"] == homolog.rule_hash(homolog.normalize_spec(spec))
+    # 修飾を書けばその列だけ: 1 種なので not_evaluable（修飾の内訳の注記は出ない）
+    oxidized = json.loads(R.dataset_homolog_check(
+        {"auto": {"lipid_class": "PE;O"}}, dataset_handle=handle))
+    assert oxidized["verdict"] == "not_evaluable" and oxidized["n_members"] == 1
+    assert len(oxidized["notes"]) == 1 and "not_evaluable" in oxidized["notes"][0]
+    # 修飾の無い列は前と同じ形（modification の列を足さない）
+    plain = json.loads(R.dataset_homolog_check(
+        {"auto": {"lipid_class": "PE;"}}, dataset_handle=handle))
+    assert plain["members"].splitlines()[0].split("\t") == ["feature_id", "carbons", "double_bonds", "rt",
+                                                             "status"]

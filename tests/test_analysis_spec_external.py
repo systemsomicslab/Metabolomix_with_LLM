@@ -512,6 +512,57 @@ def test_alignment_qc_on_external_input_is_a_note(files):
     assert any("外部の行列" in n for n in notes)
 
 
+def test_unused_dataset_only_settings_on_external_input_are_notes_not_errors(files):
+    """最終検証 WE: 外部の行列で効かない `correction=none` の `bh_population=annotated` と、drift_correct の無い spec の
+    `injection_order.source=metadata` は、自分の notes が「効かない」と書くとおり断らずに進む。正規化した spec には
+    書いたまま残り（`rule_hash` は前に通った spec と同じ規則）、数字は書かないときと同じ。使うとき（correction=bh・
+    drift_correct のあるとき）だけ従来どおり ANALYSIS_SPEC_INVALID。"""
+    analysis = {"analysis_id": "main", "test": {"kind": "student"}, "correction": "none",
+                "bh_population": "annotated"}
+    notes: list[str] = []
+    normalized = A.normalize_spec(_spec(files, [analysis], injection_order={"source": "metadata"}), notes=notes)
+    assert normalized["analyses"][0]["bh_population"] == "annotated"
+    assert normalized["injection_order"] == {"source": "metadata"}
+    assert [n.split(" ")[0] for n in notes] == ["analyses[0].bh_population", "injection_order"]
+    result = A.run_spec(normalized)
+    rows = _rows(result)
+    p = stats.ttest_ind(np.log2(VALUES["F1"][3:6]), np.log2(VALUES["F1"][:3])).pvalue   # 独立の計算
+    assert rows["F1"]["p"] == pytest.approx(p) and rows["F1"]["q"] is None
+    assert result["analyses"][0]["bh_population_n"] is None
+    assert set(result["input_fingerprint"]["files"]) == {"groups", "matrix"}       # 注入順は読まない
+    plain = A.run_spec(A.normalize_spec(_spec(files, [{**analysis, "bh_population": "matrix"}])))
+    assert result["analyses"][0]["rows"] == plain["analyses"][0]["rows"]
+    # 注入順だけ（既定の correction=bh の解析）でも同じ: 断らず notes、数字は書かないときと同じ
+    order_only = A.normalize_spec(_spec(files, injection_order={"source": "metadata"}),
+                                  notes=(order_notes := []))
+    assert order_only["injection_order"] == {"source": "metadata"}
+    assert [n.split(" ")[0] for n in order_notes] == ["injection_order"]
+    assert A.run_spec(order_only)["analyses"][0]["rows"] == _run(_spec(files))["analyses"][0]["rows"]
+    # 使うときは従来どおり誤り（外部の行列に SME も試料の表も無い）
+    for spec, field in (
+            (_spec(files, [{**analysis, "correction": "bh"}]), "analyses"),
+            (_spec(files, [{"analysis_id": "main", "test": {"kind": "student"},
+                            "matrix": {"steps": ["drift_correct"]}}],
+                   injection_order={"source": "metadata"}), "injection_order")):
+        with pytest.raises(DomainError) as info:
+            A.normalize_spec(spec)
+        assert info.value.code == "ANALYSIS_SPEC_INVALID" and info.value.details["field"] == field
+
+
+def test_unused_dataset_only_settings_on_external_input_reach_the_tool(files):
+    """dataset_analysis_run（v1）も同じ spec を断らず、notes を返す（最終検証 WE）。"""
+    import json
+
+    from metabolomix.tools import reanalysis_tools as R
+
+    spec = _spec(files, [{"analysis_id": "main", "test": {"kind": "welch"}, "correction": "none",
+                          "bh_population": "annotated"}], injection_order={"source": "metadata"})
+    out = json.loads(R.dataset_analysis_run(spec))
+    assert out["status"] == "success", out
+    assert any(n.startswith("analyses[0].bh_population") for n in out["notes"])
+    assert any(n.startswith("injection_order") for n in out["notes"])
+
+
 # ---------- 外部の入力（MAF・mwTab・xlsx） ----------
 
 def test_maf_input_reads_like_the_tsv_and_reports_unreadable_cells(files):

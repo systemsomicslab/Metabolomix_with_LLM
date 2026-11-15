@@ -188,7 +188,7 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 | `input` | `{"source": "dataset"}` | データセット（ハンドルか対話のセッション）か、外部の行列。TSV は `{"source": "tsv", "matrix_path", "orientation": "features_by_samples" \| "samples_by_features", "id_column"}`（較正用。論文の個体ごとの値など。欠測は空・`NA`・`NaN`・`null`、数として読めない値は誤り）。論文側の表は MetaboLights の MAF `{"source": "maf", "path"}`・Metabolomics Workbench の mwTab `{"source": "mwtab", "path"}`・補足の xlsx `{"source": "xlsx", "path", "sheet": null, "feature_column": "A", "first_sample_column": "B"}`（下の「外部の表」） |
 | `groups` | データセットなら `metadata` | `metadata` は実験情報シート（`group`・`role`・`include`）。TSV は `{"source": "tsv", "path", "sample_column": "sample", "group_column": "group", "role_column": null}`。外部の行列には TSV が要る |
 | `comparison` | 必須 | `reference`（基準）と `test`（比較）の群の名前。比較名は `<test>_vs_<reference>` |
-| `injection_order` | `null` | ドリフト補正の注入順。`{"source": "metadata"}` か TSV `{"source": "tsv", "path", "sample_column", "order_column": "order"}` |
+| `injection_order` | `null` | ドリフト補正の注入順。`{"source": "metadata"}` か TSV `{"source": "tsv", "path", "sample_column", "order_column": "order"}`。`metadata` はデータセットの入力でだけ使える（外部の行列で `drift_correct` の解析があれば `ANALYSIS_SPEC_INVALID`。無ければ効かないので `notes` に書いて進む） |
 | `covariates` | `null` | OLS の共変量の TSV `{"path", "sample_column": "sample", "missing": "drop" \| "error", "columns": [{"name", "type": "numeric"} \| {"name", "type": "categorical", "reference"}]}`。カテゴリは基準の水準に対する 0/1 の列に符号化する |
 | `features` | `{"all": true, "merge_split": true}` | 報告する特徴（`{"feature_ids": [...]}` で絞る）と、割れたスポットのまとめ（下の「割れたスポットのまとめ」）。BH の母集団は `bh_population` が決める。`merge_split` は無ければ true（v8 の既定）、`alignment_qc` は `dataset_alignment_qc` の `output_path` の JSON のパス（任意。`dataset_alignment_qc` がハンドルに持つ最後の結果は**使わない**——spec だけで再現するため） |
 | `aggregate` | `null` | 1 本に集約して検定する。`{"kind": "sum", "label", "feature_ids": [...]}`・`{"kind": "sum", "label", "select": {"name_regex", "evidence": ["sme"]}}`（クラスの主張）・`{"kind": "ratio", "label", "numerator", "denominator"}`（比の主張）。和はメンバーごとの寄与（`contributions`）も返す。**`features.feature_ids` とは併用できない**（報告するのは集約した 1 本なので、報告する特徴の定義がぶつかる。`ANALYSIS_SPEC_INVALID`・`field: features`。種ごとの行は `aggregate` の無い別の spec で回す） |
@@ -204,7 +204,7 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 | `test.covariates` | `[]` | `ols` で使う共変量の名前（`covariates.columns` の部分集合） |
 | `fold_change` | `arithmetic_mean_ratio` | `arithmetic_mean_ratio`（変換前の算術平均の比 test/ref）・`geometric_mean_ratio`（log2 の平均の差） |
 | `correction` | `bh` | `bh`・`none` |
-| `bh_population` | `matrix` | `matrix`（その解析の行列で検定できた全特徴）・`reported`（報告する特徴だけ）・`annotated`（SME のある特徴 = `ds.feature_candidates` に候補のある特徴だけ。論文が同定した種だけで補正したと読めるときの二次解析用）。検定できない特徴は母集団に入れない。`annotated` の母集団の外の特徴は、報告しても `q` は null。まとめた特徴は元のどちらかに SME があれば母集団に入る。外部の行列（SME を持たない）には使えない |
+| `bh_population` | `matrix` | `matrix`（その解析の行列で検定できた全特徴）・`reported`（報告する特徴だけ）・`annotated`（SME のある特徴 = `ds.feature_candidates` に候補のある特徴だけ。論文が同定した種だけで補正したと読めるときの二次解析用）。検定できない特徴は母集団に入れない。`annotated` の母集団の外の特徴は、報告しても `q` は null。まとめた特徴は元のどちらかに SME があれば母集団に入る。外部の行列（SME を持たない）では `correction=bh` の解析に使えない（`ANALYSIS_SPEC_INVALID`。`correction=none` なら効かないので `notes` に書いて進む） |
 | `thresholds` | すべて `null` | `p`・`q` は「未満」、`fc` は `|log2fc| ≥ log2(fc)`。null の閾値は見ない |
 
 **割れたスポットのまとめ（`features.merge_split`、既定 true）。** MS-DIAL のアライメントが 1 つの
@@ -225,8 +225,8 @@ spot_id / precursor_mz・`dcl_spot_spectrum`・`dcl_diagnostic_ions`・`library_
 並び、`summed` はまとめた後の並び、`aggregate.merged_from` は選んだ特徴のうちまとめたもの。比の分子と
 分母が同じ物質にまとまるなら `ANALYSIS_SPEC_INVALID`）。行列に 2 つ揃わない群（別の run の JSON など）は
 まとめず、結果の `merge_split.skipped` に挙げる。外部の行列（`input.source` が `dataset` 以外）にはアライメントが無く、
-`merge_split` は何もしない（`features.alignment_qc` は効かないので捨てて `notes` に書く。`bh_population=annotated` は
-`ANALYSIS_SPEC_INVALID`）。`merge_split=false` にすると 2 スポットのまま検定する（`alignment_qc` は効かないので捨てて
+`merge_split` は何もしない（`features.alignment_qc` は効かないので捨てて `notes` に書く。`correction=bh` の解析の
+`bh_population=annotated` は `ANALYSIS_SPEC_INVALID`。`correction=none` なら効かないので `notes`）。`merge_split=false` にすると 2 スポットのまま検定する（`alignment_qc` は効かないので捨てて
 `notes` に書く）。`dataset_alignment_qc` がハンドルに持つ最後の結果（§9）は使わない——同じ spec なら誰が回しても
 同じ組でまとめるため。既定でない閾値の組を使うなら、その JSON を `features.alignment_qc` に書く。
 
@@ -643,8 +643,19 @@ dot の足切りは二乗の値と比べる）の列を足す——**合否に�
   も `PE P-38:4` も `PE O-38:5`）——プラスマローゲンの列は `lipid_class: "PE O-"` で集める（`"PE P-"` では
   集まらず、`notes` にそう書く）。`adduct` は SME rank 1 の付加体と**綴りでなく組成で**比べる
   （`msdial.adducts.same_adduct`。mzTab-M の `[M+H]1+` と `[M+H]+`、`[M+HCOO]-` と `[M+FA-H]-` は同じ）。
-- 同じ（炭素数, 二重結合数）が複数あれば RT の中央値で並べ、`duplicates` に挙げる。
-- 同じ二重結合数の中で炭素数の昇順、同じ炭素数の中で二重結合数の昇順に並べた**隣どうし**で、
+- **種のレベルの修飾（`;` の後ろ）は列を分ける。** `PE 36:2;O (oxPE)` は `PE 36:2;O`（修飾 `O`）、
+  `PC 16:0_18:2;OOH` は `PC 34:2;O2`、`Cer 18:1;O2/16:0`（NS）は `Cer 34:1;O2`、`Cer 18:0;O3/16:0`（NP）は
+  `Cer 34:0;O3`。酸化・水酸化した種は元の種と保持が違う（早く溶出する）ので、同じ（炭素数, 二重結合数）に数えると
+  RT の中央値に別の種が混ざり、本当の違反を隠したり無い違反を作ったりする。そこで種の鍵は（修飾, 炭素数,
+  二重結合数）で、修飾の違う種どうしは重複にも隣どうしにもしない（無修飾の PE と酸化 PE、Cer の `;O2` と `;O3` は
+  それぞれ別の列）。`lipid_class: "PE"` はそのクラスの修飾をすべて集めて修飾ごとの列で比べ、2 つ以上の修飾を
+  集めたら内訳を `notes` に書く。`"PE;O"`・`"Cer;O2"` のように修飾を書けば、その修飾の種だけを集める。
+  修飾は種のレベルの合計なので、同じ数の酸素を持つ別の亜クラス（Cer NP と AS はどちらも `;O3`）は同じ列になる。
+  修飾のある種を集めたときは `members` に `modification` の列（無修飾は空）が付き、`duplicates` のキーと違反の
+  `low` / `high` は `36:2;O`・`34:0;O3` のように修飾を添える（無修飾は `36:2` のまま）。`members`（手で並べる）
+  には修飾が無く、前と同じ列で比べる。`rule_hash` は spec だけから作るので変わらない。
+- 同じ（修飾, 炭素数, 二重結合数）が複数あれば RT の中央値で並べ、`duplicates` に挙げる。
+- 同じ修飾・同じ二重結合数の中で炭素数の昇順、同じ修飾・同じ炭素数の中で二重結合数の昇順に並べた**隣どうし**で、
   規則の向きに反する対を違反と数える（RT が同じ対は違反にしない）。比べた対の数が `n_pairs`。違反が
   `max_violations` 以下なら `pass`。違反に関わった特徴は `members` の `status` が `violation`。
 - **比べた対が 0（`n_pairs: 0`）なら `verdict` は `not_evaluable`**（`pass` ではない）。`auto` が集めた種が
@@ -682,7 +693,10 @@ dot の足切りは二乗の値と比べる）の列を足す——**合否に�
   `strong` な同位体と言ってしまう）。分離できない束（重心が 13C2 と 34S の間）が束の全体と比べられるのは、この特徴から
   束のどの同位体までの差も `mz_tol` 以内のときだけ（重心が真ん中なら約 5.5 mDa / 電荷以上。既定の 0.01 Da は覆う）。それより
   狭い窓では重心は近い方の位置の 1 行だけに当たって期待比が遠い方の同位体を欠き、相手自身の束が `informational` になりうる
-  （近い方の位置までの差より狭ければ M+2 の行は出ない）。束を分離しない装置では `mz_tol` を約 0.006 Da / 電荷以上にする。
+  （重心から近い方の位置までの差（タウロコール酸 [M-H]- で約 5.2 mDa）より狭ければ 13C2 と 34S の行は出ない。窓が重心から
+  18O の位置までの差（約 2.7 mDa）以上なら 18O の行 `isotope_M+2_18O` だけが立ち、期待比が 13C2 と 34S を欠くのでやはり
+  `informational` になる（別物質の印ではなく、相手自身の束に窓が足りないだけ）。それより狭ければ M+2 の行は出ない）。
+  束を分離しない装置では `mz_tol` を約 0.006 Da / 電荷以上にする。
   同じ組の M+2 の行は同じ期待比。付加体が読めなければ中性の組成式のまま、組成式が無い・読めない・同位体の表に無い元素（Se・Fe など）を含むなら
   空（`isotope_consistent` も空）。I・As・Co は単一同位体として数える。表に無い元素を含んでも組成式が読めれば、
   O・S・Cl・Br・K を持たない相手にその M+2 の行は出さない。
@@ -907,8 +921,10 @@ v7 と違う——`dataset_feature_search`（mztab.md §13.8）と `dataset_clai
 `statistics.result_id` の spec は `{"result_id", "contrast_id": <任意>, "merge_split": true（既定）, "alignment_qc": <JSON のパス、任意>}`
 （`alignment_qc` は `dataset_alignment_qc` の `output_path`。省略時はこのハンドルで `dataset_alignment_qc` が最後に
 出した結果（§9。データ・試料の表・除外が変わっていないもの）、それも無ければその場で探す。`rule_hash` にパスは
-入らない）。`merge_split=false` の `alignment_qc` と、`analysis_spec` の隣に書いた `contrast_id`（analysis-spec.v1 の比較は
-spec の `comparison` の 1 つ）は効かないので捨てて `notes` に書く（`rule_hash` は書かないときと同じ）。
+入らない）。`merge_split=false` の `alignment_qc` と、`analysis_spec` の隣に書いた `result_id` の経路の設定——
+`contrast_id`（analysis-spec.v1 の比較は spec の `comparison` の 1 つ）・`merge_split`・`alignment_qc`（割れのまとめは
+spec の `features.merge_split` / `features.alignment_qc` が決める）——は効かないので捨てて欄ごとに `notes` に書く
+（断らない。`rule_hash` は書かないときと同じ）。
 `statistics.analysis_spec` の効かない設定と実行時の注記（統合したデータセットの `drift_correct` の注入順。§3）も、
 欄の名前の前に `statistics.analysis_spec: ` を付けて `notes` に書く（analysis_spec では最後の結果は使わない。spec だけで再現する）。
 戻り値と JSON の `merge_split` は `{enabled, source, n_groups}`（`n_groups` はまとめた組の数。`source` は

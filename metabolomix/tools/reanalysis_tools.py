@@ -616,10 +616,14 @@ def dataset_homolog_check(spec: dict, dataset_handle: str | None = None,
     （`lipid_class` の SME rank 1 の名前を GOSLIN で種のレベルに読んで集める。読み方は目標照合・MS/MS の合否と
     同じで、読めなければ注記を外して読み（`PC 34:1; ExampleDB ID-0001` は PC 34:1）、同位体の標識のある内部標準の
     名前は集めない。`P-` は種のレベルで `O-` に直る（`PE P-18:0_20:4` は `PE O-38:5`。プラスマローゲンの列は
-    `lipid_class="PE O-"`）。`evidence` に `sml` を足すと SML の名前も見る。`adduct` で SME の付加体を絞る）のどちらか一方と、
+    `lipid_class="PE O-"`）。種のレベルの修飾（`PE 36:2;O (oxPE)` の `;O`、`Cer 34:0;O3` の `;O3`）は列を分け、修飾の
+    違う種どうしは重複にも隣どうしにもしない（`lipid_class="PE"` は無修飾の PE と酸化 PE をそれぞれの列で比べ、
+    `"PE;O"` のように修飾を書けばその修飾の種だけを集める。2 つ以上の修飾を集めたら `notes` に内訳）。
+    `evidence` に `sml` を足すと SML の名前も見る。`adduct` で SME の付加体を絞る）のどちらか一方と、
     `rule`（`carbon_direction` 既定 increasing・`double_bond_direction` 既定 decreasing・
     `max_violations` 既定 0）。`adduct` は綴りでなく組成で比べる（mzTab-M の `[M+H]1+` と `[M+H]+` は同じ）。
-    同じ（炭素数, 二重結合数）が複数あれば RT の中央値で並べ `duplicates` に挙げる。戻り値は `verdict`
+    同じ（修飾, 炭素数, 二重結合数）が複数あれば RT の中央値で並べ `duplicates` に挙げる（修飾があれば `36:2;O` の
+    ように書き、`members` に `modification` の列が付く）。戻り値は `verdict`
     （pass / fail / not_evaluable）・比べた隣どうしの対の数 `n_pairs`・違反の TSV・`rule_hash`。比べた対が 0
     （`auto` が集めた種が 2 つ未満など）なら検査していないので `not_evaluable` で、理由を `notes` に書く。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
@@ -658,10 +662,23 @@ def dataset_homolog_check(spec: dict, dataset_handle: str | None = None,
     rt_of = {fid: (ds.feature_metadata.get(fid) or {}).get("rt") for fid in ds.feature_ids}
     outcome = homolog.check(members, rt_of, normalized["rule"])
     notes = []
+    auto = normalized["auto"]
+    modifications = {}
+    for m in members:
+        modifications.setdefault(m.get("modification") or "", []).append(m["feature_id"])
+    if len(modifications) > 1:
+        # 修飾の違う種（酸化・水酸化）は保持が違うので、同じ（炭素数, 二重結合数）に混ぜず別の列で比べた。
+        # 2 つ以上の修飾が集まるのは lipid_class に修飾を書かないときだけ（書けばその修飾だけを集める）
+        breakdown = "・".join(f"{';' + mod if mod else '無修飾'} {len(fids)} 件"
+                              for mod, fids in sorted(modifications.items()))
+        example = next(mod for mod in sorted(modifications) if mod)
+        notes.append(f"集めた種の修飾（GOSLIN の種のレベルの `;` の後ろ）は {breakdown}。修飾の違う種は保持が違うので、"
+                     "修飾ごとに別の列で比べた（同じ炭素数・二重結合数でも重複にも隣どうしにもしない。duplicates と"
+                     f"違反の種は修飾を添えて書く）。1 つの修飾の列だけを見るなら lipid_class="
+                     f"{auto['lipid_class'] + ';' + example!r} のように修飾を書く。")
     if outcome["n_pairs"] == 0:
-        n_species = len({(m["carbons"], m["double_bonds"]) for m in members
+        n_species = len({(m.get("modification") or "", m["carbons"], m["double_bonds"]) for m in members
                          if rt_of.get(m["feature_id"]) is not None})
-        auto = normalized["auto"]
         found = (f"auto（lipid_class={auto['lipid_class']!r}・adduct={auto['adduct']!r}・"
                  f"evidence={'/'.join(auto['evidence'])}）が集めた特徴は {len(members)} 件"
                  if auto is not None else f"members は {len(members)} 件")
@@ -673,6 +690,9 @@ def dataset_homolog_check(spec: dict, dataset_handle: str | None = None,
             notes.append(f"名前は GOSLIN の種のレベルに読むので、P-（プラスマローゲン）は O- に直る（PE P-18:0_20:4 は "
                          f"PE O-38:5）。lipid_class={auto['lipid_class']!r} の種は集まらない——プラスマローゲンの列は "
                          f"lipid_class={ether_class!r} で集める（O- のエーテルと同じ列になる）。")
+    # 修飾のある種を集めたときだけ members に modification の列を足す（無修飾だけの列は前と同じ形）
+    member_columns = ("feature_id", "carbons", "double_bonds",
+                      *(("modification",) if any(modifications) else ()), "rt", "status")
     violations = [{"axis": v["axis"], "low": v["low"], "high": v["high"], "rt_low": v["rt_low"],
                    "rt_high": v["rt_high"], "features_low": ";".join(v["features_low"]),
                    "features_high": ";".join(v["features_high"])} for v in outcome["violations"]]
@@ -684,8 +704,7 @@ def dataset_homolog_check(spec: dict, dataset_handle: str | None = None,
         "n_violations": outcome["n_violations"],
         "violations": rows_table(violations, ("axis", "low", "high", "rt_low", "rt_high",
                                               "features_low", "features_high")),
-        "members": rows_table(outcome["members"], ("feature_id", "carbons", "double_bonds", "rt",
-                                                   "status")),
+        "members": rows_table(outcome["members"], member_columns),
         "duplicates": outcome["duplicates"],
         "rule": normalized["rule"],
         "rule_hash": homolog.rule_hash(normalized),
@@ -1125,7 +1144,8 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     データ・試料の表・除外が変わっていなければ——を使い、無ければその場で探す。使った方は
     `merge_split.source` の `alignment_qc` / `last_alignment_qc` / `find_split_pairs`）、analysis_spec では
     spec の `features.merge_split` で決まる（spec だけで再現するので最後の結果は使わない）。
-    `merge_split=false` の `statistics.alignment_qc`・`analysis_spec` の隣の `statistics.contrast_id` など、
+    `merge_split=false` の `statistics.alignment_qc`・`analysis_spec` の隣の `statistics.contrast_id` /
+    `statistics.merge_split` / `statistics.alignment_qc`（`result_id` の経路の設定）など、
     効かない設定は誤りにせず `notes` に書く（analysis_spec で選んだ解析が `correction=none` なら、q が無いので
     候補が出ないことも）。
     spec の `labels`（`{path, name, feature_column="feature_id", label_column="level",
@@ -1253,11 +1273,21 @@ def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
     })
 
 
+#: `statistics.result_id` の経路だけの設定と、analysis_spec の隣では効かない理由（notes に書く）
+_RESULT_ID_ONLY = {
+    "contrast_id": "比較は spec の comparison の 1 つ",
+    "merge_split": "割れたスポットをまとめるかは spec の features.merge_split が決める",
+    "alignment_qc": "割れの組は spec の features.alignment_qc か、無ければその場で探したもの。spec だけで再現する",
+}
+
+
 def _drop_ineffective_novel_settings(spec, notes: list[str]):
     """novel-candidates の spec から、書いても効かない設定を除いた写し（理由は `notes`）。
 
     `statistics.merge_split=false` の `statistics.alignment_qc` と、`statistics.analysis_spec` の隣の
-    `statistics.contrast_id` は使われないので外す（誤りにしない）。
+    `statistics.contrast_id`・`statistics.merge_split`・`statistics.alignment_qc`（`result_id` の経路の設定。
+    analysis_spec では比較は spec の comparison の 1 つ、割れのまとめは spec の `features.merge_split` /
+    `features.alignment_qc` が決める）は使われないので外す（誤りにしない）。
     `statistics.analysis_spec`（analysis-spec.v1）の効かない設定は `analysis_spec.normalize_spec` が外し、
     その注記をここで集める。形の誤りは触らない（`normalize_novel_spec` が断る）。
     """
@@ -1272,11 +1302,15 @@ def _drop_ineffective_novel_settings(spec, notes: list[str]):
         except DomainError:
             pass  # 形の誤りは normalize_novel_spec が同じ理由で断る
         notes[:] = [f"statistics.analysis_spec: {n}" for n in notes]
-        if "contrast_id" in stats_spec and "result_id" not in stats_spec:
-            # analysis-spec.v1 の比較は spec の comparison の 1 つだけなので、対比の名指しは効かない
-            notes.append("statistics.contrast_id は statistics.analysis_spec では効かず（比較は spec の "
-                         "comparison の 1 つ）、使っていない")
-            return {**spec, "statistics": {k: v for k, v in stats_spec.items() if k != "contrast_id"}}
+        if "result_id" in stats_spec:
+            return spec           # 統計の出所が 2 つ: 形の誤り（normalize_novel_spec が断る）
+        # result_id の経路の設定は analysis_spec では効かない（spec だけで再現する）
+        dropped = [key for key in _RESULT_ID_ONLY if key in stats_spec]
+        for key in dropped:
+            notes.append(f"statistics.{key} は statistics.analysis_spec では効かず（{_RESULT_ID_ONLY[key]}）、"
+                         "使っていない")
+        if dropped:
+            return {**spec, "statistics": {k: v for k, v in stats_spec.items() if k not in dropped}}
         return spec
     if stats_spec.get("merge_split") is False and "alignment_qc" in stats_spec:
         notes.append("statistics.alignment_qc は statistics.merge_split=false なので効かず、使っていない")
