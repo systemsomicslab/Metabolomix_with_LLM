@@ -652,6 +652,7 @@ def test_save_figure_species_pca_result_id_must_name_the_held_figure(loaded, tmp
     err = _error(reports.save_figure("species_pca", "sp", result_id=r1))
     assert err["code"] == "STALE_FIGURE", err
     assert err["details"]["result_id"] == r1 and err["details"]["held_result_id"] == r2
+    assert err["details"]["mismatch"] == "settings" and "項目の指定が違う" in err["message"]
     assert err["details"]["required_tools"] == ["dataset_plot"]
     settings = err["details"]["settings"]
     assert settings["items"] == ["PG", "DGDG", "DG"] and settings["standard_samples"] == ["std"]
@@ -675,6 +676,99 @@ def test_save_figure_species_pca_result_id_must_name_the_held_figure(loaded, tmp
     err = _error(reports.save_figure("species_pca", "sp2", result_id="res_nope"))
     assert err["code"] == "DATASET_BAD_REQUEST" and err["details"]["result_id"] == "res_nope"
     assert not (figures / "sp2_species_pca.png").exists()
+
+
+def test_save_figure_species_pca_names_a_stale_result_without_a_redraw_loop(loaded, tmp_path):
+    """名指しした結果が古い（除外のあと）なら、指定が同じでも「項目の指定が違う」とは言わず、描き直しも案内しない。
+
+    同じ指定で描き直しても今の状態の新しい結果になり、名指しした結果には戻らない（描き直しを案内すると、同じ
+    STALE_FIGURE が何度でも返る）。案内は置き場の図の結果（`details.held_result_id`）か省くことで、それで保存できる。"""
+    from metabolomix.tools.sample_tools import dataset_exclude
+
+    ds = loaded["ds"]
+    figures = tmp_path / "reports" / "figures"
+    spec = {"items": ["PG", "DGDG", "DG"], "standard_samples": ["std"]}
+    first = _pca(**spec)
+    r1 = first["result_id"]
+    body = json.loads(dataset_exclude(features=["3"], reason="test"))   # 描いた分子種には入らない特徴
+    assert body.get("changed") is True, body
+    second = _pca(**spec)
+    r2 = second["result_id"]
+    assert second["points"] == first["points"]                         # 同じ図だが、R1 は除外の前の結果
+    held = ds.results[r2]
+    assert ds.results[r1]["settings"] == held["settings"]
+    assert ds.results[r1]["provenance"]["metadata_revision"] != held["provenance"]["metadata_revision"]
+
+    err = _error(reports.save_figure("species_pca", "sp", result_id=r1))
+    assert err["code"] == "STALE_FIGURE", err
+    details = err["details"]
+    assert details["mismatch"] == "stale" and details["result_id"] == r1 and details["held_result_id"] == r2
+    # 同じ指定なので、描き直しの指定も描き直しの案内も無い
+    assert "settings" not in details and "required_tools" not in details
+    assert "項目の指定が違う" not in err["message"] and "held_result_id" in err["message"]
+    assert not (figures / "sp_species_pca.png").exists()
+
+    # 古い R1 の指定で描き直しても R1 には戻らない（同じ封筒。描き直しを促さない）
+    redrawn = _p("species_pca", **ds.results[r1]["settings"])
+    err = _error(reports.save_figure("species_pca", "sp", result_id=r1))
+    assert err["details"]["mismatch"] == "stale" and err["details"]["held_result_id"] == redrawn["result_id"]
+    assert "settings" not in err["details"]
+    # 案内どおり、置き場の図の結果を渡せば（省いても）保存できる
+    msg = reports.save_figure("species_pca", "sp", result_id=err["details"]["held_result_id"])
+    assert (figures / "sp_species_pca.png").is_file() and "notes:" not in msg
+    reports.save_figure("species_pca", "sp2")
+    assert (figures / "sp2_species_pca.png").is_file()
+
+    # 古く、指定も違う結果なら、その指定（今のデータで描き直す材料）も付ける。描き直した結果の ID で保存できる
+    _pca(items=["PG", "DG"], standard_samples=["std"])
+    err = _error(reports.save_figure("species_pca", "sp3", result_id=r1))
+    assert err["details"]["mismatch"] == "stale"
+    assert err["details"]["settings"] == ds.results[r1]["settings"]
+    assert err["details"]["required_tools"] == ["dataset_plot"]
+    again = _p("species_pca", **err["details"]["settings"])
+    assert again["points"] == first["points"]
+    reports.save_figure("species_pca", "sp3", result_id=again["result_id"])
+    assert (figures / "sp3_species_pca.png").is_file()
+
+
+def test_save_figure_species_pca_names_a_result_whose_input_changed(loaded, tmp_path):
+    """同じ指定でも、キュレーションの判断の更新で入力の行列が変わった結果（`is_current` は古さと読まない）は、
+    もう描けない（`mismatch="input"`）。項目の指定の違いとは言わず、置き場の図の結果を案内する。"""
+    ds = loaded["ds"]
+    figures = tmp_path / "reports" / "figures"
+    spec = {"items": ["PG", "DGDG", "DG"], "standard_samples": ["std"]}
+    first = _pca(**spec)
+    r1 = first["result_id"]
+    _write_flags(loaded, [{"spot_id": 1, "flag": "wrong", "note": ""}])   # PG 35:1 を外す
+    second = _pca(**spec)
+    r2 = second["result_id"]
+    assert second["n_species"] == first["n_species"] - 1
+    prov1, prov2 = ds.results[r1]["provenance"], ds.results[r2]["provenance"]
+    assert prov1["input_fingerprint"] != prov2["input_fingerprint"]
+    assert prov1["metadata_revision"] == prov2["metadata_revision"]
+
+    err = _error(reports.save_figure("species_pca", "sp", result_id=r1))
+    assert err["code"] == "STALE_FIGURE", err
+    details = err["details"]
+    assert details["mismatch"] == "input" and details["held_result_id"] == r2
+    assert "settings" not in details and "required_tools" not in details
+    assert "項目の指定が違う" not in err["message"]
+    assert not (figures / "sp_species_pca.png").exists()
+    reports.save_figure("species_pca", "sp", result_id=details["held_result_id"])
+    assert (figures / "sp_species_pca.png").is_file()
+
+
+def test_save_figure_species_pca_checks_the_held_figure_before_the_named_result(loaded):
+    """置き場の図そのものが古ければ（群を焼き込んだあとに試料の情報が更新された）、名指しした別の結果と照らす前に
+    描き直しを求める（古い置き場の図の ID を「保存できる図」として案内しない）。"""
+    ds = loaded["ds"]
+    r1 = _pca(items=["PG", "DGDG", "DG"], standard_samples=["std"])["result_id"]
+    r2 = _pca(items=["PG", "DG"], standard_samples=["std"])["result_id"]
+    ds.metadata_revision += 1                               # 試料の情報の更新（図は置き場に残る）
+    err = _error(reports.save_figure("species_pca", "sp", result_id=r1))
+    assert err["code"] == "STALE_FIGURE" and "作り直" in err["message"]
+    assert err["details"]["result_id"] == r2 and "mismatch" not in err["details"]
+    assert err["details"]["required_tools"] == ["dataset_plot"]
 
 
 def test_failed_render_does_not_store_the_figure(loaded, monkeypatch):

@@ -586,7 +586,7 @@ n_excluded_after_test` が `n_features_total`。下流が `n_features_total` と
 図ごと捨てた図も `STALE_FIGURE`（`details` に `kind`・`reason`（実際に変わったもの: `exclusion` や試料の表の列名。因子の列
 だけが変わったときは、差次的解析を群と同じく古くしても `group` を挙げずにその列だけ）・
 `required_tools: ["dataset_plot"]`）。一度も描いていない図だけが `missing_state`（`required_tools` は `dataset_plot`）。
-kind が使わない `result_id` / `contrast_id` は断らずに使わず、保存した戻り値の最後の `notes:` 行に書く（`species_pca` の `result_id` は使わない引数ではなく、置き場の図の結果と照らす。§11.7）。
+kind が使わない `result_id` / `contrast_id` は断らずに使わず、保存した戻り値の最後の `notes:` 行に書く（`species_pca` の `result_id` は使わない引数ではなく、置き場の図の結果と照らす。違えば `STALE_FIGURE` で `details` に `held_result_id`・`mismatch`。§11.7）。
 `dataset_plot` も別の kind の引数は断らずに使わず（図はその引数を渡さないときと同じ）、説明の最後の `notes:` 行
 （payload は最上位の `notes` 欄。形式名は変えない。描けなかった誤りの封筒は `details.notes`: 引数の形の誤り〔`output` /
 `output_path`〕・ハンドルの誤り・`missing_state`〔データセットや結果が無い。`details` はこのときだけ足す〕・`FIGURE_SAVE_FAILED`・
@@ -699,7 +699,7 @@ kind が使わない `result_id` / `contrast_id` は断らずに使わず、保�
 | `dropped_zero_variance` | 計算に使う試料で値が変わらず外した分子種の数 |
 | `excluded` / `caveats` | `dataset_plot(kind="species")` と同じ（§11.6）。画像の説明文にも除外の件数と caveat を載せる |
 | `pc1_r_top` / `pc1_r_bottom` | PC1 との相関 r が正の上位・負の上位の分子種（表示名と r。各最大 5 件。正が無ければ `top` は空）。r は**計算に使った試料**での分子種と主成分スコアの相関で −1〜1 |
-| `result_id` | この結果の ID。`save_figure(kind="loadings", result_id=...)` で分子種のローディングを描ける。`save_figure(kind="species_pca", result_id=...)` は描き直さず（項目の指定から作る結果）、置き場の図がこの結果から描いたもの（か同じ指定で描き直しただけの結果。そのときは `notes:` 行に書く）なら保存し、別の結果の図なら保存せず `STALE_FIGURE`（`details.held_result_id` に置き場の図の結果、`details.settings` にこの結果の項目の指定。その指定で描き直す） |
+| `result_id` | この結果の ID。`save_figure(kind="loadings", result_id=...)` で分子種のローディングを描ける。`save_figure(kind="species_pca", result_id=...)` は描き直さず（項目の指定から作る結果）、置き場の図がこの結果から描いたもの（か同じ指定で描き直しただけの結果。そのときは `notes:` 行に書く）なら保存し、別の結果の図なら保存せず `STALE_FIGURE`（`details.held_result_id` に置き場の図の結果、`details.mismatch` に違いの種類）。`mismatch` が `settings`（項目の指定が違う）なら `details.settings`（この結果の項目の指定）で描き直してから保存する。`stale`（この結果が除外・試料の表の更新より前のもの）と `input`（同じ指定だが、キュレーションの判断の更新などで入力の行列が違う）はこの結果の図をもう描けない（同じ指定で描き直しても今の状態の新しい結果になる）ので、置き場の図を保存するなら `held_result_id` を渡すか省く。`details.settings` と `required_tools: ["dataset_plot"]` は、この結果の指定が置き場の図と違うときだけ付く |
 
 **読み方**: 値は `normalize`（`none` / `total`）→ log10(x + 1)（`log_transform`）→ 計算に使う試料の平均と母標準偏差で
 autoscale の順。主成分の**符号は本来任意**で、`orient_by` を指定したときだけ、その群の平均スコアが正になるようにそろえる。
